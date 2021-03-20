@@ -21,6 +21,12 @@ CMAKEFILES(
   vsp.stp
   )
 
+BRLCAD_ADDEXEC(brep_cdt_mesh brep_cdt_mesh.cpp "libbrep;libbg;libbn;libbu" TEST)
+
+BRLCAD_ADDEXEC(test_point_intersect test_point_intersect.cpp "libbrep" NO_STRICT NO_INSTALL)
+
+BRLCAD_ADDEXEC(test_curve_intersect test_curve_intersect.cpp "libbrep" NO_STRICT NO_INSTALL)
+
 # Local Variables:
 # tab-width: 8
 # mode: cmake

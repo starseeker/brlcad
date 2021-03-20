@@ -49,6 +49,15 @@ set(LIBBREP_SOURCES
   tools/util.cpp
   )
 
+set(CDT2_srcs
+  cdt2/cdt.cpp
+  cdt2/vert.cpp
+  cdt2/edge.cpp
+  cdt2/mesh.cpp
+  cdt2/polygon.cpp
+  )
+set(LIBBREP_SOURCES ${LIBBREP_SOURCES} ${CDT2_srcs})
+
 BRLCAD_ADDLIB(libbrep "${LIBBREP_SOURCES}" "libbg;libbn;libbu;${OPENNURBS_LIBRARIES};${POLY2TRI_LIBRARIES};${WINSOCK_LIB};${RPCRT_LIB};${STDCXX_LIBRARIES}")
 set_target_properties(libbrep PROPERTIES VERSION 20.0.1 SOVERSION 20)
 
@@ -61,6 +70,7 @@ endif(HIDE_INTERNAL_SYMBOLS)
 add_subdirectory(tests)
 
 CMAKEFILES(
+  ${CDT2_srcs}
   CMakeLists.txt
   PullbackCurve.h
   brep_defines.h
@@ -69,6 +79,11 @@ CMAKEFILES(
   cdt/cdt.h
   cdt/mesh.h
   debug_plot.h
+  cdt/omesh.cpp
+  cdt/overt.cpp
+  cdt/ovlps.cpp
+  cdt/ovlps_grps.cpp
+  cdt2/cdt.h
   shape_recognition/shape_recognition.h
   shape_recognition/torus.cpp
   tools/tools.h

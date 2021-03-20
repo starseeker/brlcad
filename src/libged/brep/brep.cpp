@@ -43,6 +43,7 @@
 #include "bu/cmd.h"
 #include "bu/color.h"
 #include "bu/opt.h"
+#include "brep/cdt2.h"
 #include "raytrace.h"
 #include "rt/geom.h"
 #include "wdb.h"
@@ -410,6 +411,37 @@ _brep_cmd_bots(void *bs, int argc, const char **argv)
 	}
 	bu_vls_free(&bot_name);
     }
+
+    return GED_OK;
+}
+
+
+extern "C" int
+_brep_cmd_cdt2(void *bs, int argc, const char **argv)
+{
+    const char *usage_string = "brep [options] <objname1> cdt2";
+    const char *purpose_string = "generate mesh from BRep objects";
+    if (_brep_cmd_msgs(bs, argc, argv, usage_string, purpose_string)) {
+	return GED_OK;
+    }
+
+    struct _ged_brep_info *gb = (struct _ged_brep_info *)bs;
+    //struct ged *gedp = gb->gedp;
+    if (gb->intern.idb_minor_type != DB5_MINORTYPE_BRLCAD_BREP) {
+	bu_vls_printf(gb->gedp->ged_result_str, ": object %s is not of type brep\n", gb->solid_name.c_str());
+	return GED_ERROR;
+    }
+
+    argc--; argv++;
+
+    struct rt_brep_internal *bi = (struct rt_brep_internal*)gb->intern.idb_ptr;
+
+    struct brep_cdt *s_cdt;
+    brep_cdt_create(&s_cdt, (void *)bi->brep, gb->solid_name.c_str());
+
+    brep_cdt_triangulate(s_cdt, 0, NULL, 0);
+
+    brep_cdt_destroy(s_cdt);
 
     return GED_OK;
 }
@@ -1318,6 +1350,7 @@ const struct bu_cmdtab _brep_cmds[] = {
     { "bool",            _brep_cmd_boolean},
     { "bot",             _brep_cmd_bot},
     { "bots",            _brep_cmd_bots},
+    { "cdt2",            _brep_cmd_cdt2},
     { "brep",            _brep_cmd_brep},
     { "csg",             _brep_cmd_csg},
     { "flip",            _brep_cmd_flip},
