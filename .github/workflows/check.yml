@@ -43,7 +43,7 @@ jobs:
       - name: Configure
         run: |
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
-          cmake -S . -G Ninja -B build -D ENABLE_ALL=ON -D CMAKE_BUILD_TYPE=Release -DBRLCAD_ENABLE_QT=ON
+          cmake -S . -G Ninja -B build -DCMAKE_BUILD_TYPE=Release DBRLCAD_ENABLE_STEP=OFF -DBRLCAD_ENABLE_GDAL=OFF
 
       - name: Build
         run: |
