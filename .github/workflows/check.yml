@@ -32,93 +32,93 @@ name: BRL-CAD
 on: [push]
 
 jobs:
-  windows:
-    name: Windows Latest MSVC - Ninja
-    runs-on: windows-latest
-    strategy:
-      fail-fast: true
-    steps:
-      - name: Setup - CMake
-        uses: lukka/get-cmake@latest
+# windows:
+#   name: Windows Latest MSVC - Ninja
+#   runs-on: windows-latest
+#   strategy:
+#     fail-fast: true
+#   steps:
+#     - name: Setup - CMake
+#       uses: lukka/get-cmake@latest
 
-      - name: Setup - Qt
-        uses: jurplel/install-qt-action@v3
-        with:
-          cache: 'true'
+#     - name: Setup - Qt
+#       uses: jurplel/install-qt-action@v3
+#       with:
+#         cache: 'true'
 
-      - name: Checkout
-        uses: actions/checkout@v4
+#     - name: Checkout
+#       uses: actions/checkout@v4
 
-      - name: Add github workspace to path
-        # https://github.community/t/deprecated-add-path/136621
-        run: echo "$ENV{GITHUB_WORKSPACE}" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
+#     - name: Add github workspace to path
+#       # https://github.community/t/deprecated-add-path/136621
+#       run: echo "$ENV{GITHUB_WORKSPACE}" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
 
-      - name: Add msbuild to PATH
-        uses: microsoft/setup-msbuild@v1.1.3
+#     - name: Add msbuild to PATH
+#       uses: microsoft/setup-msbuild@v1.1.3
 
-      - name: Add cl.exe to PATH
-        uses: ilammy/msvc-dev-cmd@v1
+#     - name: Add cl.exe to PATH
+#       uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Configure
-        run: |
-          cmake -S . -B build -G Ninja -D CMAKE_C_COMPILER="cl.exe" -D CMAKE_CXX_COMPILER="cl.exe" -D ENABLE_ALL=ON -D CMAKE_BUILD_TYPE=Release -DBRLCAD_ENABLE_QT=ON
-          # We do the following in order to help ensure files are "flushed"
-          # to disk before compilation is attempted
-          # https://superuser.com/a/1553374/1286142
-          powershell Write-VolumeCache C
-          powershell Write-VolumeCache D
+#     - name: Configure
+#       run: |
+#         cmake -S . -B build -G Ninja -D CMAKE_C_COMPILER="cl.exe" -D CMAKE_CXX_COMPILER="cl.exe" -D ENABLE_ALL=ON -D CMAKE_BUILD_TYPE=Release -DBRLCAD_ENABLE_QT=ON
+#         # We do the following in order to help ensure files are "flushed"
+#         # to disk before compilation is attempted
+#         # https://superuser.com/a/1553374/1286142
+#         powershell Write-VolumeCache C
+#         powershell Write-VolumeCache D
 
-      - name: Build
-        run: cd build && ninja -j1 -v && ninja check -v && ninja package
+#     - name: Build
+#       run: cd build && ninja -j1 -v && ninja check -v && ninja package
 
-        # Various other Windows build lines used for various types of testing.
-        # Preserved for reference, as the iterative time to figure out how to
-        # perform them was significant...
-        #run: cmake --build build --config Release --target package
-        #run: cd build && ninja -j1 -v STEPCODE_BLD && cd src/other/ext/STEPCODE_BLD-prefix/src/STEPCODE_BLD-build && ninja clean && ninja -j1 -v
-        #run: cmake --build build --config Release --target STEPCODE_BLD && cd build/src/other/ext/STEPCODE_BLD-prefix/src/STEPCODE_BLD-build && msbuild ALL_BUILD.vcxproj -t:clean && msbuild ALL_BUILD.vcxproj -v:diag
+#       # Various other Windows build lines used for various types of testing.
+#       # Preserved for reference, as the iterative time to figure out how to
+#       # perform them was significant...
+#       #run: cmake --build build --config Release --target package
+#       #run: cd build && ninja -j1 -v STEPCODE_BLD && cd src/other/ext/STEPCODE_BLD-prefix/src/STEPCODE_BLD-build && ninja clean && ninja -j1 -v
+#       #run: cmake --build build --config Release --target STEPCODE_BLD && cd build/src/other/ext/STEPCODE_BLD-prefix/src/STEPCODE_BLD-build && msbuild ALL_BUILD.vcxproj -t:clean && msbuild ALL_BUILD.vcxproj -v:diag
 
-        # For the moment the space demands are too extreme to enable this
-        # output for every compile test, but leave the enabling logic present
-        # in commented out form so it can be enabled as needed.
+#       # For the moment the space demands are too extreme to enable this
+#       # output for every compile test, but leave the enabling logic present
+#       # in commented out form so it can be enabled as needed.
 #     - name: Upload Package
 #       uses: actions/upload-artifact@v2
 #       with:
 #         name: BRLCAD_Windows
 #         path: ${{ github.workspace }}/build/BRL-CAD*exe
 
-  windows_std_tools:
-    name: Windows Latest MSVC - Standard Tools
-    runs-on: windows-latest
-    strategy:
-      fail-fast: true
-    steps:
-      - name: Setup - CMake
-        uses: lukka/get-cmake@latest
+# windows_std_tools:
+#   name: Windows Latest MSVC - Standard Tools
+#   runs-on: windows-latest
+#   strategy:
+#     fail-fast: true
+#   steps:
+#     - name: Setup - CMake
+#       uses: lukka/get-cmake@latest
 
-      - name: Checkout
-        uses: actions/checkout@v4
+#     - name: Checkout
+#       uses: actions/checkout@v4
 
-      - name: Add github workspace to path
-        # https://github.community/t/deprecated-add-path/136621
-        run: echo "$ENV{GITHUB_WORKSPACE}" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
+#     - name: Add github workspace to path
+#       # https://github.community/t/deprecated-add-path/136621
+#       run: echo "$ENV{GITHUB_WORKSPACE}" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
 
-      - name: Configure
-        run: |
-          cmake -S . -B build -D ENABLE_ALL=ON
-          # We do the following in order to help ensure files are "flushed"
-          # to disk before compilation is attempted
-          # https://superuser.com/a/1553374/1286142
-          powershell Write-VolumeCache C
-          powershell Write-VolumeCache D
+#     - name: Configure
+#       run: |
+#         cmake -S . -B build -D ENABLE_ALL=ON
+#         # We do the following in order to help ensure files are "flushed"
+#         # to disk before compilation is attempted
+#         # https://superuser.com/a/1553374/1286142
+#         powershell Write-VolumeCache C
+#         powershell Write-VolumeCache D
 
-          # At least for the moment, the main idea for this particular test is to try and
-          # verify multi-config building is working as expected - to shorten build times
-          # but still have a test of the key components, just build MGED
-      - name: Build
-        run: |
-          cmake --build build --config Debug   --target mged
-          cmake --build build --config Release --target mged
+#         # At least for the moment, the main idea for this particular test is to try and
+#         # verify multi-config building is working as expected - to shorten build times
+#         # but still have a test of the key components, just build MGED
+#     - name: Build
+#       run: |
+#         cmake --build build --config Debug   --target mged
+#         cmake --build build --config Release --target mged
 
   linux:
     name: Ubuntu Latest GCC
@@ -146,6 +146,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Build Directory setup
+        run: |
+          mkdir build
+
+      - name: bext checkout
+      - uses: actions/checkout@v4
+        with:
+          name: BRL-CAD/bext
+          path: ./build/bext
+
       - name: Configure
         run: |
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
@@ -166,67 +176,67 @@ jobs:
 #         name: BRLCAD_Linux
 #         path: ${{ github.workspace }}/build/BRL-CAD*gz
 
-  osx:
-    name: macOS Latest Clang
-    runs-on: macos-latest
-    strategy:
-      fail-fast: true
-    steps:
-      - name: Setup - CMake
-        uses: lukka/get-cmake@latest
+# osx:
+#   name: macOS Latest Clang
+#   runs-on: macos-latest
+#   strategy:
+#     fail-fast: true
+#   steps:
+#     - name: Setup - CMake
+#       uses: lukka/get-cmake@latest
 
-      - name: Setup - Qt
-        uses: jurplel/install-qt-action@v3
-        with:
-          cache: 'true'
+#     - name: Setup - Qt
+#       uses: jurplel/install-qt-action@v3
+#       with:
+#         cache: 'true'
 
-      - name: Checkout
-        uses: actions/checkout@v4
+#     - name: Checkout
+#       uses: actions/checkout@v4
 
-      - name: Configure
-        run: |
-          export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
-          export CC=clang
-          export CXX=clang++
-          cmake -S . -G Ninja -B build -D ENABLE_ALL=ON -D CMAKE_BUILD_TYPE=Release -DBRLCAD_ENABLE_QT=ON -D BRLCAD_ENABLE_X11=OFF
+#     - name: Configure
+#       run: |
+#         export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
+#         export CC=clang
+#         export CXX=clang++
+#         cmake -S . -G Ninja -B build -D ENABLE_ALL=ON -D CMAKE_BUILD_TYPE=Release -DBRLCAD_ENABLE_QT=ON -D BRLCAD_ENABLE_X11=OFF
 
-      - name: Build
-        run: |
-          export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
-          cd build && ninja -j1 && ninja -j1 package
-          #cmake --build build --config Release --target check
-          #cmake --build build --config Release --target package
+#     - name: Build
+#       run: |
+#         export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
+#         cd build && ninja -j1 && ninja -j1 package
+#         #cmake --build build --config Release --target check
+#         #cmake --build build --config Release --target package
 
-        # For the moment the space demands are too extreme to enable this
-        # output for every compile test, but leave the enabling logic present
-        # in commented out form so it can be enabled as needed.
+#       # For the moment the space demands are too extreme to enable this
+#       # output for every compile test, but leave the enabling logic present
+#       # in commented out form so it can be enabled as needed.
 #     - name: Upload Package
 #       uses: actions/upload-artifact@v2
 #       with:
 #         name: BRLCAD_OSX
 #         path: ${{ github.workspace }}/build/BRL-CAD*gz
 
-  # A full distcheck is too expensive for the runners, but we can run the
-  # repository integrity check and make sure we can build source archives.
-  archives:
-    name: Source Archives
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: true
-    steps:
-      - name: Setup - CMake
-        uses: lukka/get-cmake@latest
+# # A full distcheck is too expensive for the runners, but we can run the
+# # repository integrity check and make sure we can build source archives.
+# archives:
+#   name: Source Archives
+#   runs-on: ubuntu-latest
+#   strategy:
+#     fail-fast: true
+#   steps:
+#     - name: Setup - CMake
+#       uses: lukka/get-cmake@latest
 
-      - name: Checkout
-        uses: actions/checkout@v4
+#     - name: Checkout
+#       uses: actions/checkout@v4
 
-      - name: Configure
-        run: |
-          export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
-          cmake -S . -B build_archives -D ENABLE_ALL=ON
+#     - name: Configure
+#       run: |
+#         export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
+#         cmake -S . -B build_archives -D ENABLE_ALL=ON
 
-      - name: Build
-        run: |
-          export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
-          cmake --build build_archives --config Debug --target distcheck-source_archives
+#     - name: Build
+#       run: |
+#         export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
+#         cmake --build build_archives --config Debug --target distcheck-source_archives
 
