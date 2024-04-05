@@ -34,6 +34,7 @@ include(CMakeParseArguments)
 # Build a local copy of bext if we were unable to locate one
 
 function(brlcad_ext_setup)
+  message("001 BRLCAD_EXT_PARALLEL: ${BRLCAD_EXT_PARALLEL}")
 
   set(BRLCAD_EXT_BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR}/bext_build)
   set(BRLCAD_EXT_INSTALL_DIR ${CMAKE_CURRENT_BINARY_DIR})
@@ -85,7 +86,7 @@ function(brlcad_ext_setup)
   message("BRLCAD_EXT_BUILD_DIR: ${BRLCAD_EXT_BUILD_DIR}")
 
   if (NOT EXISTS "${BRLCAD_EXT_SOURCE_DIR}/dependencies.dot")
-	  message(FATAL_ERROR "Invalid bext directory: ${BRLCAD_EXT_SOURCE_DIR}")
+    message(FATAL_ERROR "Invalid bext directory: ${BRLCAD_EXT_SOURCE_DIR}")
   endif (NOT EXISTS "${BRLCAD_EXT_SOURCE_DIR}/dependencies.dot")
 
   set(EXT_CONFIG_STATUS 0)
@@ -128,10 +129,6 @@ function(brlcad_ext_setup)
     message(FATAL_ERROR "Unable to successfully configure bext dependency repository for building")
   endif (EXT_CONFIG_STATUS)
 
-message("CMAKE_SOURCE_DIR: ${CMAKE_SOURCE_DIR}")
-message("CMAKE_BINARY_DIR: ${CMAKE_BINARY_DIR}")
-message("000 BRLCAD_EXT_PARALLEL=${BRLCAD_EXT_PARALLEL}")
-
   set(EXT_BUILD_STATUS 0)
   if (NOT DEFINED BRLCAD_EXT_PARALLEL)
     set(BRLCAD_EXT_PARALLEL 8)
@@ -139,7 +136,8 @@ message("000 BRLCAD_EXT_PARALLEL=${BRLCAD_EXT_PARALLEL}")
   if (NOT DEFINED CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
   endif (NOT DEFINED CMAKE_BUILD_TYPE)
-message("001 BRLCAD_EXT_PARALLEL: ${BRLCAD_EXT_PARALLEL}")
+message("002 BRLCAD_EXT_PARALLEL: ${BRLCAD_EXT_PARALLEL}")
+message("${CMAKE_COMMAND} --build ${BRLCAD_EXT_BUILD_DIR} --parallel ${BRLCAD_EXT_PARALLEL} --config ${CMAKE_BUILD_TYPE}")
   if (CMAKE_CONFIGURATION_TYPES)
     execute_process(COMMAND ${CMAKE_COMMAND} --build ${BRLCAD_EXT_BUILD_DIR} --parallel ${BRLCAD_EXT_PARALLEL} --config ${CMAKE_BUILD_TYPE} RESULT_VARIABLE EXT_BUILD_STATUS)
   else (CMAKE_CONFIGURATION_TYPES)

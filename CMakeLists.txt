@@ -2047,6 +2047,7 @@ else (EXISTS ${CMAKE_SOURCE_DIR}/src/other/ext)
   # info out into a separate file used both here and by src/ :
   include(${CMAKE_SOURCE_DIR}/src/source_dirs.cmake)
 
+  message("000 BRLCAD_EXT_PARALLEL: ${BRLCAD_EXT_PARALLEL}")
   # Now we have the necessary info - trigger the primary management logic
   include(BRLCAD_ExternalDeps)
 endif (EXISTS ${CMAKE_SOURCE_DIR}/src/other/ext)
