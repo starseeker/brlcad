@@ -45,7 +45,7 @@ jobs:
       - name: Setup - Qt
         uses: jurplel/install-qt-action@v3
         with:
-          version: '6.7'
+          version: '6.6.*'
           cache: 'true'
 
       - name: Checkout
@@ -109,7 +109,7 @@ jobs:
       - name: Setup - Qt
         uses: jurplel/install-qt-action@v3
         with:
-          version: '6.7'
+          version: '6.6.*'
           cache: 'true'
 
       - name: Checkout
@@ -165,7 +165,7 @@ jobs:
       - name: Setup - Qt
         uses: jurplel/install-qt-action@v3
         with:
-          version: '6.7'
+          version: '6.6.*'
           cache: 'true'
 
       - name: Checkout
@@ -211,7 +211,7 @@ jobs:
       - name: Setup - Qt
         uses: jurplel/install-qt-action@v3
         with:
-          version: '6.7'
+          version: '6.6.*'
           cache: 'true'
 
       - name: Checkout
@@ -262,7 +262,7 @@ jobs:
       - name: Setup - Qt
         uses: jurplel/install-qt-action@v3
         with:
-          version: '6.7'
+          version: '6.6.*'
           cache: 'true'
 
       - name: Checkout
