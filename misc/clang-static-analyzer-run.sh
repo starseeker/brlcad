@@ -47,26 +47,6 @@ rm -rfv ./scan-reports-*
 # report directory should not be present at the end of the test.
 failure="0"
 
-# These are src/other libs that are either forked or don't have significant
-# upstream activity - since we are effectively maintaining these ourselves,
-# check them
-runtest osmesa
-runtest poly2tri
-runtest utahrle
-
-# we don't care about reports for src/other or misc tools
-# we don't maintain ourselves - build those without recording
-# the analyzer output
-cd src/other
-make -j12
-cd ../../
-cd src/other/ext
-make -j12
-cd ../../../
-cd misc/tools
-make -j12
-cd ../../
-
 # Do primary build
 runtest all
 

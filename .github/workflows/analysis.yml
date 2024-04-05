@@ -43,7 +43,7 @@ jobs:
         run: |
           pwd
           export PATH=$ENV{GITHUB_WORKSPACE}:/usr/share/clang/scan-build-14/bin:/usr/share/clang/scan-build-14/libexec:$PATH
-          mkdir build && cd build && cp ../misc/clang-static-analyzer-run.sh .
+          cd build && cp ../misc/clang-static-analyzer-run.sh .
           ./clang-static-analyzer-run.sh
 
       - name: Summary
