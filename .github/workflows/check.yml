@@ -45,6 +45,7 @@ jobs:
       - name: Setup - Qt
         uses: jurplel/install-qt-action@v3
         with:
+          version: '6.7'
           cache: 'true'
 
       - name: Checkout
@@ -105,6 +106,12 @@ jobs:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
 
+      - name: Setup - Qt
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: '6.7'
+          cache: 'true'
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -158,6 +165,7 @@ jobs:
       - name: Setup - Qt
         uses: jurplel/install-qt-action@v3
         with:
+          version: '6.7'
           cache: 'true'
 
       - name: Checkout
@@ -203,6 +211,7 @@ jobs:
       - name: Setup - Qt
         uses: jurplel/install-qt-action@v3
         with:
+          version: '6.7'
           cache: 'true'
 
       - name: Checkout
@@ -249,6 +258,12 @@ jobs:
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
+
+      - name: Setup - Qt
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: '6.7'
+          cache: 'true'
 
       - name: Checkout
         uses: actions/checkout@v4
