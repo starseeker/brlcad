@@ -262,6 +262,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Build Directory setup
+        run: |
+          cmake -E make_directory ./build
+
+      - name: bext checkout
+        uses: actions/checkout@v4
+        with:
+          name: BRL-CAD/bext
+          path: ./build/bext
+
       - name: Configure
         run: |
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
