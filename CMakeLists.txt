@@ -111,9 +111,6 @@ if (POLICY CMP0127)
   cmake_policy(SET CMP0127 NEW)
 endif (POLICY CMP0127)
 
-message("CMAKE_SOURCE_DIR: ${CMAKE_SOURCE_DIR}")
-message("CMAKE_BINARY_DIR: ${CMAKE_BINARY_DIR}")
-message("000 BRLCAD_EXT_SERIAL: ${BRLCAD_EXT_SERIAL}")
 
 #---------------------------------------------------------------------
 # CMake derives much of its functionality from modules, typically
@@ -2034,9 +2031,6 @@ else (EXISTS ${CMAKE_SOURCE_DIR}/src/other/ext)
   # up, we have a chicken-egg problem.  To resolve it, we break the dependency
   # info out into a separate file used both here and by src/ :
   include(${CMAKE_SOURCE_DIR}/src/source_dirs.cmake)
-
-
-message("001 BRLCAD_EXT_SERIAL: ${BRLCAD_EXT_SERIAL}")
 
   # Now we have the necessary info - trigger the primary management logic
   include(BRLCAD_ExternalDeps)
