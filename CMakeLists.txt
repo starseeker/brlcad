@@ -115,6 +115,14 @@ message("CMAKE_SOURCE_DIR: ${CMAKE_SOURCE_DIR}")
 message("CMAKE_BINARY_DIR: ${CMAKE_BINARY_DIR}")
 message("000 BRLCAD_EXT_PARALLEL=${BRLCAD_EXT_PARALLEL}")
 
+if (CMAKE_ORIGINAL_SRC_DIR)
+  if (NOT "${CMAKE_ORIGINAL_SRC_DIR}" STREQUAL "${CMAKE_SOURCE_DIR}")
+    message(FATAL_ERROR "Got ${CMAKE_ORIGINAL_SOURCE_DIR}/CMakeLists.txt from ${CMAKE_SOURCE_DIR}")
+  endif (NOT "${CMAKE_ORIGINAL_SRC_DIR}" STREQUAL "${CMAKE_SOURCE_DIR}")
+endif (CMAKE_ORIGINAL_SRC_DIR)
+
+set(CMAKE_ORIGINAL_SRC_DIR "${CMAKE_SOURCE_DIR}" CACHE PATH "Source of original CMakeLists.txt file" FORCE)
+
 #---------------------------------------------------------------------
 # CMake derives much of its functionality from modules, typically
 # stored in one directory - let CMake know where to find them.  If we
