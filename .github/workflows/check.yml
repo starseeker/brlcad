@@ -71,7 +71,7 @@ jobs:
 
       - name: Configure
         run: |
-          cmake -S . -B build_winninja -G Ninja -DCMAKE_C_COMPILER="cl.exe" -DCMAKE_CXX_COMPILER="cl.exe" -DBRLCAD_EXT_PARALLEL=1 -DCMAKE_BUILD_TYPE=Release -DBRLCAD_ENABLE_QT=ON
+          cmake -S . -B build_winninja -G Ninja -DCMAKE_C_COMPILER="cl.exe" -DCMAKE_CXX_COMPILER="cl.exe" -DENABLE_ALL=ON -DBRLCAD_EXT_PARALLEL=1 -DCMAKE_BUILD_TYPE=Release -DBRLCAD_ENABLE_QT=ON
           # We do the following in order to help ensure files are "flushed"
           # to disk before compilation is attempted
           # https://superuser.com/a/1553374/1286142
@@ -129,7 +129,7 @@ jobs:
 
       - name: Configure
         run: |
-          cmake -S . -B build_winstd -DBRLCAD_EXT_PARALLEL=1 -DCMAKE_BUILD_TYPE=Release
+          cmake -S . -B build_winstd -DBRLCAD_EXT_PARALLEL=1 -DENABLE_ALL=ON -DCMAKE_BUILD_TYPE=Release
           # We do the following in order to help ensure files are "flushed"
           # to disk before compilation is attempted
           # https://superuser.com/a/1553374/1286142
@@ -182,7 +182,7 @@ jobs:
       - name: Configure
         run: |
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
-          cmake -S . -G Ninja -B build_linux -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_PARALLEL=1 -DBRLCAD_ENABLE_QT=ON
+          cmake -S . -G Ninja -B build_linux -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_PARALLEL=1 -DENABLE_ALL=ON -DBRLCAD_ENABLE_QT=ON
 
       - name: Build
         run: |
@@ -230,7 +230,7 @@ jobs:
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
           export CC=clang
           export CXX=clang++
-          cmake -S . -G Ninja -B build_osx -DBRLCAD_EXT_PARALLEL=1 -DCMAKE_BUILD_TYPE=Release -DBRLCAD_ENABLE_QT=ON -DBRLCAD_ENABLE_X11=OFF
+          cmake -S . -G Ninja -B build_osx -DBRLCAD_EXT_PARALLEL=1 -DCMAKE_BUILD_TYPE=Release -DENABLE_ALL=ON -DBRLCAD_ENABLE_QT=ON -DBRLCAD_ENABLE_X11=OFF
 
       - name: Build
         run: |
@@ -279,7 +279,7 @@ jobs:
       - name: Configure
         run: |
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
-          cmake -S . -B build_archives -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_PARALLEL=1
+          cmake -S . -B build_archives -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_PARALLEL=1 -DENABLE_ALL=ON
 
       - name: Build
         run: |
