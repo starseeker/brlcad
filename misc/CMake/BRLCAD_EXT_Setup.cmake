@@ -80,6 +80,11 @@ message("003 BRLCAD_EXT_SERIAL: ${BRLCAD_EXT_SERIAL}")
     set(BEXT_USE_APPLESEED ON)
   endif (BRLCAD_ENABLE_APPLESEED)
 
+
+  message("BRLCAD_EXT_SOURCE_DIR: ${BRLCAD_EXT_SOURCE_DIR}")
+  message("BRLCAD_EXT_BUILD_DIR: ${BRLCAD_EXT_BUILD_DIR}")
+  message("004 BRLCAD_EXT_SERIAL: ${BRLCAD_EXT_SERIAL}")
+
   set(EXT_CONFIG_STATUS 0)
   if (BRLCAD_COMPONENTS)
     set(active_dirs ${BRLCAD_COMPONENTS})
@@ -119,6 +124,8 @@ message("003 BRLCAD_EXT_SERIAL: ${BRLCAD_EXT_SERIAL}")
   if (EXT_CONFIG_STATUS)
     message(FATAL_ERROR "Unable to successfully configure bext dependency repository for building")
   endif (EXT_CONFIG_STATUS)
+
+  message("005 BRLCAD_EXT_SERIAL: ${BRLCAD_EXT_SERIAL}")
 
   set(EXT_BUILD_STATUS 0)
   
