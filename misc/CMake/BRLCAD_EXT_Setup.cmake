@@ -84,6 +84,10 @@ function(brlcad_ext_setup)
   message("BRLCAD_EXT_SOURCE_DIR: ${BRLCAD_EXT_SOURCE_DIR}")
   message("BRLCAD_EXT_BUILD_DIR: ${BRLCAD_EXT_BUILD_DIR}")
 
+  if (NOT EXISTS "${BRLCAD_EXT_SOURCE_DIR}/dependencies.dot")
+	  message(FATAL_ERROR "invalid bext directory")
+  endif (NOT EXISTS "${BRLCAD_EXT_SOURCE_DIR}/dependencies.dot")
+
   set(EXT_CONFIG_STATUS 0)
   message("${CMAKE_COMMAND} -S ${BRLCAD_EXT_SOURCE_DIR} -B ${BRLCAD_EXT_BUILD_DIR} --DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DCMAKE_INSTALL_PREFIX=${BRLCAD_EXT_INSTALL_DIR}")
   if (BRLCAD_COMPONENTS)
