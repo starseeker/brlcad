@@ -85,7 +85,7 @@ function(brlcad_ext_setup)
   message("BRLCAD_EXT_BUILD_DIR: ${BRLCAD_EXT_BUILD_DIR}")
 
   if (NOT EXISTS "${BRLCAD_EXT_SOURCE_DIR}/dependencies.dot")
-	  message(FATAL_ERROR "invalid bext directory")
+	  message(FATAL_ERROR "Invalid bext directory: ${BRLCAD_EXT_SOURCE_DIR}")
   endif (NOT EXISTS "${BRLCAD_EXT_SOURCE_DIR}/dependencies.dot")
 
   set(EXT_CONFIG_STATUS 0)

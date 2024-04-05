@@ -116,7 +116,7 @@ message("CMAKE_BINARY_DIR: ${CMAKE_BINARY_DIR}")
 message("000 BRLCAD_EXT_PARALLEL=${BRLCAD_EXT_PARALLEL}")
 
 if (NOT EXISTS "${CMAKE_SOURCE_DIR}/COPYING")
-	message(FATAL_ERROR "invalid brlcad directory")
+	message(FATAL_ERROR "Invalid brlcad directory: ${CMAKE_SOURCE_DIR}")
 endif (NOT EXISTS "${CMAKE_SOURCE_DIR}/COPYING")
 
 if (CMAKE_ORIGINAL_SRC_DIR)
