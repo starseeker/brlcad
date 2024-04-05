@@ -34,10 +34,8 @@ jobs:
           cmake -E make_directory ./build_clangstatic
 
       - name: bext checkout
-        uses: actions/checkout@v4
-        with:
-          name: BRL-CAD/bext
-          path: ./build_clangstatic/bext
+        run: |
+          cd ./build_clangstatic && git clone https://github.com/BRL-CAD/bext.git && cd ..
 
       - name: Run Analyzer
         run: |
@@ -87,10 +85,8 @@ jobs:
           cmake -E make_directory ./build_lcov
 
       - name: bext checkout
-        uses: actions/checkout@v4
-        with:
-          name: BRL-CAD/bext
-          path: ./build_lcov/bext
+        run: |
+          cd ./build_lcov && git clone https://github.com/BRL-CAD/bext.git && cd ..
 
       - name: Configure
         run: |

@@ -65,10 +65,8 @@ jobs:
           cmake -E make_directory ./build_winninja
 
       - name: bext checkout
-        uses: actions/checkout@v4
-        with:
-          name: BRL-CAD/bext
-          path: ./build_winninja/bext
+        run: |
+          cd build_winninja && git clone https://github.com/BRL-CAD/bext.git && cd ..
 
       - name: Configure
         run: |
@@ -119,10 +117,8 @@ jobs:
           cmake -E make_directory ./build_winstd
 
       - name: bext checkout
-        uses: actions/checkout@v4
-        with:
-          name: BRL-CAD/bext
-          path: ./build_winstd/bext
+        run: |
+          cd ./build_winstd; git clone https://github.com/BRL-CAD/bext.git; cd ..
 
       - name: Configure
         run: |
@@ -217,10 +213,8 @@ jobs:
           cmake -E make_directory ./build_osx
 
       - name: bext checkout
-        uses: actions/checkout@v4
-        with:
-          name: BRL-CAD/bext
-          path: ./build_osx/bext
+        run: |
+          cd ./build_osx && git clone https://github.com/BRL-CAD/bext.git && cd ..
 
       - name: Configure
         run: |
@@ -264,10 +258,8 @@ jobs:
           cmake -E make_directory ./build_archives
 
       - name: bext checkout
-        uses: actions/checkout@v4
-        with:
-          name: BRL-CAD/bext
-          path: ./build_archives/bext
+        run: |
+          cd ./build_archives && git clone https://github.com/BRL-CAD/bext.git && cd ..
 
       - name: Configure
         run: |
