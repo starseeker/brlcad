@@ -264,13 +264,13 @@ jobs:
 
       - name: Build Directory setup
         run: |
-          cmake -E make_directory ./build
+          cmake -E make_directory ./build_archives
 
       - name: bext checkout
         uses: actions/checkout@v4
         with:
           name: BRL-CAD/bext
-          path: ./build/bext
+          path: ./build_archives/bext
 
       - name: Configure
         run: |
