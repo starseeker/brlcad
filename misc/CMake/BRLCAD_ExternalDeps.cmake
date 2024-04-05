@@ -40,6 +40,7 @@
 # we add those patterns to the SYS_INCLUDE_PATTERNS list
 mark_as_advanced(SYS_INCLUDE_PATTERNS)
 
+message("002 BRLCAD_EXT_SERIAL: ${BRLCAD_EXT_SERIAL}")
 if (NOT EXISTS "${BRLCAD_EXT_INSTALL_DIR}" OR NOT EXISTS "${BRLCAD_EXT_NOINSTALL_DIR}")
   message("Attempting to prepare our own version of the bext dependencies\n")
   include(BRLCAD_EXT_Setup)

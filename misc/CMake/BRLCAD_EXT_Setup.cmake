@@ -35,6 +35,8 @@ include(CMakeParseArguments)
 
 function(brlcad_ext_setup)
 
+message("003 BRLCAD_EXT_SERIAL: ${BRLCAD_EXT_SERIAL}")
+
   set(BRLCAD_EXT_BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR}/bext_build)
   set(BRLCAD_EXT_INSTALL_DIR ${CMAKE_CURRENT_BINARY_DIR})
 

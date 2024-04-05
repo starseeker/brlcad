@@ -31,26 +31,26 @@ jobs:
 
       - name: Build Directory setup
         run: |
-          cmake -E make_directory ./build
+          cmake -E make_directory ./build_clangstatic
 
       - name: bext checkout
         uses: actions/checkout@v4
         with:
           name: BRL-CAD/bext
-          path: ./build/bext
+          path: ./build_clangstatic/bext
 
       - name: Run Analyzer
         run: |
           pwd
           export PATH=$ENV{GITHUB_WORKSPACE}:/usr/share/clang/scan-build-14/bin:/usr/share/clang/scan-build-14/libexec:$PATH
-          cd build && cp ../misc/clang-static-analyzer-run.sh .
+          cd build_clangstatic && cp ../misc/clang-static-analyzer-run.sh .
           ./clang-static-analyzer-run.sh
 
       - name: Summary
         if: success() || failure()
         run: |
           sudo apt-get install html2text
-          html2text build/scan-reports-all/*/index.html
+          html2text build_clangstatic/scan-reports-all/*/index.html
 
 
   linux_cov:
@@ -84,28 +84,28 @@ jobs:
 
       - name: Build Directory setup
         run: |
-          cmake -E make_directory ./build
+          cmake -E make_directory ./build_lcov
 
       - name: bext checkout
         uses: actions/checkout@v4
         with:
           name: BRL-CAD/bext
-          path: ./build/bext
+          path: ./build_lcov/bext
 
       - name: Configure
         run: |
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
-          cmake -S . -B build -DBRLCAD_ENABLE_COVERAGE=ON -DBRLCAD_EXT_SERIAL=1 -DCMAKE_BUILD_TYPE=Release
+          cmake -S . -B build_lcov -DBRLCAD_ENABLE_COVERAGE=ON -DBRLCAD_EXT_SERIAL=1 -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
         run: |
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
-          cd build && make && cd ..
+          cd build_lcov && make && cd ..
 
       - name: Run Coverage Test
         run: |
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
-          cd build
+          cd build_lcov
           find . -name '*.gcda' -exec rm {} \;
           make check
           lcov --capture --directory . --output-file coverage.info

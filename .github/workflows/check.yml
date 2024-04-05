@@ -62,17 +62,17 @@ jobs:
 
       - name: Build Directory setup
         run: |
-          cmake -E make_directory ./build
+          cmake -E make_directory ./build_winninja
 
       - name: bext checkout
         uses: actions/checkout@v4
         with:
           name: BRL-CAD/bext
-          path: ./build/bext
+          path: ./build_winninja/bext
 
       - name: Configure
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER="cl.exe" -DCMAKE_CXX_COMPILER="cl.exe" -DBRLCAD_EXT_SERIAL=1 -DCMAKE_BUILD_TYPE=Release -DBRLCAD_ENABLE_QT=ON
+          cmake -S . -B build_winninja -G Ninja -DCMAKE_C_COMPILER="cl.exe" -DCMAKE_CXX_COMPILER="cl.exe" -DBRLCAD_EXT_SERIAL=1 -DCMAKE_BUILD_TYPE=Release -DBRLCAD_ENABLE_QT=ON
           # We do the following in order to help ensure files are "flushed"
           # to disk before compilation is attempted
           # https://superuser.com/a/1553374/1286142
@@ -80,14 +80,14 @@ jobs:
           powershell Write-VolumeCache D
 
       - name: Build
-        run: cd build && ninja -j1 -v && ninja check -v && ninja package
+        run: cd build_winninja && ninja -j1 -v && ninja check -v && ninja package
 
         # Various other Windows build lines used for various types of testing.
         # Preserved for reference, as the iterative time to figure out how to
         # perform them was significant...
-        #run: cmake --build build --config Release --target package
-        #run: cd build && ninja -j1 -v STEPCODE_BLD && cd src/other/ext/STEPCODE_BLD-prefix/src/STEPCODE_BLD-build && ninja clean && ninja -j1 -v
-        #run: cmake --build build --config Release --target STEPCODE_BLD && cd build/src/other/ext/STEPCODE_BLD-prefix/src/STEPCODE_BLD-build && msbuild ALL_BUILD.vcxproj -t:clean && msbuild ALL_BUILD.vcxproj -v:diag
+        #run: cmake --build build_winninja --config Release --target package
+        #run: cd build_winninja && ninja -j1 -v STEPCODE_BLD && cd src/other/ext/STEPCODE_BLD-prefix/src/STEPCODE_BLD-build && ninja clean && ninja -j1 -v
+        #run: cmake --build build_winninja --config Release --target STEPCODE_BLD && cd build/src/other/ext/STEPCODE_BLD-prefix/src/STEPCODE_BLD-build && msbuild ALL_BUILD.vcxproj -t:clean && msbuild ALL_BUILD.vcxproj -v:diag
 
         # For the moment the space demands are too extreme to enable this
         # output for every compile test, but leave the enabling logic present
@@ -96,7 +96,7 @@ jobs:
 #       uses: actions/upload-artifact@v2
 #       with:
 #         name: BRLCAD_Windows
-#         path: ${{ github.workspace }}/build/BRL-CAD*exe
+#         path: ${{ github.workspace }}/build_winninja/BRL-CAD*exe
 
   windows_std_tools:
     name: Windows Latest MSVC - Standard Tools
@@ -116,17 +116,17 @@ jobs:
 
       - name: Build Directory setup
         run: |
-          cmake -E make_directory ./build
+          cmake -E make_directory ./build_winstd
 
       - name: bext checkout
         uses: actions/checkout@v4
         with:
           name: BRL-CAD/bext
-          path: ./build/bext
+          path: ./build_winstd/bext
 
       - name: Configure
         run: |
-          cmake -S . -B build -DBRLCAD_EXT_SERIAL=1 -DCMAKE_BUILD_TYPE=Release
+          cmake -S . -B build_winstd -DBRLCAD_EXT_SERIAL=1 -DCMAKE_BUILD_TYPE=Release
           # We do the following in order to help ensure files are "flushed"
           # to disk before compilation is attempted
           # https://superuser.com/a/1553374/1286142
@@ -138,7 +138,7 @@ jobs:
           # but still have a test of the key components, just build MGED
       - name: Build
         run: |
-          cmake --build build --config Release --target mged
+          cmake --build build_winstd --config Release --target mged
 
 
   linux:
@@ -169,24 +169,24 @@ jobs:
 
       - name: Build Directory setup
         run: |
-          cmake -E make_directory ./build
+          cmake -E make_directory ./build_linux
 
       - name: bext checkout
         uses: actions/checkout@v4
         with:
           name: BRL-CAD/bext
-          path: ./build/bext
+          path: ./build_linux/bext
 
       - name: Configure
         run: |
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
-          cmake -S . -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_SERIAL=1 -DBRLCAD_ENABLE_QT=ON
+          cmake -S . -G Ninja -B build_linux -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_SERIAL=1 -DBRLCAD_ENABLE_QT=ON
 
       - name: Build
         run: |
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
-          cmake --build build --config Release --target check
-          cmake --build build --config Release --target package
+          cmake --build build_linux --config Release --target check
+          cmake --build build_linux --config Release --target package
 
         # For the moment the space demands are too extreme to enable this
         # output for every compile test, but leave the enabling logic present
@@ -195,7 +195,7 @@ jobs:
 #       uses: actions/upload-artifact@v2
 #       with:
 #         name: BRLCAD_Linux
-#         path: ${{ github.workspace }}/build/BRL-CAD*gz
+#         path: ${{ github.workspace }}/build_linux/BRL-CAD*gz
 
   osx:
     name: macOS Latest Clang
@@ -216,27 +216,27 @@ jobs:
 
       - name: Build Directory setup
         run: |
-          cmake -E make_directory ./build
+          cmake -E make_directory ./build_osx
 
       - name: bext checkout
         uses: actions/checkout@v4
         with:
           name: BRL-CAD/bext
-          path: ./build/bext
+          path: ./build_osx/bext
 
       - name: Configure
         run: |
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
           export CC=clang
           export CXX=clang++
-          cmake -S . -G Ninja -B build -DBRLCAD_EXT_SERIAL=1 -DCMAKE_BUILD_TYPE=Release -DBRLCAD_ENABLE_QT=ON -DBRLCAD_ENABLE_X11=OFF
+          cmake -S . -G Ninja -B build_osx -DBRLCAD_EXT_SERIAL=1 -DCMAKE_BUILD_TYPE=Release -DBRLCAD_ENABLE_QT=ON -DBRLCAD_ENABLE_X11=OFF
 
       - name: Build
         run: |
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
-          cd build && ninja -j1 && ninja -j1 package
-          #cmake --build build --config Release --target check
-          #cmake --build build --config Release --target package
+          cd build_osx && ninja -j1 && ninja -j1 package
+          #cmake --build build_osx --config Release --target check
+          #cmake --build build_osx --config Release --target package
 
         # For the moment the space demands are too extreme to enable this
         # output for every compile test, but leave the enabling logic present
@@ -245,7 +245,7 @@ jobs:
 #       uses: actions/upload-artifact@v2
 #       with:
 #         name: BRLCAD_OSX
-#         path: ${{ github.workspace }}/build/BRL-CAD*gz
+#         path: ${{ github.workspace }}/build_osx/BRL-CAD*gz
 
   # A full distcheck is too expensive for the runners, but we can run the
   # repository integrity check and make sure we can build source archives.
