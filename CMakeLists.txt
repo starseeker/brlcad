@@ -111,6 +111,9 @@ if (POLICY CMP0127)
   cmake_policy(SET CMP0127 NEW)
 endif (POLICY CMP0127)
 
+message("CMAKE_SOURCE_DIR: ${CMAKE_SOURCE_DIR}")
+message("CMAKE_BINARY_DIR: ${CMAKE_BINARY_DIR}")
+message("000 BRLCAD_EXT_PARALLEL=${BRLCAD_EXT_PARALLEL}")
 
 #---------------------------------------------------------------------
 # CMake derives much of its functionality from modules, typically
