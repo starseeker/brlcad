@@ -64,8 +64,9 @@ jobs:
           cd ./build_winninja; git clone https://github.com/BRL-CAD/bext.git; cd ..
 
       - name: Configure
+        shell: powershell
         run: |
-          cmake -S . -B build_winninja -G Ninja -DCMAKE_C_COMPILER="cl.exe" -DCMAKE_CXX_COMPILER="cl.exe" -DENABLE_ALL=ON -DBRLCAD_EXT_PARALLEL=1 -DCMAKE_BUILD_TYPE=Release -DBRLCAD_ENABLE_QT=ON
+          cmake -S . -B build_winninja -G Ninja -DCMAKE_C_COMPILER="cl.exe" -DCMAKE_CXX_COMPILER="cl.exe" -DBRLCAD_EXT_PARALLEL=1 -DCMAKE_BUILD_TYPE=Release
           # We do the following in order to help ensure files are "flushed"
           # to disk before compilation is attempted
           # https://superuser.com/a/1553374/1286142
@@ -73,7 +74,9 @@ jobs:
           Write-VolumeCache D
 
       - name: Build
-        run: cd build_winninja; ninja -j1 -v; ninja check -v; ninja package
+        shell: powershell
+        run: |
+          cd build_winninja; ninja -j1 -v; ninja check -v; ninja package
 
         # Various other Windows build lines used for various types of testing.
         # Preserved for reference, as the iterative time to figure out how to
@@ -116,8 +119,10 @@ jobs:
           cd ./build_winstd; git clone https://github.com/BRL-CAD/bext.git; cd ..
 
       - name: Configure
+        shell: cmd
         run: |
-          cmake -S . -B build_winstd -DBRLCAD_EXT_PARALLEL=1 -DENABLE_ALL=ON -DCMAKE_BUILD_TYPE=Release
+          call "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Auxiliary/Build/vcvars64.bat"
+          cmake -S . -B build_winstd -DBRLCAD_EXT_PARALLEL=1 -DCMAKE_BUILD_TYPE=Release
           # We do the following in order to help ensure files are "flushed"
           # to disk before compilation is attempted
           # https://superuser.com/a/1553374/1286142
@@ -128,7 +133,9 @@ jobs:
           # verify multi-config building is working as expected - to shorten build times
           # but still have a test of the key components, just build MGED
       - name: Build
+        shell: cmd
         run: |
+          call "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Auxiliary/Build/vcvars64.bat"
           cmake --build build_winstd --config Release --target mged
 
 
