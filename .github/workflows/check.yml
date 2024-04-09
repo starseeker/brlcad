@@ -218,6 +218,23 @@ jobs:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
 
+      - name: bext checkout
+        run: |
+          git clone https://github.com/BRL-CAD/bext.git
+
+      # Note: System Tcl/Tk messes with our build, so we turn on our bundled libs to try and avoid issues...
+      - name: Configure
+        run: |
+          export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
+          export CC=clang
+          export CXX=clang++
+          cmake -S . -G Ninja -B bext_build -DENABLE_ALL=ON -DCMAKE_INSTALL_PREFIX=${{ github.workspace }} -DGIT_SHALLOW_CLONE=ON -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: |
+          export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
+          cd bext_build && ninja -j2 -v && cd ..
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -225,17 +242,12 @@ jobs:
         run: |
           cmake -E make_directory ./build_osx
 
-      - name: bext checkout
-        run: |
-          cd ./build_osx && git clone https://github.com/BRL-CAD/bext.git && cd ..
-
-      # Note: System Tcl/Tk messes with our build, so we turn on our bundled libs to try and avoid issues...
       - name: Configure
         run: |
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
-          #export CC=clang
-          #export CXX=clang++
-          cmake -S . -G Ninja -B build_osx -DBRLCAD_EXT_PARALLEL=1 -DCMAKE_BUILD_TYPE=Release -DBRLCAD_BUNDLED_LIBS=BUNDLED -DBRLCAD_ENABLE_QT=OFF -DBRLCAD_ENABLE_GDAL=OFF -DBRLCAD_ENABLE_X11=OFF
+          export CC=clang
+          export CXX=clang++
+          cmake -S . -G Ninja -B build_osx -DBRLCAD_EXT_DIR=${{ github.workspace }}/bext_output -DCMAKE_BUILD_TYPE=Release -DBRLCAD_BUNDLED_LIBS=BUNDLED -DBRLCAD_ENABLE_QT=OFF -DBRLCAD_ENABLE_GDAL=OFF -DBRLCAD_ENABLE_X11=OFF
 
       - name: Build
         run: |
