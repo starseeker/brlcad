@@ -289,7 +289,7 @@ jobs:
         run: |
           git clone https://github.com/BRL-CAD/bext.git 
           mkdir bext_build
-          cd ./bext_build &&  cmake ../bext -DCMAKE_INSTALL_PREFIX=${{ github.workspace }} && cmake --build . -j 1
+          cd ./bext_build &&  cmake ../bext -DUSE_QT=OFF -DCMAKE_INSTALL_PREFIX=${{ github.workspace }} && cmake --build . -j 1
 
       - name: Configure
         run: |
