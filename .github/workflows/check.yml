@@ -293,27 +293,22 @@ jobs:
 
       - name: Setup - bext
         run: |
-          git clone https://github.com/BRL-CAD/bext.git 
-          mkdir bext_build
-          cd ./bext_build &&  cmake ../bext -DUSE_QT=OFF -DCMAKE_INSTALL_PREFIX=${{ github.workspace }} && cmake --build . -j 1 && cd ..
-          ls -R ${{ github.workspace }}/bext_output
 
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build Directory setup
+      - name: Build
         run: |
+          cd ${{ github.workspace }}
+          git clone https://github.com/BRL-CAD/bext.git 
+          mkdir bext_build
+          cd ./bext_build &&  cmake ../bext -DUSE_QT=OFF -DCMAKE_INSTALL_PREFIX=${{ github.workspace }} && cmake --build . -j 1 && cd ..
+          ls -R ${{ github.workspace }}/bext_output
+          cd ${{ github.workspace }}/brlcad 
           cmake -E make_directory ./build_archives
-
-      - name: Configure
-        run: |
-          echo ${{ github.workspace }}
           ls ${{ github.workspace }}/bext_output
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
           cmake -S . -B build_archives -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_DIR=${{ github.workspace }}/bext_output
-
-      - name: Build
-        run: |
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
           cmake --build build_archives --config Release --target distcheck-source_archives
 
