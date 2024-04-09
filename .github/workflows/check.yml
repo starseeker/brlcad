@@ -262,6 +262,7 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt update
+          sudo apt-cache search .
           # Install X/OpenGL dev pkgs
           sudo apt install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           # Install tools
