@@ -151,7 +151,7 @@ jobs:
           # Install tools
           sudo apt install astyle re2c xsltproc libxml2-utils liblief-dev
           # Install dependency dev pkgs
-          sudo apt install zlib1g-dev libpng-dev libnetpbm-dev libjpeg-dev libtiff-dev libeigen3-dev libgdal-dev libassimp-dev libopencv-dev libopenmesh-dev tcl-dev tk-dev qt6-base-dev qt6-svg-dev
+          sudo apt install zlib1g-dev libpng-dev libjpeg-dev libtiff-dev libeigen3-dev libgdal-dev libassimp-dev libopencv-dev tcl-dev tk-dev qt6-base-dev
           # Cleanup (we want to avoid wasting disk space) 
           sudo apt clean
 
@@ -267,7 +267,7 @@ jobs:
           # Install tools
           sudo apt install astyle re2c xsltproc libxml2-utils liblief-dev
           # Install dependency dev pkgs
-          sudo apt install zlib1g-dev libpng-dev libnetpbm-dev libjpeg-dev libtiff-dev libeigen3-dev libgdal-dev libassimp-dev libopencv-dev libopenmesh-dev tcl-dev tk-dev qt6-base-dev qt6-svg-dev 
+          sudo apt install zlib1g-dev libpng-dev libjpeg-dev libtiff-dev libeigen3-dev libgdal-dev libassimp-dev libopencv-dev tcl-dev tk-dev qt6-base-dev
           # Cleanup (we want to avoid wasting disk space) 
           sudo apt clean
 
