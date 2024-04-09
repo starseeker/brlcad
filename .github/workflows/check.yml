@@ -218,19 +218,19 @@ jobs:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
 
-      - name: bext checkout
+      - name: Setup - bext clone
         run: |
           git clone https://github.com/BRL-CAD/bext.git
 
       # Note: System Tcl/Tk messes with our build, so we turn on our bundled libs to try and avoid issues...
-      - name: Configure
+      - name: Setup - bext configure
         run: |
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
           export CC=clang
           export CXX=clang++
           cmake -S . -G Ninja -B bext_build -DENABLE_ALL=ON -DCMAKE_INSTALL_PREFIX=${{ github.workspace }} -DGIT_SHALLOW_CLONE=ON -DCMAKE_BUILD_TYPE=Debug
 
-      - name: Build
+      - name: Setup - bext build
         run: |
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
           cd bext_build && ninja -j2 -v && cd ..
