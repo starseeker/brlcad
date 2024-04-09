@@ -303,7 +303,7 @@ jobs:
           git clone https://github.com/BRL-CAD/bext.git 
           mkdir bext_build
           cd ./bext_build &&  cmake ../bext -DUSE_QT=OFF -DCMAKE_INSTALL_PREFIX=${{ github.workspace }} && cmake --build . -j 1 && cd ..
-          ls -R ${{ github.workspace }}/bext_output
+          ls ${{ github.workspace }}/bext_output
           cd ${{ github.workspace }}/brlcad 
           cmake -E make_directory ./build_archives
           ls ${{ github.workspace }}/bext_output
