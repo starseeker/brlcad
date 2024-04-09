@@ -265,13 +265,12 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt update
-          sudo apt-cache search .
           # Install X/OpenGL dev pkgs
           sudo apt install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           # Install tools
           sudo apt install astyle re2c xsltproc libxml2-utils liblief-dev
           # Install dependency dev pkgs
-          sudo apt install zlib1g-dev libpng-dev libjpeg-dev libtiff-dev libeigen3-dev libgdal-dev libassimp-dev libopencv-dev tcl-dev tk-dev qt6-base-dev
+          sudo apt install zlib1g-dev libpng-dev libjpeg-dev libtiff-dev libeigen3-dev libgdal-dev libassimp-dev libopencv-dev tcl-dev tk-dev
           # Cleanup (we want to avoid wasting disk space) 
           sudo apt clean
 
