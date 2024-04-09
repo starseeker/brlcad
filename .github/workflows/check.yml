@@ -228,7 +228,7 @@ jobs:
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
           export CC=clang
           export CXX=clang++
-          cmake -S . -G Ninja -B bext_build -DENABLE_ALL=ON -DCMAKE_INSTALL_PREFIX=${{ github.workspace }} -DGIT_SHALLOW_CLONE=ON -DCMAKE_BUILD_TYPE=Debug
+          cmake -S bext -G Ninja -B bext_build -DENABLE_ALL=ON -DCMAKE_INSTALL_PREFIX=${{ github.workspace }} -DGIT_SHALLOW_CLONE=ON -DCMAKE_BUILD_TYPE=Debug
 
       - name: Setup - bext build
         run: |
