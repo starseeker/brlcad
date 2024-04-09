@@ -220,12 +220,13 @@ jobs:
         run: |
           cd ./build_osx && git clone https://github.com/BRL-CAD/bext.git && cd ..
 
+      # Note: System Tcl/Tk messes with our build, so we turn on our bundled libs to try and avoid issues...
       - name: Configure
         run: |
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
           export CC=clang
           export CXX=clang++
-          cmake -S . -G Ninja -B build_osx -DBRLCAD_EXT_PARALLEL=1 -DCMAKE_BUILD_TYPE=Release -DBRLCAD_ENABLE_QT=OFF -DBRLCAD_ENABLE_GDAL=OFF -DBRLCAD_ENABLE_X11=OFF
+          cmake -S . -G Ninja -B build_osx -DBRLCAD_EXT_PARALLEL=1 -DCMAKE_BUILD_TYPE=Release -DBRLCAD_BUNDLED_LIBS=BUNDLED -DBRLCAD_ENABLE_QT=OFF -DBRLCAD_ENABLE_GDAL=OFF -DBRLCAD_ENABLE_X11=OFF
 
       - name: Build
         run: |
