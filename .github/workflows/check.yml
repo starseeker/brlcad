@@ -304,6 +304,8 @@ jobs:
 
       - name: Configure
         run: |
+          echo ${{ github.workspace }}
+          ls ${{ github.workspace }}/bext_output
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
           cmake -S . -B build_archives -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_DIR=${{ github.workspace }}/bext_output
 
