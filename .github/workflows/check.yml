@@ -58,6 +58,7 @@ jobs:
           git clone https://github.com/BRL-CAD/bext.git 
           mkdir bext_build
           cd ./bext_build; cmake ../bext -DUSE_QT=OFF -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}; cmake --build . -j 1; cd ..
+          ls -R ${{ github.workspace }}/bext_output
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -233,6 +234,7 @@ jobs:
         run: |
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
           cd bext_build && ninja -j2 -v && cd ..
+          ls -R ${{ github.workspace }}/bext_output
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -293,7 +295,8 @@ jobs:
         run: |
           git clone https://github.com/BRL-CAD/bext.git 
           mkdir bext_build
-          cd ./bext_build &&  cmake ../bext -DUSE_QT=OFF -DCMAKE_INSTALL_PREFIX=${{ github.workspace }} && cmake --build . -j 1
+          cd ./bext_build &&  cmake ../bext -DUSE_QT=OFF -DCMAKE_INSTALL_PREFIX=${{ github.workspace }} && cmake --build . -j 1 && cd ..
+          ls -R ${{ github.workspace }}/bext_output
 
       - name: Checkout
         uses: actions/checkout@v4
