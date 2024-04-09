@@ -36,17 +36,12 @@ jobs:
   windows:
     name: Windows Latest MSVC - Ninja
     runs-on: windows-latest
+    shell: pwsh
     strategy:
       fail-fast: true
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
-
-      - name: Setup - Qt
-        uses: jurplel/install-qt-action@v3
-        with:
-          version: '6.6.*'
-          cache: 'true'
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -67,7 +62,7 @@ jobs:
 
       - name: bext checkout
         run: |
-          cd build_winninja && git clone https://github.com/BRL-CAD/bext.git && cd ..
+          cd ./build_winninja; git clone https://github.com/BRL-CAD/bext.git; cd ..
 
       - name: Configure
         run: |
@@ -75,11 +70,11 @@ jobs:
           # We do the following in order to help ensure files are "flushed"
           # to disk before compilation is attempted
           # https://superuser.com/a/1553374/1286142
-          powershell Write-VolumeCache C
-          powershell Write-VolumeCache D
+          Write-VolumeCache C
+          Write-VolumeCache D
 
       - name: Build
-        run: cd build_winninja && ninja -j1 -v && ninja check -v && ninja package
+        run: cd build_winninja; ninja -j1 -v; ninja check -v; ninja package
 
         # Various other Windows build lines used for various types of testing.
         # Preserved for reference, as the iterative time to figure out how to
@@ -100,17 +95,12 @@ jobs:
   windows_std_tools:
     name: Windows Latest MSVC - Standard Tools
     runs-on: windows-latest
+    shell: pwsh
     strategy:
       fail-fast: true
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
-
-      - name: Setup - Qt
-        uses: jurplel/install-qt-action@v3
-        with:
-          version: '6.6.*'
-          cache: 'true'
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -157,16 +147,29 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update
+          sudo apt update
           # Install X/OpenGL dev pkgs
-          sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev
-          sudo apt-get clean
+          sudo apt install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
+          # Install tools
+          sudo apt install astyle re2c xsltproc libxml2-utils liblief-dev
+          # Install dependency dev pkgs
+          sudo apt install zlib1g-dev libpng-dev libnetpbm-dev libjpeg-dev libtiff-dev libeigen3-dev libgdal-dev libassimp-dev libopencv-dev libopenmesh-dev tcl-dev tk-dev qt6-base-dev qt6-svg-dev
+          # Cleanup (we want to avoid wasting disk space) 
+          sudo apt clean
 
-      - name: Setup - Qt
-        uses: jurplel/install-qt-action@v3
-        with:
-          version: '6.6.*'
-          cache: 'true'
+     #- name: Setup - System Qt Build Requirements
+     #  env:
+     #    DEBIAN_FRONTEND: noninteractive
+     #  run: |
+     #    sudo apt update
+     #    # Install XCB/OpenGL dev pkgs for Qt - see:
+     #    # https://wiki.qt.io/Building_Qt_6_from_Git
+     #    # https://doc.qt.io/qt-6/linux-requirements.html
+     #    sudo apt install libfontconfig1-dev libfreetype6-dev libx11-dev libx11-xcb-dev libxext-dev libxfixes-dev libxi-dev libxrender-dev libxcb1-dev libxcb-cursor-dev libxcb-glx0-dev libxcb-keysyms1-dev libxcb-image0-dev libxcb-shm0-dev libxcb-icccm4-dev libxcb-sync-dev libxcb-xfixes0-dev libxcb-shape0-dev libxcb-randr0-dev libxcb-render-util0-dev libxcb-util-dev libxcb-xinerama0-dev libxcb-xkb-dev libxkbcommon-dev libxkbcommon-x11-dev
+     #    sudo apt install libgl-dev
+     #    sudo apt install libinput-dev
+     #    sudo apt clean
+
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -182,7 +185,7 @@ jobs:
       - name: Configure
         run: |
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
-          cmake -S . -G Ninja -B build_linux -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_PARALLEL=1 -DENABLE_ALL=ON -DBRLCAD_ENABLE_QT=ON
+          cmake -S . -G Ninja -B build_linux -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_PARALLEL=1 -DBRLCAD_ENABLE_QT=ON
 
       - name: Build
         run: |
@@ -208,12 +211,6 @@ jobs:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
 
-      - name: Setup - Qt
-        uses: jurplel/install-qt-action@v3
-        with:
-          version: '6.6.*'
-          cache: 'true'
-
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -230,7 +227,7 @@ jobs:
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
           export CC=clang
           export CXX=clang++
-          cmake -S . -G Ninja -B build_osx -DBRLCAD_EXT_PARALLEL=1 -DCMAKE_BUILD_TYPE=Release -DENABLE_ALL=ON -DBRLCAD_ENABLE_QT=ON -DBRLCAD_ENABLE_X11=OFF
+          cmake -S . -G Ninja -B build_osx -DBRLCAD_EXT_PARALLEL=1 -DCMAKE_BUILD_TYPE=Release -DBRLCAD_ENABLE_QT=OFF -DBRLCAD_ENABLE_GDAL=OFF -DBRLCAD_ENABLE_X11=OFF
 
       - name: Build
         run: |
@@ -259,14 +256,22 @@ jobs:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
 
-      - name: Setup - Qt
-        uses: jurplel/install-qt-action@v3
-        with:
-          version: '6.6.*'
-          cache: 'true'
-
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup - System
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt update
+          # Install X/OpenGL dev pkgs
+          sudo apt install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
+          # Install tools
+          sudo apt install astyle re2c xsltproc libxml2-utils liblief-dev
+          # Install dependency dev pkgs
+          sudo apt install zlib1g-dev libpng-dev libnetpbm-dev libjpeg-dev libtiff-dev libeigen3-dev libgdal-dev libassimp-dev libopencv-dev libopenmesh-dev tcl-dev tk-dev qt6-base-dev qt6-svg-dev 
+          # Cleanup (we want to avoid wasting disk space) 
+          sudo apt clean
 
       - name: Build Directory setup
         run: |
@@ -279,7 +284,7 @@ jobs:
       - name: Configure
         run: |
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
-          cmake -S . -B build_archives -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_PARALLEL=1 -DENABLE_ALL=ON
+          cmake -S . -B build_archives -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_PARALLEL=1
 
       - name: Build
         run: |
