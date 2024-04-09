@@ -264,9 +264,6 @@ jobs:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
 
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Setup - System
         env:
           DEBIAN_FRONTEND: noninteractive
@@ -281,15 +278,18 @@ jobs:
           # Cleanup (we want to avoid wasting disk space) 
           sudo apt clean
 
-      - name: Build Directory setup
-        run: |
-          cmake -E make_directory ./build_archives
-
-      - name: bext setup
+      - name: Setup - bext
         run: |
           git clone https://github.com/BRL-CAD/bext.git 
           mkdir bext_build
           cd ./bext_build &&  cmake ../bext -DUSE_QT=OFF -DCMAKE_INSTALL_PREFIX=${{ github.workspace }} && cmake --build . -j 1
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Directory setup
+        run: |
+          cmake -E make_directory ./build_archives
 
       - name: Configure
         run: |
