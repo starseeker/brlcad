@@ -176,8 +176,6 @@ if (BRLCAD_EXT_DIR_ENV AND NOT DEFINED BRLCAD_EXT_DIR)
   set(BRLCAD_EXT_DIR ${BRLCAD_EXT_DIR_ENV})
 endif (BRLCAD_EXT_DIR_ENV AND NOT DEFINED BRLCAD_EXT_DIR)
 
-message(FATAL_ERROR "BRLCAD_EXT_DIR: ${BRLCAD_EXT_DIR}")
-
 # For a full tarball of the repo and its dependencies, look in the
 # location package_source would place a bext copy
 if (NOT DEFINED BRLCAD_EXT_DIR AND EXISTS "${CMAKE_SOURCE_DIR}/src/bext")
