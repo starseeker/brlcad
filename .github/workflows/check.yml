@@ -52,21 +52,13 @@ jobs:
         # https://github.community/t/deprecated-add-path/136621
         run: echo "$ENV{GITHUB_WORKSPACE}" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
 
-      - name: Setup - bext
-        shell: powershell
-        run: |
-          git clone https://github.com/BRL-CAD/bext.git 
-          mkdir bext_build
-          cd ./bext_build; cmake ../bext -DUSE_QT=OFF -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}; cmake --build . -j 1; cd ..
-          ls -R ${{ github.workspace }}/bext_output
-
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Configure
         shell: powershell
         run: |
-          cmake -S . -B build_winninja -G Ninja -DCMAKE_C_COMPILER="cl.exe" -DCMAKE_CXX_COMPILER="cl.exe" -DBRLCAD_EXT_DIR=${{ github.workspace }}/bext_output -DCMAKE_BUILD_TYPE=Release
+          cmake -S . -B build_winninja -G Ninja -DCMAKE_C_COMPILER="cl.exe" -DCMAKE_CXX_COMPILER="cl.exe" -DBRLCAD_EXT_PARALLEL=1 -DCMAKE_BUILD_TYPE=Release
           # We do the following in order to help ensure files are "flushed"
           # to disk before compilation is attempted
           # https://superuser.com/a/1553374/1286142
@@ -113,10 +105,6 @@ jobs:
       - name: Build Directory setup
         run: |
           cmake -E make_directory ./build_winstd
-
-      - name: bext checkout
-        run: |
-          cd ./build_winstd; git clone https://github.com/BRL-CAD/bext.git; cd ..
 
       - name: Configure
         shell: cmd
@@ -185,10 +173,6 @@ jobs:
         run: |
           cmake -E make_directory ./build_linux
 
-      - name: bext checkout
-        run: |
-          cd ./build_linux && git clone https://github.com/BRL-CAD/bext.git && cd ..
-
       - name: Configure
         run: |
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
@@ -218,24 +202,6 @@ jobs:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
 
-      - name: Setup - bext clone
-        run: |
-          git clone https://github.com/BRL-CAD/bext.git
-
-      # Note: System Tcl/Tk messes with our build, so we turn on our bundled libs to try and avoid issues...
-      - name: Setup - bext configure
-        run: |
-          export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
-          export CC=clang
-          export CXX=clang++
-          cmake -S bext -G Ninja -B bext_build -DENABLE_ALL=ON -DCMAKE_INSTALL_PREFIX=${{ github.workspace }} -DGIT_SHALLOW_CLONE=ON -DCMAKE_BUILD_TYPE=Debug
-
-      - name: Setup - bext build
-        run: |
-          export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
-          cd bext_build && ninja -j2 -v && cd ..
-          ls -R ${{ github.workspace }}/bext_output
-
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -248,7 +214,7 @@ jobs:
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
           export CC=clang
           export CXX=clang++
-          cmake -S . -G Ninja -B build_osx -DBRLCAD_EXT_DIR=${{ github.workspace }}/bext_output -DCMAKE_BUILD_TYPE=Release -DBRLCAD_BUNDLED_LIBS=BUNDLED -DBRLCAD_ENABLE_QT=OFF -DBRLCAD_ENABLE_GDAL=OFF -DBRLCAD_ENABLE_X11=OFF
+          cmake -S . -G Ninja -B build_osx -DCMAKE_BUILD_TYPE=Release -DBRLCAD_BUNDLED_LIBS=BUNDLED -DBRLCAD_ENABLE_QT=OFF -DBRLCAD_ENABLE_GDAL=OFF -DBRLCAD_ENABLE_X11=OFF
 
       - name: Build
         run: |
@@ -299,16 +265,8 @@ jobs:
 
       - name: Build
         run: |
-          cd ${{ github.workspace }}
-          git clone https://github.com/BRL-CAD/bext.git 
-          mkdir bext_build
-          cd ./bext_build &&  cmake ../bext -DUSE_QT=OFF -DCMAKE_INSTALL_PREFIX=${{ github.workspace }} && cmake --build . -j 1 && cd ..
-          ls ${{ github.workspace }}/bext_output
-          cd ${{ github.workspace }}/brlcad 
           cmake -E make_directory ./build_archives
-          ls ${{ github.workspace }}/bext_output
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
-          cmake -S . -B build_archives -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_DIR=${{ github.workspace }}/bext_output
-          export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
+          cmake -S . -B build_archives -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_PARALLEL=1
           cmake --build build_archives --config Release --target distcheck-source_archives
 
