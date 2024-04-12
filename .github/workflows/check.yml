@@ -200,19 +200,33 @@ jobs:
         run: |
           cmake -E make_directory ./build_osx
 
+      - name: Setup - bext
+        shell: cmd
+        run: |
+          cd build_osx
+          git clone https://github.com/BRL-CAD/bext.git
+          cmake -E make_directory bext_build
+          cd bext_build
+          export CC=clang
+          export CXX=clang++
+          cmake ../bext -DUSE_QT=OFF -DENABLE_ALL=ON -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/build_osx -DCMAKE_BUILD_TYPE=Debug
+          cmake --build . -j 1
+          cd ..
+          cmake -E rm -rf bext
+          cmake -E rm -rf bext_build
+          cd ..
+
       - name: Configure
         run: |
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
           export CC=clang
           export CXX=clang++
-          cmake -S . -G Ninja -B build_osx -DCMAKE_BUILD_TYPE=Release -DBRLCAD_BUNDLED_LIBS=BUNDLED -DBRLCAD_ENABLE_QT=OFF -DBRLCAD_ENABLE_GDAL=OFF -DBRLCAD_ENABLE_X11=OFF
+          cmake -S . -G Ninja -B build_osx -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_DIR=${{ github.workspace }}/build_osx
 
       - name: Build
         run: |
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
           cd build_osx && ninja -j1 && ninja -j1 package
-          #cmake --build build_osx --config Release --target check
-          #cmake --build build_osx --config Release --target package
 
         # For the moment the space demands are too extreme to enable this
         # output for every compile test, but leave the enabling logic present
