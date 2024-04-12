@@ -168,6 +168,10 @@ endif(BRLCAD_PRINT_MSGS)
 # do this early in the process.
 include(BRLCAD_Environment_Setup)
 
+message("BRLCAD_EXT_DIR: ${BRLCAD_EXT_DIR}")
+file(GLOB DIR_C "${BRLCAD_EXT_DIR}/*")
+message("DIR_C: ${DIR_C}")
+
 # Populate these early, even though their main use is in
 # misc/CMake/BRLCAD_ExternalDeps.cmake - find_program and find_package calls
 # may also make use of them, particularly BRLCAD_EXT_NOINSTALL_DIR

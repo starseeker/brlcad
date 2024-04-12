@@ -76,7 +76,7 @@ jobs:
           # We do the Write-VolumeCache calls in order to help ensure files are
           # "flushed" to disk before compilation is attempted
           # https://superuser.com/a/1553374/1286142
-          cd build_winninja; cmake .. -G Ninja -DCMAKE_C_COMPILER="cl.exe" -DCMAKE_CXX_COMPILER="cl.exe" -DBRLCAD_EXT_DIR=${{ github.workspace }}/build_winninja -DCMAKE_BUILD_TYPE=Release; Write-VolumeCache C; Write-VolumeCache D
+          cd build_winninja; cmake .. -G Ninja -DCMAKE_C_COMPILER="cl.exe" -DCMAKE_CXX_COMPILER="cl.exe" -DBRLCAD_EXT_DIR=${{ github.workspace }}/build_winninja/bext_output -DCMAKE_BUILD_TYPE=Release; Write-VolumeCache C; Write-VolumeCache D
 
       - name: Build
         shell: powershell
@@ -219,7 +219,7 @@ jobs:
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
           export CC=clang
           export CXX=clang++
-          cmake -S . -G Ninja -B build_osx -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_DIR=${{ github.workspace }}/build_osx
+          cmake -S . -G Ninja -B build_osx -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_DIR=${{ github.workspace }}/build_osx/bext_output
 
       - name: Build
         run: |
