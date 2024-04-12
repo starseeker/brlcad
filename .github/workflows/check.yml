@@ -59,11 +59,14 @@ jobs:
         shell: cmd
         run: |
           call "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Auxiliary/Build/vcvars64.bat"
+          cmake -E make_directory build_winninja
           cd build_winninja
           git clone https://github.com/BRL-CAD/bext.git
-          cmake -E make_directory bext_build; cd bext_build
+          cmake -E make_directory bext_build
+          cd bext_build
           cmake ../bext -DUSE_QT=OFF -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/build_winninja
           cmake --build . -j 1
+          cd ..
           cmake -E rm -rf bext
           cmake -E rm -rf bext_build
           cd ..
