@@ -40,6 +40,7 @@ function(brlcad_ext_setup)
   set(BRLCAD_EXT_INSTALL_DIR ${CMAKE_CURRENT_BINARY_DIR})
 
   # If we don't have the bext source directory, try to clone it
+  set(BEXT_SRC_CLEANUP FALSE)
   if (NOT DEFINED BRLCAD_EXT_SOURCE_DIR)
     set(BRLCAD_EXT_SOURCE_DIR ${CMAKE_CURRENT_BINARY_DIR}/bext)
     if (NOT EXISTS ${BRLCAD_EXT_SOURCE_DIR})
@@ -47,15 +48,18 @@ function(brlcad_ext_setup)
       execute_process(
 	COMMAND ${GIT_EXEC} clone https://github.com/BRL-CAD/bext.git
 	WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-      )
+	)
+      set(BEXT_SRC_CLEANUP TRUE)
     endif (NOT EXISTS ${BRLCAD_EXT_SOURCE_DIR})
   endif (NOT DEFINED BRLCAD_EXT_SOURCE_DIR)
   if (NOT EXISTS ${BRLCAD_EXT_SOURCE_DIR})
     message(FATAL_ERROR "bext directory ${BRLCAD_EXT_SOURCE_DIR} is not present")
   endif (NOT EXISTS ${BRLCAD_EXT_SOURCE_DIR})
 
+  set(BEXT_BLD_CLEANUP FALSE)
   if (NOT EXISTS ${BRLCAD_EXT_BUILD_DIR})
     file(MAKE_DIRECTORY ${BRLCAD_EXT_BUILD_DIR})
+    set(BEXT_BLD_CLEANUP TRUE)
   endif (NOT EXISTS ${BRLCAD_EXT_BUILD_DIR})
 
   # Need to control options for this based on BRL-CAD configure settings.
@@ -146,6 +150,16 @@ message("${CMAKE_COMMAND} --build ${BRLCAD_EXT_BUILD_DIR} --parallel ${BRLCAD_EX
   if (EXT_BUILD_STATUS)
     message(FATAL_ERROR "Unable to successfully build bext dependency repository")
   endif (EXT_BUILD_STATUS)
+
+  # If we were successful, and set up things ourselves, clear out
+  # the src and build directories to save space.  In some environments,
+  # like the Github runners, space can be at a premium
+  if (BEXT_SRC_CLEANUP)
+    execute_process(COMMAND ${CMAKE_COMMAND} -E rm -rf ${BRLCAD_EXT_SOURCE_DIR})
+  endif (BEXT_SRC_CLEANUP)
+  if (BEXT_BLD_CLEANUP)
+    execute_process(COMMAND ${CMAKE_COMMAND} -E rm -rf ${BRLCAD_EXT_BUILD_DIR})
+  endif (BEXT_BLD_CLEANUP)
 
   set(BRLCAD_EXT_DIR ${BRLCAD_EXT_INSTALL_DIR}/bext_output CACHE PATH "Local bext install" FORCE)
   set(BRLCAD_EXT_INSTALL_DIR ${BRLCAD_EXT_DIR}/install CACHE PATH "Local bext install" FORCE)
