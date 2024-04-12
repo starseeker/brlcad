@@ -64,7 +64,7 @@ jobs:
           git clone https://github.com/BRL-CAD/bext.git
           cmake -E make_directory bext_build
           cd bext_build
-          cmake ../bext -DUSE_QT=OFF -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/build_winninja
+          cmake ../bext -DUSE_QT=OFF -DENABLE_ALL=ON -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/build_winninja
           cmake --build . -j 1
           cd ..
           cmake -E rm -rf bext
