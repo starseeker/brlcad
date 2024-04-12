@@ -209,7 +209,9 @@ if (NOT EXISTS "${CMAKE_SOURCE_DIR}/src/other")
   endif (NOT DEFINED BRLCAD_EXT_NOINSTALL_DIR OR NOT DEFINED BRLCAD_EXT_INSTALL_DIR)
 
   # Tell CPack to bundle bext into the source tarball
-  set(CPACK_INCLUDE_EXT 1)
+  if (NOT DEFINED CPACK_INCLUDE_EXT)
+    set(CPACK_INCLUDE_EXT ON)
+  endif (NOT DEFINED CPACK_INCLUDE_EXT)
 endif (NOT EXISTS "${CMAKE_SOURCE_DIR}/src/other")
 
 #---------------------------------------------------------------------
