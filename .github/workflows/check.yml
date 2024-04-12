@@ -200,7 +200,6 @@ jobs:
           cmake -E make_directory ./build_osx
 
       - name: Setup - bext
-        shell: cmd
         run: |
           cd build_osx
           git clone https://github.com/BRL-CAD/bext.git
