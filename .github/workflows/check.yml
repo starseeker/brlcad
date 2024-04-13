@@ -63,8 +63,8 @@ jobs:
           git clone https://github.com/BRL-CAD/bext.git
           cmake -E make_directory bext_build
           cd bext_build
-          cmake ../bext -DUSE_QT=OFF -DENABLE_ALL=ON -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/build_winninja
-          cmake --build . -j 1
+          cmake ../bext -DUSE_QT=OFF -DCMAKE_BUILD_TYPE=Release -DENABLE_ALL=ON -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/build_winninja
+          cmake --build --config Release . -j 1
           cd ..
           cmake -E rm -rf bext
           cmake -E rm -rf bext_build
@@ -219,7 +219,7 @@ jobs:
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
           export CC=clang
           export CXX=clang++
-          cmake -S . -G Ninja -B build_osx -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_DIR=${{ github.workspace }}/build_osx/bext_output
+          cmake -S . -G Ninja -B build_osx -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_DIR=${{ github.workspace }}/build_osx/bext_output -DBRLCAD_ENABLE_X11=OFF
 
       - name: Build
         run: |
