@@ -61,21 +61,19 @@ jobs:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
 
-      - name: Setup
+      - name: Setup - System
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt-get update
-          # Get the lcov tool and its dependencies
-          sudo apt-get install lcov
-          # We want as many deps pre-installed as we can for this - the analyzer setup slows their compilation
-          sudo apt-get install libproj-dev libgdal-dev tcl-dev tk-dev itcl3-dev itk3-dev libpng-dev zlib1g-dev libxml2-dev libxslt1-dev xsltproc libxml2-utils astyle xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev
-          sudo apt-get clean
-
-#     - name: Setup - Qt
-#       uses: jurplel/install-qt-action@v3
-#       with:
-#         cache: 'true'
+          # Install X/OpenGL dev pkgs
+          sudo apt install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
+          # Install tools
+          sudo apt install astyle re2c xsltproc libxml2-utils liblief-dev
+          # Install dependency dev pkgs
+          sudo apt install zlib1g-dev libpng-dev libjpeg-dev libtiff-dev libeigen3-dev libgdal-dev libassimp-dev libopencv-dev tcl-dev tk-dev
+          # Cleanup (we want to avoid wasting disk space) 
+          sudo apt clean
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -84,19 +82,15 @@ jobs:
         run: |
           cmake -E make_directory ./build_lcov
 
-      - name: bext checkout
-        run: |
-          cd ./build_lcov && git clone https://github.com/BRL-CAD/bext.git && cd ..
-
       - name: Configure
         run: |
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
-          cmake -S . -B build_lcov -DBRLCAD_ENABLE_COVERAGE=ON -DBRLCAD_EXT_PARALLEL=1 -DCMAKE_BUILD_TYPE=Release
+          cmake -S . -B build_lcov -DBRLCAD_ENABLE_COVERAGE=ON -DCMAKE_BUILD_TYPE=Debug -DBRLCAD_EXT_PARALLEL=1 -DBRLCAD_ENABLE_QT=OFF
 
       - name: Build
         run: |
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
-          cd build_lcov && make && cd ..
+          cmake --build build_lcov -j1
 
       - name: Run Coverage Test
         run: |
