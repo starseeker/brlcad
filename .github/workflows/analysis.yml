@@ -66,6 +66,8 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt-get update
+          # Get the lcov tool and its dependencies
+          sudo apt-get install lcov
           # Install X/OpenGL dev pkgs
           sudo apt install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           # Install tools
