@@ -63,7 +63,7 @@ jobs:
           git clone https://github.com/BRL-CAD/bext.git
           cmake -E make_directory bext_build
           cd bext_build
-          cmake ../bext -DUSE_QT=OFF -DCMAKE_BUILD_TYPE=Release -DENABLE_ALL=ON -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/build_winninja
+          cmake ../bext -DCMAKE_BUILD_TYPE=Release -DENABLE_ALL=ON -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/build_winninja
           cmake --build . --config Release -j 1
           cd ..
           cmake -E rm -rf bext
@@ -76,7 +76,7 @@ jobs:
           # We do the Write-VolumeCache calls in order to help ensure files are
           # "flushed" to disk before compilation is attempted
           # https://superuser.com/a/1553374/1286142
-          cd build_winninja; cmake .. -G Ninja -DCMAKE_C_COMPILER="cl.exe" -DCMAKE_CXX_COMPILER="cl.exe" -DBRLCAD_EXT_DIR=${{ github.workspace }}/build_winninja/bext_output -DCMAKE_BUILD_TYPE=Release; Write-VolumeCache C; Write-VolumeCache D
+          cd build_winninja; cmake .. -G Ninja -DCMAKE_C_COMPILER="cl.exe" -DCMAKE_CXX_COMPILER="cl.exe" -DBRLCAD_EXT_DIR=${{ github.workspace }}/build_winninja/bext_output -DCMAKE_BUILD_TYPE=Release -DBRLCAD_ENABLE_QT=ON; Write-VolumeCache C; Write-VolumeCache D
 
       - name: Build
         shell: powershell
@@ -108,7 +108,7 @@ jobs:
         shell: cmd
         run: |
           call "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Auxiliary/Build/vcvars64.bat"
-          cmake -S . -B build_winstd -DBRLCAD_EXT_PARALLEL=1 -DBRLCAD_BUNDLED_LIBS=Bundled -DCMAKE_BUILD_TYPE=Release
+          cmake -S . -B build_winstd -DBRLCAD_EXT_PARALLEL=1 -DBRLCAD_BUNDLED_LIBS=Bundled -DCMAKE_BUILD_TYPE=Release -DBRLCAD_ENABLE_QT=ON
 
       - name: Build
         shell: cmd
@@ -140,21 +140,18 @@ jobs:
           # Cleanup (we want to avoid wasting disk space)
           sudo apt-get clean
 
-          # TODO - do pre-installed Qt action, and figure out how to get our find logic to spot it. Available Ubuntu dev packages don't seem to include svg component
-
-     #- name: Setup - System Qt Build Requirements
-     #  env:
-     #    DEBIAN_FRONTEND: noninteractive
-     #  run: |
-     #    sudo apt-get update
-     #    # Install XCB/OpenGL dev pkgs for Qt - see:
-     #    # https://wiki.qt.io/Building_Qt_6_from_Git
-     #    # https://doc.qt.io/qt-6/linux-requirements.html
-     #    sudo apt-get install libfontconfig1-dev libfreetype6-dev libx11-dev libx11-xcb-dev libxext-dev libxfixes-dev libxi-dev libxrender-dev libxcb1-dev libxcb-cursor-dev libxcb-glx0-dev libxcb-keysyms1-dev libxcb-image0-dev libxcb-shm0-dev libxcb-icccm4-dev libxcb-sync-dev libxcb-xfixes0-dev libxcb-shape0-dev libxcb-randr0-dev libxcb-render-util0-dev libxcb-util-dev libxcb-xinerama0-dev libxcb-xkb-dev libxkbcommon-dev libxkbcommon-x11-dev
-     #    sudo apt-get install libgl-dev
-     #    sudo apt-get install libinput-dev
-     #    sudo apt-get clean
-
+     - name: Setup - System Qt Build Requirements
+       env:
+         DEBIAN_FRONTEND: noninteractive
+       run: |
+         sudo apt-get update
+         # Install XCB/OpenGL dev pkgs for Qt - see:
+         # https://wiki.qt.io/Building_Qt_6_from_Git
+         # https://doc.qt.io/qt-6/linux-requirements.html
+         sudo apt-get install libfontconfig1-dev libfreetype6-dev libx11-dev libx11-xcb-dev libxext-dev libxfixes-dev libxi-dev libxrender-dev libxcb1-dev libxcb-cursor-dev libxcb-glx0-dev libxcb-keysyms1-dev libxcb-image0-dev libxcb-shm0-dev libxcb-icccm4-dev libxcb-sync-dev libxcb-xfixes0-dev libxcb-shape0-dev libxcb-randr0-dev libxcb-render-util0-dev libxcb-util-dev libxcb-xinerama0-dev libxcb-xkb-dev libxkbcommon-dev libxkbcommon-x11-dev
+         sudo apt-get install libgl-dev
+         sudo apt-get install libinput-dev
+         sudo apt-get clean
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -166,7 +163,7 @@ jobs:
       - name: Configure
         run: |
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
-          cmake -S . -G Ninja -B build_linux -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_PARALLEL=1 -DBRLCAD_ENABLE_QT=OFF
+          cmake -S . -G Ninja -B build_linux -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_PARALLEL=1 -DBRLCAD_ENABLE_QT=ON
 
       - name: Build
         run: |
@@ -207,7 +204,7 @@ jobs:
           cd bext_build
           export CC=clang
           export CXX=clang++
-          cmake ../bext -DUSE_QT=OFF -DENABLE_ALL=ON -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/build_osx -DCMAKE_BUILD_TYPE=Debug
+          cmake ../bext -DENABLE_ALL=ON -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/build_osx -DCMAKE_BUILD_TYPE=Debug
           cmake --build . -j 1
           cd ..
           cmake -E rm -rf bext
@@ -219,7 +216,7 @@ jobs:
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
           export CC=clang
           export CXX=clang++
-          cmake -S . -G Ninja -B build_osx -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_DIR=${{ github.workspace }}/build_osx/bext_output -DBRLCAD_ENABLE_X11=OFF
+          cmake -S . -G Ninja -B build_osx -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_DIR=${{ github.workspace }}/build_osx/bext_output -DBRLCAD_ENABLE_X11=OFF -DBRLCAD_ENABLE_QT=ON
 
       - name: Build
         run: |
