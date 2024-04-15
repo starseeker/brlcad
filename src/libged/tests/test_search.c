@@ -128,7 +128,7 @@ main(int ac, char *av[]) {
 	    const char *cmd[6] = {"search", "-v", ".", "-type", "region", NULL};
 	    ged_exec(dbp, 5, cmd);
 	    split_ret = split_newline(bu_vls_addr(dbp->ged_result_str));
-	    if (split_ret.arr[split_ret.count - 1][1] != '3') {
+	    if (split_ret.count && split_ret.arr[split_ret.count - 1][1] != '3') {
 		printf("ERROR: bad -v result. Got \"%s\", expected [%s]\n", split_ret.arr[split_ret.count - 1], "3");
 		ret_code = 1;
 		break;
