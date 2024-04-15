@@ -32,10 +32,8 @@ export CXX=clang++
 cwdir=$(pwd)
 git clone https://github.com/BRL-CAD/bext
 mkdir bext-build
-cd bext-build
-cmake .. -DCMAKE_INSTALL_PREFIX=$cwdir -DCMAKE_BUILD_TYPE=Debug
-cmake --build . --config Debug -j 1
-cd ..
+cmake -S $cwdir/bext -B $cwdir/bext-build -DCMAKE_INSTALL_PREFIX=$cwdir -DCMAKE_BUILD_TYPE=Debug
+cmake --build bext-build --config Debug -j 1
 # Save a little space
 rm -rf bext-build
 rm -rf bext
