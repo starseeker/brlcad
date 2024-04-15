@@ -38,10 +38,6 @@ jobs:
         run: |
           cmake -E make_directory ./build_clangstatic
 
-      - name: bext checkout
-        run: |
-          cd ./build_clangstatic && git clone https://github.com/BRL-CAD/bext.git && cd ..
-
       - name: Run Analyzer
         run: |
           pwd
