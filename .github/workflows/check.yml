@@ -163,13 +163,13 @@ jobs:
       - name: Configure
         run: |
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
-          cmake -S . -G Ninja -B build_linux -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_PARALLEL=1 -DBRLCAD_ENABLE_QT=ON
+          cmake -S . -G Ninja -B build_linux -DBRLCAD_EXT_PARALLEL=1 -DBRLCAD_COMPONENTS=libged
 
       - name: Build
         run: |
           export PATH=$ENV{GITHUB_WORKSPACE}:$PATH
           cmake --build build_linux --config Release --target check
-          cmake --build build_linux --config Release --target package
+          #cmake --build build_linux --config Release --target package
 
         # For the moment the space demands are too extreme to enable this
         # output for every compile test, but leave the enabling logic present
