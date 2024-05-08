@@ -2257,7 +2257,6 @@ include(BRLCAD_CPack)
 
 # Some files to ignore for distcheck.
 set(toplevel_ignore_files
-  .github/workflows/analysis.yml
   .github/workflows/check.yml
   .gitignore
   .gitmodules
