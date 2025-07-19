@@ -375,9 +375,9 @@ extern struct rt_g rt_g;
 extern struct pkg_switch pkgswitch[]; /* given at end */
 extern struct command_tab cmd_tab[];  /* given at end */
 
-char file_basename[128];	/* contains last component of file name */
-char file_fullname[128];	/* contains full file name */
-char object_list[512];	/* contains list of "MGED" objects */
+std::string file_basename;	/* contains last component of file name */
+std::string file_fullname;	/* contains full file name */
+std::string object_list;	/* contains list of "MGED" objects */
 
 FILE *helper_fp;		/* pipe to rexec helper process */
 
@@ -598,6 +598,33 @@ interactive_cmd(FILE *fp)
     (void)rt_do_cmd((struct rt_i *)0, buf, cmd_tab);
 }
 
+static void
+interactive_cmd_stream(std::istream& is)
+{
+    std::string line;
+    std::string buf;
+
+    /* Get first line */
+    if (!std::getline(is, line)) return;
+    buf = line;
+
+    /* If continued, get more */
+    while (!line.empty() && line.back() == '\n' && 
+           line.length() >= 2 && line[line.length()-2] == '\\') {
+	buf.erase(buf.length()-2);  // Remove backslash and newline
+	bu_log("-> "); (void)fflush(stderr);
+	if (!std::getline(is, line)) break;
+	buf += line;
+    }
+
+    if (buf.empty()) return;
+
+    /* Feeble allowance for comments */
+    if (buf[0] == '#') return;
+
+    (void)rt_do_cmd((struct rt_i *)0, buf.c_str(), cmd_tab);
+}
+
 
 static void
 addclient(struct pkg_conn *pc)
@@ -742,6 +769,17 @@ source(FILE *fp)
     }
 }
 
+static void
+source_stream(std::istream& is)
+{
+    while (is.good()) {
+	/* do one command from stream */
+	interactive_cmd_stream(is);
+	/* Without delay, see if anything came in */
+	check_input(0);
+    }
+}
+
 
 /*
  * Read a .remrt file.  While this file can contain any valid commands,
@@ -751,22 +789,25 @@ source(FILE *fp)
 static void
 read_rc_file(void)
 {
-    FILE *fp;
-    char *home;
-    char path[128];
-
-    if ((fp = fopen(".remrtrc", "r")) != NULL) {
-	source(fp);
-	fclose(fp);
-	return;
+    std::filesystem::path rc_file(".remrtrc");
+    
+    if (std::filesystem::exists(rc_file)) {
+	std::ifstream fs(rc_file);
+	if (fs.is_open()) {
+	    source_stream(fs);
+	    return;
+	}
     }
 
-    if ((home = getenv("HOME")) != NULL) {
-	snprintf(path, 128, "%s/.remrtrc", home);
-	if ((fp = fopen(path, "r")) != NULL) {
-	    source(fp);
-	    fclose(fp);
-	    return;
+    const char* home = getenv("HOME");
+    if (home != nullptr) {
+	std::filesystem::path home_rc_file = std::filesystem::path(home) / ".remrtrc";
+	if (std::filesystem::exists(home_rc_file)) {
+	    std::ifstream fs(home_rc_file);
+	    if (fs.is_open()) {
+		source_stream(fs);
+		return;
+	    }
 	}
     }
 }
@@ -786,34 +827,26 @@ tvdiff(struct timeval *t1, struct timeval *t0)
 static void
 build_start_cmd(const int argc, const char **argv, const int startc)
 {
-    char *cp;
     int i;
-    int len;
 
     if (startc+2 > argc) {
 	bu_log("build_start_cmd:  need file and at least one object\n");
-	file_fullname[0] = '\0';
+	file_fullname.clear();
 	return;
     }
 
-    bu_strlcpy(file_fullname, argv[startc], sizeof(file_fullname));
+    file_fullname = argv[startc];
 
-    /* Save last component of file name */
-    if ((cp = strrchr(argv[startc], '/')) != nullptr) {
-	bu_strlcpy(file_basename, cp+1, sizeof(file_basename));
-    } else {
-	bu_strlcpy(file_basename, argv[startc], sizeof(file_basename));
-    }
+    // Save last component of file name using std::filesystem
+    std::filesystem::path filepath(argv[startc]);
+    file_basename = filepath.filename().string();
 
-    /* Build new object_list[] string */
-    cp = object_list;
-    for (i=startc+1; i < argc; i++) {
-	if (i > startc+1)  *cp++ = ' ';
-	len = strlen(argv[i]);
-	memcpy(cp, argv[i], len);
-	cp += len;
+    // Build new object_list string using modern C++
+    object_list.clear();
+    for (i = startc + 1; i < argc; i++) {
+	if (i > startc + 1) object_list += " ";
+	object_list += argv[i];
     }
-    *cp++ = '\0';
 }
 
 
@@ -1045,22 +1078,21 @@ scan_frame_for_finished_pixels(struct frame *fr)
 static int
 create_outputfilename(struct frame *fr)
 {
-    char name[512];
-    struct stat sb;
-    int fd;
-
     CHECK_FRAME(fr);
 
     /* Always create a file name to write into */
+    std::string name;
     if (outputfile) {
-	snprintf(name, sizeof(name), "%s.%ld", outputfile, fr->fr_number);
+	name = std::string(outputfile) + "." + std::to_string(fr->fr_number);
 	fr->fr_tempfile = 0;
     } else {
-	snprintf(name, sizeof(name), "remrt.pix.%ld", fr->fr_number);
+	name = "remrt.pix." + std::to_string(fr->fr_number);
 	fr->fr_tempfile = 1;
     }
-    fr->fr_filename = bu_strdup(name);
+    fr->fr_filename = bu_strdup(name.c_str());
 
+    std::filesystem::path filepath(name);
+    
     /*
      * There are several cases:
      * file does not exist, create it
@@ -1068,24 +1100,29 @@ create_outputfilename(struct frame *fr)
      * file exists, is writable -- eliminate all non-black pixels
      * from work-to-do queue
      */
-    if (!bu_file_exists(fr->fr_filename, NULL)) {
+    if (!std::filesystem::exists(filepath)) {
 	/* File does not yet exist */
-	if ((fd = creat(fr->fr_filename, 0644)) < 0) {
+	std::ofstream ofs(filepath, std::ios::binary);
+	if (!ofs.is_open()) {
 	    /* Unable to create new file */
 	    perror(fr->fr_filename);
 	    return -1;		/* skip this frame */
 	}
-	(void)close(fd);
 	return 0;			/* OK */
     }
+    
     /* The file exists */
-    if (!bu_file_writable(fr->fr_filename)) {
-	/* File exists, and is not read/writable.  skip this frame */
+    auto perms = std::filesystem::status(filepath).permissions();
+    if ((perms & std::filesystem::perms::owner_write) == std::filesystem::perms::none) {
+	/* File exists, and is not writable.  skip this frame */
 	perror(fr->fr_filename);
 	return -1;			/* skip this frame */
     }
+    
     /* The file exists and is writable */
-    if (stat(fr->fr_filename, &sb) >= 0 && sb.st_size > 0) {
+    std::error_code ec;
+    auto file_size = std::filesystem::file_size(filepath, ec);
+    if (!ec && file_size > 0) {
 	/* The file has existing contents, dequeue all
 	 * non-black pixels.
 	 */
@@ -1113,7 +1150,7 @@ add_host(struct ihost *ihp)
 		    ihp->ht_name, pkg_permport, ihp->ht_path);
 	    break;
 	case HT_CONVERT:
-	    if (file_fullname[0] == '\0') {
+	    if (file_fullname.empty()) {
 		bu_log("unable to add CONVERT host %s until database given\n",
 		       ihp->ht_name);
 		return;
@@ -1121,7 +1158,7 @@ add_host(struct ihost *ihp)
 	    fprintf(helper_fp,
 		    "%s %d %s %s %s\n",
 		    ihp->ht_name, pkg_permport, ihp->ht_path,
-		    file_fullname, file_basename);
+		    file_fullname.c_str(), file_basename.c_str());
 	    break;
 	default:
 	    bu_log("add_host:  ht_where=%d?\n", ihp->ht_where);
@@ -1383,7 +1420,7 @@ do_a_frame(void)
 	bu_log("already running, please wait or STOP\n");
 	return;
     }
-    if (file_fullname[0] == '\0') {
+    if (file_fullname.empty()) {
 	bu_log("need LOAD before GO\n");
 	return;
     }
@@ -1450,7 +1487,7 @@ send_dirbuild(struct servers *sp)
     struct ihost *ihp;
 
     if (sp->sr_pc == PKC_NULL) return;
-    if (file_fullname[0] == '\0' || sp->sr_state != SRST_VERSOK) return;
+    if (file_fullname.empty() || sp->sr_state != SRST_VERSOK) return;
 
     ihp = sp->sr_host;
     switch (ihp->ht_where) {
@@ -1468,8 +1505,8 @@ send_dirbuild(struct servers *sp)
 	    return;
     }
 
-    if (rem_debug > 1) bu_log("%s MSG_DIRBUILD %s\n", stamp(), file_basename);
-    if (pkg_send(MSG_DIRBUILD, file_basename, strlen(file_basename)+1,
+    if (rem_debug > 1) bu_log("%s MSG_DIRBUILD %s\n", stamp(), file_basename.c_str());
+    if (pkg_send(MSG_DIRBUILD, file_basename.c_str(), file_basename.length()+1,
 		 sp->sr_pc) < 0
 	) {
 	drop_server(sp, "MSG_DIRBUILD pkg_send error");
@@ -1541,18 +1578,23 @@ frame_is_done(struct frame *fr)
     /* Final processing of output file */
     if (fr->fr_tempfile) {
 	/* Delete temp file -- it is in framebuffer */
-	if (!bu_file_delete(fr->fr_filename))
+	std::error_code ec;
+	if (!std::filesystem::remove(fr->fr_filename, ec)) {
 	    perror(fr->fr_filename);
+	}
     } else {
-	FILE *fp;
-	if ((fp = fopen(fr->fr_filename, "r")) == NULL) {
+	std::ifstream fs(fr->fr_filename);
+	if (!fs.is_open()) {
 	    perror(fr->fr_filename);
 	} else {
 	    /* Write-protect file, to prevent re-computation */
-	    if (fchmod(fileno(fp), 0444) < 0) {
+	    std::error_code ec;
+	    std::filesystem::permissions(fr->fr_filename, 
+		std::filesystem::perms::owner_read | std::filesystem::perms::group_read | std::filesystem::perms::others_read,
+		std::filesystem::perm_options::replace, ec);
+	    if (ec) {
 		perror(fr->fr_filename);
 	    }
-	    (void)fclose(fp);
 	}
     }
 
@@ -1585,7 +1627,7 @@ send_gettrees(struct servers *sp, struct frame *fr)
     CHECK_FRAME(fr);
     if (sp->sr_pc == PKC_NULL) return;
     if (pkg_send(MSG_GETTREES,
-		 object_list, strlen(object_list)+1, sp->sr_pc
+		 object_list.c_str(), object_list.length()+1, sp->sr_pc
 	    ) < 0) {
 	drop_server(sp, "MSG_GETTREES pkg_send error");
 	return;
@@ -1801,7 +1843,7 @@ schedule(struct timeval *nowp)
     }
     scheduler_going = 1;
 
-    if (file_fullname[0] == '\0') goto out;
+    if (file_fullname.empty()) goto out;
 
     /* Handle various state transitions */
     for (sp = &servers[0]; sp < &servers[MAXSERVERS]; sp++) {
@@ -2161,7 +2203,7 @@ cd_movie(const int argc, const char **argv)
 	bu_log("already running, please wait\n");
 	return -1;
     }
-    if (file_fullname[0] == '\0') {
+    if (file_fullname.empty()) {
 	bu_log("need LOAD before MOVIE\n");
 	return -1;
     }
@@ -2463,14 +2505,14 @@ cd_status(const int UNUSED(argc), const char **UNUSED(argv))
 
     s = stamp();
 
-    if (file_fullname[0] == '\0') {
+    if (file_fullname.empty()) {
 	bu_log("No model loaded yet\n");
     } else {
 	bu_log("\n%s %s\n",
 	       s,
 	       running ? "RUNNING" : "Halted");
 	bu_log("%s %s objects=%s\n",
-	       s, file_fullname, object_list);
+	       s, file_fullname.c_str(), object_list.c_str());
     }
 
     if (fbp != FB_NULL)
@@ -2774,7 +2816,7 @@ start_servers(struct timeval *nowp)
     int night;
     int add;
 
-    if (file_fullname[0] == '\0') return;
+    if (file_fullname.empty()) return;
 
     if (tvdiff(nowp, &last_server_check_time) < SERVER_CHECK_INTERVAL)
 	return;
