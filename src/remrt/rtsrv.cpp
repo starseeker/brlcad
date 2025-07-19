@@ -102,7 +102,7 @@ int report_progress = 0;	/* !0 = user wants progress report */
 /* Variables shared elsewhere */
 extern fastf_t rt_dist_tol;	/* Value for rti_tol.dist */
 extern fastf_t rt_perp_tol;	/* Value for rti_tol.perp */
-static char idbuf[132] = {0};		/* First ID record info */
+static std::string idbuf;		/* First ID record info */
 
 /* State flags */
 static int seen_dirbuild = 0;
@@ -162,7 +162,7 @@ char *control_host;	/* name of host running controller */
 char *tcp_port;		/* TCP port on control_host */
 int debug = 0;		/* 0=off, 1=debug, 2=verbose */
 
-char srv_usage[] = "Usage: rtsrv [-d] control-host tcp-port [cmd]\n";
+const std::string srv_usage = "Usage: rtsrv [-d] control-host tcp-port [cmd]\n";
 
 
 int
@@ -173,7 +173,7 @@ main(int argc, char **argv)
     bu_setprogname(argv[0]);
 
     if (argc < 2) {
-	fprintf(stderr, "%s", srv_usage);
+	fprintf(stderr, "%s", srv_usage.c_str());
 	return 1;
     }
     original_argc = argc;
@@ -188,13 +188,13 @@ main(int argc, char **argv)
 	    sscanf(argv[2], "%x", (unsigned int *)&optical_debug);
 	    argc--; argv++;
 	} else {
-	    fprintf(stderr, "%s", srv_usage);
+	    fprintf(stderr, "%s", srv_usage.c_str());
 	    return 3;
 	}
 	argc--; argv++;
     }
     if (argc != 3 && argc != 4) {
-	fprintf(stderr, "%s", srv_usage);
+	fprintf(stderr, "%s", srv_usage.c_str());
 	return 2;
     }
 
@@ -484,8 +484,10 @@ ph_dirbuild(struct pkg_conn *UNUSED(pc), char *buf)
     bu_free(argv, "free argv");
 
     /* Build directory of GED database */
-    if ((rtip=rt_dirbuild(title_file, idbuf, sizeof(idbuf))) == RTI_NULL)
+    char temp_idbuf[132] = {0};
+    if ((rtip=rt_dirbuild(title_file, temp_idbuf, sizeof(temp_idbuf))) == RTI_NULL)
 	bu_exit(2, "ph_dirbuild:  rt_dirbuild(%s) failure\n", title_file);
+    idbuf = temp_idbuf;
     APP.a_rt_i = rtip;
     seen_dirbuild = 1;
 
@@ -498,7 +500,7 @@ ph_dirbuild(struct pkg_conn *UNUSED(pc), char *buf)
 	rt_init_resource(&resource[n], n, rtip);
     }
 
-    if (pkg_send(MSG_DIRBUILD_REPLY, idbuf, strlen(idbuf)+1, pcsrv) < 0)
+    if (pkg_send(MSG_DIRBUILD_REPLY, idbuf.c_str(), idbuf.length()+1, pcsrv) < 0)
 	fprintf(stderr, "MSG_DIRBUILD_REPLY error\n");
 }
 
@@ -825,7 +827,6 @@ int
 bu_log(const char *fmt, ...)
 {
     va_list vap;
-    char buf[512];		/* a generous output line.  Must be AUTO, else non-PARALLEL. */
     int ret = 0;
 
     if (print_on == 0)
@@ -833,22 +834,25 @@ bu_log(const char *fmt, ...)
 
     bu_semaphore_acquire(BU_SEM_SYSCALL);
     va_start(vap, fmt);
-    ret = vsprintf(buf, fmt, vap);
+    
+    // Use C++17 style formatted string creation
+    std::vector<char> buf(512);
+    ret = vsnprintf(buf.data(), buf.size(), fmt, vap);
     va_end(vap);
 
     if (pcsrv == PKC_NULL || pcsrv == PKC_ERROR) {
-	fprintf(stderr, "%s", buf);
+	fprintf(stderr, "%s", buf.data());
 	bu_semaphore_release(BU_SEM_SYSCALL);
 	return ret;
     }
 
     if (debug)
-	fprintf(stderr, "%s", buf);
+	fprintf(stderr, "%s", buf.data());
 
-    ret = pkg_send(MSG_PRINT, buf, strlen(buf)+1, pcsrv);
+    ret = pkg_send(MSG_PRINT, buf.data(), strlen(buf.data())+1, pcsrv);
     if (ret < 0) {
 	fprintf(stderr, "pkg_send MSG_PRINT failed\n");
-	bu_exit(12, NULL);
+	bu_exit(12, nullptr);
     }
 
     bu_semaphore_release(BU_SEM_SYSCALL);
@@ -863,7 +867,7 @@ bu_log(const char *fmt, ...)
 void
 bu_bomb(const char *str)
 {
-    char *bomb = "RTSRV terminated by bu_bomb()\n";
+    const std::string bomb = "RTSRV terminated by bu_bomb()\n";
     int ret;
 
     ret = pkg_send(MSG_PRINT, const_cast<char*>(str), strlen(str)+1, pcsrv);
@@ -871,7 +875,7 @@ bu_bomb(const char *str)
 	fprintf(stderr, "bu_bomb MSG_PRINT failed\n");
     }
 
-    ret = pkg_send(MSG_PRINT, bomb, strlen(bomb)+1, pcsrv);
+    ret = pkg_send(MSG_PRINT, const_cast<char*>(bomb.c_str()), bomb.length()+1, pcsrv);
     if (ret < 0) {
 	fprintf(stderr, "bu_bomb MSG_PRINT failed\n");
     }
@@ -880,7 +884,7 @@ bu_bomb(const char *str)
 	fprintf(stderr, "\n%s\n", str);
     fflush(stderr);
 
-    bu_exit(12, NULL);
+    bu_exit(12, nullptr);
 }
 
 
