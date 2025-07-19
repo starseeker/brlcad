@@ -15,9 +15,7 @@ cmakefiles(
   ihost.c
   ihost.h
   protocol.h
-  remrt.c
   remrt.cpp
-  rtsrv.c
   rtsrv.cpp
 )
 cmakefiles(CMakeLists.txt)
