@@ -23,6 +23,11 @@
  *
  * Frame Buffer Library interface for OpenGL.
  *
+ * Modernization note (2025): Legacy glDrawPixels/glCopyPixels paths replaced
+ * with a persistent texture + screen quad upload/present strategy. This keeps
+ * compatibility with existing mode flags while deprecating copy/backbuffer
+ * semantics internally. Software colormap logic retained on CPU side.
+ *
  * There are several different Frame Buffer modes supported.  Set your
  * environment FB_FILE to the appropriate type.
  *
@@ -74,6 +79,15 @@
 #ifdef HAVE_GL_GL_H
 #  include <GL/gl.h>
 #endif
+
+#ifndef GL_BGRA_EXT
+#define GL_BGRA_EXT 0x80E1
+#endif
+
+#ifndef GL_CLAMP
+#define GL_CLAMP 0x2900
+#endif
+
 #include "bio.h"
 #include "bresource.h"
 
@@ -127,7 +141,7 @@ struct oglinfo {
     int alive;
     long event_mask;		/* event types to be received */
     short front_flag;		/* front buffer being used (b-mode) */
-    short copy_flag;		/* pan and zoom copied from backbuffer */
+    short copy_flag;		/* deprecated copy/backbuffer mode indicator */
     short soft_cmap_flag;	/* use software colormapping */
     int cmap_size;		/* hardware colormap size */
     int win_width;		/* actual window width */
@@ -139,6 +153,12 @@ struct oglinfo {
     XVisualInfo *vip;		/* pointer to info on current visual */
     Colormap xcmap;		/* xstyle color map */
     int use_ext_ctrl;		/* for controlling the Ogl graphics engine externally */
+    /* New texture-based presentation state */
+    GLuint texid;
+    int tex_initialized;
+    int dirty; /* dirty rectangle valid */
+    int dirty_xmin, dirty_ymin, dirty_xmax, dirty_ymax;
+    int view_changed; /* view/zoom change pending present */
 };
 
 
@@ -218,7 +238,7 @@ static struct modeflags {
     { 's',	MODE_9MASK, MODE_9SINGLEBUF,
       "Single buffer - else double buffer if possible" },
     { 'b',	MODE_11MASK, MODE_11COPY,
-      "Fast pan and zoom using backbuffer copy - else normal " },
+      "(Deprecated) copy mode (now no-op with texture path)" },
     { 'D',	MODE_12MASK, MODE_12DELAY_WRITES_TILL_FLUSH,
       "Don't update screen until fb_flush() is called.  (Double buffer sim)" },
     { 'z',	MODE_15MASK, MODE_15ZAP,
@@ -227,102 +247,30 @@ static struct modeflags {
 };
 
 
-/* BACKBUFFER_TO_SCREEN - copy pixels from copy on the backbuffer to
- * the front buffer. Do one scanline specified by one_y, or whole
- * screen if one_y equals -1.
+/* DEPRECATED: Legacy backbuffer copy function - no longer used with texture path.
+ * Kept as no-op for compatibility with any external references.
  */
 static void
 backbuffer_to_screen(register struct fb *ifp, int one_y)
 {
-    struct fb_clip *clp;
-
-    if (!(OGL(ifp)->front_flag)) {
-	OGL(ifp)->front_flag = 1;
-	glDrawBuffer(GL_FRONT);
-	glMatrixMode(GL_PROJECTION);
-	glPopMatrix();
-	glPixelZoom((float) ifp->i->if_xzoom, (float) ifp->i->if_yzoom);
-    }
-
-    clp = &(OGL(ifp)->clip);
-
-    if (one_y > clp->ypixmax) {
-	return;
-    } else if (one_y < 0) {
-	/* do whole visible screen */
-
-	/* Blank out area left of image */
-	glColor3b(0, 0, 0);
-	if (clp->xscrmin < 0) glRecti(clp->xscrmin - CLIP_XTRA,
-				      clp->yscrmin - CLIP_XTRA,
-				      CLIP_XTRA,
-				      clp->yscrmax + CLIP_XTRA);
-
-	/* Blank out area below image */
-	if (clp->yscrmin < 0) glRecti(clp->xscrmin - CLIP_XTRA,
-				      clp->yscrmin - CLIP_XTRA,
-				      clp->xscrmax + CLIP_XTRA,
-				      CLIP_XTRA);
-
-	/* We are in copy mode, so we use vp_width rather
-	 * than if_width
-	 */
-	/* Blank out area right of image */
-	if (clp->xscrmax >= OGL(ifp)->vp_width) glRecti(ifp->i->if_width - CLIP_XTRA,
-							clp->yscrmin - CLIP_XTRA,
-							clp->xscrmax + CLIP_XTRA,
-							clp->yscrmax + CLIP_XTRA);
-
-	/* Blank out area above image */
-	if (clp->yscrmax >= OGL(ifp)->vp_height) glRecti(clp->xscrmin - CLIP_XTRA,
-							 OGL(ifp)->vp_height - CLIP_XTRA,
-							 clp->xscrmax + CLIP_XTRA,
-							 clp->yscrmax + CLIP_XTRA);
-
-	/* copy image from backbuffer */
-	glRasterPos2i(clp->xpixmin, clp->ypixmin);
-	glCopyPixels(WIN(ifp)->mi_xoff + clp->xpixmin,
-		     WIN(ifp)->mi_yoff + clp->ypixmin,
-		     clp->xpixmax - clp->xpixmin +1,
-		     clp->ypixmax - clp->ypixmin +1,
-		     GL_COLOR);
-
-
-    } else if (one_y < clp->ypixmin) {
-	return;
-    } else {
-	/* draw one scanline */
-	glRasterPos2i(clp->xpixmin, one_y);
-	glCopyPixels(WIN(ifp)->mi_xoff + clp->xpixmin,
-		     WIN(ifp)->mi_yoff + one_y,
-		     clp->xpixmax - clp->xpixmin +1,
-		     1,
-		     GL_COLOR);
-    }
+    /* No-op with texture path - deprecated function */
+    (void)ifp;
+    (void)one_y;
 }
 
 
 /*
- * Note: unlike sgi_xmit_scanlines, this function updates an arbitrary
- * rectangle of the frame buffer
+ * Modernized texture-based scanline transmission.
+ * Marks dirty region and uploads texture data for later presentation.
  */
 static void
 ogl_xmit_scanlines(register struct fb *ifp, int ybase, int nlines, int xbase, int npix)
 {
-    register int y;
-    register int n;
-    int sw_cmap;	/* !0 => needs software color map */
     struct fb_clip *clp;
 
     /* Caller is expected to handle attaching context, etc. */
 
     clp = &(OGL(ifp)->clip);
-
-    if (OGL(ifp)->soft_cmap_flag  && WIN(ifp)->mi_cmap_flag) {
-	sw_cmap = 1;
-    } else {
-	sw_cmap = 0;
-    }
 
     if (xbase > clp->xpixmax || ybase > clp->ypixmax)
 	return;
@@ -336,98 +284,15 @@ ogl_xmit_scanlines(register struct fb *ifp, int ybase, int nlines, int xbase, in
     if ((ybase + nlines - 1) > clp->ypixmax)
 	nlines = clp->ypixmax - ybase + 1;
 
-    if (!OGL(ifp)->use_ext_ctrl) {
-	if (!OGL(ifp)->copy_flag) {
-	    /*
-	     * Blank out areas of the screen around the image, if
-	     * exposed.  In COPY mode, this is done in
-	     * backbuffer_to_screen().
-	     */
-
-	    /* Blank out area left of image */
-	    glColor3b(0, 0, 0);
-	    if (clp->xscrmin < 0) glRecti(clp->xscrmin - CLIP_XTRA,
-					  clp->yscrmin - CLIP_XTRA,
-					  CLIP_XTRA,
-					  clp->yscrmax + CLIP_XTRA);
-
-	    /* Blank out area below image */
-	    if (clp->yscrmin < 0) glRecti(clp->xscrmin - CLIP_XTRA,
-					  clp->yscrmin - CLIP_XTRA,
-					  clp->xscrmax + CLIP_XTRA,
-					  CLIP_XTRA);
-
-	    /* Blank out area right of image */
-	    if (clp->xscrmax >= ifp->i->if_width) glRecti(ifp->i->if_width - CLIP_XTRA,
-							  clp->yscrmin - CLIP_XTRA,
-							  clp->xscrmax + CLIP_XTRA,
-							  clp->yscrmax + CLIP_XTRA);
-
-	    /* Blank out area above image */
-	    if (clp->yscrmax >= ifp->i->if_height) glRecti(clp->xscrmin - CLIP_XTRA,
-							   ifp->i->if_height- CLIP_XTRA,
-							   clp->xscrmax + CLIP_XTRA,
-							   clp->yscrmax + CLIP_XTRA);
-
-	} else if (OGL(ifp)->front_flag) {
-	    /* in COPY mode, always draw full sized image into backbuffer.
-	     * backbuffer_to_screen() is used to update the front buffer
-	     */
-	    glDrawBuffer(GL_BACK);
-	    OGL(ifp)->front_flag = 0;
-	    glMatrixMode(GL_PROJECTION);
-	    glPushMatrix();	/* store current view clipping matrix*/
-	    glLoadIdentity();
-	    glOrtho(-0.25, ((GLdouble) OGL(ifp)->vp_width)-0.25,
-		    -0.25, ((GLdouble) OGL(ifp)->vp_height)-0.25,
-		    -1.0, 1.0);
-	    glPixelZoom(1.0, 1.0);
-	}
+    /* Initialize texture if needed */
+    if (!OGL(ifp)->tex_initialized) {
+        ogl_init_texture(ifp);
     }
 
-    if (sw_cmap) {
-	/* Software colormap each line as it's transmitted */
-	register int x;
-	register struct fb_pixel *oglp;
-	register struct fb_pixel *scanline;
-
-	y = ybase;
-
-	if (FB_DEBUG)
-	    printf("Doing sw colormap xmit\n");
-
-	/* Perform software color mapping into temp scanline */
-	scanline = (struct fb_pixel *)calloc(ifp->i->if_width, sizeof(struct fb_pixel));
-	if (!scanline) {
-	    fb_log("ogl_getmem: scanline memory malloc failed\n");
-	    return;
-	}
-
-	for (n=nlines; n>0; n--, y++) {
-	    oglp = (struct fb_pixel *)&ifp->i->if_mem[(y*WIN(ifp)->mi_pixwidth) * sizeof(struct fb_pixel)];
-	    for (x=xbase+npix-1; x>=xbase; x--) {
-		scanline[x].red   = CMR(ifp)[oglp[x].red];
-		scanline[x].green = CMG(ifp)[oglp[x].green];
-		scanline[x].blue  = CMB(ifp)[oglp[x].blue];
-	    }
-
-	    glPixelStorei(GL_UNPACK_SKIP_PIXELS, xbase);
-	    glRasterPos2i(xbase, y);
-	    glDrawPixels(npix, 1, GL_BGRA_EXT, GL_UNSIGNED_BYTE, (const GLvoid *)scanline);
-	}
-
-	(void)free((void *)scanline);
-
-    } else {
-	/* No need for software colormapping */
-
-	glPixelStorei(GL_UNPACK_ROW_LENGTH, WIN(ifp)->mi_pixwidth);
-	glPixelStorei(GL_UNPACK_SKIP_PIXELS, xbase);
-	glPixelStorei(GL_UNPACK_SKIP_ROWS, ybase);
-
-	glRasterPos2i(xbase, ybase);
-	glDrawPixels(npix, nlines, GL_BGRA_EXT, GL_UNSIGNED_BYTE, (const GLvoid *) ifp->i->if_mem);
-    }
+    /* Mark dirty region and upload texture data */
+    ogl_mark_dirty(ifp, xbase, ybase, npix, nlines);
+    ogl_upload_region(ifp, xbase, ybase, npix, nlines);
+}
 }
 
 
@@ -441,6 +306,177 @@ ogl_cminit(register struct fb *ifp)
 	CMG(ifp)[i] = i;
 	CMB(ifp)[i] = i;
     }
+}
+
+
+/************************ Helper / Modern Path Functions *******************/
+
+static void
+ogl_clear_dirty(struct fb *ifp)
+{
+    OGL(ifp)->dirty = 0;
+    OGL(ifp)->dirty_xmin = OGL(ifp)->dirty_ymin = 0;
+    OGL(ifp)->dirty_xmax = OGL(ifp)->dirty_ymax = -1;
+}
+
+static void
+ogl_mark_dirty(struct fb *ifp, int x, int y, int w, int h)
+{
+    if (w <= 0 || h <= 0) return;
+    if (!OGL(ifp)->dirty) {
+        OGL(ifp)->dirty = 1;
+        OGL(ifp)->dirty_xmin = x;
+        OGL(ifp)->dirty_ymin = y;
+        OGL(ifp)->dirty_xmax = x + w - 1;
+        OGL(ifp)->dirty_ymax = y + h - 1;
+    } else {
+        if (x < OGL(ifp)->dirty_xmin) OGL(ifp)->dirty_xmin = x;
+        if (y < OGL(ifp)->dirty_ymin) OGL(ifp)->dirty_ymin = y;
+        if (x + w - 1 > OGL(ifp)->dirty_xmax) OGL(ifp)->dirty_xmax = x + w - 1;
+        if (y + h - 1 > OGL(ifp)->dirty_ymax) OGL(ifp)->dirty_ymax = y + h - 1;
+    }
+}
+
+static int
+ogl_make_current(struct fb *ifp)
+{
+    if (glXMakeCurrent(OGL(ifp)->dispp, OGL(ifp)->wind, OGL(ifp)->glxc)==False) {
+        fb_log("ogl: glXMakeCurrent failed\n");
+        return 0;
+    }
+    return 1;
+}
+
+static void
+ogl_release_current(struct fb *ifp)
+{
+    glXMakeCurrent(OGL(ifp)->dispp, None, NULL);
+}
+
+static void
+ogl_init_texture(struct fb *ifp)
+{
+    if (OGL(ifp)->tex_initialized) return;
+    if (!ogl_make_current(ifp)) return;
+    
+    glGenTextures(1, &OGL(ifp)->texid);
+    glBindTexture(GL_TEXTURE_2D, OGL(ifp)->texid);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA,
+                 ifp->i->if_width, ifp->i->if_height,
+                 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, ifp->i->if_mem);
+    OGL(ifp)->tex_initialized = 1;
+    ogl_clear_dirty(ifp);
+    ogl_release_current(ifp);
+}
+
+static void
+ogl_upload_region(struct fb *ifp, int x, int y, int w, int h)
+{
+    if (!OGL(ifp)->tex_initialized) return;
+    if (w <= 0 || h <= 0) return;
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > ifp->i->if_width) w = ifp->i->if_width - x;
+    if (y + h > ifp->i->if_height) h = ifp->i->if_height - y;
+    if (w <= 0 || h <= 0) return;
+
+    if (!ogl_make_current(ifp)) return;
+
+    int sw_cmap = (OGL(ifp)->soft_cmap_flag && WIN(ifp)->mi_cmap_flag);
+    glBindTexture(GL_TEXTURE_2D, OGL(ifp)->texid);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, WIN(ifp)->mi_pixwidth);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, x);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS, y);
+
+    if (sw_cmap) {
+        /* build temporary remapped buffer */
+        struct fb_pixel *src = (struct fb_pixel *)ifp->i->if_mem + (y*WIN(ifp)->mi_pixwidth + x);
+        size_t line_bytes = (size_t)w * sizeof(struct fb_pixel);
+        struct fb_pixel *tmp = (struct fb_pixel *)bu_malloc(line_bytes * h, "sw cmap tmp");
+        for (int row = 0; row < h; row++) {
+            struct fb_pixel *s = src + row*WIN(ifp)->mi_pixwidth;
+            struct fb_pixel *d = tmp + row * w;
+            for (int col = 0; col < w; col++) {
+                d[col].red   = CMR(ifp)[s[col].red];
+                d[col].green = CMG(ifp)[s[col].green];
+                d[col].blue  = CMB(ifp)[s[col].blue];
+                d[col].alpha = 0;
+            }
+        }
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+        glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, GL_BGRA_EXT, GL_UNSIGNED_BYTE, (const GLvoid *)tmp);
+        bu_free(tmp, "sw cmap tmp");
+    } else {
+        glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, GL_BGRA_EXT, GL_UNSIGNED_BYTE, (const GLvoid *)ifp->i->if_mem);
+    }
+
+    ogl_release_current(ifp);
+}
+
+static void
+ogl_present(struct fb *ifp)
+{
+    if (!OGL(ifp)->tex_initialized) return;
+    if (!ogl_make_current(ifp)) return;
+
+    if ((ifp->i->if_mode & MODE_4MASK) == MODE_4NODITH) {
+        glDisable(GL_DITHER);
+    }
+
+    struct fb_clip *clp = &(OGL(ifp)->clip);
+
+    glViewport(0, 0, OGL(ifp)->win_width, OGL(ifp)->win_height);
+    glMatrixMode(GL_PROJECTION); glLoadIdentity();
+    glOrtho(0, OGL(ifp)->win_width, 0, OGL(ifp)->win_height, -1, 1);
+    glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_LIGHTING);
+    glClearColor(0,0,0,0);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    int xpixmin = clp->xpixmin;
+    int xpixmax = clp->xpixmax;
+    int ypixmin = clp->ypixmin;
+    int ypixmax = clp->ypixmax;
+
+    int vis_w = xpixmax - xpixmin + 1;
+    int vis_h = ypixmax - ypixmin + 1;
+    double zx = ifp->i->if_xzoom; if (zx < 1) zx = 1;
+    double zy = ifp->i->if_yzoom; if (zy < 1) zy = 1;
+    double draw_w = vis_w * zx;
+    double draw_h = vis_h * zy;
+    double sx = (OGL(ifp)->win_width  - draw_w)/2.0;
+    double sy = (OGL(ifp)->win_height - draw_h)/2.0;
+
+    float tx0 = (float)xpixmin / (float)ifp->i->if_width;
+    float ty0 = (float)ypixmin / (float)ifp->i->if_height;
+    float tx1 = (float)(xpixmax + 1) / (float)ifp->i->if_width;
+    float ty1 = (float)(ypixmax + 1) / (float)ifp->i->if_height;
+
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, OGL(ifp)->texid);
+
+    glBegin(GL_TRIANGLE_STRIP);
+        glTexCoord2f(tx0, ty0); glVertex2f(sx,       sy);
+        glTexCoord2f(tx0, ty1); glVertex2f(sx,       sy + draw_h);
+        glTexCoord2f(tx1, ty0); glVertex2f(sx+draw_w, sy);
+        glTexCoord2f(tx1, ty1); glVertex2f(sx+draw_w, sy + draw_h);
+    glEnd();
+
+    if (WIN(ifp)->mi_doublebuffer)
+        glXSwapBuffers(OGL(ifp)->dispp, OGL(ifp)->wind);
+    else
+        glFlush();
+
+    ogl_release_current(ifp);
+    OGL(ifp)->view_changed = 0;
 }
 
 
@@ -676,17 +712,11 @@ expose_callback(struct fb *ifp)
 	    glDisable(GL_DITHER);
 	}
 
-	/* set copy mode if possible and requested */
+	/* deprecated copy mode - now inert with texture path */
 	if (WIN(ifp)->mi_doublebuffer &&
 	    ((ifp->i->if_mode & MODE_11MASK)==MODE_11COPY)) {
-	    /* Copy mode only works if there are two
-	     * buffers to use. It conflicts with
-	     * double buffering
-	     */
+	    /* Copy mode flag set for compatibility but is now no-op */
 	    OGL(ifp)->copy_flag = 1;
-	    WIN(ifp)->mi_doublebuffer = 0;
-	    OGL(ifp)->front_flag = 1;
-	    glDrawBuffer(GL_FRONT);
 	} else {
 	    OGL(ifp)->copy_flag = 0;
 	}
@@ -748,13 +778,13 @@ expose_callback(struct fb *ifp)
 		   OGL(ifp)->vp_height);
     }
 
-    /* repaint entire image */
-    ogl_xmit_scanlines(ifp, 0, ifp->i->if_height, 0, ifp->i->if_width);
-    if (WIN(ifp)->mi_doublebuffer) {
-	glXSwapBuffers(OGL(ifp)->dispp, OGL(ifp)->wind);
-    } else if (OGL(ifp)->copy_flag) {
-	backbuffer_to_screen(ifp, -1);
+    /* repaint entire image using texture presentation */
+    if (!OGL(ifp)->tex_initialized) {
+        ogl_init_texture(ifp);
+        /* Upload the entire image on first time */
+        ogl_upload_region(ifp, 0, 0, ifp->i->if_width, ifp->i->if_height);
     }
+    ogl_present(ifp);
 
     if (FB_DEBUG) {
 	int dbb, db, view[4], getster, getaux;
@@ -1444,6 +1474,13 @@ ogl_close_existing(struct fb *ifp)
     }
 
     if (OGL(ifp)) {
+	/* Clean up texture resources */
+	if (OGL(ifp)->tex_initialized) {
+	    if (ogl_make_current(ifp)) {
+		glDeleteTextures(1, &OGL(ifp)->texid);
+		ogl_release_current(ifp);
+	    }
+	}
 	(void)free((char *)OGLL(ifp));
 	OGLL(ifp) = NULL;
     }
@@ -1483,13 +1520,19 @@ ogl_flush(struct fb *ifp)
 	    fb_log("Warning, ogl_flush: glXMakeCurrent unsuccessful.\n");
 	}
 
-	/* Send entire in-memory buffer to the screen, all at once */
-	ogl_xmit_scanlines(ifp, 0, ifp->i->if_height, 0, ifp->i->if_width);
-	if (WIN(ifp)->mi_doublebuffer) {
-	    glXSwapBuffers(OGL(ifp)->dispp, OGL(ifp)->wind);
-	} else if (OGL(ifp)->copy_flag) {
-	    backbuffer_to_screen(ifp, -1);
+	/* Upload dirty regions and present with texture path */
+	if (!OGL(ifp)->tex_initialized) {
+	    ogl_init_texture(ifp);
+	    /* Upload the entire image if no texture yet */
+	    ogl_upload_region(ifp, 0, 0, ifp->i->if_width, ifp->i->if_height);
+	} else if (OGL(ifp)->dirty) {
+	    /* Upload dirty region */
+	    ogl_upload_region(ifp, OGL(ifp)->dirty_xmin, OGL(ifp)->dirty_ymin,
+	                      OGL(ifp)->dirty_xmax - OGL(ifp)->dirty_xmin + 1,
+	                      OGL(ifp)->dirty_ymax - OGL(ifp)->dirty_ymin + 1);
 	}
+	ogl_present(ifp);
+	ogl_clear_dirty(ifp);
 
 	/* unattach context for other threads to use, also flushes */
 	glXMakeCurrent(OGL(ifp)->dispp, None, NULL);
@@ -1691,40 +1734,19 @@ ogl_view(struct fb *ifp, int xcenter, int ycenter, int xzoom, int yzoom)
 
     if (OGL(ifp)->use_ext_ctrl) {
 	fb_clipper(ifp);
+	OGL(ifp)->view_changed = 1;
     } else {
-	if (glXMakeCurrent(OGL(ifp)->dispp, OGL(ifp)->wind, OGL(ifp)->glxc)==False) {
-	    fb_log("Warning, ogl_view: glXMakeCurrent unsuccessful.\n");
-	}
-
-	/* Set clipping matrix and zoom level */
-	glMatrixMode(GL_PROJECTION);
-	if (OGL(ifp)->copy_flag && !OGL(ifp)->front_flag) {
-	    /* COPY mode - no changes to backbuffer copy - just
-	     * need to update front buffer
-	     */
-	    glPopMatrix();
-	    glDrawBuffer(GL_FRONT);
-	    OGL(ifp)->front_flag = 1;
-	}
-	glLoadIdentity();
-
 	fb_clipper(ifp);
-	clp = &(OGL(ifp)->clip);
-	glOrtho(clp->oleft, clp->oright, clp->obottom, clp->otop, -1.0, 1.0);
-	glPixelZoom((float) ifp->i->if_xzoom, (float) ifp->i->if_yzoom);
-
-	if (OGL(ifp)->copy_flag) {
-	    backbuffer_to_screen(ifp, -1);
-	} else {
-	    ogl_xmit_scanlines(ifp, 0, ifp->i->if_height, 0, ifp->i->if_width);
-	    if (WIN(ifp)->mi_doublebuffer) {
-		glXSwapBuffers(OGL(ifp)->dispp, OGL(ifp)->wind);
-	    }
+	
+	/* Initialize texture if needed */
+	if (!OGL(ifp)->tex_initialized) {
+	    ogl_init_texture(ifp);
+	    /* Upload the entire image if no texture yet */
+	    ogl_upload_region(ifp, 0, 0, ifp->i->if_width, ifp->i->if_height);
 	}
-	glFlush();
-
-	/* unattach context for other threads to use */
-	glXMakeCurrent(OGL(ifp)->dispp, None, NULL);
+	
+	/* Present with new view parameters - pan/zoom is now inexpensive coordinate math */
+	ogl_present(ifp);
     }
 
     return 0;
@@ -1886,37 +1908,17 @@ ogl_write(struct fb *ifp, int xstart, int ystart, const unsigned char *pixelp, s
 	return ret;
 
     if (!OGL(ifp)->use_ext_ctrl) {
-
-	if (glXMakeCurrent(OGL(ifp)->dispp, OGL(ifp)->wind, OGL(ifp)->glxc)==False) {
-	    fb_log("Warning, ogl_write: glXMakeCurrent unsuccessful.\n");
-	}
-
-	if (xstart + count < (size_t)ifp->i->if_width) {
-	    ogl_xmit_scanlines(ifp, ybase, 1, xstart, count);
-	    if (WIN(ifp)->mi_doublebuffer) {
-		glXSwapBuffers(OGL(ifp)->dispp, OGL(ifp)->wind);
-	    } else if (OGL(ifp)->copy_flag) {
-		/* repaint one scanline from backbuffer */
-		backbuffer_to_screen(ifp, ybase);
-	    }
+	/* Mark dirty region for written area */
+	ogl_mark_dirty(ifp, xstart, ybase, count, y - ybase);
+	
+	/* If not in delayed mode, immediately upload and present */
+	if (!OGL(ifp)->tex_initialized) {
+	    ogl_init_texture(ifp);
+	    ogl_upload_region(ifp, 0, 0, ifp->i->if_width, ifp->i->if_height);
 	} else {
-	    /* Normal case -- multi-pixel write */
-	    if (WIN(ifp)->mi_doublebuffer) {
-		/* refresh whole screen */
-		ogl_xmit_scanlines(ifp, 0, ifp->i->if_height, 0, ifp->i->if_width);
-		glXSwapBuffers(OGL(ifp)->dispp, OGL(ifp)->wind);
-	    } else {
-		/* just write rectangle */
-		ogl_xmit_scanlines(ifp, ybase, y-ybase, 0, ifp->i->if_width);
-		if (OGL(ifp)->copy_flag) {
-		    backbuffer_to_screen(ifp, -1);
-		}
-	    }
+	    ogl_upload_region(ifp, xstart, ybase, count, y - ybase);
 	}
-	glFlush();
-
-	/* unattach context for other threads to use */
-	glXMakeCurrent(OGL(ifp)->dispp, None, NULL);
+	ogl_present(ifp);
     }
 
     return ret;
@@ -1965,24 +1967,16 @@ ogl_writerect(struct fb *ifp, int xmin, int ymin, int width, int height, const u
 	return width*height;
 
     if (!OGL(ifp)->use_ext_ctrl) {
-	if (glXMakeCurrent(OGL(ifp)->dispp, OGL(ifp)->wind, OGL(ifp)->glxc)==False) {
-	    fb_log("Warning, ogl_writerect: glXMakeCurrent unsuccessful.\n");
-	}
-
-	if (WIN(ifp)->mi_doublebuffer) {
-	    /* refresh whole screen */
-	    ogl_xmit_scanlines(ifp, 0, ifp->i->if_height, 0, ifp->i->if_width);
-	    glXSwapBuffers(OGL(ifp)->dispp, OGL(ifp)->wind);
+	/* Mark dirty region and upload/present */
+	ogl_mark_dirty(ifp, xmin, ymin, width, height);
+	
+	if (!OGL(ifp)->tex_initialized) {
+	    ogl_init_texture(ifp);
+	    ogl_upload_region(ifp, 0, 0, ifp->i->if_width, ifp->i->if_height);
 	} else {
-	    /* just write rectangle*/
-	    ogl_xmit_scanlines(ifp, ymin, height, xmin, width);
-	    if (OGL(ifp)->copy_flag) {
-		backbuffer_to_screen(ifp, -1);
-	    }
+	    ogl_upload_region(ifp, xmin, ymin, width, height);
 	}
-
-	/* unattach context for other threads to use */
-	glXMakeCurrent(OGL(ifp)->dispp, None, NULL);
+	ogl_present(ifp);
     }
 
     return width*height;
@@ -2030,24 +2024,16 @@ ogl_bwwriterect(struct fb *ifp, int xmin, int ymin, int width, int height, const
 	return width*height;
 
     if (!OGL(ifp)->use_ext_ctrl) {
-	if (glXMakeCurrent(OGL(ifp)->dispp, OGL(ifp)->wind, OGL(ifp)->glxc)==False) {
-	    fb_log("Warning, ogl_writerect: glXMakeCurrent unsuccessful.\n");
-	}
-
-	if (WIN(ifp)->mi_doublebuffer) {
-	    /* refresh whole screen */
-	    ogl_xmit_scanlines(ifp, 0, ifp->i->if_height, 0, ifp->i->if_width);
-	    glXSwapBuffers(OGL(ifp)->dispp, OGL(ifp)->wind);
+	/* Mark dirty region and upload/present */
+	ogl_mark_dirty(ifp, xmin, ymin, width, height);
+	
+	if (!OGL(ifp)->tex_initialized) {
+	    ogl_init_texture(ifp);
+	    ogl_upload_region(ifp, 0, 0, ifp->i->if_width, ifp->i->if_height);
 	} else {
-	    /* just write rectangle*/
-	    ogl_xmit_scanlines(ifp, ymin, height, xmin, width);
-	    if (OGL(ifp)->copy_flag) {
-		backbuffer_to_screen(ifp, -1);
-	    }
+	    ogl_upload_region(ifp, xmin, ymin, width, height);
 	}
-
-	/* unattach context for other threads to use */
-	glXMakeCurrent(OGL(ifp)->dispp, None, NULL);
+	ogl_present(ifp);
     }
 
     return width*height;
@@ -2099,21 +2085,12 @@ ogl_wmap(register struct fb *ifp, register const ColorMap *cmp)
 	    /* if current and previous maps are linear, return */
 	    if (WIN(ifp)->mi_cmap_flag == 0 && prev == 0) return 0;
 
-	    /* Software color mapping, trigger a repaint */
-
-	    if (glXMakeCurrent(OGL(ifp)->dispp, OGL(ifp)->wind, OGL(ifp)->glxc)==False) {
-		fb_log("Warning, ogl_wmap: glXMakeCurrent unsuccessful.\n");
+	    /* Software color mapping, trigger texture re-upload and repaint */
+	    if (OGL(ifp)->tex_initialized) {
+		/* Re-upload entire image with new colormap */
+		ogl_upload_region(ifp, 0, 0, ifp->i->if_width, ifp->i->if_height);
+		ogl_present(ifp);
 	    }
-
-	    ogl_xmit_scanlines(ifp, 0, ifp->i->if_height, 0, ifp->i->if_width);
-	    if (WIN(ifp)->mi_doublebuffer) {
-		glXSwapBuffers(OGL(ifp)->dispp, OGL(ifp)->wind);
-	    } else if (OGL(ifp)->copy_flag) {
-		backbuffer_to_screen(ifp, -1);
-	    }
-
-	    /* unattach context for other threads to use, also flushes */
-	    glXMakeCurrent(OGL(ifp)->dispp, None, NULL);
 	} else {
 	    /* Send color map to hardware */
 	    /* This code has yet to be tested */
