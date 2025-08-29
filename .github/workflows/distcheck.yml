@@ -20,8 +20,6 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
-    env:
-      DEBIAN_FRONTEND: noninteractive
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
@@ -38,6 +36,7 @@ jobs:
       - name: Install apt dependencies
         if: runner.os == 'Linux'
         run: |
+          export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update
           # Install X/OpenGL dev pkgs
           sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
@@ -107,8 +106,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     needs: [bext]
-    env:
-      DEBIAN_FRONTEND: noninteractive
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
@@ -121,6 +118,7 @@ jobs:
       - name: Install apt dependencies
         if: runner.os == 'Linux'
         run: |
+          export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update
           sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           sudo apt-get install astyle re2c xsltproc libxml2-utils
@@ -169,8 +167,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     needs: [distcheck-default_build_type]
-    env:
-      DEBIAN_FRONTEND: noninteractive
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
@@ -184,6 +180,7 @@ jobs:
       - name: Install apt dependencies
         if: runner.os == 'Linux'
         run: |
+          export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update
           sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           sudo apt-get install astyle re2c xsltproc libxml2-utils
@@ -232,8 +229,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     needs: [distcheck-debug]
-    env:
-      DEBIAN_FRONTEND: noninteractive
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
@@ -247,6 +242,7 @@ jobs:
       - name: Install apt dependencies
         if: runner.os == 'Linux'
         run: |
+          export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update
           sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           sudo apt-get install astyle re2c xsltproc libxml2-utils
@@ -295,8 +291,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     needs: [distcheck-release]
-    env:
-      DEBIAN_FRONTEND: noninteractive
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
@@ -310,6 +304,7 @@ jobs:
       - name: Install apt dependencies
         if: runner.os == 'Linux'
         run: |
+          export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update
           sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           sudo apt-get install astyle re2c xsltproc libxml2-utils
@@ -358,8 +353,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     needs: [distcheck-enableall_debug]
-    env:
-      DEBIAN_FRONTEND: noninteractive
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
@@ -373,6 +366,7 @@ jobs:
       - name: Install apt dependencies
         if: runner.os == 'Linux'
         run: |
+          export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update
           sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           sudo apt-get install astyle re2c xsltproc libxml2-utils
@@ -421,8 +415,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     needs: [distcheck-enableall_release]
-    env:
-      DEBIAN_FRONTEND: noninteractive
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
@@ -436,6 +428,7 @@ jobs:
       - name: Install apt dependencies
         if: runner.os == 'Linux'
         run: |
+          export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update
           sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           sudo apt-get install astyle re2c xsltproc libxml2-utils
@@ -484,8 +477,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     needs: [distcheck-prepared_debug]
-    env:
-      DEBIAN_FRONTEND: noninteractive
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
@@ -499,6 +490,7 @@ jobs:
       - name: Install apt dependencies
         if: runner.os == 'Linux'
         run: |
+          export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update
           sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           sudo apt-get install astyle re2c xsltproc libxml2-utils
@@ -547,8 +539,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     needs: [distcheck-prepared_release]
-    env:
-      DEBIAN_FRONTEND: noninteractive
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
@@ -562,6 +552,7 @@ jobs:
       - name: Install apt dependencies
         if: runner.os == 'Linux'
         run: |
+          export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update
           sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           sudo apt-get install astyle re2c xsltproc libxml2-utils
@@ -610,8 +601,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     needs: [distcheck-no_tcl]
-    env:
-      DEBIAN_FRONTEND: noninteractive
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
@@ -625,6 +614,7 @@ jobs:
       - name: Install apt dependencies
         if: runner.os == 'Linux'
         run: |
+          export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update
           sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           sudo apt-get install astyle re2c xsltproc libxml2-utils
@@ -673,8 +663,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     needs: [distcheck-no_tk]
-    env:
-      DEBIAN_FRONTEND: noninteractive
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
@@ -688,6 +676,7 @@ jobs:
       - name: Install apt dependencies
         if: runner.os == 'Linux'
         run: |
+          export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update
           sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           sudo apt-get install astyle re2c xsltproc libxml2-utils
@@ -736,8 +725,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     needs: [distcheck-no_strict]
-    env:
-      DEBIAN_FRONTEND: noninteractive
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
@@ -751,6 +738,7 @@ jobs:
       - name: Install apt dependencies
         if: runner.os == 'Linux'
         run: |
+          export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update
           sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           sudo apt-get install astyle re2c xsltproc libxml2-utils
@@ -799,8 +787,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     needs: [distcheck-no_object]
-    env:
-      DEBIAN_FRONTEND: noninteractive
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
@@ -814,6 +800,7 @@ jobs:
       - name: Install apt dependencies
         if: runner.os == 'Linux'
         run: |
+          export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update
           sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           sudo apt-get install astyle re2c xsltproc libxml2-utils
@@ -862,8 +849,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     needs: [distcheck-odd_pathnames]
-    env:
-      DEBIAN_FRONTEND: noninteractive
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
@@ -877,6 +862,7 @@ jobs:
       - name: Install apt dependencies
         if: runner.os == 'Linux'
         run: |
+          export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update
           sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           sudo apt-get install astyle re2c xsltproc libxml2-utils
