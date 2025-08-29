@@ -9,20 +9,26 @@ name: Distcheck
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '30 3 * * 5'
+#  schedule:
+#    - cron: '30 3 * * 5'
+  run:
 
 jobs:
   bext:
     name: Prepare bext (cached)
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     env:
       DEBIAN_FRONTEND: noninteractive
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
 
+      # Linux specific system dependencies
       - name: Cache apt packages
+        if: runner.os == 'Linux'
         uses: actions/cache@v4
         with:
           path: |
@@ -30,6 +36,7 @@ jobs:
           key: ${{ runner.os }}-apt-${{ hashFiles('.github/workflows/check.yml') }}
 
       - name: Install apt dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           # Install X/OpenGL dev pkgs
@@ -45,6 +52,12 @@ jobs:
           sudo apt-get install libgl-dev
           sudo apt-get install libinput-dev
 
+      # macOS-specific system dependencies
+      - name: Install Homebrew dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install xquartz --cask
+
       - name: Clone bext
         run: git clone https://github.com/BRL-CAD/bext.git
 
@@ -54,11 +67,21 @@ jobs:
           cd bext
           echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
 
+      # Compute bext cache discriminator based on OS/toolchain/bext sha
       - name: Compute bext cache discriminator
         id: cachekey
         shell: bash
         run: |
-          info="${{ steps.bext-sha.outputs.sha }}-$(uname -s)-$(uname -r)-$(gcc --version | head -n 1)"
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            gccver="$(gcc --version | head -n 1)"
+            info="${{ steps.bext-sha.outputs.sha }}-$(uname -s)-$(uname -r)-$gccver"
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            xcodever="$(xcodebuild -version | head -n 1 | awk '{print $2}')"
+            clangver="$(clang --version | head -n 1)"
+            info="${{ steps.bext-sha.outputs.sha }}-$(uname -s)-$(uname -r)-$xcodever-$clangver"
+          else
+            info="${{ steps.bext-sha.outputs.sha }}-$(uname -s)-$(uname -r)"
+          fi
           echo "hash=$(echo -n "$info" | sha1sum | awk '{print $1}')" >> $GITHUB_OUTPUT
 
       - name: Cache bext build outputs
@@ -79,11 +102,13 @@ jobs:
 
   distcheck-default_build_type:
     name: distcheck-default_build_type
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     needs: [bext]
     env:
       DEBIAN_FRONTEND: noninteractive
-    if: github.ref == 'refs/heads/main'
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
@@ -94,11 +119,18 @@ jobs:
             /var/cache/apt/archives
           key: ${{ runner.os }}-apt-${{ hashFiles('.github/workflows/check.yml') }}
       - name: Install apt dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           sudo apt-get install astyle re2c xsltproc libxml2-utils
           sudo apt-get install zlib1g-dev libpng-dev libjpeg-dev libtiff-dev libeigen3-dev libgdal-dev libassimp-dev libopencv-dev tcl-dev tk-dev libgl-dev libinput-dev
+
+      # macOS-specific system dependencies
+      - name: Install Homebrew dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install xquartz --cask
 
       - name: Setup - bext
         run: |
@@ -132,26 +164,36 @@ jobs:
 
   distcheck-debug:
     name: distcheck-debug
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     needs: [distcheck-default_build_type]
     env:
       DEBIAN_FRONTEND: noninteractive
-    if: github.ref == 'refs/heads/main'
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
       - name: Cache apt packages
+        if: runner.os == 'Linux'
         uses: actions/cache@v4
         with:
           path: |
             /var/cache/apt/archives
           key: ${{ runner.os }}-apt-${{ hashFiles('.github/workflows/check.yml') }}
       - name: Install apt dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           sudo apt-get install astyle re2c xsltproc libxml2-utils
           sudo apt-get install zlib1g-dev libpng-dev libjpeg-dev libtiff-dev libeigen3-dev libgdal-dev libassimp-dev libopencv-dev tcl-dev tk-dev libgl-dev libinput-dev
+
+      # macOS-specific system dependencies
+      - name: Install Homebrew dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install xquartz --cask
 
       - name: Setup - bext
         run: |
@@ -185,26 +227,36 @@ jobs:
 
   distcheck-release:
     name: distcheck-release
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     needs: [distcheck-debug]
     env:
       DEBIAN_FRONTEND: noninteractive
-    if: github.ref == 'refs/heads/main'
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
       - name: Cache apt packages
+        if: runner.os == 'Linux'
         uses: actions/cache@v4
         with:
           path: |
             /var/cache/apt/archives
           key: ${{ runner.os }}-apt-${{ hashFiles('.github/workflows/check.yml') }}
       - name: Install apt dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           sudo apt-get install astyle re2c xsltproc libxml2-utils
           sudo apt-get install zlib1g-dev libpng-dev libjpeg-dev libtiff-dev libeigen3-dev libgdal-dev libassimp-dev libopencv-dev tcl-dev tk-dev libgl-dev libinput-dev
+
+      # macOS-specific system dependencies
+      - name: Install Homebrew dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install xquartz --cask
 
       - name: Setup - bext
         run: |
@@ -238,26 +290,36 @@ jobs:
 
   distcheck-enableall_debug:
     name: distcheck-enableall_debug
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     needs: [distcheck-release]
     env:
       DEBIAN_FRONTEND: noninteractive
-    if: github.ref == 'refs/heads/main'
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
       - name: Cache apt packages
         uses: actions/cache@v4
+        if: runner.os == 'Linux'
         with:
           path: |
             /var/cache/apt/archives
           key: ${{ runner.os }}-apt-${{ hashFiles('.github/workflows/check.yml') }}
       - name: Install apt dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           sudo apt-get install astyle re2c xsltproc libxml2-utils
           sudo apt-get install zlib1g-dev libpng-dev libjpeg-dev libtiff-dev libeigen3-dev libgdal-dev libassimp-dev libopencv-dev tcl-dev tk-dev libgl-dev libinput-dev
+
+      # macOS-specific system dependencies
+      - name: Install Homebrew dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install xquartz --cask
 
       - name: Setup - bext
         run: |
@@ -291,26 +353,36 @@ jobs:
 
   distcheck-enableall_release:
     name: distcheck-enableall_release
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     needs: [distcheck-enableall_debug]
     env:
       DEBIAN_FRONTEND: noninteractive
-    if: github.ref == 'refs/heads/main'
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
       - name: Cache apt packages
+        if: runner.os == 'Linux'
         uses: actions/cache@v4
         with:
           path: |
             /var/cache/apt/archives
           key: ${{ runner.os }}-apt-${{ hashFiles('.github/workflows/check.yml') }}
       - name: Install apt dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           sudo apt-get install astyle re2c xsltproc libxml2-utils
           sudo apt-get install zlib1g-dev libpng-dev libjpeg-dev libtiff-dev libeigen3-dev libgdal-dev libassimp-dev libopencv-dev tcl-dev tk-dev libgl-dev libinput-dev
+
+      # macOS-specific system dependencies
+      - name: Install Homebrew dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install xquartz --cask
 
       - name: Setup - bext
         run: |
@@ -344,26 +416,36 @@ jobs:
 
   distcheck-prepared_debug:
     name: distcheck-prepared_debug
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     needs: [distcheck-enableall_release]
     env:
       DEBIAN_FRONTEND: noninteractive
-    if: github.ref == 'refs/heads/main'
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
       - name: Cache apt packages
+        if: runner.os == 'Linux'
         uses: actions/cache@v4
         with:
           path: |
             /var/cache/apt/archives
           key: ${{ runner.os }}-apt-${{ hashFiles('.github/workflows/check.yml') }}
       - name: Install apt dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           sudo apt-get install astyle re2c xsltproc libxml2-utils
           sudo apt-get install zlib1g-dev libpng-dev libjpeg-dev libtiff-dev libeigen3-dev libgdal-dev libassimp-dev libopencv-dev tcl-dev tk-dev libgl-dev libinput-dev
+
+      # macOS-specific system dependencies
+      - name: Install Homebrew dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install xquartz --cask
 
       - name: Setup - bext
         run: |
@@ -397,26 +479,36 @@ jobs:
 
   distcheck-prepared_release:
     name: distcheck-prepared_release
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     needs: [distcheck-prepared_debug]
     env:
       DEBIAN_FRONTEND: noninteractive
-    if: github.ref == 'refs/heads/main'
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
       - name: Cache apt packages
+        if: runner.os == 'Linux'
         uses: actions/cache@v4
         with:
           path: |
             /var/cache/apt/archives
           key: ${{ runner.os }}-apt-${{ hashFiles('.github/workflows/check.yml') }}
       - name: Install apt dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           sudo apt-get install astyle re2c xsltproc libxml2-utils
           sudo apt-get install zlib1g-dev libpng-dev libjpeg-dev libtiff-dev libeigen3-dev libgdal-dev libassimp-dev libopencv-dev tcl-dev tk-dev libgl-dev libinput-dev
+
+      # macOS-specific system dependencies
+      - name: Install Homebrew dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install xquartz --cask
 
       - name: Setup - bext
         run: |
@@ -450,26 +542,36 @@ jobs:
 
   distcheck-no_tcl:
     name: distcheck-no_tcl
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     needs: [distcheck-prepared_release]
     env:
       DEBIAN_FRONTEND: noninteractive
-    if: github.ref == 'refs/heads/main'
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
       - name: Cache apt packages
+        if: runner.os == 'Linux'
         uses: actions/cache@v4
         with:
           path: |
             /var/cache/apt/archives
           key: ${{ runner.os }}-apt-${{ hashFiles('.github/workflows/check.yml') }}
       - name: Install apt dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           sudo apt-get install astyle re2c xsltproc libxml2-utils
           sudo apt-get install zlib1g-dev libpng-dev libjpeg-dev libtiff-dev libeigen3-dev libgdal-dev libassimp-dev libopencv-dev tcl-dev tk-dev libgl-dev libinput-dev
+
+      # macOS-specific system dependencies
+      - name: Install Homebrew dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install xquartz --cask
 
       - name: Setup - bext
         run: |
@@ -503,26 +605,36 @@ jobs:
 
   distcheck-no_tk:
     name: distcheck-no_tk
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     needs: [distcheck-no_tcl]
     env:
       DEBIAN_FRONTEND: noninteractive
-    if: github.ref == 'refs/heads/main'
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
       - name: Cache apt packages
         uses: actions/cache@v4
+        if: runner.os == 'Linux'
         with:
           path: |
             /var/cache/apt/archives
           key: ${{ runner.os }}-apt-${{ hashFiles('.github/workflows/check.yml') }}
       - name: Install apt dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           sudo apt-get install astyle re2c xsltproc libxml2-utils
           sudo apt-get install zlib1g-dev libpng-dev libjpeg-dev libtiff-dev libeigen3-dev libgdal-dev libassimp-dev libopencv-dev libgl-dev libinput-dev
+
+      # macOS-specific system dependencies
+      - name: Install Homebrew dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install xquartz --cask
 
       - name: Setup - bext
         run: |
@@ -556,26 +668,36 @@ jobs:
 
   distcheck-no_strict:
     name: distcheck-no_strict
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     needs: [distcheck-no_tk]
     env:
       DEBIAN_FRONTEND: noninteractive
-    if: github.ref == 'refs/heads/main'
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
       - name: Cache apt packages
+        if: runner.os == 'Linux'
         uses: actions/cache@v4
         with:
           path: |
             /var/cache/apt/archives
           key: ${{ runner.os }}-apt-${{ hashFiles('.github/workflows/check.yml') }}
       - name: Install apt dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           sudo apt-get install astyle re2c xsltproc libxml2-utils
           sudo apt-get install zlib1g-dev libpng-dev libjpeg-dev libtiff-dev libeigen3-dev libgdal-dev libassimp-dev libopencv-dev tcl-dev tk-dev libgl-dev libinput-dev
+
+      # macOS-specific system dependencies
+      - name: Install Homebrew dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install xquartz --cask
 
       - name: Setup - bext
         run: |
@@ -609,26 +731,36 @@ jobs:
 
   distcheck-no_object:
     name: distcheck-no_object
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     needs: [distcheck-no_strict]
     env:
       DEBIAN_FRONTEND: noninteractive
-    if: github.ref == 'refs/heads/main'
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
       - name: Cache apt packages
         uses: actions/cache@v4
+        if: runner.os == 'Linux'
         with:
           path: |
             /var/cache/apt/archives
           key: ${{ runner.os }}-apt-${{ hashFiles('.github/workflows/check.yml') }}
       - name: Install apt dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           sudo apt-get install astyle re2c xsltproc libxml2-utils
           sudo apt-get install zlib1g-dev libpng-dev libjpeg-dev libtiff-dev libeigen3-dev libgdal-dev libassimp-dev libopencv-dev tcl-dev tk-dev libgl-dev libinput-dev
+
+      # macOS-specific system dependencies
+      - name: Install Homebrew dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install xquartz --cask
 
       - name: Setup - bext
         run: |
@@ -662,26 +794,36 @@ jobs:
 
   distcheck-odd_pathnames:
     name: distcheck-odd_pathnames
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     needs: [distcheck-no_object]
     env:
       DEBIAN_FRONTEND: noninteractive
-    if: github.ref == 'refs/heads/main'
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
       - name: Cache apt packages
+        if: runner.os == 'Linux'
         uses: actions/cache@v4
         with:
           path: |
             /var/cache/apt/archives
           key: ${{ runner.os }}-apt-${{ hashFiles('.github/workflows/check.yml') }}
       - name: Install apt dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           sudo apt-get install astyle re2c xsltproc libxml2-utils
           sudo apt-get install zlib1g-dev libpng-dev libjpeg-dev libtiff-dev libeigen3-dev libgdal-dev libassimp-dev libopencv-dev tcl-dev tk-dev libgl-dev libinput-dev
+
+      # macOS-specific system dependencies
+      - name: Install Homebrew dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install xquartz --cask
 
       - name: Setup - bext
         run: |
@@ -715,26 +857,36 @@ jobs:
 
   distcheck-in_src_dir:
     name: distcheck-in_src_dir
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     needs: [distcheck-odd_pathnames]
     env:
       DEBIAN_FRONTEND: noninteractive
-    if: github.ref == 'refs/heads/main'
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
       - name: Cache apt packages
         uses: actions/cache@v4
+        if: runner.os == 'Linux'
         with:
           path: |
             /var/cache/apt/archives
           key: ${{ runner.os }}-apt-${{ hashFiles('.github/workflows/check.yml') }}
       - name: Install apt dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
           sudo apt-get install astyle re2c xsltproc libxml2-utils
           sudo apt-get install zlib1g-dev libpng-dev libjpeg-dev libtiff-dev libeigen3-dev libgdal-dev libassimp-dev libopencv-dev tcl-dev tk-dev libgl-dev libinput-dev
+
+      # macOS-specific system dependencies
+      - name: Install Homebrew dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install xquartz --cask
 
       - name: Setup - bext
         run: |
