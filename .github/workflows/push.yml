@@ -415,7 +415,7 @@ jobs:
 
   osx:
     name: macOS Clang
-    needs: [linux]
+      #needs: [linux]
     runs-on: macos-latest
     strategy:
       fail-fast: true
