@@ -500,3 +500,5 @@ jobs:
           ninja -j1 package -v
         working-directory: ${{ github.workspace }}/build_osx
 
+      - name: Debugging - tmate session
+        uses: mxschmitt/action-tmate@v3
