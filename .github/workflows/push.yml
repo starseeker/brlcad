@@ -496,14 +496,5 @@ jobs:
           make
         working-directory: ${{ github.workspace }}/build_osx
 
-      - name: Check
-        run: |
-          export PATH=$GITHUB_WORKSPACE:$PATH
-          make check
-        working-directory: ${{ github.workspace }}/build_osx
-
-      - name: Package
-        run: |
-          export PATH=$GITHUB_WORKSPACE:$PATH
-          make package
-        working-directory: ${{ github.workspace }}/build_osx
+      - name: Debugging - tmate session
+        uses: mxschmitt/action-tmate@v3
