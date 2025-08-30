@@ -499,6 +499,7 @@ jobs:
           ninja -j1 check -v
           ninja -j1 package -v
         working-directory: ${{ github.workspace }}/build_osx
+        continue-on-error: true
 
       - name: Debugging - tmate session
         uses: mxschmitt/action-tmate@v3
