@@ -483,23 +483,12 @@ jobs:
           cmake -S brlcad -B build_osx -G Ninja -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_DIR=${{ github.workspace }}/bext_output -DBRLCAD_ENABLE_QT=ON
 
       - name: Build
-        id: build_parallel
         run: |
-          export PATH=$GITHUB_WORKSPACE:$PATH
-          ninja
-          ninja check
-          ninja package
+          ninja -v -j1
+          ninja -v -j1 check
+          ninja -v -j1 package
         working-directory: ${{ github.workspace }}/build_osx
         continue-on-error: true
 
-      - name: Build (serial for diagnostics)
-        if: steps.build_parallel.outcome == 'failure'
-        run: |
-          ninja -j1 -v
-          ninja -j1 check -v
-          ninja -j1 package -v
-        working-directory: ${{ github.workspace }}/build_osx
-        continue-on-error: true
-
-      - name: Debugging - tmate session
-        uses: mxschmitt/action-tmate@v3
+#     - name: Debugging - tmate session
+#       uses: mxschmitt/action-tmate@v3
