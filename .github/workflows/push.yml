@@ -416,7 +416,7 @@ jobs:
   osx:
     name: macOS Clang
       #needs: [linux]
-    runs-on: macos-latest
+    runs-on: macos-15
     strategy:
       fail-fast: true
     steps:
@@ -480,21 +480,21 @@ jobs:
           export PATH=$GITHUB_WORKSPACE:$PATH
           export CC=clang
           export CXX=clang++
-          cmake -S brlcad -B build_osx -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_DIR=${{ github.workspace }}/bext_output -DBRLCAD_ENABLE_QT=ON
+          cmake -S brlcad -B build_osx -G Ninja -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_DIR=${{ github.workspace }}/bext_output -DBRLCAD_ENABLE_QT=ON
 
       - name: Build
         run: |
-          make
+          ninja -j1 -v
         working-directory: ${{ github.workspace }}/build_osx
 
       - name: Check
         run: |
-          make check
+          ninja -j1 -v check
         working-directory: ${{ github.workspace }}/build_osx
 
       - name: Package
         run: |
-          make package
+          ninja -j1 -v package
         working-directory: ${{ github.workspace }}/build_osx
 
 #     - name: Debugging - tmate session
