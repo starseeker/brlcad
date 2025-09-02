@@ -484,19 +484,18 @@ jobs:
 
       - name: Build
         run: |
-          ninja -v -j1
+          make
         working-directory: ${{ github.workspace }}/build_osx
 
       - name: Check
         run: |
-          ninja -v -j1 check
+          make check
         working-directory: ${{ github.workspace }}/build_osx
 
       - name: Package
         run: |
-          ninja -v -j1 package
+          make package
         working-directory: ${{ github.workspace }}/build_osx
-
 
 #     - name: Debugging - tmate session
 #       uses: mxschmitt/action-tmate@v3
