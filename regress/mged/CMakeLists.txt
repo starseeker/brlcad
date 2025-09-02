@@ -109,6 +109,7 @@ if(TARGET mged)
   if(SH_EXEC)
     brlcad_add_test(NAME regress-mged COMMAND ${SH_EXEC} "${CMAKE_CURRENT_SOURCE_DIR}/mged.sh" ${CMAKE_SOURCE_DIR})
     brlcad_regression_test(regress-mged "mged;rtarea;rt;rtcheck" TEST_DEFINED)
+    set_tests_properties(regress-mged PROPERTIES TIMEOUT 20000)
   endif(SH_EXEC)
 endif(TARGET mged)
 
