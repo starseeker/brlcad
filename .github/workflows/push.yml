@@ -480,23 +480,22 @@ jobs:
           export PATH=$GITHUB_WORKSPACE:$PATH
           export CC=clang
           export CXX=clang++
-          cmake -S brlcad -B build_osx -G Ninja -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_DIR=${{ github.workspace }}/bext_output -DBRLCAD_ENABLE_QT=ON
+          cmake -S brlcad -B build_osx -DCMAKE_BUILD_TYPE=Release -DBRLCAD_EXT_DIR=${{ github.workspace }}/bext_output -DBRLCAD_ENABLE_QT=ON
 
       - name: Build
         run: |
-          ninja -v -j1
+          make
         working-directory: ${{ github.workspace }}/build_osx
 
       - name: Check
         run: |
-          ninja -v -j1 check
+          make check
         working-directory: ${{ github.workspace }}/build_osx
 
       - name: Package
         run: |
-          ninja -v -j1 package
+          make package
         working-directory: ${{ github.workspace }}/build_osx
-
 
 #     - name: Debugging - tmate session
 #       uses: mxschmitt/action-tmate@v3
