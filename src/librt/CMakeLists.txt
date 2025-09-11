@@ -176,6 +176,7 @@ set(
   primitives/dsp/dsp.c
   primitives/dsp/dsp_brep.cpp
   primitives/dsp/dsp_mirror.c
+  primitives/dsp/terrascape/terrascape.c
   primitives/ebm/ebm.c
   primitives/ebm/ebm_brep.cpp
   primitives/ebm/ebm_mirror.c

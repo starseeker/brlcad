@@ -51,6 +51,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <math.h>
 #include <setjmp.h>
 #include "bnetwork.h"
@@ -61,10 +62,12 @@
 #include "raytrace.h"
 #include "rt/geom.h"
 #include "rt/db4.h"
+#include "rt/primitives/bot.h"
 #include "bv/plot3.h"
 
 /* private header */
 #include "./dsp.h"
+#include "./terrascape/terrascape.h"
 
 
 #define FULL_DSP_DEBUGGING 1
@@ -3455,14 +3458,140 @@ get_cut_dir(struct rt_dsp_internal *dsp_ip, int x, int y, int xlim, int ylim)
      ((*_v[1] != *_v[2]) || (*_v[1] == NULL))
 
 /**
+ * Terrascape volumetric tessellation function for DSP primitives.
+ * This function creates a watertight volumetric mesh using the Terrascape
+ * backend and converts it to NMG format.
+ *
  * Returns -
  * -1 failure
  * 0 OK.  *r points to nmgregion that holds this tessellation.
  */
 int
-rt_dsp_tess(struct nmgregion **r, struct model *m, struct rt_db_internal *ip, const struct bg_tess_tol *UNUSED(ttol), const struct bn_tol *tol)
+rt_dsp_tess_terrascape_volumetric_bot(struct nmgregion **r, struct model *m, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol)
 {
     struct rt_dsp_internal *dsp_ip;
+    struct terrascape_params params;
+    struct terrascape_bot_data bot_data;
+    struct rt_db_internal bot_internal;
+    struct rt_bot_internal *bot_ip;
+    int ret;
+
+    if (RT_G_DEBUG & RT_DEBUG_HF)
+        bu_log("rt_dsp_tess_terrascape_volumetric_bot()\n");
+
+    /* Validate inputs */
+    RT_CK_DB_INTERNAL(ip);
+    dsp_ip = (struct rt_dsp_internal *)ip->idb_ptr;
+    RT_DSP_CK_MAGIC(dsp_ip);
+
+    /* Check DSP data availability */
+    switch (dsp_ip->dsp_datasrc) {
+        case RT_DSP_SRC_V4_FILE:
+        case RT_DSP_SRC_FILE:
+            if (!dsp_ip->dsp_mp) {
+                bu_log("WARNING: Cannot find data file for displacement map (DSP)\n");
+                return -1;
+            }
+            break;
+        case RT_DSP_SRC_OBJ:
+            if (!dsp_ip->dsp_bip) {
+                bu_log("WARNING: Cannot find data object for displacement map (DSP)\n");
+                return -1;
+            }
+            break;
+    }
+
+    /* Initialize Terrascape parameters */
+    terrascape_params_init(&params);
+    if (ttol) {
+        params.tolerance = ttol->abs;
+    }
+
+    /* Perform Terrascape tessellation */
+    ret = terrascape_tessellate_volumetric(dsp_ip, &params, &bot_data);
+    if (ret != 0) {
+        bu_log("rt_dsp_tess_terrascape_volumetric_bot: Terrascape tessellation failed\n");
+        return -1;
+    }
+
+    /* Create BOT internal structure */
+    RT_DB_INTERNAL_INIT(&bot_internal);
+    bot_internal.idb_major_type = DB5_MAJORTYPE_BRLCAD;
+    bot_internal.idb_type = ID_BOT;
+    bot_internal.idb_meth = &OBJ[ID_BOT];
+
+    BU_ALLOC(bot_ip, struct rt_bot_internal);
+    bot_ip->magic = RT_BOT_INTERNAL_MAGIC;
+    bot_ip->mode = RT_BOT_SOLID;
+    bot_ip->orientation = RT_BOT_CCW;
+    bot_ip->thickness = (fastf_t *)NULL;
+    bot_ip->face_mode = (struct bu_bitv *)NULL;
+
+    bot_ip->num_vertices = bot_data.num_vertices;
+    bot_ip->num_faces = bot_data.num_faces;
+
+    /* Convert vertex data */
+    bot_ip->vertices = (fastf_t *)bu_calloc(bot_ip->num_vertices * 3, sizeof(fastf_t), "BOT vertices");
+    for (size_t i = 0; i < bot_ip->num_vertices; i++) {
+        point_t model_pt;
+        /* Transform DSP coordinate space to model space */
+        MAT4X3PNT(model_pt, dsp_ip->dsp_stom, bot_data.vertices[i]);
+        VMOVE(&bot_ip->vertices[i * 3], model_pt);
+    }
+
+    /* Convert face data */
+    bot_ip->faces = (int *)bu_calloc(bot_ip->num_faces * 3, sizeof(int), "BOT faces");
+    for (size_t i = 0; i < bot_ip->num_faces * 3; i++) {
+        bot_ip->faces[i] = bot_data.faces[i];
+    }
+
+    bot_internal.idb_ptr = (void *)bot_ip;
+
+    /* Clean up Terrascape data */
+    terrascape_bot_data_free(&bot_data);
+
+    /* Convert BOT to NMG using existing rt_bot_tess function */
+    ret = rt_bot_tess(r, m, &bot_internal, ttol, tol);
+
+    /* Clean up BOT internal */
+    rt_db_free_internal(&bot_internal);
+
+    if (ret != 0) {
+        bu_log("rt_dsp_tess_terrascape_volumetric_bot: BOT to NMG conversion failed\n");
+        return -1;
+    }
+
+    return 0;
+}
+
+
+/**
+ * Returns -
+ * -1 failure
+ * 0 OK.  *r points to nmgregion that holds this tessellation.
+ */
+int
+rt_dsp_tess(struct nmgregion **r, struct model *m, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol)
+{
+    struct rt_dsp_internal *dsp_ip;
+    const char *use_terrascape_env;
+    
+    if (RT_G_DEBUG & RT_DEBUG_HF)
+        bu_log("rt_dsp_tess()\n");
+
+    /* Check environment variable for Terrascape backend selection */
+    use_terrascape_env = getenv("DSP_USE_TERRASCAPE");
+    if (use_terrascape_env && atoi(use_terrascape_env) == 1) {
+        if (RT_G_DEBUG & RT_DEBUG_HF)
+            bu_log("rt_dsp_tess: Using Terrascape volumetric tessellation backend\n");
+        return rt_dsp_tess_terrascape_volumetric_bot(r, m, ip, ttol, tol);
+    }
+
+    /* Fall back to classic tessellation implementation */
+    if (RT_G_DEBUG & RT_DEBUG_HF)
+        bu_log("rt_dsp_tess: Using classic tessellation backend\n");
+
+    /* Original implementation starts here */
     struct shell *s;
     int xlim;
     int ylim;
