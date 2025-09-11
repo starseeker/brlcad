@@ -19,7 +19,8 @@
  */
 /** @file terrascape.h
  *
- * Terrascape volumetric tessellation library interface for DSP primitives.
+ * C interface for TerraScape volumetric tessellation library for DSP primitives.
+ * Wraps the C++ TerraScape library to provide tessellation functionality.
  *
  */
 
@@ -35,8 +36,9 @@ __BEGIN_DECLS
 /* Structure to hold volumetric tessellation parameters */
 struct terrascape_params {
     uint32_t magic;
-    int adaptive_mode;      /* Use adaptive tessellation */
-    double tolerance;       /* Tessellation tolerance */
+    double tolerance;       /* Tessellation tolerance/error threshold */
+    int point_limit;        /* Maximum number of points in tessellation */
+    double z_base;          /* Base level for volumetric extrusion */
     int ensure_watertight;  /* Guarantee watertight output */
 };
 #define TERRASCAPE_PARAMS_MAGIC 0x54455253
@@ -57,7 +59,7 @@ struct terrascape_bot_data {
 void terrascape_params_init(struct terrascape_params *params);
 
 /**
- * Perform volumetric tessellation of DSP data using Terrascape backend
+ * Perform volumetric tessellation of DSP data using TerraScape library
  *
  * @param dsp_ip Pointer to DSP internal structure
  * @param params Tessellation parameters
