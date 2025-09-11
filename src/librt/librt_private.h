@@ -76,6 +76,9 @@ struct db_i_internal {
     int mesh_c_completed;
     int mesh_c_target;
 
+    /* Database I/O locking data (opaque pointer to C++ implementation) */
+    void *lock_data;
+
     // TODO - really need to get the rt prep cache container
     // in here and add a pointer slot to it for rt_db_internal
     // so the librt point generation routines can take advantage
@@ -84,6 +87,13 @@ struct db_i_internal {
 
 struct db_i_internal * db_i_internal_create(void);
 void db_i_internal_destroy(struct db_i_internal *i);
+
+/* Database locking functions (C API wrappers for C++ implementation) */
+extern int db_lock_init(struct db_i *dbip);
+extern void db_lock_destroy(struct db_i *dbip);
+extern void db_acquire_read_lock(struct db_i *dbip);
+extern void db_acquire_write_lock(struct db_i *dbip);
+extern void db_release_lock(struct db_i *dbip);
 
 
 /* Used by sketch extrude revolve */

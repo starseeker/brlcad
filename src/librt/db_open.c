@@ -303,6 +303,13 @@ db_open(const char *name, const char *mode)
     BN_TOL_INIT_SET_TOL(&dbip->dbi_wdbp_inmem_a->wdb_tol);
     BG_TESS_TOL_INIT_SET_TOL(&dbip->dbi_wdbp_inmem_a->wdb_ttol);
 
+    /* Initialize database locking */
+    if (db_lock_init(dbip) != 0) {
+	if (RT_G_DEBUG & RT_DEBUG_DB) {
+	    bu_log("db_open(%s): Warning - failed to initialize database locking\n", name);
+	}
+    }
+
     return dbip;
 }
 
@@ -511,6 +518,10 @@ db_close(register struct db_i *dbip)
     }
 
     dbip->dbi_magic = (uint32_t)0x10101010;
+    
+    /* Clean up database locking before destroying the internal structure */
+    db_lock_destroy(dbip);
+    
     db_i_internal_destroy(dbip->i);
     bu_free((char *)dbip, "struct db_i");
 }
@@ -644,6 +655,7 @@ db_i_internal_create(void)
     struct db_i_internal *i;
     BU_GET(i, struct db_i_internal);
     i->dbi_magic = DBI_MAGIC;
+    i->lock_data = NULL;
 
     return i;
 }
@@ -656,6 +668,15 @@ db_i_internal_destroy(struct db_i_internal *i)
 
     if (i->mesh_c)
 	bv_mesh_lod_context_destroy(i->mesh_c);
+
+    /* Ensure locking is cleaned up if it was initialized */
+    if (i->lock_data) {
+	/* Note: We can't call db_lock_destroy directly here since
+	 * we don't have the dbip pointer, but the locking cleanup
+	 * should have been called from db_close before this point.
+	 */
+	i->lock_data = NULL;
+    }
 
     BU_PUT(i, struct db_i_internal);
 }

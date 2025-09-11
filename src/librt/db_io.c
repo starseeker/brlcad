@@ -60,12 +60,16 @@ db_read(const struct db_i *dbip, void *addr, size_t count, b_off_t offset)
 
     RT_CK_DBI(dbip);
 
+    /* Acquire read lock for thread-safe access */
+    db_acquire_read_lock((struct db_i *)dbip);
+
     if (RT_G_DEBUG&RT_DEBUG_DB) {
 	bu_log("db_read(dbip=%p, addr=%p, count=%zu., offset=%jd)\n",
 	       (void *)dbip, addr, count, (intmax_t)offset);
     }
 
     if (count == 0) {
+	db_release_lock((struct db_i *)dbip);
 	return -1;
     }
     if (offset+count > (size_t)dbip->dbi_eof) {
@@ -73,17 +77,22 @@ db_read(const struct db_i *dbip, void *addr, size_t count, b_off_t offset)
 	bu_log("db_read(%s) ERROR offset=%jd, count=%zu, dbi_eof=%jd\n",
 	       dbip->dbi_filename,
 	       (intmax_t)offset, count, (intmax_t)dbip->dbi_eof);
+	db_release_lock((struct db_i *)dbip);
 	return -1;
     }
     if (dbip->dbi_inmem) {
 	memcpy(addr, ((char *)dbip->dbi_inmem) + offset, count);
+	db_release_lock((struct db_i *)dbip);
 	return 0;
     }
     bu_semaphore_acquire(BU_SEM_SYSCALL);
 
     ret = bu_fseek(dbip->dbi_fp, offset, 0);
-    if (ret)
+    if (ret) {
+	bu_semaphore_release(BU_SEM_SYSCALL);
+	db_release_lock((struct db_i *)dbip);
 	bu_bomb("db_read: fseek error\n");
+    }
     got = (size_t)fread(addr, 1, count, dbip->dbi_fp);
 
     bu_semaphore_release(BU_SEM_SYSCALL);
@@ -91,8 +100,11 @@ db_read(const struct db_i *dbip, void *addr, size_t count, b_off_t offset)
     if (got != count) {
 	perror(dbip->dbi_filename);
 	bu_log("db_read(%s):  read error.  Wanted %zu, got %zu bytes\n", dbip->dbi_filename, count, got);
+	db_release_lock((struct db_i *)dbip);
 	return -1;
     }
+    
+    db_release_lock((struct db_i *)dbip);
     return 0;			/* OK */
 }
 
@@ -169,6 +181,7 @@ db_get(const struct db_i *dbip, const struct directory *dp, union record *where,
 	where->u_id = '\0';	/* undefined id */
 	return -1;
     }
+    
     return 0;			/* OK */
 }
 
@@ -180,6 +193,9 @@ db_write(struct db_i *dbip, const void *addr, size_t count, b_off_t offset)
 
     RT_CK_DBI(dbip);
 
+    /* Acquire write lock for thread-safe access */
+    db_acquire_write_lock(dbip);
+
     if (RT_G_DEBUG&RT_DEBUG_DB) {
 	bu_log("db_write(dbip=%p, addr=%p, count=%zu., offset=%jd)\n",
 	       (void *)dbip, addr, count, (intmax_t)offset);
@@ -187,13 +203,16 @@ db_write(struct db_i *dbip, const void *addr, size_t count, b_off_t offset)
 
     if (dbip->dbi_read_only) {
 	bu_log("db_write(%s):  READ-ONLY file\n", dbip->dbi_filename);
+	db_release_lock(dbip);
 	return -1;
     }
     if (count == 0) {
+	db_release_lock(dbip);
 	return -1;
     }
     if (dbip->dbi_inmem) {
 	bu_log("db_write() in memory?\n");
+	db_release_lock(dbip);
 	return -1;
     }
     bu_semaphore_acquire(BU_SEM_SYSCALL);
@@ -210,8 +229,11 @@ db_write(struct db_i *dbip, const void *addr, size_t count, b_off_t offset)
 	bu_log("db_write(%s):  write error.  Wanted %zu, got %zu bytes.\nFile forced read-only.\n",
 	       dbip->dbi_filename, count, got);
 	dbip->dbi_read_only = 1;
+	db_release_lock(dbip);
 	return -1;
     }
+    
+    db_release_lock(dbip);
     return 0;			/* OK */
 }
 
@@ -249,6 +271,7 @@ db_put(struct db_i *dbip, const struct directory *dp, union record *where, b_off
 		 dp->d_addr + offset * sizeof(union record)) < 0) {
 	return -1;
     }
+    
     return 0;
 }
 
@@ -258,11 +281,13 @@ db_get_external(register struct bu_external *ep, const struct directory *dp, con
 {
     RT_CK_DBI(dbip);
     RT_CK_DIR(dp);
+    
     if (RT_G_DEBUG&RT_DEBUG_DB) bu_log("db_get_external(%s) ep=%p, dbip=%p, dp=%p\n",
 				    dp->d_namep, (void *)ep, (void *)dbip, (void *)dp);
 
-    if ((dp->d_flags & RT_DIR_INMEM) == 0 && dp->d_addr == RT_DIR_PHONY_ADDR)
+    if ((dp->d_flags & RT_DIR_INMEM) == 0 && dp->d_addr == RT_DIR_PHONY_ADDR) {
 	return -1;		/* was dummy DB entry */
+    }
 
     BU_EXTERNAL_INIT(ep);
     if (db_version(dbip) < 5)
@@ -282,6 +307,7 @@ db_get_external(register struct bu_external *ep, const struct directory *dp, con
 	ep->ext_nbytes = 0;
 	return -1;	/* VERY BAD */
     }
+    
     return 0;
 }
 
@@ -293,6 +319,7 @@ db_put_external(struct bu_external *ep, struct directory *dp, struct db_i *dbip)
     RT_CK_DBI(dbip);
     RT_CK_DIR(dp);
     BU_CK_EXTERNAL(ep);
+    
     if (RT_G_DEBUG&RT_DEBUG_DB) bu_log("db_put_external(%s) ep=%p, dbip=%p, dp=%p\n",
 				    dp->d_namep, (void *)ep, (void *)dbip, (void *)dp);
 
@@ -303,8 +330,9 @@ db_put_external(struct bu_external *ep, struct directory *dp, struct db_i *dbip)
 	return -1;
     }
 
-    if (db_version(dbip) == 5)
+    if (db_version(dbip) == 5) {
 	return db_put_external5(ep, dp, dbip);
+    }
 
     if (db_version(dbip) < 5) {
 	size_t ngran;
@@ -320,8 +348,9 @@ db_put_external(struct bu_external *ep, struct directory *dp, struct db_i *dbip)
 	ngran = (ep->ext_nbytes+sizeof(union record)-1)/sizeof(union record);
 	if (ngran != dp->d_len) {
 	    if (dp->d_addr != RT_DIR_PHONY_ADDR) {
-		if (db_delete(dbip, dp))
+		if (db_delete(dbip, dp)) {
 		    return -2;
+		}
 	    }
 	    if (db_alloc(dbip, dp, ngran)) {
 		return -3;
@@ -335,8 +364,9 @@ db_put_external(struct bu_external *ep, struct directory *dp, struct db_i *dbip)
 	}
 
 	db_wrap_v4_external(ep, dp->d_namep);
-    } else
+    } else {
 	bu_bomb("db_put_external(): unknown database version\n");
+    }
 
     if (dp->d_flags & RT_DIR_INMEM) {
 	memcpy(dp->d_un.ptr, (char *)ep->ext_buf, ep->ext_nbytes);
@@ -346,6 +376,7 @@ db_put_external(struct bu_external *ep, struct directory *dp, struct db_i *dbip)
     if (db_write(dbip, (char *)ep->ext_buf, ep->ext_nbytes, dp->d_addr) < 0) {
 	return -1;
     }
+    
     return 0;
 }
 
