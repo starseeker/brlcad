@@ -89,11 +89,11 @@ struct db_i_internal * db_i_internal_create(void);
 void db_i_internal_destroy(struct db_i_internal *i);
 
 /* Database locking functions (C API wrappers for C++ implementation) */
-extern int db_lock_init(struct db_i *dbip);
-extern void db_lock_destroy(struct db_i *dbip);
-extern void db_acquire_read_lock(struct db_i *dbip);
-extern void db_acquire_write_lock(struct db_i *dbip);
-extern void db_release_lock(struct db_i *dbip);
+RT_EXPORT extern int db_lock_init(struct db_i *dbip);
+RT_EXPORT extern void db_lock_destroy(struct db_i *dbip);
+RT_EXPORT extern void db_acquire_read_lock(struct db_i *dbip);
+RT_EXPORT extern void db_acquire_write_lock(struct db_i *dbip);
+RT_EXPORT extern void db_release_lock(struct db_i *dbip);
 
 
 /* Used by sketch extrude revolve */
