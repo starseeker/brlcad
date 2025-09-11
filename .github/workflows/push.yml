@@ -415,7 +415,7 @@ jobs:
 
   osx:
     name: macOS Clang
-      #needs: [linux]
+    needs: [linux]
     runs-on: macos-14
     strategy:
       fail-fast: true
@@ -484,18 +484,23 @@ jobs:
 
       - name: Build
         run: |
+          export PATH=$GITHUB_WORKSPACE:$PATH
+          make -j2
+        working-directory: ${{ github.workspace }}/build_osx
+
+      - name: Check
+        run: |
           make
         working-directory: ${{ github.workspace }}/build_osx
 
       - name: Check
         run: |
+          export PATH=$GITHUB_WORKSPACE:$PATH
           make check
         working-directory: ${{ github.workspace }}/build_osx
 
       - name: Package
         run: |
+          export PATH=$GITHUB_WORKSPACE:$PATH
           make package
         working-directory: ${{ github.workspace }}/build_osx
-
-#     - name: Debugging - tmate session
-#       uses: mxschmitt/action-tmate@v3
