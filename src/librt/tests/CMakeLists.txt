@@ -83,6 +83,10 @@ brlcad_addexec(bot_match bot_match.cpp "librt;libbg" TEST)
 # boolweave testing
 brlcad_addexec(rt_boolweave rt_boolweave.c "librt" TEST)
 
+# Database threading stress test
+brlcad_addexec(test_db_threading test_db_threading.c "librt;libwdb" TEST)
+brlcad_add_test(NAME rt_db_threading_stress COMMAND test_db_threading)
+
 # Tests for primitive editing
 add_subdirectory(edit)
 
