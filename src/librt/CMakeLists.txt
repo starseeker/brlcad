@@ -124,7 +124,6 @@ set(
   db_fullpath.cpp
   db_inmem.c
   db_io.c
-  db_locking.c
   db_lookup.c
   db_match.c
   db_open.c

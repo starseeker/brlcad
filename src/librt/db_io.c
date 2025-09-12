@@ -60,8 +60,22 @@ db_read(const struct db_i *dbip, void *addr, size_t count, b_off_t offset)
 
     RT_CK_DBI(dbip);
 
-    /* Acquire read lock for thread-safe access */
-    db_acquire_read_lock((struct db_i *)dbip);
+    /* Acquire read lock using readers-writer algorithm */
+    if (dbip->i && dbip->i->reader_count_sem >= 0 && dbip->i->write_sem >= 0) {
+        /* Acquire the reader count semaphore */
+        bu_semaphore_acquire(dbip->i->reader_count_sem);
+        
+        /* Increment reader count */
+        dbip->i->reader_count++;
+        
+        /* If this is the first reader, acquire the write semaphore to block writers */
+        if (dbip->i->reader_count == 1) {
+            bu_semaphore_acquire(dbip->i->write_sem);
+        }
+        
+        /* Release the reader count semaphore */
+        bu_semaphore_release(dbip->i->reader_count_sem);
+    }
 
     if (RT_G_DEBUG&RT_DEBUG_DB) {
 	bu_log("db_read(dbip=%p, addr=%p, count=%zu., offset=%jd)\n",
@@ -69,7 +83,15 @@ db_read(const struct db_i *dbip, void *addr, size_t count, b_off_t offset)
     }
 
     if (count == 0) {
-	db_release_lock((struct db_i *)dbip);
+        /* Release read lock before returning */
+        if (dbip->i && dbip->i->reader_count_sem >= 0 && dbip->i->write_sem >= 0) {
+            bu_semaphore_acquire(dbip->i->reader_count_sem);
+            dbip->i->reader_count--;
+            if (dbip->i->reader_count == 0) {
+                bu_semaphore_release(dbip->i->write_sem);
+            }
+            bu_semaphore_release(dbip->i->reader_count_sem);
+        }
 	return -1;
     }
     if (offset+count > (size_t)dbip->dbi_eof) {
@@ -77,12 +99,28 @@ db_read(const struct db_i *dbip, void *addr, size_t count, b_off_t offset)
 	bu_log("db_read(%s) ERROR offset=%jd, count=%zu, dbi_eof=%jd\n",
 	       dbip->dbi_filename,
 	       (intmax_t)offset, count, (intmax_t)dbip->dbi_eof);
-	db_release_lock((struct db_i *)dbip);
+        /* Release read lock before returning */
+        if (dbip->i && dbip->i->reader_count_sem >= 0 && dbip->i->write_sem >= 0) {
+            bu_semaphore_acquire(dbip->i->reader_count_sem);
+            dbip->i->reader_count--;
+            if (dbip->i->reader_count == 0) {
+                bu_semaphore_release(dbip->i->write_sem);
+            }
+            bu_semaphore_release(dbip->i->reader_count_sem);
+        }
 	return -1;
     }
     if (dbip->dbi_inmem) {
 	memcpy(addr, ((char *)dbip->dbi_inmem) + offset, count);
-	db_release_lock((struct db_i *)dbip);
+        /* Release read lock before returning */
+        if (dbip->i && dbip->i->reader_count_sem >= 0 && dbip->i->write_sem >= 0) {
+            bu_semaphore_acquire(dbip->i->reader_count_sem);
+            dbip->i->reader_count--;
+            if (dbip->i->reader_count == 0) {
+                bu_semaphore_release(dbip->i->write_sem);
+            }
+            bu_semaphore_release(dbip->i->reader_count_sem);
+        }
 	return 0;
     }
     bu_semaphore_acquire(BU_SEM_SYSCALL);
@@ -90,7 +128,15 @@ db_read(const struct db_i *dbip, void *addr, size_t count, b_off_t offset)
     ret = bu_fseek(dbip->dbi_fp, offset, 0);
     if (ret) {
 	bu_semaphore_release(BU_SEM_SYSCALL);
-	db_release_lock((struct db_i *)dbip);
+        /* Release read lock before returning */
+        if (dbip->i && dbip->i->reader_count_sem >= 0 && dbip->i->write_sem >= 0) {
+            bu_semaphore_acquire(dbip->i->reader_count_sem);
+            dbip->i->reader_count--;
+            if (dbip->i->reader_count == 0) {
+                bu_semaphore_release(dbip->i->write_sem);
+            }
+            bu_semaphore_release(dbip->i->reader_count_sem);
+        }
 	bu_bomb("db_read: fseek error\n");
     }
     got = (size_t)fread(addr, 1, count, dbip->dbi_fp);
@@ -100,11 +146,27 @@ db_read(const struct db_i *dbip, void *addr, size_t count, b_off_t offset)
     if (got != count) {
 	perror(dbip->dbi_filename);
 	bu_log("db_read(%s):  read error.  Wanted %zu, got %zu bytes\n", dbip->dbi_filename, count, got);
-	db_release_lock((struct db_i *)dbip);
+        /* Release read lock before returning */
+        if (dbip->i && dbip->i->reader_count_sem >= 0 && dbip->i->write_sem >= 0) {
+            bu_semaphore_acquire(dbip->i->reader_count_sem);
+            dbip->i->reader_count--;
+            if (dbip->i->reader_count == 0) {
+                bu_semaphore_release(dbip->i->write_sem);
+            }
+            bu_semaphore_release(dbip->i->reader_count_sem);
+        }
 	return -1;
     }
     
-    db_release_lock((struct db_i *)dbip);
+    /* Release read lock */
+    if (dbip->i && dbip->i->reader_count_sem >= 0 && dbip->i->write_sem >= 0) {
+        bu_semaphore_acquire(dbip->i->reader_count_sem);
+        dbip->i->reader_count--;
+        if (dbip->i->reader_count == 0) {
+            bu_semaphore_release(dbip->i->write_sem);
+        }
+        bu_semaphore_release(dbip->i->reader_count_sem);
+    }
     return 0;			/* OK */
 }
 
@@ -193,8 +255,10 @@ db_write(struct db_i *dbip, const void *addr, size_t count, b_off_t offset)
 
     RT_CK_DBI(dbip);
 
-    /* Acquire write lock for thread-safe access */
-    db_acquire_write_lock(dbip);
+    /* Acquire write lock for exclusive access */
+    if (dbip->i && dbip->i->write_sem >= 0) {
+        bu_semaphore_acquire(dbip->i->write_sem);
+    }
 
     if (RT_G_DEBUG&RT_DEBUG_DB) {
 	bu_log("db_write(dbip=%p, addr=%p, count=%zu., offset=%jd)\n",
@@ -203,16 +267,25 @@ db_write(struct db_i *dbip, const void *addr, size_t count, b_off_t offset)
 
     if (dbip->dbi_read_only) {
 	bu_log("db_write(%s):  READ-ONLY file\n", dbip->dbi_filename);
-	db_release_lock(dbip);
+        /* Release write lock before returning */
+        if (dbip->i && dbip->i->write_sem >= 0) {
+            bu_semaphore_release(dbip->i->write_sem);
+        }
 	return -1;
     }
     if (count == 0) {
-	db_release_lock(dbip);
+        /* Release write lock before returning */
+        if (dbip->i && dbip->i->write_sem >= 0) {
+            bu_semaphore_release(dbip->i->write_sem);
+        }
 	return -1;
     }
     if (dbip->dbi_inmem) {
 	bu_log("db_write() in memory?\n");
-	db_release_lock(dbip);
+        /* Release write lock before returning */
+        if (dbip->i && dbip->i->write_sem >= 0) {
+            bu_semaphore_release(dbip->i->write_sem);
+        }
 	return -1;
     }
     bu_semaphore_acquire(BU_SEM_SYSCALL);
@@ -229,11 +302,17 @@ db_write(struct db_i *dbip, const void *addr, size_t count, b_off_t offset)
 	bu_log("db_write(%s):  write error.  Wanted %zu, got %zu bytes.\nFile forced read-only.\n",
 	       dbip->dbi_filename, count, got);
 	dbip->dbi_read_only = 1;
-	db_release_lock(dbip);
+        /* Release write lock before returning */
+        if (dbip->i && dbip->i->write_sem >= 0) {
+            bu_semaphore_release(dbip->i->write_sem);
+        }
 	return -1;
     }
     
-    db_release_lock(dbip);
+    /* Release write lock */
+    if (dbip->i && dbip->i->write_sem >= 0) {
+        bu_semaphore_release(dbip->i->write_sem);
+    }
     return 0;			/* OK */
 }
 
