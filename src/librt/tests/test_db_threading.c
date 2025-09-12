@@ -20,7 +20,7 @@
 /** @file test_db_threading.c
  *
  * Comprehensive multithreaded stress test for BRL-CAD database I/O operations.
- * Tests that the C++17-based locking mechanism correctly protects database
+ * Tests that the libbu semaphore-based locking mechanism correctly protects database
  * operations under various concurrent access patterns.
  *
  */
@@ -432,7 +432,7 @@ main(int argc, char **argv)
     }
     
     bu_log("=== BRL-CAD Database Threading Stress Test ===\n");
-    bu_log("Testing C++17-based read/write locking implementation\n");
+    bu_log("Testing libbu semaphore-based read/write locking implementation\n");
     bu_log("Database file: %s\n", test_db_file);
     
     /* Create a new database */
