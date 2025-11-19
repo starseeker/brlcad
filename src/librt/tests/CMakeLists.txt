@@ -83,6 +83,9 @@ brlcad_addexec(bot_match bot_match.cpp "librt;libbg" TEST)
 # boolweave testing
 brlcad_addexec(rt_boolweave rt_boolweave.c "librt" TEST)
 
+# arbn clip testing
+brlcad_addexec(rt_arbn_clip arbn_clip.c "librt" TEST)
+
 # Tests for primitive editing
 add_subdirectory(edit)
 
