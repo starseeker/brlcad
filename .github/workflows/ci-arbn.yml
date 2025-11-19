@@ -1,6 +1,6 @@
 # CI workflow for ARBN tessellation enhancements and g-comgeom exporter
+# Based on push.yml Ubuntu build strategy with bext caching
 # Extended timeout to accommodate long BRL-CAD builds (>1 hour)
-# Includes ccache to speed up subsequent builds
 
 name: ARBN-Enhanced-CI
 
@@ -16,188 +16,134 @@ on:
 
 jobs:
   arbn-clip-tests:
-    name: ARBN Clipping Tests
+    name: ARBN Clipping and g-comgeom Tests
     runs-on: ubuntu-latest
     timeout-minutes: 180  # 3 hours for initial dependency build
     strategy:
       fail-fast: false
       matrix:
-        config:
-          - name: "Minimal Build"
-            cmake_flags: "-DENABLE_ALL=OFF -DBRLCAD_ENABLE_TK=OFF -DBRLCAD_ENABLE_QT=OFF"
-          - name: "Standard Build"
-            cmake_flags: "-DENABLE_ALL=OFF -DBRLCAD_ENABLE_TK=OFF -DBRLCAD_ENABLE_QT=OFF"
-          - name: "Extended Build with Clip Mode"
-            cmake_flags: "-DENABLE_ALL=OFF -DBRLCAD_ENABLE_TK=OFF -DBRLCAD_ENABLE_QT=OFF"
-            arbn_mode: "clip"
+        arbn_mode: ["legacy", "clip"]
     
     env:
       DEBIAN_FRONTEND: noninteractive
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
     
     steps:
       - name: Setup - CMake
         uses: lukka/get-cmake@latest
       
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          # Core dependencies only (no GUI)
-          sudo apt-get install -y \
-            ccache \
-            ninja-build \
-            zlib1g-dev \
-            libpng-dev \
-            libjpeg-dev \
-            libtiff-dev \
-            libeigen3-dev
-      
-      - name: Setup ccache
+      # Cache apt package downloads (not installed pkgs)
+      - name: Cache apt packages
         uses: actions/cache@v4
         with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ${{ runner.os }}-ccache-${{ matrix.config.name }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-ccache-${{ matrix.config.name }}-
-            ${{ runner.os }}-ccache-
+          path: |
+            /var/cache/apt/archives
+          key: ${{ runner.os }}-apt-arbn-${{ hashFiles('.github/workflows/ci-arbn.yml') }}
       
-      - name: Configure ccache
+      # Install system dependencies (following push.yml pattern)
+      - name: Install apt dependencies
         run: |
-          ccache --set-config=max_size=2G
-          ccache --set-config=compression=true
-          ccache --zero-stats
+          sudo apt-get update
+          # Install X/OpenGL dev pkgs (needed for Tk even if not using GUI)
+          sudo apt-get install xserver-xorg-dev libx11-dev libxi-dev libxext-dev libglu1-mesa-dev libfontconfig-dev
+          # Install tools
+          sudo apt-get install astyle re2c xsltproc libxml2-utils
+          # Install dependency dev pkgs
+          sudo apt-get install zlib1g-dev libpng-dev libjpeg-dev libtiff-dev libeigen3-dev libgdal-dev libassimp-dev libopencv-dev tcl-dev tk-dev
+          # Ninja for faster builds
+          sudo apt-get install ninja-build
+      
+      # Prepare bext cache key (following push.yml pattern)
+      - name: Clone bext
+        run: git clone https://github.com/BRL-CAD/bext.git
+      
+      - name: Get bext commit SHA
+        id: bext-sha
+        run: |
+          cd bext
+          echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+      
+      - name: Compute bext cache discriminator
+        id: cachekey
+        shell: bash
+        run: |
+          info="${{ steps.bext-sha.outputs.sha }}-$(uname -s)-$(uname -r)-$(gcc --version | head -n 1)"
+          echo "hash=$(echo -n "$info" | sha1sum | awk '{print $1}')" >> $GITHUB_OUTPUT
+      
+      - name: Cache bext build outputs
+        id: cache-bext
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/bext_output
+          key: ${{ runner.os }}-bext-arbn-${{ steps.cachekey.outputs.hash }}
+      
+      - name: Build bext (if cache miss)
+        if: steps.cache-bext.outputs.cache-hit != 'true'
+        run: |
+          cmake -E make_directory bext_build
+          cmake -S bext -B bext_build -DCMAKE_BUILD_TYPE=Release -DENABLE_ALL=ON -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/bext_output
+          cmake --build bext_build --config Release -j 2
+          cmake -E rm -rf bext
+          cmake -E rm -rf bext_build
       
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          path: brlcad
       
-      - name: Configure CMake
+      - name: Directory setup
         run: |
-          mkdir -p build
-          cd build
-          cmake .. \
-            -G Ninja \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            ${{ matrix.config.cmake_flags }} \
-            2>&1 | tee cmake_config.log
-          # Output last 100 lines for visibility
-          tail -100 cmake_config.log
+          cmake -E make_directory ./build_arbn
+          cmake -E make_directory $HOME/.cache
+          cmake -E make_directory $HOME/.cache/BRL-CAD
       
-      - name: Build librt and dependencies
+      - name: Configure
         run: |
-          cd build
-          # Build only what we need for ARBN tests
-          ninja librt 2>&1 | tee build_librt.log || true
-          tail -100 build_librt.log
+          export PATH=$GITHUB_WORKSPACE:$PATH
+          cmake -S brlcad -B build_arbn -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBRLCAD_EXT_DIR=${{ github.workspace }}/bext_output -DBRLCAD_ENABLE_QT=OFF
       
-      - name: Build ARBN clip tests
+      - name: Build ARBN components
         run: |
-          cd build
-          ninja arbn_clip_test 2>&1 | tee build_test.log || true
-          tail -100 build_test.log
+          export PATH=$GITHUB_WORKSPACE:$PATH
+          cd build_arbn
+          # Build librt and ARBN test
+          ninja librt 2>&1 | tail -50
+          ninja arbn_clip_test 2>&1 | tail -50
       
       - name: Build g-comgeom
         run: |
-          cd build
-          ninja g-comgeom 2>&1 | tee build_gcomgeom.log || true
-          tail -100 build_gcomgeom.log
+          export PATH=$GITHUB_WORKSPACE:$PATH
+          cd build_arbn
+          ninja g-comgeom 2>&1 | tail -50
       
-      - name: Run ARBN clip tests (legacy mode)
-        if: matrix.config.arbn_mode != 'clip'
+      - name: Run ARBN clip tests
         run: |
-          cd build
-          export BRLCAD_ARBN_TESS_MODE=legacy
-          ./src/librt/tests/arbn_clip_test || true
-      
-      - name: Run ARBN clip tests (clip mode)
-        if: matrix.config.arbn_mode == 'clip'
-        run: |
-          cd build
-          export BRLCAD_ARBN_TESS_MODE=clip
+          cd build_arbn
+          export BRLCAD_ARBN_TESS_MODE=${{ matrix.arbn_mode }}
           export BRLCAD_ARBN_CLIP_SPATIAL_HASH=on
-          export BRLCAD_ARBN_CLIP_STATS=/tmp/arbn_stats.txt
-          ./src/librt/tests/arbn_clip_test || true
-          if [ -f /tmp/arbn_stats.txt ]; then
-            echo "ARBN Statistics:"
-            cat /tmp/arbn_stats.txt
+          export BRLCAD_ARBN_CLIP_STATS=/tmp/arbn_stats_${{ matrix.arbn_mode }}.txt
+          ./src/librt/tests/arbn_clip_test
+          if [ -f /tmp/arbn_stats_${{ matrix.arbn_mode }}.txt ]; then
+            echo "ARBN Statistics (${{ matrix.arbn_mode }} mode):"
+            cat /tmp/arbn_stats_${{ matrix.arbn_mode }}.txt
           fi
-      
-      - name: Show ccache statistics
-        run: ccache --show-stats
-      
-      - name: Upload build logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs-${{ matrix.config.name }}
-          path: |
-            build/*.log
-            /tmp/arbn_stats.txt
-          retention-days: 7
-  
-  g-comgeom-tests:
-    name: g-comgeom Exporter Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    needs: arbn-clip-tests
-    
-    env:
-      DEBIAN_FRONTEND: noninteractive
-    
-    steps:
-      - name: Setup - CMake
-        uses: lukka/get-cmake@latest
-      
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ccache ninja-build zlib1g-dev libpng-dev
-      
-      - name: Checkout
-        uses: actions/checkout@v4
-      
-      - name: Configure and Build
-        run: |
-          mkdir -p build
-          cd build
-          cmake .. -G Ninja \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DENABLE_ALL=OFF \
-            -DBRLCAD_ENABLE_TK=OFF \
-            -DBRLCAD_ENABLE_QT=OFF
-          ninja g-comgeom || true
       
       - name: Test g-comgeom help
         run: |
-          cd build
-          ./bin/g-comgeom -h || true
+          cd build_arbn
+          ./bin/g-comgeom -h || echo "g-comgeom help test (expected to fail without database)"
       
-      - name: Test g-comgeom version flags
-        run: |
-          cd build
-          ./bin/g-comgeom -V 1 || true
-          ./bin/g-comgeom -V 4 || true
-          ./bin/g-comgeom -V 5 || true
+      - name: Upload build logs and statistics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ matrix.arbn_mode }}
+          path: |
+            /tmp/arbn_stats_*.txt
+          retention-days: 7
 
-  keepalive:
-    name: Keepalive Progress Reporter
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    
-    steps:
-      - name: Report progress every 5 minutes
-        run: |
-          for i in {1..36}; do
-            echo "Build progress: Minute $((i * 5)) of 180..."
-            echo "Dependencies building... This may take over an hour."
-            sleep 300
-          done
-
-# Note: This workflow is specifically designed for ARBN branch testing.
-# The extended timeout accommodates BRL-CAD's dependency build process.
-# Future improvements:
-# - Add bext caching similar to push.yml
-# - Add performance benchmarking job
-# - Add comparison tests between legacy and clip modes
-# - Add g-comgeom deck validation tests
+# Note: This workflow follows the push.yml Ubuntu build strategy:
+# - Uses bext repository for dependencies with caching
+# - Installs system X11/Tk packages to avoid build failures
+# - Uses Ninja for faster builds
+# - Caches apt packages and bext outputs
+# - Tests both legacy and clip modes in parallel
