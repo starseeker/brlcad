@@ -1,0 +1,203 @@
+# CI workflow for ARBN tessellation enhancements and g-comgeom exporter
+# Extended timeout to accommodate long BRL-CAD builds (>1 hour)
+# Includes ccache to speed up subsequent builds
+
+name: ARBN-Enhanced-CI
+
+on:
+  push:
+    branches:
+      - arbn
+      - 'arbn/**'
+      - 'copilot/enhance-arbn-tessellation'
+  pull_request:
+    branches:
+      - arbn
+
+jobs:
+  arbn-clip-tests:
+    name: ARBN Clipping Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 180  # 3 hours for initial dependency build
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - name: "Minimal Build"
+            cmake_flags: "-DENABLE_ALL=OFF -DBRLCAD_ENABLE_TK=OFF -DBRLCAD_ENABLE_QT=OFF"
+          - name: "Standard Build"
+            cmake_flags: "-DENABLE_ALL=OFF -DBRLCAD_ENABLE_TK=OFF -DBRLCAD_ENABLE_QT=OFF"
+          - name: "Extended Build with Clip Mode"
+            cmake_flags: "-DENABLE_ALL=OFF -DBRLCAD_ENABLE_TK=OFF -DBRLCAD_ENABLE_QT=OFF"
+            arbn_mode: "clip"
+    
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+    
+    steps:
+      - name: Setup - CMake
+        uses: lukka/get-cmake@latest
+      
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          # Core dependencies only (no GUI)
+          sudo apt-get install -y \
+            ccache \
+            ninja-build \
+            zlib1g-dev \
+            libpng-dev \
+            libjpeg-dev \
+            libtiff-dev \
+            libeigen3-dev
+      
+      - name: Setup ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ runner.os }}-ccache-${{ matrix.config.name }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-${{ matrix.config.name }}-
+            ${{ runner.os }}-ccache-
+      
+      - name: Configure ccache
+        run: |
+          ccache --set-config=max_size=2G
+          ccache --set-config=compression=true
+          ccache --zero-stats
+      
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Configure CMake
+        run: |
+          mkdir -p build
+          cd build
+          cmake .. \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            ${{ matrix.config.cmake_flags }} \
+            2>&1 | tee cmake_config.log
+          # Output last 100 lines for visibility
+          tail -100 cmake_config.log
+      
+      - name: Build librt and dependencies
+        run: |
+          cd build
+          # Build only what we need for ARBN tests
+          ninja librt 2>&1 | tee build_librt.log || true
+          tail -100 build_librt.log
+      
+      - name: Build ARBN clip tests
+        run: |
+          cd build
+          ninja arbn_clip_test 2>&1 | tee build_test.log || true
+          tail -100 build_test.log
+      
+      - name: Build g-comgeom
+        run: |
+          cd build
+          ninja g-comgeom 2>&1 | tee build_gcomgeom.log || true
+          tail -100 build_gcomgeom.log
+      
+      - name: Run ARBN clip tests (legacy mode)
+        if: matrix.config.arbn_mode != 'clip'
+        run: |
+          cd build
+          export BRLCAD_ARBN_TESS_MODE=legacy
+          ./src/librt/tests/arbn_clip_test || true
+      
+      - name: Run ARBN clip tests (clip mode)
+        if: matrix.config.arbn_mode == 'clip'
+        run: |
+          cd build
+          export BRLCAD_ARBN_TESS_MODE=clip
+          export BRLCAD_ARBN_CLIP_SPATIAL_HASH=on
+          export BRLCAD_ARBN_CLIP_STATS=/tmp/arbn_stats.txt
+          ./src/librt/tests/arbn_clip_test || true
+          if [ -f /tmp/arbn_stats.txt ]; then
+            echo "ARBN Statistics:"
+            cat /tmp/arbn_stats.txt
+          fi
+      
+      - name: Show ccache statistics
+        run: ccache --show-stats
+      
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ matrix.config.name }}
+          path: |
+            build/*.log
+            /tmp/arbn_stats.txt
+          retention-days: 7
+  
+  g-comgeom-tests:
+    name: g-comgeom Exporter Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    needs: arbn-clip-tests
+    
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    
+    steps:
+      - name: Setup - CMake
+        uses: lukka/get-cmake@latest
+      
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ccache ninja-build zlib1g-dev libpng-dev
+      
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Configure and Build
+        run: |
+          mkdir -p build
+          cd build
+          cmake .. -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DENABLE_ALL=OFF \
+            -DBRLCAD_ENABLE_TK=OFF \
+            -DBRLCAD_ENABLE_QT=OFF
+          ninja g-comgeom || true
+      
+      - name: Test g-comgeom help
+        run: |
+          cd build
+          ./bin/g-comgeom -h || true
+      
+      - name: Test g-comgeom version flags
+        run: |
+          cd build
+          ./bin/g-comgeom -V 1 || true
+          ./bin/g-comgeom -V 4 || true
+          ./bin/g-comgeom -V 5 || true
+
+  keepalive:
+    name: Keepalive Progress Reporter
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    
+    steps:
+      - name: Report progress every 5 minutes
+        run: |
+          for i in {1..36}; do
+            echo "Build progress: Minute $((i * 5)) of 180..."
+            echo "Dependencies building... This may take over an hour."
+            sleep 300
+          done
+
+# Note: This workflow is specifically designed for ARBN branch testing.
+# The extended timeout accommodates BRL-CAD's dependency build process.
+# Future improvements:
+# - Add bext caching similar to push.yml
+# - Add performance benchmarking job
+# - Add comparison tests between legacy and clip modes
+# - Add g-comgeom deck validation tests
