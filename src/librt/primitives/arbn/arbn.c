@@ -44,6 +44,7 @@
 #include "rt/db4.h"
 #include "rt/geom.h"
 #include "raytrace.h"
+#include "arbn_clip.h"
 #include "../../librt_private.h"
 
 #ifdef USE_OPENCL
@@ -587,7 +588,7 @@ Sort_edges(struct arbn_edges *edges, size_t *edge_count, const struct rt_arbn_in
  *  0 OK.  *r points to nmgregion that holds this tessellation.
  */
 int
-rt_arbn_tess(struct nmgregion **r, struct model *m, struct rt_db_internal *ip, const struct bg_tess_tol *UNUSED(ttol), const struct bn_tol *tol)
+rt_arbn_tess_legacy(struct nmgregion **r, struct model *m, struct rt_db_internal *ip, const struct bg_tess_tol *UNUSED(ttol), const struct bn_tol *tol)
 {
     struct rt_arbn_internal *aip;
     struct shell *s;
@@ -829,6 +830,37 @@ fail:
     return -1;
 }
 
+/* Wrapper to select new clip path vs legacy enumeration.
+ * Switch logic:
+ *  - If plane count exceeds threshold (e.g. 40) attempt clipping.
+ *  - Fallback to legacy rt_arbn_tess on failure (maintain backward compatibility).
+ * Threshold rationale: cubic blow-up of legacy triple enumeration vs near linear growth for clip (Clarkson 1994 output sensitivity).
+ */
+int
+rt_arbn_tess(struct nmgregion **r, struct model *m, struct rt_db_internal *ip,
+                    const struct bg_tess_tol *ttol, const struct bn_tol *tol)
+{
+    struct rt_arbn_internal *aip = (struct rt_arbn_internal *)ip->idb_ptr;
+    RT_ARBN_CK_MAGIC(aip);
+
+    size_t threshold = 40;
+    const char *env_override = getenv("BRLCAD_ARBN_TESS_MODE");
+    if (env_override && BU_STR_EQUAL(env_override, "legacy"))
+        return rt_arbn_tess_legacy(r, m, ip, ttol, tol);
+
+    if (aip->neqn <= threshold && !(env_override && BU_STR_EQUAL(env_override, "clip")))
+        return rt_arbn_tess_legacy(r, m, ip, ttol, tol);
+
+    struct arbn_clip_poly *poly = rt_arbn_clip_build(aip, tol);
+    if (!poly) {
+        bu_log("arbn clip tessellation failed; reverting to legacy path\n");
+        return rt_arbn_tess_legacy(r, m, ip, ttol, tol);
+    }
+
+    int ret = rt_arbn_clip_to_nmg(r, m, poly, tol);
+    rt_arbn_clip_free(poly);
+    return ret;
+}
 
 /**
  * Convert from "network" doubles to machine specific.
