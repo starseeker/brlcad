@@ -150,6 +150,7 @@ set(
   primitives/arb8/arb8_mirror.c
   primitives/arbn/arbn.c
   primitives/arbn/arbn_brep.cpp
+  primitives/arbn/arbn_clip.c
   primitives/arbn/arbn_mirror.c
   primitives/ars/ars.c
   primitives/ars/ars_brep.cpp
@@ -336,6 +337,7 @@ set(
   primitives/rt.cl
   primitives/solver.cl
   primitives/arb8/arb8_shot.cl
+  primitives/arbn/arbn_clip.h
   primitives/arbn/arbn_shot.cl
   primitives/bot/bot_shot.cl
   primitives/ebm/ebm_shot.cl
