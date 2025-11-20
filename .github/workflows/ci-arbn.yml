@@ -80,7 +80,7 @@ jobs:
         if: steps.cache-bext.outputs.cache-hit != 'true'
         run: |
           cmake -E make_directory bext_build
-          cmake -S bext -B bext_build -DCMAKE_BUILD_TYPE=Release -DENABLE_ALL=ON -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/bext_output
+          cmake -S bext -B bext_build -DCMAKE_BUILD_TYPE=Release -DUSE_QT=OFF -DUSE_GDAL=OFF -DUSE_STEP=OFF -DUSE_TCL=OFF -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/bext_output
           cmake --build bext_build --config Release -j 2
           cmake -E rm -rf bext
           cmake -E rm -rf bext_build
@@ -99,7 +99,7 @@ jobs:
       - name: Configure
         run: |
           export PATH=$GITHUB_WORKSPACE:$PATH
-          cmake -S brlcad -B build_arbn -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBRLCAD_EXT_DIR=${{ github.workspace }}/bext_output -DBRLCAD_ENABLE_QT=OFF
+          cmake -S brlcad -B build_arbn -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBRLCAD_EXT_DIR=${{ github.workspace }}/bext_output -DBRLCAD_ENABLE_QT=OFF -DBRLCAD_ENABLE_GDAL=OFF -DBRLCAD_ENABLE_STEP=OFF -DBRLCAD_ENABLE_TCL=OFF
       
       - name: Build ARBN components
         run: |
@@ -118,6 +118,7 @@ jobs:
       - name: Run ARBN clip tests
         run: |
           cd build_arbn
+          ninja arbn_clip_test 2>&1 | tail -50
           export BRLCAD_ARBN_TESS_MODE=${{ matrix.arbn_mode }}
           export BRLCAD_ARBN_CLIP_SPATIAL_HASH=on
           export BRLCAD_ARBN_CLIP_STATS=/tmp/arbn_stats_${{ matrix.arbn_mode }}.txt
