@@ -2401,10 +2401,8 @@ include(BRLCAD_CPack)
 # a "." character are "hidden" and may not be present, so check for them first.
 set(
   hidden_files
-  .github/workflows/distcheck.yml
+  .github/workflows/ci-arbn.yml
   .github/workflows/linux_interactive.yml
-  .github/workflows/push.yml
-  .github/workflows/scheduled.yml
   .gitattributes
   .gitignore
 )
@@ -2447,7 +2445,7 @@ endif("${CMAKE_GENERATOR}" MATCHES "Ninja*")
 # Define a distcheck target.  This performs a variety of tests to determine
 # whether BRL-CAD is in a distribution ready state.  Default to the standard
 # set of tests - Debug and Release build configurations
-include(Distcheck)
+#include(Distcheck)
 
 # ----------------------------------------------------------------------------
 # Mark various miscellaneous things as advanced that we don't want in our
