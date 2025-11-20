@@ -3,6 +3,7 @@ add_definitions(-D_CONSOLE -DBRLCAD_DLL)
 verbose_add_subdirectory("src/conv" 3dm)
 verbose_add_subdirectory("src/conv" asc)
 verbose_add_subdirectory("src/conv" gcv)
+verbose_add_subdirectory("src/conv" g-comgeom)
 verbose_add_subdirectory("src/conv" step)
 verbose_add_subdirectory("src/conv" gltf)
 
