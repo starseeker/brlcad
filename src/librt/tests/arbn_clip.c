@@ -44,7 +44,7 @@ static void test_simple_cube(void) {
     VSET(ai.eqn[4], 0, 0,  1); ai.eqn[4][W] = 1;
     VSET(ai.eqn[5], 0, 0, -1); ai.eqn[5][W] = 1;
 
-    struct bn_tol tol;
+    struct bn_tol tol = BN_TOL_INIT_TOL;
     tol.dist = 1e-6;
     tol.dist_sq = tol.dist * tol.dist;
 
@@ -74,7 +74,7 @@ static void test_tetrahedron(void) {
     VSET(ai.eqn[2], -0.866, 0.5, 1); ai.eqn[2][W] = -1; /* side 2 */
     VSET(ai.eqn[3], 0.866, 0.5, 1); ai.eqn[3][W] = -1;  /* side 3 */
 
-    struct bn_tol tol;
+    struct bn_tol tol = BN_TOL_INIT_TOL;
     tol.dist = 1e-6;
     tol.dist_sq = tol.dist * tol.dist;
 
@@ -110,7 +110,7 @@ static void test_duplicate_planes(void) {
     VSET(ai.eqn[7], 0,  1, 0); ai.eqn[7][W] = 1; /* dup of 2 */
     VSET(ai.eqn[8], 0, 0, -1); ai.eqn[8][W] = 1; /* dup of 5 */
 
-    struct bn_tol tol;
+    struct bn_tol tol = BN_TOL_INIT_TOL;
     tol.dist = 1e-6;
     tol.dist_sq = tol.dist * tol.dist;
 
@@ -144,7 +144,7 @@ static void test_large_plane_count(void) {
         ai.eqn[i][W] = radius;
     }
 
-    struct bn_tol tol;
+    struct bn_tol tol = BN_TOL_INIT_TOL;
     tol.dist = 1e-6;
     tol.dist_sq = tol.dist * tol.dist;
 
@@ -175,7 +175,7 @@ static void test_statistics(void) {
     VSET(ai.eqn[4], 0, 0,  1); ai.eqn[4][W] = 1;
     VSET(ai.eqn[5], 0, 0, -1); ai.eqn[5][W] = 1;
 
-    struct bn_tol tol;
+    struct bn_tol tol = BN_TOL_INIT_TOL;
     tol.dist = 1e-6;
     tol.dist_sq = tol.dist * tol.dist;
 
