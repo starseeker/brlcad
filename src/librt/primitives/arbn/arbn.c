@@ -444,6 +444,11 @@ rt_arbn_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_t
     aip = (struct rt_arbn_internal *)ip->idb_ptr;
     RT_ARBN_CK_MAGIC(aip);
 
+    /* ARBN requires at least 4 planes to form a valid polyhedron */
+    if (aip->neqn < 2) {
+	return -1;
+    }
+
     for (i = 0; i < aip->neqn - 1; i++) {
 	for (j = i + 1; j < aip->neqn; j++) {
 	    double dot;
@@ -619,6 +624,11 @@ rt_arbn_tess(struct nmgregion **r, struct model *m, struct rt_db_internal *ip, c
     RT_CK_DB_INTERNAL(ip);
     aip = (struct rt_arbn_internal *)ip->idb_ptr;
     RT_ARBN_CK_MAGIC(aip);
+
+    /* ARBN requires at least 4 planes to form a valid polyhedron */
+    if (aip->neqn < 4) {
+	return -1;
+    }
 
     /* Allocate memory for the vertices */
     nverts = aip->neqn * (aip->neqn-1) * (aip->neqn-2) / 6;
