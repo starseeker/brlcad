@@ -78,6 +78,10 @@ brlcad_addexec(rt_bv_poly_sketch bv_poly_sketch.c "librt;libbv" TEST)
 brlcad_addexec(rt_arb8 arb8_tests.c "librt;libwdb;libbg;libbu" TEST)
 #brlcad_add_test(NAME rt_arb8_tests COMMAND rt_arb8)
 
+# arbn edge case testing
+brlcad_addexec(rt_arbn_edge_cases arbn_edge_cases.c "librt;libbu" TEST)
+brlcad_add_test(NAME rt_arbn_edge_cases COMMAND rt_arbn_edge_cases)
+
 brlcad_addexec(bot_match bot_match.cpp "librt;libbg" TEST)
 
 # boolweave testing
@@ -90,6 +94,7 @@ set(
   distcheck_files
   CMakeLists.txt
   arb_intersect.g
+  arbn_edge_cases.c
   binary_attribute.c
   brep_boolean_tests.g
   cyclic_tests.g
