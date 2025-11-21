@@ -1,3 +1,5 @@
+#include "common.h"
+
 #include "arbn_clip.h"
 #include "raytrace.h"
 #include "nmg.h"
@@ -111,21 +113,18 @@ static void normalize_plane(plane_t p) {
     p[X] /= len; p[Y] /= len; p[Z] /= len; p[W] /= len;
 }
 
-/* Check if two planes are parallel within angular tolerance */
-static int planes_parallel(const plane_t p1, const plane_t p2, double angle_tol) {
+/* Check if two planes are duplicates (same normal direction and offset within tolerance) */
+static int planes_duplicate(const plane_t p1, const plane_t p2, const struct bn_tol *tol) {
+    /* Check if normals point in the same direction (not just parallel) */
     vect_t n1, n2;
     VSET(n1, p1[X], p1[Y], p1[Z]);
     VSET(n2, p2[X], p2[Y], p2[Z]);
-    double dot = fabs(VDOT(n1, n2));
-    return dot > (1.0 - angle_tol);
-}
-
-/* Check if two planes are duplicates (same normal and offset within tolerance) */
-static int planes_duplicate(const plane_t p1, const plane_t p2, const struct bn_tol *tol) {
-    if (!planes_parallel(p1, p2, 1e-6)) return 0;
+    double dot = VDOT(n1, n2);
+    if (dot < (1.0 - 1e-6)) return 0;  /* Not pointing in same direction */
+    
+    /* Check if offsets are the same */
     double d_diff = fabs(p1[W] - p2[W]);
-    double d_sum  = fabs(p1[W] + p2[W]);
-    return (d_diff < tol->dist || d_sum < tol->dist);
+    return (d_diff < tol->dist);
 }
 
 /* Preprocess planes: normalize, deduplicate, estimate bounds

@@ -1,3 +1,5 @@
+#include "common.h"
+
 #include "raytrace.h"
 #include "bu/app.h"
 #include "../primitives/arbn/arbn_clip.h"
@@ -197,9 +199,11 @@ static void test_statistics(void) {
     report_test("Statistics generation", passed);
 }
 
-int main(int UNUSED(argc), char **UNUSED(argv))
+int main(int argc, char **argv)
 {
-    bu_setprogname("arbn_clip_test");
+    bu_setprogname(argv[0]);
+    
+    (void)argc; /* unused */
     
     printf("Running ARBN clipping tests:\n");
     
