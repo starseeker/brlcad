@@ -302,7 +302,9 @@ static int clip_with_plane(struct arbn_clip_poly *poly, const plane_t P,
         bu_free(inside, "inside"); return 0;
     }
 
-    point_t *new_pts = (point_t *)bu_malloc(sizeof(point_t)*poly->vcnt*2, "new face pts");
+    /* Allocate enough space for new intersection points - worst case is each face edge can create an intersection */
+    size_t max_new_pts = poly->fcnt * 20;  /* Conservative estimate: 20 intersections per face */
+    point_t *new_pts = (point_t *)bu_malloc(sizeof(point_t) * max_new_pts, "new face pts");
     int new_cnt = 0;
 
     for (size_t f = 0; f < poly->fcnt; ++f) {
@@ -401,6 +403,13 @@ static int clip_with_plane(struct arbn_clip_poly *poly, const plane_t P,
     }
 
     new_cnt = uniq_cnt;
+
+    if (new_cnt < 3) {
+        bu_free(new_vids_map, "new vids map");
+        bu_free(new_pts, "new face pts");
+        bu_free(inside, "inside flags");
+        return 1;
+    }
 
     int *order = (int *)bu_malloc(sizeof(int)*new_cnt, "face order");
     for (int i = 0; i < new_cnt; ++i) order[i] = i;
