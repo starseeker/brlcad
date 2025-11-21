@@ -93,6 +93,11 @@ rt_arbn_bbox(struct rt_db_internal *ip, point_t *min, point_t *max, const struct
     VSETALL((*min), INFINITY);
     VSETALL((*max), -INFINITY);
 
+    /* ARBN requires at least 4 planes to form a valid polyhedron */
+    if (aip->neqn < 3) {
+	return -1;
+    }
+
     /* Discover all vertices, use to calculate RPP */
     for (i = 0; i < aip->neqn-2; i++) {
 	for (j = i+1; j < aip->neqn-1; j++) {
@@ -152,6 +157,13 @@ rt_arbn_prep(struct soltab *stp, struct rt_db_internal *ip, struct rt_i *rtip)
     RT_CK_DB_INTERNAL(ip);
     aip = (struct rt_arbn_internal *)ip->idb_ptr;
     RT_ARBN_CK_MAGIC(aip);
+
+    /* ARBN requires at least 4 planes to form a valid polyhedron */
+    if (aip->neqn < 4) {
+	bu_log("arbn(%s) has only %zu planes, need at least 4\n",
+	       stp->st_name, aip->neqn);
+	return -1;
+    }
 
     used = (int *)bu_malloc(aip->neqn*sizeof(int), "arbn used[]");
 
