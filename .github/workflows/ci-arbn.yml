@@ -122,7 +122,7 @@ jobs:
           export BRLCAD_ARBN_TESS_MODE=${{ matrix.arbn_mode }}
           export BRLCAD_ARBN_CLIP_SPATIAL_HASH=on
           export BRLCAD_ARBN_CLIP_STATS=/tmp/arbn_stats_${{ matrix.arbn_mode }}.txt
-          ./src/librt/tests/rt_clip_test
+          ./src/librt/tests/rt_arbn_clip
           if [ -f /tmp/arbn_stats_${{ matrix.arbn_mode }}.txt ]; then
             echo "ARBN Statistics (${{ matrix.arbn_mode }} mode):"
             cat /tmp/arbn_stats_${{ matrix.arbn_mode }}.txt
