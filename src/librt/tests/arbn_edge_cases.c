@@ -21,17 +21,23 @@
 #include "common.h"
 
 #include <stdio.h>
+#include <math.h>
 
 #include "bu/app.h"
 #include "bu/log.h"
 #include "vmath.h"
 #include "raytrace.h"
 
+/* Normalized diagonal direction (1/sqrt(3), 1/sqrt(3), 1/sqrt(3)) */
+#define INV_SQRT3 0.57735026918962576451
+
 
 /**
- * Test that rt_arbn_bbox handles edge cases with invalid plane counts
- * without segfaulting. This test specifically checks for the unsigned
- * underflow issue when neqn < 3.
+ * Test that ARBN primitive functions handle edge cases with invalid
+ * plane counts without segfaulting. This test specifically checks for
+ * unsigned underflow issues when neqn is less than the required minimum
+ * for functions like rt_arbn_bbox, rt_arbn_prep, rt_arbn_plot, and
+ * rt_arbn_tess.
  */
 int
 main(int ac, char *av[])
@@ -139,8 +145,8 @@ main(int ac, char *av[])
     HSET(arbn->eqn[4],  0,  0,  1, 100);  /* z >= -100 */
     HSET(arbn->eqn[5],  0,  0, -1, 100);  /* z <= 100 */
     /* Add two diagonal planes to make it properly bounded */
-    HSET(arbn->eqn[6],  0.57735,  0.57735,  0.57735, 200);
-    HSET(arbn->eqn[7], -0.57735, -0.57735, -0.57735, 200);
+    HSET(arbn->eqn[6],  INV_SQRT3,  INV_SQRT3,  INV_SQRT3, 200);
+    HSET(arbn->eqn[7], -INV_SQRT3, -INV_SQRT3, -INV_SQRT3, 200);
     intern.idb_ptr = (void *)arbn;
 
     ret = rt_arbn_bbox(&intern, &min, &max, &tol);
