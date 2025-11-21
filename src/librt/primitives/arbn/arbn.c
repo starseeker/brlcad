@@ -93,7 +93,7 @@ rt_arbn_bbox(struct rt_db_internal *ip, point_t *min, point_t *max, const struct
     VSETALL((*min), INFINITY);
     VSETALL((*max), -INFINITY);
 
-    /* ARBN requires at least 4 planes to form a valid polyhedron */
+    /* Need at least 3 planes to avoid unsigned underflow in loop bounds */
     if (aip->neqn < 3) {
 	return -1;
     }
@@ -444,7 +444,7 @@ rt_arbn_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_t
     aip = (struct rt_arbn_internal *)ip->idb_ptr;
     RT_ARBN_CK_MAGIC(aip);
 
-    /* ARBN requires at least 4 planes to form a valid polyhedron */
+    /* Need at least 2 planes to avoid unsigned underflow in loop bounds */
     if (aip->neqn < 2) {
 	return -1;
     }
