@@ -107,7 +107,7 @@ jobs:
           cd build_arbn
           # Build librt and ARBN test
           ninja librt 2>&1 | tail -50
-          ninja arbn_clip_test 2>&1 | tail -50
+          ninja rt_arbn_clip 2>&1 | tail -50
       
       - name: Build g-comgeom
         run: |
@@ -118,11 +118,11 @@ jobs:
       - name: Run ARBN clip tests
         run: |
           cd build_arbn
-          ninja arbn_clip_test 2>&1 | tail -50
+          ninja rt_arbn_clip 2>&1 | tail -50
           export BRLCAD_ARBN_TESS_MODE=${{ matrix.arbn_mode }}
           export BRLCAD_ARBN_CLIP_SPATIAL_HASH=on
           export BRLCAD_ARBN_CLIP_STATS=/tmp/arbn_stats_${{ matrix.arbn_mode }}.txt
-          ./src/librt/tests/arbn_clip_test
+          ./src/librt/tests/rt_clip_test
           if [ -f /tmp/arbn_stats_${{ matrix.arbn_mode }}.txt ]; then
             echo "ARBN Statistics (${{ matrix.arbn_mode }} mode):"
             cat /tmp/arbn_stats_${{ matrix.arbn_mode }}.txt
