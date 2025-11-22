@@ -350,8 +350,10 @@ static int clip_with_plane(struct arbn_clip_poly *poly, const plane_t P,
                         bu_free(inside, "overflow inside");
                         return 0;
                     }
-                    VMOVE(new_pts[new_cnt++], ip);
-                    new_vids[new_vid_cnt++] = -1;
+                    VMOVE(new_pts[new_cnt], ip);
+                    /* Use -(new_cnt+1) as placeholder to track which new_pts entry this refers to */
+                    new_vids[new_vid_cnt++] = -(new_cnt + 1);
+                    new_cnt++;
                 }
             }
             vprev = vcurr;
@@ -377,6 +379,7 @@ static int clip_with_plane(struct arbn_clip_poly *poly, const plane_t P,
     }
 
     int *new_vids_map = (int *)bu_malloc(sizeof(int) * new_cnt, "new vids map");
+    int original_new_cnt = new_cnt;  /* Save original count before deduplication */
     int uniq_cnt = 0;
 
     for (int i = 0; i < new_cnt; ++i) {
@@ -408,7 +411,6 @@ static int clip_with_plane(struct arbn_clip_poly *poly, const plane_t P,
 
             if (uniq_cnt != i) {
                 VMOVE(new_pts[uniq_cnt], new_pts[i]);
-                new_vids_map[uniq_cnt] = (int)poly->vcnt;
             }
             uniq_cnt++;
             poly->vcnt++;
@@ -451,13 +453,23 @@ static int clip_with_plane(struct arbn_clip_poly *poly, const plane_t P,
     }
     poly->fcnt++;
 
-    int placeholder_idx = 0;
+    /* Replace placeholders with actual vertex IDs after deduplication
+     * Placeholders were created as -(index+1) where index is in [0, original_new_cnt)
+     */
     for (size_t f = 0; f < poly->fcnt - 1; ++f) {
         struct arbn_clip_face *face = &poly->faces[f];
         if (!face->alive) continue;
         for (int i = 0; i < face->vcnt; ++i) {
-            if (face->vids[i] == -1) {
-                face->vids[i] = new_vids_map[placeholder_idx++];
+            if (face->vids[i] < 0) {
+                /* Placeholder is -(index+1), so recover the original index */
+                int original_idx = -(face->vids[i] + 1);
+                if (original_idx >= 0 && original_idx < original_new_cnt) {
+                    face->vids[i] = new_vids_map[original_idx];
+                } else {
+                    bu_log("ERROR: Invalid placeholder index %d (valid range: 0-%d)\n", 
+                           original_idx, original_new_cnt-1);
+                    face->vids[i] = 0;  /* Fallback to vertex 0 */
+                }
             }
         }
     }
