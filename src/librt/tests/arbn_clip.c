@@ -86,8 +86,14 @@ static void test_tetrahedron(void) {
     int passed = (poly != NULL);
     if (poly) {
         /* Expect 4 vertices and 4 faces for a tetrahedron */
+        if (stats.final_vertices != 4 || stats.final_faces != 4) {
+            bu_log("Tetrahedron: got %zu vertices, %zu faces (expected 4, 4)\n",
+                   stats.final_vertices, stats.final_faces);
+        }
         passed = (stats.final_vertices == 4 && stats.final_faces == 4);
         rt_arbn_clip_free(poly);
+    } else {
+        bu_log("Tetrahedron: poly is NULL\n");
     }
     
     bu_free(ai.eqn, "tetra planes");
