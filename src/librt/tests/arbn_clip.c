@@ -70,11 +70,12 @@ static void test_tetrahedron(void) {
     ai.neqn = 4;
     ai.eqn = (plane_t *)bu_calloc(ai.neqn, sizeof(plane_t), "tetra planes");
     
-    /* Regular tetrahedron: 4 planes */
-    VSET(ai.eqn[0], 0, 0, -1); ai.eqn[0][W] = 0;     /* base */
-    VSET(ai.eqn[1], 0, -1, 1); ai.eqn[1][W] = -1;    /* side 1 */
-    VSET(ai.eqn[2], -0.866, 0.5, 1); ai.eqn[2][W] = -1; /* side 2 */
-    VSET(ai.eqn[3], 0.866, 0.5, 1); ai.eqn[3][W] = -1;  /* side 3 */
+    /* Simple tetrahedron defined by 4 planes
+     * Vertices will be at: (0,0,0), (3,0,0), (0,3,0), (0,0,3) */
+    VSET(ai.eqn[0], -1, 0, 0); ai.eqn[0][W] = 0;     /* x >= 0 */
+    VSET(ai.eqn[1], 0, -1, 0); ai.eqn[1][W] = 0;     /* y >= 0 */
+    VSET(ai.eqn[2], 0, 0, -1); ai.eqn[2][W] = 0;     /* z >= 0 */
+    VSET(ai.eqn[3], 1, 1, 1); ai.eqn[3][W] = 3;      /* x + y + z <= 3 */
 
     struct bn_tol tol = BN_TOL_INIT_TOL;
     tol.dist = 1e-6;
