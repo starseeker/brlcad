@@ -82,7 +82,7 @@ static int spatial_hash_find(struct spatial_hash *hash, const point_t p, const s
     size_t key = spatial_hash_key(p, hash->cell_size);
     struct spatial_hash_entry *e = hash->bins[key];
     while (e) {
-        if (e->vertex_id < (int)poly->vcnt) {
+        if (e->vertex_id < (int)poly->vcnt && poly->verts[e->vertex_id].alive) {
             if (DIST_PNT_PNT_SQ(p, poly->verts[e->vertex_id].p) <= hash->tol->dist_sq) {
                 return e->vertex_id;
             }
