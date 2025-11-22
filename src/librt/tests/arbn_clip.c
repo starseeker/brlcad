@@ -56,8 +56,6 @@ static void test_simple_cube(void) {
     int passed = (poly != NULL);
     if (poly) {
         /* Expect 8 vertices and 6 faces for a cube */
-        bu_log("Cube test: got %zu vertices, %zu faces (expected 8, 6)\n", 
-               stats.final_vertices, stats.final_faces);
         passed = (stats.final_vertices == 8 && stats.final_faces == 6);
         rt_arbn_clip_free(poly);
     }

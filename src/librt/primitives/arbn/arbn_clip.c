@@ -13,10 +13,10 @@
 
 /* === Configuration via environment variables ============================ */
 
-/* Check if spatial hashing is enabled (default: on) */
+/* Check if spatial hashing is enabled (default: off due to bug) */
 static int use_spatial_hash(void) {
     const char *env = getenv("BRLCAD_ARBN_CLIP_SPATIAL_HASH");
-    if (!env) return 1; /* default enabled */
+    if (!env) return 0; /* default disabled - has bug with vertex reuse */
     return !BU_STR_EQUAL(env, "off") && !BU_STR_EQUAL(env, "0");
 }
 
