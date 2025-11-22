@@ -112,12 +112,18 @@ static void test_duplicate_planes(void) {
     VSET(ai.eqn[7], 0,  1, 0); ai.eqn[7][W] = 1; /* dup of 2 */
     VSET(ai.eqn[8], 0, 0, -1); ai.eqn[8][W] = 1; /* dup of 5 */
 
+    printf("  All planes set, about to init tol\n");
+    fflush(stdout);
     struct bn_tol tol = BN_TOL_INIT_TOL;
     tol.dist = 1e-6;
     tol.dist_sq = tol.dist * tol.dist;
 
+    printf("  About to call rt_arbn_clip_build_with_stats\n");
+    fflush(stdout);
     struct arbn_clip_stats stats;
     struct arbn_clip_poly *poly = rt_arbn_clip_build_with_stats(&ai, &tol, &stats);
+    printf("  rt_arbn_clip_build_with_stats returned\n");
+    fflush(stdout);
     
     int passed = (poly != NULL);
     if (poly) {

@@ -319,6 +319,9 @@ static int clip_with_plane(struct arbn_clip_poly *poly, const plane_t P,
         }
 
         if (all_out) {
+            /* Free the vids since this face is being removed */
+            bu_free(face->vids, "dead face vids");
+            face->vids = NULL;
             face->alive = 0;
             continue;
         }
@@ -340,6 +343,13 @@ static int clip_with_plane(struct arbn_clip_poly *poly, const plane_t P,
             if (Ain != Bin) {
                 point_t ip;
                 if (segment_plane_isect(ip, poly->verts[vprev].p, poly->verts[vcurr].p, P, tol)) {
+                    if ((size_t)new_cnt >= max_new_pts) {
+                        bu_log("ERROR: new_cnt (%d) >= max_new_pts (%zu)\n", new_cnt, max_new_pts);
+                        bu_free(new_vids, "overflow face vids");
+                        bu_free(new_pts, "overflow pts");
+                        bu_free(inside, "overflow inside");
+                        return 0;
+                    }
                     VMOVE(new_pts[new_cnt++], ip);
                     new_vids[new_vid_cnt++] = -1;
                 }
@@ -353,6 +363,9 @@ static int clip_with_plane(struct arbn_clip_poly *poly, const plane_t P,
             face->vcnt = new_vid_cnt;
         } else {
             bu_free(new_vids, "new face vids");
+            /* Keep the old vids since we're marking face as dead */
+            bu_free(face->vids, "dead face vids");
+            face->vids = NULL;
             face->alive = 0;
         }
     }
@@ -416,9 +429,16 @@ static int clip_with_plane(struct arbn_clip_poly *poly, const plane_t P,
     order_face_vertices(new_pts, order, new_cnt, P);
 
     if (poly->fcnt >= poly->fcap) {
+        size_t old_fcap = poly->fcap;
         poly->fcap = poly->fcap * 2 + 6;
         poly->faces = (struct arbn_clip_face *)bu_realloc(poly->faces,
             sizeof(struct arbn_clip_face) * poly->fcap, "faces grow");
+        /* Initialize new face structures */
+        for (size_t i = old_fcap; i < poly->fcap; i++) {
+            poly->faces[i].vids = NULL;
+            poly->faces[i].vcnt = 0;
+            poly->faces[i].alive = 0;
+        }
     }
 
     poly->faces[poly->fcnt].vcnt = new_cnt;
@@ -561,8 +581,11 @@ int rt_arbn_clip_to_nmg(struct nmgregion **r, struct model *m, const struct arbn
 
 void rt_arbn_clip_free(struct arbn_clip_poly *poly) {
     if (!poly) return;
-    for (size_t f = 0; f < poly->fcnt; ++f)
-        bu_free(poly->faces[f].vids, "face vids");
+    for (size_t f = 0; f < poly->fcnt; ++f) {
+        if (poly->faces[f].vids) {
+            bu_free(poly->faces[f].vids, "face vids");
+        }
+    }
     bu_free(poly->faces, "faces");
     bu_free(poly->verts, "verts");
     bu_free(poly, "poly");
