@@ -520,6 +520,24 @@ struct arbn_clip_poly *rt_arbn_clip_build_with_stats(const struct rt_arbn_intern
     if (hash) spatial_hash_free(hash);
     bu_free(planes, "unique planes");
 
+    /* Mark vertices as dead if they're not referenced by any alive face */
+    int *vertex_used = (int *)bu_calloc(poly->vcnt, sizeof(int), "vertex used flags");
+    for (size_t f = 0; f < poly->fcnt; ++f) {
+        if (!poly->faces[f].alive) continue;
+        for (int v = 0; v < poly->faces[f].vcnt; ++v) {
+            int vid = poly->faces[f].vids[v];
+            if (vid >= 0 && (size_t)vid < poly->vcnt) {
+                vertex_used[vid] = 1;
+            }
+        }
+    }
+    for (size_t i = 0; i < poly->vcnt; ++i) {
+        if (!vertex_used[i]) {
+            poly->verts[i].alive = 0;
+        }
+    }
+    bu_free(vertex_used, "vertex used flags");
+
     if (stats) {
         stats->active_planes   = nplanes;
         stats->final_vertices  = 0;
