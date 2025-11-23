@@ -526,9 +526,18 @@ struct arbn_clip_poly *rt_arbn_clip_build_with_stats(const struct rt_arbn_intern
         if (!poly->faces[f].alive) continue;
         for (int v = 0; v < poly->faces[f].vcnt; ++v) {
             int vid = poly->faces[f].vids[v];
-            if (vid >= 0 && (size_t)vid < poly->vcnt) {
-                vertex_used[vid] = 1;
+            if (vid < 0 || (size_t)vid >= poly->vcnt) {
+                /* Invalid vertex ID indicates data corruption - should not happen
+                 * in correct implementation. Log at debug level for development. */
+                if (vid < 0) {
+                    bu_log("rt_arbn_clip: face %zu has placeholder vertex ID %d\n", f, vid);
+                } else {
+                    bu_log("rt_arbn_clip: face %zu has out-of-bounds vertex ID %d (max %zu)\n", 
+                           f, vid, poly->vcnt - 1);
+                }
+                continue;
             }
+            vertex_used[vid] = 1;
         }
     }
     for (size_t i = 0; i < poly->vcnt; ++i) {

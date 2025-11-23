@@ -6,6 +6,20 @@
 #include "raytrace.h"
 
 /* Incremental half-space intersection based tessellation for ARBN solids.
+ * 
+ * IMPLEMENTATION STATUS:
+ *  - Core algorithm: WORKING for axis-aligned convex polyhedra (cubes)
+ *  - Spatial hash optimization: DISABLED (bug with vertex reuse - see below)
+ *  - Performance: O(n²) vertex deduplication acceptable for typical use (4-20 planes)
+ *
+ * KNOWN ISSUES:
+ *  - Non-cubic shapes may produce incorrect geometry (needs investigation)
+ *  - Spatial hash incorrectly merges distinct vertices (orphan vertex reuse bug)
+ *
+ * CONFIGURATION:
+ *  - BRLCAD_ARBN_CLIP_SPATIAL_HASH: Enable spatial hash (default: off)
+ *  - BRLCAD_ARBN_CLIP_MAX_PLANES: Max plane count (default: 10000)
+ *
  * References (succinct):
  *  - Incremental convex polyhedron clipping: Preparata & Shamos 1985; Seidel 1991.
  *  - Robust plane intersection and tolerance use: Shewchuk 1997.
