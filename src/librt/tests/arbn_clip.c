@@ -87,42 +87,22 @@ static void test_tetrahedron(void) {
     int passed = (poly != NULL);
     if (poly) {
         /* Expect 4 vertices and 4 faces for a tetrahedron */
-        if (stats.final_vertices != 4 || stats.final_faces != 4) {
-            bu_log("Tetrahedron: got %zu vertices, %zu faces (expected 4, 4)\n",
-                   stats.final_vertices, stats.final_faces);
-        }
         passed = (stats.final_vertices == 4 && stats.final_faces == 4);
-        bu_log("About to free tetrahedron poly (vcnt=%zu, fcnt=%zu)\n", poly->vcnt, poly->fcnt);
         rt_arbn_clip_free(poly);
-        bu_log("Tetrahedron poly freed successfully\n");
-    } else {
-        bu_log("Tetrahedron: poly is NULL\n");
     }
     
     bu_free(ai.eqn, "tetra planes");
-    bu_log("Tetrahedron planes freed\n");
     report_test("Tetrahedron (4 planes)", passed);
-    bu_log("Tetrahedron test complete\n");
-    
-    /* Try a small allocation to verify heap is OK */
-    void *test_ptr = bu_malloc(16, "heap test");
-    bu_free(test_ptr, "heap test");
-    bu_log("Heap test after tetrahedron: OK\n");
 }
 
 static void test_duplicate_planes(void) {
-    bu_log("Starting test_duplicate_planes\n");
     struct rt_arbn_internal ai;
     ai.magic = RT_ARBN_INTERNAL_MAGIC;
     ai.neqn = 9; /* 6 unique + 3 duplicates */
-    bu_log("About to allocate planes for duplicate test\n");
     ai.eqn = (plane_t *)bu_calloc(ai.neqn, sizeof(plane_t), "dup planes");
-    bu_log("Planes allocated for duplicate test\n");
     
     /* Cube with duplicates */
-    bu_log("Setting plane 0\n");
     VSET(ai.eqn[0],  1, 0, 0); ai.eqn[0][W] = 1;
-    bu_log("Setting plane 1\n");
     VSET(ai.eqn[1], -1, 0, 0); ai.eqn[1][W] = 1;
     VSET(ai.eqn[2], 0,  1, 0); ai.eqn[2][W] = 1;
     VSET(ai.eqn[3], 0, -1, 0); ai.eqn[3][W] = 1;

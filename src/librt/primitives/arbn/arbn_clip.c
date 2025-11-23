@@ -526,15 +526,9 @@ struct arbn_clip_poly *rt_arbn_clip_build_with_stats(const struct rt_arbn_intern
         if (!poly->faces[f].alive) continue;
         for (int v = 0; v < poly->faces[f].vcnt; ++v) {
             int vid = poly->faces[f].vids[v];
-            if (vid < 0) {
-                bu_log("ERROR: Face %zu has negative vertex ID %d at position %d\n", f, vid, v);
-                continue;
+            if (vid >= 0 && (size_t)vid < poly->vcnt) {
+                vertex_used[vid] = 1;
             }
-            if ((size_t)vid >= poly->vcnt) {
-                bu_log("ERROR: Face %zu has invalid vertex ID %d >= vcnt %zu\n", f, vid, poly->vcnt);
-                continue;
-            }
-            vertex_used[vid] = 1;
         }
     }
     for (size_t i = 0; i < poly->vcnt; ++i) {
