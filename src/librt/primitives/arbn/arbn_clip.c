@@ -284,6 +284,7 @@ static struct arbn_clip_poly *seed_poly(double bounding_radius) {
  */
 static int clip_with_plane(struct arbn_clip_poly *poly, const plane_t P,
                            const struct bn_tol *tol, struct spatial_hash *hash) {
+    size_t original_vcnt = poly->vcnt;  /* Save original vertex count before adding new ones */
     int *inside = (int *)bu_calloc(poly->vcnt, sizeof(int), "inside flags");
     int inside_count = 0;
     for (size_t i = 0; i < poly->vcnt; ++i) {
@@ -477,6 +478,16 @@ static int clip_with_plane(struct arbn_clip_poly *poly, const plane_t P,
     bu_free(new_vids_map, "new vids map");
     bu_free(order, "face order");
     bu_free(new_pts, "new face pts");
+    
+    /* Mark original vertices outside the clipping plane as dead.
+     * Only check vertices that existed before clipping - new intersection 
+     * vertices are always on the plane (inside by definition). */
+    for (size_t i = 0; i < original_vcnt; ++i) {
+        if (poly->verts[i].alive && !inside[i]) {
+            poly->verts[i].alive = 0;
+        }
+    }
+    
     bu_free(inside, "inside flags");
     return 1;
 }

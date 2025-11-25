@@ -56,6 +56,8 @@ static void test_simple_cube(void) {
     int passed = (poly != NULL);
     if (poly) {
         /* Expect 8 vertices and 6 faces for a cube */
+        bu_log("Cube result: %zu vertices, %zu faces (expected 8, 6)\n",
+               stats.final_vertices, stats.final_faces);
         passed = (stats.final_vertices == 8 && stats.final_faces == 6);
         rt_arbn_clip_free(poly);
     }
@@ -87,6 +89,8 @@ static void test_tetrahedron(void) {
     int passed = (poly != NULL);
     if (poly) {
         /* Expect 4 vertices and 4 faces for a tetrahedron */
+        bu_log("Tetrahedron result: %zu vertices, %zu faces (expected 4, 4)\n",
+               stats.final_vertices, stats.final_faces);
         passed = (stats.final_vertices == 4 && stats.final_faces == 4);
         rt_arbn_clip_free(poly);
     }
