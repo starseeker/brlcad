@@ -1,3 +1,5 @@
+#include "common.h"
+
 #include "arbn_clip.h"
 #include "raytrace.h"
 #include "nmg.h"
@@ -9,14 +11,23 @@
 #include <string.h>
 #include <stdlib.h>
 
-/* === Configuration via environment variables ============================ */
+/* === Tolerance constants ================================================
+ * These constants control geometric comparisons and numerical stability.
+ */
 
-/* Check if spatial hashing is enabled (default: on) */
-static int use_spatial_hash(void) {
-    const char *env = getenv("BRLCAD_ARBN_CLIP_SPATIAL_HASH");
-    if (!env) return 1; /* default enabled */
-    return !BU_STR_EQUAL(env, "off") && !BU_STR_EQUAL(env, "0");
-}
+/**
+ * PLANE_PARALLEL_TOLERANCE - Dot product threshold for detecting parallel planes.
+ * Two normalized plane normals are considered to point in the same direction if
+ * their dot product is >= (1.0 - PLANE_PARALLEL_TOLERANCE).
+ * 
+ * Rationale: 1e-6 tolerance gives angular deviation of ~0.08 degrees, which is
+ * suitable for detecting duplicate planes while avoiding false positives from
+ * numerical noise. This is consistent with BRL-CAD's perp/para tolerance (1.0e-6)
+ * used in BN_TOL_INIT_TOL.
+ */
+#define PLANE_PARALLEL_TOLERANCE 1.0e-6
+
+/* === Configuration via environment variables ============================ */
 
 /* Get maximum plane count limit (default: 10000) */
 static size_t get_max_planes(void) {
@@ -80,7 +91,7 @@ static int spatial_hash_find(struct spatial_hash *hash, const point_t p, const s
     size_t key = spatial_hash_key(p, hash->cell_size);
     struct spatial_hash_entry *e = hash->bins[key];
     while (e) {
-        if (e->vertex_id < (int)poly->vcnt) {
+        if (e->vertex_id < (int)poly->vcnt && poly->verts[e->vertex_id].alive) {
             if (DIST_PNT_PNT_SQ(p, poly->verts[e->vertex_id].p) <= hash->tol->dist_sq) {
                 return e->vertex_id;
             }
@@ -99,6 +110,35 @@ static void spatial_hash_insert(struct spatial_hash *hash, const point_t p, int 
     hash->bins[key] = e;
 }
 
+/* Clear all entries from the hash (but keep the structure) */
+static void spatial_hash_clear(struct spatial_hash *hash) {
+    if (!hash) return;
+    for (int i = 0; i < SPATIAL_HASH_BINS; ++i) {
+        struct spatial_hash_entry *e = hash->bins[i];
+        while (e) {
+            struct spatial_hash_entry *next = e->next;
+            bu_free(e, "hash entry");
+            e = next;
+        }
+        hash->bins[i] = NULL;
+    }
+}
+
+/* Rebuild hash to only contain alive vertices from poly */
+static void spatial_hash_rebuild(struct spatial_hash *hash, const struct arbn_clip_poly *poly) {
+    if (!hash) return;
+    
+    /* Clear existing entries */
+    spatial_hash_clear(hash);
+    
+    /* Re-insert only alive vertices */
+    for (size_t i = 0; i < poly->vcnt; ++i) {
+        if (poly->verts[i].alive) {
+            spatial_hash_insert(hash, poly->verts[i].p, (int)i);
+        }
+    }
+}
+
 /* === Internal helpers =================================================== */
 
 /* Normalize plane and return scale factor.
@@ -111,21 +151,18 @@ static void normalize_plane(plane_t p) {
     p[X] /= len; p[Y] /= len; p[Z] /= len; p[W] /= len;
 }
 
-/* Check if two planes are parallel within angular tolerance */
-static int planes_parallel(const plane_t p1, const plane_t p2, double angle_tol) {
+/* Check if two planes are duplicates (same normal direction and offset within tolerance) */
+static int planes_duplicate(const plane_t p1, const plane_t p2, const struct bn_tol *tol) {
+    /* Check if normals point in the same direction (not just parallel) */
     vect_t n1, n2;
     VSET(n1, p1[X], p1[Y], p1[Z]);
     VSET(n2, p2[X], p2[Y], p2[Z]);
-    double dot = fabs(VDOT(n1, n2));
-    return dot > (1.0 - angle_tol);
-}
-
-/* Check if two planes are duplicates (same normal and offset within tolerance) */
-static int planes_duplicate(const plane_t p1, const plane_t p2, const struct bn_tol *tol) {
-    if (!planes_parallel(p1, p2, 1e-6)) return 0;
+    double dot = VDOT(n1, n2);
+    if (dot < (1.0 - PLANE_PARALLEL_TOLERANCE)) return 0;  /* Not pointing in same direction */
+    
+    /* Check if offsets are the same */
     double d_diff = fabs(p1[W] - p2[W]);
-    double d_sum  = fabs(p1[W] + p2[W]);
-    return (d_diff < tol->dist || d_sum < tol->dist);
+    return (d_diff < tol->dist);
 }
 
 /* Preprocess planes: normalize, deduplicate, estimate bounds
@@ -285,6 +322,7 @@ static struct arbn_clip_poly *seed_poly(double bounding_radius) {
  */
 static int clip_with_plane(struct arbn_clip_poly *poly, const plane_t P,
                            const struct bn_tol *tol, struct spatial_hash *hash) {
+    size_t original_vcnt = poly->vcnt;  /* Save original vertex count before adding new ones */
     int *inside = (int *)bu_calloc(poly->vcnt, sizeof(int), "inside flags");
     int inside_count = 0;
     for (size_t i = 0; i < poly->vcnt; ++i) {
@@ -303,7 +341,9 @@ static int clip_with_plane(struct arbn_clip_poly *poly, const plane_t P,
         bu_free(inside, "inside"); return 0;
     }
 
-    point_t *new_pts = (point_t *)bu_malloc(sizeof(point_t)*poly->vcnt*2, "new face pts");
+    /* Allocate enough space for new intersection points - worst case is each face edge can create an intersection */
+    size_t max_new_pts = poly->fcnt * 20;  /* Conservative estimate: 20 intersections per face */
+    point_t *new_pts = (point_t *)bu_malloc(sizeof(point_t) * max_new_pts, "new face pts");
     int new_cnt = 0;
 
     for (size_t f = 0; f < poly->fcnt; ++f) {
@@ -318,6 +358,9 @@ static int clip_with_plane(struct arbn_clip_poly *poly, const plane_t P,
         }
 
         if (all_out) {
+            /* Free the vids since this face is being removed */
+            bu_free(face->vids, "dead face vids");
+            face->vids = NULL;
             face->alive = 0;
             continue;
         }
@@ -339,8 +382,17 @@ static int clip_with_plane(struct arbn_clip_poly *poly, const plane_t P,
             if (Ain != Bin) {
                 point_t ip;
                 if (segment_plane_isect(ip, poly->verts[vprev].p, poly->verts[vcurr].p, P, tol)) {
-                    VMOVE(new_pts[new_cnt++], ip);
-                    new_vids[new_vid_cnt++] = -1;
+                    if ((size_t)new_cnt >= max_new_pts) {
+                        bu_log("ERROR: new_cnt (%d) >= max_new_pts (%zu)\n", new_cnt, max_new_pts);
+                        bu_free(new_vids, "overflow face vids");
+                        bu_free(new_pts, "overflow pts");
+                        bu_free(inside, "overflow inside");
+                        return 0;
+                    }
+                    VMOVE(new_pts[new_cnt], ip);
+                    /* Use -(new_cnt+1) as placeholder to track which new_pts entry this refers to */
+                    new_vids[new_vid_cnt++] = -(new_cnt + 1);
+                    new_cnt++;
                 }
             }
             vprev = vcurr;
@@ -352,6 +404,9 @@ static int clip_with_plane(struct arbn_clip_poly *poly, const plane_t P,
             face->vcnt = new_vid_cnt;
         } else {
             bu_free(new_vids, "new face vids");
+            /* Keep the old vids since we're marking face as dead */
+            bu_free(face->vids, "dead face vids");
+            face->vids = NULL;
             face->alive = 0;
         }
     }
@@ -363,6 +418,7 @@ static int clip_with_plane(struct arbn_clip_poly *poly, const plane_t P,
     }
 
     int *new_vids_map = (int *)bu_malloc(sizeof(int) * new_cnt, "new vids map");
+    int original_new_cnt = new_cnt;  /* Save original count before deduplication */
     int uniq_cnt = 0;
 
     for (int i = 0; i < new_cnt; ++i) {
@@ -370,10 +426,21 @@ static int clip_with_plane(struct arbn_clip_poly *poly, const plane_t P,
         if (hash) {
             existing_vid = spatial_hash_find(hash, new_pts[i], poly);
         } else {
-            for (int j = 0; j < uniq_cnt; ++j) {
-                if (DIST_PNT_PNT_SQ(new_pts[i], new_pts[j]) <= tol->dist_sq) {
-                    existing_vid = new_vids_map[j];
+            /* First check against existing vertices from previous clipping operations */
+            for (size_t j = 0; j < poly->vcnt; ++j) {
+                if (poly->verts[j].alive && 
+                    DIST_PNT_PNT_SQ(new_pts[i], poly->verts[j].p) <= tol->dist_sq) {
+                    existing_vid = (int)j;
                     break;
+                }
+            }
+            /* Then check against new points being added in this operation */
+            if (existing_vid < 0) {
+                for (int j = 0; j < uniq_cnt; ++j) {
+                    if (DIST_PNT_PNT_SQ(new_pts[i], new_pts[j]) <= tol->dist_sq) {
+                        existing_vid = new_vids_map[j];
+                        break;
+                    }
                 }
             }
         }
@@ -394,7 +461,6 @@ static int clip_with_plane(struct arbn_clip_poly *poly, const plane_t P,
 
             if (uniq_cnt != i) {
                 VMOVE(new_pts[uniq_cnt], new_pts[i]);
-                new_vids_map[uniq_cnt] = (int)poly->vcnt;
             }
             uniq_cnt++;
             poly->vcnt++;
@@ -403,14 +469,28 @@ static int clip_with_plane(struct arbn_clip_poly *poly, const plane_t P,
 
     new_cnt = uniq_cnt;
 
+    if (new_cnt < 3) {
+        bu_free(new_vids_map, "new vids map");
+        bu_free(new_pts, "new face pts");
+        bu_free(inside, "inside flags");
+        return 1;
+    }
+
     int *order = (int *)bu_malloc(sizeof(int)*new_cnt, "face order");
     for (int i = 0; i < new_cnt; ++i) order[i] = i;
     order_face_vertices(new_pts, order, new_cnt, P);
 
     if (poly->fcnt >= poly->fcap) {
+        size_t old_fcap = poly->fcap;
         poly->fcap = poly->fcap * 2 + 6;
         poly->faces = (struct arbn_clip_face *)bu_realloc(poly->faces,
             sizeof(struct arbn_clip_face) * poly->fcap, "faces grow");
+        /* Initialize new face structures */
+        for (size_t i = old_fcap; i < poly->fcap; i++) {
+            poly->faces[i].vids = NULL;
+            poly->faces[i].vcnt = 0;
+            poly->faces[i].alive = 0;
+        }
     }
 
     poly->faces[poly->fcnt].vcnt = new_cnt;
@@ -423,13 +503,23 @@ static int clip_with_plane(struct arbn_clip_poly *poly, const plane_t P,
     }
     poly->fcnt++;
 
-    int placeholder_idx = 0;
+    /* Replace placeholders with actual vertex IDs after deduplication
+     * Placeholders were created as -(index+1) where index is in [0, original_new_cnt)
+     */
     for (size_t f = 0; f < poly->fcnt - 1; ++f) {
         struct arbn_clip_face *face = &poly->faces[f];
         if (!face->alive) continue;
         for (int i = 0; i < face->vcnt; ++i) {
-            if (face->vids[i] == -1) {
-                face->vids[i] = new_vids_map[placeholder_idx++];
+            if (face->vids[i] < 0) {
+                /* Placeholder is -(index+1), so recover the original index */
+                int original_idx = -(face->vids[i] + 1);
+                if (original_idx >= 0 && original_idx < original_new_cnt) {
+                    face->vids[i] = new_vids_map[original_idx];
+                } else {
+                    bu_log("ERROR: Invalid placeholder index %d (valid range: 0-%d)\n", 
+                           original_idx, original_new_cnt-1);
+                    face->vids[i] = 0;  /* Fallback to vertex 0 */
+                }
             }
         }
     }
@@ -437,6 +527,22 @@ static int clip_with_plane(struct arbn_clip_poly *poly, const plane_t P,
     bu_free(new_vids_map, "new vids map");
     bu_free(order, "face order");
     bu_free(new_pts, "new face pts");
+    
+    /* Mark original vertices outside the clipping plane as dead.
+     * Only check vertices that existed before clipping - new intersection 
+     * vertices are always on the plane (inside by definition). */
+    for (size_t i = 0; i < original_vcnt; ++i) {
+        if (poly->verts[i].alive && !inside[i]) {
+            poly->verts[i].alive = 0;
+        }
+    }
+    
+    /* Rebuild spatial hash to remove dead vertices - this fixes bug #16
+     * where orphaned vertices from previous operations caused incorrect matches */
+    if (hash) {
+        spatial_hash_rebuild(hash, poly);
+    }
+    
     bu_free(inside, "inside flags");
     return 1;
 }
@@ -451,7 +557,7 @@ struct arbn_clip_poly *rt_arbn_clip_build_with_stats(const struct rt_arbn_intern
     if (stats) {
         memset(stats, 0, sizeof(*stats));
         stats->input_planes = aip->neqn;
-        stats->spatial_hash_enabled = use_spatial_hash();
+        stats->spatial_hash_enabled = 1; /* always enabled - bug #16 fixed */
     }
 
     size_t nplanes = 0;
@@ -463,10 +569,8 @@ struct arbn_clip_poly *rt_arbn_clip_build_with_stats(const struct rt_arbn_intern
 
     struct arbn_clip_poly *poly = seed_poly(bounding_radius);
 
-    struct spatial_hash *hash = NULL;
-    if (use_spatial_hash()) {
-        hash = spatial_hash_create(tol->dist * 10.0, tol);
-    }
+    /* Always use spatial hash - bug #16 fixed with hash rebuild */
+    struct spatial_hash *hash = spatial_hash_create(tol->dist * 10.0, tol);
 
     for (size_t i = 0; i < nplanes; ++i) {
         if (!clip_with_plane(poly, planes[i], tol, hash)) {
@@ -479,6 +583,33 @@ struct arbn_clip_poly *rt_arbn_clip_build_with_stats(const struct rt_arbn_intern
 
     if (hash) spatial_hash_free(hash);
     bu_free(planes, "unique planes");
+
+    /* Mark vertices as dead if they're not referenced by any alive face */
+    int *vertex_used = (int *)bu_calloc(poly->vcnt, sizeof(int), "vertex used flags");
+    for (size_t f = 0; f < poly->fcnt; ++f) {
+        if (!poly->faces[f].alive) continue;
+        for (int v = 0; v < poly->faces[f].vcnt; ++v) {
+            int vid = poly->faces[f].vids[v];
+            if (vid < 0 || (size_t)vid >= poly->vcnt) {
+                /* Invalid vertex ID indicates data corruption - should not happen
+                 * in correct implementation. Log at debug level for development. */
+                if (vid < 0) {
+                    bu_log("rt_arbn_clip: face %zu has placeholder vertex ID %d\n", f, vid);
+                } else {
+                    bu_log("rt_arbn_clip: face %zu has out-of-bounds vertex ID %d (max %zu)\n", 
+                           f, vid, poly->vcnt - 1);
+                }
+                continue;
+            }
+            vertex_used[vid] = 1;
+        }
+    }
+    for (size_t i = 0; i < poly->vcnt; ++i) {
+        if (!vertex_used[i]) {
+            poly->verts[i].alive = 0;
+        }
+    }
+    bu_free(vertex_used, "vertex used flags");
 
     if (stats) {
         stats->active_planes   = nplanes;
@@ -553,8 +684,11 @@ int rt_arbn_clip_to_nmg(struct nmgregion **r, struct model *m, const struct arbn
 
 void rt_arbn_clip_free(struct arbn_clip_poly *poly) {
     if (!poly) return;
-    for (size_t f = 0; f < poly->fcnt; ++f)
-        bu_free(poly->faces[f].vids, "face vids");
+    for (size_t f = 0; f < poly->fcnt; ++f) {
+        if (poly->faces[f].vids) {
+            bu_free(poly->faces[f].vids, "face vids");
+        }
+    }
     bu_free(poly->faces, "faces");
     bu_free(poly->verts, "verts");
     bu_free(poly, "poly");
