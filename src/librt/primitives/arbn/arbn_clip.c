@@ -29,13 +29,6 @@
 
 /* === Configuration via environment variables ============================ */
 
-/* Check if spatial hashing is enabled (default: on - bug #16 fixed) */
-static int use_spatial_hash(void) {
-    const char *env = getenv("BRLCAD_ARBN_CLIP_SPATIAL_HASH");
-    if (!env) return 1; /* default enabled - bug #16 fixed with hash rebuild */
-    return !BU_STR_EQUAL(env, "off") && !BU_STR_EQUAL(env, "0");
-}
-
 /* Get maximum plane count limit (default: 10000) */
 static size_t get_max_planes(void) {
     const char *env = getenv("BRLCAD_ARBN_CLIP_MAX_PLANES");
@@ -564,7 +557,7 @@ struct arbn_clip_poly *rt_arbn_clip_build_with_stats(const struct rt_arbn_intern
     if (stats) {
         memset(stats, 0, sizeof(*stats));
         stats->input_planes = aip->neqn;
-        stats->spatial_hash_enabled = use_spatial_hash();
+        stats->spatial_hash_enabled = 1; /* always enabled - bug #16 fixed */
     }
 
     size_t nplanes = 0;
@@ -576,10 +569,8 @@ struct arbn_clip_poly *rt_arbn_clip_build_with_stats(const struct rt_arbn_intern
 
     struct arbn_clip_poly *poly = seed_poly(bounding_radius);
 
-    struct spatial_hash *hash = NULL;
-    if (use_spatial_hash()) {
-        hash = spatial_hash_create(tol->dist * 10.0, tol);
-    }
+    /* Always use spatial hash - bug #16 fixed with hash rebuild */
+    struct spatial_hash *hash = spatial_hash_create(tol->dist * 10.0, tol);
 
     for (size_t i = 0; i < nplanes; ++i) {
         if (!clip_with_plane(poly, planes[i], tol, hash)) {

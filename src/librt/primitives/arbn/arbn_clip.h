@@ -11,16 +11,14 @@
  *  - Core algorithm: WORKING for all convex polyhedra (cubes, tetrahedra, arbitrary shapes)
  *  - Spatial hash optimization: ENABLED (bug #16 fixed with hash rebuild)
  *  - Performance: O(1) average-case vertex deduplication with spatial hash
- *                 O(n²) fallback without spatial hash (acceptable for 4-500 planes)
  *
  * PERFORMANCE CHARACTERISTICS:
  *  - Typical ARBN (4-20 planes): Sub-millisecond
  *  - Complex models (100-200 planes): < 5 seconds
  *  - Large models (500 planes): < 30 seconds
- *  - With spatial hash: ~4x faster, supports up to ~2000 planes
+ *  - Supports up to ~2000 planes
  *
  * CONFIGURATION:
- *  - BRLCAD_ARBN_CLIP_SPATIAL_HASH: Enable/disable spatial hash (default: on)
  *  - BRLCAD_ARBN_CLIP_MAX_PLANES: Max plane count (default: 10000)
  *
  * BUG FIXES:
