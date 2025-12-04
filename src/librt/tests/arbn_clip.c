@@ -19,6 +19,21 @@
  * (Avis & Fukuda 1992; Barber et al. 1996; Preparata & Shamos 1985).
  */
 
+/**
+ * TEST_TOLERANCE - Distance tolerance for test geometries.
+ * Rationale: 1e-6 (1 micron for mm units) provides sufficient precision for
+ * test validation while being significantly larger than floating-point epsilon.
+ * This matches the default 'perp' tolerance in BN_TOL_INIT_TOL.
+ */
+#define TEST_TOLERANCE 1.0e-6
+
+/**
+ * THIN_SLAB_THICKNESS - Thickness for degenerate geometry stress tests.
+ * Rationale: 0.001 (1 millimeter) tests numerical stability with near-coplanar
+ * faces while remaining well above floating-point precision limits.
+ */
+#define THIN_SLAB_THICKNESS 0.001
+
 static int test_count = 0;
 static int test_pass = 0;
 
@@ -47,7 +62,7 @@ static void test_simple_cube(void) {
     VSET(ai.eqn[5], 0, 0, -1); ai.eqn[5][W] = 1;
 
     struct bn_tol tol = BN_TOL_INIT_TOL;
-    tol.dist = 1e-6;
+    tol.dist = TEST_TOLERANCE;
     tol.dist_sq = tol.dist * tol.dist;
 
     struct arbn_clip_stats stats;
@@ -80,7 +95,7 @@ static void test_tetrahedron(void) {
     VSET(ai.eqn[3], 1, 1, 1); ai.eqn[3][W] = 3;      /* x + y + z <= 3 */
 
     struct bn_tol tol = BN_TOL_INIT_TOL;
-    tol.dist = 1e-6;
+    tol.dist = TEST_TOLERANCE;
     tol.dist_sq = tol.dist * tol.dist;
 
     struct arbn_clip_stats stats;
@@ -118,7 +133,7 @@ static void test_duplicate_planes(void) {
     VSET(ai.eqn[8], 0, 0, -1); ai.eqn[8][W] = 1; /* dup of 5 */
 
     struct bn_tol tol = BN_TOL_INIT_TOL;
-    tol.dist = 1e-6;
+    tol.dist = TEST_TOLERANCE;
     tol.dist_sq = tol.dist * tol.dist;
 
     struct arbn_clip_stats stats;
@@ -152,7 +167,7 @@ static void test_large_plane_count(void) {
     }
 
     struct bn_tol tol = BN_TOL_INIT_TOL;
-    tol.dist = 1e-6;
+    tol.dist = TEST_TOLERANCE;
     tol.dist_sq = tol.dist * tol.dist;
 
     struct arbn_clip_stats stats;
@@ -183,7 +198,7 @@ static void test_statistics(void) {
     VSET(ai.eqn[5], 0, 0, -1); ai.eqn[5][W] = 1;
 
     struct bn_tol tol = BN_TOL_INIT_TOL;
-    tol.dist = 1e-6;
+    tol.dist = TEST_TOLERANCE;
     tol.dist_sq = tol.dist * tol.dist;
 
     struct arbn_clip_stats stats;
@@ -221,10 +236,10 @@ static void test_coplanar_faces(void) {
     VSET(ai.eqn[4], 0, 0,  1); ai.eqn[4][W] = 1;
     VSET(ai.eqn[5], 0, 0, -1); ai.eqn[5][W] = 1;
     /* Nearly coplanar with eqn[4] - slight tilt */
-    VSET(ai.eqn[6], 0.001, 0, 1); ai.eqn[6][W] = 1.0001;
+    VSET(ai.eqn[6], THIN_SLAB_THICKNESS, 0, 1); ai.eqn[6][W] = 1.0 + THIN_SLAB_THICKNESS;
 
     struct bn_tol tol = BN_TOL_INIT_TOL;
-    tol.dist = 1e-6;
+    tol.dist = TEST_TOLERANCE;
     tol.dist_sq = tol.dist * tol.dist;
 
     struct arbn_clip_stats stats;
@@ -248,16 +263,16 @@ static void test_degenerate_thin_slab(void) {
     ai.neqn = 6;
     ai.eqn = (plane_t *)bu_calloc(ai.neqn, sizeof(plane_t), "thin slab");
     
-    /* Thin slab in Z direction (0.001 units thick) */
+    /* Thin slab in Z direction (THIN_SLAB_THICKNESS units thick) */
     VSET(ai.eqn[0],  1, 0, 0); ai.eqn[0][W] = 1;
     VSET(ai.eqn[1], -1, 0, 0); ai.eqn[1][W] = 1;
     VSET(ai.eqn[2], 0,  1, 0); ai.eqn[2][W] = 1;
     VSET(ai.eqn[3], 0, -1, 0); ai.eqn[3][W] = 1;
-    VSET(ai.eqn[4], 0, 0,  1); ai.eqn[4][W] = 0.001; /* Very close */
+    VSET(ai.eqn[4], 0, 0,  1); ai.eqn[4][W] = THIN_SLAB_THICKNESS; /* Very close */
     VSET(ai.eqn[5], 0, 0, -1); ai.eqn[5][W] = 0.0;
 
     struct bn_tol tol = BN_TOL_INIT_TOL;
-    tol.dist = 1e-6;
+    tol.dist = TEST_TOLERANCE;
     tol.dist_sq = tol.dist * tol.dist;
 
     struct arbn_clip_stats stats;
@@ -292,7 +307,7 @@ static void test_highly_oblique_planes(void) {
     VSET(ai.eqn[7], -1, -1, -1); ai.eqn[7][W] = 3;
 
     struct bn_tol tol = BN_TOL_INIT_TOL;
-    tol.dist = 1e-6;
+    tol.dist = TEST_TOLERANCE;
     tol.dist_sq = tol.dist * tol.dist;
 
     struct arbn_clip_stats stats;
@@ -324,7 +339,7 @@ static void test_near_degenerate_pyramid(void) {
     VSET(ai.eqn[4], 0, -1, 1); ai.eqn[4][W] = 1.01;
 
     struct bn_tol tol = BN_TOL_INIT_TOL;
-    tol.dist = 1e-6;
+    tol.dist = TEST_TOLERANCE;
     tol.dist_sq = tol.dist * tol.dist;
 
     struct arbn_clip_stats stats;
@@ -360,7 +375,7 @@ static void test_many_duplicate_planes(void) {
     }
 
     struct bn_tol tol = BN_TOL_INIT_TOL;
-    tol.dist = 1e-6;
+    tol.dist = TEST_TOLERANCE;
     tol.dist_sq = tol.dist * tol.dist;
 
     struct arbn_clip_stats stats;
@@ -395,7 +410,7 @@ static void test_performance_moderate(void) {
     }
 
     struct bn_tol tol = BN_TOL_INIT_TOL;
-    tol.dist = 1e-6;
+    tol.dist = TEST_TOLERANCE;
     tol.dist_sq = tol.dist * tol.dist;
 
     int64_t start_us = bu_gettime();
@@ -433,7 +448,7 @@ static void test_performance_large(void) {
     }
 
     struct bn_tol tol = BN_TOL_INIT_TOL;
-    tol.dist = 1e-6;
+    tol.dist = TEST_TOLERANCE;
     tol.dist_sq = tol.dist * tol.dist;
 
     int64_t start_us = bu_gettime();
@@ -471,7 +486,7 @@ static void test_performance_extreme(void) {
     }
 
     struct bn_tol tol = BN_TOL_INIT_TOL;
-    tol.dist = 1e-6;
+    tol.dist = TEST_TOLERANCE;
     tol.dist_sq = tol.dist * tol.dist;
 
     int64_t start_us = bu_gettime();

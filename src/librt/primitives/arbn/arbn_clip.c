@@ -11,6 +11,22 @@
 #include <string.h>
 #include <stdlib.h>
 
+/* === Tolerance constants ================================================
+ * These constants control geometric comparisons and numerical stability.
+ */
+
+/**
+ * PLANE_PARALLEL_TOLERANCE - Dot product threshold for detecting parallel planes.
+ * Two normalized plane normals are considered to point in the same direction if
+ * their dot product is >= (1.0 - PLANE_PARALLEL_TOLERANCE).
+ * 
+ * Rationale: 1e-6 tolerance gives angular deviation of ~0.08 degrees, which is
+ * suitable for detecting duplicate planes while avoiding false positives from
+ * numerical noise. This is consistent with BRL-CAD's perp/para tolerance (1.0e-6)
+ * used in BN_TOL_INIT_TOL.
+ */
+#define PLANE_PARALLEL_TOLERANCE 1.0e-6
+
 /* === Configuration via environment variables ============================ */
 
 /* Check if spatial hashing is enabled (default: on - bug #16 fixed) */
@@ -149,7 +165,7 @@ static int planes_duplicate(const plane_t p1, const plane_t p2, const struct bn_
     VSET(n1, p1[X], p1[Y], p1[Z]);
     VSET(n2, p2[X], p2[Y], p2[Z]);
     double dot = VDOT(n1, n2);
-    if (dot < (1.0 - 1e-6)) return 0;  /* Not pointing in same direction */
+    if (dot < (1.0 - PLANE_PARALLEL_TOLERANCE)) return 0;  /* Not pointing in same direction */
     
     /* Check if offsets are the same */
     double d_diff = fabs(p1[W] - p2[W]);
