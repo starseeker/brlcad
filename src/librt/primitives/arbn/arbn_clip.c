@@ -388,10 +388,21 @@ static int clip_with_plane(struct arbn_clip_poly *poly, const plane_t P,
         if (hash) {
             existing_vid = spatial_hash_find(hash, new_pts[i], poly);
         } else {
-            for (int j = 0; j < uniq_cnt; ++j) {
-                if (DIST_PNT_PNT_SQ(new_pts[i], new_pts[j]) <= tol->dist_sq) {
-                    existing_vid = new_vids_map[j];
+            /* First check against existing vertices from previous clipping operations */
+            for (size_t j = 0; j < poly->vcnt; ++j) {
+                if (poly->verts[j].alive && 
+                    DIST_PNT_PNT_SQ(new_pts[i], poly->verts[j].p) <= tol->dist_sq) {
+                    existing_vid = (int)j;
                     break;
+                }
+            }
+            /* Then check against new points being added in this operation */
+            if (existing_vid < 0) {
+                for (int j = 0; j < uniq_cnt; ++j) {
+                    if (DIST_PNT_PNT_SQ(new_pts[i], new_pts[j]) <= tol->dist_sq) {
+                        existing_vid = new_vids_map[j];
+                        break;
+                    }
                 }
             }
         }
