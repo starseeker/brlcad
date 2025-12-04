@@ -13,10 +13,10 @@
 
 /* === Configuration via environment variables ============================ */
 
-/* Check if spatial hashing is enabled (default: off due to bug) */
+/* Check if spatial hashing is enabled (default: on - bug #16 fixed) */
 static int use_spatial_hash(void) {
     const char *env = getenv("BRLCAD_ARBN_CLIP_SPATIAL_HASH");
-    if (!env) return 0; /* default disabled - has bug with vertex reuse */
+    if (!env) return 1; /* default enabled - bug #16 fixed with hash rebuild */
     return !BU_STR_EQUAL(env, "off") && !BU_STR_EQUAL(env, "0");
 }
 
@@ -99,6 +99,35 @@ static void spatial_hash_insert(struct spatial_hash *hash, const point_t p, int 
     e->vertex_id = vertex_id;
     e->next = hash->bins[key];
     hash->bins[key] = e;
+}
+
+/* Clear all entries from the hash (but keep the structure) */
+static void spatial_hash_clear(struct spatial_hash *hash) {
+    if (!hash) return;
+    for (int i = 0; i < SPATIAL_HASH_BINS; ++i) {
+        struct spatial_hash_entry *e = hash->bins[i];
+        while (e) {
+            struct spatial_hash_entry *next = e->next;
+            bu_free(e, "hash entry");
+            e = next;
+        }
+        hash->bins[i] = NULL;
+    }
+}
+
+/* Rebuild hash to only contain alive vertices from poly */
+static void spatial_hash_rebuild(struct spatial_hash *hash, const struct arbn_clip_poly *poly) {
+    if (!hash) return;
+    
+    /* Clear existing entries */
+    spatial_hash_clear(hash);
+    
+    /* Re-insert only alive vertices */
+    for (size_t i = 0; i < poly->vcnt; ++i) {
+        if (poly->verts[i].alive) {
+            spatial_hash_insert(hash, poly->verts[i].p, (int)i);
+        }
+    }
 }
 
 /* === Internal helpers =================================================== */
@@ -497,6 +526,12 @@ static int clip_with_plane(struct arbn_clip_poly *poly, const plane_t P,
         if (poly->verts[i].alive && !inside[i]) {
             poly->verts[i].alive = 0;
         }
+    }
+    
+    /* Rebuild spatial hash to remove dead vertices - this fixes bug #16
+     * where orphaned vertices from previous operations caused incorrect matches */
+    if (hash) {
+        spatial_hash_rebuild(hash, poly);
     }
     
     bu_free(inside, "inside flags");
