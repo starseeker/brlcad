@@ -169,8 +169,14 @@ extern "C" {
 #define GED__DECL_PCMD_XID(sym, cmdstr, fn, opts) { cmdstr, fn },
 
 /* Public: declare a command set in a TU */
-#define GED_DECLARE_COMMAND_SET(LIST_MACRO)                                        \
-    LIST_MACRO(GED__DECL_STATIC_X, GED__DECL_STATIC_XID)
+#if defined(LIBGED_STATIC_CORE) && !defined(GED_PLUGIN_ONLY)
+#  define GED_DECLARE_COMMAND_SET(LIST_MACRO) \
+      LIST_MACRO(GED__DECL_STATIC_X, GED__DECL_STATIC_XID)
+#else
+  /* File-scope safe no-op (no variables, no statements) */
+#  define GED_DECLARE_COMMAND_SET(LIST_MACRO) \
+      /* static registration disabled */
+#endif
 
 /* Public: declare plugin manifest in a TU */
 #ifdef GED_PLUGIN
