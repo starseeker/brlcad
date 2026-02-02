@@ -1730,7 +1730,7 @@ ged_redraw_core(struct ged *gedp, int argc, const char *argv[])
     X(ev, ged_ev_core, GED_CMD_DEFAULT) \
     X(redraw, ged_redraw_core, GED_CMD_DEFAULT) \
     X(loadview, ged_loadview_core, GED_CMD_DEFAULT) \
-    X(preview, ged_preview_core, GED_CMD_DEFAULT) \
+    X(preview, ged_preview_core, GED_CMD_DEFAULT)
 
 GED_DECLARE_COMMAND_SET(GED_DRAW_COMMANDS)
 GED_DECLARE_PLUGIN_MANIFEST("libged_draw", 1, GED_DRAW_COMMANDS)

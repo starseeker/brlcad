@@ -73,7 +73,8 @@ ged_blast_core(struct ged *gedp, int argc, const char *argv[])
  */
 
 #define GED_BLAST_COMMANDS(X, XID) \
-    X(blast, ged_blast_core, GED_CMD_DEFAULT) \
+    X(B,     ged_blast_core, GED_CMD_DEFAULT) \
+    X(blast, ged_blast_core, GED_CMD_DEFAULT)
 
 GED_DECLARE_COMMAND_SET(GED_BLAST_COMMANDS)
 GED_DECLARE_PLUGIN_MANIFEST("libged_blast", 1, GED_BLAST_COMMANDS)
