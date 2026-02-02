@@ -1723,16 +1723,6 @@ ged_redraw_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-/*
- * Local Variables:
- * mode: C
- * tab-width: 8
- * indent-tabs-mode: t
- * c-file-style: "stroustrup"
- * End:
- * ex: shiftwidth=4 tabstop=8
- */
-
 #define GED_DRAW_COMMANDS(X, XID) \
     X(draw, ged_draw_core, GED_CMD_DEFAULT) \
     X(E, ged_E_core, GED_CMD_DEFAULT) \
@@ -1744,4 +1734,14 @@ ged_redraw_core(struct ged *gedp, int argc, const char *argv[])
 
 GED_DECLARE_COMMAND_SET(GED_DRAW_COMMANDS)
 GED_DECLARE_PLUGIN_MANIFEST("libged_draw", 1, GED_DRAW_COMMANDS)
+
+/*
+ * Local Variables:
+ * mode: C
+ * tab-width: 8
+ * indent-tabs-mode: t
+ * c-file-style: "stroustrup"
+ * End:
+ * ex: shiftwidth=4 tabstop=8
+ */
 
