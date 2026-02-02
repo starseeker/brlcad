@@ -144,22 +144,11 @@ ged_simulate_core(ged * const gedp, const int argc, const char ** const argv)
 
 #include "../include/plugin.h"
 
-#ifdef GED_PLUGIN
-extern "C" {
-    static bu_plugin_cmd pcommands[] = {
-	{ "simulate",            ged_simulate_core }
-    };
-    static bu_plugin_manifest pinfo = {
-	"libged_simulate",
-	1,
-	(unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-	pcommands,
-	BU_PLUGIN_ABI_VERSION,
-	sizeof(bu_plugin_manifest)
-    };
-    BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-}
-#endif /* GED_PLUGIN */
+#define GED_SIMLATE_COMMANDS(X, XID) \
+    X(simulate,  ged_simulate_core,   GED_CMD_DEFAULT)
+
+GED_DECLARE_COMMAND_SET(GED_SIMLATE_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_simulate", 1, GED_SIMLATE_COMMANDS)
 
 // Local Variables:
 // tab-width: 8

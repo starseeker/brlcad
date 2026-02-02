@@ -793,22 +793,12 @@ ged_analyze_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-#ifdef GED_PLUGIN
-extern "C" {
-    static bu_plugin_cmd pcommands[] = {
-	{ "analyze",            ged_analyze_core }
-    };
-    static bu_plugin_manifest pinfo = {
-	"libged_analyze",
-	1,
-	(unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-	pcommands,
-	BU_PLUGIN_ABI_VERSION,
-	sizeof(bu_plugin_manifest)
-    };
-    BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-}
-#endif /* GED_PLUGIN */
+#define GED_ANALYZE_COMMANDS(X, XID) \
+    X(analyze,  ged_analyze_core,   GED_CMD_DEFAULT)
+
+GED_DECLARE_COMMAND_SET(GED_ANALYZE_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_analyze", 1, GED_ANALYZE_COMMANDS)
+
 
 // Local Variables:
 // tab-width: 8
