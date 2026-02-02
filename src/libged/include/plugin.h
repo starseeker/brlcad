@@ -84,14 +84,14 @@ extern "C" {
 #endif
 
 #ifdef __cplusplus
-#define REGISTER_GED_COMMAND(cmd_symbol)                                        \
-    GED_CMD_USED const struct ged_cmd cmd_symbol##_rcmd = { &cmd_symbol##_impl };      \
-    extern "C" GED_CMD_USED const struct ged_cmd * const                        \
+#define REGISTER_GED_COMMAND(cmd_symbol)                                              \
+    GED_CMD_USED const struct ged_cmd cmd_symbol##_rcmd = { &cmd_symbol##_impl };     \
+    extern "C" GED_CMD_USED const struct ged_cmd * const                              \
         __ged_cmd_ptr_##cmd_symbol = &cmd_symbol##_rcmd
 #else
-#define REGISTER_GED_COMMAND(cmd_symbol)                                        \
-    GED_CMD_USED const struct ged_cmd cmd_symbol##_rcmd = { &cmd_symbol##_impl };      \
-    GED_CMD_USED const struct ged_cmd * const                                   \
+#define REGISTER_GED_COMMAND(cmd_symbol)                                              \
+    GED_CMD_USED const struct ged_cmd cmd_symbol##_rcmd = { &cmd_symbol##_impl };     \
+    GED_CMD_USED const struct ged_cmd * const                                         \
         __ged_cmd_ptr_##cmd_symbol = &cmd_symbol##_rcmd
 #endif
 
@@ -116,87 +116,193 @@ extern "C" {
 /* =======================================================================================
  * Canonical command list helpers (token-based entries)
  *
- * These macros allow a single per-TU list to drive:
- *   - static registration (when LIBGED_STATIC_CORE is enabled)
- *   - plugin manifest export (when GED_PLUGIN is defined)
- *   - scanner extraction of command names and static symbols
+ * Background / Goals
+ * ------------------
+ * LIBGED supports two deployment models:
  *
- * Expected list signature:
- *   #define GED_SOMETHING_COMMANDS(X, XID) \
- *     X(token, fn, opts) \
- *     XID(symbol, "cmdname", fn, opts)
+ *   1) Static-core (built into libged):
+ *      - A scanner-generated file (ged_force_static_registration) calls
+ *        ged_register_command(...) on a set of symbols.
+ *      - For this to work reliably across platforms and linkers, each TU must
+ *        expose stable symbols that the scanner can reference and that the
+ *        linker will not discard.
  *
- * Where:
- *   - token is a C identifier token representing the command name, e.g. bot_condense
- *   - fn is a ged_func_ptr-compatible function pointer
- *   - opts is a GED_CMD_* flags expression
- *   - symbol is an explicit C identifier for odd/aliased commands
+ *   2) Dynamic plugins (shared libraries):
+ *      - A plugin exports a bu_plugin_manifest (and its bu_plugin_cmd[] table)
+ *        which the host locates via dlsym/GetProcAddress and loads at runtime.
  *
- * From X(token,...), we derive:
- *   - command string: "token"
- *   - symbol id: token##_cmd
+ * This macro system lets you define a command list ONCE per TU and reuse it to
+ * drive both mechanisms with minimal duplication.
  *
- * From XID(symbol,"cmd",...), we use:
- *   - command string: "cmd"
- *   - symbol id: symbol
+ *
+ * Command List Definition
+ * -----------------------
+ * Define a list macro in a TU with the signature:
+ *
+ *   #define GED_<group>_COMMANDS(X, XID) \
+ *       X(token, fn, opts) \
+ *       XID(symbol, "cmdname", fn, opts) \
+ *       ...
+ *
+ * and then invoke:
+ *
+ *   GED_DECLARE_COMMAND_SET(GED_<group>_COMMANDS)
+ *   GED_DECLARE_PLUGIN_MANIFEST("libged_<group>", 1, GED_<group>_COMMANDS)
+ *
+ * GED_DECLARE_COMMAND_SET expands to:
+ *   - metadata declarations always
+ *   - static registration anchors only when LIBGED_STATIC_CORE is enabled and
+ *     GED_PLUGIN_ONLY is NOT defined
+ *
+ * GED_DECLARE_PLUGIN_MANIFEST only emits plugin export code when GED_PLUGIN is
+ * defined.
+ *
+ *
+ * Entry Forms
+ * -----------
+ * 1) X(token, fn, opts)
+ *    - token: C identifier representing the command string (e.g., bot_split)
+ *    - fn:    ged_func_ptr-compatible function pointer (implementation)
+ *    - opts:  GED_CMD_* flags
+ *
+ *    Derived names:
+ *      command string:  "token"
+ *      base symbol:     token##_cmd
+ *      impl variable:   token##_cmd_impl
+ *
+ *    Example:
+ *      #define GED_EXAMPLE_COMMANDS(X, XID) \
+ *          X(bot, ged_bot_core, GED_CMD_DEFAULT)
+ *
+ *    Expands (conceptually) to:
+ *      struct ged_cmd_impl bot_cmd_impl = { "bot", ged_bot_core, GED_CMD_DEFAULT };
+ *      REGISTER_GED_COMMAND(bot_cmd);   // static-core only
+ *
+ * 2) XID(symbol, "cmdname", fn, opts)
+ *    Use when the command string cannot be expressed as a simple token or you
+ *    need an explicit symbol name.
+ *
+ *    Example (odd characters):
+ *      #define GED_HELP_COMMANDS(X, XID) \
+ *          XID(questionmark_cmd, "?", ged_help_core, GED_CMD_DEFAULT)
+ *
+ *    Expands (conceptually) to:
+ *      struct ged_cmd_impl questionmark_cmd_impl = { "?", ged_help_core, GED_CMD_DEFAULT };
+ *      REGISTER_GED_COMMAND(questionmark_cmd);  // static-core only
+ *
+ *
+ * When to use alternative styles
+ * ------------------------------
+ * A) Aliases / multiple names for the same implementation
+ *    Prefer multiple X/XID entries mapping to the same function:
+ *
+ *      #define GED_ALIAS_COMMANDS(X, XID) \
+ *          X(foo, ged_foo_core, GED_CMD_DEFAULT) \
+ *          X(foo_legacy, ged_foo_core, GED_CMD_DEFAULT) \
+ *          XID(foo_dash_cmd, "foo-legacy", ged_foo_core, GED_CMD_DEFAULT)
+ *
+ * B) Configuration-dependent command sets
+ *    If some commands only exist under certain compile-time flags, you can gate
+ *    entries inside the list macro with #ifdef, or use helper macros that expand
+ *    to either an entry or nothing.
+ *
+ * C) Full manual fallback (legacy style)
+ *    If a TU cannot cleanly express its registration as a (name, fn, opts) list,
+ *    you may manually write:
+ *      - struct ged_cmd_impl <sym>_impl definitions
+ *      - REGISTER_GED_COMMAND(<sym>) anchors (static-core)
+ *      - bu_plugin_cmd[] + bu_plugin_manifest export (plugin)
+ *
  * ======================================================================================= */
+
+/* Stringize helper */
 #define GED_STR_IMPL(x) #x
 #define GED_STR(x) GED_STR_IMPL(x)
 
+/* Token concatenation helper */
 #define GED_CAT2_IMPL(a,b) a##b
 #define GED_CAT2(a,b) GED_CAT2_IMPL(a,b)
 
-/* token -> token_cmd (must expand before use in REGISTER_GED_COMMAND) */
+/* token -> token_cmd */
 #define GED_CMD_SYM(token) GED_CAT2(token,_cmd)
 
 /* Wrapper to force expansion before REGISTER_GED_COMMAND applies ## internally */
 #define GED_REGISTER_SYM(sym) REGISTER_GED_COMMAND(sym)
 
-/* Emit ged_cmd_impl + static registration anchor (token case) */
-#define GED__DECL_STATIC_X(token, fn, opts)                                           \
-    struct ged_cmd_impl GED_CAT2(GED_CMD_SYM(token), _impl) = { GED_STR(token), fn, opts }; \
+/* ---------------------------------------------------------------------------------------
+ * 1) Metadata emission (always)
+ *
+ * These macros ONLY define the struct ged_cmd_impl objects.  They do not create
+ * any registration anchors.  This separation keeps the command description
+ * stable and reusable across different build modes.
+ * --------------------------------------------------------------------------------------- */
+#define GED__DECL_META_X(token, fn, opts)                                            \
+    struct ged_cmd_impl GED_CAT2(GED_CMD_SYM(token), _impl) = { GED_STR(token), fn, opts };
+
+#define GED__DECL_META_XID(sym, cmdstr, fn, opts)                                    \
+    struct ged_cmd_impl GED_CAT2(sym, _impl) = { cmdstr, fn, opts };
+
+#define GED_DECLARE_COMMAND_METADATA(LIST_MACRO)                                     \
+    LIST_MACRO(GED__DECL_META_X, GED__DECL_META_XID)
+
+/* ---------------------------------------------------------------------------------------
+ * 2) Static registration anchors (only when using LIBGED static-core)
+ *
+ * These macros create the stable symbols consumed by the scanner-generated
+ * ged_force_static_registration() implementation.
+ *
+ * In static-core mode, REGISTER_GED_COMMAND(sym) creates:
+ *   - sym##_rcmd : canonical struct ged_cmd wrapper
+ *   - __ged_cmd_ptr_##sym : stable anchor pointer that the scanner references
+ *
+ * The anchors depend on having sym##_impl already defined (by metadata emission).
+ * --------------------------------------------------------------------------------------- */
+#define GED__DECL_STATIC_ANCHOR_X(token, fn, opts)                                   \
     GED_REGISTER_SYM(GED_CMD_SYM(token));
 
-/* Emit ged_cmd_impl + static registration anchor (explicit-id case) */
-#define GED__DECL_STATIC_XID(sym, cmdstr, fn, opts)                                   \
-    struct ged_cmd_impl GED_CAT2(sym, _impl) = { cmdstr, fn, opts };                  \
+#define GED__DECL_STATIC_ANCHOR_XID(sym, cmdstr, fn, opts)                           \
     GED_REGISTER_SYM(sym);
 
-/* Emit plugin command array entry (token case) */
-#define GED__DECL_PCMD_X(token, fn, opts) { GED_STR(token), fn },
-
-/* Emit plugin command array entry (explicit-id case) */
-#define GED__DECL_PCMD_XID(sym, cmdstr, fn, opts) { cmdstr, fn },
-
-/* Public: declare a command set in a TU */
 #if defined(LIBGED_STATIC_CORE) && !defined(GED_PLUGIN_ONLY)
-#  define GED_DECLARE_COMMAND_SET(LIST_MACRO) \
-      LIST_MACRO(GED__DECL_STATIC_X, GED__DECL_STATIC_XID)
+#  define GED_DECLARE_STATIC_REGISTRATION(LIST_MACRO)                                \
+      LIST_MACRO(GED__DECL_STATIC_ANCHOR_X, GED__DECL_STATIC_ANCHOR_XID)
 #else
-  /* File-scope safe no-op (no variables, no statements) */
-#  define GED_DECLARE_COMMAND_SET(LIST_MACRO) \
+/* File-scope safe no-op */
+#  define GED_DECLARE_STATIC_REGISTRATION(LIST_MACRO)                                \
       /* static registration disabled */
 #endif
 
-/* Public: declare plugin manifest in a TU */
+/* ---------------------------------------------------------------------------------------
+ * 3) Convenience: declare a command set (metadata + optional static anchors)
+ * --------------------------------------------------------------------------------------- */
+#define GED_DECLARE_COMMAND_SET(LIST_MACRO)                                          \
+    GED_DECLARE_COMMAND_METADATA(LIST_MACRO)                                         \
+    GED_DECLARE_STATIC_REGISTRATION(LIST_MACRO)
+
+/* ---------------------------------------------------------------------------------------
+ * 4) Plugin manifest export (only when building a plugin)
+ * --------------------------------------------------------------------------------------- */
+#define GED__DECL_PCMD_X(token, fn, opts) { GED_STR(token), fn },
+#define GED__DECL_PCMD_XID(sym, cmdstr, fn, opts) { cmdstr, fn },
+
 #ifdef GED_PLUGIN
 #  define GED_DECLARE_PLUGIN_MANIFEST(plugin_name_str, plugin_version_u32, LIST_MACRO) \
-    static bu_plugin_cmd pcommands[] = {                                           \
-        LIST_MACRO(GED__DECL_PCMD_X, GED__DECL_PCMD_XID)                           \
-    };                                                                             \
-    static bu_plugin_manifest pinfo = {                                            \
-        plugin_name_str,                                                           \
-        (unsigned int)(plugin_version_u32),                                        \
-        (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),                    \
-        pcommands,                                                                 \
-        BU_PLUGIN_ABI_VERSION,                                                     \
-        sizeof(bu_plugin_manifest)                                                 \
-    };                                                                             \
+    static bu_plugin_cmd pcommands[] = {                                               \
+        LIST_MACRO(GED__DECL_PCMD_X, GED__DECL_PCMD_XID)                               \
+    };                                                                                 \
+    static bu_plugin_manifest pinfo = {                                                \
+        plugin_name_str,                                                               \
+        (unsigned int)(plugin_version_u32),                                            \
+        (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),                        \
+        pcommands,                                                                     \
+        BU_PLUGIN_ABI_VERSION,                                                         \
+        sizeof(bu_plugin_manifest)                                                     \
+    };                                                                                 \
     BU_PLUGIN_DECLARE_MANIFEST(pinfo)
 #else
 /* File-scope safe no-op (no variables, no statements) */
 #  define GED_DECLARE_PLUGIN_MANIFEST(plugin_name_str, plugin_version_u32, LIST_MACRO) \
-    /* not building plugin */
+      /* not building plugin */
 #endif
 
 #endif /* LIBGED_PLUGIN_H */
