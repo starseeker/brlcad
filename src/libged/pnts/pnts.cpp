@@ -610,7 +610,6 @@ _ged_pnts_tri_cmd_spsr(void *bs, int argc, const char **argv)
 }
 
 
-
 static const struct bu_cmdtab _pnts_tri_cmds[] = {
     { "unit",      _ged_pnts_tri_cmd_unit },
     { "ballpivot", _ged_pnts_tri_cmd_ballpivot },
@@ -696,7 +695,6 @@ _ged_pnts_cmd_tri(void *bs, int argc, const char **argv)
     _pnts_tri_show_help(gedp);
     return BRLCAD_ERROR;
 }
-
 
 
 static int
@@ -1023,7 +1021,7 @@ _ged_pnts_cmd_read(void *bs, int argc, const char **argv)
 	    return BRLCAD_ERROR;
 	}
 
-	_pnt_read(pnts, numcnt, (const char **)nums, bu_vls_addr(&fmt), conv_factor); 
+	_pnt_read(pnts, numcnt, (const char **)nums, bu_vls_addr(&fmt), conv_factor);
 	pnts_cnt++;
 	bu_vls_trunc(&fl, 0);
 	bu_free(input, "input cpy");
@@ -1461,7 +1459,7 @@ ged_pnts_core(struct ged *gedp, int argc, const char *argv[])
  * argv[5] default size of each point
  */
 int
-ged_make_pnts_core(struct ged *gedp, int argc, const char *argv[]) 
+ged_make_pnts_core(struct ged *gedp, int argc, const char *argv[])
 {
     double conv_factor = -1.0;
     double psize = -1.0;
@@ -1563,30 +1561,6 @@ ged_make_pnts_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl make_pnts_impl = {"make_pnts", ged_make_pnts_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(make_pnts);
-
-struct ged_cmd_impl pnts_impl = {"pnts", ged_pnts_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(pnts);
-
-#ifdef GED_PLUGIN
-extern "C" {
-    static bu_plugin_cmd pcommands[] = {
-	{ "make_pnts",       ged_make_pnts_core },
-	{ "pnts",            ged_pnts_core }
-    };
-    static bu_plugin_manifest pinfo = {
-	"libged_pnts",
-	1,
-	(unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-	pcommands,
-	BU_PLUGIN_ABI_VERSION,
-	sizeof(bu_plugin_manifest)
-    };
-    BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-}
-#endif /* GED_PLUGIN */
-
 // Local Variables:
 // tab-width: 8
 // mode: C++
@@ -1595,4 +1569,11 @@ extern "C" {
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
+
+#define GED_PNTS_COMMANDS(X, XID) \
+    X(make_pnts, ged_make_pnts_core, GED_CMD_DEFAULT) \
+    X(pnts, ged_pnts_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_PNTS_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_pnts", 1, GED_PNTS_COMMANDS)
 

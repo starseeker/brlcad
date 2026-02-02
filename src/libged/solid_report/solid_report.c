@@ -223,29 +223,6 @@ ged_solid_report_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl solid_report_impl = {"solid_report", ged_solid_report_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(solid_report);
-
-struct ged_cmd_impl x_impl = {"x", ged_solid_report_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(x);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "solid_report",     ged_solid_report_core },
-    { "x",                ged_solid_report_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_solid_report",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
-
 /*
  * Local Variables:
  * mode: C
@@ -255,3 +232,11 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_SOLID_REPORT_COMMANDS(X, XID) \
+    X(solid_report, ged_solid_report_core, GED_CMD_DEFAULT) \
+    X(x, ged_solid_report_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_SOLID_REPORT_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_solid_report", 1, GED_SOLID_REPORT_COMMANDS)
+

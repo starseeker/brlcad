@@ -368,8 +368,8 @@ ged_lc_core(struct ged *gedp, int argc, const char *argv[])
 	    int jm = im + 1;
 	    int mismatch = 0;
 	    while (!found_all_matches) {
-		if (jm == (int)BU_PTBL_LEN(&results2) || 
-		    bu_strcmp(regions[im].region_id, regions[jm].region_id) || 
+		if (jm == (int)BU_PTBL_LEN(&results2) ||
+		    bu_strcmp(regions[im].region_id, regions[jm].region_id) ||
 		    !bu_strcmp(regions[im].region_id, "--")) {
 		    /* Found all matches - set ignore flags */
 		    int km = 0;
@@ -511,25 +511,6 @@ print_results:
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl lc_impl = {"lc", ged_lc_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(lc);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "lc",            ged_lc_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_lc",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
-
 /*
  * Local Variables:
  * mode: C
@@ -539,3 +520,10 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_LC_COMMANDS(X, XID) \
+    X(lc, ged_lc_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_LC_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_lc", 1, GED_LC_COMMANDS)
+

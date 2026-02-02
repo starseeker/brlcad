@@ -59,28 +59,6 @@ ged_dbip_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl dbip_impl = {"dbip", ged_dbip_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(dbip);
-
-struct ged_cmd_impl get_dbip_impl = {"get_dbip", ged_dbip_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(get_dbip);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "get_dbip",        ged_dbip_core },
-    { "dbip",            ged_dbip_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_dbip",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
 /*
  * Local Variables:
  * mode: C
@@ -90,3 +68,11 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_DBIP_COMMANDS(X, XID) \
+    X(dbip, ged_dbip_core, GED_CMD_DEFAULT) \
+    X(get_dbip, ged_dbip_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_DBIP_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_dbip", 1, GED_DBIP_COMMANDS)
+

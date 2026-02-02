@@ -2432,40 +2432,6 @@ err_missing_arg:
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl edit_impl = {"edit", ged_edit_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(edit);
-
-struct ged_cmd_impl edarb_impl = {"edarb", ged_edarb_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(edarb);
-
-struct ged_cmd_impl protate_impl = {"protate", ged_protate_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(protate);
-
-struct ged_cmd_impl pscale_impl = {"pscale", ged_pscale_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(pscale);
-
-struct ged_cmd_impl ptranslate_impl = {"ptranslate", ged_ptranslate_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(ptranslate);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "edit",            ged_edit_core },
-    { "edarb",           ged_edarb_core },
-    { "protate",         ged_protate_core },
-    { "pscale",          ged_pscale_core },
-    { "ptranslate",      ged_ptranslate_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_edit",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
 /*
  * Local Variables:
  * mode: C
@@ -2475,3 +2441,14 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_EDIT_COMMANDS(X, XID) \
+    X(edit, ged_edit_core, GED_CMD_DEFAULT) \
+    X(edarb, ged_edarb_core, GED_CMD_DEFAULT) \
+    X(protate, ged_protate_core, GED_CMD_DEFAULT) \
+    X(pscale, ged_pscale_core, GED_CMD_DEFAULT) \
+    X(ptranslate, ged_ptranslate_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_EDIT_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_edit", 1, GED_EDIT_COMMANDS)
+

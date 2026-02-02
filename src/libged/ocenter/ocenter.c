@@ -123,26 +123,6 @@ ged_ocenter_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl ocenter_impl = {"ocenter", ged_ocenter_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(ocenter);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "ocenter",            ged_ocenter_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_ocenter",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
-
-
 /*
  * Local Variables:
  * mode: C
@@ -152,3 +132,10 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_OCENTER_COMMANDS(X, XID) \
+    X(ocenter, ged_ocenter_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_OCENTER_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_ocenter", 1, GED_OCENTER_COMMANDS)
+

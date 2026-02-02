@@ -293,27 +293,7 @@ ged_solids_on_ray_core(struct ged *gedp, int argc, const char *argv[])
 }
 
 
-
 #include "../include/plugin.h"
-
-struct ged_cmd_impl solids_on_ray_impl = {"solids_on_ray", ged_solids_on_ray_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(solids_on_ray);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "solids_on_ray",            ged_solids_on_ray_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_solids_on_ray",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
 
 /*
  * Local Variables:
@@ -324,3 +304,10 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_SOLIDS_ON_RAY_COMMANDS(X, XID) \
+    X(solids_on_ray, ged_solids_on_ray_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_SOLIDS_ON_RAY_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_solids_on_ray", 1, GED_SOLIDS_ON_RAY_COMMANDS)
+

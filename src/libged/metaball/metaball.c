@@ -551,38 +551,6 @@ ged_metaball_move_pnt_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl metaball_delete_pnt_impl = {"metaball_delete_pnt", ged_metaball_delete_pnt_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(metaball_delete_pnt);
-
-struct ged_cmd_impl metaball_move_pnt_impl = {"metaball_move_pnt", ged_metaball_move_pnt_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(metaball_move_pnt);
-
-struct ged_cmd_impl mouse_move_metaball_pnt_impl = {"mouse_move_metaball_pnt", ged_metaball_move_pnt_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(mouse_move_metaball_pnt);
-
-struct ged_cmd_impl mouse_add_metaball_pnt_impl = {"mouse_add_metaball_pnt", ged_metaball_add_pnt_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(mouse_add_metaball_pnt);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "metaball_delete_pnt",          ged_metaball_delete_pnt_core },
-    { "metaball_move_pnt",            ged_metaball_move_pnt_core },
-    { "mouse_move_metaball_pnt",      ged_metaball_move_pnt_core },
-    { "mouse_add_metaball_pnt",       ged_metaball_add_pnt_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_metaball",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
-
-
 /*
  * Local Variables:
  * mode: C
@@ -592,3 +560,13 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_METABALL_COMMANDS(X, XID) \
+    X(metaball_delete_pnt, ged_metaball_delete_pnt_core, GED_CMD_DEFAULT) \
+    X(metaball_move_pnt, ged_metaball_move_pnt_core, GED_CMD_DEFAULT) \
+    X(mouse_move_metaball_pnt, ged_metaball_move_pnt_core, GED_CMD_DEFAULT) \
+    X(mouse_add_metaball_pnt, ged_metaball_add_pnt_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_METABALL_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_metaball", 1, GED_METABALL_COMMANDS)
+

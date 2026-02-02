@@ -419,25 +419,6 @@ ged_qray_core(struct ged *gedp,
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl qray_impl = {"qray", ged_qray_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(qray);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "qray",            ged_qray_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_qray",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
-
 /*
  * Local Variables:
  * mode: C
@@ -447,3 +428,10 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_QRAY_COMMANDS(X, XID) \
+    X(qray, ged_qray_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_QRAY_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_qray", 1, GED_QRAY_COMMANDS)
+

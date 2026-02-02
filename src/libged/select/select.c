@@ -106,7 +106,6 @@ _ged_select_botpts(struct ged *gedp, struct rt_bot_internal *botip, double vx, d
 }
 
 
-
 int
 dl_select(struct bu_list *hdlp, mat_t model2view, struct bu_vls *vls, double vx, double vy, double vwidth, double vheight, int rflag)
 {
@@ -342,7 +341,6 @@ dl_select_partial(struct bu_list *hdlp, mat_t model2view, struct bu_vls *vls, do
 
     return BRLCAD_OK;
 }
-
 
 
 /*
@@ -596,29 +594,6 @@ ged_rselect_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl select_impl = {"select", ged_select_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(select);
-
-struct ged_cmd_impl rselect_impl = {"rselect", ged_rselect_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(rselect);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "select",            ged_select_core },
-    { "rselect",           ged_rselect_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_select",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
-
 /*
  * Local Variables:
  * mode: C
@@ -628,3 +603,11 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_SELECT_COMMANDS(X, XID) \
+    X(select, ged_select_core, GED_CMD_DEFAULT) \
+    X(rselect, ged_rselect_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_SELECT_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_select", 1, GED_SELECT_COMMANDS)
+

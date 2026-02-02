@@ -136,7 +136,6 @@ nirt_cmd_print(struct ged *gedp, struct nirt_info *np)
 }
 
 
-
 /**
  * Invoke nirt, optionally using the current view info to drive
  * shot center and direction.
@@ -734,38 +733,6 @@ ged_vnirt_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl nirt_impl = {"nirt", ged_nirt_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(nirt);
-
-struct ged_cmd_impl query_ray_impl = {"query_ray", ged_nirt_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(query_ray);
-
-struct ged_cmd_impl vnirt_impl = {"vnirt", ged_vnirt_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(vnirt);
-
-struct ged_cmd_impl vquery_ray_impl = {"vquery_ray", ged_vnirt_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(vquery_ray);
-
-#ifdef GED_PLUGIN
-extern "C" {
-    static bu_plugin_cmd pcommands[] = {
-	{ "nirt",            ged_nirt_core },
-	{ "query_ray",       ged_nirt_core },
-	{ "vnirt",           ged_vnirt_core },
-	{ "vquery_ray",      ged_vnirt_core }
-    };
-    static bu_plugin_manifest pinfo = {
-	"libged_nirt",
-	1,
-	(unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-	pcommands,
-	BU_PLUGIN_ABI_VERSION,
-	sizeof(bu_plugin_manifest)
-    };
-    BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-}
-#endif /* GED_PLUGIN */
-
 // Local Variables:
 // tab-width: 8
 // mode: C++
@@ -774,3 +741,13 @@ extern "C" {
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8 cino=N-s
+
+#define GED_NIRT_COMMANDS(X, XID) \
+    X(nirt, ged_nirt_core, GED_CMD_DEFAULT) \
+    X(query_ray, ged_nirt_core, GED_CMD_DEFAULT) \
+    X(vnirt, ged_vnirt_core, GED_CMD_DEFAULT) \
+    X(vquery_ray, ged_vnirt_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_NIRT_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_nirt", 1, GED_NIRT_COMMANDS)
+

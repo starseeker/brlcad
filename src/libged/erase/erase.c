@@ -186,28 +186,6 @@ ged_erase_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl erase_impl = {"erase", ged_erase_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(erase);
-
-struct ged_cmd_impl d_impl = {"d", ged_erase_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(d);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "erase",        ged_erase_core },
-    { "d",            ged_erase_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_erase",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
 /*
  * Local Variables:
  * mode: C
@@ -217,3 +195,11 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_ERASE_COMMANDS(X, XID) \
+    X(erase, ged_erase_core, GED_CMD_DEFAULT) \
+    X(d, ged_erase_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_ERASE_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_erase", 1, GED_ERASE_COMMANDS)
+

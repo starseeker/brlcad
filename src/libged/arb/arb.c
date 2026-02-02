@@ -132,28 +132,6 @@ ged_arb_core(struct ged *gedp, int argc, const char *argv[])
 
 extern int ged_rotate_arb_face_core(struct ged *gedp, int argc, const char *argv[]);
 
-struct ged_cmd_impl arb_impl = {"arb", ged_arb_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(arb);
-
-struct ged_cmd_impl rotate_arb_face_impl = {"rotate_arb_face", ged_rotate_arb_face_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(rotate_arb_face);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "arb",              ged_arb_core },
-    { "rotate_arb_face",  ged_rotate_arb_face_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_arb",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
 /*
  * Local Variables:
  * mode: C
@@ -163,3 +141,11 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_ARB_COMMANDS(X, XID) \
+    X(arb, ged_arb_core, GED_CMD_DEFAULT) \
+    X(rotate_arb_face, ged_rotate_arb_face_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_ARB_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_arb", 1, GED_ARB_COMMANDS)
+

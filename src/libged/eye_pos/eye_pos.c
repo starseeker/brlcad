@@ -95,24 +95,6 @@ ged_eye_pos_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl eye_pos_impl = {"eye_pos", ged_eye_pos_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(eye_pos);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "eye_pos",            ged_eye_pos_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_eye_pos",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
 /*
  * Local Variables:
  * mode: C
@@ -122,3 +104,10 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_EYE_POS_COMMANDS(X, XID) \
+    X(eye_pos, ged_eye_pos_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_EYE_POS_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_eye_pos", 1, GED_EYE_POS_COMMANDS)
+

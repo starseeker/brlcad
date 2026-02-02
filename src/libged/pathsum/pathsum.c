@@ -139,33 +139,6 @@ ged_pathsum_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl listeval_impl = {"listeval", ged_pathsum_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(listeval);
-
-struct ged_cmd_impl paths_impl = {"paths", ged_pathsum_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(paths);
-
-struct ged_cmd_impl pathsum_impl = {"pathsum", ged_pathsum_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(pathsum);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "listeval",           ged_pathsum_core },
-    { "paths",              ged_pathsum_core },
-    { "pathsum",            ged_pathsum_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_pathsum",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
-
 /*
  * Local Variables:
  * mode: C
@@ -175,3 +148,12 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_PATHSUM_COMMANDS(X, XID) \
+    X(listeval, ged_pathsum_core, GED_CMD_DEFAULT) \
+    X(paths, ged_pathsum_core, GED_CMD_DEFAULT) \
+    X(pathsum, ged_pathsum_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_PATHSUM_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_pathsum", 1, GED_PATHSUM_COMMANDS)
+

@@ -749,36 +749,6 @@ ged_dm_core(struct ged *gedp, int argc, const char *argv[])
 extern int ged_ert_core(struct ged *gedp, int argc, const char *argv[]);
 extern int ged_screen_grab_core(struct ged *gedp, int argc, const char *argv[]);
 
-struct ged_cmd_impl ert_impl = {"ert", ged_ert_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(ert);
-
-struct ged_cmd_impl dm_impl = {"dm", ged_dm_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(dm);
-
-struct ged_cmd_impl screen_grab_impl = {"screen_grab", ged_screen_grab_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(screen_grab);
-
-struct ged_cmd_impl screengrab_impl = {"screengrab", ged_screen_grab_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(screengrab);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "ert",            ged_ert_core },
-    { "dm",             ged_dm_core },
-    { "screen_grab",    ged_screen_grab_core },
-    { "screengrab",     ged_screen_grab_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_dm",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
 /*
  * Local Variables:
  * mode: C
@@ -788,3 +758,13 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_DM_COMMANDS(X, XID) \
+    X(ert, ged_ert_core, GED_CMD_DEFAULT) \
+    X(dm, ged_dm_core, GED_CMD_DEFAULT) \
+    X(screen_grab, ged_screen_grab_core, GED_CMD_DEFAULT) \
+    X(screengrab, ged_screen_grab_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_DM_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_dm", 1, GED_DM_COMMANDS)
+

@@ -148,28 +148,6 @@ ged_list_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl list_impl = {"list", ged_list_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(list);
-
-struct ged_cmd_impl l_impl = {"l", ged_list_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(l);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "list",         ged_list_core },
-    { "l",            ged_list_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_list",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
 /*
  * Local Variables:
  * mode: C
@@ -179,3 +157,11 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_LIST_COMMANDS(X, XID) \
+    X(list, ged_list_core, GED_CMD_DEFAULT) \
+    X(l, ged_list_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_LIST_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_list", 1, GED_LIST_COMMANDS)
+

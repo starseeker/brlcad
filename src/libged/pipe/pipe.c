@@ -444,53 +444,6 @@ ged_pipe_prepend_pnt_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl find_pipe_pnt_impl = {"find_pipe_pnt", ged_find_pipe_pnt_nearest_pnt_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(find_pipe_pnt);
-
-struct ged_cmd_impl pipe_move_pnt_impl = {"pipe_move_pnt", ged_pipe_move_pnt_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(pipe_move_pnt);
-
-struct ged_cmd_impl pipe_append_pnt_impl = {"pipe_append_pnt", ged_pipe_append_pnt_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(pipe_append_pnt);
-
-struct ged_cmd_impl pipe_prepend_pnt_impl = {"pipe_prepend_pnt", ged_pipe_prepend_pnt_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(pipe_prepend_pnt);
-
-struct ged_cmd_impl pipe_delete_pnt_impl = {"pipe_delete_pnt", ged_pipe_delete_pnt_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(pipe_delete_pnt);
-
-struct ged_cmd_impl mouse_move_pipe_pnt_impl = {"mouse_move_pipe_pnt", ged_pipe_move_pnt_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(mouse_move_pipe_pnt);
-
-struct ged_cmd_impl mouse_append_pipe_pnt_impl = {"mouse_append_pipe_pnt", ged_pipe_append_pnt_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(mouse_append_pipe_pnt);
-
-struct ged_cmd_impl mouse_prepend_pipe_pnt_impl = {"mouse_prepend_pipe_pnt", ged_pipe_prepend_pnt_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(mouse_prepend_pipe_pnt);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "find_pipe_pnt",              ged_find_pipe_pnt_nearest_pnt_core },
-    { "pipe_move_pnt",              ged_pipe_move_pnt_core },
-    { "pipe_append_pnt",            ged_pipe_append_pnt_core },
-    { "pipe_prepend_pnt",           ged_pipe_prepend_pnt_core },
-    { "pipe_delete_pnt",            ged_pipe_delete_pnt_core },
-    { "mouse_move_pipe_pnt",        ged_pipe_move_pnt_core },
-    { "mouse_append_pipe_pnt",      ged_pipe_append_pnt_core },
-    { "mouse_prepend_pipe_pnt",     ged_pipe_prepend_pnt_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_pipe",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
-
 /*
  * Local Variables:
  * mode: C
@@ -500,3 +453,17 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_PIPE_COMMANDS(X, XID) \
+    X(find_pipe_pnt, ged_find_pipe_pnt_nearest_pnt_core, GED_CMD_DEFAULT) \
+    X(pipe_move_pnt, ged_pipe_move_pnt_core, GED_CMD_DEFAULT) \
+    X(pipe_append_pnt, ged_pipe_append_pnt_core, GED_CMD_DEFAULT) \
+    X(pipe_prepend_pnt, ged_pipe_prepend_pnt_core, GED_CMD_DEFAULT) \
+    X(pipe_delete_pnt, ged_pipe_delete_pnt_core, GED_CMD_DEFAULT) \
+    X(mouse_move_pipe_pnt, ged_pipe_move_pnt_core, GED_CMD_DEFAULT) \
+    X(mouse_append_pipe_pnt, ged_pipe_append_pnt_core, GED_CMD_DEFAULT) \
+    X(mouse_prepend_pipe_pnt, ged_pipe_prepend_pnt_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_PIPE_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_pipe", 1, GED_PIPE_COMMANDS)
+

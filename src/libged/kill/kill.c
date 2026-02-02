@@ -128,24 +128,6 @@ ged_kill_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl kill_impl = {"kill", ged_kill_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(kill);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "kill",            ged_kill_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_kill",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
 /*
  * Local Variables:
  * mode: C
@@ -155,3 +137,10 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_KILL_COMMANDS(X, XID) \
+    X(kill, ged_kill_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_KILL_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_kill", 1, GED_KILL_COMMANDS)
+

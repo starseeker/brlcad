@@ -68,26 +68,6 @@ ged_debuglib_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl debuglib_impl = {"debuglib", ged_debuglib_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(debuglib);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "debuglib",            ged_debuglib_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_debuglib",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
-
-
 /*
  * Local Variables:
  * mode: C
@@ -97,3 +77,10 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_DEBUGLIB_COMMANDS(X, XID) \
+    X(debuglib, ged_debuglib_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_DEBUGLIB_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_debuglib", 1, GED_DEBUGLIB_COMMANDS)
+

@@ -295,24 +295,6 @@ ged_edcodes_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl edcodes_impl = {"edcodes", ged_edcodes_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(edcodes);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "edcodes",            ged_edcodes_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_edcodes",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
 /*
  * Local Variables:
  * mode: C
@@ -322,3 +304,10 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_EDCODES_COMMANDS(X, XID) \
+    X(edcodes, ged_edcodes_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_EDCODES_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_edcodes", 1, GED_EDCODES_COMMANDS)
+

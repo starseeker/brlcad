@@ -246,25 +246,6 @@ if (face_idx > max_idx) { \
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl move_arb_face_impl = {"move_arb_face", ged_move_arb_face_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(move_arb_face);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "move_arb_face",            ged_move_arb_face_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_move_arb_face",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
-
 /*
  * Local Variables:
  * mode: C
@@ -274,3 +255,10 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_MOVE_ARB_FACE_COMMANDS(X, XID) \
+    X(move_arb_face, ged_move_arb_face_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_MOVE_ARB_FACE_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_move_arb_face", 1, GED_MOVE_ARB_FACE_COMMANDS)
+

@@ -78,7 +78,6 @@ solid_set_color_info(
 }
 
 
-
 void
 dl_add_path(int dashflag, struct bu_list *vhead, const struct db_full_path *pathp, struct db_tree_state *tsp, unsigned char *wireframe_color_override, struct _ged_client_data *dgcdp)
 {
@@ -332,7 +331,7 @@ append_solid_to_display_list(
 	struct bv_vlist *bvv = (struct bv_vlist *)&vhead;
 	sp->s_vlen += bv_vlist_cmd_cnt(bvv);
 	BU_LIST_APPEND_LIST(&(sp->s_vlist), &(bvv->l));
-	
+
 	bv_scene_obj_bound(sp, bv_data->v);
 
         while (BU_LIST_WHILE(vp, bv_vlist, &(sp->s_vlist))) {
@@ -1724,48 +1723,6 @@ ged_redraw_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl draw_impl = {"draw", ged_draw_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(draw);
-
-struct ged_cmd_impl E_impl = {"E", ged_E_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(E);
-
-struct ged_cmd_impl e_impl = {"e", ged_draw_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(e);
-
-struct ged_cmd_impl ev_impl = {"ev", ged_ev_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(ev);
-
-struct ged_cmd_impl redraw_impl = {"redraw", ged_redraw_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(redraw);
-
-struct ged_cmd_impl loadview_impl = {"loadview", ged_loadview_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(loadview);
-
-struct ged_cmd_impl preview_impl = {"preview", ged_preview_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(preview);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "draw",         ged_draw_core },
-    { "E",            ged_E_core },
-    { "e",            ged_draw_core },
-    { "ev",           ged_ev_core },
-    { "redraw",       ged_redraw_core },
-    { "loadview",     ged_loadview_core },
-    { "preview",      ged_preview_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_draw",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
 /*
  * Local Variables:
  * mode: C
@@ -1775,3 +1732,16 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_DRAW_COMMANDS(X, XID) \
+    X(draw, ged_draw_core, GED_CMD_DEFAULT) \
+    X(E, ged_E_core, GED_CMD_DEFAULT) \
+    X(e, ged_draw_core, GED_CMD_DEFAULT) \
+    X(ev, ged_ev_core, GED_CMD_DEFAULT) \
+    X(redraw, ged_redraw_core, GED_CMD_DEFAULT) \
+    X(loadview, ged_loadview_core, GED_CMD_DEFAULT) \
+    X(preview, ged_preview_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_DRAW_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_draw", 1, GED_DRAW_COMMANDS)
+

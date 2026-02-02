@@ -100,33 +100,6 @@ ged_slew_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl slew_impl = {"slew", ged_slew_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(slew);
-
-struct ged_cmd_impl sv_impl = {"sv", ged_slew_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(sv);
-
-struct ged_cmd_impl vslew_impl = {"vslew", ged_slew_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(vslew);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "slew",          ged_slew_core },
-    { "sv",            ged_slew_core },
-    { "vslew",         ged_slew_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_slew",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
-
 /*
  * Local Variables:
  * mode: C
@@ -136,3 +109,12 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_SLEW_COMMANDS(X, XID) \
+    X(slew, ged_slew_core, GED_CMD_DEFAULT) \
+    X(sv, ged_slew_core, GED_CMD_DEFAULT) \
+    X(vslew, ged_slew_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_SLEW_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_slew", 1, GED_SLEW_COMMANDS)
+

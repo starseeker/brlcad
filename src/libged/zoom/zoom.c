@@ -68,25 +68,6 @@ ged_zoom_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl zoom_impl = {"zoom", ged_zoom_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(zoom);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "zoom",            ged_zoom_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_zoom",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
-
 /*
  * Local Variables:
  * tab-width: 8
@@ -96,3 +77,10 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_ZOOM_COMMANDS(X, XID) \
+    X(zoom, ged_zoom_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_ZOOM_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_zoom", 1, GED_ZOOM_COMMANDS)
+

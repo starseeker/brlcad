@@ -78,28 +78,6 @@ ged_instance_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl i_impl = {"i", ged_instance_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(i);
-
-struct ged_cmd_impl instance_impl = {"instance", ged_instance_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(instance);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "i",                   ged_instance_core },
-    { "instance",            ged_instance_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_instance",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
 /*
  * Local Variables:
  * mode: C
@@ -109,3 +87,11 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_INSTANCE_COMMANDS(X, XID) \
+    X(i, ged_instance_core, GED_CMD_DEFAULT) \
+    X(instance, ged_instance_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_INSTANCE_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_instance", 1, GED_INSTANCE_COMMANDS)
+

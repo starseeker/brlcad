@@ -82,25 +82,6 @@ bad:
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl shaded_mode_impl = {"shaded_mode", ged_shaded_mode_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(shaded_mode);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "shaded_mode",            ged_shaded_mode_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_shaded_mode",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
-
 /*
  * Local Variables:
  * mode: C
@@ -110,3 +91,10 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_SHADED_MODE_COMMANDS(X, XID) \
+    X(shaded_mode, ged_shaded_mode_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_SHADED_MODE_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_shaded_mode", 1, GED_SHADED_MODE_COMMANDS)
+

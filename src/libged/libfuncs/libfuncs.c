@@ -145,36 +145,6 @@ ged_mat_scale_about_pnt_core(struct ged *gedp,
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl mat4x3pnt_impl = {"mat4x3pnt", ged_mat4x3pnt_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(mat4x3pnt);
-
-struct ged_cmd_impl mat_ae_impl = {"mat_ae", ged_mat_ae_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(mat_ae);
-
-struct ged_cmd_impl mat_mul_impl = {"mat_mul", ged_mat_mul_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(mat_mul);
-
-struct ged_cmd_impl mat_scale_about_pnt_impl = {"mat_scale_about_pnt", ged_mat_scale_about_pnt_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(mat_scale_about_pnt);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "mat4x3pnt",            ged_mat4x3pnt_core },
-    { "mat_ae",               ged_mat_ae_core },
-    { "mat_mul",              ged_mat_mul_core },
-    { "mat_scale_about_pnt",  ged_mat_scale_about_pnt_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_libfuncs",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
 /*
  * Local Variables:
  * mode: C
@@ -184,3 +154,13 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_LIBFUNCS_COMMANDS(X, XID) \
+    X(mat4x3pnt, ged_mat4x3pnt_core, GED_CMD_DEFAULT) \
+    X(mat_ae, ged_mat_ae_core, GED_CMD_DEFAULT) \
+    X(mat_mul, ged_mat_mul_core, GED_CMD_DEFAULT) \
+    X(mat_scale_about_pnt, ged_mat_scale_about_pnt_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_LIBFUNCS_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_libfuncs", 1, GED_LIBFUNCS_COMMANDS)
+

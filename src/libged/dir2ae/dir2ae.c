@@ -84,24 +84,6 @@ ged_dir2ae_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl dir2ae_impl = {"dir2ae", ged_dir2ae_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(dir2ae);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "dir2ae",            ged_dir2ae_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_dir2ae",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
 /*
  * Local Variables:
  * mode: C
@@ -111,3 +93,10 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_DIR2AE_COMMANDS(X, XID) \
+    X(dir2ae, ged_dir2ae_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_DIR2AE_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_dir2ae", 1, GED_DIR2AE_COMMANDS)
+

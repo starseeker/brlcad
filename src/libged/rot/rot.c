@@ -50,29 +50,6 @@ ged_rot_core(struct ged *gedp, int argc, const char *argv[])
 
 extern int ged_rotate_about_core(struct ged *gedp, int argc, const char *argv[]);
 
-struct ged_cmd_impl rot_impl = {"rot", ged_rot_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(rot);
-
-struct ged_cmd_impl rot_about_impl = {"rot_about", ged_rotate_about_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(rot_about);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "rot",            ged_rot_core },
-    { "rot_about",      ged_rotate_about_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_rot",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
-
 /*
  * Local Variables:
  * mode: C
@@ -82,3 +59,11 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_ROT_COMMANDS(X, XID) \
+    X(rot, ged_rot_core, GED_CMD_DEFAULT) \
+    X(rot_about, ged_rotate_about_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_ROT_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_rot", 1, GED_ROT_COMMANDS)
+

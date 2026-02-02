@@ -344,25 +344,6 @@ do_identitize(struct db_i *dbip, struct rt_comb_internal *UNUSED(comb), union tr
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl push_impl = {"push", ged_push_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(push);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "push",            ged_push_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_push",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
-
 /*
  * Local Variables:
  * mode: C
@@ -372,3 +353,10 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_PUSH_COMMANDS(X, XID) \
+    X(push, ged_push_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_PUSH_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_push", 1, GED_PUSH_COMMANDS)
+

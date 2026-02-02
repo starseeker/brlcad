@@ -241,24 +241,6 @@ ged_bo_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl bo_impl = {"bo", ged_bo_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(bo);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "bo",            ged_bo_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_bo",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
 /*
  * Local Variables:
  * mode: C
@@ -268,3 +250,10 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_BO_COMMANDS(X, XID) \
+    X(bo, ged_bo_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_BO_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_bo", 1, GED_BO_COMMANDS)
+

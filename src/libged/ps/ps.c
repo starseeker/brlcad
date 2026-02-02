@@ -457,29 +457,6 @@ bad:
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl postscript_impl = {"postscript", ged_ps_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(postscript);
-
-struct ged_cmd_impl ps_impl = {"ps", ged_ps_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(ps);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "postscript",    ged_ps_core },
-    { "ps",            ged_ps_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_ps",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
-
 /*
  * Local Variables:
  * mode: C
@@ -489,3 +466,11 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_PS_COMMANDS(X, XID) \
+    X(postscript, ged_ps_core, GED_CMD_DEFAULT) \
+    X(ps, ged_ps_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_PS_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_ps", 1, GED_PS_COMMANDS)
+

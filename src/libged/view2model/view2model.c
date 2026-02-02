@@ -54,25 +54,6 @@ ged_view2model_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl view2model_impl = {"view2model", ged_view2model_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(view2model);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "view2model",            ged_view2model_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_view2model",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
-
 /*
  * Local Variables:
  * mode: C
@@ -82,3 +63,10 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_VIEW2MODEL_COMMANDS(X, XID) \
+    X(view2model, ged_view2model_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_VIEW2MODEL_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_view2model", 1, GED_VIEW2MODEL_COMMANDS)
+

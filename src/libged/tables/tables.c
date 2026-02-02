@@ -619,38 +619,6 @@ end:
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl idents_impl = {"idents", ged_tables_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(idents);
-
-struct ged_cmd_impl regions_impl = {"regions", ged_tables_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(regions);
-
-struct ged_cmd_impl solids_impl = {"solids", ged_tables_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(solids);
-
-struct ged_cmd_impl tables_impl = {"tables", ged_tables_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(tables);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "idents",            ged_tables_core },
-    { "regions",           ged_tables_core },
-    { "solids",            ged_tables_core },
-    { "tables",            ged_tables_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_tables",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
-
-
 /*
  * Local Variables:
  * mode: C
@@ -660,3 +628,13 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_TABLES_COMMANDS(X, XID) \
+    X(idents, ged_tables_core, GED_CMD_DEFAULT) \
+    X(regions, ged_tables_core, GED_CMD_DEFAULT) \
+    X(solids, ged_tables_core, GED_CMD_DEFAULT) \
+    X(tables, ged_tables_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_TABLES_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_tables", 1, GED_TABLES_COMMANDS)
+

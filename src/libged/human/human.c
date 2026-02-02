@@ -2492,25 +2492,6 @@ ged_human_core(struct ged *gedp, int ac, const char *av[])
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl human_impl = {"human", ged_human_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(human);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "human",            ged_human_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_human",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
-
 /*
  * Local Variables:
  * mode: C
@@ -2520,3 +2501,10 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_HUMAN_COMMANDS(X, XID) \
+    X(human, ged_human_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_HUMAN_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_human", 1, GED_HUMAN_COMMANDS)
+

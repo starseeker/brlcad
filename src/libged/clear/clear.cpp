@@ -38,26 +38,6 @@ ged_clear_core(struct ged *UNUSED(gedp), int UNUSED(argc), const char **UNUSED(a
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl clear_impl = {"clear", ged_clear_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(clear);
-
-#ifdef GED_PLUGIN
-extern "C" {
-    static bu_plugin_cmd pcommands[] = {
-	{ "clear",          ged_clear_core }
-    };
-    static bu_plugin_manifest pinfo = {
-	"libged_clear",
-	1,
-	(unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-	pcommands,
-	BU_PLUGIN_ABI_VERSION,
-	sizeof(bu_plugin_manifest)
-    };
-    BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-}
-#endif /* GED_PLUGIN */
-
 // Local Variables:
 // tab-width: 8
 // mode: C++
@@ -66,4 +46,10 @@ extern "C" {
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
+
+#define GED_CLEAR_COMMANDS(X, XID) \
+    X(clear, ged_clear_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_CLEAR_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_clear", 1, GED_CLEAR_COMMANDS)
 

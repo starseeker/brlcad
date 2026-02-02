@@ -302,30 +302,6 @@ ged_find_arb_edge_nearest_pnt_core(struct ged *gedp, int argc, const char *argv[
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl move_arb_edge_impl = {"move_arb_edge", ged_move_arb_edge_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(move_arb_edge);
-
-struct ged_cmd_impl find_arb_edge_impl = {"find_arb_edge", ged_find_arb_edge_nearest_pnt_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(find_arb_edge);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "move_arb_edge",            ged_move_arb_edge_core },
-    { "find_arb_edge",            ged_find_arb_edge_nearest_pnt_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_move_arb_edge",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
-
-
 /*
  * Local Variables:
  * mode: C
@@ -335,3 +311,11 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_MOVE_ARB_EDGE_COMMANDS(X, XID) \
+    X(move_arb_edge, ged_move_arb_edge_core, GED_CMD_DEFAULT) \
+    X(find_arb_edge, ged_find_arb_edge_nearest_pnt_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_MOVE_ARB_EDGE_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_move_arb_edge", 1, GED_MOVE_ARB_EDGE_COMMANDS)
+

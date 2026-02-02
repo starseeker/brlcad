@@ -89,7 +89,6 @@ ged_labelvert_core(struct ged *gedp, int argc, const char *argv[])
 }
 
 
-
 static int
 dl_set_illum(struct display_list *gdlp, const char *obj, int illum)
 {
@@ -182,28 +181,6 @@ bad:
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl illum_impl = {"illum", ged_illum_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(illum);
-
-struct ged_cmd_impl labelvert_impl = {"labelvert", ged_labelvert_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(labelvert);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "illum",            ged_illum_core },
-    { "labelvert",        ged_labelvert_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_illum",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
 /*
  * Local Variables:
  * mode: C
@@ -213,3 +190,11 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_ILLUM_COMMANDS(X, XID) \
+    X(illum, ged_illum_core, GED_CMD_DEFAULT) \
+    X(labelvert, ged_labelvert_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_ILLUM_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_illum", 1, GED_ILLUM_COMMANDS)
+

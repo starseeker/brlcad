@@ -191,7 +191,6 @@ dl_plot(struct bu_list *hdlp, FILE *fp, mat_t model2view, int floating, mat_t ce
 }
 
 
-
 /*
  * plot file [opts]
  * potential options might include:
@@ -295,25 +294,6 @@ ged_plot_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl plot_impl = {"plot", ged_plot_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(plot);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "plot",            ged_plot_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_plot",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
-
 /*
  * Local Variables:
  * mode: C
@@ -323,3 +303,10 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_PLOT_COMMANDS(X, XID) \
+    X(plot, ged_plot_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_PLOT_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_plot", 1, GED_PLOT_COMMANDS)
+

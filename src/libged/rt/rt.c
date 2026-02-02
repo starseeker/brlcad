@@ -133,41 +133,6 @@ ged_rt_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl rt_impl = {"rt", ged_rt_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(rt);
-
-struct ged_cmd_impl rtarea_impl = {"rtarea", ged_rt_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(rtarea);
-
-struct ged_cmd_impl rtedge_impl = {"rtedge", ged_rt_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(rtedge);
-
-struct ged_cmd_impl rtweight_impl = {"rtweight", ged_rt_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(rtweight);
-
-struct ged_cmd_impl art_impl = {"art", ged_rt_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(art);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "rt",            ged_rt_core },
-    { "rtarea",        ged_rt_core },
-    { "rtedge",        ged_rt_core },
-    { "rtweight",      ged_rt_core },
-    { "art",           ged_rt_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_rt",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
-
 /*
  * Local Variables:
  * mode: C
@@ -177,3 +142,14 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_RT_COMMANDS(X, XID) \
+    X(rt, ged_rt_core, GED_CMD_DEFAULT) \
+    X(rtarea, ged_rt_core, GED_CMD_DEFAULT) \
+    X(rtedge, ged_rt_core, GED_CMD_DEFAULT) \
+    X(rtweight, ged_rt_core, GED_CMD_DEFAULT) \
+    X(art, ged_rt_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_RT_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_rt", 1, GED_RT_COMMANDS)
+

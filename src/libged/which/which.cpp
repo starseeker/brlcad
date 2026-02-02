@@ -295,34 +295,6 @@ ged_which_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl which_impl = {"which", ged_which_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(which);
-
-struct ged_cmd_impl whichair_impl = {"whichair", ged_which_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(whichair);
-
-struct ged_cmd_impl whichid_impl = {"whichid", ged_which_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(whichid);
-
-#ifdef GED_PLUGIN
-extern "C" {
-    static bu_plugin_cmd pcommands[] = {
-	{ "which",           ged_which_core },
-	{ "whichair",        ged_which_core },
-	{ "whichid",         ged_which_core }
-    };
-    static bu_plugin_manifest pinfo = {
-	"libged_which",
-	1,
-	(unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-	pcommands,
-	BU_PLUGIN_ABI_VERSION,
-	sizeof(bu_plugin_manifest)
-    };
-    BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-}
-#endif /* GED_PLUGIN */
-
 // Local Variables:
 // tab-width: 8
 // mode: C++
@@ -331,4 +303,12 @@ extern "C" {
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
+
+#define GED_WHICH_COMMANDS(X, XID) \
+    X(which, ged_which_core, GED_CMD_DEFAULT) \
+    X(whichair, ged_which_core, GED_CMD_DEFAULT) \
+    X(whichid, ged_which_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_WHICH_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_which", 1, GED_WHICH_COMMANDS)
 

@@ -79,28 +79,7 @@ ged_shader_core(struct ged *gedp, int argc, const char *argv[])
 }
 
 
-
 #include "../include/plugin.h"
-
-struct ged_cmd_impl shader_impl = {"shader", ged_shader_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(shader);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "shader",            ged_shader_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_shader",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
-
 
 /*
  * Local Variables:
@@ -111,3 +90,10 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_SHADER_COMMANDS(X, XID) \
+    X(shader, ged_shader_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_SHADER_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_shader", 1, GED_SHADER_COMMANDS)
+

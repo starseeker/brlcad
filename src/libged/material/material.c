@@ -635,24 +635,6 @@ ged_material_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl material_impl = {"material", ged_material_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(material);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "material",            ged_material_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_material",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
 /*
  * Local Variables:
  * tab-width: 8
@@ -662,3 +644,10 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_MATERIAL_COMMANDS(X, XID) \
+    X(material, ged_material_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_MATERIAL_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_material", 1, GED_MATERIAL_COMMANDS)
+

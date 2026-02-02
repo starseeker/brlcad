@@ -181,25 +181,6 @@ ged_wcodes_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-struct ged_cmd_impl wcodes_impl = {"wcodes", ged_wcodes_core, GED_CMD_DEFAULT};
-REGISTER_GED_COMMAND(wcodes);
-
-#ifdef GED_PLUGIN
-static bu_plugin_cmd pcommands[] = {
-    { "wcodes",            ged_wcodes_core }
-};
-static bu_plugin_manifest pinfo = {
-    "libged_wcodes",
-    1,
-    (unsigned int)(sizeof(pcommands)/sizeof(pcommands[0])),
-    pcommands,
-    BU_PLUGIN_ABI_VERSION,
-    sizeof(bu_plugin_manifest)
-};
-BU_PLUGIN_DECLARE_MANIFEST(pinfo)
-#endif /* GED_PLUGIN */
-
-
 /*
  * Local Variables:
  * mode: C
@@ -209,3 +190,10 @@ BU_PLUGIN_DECLARE_MANIFEST(pinfo)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
+
+#define GED_WCODES_COMMANDS(X, XID) \
+    X(wcodes, ged_wcodes_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_WCODES_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_wcodes", 1, GED_WCODES_COMMANDS)
+
