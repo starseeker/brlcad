@@ -87,6 +87,13 @@ ged_close_core(struct ged *gedp, int UNUSED(argc), const char **UNUSED(argv))
 
 #include "../include/plugin.h"
 
+#define GED_CLOSE_COMMANDS(X, XID) \
+    X(closedb, ged_close_core, GED_CMD_DEFAULT) \
+    X(close, ged_close_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_CLOSE_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_close", 1, GED_CLOSE_COMMANDS)
+
 // Local Variables:
 // tab-width: 8
 // mode: C++
@@ -95,11 +102,3 @@ ged_close_core(struct ged *gedp, int UNUSED(argc), const char **UNUSED(argv))
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-
-#define GED_CLOSE_COMMANDS(X, XID) \
-    X(closedb, ged_close_core, GED_CMD_DEFAULT) \
-    X(close, ged_close_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_CLOSE_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_close", 1, GED_CLOSE_COMMANDS)
-
