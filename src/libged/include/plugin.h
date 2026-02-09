@@ -76,6 +76,9 @@ extern "C" {
  *  - the canonical struct ged_cmd object (so there is a stable data symbol)
  *  - a stable anchor pointer __ged_cmd_ptr_<cmd> the scanner can reference
  * No constructors, no linker sections, no CRT $XCU.
+ *
+ * Note: On MSVC, we rely on the linker option /OPT:NOREF (set in CMakeLists.txt)
+ * to prevent the linker from stripping "unused" static command registration symbols.
  */
 #if defined(__GNUC__) || defined(__clang__)
 #define GED_CMD_USED __attribute__((used))

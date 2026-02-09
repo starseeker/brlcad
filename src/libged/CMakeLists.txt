@@ -350,6 +350,10 @@ brlcad_addlib(libged "${LIBGED_SOURCES}" "${GED_LIBS}" "" "${GED_LOCAL_INCLUDE_D
 set_target_properties(libged PROPERTIES VERSION 20.0.1 SOVERSION 20)
 if (LIBGED_STATIC_CORE)
   target_link_libraries(libged PRIVATE libged_plugin_deps)
+  # On MSVC, prevent the linker from stripping "unused" static command registration symbols
+  if(MSVC)
+    target_link_options(libged PRIVATE "/OPT:NOREF")
+  endif()
 endif()
 
 # This executable is used to launch processes from LIBGED commands that may

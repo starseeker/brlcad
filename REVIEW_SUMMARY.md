@@ -5,46 +5,35 @@
 **Branch:** gedcmdsreview  
 **Compared to:** main  
 **Date:** February 2025  
-**Overall Status:** ⚠️ Ready with Critical Fixes Required
+**Overall Status:** ✅ Ready for Merge (Critical Issues Fixed)
 
 ---
 
-## Critical Issues (MUST FIX)
+## Critical Issues - ✅ FIXED
 
-### 1. Windows/MSVC Build Failure Risk 🔴
+### 1. Windows/MSVC Build Failure Risk 🔴 **FIXED**
 
-**Location:** `src/libged/include/plugin.h:80-84`
+**Location:** `src/libged/include/plugin.h:80-84` and `src/libged/CMakeLists.txt`
 
 **Problem:** The `GED_CMD_USED` macro is empty on MSVC, which will cause the linker to strip "unused" command registration symbols.
 
-**Quick Fix:**
-```c
-#if defined(__GNUC__) || defined(__clang__)
-#define GED_CMD_USED __attribute__((used))
-#elif defined(_MSC_VER)
-// Add linker option /OPT:NOREF in CMake instead
-// OR use: #pragma comment(linker, "/INCLUDE:symbol_name")
-#define GED_CMD_USED
-#else
-#define GED_CMD_USED
-#endif
-```
-
-**CMake Fix (recommended):**
-Add to `src/libged/CMakeLists.txt`:
+**Fix Applied:**
+Added to `src/libged/CMakeLists.txt`:
 ```cmake
 if(MSVC AND LIBGED_STATIC_CORE)
   target_link_options(libged PRIVATE "/OPT:NOREF")
 endif()
 ```
 
-### 2. Bot Plugin Link Failure Risk 🟡
+And documented the rationale in `plugin.h` comments.
+
+### 2. Bot Plugin Link Failure Risk 🟡 **FIXED**
 
 **Location:** `src/libged/bot/CMakeLists.txt:4`
 
 **Problem:** Removed `libged` from BOT_LIBS, but dynamic plugin builds need it.
 
-**Fix:**
+**Fix Applied:**
 ```cmake
 set(BOT_LIBS libged libbg libbu manifold::manifold)
 ```
