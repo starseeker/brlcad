@@ -77,8 +77,18 @@ extern "C" {
  *  - a stable anchor pointer __ged_cmd_ptr_<cmd> the scanner can reference
  * No constructors, no linker sections, no CRT $XCU.
  *
- * Note: On MSVC, we rely on the linker option /OPT:NOREF (set in CMakeLists.txt)
- * to prevent the linker from stripping "unused" static command registration symbols.
+ * Symbol Retention Strategy:
+ * -------------------------
+ * GCC/Clang: Use __attribute__((used)) to prevent elimination
+ * 
+ * MSVC: Two-pronged approach required:
+ *   1. Scanner-generated ged_force_static_registration() explicitly references
+ *      all __ged_cmd_ptr_xxx symbols via extern declarations and function calls
+ *   2. /OPT:NOREF linker flag (set in CMakeLists.txt) prevents the linker from
+ *      removing the symbol definitions from object files during link-time optimization
+ *
+ * Both mechanisms work together: the generated code creates references, but without
+ * /OPT:NOREF, MSVC's linker could still strip the symbols before seeing those references.
  */
 #if defined(__GNUC__) || defined(__clang__)
 #define GED_CMD_USED __attribute__((used))

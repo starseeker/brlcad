@@ -4,6 +4,26 @@
 
 The `gedcmdsreview` branch implements a hybrid plugin system for libged that significantly improves startup performance while maintaining backward compatibility. After comprehensive code review and critical fixes, the branch is **READY FOR PRODUCTION** pending final cross-platform testing.
 
+## ⚠️ Important: MSVC Symbol Retention Mechanism
+
+**Question Raised:** Does the scanner-generated `ged_static_registration.cpp` already prevent MSVC symbol stripping?
+
+**Answer:** The generated registration code is necessary but **not sufficient** on MSVC. Both mechanisms work together:
+
+1. **Scanner-generated code** (`ged_force_static_registration()`):
+   - Creates explicit `extern` references to all command symbols
+   - Calls `ged_register_command()` on each symbol
+   - Ensures symbols are **used** during initialization
+
+2. **`/OPT:NOREF` linker flag**:
+   - Prevents MSVC linker from stripping symbols **before** the references are resolved
+   - Required because MSVC lacks `__attribute__((used))` equivalent
+   - Ensures symbol **definitions survive** to be available for use
+
+**Why both are needed:** MSVC's linker optimization runs in passes. It may strip "unreferenced" symbols from object files before seeing the `extern` declarations in the generated registration code. The `/OPT:NOREF` flag prevents this premature elimination.
+
+See `MSVC_SYMBOL_RETENTION_ANALYSIS.md` for detailed technical explanation.
+
 ---
 
 ## Critical Issues - Status: ✅ ALL FIXED

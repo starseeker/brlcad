@@ -6,6 +6,20 @@
 
 ---
 
+## ⚠️ Important Note: MSVC Symbol Retention
+
+**Q: Does the scanner-generated `ged_static_registration.cpp` already solve the MSVC symbol problem?**
+
+**A: No - both mechanisms are needed.** See `MSVC_SYMBOL_RETENTION_ANALYSIS.md` for detailed explanation.
+
+**Summary:** 
+- The generated `ged_force_static_registration()` function creates references to symbols
+- But MSVC's linker may strip symbol definitions **before** seeing those references
+- The `/OPT:NOREF` flag prevents premature stripping
+- Both work together: generated code uses symbols, `/OPT:NOREF` ensures they exist to be used
+
+---
+
 ## 📊 What Was Reviewed
 
 The gedcmdsreview branch implements a major architectural improvement to BRL-CAD's libged library:
