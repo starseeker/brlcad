@@ -431,6 +431,12 @@ ged_gdiff_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_GDIFF_COMMANDS(X, XID) \
+    X(gdiff, ged_gdiff_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_GDIFF_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_gdiff", 1, GED_GDIFF_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -440,10 +446,3 @@ ged_gdiff_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_GDIFF_COMMANDS(X, XID) \
-    X(gdiff, ged_gdiff_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_GDIFF_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_gdiff", 1, GED_GDIFF_COMMANDS)
-

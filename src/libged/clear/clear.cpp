@@ -38,6 +38,12 @@ ged_clear_core(struct ged *UNUSED(gedp), int UNUSED(argc), const char **UNUSED(a
 
 #include "../include/plugin.h"
 
+#define GED_CLEAR_COMMANDS(X, XID) \
+    X(clear, ged_clear_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_CLEAR_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_clear", 1, GED_CLEAR_COMMANDS)
+
 // Local Variables:
 // tab-width: 8
 // mode: C++
@@ -46,10 +52,3 @@ ged_clear_core(struct ged *UNUSED(gedp), int UNUSED(argc), const char **UNUSED(a
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-
-#define GED_CLEAR_COMMANDS(X, XID) \
-    X(clear, ged_clear_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_CLEAR_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_clear", 1, GED_CLEAR_COMMANDS)
-

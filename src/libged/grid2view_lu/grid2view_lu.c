@@ -72,6 +72,12 @@ bad:
 
 #include "../include/plugin.h"
 
+#define GED_GRID2VIEW_LU_COMMANDS(X, XID) \
+    X(grid2view_lu, ged_grid2view_lu_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_GRID2VIEW_LU_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_grid2view_lu", 1, GED_GRID2VIEW_LU_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -81,10 +87,3 @@ bad:
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_GRID2VIEW_LU_COMMANDS(X, XID) \
-    X(grid2view_lu, ged_grid2view_lu_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_GRID2VIEW_LU_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_grid2view_lu", 1, GED_GRID2VIEW_LU_COMMANDS)
-

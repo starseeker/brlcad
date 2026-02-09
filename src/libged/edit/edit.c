@@ -2432,16 +2432,6 @@ err_missing_arg:
 
 #include "../include/plugin.h"
 
-/*
- * Local Variables:
- * mode: C
- * tab-width: 8
- * indent-tabs-mode: t
- * c-file-style: "stroustrup"
- * End:
- * ex: shiftwidth=4 tabstop=8
- */
-
 #define GED_EDIT_COMMANDS(X, XID) \
     X(edit, ged_edit_core, GED_CMD_DEFAULT) \
     X(edarb, ged_edarb_core, GED_CMD_DEFAULT) \
@@ -2452,3 +2442,12 @@ err_missing_arg:
 GED_DECLARE_COMMAND_SET(GED_EDIT_COMMANDS)
 GED_DECLARE_PLUGIN_MANIFEST("libged_edit", 1, GED_EDIT_COMMANDS)
 
+/*
+ * Local Variables:
+ * mode: C
+ * tab-width: 8
+ * indent-tabs-mode: t
+ * c-file-style: "stroustrup"
+ * End:
+ * ex: shiftwidth=4 tabstop=8
+ */

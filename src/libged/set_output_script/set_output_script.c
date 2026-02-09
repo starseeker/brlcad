@@ -72,6 +72,12 @@ ged_set_output_script_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_SET_OUTPUT_SCRIPT_COMMANDS(X, XID) \
+    X(set_output_script, ged_set_output_script_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_SET_OUTPUT_SCRIPT_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_set_output_script", 1, GED_SET_OUTPUT_SCRIPT_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -81,10 +87,3 @@ ged_set_output_script_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_SET_OUTPUT_SCRIPT_COMMANDS(X, XID) \
-    X(set_output_script, ged_set_output_script_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_SET_OUTPUT_SCRIPT_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_set_output_script", 1, GED_SET_OUTPUT_SCRIPT_COMMANDS)
-

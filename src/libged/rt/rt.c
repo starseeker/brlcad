@@ -133,16 +133,6 @@ ged_rt_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-/*
- * Local Variables:
- * mode: C
- * tab-width: 8
- * indent-tabs-mode: t
- * c-file-style: "stroustrup"
- * End:
- * ex: shiftwidth=4 tabstop=8
- */
-
 #define GED_RT_COMMANDS(X, XID) \
     X(rt, ged_rt_core, GED_CMD_DEFAULT) \
     X(rtarea, ged_rt_core, GED_CMD_DEFAULT) \
@@ -153,3 +143,12 @@ ged_rt_core(struct ged *gedp, int argc, const char *argv[])
 GED_DECLARE_COMMAND_SET(GED_RT_COMMANDS)
 GED_DECLARE_PLUGIN_MANIFEST("libged_rt", 1, GED_RT_COMMANDS)
 
+/*
+ * Local Variables:
+ * mode: C
+ * tab-width: 8
+ * indent-tabs-mode: t
+ * c-file-style: "stroustrup"
+ * End:
+ * ex: shiftwidth=4 tabstop=8
+ */

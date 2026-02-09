@@ -82,6 +82,12 @@ bad:
 
 #include "../include/plugin.h"
 
+#define GED_SHADED_MODE_COMMANDS(X, XID) \
+    X(shaded_mode, ged_shaded_mode_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_SHADED_MODE_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_shaded_mode", 1, GED_SHADED_MODE_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -91,10 +97,3 @@ bad:
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_SHADED_MODE_COMMANDS(X, XID) \
-    X(shaded_mode, ged_shaded_mode_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_SHADED_MODE_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_shaded_mode", 1, GED_SHADED_MODE_COMMANDS)
-

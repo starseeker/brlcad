@@ -93,6 +93,12 @@ ged_v2m_point_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_V2M_POINT_COMMANDS(X, XID) \
+    X(v2m_point, ged_v2m_point_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_V2M_POINT_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_v2m_point", 1, GED_V2M_POINT_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -102,10 +108,3 @@ ged_v2m_point_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_V2M_POINT_COMMANDS(X, XID) \
-    X(v2m_point, ged_v2m_point_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_V2M_POINT_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_v2m_point", 1, GED_V2M_POINT_COMMANDS)
-

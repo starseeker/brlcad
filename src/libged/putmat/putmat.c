@@ -250,6 +250,12 @@ ged_putmat_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_PUTMAT_COMMANDS(X, XID) \
+    X(putmat, ged_putmat_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_PUTMAT_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_putmat", 1, GED_PUTMAT_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -259,10 +265,3 @@ ged_putmat_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_PUTMAT_COMMANDS(X, XID) \
-    X(putmat, ged_putmat_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_PUTMAT_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_putmat", 1, GED_PUTMAT_COMMANDS)
-

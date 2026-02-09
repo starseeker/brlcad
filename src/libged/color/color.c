@@ -361,6 +361,13 @@ ged_color_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_COLOR_COMMANDS(X, XID) \
+    X(color, ged_color_core, GED_CMD_DEFAULT) \
+    X(edcolor, ged_edcolor_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_COLOR_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_color", 1, GED_COLOR_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -370,11 +377,3 @@ ged_color_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_COLOR_COMMANDS(X, XID) \
-    X(color, ged_color_core, GED_CMD_DEFAULT) \
-    X(edcolor, ged_edcolor_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_COLOR_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_color", 1, GED_COLOR_COMMANDS)
-

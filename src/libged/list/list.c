@@ -148,6 +148,13 @@ ged_list_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_LIST_COMMANDS(X, XID) \
+    X(list, ged_list_core, GED_CMD_DEFAULT) \
+    X(l, ged_list_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_LIST_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_list", 1, GED_LIST_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -157,11 +164,3 @@ ged_list_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_LIST_COMMANDS(X, XID) \
-    X(list, ged_list_core, GED_CMD_DEFAULT) \
-    X(l, ged_list_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_LIST_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_list", 1, GED_LIST_COMMANDS)
-

@@ -511,6 +511,12 @@ print_results:
 
 #include "../include/plugin.h"
 
+#define GED_LC_COMMANDS(X, XID) \
+    X(lc, ged_lc_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_LC_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_lc", 1, GED_LC_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -520,10 +526,3 @@ print_results:
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_LC_COMMANDS(X, XID) \
-    X(lc, ged_lc_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_LC_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_lc", 1, GED_LC_COMMANDS)
-

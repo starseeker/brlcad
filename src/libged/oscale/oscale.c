@@ -132,6 +132,12 @@ ged_oscale_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_OSCALE_COMMANDS(X, XID) \
+    X(oscale, ged_oscale_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_OSCALE_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_oscale", 1, GED_OSCALE_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -141,10 +147,3 @@ ged_oscale_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_OSCALE_COMMANDS(X, XID) \
-    X(oscale, ged_oscale_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_OSCALE_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_oscale", 1, GED_OSCALE_COMMANDS)
-

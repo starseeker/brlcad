@@ -720,6 +720,12 @@ ged_search_core(struct ged *gedp, int argc, const char *argv_orig[])
 
 #include "../include/plugin.h"
 
+#define GED_SEARCH_COMMANDS(X, XID) \
+    X(search, ged_search_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_SEARCH_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_search", 1, GED_SEARCH_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -729,10 +735,3 @@ ged_search_core(struct ged *gedp, int argc, const char *argv_orig[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_SEARCH_COMMANDS(X, XID) \
-    X(search, ged_search_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_SEARCH_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_search", 1, GED_SEARCH_COMMANDS)
-

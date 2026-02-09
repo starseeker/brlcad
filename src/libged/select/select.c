@@ -594,6 +594,13 @@ ged_rselect_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_SELECT_COMMANDS(X, XID) \
+    X(select, ged_select_core, GED_CMD_DEFAULT) \
+    X(rselect, ged_rselect_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_SELECT_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_select", 1, GED_SELECT_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -603,11 +610,3 @@ ged_rselect_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_SELECT_COMMANDS(X, XID) \
-    X(select, ged_select_core, GED_CMD_DEFAULT) \
-    X(rselect, ged_rselect_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_SELECT_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_select", 1, GED_SELECT_COMMANDS)
-

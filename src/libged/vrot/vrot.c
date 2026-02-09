@@ -77,6 +77,12 @@ ged_vrot_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_VROT_COMMANDS(X, XID) \
+    X(vrot, ged_vrot_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_VROT_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_vrot", 1, GED_VROT_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -86,10 +92,3 @@ ged_vrot_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_VROT_COMMANDS(X, XID) \
-    X(vrot, ged_vrot_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_VROT_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_vrot", 1, GED_VROT_COMMANDS)
-

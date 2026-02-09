@@ -108,6 +108,12 @@ ged_pathlist_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_PATHLIST_COMMANDS(X, XID) \
+    X(pathlist, ged_pathlist_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_PATHLIST_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_pathlist", 1, GED_PATHLIST_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -117,10 +123,3 @@ ged_pathlist_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_PATHLIST_COMMANDS(X, XID) \
-    X(pathlist, ged_pathlist_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_PATHLIST_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_pathlist", 1, GED_PATHLIST_COMMANDS)
-

@@ -295,6 +295,12 @@ ged_edcodes_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_EDCODES_COMMANDS(X, XID) \
+    X(edcodes, ged_edcodes_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_EDCODES_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_edcodes", 1, GED_EDCODES_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -304,10 +310,3 @@ ged_edcodes_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_EDCODES_COMMANDS(X, XID) \
-    X(edcodes, ged_edcodes_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_EDCODES_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_edcodes", 1, GED_EDCODES_COMMANDS)
-

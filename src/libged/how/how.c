@@ -144,6 +144,12 @@ good_label:
 
 #include "../include/plugin.h"
 
+#define GED_HOW_COMMANDS(X, XID) \
+    X(how, ged_how_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_HOW_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_how", 1, GED_HOW_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -153,10 +159,3 @@ good_label:
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_HOW_COMMANDS(X, XID) \
-    X(how, ged_how_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_HOW_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_how", 1, GED_HOW_COMMANDS)
-

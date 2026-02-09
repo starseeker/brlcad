@@ -54,6 +54,12 @@ ged_pmodel2view_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_PMODEL2VIEW_COMMANDS(X, XID) \
+    X(pmodel2view, ged_pmodel2view_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_PMODEL2VIEW_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_pmodel2view", 1, GED_PMODEL2VIEW_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -63,10 +69,3 @@ ged_pmodel2view_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_PMODEL2VIEW_COMMANDS(X, XID) \
-    X(pmodel2view, ged_pmodel2view_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_PMODEL2VIEW_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_pmodel2view", 1, GED_PMODEL2VIEW_COMMANDS)
-

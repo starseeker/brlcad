@@ -87,6 +87,12 @@ ged_adjust_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_ADJUST_COMMANDS(X, XID) \
+    X(adjust, ged_adjust_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_ADJUST_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_adjust", 1, GED_ADJUST_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -96,10 +102,3 @@ ged_adjust_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_ADJUST_COMMANDS(X, XID) \
-    X(adjust, ged_adjust_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_ADJUST_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_adjust", 1, GED_ADJUST_COMMANDS)
-

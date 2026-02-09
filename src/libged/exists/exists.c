@@ -491,6 +491,12 @@ ged_exists_core(struct ged *gedp, int argc, const char *argv_orig[])
 
 #include "../include/plugin.h"
 
+#define GED_EXISTS_COMMANDS(X, XID) \
+    X(exists, ged_exists_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_EXISTS_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_exists", 1, GED_EXISTS_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -500,10 +506,3 @@ ged_exists_core(struct ged *gedp, int argc, const char *argv_orig[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_EXISTS_COMMANDS(X, XID) \
-    X(exists, ged_exists_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_EXISTS_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_exists", 1, GED_EXISTS_COMMANDS)
-

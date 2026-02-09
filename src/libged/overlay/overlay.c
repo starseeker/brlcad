@@ -327,6 +327,12 @@ ged_overlay_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_OVERLAY_COMMANDS(X, XID) \
+    X(overlay, ged_overlay_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_OVERLAY_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_overlay", 1, GED_OVERLAY_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -336,10 +342,3 @@ ged_overlay_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_OVERLAY_COMMANDS(X, XID) \
-    X(overlay, ged_overlay_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_OVERLAY_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_overlay", 1, GED_OVERLAY_COMMANDS)
-

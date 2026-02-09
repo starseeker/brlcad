@@ -174,6 +174,12 @@ ged_rtwizard_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_RTWIZARD_COMMANDS(X, XID) \
+    X(rtwizard, ged_rtwizard_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_RTWIZARD_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_rtwizard", 1, GED_RTWIZARD_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -183,10 +189,3 @@ ged_rtwizard_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_RTWIZARD_COMMANDS(X, XID) \
-    X(rtwizard, ged_rtwizard_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_RTWIZARD_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_rtwizard", 1, GED_RTWIZARD_COMMANDS)
-

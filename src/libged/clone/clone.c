@@ -1022,6 +1022,12 @@ ged_clone_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_CLONE_COMMANDS(X, XID) \
+    X(clone, ged_clone_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_CLONE_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_clone", 1, GED_CLONE_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -1031,10 +1037,3 @@ ged_clone_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_CLONE_COMMANDS(X, XID) \
-    X(clone, ged_clone_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_CLONE_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_clone", 1, GED_CLONE_COMMANDS)
-

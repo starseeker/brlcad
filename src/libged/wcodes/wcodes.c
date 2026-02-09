@@ -181,6 +181,12 @@ ged_wcodes_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_WCODES_COMMANDS(X, XID) \
+    X(wcodes, ged_wcodes_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_WCODES_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_wcodes", 1, GED_WCODES_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -190,10 +196,3 @@ ged_wcodes_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_WCODES_COMMANDS(X, XID) \
-    X(wcodes, ged_wcodes_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_WCODES_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_wcodes", 1, GED_WCODES_COMMANDS)
-

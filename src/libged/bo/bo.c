@@ -241,6 +241,12 @@ ged_bo_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_BO_COMMANDS(X, XID) \
+    X(bo, ged_bo_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_BO_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_bo", 1, GED_BO_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -250,10 +256,3 @@ ged_bo_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_BO_COMMANDS(X, XID) \
-    X(bo, ged_bo_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_BO_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_bo", 1, GED_BO_COMMANDS)
-

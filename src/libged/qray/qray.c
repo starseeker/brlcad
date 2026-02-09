@@ -419,6 +419,12 @@ ged_qray_core(struct ged *gedp,
 
 #include "../include/plugin.h"
 
+#define GED_QRAY_COMMANDS(X, XID) \
+    X(qray, ged_qray_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_QRAY_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_qray", 1, GED_QRAY_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -428,10 +434,3 @@ ged_qray_core(struct ged *gedp,
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_QRAY_COMMANDS(X, XID) \
-    X(qray, ged_qray_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_QRAY_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_qray", 1, GED_QRAY_COMMANDS)
-

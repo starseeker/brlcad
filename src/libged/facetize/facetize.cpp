@@ -405,6 +405,12 @@ ged_facetize_memfree:
 
 #include "../include/plugin.h"
 
+#define GED_FACETIZE_COMMANDS(X, XID) \
+    X(facetize, ged_facetize_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_FACETIZE_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_facetize", 1, GED_FACETIZE_COMMANDS)
+
 // Local Variables:
 // tab-width: 8
 // mode: C++
@@ -413,10 +419,3 @@ ged_facetize_memfree:
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-
-#define GED_FACETIZE_COMMANDS(X, XID) \
-    X(facetize, ged_facetize_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_FACETIZE_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_facetize", 1, GED_FACETIZE_COMMANDS)
-

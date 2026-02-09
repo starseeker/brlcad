@@ -133,6 +133,13 @@ ged_find_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_FIND_COMMANDS(X, XID) \
+    X(dbfind, ged_find_core, GED_CMD_DEFAULT) \
+    X(find, ged_find_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_FIND_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_find", 1, GED_FIND_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -142,11 +149,3 @@ ged_find_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_FIND_COMMANDS(X, XID) \
-    X(dbfind, ged_find_core, GED_CMD_DEFAULT) \
-    X(find, ged_find_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_FIND_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_find", 1, GED_FIND_COMMANDS)
-

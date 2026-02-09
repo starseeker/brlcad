@@ -59,6 +59,13 @@ ged_dbip_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_DBIP_COMMANDS(X, XID) \
+    X(dbip, ged_dbip_core, GED_CMD_DEFAULT) \
+    X(get_dbip, ged_dbip_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_DBIP_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_dbip", 1, GED_DBIP_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -68,11 +75,3 @@ ged_dbip_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_DBIP_COMMANDS(X, XID) \
-    X(dbip, ged_dbip_core, GED_CMD_DEFAULT) \
-    X(get_dbip, ged_dbip_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_DBIP_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_dbip", 1, GED_DBIP_COMMANDS)
-

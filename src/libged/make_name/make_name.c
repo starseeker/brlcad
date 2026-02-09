@@ -100,6 +100,12 @@ ged_make_name_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_MAKE_NAME_COMMANDS(X, XID) \
+    X(make_name, ged_make_name_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_MAKE_NAME_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_make_name", 1, GED_MAKE_NAME_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -109,10 +115,3 @@ ged_make_name_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_MAKE_NAME_COMMANDS(X, XID) \
-    X(make_name, ged_make_name_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_MAKE_NAME_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_make_name", 1, GED_MAKE_NAME_COMMANDS)
-

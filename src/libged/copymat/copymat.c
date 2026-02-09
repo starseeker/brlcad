@@ -160,6 +160,12 @@ wrapup:
 
 #include "../include/plugin.h"
 
+#define GED_COPYMAT_COMMANDS(X, XID) \
+    X(copymat, ged_copymat_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_COPYMAT_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_copymat", 1, GED_COPYMAT_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -169,10 +175,3 @@ wrapup:
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_COPYMAT_COMMANDS(X, XID) \
-    X(copymat, ged_copymat_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_COPYMAT_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_copymat", 1, GED_COPYMAT_COMMANDS)
-

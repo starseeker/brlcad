@@ -80,6 +80,12 @@ ged_set_uplotOutputMode_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_SET_UPLOTOUTPUTMODE_COMMANDS(X, XID) \
+    X(set_uplotOutputMode, ged_set_uplotOutputMode_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_SET_UPLOTOUTPUTMODE_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_set_uplotOutputMode", 1, GED_SET_UPLOTOUTPUTMODE_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -89,10 +95,3 @@ ged_set_uplotOutputMode_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_SET_UPLOTOUTPUTMODE_COMMANDS(X, XID) \
-    X(set_uplotOutputMode, ged_set_uplotOutputMode_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_SET_UPLOTOUTPUTMODE_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_set_uplotOutputMode", 1, GED_SET_UPLOTOUTPUTMODE_COMMANDS)
-

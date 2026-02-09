@@ -223,6 +223,13 @@ ged_solid_report_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_SOLID_REPORT_COMMANDS(X, XID) \
+    X(solid_report, ged_solid_report_core, GED_CMD_DEFAULT) \
+    X(x, ged_solid_report_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_SOLID_REPORT_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_solid_report", 1, GED_SOLID_REPORT_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -232,11 +239,4 @@ ged_solid_report_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_SOLID_REPORT_COMMANDS(X, XID) \
-    X(solid_report, ged_solid_report_core, GED_CMD_DEFAULT) \
-    X(x, ged_solid_report_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_SOLID_REPORT_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_solid_report", 1, GED_SOLID_REPORT_COMMANDS)
 

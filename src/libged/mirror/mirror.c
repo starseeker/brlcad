@@ -215,6 +215,12 @@ ged_mirror_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_MIRROR_COMMANDS(X, XID) \
+    X(mirror, ged_mirror_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_MIRROR_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_mirror", 1, GED_MIRROR_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -224,10 +230,3 @@ ged_mirror_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_MIRROR_COMMANDS(X, XID) \
-    X(mirror, ged_mirror_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_MIRROR_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_mirror", 1, GED_MIRROR_COMMANDS)
-

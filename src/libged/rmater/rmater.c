@@ -163,6 +163,12 @@ ged_rmater_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_RMATER_COMMANDS(X, XID) \
+    X(rmater, ged_rmater_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_RMATER_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_rmater", 1, GED_RMATER_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -172,10 +178,3 @@ ged_rmater_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_RMATER_COMMANDS(X, XID) \
-    X(rmater, ged_rmater_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_RMATER_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_rmater", 1, GED_RMATER_COMMANDS)
-

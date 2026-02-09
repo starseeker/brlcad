@@ -181,6 +181,13 @@ bad:
 
 #include "../include/plugin.h"
 
+#define GED_ILLUM_COMMANDS(X, XID) \
+    X(illum, ged_illum_core, GED_CMD_DEFAULT) \
+    X(labelvert, ged_labelvert_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_ILLUM_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_illum", 1, GED_ILLUM_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -190,11 +197,3 @@ bad:
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_ILLUM_COMMANDS(X, XID) \
-    X(illum, ged_illum_core, GED_CMD_DEFAULT) \
-    X(labelvert, ged_labelvert_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_ILLUM_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_illum", 1, GED_ILLUM_COMMANDS)
-

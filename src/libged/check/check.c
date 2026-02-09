@@ -684,6 +684,12 @@ freemem:
 
 #include "../include/plugin.h"
 
+#define GED_CHECK_COMMANDS(X, XID) \
+    X(check, ged_check_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_CHECK_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_check", 1, GED_CHECK_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -693,10 +699,3 @@ freemem:
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_CHECK_COMMANDS(X, XID) \
-    X(check, ged_check_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_CHECK_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_check", 1, GED_CHECK_COMMANDS)
-

@@ -2492,6 +2492,12 @@ ged_human_core(struct ged *gedp, int ac, const char *av[])
 
 #include "../include/plugin.h"
 
+#define GED_HUMAN_COMMANDS(X, XID) \
+    X(human, ged_human_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_HUMAN_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_human", 1, GED_HUMAN_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -2501,10 +2507,3 @@ ged_human_core(struct ged *gedp, int ac, const char *av[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_HUMAN_COMMANDS(X, XID) \
-    X(human, ged_human_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_HUMAN_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_human", 1, GED_HUMAN_COMMANDS)
-

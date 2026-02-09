@@ -96,6 +96,12 @@ ged_wmater_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_WMATER_COMMANDS(X, XID) \
+    X(wmater, ged_wmater_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_WMATER_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_wmater", 1, GED_WMATER_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -105,10 +111,3 @@ ged_wmater_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_WMATER_COMMANDS(X, XID) \
-    X(wmater, ged_wmater_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_WMATER_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_wmater", 1, GED_WMATER_COMMANDS)
-

@@ -260,6 +260,12 @@ ged_killtree_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_KILLTREE_COMMANDS(X, XID) \
+    X(killtree, ged_killtree_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_KILLTREE_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_killtree", 1, GED_KILLTREE_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -269,10 +275,3 @@ ged_killtree_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_KILLTREE_COMMANDS(X, XID) \
-    X(killtree, ged_killtree_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_KILLTREE_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_killtree", 1, GED_KILLTREE_COMMANDS)
-

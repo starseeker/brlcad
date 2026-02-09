@@ -749,16 +749,6 @@ ged_dm_core(struct ged *gedp, int argc, const char *argv[])
 extern int ged_ert_core(struct ged *gedp, int argc, const char *argv[]);
 extern int ged_screen_grab_core(struct ged *gedp, int argc, const char *argv[]);
 
-/*
- * Local Variables:
- * mode: C
- * tab-width: 8
- * indent-tabs-mode: t
- * c-file-style: "stroustrup"
- * End:
- * ex: shiftwidth=4 tabstop=8
- */
-
 #define GED_DM_COMMANDS(X, XID) \
     X(ert, ged_ert_core, GED_CMD_DEFAULT) \
     X(dm, ged_dm_core, GED_CMD_DEFAULT) \
@@ -768,3 +758,12 @@ extern int ged_screen_grab_core(struct ged *gedp, int argc, const char *argv[]);
 GED_DECLARE_COMMAND_SET(GED_DM_COMMANDS)
 GED_DECLARE_PLUGIN_MANIFEST("libged_dm", 1, GED_DM_COMMANDS)
 
+/*
+ * Local Variables:
+ * mode: C
+ * tab-width: 8
+ * indent-tabs-mode: t
+ * c-file-style: "stroustrup"
+ * End:
+ * ex: shiftwidth=4 tabstop=8
+ */

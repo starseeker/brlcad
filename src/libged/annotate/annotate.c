@@ -169,6 +169,12 @@ ged_annotate_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_ANNOTATE_COMMANDS(X, XID) \
+    X(annotate, ged_annotate_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_ANNOTATE_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_annotate", 1, GED_ANNOTATE_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -178,10 +184,3 @@ ged_annotate_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_ANNOTATE_COMMANDS(X, XID) \
-    X(annotate, ged_annotate_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_ANNOTATE_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_annotate", 1, GED_ANNOTATE_COMMANDS)
-

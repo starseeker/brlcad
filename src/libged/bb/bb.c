@@ -325,6 +325,12 @@ ged_bb_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_BB_COMMANDS(X, XID) \
+    X(bb, ged_bb_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_BB_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_bb", 1, GED_BB_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -334,10 +340,3 @@ ged_bb_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_BB_COMMANDS(X, XID) \
-    X(bb, ged_bb_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_BB_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_bb", 1, GED_BB_COMMANDS)
-

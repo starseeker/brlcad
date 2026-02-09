@@ -54,6 +54,13 @@ ged_db_version_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_VERSION_COMMANDS(X, XID) \
+    X(dbversion, ged_db_version_core, GED_CMD_DEFAULT) \
+    X(version, ged_db_version_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_VERSION_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_version", 1, GED_VERSION_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -63,11 +70,3 @@ ged_db_version_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_VERSION_COMMANDS(X, XID) \
-    X(dbversion, ged_db_version_core, GED_CMD_DEFAULT) \
-    X(version, ged_db_version_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_VERSION_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_version", 1, GED_VERSION_COMMANDS)
-

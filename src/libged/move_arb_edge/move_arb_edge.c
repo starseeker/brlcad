@@ -302,6 +302,13 @@ ged_find_arb_edge_nearest_pnt_core(struct ged *gedp, int argc, const char *argv[
 
 #include "../include/plugin.h"
 
+#define GED_MOVE_ARB_EDGE_COMMANDS(X, XID) \
+    X(move_arb_edge, ged_move_arb_edge_core, GED_CMD_DEFAULT) \
+    X(find_arb_edge, ged_find_arb_edge_nearest_pnt_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_MOVE_ARB_EDGE_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_move_arb_edge", 1, GED_MOVE_ARB_EDGE_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -311,11 +318,3 @@ ged_find_arb_edge_nearest_pnt_core(struct ged *gedp, int argc, const char *argv[
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_MOVE_ARB_EDGE_COMMANDS(X, XID) \
-    X(move_arb_edge, ged_move_arb_edge_core, GED_CMD_DEFAULT) \
-    X(find_arb_edge, ged_find_arb_edge_nearest_pnt_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_MOVE_ARB_EDGE_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_move_arb_edge", 1, GED_MOVE_ARB_EDGE_COMMANDS)
-

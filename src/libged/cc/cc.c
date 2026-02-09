@@ -81,6 +81,12 @@ ged_cc_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_CC_COMMANDS(X, XID) \
+    X(cc, ged_cc_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_CC_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_cc", 1, GED_CC_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -90,10 +96,3 @@ ged_cc_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_CC_COMMANDS(X, XID) \
-    X(cc, ged_cc_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_CC_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_cc", 1, GED_CC_COMMANDS)
-

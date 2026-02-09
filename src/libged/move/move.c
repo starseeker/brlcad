@@ -124,6 +124,13 @@ ged_move_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_MOVE_COMMANDS(X, XID) \
+    X(move, ged_move_core, GED_CMD_DEFAULT) \
+    X(mv, ged_move_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_MOVE_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_move", 1, GED_MOVE_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -133,11 +140,3 @@ ged_move_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_MOVE_COMMANDS(X, XID) \
-    X(move, ged_move_core, GED_CMD_DEFAULT) \
-    X(mv, ged_move_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_MOVE_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_move", 1, GED_MOVE_COMMANDS)
-

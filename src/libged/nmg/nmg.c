@@ -284,16 +284,6 @@ ged_nmg_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-/*
- * Local Variables:
- * mode: C
- * tab-width: 8
- * indent-tabs-mode: t
- * c-file-style: "stroustrup"
- * End:
- * ex: shiftwidth=4 tabstop=8
- */
-
 #define GED_NMG_COMMANDS(X, XID) \
     X(nmg, ged_nmg_core, GED_CMD_DEFAULT) \
     X(labelface, ged_labelface_core, GED_CMD_DEFAULT) \
@@ -310,3 +300,12 @@ ged_nmg_core(struct ged *gedp, int argc, const char *argv[])
 GED_DECLARE_COMMAND_SET(GED_NMG_COMMANDS)
 GED_DECLARE_PLUGIN_MANIFEST("libged_nmg", 1, GED_NMG_COMMANDS)
 
+/*
+ * Local Variables:
+ * mode: C
+ * tab-width: 8
+ * indent-tabs-mode: t
+ * c-file-style: "stroustrup"
+ * End:
+ * ex: shiftwidth=4 tabstop=8
+ */

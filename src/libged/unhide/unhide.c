@@ -110,6 +110,12 @@ ged_unhide_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_UNHIDE_COMMANDS(X, XID) \
+    X(unhide, ged_unhide_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_UNHIDE_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_unhide", 1, GED_UNHIDE_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -119,10 +125,3 @@ ged_unhide_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_UNHIDE_COMMANDS(X, XID) \
-    X(unhide, ged_unhide_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_UNHIDE_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_unhide", 1, GED_UNHIDE_COMMANDS)
-

@@ -274,6 +274,12 @@ ged_pull_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_PULL_COMMANDS(X, XID) \
+    X(pull, ged_pull_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_PULL_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_pull", 1, GED_PULL_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -283,10 +289,3 @@ ged_pull_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_PULL_COMMANDS(X, XID) \
-    X(pull, ged_pull_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_PULL_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_pull", 1, GED_PULL_COMMANDS)
-

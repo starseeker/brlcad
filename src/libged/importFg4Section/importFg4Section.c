@@ -62,6 +62,12 @@ ged_importFg4Section_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_IMPORTFG4SECTION_COMMANDS(X, XID) \
+    X(importFg4Section, ged_importFg4Section_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_IMPORTFG4SECTION_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_importFg4Section", 1, GED_IMPORTFG4SECTION_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -71,10 +77,3 @@ ged_importFg4Section_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_IMPORTFG4SECTION_COMMANDS(X, XID) \
-    X(importFg4Section, ged_importFg4Section_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_IMPORTFG4SECTION_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_importFg4Section", 1, GED_IMPORTFG4SECTION_COMMANDS)
-

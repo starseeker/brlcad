@@ -182,6 +182,12 @@ ged_showmats_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_SHOWMATS_COMMANDS(X, XID) \
+    X(showmats, ged_showmats_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_SHOWMATS_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_showmats", 1, GED_SHOWMATS_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -191,10 +197,3 @@ ged_showmats_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_SHOWMATS_COMMANDS(X, XID) \
-    X(showmats, ged_showmats_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_SHOWMATS_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_showmats", 1, GED_SHOWMATS_COMMANDS)
-

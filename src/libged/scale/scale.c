@@ -68,6 +68,13 @@ ged_scale_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_SCALE_COMMANDS(X, XID) \
+    X(scale, ged_scale_core, GED_CMD_DEFAULT) \
+    X(sca, ged_scale_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_SCALE_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_scale", 1, GED_SCALE_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -77,11 +84,3 @@ ged_scale_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_SCALE_COMMANDS(X, XID) \
-    X(scale, ged_scale_core, GED_CMD_DEFAULT) \
-    X(sca, ged_scale_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_SCALE_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_scale", 1, GED_SCALE_COMMANDS)
-

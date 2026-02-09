@@ -113,6 +113,12 @@ ged_edmater_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_EDMATER_COMMANDS(X, XID) \
+    X(edmater, ged_edmater_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_EDMATER_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_edmater", 1, GED_EDMATER_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -122,10 +128,3 @@ ged_edmater_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_EDMATER_COMMANDS(X, XID) \
-    X(edmater, ged_edmater_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_EDMATER_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_edmater", 1, GED_EDMATER_COMMANDS)
-

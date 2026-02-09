@@ -76,6 +76,12 @@ ged_inside_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_INSIDE_COMMANDS(X, XID) \
+    X(inside, ged_inside_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_INSIDE_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_inside", 1, GED_INSIDE_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -85,10 +91,3 @@ ged_inside_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_INSIDE_COMMANDS(X, XID) \
-    X(inside, ged_inside_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_INSIDE_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_inside", 1, GED_INSIDE_COMMANDS)
-

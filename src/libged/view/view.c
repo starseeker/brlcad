@@ -866,16 +866,6 @@ ged_view_func_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-/*
- * Local Variables:
- * mode: C
- * tab-width: 8
- * indent-tabs-mode: t
- * c-file-style: "stroustrup"
- * End:
- * ex: shiftwidth=4 tabstop=8
- */
-
 #define GED_VIEW_COMMANDS(X, XID) \
     X(ae, ged_aet_core, GED_CMD_DEFAULT) \
     X(aet, ged_aet_core, GED_CMD_DEFAULT) \
@@ -900,3 +890,12 @@ ged_view_func_core(struct ged *gedp, int argc, const char *argv[])
 GED_DECLARE_COMMAND_SET(GED_VIEW_COMMANDS)
 GED_DECLARE_PLUGIN_MANIFEST("libged_view", 1, GED_VIEW_COMMANDS)
 
+/*
+ * Local Variables:
+ * mode: C
+ * tab-width: 8
+ * indent-tabs-mode: t
+ * c-file-style: "stroustrup"
+ * End:
+ * ex: shiftwidth=4 tabstop=8
+ */

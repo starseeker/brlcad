@@ -163,15 +163,6 @@ ged_opendb_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-// Local Variables:
-// tab-width: 8
-// mode: C++
-// c-basic-offset: 4
-// indent-tabs-mode: t
-// c-file-style: "stroustrup"
-// End:
-// ex: shiftwidth=4 tabstop=8
-
 #define GED_OPEN_COMMANDS(X, XID) \
     X(reopen, ged_opendb_core, GED_CMD_DEFAULT) \
     X(opendb, ged_opendb_core, GED_CMD_DEFAULT) \
@@ -180,3 +171,11 @@ ged_opendb_core(struct ged *gedp, int argc, const char *argv[])
 GED_DECLARE_COMMAND_SET(GED_OPEN_COMMANDS)
 GED_DECLARE_PLUGIN_MANIFEST("libged_open", 1, GED_OPEN_COMMANDS)
 
+// Local Variables:
+// tab-width: 8
+// mode: C++
+// c-basic-offset: 4
+// indent-tabs-mode: t
+// c-file-style: "stroustrup"
+// End:
+// ex: shiftwidth=4 tabstop=8

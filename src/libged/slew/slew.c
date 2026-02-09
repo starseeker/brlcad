@@ -100,6 +100,14 @@ ged_slew_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_SLEW_COMMANDS(X, XID) \
+    X(slew, ged_slew_core, GED_CMD_DEFAULT) \
+    X(sv, ged_slew_core, GED_CMD_DEFAULT) \
+    X(vslew, ged_slew_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_SLEW_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_slew", 1, GED_SLEW_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -109,12 +117,3 @@ ged_slew_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_SLEW_COMMANDS(X, XID) \
-    X(slew, ged_slew_core, GED_CMD_DEFAULT) \
-    X(sv, ged_slew_core, GED_CMD_DEFAULT) \
-    X(vslew, ged_slew_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_SLEW_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_slew", 1, GED_SLEW_COMMANDS)
-

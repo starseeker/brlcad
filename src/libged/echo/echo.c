@@ -54,6 +54,12 @@ ged_echo_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_ECHO_COMMANDS(X, XID) \
+    X(echo, ged_echo_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_ECHO_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_echo", 1, GED_ECHO_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -63,10 +69,3 @@ ged_echo_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_ECHO_COMMANDS(X, XID) \
-    X(echo, ged_echo_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_ECHO_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_echo", 1, GED_ECHO_COMMANDS)
-

@@ -344,6 +344,12 @@ do_identitize(struct db_i *dbip, struct rt_comb_internal *UNUSED(comb), union tr
 
 #include "../include/plugin.h"
 
+#define GED_PUSH_COMMANDS(X, XID) \
+    X(push, ged_push_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_PUSH_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_push", 1, GED_PUSH_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -353,10 +359,3 @@ do_identitize(struct db_i *dbip, struct rt_comb_internal *UNUSED(comb), union tr
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_PUSH_COMMANDS(X, XID) \
-    X(push, ged_push_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_PUSH_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_push", 1, GED_PUSH_COMMANDS)
-

@@ -1077,7 +1077,6 @@ ged_graph(struct ged *gedp, int argc, const char *argv[])
 GED_DECLARE_COMMAND_SET(GED_GRAPH_COMMANDS)
 GED_DECLARE_PLUGIN_MANIFEST("libged_graph", 1, GED_GRAPH_COMMANDS)
 
-
 // Local Variables:
 // tab-width: 8
 // mode: C++

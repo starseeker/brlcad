@@ -239,6 +239,12 @@ ged_pix2fb_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_PIX2FB_COMMANDS(X, XID) \
+    X(pix2fb, ged_pix2fb_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_PIX2FB_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_pix2fb", 1, GED_PIX2FB_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -248,10 +254,3 @@ ged_pix2fb_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_PIX2FB_COMMANDS(X, XID) \
-    X(pix2fb, ged_pix2fb_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_PIX2FB_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_pix2fb", 1, GED_PIX2FB_COMMANDS)
-

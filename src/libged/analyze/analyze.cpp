@@ -799,7 +799,6 @@ ged_analyze_core(struct ged *gedp, int argc, const char *argv[])
 GED_DECLARE_COMMAND_SET(GED_ANALYZE_COMMANDS)
 GED_DECLARE_PLUGIN_MANIFEST("libged_analyze", 1, GED_ANALYZE_COMMANDS)
 
-
 // Local Variables:
 // tab-width: 8
 // mode: C++
@@ -808,4 +807,3 @@ GED_DECLARE_PLUGIN_MANIFEST("libged_analyze", 1, GED_ANALYZE_COMMANDS)
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

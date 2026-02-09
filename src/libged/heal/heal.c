@@ -86,6 +86,12 @@ ged_heal_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_HEAL_COMMANDS(X, XID) \
+    X(heal, ged_heal_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_HEAL_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_heal", 1, GED_HEAL_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -95,10 +101,3 @@ ged_heal_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_HEAL_COMMANDS(X, XID) \
-    X(heal, ged_heal_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_HEAL_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_heal", 1, GED_HEAL_COMMANDS)
-

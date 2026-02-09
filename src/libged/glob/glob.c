@@ -240,6 +240,13 @@ ged_glob_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_GLOB_COMMANDS(X, XID) \
+    X(db_glob, ged_glob_core, GED_CMD_DEFAULT) \
+    X(glob, ged_glob_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_GLOB_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_glob", 1, GED_GLOB_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -249,11 +256,3 @@ ged_glob_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_GLOB_COMMANDS(X, XID) \
-    X(db_glob, ged_glob_core, GED_CMD_DEFAULT) \
-    X(glob, ged_glob_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_GLOB_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_glob", 1, GED_GLOB_COMMANDS)
-

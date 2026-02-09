@@ -191,6 +191,12 @@ ged_get_comb_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_GET_COMB_COMMANDS(X, XID) \
+    X(get_comb, ged_get_comb_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_GET_COMB_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_get_comb", 1, GED_GET_COMB_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -200,10 +206,3 @@ ged_get_comb_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_GET_COMB_COMMANDS(X, XID) \
-    X(get_comb, ged_get_comb_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_GET_COMB_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_get_comb", 1, GED_GET_COMB_COMMANDS)
-

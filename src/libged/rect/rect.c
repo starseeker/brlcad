@@ -513,6 +513,12 @@ ged_rect_core(struct ged *gedp,
 
 #include "../include/plugin.h"
 
+#define GED_RECT_COMMANDS(X, XID) \
+    X(rect, ged_rect_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_RECT_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_rect", 1, GED_RECT_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -522,10 +528,3 @@ ged_rect_core(struct ged *gedp,
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_RECT_COMMANDS(X, XID) \
-    X(rect, ged_rect_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_RECT_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_rect", 1, GED_RECT_COMMANDS)
-

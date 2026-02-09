@@ -103,6 +103,12 @@ ged_fbclear_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_FBCLEAR_COMMANDS(X, XID) \
+    X(fbclear, ged_fbclear_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_FBCLEAR_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_fbclear", 1, GED_FBCLEAR_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -112,10 +118,3 @@ ged_fbclear_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_FBCLEAR_COMMANDS(X, XID) \
-    X(fbclear, ged_fbclear_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_FBCLEAR_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_fbclear", 1, GED_FBCLEAR_COMMANDS)
-

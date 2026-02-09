@@ -103,6 +103,12 @@ ged_which_shader_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_WHICH_SHADER_COMMANDS(X, XID) \
+    X(which_shader, ged_which_shader_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_WHICH_SHADER_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_which_shader", 1, GED_WHICH_SHADER_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -112,10 +118,3 @@ ged_which_shader_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_WHICH_SHADER_COMMANDS(X, XID) \
-    X(which_shader, ged_which_shader_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_WHICH_SHADER_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_which_shader", 1, GED_WHICH_SHADER_COMMANDS)
-

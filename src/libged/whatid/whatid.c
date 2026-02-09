@@ -79,6 +79,12 @@ ged_whatid_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_WHATID_COMMANDS(X, XID) \
+    X(whatid, ged_whatid_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_WHATID_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_whatid", 1, GED_WHATID_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -88,10 +94,3 @@ ged_whatid_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_WHATID_COMMANDS(X, XID) \
-    X(whatid, ged_whatid_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_WHATID_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_whatid", 1, GED_WHATID_COMMANDS)
-

@@ -89,6 +89,12 @@ ged_killall_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_KILLALL_COMMANDS(X, XID) \
+    X(killall, ged_killall_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_KILLALL_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_killall", 1, GED_KILLALL_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -98,10 +104,3 @@ ged_killall_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_KILLALL_COMMANDS(X, XID) \
-    X(killall, ged_killall_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_KILLALL_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_killall", 1, GED_KILLALL_COMMANDS)
-

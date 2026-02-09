@@ -2801,6 +2801,12 @@ aborted:
 
 #include "../include/plugin.h"
 
+#define GED_GQA_COMMANDS(X, XID) \
+    X(gqa, ged_gqa_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_GQA_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_gqa", 1, GED_GQA_COMMANDS)
+
 // Local Variables:
 // tab-width: 8
 // mode: C++
@@ -2809,10 +2815,3 @@ aborted:
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-
-#define GED_GQA_COMMANDS(X, XID) \
-    X(gqa, ged_gqa_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_GQA_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_gqa", 1, GED_GQA_COMMANDS)
-

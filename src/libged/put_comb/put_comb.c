@@ -595,6 +595,12 @@ ged_put_comb_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_PUT_COMB_COMMANDS(X, XID) \
+    X(put_comb, ged_put_comb_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_PUT_COMB_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_put_comb", 1, GED_PUT_COMB_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -604,10 +610,3 @@ ged_put_comb_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_PUT_COMB_COMMANDS(X, XID) \
-    X(put_comb, ged_put_comb_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_PUT_COMB_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_put_comb", 1, GED_PUT_COMB_COMMANDS)
-

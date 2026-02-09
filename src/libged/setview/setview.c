@@ -93,6 +93,12 @@ ged_setview_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_SETVIEW_COMMANDS(X, XID) \
+    X(setview, ged_setview_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_SETVIEW_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_setview", 1, GED_SETVIEW_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -102,10 +108,3 @@ ged_setview_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_SETVIEW_COMMANDS(X, XID) \
-    X(setview, ged_setview_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_SETVIEW_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_setview", 1, GED_SETVIEW_COMMANDS)
-

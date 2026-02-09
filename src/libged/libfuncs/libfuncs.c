@@ -145,16 +145,6 @@ ged_mat_scale_about_pnt_core(struct ged *gedp,
 
 #include "../include/plugin.h"
 
-/*
- * Local Variables:
- * mode: C
- * tab-width: 8
- * indent-tabs-mode: t
- * c-file-style: "stroustrup"
- * End:
- * ex: shiftwidth=4 tabstop=8
- */
-
 #define GED_LIBFUNCS_COMMANDS(X, XID) \
     X(mat4x3pnt, ged_mat4x3pnt_core, GED_CMD_DEFAULT) \
     X(mat_ae, ged_mat_ae_core, GED_CMD_DEFAULT) \
@@ -164,3 +154,12 @@ ged_mat_scale_about_pnt_core(struct ged *gedp,
 GED_DECLARE_COMMAND_SET(GED_LIBFUNCS_COMMANDS)
 GED_DECLARE_PLUGIN_MANIFEST("libged_libfuncs", 1, GED_LIBFUNCS_COMMANDS)
 
+/*
+ * Local Variables:
+ * mode: C
+ * tab-width: 8
+ * indent-tabs-mode: t
+ * c-file-style: "stroustrup"
+ * End:
+ * ex: shiftwidth=4 tabstop=8
+ */

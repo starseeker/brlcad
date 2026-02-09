@@ -215,6 +215,12 @@ ged_fracture_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_FRACTURE_COMMANDS(X, XID) \
+    X(fracture, ged_fracture_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_FRACTURE_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_fracture", 1, GED_FRACTURE_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -224,10 +230,3 @@ ged_fracture_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_FRACTURE_COMMANDS(X, XID) \
-    X(fracture, ged_fracture_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_FRACTURE_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_fracture", 1, GED_FRACTURE_COMMANDS)
-

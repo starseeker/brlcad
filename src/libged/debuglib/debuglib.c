@@ -68,6 +68,12 @@ ged_debuglib_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_DEBUGLIB_COMMANDS(X, XID) \
+    X(debuglib, ged_debuglib_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_DEBUGLIB_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_debuglib", 1, GED_DEBUGLIB_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -77,10 +83,3 @@ ged_debuglib_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_DEBUGLIB_COMMANDS(X, XID) \
-    X(debuglib, ged_debuglib_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_DEBUGLIB_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_debuglib", 1, GED_DEBUGLIB_COMMANDS)
-

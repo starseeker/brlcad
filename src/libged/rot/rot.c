@@ -50,6 +50,13 @@ ged_rot_core(struct ged *gedp, int argc, const char *argv[])
 
 extern int ged_rotate_about_core(struct ged *gedp, int argc, const char *argv[]);
 
+#define GED_ROT_COMMANDS(X, XID) \
+    X(rot, ged_rot_core, GED_CMD_DEFAULT) \
+    X(rot_about, ged_rotate_about_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_ROT_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_rot", 1, GED_ROT_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -59,11 +66,3 @@ extern int ged_rotate_about_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_ROT_COMMANDS(X, XID) \
-    X(rot, ged_rot_core, GED_CMD_DEFAULT) \
-    X(rot_about, ged_rotate_about_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_ROT_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_rot", 1, GED_ROT_COMMANDS)
-

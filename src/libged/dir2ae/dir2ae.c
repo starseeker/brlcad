@@ -84,6 +84,12 @@ ged_dir2ae_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_DIR2AE_COMMANDS(X, XID) \
+    X(dir2ae, ged_dir2ae_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_DIR2AE_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_dir2ae", 1, GED_DIR2AE_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -93,10 +99,3 @@ ged_dir2ae_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_DIR2AE_COMMANDS(X, XID) \
-    X(dir2ae, ged_dir2ae_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_DIR2AE_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_dir2ae", 1, GED_DIR2AE_COMMANDS)
-

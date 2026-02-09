@@ -733,15 +733,6 @@ ged_vnirt_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-// Local Variables:
-// tab-width: 8
-// mode: C++
-// c-basic-offset: 4
-// indent-tabs-mode: t
-// c-file-style: "stroustrup"
-// End:
-// ex: shiftwidth=4 tabstop=8 cino=N-s
-
 #define GED_NIRT_COMMANDS(X, XID) \
     X(nirt, ged_nirt_core, GED_CMD_DEFAULT) \
     X(query_ray, ged_nirt_core, GED_CMD_DEFAULT) \
@@ -751,3 +742,11 @@ ged_vnirt_core(struct ged *gedp, int argc, const char *argv[])
 GED_DECLARE_COMMAND_SET(GED_NIRT_COMMANDS)
 GED_DECLARE_PLUGIN_MANIFEST("libged_nirt", 1, GED_NIRT_COMMANDS)
 
+// Local Variables:
+// tab-width: 8
+// mode: C++
+// c-basic-offset: 4
+// indent-tabs-mode: t
+// c-file-style: "stroustrup"
+// End:
+// ex: shiftwidth=4 tabstop=8 cino=N-s

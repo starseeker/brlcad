@@ -61,6 +61,13 @@ ged_group_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_GROUP_COMMANDS(X, XID) \
+    X(g, ged_group_core, GED_CMD_DEFAULT) \
+    X(group, ged_group_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_GROUP_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_group", 1, GED_GROUP_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -70,11 +77,3 @@ ged_group_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_GROUP_COMMANDS(X, XID) \
-    X(g, ged_group_core, GED_CMD_DEFAULT) \
-    X(group, ged_group_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_GROUP_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_group", 1, GED_GROUP_COMMANDS)
-

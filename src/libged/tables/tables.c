@@ -619,16 +619,6 @@ end:
 
 #include "../include/plugin.h"
 
-/*
- * Local Variables:
- * mode: C
- * tab-width: 8
- * indent-tabs-mode: t
- * c-file-style: "stroustrup"
- * End:
- * ex: shiftwidth=4 tabstop=8
- */
-
 #define GED_TABLES_COMMANDS(X, XID) \
     X(idents, ged_tables_core, GED_CMD_DEFAULT) \
     X(regions, ged_tables_core, GED_CMD_DEFAULT) \
@@ -638,3 +628,12 @@ end:
 GED_DECLARE_COMMAND_SET(GED_TABLES_COMMANDS)
 GED_DECLARE_PLUGIN_MANIFEST("libged_tables", 1, GED_TABLES_COMMANDS)
 
+/*
+ * Local Variables:
+ * mode: C
+ * tab-width: 8
+ * indent-tabs-mode: t
+ * c-file-style: "stroustrup"
+ * End:
+ * ex: shiftwidth=4 tabstop=8
+ */

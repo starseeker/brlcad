@@ -38,15 +38,6 @@ ged_quit_core(struct ged *UNUSED(gedp), int UNUSED(argc), const char **UNUSED(ar
 
 #include "../include/plugin.h"
 
-// Local Variables:
-// tab-width: 8
-// mode: C++
-// c-basic-offset: 4
-// indent-tabs-mode: t
-// c-file-style: "stroustrup"
-// End:
-// ex: shiftwidth=4 tabstop=8
-
 #define GED_QUIT_COMMANDS(X, XID) \
     X(exit, ged_quit_core, GED_CMD_DEFAULT) \
     X(q, ged_quit_core, GED_CMD_DEFAULT) \
@@ -55,3 +46,11 @@ ged_quit_core(struct ged *UNUSED(gedp), int UNUSED(argc), const char **UNUSED(ar
 GED_DECLARE_COMMAND_SET(GED_QUIT_COMMANDS)
 GED_DECLARE_PLUGIN_MANIFEST("libged_quit", 1, GED_QUIT_COMMANDS)
 
+// Local Variables:
+// tab-width: 8
+// mode: C++
+// c-basic-offset: 4
+// indent-tabs-mode: t
+// c-file-style: "stroustrup"
+// End:
+// ex: shiftwidth=4 tabstop=8

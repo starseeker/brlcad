@@ -92,6 +92,12 @@ ged_keypoint_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_KEYPOINT_COMMANDS(X, XID) \
+    X(keypoint, ged_keypoint_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_KEYPOINT_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_keypoint", 1, GED_KEYPOINT_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -101,10 +107,3 @@ ged_keypoint_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_KEYPOINT_COMMANDS(X, XID) \
-    X(keypoint, ged_keypoint_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_KEYPOINT_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_keypoint", 1, GED_KEYPOINT_COMMANDS)
-

@@ -104,6 +104,12 @@ ged_cpi_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_CPI_COMMANDS(X, XID) \
+    X(cpi, ged_cpi_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_CPI_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_cpi", 1, GED_CPI_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -113,10 +119,3 @@ ged_cpi_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_CPI_COMMANDS(X, XID) \
-    X(cpi, ged_cpi_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_CPI_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_cpi", 1, GED_CPI_COMMANDS)
-

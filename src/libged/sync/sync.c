@@ -54,6 +54,12 @@ ged_sync_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_SYNC_COMMANDS(X, XID) \
+    X(sync, ged_sync_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_SYNC_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_sync", 1, GED_SYNC_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -63,10 +69,3 @@ ged_sync_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_SYNC_COMMANDS(X, XID) \
-    X(sync, ged_sync_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_SYNC_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_sync", 1, GED_SYNC_COMMANDS)
-

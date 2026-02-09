@@ -3580,6 +3580,12 @@ struct funtab joint_tab[] = {
 
 #include "../include/plugin.h"
 
+#define GED_JOINT_COMMANDS(X, XID) \
+    X(joint, ged_joint_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_JOINT_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_joint", 1, GED_JOINT_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -3589,10 +3595,3 @@ struct funtab joint_tab[] = {
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_JOINT_COMMANDS(X, XID) \
-    X(joint, ged_joint_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_JOINT_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_joint", 1, GED_JOINT_COMMANDS)
-

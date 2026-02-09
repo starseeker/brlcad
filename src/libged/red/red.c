@@ -995,6 +995,12 @@ cleanup:
 
 #include "../include/plugin.h"
 
+#define GED_RED_COMMANDS(X, XID) \
+    X(red, ged_red_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_RED_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_red", 1, GED_RED_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -1004,10 +1010,3 @@ cleanup:
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_RED_COMMANDS(X, XID) \
-    X(red, ged_red_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_RED_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_red", 1, GED_RED_COMMANDS)
-

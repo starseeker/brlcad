@@ -116,6 +116,13 @@ ged_region_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_REGION_COMMANDS(X, XID) \
+    X(r, ged_region_core, GED_CMD_DEFAULT) \
+    X(region, ged_region_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_REGION_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_region", 1, GED_REGION_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -125,11 +132,3 @@ ged_region_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_REGION_COMMANDS(X, XID) \
-    X(r, ged_region_core, GED_CMD_DEFAULT) \
-    X(region, ged_region_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_REGION_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_region", 1, GED_REGION_COMMANDS)
-

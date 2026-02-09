@@ -109,6 +109,12 @@ ged_sphgroup_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_SPHGROUP_COMMANDS(X, XID) \
+    X(sphgroup, ged_sphgroup_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_SPHGROUP_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_sphgroup", 1, GED_SPHGROUP_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -118,10 +124,3 @@ ged_sphgroup_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_SPHGROUP_COMMANDS(X, XID) \
-    X(sphgroup, ged_sphgroup_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_SPHGROUP_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_sphgroup", 1, GED_SPHGROUP_COMMANDS)
-

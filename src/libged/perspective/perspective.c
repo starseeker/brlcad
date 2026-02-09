@@ -79,6 +79,12 @@ ged_perspective_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_PERSPECTIVE_COMMANDS(X, XID) \
+    X(perspective, ged_perspective_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_PERSPECTIVE_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_perspective", 1, GED_PERSPECTIVE_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -88,10 +94,3 @@ ged_perspective_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_PERSPECTIVE_COMMANDS(X, XID) \
-    X(perspective, ged_perspective_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_PERSPECTIVE_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_perspective", 1, GED_PERSPECTIVE_COMMANDS)
-

@@ -94,6 +94,12 @@ ged_log_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_LOG_COMMANDS(X, XID) \
+    X(log, ged_log_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_LOG_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_log", 1, GED_LOG_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -103,10 +109,3 @@ ged_log_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_LOG_COMMANDS(X, XID) \
-    X(log, ged_log_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_LOG_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_log", 1, GED_LOG_COMMANDS)
-

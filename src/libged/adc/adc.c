@@ -711,6 +711,12 @@ ged_calc_adc_dst(struct bview *gvp)
 
 #include "../include/plugin.h"
 
+#define GED_ADC_COMMANDS(X, XID) \
+    X(adc, ged_adc_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_ADC_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_adc", 1, GED_ADC_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -720,10 +726,3 @@ ged_calc_adc_dst(struct bview *gvp)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_ADC_COMMANDS(X, XID) \
-    X(adc, ged_adc_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_ADC_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_adc", 1, GED_ADC_COMMANDS)
-

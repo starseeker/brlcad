@@ -68,6 +68,12 @@ ged_debugnmg_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_DEBUGNMG_COMMANDS(X, XID) \
+    X(debugnmg, ged_debugnmg_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_DEBUGNMG_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_debugnmg", 1, GED_DEBUGNMG_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -77,10 +83,3 @@ ged_debugnmg_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_DEBUGNMG_COMMANDS(X, XID) \
-    X(debugnmg, ged_debugnmg_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_DEBUGNMG_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_debugnmg", 1, GED_DEBUGNMG_COMMANDS)
-

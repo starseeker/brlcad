@@ -3733,6 +3733,12 @@ do_new_update:
 
 #include "../include/plugin.h"
 
+#define GED_TYPEIN_COMMANDS(X, XID) \
+    X(in, ged_in_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_TYPEIN_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_typein", 1, GED_TYPEIN_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -3742,10 +3748,3 @@ do_new_update:
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_TYPEIN_COMMANDS(X, XID) \
-    X(in, ged_in_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_TYPEIN_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_typein", 1, GED_TYPEIN_COMMANDS)
-

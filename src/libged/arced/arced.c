@@ -134,6 +134,12 @@ fail:
 
 #include "../include/plugin.h"
 
+#define GED_ARCED_COMMANDS(X, XID) \
+    X(arced, ged_arced_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_ARCED_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_arced", 1, GED_ARCED_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -143,10 +149,3 @@ fail:
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_ARCED_COMMANDS(X, XID) \
-    X(arced, ged_arced_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_ARCED_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_arced", 1, GED_ARCED_COMMANDS)
-

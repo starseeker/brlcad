@@ -1715,6 +1715,12 @@ ged_mater_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_MATER_COMMANDS(X, XID) \
+    X(mater, ged_mater_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_MATER_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_mater", 1, GED_MATER_COMMANDS)
+
 // Local Variables:
 // tab-width: 8
 // mode: C++
@@ -1723,10 +1729,3 @@ ged_mater_core(struct ged *gedp, int argc, const char *argv[])
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-
-#define GED_MATER_COMMANDS(X, XID) \
-    X(mater, ged_mater_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_MATER_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_mater", 1, GED_MATER_COMMANDS)
-

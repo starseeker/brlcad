@@ -166,6 +166,12 @@ ged_lt_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_LT_COMMANDS(X, XID) \
+    X(lt, ged_lt_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_LT_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_lt", 1, GED_LT_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -175,10 +181,3 @@ ged_lt_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_LT_COMMANDS(X, XID) \
-    X(lt, ged_lt_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_LT_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_lt", 1, GED_LT_COMMANDS)
-

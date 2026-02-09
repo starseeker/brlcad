@@ -176,6 +176,12 @@ ged_prefix_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_PREFIX_COMMANDS(X, XID) \
+    X(prefix, ged_prefix_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_PREFIX_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_prefix", 1, GED_PREFIX_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -185,10 +191,3 @@ ged_prefix_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_PREFIX_COMMANDS(X, XID) \
-    X(prefix, ged_prefix_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_PREFIX_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_prefix", 1, GED_PREFIX_COMMANDS)
-

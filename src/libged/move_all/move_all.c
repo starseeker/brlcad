@@ -334,6 +334,13 @@ ged_move_all_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_MOVE_ALL_COMMANDS(X, XID) \
+    X(move_all, ged_move_all_core, GED_CMD_DEFAULT) \
+    X(mvall, ged_move_all_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_MOVE_ALL_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_move_all", 1, GED_MOVE_ALL_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -343,11 +350,3 @@ ged_move_all_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_MOVE_ALL_COMMANDS(X, XID) \
-    X(move_all, ged_move_all_core, GED_CMD_DEFAULT) \
-    X(mvall, ged_move_all_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_MOVE_ALL_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_move_all", 1, GED_MOVE_ALL_COMMANDS)
-

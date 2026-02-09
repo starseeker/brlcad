@@ -1087,6 +1087,12 @@ bad:
 
 #include "../include/plugin.h"
 
+#define GED_COMBMEM_COMMANDS(X, XID) \
+    X(combmem, ged_combmem_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_COMBMEM_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_combmem", 1, GED_COMBMEM_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -1096,10 +1102,3 @@ bad:
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_COMBMEM_COMMANDS(X, XID) \
-    X(combmem, ged_combmem_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_COMBMEM_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_combmem", 1, GED_COMBMEM_COMMANDS)
-

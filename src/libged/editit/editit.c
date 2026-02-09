@@ -100,6 +100,12 @@ ged_editit_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_EDITIT_COMMANDS(X, XID) \
+    X(editit, ged_editit_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_EDITIT_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_editit", 1, GED_EDITIT_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -109,10 +115,3 @@ ged_editit_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_EDITIT_COMMANDS(X, XID) \
-    X(editit, ged_editit_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_EDITIT_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_editit", 1, GED_EDITIT_COMMANDS)
-

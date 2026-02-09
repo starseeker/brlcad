@@ -444,16 +444,6 @@ ged_pipe_prepend_pnt_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-/*
- * Local Variables:
- * mode: C
- * tab-width: 8
- * indent-tabs-mode: t
- * c-file-style: "stroustrup"
- * End:
- * ex: shiftwidth=4 tabstop=8
- */
-
 #define GED_PIPE_COMMANDS(X, XID) \
     X(find_pipe_pnt, ged_find_pipe_pnt_nearest_pnt_core, GED_CMD_DEFAULT) \
     X(pipe_move_pnt, ged_pipe_move_pnt_core, GED_CMD_DEFAULT) \
@@ -467,3 +457,12 @@ ged_pipe_prepend_pnt_core(struct ged *gedp, int argc, const char *argv[])
 GED_DECLARE_COMMAND_SET(GED_PIPE_COMMANDS)
 GED_DECLARE_PLUGIN_MANIFEST("libged_pipe", 1, GED_PIPE_COMMANDS)
 
+/*
+ * Local Variables:
+ * mode: C
+ * tab-width: 8
+ * indent-tabs-mode: t
+ * c-file-style: "stroustrup"
+ * End:
+ * ex: shiftwidth=4 tabstop=8
+ */

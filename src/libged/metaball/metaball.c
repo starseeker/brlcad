@@ -551,16 +551,6 @@ ged_metaball_move_pnt_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
-/*
- * Local Variables:
- * mode: C
- * tab-width: 8
- * indent-tabs-mode: t
- * c-file-style: "stroustrup"
- * End:
- * ex: shiftwidth=4 tabstop=8
- */
-
 #define GED_METABALL_COMMANDS(X, XID) \
     X(metaball_delete_pnt, ged_metaball_delete_pnt_core, GED_CMD_DEFAULT) \
     X(metaball_move_pnt, ged_metaball_move_pnt_core, GED_CMD_DEFAULT) \
@@ -570,3 +560,12 @@ ged_metaball_move_pnt_core(struct ged *gedp, int argc, const char *argv[])
 GED_DECLARE_COMMAND_SET(GED_METABALL_COMMANDS)
 GED_DECLARE_PLUGIN_MANIFEST("libged_metaball", 1, GED_METABALL_COMMANDS)
 
+/*
+ * Local Variables:
+ * mode: C
+ * tab-width: 8
+ * indent-tabs-mode: t
+ * c-file-style: "stroustrup"
+ * End:
+ * ex: shiftwidth=4 tabstop=8
+ */

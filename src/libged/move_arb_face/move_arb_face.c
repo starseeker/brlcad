@@ -246,6 +246,12 @@ if (face_idx > max_idx) { \
 
 #include "../include/plugin.h"
 
+#define GED_MOVE_ARB_FACE_COMMANDS(X, XID) \
+    X(move_arb_face, ged_move_arb_face_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_MOVE_ARB_FACE_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_move_arb_face", 1, GED_MOVE_ARB_FACE_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -255,10 +261,3 @@ if (face_idx > max_idx) { \
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_MOVE_ARB_FACE_COMMANDS(X, XID) \
-    X(move_arb_face, ged_move_arb_face_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_MOVE_ARB_FACE_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_move_arb_face", 1, GED_MOVE_ARB_FACE_COMMANDS)
-

@@ -152,6 +152,12 @@ ged_rmap_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_RMAP_COMMANDS(X, XID) \
+    X(rmap, ged_rmap_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_RMAP_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_rmap", 1, GED_RMAP_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -161,10 +167,3 @@ ged_rmap_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_RMAP_COMMANDS(X, XID) \
-    X(rmap, ged_rmap_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_RMAP_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_rmap", 1, GED_RMAP_COMMANDS)
-

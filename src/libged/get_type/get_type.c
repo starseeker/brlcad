@@ -213,6 +213,12 @@ ged_get_type_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_GET_TYPE_COMMANDS(X, XID) \
+    X(get_type, ged_get_type_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_GET_TYPE_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_get_type", 1, GED_GET_TYPE_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -222,10 +228,3 @@ ged_get_type_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_GET_TYPE_COMMANDS(X, XID) \
-    X(get_type, ged_get_type_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_GET_TYPE_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_get_type", 1, GED_GET_TYPE_COMMANDS)
-

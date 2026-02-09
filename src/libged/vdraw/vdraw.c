@@ -780,6 +780,12 @@ ged_vdraw_core(struct ged *gedp, int argc, const char *argv[])
 
 #include "../include/plugin.h"
 
+#define GED_VDRAW_COMMANDS(X, XID) \
+    X(vdraw, ged_vdraw_core, GED_CMD_DEFAULT) \
+
+GED_DECLARE_COMMAND_SET(GED_VDRAW_COMMANDS)
+GED_DECLARE_PLUGIN_MANIFEST("libged_vdraw", 1, GED_VDRAW_COMMANDS)
+
 /*
  * Local Variables:
  * mode: C
@@ -789,10 +795,3 @@ ged_vdraw_core(struct ged *gedp, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-
-#define GED_VDRAW_COMMANDS(X, XID) \
-    X(vdraw, ged_vdraw_core, GED_CMD_DEFAULT) \
-
-GED_DECLARE_COMMAND_SET(GED_VDRAW_COMMANDS)
-GED_DECLARE_PLUGIN_MANIFEST("libged_vdraw", 1, GED_VDRAW_COMMANDS)
-
