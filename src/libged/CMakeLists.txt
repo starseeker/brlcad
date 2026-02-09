@@ -28,9 +28,13 @@ endif()
 set(GED_CMD_LIST ${CMAKE_CURRENT_BINARY_DIR}/../ged_cmds.txt)
 file(REMOVE ${GED_CMD_LIST})
 
+# ============================================================================
+#                             static-core mode
+#
 # Dynamic loading of GED commands carries a runtime overhead, so by default we
 # build most (but not all) of the core command set into libged proper via a
 # static registration mechanism.
+# ============================================================================
 option(LIBGED_STATIC_CORE "Statically register most ged commands into libged" ON)
 
 # If static core is enabled, make the compile definition visible so REGISTER_GED_COMMAND works.
@@ -38,25 +42,17 @@ if(LIBGED_STATIC_CORE)
   add_compile_definitions(LIBGED_STATIC_CORE)
 endif()
 
-# ================================================================
-# Accumulation helpers for libged static-core mode
-# ================================================================
-# Define global accumulation properties (if not already defined)
-define_property(GLOBAL PROPERTY GED_COMMAND_STATIC_SRCS BRIEF_DOCS "libged static command sources" FULL_DOCS "")
-define_property(GLOBAL PROPERTY GED_COMMAND_PLUGIN_SRCS BRIEF_DOCS "libged plugin command sources" FULL_DOCS "")
-define_property(GLOBAL PROPERTY GED_COMMAND_ALL_SRCS BRIEF_DOCS "all libged command sources" FULL_DOCS "")
-define_property(GLOBAL PROPERTY LIBGED_ACCUM_INCLUDES BRIEF_DOCS "libged aggregated includes" FULL_DOCS "")
-define_property(GLOBAL PROPERTY LIBGED_ACCUM_SYSTEM_INCLUDES BRIEF_DOCS "libged aggregated system includes" FULL_DOCS "")
-define_property(GLOBAL PROPERTY LIBGED_ACCUM_LIBS BRIEF_DOCS "libged aggregated libs" FULL_DOCS "")
-define_property(GLOBAL PROPERTY LIBGED_ACCUM_DEFS BRIEF_DOCS "libged aggregated defs" FULL_DOCS "")
-define_property(GLOBAL PROPERTY LIBGED_ACCUM_COPTS BRIEF_DOCS "libged aggregated compile options" FULL_DOCS "")
-
 # We'll need to supply find_package results from plugins being
 # built statically to libged itself - use an interface library
 # to collect them.
 add_library(libged_plugin_deps INTERFACE)
 
 
+# Define global accumulation properties (if not already defined)
+define_property(GLOBAL PROPERTY GED_COMMAND_STATIC_SRCS BRIEF_DOCS "libged static command sources" FULL_DOCS "")
+define_property(GLOBAL PROPERTY GED_COMMAND_ALL_SRCS BRIEF_DOCS "all libged command sources" FULL_DOCS "")
+
+# Helper function for collecting info onto properties
 function(_libged_accumulate_global prop)
   set(items ${ARGN})
   if(NOT items)
@@ -101,41 +97,9 @@ function(_libged_accumulate_global prop)
   set_property(GLOBAL PROPERTY ${prop} "${curr}")
 endfunction()
 
-# Sanitize static lib list: remove self target, expand only existing targets or keep raw names.
-function(_libged_sanitize_and_link_libs target libs)
-  if(NOT libs)
-    return()
-  endif()
-  # Remove duplicates
-  list(REMOVE_DUPLICATES libs)
-  # Remove self-link entries (libged, or accidental alias)
-  list(FILTER libs EXCLUDE REGEX "^(libged|${target})$")
-  if(NOT libs)
-    return()
-  endif()
 
-  set(valid_libs "")
-  foreach(L ${libs})
-    if(TARGET ${L})
-      list(APPEND valid_libs ${L})
-    else()
-      # Try to detect imported namespace target missing
-      if("${L}" MATCHES "::")
-        message(WARNING "Static libged: requested target '${L}' not found. Did you run find_package for it before ged_plugin_library? Dropping it.")
-        continue()
-      endif()
-      # Raw library name or path - keep it
-      list(APPEND valid_libs ${L})
-    endif()
-  endforeach()
 
-  if(valid_libs)
-    # Plain signature to match original style and avoid keyword mixing error
-    target_link_libraries(${target} ${valid_libs})
-  endif()
-endfunction()
-
-# ================================================================
+# ============================================================================
 # ged_plugin_library:
 #   Arguments:
 #     <name> <sources...>
@@ -145,7 +109,11 @@ endfunction()
 #     DEFINITIONS <defs...>
 #     COMPILE_OPTIONS <opts...>
 #     [PLUGIN_ONLY] [FORCE_STATIC]
-# ================================================================
+#
+# This is the core function used to define the build logic for a LIBGED plugin
+# - except in extraordinary circumstances, you should always use this function
+# when adding a new plugin to the LIBGED framework.
+# ============================================================================
 function(ged_plugin_library name)
   set(options PLUGIN_ONLY FORCE_STATIC)
   set(oneValueArgs "")
@@ -243,17 +211,21 @@ function(ged_plugin_library name)
 endfunction()
 
 
-# This target is supplied so applications wanting to run libged
-# commands at build time can depend on the plugins being built as well as
-# libged itself (otherwise LIBGED commands might fail due to their plugins not
-# yet having been built.)
+# =========================================================================
+# This target is supplied so applications wanting to run libged commands at
+# build time can depend on the plugins being built as well as libged itself
+# (otherwise LIBGED commands might fail due to their plugins not yet having
+# been built.)
+# =========================================================================
 add_custom_target(ged_plugins ALL DEPENDS ged_plugins_sentinel)
 set_target_properties(ged_plugins PROPERTIES FOLDER "BRL-CAD Plugins")
 
+# =========================================================================
 # In addition to the standard command plugins, there are plugins for the
 # ged_exec subprocess executable, which are run as independent processes
 # to allow them to be terminated by the parent command without bringing
 # down the parent application
+# =========================================================================
 add_custom_command(
   OUTPUT "${CMAKE_BINARY_DIR}/ged_subprocesses.sentinel"
   COMMAND ${CMAKE_COMMAND} -E touch "${CMAKE_BINARY_DIR}/ged_subprocesses.sentinel"
@@ -261,24 +233,50 @@ add_custom_command(
 add_custom_target(ged_subprocesses_sentinel DEPENDS ${CMAKE_BINARY_DIR}/ged_subprocesses.sentinel)
 set_target_properties(ged_subprocesses_sentinel PROPERTIES FOLDER "BRL-CAD Plugins/ged_process")
 
+# This target is supplied so applications wanting to run libged
+# commands at build time can depend on the subprocesses being built as well as
+# libged itself (otherwise LIBGED commands might fail due to their subprocesses not
+# yet having been built.)
+add_custom_target(ged_subprocesses ALL DEPENDS ged_subprocesses_sentinel)
+set_target_properties(ged_subprocesses PROPERTIES FOLDER "BRL-CAD Plugins")
+
+# The subprocess libraries have slightly different handling than standard
+# BRL-CAD libraries or plugins, so we encapsulate that logic here.
 function(ged_subprocess_library name)
-  add_library(${name} ${ARGN})
+  set(oneValueArgs "")
+  set(multiValueArgs INCLUDES SYSTEM_INCLUDES LIBS DEFINITIONS COMPILE_OPTIONS)
+  cmake_parse_arguments(GEDSP "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+  set(subp_sources ${GEDSP_UNPARSED_ARGUMENTS})
+
+  add_library(${name} ${subp_sources})
+  target_compile_definitions(${name} PRIVATE GED_PLUGIN BRLCADBUILD HAVE_CONFIG_H)
   set_target_properties(${name} PROPERTIES PREFIX "")
-  set(dep_includes)
-  foreach(ll ${libslist})
-    if(TARGET ${ll})
-      get_target_property(IDIRS ${ll} INTERFACE_INCLUDE_DIRECTORIES)
-      if(IDIRS)
-        list(APPEND dep_includes ${IDIRS})
-      endif(IDIRS)
-    endif(TARGET ${ll})
-  endforeach(ll ${libslist})
-  brlcad_include_dirs(${name} dep_includes PRIVATE)
+  validate_style(${name} ${subp_sources})
+  plugin_setup(${name} ged_exec)
+
+  if(GEDSP_INCLUDES)
+    brlcad_include_dirs(${name} GEDSP_INCLUDES PRIVATE)
+  endif()
+  if(GEDSP_SYSTEM_INCLUDES)
+    brlcad_include_dirs(${name} GEDSP_SYSTEM_INCLUDES PRIVATE)
+  endif()
+  if(GEDSP_LIBS)
+    target_link_libraries(${name} ${GEDSP_LIBS})
+  endif()
+  if(GEDSP_DEFINITIONS)
+    target_compile_definitions(${name} PRIVATE ${GEDSP_DEFINITIONS})
+  endif()
+  if(GEDSP_COMPILE_OPTIONS)
+    target_compile_options(${name} PRIVATE ${GEDSP_COMPILE_OPTIONS})
+  endif()
+
   add_dependencies(ged_subprocesses_sentinel ${name})
 endfunction(ged_subprocess_library name)
 
-# We need to define a couple of generated filenames here so
-# the libged library will know to include them
+# =========================================================================
+# We need to define a couple of generated filenames here so the libged library
+# will know to include them
+# =========================================================================
 set(GED_HDR_DIR ${PROJECT_BINARY_DIR}/${INCLUDE_DIR}/brlcad/ged)
 file(MAKE_DIRECTORY ${GED_HDR_DIR})
 set(GED_CMD_HDR ${GED_HDR_DIR}/ged_cmds.h)
@@ -287,15 +285,7 @@ set(GED_CMD_SRC ${CMAKE_CURRENT_BINARY_DIR}/ged_cmds.cpp)
 distclean("${GED_CMD_SRC}")
 set(GED_STATIC_REGISTRATION_CPP ${CMAKE_CURRENT_BINARY_DIR}/ged_static_registration.cpp)
 distclean("${GED_STATIC_REGISTRATION_CPP}")
-message("GED_CMD_SRC: ${GED_CMD_SRC}")
-message("GED_STATIC_REGISTRATION_CPP : ${GED_STATIC_REGISTRATION_CPP}")
 
-# This target is supplied so applications wanting to run libged
-# commands at build time can depend on the subprocesses being built as well as
-# libged itself (otherwise LIBGED commands might fail due to their subprocesses not
-# yet having been built.)
-add_custom_target(ged_subprocesses ALL DEPENDS ged_subprocesses_sentinel)
-set_target_properties(ged_subprocesses PROPERTIES FOLDER "BRL-CAD Plugins")
 
 set(
   LIBGED_SOURCES
