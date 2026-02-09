@@ -26,6 +26,10 @@
  * cross-platform symbol visibility, thread-safe command registration, ABI safety,
  * and lifecycle management.
  *
+ * NOTE:  This header is explicitly NOT public libbu API - it is intended to be
+ * internal to BRL-CAD, for reuse in various BRL-CAD libraries.  External
+ * applications should NOT depend on this file when designing their own code.
+ *
  * # Overview
  *
  * The BU plugin system provides:
@@ -316,8 +320,8 @@
  * @code
  * // CMakeLists.txt
  * add_library(myhost SHARED host.cpp)
- * target_compile_definitions(myhost PRIVATE 
- *     BU_PLUGIN_IMPLEMENTATION 
+ * target_compile_definitions(myhost PRIVATE
+ *     BU_PLUGIN_IMPLEMENTATION
  *     BU_PLUGIN_BUILDING_DLL)
  * @endcode
  *
