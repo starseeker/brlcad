@@ -51,6 +51,12 @@ define_property(GLOBAL PROPERTY LIBGED_ACCUM_LIBS BRIEF_DOCS "libged aggregated 
 define_property(GLOBAL PROPERTY LIBGED_ACCUM_DEFS BRIEF_DOCS "libged aggregated defs" FULL_DOCS "")
 define_property(GLOBAL PROPERTY LIBGED_ACCUM_COPTS BRIEF_DOCS "libged aggregated compile options" FULL_DOCS "")
 
+# We'll need to supply find_package results from plugins being
+# built statically to libged itself - use an interface library
+# to collect them.
+add_library(libged_plugin_deps INTERFACE)
+
+
 function(_libged_accumulate_global prop)
   set(items ${ARGN})
   if(NOT items)
@@ -183,20 +189,20 @@ function(ged_plugin_library name)
     target_sources(libged PRIVATE ${plugin_sources})
 
     if(GEDPL_INCLUDES)
-      _libged_accumulate_global(LIBGED_ACCUM_INCLUDES ${GEDPL_INCLUDES})
+      target_include_directories(libged_plugin_deps INTERFACE ${GEDPL_INCLUDES})
     endif()
     if(GEDPL_SYSTEM_INCLUDES)
-      _libged_accumulate_global(LIBGED_ACCUM_SYSTEM_INCLUDES ${GEDPL_SYSTEM_INCLUDES})
+      target_include_directories(libged_plugin_deps SYSTEM INTERFACE ${GEDPL_SYSTEM_INCLUDES})
     endif()
     if(GEDPL_LIBS)
-      # accumulate, self-filter handled later
-      _libged_accumulate_global(LIBGED_ACCUM_LIBS ${GEDPL_LIBS})
+      list(REMOVE_ITEM GEDPL_LIBS libged)
+      target_link_libraries(libged_plugin_deps INTERFACE ${GEDPL_LIBS})
     endif()
     if(GEDPL_DEFINITIONS)
-      _libged_accumulate_global(LIBGED_ACCUM_DEFS ${GEDPL_DEFINITIONS})
+      target_compile_definitions(libged_plugin_deps INTERFACE ${GEDPL_DEFINITIONS})
     endif()
     if(GEDPL_COMPILE_OPTIONS)
-      _libged_accumulate_global(LIBGED_ACCUM_COPTS ${GEDPL_COMPILE_OPTIONS})
+      target_compile_options(libged_plugin_deps INTERFACE ${GEDPL_COMPILE_OPTIONS})
     endif()
 
     # Find package calls will need to be repeated at the parent scope,
@@ -223,27 +229,14 @@ function(ged_plugin_library name)
     if(GEDPL_SYSTEM_INCLUDES)
       brlcad_include_dirs(${name} GEDPL_SYSTEM_INCLUDES PRIVATE)
     endif()
-
+    if(GEDPL_LIBS)
+      target_link_libraries(${name} ${GEDPL_LIBS})
+    endif()
     if(GEDPL_DEFINITIONS)
       target_compile_definitions(${name} PRIVATE ${GEDPL_DEFINITIONS})
     endif()
     if(GEDPL_COMPILE_OPTIONS)
       target_compile_options(${name} PRIVATE ${GEDPL_COMPILE_OPTIONS})
-    endif()
-
-    # Inside the plugin branch of ged_plugin_library, before target_link_libraries:
-    if(NOT DO_STATIC)
-      # Ensure libged is linked for Windows/import-lib correctness and explicitness
-      if(TARGET libged)
-	list(FIND GEDPL_LIBS "libged" _has_libged)
-	if(_has_libged EQUAL -1)
-	  set(GEDPL_LIBS libged ${GEDPL_LIBS})
-	endif()
-      endif()
-    endif()
-
-    if(GEDPL_LIBS)
-      target_link_libraries(${name} ${GEDPL_LIBS})
     endif()
 
   endif()
@@ -365,6 +358,9 @@ set(
 
 brlcad_addlib(libged "${LIBGED_SOURCES}" "${GED_LIBS}" "" "${GED_LOCAL_INCLUDE_DIRS}")
 set_target_properties(libged PROPERTIES VERSION 20.0.1 SOVERSION 20)
+if (LIBGED_STATIC_CORE)
+  target_link_libraries(libged PRIVATE libged_plugin_deps)
+endif()
 
 # This executable is used to launch processes from LIBGED commands that may
 # need to be terminated due to excessive runtime length or infinite looping.
@@ -604,67 +600,6 @@ add_subdirectory(xpush)
 add_subdirectory(zap)
 add_subdirectory(zoom)
 
-# ================================================================
-# Apply accumulated properties to libged (static-core mode only)
-# ================================================================
-if(LIBGED_STATIC_CORE AND TARGET libged)
-
-  # Find package calls from plugins will need to be repeated at the parent scope,
-  # so libged can find the package libraries needed to link correctly with plugin
-  # code included (find_package calls in subdirectories are scoped only in that
-  # subdirectory)
-  message("Repeating libged plugin find_package calls for libged library...")
-  get_property(pkg_calls DIRECTORY PROPERTY BRLCAD_LOCAL_PACKAGE_CALLS)
-  if (pkg_calls)
-    list(REMOVE_DUPLICATES pkg_calls)
-  endif()
-  foreach(c ${pkg_calls})
-    # Undo escaped semicolons
-    string(REPLACE "\\;" "<SEMICOLON>" safe_call "${c}")
-    string(REPLACE "|" ";" safe_call "${safe_call}")
-    string(REPLACE "<SEMICOLON>" ";" safe_call "${safe_call}")
-    separate_arguments(safe_call)
-    # Replay with all original arguments, and add QUIET so we don't
-    # see replays of the same find_package output in the config.
-    brlcad_find_package(${safe_call} QUIET)
-  endforeach()
-  message("Repeating libged plugin find_package calls for libged library... done.")
-
-  foreach(prop LIBGED_ACCUM_INCLUDES LIBGED_ACCUM_SYSTEM_INCLUDES LIBGED_ACCUM_LIBS LIBGED_ACCUM_DEFS LIBGED_ACCUM_COPTS)
-    get_property(val GLOBAL PROPERTY ${prop})
-    if(val)
-      list(REMOVE_DUPLICATES val)
-    endif()
-    set(${prop}_DEDUP "${val}")
-  endforeach()
-
-  # Includes
-  if(LIBGED_ACCUM_INCLUDES_DEDUP)
-    set(_TMP_INCS ${LIBGED_ACCUM_INCLUDES_DEDUP})
-    brlcad_include_dirs(libged _TMP_INCS PRIVATE)
-  endif()
-
-  # System Includes
-  if(LIBGED_ACCUM_SYSTEM_INCLUDES_DEDUP)
-    set(_TMP_SYSINCS ${LIBGED_ACCUM_SYSTEM_INCLUDES_DEDUP})
-    brlcad_include_dirs(libged _TMP_SYSINCS PRIVATE)
-  endif()
-
-  # Compile definitions
-  if(LIBGED_ACCUM_DEFS_DEDUP)
-    target_compile_definitions(libged PRIVATE ${LIBGED_ACCUM_DEFS_DEDUP})
-  endif()
-
-  # Compile options
-  if(LIBGED_ACCUM_COPTS_DEDUP)
-    target_compile_options(libged PRIVATE ${LIBGED_ACCUM_COPTS_DEDUP})
-  endif()
-
-  # Libraries (sanitize before linking)
-  if(LIBGED_ACCUM_LIBS_DEDUP)
-    _libged_sanitize_and_link_libs(libged "${LIBGED_ACCUM_LIBS_DEDUP}")
-  endif()
-endif()
 
 #############################################
 # Plugins defined - now generate the wrappers
