@@ -808,9 +808,20 @@ brlcad_add_test(NAME bu_snooze COMMAND bu_test snooze)
 #
 add_subdirectory(dylib)
 
+#
+#  *********** bu_plugin.h compile test ************
+#
+# This test verifies that bu_plugin.h compiles correctly with
+# BU_PLUGIN_IMPLEMENTATION defined, particularly ensuring that
+# on Windows the implementation doesn't incorrectly get dllimport
+# decorations (which would cause C2491 errors).
+brlcad_addexec(bu_plugin_compile bu_plugin_compile.cpp "libbu;${CMAKE_THREAD_LIBS_INIT}" TEST)
+brlcad_add_test(NAME bu_plugin_compile COMMAND bu_plugin_compile)
+
 cmakefiles(
   CMakeLists.txt
   bu_test.cpp.in
+  bu_plugin_compile.cpp
   dylib/CMakeLists.txt
   dylib/README.txt
   dylib/dylib.c

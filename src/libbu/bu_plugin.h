@@ -316,20 +316,42 @@
  *
  * # Build Configuration
  *
- * Host library (compiles the implementation):
+ * ## Default: Static or Header-Only Implementation
+ *
+ * Host library (compiles the implementation, no DLL export/import):
+ * @code
+ * // CMakeLists.txt
+ * add_library(myhost host.cpp)
+ * target_compile_definitions(myhost PRIVATE BU_PLUGIN_IMPLEMENTATION)
+ * @endcode
+ *
+ * This is the recommended approach for most use cases. Each library that needs
+ * the plugin implementation defines BU_PLUGIN_IMPLEMENTATION in one translation
+ * unit without symbol conflicts.
+ *
+ * ## Optional: Exporting from a Shared Library (Windows DLL)
+ *
+ * If you want to export bu_plugin symbols from a shared library on Windows:
  * @code
  * // CMakeLists.txt
  * add_library(myhost SHARED host.cpp)
  * target_compile_definitions(myhost PRIVATE
  *     BU_PLUGIN_IMPLEMENTATION
- *     BU_PLUGIN_BUILDING_DLL)
+ *     BU_PLUGIN_DLL_EXPORTS)
+ * @endcode
+ *
+ * Client code linking to this DLL would define BU_PLUGIN_DLL_IMPORTS:
+ * @code
+ * add_library(myclient client.cpp)
+ * target_compile_definitions(myclient PRIVATE BU_PLUGIN_DLL_IMPORTS)
+ * target_link_libraries(myclient PRIVATE myhost)
  * @endcode
  *
  * Plugin library (uses the API):
  * @code
  * // CMakeLists.txt
  * add_library(myplugin MODULE plugin.cpp)
- * target_link_libraries(myplugin PRIVATE myhost)
+ * # No special definitions needed - plugins export their manifest with BU_PLUGIN_DECLARE_MANIFEST
  * @endcode
  *
  * # Advanced Features
@@ -356,41 +378,112 @@ extern "C" {
 #endif
 
     /*
-     * Cross-platform symbol visibility macros.
-     * Define BU_PLUGIN_EXPORT for exporting symbols from shared libraries,
-     * and BU_PLUGIN_IMPORT for importing them.
-     * These work without requiring global compiler flags for visibility.
+     * ============================================================================
+     * Cross-platform symbol visibility macros - EXPLICIT OPT-IN POLICY
+     * ============================================================================
+     *
+     * This header provides a complete plugin implementation that is intended to be
+     * reused across multiple BRL-CAD libraries. By default, bu_plugin.h does NOT
+     * apply Windows DLL import/export decorations. This allows libraries to include
+     * the implementation without symbol conflicts.
+     *
+     * # Default Behavior (no explicit opt-in)
+     *
+     * When neither BU_PLUGIN_DLL_EXPORTS nor BU_PLUGIN_DLL_IMPORTS is defined,
+     * BU_PLUGIN_API expands to:
+     *   - Empty on Windows (no __declspec decoration)
+     *   - __attribute__((visibility("default"))) on GCC/Clang (if supported)
+     *   - Empty otherwise
+     *
+     * This default is suitable for:
+     *   - Static library builds
+     *   - Header-only or inline implementation usage
+     *   - Multiple libraries embedding the implementation separately
+     *
+     * # Explicit Opt-In for DLL Export/Import
+     *
+     * To enable Windows DLL symbol export/import decorations, define one of:
+     *
+     *   BU_PLUGIN_DLL_EXPORTS - When building a DLL that exports bu_plugin symbols
+     *   BU_PLUGIN_DLL_IMPORTS - When using a DLL that exports bu_plugin symbols
+     *
+     * Example (exporting from a DLL):
+     *   target_compile_definitions(mylib PRIVATE BU_PLUGIN_DLL_EXPORTS)
+     *
+     * Example (importing from a DLL):
+     *   target_compile_definitions(client PRIVATE BU_PLUGIN_DLL_IMPORTS)
+     *
+     * NOTE: Defining both BU_PLUGIN_DLL_EXPORTS and BU_PLUGIN_DLL_IMPORTS
+     * simultaneously is an error and will trigger a compile-time check.
+     *
+     * # BU_PLUGIN_IMPLEMENTATION
+     *
+     * BU_PLUGIN_IMPLEMENTATION controls whether the inline C++ implementation
+     * section is compiled into the current translation unit. It is independent
+     * of symbol export/import decorations. Define it in exactly one .cpp file
+     * per library that needs the implementation.
+     *
+     * ============================================================================
      */
+
+    /* Ensure mutual exclusivity of EXPORTS and IMPORTS */
+#if defined(BU_PLUGIN_DLL_EXPORTS) && defined(BU_PLUGIN_DLL_IMPORTS)
+#  error "BU_PLUGIN_DLL_EXPORTS and BU_PLUGIN_DLL_IMPORTS cannot both be defined"
+#endif
+
+    /* Internal helpers for actual symbol decoration */
 #if defined(HAVE_WINDOWS_H)
-#  ifdef BU_PLUGIN_BUILDING_DLL
-#    define BU_PLUGIN_EXPORT __declspec(dllexport)
-#  else
-#    define BU_PLUGIN_EXPORT __declspec(dllimport)
-#  endif
-#  define BU_PLUGIN_IMPORT __declspec(dllimport)
-#  define BU_PLUGIN_LOCAL
+#  define BU_PLUGIN_EXPORT_IMPL __declspec(dllexport)
+#  define BU_PLUGIN_IMPORT_IMPL __declspec(dllimport)
+#  define BU_PLUGIN_LOCAL_IMPL
 #else
 #  if (defined(__GNUC__) && __GNUC__ >= 4) || defined(__clang__)
-#    define BU_PLUGIN_EXPORT __attribute__ ((visibility ("default")))
-#    define BU_PLUGIN_IMPORT __attribute__ ((visibility ("default")))
-#    define BU_PLUGIN_LOCAL  __attribute__ ((visibility ("hidden")))
+#    define BU_PLUGIN_EXPORT_IMPL __attribute__ ((visibility ("default")))
+#    define BU_PLUGIN_IMPORT_IMPL __attribute__ ((visibility ("default")))
+#    define BU_PLUGIN_LOCAL_IMPL  __attribute__ ((visibility ("hidden")))
 #  else
-#    define BU_PLUGIN_EXPORT
-#    define BU_PLUGIN_IMPORT
-#    define BU_PLUGIN_LOCAL
+#    define BU_PLUGIN_EXPORT_IMPL
+#    define BU_PLUGIN_IMPORT_IMPL
+#    define BU_PLUGIN_LOCAL_IMPL
 #  endif
 #endif
 
     /*
-     * BU_PLUGIN_API: Use on declarations/definitions that are part of the public plugin API.
-     * When building the host library (BU_PLUGIN_IMPLEMENTATION defined), this exports symbols.
-     * When building a plugin or client code, this imports them.
+     * BU_PLUGIN_API: Primary visibility macro for bu_plugin declarations/definitions.
+     *
+     * Applied to all public bu_plugin functions. The decoration depends on opt-in:
+     *   - BU_PLUGIN_DLL_EXPORTS defined: dllexport (Windows) or visibility default (GCC/Clang)
+     *   - BU_PLUGIN_DLL_IMPORTS defined: dllimport (Windows) or visibility default (GCC/Clang)
+     *   - Neither defined (default): visibility default (GCC/Clang) or empty (Windows)
      */
-#ifdef BU_PLUGIN_IMPLEMENTATION
-#  define BU_PLUGIN_API BU_PLUGIN_EXPORT
+#if defined(BU_PLUGIN_DLL_EXPORTS)
+#  define BU_PLUGIN_API BU_PLUGIN_EXPORT_IMPL
+#elif defined(BU_PLUGIN_DLL_IMPORTS)
+#  define BU_PLUGIN_API BU_PLUGIN_IMPORT_IMPL
 #else
-#  define BU_PLUGIN_API BU_PLUGIN_IMPORT
+    /* Default: no dllimport/dllexport on Windows, visibility default on GCC/Clang */
+#  if defined(HAVE_WINDOWS_H)
+#    define BU_PLUGIN_API
+#  else
+#    if (defined(__GNUC__) && __GNUC__ >= 4) || defined(__clang__)
+#      define BU_PLUGIN_API __attribute__ ((visibility ("default")))
+#    else
+#      define BU_PLUGIN_API
+#    endif
+#  endif
 #endif
+
+    /*
+     * BU_PLUGIN_EXPORT: Legacy macro for plugin manifest export.
+     * Plugins use BU_PLUGIN_DECLARE_MANIFEST which needs dllexport on Windows.
+     * This always exports regardless of BU_PLUGIN_API policy.
+     */
+#define BU_PLUGIN_EXPORT BU_PLUGIN_EXPORT_IMPL
+
+    /*
+     * BU_PLUGIN_LOCAL: For internal symbols (hidden visibility when supported).
+     */
+#define BU_PLUGIN_LOCAL BU_PLUGIN_LOCAL_IMPL
 
     /*
      * Log levels for the logger callback.
