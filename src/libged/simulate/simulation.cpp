@@ -264,7 +264,7 @@ public:
     bool usesRoiProxy() const { return m_roi_collision_shape != NULL; }
 
     // Get the ROI collision shape (returns NULL if not using ROI)
-    RtRoiCollisionShape *getRoiCollisionShape() {
+    RtRoiCollisionShape *getRoiCollisionShape() const {
 	return m_roi_collision_shape;
     }
 
@@ -488,8 +488,29 @@ Simulation::Simulation(db_i &db, const db_full_path &path) :
     m_world.setDebugDrawer(&m_debug_draw);
     m_world.setGravity(parameters.m_gravity);
 
+    // Register collision algorithms for standard RtCollisionShape
     m_collision_dispatcher.registerCollisionCreateFunc(
 	RtCollisionShape::RT_COLLISION_SHAPE_TYPE,
+	RtCollisionShape::RT_COLLISION_SHAPE_TYPE,
+	new RtCollisionAlgorithm::CreateFunc(m_rt_instance, parameters.m_grid_radius,
+					    *m_world.getDebugDrawer()));
+
+    // Register collision algorithms for RtRoiCollisionShape
+    // ROI shapes need custom collision algorithm with both other ROI shapes and regular shapes
+    m_collision_dispatcher.registerCollisionCreateFunc(
+	RtRoiCollisionShape::RT_ROI_COLLISION_SHAPE_TYPE,
+	RtRoiCollisionShape::RT_ROI_COLLISION_SHAPE_TYPE,
+	new RtCollisionAlgorithm::CreateFunc(m_rt_instance, parameters.m_grid_radius,
+					    *m_world.getDebugDrawer()));
+
+    m_collision_dispatcher.registerCollisionCreateFunc(
+	RtCollisionShape::RT_COLLISION_SHAPE_TYPE,
+	RtRoiCollisionShape::RT_ROI_COLLISION_SHAPE_TYPE,
+	new RtCollisionAlgorithm::CreateFunc(m_rt_instance, parameters.m_grid_radius,
+					    *m_world.getDebugDrawer()));
+
+    m_collision_dispatcher.registerCollisionCreateFunc(
+	RtRoiCollisionShape::RT_ROI_COLLISION_SHAPE_TYPE,
 	RtCollisionShape::RT_COLLISION_SHAPE_TYPE,
 	new RtCollisionAlgorithm::CreateFunc(m_rt_instance, parameters.m_grid_radius,
 					    *m_world.getDebugDrawer()));
