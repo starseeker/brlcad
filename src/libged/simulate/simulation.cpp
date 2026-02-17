@@ -339,7 +339,7 @@ Simulation::Region::get_region(db_i &db, const db_full_path &path,
 			roi_proxy = false;
 		    } else {
 			throw InvalidSimulationError(error_at(std::string() + "invalid roi_proxy value \"" + 
-							      value + "\" (expected 0/1 or true/false)", path));
+							      value + "\" (expected \"0\", \"1\", \"true\", or \"false\")", path));
 		    }
 		} else
 		    throw InvalidSimulationError(error_at(std::string() + "invalid attribute '" +
@@ -433,6 +433,7 @@ Simulation::Region::Region(db_i &db, const db_full_path &path,
     btCollisionShape *shape = NULL;
 
     // Create appropriate collision shape based on mass and roi_proxy settings
+    // Exactly one of m_collision_shape or m_roi_collision_shape will be non-NULL
     if (mass == 0.0 && roi_proxy) {
 	// Static body with ROI proxy enabled
 	m_roi_collision_shape = new RtRoiCollisionShape(aabb.first, aabb.second,
@@ -472,6 +473,7 @@ Simulation::Region::~Region()
     m_world.removeRigidBody(&m_rigid_body);
 
     // Clean up collision shapes
+    // Only one of these is non-NULL; deleting NULL is safe
     delete m_collision_shape;
     delete m_roi_collision_shape;
 }

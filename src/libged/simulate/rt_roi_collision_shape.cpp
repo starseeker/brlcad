@@ -130,7 +130,7 @@ RtRoiCollisionShape::calculateLocalInertia(const btScalar mass,
 					   btVector3 &dest_inertia) const
 {
     if (mass < 0.0)
-	bu_bomb("invalid argument");
+	bu_bomb("mass must be non-negative");
 
     // Static bodies (mass=0) don't need inertia calculation,
     // but we delegate to the box shape for consistency
@@ -157,7 +157,7 @@ RtRoiCollisionShape::setLocalScaling(const btVector3 &local_scaling)
 {
     for (std::size_t i = 0; i < 3; ++i)
 	if (local_scaling[i] < 0.0)
-	    bu_bomb("invalid argument");
+	    bu_bomb("local_scaling components must be non-negative");
 
     m_box_shape->setLocalScaling(local_scaling);
 }
@@ -167,7 +167,7 @@ void
 RtRoiCollisionShape::setMargin(const btScalar collision_margin)
 {
     if (collision_margin < 0.0)
-	bu_bomb("invalid argument");
+	bu_bomb("collision_margin must be non-negative");
 
     m_box_shape->setMargin(collision_margin);
 }
