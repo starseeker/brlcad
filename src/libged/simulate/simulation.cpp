@@ -33,6 +33,7 @@
 #include "simulation.hpp"
 #include "rt_collision_algorithm.hpp"
 #include "rt_collision_shape.hpp"
+#include "rt_roi_collision_shape.hpp"
 #include "rt_motion_state.hpp"
 #include "utility.hpp"
 
@@ -255,17 +256,31 @@ public:
     static std::vector<const Region *> get_regions(db_i &db,
 						   const db_full_path &path, btDiscreteDynamicsWorld &world);
 
+    // Get the rigid body for ROI updates
+    btRigidBody *getRigidBody() { return &m_rigid_body; }
+    const btRigidBody *getRigidBody() const { return &m_rigid_body; }
+
+    // Check if this region uses ROI proxy
+    bool usesRoiProxy() const { return m_roi_collision_shape != NULL; }
+
+    // Get the ROI collision shape (returns NULL if not using ROI)
+    RtRoiCollisionShape *getRoiCollisionShape() {
+	return m_roi_collision_shape;
+    }
+
 
 private:
     explicit Region(db_i &db, const db_full_path &path,
 		    btDiscreteDynamicsWorld &world, const std::pair<btVector3, btVector3> &aabb,
 		    const btVector3 &center_of_mass, btScalar mass,
-		    const btVector3 &linear_velocity, const btVector3 &angular_velocity);
+		    const btVector3 &linear_velocity, const btVector3 &angular_velocity,
+		    bool roi_proxy);
 
     TemporaryRegionHandle m_region_handle;
     btDiscreteDynamicsWorld &m_world;
     RtMotionState m_motion_state;
-    RtCollisionShape m_collision_shape;
+    RtCollisionShape *m_collision_shape;
+    RtRoiCollisionShape *m_roi_collision_shape;
     btRigidBody m_rigid_body;
 };
 
@@ -280,6 +295,8 @@ Simulation::Region::get_region(db_i &db, const db_full_path &path,
     btScalar mass = 1.0;
     btVector3 linear_velocity(0.0, 0.0, 0.0);
     btVector3 angular_velocity(0.0, 0.0, 0.0);
+    bool roi_proxy_specified = false;
+    bool roi_proxy = false;
     {
 	bu_attribute_value_set avs;
 	BU_AVS_INIT(&avs);
@@ -305,14 +322,29 @@ Simulation::Region::get_region(db_i &db, const db_full_path &path,
 		    linear_velocity = deserialize_vector(value);
 		} else if (!bu_strcmp(name, "angular_velocity")) {
 		    angular_velocity = deserialize_vector(value);
+		} else if (!bu_strcmp(name, "roi_proxy")) {
+		    // Parse roi_proxy attribute: accept 0/1, true/false
+		    roi_proxy_specified = true;
+		    if (!bu_strcmp(value, "1") || !bu_strcmp(value, "true")) {
+			roi_proxy = true;
+		    } else if (!bu_strcmp(value, "0") || !bu_strcmp(value, "false")) {
+			roi_proxy = false;
+		    } else {
+			throw InvalidSimulationError(error_at("invalid roi_proxy value (expected 0/1 or true/false)", path));
+		    }
 		} else
 		    throw InvalidSimulationError(error_at(std::string() + "invalid attribute '" +
 							  avs.avp[i].name + "'", path));
 	    }
     }
 
+    // Default: enable ROI proxy for static bodies (mass == 0) unless explicitly disabled
+    if (!roi_proxy_specified && mass == 0.0) {
+	roi_proxy = true;
+    }
+
     return new Region(db, path, world, get_aabb(db, path), get_center_of_mass(db,
-									      path), mass, linear_velocity, angular_velocity);
+									      path), mass, linear_velocity, angular_velocity, roi_proxy);
 }
 
 
@@ -380,16 +412,45 @@ Simulation::Region::get_regions(db_i &db, const db_full_path &path,
 Simulation::Region::Region(db_i &db, const db_full_path &path,
 			   btDiscreteDynamicsWorld &world, const std::pair<btVector3, btVector3> &aabb,
 			   const btVector3 &center_of_mass, const btScalar mass,
-			   const btVector3 &linear_velocity, const btVector3 &angular_velocity) :
+			   const btVector3 &linear_velocity, const btVector3 &angular_velocity,
+			   bool roi_proxy) :
     m_region_handle(db, path),
     m_world(world),
     m_motion_state(db, path, center_of_mass),
-    m_collision_shape(aabb.second - aabb.first,
-		      (aabb.first + aabb.second) / 2.0 - center_of_mass,
-		      DB_FULL_PATH_CUR_DIR(&path)->d_namep),
-    m_rigid_body(get_rigid_body_construction_info(m_motion_state, m_collision_shape,
-						  db, mass))
+    m_collision_shape(NULL),
+    m_roi_collision_shape(NULL),
+    m_rigid_body(mass, &m_motion_state, NULL, btVector3(0.0, 0.0, 0.0))
 {
+    btCollisionShape *shape = NULL;
+
+    // Create appropriate collision shape based on mass and roi_proxy settings
+    if (mass == 0.0 && roi_proxy) {
+	// Static body with ROI proxy enabled
+	m_roi_collision_shape = new RtRoiCollisionShape(aabb.first, aabb.second,
+							DB_FULL_PATH_CUR_DIR(&path)->d_namep);
+	shape = m_roi_collision_shape;
+
+	// Set initial transform to ROI center (starts at global AABB center)
+	btVector3 roi_center = (aabb.first + aabb.second) / 2.0;
+	btTransform initial_transform;
+	initial_transform.setIdentity();
+	initial_transform.setOrigin(roi_center);
+	m_rigid_body.setWorldTransform(initial_transform);
+    } else {
+	// Dynamic body or static body with ROI disabled - use standard collision shape
+	m_collision_shape = new RtCollisionShape(aabb.second - aabb.first,
+						 (aabb.first + aabb.second) / 2.0 - center_of_mass,
+						 DB_FULL_PATH_CUR_DIR(&path)->d_namep);
+	shape = m_collision_shape;
+    }
+
+    // Set the collision shape and calculate inertia
+    m_rigid_body.setCollisionShape(shape);
+
+    btVector3 inertia(0.0, 0.0, 0.0);
+    shape->calculateLocalInertia(mass, inertia);
+    m_rigid_body.setMassProps(mass, inertia);
+
     m_world.addRigidBody(&m_rigid_body);
 
     m_rigid_body.setLinearVelocity(linear_velocity);
@@ -400,6 +461,10 @@ Simulation::Region::Region(db_i &db, const db_full_path &path,
 Simulation::Region::~Region()
 {
     m_world.removeRigidBody(&m_rigid_body);
+
+    // Clean up collision shapes
+    delete m_collision_shape;
+    delete m_roi_collision_shape;
 }
 
 
@@ -440,6 +505,153 @@ Simulation::~Simulation()
 
 
 void
+Simulation::updateRoiProxies(const fastf_t seconds)
+{
+    // ROI update constants
+    const btScalar MAX_PREDICTION_TIME = 0.5; // Maximum time horizon for prediction
+    const btScalar ROI_PADDING = 0.5; // Padding around dynamic bodies in meters
+    const btScalar MIN_ROI_SIZE = 0.2; // Minimum ROI size in meters
+
+    // Clamp prediction time to reasonable bounds
+    const btScalar dt_predict = btMin(seconds, MAX_PREDICTION_TIME);
+
+    // Collect dynamic bodies and their swept AABBs
+    std::vector<std::pair<btVector3, btVector3> > dynamic_swept_aabbs;
+
+    for (std::vector<const Region *>::const_iterator it = m_regions.begin();
+	 it != m_regions.end(); ++it) {
+	const Region *region = *it;
+	btRigidBody *body = const_cast<btRigidBody *>(region->getRigidBody());
+
+	// Skip static bodies
+	if (body->getMass() == 0.0)
+	    continue;
+
+	// Get current AABB
+	btVector3 current_min, current_max;
+	body->getCollisionShape()->getAabb(body->getWorldTransform(), current_min, current_max);
+
+	// Predict future position based on linear velocity
+	btVector3 velocity = body->getLinearVelocity();
+	btVector3 displacement = velocity * dt_predict;
+
+	// Compute swept AABB (union of current and predicted)
+	btVector3 predicted_origin = body->getWorldTransform().getOrigin() + displacement;
+	btTransform predicted_transform = body->getWorldTransform();
+	predicted_transform.setOrigin(predicted_origin);
+
+	btVector3 predicted_min, predicted_max;
+	body->getCollisionShape()->getAabb(predicted_transform, predicted_min, predicted_max);
+
+	// Union of current and predicted AABBs
+	btVector3 swept_min, swept_max;
+	for (int i = 0; i < 3; ++i) {
+	    swept_min[i] = btMin(current_min[i], predicted_min[i]);
+	    swept_max[i] = btMax(current_max[i], predicted_max[i]);
+	}
+
+	// Add padding for rotation and numerical safety
+	btVector3 padding_vec(ROI_PADDING, ROI_PADDING, ROI_PADDING);
+	swept_min -= padding_vec;
+	swept_max += padding_vec;
+
+	dynamic_swept_aabbs.push_back(std::make_pair(swept_min, swept_max));
+    }
+
+    // Update ROI for each static body with ROI proxy enabled
+    for (std::vector<const Region *>::const_iterator it = m_regions.begin();
+	 it != m_regions.end(); ++it) {
+	Region *region = const_cast<Region *>(*it);
+
+	if (!region->usesRoiProxy())
+	    continue;
+
+	RtRoiCollisionShape *roi_shape = region->getRoiCollisionShape();
+	if (!roi_shape)
+	    continue;
+
+	btRigidBody *static_body = region->getRigidBody();
+	btVector3 global_min = roi_shape->getGlobalMin();
+	btVector3 global_max = roi_shape->getGlobalMax();
+
+	// Find nearby dynamic bodies and compute union of their swept AABBs
+	bool found_nearby = false;
+	btVector3 roi_min = global_max; // Start with invalid bounds
+	btVector3 roi_max = global_min;
+
+	for (std::size_t i = 0; i < dynamic_swept_aabbs.size(); ++i) {
+	    const btVector3 &swept_min = dynamic_swept_aabbs[i].first;
+	    const btVector3 &swept_max = dynamic_swept_aabbs[i].second;
+
+	    // Check if swept AABB overlaps with global AABB
+	    bool overlaps = true;
+	    for (int j = 0; j < 3; ++j) {
+		if (swept_max[j] < global_min[j] || swept_min[j] > global_max[j]) {
+		    overlaps = false;
+		    break;
+		}
+	    }
+
+	    if (overlaps) {
+		if (!found_nearby) {
+		    roi_min = swept_min;
+		    roi_max = swept_max;
+		    found_nearby = true;
+		} else {
+		    // Union with existing ROI
+		    for (int j = 0; j < 3; ++j) {
+			roi_min[j] = btMin(roi_min[j], swept_min[j]);
+			roi_max[j] = btMax(roi_max[j], swept_max[j]);
+		    }
+		}
+	    }
+	}
+
+	// If no nearby dynamic bodies, keep previous ROI or use a minimal ROI at center
+	if (!found_nearby) {
+	    btVector3 current_roi_min = roi_shape->getRoiMin();
+	    btVector3 current_roi_max = roi_shape->getRoiMax();
+	    btVector3 current_center = (current_roi_min + current_roi_max) / 2.0;
+
+	    btVector3 half_min_size(MIN_ROI_SIZE / 2.0, MIN_ROI_SIZE / 2.0, MIN_ROI_SIZE / 2.0);
+	    roi_min = current_center - half_min_size;
+	    roi_max = current_center + half_min_size;
+	}
+
+	// Store previous ROI for comparison
+	btVector3 prev_roi_min = roi_shape->getRoiMin();
+	btVector3 prev_roi_max = roi_shape->getRoiMax();
+
+	// Update ROI (setRoiAabb handles clamping and minimum size enforcement)
+	roi_shape->setRoiAabb(roi_min, roi_max);
+
+	// Update the rigid body's transform to the new ROI center
+	btVector3 new_roi_center = (roi_shape->getRoiMin() + roi_shape->getRoiMax()) / 2.0;
+	btTransform new_transform;
+	new_transform.setIdentity();
+	new_transform.setOrigin(new_roi_center);
+	static_body->setWorldTransform(new_transform);
+
+	// Check if ROI changed significantly (to avoid unnecessary updates)
+	bool roi_changed = false;
+	const btScalar CHANGE_THRESHOLD = 0.01; // 1cm threshold
+	for (int i = 0; i < 3; ++i) {
+	    if (btFabs(prev_roi_min[i] - roi_shape->getRoiMin()[i]) > CHANGE_THRESHOLD ||
+		btFabs(prev_roi_max[i] - roi_shape->getRoiMax()[i]) > CHANGE_THRESHOLD) {
+		roi_changed = true;
+		break;
+	    }
+	}
+
+	// Update broadphase AABB if ROI changed
+	if (roi_changed) {
+	    m_world.updateSingleAabb(static_body);
+	}
+    }
+}
+
+
+void
 Simulation::step(const fastf_t seconds, const DebugMode debug_mode)
 {
     const btScalar fixed_time_step = 1.0 / 60.0;
@@ -463,6 +675,9 @@ Simulation::step(const fastf_t seconds, const DebugMode debug_mode)
     if (debug_mode & debug_ray)
 	m_world.getDebugDrawer()->setDebugMode(m_world.getDebugDrawer()->getDebugMode()
 					      | btIDebugDraw::DBG_DrawFrames);
+
+    // Update ROI proxies for static bodies before stepping simulation
+    updateRoiProxies(seconds);
 
     m_world.stepSimulation(seconds, max_substeps, fixed_time_step);
     m_world.debugDrawWorld();

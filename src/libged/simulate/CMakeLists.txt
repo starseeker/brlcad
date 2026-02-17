@@ -39,6 +39,7 @@ set(
   rt_debug_draw.cpp
   rt_instance.cpp
   rt_motion_state.cpp
+  rt_roi_collision_shape.cpp
   simulation.cpp
   utility.cpp
 )
@@ -61,6 +62,7 @@ cmakefiles(
   rt_debug_draw.hpp
   rt_instance.hpp
   rt_motion_state.hpp
+  rt_roi_collision_shape.hpp
   simulation.hpp
   tests/CMakeLists.txt
   tests/simulate_test.cpp

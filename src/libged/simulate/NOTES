@@ -46,3 +46,90 @@ instead, the center of objects' axis-aligned bounding boxes are used. It may
 be best to provide an API within libanalyze for evaluating the center of mass
 and moment of inertia of arbitrary geometry. In most cases the moment
 of inertia of an object can be approximated by that of its bounding box.
+
+## Region-of-Interest (ROI) Proxy for Static Bodies ##
+
+The simulate subsystem now supports an optional Region-of-Interest (ROI) proxy
+feature for static bodies (objects with `simulate::mass=0`). This feature
+addresses a known limitation where very small dynamic objects interacting with
+very large static objects (e.g., a small solid dropped on huge terrain) can
+exhibit poor broadphase performance in Bullet.
+
+### How It Works ###
+
+Instead of using the full global AABB of a static object for broadphase collision
+detection, the ROI proxy maintains a smaller, moving AABB that tracks nearby
+dynamic bodies. Each simulation step:
+
+1. Dynamic bodies' positions are predicted based on their velocities over a short
+   time horizon (default: 0.5 seconds or the step duration, whichever is smaller).
+
+2. Swept AABBs are computed for each dynamic body (union of current and predicted
+   positions, plus padding for rotation).
+
+3. For each static body with ROI enabled, the ROI is updated to encompass all
+   dynamic bodies' swept AABBs that overlap the static body's global AABB.
+
+4. If no dynamic bodies are nearby, the ROI shrinks to a minimal size around
+   the static body's current position.
+
+5. The rigid body's world transform is updated to position the ROI box at the
+   new ROI center, and Bullet's broadphase is notified via `updateSingleAabb()`.
+
+### Configuration ###
+
+**Default Behavior:**
+- ROI proxy is **enabled by default** for all static bodies (`simulate::mass=0`).
+- Dynamic bodies (`simulate::mass>0`) always use standard collision shapes.
+
+**Opt-Out:**
+To disable ROI proxy for a specific static object, set the attribute:
+```
+simulate::roi_proxy = 0
+```
+or
+```
+simulate::roi_proxy = false
+```
+
+To explicitly enable (though this is the default for static bodies):
+```
+simulate::roi_proxy = 1
+```
+or
+```
+simulate::roi_proxy = true
+```
+
+### Tunable Constants ###
+
+The following constants can be adjusted in `simulation.cpp` (in the
+`updateRoiProxies()` function):
+
+- `MAX_PREDICTION_TIME` (default: 0.5 seconds) - Maximum time horizon for
+  predicting dynamic body positions.
+
+- `ROI_PADDING` (default: 0.5 meters) - Additional padding around dynamic
+  bodies' swept AABBs to account for rotation and numerical safety.
+
+- `MIN_ROI_SIZE` (default: 0.2 meters) - Minimum ROI extent to prevent
+  degenerate collision shapes when no dynamic bodies are nearby.
+
+- `CHANGE_THRESHOLD` (default: 0.01 meters) - Minimum ROI change required
+  to trigger a broadphase update, avoiding unnecessary updates for tiny changes.
+
+### Implementation Notes ###
+
+- The `RtRoiCollisionShape` class (in `rt_roi_collision_shape.hpp/cpp`) extends
+  `btCollisionShape` and internally uses a `btBoxShape` representing the current
+  ROI extents.
+
+- The rigid body's world transform origin is set to the ROI center (not the
+  object's center of mass), so the transform moves as the ROI updates.
+
+- ROI bounds are clamped to the object's global AABB and enforce minimum extents
+  to prevent collision shape degeneration.
+
+- For static bodies with ROI disabled, the standard `RtCollisionShape` is used,
+  maintaining backward compatibility.
+

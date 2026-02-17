@@ -60,6 +60,8 @@ public:
 private:
     class Region;
 
+    void updateRoiProxies(fastf_t seconds);
+
     RtDebugDraw m_debug_draw;
     btDbvtBroadphase m_broadphase;
     btDefaultCollisionConfiguration m_collision_config;
