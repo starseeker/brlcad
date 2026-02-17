@@ -103,19 +103,19 @@ simulate::roi_proxy = true
 
 ### Tunable Constants ###
 
-The following constants can be adjusted in `simulation.cpp` (in the
-`updateRoiProxies()` function):
+The following constants can be adjusted in `simulation.cpp` / `simulation.hpp`
+(defined as static const members of the Simulation class):
 
-- `MAX_PREDICTION_TIME` (default: 0.5 seconds) - Maximum time horizon for
+- `ROI_MAX_PREDICTION_TIME` (default: 0.5 seconds) - Maximum time horizon for
   predicting dynamic body positions.
 
 - `ROI_PADDING` (default: 0.5 meters) - Additional padding around dynamic
   bodies' swept AABBs to account for rotation and numerical safety.
 
-- `MIN_ROI_SIZE` (default: 0.2 meters) - Minimum ROI extent to prevent
+- `ROI_MIN_SIZE` (default: 0.2 meters) - Minimum ROI extent to prevent
   degenerate collision shapes when no dynamic bodies are nearby.
 
-- `CHANGE_THRESHOLD` (default: 0.01 meters) - Minimum ROI change required
+- `ROI_CHANGE_THRESHOLD` (default: 0.01 meters) - Minimum ROI change required
   to trigger a broadphase update, avoiding unnecessary updates for tiny changes.
 
 ### Implementation Notes ###
