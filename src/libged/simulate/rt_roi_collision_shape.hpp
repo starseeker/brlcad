@@ -56,6 +56,8 @@ public:
 				 const btVector3 &global_aabb_max,
 				 const std::string &name);
 
+    virtual ~RtRoiCollisionShape();
+
     virtual const char *getName() const;
     virtual void getAabb(const btTransform &transform, btVector3 &dest_aabb_min,
 			 btVector3 &dest_aabb_max) const;
@@ -87,7 +89,7 @@ private:
     const std::string m_name;
     btVector3 m_roi_min;
     btVector3 m_roi_max;
-    btBoxShape m_box_shape;
+    btBoxShape *m_box_shape;
 
     void updateBoxShape();
 };

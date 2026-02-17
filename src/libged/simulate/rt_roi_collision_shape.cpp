@@ -86,7 +86,7 @@ RtRoiCollisionShape::RtRoiCollisionShape(const btVector3 &global_aabb_min,
     m_name(name),
     m_roi_min(global_aabb_min),
     m_roi_max(global_aabb_max),
-    m_box_shape((global_aabb_max - global_aabb_min) / 2.0)
+    m_box_shape(NULL)
 {
     m_shapeType = RT_ROI_COLLISION_SHAPE_TYPE;
 
@@ -99,6 +99,12 @@ RtRoiCollisionShape::RtRoiCollisionShape(const btVector3 &global_aabb_min,
     // Initialize with global AABB as the ROI
     // The rigid body's transform origin should be set to the ROI center
     updateBoxShape();
+}
+
+
+RtRoiCollisionShape::~RtRoiCollisionShape()
+{
+    delete m_box_shape;
 }
 
 
@@ -115,7 +121,7 @@ RtRoiCollisionShape::getAabb(const btTransform &transform,
 {
     // The transform origin is at the ROI center
     // The box shape represents the ROI extents
-    m_box_shape.getAabb(transform, dest_aabb_min, dest_aabb_max);
+    m_box_shape->getAabb(transform, dest_aabb_min, dest_aabb_max);
 }
 
 
@@ -128,21 +134,21 @@ RtRoiCollisionShape::calculateLocalInertia(const btScalar mass,
 
     // Static bodies (mass=0) don't need inertia calculation,
     // but we delegate to the box shape for consistency
-    m_box_shape.calculateLocalInertia(mass, dest_inertia);
+    m_box_shape->calculateLocalInertia(mass, dest_inertia);
 }
 
 
 const btVector3 &
 RtRoiCollisionShape::getLocalScaling() const
 {
-    return m_box_shape.getLocalScaling();
+    return m_box_shape->getLocalScaling();
 }
 
 
 btScalar
 RtRoiCollisionShape::getMargin() const
 {
-    return m_box_shape.getMargin();
+    return m_box_shape->getMargin();
 }
 
 
@@ -153,7 +159,7 @@ RtRoiCollisionShape::setLocalScaling(const btVector3 &local_scaling)
 	if (local_scaling[i] < 0.0)
 	    bu_bomb("invalid argument");
 
-    m_box_shape.setLocalScaling(local_scaling);
+    m_box_shape->setLocalScaling(local_scaling);
 }
 
 
@@ -163,7 +169,7 @@ RtRoiCollisionShape::setMargin(const btScalar collision_margin)
     if (collision_margin < 0.0)
 	bu_bomb("invalid argument");
 
-    m_box_shape.setMargin(collision_margin);
+    m_box_shape->setMargin(collision_margin);
 }
 
 
@@ -217,10 +223,10 @@ RtRoiCollisionShape::updateBoxShape()
 	throw InvalidSimulationError("ROI dimensions are too extreme for Bullet at '"
 				    + m_name + "'");
 
-    // Update the box shape
-    // We need to recreate it because btBoxShape doesn't have a setHalfExtents method
-    m_box_shape.~btBoxShape();
-    new (&m_box_shape) btBoxShape(half_extents);
+    // Recreate the box shape with new half-extents
+    // btBoxShape doesn't provide a method to update extents, so we recreate it
+    delete m_box_shape;
+    m_box_shape = new btBoxShape(half_extents);
 }
 
 

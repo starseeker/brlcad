@@ -245,6 +245,13 @@ namespace simulate
 {
 
 
+// Define ROI update constants
+const btScalar Simulation::ROI_MAX_PREDICTION_TIME = 0.5; // 0.5 seconds
+const btScalar Simulation::ROI_PADDING = 0.5; // 0.5 meters
+const btScalar Simulation::ROI_MIN_SIZE = 0.2; // 0.2 meters
+const btScalar Simulation::ROI_CHANGE_THRESHOLD = 0.01; // 1cm
+
+
 class Simulation::Region
 {
 public:
@@ -279,6 +286,7 @@ private:
     TemporaryRegionHandle m_region_handle;
     btDiscreteDynamicsWorld &m_world;
     RtMotionState m_motion_state;
+    // Exactly one of these will be non-NULL, depending on whether ROI proxy is enabled
     RtCollisionShape *m_collision_shape;
     RtRoiCollisionShape *m_roi_collision_shape;
     btRigidBody m_rigid_body;
@@ -330,7 +338,8 @@ Simulation::Region::get_region(db_i &db, const db_full_path &path,
 		    } else if (!bu_strcmp(value, "0") || !bu_strcmp(value, "false")) {
 			roi_proxy = false;
 		    } else {
-			throw InvalidSimulationError(error_at("invalid roi_proxy value (expected 0/1 or true/false)", path));
+			throw InvalidSimulationError(error_at(std::string() + "invalid roi_proxy value \"" + 
+							      value + "\" (expected 0/1 or true/false)", path));
 		    }
 		} else
 		    throw InvalidSimulationError(error_at(std::string() + "invalid attribute '" +
@@ -528,13 +537,8 @@ Simulation::~Simulation()
 void
 Simulation::updateRoiProxies(const fastf_t seconds)
 {
-    // ROI update constants
-    const btScalar MAX_PREDICTION_TIME = 0.5; // Maximum time horizon for prediction
-    const btScalar ROI_PADDING = 0.5; // Padding around dynamic bodies in meters
-    const btScalar MIN_ROI_SIZE = 0.2; // Minimum ROI size in meters
-
     // Clamp prediction time to reasonable bounds
-    const btScalar dt_predict = btMin(seconds, MAX_PREDICTION_TIME);
+    const btScalar dt_predict = btMin(seconds, ROI_MAX_PREDICTION_TIME);
 
     // Collect dynamic bodies and their swept AABBs
     std::vector<std::pair<btVector3, btVector3> > dynamic_swept_aabbs;
@@ -634,7 +638,7 @@ Simulation::updateRoiProxies(const fastf_t seconds)
 	    btVector3 current_roi_max = roi_shape->getRoiMax();
 	    btVector3 current_center = (current_roi_min + current_roi_max) / 2.0;
 
-	    btVector3 half_min_size(MIN_ROI_SIZE / 2.0, MIN_ROI_SIZE / 2.0, MIN_ROI_SIZE / 2.0);
+	    btVector3 half_min_size(ROI_MIN_SIZE / 2.0, ROI_MIN_SIZE / 2.0, ROI_MIN_SIZE / 2.0);
 	    roi_min = current_center - half_min_size;
 	    roi_max = current_center + half_min_size;
 	}
@@ -655,10 +659,9 @@ Simulation::updateRoiProxies(const fastf_t seconds)
 
 	// Check if ROI changed significantly (to avoid unnecessary updates)
 	bool roi_changed = false;
-	const btScalar CHANGE_THRESHOLD = 0.01; // 1cm threshold
 	for (int i = 0; i < 3; ++i) {
-	    if (btFabs(prev_roi_min[i] - roi_shape->getRoiMin()[i]) > CHANGE_THRESHOLD ||
-		btFabs(prev_roi_max[i] - roi_shape->getRoiMax()[i]) > CHANGE_THRESHOLD) {
+	    if (btFabs(prev_roi_min[i] - roi_shape->getRoiMin()[i]) > ROI_CHANGE_THRESHOLD ||
+		btFabs(prev_roi_max[i] - roi_shape->getRoiMax()[i]) > ROI_CHANGE_THRESHOLD) {
 		roi_changed = true;
 		break;
 	    }
