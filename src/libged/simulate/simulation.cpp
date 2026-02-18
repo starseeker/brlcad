@@ -525,7 +525,7 @@ void
 Simulation::updateRoiProxies(const fastf_t seconds)
 {
     // Clamp prediction time to reasonable bounds
-    const btScalar dt_predict = btMin(seconds, ROI_MAX_PREDICTION_TIME);
+    const btScalar dt_predict = btMin(btScalar(seconds), ROI_MAX_PREDICTION_TIME);
 
     // Collect dynamic bodies and their swept AABBs
     std::vector<std::pair<btVector3, btVector3> > dynamic_swept_aabbs;

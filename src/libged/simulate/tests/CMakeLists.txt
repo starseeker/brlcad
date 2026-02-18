@@ -31,8 +31,11 @@ if(BRLCAD_ENABLE_BULLET)
 
   # If bullet was built with USE_DOUBLE_PRECISION, we need this (see
   # https://pybullet.org/Bullet/phpBB3/viewtopic.php?t=9670 for more discussion.)
-  # Hopefully we can find a way to detect this correctly at some point...
-  add_definitions(-DBT_USE_DOUBLE_PRECISION=1)
+  # System Bullet libraries typically use single precision, so only enable double
+  # precision when NOT using system libraries.
+  if(NOT BRLCAD_BUNDLED_LIBS STREQUAL "SYSTEM")
+    add_definitions(-DBT_USE_DOUBLE_PRECISION=1)
+  endif()
 
   brlcad_addexec(simulate_test "simulate_test.cpp" "libged;${BULLET_LIBRARIES}" TEST)
   target_include_directories(simulate_test BEFORE PRIVATE ${SIM_INCLUDE_DIRS})

@@ -33,8 +33,11 @@ if(BRLCAD_ENABLE_BULLET AND BULLET_LIBRARIES)
 
   # If bullet was built with USE_DOUBLE_PRECISION, we need this (see
   # https://pybullet.org/Bullet/phpBB3/viewtopic.php?t=9670 for more discussion.)
-  # Hopefully we can find a way to detect this correctly at some point...
-  add_definitions(-DBT_USE_DOUBLE_PRECISION=1)
+  # System Bullet libraries typically use single precision, so only enable double
+  # precision when NOT using system libraries.
+  if(NOT BRLCAD_BUNDLED_LIBS STREQUAL "SYSTEM")
+    add_definitions(-DBT_USE_DOUBLE_PRECISION=1)
+  endif()
 endif(BRLCAD_ENABLE_BULLET AND BULLET_LIBRARIES)
 
 set(
