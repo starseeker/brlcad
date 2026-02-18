@@ -62,21 +62,6 @@ error_at(const std::string &message, const db_full_path &path)
 }
 
 
-static btRigidBody::btRigidBodyConstructionInfo
-get_rigid_body_construction_info(btMotionState &motion_state,
-				 btCollisionShape &collision_shape, const db_i &db, const btScalar mass)
-{
-    RT_CK_DBI(&db);
-
-    if (mass < 0.0)
-	bu_bomb("invalid argument");
-
-    btVector3 inertia(0.0, 0.0, 0.0);
-    collision_shape.calculateLocalInertia(mass, inertia);
-    return btRigidBody::btRigidBodyConstructionInfo(mass, &motion_state,
-						   &collision_shape, inertia);
-}
-
 
 static std::pair<btVector3, btVector3>
 get_aabb(db_i &db, const db_full_path &path)
@@ -347,8 +332,8 @@ Simulation::Region::get_region(db_i &db, const db_full_path &path,
 	    }
     }
 
-    // Default: enable ROI proxy for static bodies (mass == 0) unless explicitly disabled
-    if (!roi_proxy_specified && mass == 0.0) {
+    // Default: enable ROI proxy for static bodies (mass near zero) unless explicitly disabled
+    if (!roi_proxy_specified && NEAR_ZERO(mass, SMALL_FASTF)) {
 	roi_proxy = true;
     }
 
@@ -371,7 +356,7 @@ Simulation::Region::get_regions(db_i &db, const db_full_path &path,
 
     if (0 > db_search(&found, DB_SEARCH_TREE,
 		      (std::string() + "-attr " + attribute_prefix + "type=region -below -attr " +
-		       attribute_prefix + "type=region").c_str(), path.fp_len, path.fp_names, &db, NULL))
+		       attribute_prefix + "type=region").c_str(), path.fp_len, path.fp_names, &db, NULL, NULL, NULL))
 	bu_bomb("db_search() failed");
 
     if (BU_PTBL_LEN(&found))
@@ -382,7 +367,7 @@ Simulation::Region::get_regions(db_i &db, const db_full_path &path,
 		      (std::string() + "-depth >0 -attr " + attribute_prefix + "* -not ( -attr " +
 		       attribute_prefix + "type=region -or ( -type shape -not -below -attr " +
 		       attribute_prefix + "type=region ) )").c_str(), path.fp_len,
-		      path.fp_names, &db, NULL))
+		      path.fp_names, &db, NULL, NULL, NULL))
 	bu_bomb("db_search() failed");
 
     if (BU_PTBL_LEN(&found))
@@ -393,7 +378,7 @@ Simulation::Region::get_regions(db_i &db, const db_full_path &path,
     if (0 > db_search(&found, DB_SEARCH_TREE,
 		      (std::string() + "-attr " + attribute_prefix +
 		       "type=region -or -type shape -not -below -attr " + attribute_prefix +
-		       "type=region").c_str(), path.fp_len, path.fp_names, &db, NULL))
+		       "type=region").c_str(), path.fp_len, path.fp_names, &db, NULL, NULL, NULL))
 	bu_bomb("db_search() failed");
 
     if (!BU_PTBL_LEN(&found))
@@ -434,7 +419,7 @@ Simulation::Region::Region(db_i &db, const db_full_path &path,
 
     // Create appropriate collision shape based on mass and roi_proxy settings
     // Exactly one of m_collision_shape or m_roi_collision_shape will be non-NULL
-    if (mass == 0.0 && roi_proxy) {
+    if (NEAR_ZERO(mass, SMALL_FASTF) && roi_proxy) {
 	// Static body with ROI proxy enabled
 	m_roi_collision_shape = new RtRoiCollisionShape(aabb.first, aabb.second,
 							DB_FULL_PATH_CUR_DIR(&path)->d_namep);
@@ -551,7 +536,7 @@ Simulation::updateRoiProxies(const fastf_t seconds)
 	btRigidBody *body = const_cast<btRigidBody *>(region->getRigidBody());
 
 	// Skip static bodies
-	if (body->getMass() == 0.0)
+	if (NEAR_ZERO(body->getMass(), SMALL_FASTF))
 	    continue;
 
 	// Get current AABB
