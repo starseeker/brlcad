@@ -90,13 +90,19 @@ RtRoiCollisionShape::RtRoiCollisionShape(const btVector3 &global_aabb_min,
 {
     m_shapeType = RT_ROI_COLLISION_SHAPE_TYPE;
 
-    // Validate global AABB dimensions
-    btVector3 global_extents = global_aabb_max - global_aabb_min;
-    if (!bullet_dimensions_valid(global_extents))
-	throw InvalidSimulationError("global dimensions are too extreme for Bullet at '"
-				    + m_name + "'");
+    // For ROI shapes, the global AABB may be very large (e.g., terrain).
+    // Start with a reasonable initial ROI at the center of the global AABB.
+    // The ROI will be updated to track dynamic bodies during simulation.
+    btVector3 global_center = (global_aabb_min + global_aabb_max) / 2.0;
+    btScalar initial_roi_extent = 50.0;  // 50 meters initial ROI
+    m_roi_min = global_center - btVector3(initial_roi_extent, initial_roi_extent, initial_roi_extent);
+    m_roi_max = global_center + btVector3(initial_roi_extent, initial_roi_extent, initial_roi_extent);
+    
+    // Clamp initial ROI to global bounds
+    m_roi_min.setMax(m_global_aabb_min);
+    m_roi_max.setMin(m_global_aabb_max);
 
-    // Initialize with global AABB as the ROI
+    // Initialize with the clamped ROI
     // The rigid body's transform origin should be set to the ROI center
     updateBoxShape();
 }
