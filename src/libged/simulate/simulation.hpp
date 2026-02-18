@@ -60,6 +60,14 @@ public:
 private:
     class Region;
 
+    void updateRoiProxies(fastf_t seconds);
+
+    // ROI update constants
+    static const btScalar ROI_MAX_PREDICTION_TIME; // Maximum time horizon for prediction
+    static const btScalar ROI_PADDING; // Padding around dynamic bodies in meters
+    static const btScalar ROI_MIN_SIZE; // Minimum ROI size in meters
+    static const btScalar ROI_CHANGE_THRESHOLD; // Minimum change to trigger broadphase update
+
     RtDebugDraw m_debug_draw;
     btDbvtBroadphase m_broadphase;
     btDefaultCollisionConfiguration m_collision_config;
