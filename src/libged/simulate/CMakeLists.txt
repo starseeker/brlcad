@@ -16,10 +16,16 @@ if(BRLCAD_ENABLE_BULLET)
   #
   # To avoid finding versions that won't work for our build, we use a variation
   # on this trick:  https://www.scivision.dev/cmake-force-link-static-libs/
-  set(CFLS_TMP ${CMAKE_FIND_LIBRARY_SUFFIXES})
-  set(CMAKE_FIND_LIBRARY_SUFFIXES ${CMAKE_STATIC_LIBRARY_SUFFIX})
+  # However, when using system libraries (BRLCAD_BUNDLED_LIBS=SYSTEM), we allow
+  # shared libraries to enable faster builds.
+  if(NOT BRLCAD_BUNDLED_LIBS STREQUAL "SYSTEM")
+    set(CFLS_TMP ${CMAKE_FIND_LIBRARY_SUFFIXES})
+    set(CMAKE_FIND_LIBRARY_SUFFIXES ${CMAKE_STATIC_LIBRARY_SUFFIX})
+  endif()
   find_package(Bullet REQUIRED)
-  set(CMAKE_FIND_LIBRARY_SUFFIXES ${CFLS_TMP})
+  if(NOT BRLCAD_BUNDLED_LIBS STREQUAL "SYSTEM")
+    set(CMAKE_FIND_LIBRARY_SUFFIXES ${CFLS_TMP})
+  endif()
 endif(BRLCAD_ENABLE_BULLET)
 
 if(BRLCAD_ENABLE_BULLET AND BULLET_LIBRARIES)
