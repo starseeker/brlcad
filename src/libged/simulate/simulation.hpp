@@ -86,7 +86,7 @@ private:
     btCollisionDispatcher m_collision_dispatcher;
     btSequentialImpulseConstraintSolver m_constraint_solver;
     btDiscreteDynamicsWorld m_world;
-    std::vector<const Region *> m_regions;
+    std::vector<Region *> m_regions;
     const RtInstance m_rt_instance;
 };
 
