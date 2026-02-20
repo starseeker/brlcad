@@ -1,15 +1,20 @@
 #!/bin/bash
-# run_sim.sh - Run truck-on-terrain physics simulation and render to video
+# run_sim.sh - Simulate M35 truck falling onto terra terrain; render video.
 #
 # Usage: ./run_sim.sh [brlcad_build_dir] [output_dir]
-# Example: ./run_sim.sh /home/runner/work/brlcad/brlcad-build /tmp/sim_output
+# Default build: /home/runner/work/brlcad/brlcad-build
+# Default output: /tmp/sim_output
 #
-# The script:
-#  1. Creates a combined .g database (truck + terrain)
-#  2. Steps through the simulation 25x 0.5s = 12.5s total
-#  3. Saves a .g snapshot after each step
-#  4. Renders each snapshot with rt
-#  5. Assembles frames into an mp4 video
+# The truck starts 20 degrees nose-down (pitched around Y axis) so the
+# front wheels contact the terrain before the rear wheels.
+#
+# Pipeline:
+#  1. Build combined .g database (truck + terrain)  [<1 second]
+#  2. Run 25 simulation steps x 0.5 s = 12.5 s total  [seconds/step]
+#     - Steps 1-20: truck in free fall
+#     - Steps 21-25: truck landing and settling
+#  3. Render each frame with rt (chase camera, per-frame eye_pt + orientation)
+#  4. Assemble video with ffmpeg (~24 fps, ~12 s)
 
 set -e
 
@@ -28,9 +33,13 @@ mkdir -p "$OUTPUT_DIR" "$FRAMES_DIR"
 
 # ----------------------------------------------------------------
 # Step 1: Build simulation database
-# Run from DB_DIR so terra.bin is in CWD (required by DSP primitive)
-# All operations (dbconcat, comb, attr, arced) are metadata-only
-# and complete in milliseconds.
+# Run from DB_DIR so terra.bin is in CWD (required by DSP primitive).
+# All mged operations here are pure metadata writes (< 0.3 s total):
+#   dbconcat  - copies object records
+#   comb      - writes a combination tree record
+#   attr set  - writes key/value attribute
+#   arced     - writes a 4x4 matrix into a combination leaf
+# None of these tessellate or process geometry.
 # ----------------------------------------------------------------
 echo "=== Step 1: Building simulation database ==="
 cd "$DB_DIR"
@@ -39,16 +48,20 @@ rm -f "$SIM_DB"
 mged -c "$SIM_DB" < "$SCRIPT_DIR/setup_sim.tcl"
 echo "  Created: $SIM_DB"
 
+# Verify scene structure
+mged -c "$SIM_DB" "ls scene.c" 2>/dev/null | head -3
+
 # ----------------------------------------------------------------
-# Step 2: Step through simulation, saving .g snapshot each step
-# 25 steps x 0.5s = 12.5 seconds total
-#   t=0..10s: truck falls ~490m (free fall under gravity)
-#   t=10..12.5s: truck hits and settles on terrain
+# Step 2: Step through simulation, saving .g snapshot each step.
+# 25 steps × 0.5 s = 12.5 s total.
+#   t=0–10 s : truck in free fall (~490 m, nose pitched 20° down)
+#   t=10–12.5s: front wheels contact and settle, rear follows
+# Minimum Bullet timestep = 1/60 s ≈ 0.017 s; 0.5 s >> minimum.
 # ----------------------------------------------------------------
 NSTEPS=25
 STEP_DUR=0.5
 
-echo "=== Step 2: Running simulation ($NSTEPS steps x ${STEP_DUR}s = $(echo "$NSTEPS * $STEP_DUR" | bc)s) ==="
+echo "=== Step 2: Simulation ($NSTEPS × ${STEP_DUR}s = $(python3 -c "print($NSTEPS*$STEP_DUR)")s) ==="
 cd "$DB_DIR"
 
 for i in $(seq 1 $NSTEPS); do
@@ -61,43 +74,32 @@ for i in $(seq 1 $NSTEPS); do
     cp "$SIM_DB" "$FRAMES_DIR/frame_${STEPNUM}.g"
     echo "  Step $i/$NSTEPS done"
 done
-echo "  Simulation frames saved to $FRAMES_DIR/"
+echo "  Frames saved to $FRAMES_DIR/"
 
 # ----------------------------------------------------------------
-# Step 3: Render each frame with rt
-# Render scene.c/truck.sim path so the truck appears at its world
-# position (after the physics matrix update from simulate).
-# Use -a 225 -e 35 for a consistent diagonal view.
-# Auto-centering produces a close-up of the truck in each frame.
-# For the landing frames, the terrain surface also appears below.
+# Step 3: Render frames using the Python chase-camera renderer.
+# render_frames.py computes per-frame eye_pt from truck bounding box
+# and uses a fixed orientation quaternion matching az=225, el=35 view.
 # ----------------------------------------------------------------
-echo "=== Step 3: Rendering $NSTEPS frames with rt ==="
-cd "$DB_DIR"
+echo "=== Step 3: Rendering $NSTEPS frames ==="
 
-IMG_W=1280
-IMG_H=720
+python3 "$SCRIPT_DIR/render_frames.py" \
+    --build  "$BRLCAD_BUILD" \
+    --frames "$FRAMES_DIR" \
+    --output "$FRAMES_DIR" \
+    --width  1280 \
+    --height 720 \
+    --first  1 \
+    --last   $NSTEPS
 
-for i in $(seq 1 $NSTEPS); do
-    STEPNUM=$(printf "%04d" $i)
-    FRAME_G="$FRAMES_DIR/frame_${STEPNUM}.g"
-    FRAME_PIX="$FRAMES_DIR/frame_${STEPNUM}.pix"
-    FRAME_PNG="$FRAMES_DIR/frame_${STEPNUM}.png"
-
-    [ -f "$FRAME_G" ] || { echo "  Frame $i: .g not found, skipping"; continue; }
-
-    rt -w $IMG_W -n $IMG_H -a 225 -e 35 \
-       -o "$FRAME_PIX" \
-       "$FRAME_G" "scene.c/truck.sim" terrain.sim 2>/dev/null
-
-    "$BRLCAD_BUILD/bin/pix-png" -w $IMG_W -n $IMG_H < "$FRAME_PIX" > "$FRAME_PNG"
-    rm -f "$FRAME_PIX"
-    echo "  Rendered frame $i/$NSTEPS"
-done
-echo "  All frames rendered."
+echo "  Frames rendered."
 
 # ----------------------------------------------------------------
-# Step 4: Assemble video with ffmpeg
-# 25 frames at 2 fps = 12.5s input -> 24fps output via interpolation
+# Step 4: Assemble video with ffmpeg.
+# Input: 25 frames (12.5 s simulation) at 2 fps input framerate.
+# Output: smooth 24 fps video with scene-change interpolation.
+# Each simulated second = ~2.4 output seconds → ~25 s video total.
+# High quality: CRF 18, slow preset, lanczos scale filter.
 # ----------------------------------------------------------------
 echo "=== Step 4: Assembling video ==="
 
@@ -111,10 +113,10 @@ ffmpeg -y \
     -preset slow \
     -crf 18 \
     -pix_fmt yuv420p \
-    -vf "fps=24,scale=${IMG_W}:${IMG_H}:flags=lanczos" \
-    "$VIDEO_OUT"
+    -vf "fps=24,scale=1280:720:flags=lanczos" \
+    "$VIDEO_OUT" 2>&1
 
 echo ""
 echo "=== DONE ==="
-echo "Video: $VIDEO_OUT"
+echo "Video:  $VIDEO_OUT"
 ls -lh "$VIDEO_OUT"
