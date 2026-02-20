@@ -54,7 +54,7 @@ set(
 )
 
 set(SIM_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/simulate ${BULLET_INCLUDE_DIR})
-set(SIM_LIBS libged libbu ${BULLET_LIBRARIES})
+set(SIM_LIBS libged libbu libbv ${BULLET_LIBRARIES})
 
 ged_plugin_library(ged-simulate
   ${bullet_srcs}

@@ -30,6 +30,8 @@
 #ifdef HAVE_BULLET
 
 
+#include "bv/plot3.h"
+
 #include "simulation.hpp"
 #include "rt_collision_algorithm.hpp"
 #include "rt_collision_shape.hpp"
@@ -42,6 +44,9 @@
 #include "rt/db_io.h"
 #include "rt/search.h"
 
+#include <cerrno>
+#include <cstdio>
+#include <cstring>
 #include <limits>
 #include <stack>
 
@@ -51,6 +56,56 @@ namespace
 
 
 const char * const attribute_prefix = "simulate::";
+
+
+static std::string
+serialize_vector(const btVector3 &v)
+{
+    std::ostringstream stream;
+    stream.exceptions(std::ostream::failbit | std::ostream::badbit);
+    stream << "<" << v.x() << "," << v.y() << "," << v.z() << ">";
+    return stream.str();
+}
+
+
+static void
+fclose_wrapper(FILE *fp)
+{
+    /* Ignore return: errors here are non-recoverable in a destructor context. */
+    (void)fclose(fp);
+}
+
+
+static void
+draw_wireframe_box(FILE *fp, const point_t min_pt, const point_t max_pt)
+{
+    /* 8 corners of the box */
+    point_t c[8];
+    VSET(c[0], min_pt[X], min_pt[Y], min_pt[Z]);
+    VSET(c[1], max_pt[X], min_pt[Y], min_pt[Z]);
+    VSET(c[2], max_pt[X], max_pt[Y], min_pt[Z]);
+    VSET(c[3], min_pt[X], max_pt[Y], min_pt[Z]);
+    VSET(c[4], min_pt[X], min_pt[Y], max_pt[Z]);
+    VSET(c[5], max_pt[X], min_pt[Y], max_pt[Z]);
+    VSET(c[6], max_pt[X], max_pt[Y], max_pt[Z]);
+    VSET(c[7], min_pt[X], max_pt[Y], max_pt[Z]);
+
+    /* bottom face */
+    pdv_3move(fp, c[0]); pdv_3cont(fp, c[1]);
+    pdv_3cont(fp, c[2]); pdv_3cont(fp, c[3]);
+    pdv_3cont(fp, c[0]);
+
+    /* top face */
+    pdv_3move(fp, c[4]); pdv_3cont(fp, c[5]);
+    pdv_3cont(fp, c[6]); pdv_3cont(fp, c[7]);
+    pdv_3cont(fp, c[4]);
+
+    /* vertical edges */
+    pdv_3move(fp, c[0]); pdv_3cont(fp, c[4]);
+    pdv_3move(fp, c[1]); pdv_3cont(fp, c[5]);
+    pdv_3move(fp, c[2]); pdv_3cont(fp, c[6]);
+    pdv_3move(fp, c[3]); pdv_3cont(fp, c[7]);
+}
 
 
 static std::string
@@ -243,14 +298,30 @@ public:
     ~Region();
 
     static Region *get_region(db_i &db, const db_full_path &path,
-			      btDiscreteDynamicsWorld &world);
+			      btDiscreteDynamicsWorld &world, bool use_saved_state);
 
     static std::vector<const Region *> get_regions(db_i &db,
-						   const db_full_path &path, btDiscreteDynamicsWorld &world);
+						   const db_full_path &path, btDiscreteDynamicsWorld &world,
+						   bool use_saved_state);
 
     // Get the rigid body for ROI updates
     btRigidBody *getRigidBody() { return &m_rigid_body; }
     const btRigidBody *getRigidBody() const { return &m_rigid_body; }
+
+    // Get the db_full_path for this region
+    const db_full_path &getPath() const { return m_motion_state.get_path(); }
+
+    // Get the physical AABB for this region (global AABB for ROI proxy, shape AABB otherwise)
+    void getAabb(btVector3 &aabb_min, btVector3 &aabb_max) const
+    {
+	if (m_roi_collision_shape) {
+	    aabb_min = m_roi_collision_shape->getGlobalMin();
+	    aabb_max = m_roi_collision_shape->getGlobalMax();
+	} else {
+	    m_rigid_body.getCollisionShape()->getAabb(
+		m_rigid_body.getWorldTransform(), aabb_min, aabb_max);
+	}
+    }
 
     // Check if this region uses ROI proxy
     bool usesRoiProxy() const { return m_roi_collision_shape != NULL; }
@@ -280,7 +351,7 @@ private:
 
 Simulation::Region *
 Simulation::Region::get_region(db_i &db, const db_full_path &path,
-			       btDiscreteDynamicsWorld &world)
+			       btDiscreteDynamicsWorld &world, bool use_saved_state)
 {
     RT_CK_DBI(&db);
     RT_CK_FULL_PATH(&path);
@@ -290,6 +361,10 @@ Simulation::Region::get_region(db_i &db, const db_full_path &path,
     btVector3 angular_velocity(0.0, 0.0, 0.0);
     bool roi_proxy_specified = false;
     bool roi_proxy = false;
+    btVector3 saved_linear_velocity(0.0, 0.0, 0.0);
+    btVector3 saved_angular_velocity(0.0, 0.0, 0.0);
+    bool has_saved_linear_velocity = false;
+    bool has_saved_angular_velocity = false;
     {
 	bu_attribute_value_set avs;
 	BU_AVS_INIT(&avs);
@@ -315,6 +390,14 @@ Simulation::Region::get_region(db_i &db, const db_full_path &path,
 		    linear_velocity = deserialize_vector(value);
 		} else if (!bu_strcmp(name, "angular_velocity")) {
 		    angular_velocity = deserialize_vector(value);
+		} else if (!bu_strcmp(name, "state_linear_velocity")) {
+		    /* Saved state from a previous simulation run (set by saveState()). */
+		    saved_linear_velocity = deserialize_vector(value);
+		    has_saved_linear_velocity = true;
+		} else if (!bu_strcmp(name, "state_angular_velocity")) {
+		    /* Saved state from a previous simulation run (set by saveState()). */
+		    saved_angular_velocity = deserialize_vector(value);
+		    has_saved_angular_velocity = true;
 		} else if (!bu_strcmp(name, "roi_proxy")) {
 		    // Parse roi_proxy attribute: accept 0/1, true/false
 		    roi_proxy_specified = true;
@@ -332,6 +415,15 @@ Simulation::Region::get_region(db_i &db, const db_full_path &path,
 	    }
     }
 
+    /* When resuming, override initial velocities with the saved state so that
+     * the simulation continues from where it left off.  */
+    if (use_saved_state) {
+	if (has_saved_linear_velocity)
+	    linear_velocity = saved_linear_velocity;
+	if (has_saved_angular_velocity)
+	    angular_velocity = saved_angular_velocity;
+    }
+
     // Default: enable ROI proxy for static bodies (mass near zero) unless explicitly disabled
     if (!roi_proxy_specified && NEAR_ZERO(mass, SMALL_FASTF)) {
 	roi_proxy = true;
@@ -344,7 +436,7 @@ Simulation::Region::get_region(db_i &db, const db_full_path &path,
 
 std::vector<const Simulation::Region *>
 Simulation::Region::get_regions(db_i &db, const db_full_path &path,
-				btDiscreteDynamicsWorld &world)
+				btDiscreteDynamicsWorld &world, bool use_saved_state)
 {
     RT_CK_DBI(&db);
     RT_CK_FULL_PATH(&path);
@@ -390,7 +482,7 @@ Simulation::Region::get_regions(db_i &db, const db_full_path &path,
 	db_full_path **entry;
 
 	for (BU_PTBL_FOR(entry, (db_full_path **), &found))
-	    result.push_back(get_region(db, **entry, world));
+	    result.push_back(get_region(db, **entry, world, use_saved_state));
     } catch (...) {
 	for (std::vector<const Region *>::const_iterator it = result.begin();
 	     it != result.end(); ++it)
@@ -464,7 +556,8 @@ Simulation::Region::~Region()
 }
 
 
-Simulation::Simulation(db_i &db, const db_full_path &path) :
+Simulation::Simulation(db_i &db, const db_full_path &path, bool use_saved_state) :
+    m_db(db),
     m_debug_draw(db),
     m_broadphase(),
     m_collision_config(),
@@ -472,7 +565,7 @@ Simulation::Simulation(db_i &db, const db_full_path &path) :
     m_constraint_solver(),
     m_world(&m_collision_dispatcher, &m_broadphase, &m_constraint_solver,
 	   &m_collision_config),
-    m_regions(Region::get_regions(db, path, m_world)),
+    m_regions(Region::get_regions(db, path, m_world, use_saved_state)),
     m_rt_instance(db)
 {
     RT_CK_DBI(&db);
@@ -692,6 +785,80 @@ Simulation::step(const fastf_t seconds, const DebugMode debug_mode)
 
     m_world.stepSimulation(seconds, max_substeps, fixed_time_step);
     m_world.debugDrawWorld();
+}
+
+
+void
+Simulation::saveState()
+{
+    RT_CK_DBI(&m_db);
+
+    for (std::vector<const Region *>::const_iterator it = m_regions.begin();
+	 it != m_regions.end(); ++it) {
+	const Region *region = *it;
+	const btRigidBody *body = region->getRigidBody();
+
+	/* Static bodies (mass == 0) never move, so their velocity state is
+	 * always zero and does not need to be persisted.  */
+	if (NEAR_ZERO(body->getMass(), SMALL_FASTF))
+	    continue;
+
+	const db_full_path &path = region->getPath();
+	const char * const name = DB_FULL_PATH_CUR_DIR(&path)->d_namep;
+
+	const std::string linear_vel_str = serialize_vector(body->getLinearVelocity());
+	const std::string angular_vel_str = serialize_vector(body->getAngularVelocity());
+
+	if (db5_update_attribute(name, "simulate::state_linear_velocity",
+				 linear_vel_str.c_str(), &m_db))
+	    bu_bomb("db5_update_attribute() failed");
+
+	if (db5_update_attribute(name, "simulate::state_angular_velocity",
+				 angular_vel_str.c_str(), &m_db))
+	    bu_bomb("db5_update_attribute() failed");
+    }
+}
+
+
+void
+Simulation::writePlotFile(const std::string &filename) const
+{
+    FILE *fp = fopen(filename.c_str(), "wb");
+
+    if (!fp)
+	throw InvalidSimulationError("failed to open plot file '" + filename + "': "
+				     + std::string(strerror(errno)));
+
+    const AutoPtr<FILE, fclose_wrapper> autofree_fp(fp);
+
+    for (std::vector<const Region *>::const_iterator it = m_regions.begin();
+	 it != m_regions.end(); ++it) {
+	const Region *region = *it;
+	const btRigidBody *body = region->getRigidBody();
+
+	btVector3 aabb_min, aabb_max;
+	region->getAabb(aabb_min, aabb_max);
+
+	/* Convert from Bullet units (m) to application units (mm).  */
+	const btVector3 aabb_min_app = aabb_min * world_to_application;
+	const btVector3 aabb_max_app = aabb_max * world_to_application;
+
+	point_t min_pt, max_pt;
+	VSET(min_pt, static_cast<fastf_t>(aabb_min_app.x()),
+	     static_cast<fastf_t>(aabb_min_app.y()),
+	     static_cast<fastf_t>(aabb_min_app.z()));
+	VSET(max_pt, static_cast<fastf_t>(aabb_max_app.x()),
+	     static_cast<fastf_t>(aabb_max_app.y()),
+	     static_cast<fastf_t>(aabb_max_app.z()));
+
+	/* Green for dynamic bodies, red for static bodies.  */
+	if (NEAR_ZERO(body->getMass(), SMALL_FASTF))
+	    pl_color(fp, 255, 0, 0);
+	else
+	    pl_color(fp, 0, 200, 0);
+
+	draw_wireframe_box(fp, min_pt, max_pt);
+    }
 }
 
 
