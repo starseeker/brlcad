@@ -116,8 +116,8 @@ ged_simulate_core(ged * const gedp, const int argc, const char ** const argv)
 
     if (2 != bu_opt_parse(gedp->ged_result_str, argc - 1, &argv[1],
 			  options_description)) {
-	const simulate::AutoPtr<char> usage(const_cast<char *>(bu_opt_describe(
-								   const_cast<bu_opt_desc *>(options_description), NULL)));
+	const simulate::AutoPtr<char> usage(bu_opt_describe(
+						const_cast<bu_opt_desc *>(options_description), NULL));
 	bu_vls_printf(gedp->ged_result_str,
 		      "USAGE: %s [OPTIONS] path duration\nOptions:\n%s\n", argv[0], usage.ptr);
 	return BRLCAD_ERROR;

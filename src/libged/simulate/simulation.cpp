@@ -300,9 +300,9 @@ public:
     static Region *get_region(db_i &db, const db_full_path &path,
 			      btDiscreteDynamicsWorld &world, bool use_saved_state);
 
-    static std::vector<const Region *> get_regions(db_i &db,
-						   const db_full_path &path, btDiscreteDynamicsWorld &world,
-						   bool use_saved_state);
+    static std::vector<Region *> get_regions(db_i &db,
+					    const db_full_path &path, btDiscreteDynamicsWorld &world,
+					    bool use_saved_state);
 
     // Get the rigid body for ROI updates
     btRigidBody *getRigidBody() { return &m_rigid_body; }
@@ -434,7 +434,7 @@ Simulation::Region::get_region(db_i &db, const db_full_path &path,
 }
 
 
-std::vector<const Simulation::Region *>
+std::vector<Simulation::Region *>
 Simulation::Region::get_regions(db_i &db, const db_full_path &path,
 				btDiscreteDynamicsWorld &world, bool use_saved_state)
 {
@@ -476,7 +476,7 @@ Simulation::Region::get_regions(db_i &db, const db_full_path &path,
     if (!BU_PTBL_LEN(&found))
 	throw InvalidSimulationError("no regions found");
 
-    std::vector<const Simulation::Region *> result;
+    std::vector<Simulation::Region *> result;
 
     try {
 	db_full_path **entry;
@@ -484,9 +484,8 @@ Simulation::Region::get_regions(db_i &db, const db_full_path &path,
 	for (BU_PTBL_FOR(entry, (db_full_path **), &found))
 	    result.push_back(get_region(db, **entry, world, use_saved_state));
     } catch (...) {
-	for (std::vector<const Region *>::const_iterator it = result.begin();
-	     it != result.end(); ++it)
-	    delete *it;
+	for (Region * const region : result)
+	    delete region;
 
 	throw;
     }
@@ -608,9 +607,8 @@ Simulation::Simulation(db_i &db, const db_full_path &path, bool use_saved_state)
 
 Simulation::~Simulation()
 {
-    for (std::vector<const Region *>::const_iterator it = m_regions.begin();
-	 it != m_regions.end(); ++it)
-	delete *it;
+    for (Region * const region : m_regions)
+	delete region;
 }
 
 
@@ -623,10 +621,8 @@ Simulation::updateRoiProxies(const fastf_t seconds)
     // Collect dynamic bodies and their swept AABBs
     std::vector<std::pair<btVector3, btVector3> > dynamic_swept_aabbs;
 
-    for (std::vector<const Region *>::const_iterator it = m_regions.begin();
-	 it != m_regions.end(); ++it) {
-	const Region *region = *it;
-	btRigidBody *body = const_cast<btRigidBody *>(region->getRigidBody());
+    for (const Region * const region : m_regions) {
+	const btRigidBody * const body = region->getRigidBody();
 
 	// Skip static bodies
 	if (NEAR_ZERO(body->getMass(), SMALL_FASTF))
@@ -637,11 +633,11 @@ Simulation::updateRoiProxies(const fastf_t seconds)
 	body->getCollisionShape()->getAabb(body->getWorldTransform(), current_min, current_max);
 
 	// Predict future position based on linear velocity
-	btVector3 velocity = body->getLinearVelocity();
-	btVector3 displacement = velocity * dt_predict;
+	const btVector3 velocity = body->getLinearVelocity();
+	const btVector3 displacement = velocity * dt_predict;
 
 	// Compute swept AABB (union of current and predicted)
-	btVector3 predicted_origin = body->getWorldTransform().getOrigin() + displacement;
+	const btVector3 predicted_origin = body->getWorldTransform().getOrigin() + displacement;
 	btTransform predicted_transform = body->getWorldTransform();
 	predicted_transform.setOrigin(predicted_origin);
 
@@ -664,10 +660,7 @@ Simulation::updateRoiProxies(const fastf_t seconds)
     }
 
     // Update ROI for each static body with ROI proxy enabled
-    for (std::vector<const Region *>::const_iterator it = m_regions.begin();
-	 it != m_regions.end(); ++it) {
-	Region *region = const_cast<Region *>(*it);
-
+    for (Region * const region : m_regions) {
 	if (!region->usesRoiProxy())
 	    continue;
 
@@ -684,9 +677,9 @@ Simulation::updateRoiProxies(const fastf_t seconds)
 	btVector3 roi_min = global_max; // Start with invalid bounds
 	btVector3 roi_max = global_min;
 
-	for (std::size_t i = 0; i < dynamic_swept_aabbs.size(); ++i) {
-	    const btVector3 &swept_min = dynamic_swept_aabbs[i].first;
-	    const btVector3 &swept_max = dynamic_swept_aabbs[i].second;
+	for (const std::pair<btVector3, btVector3> &swept_aabb : dynamic_swept_aabbs) {
+	    const btVector3 &swept_min = swept_aabb.first;
+	    const btVector3 &swept_max = swept_aabb.second;
 
 	    // Check if swept AABB overlaps with global AABB
 	    bool overlaps = true;
@@ -793,10 +786,8 @@ Simulation::saveState()
 {
     RT_CK_DBI(&m_db);
 
-    for (std::vector<const Region *>::const_iterator it = m_regions.begin();
-	 it != m_regions.end(); ++it) {
-	const Region *region = *it;
-	const btRigidBody *body = region->getRigidBody();
+    for (const Region * const region : m_regions) {
+	const btRigidBody * const body = region->getRigidBody();
 
 	/* Static bodies (mass == 0) never move, so their velocity state is
 	 * always zero and does not need to be persisted.  */
@@ -831,10 +822,8 @@ Simulation::writePlotFile(const std::string &filename) const
 
     const AutoPtr<FILE, fclose_wrapper> autofree_fp(fp);
 
-    for (std::vector<const Region *>::const_iterator it = m_regions.begin();
-	 it != m_regions.end(); ++it) {
-	const Region *region = *it;
-	const btRigidBody *body = region->getRigidBody();
+    for (const Region * const region : m_regions) {
+	const btRigidBody * const body = region->getRigidBody();
 
 	btVector3 aabb_min, aabb_max;
 	region->getAabb(aabb_min, aabb_max);

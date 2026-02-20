@@ -229,10 +229,10 @@ RtRoiCollisionShape::updateBoxShape()
 	throw InvalidSimulationError("ROI dimensions are too extreme for Bullet at '"
 				    + m_name + "'");
 
-    // Recreate the box shape with new half-extents
-    // btBoxShape doesn't provide a method to update extents, so we recreate it
+    // Allocate new shape before releasing old one for exception safety
+    btBoxShape * const new_shape = new btBoxShape(half_extents);
     delete m_box_shape;
-    m_box_shape = new btBoxShape(half_extents);
+    m_box_shape = new_shape;
 }
 
 
