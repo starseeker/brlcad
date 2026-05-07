@@ -1778,6 +1778,7 @@ refresh(struct mged_state *s)
 	 * Otherwise, we are happy with the view we have
 	 */
 	set_curr_dm(s, p);
+	(void)dm_configure_win(DMP, 0);
 	if (mapped && DMP_dirty) {
 	    int restore_zbuffer = 0;
 
@@ -2488,6 +2489,15 @@ main(int argc, char *argv[])
     if (cl.attach)
 	attach = (char *)cl.attach;
 
+    /*
+     * In classic mode, -a directly controls the attach target.
+     * In GUI mode, the startup scripts choose the DM from
+     * mged_default(dm_type), so mirror -a into dm_type unless the
+     * user explicitly supplied --dm-type.
+     */
+    if (cl.attach && !cl.dm_type)
+	cl.dm_type = cl.attach;
+
     /* -d / --display */
     if (cl.dpy_string)
 	s->dpy_string = (char *)cl.dpy_string;
@@ -2827,7 +2837,16 @@ main(int argc, char *argv[])
 #endif
 
 	    if (old_mged_gui) {
-		bu_vls_strcpy(&vls, "gui");
+		if (attach && strlen(attach) > 0) {
+		    Tcl_SetVar2(s->interp, "mged_default", "dm_type", attach, TCL_GLOBAL_ONLY);
+		    if (BU_STR_EQUAL(attach, "tkswrast")) {
+			bu_vls_printf(&vls, "gui -dt %s -config g", attach);
+		    } else {
+			bu_vls_printf(&vls, "gui -dt %s", attach);
+		    }
+		} else {
+		    bu_vls_strcpy(&vls, "gui");
+		}
 		status = Tcl_Eval(s->interp, bu_vls_addr(&vls));
 	    } else {
 		Tcl_DString temp;

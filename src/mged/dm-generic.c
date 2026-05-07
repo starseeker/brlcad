@@ -244,6 +244,16 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 	return status;
     }
 
+    if (BU_STR_EQUAL(argv[0], "motion")) {
+	if (argc < 3) {
+	    Tcl_AppendResult(s->interp, "dm motion: need more parameters\n",
+			     "dm motion xpos ypos\n", (char *)NULL);
+	    return TCL_ERROR;
+	}
+
+	return mged_dm_motion(s, atoi(argv[1]), atoi(argv[2]));
+    }
+
     if (BU_STR_EQUAL(argv[0], "am")) {
 	if (argc < 4) {
 	    Tcl_AppendResult(s->interp, "dm am: need more parameters\n",

@@ -109,7 +109,7 @@ dm_graphics_system(const char *dmtype)
 }
 
 
-static const char *priority_list[] = {"wgl", "ogl", "X", NULL};
+static const char *priority_list[] = {"wgl", "ogl", "tkswrast", "X", NULL};
 
 
 extern "C" void
@@ -536,4 +536,3 @@ fb_genhelp(void)
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

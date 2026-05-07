@@ -103,6 +103,7 @@ add_subdirectory(plot)
 add_subdirectory(postscript)
 add_subdirectory(qtgl)
 add_subdirectory(swrast)
+add_subdirectory(tkswrast)
 add_subdirectory(txt)
 add_subdirectory(wgl)
 
