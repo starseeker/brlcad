@@ -562,6 +562,8 @@ int gl_draw_obj(struct dm *dmp, struct bv_scene_obj *s)
 {
     GLint originalShadeModel = 0;
     int restoreShadeModel = 0;
+    GLboolean lightingWasEnabled = GL_FALSE;
+    int restoreLighting = 0;
 
     if (s->s_type_flags & BV_MESH_LOD) {
 	struct bv_mesh_lod *lod = (struct bv_mesh_lod *)s->draw_data;
@@ -575,6 +577,13 @@ int gl_draw_obj(struct dm *dmp, struct bv_scene_obj *s)
     // "Standard" vlist object drawing
     if (bu_list_len(&s->s_vlist)) {
 	if (gl_swrast_database_wireframe(dmp, s)) {
+	    lightingWasEnabled = glIsEnabled(GL_LIGHTING);
+	    if (lightingWasEnabled) {
+		unsigned char *fg = dm_get_fg(dmp);
+		glDisable(GL_LIGHTING);
+		glColor3ub((GLubyte)fg[0], (GLubyte)fg[1], (GLubyte)fg[2]);
+		restoreLighting = 1;
+	    }
 	    glGetIntegerv(GL_SHADE_MODEL, &originalShadeModel);
 	    if (originalShadeModel != GL_FLAT) {
 		glShadeModel(GL_FLAT);
@@ -588,6 +597,8 @@ int gl_draw_obj(struct dm *dmp, struct bv_scene_obj *s)
 	}
 	if (restoreShadeModel)
 	    glShadeModel((GLenum)originalShadeModel);
+	if (restoreLighting)
+	    glEnable(GL_LIGHTING);
 	return BRLCAD_OK;
     }
 
