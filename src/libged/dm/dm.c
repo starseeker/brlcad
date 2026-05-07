@@ -29,6 +29,7 @@
 #include <ctype.h>
 #include <string.h>
 #include "bu/cmd.h"
+#include "bu/log.h"
 #include "bu/opt.h"
 #include "bu/vls.h"
 #include "dm.h"
@@ -50,6 +51,16 @@ struct _ged_dm_info {
     const struct bu_cmdtab *cmds;
     struct bu_opt_desc *gopts;
 };
+
+static int
+_ged_dm_log_to_vls(void *data, void *str)
+{
+    struct bu_vls *v = (struct bu_vls *)data;
+    if (!v || !str)
+        return 0;
+    bu_vls_printf(v, "%s", (const char *)str);
+    return 0;
+}
 
 static int
 _dm_cmd_msgs(void *bs, int argc, const char **argv, const char *us, const char *ps)
@@ -457,14 +468,30 @@ _dm_cmd_set(void *ds, int argc, const char **argv)
     }
 
     struct bu_vls tmp_vls = BU_VLS_INIT_ZERO;
+    struct bu_vls parse_msgs = BU_VLS_INIT_ZERO;
+    struct bu_hook_list saved_log_hooks = BU_HOOK_LIST_INIT_ZERO;
     int ret;
     bu_vls_printf(&tmp_vls, "%s=\"%s\"", argv[0], argv[1]);
+
+    bu_log_hook_save_all(&saved_log_hooks);
+    bu_log_hook_delete_all();
+    bu_log_add_hook(_ged_dm_log_to_vls, (void *)&parse_msgs);
+
     ret = bu_struct_parse(&tmp_vls, dmparse, (char *)mvars, NULL);
+
+    bu_log_hook_delete_all();
+    bu_log_hook_restore_all(&saved_log_hooks);
+
     bu_vls_free(&tmp_vls);
     if (ret < 0) {
+	if (bu_vls_strlen(&parse_msgs)) {
+	    bu_vls_printf(gd->gedp->ged_result_str, "%s", bu_vls_cstr(&parse_msgs));
+	}
 	bu_vls_printf(gd->gedp->ged_result_str, ": unable to set %s", argv[0]);
+	bu_vls_free(&parse_msgs);
 	return BRLCAD_ERROR;
     }
+    bu_vls_free(&parse_msgs);
 
     if (gd->verbosity) {
 	if (gd->verbosity > 1) {
