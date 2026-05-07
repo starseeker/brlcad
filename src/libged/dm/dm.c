@@ -430,16 +430,29 @@ _dm_cmd_set(void *ds, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    if (ac != 2) {
-	bu_vls_printf(gd->gedp->ged_result_str, ": invalid argument count - need key and value");
-	return BRLCAD_ERROR;
-    }
-
     struct bu_structparse *dmparse = dm_get_vparse(cdmp);
     void *mvars = dm_get_mvars(cdmp);
     if (!dmparse || !mvars) {
 	// No variables to set
 	bu_vls_printf(gd->gedp->ged_result_str, "display manager has not associated variables\n");
+	return BRLCAD_ERROR;
+    }
+
+    if (!ac) {
+	for (const struct bu_structparse *sdp = dmparse; sdp->sp_fmt[0] != '\0'; sdp++) {
+	    if (!sdp->sp_name)
+		continue;
+	    if (gd->verbosity) {
+		bu_vls_printf(gd->gedp->ged_result_str, "%s (%s)\n", sdp->sp_name, sdp->sp_fmt);
+	    } else {
+		bu_vls_printf(gd->gedp->ged_result_str, "%s\n", sdp->sp_name);
+	    }
+	}
+	return BRLCAD_OK;
+    }
+
+    if (ac != 2) {
+	bu_vls_printf(gd->gedp->ged_result_str, ": invalid argument count - need key and value");
 	return BRLCAD_ERROR;
     }
 
