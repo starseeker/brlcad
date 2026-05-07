@@ -62,6 +62,16 @@ gl_swrast_database_wireframe(struct dm *dmp, struct bv_scene_obj *s)
     return (s->s_os->s_dmode == 0 || s->s_os->s_dmode == 3);
 }
 
+static int
+gl_swrast_wireframe_obj(struct dm *dmp, struct bv_scene_obj *s)
+{
+    if (!dmp || !s || !dm_get_dm_name(dmp) || !BU_STR_EQUAL(dm_get_dm_name(dmp), "swrast"))
+	return 0;
+    if (!(s->s_type_flags & BV_DB_OBJS))
+	return 0;
+    return (s->s_os->s_dmode == 0 || s->s_os->s_dmode == 3);
+}
+
 static inline void
 swrast_put_pixel_rgba(struct swrast_vars_fast *pv, int w, int h, int x, int y, const unsigned char *fg)
 {
@@ -784,7 +794,7 @@ int gl_draw_obj(struct dm *dmp, struct bv_scene_obj *s)
 
     // "Standard" vlist object drawing
     if (bu_list_len(&s->s_vlist)) {
-	if (gl_swrast_database_wireframe(dmp, s)) {
+	if (gl_swrast_wireframe_obj(dmp, s)) {
 	    lightingWasEnabled = glIsEnabled(GL_LIGHTING);
 	    if (lightingWasEnabled) {
 		unsigned char *fg = dm_get_fg(dmp);
@@ -792,7 +802,7 @@ int gl_draw_obj(struct dm *dmp, struct bv_scene_obj *s)
 		glColor3ub((GLubyte)fg[0], (GLubyte)fg[1], (GLubyte)fg[2]);
 		restoreLighting = 1;
 	    }
-	    if (swrast_drawVList_fast(dmp, (struct bv_vlist *)&s->s_vlist) == BRLCAD_OK) {
+	    if (gl_swrast_database_wireframe(dmp, s) && swrast_drawVList_fast(dmp, (struct bv_vlist *)&s->s_vlist) == BRLCAD_OK) {
 		if (restoreLighting)
 		    glEnable(GL_LIGHTING);
 		return BRLCAD_OK;
