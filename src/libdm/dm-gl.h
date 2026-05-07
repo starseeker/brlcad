@@ -114,6 +114,7 @@ struct gl_vars {
     int zclipping_on;
     int zbuffer_on;
     int lighting_on;
+    int fast_wireframe;
     int transparency_on;
     int fastfog;
     double fogdensity;

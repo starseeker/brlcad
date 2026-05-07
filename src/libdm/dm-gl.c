@@ -136,6 +136,7 @@ void glvars_init(struct dm *dmp)
     /* Unless the app tells us different, assume OpenGL based
      * displays are capable of transparency */
     mvars->transparency_on = 1;
+    mvars->fast_wireframe = 0;
 }
 
 void gl_fogHint(struct dm *dmp, int fastfog)
@@ -1765,6 +1766,7 @@ struct bu_structparse gl_vparse[] = {
     {"%d",  1, "zclip",            gl_MV_O(zclipping_on),    gl_zclip_hook, NULL, NULL },
     {"%d",  1, "zbuffer",          gl_MV_O(zbuffer_on),      gl_zbuffer_hook, NULL, NULL },
     {"%d",  1, "lighting",         gl_MV_O(lighting_on),     gl_lighting_hook, NULL, NULL },
+    {"%d",  1, "fast_wireframe",   gl_MV_O(fast_wireframe),  dm_generic_hook, NULL, NULL },
     {"%d",  1, "transparency",     gl_MV_O(transparency_on), gl_transparency_hook, NULL, NULL },
     {"%d",  1, "fastfog",          gl_MV_O(fastfog),         gl_fog_hook, NULL, NULL },
     {"%g",  1, "density",          gl_MV_O(fogdensity),      dm_generic_hook, NULL, NULL },

@@ -49,7 +49,14 @@ struct swrast_vars_fast {
 static int
 gl_swrast_database_wireframe(struct dm *dmp, struct bv_scene_obj *s)
 {
+    /* fast_wireframe currently applies only to the swrast DM.  Other GL DMs
+     * may expose the variable via shared gl_vparse, but this check keeps it
+     * a no-op outside swrast. */
     if (!dmp || !s || !dm_get_dm_name(dmp) || !BU_STR_EQUAL(dm_get_dm_name(dmp), "swrast"))
+	return 0;
+
+    struct gl_vars *mvars = (struct gl_vars *)dmp->i->m_vars;
+    if (!mvars || !mvars->fast_wireframe)
 	return 0;
 
     if (!(s->s_type_flags & BV_DB_OBJS))
