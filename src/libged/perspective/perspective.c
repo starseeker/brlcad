@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "rt/view_legacy_bsg.h"
+
 #include "../ged_private.h"
 
 
@@ -47,7 +49,8 @@ ged_perspective_core(struct ged *gedp, int argc, const char *argv[])
 
     /* get the perspective angle */
     if (argc == 1) {
-	bu_vls_printf(gedp->ged_result_str, "%g", gedp->ged_gvp->gv_perspective);
+	bu_vls_printf(gedp->ged_result_str, "%g",
+		rt_view_perspective_from_bsg(gedp->ged_gvp));
 	return BRLCAD_OK;
     }
 
@@ -58,14 +61,16 @@ ged_perspective_core(struct ged *gedp, int argc, const char *argv[])
 	    return BRLCAD_ERROR;
 	}
 
-	gedp->ged_gvp->gv_perspective = perspective;
+	rt_view_perspective_set_bsg(gedp->ged_gvp, perspective);
 
-	if (SMALL_FASTF < gedp->ged_gvp->gv_perspective) {
-	    persp_mat(gedp->ged_gvp->gv_pmat, gedp->ged_gvp->gv_perspective,
+	mat_t pmat;
+	if (SMALL_FASTF < perspective) {
+	    persp_mat(pmat, perspective,
 			  (fastf_t)1.0f, (fastf_t)0.01f, (fastf_t)1.0e10f, (fastf_t)1.0f);
 	} else {
-	    MAT_COPY(gedp->ged_gvp->gv_pmat, bn_mat_identity);
+	    MAT_COPY(pmat, bn_mat_identity);
 	}
+	rt_view_pmat_set_bsg(gedp->ged_gvp, pmat);
 
 	bsg_update(gedp->ged_gvp);
 

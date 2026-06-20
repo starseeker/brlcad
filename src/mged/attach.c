@@ -127,7 +127,7 @@ mged_dm_init(
 	return TCL_ERROR;
 
     /*XXXX this eventually needs to move into Ogl's private structure */
-    dm_set_vp(DMP, &view_state->vs_gvp->gv_scale);
+    dm_set_vp(DMP, rt_view_scale_storage_from_bsg(view_state->vs_gvp));
     dm_set_perspective(DMP, mged_variables->mv_perspective_mode);
 
 #ifdef HAVE_TK

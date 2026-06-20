@@ -32,6 +32,7 @@ extern "C" {
 #include "bn/str.h"
 #include "bsg/defines.h"
 #include "bsg/util.h"
+#include "rt/view_legacy_bsg.h"
 }
 
 #include "qtcad/defines.h"
@@ -40,11 +41,13 @@ extern "C" {
 void
 QgCanvasInput::suspendDragBoundsUpdate(struct bsg_view *v)
 {
-	if (!v || !v->gv_bounds_update)
+	qgcanvas_bounds_update_t bounds_update =
+		rt_view_bounds_update_callback_from_bsg(v);
+	if (!bounds_update)
 		return;
 	if (m_drag_bounds_updates.find(v) == m_drag_bounds_updates.end()) {
-		m_drag_bounds_updates[v] = v->gv_bounds_update;
-		v->gv_bounds_update = nullptr;
+		m_drag_bounds_updates[v] = bounds_update;
+		rt_view_bounds_update_callback_set_bsg(v, nullptr);
 	}
 }
 
@@ -56,9 +59,9 @@ QgCanvasInput::restoreDragBoundsUpdate(struct bsg_view *v, int refresh_bounds)
 	auto it = m_drag_bounds_updates.find(v);
 	if (it == m_drag_bounds_updates.end())
 		return;
-	v->gv_bounds_update = it->second;
-	if (refresh_bounds && v->gv_bounds_update)
-		(*(v->gv_bounds_update))(v);
+	rt_view_bounds_update_callback_set_bsg(v, it->second);
+	if (refresh_bounds)
+		rt_view_bounds_update_callback_call_bsg(v);
 	m_drag_bounds_updates.erase(it);
 	m_drag_update_ts.erase(v);
 }
@@ -104,70 +107,70 @@ QgCanvasInput::keyPressEvent(struct bsg_view *v, int UNUSED(x_prev),
 		case '2': {
 				vect_t aet_vec;
 				bn_decode_vect(aet_vec, "35 -25 0");
-				bsg_view_set_aet(v, aet_vec);
+				rt_view_aet_set_bsg(v, aet_vec);
 				bsg_update(v);
 				return 1;
 			}
 		case '3': {
 				vect_t aet_vec;
 				bn_decode_vect(aet_vec, "35 25 0");
-				bsg_view_set_aet(v, aet_vec);
+				rt_view_aet_set_bsg(v, aet_vec);
 				bsg_update(v);
 				return 1;
 			}
 		case '4': {
 				vect_t aet_vec;
 				bn_decode_vect(aet_vec, "45 45 0");
-				bsg_view_set_aet(v, aet_vec);
+				rt_view_aet_set_bsg(v, aet_vec);
 				bsg_update(v);
 				return 1;
 			}
 		case '5': {
 				vect_t aet_vec;
 				bn_decode_vect(aet_vec, "145 25 0");
-				bsg_view_set_aet(v, aet_vec);
+				rt_view_aet_set_bsg(v, aet_vec);
 				bsg_update(v);
 				return 1;
 			}
 		case '6': {
 				vect_t aet_vec;
 				bn_decode_vect(aet_vec, "215 25 0");
-				bsg_view_set_aet(v, aet_vec);
+				rt_view_aet_set_bsg(v, aet_vec);
 				bsg_update(v);
 				return 1;
 			}
 		case '7': {
 				vect_t aet_vec;
 				bn_decode_vect(aet_vec, "325 25 0");
-				bsg_view_set_aet(v, aet_vec);
+				rt_view_aet_set_bsg(v, aet_vec);
 				bsg_update(v);
 				return 1;
 			}
 		case 'F': {
 				vect_t aet_vec;
 				bn_decode_vect(aet_vec, "0 0 0");
-				bsg_view_set_aet(v, aet_vec);
+				rt_view_aet_set_bsg(v, aet_vec);
 				bsg_update(v);
 				return 1;
 			}
 		case 'T': {
 				vect_t aet_vec;
 				bn_decode_vect(aet_vec, "270 90 0");
-				bsg_view_set_aet(v, aet_vec);
+				rt_view_aet_set_bsg(v, aet_vec);
 				bsg_update(v);
 				return 1;
 			}
 		case 'B': {
 				vect_t aet_vec;
 				bn_decode_vect(aet_vec, "270 -90 0");
-				bsg_view_set_aet(v, aet_vec);
+				rt_view_aet_set_bsg(v, aet_vec);
 				bsg_update(v);
 				return 1;
 			}
 		case 'L': {
 				vect_t aet_vec;
 				bn_decode_vect(aet_vec, "90 0 0");
-				bsg_view_set_aet(v, aet_vec);
+				rt_view_aet_set_bsg(v, aet_vec);
 				bsg_update(v);
 				return 1;
 			}
@@ -179,7 +182,7 @@ QgCanvasInput::keyPressEvent(struct bsg_view *v, int UNUSED(x_prev),
 				else {
 					bn_decode_vect(aet_vec, "270 0 0");
 				}
-				bsg_view_set_aet(v, aet_vec);
+				rt_view_aet_set_bsg(v, aet_vec);
 				bsg_update(v);
 				return 1;
 			}
@@ -366,7 +369,7 @@ QgCanvasInput::mouseMoveEvent(struct bsg_view *v, int x_prev, int y_prev,
 		// Build in some sensitivity to how much the mouse moved when doing
 		// a motion based scale
 		int mdelta = (abs(dx) > abs(dy)) ? dx : -dy;
-		int f = (int)(2*100*(double)abs(mdelta)/(double)v->gv_height);
+		int f = (int)(2*100*(double)abs(mdelta)/(double)rt_view_height_from_bsg(v));
 
 		if (mdelta > 0) {
 			dy = 101 + f;
@@ -385,7 +388,9 @@ QgCanvasInput::mouseMoveEvent(struct bsg_view *v, int x_prev, int y_prev,
 	// based on which mod keys are set to allow bsg_adjust to
 	// do the correct math.
 	point_t center;
-	MAT_DELTAS_GET_NEG(center, v->gv_center);
+	mat_t view_center;
+	rt_view_center_from_bsg(view_center, v);
+	MAT_DELTAS_GET_NEG(center, view_center);
 
 	if (view_flags & (BSG_ROT | BSG_TRANS | BSG_SCALE))
 		suspendDragBoundsUpdate(v);

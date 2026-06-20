@@ -31,6 +31,7 @@
 
 #include "vmath.h"
 #include "bsg/view_state.h"
+#include "rt/view_legacy_bsg.h"
 
 #include "../ged_private.h"
 
@@ -218,6 +219,9 @@ rect_zoom(struct ged *gedp, struct bsg_interactive_rect_state *rect)
     point_t new_model_center;
     point_t old_view_center;
     point_t new_view_center;
+    mat_t view_center;
+    mat_t model2view;
+    mat_t view2model;
 
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
 
@@ -230,8 +234,11 @@ rect_zoom(struct ged *gedp, struct bsg_interactive_rect_state *rect)
     rect_adjust_for_zoom(rect);
 
     /* find old view center */
-    MAT_DELTAS_GET_NEG(old_model_center, gedp->ged_gvp->gv_center);
-    MAT4X3PNT(old_view_center, gedp->ged_gvp->gv_model2view, old_model_center);
+    rt_view_center_from_bsg(view_center, gedp->ged_gvp);
+    rt_view_model2view_from_bsg(model2view, gedp->ged_gvp);
+    rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
+    MAT_DELTAS_GET_NEG(old_model_center, view_center);
+    MAT4X3PNT(old_view_center, model2view, old_model_center);
 
     /* calculate new view center */
     VSET(new_view_center,
@@ -240,7 +247,7 @@ rect_zoom(struct ged *gedp, struct bsg_interactive_rect_state *rect)
 	 old_view_center[Z]);
 
     /* find new model center */
-    MAT4X3PNT(new_model_center, gedp->ged_gvp->gv_view2model, new_view_center);
+    MAT4X3PNT(new_model_center, view2model, new_view_center);
 
     /* zoom in to fill rectangle */
     if (rect->width >= 0.0)
@@ -262,8 +269,9 @@ rect_zoom(struct ged *gedp, struct bsg_interactive_rect_state *rect)
 	return BRLCAD_OK;
 
     /* set the new model center */
-    MAT_DELTAS_VEC_NEG(gedp->ged_gvp->gv_center, new_model_center);
-    gedp->ged_gvp->gv_scale *= sf;
+    rt_view_center_vec_set_bsg(gedp->ged_gvp, new_model_center);
+    rt_view_scale_set_bsg(gedp->ged_gvp,
+	    rt_view_scale_from_bsg(gedp->ged_gvp) * sf);
     bsg_update(gedp->ged_gvp);
 
     return BRLCAD_OK;

@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "rt/view_legacy_bsg.h"
+
 #include "../ged_private.h"
 
 
@@ -46,14 +48,15 @@ ged_pmat_core(struct ged *gedp, int argc, const char *argv[])
 
     /* get the perspective matrix */
     if (argc == 1) {
-	bn_encode_mat(gedp->ged_result_str, gedp->ged_gvp->gv_pmat, 1);
+	rt_view_pmat_from_bsg(pmat, gedp->ged_gvp);
+	bn_encode_mat(gedp->ged_result_str, pmat, 1);
 	return BRLCAD_OK;
     } else if (argc == 2) {
 	/* set perspective matrix */
 	if (bn_decode_mat(pmat, argv[1]) != 16)
 	    return BRLCAD_ERROR;
 
-	MAT_COPY(gedp->ged_gvp->gv_pmat, pmat);
+	rt_view_pmat_set_bsg(gedp->ged_gvp, pmat);
 	bsg_update(gedp->ged_gvp);
 
 	return BRLCAD_OK;

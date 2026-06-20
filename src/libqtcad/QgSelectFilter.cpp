@@ -29,6 +29,7 @@ extern "C" {
 #include "bu/malloc.h"
 #include "bsg.h"
 #include "raytrace.h"
+#include "rt/view_legacy_bsg.h"
 }
 
 #include <algorithm>
@@ -164,13 +165,13 @@ QgSelectFilter::clear_selected_result()
 }
 
 void
-QgSelectFilter::set_selected_result(struct bsg_view *v, struct bsg_pick_result *res)
+QgSelectFilter::set_selected_result(struct bsg_view *v, void *res)
 {
     clear_selected_result();
     if (!m)
 	return;
 
-    m->selected_result = res;
+    m->selected_result = static_cast<struct bsg_pick_result *>(res);
     if (m->selected_result) {
 	m->selected_interactions = bsg_interaction_from_pick_result(m->selected_result);
 	if (m->selected_interactions) {
@@ -262,6 +263,8 @@ QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
     if (e->type() == QEvent::MouseButtonPress) {
 	px = v->gv_mouse_x;
 	py = v->gv_mouse_y;
+	int view_width = rt_view_width_from_bsg(v);
+	int view_height = rt_view_height_from_bsg(v);
 	struct bsg_interactive_rect_state rect;
 	if (!bsg_view_interactive_rect_get(v, &rect))
 	    return true;
@@ -269,11 +272,11 @@ QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
 	rect.dim[0] = 0;
 	rect.dim[1] = 0;
 	rect.x = px;
-	rect.y = v->gv_height - py;
+	rect.y = view_height - py;
 	rect.pos[0] = rect.x;
 	rect.pos[1] = rect.y;
-	rect.cdim[0] = v->gv_width;
-	rect.cdim[1] = v->gv_height;
+	rect.cdim[0] = view_width;
+	rect.cdim[1] = view_height;
 	rect.aspect = (fastf_t)rect.cdim[X] / rect.cdim[Y];
 	bsg_view_interactive_rect_set(v, &rect);
 	emit view_updated(QG_VIEW_DRAWN);
@@ -284,9 +287,10 @@ QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
 	struct bsg_interactive_rect_state rect;
 	if (!bsg_view_interactive_rect_get(v, &rect))
 	    return true;
+	int view_height = rt_view_height_from_bsg(v);
 	rect.draw = 1;
 	rect.dim[0] = v->gv_mouse_x - px;
-	rect.dim[1] = (v->gv_height - v->gv_mouse_y) - rect.pos[1];
+	rect.dim[1] = (view_height - v->gv_mouse_y) - rect.pos[1];
 	rect.x = (rect.pos[X] / (fastf_t)rect.cdim[X] - 0.5) * 2.0;
 	rect.y = ((0.5 - (rect.cdim[Y] - rect.pos[Y]) / (fastf_t)rect.cdim[Y]) / rect.aspect * 2.0);
 	rect.width = rect.dim[X] * 2.0 / (fastf_t)rect.cdim[X];
@@ -521,9 +525,13 @@ QgSelectRayFilter::eventFilter(QObject *, QEvent *e)
     bsg_screen_to_view(v, &vx, &vy, v->gv_mouse_x, v->gv_mouse_y);
     point_t vpnt, mpnt;
     VSET(vpnt, vx, vy, 0);
-    MAT4X3PNT(mpnt, v->gv_view2model, vpnt);
+    mat_t view2model;
+    rt_view_view2model_from_bsg(view2model, v);
+    MAT4X3PNT(mpnt, view2model, vpnt);
     vect_t dir;
-    VMOVEN(dir, v->gv_rotation + 8, 3);
+    mat_t view_rotation;
+    rt_view_rotation_from_bsg(view_rotation, v);
+    VMOVEN(dir, view_rotation + 8, 3);
     VUNITIZE(dir);
     VSCALE(dir, dir, v->radius);
     VADD2(ap->a_ray.r_pt, mpnt, dir);

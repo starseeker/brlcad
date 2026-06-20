@@ -1,5 +1,31 @@
-BRL-CAD Obol Pivot Migration Plan
-=================================
+BRL-CAD Obol Migration Worklog
+==============================
+
+How To Use This File
+--------------------
+
+This file preserves the detailed Obol migration work history, design notes,
+and rationale consolidated from the former root guidance documents.  It is a
+reference log, not the first-stop active handoff.
+
+Use obol_activework.txt first for current priorities, completion percentages,
+test gates, and remaining work.  Return here when an implementation choice
+needs historical context or more detailed design rationale.
+
+Consolidated former root notes:
+
+* fb_plan.txt
+* lod_pipeline.txt
+* lod_result_wakeup.txt
+* modern_drawing.txt
+* obol_migration.txt
+* obol_prototype.txt
+* pop_lod.txt
+* review.txt
+
+
+Original Obol Pivot Migration Plan
+----------------------------------
 
 Purpose
 -------
@@ -95,14 +121,33 @@ libbrlobol and qtcad:
   Obol supplies the selection paths.  The public qtcad selection filter API
   now exposes normalized paths instead of BSG pick/interaction result
   accessors, and the qged selector plugin consumes those paths directly.
-  Legacy BSG pick paths remain internal fallback.
+  The qtcad point-pick helper also has the first nonblocking source-backed
+  exact mesh pick integration: it keeps ordinary display picks as the first
+  pass, then uses SoBRLSourceMeshPickAction, request-filtered LoD result
+  draining, and source-backed request submission for LoD meshes explicitly set
+  to full-detail picking.  Rectangle picks inherit this through their point
+  samples.  qtcad point and rectangle picks also use the libbrlobol direct
+  librt exact ray helper as a database-source fallback for implicit solids and
+  implicit-backed combs when no ordinary display/source-backed mesh hit is
+  available.  Legacy BSG pick paths remain internal fallback.
 * qtcad Obol measurement and snap workflows operate on migrated content
   without initializing the legacy display manager.  Measurement overlays are
   now published exclusively through Obol; the qtcad measurement filter no
   longer creates BSG measurement features or caches BSG measure-result
   records, and 3D measurement no longer falls back through BSG pick
-  candidates or direct raytrace prep.  Snap retains transitional legacy
-  refinement fallback for non-migrated or view-scoped cases.
+  candidates or direct raytrace prep.  qtcad now exposes a full-detail snap
+  helper that consumes matching ready source-backed LoD results or submits
+  missing source-backed requests through SoBRLSnapAction, while the ordinary
+  interactive snap helper remains display-level.  qtcad also exposes an exact
+  full-detail geometry measure helper that consumes matching source-backed
+  LoD results through SoBRLMeasureAction and reports source-backed counts,
+  bounds, area/length, and nearest-primitive identity.  qtcad exact
+  pick/snap/measure submissions now pass BRLObolViewController's exact
+  full-detail face/point budget to source-backed provider tasks so
+  over-budget whole-object reloads can fall back before mesh allocation.  Snap
+  retains
+  transitional legacy refinement fallback for non-migrated or view-scoped
+  cases.
 * qtcad Obol workflow tests cover pinewood.g, havoc.g, and the larger
   mixed-primitive m35.g sample, including real-model readback, pick, snap,
   and measurement overlay helpers.  doc/notes/obol_realization_coverage.txt
@@ -131,7 +176,7 @@ libbrlobol and qtcad:
   result draining, in-flight diagnostics, cancellable task-level debug delay
   controls, stale result rejection, owned realization-task data cleanup, and
   one serialized cache-write lane without exposing BSG LoD APIs.  It also has
-  the coalesced result-ready wakeup described in lod_result_wakeup.txt:
+  the coalesced result-ready wakeup described in the consolidated LoD notes:
   workers only signal that queued results should be drained, and the owning
   view/controller performs the main-thread drain/apply pass.  The LoD result
   contract now carries typed Stage 0/1/2 directory/dependency records, display
@@ -178,23 +223,72 @@ libbrlobol and qtcad:
   identity after the full-detail fields are replaced.  For preserving meshes,
   SoBRLExportAction/SoBRLMeasureAction/SoBRLSnapAction can use that preserved
   source geometry for full-detail/detail-preserving policy requests while
-  DISPLAY_LEVEL continues to use the displayed LoD mesh.  Mesh ray picking now
-  has the same initial policy split: display-level is the viewport default,
-  while explicit full-detail picks use resident preserved source triangles
-  when available and otherwise refuse to treat an active display-LoD payload as
-  exact geometry.  That preservation is an interim correctness bridge for
-  meshes that are already resident, not the target policy for large geometry.
+  DISPLAY_LEVEL continues to use the displayed LoD mesh.  When no preserved
+  full-detail payload is resident, exact export/measure/snap now record
+  BRLObolSourceMeshRequest records carrying source identity, counts, and
+  bounds instead of treating display LoD as exact geometry.  The first RT
+  source full-detail provider can reload direct BoT source objects into owned
+  Obol mesh payloads through BRLObolLodService, validates source-count
+  mismatches as stale results, and exposes whole-object face/point limits so
+  callers can refuse over-budget full-detail reloads before falling through to
+  chunked detail reads.  BRLObolViewController now owns a per-view exact
+  full-detail budget, and qtcad exact pick/snap/measure submit paths pass
+  those limits to source-backed provider tasks.  Export, measure, and snap
+  actions can now convert their recorded source requests into submit-ready RT
+  full-detail LoD requests, and BRLObolLodService can submit those source
+  requests with provider-owned cleanup.  Those actions can also consume
+  returned full-detail mesh payloads using the recorded transform and
+  shape-level metadata, and now expose action-level submit and drained-result
+  consume helpers for recorded source-backed requests.  Higher-level
+  exact-operation callers no longer need a separate triangle ingestion path
+  for export, measure, or snap, but still need to call the helpers around
+  their UI/tool workflows.  Exact mesh picking now has a matching
+  source-backed traversal action that records full-detail source requests for
+  LoD-backed meshes in exact-pick mode, can submit them through the LoD
+  service, and can consume drained full-detail results via the shared
+  pick-result ray tester.  qtcad point and rectangle picking now route exact
+  mesh picks through that action around provider drain points without blocking
+  the UI, and qtcad's explicit full-detail snap helper routes exact snap
+  queries through the snap action source-backed drain/submit path.  qtcad's
+  full-detail geometry measure helper now routes exact measurement queries
+  through the measure action source-backed drain/submit path.  Other
+  exact-operation tools still need matching caller-side drain/submit
+  integration.  The LoD service now supports request-filtered
+  result draining, which lets
+  source-backed exact-operation callers consume matching full-detail results
+  without stealing unrelated display-LoD results from the shared queue.  Snap
+  and pick source-backed exact requests now carry source-local query metadata
+  into LoD provider params: snap records bounded query boxes and tolerance,
+  while pick records source-local rays.  This gives the future chunked BoT
+  reader the object identity and query scope needed to avoid whole-object
+  reloads, while leaving the current whole-direct-BoT provider behavior
+  unchanged.
+  Mesh ray
+  picking now has the same initial policy split: display-level is the viewport
+  default, while explicit full-detail picks use resident preserved source
+  triangles when available and otherwise refuse to treat an active display-LoD
+  payload as exact geometry.  That preservation is an interim correctness
+  bridge for meshes that are already resident, not the target policy for large
+  geometry.
   Production LoD-backed BoTs must be
   source-backed and memory-budgeted, keeping identity/bounds/active display
   payloads resident while exact operations fetch full-detail or bounded chunks
   from the .g/RT provider path on demand.  Exact picks for CSG implicit solids
   and implicit-solid-backed comb instances should use a librt ray query rather
-  than tessellated display geometry, returning the displayed instance path,
-  region/material data, primitive identity, hit point, normal, and distance.
-  POP payload ownership, active-level selection, source-backed full-detail
-  reload or chunked detail reads when no preserved payload is resident,
+  than tessellated display geometry.  libbrlobol now has the first direct
+  librt ray helper for explicit database object paths; it returns the nearest
+  implicit/comb hit with point, normal, distance, region/material data, source
+  primitive name/type, and BRL-CAD pick-detail identity.  qtcad point and
+  rectangle picks now call that helper for database-source implicit/comb
+  fallback hits, including camera-derived rays for scenes that have database
+  sources but no display-pickable Obol geometry.
+  POP payload ownership, active-level selection, action/pick consumption of
+  source-backed full-detail reloads, chunked detail reads from the recorded
+  source requests when no preserved payload is resident,
   optional coarse POP-build spatial/index sidecar metadata for targeted exact
-  picks/snaps, the librt exact-pick provider, and richer policy-aware provider
+  picks/snaps, remaining tool integration of the librt exact-pick helper,
+  prep cache ownership for repeated exact rays, result-order refinement across
+  display/source-backed/librt hits, and richer policy-aware provider
   scheduling are still queued.
 * libbrlobol shaded PNTS realization now preserves basic RT_PNT_TYPE_PNT
   point clouds as Obol vlist point primitives rather than failing the shaded
@@ -231,7 +325,7 @@ Dependency guardrails:
   standalone bg test executables.  It also checks that bg_line_layer keeps
   its explicit plot3 diagnostic export helpers and that standalone plot3
   utilities do not relink libbsg.
-* fb_plan.txt records the framebuffer/image-stream split: libimgstream owns
+* The framebuffer/image-stream plan records the split: libimgstream owns
   non-display stream storage, transport, producer/subscriber lifecycle, and
   fb compatibility; libicv owns static images/codecs/lookup tables; Obol and
   libbrlobol own image display and window-host behavior.
@@ -329,9 +423,10 @@ Low-level neutralization:
   average sample spacing, and solid point spacing; primitive LoD code uses
   those RT names instead of private primitive/view helper declarations.
   src/librt/view_legacy_bsg.c owns the BSG view, LoD policy get/set/copy,
-  LoD bounds-update/callback, view-scale, and scene-ref LoD load/free adapter
-  implementation.  BSG mesh-LoD unwrapping is private to librt implementation
-  units rather than an installed legacy adapter surface.
+  LoD bounds-update/callback, view-scale/size/inverse-size, keypoint,
+  rotate-about, coord, and scene-ref LoD load/free adapter implementation.  BSG
+  mesh-LoD unwrapping is private to librt implementation units rather than an
+  installed legacy adapter surface.
   src/libged's private primitive wireframe and face-set publication helpers
   now consume rt_view_info snapshots before invoking RT primitive callbacks;
   BSG-to-RT view adaptation is centralized in the transitional
@@ -348,18 +443,170 @@ Low-level neutralization:
   implementation.
   libged plot, vnirt, solids_on_ray, ADC, and DM window-bound
   helpers now use RT_VIEW_* and RT_INV_VIEW constants instead of BSG_VIEW_*,
-  BSG_INV_*, or INV_BV spellings for normalized view-coordinate math.  libged
+  BSG_INV_*, or INV_BV spellings for normalized view-coordinate math, and
+  solids_on_ray also reads ray center, rotation, model2view, and scale through
+  the RT legacy adapter; rtcheck2 reads overlap glyph scale through that same
+  boundary.  libged
   size, scale, and zoom commands now use RT_VIEW_MIN_SIZE/RT_VIEW_MIN_SCALE
   instead of BSG_MINVIEWSIZE/BSG_MINVIEWSCALE for view bounds, and the pivot
   guard checks those command paths.  libged check -i overlap setup,
-  get_eyemodel output, _ged_rt_write script emission, and rtwizard command
-  construction now read view size and orientation through the RT legacy view
-  adapter, while the GED-owned eye-model helper remains in GED because it
-  depends on draw bounds and clipping behavior.  RT command, rtwizard,
-  saveview, embedded-RT, and GED eye-model-helper perspective reads also use
-  the same adapter boundary, and plot/PS/PNG diagnostic export now copies
+  get_eyemodel output, _ged_rt_write script emission, rtwizard command
+  construction, NIRT default shot center/direction, NIRT qray glyph scale,
+  vnirt view-to-model conversion, GED eye-model helper snapshots, BoT/BREP
+  viewport pick ray setup, BREP TikZ view AET output, libged
+  selection/polyclip/view-snap/view-polygon/vZ coordinate transforms,
+  pipe/metaball/rot_point/label transform helpers, BoT/ARB nearest-subentity
+  transform helpers, draw refresh view snapshots through the private GED draw
+  bridge, and libged view
+  size/center/AET/ypr/quat/rmat/perspective/eye_pos/width/height query output
+  plus TclCAD polygon command view snapshots and coordinate conversions now
+  read through the RT legacy view adapter; TclCAD data move/pick/screen-to-model
+  command conversions also snapshot model-to-view and view-to-model matrices
+  through that boundary, and TclCAD mouse BREP/joint selection rays plus simple
+  metaball/pipe point lookups now snapshot view-to-model matrices and view
+  rotation through that boundary; remaining TclCAD mouse inverse-rotation
+  edit-motion calculations now use a local adapter helper rather than direct
+  `gv_rotation` reads.  TclCAD mouse BoT single-point setup, polygon
+  circle/contour/ellipse/rectangle creation, and data-scale display
+  conversions now also snapshot model-to-view, view-to-model, and scale values
+  through the same adapter boundary.  RT now exposes legacy raw width/height,
+  view-size, inverse-size, initial-scale, absolute-scale, unit-conversion,
+  keypoint, rotate-about, and coord adapters; TclCAD mouse delta scaling
+  uses the size adapter instead of direct `gv_size` reads, and libged
+  isize/keypoint/rotate_about queries plus rotation/translation utility helper
+  reads use the same boundary; libged, TclCAD, and MGED default/query coord
+  reads plus MGED edit-knob coord save reads now use that adapter boundary
+  while coord setters and unsupported staging/hash fields remain transitional.
+  MGED view command staging/cache/hash reads for adapter-covered fields, MGED
+  temp staging width/height reads, and libged DM fallback width/height checks
+  now use the same boundary.  libged pmat/pmodel2view query output, TclCAD
+  draw projection-matrix loads, and MGED staging/cache/hash projection-matrix
+  reads now also snapshot through the adapter while projection writes remain
+  transitional.  MGED staging/cache/hash initial/absolute scale reads plus
+  libged and MGED knob absolute-scale query output now also use scalar
+  adapters, and MGED cache plus TclCAD refresh unit-conversion stash reads use
+  the same boundary.  MGED VIEWSIZE/VIEWFACTOR macros now expand through the
+  adapter boundary while scale and unit-conversion writes remain transitional.
+  libged AET incremental updates, eye-position
+  perspective-matrix updates, and perspective command matrix updates now also
+  avoid direct BSG readbacks after writing transitional view state.  libged
+  knob keypoint-origin rotation now snapshots keypoint through the adapter,
+  libged size/scale/zoom commands compute paired size/scale/isize values
+  from local snapshots rather than direct view readbacks, and libged
+  pure-rotation plus MGED view-scale ratio readbacks now snapshot current view
+  state before writing transitional BSG fields.  MGED
+  simulation output view argument injection now snapshots
+  orientation, eye position, and size through the adapter boundary, and MGED
+  command autoview ring-scale snapshots use the same read boundary.  MGED make
+  default center/scale
+  reads and area view-rotation diagnostic output now use the same adapter
+  boundary, and libged ADC view scale/matrix conversion reads now use that
+  boundary.  MGED slider view-scale reads now use the same adapter boundary,
+  and libged grid vsnap, eye, and rectangle-zoom read-side view snapshots now
+  use RT adapters while their live view writes remain transitional,
+  and libged lookat/qvrot read-side view snapshots follow the same pattern,
+  and MGED axes overlay view size/rotation/model-to-view reads use RT
+  adapters, and MGED rectangle zoom, pipe pick direction, view-centered
+  transform, and initial view-center setup reads now use the same adapter
+  boundary, and MGED status query output now reads view scale and matrices
+  through that boundary as well.  MGED grid auto-size, draw/snap scaling, and
+  grid coordinate-transform reads now use RT adapter snapshots while live grid
+  view-center writes remain transitional, and MGED ADC view scale and matrix
+  conversions, absolute translation bookkeeping, and chgview knob/edit/slew/size
+  read snapshots now use the same adapter boundary.  MGED generic mouse and X
+  motion/ADC input conversions now snapshot view scale, center, and matrices
+  through that boundary while leaving event dispatch unchanged,
+  while the GED-owned eye-model
+  helper calculation remains in GED because it depends on draw bounds and
+  clipping behavior.  RT command, rtwizard, saveview,
+  embedded-RT, and GED
+  eye-model-helper perspective reads also use the same adapter boundary, and
+  plot/PS/PNG diagnostic export now copies
   model2view, center, scale, perspective, and eye-position camera values
-  through that boundary before invoking the legacy export routines.  savekey
+  through that boundary before invoking the legacy export routines.  The librt
+  edit BSG compatibility bridge now builds `rt_edit_view` snapshots through
+  the RT view adapter boundary instead of reading BSG view fields directly.
+  Legacy DM view-scale pointer setup now uses
+  `rt_view_scale_storage_from_bsg` for the remaining live pointer contract,
+  so libged DM attach, MGED attach, and qtcad GL/SW fallback setup no longer
+  name `gv_scale` directly when binding DM view storage.  qtcad drag-bounds
+  callback suspend/restore now uses `rt_view_bounds_update_callback_*_bsg`
+  helpers rather than reading or writing `gv_bounds_update` directly.  qtcad
+  snap policy reads, simple GED/TclCAD snap-line access, TclCAD Tcl-snap
+  preparation, TclCAD snap-line recentering, and qtcad/libged snap tolerance
+  factor callers now use `rt_view_snap_*_bsg` and
+  `rt_view_center_linesnap_bsg` helpers instead of calling BSG view-state or
+  snap helpers directly.  TclCAD/MGED/libged z-clip view-state get/set paths now use
+  `rt_view_zclip_*_bsg` helpers rather than direct BSG view-state calls.
+  libged/qtcad framebuffer-mode command and toggle paths now use
+  `rt_view_framebuffer_mode_*_bsg` helpers as a narrow scalar compatibility
+  migration; this does not resolve the broader framebuffer display ownership
+  work that belongs with libimgstream/Obol display migration.  gsh/libged
+  cleared-state tracking now uses `rt_view_cleared_*_bsg` helpers instead of
+  direct BSG view-state calls.  libged/TclCAD polygon clipping and
+  area/overlap helpers now derive their view plane through
+  `rt_view_plane_from_bsg` instead of calling `bsg_view_plane` directly.
+  MGED shared-settings checks now use `rt_view_settings_shared_bsg` instead
+  of calling the BSG view-state helper directly.  libged loadview restore
+  writes now use RT legacy setter adapters for size, rotation, center, and
+  perspective instead of calling BSG utility setters directly.  qtcad
+  keybinding/canvas AET writes, qtcad Obol snap-test snap-state setup, and
+  the qtcad Obol draw-sync test's center/scale setup now use the same RT
+  legacy utility-setter boundary; the qtcad Obol snap center-query test setup
+  and qsketch view setup/fit-to-view writes now do as well.  qged polygon
+  snap-line/source-flag UI state
+  and libged snap-semantics test setup now route through the same snap-state
+  adapter helpers, and the libged view-independent oversized view setup now
+  uses an exact scale-state adapter while polygon refs and grid state remain
+  transitional.
+  libdm framebuffer-mode draw/open checks also use the RT legacy framebuffer
+  mode helpers, while broader framebuffer display ownership remains queued for
+  libimgstream/Obol display-host migration.
+  A low-risk setter batch routes qged polygon align-to-poly and
+  libged view/zoom/scale/rect/orient/rmat/setview/vutil writes for AET,
+  center, rotation, size, and scale through the RT legacy setter boundary
+  while leaving unsupported derived view-to-model/projection writes and
+  lifecycle/ownership changes as separate transitional work.
+  A follow-on simple-field setter batch adds RT legacy adapters for keypoint,
+  coord, and rotate-about writes and routes libged keypoint/rotate_about,
+  TclCAD set_coord, and MGED coord/rotate-about setting hooks through them.
+  MGED chgview's librt-edit temporary coord override/restore now uses that
+  same coord setter boundary.  MGED view-command cache/staging restore/copy
+  paths now also use the RT legacy setters for perspective, coord, and
+  rotate-about while leaving scalar/matrix staging writes transitional.  MGED
+  saved-view and view-ring restore paths now use the RT legacy setters for
+  scale, rotation, and center before their existing `new_mats` refresh.  MGED
+  and libged grid center updates now use the RT legacy center setter while
+  preserving the existing `new_mats`/`bsg_update` calls.  libged preview
+  camera rotation/center writes now use the RT legacy setters while preserving
+  the existing preview `bsg_update` calls.  MGED RT command view updates now
+  use the RT legacy scale, rotation, and center setters while preserving the
+  existing `new_mats` refresh sequence.  `mged_vscale` now routes its
+  view-scale update through the RT legacy scale setter while preserving the
+  existing absolute-scale knob bookkeeping, and live chgview initial/absolute
+  scale bookkeeping now uses RT legacy setters.  Libged pmat, perspective, and
+  eye_pos projection-matrix/eye-position updates plus MGED dozoom temporary
+  projection-matrix updates now use RT legacy setters while preserving their
+  existing `bsg_update` or frame-local restore behavior.  MGED cmd
+  staging/cache restore/copy now uses RT legacy exact-state setters for
+  scalar tuples, unit conversions, raw AET, eye/keypoint, rotation/center,
+  derived matrices, and projection matrices.
+  The libged perspective command and MGED perspective variable hooks now also
+  route direct perspective field writes through the RT legacy setter while
+  preserving their existing projection-matrix and display-manager sync logic.
+  qtcad/qged production viewport dimension sync now uses a paired RT legacy
+  width/height setter for GL, SW, shared canvas-state, quad-view, and
+  current-view application updates; test fixture direct width/height setup
+  remains transitional.  TclCAD wrapper, command, mouse, and polygon
+  DM-to-view width/height sync now uses the same RT dimensions setter, and
+  MGED draw/temp-staging plus libged headless DM fallback dimension writes now
+  do the same; the pivot guard rejects reintroduced direct production
+  assignments there.  A broad direct-production BSG view-field scan across
+  libged, libtclcad, MGED, qged, and qtcad is now clean for the tracked
+  assignment/matrix-copy patterns.  The former `src/libged/edit/edit.cpp`
+  `rt_edit_view` initializer hit now relies on neutral `rt_edit_view_init`
+  defaults rather than a direct field write or the BSG adapter boundary.
+  savekey
   now uses the same RT legacy adapter surface for RT -M size, rotation, and
   view2model values instead of reading the transitional BSG view fields
   directly.  The first TclCAD and MGED callers now
@@ -432,7 +679,7 @@ Low-level neutralization:
   bsg/lod.h for LoD publication.
   src/librt/tests/lod.c now validates cached mesh-LoD levels through the
   RT-owned helpers instead of creating BSG views, mesh nodes, or LoD contexts.
-* pop_lod.txt, lod_pipeline.txt, lod_result_wakeup.txt, and cache_drawing.cpp
+* The former POP, LoD pipeline, LoD wakeup notes, and cache_drawing.cpp
   define the LoD rework direction for Obol/libbrlobol.  LoD realization
   should be a provider-neutral staged service below Obol, not a BSG LoD node
   port.  Obol/libbrlobol should
@@ -463,7 +710,7 @@ Low-level neutralization:
   revision, result kind, quality tier, provider id, cache key or geometry
   handle, bounds, primitive counts, estimated error when known,
   terminal/fallback status, and diagnostics.
-  lod_result_wakeup.txt adds the required wakeup contract: BRLObolLodService
+  The LoD wakeup design adds the required wakeup contract: BRLObolLodService
   should emit a lightweight, coalesced result-ready callback when the result
   queue transitions from empty to non-empty; callbacks must not mutate Obol
   nodes or deliver results; the owning controller sets a pending flag, wakes
@@ -665,7 +912,7 @@ Next Push:
   vertex indices for face-level inspection/export, and face pick details record
   nearest edge and vertex identity hints.  Base PNTS point primitives now have
   shaded Obol realization coverage.
-* libbrlobol database realization: 94 percent.  Real hierarchy realization,
+* libbrlobol database realization: 97 percent.  Real hierarchy realization,
   partial refresh, identity fields, mesh/vlist representation, and tests are
   in place; mesh face pick/export details carry source vertex indices and face
   picks expose nearest edge/vertex identity hints; BoT meshes can publish
@@ -706,7 +953,18 @@ Next Push:
   LoD-backed mesh nodes now disable full-detail backup when display-LoD
   payloads replace active fields, while preserving lightweight source
   counts/bounds for request identity.  Ordinary meshes can still preserve
-  full-detail indexed triangles as an interim resident-mesh fallback.  The
+  full-detail indexed triangles as an interim resident-mesh fallback.  Mesh
+  nodes can now evict both preserved full-detail arrays and active
+  display-LoD payloads while retaining source-backed request identity, source
+  counts, bounds, exact-operation provider routing, and bbox contribution.
+  SoBRLMeshResidencyAction and BRLObolViewController's explicit and optional
+  controller-owned mesh-budget paths can now enforce a resident mesh byte
+  budget across a scene by evicting preserved full detail first and
+  source-backed active display payloads second, including automatic
+  enforcement after LoD results are applied.  Snap and pick exact source
+  requests now carry source-local bounded-query metadata into LoD provider
+  params, so the partial-read provider can distinguish whole-object exact
+  reloads from bbox/ray-scoped source queries.  The
   production large-BoT path still needs source-backed full-detail access that
   can reload from .g data, fetch bbox/intersection-targeted subsets, or chunk
   very large meshes instead of requiring a full resident copy.  A candidate
@@ -720,23 +978,38 @@ Next Push:
   preserved full-detail source geometry when available, snap defaults to
   display-level behavior with an explicit full-detail detail-preserving mode
   that can also use preserved source geometry, and mesh ray picking has an
-  explicit display/default versus preserved-full-detail policy split; exact
-  CSG implicit and comb-instance picking still needs a librt ray-query
-  provider that returns display path, region/material, primitive, hit point,
-  normal, and distance; base PNTS shaded point
+  explicit display/default versus preserved-full-detail policy split;
+  libbrlobol has the first direct librt ray-query helper for exact CSG
+  implicit and comb-instance hits, returning path/source identity,
+  region/material data, hit point, normal, and distance, while qtcad/tool
+  integration and prep-cache ownership remain; base PNTS shaded point
   realization/export/snap is covered; native
   text/curve/material refinements, richer PNTS attributes, standalone edge and
   vertex entity picking, POP/provider payload ownership, richer provider-level
   active-level policy scheduling, and more shaded converter hardening remain.
+  Controller-owned database-source replacement now configures watched source
+  fields atomically so realization is not invalidated by stale delayed field
+  sensors immediately after qtcad sync.
 * Obol diagnostic overlays: 45 percent.  qtcad Obol line-layer/HUD overlay
   sync exists; GQA/check/BREP/NMG publication still needs broader Obol-first
   routing.
-* qtcad visible Obol rendering: 56 percent.  Obol readback, GL/SW capture,
+* qtcad visible Obol rendering: 64 percent.  Obol readback, GL/SW capture,
   navigation, selection, snap, and measure gates exist for migrated content;
-  the Qt display-host adapter can create an owned visible toplevel for
-  display-capable framebuffer requests; legacy fallback remains for
-  non-migrated paths.
-* Guardrails and inventory: 88 percent.  Transitional guard and dependency
+  qtcad Obol camera sync, snap tolerance, input scaling, sketch transform, and
+  selection ray/rectangle view snapshots now use the RT legacy view adapter
+  boundary, as do 2D measurement view-to-model conversion, quad-view source
+  unit/size copies, and SW/GL fallback framebuffer-size or matrix-load reads;
+  quad-view visible-path propagation now uses Obol export identity in
+  display-level mode instead of a direct BSG export query; qtcad selection's
+  public header now exposes selected paths without naming legacy BSG
+  pick-result objects, keeping the remaining BSG pick-result fallback internal;
+  qtcad GED draw observer sync and real-model Obol draw/readback workflows now
+  keep controller-owned database sources realized after delayed Obol field
+  sensors drain; the full qtcad Obol workflow gate passes for the pinewood.g,
+  havoc.g, and m35.g baseline.  The Qt display-host adapter can create an
+  owned visible toplevel for display-capable framebuffer requests; legacy
+  fallback remains for non-migrated paths.
+* Guardrails and inventory: 97 percent.  Transitional guard and dependency
   inventory are active and now checks RT-owned view-coordinate constant use in
   the first libged command/helper set, TclCAD/MGED view numeric callers,
   MGED-wide retired numeric alias scans, RT-owned view size/scale limits, and
@@ -744,12 +1017,67 @@ Next Push:
   rejects direct BSG LoD bounds, view-scale, and scene-ref load/free calls in
   the private libged BSG-to-RT view helper, rejects direct savekey RT -M BSG
   view reads, rejects direct MGED title/status BSG view-field reads for
-  center/size/AET/perspective/scale, rejects direct libged simple conversion
-  helper matrix/scale reads, rejects direct libtclcad view draw
-  matrix/perspective reads, wrapper perspective/zoom-refresh LoD policy reads,
-  commands LoD policy reads/writes and command center/scale reads, and axes
-  size-scaling reads, and rejects direct BSG mesh-LoD detail callbacks in the
-  BRep LoD producer; strict mode and final allowlist removal remain.
+  center/size/AET/perspective/scale, rejects direct NIRT snapshot view reads
+  and BoT/BREP viewport pick ray reads, rejects direct BREP TikZ AET output,
+  rejects direct GED eye-model helper snapshot reads, rejects direct libged
+  selection/polyclip/view-snap/view-polygon/vZ coordinate transform reads,
+  rejects direct pipe/metaball/rot_point/label transform helper reads, rejects
+  direct BoT/ARB nearest-subentity transform reads, rejects direct draw refresh
+  view snapshot reads in draw.cpp, rejects direct libged simple conversion
+  helper matrix/rotation/scale reads plus
+  viewdir, solids_on_ray ray view reads, and view command query output, rejects
+  direct ypr/quat/rmat/perspective/eye_pos/width/height query output, rejects
+  rtcheck2 overlap glyph scale reads,
+  rejects direct libtclcad view draw matrix/perspective reads, wrapper
+  perspective/zoom-refresh LoD policy reads, commands LoD policy reads/writes
+  and command center/scale reads, axes size-scaling reads, polygon command
+  view snapshot reads, and qged view-info size/width/height/AET/center reads,
+  plus direct MGED make default center/scale and area view-rotation reads,
+  direct MGED slider view-scale reads, and direct libged ADC view scale/matrix
+  reads, plus direct libged grid/eye/rectangle-zoom read-side view matrix and
+  center/scale reads, direct libged lookat/qvrot read-side view reads, and
+  direct MGED axes overlay view reads, direct MGED rectangle zoom view reads,
+  direct MGED pipe pick direction reads, direct MGED view-centered transform
+  reads, direct MGED initial view-center setup reads, and direct MGED status
+  query output view reads, plus direct MGED grid view size/scale/matrix and
+  center-snapshot reads, direct MGED ADC view scale/matrix reads, direct MGED
+  absolute translation view reads, and direct MGED chgview edit/slew/size read
+  snapshots, plus direct MGED generic mouse and X motion/ADC input view reads,
+  direct MGED edit matrix/rate-knob scale reads, and direct libged align and
+  rotation/slew/translate utility helper view reads, plus direct libged preview
+  camera rotation/view-to-model reads, direct MGED saved-view snapshot reads,
+  direct MGED RT command eyepoint-correction view-to-model reads, and direct
+  MGED view-ring save/autoview ring-scale snapshot reads plus direct MGED
+  command autoview ring-scale reads, and direct MGED edsol
+  absolute-translation, rotate-about, NMG/ARS/metaball, BoT/NMG edit-pick, and
+  solid/object edit mouse-projection view snapshot reads, plus direct MGED
+  dozoom perspective, eye-position, and model-to-view read snapshots, and
+  direct libged inverse-size/keypoint/rotate-about query plus utility-helper
+  reads, plus direct libged AET/eye-position/perspective setter readbacks and
+  direct libged knob keypoint-origin plus size/scale/zoom setter readbacks,
+  direct libged pure-rotation and MGED view-scale ratio readbacks,
+  plus direct libged/TclCAD/MGED default/query coord, MGED edit-knob coord
+  save, MGED cmd staging/cache/hash adapter-covered view reads, and direct
+  MGED temp-staging/libged-DM fallback width/height reads, plus direct libged
+  pmat/pmodel2view query output, TclCAD draw projection-matrix loads, MGED
+  staging/cache/hash projection-matrix reads, direct initial/absolute scale
+  readbacks in MGED cache/hash and knob query output, and direct
+  unit-conversion stash reads in MGED cache and TclCAD refresh paths, plus
+  direct MGED VIEWSIZE/VIEWFACTOR macro view-size/scale reads,
+  direct qtcad camera/snap/input/sketch/selection read-side view snapshots and
+  qtcad measurement, quad-view source-copy, and SW/GL fallback framebuffer or
+  matrix-load view reads, plus direct controller-owned database-source
+  replacement field assignments that would bypass the grouped configuration
+  helper,
+  rejects direct BSG mesh-LoD detail callbacks in the BRep LoD producer, and
+  pins the RT source full-detail LoD provider contract, direct BoT database
+  read path, source-request conversion/submission helpers, exact-result
+  consumption helpers plus action-level submit/drain helpers for
+  export/measure/snap and exact mesh pick request collection/consumption,
+  qtcad source-backed exact pick, snap, and measure caller integration plus
+  controller exact full-detail budget submission, stale source-metrics
+  behavior, and over-budget whole-object fallback coverage;
+  strict mode and final allowlist removal remain.
 * Low-level cleanup: 98 percent.  vlist, plot3, line-layer, RT view-info,
   neutral RT LoD policy snapshots, mesh-LoD handles, sketch polygons,
   normalized view-coordinate constants and
@@ -773,7 +1101,8 @@ Next Push:
   including bsg/lod.h; BRep full-detail callbacks now publish through neutral
   RT mesh-LoD detail callbacks instead of BSG callback signatures, so libged
   no longer includes bsg/lod.h for LoD work; qtcad quad views and MGED zoom/idle/attach
-  paths no longer use direct BSG LoD policy structs, but
+  paths no longer use direct BSG LoD policy structs, and qged view-info now
+  reads size, dimensions, AET, and center through the RT legacy adapter, but
   lower-level framebuffer/libdm, BRep LoD tessellation producers, and
   some BSG scene paths remain.
 * libimgstream migration batch: 57 percent.  Core streams, icv snapshots, and
@@ -797,10 +1126,10 @@ Next Push:
 Migration Phases:
 
 * Phase 1, architecture freeze and guardrails: 80 percent.
-* Phase 2, productionize libbrlobol: 86 percent.
-* Phase 3, migrate qged/qtcad: 46 percent.
-* Phase 4, migrate libged, libtclcad, and mged: 25 percent.
-* Phase 5, remove lower-level BSG/DM dependencies: 51 percent.
+* Phase 2, productionize libbrlobol: 97 percent.
+* Phase 3, migrate qged/qtcad: 52 percent.
+* Phase 4, migrate libged, libtclcad, and mged: 26 percent.
+* Phase 5, remove lower-level BSG/DM dependencies: 52 percent.
 * Phase 6, hard removal: 5 percent.
 
 
@@ -840,7 +1169,7 @@ Completion for this step:
 * Convert bg_vlist/rt_vlist wire output to Obol line/shape nodes only at the
   realization boundary.
 * For large BoTs and future high-cost geometry, use the staged LoD realization
-  pipeline described in lod_pipeline.txt: publish metadata, attributes/AABB,
+  pipeline described in the consolidated LoD notes: publish metadata, attributes/AABB,
   OBB/proxy, POP fast mesh, qualified progressive/high-quality mesh, and
   full-detail fallback as separate revision-tagged results instead of blocking
   Obol realization on a single final mesh.
@@ -945,9 +1274,10 @@ Completion for this step:
      is active, while keeping source counts and bounds stable for request
      identity.  They can use preserved source triangles for export, measure,
      and snap only when that source geometry is already resident.  Large-geometry LoD must avoid mandatory full-detail residency:
-     scene nodes should retain source identity, bounds, counts, and active
-     display payloads, and exact operations should reload or stream bounded
-     full-detail data from the .g/RT provider path, including chunked
+     scene nodes should retain source identity, bounds, counts, and the
+     display payload only while memory policy keeps it resident, and exact
+     operations should reload or stream bounded full-detail data from the .g/RT
+     provider path, including chunked
      bbox/intersection-targeted reads for meshes too large to fit in memory.
      Cached coarse spatial/index sidecars generated while building POP payloads
      are a candidate optimization for pick/snap: reuse the POP pass over source
@@ -981,12 +1311,24 @@ Completion for this step:
      geometry and has an explicit full-detail policy that uses resident
      preserved source triangles when available, skipping active display-LoD
      payloads when no exact source geometry is resident.  RT/source-backed
-     reload when no preserved full-detail payload is resident, memory-budget
-     eviction of resident detail, chunked/bbox-targeted detail reads for
-     out-of-core meshes, and librt-backed exact ray queries for CSG implicits
-     and comb instances remain.  Evaluate a coarse POP-build spatial sidecar
-     plus selective BoT read or cached full-detail chunk API for exact pick/snap
-     subsets before committing to that complexity.
+     reload when no preserved full-detail payload is resident is wired for the
+     first exact-operation paths.  Mesh nodes now report estimated display,
+     preserved full-detail, and total resident mesh bytes, and can explicitly
+     evict preserved full-detail arrays and active display payloads while
+     retaining source counts and bounds so source-backed requests still work.
+     A dedicated scene traversal action plus explicit and optional
+     controller-owned budget paths can now enforce a resident mesh byte budget
+     by evicting preserved detail first and source-backed display payloads
+     second.  Source-backed exact snap and pick requests now carry
+     source-local query bounds/tolerance or ray metadata through LoD provider
+     params.  A direct libbrlobol librt ray-query helper now covers exact
+     implicit-solid and comb-instance hit identity.
+     Chunked/bbox-targeted detail reads for out-of-core meshes and
+     remaining tool integration/refinement of librt-backed exact CSG/comb
+     picks remain.
+     Evaluate a coarse POP-build spatial sidecar plus selective BoT read or
+     cached full-detail chunk API for exact pick/snap subsets before committing
+     to that complexity.
 * Add tests for draw, erase, partial refresh, selection identity, path
   identity, bbox/autoview data, and unsupported-object diagnostics.
 
@@ -1070,22 +1412,125 @@ Completion for this step:
   views without direct BSG setup, and db_mesh_lod_get now returns opaque
   rt_mesh_lod; libged plot, vnirt, solids_on_ray, ADC, and DM window-bound
   helpers now consume RT_VIEW_* and RT_INV_VIEW constants for normalized view
-  coordinates instead of BSG_VIEW_*, BSG_INV_*, or INV_BV spellings; libged
+  coordinates instead of BSG_VIEW_*, BSG_INV_*, or INV_BV spellings, and
+  solids_on_ray ray construction obtains center, rotation, model2view, and
+  scale through the RT legacy adapter; libged
   size, scale, and zoom consume RT_VIEW_MIN_SIZE/RT_VIEW_MIN_SCALE instead of
   BSG_MINVIEWSIZE/BSG_MINVIEWSCALE; libged check -i overlaps, get_eyemodel,
-  _ged_rt_write, and rtwizard now read view size and orientation through the
-  RT legacy view adapter while leaving GED-specific eye-model calculation in
-  GED; RT command, rtwizard, saveview, embedded-RT, and GED eye-model-helper
-  perspective reads use the same adapter boundary, and plot/PS/PNG diagnostic
+  _ged_rt_write, rtwizard, NIRT default shot setup and qray glyph scaling,
+  vnirt view-to-model conversion, GED eye-model helper snapshots, BoT/BREP
+  viewport pick ray setup, BREP TikZ view AET output, libged
+  selection/polyclip/view-snap/view-polygon/vZ coordinate transforms,
+  pipe/metaball/rot_point/label transform helpers, BoT/ARB nearest-subentity
+  transform helpers, draw refresh view snapshots through the private GED draw
+  bridge, and libged view
+  size/center/AET/ypr/quat/rmat/perspective/eye_pos/width/height query output
+  and TclCAD polygon command view snapshots/coordinate conversions now read
+  through the RT legacy view adapter, and TclCAD data move/pick/screen-to-model
+  command conversions use adapter matrix snapshots; TclCAD mouse BREP/joint
+  selection rays and simple metaball/pipe point lookups now use adapter
+  view-to-model/rotation snapshots, and remaining TclCAD mouse inverse-rotation
+  edit-motion calculations use a local adapter helper.  TclCAD mouse BoT
+  single-point setup, polygon circle/contour/ellipse/rectangle creation, and
+  data-scale display conversions now use adapter model-to-view/view-to-model
+  and scale snapshots; mouse delta scaling now uses the RT legacy view-size
+  adapter.  MGED simulation output view argument injection now uses adapter
+  orientation, eye, and size snapshots, and MGED command autoview ring-scale
+  snapshots use adapter scale reads.  MGED make default
+  center/scale and
+  area view-rotation diagnostic reads now use the same adapter boundary while
+  libged ADC view scale/matrix conversion reads and MGED slider view-scale
+  reads use that boundary.  libged grid vsnap, eye, and rectangle-zoom
+  read-side snapshots plus lookat/qvrot read-side snapshots also use the
+  adapter boundary, and MGED axes overlay view reads plus MGED rectangle zoom,
+  pipe pick direction, view-centered transform, and initial view-center setup
+  reads use that boundary; MGED status query output reads view scale and
+  matrices through that boundary as well, and MGED grid auto-size, draw/snap
+  scaling, and coordinate-transform reads use that boundary while live grid
+  view-center writes remain transitional; MGED ADC view scale and matrix
+  conversions, absolute translation bookkeeping, and chgview knob/edit/slew/size
+  read snapshots use that boundary too; MGED generic mouse and X motion/ADC
+  input conversions also snapshot view scale, center, and matrices through
+  that boundary, and MGED edit matrix composition/rate-knob translation scaling
+  plus libged align and rotation/slew/translate utility helpers snapshot their
+  view inputs through that boundary before preserving the existing BSG state
+  updates; libged preview camera initialization and eye-path marker calculations
+  now use adapter snapshots for rotation and view-to-model inputs; MGED
+  saved-view snapshots and RT command eyepoint correction now read
+  scale/rotation/center/view-to-model state through the same adapter boundary,
+  and the RT command view update path now uses the RT legacy scale, rotation,
+  and center setters while preserving the existing `new_mats` refreshes;
+  `mged_vscale` now routes its view-scale update through the RT legacy scale
+  setter while preserving absolute-scale knob bookkeeping; MGED
+  autoview ring-scale updates plus view-ring save-current snapshots now use
+  adapter snapshots while preserving view-ring restore writes; the
+  first narrow edsol slice now routes absolute-translation bookkeeping
+  scale/model-to-view/view-to-model reads, solid-rotation rotate-about
+  view/eye points, NMG/ARS/metaball view-direction snapshots, and BoT/NMG
+  edit-pick plus solid/object edit mouse-projection view snapshots through the
+  adapter; MGED dozoom perspective, eye-position, model-to-view, and saved
+  projection-matrix read snapshots now use the same adapter while live
+  projection-matrix writes and stereo fallback writes remain transitional;
+  libged selection semantics pick-point width/height reads and rtwizard
+  view-matrix comparison reads also use that boundary; libged
+  isize/keypoint/rotate_about
+  queries and rotation/translation utility helpers now read raw width/height,
+  inverse size, initial-scale, absolute-scale, unit-conversion, keypoint,
+  rotate-about, and coord state through the same boundary; libged,
+  TclCAD, and MGED default/query coord reads plus MGED edit-knob coord save
+  reads now use that adapter while coord writes and unsupported staging/hash
+  fields remain transitional; MGED view command staging/cache/hash reads for
+  adapter-covered fields, MGED temp staging width/height reads, and libged DM
+  fallback width/height checks now use the same boundary; libged
+  pmat/pmodel2view query output, TclCAD draw projection-matrix loads, and MGED
+  staging/cache/hash projection-matrix reads now also snapshot through the
+  adapter while projection writes remain transitional; MGED cmd staging/cache
+  restore/copy now uses RT legacy exact-state setters for scalar tuples, unit
+  conversions, raw AET, eye/keypoint, rotation/center, derived matrices, and
+  projection matrices, and shared staging unit-conversion refresh uses the
+  same boundary while hash/address handling and RT-native/non-BSG setup fields
+  stay transitional; MGED staging/cache/hash
+  initial/absolute scale reads plus libged and MGED knob absolute-scale query
+  output now also use scalar adapters while remaining staging/cache scale
+  writes remain transitional;
+  MGED cache plus TclCAD refresh unit-conversion stash reads now use the same
+  boundary.  MGED VIEWSIZE/VIEWFACTOR macros now expand through the adapter
+  boundary while unit-conversion writes remain transitional; libged AET
+  incremental updates now avoid direct readbacks after writes, and libged
+  eye-position plus perspective command matrix updates now use local/adapter
+  snapshots and projection-matrix/eye-position setters instead of direct BSG
+  readbacks or direct field writes; libged knob keypoint-origin rotation,
+  size/scale/zoom paired-field updates, libged pure-rotation composition, and
+  MGED view-scale ratio updates now also avoid direct BSG readbacks, leaving GED-specific
+  eye-model calculation in GED; RT command, rtwizard, saveview,
+  embedded-RT, and GED eye-model-helper perspective reads use the same adapter
+  boundary,
+  and plot/PS/PNG diagnostic
   export copies its camera values through the same adapter before calling the
-  legacy export routines; simple libged point/matrix/grid conversion helpers
-  and overlay default scale read model2view, view2model, and view scale through
-  the same adapter; savekey now uses RT legacy adapter copies for RT -M
-  size, rotation, and view2model output; MGED title/status display now reads
+  legacy export routines; the librt edit BSG compatibility bridge now builds
+  `rt_edit_view` snapshots through the RT view adapter boundary instead of
+  reading BSG view fields directly; simple libged point/matrix/grid/vector conversion
+  helpers, viewdir, and overlay default scale read model2view, view2model,
+  view rotation, view scale, and rtcheck2 overlap glyph scale through the same
+  adapter; savekey now uses RT
+  legacy adapter copies for RT -M size, rotation, and view2model output; MGED
+  title/status display now reads
   center, size, AET, perspective, and scale through the RT legacy adapter;
   libtclcad view draw matrix/perspective, wrapper perspective reads, command
-  center/scale reads, and axes size scaling also go through the RT legacy
-  adapter; libtclcad display-bound setup, MGED ADC
+  center/scale reads, axes size scaling, polygon command view snapshots, and
+  qged view-info numeric display reads also go through the RT legacy
+  adapter; qtcad Obol camera sync, snap tolerance, input scaling, sketch
+  transform, selection ray/rectangle view snapshots, 2D measurement
+  view-to-model conversion, quad-view source unit/size copies, and SW/GL
+  fallback framebuffer-size or matrix-load reads plus qtcad test/demo view
+  setup writes now use the same RT view adapter boundary, and qtcad quad-view
+  visible-path propagation now uses
+  Obol export identity in display-level mode instead of direct BSG export
+  queries; qtcad selection's public header now exposes selected paths without
+  naming legacy BSG pick-result objects while keeping the remaining fallback
+  internal; qtcad GED draw observer sync and real-model Obol
+  draw/readback workflows now keep controller-owned database sources realized
+  after delayed Obol field sensors drain; libtclcad display-bound setup, MGED ADC
   view-unit math, the shared GED2PM1 conversion, MGED axes overlay scaling,
   MGED attach window bounds, MGED view-scale clamping, and MGED menu/faceplate
   drawing plus slider/pen normalized-coordinate handling now use the same RT
@@ -1194,7 +1639,7 @@ Completion for this step:
 * Keep bsg/plot3.h only as a compatibility wrapper until libbsg removal.
 * Do not reintroduce old BSG TIG or vectfont public headers.
 * Move useful framebuffer/image-streaming behavior out of libdm according to
-  fb_plan.txt: libimgstream for mutable streams, transport, producers,
+  the framebuffer plan: libimgstream for mutable streams, transport, producers,
   subscribers, fan-out, fbserv compatibility, and fb_* wrappers; libicv for
   static image/codecs/lookup-table operations; Obol/libbrlobol for display,
   texture nodes, readback, image placement, and window/input hosting.
@@ -1415,6 +1860,152 @@ Done when:
 * Obol is documented as the canonical BRL-CAD scene API.
 
 
+Consolidated Historical Notes
+-----------------------------
+
+This section preserves the useful context from the former root notes that were
+not meant to stay as separate active handoffs.
+
+newdraw branch review:
+
+* The newdraw branch was a large architectural migration, not a cosmetic
+  libbv rename.  The review snapshot measured roughly 1050 changed files,
+  155298 insertions, and 42636 deletions.
+* The strongest value in newdraw was centralized semantic drawing state:
+  libged owned draw records, draw transactions, database indexes, selection
+  state, stale tracking, and shared frontend semantics; libdm gained a backend
+  render-item/resource-cache boundary; MGED, TclCAD, and qged moved toward one
+  common draw-state model.
+* The main risk was scope and public API stability.  libbsg was broader than
+  libbv: scene graph, view state, render items, payloads, selection, snapping,
+  overlays, HUD, LoD, and backend adapters.  The Obol migration keeps the
+  useful semantic lessons but avoids preserving libbsg as the canonical public
+  drawing API.
+* The review's validation lesson still applies: make the risk bounded with
+  main-compatible behavioral tests, unchanged tests on the migrated path,
+  Obol/newdraw-only semantic tests, stress/scale/performance gates, and an
+  explicit evidence package before broad legacy removal.
+
+Modern drawing/model handoff:
+
+* The database remains authoritative.  Draw records, selections, edit
+  previews, Qt models, indexes, and application state are derived and
+  rebuildable.
+* Native GED services are the desired ownership model:
+  GedDbIndex owns object/path/reverse-use/affected-path indexing;
+  GedEventTxn owns mutation batching, event coalescing, reconcile phases, and
+  post-reconcile observer notification; GedDrawState owns retained draw
+  intents, typed realized geometry, stale state, draw/erase/clear/redraw/who
+  behavior, and shared/independent view transactions; GedSelectionState owns
+  semantic selection and highlight synchronization.
+* Do not recreate DbiState, BViewState, gedp->dbi_state,
+  ged_dbi_state_*, include/ged/dbi_state.h, src/libged/dbi.h, or
+  src/libged/dbi_state.cpp as the ownership model.
+* Modern drawing publication is typed: line sets, point sets, indexed line
+  sets, indexed face sets, text, annotations, images, overlays, proxies, and
+  edit previews.  Modern paths should not expose raw vlists/vlblocks or raw
+  BSG internals.
+* Observers should see stable post-reconcile state only.  Avoid notifying UI
+  or application consumers while database, draw, selection, or edit state is
+  partially mutated.
+* Scale work should be bounded by affected objects, active draw intents,
+  expanded Qt branches, selected/edit targets, and active views.  Full rebuilds
+  are acceptable for open-file, explicit rebuild, corruption, batch import, or
+  events whose scope cannot yet be localized.
+* Avoid full path-string scans in hot update paths.  Prefer path hashes,
+  reverse-use answers, affected-path hints, and loaded-row indexes.  If full
+  path matching is unavoidable, benchmark it at scale and add a regression
+  gate.
+
+Obol prototype lessons:
+
+* The prototype proved enough to proceed with Obol-canonical work: database
+  source nodes, SoBRLRealizeAction, real librt/db_walk_tree traversal,
+  combination instance transforms, SoBRLVListShape, SoBRLMeshShape, shaded
+  ARB8/RPP/BoT realization, NMG tessellation fallback, pick details, snap,
+  measure, export, draw-intent fields, edit preview, field-sensor
+  invalidation, partial source refresh, scene-controller rebuild from existing
+  Obol nodes, grid/axes/ADC overlays, direct Obol GL rendering, non-GL
+  renderScene proof, NanoRT proof, readback, and Obol HUD use without libdm.
+* Every new feature should first be expressed as normal Obol scene
+  programming: node fields, field sensors/notification, actions, details,
+  state/elements only where traversal state is genuinely needed, and
+  application-owned backends through Obol's context/backend interface.
+* Do not add a generic BRL-CAD node/field/action/render layer unless a
+  concrete test shows Obol cannot represent the needed behavior cleanly.
+* Continue the Obol pivot if libbrlobol remains a small BRL-CAD extension
+  layer on top of Obol.  Pause and reconsider if libbrlobol starts exposing
+  generic scene, field, render-item, or backend-adapter types that duplicate
+  Obol.
+
+LoD pipeline details:
+
+* The source database is authoritative.  LoD data is disposable derived
+  display/cache data.
+* The staged service should produce metadata/dependency records, attributes
+  and AABB, OBB or cheap proxy, fast display LoD, qualified high-quality LoD,
+  and exact/full-detail fallback as separate revision-tagged results.
+* Provider-neutral request keys should include database identity, source
+  revision or content hash, object path/name, view/policy revision, draw mode,
+  provider id/version, provider parameters, quality tier, bounds, primitive
+  counts, estimated error where known, terminal/fallback status, and
+  diagnostics.
+* POP Buffer generation is the first production fast-BoT provider because it
+  is robust for triangle soup and invalid BoTs.  Progressive mesh generation
+  should be a later provider for qualified clean topology.
+* The older cache_drawing.cpp experiment contributed useful shape: staged
+  fast-to-slow workers, main-thread result queue, serialized cache writer,
+  debug delay knobs, and AABB/OBB/LoD milestones.  Do not carry forward its
+  detached workers, object-name-only keys, void* lifetime, fixed linear
+  assumptions, or informal rt_db_internal ownership.
+* concurrentqueue.h may be used for high-volume producer/consumer handoff if
+  it improves implementation quality, but correctness must come from
+  enqueue/dequeue success, cancellation/shutdown tokens, generation ids, and
+  in-flight counts.  size_approx() is only diagnostic.
+* Result-ready wakeups are signals only.  Workers publish BRLObolLodResult
+  records and coalesced wakeups; the owning view/controller drains results on
+  the UI/main thread and applies SoBRLLodUpdateAction to matching scene nodes.
+* Large LoD-backed BoTs must avoid mandatory full-detail residency.  Exact
+  operations should request source-backed whole-object reloads, bounded
+  chunks, or bbox/intersection-targeted subsets through the RT/provider path.
+* A POP-build spatial sidecar is plausible and should remain optional: while
+  walking source triangles, assign faces to coarse normalized Morton/grid
+  buckets, union leaf bboxes, store source face ids or ranges, and build a
+  shallow tree.  It is useful only if paired with a BoT partial-read API or
+  cached full-detail chunk provider.
+
+Framebuffer and image-stream plan:
+
+* Obol owns display, placement, layering, texture upload, readback, backend
+  selection, window hosting, and input integration.
+* libimgstream owns mutable streams, pixel storage, dimensions, dirty
+  rectangles, generation counters, clear/read/write/read-rect/write-rect,
+  snapshots, producers, subscribers, fan-out, in-memory streams, file
+  sinks/sources, transport, fb compatibility, null/debug/txt diagnostics, and
+  fbserv/remrt/rt workflows during migration.
+* libicv owns static image containers, codecs, file I/O, image transforms, and
+  neutral colormap/lookup-table operations.
+* fb compatibility lives inside libimgstream as fb_compat.h/fb_compat.c unless
+  implementation evidence justifies a split.
+* Preserve useful transport mechanisms: host:port, ipc:<addr>, PKG_ADDR
+  handoff, FBSERV_TOKEN, FBSERV_TLS, and MSG_FB* where needed.
+* Treat legacy view, cursor, poll, expose/resize, linger, simple mouse, and
+  pan/zoom behavior as compatibility/display state.  Do not let it define the
+  core image-stream API.
+* Device spelling maps under compatibility: /dev/mem becomes in-memory stream
+  behavior; /dev/disk becomes file sink/source behavior; /dev/stack becomes
+  fan-out; /dev/null, /dev/debug, and /dev/txt become diagnostic sinks;
+  remote, host:port, tcp:, and ipc: spellings become transport endpoints;
+  display specifiers such as /dev/qtgl, /dev/ogl, /dev/wgl, /dev/X, and
+  /dev/swrast request display through an active Obol/libbrlobol host or fail
+  explicitly when no host exists.
+* The libbrlobol window-host contract should hide toolkit details.  Qt, Tk,
+  GLX/WGL, and other native handles belong in adapter-private code or explicit
+  application integration hooks.  Long-term input bindings should be semantic,
+  not Tcl strings, although the Tk adapter may translate legacy Tcl bindings
+  during migration.
+
+
 Verification Baseline
 ---------------------
 
@@ -1426,7 +2017,7 @@ Use this short baseline after doc-only or small migration changes:
   --output-on-failure
 * git diff --check
 * rg -n '^<<<<<<< |^=======$|^>>>>>>> |bsg/tig\.h|bsg/vectfont\.h' include
-  src obol_migration.txt CMakeLists.txt misc/CMake
+  src obol_activework.txt obol_worklog.txt CMakeLists.txt misc/CMake
 
 Use broader testing before removing a legacy path:
 
@@ -1476,7 +2067,7 @@ Resolved decisions:
   rendering when system OpenGL/Vulkan/etc. are available; OSMesa/offscreen
   rendering plus image presentation remains a slower fallback.
 * Residual libdm framebuffer behavior should split as described in
-  fb_plan.txt: libimgstream for mutable streams, producer/subscriber state,
+  the framebuffer plan: libimgstream for mutable streams, producer/subscriber state,
   transport, fbserv behavior, and fb compatibility; libicv for static images,
   codecs, and lookup-table image transforms; Obol/libbrlobol for image
   display, texture nodes, readback, display-host callbacks, and window/input

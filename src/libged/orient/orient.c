@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "rt/view_legacy_bsg.h"
+
 #include "../ged_private.h"
 
 
@@ -76,7 +78,9 @@ ged_orient_core(struct ged *gedp, int argc, const char *argv[])
 	}
     }
 
-    quat_quat2mat(gedp->ged_gvp->gv_rotation, quat);
+    mat_t rotation;
+    quat_quat2mat(rotation, quat);
+    rt_view_rotation_set_bsg(gedp->ged_gvp, rotation);
     bsg_update(gedp->ged_gvp);
 
     return BRLCAD_OK;

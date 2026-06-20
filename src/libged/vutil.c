@@ -30,6 +30,7 @@
 #include "bg/line_layer.h"
 #include "bsg/feature.h"
 #include "nmg/display.h"
+#include "rt/view_legacy_bsg.h"
 #include "./ged_private.h"
 #include "ged/view.h"
 #include "ged/bsg_ged_draw.h"
@@ -41,41 +42,52 @@ _ged_do_rot(struct ged *gedp,
 	    int (*func)(struct ged *, char, char, mat_t))
 {
     mat_t temp1, temp2;
+    char rotate_about = rt_view_rotate_about_from_bsg(gedp->ged_gvp);
 
     if (func != (int (*)(struct ged *, char, char, mat_t))0)
-	return (*func)(gedp, coord, gedp->ged_gvp->gv_rotate_about, rmat);
+	return (*func)(gedp, coord, rotate_about, rmat);
 
     switch (coord) {
-	case 'm':
+	case 'm': {
 	    /* transform model rotations into view rotations */
-	    bn_mat_inv(temp1, gedp->ged_gvp->gv_rotation);
-	    bn_mat_mul(temp2, gedp->ged_gvp->gv_rotation, rmat);
+	    mat_t view_rotation;
+	    rt_view_rotation_from_bsg(view_rotation, gedp->ged_gvp);
+	    bn_mat_inv(temp1, view_rotation);
+	    bn_mat_mul(temp2, view_rotation, rmat);
 	    bn_mat_mul(rmat, temp2, temp1);
 	    break;
+	}
 	case 'v':
 	default:
 	    break;
     }
 
     /* Calculate new view center */
-    if (gedp->ged_gvp->gv_rotate_about != 'v') {
+    if (rotate_about != 'v') {
 	point_t rot_pt;
 	point_t new_origin;
 	mat_t viewchg, viewchginv;
+	mat_t model2view;
+	mat_t view2model;
 	point_t new_cent_view;
 	point_t new_cent_model;
 
-	switch (gedp->ged_gvp->gv_rotate_about) {
+	rt_view_model2view_from_bsg(model2view, gedp->ged_gvp);
+
+	switch (rotate_about) {
 	    case 'e':
 		VSET(rot_pt, 0.0, 0.0, 1.0);
 		break;
-	    case 'k':
-		MAT4X3PNT(rot_pt, gedp->ged_gvp->gv_model2view, gedp->ged_gvp->gv_keypoint);
+	    case 'k': {
+		point_t keypoint;
+		rt_view_keypoint_from_bsg(keypoint, gedp->ged_gvp);
+		MAT4X3PNT(rot_pt, model2view, keypoint);
 		break;
+	    }
 	    case 'm':
 		/* rotate around model center (0, 0, 0) */
 		VSET(new_origin, 0.0, 0.0, 0.0);
-		MAT4X3PNT(rot_pt, gedp->ged_gvp->gv_model2view, new_origin);
+		MAT4X3PNT(rot_pt, model2view, new_origin);
 		break;
 	    default:
 		return BRLCAD_ERROR;
@@ -87,12 +99,18 @@ _ged_do_rot(struct ged *gedp,
 	/* Convert origin in new (viewchg) coords back to old view coords */
 	VSET(new_origin, 0.0, 0.0, 0.0);
 	MAT4X3PNT(new_cent_view, viewchginv, new_origin);
-	MAT4X3PNT(new_cent_model, gedp->ged_gvp->gv_view2model, new_cent_view);
-	MAT_DELTAS_VEC_NEG(gedp->ged_gvp->gv_center, new_cent_model);
+	rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
+	MAT4X3PNT(new_cent_model, view2model, new_cent_view);
+	rt_view_center_vec_set_bsg(gedp->ged_gvp, new_cent_model);
     }
 
     /* pure rotation */
-    bn_mat_mul2(rmat, gedp->ged_gvp->gv_rotation);
+    {
+	mat_t view_rotation;
+	rt_view_rotation_from_bsg(view_rotation, gedp->ged_gvp);
+	bn_mat_mul2(rmat, view_rotation);
+	rt_view_rotation_set_bsg(gedp->ged_gvp, view_rotation);
+    }
     bsg_update(gedp->ged_gvp);
 
     return BRLCAD_OK;
@@ -103,9 +121,11 @@ int
 _ged_do_slew(struct ged *gedp, vect_t svec)
 {
     point_t model_center;
+    mat_t view2model;
 
-    MAT4X3PNT(model_center, gedp->ged_gvp->gv_view2model, svec);
-    MAT_DELTAS_VEC_NEG(gedp->ged_gvp->gv_center, model_center);
+    rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
+    MAT4X3PNT(model_center, view2model, svec);
+    rt_view_center_vec_set_bsg(gedp->ged_gvp, model_center);
     bsg_update(gedp->ged_gvp);
 
     return BRLCAD_OK;
@@ -128,19 +148,30 @@ _ged_do_tra(struct ged *gedp,
     switch (coord) {
 	case 'm':
 	    VSCALE(delta, tvec, -gedp->dbip->dbi_base2local);
-	    MAT_DELTAS_GET_NEG(vc, gedp->ged_gvp->gv_center);
+	    {
+		mat_t view_center;
+		rt_view_center_from_bsg(view_center, gedp->ged_gvp);
+		MAT_DELTAS_GET_NEG(vc, view_center);
+	    }
 	    break;
 	case 'v':
 	default:
-	    VSCALE(tvec, tvec, -2.0*gedp->dbip->dbi_base2local*gedp->ged_gvp->gv_isize);
-	    MAT4X3PNT(work, gedp->ged_gvp->gv_view2model, tvec);
-	    MAT_DELTAS_GET_NEG(vc, gedp->ged_gvp->gv_center);
+	    VSCALE(tvec, tvec, -2.0 * gedp->dbip->dbi_base2local *
+		    rt_view_inverse_size_from_bsg(gedp->ged_gvp));
+	    {
+		mat_t view2model;
+		mat_t view_center;
+		rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
+		rt_view_center_from_bsg(view_center, gedp->ged_gvp);
+		MAT4X3PNT(work, view2model, tvec);
+		MAT_DELTAS_GET_NEG(vc, view_center);
+	    }
 	    VSUB2(delta, work, vc);
 	    break;
     }
 
     VSUB2(nvc, vc, delta);
-    MAT_DELTAS_VEC_NEG(gedp->ged_gvp->gv_center, nvc);
+    rt_view_center_vec_set_bsg(gedp->ged_gvp, nvc);
     bsg_update(gedp->ged_gvp);
 
     return BRLCAD_OK;

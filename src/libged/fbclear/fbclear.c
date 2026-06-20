@@ -40,7 +40,7 @@
 #include "dm.h"
 #include "ged.h"
 #include "bu/str.h"
-#include "bsg/view_state.h"
+#include "rt/view_legacy_bsg.h"
 
 
 #define FB_CONSTRAIN(_v, _a, _b) \
@@ -109,7 +109,7 @@ ged_fbclear_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
 
     if (reset_mode)
-	bsg_view_set_framebuffer_mode(gedp->ged_gvp, 0);
+	rt_view_framebuffer_mode_set_bsg(gedp->ged_gvp, 0);
 
     (void)dm_draw_begin(dmp);
     fb_refresh(fbp, 0, 0, fb_getwidth(fbp), fb_getheight(fbp));

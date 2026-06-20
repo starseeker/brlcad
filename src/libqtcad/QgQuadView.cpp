@@ -47,17 +47,53 @@
 #include <QMouseEvent>
 #include <QtGlobal>
 
+#include "brlobol/export_action.h"
+#include "brlobol/view_controller.h"
 #include "bu/str.h"
 #include "bsg.h"
-#include "bsg/export.h"
-#include "bsg/render.h"
 #include "ged/defines.h"
 #include "ged/commands.h"
 #include "rt/view_legacy_bsg.h"
 #include "qtcad/QgQuadView.h"
 #include "qtcad/QgView.h"
 
+#include <Inventor/SoViewport.h>
+
 static const char *VIEW_NAMES[] = {"Q1", "Q2", "Q3", "Q4"};
+
+static void
+qg_quad_insert_obol_path(std::set<std::string> &paths, const SbString &path)
+{
+	const char *cpath = path.getString();
+	if (cpath && cpath[0])
+		paths.insert(std::string(cpath));
+}
+
+static std::set<std::string>
+qg_quad_obol_visible_paths(QgView *view)
+{
+	std::set<std::string> paths;
+	if (!view)
+		return paths;
+
+	BRLObolViewController *controller = view->obolViewController();
+	if (!controller || !controller->getViewport() ||
+			!controller->getViewport()->getRoot())
+		return paths;
+
+	SoBRLExportAction exportAction;
+	exportAction.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
+	exportAction.apply(controller->getViewport()->getRoot());
+
+	for (int i = 0; i < exportAction.getLineCount(); i++)
+		qg_quad_insert_obol_path(paths, exportAction.getLine(i).path);
+	for (int i = 0; i < exportAction.getPointCount(); i++)
+		qg_quad_insert_obol_path(paths, exportAction.getPoint(i).path);
+	for (int i = 0; i < exportAction.getTriangleCount(); i++)
+		qg_quad_insert_obol_path(paths, exportAction.getTriangle(i).path);
+
+	return paths;
+}
 
 /**
  * @brief Construct a new Qt C A D Quad:: Qt C A D Quad object
@@ -210,14 +246,15 @@ QgQuadView::changeToQuadFrame()
 
 			// Out of the gate, have the new view units match the first view's
 			// units (which should usually be based on the database units)
-			views[i]->view()->gv_base2local = views[0]->view()->gv_base2local;
-			views[i]->view()->gv_local2base = views[0]->view()->gv_local2base;
+			views[i]->view()->gv_base2local = rt_view_base2local_from_bsg(views[0]->view());
+			views[i]->view()->gv_local2base = rt_view_local2base_from_bsg(views[0]->view());
 
 			// For initial layout calculations, we need to set a screen width
 			// and height.  This won't be right in the end, but it gives
 			// the LoD bounds update something to work with
-			views[i]->view()->gv_width = views[UPPER_RIGHT_QUADRANT]->view()->gv_width;
-			views[i]->view()->gv_height = views[UPPER_RIGHT_QUADRANT]->view()->gv_height;
+			rt_view_dimensions_set_bsg(views[i]->view(),
+				rt_view_width_from_bsg(views[UPPER_RIGHT_QUADRANT]->view()),
+				rt_view_height_from_bsg(views[UPPER_RIGHT_QUADRANT]->view()));
 		}
 		// Copy the LoD source policy so all quadrants use the same
 		// source-selection behavior.
@@ -279,34 +316,26 @@ QgQuadView::changeToQuadFrame()
 		bsg_autoview(views[i]->view(), BSG_AUTOVIEW_SCALE_DEFAULT, 0);
 		rt_view_lod_bounds_update_bsg(views[i]->view());
 	}
-	struct bsg_export_request request;
-	bsg_export_request_init(&request, views[UPPER_RIGHT_QUADRANT]->view());
-	request.query_flags = BSG_EXPORT_QUERY_VISIBLE_ONLY | BSG_EXPORT_QUERY_DB_OBJECTS;
-	request.render_flags = BSG_RENDER_FLAG_VISIBLE_ONLY | BSG_RENDER_FLAG_PAYLOAD_PREPARE;
-	struct bsg_export_result *export_result = bsg_export_query(&request);
-	if (export_result) {
-		std::set<std::string> paths;
-		for (size_t i = 0; i < bsg_export_result_count(export_result); i++) {
-			const struct bsg_export_record *rec = bsg_export_result_get(export_result, i);
-			const char *path = rec ? bu_vls_cstr(&rec->path) : nullptr;
-			if (path && path[0])
-				paths.insert(std::string(path));
-		}
-		struct bsg_view *saved_view = gedp->ged_gvp;
-		for (int j = UPPER_RIGHT_QUADRANT + 1; j < LOWER_RIGHT_QUADRANT + 1; j++) {
-			gedp->ged_gvp = views[j]->view();
-			for (const std::string &path : paths) {
-				const char *draw_av[] = {"draw", path.c_str(), nullptr};
-				(void)ged_exec(gedp, 2, draw_av);
+	{
+		std::set<std::string> paths =
+			qg_quad_obol_visible_paths(views[UPPER_RIGHT_QUADRANT]);
+		if (!paths.empty()) {
+			struct bsg_view *saved_view = gedp->ged_gvp;
+			for (int j = UPPER_RIGHT_QUADRANT + 1; j < LOWER_RIGHT_QUADRANT + 1; j++) {
+				gedp->ged_gvp = views[j]->view();
+				for (const std::string &path : paths) {
+					const char *draw_av[] = {"draw", path.c_str(), nullptr};
+					(void)ged_exec(gedp, 2, draw_av);
+				}
 			}
+			gedp->ged_gvp = saved_view;
 		}
-		gedp->ged_gvp = saved_view;
-		bsg_export_result_free(export_result);
 	}
 
 	for (int i = UPPER_RIGHT_QUADRANT + 1; i < LOWER_RIGHT_QUADRANT + 1; i++) {
-		views[i]->view()->gv_width = views[UPPER_RIGHT_QUADRANT]->view()->gv_width;
-		views[i]->view()->gv_height = views[UPPER_RIGHT_QUADRANT]->view()->gv_height;
+		rt_view_dimensions_set_bsg(views[i]->view(),
+			rt_view_width_from_bsg(views[UPPER_RIGHT_QUADRANT]->view()),
+			rt_view_height_from_bsg(views[UPPER_RIGHT_QUADRANT]->view()));
 	}
 
 	// Current view selection pieces

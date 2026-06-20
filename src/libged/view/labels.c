@@ -35,6 +35,7 @@
 #include "bu/vls.h"
 #include "bsg.h"
 #include "bsg/feature.h"
+#include "rt/view_legacy_bsg.h"
 
 #include "../ged_private.h"
 #include "./ged_view.h"
@@ -89,7 +90,9 @@ _label_cmd_create(void *bs, int argc, const char **argv)
 	p[2] = 0;
 	point_t tp;
 	VMOVE(tp, p);
-	MAT4X3PNT(p, gd->cv->gv_view2model, tp);
+	mat_t view2model;
+	rt_view_view2model_from_bsg(view2model, gd->cv);
+	MAT4X3PNT(p, view2model, tp);
     }
     point_t target;
     if (argc == 6) {

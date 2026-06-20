@@ -48,6 +48,7 @@
 #include "bsg/defines.h"
 #include "dm/view.h"
 #include "ged/bsg_ged_draw.h"
+#include "rt/view_legacy_bsg.h"
 
 #include "./mged.h"
 #include "./sedit.h"
@@ -102,6 +103,9 @@ void
 dozoom(struct mged_state *s, int which_eye)
 {
     struct bsg_view *v = view_state->vs_gvp;
+    fastf_t view_perspective;
+    mat_t model2view;
+    point_t view_eye_pos;
 
     /*
      * The vectorThreshold stuff in libdm may turn the
@@ -120,25 +124,29 @@ dozoom(struct mged_state *s, int which_eye)
     /* gv_pmat may be replaced for the stereo path; remember the original
      * so we can restore it before returning. */
     mat_t saved_pmat;
-    MAT_COPY(saved_pmat, v->gv_pmat);
+    rt_view_pmat_from_bsg(saved_pmat, v);
+
+    view_perspective = rt_view_perspective_from_bsg(v);
+    rt_view_eye_pos_from_bsg(view_eye_pos, v);
+    rt_view_model2view_from_bsg(model2view, v);
 
     if (which_eye == 0) {
 	/* ----- Non-stereo: keep gv_pmat in sync with the perspective state.
 	 * The GED "perspective" command normally maintains this, but the
 	 * shear-perspective (gv_eye_pos[Z] != 1.0) mode needs an explicit
 	 * rebuild here. */
-	if (v->gv_perspective >= SMALL_FASTF) {
-	    if (!EQUAL(v->gv_eye_pos[Z], 1.0)) {
+	if (view_perspective >= SMALL_FASTF) {
+	    if (!EQUAL(view_eye_pos[Z], 1.0)) {
 		point_t l, h;
 		VSET(l, -1.0, -1.0, -1.0);
 		VSET(h,  1.0,  1.0, 200.0);
-		deering_persp_mat(v->gv_pmat, l, h, v->gv_eye_pos);
-		MAT_COPY(perspective_mat, v->gv_pmat);
+		deering_persp_mat(perspective_mat, l, h, view_eye_pos);
+		rt_view_pmat_set_bsg(v, perspective_mat);
 	    } else {
-		persp_mat(perspective_mat, v->gv_perspective,
+		persp_mat(perspective_mat, view_perspective,
 			  (fastf_t)1.0f, (fastf_t)0.01f,
 			  (fastf_t)1.0e10f, (fastf_t)1.0f);
-		MAT_COPY(v->gv_pmat, perspective_mat);
+		rt_view_pmat_set_bsg(v, perspective_mat);
 	    }
 	}
     } else {
@@ -149,7 +157,7 @@ dozoom(struct mged_state *s, int which_eye)
 	 * to_eye_scr below derives from it.  When mv_perspective_mode is
 	 * enabled but gv_perspective happens to be 0, fall back to a
 	 * sensible default so we don't divide by zero. */
-	fastf_t persp = v->gv_perspective;
+	fastf_t persp = view_perspective;
 	if (persp < SMALL_FASTF)
 	    persp = 90.0;
 	fastf_t to_eye_scr = 1 / tan(persp * DEG2RAD * 0.5);
@@ -167,20 +175,20 @@ dozoom(struct mged_state *s, int which_eye)
 	} else {
 	    eye[X] = -eye_delta_scr;
 	}
-	deering_persp_mat(v->gv_pmat, l, h, eye);
-	MAT_COPY(perspective_mat, v->gv_pmat);
+	deering_persp_mat(perspective_mat, l, h, eye);
+	rt_view_pmat_set_bsg(v, perspective_mat);
 
 	/* Force dm_draw_objs() to apply the perspective matrix even if
 	 * v->gv_perspective itself was 0 (it gates the dm_loadpmatrix call
 	 * on SMALL_FASTF < gv_perspective). */
-	if (v->gv_perspective < SMALL_FASTF)
+	if (view_perspective < SMALL_FASTF)
 	    v->gv_perspective = persp;
 
 	/* Stereo viewport / scissor selection.  gl_loadMatrix() inspects
 	 * which_eye (1 = right, 2 = left) and adjusts glViewport+glScissor
 	 * accordingly; the matrix upload itself is then redone by
 	 * dm_draw_objs() with which_eye=0 (which is a no-op for viewport). */
-	dm_loadmatrix(DMP, v->gv_model2view, which_eye);
+	dm_loadmatrix(DMP, model2view, which_eye);
     }
 
     /* Expose the edit-mode matrix on the view so render-item drawing can use
@@ -204,7 +212,7 @@ dozoom(struct mged_state *s, int which_eye)
     v->gv_edit_mat = NULL;
 
     /* Restore gv_pmat (no-op for which_eye == 0). */
-    MAT_COPY(v->gv_pmat, saved_pmat);
+    rt_view_pmat_set_bsg(v, saved_pmat);
 
     /* Count drawn objects for usepen.c zone-based picking.  Each rendered
      * shape records the bsg_view frame revision when painted; comparing the

@@ -36,11 +36,19 @@
 #include "bsg/feature.h"
 #include "bsg/geometry.h"
 #include "bg/lseg.h"
+#include "rt/view_legacy_bsg.h"
 #include "tclcad.h"
 
 /* Private headers */
 #include "./tclcad_private.h"
 #include "./view/view.h"
+
+static void
+tclcad_polygons_sync_dm_dimensions(struct bsg_view *gdvp)
+{
+    rt_view_dimensions_set_bsg(gdvp, dm_get_width((struct dm *)gdvp->dmp),
+	    dm_get_height((struct dm *)gdvp->dmp));
+}
 
 /* Phase T1 (drawing_stack_modernization): keep a BSG VIEW_SCOPE object in sync
  * with the gv_tcl data-polygons state so the modern BSG renderer picks up
@@ -136,10 +144,27 @@ _sync_tcl_polygons_to_bsg(struct bsg_view *v, bsg_data_polygon_state *gdpsp, con
 			       0);
 }
 
+static void
+_sync_tcl_polygon_view_snapshot(struct bsg_view *gdvp, bsg_data_polygon_state *gdpsp)
+{
+    mat_t view_center;
+
+    if (!gdpsp)
+	return;
+
+    gdpsp->gdps_scale = rt_view_scale_from_bsg(gdvp);
+    rt_view_center_from_bsg(view_center, gdvp);
+    VMOVE(gdpsp->gdps_origin, view_center);
+    rt_view_rotation_from_bsg(gdpsp->gdps_rotation, gdvp);
+    rt_view_model2view_from_bsg(gdpsp->gdps_model2view, gdvp);
+    rt_view_view2model_from_bsg(gdpsp->gdps_view2model, gdvp);
+}
+
 static int
 to_extract_contours_av(Tcl_Interp *interp, struct ged *gedp, struct bsg_view *gdvp, struct bg_polygon *gpp, size_t contour_ac, const char **contour_av, int mode, int vflag)
 {
     register size_t j = 0, k = 0;
+    mat_t view2model;
 
     gpp->num_contours = contour_ac;
     gpp->hole = NULL;
@@ -150,6 +175,9 @@ to_extract_contours_av(Tcl_Interp *interp, struct ged *gedp, struct bsg_view *gd
 
     gpp->hole = (int *)bu_calloc(contour_ac, sizeof(int), "hole");
     gpp->contour = (struct bg_poly_contour *)bu_calloc(contour_ac, sizeof(struct bg_poly_contour), "contour");
+
+    if (vflag)
+	rt_view_view2model_from_bsg(view2model, gdvp);
 
     for (j = 0; j < contour_ac; ++j) {
 	int ac;
@@ -193,7 +221,7 @@ to_extract_contours_av(Tcl_Interp *interp, struct ged *gedp, struct bsg_view *gd
 	    }
 
 	    if (vflag) {
-		MAT4X3PNT(gpp->contour[j].point[k-1], gdvp->gv_view2model, pt);
+		MAT4X3PNT(gpp->contour[j].point[k-1], view2model, pt);
 	    } else {
 		VMOVE(gpp->contour[j].point[k-1], pt);
 	    }
@@ -263,12 +291,8 @@ to_data_polygons_func(Tcl_Interp *interp,
 	bsg_name = "_tcl_data_polygons";
     }
 
-    gdpsp->gdps_scale = gdvp->gv_scale;
+    _sync_tcl_polygon_view_snapshot(gdvp, gdpsp);
     gdpsp->gdps_data_vZ = gdvp->gv_tcl->gv_data_vZ;
-    VMOVE(gdpsp->gdps_origin, gdvp->gv_center);
-    MAT_COPY(gdpsp->gdps_rotation, gdvp->gv_rotation);
-    MAT_COPY(gdpsp->gdps_model2view, gdvp->gv_model2view);
-    MAT_COPY(gdpsp->gdps_view2model, gdvp->gv_view2model);
 
     if (BU_STR_EQUAL(argv[1], "target_poly")) {
 	if (argc == 2) {
@@ -715,7 +739,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 	    goto bad;
 
 	plane_t pl;
-	bsg_view_plane(&pl, gdvp);
+	rt_view_plane_from_bsg(&pl, gdvp);
 
 	gpp = bg_clip_polygon((bg_clip_t)op,
 			       &gdpsp->gdps_polygons.polygon[i],
@@ -852,7 +876,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 	    goto bad;
 
 	plane_t pl;
-	bsg_view_plane(&pl, gdvp);
+	rt_view_plane_from_bsg(&pl, gdvp);
 
 	area = bg_find_polygon_area(&gdpsp->gdps_polygons.polygon[i], CLIPPER_MAX,
 				     &pl, gdpsp->gdps_scale);
@@ -901,6 +925,11 @@ to_data_polygons_func(Tcl_Interp *interp,
 	else
 	    vflag = 1;
 	if (argc == 2) {
+	    mat_t model2view;
+
+	    if (vflag)
+		rt_view_model2view_from_bsg(model2view, gdvp);
+
 	    for (i = 0; i < gdpsp->gdps_polygons.num_polygons; ++i) {
 		bu_vls_printf(gedp->ged_result_str, " {");
 
@@ -911,7 +940,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 			point_t pt;
 
 			if (vflag) {
-			    MAT4X3PNT(pt, gdvp->gv_model2view, gdpsp->gdps_polygons.polygon[i].contour[j].point[k]);
+			    MAT4X3PNT(pt, model2view, gdpsp->gdps_polygons.polygon[i].contour[j].point[k]);
 			} else {
 			    VMOVE(pt, gdpsp->gdps_polygons.polygon[i].contour[j].point[k]);
 			}
@@ -1284,11 +1313,7 @@ to_poly_circ_mode_func(Tcl_Interp *interp,
     else
 	gdpsp = &gdvp->gv_tcl->gv_data_polygons;
 
-    gdpsp->gdps_scale = gdvp->gv_scale;
-    VMOVE(gdpsp->gdps_origin, gdvp->gv_center);
-    MAT_COPY(gdpsp->gdps_rotation, gdvp->gv_rotation);
-    MAT_COPY(gdpsp->gdps_model2view, gdvp->gv_model2view);
-    MAT_COPY(gdpsp->gdps_view2model, gdvp->gv_view2model);
+    _sync_tcl_polygon_view_snapshot(gdvp, gdpsp);
 
     gedp->ged_gvp = gdvp;
 
@@ -1302,17 +1327,16 @@ to_poly_circ_mode_func(Tcl_Interp *interp,
     gdvp->gv_prevMouseY = y;
     gdvp->gv_tcl->gv_polygon_mode = BSG_POLY_CIRCLE_MODE;
 
-    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+    tclcad_polygons_sync_dm_dimensions(gdvp);
     bsg_screen_to_view(gdvp, &fx, &fy, x, y);
     VSET(v_pt, fx, fy, gdvp->gv_tcl->gv_data_vZ);
     {
-	bsg_snap_kind_mask snap_kinds = bsg_view_prepare_tcl_snap(gedp->ged_gvp);
+	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
 	if (snap_kinds)
 	    bsg_snap_point_2d(gedp->ged_gvp, &v_pt[X], &v_pt[Y], snap_kinds);
     }
 
-    MAT4X3PNT(m_pt, gdvp->gv_view2model, v_pt);
+    MAT4X3PNT(m_pt, gdpsp->gdps_view2model, v_pt);
     VMOVE(gdpsp->gdps_prev_point, v_pt);
 
     bu_vls_printf(&plist, "{ {%lf %lf %lf} {%lf %lf %lf} {%lf %lf %lf} {%lf %lf %lf} }",
@@ -1356,11 +1380,7 @@ to_poly_cont_build_func(Tcl_Interp *interp,
     else
 	gdpsp = &gdvp->gv_tcl->gv_data_polygons;
 
-    gdpsp->gdps_scale = gdvp->gv_scale;
-    VMOVE(gdpsp->gdps_origin, gdvp->gv_center);
-    MAT_COPY(gdpsp->gdps_rotation, gdvp->gv_rotation);
-    MAT_COPY(gdpsp->gdps_model2view, gdvp->gv_model2view);
-    MAT_COPY(gdpsp->gdps_view2model, gdvp->gv_view2model);
+    _sync_tcl_polygon_view_snapshot(gdvp, gdpsp);
 
     gedp->ged_gvp = gdvp;
 
@@ -1374,17 +1394,16 @@ to_poly_cont_build_func(Tcl_Interp *interp,
     gdvp->gv_prevMouseY = y;
     gdvp->gv_tcl->gv_polygon_mode = BSG_POLY_CONTOUR_MODE;
 
-    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+    tclcad_polygons_sync_dm_dimensions(gdvp);
     bsg_screen_to_view(gdvp, &fx, &fy, x, y);
     VSET(v_pt, fx, fy, gdvp->gv_tcl->gv_data_vZ);
     {
-	bsg_snap_kind_mask snap_kinds = bsg_view_prepare_tcl_snap(gedp->ged_gvp);
+	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
 	if (snap_kinds)
 	    bsg_snap_point_2d(gedp->ged_gvp, &v_pt[X], &v_pt[Y], snap_kinds);
     }
 
-    MAT4X3PNT(m_pt, gdvp->gv_view2model, v_pt);
+    MAT4X3PNT(m_pt, gdpsp->gdps_view2model, v_pt);
 
     av[0] = "data_polygons";
     if (gdpsp->gdps_cflag == 0) {
@@ -1719,11 +1738,7 @@ to_poly_ell_mode_func(Tcl_Interp *interp,
     else
 	gdpsp = &gdvp->gv_tcl->gv_data_polygons;
 
-    gdpsp->gdps_scale = gdvp->gv_scale;
-    VMOVE(gdpsp->gdps_origin, gdvp->gv_center);
-    MAT_COPY(gdpsp->gdps_rotation, gdvp->gv_rotation);
-    MAT_COPY(gdpsp->gdps_model2view, gdvp->gv_model2view);
-    MAT_COPY(gdpsp->gdps_view2model, gdvp->gv_view2model);
+    _sync_tcl_polygon_view_snapshot(gdvp, gdpsp);
 
     gedp->ged_gvp = gdvp;
 
@@ -1737,17 +1752,16 @@ to_poly_ell_mode_func(Tcl_Interp *interp,
     gdvp->gv_prevMouseY = y;
     gdvp->gv_tcl->gv_polygon_mode = TCLCAD_POLY_ELLIPSE_MODE;
 
-    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+    tclcad_polygons_sync_dm_dimensions(gdvp);
     bsg_screen_to_view(gdvp, &fx, &fy, x, y);
     VSET(v_pt, fx, fy, gdvp->gv_tcl->gv_data_vZ);
     {
-	bsg_snap_kind_mask snap_kinds = bsg_view_prepare_tcl_snap(gedp->ged_gvp);
+	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
 	if (snap_kinds)
 	    bsg_snap_point_2d(gedp->ged_gvp, &v_pt[X], &v_pt[Y], snap_kinds);
     }
 
-    MAT4X3PNT(m_pt, gdvp->gv_view2model, v_pt);
+    MAT4X3PNT(m_pt, gdpsp->gdps_view2model, v_pt);
     VMOVE(gdpsp->gdps_prev_point, v_pt);
 
     bu_vls_printf(&plist, "{ {%lf %lf %lf} {%lf %lf %lf} {%lf %lf %lf} {%lf %lf %lf} }",
@@ -1873,11 +1887,7 @@ to_poly_rect_mode_func(Tcl_Interp *interp,
     else
 	gdpsp = &gdvp->gv_tcl->gv_data_polygons;
 
-    gdpsp->gdps_scale = gdvp->gv_scale;
-    VMOVE(gdpsp->gdps_origin, gdvp->gv_center);
-    MAT_COPY(gdpsp->gdps_rotation, gdvp->gv_rotation);
-    MAT_COPY(gdpsp->gdps_model2view, gdvp->gv_model2view);
-    MAT_COPY(gdpsp->gdps_view2model, gdvp->gv_view2model);
+    _sync_tcl_polygon_view_snapshot(gdvp, gdpsp);
 
     gedp->ged_gvp = gdvp;
 
@@ -1903,17 +1913,16 @@ to_poly_rect_mode_func(Tcl_Interp *interp,
     else
 	gdvp->gv_tcl->gv_polygon_mode = TCLCAD_POLY_RECTANGLE_MODE;
 
-    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+    tclcad_polygons_sync_dm_dimensions(gdvp);
     bsg_screen_to_view(gdvp, &fx, &fy, x, y);
     VSET(v_pt, fx, fy, gdvp->gv_tcl->gv_data_vZ);
     {
-	bsg_snap_kind_mask snap_kinds = bsg_view_prepare_tcl_snap(gedp->ged_gvp);
+	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
 	if (snap_kinds)
 	    bsg_snap_point_2d(gedp->ged_gvp, &v_pt[X], &v_pt[Y], snap_kinds);
     }
 
-    MAT4X3PNT(m_pt, gdvp->gv_view2model, v_pt);
+    MAT4X3PNT(m_pt, gdpsp->gdps_view2model, v_pt);
     VMOVE(gdpsp->gdps_prev_point, v_pt);
 
     bu_vls_printf(&plist, "{ {%lf %lf %lf} {%lf %lf %lf} {%lf %lf %lf} {%lf %lf %lf} }",

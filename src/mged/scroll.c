@@ -32,6 +32,7 @@
 #include "vmath.h"
 #include "ged.h"
 #include "rt/view.h"
+#include "rt/view_legacy_bsg.h"
 #include "./mged.h"
 #include "./mged_dm.h"
 
@@ -186,6 +187,7 @@ sl_atol(struct scroll_item *mptr, double val)
 {
     struct mged_state *s = MGED_STATE;
     struct bu_vls vls = BU_VLS_INIT_ZERO;
+    fastf_t view_scale;
 
     if (s->dbip == DBI_NULL)
 	return;
@@ -198,7 +200,8 @@ sl_atol(struct scroll_item *mptr, double val)
 	val = 0.0;
     }
 
-    bu_vls_printf(&vls, "knob %s %f", mptr->scroll_cmd, val*view_state->vs_gvp->gv_scale*s->dbip->dbi_base2local);
+    view_scale = rt_view_scale_from_bsg(view_state->vs_gvp);
+    bu_vls_printf(&vls, "knob %s %f", mptr->scroll_cmd, val * view_scale * s->dbip->dbi_base2local);
     Tcl_Eval(s->interp, bu_vls_addr(&vls));
     bu_vls_free(&vls);
 }

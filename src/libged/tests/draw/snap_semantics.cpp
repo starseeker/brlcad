@@ -43,6 +43,7 @@
 #include <bsg.h>
 #include "bsg/snap_action.h"
 #include "bsg/util.h"
+#include "rt/view_legacy_bsg.h"
 
 #define ASSERT(cond) do { \
     nchecks++; \
@@ -73,7 +74,7 @@ main(int UNUSED(ac), char *av[])
     grid.res_h = 1.0;
     grid.res_v = 1.0;
     bsg_view_grid_set(&v, &grid);
-    bsg_view_set_snap_source_flags(&v, 0);
+    rt_view_snap_source_flags_set_bsg(&v, 0);
 
     /* ------------------------------------------------------------------
      * Test 1: bsg_snap_candidates near origin with GRID kind.

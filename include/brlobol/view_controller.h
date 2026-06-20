@@ -82,6 +82,26 @@ public:
     void clearLodForcedLevel(void);
     SbBool hasLodForcedLevel(void) const;
     int getLodForcedLevel(void) const;
+    void setExactFullDetailBudget(uint64_t maxFaceCount,
+	uint64_t maxPointCount);
+    uint64_t getMaxExactFullDetailFaceCount(void) const;
+    uint64_t getMaxExactFullDetailPointCount(void) const;
+    void setMeshResidencyBudget(size_t maxResidentMeshBytes,
+	SbBool evictDisplayPayloads = TRUE);
+    void clearMeshResidencyBudget(void);
+    SbBool hasMeshResidencyBudget(void) const;
+    size_t getMaxResidentMeshBytes(void) const;
+    SbBool isMeshResidencyDisplayEvictionEnabled(void) const;
+    size_t evictMeshPayloadsToBudget(size_t maxBytes,
+	SbBool evictDisplayPayloads = TRUE);
+    size_t getLastMeshBudgetInitialResidentBytes(void) const;
+    size_t getLastMeshBudgetFinalResidentBytes(void) const;
+    size_t getLastMeshBudgetFreedResidentBytes(void) const;
+    size_t getLastMeshBudgetFreedFullDetailBytes(void) const;
+    size_t getLastMeshBudgetFreedDisplayBytes(void) const;
+    unsigned int getLastMeshBudgetVisitedMeshCount(void) const;
+    unsigned int getLastMeshBudgetEvictedFullDetailMeshCount(void) const;
+    unsigned int getLastMeshBudgetEvictedDisplayMeshCount(void) const;
     SbBool hasPendingLodResults(void) const;
     size_t processPendingLodResults(size_t maxResults = 0);
     int submitLodRequestsIfNeeded(SbBool refreshMissing = TRUE,
@@ -146,6 +166,7 @@ private:
     void advanceLodViewRevision(void);
     void advanceLodPolicyRevision(void);
     void syncLodViewSignature(SbBool advanceOnChange = TRUE);
+    size_t enforceMeshResidencyBudget(void);
     static void lodResultReadyCB(BRLObolLodService *service, void *userData);
 
     SoBRLSceneController sceneController;
@@ -168,6 +189,18 @@ private:
     uint64_t lodPolicyRevision;
     SbBool lodUseForcedLevel;
     int lodForcedLevel;
+    uint64_t maxExactFullDetailFaceCount;
+    uint64_t maxExactFullDetailPointCount;
+    SbBool meshResidencyBudgetEnabled;
+    size_t maxResidentMeshBytes;
+    SbBool meshResidencyEvictDisplayPayloads;
+    size_t lastMeshBudgetInitialResidentBytes;
+    size_t lastMeshBudgetFinalResidentBytes;
+    size_t lastMeshBudgetFreedFullDetailBytes;
+    size_t lastMeshBudgetFreedDisplayBytes;
+    unsigned int lastMeshBudgetVisitedMeshCount;
+    unsigned int lastMeshBudgetEvictedFullDetailMeshCount;
+    unsigned int lastMeshBudgetEvictedDisplayMeshCount;
     unsigned int lastLodVisitedMeshCount;
     unsigned int lastLodSubmittedTaskCount;
     unsigned int lastLodSkippedMeshCount;

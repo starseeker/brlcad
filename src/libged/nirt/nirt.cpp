@@ -54,6 +54,7 @@
 #include "bu/process.h"
 #include "vmath.h"
 #include "rt/view.h"
+#include "rt/view_legacy_bsg.h"
 
 #include "bsg/appearance.h"
 #include "bsg/feature.h"
@@ -358,8 +359,9 @@ ged_nirt_core(struct ged *gedp, int argc, const char *argv[])
     /* Calculate point from xyz point from which to fire the ray, if it was not
      * explicitly supplied by one of the above. */
     if (VNEAR_ZERO(nv.center_model, VUNITIZE_TOL)) {
-	struct bsg_view *bv = gedp->ged_gvp;
-	VSET(nv.center_model, -bv->gv_center[MDX], -bv->gv_center[MDY], -bv->gv_center[MDZ]);
+	mat_t view_center;
+	rt_view_center_from_bsg(view_center, gedp->ged_gvp);
+	MAT_DELTAS_GET_NEG(nv.center_model, view_center);
 	/* Because we are preparing an input for the nirt command line, we need
 	 * to convert to local units - lower level logic will be expecting
 	 * those units and convert back. */
@@ -518,7 +520,9 @@ ged_nirt_core(struct ged *gedp, int argc, const char *argv[])
 
     // calculate the ray direction from the view.
     vect_t dir = VINIT_ZERO;
-    VMOVEN(dir, gedp->ged_gvp->gv_rotation + 8, 3);
+    mat_t view_rotation;
+    rt_view_rotation_from_bsg(view_rotation, gedp->ged_gvp);
+    VMOVEN(dir, view_rotation + 8, 3);
     VSCALE(dir, dir, -1.0);
     bu_vls_sprintf(&nirt_cmd, "dir %0.17f %0.17f %0.17f", V3ARGS(dir));
     fprintf(np.fp_in, "%s\n", bu_vls_cstr(&nirt_cmd));
@@ -604,7 +608,8 @@ ged_nirt_core(struct ged *gedp, int argc, const char *argv[])
     if (DG_QRAY_GRAPHICS(gedp->i->ged_gdp) && bu_vls_strlen(&nv.plotfile)) {
 	FILE *fp = fopen(bu_vls_cstr(&nv.plotfile), "rb");
 	if (fp) {
-	    fastf_t csize = gedp->ged_gvp ? gedp->ged_gvp->gv_scale * 0.01 : 1.0;
+	    fastf_t csize = gedp->ged_gvp ?
+		rt_view_scale_from_bsg(gedp->ged_gvp) * 0.01 : 1.0;
 	    int pret = _ged_draw_uplot_to_feature(gedp, fp,
 		    bu_vls_cstr(&gedp->i->ged_gdp->gd_qray_basename),
 		    csize, gedp->i->ged_gdp->gd_uplotOutputMode);
@@ -679,7 +684,9 @@ ged_vnirt_core(struct ged *gedp, int argc, const char *argv[])
 
     /* Calculate point from which to fire ray. */
     VSCALE(view_ray_orig, scan, sf);
-    MAT4X3PNT(center_model, gedp->ged_gvp->gv_view2model, view_ray_orig);
+    mat_t view2model;
+    rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
+    MAT4X3PNT(center_model, view2model, view_ray_orig);
     /* Initial center_model value will be in base units, and main nirt
      * evaluation path assumes inputs are in local units, so convert. */
     VSCALE(center_model, center_model, gedp->dbip->dbi_base2local);

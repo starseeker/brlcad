@@ -28,6 +28,13 @@
 #include "./tclcad_private.h"
 #include "./view/view.h"
 
+static void
+tclcad_wrapper_sync_dm_dimensions(struct bsg_view *target, struct bsg_view *source)
+{
+    rt_view_dimensions_set_bsg(target, dm_get_width((struct dm *)source->dmp),
+	    dm_get_height((struct dm *)source->dmp));
+}
+
 /* Wraps calls to commands like "draw" that need to reset the view */
 int
 to_autoview_func(struct ged *gedp,
@@ -66,8 +73,7 @@ to_autoview_func(struct ged *gedp,
     for (i = 0; i < BU_PTBL_LEN(views); i++) {
 	gdvp = (struct bsg_view *)BU_PTBL_GET(views, i);
 	if (to_is_viewable(gdvp)) {
-	    gedp->ged_gvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-	    gedp->ged_gvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+	    tclcad_wrapper_sync_dm_dimensions(gedp->ged_gvp, gdvp);
 	}
     }
 
@@ -296,8 +302,7 @@ to_view_func_common(struct ged *gedp,
 
 	ged_exec_redraw(gedp, 1, (const char **)gr_av);
 
-	gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-	gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+	tclcad_wrapper_sync_dm_dimensions(gdvp, gdvp);
     }
 
     if (ret == BRLCAD_OK) {

@@ -3186,6 +3186,10 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 		controllerSource->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED ||
 		controllerSource->getRealizedShapeCount() != 1)
 	    FAIL("view controller database source should realize through the scene controller");
+	SoDB::getSensorManager()->processDelayQueue(TRUE);
+	if (controllerSource->needsRealization() ||
+		controllerSource->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED)
+	    FAIL("view controller database source replacement should not leave delayed stale sensors after realization");
 
 	if (dbController.replaceDatabaseSource("/box.s", dbip,
 		    SoBRLDatabaseSource::WIREFRAME, 72) != 1 ||

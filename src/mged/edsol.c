@@ -39,6 +39,7 @@
 #include "wdb.h"
 #include "rt/db4.h"
 #include "ged/view.h"
+#include "rt/view_legacy_bsg.h"
 #include "bsg/appearance.h"
 #include "bsg/draw_source.h"
 
@@ -3641,12 +3642,20 @@ sedit(struct mged_state *s)
 		/* xlate keypoint to origin, rotate, then put back. */
 		switch (mged_variables->mv_rotate_about) {
 		    case 'v':       /* View Center */
-			VSET(work, 0.0, 0.0, 0.0);
-			MAT4X3PNT(rot_point, view_state->vs_gvp->gv_view2model, work);
+			{
+			    mat_t view2model;
+			    VSET(work, 0.0, 0.0, 0.0);
+			    rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+			    MAT4X3PNT(rot_point, view2model, work);
+			}
 			break;
 		    case 'e':       /* Eye */
-			VSET(work, 0.0, 0.0, 1.0);
-			MAT4X3PNT(rot_point, view_state->vs_gvp->gv_view2model, work);
+			{
+			    mat_t view2model;
+			    VSET(work, 0.0, 0.0, 1.0);
+			    rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+			    MAT4X3PNT(rot_point, view2model, work);
+			}
 			break;
 		    case 'm':       /* Model Center */
 			VSETALL(rot_point, 0.0);
@@ -3995,11 +4004,13 @@ sedit(struct mged_state *s)
 		    if (area > 0.0) {
 			vect_t view_z_dir;
 			vect_t view_dir;
+			mat_t view2model;
 			fastf_t dist;
 
 			/* Get view direction vector */
 			VSET(view_z_dir, 0.0, 0.0, 1.0);
-			MAT4X3VEC(view_dir, view_state->vs_gvp->gv_view2model, view_z_dir);
+			rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+			MAT4X3VEC(view_dir, view2model, view_z_dir);
 
 			/* intersect line through new_pt with plane of loop */
 			if (bg_isect_line3_plane(&dist, new_pt, view_dir, pl, &s->tol.tol) < 1) {
@@ -4148,11 +4159,13 @@ sedit(struct mged_state *s)
 		    if (area > 0.0) {
 			vect_t view_z_dir;
 			vect_t view_dir;
+			mat_t view2model;
 			fastf_t dist;
 
 			/* Get view direction vector */
 			VSET(view_z_dir, 0.0, 0.0, 1.0);
-			MAT4X3VEC(view_dir, view_state->vs_gvp->gv_view2model, view_z_dir);
+			rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+			MAT4X3VEC(view_dir, view2model, view_z_dir);
 
 			/* intersect line through new_pt with plane of loop */
 			if (bg_isect_line3_plane(&dist, new_pt, view_dir, pl, &s->tol.tol) < 1) {
@@ -4435,6 +4448,7 @@ sedit(struct mged_state *s)
 		point_t pick_pt;
 		vect_t view_dir;
 		vect_t z_dir;
+		mat_t view2model;
 		struct bu_vls tmp_vls = BU_VLS_INIT_ZERO;
 		point_t selected_pt;
 
@@ -4458,7 +4472,8 @@ sedit(struct mged_state *s)
 
 		/* Get view direction vector */
 		VSET(z_dir, 0.0, 0.0, 1.0);
-		MAT4X3VEC(view_dir, view_state->vs_gvp->gv_view2model, z_dir);
+		rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+		MAT4X3VEC(view_dir, view2model, z_dir);
 		find_ars_nearest_pnt(&es_ars_crv, &es_ars_col, ars, pick_pt, view_dir);
 		VMOVE(es_pt, &ars->curves[es_ars_crv][es_ars_col*3]);
 		VSCALE(selected_pt, es_pt, s->dbip->dbi_base2local);
@@ -4774,13 +4789,15 @@ sedit(struct mged_state *s)
 		if (MEDIT(s)->e_mvalid) {
 		    vect_t view_dir;
 		    plane_t view_pl;
+		    mat_t view2model;
 		    fastf_t dist;
 
 		    /* construct a plane perpendicular to view direction
 		     * that passes through ARS point being moved
-		     */
+		    */
 		    VSET(view_dir, 0.0, 0.0, 1.0);
-		    MAT4X3VEC(view_pl, view_state->vs_gvp->gv_view2model, view_dir);
+		    rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+		    MAT4X3VEC(view_pl, view2model, view_dir);
 		    VUNITIZE(view_pl);
 		    view_pl[W] = VDOT(view_pl, &ars->curves[es_ars_crv][es_ars_col*3]);
 
@@ -4827,13 +4844,15 @@ sedit(struct mged_state *s)
 		if (MEDIT(s)->e_mvalid) {
 		    vect_t view_dir;
 		    plane_t view_pl;
+		    mat_t view2model;
 		    fastf_t dist;
 
 		    /* construct a plane perpendicular to view direction
 		     * that passes through ARS point being moved
-		     */
+		    */
 		    VSET(view_dir, 0.0, 0.0, 1.0);
-		    MAT4X3VEC(view_pl, view_state->vs_gvp->gv_view2model, view_dir);
+		    rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+		    MAT4X3VEC(view_pl, view2model, view_dir);
 		    VUNITIZE(view_pl);
 		    view_pl[W] = VDOT(view_pl, &ars->curves[es_ars_crv][es_ars_col*3]);
 
@@ -4879,13 +4898,15 @@ sedit(struct mged_state *s)
 		if (MEDIT(s)->e_mvalid) {
 		    vect_t view_dir;
 		    plane_t view_pl;
+		    mat_t view2model;
 		    fastf_t dist;
 
 		    /* construct a plane perpendicular to view direction
 		     * that passes through ARS point being moved
-		     */
+		    */
 		    VSET(view_dir, 0.0, 0.0, 1.0);
-		    MAT4X3VEC(view_pl, view_state->vs_gvp->gv_view2model, view_dir);
+		    rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+		    MAT4X3VEC(view_pl, view2model, view_dir);
 		    VUNITIZE(view_pl);
 		    view_pl[W] = VDOT(view_pl, &ars->curves[es_ars_crv][es_ars_col*3]);
 
@@ -5054,6 +5075,7 @@ sedit(struct mged_state *s)
 		struct bn_tol tmp_tol;
 		fastf_t min_dist = MAX_FASTF;
 		vect_t dir;
+		mat_t view2model;
 
 		RT_METABALL_CK_MAGIC(metaball);
 
@@ -5077,7 +5099,8 @@ sedit(struct mged_state *s)
 
 		/* get a direction vector in model space corresponding to z-direction in view */
 		VSET(work, 0.0, 0.0, 1.0);
-		MAT4X3VEC(dir, view_state->vs_gvp->gv_view2model, work);
+		rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+		MAT4X3VEC(dir, view2model, work);
 
 		for (BU_LIST_FOR(ps, wdb_metaball_pnt, &metaball->metaball_ctrl_head)) {
 		    fastf_t dist;
@@ -5198,16 +5221,34 @@ update_edit_absolute_tran(struct mged_state *s, vect_t view_pos)
     vect_t model_pos;
     vect_t ea_view_pos;
     vect_t diff;
-    fastf_t inv_Viewscale = 1/view_state->vs_gvp->gv_scale;
+    mat_t view2model;
+    mat_t model2view;
+    fastf_t inv_Viewscale = 1/rt_view_scale_from_bsg(view_state->vs_gvp);
 
-    MAT4X3PNT(model_pos, view_state->vs_gvp->gv_view2model, view_pos);
+    rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+    MAT4X3PNT(model_pos, view2model, view_pos);
     VSUB2(diff, model_pos, MEDIT(s)->e_axes_pos);
     VSCALE(MEDIT(s)->k.tra_m_abs, diff, inv_Viewscale);
     VMOVE(MEDIT(s)->k.tra_m_abs_last, MEDIT(s)->k.tra_m_abs);
 
-    MAT4X3PNT(ea_view_pos, view_state->vs_gvp->gv_model2view, MEDIT(s)->e_axes_pos);
+    rt_view_model2view_from_bsg(model2view, view_state->vs_gvp);
+    MAT4X3PNT(ea_view_pos, model2view, MEDIT(s)->e_axes_pos);
     VSUB2(MEDIT(s)->k.tra_v_abs, view_pos, ea_view_pos);
     VMOVE(MEDIT(s)->k.tra_v_abs_last, MEDIT(s)->k.tra_v_abs);
+}
+
+static void
+edsol_mouse_project_model_from_view_xy(struct mged_state *s, point_t model_pt, point_t view_pt, const point_t src_model_pt, const vect_t mousevec)
+{
+    mat_t model2view;
+    mat_t view2model;
+
+    rt_view_model2view_from_bsg(model2view, view_state->vs_gvp);
+    rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+    MAT4X3PNT(view_pt, model2view, src_model_pt);
+    view_pt[X] = mousevec[X];
+    view_pt[Y] = mousevec[Y];
+    MAT4X3PNT(model_pt, view2model, view_pt);
 }
 
 
@@ -5278,10 +5319,7 @@ sedit_mouse(struct mged_state *s, const vect_t mousevec)
 		point_t pt;
 		vect_t delta;
 
-		MAT4X3PNT(pos_view, view_state->vs_gvp->gv_model2view, MEDIT(s)->curr_e_axes_pos);
-		pos_view[X] = mousevec[X];
-		pos_view[Y] = mousevec[Y];
-		MAT4X3PNT(pt, view_state->vs_gvp->gv_view2model, pos_view);
+		edsol_mouse_project_model_from_view_xy(s, pt, pos_view, MEDIT(s)->curr_e_axes_pos, mousevec);
 
 		/* Need vector from current vertex/keypoint
 		 * to desired new location.
@@ -5304,10 +5342,7 @@ sedit_mouse(struct mged_state *s, const vect_t mousevec)
 	     * Leave desired location in MEDIT(s)->e_mparam.
 	     */
 
-	    MAT4X3PNT(pos_view, view_state->vs_gvp->gv_model2view, MEDIT(s)->curr_e_axes_pos);
-	    pos_view[X] = mousevec[X];
-	    pos_view[Y] = mousevec[Y];
-	    MAT4X3PNT(temp, view_state->vs_gvp->gv_view2model, pos_view);
+	    edsol_mouse_project_model_from_view_xy(s, temp, pos_view, MEDIT(s)->curr_e_axes_pos, mousevec);
 	    MAT4X3PNT(MEDIT(s)->e_mparam, MEDIT(s)->e_invmat, temp);
 	    MEDIT(s)->e_mvalid = 1;	/* MEDIT(s)->e_mparam is valid */
 	    /* Leave the rest to code in sedit(s) */
@@ -5321,11 +5356,7 @@ sedit_mouse(struct mged_state *s, const vect_t mousevec)
 		    (struct rt_tgc_internal *)MEDIT(s)->es_int.idb_ptr;
 		RT_TGC_CK_MAGIC(tgc);
 
-		MAT4X3PNT(pos_view, view_state->vs_gvp->gv_model2view, MEDIT(s)->curr_e_axes_pos);
-		pos_view[X] = mousevec[X];
-		pos_view[Y] = mousevec[Y];
-		/* Do NOT change pos_view[Z] ! */
-		MAT4X3PNT(temp, view_state->vs_gvp->gv_view2model, pos_view);
+		edsol_mouse_project_model_from_view_xy(s, temp, pos_view, MEDIT(s)->curr_e_axes_pos, mousevec);
 		MAT4X3PNT(tr_temp, MEDIT(s)->e_invmat, temp);
 		VSUB2(tgc->h, tr_temp, tgc->v);
 	    }
@@ -5338,11 +5369,7 @@ sedit_mouse(struct mged_state *s, const vect_t mousevec)
 		    (struct rt_extrude_internal *)MEDIT(s)->es_int.idb_ptr;
 		RT_EXTRUDE_CK_MAGIC(extr);
 
-		MAT4X3PNT(pos_view, view_state->vs_gvp->gv_model2view, MEDIT(s)->curr_e_axes_pos);
-		pos_view[X] = mousevec[X];
-		pos_view[Y] = mousevec[Y];
-		/* Do NOT change pos_view[Z] ! */
-		MAT4X3PNT(temp, view_state->vs_gvp->gv_view2model, pos_view);
+		edsol_mouse_project_model_from_view_xy(s, temp, pos_view, MEDIT(s)->curr_e_axes_pos, mousevec);
 		MAT4X3PNT(tr_temp, MEDIT(s)->e_invmat, temp);
 		VSUB2(extr->h, tr_temp, extr->V);
 	    }
@@ -5355,11 +5382,7 @@ sedit_mouse(struct mged_state *s, const vect_t mousevec)
 
 		RT_CLINE_CK_MAGIC(cli);
 
-		MAT4X3PNT(pos_view, view_state->vs_gvp->gv_model2view, MEDIT(s)->curr_e_axes_pos);
-		pos_view[X] = mousevec[X];
-		pos_view[Y] = mousevec[Y];
-		/* Do NOT change pos_view[Z] ! */
-		MAT4X3PNT(temp, view_state->vs_gvp->gv_view2model, pos_view);
+		edsol_mouse_project_model_from_view_xy(s, temp, pos_view, MEDIT(s)->curr_e_axes_pos, mousevec);
 		MAT4X3PNT(tr_temp, MEDIT(s)->e_invmat, temp);
 		VSUB2(cli->h, tr_temp, cli->v);
 	    }
@@ -5368,28 +5391,19 @@ sedit_mouse(struct mged_state *s, const vect_t mousevec)
 	case PTARB:
 	    /* move an arb point to indicated point */
 	    /* point is located at es_values[es_menu*3] */
-	    MAT4X3PNT(pos_view, view_state->vs_gvp->gv_model2view, MEDIT(s)->curr_e_axes_pos);
-	    pos_view[X] = mousevec[X];
-	    pos_view[Y] = mousevec[Y];
-	    MAT4X3PNT(temp, view_state->vs_gvp->gv_view2model, pos_view);
+	    edsol_mouse_project_model_from_view_xy(s, temp, pos_view, MEDIT(s)->curr_e_axes_pos, mousevec);
 	    MAT4X3PNT(pos_model, MEDIT(s)->e_invmat, temp);
 	    editarb(s, pos_model);
 
 	    break;
 	case EARB:
-	    MAT4X3PNT(pos_view, view_state->vs_gvp->gv_model2view, MEDIT(s)->curr_e_axes_pos);
-	    pos_view[X] = mousevec[X];
-	    pos_view[Y] = mousevec[Y];
-	    MAT4X3PNT(temp, view_state->vs_gvp->gv_view2model, pos_view);
+	    edsol_mouse_project_model_from_view_xy(s, temp, pos_view, MEDIT(s)->curr_e_axes_pos, mousevec);
 	    MAT4X3PNT(pos_model, MEDIT(s)->e_invmat, temp);
 	    editarb(s, pos_model);
 
 	    break;
 	case ECMD_ARB_MOVE_FACE:
-	    MAT4X3PNT(pos_view, view_state->vs_gvp->gv_model2view, MEDIT(s)->curr_e_axes_pos);
-	    pos_view[X] = mousevec[X];
-	    pos_view[Y] = mousevec[Y];
-	    MAT4X3PNT(temp, view_state->vs_gvp->gv_view2model, pos_view);
+	    edsol_mouse_project_model_from_view_xy(s, temp, pos_view, MEDIT(s)->curr_e_axes_pos, mousevec);
 	    MAT4X3PNT(pos_model, MEDIT(s)->e_invmat, temp);
 	    /* change D of planar equation */
 	    es_peqn[es_menu][W]=VDOT(&es_peqn[es_menu][0], pos_model);
@@ -5410,14 +5424,16 @@ sedit_mouse(struct mged_state *s, const vect_t mousevec)
 		int tmp_vert;
 		char tmp_msg[256];
 		point_t selected_pt;
+		mat_t model2view;
 
 		RT_BOT_CK_MAGIC(bot);
 
-		MAT4X3PNT(pos_view, view_state->vs_gvp->gv_model2view, MEDIT(s)->curr_e_axes_pos);
+		rt_view_model2view_from_bsg(model2view, view_state->vs_gvp);
+		MAT4X3PNT(pos_view, model2view, MEDIT(s)->curr_e_axes_pos);
 		pos_view[X] = mousevec[X];
 		pos_view[Y] = mousevec[Y];
 
-		tmp_vert = rt_bot_find_v_nearest_pt2(bot, pos_view, view_state->vs_gvp->gv_model2view);
+		tmp_vert = rt_bot_find_v_nearest_pt2(bot, pos_view, model2view);
 		if (tmp_vert < 0) {
 		    Tcl_AppendResult(s->interp, "ECMD_BOT_PICKV: unable to find a vertex!\n", (char *)NULL);
 		    mged_print_result(s, TCL_ERROR);
@@ -5439,14 +5455,16 @@ sedit_mouse(struct mged_state *s, const vect_t mousevec)
 		int vert1, vert2;
 		char tmp_msg[256];
 		point_t from_pt, to_pt;
+		mat_t model2view;
 
 		RT_BOT_CK_MAGIC(bot);
 
-		MAT4X3PNT(pos_view, view_state->vs_gvp->gv_model2view, MEDIT(s)->curr_e_axes_pos);
+		rt_view_model2view_from_bsg(model2view, view_state->vs_gvp);
+		MAT4X3PNT(pos_view, model2view, MEDIT(s)->curr_e_axes_pos);
 		pos_view[X] = mousevec[X];
 		pos_view[Y] = mousevec[Y];
 
-		if (rt_bot_find_e_nearest_pt2(&vert1, &vert2, bot, pos_view, view_state->vs_gvp->gv_model2view)) {
+		if (rt_bot_find_e_nearest_pt2(&vert1, &vert2, bot, pos_view, model2view)) {
 		    Tcl_AppendResult(s->interp, "ECMD_BOT_PICKE: unable to find an edge!\n", (char *)NULL);
 		    mged_print_result(s, TCL_ERROR);
 		    return;
@@ -5471,14 +5489,16 @@ sedit_mouse(struct mged_state *s, const vect_t mousevec)
 		int hits, ret_tcl;
 		int v1, v2, v3;
 		point_t pt1, pt2, pt3;
+		mat_t view2model;
 		struct bu_vls vls = BU_VLS_INIT_ZERO;
 
 		RT_BOT_CK_MAGIC(bot);
 
+		rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
 		VSET(tmp, mousevec[X], mousevec[Y], 0.0);
-		MAT4X3PNT(start_pt, view_state->vs_gvp->gv_view2model, tmp);
+		MAT4X3PNT(start_pt, view2model, tmp);
 		VSET(tmp, 0, 0, 1);
-		MAT4X3VEC(dir, view_state->vs_gvp->gv_view2model, tmp);
+		MAT4X3VEC(dir, view2model, tmp);
 
 		bu_vls_strcat(&vls, " {");
 		hits = 0;
@@ -5530,6 +5550,7 @@ sedit_mouse(struct mged_state *s, const vect_t mousevec)
 		    (struct model *)MEDIT(s)->es_int.idb_ptr;
 		struct edge *e;
 		struct bn_tol tmp_tol;
+		mat_t model2view;
 		NMG_CK_MODEL(m);
 
 		/* Picking an edge should not depend on tolerances! */
@@ -5539,11 +5560,12 @@ sedit_mouse(struct mged_state *s, const vect_t mousevec)
 		tmp_tol.perp = 0.0;
 		tmp_tol.para = 1 - tmp_tol.perp;
 
-		MAT4X3PNT(pos_view, view_state->vs_gvp->gv_model2view, MEDIT(s)->curr_e_axes_pos);
+		rt_view_model2view_from_bsg(model2view, view_state->vs_gvp);
+		MAT4X3PNT(pos_view, model2view, MEDIT(s)->curr_e_axes_pos);
 		pos_view[X] = mousevec[X];
 		pos_view[Y] = mousevec[Y];
 		if ((e = nmg_find_e_nearest_pt2(&m->magic, pos_view,
-						view_state->vs_gvp->gv_model2view, s->vlfree, &tmp_tol)) == (struct edge *)NULL) {
+						model2view, s->vlfree, &tmp_tol)) == (struct edge *)NULL) {
 		    Tcl_AppendResult(s->interp, "ECMD_NMG_EPICK: unable to find an edge\n",
 				     (char *)NULL);
 		    mged_print_result(s, TCL_ERROR);
@@ -5585,10 +5607,7 @@ sedit_mouse(struct mged_state *s, const vect_t mousevec)
 	case ECMD_METABALL_PT_MOV:
 	case ECMD_METABALL_PT_ADD:
 
-	    MAT4X3PNT(pos_view, view_state->vs_gvp->gv_model2view, MEDIT(s)->curr_e_axes_pos);
-	    pos_view[X] = mousevec[X];
-	    pos_view[Y] = mousevec[Y];
-	    MAT4X3PNT(temp, view_state->vs_gvp->gv_view2model, pos_view);
+	    edsol_mouse_project_model_from_view_xy(s, temp, pos_view, MEDIT(s)->curr_e_axes_pos, mousevec);
 	    MAT4X3PNT(MEDIT(s)->e_mparam, MEDIT(s)->e_invmat, temp);
 	    MEDIT(s)->e_mvalid = 1;
 
@@ -5714,6 +5733,7 @@ objedit_mouse(struct mged_state *s, const vect_t mousevec)
 
     } else if (movedir & (RARROW | UARROW)) {
 	mat_t oldchanges;       /* temporary matrix */
+	mat_t view2model;
 
 	/* Vector from object keypoint to cursor */
 	VMOVE(temp, MEDIT(s)->e_keypoint);
@@ -5724,7 +5744,8 @@ objedit_mouse(struct mged_state *s, const vect_t mousevec)
 	if (movedir & UARROW)
 	    pos_view[Y] = mousevec[Y];
 
-	MAT4X3PNT(pos_model, view_state->vs_gvp->gv_view2model, pos_view); /* NOT objview */
+	rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+	MAT4X3PNT(pos_model, view2model, pos_view); /* NOT objview */
 	MAT4X3PNT(tr_temp, MEDIT(s)->model_changes, temp);
 	VSUB2(tr_temp, pos_model, tr_temp);
 	MAT_DELTAS_VEC(incr_mat, tr_temp);
@@ -6428,7 +6449,7 @@ mged_param(struct mged_state *s, Tcl_Interp *interp, int argc, fastf_t *argvect)
 
     if (SEDIT_TRAN) {
 	vect_t diff;
-	fastf_t inv_Viewscale = 1/view_state->vs_gvp->gv_scale;
+	fastf_t inv_Viewscale = 1/rt_view_scale_from_bsg(view_state->vs_gvp);
 
 	VSUB2(diff, MEDIT(s)->e_para, MEDIT(s)->e_axes_pos);
 	VSCALE(MEDIT(s)->k.tra_m_abs, diff, inv_Viewscale);

@@ -27,10 +27,10 @@
 
 #include "bu/env.h"
 #include "bsg/util.h"
-#include "bsg/view_state.h"
 #include "ged.h"
 #include "qtcad/QgViewCtrl.h"
 #include "qtcad/QgSignalFlags.h"
+#include "rt/view_legacy_bsg.h"
 
 
 QgViewCtrl::QgViewCtrl(QWidget *pparent, struct ged *pgedp) : QToolBar(pparent)
@@ -110,18 +110,18 @@ QgViewCtrl::fb_mode_cmd()
 	if (!gedp->ged_gvp)
 		return;
 	struct bsg_view *v = gedp->ged_gvp;
-	switch (bsg_view_framebuffer_mode(v)) {
+	switch (rt_view_framebuffer_mode_from_bsg(v)) {
 	case 0:
-		bsg_view_set_framebuffer_mode(v, 2);
+		rt_view_framebuffer_mode_set_bsg(v, 2);
 		break;
 	case 2:
-		bsg_view_set_framebuffer_mode(v, 1);
+		rt_view_framebuffer_mode_set_bsg(v, 1);
 		break;
 	case 1:
-		bsg_view_set_framebuffer_mode(v, 0);
+		rt_view_framebuffer_mode_set_bsg(v, 0);
 		break;
 	default:
-		bu_log("Error - invalid fb mode: %d\n", bsg_view_framebuffer_mode(v));
+		bu_log("Error - invalid fb mode: %d\n", rt_view_framebuffer_mode_from_bsg(v));
 	}
 	emit view_changed(QG_VIEW_REFRESH);
 }
@@ -133,7 +133,7 @@ QgViewCtrl::do_view_update(QgViewUpdateFlags flags)
 	if (!gedp->ged_gvp || !flags)
 		return;
 	struct bsg_view *v = gedp->ged_gvp;
-	switch (bsg_view_framebuffer_mode(v)) {
+	switch (rt_view_framebuffer_mode_from_bsg(v)) {
 	case 0:
 		fb_mode->setIcon(QIcon(QPixmap(":images/view/framebuffer_off.png")));
 		break;
@@ -144,7 +144,7 @@ QgViewCtrl::do_view_update(QgViewUpdateFlags flags)
 		fb_mode->setIcon(QIcon(QPixmap(":images/view/framebuffer_underlay.png")));
 		break;
 	default:
-		bu_log("Error - invalid fb mode: %d\n", bsg_view_framebuffer_mode(v));
+		bu_log("Error - invalid fb mode: %d\n", rt_view_framebuffer_mode_from_bsg(v));
 	}
 }
 

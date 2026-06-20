@@ -27,6 +27,7 @@
 
 extern "C" {
 #include "bsg.h"
+#include "rt/view_legacy_bsg.h"
 }
 
 #include <string>
@@ -240,8 +241,10 @@ QMeasure2DFilter::get_point()
 	fastf_t vx, vy;
 	bsg_screen_to_view(v, &vx, &vy, v->gv_mouse_x, v->gv_mouse_y);
 	point_t vpnt;
+	mat_t view2model;
 	VSET(vpnt, vx, vy, 0);
-	MAT4X3PNT(mpnt, v->gv_view2model, vpnt);
+	rt_view_view2model_from_bsg(view2model, v);
+	MAT4X3PNT(mpnt, view2model, vpnt);
 	return true;
 }
 

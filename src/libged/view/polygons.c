@@ -38,6 +38,7 @@
 #include "bg/polygon.h"
 #include "rt/geom.h"
 #include "rt/primitives/sketch_legacy_bsg.h"
+#include "rt/view_legacy_bsg.h"
 
 #include "../ged_private.h"
 #include "./ged_view.h"
@@ -482,7 +483,8 @@ _poly_cmd_area(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    double area = bg_find_polygon_area((struct bg_polygon *)&p->polygon, CLIPPER_MAX, (plane_t *)&p->vp, gd->cv ? gd->cv->gv_scale : 1.0);
+    double view_scale = rt_view_scale_from_bsg(gd->cv);
+    double area = bg_find_polygon_area((struct bg_polygon *)&p->polygon, CLIPPER_MAX, (plane_t *)&p->vp, view_scale);
 
     if (gedp->dbip) {
 	bu_vls_printf(gedp->ged_result_str, "%g", area * gedp->dbip->dbi_base2local);
@@ -533,7 +535,8 @@ _poly_cmd_overlap(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    int ovlp = bg_polygons_overlap((struct bg_polygon *)&polyA->polygon, (struct bg_polygon *)&polyB->polygon, (plane_t *)&polyA->vp, &wdbp->wdb_tol, v->gv_scale);
+    fastf_t view_scale = rt_view_scale_from_bsg(v);
+    int ovlp = bg_polygons_overlap((struct bg_polygon *)&polyA->polygon, (struct bg_polygon *)&polyB->polygon, (plane_t *)&polyA->vp, &wdbp->wdb_tol, view_scale);
 
     bu_vls_printf(gedp->ged_result_str, "%d", ovlp);
 

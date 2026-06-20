@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "rt/view_legacy_bsg.h"
+
 #include "../ged_private.h"
 
 
@@ -40,6 +42,9 @@ ged_lookat_core(struct ged *gedp, int argc, const char *argv[])
     point_t tmp;
     point_t new_center;
     vect_t dir;
+    vect_t view_aet;
+    mat_t view2model;
+    fastf_t view_scale;
     fastf_t new_az, new_el;
     double scan[3];
     static const char *usage = "x y z";
@@ -90,17 +95,20 @@ ged_lookat_core(struct ged *gedp, int argc, const char *argv[])
     VSCALE(look, look, lbval);
 
     VSET(tmp, 0.0, 0.0, 1.0);
-    MAT4X3PNT(eye, gedp->ged_gvp->gv_view2model, tmp);
+    rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
+    MAT4X3PNT(eye, view2model, tmp);
 
     VSUB2(dir, eye, look);
     VUNITIZE(dir);
     bn_ae_vec(&new_az, &new_el, dir);
 
-    VSET(gedp->ged_gvp->gv_aet, new_az, new_el, gedp->ged_gvp->gv_aet[Z]);
-    bsg_mat_aet(gedp->ged_gvp);
+    rt_view_aet_from_bsg(view_aet, gedp->ged_gvp);
+    VSET(view_aet, new_az, new_el, view_aet[Z]);
+    rt_view_aet_set_bsg(gedp->ged_gvp, view_aet);
 
-    VJOIN1(new_center, eye, -gedp->ged_gvp->gv_scale, dir);
-    MAT_DELTAS_VEC_NEG(gedp->ged_gvp->gv_center, new_center);
+    view_scale = rt_view_scale_from_bsg(gedp->ged_gvp);
+    VJOIN1(new_center, eye, -view_scale, dir);
+    rt_view_center_vec_set_bsg(gedp->ged_gvp, new_center);
 
     bsg_update(gedp->ged_gvp);
 

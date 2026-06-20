@@ -8,13 +8,36 @@
 #include "common.h"
 
 #include "brlobol/export_action.h"
+#include "brlobol/lod_service.h"
 #include "brlobol/mesh_shape.h"
 #include "brlobol/vlist_shape.h"
 
 #include <Inventor/elements/SoModelMatrixElement.h>
 #include <Inventor/nodes/SoNode.h>
 
+#include <vector>
+
 SO_ACTION_SOURCE(SoBRLExportAction);
+
+static SbBool
+export_source_full_detail_result_valid(const BRLObolSourceMeshRequest &sourceRequest,
+	const BRLObolLodResult &result)
+{
+    if (result.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
+	    result.resultKind != BRLOBOL_LOD_RESULT_FULL_DETAIL ||
+	    !result.mesh.isValid())
+	return FALSE;
+
+    size_t faceCount = result.mesh.coordIndex.size() / 3;
+    if ((sourceRequest.faceCount != 0 &&
+		sourceRequest.faceCount != static_cast<uint64_t>(faceCount)) ||
+	    (sourceRequest.pointCount != 0 &&
+		sourceRequest.pointCount !=
+		static_cast<uint64_t>(result.mesh.points.size())))
+	return FALSE;
+
+    return TRUE;
+}
 
 SoBRLExportAction::SoBRLExportAction(void) :
     geometryPolicy(FULL_DETAIL),
@@ -97,6 +120,141 @@ unsigned int
 SoBRLExportAction::getSkippedLodDisplayMeshCount(void) const
 {
     return this->skippedLodDisplayMeshCount;
+}
+
+int
+SoBRLExportAction::getSourceBackedFullDetailRequestCount(void) const
+{
+    return static_cast<int>(this->sourceBackedFullDetailRequests.size());
+}
+
+const BRLObolSourceMeshRequest &
+SoBRLExportAction::getSourceBackedFullDetailRequest(int index) const
+{
+    return this->sourceBackedFullDetailRequests.at(static_cast<size_t>(index));
+}
+
+SbBool
+SoBRLExportAction::makeSourceBackedFullDetailLodRequest(int index,
+	BRLObolLodRequest &request,
+	const BRLObolLodRequest *templateRequest) const
+{
+    if (index < 0 ||
+	    static_cast<size_t>(index) >=
+	    this->sourceBackedFullDetailRequests.size())
+	return FALSE;
+
+    return brlobol_lod_rt_source_full_detail_request_from_source_mesh_request(
+	request, this->sourceBackedFullDetailRequests[static_cast<size_t>(index)],
+	templateRequest);
+}
+
+SbBool
+SoBRLExportAction::appendSourceBackedFullDetailResult(
+	const BRLObolSourceMeshRequest &sourceRequest,
+	const BRLObolLodResult &result)
+{
+    if (!export_source_full_detail_result_valid(sourceRequest, result))
+	return FALSE;
+
+    size_t faceCount = result.mesh.coordIndex.size() / 3;
+    for (size_t i = 0; i < faceCount; i++) {
+	int ia = result.mesh.coordIndex[i * 3];
+	int ib = result.mesh.coordIndex[i * 3 + 1];
+	int ic = result.mesh.coordIndex[i * 3 + 2];
+	if (ia < 0 || ib < 0 || ic < 0 ||
+		static_cast<size_t>(ia) >= result.mesh.points.size() ||
+		static_cast<size_t>(ib) >= result.mesh.points.size() ||
+		static_cast<size_t>(ic) >= result.mesh.points.size())
+	    return FALSE;
+
+	SbVec3f worldA;
+	SbVec3f worldB;
+	SbVec3f worldC;
+	sourceRequest.localToWorld.multVecMatrix(
+		result.mesh.points[static_cast<size_t>(ia)], worldA);
+	sourceRequest.localToWorld.multVecMatrix(
+		result.mesh.points[static_cast<size_t>(ib)], worldB);
+	sourceRequest.localToWorld.multVecMatrix(
+		result.mesh.points[static_cast<size_t>(ic)], worldC);
+
+	this->appendTriangle(sourceRequest.path, sourceRequest.sourceName,
+		sourceRequest.sourceType, sourceRequest.sourceId,
+		sourceRequest.regionId, sourceRequest.airCode,
+		sourceRequest.materialId, sourceRequest.los,
+		sourceRequest.materialColorValid, sourceRequest.materialColor,
+		sourceRequest.materialShader, static_cast<int>(i),
+		ia, ib, ic, sourceRequest.selected, sourceRequest.highlighted,
+		sourceRequest.ghosted, sourceRequest.hiddenLine,
+		sourceRequest.editEmphasis, sourceRequest.lodPolicy,
+		sourceRequest.lodAvailable, sourceRequest.lodActiveLevel,
+		result.counts.faceCount > 0 ?
+		    static_cast<uint32_t>(result.counts.faceCount) :
+		    static_cast<uint32_t>(faceCount),
+		result.counts.pointCount > 0 ?
+		    static_cast<uint32_t>(result.counts.pointCount) :
+		    static_cast<uint32_t>(result.mesh.points.size()),
+		static_cast<uint32_t>(result.counts.originalPointCount),
+		static_cast<uint32_t>(result.counts.normalCount),
+		result.hasSnappedPoints, result.hasNormals,
+		result.bounds.isEmpty() ? sourceRequest.lodBoundsMin :
+		    result.bounds.getMin(),
+		result.bounds.isEmpty() ? sourceRequest.lodBoundsMax :
+		    result.bounds.getMax(),
+		sourceRequest.colorOverride, sourceRequest.color,
+		worldA, worldB, worldC);
+    }
+
+    return TRUE;
+}
+
+int
+SoBRLExportAction::submitSourceBackedFullDetailRequests(
+	BRLObolLodService *service, uint64_t generation, struct db_i *dbip,
+	const BRLObolLodRequest *templateRequest,
+	uint64_t maxFullDetailFaceCount,
+	uint64_t maxFullDetailPointCount) const
+{
+    int submitted = 0;
+    for (size_t i = 0; i < this->sourceBackedFullDetailRequests.size(); i++) {
+	if (brlobol_lod_submit_rt_source_full_detail_request(service,
+		generation, this->sourceBackedFullDetailRequests[i], dbip,
+		templateRequest, maxFullDetailFaceCount,
+		maxFullDetailPointCount) != 0)
+	    submitted++;
+    }
+    return submitted;
+}
+
+int
+SoBRLExportAction::consumeSourceBackedFullDetailResults(
+	const std::vector<BRLObolLodResult> &results,
+	const BRLObolLodRequest *templateRequest)
+{
+    std::vector<SbBool> used(results.size(), FALSE);
+    int consumed = 0;
+
+    for (size_t i = 0; i < this->sourceBackedFullDetailRequests.size(); i++) {
+	BRLObolLodRequest expected;
+	if (!brlobol_lod_rt_source_full_detail_request_from_source_mesh_request(
+		expected, this->sourceBackedFullDetailRequests[i],
+		templateRequest))
+	    continue;
+
+	for (size_t j = 0; j < results.size(); j++) {
+	    if (used[j] ||
+		    !brlobol_lod_result_matches_request(results[j], expected))
+		continue;
+	    if (this->appendSourceBackedFullDetailResult(
+		    this->sourceBackedFullDetailRequests[i], results[j])) {
+		used[j] = TRUE;
+		consumed++;
+	    }
+	    break;
+	}
+    }
+
+    return consumed;
 }
 
 void
@@ -184,16 +342,18 @@ SoBRLExportAction::meshShapeAction(SoAction *action, SoNode *node)
 
     const SbBool useFullDetail =
 	(exportAction->geometryPolicy == SoBRLExportAction::FULL_DETAIL &&
-	 shape->isLodDisplayActive() && shape->hasFullDetailMesh()) ?
-	TRUE : FALSE;
+	 shape->hasFullDetailMesh()) ? TRUE : FALSE;
+    const SbBool useSourceBackedFullDetail =
+	(exportAction->geometryPolicy == SoBRLExportAction::FULL_DETAIL &&
+	 shape->needsSourceBackedFullDetail()) ? TRUE : FALSE;
     if (exportAction->geometryPolicy == SoBRLExportAction::FULL_DETAIL &&
 	    shape->isLodDisplayActive())
 	exportAction->skippedLodDisplayMeshCount++;
-    if (exportAction->geometryPolicy == SoBRLExportAction::FULL_DETAIL &&
-	    shape->isLodDisplayActive() && !useFullDetail)
-	return;
-
     const SbMatrix &localToWorld = SoModelMatrixElement::get(action->getState());
+    if (useSourceBackedFullDetail) {
+	exportAction->appendSourceBackedFullDetailRequest(shape, localToWorld);
+	return;
+    }
 
     int triangleCount = useFullDetail ?
 	shape->getFullDetailTriangleCount() : shape->getTriangleCount();
@@ -256,8 +416,23 @@ SoBRLExportAction::resetResults(void)
     this->lines.clear();
     this->points.clear();
     this->triangles.clear();
+    this->sourceBackedFullDetailRequests.clear();
     this->bounds.makeEmpty();
     this->skippedLodDisplayMeshCount = 0;
+}
+
+void
+SoBRLExportAction::appendSourceBackedFullDetailRequest(
+	const SoBRLMeshShape *shape, const SbMatrix &localToWorld)
+{
+    if (!shape)
+	return;
+
+    BRLObolSourceMeshRequest request;
+    if (shape->makeSourceMeshRequest(request)) {
+	request.localToWorld = localToWorld;
+	this->sourceBackedFullDetailRequests.push_back(request);
+    }
 }
 
 void

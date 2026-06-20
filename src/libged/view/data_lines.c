@@ -54,7 +54,7 @@
 #include "bsg/scene_object.h"
 #include "bsg/hud.h"
 #include "bsg/overlay.h"
-#include "bsg/view_state.h"
+#include "rt/view_legacy_bsg.h"
 #include "../ged_private.h"
 #include "./ged_view.h"
 
@@ -143,7 +143,7 @@ _view_dlines_cmd_snap(void *bs, int argc, const char **argv)
     struct view_dlines_state *vs = (struct view_dlines_state *)bs;
     struct ged *gedp = vs->gedp;
     if (argc == 1) {
-	bu_vls_printf(gedp->ged_result_str, "%d", bsg_view_snap_lines(gedp->ged_gvp));
+	bu_vls_printf(gedp->ged_result_str, "%d", rt_view_snap_lines_from_bsg(gedp->ged_gvp));
 	return BRLCAD_OK;
     }
 
@@ -152,7 +152,7 @@ _view_dlines_cmd_snap(void *bs, int argc, const char **argv)
 
 	if (bu_sscanf(argv[1], "%d", &i) != 1) return BRLCAD_ERROR;
 
-	bsg_view_set_snap_lines(gedp->ged_gvp, i);
+	rt_view_snap_lines_set_bsg(gedp->ged_gvp, i);
 
 	return BRLCAD_OK;
     }

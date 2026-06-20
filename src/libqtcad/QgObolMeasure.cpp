@@ -11,13 +11,121 @@
 #include "qtcad/QgObolMeasure.h"
 
 #include "bg/line_layer.h"
+#include "brlobol/database_source.h"
+#include "brlobol/lod_service.h"
+#include "brlobol/measure_action.h"
 #include "brlobol/view_controller.h"
 #include "bu/color.h"
 #include "qtcad/QgObolPick.h"
 #include "qtcad/QgSignalFlags.h"
 #include "qtcad/QgView.h"
 
+#include <Inventor/SoViewport.h>
+
 #include <vector>
+
+QgObolMeasureGeometryRecord::QgObolMeasureGeometryRecord(void) :
+    shapeCount(0),
+    segmentCount(0),
+    triangleCount(0),
+    surfaceArea(0.0f),
+    totalLength(0.0f),
+    boundsMin(0.0f, 0.0f, 0.0f),
+    boundsMax(0.0f, 0.0f, 0.0f),
+    boundsValid(false),
+    hasNearestPrimitive(false),
+    nearestPrimitiveKind(NONE),
+    nearestPrimitiveIndex(-1),
+    nearestPath(),
+    nearestPoint(0.0f, 0.0f, 0.0f),
+    nearestDistance(0.0f)
+{
+}
+
+static SoBRLDatabaseSource *
+qg_obol_measure_first_database_source(BRLObolViewController *controller)
+{
+    if (!controller)
+	return NULL;
+
+    for (int i = 0; i < controller->getDatabaseSourceCount(); i++) {
+	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
+	if (source && source->getDatabase())
+	    return source;
+    }
+
+    return NULL;
+}
+
+static void
+qg_obol_measure_consume_source_full_detail(BRLObolViewController *controller,
+	SoBRLMeasureAction &measureAction)
+{
+    if (!controller)
+	return;
+
+    const int requestCount =
+	measureAction.getSourceBackedFullDetailRequestCount();
+    if (requestCount <= 0)
+	return;
+
+    std::vector<BRLObolLodRequest> expectedRequests;
+    for (int i = 0; i < requestCount; i++) {
+	BRLObolLodRequest request;
+	if (measureAction.makeSourceBackedFullDetailLodRequest(i, request))
+	    expectedRequests.push_back(request);
+    }
+    if (expectedRequests.empty())
+	return;
+
+    BRLObolLodService *service = controller->getLodService();
+    if (!service || !service->isRunning())
+	return;
+
+    std::vector<BRLObolLodResult> sourceResults;
+    service->drainMatchingResults(sourceResults, expectedRequests);
+    if (!sourceResults.empty()) {
+	(void)measureAction.consumeSourceBackedFullDetailResults(sourceResults);
+	return;
+    }
+
+    SoBRLDatabaseSource *source =
+	qg_obol_measure_first_database_source(controller);
+    if (source)
+	(void)measureAction.submitSourceBackedFullDetailRequests(service, 0,
+		source->getDatabase(), NULL,
+		controller->getMaxExactFullDetailFaceCount(),
+		controller->getMaxExactFullDetailPointCount());
+}
+
+static void
+qg_obol_measure_record_from_action(const SoBRLMeasureAction &measureAction,
+	QgObolMeasureGeometryRecord &record)
+{
+    record.shapeCount = measureAction.getShapeCount();
+    record.segmentCount = measureAction.getSegmentCount();
+    record.triangleCount = measureAction.getTriangleCount();
+    record.surfaceArea = measureAction.getSurfaceArea();
+    record.totalLength = measureAction.getTotalLength();
+
+    const SbBox3f &bounds = measureAction.getBounds();
+    if (!bounds.isEmpty()) {
+	record.boundsValid = true;
+	record.boundsMin = bounds.getMin();
+	record.boundsMax = bounds.getMax();
+    }
+
+    if (measureAction.hasNearestPrimitive()) {
+	record.hasNearestPrimitive = true;
+	record.nearestPrimitiveKind =
+	    static_cast<int>(measureAction.getNearestPrimitiveKind());
+	record.nearestPrimitiveIndex =
+	    measureAction.getNearestPrimitiveIndex();
+	record.nearestPath = measureAction.getNearestPath().getString();
+	record.nearestPoint = measureAction.getNearestPoint();
+	record.nearestDistance = measureAction.getNearestDistance();
+    }
+}
 
 int
 qg_obol_measure_pick_point(QgView *display,
@@ -33,6 +141,37 @@ qg_obol_measure_pick_point(QgView *display,
     point = picks[0].point;
     if (path)
 	*path = picks[0].path;
+    return 1;
+}
+
+int
+qg_obol_measure_geometry_full_detail(QgView *display,
+	const SbVec3f *query,
+	QgObolMeasureGeometryRecord &record)
+{
+    record = QgObolMeasureGeometryRecord();
+    if (!display)
+	return 0;
+
+    BRLObolViewController *controller = display->obolViewController();
+    if (!controller || !controller->getViewport() ||
+	    !controller->getViewport()->getRoot())
+	return 0;
+
+    SoBRLMeasureAction measureAction;
+    measureAction.setGeometryPolicy(SoBRLMeasureAction::FULL_DETAIL);
+    if (query)
+	measureAction.setQueryPoint(*query);
+    measureAction.apply(controller->getViewport()->getRoot());
+    qg_obol_measure_consume_source_full_detail(controller, measureAction);
+
+    if (measureAction.getShapeCount() <= 0 &&
+	    measureAction.getSegmentCount() <= 0 &&
+	    measureAction.getTriangleCount() <= 0 &&
+	    !measureAction.hasNearestPrimitive())
+	return 0;
+
+    qg_obol_measure_record_from_action(measureAction, record);
     return 1;
 }
 

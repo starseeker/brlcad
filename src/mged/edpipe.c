@@ -36,6 +36,7 @@
 #include "vmath.h"
 #include "nmg.h"
 #include "rt/geom.h"
+#include "rt/view_legacy_bsg.h"
 #include "ged.h"
 #include "wdb.h"
 
@@ -286,6 +287,7 @@ find_pipe_pnt_nearest_pnt(struct mged_state *s, const struct bu_list *pipe_hd, c
     struct bn_tol tmp_tol;
     fastf_t min_dist = MAX_FASTF;
     vect_t dir, work;
+    mat_t view2model;
 
     tmp_tol.magic = BN_TOL_MAGIC;
     tmp_tol.dist = 0.0;
@@ -295,7 +297,8 @@ find_pipe_pnt_nearest_pnt(struct mged_state *s, const struct bu_list *pipe_hd, c
 
     /* get a direction vector in model space corresponding to z-direction in view */
     VSET(work, 0.0, 0.0, 1.0);
-    MAT4X3VEC(dir, view_state->vs_gvp->gv_view2model, work);
+    rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+    MAT4X3VEC(dir, view2model, work);
 
     for (BU_LIST_FOR(ps, wdb_pipe_pnt, pipe_hd)) {
 	fastf_t dist;

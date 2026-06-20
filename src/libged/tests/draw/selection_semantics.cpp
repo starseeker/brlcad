@@ -45,6 +45,7 @@
 #include "bsg/pick.h"
 #include "bsg/selection.h"
 #include <ged.h>
+#include "rt/view_legacy_bsg.h"
 
 #define ASSERT(cond) do { \
     nchecks++; \
@@ -135,8 +136,8 @@ main(int ac, char *av[])
     /* ------------------------------------------------------------------
      * Test 2: pick then add to selection
      * ------------------------------------------------------------------ */
-    int cx = v->gv_width  / 2;
-    int cy = v->gv_height / 2;
+    int cx = rt_view_width_from_bsg(v) / 2;
+    int cy = rt_view_height_from_bsg(v) / 2;
     struct bsg_pick_result *pr = bsg_pick_point(v, cx, cy, 0);
     if (pr && bsg_pick_result_count(pr) > 0) {
 	struct bsg_interaction_result *ir = bsg_interaction_from_pick_result(pr);

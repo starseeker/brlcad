@@ -34,6 +34,7 @@
 #include "rt/directory.h"
 #include "rt/db_io.h"
 #include "rt/primitives/sketch_legacy_bsg.h"
+#include "rt/view_legacy_bsg.h"
 #include "QPolyCreate.h"
 #include "QPolyMod.h"
 #include "bsg/polygon.h"
@@ -570,10 +571,11 @@ QPolyMod::align_to_poly()
     if (!v)
 	return;
 
-    MAT_DELTAS_VEC_NEG(v->gv_center, center);
-    bn_ae_vec(&v->gv_aet[0], &v->gv_aet[1], dir);
-    v->gv_aet[2] = 0;
-    bsg_mat_aet(v);
+    rt_view_center_vec_set_bsg(v, center);
+    vect_t aet = VINIT_ZERO;
+    bn_ae_vec(&aet[0], &aet[1], dir);
+    aet[2] = 0;
+    rt_view_aet_set_bsg(v, aet);
 
     bsg_update(v);
 
@@ -811,13 +813,13 @@ QPolyMod::toggle_line_snapping(bool s)
     if (!v || bsg_polygon_ref_is_null(co))
 	return;
 
-    bsg_view_set_snap_source_flags(v, BSG_SNAP_VIEW);
+    rt_view_snap_source_flags_set_bsg(v, BSG_SNAP_VIEW);
     if (!s) {
-	bsg_view_set_snap_lines(v, 0);
+	rt_view_snap_lines_set_bsg(v, 0);
 	bsg_view_snap_exclude_feature_clear(v);
     } else {
 	bsg_view_snap_exclude_feature_set(v, co);
-	bsg_view_set_snap_lines(v, bsg_view_polygon_snap_count(v, co) ? 1 : 0);
+	rt_view_snap_lines_set_bsg(v, bsg_view_polygon_snap_count(v, co) ? 1 : 0);
     }
 
     emit settings_changed(QG_VIEW_DRAWN);
@@ -830,7 +832,7 @@ QPolyMod::toggle_grid_snapping(bool s)
     if (!v)
 	return;
 
-    bsg_view_set_snap_source_flags(v, BSG_SNAP_VIEW);
+    rt_view_snap_source_flags_set_bsg(v, BSG_SNAP_VIEW);
     struct bsg_grid_state grid;
     if (!bsg_view_grid_get(v, &grid))
 	return;
@@ -858,7 +860,7 @@ QPolyMod::checkbox_refresh(unsigned long long)
     ps->grid_snapping->blockSignals(false);
 
     ps->line_snapping->blockSignals(true);
-    if (bsg_view_snap_lines(v)) {
+    if (rt_view_snap_lines_from_bsg(v)) {
 	ps->line_snapping->setCheckState(Qt::Checked);
     } else {
 	ps->line_snapping->setCheckState(Qt::Unchecked);

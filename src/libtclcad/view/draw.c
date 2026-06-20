@@ -45,13 +45,15 @@ go_draw(struct bsg_view *gdvp)
 {
     struct dm *dmp = (struct dm *)gdvp->dmp;
     mat_t model2view;
+    mat_t pmat;
     fastf_t perspective = rt_view_perspective_from_bsg(gdvp);
 
     rt_view_model2view_from_bsg(model2view, gdvp);
+    rt_view_pmat_from_bsg(pmat, gdvp);
     (void)dm_loadmatrix(dmp, model2view, 0);
 
     if (SMALL_FASTF < perspective)
-	(void)dm_loadpmatrix(dmp, gdvp->gv_pmat);
+	(void)dm_loadpmatrix(dmp, pmat);
     else
 	(void)dm_loadpmatrix(dmp, (fastf_t *)NULL);
 

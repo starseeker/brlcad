@@ -33,6 +33,7 @@
 #include "bsg/selection.h"
 #include "ged/view.h"
 #include "rt/view.h"
+#include "rt/view_legacy_bsg.h"
 
 #include "./mged.h"
 #include "./mged_dm.h"
@@ -236,13 +237,15 @@ void
 wrt_view(struct mged_state *s, mat_t out, const mat_t change, const mat_t in)
 {
     static mat_t t1, t2;
+    mat_t view_center;
 
-    bn_mat_mul(t1, view_state->vs_gvp->gv_center, in);
+    rt_view_center_from_bsg(view_center, view_state->vs_gvp);
+    bn_mat_mul(t1, view_center, in);
     bn_mat_mul(t2, change, t1);
 
     /* Build "fromViewcenter" matrix */
     MAT_IDN(t1);
-    MAT_DELTAS(t1, -view_state->vs_gvp->gv_center[MDX], -view_state->vs_gvp->gv_center[MDY], -view_state->vs_gvp->gv_center[MDZ]);
+    MAT_DELTAS(t1, -view_center[MDX], -view_center[MDY], -view_center[MDZ]);
     bn_mat_mul(out, t1, t2);
 }
 

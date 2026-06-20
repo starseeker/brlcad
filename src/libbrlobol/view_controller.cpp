@@ -13,6 +13,7 @@
 #include "brlobol/lod_service.h"
 #include "brlobol/lod_update_action.h"
 #include "brlobol/mesh_lod_submit_action.h"
+#include "brlobol/mesh_residency_action.h"
 #include "brlobol/view_controller.h"
 #include "raytrace.h"
 #include "rt/view.h"
@@ -52,6 +53,18 @@ BRLObolViewController::BRLObolViewController(void) :
     lodPolicyRevision(1),
     lodUseForcedLevel(FALSE),
     lodForcedLevel(0),
+    maxExactFullDetailFaceCount(0),
+    maxExactFullDetailPointCount(0),
+    meshResidencyBudgetEnabled(FALSE),
+    maxResidentMeshBytes(0),
+    meshResidencyEvictDisplayPayloads(TRUE),
+    lastMeshBudgetInitialResidentBytes(0),
+    lastMeshBudgetFinalResidentBytes(0),
+    lastMeshBudgetFreedFullDetailBytes(0),
+    lastMeshBudgetFreedDisplayBytes(0),
+    lastMeshBudgetVisitedMeshCount(0),
+    lastMeshBudgetEvictedFullDetailMeshCount(0),
+    lastMeshBudgetEvictedDisplayMeshCount(0),
     lastLodVisitedMeshCount(0),
     lastLodSubmittedTaskCount(0),
     lastLodSkippedMeshCount(0),
@@ -85,6 +98,18 @@ BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
     lodPolicyRevision(1),
     lodUseForcedLevel(FALSE),
     lodForcedLevel(0),
+    maxExactFullDetailFaceCount(0),
+    maxExactFullDetailPointCount(0),
+    meshResidencyBudgetEnabled(FALSE),
+    maxResidentMeshBytes(0),
+    meshResidencyEvictDisplayPayloads(TRUE),
+    lastMeshBudgetInitialResidentBytes(0),
+    lastMeshBudgetFinalResidentBytes(0),
+    lastMeshBudgetFreedFullDetailBytes(0),
+    lastMeshBudgetFreedDisplayBytes(0),
+    lastMeshBudgetVisitedMeshCount(0),
+    lastMeshBudgetEvictedFullDetailMeshCount(0),
+    lastMeshBudgetEvictedDisplayMeshCount(0),
     lastLodVisitedMeshCount(0),
     lastLodSubmittedTaskCount(0),
     lastLodSkippedMeshCount(0),
@@ -497,6 +522,167 @@ BRLObolViewController::getLodForcedLevel(void) const
     return this->lodForcedLevel;
 }
 
+void
+BRLObolViewController::setExactFullDetailBudget(uint64_t maxFaceCount,
+	uint64_t maxPointCount)
+{
+    this->maxExactFullDetailFaceCount = maxFaceCount;
+    this->maxExactFullDetailPointCount = maxPointCount;
+}
+
+uint64_t
+BRLObolViewController::getMaxExactFullDetailFaceCount(void) const
+{
+    return this->maxExactFullDetailFaceCount;
+}
+
+uint64_t
+BRLObolViewController::getMaxExactFullDetailPointCount(void) const
+{
+    return this->maxExactFullDetailPointCount;
+}
+
+void
+BRLObolViewController::setMeshResidencyBudget(
+	size_t maxBytes,
+	SbBool evictDisplayPayloads)
+{
+    this->meshResidencyBudgetEnabled = TRUE;
+    this->maxResidentMeshBytes = maxBytes;
+    this->meshResidencyEvictDisplayPayloads =
+	evictDisplayPayloads ? TRUE : FALSE;
+}
+
+void
+BRLObolViewController::clearMeshResidencyBudget(void)
+{
+    this->meshResidencyBudgetEnabled = FALSE;
+    this->maxResidentMeshBytes = 0;
+    this->meshResidencyEvictDisplayPayloads = TRUE;
+}
+
+SbBool
+BRLObolViewController::hasMeshResidencyBudget(void) const
+{
+    return this->meshResidencyBudgetEnabled;
+}
+
+size_t
+BRLObolViewController::getMaxResidentMeshBytes(void) const
+{
+    return this->maxResidentMeshBytes;
+}
+
+SbBool
+BRLObolViewController::isMeshResidencyDisplayEvictionEnabled(void) const
+{
+    return this->meshResidencyEvictDisplayPayloads;
+}
+
+size_t
+BRLObolViewController::evictMeshPayloadsToBudget(
+	size_t maxBytes,
+	SbBool evictDisplayPayloads)
+{
+    this->lastMeshBudgetInitialResidentBytes = 0;
+    this->lastMeshBudgetFinalResidentBytes = 0;
+    this->lastMeshBudgetFreedFullDetailBytes = 0;
+    this->lastMeshBudgetFreedDisplayBytes = 0;
+    this->lastMeshBudgetVisitedMeshCount = 0;
+    this->lastMeshBudgetEvictedFullDetailMeshCount = 0;
+    this->lastMeshBudgetEvictedDisplayMeshCount = 0;
+
+    SoNode *root = this->getSceneRoot();
+    if (!root)
+	return 0;
+
+    SoBRLMeshResidencyAction action;
+    action.setMaxResidentMeshBytes(maxBytes);
+    action.setEvictDisplayPayloads(evictDisplayPayloads);
+    action.apply(root);
+
+    this->lastMeshBudgetInitialResidentBytes =
+	action.getInitialResidentMeshBytes();
+    this->lastMeshBudgetFinalResidentBytes =
+	action.getFinalResidentMeshBytes();
+    this->lastMeshBudgetFreedFullDetailBytes =
+	action.getFreedFullDetailBytes();
+    this->lastMeshBudgetFreedDisplayBytes =
+	action.getFreedDisplayBytes();
+    this->lastMeshBudgetVisitedMeshCount = action.getVisitedMeshCount();
+    this->lastMeshBudgetEvictedFullDetailMeshCount =
+	action.getEvictedFullDetailMeshCount();
+    this->lastMeshBudgetEvictedDisplayMeshCount =
+	action.getEvictedDisplayMeshCount();
+
+    size_t freedBytes = action.getFreedResidentMeshBytes();
+    if (freedBytes > 0)
+	this->requestRender("lod-memory-budget");
+    return freedBytes;
+}
+
+size_t
+BRLObolViewController::enforceMeshResidencyBudget(void)
+{
+    if (!this->meshResidencyBudgetEnabled)
+	return 0;
+
+    return this->evictMeshPayloadsToBudget(
+	    this->maxResidentMeshBytes,
+	    this->meshResidencyEvictDisplayPayloads);
+}
+
+size_t
+BRLObolViewController::getLastMeshBudgetInitialResidentBytes(void) const
+{
+    return this->lastMeshBudgetInitialResidentBytes;
+}
+
+size_t
+BRLObolViewController::getLastMeshBudgetFinalResidentBytes(void) const
+{
+    return this->lastMeshBudgetFinalResidentBytes;
+}
+
+size_t
+BRLObolViewController::getLastMeshBudgetFreedResidentBytes(void) const
+{
+    return this->lastMeshBudgetInitialResidentBytes >
+	this->lastMeshBudgetFinalResidentBytes ?
+	this->lastMeshBudgetInitialResidentBytes -
+	this->lastMeshBudgetFinalResidentBytes : 0;
+}
+
+size_t
+BRLObolViewController::getLastMeshBudgetFreedFullDetailBytes(void) const
+{
+    return this->lastMeshBudgetFreedFullDetailBytes;
+}
+
+size_t
+BRLObolViewController::getLastMeshBudgetFreedDisplayBytes(void) const
+{
+    return this->lastMeshBudgetFreedDisplayBytes;
+}
+
+unsigned int
+BRLObolViewController::getLastMeshBudgetVisitedMeshCount(void) const
+{
+    return this->lastMeshBudgetVisitedMeshCount;
+}
+
+unsigned int
+BRLObolViewController::getLastMeshBudgetEvictedFullDetailMeshCount(void) const
+{
+    return this->lastMeshBudgetEvictedFullDetailMeshCount;
+}
+
+unsigned int
+BRLObolViewController::getLastMeshBudgetEvictedDisplayMeshCount(void) const
+{
+    return this->lastMeshBudgetEvictedDisplayMeshCount;
+}
+
 SbBool
 BRLObolViewController::hasPendingLodResults(void) const
 {
@@ -685,8 +871,10 @@ BRLObolViewController::applyLodResults(BRLObolLodService *service,
     this->lodResultsPending.store(
 	    service->queuedResultCountForDiagnostics() > 0 ? 1 : 0);
 
-    if (this->lastLodAppliedResultCount > 0)
+    if (this->lastLodAppliedResultCount > 0) {
 	this->requestRender("lod-result");
+	(void)this->enforceMeshResidencyBudget();
+    }
 
     return size_to_int_saturated(
 	    static_cast<size_t>(this->lastLodAppliedResultCount));
@@ -1080,11 +1268,7 @@ BRLObolViewController::replaceDatabaseSource(const char *sourcePath,
     if (sourceRevision == 0)
 	sourceRevision = source->sourceRevision.getValue() + 1;
 
-    source->setDatabase(dbip);
-    source->path = sourcePath;
-    source->drawMode = drawMode;
-    source->sourceRevision = sourceRevision;
-    source->markStale(SoBRLDatabaseSource::STALE_SOURCE);
+    source->configureDatabaseSource(sourcePath, dbip, drawMode, sourceRevision);
 
     if (childIndex < 0)
 	group->addChild(source);

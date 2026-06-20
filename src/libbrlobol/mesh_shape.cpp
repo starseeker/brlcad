@@ -262,6 +262,130 @@ SoBRLMeshShape::getFullDetailTriangleVertexIndices(int triangleIndex,
     return TRUE;
 }
 
+SbBool
+SoBRLMeshShape::makeSourceMeshRequest(BRLObolSourceMeshRequest &request) const
+{
+    request.clear();
+    request.path = this->sourcePath.getValue();
+    request.sourceName = this->sourceName.getValue();
+    request.sourceType = this->sourceType.getValue();
+    request.sourceId = this->sourceId.getValue();
+    request.regionId = this->regionId.getValue();
+    request.airCode = this->airCode.getValue();
+    request.materialId = this->materialId.getValue();
+    request.los = this->los.getValue();
+    request.materialColorValid = this->materialColorValid.getValue();
+    request.materialColor = this->materialColor.getValue();
+    request.materialShader = this->materialShader.getValue();
+    request.selected = this->selected.getValue();
+    request.highlighted = this->highlighted.getValue();
+    request.ghosted = this->ghosted.getValue();
+    request.hiddenLine = this->hiddenLine.getValue();
+    request.editEmphasis = this->editEmphasis.getValue();
+    request.lodPolicy = this->lodPolicy.getValue();
+    request.lodAvailable = this->lodAvailable.getValue();
+    request.lodActiveLevel = this->lodActiveLevel.getValue();
+    request.lodFaceCount = this->lodFaceCount.getValue();
+    request.lodPointCount = this->lodPointCount.getValue();
+    request.lodOriginalPointCount = this->lodOriginalPointCount.getValue();
+    request.lodNormalCount = this->lodNormalCount.getValue();
+    request.lodHasSnappedPoints = this->lodHasSnappedPoints.getValue();
+    request.lodHasNormals = this->lodHasNormals.getValue();
+    request.lodBoundsMin = this->lodBoundsMin.getValue();
+    request.lodBoundsMax = this->lodBoundsMax.getValue();
+    request.colorOverride = this->colorOverride.getValue();
+    request.color = this->color.getValue();
+
+    if (this->hasFullDetailMesh()) {
+	request.faceCount = static_cast<uint64_t>(this->getFullDetailTriangleCount());
+	request.pointCount = static_cast<uint64_t>(this->fullDetailPoint.size());
+	for (size_t i = 0; i < this->fullDetailPoint.size(); i++)
+	    request.bounds.extendBy(this->fullDetailPoint[i]);
+    } else if (this->sourceMeshMetricsValid) {
+	request.faceCount = this->sourceMeshFaceCount;
+	request.pointCount = this->sourceMeshPointCount;
+	request.bounds = this->sourceMeshBounds;
+    } else {
+	request.faceCount = static_cast<uint64_t>(this->getTriangleCount());
+	request.pointCount = static_cast<uint64_t>(this->point.getNum());
+	for (int i = 0; i < this->point.getNum(); i++)
+	    request.bounds.extendBy(this->point[i]);
+    }
+
+    return (request.faceCount > 0 &&
+	    request.pointCount > 0 &&
+	    !request.bounds.isEmpty()) ? TRUE : FALSE;
+}
+
+SbBool
+SoBRLMeshShape::needsSourceBackedFullDetail(void) const
+{
+    if (this->hasFullDetailMesh())
+	return FALSE;
+
+    if (!this->lodDisplayActive.getValue() &&
+	    !this->lodBacked.getValue() &&
+	    !(this->lodAvailable.getValue() &&
+		this->lodResultKind.getValue() == BRLOBOL_LOD_RESULT_MESH))
+	return FALSE;
+
+    BRLObolSourceMeshRequest request;
+    return this->makeSourceMeshRequest(request);
+}
+
+size_t
+SoBRLMeshShape::estimateDisplayMeshBytes(void) const
+{
+    size_t bytes = static_cast<size_t>(this->point.getNum()) * sizeof(SbVec3f);
+    bytes += static_cast<size_t>(this->coordIndex.getNum()) * sizeof(int32_t);
+    return bytes;
+}
+
+size_t
+SoBRLMeshShape::estimateFullDetailMeshBytes(void) const
+{
+    size_t bytes = this->fullDetailPoint.capacity() * sizeof(SbVec3f);
+    bytes += this->fullDetailCoordIndex.capacity() * sizeof(int32_t);
+    return bytes;
+}
+
+size_t
+SoBRLMeshShape::estimateResidentMeshBytes(void) const
+{
+    return this->estimateDisplayMeshBytes() +
+	this->estimateFullDetailMeshBytes();
+}
+
+size_t
+SoBRLMeshShape::evictFullDetailMesh(void)
+{
+    size_t freedBytes = this->estimateFullDetailMeshBytes();
+    if (freedBytes == 0)
+	return 0;
+
+    if (this->hasFullDetailMesh())
+	this->updateSourceMeshMetricsFromFullDetail();
+    this->clearFullDetailMesh();
+    return freedBytes;
+}
+
+size_t
+SoBRLMeshShape::evictActiveDisplayMesh(void)
+{
+    if (!this->lodDisplayActive.getValue())
+	return 0;
+
+    size_t freedBytes = this->estimateDisplayMeshBytes();
+    if (this->hasFullDetailMesh())
+	this->updateSourceMeshMetricsFromFullDetail();
+    else if (!this->sourceMeshMetricsValid)
+	this->updateSourceMeshMetricsFromFields();
+
+    this->setIndexedTriangleFields(NULL, 0, NULL, 0);
+    this->lodDisplayActive = FALSE;
+    return freedBytes;
+}
+
 static SbBool
 mesh_int_field_contains(const SoMFInt32 &field, int value)
 {
@@ -352,7 +476,7 @@ SoBRLMeshShape::setLodPreserveFullDetail(SbBool enabled)
 {
     this->lodPreserveFullDetail = enabled ? TRUE : FALSE;
     if (!enabled)
-	this->clearFullDetailMesh();
+	this->evictFullDetailMesh();
 }
 
 SbBool
@@ -406,12 +530,9 @@ SoBRLMeshShape::makeLodRequest(BRLObolLodRequest &request,
     request.providerId = providerId ? providerId : "";
     request.providerVersion = providerVersion ? providerVersion : "";
     request.qualityTier = qualityTier;
-    const SbBool useFullDetail =
-	(this->lodDisplayActive.getValue() && this->hasFullDetailMesh()) ?
-	TRUE : FALSE;
+    const SbBool useFullDetail = this->hasFullDetailMesh();
     const SbBool useSourceMetrics =
-	(this->lodDisplayActive.getValue() && !useFullDetail &&
-	 this->sourceMeshMetricsValid) ? TRUE : FALSE;
+	(!useFullDetail && this->sourceMeshMetricsValid) ? TRUE : FALSE;
     request.sourceCounts.faceCount = useFullDetail ?
 	static_cast<uint64_t>(this->getFullDetailTriangleCount()) :
 	(useSourceMetrics ? this->sourceMeshFaceCount :
@@ -604,6 +725,22 @@ SoBRLMeshShape::updateSourceMeshMetricsFromFields(void)
 }
 
 void
+SoBRLMeshShape::updateSourceMeshMetricsFromFullDetail(void)
+{
+    this->sourceMeshFaceCount =
+	static_cast<uint64_t>(this->getFullDetailTriangleCount());
+    this->sourceMeshPointCount =
+	static_cast<uint64_t>(this->fullDetailPoint.size());
+    this->sourceMeshBounds.makeEmpty();
+    for (size_t i = 0; i < this->fullDetailPoint.size(); i++)
+	this->sourceMeshBounds.extendBy(this->fullDetailPoint[i]);
+    this->sourceMeshMetricsValid =
+	(!this->sourceMeshBounds.isEmpty() &&
+	 this->sourceMeshFaceCount > 0 &&
+	 this->sourceMeshPointCount > 0) ? TRUE : FALSE;
+}
+
+void
 SoBRLMeshShape::captureFullDetailMesh(void)
 {
     if (this->hasFullDetailMesh() || this->lodDisplayActive.getValue())
@@ -705,8 +842,12 @@ SoBRLMeshShape::computeBBox(SoAction *UNUSED(action), SbBox3f &box, SbVec3f &cen
 	return;
     }
 
-    for (int i = 0; i < this->point.getNum(); i++)
-	box.extendBy(this->point[i]);
+    if (this->point.getNum() > 0) {
+	for (int i = 0; i < this->point.getNum(); i++)
+	    box.extendBy(this->point[i]);
+    } else if (this->sourceMeshMetricsValid) {
+	box = this->sourceMeshBounds;
+    }
 
     center = box.isEmpty() ? SbVec3f(0.0f, 0.0f, 0.0f) : box.getCenter();
 }

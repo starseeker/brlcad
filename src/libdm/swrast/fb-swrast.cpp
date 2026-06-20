@@ -40,6 +40,7 @@ extern "C" {
 #include "../include/private.h"
 #include "../dm-gl.h"
 #include "bsg/view_state.h"
+#include "rt/view_legacy_bsg.h"
 }
 
 extern "C" {
@@ -435,7 +436,7 @@ fb_swrast_open(struct fb *ifp, const char *UNUSED(file), int width, int height)
 	return -1;
     }
     bsg_init(canvas_view, NULL);
-    bsg_view_set_framebuffer_mode(canvas_view, 1);
+    rt_view_framebuffer_mode_set_bsg(canvas_view, 1);
     canvas_view->gv_width = width;
     canvas_view->gv_height = height;
 

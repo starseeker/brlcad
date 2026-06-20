@@ -10,6 +10,7 @@
 #define BRLOBOL_LOD_SERVICE_H
 
 #include "brlobol/lod_realization.h"
+#include "brlobol/source_mesh_request.h"
 
 #include <Inventor/SbBasic.h>
 
@@ -42,6 +43,16 @@ struct BRLOBOL_EXPORT BRLObolRtMeshLodProvider {
     void clear(void);
 };
 
+struct BRLOBOL_EXPORT BRLObolRtSourceFullDetailProvider {
+    struct db_i *dbip;
+    SbBool validateSourceMetrics;
+    uint64_t maxFullDetailFaceCount;
+    uint64_t maxFullDetailPointCount;
+
+    BRLObolRtSourceFullDetailProvider(void);
+    void clear(void);
+};
+
 struct BRLOBOL_EXPORT BRLObolLodTask {
     uint64_t generation;
     BRLObolLodRequest request;
@@ -67,6 +78,29 @@ brlobol_rt_mesh_lod_provider_task(const BRLObolLodRequest &request,
 BRLOBOL_EXPORT void
 brlobol_rt_mesh_lod_provider_free(void *userData);
 
+BRLOBOL_EXPORT BRLObolLodResult
+brlobol_rt_source_full_detail_provider_task(
+	const BRLObolLodRequest &request, void *userData);
+
+BRLOBOL_EXPORT void
+brlobol_rt_source_full_detail_provider_free(void *userData);
+
+BRLOBOL_EXPORT SbBool
+brlobol_lod_rt_source_full_detail_request_from_source_mesh_request(
+	BRLObolLodRequest &request,
+	const BRLObolSourceMeshRequest &sourceRequest,
+	const BRLObolLodRequest *templateRequest);
+
+BRLOBOL_EXPORT uint64_t
+brlobol_lod_submit_rt_source_full_detail_request(
+	BRLObolLodService *service,
+	uint64_t generation,
+	const BRLObolSourceMeshRequest &sourceRequest,
+	struct db_i *dbip,
+	const BRLObolLodRequest *templateRequest,
+	uint64_t maxFullDetailFaceCount,
+	uint64_t maxFullDetailPointCount);
+
 struct BRLObolLodServicePrivate;
 
 class BRLOBOL_EXPORT BRLObolLodService {
@@ -85,6 +119,9 @@ public:
 
     uint64_t submit(const BRLObolLodTask &task);
     size_t drainResults(std::vector<BRLObolLodResult> &results,
+	size_t maxResults = 0);
+    size_t drainMatchingResults(std::vector<BRLObolLodResult> &results,
+	const std::vector<BRLObolLodRequest> &requests,
 	size_t maxResults = 0);
     BRLObolLodSubscriberId subscribeResultReady(
 	BRLObolLodResultReadyCB callback, void *userData);

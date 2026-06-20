@@ -8,6 +8,7 @@
 #include "common.h"
 
 #include "brlobol/measure_action.h"
+#include "brlobol/lod_service.h"
 #include "brlobol/mesh_shape.h"
 #include "brlobol/vlist_shape.h"
 
@@ -19,6 +20,26 @@
 #include <vector>
 
 SO_ACTION_SOURCE(SoBRLMeasureAction);
+
+static SbBool
+measure_source_full_detail_result_valid(const BRLObolSourceMeshRequest &sourceRequest,
+	const BRLObolLodResult &result)
+{
+    if (result.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
+	    result.resultKind != BRLOBOL_LOD_RESULT_FULL_DETAIL ||
+	    !result.mesh.isValid())
+	return FALSE;
+
+    size_t faceCount = result.mesh.coordIndex.size() / 3;
+    if ((sourceRequest.faceCount != 0 &&
+		sourceRequest.faceCount != static_cast<uint64_t>(faceCount)) ||
+	    (sourceRequest.pointCount != 0 &&
+		sourceRequest.pointCount !=
+		static_cast<uint64_t>(result.mesh.points.size())))
+	return FALSE;
+
+    return TRUE;
+}
 
 struct measure_segment_record {
     SbString path;
@@ -274,6 +295,125 @@ SoBRLMeasureAction::getSkippedLodDisplayMeshCount(void) const
     return this->skippedLodDisplayMeshCount;
 }
 
+int
+SoBRLMeasureAction::getSourceBackedFullDetailRequestCount(void) const
+{
+    return static_cast<int>(this->sourceBackedFullDetailRequests.size());
+}
+
+const BRLObolSourceMeshRequest &
+SoBRLMeasureAction::getSourceBackedFullDetailRequest(int index) const
+{
+    return this->sourceBackedFullDetailRequests.at(static_cast<size_t>(index));
+}
+
+SbBool
+SoBRLMeasureAction::makeSourceBackedFullDetailLodRequest(int index,
+	BRLObolLodRequest &request,
+	const BRLObolLodRequest *templateRequest) const
+{
+    if (index < 0 ||
+	    static_cast<size_t>(index) >=
+	    this->sourceBackedFullDetailRequests.size())
+	return FALSE;
+
+    return brlobol_lod_rt_source_full_detail_request_from_source_mesh_request(
+	request, this->sourceBackedFullDetailRequests[static_cast<size_t>(index)],
+	templateRequest);
+}
+
+SbBool
+SoBRLMeasureAction::consumeSourceBackedFullDetailResult(
+	const BRLObolSourceMeshRequest &sourceRequest,
+	const BRLObolLodResult &result)
+{
+    if (!measure_source_full_detail_result_valid(sourceRequest, result))
+	return FALSE;
+    if (!this->selectionAllows(sourceRequest.selected) ||
+	    !this->highlightAllows(sourceRequest.highlighted))
+	return TRUE;
+
+    size_t faceCount = result.mesh.coordIndex.size() / 3;
+    SbBool measuredShape = FALSE;
+    for (size_t i = 0; i < faceCount; i++) {
+	int ia = result.mesh.coordIndex[i * 3];
+	int ib = result.mesh.coordIndex[i * 3 + 1];
+	int ic = result.mesh.coordIndex[i * 3 + 2];
+	if (ia < 0 || ib < 0 || ic < 0 ||
+		static_cast<size_t>(ia) >= result.mesh.points.size() ||
+		static_cast<size_t>(ib) >= result.mesh.points.size() ||
+		static_cast<size_t>(ic) >= result.mesh.points.size())
+	    return FALSE;
+
+	SbVec3f pointA = this->pointForCoordinateSpace(
+		sourceRequest.localToWorld,
+		result.mesh.points[static_cast<size_t>(ia)]);
+	SbVec3f pointB = this->pointForCoordinateSpace(
+		sourceRequest.localToWorld,
+		result.mesh.points[static_cast<size_t>(ib)]);
+	SbVec3f pointC = this->pointForCoordinateSpace(
+		sourceRequest.localToWorld,
+		result.mesh.points[static_cast<size_t>(ic)]);
+	measuredShape = TRUE;
+	this->measureTriangle(sourceRequest.path, static_cast<int>(i),
+		pointA, pointB, pointC);
+    }
+
+    if (measuredShape)
+	this->shapeCount++;
+
+    return TRUE;
+}
+
+int
+SoBRLMeasureAction::submitSourceBackedFullDetailRequests(
+	BRLObolLodService *service, uint64_t generation, struct db_i *dbip,
+	const BRLObolLodRequest *templateRequest,
+	uint64_t maxFullDetailFaceCount,
+	uint64_t maxFullDetailPointCount) const
+{
+    int submitted = 0;
+    for (size_t i = 0; i < this->sourceBackedFullDetailRequests.size(); i++) {
+	if (brlobol_lod_submit_rt_source_full_detail_request(service,
+		generation, this->sourceBackedFullDetailRequests[i], dbip,
+		templateRequest, maxFullDetailFaceCount,
+		maxFullDetailPointCount) != 0)
+	    submitted++;
+    }
+    return submitted;
+}
+
+int
+SoBRLMeasureAction::consumeSourceBackedFullDetailResults(
+	const std::vector<BRLObolLodResult> &results,
+	const BRLObolLodRequest *templateRequest)
+{
+    std::vector<SbBool> used(results.size(), FALSE);
+    int consumed = 0;
+
+    for (size_t i = 0; i < this->sourceBackedFullDetailRequests.size(); i++) {
+	BRLObolLodRequest expected;
+	if (!brlobol_lod_rt_source_full_detail_request_from_source_mesh_request(
+		expected, this->sourceBackedFullDetailRequests[i],
+		templateRequest))
+	    continue;
+
+	for (size_t j = 0; j < results.size(); j++) {
+	    if (used[j] ||
+		    !brlobol_lod_result_matches_request(results[j], expected))
+		continue;
+	    if (this->consumeSourceBackedFullDetailResult(
+		    this->sourceBackedFullDetailRequests[i], results[j])) {
+		used[j] = TRUE;
+		consumed++;
+	    }
+	    break;
+	}
+    }
+
+    return consumed;
+}
+
 SbBool
 SoBRLMeasureAction::hasSegments(void) const
 {
@@ -488,16 +628,18 @@ SoBRLMeasureAction::meshShapeAction(SoAction *action, SoNode *node)
 	return;
     const SbBool useFullDetail =
 	(measureAction->geometryPolicy == SoBRLMeasureAction::FULL_DETAIL &&
-	 shape->isLodDisplayActive() && shape->hasFullDetailMesh()) ?
-	TRUE : FALSE;
+	 shape->hasFullDetailMesh()) ? TRUE : FALSE;
+    const SbBool useSourceBackedFullDetail =
+	(measureAction->geometryPolicy == SoBRLMeasureAction::FULL_DETAIL &&
+	 shape->needsSourceBackedFullDetail()) ? TRUE : FALSE;
     if (measureAction->geometryPolicy == SoBRLMeasureAction::FULL_DETAIL &&
 	    shape->isLodDisplayActive())
 	measureAction->skippedLodDisplayMeshCount++;
-    if (measureAction->geometryPolicy == SoBRLMeasureAction::FULL_DETAIL &&
-	    shape->isLodDisplayActive() && !useFullDetail)
-	return;
-
     const SbMatrix &localToWorld = SoModelMatrixElement::get(action->getState());
+    if (useSourceBackedFullDetail) {
+	measureAction->appendSourceBackedFullDetailRequest(shape, localToWorld);
+	return;
+    }
 
     int localTriangleCount = useFullDetail ?
 	shape->getFullDetailTriangleCount() : shape->getTriangleCount();
@@ -549,11 +691,26 @@ SoBRLMeasureAction::resetResults(void)
     this->anglePrimitiveIndexA = -1;
     this->anglePrimitiveIndexB = -1;
     this->skippedLodDisplayMeshCount = 0;
+    this->sourceBackedFullDetailRequests.clear();
     this->nearestPrimitiveKind = NONE;
     this->haveNearestPrimitive = FALSE;
     this->haveAngle = FALSE;
     this->anglePoint = SbVec3f(0.0f, 0.0f, 0.0f);
     this->anglePath = "";
+}
+
+void
+SoBRLMeasureAction::appendSourceBackedFullDetailRequest(
+	const SoBRLMeshShape *shape, const SbMatrix &localToWorld)
+{
+    if (!shape)
+	return;
+
+    BRLObolSourceMeshRequest request;
+    if (shape->makeSourceMeshRequest(request)) {
+	request.localToWorld = localToWorld;
+	this->sourceBackedFullDetailRequests.push_back(request);
+    }
 }
 
 void

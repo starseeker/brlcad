@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "rt/view_legacy_bsg.h"
+
 #include "../ged_private.h"
 
 
@@ -42,6 +44,7 @@ static void
 usejoy(struct ged *gedp, double xangle, double yangle, double zangle)
 {
     mat_t newrot;		/* NEW rot matrix, from joystick */
+    mat_t view_rotation;
 
     /* NORMAL CASE.
      * Apply delta viewing rotation for non-edited parts.
@@ -49,7 +52,9 @@ usejoy(struct ged *gedp, double xangle, double yangle, double zangle)
      */
     MAT_IDN(newrot);
     bn_mat_angles_rad(newrot, xangle, yangle, zangle);
-    bn_mat_mul2(newrot, gedp->ged_gvp->gv_rotation);
+    rt_view_rotation_from_bsg(view_rotation, gedp->ged_gvp);
+    bn_mat_mul2(newrot, view_rotation);
+    rt_view_rotation_set_bsg(gedp->ged_gvp, view_rotation);
 }
 
 
@@ -124,7 +129,9 @@ ged_qvrot_core(struct ged *gedp, int argc, const char *argv[])
 
     el = atan2(dz, sqrt(dx * dx + dy * dy));
 
-    bn_mat_angles(gedp->ged_gvp->gv_rotation, 270.0 + el * RAD2DEG, 0.0, 270.0 - az * RAD2DEG);
+    mat_t rotation;
+    bn_mat_angles(rotation, 270.0 + el * RAD2DEG, 0.0, 270.0 - az * RAD2DEG);
+    rt_view_rotation_set_bsg(gedp->ged_gvp, rotation);
     usejoy(gedp, 0.0, 0.0, theta*DEG2RAD);
     bsg_update(gedp->ged_gvp);
 

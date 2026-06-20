@@ -18,6 +18,7 @@
 #include "qtcad/QgObolDrawSync.h"
 #include "qtcad/QgView.h"
 #include "raytrace.h"
+#include "rt/view_legacy_bsg.h"
 #include "wdb.h"
 
 #include <Inventor/SoViewport.h>
@@ -183,8 +184,8 @@ main(int argc, char **argv)
     if (!camera)
 	FAIL("qtcad Obol controller should expose a camera for view sync");
     point_t offcenter = {100.0, 0.0, 0.0};
-    bsg_view_set_center_vec(view.view(), offcenter);
-    bsg_view_set_scale(view.view(), 250.0);
+    rt_view_center_vec_set_bsg(view.view(), offcenter);
+    rt_view_scale_set_bsg(view.view(), 250.0);
     view.need_update(QG_VIEW_REFRESH);
     SbVec3f offTargetCamera = camera->position.getValue();
     if (offTargetCamera[0] < 50.0f)

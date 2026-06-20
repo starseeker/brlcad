@@ -71,6 +71,7 @@
 #include "bsg/node.h"
 #include "bsg/util.h"
 #include "bsg/view_state.h"
+#include "rt/view_legacy_bsg.h"
 
 extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);
 
@@ -546,7 +547,7 @@ test_gui_eyemodel_consistency(const char *datadir)
     /* Save the view matrix for comparison */
     struct bsg_view *v = gedp->ged_gvp;
     mat_t saved_m2v;
-    MAT_COPY(saved_m2v, v->gv_model2view);
+    rt_view_model2view_from_bsg(saved_m2v, v);
 
     /* Render A */
     do_swrast_refresh(gedp);
@@ -589,7 +590,7 @@ test_gui_eyemodel_consistency(const char *datadir)
 
     /* Also confirm view matrices match within floating-point noise */
     mat_t new_m2v;
-    MAT_COPY(new_m2v, v->gv_model2view);
+    rt_view_model2view_from_bsg(new_m2v, v);
     fastf_t max_delta = 0.0;
     for (int i = 0; i < 16; i++) {
 	fastf_t d = fabs(saved_m2v[i] - new_m2v[i]);

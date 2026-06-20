@@ -203,6 +203,85 @@ test_dependency_order_and_cache_write(void)
     return 0;
 }
 
+static int
+test_filtered_result_drain(void)
+{
+    ServiceTestContext context;
+    TaskData firstData;
+    TaskData secondData;
+    TaskData thirdData;
+    BRLObolLodService service;
+
+    firstData.context = &context;
+    firstData.value = 1;
+    secondData.context = &context;
+    secondData.value = 2;
+    thirdData.context = &context;
+    thirdData.value = 3;
+
+    if (!service.start(1, TRUE)) {
+	printf("FAIL: LoD filtered-drain service did not start\n");
+	return 1;
+    }
+
+    uint64_t generation = service.beginGeneration();
+    BRLObolLodTask first;
+    first.generation = generation;
+    first.request = make_request("/filtered-first.bot");
+    first.realize = ready_task;
+    first.realizeData = &firstData;
+
+    BRLObolLodTask second;
+    second.generation = generation;
+    second.request = make_request("/filtered-second.bot");
+    second.realize = ready_task;
+    second.realizeData = &secondData;
+
+    BRLObolLodTask third;
+    third.generation = generation;
+    third.request = make_request("/filtered-third.bot");
+    third.realize = ready_task;
+    third.realizeData = &thirdData;
+
+    if (service.submit(first) == 0 ||
+	    service.submit(second) == 0 ||
+	    service.submit(third) == 0) {
+	printf("FAIL: LoD filtered-drain service did not accept tasks\n");
+	service.stop();
+	return 1;
+    }
+
+    if (wait_for_settled(service, 3)) {
+	service.stop();
+	return 1;
+    }
+
+    std::vector<BRLObolLodRequest> requests;
+    requests.push_back(second.request);
+    std::vector<BRLObolLodResult> matched;
+    if (service.drainMatchingResults(matched, requests) != 1 ||
+	    matched.size() != 1 ||
+	    !brlobol_lod_result_matches_request(matched[0], second.request) ||
+	    service.queuedResultCountForDiagnostics() != 2) {
+	printf("FAIL: LoD filtered result drain did not isolate requested result\n");
+	service.stop();
+	return 1;
+    }
+
+    std::vector<BRLObolLodResult> remaining;
+    if (service.drainResults(remaining) != 2 ||
+	    remaining.size() != 2 ||
+	    !brlobol_lod_result_matches_request(remaining[0], first.request) ||
+	    !brlobol_lod_result_matches_request(remaining[1], third.request)) {
+	printf("FAIL: LoD filtered result drain did not preserve unmatched queue order\n");
+	service.stop();
+	return 1;
+    }
+
+    service.stop();
+    return 0;
+}
+
 struct BlockingTaskData {
     std::mutex mutex;
     std::condition_variable cv;
@@ -841,6 +920,179 @@ make_provider_test_db(char *dbpath, size_t dbpath_len, struct db_i **dbip_out)
 }
 
 static int
+check_source_full_detail_result(const BRLObolLodResult &result,
+	const BRLObolLodRequest &request, const char *label)
+{
+    if (result.resultKind != BRLOBOL_LOD_RESULT_FULL_DETAIL ||
+	    result.qualityTier != BRLOBOL_LOD_QUALITY_FULL_DETAIL ||
+	    result.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
+	    result.geometry.kind != BRLOBOL_LOD_GEOMETRY_OBOL_MESH ||
+	    !result.geometry.isValid() ||
+	    result.counts.faceCount != 4 ||
+	    result.counts.pointCount != 4 ||
+	    !result.mesh.isValid() ||
+	    result.mesh.points.size() != 4 ||
+	    result.mesh.coordIndex.size() != 12 ||
+	    !brlobol_lod_result_matches_request(result, request)) {
+	printf("FAIL: LoD RT source full-detail provider %s\n", label);
+	return 1;
+    }
+
+    return 0;
+}
+
+static int
+test_rt_source_full_detail_provider_task(void)
+{
+    char dbpath[MAXPATHLEN] = {0};
+    struct db_i *dbip = NULL;
+
+    if (make_provider_test_db(dbpath, sizeof(dbpath), &dbip))
+	return 1;
+
+    BRLObolRtSourceFullDetailProvider provider;
+    provider.dbip = dbip;
+    provider.validateSourceMetrics = TRUE;
+
+    BRLObolLodRequest request = make_request("/lod-provider.bot");
+    request.objectName = "lod-provider.bot";
+    request.providerId = "rt_source_full_detail";
+    request.providerVersion = "direct-bot-v1";
+    request.qualityTier = BRLOBOL_LOD_QUALITY_FULL_DETAIL;
+    request.sourceCounts.faceCount = 4;
+    request.sourceCounts.pointCount = 4;
+
+    int ret = 0;
+    BRLObolLodResult directResult =
+	brlobol_rt_source_full_detail_provider_task(request, &provider);
+    if (check_source_full_detail_result(directResult, request,
+	    "did not return direct BoT mesh result"))
+	ret = 1;
+
+    BRLObolLodService service;
+    if (!service.start(1, TRUE)) {
+	printf("FAIL: LoD RT source full-detail provider service did not start\n");
+	ret = 1;
+    } else {
+	BRLObolLodTask task;
+	task.generation = service.beginGeneration();
+	task.request = request;
+	task.realize = brlobol_rt_source_full_detail_provider_task;
+	task.realizeData = &provider;
+
+	if (service.submit(task) == 0) {
+	    printf("FAIL: LoD RT source full-detail provider service did not accept task\n");
+	    ret = 1;
+	} else if (wait_for_settled(service, 1)) {
+	    ret = 1;
+	} else {
+	    std::vector<BRLObolLodResult> results;
+	    service.drainResults(results);
+	    if (results.size() != 1 ||
+		    check_source_full_detail_result(results[0], request,
+			"did not publish service BoT mesh result"))
+		ret = 1;
+	}
+	service.stop();
+    }
+
+    BRLObolLodRequest staleRequest = request;
+    staleRequest.sourceCounts.faceCount = 99;
+    BRLObolLodResult staleResult =
+	brlobol_rt_source_full_detail_provider_task(staleRequest, &provider);
+    if (staleResult.providerStatus != BRLOBOL_LOD_PROVIDER_STALE ||
+	    !staleResult.stale ||
+	    strcmp(staleResult.diagnostic.getString(),
+		"RT source full-detail provider source metrics changed") != 0 ||
+	    staleResult.mesh.isValid()) {
+	printf("FAIL: LoD RT source full-detail provider did not reject stale source metrics\n");
+	ret = 1;
+    }
+
+    BRLObolSourceMeshRequest sourceRequest;
+    sourceRequest.path = "/lod-provider.bot";
+    sourceRequest.sourceName = "lod-provider.bot";
+    sourceRequest.sourceType = "bot";
+    sourceRequest.sourceId = 7001;
+    sourceRequest.faceCount = 4;
+    sourceRequest.pointCount = 4;
+    sourceRequest.bounds = request.bounds;
+
+    BRLObolLodRequest convertedRequest;
+    if (!brlobol_lod_rt_source_full_detail_request_from_source_mesh_request(
+	    convertedRequest, sourceRequest, &request) ||
+	    strcmp(convertedRequest.providerId.getString(),
+		"rt_source_full_detail") != 0 ||
+	    strcmp(convertedRequest.providerVersion.getString(),
+		"direct-bot-v1") != 0 ||
+	    convertedRequest.qualityTier != BRLOBOL_LOD_QUALITY_FULL_DETAIL ||
+	    convertedRequest.sourceCounts.faceCount != 4 ||
+	    convertedRequest.sourceCounts.pointCount != 4 ||
+	    strcmp(convertedRequest.objectPath.getString(),
+		"/lod-provider.bot") != 0 ||
+	    strcmp(convertedRequest.objectName.getString(),
+		"lod-provider.bot") != 0) {
+	printf("FAIL: LoD RT source full-detail helper did not convert source request\n");
+	ret = 1;
+    }
+
+    BRLObolLodService submitService;
+    if (!submitService.start(1, TRUE)) {
+	printf("FAIL: LoD RT source full-detail helper service did not start\n");
+	ret = 1;
+    } else {
+	uint64_t taskId = brlobol_lod_submit_rt_source_full_detail_request(
+		&submitService, submitService.beginGeneration(), sourceRequest,
+		dbip, &request, 10, 10);
+	if (taskId == 0) {
+	    printf("FAIL: LoD RT source full-detail helper did not submit source request\n");
+	    ret = 1;
+	} else if (wait_for_settled(submitService, 1)) {
+	    ret = 1;
+	} else {
+	    std::vector<BRLObolLodResult> helperResults;
+	    submitService.drainResults(helperResults);
+	    if (helperResults.size() != 1 ||
+		    check_source_full_detail_result(helperResults[0],
+			convertedRequest,
+			"did not publish helper-submitted BoT mesh result"))
+		ret = 1;
+	}
+	submitService.stop();
+    }
+
+    BRLObolRtSourceFullDetailProvider limitProvider;
+    limitProvider.dbip = dbip;
+    limitProvider.maxFullDetailFaceCount = 3;
+    BRLObolLodResult limitedResult =
+	brlobol_rt_source_full_detail_provider_task(request, &limitProvider);
+    if (limitedResult.providerStatus != BRLOBOL_LOD_PROVIDER_FALLBACK ||
+	    strcmp(limitedResult.diagnostic.getString(),
+		"RT source full-detail provider request exceeds full-detail limits") != 0 ||
+	    limitedResult.mesh.isValid()) {
+	printf("FAIL: LoD RT source full-detail provider did not refuse over-budget full detail\n");
+	ret = 1;
+    }
+
+    BRLObolLodRequest missingRequest = request;
+    missingRequest.objectPath = "/missing.bot";
+    missingRequest.objectName = "missing.bot";
+    BRLObolLodResult missingResult =
+	brlobol_rt_source_full_detail_provider_task(missingRequest, &provider);
+    if (missingResult.providerStatus != BRLOBOL_LOD_PROVIDER_ERROR ||
+	    strcmp(missingResult.diagnostic.getString(),
+		"RT source full-detail provider could not find source object") != 0 ||
+	    missingResult.mesh.isValid()) {
+	printf("FAIL: LoD RT source full-detail provider did not report missing source object\n");
+	ret = 1;
+    }
+
+    db_close(dbip);
+    bu_file_delete(dbpath);
+    return ret;
+}
+
+static int
 test_rt_mesh_provider_task(void)
 {
     char cache_dir[MAXPATHLEN] = {0};
@@ -1012,6 +1264,8 @@ main(int argc, char **argv)
 
     if (test_dependency_order_and_cache_write())
 	return 1;
+    if (test_filtered_result_drain())
+	return 1;
     if (test_generation_cancellation())
 	return 1;
     if (test_stale_result_rejection())
@@ -1023,6 +1277,8 @@ main(int argc, char **argv)
     if (test_task_realize_data_cleanup())
 	return 1;
     if (test_debug_delay_cancellation())
+	return 1;
+    if (test_rt_source_full_detail_provider_task())
 	return 1;
     if (test_rt_mesh_provider_task())
 	return 1;

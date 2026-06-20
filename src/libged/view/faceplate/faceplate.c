@@ -36,6 +36,7 @@
 #include "bu/vls.h"
 #include "bsg.h"
 #include "bsg/hud.h"
+#include "rt/view_legacy_bsg.h"
 
 #include "../../ged_private.h"
 #include "../ged_view.h"
@@ -153,21 +154,21 @@ _fp_cmd_fb(void *ds, int argc, const char **argv)
     struct bsg_view *v = gedp->ged_gvp;
 
     if (!argc) {
-	bu_vls_printf(gedp->ged_result_str, "%d", bsg_view_framebuffer_mode(v));
+	bu_vls_printf(gedp->ged_result_str, "%d", rt_view_framebuffer_mode_from_bsg(v));
 	return BRLCAD_OK;
     }
 
     if (argc == 1) {
 	if (BU_STR_EQUAL("2", argv[0])) {
-	    bsg_view_set_framebuffer_mode(v, 2);
+	    rt_view_framebuffer_mode_set_bsg(v, 2);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("1", argv[0])) {
-	    bsg_view_set_framebuffer_mode(v, 1);
+	    rt_view_framebuffer_mode_set_bsg(v, 1);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("0", argv[0])) {
-	    bsg_view_set_framebuffer_mode(v, 0);
+	    rt_view_framebuffer_mode_set_bsg(v, 0);
 	    return BRLCAD_OK;
 	}
 	bu_vls_printf(gedp->ged_result_str, "value %s is invalid - valid values are 0, 1 and 2\n", argv[0]);

@@ -25,6 +25,7 @@
 
 
 #include "vmath.h"
+#include "rt/view_legacy_bsg.h"
 
 #include "./sedit.h"
 #include "./mged.h"
@@ -369,8 +370,12 @@ set_absolute_tran(struct mged_state *s)
 void
 set_absolute_view_tran(struct mged_state *s)
 {
+    mat_t model2view;
+
+    rt_view_model2view_from_bsg(model2view, view_state->vs_gvp);
+
     /* calculate absolute_tran */
-    MAT4X3PNT(view_state->k.tra_v_abs, view_state->vs_gvp->gv_model2view, view_state->vs_orig_pos);
+    MAT4X3PNT(view_state->k.tra_v_abs, model2view, view_state->vs_orig_pos);
     /* This is used in f_knob()  ---- needed in case absolute_tran is set from Tcl */
     VMOVE(view_state->k.tra_v_abs_last, view_state->k.tra_v_abs);
 }
@@ -381,11 +386,16 @@ set_absolute_model_tran(struct mged_state *s)
 {
     point_t new_pos;
     point_t diff;
+    mat_t view_center;
+    fastf_t view_scale;
+
+    rt_view_center_from_bsg(view_center, view_state->vs_gvp);
+    view_scale = rt_view_scale_from_bsg(view_state->vs_gvp);
 
     /* calculate absolute_model_tran */
-    MAT_DELTAS_GET_NEG(new_pos, view_state->vs_gvp->gv_center);
+    MAT_DELTAS_GET_NEG(new_pos, view_center);
     VSUB2(diff, view_state->vs_orig_pos, new_pos);
-    VSCALE(view_state->k.tra_m_abs, diff, 1/view_state->vs_gvp->gv_scale);
+    VSCALE(view_state->k.tra_m_abs, diff, 1/view_scale);
     /* This is used in f_knob()  ---- needed in case absolute_model_tran is set from Tcl */
     VMOVE(view_state->k.tra_m_abs_last, view_state->k.tra_m_abs);
 }
@@ -437,7 +447,7 @@ set_perspective(const struct bu_structparse *sdp,
 	mged_variables->mv_perspective_mode = 0;
 
     /* keep view feature in sync */
-    view_state->vs_gvp->gv_perspective = mged_variables->mv_perspective;
+    rt_view_perspective_set_bsg(view_state->vs_gvp, mged_variables->mv_perspective);
 
     /* keep display manager in sync */
     dm_set_perspective(DMP, mged_variables->mv_perspective_mode);
@@ -459,7 +469,7 @@ establish_perspective(const struct bu_structparse *sdp,
 	perspective_table[perspective_angle] : -1;
 
     /* keep view feature in sync */
-    view_state->vs_gvp->gv_perspective = mged_variables->mv_perspective;
+    rt_view_perspective_set_bsg(view_state->vs_gvp, mged_variables->mv_perspective);
 
     /* keep display manager in sync */
     dm_set_perspective(DMP, mged_variables->mv_perspective_mode);
@@ -501,7 +511,7 @@ toggle_perspective(const struct bu_structparse *sdp,
     mged_variables->mv_perspective = perspective_table[perspective_angle];
 
     /* keep view feature in sync */
-    view_state->vs_gvp->gv_perspective = mged_variables->mv_perspective;
+    rt_view_perspective_set_bsg(view_state->vs_gvp, mged_variables->mv_perspective);
 
     /* keep display manager in sync */
     dm_set_perspective(DMP, mged_variables->mv_perspective_mode);
@@ -519,7 +529,7 @@ set_coords(const struct bu_structparse *UNUSED(sdp),
 {
     struct mged_state *s = (struct mged_state *)data;
     MGED_CK_STATE(s);
-    view_state->vs_gvp->gv_coord = mged_variables->mv_coords;
+    rt_view_coord_set_bsg(view_state->vs_gvp, mged_variables->mv_coords);
 }
 
 
@@ -532,7 +542,7 @@ set_rotate_about(const struct bu_structparse *UNUSED(sdp),
 {
     struct mged_state *s = (struct mged_state *)data;
     MGED_CK_STATE(s);
-    view_state->vs_gvp->gv_rotate_about = mged_variables->mv_rotate_about;
+    rt_view_rotate_about_set_bsg(view_state->vs_gvp, mged_variables->mv_rotate_about);
 }
 
 

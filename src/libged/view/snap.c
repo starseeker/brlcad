@@ -35,6 +35,7 @@
 #include "bsg/snap.h"
 #include "bsg/snap_action.h"
 #include "dm.h"
+#include "rt/view_legacy_bsg.h"
 #include "../ged_private.h"
 #include "./ged_view.h"
 
@@ -114,14 +115,14 @@ ged_view_snap(struct ged *gedp, int argc, const char *argv[])
     /* Handle tolerance */
     if (stol < DBL_MAX || stol < -DBL_MAX + 1) {
 	if (stol > -DBL_MAX) {
-	    bsg_view_set_snap_tolerance_factor(gedp->ged_gvp, stol);
+	    rt_view_snap_tolerance_factor_set_bsg(gedp->ged_gvp, stol);
 	    if (!opt_ret) {
-		bu_vls_printf(gedp->ged_result_str, "%g", bsg_view_snap_tolerance_factor(gedp->ged_gvp));
+		bu_vls_printf(gedp->ged_result_str, "%g", rt_view_snap_tolerance_factor_from_bsg(gedp->ged_gvp));
 		return BRLCAD_OK;
 	    }
 	} else {
 	    // Report current tolerance
-	    bu_vls_printf(gedp->ged_result_str, "%g", bsg_view_snap_tolerance_factor(gedp->ged_gvp));
+	    bu_vls_printf(gedp->ged_result_str, "%g", rt_view_snap_tolerance_factor_from_bsg(gedp->ged_gvp));
 	    return BRLCAD_OK;
 	}
     }
@@ -132,6 +133,11 @@ ged_view_snap(struct ged *gedp, int argc, const char *argv[])
 	_ged_cmd_help(gedp, usage, d);
 	return BRLCAD_ERROR;
     }
+
+    mat_t model2view;
+    mat_t view2model;
+    rt_view_model2view_from_bsg(model2view, gedp->ged_gvp);
+    rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
 
     /* We may get a 2D screen point or a 3D model space point.  Either
      * should work - whatever we get, set up both points so we have
@@ -152,7 +158,7 @@ ged_view_snap(struct ged *gedp, int argc, const char *argv[])
 	}
 	V2MOVE(view_pt_2d, p2d);
 	VSET(vp, p[0], p[1], 0);
-	MAT4X3PNT(p, gedp->ged_gvp->gv_view2model, vp);
+	MAT4X3PNT(p, view2model, vp);
 	VMOVE(view_pt, p);
     }
     /* We may get a 3D point instead */
@@ -164,7 +170,7 @@ ged_view_snap(struct ged *gedp, int argc, const char *argv[])
 	    bu_vls_free(&msg);
 	    return BRLCAD_ERROR;
 	}
-	MAT4X3PNT(vp, gedp->ged_gvp->gv_model2view, p);
+	MAT4X3PNT(vp, model2view, p);
 	V2SET(view_pt_2d, vp[0], vp[1]);
 	VMOVE(view_pt, p);
     }
@@ -182,7 +188,7 @@ ged_view_snap(struct ged *gedp, int argc, const char *argv[])
 	if (bsg_snap_candidates(gedp->ged_gvp, sample, 0.0, BSG_SNAP_KIND_GRID, &sres) > 0) {
 	    point_t vp = VINIT_ZERO;
 	    VMOVE(view_pt, sres.sr_candidates[0].sc_point);
-	    MAT4X3PNT(vp, gedp->ged_gvp->gv_model2view, view_pt);
+	    MAT4X3PNT(vp, model2view, view_pt);
 	    V2SET(view_pt_2d, vp[0], vp[1]);
 	}
 	bsg_snap_result_free(&sres);
@@ -197,7 +203,7 @@ ged_view_snap(struct ged *gedp, int argc, const char *argv[])
 	if (bsg_snap_candidates(gedp->ged_gvp, sample, 0.0, BSG_SNAP_KIND_ENDPOINT, &sres) > 0) {
 	    line_snap_ok = 1;
 	    VMOVE(view_pt, sres.sr_candidates[0].sc_point);
-	    MAT4X3PNT(vp, gedp->ged_gvp->gv_model2view, view_pt);
+	    MAT4X3PNT(vp, model2view, view_pt);
 	    V2SET(view_pt_2d, vp[0], vp[1]);
 	}
 	bsg_snap_result_free(&sres);

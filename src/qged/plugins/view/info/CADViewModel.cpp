@@ -31,6 +31,7 @@
 #include "bu/malloc.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgSignalFlags.h"
+#include "rt/view_legacy_bsg.h"
 #include "CADViewModel.h"
 
 CADViewModel::CADViewModel(QObject *parentobj)
@@ -62,27 +63,34 @@ CADViewModel::refresh(unsigned long long)
     struct bu_vls val = BU_VLS_INIT_ZERO;
     QMap<QString, QgKeyValNode*> standard_nodes;
     int i = 0;
+    struct rt_view_info view_info;
+    vect_t aet;
+    mat_t view_center;
     if (m_root)
 	delete m_root;
     m_root = new QgKeyValNode();
     beginResetModel();
 
+    rt_view_info_from_bsg(&view_info, v);
+    rt_view_aet_from_bsg(aet, v);
+    rt_view_center_from_bsg(view_center, v);
+
     standard_nodes.insert("Name", add_pair("Name", bu_vls_cstr(&v->gv_name), m_root, i));
-    bu_vls_sprintf(&val, "%g", v->gv_size);
+    bu_vls_sprintf(&val, "%g", view_info.size);
     standard_nodes.insert("Size", add_pair("Size", bu_vls_cstr(&val), m_root, i));
-    bu_vls_sprintf(&val, "%d", v->gv_width);
+    bu_vls_sprintf(&val, "%d", view_info.width);
     standard_nodes.insert("Width", add_pair("Width", bu_vls_cstr(&val), m_root, i));
-    bu_vls_sprintf(&val, "%d", v->gv_height);
+    bu_vls_sprintf(&val, "%d", view_info.height);
     standard_nodes.insert("Height", add_pair("Height", bu_vls_cstr(&val), m_root, i));
-    bu_vls_sprintf(&val, "%g", v->gv_aet[0]);
+    bu_vls_sprintf(&val, "%g", aet[0]);
     standard_nodes.insert("Az", add_pair("Az", bu_vls_cstr(&val), m_root, i));
-    bu_vls_sprintf(&val, "%g", v->gv_aet[1]);
+    bu_vls_sprintf(&val, "%g", aet[1]);
     standard_nodes.insert("El", add_pair("El", bu_vls_cstr(&val), m_root, i));
-    bu_vls_sprintf(&val, "%g", v->gv_aet[2]);
+    bu_vls_sprintf(&val, "%g", aet[2]);
     standard_nodes.insert("Tw", add_pair("Tw", bu_vls_cstr(&val), m_root, i));
 
     vect_t center;
-    MAT_DELTAS_GET_NEG(center, v->gv_center);
+    MAT_DELTAS_GET_NEG(center, view_center);
     bu_vls_sprintf(&val, "%g", center[0]);
     standard_nodes.insert("Center[X]", add_pair("Center[X]", bu_vls_cstr(&val), m_root, i));
     bu_vls_sprintf(&val, "%g", center[1]);
@@ -103,4 +111,3 @@ CADViewModel::refresh(unsigned long long)
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

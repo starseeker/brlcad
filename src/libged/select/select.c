@@ -33,6 +33,7 @@
 #include "bsg/render.h"
 #include "bsg/view_state.h"
 #include "ged/bsg_ged_draw.h"
+#include "rt/view_legacy_bsg.h"
 #include "../ged_private.h"
 
 static int
@@ -47,6 +48,9 @@ _ged_select_botpts(struct ged *gedp, struct rt_bot_internal *botip, double vx, d
 
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
+
+    mat_t model2view;
+    rt_view_model2view_from_bsg(model2view, gedp->ged_gvp);
 
     if (rflag) {
 	vr = vwidth;
@@ -76,7 +80,7 @@ _ged_select_botpts(struct ged *gedp, struct rt_bot_internal *botip, double vx, d
 	    vect_t diff;
 	    fastf_t mag;
 
-	    MAT4X3PNT(vpt, gedp->ged_gvp->gv_model2view, &botip->vertices[i*3]);
+	    MAT4X3PNT(vpt, model2view, &botip->vertices[i*3]);
 
 	    if (vpt[Z] < vminz)
 		continue;
@@ -94,7 +98,7 @@ _ged_select_botpts(struct ged *gedp, struct rt_bot_internal *botip, double vx, d
 	for (i = 0; i < botip->num_vertices; i++) {
 	    point_t vpt;
 
-	    MAT4X3PNT(vpt, gedp->ged_gvp->gv_model2view, &botip->vertices[i*3]);
+	    MAT4X3PNT(vpt, model2view, &botip->vertices[i*3]);
 
 	    if (vpt[Z] < vminz)
 		continue;
@@ -539,10 +543,12 @@ ged_select_core(struct ged *gedp, int argc, const char *argv[])
 
 	    return ret;
 	} else {
+	    mat_t model2view;
+	    rt_view_model2view_from_bsg(model2view, gedp->ged_gvp);
 	    if (pflag)
-		return dl_select_partial(gedp, gedp->ged_gvp->gv_model2view, gedp->ged_result_str, vx, vy, vr, vr, 1);
+		return dl_select_partial(gedp, model2view, gedp->ged_result_str, vx, vy, vr, vr, 1);
 	    else
-		return dl_select(gedp, gedp->ged_gvp->gv_model2view, gedp->ged_result_str, vx, vy, vr, vr, 1);
+		return dl_select(gedp, model2view, gedp->ged_result_str, vx, vy, vr, vr, 1);
 	}
     } else {
 	if (sscanf(argv[1], "%lf", &vx) != 1 ||
@@ -561,10 +567,12 @@ ged_select_core(struct ged *gedp, int argc, const char *argv[])
 
 	    return ret;
 	} else {
+	    mat_t model2view;
+	    rt_view_model2view_from_bsg(model2view, gedp->ged_gvp);
 	    if (pflag)
-		return dl_select_partial(gedp, gedp->ged_gvp->gv_model2view, gedp->ged_result_str, vx, vy, vw, vh, 0);
+		return dl_select_partial(gedp, model2view, gedp->ged_result_str, vx, vy, vw, vh, 0);
 	    else
-		return dl_select(gedp, gedp->ged_gvp->gv_model2view, gedp->ged_result_str, vx, vy, vw, vh, 0);
+		return dl_select(gedp, model2view, gedp->ged_result_str, vx, vy, vw, vh, 0);
 	}
     }
 }
@@ -671,15 +679,17 @@ ged_rselect_core(struct ged *gedp, int argc, const char *argv[])
 	rt_db_free_internal(&intern);
 	return ret;
     } else {
+	mat_t model2view;
+	rt_view_model2view_from_bsg(model2view, gedp->ged_gvp);
 	if (pflag)
-	    return dl_select_partial(gedp, gedp->ged_gvp->gv_model2view, gedp->ged_result_str,
+	    return dl_select_partial(gedp, model2view, gedp->ged_result_str,
 				     rect.x,
 				     rect.y,
 				     rect.width,
 				     rect.height,
 				     0);
 	else
-	    return dl_select(gedp, gedp->ged_gvp->gv_model2view, gedp->ged_result_str,
+	    return dl_select(gedp, model2view, gedp->ged_result_str,
 			     rect.x,
 			     rect.y,
 			     rect.width,

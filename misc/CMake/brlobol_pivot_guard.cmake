@@ -744,6 +744,18 @@ function(_brlobol_pivot_guard_check_brlobol_window_host)
 	"clearLodForcedLevel"
 	"hasLodForcedLevel"
 	"getLodForcedLevel"
+	"setExactFullDetailBudget"
+	"getMaxExactFullDetailFaceCount"
+	"getMaxExactFullDetailPointCount"
+	"setMeshResidencyBudget"
+	"clearMeshResidencyBudget"
+	"hasMeshResidencyBudget"
+	"getMaxResidentMeshBytes"
+	"isMeshResidencyDisplayEvictionEnabled"
+	"evictMeshPayloadsToBudget"
+	"getLastMeshBudgetInitialResidentBytes"
+	"getLastMeshBudgetFinalResidentBytes"
+	"getLastMeshBudgetEvictedDisplayMeshCount"
 	"hasPendingLodResults"
 	"processPendingLodResults"
 	"submitLodRequestsIfNeeded"
@@ -766,8 +778,18 @@ function(_brlobol_pivot_guard_check_brlobol_window_host)
     file(READ "${BRLCAD_SOURCE_DIR}/src/libbrlobol/view_controller.cpp" _view_controller_impl)
     foreach(_token
 	"BRLObolViewController::getRtViewInfo"
+	"source->configureDatabaseSource"
 	"BRLObolViewController::setLodService"
 	"BRLObolViewController::setLodAutoSubmit"
+	"BRLObolViewController::setExactFullDetailBudget"
+	"BRLObolViewController::getMaxExactFullDetailFaceCount"
+	"BRLObolViewController::getMaxExactFullDetailPointCount"
+	"BRLObolViewController::setMeshResidencyBudget"
+	"BRLObolViewController::clearMeshResidencyBudget"
+	"BRLObolViewController::enforceMeshResidencyBudget"
+	"BRLObolViewController::evictMeshPayloadsToBudget"
+	"SoBRLMeshResidencyAction"
+	"lod-memory-budget"
 	"BRLObolViewController::submitLodRequestsIfNeeded"
 	"BRLObolViewController::processPendingLodResults"
 	"BRLObolViewController::submitLodRequests"
@@ -777,6 +799,12 @@ function(_brlobol_pivot_guard_check_brlobol_window_host)
 	"lodAutoSubmit"
 	"lodViewSignature"
 	"lodUseForcedLevel"
+	"maxExactFullDetailFaceCount"
+	"maxExactFullDetailPointCount"
+	"meshResidencyBudgetEnabled"
+	"meshResidencyEvictDisplayPayloads"
+	"lastMeshBudgetInitialResidentBytes"
+	"lastMeshBudgetEvictedDisplayMeshCount"
 	"advanceLodPolicyRevision"
 	"controller_lod_view_signature"
 	"controller_lod_source_signature"
@@ -793,6 +821,17 @@ function(_brlobol_pivot_guard_check_brlobol_window_host)
       string(FIND "${_view_controller_impl}" "${_token}" _idx)
       if(_idx EQUAL -1)
 	_brlobol_pivot_guard_fail("src/libbrlobol/view_controller.cpp missing ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[source->[ \t\r\n]*setDatabase]]
+	[[source->[ \t\r\n]*path[ \t\r\n]*=]]
+	[[source->[ \t\r\n]*drawMode[ \t\r\n]*=]]
+	[[source->[ \t\r\n]*sourceRevision[ \t\r\n]*=]]
+	[[source->[ \t\r\n]*markStale]])
+      string(REGEX MATCH "${_pat}" _hit "${_view_controller_impl}")
+      if(_hit)
+	_brlobol_pivot_guard_fail("src/libbrlobol/view_controller.cpp must configure controller-owned database sources atomically: ${_hit}")
       endif()
     endforeach()
   endif()
@@ -1536,16 +1575,35 @@ function(_brlobol_pivot_guard_check_librt_edit_knob_neutralization)
   else()
     file(READ "${_edit_legacy_bsg_impl}" _edit_legacy_bsg_impl_contents)
     foreach(_token
-	"bsg/view_state.h"
 	"rt/edit_legacy_bsg.h"
+	"rt/view_legacy_bsg.h"
 	"rt_edit_view_from_bsg"
 	"rt_edit_create_bsg"
 	"rt_edit_reinit_bsg"
-	"rt_edit_knob_cmd_process_bsg")
+	"rt_edit_knob_cmd_process_bsg"
+	"rt_view_scale_from_bsg"
+	"rt_view_base2local_from_bsg"
+	"rt_view_local2base_from_bsg"
+	"rt_view_coord_from_bsg"
+	"rt_view_rotate_about_from_bsg"
+	"rt_view_rotation_from_bsg"
+	"rt_view_center_from_bsg"
+	"rt_view_model2view_from_bsg"
+	"rt_view_view2model_from_bsg")
       string(FIND "${_edit_legacy_bsg_impl_contents}" "${_token}" _legacy_impl_idx)
       if(_legacy_impl_idx EQUAL -1)
 	_brlobol_pivot_guard_fail(
 	  "src/librt/edit_legacy_bsg.cpp must own transitional edit adapter ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]bsg/view_state\.h]]
+	[[(^|[^A-Za-z0-9_])v->[ \t\r\n]*gv_(scale|base2local|local2base|coord|rotate_about|rotation|center|model2view|view2model)]])
+      string(REGEX MATCH "${_pat}" _edit_legacy_bsg_direct_hit
+	"${_edit_legacy_bsg_impl_contents}")
+      if(_edit_legacy_bsg_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/librt/edit_legacy_bsg.cpp must route BSG edit-view snapshots through rt/view_legacy_bsg.h: ${_edit_legacy_bsg_direct_hit}")
       endif()
     endforeach()
   endif()
@@ -1587,6 +1645,100 @@ function(_brlobol_pivot_guard_check_librt_edit_knob_neutralization)
       _brlobol_pivot_guard_fail(
 	"src/mged/cmd.cpp must use rt_edit_knobs_hash for rt_edit::k")
     endif()
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_orientation_quat_from_bsg]]
+	[[rt_view_eye_pos_from_bsg]]
+	[[rt_view_scale_from_bsg]]
+	[[rt_view_size_from_bsg]])
+      string(REGEX MATCH "${_token}" _mged_cmd_view_arg_token_hit
+	"${_mged_cmd_contents}")
+      if(NOT _mged_cmd_view_arg_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/cmd.cpp must route simulation view argument injection through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[bv->[ \t\r\n]*gv_rotation]]
+	[[bv->[ \t\r\n]*gv_eye_pos]]
+	[[bv->[ \t\r\n]*gv_size]]
+	[[vrp->[ \t\r\n]*vr_scale[ \t\r\n]*=[^\n;]*gv_scale]])
+      string(REGEX MATCH "${_pat}" _mged_cmd_view_arg_direct_hit
+	"${_mged_cmd_contents}")
+      if(_mged_cmd_view_arg_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/cmd.cpp reintroduced direct BSG simulation view argument reads: ${_mged_cmd_view_arg_direct_hit}")
+      endif()
+    endforeach()
+    foreach(_token
+	[[rt_view_width_from_bsg]]
+	[[rt_view_height_from_bsg]]
+	[[rt_view_dimensions_set_bsg]]
+	[[rt_view_scale_state_set_bsg]]
+	[[rt_view_initial_scale_from_bsg]]
+	[[rt_view_absolute_scale_from_bsg]]
+	[[rt_view_local2base_from_bsg]]
+	[[rt_view_base2local_from_bsg]]
+	[[rt_view_unit_conversion_set_bsg]]
+	[[rt_view_inverse_size_from_bsg]]
+	[[rt_view_perspective_from_bsg]]
+	[[rt_view_perspective_set_bsg]]
+	[[rt_view_coord_from_bsg]]
+	[[rt_view_coord_set_bsg]]
+	[[rt_view_rotate_about_from_bsg]]
+	[[rt_view_rotate_about_set_bsg]]
+	[[rt_view_keypoint_from_bsg]]
+	[[rt_view_keypoint_set_bsg]]
+	[[rt_view_aet_from_bsg]]
+	[[rt_view_aet_state_set_bsg]]
+	[[rt_view_rotation_from_bsg]]
+	[[rt_view_rotation_set_bsg]]
+	[[rt_view_center_from_bsg]]
+	[[rt_view_center_vec_set_bsg]]
+	[[rt_view_model2view_from_bsg]]
+	[[rt_view_model2view_set_bsg]]
+	[[rt_view_view2model_from_bsg]]
+	[[rt_view_view2model_set_bsg]]
+	[[rt_view_pmodel2view_from_bsg]]
+	[[rt_view_pmodel2view_set_bsg]]
+	[[rt_view_pmat_from_bsg]]
+	[[rt_view_pmat_set_bsg]]
+	[[rt_view_eye_pos_set_bsg]])
+      string(REGEX MATCH "${_token}" _mged_cmd_cache_token_hit
+	"${_mged_cmd_contents}")
+      if(NOT _mged_cmd_cache_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/cmd.cpp must route adapter-covered staging/cache/hash view reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(c|dst)->gv_(scale|i_scale|a_scale|local2base|base2local|size|isize|perspective|coord|rotate_about)[ \t]*=[^\n;]*(v|src)->gv_]]
+	[[staging->gv_(width|height)[ \t]*=[^\n;]*mged_view->gv_]]
+	[[gvp->[ \t\r\n]*gv_(width|height)[ \t\r\n]*=]]
+	[[staging->[ \t\r\n]*gv_(width|height)[ \t\r\n]*=]]
+	[[staging->[ \t\r\n]*gv_(local2base|base2local)[ \t\r\n]*=]]
+	[[v->[ \t\r\n]*gv_(perspective|coord|rotate_about)[ \t\r\n]*=]]
+	[[dst->[ \t\r\n]*gv_(perspective|coord|rotate_about)[ \t\r\n]*=]]
+	[[v->[ \t\r\n]*gv_(scale|i_scale|a_scale|size|isize|local2base|base2local)[ \t\r\n]*=]]
+	[[dst->[ \t\r\n]*gv_(scale|i_scale|a_scale|size|isize|local2base|base2local)[ \t\r\n]*=]]
+	[[VMOVE[^\n;]*v->gv_(eye_pos|keypoint)[^\n;]*c->gv_]]
+	[[VMOVE[^\n;]*v->gv_aet[^\n;]*c->gv_]]
+	[[MAT_COPY[^\n;]*v->gv_(rotation|center|pmat)[^\n;]*c->gv_]]
+	[[MAT_COPY[^\n;]*v->gv_(model2view|view2model|pmodel2view)[^\n;]*c->gv_]]
+	[[rt_view_(eye_pos|keypoint)_from_bsg[^\n;]*dst->gv_]]
+	[[rt_view_aet_from_bsg[^\n;]*dst->gv_]]
+	[[rt_view_(rotation|center|pmat)_from_bsg[^\n;]*dst->gv_]]
+	[[rt_view_(model2view|view2model|pmodel2view)_from_bsg[^\n;]*dst->gv_]]
+	[[VMOVE[^\n;]*(c|dst)->gv_(eye_pos|keypoint|aet)[^\n;]*(v|src)->gv_]]
+	[[MAT_COPY[^\n;]*(c|dst)->gv_(rotation|center|model2view|view2model|pmodel2view|pmat)[^\n;]*(v|src)->gv_]]
+	[[bu_data_hash_update[^\n;]*&v->gv_(scale|i_scale|a_scale|size|isize|perspective|center|rotation|model2view|view2model|pmodel2view|pmat|eye_pos|keypoint|aet|coord|rotate_about)]])
+      string(REGEX MATCH "${_pat}" _mged_cmd_cache_direct_hit
+	"${_mged_cmd_contents}")
+      if(_mged_cmd_cache_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/cmd.cpp reintroduced direct BSG staging/cache/hash view reads: ${_mged_cmd_cache_direct_hit}")
+      endif()
+    endforeach()
   endif()
 
   set(_libged_edit "${BRLCAD_SOURCE_DIR}/src/libged/edit/edit.cpp")
@@ -1597,6 +1749,12 @@ function(_brlobol_pivot_guard_check_librt_edit_knob_neutralization)
     if(_libged_edit_vp_hit)
       _brlobol_pivot_guard_fail(
 	"src/libged/edit/edit.cpp must install edit views via rt_edit_set_view, not direct s->vp assignment")
+    endif()
+    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_scale[ \t\r\n]*=]]
+      _libged_edit_scale_hit "${_libged_edit_contents}")
+    if(_libged_edit_scale_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/edit/edit.cpp reintroduced direct edit-view scale writes: ${_libged_edit_scale_hit}")
     endif()
   endif()
 endfunction()
@@ -1696,21 +1854,79 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_view_legacy_bsg_header}" _view_legacy_bsg_contents)
     foreach(_token
 	rt_view_info_from_bsg
+	rt_view_width_from_bsg
+	rt_view_height_from_bsg
+	rt_view_dimensions_set_bsg
 	rt_view_orientation_quat_from_bsg
 	rt_view_aet_from_bsg
+	rt_view_aet_set_bsg
+	rt_view_aet_state_set_bsg
 	rt_view_perspective_from_bsg
+	rt_view_perspective_set_bsg
 	rt_view_model2view_from_bsg
+	rt_view_model2view_set_bsg
 	rt_view_view2model_from_bsg
+	rt_view_view2model_set_bsg
+	rt_view_pmodel2view_from_bsg
+	rt_view_pmodel2view_set_bsg
+	rt_view_pmat_from_bsg
+	rt_view_pmat_set_bsg
 	rt_view_rotation_from_bsg
+	rt_view_rotation_set_bsg
 	rt_view_center_from_bsg
+	rt_view_center_vec_set_bsg
+	rt_view_plane_from_bsg
 	rt_view_lod_policy_from_bsg
 	rt_view_lod_policy_apply_bsg
 	rt_view_lod_policy_copy_bsg
 	rt_view_lod_bounds_update_bsg
 	rt_view_lod_bounds_callback_set_bsg
 	rt_view_lod_bounds_callback_is_bsg
+	rt_view_bounds_update_callback_bsg_t
+	rt_view_bounds_update_callback_from_bsg
+	rt_view_bounds_update_callback_set_bsg
+	rt_view_bounds_update_callback_call_bsg
 	rt_view_scale_from_bsg
+	rt_view_scale_set_bsg
+	rt_view_scale_storage_from_bsg
+	rt_view_scale_state_set_bsg
+	rt_view_initial_scale_from_bsg
+	rt_view_initial_scale_set_bsg
+	rt_view_absolute_scale_from_bsg
+	rt_view_absolute_scale_set_bsg
+	rt_view_local2base_from_bsg
+	rt_view_base2local_from_bsg
+	rt_view_unit_conversion_set_bsg
+	rt_view_width_from_bsg
+	rt_view_height_from_bsg
+	rt_view_dimensions_set_bsg
+	rt_view_size_from_bsg
+	rt_view_size_set_bsg
+	rt_view_inverse_size_from_bsg
 	rt_view_eye_pos_from_bsg
+	rt_view_eye_pos_set_bsg
+	rt_view_keypoint_from_bsg
+	rt_view_keypoint_set_bsg
+	rt_view_rotate_about_from_bsg
+	rt_view_rotate_about_set_bsg
+	rt_view_coord_from_bsg
+	rt_view_coord_set_bsg
+	rt_view_snap_lines_from_bsg
+	rt_view_snap_lines_set_bsg
+	rt_view_snap_source_flags_from_bsg
+	rt_view_snap_source_flags_set_bsg
+	rt_view_snap_kind_mask_from_bsg
+	rt_view_prepare_tcl_snap_bsg
+	rt_view_center_linesnap_bsg
+	rt_view_zclip_from_bsg
+	rt_view_zclip_set_bsg
+	rt_view_framebuffer_mode_from_bsg
+	rt_view_framebuffer_mode_set_bsg
+	rt_view_cleared_from_bsg
+	rt_view_cleared_set_bsg
+	rt_view_settings_shared_bsg
+	rt_view_snap_tolerance_factor_from_bsg
+	rt_view_snap_tolerance_factor_set_bsg
 	rt_mesh_lod_load_view_scene_ref_bsg
 	rt_mesh_lod_free_scene_ref_bsg)
       string(FIND "${_view_legacy_bsg_contents}" "${_token}"
@@ -1810,19 +2026,73 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_view_info_from_bsg
 	rt_view_orientation_quat_from_bsg
 	rt_view_aet_from_bsg
+	rt_view_aet_set_bsg
+	rt_view_aet_state_set_bsg
 	rt_view_perspective_from_bsg
+	rt_view_perspective_set_bsg
 	rt_view_model2view_from_bsg
+	rt_view_model2view_set_bsg
 	rt_view_view2model_from_bsg
+	rt_view_view2model_set_bsg
+	rt_view_pmodel2view_from_bsg
+	rt_view_pmodel2view_set_bsg
+	rt_view_pmat_from_bsg
+	rt_view_pmat_set_bsg
 	rt_view_rotation_from_bsg
+	rt_view_rotation_set_bsg
 	rt_view_center_from_bsg
+	rt_view_center_vec_set_bsg
+	rt_view_plane_from_bsg
 	rt_view_lod_policy_from_bsg
 	rt_view_lod_policy_apply_bsg
 	rt_view_lod_policy_copy_bsg
 	rt_view_lod_bounds_update_bsg
 	rt_view_lod_bounds_callback_set_bsg
 	rt_view_lod_bounds_callback_is_bsg
+	rt_view_bounds_update_callback_from_bsg
+	rt_view_bounds_update_callback_set_bsg
+	rt_view_bounds_update_callback_call_bsg
 	rt_view_scale_from_bsg
+	rt_view_scale_set_bsg
+	rt_view_scale_storage_from_bsg
+	rt_view_scale_state_set_bsg
+	rt_view_initial_scale_from_bsg
+	rt_view_initial_scale_set_bsg
+	rt_view_absolute_scale_from_bsg
+	rt_view_absolute_scale_set_bsg
+	rt_view_local2base_from_bsg
+	rt_view_base2local_from_bsg
+	rt_view_unit_conversion_set_bsg
+	rt_view_width_from_bsg
+	rt_view_height_from_bsg
+	rt_view_dimensions_set_bsg
+	rt_view_size_from_bsg
+	rt_view_size_set_bsg
+	rt_view_inverse_size_from_bsg
 	rt_view_eye_pos_from_bsg
+	rt_view_eye_pos_set_bsg
+	rt_view_keypoint_from_bsg
+	rt_view_keypoint_set_bsg
+	rt_view_rotate_about_from_bsg
+	rt_view_rotate_about_set_bsg
+	rt_view_coord_from_bsg
+	rt_view_coord_set_bsg
+	rt_view_snap_lines_from_bsg
+	rt_view_snap_lines_set_bsg
+	rt_view_snap_source_flags_from_bsg
+	rt_view_snap_source_flags_set_bsg
+	rt_view_snap_kind_mask_from_bsg
+	rt_view_prepare_tcl_snap_bsg
+	rt_view_center_linesnap_bsg
+	rt_view_zclip_from_bsg
+	rt_view_zclip_set_bsg
+	rt_view_framebuffer_mode_from_bsg
+	rt_view_framebuffer_mode_set_bsg
+	rt_view_cleared_from_bsg
+	rt_view_cleared_set_bsg
+	rt_view_settings_shared_bsg
+	rt_view_snap_tolerance_factor_from_bsg
+	rt_view_snap_tolerance_factor_set_bsg
 	rt_mesh_lod_load_view_scene_ref_bsg
 	rt_mesh_lod_free_scene_ref_bsg
 	bsg_view_lod_source_policy_get
@@ -1917,23 +2187,79 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     foreach(_token
 	"bsg/util.h"
 	"bsg/view_state.h"
+	"rt/edit_legacy_bsg.h"
 	"rt/view_legacy_bsg.h"
+	rt_edit_view_from_bsg
 	rt_view_info_from_bsg
 	rt_view_orientation_quat_from_bsg
 	rt_view_aet_from_bsg
+	rt_view_aet_set_bsg
+	rt_view_aet_state_set_bsg
 	rt_view_perspective_from_bsg
+	rt_view_perspective_set_bsg
 	rt_view_model2view_from_bsg
+	rt_view_model2view_set_bsg
 	rt_view_view2model_from_bsg
+	rt_view_view2model_set_bsg
+	rt_view_pmodel2view_from_bsg
+	rt_view_pmodel2view_set_bsg
+	rt_view_pmat_from_bsg
+	rt_view_pmat_set_bsg
 	rt_view_rotation_from_bsg
+	rt_view_rotation_set_bsg
 	rt_view_center_from_bsg
+	rt_view_center_vec_set_bsg
+	rt_view_plane_from_bsg
 	rt_view_lod_policy_from_bsg
 	rt_view_lod_policy_apply_bsg
 	rt_view_lod_policy_copy_bsg
 	rt_view_lod_bounds_update_bsg
 	rt_view_lod_bounds_callback_set_bsg
 	rt_view_lod_bounds_callback_is_bsg
+	rt_view_bounds_update_callback_from_bsg
+	rt_view_bounds_update_callback_set_bsg
+	rt_view_bounds_update_callback_call_bsg
 	rt_view_scale_from_bsg
+	rt_view_scale_set_bsg
+	rt_view_scale_storage_from_bsg
+	rt_view_scale_state_set_bsg
+	rt_view_initial_scale_from_bsg
+	rt_view_initial_scale_set_bsg
+	rt_view_absolute_scale_from_bsg
+	rt_view_absolute_scale_set_bsg
+	rt_view_local2base_from_bsg
+	rt_view_base2local_from_bsg
+	rt_view_unit_conversion_set_bsg
+	rt_view_width_from_bsg
+	rt_view_height_from_bsg
+	rt_view_dimensions_set_bsg
+	rt_view_size_from_bsg
+	rt_view_size_set_bsg
+	rt_view_inverse_size_from_bsg
 	rt_view_eye_pos_from_bsg
+	rt_view_eye_pos_set_bsg
+	rt_view_keypoint_from_bsg
+	rt_view_keypoint_set_bsg
+	rt_view_rotate_about_from_bsg
+	rt_view_rotate_about_set_bsg
+	rt_view_coord_from_bsg
+	rt_view_coord_set_bsg
+	rt_view_snap_lines_from_bsg
+	rt_view_snap_lines_set_bsg
+	rt_view_snap_source_flags_from_bsg
+	rt_view_snap_source_flags_set_bsg
+	rt_view_snap_kind_mask_from_bsg
+	rt_view_prepare_tcl_snap_bsg
+	rt_view_center_linesnap_bsg
+	rt_view_zclip_from_bsg
+	rt_view_zclip_set_bsg
+	rt_view_framebuffer_mode_from_bsg
+	rt_view_framebuffer_mode_set_bsg
+	rt_view_cleared_from_bsg
+	rt_view_cleared_set_bsg
+	rt_view_settings_shared_bsg
+	rt_view_snap_tolerance_factor_from_bsg
+	rt_view_snap_tolerance_factor_set_bsg
 	rt_mesh_lod_load_view_scene_ref_bsg
 	rt_mesh_lod_free_scene_ref_bsg
 	test_bsg_lod_policy_adapter
@@ -1945,7 +2271,8 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	test_bsg_aet_adapter
 	test_bsg_perspective_adapter
 	test_bsg_camera_adapter
-	test_bsg_mesh_lod_adapter_boundary)
+	test_bsg_mesh_lod_adapter_boundary
+	test_bsg_edit_view_adapter)
       string(FIND "${_librt_view_legacy_bsg_test_contents}" "${_token}"
 	_librt_view_legacy_bsg_test_token_idx)
       if(_librt_view_legacy_bsg_test_token_idx EQUAL -1)
@@ -2023,7 +2350,180 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       _brlobol_pivot_guard_fail(
 	"${_rel} reintroduced direct BSG view perspective reads: ${_ged_direct_perspective_hit}")
     endif()
+
+    if(_rel STREQUAL "src/libged/dm/ert.cpp")
+      foreach(_token
+	  [[rt_view_framebuffer_mode_from_bsg]]
+	  [[rt_view_framebuffer_mode_set_bsg]])
+	string(REGEX MATCH "${_token}" _ged_ert_fb_token_hit
+	  "${_ged_perspective_contents}")
+	if(NOT _ged_ert_fb_token_hit)
+	  _brlobol_pivot_guard_fail(
+	    "src/libged/dm/ert.cpp must route framebuffer mode view-state access through rt/view_legacy_bsg.h")
+	endif()
+      endforeach()
+      string(REGEX MATCH [[(^|[^A-Za-z0-9_])bsg_view_(set_)?framebuffer_mode([^A-Za-z0-9_]|$)]]
+	_ged_ert_fb_direct_hit "${_ged_perspective_contents}")
+      if(_ged_ert_fb_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/dm/ert.cpp reintroduced direct BSG framebuffer mode view-state access: ${_ged_ert_fb_direct_hit}")
+      endif()
+    endif()
   endforeach()
+
+  set(_ged_eye_model_helper "${BRLCAD_SOURCE_DIR}/src/libged/ged_util.cpp")
+  if(EXISTS "${_ged_eye_model_helper}")
+    file(READ "${_ged_eye_model_helper}" _ged_eye_model_helper_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_view2model_from_bsg]]
+	[[rt_view_center_from_bsg]]
+	[[rt_view_rotation_from_bsg]]
+	[[rt_view_zclip_from_bsg]])
+      string(REGEX MATCH "${_token}" _ged_eye_model_helper_token_hit
+	"${_ged_eye_model_helper_contents}")
+      if(NOT _ged_eye_model_helper_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/ged_util.cpp must route eye-model view snapshot reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_rotation([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_view_zclip([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _ged_eye_model_helper_direct_hit
+	"${_ged_eye_model_helper_contents}")
+      if(_ged_eye_model_helper_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/ged_util.cpp reintroduced direct BSG eye-model view snapshot reads: ${_ged_eye_model_helper_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_nirt_impl "${BRLCAD_SOURCE_DIR}/src/libged/nirt/nirt.cpp")
+  if(EXISTS "${_libged_nirt_impl}")
+    file(READ "${_libged_nirt_impl}" _libged_nirt_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_center_from_bsg]]
+	[[rt_view_rotation_from_bsg]]
+	[[rt_view_scale_from_bsg]]
+	[[rt_view_view2model_from_bsg]])
+      string(REGEX MATCH "${_token}" _libged_nirt_token_hit
+	"${_libged_nirt_contents}")
+      if(NOT _libged_nirt_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/nirt/nirt.cpp must route NIRT view snapshot reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_rotation([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _libged_nirt_direct_hit
+	"${_libged_nirt_contents}")
+      if(_libged_nirt_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/nirt/nirt.cpp reintroduced direct BSG NIRT view snapshot reads: ${_libged_nirt_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_bot_pick_impl "${BRLCAD_SOURCE_DIR}/src/libged/bot/pick.cpp")
+  if(EXISTS "${_libged_bot_pick_impl}")
+    file(READ "${_libged_bot_pick_impl}" _libged_bot_pick_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_center_from_bsg]]
+	[[rt_view_rotation_from_bsg]])
+      string(REGEX MATCH "${_token}" _libged_bot_pick_token_hit
+	"${_libged_bot_pick_contents}")
+      if(NOT _libged_bot_pick_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/bot/pick.cpp must route viewport pick ray reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_rotation([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _libged_bot_pick_direct_hit
+	"${_libged_bot_pick_contents}")
+      if(_libged_bot_pick_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/bot/pick.cpp reintroduced direct BSG viewport pick ray reads: ${_libged_bot_pick_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_brep_pick_impl "${BRLCAD_SOURCE_DIR}/src/libged/brep/pick.cpp")
+  if(EXISTS "${_libged_brep_pick_impl}")
+    file(READ "${_libged_brep_pick_impl}" _libged_brep_pick_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_center_from_bsg]]
+	[[rt_view_rotation_from_bsg]])
+      string(REGEX MATCH "${_token}" _libged_brep_pick_token_hit
+	"${_libged_brep_pick_contents}")
+      if(NOT _libged_brep_pick_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/brep/pick.cpp must route viewport pick ray reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_rotation([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _libged_brep_pick_direct_hit
+	"${_libged_brep_pick_contents}")
+      if(_libged_brep_pick_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/brep/pick.cpp reintroduced direct BSG viewport pick ray reads: ${_libged_brep_pick_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_ged_view_coord_helper "${BRLCAD_SOURCE_DIR}/src/libged/ged_util.cpp")
+  if(EXISTS "${_ged_view_coord_helper}")
+    file(READ "${_ged_view_coord_helper}" _ged_view_coord_helper_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_coord_from_bsg]])
+      string(REGEX MATCH "${_token}" _ged_view_coord_helper_token_hit
+	"${_ged_view_coord_helper_contents}")
+      if(NOT _ged_view_coord_helper_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/ged_util.cpp must route default coord reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[\*[ \t]*coord[ \t]*=[^\n;]*gv_coord]]
+      _ged_view_coord_helper_direct_hit "${_ged_view_coord_helper_contents}")
+    if(_ged_view_coord_helper_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/ged_util.cpp reintroduced direct BSG default coord reads: ${_ged_view_coord_helper_direct_hit}")
+    endif()
+  endif()
+
+  set(_libged_arot_coord_impl "${BRLCAD_SOURCE_DIR}/src/libged/arot/arot.c")
+  if(EXISTS "${_libged_arot_coord_impl}")
+    file(READ "${_libged_arot_coord_impl}" _libged_arot_coord_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_coord_from_bsg]])
+      string(REGEX MATCH "${_token}" _libged_arot_coord_adapter_hit
+	"${_libged_arot_coord_contents}")
+      if(NOT _libged_arot_coord_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/arot/arot.c must route default coord reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[_ged_do_rot[^\n;]*gv_coord]]
+      _libged_arot_coord_direct_hit "${_libged_arot_coord_contents}")
+    if(_libged_arot_coord_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/arot/arot.c reintroduced direct BSG default coord reads: ${_libged_arot_coord_direct_hit}")
+    endif()
+  endif()
 
   set(_ged_savekey_file "${BRLCAD_SOURCE_DIR}/src/libged/savekey/savekey.c")
   if(NOT EXISTS "${_ged_savekey_file}")
@@ -2179,6 +2679,35 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     if(_ged_view2model_conv_direct_hit)
       _brlobol_pivot_guard_fail(
 	"${_rel} reintroduced direct BSG view2model conversion reads: ${_ged_view2model_conv_direct_hit}")
+    endif()
+  endforeach()
+
+  foreach(_rel
+      src/libged/view2model_vec/view2model_vec.c
+      src/libged/view/viewdir.c)
+    set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
+    if(NOT EXISTS "${_file}")
+      _brlobol_pivot_guard_fail(
+	"${_rel} is required for GED view rotation adapter checks")
+      continue()
+    endif()
+
+    file(READ "${_file}" _ged_view_rotation_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_rotation_from_bsg]])
+      string(REGEX MATCH "${_token}" _ged_view_rotation_token_hit
+	"${_ged_view_rotation_contents}")
+      if(NOT _ged_view_rotation_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} must route view rotation reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_rotation([^A-Za-z0-9_]|$)]]
+      _ged_view_rotation_direct_hit "${_ged_view_rotation_contents}")
+    if(_ged_view_rotation_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"${_rel} reintroduced direct BSG view rotation reads: ${_ged_view_rotation_direct_hit}")
     endif()
   endforeach()
 
@@ -2353,6 +2882,267 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endforeach()
   endforeach()
 
+  set(_libged_dm_view_dims_impl "${BRLCAD_SOURCE_DIR}/src/libged/dm/dm.c")
+  if(EXISTS "${_libged_dm_view_dims_impl}")
+    file(READ "${_libged_dm_view_dims_impl}" _libged_dm_view_dims_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_width_from_bsg]]
+	[[rt_view_height_from_bsg]]
+	[[rt_view_dimensions_set_bsg]]
+	[[rt_view_scale_storage_from_bsg]])
+      string(REGEX MATCH "${_token}" _libged_dm_view_dims_token_hit
+	"${_libged_dm_view_dims_contents}")
+      if(NOT _libged_dm_view_dims_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/dm/dm.c must route DM fallback view reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[if[ \t\r\n]*\([ \t\r\n]*![ \t\r\n]*target_view->[ \t\r\n]*gv_width[ \t\r\n]*\)]]
+	[[if[ \t\r\n]*\([ \t\r\n]*![ \t\r\n]*target_view->[ \t\r\n]*gv_height[ \t\r\n]*\)]]
+	[[target_view->[ \t\r\n]*gv_(width|height)[ \t\r\n]*=]]
+	[[dm_set_vp[ \t\r\n]*\([^;]*gv_scale]])
+      string(REGEX MATCH "${_pat}" _libged_dm_view_dims_direct_hit
+	"${_libged_dm_view_dims_contents}")
+      if(_libged_dm_view_dims_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/dm/dm.c reintroduced direct BSG DM fallback view reads: ${_libged_dm_view_dims_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_solids_on_ray_impl
+    "${BRLCAD_SOURCE_DIR}/src/libged/solids_on_ray/solids_on_ray.c")
+  if(EXISTS "${_libged_solids_on_ray_impl}")
+    file(READ "${_libged_solids_on_ray_impl}" _libged_solids_on_ray_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_center_from_bsg]]
+	[[rt_view_rotation_from_bsg]]
+	[[rt_view_model2view_from_bsg]]
+	[[rt_view_scale_from_bsg]])
+      string(REGEX MATCH "${_token}" _libged_solids_on_ray_token_hit
+	"${_libged_solids_on_ray_contents}")
+      if(NOT _libged_solids_on_ray_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/solids_on_ray/solids_on_ray.c must route ray view reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_rotation([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _libged_solids_on_ray_direct_hit
+	"${_libged_solids_on_ray_contents}")
+      if(_libged_solids_on_ray_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/solids_on_ray/solids_on_ray.c reintroduced direct BSG ray view reads: ${_libged_solids_on_ray_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_adc_impl "${BRLCAD_SOURCE_DIR}/src/libged/adc/adc.c")
+  if(EXISTS "${_libged_adc_impl}")
+    file(READ "${_libged_adc_impl}" _libged_adc_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_scale_from_bsg]]
+	[[rt_view_model2view_from_bsg]]
+	[[rt_view_view2model_from_bsg]])
+      string(REGEX MATCH "${_token}" _libged_adc_token_hit
+	"${_libged_adc_contents}")
+      if(NOT _libged_adc_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/adc/adc.c must route ADC view scale/matrix reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _libged_adc_direct_hit
+	"${_libged_adc_contents}")
+      if(_libged_adc_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/adc/adc.c reintroduced direct BSG ADC view reads: ${_libged_adc_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_grid_impl "${BRLCAD_SOURCE_DIR}/src/libged/grid/grid.c")
+  if(EXISTS "${_libged_grid_impl}")
+    file(READ "${_libged_grid_impl}" _libged_grid_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_center_from_bsg]]
+	[[rt_view_center_vec_set_bsg]]
+	[[rt_view_model2view_from_bsg]]
+	[[rt_view_view2model_from_bsg]])
+      string(REGEX MATCH "${_token}" _libged_grid_token_hit
+	"${_libged_grid_contents}")
+      if(NOT _libged_grid_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/grid/grid.c must route vsnap view reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
+	[[MAT_DELTAS_GET_NEG[ \t\r\n]*\([^;]*gv_center]]
+	[[MAT_DELTAS_VEC_NEG[ \t\r\n]*\([^;]*gv_center]])
+      string(REGEX MATCH "${_pat}" _libged_grid_direct_hit
+	"${_libged_grid_contents}")
+      if(_libged_grid_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/grid/grid.c reintroduced direct BSG vsnap view reads: ${_libged_grid_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_eye_cmd "${BRLCAD_SOURCE_DIR}/src/libged/view/eye.c")
+  if(EXISTS "${_libged_eye_cmd}")
+    file(READ "${_libged_eye_cmd}" _libged_eye_cmd_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_view2model_from_bsg]])
+      string(REGEX MATCH "${_token}" _libged_eye_cmd_token_hit
+	"${_libged_eye_cmd_contents}")
+      if(NOT _libged_eye_cmd_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/eye.c must route eye view-to-model reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
+      _libged_eye_cmd_direct_hit "${_libged_eye_cmd_contents}")
+    if(_libged_eye_cmd_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/view/eye.c reintroduced direct BSG eye view-to-model reads: ${_libged_eye_cmd_direct_hit}")
+    endif()
+    string(REGEX MATCH [[MAT_DELTAS_VEC_NEG[ \t\r\n]*\([^;]*gv_center]]
+      _libged_eye_cmd_center_direct_hit "${_libged_eye_cmd_contents}")
+    if(_libged_eye_cmd_center_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/view/eye.c reintroduced direct BSG eye center writes: ${_libged_eye_cmd_center_direct_hit}")
+    endif()
+  endif()
+
+  set(_libged_rect_impl "${BRLCAD_SOURCE_DIR}/src/libged/rect/rect.c")
+  if(EXISTS "${_libged_rect_impl}")
+    file(READ "${_libged_rect_impl}" _libged_rect_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_center_from_bsg]]
+	[[rt_view_model2view_from_bsg]]
+	[[rt_view_view2model_from_bsg]]
+	[[rt_view_scale_from_bsg]]
+	[[rt_view_center_vec_set_bsg]]
+	[[rt_view_scale_set_bsg]])
+      string(REGEX MATCH "${_token}" _libged_rect_token_hit
+	"${_libged_rect_contents}")
+      if(NOT _libged_rect_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/rect/rect.c must route rectangle-zoom view reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
+	[[MAT_DELTAS_GET_NEG[ \t\r\n]*\([^;]*gv_center]]
+	[[MAT_DELTAS_VEC_NEG[ \t\r\n]*\([^;]*gv_center]]
+	[[(^|[^A-Za-z0-9_])gv_scale[ \t]*[*/+-]?=]])
+      string(REGEX MATCH "${_pat}" _libged_rect_direct_hit
+	"${_libged_rect_contents}")
+      if(_libged_rect_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/rect/rect.c reintroduced direct BSG rectangle-zoom view reads: ${_libged_rect_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_lookat_cmd "${BRLCAD_SOURCE_DIR}/src/libged/view/lookat.c")
+  if(EXISTS "${_libged_lookat_cmd}")
+    file(READ "${_libged_lookat_cmd}" _libged_lookat_cmd_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_view2model_from_bsg]]
+	[[rt_view_aet_from_bsg]]
+	[[rt_view_scale_from_bsg]]
+	[[rt_view_aet_set_bsg]]
+	[[rt_view_center_vec_set_bsg]])
+      string(REGEX MATCH "${_token}" _libged_lookat_cmd_token_hit
+	"${_libged_lookat_cmd_contents}")
+      if(NOT _libged_lookat_cmd_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/lookat.c must route lookat view reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
+	"gv_aet[ \t\r\n]*\\[[ \t\r\n]*Z[ \t\r\n]*\\]"
+	[[MAT_DELTAS_VEC_NEG[ \t\r\n]*\([^;]*gv_center]]
+	[[VSET[ \t\r\n]*\([^;]*gv_aet]]
+	[[bsg_mat_aet[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_lookat_cmd_direct_hit
+	"${_libged_lookat_cmd_contents}")
+      if(_libged_lookat_cmd_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/lookat.c reintroduced direct BSG lookat view reads: ${_libged_lookat_cmd_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_qvrot_cmd "${BRLCAD_SOURCE_DIR}/src/libged/view/qvrot.c")
+  if(EXISTS "${_libged_qvrot_cmd}")
+    file(READ "${_libged_qvrot_cmd}" _libged_qvrot_cmd_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_rotation_from_bsg]]
+	[[rt_view_rotation_set_bsg]])
+      string(REGEX MATCH "${_token}" _libged_qvrot_cmd_token_hit
+	"${_libged_qvrot_cmd_contents}")
+      if(NOT _libged_qvrot_cmd_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/qvrot.c must route incremental rotation reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[bn_mat_mul2[^\n;]*gv_rotation]]
+	[[bn_mat_angles[^\n;]*gv_rotation]]
+	[[MAT_COPY[^\n;]*gv_rotation]])
+      string(REGEX MATCH "${_pat}" _libged_qvrot_cmd_direct_hit
+	"${_libged_qvrot_cmd_contents}")
+      if(_libged_qvrot_cmd_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/qvrot.c reintroduced direct BSG incremental rotation access: ${_libged_qvrot_cmd_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_rtcheck2_impl
+    "${BRLCAD_SOURCE_DIR}/src/libged/rtcheck/rtcheck2.cpp")
+  if(EXISTS "${_libged_rtcheck2_impl}")
+    file(READ "${_libged_rtcheck2_impl}" _libged_rtcheck2_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_scale_from_bsg]])
+      string(REGEX MATCH "${_token}" _libged_rtcheck2_token_hit
+	"${_libged_rtcheck2_contents}")
+      if(NOT _libged_rtcheck2_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/rtcheck/rtcheck2.cpp must route overlap glyph scale through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
+      _libged_rtcheck2_direct_hit "${_libged_rtcheck2_contents}")
+    if(_libged_rtcheck2_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/rtcheck/rtcheck2.cpp reintroduced direct BSG overlap glyph scale reads: ${_libged_rtcheck2_direct_hit}")
+    endif()
+  endif()
+
   set(_libged_zoom_impl "${BRLCAD_SOURCE_DIR}/src/libged/zoom/zoom.c")
   if(EXISTS "${_libged_zoom_impl}")
     file(READ "${_libged_zoom_impl}" _libged_zoom_contents)
@@ -2365,6 +3155,16 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	  "src/libged/zoom/zoom.c must use RT-owned view scale constant ${_token}")
       endif()
     endforeach()
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_scale_from_bsg]])
+      string(REGEX MATCH "${_token}" _libged_zoom_adapter_hit
+	"${_libged_zoom_contents}")
+      if(NOT _libged_zoom_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/zoom/zoom.c must route zoom view-scale reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
     foreach(_pat
 	[[(^|[^A-Za-z0-9_])BSG_MINVIEWSCALE([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_MINVIEWSIZE([^A-Za-z0-9_]|$)]])
@@ -2373,6 +3173,18 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       if(_libged_zoom_bsg_scale_hit)
 	_brlobol_pivot_guard_fail(
 	  "src/libged/zoom/zoom.c must not use BSG-owned spellings for view scale limits: ${_libged_zoom_bsg_scale_hit}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[gv_scale[ \t]*=]]
+	[[gv_scale[ \t]*/=]]
+	[[gv_size[ \t]*=[^\n;]*gv_scale]]
+	[[gv_isize[ \t]*=[^\n;]*gv_size]])
+      string(REGEX MATCH "${_pat}" _libged_zoom_bsg_readback_hit
+	"${_libged_zoom_contents}")
+      if(_libged_zoom_bsg_readback_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/zoom/zoom.c reintroduced direct BSG zoom readbacks: ${_libged_zoom_bsg_readback_hit}")
       endif()
     endforeach()
   endif()
@@ -2408,6 +3220,799 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       endif()
     endforeach()
   endforeach()
+
+  set(_libged_scale_impl "${BRLCAD_SOURCE_DIR}/src/libged/scale/scale.c")
+  if(EXISTS "${_libged_scale_impl}")
+    file(READ "${_libged_scale_impl}" _libged_scale_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_scale_from_bsg]]
+	[[rt_view_scale_set_bsg]])
+      string(REGEX MATCH "${_token}" _libged_scale_adapter_hit
+	"${_libged_scale_contents}")
+      if(NOT _libged_scale_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/scale/scale.c must route scale-command view-scale reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[gv_scale[ \t]*=]]
+	[[gv_scale[ \t]*\*=]]
+	[[gv_size[ \t]*=[^\n;]*gv_scale]]
+	[[gv_isize[ \t]*=[^\n;]*gv_size]])
+      string(REGEX MATCH "${_pat}" _libged_scale_readback_hit
+	"${_libged_scale_contents}")
+      if(_libged_scale_readback_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/scale/scale.c reintroduced direct BSG scale-command readbacks: ${_libged_scale_readback_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_view_size_cmd "${BRLCAD_SOURCE_DIR}/src/libged/view/size.c")
+  if(EXISTS "${_libged_view_size_cmd}")
+    file(READ "${_libged_view_size_cmd}" _libged_view_size_cmd_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_info_from_bsg]]
+	[[rt_view_size_set_bsg]])
+      string(REGEX MATCH "${_token}" _libged_view_size_cmd_token_hit
+	"${_libged_view_size_cmd_contents}")
+      if(NOT _libged_view_size_cmd_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/size.c must route query output through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[bu_vls_printf[^\n;]*gv_size]]
+      _libged_view_size_cmd_direct_hit "${_libged_view_size_cmd_contents}")
+    if(_libged_view_size_cmd_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/view/size.c reintroduced direct BSG query output: ${_libged_view_size_cmd_direct_hit}")
+    endif()
+    foreach(_pat
+	[[gv_size[ \t]*=]]
+	[[gv_isize[ \t]*=[^\n;]*gv_size]]
+	[[gv_scale[ \t]*=[^\n;]*gv_size]])
+      string(REGEX MATCH "${_pat}" _libged_view_size_cmd_readback_hit
+	"${_libged_view_size_cmd_contents}")
+      if(_libged_view_size_cmd_readback_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/size.c reintroduced direct BSG size-command readbacks: ${_libged_view_size_cmd_readback_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_view_center_cmd "${BRLCAD_SOURCE_DIR}/src/libged/view/center.cpp")
+  if(EXISTS "${_libged_view_center_cmd}")
+    file(READ "${_libged_view_center_cmd}" _libged_view_center_cmd_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_center_from_bsg]]
+	[[rt_view_center_vec_set_bsg]])
+      string(REGEX MATCH "${_token}" _libged_view_center_cmd_token_hit
+	"${_libged_view_center_cmd_contents}")
+      if(NOT _libged_view_center_cmd_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/center.cpp must route query output through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[MAT_DELTAS_GET_NEG[ \t\r\n]*\([^;]*gv_center]]
+      _libged_view_center_cmd_direct_hit
+      "${_libged_view_center_cmd_contents}")
+    if(_libged_view_center_cmd_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/view/center.cpp reintroduced direct BSG query output: ${_libged_view_center_cmd_direct_hit}")
+    endif()
+    string(REGEX MATCH [[MAT_DELTAS_VEC_NEG[ \t\r\n]*\([^;]*gv_center]]
+      _libged_view_center_cmd_set_direct_hit
+      "${_libged_view_center_cmd_contents}")
+    if(_libged_view_center_cmd_set_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/view/center.cpp reintroduced direct BSG center writes: ${_libged_view_center_cmd_set_direct_hit}")
+    endif()
+  endif()
+
+  set(_libged_view_aet_cmd "${BRLCAD_SOURCE_DIR}/src/libged/view/aet.c")
+  if(EXISTS "${_libged_view_aet_cmd}")
+    file(READ "${_libged_view_aet_cmd}" _libged_view_aet_cmd_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_aet_from_bsg]]
+	[[rt_view_aet_set_bsg]])
+      string(REGEX MATCH "${_token}" _libged_view_aet_cmd_token_hit
+	"${_libged_view_aet_cmd_contents}")
+      if(NOT _libged_view_aet_cmd_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/aet.c must route query output through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[bn_encode_vect[^\n;]*gv_aet]]
+	[[VADD2[^\n;]*gv_aet[^\n;]*gv_aet]]
+	[[VMOVE[^\n;]*gv_aet]]
+	[[VSET[^\n;]*gv_aet]]
+	[[bsg_mat_aet[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_view_aet_cmd_direct_hit
+	"${_libged_view_aet_cmd_contents}")
+      if(_libged_view_aet_cmd_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/aet.c reintroduced direct BSG AET reads: ${_libged_view_aet_cmd_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_brep_tikz_cmd "${BRLCAD_SOURCE_DIR}/src/libged/brep/tikz.cpp")
+  if(EXISTS "${_libged_brep_tikz_cmd}")
+    file(READ "${_libged_brep_tikz_cmd}" _libged_brep_tikz_cmd_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_aet_from_bsg]])
+      string(REGEX MATCH "${_token}" _libged_brep_tikz_token_hit
+	"${_libged_brep_tikz_cmd_contents}")
+      if(NOT _libged_brep_tikz_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/brep/tikz.cpp must route TikZ AET output through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_aet([^A-Za-z0-9_]|$)]]
+      _libged_brep_tikz_direct_hit "${_libged_brep_tikz_cmd_contents}")
+    if(_libged_brep_tikz_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/brep/tikz.cpp reintroduced direct BSG TikZ AET output: ${_libged_brep_tikz_direct_hit}")
+    endif()
+  endif()
+
+  set(_libged_select_cmd "${BRLCAD_SOURCE_DIR}/src/libged/select/select.c")
+  if(EXISTS "${_libged_select_cmd}")
+    file(READ "${_libged_select_cmd}" _libged_select_cmd_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_model2view_from_bsg]])
+      string(REGEX MATCH "${_token}" _libged_select_cmd_token_hit
+	"${_libged_select_cmd_contents}")
+      if(NOT _libged_select_cmd_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/select/select.c must route selection model-to-view reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
+      _libged_select_cmd_direct_hit "${_libged_select_cmd_contents}")
+    if(_libged_select_cmd_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/select/select.c reintroduced direct BSG selection model-to-view reads: ${_libged_select_cmd_direct_hit}")
+    endif()
+  endif()
+
+  set(_libged_polyclip_impl "${BRLCAD_SOURCE_DIR}/src/libged/polyclip.cpp")
+  if(EXISTS "${_libged_polyclip_impl}")
+    file(READ "${_libged_polyclip_impl}" _libged_polyclip_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_model2view_from_bsg]]
+	[[rt_view_view2model_from_bsg]]
+	[[rt_view_scale_from_bsg]]
+	[[rt_view_plane_from_bsg]])
+      string(REGEX MATCH "${_token}" _libged_polyclip_token_hit
+	"${_libged_polyclip_contents}")
+      if(NOT _libged_polyclip_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/polyclip.cpp must route polygon view transform reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_view_plane([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _libged_polyclip_direct_hit
+	"${_libged_polyclip_contents}")
+      if(_libged_polyclip_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/polyclip.cpp reintroduced direct BSG polygon view transform reads: ${_libged_polyclip_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_view_snap_cmd "${BRLCAD_SOURCE_DIR}/src/libged/view/snap.c")
+  if(EXISTS "${_libged_view_snap_cmd}")
+    file(READ "${_libged_view_snap_cmd}" _libged_view_snap_cmd_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_model2view_from_bsg]]
+	[[rt_view_view2model_from_bsg]]
+	[[rt_view_snap_tolerance_factor_from_bsg]]
+	[[rt_view_snap_tolerance_factor_set_bsg]])
+      string(REGEX MATCH "${_token}" _libged_view_snap_cmd_token_hit
+	"${_libged_view_snap_cmd_contents}")
+      if(NOT _libged_view_snap_cmd_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/snap.c must route snap view transform reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_view_(set_)?snap_tolerance_factor([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _libged_view_snap_cmd_direct_hit
+	"${_libged_view_snap_cmd_contents}")
+      if(_libged_view_snap_cmd_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/snap.c reintroduced direct BSG snap view transform reads: ${_libged_view_snap_cmd_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_view_data_lines_cmd "${BRLCAD_SOURCE_DIR}/src/libged/view/data_lines.c")
+  if(EXISTS "${_libged_view_data_lines_cmd}")
+    file(READ "${_libged_view_data_lines_cmd}" _libged_view_data_lines_cmd_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_snap_lines_from_bsg]]
+	[[rt_view_snap_lines_set_bsg]])
+      string(REGEX MATCH "${_token}" _libged_view_data_lines_cmd_token_hit
+	"${_libged_view_data_lines_cmd_contents}")
+      if(NOT _libged_view_data_lines_cmd_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/data_lines.c must route snap-line view-state access through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]bsg/view_state\.h]]
+	[[(^|[^A-Za-z0-9_])bsg_view_(set_)?snap_lines([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _libged_view_data_lines_cmd_direct_hit
+	"${_libged_view_data_lines_cmd_contents}")
+      if(_libged_view_data_lines_cmd_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/data_lines.c reintroduced direct BSG snap-line view-state access: ${_libged_view_data_lines_cmd_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_snap_semantics_test "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/snap_semantics.cpp")
+  if(EXISTS "${_libged_snap_semantics_test}")
+    file(READ "${_libged_snap_semantics_test}" _libged_snap_semantics_test_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_snap_source_flags_set_bsg]])
+      string(REGEX MATCH "${_token}" _libged_snap_semantics_token_hit
+	"${_libged_snap_semantics_test_contents}")
+      if(NOT _libged_snap_semantics_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/tests/draw/snap_semantics.cpp must route snap-state setup through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[(^|[^A-Za-z0-9_])bsg_view_set_snap_source_flags([^A-Za-z0-9_]|$)]]
+      _libged_snap_semantics_direct_hit "${_libged_snap_semantics_test_contents}")
+    if(_libged_snap_semantics_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/tests/draw/snap_semantics.cpp reintroduced direct BSG snap-state setup: ${_libged_snap_semantics_direct_hit}")
+    endif()
+  endif()
+
+  set(_libged_draw_tests_cmake "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/CMakeLists.txt")
+  if(EXISTS "${_libged_draw_tests_cmake}")
+    file(READ "${_libged_draw_tests_cmake}" _libged_draw_tests_cmake_contents)
+    string(REGEX MATCH [[brlcad_addexec[ \t\r\n]*\([ \t\r\n]*ged_test_snap_semantics[^)]*librt]]
+      _libged_snap_semantics_librt_hit "${_libged_draw_tests_cmake_contents}")
+    if(NOT _libged_snap_semantics_librt_hit)
+      _brlobol_pivot_guard_fail(
+	"ged_test_snap_semantics must link librt for rt/view_legacy_bsg.h snap-state setup")
+    endif()
+  endif()
+
+  set(_libged_faceplate_cmd "${BRLCAD_SOURCE_DIR}/src/libged/view/faceplate/faceplate.c")
+  if(EXISTS "${_libged_faceplate_cmd}")
+    file(READ "${_libged_faceplate_cmd}" _libged_faceplate_cmd_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_framebuffer_mode_from_bsg]]
+	[[rt_view_framebuffer_mode_set_bsg]])
+      string(REGEX MATCH "${_token}" _libged_faceplate_fb_token_hit
+	"${_libged_faceplate_cmd_contents}")
+      if(NOT _libged_faceplate_fb_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/faceplate/faceplate.c must route framebuffer mode view-state access through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[(^|[^A-Za-z0-9_])bsg_view_(set_)?framebuffer_mode([^A-Za-z0-9_]|$)]]
+      _libged_faceplate_fb_direct_hit "${_libged_faceplate_cmd_contents}")
+    if(_libged_faceplate_fb_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/view/faceplate/faceplate.c reintroduced direct BSG framebuffer mode view-state access: ${_libged_faceplate_fb_direct_hit}")
+    endif()
+  endif()
+
+  set(_libged_fbclear_cmd "${BRLCAD_SOURCE_DIR}/src/libged/fbclear/fbclear.c")
+  if(EXISTS "${_libged_fbclear_cmd}")
+    file(READ "${_libged_fbclear_cmd}" _libged_fbclear_cmd_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_framebuffer_mode_set_bsg]])
+      string(REGEX MATCH "${_token}" _libged_fbclear_fb_token_hit
+	"${_libged_fbclear_cmd_contents}")
+      if(NOT _libged_fbclear_fb_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/fbclear/fbclear.c must route framebuffer mode view-state access through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]bsg/view_state\.h]]
+	[[(^|[^A-Za-z0-9_])bsg_view_(set_)?framebuffer_mode([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _libged_fbclear_fb_direct_hit
+	"${_libged_fbclear_cmd_contents}")
+      if(_libged_fbclear_fb_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/fbclear/fbclear.c reintroduced direct BSG framebuffer mode view-state access: ${_libged_fbclear_fb_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  foreach(_rel
+      src/libdm/view.c
+      src/libdm/swrast/fb-swrast.cpp
+      src/libdm/qtgl/fb-qtgl.cpp)
+    set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
+    if(EXISTS "${_file}")
+      file(READ "${_file}" _contents)
+      foreach(_token
+	  [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	  [[rt_view_framebuffer_mode]])
+	string(REGEX MATCH "${_token}" _libdm_fb_mode_token_hit "${_contents}")
+	if(NOT _libdm_fb_mode_token_hit)
+	  _brlobol_pivot_guard_fail(
+	    "${_rel} must route framebuffer mode view-state access through rt/view_legacy_bsg.h")
+	endif()
+      endforeach()
+      string(REGEX MATCH [[(^|[^A-Za-z0-9_])bsg_view_(set_)?framebuffer_mode([^A-Za-z0-9_]|$)]]
+	_libdm_fb_mode_direct_hit "${_contents}")
+      if(_libdm_fb_mode_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} reintroduced direct BSG framebuffer mode view-state access: ${_libdm_fb_mode_direct_hit}")
+      endif()
+    endif()
+  endforeach()
+
+  set(_libged_zap_cmd "${BRLCAD_SOURCE_DIR}/src/libged/zap/zap2.cpp")
+  if(EXISTS "${_libged_zap_cmd}")
+    file(READ "${_libged_zap_cmd}" _libged_zap_cmd_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_cleared_set_bsg]])
+      string(REGEX MATCH "${_token}" _libged_zap_cleared_token_hit
+	"${_libged_zap_cmd_contents}")
+      if(NOT _libged_zap_cleared_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/zap/zap2.cpp must route cleared-state view-state access through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]bsg/view_state\.h]]
+	[[(^|[^A-Za-z0-9_])bsg_view_(set_)?cleared([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _libged_zap_cleared_direct_hit
+	"${_libged_zap_cmd_contents}")
+      if(_libged_zap_cleared_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/zap/zap2.cpp reintroduced direct BSG cleared-state view-state access: ${_libged_zap_cleared_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_gtools_gsh_impl "${BRLCAD_SOURCE_DIR}/src/gtools/gsh/gsh.cpp")
+  if(EXISTS "${_gtools_gsh_impl}")
+    file(READ "${_gtools_gsh_impl}" _gtools_gsh_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_cleared_from_bsg]]
+	[[rt_view_cleared_set_bsg]])
+      string(REGEX MATCH "${_token}" _gtools_gsh_cleared_token_hit
+	"${_gtools_gsh_contents}")
+      if(NOT _gtools_gsh_cleared_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/gtools/gsh/gsh.cpp must route cleared-state view-state access through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[(^|[^A-Za-z0-9_])bsg_view_(set_)?cleared([^A-Za-z0-9_]|$)]]
+      _gtools_gsh_cleared_direct_hit "${_gtools_gsh_contents}")
+    if(_gtools_gsh_cleared_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/gtools/gsh/gsh.cpp reintroduced direct BSG cleared-state view-state access: ${_gtools_gsh_cleared_direct_hit}")
+    endif()
+  endif()
+
+  set(_libged_view_polygons_cmd
+    "${BRLCAD_SOURCE_DIR}/src/libged/view/polygons.c")
+  if(EXISTS "${_libged_view_polygons_cmd}")
+    file(READ "${_libged_view_polygons_cmd}" _libged_view_polygons_cmd_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_scale_from_bsg]])
+      string(REGEX MATCH "${_token}" _libged_view_polygons_cmd_token_hit
+	"${_libged_view_polygons_cmd_contents}")
+      if(NOT _libged_view_polygons_cmd_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/polygons.c must route polygon scale reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
+      _libged_view_polygons_cmd_direct_hit
+      "${_libged_view_polygons_cmd_contents}")
+    if(_libged_view_polygons_cmd_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/view/polygons.c reintroduced direct BSG polygon scale reads: ${_libged_view_polygons_cmd_direct_hit}")
+    endif()
+  endif()
+
+  set(_libged_view_vz_cmd "${BRLCAD_SOURCE_DIR}/src/libged/view/view.c")
+  if(EXISTS "${_libged_view_vz_cmd}")
+    file(READ "${_libged_view_vz_cmd}" _libged_view_vz_cmd_contents)
+    string(REGEX MATCH [[rt_view_model2view_from_bsg]]
+      _libged_view_vz_cmd_token_hit "${_libged_view_vz_cmd_contents}")
+    if(NOT _libged_view_vz_cmd_token_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/view/view.c must route vZ model-to-view reads through rt/view_legacy_bsg.h")
+    endif()
+    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
+      _libged_view_vz_cmd_direct_hit "${_libged_view_vz_cmd_contents}")
+    if(_libged_view_vz_cmd_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/view/view.c reintroduced direct BSG vZ model-to-view reads: ${_libged_view_vz_cmd_direct_hit}")
+    endif()
+  endif()
+
+  foreach(_rel
+      src/libged/pipe/pipe.c
+      src/libged/metaball/metaball.c)
+    set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
+    if(NOT EXISTS "${_file}")
+      _brlobol_pivot_guard_fail(
+	"${_rel} is required for primitive edit transform adapter checks")
+      continue()
+    endif()
+    file(READ "${_file}" _libged_prim_edit_transform_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_model2view_from_bsg]]
+	[[rt_view_view2model_from_bsg]])
+      string(REGEX MATCH "${_token}" _libged_prim_edit_transform_token_hit
+	"${_libged_prim_edit_transform_contents}")
+      if(NOT _libged_prim_edit_transform_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} must route primitive edit transform reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _libged_prim_edit_transform_direct_hit
+	"${_libged_prim_edit_transform_contents}")
+      if(_libged_prim_edit_transform_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} reintroduced direct BSG primitive edit transform reads: ${_libged_prim_edit_transform_direct_hit}")
+      endif()
+    endforeach()
+  endforeach()
+
+  foreach(_rel
+      src/libged/bot/edbot.c
+      src/libged/move_arb_edge/move_arb_edge.c)
+    set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
+    if(NOT EXISTS "${_file}")
+      _brlobol_pivot_guard_fail(
+	"${_rel} is required for subentity selection transform adapter checks")
+      continue()
+    endif()
+    file(READ "${_file}" _libged_subentity_transform_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_model2view_from_bsg]])
+      string(REGEX MATCH "${_token}" _libged_subentity_transform_token_hit
+	"${_libged_subentity_transform_contents}")
+      if(NOT _libged_subentity_transform_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} must route subentity selection model-to-view reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
+      _libged_subentity_transform_direct_hit
+      "${_libged_subentity_transform_contents}")
+    if(_libged_subentity_transform_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"${_rel} reintroduced direct BSG subentity selection model-to-view reads: ${_libged_subentity_transform_direct_hit}")
+    endif()
+  endforeach()
+
+  set(_libged_rot_point_cmd "${BRLCAD_SOURCE_DIR}/src/libged/rot_point/rot_point.c")
+  if(EXISTS "${_libged_rot_point_cmd}")
+    file(READ "${_libged_rot_point_cmd}" _libged_rot_point_cmd_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_rotation_from_bsg]])
+      string(REGEX MATCH "${_token}" _libged_rot_point_cmd_token_hit
+	"${_libged_rot_point_cmd_contents}")
+      if(NOT _libged_rot_point_cmd_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/rot_point/rot_point.c must route rotation reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_rotation([^A-Za-z0-9_]|$)]]
+      _libged_rot_point_cmd_direct_hit "${_libged_rot_point_cmd_contents}")
+    if(_libged_rot_point_cmd_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/rot_point/rot_point.c reintroduced direct BSG rotation reads: ${_libged_rot_point_cmd_direct_hit}")
+    endif()
+  endif()
+
+  set(_libged_view_labels_cmd "${BRLCAD_SOURCE_DIR}/src/libged/view/labels.c")
+  if(EXISTS "${_libged_view_labels_cmd}")
+    file(READ "${_libged_view_labels_cmd}" _libged_view_labels_cmd_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_view2model_from_bsg]])
+      string(REGEX MATCH "${_token}" _libged_view_labels_cmd_token_hit
+	"${_libged_view_labels_cmd_contents}")
+      if(NOT _libged_view_labels_cmd_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/labels.c must route label view-to-model reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
+      _libged_view_labels_cmd_direct_hit "${_libged_view_labels_cmd_contents}")
+    if(_libged_view_labels_cmd_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/view/labels.c reintroduced direct BSG label view-to-model reads: ${_libged_view_labels_cmd_direct_hit}")
+    endif()
+  endif()
+
+  foreach(_rel
+      src/libged/view/ypr.c
+      src/libged/rmat/rmat.c)
+    set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
+    if(NOT EXISTS "${_file}")
+      _brlobol_pivot_guard_fail(
+	"${_rel} is required for view rotation query adapter checks")
+      continue()
+    endif()
+    file(READ "${_file}" _libged_view_rotation_query_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_rotation_from_bsg]])
+      string(REGEX MATCH "${_token}" _libged_view_rotation_query_token_hit
+	"${_libged_view_rotation_query_contents}")
+      if(NOT _libged_view_rotation_query_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} must route rotation query output through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+  endforeach()
+
+  set(_libged_view_ypr_cmd "${BRLCAD_SOURCE_DIR}/src/libged/view/ypr.c")
+  if(EXISTS "${_libged_view_ypr_cmd}")
+    file(READ "${_libged_view_ypr_cmd}" _libged_view_ypr_cmd_contents)
+    string(REGEX MATCH [[bn_mat_trn[ \t\r\n]*\([^,;]*,[^;]*gv_rotation]]
+      _libged_view_ypr_cmd_direct_hit "${_libged_view_ypr_cmd_contents}")
+    if(_libged_view_ypr_cmd_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/view/ypr.c reintroduced direct BSG query output: ${_libged_view_ypr_cmd_direct_hit}")
+    endif()
+    string(REGEX MATCH [[bn_mat_trn[ \t\r\n]*\([^;]*gv_rotation]]
+      _libged_view_ypr_cmd_set_direct_hit "${_libged_view_ypr_cmd_contents}")
+    if(_libged_view_ypr_cmd_set_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/view/ypr.c reintroduced direct BSG rotation writes: ${_libged_view_ypr_cmd_set_direct_hit}")
+    endif()
+  endif()
+
+  set(_libged_rmat_cmd "${BRLCAD_SOURCE_DIR}/src/libged/rmat/rmat.c")
+  if(EXISTS "${_libged_rmat_cmd}")
+    file(READ "${_libged_rmat_cmd}" _libged_rmat_cmd_contents)
+    string(REGEX MATCH [[bn_encode_mat[^\n;]*gv_rotation]]
+      _libged_rmat_cmd_direct_hit "${_libged_rmat_cmd_contents}")
+    if(_libged_rmat_cmd_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/rmat/rmat.c reintroduced direct BSG query output: ${_libged_rmat_cmd_direct_hit}")
+    endif()
+    string(REGEX MATCH [[MAT_COPY[^\n;]*gv_rotation]]
+      _libged_rmat_cmd_set_direct_hit "${_libged_rmat_cmd_contents}")
+    if(_libged_rmat_cmd_set_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/rmat/rmat.c reintroduced direct BSG rotation writes: ${_libged_rmat_cmd_set_direct_hit}")
+    endif()
+  endif()
+
+  foreach(_rel
+      src/libged/orient/orient.c
+      src/libged/setview/setview.c)
+    set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
+    if(EXISTS "${_file}")
+      file(READ "${_file}" _libged_rotation_setter_contents)
+      foreach(_token
+	  [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	  [[rt_view_rotation_set_bsg]])
+	string(REGEX MATCH "${_token}" _libged_rotation_setter_token_hit
+	  "${_libged_rotation_setter_contents}")
+	if(NOT _libged_rotation_setter_token_hit)
+	  _brlobol_pivot_guard_fail(
+	    "${_rel} must route rotation writes through rt/view_legacy_bsg.h")
+	endif()
+      endforeach()
+      foreach(_pat
+	  [[quat_quat2mat[^\n;]*gv_rotation]]
+	  [[bn_mat_angles[^\n;]*gv_rotation]]
+	  [[MAT_COPY[^\n;]*gv_rotation]])
+	string(REGEX MATCH "${_pat}" _libged_rotation_setter_direct_hit
+	  "${_libged_rotation_setter_contents}")
+	if(_libged_rotation_setter_direct_hit)
+	  _brlobol_pivot_guard_fail(
+	    "${_rel} reintroduced direct BSG rotation writes: ${_libged_rotation_setter_direct_hit}")
+	endif()
+      endforeach()
+    endif()
+  endforeach()
+
+  set(_libged_pmat_cmd "${BRLCAD_SOURCE_DIR}/src/libged/pmat/pmat.c")
+  if(EXISTS "${_libged_pmat_cmd}")
+    file(READ "${_libged_pmat_cmd}" _libged_pmat_cmd_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_pmat_from_bsg]]
+	[[rt_view_pmat_set_bsg]])
+      string(REGEX MATCH "${_token}" _libged_pmat_cmd_token_hit
+	"${_libged_pmat_cmd_contents}")
+      if(NOT _libged_pmat_cmd_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/pmat/pmat.c must route projection-matrix access through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[bn_encode_mat[^\n;]*gv_pmat|MAT_COPY[^\n;]*gv_pmat]]
+      _libged_pmat_cmd_direct_hit "${_libged_pmat_cmd_contents}")
+    if(_libged_pmat_cmd_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/pmat/pmat.c reintroduced direct BSG projection-matrix access: ${_libged_pmat_cmd_direct_hit}")
+    endif()
+  endif()
+
+  set(_libged_pmodel2view_cmd "${BRLCAD_SOURCE_DIR}/src/libged/pmodel2view/pmodel2view.c")
+  if(EXISTS "${_libged_pmodel2view_cmd}")
+    file(READ "${_libged_pmodel2view_cmd}" _libged_pmodel2view_cmd_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_pmodel2view_from_bsg]])
+      string(REGEX MATCH "${_token}" _libged_pmodel2view_cmd_token_hit
+	"${_libged_pmodel2view_cmd_contents}")
+      if(NOT _libged_pmodel2view_cmd_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/pmodel2view/pmodel2view.c must route projected-model-to-view query output through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[bn_encode_mat[^\n;]*gv_pmodel2view]]
+      _libged_pmodel2view_cmd_direct_hit "${_libged_pmodel2view_cmd_contents}")
+    if(_libged_pmodel2view_cmd_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/pmodel2view/pmodel2view.c reintroduced direct BSG projected-model-to-view query output: ${_libged_pmodel2view_cmd_direct_hit}")
+    endif()
+  endif()
+
+  set(_libged_view_quat_cmd "${BRLCAD_SOURCE_DIR}/src/libged/view/quat.c")
+  if(EXISTS "${_libged_view_quat_cmd}")
+    file(READ "${_libged_view_quat_cmd}" _libged_view_quat_cmd_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_orientation_quat_from_bsg]])
+      string(REGEX MATCH "${_token}" _libged_view_quat_cmd_token_hit
+	"${_libged_view_quat_cmd_contents}")
+      if(NOT _libged_view_quat_cmd_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/quat.c must route quaternion query output through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[quat_mat2quat[ \t\r\n]*\([^;]*gv_rotation]]
+      _libged_view_quat_cmd_direct_hit "${_libged_view_quat_cmd_contents}")
+    if(_libged_view_quat_cmd_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/view/quat.c reintroduced direct BSG query output: ${_libged_view_quat_cmd_direct_hit}")
+    endif()
+    foreach(_token
+	[[rt_view_rotation_set_bsg]])
+      string(REGEX MATCH "${_token}" _libged_view_quat_cmd_set_token_hit
+	"${_libged_view_quat_cmd_contents}")
+      if(NOT _libged_view_quat_cmd_set_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/quat.c must route quaternion rotation writes through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[quat_quat2mat[^\n;]*gv_rotation]]
+      _libged_view_quat_cmd_set_direct_hit "${_libged_view_quat_cmd_contents}")
+    if(_libged_view_quat_cmd_set_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/view/quat.c reintroduced direct BSG rotation writes: ${_libged_view_quat_cmd_set_direct_hit}")
+    endif()
+  endif()
+
+  set(_libged_perspective_cmd
+    "${BRLCAD_SOURCE_DIR}/src/libged/perspective/perspective.c")
+  if(EXISTS "${_libged_perspective_cmd}")
+    file(READ "${_libged_perspective_cmd}" _libged_perspective_cmd_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_perspective_from_bsg]]
+	[[rt_view_perspective_set_bsg]]
+	[[rt_view_pmat_set_bsg]])
+      string(REGEX MATCH "${_token}" _libged_perspective_cmd_token_hit
+	"${_libged_perspective_cmd_contents}")
+      if(NOT _libged_perspective_cmd_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/perspective/perspective.c must route query output plus perspective/projection-matrix writes through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[gedp->[ \t\r\n]*ged_gvp->[ \t\r\n]*gv_perspective[ \t\r\n]*=]]
+	[[bu_vls_printf[^\n;]*gv_perspective]]
+	[[if[ \t]*\([^\n;]*gv_perspective]]
+	[[persp_mat[^\n;]*gv_perspective]]
+	[[persp_mat[^\n;]*gv_pmat]]
+	[[MAT_COPY[^\n;]*gv_pmat]])
+      string(REGEX MATCH "${_pat}" _libged_perspective_cmd_direct_hit
+	"${_libged_perspective_cmd_contents}")
+      if(_libged_perspective_cmd_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/perspective/perspective.c reintroduced direct BSG perspective reads/writes: ${_libged_perspective_cmd_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_eye_pos_cmd "${BRLCAD_SOURCE_DIR}/src/libged/eye_pos/eye_pos.c")
+  if(EXISTS "${_libged_eye_pos_cmd}")
+    file(READ "${_libged_eye_pos_cmd}" _libged_eye_pos_cmd_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_eye_pos_from_bsg]]
+	[[rt_view_eye_pos_set_bsg]]
+	[[rt_view_pmat_set_bsg]])
+      string(REGEX MATCH "${_token}" _libged_eye_pos_cmd_token_hit
+	"${_libged_eye_pos_cmd_contents}")
+      if(NOT _libged_eye_pos_cmd_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/eye_pos/eye_pos.c must route eye-position and projection-matrix access through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[VSCALE[ \t\r\n]*\([^,;]*,[^;]*gv_eye_pos]]
+	[[VMOVE[^\n;]*gv_eye_pos]]
+	[[mike_persp_mat[^\n;]*gv_eye_pos]]
+	[[mike_persp_mat[^\n;]*gv_pmat]])
+      string(REGEX MATCH "${_pat}" _libged_eye_pos_cmd_direct_hit
+	"${_libged_eye_pos_cmd_contents}")
+      if(_libged_eye_pos_cmd_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/eye_pos/eye_pos.c reintroduced direct BSG eye-position/projection-matrix access: ${_libged_eye_pos_cmd_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_view_cmd_impl "${BRLCAD_SOURCE_DIR}/src/libged/view/view.c")
+  if(EXISTS "${_libged_view_cmd_impl}")
+    file(READ "${_libged_view_cmd_impl}" _libged_view_cmd_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_info_from_bsg]])
+      string(REGEX MATCH "${_token}" _libged_view_cmd_token_hit
+	"${_libged_view_cmd_contents}")
+      if(NOT _libged_view_cmd_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/view.c must route width/height query output through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[bu_vls_printf[^\n;]*gv_width]]
+	[[bu_vls_printf[^\n;]*gv_height]])
+      string(REGEX MATCH "${_pat}" _libged_view_cmd_direct_hit
+	"${_libged_view_cmd_contents}")
+      if(_libged_view_cmd_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/view.c reintroduced direct BSG width/height query output: ${_libged_view_cmd_direct_hit}")
+      endif()
+    endforeach()
+  endif()
 
   foreach(_rel
       src/libtclcad/commands.c
@@ -2480,6 +4085,31 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	  "${_rel} must not use BSG-owned spellings for inverse RT view-unit conversion: ${_mged_rt_inverse_view_hit}")
       endif()
     endforeach()
+    if("${_rel}" STREQUAL "src/mged/mged_dm.h")
+      foreach(_token
+	  [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	  [[rt_view_size_from_bsg]]
+	  [[rt_view_scale_from_bsg]]
+	  [[rt_view_settings_shared_bsg]])
+	string(REGEX MATCH "${_token}" _mged_dm_view_macro_token_hit
+	  "${_mged_rt_inverse_view_contents}")
+	if(NOT _mged_dm_view_macro_token_hit)
+	  _brlobol_pivot_guard_fail(
+	    "src/mged/mged_dm.h must route VIEWSIZE/VIEWFACTOR macros through rt/view_legacy_bsg.h")
+	endif()
+      endforeach()
+      foreach(_pat
+	  [[#[ \t]*define[ \t]+VIEWSIZE[^\n]*gv_size]]
+	  [[#[ \t]*define[ \t]+VIEWFACTOR[^\n]*gv_scale]]
+	  [[(^|[^A-Za-z0-9_])bsg_view_settings_shared([^A-Za-z0-9_]|$)]])
+	string(REGEX MATCH "${_pat}" _mged_dm_view_macro_direct_hit
+	  "${_mged_rt_inverse_view_contents}")
+	if(_mged_dm_view_macro_direct_hit)
+	  _brlobol_pivot_guard_fail(
+	    "src/mged/mged_dm.h reintroduced direct BSG view-size/scale macro reads: ${_mged_dm_view_macro_direct_hit}")
+	endif()
+      endforeach()
+    endif()
   endforeach()
 
   set(_mged_attach_impl "${BRLCAD_SOURCE_DIR}/src/mged/attach.c")
@@ -2487,21 +4117,24 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_mged_attach_impl}" _mged_attach_contents)
     foreach(_token
 	"rt/view.h"
+	"rt/view_legacy_bsg.h"
+	"rt_view_scale_storage_from_bsg"
 	"RT_VIEW_MIN"
 	"RT_VIEW_MAX")
       string(FIND "${_mged_attach_contents}" "${_token}" _mged_attach_token_idx)
       if(_mged_attach_token_idx EQUAL -1)
 	_brlobol_pivot_guard_fail(
-	  "src/mged/attach.c must use RT-owned view window bounds ${_token}")
+	  "src/mged/attach.c must use RT-owned view adapters/constants ${_token}")
       endif()
     endforeach()
     foreach(_pat
-	[[(^|[^A-Za-z0-9_])BSG_VIEW_(MIN|MAX)([^A-Za-z0-9_]|$)]])
+	[[(^|[^A-Za-z0-9_])BSG_VIEW_(MIN|MAX)([^A-Za-z0-9_]|$)]]
+	[[dm_set_vp[ \t\r\n]*\([^;]*gv_scale]])
       string(REGEX MATCH "${_pat}" _mged_attach_bsg_view_hit
 	"${_mged_attach_contents}")
       if(_mged_attach_bsg_view_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/mged/attach.c must not use BSG-owned spellings for view window bounds: ${_mged_attach_bsg_view_hit}")
+	  "src/mged/attach.c must not use BSG-owned spellings for DM view state: ${_mged_attach_bsg_view_hit}")
       endif()
     endforeach()
   endif()
@@ -2598,13 +4231,850 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endforeach()
   endif()
 
+  set(_mged_chgmodel_impl "${BRLCAD_SOURCE_DIR}/src/mged/chgmodel.c")
+  if(EXISTS "${_mged_chgmodel_impl}")
+    file(READ "${_mged_chgmodel_impl}" _mged_chgmodel_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_center_from_bsg]]
+	[[rt_view_scale_from_bsg]])
+      string(REGEX MATCH "${_token}" _mged_chgmodel_adapter_hit
+	"${_mged_chgmodel_contents}")
+      if(NOT _mged_chgmodel_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/chgmodel.c must route make default view center/scale reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _mged_chgmodel_direct_hit
+	"${_mged_chgmodel_contents}")
+      if(_mged_chgmodel_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/chgmodel.c reintroduced direct BSG make default view reads: ${_mged_chgmodel_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_mged_plot_impl "${BRLCAD_SOURCE_DIR}/src/mged/plot.c")
+  if(EXISTS "${_mged_plot_impl}")
+    file(READ "${_mged_plot_impl}" _mged_plot_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_rotation_from_bsg]])
+      string(REGEX MATCH "${_token}" _mged_plot_adapter_hit
+	"${_mged_plot_contents}")
+      if(NOT _mged_plot_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/plot.c must route area view rotation reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_rotation([^A-Za-z0-9_]|$)]]
+      _mged_plot_direct_hit "${_mged_plot_contents}")
+    if(_mged_plot_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/mged/plot.c reintroduced direct BSG area view rotation reads: ${_mged_plot_direct_hit}")
+    endif()
+  endif()
+
+  set(_mged_scroll_impl "${BRLCAD_SOURCE_DIR}/src/mged/scroll.c")
+  if(EXISTS "${_mged_scroll_impl}")
+    file(READ "${_mged_scroll_impl}" _mged_scroll_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_scale_from_bsg]])
+      string(REGEX MATCH "${_token}" _mged_scroll_adapter_hit
+	"${_mged_scroll_contents}")
+      if(NOT _mged_scroll_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/scroll.c must route slider view-scale reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
+      _mged_scroll_direct_hit "${_mged_scroll_contents}")
+    if(_mged_scroll_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/mged/scroll.c reintroduced direct BSG slider view-scale reads: ${_mged_scroll_direct_hit}")
+    endif()
+  endif()
+
+  set(_mged_axes_impl "${BRLCAD_SOURCE_DIR}/src/mged/axes.c")
+  if(EXISTS "${_mged_axes_impl}")
+    file(READ "${_mged_axes_impl}" _mged_axes_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_info_from_bsg]]
+	[[rt_view_model2view_from_bsg]]
+	[[rt_view_rotation_from_bsg]])
+      string(REGEX MATCH "${_token}" _mged_axes_adapter_hit
+	"${_mged_axes_contents}")
+      if(NOT _mged_axes_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/axes.c must route axes overlay view reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])gv_size([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_rotation([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _mged_axes_direct_hit
+	"${_mged_axes_contents}")
+      if(_mged_axes_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/axes.c reintroduced direct BSG axes overlay view reads: ${_mged_axes_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_mged_rect_impl "${BRLCAD_SOURCE_DIR}/src/mged/rect.c")
+  if(EXISTS "${_mged_rect_impl}")
+    file(READ "${_mged_rect_impl}" _mged_rect_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_center_from_bsg]]
+	[[rt_view_model2view_from_bsg]]
+	[[rt_view_view2model_from_bsg]])
+      string(REGEX MATCH "${_token}" _mged_rect_adapter_hit
+	"${_mged_rect_contents}")
+      if(NOT _mged_rect_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/rect.c must route rectangle zoom view reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _mged_rect_direct_hit
+	"${_mged_rect_contents}")
+      if(_mged_rect_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/rect.c reintroduced direct BSG rectangle zoom view reads: ${_mged_rect_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_mged_edpipe_impl "${BRLCAD_SOURCE_DIR}/src/mged/edpipe.c")
+  if(EXISTS "${_mged_edpipe_impl}")
+    file(READ "${_mged_edpipe_impl}" _mged_edpipe_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_view2model_from_bsg]])
+      string(REGEX MATCH "${_token}" _mged_edpipe_adapter_hit
+	"${_mged_edpipe_contents}")
+      if(NOT _mged_edpipe_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/edpipe.c must route pipe pick direction reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
+      _mged_edpipe_direct_hit "${_mged_edpipe_contents}")
+    if(_mged_edpipe_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/mged/edpipe.c reintroduced direct BSG pipe pick direction reads: ${_mged_edpipe_direct_hit}")
+    endif()
+  endif()
+
+  set(_mged_usepen_impl "${BRLCAD_SOURCE_DIR}/src/mged/usepen.c")
+  if(EXISTS "${_mged_usepen_impl}")
+    file(READ "${_mged_usepen_impl}" _mged_usepen_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_center_from_bsg]])
+      string(REGEX MATCH "${_token}" _mged_usepen_adapter_hit
+	"${_mged_usepen_contents}")
+      if(NOT _mged_usepen_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/usepen.c must route view-centered transform reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
+      _mged_usepen_direct_hit "${_mged_usepen_contents}")
+    if(_mged_usepen_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/mged/usepen.c reintroduced direct BSG view-centered transform reads: ${_mged_usepen_direct_hit}")
+    endif()
+  endif()
+
+  set(_mged_setup_impl "${BRLCAD_SOURCE_DIR}/src/mged/setup.c")
+  if(EXISTS "${_mged_setup_impl}")
+    file(READ "${_mged_setup_impl}" _mged_setup_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_center_from_bsg]])
+      string(REGEX MATCH "${_token}" _mged_setup_adapter_hit
+	"${_mged_setup_contents}")
+      if(NOT _mged_setup_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/setup.c must route initial view-center reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
+      _mged_setup_direct_hit "${_mged_setup_contents}")
+    if(_mged_setup_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/mged/setup.c reintroduced direct BSG initial view-center reads: ${_mged_setup_direct_hit}")
+    endif()
+  endif()
+
+  set(_mged_chgview_status_impl "${BRLCAD_SOURCE_DIR}/src/mged/chgview.c")
+  if(EXISTS "${_mged_chgview_status_impl}")
+    file(READ "${_mged_chgview_status_impl}" _mged_chgview_status_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_scale_from_bsg]]
+	[[rt_view_initial_scale_from_bsg]]
+	[[rt_view_absolute_scale_from_bsg]]
+	[[rt_view_center_from_bsg]]
+	[[rt_view_rotation_from_bsg]]
+	[[rt_view_model2view_from_bsg]]
+	[[rt_view_view2model_from_bsg]])
+      string(REGEX MATCH "${_token}" _mged_chgview_status_adapter_hit
+	"${_mged_chgview_status_contents}")
+      if(NOT _mged_chgview_status_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/chgview.c must route status query view reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[bu_vls_printf[^;]*gv_scale]]
+	[[mged_bn_mat_print[^\n;]*gv_(center|rotation|model2view|view2model)]])
+      string(REGEX MATCH "${_pat}" _mged_chgview_status_direct_hit
+	"${_mged_chgview_status_contents}")
+      if(_mged_chgview_status_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/chgview.c reintroduced direct BSG status query view reads: ${_mged_chgview_status_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_mged_grid_impl "${BRLCAD_SOURCE_DIR}/src/mged/grid.c")
+  if(EXISTS "${_mged_grid_impl}")
+    file(READ "${_mged_grid_impl}" _mged_grid_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_info_from_bsg]]
+	[[rt_view_scale_from_bsg]]
+	[[rt_view_center_from_bsg]]
+	[[rt_view_center_vec_set_bsg]]
+	[[rt_view_model2view_from_bsg]]
+	[[rt_view_view2model_from_bsg]])
+      string(REGEX MATCH "${_token}" _mged_grid_adapter_hit
+	"${_mged_grid_contents}")
+      if(NOT _mged_grid_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/grid.c must route grid view read snapshots through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])gv_size([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
+	[[MAT_DELTAS_GET_NEG[ \t\r\n]*\([^;]*gv_center]]
+	[[MAT_DELTAS_VEC_NEG[ \t\r\n]*\([^;]*gv_center]])
+      string(REGEX MATCH "${_pat}" _mged_grid_direct_hit
+	"${_mged_grid_contents}")
+      if(_mged_grid_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/grid.c reintroduced direct BSG grid view reads: ${_mged_grid_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_mged_adc_impl "${BRLCAD_SOURCE_DIR}/src/mged/adc.c")
+  if(EXISTS "${_mged_adc_impl}")
+    file(READ "${_mged_adc_impl}" _mged_adc_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_scale_from_bsg]]
+	[[rt_view_model2view_from_bsg]]
+	[[rt_view_view2model_from_bsg]])
+      string(REGEX MATCH "${_token}" _mged_adc_adapter_hit
+	"${_mged_adc_contents}")
+      if(NOT _mged_adc_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/adc.c must route ADC view scale/matrix reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _mged_adc_direct_hit
+	"${_mged_adc_contents}")
+      if(_mged_adc_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/adc.c reintroduced direct BSG ADC view scale/matrix reads: ${_mged_adc_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_mged_set_impl "${BRLCAD_SOURCE_DIR}/src/mged/set.c")
+  if(EXISTS "${_mged_set_impl}")
+    file(READ "${_mged_set_impl}" _mged_set_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_scale_from_bsg]]
+	[[rt_view_center_from_bsg]]
+	[[rt_view_model2view_from_bsg]]
+	[[rt_view_perspective_set_bsg]]
+	[[rt_view_coord_set_bsg]]
+	[[rt_view_rotate_about_set_bsg]])
+      string(REGEX MATCH "${_token}" _mged_set_adapter_hit
+	"${_mged_set_contents}")
+      if(NOT _mged_set_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/set.c must route view reads/simple setters through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
+	[[vs_gvp->[ \t\r\n]*gv_perspective[ \t\r\n]*=]]
+	[[vs_gvp->[ \t\r\n]*gv_coord[ \t\r\n]*=]]
+	[[vs_gvp->[ \t\r\n]*gv_rotate_about[ \t\r\n]*=]])
+      string(REGEX MATCH "${_pat}" _mged_set_direct_hit
+	"${_mged_set_contents}")
+      if(_mged_set_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/set.c reintroduced direct BSG view reads/simple setters: ${_mged_set_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_mged_chgview_edit_reads_impl "${BRLCAD_SOURCE_DIR}/src/mged/chgview.c")
+  if(EXISTS "${_mged_chgview_edit_reads_impl}")
+    file(READ "${_mged_chgview_edit_reads_impl}" _mged_chgview_edit_reads_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_scale_from_bsg]]
+	[[rt_view_center_from_bsg]]
+	[[rt_view_rotation_from_bsg]]
+	[[rt_view_scale_set_bsg]]
+	[[rt_view_initial_scale_set_bsg]]
+	[[rt_view_absolute_scale_set_bsg]]
+	[[rt_view_center_vec_set_bsg]]
+	[[rt_view_rotation_set_bsg]]
+	[[rt_view_view2model_from_bsg]])
+      string(REGEX MATCH "${_token}" _mged_chgview_edit_reads_adapter_hit
+	"${_mged_chgview_edit_reads_contents}")
+      if(NOT _mged_chgview_edit_reads_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/chgview.c must route edit/slew view read snapshots through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_token
+	[[rt_view_coord_from_bsg]]
+	[[rt_view_coord_set_bsg]]
+	[[rt_view_rotate_about_from_bsg]])
+      string(REGEX MATCH "${_token}" _mged_chgview_coord_adapter_hit
+	"${_mged_chgview_edit_reads_contents}")
+      if(NOT _mged_chgview_coord_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/chgview.c must route edit rotation coord/rotate-about reads and temporary coord writes through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[fval[^\n;]*/[^\n;]*gv_scale]]
+	[[last_arr[^\n;]*gv_scale]]
+	[[bn_mat_inv[^\n;]*gv_rotation]]
+	[[bn_mat_mul[^\n;]*gv_rotation]]
+	[[MAT4X3PNT[^\n;]*gv_view2model]]
+	[[VSCALE[^\n;]*/[^\n;]*gv_scale]]
+	[[MAT_DELTAS_GET_NEG[ \t\r\n]*\([^;]*gv_center]]
+	[[gv_a_scale[^\n;]*gv_scale]]
+	[[f[ \t]*=[^\n;]*gv_scale[ \t]*/[^\n;]*gv_i_scale]]
+	[[bu_vls_printf[^\n;]*gv_a_scale]]
+	[[if[ \t]*\([^\n;]*gv_scale[ \t]*<]]
+	[[gv_i_scale[ \t]*=[^\n;]*gv_scale]]
+	[[vrp->[ \t]*vr_scale[ \t]*=[^\n;]*gv_scale]]
+	[[vs_current_view->vr_scale[ \t]*=[^\n;]*gv_scale]]
+	[[save_coord[ \t]*=[^\n;]*gv_coord]]
+	[[v->[ \t\r\n]*gv_coord[ \t\r\n]*=]]
+	[[mged_erot[ \t\r\n]*\([^;]*gv_coord]]
+	[[mged_erot[ \t\r\n]*\([^;]*gv_rotate_about]]
+	[[view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_scale[ \t\r\n]*=[^\n;]*view_scale]]
+	[[view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_i_scale[ \t\r\n]*=]]
+	[[view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_a_scale[ \t\r\n]*=]]
+	[[MAT_COPY[ \t\r\n]*\([^\n,]*view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_rotation[^;]*vs_current_view->[ \t\r\n]*vr_rot_mat]]
+	[[MAT_COPY[ \t\r\n]*\([^\n,]*view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_center[^;]*vs_current_view->[ \t\r\n]*vr_tvc_mat]]
+	[[view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_scale[ \t\r\n]*=[^\n;]*vs_current_view->[ \t\r\n]*vr_scale]])
+      string(REGEX MATCH "${_pat}" _mged_chgview_edit_reads_direct_hit
+	"${_mged_chgview_edit_reads_contents}")
+      if(_mged_chgview_edit_reads_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/chgview.c reintroduced direct BSG edit/slew view reads: ${_mged_chgview_edit_reads_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_mged_dm_generic_event_impl "${BRLCAD_SOURCE_DIR}/src/mged/dm-generic.c")
+  if(EXISTS "${_mged_dm_generic_event_impl}")
+    file(READ "${_mged_dm_generic_event_impl}" _mged_dm_generic_event_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_scale_from_bsg]]
+	[[rt_view_center_from_bsg]]
+	[[rt_view_model2view_from_bsg]]
+	[[rt_view_view2model_from_bsg]]
+	[[rt_view_zclip_set_bsg]])
+      string(REGEX MATCH "${_token}" _mged_dm_generic_event_adapter_hit
+	"${_mged_dm_generic_event_contents}")
+      if(NOT _mged_dm_generic_event_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/dm-generic.c must route mouse/ADC input view reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_view_set_zclip([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _mged_dm_generic_event_direct_hit
+	"${_mged_dm_generic_event_contents}")
+      if(_mged_dm_generic_event_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/dm-generic.c reintroduced direct BSG mouse/ADC input view reads: ${_mged_dm_generic_event_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_mged_doevent_impl "${BRLCAD_SOURCE_DIR}/src/mged/doevent.c")
+  if(EXISTS "${_mged_doevent_impl}")
+    file(READ "${_mged_doevent_impl}" _mged_doevent_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_scale_from_bsg]]
+	[[rt_view_center_from_bsg]]
+	[[rt_view_view2model_from_bsg]])
+      string(REGEX MATCH "${_token}" _mged_doevent_adapter_hit
+	"${_mged_doevent_contents}")
+      if(NOT _mged_doevent_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/doevent.c must route motion-event view reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _mged_doevent_direct_hit
+	"${_mged_doevent_contents}")
+      if(_mged_doevent_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/doevent.c reintroduced direct BSG motion-event view reads: ${_mged_doevent_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_mged_main_view_reads_impl "${BRLCAD_SOURCE_DIR}/src/mged/mged.c")
+  if(EXISTS "${_mged_main_view_reads_impl}")
+    file(READ "${_mged_main_view_reads_impl}" _mged_main_view_reads_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_scale_from_bsg]]
+	[[rt_view_model2view_from_bsg]]
+	[[rt_view_zclip_set_bsg]])
+      string(REGEX MATCH "${_token}" _mged_main_view_reads_adapter_hit
+	"${_mged_main_view_reads_contents}")
+      if(NOT _mged_main_view_reads_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/mged.c must route edit matrix and rate-knob scale reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_view_set_zclip([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _mged_main_view_reads_direct_hit
+	"${_mged_main_view_reads_contents}")
+      if(_mged_main_view_reads_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/mged.c reintroduced direct BSG edit matrix/rate-knob view reads: ${_mged_main_view_reads_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_mged_dozoom_view_reads_impl "${BRLCAD_SOURCE_DIR}/src/mged/dozoom.c")
+  if(EXISTS "${_mged_dozoom_view_reads_impl}")
+    file(READ "${_mged_dozoom_view_reads_impl}" _mged_dozoom_view_reads_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_perspective_from_bsg]]
+	[[rt_view_eye_pos_from_bsg]]
+	[[rt_view_model2view_from_bsg]]
+	[[rt_view_pmat_from_bsg]]
+	[[rt_view_pmat_set_bsg]])
+      string(REGEX MATCH "${_token}" _mged_dozoom_view_reads_adapter_hit
+	"${_mged_dozoom_view_reads_contents}")
+      if(NOT _mged_dozoom_view_reads_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/dozoom.c must route perspective, eye, model-to-view, and projection-matrix access through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[if[ \t]*\([^\n;]*v->[ \t]*gv_perspective[ \t]*>=]]
+	[[fastf_t[ \t\r\n]+persp[ \t\r\n]*=[^\n;]*v->[ \t]*gv_perspective]]
+	[[if[ \t]*\([^\n;]*v->[ \t]*gv_perspective[ \t]*<]]
+	[[v->[ \t]*gv_eye_pos]]
+	[[dm_loadmatrix[^\n;]*v->[ \t]*gv_model2view]]
+	[[MAT_COPY[ \t]*\([ \t]*(saved_pmat|perspective_mat)[^,]*,[^\n;]*v->[ \t]*gv_pmat]]
+	[[MAT_COPY[ \t]*\([ \t]*v->[ \t]*gv_pmat]])
+      string(REGEX MATCH "${_pat}" _mged_dozoom_view_reads_direct_hit
+	"${_mged_dozoom_view_reads_contents}")
+      if(_mged_dozoom_view_reads_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/dozoom.c reintroduced direct BSG perspective/eye/model-to-view/projection-matrix access: ${_mged_dozoom_view_reads_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_mged_buttons_view_save_impl "${BRLCAD_SOURCE_DIR}/src/mged/buttons.c")
+  if(EXISTS "${_mged_buttons_view_save_impl}")
+    file(READ "${_mged_buttons_view_save_impl}" _mged_buttons_view_save_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_scale_from_bsg]]
+	[[rt_view_rotation_from_bsg]]
+	[[rt_view_center_from_bsg]]
+	[[rt_view_scale_set_bsg]]
+	[[rt_view_rotation_set_bsg]]
+	[[rt_view_center_vec_set_bsg]])
+      string(REGEX MATCH "${_token}" _mged_buttons_view_save_adapter_hit
+	"${_mged_buttons_view_save_contents}")
+      if(NOT _mged_buttons_view_save_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/buttons.c must route saved-view snapshots through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[sav_vscale[ \t]*=[^;\n]*gv_scale]]
+	[[MAT_COPY[ \t\r\n]*\([ \t\r\n]*sav_viewrot[^;]*gv_rotation]]
+	[[MAT_COPY[ \t\r\n]*\([ \t\r\n]*sav_toviewcenter[^;]*gv_center]]
+	[[view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_scale[ \t\r\n]*=[^\n;]*sav_vscale]]
+	[[MAT_COPY[ \t\r\n]*\([^\n,]*view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_rotation[^;]*sav_viewrot]]
+	[[MAT_COPY[ \t\r\n]*\([^\n,]*view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_center[^;]*sav_toviewcenter]])
+      string(REGEX MATCH "${_pat}" _mged_buttons_view_save_direct_hit
+	"${_mged_buttons_view_save_contents}")
+      if(_mged_buttons_view_save_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/buttons.c reintroduced direct BSG saved-view reads: ${_mged_buttons_view_save_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_mged_rtif_view_reads_impl "${BRLCAD_SOURCE_DIR}/src/mged/rtif.c")
+  if(EXISTS "${_mged_rtif_view_reads_impl}")
+    file(READ "${_mged_rtif_view_reads_impl}" _mged_rtif_view_reads_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_scale_set_bsg]]
+	[[rt_view_rotation_set_bsg]]
+	[[rt_view_center_vec_set_bsg]]
+	[[rt_view_view2model_from_bsg]])
+      string(REGEX MATCH "${_token}" _mged_rtif_view_reads_adapter_hit
+	"${_mged_rtif_view_reads_contents}")
+      if(NOT _mged_rtif_view_reads_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/rtif.c must route RT command view access through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_scale[ \t\r\n]*=]]
+	[[MAT_COPY[ \t\r\n]*\([^\n,]*view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_rotation]]
+	[[MAT_IDN[ \t\r\n]*\([^\n;]*view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_rotation]]
+	[[MAT_DELTAS_VEC_NEG[ \t\r\n]*\([^;]*view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_center]]
+	[[MAT4X3PNT[^\n;]*gv_view2model]])
+      string(REGEX MATCH "${_pat}" _mged_rtif_view_reads_direct_hit
+	"${_mged_rtif_view_reads_contents}")
+      if(_mged_rtif_view_reads_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/rtif.c reintroduced direct BSG RT command view access: ${_mged_rtif_view_reads_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_mged_edsol_abs_tran_impl "${BRLCAD_SOURCE_DIR}/src/mged/edsol.c")
+  if(EXISTS "${_mged_edsol_abs_tran_impl}")
+    file(READ "${_mged_edsol_abs_tran_impl}" _mged_edsol_abs_tran_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_scale_from_bsg]]
+	[[rt_view_model2view_from_bsg]]
+	[[rt_view_view2model_from_bsg]])
+      string(REGEX MATCH "${_token}" _mged_edsol_abs_tran_adapter_hit
+	"${_mged_edsol_abs_tran_contents}")
+      if(NOT _mged_edsol_abs_tran_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/edsol.c must route absolute translation bookkeeping reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[inv_Viewscale[ \t]*=[^\n;]*/[^\n;]*gv_scale]]
+	[[MAT4X3PNT[ \t\r\n]*\([ \t\r\n]*model_pos[^;]*gv_view2model]]
+	[[MAT4X3PNT[ \t\r\n]*\([ \t\r\n]*ea_view_pos[^;]*gv_model2view]]
+	[[MAT4X3PNT[ \t\r\n]*\([ \t\r\n]*rot_point[^;]*gv_view2model]]
+	[[MAT4X3VEC[ \t\r\n]*\([ \t\r\n]*view_dir[^;]*gv_view2model[^;]*(view_z_dir|z_dir)]]
+	[[MAT4X3VEC[ \t\r\n]*\([ \t\r\n]*view_pl[^;]*gv_view2model[^;]*view_dir]]
+	[[MAT4X3VEC[ \t\r\n]*\([ \t\r\n]*dir[^;]*gv_view2model[^;]*work]]
+	[[rt_bot_find_[ve]_nearest_pt2[^;]*gv_model2view]]
+	[[nmg_find_e_nearest_pt2[^;]*gv_model2view]]
+	[[MAT4X3PNT[ \t\r\n]*\([ \t\r\n]*start_pt[^;]*gv_view2model]]
+	[[MAT4X3VEC[ \t\r\n]*\([ \t\r\n]*dir[^;]*gv_view2model[^;]*tmp]]
+	[[view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_model2view]]
+	[[view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_view2model]])
+      string(REGEX MATCH "${_pat}" _mged_edsol_abs_tran_direct_hit
+	"${_mged_edsol_abs_tran_contents}")
+      if(_mged_edsol_abs_tran_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/edsol.c reintroduced direct BSG edit view snapshot reads: ${_mged_edsol_abs_tran_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_align_view_reads_impl "${BRLCAD_SOURCE_DIR}/src/libged/view/align.c")
+  if(EXISTS "${_libged_align_view_reads_impl}")
+    file(READ "${_libged_align_view_reads_impl}" _libged_align_view_reads_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_center_from_bsg]]
+	[[rt_view_view2model_from_bsg]]
+	[[rt_view_aet_from_bsg]]
+	[[rt_view_aet_set_bsg]])
+      string(REGEX MATCH "${_token}" _libged_align_view_reads_adapter_hit
+	"${_libged_align_view_reads_contents}")
+      if(NOT _libged_align_view_reads_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/align.c must route center/eye/AET reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[MAT4X3PNT[^\n;]*gv_center]]
+	[[MAT4X3PNT[^\n;]*gv_view2model]]
+	[[gv_aet[ \t]*\[]]
+	[[VSET[^\n;]*gv_aet]]
+	[[bsg_mat_aet[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_align_view_reads_direct_hit
+	"${_libged_align_view_reads_contents}")
+      if(_libged_align_view_reads_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/align.c reintroduced direct BSG align view reads: ${_libged_align_view_reads_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_vutil_view_reads_impl "${BRLCAD_SOURCE_DIR}/src/libged/vutil.c")
+  if(EXISTS "${_libged_vutil_view_reads_impl}")
+    file(READ "${_libged_vutil_view_reads_impl}" _libged_vutil_view_reads_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_rotation_from_bsg]]
+	[[rt_view_model2view_from_bsg]]
+	[[rt_view_view2model_from_bsg]]
+	[[rt_view_center_from_bsg]]
+	[[rt_view_inverse_size_from_bsg]]
+	[[rt_view_keypoint_from_bsg]]
+	[[rt_view_rotate_about_from_bsg]]
+	[[rt_view_center_vec_set_bsg]]
+	[[rt_view_rotation_set_bsg]])
+      string(REGEX MATCH "${_token}" _libged_vutil_view_reads_adapter_hit
+	"${_libged_vutil_view_reads_contents}")
+      if(NOT _libged_vutil_view_reads_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/vutil.c must route rotation/translation helper view reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[bn_mat_inv[ \t\r\n]*\([^;]*gv_rotation]]
+	[[bn_mat_mul[ \t\r\n]*\([^;]*gv_rotation]]
+	[[bn_mat_mul2[ \t\r\n]*\([^;]*gv_rotation]]
+	[[MAT4X3PNT[^\n;]*gv_model2view]]
+	[[MAT4X3PNT[^\n;]*gv_view2model]]
+	[[MAT_DELTAS_GET_NEG[ \t\r\n]*\([^;]*gv_center]]
+	[[MAT_DELTAS_VEC_NEG[ \t\r\n]*\([^;]*gv_center]]
+	[[MAT_COPY[^\n;]*gv_rotation]]
+	[[(^|[^A-Za-z0-9_])gv_isize([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_keypoint([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_rotate_about([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _libged_vutil_view_reads_direct_hit
+	"${_libged_vutil_view_reads_contents}")
+      if(_libged_vutil_view_reads_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/vutil.c reintroduced direct BSG utility view reads: ${_libged_vutil_view_reads_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_isize_impl "${BRLCAD_SOURCE_DIR}/src/libged/isize/isize.c")
+  if(EXISTS "${_libged_isize_impl}")
+    file(READ "${_libged_isize_impl}" _libged_isize_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_inverse_size_from_bsg]])
+      string(REGEX MATCH "${_token}" _libged_isize_adapter_hit
+	"${_libged_isize_contents}")
+      if(NOT _libged_isize_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/isize/isize.c must route inverse view-size reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_isize([^A-Za-z0-9_]|$)]]
+      _libged_isize_direct_hit "${_libged_isize_contents}")
+    if(_libged_isize_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/isize/isize.c reintroduced direct BSG inverse view-size reads: ${_libged_isize_direct_hit}")
+    endif()
+  endif()
+
+  set(_libged_keypoint_impl "${BRLCAD_SOURCE_DIR}/src/libged/keypoint/keypoint.c")
+  if(EXISTS "${_libged_keypoint_impl}")
+    file(READ "${_libged_keypoint_impl}" _libged_keypoint_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_keypoint_from_bsg]]
+	[[rt_view_keypoint_set_bsg]])
+      string(REGEX MATCH "${_token}" _libged_keypoint_adapter_hit
+	"${_libged_keypoint_contents}")
+      if(NOT _libged_keypoint_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/keypoint/keypoint.c must route keypoint get/set through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_keypoint([^A-Za-z0-9_]|$)]]
+      _libged_keypoint_direct_hit "${_libged_keypoint_contents}")
+    if(_libged_keypoint_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/keypoint/keypoint.c reintroduced direct BSG keypoint access: ${_libged_keypoint_direct_hit}")
+    endif()
+  endif()
+
+  set(_libged_rotate_about_impl "${BRLCAD_SOURCE_DIR}/src/libged/rot/rotate_about.c")
+  if(EXISTS "${_libged_rotate_about_impl}")
+    file(READ "${_libged_rotate_about_impl}" _libged_rotate_about_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_rotate_about_from_bsg]]
+	[[rt_view_rotate_about_set_bsg]])
+      string(REGEX MATCH "${_token}" _libged_rotate_about_adapter_hit
+	"${_libged_rotate_about_contents}")
+      if(NOT _libged_rotate_about_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/rot/rotate_about.c must route rotate-about get/set through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[gedp->[ \t\r\n]*ged_gvp->[ \t\r\n]*gv_rotate_about]]
+      _libged_rotate_about_direct_hit "${_libged_rotate_about_contents}")
+    if(_libged_rotate_about_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/rot/rotate_about.c reintroduced direct BSG rotate-about access: ${_libged_rotate_about_direct_hit}")
+    endif()
+  endif()
+
+  set(_libged_view_knob_impl "${BRLCAD_SOURCE_DIR}/src/libged/view/knob.c")
+  if(EXISTS "${_libged_view_knob_impl}")
+    file(READ "${_libged_view_knob_impl}" _libged_view_knob_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_keypoint_from_bsg]]
+	[[rt_view_absolute_scale_from_bsg]])
+      string(REGEX MATCH "${_token}" _libged_view_knob_adapter_hit
+	"${_libged_view_knob_contents}")
+      if(NOT _libged_view_knob_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/knob.c must route keypoint-origin rotation reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[gv_coord[ \t]*==[ \t]*'m']]
+      _libged_view_knob_coord_direct_hit "${_libged_view_knob_contents}")
+    if(_libged_view_knob_coord_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/view/knob.c reintroduced direct BSG coord default reads: ${_libged_view_knob_coord_direct_hit}")
+    endif()
+    string(REGEX MATCH [[bsg_knobs_rot[^\n;]*gv_keypoint]]
+      _libged_view_knob_direct_hit "${_libged_view_knob_contents}")
+    if(_libged_view_knob_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/view/knob.c reintroduced direct BSG keypoint-origin rotation reads: ${_libged_view_knob_direct_hit}")
+    endif()
+    string(REGEX MATCH [[bu_vls_printf[^\n;]*gv_a_scale]]
+      _libged_view_knob_a_scale_direct_hit "${_libged_view_knob_contents}")
+    if(_libged_view_knob_a_scale_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/view/knob.c reintroduced direct BSG absolute-scale query output: ${_libged_view_knob_a_scale_direct_hit}")
+    endif()
+  endif()
+
+  set(_libged_preview_view_reads_impl "${BRLCAD_SOURCE_DIR}/src/libged/draw/preview.cpp")
+  if(EXISTS "${_libged_preview_view_reads_impl}")
+    file(READ "${_libged_preview_view_reads_impl}" _libged_preview_view_reads_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_rotation_from_bsg]]
+	[[rt_view_rotation_set_bsg]]
+	[[rt_view_center_vec_set_bsg]]
+	[[rt_view_view2model_from_bsg]])
+      string(REGEX MATCH "${_token}" _libged_preview_view_reads_adapter_hit
+	"${_libged_preview_view_reads_contents}")
+      if(NOT _libged_preview_view_reads_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/draw/preview.cpp must route preview camera view access through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[MAT_COPY[ \t\r\n]*\([^\n,]*gedp->[ \t\r\n]*ged_gvp->[ \t\r\n]*gv_rotation]]
+	[[MAT_DELTAS_VEC_NEG[ \t\r\n]*\([^\n,]*gedp->[ \t\r\n]*ged_gvp->[ \t\r\n]*gv_center]]
+	[[MAT4X3PNT[^\n;]*gv_view2model]])
+      string(REGEX MATCH "${_pat}" _libged_preview_view_reads_direct_hit
+	"${_libged_preview_view_reads_contents}")
+      if(_libged_preview_view_reads_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/draw/preview.cpp reintroduced direct BSG preview camera view access: ${_libged_preview_view_reads_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_loadview_impl "${BRLCAD_SOURCE_DIR}/src/libged/draw/loadview.cpp")
+  if(EXISTS "${_libged_loadview_impl}")
+    file(READ "${_libged_loadview_impl}" _libged_loadview_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_size_set_bsg]]
+	[[rt_view_rotation_set_bsg]]
+	[[rt_view_center_vec_set_bsg]]
+	[[rt_view_perspective_set_bsg]])
+      string(REGEX MATCH "${_token}" _libged_loadview_adapter_hit
+	"${_libged_loadview_contents}")
+      if(NOT _libged_loadview_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/draw/loadview.cpp must route view restore writes through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])bsg_view_set_size([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_view_set_rotation([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_view_set_center_vec([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_view_set_perspective([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _libged_loadview_direct_hit
+	"${_libged_loadview_contents}")
+      if(_libged_loadview_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/draw/loadview.cpp reintroduced direct BSG view restore writes: ${_libged_loadview_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
   set(_libtclcad_view_draw_impl "${BRLCAD_SOURCE_DIR}/src/libtclcad/view/draw.c")
   if(EXISTS "${_libtclcad_view_draw_impl}")
     file(READ "${_libtclcad_view_draw_impl}" _libtclcad_view_draw_contents)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[rt_view_model2view_from_bsg]]
-	[[rt_view_perspective_from_bsg]])
+	[[rt_view_perspective_from_bsg]]
+	[[rt_view_pmat_from_bsg]])
       string(REGEX MATCH "${_token}" _libtclcad_view_draw_adapter_hit
 	"${_libtclcad_view_draw_contents}")
       if(NOT _libtclcad_view_draw_adapter_hit)
@@ -2614,7 +5084,8 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endforeach()
     foreach(_pat
 	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])gv_perspective([^A-Za-z0-9_]|$)]])
+	[[(^|[^A-Za-z0-9_])gv_perspective([^A-Za-z0-9_]|$)]]
+	[[dm_loadpmatrix[^\n;]*gv_pmat]])
       string(REGEX MATCH "${_pat}" _libtclcad_view_draw_direct_hit
 	"${_libtclcad_view_draw_contents}")
       if(_libtclcad_view_draw_direct_hit)
@@ -2624,29 +5095,54 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endforeach()
   endif()
 
+  set(_libtclcad_view_refresh_impl "${BRLCAD_SOURCE_DIR}/src/libtclcad/view/refresh.c")
+  if(EXISTS "${_libtclcad_view_refresh_impl}")
+    file(READ "${_libtclcad_view_refresh_impl}" _libtclcad_view_refresh_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_local2base_from_bsg]]
+	[[rt_view_base2local_from_bsg]])
+      string(REGEX MATCH "${_token}" _libtclcad_view_refresh_adapter_hit
+	"${_libtclcad_view_refresh_contents}")
+      if(NOT _libtclcad_view_refresh_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libtclcad/view/refresh.c must route unit-conversion stash reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[double[^\n;]*=[^\n;]*gdvp->[ \t\r\n]*gv_(local2base|base2local)]]
+      _libtclcad_view_refresh_direct_hit "${_libtclcad_view_refresh_contents}")
+    if(_libtclcad_view_refresh_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libtclcad/view/refresh.c reintroduced direct BSG unit-conversion stash reads: ${_libtclcad_view_refresh_direct_hit}")
+    endif()
+  endif()
+
   set(_libtclcad_wrapper_impl "${BRLCAD_SOURCE_DIR}/src/libtclcad/wrapper.c")
   if(EXISTS "${_libtclcad_wrapper_impl}")
     file(READ "${_libtclcad_wrapper_impl}" _libtclcad_wrapper_contents)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_dimensions_set_bsg]]
 	[[rt_view_perspective_from_bsg]]
 	[[rt_view_lod_policy_from_bsg]])
       string(REGEX MATCH "${_token}" _libtclcad_wrapper_adapter_hit
 	"${_libtclcad_wrapper_contents}")
       if(NOT _libtclcad_wrapper_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libtclcad/wrapper.c must route perspective and zoom-refresh LoD policy reads through rt/view_legacy_bsg.h")
+	  "src/libtclcad/wrapper.c must route perspective, dimensions, and zoom-refresh LoD policy access through rt/view_legacy_bsg.h")
       endif()
     endforeach()
     foreach(_pat
 	[[(^|[^A-Za-z0-9_])gv_perspective([^A-Za-z0-9_]|$)]]
+	[[gedp->[ \t\r\n]*ged_gvp->[ \t\r\n]*gv_(width|height)[ \t\r\n]*=]]
+	[[gdvp->[ \t\r\n]*gv_(width|height)[ \t\r\n]*=]]
 	[[struct[ \t\r\n]+bsg_lod_source_policy_settings]]
 	[[bsg_view_lod_source_policy_get]])
       string(REGEX MATCH "${_pat}" _libtclcad_wrapper_direct_hit
 	"${_libtclcad_wrapper_contents}")
       if(_libtclcad_wrapper_direct_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libtclcad/wrapper.c reintroduced direct BSG perspective/LoD policy reads: ${_libtclcad_wrapper_direct_hit}")
+	  "src/libtclcad/wrapper.c reintroduced direct BSG perspective/LoD policy/dimension access: ${_libtclcad_wrapper_direct_hit}")
       endif()
     endforeach()
   endif()
@@ -2679,26 +5175,128 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[rt_view_lod_policy_from_bsg]]
 	[[rt_view_lod_policy_apply_bsg]]
+	[[rt_view_dimensions_set_bsg]]
 	[[rt_view_center_from_bsg]]
-	[[rt_view_scale_from_bsg]])
+	[[rt_view_scale_from_bsg]]
+	[[rt_view_model2view_from_bsg]]
+	[[rt_view_view2model_from_bsg]]
+	[[rt_view_snap_lines_from_bsg]]
+	[[rt_view_prepare_tcl_snap_bsg]]
+	[[rt_view_center_linesnap_bsg]]
+	[[rt_view_zclip_from_bsg]]
+	[[rt_view_zclip_set_bsg]])
       string(REGEX MATCH "${_token}" _libtclcad_commands_adapter_hit
 	"${_libtclcad_commands_contents}")
       if(NOT _libtclcad_commands_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libtclcad/commands.c must route TclCAD LoD policy and command view reads through rt/view_legacy_bsg.h")
+	  "src/libtclcad/commands.c must route TclCAD LoD policy and command view/dimension access through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_token
+	[[rt_view_coord_from_bsg]]
+	[[rt_view_coord_set_bsg]])
+      string(REGEX MATCH "${_token}" _libtclcad_commands_coord_adapter_hit
+	"${_libtclcad_commands_contents}")
+      if(NOT _libtclcad_commands_coord_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libtclcad/commands.c must route set_coord get/set through rt/view_legacy_bsg.h")
       endif()
     endforeach()
     foreach(_pat
 	[[struct[ \t\r\n]+bsg_lod_source_policy_settings]]
 	[[bsg_view_lod_source_policy_get]]
 	[[bsg_view_lod_source_policy_set]]
+	[[gedp->[ \t\r\n]*ged_gvp->[ \t\r\n]*gv_(width|height)[ \t\r\n]*=]]
+	[[gdvp->[ \t\r\n]*gv_(width|height)[ \t\r\n]*=]]
+	[[(^|[^A-Za-z0-9_])bsg_view_snap_lines([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_view_prepare_tcl_snap([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_view_center_linesnap([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_view_(set_)?zclip([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]])
+	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
+	[[gdvp->[ \t\r\n]*gv_coord[ \t\r\n]*=]]
+	[[bu_vls_printf[^\n;]*gv_coord]]
+	[[MAT4X3PNT[^\n;]*gdvp->gv_model2view]]
+	[[MAT4X3PNT[^\n;]*gdvp->gv_view2model]])
       string(REGEX MATCH "${_pat}" _libtclcad_commands_bsg_policy_hit
 	"${_libtclcad_commands_contents}")
       if(_libtclcad_commands_bsg_policy_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libtclcad/commands.c reintroduced direct BSG LoD policy/view reads: ${_libtclcad_commands_bsg_policy_hit}")
+	  "src/libtclcad/commands.c reintroduced direct BSG LoD policy/view reads or dimension writes: ${_libtclcad_commands_bsg_policy_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libtclcad_mouse_first_impl "${BRLCAD_SOURCE_DIR}/src/libtclcad/mouse.c")
+  if(EXISTS "${_libtclcad_mouse_first_impl}")
+    file(READ "${_libtclcad_mouse_first_impl}" _libtclcad_mouse_first_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_scale_from_bsg]]
+	[[rt_view_size_from_bsg]]
+	[[rt_view_model2view_from_bsg]]
+	[[rt_view_view2model_from_bsg]]
+	[[rt_view_rotation_from_bsg]]
+	[[rt_view_dimensions_set_bsg]]
+	[[rt_view_prepare_tcl_snap_bsg]])
+      string(REGEX MATCH "${_token}" _libtclcad_mouse_first_adapter_hit
+	"${_libtclcad_mouse_first_contents}")
+      if(NOT _libtclcad_mouse_first_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libtclcad/mouse.c must route simple selection/point input view reads and dimension writes through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_size([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_rotation([^A-Za-z0-9_]|$)]]
+	[[gdvp->[ \t\r\n]*gv_(width|height)[ \t\r\n]*=]]
+	[[(^|[^A-Za-z0-9_])bsg_view_prepare_tcl_snap([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _libtclcad_mouse_first_direct_hit
+	"${_libtclcad_mouse_first_contents}")
+      if(_libtclcad_mouse_first_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libtclcad/mouse.c reintroduced direct BSG mouse view snapshot reads or dimension writes: ${_libtclcad_mouse_first_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libtclcad_polygons_impl "${BRLCAD_SOURCE_DIR}/src/libtclcad/polygons.c")
+  if(EXISTS "${_libtclcad_polygons_impl}")
+    file(READ "${_libtclcad_polygons_impl}" _libtclcad_polygons_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_scale_from_bsg]]
+	[[rt_view_center_from_bsg]]
+	[[rt_view_rotation_from_bsg]]
+	[[rt_view_model2view_from_bsg]]
+	[[rt_view_view2model_from_bsg]]
+	[[rt_view_plane_from_bsg]]
+	[[rt_view_dimensions_set_bsg]]
+	[[rt_view_prepare_tcl_snap_bsg]])
+      string(REGEX MATCH "${_token}" _libtclcad_polygons_adapter_hit
+	"${_libtclcad_polygons_contents}")
+      if(NOT _libtclcad_polygons_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libtclcad/polygons.c must route polygon view snapshots and dimension writes through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_rotation([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
+	[[gdvp->[ \t\r\n]*gv_(width|height)[ \t\r\n]*=]]
+	[[(^|[^A-Za-z0-9_])bsg_view_plane([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_view_prepare_tcl_snap([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _libtclcad_polygons_direct_hit
+	"${_libtclcad_polygons_contents}")
+      if(_libtclcad_polygons_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libtclcad/polygons.c reintroduced direct BSG polygon view snapshot reads or dimension writes: ${_libtclcad_polygons_direct_hit}")
       endif()
     endforeach()
   endif()
@@ -2837,6 +5435,8 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	ged_draw_view_info_from_bsg
+	ged_draw_view_perspective_from_bsg
+	ged_draw_view_scale_from_bsg
 	ged_draw_view_lod_policy_from_bsg
 	ged_draw_view_lod_policy_apply_bsg
 	ged_draw_view_lod_policy_apply_bsg_bot_threshold
@@ -2847,6 +5447,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	ged_draw_mesh_lod_free_scene_ref
 	rt_view_lod_bounds_callback_set_bsg
 	rt_view_lod_bounds_callback_is_bsg
+	rt_view_perspective_from_bsg
 	rt_view_scale_from_bsg
 	rt_mesh_lod_load_view_scene_ref_bsg
 	rt_mesh_lod_free_scene_ref_bsg
@@ -2869,7 +5470,8 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[bsg_mesh_lod_load_view_scene_ref]]
 	[[bsg_mesh_lod_free_scene_ref]]
 	[[rt_mesh_lod_bsg]]
-	[[->[ \t\r\n]*gv_scale]])
+	[[->[ \t\r\n]*gv_scale]]
+	[[->[ \t\r\n]*gv_perspective]])
       string(REGEX MATCH "${_pat}" _ged_bsg_draw_view_bsg_policy_hit
 	"${_ged_bsg_draw_view_contents}")
       if(_ged_bsg_draw_view_bsg_policy_hit)
@@ -2896,6 +5498,8 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	"src/libged/bsg_ged_draw_private.h must expose the private GED view LoD policy snapshot")
     endif()
     foreach(_func
+	ged_draw_view_perspective_from_bsg
+	ged_draw_view_scale_from_bsg
 	ged_draw_view_lod_policy_from_bsg
 	ged_draw_view_lod_policy_apply_bsg
 	ged_draw_view_lod_policy_apply_bsg_bot_threshold
@@ -3121,6 +5725,30 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endif()
   endforeach()
 
+  set(_ged_view_independent_test "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/view_independent.cpp")
+  if(EXISTS "${_ged_view_independent_test}")
+    file(READ "${_ged_view_independent_test}" _ged_view_independent_test_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_scale_state_set_bsg]])
+      string(REGEX MATCH "${_token}" _ged_view_independent_test_token_hit
+	"${_ged_view_independent_test_contents}")
+      if(NOT _ged_view_independent_test_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/tests/draw/view_independent.cpp must route oversized view setup through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[=[views\[[^]]+\]->[ \t\r\n]*gv_(scale|size|isize)[ \t\r\n]*=]=])
+      string(REGEX MATCH "${_pat}" _ged_view_independent_test_direct_hit
+	"${_ged_view_independent_test_contents}")
+      if(_ged_view_independent_test_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/tests/draw/view_independent.cpp reintroduced direct BSG oversized view setup writes: ${_ged_view_independent_test_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
   foreach(_rel
       src/libged/tests/draw/ged_draw_scene.cpp
       src/libged/tests/draw/lod.cpp
@@ -3150,6 +5778,53 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       endif()
     endforeach()
   endforeach()
+
+  set(_libged_selection_semantics_test "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/selection_semantics.cpp")
+  if(EXISTS "${_libged_selection_semantics_test}")
+    file(READ "${_libged_selection_semantics_test}" _selection_semantics_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_width_from_bsg]]
+	[[rt_view_height_from_bsg]])
+      string(REGEX MATCH "${_token}" _selection_semantics_adapter_hit
+	"${_selection_semantics_contents}")
+      if(NOT _selection_semantics_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/tests/draw/selection_semantics.cpp must route pick-point size reads through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[v->[ \t\r\n]*gv_width]]
+	[[v->[ \t\r\n]*gv_height]])
+      string(REGEX MATCH "${_pat}" _selection_semantics_direct_hit
+	"${_selection_semantics_contents}")
+      if(_selection_semantics_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/tests/draw/selection_semantics.cpp reintroduced direct pick-point BSG size reads: ${_selection_semantics_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_rtwizard_bsg_test "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/rtwizard_bsg.cpp")
+  if(EXISTS "${_libged_rtwizard_bsg_test}")
+    file(READ "${_libged_rtwizard_bsg_test}" _rtwizard_bsg_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_model2view_from_bsg]])
+      string(REGEX MATCH "${_token}" _rtwizard_bsg_adapter_hit
+	"${_rtwizard_bsg_contents}")
+      if(NOT _rtwizard_bsg_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/tests/draw/rtwizard_bsg.cpp must route view matrix comparisons through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[v->[ \t\r\n]*gv_model2view]]
+      _rtwizard_bsg_direct_hit "${_rtwizard_bsg_contents}")
+    if(_rtwizard_bsg_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/tests/draw/rtwizard_bsg.cpp reintroduced direct view matrix comparison reads: ${_rtwizard_bsg_direct_hit}")
+    endif()
+  endif()
 
   foreach(_rel
       src/libged/bsg_ged_draw_binding.c
@@ -3331,6 +6006,26 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       _brlobol_pivot_guard_fail(
 	"src/libged/draw.cpp must route BSG scene-ref mesh-LoD view loading through ged_draw_mesh_lod_load_view_scene_ref: ${_ged_draw_bsg_lod_view_load_hit}")
     endif()
+    foreach(_token
+	ged_draw_view_perspective_from_bsg
+	ged_draw_view_scale_from_bsg)
+      string(REGEX MATCH "${_token}" _ged_draw_view_snapshot_token_hit
+	"${_ged_draw_contents}")
+      if(NOT _ged_draw_view_snapshot_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/draw.cpp must route draw view snapshot reads through private GED draw view helpers")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])gv_perspective([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _ged_draw_view_snapshot_direct_hit
+	"${_ged_draw_contents}")
+      if(_ged_draw_view_snapshot_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/draw.cpp reintroduced direct BSG draw view snapshot reads: ${_ged_draw_view_snapshot_direct_hit}")
+      endif()
+    endforeach()
     foreach(_pat
 	[[(^|[^A-Za-z0-9_])ged_draw_rt_mesh_lod_bsg([^A-Za-z0-9_]|$)]]
 	[[struct[ \t\r\n]+bsg_mesh_lod]]
@@ -3560,6 +6255,52 @@ function(_brlobol_pivot_guard_check_librt_sketch_polygon_neutralization)
 	_brlobol_pivot_guard_fail(
 	  "${_rel} must include rt/primitives/sketch_legacy_bsg.h for BSG polygon conversion adapters")
       endif()
+      if(_rel STREQUAL "src/qged/plugins/polygon/QPolyCreate.cpp" OR
+	  _rel STREQUAL "src/qged/plugins/polygon/QPolyMod.cpp")
+	foreach(_token
+	    "rt/view_legacy_bsg.h"
+	    "rt_view_snap_source_flags_set_bsg"
+	    "rt_view_snap_lines_set_bsg"
+	    "rt_view_snap_lines_from_bsg")
+	  string(FIND "${_contents}" "${_token}" _qged_poly_snap_token_idx)
+	  if(_qged_poly_snap_token_idx EQUAL -1)
+	    _brlobol_pivot_guard_fail(
+	      "${_rel} must route polygon snap-state access through rt/view_legacy_bsg.h token ${_token}")
+	  endif()
+	endforeach()
+	foreach(_pat
+	    [[(^|[^A-Za-z0-9_])bsg_view_set_snap_source_flags([^A-Za-z0-9_]|$)]]
+	    [[(^|[^A-Za-z0-9_])bsg_view_(set_)?snap_lines([^A-Za-z0-9_]|$)]])
+	  string(REGEX MATCH "${_pat}" _qged_poly_snap_direct_hit "${_contents}")
+	  if(_qged_poly_snap_direct_hit)
+	    _brlobol_pivot_guard_fail(
+	      "${_rel} reintroduced direct BSG polygon snap-state access: ${_qged_poly_snap_direct_hit}")
+	  endif()
+	endforeach()
+      endif()
+      if(_rel STREQUAL "src/qged/plugins/polygon/QPolyMod.cpp")
+	foreach(_token
+	    "rt_view_center_vec_set_bsg"
+	    "rt_view_aet_set_bsg")
+	  string(FIND "${_contents}" "${_token}" _qged_poly_view_setter_token_idx)
+	  if(_qged_poly_view_setter_token_idx EQUAL -1)
+	    _brlobol_pivot_guard_fail(
+	      "${_rel} must route polygon alignment view writes through rt/view_legacy_bsg.h token ${_token}")
+	  endif()
+	endforeach()
+	foreach(_pat
+	    [[MAT_DELTAS_VEC_NEG[ \t\r\n]*\([^;]*gv_center]]
+	    [[VSET[^\n;]*gv_aet]]
+	    [[VMOVE[^\n;]*gv_aet]]
+	    [[bsg_mat_aet[ \t\r\n]*\(]])
+	  string(REGEX MATCH "${_pat}" _qged_poly_view_setter_direct_hit
+	    "${_contents}")
+	  if(_qged_poly_view_setter_direct_hit)
+	    _brlobol_pivot_guard_fail(
+	      "${_rel} reintroduced direct BSG polygon alignment view writes: ${_qged_poly_view_setter_direct_hit}")
+	  endif()
+	endforeach()
+      endif()
     endif()
   endforeach()
 endfunction()
@@ -3610,6 +6351,243 @@ function(_brlobol_pivot_guard_check_qtcad_obol_test_links)
       endforeach()
     endforeach()
   endforeach()
+endfunction()
+
+function(_brlobol_pivot_guard_check_qtcad_obol_pick_source_exact)
+  set(_qtcad_pick_header
+    "${BRLCAD_SOURCE_DIR}/include/qtcad/QgObolPick.h")
+  set(_qtcad_pick_impl
+    "${BRLCAD_SOURCE_DIR}/src/libqtcad/QgObolPick.cpp")
+  set(_qtcad_pick_test
+    "${BRLCAD_SOURCE_DIR}/src/libqtcad/tests/test_qtcad_obol_pick.cpp")
+
+  foreach(_file IN ITEMS
+      "${_qtcad_pick_header}"
+      "${_qtcad_pick_impl}"
+      "${_qtcad_pick_test}")
+    if(NOT EXISTS "${_file}")
+      file(RELATIVE_PATH _rel "${BRLCAD_SOURCE_DIR}" "${_file}")
+      _brlobol_pivot_guard_fail("${_rel} is required for qtcad Obol source-backed exact pick coverage")
+    endif()
+  endforeach()
+
+  if(EXISTS "${_qtcad_pick_header}")
+    file(READ "${_qtcad_pick_header}" _qtcad_pick_header_contents)
+    foreach(_token
+	"QgObolPickRecord"
+	"IMPLICIT_SOLID"
+	"float distance")
+      string(FIND "${_qtcad_pick_header_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("include/qtcad/QgObolPick.h missing source-backed exact pick token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  if(EXISTS "${_qtcad_pick_impl}")
+    file(READ "${_qtcad_pick_impl}" _qtcad_pick_impl_contents)
+    foreach(_token
+	"brlobol/lod_service.h"
+	"BRLObolSourceMeshPickResult"
+	"BRLObolRtPickResult"
+	"SoBRLSourceMeshPickAction"
+	"qg_obol_pick_source_full_detail"
+	"qg_obol_pick_camera_line"
+	"qg_obol_pick_rt_exact"
+	"brlobol_pick_rt_ray"
+	"qg_obol_insert_pick_record"
+	"drainMatchingResults"
+	"submitSourceBackedFullDetailRequests"
+	"getMaxExactFullDetailFaceCount"
+	"getMaxExactFullDetailPointCount"
+	"getLine"
+	"distance")
+      string(FIND "${_qtcad_pick_impl_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("src/libqtcad/QgObolPick.cpp missing source-backed exact pick token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  if(EXISTS "${_qtcad_pick_test}")
+    file(READ "${_qtcad_pick_test}" _qtcad_pick_test_contents)
+    foreach(_token
+	"SoBRLLodMeshShape"
+	"BRLObolLodService"
+	"BRLOBOL_LOD_RESULT_FULL_DETAIL"
+	"SoRayPickAction"
+	"SoBRLSourceMeshPickAction"
+	"makeSourceBackedFullDetailLodRequest"
+	"qtcad LoD pick fixture should build a bounded source full-detail request"
+	"queuedResultCountForDiagnostics"
+	"qtcad Obol point pick should consume ready source-backed full detail"
+	"qtcad Obol source-backed pick should preserve exact mesh identity"
+	"qtcad source-backed exact Obol pick should pass controller full-detail budget to source provider"
+	"qtcad Obol point pick should use librt exact implicit pick"
+	"qtcad Obol librt exact implicit pick should preserve RT hit identity"
+	"QgObolPickRecord::IMPLICIT_SOLID")
+      string(FIND "${_qtcad_pick_test_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("src/libqtcad/tests/test_qtcad_obol_pick.cpp missing source-backed exact pick token ${_token}")
+      endif()
+    endforeach()
+  endif()
+endfunction()
+
+function(_brlobol_pivot_guard_check_qtcad_obol_snap_source_exact)
+  set(_qtcad_snap_header
+    "${BRLCAD_SOURCE_DIR}/include/qtcad/QgObolSnap.h")
+  set(_qtcad_snap_impl
+    "${BRLCAD_SOURCE_DIR}/src/libqtcad/QgObolSnap.cpp")
+  set(_qtcad_snap_test
+    "${BRLCAD_SOURCE_DIR}/src/libqtcad/tests/test_qtcad_obol_snap.cpp")
+
+  foreach(_file IN ITEMS
+      "${_qtcad_snap_header}"
+      "${_qtcad_snap_impl}"
+      "${_qtcad_snap_test}")
+    if(NOT EXISTS "${_file}")
+      file(RELATIVE_PATH _rel "${BRLCAD_SOURCE_DIR}" "${_file}")
+      _brlobol_pivot_guard_fail("${_rel} is required for qtcad Obol source-backed exact snap coverage")
+    endif()
+  endforeach()
+
+  if(EXISTS "${_qtcad_snap_header}")
+    file(READ "${_qtcad_snap_header}" _qtcad_snap_header_contents)
+    foreach(_token
+	"qg_obol_snap_point_full_detail"
+	"source-backed LoD")
+      string(FIND "${_qtcad_snap_header_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("include/qtcad/QgObolSnap.h missing source-backed exact snap token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  if(EXISTS "${_qtcad_snap_impl}")
+    file(READ "${_qtcad_snap_impl}" _qtcad_snap_impl_contents)
+    foreach(_token
+	"brlobol/lod_service.h"
+	"qg_obol_snap_point_with_policy"
+	"qg_obol_snap_point_full_detail"
+	"SoBRLSnapAction::FULL_DETAIL"
+	"qg_obol_snap_consume_source_full_detail"
+	"drainMatchingResults"
+	"consumeSourceBackedFullDetailResults"
+	"submitSourceBackedFullDetailRequests"
+	"getMaxExactFullDetailFaceCount"
+	"getMaxExactFullDetailPointCount")
+      string(FIND "${_qtcad_snap_impl_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("src/libqtcad/QgObolSnap.cpp missing source-backed exact snap token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  if(EXISTS "${_qtcad_snap_test}")
+    file(READ "${_qtcad_snap_test}" _qtcad_snap_test_contents)
+    foreach(_token
+	"SoBRLLodMeshShape"
+	"BRLObolLodService"
+	"rt/view_legacy_bsg.h"
+	"rt_view_dimensions_set_bsg"
+	"rt_view_size_set_bsg"
+	"rt_view_view2model_set_bsg"
+	"rt_view_snap_source_flags_set_bsg"
+	"rt_view_snap_lines_set_bsg"
+	"BRLOBOL_LOD_RESULT_FULL_DETAIL"
+	"SoBRLSnapAction"
+	"makeSourceBackedFullDetailLodRequest"
+	"qtcad LoD snap fixture should build a bounded source full-detail request"
+	"qg_obol_snap_point_full_detail"
+	"qtcad exact Obol snap should consume ready source-backed full detail"
+	"qtcad exact Obol snap should preserve source-backed face identity"
+	"qtcad exact Obol snap should pass controller full-detail budget to source provider")
+      string(FIND "${_qtcad_snap_test_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("src/libqtcad/tests/test_qtcad_obol_snap.cpp missing source-backed exact snap token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[v->[ \t\r\n]*gv_(width|height|size)[ \t\r\n]*=]]
+	[[MAT_(IDN|DELTAS)[ \t\r\n]*\([^;]*v->[ \t\r\n]*gv_view2model]]
+	[[(^|[^A-Za-z0-9_])bsg_view_set_snap_source_flags([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_view_set_snap_lines([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _hit "${_qtcad_snap_test_contents}")
+      if(_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libqtcad/tests/test_qtcad_obol_snap.cpp reintroduced direct BSG snap test setup writes: ${_hit}")
+      endif()
+    endforeach()
+  endif()
+endfunction()
+
+function(_brlobol_pivot_guard_check_qtcad_obol_measure_source_exact)
+  set(_qtcad_measure_header
+    "${BRLCAD_SOURCE_DIR}/include/qtcad/QgObolMeasure.h")
+  set(_qtcad_measure_impl
+    "${BRLCAD_SOURCE_DIR}/src/libqtcad/QgObolMeasure.cpp")
+  set(_qtcad_measure_test
+    "${BRLCAD_SOURCE_DIR}/src/libqtcad/tests/test_qtcad_obol_measure.cpp")
+
+  foreach(_file IN ITEMS
+      "${_qtcad_measure_header}"
+      "${_qtcad_measure_impl}"
+      "${_qtcad_measure_test}")
+    if(NOT EXISTS "${_file}")
+      file(RELATIVE_PATH _rel "${BRLCAD_SOURCE_DIR}" "${_file}")
+      _brlobol_pivot_guard_fail("${_rel} is required for qtcad Obol source-backed exact measure coverage")
+    endif()
+  endforeach()
+
+  if(EXISTS "${_qtcad_measure_header}")
+    file(READ "${_qtcad_measure_header}" _qtcad_measure_header_contents)
+    foreach(_token
+	"QgObolMeasureGeometryRecord"
+	"qg_obol_measure_geometry_full_detail")
+      string(FIND "${_qtcad_measure_header_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("include/qtcad/QgObolMeasure.h missing source-backed exact measure token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  if(EXISTS "${_qtcad_measure_impl}")
+    file(READ "${_qtcad_measure_impl}" _qtcad_measure_impl_contents)
+    foreach(_token
+	"brlobol/lod_service.h"
+	"brlobol/measure_action.h"
+	"SoBRLMeasureAction::FULL_DETAIL"
+	"qg_obol_measure_consume_source_full_detail"
+	"drainMatchingResults"
+	"consumeSourceBackedFullDetailResults"
+	"submitSourceBackedFullDetailRequests"
+	"getMaxExactFullDetailFaceCount"
+	"getMaxExactFullDetailPointCount")
+      string(FIND "${_qtcad_measure_impl_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("src/libqtcad/QgObolMeasure.cpp missing source-backed exact measure token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  if(EXISTS "${_qtcad_measure_test}")
+    file(READ "${_qtcad_measure_test}" _qtcad_measure_test_contents)
+    foreach(_token
+	"SoBRLLodMeshShape"
+	"BRLObolLodService"
+	"BRLOBOL_LOD_RESULT_FULL_DETAIL"
+	"brlobol_lod_rt_source_full_detail_request_from_source_mesh_request"
+	"qg_obol_measure_geometry_full_detail"
+	"qtcad exact Obol measure should consume ready source-backed full detail"
+	"qtcad exact Obol measure should preserve source-backed face identity"
+	"qtcad exact Obol measure should pass controller full-detail budget to source provider")
+      string(FIND "${_qtcad_measure_test_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("src/libqtcad/tests/test_qtcad_obol_measure.cpp missing source-backed exact measure token ${_token}")
+      endif()
+    endforeach()
+  endif()
 endfunction()
 
 function(_brlobol_pivot_guard_check_qtcad_window_host_adapter)
@@ -3755,6 +6733,7 @@ function(_brlobol_pivot_guard_check_qtcad_selection_api)
     set(_select_header_forbidden
       [[#[ \t]*include[ \t]*[<"]bsg]]
       [[#[ \t]*include[ \t]*[<"]raytrace\.h]]
+      [[(^|[^A-Za-z0-9_])bsg_pick_result([^A-Za-z0-9_]|$)]]
       [[(^|[^A-Za-z0-9_])bsg_interaction_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
       [[(^|[^A-Za-z0-9_])pick_result[ \t]*\([^A-Za-z0-9_]*\)]]
       [[(^|[^A-Za-z0-9_])interaction_result[ \t]*\([^A-Za-z0-9_]*\)]]
@@ -3790,6 +6769,416 @@ function(_brlobol_pivot_guard_check_qtcad_selection_api)
   endif()
 endfunction()
 
+function(_brlobol_pivot_guard_check_qtcad_view_snapshot_adapters)
+  set(_qtcad_canvas_state "${BRLCAD_SOURCE_DIR}/src/libqtcad/QgCanvasState.h")
+  if(EXISTS "${_qtcad_canvas_state}")
+    file(READ "${_qtcad_canvas_state}" _qtcad_canvas_state_contents)
+    foreach(_token
+	"rt/view_legacy_bsg.h"
+	"rt_view_rotation_from_bsg"
+	"rt_view_center_from_bsg"
+	"rt_view_scale_from_bsg"
+	"rt_view_perspective_from_bsg"
+	"rt_view_dimensions_set_bsg"
+	"rt_view_aet_set_bsg")
+      string(FIND "${_qtcad_canvas_state_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail(
+	  "src/libqtcad/QgCanvasState.h must route Obol camera view snapshots through rt/view_legacy_bsg.h token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[s[.]v->[ \t\r\n]*gv_(width|height)[ \t\r\n]*=]]
+	[[s[.]v->[ \t\r\n]*gv_(rotation|scale|perspective)]]
+	[[bsg_view_get_center_vec]]
+	[[(^|[^A-Za-z0-9_])bsg_view_set_aet([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _hit "${_qtcad_canvas_state_contents}")
+      if(_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libqtcad/QgCanvasState.h reintroduced direct qtcad Obol camera BSG view reads: ${_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_qtcad_draw_sync_test "${BRLCAD_SOURCE_DIR}/src/libqtcad/tests/test_qtcad_obol_draw_sync.cpp")
+  if(EXISTS "${_qtcad_draw_sync_test}")
+    file(READ "${_qtcad_draw_sync_test}" _qtcad_draw_sync_test_contents)
+    foreach(_token
+	"rt/view_legacy_bsg.h"
+	"rt_view_center_vec_set_bsg"
+	"rt_view_scale_set_bsg")
+      string(FIND "${_qtcad_draw_sync_test_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail(
+	  "src/libqtcad/tests/test_qtcad_obol_draw_sync.cpp must route view sync setup writes through rt/view_legacy_bsg.h token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])bsg_view_set_center_vec([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_view_set_scale([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _hit "${_qtcad_draw_sync_test_contents}")
+      if(_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libqtcad/tests/test_qtcad_obol_draw_sync.cpp reintroduced direct BSG utility view setters: ${_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_qtcad_qsketch_test "${BRLCAD_SOURCE_DIR}/src/libqtcad/tests/qsketch.cpp")
+  if(EXISTS "${_qtcad_qsketch_test}")
+    file(READ "${_qtcad_qsketch_test}" _qtcad_qsketch_test_contents)
+    foreach(_token
+	"rt/view_legacy_bsg.h"
+	"rt_view_aet_set_bsg"
+	"rt_view_scale_set_bsg"
+	"rt_view_dimensions_set_bsg"
+	"rt_view_center_vec_set_bsg"
+	"rt_view_size_set_bsg")
+      string(FIND "${_qtcad_qsketch_test_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail(
+	  "src/libqtcad/tests/qsketch.cpp must route view setup writes through rt/view_legacy_bsg.h token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[m_bv->[ \t\r\n]*gv_(width|height|scale|size|isize|aet)[ \t\r\n]*=]]
+	[[MAT_(IDN|DELTAS_VEC_NEG)[ \t\r\n]*\([^;]*m_bv->[ \t\r\n]*gv_center]]
+	[[(^|[^A-Za-z0-9_])bsg_mat_aet[ \t\r\n]*\([^;]*m_bv]])
+      string(REGEX MATCH "${_pat}" _hit "${_qtcad_qsketch_test_contents}")
+      if(_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libqtcad/tests/qsketch.cpp reintroduced direct BSG qsketch view setup writes: ${_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_qtcad_view_ctrl "${BRLCAD_SOURCE_DIR}/src/libqtcad/QgViewCtrl.cpp")
+  if(EXISTS "${_qtcad_view_ctrl}")
+    file(READ "${_qtcad_view_ctrl}" _qtcad_view_ctrl_contents)
+    foreach(_token
+	"rt/view_legacy_bsg.h"
+	"rt_view_framebuffer_mode_from_bsg"
+	"rt_view_framebuffer_mode_set_bsg")
+      string(FIND "${_qtcad_view_ctrl_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail(
+	  "src/libqtcad/QgViewCtrl.cpp must route framebuffer mode view-state access through rt/view_legacy_bsg.h token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]bsg/view_state\.h]]
+	[[(^|[^A-Za-z0-9_])bsg_view_(set_)?framebuffer_mode([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _qtcad_view_ctrl_fb_direct
+	"${_qtcad_view_ctrl_contents}")
+      if(_qtcad_view_ctrl_fb_direct)
+	_brlobol_pivot_guard_fail(
+	  "src/libqtcad/QgViewCtrl.cpp reintroduced direct BSG framebuffer mode view-state access: ${_qtcad_view_ctrl_fb_direct}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_qtcad_view_filter "${BRLCAD_SOURCE_DIR}/src/libqtcad/QgViewFilter.cpp")
+  if(EXISTS "${_qtcad_view_filter}")
+    file(READ "${_qtcad_view_filter}" _qtcad_view_filter_contents)
+    foreach(_token
+	"rt/view_legacy_bsg.h"
+	"rt_view_width_from_bsg"
+	"rt_view_height_from_bsg"
+	"rt_view_size_from_bsg"
+	"rt_view_snap_lines_from_bsg"
+	"rt_view_snap_source_flags_from_bsg"
+	"rt_view_snap_kind_mask_from_bsg"
+	"rt_view_snap_tolerance_factor_from_bsg")
+      string(FIND "${_qtcad_view_filter_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail(
+	  "src/libqtcad/QgViewFilter.cpp must route snap tolerance view reads through rt/view_legacy_bsg.h token ${_token}")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[v->[ \t\r\n]*gv_(width|height|size)]]
+      _qtcad_view_filter_direct "${_qtcad_view_filter_contents}")
+    if(_qtcad_view_filter_direct)
+      _brlobol_pivot_guard_fail(
+	"src/libqtcad/QgViewFilter.cpp reintroduced direct snap tolerance BSG view reads: ${_qtcad_view_filter_direct}")
+    endif()
+    string(REGEX MATCH [[(^|[^A-Za-z0-9_])bsg_view_snap_tolerance_factor([^A-Za-z0-9_]|$)]]
+      _qtcad_view_filter_snap_tol_direct "${_qtcad_view_filter_contents}")
+    if(_qtcad_view_filter_snap_tol_direct)
+      _brlobol_pivot_guard_fail(
+	"src/libqtcad/QgViewFilter.cpp reintroduced direct BSG snap tolerance factor reads: ${_qtcad_view_filter_snap_tol_direct}")
+    endif()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])bsg_view_snap_lines([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_view_snap_source_flags([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_view_snap_kind_mask([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _qtcad_view_filter_snap_policy_direct "${_qtcad_view_filter_contents}")
+      if(_qtcad_view_filter_snap_policy_direct)
+	_brlobol_pivot_guard_fail(
+	  "src/libqtcad/QgViewFilter.cpp reintroduced direct BSG snap policy reads: ${_qtcad_view_filter_snap_policy_direct}")
+      endif()
+    endforeach()
+  endif()
+
+  foreach(_rel
+      src/libqtcad/QgCanvasInput.cpp
+      src/libqtcad/bindings.cpp)
+    set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
+    if(NOT EXISTS "${_file}")
+      _brlobol_pivot_guard_fail("${_rel} is required for qtcad input view adapter checks")
+      continue()
+    endif()
+    file(READ "${_file}" _contents)
+    foreach(_token
+	"rt/view_legacy_bsg.h"
+	"rt_view_height_from_bsg"
+	"rt_view_center_from_bsg"
+	"rt_view_bounds_update_callback_from_bsg"
+	"rt_view_bounds_update_callback_set_bsg"
+	"rt_view_bounds_update_callback_call_bsg"
+	"rt_view_aet_set_bsg")
+      string(FIND "${_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} must route input view reads/callbacks through rt/view_legacy_bsg.h token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[v->[ \t\r\n]*gv_height]]
+	[[gv_bounds_update]]
+	[[MAT_DELTAS_GET_NEG[ \t\r\n]*\([^;]*v->[ \t\r\n]*gv_center]]
+	[[(^|[^A-Za-z0-9_])bsg_view_set_aet([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _hit "${_contents}")
+      if(_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} reintroduced direct qtcad input BSG view reads: ${_hit}")
+      endif()
+    endforeach()
+  endforeach()
+
+  set(_qtcad_sketch_filter "${BRLCAD_SOURCE_DIR}/src/libqtcad/QgSketchFilter.cpp")
+  if(EXISTS "${_qtcad_sketch_filter}")
+    file(READ "${_qtcad_sketch_filter}" _qtcad_sketch_filter_contents)
+    foreach(_token
+	"rt/view_legacy_bsg.h"
+	"rt_view_model2view_from_bsg"
+	"rt_view_width_from_bsg")
+      string(FIND "${_qtcad_sketch_filter_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail(
+	  "src/libqtcad/QgSketchFilter.cpp must route sketch view snapshots through rt/view_legacy_bsg.h token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[v->[ \t\r\n]*gv_model2view]]
+	[[v->[ \t\r\n]*gv_width]])
+      string(REGEX MATCH "${_pat}" _hit "${_qtcad_sketch_filter_contents}")
+      if(_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libqtcad/QgSketchFilter.cpp reintroduced direct sketch BSG view reads: ${_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_qtcad_select_filter "${BRLCAD_SOURCE_DIR}/src/libqtcad/QgSelectFilter.cpp")
+  if(EXISTS "${_qtcad_select_filter}")
+    file(READ "${_qtcad_select_filter}" _qtcad_select_filter_contents)
+    foreach(_token
+	"rt/view_legacy_bsg.h"
+	"rt_view_width_from_bsg"
+	"rt_view_height_from_bsg"
+	"rt_view_view2model_from_bsg"
+	"rt_view_rotation_from_bsg")
+      string(FIND "${_qtcad_select_filter_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail(
+	  "src/libqtcad/QgSelectFilter.cpp must route selection view snapshots through rt/view_legacy_bsg.h token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[v->[ \t\r\n]*gv_(width|height|view2model|rotation)]])
+      string(REGEX MATCH "${_pat}" _hit "${_qtcad_select_filter_contents}")
+      if(_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libqtcad/QgSelectFilter.cpp reintroduced direct selection BSG view reads: ${_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_qtcad_measure_filter "${BRLCAD_SOURCE_DIR}/src/libqtcad/QgMeasureFilter.cpp")
+  if(EXISTS "${_qtcad_measure_filter}")
+    file(READ "${_qtcad_measure_filter}" _qtcad_measure_filter_contents)
+    foreach(_token
+	"rt/view_legacy_bsg.h"
+	"rt_view_view2model_from_bsg")
+      string(FIND "${_qtcad_measure_filter_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail(
+	  "src/libqtcad/QgMeasureFilter.cpp must route 2D measurement view-to-model reads through rt/view_legacy_bsg.h token ${_token}")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[MAT4X3PNT[ \t\r\n]*\([^;]*v->[ \t\r\n]*gv_view2model]]
+      _qtcad_measure_direct "${_qtcad_measure_filter_contents}")
+    if(_qtcad_measure_direct)
+      _brlobol_pivot_guard_fail(
+	"src/libqtcad/QgMeasureFilter.cpp reintroduced direct 2D measurement BSG view reads: ${_qtcad_measure_direct}")
+    endif()
+  endif()
+
+  set(_qtcad_quad_view "${BRLCAD_SOURCE_DIR}/src/libqtcad/QgQuadView.cpp")
+  if(EXISTS "${_qtcad_quad_view}")
+    file(READ "${_qtcad_quad_view}" _qtcad_quad_view_contents)
+    foreach(_token
+	"rt/view_legacy_bsg.h"
+	"rt_view_base2local_from_bsg"
+	"rt_view_local2base_from_bsg"
+	"rt_view_width_from_bsg"
+	"rt_view_height_from_bsg"
+	"rt_view_dimensions_set_bsg"
+	"brlobol/export_action.h"
+	"SoBRLExportAction"
+	"SoBRLExportAction::DISPLAY_LEVEL"
+	"qg_quad_obol_visible_paths")
+      string(FIND "${_qtcad_quad_view_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail(
+	  "src/libqtcad/QgQuadView.cpp missing qtcad quad-view migration token ${_token}")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[=[^;]*->[ \t\r\n]*gv_(base2local|local2base|width|height)]]
+      _qtcad_quad_direct "${_qtcad_quad_view_contents}")
+    if(_qtcad_quad_direct)
+      _brlobol_pivot_guard_fail(
+	"src/libqtcad/QgQuadView.cpp reintroduced direct source BSG view copies: ${_qtcad_quad_direct}")
+    endif()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]bsg/export\.h]]
+	[[#[ \t]*include[ \t]*[<"]bsg/render\.h]]
+	[[(^|[^A-Za-z0-9_])bsg_export_query([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_export_request([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_EXPORT_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_RENDER_FLAG_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _qtcad_quad_export_direct
+	"${_qtcad_quad_view_contents}")
+      if(_qtcad_quad_export_direct)
+	_brlobol_pivot_guard_fail(
+	  "src/libqtcad/QgQuadView.cpp reintroduced direct BSG export path discovery: ${_qtcad_quad_export_direct}")
+      endif()
+    endforeach()
+  endif()
+
+  foreach(_rel
+      src/libqtcad/QgSW.cpp
+      src/libqtcad/QgGL.cpp)
+    set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
+    if(NOT EXISTS "${_file}")
+      _brlobol_pivot_guard_fail("${_rel} is required for qtcad framebuffer view adapter checks")
+      continue()
+    endif()
+    file(READ "${_file}" _contents)
+    foreach(_token
+	"rt/view_legacy_bsg.h"
+	"rt_view_width_from_bsg"
+	"rt_view_height_from_bsg"
+	"rt_view_dimensions_set_bsg"
+	"rt_view_scale_storage_from_bsg")
+      string(FIND "${_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} must route framebuffer size view reads through rt/view_legacy_bsg.h token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[->[ \t\r\n]*gv_(width|height)[ \t\r\n]*=]]
+	[[fb_configure_window[ \t\r\n]*\([^;]*->[ \t\r\n]*gv_(width|height)]]
+	[[dm_set_vp[ \t\r\n]*\([^;]*gv_scale]])
+      string(REGEX MATCH "${_pat}" _qtcad_fb_direct "${_contents}")
+      if(_qtcad_fb_direct)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} reintroduced direct framebuffer BSG view reads: ${_qtcad_fb_direct}")
+      endif()
+    endforeach()
+  endforeach()
+
+  set(_qtcad_sw "${BRLCAD_SOURCE_DIR}/src/libqtcad/QgSW.cpp")
+  if(EXISTS "${_qtcad_sw}")
+    file(READ "${_qtcad_sw}" _qtcad_sw_contents)
+    string(FIND "${_qtcad_sw_contents}" "rt_view_model2view_from_bsg" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail(
+	"src/libqtcad/QgSW.cpp must route legacy SW matrix loads through rt_view_model2view_from_bsg")
+    endif()
+    string(REGEX MATCH [[dm_loadmatrix[ \t\r\n]*\([^;]*->[ \t\r\n]*gv_model2view]]
+      _qtcad_sw_direct "${_qtcad_sw_contents}")
+    if(_qtcad_sw_direct)
+      _brlobol_pivot_guard_fail(
+	"src/libqtcad/QgSW.cpp reintroduced direct legacy SW model2view reads: ${_qtcad_sw_direct}")
+    endif()
+  endif()
+endfunction()
+
+function(_brlobol_pivot_guard_check_qged_view_info_rt_adapter)
+  set(_view_info_model
+    "${BRLCAD_SOURCE_DIR}/src/qged/plugins/view/info/CADViewModel.cpp")
+  if(NOT EXISTS "${_view_info_model}")
+    _brlobol_pivot_guard_fail(
+      "src/qged/plugins/view/info/CADViewModel.cpp is required for qged view-info migration checks")
+    return()
+  endif()
+
+  file(READ "${_view_info_model}" _view_info_contents)
+  foreach(_token
+      [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+      [[rt_view_info_from_bsg]]
+      [[rt_view_aet_from_bsg]]
+      [[rt_view_center_from_bsg]])
+    string(REGEX MATCH "${_token}" _view_info_adapter_hit
+      "${_view_info_contents}")
+    if(NOT _view_info_adapter_hit)
+      _brlobol_pivot_guard_fail(
+	"src/qged/plugins/view/info/CADViewModel.cpp must route view-info numeric reads through rt/view_legacy_bsg.h")
+    endif()
+  endforeach()
+
+  foreach(_pat
+      [[(^|[^A-Za-z0-9_])gv_size([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])gv_width([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])gv_height([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])gv_aet([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]])
+    string(REGEX MATCH "${_pat}" _view_info_direct_hit
+      "${_view_info_contents}")
+    if(_view_info_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/qged/plugins/view/info/CADViewModel.cpp reintroduced direct BSG view-info numeric reads: ${_view_info_direct_hit}")
+    endif()
+  endforeach()
+
+  set(_qged_app "${BRLCAD_SOURCE_DIR}/src/qged/QgEdApp.cpp")
+  if(EXISTS "${_qged_app}")
+    file(READ "${_qged_app}" _qged_app_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_dimensions_set_bsg]])
+      string(REGEX MATCH "${_token}" _qged_app_dim_adapter_hit
+	"${_qged_app_contents}")
+      if(NOT _qged_app_dim_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/qged/QgEdApp.cpp must route current-view dimension writes through rt/view_legacy_bsg.h")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[view[ \t\r\n]*\([ \t\r\n]*\)->[ \t\r\n]*gv_width[ \t\r\n]*=]]
+	[[view[ \t\r\n]*\([ \t\r\n]*\)->[ \t\r\n]*gv_height[ \t\r\n]*=]])
+      string(REGEX MATCH "${_pat}" _qged_app_dim_direct_hit
+	"${_qged_app_contents}")
+      if(_qged_app_dim_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/qged/QgEdApp.cpp reintroduced direct current-view dimension writes: ${_qged_app_dim_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+endfunction()
+
 function(_brlobol_pivot_guard_check_brlobol_mesh_identity)
   foreach(_rel
       include/brlobol/pick_detail.h
@@ -3818,7 +7207,21 @@ function(_brlobol_pivot_guard_check_brlobol_mesh_identity)
       "setNearestFaceVertex"
       "getNearestFaceVertexSlot"
       "getNearestFaceVertexIndex"
-      "faceVertexIndex")
+      "faceVertexIndex"
+      "BRLObolSourceMeshPickResult"
+      "BRLObolRtPickResult"
+      "brlobol_pick_source_full_detail_result"
+      "brlobol_pick_rt_ray"
+      "IMPLICIT_SOLID"
+      "SoBRLSourceMeshPickAction"
+      "setRay"
+      "getSourceBackedFullDetailRequestCount"
+      "getSourceBackedFullDetailRequest"
+      "makeSourceBackedFullDetailLodRequest"
+      "submitSourceBackedFullDetailRequests"
+      "consumeSourceBackedFullDetailResults"
+      "rayIntersectsBounds"
+      "clear")
     string(FIND "${_pick_header}" "${_token}" _idx)
     if(_idx EQUAL -1)
       _brlobol_pivot_guard_fail("include/brlobol/pick_detail.h missing mesh vertex identity token ${_token}")
@@ -3833,7 +7236,30 @@ function(_brlobol_pivot_guard_check_brlobol_mesh_identity)
       "SoBRLPickDetail::getFaceVertexIndex"
       "nearestFaceEdgeSlot"
       "SoBRLPickDetail::setNearestFaceEdge"
-      "SoBRLPickDetail::setNearestFaceVertex")
+      "SoBRLPickDetail::setNearestFaceVertex"
+      "BRLObolSourceMeshPickResult::clear"
+      "BRLObolRtPickResult::clear"
+      "brlobol_pick_rt_ray"
+      "brlobol_pick_rt_hit"
+      "rt_shootray"
+      "RT_HIT_NORMAL"
+      "pick_source_ray_triangle"
+      "pick_source_fill_detail"
+      "brlobol_pick_source_full_detail_result"
+      "pick_source_full_detail_result_valid"
+      "SO_ACTION_SOURCE(SoBRLSourceMeshPickAction)"
+      "SoBRLSourceMeshPickAction::initClass"
+      "SoBRLSourceMeshPickAction::meshShapeAction"
+      "SoBRLSourceMeshPickAction::appendSourceBackedFullDetailRequest"
+      "SoBRLSourceMeshPickAction::rayIntersectsBounds"
+      "pick_action_ray_intersects_box"
+      "SoModelMatrixElement::get"
+      "shape->getPickGeometryPolicy()"
+      "shape->needsSourceBackedFullDetail()"
+      "request.queryRayValid = 1"
+      "request.queryRayOrigin"
+      "request.queryRayDirection"
+      "brlobol_lod_submit_rt_source_full_detail_request")
     string(FIND "${_pick_impl}" "${_token}" _idx)
     if(_idx EQUAL -1)
       _brlobol_pivot_guard_fail("src/libbrlobol/pick_detail.cpp missing mesh vertex identity token ${_token}")
@@ -3916,6 +7342,7 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       include/brlobol/lod_service.h
       include/brlobol/lod_update_action.h
       include/brlobol/mesh_lod_submit_action.h
+      include/brlobol/mesh_residency_action.h
       include/brlobol/export_action.h
       include/brlobol/measure_action.h
       include/brlobol/mesh_shape.h
@@ -3927,6 +7354,7 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       src/libbrlobol/lod_service.cpp
       src/libbrlobol/lod_update_action.cpp
       src/libbrlobol/mesh_lod_submit_action.cpp
+      src/libbrlobol/mesh_residency_action.cpp
       src/libbrlobol/export_action.cpp
       src/libbrlobol/measure_action.cpp
       src/libbrlobol/mesh_shape.cpp
@@ -3964,6 +7392,10 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
   if(_idx EQUAL -1)
     _brlobol_pivot_guard_fail("include/brlobol.h must include brlobol/mesh_lod_submit_action.h")
   endif()
+  string(FIND "${_brlobol_header}" "brlobol/mesh_residency_action.h" _idx)
+  if(_idx EQUAL -1)
+    _brlobol_pivot_guard_fail("include/brlobol.h must include brlobol/mesh_residency_action.h")
+  endif()
 
   file(READ "${BRLCAD_SOURCE_DIR}/include/brlobol/CMakeLists.txt" _brlobol_include_cmake)
   string(FIND "${_brlobol_include_cmake}" "lod_realization.h" _idx)
@@ -3986,6 +7418,10 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
   if(_idx EQUAL -1)
     _brlobol_pivot_guard_fail("include/brlobol/CMakeLists.txt must install mesh_lod_submit_action.h")
   endif()
+  string(FIND "${_brlobol_include_cmake}" "mesh_residency_action.h" _idx)
+  if(_idx EQUAL -1)
+    _brlobol_pivot_guard_fail("include/brlobol/CMakeLists.txt must install mesh_residency_action.h")
+  endif()
 
   file(READ "${BRLCAD_SOURCE_DIR}/src/libbrlobol/CMakeLists.txt" _brlobol_cmake)
   string(FIND "${_brlobol_cmake}" "lod_realization.cpp" _idx)
@@ -3997,6 +7433,7 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "lod_mesh_shape.cpp"
       "lod_update_action.cpp"
       "mesh_lod_submit_action.cpp"
+      "mesh_residency_action.cpp"
       "Threads::Threads")
     string(FIND "${_brlobol_cmake}" "${_token}" _idx)
     if(_idx EQUAL -1)
@@ -4009,9 +7446,12 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "brlobol/lod_mesh_shape.h"
       "brlobol/lod_update_action.h"
       "brlobol/mesh_lod_submit_action.h"
+      "brlobol/mesh_residency_action.h"
       "SoBRLLodMeshShape::initClass"
+      "SoBRLSourceMeshPickAction::initClass"
       "SoBRLLodUpdateAction::initClass"
-      "SoBRLMeshLodSubmitAction::initClass")
+      "SoBRLMeshLodSubmitAction::initClass"
+      "SoBRLMeshResidencyAction::initClass")
     string(FIND "${_brlobol_init_impl}" "${_token}" _idx)
     if(_idx EQUAL -1)
       _brlobol_pivot_guard_fail("src/libbrlobol/init.cpp must initialize staged LoD update action token ${_token}")
@@ -4154,6 +7594,12 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "BRLObolRtMeshLodProvider"
       "brlobol_rt_mesh_lod_provider_task"
       "brlobol_rt_mesh_lod_provider_free"
+      "BRLObolRtSourceFullDetailProvider"
+      "brlobol_rt_source_full_detail_provider_task"
+      "brlobol_rt_source_full_detail_provider_free"
+      "brlobol_lod_rt_source_full_detail_request_from_source_mesh_request"
+      "brlobol_lod_submit_rt_source_full_detail_request"
+      "maxFullDetailFaceCount"
       "BRLObolLodTask"
       "BRLObolLodService"
       "start"
@@ -4163,6 +7609,7 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "isGenerationCancelled"
       "submit"
       "drainResults"
+      "drainMatchingResults"
       "subscribeResultReady"
       "unsubscribeResultReady"
       "inFlightCount"
@@ -4197,12 +7644,25 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "lod_notify_result_ready"
       "subscriberCv"
       "lod_normalize_result"
+      "BRLObolLodService::drainMatchingResults"
       "BRLOBOL_LOD_PROVIDER_CANCELLED"
       "BRLOBOL_LOD_PROVIDER_STALE"
       "brlobol_rt_mesh_lod_provider_task"
       "brlobol_rt_mesh_lod_provider_free"
+      "brlobol_rt_source_full_detail_provider_task"
+      "brlobol_rt_source_full_detail_provider_free"
+      "brlobol_lod_rt_source_full_detail_request_from_source_mesh_request"
+      "brlobol_lod_submit_rt_source_full_detail_request"
       "db_mesh_lod_status"
       "db_mesh_lod_refresh"
+      "rt_db_get_internal"
+      "ID_BOT"
+      "RT_BOT_CK_MAGIC"
+      "BRLOBOL_LOD_RESULT_FULL_DETAIL"
+      "source_query.bounds"
+      "source_query.ray.origin"
+      "source_query.ray.direction"
+      "source_query.tolerance"
       "rt_mesh_lod_has_active_data"
       "rt_mesh_lod_load_level"
       "rt_mesh_lod_info_get"
@@ -4278,6 +7738,58 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
     endif()
   endforeach()
 
+  file(READ "${BRLCAD_SOURCE_DIR}/include/brlobol/mesh_residency_action.h" _mesh_residency_header)
+  foreach(_token
+      "SoBRLMeshResidencyAction"
+      "setMaxResidentMeshBytes"
+      "setEvictDisplayPayloads"
+      "getInitialResidentMeshBytes"
+      "getFinalResidentMeshBytes"
+      "getFreedFullDetailBytes"
+      "getFreedDisplayBytes"
+      "getEvictedFullDetailMeshCount"
+      "getEvictedDisplayMeshCount")
+    string(FIND "${_mesh_residency_header}" "${_token}" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("include/brlobol/mesh_residency_action.h missing mesh residency budget token ${_token}")
+    endif()
+  endforeach()
+  foreach(_pat
+      [[#[ \t]*include[ \t]*[<"]bsg/]]
+      [[(^|[^A-Za-z0-9_])bsg_mesh_lod([^A-Za-z0-9_]|$)]])
+    string(REGEX MATCH "${_pat}" _hit "${_mesh_residency_header}")
+    if(_hit)
+      _brlobol_pivot_guard_fail("include/brlobol/mesh_residency_action.h must not expose BSG LoD APIs: ${_hit}")
+    endif()
+  endforeach()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/src/libbrlobol/mesh_residency_action.cpp" _mesh_residency_impl)
+  foreach(_token
+      "SO_ACTION_SOURCE(SoBRLMeshResidencyAction)"
+      "SoBRLMeshShape"
+      "estimateResidentMeshBytes"
+      "estimateFullDetailMeshBytes"
+      "estimateDisplayMeshBytes"
+      "evictFullDetailMesh"
+      "evictActiveDisplayMesh"
+      "needsSourceBackedFullDetail"
+      "maxResidentMeshBytes"
+      "freedDisplayBytes"
+      "skippedDisplayMeshCount")
+    string(FIND "${_mesh_residency_impl}" "${_token}" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("src/libbrlobol/mesh_residency_action.cpp missing mesh residency budget token ${_token}")
+    endif()
+  endforeach()
+  foreach(_pat
+      [[#[ \t]*include[ \t]*[<"]bsg/]]
+      [[(^|[^A-Za-z0-9_])bsg_mesh_lod([^A-Za-z0-9_]|$)]])
+    string(REGEX MATCH "${_pat}" _hit "${_mesh_residency_impl}")
+    if(_hit)
+      _brlobol_pivot_guard_fail("src/libbrlobol/mesh_residency_action.cpp must not use BSG LoD APIs: ${_hit}")
+    endif()
+  endforeach()
+
   file(READ "${BRLCAD_SOURCE_DIR}/include/brlobol/mesh_lod_submit_action.h" _lod_submit_header)
   foreach(_token
       "SoBRLMeshLodSubmitAction"
@@ -4347,6 +7859,11 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "setGeometryPolicy"
       "getGeometryPolicy"
       "getSkippedLodDisplayMeshCount"
+      "getSourceBackedFullDetailRequestCount"
+      "makeSourceBackedFullDetailLodRequest"
+      "appendSourceBackedFullDetailResult"
+      "submitSourceBackedFullDetailRequests"
+      "consumeSourceBackedFullDetailResults"
       "struct TriangleRecord"
       "lodAvailable"
       "lodActiveLevel"
@@ -4397,6 +7914,12 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "getFullDetailTriangleCount"
       "getFullDetailTriangle"
       "makeLodRequest"
+      "makeSourceMeshRequest"
+      "needsSourceBackedFullDetail"
+      "estimateDisplayMeshBytes"
+      "estimateResidentMeshBytes"
+      "evictFullDetailMesh"
+      "evictActiveDisplayMesh"
       "applyStagedLodResult"
       "clearStagedLodResult")
     string(FIND "${_mesh_header}" "${_token}" _idx)
@@ -4425,6 +7948,10 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "SoBRLMeshShape::setPickGeometryPolicy"
       "SoBRLMeshShape::getPickGeometryPolicy"
       "SoBRLMeshShape::isLodDisplayActive"
+      "SoBRLMeshShape::makeSourceMeshRequest"
+      "SoBRLMeshShape::needsSourceBackedFullDetail"
+      "SoBRLMeshShape::estimateDisplayMeshBytes"
+      "SoBRLMeshShape::evictActiveDisplayMesh"
       "SoBRLMeshShape::updateSourceMeshMetricsFromFields"
       "SoBRLMeshShape::captureFullDetailMesh"
       "SoBRLMeshShape::restoreFullDetailMesh"
@@ -4434,6 +7961,7 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "fullDetailCoordIndex"
       "sourceMeshMetricsValid"
       "sourceMeshBounds"
+      "BRLObolSourceMeshRequest"
       "lodDisplayActive"
       "lodPreserveFullDetail"
       "pickGeometryPolicy"
@@ -4444,6 +7972,33 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
     string(FIND "${_mesh_impl}" "${_token}" _idx)
     if(_idx EQUAL -1)
       _brlobol_pivot_guard_fail("src/libbrlobol/mesh_shape.cpp missing staged LoD mesh-consumption token ${_token}")
+    endif()
+  endforeach()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/include/brlobol/source_mesh_request.h" _source_mesh_request_header)
+  foreach(_token
+      "BRLObolSourceMeshRequest"
+      "sourceName"
+      "sourceType"
+      "sourceId"
+      "faceCount"
+      "pointCount"
+      "bounds"
+      "localToWorld"
+      "queryBoundsValid"
+      "queryBounds"
+      "queryRayValid"
+      "queryRayOrigin"
+      "queryRayDirection"
+      "queryToleranceValid"
+      "queryTolerance"
+      "materialColor"
+      "selected"
+      "lodActiveLevel"
+      "colorOverride")
+    string(FIND "${_source_mesh_request_header}" "${_token}" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("include/brlobol/source_mesh_request.h missing source-backed exact request token ${_token}")
     endif()
   endforeach()
   foreach(_pat
@@ -4484,6 +8039,7 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
 
   file(READ "${BRLCAD_SOURCE_DIR}/include/brlobol/database_source.h" _db_source_header)
   foreach(_token
+      "configureDatabaseSource"
       "lodBotThreshold"
       "lodBotThresholdSensor")
     string(FIND "${_db_source_header}" "${_token}" _idx)
@@ -4498,8 +8054,19 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "SoBRLExportAction::DISPLAY_LEVEL"
       "shape->isLodDisplayActive()"
       "shape->hasFullDetailMesh()"
+      "shape->needsSourceBackedFullDetail()"
       "shape->getFullDetailTriangle"
+      "appendSourceBackedFullDetailRequest"
+      "getSourceBackedFullDetailRequestCount"
+      "makeSourceBackedFullDetailLodRequest"
+      "appendSourceBackedFullDetailResult"
+      "submitSourceBackedFullDetailRequests"
+      "consumeSourceBackedFullDetailResults"
       "skippedLodDisplayMeshCount"
+      "export_source_full_detail_result_valid"
+      "brlobol_lod_rt_source_full_detail_request_from_source_mesh_request"
+      "brlobol_lod_submit_rt_source_full_detail_request"
+      "request.localToWorld = localToWorld"
       "shape->lodAvailable.getValue()"
       "shape->lodActiveLevel.getValue()"
       "record.lodFaceCount"
@@ -4518,7 +8085,12 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "DISPLAY_LEVEL"
       "setGeometryPolicy"
       "getGeometryPolicy"
-      "getSkippedLodDisplayMeshCount")
+      "getSkippedLodDisplayMeshCount"
+      "getSourceBackedFullDetailRequestCount"
+      "makeSourceBackedFullDetailLodRequest"
+      "consumeSourceBackedFullDetailResult"
+      "submitSourceBackedFullDetailRequests"
+      "consumeSourceBackedFullDetailResults")
     string(FIND "${_measure_header}" "${_token}" _idx)
     if(_idx EQUAL -1)
       _brlobol_pivot_guard_fail("include/brlobol/measure_action.h missing LoD geometry policy token ${_token}")
@@ -4531,7 +8103,18 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "SoBRLMeasureAction::DISPLAY_LEVEL"
       "shape->isLodDisplayActive()"
       "shape->hasFullDetailMesh()"
+      "shape->needsSourceBackedFullDetail()"
       "shape->getFullDetailTriangle"
+      "appendSourceBackedFullDetailRequest"
+      "getSourceBackedFullDetailRequestCount"
+      "makeSourceBackedFullDetailLodRequest"
+      "consumeSourceBackedFullDetailResult"
+      "submitSourceBackedFullDetailRequests"
+      "consumeSourceBackedFullDetailResults"
+      "measure_source_full_detail_result_valid"
+      "brlobol_lod_rt_source_full_detail_request_from_source_mesh_request"
+      "brlobol_lod_submit_rt_source_full_detail_request"
+      "request.localToWorld = localToWorld"
       "skippedLodDisplayMeshCount")
     string(FIND "${_measure_impl}" "${_token}" _idx)
     if(_idx EQUAL -1)
@@ -4546,7 +8129,12 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "DISPLAY_LEVEL"
       "setGeometryPolicy"
       "getGeometryPolicy"
-      "getSkippedLodDisplayMeshCount")
+      "getSkippedLodDisplayMeshCount"
+      "getSourceBackedFullDetailRequestCount"
+      "makeSourceBackedFullDetailLodRequest"
+      "consumeSourceBackedFullDetailResult"
+      "submitSourceBackedFullDetailRequests"
+      "consumeSourceBackedFullDetailResults")
     string(FIND "${_snap_header}" "${_token}" _idx)
     if(_idx EQUAL -1)
       _brlobol_pivot_guard_fail("include/brlobol/snap_action.h missing LoD geometry policy token ${_token}")
@@ -4557,9 +8145,23 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
   foreach(_token
       "SoBRLSnapAction::FULL_DETAIL"
       "SoBRLSnapAction::DISPLAY_LEVEL"
+      "snap_source_local_tolerance"
       "shape->isLodDisplayActive()"
       "shape->hasFullDetailMesh()"
+      "shape->needsSourceBackedFullDetail()"
       "shape->getFullDetailTriangle"
+      "appendSourceBackedFullDetailRequest"
+      "getSourceBackedFullDetailRequestCount"
+      "makeSourceBackedFullDetailLodRequest"
+      "consumeSourceBackedFullDetailResult"
+      "submitSourceBackedFullDetailRequests"
+      "consumeSourceBackedFullDetailResults"
+      "snap_source_full_detail_result_valid"
+      "brlobol_lod_rt_source_full_detail_request_from_source_mesh_request"
+      "brlobol_lod_submit_rt_source_full_detail_request"
+      "request.localToWorld = localToWorld"
+      "request.queryBoundsValid = 1"
+      "request.queryToleranceValid = 1"
       "skippedLodDisplayMeshCount")
     string(FIND "${_snap_impl}" "${_token}" _idx)
     if(_idx EQUAL -1)
@@ -4629,7 +8231,9 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "SoBRLExportAction::DISPLAY_LEVEL"
       "SoBRLMeasureAction::DISPLAY_LEVEL"
       "SoBRLSnapAction::FULL_DETAIL"
+      "SoGetBoundingBoxAction"
       "SoRayPickAction"
+      "SoBRLMeshResidencyAction"
       "PICK_DISPLAY_LEVEL"
       "PICK_FULL_DETAIL"
       "setPickGeometryPolicy"
@@ -4648,6 +8252,44 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "isLodDisplayActive"
       "LoD-backed mesh retained full-detail payload after display LoD update"
       "LoD-backed mesh request did not keep source metrics without full-detail payload"
+      "evictActiveDisplayMesh"
+      "active display eviction did not preserve source-backed LoD identity"
+      "evicted active display mesh did not keep source-backed exact export"
+      "evicted active display mesh did not keep source-backed exact measure"
+      "evicted active display mesh did not keep source-backed exact snap"
+      "evicted active display mesh did not keep source-backed exact pick"
+      "test_mesh_residency_budget_action"
+      "mesh residency budget did not evict preserved full detail first"
+      "controller mesh residency budget did not preserve source-backed exact identity"
+      "test_view_controller_mesh_residency_budget_auto"
+      "controller mesh residency budget did not auto-evict applied LoD payload"
+      "setMeshResidencyBudget"
+      "clearMeshResidencyBudget"
+      "hasMeshResidencyBudget"
+      "evictMeshPayloadsToBudget"
+      "getLastMeshBudgetEvictedDisplayMeshCount"
+      "exact export did not request source-backed full-detail LoD mesh"
+      "exact export source-backed request did not convert to RT full-detail LoD request"
+      "exact export did not consume source-backed full-detail LoD result"
+      "exact export did not submit source-backed full-detail LoD request"
+      "exact export source-backed submit helper did not publish stale source result"
+      "exact measure did not request source-backed full-detail LoD mesh"
+      "exact measure source-backed request did not convert to RT full-detail LoD request"
+      "exact measure did not consume source-backed full-detail LoD result"
+      "exact snap did not request source-backed full-detail LoD mesh"
+      "exact snap source-backed request did not carry bounded query metadata"
+      "exact snap source-backed request did not convert to RT full-detail LoD request"
+      "exact snap did not consume source-backed full-detail LoD result"
+      "exact pick did not consume source-backed full-detail LoD result"
+      "SoBRLSourceMeshPickAction"
+      "exact pick action did not collect and consume source-backed full-detail LoD result"
+      "test_rt_exact_pick_provider"
+      "RT exact pick provider did not return implicit comb hit identity"
+      "SoBRLPickDetail::IMPLICIT_SOLID"
+      "source_query.bounds"
+      "source_query.tolerance"
+      "source_query.ray.origin"
+      "source_query.ray.direction"
       "test_mesh_lod_submit_action"
       "make_submit_test_db"
       "BU_DIR_CACHE"
@@ -4712,6 +8354,9 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "test_task_realize_data_cleanup"
       "cacheWriteOrder"
       "drainResults"
+      "drainMatchingResults"
+      "test_filtered_result_drain"
+      "LoD filtered result drain did not isolate requested result"
       "staged_payload_task"
       "brlobol_rt_mesh_lod_provider_task"
       "BRLObolRtMeshLodProvider"
@@ -4723,6 +8368,15 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "cleared_cache_entry"
       "refreshMissing = FALSE"
       "RT mesh LoD provider has no cache payload"
+      "brlobol_rt_source_full_detail_provider_task"
+      "brlobol_lod_rt_source_full_detail_request_from_source_mesh_request"
+      "brlobol_lod_submit_rt_source_full_detail_request"
+      "BRLObolRtSourceFullDetailProvider"
+      "BRLOBOL_LOD_RESULT_FULL_DETAIL"
+      "RT source full-detail provider source metrics changed"
+      "RT source full-detail provider request exceeds full-detail limits"
+      "LoD RT source full-detail helper did not submit source request"
+      "test_rt_source_full_detail_provider_task"
       "mesh.isValid"
       "BRLOBOL_LOD_RESULT_ATTRIBUTES")
     string(FIND "${_lod_service_test}" "${_token}" _idx)
@@ -4840,9 +8494,14 @@ _brlobol_pivot_guard_check_librt_edit_knob_neutralization()
 _brlobol_pivot_guard_check_librt_view_info_neutralization()
 _brlobol_pivot_guard_check_librt_sketch_polygon_neutralization()
 _brlobol_pivot_guard_check_qtcad_obol_test_links()
+_brlobol_pivot_guard_check_qtcad_obol_pick_source_exact()
+_brlobol_pivot_guard_check_qtcad_obol_snap_source_exact()
+_brlobol_pivot_guard_check_qtcad_obol_measure_source_exact()
 _brlobol_pivot_guard_check_qtcad_window_host_adapter()
 _brlobol_pivot_guard_check_qtcad_measure_filter()
 _brlobol_pivot_guard_check_qtcad_selection_api()
+_brlobol_pivot_guard_check_qtcad_view_snapshot_adapters()
+_brlobol_pivot_guard_check_qged_view_info_rt_adapter()
 
 if("${BRLOBOL_PIVOT_GUARD_MODE}" STREQUAL "strict")
   file(GLOB_RECURSE _files LIST_DIRECTORIES false

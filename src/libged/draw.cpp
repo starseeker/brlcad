@@ -292,7 +292,7 @@ csg_wireframe_update(bsg_scene_ref ref, struct bsg_view *v, int flag)
     point_t bmin = VINIT_ZERO;
     point_t bmax = VINIT_ZERO;
     bsg_scene_bounds(ref, bmin, bmax);
-    if (!(v->gv_perspective > SMALL_FASTF) && !bg_sat_aabb_obb(bmin, bmax, v->obb_center, v->obb_extent1, v->obb_extent2, v->obb_extent3))
+    if (!(ged_draw_view_perspective_from_bsg(v) > SMALL_FASTF) && !bg_sat_aabb_obb(bmin, bmax, v->obb_center, v->obb_extent1, v->obb_extent2, v->obb_extent3))
 	return 0;
 
     bool rework = (flag) ? true : false;
@@ -306,8 +306,9 @@ csg_wireframe_update(bsg_scene_ref ref, struct bsg_view *v, int flag)
     if (!rework) {
 	// Check view scale
 	fastf_t view_scale = ged_draw_scene_ref_realization_view_scale(ref);
+	fastf_t current_view_scale = ged_draw_view_scale_from_bsg(v);
 	fastf_t delta = view_scale * 0.1/view_scale;
-	if (!NEAR_EQUAL(view_scale, v->gv_scale, delta))
+	if (!NEAR_EQUAL(view_scale, current_view_scale, delta))
 	    rework = true;
     }
     if (!rework)

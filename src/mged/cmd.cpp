@@ -56,6 +56,7 @@ extern "C" {
 #include "bsg/util.h"
 #include "rt/edit.h"
 #include "rt/geom.h"
+#include "rt/view_legacy_bsg.h"
 #include "ged.h"
 
 #include "tcl.h"
@@ -695,20 +696,25 @@ cmd_ged_simulate_wrapper(ClientData clientData, Tcl_Interp *interpreter, int arg
     if (has_output && !has_view && s->gedp && s->gedp->ged_gvp) {
 	struct bsg_view *bv = s->gedp->ged_gvp;
 	quat_t quat;
-	quat_mat2quat(quat, bv->gv_rotation);
+	point_t eye_pos;
+	fastf_t view_size;
+
+	rt_view_orientation_quat_from_bsg(quat, bv);
+	rt_view_eye_pos_from_bsg(eye_pos, bv);
+	view_size = rt_view_size_from_bsg(bv);
 
 	/* Build "--view-quat=x,y,z,w" argument */
 	snprintf(quat_buf, sizeof(quat_buf),
 		 "--view-quat=%.10g,%.10g,%.10g,%.10g",
 		 quat[0], quat[1], quat[2], quat[3]);
 
-	/* Build "--view-eye=x,y,z" argument from gv_eye_pos */
+	/* Build "--view-eye=x,y,z" argument */
 	snprintf(eye_buf, sizeof(eye_buf),
 		 "--view-eye=%.6g,%.6g,%.6g",
-		 bv->gv_eye_pos[0], bv->gv_eye_pos[1], bv->gv_eye_pos[2]);
+		 eye_pos[0], eye_pos[1], eye_pos[2]);
 
 	/* Build "--view-size=S" argument */
-	snprintf(size_buf, sizeof(size_buf), "--view-size=%.6g", bv->gv_size);
+	snprintf(size_buf, sizeof(size_buf), "--view-size=%.6g", view_size);
 
 	new_argc = argc + 3; /* three extra arguments */
 	injected_argv = (char **)bu_calloc((size_t)(new_argc + 1),
@@ -2473,7 +2479,7 @@ cmd_blast(ClientData clientData, Tcl_Interp *UNUSED(interpreter), int argc, cons
 	    (void)mged_svbase(s);
 
 	    for (BU_LIST_FOR(vrp, view_ring, &view_state->vs_headView.l)) {
-		vrp->vr_scale = view_state->vs_gvp->gv_scale;
+		vrp->vr_scale = rt_view_scale_from_bsg(view_state->vs_gvp);
 	    }
 	}
     }
@@ -2502,8 +2508,7 @@ cmd_draw(ClientData clientData, Tcl_Interp *UNUSED(interpreter), int argc, const
 	gvp = s->gedp->ged_gvp;
 
     if (gvp && DMP) {
-	gvp->gv_width = dm_get_width(DMP);
-	gvp->gv_height = dm_get_height(DMP);
+	rt_view_dimensions_set_bsg(gvp, dm_get_width(DMP), dm_get_height(DMP));
     }
 
     return edit_com(s, argc, argv);
@@ -2705,29 +2710,29 @@ struct _view_cache {
     int   valid;
 
     /* Scalars */
-    fastf_t gv_scale;
-    fastf_t gv_i_scale;
-    fastf_t gv_a_scale;
-    fastf_t gv_size;
-    fastf_t gv_isize;
-    fastf_t gv_perspective;
-    fastf_t gv_local2base;
-    fastf_t gv_base2local;
-    char    gv_coord;
-    char    gv_rotate_about;
+    fastf_t scale;
+    fastf_t initial_scale;
+    fastf_t absolute_scale;
+    fastf_t size;
+    fastf_t inverse_size;
+    fastf_t perspective;
+    fastf_t local2base;
+    fastf_t base2local;
+    char    coord;
+    char    rotate_about;
 
     /* Vectors */
-    vect_t gv_eye_pos;
-    vect_t gv_keypoint;
-    vect_t gv_aet;
+    vect_t eye_pos;
+    vect_t keypoint;
+    vect_t aet;
 
     /* Matrices */
-    mat_t gv_rotation;
-    mat_t gv_center;
-    mat_t gv_model2view;
-    mat_t gv_view2model;
-    mat_t gv_pmodel2view;
-    mat_t gv_pmat;
+    mat_t rotation;
+    mat_t center;
+    mat_t model2view;
+    mat_t view2model;
+    mat_t pmodel2view;
+    mat_t pmat;
 
     /* Knob state (optional) */
     int have_knobs;
@@ -2740,27 +2745,27 @@ _view_cache_save(struct _view_cache *c, struct bsg_view *v, int include_knobs)
     if (!c || !v) return;
     c->valid = 1;
 
-    c->gv_scale       = v->gv_scale;
-    c->gv_i_scale     = v->gv_i_scale;
-    c->gv_a_scale     = v->gv_a_scale;
-    c->gv_size        = v->gv_size;
-    c->gv_isize       = v->gv_isize;
-    c->gv_perspective = v->gv_perspective;
-    c->gv_local2base  = v->gv_local2base;
-    c->gv_base2local  = v->gv_base2local;
-    c->gv_coord       = v->gv_coord;
-    c->gv_rotate_about= v->gv_rotate_about;
+    c->scale       = rt_view_scale_from_bsg(v);
+    c->initial_scale = rt_view_initial_scale_from_bsg(v);
+    c->absolute_scale = rt_view_absolute_scale_from_bsg(v);
+    c->size        = rt_view_size_from_bsg(v);
+    c->inverse_size = rt_view_inverse_size_from_bsg(v);
+    c->perspective = rt_view_perspective_from_bsg(v);
+    c->local2base  = rt_view_local2base_from_bsg(v);
+    c->base2local  = rt_view_base2local_from_bsg(v);
+    c->coord       = rt_view_coord_from_bsg(v);
+    c->rotate_about= rt_view_rotate_about_from_bsg(v);
 
-    VMOVE(c->gv_eye_pos,  v->gv_eye_pos);
-    VMOVE(c->gv_keypoint, v->gv_keypoint);
-    VMOVE(c->gv_aet,      v->gv_aet);
+    rt_view_eye_pos_from_bsg(c->eye_pos, v);
+    rt_view_keypoint_from_bsg(c->keypoint, v);
+    rt_view_aet_from_bsg(c->aet, v);
 
-    MAT_COPY(c->gv_rotation,    v->gv_rotation);
-    MAT_COPY(c->gv_center,      v->gv_center);
-    MAT_COPY(c->gv_model2view,  v->gv_model2view);
-    MAT_COPY(c->gv_view2model,  v->gv_view2model);
-    MAT_COPY(c->gv_pmodel2view, v->gv_pmodel2view);
-    MAT_COPY(c->gv_pmat,        v->gv_pmat);
+    rt_view_rotation_from_bsg(c->rotation, v);
+    rt_view_center_from_bsg(c->center, v);
+    rt_view_model2view_from_bsg(c->model2view, v);
+    rt_view_view2model_from_bsg(c->view2model, v);
+    rt_view_pmodel2view_from_bsg(c->pmodel2view, v);
+    rt_view_pmat_from_bsg(c->pmat, v);
 
     c->have_knobs = include_knobs;
     if (include_knobs) {
@@ -2773,27 +2778,26 @@ _view_cache_restore(const struct _view_cache *c, struct bsg_view *v)
 {
     if (!c || !v || !c->valid) return;
 
-    v->gv_scale       = c->gv_scale;
-    v->gv_i_scale     = c->gv_i_scale;
-    v->gv_a_scale     = c->gv_a_scale;
-    v->gv_size        = c->gv_size;
-    v->gv_isize       = c->gv_isize;
-    v->gv_perspective = c->gv_perspective;
-    v->gv_local2base  = c->gv_local2base;
-    v->gv_base2local  = c->gv_base2local;
-    v->gv_coord       = c->gv_coord;
-    v->gv_rotate_about= c->gv_rotate_about;
+    rt_view_scale_state_set_bsg(v,
+	    c->scale, c->initial_scale, c->absolute_scale,
+	    c->size, c->inverse_size);
+    rt_view_unit_conversion_set_bsg(v, c->local2base, c->base2local);
+    rt_view_perspective_set_bsg(v, c->perspective);
+    rt_view_coord_set_bsg(v, c->coord);
+    rt_view_rotate_about_set_bsg(v, c->rotate_about);
 
-    VMOVE(v->gv_eye_pos,  c->gv_eye_pos);
-    VMOVE(v->gv_keypoint, c->gv_keypoint);
-    VMOVE(v->gv_aet,      c->gv_aet);
+    rt_view_eye_pos_set_bsg(v, c->eye_pos);
+    rt_view_keypoint_set_bsg(v, c->keypoint);
+    rt_view_aet_state_set_bsg(v, c->aet);
 
-    MAT_COPY(v->gv_rotation,    c->gv_rotation);
-    MAT_COPY(v->gv_center,      c->gv_center);
-    MAT_COPY(v->gv_model2view,  c->gv_model2view);
-    MAT_COPY(v->gv_view2model,  c->gv_view2model);
-    MAT_COPY(v->gv_pmodel2view, c->gv_pmodel2view);
-    MAT_COPY(v->gv_pmat,        c->gv_pmat);
+    rt_view_rotation_set_bsg(v, c->rotation);
+    point_t view_center;
+    MAT_DELTAS_GET_NEG(view_center, c->center);
+    rt_view_center_vec_set_bsg(v, view_center);
+    rt_view_model2view_set_bsg(v, c->model2view);
+    rt_view_view2model_set_bsg(v, c->view2model);
+    rt_view_pmodel2view_set_bsg(v, c->pmodel2view);
+    rt_view_pmat_set_bsg(v, c->pmat);
 
     if (c->have_knobs) {
 	v->k = c->k;
@@ -2805,29 +2809,43 @@ _view_copy_to_staging(struct bsg_view *dst, struct bsg_view *src, struct mged_st
 {
     if (!dst || !src) return;
 
-    dst->gv_scale       = src->gv_scale;
-    dst->gv_i_scale     = src->gv_i_scale;
-    dst->gv_a_scale     = src->gv_a_scale;
-    dst->gv_size        = src->gv_size;
-    dst->gv_isize       = src->gv_isize;
-    dst->gv_coord       = src->gv_coord;
-    dst->gv_rotate_about= src->gv_rotate_about;
-    dst->gv_perspective = src->gv_perspective;
+    rt_view_scale_state_set_bsg(dst,
+	    rt_view_scale_from_bsg(src),
+	    rt_view_initial_scale_from_bsg(src),
+	    rt_view_absolute_scale_from_bsg(src),
+	    rt_view_size_from_bsg(src),
+	    rt_view_inverse_size_from_bsg(src));
+    rt_view_coord_set_bsg(dst, rt_view_coord_from_bsg(src));
+    rt_view_rotate_about_set_bsg(dst, rt_view_rotate_about_from_bsg(src));
+    rt_view_perspective_set_bsg(dst, rt_view_perspective_from_bsg(src));
 
     /* Update db unit conversions */
-    dst->gv_local2base = (s->dbip) ? s->dbip->dbi_local2base : 1.0;
-    dst->gv_base2local = (s->dbip) ? s->dbip->dbi_base2local : 1.0;
+    rt_view_unit_conversion_set_bsg(dst,
+	    (s->dbip) ? s->dbip->dbi_local2base : 1.0,
+	    (s->dbip) ? s->dbip->dbi_base2local : 1.0);
 
-    VMOVE(dst->gv_eye_pos,  src->gv_eye_pos);
-    VMOVE(dst->gv_keypoint, src->gv_keypoint);
-    VMOVE(dst->gv_aet,      src->gv_aet);
+    point_t view_point;
+    rt_view_eye_pos_from_bsg(view_point, src);
+    rt_view_eye_pos_set_bsg(dst, view_point);
+    rt_view_keypoint_from_bsg(view_point, src);
+    rt_view_keypoint_set_bsg(dst, view_point);
+    rt_view_aet_from_bsg(view_point, src);
+    rt_view_aet_state_set_bsg(dst, view_point);
 
-    MAT_COPY(dst->gv_rotation,    src->gv_rotation);
-    MAT_COPY(dst->gv_center,      src->gv_center);
-    MAT_COPY(dst->gv_model2view,  src->gv_model2view);
-    MAT_COPY(dst->gv_view2model,  src->gv_view2model);
-    MAT_COPY(dst->gv_pmodel2view, src->gv_pmodel2view);
-    MAT_COPY(dst->gv_pmat,        src->gv_pmat);
+    mat_t view_mat;
+    rt_view_rotation_from_bsg(view_mat, src);
+    rt_view_rotation_set_bsg(dst, view_mat);
+    rt_view_center_from_bsg(view_mat, src);
+    MAT_DELTAS_GET_NEG(view_point, view_mat);
+    rt_view_center_vec_set_bsg(dst, view_point);
+    rt_view_model2view_from_bsg(view_mat, src);
+    rt_view_model2view_set_bsg(dst, view_mat);
+    rt_view_view2model_from_bsg(view_mat, src);
+    rt_view_view2model_set_bsg(dst, view_mat);
+    rt_view_pmodel2view_from_bsg(view_mat, src);
+    rt_view_pmodel2view_set_bsg(dst, view_mat);
+    rt_view_pmat_from_bsg(view_mat, src);
+    rt_view_pmat_set_bsg(dst, view_mat);
 
     if (include_knobs) {
 	dst->k = src->k;
@@ -2839,25 +2857,38 @@ _view_copy_from_staging(struct bsg_view *dst, struct bsg_view *src, int include_
 {
     if (!dst || !src) return;
 
-    dst->gv_scale       = src->gv_scale;
-    dst->gv_i_scale     = src->gv_i_scale;
-    dst->gv_a_scale     = src->gv_a_scale;
-    dst->gv_size        = src->gv_size;
-    dst->gv_isize       = src->gv_isize;
-    dst->gv_coord       = src->gv_coord;
-    dst->gv_rotate_about= src->gv_rotate_about;
-    dst->gv_perspective = src->gv_perspective;
+    rt_view_scale_state_set_bsg(dst,
+	    rt_view_scale_from_bsg(src),
+	    rt_view_initial_scale_from_bsg(src),
+	    rt_view_absolute_scale_from_bsg(src),
+	    rt_view_size_from_bsg(src),
+	    rt_view_inverse_size_from_bsg(src));
+    rt_view_coord_set_bsg(dst, rt_view_coord_from_bsg(src));
+    rt_view_rotate_about_set_bsg(dst, rt_view_rotate_about_from_bsg(src));
+    rt_view_perspective_set_bsg(dst, rt_view_perspective_from_bsg(src));
 
-    VMOVE(dst->gv_eye_pos,  src->gv_eye_pos);
-    VMOVE(dst->gv_keypoint, src->gv_keypoint);
-    VMOVE(dst->gv_aet,      src->gv_aet);
+    point_t view_point;
+    rt_view_eye_pos_from_bsg(view_point, src);
+    rt_view_eye_pos_set_bsg(dst, view_point);
+    rt_view_keypoint_from_bsg(view_point, src);
+    rt_view_keypoint_set_bsg(dst, view_point);
+    rt_view_aet_from_bsg(view_point, src);
+    rt_view_aet_state_set_bsg(dst, view_point);
 
-    MAT_COPY(dst->gv_rotation,    src->gv_rotation);
-    MAT_COPY(dst->gv_center,      src->gv_center);
-    MAT_COPY(dst->gv_model2view,  src->gv_model2view);
-    MAT_COPY(dst->gv_view2model,  src->gv_view2model);
-    MAT_COPY(dst->gv_pmodel2view, src->gv_pmodel2view);
-    MAT_COPY(dst->gv_pmat,        src->gv_pmat);
+    mat_t view_mat;
+    rt_view_rotation_from_bsg(view_mat, src);
+    rt_view_rotation_set_bsg(dst, view_mat);
+    rt_view_center_from_bsg(view_mat, src);
+    MAT_DELTAS_GET_NEG(view_point, view_mat);
+    rt_view_center_vec_set_bsg(dst, view_point);
+    rt_view_model2view_from_bsg(view_mat, src);
+    rt_view_model2view_set_bsg(dst, view_mat);
+    rt_view_view2model_from_bsg(view_mat, src);
+    rt_view_view2model_set_bsg(dst, view_mat);
+    rt_view_pmodel2view_from_bsg(view_mat, src);
+    rt_view_pmodel2view_set_bsg(dst, view_mat);
+    rt_view_pmat_from_bsg(view_mat, src);
+    rt_view_pmat_set_bsg(dst, view_mat);
 
     if (include_knobs) {
 	dst->k = src->k;
@@ -2910,30 +2941,58 @@ _view_mutation_hash(struct mged_state *ms, struct bsg_view *v)
     struct bu_data_hash_state *state = bu_data_hash_create();
     if (!state) return 0ULL;
 
+    fastf_t view_scale = rt_view_scale_from_bsg(v);
+    fastf_t view_initial_scale = rt_view_initial_scale_from_bsg(v);
+    fastf_t view_absolute_scale = rt_view_absolute_scale_from_bsg(v);
+    fastf_t view_size = rt_view_size_from_bsg(v);
+    fastf_t view_isize = rt_view_inverse_size_from_bsg(v);
+    fastf_t view_perspective = rt_view_perspective_from_bsg(v);
+    mat_t view_center;
+    mat_t view_rotation;
+    mat_t model2view;
+    mat_t view2model;
+    mat_t pmodel2view;
+    mat_t pmat;
+    vect_t eye_pos;
+    vect_t keypoint;
+    vect_t aet;
+    char coord = rt_view_coord_from_bsg(v);
+    char rotate_about = rt_view_rotate_about_from_bsg(v);
+
+    rt_view_center_from_bsg(view_center, v);
+    rt_view_rotation_from_bsg(view_rotation, v);
+    rt_view_model2view_from_bsg(model2view, v);
+    rt_view_view2model_from_bsg(view2model, v);
+    rt_view_pmodel2view_from_bsg(pmodel2view, v);
+    rt_view_pmat_from_bsg(pmat, v);
+    rt_view_eye_pos_from_bsg(eye_pos, v);
+    rt_view_keypoint_from_bsg(keypoint, v);
+    rt_view_aet_from_bsg(aet, v);
+
     /* Core scalar transforms */
-    bu_data_hash_update(state, &v->gv_scale, sizeof(v->gv_scale));
-    bu_data_hash_update(state, &v->gv_i_scale, sizeof(v->gv_i_scale));
-    bu_data_hash_update(state, &v->gv_a_scale, sizeof(v->gv_a_scale));
-    bu_data_hash_update(state, &v->gv_size, sizeof(v->gv_size));
-    bu_data_hash_update(state, &v->gv_isize, sizeof(v->gv_isize));
-    bu_data_hash_update(state, &v->gv_perspective, sizeof(v->gv_perspective));
+    bu_data_hash_update(state, &view_scale, sizeof(view_scale));
+    bu_data_hash_update(state, &view_initial_scale, sizeof(view_initial_scale));
+    bu_data_hash_update(state, &view_absolute_scale, sizeof(view_absolute_scale));
+    bu_data_hash_update(state, &view_size, sizeof(view_size));
+    bu_data_hash_update(state, &view_isize, sizeof(view_isize));
+    bu_data_hash_update(state, &view_perspective, sizeof(view_perspective));
 
     /* Orientation / position / projection related */
-    bu_data_hash_update(state, &v->gv_center, sizeof(mat_t));
-    bu_data_hash_update(state, &v->gv_rotation, sizeof(mat_t));
-    bu_data_hash_update(state, &v->gv_model2view, sizeof(mat_t));
-    bu_data_hash_update(state, &v->gv_view2model, sizeof(mat_t));
-    bu_data_hash_update(state, &v->gv_pmodel2view, sizeof(mat_t));
-    bu_data_hash_update(state, &v->gv_pmat, sizeof(mat_t));
+    bu_data_hash_update(state, &view_center, sizeof(mat_t));
+    bu_data_hash_update(state, &view_rotation, sizeof(mat_t));
+    bu_data_hash_update(state, &model2view, sizeof(mat_t));
+    bu_data_hash_update(state, &view2model, sizeof(mat_t));
+    bu_data_hash_update(state, &pmodel2view, sizeof(mat_t));
+    bu_data_hash_update(state, &pmat, sizeof(mat_t));
 
     /* Camera descriptive vectors */
-    bu_data_hash_update(state, &v->gv_eye_pos, sizeof(vect_t));
-    bu_data_hash_update(state, &v->gv_keypoint, sizeof(vect_t));
-    bu_data_hash_update(state, &v->gv_aet, sizeof(vect_t));
+    bu_data_hash_update(state, &eye_pos, sizeof(vect_t));
+    bu_data_hash_update(state, &keypoint, sizeof(vect_t));
+    bu_data_hash_update(state, &aet, sizeof(vect_t));
 
     /* Coordinate & rotate about modes */
-    bu_data_hash_update(state, &v->gv_coord, sizeof(char));
-    bu_data_hash_update(state, &v->gv_rotate_about, sizeof(char));
+    bu_data_hash_update(state, &coord, sizeof(char));
+    bu_data_hash_update(state, &rotate_about, sizeof(char));
 
     /* Knob state (rates + absolute values + flags + origins) */
     bsg_knobs_hash(&v->k, state);
@@ -3010,8 +3069,9 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
 	created_temp = 1;
 	/* Carry over dimensions for screen-dependent ops */
 	if (mged_view) {
-	    staging->gv_width  = mged_view->gv_width;
-	    staging->gv_height = mged_view->gv_height;
+	    rt_view_dimensions_set_bsg(staging,
+		    rt_view_width_from_bsg(mged_view),
+		    rt_view_height_from_bsg(mged_view));
 	}
     }
 
@@ -3033,8 +3093,9 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
 	_view_copy_to_staging(staging, mged_view, s, is_knob);
     } else {
 	/* Shared path: ensure conversions up to date */
-	staging->gv_local2base = (s->dbip) ? s->dbip->dbi_local2base : 1.0;
-	staging->gv_base2local = (s->dbip) ? s->dbip->dbi_base2local : 1.0;
+	rt_view_unit_conversion_set_bsg(staging,
+		(s->dbip) ? s->dbip->dbi_local2base : 1.0,
+		(s->dbip) ? s->dbip->dbi_base2local : 1.0);
     }
 
     /* For knob operations, ensure the staging (or shared) bsg_view's knob struct

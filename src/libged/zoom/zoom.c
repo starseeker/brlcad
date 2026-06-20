@@ -23,15 +23,16 @@
 #include "bsg/util.h"
 #include "ged.h"
 #include "rt/view.h"
+#include "rt/view_legacy_bsg.h"
 
 static int
 do_zoom(struct ged *gedp, double sf)
 {
-    gedp->ged_gvp->gv_scale /= sf;
-    if (gedp->ged_gvp->gv_scale < RT_VIEW_MIN_SCALE)
-	gedp->ged_gvp->gv_scale = RT_VIEW_MIN_SCALE;
-    gedp->ged_gvp->gv_size = 2.0 * gedp->ged_gvp->gv_scale;
-    gedp->ged_gvp->gv_isize = 1.0 / gedp->ged_gvp->gv_size;
+    fastf_t view_scale = rt_view_scale_from_bsg(gedp->ged_gvp) / sf;
+    if (view_scale < RT_VIEW_MIN_SCALE)
+	view_scale = RT_VIEW_MIN_SCALE;
+
+    rt_view_scale_set_bsg(gedp->ged_gvp, view_scale);
     bsg_update(gedp->ged_gvp);
 
     return BRLCAD_OK;

@@ -36,6 +36,7 @@
 #include "vmath.h"
 #include "nmg.h"
 #include "rt/geom.h"
+#include "rt/view_legacy_bsg.h"
 #include "ged.h"
 #include "wdb.h"
 #include "ged/event_txn.h"
@@ -137,9 +138,14 @@ _ged_pipe_append_pnt_common(struct ged *gedp, int argc, const char *argv[], stru
     else
 	prevpp = BU_LIST_FIRST(wdb_pipe_pnt, &pipeip->pipe_segs_head);
 
-    MAT4X3PNT(view_pp_coord, gedp->ged_gvp->gv_model2view, prevpp->pp_coord);
+    mat_t model2view;
+    mat_t view2model;
+    rt_view_model2view_from_bsg(model2view, gedp->ged_gvp);
+    rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
+
+    MAT4X3PNT(view_pp_coord, model2view, prevpp->pp_coord);
     view_ps_pt[Z] = view_pp_coord[Z];
-    MAT4X3PNT(ps_pt, gedp->ged_gvp->gv_view2model, view_ps_pt);
+    MAT4X3PNT(ps_pt, view2model, view_ps_pt);
 
     if ((*func)(pipeip, (struct wdb_pipe_pnt *)NULL, ps_pt) == (struct wdb_pipe_pnt *)NULL) {
 	rt_db_free_internal(&intern);
@@ -322,8 +328,10 @@ ged_find_pipe_pnt_nearest_pnt_core(struct ged *gedp, int argc, const char *argv[
 	return BRLCAD_ERROR;
     }
 
+    mat_t view2model;
+    rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
     nearest = rt_pipe_find_pnt_nearest_pnt(&((struct rt_pipe_internal *)intern.idb_ptr)->pipe_segs_head,
-				     model_pt, gedp->ged_gvp->gv_view2model);
+				     model_pt, view2model);
     seg_i = rt_pipe_get_i_seg((struct rt_pipe_internal *)intern.idb_ptr, nearest);
     rt_db_free_internal(&intern);
 

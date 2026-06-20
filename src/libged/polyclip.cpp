@@ -33,6 +33,7 @@
 #include "bsg/util.h"
 #include "ged.h"
 #include "ged/event_txn.h"
+#include "rt/view_legacy_bsg.h"
 
 int
 ged_export_polygon(struct ged *gedp, bsg_data_polygon_state *gdpsp, size_t polygon_i, const char *sname)
@@ -317,9 +318,10 @@ ged_polygons_overlap(struct ged *gedp, struct bg_polygon *polyA, struct bg_polyg
     struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
 
     plane_t pl;
-    bsg_view_plane(&pl, gedp->ged_gvp);
+    rt_view_plane_from_bsg(&pl, gedp->ged_gvp);
 
-    return bg_polygons_overlap(polyA, polyB, &pl, &wdbp->wdb_tol, gedp->ged_gvp->gv_scale);
+    fastf_t view_scale = rt_view_scale_from_bsg(gedp->ged_gvp);
+    return bg_polygons_overlap(polyA, polyB, &pl, &wdbp->wdb_tol, view_scale);
 }
 
 static int
@@ -360,6 +362,11 @@ ged_polygon_fill_segments(struct ged *gedp, struct bg_polygon *poly, vect2d_t vf
     static size_t isectSize = 8;
     static int maxTweaks = 10;
     struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
+    mat_t model2view;
+    mat_t view2model;
+
+    rt_view_model2view_from_bsg(model2view, gedp->ged_gvp);
+    rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -386,7 +393,7 @@ ged_polygon_fill_segments(struct ged *gedp, struct bg_polygon *poly, vect2d_t vf
 	for (j = 0; j < poly->contour[i].num_points; ++j) {
 	    point_t vpoint;
 
-	    MAT4X3PNT(vpoint, gedp->ged_gvp->gv_model2view, poly->contour[i].point[j]);
+	    MAT4X3PNT(vpoint, model2view, poly->contour[i].point[j]);
 	    V2MOVE(poly_2d.p_contour[i].pc_point[j], vpoint);
 	    vZ = vpoint[Z];
 	}
@@ -469,7 +476,7 @@ ged_polygon_fill_segments(struct ged *gedp, struct bg_polygon *poly, vect2d_t vf
 		for (i = 0; i < final_icount; ++i) {
 		    V2MOVE(pt, final_isect2[i]);
 		    pt[Z] = vZ;
-		    MAT4X3PNT(hit_pt, gedp->ged_gvp->gv_view2model, pt);
+		    MAT4X3PNT(hit_pt, view2model, pt);
 		    bu_vls_printf(&result_vls, "{%lf %lf %lf} ", V3ARGS(hit_pt));
 		}
 	    } else if (tweakCount < maxTweaks) {
@@ -558,7 +565,7 @@ ged_polygon_fill_segments(struct ged *gedp, struct bg_polygon *poly, vect2d_t vf
 		for (i = 0; i < final_icount; ++i) {
 		    V2MOVE(pt, final_isect2[i]);
 		    pt[Z] = vZ;
-		    MAT4X3PNT(hit_pt, gedp->ged_gvp->gv_view2model, pt);
+		    MAT4X3PNT(hit_pt, view2model, pt);
 		    bu_vls_printf(&result_vls, "{%lf %lf %lf} ", V3ARGS(hit_pt));
 		}
 	    } else if (tweakCount < maxTweaks) {

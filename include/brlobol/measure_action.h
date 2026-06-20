@@ -10,6 +10,8 @@
 #define BRLOBOL_MEASURE_ACTION_H
 
 #include "brlobol/defines.h"
+#include "brlobol/lod_realization.h"
+#include "brlobol/source_mesh_request.h"
 
 #include <Inventor/SbBox.h>
 #include <Inventor/SbMatrix.h>
@@ -17,6 +19,12 @@
 #include <Inventor/SbVec3f.h>
 #include <Inventor/actions/SoAction.h>
 #include <Inventor/actions/SoSubAction.h>
+
+#include <vector>
+
+class BRLObolLodService;
+class SoBRLMeshShape;
+struct db_i;
 
 class BRLOBOL_EXPORT SoBRLMeasureAction : public SoAction {
     typedef SoAction inherited;
@@ -67,6 +75,22 @@ public:
     void setGeometryPolicy(GeometryPolicy policy);
     GeometryPolicy getGeometryPolicy(void) const;
     unsigned int getSkippedLodDisplayMeshCount(void) const;
+    int getSourceBackedFullDetailRequestCount(void) const;
+    const BRLObolSourceMeshRequest &getSourceBackedFullDetailRequest(int index) const;
+    SbBool makeSourceBackedFullDetailLodRequest(int index,
+	    BRLObolLodRequest &request,
+	    const BRLObolLodRequest *templateRequest = 0) const;
+    SbBool consumeSourceBackedFullDetailResult(
+	    const BRLObolSourceMeshRequest &sourceRequest,
+	    const BRLObolLodResult &result);
+    int submitSourceBackedFullDetailRequests(BRLObolLodService *service,
+	    uint64_t generation, struct db_i *dbip,
+	    const BRLObolLodRequest *templateRequest = 0,
+	    uint64_t maxFullDetailFaceCount = 0,
+	    uint64_t maxFullDetailPointCount = 0) const;
+    int consumeSourceBackedFullDetailResults(
+	    const std::vector<BRLObolLodResult> &results,
+	    const BRLObolLodRequest *templateRequest = 0);
 
     SbBool hasSegments(void) const;
     int getShapeCount(void) const;
@@ -101,6 +125,8 @@ private:
     static void meshShapeAction(SoAction *action, SoNode *node);
 
     void resetResults(void);
+    void appendSourceBackedFullDetailRequest(const SoBRLMeshShape *shape,
+	    const SbMatrix &localToWorld);
     void measureSegment(const SbString &path, int primitiveIndex,
 	    const SbVec3f &a, const SbVec3f &b);
     void measureTriangle(const SbString &path, int primitiveIndex,
@@ -138,6 +164,7 @@ private:
     HighlightFilter highlightFilter;
     GeometryPolicy geometryPolicy;
     unsigned int skippedLodDisplayMeshCount;
+    std::vector<BRLObolSourceMeshRequest> sourceBackedFullDetailRequests;
     SbBool haveQueryPoint;
     SbBool haveNearestPrimitive;
     SbBool haveAngle;

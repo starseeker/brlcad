@@ -52,6 +52,18 @@ QTCAD_EXPORT int qg_obol_snap_point(QgView *display,
 	uint32_t enabledKinds,
 	QgObolSnapRecord &record);
 
+/**
+ * Snap @p query using exact full-detail mesh policy.  LoD-backed meshes with
+ * no resident full-detail payload consume matching ready source-backed LoD
+ * results, or submit nonblocking source-backed full-detail requests when a
+ * database source and LoD service are available.
+ */
+QTCAD_EXPORT int qg_obol_snap_point_full_detail(QgView *display,
+	const SbVec3f &query,
+	float tolerance,
+	uint32_t enabledKinds,
+	QgObolSnapRecord &record);
+
 #endif /* QGOBOLSNAP_H */
 
 // Local Variables:

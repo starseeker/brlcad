@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "rt/view_legacy_bsg.h"
+
 #include "../ged_private.h"
 #include "./ged_view.h"
 
@@ -48,7 +50,7 @@ ged_quat_core(struct ged *gedp, int argc, const char *argv[])
 
     /* return Viewrot as a quaternion */
     if (argc == 1) {
-	quat_mat2quat(quat, gedp->ged_gvp->gv_rotation);
+	rt_view_orientation_quat_from_bsg(quat, gedp->ged_gvp);
 	bu_vls_printf(gedp->ged_result_str, "%.12g %.12g %.12g %.12g", V4ARGS(quat));
 	return BRLCAD_OK;
     }
@@ -70,7 +72,9 @@ ged_quat_core(struct ged *gedp, int argc, const char *argv[])
     }
     HMOVE(quat, scan);
 
-    quat_quat2mat(gedp->ged_gvp->gv_rotation, quat);
+    mat_t rotation;
+    quat_quat2mat(rotation, quat);
+    rt_view_rotation_set_bsg(gedp->ged_gvp, rotation);
     bsg_update(gedp->ged_gvp);
 
     return BRLCAD_OK;

@@ -30,6 +30,7 @@
 #include "../../libbg/RTree.h"
 #include "bu/cmd.h"
 #include "brep/defines.h"
+#include "rt/view_legacy_bsg.h"
 #include "./ged_brep.h"
 
 struct _ged_brep_ipick {
@@ -53,6 +54,31 @@ _brep_pick_msgs(void *bs, int argc, const char **argv, const char *us, const cha
     return 0;
 }
 
+static int
+_brep_pick_ray_from_view(struct _ged_brep_ipick *gib, point_t origin, vect_t dir,
+	double diag_len)
+{
+    struct ged *gedp = gib->gb->gedp;
+    if (!gedp->ged_gvp) {
+	bu_vls_printf(gib->vls, "no viewport available and no ray specified\n");
+	return BRLCAD_ERROR;
+    }
+
+    mat_t view_center;
+    mat_t view_rotation;
+    rt_view_center_from_bsg(view_center, gedp->ged_gvp);
+    rt_view_rotation_from_bsg(view_rotation, gedp->ged_gvp);
+    MAT_DELTAS_GET_NEG(origin, view_center);
+    VSCALE(origin, origin, gedp->dbip->dbi_base2local);
+    VMOVEN(dir, view_rotation + 8, 3);
+    VSCALE(dir, dir, -1.0);
+    for (int i = 0; i < 3; i++) {
+	origin[i] = origin[i] + diag_len * -1.0 * dir[i];
+    }
+
+    return BRLCAD_OK;
+}
+
 // E - topological edges
 extern "C" int
 _brep_cmd_edge_pick(void *bs, int argc, const char **argv)
@@ -66,7 +92,6 @@ _brep_cmd_edge_pick(void *bs, int argc, const char **argv)
     argc--;argv++;
 
     struct _ged_brep_ipick *gib = (struct _ged_brep_ipick *)bs;
-    struct ged *gedp = gib->gb->gedp;
     const ON_Brep *brep = ((struct rt_brep_internal *)(gib->gb->intern.idb_ptr))->brep;
 
     point_t origin;
@@ -76,15 +101,9 @@ _brep_cmd_edge_pick(void *bs, int argc, const char **argv)
 	bu_vls_printf(gib->vls, "need six values for point and direction\n");
 	return BRLCAD_ERROR;
     } else {
-	// If not explicitly specified, get the ray from GED
-	VSET(origin, -gedp->ged_gvp->gv_center[MDX], -gedp->ged_gvp->gv_center[MDY], -gedp->ged_gvp->gv_center[MDZ]);
-	VSCALE(origin, origin, gedp->dbip->dbi_base2local);
-	VMOVEN(dir, gedp->ged_gvp->gv_rotation + 8, 3);
-	VSCALE(dir, dir, -1.0);
-	// Back outside the shape using the brep bounding box diagonal length
 	ON_BoundingBox brep_bb = brep->BoundingBox();
-	for (int i = 0; i < 3; i++) {
-	    origin[i] = origin[i] + brep_bb.Diagonal().Length() * -1 * dir[i];
+	if (_brep_pick_ray_from_view(gib, origin, dir, brep_bb.Diagonal().Length()) != BRLCAD_OK) {
+	    return BRLCAD_ERROR;
 	}
     }
 
@@ -215,7 +234,6 @@ _brep_cmd_face_pick(void *bs, int argc, const char **argv)
     argc--;argv++;
 
     struct _ged_brep_ipick *gib = (struct _ged_brep_ipick *)bs;
-    struct ged *gedp = gib->gb->gedp;
     const ON_Brep *brep = ((struct rt_brep_internal *)(gib->gb->intern.idb_ptr))->brep;
 
     point_t origin;
@@ -225,15 +243,9 @@ _brep_cmd_face_pick(void *bs, int argc, const char **argv)
 	bu_vls_printf(gib->vls, "need six values for point and direction\n");
 	return BRLCAD_ERROR;
     } else {
-	// If not explicitly specified, get the ray from GED
-	VSET(origin, -gedp->ged_gvp->gv_center[MDX], -gedp->ged_gvp->gv_center[MDY], -gedp->ged_gvp->gv_center[MDZ]);
-	VSCALE(origin, origin, gedp->dbip->dbi_base2local);
-	VMOVEN(dir, gedp->ged_gvp->gv_rotation + 8, 3);
-	VSCALE(dir, dir, -1.0);
-	// Back outside the shape using the brep bounding box diagonal length
 	ON_BoundingBox brep_bb = brep->BoundingBox();
-	for (int i = 0; i < 3; i++) {
-	    origin[i] = origin[i] + brep_bb.Diagonal().Length() * -1 * dir[i];
+	if (_brep_pick_ray_from_view(gib, origin, dir, brep_bb.Diagonal().Length()) != BRLCAD_OK) {
+	    return BRLCAD_ERROR;
 	}
     }
 
@@ -386,7 +398,6 @@ _brep_cmd_vertex_pick(void *bs, int argc, const char **argv)
     argc--;argv++;
 
     struct _ged_brep_ipick *gib = (struct _ged_brep_ipick *)bs;
-    struct ged *gedp = gib->gb->gedp;
     const ON_Brep *brep = ((struct rt_brep_internal *)(gib->gb->intern.idb_ptr))->brep;
     ON_BoundingBox brep_bb = brep->BoundingBox();
 
@@ -397,14 +408,8 @@ _brep_cmd_vertex_pick(void *bs, int argc, const char **argv)
 	bu_vls_printf(gib->vls, "need six values for point and direction\n");
 	return BRLCAD_ERROR;
     } else {
-	// If not explicitly specified, get the ray from GED
-	VSET(origin, -gedp->ged_gvp->gv_center[MDX], -gedp->ged_gvp->gv_center[MDY], -gedp->ged_gvp->gv_center[MDZ]);
-	VSCALE(origin, origin, gedp->dbip->dbi_base2local);
-	VMOVEN(dir, gedp->ged_gvp->gv_rotation + 8, 3);
-	VSCALE(dir, dir, -1.0);
-	// Back outside the shape using the brep bounding box diagonal length
-	for (int i = 0; i < 3; i++) {
-	    origin[i] = origin[i] + brep_bb.Diagonal().Length() * -1 * dir[i];
+	if (_brep_pick_ray_from_view(gib, origin, dir, brep_bb.Diagonal().Length()) != BRLCAD_OK) {
+	    return BRLCAD_ERROR;
 	}
     }
 

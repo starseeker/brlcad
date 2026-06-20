@@ -42,6 +42,7 @@
 #include "vmath.h"
 #include "raytrace.h"
 #include "ged/view.h"
+#include "rt/view_legacy_bsg.h"
 
 #include "./sedit.h"
 #include "./mged.h"
@@ -318,22 +319,27 @@ work:
 	switch (mode) {
 	    case -1:
 		/* First step:  put eye in center */
-		view_state->vs_gvp->gv_scale = scale;
-		MAT_COPY(view_state->vs_gvp->gv_rotation, rot);
-		MAT_DELTAS_VEC_NEG(view_state->vs_gvp->gv_center, eye_model);
+		rt_view_scale_set_bsg(view_state->vs_gvp, scale);
+		rt_view_rotation_set_bsg(view_state->vs_gvp, rot);
+		rt_view_center_vec_set_bsg(view_state->vs_gvp, eye_model);
 		new_mats(s);
 		/* Second step:  put eye in front */
 		VSET(xlate, 0.0, 0.0, -1.0);	/* correction factor */
-		MAT4X3PNT(eye_model, view_state->vs_gvp->gv_view2model, xlate);
-		MAT_DELTAS_VEC_NEG(view_state->vs_gvp->gv_center, eye_model);
+		mat_t view2model;
+		rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+		MAT4X3PNT(eye_model, view2model, xlate);
+		rt_view_center_vec_set_bsg(view_state->vs_gvp, eye_model);
 		new_mats(s);
 		break;
-	    case 0:
-		view_state->vs_gvp->gv_scale = scale;
-		MAT_IDN(view_state->vs_gvp->gv_rotation);	/* top view */
-		MAT_DELTAS_VEC_NEG(view_state->vs_gvp->gv_center, eye_model);
+	    case 0: {
+		mat_t top_view;
+		MAT_IDN(top_view);
+		rt_view_scale_set_bsg(view_state->vs_gvp, scale);
+		rt_view_rotation_set_bsg(view_state->vs_gvp, top_view);	/* top view */
+		rt_view_center_vec_set_bsg(view_state->vs_gvp, eye_model);
 		new_mats(s);
 		break;
+	    }
 	    case 1:
 		/* Adjust center for drawn scene devices */
 		_rtif_shape_set_center(s, sp_ref, eye_model);

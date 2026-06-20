@@ -809,6 +809,28 @@ SoBRLDatabaseSource::getDatabase(void) const
     return this->dbip;
 }
 
+void
+SoBRLDatabaseSource::configureDatabaseSource(const char *sourcePath,
+	struct db_i *database,
+	int mode,
+	uint32_t revision)
+{
+    int sanitizedMode = mode == SHADED ? SHADED : WIREFRAME;
+    uint32_t reason = STALE_SOURCE;
+    if (this->dbip != database)
+	reason |= STALE_DATABASE;
+    if (this->drawMode.getValue() != sanitizedMode)
+	reason |= STALE_DRAW;
+
+    this->detachFieldSensors();
+    this->dbip = database;
+    this->path = sourcePath ? sourcePath : "";
+    this->drawMode = sanitizedMode;
+    this->sourceRevision = revision;
+    this->markStale(reason);
+    this->attachFieldSensors();
+}
+
 SbBool
 SoBRLDatabaseSource::needsRealization(void) const
 {

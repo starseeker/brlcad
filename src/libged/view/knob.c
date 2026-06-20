@@ -26,6 +26,7 @@
 #include "common.h"
 
 #include <string.h>
+#include "rt/view_legacy_bsg.h"
 #include "../ged_private.h"
 #include "./ged_view.h"
 
@@ -55,7 +56,7 @@ print_knob_vals(struct bu_vls *o, struct bsg_view *v)
     bu_vls_printf(o, " aY = %f\n", v->k.tra_v_abs[Y]);
     bu_vls_printf(o, " aZ = %f\n", v->k.tra_v_abs[Z]);
     bu_vls_printf(o, "absolute - scale:\n");
-    bu_vls_printf(o, " aS = %f\n", v->gv_a_scale);
+    bu_vls_printf(o, " aS = %f\n", rt_view_absolute_scale_from_bsg(v));
 }
 
 int
@@ -119,7 +120,7 @@ ged_knob_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
     if (!model_flag && !view_flag)
-	model_flag = (v->gv_coord == 'm') ? 1 : 0;
+	model_flag = (rt_view_coord_from_bsg(v) == 'm') ? 1 : 0;
 
     int do_tran = 0;
     int do_rot = 0;
@@ -185,8 +186,14 @@ ged_knob_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     if (do_rot) {
+	point_t keypoint;
+	const pointp_t pvt_pt = (origin == 'k') ? keypoint : NULL;
+
+	if (pvt_pt)
+	    rt_view_keypoint_from_bsg(keypoint, gedp->ged_gvp);
+
 	// Note - we don't (currently) support 'o' coords here, so the obj_rot matrix is always NULL.
-	bsg_knobs_rot(v, rvec, origin, (model_flag ? 'm' : 'v'), NULL, (origin == 'k') ? gedp->ged_gvp->gv_keypoint : NULL);
+	bsg_knobs_rot(v, rvec, origin, (model_flag ? 'm' : 'v'), NULL, pvt_pt);
     }
 
     bsg_update_rate_flags(v);

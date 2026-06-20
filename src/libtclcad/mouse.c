@@ -23,12 +23,29 @@
 #include "bu/path.h"
 #include "bsg.h"
 #include "bsg/node.h"
+#include "rt/view_legacy_bsg.h"
 #include "tclcad.h"
 
 /* Private headers */
 #include "./tclcad_private.h"
 #include "./view/view.h"
 #include "./bsg_move_helpers.h"
+
+static void
+tclcad_mouse_sync_dm_dimensions(struct bsg_view *gdvp)
+{
+    rt_view_dimensions_set_bsg(gdvp, dm_get_width((struct dm *)gdvp->dmp),
+	    dm_get_height((struct dm *)gdvp->dmp));
+}
+
+static void
+tclcad_mouse_view_inv_rotation_from_bsg(mat_t inv_rotation, const struct bsg_view *gdvp)
+{
+    mat_t view_rotation;
+
+    rt_view_rotation_from_bsg(view_rotation, gdvp);
+    bn_mat_inv(inv_rotation, view_rotation);
+}
 
 int
 to_get_prev_mouse(struct ged *gedp,
@@ -105,17 +122,15 @@ to_mouse_append_pnt_common(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+    tclcad_mouse_sync_dm_dimensions(gdvp);
     bsg_screen_to_view(gdvp, &x, &y, x, y);
     VSET(view, x, y, 0.0);
 
-    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+    tclcad_mouse_sync_dm_dimensions(gdvp);
 
     gedp->ged_gvp = gdvp;
     {
-	bsg_snap_kind_mask snap_kinds = bsg_view_prepare_tcl_snap(gedp->ged_gvp);
+	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
 	if (snap_kinds)
 	    bsg_snap_point_2d(gedp->ged_gvp, &view[X], &view[Y], snap_kinds);
     }
@@ -160,6 +175,7 @@ to_mouse_brep_selection_append(struct ged *gedp,
     point_t screen_pt, view_pt, model_pt;
     vect_t view_dir, model_dir;
     mat_t invRot;
+    mat_t view2model, view_rotation;
 
     if (argc != maxargs) {
 	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", argv[0], usage);
@@ -195,15 +211,16 @@ to_mouse_brep_selection_append(struct ged *gedp,
     gdvp->gv_prevMouseY = screen_pt[Y];
 
     /* convert screen point to model-space start point and direction */
-    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+    tclcad_mouse_sync_dm_dimensions(gdvp);
     bsg_screen_to_view(gdvp, &view_pt[X], &view_pt[Y], screen_pt[X], screen_pt[Y]);
     view_pt[Z] = 1.0;
 
-    MAT4X3PNT(model_pt, gdvp->gv_view2model, view_pt);
+    rt_view_view2model_from_bsg(view2model, gdvp);
+    MAT4X3PNT(model_pt, view2model, view_pt);
 
     VSET(view_dir, 0.0, 0.0, -1.0);
-    bn_mat_inv(invRot, gedp->ged_gvp->gv_rotation);
+    rt_view_rotation_from_bsg(view_rotation, gedp->ged_gvp);
+    bn_mat_inv(invRot, view_rotation);
     MAT4X3PNT(model_dir, invRot, view_dir);
 
     /* brep brep_name selection append selection_name startx starty startz dirx diry dirz */
@@ -272,6 +289,7 @@ to_mouse_brep_selection_translate(struct ged *gedp,
     char *end;
     point_t screen_end, view_start, view_end, model_start, model_end;
     vect_t model_delta;
+    mat_t view2model;
     struct bu_vls delta[] = {BU_VLS_INIT_ZERO, BU_VLS_INIT_ZERO, BU_VLS_INIT_ZERO};
 
     if (argc != maxargs) {
@@ -302,17 +320,16 @@ to_mouse_brep_selection_translate(struct ged *gedp,
     }
 
     /* convert screen-space delta to model-space delta */
-    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+    tclcad_mouse_sync_dm_dimensions(gdvp);
     bsg_screen_to_view(gdvp, &view_start[X], &view_start[Y], gdvp->gv_prevMouseX, gdvp->gv_prevMouseY);
     view_start[Z] = 1;
-    MAT4X3PNT(model_start, gdvp->gv_view2model, view_start);
+    rt_view_view2model_from_bsg(view2model, gdvp);
+    MAT4X3PNT(model_start, view2model, view_start);
 
-    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+    tclcad_mouse_sync_dm_dimensions(gdvp);
     bsg_screen_to_view(gdvp, &view_end[X], &view_end[Y], screen_end[X], screen_end[Y]);
     view_end[Z] = 1;
-    MAT4X3PNT(model_end, gdvp->gv_view2model, view_end);
+    MAT4X3PNT(model_end, view2model, view_end);
 
     VSUB2(model_delta, model_end, model_start);
 
@@ -529,8 +546,8 @@ to_mouse_constrain_trans(struct ged *gedp,
 
     width = dm_get_width((struct dm *)gdvp->dmp);
     inv_width = 1.0 / (fastf_t)width;
-    dx *= inv_width * gdvp->gv_size * gedp->dbip->dbi_local2base;
-    dy *= inv_width * gdvp->gv_size * gedp->dbip->dbi_local2base;
+    dx *= inv_width * rt_view_size_from_bsg(gdvp) * gedp->dbip->dbi_local2base;
+    dy *= inv_width * rt_view_size_from_bsg(gdvp) * gedp->dbip->dbi_local2base;
 
     if (fabs(dx) > fabs(dy))
 	sf = dx;
@@ -612,8 +629,7 @@ to_mouse_find_arb_edge(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+    tclcad_mouse_sync_dm_dimensions(gdvp);
     bsg_screen_to_view(gdvp, &x, &y, x, y);
     VSET(view, x, y, 0.0);
 
@@ -675,8 +691,7 @@ to_mouse_find_bot_edge(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+    tclcad_mouse_sync_dm_dimensions(gdvp);
     bsg_screen_to_view(gdvp, &x, &y, x, y);
     VSET(view, x, y, 0.0);
 
@@ -737,8 +752,7 @@ to_mouse_find_bot_pnt(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+    tclcad_mouse_sync_dm_dimensions(gdvp);
     bsg_screen_to_view(gdvp, &x, &y, x, y);
     VSET(view, x, y, 0.0);
 
@@ -769,6 +783,7 @@ to_mouse_find_metaball_pnt(struct ged *gedp,
     const char *av[6];
     point_t model;
     point_t view;
+    mat_t view2model;
     struct bu_vls pt_vls = BU_VLS_INIT_ZERO;
 
     /* must be double for scanf */
@@ -800,11 +815,11 @@ to_mouse_find_metaball_pnt(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+    tclcad_mouse_sync_dm_dimensions(gdvp);
     bsg_screen_to_view(gdvp, &x, &y, x, y);
     VSET(view, x, y, 0.0);
-    MAT4X3PNT(model, gdvp->gv_view2model, view);
+    rt_view_view2model_from_bsg(view2model, gdvp);
+    MAT4X3PNT(model, view2model, view);
 
     bu_vls_printf(&pt_vls, "%lf %lf %lf", model[X], model[Y], model[Z]);
 
@@ -833,6 +848,7 @@ to_mouse_find_pipe_pnt(struct ged *gedp,
     const char *av[6];
     point_t model;
     point_t view;
+    mat_t view2model;
     struct bu_vls pt_vls = BU_VLS_INIT_ZERO;
 
     /* must be double for scanf */
@@ -864,11 +880,11 @@ to_mouse_find_pipe_pnt(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+    tclcad_mouse_sync_dm_dimensions(gdvp);
     bsg_screen_to_view(gdvp, &x, &y, x, y);
     VSET(view, x, y, 0.0);
-    MAT4X3PNT(model, gdvp->gv_view2model, view);
+    rt_view_view2model_from_bsg(view2model, gdvp);
+    MAT4X3PNT(model, view2model, view);
 
     bu_vls_printf(&pt_vls, "%lf %lf %lf", model[X], model[Y], model[Z]);
 
@@ -905,6 +921,7 @@ to_mouse_joint_select(
     point_t screen_pt, view_pt, model_pt;
     vect_t view_dir, model_dir;
     mat_t invRot;
+    mat_t view2model, view_rotation;
 
     if (argc != maxargs) {
 	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", argv[0], usage);
@@ -939,15 +956,16 @@ to_mouse_joint_select(
     gdvp->gv_prevMouseY = screen_pt[Y];
 
     /* convert screen point to model-space start point and direction */
-    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+    tclcad_mouse_sync_dm_dimensions(gdvp);
     bsg_screen_to_view(gdvp, &view_pt[X], &view_pt[Y], screen_pt[X], screen_pt[Y]);
     view_pt[Z] = 1.0;
 
-    MAT4X3PNT(model_pt, gdvp->gv_view2model, view_pt);
+    rt_view_view2model_from_bsg(view2model, gdvp);
+    MAT4X3PNT(model_pt, view2model, view_pt);
 
     VSET(view_dir, 0.0, 0.0, -1.0);
-    bn_mat_inv(invRot, gedp->ged_gvp->gv_rotation);
+    rt_view_rotation_from_bsg(view_rotation, gedp->ged_gvp);
+    bn_mat_inv(invRot, view_rotation);
     MAT4X3PNT(model_dir, invRot, view_dir);
 
     /* joint2 joint_name selection append selection_name startx starty startz dirx diry dirz */
@@ -1014,6 +1032,7 @@ to_mouse_joint_selection_translate(
     char *end;
     point_t screen_end, view_start, view_end, model_start, model_end;
     vect_t model_delta;
+    mat_t view2model;
     struct bu_vls delta[] = {BU_VLS_INIT_ZERO, BU_VLS_INIT_ZERO, BU_VLS_INIT_ZERO};
 
     if (argc != maxargs) {
@@ -1044,17 +1063,16 @@ to_mouse_joint_selection_translate(
     }
 
     /* convert screen-space delta to model-space delta */
-    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+    tclcad_mouse_sync_dm_dimensions(gdvp);
     bsg_screen_to_view(gdvp, &view_start[X], &view_start[Y], gdvp->gv_prevMouseX, gdvp->gv_prevMouseY);
     view_start[Z] = 1;
-    MAT4X3PNT(model_start, gdvp->gv_view2model, view_start);
+    rt_view_view2model_from_bsg(view2model, gdvp);
+    MAT4X3PNT(model_start, view2model, view_start);
 
-    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+    tclcad_mouse_sync_dm_dimensions(gdvp);
     bsg_screen_to_view(gdvp, &view_end[X], &view_end[Y], screen_end[X], screen_end[Y]);
     view_end[Z] = 1;
-    MAT4X3PNT(model_end, gdvp->gv_view2model, view_end);
+    MAT4X3PNT(model_end, view2model, view_end);
 
     VSUB2(model_delta, model_end, model_start);
 
@@ -1209,10 +1227,10 @@ to_mouse_move_arb_edge(struct ged *gedp,
     width = dm_get_width((struct dm *)gdvp->dmp);
     inv_width = 1.0 / (fastf_t)width;
     /* ged_move_arb_edge expects things to be in local units */
-    dx *= inv_width * gdvp->gv_size * gedp->dbip->dbi_base2local;
-    dy *= inv_width * gdvp->gv_size * gedp->dbip->dbi_base2local;
+    dx *= inv_width * rt_view_size_from_bsg(gdvp) * gedp->dbip->dbi_base2local;
+    dy *= inv_width * rt_view_size_from_bsg(gdvp) * gedp->dbip->dbi_base2local;
     VSET(view, dx, dy, 0.0);
-    bn_mat_inv(inv_rot, gdvp->gv_rotation);
+    tclcad_mouse_view_inv_rotation_from_bsg(inv_rot, gdvp);
     MAT4X3PNT(model, inv_rot, view);
 
     bu_vls_printf(&pt_vls, "%lf %lf %lf", model[X], model[Y], model[Z]);
@@ -1305,10 +1323,10 @@ to_mouse_move_arb_face(struct ged *gedp,
     width = dm_get_width((struct dm *)gdvp->dmp);
     inv_width = 1.0 / (fastf_t)width;
     /* ged_move_arb_face expects things to be in local units */
-    dx *= inv_width * gdvp->gv_size * gedp->dbip->dbi_base2local;
-    dy *= inv_width * gdvp->gv_size * gedp->dbip->dbi_base2local;
+    dx *= inv_width * rt_view_size_from_bsg(gdvp) * gedp->dbip->dbi_base2local;
+    dy *= inv_width * rt_view_size_from_bsg(gdvp) * gedp->dbip->dbi_base2local;
     VSET(view, dx, dy, 0.0);
-    bn_mat_inv(inv_rot, gdvp->gv_rotation);
+    tclcad_mouse_view_inv_rotation_from_bsg(inv_rot, gdvp);
     MAT4X3PNT(model, inv_rot, view);
 
     bu_vls_printf(&pt_vls, "%lf %lf %lf", model[X], model[Y], model[Z]);
@@ -1352,6 +1370,7 @@ to_mouse_move_bot_pnt(struct ged *gedp,
     fastf_t inv_width;
     point_t model;
     point_t view;
+    mat_t model2view;
     mat_t v2m_mat;
     struct bu_vls pt_vls = BU_VLS_INIT_ZERO;
 
@@ -1419,10 +1438,10 @@ to_mouse_move_bot_pnt(struct ged *gedp,
 	else if (gdvp->gv_maxMouseDelta < dy)
 	    dy = gdvp->gv_maxMouseDelta;
 
-	bn_mat_inv(v2m_mat, gdvp->gv_rotation);
+	tclcad_mouse_view_inv_rotation_from_bsg(v2m_mat, gdvp);
 
-	dx *= inv_width * gdvp->gv_size;
-	dy *= inv_width * gdvp->gv_size;
+	dx *= inv_width * rt_view_size_from_bsg(gdvp);
+	dy *= inv_width * rt_view_size_from_bsg(gdvp);
     } else {
 	struct rt_db_internal intern;
 	struct rt_bot_internal *botip;
@@ -1467,11 +1486,11 @@ to_mouse_move_bot_pnt(struct ged *gedp,
 	    return BRLCAD_ERROR;
 	}
 
-	MAT4X3PNT(view, gdvp->gv_model2view, &botip->vertices[vertex_i*3]);
-	MAT_COPY(v2m_mat, gdvp->gv_view2model);
+	rt_view_model2view_from_bsg(model2view, gdvp);
+	rt_view_view2model_from_bsg(v2m_mat, gdvp);
+	MAT4X3PNT(view, model2view, &botip->vertices[vertex_i*3]);
 
-	gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-	gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+	tclcad_mouse_sync_dm_dimensions(gdvp);
 	bsg_screen_to_view(gdvp, &dx, &dy, x, y);
 	dz = view[Z];
 
@@ -1586,10 +1605,10 @@ to_mouse_move_bot_pnts(struct ged *gedp,
     else if (gdvp->gv_maxMouseDelta < dy)
 	dy = gdvp->gv_maxMouseDelta;
 
-    bn_mat_inv(v2m_mat, gdvp->gv_rotation);
+    tclcad_mouse_view_inv_rotation_from_bsg(v2m_mat, gdvp);
 
-    dx *= inv_width * gdvp->gv_size;
-    dy *= inv_width * gdvp->gv_size;
+    dx *= inv_width * rt_view_size_from_bsg(gdvp);
+    dy *= inv_width * rt_view_size_from_bsg(gdvp);
 
     VSET(view, dx, dy, dz);
     MAT4X3PNT(model, v2m_mat, view);
@@ -1696,10 +1715,10 @@ to_mouse_move_pnt_common(struct ged *gedp,
     width = dm_get_width((struct dm *)gdvp->dmp);
     inv_width = 1.0 / (fastf_t)width;
     /* ged_pipe_move_pnt expects things to be in local units */
-    dx *= inv_width * gdvp->gv_size * gedp->dbip->dbi_base2local;
-    dy *= inv_width * gdvp->gv_size * gedp->dbip->dbi_base2local;
+    dx *= inv_width * rt_view_size_from_bsg(gdvp) * gedp->dbip->dbi_base2local;
+    dy *= inv_width * rt_view_size_from_bsg(gdvp) * gedp->dbip->dbi_base2local;
     VSET(view, dx, dy, 0.0);
-    bn_mat_inv(inv_rot, gdvp->gv_rotation);
+    tclcad_mouse_view_inv_rotation_from_bsg(inv_rot, gdvp);
     MAT4X3PNT(model, inv_rot, view);
 
     bu_vls_printf(&pt_vls, "%lf %lf %lf", model[X], model[Y], model[Z]);
@@ -1791,7 +1810,7 @@ to_mouse_orotate(struct ged *gedp,
     dy *= gdvp->gv_rscale;
 
     VSET(view, dx, dy, 0.0);
-    bn_mat_inv(inv_rot, gdvp->gv_rotation);
+    tclcad_mouse_view_inv_rotation_from_bsg(inv_rot, gdvp);
     MAT4X3PNT(model, inv_rot, view);
 
     bu_vls_printf(&rot_x_vls, "%lf", model[X]);
@@ -2004,8 +2023,8 @@ to_mouse_otranslate(struct ged *gedp,
     width = dm_get_width((struct dm *)gdvp->dmp);
     inv_width = 1.0 / (fastf_t)width;
     /* ged_otranslate expects things to be in local units */
-    dx *= inv_width * gdvp->gv_size * gedp->dbip->dbi_base2local;
-    dy *= inv_width * gdvp->gv_size * gedp->dbip->dbi_base2local;
+    dx *= inv_width * rt_view_size_from_bsg(gdvp) * gedp->dbip->dbi_base2local;
+    dy *= inv_width * rt_view_size_from_bsg(gdvp) * gedp->dbip->dbi_base2local;
 
     VSET(view, dx, dy, 0.0);
     bu_vls_printf(&tran_x_vls, "%lf", model[X]);
@@ -2035,7 +2054,7 @@ to_mouse_otranslate(struct ged *gedp,
 	params->dx += dx;
 	params->dy += dy;
 	VSET(view, params->dx, params->dy, 0.0);
-	bn_mat_inv(inv_rot, gdvp->gv_rotation);
+	tclcad_mouse_view_inv_rotation_from_bsg(inv_rot, gdvp);
 	MAT4X3PNT(model, inv_rot, view);
 
 	MAT_IDN(params->edit_mat);
@@ -2156,6 +2175,7 @@ to_mouse_poly_circ_func(Tcl_Interp *interp,
     int x, y;
     fastf_t fx, fy;
     point_t v_pt, m_pt;
+    mat_t view2model;
     struct bu_vls plist = BU_VLS_INIT_ZERO;
     struct bu_vls i_vls = BU_VLS_INIT_ZERO;
     struct tclcad_view_data *tvd = (struct tclcad_view_data *)gdvp->u_data;
@@ -2175,12 +2195,12 @@ to_mouse_poly_circ_func(Tcl_Interp *interp,
     gdvp->gv_prevMouseX = x;
     gdvp->gv_prevMouseY = y;
 
-    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+    tclcad_mouse_sync_dm_dimensions(gdvp);
     bsg_screen_to_view(gdvp, &fx, &fy, x, y);
+    rt_view_view2model_from_bsg(view2model, gdvp);
 
     {
-	bsg_snap_kind_mask snap_kinds = bsg_view_prepare_tcl_snap(gedp->ged_gvp);
+	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
 	if (snap_kinds)
 	    bsg_snap_point_2d(gedp->ged_gvp, &fx, &fy, snap_kinds);
     }
@@ -2205,7 +2225,7 @@ to_mouse_poly_circ_func(Tcl_Interp *interp,
 	 * circumference / 4 = PI * diameter / 4
 	 *
 	 */
-	nsegs = M_PI_2 * r * gdvp->gv_scale;
+	nsegs = M_PI_2 * r * rt_view_scale_from_bsg(gdvp);
 
 	if (nsegs < 32)
 	    nsegs = 32;
@@ -2217,7 +2237,7 @@ to_mouse_poly_circ_func(Tcl_Interp *interp,
 	    curr_fx = cos(ang*DEG2RAD) * r + gdpsp->gdps_prev_point[X];
 	    curr_fy = sin(ang*DEG2RAD) * r + gdpsp->gdps_prev_point[Y];
 	    VSET(v_pt, curr_fx, curr_fy, gdpsp->gdps_data_vZ);
-	    MAT4X3PNT(m_pt, gdvp->gv_view2model, v_pt);
+	    MAT4X3PNT(m_pt, view2model, v_pt);
 	    bu_vls_printf(&plist, " {%lf %lf %lf}", V3ARGS(m_pt));
 	}
     }
@@ -2327,6 +2347,7 @@ to_mouse_poly_cont_func(Tcl_Interp *interp,
     int x, y;
     fastf_t fx, fy;
     point_t v_pt, m_pt;
+    mat_t view2model;
     struct tclcad_view_data *tvd = (struct tclcad_view_data *)gdvp->u_data;
     bsg_data_polygon_state *gdpsp;
 
@@ -2344,12 +2365,12 @@ to_mouse_poly_cont_func(Tcl_Interp *interp,
     gdvp->gv_prevMouseX = x;
     gdvp->gv_prevMouseY = y;
 
-    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+    tclcad_mouse_sync_dm_dimensions(gdvp);
     bsg_screen_to_view(gdvp, &fx, &fy, x, y);
     VSET(v_pt, fx, fy, gdpsp->gdps_data_vZ);
 
-    MAT4X3PNT(m_pt, gdvp->gv_view2model, v_pt);
+    rt_view_view2model_from_bsg(view2model, gdvp);
+    MAT4X3PNT(m_pt, view2model, v_pt);
     gedp->ged_gvp = gdvp;
 
     {
@@ -2466,6 +2487,7 @@ to_mouse_poly_ell_func(Tcl_Interp *interp,
     int x, y;
     fastf_t fx, fy;
     point_t m_pt;
+    mat_t view2model;
     struct bu_vls plist = BU_VLS_INIT_ZERO;
     struct bu_vls i_vls = BU_VLS_INIT_ZERO;
     struct tclcad_view_data *tvd = (struct tclcad_view_data *)gdvp->u_data;
@@ -2486,12 +2508,12 @@ to_mouse_poly_ell_func(Tcl_Interp *interp,
     gdvp->gv_prevMouseY = y;
 
 
-    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+    tclcad_mouse_sync_dm_dimensions(gdvp);
     bsg_screen_to_view(gdvp, &fx, &fy, x, y);
+    rt_view_view2model_from_bsg(view2model, gdvp);
 
     {
-	bsg_snap_kind_mask snap_kinds = bsg_view_prepare_tcl_snap(gedp->ged_gvp);
+	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
 	if (snap_kinds)
 	    bsg_snap_point_2d(gedp->ged_gvp, &fx, &fy, snap_kinds);
     }
@@ -2526,7 +2548,7 @@ to_mouse_poly_ell_func(Tcl_Interp *interp,
 	 * circumference / 4 = PI * diameter / 4
 	 *
 	 */
-	nsegs = M_PI_2 * FMAX(a, b) * gdvp->gv_scale;
+	nsegs = M_PI_2 * FMAX(a, b) * rt_view_scale_from_bsg(gdvp);
 
 	if (nsegs < 32)
 	    nsegs = 32;
@@ -2537,7 +2559,7 @@ to_mouse_poly_ell_func(Tcl_Interp *interp,
 	    fastf_t sina = sin(n * arc * DEG2RAD);
 
 	    VJOIN2(ellout, gdpsp->gdps_prev_point, cosa, A, sina, B);
-	    MAT4X3PNT(m_pt, gdvp->gv_view2model, ellout);
+	    MAT4X3PNT(m_pt, view2model, ellout);
 	    bu_vls_printf(&plist, " {%lf %lf %lf}", V3ARGS(m_pt));
 	}
     }
@@ -2647,6 +2669,7 @@ to_mouse_poly_rect_func(Tcl_Interp *interp,
     int x, y;
     fastf_t fx, fy;
     point_t v_pt, m_pt;
+    mat_t view2model;
     struct bu_vls plist = BU_VLS_INIT_ZERO;
     struct bu_vls i_vls = BU_VLS_INIT_ZERO;
     struct tclcad_view_data *tvd = (struct tclcad_view_data *)gdvp->u_data;
@@ -2666,12 +2689,12 @@ to_mouse_poly_rect_func(Tcl_Interp *interp,
     gdvp->gv_prevMouseX = x;
     gdvp->gv_prevMouseY = y;
 
-    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+    tclcad_mouse_sync_dm_dimensions(gdvp);
     bsg_screen_to_view(gdvp, &fx, &fy, x, y);
+    rt_view_view2model_from_bsg(view2model, gdvp);
 
     {
-	bsg_snap_kind_mask snap_kinds = bsg_view_prepare_tcl_snap(gedp->ged_gvp);
+	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
 	if (snap_kinds)
 	    bsg_snap_point_2d(gedp->ged_gvp, &fx, &fy, snap_kinds);
     }
@@ -2696,18 +2719,18 @@ to_mouse_poly_rect_func(Tcl_Interp *interp,
 	}
     }
 
-    MAT4X3PNT(m_pt, gdvp->gv_view2model, gdpsp->gdps_prev_point);
+    MAT4X3PNT(m_pt, view2model, gdpsp->gdps_prev_point);
     bu_vls_printf(&plist, "{0 {%lf %lf %lf} ",  V3ARGS(m_pt));
 
     VSET(v_pt, gdpsp->gdps_prev_point[X], fy, gdpsp->gdps_data_vZ);
-    MAT4X3PNT(m_pt, gdvp->gv_view2model, v_pt);
+    MAT4X3PNT(m_pt, view2model, v_pt);
     bu_vls_printf(&plist, "{%lf %lf %lf} ",  V3ARGS(m_pt));
 
     VSET(v_pt, fx, fy, gdpsp->gdps_data_vZ);
-    MAT4X3PNT(m_pt, gdvp->gv_view2model, v_pt);
+    MAT4X3PNT(m_pt, view2model, v_pt);
     bu_vls_printf(&plist, "{%lf %lf %lf} ",  V3ARGS(m_pt));
     VSET(v_pt, fx, gdpsp->gdps_prev_point[Y], gdpsp->gdps_data_vZ);
-    MAT4X3PNT(m_pt, gdvp->gv_view2model, v_pt);
+    MAT4X3PNT(m_pt, view2model, v_pt);
     bu_vls_printf(&plist, "{%lf %lf %lf} }",  V3ARGS(m_pt));
 
     bu_vls_printf(&i_vls, "%zu", gdpsp->gdps_curr_polygon_i);
@@ -2958,7 +2981,7 @@ to_mouse_rotate_arb_face(struct ged *gedp,
     dy *= gdvp->gv_rscale;
 
     VSET(view, dx, dy, 0.0);
-    bn_mat_inv(inv_rot, gdvp->gv_rotation);
+    tclcad_mouse_view_inv_rotation_from_bsg(inv_rot, gdvp);
     MAT4X3PNT(model, inv_rot, view);
 
     bu_vls_printf(&pt_vls, "%lf %lf %lf", model[X], model[Y], model[Z]);
@@ -3062,6 +3085,7 @@ to_data_scale(struct ged *gedp,
 {
     register int i;
     fastf_t sf;
+    mat_t model2view, view2model;
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -3088,6 +3112,8 @@ to_data_scale(struct ged *gedp,
 	bu_vls_printf(gedp->ged_result_str, "Invalid scale factor - %s", argv[2]);
 	return BRLCAD_ERROR;
     }
+    rt_view_model2view_from_bsg(model2view, gedp->ged_gvp);
+    rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
 
     /* scale data arrows - T3: read/write BSG vlist instead of gv_tcl */
     {
@@ -3103,12 +3129,12 @@ to_data_scale(struct ged *gedp,
 		for (i = 0; i < _npts; i += 2) {
 		    vect_t diff;
 		    point_t vpoint;
-		    MAT4X3PNT(vpoint, gedp->ged_gvp->gv_model2view, _pts[i]);
+		    MAT4X3PNT(vpoint, model2view, _pts[i]);
 		    vcenter[Z] = vpoint[Z];
 		    VSUB2(diff, vpoint, vcenter);
 		    VSCALE(diff, diff, sf);
 		    VADD2(vpoint, vcenter, diff);
-		    MAT4X3PNT(_pts[i], gedp->ged_gvp->gv_view2model, vpoint);
+		    MAT4X3PNT(_pts[i], view2model, vpoint);
 		}
 
 		int _color[3]; int _lw, _tl, _tw, _vis;
@@ -3134,12 +3160,12 @@ to_data_scale(struct ged *gedp,
 
 		if (!bsg_feature_label_copy(_ref, _k, NULL, label_pt, NULL))
 		    continue;
-		MAT4X3PNT(vpoint, gedp->ged_gvp->gv_model2view, label_pt);
+		MAT4X3PNT(vpoint, model2view, label_pt);
 		vcenter[Z] = vpoint[Z];
 		VSUB2(diff, vpoint, vcenter);
 		VSCALE(diff, diff, sf);
 		VADD2(vpoint, vcenter, diff);
-		MAT4X3PNT(label_pt, gedp->ged_gvp->gv_view2model, vpoint);
+		MAT4X3PNT(label_pt, view2model, vpoint);
 		bsg_feature_label_point_set(_ref, _k, label_pt);
 	    }
 	}
@@ -3279,7 +3305,7 @@ to_mouse_protate(struct ged *gedp,
     dy *= gdvp->gv_rscale;
 
     VSET(view, dx, dy, 0.0);
-    bn_mat_inv(inv_rot, gdvp->gv_rotation);
+    tclcad_mouse_view_inv_rotation_from_bsg(inv_rot, gdvp);
     MAT4X3PNT(model, inv_rot, view);
 
     bu_vls_printf(&mrot_vls, "%lf %lf %lf", V3ARGS(model));
@@ -3464,10 +3490,10 @@ to_mouse_ptranslate(struct ged *gedp,
     width = dm_get_width((struct dm *)gdvp->dmp);
     inv_width = 1.0 / (fastf_t)width;
     /* ged_ptranslate expects things to be in local units */
-    dx *= inv_width * gdvp->gv_size * gedp->dbip->dbi_base2local;
-    dy *= inv_width * gdvp->gv_size * gedp->dbip->dbi_base2local;
+    dx *= inv_width * rt_view_size_from_bsg(gdvp) * gedp->dbip->dbi_base2local;
+    dy *= inv_width * rt_view_size_from_bsg(gdvp) * gedp->dbip->dbi_base2local;
     VSET(view, dx, dy, 0.0);
-    bn_mat_inv(inv_rot, gdvp->gv_rotation);
+    tclcad_mouse_view_inv_rotation_from_bsg(inv_rot, gdvp);
     MAT4X3PNT(model, inv_rot, view);
 
     bu_vls_printf(&tvec_vls, "%lf %lf %lf", V3ARGS(model));
@@ -3556,8 +3582,8 @@ to_mouse_trans(struct ged *gedp,
 
     width = dm_get_width((struct dm *)gdvp->dmp);
     inv_width = 1.0 / (fastf_t)width;
-    dx *= inv_width * gdvp->gv_size * gedp->dbip->dbi_local2base;
-    dy *= inv_width * gdvp->gv_size * gedp->dbip->dbi_local2base;
+    dx *= inv_width * rt_view_size_from_bsg(gdvp) * gedp->dbip->dbi_local2base;
+    dy *= inv_width * rt_view_size_from_bsg(gdvp) * gedp->dbip->dbi_local2base;
 
     bu_vls_printf(&trans_vls, "%lf %lf 0", dx, dy);
 

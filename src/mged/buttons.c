@@ -29,6 +29,7 @@
 #include "vmath.h"
 #include "bsg/appearance.h"
 #include "ged/view.h"
+#include "rt/view_legacy_bsg.h"
 
 #include "./mged.h"
 #include "./sedit.h"
@@ -463,9 +464,12 @@ bsg_vrestore(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc)
     struct mged_state *s = ctp->s;
      /* restore to saved view */
     if (vsaved) {
-	view_state->vs_gvp->gv_scale = sav_vscale;
-	MAT_COPY(view_state->vs_gvp->gv_rotation, sav_viewrot);
-	MAT_COPY(view_state->vs_gvp->gv_center, sav_toviewcenter);
+	point_t saved_center;
+
+	rt_view_scale_set_bsg(view_state->vs_gvp, sav_vscale);
+	rt_view_rotation_set_bsg(view_state->vs_gvp, sav_viewrot);
+	MAT_DELTAS_GET_NEG(saved_center, sav_toviewcenter);
+	rt_view_center_vec_set_bsg(view_state->vs_gvp, saved_center);
 	new_mats(s);
 
 	(void)mged_svbase(s);
@@ -482,9 +486,9 @@ bsg_vsave(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), c
     MGED_CK_CMD(ctp);
     struct mged_state *s = ctp->s;
      /* save current view */
-    sav_vscale = view_state->vs_gvp->gv_scale;
-    MAT_COPY(sav_viewrot, view_state->vs_gvp->gv_rotation);
-    MAT_COPY(sav_toviewcenter, view_state->vs_gvp->gv_center);
+    sav_vscale = rt_view_scale_from_bsg(view_state->vs_gvp);
+    rt_view_rotation_from_bsg(sav_viewrot, view_state->vs_gvp);
+    rt_view_center_from_bsg(sav_toviewcenter, view_state->vs_gvp);
     vsaved = 1;
     return TCL_OK;
 }

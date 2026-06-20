@@ -35,6 +35,7 @@ extern "C" {
 #include "rt/geom.h"
 #include "rt/primitives/sketch.h"
 #include "rt/rt_ecmds.h"
+#include "rt/view_legacy_bsg.h"
 }
 
 #include "qtcad/QgSketchFilter.h"
@@ -115,7 +116,9 @@ QgSketchFilter::snap_vertex_uv(int sx, int sy,
 
 	/* Model→view transform (including any edit transform) */
 	mat_t m2v;
-	bn_mat_mul(m2v, v->gv_model2view, es->model_changes);
+	mat_t model2view;
+	rt_view_model2view_from_bsg(model2view, v);
+	bn_mat_mul(m2v, model2view, es->model_changes);
 
 	/* Cursor in view space */
 	vect_t cursor_v;
@@ -123,8 +126,9 @@ QgSketchFilter::snap_vertex_uv(int sx, int sy,
 
 	/* Convert snap_px to view-space units.
 	 * One pixel = 2 / gv_width view units in X. */
-	fastf_t px_to_view = (v->gv_width > 0)
-	                     ? (2.0 / (fastf_t)v->gv_width)
+	int view_width = rt_view_width_from_bsg(v);
+	fastf_t px_to_view = (view_width > 0)
+	                     ? (2.0 / (fastf_t)view_width)
 	                     : 0.005;
 	fastf_t threshold2 = (snap_px * px_to_view) * (snap_px * px_to_view);
 
@@ -424,7 +428,9 @@ QgSketchPickSegmentFilter::eventFilter(QObject *, QEvent *e)
 		/* Build model→view matrix including any edit transform */
 		mat_t m2v;
 		struct bsg_view *v = view();
-		bn_mat_mul(m2v, v->gv_model2view, es->model_changes);
+		mat_t model2view;
+		rt_view_model2view_from_bsg(model2view, v);
+		bn_mat_mul(m2v, model2view, es->model_changes);
 
 		/* Cursor in view space */
 		vect_t cursor_v;
@@ -768,7 +774,9 @@ QgSketchSetTangencyFilter::eventFilter(QObject *, QEvent *e)
 		/* Build model→view matrix */
 		mat_t m2v;
 		struct bsg_view *v = view();
-		bn_mat_mul(m2v, v->gv_model2view, es->model_changes);
+		mat_t model2view;
+		rt_view_model2view_from_bsg(model2view, v);
+		bn_mat_mul(m2v, model2view, es->model_changes);
 
 		/* Cursor in view space */
 		vect_t cursor_v;

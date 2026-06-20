@@ -39,6 +39,7 @@
 #include "ged/bsg_ged_draw.h"
 #include "ged/db_index.h"
 #include "ged/selection_state.h"
+#include "rt/view_legacy_bsg.h"
 #include "qtcad/QgGeomImport.h"
 #include "qtcad/QgObolDrawSync.h"
 #include "qtcad/QgObolOverlaySync.h"
@@ -855,8 +856,8 @@ QgEdApp::element_selected(QgToolPaletteElement *el)
     if (el->use_event_filter)
 	curr_view->add_event_filter(controls);
     if (curr_view->view()) {
-	curr_view->view()->gv_width = curr_view->width();
-	curr_view->view()->gv_height = curr_view->height();
+	rt_view_dimensions_set_bsg(curr_view->view(),
+		curr_view->width(), curr_view->height());
     }
 }
 

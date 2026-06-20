@@ -32,6 +32,7 @@
 #include "vmath.h"
 #include "bsg.h"
 #include "bsg/snap.h"
+#include "rt/view_legacy_bsg.h"
 
 #include "../ged_private.h"
 
@@ -41,12 +42,19 @@ grid_vsnap(struct ged *gedp)
 {
     point_t view_pt;
     point_t model_pt;
+    mat_t view_center;
+    mat_t model2view;
+    mat_t view2model;
 
-    MAT_DELTAS_GET_NEG(model_pt, gedp->ged_gvp->gv_center);
-    MAT4X3PNT(view_pt, gedp->ged_gvp->gv_model2view, model_pt);
+    rt_view_center_from_bsg(view_center, gedp->ged_gvp);
+    rt_view_model2view_from_bsg(model2view, gedp->ged_gvp);
+    rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
+
+    MAT_DELTAS_GET_NEG(model_pt, view_center);
+    MAT4X3PNT(view_pt, model2view, model_pt);
     bsg_snap_grid_2d(gedp->ged_gvp, &view_pt[X], &view_pt[Y]);
-    MAT4X3PNT(model_pt, gedp->ged_gvp->gv_view2model, view_pt);
-    MAT_DELTAS_VEC_NEG(gedp->ged_gvp->gv_center, model_pt);
+    MAT4X3PNT(model_pt, view2model, view_pt);
+    rt_view_center_vec_set_bsg(gedp->ged_gvp, model_pt);
     bsg_update(gedp->ged_gvp);
 }
 

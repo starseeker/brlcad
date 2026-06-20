@@ -10,12 +10,25 @@
 #define BRLOBOL_PICK_DETAIL_H
 
 #include "brlobol/defines.h"
+#include "brlobol/lod_realization.h"
+#include "brlobol/source_mesh_request.h"
 
+#include <Inventor/SbBox.h>
 #include <Inventor/SbColor.h>
+#include <Inventor/SbMatrix.h>
 #include <Inventor/SbString.h>
 #include <Inventor/SbVec3f.h>
+#include <Inventor/actions/SoAction.h>
+#include <Inventor/actions/SoSubAction.h>
 #include <Inventor/details/SoDetail.h>
 #include <Inventor/details/SoSubDetail.h>
+
+#include <stdint.h>
+#include <vector>
+
+class BRLObolLodService;
+class SoBRLMeshShape;
+struct db_i;
 
 class BRLOBOL_EXPORT SoBRLPickDetail : public SoDetail {
     typedef SoDetail inherited;
@@ -27,15 +40,18 @@ public:
 	UNKNOWN = 0,
 	LINE_SEGMENT = 1,
 	POINT = 2,
-	FACE = 3
+	FACE = 3,
+	IMPLICIT_SOLID = 4
     };
 
     SoBRLPickDetail(void);
     SoBRLPickDetail(const SoBRLPickDetail &other);
+    SoBRLPickDetail &operator=(const SoBRLPickDetail &other);
     virtual ~SoBRLPickDetail(void);
 
     static void initClass(void);
     virtual SoDetail *copy(void) const;
+    void clear(void);
 
     void setPath(const SbString &path);
     const SbString &getPath(void) const;
@@ -110,6 +126,89 @@ private:
     int nearestFaceEdgeVertexIndex[2];
     int nearestFaceVertexSlot;
     int nearestFaceVertexIndex;
+};
+
+struct BRLOBOL_EXPORT BRLObolSourceMeshPickResult {
+    SoBRLPickDetail detail;
+    SbVec3f point;
+    float distance;
+    SbBool hit;
+
+    BRLObolSourceMeshPickResult(void);
+    void clear(void);
+};
+
+struct BRLOBOL_EXPORT BRLObolRtPickResult {
+    SoBRLPickDetail detail;
+    SbVec3f point;
+    SbVec3f normal;
+    float distance;
+    SbBool hit;
+
+    BRLObolRtPickResult(void);
+    void clear(void);
+};
+
+BRLOBOL_EXPORT SbBool
+brlobol_pick_source_full_detail_result(
+	BRLObolSourceMeshPickResult &pick,
+	const BRLObolSourceMeshRequest &sourceRequest,
+	const BRLObolLodResult &result,
+	const SbVec3f &rayOrigin,
+	const SbVec3f &rayDirection);
+
+BRLOBOL_EXPORT SbBool
+brlobol_pick_rt_ray(BRLObolRtPickResult &pick,
+	struct db_i *dbip,
+	const std::vector<SbString> &objectPaths,
+	const SbVec3f &rayOrigin,
+	const SbVec3f &rayDirection);
+
+class BRLOBOL_EXPORT SoBRLSourceMeshPickAction : public SoAction {
+    typedef SoAction inherited;
+
+    SO_ACTION_HEADER(SoBRLSourceMeshPickAction);
+
+public:
+    SoBRLSourceMeshPickAction(void);
+    virtual ~SoBRLSourceMeshPickAction(void);
+    static void initClass(void);
+
+    void setRay(const SbVec3f &origin, const SbVec3f &direction);
+    const SbVec3f &getRayOrigin(void) const;
+    const SbVec3f &getRayDirection(void) const;
+    int getVisitedMeshCount(void) const;
+    int getSourceBackedFullDetailRequestCount(void) const;
+    const BRLObolSourceMeshRequest &getSourceBackedFullDetailRequest(int index) const;
+    SbBool makeSourceBackedFullDetailLodRequest(int index,
+	    BRLObolLodRequest &request,
+	    const BRLObolLodRequest *templateRequest = 0) const;
+    int submitSourceBackedFullDetailRequests(BRLObolLodService *service,
+	    uint64_t generation, struct db_i *dbip,
+	    const BRLObolLodRequest *templateRequest = 0,
+	    uint64_t maxFullDetailFaceCount = 0,
+	    uint64_t maxFullDetailPointCount = 0) const;
+    int consumeSourceBackedFullDetailResults(
+	    BRLObolSourceMeshPickResult &pick,
+	    const std::vector<BRLObolLodResult> &results,
+	    const BRLObolLodRequest *templateRequest = 0) const;
+
+protected:
+    virtual void beginTraversal(SoNode *node);
+
+private:
+    static void nodeAction(SoAction *action, SoNode *node);
+    static void meshShapeAction(SoAction *action, SoNode *node);
+
+    void resetResults(void);
+    void appendSourceBackedFullDetailRequest(const SoBRLMeshShape *shape,
+	    const SbMatrix &localToWorld);
+    SbBool rayIntersectsBounds(const BRLObolSourceMeshRequest &request) const;
+
+    std::vector<BRLObolSourceMeshRequest> sourceBackedFullDetailRequests;
+    SbVec3f rayOrigin;
+    SbVec3f rayDirection;
+    int visitedMeshCount;
 };
 
 #endif /* BRLOBOL_PICK_DETAIL_H */

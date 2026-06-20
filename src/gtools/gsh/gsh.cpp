@@ -39,6 +39,7 @@
 #include "brlcad_ident.h"
 #include "bu.h"
 #include "bsg.h"
+#include "rt/view_legacy_bsg.h"
 
 #define USE_DM 1
 #ifdef USE_DM
@@ -178,9 +179,9 @@ DisplayHash::hash(struct ged *gedp, bool db_index_check, bool qged_display_mode)
 	if (db_index_check) {
 	    unsigned long long updated = ged_db_index_refresh_flags(gedp);
 	    l = (updated) ? l + 1 : 0;
-	    if (bsg_view_cleared(bv)) {
+	    if (rt_view_cleared_from_bsg(bv)) {
 		l = 1;
-		bsg_view_set_cleared(bv, 0);
+		rt_view_cleared_set_bsg(bv, 0);
 	    }
 	} else {
 	    l = 0;

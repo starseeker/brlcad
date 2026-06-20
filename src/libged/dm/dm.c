@@ -34,6 +34,7 @@
 #include "bu/vls.h"
 #include "dm.h"
 #include "rt/view.h"
+#include "rt/view_legacy_bsg.h"
 
 #include "../ged_private.h"
 #include "../bsg_ged_draw_private.h"
@@ -673,11 +674,12 @@ _dm_cmd_attach(void *ds, int argc, const char **argv)
     // either shouldn't be necessary or probably should come after
     // dm_open has its chance to set up dm width and height (which
     // should be used before the fallback)
-    if (!target_view->gv_width) {
-	target_view->gv_width = 512;
-    }
-    if (!target_view->gv_height) {
-	target_view->gv_height = 512;
+    int target_width = rt_view_width_from_bsg(target_view);
+    int target_height = rt_view_height_from_bsg(target_view);
+    if (!target_width || !target_height) {
+	rt_view_dimensions_set_bsg(target_view,
+		target_width ? target_width : 512,
+		target_height ? target_height : 512);
     }
 
     // If the application has not provided a toolkit specific context, use the
@@ -695,7 +697,7 @@ _dm_cmd_attach(void *ds, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    dm_set_vp(dmp, &gedp->ged_gvp->gv_scale);
+    dm_set_vp(dmp, rt_view_scale_storage_from_bsg(gedp->ged_gvp));
     dm_configure_win(dmp, 0);
     dm_set_pathname(dmp, bu_vls_cstr(&dm_name));
     dm_set_zbuffer(dmp, 1);

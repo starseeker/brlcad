@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "rt/view_legacy_bsg.h"
+
 #include "../ged_private.h"
 
 
@@ -48,7 +50,8 @@ ged_eye_pos_core(struct ged *gedp, int argc, const char *argv[])
 
     /* get eye position */
     if (argc == 1) {
-	VSCALE(eye_pos, gedp->ged_gvp->gv_eye_pos, sval);
+	rt_view_eye_pos_from_bsg(eye_pos, gedp->ged_gvp);
+	VSCALE(eye_pos, eye_pos, sval);
 	bn_encode_vect(gedp->ged_result_str, eye_pos, 1);
 	return BRLCAD_OK;
     }
@@ -83,10 +86,14 @@ ged_eye_pos_core(struct ged *gedp, int argc, const char *argv[])
 	VMOVE(eye_pos, scan);
     }
 
-    VSCALE(gedp->ged_gvp->gv_eye_pos, eye_pos, sval);
+    point_t view_eye_pos;
+    VSCALE(view_eye_pos, eye_pos, sval);
+    rt_view_eye_pos_set_bsg(gedp->ged_gvp, view_eye_pos);
 
     /* update perspective matrix */
-    mike_persp_mat(gedp->ged_gvp->gv_pmat, gedp->ged_gvp->gv_eye_pos);
+    mat_t pmat;
+    mike_persp_mat(pmat, view_eye_pos);
+    rt_view_pmat_set_bsg(gedp->ged_gvp, pmat);
 
     bsg_update(gedp->ged_gvp);
 

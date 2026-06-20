@@ -37,12 +37,14 @@
 #include "bsg/feature.h"
 #include "bsg/render.h"
 #include "ged/bsg_ged_draw.h"
+#include "rt/view_legacy_bsg.h"
 #include "../ged_private.h"
 #include "./ged_view.h"
 
 /* Visit context + callbacks for the "view vZ" autodetect path. */
 struct _view_vZ_ctx {
     struct bsg_view *cv;
+    mat_t model2view;
     int calc_mode;
     double vZ;
     int have_vz;
@@ -69,7 +71,7 @@ static void
 _view_vZ_consider_model_point(struct _view_vZ_ctx *c, const point_t p)
 {
     vect_t vpt;
-    MAT4X3PNT(vpt, c->cv->gv_model2view, p);
+    MAT4X3PNT(vpt, c->model2view, p);
     _view_vZ_consider(c, vpt[Z]);
 }
 
@@ -115,7 +117,7 @@ _view_vZ_export_record(const struct bsg_export_record *rec, struct _view_vZ_ctx 
 	point_t mc;
 	MAT4X3PNT(mc, rec->model_mat, rec->bounds_center);
 	vect_t vc;
-	MAT4X3PNT(vc, ctx->cv->gv_model2view, mc);
+	MAT4X3PNT(vc, ctx->model2view, mc);
 	_view_vZ_consider(ctx, vc[Z] - rec->bounds_radius);
 	_view_vZ_consider(ctx, vc[Z] + rec->bounds_radius);
     }
@@ -587,6 +589,7 @@ _view_cmd_vZ(void *bs, int argc, const char **argv)
 	    /* Check all drawn view features and database leaves. */
 	    struct _view_vZ_ctx ctx;
 	    ctx.cv = gd->cv;
+	    rt_view_model2view_from_bsg(ctx.model2view, gd->cv);
 	    ctx.calc_mode = calc_mode;
 	    ctx.vZ = (calc_mode) ? -DBL_MAX : DBL_MAX;
 	    ctx.have_vz = 0;
@@ -624,7 +627,9 @@ _view_cmd_width(void *ds, int argc, const char **argv)
 
     struct _ged_view_info *gd = (struct _ged_view_info *)ds;
     struct bsg_view *v = gd->cv;
-    bu_vls_printf(gd->gedp->ged_result_str, "%d\n", v->gv_width);
+    struct rt_view_info view_info;
+    rt_view_info_from_bsg(&view_info, v);
+    bu_vls_printf(gd->gedp->ged_result_str, "%d\n", view_info.width);
     return BRLCAD_OK;
 }
 
@@ -641,7 +646,9 @@ _view_cmd_height(void *ds, int argc, const char **argv)
 
     struct _ged_view_info *gd = (struct _ged_view_info *)ds;
     struct bsg_view *v = gd->cv;
-    bu_vls_printf(gd->gedp->ged_result_str, "%d\n", v->gv_height);
+    struct rt_view_info view_info;
+    rt_view_info_from_bsg(&view_info, v);
+    bu_vls_printf(gd->gedp->ged_result_str, "%d\n", view_info.height);
     return BRLCAD_OK;
 }
 

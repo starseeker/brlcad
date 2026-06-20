@@ -19,11 +19,13 @@ set(
   lod_update_action.h
   measure_action.h
   mesh_lod_submit_action.h
+  mesh_residency_action.h
   mesh_shape.h
   pick_detail.h
   realize_action.h
   scene_controller.h
   snap_action.h
+  source_mesh_request.h
   view_controller.h
   viewport_image.h
   vlist_shape.h

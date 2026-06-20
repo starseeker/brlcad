@@ -188,7 +188,6 @@ static void
 _edit_cli_view_init(struct rt_edit_view *v)
 {
     rt_edit_view_init(v);
-    v->gv_scale         = 1.0;
     v->gv_rotate_about  = 'k';   /* rotate about keypoint — no view matrices needed */
     v->gv_coord         = 'm';   /* model-space coordinates */
     MAT_IDN(v->gv_model2view);

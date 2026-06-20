@@ -26,8 +26,8 @@
 
 extern "C" {
 #include "vmath.h"
-#include "bsg/view_state.h"
 #include "rt/edit_legacy_bsg.h"
+#include "rt/view_legacy_bsg.h"
 }
 
 void
@@ -36,20 +36,15 @@ rt_edit_view_from_bsg(struct rt_edit_view *ev, const struct bsg_view *v)
     if (!ev)
 	return;
 
-    if (!v) {
-	rt_edit_view_init(ev);
-	return;
-    }
-
-    ev->gv_scale = v->gv_scale;
-    ev->gv_base2local = v->gv_base2local;
-    ev->gv_local2base = v->gv_local2base;
-    ev->gv_coord = v->gv_coord;
-    ev->gv_rotate_about = v->gv_rotate_about;
-    MAT_COPY(ev->gv_rotation, v->gv_rotation);
-    MAT_COPY(ev->gv_center, v->gv_center);
-    MAT_COPY(ev->gv_model2view, v->gv_model2view);
-    MAT_COPY(ev->gv_view2model, v->gv_view2model);
+    ev->gv_scale = rt_view_scale_from_bsg(v);
+    ev->gv_base2local = rt_view_base2local_from_bsg(v);
+    ev->gv_local2base = rt_view_local2base_from_bsg(v);
+    ev->gv_coord = rt_view_coord_from_bsg(v);
+    ev->gv_rotate_about = rt_view_rotate_about_from_bsg(v);
+    rt_view_rotation_from_bsg(ev->gv_rotation, v);
+    rt_view_center_from_bsg(ev->gv_center, v);
+    rt_view_model2view_from_bsg(ev->gv_model2view, v);
+    rt_view_view2model_from_bsg(ev->gv_view2model, v);
 }
 
 struct rt_edit *

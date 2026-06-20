@@ -30,6 +30,7 @@
 #include "bn.h"
 #include "ged.h"
 #include "rt/view.h"
+#include "rt/view_legacy_bsg.h"
 
 #include "./mged.h"
 #include "./mged_dm.h"
@@ -97,18 +98,25 @@ draw_e_axes(struct mged_state *s)
 {
     point_t v_ap1;                 /* axes position in view coordinates */
     point_t v_ap2;                 /* axes position in view coordinates */
+    struct rt_view_info view_info;
+    mat_t model2view;
     mat_t rot_mat;
+    mat_t view_rotation;
     struct bsg_axes gas;
 
+    rt_view_info_from_bsg(&view_info, view_state->vs_gvp);
+    rt_view_model2view_from_bsg(model2view, view_state->vs_gvp);
+    rt_view_rotation_from_bsg(view_rotation, view_state->vs_gvp);
+
     if (s->global_editing_state == ST_S_EDIT) {
-	MAT4X3PNT(v_ap1, view_state->vs_gvp->gv_model2view, MEDIT(s)->e_axes_pos);
-	MAT4X3PNT(v_ap2, view_state->vs_gvp->gv_model2view, MEDIT(s)->curr_e_axes_pos);
+	MAT4X3PNT(v_ap1, model2view, MEDIT(s)->e_axes_pos);
+	MAT4X3PNT(v_ap2, model2view, MEDIT(s)->curr_e_axes_pos);
     } else if (s->global_editing_state == ST_O_EDIT) {
 	point_t m_ap2;
 
-	MAT4X3PNT(v_ap1, view_state->vs_gvp->gv_model2view, MEDIT(s)->e_keypoint);
+	MAT4X3PNT(v_ap1, model2view, MEDIT(s)->e_keypoint);
 	MAT4X3PNT(m_ap2, MEDIT(s)->model_changes, MEDIT(s)->e_keypoint);
-	MAT4X3PNT(v_ap2, view_state->vs_gvp->gv_model2view, m_ap2);
+	MAT4X3PNT(v_ap2, model2view, m_ap2);
     } else
 	return;
 
@@ -120,7 +128,7 @@ draw_e_axes(struct mged_state *s)
     VMOVE(gas.label_color, color_scheme->cs_edit_axes_label1);
     gas.line_width = axes_state->ax_edit_linewidth1;
 
-    dm_draw_hud_axes(DMP, view_state->vs_gvp->gv_size, view_state->vs_gvp->gv_rotation, &gas);
+    dm_draw_hud_axes(DMP, view_info.size, view_rotation, &gas);
 
     memset(&gas, 0, sizeof(struct bsg_axes));
     gas.label_flag = 1;
@@ -130,8 +138,8 @@ draw_e_axes(struct mged_state *s)
     VMOVE(gas.label_color, color_scheme->cs_edit_axes_label2);
     gas.line_width = axes_state->ax_edit_linewidth2;
 
-    bn_mat_mul(rot_mat, view_state->vs_gvp->gv_rotation, MEDIT(s)->acc_rot_sol);
-    dm_draw_hud_axes(DMP, view_state->vs_gvp->gv_size, rot_mat, &gas);
+    bn_mat_mul(rot_mat, view_rotation, MEDIT(s)->acc_rot_sol);
+    dm_draw_hud_axes(DMP, view_info.size, rot_mat, &gas);
 }
 
 
@@ -140,10 +148,17 @@ draw_m_axes(struct mged_state *s)
 {
     point_t m_ap;			/* axes position in model coordinates, mm */
     point_t v_ap;			/* axes position in view coordinates */
+    struct rt_view_info view_info;
+    mat_t model2view;
+    mat_t view_rotation;
     struct bsg_axes gas;
 
+    rt_view_info_from_bsg(&view_info, view_state->vs_gvp);
+    rt_view_model2view_from_bsg(model2view, view_state->vs_gvp);
+    rt_view_rotation_from_bsg(view_rotation, view_state->vs_gvp);
+
     VSCALE(m_ap, axes_state->ax_model_pos, s->dbip->dbi_local2base);
-    MAT4X3PNT(v_ap, view_state->vs_gvp->gv_model2view, m_ap);
+    MAT4X3PNT(v_ap, model2view, m_ap);
 
     memset(&gas, 0, sizeof(struct bsg_axes));
     gas.label_flag = 1;
@@ -153,7 +168,7 @@ draw_m_axes(struct mged_state *s)
     VMOVE(gas.label_color, color_scheme->cs_model_axes_label);
     gas.line_width = axes_state->ax_model_linewidth;
 
-    dm_draw_hud_axes(DMP, view_state->vs_gvp->gv_size, view_state->vs_gvp->gv_rotation, &gas);
+    dm_draw_hud_axes(DMP, view_info.size, view_rotation, &gas);
 }
 
 
@@ -161,7 +176,13 @@ void
 draw_v_axes(struct mged_state *s)
 {
     point_t v_ap;			/* axes position in view coordinates */
+    struct rt_view_info view_info;
+    mat_t view_rotation;
     struct bsg_axes gas;
+
+    (void)s;
+    rt_view_info_from_bsg(&view_info, view_state->vs_gvp);
+    rt_view_rotation_from_bsg(view_rotation, view_state->vs_gvp);
 
     VSET(v_ap,
 	 axes_state->ax_view_pos[X] * RT_INV_VIEW,
@@ -176,7 +197,7 @@ draw_v_axes(struct mged_state *s)
     VMOVE(gas.label_color, color_scheme->cs_view_axes_label);
     gas.line_width = axes_state->ax_view_linewidth;
 
-    dm_draw_hud_axes(DMP, view_state->vs_gvp->gv_size, view_state->vs_gvp->gv_rotation, &gas);
+    dm_draw_hud_axes(DMP, view_info.size, view_rotation, &gas);
 }
 
 

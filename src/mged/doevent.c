@@ -51,6 +51,7 @@
 #include "raytrace.h"
 #include "ged.h"
 #include "rt/view.h"
+#include "rt/view_legacy_bsg.h"
 
 #include "./mged.h"
 #include "./mged_dm.h"
@@ -180,6 +181,9 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
     fastf_t f;
     fastf_t fx, fy;
     fastf_t td;
+    fastf_t view_local_scale;
+    mat_t view_center;
+    mat_t view2model;
     int em = ((s->global_editing_state == ST_S_EDIT || s->global_editing_state == ST_O_EDIT) && mged_variables->mv_transform == 'e') ? 1 : 0;
 
     if (s->dbip == DBI_NULL)
@@ -194,6 +198,9 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
     int my = xmotion->y;
     int dx = mx - dm_omx;
     int dy = my - dm_omy;
+    view_local_scale = rt_view_scale_from_bsg(view_state->vs_gvp) * s->dbip->dbi_base2local;
+    rt_view_center_from_bsg(view_center, view_state->vs_gvp);
+    rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
 
     switch (am_mode) {
 	case AMM_IDLE:
@@ -315,8 +322,8 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 			view_pt[Z] = 0.0;
 			round_to_grid(s, &view_pt[X], &view_pt[Y]);
 
-			MAT4X3PNT(model_pt, view_state->vs_gvp->gv_view2model, view_pt);
-			MAT_DELTAS_GET_NEG(vcenter, view_state->vs_gvp->gv_center);
+			MAT4X3PNT(model_pt, view2model, view_pt);
+			MAT_DELTAS_GET_NEG(vcenter, view_center);
 			VSUB2(diff, model_pt, vcenter);
 			VSCALE(diff, diff, s->dbip->dbi_base2local);
 			VADD2(model_pt, dm_work_pt, diff);
@@ -326,7 +333,7 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 			    bu_vls_printf(&cmd, "translate %lf %lf %lf", model_pt[X], model_pt[Y], model_pt[Z]);
 		    } else
 			bu_vls_printf(&cmd, "knob -i aX %lf aY %lf\n",
-				      fx*view_state->vs_gvp->gv_scale*s->dbip->dbi_base2local, fy*view_state->vs_gvp->gv_scale*s->dbip->dbi_base2local);
+				      fx*view_local_scale, fy*view_local_scale);
 		} else {
 		    if (mged_variables->mv_rateknobs)      /* otherwise, drag to translate the view */
 			bu_vls_printf(&cmd, "knob -i -v X %lf Y %lf\n", fx, fy);
@@ -343,7 +350,7 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 			    goto handled;
 			} else
 			    bu_vls_printf(&cmd, "knob -i -v aX %lf aY %lf\n",
-					  fx*view_state->vs_gvp->gv_scale*s->dbip->dbi_base2local, fy*view_state->vs_gvp->gv_scale*s->dbip->dbi_base2local);
+					  fx*view_local_scale, fy*view_local_scale);
 		    }
 		}
 
@@ -396,15 +403,15 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 		if (grid->snap)
 		    snap_to_grid(s, &view_pt[X], &view_pt[Y]);
 
-		MAT4X3PNT(model_pt, view_state->vs_gvp->gv_view2model, view_pt);
+		MAT4X3PNT(model_pt, view2model, view_pt);
 		VSCALE(model_pt, model_pt, s->dbip->dbi_base2local);
 		bu_vls_printf(&cmd, "adc xyz %lf %lf %lf\n", model_pt[X], model_pt[Y], model_pt[Z]);
 	    }
 
 	    break;
 	case AMM_ADC_DIST:
-	    fx = (dm_Xx2Normal(DMP, mx) * RT_VIEW_MAX - adc->dv_x) * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local * RT_INV_VIEW;
-	    fy = (dm_Xy2Normal(DMP, my, 1) * RT_VIEW_MAX - adc->dv_y) * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local * RT_INV_VIEW;
+	    fx = (dm_Xx2Normal(DMP, mx) * RT_VIEW_MAX - adc->dv_x) * view_local_scale * RT_INV_VIEW;
+	    fy = (dm_Xy2Normal(DMP, my, 1) * RT_VIEW_MAX - adc->dv_y) * view_local_scale * RT_INV_VIEW;
 	    td = sqrt(fx * fx + fy * fy);
 	    bu_vls_printf(&cmd, "adc dst %lf\n", td);
 
@@ -501,7 +508,7 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 	    if (mged_variables->mv_rateknobs)
 		bu_vls_printf(&cmd, "knob -i X %f\n", f);
 	    else
-		bu_vls_printf(&cmd, "knob -i aX %f\n", f*view_state->vs_gvp->gv_scale*s->dbip->dbi_base2local);
+		bu_vls_printf(&cmd, "knob -i aX %f\n", f*view_local_scale);
 
 	    break;
 	case AMM_CON_TRAN_Y:
@@ -524,7 +531,7 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 	    if (mged_variables->mv_rateknobs)
 		bu_vls_printf(&cmd, "knob -i Y %f\n", f);
 	    else
-		bu_vls_printf(&cmd, "knob -i aY %f\n", f*view_state->vs_gvp->gv_scale*s->dbip->dbi_base2local);
+		bu_vls_printf(&cmd, "knob -i aY %f\n", f*view_local_scale);
 
 	    break;
 	case AMM_CON_TRAN_Z:
@@ -547,7 +554,7 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 	    if (mged_variables->mv_rateknobs)
 		bu_vls_printf(&cmd, "knob -i Z %f\n", f);
 	    else
-		bu_vls_printf(&cmd, "knob -i aZ %f\n", f*view_state->vs_gvp->gv_scale*s->dbip->dbi_base2local);
+		bu_vls_printf(&cmd, "knob -i aZ %f\n", f*view_local_scale);
 
 	    break;
 	case AMM_CON_SCALE_X:

@@ -39,9 +39,9 @@
 #include <QMouseEvent>
 #include <QWheelEvent>
 
-#include "bsg/defines.h"
+#include "rt/view_legacy_bsg.h"
 
-typedef void (*qgcanvas_bounds_update_t)(struct bsg_view *);
+typedef rt_view_bounds_update_callback_bsg_t qgcanvas_bounds_update_t;
 
 /**
  * Per-canvas input-binding handler.

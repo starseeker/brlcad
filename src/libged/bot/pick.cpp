@@ -36,6 +36,7 @@
 #include "bg/plane.h"
 #include "bg/tri_ray.h"
 #include "rt/geom.h"
+#include "rt/view_legacy_bsg.h"
 
 #include "./ged_bot.h"
 
@@ -122,12 +123,13 @@ _bot_pick_ray(struct _ged_bot_ipick *gib, int argc, const char **argv,
 	    bu_vls_printf(gib->vls, "no viewport available and no ray specified\n");
 	    return BRLCAD_ERROR;
 	}
-	VSET(origin,
-	    -gedp->ged_gvp->gv_center[MDX],
-	    -gedp->ged_gvp->gv_center[MDY],
-	    -gedp->ged_gvp->gv_center[MDZ]);
+	mat_t view_center;
+	mat_t view_rotation;
+	rt_view_center_from_bsg(view_center, gedp->ged_gvp);
+	rt_view_rotation_from_bsg(view_rotation, gedp->ged_gvp);
+	MAT_DELTAS_GET_NEG(origin, view_center);
 	VSCALE(origin, origin, gedp->dbip->dbi_base2local);
-	VMOVEN(dir, gedp->ged_gvp->gv_rotation + 8, 3);
+	VMOVEN(dir, view_rotation + 8, 3);
 	VSCALE(dir, dir, -1.0);
 	/* Back origin outside the shape using bbox diagonal */
 	for (int i = 0; i < 3; i++) {

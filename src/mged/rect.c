@@ -30,6 +30,7 @@
 #include "vmath.h"
 #include "ged.h"
 #include "dm.h"
+#include "rt/view_legacy_bsg.h"
 #include "./mged.h"
 #include "./mged_dm.h"
 
@@ -299,16 +300,22 @@ zoom_rect_area(struct mged_state *s)
     point_t new_model_center;
     point_t old_view_center;
     point_t new_view_center;
+    mat_t view_center;
+    mat_t model2view;
+    mat_t view2model;
 
     if (ZERO(rubber_band->rb_width) &&
 	ZERO(rubber_band->rb_height))
 	return;
 
     adjust_rect_for_zoom(s);
+    rt_view_center_from_bsg(view_center, view_state->vs_gvp);
+    rt_view_model2view_from_bsg(model2view, view_state->vs_gvp);
+    rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
 
     /* find old view center */
-    MAT_DELTAS_GET_NEG(old_model_center, view_state->vs_gvp->gv_center);
-    MAT4X3PNT(old_view_center, view_state->vs_gvp->gv_model2view, old_model_center);
+    MAT_DELTAS_GET_NEG(old_model_center, view_center);
+    MAT4X3PNT(old_view_center, model2view, old_model_center);
 
     /* calculate new view center */
     VSET(new_view_center,
@@ -317,7 +324,7 @@ zoom_rect_area(struct mged_state *s)
 	 old_view_center[Z]);
 
     /* find new model center */
-    MAT4X3PNT(new_model_center, view_state->vs_gvp->gv_view2model, new_view_center);
+    MAT4X3PNT(new_model_center, view2model, new_view_center);
     mged_center(s, new_model_center);
 
     /* zoom in to fill rectangle */

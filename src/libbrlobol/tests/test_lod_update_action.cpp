@@ -17,6 +17,7 @@
 #include <Inventor/SbViewportRegion.h>
 #include <Inventor/SbVec3f.h>
 #include <Inventor/SoPickedPoint.h>
+#include <Inventor/actions/SoGetBoundingBoxAction.h>
 #include <Inventor/actions/SoRayPickAction.h>
 #include <Inventor/nodes/SoOrthographicCamera.h>
 #include <Inventor/nodes/SoSeparator.h>
@@ -84,6 +85,58 @@ make_lod_mesh(const char *path, const char *name)
     return mesh;
 }
 
+static int
+check_source_mesh_request(const BRLObolSourceMeshRequest &request,
+	const char *path,
+	const char *name,
+	uint32_t sourceId)
+{
+    if (strcmp(request.path.getString(), path) != 0 ||
+	    strcmp(request.sourceName.getString(), name) != 0 ||
+	    request.sourceId != sourceId ||
+	    request.faceCount != 1 ||
+	    request.pointCount != 3 ||
+	    request.bounds.isEmpty() ||
+	    request.bounds.getMax()[0] > 1.0f ||
+	    request.bounds.getMax()[1] > 1.0f) {
+	return 1;
+    }
+
+    return 0;
+}
+
+static int
+check_source_full_detail_lod_request(const BRLObolLodRequest &request,
+	const char *path,
+	const char *name)
+{
+    if (strcmp(request.objectPath.getString(), path) != 0 ||
+	    strcmp(request.objectName.getString(), name) != 0 ||
+	    strcmp(request.providerId.getString(), "rt_source_full_detail") != 0 ||
+	    strcmp(request.providerVersion.getString(), "direct-bot-v1") != 0 ||
+	    request.qualityTier != BRLOBOL_LOD_QUALITY_FULL_DETAIL ||
+	    request.sourceCounts.faceCount != 1 ||
+	    request.sourceCounts.pointCount != 3 ||
+	    request.bounds.isEmpty() ||
+	    request.bounds.getMax()[0] > 1.0f ||
+	    request.bounds.getMax()[1] > 1.0f) {
+	return 1;
+    }
+
+    return 0;
+}
+
+static int
+has_lod_provider_param(const BRLObolLodRequest &request, const char *name)
+{
+    for (size_t i = 0; i < request.providerParams.size(); i++) {
+	if (strcmp(request.providerParams[i].name.getString(), name) == 0)
+	    return 1;
+    }
+
+    return 0;
+}
+
 static BRLObolLodResult
 attributes_result(const BRLObolLodRequest &request, const char *value)
 {
@@ -124,6 +177,40 @@ mesh_payload_result(const BRLObolLodRequest &request)
     result.mesh.coordIndex.push_back(0);
     result.mesh.coordIndex.push_back(3);
     result.mesh.coordIndex.push_back(1);
+
+    return result;
+}
+
+static BRLObolLodResult
+mesh_payload_task(const BRLObolLodRequest &request, void *UNUSED(userData))
+{
+    return mesh_payload_result(request);
+}
+
+static BRLObolLodResult
+source_full_detail_result(const BRLObolLodRequest &request)
+{
+    BRLObolLodResult result;
+
+    result.request = request;
+    result.cacheKey = brlobol_lod_cache_key(request);
+    result.resultKind = BRLOBOL_LOD_RESULT_FULL_DETAIL;
+    result.qualityTier = BRLOBOL_LOD_QUALITY_FULL_DETAIL;
+    result.providerStatus = BRLOBOL_LOD_PROVIDER_READY;
+    result.geometry.kind = BRLOBOL_LOD_GEOMETRY_OBOL_MESH;
+    result.geometry.providerId = request.providerId;
+    result.geometry.providerVersion = request.providerVersion;
+    result.geometry.cacheKey = result.cacheKey;
+    result.geometry.activeLevel = -1;
+    result.counts.faceCount = 1;
+    result.counts.pointCount = 3;
+    result.bounds = request.bounds;
+    result.mesh.points.push_back(SbVec3f(0.0f, 0.0f, 0.0f));
+    result.mesh.points.push_back(SbVec3f(1.0f, 0.0f, 0.0f));
+    result.mesh.points.push_back(SbVec3f(0.0f, 1.0f, 0.0f));
+    result.mesh.coordIndex.push_back(0);
+    result.mesh.coordIndex.push_back(1);
+    result.mesh.coordIndex.push_back(2);
 
     return result;
 }
@@ -204,6 +291,107 @@ make_submit_test_db(char *dbpath, size_t dbpath_len, struct db_i **dbip_out)
     }
 
     *dbip_out = dbip;
+    return 0;
+}
+
+static int
+make_rt_pick_test_db(char *dbpath, size_t dbpath_len, struct db_i **dbip_out)
+{
+    if (!dbpath || dbpath_len == 0 || !dbip_out)
+	return 1;
+    *dbip_out = NULL;
+
+    FILE *fp = bu_temp_file(dbpath, dbpath_len);
+    if (!fp) {
+	printf("FAIL: RT exact pick temp file\n");
+	return 1;
+    }
+    fclose(fp);
+
+    struct db_i *dbip = db_create(dbpath, 5);
+    if (!dbip) {
+	printf("FAIL: RT exact pick db_create\n");
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
+    struct rt_wdb *wdbp = wdb_dbopen(dbip, RT_WDB_TYPE_DB_DISK);
+    if (!wdbp) {
+	printf("FAIL: RT exact pick wdb_dbopen\n");
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
+    point_t center = {0.0, 0.0, 0.0};
+    if (mk_sph(wdbp, "implicit.s", center, 2.0) != 0) {
+	printf("FAIL: RT exact pick mk_sph\n");
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
+    struct wmember region;
+    BU_LIST_INIT(&region.l);
+    unsigned char color[3] = {32, 96, 192};
+    if (!mk_addmember("implicit.s", &region.l, NULL, WMOP_UNION) ||
+	    mk_lrcomb(wdbp, "implicit.r", &region, 1, "plastic", "",
+		color, 77, 2, 33, 100, 0) != 0) {
+	printf("FAIL: RT exact pick mk_lrcomb\n");
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
+    *dbip_out = dbip;
+    return 0;
+}
+
+static int
+test_rt_exact_pick_provider(void)
+{
+    char dbpath[MAXPATHLEN] = {0};
+    struct db_i *dbip = NULL;
+    if (make_rt_pick_test_db(dbpath, sizeof(dbpath), &dbip))
+	return 1;
+
+    std::vector<SbString> paths;
+    paths.push_back("implicit.r");
+
+    BRLObolRtPickResult pick;
+    if (!brlobol_pick_rt_ray(pick, dbip, paths,
+	    SbVec3f(0.0f, 0.0f, 5.0f),
+	    SbVec3f(0.0f, 0.0f, -1.0f)) ||
+	    !pick.hit ||
+	    fabsf(pick.distance - 3.0f) > 1.0e-5f ||
+	    fabsf(pick.point[2] - 2.0f) > 1.0e-5f ||
+	    pick.normal[2] < 0.9f ||
+	    pick.detail.getPrimitiveKind() != SoBRLPickDetail::IMPLICIT_SOLID ||
+	    pick.detail.getRegionId() != 77 ||
+	    pick.detail.getAirCode() != 2 ||
+	    pick.detail.getMaterialId() != 33 ||
+	    pick.detail.getLos() != 100 ||
+	    strcmp(pick.detail.getSourceName().getString(), "implicit.s") != 0 ||
+	    strcmp(pick.detail.getSourceType().getString(), "sph") != 0 ||
+	    !strstr(pick.detail.getPath().getString(), "implicit.r")) {
+	printf("FAIL: RT exact pick provider did not return implicit comb hit identity\n");
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
+    BRLObolRtPickResult miss;
+    if (brlobol_pick_rt_ray(miss, dbip, paths,
+	    SbVec3f(10.0f, 10.0f, 5.0f),
+	    SbVec3f(0.0f, 0.0f, -1.0f)) || miss.hit) {
+	printf("FAIL: RT exact pick provider reported a miss ray as a hit\n");
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
+    db_close(dbip);
+    bu_file_delete(dbpath);
     return 0;
 }
 
@@ -322,7 +510,8 @@ test_update_action_direct(void)
     exactExport.apply(root);
     if (exactExport.getGeometryPolicy() != SoBRLExportAction::FULL_DETAIL ||
 	    exactExport.getTriangleCount() != 4 ||
-	    exactExport.getSkippedLodDisplayMeshCount() != 1) {
+	    exactExport.getSkippedLodDisplayMeshCount() != 1 ||
+	    exactExport.getSourceBackedFullDetailRequestCount() != 0) {
 	printf("FAIL: default export did not use preserved full-detail mesh\n");
 	root->unref();
 	return 1;
@@ -344,6 +533,7 @@ test_update_action_direct(void)
     if (exactMeasure.getGeometryPolicy() != SoBRLMeasureAction::FULL_DETAIL ||
 	    exactMeasure.getTriangleCount() != 4 ||
 	    exactMeasure.getSkippedLodDisplayMeshCount() != 1 ||
+	    exactMeasure.getSourceBackedFullDetailRequestCount() != 0 ||
 	    fabsf(exactMeasure.getSurfaceArea() - 2.0f) > 1.0e-5f) {
 	printf("FAIL: default measure did not use preserved full-detail mesh\n");
 	root->unref();
@@ -384,7 +574,8 @@ test_update_action_direct(void)
     exactSnap.apply(root);
     if (exactSnap.getGeometryPolicy() != SoBRLSnapAction::FULL_DETAIL ||
 	    exactSnap.hasCandidate() ||
-	    exactSnap.getSkippedLodDisplayMeshCount() != 1) {
+	    exactSnap.getSkippedLodDisplayMeshCount() != 1 ||
+	    exactSnap.getSourceBackedFullDetailRequestCount() != 0) {
 	printf("FAIL: full-detail snap did not skip active display LoD mesh\n");
 	root->unref();
 	return 1;
@@ -401,7 +592,8 @@ test_update_action_direct(void)
     exactFullSnap.apply(root);
     if (!exactFullSnap.hasCandidate() ||
 	    strcmp(exactFullSnap.getPath().getString(), "/mesh/d") != 0 ||
-	    exactFullSnap.getSkippedLodDisplayMeshCount() != 1) {
+	    exactFullSnap.getSkippedLodDisplayMeshCount() != 1 ||
+	    exactFullSnap.getSourceBackedFullDetailRequestCount() != 0) {
 	printf("FAIL: full-detail snap did not use preserved full-detail mesh\n");
 	root->unref();
 	return 1;
@@ -463,6 +655,43 @@ test_update_action_direct(void)
 	return 1;
     }
     meshD->setPickGeometryPolicy(SoBRLMeshShape::PICK_DISPLAY_LEVEL);
+
+    size_t displayBytes = meshD->estimateDisplayMeshBytes();
+    size_t fullDetailBytes = meshD->estimateFullDetailMeshBytes();
+    size_t residentBytes = meshD->estimateResidentMeshBytes();
+    if (displayBytes == 0 || fullDetailBytes == 0 ||
+	    residentBytes != displayBytes + fullDetailBytes) {
+	printf("FAIL: resident LoD mesh byte accounting did not include display and full-detail payloads\n");
+	root->unref();
+	return 1;
+    }
+
+    size_t freedBytes = meshD->evictFullDetailMesh();
+    BRLObolSourceMeshRequest evictedRequest;
+    if (freedBytes != fullDetailBytes ||
+	    meshD->hasFullDetailMesh() ||
+	    meshD->estimateFullDetailMeshBytes() != 0 ||
+	    meshD->estimateResidentMeshBytes() != displayBytes ||
+	    !meshD->makeSourceMeshRequest(evictedRequest) ||
+	    check_source_mesh_request(evictedRequest, "/mesh/d", "d", 0)) {
+	printf("FAIL: full-detail eviction did not preserve source-backed request metadata\n");
+	root->unref();
+	return 1;
+    }
+
+    SoBRLExportAction evictedExactExport;
+    evictedExactExport.apply(root);
+    if (evictedExactExport.getGeometryPolicy() != SoBRLExportAction::FULL_DETAIL ||
+	    evictedExactExport.getTriangleCount() != 3 ||
+	    evictedExactExport.getSkippedLodDisplayMeshCount() != 1 ||
+	    evictedExactExport.getSourceBackedFullDetailRequestCount() != 1 ||
+	    check_source_mesh_request(
+		evictedExactExport.getSourceBackedFullDetailRequest(0),
+		"/mesh/d", "d", 0)) {
+	printf("FAIL: evicted full-detail mesh did not fall back to source-backed exact export request\n");
+	root->unref();
+	return 1;
+    }
 
     root->unref();
     return 0;
@@ -639,6 +868,213 @@ test_mesh_lod_request_and_view_info(void)
 }
 
 static int
+test_mesh_residency_budget_action(void)
+{
+    SoSeparator *root = new SoSeparator;
+    root->ref();
+
+    SoBRLMeshShape *preservingMesh = make_mesh("/budget/preserve.bot",
+	    "preserve.bot");
+    SoBRLMeshShape *lodMesh = make_lod_mesh("/budget/lod.bot", "lod.bot");
+    preservingMesh->sourceId = 121;
+    lodMesh->sourceId = 122;
+    root->addChild(preservingMesh);
+    root->addChild(lodMesh);
+
+    BRLObolLodRequest preservingRequest =
+	make_request("/budget/preserve.bot", "preserve.bot");
+    BRLObolLodRequest lodRequest =
+	make_request("/budget/lod.bot", "lod.bot");
+    BRLObolLodResult preservingResult =
+	mesh_payload_result(preservingRequest);
+    BRLObolLodResult lodResult =
+	mesh_payload_result(lodRequest);
+    if (!preservingMesh->applyStagedLodResult(preservingResult,
+	    &preservingRequest) ||
+	    !lodMesh->applyStagedLodResult(lodResult, &lodRequest) ||
+	    !preservingMesh->hasFullDetailMesh() ||
+	    lodMesh->hasFullDetailMesh() ||
+	    !preservingMesh->isLodDisplayActive() ||
+	    !lodMesh->isLodDisplayActive()) {
+	printf("FAIL: mesh residency budget fixture did not stage LoD meshes\n");
+	root->unref();
+	return 1;
+    }
+
+    size_t initialBytes =
+	preservingMesh->estimateResidentMeshBytes() +
+	lodMesh->estimateResidentMeshBytes();
+    size_t fullDetailBytes = preservingMesh->estimateFullDetailMeshBytes();
+    size_t displayBytesAfterFullDetail =
+	preservingMesh->estimateDisplayMeshBytes() +
+	lodMesh->estimateDisplayMeshBytes();
+    if (initialBytes == 0 || fullDetailBytes == 0 ||
+	    displayBytesAfterFullDetail == 0 ||
+	    initialBytes != fullDetailBytes + displayBytesAfterFullDetail) {
+	printf("FAIL: mesh residency budget fixture byte accounting failed\n");
+	root->unref();
+	return 1;
+    }
+
+    SoBRLMeshResidencyAction fullDetailBudget;
+    fullDetailBudget.setMaxResidentMeshBytes(displayBytesAfterFullDetail);
+    fullDetailBudget.setEvictDisplayPayloads(FALSE);
+    fullDetailBudget.apply(root);
+    if (fullDetailBudget.getVisitedMeshCount() != 2 ||
+	    fullDetailBudget.getInitialResidentMeshBytes() != initialBytes ||
+	    fullDetailBudget.getFinalResidentMeshBytes() !=
+		displayBytesAfterFullDetail ||
+	    fullDetailBudget.getFreedFullDetailBytes() != fullDetailBytes ||
+	    fullDetailBudget.getFreedDisplayBytes() != 0 ||
+	    fullDetailBudget.getEvictedFullDetailMeshCount() != 1 ||
+	    fullDetailBudget.getEvictedDisplayMeshCount() != 0 ||
+	    preservingMesh->hasFullDetailMesh() ||
+	    !preservingMesh->isLodDisplayActive() ||
+	    !lodMesh->isLodDisplayActive()) {
+	printf("FAIL: mesh residency budget did not evict preserved full detail first\n");
+	root->unref();
+	return 1;
+    }
+
+    int controllerBudgetRet = 0;
+    {
+	SoOrthographicCamera *camera = new SoOrthographicCamera;
+	BRLObolViewController controller(root, camera);
+	controller.clearRenderRequest();
+	size_t freedBytes = controller.evictMeshPayloadsToBudget(0, TRUE);
+	BRLObolSourceMeshRequest preservingSourceRequest;
+	BRLObolSourceMeshRequest lodSourceRequest;
+	if (freedBytes != displayBytesAfterFullDetail ||
+		controller.getLastMeshBudgetVisitedMeshCount() != 2 ||
+		controller.getLastMeshBudgetInitialResidentBytes() !=
+		    displayBytesAfterFullDetail ||
+		controller.getLastMeshBudgetFinalResidentBytes() != 0 ||
+		controller.getLastMeshBudgetFreedResidentBytes() !=
+		    displayBytesAfterFullDetail ||
+		controller.getLastMeshBudgetFreedFullDetailBytes() != 0 ||
+		controller.getLastMeshBudgetFreedDisplayBytes() !=
+		    displayBytesAfterFullDetail ||
+		controller.getLastMeshBudgetEvictedFullDetailMeshCount() != 0 ||
+		controller.getLastMeshBudgetEvictedDisplayMeshCount() != 2 ||
+		!controller.isRenderRequested() ||
+		strcmp(controller.getRenderReason().getString(),
+		    "lod-memory-budget") != 0 ||
+		preservingMesh->isLodDisplayActive() ||
+		lodMesh->isLodDisplayActive() ||
+		preservingMesh->getTriangleCount() != 0 ||
+		lodMesh->getTriangleCount() != 0 ||
+		preservingMesh->estimateResidentMeshBytes() != 0 ||
+		lodMesh->estimateResidentMeshBytes() != 0 ||
+		!preservingMesh->makeSourceMeshRequest(
+		    preservingSourceRequest) ||
+		!lodMesh->makeSourceMeshRequest(lodSourceRequest) ||
+		check_source_mesh_request(preservingSourceRequest,
+		    "/budget/preserve.bot", "preserve.bot", 121) ||
+		check_source_mesh_request(lodSourceRequest,
+		    "/budget/lod.bot", "lod.bot", 122)) {
+	    printf("FAIL: controller mesh residency budget did not preserve source-backed exact identity\n");
+	    controllerBudgetRet = 1;
+	}
+    }
+    if (controllerBudgetRet) {
+	root->unref();
+	return 1;
+    }
+
+    root->unref();
+    return 0;
+}
+
+static int
+test_view_controller_mesh_residency_budget_auto(void)
+{
+    SoSeparator *root = new SoSeparator;
+    root->ref();
+    SoBRLMeshShape *mesh = make_mesh("/budget/auto.bot", "auto.bot");
+    mesh->sourceId = 131;
+    root->addChild(mesh);
+
+    int ret = 0;
+    {
+	SoOrthographicCamera *camera = new SoOrthographicCamera;
+	BRLObolViewController controller(root, camera);
+	BRLObolLodService service;
+
+	if (controller.hasMeshResidencyBudget()) {
+	    printf("FAIL: controller mesh residency budget should default disabled\n");
+	    ret = 1;
+	}
+	if (!ret) {
+	    controller.setMeshResidencyBudget(0, TRUE);
+	    if (!controller.hasMeshResidencyBudget() ||
+		    controller.getMaxResidentMeshBytes() != 0 ||
+		    !controller.isMeshResidencyDisplayEvictionEnabled()) {
+		printf("FAIL: controller mesh residency budget policy was not stored\n");
+		ret = 1;
+	    }
+	}
+	if (!ret && !service.start(1, TRUE)) {
+	    printf("FAIL: controller mesh residency budget service did not start\n");
+	    ret = 1;
+	}
+
+	if (!ret) {
+	    BRLObolLodTask task;
+	    task.generation = service.beginGeneration();
+	    task.request = make_request("/budget/auto.bot", "auto.bot");
+	    task.request.viewRevision = controller.getLodViewRevision();
+	    task.request.policyRevision = controller.getLodPolicyRevision();
+	    task.realize = mesh_payload_task;
+	    if (service.submit(task) == 0) {
+		printf("FAIL: controller mesh residency budget service did not accept task\n");
+		ret = 1;
+	    }
+	}
+	if (!ret && wait_for_service(service))
+	    ret = 1;
+
+	if (!ret) {
+	    controller.clearRenderRequest();
+	    int applied = controller.applyLodResults(&service);
+	    BRLObolSourceMeshRequest sourceRequest;
+	    if (applied != 1 ||
+		    controller.getLastLodAppliedResultCount() != 1 ||
+		    controller.getLastMeshBudgetVisitedMeshCount() != 1 ||
+		    controller.getLastMeshBudgetInitialResidentBytes() == 0 ||
+		    controller.getLastMeshBudgetFinalResidentBytes() != 0 ||
+		    controller.getLastMeshBudgetEvictedFullDetailMeshCount() != 1 ||
+		    controller.getLastMeshBudgetEvictedDisplayMeshCount() != 1 ||
+		    !controller.isRenderRequested() ||
+		    strcmp(controller.getRenderReason().getString(),
+			"lod-memory-budget") != 0 ||
+		    mesh->isLodDisplayActive() ||
+		    mesh->hasFullDetailMesh() ||
+		    mesh->getTriangleCount() != 0 ||
+		    mesh->estimateResidentMeshBytes() != 0 ||
+		    !mesh->makeSourceMeshRequest(sourceRequest) ||
+		    check_source_mesh_request(sourceRequest,
+			"/budget/auto.bot", "auto.bot", 131)) {
+		printf("FAIL: controller mesh residency budget did not auto-evict applied LoD payload\n");
+		ret = 1;
+	    }
+	}
+	if (!ret) {
+	    controller.clearMeshResidencyBudget();
+	    if (controller.hasMeshResidencyBudget() ||
+		    !controller.isMeshResidencyDisplayEvictionEnabled()) {
+		printf("FAIL: controller mesh residency budget clear failed\n");
+		ret = 1;
+	    }
+	}
+
+	service.stop();
+    }
+
+    root->unref();
+    return ret;
+}
+
+static int
 test_mesh_lod_submit_action(void)
 {
     char cache_dir[MAXPATHLEN] = {0};
@@ -763,6 +1199,321 @@ test_mesh_lod_submit_action(void)
 	    printf("FAIL: LoD-backed mesh request did not keep source metrics without full-detail payload\n");
 	    ret = 1;
 	}
+    }
+
+    if (!ret) {
+	SoBRLExportAction exactExport;
+	exactExport.apply(root);
+	if (exactExport.getGeometryPolicy() != SoBRLExportAction::FULL_DETAIL ||
+		exactExport.getTriangleCount() != 1 ||
+		exactExport.getSkippedLodDisplayMeshCount() != 1 ||
+		exactExport.getSourceBackedFullDetailRequestCount() != 1 ||
+		check_source_mesh_request(
+		    exactExport.getSourceBackedFullDetailRequest(0),
+		    "/lod-submit.bot", "lod-submit.bot", 101)) {
+	    printf("FAIL: exact export did not request source-backed full-detail LoD mesh\n");
+	    ret = 1;
+	} else {
+	    BRLObolLodRequest sourceLodRequest;
+	    if (!exactExport.makeSourceBackedFullDetailLodRequest(0,
+		    sourceLodRequest) ||
+		    check_source_full_detail_lod_request(sourceLodRequest,
+			"/lod-submit.bot", "lod-submit.bot")) {
+		printf("FAIL: exact export source-backed request did not convert to RT full-detail LoD request\n");
+		ret = 1;
+	    } else {
+		int beforeTriangleCount = exactExport.getTriangleCount();
+		BRLObolLodResult sourceResult =
+		    source_full_detail_result(sourceLodRequest);
+		std::vector<BRLObolLodResult> sourceResults;
+		sourceResults.push_back(sourceResult);
+		if (exactExport.consumeSourceBackedFullDetailResults(
+			sourceResults) != 1 ||
+			exactExport.getTriangleCount() != beforeTriangleCount + 1 ||
+			exactExport.getTriangle(beforeTriangleCount).sourceId != 101 ||
+			exactExport.getTriangle(beforeTriangleCount).vertexIndexA != 0 ||
+			exactExport.getTriangle(beforeTriangleCount).vertexIndexB != 1 ||
+			exactExport.getTriangle(beforeTriangleCount).vertexIndexC != 2) {
+		    printf("FAIL: exact export did not consume source-backed full-detail LoD result\n");
+		    ret = 1;
+		}
+		BRLObolLodService sourceService;
+		if (!sourceService.start(1, TRUE)) {
+		    printf("FAIL: exact export source-backed submit helper service did not start\n");
+		    ret = 1;
+		} else {
+		    if (exactExport.submitSourceBackedFullDetailRequests(
+			    &sourceService, sourceService.beginGeneration(),
+			    dbip) != 1) {
+			printf("FAIL: exact export did not submit source-backed full-detail LoD request\n");
+			ret = 1;
+		    } else if (wait_for_service(sourceService)) {
+			ret = 1;
+		    } else {
+			std::vector<BRLObolLodResult> submittedResults;
+			sourceService.drainResults(submittedResults);
+			if (submittedResults.size() != 1 ||
+				submittedResults[0].providerStatus !=
+				BRLOBOL_LOD_PROVIDER_STALE) {
+			    printf("FAIL: exact export source-backed submit helper did not publish stale source result\n");
+			    ret = 1;
+			}
+		    }
+		    sourceService.stop();
+		}
+	    }
+	}
+    }
+
+    if (!ret) {
+	SoBRLMeasureAction exactMeasure;
+	exactMeasure.apply(root);
+	if (exactMeasure.getGeometryPolicy() != SoBRLMeasureAction::FULL_DETAIL ||
+		exactMeasure.getTriangleCount() != 1 ||
+		exactMeasure.getSkippedLodDisplayMeshCount() != 1 ||
+		exactMeasure.getSourceBackedFullDetailRequestCount() != 1 ||
+		check_source_mesh_request(
+		    exactMeasure.getSourceBackedFullDetailRequest(0),
+		    "/lod-submit.bot", "lod-submit.bot", 101)) {
+	    printf("FAIL: exact measure did not request source-backed full-detail LoD mesh\n");
+	    ret = 1;
+	} else {
+	    BRLObolLodRequest sourceLodRequest;
+	    if (!exactMeasure.makeSourceBackedFullDetailLodRequest(0,
+		    sourceLodRequest) ||
+		    check_source_full_detail_lod_request(sourceLodRequest,
+			"/lod-submit.bot", "lod-submit.bot")) {
+		printf("FAIL: exact measure source-backed request did not convert to RT full-detail LoD request\n");
+		ret = 1;
+	    } else {
+		int beforeTriangleCount = exactMeasure.getTriangleCount();
+		float beforeArea = exactMeasure.getSurfaceArea();
+		BRLObolLodResult sourceResult =
+		    source_full_detail_result(sourceLodRequest);
+		std::vector<BRLObolLodResult> sourceResults;
+		sourceResults.push_back(sourceResult);
+		if (exactMeasure.consumeSourceBackedFullDetailResults(
+			sourceResults) != 1 ||
+			exactMeasure.getTriangleCount() != beforeTriangleCount + 1 ||
+			exactMeasure.getSurfaceArea() <= beforeArea) {
+		    printf("FAIL: exact measure did not consume source-backed full-detail LoD result\n");
+		    ret = 1;
+		}
+	    }
+	}
+    }
+
+    if (!ret) {
+	SoBRLSnapAction exactSnap;
+	exactSnap.setGeometryPolicy(SoBRLSnapAction::FULL_DETAIL);
+	exactSnap.setEnabledKinds(SoBRLSnapAction::FACE_NEAREST);
+	exactSnap.setQueryPoint(SbVec3f(1.5f, 0.2f, 0.0f));
+	exactSnap.setTolerance(0.1f);
+	exactSnap.apply(root);
+	if (exactSnap.hasCandidate() ||
+		exactSnap.getSkippedLodDisplayMeshCount() != 1 ||
+		exactSnap.getSourceBackedFullDetailRequestCount() != 1) {
+	    printf("FAIL: exact snap did not request source-backed full-detail LoD mesh\n");
+	    ret = 1;
+	} else {
+	    const BRLObolSourceMeshRequest &snapSourceRequest =
+		exactSnap.getSourceBackedFullDetailRequest(0);
+	    if (check_source_mesh_request(snapSourceRequest, "/lod-submit.bot",
+		    "lod-submit.bot", 101)) {
+		printf("FAIL: exact snap did not request source-backed full-detail LoD mesh\n");
+		ret = 1;
+	    } else if (!snapSourceRequest.queryBoundsValid ||
+		    snapSourceRequest.queryBounds.isEmpty() ||
+		    !snapSourceRequest.queryToleranceValid ||
+		    snapSourceRequest.queryTolerance <= 0.0f) {
+		printf("FAIL: exact snap source-backed request did not carry bounded query metadata\n");
+		ret = 1;
+	    }
+	}
+	if (!ret) {
+	    BRLObolLodRequest sourceLodRequest;
+	    if (!exactSnap.makeSourceBackedFullDetailLodRequest(0,
+		    sourceLodRequest) ||
+		    check_source_full_detail_lod_request(sourceLodRequest,
+			"/lod-submit.bot", "lod-submit.bot") ||
+		    !has_lod_provider_param(sourceLodRequest,
+			"source_query.space") ||
+		    !has_lod_provider_param(sourceLodRequest,
+			"source_query.bounds") ||
+		    !has_lod_provider_param(sourceLodRequest,
+			"source_query.tolerance")) {
+		printf("FAIL: exact snap source-backed request did not convert to RT full-detail LoD request\n");
+		ret = 1;
+	    } else {
+		BRLObolLodResult sourceResult =
+		    source_full_detail_result(sourceLodRequest);
+		std::vector<BRLObolLodResult> sourceResults;
+		sourceResults.push_back(sourceResult);
+		exactSnap.setQueryPoint(SbVec3f(0.2f, 0.2f, 0.0f));
+		if (exactSnap.consumeSourceBackedFullDetailResults(
+			sourceResults) != 1 ||
+			!exactSnap.hasCandidate() ||
+			exactSnap.getKind() != SoBRLSnapAction::FACE_NEAREST ||
+			exactSnap.getPrimitiveIndex() != 0 ||
+			strcmp(exactSnap.getPath().getString(),
+			    "/lod-submit.bot") != 0) {
+		    printf("FAIL: exact snap did not consume source-backed full-detail LoD result\n");
+		    ret = 1;
+		}
+		BRLObolSourceMeshPickResult sourcePick;
+		if (!brlobol_pick_source_full_detail_result(sourcePick,
+			exactSnap.getSourceBackedFullDetailRequest(0),
+			sourceResult,
+			SbVec3f(0.2f, 0.2f, 5.0f),
+			SbVec3f(0.0f, 0.0f, -1.0f)) ||
+			!sourcePick.hit ||
+			strcmp(sourcePick.detail.getPath().getString(),
+			    "/lod-submit.bot") != 0 ||
+			sourcePick.detail.getPrimitiveKind() !=
+			    SoBRLPickDetail::FACE ||
+			sourcePick.detail.getPrimitiveIndex() != 0 ||
+			sourcePick.detail.getFaceVertexIndexA() != 0 ||
+			sourcePick.detail.getFaceVertexIndexB() != 1 ||
+			sourcePick.detail.getFaceVertexIndexC() != 2 ||
+			fabsf(sourcePick.distance - 5.0f) > 1.0e-5f) {
+		    printf("FAIL: exact pick did not consume source-backed full-detail LoD result\n");
+		    ret = 1;
+		}
+		SoBRLSourceMeshPickAction sourcePickAction;
+		mesh->setPickGeometryPolicy(SoBRLMeshShape::PICK_FULL_DETAIL);
+		sourcePickAction.setRay(SbVec3f(0.2f, 0.2f, 5.0f),
+			SbVec3f(0.0f, 0.0f, -1.0f));
+		sourcePickAction.apply(root);
+		if (sourcePickAction.getVisitedMeshCount() != 2 ||
+			sourcePickAction.getSourceBackedFullDetailRequestCount() != 1) {
+		    printf("FAIL: exact pick action did not collect and consume source-backed full-detail LoD result\n");
+		    ret = 1;
+		} else {
+		    BRLObolLodRequest pickLodRequest;
+		    BRLObolSourceMeshPickResult actionPick;
+		    const BRLObolSourceMeshRequest &pickSourceRequest =
+			sourcePickAction.getSourceBackedFullDetailRequest(0);
+		    if (!pickSourceRequest.queryRayValid ||
+			pickSourceRequest.queryRayDirection.length() <= 0.0f ||
+			!sourcePickAction.makeSourceBackedFullDetailLodRequest(0,
+			    pickLodRequest) ||
+			check_source_full_detail_lod_request(pickLodRequest,
+			    "/lod-submit.bot", "lod-submit.bot") ||
+			!has_lod_provider_param(pickLodRequest,
+			    "source_query.space") ||
+			!has_lod_provider_param(pickLodRequest,
+			    "source_query.ray.origin") ||
+			!has_lod_provider_param(pickLodRequest,
+			    "source_query.ray.direction")) {
+			printf("FAIL: exact pick action did not collect and consume source-backed full-detail LoD result\n");
+			ret = 1;
+		    } else {
+			std::vector<BRLObolLodResult> pickSourceResults;
+			pickSourceResults.push_back(
+				source_full_detail_result(pickLodRequest));
+			if (sourcePickAction.consumeSourceBackedFullDetailResults(
+				actionPick, pickSourceResults) != 1 ||
+				!actionPick.hit ||
+				strcmp(actionPick.detail.getPath().getString(),
+				    "/lod-submit.bot") != 0 ||
+				actionPick.detail.getPrimitiveIndex() != 0) {
+			    printf("FAIL: exact pick action did not collect and consume source-backed full-detail LoD result\n");
+			    ret = 1;
+			}
+		    }
+		}
+	    }
+	}
+    }
+
+    if (!ret) {
+	size_t displayBytes = mesh->estimateDisplayMeshBytes();
+	size_t residentBytes = mesh->estimateResidentMeshBytes();
+	size_t freedBytes = mesh->evictActiveDisplayMesh();
+	BRLObolSourceMeshRequest evictedDisplayRequest;
+	SoGetBoundingBoxAction bboxAction(SbViewportRegion(100, 100));
+	bboxAction.apply(mesh);
+	if (displayBytes == 0 ||
+		residentBytes != displayBytes ||
+		freedBytes != displayBytes ||
+		mesh->isLodDisplayActive() ||
+		mesh->getTriangleCount() != 0 ||
+		mesh->estimateDisplayMeshBytes() != 0 ||
+		mesh->estimateResidentMeshBytes() != 0 ||
+		!mesh->makeSourceMeshRequest(evictedDisplayRequest) ||
+		check_source_mesh_request(evictedDisplayRequest,
+		    "/lod-submit.bot", "lod-submit.bot", 101) ||
+		bboxAction.getBoundingBox().isEmpty() ||
+		bboxAction.getBoundingBox().getMax()[0] > 1.0f ||
+		bboxAction.getBoundingBox().getMax()[1] > 1.0f) {
+	    printf("FAIL: active display eviction did not preserve source-backed LoD identity\n");
+	    ret = 1;
+	}
+    }
+
+    if (!ret) {
+	SoBRLExportAction evictedDisplayExactExport;
+	evictedDisplayExactExport.apply(root);
+	if (evictedDisplayExactExport.getGeometryPolicy() !=
+		SoBRLExportAction::FULL_DETAIL ||
+		evictedDisplayExactExport.getTriangleCount() != 1 ||
+		evictedDisplayExactExport.getSourceBackedFullDetailRequestCount() != 1 ||
+		check_source_mesh_request(
+		    evictedDisplayExactExport.getSourceBackedFullDetailRequest(0),
+		    "/lod-submit.bot", "lod-submit.bot", 101)) {
+	    printf("FAIL: evicted active display mesh did not keep source-backed exact export\n");
+	    ret = 1;
+	}
+    }
+
+    if (!ret) {
+	SoBRLMeasureAction evictedDisplayExactMeasure;
+	evictedDisplayExactMeasure.apply(root);
+	if (evictedDisplayExactMeasure.getGeometryPolicy() !=
+		SoBRLMeasureAction::FULL_DETAIL ||
+		evictedDisplayExactMeasure.getTriangleCount() != 1 ||
+		evictedDisplayExactMeasure.getSourceBackedFullDetailRequestCount() != 1 ||
+		check_source_mesh_request(
+		    evictedDisplayExactMeasure.getSourceBackedFullDetailRequest(0),
+		    "/lod-submit.bot", "lod-submit.bot", 101)) {
+	    printf("FAIL: evicted active display mesh did not keep source-backed exact measure\n");
+	    ret = 1;
+	}
+    }
+
+    if (!ret) {
+	SoBRLSnapAction evictedDisplayExactSnap;
+	evictedDisplayExactSnap.setGeometryPolicy(SoBRLSnapAction::FULL_DETAIL);
+	evictedDisplayExactSnap.setEnabledKinds(SoBRLSnapAction::FACE_NEAREST);
+	evictedDisplayExactSnap.setQueryPoint(SbVec3f(1.5f, 0.2f, 0.0f));
+	evictedDisplayExactSnap.setTolerance(0.1f);
+	evictedDisplayExactSnap.apply(root);
+	if (evictedDisplayExactSnap.hasCandidate() ||
+		evictedDisplayExactSnap.getSourceBackedFullDetailRequestCount() != 1 ||
+		check_source_mesh_request(
+		    evictedDisplayExactSnap.getSourceBackedFullDetailRequest(0),
+		    "/lod-submit.bot", "lod-submit.bot", 101)) {
+	    printf("FAIL: evicted active display mesh did not keep source-backed exact snap\n");
+	    ret = 1;
+	}
+    }
+
+    if (!ret) {
+	SoBRLSourceMeshPickAction evictedDisplayPick;
+	BRLObolLodRequest evictedDisplayPickRequest;
+	mesh->setPickGeometryPolicy(SoBRLMeshShape::PICK_FULL_DETAIL);
+	evictedDisplayPick.setRay(SbVec3f(0.2f, 0.2f, 5.0f),
+		SbVec3f(0.0f, 0.0f, -1.0f));
+	evictedDisplayPick.apply(root);
+	if (evictedDisplayPick.getSourceBackedFullDetailRequestCount() != 1 ||
+		!evictedDisplayPick.makeSourceBackedFullDetailLodRequest(0,
+		    evictedDisplayPickRequest) ||
+		check_source_full_detail_lod_request(evictedDisplayPickRequest,
+		    "/lod-submit.bot", "lod-submit.bot")) {
+	    printf("FAIL: evicted active display mesh did not keep source-backed exact pick\n");
+	    ret = 1;
+	}
+	mesh->setPickGeometryPolicy(SoBRLMeshShape::PICK_DISPLAY_LEVEL);
     }
 
     if (!ret) {
@@ -1231,6 +1982,12 @@ main(int argc, char **argv)
     if (test_update_action_service_drain())
 	return 1;
     if (test_mesh_lod_request_and_view_info())
+	return 1;
+    if (test_rt_exact_pick_provider())
+	return 1;
+    if (test_mesh_residency_budget_action())
+	return 1;
+    if (test_view_controller_mesh_residency_budget_auto())
 	return 1;
     if (test_mesh_lod_submit_action())
 	return 1;

@@ -10,8 +10,14 @@
 extern "C" {
 #include "bsg.h"
 #include "bsg/view_state.h"
+#include "rt/view_legacy_bsg.h"
 }
 
+#include "brlobol/database_source.h"
+#include "brlobol/lod_mesh_shape.h"
+#include "brlobol/lod_service.h"
+#include "brlobol/mesh_shape.h"
+#include "brlobol/snap_action.h"
 #include "brlobol/view_controller.h"
 #include "bu/app.h"
 #include "bu/env.h"
@@ -26,12 +32,17 @@ extern "C" {
 #include "wdb.h"
 
 #include <Inventor/SoViewport.h>
+#include <Inventor/nodes/SoSeparator.h>
 
 #include <QApplication>
 #include <QMouseEvent>
 
+#include <chrono>
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
+#include <thread>
+#include <vector>
 
 #define FAIL(_msg) \
     do { \
@@ -93,6 +104,62 @@ apply_and_sync(struct ged *gedp,
     return draw_ret >= 0 && changed != 0;
 }
 
+static BRLObolLodResult
+qtcad_source_snap_result(const BRLObolLodRequest &request,
+	int resultKind,
+	int qualityTier)
+{
+    BRLObolLodResult result;
+
+    result.request = request;
+    result.cacheKey = brlobol_lod_cache_key(request);
+    result.resultKind = resultKind;
+    result.qualityTier = qualityTier;
+    result.providerStatus = BRLOBOL_LOD_PROVIDER_READY;
+    result.counts.faceCount = 1;
+    result.counts.pointCount = 3;
+    result.terminal = TRUE;
+
+    result.geometry.kind = BRLOBOL_LOD_GEOMETRY_OBOL_MESH;
+    result.geometry.providerId = request.providerId;
+    result.geometry.providerVersion = request.providerVersion;
+    result.geometry.cacheKey = result.cacheKey;
+    result.geometry.activeLevel =
+	resultKind == BRLOBOL_LOD_RESULT_MESH ? 1 : -1;
+    result.geometry.borrowed = FALSE;
+
+    result.mesh.points.push_back(SbVec3f(-1.0f, -1.0f, 0.0f));
+    result.mesh.points.push_back(SbVec3f(1.0f, -1.0f, 0.0f));
+    result.mesh.points.push_back(SbVec3f(-1.0f, 1.0f, 0.0f));
+    result.mesh.coordIndex.push_back(0);
+    result.mesh.coordIndex.push_back(1);
+    result.mesh.coordIndex.push_back(2);
+    for (const SbVec3f &point : result.mesh.points)
+	result.bounds.extendBy(point);
+
+    return result;
+}
+
+static BRLObolLodResult
+qtcad_source_snap_task(const BRLObolLodRequest &request, void *UNUSED(userData))
+{
+    return qtcad_source_snap_result(request, BRLOBOL_LOD_RESULT_FULL_DETAIL,
+	    BRLOBOL_LOD_QUALITY_FULL_DETAIL);
+}
+
+static int
+wait_for_qtcad_source_snap_result(BRLObolLodService &service)
+{
+    for (int i = 0; i < 400; i++) {
+	if (service.inFlightCount() == 0 &&
+		service.queuedResultCountForDiagnostics() >= 1)
+	    return 0;
+	std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+
+    return 1;
+}
+
 static QMouseEvent
 left_move_at(int x, int y)
 {
@@ -108,11 +175,12 @@ left_move_at(int x, int y)
 static void
 set_center_query(struct bsg_view *v, fastf_t x, fastf_t y, fastf_t z)
 {
-    v->gv_width = 200;
-    v->gv_height = 200;
-    v->gv_size = 2.0;
-    MAT_IDN(v->gv_view2model);
-    MAT_DELTAS(v->gv_view2model, x, y, z);
+    mat_t view2model;
+    rt_view_dimensions_set_bsg(v, 200, 200);
+    rt_view_size_set_bsg(v, 2.0);
+    MAT_IDN(view2model);
+    MAT_DELTAS(view2model, x, y, z);
+    rt_view_view2model_set_bsg(v, view2model);
 }
 
 int
@@ -168,8 +236,8 @@ main(int argc, char **argv)
 
     struct bsg_view *bv = view.view();
     set_center_query(bv, 11.02, 11.02, 11.02);
-    bsg_view_set_snap_source_flags(bv, BSG_SNAP_DB);
-    bsg_view_set_snap_lines(bv, 1);
+    rt_view_snap_source_flags_set_bsg(bv, BSG_SNAP_DB);
+    rt_view_snap_lines_set_bsg(bv, 1);
 
     SnapProbeFilter filter;
     filter.set_view(bv);
@@ -185,7 +253,7 @@ main(int argc, char **argv)
 	FAIL("qtcad Obol snap refinement should not initialize the legacy display manager");
 
     set_center_query(bv, 11.02, 11.02, 11.02);
-    bsg_view_set_snap_source_flags(bv, BSG_SNAP_VIEW);
+    rt_view_snap_source_flags_set_bsg(bv, BSG_SNAP_VIEW);
     QMouseEvent viewScopedMove = left_move_at(100, 100);
     if (!filter.sync(&viewScopedMove))
 	FAIL("qtcad view filter should accept a view-scoped snap probe event");
@@ -195,6 +263,138 @@ main(int argc, char **argv)
 	FAIL("qtcad view filter should leave view-scoped snapping on the BSG path");
     if (view.dmp())
 	FAIL("qtcad view-scoped snap fallback should not initialize the legacy display manager");
+
+    SoSeparator *lodRoot = new SoSeparator;
+    lodRoot->ref();
+    SoBRLDatabaseSource *lodDatabase = new SoBRLDatabaseSource;
+    lodDatabase->configureDatabaseSource("lod-snap-db", gedp->dbip,
+	    SoBRLDatabaseSource::WIREFRAME, 1);
+    SoBRLLodMeshShape *lodMesh = new SoBRLLodMeshShape;
+    SbVec3f lodPoints[3] = {
+	SbVec3f(-1.0f, -1.0f, 0.0f),
+	SbVec3f(1.0f, -1.0f, 0.0f),
+	SbVec3f(-1.0f, 1.0f, 0.0f)
+    };
+    int32_t lodIndices[3] = {0, 1, 2};
+    lodMesh->sourcePath = "/lod-snap.bot";
+    lodMesh->sourceName = "lod-snap.bot";
+    lodMesh->sourceType = "bot";
+    lodMesh->sourceId = 9101;
+    lodMesh->setIndexedTriangles(lodPoints, 3, lodIndices, 3);
+
+    BRLObolLodRequest displayRequest;
+    lodMesh->makeLodRequest(displayRequest,
+	    "db://qtcad-obol-snap-test",
+	    1,
+	    1,
+	    1,
+	    BRLOBOL_LOD_DRAW_SHADED,
+	    "rt_mesh_lod",
+	    "rt-cache-v1",
+	    BRLOBOL_LOD_QUALITY_FAST_DISPLAY);
+    BRLObolLodResult displayResult = qtcad_source_snap_result(displayRequest,
+	    BRLOBOL_LOD_RESULT_MESH, BRLOBOL_LOD_QUALITY_FAST_DISPLAY);
+    if (!lodMesh->applyStagedLodResult(displayResult, &displayRequest) ||
+	    !lodMesh->isLodDisplayActive() ||
+	    lodMesh->hasFullDetailMesh())
+	FAIL("qtcad LoD snap fixture should have active display LoD without resident full detail");
+
+    lodRoot->addChild(lodDatabase);
+    lodRoot->addChild(lodMesh);
+    controller->setSceneRoot(lodRoot);
+    lodRoot->unref();
+
+    BRLObolLodRequest sourceLodRequest;
+    SoBRLSnapAction seededSnapAction;
+    seededSnapAction.setQueryPoint(SbVec3f(-0.2f, -0.2f, 0.02f));
+    seededSnapAction.setTolerance(0.1f);
+    seededSnapAction.setEnabledKinds(QgObolSnapRecord::FACE_NEAREST);
+    seededSnapAction.setPriorityPolicy(SoBRLSnapAction::FEATURE_PRIORITY);
+    seededSnapAction.setGeometryPolicy(SoBRLSnapAction::FULL_DETAIL);
+    seededSnapAction.apply(controller->getViewport()->getRoot());
+    if (seededSnapAction.getSourceBackedFullDetailRequestCount() != 1 ||
+	    !seededSnapAction.makeSourceBackedFullDetailLodRequest(0,
+		sourceLodRequest))
+	FAIL("qtcad LoD snap fixture should build a bounded source full-detail request");
+
+    BRLObolLodService sourceService;
+    if (!sourceService.start(1, TRUE))
+	FAIL("qtcad LoD snap source service should start");
+    controller->setLodService(&sourceService);
+
+    BRLObolLodTask sourceTask;
+    sourceTask.request = sourceLodRequest;
+    sourceTask.realize = qtcad_source_snap_task;
+    if (sourceService.submit(sourceTask) == 0) {
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad LoD snap source service should accept the ready task");
+    }
+    if (wait_for_qtcad_source_snap_result(sourceService)) {
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad LoD snap source result should become ready");
+    }
+
+    QgObolSnapRecord exactSnap;
+    if (!qg_obol_snap_point_full_detail(&view,
+	    SbVec3f(-0.2f, -0.2f, 0.02f), 0.1f,
+	    QgObolSnapRecord::FACE_NEAREST, exactSnap)) {
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad exact Obol snap should consume ready source-backed full detail");
+    }
+    if (exactSnap.path != "/lod-snap.bot" ||
+	    exactSnap.kind != QgObolSnapRecord::FACE_NEAREST ||
+	    exactSnap.primitiveIndex != 0 ||
+	    !near_point(exactSnap.point, -0.2f, -0.2f, 0.0f)) {
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad exact Obol snap should preserve source-backed face identity");
+    }
+    if (sourceService.queuedResultCountForDiagnostics() != 0) {
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad exact Obol snap should drain only its matching result");
+    }
+
+    controller->setExactFullDetailBudget(0, 2);
+    QgObolSnapRecord overBudgetSnap;
+    if (qg_obol_snap_point_full_detail(&view,
+	    SbVec3f(-0.2f, -0.2f, 0.02f), 0.1f,
+	    QgObolSnapRecord::FACE_NEAREST, overBudgetSnap)) {
+	controller->setExactFullDetailBudget(0, 0);
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad exact Obol snap should not treat missing over-budget source detail as a snap candidate");
+    }
+    if (wait_for_qtcad_source_snap_result(sourceService)) {
+	controller->setExactFullDetailBudget(0, 0);
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad exact Obol snap over-budget source result should become ready");
+    }
+    std::vector<BRLObolLodResult> overBudgetResults;
+    sourceService.drainResults(overBudgetResults);
+    if (overBudgetResults.size() != 1 ||
+	    overBudgetResults[0].providerStatus != BRLOBOL_LOD_PROVIDER_FALLBACK ||
+	    strcmp(overBudgetResults[0].diagnostic.getString(),
+		"RT source full-detail provider request exceeds full-detail limits") != 0 ||
+	    overBudgetResults[0].mesh.isValid()) {
+	controller->setExactFullDetailBudget(0, 0);
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad exact Obol snap should pass controller full-detail budget to source provider");
+    }
+    controller->setExactFullDetailBudget(0, 0);
+
+    if (view.dmp()) {
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad source-backed exact Obol snap should not initialize the legacy display manager");
+    }
+    controller->setLodService(NULL);
+    sourceService.stop();
 
     ged_close(gedp);
     bu_file_delete(dbpath);

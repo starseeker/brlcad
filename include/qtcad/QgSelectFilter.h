@@ -36,7 +36,6 @@
 #include "qtcad/defines.h"
 #include "qtcad/QgViewFilter.h"
 
-struct bsg_pick_result;
 struct bsg_view;
 struct db_i;
 
@@ -67,7 +66,7 @@ class QTCAD_EXPORT QgSelectFilter : public QgViewFilter {
 
     protected:
 	void clear_selected_result();
-	void set_selected_result(struct bsg_view *v, struct bsg_pick_result *res);
+	void set_selected_result(struct bsg_view *v, void *res);
 	void set_selected_paths(struct bsg_view *v, const std::vector<std::string> &paths);
 
     private:

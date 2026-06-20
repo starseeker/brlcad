@@ -36,6 +36,7 @@
 
 #include "bsg/feature.h"
 #include "bsg/geometry.h"
+#include "rt/view_legacy_bsg.h"
 
 #include "../ged_private.h"
 extern "C" {
@@ -156,9 +157,11 @@ ged_cm_end(struct ged *gedp, vect_t *v, mat_t *m, const int UNUSED(argc), const 
     }
 
     /* First step:  put eye at view center (view 0, 0, 0) */
-    MAT_COPY(gedp->ged_gvp->gv_rotation, (*m));
-    MAT_DELTAS_VEC_NEG(gedp->ged_gvp->gv_center, (*v));
+    rt_view_rotation_set_bsg(gedp->ged_gvp, (*m));
+    rt_view_center_vec_set_bsg(gedp->ged_gvp, (*v));
     bsg_update(gedp->ged_gvp);
+    mat_t view2model;
+    rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
 
     /*
      * Compute camera orientation notch to right (+X) and up (+Y)
@@ -166,8 +169,8 @@ ged_cm_end(struct ged *gedp, vect_t *v, mat_t *m, const int UNUSED(argc), const 
      */
     VSET(xv, 0.05, 0.0, 0.0);
     VSET(yv, 0.0, 0.05, 0.0);
-    MAT4X3PNT(xm, gedp->ged_gvp->gv_view2model, xv);
-    MAT4X3PNT(ym, gedp->ged_gvp->gv_view2model, yv);
+    MAT4X3PNT(xm, view2model, xv);
+    MAT4X3PNT(ym, view2model, yv);
     if (draw_eye_path) {
 	(void)preview_line_append(&preview_eye_path, xm, BSG_GEOMETRY_LINE_DRAW);
 	(void)preview_line_append(&preview_eye_path, (*v), BSG_GEOMETRY_LINE_MOVE);
@@ -177,10 +180,10 @@ ged_cm_end(struct ged *gedp, vect_t *v, mat_t *m, const int UNUSED(argc), const 
 
     /* Second step:  put eye at view 0, 0, 1.
      * For eye to be at 0, 0, 1, the old 0, 0, -1 needs to become 0, 0, 0.
-     */
+    */
     VSET(xlate, 0.0, 0.0, -1.0);	/* correction factor */
-    MAT4X3PNT(new_cent, gedp->ged_gvp->gv_view2model, xlate);
-    MAT_DELTAS_VEC_NEG(gedp->ged_gvp->gv_center, new_cent);
+    MAT4X3PNT(new_cent, view2model, xlate);
+    rt_view_center_vec_set_bsg(gedp->ged_gvp, new_cent);
     bsg_update(gedp->ged_gvp);
 
     /* If new treewalk is needed, get new objects into view. */
@@ -447,9 +450,11 @@ ged_preview_core(struct ged *gedp, int argc, const char *argv[])
      * Initialize the view to the current one provided by the ged
      * structure in case a view specification is never given.
      */
-    MAT_COPY(*ged_viewrot, gedp->ged_gvp->gv_rotation);
+    rt_view_rotation_from_bsg(*ged_viewrot, gedp->ged_gvp);
     VSET(temp, 0.0, 0.0, 1.0);
-    MAT4X3PNT(*ged_eye_model, gedp->ged_gvp->gv_view2model, temp);
+    mat_t view2model;
+    rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
+    MAT4X3PNT(*ged_eye_model, view2model, temp);
 
     if (image_name) {
 	/* parse file name and possible extension */

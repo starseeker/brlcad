@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "rt/view_legacy_bsg.h"
+
 #include "../ged_private.h"
 
 
@@ -85,7 +87,9 @@ ged_rot_point_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     /* Rotate the incoming point */
-    bn_mat_inv(invRot, gedp->ged_gvp->gv_rotation);
+    mat_t rotation;
+    rt_view_rotation_from_bsg(rotation, gedp->ged_gvp);
+    bn_mat_inv(invRot, rotation);
     MAT4X3PNT(rpoint, invRot, point);
     bn_encode_vect(gedp->ged_result_str, rpoint, 1);
 

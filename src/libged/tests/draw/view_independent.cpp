@@ -32,6 +32,7 @@
 #include <bu.h>
 #include <bsg.h>
 #include <ged.h>
+#include <rt/view_legacy_bsg.h>
 #include "ged/bsg_ged_draw.h"
 #include "../../bsg_ged_draw_private.h"
 
@@ -190,8 +191,7 @@ main(int argc, const char **argv)
     }
 
     for (int i = 0; i < 2; i++) {
-	views[i]->gv_size = 1.0e9;
-	views[i]->gv_scale = 1.0e9;
+	rt_view_scale_state_set_bsg(views[i], 1.0e9, 1.0, 0.0, 1.0e9, 1.0 / 1.0e9);
     }
     ASSERT(draw_shared_autoview(gedp, "all.g") == BRLCAD_OK);
     ASSERT(ged_draw_view_has_lod_bounds_update(views[0]));

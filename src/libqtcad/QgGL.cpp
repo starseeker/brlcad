@@ -38,6 +38,7 @@
 
 extern "C" {
 #include "bsg/util.h"
+#include "rt/view_legacy_bsg.h"
 }
 
 // FROM MGED
@@ -207,14 +208,13 @@ dm_set_win_bounds(d->dmp, windowbounds);
 
 if (d->v) {
     // Associate the view scale with the dmp
-    dm_set_vp(d->dmp, &d->v->gv_scale);
+    dm_set_vp(d->dmp, rt_view_scale_storage_from_bsg(d->v));
 
     // Let the view know it now has an associated display manager
     d->v->dmp = d->dmp;
 
     // Set the view width and height to match the dm
-    d->v->gv_width  = dm_get_width(d->dmp);
-    d->v->gv_height = dm_get_height(d->dmp);
+    rt_view_dimensions_set_bsg(d->v, dm_get_width(d->dmp), dm_get_height(d->dmp));
 }
 
 // If we have a ptbl defining the current dm set and/or an unset
@@ -238,8 +238,7 @@ dm_configure_win(d->dmp, 0);
 if (d->ifp)
     fb_configure_window(d->ifp, rsize.width(), rsize.height());
     }
-    d->v->gv_width  = dm_get_width(d->dmp);
-    d->v->gv_height = dm_get_height(d->dmp);
+    rt_view_dimensions_set_bsg(d->v, dm_get_width(d->dmp), dm_get_height(d->dmp));
 
     // Re-draw the background to clear any previous drawing
     unsigned char *dm_bg1;
@@ -263,10 +262,11 @@ void QgGL::resizeGL(int, int)
     if (!d->dmp || !d->v)
 return;
     dm_configure_win(d->dmp, 0);
-    d->v->gv_width  = dm_get_width(d->dmp);
-    d->v->gv_height = dm_get_height(d->dmp);
+    rt_view_dimensions_set_bsg(d->v, dm_get_width(d->dmp), dm_get_height(d->dmp));
     if (d->ifp) {
-fb_configure_window(d->ifp, d->v->gv_width, d->v->gv_height);
+fb_configure_window(d->ifp,
+	rt_view_width_from_bsg(d->v),
+	rt_view_height_from_bsg(d->v));
     }
     if (d->dmp)
 qgcanvas_request_update(*d, BSG_VIEW_REFRESH_VIEW);
@@ -282,11 +282,12 @@ return;
     QSize rsize = qgcanvas_render_size(this);
     dm_set_width(d->dmp, rsize.width());
     dm_set_height(d->dmp, rsize.height());
-    d->v->gv_width  = rsize.width();
-    d->v->gv_height = rsize.height();
+    rt_view_dimensions_set_bsg(d->v, rsize.width(), rsize.height());
     dm_configure_win(d->dmp, 0);
     if (d->ifp) {
-fb_configure_window(d->ifp, d->v->gv_width, d->v->gv_height);
+fb_configure_window(d->ifp,
+	rt_view_width_from_bsg(d->v),
+	rt_view_height_from_bsg(d->v));
     }
     if (d->dmp)
 qgcanvas_request_update(*d, BSG_VIEW_REFRESH_VIEW);
@@ -328,8 +329,7 @@ return;
     // Let bv know what the current view width and height are, in
     // case the dx/dy mouse translations need that information
     QSize rsize = qgcanvas_render_size(this);
-    d->v->gv_width  = rsize.width();
-    d->v->gv_height = rsize.height();
+    rt_view_dimensions_set_bsg(d->v, rsize.width(), rsize.height());
 
     if (d->input.keyPressEvent(d->v, d->x_prev, d->y_prev, k)) {
 qgcanvas_request_update(*d, BSG_VIEW_REFRESH_VIEW);
@@ -357,8 +357,7 @@ return;
     // Let bv know what the current view width and height are, in
     // case the dx/dy mouse translations need that information
     QSize rsize = qgcanvas_render_size(this);
-    d->v->gv_width  = rsize.width();
-    d->v->gv_height = rsize.height();
+    rt_view_dimensions_set_bsg(d->v, rsize.width(), rsize.height());
 
     if (d->input.mousePressEvent(d->v, d->x_prev, d->y_prev, e)) {
 qgcanvas_request_update(*d, BSG_VIEW_REFRESH_VIEW);
@@ -411,8 +410,7 @@ return;
     // Let bv know what the current view width and height are, in
     // case the dx/dy mouse translations need that information
     QSize rsize = qgcanvas_render_size(this);
-    d->v->gv_width  = rsize.width();
-    d->v->gv_height = rsize.height();
+    rt_view_dimensions_set_bsg(d->v, rsize.width(), rsize.height());
 
     int mret = d->input.mouseMoveEvent(d->v, d->x_prev, d->y_prev, e, d->lmouse_mode);
     if (mret > 0) {
@@ -446,8 +444,7 @@ return;
     // Let bv know what the current view width and height are, in
     // case the dx/dy mouse translations need that information
     QSize rsize = qgcanvas_render_size(this);
-    d->v->gv_width  = rsize.width();
-    d->v->gv_height = rsize.height();
+    rt_view_dimensions_set_bsg(d->v, rsize.width(), rsize.height());
 
     if (d->input.wheelEvent(d->v, e)) {
 qgcanvas_request_update(*d, BSG_VIEW_REFRESH_VIEW);

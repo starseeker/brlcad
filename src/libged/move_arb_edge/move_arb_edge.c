@@ -31,6 +31,7 @@
 #include "ged/event_txn.h"
 #include "rt/geom.h"
 #include "rt/primitives/arb8.h"
+#include "rt/view_legacy_bsg.h"
 #include "raytrace.h"
 
 #include "../ged_private.h"
@@ -303,7 +304,9 @@ ged_find_arb_edge_nearest_pnt_core(struct ged *gedp, int argc, const char *argv[
 	return BRLCAD_ERROR;
     }
 
-    (void)rt_arb_find_e_nearest_pt2(&edge, &vi1, &vi2, &intern, view, gedp->ged_gvp->gv_model2view, ptol);
+    mat_t model2view;
+    rt_view_model2view_from_bsg(model2view, gedp->ged_gvp);
+    (void)rt_arb_find_e_nearest_pt2(&edge, &vi1, &vi2, &intern, view, model2view, ptol);
     bu_vls_printf(gedp->ged_result_str, "%d %d %d", edge, vi1, vi2);
 
     rt_db_free_internal(&intern);

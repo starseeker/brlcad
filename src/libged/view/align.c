@@ -30,6 +30,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "rt/view_legacy_bsg.h"
+
 #include "../ged_private.h"
 
 
@@ -102,12 +104,16 @@ ged_align_core(struct ged *gedp, int argc, const char *argv[])
 
     // get center as point
     point_t tmp = {0.0, 0.0, 0.0};
-    MAT4X3PNT(center, gedp->ged_gvp->gv_center, tmp);
+    mat_t view_center;
+    rt_view_center_from_bsg(view_center, gedp->ged_gvp);
+    MAT4X3PNT(center, view_center, tmp);
     VSCALE(center, center, -1.0);
 
     // calculate eye / center / align_pt distances
     vect_t xlate = {0.0, 0.0, 1.0};
-    MAT4X3PNT(eye, gedp->ged_gvp->gv_view2model, xlate);
+    mat_t view2model;
+    rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
+    MAT4X3PNT(eye, view2model, xlate);
     VSCALE(eye, eye, scale);
     double dist_eye_center = DIST_PNT_PNT(center, eye);
     double dist_alignpt_center = DIST_PNT_PNT(align, center);
@@ -123,8 +129,10 @@ ged_align_core(struct ged *gedp, int argc, const char *argv[])
     bn_ae_vec(&new_az, &new_el, dir);
 
     // update view ae using direction
-    VSET(gedp->ged_gvp->gv_aet, new_az, new_el, gedp->ged_gvp->gv_aet[Z]);
-    bsg_mat_aet(gedp->ged_gvp);
+    vect_t view_aet;
+    rt_view_aet_from_bsg(view_aet, gedp->ged_gvp);
+    VSET(view_aet, new_az, new_el, view_aet[Z]);
+    rt_view_aet_set_bsg(gedp->ged_gvp, view_aet);
 
     // update eye
     point_t new_eye;

@@ -33,6 +33,18 @@ ged_draw_view_info_from_bsg(struct rt_view_info *view_info,
     rt_view_info_from_bsg(view_info, view);
 }
 
+fastf_t
+ged_draw_view_perspective_from_bsg(const struct bsg_view *view)
+{
+    return rt_view_perspective_from_bsg(view);
+}
+
+fastf_t
+ged_draw_view_scale_from_bsg(const struct bsg_view *view)
+{
+    return rt_view_scale_from_bsg(view);
+}
+
 int
 ged_draw_view_lod_policy_from_bsg(ged_draw_view_lod_policy *policy,
 				  const struct bsg_view *view)

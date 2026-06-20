@@ -29,6 +29,7 @@
 #include "vmath.h"
 #include "nmg.h"
 #include "rt/geom.h"
+#include "rt/view_legacy_bsg.h"
 #include "ged.h"
 #include "wdb.h"
 
@@ -621,7 +622,9 @@ ged_find_bot_edge_nearest_pnt_core(struct ged *gedp, int argc, const char *argv[
     }
 
     botip = (struct rt_bot_internal *)intern.idb_ptr;
-    (void)rt_bot_find_e_nearest_pt2(&vi1, &vi2, botip, view, gedp->ged_gvp->gv_model2view);
+    mat_t model2view;
+    rt_view_model2view_from_bsg(model2view, gedp->ged_gvp);
+    (void)rt_bot_find_e_nearest_pt2(&vi1, &vi2, botip, view, model2view);
     bu_vls_printf(gedp->ged_result_str, "%d %d", vi1, vi2);
 
     rt_db_free_internal(&intern);
@@ -681,7 +684,9 @@ ged_find_bot_pnt_nearest_pnt_core(struct ged *gedp, int argc, const char *argv[]
     botip = (struct rt_bot_internal *)intern.idb_ptr;
     VMOVE(view, scan); /* convert double to fastf_t */
 
-    nearest_pt = rt_bot_find_v_nearest_pt2(botip, view, gedp->ged_gvp->gv_model2view);
+    mat_t model2view;
+    rt_view_model2view_from_bsg(model2view, gedp->ged_gvp);
+    nearest_pt = rt_bot_find_v_nearest_pt2(botip, view, model2view);
     bu_vls_printf(gedp->ged_result_str, "%d", nearest_pt);
 
     rt_db_free_internal(&intern);

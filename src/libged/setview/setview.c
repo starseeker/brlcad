@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "rt/view_legacy_bsg.h"
+
 #include "../ged_private.h"
 
 
@@ -84,7 +86,9 @@ ged_setview_core(struct ged *gedp, int argc, const char *argv[])
 	VMOVE(rvec, scan);
     }
 
-    bn_mat_angles(gedp->ged_gvp->gv_rotation, rvec[X], rvec[Y], rvec[Z]);
+    mat_t rotation;
+    bn_mat_angles(rotation, rvec[X], rvec[Y], rvec[Z]);
+    rt_view_rotation_set_bsg(gedp->ged_gvp, rotation);
     bsg_update(gedp->ged_gvp);
 
     return BRLCAD_OK;

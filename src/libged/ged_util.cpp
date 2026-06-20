@@ -817,7 +817,7 @@ ged_rot_args(struct ged *gedp, int argc, const char *argv[], char *coord, mat_t 
 	--argc;
 	++argv;
     } else
-	*coord = gedp->ged_gvp->gv_coord;
+	*coord = rt_view_coord_from_bsg(gedp->ged_gvp);
 
     if (argc != 2 && argc != 4) {
 	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", argv[0], usage);
@@ -935,7 +935,7 @@ ged_tra_args(struct ged *gedp, int argc, const char *argv[], char *coord, vect_t
 	--argc;
 	++argv;
     } else
-	*coord = gedp->ged_gvp->gv_coord;
+	*coord = rt_view_coord_from_bsg(gedp->ged_gvp);
 
     if (argc != 2 && argc != 4) {
 	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", argv[0], usage);
@@ -2232,15 +2232,19 @@ void
 _ged_rt_set_eye_model(struct ged *gedp,
 		      vect_t eye_model)
 {
-    if (bsg_view_zclip(gedp->ged_gvp) ||
+    if (rt_view_zclip_from_bsg(gedp->ged_gvp) ||
 	    rt_view_perspective_from_bsg(gedp->ged_gvp) > 0) {
+	mat_t view2model;
 	vect_t temp;
 
+	rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
 	VSET(temp, 0.0, 0.0, 1.0);
-	MAT4X3PNT(eye_model, gedp->ged_gvp->gv_view2model, temp);
+	MAT4X3PNT(eye_model, view2model, temp);
     } else {
 	/* not doing zclipping, so back out of geometry */
 	int i;
+	mat_t view_center;
+	mat_t view_rotation;
 	vect_t direction;
 	vect_t extremum[2];
 	double t_in;
@@ -2248,8 +2252,9 @@ _ged_rt_set_eye_model(struct ged *gedp,
 	vect_t diag2;
 	point_t ecenter;
 
-	VSET(eye_model, -gedp->ged_gvp->gv_center[MDX],
-	     -gedp->ged_gvp->gv_center[MDY], -gedp->ged_gvp->gv_center[MDZ]);
+	rt_view_center_from_bsg(view_center, gedp->ged_gvp);
+	rt_view_rotation_from_bsg(view_rotation, gedp->ged_gvp);
+	MAT_DELTAS_GET_NEG(eye_model, view_center);
 
 	for (i = 0; i < 3; ++i) {
 	    extremum[0][i] = INFINITY;
@@ -2258,7 +2263,7 @@ _ged_rt_set_eye_model(struct ged *gedp,
 
 	(void)ged_draw_bounds(gedp, &(extremum[0]), &(extremum[1]), 0);
 
-	VMOVEN(direction, gedp->ged_gvp->gv_rotation + 8, 3);
+	VMOVEN(direction, view_rotation + 8, 3);
 	for (i = 0; i < 3; ++i)
 	    if (NEAR_ZERO(direction[i], 1e-10))
 		direction[i] = 0.0;

@@ -57,6 +57,7 @@
 #include "bu/app.h"
 #include "bu/str.h"
 #include "bsg/view_state.h"
+#include "rt/view_legacy_bsg.h"
 
 extern "C" {
 #include "../include/private.h"
@@ -543,7 +544,7 @@ fb_qtgl_open(struct fb *ifp, const char *UNUSED(file), int width, int height)
 	ifp->i->pp = NULL;
 	return -1;
     }
-    bsg_view_set_framebuffer_mode(canvas_view, 1);
+    rt_view_framebuffer_mode_set_bsg(canvas_view, 1);
 
     struct fb_platform_specific fbps;
     fbps.magic = FB_QTGL_MAGIC;

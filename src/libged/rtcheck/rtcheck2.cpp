@@ -39,6 +39,7 @@
 #include <string>
 
 #include "bu/app.h"
+#include "rt/view_legacy_bsg.h"
 
 #include "../ged_private.h"
 #include "bsg/feature.h"
@@ -309,7 +310,7 @@ ged_rtcheck2_core(struct ged *gedp, int argc, const char *argv[])
     rtcp->fp = bu_process_file_open(p, BU_PROCESS_STDOUT);
     /* Needed on Windows for successful rtcheck drawing data communication */
     setmode(fileno(rtcp->fp), O_BINARY);
-    rtcp->csize = gedp->ged_gvp->gv_scale * 0.01;
+    rtcp->csize = rt_view_scale_from_bsg(gedp->ged_gvp) * 0.01;
     rtcp->uplot = _ged_uplot_stream_create(rtcp->csize, gedp->i->ged_gdp->gd_uplotOutputMode);
     rtcp->read_failed = 0;
     rtcp->draw_read_failed = 0;

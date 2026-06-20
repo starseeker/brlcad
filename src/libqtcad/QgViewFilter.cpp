@@ -27,6 +27,7 @@
 extern "C" {
 #include "bsg.h"
 #include "bsg/view_state.h"
+#include "rt/view_legacy_bsg.h"
 }
 
 #include "qtcad/QgObolSnap.h"
@@ -52,10 +53,10 @@ qg_obol_snap_kinds_from_bsg(bsg_snap_kind_mask kinds)
 static int
 qg_obol_db_snap_enabled(const struct bsg_view *v)
 {
-	if (!v || !bsg_view_snap_lines(v))
+	if (!v || !rt_view_snap_lines_from_bsg(v))
 		return 0;
 
-	int flags = bsg_view_snap_source_flags(v);
+	int flags = rt_view_snap_source_flags_from_bsg(v);
 	if (flags == BSG_SNAP_TCL)
 		return 0;
 	return !flags || (flags & BSG_SNAP_DB);
@@ -64,12 +65,15 @@ qg_obol_db_snap_enabled(const struct bsg_view *v)
 static float
 qg_obol_snap_tolerance(const struct bsg_view *v)
 {
-	if (!v || v->gv_width <= 0 || v->gv_height <= 0)
+	int width = rt_view_width_from_bsg(v);
+	int height = rt_view_height_from_bsg(v);
+	if (!v || width <= 0 || height <= 0)
 		return 0.0f;
 
-	double lavg = ((double)v->gv_width + (double)v->gv_height) * 0.5;
+	double lavg = ((double)width + (double)height) * 0.5;
 	double lratio = 1.0 / lavg;
-	double tol = v->gv_size * lratio * bsg_view_snap_tolerance_factor(v);
+	double tol = rt_view_size_from_bsg(v) * lratio *
+		rt_view_snap_tolerance_factor_from_bsg(v);
 
 	return tol > 0.0 ? (float)tol : 0.0f;
 }
@@ -81,7 +85,7 @@ qg_obol_refine_db_snap(QgView *display, struct bsg_view *v)
 		return;
 
 	uint32_t obol_kinds = qg_obol_snap_kinds_from_bsg(
-		bsg_view_snap_kind_mask(v));
+		rt_view_snap_kind_mask_from_bsg(v));
 	float tolerance = qg_obol_snap_tolerance(v);
 	if (!obol_kinds || tolerance <= 0.0f)
 		return;

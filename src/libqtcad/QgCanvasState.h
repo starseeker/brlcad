@@ -63,6 +63,7 @@ extern "C" {
 #include "bsg.h"
 #include "bsg/util.h"
 #include "bsg/view_state.h"
+#include "rt/view_legacy_bsg.h"
 #define DM_WITH_RT
 #include "dm.h"
 }
@@ -202,29 +203,33 @@ qgcanvas_sync_obol_camera(QgCanvasState &s)
 
 	mat_t orientation_mat;
 	MAT_IDN(orientation_mat);
-	orientation_mat[0] = s.v->gv_rotation[0];
-	orientation_mat[1] = s.v->gv_rotation[4];
-	orientation_mat[2] = s.v->gv_rotation[8];
-	orientation_mat[4] = s.v->gv_rotation[1];
-	orientation_mat[5] = s.v->gv_rotation[5];
-	orientation_mat[6] = s.v->gv_rotation[9];
-	orientation_mat[8] = s.v->gv_rotation[2];
-	orientation_mat[9] = s.v->gv_rotation[6];
-	orientation_mat[10] = s.v->gv_rotation[10];
+	mat_t view_rotation;
+	rt_view_rotation_from_bsg(view_rotation, s.v);
+	orientation_mat[0] = view_rotation[0];
+	orientation_mat[1] = view_rotation[4];
+	orientation_mat[2] = view_rotation[8];
+	orientation_mat[4] = view_rotation[1];
+	orientation_mat[5] = view_rotation[5];
+	orientation_mat[6] = view_rotation[9];
+	orientation_mat[8] = view_rotation[2];
+	orientation_mat[9] = view_rotation[6];
+	orientation_mat[10] = view_rotation[10];
 
 	vect_t center;
-	bsg_view_get_center_vec(s.v, center);
+	mat_t view_center;
+	rt_view_center_from_bsg(view_center, s.v);
+	MAT_DELTAS_GET_NEG(center, view_center);
 
 	vect_t view_z;
 	view_z[X] = orientation_mat[2];
 	view_z[Y] = orientation_mat[6];
 	view_z[Z] = orientation_mat[10];
 
-	double scale = s.v->gv_scale;
+	double scale = rt_view_scale_from_bsg(s.v);
 	if (scale <= SMALL_FASTF)
 		scale = 1.0;
 
-	double height_angle = s.v->gv_perspective * DEG2RAD;
+	double height_angle = rt_view_perspective_from_bsg(s.v) * DEG2RAD;
 	if (height_angle <= SMALL_FASTF)
 		height_angle = 2.0 * std::atan(0.1);
 	if (height_angle < 0.001)
@@ -577,7 +582,7 @@ qgcanvas_aet(QgCanvasState &s, double a, double e, double t)
 	fastf_t aet_v[3];
 	double  aetd[3] = {a, e, t};
 	VMOVE(aet_v, aetd);
-	bsg_view_set_aet(s.v, aet_v);
+	rt_view_aet_set_bsg(s.v, aet_v);
 	bsg_update(s.v);
 	qgcanvas_sync_obol_camera(s);
 }
@@ -599,8 +604,7 @@ qgcanvas_set_view(QgCanvasState &s, struct bsg_view *nv)
 	}
 	s.v->dmp = s.dmp;
 	dm_configure_win(s.dmp, 0);
-	s.v->gv_width  = dm_get_width(s.dmp);
-	s.v->gv_height = dm_get_height(s.dmp);
+	rt_view_dimensions_set_bsg(s.v, dm_get_width(s.dmp), dm_get_height(s.dmp));
 	qgcanvas_sync_obol_camera(s);
 }
 

@@ -34,6 +34,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "rt/view_legacy_bsg.h"
+
 #include "../ged_private.h"
 #include "./ged_view.h"
 
@@ -51,7 +53,9 @@ ged_center_core(struct ged *gedp, int argc, const char *argv[])
 
     /* get view center */
     if (argc == 1) {
-	MAT_DELTAS_GET_NEG(center, gedp->ged_gvp->gv_center);
+	mat_t view_center;
+	rt_view_center_from_bsg(view_center, gedp->ged_gvp);
+	MAT_DELTAS_GET_NEG(center, view_center);
 	if (gedp->dbip)
 	    VSCALE(center, center, gedp->dbip->dbi_base2local);
 	bn_encode_vect(gedp->ged_result_str, center, 1);
@@ -61,7 +65,9 @@ ged_center_core(struct ged *gedp, int argc, const char *argv[])
 
     if (argc == 2 && BU_STR_EQUAL(argv[1], "-v")) {
 	std::ostringstream ss;
-	MAT_DELTAS_GET_NEG(center, gedp->ged_gvp->gv_center);
+	mat_t view_center;
+	rt_view_center_from_bsg(view_center, gedp->ged_gvp);
+	MAT_DELTAS_GET_NEG(center, view_center);
 	if (gedp->dbip)
 	    VSCALE(center, center, gedp->dbip->dbi_base2local);
 	ss << std::fixed << std::setprecision(std::numeric_limits<fastf_t>::max_digits10) << center[X];
@@ -146,7 +152,7 @@ ged_center_core(struct ged *gedp, int argc, const char *argv[])
 
     if (gedp->dbip)
 	VSCALE(center, center, gedp->dbip->dbi_local2base);
-    MAT_DELTAS_VEC_NEG(gedp->ged_gvp->gv_center, center);
+    rt_view_center_vec_set_bsg(gedp->ged_gvp, center);
     bsg_update(gedp->ged_gvp);
 
     return BRLCAD_OK;
@@ -161,4 +167,3 @@ ged_center_core(struct ged *gedp, int argc, const char *argv[])
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

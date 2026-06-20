@@ -123,6 +123,8 @@ typedef struct rt_view_lod_policy ged_draw_view_lod_policy;
 GED_EXPORT extern void ged_draw_source_data_free(void *data);
 GED_EXPORT extern void ged_draw_view_info_from_bsg(struct rt_view_info *view_info,
 						   const struct bsg_view *view);
+GED_EXPORT extern fastf_t ged_draw_view_perspective_from_bsg(const struct bsg_view *view);
+GED_EXPORT extern fastf_t ged_draw_view_scale_from_bsg(const struct bsg_view *view);
 GED_EXPORT extern int ged_draw_view_lod_policy_from_bsg(ged_draw_view_lod_policy *policy,
 							const struct bsg_view *view);
 GED_EXPORT extern int ged_draw_view_lod_policy_apply_bsg(struct bsg_view *view,

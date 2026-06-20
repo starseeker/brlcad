@@ -23,6 +23,7 @@
 #include "brlobol/lod_update_action.h"
 #include "brlobol/measure_action.h"
 #include "brlobol/mesh_lod_submit_action.h"
+#include "brlobol/mesh_residency_action.h"
 #include "brlobol/mesh_shape.h"
 #include "brlobol/pick_detail.h"
 #include "brlobol/realize_action.h"
@@ -84,9 +85,11 @@ brlobol_init(SoDB::ContextManager *contextManager)
     SoBRLLineLayerOverlay::initClass();
     SoBRLMeshShape::initClass();
     SoBRLLodMeshShape::initClass();
+    SoBRLSourceMeshPickAction::initClass();
     SoBRLRealizeAction::initClass();
     SoBRLLodUpdateAction::initClass();
     SoBRLMeshLodSubmitAction::initClass();
+    SoBRLMeshResidencyAction::initClass();
     SoBRLSnapAction::initClass();
     SoBRLMeasureAction::initClass();
     SoBRLExportAction::initClass();

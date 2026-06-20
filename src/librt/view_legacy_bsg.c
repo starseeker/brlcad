@@ -26,8 +26,11 @@
 
 #include <string.h>
 
+#include "bg/plane.h"
 #include "bn/qmath.h"
 #include "bsg/lod.h"
+#include "bsg/snap.h"
+#include "bsg/util.h"
 #include "bsg/view_state.h"
 #include "rt/view_legacy_bsg.h"
 
@@ -56,6 +59,29 @@ rt_view_info_from_bsg(struct rt_view_info *info, const struct bsg_view *v)
 	info->lod.bot_threshold = policy.bot_threshold;
     }
     rt_view_info_sanitize(info);
+}
+
+int
+rt_view_width_from_bsg(const struct bsg_view *v)
+{
+    return v ? v->gv_width : 0;
+}
+
+int
+rt_view_height_from_bsg(const struct bsg_view *v)
+{
+    return v ? v->gv_height : 0;
+}
+
+int
+rt_view_dimensions_set_bsg(struct bsg_view *v, int width, int height)
+{
+    if (!v)
+	return 0;
+
+    v->gv_width = width;
+    v->gv_height = height;
+    return 1;
 }
 
 int
@@ -91,10 +117,40 @@ rt_view_aet_from_bsg(vect_t aet, const struct bsg_view *v)
     return 1;
 }
 
+int
+rt_view_aet_set_bsg(struct bsg_view *v, const vect_t aet)
+{
+    if (!v || !aet)
+	return 0;
+
+    bsg_view_set_aet(v, aet);
+    return 1;
+}
+
+int
+rt_view_aet_state_set_bsg(struct bsg_view *v, const vect_t aet)
+{
+    if (!v || !aet)
+	return 0;
+
+    VMOVE(v->gv_aet, aet);
+    return 1;
+}
+
 fastf_t
 rt_view_perspective_from_bsg(const struct bsg_view *v)
 {
     return v ? v->gv_perspective : 0.0;
+}
+
+int
+rt_view_perspective_set_bsg(struct bsg_view *v, fastf_t perspective)
+{
+    if (!v)
+	return 0;
+
+    bsg_view_set_perspective(v, perspective);
+    return 1;
 }
 
 int
@@ -109,6 +165,16 @@ rt_view_model2view_from_bsg(mat_t model2view, const struct bsg_view *v)
     }
 
     MAT_COPY(model2view, v->gv_model2view);
+    return 1;
+}
+
+int
+rt_view_model2view_set_bsg(struct bsg_view *v, const mat_t model2view)
+{
+    if (!v || !model2view)
+	return 0;
+
+    MAT_COPY(v->gv_model2view, model2view);
     return 1;
 }
 
@@ -128,6 +194,66 @@ rt_view_view2model_from_bsg(mat_t view2model, const struct bsg_view *v)
 }
 
 int
+rt_view_view2model_set_bsg(struct bsg_view *v, const mat_t view2model)
+{
+    if (!v || !view2model)
+	return 0;
+
+    MAT_COPY(v->gv_view2model, view2model);
+    return 1;
+}
+
+int
+rt_view_pmodel2view_from_bsg(mat_t pmodel2view, const struct bsg_view *v)
+{
+    if (!pmodel2view)
+	return 0;
+
+    if (!v) {
+	MAT_IDN(pmodel2view);
+	return 0;
+    }
+
+    MAT_COPY(pmodel2view, v->gv_pmodel2view);
+    return 1;
+}
+
+int
+rt_view_pmodel2view_set_bsg(struct bsg_view *v, const mat_t pmodel2view)
+{
+    if (!v || !pmodel2view)
+	return 0;
+
+    MAT_COPY(v->gv_pmodel2view, pmodel2view);
+    return 1;
+}
+
+int
+rt_view_pmat_from_bsg(mat_t pmat, const struct bsg_view *v)
+{
+    if (!pmat)
+	return 0;
+
+    if (!v) {
+	MAT_IDN(pmat);
+	return 0;
+    }
+
+    MAT_COPY(pmat, v->gv_pmat);
+    return 1;
+}
+
+int
+rt_view_pmat_set_bsg(struct bsg_view *v, const mat_t pmat)
+{
+    if (!v || !pmat)
+	return 0;
+
+    MAT_COPY(v->gv_pmat, pmat);
+    return 1;
+}
+
+int
 rt_view_rotation_from_bsg(mat_t rotation, const struct bsg_view *v)
 {
     if (!rotation)
@@ -139,6 +265,16 @@ rt_view_rotation_from_bsg(mat_t rotation, const struct bsg_view *v)
     }
 
     MAT_COPY(rotation, v->gv_rotation);
+    return 1;
+}
+
+int
+rt_view_rotation_set_bsg(struct bsg_view *v, const mat_t rotation)
+{
+    if (!v || !rotation)
+	return 0;
+
+    bsg_view_set_rotation(v, rotation);
     return 1;
 }
 
@@ -155,6 +291,33 @@ rt_view_center_from_bsg(mat_t center, const struct bsg_view *v)
 
     MAT_COPY(center, v->gv_center);
     return 1;
+}
+
+int
+rt_view_center_vec_set_bsg(struct bsg_view *v, const point_t center)
+{
+    if (!v || !center)
+	return 0;
+
+    bsg_view_set_center_vec(v, center);
+    return 1;
+}
+
+int
+rt_view_plane_from_bsg(plane_t *plane, const struct bsg_view *v)
+{
+    point_t center;
+    vect_t normal;
+
+    if (!plane || !v)
+	return -1;
+
+    MAT_DELTAS_GET_NEG(center, v->gv_center);
+    VMOVEN(normal, v->gv_rotation + 8, 3);
+    VUNITIZE(normal);
+    VSCALE(normal, normal, -1.0);
+
+    return bg_plane_pt_nrml(plane, center, normal);
 }
 
 int
@@ -244,10 +407,154 @@ rt_view_lod_bounds_callback_is_bsg(const struct bsg_view *v)
     return (v && v->gv_bounds_update == &bsg_view_bounds) ? 1 : 0;
 }
 
+rt_view_bounds_update_callback_bsg_t
+rt_view_bounds_update_callback_from_bsg(const struct bsg_view *v)
+{
+    return v ? v->gv_bounds_update : NULL;
+}
+
+int
+rt_view_bounds_update_callback_set_bsg(struct bsg_view *v,
+				       rt_view_bounds_update_callback_bsg_t callback)
+{
+    if (!v)
+	return 0;
+
+    v->gv_bounds_update = callback;
+    return 1;
+}
+
+int
+rt_view_bounds_update_callback_call_bsg(struct bsg_view *v)
+{
+    rt_view_bounds_update_callback_bsg_t callback =
+	rt_view_bounds_update_callback_from_bsg(v);
+
+    if (!callback)
+	return 0;
+
+    (*callback)(v);
+    return 1;
+}
+
 fastf_t
 rt_view_scale_from_bsg(const struct bsg_view *v)
 {
     return v ? v->gv_scale : 1.0;
+}
+
+int
+rt_view_scale_set_bsg(struct bsg_view *v, fastf_t scale)
+{
+    if (!v)
+	return 0;
+
+    bsg_view_set_scale(v, scale);
+    return 1;
+}
+
+fastf_t *
+rt_view_scale_storage_from_bsg(struct bsg_view *v)
+{
+    return v ? &v->gv_scale : NULL;
+}
+
+int
+rt_view_scale_state_set_bsg(struct bsg_view *v,
+			    fastf_t scale,
+			    fastf_t initial_scale,
+			    fastf_t absolute_scale,
+			    fastf_t size,
+			    fastf_t inverse_size)
+{
+    if (!v)
+	return 0;
+
+    v->gv_scale = scale;
+    v->gv_i_scale = initial_scale;
+    v->gv_a_scale = absolute_scale;
+    v->gv_size = size;
+    v->gv_isize = inverse_size;
+    return 1;
+}
+
+fastf_t
+rt_view_initial_scale_from_bsg(const struct bsg_view *v)
+{
+    return v ? v->gv_i_scale : 1.0;
+}
+
+int
+rt_view_initial_scale_set_bsg(struct bsg_view *v, fastf_t scale)
+{
+    if (!v)
+	return 0;
+
+    v->gv_i_scale = scale;
+    return 1;
+}
+
+fastf_t
+rt_view_absolute_scale_from_bsg(const struct bsg_view *v)
+{
+    return v ? v->gv_a_scale : 0.0;
+}
+
+int
+rt_view_absolute_scale_set_bsg(struct bsg_view *v, fastf_t scale)
+{
+    if (!v)
+	return 0;
+
+    v->gv_a_scale = scale;
+    return 1;
+}
+
+fastf_t
+rt_view_local2base_from_bsg(const struct bsg_view *v)
+{
+    return v ? v->gv_local2base : 1.0;
+}
+
+fastf_t
+rt_view_base2local_from_bsg(const struct bsg_view *v)
+{
+    return v ? v->gv_base2local : 1.0;
+}
+
+int
+rt_view_unit_conversion_set_bsg(struct bsg_view *v,
+				fastf_t local2base,
+				fastf_t base2local)
+{
+    if (!v)
+	return 0;
+
+    v->gv_local2base = local2base;
+    v->gv_base2local = base2local;
+    return 1;
+}
+
+fastf_t
+rt_view_size_from_bsg(const struct bsg_view *v)
+{
+    return v ? v->gv_size : 1.0;
+}
+
+int
+rt_view_size_set_bsg(struct bsg_view *v, fastf_t size)
+{
+    if (!v)
+	return 0;
+
+    bsg_view_set_size(v, size);
+    return 1;
+}
+
+fastf_t
+rt_view_inverse_size_from_bsg(const struct bsg_view *v)
+{
+    return v ? v->gv_isize : 1.0;
 }
 
 int
@@ -262,6 +569,197 @@ rt_view_eye_pos_from_bsg(point_t eye_pos, const struct bsg_view *v)
     }
 
     VMOVE(eye_pos, v->gv_eye_pos);
+    return 1;
+}
+
+int
+rt_view_eye_pos_set_bsg(struct bsg_view *v, const point_t eye_pos)
+{
+    if (!v || !eye_pos)
+	return 0;
+
+    VMOVE(v->gv_eye_pos, eye_pos);
+    return 1;
+}
+
+int
+rt_view_keypoint_from_bsg(point_t keypoint, const struct bsg_view *v)
+{
+    if (!keypoint)
+	return 0;
+
+    if (!v) {
+	VSETALL(keypoint, 0.0);
+	return 0;
+    }
+
+    VMOVE(keypoint, v->gv_keypoint);
+    return 1;
+}
+
+int
+rt_view_keypoint_set_bsg(struct bsg_view *v, const point_t keypoint)
+{
+    if (!v || !keypoint)
+	return 0;
+
+    VMOVE(v->gv_keypoint, keypoint);
+    return 1;
+}
+
+char
+rt_view_rotate_about_from_bsg(const struct bsg_view *v)
+{
+    return v ? v->gv_rotate_about : 'v';
+}
+
+int
+rt_view_rotate_about_set_bsg(struct bsg_view *v, char rotate_about)
+{
+    if (!v)
+	return 0;
+
+    v->gv_rotate_about = rotate_about;
+    return 1;
+}
+
+char
+rt_view_coord_from_bsg(const struct bsg_view *v)
+{
+    return v ? v->gv_coord : 'v';
+}
+
+int
+rt_view_coord_set_bsg(struct bsg_view *v, char coord)
+{
+    if (!v)
+	return 0;
+
+    v->gv_coord = coord;
+    return 1;
+}
+
+int
+rt_view_snap_lines_from_bsg(const struct bsg_view *v)
+{
+    return bsg_view_snap_lines(v);
+}
+
+int
+rt_view_snap_lines_set_bsg(struct bsg_view *v, int enabled)
+{
+    if (!v)
+	return 0;
+
+    bsg_view_set_snap_lines(v, enabled);
+    return 1;
+}
+
+int
+rt_view_snap_source_flags_from_bsg(const struct bsg_view *v)
+{
+    return bsg_view_snap_source_flags(v);
+}
+
+int
+rt_view_snap_source_flags_set_bsg(struct bsg_view *v, int flags)
+{
+    if (!v)
+	return 0;
+
+    bsg_view_set_snap_source_flags(v, flags);
+    return 1;
+}
+
+unsigned long long
+rt_view_snap_kind_mask_from_bsg(const struct bsg_view *v)
+{
+    return (unsigned long long)bsg_view_snap_kind_mask(v);
+}
+
+unsigned long long
+rt_view_prepare_tcl_snap_bsg(struct bsg_view *v)
+{
+    return (unsigned long long)bsg_view_prepare_tcl_snap(v);
+}
+
+int
+rt_view_center_linesnap_bsg(struct bsg_view *v)
+{
+    if (!v)
+	return 0;
+
+    bsg_view_center_linesnap(v);
+    return 1;
+}
+
+int
+rt_view_zclip_from_bsg(const struct bsg_view *v)
+{
+    return bsg_view_zclip(v);
+}
+
+int
+rt_view_zclip_set_bsg(struct bsg_view *v, int zclip)
+{
+    if (!v)
+	return 0;
+
+    bsg_view_set_zclip(v, zclip);
+    return 1;
+}
+
+int
+rt_view_framebuffer_mode_from_bsg(const struct bsg_view *v)
+{
+    return bsg_view_framebuffer_mode(v);
+}
+
+int
+rt_view_framebuffer_mode_set_bsg(struct bsg_view *v, int mode)
+{
+    if (!v)
+	return 0;
+
+    bsg_view_set_framebuffer_mode(v, mode);
+    return 1;
+}
+
+int
+rt_view_cleared_from_bsg(const struct bsg_view *v)
+{
+    return bsg_view_cleared(v);
+}
+
+int
+rt_view_cleared_set_bsg(struct bsg_view *v, int cleared)
+{
+    if (!v)
+	return 0;
+
+    bsg_view_set_cleared(v, cleared);
+    return 1;
+}
+
+int
+rt_view_settings_shared_bsg(const struct bsg_view *a, const struct bsg_view *b)
+{
+    return bsg_view_settings_shared(a, b);
+}
+
+double
+rt_view_snap_tolerance_factor_from_bsg(const struct bsg_view *v)
+{
+    return bsg_view_snap_tolerance_factor(v);
+}
+
+int
+rt_view_snap_tolerance_factor_set_bsg(struct bsg_view *v, double factor)
+{
+    if (!v)
+	return 0;
+
+    bsg_view_set_snap_tolerance_factor(v, factor);
     return 1;
 }
 

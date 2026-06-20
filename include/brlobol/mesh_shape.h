@@ -10,6 +10,7 @@
 #define BRLOBOL_MESH_SHAPE_H
 
 #include "brlobol/defines.h"
+#include "brlobol/source_mesh_request.h"
 
 #include <Inventor/fields/SoMFInt32.h>
 #include <Inventor/fields/SoMFBool.h>
@@ -25,6 +26,7 @@
 #include <Inventor/SbBox.h>
 #include <Inventor/nodes/SoShape.h>
 
+#include <stddef.h>
 #include <stdint.h>
 #include <vector>
 
@@ -123,6 +125,13 @@ public:
     int getFullDetailTriangleCount(void) const;
     SbBool getFullDetailTriangle(int triangleIndex, SbVec3f &a, SbVec3f &b, SbVec3f &c) const;
     SbBool getFullDetailTriangleVertexIndices(int triangleIndex, int &indexA, int &indexB, int &indexC) const;
+    SbBool makeSourceMeshRequest(BRLObolSourceMeshRequest &request) const;
+    SbBool needsSourceBackedFullDetail(void) const;
+    size_t estimateDisplayMeshBytes(void) const;
+    size_t estimateFullDetailMeshBytes(void) const;
+    size_t estimateResidentMeshBytes(void) const;
+    size_t evictFullDetailMesh(void);
+    size_t evictActiveDisplayMesh(void);
     SbBool isPrimitiveSelected(int primitiveIndex) const;
     SbBool isPrimitiveHighlighted(int primitiveIndex) const;
     void setLodBackedMesh(SbBool enabled);
@@ -161,6 +170,7 @@ private:
     void setIndexedTriangleFields(const SbVec3f *points, int pointCount,
 	    const int32_t *indices, int indexCount);
     void updateSourceMeshMetricsFromFields(void);
+    void updateSourceMeshMetricsFromFullDetail(void);
     void captureFullDetailMesh(void);
     void restoreFullDetailMesh(void);
     void clearFullDetailMesh(void);

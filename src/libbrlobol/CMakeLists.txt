@@ -19,6 +19,7 @@ set(
   lod_update_action.cpp
   measure_action.cpp
   mesh_lod_submit_action.cpp
+  mesh_residency_action.cpp
   mesh_shape.cpp
   pick_detail.cpp
   realize_action.cpp
@@ -79,6 +80,7 @@ cmakefiles(
   lod_update_action.cpp
   measure_action.cpp
   mesh_lod_submit_action.cpp
+  mesh_residency_action.cpp
   mesh_shape.cpp
   pick_detail.cpp
   realize_action.cpp

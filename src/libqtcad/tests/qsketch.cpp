@@ -91,6 +91,7 @@
 #include "dm.h"
 #include "raytrace.h"
 #include "rt/edit_legacy_bsg.h"
+#include "rt/view_legacy_bsg.h"
 #include "rt/functab.h"
 #include "rt/geom.h"
 #include "rt/db_internal.h"
@@ -449,15 +450,13 @@ QSketchEditWindow::QSketchEditWindow(struct db_i *dbip,
     /* Look along -Z toward +Z (top view, sketch in XY plane face-on).
      * az=0, el=90 gives view +X→right, +Y→up which matches the sketch
      * u_vec (1,0,0) and v_vec (0,1,0) defaults. */
-    VSET(m_bv->gv_aet, 0.0, 90.0, 0.0);
-    bsg_mat_aet(m_bv);
-    m_bv->gv_scale  = 250.0;
-    m_bv->gv_size   = 2.0 * m_bv->gv_scale;
-    m_bv->gv_isize  = 1.0 / m_bv->gv_size;
+    vect_t aet;
+    VSET(aet, 0.0, 90.0, 0.0);
+    rt_view_aet_set_bsg(m_bv, aet);
+    rt_view_scale_set_bsg(m_bv, 250.0);
     bsg_update(m_bv);
     bu_vls_sprintf(&m_bv->gv_name, "qsketch");
-    m_bv->gv_width  = 700;
-    m_bv->gv_height = 700;
+    rt_view_dimensions_set_bsg(m_bv, 700, 700);
 
     /* ---- rt_edit ---- */
     struct db_full_path fp;
@@ -1169,12 +1168,8 @@ void QSketchEditWindow::on_fit_view()
     world_center[0] = skt2->V[0] + cx * skt2->u_vec[0] + cy * skt2->v_vec[0];
     world_center[1] = skt2->V[1] + cx * skt2->u_vec[1] + cy * skt2->v_vec[1];
     world_center[2] = skt2->V[2] + cx * skt2->u_vec[2] + cy * skt2->v_vec[2];
-    MAT_IDN(m_bv->gv_center);
-    MAT_DELTAS_VEC_NEG(m_bv->gv_center, world_center);
-
-    m_bv->gv_scale = span * 0.5;
-    m_bv->gv_size  = span;
-    m_bv->gv_isize = 1.0 / span;
+    rt_view_center_vec_set_bsg(m_bv, world_center);
+    rt_view_size_set_bsg(m_bv, span);
     bsg_update(m_bv);
 
     m_view->need_update(QG_VIEW_REFRESH);

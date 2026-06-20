@@ -39,6 +39,7 @@
 #include "bsg/export.h"
 #include "bg/plot3.h"
 #include "bsg/render.h"
+#include "rt/view_legacy_bsg.h"
 
 #include "./mged.h"
 #include "./mged_dm.h"
@@ -238,8 +239,10 @@ f_area(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
      */
     {
 	struct _area_write_data wd;
+	mat_t view_rotation;
+	rt_view_rotation_from_bsg(view_rotation, view_state->vs_gvp);
 	wd.fp_w = fp_w;
-	wd.rotation = (const mat_t *)&view_state->vs_gvp->gv_rotation;
+	wd.rotation = (const mat_t *)&view_rotation;
 	wd.dbip = s->dbip;
 	struct bsg_export_request request;
 	bsg_export_request_init(&request, s->gedp->ged_gvp);

@@ -30,6 +30,7 @@
 #include <string.h>
 
 #include "rt/view.h"
+#include "rt/view_legacy_bsg.h"
 
 #include "../ged_private.h"
 #include "./ged_view.h"
@@ -50,10 +51,13 @@ ged_size_core(struct ged *gedp, int argc, const char *argv[])
 
     /* get view size */
     if (argc == 1) {
+	struct rt_view_info view_info;
+	rt_view_info_from_bsg(&view_info, gedp->ged_gvp);
 	if (gedp->dbip) {
-	    bu_vls_printf(gedp->ged_result_str, "%g", gedp->ged_gvp->gv_size * gedp->dbip->dbi_base2local);
+	    bu_vls_printf(gedp->ged_result_str, "%g",
+		    view_info.size * gedp->dbip->dbi_base2local);
 	} else {
-	    bu_vls_printf(gedp->ged_result_str, "%g", gedp->ged_gvp->gv_size);
+	    bu_vls_printf(gedp->ged_result_str, "%g", view_info.size);
 	}
 	return BRLCAD_OK;
     }
@@ -68,11 +72,10 @@ ged_size_core(struct ged *gedp, int argc, const char *argv[])
 	    return BRLCAD_ERROR;
 	}
 
-	gedp->ged_gvp->gv_size = (gedp->dbip) ? gedp->dbip->dbi_local2base * size : size;
-	if (gedp->ged_gvp->gv_size < RT_VIEW_MIN_SIZE)
-	    gedp->ged_gvp->gv_size = RT_VIEW_MIN_SIZE;
-	gedp->ged_gvp->gv_isize = 1.0 / gedp->ged_gvp->gv_size;
-	gedp->ged_gvp->gv_scale = 0.5 * gedp->ged_gvp->gv_size;
+	fastf_t view_size = (gedp->dbip) ? gedp->dbip->dbi_local2base * size : size;
+	if (view_size < RT_VIEW_MIN_SIZE)
+	    view_size = RT_VIEW_MIN_SIZE;
+	rt_view_size_set_bsg(gedp->ged_gvp, view_size);
 	bsg_update(gedp->ged_gvp);
 
 	return BRLCAD_OK;

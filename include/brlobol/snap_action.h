@@ -10,6 +10,8 @@
 #define BRLOBOL_SNAP_ACTION_H
 
 #include "brlobol/defines.h"
+#include "brlobol/lod_realization.h"
+#include "brlobol/source_mesh_request.h"
 
 #include <Inventor/SbMatrix.h>
 #include <Inventor/SbString.h>
@@ -18,6 +20,11 @@
 #include <Inventor/actions/SoSubAction.h>
 
 #include <stdint.h>
+#include <vector>
+
+class BRLObolLodService;
+class SoBRLMeshShape;
+struct db_i;
 
 class BRLOBOL_EXPORT SoBRLSnapAction : public SoAction {
     typedef SoAction inherited;
@@ -74,6 +81,22 @@ public:
     void setGeometryPolicy(GeometryPolicy policy);
     GeometryPolicy getGeometryPolicy(void) const;
     unsigned int getSkippedLodDisplayMeshCount(void) const;
+    int getSourceBackedFullDetailRequestCount(void) const;
+    const BRLObolSourceMeshRequest &getSourceBackedFullDetailRequest(int index) const;
+    SbBool makeSourceBackedFullDetailLodRequest(int index,
+	    BRLObolLodRequest &request,
+	    const BRLObolLodRequest *templateRequest = 0) const;
+    SbBool consumeSourceBackedFullDetailResult(
+	    const BRLObolSourceMeshRequest &sourceRequest,
+	    const BRLObolLodResult &result);
+    int submitSourceBackedFullDetailRequests(BRLObolLodService *service,
+	    uint64_t generation, struct db_i *dbip,
+	    const BRLObolLodRequest *templateRequest = 0,
+	    uint64_t maxFullDetailFaceCount = 0,
+	    uint64_t maxFullDetailPointCount = 0) const;
+    int consumeSourceBackedFullDetailResults(
+	    const std::vector<BRLObolLodResult> &results,
+	    const BRLObolLodRequest *templateRequest = 0);
     void setConstructionPlane(const SbVec3f &origin, const SbVec3f &normal);
     void setConstructionPlane(const SbVec3f &origin, const SbVec3f &normal,
 	    const SbString &path);
@@ -95,6 +118,8 @@ private:
     static void vlistShapeAction(SoAction *action, SoNode *node);
     static void meshShapeAction(SoAction *action, SoNode *node);
 
+    void appendSourceBackedFullDetailRequest(const SoBRLMeshShape *shape,
+	    const SbMatrix &localToWorld);
     void consider(SnapKind kind, const SbString &path, int primitiveIndex,
 	    const SbVec3f &query, const SbVec3f &candidate);
     SbVec3f pointForCoordinateSpace(const SbMatrix &localToWorld,
@@ -117,6 +142,7 @@ private:
     PriorityPolicy priorityPolicy;
     GeometryPolicy geometryPolicy;
     unsigned int skippedLodDisplayMeshCount;
+    std::vector<BRLObolSourceMeshRequest> sourceBackedFullDetailRequests;
     SbBool foundCandidate;
     SbBool constructionPlaneEnabled;
 };

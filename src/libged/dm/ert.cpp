@@ -40,7 +40,6 @@
 #include "bu/app.h"
 #include "bu/env.h"
 #include "bu/process.h"
-#include "bsg/view_state.h"
 #include "raytrace.h"
 #include "dm.h"
 #include "rt/view_legacy_bsg.h"
@@ -96,9 +95,9 @@ ged_ert_core(struct ged *gedp, int argc, const char *argv[])
     //     gv_fb_mode = 0) — see src/libged/fbclear/fbclear.c.
     //   * Programmatic callers that need to restore the prior fb_mode
     //     should snapshot it before invoking ert and write it back after.
-    int prior_fb_mode = bsg_view_framebuffer_mode(gedp->ged_gvp);
+    int prior_fb_mode = rt_view_framebuffer_mode_from_bsg(gedp->ged_gvp);
     if (!prior_fb_mode)
-	bsg_view_set_framebuffer_mode(gedp->ged_gvp, 2);
+	rt_view_framebuffer_mode_set_bsg(gedp->ged_gvp, 2);
 
     // Have a framebuffer to target and objects to raytrace.  Next we need a
     // framebuffer server.

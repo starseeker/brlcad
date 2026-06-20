@@ -33,6 +33,7 @@
 #include "pkg.h" /* struct pkg_conn */
 #include "ged.h"
 #include "rt/view.h"
+#include "rt/view_legacy_bsg.h"
 #include "bsg/view_state.h"
 
 #include "mged.h"
@@ -433,7 +434,7 @@ mged_dm_view_settings_shared(struct mged_dm *a, struct mged_dm *b)
     if (!a || !a->dm_view_state || !a->dm_view_state->vs_gvp ||
 	    !b || !b->dm_view_state || !b->dm_view_state->vs_gvp)
 	return 0;
-    return bsg_view_settings_shared(a->dm_view_state->vs_gvp, b->dm_view_state->vs_gvp);
+    return rt_view_settings_shared_bsg(a->dm_view_state->vs_gvp, b->dm_view_state->vs_gvp);
 }
 
 #define MGED_DM_NULL ((struct mged_dm *)NULL)
@@ -474,8 +475,8 @@ mged_dm_view_settings_shared(struct mged_dm *a, struct mged_dm *b)
 #define scroll_y s->mged_curr_dm->dm_scroll_y
 #define scroll_array s->mged_curr_dm->dm_scroll_array
 
-#define VIEWSIZE	(view_state->vs_gvp->gv_size)	/* Width of viewing cube */
-#define VIEWFACTOR	(1/view_state->vs_gvp->gv_scale)
+#define VIEWSIZE	(rt_view_size_from_bsg(view_state->vs_gvp))	/* Width of viewing cube */
+#define VIEWFACTOR	(1/rt_view_scale_from_bsg(view_state->vs_gvp))
 
 #define RATE_ROT_FACTOR 6.0
 #define ABS_ROT_FACTOR 180.0

@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "rt/view_legacy_bsg.h"
+
 #include "../ged_private.h"
 
 
@@ -43,7 +45,9 @@ ged_pmodel2view_core(struct ged *gedp, int argc, const char *argv[])
 
     /* get the pmodel2view matrix */
     if (argc == 1) {
-	bn_encode_mat(gedp->ged_result_str, gedp->ged_gvp->gv_pmodel2view, 1);
+	mat_t pmodel2view;
+	rt_view_pmodel2view_from_bsg(pmodel2view, gedp->ged_gvp);
+	bn_encode_mat(gedp->ged_result_str, pmodel2view, 1);
 	return BRLCAD_OK;
     }
 

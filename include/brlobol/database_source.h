@@ -11,6 +11,8 @@
 
 #include "brlobol/defines.h"
 
+#include <stdint.h>
+
 #include <Inventor/fields/SoSFBool.h>
 #include <Inventor/fields/SoSFEnum.h>
 #include <Inventor/fields/SoSFFloat.h>
@@ -81,6 +83,10 @@ public:
      */
     void setDatabase(struct db_i *dbip);
     struct db_i *getDatabase(void) const;
+    void configureDatabaseSource(const char *sourcePath,
+	struct db_i *database,
+	int mode,
+	uint32_t revision);
 
     void markStale(void);
     void markStale(uint32_t reason);

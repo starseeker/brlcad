@@ -71,6 +71,7 @@
 #include "libtermio.h"
 #include "bsg/util.h"
 #include "ged.h"
+#include "rt/view_legacy_bsg.h"
 #include "tclcad.h"
 
 /* private */
@@ -412,7 +413,9 @@ new_edit_mats(struct mged_state *s)
 	    continue;
 
 	set_curr_dm(s, p);
-	bn_mat_mul(view_state->vs_model2objview, view_state->vs_gvp->gv_model2view, MEDIT(s)->model_changes);
+	mat_t model2view;
+	rt_view_model2view_from_bsg(model2view, view_state->vs_gvp);
+	bn_mat_mul(view_state->vs_model2objview, model2view, MEDIT(s)->model_changes);
 	bn_mat_inv(view_state->vs_objview2model, view_state->vs_model2objview);
 
 	/* Keep rt_edit’s own cached matrix in sync for external users */
@@ -436,7 +439,9 @@ mged_view_callback(struct bsg_view *gvp,
 	return;
 
     if (s->global_editing_state != ST_VIEW) {
-	bn_mat_mul(vsp->vs_model2objview, gvp->gv_model2view, MEDIT(s)->model_changes);
+	mat_t model2view;
+	rt_view_model2view_from_bsg(model2view, gvp);
+	bn_mat_mul(vsp->vs_model2objview, model2view, MEDIT(s)->model_changes);
 	bn_mat_inv(vsp->vs_objview2model, vsp->vs_model2objview);
     }
     mged_refresh_request_view(s, vsp, BSG_VIEW_REFRESH_VIEW);
@@ -471,7 +476,7 @@ mged_dm_during_clbk(int ac, const char **av, void *UNUSED(u1), void *u2)
 
     if (BU_STR_EQUAL(av[1], "set")) {
         if (ac > 2 && BU_STR_EQUAL(av[2], "zclip") && DMP && view_state && view_state->vs_gvp) {
-            bsg_view_set_zclip(view_state->vs_gvp, dm_get_zclip(DMP));
+            rt_view_zclip_set_bsg(view_state->vs_gvp, dm_get_zclip(DMP));
         }
         if (view_state)
             mged_refresh_request_view(s, view_state, BSG_VIEW_REFRESH_VIEW);
@@ -1488,10 +1493,11 @@ event_check(struct mged_state *s, int non_blocking)
 	}
 
 	non_blocking++;
+	fastf_t view_local_scale = rt_view_scale_from_bsg(view_state->vs_gvp) * s->dbip->dbi_base2local;
 	bu_vls_printf(&vls, "knob -i -e aX %f aY %f aZ %f\n",
-		      MEDIT(s)->k.tra_m[X] * 0.05 * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local,
-		      MEDIT(s)->k.tra_m[Y] * 0.05 * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local,
-		      MEDIT(s)->k.tra_m[Z] * 0.05 * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local);
+		      MEDIT(s)->k.tra_m[X] * 0.05 * view_local_scale,
+		      MEDIT(s)->k.tra_m[Y] * 0.05 * view_local_scale,
+		      MEDIT(s)->k.tra_m[Z] * 0.05 * view_local_scale);
 
 	Tcl_Eval(s->interp, bu_vls_addr(&vls));
 	bu_vls_free(&vls);
@@ -1521,10 +1527,11 @@ event_check(struct mged_state *s, int non_blocking)
 	}
 
 	non_blocking++;
+	fastf_t view_local_scale = rt_view_scale_from_bsg(view_state->vs_gvp) * s->dbip->dbi_base2local;
 	bu_vls_printf(&vls, "knob -i -e aX %f aY %f aZ %f\n",
-		      MEDIT(s)->k.tra_v[X] * 0.05 * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local,
-		      MEDIT(s)->k.tra_v[Y] * 0.05 * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local,
-		      MEDIT(s)->k.tra_v[Z] * 0.05 * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local);
+		      MEDIT(s)->k.tra_v[X] * 0.05 * view_local_scale,
+		      MEDIT(s)->k.tra_v[Y] * 0.05 * view_local_scale,
+		      MEDIT(s)->k.tra_v[Z] * 0.05 * view_local_scale);
 
 	Tcl_Eval(s->interp, bu_vls_addr(&vls));
 	bu_vls_free(&vls);
@@ -1567,6 +1574,7 @@ event_check(struct mged_state *s, int non_blocking)
 	    continue;
 
 	set_curr_dm(s, p);
+	fastf_t view_local_scale = rt_view_scale_from_bsg(view_state->vs_gvp) * s->dbip->dbi_base2local;
 
 	if (view_state->k.rot_m_flag) {
 	    struct bu_vls vls = BU_VLS_INIT_ZERO;
@@ -1586,9 +1594,9 @@ event_check(struct mged_state *s, int non_blocking)
 
 	    non_blocking++;
 	    bu_vls_printf(&vls, "knob -i -m aX %f aY %f aZ %f\n",
-			  view_state->k.tra_m[X] * 0.05 * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local,
-			  view_state->k.tra_m[Y] * 0.05 * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local,
-			  view_state->k.tra_m[Z] * 0.05 * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local);
+			  view_state->k.tra_m[X] * 0.05 * view_local_scale,
+			  view_state->k.tra_m[Y] * 0.05 * view_local_scale,
+			  view_state->k.tra_m[Z] * 0.05 * view_local_scale);
 
 	    Tcl_Eval(s->interp, bu_vls_addr(&vls));
 	    bu_vls_free(&vls);
@@ -1611,9 +1619,9 @@ event_check(struct mged_state *s, int non_blocking)
 
 	    non_blocking++;
 	    bu_vls_printf(&vls, "knob -i -v aX %f aY %f aZ %f",
-			  view_state->k.tra_v[X] * 0.05 * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local,
-			  view_state->k.tra_v[Y] * 0.05 * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local,
-			  view_state->k.tra_v[Z] * 0.05 * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local);
+			  view_state->k.tra_v[X] * 0.05 * view_local_scale,
+			  view_state->k.tra_v[Y] * 0.05 * view_local_scale,
+			  view_state->k.tra_v[Z] * 0.05 * view_local_scale);
 
 	    Tcl_Eval(s->interp, bu_vls_addr(&vls));
 	    bu_vls_free(&vls);

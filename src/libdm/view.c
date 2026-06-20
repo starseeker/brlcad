@@ -44,6 +44,7 @@
 #include "bsg/scene_object.h"
 #include "bsg/view_scope.h"
 #include "bsg/view_state.h"
+#include "rt/view_legacy_bsg.h"
 #include "dm.h"
 
 void
@@ -1119,7 +1120,7 @@ dm_draw_objs(struct bsg_view *v)
     // The rest of the drawing layers manipulate the OpenGL view and projection
     // matrices, but the framebuffer is always aligned to the view.  We also
     // can't have the zbuffer enabled or the fb image won't draw correctly.
-    int fb_mode = bsg_view_framebuffer_mode(v);
+    int fb_mode = rt_view_framebuffer_mode_from_bsg(v);
     if (fb_mode && dm_get_fb(dmp)) {
 	static struct bsg_backend_adapter framebuffer_adapter = {NULL, NULL, _dm_framebuffer_draw_item, NULL, NULL, NULL, NULL};
 	(void)_dm_hud_render_request(v, &framebuffer_adapter);

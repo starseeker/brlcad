@@ -27,6 +27,7 @@
 #include "common.h"
 #include "bu/units.h"
 #include "ged.h"
+#include "rt/view_legacy_bsg.h"
 #include "tclcad.h"
 
 /* Private headers */
@@ -46,8 +47,8 @@ go_refresh_draw(struct ged *gedp, struct bsg_view *gdvp, int restore_zbuffer)
 	    /* Phase T2-final: replaced dm_draw_viewobjs with dm_draw_objs.
 	     * Stash/restore gv_local2base|base2local to keep faceplate unit
 	     * display consistent with the database unit factors. */
-	    double l2b = gdvp->gv_local2base;
-	    double b2l = gdvp->gv_base2local;
+	    double l2b = rt_view_local2base_from_bsg(gdvp);
+	    double b2l = rt_view_base2local_from_bsg(gdvp);
 	    gdvp->gv_local2base = gedp->dbip->dbi_local2base;
 	    gdvp->gv_base2local = gedp->dbip->dbi_base2local;
 	    dm_draw_objs(gdvp);
@@ -130,8 +131,8 @@ go_refresh_draw(struct ged *gedp, struct bsg_view *gdvp, int restore_zbuffer)
      * full BSG view-scope object set (including T1-migrated overlays) and
      * faceplate are rendered through the modern path.  Stash/restore the
      * unit-conversion factors as before. */
-    double l2b = gdvp->gv_local2base;
-    double b2l = gdvp->gv_base2local;
+    double l2b = rt_view_local2base_from_bsg(gdvp);
+    double b2l = rt_view_base2local_from_bsg(gdvp);
     gdvp->gv_local2base = gedp->dbip->dbi_local2base;
     gdvp->gv_base2local = gedp->dbip->dbi_base2local;
     dm_draw_objs(gdvp);

@@ -18,11 +18,40 @@
 class QgView;
 struct bu_color;
 
+struct QTCAD_EXPORT QgObolMeasureGeometryRecord {
+    enum PrimitiveKind {
+	NONE = 0,
+	LINE_SEGMENT = 1,
+	FACE = 3
+    };
+
+    QgObolMeasureGeometryRecord(void);
+
+    int shapeCount;
+    int segmentCount;
+    int triangleCount;
+    float surfaceArea;
+    float totalLength;
+    SbVec3f boundsMin;
+    SbVec3f boundsMax;
+    bool boundsValid;
+    bool hasNearestPrimitive;
+    int nearestPrimitiveKind;
+    int nearestPrimitiveIndex;
+    std::string nearestPath;
+    SbVec3f nearestPoint;
+    float nearestDistance;
+};
+
 QTCAD_EXPORT int qg_obol_measure_pick_point(QgView *display,
 	int x,
 	int y,
 	SbVec3f &point,
 	std::string *path = 0);
+
+QTCAD_EXPORT int qg_obol_measure_geometry_full_detail(QgView *display,
+	const SbVec3f *query,
+	QgObolMeasureGeometryRecord &record);
 
 QTCAD_EXPORT int qg_obol_measure_update_overlay(QgView *display,
 	const char *overlayId,

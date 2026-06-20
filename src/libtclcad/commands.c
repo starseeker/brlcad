@@ -92,6 +92,13 @@
 #include "./view/view.h"
 #include "./bsg_move_helpers.h"
 
+static void
+tclcad_commands_sync_dm_dimensions(struct bsg_view *target, struct bsg_view *source)
+{
+    rt_view_dimensions_set_bsg(target, dm_get_width((struct dm *)source->dmp),
+	    dm_get_height((struct dm *)source->dmp));
+}
+
 static int to_base2local(struct ged *gedp,
 	int argc,
 	const char *argv[],
@@ -1860,6 +1867,7 @@ to_data_move_func(struct ged *gedp,
     fastf_t vx, vy;
     fastf_t sf;
     point_t mpoint, vpoint;
+    mat_t model2view, view2model;
 
     if (bu_sscanf(argv[2], "%d", &dindex) != 1 || dindex < 0)
 	goto bad;
@@ -1882,6 +1890,8 @@ to_data_move_func(struct ged *gedp,
     sf = 2.0 / width;
     vx = (mx - cx) * sf;
     vy = (cy - my) * sf;
+    rt_view_model2view_from_bsg(model2view, gdvp);
+    rt_view_view2model_from_bsg(view2model, gdvp);
 
     if (BU_STR_EQUAL(argv[1], "data_polygons")) {
 	size_t i, j, k;
@@ -1903,10 +1913,10 @@ to_data_move_func(struct ged *gedp,
 
 	    VMOVE(old_mpoint, gdpsp->gdps_polygons.polygon[i].contour[j].point[k]);
 
-	    MAT4X3PNT(vpoint, gdvp->gv_model2view, gdpsp->gdps_polygons.polygon[i].contour[j].point[k]);
+	    MAT4X3PNT(vpoint, model2view, gdpsp->gdps_polygons.polygon[i].contour[j].point[k]);
 	    vpoint[X] = vx;
 	    vpoint[Y] = vy;
-	    MAT4X3PNT(new_mpoint, gdvp->gv_view2model, vpoint);
+	    MAT4X3PNT(new_mpoint, view2model, vpoint);
 	    VSUB2(diff, new_mpoint, old_mpoint);
 
 	    /* Move all polygons and all their respective contours. */
@@ -1931,10 +1941,10 @@ to_data_move_func(struct ged *gedp,
 	    }
 	} else {
 	    /* This section is for moving a single point on a contour */
-	    MAT4X3PNT(vpoint, gdvp->gv_model2view, gdpsp->gdps_polygons.polygon[i].contour[j].point[k]);
+	    MAT4X3PNT(vpoint, model2view, gdpsp->gdps_polygons.polygon[i].contour[j].point[k]);
 	    vpoint[X] = vx;
 	    vpoint[Y] = vy;
-	    MAT4X3PNT(gdpsp->gdps_polygons.polygon[i].contour[j].point[k], gdvp->gv_view2model, vpoint);
+	    MAT4X3PNT(gdpsp->gdps_polygons.polygon[i].contour[j].point[k], view2model, vpoint);
 	}
 
 	to_refresh_view(gdvp);
@@ -1961,16 +1971,16 @@ to_data_move_func(struct ged *gedp,
 	    point_t old_mpoint, new_mpoint;
 	    vect_t diff;
 	    VMOVE(old_mpoint, _pts[dindexA]);
-	    MAT4X3PNT(vpoint, gdvp->gv_model2view, _pts[dindexA]);
+	    MAT4X3PNT(vpoint, model2view, _pts[dindexA]);
 	    vpoint[X] = vx; vpoint[Y] = vy;
-	    MAT4X3PNT(new_mpoint, gdvp->gv_view2model, vpoint);
+	    MAT4X3PNT(new_mpoint, view2model, vpoint);
 	    VSUB2(diff, new_mpoint, old_mpoint);
 	    VMOVE(_pts[dindexA], new_mpoint);
 	    VADD2(_pts[dindexB], _pts[dindexB], diff);
 	} else {
-	    MAT4X3PNT(vpoint, gdvp->gv_model2view, _pts[dindex]);
+	    MAT4X3PNT(vpoint, model2view, _pts[dindex]);
 	    vpoint[X] = vx; vpoint[Y] = vy;
-	    MAT4X3PNT(mpoint, gdvp->gv_view2model, vpoint);
+	    MAT4X3PNT(mpoint, view2model, vpoint);
 	    VMOVE(_pts[dindex], mpoint);
 	}
 
@@ -2002,16 +2012,16 @@ to_data_move_func(struct ged *gedp,
 	    point_t old_mpoint, new_mpoint;
 	    vect_t diff;
 	    VMOVE(old_mpoint, _pts[dindexA]);
-	    MAT4X3PNT(vpoint, gdvp->gv_model2view, _pts[dindexA]);
+	    MAT4X3PNT(vpoint, model2view, _pts[dindexA]);
 	    vpoint[X] = vx; vpoint[Y] = vy;
-	    MAT4X3PNT(new_mpoint, gdvp->gv_view2model, vpoint);
+	    MAT4X3PNT(new_mpoint, view2model, vpoint);
 	    VSUB2(diff, new_mpoint, old_mpoint);
 	    VMOVE(_pts[dindexA], new_mpoint);
 	    VADD2(_pts[dindexB], _pts[dindexB], diff);
 	} else {
-	    MAT4X3PNT(vpoint, gdvp->gv_model2view, _pts[dindex]);
+	    MAT4X3PNT(vpoint, model2view, _pts[dindex]);
 	    vpoint[X] = vx; vpoint[Y] = vy;
-	    MAT4X3PNT(mpoint, gdvp->gv_view2model, vpoint);
+	    MAT4X3PNT(mpoint, view2model, vpoint);
 	    VMOVE(_pts[dindex], mpoint);
 	}
 
@@ -2034,9 +2044,9 @@ to_data_move_func(struct ged *gedp,
 
 	if (dindex >= _ncpts) { bu_free(_cpts, "bsg axes pts"); return BRLCAD_OK; }
 
-	MAT4X3PNT(vpoint, gdvp->gv_model2view, _cpts[dindex]);
+	MAT4X3PNT(vpoint, model2view, _cpts[dindex]);
 	vpoint[X] = vx; vpoint[Y] = vy;
-	MAT4X3PNT(mpoint, gdvp->gv_view2model, vpoint);
+	MAT4X3PNT(mpoint, view2model, vpoint);
 	VMOVE(_cpts[dindex], mpoint);
 
 	/* Recover halfAxesSize from X-axis endpoints of first center group */
@@ -2064,9 +2074,9 @@ to_data_move_func(struct ged *gedp,
 
 	if (dindex >= _ncpts) { bu_free(_cpts, "bsg axes pts"); return BRLCAD_OK; }
 
-	MAT4X3PNT(vpoint, gdvp->gv_model2view, _cpts[dindex]);
+	MAT4X3PNT(vpoint, model2view, _cpts[dindex]);
 	vpoint[X] = vx; vpoint[Y] = vy;
-	MAT4X3PNT(mpoint, gdvp->gv_view2model, vpoint);
+	MAT4X3PNT(mpoint, view2model, vpoint);
 	VMOVE(_cpts[dindex], mpoint);
 
 	point_t *_all = NULL;
@@ -2093,9 +2103,9 @@ to_data_move_func(struct ged *gedp,
 	point_t _label_pt;
 	if (!bsg_feature_label_copy(_ref, (size_t)dindex, NULL, _label_pt, NULL))
 	    return BRLCAD_OK;
-	MAT4X3PNT(vpoint, gdvp->gv_model2view, _label_pt);
+	MAT4X3PNT(vpoint, model2view, _label_pt);
 	vpoint[X] = vx; vpoint[Y] = vy;
-	MAT4X3PNT(mpoint, gdvp->gv_view2model, vpoint);
+	MAT4X3PNT(mpoint, view2model, vpoint);
 	bsg_feature_label_point_set(_ref, (size_t)dindex, mpoint);
 
 	to_refresh_view(gdvp);
@@ -2112,9 +2122,9 @@ to_data_move_func(struct ged *gedp,
 	point_t _label_pt;
 	if (!bsg_feature_label_copy(_ref, (size_t)dindex, NULL, _label_pt, NULL))
 	    return BRLCAD_OK;
-	MAT4X3PNT(vpoint, gdvp->gv_model2view, _label_pt);
+	MAT4X3PNT(vpoint, model2view, _label_pt);
 	vpoint[X] = vx; vpoint[Y] = vy;
-	MAT4X3PNT(mpoint, gdvp->gv_view2model, vpoint);
+	MAT4X3PNT(mpoint, view2model, vpoint);
 	bsg_feature_label_point_set(_ref, (size_t)dindex, mpoint);
 
 	to_refresh_view(gdvp);
@@ -2141,16 +2151,16 @@ to_data_move_func(struct ged *gedp,
 	    point_t old_mpoint, new_mpoint;
 	    vect_t diff;
 	    VMOVE(old_mpoint, _pts[dindexA]);
-	    MAT4X3PNT(vpoint, gdvp->gv_model2view, _pts[dindexA]);
+	    MAT4X3PNT(vpoint, model2view, _pts[dindexA]);
 	    vpoint[X] = vx; vpoint[Y] = vy;
-	    MAT4X3PNT(new_mpoint, gdvp->gv_view2model, vpoint);
+	    MAT4X3PNT(new_mpoint, view2model, vpoint);
 	    VSUB2(diff, new_mpoint, old_mpoint);
 	    VMOVE(_pts[dindexA], new_mpoint);
 	    VADD2(_pts[dindexB], _pts[dindexB], diff);
 	} else {
-	    MAT4X3PNT(vpoint, gdvp->gv_model2view, _pts[dindex]);
+	    MAT4X3PNT(vpoint, model2view, _pts[dindex]);
 	    vpoint[X] = vx; vpoint[Y] = vy;
-	    MAT4X3PNT(mpoint, gdvp->gv_view2model, vpoint);
+	    MAT4X3PNT(mpoint, view2model, vpoint);
 	    VMOVE(_pts[dindex], mpoint);
 	}
 
@@ -2182,16 +2192,16 @@ to_data_move_func(struct ged *gedp,
 	    point_t old_mpoint, new_mpoint;
 	    vect_t diff;
 	    VMOVE(old_mpoint, _pts[dindexA]);
-	    MAT4X3PNT(vpoint, gdvp->gv_model2view, _pts[dindexA]);
+	    MAT4X3PNT(vpoint, model2view, _pts[dindexA]);
 	    vpoint[X] = vx; vpoint[Y] = vy;
-	    MAT4X3PNT(new_mpoint, gdvp->gv_view2model, vpoint);
+	    MAT4X3PNT(new_mpoint, view2model, vpoint);
 	    VSUB2(diff, new_mpoint, old_mpoint);
 	    VMOVE(_pts[dindexA], new_mpoint);
 	    VADD2(_pts[dindexB], _pts[dindexB], diff);
 	} else {
-	    MAT4X3PNT(vpoint, gdvp->gv_model2view, _pts[dindex]);
+	    MAT4X3PNT(vpoint, model2view, _pts[dindex]);
 	    vpoint[X] = vx; vpoint[Y] = vy;
-	    MAT4X3PNT(mpoint, gdvp->gv_view2model, vpoint);
+	    MAT4X3PNT(mpoint, view2model, vpoint);
 	    VMOVE(_pts[dindex], mpoint);
 	}
 
@@ -2461,6 +2471,7 @@ to_data_pick_func(struct ged *gedp,
     fastf_t vx, vy;
     fastf_t sf;
     point_t dpoint, vpoint;
+    mat_t model2view;
     int i;
     fastf_t top_z = -MAX_FASTF;
     point_t top_point = VINIT_ZERO;
@@ -2499,6 +2510,7 @@ to_data_pick_func(struct ged *gedp,
     sf = 2.0 / width;
     vx = (mx - cx) * sf;
     vy = (cy - my) * sf;
+    rt_view_model2view_from_bsg(model2view, gdvp);
 
     /* check for polygon points */
     if (gdvp->gv_tcl->gv_data_polygons.gdps_draw &&
@@ -2513,7 +2525,7 @@ to_data_pick_func(struct ged *gedp,
 		    fastf_t minX, maxX;
 		    fastf_t minY, maxY;
 
-		    MAT4X3PNT(vpoint, gdvp->gv_model2view, gdpsp->gdps_polygons.polygon[si].contour[sj].point[sk]);
+		    MAT4X3PNT(vpoint, model2view, gdpsp->gdps_polygons.polygon[si].contour[sj].point[sk]);
 		    minX = vpoint[X] - tol;
 		    maxX = vpoint[X] + tol;
 		    minY = vpoint[Y] - tol;
@@ -2556,7 +2568,7 @@ to_data_pick_func(struct ged *gedp,
 		    continue;
 		}
 
-		MAT4X3PNT(vpoint, gdvp->gv_model2view, dpoint);
+		MAT4X3PNT(vpoint, model2view, dpoint);
 
 		minX = vpoint[X];
 		maxX = vpoint[X] + (2 * tol);
@@ -2595,7 +2607,7 @@ to_data_pick_func(struct ged *gedp,
 		    continue;
 		}
 
-		MAT4X3PNT(vpoint, gdvp->gv_model2view, dpoint);
+		MAT4X3PNT(vpoint, model2view, dpoint);
 
 		minX = vpoint[X];
 		maxX = vpoint[X] + (2 * tol);
@@ -2636,7 +2648,7 @@ to_data_pick_func(struct ged *gedp,
 		fastf_t minX, maxX;
 		fastf_t minY, maxY;
 		VMOVE(dpoint, _lpts[i]);
-		MAT4X3PNT(vpoint, gdvp->gv_model2view, dpoint);
+		MAT4X3PNT(vpoint, model2view, dpoint);
 		minX = vpoint[X] - tol; maxX = vpoint[X] + tol;
 		minY = vpoint[Y] - tol; maxY = vpoint[Y] + tol;
 		if (minX < vx && vx < maxX && minY < vy && vy < maxY) {
@@ -2660,7 +2672,7 @@ to_data_pick_func(struct ged *gedp,
 		fastf_t minX, maxX;
 		fastf_t minY, maxY;
 		VMOVE(dpoint, _lpts[i]);
-		MAT4X3PNT(vpoint, gdvp->gv_model2view, dpoint);
+		MAT4X3PNT(vpoint, model2view, dpoint);
 		minX = vpoint[X] - tol; maxX = vpoint[X] + tol;
 		minY = vpoint[Y] - tol; maxY = vpoint[Y] + tol;
 		if (minX < vx && vx < maxX && minY < vy && vy < maxY) {
@@ -2693,7 +2705,7 @@ to_data_pick_func(struct ged *gedp,
 	    for (i = 0; i < _anpts; ++i) {
 		fastf_t minX, maxX, minY, maxY;
 		VMOVE(dpoint, _apts[i]);
-		MAT4X3PNT(vpoint, gdvp->gv_model2view, dpoint);
+		MAT4X3PNT(vpoint, model2view, dpoint);
 		minX = vpoint[X] - tol; maxX = vpoint[X] + tol;
 		minY = vpoint[Y] - tol; maxY = vpoint[Y] + tol;
 		if (minX < vx && vx < maxX && minY < vy && vy < maxY) {
@@ -2719,7 +2731,7 @@ to_data_pick_func(struct ged *gedp,
 	    for (i = 0; i < _anpts; ++i) {
 		fastf_t minX, maxX, minY, maxY;
 		VMOVE(dpoint, _apts[i]);
-		MAT4X3PNT(vpoint, gdvp->gv_model2view, dpoint);
+		MAT4X3PNT(vpoint, model2view, dpoint);
 		minX = vpoint[X] - tol; maxX = vpoint[X] + tol;
 		minY = vpoint[Y] - tol; maxY = vpoint[Y] + tol;
 		if (minX < vx && vx < maxX && minY < vy && vy < maxY) {
@@ -2752,7 +2764,7 @@ to_data_pick_func(struct ged *gedp,
 	    for (i = 0; i < _ncpts; ++i) {
 		fastf_t minX, maxX, minY, maxY;
 		VMOVE(dpoint, _cpts[i]);
-		MAT4X3PNT(vpoint, gdvp->gv_model2view, dpoint);
+		MAT4X3PNT(vpoint, model2view, dpoint);
 		minX = vpoint[X] - tol; maxX = vpoint[X] + tol;
 		minY = vpoint[Y] - tol; maxY = vpoint[Y] + tol;
 		if (minX < vx && vx < maxX && minY < vy && vy < maxY) {
@@ -2778,7 +2790,7 @@ to_data_pick_func(struct ged *gedp,
 	    for (i = 0; i < _ncpts; ++i) {
 		fastf_t minX, maxX, minY, maxY;
 		VMOVE(dpoint, _cpts[i]);
-		MAT4X3PNT(vpoint, gdvp->gv_model2view, dpoint);
+		MAT4X3PNT(vpoint, model2view, dpoint);
 		minX = vpoint[X] - tol; maxX = vpoint[X] + tol;
 		minY = vpoint[Y] - tol; maxY = vpoint[Y] + tol;
 		if (minX < vx && vx < maxX && minY < vy && vy < maxY) {
@@ -3209,8 +3221,7 @@ to_dplot(struct ged *gedp,
 	for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	    gdvp = (struct bsg_view *)BU_PTBL_GET(views, i);
 	    if (to_is_viewable(gdvp)) {
-		gedp->ged_gvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-		gedp->ged_gvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+		tclcad_commands_sync_dm_dimensions(gedp->ged_gvp, gdvp);
 	    }
 	}
 
@@ -3282,8 +3293,7 @@ to_dplot(struct ged *gedp,
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	gdvp = (struct bsg_view *)BU_PTBL_GET(views, i);
 	if (to_is_viewable(gdvp)) {
-	    gedp->ged_gvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-	    gedp->ged_gvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+	    tclcad_commands_sync_dm_dimensions(gedp->ged_gvp, gdvp);
 	}
     }
     to_refresh_all_views(current_top);
@@ -3709,8 +3719,7 @@ to_idle_mode(struct ged *gedp,
     {
 	const char *av[3];
 
-	gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-	gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+	tclcad_commands_sync_dm_dimensions(gdvp, gdvp);
 
 	gedp->ged_gvp = gdvp;
 	av[0] = "grid";
@@ -5641,6 +5650,7 @@ to_screen2model(struct ged *gedp,
 {
     point_t view;
     point_t model;
+    mat_t view2model;
 
     /* must be double for scanf */
     double x, y;
@@ -5671,11 +5681,11 @@ to_screen2model(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+    tclcad_commands_sync_dm_dimensions(gdvp, gdvp);
     bsg_screen_to_view(gdvp, &x, &y, x, y);
     VSET(view, x, y, 0.0);
-    MAT4X3PNT(model, gdvp->gv_view2model, view);
+    rt_view_view2model_from_bsg(view2model, gdvp);
+    MAT4X3PNT(model, view2model, view);
 
     bu_vls_printf(gedp->ged_result_str, "%lf %lf %lf", V3ARGS(model));
 
@@ -5722,8 +5732,7 @@ to_screen2view(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+    tclcad_commands_sync_dm_dimensions(gdvp, gdvp);
     bsg_screen_to_view(gdvp, &x, &y, x, y);
     VSET(view, x, y, 0.0);
 
@@ -5763,7 +5772,7 @@ to_set_coord(struct ged *gedp,
 
     /* Get coord */
     if (argc == 2) {
-	bu_vls_printf(gedp->ged_result_str, "%c", gdvp->gv_coord);
+	bu_vls_printf(gedp->ged_result_str, "%c", rt_view_coord_from_bsg(gdvp));
 	return BRLCAD_OK;
     }
 
@@ -5773,7 +5782,7 @@ to_set_coord(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_coord = argv[2][0];
+    rt_view_coord_set_bsg(gdvp, argv[2][0]);
 
     return BRLCAD_OK;
 }
@@ -5821,20 +5830,19 @@ to_snap_view(struct ged *gedp,
     fvx = vx;
     fvy = vy;
 
-    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+    tclcad_commands_sync_dm_dimensions(gdvp, gdvp);
     gdvp->gv_base2local = gedp->dbip->dbi_base2local;
 
     gedp->ged_gvp = gdvp;
     struct bsg_grid_state grid;
     (void)bsg_view_grid_get(gedp->ged_gvp, &grid);
-    if (!bsg_view_snap_lines(gedp->ged_gvp) && !grid.snap) {
+    if (!rt_view_snap_lines_from_bsg(gedp->ged_gvp) && !grid.snap) {
 	bu_vls_printf(gedp->ged_result_str, "%lf %lf", fvx, fvy);
 	return BRLCAD_OK;
     }
 
     {
-	bsg_snap_kind_mask snap_kinds = bsg_view_prepare_tcl_snap(gedp->ged_gvp);
+	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
 	if (snap_kinds)
 	    bsg_snap_point_2d(gedp->ged_gvp, &fvx, &fvy, snap_kinds);
     }
@@ -6306,8 +6314,7 @@ to_vslew(struct ged *gedp,
 	(void)bsg_view_grid_get(gdvp, &grid);
 	if (grid.snap) {
 
-	    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-	    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+	    tclcad_commands_sync_dm_dimensions(gdvp, gdvp);
 
 	    gedp->ged_gvp = gdvp;
 	    av[0] = "grid";
@@ -6316,8 +6323,8 @@ to_vslew(struct ged *gedp,
 	    ged_exec_grid(gedp, 2, (const char **)av);
 	}
 
-	if (bsg_view_snap_lines(gedp->ged_gvp)) {
-	    bsg_view_center_linesnap(gedp->ged_gvp);
+	if (rt_view_snap_lines_from_bsg(gedp->ged_gvp)) {
+	    rt_view_center_linesnap_bsg(gedp->ged_gvp);
 	}
 
 	struct tclcad_view_data *tvd = (struct tclcad_view_data *)gdvp->u_data;
@@ -6424,7 +6431,7 @@ to_zclip(struct ged *gedp,
 
     /* get zclip flag */
     if (argc == 2) {
-	bu_vls_printf(gedp->ged_result_str, "%d", bsg_view_zclip(gdvp));
+	bu_vls_printf(gedp->ged_result_str, "%d", rt_view_zclip_from_bsg(gdvp));
 	return BRLCAD_OK;
     }
 
@@ -6439,7 +6446,7 @@ to_zclip(struct ged *gedp,
     else if (1 < zclip)
 	zclip = 1;
 
-    bsg_view_set_zclip(gdvp, zclip);
+    rt_view_zclip_set_bsg(gdvp, zclip);
     dm_set_zclip((struct dm *)gdvp->dmp, zclip);
     to_refresh_view(gdvp);
 

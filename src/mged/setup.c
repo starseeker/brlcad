@@ -37,6 +37,7 @@
 #include "bsg/util.h"
 #include "tclcad.h"
 #include "ged.h"
+#include "rt/view_legacy_bsg.h"
 
 /* local headers */
 #include "./mged.h"
@@ -570,7 +571,9 @@ mged_setup(struct mged_state *s)
 
     view_state->vs_gvp->gv_callback = mged_view_callback;
     view_state->vs_gvp->gv_clientData = (void *)view_state;
-    MAT_DELTAS_GET_NEG(view_state->vs_orig_pos, view_state->vs_gvp->gv_center);
+    mat_t view_center;
+    rt_view_center_from_bsg(view_center, view_state->vs_gvp);
+    MAT_DELTAS_GET_NEG(view_state->vs_orig_pos, view_center);
 
     view_state->vs_gvp->vset = &s->gedp->ged_views;
 

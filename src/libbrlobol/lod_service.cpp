@@ -9,12 +9,18 @@
 
 #include "brlobol/lod_service.h"
 
+#include "raytrace.h"
+
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <deque>
+#include <iomanip>
+#include <limits>
 #include <mutex>
+#include <new>
 #include <set>
+#include <sstream>
 #include <string.h>
 #include <thread>
 #include <vector>
@@ -35,6 +41,20 @@ BRLObolRtMeshLodProvider::clear(void)
     shrinkAfterCopy = TRUE;
     forcedLevel = 0;
     reset = 0;
+}
+
+BRLObolRtSourceFullDetailProvider::BRLObolRtSourceFullDetailProvider(void)
+{
+    clear();
+}
+
+void
+BRLObolRtSourceFullDetailProvider::clear(void)
+{
+    dbip = NULL;
+    validateSourceMetrics = TRUE;
+    maxFullDetailFaceCount = 0;
+    maxFullDetailPointCount = 0;
 }
 
 BRLObolLodTask::BRLObolLodTask(void)
@@ -102,6 +122,312 @@ lod_provider_status_result(const BRLObolLodRequest &request, int status,
 	result.stale = TRUE;
 
     return result;
+}
+
+static SbBool
+lod_source_full_detail_exceeds_limits(
+	const BRLObolRtSourceFullDetailProvider *provider,
+	uint64_t faceCount, uint64_t pointCount)
+{
+    if (!provider)
+	return FALSE;
+
+    if (provider->maxFullDetailFaceCount != 0 &&
+	    faceCount > provider->maxFullDetailFaceCount)
+	return TRUE;
+    if (provider->maxFullDetailPointCount != 0 &&
+	    pointCount > provider->maxFullDetailPointCount)
+	return TRUE;
+
+    return FALSE;
+}
+
+static SbBool
+lod_request_source_counts_known(const BRLObolLodRequest &request)
+{
+    return request.sourceCounts.faceCount != 0 ||
+	request.sourceCounts.pointCount != 0 ? TRUE : FALSE;
+}
+
+static SbString
+lod_vec3_provider_param(const SbVec3f &value)
+{
+    std::ostringstream out;
+
+    out << std::setprecision(9)
+	<< value[0] << " " << value[1] << " " << value[2];
+    return SbString(out.str().c_str());
+}
+
+static SbString
+lod_bounds_provider_param(const SbBox3f &bounds)
+{
+    std::ostringstream out;
+    const SbVec3f &bmin = bounds.getMin();
+    const SbVec3f &bmax = bounds.getMax();
+
+    out << std::setprecision(9)
+	<< bmin[0] << " " << bmin[1] << " " << bmin[2] << " "
+	<< bmax[0] << " " << bmax[1] << " " << bmax[2];
+    return SbString(out.str().c_str());
+}
+
+static SbString
+lod_float_provider_param(float value)
+{
+    std::ostringstream out;
+
+    out << std::setprecision(9) << value;
+    return SbString(out.str().c_str());
+}
+
+static BRLObolLodResult
+lod_source_full_detail_payload_result(const BRLObolLodRequest &request,
+	const struct rt_bot_internal *bot)
+{
+    BRLObolLodResult result;
+
+    result.request = request;
+    result.cacheKey = brlobol_lod_cache_key(request);
+    result.resultKind = BRLOBOL_LOD_RESULT_FULL_DETAIL;
+    result.qualityTier = BRLOBOL_LOD_QUALITY_FULL_DETAIL;
+    result.providerStatus = BRLOBOL_LOD_PROVIDER_READY;
+    result.counts.faceCount = bot->num_faces;
+    result.counts.pointCount = bot->num_vertices;
+    result.terminal = TRUE;
+
+    result.geometry.kind = BRLOBOL_LOD_GEOMETRY_OBOL_MESH;
+    result.geometry.providerId = request.providerId;
+    result.geometry.providerVersion = request.providerVersion;
+    result.geometry.cacheKey = result.cacheKey;
+    result.geometry.activeLevel = -1;
+    result.geometry.borrowed = FALSE;
+
+    result.bounds.makeEmpty();
+    try {
+	result.mesh.points.reserve(bot->num_vertices);
+	for (size_t i = 0; i < bot->num_vertices; i++) {
+	    SbVec3f point(static_cast<float>(bot->vertices[i * 3]),
+		    static_cast<float>(bot->vertices[i * 3 + 1]),
+		    static_cast<float>(bot->vertices[i * 3 + 2]));
+	    result.mesh.points.push_back(point);
+	    result.bounds.extendBy(point);
+	}
+
+	size_t indexCount = bot->num_faces * 3;
+	result.mesh.coordIndex.reserve(indexCount);
+	for (size_t i = 0; i < indexCount; i++) {
+	    int idx = bot->faces[i];
+	    if (idx < 0 || static_cast<size_t>(idx) >= bot->num_vertices) {
+		result.mesh.clear();
+		result.providerStatus = BRLOBOL_LOD_PROVIDER_ERROR;
+		result.diagnostic =
+		    "RT source full-detail provider BoT has invalid face indices";
+		return result;
+	    }
+	    result.mesh.coordIndex.push_back(static_cast<int32_t>(idx));
+	}
+    } catch (const std::bad_alloc &) {
+	result.mesh.clear();
+	result.providerStatus = BRLOBOL_LOD_PROVIDER_FALLBACK;
+	result.diagnostic =
+	    "RT source full-detail provider could not allocate BoT payload";
+	return result;
+    }
+
+    if (!result.mesh.isValid()) {
+	result.providerStatus = BRLOBOL_LOD_PROVIDER_ERROR;
+	result.diagnostic =
+	    "RT source full-detail provider copied an invalid BoT payload";
+    }
+
+    return result;
+}
+
+BRLObolLodResult
+brlobol_rt_source_full_detail_provider_task(
+	const BRLObolLodRequest &request, void *userData)
+{
+    BRLObolRtSourceFullDetailProvider *provider =
+	static_cast<BRLObolRtSourceFullDetailProvider *>(userData);
+    if (!provider || !provider->dbip)
+	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
+	    "RT source full-detail provider has no database");
+
+    if (lod_request_source_counts_known(request) &&
+	    lod_source_full_detail_exceeds_limits(provider,
+		request.sourceCounts.faceCount, request.sourceCounts.pointCount))
+	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_FALLBACK,
+	    "RT source full-detail provider request exceeds full-detail limits");
+
+    const char *name = lod_request_object_name(request);
+    if (!name)
+	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
+	    "RT source full-detail provider request has no object name");
+
+    struct directory *dp = db_lookup(provider->dbip, name, LOOKUP_QUIET);
+    if (dp == RT_DIR_NULL)
+	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
+	    "RT source full-detail provider could not find source object");
+
+    struct rt_db_internal intern;
+    RT_DB_INTERNAL_INIT(&intern);
+    int internalType = rt_db_get_internal(&intern, dp, provider->dbip, NULL);
+    if (internalType < 0)
+	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
+	    "RT source full-detail provider could not read source object");
+
+    if (internalType != ID_BOT || intern.idb_type != ID_BOT ||
+	    intern.idb_ptr == NULL) {
+	rt_db_free_internal(&intern);
+	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
+	    "RT source full-detail provider source is not a BoT");
+    }
+
+    const struct rt_bot_internal *bot =
+	static_cast<const struct rt_bot_internal *>(intern.idb_ptr);
+    if (!bot || !bot->vertices || !bot->faces ||
+	    bot->num_vertices == 0 || bot->num_faces == 0) {
+	rt_db_free_internal(&intern);
+	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
+	    "RT source full-detail provider source BoT has no mesh payload");
+    }
+    RT_BOT_CK_MAGIC(bot);
+
+    if (lod_source_full_detail_exceeds_limits(provider,
+	    bot->num_faces, bot->num_vertices)) {
+	rt_db_free_internal(&intern);
+	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_FALLBACK,
+	    "RT source full-detail provider source exceeds full-detail limits");
+    }
+
+    if (provider->validateSourceMetrics &&
+	    ((request.sourceCounts.faceCount != 0 &&
+		request.sourceCounts.faceCount != bot->num_faces) ||
+	     (request.sourceCounts.pointCount != 0 &&
+		request.sourceCounts.pointCount != bot->num_vertices))) {
+	rt_db_free_internal(&intern);
+	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_STALE,
+	    "RT source full-detail provider source metrics changed");
+    }
+
+    if (bot->num_vertices >
+	    static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
+	    bot->num_faces >
+	    static_cast<size_t>(std::numeric_limits<size_t>::max() / 3)) {
+	rt_db_free_internal(&intern);
+	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_FALLBACK,
+	    "RT source full-detail provider source exceeds copy limits");
+    }
+
+    BRLObolLodResult result =
+	lod_source_full_detail_payload_result(request, bot);
+    rt_db_free_internal(&intern);
+    return result;
+}
+
+void
+brlobol_rt_source_full_detail_provider_free(void *userData)
+{
+    BRLObolRtSourceFullDetailProvider *provider =
+	static_cast<BRLObolRtSourceFullDetailProvider *>(userData);
+    delete provider;
+}
+
+SbBool
+brlobol_lod_rt_source_full_detail_request_from_source_mesh_request(
+	BRLObolLodRequest &request,
+	const BRLObolSourceMeshRequest &sourceRequest,
+	const BRLObolLodRequest *templateRequest)
+{
+    if (sourceRequest.path.getLength() == 0 &&
+	    sourceRequest.sourceName.getLength() == 0)
+	return FALSE;
+
+    if (templateRequest)
+	request = *templateRequest;
+    else
+	request.clear();
+
+    request.objectPath = sourceRequest.path.getLength() > 0 ?
+	sourceRequest.path : sourceRequest.sourceName;
+    request.objectName = sourceRequest.sourceName;
+    if (request.objectName.getLength() == 0) {
+	const char *name = lod_request_object_name(request);
+	request.objectName = name ? name : "";
+    }
+
+    request.providerId = "rt_source_full_detail";
+    request.providerVersion = "direct-bot-v1";
+    request.qualityTier = BRLOBOL_LOD_QUALITY_FULL_DETAIL;
+    if (request.drawMode == BRLOBOL_LOD_DRAW_UNKNOWN)
+	request.drawMode = BRLOBOL_LOD_DRAW_SHADED;
+    request.bounds = sourceRequest.bounds;
+    request.sourceCounts.clear();
+    request.sourceCounts.faceCount = sourceRequest.faceCount;
+    request.sourceCounts.pointCount = sourceRequest.pointCount;
+    if ((sourceRequest.queryBoundsValid && !sourceRequest.queryBounds.isEmpty()) ||
+	    sourceRequest.queryRayValid || sourceRequest.queryToleranceValid)
+	request.addProviderParam("source_query.space", "source_local");
+    if (sourceRequest.queryBoundsValid && !sourceRequest.queryBounds.isEmpty()) {
+	request.addProviderParam("source_query.bounds",
+		lod_bounds_provider_param(sourceRequest.queryBounds));
+    }
+    if (sourceRequest.queryRayValid) {
+	request.addProviderParam("source_query.ray.origin",
+		lod_vec3_provider_param(sourceRequest.queryRayOrigin));
+	request.addProviderParam("source_query.ray.direction",
+		lod_vec3_provider_param(sourceRequest.queryRayDirection));
+    }
+    if (sourceRequest.queryToleranceValid) {
+	request.addProviderParam("source_query.tolerance",
+		lod_float_provider_param(sourceRequest.queryTolerance));
+    }
+
+    return request.objectPath.getLength() > 0 ||
+	request.objectName.getLength() > 0 ? TRUE : FALSE;
+}
+
+uint64_t
+brlobol_lod_submit_rt_source_full_detail_request(
+	BRLObolLodService *service,
+	uint64_t generation,
+	const BRLObolSourceMeshRequest &sourceRequest,
+	struct db_i *dbip,
+	const BRLObolLodRequest *templateRequest,
+	uint64_t maxFullDetailFaceCount,
+	uint64_t maxFullDetailPointCount)
+{
+    if (!service || !dbip)
+	return 0;
+
+    BRLObolRtSourceFullDetailProvider *provider =
+	new (std::nothrow) BRLObolRtSourceFullDetailProvider;
+    if (!provider)
+	return 0;
+
+    BRLObolLodTask task;
+    task.generation = generation;
+    if (!brlobol_lod_rt_source_full_detail_request_from_source_mesh_request(
+	    task.request, sourceRequest, templateRequest)) {
+	delete provider;
+	return 0;
+    }
+
+    provider->dbip = dbip;
+    provider->validateSourceMetrics = TRUE;
+    provider->maxFullDetailFaceCount = maxFullDetailFaceCount;
+    provider->maxFullDetailPointCount = maxFullDetailPointCount;
+
+    task.realize = brlobol_rt_source_full_detail_provider_task;
+    task.realizeData = provider;
+    task.realizeDataFree = brlobol_rt_source_full_detail_provider_free;
+
+    uint64_t taskId = service->submit(task);
+    if (taskId == 0)
+	brlobol_rt_source_full_detail_provider_free(provider);
+
+    return taskId;
 }
 
 BRLObolLodResult
@@ -784,6 +1110,43 @@ BRLObolLodService::drainResults(std::vector<BRLObolLodResult> &results,
 	    (maxResults == 0 || count < maxResults)) {
 	results.push_back(this->p->results.front());
 	this->p->results.pop_front();
+	count++;
+    }
+
+    return count;
+}
+
+size_t
+BRLObolLodService::drainMatchingResults(
+	std::vector<BRLObolLodResult> &results,
+	const std::vector<BRLObolLodRequest> &requests,
+	size_t maxResults)
+{
+    if (requests.empty())
+	return 0;
+
+    size_t count = 0;
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+
+    for (std::deque<BRLObolLodResult>::iterator it =
+	    this->p->results.begin(); it != this->p->results.end();) {
+	if (maxResults != 0 && count >= maxResults)
+	    break;
+
+	SbBool matched = FALSE;
+	for (size_t i = 0; i < requests.size(); i++) {
+	    if (brlobol_lod_result_matches_request(*it, requests[i])) {
+		matched = TRUE;
+		break;
+	    }
+	}
+	if (!matched) {
+	    ++it;
+	    continue;
+	}
+
+	results.push_back(*it);
+	it = this->p->results.erase(it);
 	count++;
     }
 

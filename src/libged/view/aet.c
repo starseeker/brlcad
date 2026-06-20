@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "rt/view_legacy_bsg.h"
+
 #include "../ged_private.h"
 #include "./ged_view.h"
 
@@ -47,7 +49,8 @@ ged_aet_core(struct ged *gedp, int argc, const char *argv[])
 
     /* get aet */
     if (argc == 1) {
-	bn_encode_vect(gedp->ged_result_str, gedp->ged_gvp->gv_aet, 1);
+	rt_view_aet_from_bsg(aet, gedp->ged_gvp);
+	bn_encode_vect(gedp->ged_result_str, aet, 1);
 	return BRLCAD_OK;
     }
 
@@ -70,11 +73,11 @@ ged_aet_core(struct ged *gedp, int argc, const char *argv[])
 	}
 
 	if (iflag) {
-	    VADD2(gedp->ged_gvp->gv_aet, gedp->ged_gvp->gv_aet, aet);
-	} else {
-	    VMOVE(gedp->ged_gvp->gv_aet, aet);
+	    vect_t view_aet;
+	    rt_view_aet_from_bsg(view_aet, gedp->ged_gvp);
+	    VADD2(aet, view_aet, aet);
 	}
-	bsg_mat_aet(gedp->ged_gvp);
+	rt_view_aet_set_bsg(gedp->ged_gvp, aet);
 	bsg_update(gedp->ged_gvp);
 
 	return BRLCAD_OK;
@@ -105,11 +108,11 @@ ged_aet_core(struct ged *gedp, int argc, const char *argv[])
 	VMOVE(aet, scan);
 
 	if (iflag) {
-	    VADD2(gedp->ged_gvp->gv_aet, gedp->ged_gvp->gv_aet, aet);
-	} else {
-	    VMOVE(gedp->ged_gvp->gv_aet, aet);
+	    vect_t view_aet;
+	    rt_view_aet_from_bsg(view_aet, gedp->ged_gvp);
+	    VADD2(aet, view_aet, aet);
 	}
-	bsg_mat_aet(gedp->ged_gvp);
+	rt_view_aet_set_bsg(gedp->ged_gvp, aet);
 	bsg_update(gedp->ged_gvp);
 
 	return BRLCAD_OK;

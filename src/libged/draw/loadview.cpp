@@ -30,6 +30,7 @@
 #include <string.h>
 
 #include "../ged_private.h"
+#include "rt/view_legacy_bsg.h"
 extern "C" {
 #include "./ged_draw.h"
 }
@@ -46,7 +47,7 @@ _ged_cm_vsize(struct ged *gedp, vect_t *UNUSED(v), mat_t *UNUSED(m), const int a
     if (argc < 2)
 	return -1;
     /* for some reason, scale is supposed to be half of size... */
-    bsg_view_set_size(gedp->ged_gvp, atof(argv[1]));
+    rt_view_size_set_bsg(gedp->ged_gvp, atof(argv[1]));
     return 0;
 }
 
@@ -165,8 +166,8 @@ _ged_cm_end(struct ged *gedp, vect_t *v, mat_t *m, const int argc, const char **
     /* now we have to finish view calculations that are deferred until
      * the end command runs.
      */
-    bsg_view_set_rotation(gedp->ged_gvp, (*m));
-    bsg_view_set_center_vec(gedp->ged_gvp, (*v));
+    rt_view_rotation_set_bsg(gedp->ged_gvp, (*m));
+    rt_view_center_vec_set_bsg(gedp->ged_gvp, (*v));
     bsg_update(gedp->ged_gvp);
 
     struct bu_vls eye = BU_VLS_INIT_ZERO;
@@ -333,7 +334,7 @@ ged_loadview_core(struct ged *gedp, int argc, const char *argv[])
     /* turn perspective mode off, by default.  A "-p" option in the
      * view script will turn it back on.
      */
-    bsg_view_set_perspective(gedp->ged_gvp, 0.0);
+    rt_view_perspective_set_bsg(gedp->ged_gvp, 0.0);
 
     /* iterate over the contents of the raytrace script */
     /* TODO: change to bu_fgets or bu_vls_fgets */

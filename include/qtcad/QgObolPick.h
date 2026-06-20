@@ -25,7 +25,8 @@ struct QTCAD_EXPORT QgObolPickRecord {
 	UNKNOWN = 0,
 	LINE_SEGMENT = 1,
 	POINT = 2,
-	FACE = 3
+	FACE = 3,
+	IMPLICIT_SOLID = 4
     };
 
     QgObolPickRecord(void);
@@ -36,6 +37,7 @@ struct QTCAD_EXPORT QgObolPickRecord {
     std::string materialShader;
     SbVec3f point;
     SbColor materialColor;
+    float distance;
     uint32_t sourceId;
     int regionId;
     int airCode;

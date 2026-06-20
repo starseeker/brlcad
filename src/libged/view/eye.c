@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "rt/view_legacy_bsg.h"
+
 #include "../ged_private.h"
 #include "./ged_view.h"
 
@@ -51,10 +53,12 @@ ged_eye_core(struct ged *gedp, int argc, const char *argv[])
     /* get eye */
     if (argc == 1) {
 	point_t eye;
+	mat_t view2model;
 
 	/* calculate eye point */
 	VSET(xlate, 0.0, 0.0, 1.0);
-	MAT4X3PNT(eye, gedp->ged_gvp->gv_view2model, xlate);
+	rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
+	MAT4X3PNT(eye, view2model, xlate);
 	if (gedp->dbip)
 	    VSCALE(eye, eye, gedp->dbip->dbi_base2local);
 
@@ -96,15 +100,19 @@ ged_eye_core(struct ged *gedp, int argc, const char *argv[])
 	VSCALE(eye_model, eye_model, gedp->dbip->dbi_local2base);
 
     /* First step:  put eye at view center (view 0, 0, 0) */
-    MAT_DELTAS_VEC_NEG(gedp->ged_gvp->gv_center, eye_model);
+    rt_view_center_vec_set_bsg(gedp->ged_gvp, eye_model);
     bsg_update(gedp->ged_gvp);
 
     /* Second step:  put eye at view 0, 0, 1.
      * For eye to be at 0, 0, 1, the old 0, 0, -1 needs to become 0, 0, 0.
      */
     VSET(xlate, 0.0, 0.0, -1.0);	/* correction factor */
-    MAT4X3PNT(new_cent, gedp->ged_gvp->gv_view2model, xlate);
-    MAT_DELTAS_VEC_NEG(gedp->ged_gvp->gv_center, new_cent);
+    {
+	mat_t view2model;
+	rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
+	MAT4X3PNT(new_cent, view2model, xlate);
+    }
+    rt_view_center_vec_set_bsg(gedp->ged_gvp, new_cent);
     bsg_update(gedp->ged_gvp);
 
     return BRLCAD_OK;

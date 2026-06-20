@@ -28,6 +28,9 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
+
+#include "rt/view_legacy_bsg.h"
+
 #include "../ged_private.h"
 #include "./ged_view.h"
 
@@ -49,8 +52,10 @@ ged_ypr_core(struct ged *gedp, int argc, const char *argv[])
     /* return Viewrot as yaw, pitch and roll */
     if (argc == 1) {
 	point_t pt = VINIT_ZERO;
+	mat_t view_rotation;
 
-	bn_mat_trn(mat, gedp->ged_gvp->gv_rotation);
+	rt_view_rotation_from_bsg(view_rotation, gedp->ged_gvp);
+	bn_mat_trn(mat, view_rotation);
 	anim_v_unpermute(mat);
 
 	if (anim_mat2ypr(mat, pt) == 2) {
@@ -84,7 +89,9 @@ ged_ypr_core(struct ged *gedp, int argc, const char *argv[])
 
     anim_dy_p_r2mat(mat, V3ARGS(ypr));
     anim_v_permute(mat);
-    bn_mat_trn(gedp->ged_gvp->gv_rotation, mat);
+    mat_t rotation;
+    bn_mat_trn(rotation, mat);
+    rt_view_rotation_set_bsg(gedp->ged_gvp, rotation);
     bsg_update(gedp->ged_gvp);
 
     return BRLCAD_OK;

@@ -274,7 +274,7 @@ endif()
 distclean(${CMAKE_CURRENT_BINARY_DIR}/moss_selection_semantics_tmp.g)
 distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_selection_semantics_cache)
 
-brlcad_addexec(ged_test_snap_semantics "snap_semantics.cpp" "libbsg;libbu" TEST)
+brlcad_addexec(ged_test_snap_semantics "snap_semantics.cpp" "librt;libbsg;libbu" TEST)
 if(TARGET ged_test_snap_semantics)
   foreach(tdp ${test_deps})
     if (TARGET ${tdp})

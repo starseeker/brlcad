@@ -26,9 +26,10 @@
 #include "common.h"
 
 #include <stdlib.h>
+#include "bsg/util.h"
 #include "bsg/view_set.h"
-#include "bsg/view_state.h"
 #include "ged/bsg_ged_draw.h"
+#include "rt/view_legacy_bsg.h"
 #include "../ged_private.h"
 
 
@@ -138,7 +139,7 @@ ged_zap2_core(struct ged *gedp, int argc, const char *argv[])
 	    flags |= BSG_SOURCE_VIEW;
 
 	if (!bsg_clear(v, flags))
-	    bsg_view_set_cleared(v, 1);
+	    rt_view_cleared_set_bsg(v, 1);
 
 	bu_vls_free(&cvls);
 	return BRLCAD_OK;
@@ -174,7 +175,7 @@ ged_zap2_core(struct ged *gedp, int argc, const char *argv[])
 	    lret = bsg_clear(v, flags);
 	}
 	if (!nret || !lret)
-	    bsg_view_set_cleared(v, 1);
+	    rt_view_cleared_set_bsg(v, 1);
 
 	ret = BRLCAD_OK;
     }
