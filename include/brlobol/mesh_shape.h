@@ -154,17 +154,17 @@ public:
 	    const BRLObolLodRequest *expectedRequest = NULL);
     void clearStagedLodResult(void);
 
-    virtual void GLRender(SoGLRenderAction *action);
-    virtual void computeBBox(SoAction *action, SbBox3f &box, SbVec3f &center);
+    void GLRender(SoGLRenderAction *action) override;
+    void computeBBox(SoAction *action, SbBox3f &box, SbVec3f &center) override;
 
 protected:
     virtual ~SoBRLMeshShape(void);
-    virtual void generatePrimitives(SoAction *action);
-    virtual SoDetail *createTriangleDetail(SoRayPickAction *action,
+    void generatePrimitives(SoAction *action) override;
+    SoDetail *createTriangleDetail(SoRayPickAction *action,
 	    const SoPrimitiveVertex *v1,
 	    const SoPrimitiveVertex *v2,
 	    const SoPrimitiveVertex *v3,
-	    SoPickedPoint *pp);
+	    SoPickedPoint *pp) override;
 
 private:
     void setIndexedTriangleFields(const SbVec3f *points, int pointCount,

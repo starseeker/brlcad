@@ -76,19 +76,19 @@ public:
     SbBool isPrimitiveSelected(int primitiveIndex) const;
     SbBool isPrimitiveHighlighted(int primitiveIndex) const;
 
-    virtual void GLRender(SoGLRenderAction *action);
-    virtual void computeBBox(SoAction *action, SbBox3f &box, SbVec3f &center);
+    void GLRender(SoGLRenderAction *action) override;
+    void computeBBox(SoAction *action, SbBox3f &box, SbVec3f &center) override;
 
 protected:
     virtual ~SoBRLVListShape(void);
-    virtual void generatePrimitives(SoAction *action);
-    virtual SoDetail *createLineSegmentDetail(SoRayPickAction *action,
+    void generatePrimitives(SoAction *action) override;
+    SoDetail *createLineSegmentDetail(SoRayPickAction *action,
 	    const SoPrimitiveVertex *v1,
 	    const SoPrimitiveVertex *v2,
-	    SoPickedPoint *pp);
-    virtual SoDetail *createPointDetail(SoRayPickAction *action,
+	    SoPickedPoint *pp) override;
+    SoDetail *createPointDetail(SoRayPickAction *action,
 	    const SoPrimitiveVertex *v,
-	    SoPickedPoint *pp);
+	    SoPickedPoint *pp) override;
 };
 
 #endif /* BRLOBOL_VLIST_SHAPE_H */

@@ -50,7 +50,7 @@ public:
     virtual ~SoBRLPickDetail(void);
 
     static void initClass(void);
-    virtual SoDetail *copy(void) const;
+    SoDetail *copy(void) const override;
     void clear(void);
 
     void setPath(const SbString &path);

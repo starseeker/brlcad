@@ -4,7 +4,7 @@ set_property(TEST libbrlobol_prototype APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=$
 
 brlcad_find_package(OSMESA REQUIRED)
 brlcad_addexec(test_brlobol_render test_render.cpp "libbrlobol;libbu;Obol::Obol;${OSMESA_LIBRARY}" TEST ALL_CXX)
-target_include_directories(test_brlobol_render SYSTEM PRIVATE ${OSMESA_INCLUDE_DIR})
+target_include_directories(test_brlobol_render SYSTEM PRIVATE ${OSMESA_INCLUDE_DIR} ${BRLOBOL_OPENGL_INCLUDE_DIRS})
 brlcad_add_test(NAME libbrlobol_render COMMAND test_brlobol_render)
 
 brlcad_addexec(test_brlobol_image_source test_image_source.cpp "libbrlobol;libimgstream;libicv;libbu;Obol::Obol" TEST ALL_CXX)
@@ -35,6 +35,7 @@ if(EXISTS "${OBOL_NANORT_CONTEXT_MANAGER}" AND EXISTS "${OBOL_NANORT_HEADER}")
   brlcad_addexec(test_brlobol_nanort_render test_nanort_render.cpp "libbrlobol;libwdb;libbu;Obol::Obol;Threads::Threads;${OSMESA_LIBRARY}" TEST ALL_CXX)
   target_include_directories(test_brlobol_nanort_render SYSTEM PRIVATE
     ${OSMESA_INCLUDE_DIR}
+    ${BRLOBOL_OPENGL_INCLUDE_DIRS}
     "${OBOL_SOURCE_DIR}/tests/utils"
     "${OBOL_SOURCE_DIR}/external/nanort"
     "${OBOL_SOURCE_DIR}/external/nanort/examples/common"

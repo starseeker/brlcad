@@ -42,12 +42,24 @@ if(NOT TARGET Obol::Obol)
   message(FATAL_ERROR "libbrlobol requires the Obol::Obol CMake package target")
 endif()
 
+set(BRLOBOL_OPENGL_INCLUDE_DIRS)
+if(OPENGL_INCLUDE_DIR_GL)
+  list(APPEND BRLOBOL_OPENGL_INCLUDE_DIRS ${OPENGL_INCLUDE_DIR_GL})
+elseif(OPENGL_INCLUDE_DIR)
+  list(APPEND BRLOBOL_OPENGL_INCLUDE_DIRS ${OPENGL_INCLUDE_DIR})
+endif()
 set(BRLOBOL_LOCAL_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR})
 
 brlcad_addlib(libbrlobol "${LIBBRLOBOL_SRCS}" "" "${BRLOBOL_LOCAL_INCLUDE_DIRS}"
   PUBLIC_LIBS "librt;libimgstream;libbg;libbu;Obol::Obol;Threads::Threads"
   ALL_CXX
 )
+if(BRLOBOL_OPENGL_INCLUDE_DIRS)
+  target_include_directories(libbrlobol SYSTEM PRIVATE ${BRLOBOL_OPENGL_INCLUDE_DIRS})
+  if(TARGET libbrlobol-obj)
+    target_include_directories(libbrlobol-obj SYSTEM PRIVATE ${BRLOBOL_OPENGL_INCLUDE_DIRS})
+  endif(TARGET libbrlobol-obj)
+endif(BRLOBOL_OPENGL_INCLUDE_DIRS)
 set_target_properties(libbrlobol PROPERTIES VERSION 1.0.0 SOVERSION 1)
 if(HIDE_INTERNAL_SYMBOLS)
   set_property(TARGET libbrlobol APPEND PROPERTY COMPILE_DEFINITIONS "BRLOBOL_DLL_EXPORTS")
