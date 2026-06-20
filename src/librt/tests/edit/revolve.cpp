@@ -49,6 +49,7 @@
 #include "bu/malloc.h"
 #include "bu/vls.h"
 #include "raytrace.h"
+#include "edit_test_view.h"
 #include "rt/geom.h"
 
 /* ECMD numbers from edrevolve.c */
@@ -112,14 +113,10 @@ main(int argc, char *argv[])
     db_full_path_init(&fp);
     db_add_node_to_full_path(&fp, dp);
 
-    struct bview *v;
-    BU_GET(v, struct bview);
-    bv_init(v, NULL);
-    v->gv_size = 10.0; v->gv_isize = 0.1; v->gv_scale = 5.0;
-    bu_vls_sprintf(&v->gv_name, "default");
-    v->gv_width = 512; v->gv_height = 512;
+    struct rt_edit_view v;
+    rt_edit_test_view_init_identity_size(&v, 10.0);
 
-    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, v);
+    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, &v);
     s->mv_context = 1;
     s->local2base = 1.0;
     s->base2local = 1.0;

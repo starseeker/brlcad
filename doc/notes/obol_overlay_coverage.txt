@@ -1,0 +1,65 @@
+BRL-CAD Obol Overlay Coverage
+=============================
+
+Scope
+-----
+
+This note tracks the Obol-side overlay representation needed by the Obol pivot.
+It is intentionally separate from bg_line_layer ownership: bg_line_layer remains
+the neutral low-level diagnostic producer/container, and libbrlobol converts it
+to Obol nodes only at publication boundaries.
+
+Current Obol Overlay Representations
+------------------------------------
+
+| Overlay source | Obol representation | Current status |
+| --- | --- | --- |
+| color-keyed diagnostic lines and points from bg_line_layer_builder | SoBRLLineLayerOverlay, with one SoBRLVListShape child per color layer | Covered by libbrlobol_prototype conversion/export/pick/snap/measure tests |
+| model axes | SoBRLAxes producing SoBRLVListShape geometry | Covered by libbrlobol_prototype overlay tests |
+| work grid | SoBRLGrid producing SoBRLVListShape geometry | Covered by libbrlobol_prototype overlay tests |
+| ADC / angle-distance cursor | SoBRLADC producing SoBRLVListShape geometry | Covered by libbrlobol_prototype overlay tests |
+| edit previews | SoBRLEditPreview producing wire or mesh preview nodes | Covered by libbrlobol_prototype edit-preview tests |
+| diagnostic and HUD labels | SoBRLHUDLabelOverlay wrapping direct Obol SoHUDKit/SoHUDLabel nodes | Covered by libbrlobol_prototype controller tests, qtcad overlay-sync tests, and libbrlobol_render |
+| HUD labels and rubber-band controls | Direct Obol HUD nodes | Covered by libbrlobol_render and libbrlobol_nanort_render |
+
+Publication Paths
+-----------------
+
+GED diagnostic producers publish bg_line_layer_builder data through the neutral
+ged_diagnostic_line_layer_publish callback.  qged installs an adapter that
+replaces the current QgView BRLObolViewController overlay with
+SoBRLLineLayerOverlay.  Existing BSG feature publication is retained only as
+the compatibility fallback when no Obol handler consumes the diagnostic.
+
+Current routed producers:
+
+* GQA overlap overlays, published as gqa::overlaps
+* check overlap overlays, published as check::overlaps
+* BREP debug line plots, published as brep::<debug-name>
+* NMG edge-use debug overlays, published as nmg::_EU_ or nmg::_EDGEUSES_
+
+Current routed HUD label producers:
+
+* GQA overlap summaries, published as gqa::overlaps::summary
+* check overlap summaries, published as check::overlaps::summary
+
+Preserved Overlay Identity
+--------------------------
+
+Line-layer overlays preserve:
+
+* overlay path and per-color layer path
+* layer name
+* source revision id
+* Obol source type "line-layer"
+* layer color as an Obol color override
+* per-line primitive index for pick/export/snap/measure
+* visibility and selectability
+
+Remaining Migration Work
+------------------------
+
+1. Route remaining diagnostic label producers to SoBRLHUDLabelOverlay where
+   labels should not be flattened into line geometry.
+2. Keep legacy BSG overlay publication only behind explicit compatibility paths
+   until the qtcad/GED Obol path is authoritative.

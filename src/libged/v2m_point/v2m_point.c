@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "rt/view_legacy_bsg.h"
+
 #include "../ged_private.h"
 
 
@@ -84,7 +86,9 @@ ged_v2m_point_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     /* Convert the incoming view point to a model point */
-    MAT4X3PNT(model, gedp->ged_gvp->gv_view2model, view);
+    mat_t view2model;
+    rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
+    MAT4X3PNT(model, view2model, view);
     bn_encode_vect(gedp->ged_result_str, model, 1);
 
     return BRLCAD_OK;

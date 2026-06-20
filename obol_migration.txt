@@ -1,0 +1,1499 @@
+BRL-CAD Obol Pivot Migration Plan
+=================================
+
+Purpose
+-------
+
+BRL-CAD should use Obol as the canonical scene, view, interaction, and
+rendering API for interactive 3D applications.
+
+The migration is parallel-first: build the Obol path beside the current
+BSG/DM path until it reaches production parity, then remove public libbsg,
+libdm, dm_plugins, and BSG/DM-shaped application APIs.  Temporary internal
+bridges are allowed while a phase is incomplete.  No long-lived public BSG
+or DM compatibility layer is part of the target design.
+
+libbrlobol is the BRL-CAD-specific Obol extension library.  It should define
+BRL-CAD Obol nodes, actions, details, and narrow application services.  It
+must not become a generic replacement for BSG's render-item/backend-scene
+model.
+
+The first production target is qged/qtcad.  After qged is usable on Obol,
+migrate GED/TclCAD/mged, then remove lower-level BSG/DM utility
+dependencies.
+
+
+Guiding Decisions
+-----------------
+
+* Obol cameras, transforms, SoViewport, SoRenderManager, actions, nodes,
+  fields, and details are authoritative for scene, view, render, and
+  interaction state.
+* New drawing code should use Obol directly or use BRL-CAD Obol extensions.
+  It should not add new BSG/DM dependencies outside explicit legacy
+  allowlists.
+* BRL-CAD-specific policy belongs in libbrlobol.  Generic scene graph,
+  traversal, rendering, text, picking, and backend features should be exposed
+  through Obol rather than rewrapped as parallel BSG concepts.
+* C++ is acceptable for code that directly interacts with the drawing API.
+  C and Tcl callers may use opaque bridges backed by Obol.
+* bg_vlist and bg_line_layer are low-level geometry/debug containers, not
+  scene APIs.  Application-visible drawing state should be Obol nodes.
+* UNIX plot3 and TIG-style helpers are legacy plot/export/diagnostic support.
+  They should not become Obol scene concepts.
+* bg_line_layer should stay independent from plot3.  It is an in-memory
+  diagnostic/overlay container; plot3 is a legacy file-stream format and
+  helper API.  Conversion helpers between bg_line_layer, plot3 output, and
+  Obol overlay nodes are appropriate, but moving line_layer into plot3.h
+  would couple normal diagnostic geometry to a legacy export format.
+* Scene text, labels, HUD text, and annotations should use Obol 2D/3D text.
+  If flattened text geometry is needed, use an Obol-backed text-to-geometry
+  conversion/export path rather than preserving vectfont as a scene API.
+* Obol's pluggable backend model is the intended replacement for libdm's
+  rendering/display role.
+* libimgstream is the target home for live mutable image streams, async image
+  producers, dirty-update notification, transport, and framebuffer protocol
+  compatibility.  It is not a display backend system.
+* libicv remains the target home for static image containers, codecs, image
+  file I/O, image transforms, and neutral lookup-table/colormap operations.
+* Obol owns image display, placement, layering, texture upload, readback, and
+  rendering backend selection.  Framebuffer pan/zoom/cursor/overlay behavior
+  is display compatibility state realized through Obol/application display
+  hosts, not core image-stream storage.
+* fb compatibility belongs inside libimgstream as a clearly scoped
+  compatibility layer while callers migrate.  It should preserve useful
+  host:port, ipc:<addr>, PKG_ADDR, FBSERV_TOKEN, FBSERV_TLS, and MSG_FB*
+  workflows without preserving libdm's framebuffer backend abstraction.
+
+
+Current State
+-------------
+
+libbrlobol and qtcad:
+
+* brlobol_init registers BRL-CAD Obol classes and supports replacing the
+  active Obol context manager after initial setup.
+* BRLObolViewController owns the application scene root, active camera,
+  SoViewport, SoRenderManager, viewport region, and render-request lifecycle.
+* qtcad canvases expose the Obol controller and an Obol viewport image
+  readback path.
+* qtcad installs an application-owned Obol context manager backed by Qt
+  offscreen GL, with OSMesa fallback when Qt offscreen creation is not
+  available.
+* qtcad GL/SW viewport capture uses Obol readback directly when migrated Obol
+  scene content exists, consumes the Obol render request, and does not
+  initialize the legacy display manager for that content.  SW visible paint
+  follows the same direct Obol readback path.  GL migrated-content paint now
+  renders through BRLObolViewController::renderPending with the Qt GL context
+  current before legacy DM initialization, and falls back to legacy DM drawing
+  only when Obol rendering is not available.
+* qtcad default keyboard/mouse/wheel navigation no longer requires a legacy
+  display manager before it can update the transitional view and synchronize
+  Obol camera/render state.
+* qtcad point, rectangle, and ray selection filters prefer Obol pick identity
+  for migrated content and do not initialize the legacy display manager when
+  Obol supplies the selection paths.  The public qtcad selection filter API
+  now exposes normalized paths instead of BSG pick/interaction result
+  accessors, and the qged selector plugin consumes those paths directly.
+  Legacy BSG pick paths remain internal fallback.
+* qtcad Obol measurement and snap workflows operate on migrated content
+  without initializing the legacy display manager.  Measurement overlays are
+  now published exclusively through Obol; the qtcad measurement filter no
+  longer creates BSG measurement features or caches BSG measure-result
+  records, and 3D measurement no longer falls back through BSG pick
+  candidates or direct raytrace prep.  Snap retains transitional legacy
+  refinement fallback for non-migrated or view-scoped cases.
+* qtcad Obol workflow tests cover pinewood.g, havoc.g, and the larger
+  mixed-primitive m35.g sample, including real-model readback, pick, snap,
+  and measurement overlay helpers.  doc/notes/obol_realization_coverage.txt
+  now records share/db/faa/Generic_Twin.g as the larger FAA maturity candidate
+  once the large-model staged-LoD path is ready for routine gating, and
+  test_qtcad_obol_real_models exposes it as an opt-in
+  BRLOBOL_QTCAD_GENERIC_TWIN=1 draw/readback check.
+* libbrlobol mesh face picks now preserve the picked triangle's source
+  coordinate indices in SoBRLPickDetail, and SoBRLExportAction triangle
+  records carry the same vertex-index identity.  Face pick details also record
+  the nearest source edge endpoints, nearest source vertex, and object-space
+  hit point for deterministic mesh sub-entity inspection.  Full standalone
+  edge and vertex picking remain queued.
+* libbrlobol BoT mesh realization now copies existing RT-owned mesh LoD
+  metadata onto SoBRLMeshShape fields when a neutral rt_mesh_lod cache result
+  is already available.  It records active level, counts, snapped-point/normal
+  flags, and bounds without exposing BSG LoD containers or forcing synchronous
+  cache generation during normal Obol realization.  The bridge now expresses
+  that copied metadata as a provider-neutral BRLObolLodRequest/Result and
+  geometry-handle record before publishing the existing Obol fields.
+  SoBRLExportAction triangle records now carry that same copied LoD summary
+  for diagnostic export and staged-realization verification.
+* libbrlobol now has the first provider-neutral BRLObolLodService skeleton
+  for staged realization work.  It owns explicit start/stop, joinable worker
+  threads, generation cancellation, dependency-aware task scheduling, UI-thread
+  result draining, in-flight diagnostics, cancellable task-level debug delay
+  controls, stale result rejection, owned realization-task data cleanup, and
+  one serialized cache-write lane without exposing BSG LoD APIs.  It also has
+  the coalesced result-ready wakeup described in lod_result_wakeup.txt:
+  workers only signal that queued results should be drained, and the owning
+  view/controller performs the main-thread drain/apply pass.  The LoD result
+  contract now carries typed Stage 0/1/2 directory/dependency records, display
+  attributes, AABB results, and proxy/OBB payloads so early placeholder states
+  can be generated and inspected before final mesh payloads arrive.
+  SoBRLMeshShape can now consume staged LoD results into Obol fields, reject
+  stale result keys, and publish cached RT mesh results through the same
+  staged-result path.  Staged mesh results can now carry an owned Obol-side
+  triangle payload copied from an active RT mesh-LoD data view, and
+  SoBRLMeshShape can apply that payload through its existing indexed-triangle
+  fields without borrowing RT or BSG arrays.  SoBRLMeshShape can also build a
+  provider-neutral BRLObolLodRequest from its Obol identity, policy, counts,
+  and bounds fields, and BRLObolViewController can derive a sanitized
+  rt_view_info snapshot from its Obol camera and viewport state.  The first
+  SoBRLMeshLodSubmitAction can walk Obol mesh nodes, build deterministic
+  requests from those fields, own RT mesh-cache provider state through the
+  service task lifetime, and submit view-driven cached mesh refresh/load work
+  explicitly.  BRLObolViewController now exposes a narrow controller hook that
+  derives the active rt_view_info snapshot, submits per-database-source mesh
+  LoD requests through that action, drains completed service results, and
+  applies them back through the update action while recording counts and
+  diagnostics; it can retain an active LoD service subscription, mark pending
+  results from the wakeup callback without touching scene nodes, and process
+  those results before rendering.  It also has the first coalesced auto-submit
+  gate for changed view/policy/source signatures, so render-time preparation
+  can enqueue fresh RT mesh-cache provider work without duplicate submissions
+  for the same stable scene.  The first SoBRLLodUpdateAction drains LoD service
+  results on the UI/main thread, matches them to SoBRLMeshShape nodes by
+  source path/name, applies accepted staged fields and owned mesh payloads,
+  and records rejected or unmatched result diagnostics.  The first RT
+  mesh-cache provider task can refresh/load cached RT mesh LoD through the
+  service, optionally force a requested RT LoD level, shrink active RT arrays
+  after copying, and return the neutral staged mesh result with an owned mesh
+  copy.  SoBRLLodMeshShape now provides
+  the first dedicated LoD-backed BoT mesh representation while preserving the
+  existing SoBRLMeshShape full-field path for small or synchronous meshes, and
+  LoD submission filters ordinary meshes unless explicitly configured
+  otherwise.  BoT database realization now uses lodBotThreshold so the
+  full-mesh path remains default and only threshold-matching BoTs become
+  LoD-backed.  SoBRLMeshShape now has an explicit full-detail preservation
+  policy: ordinary meshes preserve their pre-LoD indexed triangles when
+  applying an active display-LoD payload, while SoBRLLodMeshShape opts out of
+  that backup and keeps lightweight source counts/bounds for stable request
+  identity after the full-detail fields are replaced.  For preserving meshes,
+  SoBRLExportAction/SoBRLMeasureAction/SoBRLSnapAction can use that preserved
+  source geometry for full-detail/detail-preserving policy requests while
+  DISPLAY_LEVEL continues to use the displayed LoD mesh.  Mesh ray picking now
+  has the same initial policy split: display-level is the viewport default,
+  while explicit full-detail picks use resident preserved source triangles
+  when available and otherwise refuse to treat an active display-LoD payload as
+  exact geometry.  That preservation is an interim correctness bridge for
+  meshes that are already resident, not the target policy for large geometry.
+  Production LoD-backed BoTs must be
+  source-backed and memory-budgeted, keeping identity/bounds/active display
+  payloads resident while exact operations fetch full-detail or bounded chunks
+  from the .g/RT provider path on demand.  Exact picks for CSG implicit solids
+  and implicit-solid-backed comb instances should use a librt ray query rather
+  than tessellated display geometry, returning the displayed instance path,
+  region/material data, primitive identity, hit point, normal, and distance.
+  POP payload ownership, active-level selection, source-backed full-detail
+  reload or chunked detail reads when no preserved payload is resident,
+  optional coarse POP-build spatial/index sidecar metadata for targeted exact
+  picks/snaps, the librt exact-pick provider, and richer policy-aware provider
+  scheduling are still queued.
+* libbrlobol shaded PNTS realization now preserves basic RT_PNT_TYPE_PNT
+  point clouds as Obol vlist point primitives rather than failing the shaded
+  path or forcing a mesh.  SoBRLVListShape exposes point primitive inspection,
+  SoBRLExportAction exports point records with source identity, snap treats
+  point primitives as endpoint candidates, and prototype tests cover shaded
+  PNTS realization, bbox, pick detail, export, and snap behavior.  Richer PNTS
+  point attributes such as per-point color, scale, and normal remain queued.
+* qtcad still has a transitional BSG-to-Obol camera bridge.  The bridge is
+  correctly kept in libqtcad, not libbrlobol.
+* qtcad's visible rendering path is still transitional.  Obol render/readback
+  works and GL/SW migrated-content paints bypass libdm, but libdm/BSG are
+  still part of current application rendering for non-migrated content and
+  legacy fallback paths.
+
+Dependency guardrails:
+
+* brlobol_pivot_guard is active as a transitional CTest guard.
+* The guard blocks new BSG/DM leakage in Obol-canonical code and rejects
+  direct BSG vlist/vlblock symbols in libbrlobol.
+* doc/notes/obol_legacy_dependency_inventory.txt records the phase-owned
+  direct BSG/DM dependency rows for the Obol pivot, and the guard checks the
+  exact rows against src/source_dirs.cmake.
+* The guard checks that qtcad Obol workflow tests do not directly link libdm,
+  libbsg, or dm_plugins while they exercise the transitional application path.
+* The guard rejects reintroducing BSG measurement feature/result fallback
+  symbols or the old BSG-pick/raytrace 3D measurement fallback in
+  QgMeasureFilter while the rest of qtcad continues its staged migration.
+* The guard rejects reintroducing public BSG/raytrace selection accessors in
+  QgSelectFilter and direct BSG interaction consumption in the qged selector
+  plugin.
+* The guard checks that the default plot3 implementation is owned by the
+  normal libbg implementation unit and is not reintroduced through libbsg or
+  standalone bg test executables.  It also checks that bg_line_layer keeps
+  its explicit plot3 diagnostic export helpers and that standalone plot3
+  utilities do not relink libbsg.
+* fb_plan.txt records the framebuffer/image-stream split: libimgstream owns
+  non-display stream storage, transport, producer/subscriber lifecycle, and
+  fb compatibility; libicv owns static images/codecs/lookup tables; Obol and
+  libbrlobol own image display and window-host behavior.
+* The initial libimgstream target now provides an opaque imgstream_* C API for
+  RGB/RGBA memory streams, resize, clear, full-frame and rectangle
+  read/write, stream info/metadata snapshots, dirty-region generation,
+  subscriber notification, producer begin/end state, and icv_image_t snapshot
+  conversion without linking libdm, libbsg, or libbrlobol.
+* libbrlobol now provides SoBRLImageSource as the first Obol image-stream
+  source ownership node.  It can wrap static icv_image_t data or borrowed
+  libimgstream streams, tracks stream metadata/revisions in Obol fields, and
+  subscribes to dirty-region notifications.  SoBRLViewportImage and
+  SoBRLImagePlane are the first display consumers: they read source streams,
+  rebuild standard Obol texture quads when source data/dirty revisions change,
+  and expose the viewport/image-plane policy fields needed by framebuffer
+  display migration.  Incremental backend dirty-region texture uploads and
+  real window-host integration remain queued.
+* The first libimgstream framebuffer compatibility unit is in place as
+  imgstream/fb_compat.h and src/libimgstream/fb_compat.c.  It maps memory
+  framebuffer requests to RGB imgstream buffers, preserves legacy view,
+  window, zoom, cursor, screen-cursor, and cursor-shape compatibility
+  spellings plus reset, viewport, poll, and poll-rate compatibility as
+  non-display state/operations, supports RGB and BW rectangle compatibility,
+  and supports raw RGB file sink/source compatibility for
+  ordinary file paths plus explicit /dev/disk:<path> or /dev/disk=<path>
+  spelling.  It also supports /dev/stack fan-out to memory/file child sinks
+  and /dev/null, /dev/debug, and /dev/txt diagnostic sinks without a display
+  backend.  It preserves legacy 256-entry RGB colormap state through a neutral
+  imgstream_fb_colormap type and rmap/wmap compatibility calls.  It classifies
+  and normalizes remote/display specifiers through imgstream_fb_spec_info,
+  including numeric port specs, host:port, host:port:device, tcp:, ipc:, and
+  display framebuffer names.  Display-capable framebuffer opens now create an
+  RGB stream and delegate open/close, view, cursor, viewport, flush, reset,
+  and poll behavior to a registered toolkit-neutral display host callback;
+  without that callback they still fail explicitly until the Obol/libbrlobol
+  display-host migration connects real windows.
+* The guard still needs to grow as more directories become Obol-canonical.
+
+Low-level neutralization:
+
+* include/bg/vlist.h owns bg_vlist, bg_vlblock, BG_VLIST_* commands, helper
+  macros, and pure helper declarations.
+* src/libbg/vlist.c owns the pure vlist helper implementations, including
+  command counting, bbox, validation, copy/import/export/cleanup, vlblock
+  helpers, RPP emission, ARB8 wire emission, text stroking, and plot3/uplot
+  export.
+* BG-owned polygon and SAT interfaces no longer include BSG headers.  The
+  pivot guard prevents include/bg and src/libbg from reintroducing direct BSG
+  header dependencies.
+* include/rt/vlist.h exposes RT-facing aliases over bg_vlist.  The RT-named
+  text/uplot helpers are wrappers over the BG-owned implementation.
+* include/bsg/vlist.h, src/libbsg/vlist.c, and src/libbsg/font.c are
+  compatibility layers.  They should disappear with libbsg.
+* Most librt primitive wire emitters, the NMG edit-test helper, prep plot
+  export, annotation text stroking, and librt text/uplot bridges now include
+  rt/vlist.h and use RT_VLIST_* or RT-named helper APIs instead of BSG vlist
+  names.  The pivot guard prevents those callers from regressing to
+  bsg/vlist.h, bsg_vlist/bsg_vlblock, or BSG_*VLIST macros.  The BREP debug
+  vlblock declaration also uses rt_vlblock, so src/librt no longer has direct
+  bsg/vlist.h users.
+* librt primitive wire/LoD line emitters use RT_PRIMITIVE_* line-command names
+  for move, draw, and point records instead of BSG_GEOMETRY_* names.  The
+  command encodings intentionally match BG line-layer and legacy BSG streams,
+  and the pivot guard prevents src/librt/primitives from regressing to
+  bsg/geometry.h or BSG_GEOMETRY_* names.
+* include/rt and non-test src/librt no longer include the broad bsg.h umbrella
+  header.  Remaining transitional BSG use in librt is routed through specific
+  headers and explicit legacy adapters while BSG-backed compatibility paths are
+  retired.  The pivot guard prevents reintroducing the BSG
+  umbrella include.
+* include/rt/edit.h owns rt_edit_knobs plus its reset/hash helpers and no
+  longer includes bsg/defines.h or embeds bsg_view_knobs.  It also owns the
+  rt_edit_view snapshot used by rt_edit runtime state, so struct rt_edit no
+  longer stores a BSG view pointer.  The main edit create/reinit/knob APIs now
+  accept rt_edit_view; callers that still own BSG view state opt into the
+  transitional include/rt/edit_legacy_bsg.h adapters.  The neutral
+  src/librt/edit.cpp implementation is free of BSG headers and adapter logic;
+  src/librt/edit_legacy_bsg.cpp owns the BSG view-state adapter
+  implementation.  The src/librt/tests/edit primitive edit tests now
+  construct RT-owned rt_edit_view snapshots directly through a local test
+  helper instead of creating BSG views.
+* include/rt/view.h owns the neutral rt_view_info, rt_view_lod_settings, and
+  rt_view_lod_policy snapshots used by RT primitive plot, LoD realization,
+  indexed-face-set callbacks, and transitional view LoD policy adapters, plus
+  RT_VIEW_* normalized view-coordinate constants and RT_VIEW_MIN_SIZE /
+  RT_VIEW_MIN_SCALE limits for callers that only need historical view numeric
+  policy.  rt_view_info_sanitize and rt_view_lod_policy_sanitize normalize
+  invalid dimensions, view size, and nonpositive LoD scales to neutral defaults
+  at adapter boundaries.
+  include/rt/functab.h and the primitive callback declarations no longer
+  expose bsg_view for those callbacks; BSG-backed callers adapt through the
+  transitional include/rt/view_legacy_bsg.h boundary.
+  src/librt/view.c contains only the neutral RT view helper implementation and
+  exposes RT-prefixed view metric helpers for LoD curve scale, BoT threshold,
+  average sample spacing, and solid point spacing; primitive LoD code uses
+  those RT names instead of private primitive/view helper declarations.
+  src/librt/view_legacy_bsg.c owns the BSG view, LoD policy get/set/copy,
+  LoD bounds-update/callback, view-scale, and scene-ref LoD load/free adapter
+  implementation.  BSG mesh-LoD unwrapping is private to librt implementation
+  units rather than an installed legacy adapter surface.
+  src/libged's private primitive wireframe and face-set publication helpers
+  now consume rt_view_info snapshots before invoking RT primitive callbacks;
+  BSG-to-RT view adaptation is centralized in the transitional
+  src/libged/bsg_ged_draw_view.c helper used by the BSG-owning caller
+  wrappers, and those wrappers now receive the adapter declaration through the
+  private bsg_ged_draw_private.h boundary rather than one-off declarations.
+  The same helper wraps the RT-owned LoD policy snapshot for draw.cpp, draw
+  refs, transaction redraw paths, and the draw command's temporary
+  BoT-threshold mutation/restore compatibility path, plus the transitional BSG
+  LoD bounds-update hook used by transaction redraw.  The libged lod and view
+  lod commands use that same private wrapper, while raw BSG LoD policy
+  get/set, BSG view bounds-callback identity, view-scale extraction, and
+  scene-ref LoD load/free calls stay inside the RT legacy adapter
+  implementation.
+  libged plot, vnirt, solids_on_ray, ADC, and DM window-bound
+  helpers now use RT_VIEW_* and RT_INV_VIEW constants instead of BSG_VIEW_*,
+  BSG_INV_*, or INV_BV spellings for normalized view-coordinate math.  libged
+  size, scale, and zoom commands now use RT_VIEW_MIN_SIZE/RT_VIEW_MIN_SCALE
+  instead of BSG_MINVIEWSIZE/BSG_MINVIEWSCALE for view bounds, and the pivot
+  guard checks those command paths.  libged check -i overlap setup,
+  get_eyemodel output, _ged_rt_write script emission, and rtwizard command
+  construction now read view size and orientation through the RT legacy view
+  adapter, while the GED-owned eye-model helper remains in GED because it
+  depends on draw bounds and clipping behavior.  RT command, rtwizard,
+  saveview, embedded-RT, and GED eye-model-helper perspective reads also use
+  the same adapter boundary, and plot/PS/PNG diagnostic export now copies
+  model2view, center, scale, perspective, and eye-position camera values
+  through that boundary before invoking the legacy export routines.  savekey
+  now uses the same RT legacy adapter surface for RT -M size, rotation, and
+  view2model values instead of reading the transitional BSG view fields
+  directly.  The first TclCAD and MGED callers now
+  follow the same boundary: libtclcad display-bound setup, libtclcad axes
+  size scaling, and MGED ADC view-unit math, shared MGED GED2PM1 conversion,
+  MGED axes overlay scaling,
+  MGED attach window bounds, and MGED view-scale clamping include rt/view.h
+  for RT_VIEW_*, RT_INV_VIEW, and RT_VIEW_MIN_SIZE.  MGED menu and faceplate
+  drawing plus MGED slider/pen normalized-coordinate handling now use the same
+  RT-owned min/max/range/inverse constants.  MGED event and generic display
+  manager mouse/ADC paths now use the same RT-owned numeric constants while
+  keeping their transitional display/view ownership unchanged.  qtcad quad
+  views, TclCAD commands/wrapper paths, and MGED zoom/idle/attach paths now
+  copy, inspect, or apply transitional BSG LoD policy through
+  rt/view_legacy_bsg.h instead of naming BSG LoD policy structs directly.  The
+  pivot
+  guard now scans src/mged for the retired BSG numeric aliases so new MGED
+  code must use RT-owned view numeric policy.
+  src/librt/tests/view_info.c covers the neutral defaults, RT view metric
+  helpers, and mesh-LoD helper surface without including BSG headers;
+  src/librt/tests/view_legacy_bsg.c covers the transitional BSG view/LoD
+  policy mapping.
+* include/rt/view.h exposes mesh LoD cache lookups through an opaque
+  rt_mesh_lod handle instead of returning bsg_mesh_lod directly.  The current
+  cache implementation remains BSG-backed internally, but RT now exposes
+  neutral rt_mesh_lod_load_level, rt_mesh_lod_load_view, and
+  rt_mesh_lod_data_get helpers for loading and inspecting cached mesh data
+  without exposing the BSG container.  rt_mesh_lod_current_level reports the
+  active level without changing residency, and rt_mesh_lod_memshrink releases
+  active CPU-side POP/full-detail arrays while preserving the current level so
+  callers can reload on demand.  rt_mesh_lod_info_get provides a copied
+  RT-owned active-level, count, bounds, snapped-point, and normal summary for
+  staged realization decisions that should not borrow provider arrays.
+  db_mesh_lod_status, db_mesh_lod_refresh, and db_mesh_lod_invalidate expose
+  neutral cache-key, cached-payload, stale-entry, generated, and cleared-entry
+  reporting for staged realization and invalidation logic; libged database
+  index invalidation now uses the RT-owned invalidation helper rather than
+  direct BSG mesh-LoD key/cache mutation.  db_mesh_lod_clear handles
+  per-database cache clearing and rt_mesh_lod_cache_clear_all owns the explicit
+  global cache-clear operation, so libged view lod cache-clear commands no
+  longer call BSG cache clearing directly.  The same view lod cache command
+  now refreshes BoT cache entries through db_mesh_lod_refresh and checks cache
+  presence through db_mesh_lod_status.  The BSG-backed draw.cpp BoT mesh LoD
+  realization path now uses db_mesh_lod_status/refresh/get for cache
+  ownership, stores the RT-owned rt_mesh_lod handle in the draw source state,
+  publishes active mesh geometry through the copied RT mesh-LoD data view, and
+  passes that RT handle to private GED adapters that own the remaining
+  transitional BSG scene-ref visibility/load unwrapping.  db_mesh_lod_store_mesh now
+  stores generated mesh payloads through the same RT cache facade, so libged
+  view lod and draw.cpp BRep paths no longer write BSG mesh-LoD cache keys directly;
+  BRep tessellation itself remains a transitional libged-side producer until
+  RT owns BRep mesh-LoD generation.
+  Legacy callers no longer get an installed BSG mesh-LoD extraction helper;
+  BSG unwrapping stays private to librt implementation units, and transitional
+  BSG scene-ref loading is exposed only through narrow RT legacy helper calls.
+  librt private database state owns an opaque rt_mesh_lod_context rather than
+  bsg_mesh_lod_context; the RT cache path self-initializes that private context
+  and only the cache implementation unwraps the current BSG backing context.
+  libged draw_data_t and ged_draw_source_state no longer carry the old
+  bsg_mesh_lod_context pass-through, and ged_draw_source_state no longer stores
+  a borrowed bsg_mesh_lod pointer; draw realization asks RT cache helpers
+  for LoD state when it needs it.  Public struct ged no longer exposes or
+  manually creates/destroys a BSG mesh-LoD context; GED draw tests invalidate
+  LoD cache entries through the RT cache facade.  BSG draw helper units that
+  do not own transitional mesh-LoD payload operations no longer include
+  bsg/lod.h, and draw.cpp no longer includes bsg/lod.h directly.  The private
+  libged BSG-to-RT view helper no longer includes bsg/lod.h or names direct
+  BSG bounds/scene-ref LoD APIs.  BRep full-detail callback registration now
+  uses RT mesh-LoD detail callbacks, so src/libged no longer includes
+  bsg/lod.h for LoD publication.
+  src/librt/tests/lod.c now validates cached mesh-LoD levels through the
+  RT-owned helpers instead of creating BSG views, mesh nodes, or LoD contexts.
+* pop_lod.txt, lod_pipeline.txt, lod_result_wakeup.txt, and cache_drawing.cpp
+  define the LoD rework direction for Obol/libbrlobol.  LoD realization
+  should be a provider-neutral staged service below Obol, not a BSG LoD node
+  port.  Obol/libbrlobol should
+  request immutable realized geometry for database path, database identity,
+  source revision or content hash, view state, draw mode, LoD policy, provider
+  id/version, and provider parameters, then apply staged results on the
+  UI/main thread only when source/view/policy generation tokens still match.
+  The staged result sequence should be: metadata/hierarchy, attributes plus
+  AABB, OBB or other cheap proxy, fast display LoD such as POP Buffers,
+  qualified high-quality/progressive mesh LoD for clean meshes, and
+  exact/full-detail fallback for editing, exact picking, export, or
+  still-frame refinement.
+  The old cache_drawing.cpp experiment contributes useful production concepts:
+  fast-to-slow preparation, main-thread result draining, one serialized
+  bu_cache/LMDB write lane, debug delay knobs for observing intermediate
+  states, explicit AABB/OBB/LoD milestones, and queue-based handoff between
+  independent workers.  Do not carry forward its BSG-specific API,
+  object-name-only cache keys, detached unmanaged workers, void* lifetime
+  pattern, fixed linear pipeline assumption, or rt_db_internal ownership by
+  comment.  Use an owned task service with explicit start/stop, joinable
+  shutdown, cancellation tokens, generation ids, explicit in-flight counts,
+  task-graph dependencies, and clear final ownership of cracked internals.
+  concurrentqueue.h may be used for multi-producer/multi-consumer stage and
+  result handoff, but size_approx() must remain diagnostic, idle-wait, or
+  settled-check only.  Correctness must come from enqueue/dequeue success,
+  shutdown/cancellation tokens, generation ids, and in-flight counters.
+  Result records should carry object path/name, source revision, view/policy
+  revision, result kind, quality tier, provider id, cache key or geometry
+  handle, bounds, primitive counts, estimated error when known,
+  terminal/fallback status, and diagnostics.
+  lod_result_wakeup.txt adds the required wakeup contract: BRLObolLodService
+  should emit a lightweight, coalesced result-ready callback when the result
+  queue transitions from empty to non-empty; callbacks must not mutate Obol
+  nodes or deliver results; the owning controller sets a pending flag, wakes
+  or is observed by the main loop, and drains/applies results on the UI/main
+  thread with bounded-drain support.  This uses the existing mutex/condition
+  service queues for now; concurrentqueue.h remains an option for later
+  high-volume inter-stage/result handoff once the public contract is stable.
+  The concrete Obol/libbrlobol build-out should start by closing the neutral
+  RT facade gaps that libbrlobol will need: current active level/status,
+  active-data residency status, memory-shrink/reload hooks, cache
+  invalidation or stale-entry status, and copied metadata that avoids
+  borrowing provider arrays.  The initial
+  provider-neutral BRLObolLodRequest, BRLObolLodResult, cache-key, and
+  geometry-handle contract is in place, including deterministic cache keys
+  over database/source/view/policy/provider identity, bounds, counts, and
+  provider parameters.  The initial owned BRLObolLodService now provides
+  start/stop, joinable workers, generation cancellation, task dependencies,
+  main-thread result draining, in-flight diagnostics, cancellable task-level
+  debug delay controls, stale-result rejection, owned realization-task data
+  cleanup, a coalesced result-ready subscription/wakeup, and a serialized
+  cache-write lane.  Typed Stage 0/1/2 result payloads and
+  constructors now cover dependency/directory records, display attributes,
+  AABB, and proxy/OBB milestones.  The first RT mesh-cache provider adapter
+  can run as a service task, refresh missing cache entries, load the active
+  RT mesh-LoD view level, copy the active RT mesh-LoD arrays into an owned
+  staged mesh payload, and publish the neutral mesh result without exposing
+  BSG.  Next wire POP/provider payload ownership and a dedicated LoD-backed
+  Obol node/update pass while the existing direct mesh/vlist realization
+  remains available for small and synchronous cases.  The first
+  SoBRLLodUpdateAction already handles UI-thread result drains and applies
+  staged metadata/attribute/proxy records plus owned mesh payloads to matching
+  SoBRLMeshShape nodes.  Mesh nodes can now build deterministic staged LoD
+  requests from their Obol identity fields, and the view controller can expose
+  a sanitized rt_view_info snapshot.  The first explicit
+  SoBRLMeshLodSubmitAction uses those pieces to submit RT mesh-cache provider
+  tasks for matching mesh nodes, and BRLObolViewController now has explicit
+  submit/drain/apply methods plus a retained LoD service subscription and
+  pending-result processing path that wire the action pair to the active
+  scene, view snapshot, service, and database source list.  It also has the
+  first auto-submit gate, keyed by view, policy, and source signature, for
+  render-time LoD request preparation; that source signature includes
+  lodBotThreshold policy input.  The remaining controller/render integration
+  work is to make scheduling richer and provider/policy-aware.
+  Large BoTs
+  should realize through a dedicated
+  LoD-backed mesh node, preferably SoBRLLodMeshShape, or a clearly separated
+  LoD-backed mode on SoBRLMeshShape.  That node should store persistent
+  source/material/selection/LoD policy fields in Obol while keeping large
+  active POP arrays private, reloadable, and governed by RT-owned
+  rt_mesh_lod handles.  A narrow SoBRLMeshLodUpdateAction or extension of the
+  current action/controller pass should build rt_view_info from the Obol camera
+  and viewport, call the
+  neutral rt_mesh_lod_load_view/data APIs, update backend/private geometry
+  only when the active level changes or a reload is requested, and mark the
+  node dirty through normal Obol notification.  Actions must distinguish
+  display-geometry behavior from exact/model behavior: viewport pick may use
+  active display LoD, while precision measure, edit snap, and default export
+  need an explicit full-detail or detail-preserving policy.  Export, measure,
+  and snap now expose that policy split; full-detail reloads and pick policy
+  wiring remain.
+* include/rt/primitives/sketch.h exposes sketch-to-polygon and
+  polygon-to-sketch conversion through an opaque rt_sketch_polygon handle
+  instead of bsg_polygon_ref.  The current BSG view-polygon workflow opts into
+  include/rt/primitives/sketch_legacy_bsg.h for the old
+  db_sketch_to_view_polygon* and db_view_polygon_ref_to_sketch adapters.
+  src/librt/primitives/sketch/polygons.c now stores the opaque handle in
+  RT-owned polygon state and is free of BSG headers; BSG polygon-ref
+  translation is limited to
+  src/librt/primitives/sketch/polygons_legacy_bsg.c.
+* src/libnmg now includes bg/vlist.h directly, uses bg_vlist/bg_vlblock and
+  BG_VLIST_* helper APIs for NMG plot/debug output, and no longer links
+  libbsg directly.  The pivot guard prevents these NMG files from regressing
+  to BSG vlist names.
+* libanalyze's NIRT segment plotting now includes bg/vlist.h directly and uses
+  BG vlist/vlblock helpers.  libanalyze records a direct libbg dependency for
+  that use, and the pivot guard prevents NIRT from regressing to BSG vlist
+  names.
+* dxf-g, IGES drawing import, g-jack, g-off, ganalyze, and tea_nmg use
+  bg/vlist.h directly for their low-level vlist/uplot work instead of
+  bsg/vlist.h compatibility aliases.  The pivot guard prevents those utility
+  paths from regressing to BSG vlist names.
+* src/libbrep uses BG-owned vlist/plot helpers for debug plot output and no
+  longer records a direct libbsg dependency.  Any remaining BREP BSG
+  publication is in GED/librt transitional scene paths, not libbrep.  The
+  pivot guard prevents src/libbrep and include/brep from regressing to BSG
+  names.
+* include/bg/line_layer.h and src/libbg/line_layer.c own the neutral
+  color-keyed line-layer builder and the simple bg_line_layer-to-plot3 stream
+  export helpers used for legacy diagnostic output.
+* BREP, NMG, GQA, and check diagnostic paths now build bg_line_layer data and
+  cross back into BSG only at the temporary publication boundary.
+* include/bg/plot3.h is the canonical installed plot3 header.
+  include/bsg/plot3.h is a transitional wrapper.
+* Standalone plot3 utilities now link through libbg/libbu as appropriate,
+  not libbsg.  plot3-dm remains a legacy display/Tk utility path.
+* The old BSG TIG and vectfont headers are no longer part of the public BSG
+  header set after the newdraw rebase.
+* The default plot3_* implementation now lives in a normal libbg
+  implementation unit.  The PLOT3_IMPLEMENTATION header block remains only
+  for private prefixed local implementations; plot3.h is expected to remain a
+  useful debugging/export interface.
+
+
+What We Should Not Rebuild
+--------------------------
+
+Do not recreate BSG inside libbrlobol.
+
+The earlier BSG direction was useful because it separated application drawing
+state from individual display backends.  Obol already provides the stronger
+version of that model: a real scene graph, traversal/actions, details,
+render managers, text, cameras, and pluggable backends.  The cleaner long
+term design is to put BRL-CAD-specific behavior into Obol extensions and let
+applications use Obol features directly.
+
+libbrlobol may provide narrow controllers and services where BRL-CAD needs
+coordination, such as database realization, diagnostics, edit preview, and
+application render scheduling.  Those services should hold Obol objects and
+BRL-CAD policy, not generic render lists, payload stores, or backend-neutral
+scene abstractions parallel to Obol.
+
+
+Target Public API Shape
+-----------------------
+
+libbrlobol:
+
+* brlobol_init initializes Obol and BRL-CAD Obol classes.
+* Database source nodes own BRL-CAD database/path realization state as
+  normal Obol node fields.
+* BRLObolViewController coordinates scene root, camera, SoViewport,
+  SoRenderManager, render scheduling, readback, realization, and diagnostics.
+* Realization, export, snap, measure, pick, diagnostics, edit preview, HUD,
+  overlays, and text are expressed as Obol nodes/actions/details.
+* SoBRLSceneController remains a narrow realization/diagnostic service.
+* No public bsg_render_item, bsg_backend_scene, generic payload store, or
+  BSG-like render list appears in libbrlobol.
+
+qtcad/qged:
+
+* Migrated code uses BRLObolViewController and Obol scene/camera objects.
+* Existing bsg_view, dm, and fb accessors remain only during parallel
+  migration.
+* Final public drawing APIs do not expose bsg_view, dm, fb, or dm_plugins.
+* vlist is not exposed as an application scene abstraction.  Wire output is
+  converted to Obol line/shape nodes at the scene boundary.
+
+GED/TclCAD/mged:
+
+* GED drawing services update Obol database source nodes, Obol camera/view
+  state, and Obol selection/pick details.
+* C/Tcl callers use an opaque bridge backed by Obol where needed.
+* No public BSG/DM compatibility shim survives final removal.
+
+Image streams, framebuffer compatibility, and window hosting:
+
+* libimgstream provides opaque imgstream_* stream lifecycle, metadata, pixel
+  read/write, rect update, snapshot, subscriber, producer, and transport APIs.
+* libimgstream/fb_compat preserves the current framebuffer API/protocol
+  spellings needed by rt, remrt, fbserv, GED/TclCAD, and src/fb tools while
+  translating them to image-stream storage, transport, or explicit
+  unsupported diagnostics.
+* SoBRLImageSource represents static icv_image_t data and live libimgstream
+  streams as Obol data sources.
+* SoBRLViewportImage displays an image source in viewport-aligned underlay,
+  overlay, HUD, render-progress, and framebuffer-compatibility roles.
+* SoBRLImagePlane displays an image source as a textured scene-space plane.
+* libbrlobol owns the toolkit-neutral BRLObolWindowHost contract around
+  BRLObolViewController, normalized input events, semantic input profiles,
+  and display-host callbacks used by display-capable fb_open and dm_open
+  compatibility.  The neutral contract and initial imgstream display-host
+  bridge are in place; display-capable framebuffer streams can attach to
+  SoBRLImageSource and SoBRLViewportImage nodes under the controller.
+  BRLObolHeadlessWindowHost provides the first offscreen adapter and drains
+  those streams through Obol readback; qtcad's QgObolWindowHost provides the
+  first Qt canvas adapter for the same display-host contract and can create an
+  owned visible Qt toplevel QgSW fallback when no qtcad canvas exists.  General
+  dm_open routing, final Qt host selection, and Tk/MGED adapters remain.
+* libimgstream must not depend on libbrlobol.  Display-capable framebuffer
+  compatibility obtains or creates an image stream, then delegates window or
+  viewport display through a registered libbrlobol/application display host.
+
+
+Progress Snapshot
+-----------------
+
+These are approximate completion estimates for the current checked-in path.
+They measure exit-criteria completion, not implementation effort spent.
+
+Next Push:
+
+* Obol realization coverage matrix: 95 percent.  The matrix and required
+  pinewood.g, havoc.g, and m35.g gates exist, and Generic_Twin.g is documented
+  as the larger FAA maturity candidate with an opt-in
+  BRLOBOL_QTCAD_GENERIC_TWIN=1 draw/readback hook for the final mixed
+  implicit/BoT gate; stable standalone material, standalone edge entity
+  picking, standalone vertex entity picking, and deeper edit-intent identity
+  remain.  Mesh face picks and triangle export records now preserve source
+  vertex indices for face-level inspection/export, and face pick details record
+  nearest edge and vertex identity hints.  Base PNTS point primitives now have
+  shaded Obol realization coverage.
+* libbrlobol database realization: 94 percent.  Real hierarchy realization,
+  partial refresh, identity fields, mesh/vlist representation, and tests are
+  in place; mesh face pick/export details carry source vertex indices and face
+  picks expose nearest edge/vertex identity hints; BoT meshes can publish
+  cached RT LoD metadata into Obol fields and export records through the
+  initial provider-neutral LoD result contract, and the first async
+  BRLObolLodService skeleton plus typed Stage 0/1/2 dependency, attribute,
+  AABB, and proxy payloads are available for staged work.  The first RT
+  mesh-cache provider task can refresh/load cached RT mesh LoD through the
+  async service, force a requested RT LoD level, shrink active RT arrays after
+  copying, and return a neutral staged mesh result with an owned Obol-side
+  triangle payload; explicit database invalidation is now covered at the
+  provider boundary, with no-refresh providers surfacing cache misses and
+  refresh-enabled providers rebuilding the RT cache before returning an Obol
+  payload.  SoBRLMeshShape can
+  now consume staged results into Obol fields and reject stale, cancelled,
+  error, and cache-miss result statuses, and SoBRLLodUpdateAction can drain
+  service results and apply accepted staged records and owned mesh payloads to
+  matching scene nodes;
+  request/view helper boundaries now exist, and the first explicit
+  SoBRLMeshLodSubmitAction can use them to submit RT mesh-cache provider work
+  from an Obol scene and view snapshot; BRLObolViewController now exposes
+  explicit submit/drain/apply LoD methods with counters and diagnostics for
+  application/controller integration, and the service/controller wakeup path
+  can mark queued results pending, process them on the main thread, and
+  request a render after applied staged results; the controller can now
+  coalesce automatic LoD submissions by view/policy/source signature so
+  render-time preparation avoids duplicate requests for an unchanged scene and
+  lodBotThreshold policy changes are part of that source signature; it also
+  tracks a sanitized RT view signature so direct camera field changes can
+  trigger a fresh LoD submission without replacing the camera node, and
+  forced RT LoD levels can be requested through both SoBRLMeshLodSubmitAction
+  and BRLObolViewController as an explicit policy input;
+  SoBRLLodMeshShape now provides the first dedicated LoD-backed BoT node
+  identity, BoT realization uses it only when lodBotThreshold is positive and
+  the BoT face count meets/exceeds the threshold while currently loading
+  full-field mesh data for first realization, and LoD submission skips
+  ordinary meshes unless explicitly configured otherwise; dedicated
+  LoD-backed mesh nodes now disable full-detail backup when display-LoD
+  payloads replace active fields, while preserving lightweight source
+  counts/bounds for request identity.  Ordinary meshes can still preserve
+  full-detail indexed triangles as an interim resident-mesh fallback.  The
+  production large-BoT path still needs source-backed full-detail access that
+  can reload from .g data, fetch bbox/intersection-targeted subsets, or chunk
+  very large meshes instead of requiring a full resident copy.  A candidate
+  exact-query optimization is a cached coarse spatial/index sidecar emitted
+  while the POP build is already walking source triangles: assign triangles to
+  normalized Morton/grid leaves, union real triangle bboxes into leaf bounds,
+  and store source face ids or ranges for provider subset queries.  Keep it
+  optional and coarse; it becomes an out-of-core win only when paired with a
+  librt BoT partial-read or cached full-detail chunk API.  Export and
+  measure now have explicit full-detail versus display-LoD policies that use
+  preserved full-detail source geometry when available, snap defaults to
+  display-level behavior with an explicit full-detail detail-preserving mode
+  that can also use preserved source geometry, and mesh ray picking has an
+  explicit display/default versus preserved-full-detail policy split; exact
+  CSG implicit and comb-instance picking still needs a librt ray-query
+  provider that returns display path, region/material, primitive, hit point,
+  normal, and distance; base PNTS shaded point
+  realization/export/snap is covered; native
+  text/curve/material refinements, richer PNTS attributes, standalone edge and
+  vertex entity picking, POP/provider payload ownership, richer provider-level
+  active-level policy scheduling, and more shaded converter hardening remain.
+* Obol diagnostic overlays: 45 percent.  qtcad Obol line-layer/HUD overlay
+  sync exists; GQA/check/BREP/NMG publication still needs broader Obol-first
+  routing.
+* qtcad visible Obol rendering: 56 percent.  Obol readback, GL/SW capture,
+  navigation, selection, snap, and measure gates exist for migrated content;
+  the Qt display-host adapter can create an owned visible toplevel for
+  display-capable framebuffer requests; legacy fallback remains for
+  non-migrated paths.
+* Guardrails and inventory: 88 percent.  Transitional guard and dependency
+  inventory are active and now checks RT-owned view-coordinate constant use in
+  the first libged command/helper set, TclCAD/MGED view numeric callers,
+  MGED-wide retired numeric alias scans, RT-owned view size/scale limits, and
+  qtcad/MGED LoD policy use through the RT legacy adapter.  It also now
+  rejects direct BSG LoD bounds, view-scale, and scene-ref load/free calls in
+  the private libged BSG-to-RT view helper, rejects direct savekey RT -M BSG
+  view reads, rejects direct MGED title/status BSG view-field reads for
+  center/size/AET/perspective/scale, rejects direct libged simple conversion
+  helper matrix/scale reads, rejects direct libtclcad view draw
+  matrix/perspective reads, wrapper perspective/zoom-refresh LoD policy reads,
+  commands LoD policy reads/writes and command center/scale reads, and axes
+  size-scaling reads, and rejects direct BSG mesh-LoD detail callbacks in the
+  BRep LoD producer; strict mode and final allowlist removal remain.
+* Low-level cleanup: 98 percent.  vlist, plot3, line-layer, RT view-info,
+  neutral RT LoD policy snapshots, mesh-LoD handles, sketch polygons,
+  normalized view-coordinate constants and
+  view size/scale limits in selected libged/TclCAD/MGED command/helper paths,
+  the private libged BSG-to-RT view adapter declaration and LoD policy
+  snapshot/apply boundary for draw and LoD commands, and several utility paths
+  including libged database-index LoD cache invalidation and view lod cache
+  clear/status/BoT-refresh operations plus draw BoT LoD cache ownership are
+  neutralized; active draw LoD publication now reads the RT mesh-LoD data view
+  rather than BSG container fields; private BSG draw LoD adapters now take
+  RT mesh-LoD handles instead of exposing borrowed BSG mesh pointers to
+  draw.cpp; generated BRep mesh cache writes now go through RT helpers,
+  draw source state no longer stores BSG mesh-LoD context or borrowed BSG mesh
+  state, public GED no longer owns a BSG mesh-LoD context, and draw-ref reset
+  now frees transitional scene-ref LoD state through the private adapter
+  rather than including bsg/lod.h directly; draw tests now verify the
+  transaction bounds-update hook through the same private adapter instead of
+  naming bsg_view_bounds directly; the private libged view adapter now
+  delegates BSG bounds-callback, view-scale, and scene-ref LoD load/free
+  behavior to the RT legacy adapter instead of
+  including bsg/lod.h; BRep full-detail callbacks now publish through neutral
+  RT mesh-LoD detail callbacks instead of BSG callback signatures, so libged
+  no longer includes bsg/lod.h for LoD work; qtcad quad views and MGED zoom/idle/attach
+  paths no longer use direct BSG LoD policy structs, but
+  lower-level framebuffer/libdm, BRep LoD tessellation producers, and
+  some BSG scene paths remain.
+* libimgstream migration batch: 57 percent.  Core streams, icv snapshots, and
+  memory/file/stack/diagnostic fb_compat are in place; remote/display spec
+  normalization plus display-host callback delegation are in place; remote
+  transport and fbserv protocol behavior remain.
+* Framebuffer display ownership: 39 percent.  The libimgstream/libicv/Obol
+  split is defined, non-display compatibility has started, and display-capable
+  fb_compat requests can delegate to a registered display host; SoBRLImageSource
+  owns image-source metadata and dirty stream notifications, while
+  SoBRLViewportImage and SoBRLImagePlane now consume those sources as standard
+  Obol texture quads.  BRLObolWindowHost now provides the first neutral bridge
+  from display framebuffer streams to Obol image nodes, and
+  BRLObolHeadlessWindowHost can poll and capture those scenes through
+  SoOffscreenRenderer.  QgObolWindowHost can attach the same display-host
+  route to a qtcad Qt canvas, create an owned Qt toplevel QgSW host when no
+  canvas exists, and consume Qt readback.  Incremental dirty-region texture
+  uploads, broader dm_open routing, hardware-preferred Qt host selection, and
+  Tk/MGED adapters remain.
+
+Migration Phases:
+
+* Phase 1, architecture freeze and guardrails: 80 percent.
+* Phase 2, productionize libbrlobol: 86 percent.
+* Phase 3, migrate qged/qtcad: 46 percent.
+* Phase 4, migrate libged, libtclcad, and mged: 25 percent.
+* Phase 5, remove lower-level BSG/DM dependencies: 51 percent.
+* Phase 6, hard removal: 5 percent.
+
+
+Next Push
+---------
+
+The next implementation push should make the Obol path real enough to test
+against application workflows, not just isolated controller/readback pieces.
+
+1. Define the Obol realization coverage matrix.
+
+* Use share/db/pinewood.g and share/db/havoc.g as required hierarchy tests.
+  Use share/db/faa/Generic_Twin.g as the larger mixed-primitive maturity
+  candidate before the final qtcad migration gate: it is the largest in-tree
+  example, includes valid and invalid BoTs, and mixes in implicit solids.
+* List every primitive and database object type that the old drawing path can
+  draw.
+* For each type, record the intended Obol representation: native Obol shape,
+  BRL-CAD Obol node, tessellated mesh, wire/vlist fallback, or deferred.
+* Record the required preserved identity: db path, primitive, face, edge,
+  vertex, material, visibility, selection state, and edit intent.
+
+Completion for this step:
+
+* A checked-in coverage table exists.
+* pinewood.g and havoc.g can be loaded by the Obol realization path without
+  requiring BSG scene objects.
+* Unsupported types fail explicitly with diagnostics instead of silently
+  disappearing.
+
+2. Productionize libbrlobol database realization.
+
+* Make SoBRLDatabaseSource and SoBRLSceneController responsible for real .g
+  hierarchy realization and partial refresh.
+* Keep traversal-relevant state in Obol fields/details, not controller side
+  tables.
+* Convert bg_vlist/rt_vlist wire output to Obol line/shape nodes only at the
+  realization boundary.
+* For large BoTs and future high-cost geometry, use the staged LoD realization
+  pipeline described in lod_pipeline.txt: publish metadata, attributes/AABB,
+  OBB/proxy, POP fast mesh, qualified progressive/high-quality mesh, and
+  full-detail fallback as separate revision-tagged results instead of blocking
+  Obol realization on a single final mesh.
+  The first synchronous bridge is limited to copying already-cached
+  rt_mesh_lod_info into SoBRLMeshShape metadata fields and SoBRLExportAction
+  triangle records; it must not become the final staged task service or force
+  POP generation in ordinary realization.
+* LoD implementation sub-queue:
+  1. Continue extending the RT-owned mesh-LoD facade before libbrlobol depends
+     on POP residency.  Neutral current-level queries, active-data residency
+     status, copied active metadata, memory shrink/reload hooks, and cache
+     status/refresh/invalidate reporting are in place; richer provider
+     diagnostics remain.
+  2. Define provider-neutral request/result/geometry-handle types and cache
+     keys that include database identity, source revision or content hash,
+     object path/name, view/policy revision, draw mode, provider id/version,
+     provider parameters, quality tier, bounds, primitive counts, estimated
+     error when known, terminal/fallback status, and diagnostics.  Initial
+     BRLObolLodRequest, BRLObolLodResult, BRLObolLodGeometryHandle, and
+     deterministic cache-key helpers are in place, including typed
+     dependencies, attributes, proxy payloads, and owned mesh payloads for
+     staged results; the first RT mesh-cache provider task adapter is in
+     place, can force a requested RT LoD level, and copies active RT mesh-LoD
+     arrays before shrinking borrowed active arrays and publishing results;
+     provider-specific POP mesh payload ownership and broader provider wiring
+     remain.
+  3. Add an owned async realization service with explicit start/stop,
+     joinable workers, cancellation/generation tokens, explicit in-flight
+     counts, task-graph dependencies, result drain on the UI thread, and one
+     serialized bu_cache/LMDB write lane for persistent writes and stale-entry
+     clears.  The initial BRLObolLodService is in place with tests for
+     dependency ordering, late generation cancellation, stale result rejection,
+     UI-thread result draining, cancellable debug-delay diagnostics, and
+     serialized cache writes, plus owned realization-task data cleanup for
+     completed and never-started queued tasks.  It now has a tested RT
+     mesh-cache provider task adapter, provider-specific free helper, and
+     coalesced result-ready subscription/wakeup;
+     integration with persistent cache-write operations and provider-owned POP
+     payloads remains.
+  4. Use moodycamel::ConcurrentQueue where it fits inter-stage and result
+     handoff, but keep correctness based on enqueue/dequeue success,
+     cancellation/shutdown tokens, generation ids, and in-flight counts rather
+     than size_approx().  size_approx() is acceptable only for diagnostics,
+     idle waits, and settled checks.  The first service uses standard
+     mutex/condition-variable queues as the correctness baseline; a
+     concurrentqueue substitution can be evaluated later without changing the
+     public service contract.
+  5. Implement Stage 0/1/2 outputs first: directory/dependency records,
+     display attributes, AABB, and OBB/proxy.  Preserve the cache_drawing.cpp
+     debug-delay idea with production-owned diagnostics so intermediate
+     placeholder states can be inspected during large-model debugging.  The
+     provider-neutral result payloads and constructors for these milestones
+     are in place, and SoBRLLodUpdateAction can apply those records to matching
+     mesh shapes after a UI-thread service drain; the service now has
+     cancellable task-level debug delay controls and delayed-task diagnostics;
+     the RT mesh-cache provider task is available for cached mesh results, can
+     force a requested RT LoD level, can shrink active RT arrays after copying,
+     and can publish owned mesh payloads; lodBotThreshold now gates when database
+     BoT realization creates LoD-backed mesh nodes.  POP provider tasks,
+     provider-level active-level updates, and richer provider/policy
+     scheduling remain.
+  6. Wire Obol/libbrlobol to consume staged results while preserving existing
+     full-field SoBRLMeshShape and vlist realization for small or synchronous
+     geometry.  Late results must be ignored harmlessly when their
+     source/view/policy generation tokens no longer match.  SoBRLMeshShape now
+     exposes staged result fields for dependencies, attributes, proxy state,
+     provider status, diagnostics, and cache identity, and can reject stale
+     result keys while preserving existing full mesh realization.
+     SoBRLLodUpdateAction drains staged results from BRLObolLodService, matches
+     them to mesh nodes by source path/name, applies accepted records and owned
+     mesh payloads, and reports stale or unmatched results.  Mesh shapes can
+     build deterministic request identities from their Obol fields, and the
+     view controller can produce an RT view snapshot from Obol camera/viewport
+     state.  The first explicit SoBRLMeshLodSubmitAction uses those identities
+     and snapshots to enqueue RT mesh-cache provider tasks for matching
+     LoD-backed mesh
+     nodes, and BRLObolViewController now wires explicit controller-level
+     submit/drain/apply calls plus retained service wakeups over its active
+     scene and database source list.  It also has an auto-submit gate that
+     coalesces changed view/policy/source signatures, includes lodBotThreshold
+     policy input in the source signature, tracks sanitized RT view signatures
+     including direct camera field changes, exposes a forced-level policy that
+     is passed to SoBRLMeshLodSubmitAction, and cancels the previous active
+     generation before scheduling new RT mesh-cache requests.
+     SoBRLLodMeshShape now marks the first dedicated LoD-backed BoT mesh
+     representation, and BoT database realization creates it only when
+     lodBotThreshold is positive and the BoT face count meets/exceeds the
+     threshold while retaining existing full-field mesh data.  The first
+     forced-level provider policy path is wired; richer render-time level
+     selection and scheduling remain.
+  7. Add a LoD-backed BoT representation, preferably SoBRLLodMeshShape, plus
+     SoBRLMeshLodUpdateAction or equivalent controller logic that updates the
+     active RT mesh-LoD level from Obol camera/view state before rendering and
+     updates private/backend geometry only when the active level changes or a
+     reload is requested.  The initial SoBRLLodMeshShape subclass is in place,
+     BoT database realization uses lodBotThreshold for policy-threshold
+     selection, LoD submission filters out ordinary full-detail mesh shapes
+     unless explicitly configured otherwise, and export now has explicit
+     full-detail versus display-LoD policy with full-detail preserving
+     behavior as the default for ordinary meshes.  Dedicated LoD-backed mesh
+     shapes now avoid mandatory full-detail backup when a display-LoD payload
+     is active, while keeping source counts and bounds stable for request
+     identity.  They can use preserved source triangles for export, measure,
+     and snap only when that source geometry is already resident.  Large-geometry LoD must avoid mandatory full-detail residency:
+     scene nodes should retain source identity, bounds, counts, and active
+     display payloads, and exact operations should reload or stream bounded
+     full-detail data from the .g/RT provider path, including chunked
+     bbox/intersection-targeted reads for meshes too large to fit in memory.
+     Cached coarse spatial/index sidecars generated while building POP payloads
+     are a candidate optimization for pick/snap: reuse the POP pass over source
+     triangles to assign faces to normalized Morton/grid leaves, store unioned
+     leaf bboxes plus source face ids or ranges, and query those leaves before
+     requesting bounded exact data.  Keep this optional and useful only when
+     paired with a clean librt BoT partial-read interface or cached full-detail
+     chunks.
+     Basic forced-level update is wired; richer view-policy level selection
+     and source-backed detail access remain.
+  8. Move POP generation behind the neutral provider interface as the first
+     production fast-BoT provider.  Add BoT topology qualification, mark bad
+     mesh topology as POP-terminal when appropriate, and add
+     progressive/high-quality providers only after the POP path is reliable.
+  9. Make pick, snap, measure, and export choose display-level or full-detail
+     geometry explicitly, and add tests for large-BoT realization,
+     view-dependent level changes, memory shrink/reload, full-detail export,
+     stale late-result rejection, serialized cache writes, and absence of BSG
+     LoD headers in libbrlobol.  Provider-level database invalidation coverage
+     now verifies explicit RT cache-key clearing, no-refresh cache-miss
+     reporting, and refresh-enabled payload regeneration.  SoBRLExportAction
+     and SoBRLMeasureAction now default to FULL_DETAIL/detail-preserving
+     behavior that skips active display-LoD mesh payloads and uses preserved
+     full-detail source geometry when available, while DISPLAY_LEVEL opts into
+     the displayed LoD geometry.  SoBRLSnapAction defaults to DISPLAY_LEVEL
+     for interactive snapping while FULL_DETAIL skips active display-LoD
+     payloads and can use preserved source geometry for edit/precision
+     callers.  Dedicated LoD-backed mesh tests now verify display-LoD updates
+     do not retain full-detail payloads but still keep source metrics for
+     request identity.  Mesh ray picking now defaults to display-level
+     geometry and has an explicit full-detail policy that uses resident
+     preserved source triangles when available, skipping active display-LoD
+     payloads when no exact source geometry is resident.  RT/source-backed
+     reload when no preserved full-detail payload is resident, memory-budget
+     eviction of resident detail, chunked/bbox-targeted detail reads for
+     out-of-core meshes, and librt-backed exact ray queries for CSG implicits
+     and comb instances remain.  Evaluate a coarse POP-build spatial sidecar
+     plus selective BoT read or cached full-detail chunk API for exact pick/snap
+     subsets before committing to that complexity.
+* Add tests for draw, erase, partial refresh, selection identity, path
+  identity, bbox/autoview data, and unsupported-object diagnostics.
+
+Completion for this step:
+
+* libbrlobol can realize, update, inspect, select, and render the required
+  model set without libbsg/libdm scene objects.
+* Rebuilding a controller from an existing Obol scene does not lose
+  authoritative state.
+* Staged realization results can arrive asynchronously, apply only to matching
+  source/view/policy revisions, and leave stale late results harmless.
+
+3. Replace BSG diagnostic publication with Obol overlays.
+
+* Define the Obol-side representation for diagnostic lines, points, labels,
+  axes, grids, faceplate/HUD, edit previews, and selectable diagnostics.
+* Convert GQA/check/BREP/NMG diagnostic publication to the Obol overlay path.
+* Keep bg_line_layer only as an internal producer/container while legacy code
+  still emits line-layer data.
+
+Completion for this step:
+
+* GQA/check overlap overlays are visible through Obol without
+  bsg_feature_replace_line_layer_builder in the new path.
+* BREP/NMG debug overlays can publish to Obol.
+* Legacy BSG publication remains only behind an explicit compatibility path.
+
+4. Make qtcad visibly render through Obol.
+
+* Route QgGL paint through BRLObolViewController::renderPending and the owned
+  SoRenderManager after making the correct Qt GL context current.
+* Make QgSW/offscreen use Obol OSMesa/NanoRT/readback paths rather than libdm
+  swrast for the Obol mode.
+* Make Obol camera/view state authoritative for qtcad navigation, autoview,
+  image capture, selection, picking, snapping, and measuring.
+* Keep the BSG camera bridge only as a temporary legacy adapter until the old
+  visible path is removed.
+
+Completion for this step:
+
+* qtcad opens real .g files and displays wire and shaded Obol output.
+* navigation, autoview, selection, picking, snapping, measuring, overlays,
+  edit preview, and screenshot/readback work through Obol.
+* qtcad Obol mode does not require libdm or dm_plugins.
+
+5. Expand guardrails and inventory remaining legacy dependencies.
+
+* Expand brlobol_pivot_guard as directories become Obol-canonical.
+* Maintain an explicit allowlist for remaining BSG/DM references.
+* Add dependency tests for qtcad Obol mode and libbrlobol.
+* Keep conflict-marker and removed-header checks in the focused test set.
+
+Completion for this step:
+
+* New Obol-canonical code cannot include BSG/DM headers or link BSG/DM
+  targets without failing CTest.
+* The remaining BSG/DM dependency graph is documented and phase-owned.
+
+6. Continue low-level cleanup.
+
+* Finish retargeting non-scene callers from BSG names to BG/RT names.
+* Keep BG-owned headers and implementation files free of direct BSG includes.
+* Continue retiring public RT callback signatures that expose BSG view,
+  mesh-LoD, or sketch-polygon state.  Primitive plot/LoD/face-set callbacks
+  now use rt_view_info, primitive LoD code reads view metric policy through
+  RT-prefixed helpers in include/rt/view.h, libged's lower primitive
+  publication helpers pass rt_view_info into those callbacks,
+  BSG-to-RT view snapshot adaptation for those helpers is isolated in
+  src/libged/bsg_ged_draw_view.c, and BSG-owning wrapper files include
+  bsg_ged_draw_private.h for that adapter declaration rather than redeclaring
+  it.  BSG LoD policy extraction for draw.cpp, draw refs, transaction redraw,
+  the transaction bounds-update hook, view-scale extraction, scene-ref LoD
+  load/free, and the draw command threshold
+  compatibility override/restore is isolated behind the same private adapter;
+  libged lod and view lod commands also use the private snapshot/apply helper
+  instead of direct BSG policy get/set, while the underlying BSG policy mapping
+  and BSG view/scene-ref calls are now owned by the RT legacy adapter so qtcad quad views and MGED
+  zoom/idle/attach paths can use the same boundary,
+  src/librt/view.c is free of BSG adapter logic, src/librt/edit.cpp is free of
+  BSG edit adapter logic, src/librt/tests/edit now exercises RT-owned edit
+  views without direct BSG setup, and db_mesh_lod_get now returns opaque
+  rt_mesh_lod; libged plot, vnirt, solids_on_ray, ADC, and DM window-bound
+  helpers now consume RT_VIEW_* and RT_INV_VIEW constants for normalized view
+  coordinates instead of BSG_VIEW_*, BSG_INV_*, or INV_BV spellings; libged
+  size, scale, and zoom consume RT_VIEW_MIN_SIZE/RT_VIEW_MIN_SCALE instead of
+  BSG_MINVIEWSIZE/BSG_MINVIEWSCALE; libged check -i overlaps, get_eyemodel,
+  _ged_rt_write, and rtwizard now read view size and orientation through the
+  RT legacy view adapter while leaving GED-specific eye-model calculation in
+  GED; RT command, rtwizard, saveview, embedded-RT, and GED eye-model-helper
+  perspective reads use the same adapter boundary, and plot/PS/PNG diagnostic
+  export copies its camera values through the same adapter before calling the
+  legacy export routines; simple libged point/matrix/grid conversion helpers
+  and overlay default scale read model2view, view2model, and view scale through
+  the same adapter; savekey now uses RT legacy adapter copies for RT -M
+  size, rotation, and view2model output; MGED title/status display now reads
+  center, size, AET, perspective, and scale through the RT legacy adapter;
+  libtclcad view draw matrix/perspective, wrapper perspective reads, command
+  center/scale reads, and axes size scaling also go through the RT legacy
+  adapter; libtclcad display-bound setup, MGED ADC
+  view-unit math, the shared GED2PM1 conversion, MGED axes overlay scaling,
+  MGED attach window bounds, MGED view-scale clamping, and MGED menu/faceplate
+  drawing plus slider/pen normalized-coordinate handling now use the same RT
+  view numeric boundary, and MGED event/generic display-manager mouse and ADC
+  numeric paths no longer use BSG-owned view-coordinate constants.  Sketch
+  conversion now uses opaque rt_sketch_polygon in the neutral header
+  and RT-owned implementation, with BSG polygon refs limited to the explicit
+  legacy adapter header and implementation unit.  rt_mesh_lod loading/data
+  access, copied active-state metadata, cache status, reported refresh, and
+  explicit invalidation are available through RT-owned helpers.  The libged
+  draw BoT LoD path also obtains cache status, refreshes missing or stale
+  entries, owns the returned rt_mesh_lod handle, publishes active geometry
+  through rt_mesh_lod_data_get, and passes that RT handle to private GED
+  adapters for the remaining transitional BSG scene-ref visibility/load behavior.
+  Generated BRep mesh payloads are stored with db_mesh_lod_store_mesh, and
+  BRep draw realization now owns an rt_mesh_lod handle before borrowing the
+  BSG payload through the RT legacy adapter for transitional scene-ref load
+  behavior; the full-detail BRep
+  BSG callback registration and payload field mutation are isolated in
+  bsg_ged_draw_brep.cpp instead of draw.cpp.  Direct BSG cache mutation is
+  confined to the RT cache implementation; BRep tessellation remains the documented
+  transitional libged-side producer.  BSG mesh-LoD unwrapping remains private
+  to librt implementation units, with private GED adapters passing RT-handle
+  parameters through the RT legacy BSG view/scene-ref boundary.
+  rt_view_info adapter,
+  sanitize, RT view
+  metric helper, and mesh-LoD helper behavior are covered by the BSG-free
+  src/librt/tests/view_info.c; src/librt/tests/view_legacy_bsg.c covers the
+  transitional BSG adapter; rt_lod validates cached LoD levels through the
+  neutral helper surface.  libged database-index LoD cache invalidation uses
+  db_mesh_lod_invalidate instead of direct BSG key/cache APIs, and view lod
+  cache clearing uses db_mesh_lod_clear/rt_mesh_lod_cache_clear_all instead of
+  direct BSG cache-clear calls.  View lod BoT cache refresh and cache-exists
+  checks use db_mesh_lod_refresh/status rather than direct BSG key lookup; the
+  draw BoT mesh-LoD path uses db_mesh_lod_status/refresh/get and RT handle
+  ownership instead of direct BSG key/cache generation, while generated BRep
+  mesh payloads are written through db_mesh_lod_store_mesh instead of direct
+  BSG cache APIs.  The remaining BRep tessellation producers in view lod and
+  draw are explicitly transitional.  The draw source state and tree-walk
+  draw_data_t no longer carry bsg_mesh_lod_context or ged_lod through to
+  realization, ged_draw_source_state no longer stores a borrowed bsg_mesh_lod
+  pointer, and public struct ged no longer exposes or manually manages a
+  BSG mesh-LoD context.  General BSG draw helper units without mesh-LoD
+  payload operations, plus the GED draw tests that now use RT cache helpers,
+  no longer include bsg/lod.h; draw.cpp routes BRep mesh-LoD full-detail
+  setup through the private BREP draw helper, and that helper now registers
+  neutral RT mesh-LoD detail callbacks rather than BSG callback signatures.
+  Draw-ref reset calls the private scene-ref LoD free
+  adapter rather than direct BSG LoD APIs.  The private libged BSG-to-RT view
+  adapter now uses only RT legacy helpers for BSG LoD bounds callbacks,
+  view scale, and scene-ref LoD load/free.  Draw tests check the transaction
+  bounds-update hook through the private helper rather than direct
+  bsg_view_bounds comparisons.  qtcad quad views, MGED zoom/idle/attach paths,
+  and libtclcad commands/wrapper redraw checks copy, inspect, and apply LoD
+  policy through rt/view_legacy_bsg.h instead of direct BSG policy structs or
+  get/set calls.  All are enforced by the pivot guard.
+* The initial provider-neutral LoD request, result, cache-key, and
+  geometry-handle types are in place before wiring libbrlobol to POP.  Keep
+  POP as the first production fast BoT provider behind RT/provider APIs; add
+  BoT topology qualification and progressive-mesh generation later as separate
+  providers.  Result records carry object path, source revision, view/policy
+  revision, result kind, quality tier, provider id, cache key or geometry
+  handle, bounds, primitive counts, estimated error when known,
+  terminal/fallback status, and diagnostics.  The current SoBRLMeshShape and
+  SoBRLExportAction LoD summary fields are only the first visible metadata
+  slice of that result contract.  The initial BRLObolLodService provides the
+  staged worker, generation cancellation, dependency, result-drain, and
+  serialized cache-write lane needed by future providers.  Stage 0/1/2 result
+  payloads now carry dependency records, display attributes, AABB milestones,
+  and proxy/OBB records.  Staged mesh results can also carry owned
+  indexed-triangle payloads copied from RT mesh-LoD data.  SoBRLMeshShape
+  consumes those staged records into Obol fields, applies owned mesh payloads
+  through its existing geometry fields, and rejects stale, cancelled, error,
+  and cache-miss result statuses.  SoBRLLodUpdateAction drains service results
+  and applies accepted staged records to matching mesh nodes.  Mesh shapes can
+  build deterministic request identities from their Obol fields, and
+  BRLObolViewController can produce sanitized rt_view_info snapshots from its
+  Obol camera/viewport state.  The first explicit SoBRLMeshLodSubmitAction
+  uses those identities and snapshots to enqueue RT mesh-cache provider tasks
+  for matching LoD-backed mesh nodes and lets BRLObolLodService own provider
+  task cleanup after completion,
+  cancellation, or shutdown before execution.  BRLObolViewController now has
+  an explicit controller-facing submit/drain/apply path over database sources
+  so applications can exercise the staged path without hand-instantiating the
+  actions, plus a retained result-ready subscription that turns worker queue
+  publication into a main-thread pending-result drain before render.  It can
+  also coalesce automatic submissions by changed view/policy/source signature
+  before render.  The first RT
+  mesh-cache provider task can refresh/load cached RT mesh LoD through the
+  service and uses the RT active-data residency query to keep unloaded active
+  levels on the cache-miss result path.  Dedicated LoD-backed Obol mesh nodes
+  now opt out of preserving full-detail arrays when display-LoD payloads are
+  applied and retain lightweight source metrics for stable request keys, but
+  the service does not yet own POP payload residency, source-backed
+  full-detail fallback, chunked/bounded
+  detail fetches for exact operations, optional acceleration/index sidecars
+  for targeted triangle subset queries, memory-budget eviction policy, richer
+  provider/policy scheduling, or update dedicated LoD-backed Obol mesh nodes.
+* Keep the default plot3 implementation in its normal libbg implementation
+  unit.
+* Keep standalone plot3 utility links on libbg/libbu instead of libbsg, except
+  for explicit display/Tk compatibility utilities such as plot3-dm.
+* Keep bg_line_layer as the neutral in-memory diagnostic container.  The
+  bg_line_layer-to-plot3 export helpers are available as a simple diagnostic
+  output path that does not require Obol execution.
+* Keep bsg/plot3.h only as a compatibility wrapper until libbsg removal.
+* Do not reintroduce old BSG TIG or vectfont public headers.
+* Move useful framebuffer/image-streaming behavior out of libdm according to
+  fb_plan.txt: libimgstream for mutable streams, transport, producers,
+  subscribers, fan-out, fbserv compatibility, and fb_* wrappers; libicv for
+  static image/codecs/lookup-table operations; Obol/libbrlobol for display,
+  texture nodes, readback, image placement, and window/input hosting.
+* Preserve useful legacy transport and protocol workflows through
+  libimgstream compatibility while replacing display-capable framebuffer
+  backends with Obol image display.
+
+Completion for this step:
+
+* Low-level libraries no longer need BSG names for vlist, line-layer, plot,
+  or diagnostic containers.
+* Remaining libdm framebuffer use is either deleted, routed through
+  libimgstream/fb_compat, replaced by Obol readback/display, or assigned to
+  libicv image-processing utilities.
+
+7. Continue the libimgstream migration batch.
+
+* The libimgstream build target and initial opaque C API are in place.
+* The first in-memory RGB/RGBA stream layer implements imgstream_get_info,
+  resize, clear, full frame read/write, rect read/write, dirty rectangle
+  generation, subscriber callbacks, producer begin/end, and
+  imgstream_snapshot_icv conversion.
+* Keep expanding focused tests for stream lifecycle, resize behavior, pixel
+  operations, dirty-update generation, subscriber notification, and snapshot
+  conversion as compatibility callers arrive.
+* Add the remaining metadata/state APIs needed by framebuffer compatibility
+  before routing old fb state through libimgstream.
+* The first fb compatibility wrapper entry points are in place for memory
+  stream open/close, clear, read/write, RGB readrect/writerect,
+  BW readrect/writerect, view/getview, window, zoom, cursor/getcursor,
+  scursor, setcursor, reset, viewport, and no-op non-display poll/poll-rate.
+* Raw RGB file compatibility is in place for ordinary file paths and explicit
+  /dev/disk:<path> or /dev/disk=<path> spelling.  File-backed streams load
+  existing exact-sized pixel data, expose the same imgstream operations, and
+  flush raw RGB data on request or close.
+* /dev/stack fan-out compatibility is in place for semicolon-separated
+  memory/file child sinks.  Writes, rectangle writes, clear, view, cursor,
+  poll, and flush propagate to every child; reads use the first child, matching
+  the legacy stack framebuffer behavior.
+* /dev/null, /dev/debug, and /dev/txt diagnostic sink compatibility is in
+  place.  These sinks expose dimensions and preserved view/cursor state,
+  discard writes without mutating the backing stream, return zero pixels for
+  reads, and keep /dev/debug logging behavior for operation tracing.
+* Neutral colormap compatibility is in place.  imgstream_fb_colormap stores the
+  legacy 256-entry RGB transfer table with 16-bit channels, rmap/wmap preserve
+  per-stream state, and wmap(NULL) resets to the default linear map.
+* Remote/display framebuffer spec normalization is in place.  The
+  imgstream_fb_spec_info helper records parsed file/fan-out targets,
+  remote TCP or IPC targets, host/port/device fields, display kind, and
+  diagnostic kind for legacy spelling such as numeric ports, host:port,
+  host:port:device, tcp:, ipc:, and /dev/qtgl.
+* Display-host callback registration is in place.  Display-capable
+  framebuffer opens create an RGB stream and delegate open/close, view,
+  cursor, screen-cursor, cursor-shape, viewport, reset, flush, poll, and
+  poll-rate operations to the registered display host.  If no host is
+  registered, display specifiers still fail open explicitly.
+* Add remote transport, fbserv protocol, and real Obol/libbrlobol display-host
+  implementations in later batches.
+
+Completion for this step:
+
+* A non-display image stream can be created, updated, observed, read back, and
+  converted to/from libicv data without linking libdm.
+* The initial API remains small, opaque, and uses imgstream_* names.
+* Memory framebuffer compatibility requests route to libimgstream-owned RGB
+  buffers, file compatibility requests route to libimgstream-backed raw RGB
+  file sinks/sources, and /dev/stack fan-out compatibility routes to supported
+  child sinks.  Diagnostic framebuffer compatibility routes to non-display
+  diagnostic sinks.  Legacy colormap state is preserved through neutral
+  libimgstream types.  Remote and other old framebuffer specifiers are parsed
+  for future migration and rejected explicitly for now; display framebuffer
+  specifiers open only when a toolkit-neutral display host is registered.
+* No Obol display code depends on libimgstream until the stream layer is
+  independently tested.
+
+8. Extract framebuffer compatibility and display ownership.
+
+* Move useful /dev/mem behavior to core libimgstream in-memory streams.
+* Move file sink/source and colormap image transforms to libicv/libimgstream
+  as appropriate.
+* Move /dev/remote, host:port, ipc:<addr>, PKG_ADDR, FBSERV_TOKEN,
+  FBSERV_TLS, and MSG_FB* behavior to libimgstream transport/fb_compat.
+* Preserve legacy fb_view, fb_getview, fb_window, fb_zoom, cursor, poll,
+  expose/resize, linger, and simple mouse behavior as compatibility/display
+  state.
+* SoBRLImageSource is in place for static icv_image_t data and borrowed live
+  imgstream sources, including stream metadata fields and dirty-region
+  subscription updates.  SoBRLViewportImage and SoBRLImagePlane are in place as
+  standard Obol texture-quad consumers driven by source data/dirty revisions;
+  replace full rebuilds with dirty-region backend texture uploads and connect
+  the display-host/window-host paths.
+* The neutral BRLObolWindowHost contract and imgstream display-host
+  registration are in place for display-capable fb_open.  The first
+  headless/offscreen BRLObolHeadlessWindowHost adapter can drain render
+  requests and capture pixels through SoOffscreenRenderer.  qtcad's
+  QgObolWindowHost can attach a Qt canvas to the same display-host path and
+  can create an owned visible Qt toplevel QgSW host for display-capable
+  framebuffer requests when no canvas exists.  Connect dm_open/display-host
+  routing through that contract, replace the temporary owned-window fallback
+  with final qtcad/qged host policy, and add the Tk/MGED adapter.
+
+Completion for this step:
+
+* fbserv, rt -F, remrt, and representative src/fb tools can run through
+  libimgstream compatibility while display-capable requests are shown by an
+  Obol/libbrlobol display host or fail explicitly when no host is registered.
+* Old framebuffer backend identities no longer define the implementation
+  architecture.
+
+
+Migration Phases
+----------------
+
+Phase 1: Architecture freeze and guardrails
+
+* Document Obol as BRL-CAD's canonical drawing API.
+* Keep brlobol_pivot_guard active in transitional mode.
+* Inventory all current BSG/DM dependencies.
+* Convert the guard to strict mode before hard removal.
+
+Done when:
+
+* The policy is documented.
+* New Obol-canonical directories are clean of BSG/DM dependencies.
+* Legacy violations are inventoried and assigned to later phases.
+
+Phase 2: Productionize libbrlobol
+
+* Complete primitive and hierarchy realization.
+* Add staged provider-neutral LoD realization for large BoTs, starting with
+  POP behind the RT mesh-LoD facade and preserving full-detail fallback for
+  exact operations.
+* Preserve identity, material, visibility, selection, draw intent, edit
+  preview, and diagnostics on Obol nodes/fields/details.
+* Implement snap, measure, pick, export, partial refresh, HUD, overlays,
+  faceplate, grid, axes, ADC, and text behavior with Obol concepts.
+
+Done when:
+
+* libbrlobol can load, realize, inspect, select, pick, snap, measure, export,
+  and render the agreed model set without libbsg/libdm.
+* Large BoTs can render through LoD-backed Obol geometry, refine from view
+  changes, and still support explicit full-detail pick/measure/snap/export
+  policies.
+* Controller rebuild from an existing Obol scene works without lost state.
+* libbrlobol has no generic BSG replacement API.
+
+Phase 3: Migrate qged/qtcad
+
+* Replace visible qtcad rendering with Obol rendering.
+* Move qged open/draw/erase/view/autoview/navigation/pick/select/snap/
+  measure/edit-preview/HUD/screenshot workflows to Obol.
+* Use Obol software/offscreen fallback paths instead of libdm swrast.
+
+Done when:
+
+* qged/qtcad render real models through Obol only.
+* qged/qtcad support the expected interactive workflows through Obol.
+* qged/qtcad no longer link libbsg/libdm or depend on dm_plugins.
+
+Phase 4: Migrate libged, libtclcad, and mged
+
+* Replace bsg_ged_draw* with an Obol-backed GED scene service.
+* Port TclCAD view creation, input handling, refresh, faceplate, and readback
+  to the Obol controller bridge.
+* Keep mged supported with a proper Tcl/Tk Obol widget for performant native
+  rendering when system graphics APIs are available.  Obol offscreen rendering
+  plus Tk image presentation is a fallback path, not the target design.
+* Route display-window creation through the libbrlobol window host contract
+  rather than preserving dm_open as a public display-manager abstraction.
+
+Done when:
+
+* libged and libtclcad no longer link libbsg/libdm.
+* mged core display workflows pass scripted regression tests using Obol.
+* No GED/TclCAD command requires a public bsg_view or dm object.
+
+Phase 5: Remove lower-level BSG/DM dependencies
+
+* Finish moving neutral geometry/debug/export containers to libbg/librt names.
+* Retire BSG vlist and line-layer wrappers.
+* Replace scene text and labels with Obol text.
+* Grow libimgstream from the initial memory-stream target into the owner of
+  useful framebuffer storage, streaming, producer/subscriber, transport,
+  fbserv, and fb compatibility behavior.
+* Move static image/codecs/lookup-table behavior to libicv.
+* Replace libdm framebuffer display behavior with Obol image nodes and
+  libbrlobol display-host/window-host paths.
+
+Done when:
+
+* No non-legacy target in src/source_dirs.cmake depends on libbsg/libdm.
+* Low-level libraries do not include BSG/DM headers for scene or display
+  behavior.
+* Framebuffer tools use libimgstream/fb_compat, libicv, or Obol readback and
+  display paths rather than libdm framebuffer backends.
+
+Phase 6: Hard removal
+
+* Delete installed BSG and DM public headers.
+* Delete libbsg, libdm, and dm_plugins from build and install.
+* Remove temporary allowlists and transitional bridges.
+* Remove obsolete fb_* compatibility wrappers only after rt, remrt, qged,
+  TclCAD/mged, and required tools use libimgstream or Obol directly.  Keep
+  transport and MSG_FB* compatibility where it remains useful independent of
+  the old libdm framebuffer backend API.
+* Update documentation, examples, man pages, package metadata, pkg-config
+  files, and build files.
+* Enable strict dependency checks.
+
+Done when:
+
+* Full build/install produces no libbsg, no libdm, no dm_plugins, and no
+  public BSG/DM headers.
+* No source target links libbsg/libdm.
+* No source code includes BSG/DM headers outside intentionally archived
+  historical documentation.
+* Obol is documented as the canonical BRL-CAD scene API.
+
+
+Verification Baseline
+---------------------
+
+Use this short baseline after doc-only or small migration changes:
+
+* ninja -C build
+* ctest --test-dir build -R
+  '^(brlobol_pivot_guard|rt_view_info|bg_vlist_basic|bg_line_layer_basic|libbsg_feature|libbsg_api_hygiene|libbsg_public_headers|ged_test_gqa|ged_test_cmd_schemas|ged_test_ged_draw_scene|regress-gchecker|regress-gqa)$'
+  --output-on-failure
+* git diff --check
+* rg -n '^<<<<<<< |^=======$|^>>>>>>> |bsg/tig\.h|bsg/vectfont\.h' include
+  src obol_migration.txt CMakeLists.txt misc/CMake
+
+Use broader testing before removing a legacy path:
+
+* full ctest --test-dir build --output-on-failure
+* qged/qtcad workflow tests against pinewood.g, havoc.g, and
+  share/db/faa/Generic_Twin.g once the Obol path is mature enough for the
+  larger mixed implicit/BoT model.
+* Obol render backend tests for Qt GL, offscreen/OSMesa, and NanoRT/software
+  paths as applicable.
+* libimgstream tests for stream lifecycle, resize, pixel operations,
+  dirty-region updates, producer/subscriber lifecycle, icv snapshots,
+  transport, and framebuffer protocol compatibility as applicable.
+* Dependency checks proving the removed BSG/DM path is no longer installed,
+  linked, or included.
+
+
+Performance Gates
+-----------------
+
+Before final BSG/DM removal:
+
+* Initial realization/render on selected regression models should be within
+  25 percent of the current path, or have an explicit documented and accepted
+  reason.
+* Camera-only redraw and selection/pick updates should be equal or faster
+  than the old path on the selected regression models.
+* Small imports and small hierarchy updates must not show pathological
+  scaling.
+* regress-gqa should remain a sub-second test unless the test scope is
+  deliberately expanded.
+
+
+Open Questions
+--------------
+
+* Which Obol upstream APIs need to be added or improved once qtcad uses Obol
+  as the visible renderer?  This needs more implementation evidence and
+  discussion before turning into concrete migration tasks.
+
+Resolved decisions:
+
+* plot3 should gain a normal libbg implementation unit; plot3.h is unlikely to
+  be retired.
+* bg_line_layer-to-plot3 export should remain available as a simple diagnostic
+  output path for debugging without requiring Obol execution.
+* MGED should target a proper Tcl/Tk Obol widget for performant native
+  rendering when system OpenGL/Vulkan/etc. are available; OSMesa/offscreen
+  rendering plus image presentation remains a slower fallback.
+* Residual libdm framebuffer behavior should split as described in
+  fb_plan.txt: libimgstream for mutable streams, producer/subscriber state,
+  transport, fbserv behavior, and fb compatibility; libicv for static images,
+  codecs, and lookup-table image transforms; Obol/libbrlobol for image
+  display, texture nodes, readback, display-host callbacks, and window/input
+  hosting.
+
+
+Final Completion Criteria
+-------------------------
+
+The migration is complete when:
+
+* Obol is the only scene/rendering API used by BRL-CAD interactive
+  applications.
+* qged/qtcad and mged pass their Obol display workflows.
+* libbsg, libdm, and dm_plugins are absent from build, install, public
+  headers, pkg-config files, and linked target graphs.
+* libbrlobol remains BRL-specific and does not contain a generic BSG
+  replacement.
+* Documentation names Obol as the canonical scene API and explains where
+  BRL-CAD Obol extensions live.

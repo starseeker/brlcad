@@ -1,0 +1,268 @@
+/*              B S G _ G E D _ D R A W _ B R E P . C P P
+ * BRL-CAD
+ *
+ * Copyright (c) 2026 United States Government as represented by
+ * the U.S. Army Research Laboratory.
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public License
+ * version 2.1 as published by the Free Software Foundation.
+ *
+ * This library is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this file; see the file named COPYING for more information.
+ */
+/** @file bsg_ged_draw_brep.cpp
+ *
+ * Private BREP/BSPLINE typed geometry publication for libged drawing paths.
+ */
+
+#include "common.h"
+
+#include <string.h>
+
+#include "brep/cdt.h"
+#include "bn/tol.h"
+#include "bu/malloc.h"
+#include "raytrace.h"
+#include "rt/functab.h"
+#include "rt/geom.h"
+#include "rt/primitives/brep.h"
+#include "rt/primitives/bspline.h"
+#include "rt/view.h"
+#include "./ged_private.h"
+#include "./bsg_ged_draw_private.h"
+
+
+struct ged_brep_lod_detail_clbk_data {
+    struct db_i *dbip;
+    struct directory *dp;
+    struct rt_db_internal *intern;
+    const struct bg_tess_tol *ttol;
+    const struct bn_tol *tol;
+    int *faces;
+    int face_cnt;
+    vect_t *normals;
+    point_t *pnts;
+    int pnt_cnt;
+};
+
+
+static int
+_ged_draw_brep_mesh_info_clbk(struct rt_mesh_lod_detail *detail, void *cb_data)
+{
+    if (!detail || !cb_data)
+	return -1;
+
+    struct ged_brep_lod_detail_clbk_data *cd = (struct ged_brep_lod_detail_clbk_data *)cb_data;
+    BU_GET(cd->intern, struct rt_db_internal);
+    RT_DB_INTERNAL_INIT(cd->intern);
+    struct rt_db_internal *ip = cd->intern;
+    int ret = rt_db_get_internal(ip, cd->dp, cd->dbip, NULL);
+    if (ret < 0) {
+	BU_PUT(cd->intern, struct rt_db_internal);
+	cd->intern = NULL;
+	return -1;
+    }
+    if (ip->idb_minor_type != DB5_MINORTYPE_BRLCAD_BREP || !ip->idb_ptr) {
+	rt_db_free_internal(cd->intern);
+	BU_PUT(cd->intern, struct rt_db_internal);
+	cd->intern = NULL;
+	return -1;
+    }
+
+    struct rt_brep_internal *bi = (struct rt_brep_internal *)ip->idb_ptr;
+    RT_BREP_CK_MAGIC(bi);
+
+    ret = brep_cdt_fast(&cd->faces, &cd->face_cnt, &cd->normals,
+	    &cd->pnts, &cd->pnt_cnt, bi->brep, -1, cd->ttol, cd->tol);
+    rt_db_free_internal(cd->intern);
+    BU_PUT(cd->intern, struct rt_db_internal);
+    cd->intern = NULL;
+    if (ret != BRLCAD_OK) {
+	bu_free(cd->faces, "faces");
+	bu_free(cd->normals, "normals");
+	bu_free(cd->pnts, "pnts");
+	cd->faces = NULL;
+	cd->face_cnt = 0;
+	cd->normals = NULL;
+	cd->pnts = NULL;
+	cd->pnt_cnt = 0;
+	return -1;
+    }
+
+    detail->faces = cd->faces;
+    detail->face_count = (cd->face_cnt > 0) ? (size_t)cd->face_cnt : 0;
+    detail->points = (const point_t *)cd->pnts;
+    detail->point_count = (cd->pnt_cnt > 0) ? (size_t)cd->pnt_cnt : 0;
+    detail->points_orig = (const point_t *)cd->pnts;
+    detail->point_orig_count = (cd->pnt_cnt > 0) ? (size_t)cd->pnt_cnt : 0;
+    detail->normals = cd->normals;
+    detail->normal_count = (cd->normals && detail->face_count) ?
+	detail->face_count * 3 : 0;
+
+    return 0;
+}
+
+
+static int
+_ged_draw_brep_mesh_info_clear_clbk(void *cb_data)
+{
+    struct ged_brep_lod_detail_clbk_data *cd = (struct ged_brep_lod_detail_clbk_data *)cb_data;
+    if (!cd)
+	return 0;
+
+    if (cd->intern) {
+	rt_db_free_internal(cd->intern);
+	BU_PUT(cd->intern, struct rt_db_internal);
+	cd->intern = NULL;
+    }
+    bu_free(cd->faces, "faces");
+    bu_free(cd->normals, "normals");
+    bu_free(cd->pnts, "pnts");
+    cd->faces = NULL;
+    cd->face_cnt = 0;
+    cd->normals = NULL;
+    cd->pnts = NULL;
+    cd->pnt_cnt = 0;
+
+    return 0;
+}
+
+
+static int
+_ged_draw_brep_mesh_info_free_clbk(void *cb_data)
+{
+    _ged_draw_brep_mesh_info_clear_clbk(cb_data);
+    struct ged_brep_lod_detail_clbk_data *cd = (struct ged_brep_lod_detail_clbk_data *)cb_data;
+    if (!cd)
+	return 0;
+
+    BU_PUT(cd, struct ged_brep_lod_detail_clbk_data);
+    return 0;
+}
+
+
+extern "C" int
+ged_draw_brep_mesh_lod_detail_setup(struct rt_mesh_lod *lod,
+				    struct db_i *dbip,
+				    struct directory *dp,
+				    const struct bg_tess_tol *ttol,
+				    const struct bn_tol *tol)
+{
+    if (!lod || !dbip || !dp)
+	return 0;
+
+    struct ged_brep_lod_detail_clbk_data *cbd;
+    BU_GET(cbd, struct ged_brep_lod_detail_clbk_data);
+    memset(cbd, 0, sizeof(*cbd));
+    cbd->dbip = dbip;
+    cbd->dp = dp;
+    cbd->ttol = ttol;
+    cbd->tol = tol;
+    if (!rt_mesh_lod_detail_callbacks_set(lod,
+	    &_ged_draw_brep_mesh_info_clbk,
+	    &_ged_draw_brep_mesh_info_clear_clbk,
+	    &_ged_draw_brep_mesh_info_free_clbk,
+	    (void *)cbd)) {
+	_ged_draw_brep_mesh_info_free_clbk((void *)cbd);
+	return 0;
+    }
+
+    return 1;
+}
+
+
+static void
+_ged_draw_realization_line_set_free(struct rt_primitive_lod_realization *realization)
+{
+    if (!realization)
+	return;
+
+    if (realization->line_points)
+	bu_free(realization->line_points, "primitive LoD line-set points");
+    if (realization->line_commands)
+	bu_free(realization->line_commands, "primitive LoD line-set commands");
+    realization->line_points = NULL;
+    realization->line_commands = NULL;
+    realization->line_count = 0;
+    realization->line_capacity = 0;
+    realization->has_line_set = 0;
+}
+
+
+static int
+_ged_draw_scene_ref_publish_realization_line_set(bsg_scene_ref ref,
+						 struct rt_primitive_lod_realization *realization)
+{
+    int ok = 0;
+
+    if (!realization || !realization->has_line_set)
+	return 0;
+
+    ok = realization->line_count ?
+	ged_draw_scene_ref_publish_line_set(ref,
+		(const point_t *)realization->line_points,
+		realization->line_commands, realization->line_count) :
+	ged_draw_scene_ref_geometry_clear(ref);
+
+    _ged_draw_realization_line_set_free(realization);
+    return ok;
+}
+
+
+extern "C" int
+ged_draw_scene_ref_publish_brep_wireframe_line_set(bsg_scene_ref ref,
+						   const struct rt_brep_internal *bi,
+						   const struct bn_tol *tol)
+{
+    struct rt_primitive_lod_realization realization = {};
+    struct rt_db_internal brep_ip;
+    int ret = 0;
+
+    if (!bi)
+	return 0;
+
+    RT_BREP_CK_MAGIC(bi);
+    if (!bi->brep)
+	return 0;
+
+    RT_DB_INTERNAL_INIT(&brep_ip);
+    brep_ip.idb_major_type = DB5_MAJORTYPE_BRLCAD;
+    brep_ip.idb_type = ID_BREP;
+    brep_ip.idb_meth = &OBJ[ID_BREP];
+    brep_ip.idb_ptr = (void *)bi;
+
+    ret = rt_brep_wireframe_line_set(&realization, &brep_ip, tol);
+    if (ret < 0) {
+	_ged_draw_realization_line_set_free(&realization);
+	return 0;
+    }
+
+    return _ged_draw_scene_ref_publish_realization_line_set(ref, &realization);
+}
+
+
+extern "C" int
+ged_draw_scene_ref_publish_bspline_wireframe_line_set(bsg_scene_ref ref,
+						      struct rt_db_internal *ip,
+						      const struct bn_tol *tol)
+{
+    struct rt_primitive_lod_realization realization = {};
+    int ret = 0;
+
+    if (!ip || ip->idb_type != ID_BSPLINE || !ip->idb_ptr)
+	return 0;
+
+    ret = rt_nurb_wireframe_line_set(&realization, ip, tol);
+    if (ret < 0) {
+	_ged_draw_realization_line_set_free(&realization);
+	return 0;
+    }
+
+    return _ged_draw_scene_ref_publish_realization_line_set(ref, &realization);
+}

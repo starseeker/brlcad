@@ -30,6 +30,9 @@ set(
   notes/hypot.txt
   notes/mater.txt
   notes/matrix.txt
+  notes/obol_legacy_dependency_inventory.txt
+  notes/obol_overlay_coverage.txt
+  notes/obol_realization_coverage.txt
   pre_BRL-CAD.bib
 )
 add_doc(documentation_DATA ".")

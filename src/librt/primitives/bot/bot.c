@@ -30,6 +30,7 @@
 #include <string.h> // needed for memset, memcpy, and strlen
 #include <ctype.h> // needed for isdigit() and isspace() in rt_bot_adjust
 
+#include "bg/polygon.h"
 #include "bg/trimesh.h" // needed for the call in rt_bot_bbox
 #include "bg/tri_ray.h"
 #include "vmath.h"

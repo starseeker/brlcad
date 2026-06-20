@@ -24,6 +24,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "rt/view_legacy_bsg.h"
+
 #include "../ged_private.h"
 
 
@@ -36,6 +38,7 @@
 int
 ged_model2view_core(struct ged *gedp, int argc, const char *argv[])
 {
+    mat_t model2view;
     point_t view_pt;
     double model_pt[3]; /* intentionally double for scan */
     static const char *usage = "[x y z]";
@@ -46,9 +49,11 @@ ged_model2view_core(struct ged *gedp, int argc, const char *argv[])
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
+    rt_view_model2view_from_bsg(model2view, gedp->ged_gvp);
+
     /* get the model2view matrix */
     if (argc == 1) {
-	bn_encode_mat(gedp->ged_result_str, gedp->ged_gvp->gv_model2view, 1);
+	bn_encode_mat(gedp->ged_result_str, model2view, 1);
 	return BRLCAD_OK;
     }
 
@@ -61,7 +66,7 @@ ged_model2view_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    MAT4X3PNT(view_pt, gedp->ged_gvp->gv_model2view, model_pt);
+    MAT4X3PNT(view_pt, model2view, model_pt);
     bn_encode_vect(gedp->ged_result_str, view_pt, 1);
 
     return BRLCAD_OK;

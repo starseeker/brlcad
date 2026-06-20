@@ -52,7 +52,7 @@
 
 /* maximum input line buffer size */
 #define BUFSIZE (16*1024)
-#define SIZE (128*1024*1024)
+#define TCL_BLOCK_TARGET (4*1024*1024)
 #define TYPE_LEN 255
 #define NAME_LEN 255
 
@@ -1437,75 +1437,119 @@ arbnbld(void)
 
 
 /**
- * This routine checks the last character in the string to see if it matches the
- * specified character. Used by gettclblock() to check for an escaped return.
- *
+ * Incremental command state for the g2asc Tcl subset.  This lets us avoid
+ * rescanning large quoted payloads on every input line.
  */
-int
-endswith(char *line, char ch)
-{
-    if (*(line+strlen(line)-1) == ch) {
-	return 1;
-    }
-    return 0;
-}
-/**
- * This routine counts the number of open braces and is used to determine whether a Tcl
- * command is complete.
- *
- */
-int
-bracecnt(char *line)
-{
-    char *start;
-    int cnt = 0;
+struct tcl_block_state {
+    int in_quote;
+    int escape;
+    int brace_depth;
+};
 
-    start = line;
-    while (*start != '\0') {
-	if (*start == '{') {
-	    cnt++;
-	} else if (*start == '}') {
-	    cnt--;
-	}
-	start++;
-    }
-    return cnt;
+
+static void
+tcl_block_state_reset(struct tcl_block_state *s)
+{
+    s->in_quote = 0;
+    s->escape = 0;
+    s->brace_depth = 0;
 }
+
+
+static void
+tcl_block_scan(struct tcl_block_state *s, const char *frag)
+{
+    const char *p;
+
+    if (!s || !frag)
+	return;
+
+    for (p = frag; *p; p++) {
+	char c = *p;
+
+	if (s->escape) {
+	    s->escape = 0;
+	    continue;
+	}
+	if (c == '\\') {
+	    s->escape = 1;
+	    continue;
+	}
+
+	if (s->in_quote) {
+	    if (c == '"')
+		s->in_quote = 0;
+	    continue;
+	}
+
+	if (c == '"') {
+	    s->in_quote = 1;
+	    continue;
+	}
+	if (c == '{') {
+	    s->brace_depth++;
+	    continue;
+	}
+	if (c == '}') {
+	    if (s->brace_depth > 0)
+		s->brace_depth--;
+	    continue;
+	}
+    }
+}
+
+
+static int
+tcl_block_state_complete(const struct tcl_block_state *s)
+{
+    return s && !s->in_quote && !s->escape && s->brace_depth == 0;
+}
+
+
 /**
- * This routine reads the next block of Tcl commands. This block is expected to be a Tcl
- * command script and will be fed to an interpreter using Tcl_Eval(). Any escaped returns
- * or open braces are parsed through and concatenated ensuring Tcl commands are complete.
- *
- * SIZE is used as the approximate blocking size allowing to grow past this to close the
- * command line.
+ * This routine reads the next block of complete Tcl commands.  Tcl_CommandComplete
+ * accounts for braces, quotes, brackets, comments, and backslash-newline
+ * continuations.  Accumulate complete commands up to a moderate target size:
+ * this avoids Tcl_Eval overhead for command-dense g2asc output without holding
+ * most of a large input file in one script.
  */
 int
 gettclblock(struct bu_vls *line, FILE *fp)
 {
     int ret = 0;
+    size_t cmd_start = 0;
+    int command_complete = 0;
+    struct tcl_block_state pst;
     struct bu_vls tmp = BU_VLS_INIT_ZERO;
 
+    tcl_block_state_reset(&pst);
     if ((ret=bu_vls_gets(line, fp)) >= 0) {
-	int bcnt = 0;
-	int escapedcr = 0;
-
 	linecnt++;
-	escapedcr = endswith(bu_vls_addr(line), '\\');
-	bcnt = bracecnt(bu_vls_addr(line));
-	while ((ret >= 0) && ((bu_vls_strlen(line) < SIZE) || (escapedcr) || (bcnt != 0))) {
+	tcl_block_scan(&pst, bu_vls_addr(line));
+	if (tcl_block_state_complete(&pst)) {
+	    command_complete = Tcl_CommandComplete(bu_vls_addr(line) + cmd_start);
+	}
+	while (ret >= 0) {
+	    if (command_complete) {
+		if (bu_vls_strlen(line) >= TCL_BLOCK_TARGET) {
+		    break;
+		}
+		cmd_start = bu_vls_strlen(line) + 1;
+		tcl_block_state_reset(&pst);
+	    }
+	    if ((ret=bu_vls_gets(&tmp, fp)) < 0) {
+		break;
+	    }
 	    linecnt++;
-	    if (escapedcr) {
-		bu_vls_trunc(line, (int)bu_vls_strlen(line)-1);
-	    }
-	    if ((ret=bu_vls_gets(&tmp, fp)) > 0) {
-		escapedcr = endswith(bu_vls_addr(&tmp), '\\');
-		bcnt = bcnt + bracecnt(bu_vls_addr(&tmp));
-		bu_vls_putc(line, '\n');
-		bu_vls_strcat(line, bu_vls_addr(&tmp));
-		bu_vls_trunc(&tmp, 0);
+	    bu_vls_putc(line, '\n');
+	    bu_vls_strcat(line, bu_vls_addr(&tmp));
+	    tcl_block_scan(&pst, bu_vls_addr(&tmp));
+	    if (tcl_block_state_complete(&pst)) {
+		command_complete = Tcl_CommandComplete(bu_vls_addr(line) + cmd_start);
 	    } else {
-		escapedcr = 0;
+		command_complete = 0;
 	    }
+	    bu_vls_trunc(&tmp, 0);
 	}
 	ret = (int)bu_vls_strlen(line);
     }
@@ -1547,7 +1591,6 @@ main(int argc, char *argv[])
 	bu_exit(1, "asc2g: can't open files.");
     }
 
-    bu_vls_extend(&line, SIZE);
     bu_vls_strcpy(&str_title, "title");
     bu_vls_strcpy(&str_put, "put ");
 
@@ -1588,6 +1631,7 @@ main(int argc, char *argv[])
 	bu_vls_trunc(&line, 0);
 
 	interp = Tcl_CreateInterp();
+	Tcl_SetVar(interp, "tclcad_disable_events", "1", TCL_GLOBAL_ONLY);
 	tret = Ged_Init(interp);
 	if (tret == TCL_ERROR) {
 	    bu_log("Ged_Init error: %s\n", Tcl_GetStringResult(interp));

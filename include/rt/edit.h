@@ -63,7 +63,7 @@
  * defining the vlist.  Then the instance obj would just hold the matrix and
  * any override info for color, etc.  Need to check how MGED is handling comb
  * instances now, the new drawing layer I think is just creating a new
- * bv_scene_obj for each instance with its own vlist...
+ * scene node for each instance with its own vlist...
  */
 
 #ifndef RT_EDIT_H
@@ -75,17 +75,22 @@
 #include "bn/mat.h"
 #include "bu/parse.h"
 #include "bu/avs.h"
-#include "bv/defines.h"
 #include "rt/defines.h"
 #include "rt/db_internal.h"
 
 __BEGIN_DECLS
 
 struct db_full_path;
+struct bu_data_hash_state;
 
 // Settings used for both solid and matrix edits
 #define RT_EDIT_DEFAULT   -1
 #define RT_EDIT_IDLE       0
+
+/* Clear categories for rt_edit_knobs_reset. */
+#define RT_EDIT_KNOBS_ALL  0
+#define RT_EDIT_KNOBS_RATE 1
+#define RT_EDIT_KNOBS_ABS  2
 
 /**
  * Maximum number of parameters that can be supplied via e_para in a single
@@ -183,6 +188,76 @@ struct db_full_path;
 
 struct rt_edit_map;
 
+/*
+ * View state needed by librt edit operations.
+ *
+ * The gv_* member names intentionally match the legacy view fields used by the
+ * edit implementation.  The owning type is RT-specific, so editing logic does
+ * not store display-scene view pointers.
+ */
+struct rt_edit_view {
+    fastf_t gv_scale;
+    fastf_t gv_base2local;
+    fastf_t gv_local2base;
+
+    char gv_coord;
+    char gv_rotate_about;
+    mat_t gv_rotation;
+    mat_t gv_center;
+    mat_t gv_model2view;
+    mat_t gv_view2model;
+};
+
+struct rt_edit_knobs {
+
+    /* Rate data */
+    vect_t      rot_m;      // rotation - model coords
+    int         rot_m_flag;
+    char        origin_m;
+    void	*rot_m_udata;
+
+    vect_t	rot_o;      // rotation - object coords
+    int		rot_o_flag;
+    char	origin_o;
+    void	*rot_o_udata;
+
+    vect_t      rot_v;      // rotation - view coords
+    int         rot_v_flag;
+    char        origin_v;
+    void	*rot_v_udata;
+
+    fastf_t     sca;        // scale
+    int         sca_flag;
+    void	*sca_udata;
+
+    vect_t      tra_m;      // translation - model coords
+    int         tra_m_flag;
+    void	*tra_m_udata;
+
+    vect_t      tra_v;      // translation - view coords
+    int         tra_v_flag;
+    void	*tra_v_udata;
+
+    /* Absolute data */
+    vect_t      rot_m_abs;       // rotation - model coords
+    vect_t      rot_m_abs_last;
+
+    vect_t      rot_o_abs;       // rotation - object coords
+    vect_t      rot_o_abs_last;
+
+    vect_t      rot_v_abs;       // rotation - view coords
+    vect_t      rot_v_abs_last;
+
+    fastf_t     sca_abs;
+
+    vect_t      tra_m_abs;       // translation - model coords
+    vect_t      tra_m_abs_last;
+
+    vect_t      tra_v_abs;       // translation - view coords
+    vect_t      tra_v_abs_last;
+
+};
+
 struct rt_edit {
 
     struct rt_edit_map *m;
@@ -225,11 +300,13 @@ struct rt_edit {
     struct db_i *dbip;          /**< @brief database instance (for checkpoint/revert) */
 
     // Main view associated with the edit.  This may not be the only view in
-    // which the edit is *visible*, but this should hold the pointer to the
-    // view which will be used to drive any view dependent edit ops.
-    struct bview *vp;
+    // which the edit is *visible*, but it drives view-dependent edit ops.  The
+    // pointer is kept for existing edit code and points at view_storage unless
+    // a specialized caller deliberately supplies another rt_edit_view.
+    struct rt_edit_view view_storage;
+    struct rt_edit_view *vp;
     // Knob based editing data
-    struct bview_knobs k;
+    struct rt_edit_knobs k;
 
     // Current editing operation.  This holds the exact operation being
     // performed (for example, ECMD_TGC_SCALE_A to scale a tgc primitive's
@@ -295,7 +372,7 @@ struct rt_edit {
      * the pattern looks like the following:
      *
      * mat_t model2objview;
-     * struct bview *vp = <current view pointer>;
+     * struct rt_edit_view *vp = <current edit view snapshot>;
      * bn_mat_mul(model2objview, vp->gv_model2view, s->model_changes);
      * ## A second bn_mat_mul might be needed if a perspective matrix is in use
      * dm_loadmatrix(DMP, model2objview, which_eye);
@@ -337,7 +414,7 @@ struct rt_edit {
     double local2base;
 
     // Trigger for view updating
-    int update_views;
+    int view_update_requested;
 
     // vlfree list
     struct bu_list *vlfree;
@@ -367,11 +444,23 @@ struct rt_edit {
 
 /** Create and initialize an rt_edit struct */
 RT_EXPORT extern struct rt_edit *
-rt_edit_create(struct db_full_path *dfp, struct db_i *dbip, struct bn_tol *, struct bview *v);
+rt_edit_create(struct db_full_path *dfp, struct db_i *dbip, struct bn_tol *, const struct rt_edit_view *v);
 
 /** Free a rt_edit struct */
 RT_EXPORT extern void
 rt_edit_destroy(struct rt_edit *s);
+
+RT_EXPORT extern void
+rt_edit_knobs_reset(struct rt_edit_knobs *k, int category);
+
+RT_EXPORT extern unsigned long long
+rt_edit_knobs_hash(struct rt_edit_knobs *k, struct bu_data_hash_state *state);
+
+RT_EXPORT extern void
+rt_edit_view_init(struct rt_edit_view *v);
+
+RT_EXPORT extern void
+rt_edit_set_view(struct rt_edit *s, const struct rt_edit_view *v);
 
 /**
  * Reset an rt_edit back to an idle/empty state without freeing the struct
@@ -401,7 +490,7 @@ rt_edit_reset(struct rt_edit *s);
  */
 RT_EXPORT extern int
 rt_edit_reinit(struct rt_edit *s, struct db_full_path *dfp, struct db_i *dbip,
-               struct bn_tol *tol, struct bview *v);
+               struct bn_tol *tol, const struct rt_edit_view *v);
 
 /**
  * Set a dynamic option for this editing session.
@@ -469,7 +558,7 @@ RT_EXPORT extern int
 rt_edit_knob_cmd_process(
 	struct rt_edit *s,
 	vect_t *rvec, int *do_rot, vect_t *tvec, int *do_tran, int *do_sca,
-        struct bview *v, const char *cmd, fastf_t f,
+        const struct rt_edit_view *v, const char *cmd, fastf_t f,
         char origin, int incr_flag, void *u_data
 	);
 

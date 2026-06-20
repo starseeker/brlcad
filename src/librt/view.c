@@ -19,43 +19,125 @@
  */
 /** @file rt/view.c
  *
- * Information routines to support adaptive plotting.
+ * Information routines to support LoD primitive realization.
  *
  */
 
 #include "common.h"
 
 #include <stdlib.h>
-#include <string.h>
 
-#include "bv.h"
 #include "librt_private.h"
+#include "rt/view.h"
+
+void
+rt_view_info_init(struct rt_view_info *info)
+{
+    struct rt_view_info defaults = RT_VIEW_INFO_INIT;
+    if (info)
+	*info = defaults;
+}
+
+void
+rt_view_info_sanitize(struct rt_view_info *info)
+{
+    if (!info)
+	return;
+
+    if (info->width <= 0)
+	info->width = 1;
+    if (info->height <= 0)
+	info->height = 1;
+    if (info->size <= SMALL_FASTF)
+	info->size = 1.0;
+    if (info->lod.scale <= SMALL_FASTF)
+	info->lod.scale = 1.0;
+    if (info->lod.curve_scale <= SMALL_FASTF)
+	info->lod.curve_scale = 1.0;
+    if (info->lod.point_scale <= SMALL_FASTF)
+	info->lod.point_scale = 1.0;
+}
+
+void
+rt_view_lod_policy_init(struct rt_view_lod_policy *policy)
+{
+    struct rt_view_lod_policy defaults = RT_VIEW_LOD_POLICY_INIT;
+    if (policy)
+	*policy = defaults;
+}
+
+void
+rt_view_lod_policy_sanitize(struct rt_view_lod_policy *policy)
+{
+    if (!policy)
+	return;
+
+    if (policy->scale <= SMALL_FASTF)
+	policy->scale = 1.0;
+    if (policy->curve_scale <= SMALL_FASTF)
+	policy->curve_scale = 1.0;
+    if (policy->point_scale <= SMALL_FASTF)
+	policy->point_scale = 1.0;
+}
+
+static struct rt_view_lod_settings
+view_lod_policy(const struct rt_view_info *info)
+{
+    struct rt_view_lod_settings policy = RT_VIEW_LOD_SETTINGS_INIT;
+    if (info)
+	policy = info->lod;
+    if (policy.curve_scale <= SMALL_FASTF)
+	policy.curve_scale = 1.0;
+    if (policy.point_scale <= SMALL_FASTF)
+	policy.point_scale = 1.0;
+    if (policy.scale <= SMALL_FASTF)
+	policy.scale = 1.0;
+    return policy;
+}
+
+fastf_t
+rt_view_lod_curve_scale(const struct rt_view_info *v)
+{
+    return view_lod_policy(v).curve_scale;
+}
+
+size_t
+rt_view_lod_bot_threshold(const struct rt_view_info *v)
+{
+    return view_lod_policy(v).bot_threshold;
+}
 
 static fastf_t
-view_avg_size(const struct bview *gvp)
+view_avg_size(const struct rt_view_info *info)
 {
     fastf_t view_aspect, x_size, y_size;
 
-    view_aspect = (fastf_t)gvp->gv_width / gvp->gv_height;
-    x_size = gvp->gv_size;
+    if (!info || info->width <= 0 || info->height <= 0 || info->size <= SMALL_FASTF)
+	return 1.0;
+
+    view_aspect = (fastf_t)info->width / info->height;
+    x_size = info->size;
     y_size = x_size / view_aspect;
 
     return (x_size + y_size) / 2.0;
 }
 
 fastf_t
-view_avg_sample_spacing(const struct bview *gvp)
+rt_view_avg_sample_spacing(const struct rt_view_info *info)
 {
     fastf_t avg_view_size, avg_view_samples;
 
-    avg_view_size = view_avg_size(gvp);
-    avg_view_samples = (gvp->gv_width + gvp->gv_height) / 2.0;
+    if (!info || info->width <= 0 || info->height <= 0)
+	return 1.0;
+
+    avg_view_size = view_avg_size(info);
+    avg_view_samples = (info->width + info->height) / 2.0;
 
     return avg_view_size / avg_view_samples;
 }
 
 fastf_t
-solid_point_spacing(const struct bview *gvp, fastf_t solid_width)
+rt_view_solid_point_spacing(const struct rt_view_info *info, fastf_t solid_width)
 {
     fastf_t radius, avg_view_size, avg_sample_spacing;
     point2d_t p1, p2;
@@ -63,7 +145,7 @@ solid_point_spacing(const struct bview *gvp, fastf_t solid_width)
     if (solid_width < SQRT_SMALL_FASTF)
 	solid_width = SQRT_SMALL_FASTF;
 
-    avg_view_size = view_avg_size(gvp);
+    avg_view_size = view_avg_size(info);
 
     /* Now, for the sake of simplicity we're going to make
      * several assumptions:
@@ -110,7 +192,7 @@ solid_point_spacing(const struct bview *gvp, fastf_t solid_width)
     p1[Y] = radius;
     p1[X] = 0.0;
 
-    avg_sample_spacing = view_avg_sample_spacing(gvp);
+    avg_sample_spacing = rt_view_avg_sample_spacing(info);
     if (avg_sample_spacing < radius) {
 	p2[Y] = radius - (avg_sample_spacing);
     } else {
@@ -121,7 +203,7 @@ solid_point_spacing(const struct bview *gvp, fastf_t solid_width)
     }
     p2[X] = sqrt((radius * radius) - (p2[Y] * p2[Y]));
 
-    return DIST_PNT2_PNT2(p1, p2);
+    return DIST_PNT2_PNT2(p1, p2) / view_lod_policy(info).point_scale;
 }
 
 

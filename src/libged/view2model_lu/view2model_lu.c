@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "rt/view_legacy_bsg.h"
+
 #include "../ged_private.h"
 
 
@@ -36,6 +38,8 @@ int
 ged_view2model_lu_core(struct ged *gedp, int argc, const char *argv[])
 {
     fastf_t sf;
+    fastf_t view_scale;
+    mat_t view2model;
     point_t view_pt;
     point_t model_pt;
     double scan[3];
@@ -59,9 +63,11 @@ ged_view2model_lu_core(struct ged *gedp, int argc, const char *argv[])
     /* convert from double to fastf_t */
     VMOVE(view_pt, scan);
 
-    sf = 1.0 / (gedp->ged_gvp->gv_scale * b2lval);
+    rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
+    view_scale = rt_view_scale_from_bsg(gedp->ged_gvp);
+    sf = 1.0 / (view_scale * b2lval);
     VSCALE(view_pt, view_pt, sf);
-    MAT4X3PNT(model_pt, gedp->ged_gvp->gv_view2model, view_pt);
+    MAT4X3PNT(model_pt, view2model, view_pt);
     VSCALE(model_pt, model_pt, gedp->dbip->dbi_base2local);
 
     bn_encode_vect(gedp->ged_result_str, model_pt, 1);

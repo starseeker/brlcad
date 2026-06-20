@@ -42,6 +42,7 @@
 
 extern "C" {
 #include "vmath.h"
+#include "bu/hash.h"
 #include "bu/malloc.h"
 #include "bu/str.h"
 #include "bu/vls.h"
@@ -66,6 +67,157 @@ struct rt_edit_map {
     RT_Edit_Map_Internal *i;
 };
 
+void
+rt_edit_knobs_reset(struct rt_edit_knobs *k, int category)
+{
+    if (!k)
+	return;
+
+    if (!category || category == RT_EDIT_KNOBS_RATE) {
+	k->rot_m_flag = 0;
+	VSETALL(k->rot_m, 0.0);
+
+	k->rot_o_flag = 0;
+	VSETALL(k->rot_o, 0.0);
+
+	k->rot_v_flag = 0;
+	VSETALL(k->rot_v, 0.0);
+
+	k->tra_m_flag = 0;
+	VSETALL(k->tra_m, 0.0);
+
+	k->tra_v_flag = 0;
+	VSETALL(k->tra_v, 0.0);
+
+	k->sca_flag = 0;
+	k->sca = 0.0;
+    }
+
+    if (!category || category == RT_EDIT_KNOBS_ABS) {
+	VSETALL(k->rot_m_abs, 0.0);
+	VSETALL(k->rot_m_abs_last, 0.0);
+
+	VSETALL(k->rot_o_abs, 0.0);
+	VSETALL(k->rot_o_abs_last, 0.0);
+
+	VSETALL(k->rot_v_abs, 0.0);
+	VSETALL(k->rot_v_abs_last, 0.0);
+
+	VSETALL(k->tra_m_abs, 0.0);
+	VSETALL(k->tra_m_abs_last, 0.0);
+
+	VSETALL(k->tra_v_abs, 0.0);
+	VSETALL(k->tra_v_abs_last, 0.0);
+
+	k->sca_abs = 0.0;
+    }
+}
+
+unsigned long long
+rt_edit_knobs_hash(struct rt_edit_knobs *k, struct bu_data_hash_state *state)
+{
+    if (!k)
+	return 0ULL;
+
+    int own_state = 0;
+    if (!state) {
+	state = bu_data_hash_create();
+	if (!state)
+	    return 0ULL;
+	own_state = 1;
+    }
+
+    bu_data_hash_update(state, &k->rot_m, sizeof(k->rot_m));
+    bu_data_hash_update(state, &k->rot_m_flag, sizeof(k->rot_m_flag));
+    bu_data_hash_update(state, &k->origin_m, sizeof(k->origin_m));
+    bu_data_hash_update(state, &k->rot_o, sizeof(k->rot_o));
+    bu_data_hash_update(state, &k->rot_o_flag, sizeof(k->rot_o_flag));
+    bu_data_hash_update(state, &k->origin_o, sizeof(k->origin_o));
+    bu_data_hash_update(state, &k->rot_v, sizeof(k->rot_v));
+    bu_data_hash_update(state, &k->rot_v_flag, sizeof(k->rot_v_flag));
+    bu_data_hash_update(state, &k->origin_v, sizeof(k->origin_v));
+
+    bu_data_hash_update(state, &k->sca, sizeof(k->sca));
+    bu_data_hash_update(state, &k->sca_flag, sizeof(k->sca_flag));
+
+    bu_data_hash_update(state, &k->tra_m, sizeof(k->tra_m));
+    bu_data_hash_update(state, &k->tra_m_flag, sizeof(k->tra_m_flag));
+    bu_data_hash_update(state, &k->tra_v, sizeof(k->tra_v));
+    bu_data_hash_update(state, &k->tra_v_flag, sizeof(k->tra_v_flag));
+
+    bu_data_hash_update(state, &k->rot_m_abs, sizeof(k->rot_m_abs));
+    bu_data_hash_update(state, &k->rot_m_abs_last, sizeof(k->rot_m_abs_last));
+    bu_data_hash_update(state, &k->rot_o_abs, sizeof(k->rot_o_abs));
+    bu_data_hash_update(state, &k->rot_o_abs_last, sizeof(k->rot_o_abs_last));
+    bu_data_hash_update(state, &k->rot_v_abs, sizeof(k->rot_v_abs));
+    bu_data_hash_update(state, &k->rot_v_abs_last, sizeof(k->rot_v_abs_last));
+
+    bu_data_hash_update(state, &k->sca_abs, sizeof(k->sca_abs));
+
+    bu_data_hash_update(state, &k->tra_m_abs, sizeof(k->tra_m_abs));
+    bu_data_hash_update(state, &k->tra_m_abs_last, sizeof(k->tra_m_abs_last));
+    bu_data_hash_update(state, &k->tra_v_abs, sizeof(k->tra_v_abs));
+    bu_data_hash_update(state, &k->tra_v_abs_last, sizeof(k->tra_v_abs_last));
+
+    if (!own_state)
+	return 0ULL;
+
+    unsigned long long hv = bu_data_hash_val(state);
+    bu_data_hash_destroy(state);
+    return hv;
+}
+
+static void
+rt_edit_knobs_init(struct rt_edit_knobs *k)
+{
+    if (!k)
+	return;
+
+    rt_edit_knobs_reset(k, RT_EDIT_KNOBS_ALL);
+    k->origin_m = '\0';
+    k->origin_o = '\0';
+    k->origin_v = '\0';
+    k->rot_m_udata = NULL;
+    k->rot_o_udata = NULL;
+    k->rot_v_udata = NULL;
+    k->sca_udata = NULL;
+    k->tra_m_udata = NULL;
+    k->tra_v_udata = NULL;
+}
+
+void
+rt_edit_view_init(struct rt_edit_view *v)
+{
+    if (!v)
+	return;
+
+    v->gv_scale = 1.0;
+    v->gv_base2local = 1.0;
+    v->gv_local2base = 1.0;
+    v->gv_coord = 'v';
+    v->gv_rotate_about = 'v';
+    MAT_IDN(v->gv_rotation);
+    MAT_IDN(v->gv_center);
+    MAT_IDN(v->gv_model2view);
+    MAT_IDN(v->gv_view2model);
+}
+
+void
+rt_edit_set_view(struct rt_edit *s, const struct rt_edit_view *v)
+{
+    if (!s)
+	return;
+
+    if (!v) {
+	rt_edit_view_init(&s->view_storage);
+	s->vp = NULL;
+	return;
+    }
+
+    s->view_storage = *v;
+    s->vp = &s->view_storage;
+}
+
 extern "C" struct rt_edit_map *
 rt_edit_map_create(void)
 {
@@ -85,7 +237,7 @@ rt_edit_map_destroy(struct rt_edit_map *o)
 }
 
 struct rt_edit *
-rt_edit_create(struct db_full_path *dfp, struct db_i *dbip, struct bn_tol *tol, struct bview *v)
+rt_edit_create(struct db_full_path *dfp, struct db_i *dbip, struct bn_tol *tol, const struct rt_edit_view *v)
 {
     struct rt_edit *s;
     BU_GET(s, struct rt_edit);
@@ -111,16 +263,7 @@ rt_edit_create(struct db_full_path *dfp, struct db_i *dbip, struct bn_tol *tol, 
     memset(s->e_para, 0, sizeof(s->e_para));
     memset(s->e_str,  0, sizeof(s->e_str));
 
-    bv_knobs_reset(&s->k, 0);
-    s->k.origin_m = '\0';
-    s->k.origin_o = '\0';
-    s->k.origin_v = '\0';
-    s->k.rot_m_udata = NULL;
-    s->k.rot_o_udata = NULL;
-    s->k.rot_v_udata = NULL;
-    s->k.sca_udata = NULL;
-    s->k.tra_m_udata = NULL;
-    s->k.tra_v_udata = NULL;
+    rt_edit_knobs_init(&s->k);
 
     s->acc_sc_sol = 1.0;
     s->acc_sc_obj = 1.0;
@@ -142,9 +285,12 @@ rt_edit_create(struct db_full_path *dfp, struct db_i *dbip, struct bn_tol *tol, 
     s->edit_mode = RT_EDIT_DEFAULT;
     s->tol = tol;
     s->u_ptr = NULL;
-    s->update_views = 0;
+    s->view_update_requested = 0;
     s->vlfree = NULL;
-    s->vp = v;
+    rt_edit_view_init(&s->view_storage);
+    s->vp = NULL;
+    if (v)
+	rt_edit_set_view(s, v);
     s->dbip = NULL;
 
     BU_GET(s->log_str, struct bu_vls);
@@ -262,18 +408,7 @@ rt_edit_reset(struct rt_edit *s)
     memset(s->e_para, 0, sizeof(s->e_para));
     memset(s->e_str, 0, sizeof(s->e_str));
 
-    bv_knobs_reset(&s->k, 0);
-    /* bv_knobs_reset() clears numeric knob fields (rates + absolutes) but
-     * does NOT touch origin_m/o/v or *_udata pointers; clear those here. */
-    s->k.origin_m = '\0';
-    s->k.origin_o = '\0';
-    s->k.origin_v = '\0';
-    s->k.rot_m_udata = NULL;
-    s->k.rot_o_udata = NULL;
-    s->k.rot_v_udata = NULL;
-    s->k.sca_udata = NULL;
-    s->k.tra_m_udata = NULL;
-    s->k.tra_v_udata = NULL;
+    rt_edit_knobs_init(&s->k);
 
     s->acc_sc_sol = 1.0;
     s->acc_sc_obj = 1.0;
@@ -292,8 +427,9 @@ rt_edit_reset(struct rt_edit *s)
     s->snap.enabled = 0;
     s->snap.spacing = 1.0;
     s->u_ptr = NULL;
-    s->update_views = 0;
+    s->view_update_requested = 0;
     s->vlfree = NULL;
+    rt_edit_set_view(s, NULL);
 
     bu_vls_trunc(s->log_str, 0);
 }
@@ -301,7 +437,7 @@ rt_edit_reset(struct rt_edit *s)
 
 int
 rt_edit_reinit(struct rt_edit *s, struct db_full_path *dfp, struct db_i *dbip,
-               struct bn_tol *tol, struct bview *v)
+               struct bn_tol *tol, const struct rt_edit_view *v)
 {
     if (!s)
 	return BRLCAD_ERROR;
@@ -310,7 +446,8 @@ rt_edit_reinit(struct rt_edit *s, struct db_full_path *dfp, struct db_i *dbip,
     rt_edit_reset(s);
 
     s->tol = tol;
-    s->vp = v;
+    if (v)
+	rt_edit_set_view(s, v);
 
     if (!dfp || !dbip) {
 	/* Idle init with no solid — matches rt_edit_create(NULL, NULL, ...) behavior.
@@ -577,9 +714,19 @@ int
 rt_edit_knob_cmd_process(
 	struct rt_edit *s,
 	vect_t *rvec, int *do_rot, vect_t *tvec, int *do_tran, int *do_sca,
-	struct bview *v, const char *cmd, fastf_t f,
+	const struct rt_edit_view *v, const char *cmd, fastf_t f,
 	char origin, int incr_flag, void *u_data)
 {
+    if (!s || !rvec || !do_rot || !tvec || !do_tran || !do_sca || !cmd)
+	return BRLCAD_ERROR;
+
+    if (v)
+	rt_edit_set_view(s, v);
+
+    struct rt_edit_view *ev = s->vp;
+    if (!ev)
+	return BRLCAD_ERROR;
+
     char c = (cmd[1] == '\0') ? cmd[0] : cmd[1];
 
     int ind = -1;
@@ -612,7 +759,7 @@ rt_edit_knob_cmd_process(
 	    char *orig;
 	    void **edm;
 
-	    switch (v->gv_coord) {
+	    switch (ev->gv_coord) {
 		case 'm':
 		    rot = &s->k.rot_m[ind];
 		    orig = &s->k.origin_m;
@@ -647,7 +794,7 @@ rt_edit_knob_cmd_process(
 	    fastf_t *tra;
 	    void **edm;
 
-	    switch (v->gv_coord) {
+	    switch (ev->gv_coord) {
 		case 'm':
 		case 'o':
 		    tra = &s->k.tra_m[ind];
@@ -694,7 +841,7 @@ rt_edit_knob_cmd_process(
 
 	    rvec_c = &(*rvec)[ind];
 
-	    switch (v->gv_coord) {
+	    switch (ev->gv_coord) {
 		case 'm':
 		    rot_c = &s->k.rot_m_abs[ind];
 		    rot_lc = &s->k.rot_m_abs_last[ind];
@@ -723,7 +870,7 @@ rt_edit_knob_cmd_process(
 	    fastf_t *arp;
 	    fastf_t *larp;
 
-	    switch (v->gv_coord) {
+	    switch (ev->gv_coord) {
 		case 'm':
 		    arp = s->k.rot_m_abs;
 		    larp = s->k.rot_m_abs_last;
@@ -759,11 +906,11 @@ rt_edit_knob_cmd_process(
 	    fastf_t *eamt = NULL;
 	    fastf_t *leamt = NULL;
 	    fastf_t *tvec_c;
-	    fastf_t sf = f * v->gv_local2base / v->gv_scale;
+	    fastf_t sf = f * ev->gv_local2base / ev->gv_scale;
 
 	    tvec_c = &(*tvec)[ind];
 
-	    switch (v->gv_coord) {
+	    switch (ev->gv_coord) {
 		case 'm':
 		case 'o':
 		    eamt = &s->k.tra_m_abs[ind];
@@ -783,7 +930,7 @@ rt_edit_knob_cmd_process(
 		*tvec_c = f;
 	    } else {
 		*eamt = sf;
-		*tvec_c = f - *leamt * v->gv_scale * v->gv_base2local;
+		*tvec_c = f - *leamt * ev->gv_scale * ev->gv_base2local;
 	    }
 	    *leamt = *eamt;
 
@@ -817,7 +964,7 @@ rt_knob_edit_rot(struct rt_edit *s,
 {
     mat_t temp1, temp2;
 
-    s->update_views = 1;
+    s->view_update_requested = 1;
 
     switch (coords) {
 	case 'm':
@@ -1094,7 +1241,7 @@ rt_edit_process(struct rt_edit *s)
     bu_clbk_t f = NULL;
     void *d = NULL;
 
-    ++s->update_views;
+    ++s->view_update_requested;
 
     int had_method = 0;
     const struct rt_db_internal *ip = &s->es_int;
@@ -1122,7 +1269,7 @@ rt_edit_process(struct rt_edit *s)
 
 	case RT_EDIT_IDLE:
 	    /* do nothing more */
-	    --s->update_views;
+	    --s->view_update_requested;
 	    break;
 	default:
 	    {
@@ -1160,7 +1307,7 @@ rt_edit_process(struct rt_edit *s)
 	(*f)(0, NULL, d, NULL);
 
     // view update callback
-    if (s->update_views) {
+    if (s->view_update_requested) {
 	f = NULL; d = NULL;
 	rt_edit_map_clbk_get(&f, &d, s->m, ECMD_VIEW_UPDATE, BU_CLBK_DURING);
 	if (f)

@@ -1,0 +1,66 @@
+BRL-CAD Obol Legacy Dependency Inventory
+========================================
+
+Scope
+-----
+
+This note is the transitional allowlist for BSG, DM, and dm_plugins
+dependencies while qged/qtcad, GED/TclCAD/mged, and lower-level utility
+targets move to Obol.  It records direct build rows and phase ownership.  The
+Obol pivot guard checks the guarded rows below against src/source_dirs.cmake;
+when a dependency is removed or added, update this note in the same change.
+
+Guarded Direct Dependency Rows
+------------------------------
+
+These rows are intentionally exact.  They document the current direct target
+dependency graph relevant to the Obol pivot:
+
+* libbrlobol: libwdb;librt;libimgstream;libbg;libbu
+* libnmg: libbg;libbn;libbu
+* libbrep: libbg;libbu
+* libanalyze: librt;libbg;libbn;libbu
+* libimgstream: libicv;libbn;libbu
+* libdm: libbsg;librt;libicv;libbn;libpkg;libbu
+* libged: libicv;libanalyze;libwdb;liboptical;libdm;libbsg;libbu
+* libqtcad: libbrlobol;libged;libdm;libbsg;libbg;libbn;libbu
+* libtclcad: libged;libdm;libbsg;libbn;libbu
+* qged: libqtcad
+* mged: libtclcad
+
+The qged executable also has a direct CMake build dependency on dm_plugins:
+
+* qged plugin dependency: dm_plugins
+
+The qtcad Obol workflow test targets are guarded separately.  They may link
+through transitional qtcad/GED libraries while the application is migrating,
+but they must not directly link libdm, libbsg, or dm_plugins:
+
+* qtcad Obol tests: no direct libdm/libbsg/dm_plugins link
+
+Phase Ownership
+---------------
+
+| Area | Current legacy dependency | Owner phase | Removal condition |
+| --- | --- | --- | --- |
+| libbrlobol | No direct libbsg or libdm dependency; direct libimgstream is present for SoBRLImageSource plus SoBRLViewportImage/SoBRLImagePlane image display ownership, the BRLObolWindowHost display-host bridge, and the BRLObolHeadlessWindowHost offscreen adapter, and transitional low-level transitives still arrive through librt/libwdb | Phase 2 and Phase 5 | libbrlobol remains direct-BSG/DM-free while librt/libwdb lower-level BSG dependencies are removed and image display/window hosting stays on libimgstream/Obol contracts |
+| qtcad/qged | libqtcad directly depends on libged, libdm, and libbsg; qged depends on qtcad and dm_plugins; qtcad now has QgObolWindowHost as the first Qt canvas adapter for the Obol/libbrlobol window-host contract, including an owned visible QgSW toplevel fallback for Qt display-host opens without an existing canvas | Phase 3 | qtcad visible rendering, interaction, screenshot/readback, and qged draw/view workflows run through Obol without libdm, libbsg, or dm_plugins |
+| libged | libged directly depends on libdm and libbsg, primarily for bsg_ged_draw, view, faceplate, plot/select/snap/measure, and framebuffer command paths | Phase 4 | GED drawing services update Obol scene/camera/selection state through an Obol-backed service instead of public BSG/DM objects |
+| libtclcad/mged | libtclcad depends on libged, libdm, and libbsg; mged depends on libtclcad and still hosts DM-backed display workflows | Phase 4 | TclCAD/mged view creation, refresh, input, faceplate, and readback use the Obol bridge/offscreen path |
+| libimgstream | Initial libimgstream target depends on libicv, libbn, and libbu only; it provides opaque RGB/RGBA memory streams, stream info snapshots, dirty-region generation, subscriber callbacks, producer begin/end state, icv_image_t snapshot conversion, first fb_compat memory-stream wrappers including RGB/BW rect compatibility, legacy view/getview, window, zoom, cursor/getcursor, scursor, setcursor, reset, viewport, and no-op non-display poll/poll-rate behavior, raw RGB file sink/source compatibility, /dev/stack fan-out compatibility, /dev/null, /dev/debug, and /dev/txt diagnostic sink compatibility, neutral colormap rmap/wmap compatibility, parsed remote/display framebuffer spec normalization, and toolkit-neutral display-host callback delegation without linking libdm, libbsg, or libbrlobol | Phase 5 | Framebuffer storage, streaming, producer/subscriber, transport, fbserv, and fb compatibility behavior move here while display-capable requests delegate to Obol/libbrlobol display hosts |
+| libdm/libbsg | libdm depends on libbsg and provides display/framebuffer/plugin behavior; libbsg remains the compatibility scene layer | Phase 5 and Phase 6 | Framebuffer storage, streaming, producer/subscriber, transport, fbserv, and fb compatibility behavior move to libimgstream; static image/codecs/lookup-table behavior moves to libicv; display-capable framebuffer behavior moves to Obol/libbrlobol image nodes and display-host/window-host paths; then libdm/libbsg and dm_plugins are removed |
+| low-level librt/libbrep/libnmg/libanalyze | src/libbrep, src/libnmg, and NIRT no longer link libbsg directly; include/bg and src/libbg no longer include BSG headers; src/librt, src/libnmg, and NIRT no longer have direct bsg/vlist.h users; librt primitive wire/LoD emitters use RT_PRIMITIVE_* line-command names instead of BSG_GEOMETRY_* names; include/rt and non-test src/librt no longer include the broad bsg.h umbrella header; include/rt/edit.h owns rt_edit_knobs plus its reset/hash helpers instead of embedding bsg_view_knobs from bsg/defines.h, struct rt_edit stores an RT-owned rt_edit_view snapshot instead of a BSG view pointer, BSG-backed edit entry points have moved to explicit include/rt/edit_legacy_bsg.h compatibility adapters, src/librt/edit.cpp is free of BSG edit adapter logic, src/librt/edit_legacy_bsg.cpp owns the BSG view-state adapter implementation, and the src/librt/tests/edit primitive edit tests construct RT-owned edit views without BSG setup; include/rt/view.h owns neutral rt_view_info/rt_view_lod_settings snapshots for RT primitive plot, LoD realization, and indexed-face-set callbacks plus rt_view_info_sanitize for adapter-boundary defaults and RT-prefixed view metric helpers used by primitive LoD code, src/librt/view.c is free of BSG adapter logic, BSG-backed callers use include/rt/view_legacy_bsg.h plus src/librt/view_legacy_bsg.c adapters, libged's lower primitive publication helpers now pass rt_view_info snapshots into those RT callbacks, src/librt/tests/view_info.c stays BSG-free, and src/librt/tests/view_legacy_bsg.c owns the transitional adapter coverage; include/rt/view.h returns opaque rt_mesh_lod handles instead of public bsg_mesh_lod pointers from db_mesh_lod_get, provides RT-owned rt_mesh_lod_load_level, rt_mesh_lod_load_view, and rt_mesh_lod_data_get helpers, limits BSG extraction to include/rt/view_legacy_bsg.h, librt private database state owns a self-initializing opaque rt_mesh_lod_context instead of bsg_mesh_lod_context, and src/librt/tests/lod.c validates cached LoD levels through the RT mesh-LoD helpers without BSG scene-node setup; include/rt/primitives/sketch.h returns opaque rt_sketch_polygon handles for sketch polygon conversion, src/librt/primitives/sketch/polygons.c stores RT-owned polygon state without BSG headers, and old bsg_polygon_ref adapters are limited to include/rt/primitives/sketch_legacy_bsg.h plus src/librt/primitives/sketch/polygons_legacy_bsg.c; NIRT segment plotting uses BG vlist/vlblock helpers through libanalyze's direct libbg dependency; remaining BSG vlist/vlblock references are in libdm display paths, compatibility headers/tests, and legacy conversion/tools | Phase 5 | Neutral vlist, plot, line-layer, view-info, mesh-LoD handles, sketch polygon conversion handles, and diagnostic containers use bg/rt names and do not require BSG scene/display APIs |
+| utility applications | fb, fbserv, rt, art, util, and remrt keep direct libdm rows in source_dirs.cmake; dxf-g, IGES drawing import, g-jack, g-off, ganalyze, and tea_nmg now use bg/vlist.h directly for vlist/uplot work instead of bsg/vlist.h compatibility aliases | Phase 5 | Each remaining libdm use is deleted, routed through libimgstream/fb_compat, replaced by Obol readback/display, or assigned to libicv image-processing utilities; converted utility vlist/debug output paths stay on BG/RT names rather than BSG names |
+
+Guard Expansion Rules
+---------------------
+
+1. New Obol-canonical files must be added to brlobol_pivot_guard.cmake rather
+   than relying on this inventory.
+2. New qtcad Obol workflow tests must stay direct-libdm/libbsg/dm_plugins-free.
+3. Any new direct libbsg, libdm, or dm_plugins dependency must add a phase owner
+   and a removal condition here.
+4. Removing a legacy dependency should shrink this inventory and the guard's
+   exact dependency-row allowlist in the same patch.
+5. Temporary adapters such as qtcad draw-transaction sync are allowed only while
+   they bridge an existing legacy API to an Obol-owned state path.

@@ -29,12 +29,10 @@
 
 #include "bu/cmd.h"
 #include "bu/opt.h"
-#include "bv/lod.h"
 #include "../../librt/librt_private.h"
 
+#include "ged/event_txn.h"
 #include "../ged_private.h"
-
-#include "../dbi.h"
 
 extern "C" int
 ged_opendb_core(struct ged *gedp, int argc, const char *argv[])
@@ -135,15 +133,7 @@ ged_opendb_core(struct ged *gedp, int argc, const char *argv[])
 
     /* Set up the new database info in gedp */
     gedp->dbip = new_dbip;
-
-    // LoD context creation (DbiState initialization can use info
-    // stored here, so do this first)
-    if (gedp->new_cmd_forms)
-	gedp->ged_lod = bv_mesh_lod_context_create(argv[0]);
-
-    // If enabled, set up the DbiState container for fast structure access
-    if (gedp->new_cmd_forms)
-	gedp->dbi_state = new DbiState(gedp);
+    ged_event_librt_callbacks_enable(gedp);
 
     // Set the view units, if we have a view
     if (gedp->ged_gvp) {

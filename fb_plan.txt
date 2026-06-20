@@ -1,0 +1,931 @@
+BRL-CAD Framebuffer / Image Stream Migration Plan
+=================================================
+
+Purpose
+-------
+
+This document records the planned framebuffer cleanup discussed as part of
+the Obol migration work.
+
+The target direction is:
+
+* Obol owns image display, placement, layering, texture upload, readback, and
+  rendering backend selection.
+* libimgstream owns live mutable image streams, async image producers,
+  transport, dirty-update notification, and compatibility with current
+  framebuffer streaming workflows.
+* libicv owns static image containers, codecs, image file I/O, and image
+  transforms.
+* libdm should stop being the place where framebuffer storage, display,
+  streaming, remote transport, and image conversion are all mixed together.
+
+This is consistent with obol_migration.txt: Obol replaces libdm's
+rendering/display role, while non-display framebuffer and image-streaming
+behavior that still matters moves to a small non-display library or an Obol
+readback path.
+
+
+Terminology
+-----------
+
+Framebuffer
+    The legacy libdm/libfb-style object and API: struct fb, fb_open,
+    fb_write, fb_refresh, /dev/mem, /dev/remote, /dev/qtgl, etc.
+
+Image stream
+    The new non-display concept: a mutable image buffer with pixel format,
+    dimensions, generation state, dirty rectangles, producer lifecycle,
+    subscribers, optional transport, and snapshot/readback support.
+
+Image node / texture node
+    The Obol-side display object responsible for showing an image stream or
+    static image in a view, HUD, overlay, underlay, or 3D scene placement.
+
+fb compatibility
+    Transitional support for existing framebuffer APIs, command line options,
+    protocol messages, environment variables, and tools while callers are
+    migrated.
+
+
+Guiding Decisions
+-----------------
+
+* libimgstream is the new library name.
+* libimgstream is not a new display backend system.
+* Obol is the only long-term display/rendering authority.
+* libimgstream should preserve useful framebuffer workflows without preserving
+  the old backend model.
+* Existing transport and deployment mechanisms are not inherently legacy and
+  should remain supported:
+
+  * host:port addressing
+  * ipc:<addr> addressing
+  * PKG_ADDR child-process handoff
+  * FBSERV_TOKEN authentication
+  * FBSERV_TLS transport security enablement
+
+* What becomes legacy is the old libdm/libfb device abstraction around those
+  transports: fb_open, /dev/remote, MSG_FB* as the primary application model,
+  and routing image updates through a display backend struct fb.
+* Public libimgstream API names should use an imgstream_* prefix.  Initial
+  naming should follow the pattern of imgstream_server_listen,
+  imgstream_connect, imgstream_connect_uri, imgstream_server_set_tls, and
+  imgstream_server_set_auth_token.
+* The first public libimgstream API should stay small and opaque.  Start with
+  stream lifecycle/info, pixel read/write, subscription/producer lifecycle,
+  and transport APIs.  Avoid exposing a broad sink/source abstraction
+  hierarchy until there are enough concrete users to justify it.
+* fb compatibility should live inside the libimgstream library as clearly
+  scoped fb_compat.h and fb_compat.c files.  Do not add a separate
+  compatibility library unless implementation experience proves there is a
+  strong reason to split it.
+* The MSG_FB* protocol should remain supported unless a specific technical or
+  security reason is found not to support a particular message.  This keeps
+  older and external clients viable while changing the internal implementation
+  target from framebuffer backend to image stream.
+* MSG_FB* messages that are fundamentally display state, such as view and
+  cursor messages, should be preserved in compatibility state when possible.
+  They should not affect core libimgstream pixel storage.  If no meaningful
+  Obol/app translation exists for a request, report it explicitly as
+  unsupported.
+* /dev/mem becomes moot as a framebuffer backend, but its useful behavior
+  becomes the core libimgstream in-memory stream/buffer.
+* /dev/disk and /dev/stack should not remain framebuffer backends.  Their
+  useful behavior becomes file sinks/sources and fan-out sinks.
+* Existing /dev/* framebuffer specifiers should be translated under the hood
+  to appropriate libimgstream, file, transport, diagnostic, or Obol behavior
+  where that can be done faithfully.  When an older interface cannot be
+  imitated successfully, report it explicitly as unsupported.
+* Display-backend specifiers such as /dev/qtgl, /dev/ogl, /dev/wgl, /dev/X,
+  and /dev/swrast are not true framebuffer backends in the target design.
+  Translate them to "display this stream through the active Obol view" when an
+  application context exists.  Otherwise report them as unsupported.
+* The src/fb utility question is separate from this migration.  Unless an
+  architectural change forces a break, leave the tools working as they are
+  and route their existing framebuffer calls through compatibility.
+* Pan, zoom, cursor, overlay/underlay/interlay placement, HUD alignment, and
+  texture upload are display concerns.  They belong in Obol or application UI
+  code, not in libimgstream core.
+* Existing framebuffer view, cursor, poll, expose/resize, linger, and simple
+  mouse behavior should be treated as compatibility/display state.  Preserve
+  it where practical, but do not let it define the core image-stream API.
+
+
+Target Ownership
+----------------
+
+libimgstream:
+
+* Image stream/buffer object.
+* Pixel format, dimensions, stride, and optional metadata.
+* Dirty rectangle accumulation and generation counters.
+* Clear, read, write, read-rect, write-rect, and snapshot operations.
+* Resize policy, including active-producer/active-client protection.
+* Producer lifecycle: begin, update, end, cancel/error.
+* Subscriber callbacks for dirty regions, resize, completion, and failure.
+* Fan-out support for publishing one stream to multiple sinks/subscribers.
+* Local in-memory stream implementation.
+* File sink/source glue for raw pixel/image workflows where appropriate.
+* Network and local IPC transport for image-stream clients and servers.
+* fb compatibility layer for current fbserv/remrt/rt workflows.
+* Test/null/debug sinks for diagnostics that do not imply a display backend.
+
+Initial public API groups:
+
+* Stream lifecycle and metadata:
+
+  * imgstream_create
+  * imgstream_destroy
+  * imgstream_get_info
+  * imgstream_resize
+
+* Pixel access and snapshots:
+
+  * imgstream_clear
+  * imgstream_write
+  * imgstream_write_rect
+  * imgstream_read
+  * imgstream_read_rect
+  * imgstream_snapshot_icv
+
+* Subscriptions and producers:
+
+  * imgstream_subscribe
+  * imgstream_unsubscribe
+  * imgstream_producer_begin
+  * imgstream_producer_end
+
+* Transport:
+
+  * imgstream_server_listen
+  * imgstream_connect
+  * imgstream_connect_uri
+  * imgstream_server_set_tls
+  * imgstream_server_set_auth_token
+
+libimgstream fb compatibility:
+
+* Implemented in libimgstream, initially as fb_compat.h and fb_compat.c.
+* Existing fbserv-style server/client lifecycle.
+* Existing local IPC and TCP behavior.
+* Existing host:port and ipc:<addr> addressing behavior.
+* Existing PKG_ADDR handoff behavior.
+* Existing FBSERV_TOKEN and FBSERV_TLS behavior.
+* Existing MSG_FB* framebuffer protocol compatibility where needed by rt,
+  remrt, fbserv, old fb tools, and older/external clients.
+* Translators from old fb operations to libimgstream operations.
+* Translators from old /dev/* framebuffer specifiers to new behavior where
+  possible, with explicit unsupported diagnostics where not possible.
+* Legacy framebuffer view state: fb_view, fb_getview, old fb_window,
+  old fb_zoom, and MSG_FBVIEW/MSG_FBGETVIEW/MSG_FBWINDOW/MSG_FBZOOM.
+* Legacy framebuffer cursor state: fb_cursor, fb_getcursor, fb_scursor,
+  fb_setcursor, and MSG_FBCURSOR/MSG_FBGETCURSOR/MSG_FBSCURSOR/
+  MSG_FBSETCURSOR.
+* Legacy event pumping: fb_poll, fb_poll_rate, and MSG_FBPOLL, mapped to the
+  registered display host where one exists and treated as a no-op or explicit
+  unsupported operation for non-display streams as appropriate.
+* Legacy ColorMap state and fb_rmap/fb_wmap compatibility, translated to and
+  from neutral libicv color lookup table operations where image processing is
+  needed.
+
+libicv:
+
+* Static image containers and image manipulation.
+* Image file read/write and codec support.
+* Raw pix/bw/gif/png/etc. conversion logic.
+* Image-size helpers that are not stream-specific.
+* Neutral color lookup table representation and operations, independent of
+  libdm and struct fb.
+* Color transforms and colormap-like image operations where they are
+  image-processing features rather than framebuffer/display state.
+* Helpers to apply lookup tables to icv_image_t data.
+* Helpers to generate common lookup tables such as linear, inverse, gamma,
+  and false-color maps.
+* Optional cmap file read/write support if the file format remains useful as
+  a generic lookup-table interchange format.
+
+Obol / libbrlobol:
+
+* Image and texture scene nodes.
+* Live image-stream node or field connection to libimgstream.
+* HUD, overlay, underlay, viewport-aligned image, and 3D image pane placement.
+* Texture upload and dirty-region synchronization.
+* Display ordering, depth behavior, transparency, and compositing.
+* Readback path for saving the current rendered view or texture result.
+* Headless/null/diagnostic rendering through Obol backend policy.
+* Framebuffer display-compatibility controls supplied by libimgstream/fb_compat
+  through the registered display-host callback: source view center, source
+  pixel zoom, cursor overlay/native cursor state, expose refresh, resize, and
+  close/linger policy.
+
+Recommended Obol node split:
+
+* Use three node types, not four.  Static image and live stream behavior are
+  different source modes, not different display concepts.
+* SoBRLImageSource owns image data source metadata and connection state.
+* SoBRLViewportImage displays an image source in viewport/camera-aligned
+  space, covering framebuffer-style HUD, overlay, underlay, and render
+  progress display.
+* SoBRLImagePlane displays an image source as a textured rectangular object in
+  the 3D scene.
+* Do not expose backend texture IDs, OpenGL handles, Vulkan handles, or other
+  renderer-specific resources through these nodes.
+* SoBRLImageSource should receive dirty-region notifications from
+  libimgstream, increment revision fields, and let Obol/backend render code
+  realize the needed texture updates.
+
+SoBRLImageSource:
+
+* Purpose: source of image data for both static icv_image_t data and live
+  libimgstream streams.
+* Suggested fields:
+
+  * imageId
+  * sourceUri
+  * sourceKind: EMPTY, STATIC_IMAGE, IMAGE_STREAM
+  * status: EMPTY, READY, STREAMING, FAILED
+  * diagnostic
+  * pixelWidth
+  * pixelHeight
+  * pixelFormat
+  * colorSpace
+  * alphaMode
+  * sourceRevision
+  * dataRevision
+  * dirtyRevision
+
+* Suggested non-field methods:
+
+  * setImage(const icv_image_t *img)
+  * setStream(struct imgstream *stream)
+  * snapshot(void) const
+
+SoBRLViewportImage:
+
+* Purpose: viewport-aligned image display.  This should be the Obol
+  replacement for framebuffer HUD/overlay/underlay display behavior.
+* Suggested fields:
+
+  * imageSource
+  * overlayId
+  * visible
+  * layer: UNDERLAY, OVERLAY, HUD
+  * zOrder
+  * anchor: LOWER_LEFT, LOWER_RIGHT, UPPER_LEFT, UPPER_RIGHT, CENTER
+  * units: PIXELS, NORMALIZED
+  * position
+  * size
+  * fit: NATIVE, STRETCH, CONTAIN, COVER
+  * opacity
+  * preserveAspect
+  * sourceCenter
+  * sourceZoom
+  * cursorVisible
+  * cursorImagePosition
+  * cursorShape
+
+SoBRLImagePlane:
+
+* Purpose: 3D image pane, implemented as a scene-space textured rectangular
+  shape.
+* Suggested fields:
+
+  * imageSource
+  * sourcePath
+  * sourceId
+  * visible
+  * selectable
+  * width
+  * height
+  * sizeMode: IMAGE_ASPECT, EXPLICIT_SIZE
+  * fit: STRETCH, CONTAIN, COVER
+  * opacity
+  * doubleSided
+  * depthTest
+  * depthWrite
+
+Applications and adapters:
+
+* qtcad/qged own Qt event-loop integration and notifier wiring.
+* TclCAD/mged own Tcl event-loop integration during transition.
+* GED commands use Obol and libimgstream through narrow bridges.
+* rt/remrt initially use fb compatibility, then migrate to native
+  libimgstream producer APIs.
+
+
+Window Creation / dm_open Direction
+-----------------------------------
+
+The toolkit-agnostic "create a view window" feature should move to
+libbrlobol.  It does not warrant a separate library.
+
+The long-term API should be a small libbrlobol window host contract around
+BRLObolViewController and Obol rendering, not a new public dm_open or a new
+public display-capable fb_open.
+
+Suggested concepts:
+
+* BRLObolWindowHost
+* BRLObolWindowDesc
+* BRLObolInputProfile
+* BRLObolInputEvent
+* BRLObolInputAction
+
+The libbrlobol window host should own:
+
+* toplevel, embedded, and headless/offscreen window modes
+* requested width, height, title, display/screen, and visibility hints
+* native surface/context creation through hidden toolkit adapters
+* BRLObolViewController attachment
+* normalized key, pointer, wheel, resize, focus, close, and expose events
+* semantic input profiles and bindings
+* render requests and event-loop integration
+
+Toolkit details should be hidden behind adapters:
+
+* Qt adapter
+* Tk adapter
+* GLFW adapter if needed
+* headless/offscreen adapter
+* diagnostic/null adapter
+
+The public user contract should not expose Tk_Window, Tcl_Interp,
+QOpenGLWidget, GLX windows, WGL HWNDs, or GLFWwindow pointers.  Toolkit-native
+handles may exist only in adapter-private implementation or explicit
+application integration hooks.
+
+Input bindings should be described in toolkit-neutral terms.  Native toolkit
+events should be normalized to BRLObolInputEvent values, and bindings should
+trigger semantic actions such as:
+
+* view.rotate
+* view.pan
+* view.zoom
+* view.center
+* view.front
+* view.top
+* app.cancel
+* app.accept
+
+Bindings should not be Tcl strings in the long-term contract.  The Tk adapter
+may translate legacy Tcl bindings during migration, but new code should use
+semantic input profiles.
+
+dm_open / display-capable fb_open compatibility:
+
+* dm_open remains as a compatibility wrapper during migration.
+* fb_open remains as a compatibility wrapper during migration.
+* dm_open and display-capable fb_open requests should use the same window host
+  concept.  Do not preserve separate toolkit-specific window creation paths
+  for display managers and framebuffers.
+* -W, -N, and -s become size hints.
+* -d becomes a display/screen hint.
+* -t becomes toplevel/embedded mode.
+* -n remains legacy window-id/Tk-path spelling for Tk compatibility.
+* -i remains legacy Tcl init/binding hook only and should not be part of the
+  new libbrlobol window host API.
+* Legacy dm type names become backend/toolkit hints.
+* Legacy framebuffer display names become stream-display hints.
+* swrast maps to headless/offscreen rendering where no native window is
+  required.
+* qtgl requires an existing Qt application/widget integration context until
+  the Qt adapter can create the host itself.
+* ogl, wgl, X, and tkswrast map to legacy Tk/window adapter behavior while
+  those compatibility paths exist.
+* nu/txt map to diagnostic/no-render window hosts.
+
+Dependency boundary:
+
+* libimgstream should not depend directly on libbrlobol.  libbrlobol consumes
+  libimgstream streams for display, so a direct libimgstream-to-libbrlobol
+  dependency would create the wrong dependency direction.
+* Pure image-stream fb_open compatibility stays inside libimgstream/fb_compat:
+  memory, file, stack/fan-out, remote, null, debug, and protocol behavior.
+* Display-capable fb_open compatibility creates or obtains an image stream and
+  delegates display/window creation through a registered display-host callback
+  supplied by libbrlobol or the application.
+* If no display-host callback is registered, display-capable framebuffer names
+  should fail with an explicit unsupported diagnostic rather than silently
+  choosing a toolkit backend.
+
+The current rt path uses framebuffer APIs rather than dm_open directly.  Its
+visible-window behavior should be preserved by routing display-capable
+framebuffer specs through libimgstream/fb_compat and then into a registered
+libbrlobol window host when a visible window is requested.
+
+
+Framebuffer Display Controls / Input Compatibility
+--------------------------------------------------
+
+The current framebuffer API has more display behavior than just pixel
+storage.  The migration should preserve the useful parts as compatibility
+state and display-host actions:
+
+* fb_view/fb_getview define a display transform over the image: source center
+  and X/Y pixel zoom.  Old fb_window and fb_zoom are equivalent compatibility
+  spellings.  This should not mutate stream pixels.
+* The compatibility layer should store view state even for non-display
+  streams so legacy clients can round-trip fb_getview.  If a display host is
+  attached, the state is applied to the Obol viewport image.
+* fb_cursor/fb_getcursor define image-space cursor visibility and position.
+  fb_scursor is the older screen-space cursor call.  Preserve both in
+  fb_compat; translate to display-host cursor actions when possible.
+* fb_setcursor defines an optional custom bitmap cursor shape.  The old bit
+  ordering and origin semantics should stay isolated in fb_compat, with
+  conversion to an Obol cursor overlay or native toolkit cursor if supported.
+* If a display host does not support custom cursor shapes, keep the cursor
+  state and report unsupported only when a caller depends on the shape being
+  realized.
+* fb_poll and fb_poll_rate are event-pump compatibility APIs.  For visible
+  display hosts, fb_poll should pump pending host events and return the
+  legacy closed/done indication.  For non-display streams, it should be a
+  no-op with the same practical behavior as current null/memory interfaces.
+* Expose events request redraw/refresh of the current image.  Resize events
+  update the display viewport and should not corrupt the underlying stream;
+  active-producer stream resize protection remains a libimgstream concern.
+* Old X/OGL display framebuffers provide simple built-in pointer behavior:
+  middle click logs the RGB value under the pointer, right click marks the
+  standalone/lingering window closed, and Ctrl/Meta/Cmd modified Button1 is
+  remapped to Button2/Button3 for one-button mouse compatibility.  Preserve
+  these as a legacy framebuffer input profile in libbrlobol, not as core
+  image-stream behavior.
+* Standalone/linger behavior is a window close policy.  It belongs in the
+  libbrlobol display host, with fb_compat selecting the policy requested by
+  legacy framebuffer names or options.
+* Terminal-driven tools such as fbpoint and fbzoom read keyboard input
+  themselves and call fb_cursor/fb_view.  They should continue to work through
+  those compatibility APIs; their keybindings do not need to become global
+  Obol window bindings.
+* MSG_FBCURSOR, MSG_FBGETCURSOR, MSG_FBSCURSOR, MSG_FBSETCURSOR, MSG_FBVIEW,
+  MSG_FBGETVIEW, MSG_FBWINDOW, MSG_FBZOOM, and MSG_FBPOLL should be included
+  in the MSG_FB* compatibility set.
+
+This keeps the old interactive framebuffer affordances available where they
+matter while making the new abstraction explicit: image streams hold pixels;
+Obol viewport images display pixels; libbrlobol window hosts normalize
+toolkit events and implement compatibility input profiles.
+
+
+Current Pieces and Where They Go
+--------------------------------
+
+include/dm.h framebuffer API:
+
+* Final state: removed from public libdm.
+* Transitional state: wrappers may remain only as fb compatibility.
+
+include/dm/fbserv.h and src/libdm/fbserv.c:
+
+* Move conceptually to libimgstream.
+* Replace struct fb target with an imgstream buffer/sink target.
+* Keep transport and protocol behavior needed by current workflows.
+
+src/libdm/if_mem.c:
+
+* Remove as a backend.
+* Reimplement useful behavior as the core in-memory libimgstream buffer.
+
+src/libdm/if_disk.c:
+
+* Remove as a backend.
+* Preserve useful behavior as raw pixel/image file sink/source support via
+  libicv and libimgstream.
+* Existing ordinary file path behavior can remain in command compatibility.
+
+src/libdm/if_stack.c:
+
+* Remove as a backend.
+* Preserve useful behavior as libimgstream fan-out or tool-level pipeline
+  composition.
+
+src/libdm/if_remote.c:
+
+* Remove as a libdm backend.
+* Preserve useful behavior as libimgstream transport/client support.
+* Keep host:port, ipc:<addr>, PKG_ADDR, FBSERV_TOKEN, and FBSERV_TLS.
+
+src/libdm/null/if_null.c and src/libdm/txt/if_debug.c:
+
+* Remove as framebuffer backends.
+* Preserve useful behavior as diagnostic/test sinks or Obol diagnostic
+  backend behavior.
+
+src/libdm/qtgl/fb-qtgl.cpp, src/libdm/glx/if_ogl.c,
+src/libdm/wgl/if_wgl.c, src/libdm/X/if_X24.c,
+src/libdm/swrast/fb-swrast.cpp:
+
+* Remove as framebuffer display backends.
+* Replace display behavior with Obol image/texture nodes and Obol rendering
+  backends.
+
+src/libdm/fb_generic.c:
+
+* Split useful image/container helpers into libicv/libimgstream.
+* Move fb API wrappers to compatibility only.
+* Remove backend selection and display coupling.
+
+src/libdm/fb_rect.c:
+
+* Replace with libimgstream rect read/write APIs.
+
+src/libdm/fb_paged_io.c:
+
+* Remove unless a demonstrated compatibility need remains.
+* New streaming chunking should live in transport code, not in a public fb
+  paging API.
+
+src/libdm/fb_util.c:
+
+* Move non-display image helpers where still needed.
+* Move view/cursor/pan/zoom semantics to Obol or app UI.
+
+src/fb command line tools:
+
+* Leave tools working as they are unless the architecture forces a specific
+  change.
+* Route existing framebuffer calls and /dev/* specifiers through compatibility
+  under the hood.
+* Report unsupported legacy interfaces explicitly when they cannot be
+  faithfully imitated.
+* Treat any broader redesign or retirement of src/fb tools as a separate
+  effort.
+
+
+Legacy Device Specifier Mapping
+-------------------------------
+
+The old /dev/* framebuffer names should remain compatibility input spelling
+where practical, but they should not define the new architecture.
+
+Recommended mapping:
+
+* /dev/mem maps to an in-memory libimgstream stream.
+* Ordinary file paths and old disk behavior map to file sink/source behavior.
+* /dev/disk maps to file sink/source behavior where the old semantics can be
+  identified.
+* /dev/stack maps to a libimgstream fan-out sink where possible.
+* /dev/remote maps to imgstream_connect_uri or equivalent transport support.
+* /dev/null maps to a null/test sink.
+* /dev/debug maps to a diagnostic sink or logging behavior.
+* /dev/qtgl, /dev/ogl, /dev/wgl, /dev/X, and /dev/swrast are no longer true
+  framebuffer backends.  If an active application Obol view exists, translate
+  them to display the stream through that view.  If no such context exists,
+  report the request as unsupported.
+
+
+Colormap Working Position
+-------------------------
+
+The existing ColorMap model is a 256-entry RGB transfer table with 16-bit
+channel values.  It was originally tied to hardware and framebuffer display
+behavior: fb_rmap/fb_wmap, cmap files, gamma tables, false/inverse color
+maps, and software or hardware display mapping in X/WGL/swrast paths.
+
+Colormapping still has utility, but not as part of the core image-stream
+storage model.
+
+Recommended treatment:
+
+* Preserve legacy ColorMap state, fb_rmap/fb_wmap, default-linear-map
+  behavior, /dev/* colormap behavior, and MSG_FB* rmap/wmap protocol handling
+  in fb_compat.h/fb_compat.c.
+* Define any reusable new lookup-table representation in libicv, not in
+  libdm or libimgstream core.
+* Keep libicv's lookup-table API independent of dm.h, struct fb, and the
+  legacy ColorMap public type.
+* Let fb_compat translate between legacy ColorMap values and the neutral
+  libicv lookup-table representation when image-processing operations are
+  needed.
+* Preserve existing cmap-related tools through framebuffer compatibility.
+* Keep linear map as the default.
+* Treat non-linear maps as optional display/export transforms.  Applying a
+  map to pixels is a libicv image operation; maintaining an active
+  framebuffer colormap for an old client is fb_compat state; showing a
+  mapped image in a view is an Obol display-transform question.
+* In Obol, prefer display-node ownership for optional colormap/display
+  transforms.  Keeping the source as pixels allows two SoBRLViewportImage or
+  SoBRLImagePlane instances to show the same SoBRLImageSource with different
+  gamma, inverse, false-color, or compatibility transforms.
+* Do not make every libimgstream buffer carry a mandatory colormap.
+* Do not model hardware colormap behavior in libimgstream core.
+
+This keeps useful workflows such as gamma correction, inverse video,
+false-color display, and "crunch colormap on export" available without
+letting legacy display hardware assumptions drive the new stream API.
+
+
+Compatibility That Should Survive
+---------------------------------
+
+The following capabilities should continue to work, even after libdm
+framebuffers are removed:
+
+* Render producer streams image data to a display process.
+* A local child process discovers the server endpoint through PKG_ADDR.
+* A remote process can connect using host:port.
+* A local IPC client can connect using ipc:<addr>.
+* Authentication can be controlled with token support, including
+  FBSERV_TOKEN compatibility.
+* TLS can be enabled/configured with FBSERV_TLS compatibility.
+* fbserv can continue to exist as a command, backed by libimgstream.
+* rt -F and remrt workflows continue initially through fb compatibility, then
+  migrate to native libimgstream options/APIs.
+* Existing src/fb tools continue to work through compatibility unless a
+  specific interface cannot be imitated.
+
+The names and environment variables can remain stable.  The implementation
+target changes from "remote framebuffer device" to "image stream transport."
+
+
+What Gets Removed In The Final State
+------------------------------------
+
+* Public struct fb and fb_* APIs from libdm headers.
+* libdm framebuffer backend registration and selection.
+* dm_plugins framebuffer plugin behavior.
+* Canonical /dev/mem, /dev/disk, /dev/stack, /dev/remote, /dev/debug,
+  /dev/null, /dev/qtgl, /dev/ogl, /dev/wgl, /dev/swrast, and /dev/X
+  framebuffer device identities.
+* framebuffer pan/zoom/view/cursor as image storage APIs.
+* framebuffer overlay/underlay/interlay as libdm concepts.
+* framebuffer-specific OpenGL/QtGL/WGL/X/swrast display paths.
+* FB_FILE as the canonical display-selection mechanism.
+
+Some of these may remain temporarily as compatibility spelling while the old
+tools and callers are migrated.
+
+
+Implementation Phases
+---------------------
+
+1. Add libimgstream skeleton
+
+* Status: initial batch implemented.
+* Public opaque C API exists in include/imgstream.h and
+  include/imgstream/stream.h.
+* Core stream/buffer type and RGB/RGBA pixel format definitions exist.
+* imgstream_get_info reports format, dimensions, stride, generation,
+  dirty-state, dirty rectangle, and active-producer state.
+* Dirty rectangle and generation tracking exist.
+* Clear/read/write/read-rect/write-rect operations exist.
+* Snapshot conversion to/from icv_image_t exists through
+  imgstream_snapshot_icv and imgstream_create_from_icv.
+* Focused unit tests cover lifecycle, resize protection, pixel operations,
+  dirty-update generation, subscriber notification, and snapshot conversion.
+* Initial fb_compat.h/fb_compat.c support exists for memory framebuffer
+  compatibility: spec classification, memory stream open/close, clear,
+  linear read/write, RGB and BW rect read/write, preserved view/cursor state,
+  reset/viewport no-ops, and no-op non-display poll/poll-rate behavior.
+* BW rectangle compatibility preserves the legacy helper behavior: BW reads
+  extract the green channel from RGB stream data, and BW writes expand one
+  byte per pixel into all RGB channels before updating the stream or child
+  sinks.
+* Legacy view/window/zoom and cursor/getcursor/scursor/setcursor
+  compatibility spellings are present in libimgstream/fb_compat.  Window and
+  zoom update the preserved view state, cursor/getcursor preserve cursor
+  position/mode, and scursor/setcursor succeed as non-display compatibility
+  operations without making cursor-shape display state part of core
+  libimgstream.  Reset and viewport compatibility are no-op state/display
+  placeholders pending display-host routing.
+* Initial raw RGB file sink/source compatibility exists for ordinary file
+  paths and explicit /dev/disk:<path> or /dev/disk=<path> spelling.  File
+  streams load existing pixel data when present and flush the stream to raw
+  RGB pixels on request or close.
+* Initial /dev/stack fan-out compatibility exists for semicolon-separated
+  memory/file child sinks.  Writes, rectangle writes, clear, view, cursor,
+  poll, and flush propagate to every child; reads use the first child,
+  matching the legacy stack framebuffer behavior.
+* Initial /dev/null, /dev/debug, and /dev/txt diagnostic sink compatibility
+  exists.  Diagnostic sinks preserve dimensions and view/cursor state, discard
+  writes without mutating the backing stream, return zero pixels for reads,
+  and keep /dev/debug operation logging.
+* Initial neutral colormap compatibility exists in libimgstream/fb_compat.
+  imgstream_fb_colormap stores the legacy 256-entry RGB transfer table with
+  16-bit channels, rmap/wmap preserve per-stream compatibility state, and
+  wmap(NULL) resets to the default linear map.
+* Remote/display specifiers are classified and parsed by
+  imgstream_fb_spec_info, covering numeric ports, host:port,
+  host:port:device, tcp:, ipc:, display names, and diagnostic names, but they
+  are not opened by the core memory/file/fan-out/diagnostic compatibility
+  layer.
+* Display-capable framebuffer opens can delegate through a registered
+  toolkit-neutral imgstream_fb_display_host callback.  The compatibility layer
+  creates the RGB stream, preserves view/cursor state, and forwards
+  open/close, view, cursor, screen-cursor, cursor-shape, viewport, reset,
+  flush, poll, and poll-rate operations.  With no registered display host,
+  display specifiers still fail explicitly.
+
+2. Replace memory framebuffer behavior
+
+* Port the useful /dev/mem behavior to libimgstream.
+* Ensure local memory streams can be used without libdm.
+* Test resize, clear, full-frame write, subrect write, and snapshot export.
+
+3. Add file sink/source support
+
+* Move raw pix/image import/export behavior to libicv/libimgstream.
+* Preserve ordinary file-path compatibility for old -F usage where needed.
+* Avoid treating disk files as display backends.
+* Add neutral libicv lookup-table support if needed by export or cmap-related
+  compatibility tools.
+
+4. Extract fbserv behavior
+
+* Add libimgstream server/client APIs.
+* Add fb_compat.h and fb_compat.c inside libimgstream.
+* Add compatibility support for existing MSG_FB* protocol messages.
+* Preserve TCP, IPC, PKG_ADDR, FBSERV_TOKEN, and FBSERV_TLS behavior.
+* Replace struct fb server target with imgstream buffer/sink target.
+* Keep fbserv command working through libimgstream.
+* Keep legacy ColorMap protocol/state in fb_compat and translate to libicv
+  lookup-table operations only when pixels need to be transformed.
+* Keep legacy view/cursor/poll protocol state in fb_compat and route display
+  realization through a registered display host when available.
+
+5. Add transitional fb API wrappers
+
+* Keep enough fb_* compatibility for rt, remrt, GED/TclCAD, and src/fb tools
+  to keep working.
+* Route compatibility calls through libimgstream.
+* Avoid adding new users of the old fb API.
+
+6. Add Obol image-stream display
+
+* SoBRLImageSource is in place for static icv_image_t data and live
+  libimgstream stream source state, including source/data/dirty revision
+  fields and dirty-region subscription updates.
+* SoBRLViewportImage is in place for viewport-aligned HUD, overlay, underlay,
+  and render-progress display policy.
+* SoBRLImagePlane is in place for scene-space textured image pane display.
+* SoBRLViewportImage and SoBRLImagePlane currently use SoBRLImageSource
+  data/dirty revisions to rebuild standard Obol texture quads from stream
+  snapshots.
+* Replace full texture-quad rebuilds with dirty-region uploads through Obol
+  backend texture mechanisms.
+* Finish viewport-image display controls needed by framebuffer compatibility:
+  normalized viewport placement, source center, pixel zoom, and optional cursor
+  overlay/native cursor mapping.
+* Replace libdm framebuffer HUD/overlay display logic in the Obol path.
+
+7. Migrate qtcad/qged ERT workflow
+
+* ERT creates or obtains a libimgstream stream.
+* Render producers write to the stream.
+* qtcad/qged displays the stream through Obol.
+* Qt notifier/event-loop handling stays in qtcad/qged adapter code.
+
+8. Add libbrlobol window host support
+
+* The neutral libbrlobol window host API around BRLObolViewController is in
+  place.
+* Toolkit-neutral window descriptions, input events, input profiles, and
+  semantic input actions are in place.
+* The initial imgstream display-host bridge is in place: display-capable
+  framebuffer streams can attach to SoBRLImageSource and SoBRLViewportImage
+  nodes owned by the window host/controller pair.
+* The first headless/offscreen adapter is in place:
+  BRLObolHeadlessWindowHost forces an offscreen descriptor, seeds a default
+  camera, drains render requests, captures pixels through SoOffscreenRenderer,
+  and lets /dev/swrast framebuffer compatibility poll the Obol path.
+* The first qtcad Qt adapter is in place: QgObolWindowHost attaches an
+  existing QgCanvasBase Obol controller to the window-host contract, drains
+  render requests through qtcad Obol readback, and lets /dev/qtgl framebuffer
+  compatibility poll a Qt canvas.  It can also create and own a visible Qt
+  toplevel QgSW canvas when display-capable framebuffer compatibility opens a
+  Qt host without an existing qtcad canvas.
+* Replace the temporary QgSW owned-window fallback with the final qtcad/qged
+  host policy where callers need a toplevel hardware/OpenGL-capable host.
+* Add a Tk adapter or compatibility bridge for MGED/TclCAD while those paths
+  still need Tk.
+* Route dm_open through the window host where possible, preserving old option
+  spelling as compatibility.
+* Allow libimgstream/fb_compat display-capable fb_open requests to delegate to
+  the registered libbrlobol/application display-host callback.
+* Keep toolkit-native handles out of the public libbrlobol window contract.
+* Add a legacy framebuffer input profile for expose/resize/poll, middle-click
+  RGB inspect, right-click close, one-button mouse remapping, and linger
+  close policy.
+
+9. Migrate rt/remrt and tools
+
+* Move producers from fb_* writes to native libimgstream producer APIs.
+* Keep old command line compatibility while introducing direct stream options.
+* Leave src/fb tools working through compatibility unless a specific
+  architectural reason requires changing one.
+* Treat broader src/fb utility redesign as a separate effort.
+
+10. Remove libdm framebuffer implementation
+
+* Stop building the old framebuffer backends.
+* Remove the fb vtable and backend dispatch.
+* Remove dm framebuffer fields and accessors.
+* Remove framebuffer plugin registration from dm_plugins.
+* Remove public libdm framebuffer headers/API after callers are gone.
+
+11. Remove remaining compatibility
+
+* After rt, remrt, qged, TclCAD/mged, and required tools use libimgstream or
+  Obol directly, delete old fb compatibility wrappers that no longer have
+  active callers.
+* Keep transport and MSG_FB* protocol compatibility where it remains useful
+  independent of the old libdm framebuffer backend API.
+
+
+Testing Requirements
+--------------------
+
+Core libimgstream tests:
+
+* create/destroy stream
+* resize behavior
+* clear/write/read
+* subrect update tracking
+* dirty rectangle generation
+* snapshot to/from icv_image_t
+* fan-out to multiple sinks
+* active-producer resize protection
+
+Transport tests:
+
+* local IPC connect/write/readback
+* TCP connect/write/readback
+* PKG_ADDR child-process handoff
+* token-auth success/failure
+* TLS-enabled connection where build support exists
+* compatibility protocol write/readrect/writerect behavior
+* compatibility protocol view/getview/window/zoom behavior
+* compatibility protocol cursor/getcursor/scursor/setcursor behavior
+* compatibility protocol poll behavior
+
+Application tests:
+
+* qtcad/qged ERT progressively displays render output.
+* Resize during active render does not corrupt scanlines.
+* SoBRLImageSource exposes static icv_image_t data.
+* SoBRLImageSource updates from libimgstream dirty regions.
+* SoBRLViewportImage displays static and live image sources in viewport
+  overlay/underlay/HUD modes.
+* SoBRLImagePlane displays static and live image sources as 3D textured
+  planes.
+* libbrlobol window host can attach a display framebuffer stream to a
+  SoBRLViewportImage.
+* BRLObolHeadlessWindowHost can drain pending Obol renders and expose the last
+  captured frame buffer.
+* QgObolWindowHost can attach a qtcad canvas or create an owned visible Qt
+  toplevel for the Obol window-host contract and drain /dev/qtgl framebuffer
+  compatibility through Qt readback.
+* Save/export works from stream snapshot and Obol readback.
+* Headless/diagnostic path can consume streams without visible display.
+* libbrlobol window host can create a Qt-backed visible view.
+* libbrlobol window host can create a headless/offscreen view.
+* Normalized key, pointer, wheel, resize, and close events reach the
+  BRLObolInputProfile/action layer.
+* A semantic input profile can drive view rotate, pan, zoom, center, and
+  preset-view actions without toolkit-specific binding strings.
+* The legacy framebuffer input profile can handle expose refresh, resize,
+  middle-click RGB inspect, right-click close, and one-button mouse remapping.
+* Display-capable framebuffer compatibility can show cursor state and source
+  view/zoom state on a SoBRLViewportImage.
+
+Compatibility tests:
+
+* fbserv still accepts legacy clients.
+* rt -F compatibility continues during migration.
+* remrt minimal workflow continues during migration.
+* representative src/fb tools still work until deliberately retired.
+* fbpoint and fbzoom continue to work through fb_cursor and fb_view
+  compatibility.
+* cmap/rmap/wmap compatibility works for legacy clients and tools.
+* libicv lookup-table application produces the same pixel results as current
+  framebuffer colormap crunching for representative maps.
+* dm_open compatibility preserves -W, -N, -s, -d, -t, -n, and legacy -i
+  behavior where a Tk compatibility path is active.
+* dm_open legacy type names route to the appropriate libbrlobol window host,
+  Obol renderer, headless adapter, diagnostic adapter, or explicit
+  unsupported diagnostic.
+* Display-capable fb_open legacy names create or obtain an image stream and
+  display it through a registered libbrlobol/application display host.
+* Display-capable fb_open legacy names report explicit unsupported diagnostics
+  when no display host is registered.
+
+
+Initial Implementation Batch
+----------------------------
+
+The first practical batch should avoid touching Obol display code until the
+non-display stream object is solid.
+
+Recommended first batch:
+
+1. Add libimgstream build target and public header.
+2. Implement in-memory RGB/RGBA stream storage.
+3. Implement clear, write, read, write-rect, read-rect, and snapshot APIs.
+4. Implement dirty rectangle generation and subscriber callbacks.
+5. Add tests for the above.
+6. Add conversion helpers between libimgstream and icv_image_t.
+7. Add memory, raw RGB file, and stack fan-out fb compatibility coverage.
+8. Add a small compatibility notes file or comments identifying the fb API
+   wrappers that will eventually route through this layer.
+
+Only after that should fbserv extraction and SoBRLImageSource /
+SoBRLViewportImage / SoBRLImagePlane work start.

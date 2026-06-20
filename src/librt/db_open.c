@@ -630,6 +630,9 @@ db_i_internal_create(void)
     struct db_i_internal *i;
     BU_GET(i, struct db_i_internal);
     i->dbi_magic = DBI_MAGIC;
+    i->mesh_c = NULL;
+    i->mesh_c_completed = 0;
+    i->mesh_c_target = 0;
     i->material_head = MATER_NULL;
     i->dbi_directory_hd = NULL;
     bu_ptbl_init(&i->dbi_directory_blocks, 8, "dbi_directory_blocks");
@@ -644,7 +647,8 @@ db_i_internal_destroy(struct db_i_internal *i)
 	return;
 
     if (i->mesh_c)
-	bv_mesh_lod_context_destroy(i->mesh_c);
+	_rt_mesh_lod_context_destroy(i->mesh_c);
+    i->mesh_c = NULL;
 
     /* Free any directory blocks */
     for (size_t ii = 0; ii < BU_PTBL_LEN(&i->dbi_directory_blocks); ii++)

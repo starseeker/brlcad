@@ -24,6 +24,7 @@
  */
 
 #include "ged.h"
+#include "ged/event_txn.h"
 
 
 int
@@ -58,6 +59,9 @@ ged_shader_core(struct ged *gedp, int argc, const char *argv[])
 	bu_vls_printf(gedp->ged_result_str, "%s", bu_vls_addr(&comb->shader));
 	rt_db_free_internal(&intern);
     } else {
+	struct bu_vls new_shader = BU_VLS_INIT_ZERO;
+	int event_batch_opened = 0;
+
 	if (gedp->dbip->dbi_read_only) {
 	    bu_vls_printf(gedp->ged_result_str, "Sorry, this database is READ-ONLY");
 	    rt_db_free_internal(&intern);
@@ -65,14 +69,32 @@ ged_shader_core(struct ged *gedp, int argc, const char *argv[])
 	    return BRLCAD_ERROR;
 	}
 
-	/* Replace with new shader string from command line */
-	bu_vls_free(&comb->shader);
-
 	/* Bunch up the rest of the args, space separated */
-	bu_vls_from_argv(&comb->shader, argc-2, (const char **)argv+2);
+	bu_vls_from_argv(&new_shader, argc-2, (const char **)argv+2);
 
-	GED_DB_PUT_INTERN(gedp, dp, &intern, BRLCAD_ERROR);
+	if (BU_STR_EQUAL(bu_vls_cstr(&comb->shader),
+		bu_vls_cstr(&new_shader))) {
+	    bu_vls_free(&new_shader);
+	    rt_db_free_internal(&intern);
+	    return BRLCAD_OK;
+	}
+
+	/* Replace with new shader string from command line */
+	bu_vls_trunc(&comb->shader, 0);
+	bu_vls_vlscat(&comb->shader, &new_shader);
+	bu_vls_free(&new_shader);
+
+	event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+	if (rt_db_put_internal(dp, gedp->dbip, &intern) < 0) {
+	    if (event_batch_opened)
+		ged_event_batch_end(gedp, NULL);
+	    bu_vls_printf(gedp->ged_result_str, "Database write failure.");
+	    return BRLCAD_ERROR;
+	}
 	/* Internal representation has been freed by rt_db_put_internal */
+	(void)ged_event_notify_object_material_changed(gedp, dp->d_namep, NULL);
+	if (event_batch_opened)
+	    ged_event_batch_end(gedp, NULL);
     }
 
     return BRLCAD_OK;

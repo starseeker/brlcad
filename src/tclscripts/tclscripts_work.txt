@@ -1,0 +1,547 @@
+tclscripts migration survey
+===========================
+
+Scope
+-----
+
+This note inventories user-facing logic in src/tclscripts that looks like a
+candidate for re-implementation or consolidation in C/C++ BRL-CAD libraries.
+The target is not one-for-one Tcl/Tk translation.  The target is to identify
+core behavior that should be expressed as toolkit-neutral library state,
+commands, descriptors, or scene data so Tcl/Tk, Qt/qged, MGED, command-line
+tools, and future viewers can share it.
+
+Faceplate GUI notes have been split into faceplate_gui.txt.
+
+
+Sketch editing
+--------------
+
+Representative Tcl:
+
+* src/tclscripts/mged/skt_ed.tcl
+* src/tclscripts/archer/SketchEditFrame.tcl
+
+Relevant C/C++ already present:
+
+* include/rt/edit.h
+* include/rt/functab.h
+* include/rt/primitives/sketch.h
+* src/librt/edit.cpp
+* src/librt/primitives/sketch/edsketch.c
+* include/rt/edit_legacy_bsg.h
+* src/librt/edit_legacy_bsg.cpp
+* include/qtcad/QgSketchFilter.h
+* src/libqtcad/QgSketchFilter.cpp
+* src/libqtcad/tests/qsketch.cpp
+
+Current assessment:
+
+The reusable sketch editing core should be built around librt's primitive edit
+machinery, not around the Tcl/Tk editor.  qsketch is already an experiment in
+that direction: it uses libqtcad interaction plumbing while reaching into
+rt_edit and sketch edit state.  Some qsketch code still duplicates lower-level
+logic, such as segment sampling and split-segment support, which is a sign that
+more of the sketch-specific editing surface should be made explicit in librt or
+libged.
+
+The likely end state is a toolkit-agnostic sketch edit controller:
+
+* rt_edit/edsketch owns primitive mutation, validation, snapping-sensitive
+  model/sketch/view coordinate transforms, and command execution;
+* libged exposes command-friendly edit operations and descriptors;
+* Obol/BSG/libqtcad expose the interactive selection/handle/overlay layer.
+
+One design question is whether the reusable interactive layer should be framed
+as a BRL-CAD Obol widget: a sketch editing object that can be hosted by qged,
+MGED-style display managers, or other viewers.  That looks promising if it is
+kept as an interaction/model adapter rather than a Qt widget abstraction.
+
+Recommended work:
+
+1. Audit edsketch operations against skt_ed.tcl and SketchEditFrame.tcl.
+2. Move duplicated qsketch helpers into librt/libged where they are genuinely
+   primitive-edit semantics.
+3. Define a stable sketch edit action and selection model that Obol can display
+   and hit-test.
+4. Keep qsketch as a testbed for the generalized Obol-backed editor.
+
+
+Primitive edit panels and per-primitive editing
+-----------------------------------------------
+
+Representative Tcl:
+
+* src/tclscripts/archer/GeometryEditFrame.tcl
+* src/tclscripts/archer/*EditFrame.tcl
+* src/tclscripts/mged primitive edit helpers
+
+Relevant C/C++ already present:
+
+* include/rt/edit.h
+* include/rt/functab.h
+* src/librt/edit.cpp
+* src/libged/edit/edit.cpp
+* src/libged/tests/edit/test_edit.cpp
+
+Current assessment:
+
+This area already has the right architectural seed.  include/rt/edit.h defines
+rt_edit_prim_desc, rt_edit_cmd_desc, rt_edit_param_desc, and rt_edit_opt_desc.
+Those descriptors cover command ids, labels, categories, parameter types,
+ranges, units, enum choices, interactivity, display order, and applicability.
+The edit command can print primitive operation help and JSON descriptors through
+interfaces such as:
+
+* edit <type> --list-ops
+* edit <type> --list-ops=json
+* edit --list-all-prim-ops
+* edit --list-all-prim-ops=json
+
+That means a significant part of the desired "what can be edited for this
+primitive?" answer already exists below Tcl/Tk.
+
+Recommended work:
+
+1. Compare every Archer *EditFrame.tcl panel with the rt_edit descriptors for
+   the corresponding primitive.
+2. Fill missing ft_edit_desc coverage in librt before adding new GUI-side edit
+   logic.
+3. Make Tcl/Tk primitive edit panels query the descriptors where possible,
+   replacing hand-coded duplicate knowledge.
+4. Make qged/libqtcad primitive editing plugin generation descriptor-driven.
+5. Extend the descriptor model only where real UI generation needs are missing,
+   for example richer grouping, validation messages, feature/handle bindings,
+   or command preview semantics.
+
+The path here should be consolidation around libged edit and rt_edit, not a new
+parallel descriptor system.
+
+
+Shader, material, and appearance editing
+----------------------------------------
+
+Representative Tcl:
+
+* src/tclscripts/mged/shaders.tcl
+* src/tclscripts/archer/ShaderEdit.tcl
+* src/tclscripts/mged/color_scheme.tcl
+
+Relevant C/C++ already present:
+
+* src/libged/shader/shader.c
+* src/libged/material/material.c
+* src/libged/mater/mater.cpp
+* src/libged/edmater/edmater.c
+* src/libged/rmater/rmater.c
+* src/libged/wmater/wmater.c
+* src/libged/color/color.c
+* src/libged/comb_color/comb_color.c
+* src/liboptical
+* include/rt/comb.h and related combination material/shader storage
+
+Current assessment:
+
+The Tcl shader editors contain a large amount of shader-specific parameter
+knowledge: supported shader names, nested stack/envmap behavior, defaults,
+parameter validation, RGB validation, and serialization back to shader strings.
+There are already libged commands for setting shader/material/color data, but
+the GUI-facing structured parameter API appears to be the missing layer.
+
+Recommended work:
+
+1. Inventory liboptical shader definitions and compare them with shaders.tcl and
+   ShaderEdit.tcl.
+2. Define a shader parameter descriptor API covering shader name, display name,
+   parameter names, types, defaults, ranges, units, nested shader composition,
+   and serialization rules.
+3. Reuse existing libged shader/material/mater commands for database mutation.
+4. Add parsing/validation/serialization support in a lower library so frontends
+   do not need to manually assemble shader strings.
+5. Keep display color scheme editing separate from material/shader editing,
+   although both should use common color parsing/validation helpers.
+
+
+BoT inspection and repair workflows
+-----------------------------------
+
+Representative Tcl:
+
+* src/tclscripts/boteditor/botTools.tcl
+* src/tclscripts/boteditor/botPropertyBox.tcl
+
+Relevant C/C++ already present:
+
+* include/rt/primitives/bot.h
+* src/libged/bot/bot.cpp
+* src/libged/bot/check.cpp
+* src/libged/bot/repair.cpp
+* src/libged/bot/decimate.cpp
+* src/libged/bot/pick.cpp
+* src/libged/bot/info.cpp
+* src/libged/bot/remesh.cpp
+* src/libged/select/select.c
+* src/libanalyze/heal_mesh.cpp
+* include/bg/trimesh.h
+* include/bsg/geometry.h
+* include/bsg/feature.h
+
+Current assessment:
+
+botTools.tcl is already mostly a wrapper around BoT commands.  It performs
+cleanup actions through bot_condense, bot_vertex_fuse, bot_face_fuse,
+bot_face_sort, and bot_decimate, with Tcl-side validation and option assembly.
+The modern libged bot command is broader and better organized.  Its subcommands
+include check, chull, decimate, exterior, extrude, flip, get, info, isect, pca,
+pick, plot, remesh, repair, set, smooth, split, stat, strip, subd, sync, and
+vertex.  It also has high-level options including visualize and color.
+
+The desired direction is to make the Tcl BoT editor a wrapper around the modern
+bot command for core behavior, not to preserve older bot_* entry points as the
+main GUI API.
+
+Potential gaps to check:
+
+* whether bot repair/check results are structured enough for GUI display;
+* whether selected faces/edges/vertices can be identified with stable ids;
+* whether bot pick/select and Obol/BSG feature selection can express the same
+  selections the Tcl editor needs;
+* whether visualization output should be scene objects, transient overlays, or
+  both;
+* whether decimate suggestions, validation ranges, and progress reporting should
+  be returned by bot command descriptors rather than hard-coded in Tcl.
+
+Recommended work:
+
+1. Map every botTools.tcl operation to the modern bot subcommand set.
+2. Keep compatibility aliases only where needed for existing scripts.
+3. Add structured result output for diagnostics, repair reports, and selection
+   ids.
+4. Verify Obol/BSG can represent BoT face/edge/vertex highlighting and problem
+   annotations.
+5. Prefer bot command improvements over GUI-specific BoT logic.
+
+
+Checker, overlap, and geometry-analysis workflows
+-------------------------------------------------
+
+Representative Tcl:
+
+* src/tclscripts/checker/check.tcl
+* src/tclscripts/checker/menu.tcl
+* src/tclscripts/checker/OverlapFileTool.tcl
+* src/tclscripts/checker/TODO
+
+Relevant C/C++ already present:
+
+* src/libged/check/check.c
+* src/libged/check/check_overlaps.c
+* src/libged/rtcheck/rtcheck.c
+* src/libged/rtcheck/rtcheck2.cpp
+* src/libged/gqa/gqa.cpp
+* src/libged/lint/*
+* src/libged/analyze/*
+* src/libanalyze
+
+Current assessment:
+
+This is a consolidation problem.  BRL-CAD currently has multiple partially
+overlapping paths for overlaps and model-quality analysis:
+
+* libged check, with subcommands such as overlaps, gap, mass, volume, centroid,
+  moments, surf_area, adjacent air, exposed air, and unconfined air;
+* rtcheck, which launches the rtcheck executable and collects text/uplot output;
+* gqa-style analysis;
+* lint-style model diagnostics;
+* Tcl checker UI logic for overlap files, list management, navigation, marking,
+  filtering, drawing, and manual resolution workflows.
+
+The Tcl checker TODO file is especially important: it describes real workflow
+requirements around large overlap lists, filtering, preserving position in the
+list, marking resolved/unresolved states, drawing only relevant overlap context,
+detecting stale overlap data after database changes, and supporting assisted
+resolution.
+
+Recommended work:
+
+1. Define one durable result model for geometry checks.
+2. Include check type, object paths, region pair, hit/ray context, volume or
+   severity estimates where available, status, stale/error state, display
+   geometry references, and user notes/resolution state.
+3. Make libged check/rtcheck/gqa/lint-style tools either produce that model or
+   adapt into it.
+4. Provide sorting, filtering, paging, persistence, and invalidation logic below
+   GUI code.
+5. Expose optional Obol/BSG scene data for overlap visualization.
+6. Let Tcl/Tk and Qt widgets consume the same model rather than parse overlap
+   files independently.
+
+This should be treated as a small framework design, not just a command port.
+
+
+Raytrace and qray workflows
+---------------------------
+
+Representative Tcl:
+
+* src/tclscripts/mged/rt.tcl
+* src/tclscripts/mged/qray.tcl
+
+Relevant C/C++ already present:
+
+* src/libged/rt/rt.c
+* src/libged/nirt/nirt.cpp
+* src/libged/qray/qray.c
+* src/libged/rtwizard/rtwizard.c
+* src/libged/rtabort/rtabort.c
+* src/libged/analyze/*
+* src/libanalyze
+
+Current assessment:
+
+rt.tcl and qray.tcl mostly organize user-facing settings: command option
+assembly, framebuffer/output choices, colors, qray text/graphics/both modes,
+NIRT format strings, use_air, command echoing, basename choices, and related
+view state.  Existing libged commands already cover execution paths for rt,
+nirt, and qray, so the missing layer is a structured job/configuration/result
+API suitable for frontends.
+
+Recommended work:
+
+1. Avoid inventing a separate render configuration API until rt, nirt, qray,
+   rtwizard, and analyze overlap has been reviewed together.
+2. Define reusable render/query job descriptors: view source, object set,
+   output target, framebuffer behavior, air handling, colors, formatting, and
+   process/progress/cancel state.
+3. Represent qray results structurally where possible: ray, partitions, hits,
+   misses, overlaps, gaps, text formatting, and graphics overlays.
+4. Keep NIRT script/format compatibility, but do not make GUI code parse NIRT
+   output as the primary API if libged/libanalyze can expose structured data.
+
+
+Shot visualization
+------------------
+
+Representative Tcl:
+
+* src/tclscripts/shotvis/shotvis.tcl
+
+Relevant C/C++ already present:
+
+* src/libged/nirt/nirt.cpp
+* src/libged/view/lines.c
+* src/libged/annotate/annotate.c
+* include/bsg/feature.h
+* include/bsg/geometry.h
+* src/libged/view/polygons.c
+
+Current assessment:
+
+shotvis.tcl is a good candidate for testing command-created custom scene data.
+The Tcl script currently drives NIRT, parses output, builds shotline geometry,
+and creates database objects/combinations to represent rays, hit regions, and
+threat/view shot states.  That persistent-geometry approach is useful for some
+workflows but too heavy for transient visualization.
+
+Potential command shape:
+
+* shot or rayvis as a libged command family;
+* subcommands such as shoot, view, threat, clear, list, export, and persist;
+* options for start point, direction, view-derived ray, object set, use_air,
+  basename/id, color/style, and output mode;
+* output modes such as text, json, scene, database, or both.
+
+Recommendation:
+
+Use this as a pilot for a libged command that can add transient Obol/BSG scene
+objects: ray lines, entry/exit markers, partition spans, hit labels, and
+selected region references.  Provide a separate option to persist the result as
+database geometry when that is explicitly desired.
+
+
+Point-derived geometry tools
+----------------------------
+
+Representative Tcl:
+
+* src/tclscripts/mged/points.tcl
+
+Relevant C/C++ already present:
+
+* src/libged/pnts/pnts.cpp
+* src/libged/pnts_util.c
+* include/analyze/pnts.h
+* include/wdb.h mk_pnts
+* src/libged/3ptarb/3ptarb.c
+* src/libged/arb/arb.cpp
+* src/libged/make/make.c
+* src/libged/pipe/pipe.c
+
+Current assessment:
+
+The Tcl points.tcl file is not mainly about the pnts primitive.  It contains
+geometry construction helpers from user-supplied points: circle-from-three
+points, cylinder/pipe point calculations, eight-point ARB construction, and
+surface/projection-style helpers.
+
+The modern pnts command covers pnts primitive workflows: read, write, gen, and
+tri, including point-set import/export and triangulation paths.  That does not
+replace all of points.tcl.
+
+Recommended work:
+
+1. Separate point-cloud/pnts workflows from "construct geometry from picked
+   points" workflows.
+2. Use libged pnts for pnts primitive read/write/generation/triangulation.
+3. For construction helpers, check whether existing commands such as 3ptarb,
+   arb, make, pipe, and related primitive-specific commands already cover each
+   case.
+4. Where gaps remain, add focused libged helpers such as circle_from_3pt,
+   pipe_from_points, or point_construct subcommands rather than keeping
+   Tcl-only geometry math.
+
+
+Database utility workflows
+--------------------------
+
+Representative Tcl:
+
+* src/tclscripts/mged/build_region.tcl
+* src/tclscripts/mged/remap_mater.tcl
+* src/tclscripts/mged/util/*.tcl
+* src/tclscripts/misc/rename_regions_to_ids.tcl
+
+Relevant C/C++ already present:
+
+* src/libged/region/region.c
+* src/libged/regdef/regdef.c
+* src/libged/comb/comb.c
+* src/libged/combmem/combmem.c
+* src/libged/put/put.c
+* src/libged/adjust/adjust.c
+* src/libged/search/search.c
+* src/libged/attr/attr.cpp
+* src/libged/mater/mater.cpp
+* src/libged/edmater/edmater.c
+* src/libged/rmater/rmater.c
+* src/libged/wmater/wmater.c
+* src/libged/rcodes/rcodes.c
+* src/libged/wcodes/wcodes.c
+* src/libged/clone/clone.cpp
+* src/libged/prefix/prefix.c
+* src/libged/move_all/move_all.c
+
+Current assessment:
+
+Most database utility Tcl scripts should be considered command workflows over
+existing libged commands, not necessarily new commands.
+
+For example, build_region.tcl uses a naming convention tag.sN, tag.sN-M, and
+tag.sN+M to build a Boolean tree and then creates/appends a region using regdef
+and put/adjust.  This might fit as an option or helper around region/comb
+construction rather than a standalone C port.
+
+remap_mater.tcl reads an old-to-new material-code mapping file and applies it to
+all regions.  That likely belongs near mater/rmater/edmater or as a batch mode
+using search plus attr/adjust, depending on how current material-code handling
+is intended to evolve.
+
+Recommended work:
+
+1. Inventory each utility script against existing libged commands before adding
+   commands.
+2. Prefer extending logical existing commands with batch/options support.
+3. Add new commands only when the workflow has a stable user-facing concept that
+   does not fit an existing command family.
+4. Where scripts remain as scripts, make them thin wrappers over documented
+   libged behavior.
+
+
+Conversion option schemas
+-------------------------
+
+Representative Tcl:
+
+* src/tclscripts/lib/gui_conversion.tcl
+
+Current assessment:
+
+This should wait on a more mature libgcv design.  The eventual target is still
+a declarative schema consumed by frontends: option name, type, default, range,
+enum choices, help text, applicability, and command-line serialization.  The
+schema should come from libgcv/libged rather than being owned by Tcl/Tk or Qt.
+
+
+View and display state controls
+-------------------------------
+
+Representative Tcl:
+
+* src/tclscripts/mged/grid.tcl
+* src/tclscripts/mged/adc.tcl
+* src/tclscripts/mged/calipers.tcl
+* src/tclscripts/mged/color_scheme.tcl
+* view/model axes and display controls in src/tclscripts/mged
+
+Relevant C/C++ already present:
+
+* include/bsg/faceplate.h
+* include/bsg/hud.h
+* src/libged/view/faceplate/*
+* src/libged/adc/adc.c
+* src/libged/grid/grid.c
+* src/libged/view/axes.c
+* src/libged/view/snap.c
+* src/libged/view/lines.c
+* src/libged/view/polygons.c
+* src/libdm/view.c
+* src/libqtcad/QgCanvasState.h
+
+Current assessment:
+
+Much of this state has already moved down into libged/bsg/libdm.  The main
+remaining work is to identify Tcl-only behavior that is still missing below the
+GUI layer.
+
+Likely already covered:
+
+* grid state and snapping controls;
+* ADC state;
+* center dot, axes, scale, params text, framebuffer, and interactive rectangle
+  faceplate state;
+* view/model/grid coordinate conversions;
+* generic view data lines and polygons.
+
+Likely needs follow-up:
+
+* calipers as a first-class measurement/annotation tool;
+* edit axes styling/state as distinct from model/view axes;
+* full color-scheme coverage, especially legacy faceplate GUI colors;
+* GUI-friendly descriptors for view controls, comparable to primitive edit
+  descriptors.
+
+
+Priority recommendations
+------------------------
+
+Highest priority:
+
+* align Tcl/Qt primitive editing with rt_edit/libged edit descriptors;
+* generalize sketch editing around rt_edit plus Obol/BSG interaction;
+* consolidate checker/overlap result workflows;
+* continue bsg/libged/libdm faceplate/HUD state migration;
+* map BoT GUI workflows onto the modern bot command.
+
+Medium priority:
+
+* shader/material parameter descriptors;
+* raytrace/qray/nirt structured job and result models;
+* shot visualization as a custom scene-data pilot;
+* point-derived construction helper audit.
+
+Lower priority or dependent:
+
+* conversion schemas, pending libgcv design;
+* generic dialog/layout Tcl code where the underlying command already exists;
+* HTML viewing widgets, which should be replaced by toolkit-native facilities.
+

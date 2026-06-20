@@ -79,8 +79,14 @@ brlcad_add_test(NAME rt_cache_parallel_multiple_different_objects_hierarchy_1  C
 # lod testing
 brlcad_addexec(rt_lod lod.c "librt;libbg;${M_LIBRARY}" TEST)
 
+# RT view snapshot and transitional BSG adapter testing
+brlcad_addexec(rt_view_info view_info.c "librt;libwdb;libbu;${M_LIBRARY}" TEST)
+brlcad_add_test(NAME rt_view_info COMMAND rt_view_info)
+brlcad_addexec(rt_view_legacy_bsg view_legacy_bsg.c "librt;libbsg;libbu;${M_LIBRARY}" TEST)
+brlcad_add_test(NAME rt_view_legacy_bsg COMMAND rt_view_legacy_bsg)
+
 # bv_polygon <-> sketch testing
-brlcad_addexec(rt_bv_poly_sketch bv_poly_sketch.c "librt;libbv;${M_LIBRARY}" TEST)
+brlcad_addexec(rt_bv_poly_sketch bsg_poly_sketch.c "librt;libbsg;${M_LIBRARY}" TEST)
 
 # arb8 testing
 brlcad_addexec(rt_arb8 arb8_tests.c "librt;libwdb;libbg;libbu;${M_LIBRARY}" TEST)
@@ -140,6 +146,8 @@ set(
   nurbs_surfaces.g
   rt_datum.c
   rt_perturb.c
+  view_info.c
+  view_legacy_bsg.c
   search_stress.c
   sketch.g
   prim_tess.c

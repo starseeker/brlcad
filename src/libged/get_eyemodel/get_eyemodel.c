@@ -25,6 +25,7 @@
 
 #include "common.h"
 
+#include "rt/view_legacy_bsg.h"
 
 #include "../ged_private.h"
 
@@ -39,6 +40,7 @@
 int
 ged_get_eyemodel_core(struct ged *gedp, int argc, const char *argv[])
 {
+    struct rt_view_info view_info = RT_VIEW_INFO_INIT;
     quat_t quat;
     vect_t eye_model;
 
@@ -55,9 +57,10 @@ ged_get_eyemodel_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     _ged_rt_set_eye_model(gedp, eye_model);
-    quat_mat2quat(quat, gedp->ged_gvp->gv_rotation);
+    rt_view_info_from_bsg(&view_info, gedp->ged_gvp);
+    rt_view_orientation_quat_from_bsg(quat, gedp->ged_gvp);
 
-    bu_vls_printf(gedp->ged_result_str, "viewsize %.15e;\n", gedp->ged_gvp->gv_size);
+    bu_vls_printf(gedp->ged_result_str, "viewsize %.15e;\n", view_info.size);
     bu_vls_printf(gedp->ged_result_str, "orientation %.15e %.15e %.15e %.15e;\n",
 		  V4ARGS(quat));
     bu_vls_printf(gedp->ged_result_str, "eye_pt %.15e %.15e %.15e;\n",

@@ -26,15 +26,20 @@
 
 #include "common.h"
 #include "vmath.h"
+#include "bg/polygon_types.h"
 #include "bu/list.h"
 #include "bu/vls.h"
 #include "bn/tol.h"
-#include "bv/defines.h"
 #include "rt/defines.h"
 #include "rt/directory.h"
 #include "rt/db_instance.h"
 
 __BEGIN_DECLS
+
+struct bg_tess_tol;
+struct rt_db_internal;
+struct rt_primitive_lod_realization;
+struct rt_sketch_polygon;
 
 /* SKETCH specific editing info */
 struct rt_sketch_edit {
@@ -60,11 +65,19 @@ RT_EXPORT extern void rt_copy_curve(struct rt_curve *crv_out,
 				    const struct rt_curve *crv_in);
 RT_EXPORT extern struct rt_sketch_internal *rt_copy_sketch(const struct rt_sketch_internal *sketch_ip);
 
-RT_EXPORT extern struct bv_scene_obj *
-db_sketch_to_scene_obj(const char *sname, struct db_i *dbip, struct directory *dp, struct bview *sv, int flags);
+RT_EXPORT extern int rt_sketch_wireframe_line_set(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bg_tess_tol *ttol);
 
 RT_EXPORT extern struct directory *
-db_scene_obj_to_sketch(struct db_i *dbip, const char *sname, struct bv_scene_obj *s);
+db_sketch_polygon_to_sketch(struct db_i *dbip, const char *sname, const struct rt_sketch_polygon *poly, const unsigned char edge_rgb[3]);
+
+RT_EXPORT extern struct rt_sketch_polygon *
+db_sketch_to_polygon(const char *sname, struct db_i *dbip, struct directory *dp);
+
+RT_EXPORT extern const struct bg_polygon *
+rt_sketch_polygon_bg_polygon(const struct rt_sketch_polygon *poly);
+
+RT_EXPORT extern void
+rt_sketch_polygon_destroy(struct rt_sketch_polygon *poly);
 
 __END_DECLS
 

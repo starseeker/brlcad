@@ -1,0 +1,147 @@
+BRL-CAD Obol Realization Coverage Matrix
+=========================================
+
+Scope
+-----
+
+This table tracks the production database object coverage expected from the
+Obol realization path.  The current libbrlobol path realizes BRL-CAD .g
+hierarchies through SoBRLDatabaseSource and SoBRLSceneController, preserving
+database path identity on Obol shape nodes.  Wire output is converted from
+rt_obj_plot bg/rt_vlist data into SoBRLVListShape only at the realization
+boundary.  Shaded output is represented by SoBRLMeshShape using direct mesh
+importers where available and rt_obj_tess fallback otherwise.
+
+The required hierarchy smoke models are:
+
+* share/db/pinewood.g, root object pinewood
+* share/db/havoc.g, root object havoc
+
+The larger maturity candidate is share/db/faa/Generic_Twin.g.  It is the
+largest in-tree example, includes valid and invalid BoTs, and mixes in
+implicit solids.  It should become the final qtcad/Obol large-model gate once
+staged LoD realization and large-BoT diagnostics are mature enough for the
+extra runtime.
+
+The focused CTest gates are libbrlobol_prototype and
+test_qtcad_obol_draw_sync.  libbrlobol_prototype requires both staged models
+to load through Obol hierarchy realization and gates shaded mesh export and
+measure traversal for both pinewood.g and havoc.g.  test_qtcad_obol_draw_sync
+also verifies the real GED draw-observer path used by qged/qtcad: a
+ged_exec_draw command updates a QgView Obol database source and the resulting
+scene is visible through qtcad capture without requiring the test to construct
+synthetic transactions by hand.  The same gate runs a real ged_exec_autoview,
+pushes the resulting qtcad view refresh through the canvas, and verifies the
+Obol camera/readback path follows the updated view.
+libbrlobol_prototype also rebuilds a view controller over an existing realized
+Obol scene, verifies that source and draw-intent state remain authoritative on
+the scene nodes, and exercises partial refresh through the rebuilt controller.
+test_qtcad_obol_real_models gates qtcad Obol draw/readback workflows against
+pinewood.g, havoc.g, and the larger mixed-primitive m35.g sample.  The m35.g
+case also exercises qtcad Obol pick, snap, and measurement overlay helpers on
+real model geometry.  Generic_Twin.g is tracked as the larger FAA maturity
+candidate rather than a default CTest case until the large-model path can
+handle mixed valid/invalid BoTs, implicit solids, and staged LoD behavior
+without making routine developer tests too expensive.  Developers can run the
+current opt-in draw/readback maturity check by setting
+BRLOBOL_QTCAD_GENERIC_TWIN=1 for test_qtcad_obol_real_models; the default
+test remains limited to the smaller routine models.
+test_qtcad_obol_controller verifies the qtcad GL/SW visible-content capture
+path uses Obol readback for migrated scene content, consumes the Obol render
+request, and leaves the legacy display manager unopened for that capture case.
+It also verifies SW visible paint follows the same direct Obol readback path.
+When an offscreen Qt GL context is available, the same controller gate calls
+QgGL paint with its GL context current and verifies migrated Obol content
+drains the paint-time Obol render request through BRLObolViewController
+without opening the legacy display manager.
+test_qtcad_obol_real_models applies the capture request-drain and legacy-DM
+bypass checks to the required real `.g` model workflow cases.
+The same controller gate verifies default qtcad key, wheel, and drag
+navigation can update the Obol camera and request an Obol render before
+legacy DM initialization.
+test_qtcad_obol_pick verifies point, rectangle, and ray selection workflows
+prefer Obol pick identity and leave the legacy display manager unopened when
+selecting migrated content.  The qtcad selection filter API exposes the
+resulting normalized paths directly for qged consumption instead of requiring
+callers to inspect BSG pick or interaction records.
+test_qtcad_obol_measure and test_qtcad_obol_snap verify migrated-content
+measurement overlays and database snap refinement run through Obol without
+opening the legacy display manager.  The measurement gate also asserts that
+the qtcad measurement filter publishes its guide/final segment as Obol line
+overlays, with no BSG measurement feature, cached BSG measure-result path, or
+BSG-pick/raytrace fallback for 3D measurement.
+
+Preserved Identity
+------------------
+
+Every realized drawable Obol node must preserve:
+
+* full database path, including combination instances
+* source revision and realized source/input/view revisions
+* primitive name and type identity at shape level
+* inherited region/material identity currently carried by db_tree_state:
+  region id, air code, GIFT material id, LOS, material color, and shader
+* face or line-segment primitive index for pick/export/snap/measure
+* visibility, selectability, selection, highlight, ghost, hidden-line, edit
+  emphasis, LoD policy, and color override fields
+
+Standalone material-object identity, edge and vertex identity, edit-intent
+detail beyond the current draw-intent fields, and stable face/edge/vertex IDs
+for tessellated curved primitives are still migration work.
+
+Coverage Table
+--------------
+
+| Database object | Old draw input | Obol representation | Current status |
+| --- | --- | --- | --- |
+| combination/region | db_walk_tree hierarchy and member matrices | SoBRLDatabaseSource subtree with SoSeparator and SoMatrixTransform per leaf path | Covered for direct primitives, instanced combinations, pinewood.g, and havoc.g hierarchy |
+| arb8/rpp | rt_obj_plot wire, rt_arb internal | SoBRLVListShape for wire, direct SoBRLMeshShape for shaded | Covered by generated database draw/export/pick/snap/measure tests |
+| bot | rt_obj_plot wire, rt_bot face arrays | SoBRLVListShape for wire, direct SoBRLMeshShape for shaded | Covered by generated database mesh/export/bounds tests |
+| sph | rt_obj_plot, rt_obj_tess | SoBRLVListShape for wire, tessellated SoBRLMeshShape for shaded | Covered by generated database shaded export/pick/snap/measure tests |
+| ell | rt_obj_plot, rt_obj_tess | SoBRLVListShape for wire, tessellated SoBRLMeshShape for shaded | Covered by generated database shaded export/bounds/measure tests |
+| tgc/rec | rt_obj_plot, rt_obj_tess | SoBRLVListShape for wire, tessellated SoBRLMeshShape for shaded | Covered by generated database shaded export/bounds tests |
+| tor | rt_obj_plot, rt_obj_tess | SoBRLVListShape for wire, tessellated SoBRLMeshShape for shaded | Covered by generated database shaded measure/bounds tests |
+| ars | rt_obj_plot, rt_obj_tess | SoBRLVListShape for wire, tessellated SoBRLMeshShape where tessellation succeeds | Covered by generated primitive wire/shaded export/measure tests |
+| arbn | rt_obj_plot, rt_obj_tess | SoBRLVListShape for wire, tessellated SoBRLMeshShape where tessellation succeeds | Covered by generated primitive wire/shaded export/measure tests |
+| poly/pg | rt_obj_plot, rt_obj_tess | SoBRLVListShape for wire, tessellated SoBRLMeshShape where tessellation succeeds | Covered by generated legacy v4 POLY wire/shaded export/measure test; v5 stores converted BoT/NMG instead |
+| nmg | rt_obj_plot, rt_obj_tess | SoBRLVListShape for wire, tessellated SoBRLMeshShape | Covered by generated primitive wire/shaded export/measure tests; debug overlays deferred |
+| pipe | rt_obj_plot, rt_obj_tess | SoBRLVListShape for wire, tessellated SoBRLMeshShape where tessellation succeeds | Covered by generated primitive wire/shaded export/measure tests |
+| particle | rt_obj_plot, rt_obj_tess | SoBRLVListShape for wire, tessellated SoBRLMeshShape where tessellation succeeds | Covered by generated primitive wire/shaded export/measure tests |
+| rpc/rhc | rt_obj_plot, rt_obj_tess | SoBRLVListShape for wire, tessellated SoBRLMeshShape where tessellation succeeds | Covered by generated primitive wire/shaded export/measure tests |
+| epa/ehy/eto | rt_obj_plot, rt_obj_tess | SoBRLVListShape for wire, tessellated SoBRLMeshShape where tessellation succeeds | Covered by generated primitive wire/shaded export/measure tests |
+| hyp | rt_obj_plot, rt_obj_tess | SoBRLVListShape for wire, tessellated SoBRLMeshShape where tessellation succeeds | Covered by generated primitive wire/shaded export/measure tests |
+| superell | rt_obj_plot, rt_obj_tess | SoBRLVListShape for wire; shaded realization currently reports an explicit unsupported tessellation diagnostic | Covered by generated wire test and shaded diagnostic test |
+| metaball | rt_obj_plot, rt_obj_tess when available | SoBRLVListShape for wire, tessellated SoBRLMeshShape where tessellation succeeds | Covered by generated primitive wire/shaded export/measure tests with fine shaded tessellation tolerance |
+| halfspace | rt_obj_plot, rt_obj_tess | SoBRLVListShape for finite wire display; shaded realization currently reports an explicit unsupported tessellation diagnostic because the primitive is unbounded | Covered by generated wire test and shaded diagnostic test |
+| sketch | rt_obj_plot | Obol 2D/3D curve or SoBRLVListShape fallback | Covered by generated sketch wire export/measure test; native curve policy deferred |
+| extrude | sketch plus extrusion path | SoBRLVListShape for wire, tessellated SoBRLMeshShape where tessellation succeeds | Covered by generated sketch-backed wire/shaded export/measure test |
+| revolve | sketch plus revolution path | SoBRLVListShape for wire; shaded realization currently reports an explicit unsupported tessellation diagnostic | Covered by generated sketch-backed wire test and shaded diagnostic test |
+| cline | rt_obj_plot, rt_obj_tess | SoBRLVListShape for wire, tessellated SoBRLMeshShape where tessellation succeeds | Covered by generated primitive wire/shaded export/measure tests |
+| brep | BREP/NURBS display path | SoBRLVListShape for wire; shaded CDT mesh conversion is accepted when stable and must otherwise fail with an explicit diagnostic | Covered by generated OpenNURBS sphere BREP wire test plus empty-BREP wire/shaded diagnostic tests |
+| bspline/nurb | NURBS curve/surface path | SoBRLVListShape for wire; future native Obol curve/surface or BREP-backed representation for shaded output | Covered by generated BSpline surface wire test and shaded diagnostic test |
+| dsp/ebm/vol/hf | external/grid/volume-backed draw path | Tessellated SoBRLMeshShape for object-backed DSP/EBM/VOL; legacy HF uses SoBRLVListShape wire fallback and explicit shaded unsupported tessellation diagnostic | Covered for generated object-backed DSP, EBM, and VOL wire/shaded export/measure tests plus generated legacy v4 HF wire/shaded diagnostic test |
+| submodel | referenced model draw path | SoBRLVListShape fallback for same-database referenced models; future native representation can use a SoBRLDatabaseSource-backed sub-scene | Covered by generated same-database submodel wire test and shaded diagnostic test |
+| annot | annotation/text draw path | Obol text/HUD/annotation nodes | Covered by generated line-annotation wire test and shaded diagnostic test; native text realization deferred |
+| pnts | point-cloud draw path | Obol point/marker node or SoBRLVListShape point fallback | Covered by generated point-cloud wire test and shaded diagnostic test; native point node deferred |
+| datum | datum helper object | BRL-CAD Obol datum node | Covered by generated datum wire test and shaded diagnostic test |
+| joint | joint/edit helper object | BRL-CAD Obol edit/rigging node or explicit diagnostic | Covered by generated joint wire test and shaded diagnostic test |
+| hrt | primitive draw path | SoBRLVListShape for wire; shaded realization currently reports an explicit unsupported tessellation diagnostic | Covered by generated wire test and shaded diagnostic test |
+| binunif | binary application data | No drawable scene node | Covered by generated wire/shaded no-draw diagnostic tests |
+| constraint | constraint metadata | No drawable scene node | Covered by generated wire/shaded no-draw diagnostic tests |
+| material | material metadata | Obol material field/detail, not standalone geometry | Covered by generated wire/shaded no-draw diagnostic tests |
+| script | script metadata/action object | No drawable scene node until a script-backed scene policy exists | Covered by generated wire/shaded no-draw diagnostic tests |
+
+Near-Term Gates
+---------------
+
+1. Promote BREP and BSpline/NURB shaded rows from diagnostics to stable native
+   or tessellated representation when the underlying converters are reliable.
+2. Promote diagnostic/fallback rows such as BREP, legacy HF, annotation, and
+   point-clouds to native Obol representations where that adds stable user
+   value.
+3. Add stable standalone material-object, edge, vertex, and edit-intent
+   identity where Obol actions need to report those sub-entities.
+4. Promote the controlled Generic_Twin.g opt-in workflow gate to a default
+   gate after large-BoT staged LoD realization can publish diagnostics for
+   invalid BoTs, preserve mixed implicit/mesh identity, and avoid blocking
+   routine qtcad developer tests.

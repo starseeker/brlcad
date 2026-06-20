@@ -1,0 +1,201 @@
+/*               Q G O B O L C O N T E X T M A N A G E R . H
+ * BRL-CAD
+ *
+ * Copyright (c) 2026 United States Government as represented by
+ * the U.S. Army Research Laboratory.
+ */
+/** @file QgObolContextManager.h
+ *
+ * Private qtcad Obol ContextManager backed by Qt offscreen OpenGL contexts.
+ */
+
+#ifndef QGOBOLCONTEXTMANAGER_H
+#define QGOBOLCONTEXTMANAGER_H
+
+#include "common.h"
+
+#include <Inventor/SoDB.h>
+
+#include <QOffscreenSurface>
+#include <QOpenGLContext>
+#include <QSurface>
+#include <QSurfaceFormat>
+
+class QgObolContextManager : public SoDB::ContextManager {
+private:
+    struct QgObolContext {
+	enum ContextKind {
+	    QT_CONTEXT,
+	    FALLBACK_CONTEXT
+	};
+
+	ContextKind kind = QT_CONTEXT;
+	QOffscreenSurface *surface = NULL;
+	QOpenGLContext *context = NULL;
+	QOpenGLContext *previousContext = NULL;
+	QSurface *previousSurface = NULL;
+	void *fallbackContext = NULL;
+    };
+
+public:
+    QgObolContextManager(void) :
+	fallbackManager(SoDB::createOSMesaContextManager())
+    {
+    }
+
+    virtual ~QgObolContextManager(void)
+    {
+	delete this->fallbackManager;
+	this->fallbackManager = NULL;
+    }
+
+    virtual void *createOffscreenContext(unsigned int width, unsigned int height)
+    {
+	QgObolContext *ctx = new QgObolContext;
+
+	QSurfaceFormat format;
+	format.setDepthBufferSize(24);
+	format.setStencilBufferSize(8);
+
+	ctx->surface = new QOffscreenSurface;
+	ctx->surface->setFormat(format);
+	ctx->surface->create();
+	if (!ctx->surface->isValid()) {
+	    delete ctx->surface;
+	    ctx->surface = NULL;
+	    return this->createFallbackContext(ctx, width, height);
+	}
+
+	ctx->context = new QOpenGLContext;
+	ctx->context->setFormat(format);
+	if (!ctx->context->create()) {
+	    delete ctx->context;
+	    ctx->context = NULL;
+	    delete ctx->surface;
+	    ctx->surface = NULL;
+	    return this->createFallbackContext(ctx, width, height);
+	}
+
+	ctx->kind = QgObolContext::QT_CONTEXT;
+	return ctx;
+    }
+
+    virtual SbBool makeContextCurrent(void *context)
+    {
+	QgObolContext *ctx = static_cast<QgObolContext *>(context);
+	if (ctx && ctx->kind == QgObolContext::FALLBACK_CONTEXT)
+	    return this->fallbackManager ?
+		this->fallbackManager->makeContextCurrent(ctx->fallbackContext) : FALSE;
+	if (!ctx || !ctx->context || !ctx->surface)
+	    return FALSE;
+
+	ctx->previousContext = QOpenGLContext::currentContext();
+	ctx->previousSurface = ctx->previousContext ? ctx->previousContext->surface() : NULL;
+	return ctx->context->makeCurrent(ctx->surface) ? TRUE : FALSE;
+    }
+
+    virtual void restorePreviousContext(void *context)
+    {
+	QgObolContext *ctx = static_cast<QgObolContext *>(context);
+	if (ctx && ctx->kind == QgObolContext::FALLBACK_CONTEXT) {
+	    if (this->fallbackManager)
+		this->fallbackManager->restorePreviousContext(ctx->fallbackContext);
+	    return;
+	}
+	if (!ctx || !ctx->context)
+	    return;
+
+	if (ctx->previousContext && ctx->previousSurface)
+	    ctx->previousContext->makeCurrent(ctx->previousSurface);
+	else
+	    ctx->context->doneCurrent();
+    }
+
+    virtual void destroyContext(void *context)
+    {
+	QgObolContext *ctx = static_cast<QgObolContext *>(context);
+	if (!ctx)
+	    return;
+
+	if (ctx->kind == QgObolContext::FALLBACK_CONTEXT) {
+	    if (this->fallbackManager)
+		this->fallbackManager->destroyContext(ctx->fallbackContext);
+	    delete ctx;
+	    return;
+	}
+
+	if (ctx->context)
+	    ctx->context->doneCurrent();
+	delete ctx->context;
+	delete ctx->surface;
+	delete ctx;
+    }
+
+    virtual SbBool isOSMesaContext(void *context)
+    {
+	QgObolContext *ctx = static_cast<QgObolContext *>(context);
+	if (ctx && ctx->kind == QgObolContext::FALLBACK_CONTEXT &&
+		this->fallbackManager)
+	    return this->fallbackManager->isOSMesaContext(ctx->fallbackContext);
+	return FALSE;
+    }
+
+    virtual void maxOffscreenDimensions(unsigned int &width,
+	    unsigned int &height) const
+    {
+	if (this->fallbackManager) {
+	    this->fallbackManager->maxOffscreenDimensions(width, height);
+	    if (width > 0 && height > 0)
+		return;
+	}
+	width = 16384;
+	height = 16384;
+    }
+
+    virtual void getActualSurfaceSize(void *context,
+	    unsigned int &width,
+	    unsigned int &height) const
+    {
+	QgObolContext *ctx = static_cast<QgObolContext *>(context);
+	if (ctx && ctx->kind == QgObolContext::FALLBACK_CONTEXT &&
+		this->fallbackManager) {
+	    this->fallbackManager->getActualSurfaceSize(ctx->fallbackContext,
+		    width, height);
+	    return;
+	}
+	width = 0;
+	height = 0;
+    }
+
+    virtual void *getProcAddress(const char *funcName)
+    {
+	QOpenGLContext *ctx = QOpenGLContext::currentContext();
+	if (ctx && funcName)
+	    return reinterpret_cast<void *>(ctx->getProcAddress(funcName));
+	return this->fallbackManager ? this->fallbackManager->getProcAddress(funcName) : NULL;
+    }
+
+private:
+    void *createFallbackContext(QgObolContext *ctx,
+	    unsigned int width,
+	    unsigned int height)
+    {
+	if (!this->fallbackManager) {
+	    delete ctx;
+	    return NULL;
+	}
+
+	ctx->fallbackContext = this->fallbackManager->createOffscreenContext(width, height);
+	if (!ctx->fallbackContext) {
+	    delete ctx;
+	    return NULL;
+	}
+
+	ctx->kind = QgObolContext::FALLBACK_CONTEXT;
+	return ctx;
+    }
+
+    SoDB::ContextManager *fallbackManager = NULL;
+};
+
+#endif /* QGOBOLCONTEXTMANAGER_H */
