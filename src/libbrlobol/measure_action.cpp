@@ -15,8 +15,11 @@
 #include <Inventor/elements/SoModelMatrixElement.h>
 #include <Inventor/nodes/SoNode.h>
 
+#include <algorithm>
 #include <float.h>
 #include <math.h>
+#include <map>
+#include <utility>
 #include <vector>
 
 SO_ACTION_SOURCE(SoBRLMeasureAction);
@@ -31,22 +34,165 @@ measure_source_full_detail_result_valid(const BRLObolSourceMeshRequest &sourceRe
 	return FALSE;
 
     size_t faceCount = result.mesh.coordIndex.size() / 3;
-    if ((sourceRequest.faceCount != 0 &&
-		sourceRequest.faceCount != static_cast<uint64_t>(faceCount)) ||
-	    (sourceRequest.pointCount != 0 &&
-		sourceRequest.pointCount !=
-		static_cast<uint64_t>(result.mesh.points.size())))
-	return FALSE;
+    const SbBool scopedSubset =
+	(sourceRequest.queryBoundsValid && sourceRequest.queryToleranceValid &&
+	 sourceRequest.queryTolerance >= 0.0f) ? TRUE : FALSE;
+    if (sourceRequest.faceCount != 0) {
+	const uint64_t resultFaceCount = static_cast<uint64_t>(faceCount);
+	if (scopedSubset) {
+	    if (resultFaceCount > sourceRequest.faceCount)
+		return FALSE;
+	    if (resultFaceCount < sourceRequest.faceCount &&
+		    result.mesh.faceIndex.size() != faceCount)
+		return FALSE;
+	} else if (sourceRequest.faceCount != resultFaceCount) {
+	    return FALSE;
+	}
+    }
+    if (sourceRequest.pointCount != 0) {
+	const uint64_t resultPointCount =
+	    static_cast<uint64_t>(result.mesh.points.size());
+	if (scopedSubset) {
+	    if (resultPointCount > sourceRequest.pointCount)
+		return FALSE;
+	    if (resultPointCount < sourceRequest.pointCount &&
+		    result.mesh.vertexIndex.size() != result.mesh.points.size())
+		return FALSE;
+	} else if (sourceRequest.pointCount != resultPointCount) {
+	    return FALSE;
+	}
+    }
 
     return TRUE;
 }
 
+static int
+measure_source_mesh_face_index(const BRLObolLodMeshPayload &mesh,
+	size_t faceSlot, size_t faceCount)
+{
+    if (mesh.faceIndex.size() == faceCount)
+	return static_cast<int>(mesh.faceIndex[faceSlot]);
+    return static_cast<int>(faceSlot);
+}
+
+static int
+measure_source_mesh_vertex_index(const BRLObolLodMeshPayload &mesh,
+	int localIndex)
+{
+    if (localIndex < 0)
+	return localIndex;
+    if (mesh.vertexIndex.size() == mesh.points.size())
+	return static_cast<int>(
+		mesh.vertexIndex[static_cast<size_t>(localIndex)]);
+    return localIndex;
+}
+
 struct measure_segment_record {
     SbString path;
+    SbString editIntentId;
+    SbString editIntentRole;
     int primitiveIndex;
     SbVec3f a;
     SbVec3f b;
 };
+
+static const float MEASURE_ANGLE_VERTEX_TOLERANCE = 1.0e-5f;
+
+struct measure_endpoint_cell {
+    long long x;
+    long long y;
+    long long z;
+
+    bool operator<(const measure_endpoint_cell &other) const
+    {
+	if (this->x != other.x)
+	    return this->x < other.x;
+	if (this->y != other.y)
+	    return this->y < other.y;
+	return this->z < other.z;
+    }
+};
+
+static measure_endpoint_cell
+measure_make_endpoint_cell(long long x, long long y, long long z)
+{
+    measure_endpoint_cell cell;
+    cell.x = x;
+    cell.y = y;
+    cell.z = z;
+    return cell;
+}
+
+static long long
+measure_endpoint_cell_coord(float value)
+{
+    return static_cast<long long>(floor(static_cast<double>(value) /
+	    static_cast<double>(MEASURE_ANGLE_VERTEX_TOLERANCE)));
+}
+
+static measure_endpoint_cell
+measure_endpoint_cell_for_point(const SbVec3f &point)
+{
+    return measure_make_endpoint_cell(
+	    measure_endpoint_cell_coord(point[0]),
+	    measure_endpoint_cell_coord(point[1]),
+	    measure_endpoint_cell_coord(point[2]));
+}
+
+static void
+measure_collect_angle_endpoint_candidates(
+	const std::map<measure_endpoint_cell, std::vector<size_t> > &endpointMap,
+	const SbVec3f &point,
+	std::vector<size_t> &candidates)
+{
+    measure_endpoint_cell center = measure_endpoint_cell_for_point(point);
+    for (int dx = -1; dx <= 1; dx++) {
+	for (int dy = -1; dy <= 1; dy++) {
+	    for (int dz = -1; dz <= 1; dz++) {
+		measure_endpoint_cell key = measure_make_endpoint_cell(
+			center.x + dx, center.y + dy, center.z + dz);
+		std::map<measure_endpoint_cell,
+		    std::vector<size_t> >::const_iterator it =
+		    endpointMap.find(key);
+		if (it == endpointMap.end())
+		    continue;
+		candidates.insert(candidates.end(), it->second.begin(),
+			it->second.end());
+	    }
+	}
+    }
+}
+
+static void
+measure_add_angle_endpoint(
+	std::map<measure_endpoint_cell, std::vector<size_t> > &endpointMap,
+	const SbVec3f &point,
+	size_t segmentIndex)
+{
+    endpointMap[measure_endpoint_cell_for_point(point)].push_back(segmentIndex);
+}
+
+static float
+measure_source_local_query_distance_limit(const SbMatrix &worldToLocal,
+	float distance)
+{
+    if (distance <= 0.0f)
+	return distance;
+
+    const SbVec3f axes[3] = {
+	SbVec3f(1.0f, 0.0f, 0.0f),
+	SbVec3f(0.0f, 1.0f, 0.0f),
+	SbVec3f(0.0f, 0.0f, 1.0f)
+    };
+    float scale = 0.0f;
+    for (int i = 0; i < 3; i++) {
+	SbVec3f localAxis;
+	worldToLocal.multDirMatrix(axes[i], localAxis);
+	scale += localAxis.length();
+    }
+
+    return scale > 0.0f ? distance * scale : distance;
+}
 
 static SbVec3f
 closest_point_on_segment(const SbVec3f &query, const SbVec3f &a, const SbVec3f &b)
@@ -62,6 +208,47 @@ closest_point_on_segment(const SbVec3f &query, const SbVec3f &a, const SbVec3f &
     if (t > 1.0f)
 	t = 1.0f;
     return a + ab * t;
+}
+
+static float
+distance_squared_to_segment(const SbVec3f &p, const SbVec3f &a,
+	const SbVec3f &b)
+{
+    SbVec3f closest = closest_point_on_segment(p, a, b);
+    return (p - closest).sqrLength();
+}
+
+static int
+nearest_face_vertex_slot(const SbVec3f &point, const SbVec3f vertices[3])
+{
+    int nearest = 0;
+    float nearestDist = (point - vertices[0]).sqrLength();
+    for (int i = 1; i < 3; i++) {
+	float dist = (point - vertices[i]).sqrLength();
+	if (dist < nearestDist) {
+	    nearest = i;
+	    nearestDist = dist;
+	}
+    }
+    return nearest;
+}
+
+static int
+nearest_face_edge_slot(const SbVec3f &point, const SbVec3f vertices[3])
+{
+    static const int edges[3][2] = {{0, 1}, {1, 2}, {2, 0}};
+    int nearest = 0;
+    float nearestDist = distance_squared_to_segment(point,
+	    vertices[edges[0][0]], vertices[edges[0][1]]);
+    for (int i = 1; i < 3; i++) {
+	float dist = distance_squared_to_segment(point,
+		vertices[edges[i][0]], vertices[edges[i][1]]);
+	if (dist < nearestDist) {
+	    nearest = i;
+	    nearestDist = dist;
+	}
+    }
+    return nearest;
 }
 
 static SbVec3f
@@ -127,7 +314,7 @@ clamp_float(float value, float minValue, float maxValue)
 static SbBool
 same_point(const SbVec3f &a, const SbVec3f &b)
 {
-    return (a - b).length() <= 1.0e-5f;
+    return (a - b).length() <= MEASURE_ANGLE_VERTEX_TOLERANCE;
 }
 
 static SbBool
@@ -187,16 +374,24 @@ SoBRLMeasureAction::SoBRLMeasureAction(void) :
     nearestPoint(0.0f, 0.0f, 0.0f),
     anglePoint(0.0f, 0.0f, 0.0f),
     nearestPath(""),
+    nearestEditIntentId(""),
+    nearestEditIntentRole(""),
     anglePath(""),
+    angleEditIntentId(""),
+    angleEditIntentRole(""),
     totalLength(0.0f),
     surfaceArea(0.0f),
     nearestDistance(FLT_MAX),
+    queryDistanceLimit(0.0f),
     angleDegrees(0.0f),
     angleDistance(FLT_MAX),
     shapeCount(0),
     segmentCount(0),
     triangleCount(0),
     nearestPrimitiveIndex(-1),
+    nearestFaceEdgeSlot(-1),
+    nearestFaceVertexSlot(-1),
+    nearestFaceSingleVertexIndex(-1),
     anglePrimitiveIndexA(-1),
     anglePrimitiveIndexB(-1),
     nearestPrimitiveKind(NONE),
@@ -204,12 +399,19 @@ SoBRLMeasureAction::SoBRLMeasureAction(void) :
     selectionFilter(ALL_SELECTION),
     highlightFilter(ALL_HIGHLIGHT),
     geometryPolicy(SoBRLMeasureAction::FULL_DETAIL),
+    angleComputationEnabled(TRUE),
     skippedLodDisplayMeshCount(0),
     haveQueryPoint(FALSE),
+    haveQueryDistanceLimit(FALSE),
     haveNearestPrimitive(FALSE),
     haveAngle(FALSE)
 {
     SO_ACTION_CONSTRUCTOR(SoBRLMeasureAction);
+    this->nearestFaceVertexIndex[0] = -1;
+    this->nearestFaceVertexIndex[1] = -1;
+    this->nearestFaceVertexIndex[2] = -1;
+    this->nearestFaceEdgeVertexIndex[0] = -1;
+    this->nearestFaceEdgeVertexIndex[1] = -1;
     this->bounds.makeEmpty();
 }
 
@@ -238,6 +440,37 @@ void
 SoBRLMeasureAction::clearQueryPoint(void)
 {
     this->haveQueryPoint = FALSE;
+}
+
+void
+SoBRLMeasureAction::setQueryDistanceLimit(float distance)
+{
+    if (distance >= 0.0f && distance <= FLT_MAX) {
+	this->queryDistanceLimit = distance;
+	this->haveQueryDistanceLimit = TRUE;
+	return;
+    }
+
+    this->clearQueryDistanceLimit();
+}
+
+void
+SoBRLMeasureAction::clearQueryDistanceLimit(void)
+{
+    this->queryDistanceLimit = 0.0f;
+    this->haveQueryDistanceLimit = FALSE;
+}
+
+SbBool
+SoBRLMeasureAction::hasQueryDistanceLimit(void) const
+{
+    return this->haveQueryDistanceLimit;
+}
+
+float
+SoBRLMeasureAction::getQueryDistanceLimit(void) const
+{
+    return this->queryDistanceLimit;
 }
 
 void
@@ -287,6 +520,18 @@ SoBRLMeasureAction::GeometryPolicy
 SoBRLMeasureAction::getGeometryPolicy(void) const
 {
     return this->geometryPolicy;
+}
+
+void
+SoBRLMeasureAction::setAngleComputationEnabled(SbBool enabled)
+{
+    this->angleComputationEnabled = enabled ? TRUE : FALSE;
+}
+
+SbBool
+SoBRLMeasureAction::isAngleComputationEnabled(void) const
+{
+    return this->angleComputationEnabled;
 }
 
 unsigned int
@@ -354,9 +599,14 @@ SoBRLMeasureAction::consumeSourceBackedFullDetailResult(
 	SbVec3f pointC = this->pointForCoordinateSpace(
 		sourceRequest.localToWorld,
 		result.mesh.points[static_cast<size_t>(ic)]);
+	const int sourceIa = measure_source_mesh_vertex_index(result.mesh, ia);
+	const int sourceIb = measure_source_mesh_vertex_index(result.mesh, ib);
+	const int sourceIc = measure_source_mesh_vertex_index(result.mesh, ic);
 	measuredShape = TRUE;
-	this->measureTriangle(sourceRequest.path, static_cast<int>(i),
-		pointA, pointB, pointC);
+	this->measureTriangle(sourceRequest.path, sourceRequest.editIntentId,
+		sourceRequest.editIntentRole,
+		measure_source_mesh_face_index(result.mesh, i, faceCount),
+		pointA, pointB, pointC, sourceIa, sourceIb, sourceIc);
     }
 
     if (measuredShape)
@@ -486,10 +736,78 @@ SoBRLMeasureAction::getNearestPath(void) const
     return this->nearestPath;
 }
 
+const SbString &
+SoBRLMeasureAction::getNearestEditIntentId(void) const
+{
+    return this->nearestEditIntentId;
+}
+
+const SbString &
+SoBRLMeasureAction::getNearestEditIntentRole(void) const
+{
+    return this->nearestEditIntentRole;
+}
+
 int
 SoBRLMeasureAction::getNearestPrimitiveIndex(void) const
 {
     return this->nearestPrimitiveIndex;
+}
+
+int
+SoBRLMeasureAction::getNearestFaceVertexIndex(int vertexSlot) const
+{
+    if (vertexSlot < 0 || vertexSlot >= 3)
+	return -1;
+    return this->nearestFaceVertexIndex[vertexSlot];
+}
+
+int
+SoBRLMeasureAction::getNearestFaceVertexIndexA(void) const
+{
+    return this->getNearestFaceVertexIndex(0);
+}
+
+int
+SoBRLMeasureAction::getNearestFaceVertexIndexB(void) const
+{
+    return this->getNearestFaceVertexIndex(1);
+}
+
+int
+SoBRLMeasureAction::getNearestFaceVertexIndexC(void) const
+{
+    return this->getNearestFaceVertexIndex(2);
+}
+
+int
+SoBRLMeasureAction::getNearestFaceEdgeSlot(void) const
+{
+    return this->nearestFaceEdgeSlot;
+}
+
+int
+SoBRLMeasureAction::getNearestFaceEdgeVertexIndexA(void) const
+{
+    return this->nearestFaceEdgeVertexIndex[0];
+}
+
+int
+SoBRLMeasureAction::getNearestFaceEdgeVertexIndexB(void) const
+{
+    return this->nearestFaceEdgeVertexIndex[1];
+}
+
+int
+SoBRLMeasureAction::getNearestFaceVertexSlot(void) const
+{
+    return this->nearestFaceVertexSlot;
+}
+
+int
+SoBRLMeasureAction::getNearestFaceVertexIndex(void) const
+{
+    return this->nearestFaceSingleVertexIndex;
 }
 
 const SbVec3f &
@@ -526,6 +844,18 @@ const SbString &
 SoBRLMeasureAction::getAnglePath(void) const
 {
     return this->anglePath;
+}
+
+const SbString &
+SoBRLMeasureAction::getAngleEditIntentId(void) const
+{
+    return this->angleEditIntentId;
+}
+
+const SbString &
+SoBRLMeasureAction::getAngleEditIntentRole(void) const
+{
+    return this->angleEditIntentRole;
 }
 
 int
@@ -568,48 +898,100 @@ SoBRLMeasureAction::vlistShapeAction(SoAction *action, SoNode *node)
 	return;
 
     const SbMatrix &localToWorld = SoModelMatrixElement::get(action->getState());
-    std::vector<measure_segment_record> measuredSegments;
-
-    int localSegmentCount = shape->getSegmentCount();
+    const SbString &sourcePath = shape->sourcePath.getValue();
+    const SbString &editIntentId = shape->editIntentId.getValue();
+    const SbString &editIntentRole = shape->editIntentRole.getValue();
     SbBool measuredShape = FALSE;
+    SbVec3f last;
+    SbBool haveLast = FALSE;
+    int segmentIndex = 0;
+    int n = shape->point.getNum();
+    if (shape->command.getNum() < n)
+	n = shape->command.getNum();
 
-    for (int i = 0; i < localSegmentCount; i++) {
-	SbVec3f a;
-	SbVec3f b;
-	if (!shape->getSegment(i, a, b))
+    std::vector<measure_segment_record> measuredSegments;
+    for (int i = 0; i < n; i++) {
+	if (shape->command[i] == SoBRLVListShape::MOVE) {
+	    last = shape->point[i];
+	    haveLast = TRUE;
 	    continue;
-	if (!measureAction->selectionAllows(shape->isPrimitiveSelected(i)))
-	    continue;
-	if (!measureAction->highlightAllows(shape->isPrimitiveHighlighted(i)))
+	}
+
+	if (shape->command[i] != SoBRLVListShape::DRAW)
 	    continue;
 
-	SbVec3f pointA = measureAction->pointForCoordinateSpace(localToWorld, a);
-	SbVec3f pointB = measureAction->pointForCoordinateSpace(localToWorld, b);
+	if (!haveLast) {
+	    last = shape->point[i];
+	    haveLast = TRUE;
+	    continue;
+	}
+
+	const int currentSegment = segmentIndex++;
+	if (!measureAction->selectionAllows(shape->isPrimitiveSelected(currentSegment)) ||
+		!measureAction->highlightAllows(shape->isPrimitiveHighlighted(currentSegment))) {
+	    last = shape->point[i];
+	    continue;
+	}
+
+	SbVec3f pointA = measureAction->pointForCoordinateSpace(localToWorld, last);
+	SbVec3f pointB = measureAction->pointForCoordinateSpace(localToWorld, shape->point[i]);
 
 	measuredShape = TRUE;
-	measureAction->measureSegment(shape->sourcePath.getValue(), i, pointA, pointB);
-	measure_segment_record record;
-	record.path = shape->sourcePath.getValue();
-	record.primitiveIndex = i;
-	record.a = pointA;
-	record.b = pointB;
-	measuredSegments.push_back(record);
+	measureAction->measureSegment(sourcePath, editIntentId,
+		editIntentRole, currentSegment, pointA, pointB);
+	if (measureAction->angleComputationEnabled) {
+	    measure_segment_record record;
+	    record.path = sourcePath;
+	    record.editIntentId = editIntentId;
+	    record.editIntentRole = editIntentRole;
+	    record.primitiveIndex = currentSegment;
+	    record.a = pointA;
+	    record.b = pointB;
+	    measuredSegments.push_back(record);
+	}
+	last = shape->point[i];
     }
 
-    for (size_t i = 0; i < measuredSegments.size(); i++) {
-	for (size_t j = i + 1; j < measuredSegments.size(); j++) {
+    if (measureAction->angleComputationEnabled) {
+	std::map<measure_endpoint_cell, std::vector<size_t> > endpointMap;
+	std::vector<std::pair<size_t, size_t> > connectedPairs;
+	std::vector<size_t> candidates;
+
+	for (size_t i = 0; i < measuredSegments.size(); i++) {
+	    candidates.clear();
+	    measure_collect_angle_endpoint_candidates(endpointMap,
+		    measuredSegments[i].a, candidates);
+	    measure_collect_angle_endpoint_candidates(endpointMap,
+		    measuredSegments[i].b, candidates);
+	    std::sort(candidates.begin(), candidates.end());
+	    candidates.erase(std::unique(candidates.begin(), candidates.end()),
+		    candidates.end());
+	    for (size_t j = 0; j < candidates.size(); j++)
+		connectedPairs.push_back(std::make_pair(candidates[j], i));
+	    measure_add_angle_endpoint(endpointMap, measuredSegments[i].a, i);
+	    measure_add_angle_endpoint(endpointMap, measuredSegments[i].b, i);
+	}
+
+	std::sort(connectedPairs.begin(), connectedPairs.end());
+	connectedPairs.erase(std::unique(connectedPairs.begin(),
+		connectedPairs.end()), connectedPairs.end());
+	for (size_t i = 0; i < connectedPairs.size(); i++) {
+	    size_t segmentA = connectedPairs[i].first;
+	    size_t segmentB = connectedPairs[i].second;
 	    SbVec3f shared;
 	    SbVec3f otherA;
 	    SbVec3f otherB;
 	    float degrees = 0.0f;
-	    if (!shared_segment_vertex(measuredSegments[i], measuredSegments[j],
-		    shared, otherA, otherB))
+	    if (!shared_segment_vertex(measuredSegments[segmentA],
+		    measuredSegments[segmentB], shared, otherA, otherB))
 		continue;
 	    if (!segment_angle_degrees(shared, otherA, otherB, degrees))
 		continue;
-	    measureAction->considerAngle(measuredSegments[i].path,
-		    measuredSegments[i].primitiveIndex,
-		    measuredSegments[j].primitiveIndex,
+	    measureAction->considerAngle(measuredSegments[segmentA].path,
+		    measuredSegments[segmentA].editIntentId,
+		    measuredSegments[segmentA].editIntentRole,
+		    measuredSegments[segmentA].primitiveIndex,
+		    measuredSegments[segmentB].primitiveIndex,
 		    shared,
 		    degrees);
 	}
@@ -640,19 +1022,29 @@ SoBRLMeasureAction::meshShapeAction(SoAction *action, SoNode *node)
 	measureAction->appendSourceBackedFullDetailRequest(shape, localToWorld);
 	return;
     }
+    const SbString &sourcePath = shape->sourcePath.getValue();
+    const SbString &editIntentId = shape->editIntentId.getValue();
+    const SbString &editIntentRole = shape->editIntentRole.getValue();
 
     int localTriangleCount = useFullDetail ?
 	shape->getFullDetailTriangleCount() : shape->getTriangleCount();
     SbBool measuredShape = FALSE;
 
     for (int i = 0; i < localTriangleCount; i++) {
+	int ia = -1;
+	int ib = -1;
+	int ic = -1;
 	SbVec3f a;
 	SbVec3f b;
 	SbVec3f c;
 	if (useFullDetail) {
+	    if (!shape->getFullDetailTriangleVertexIndices(i, ia, ib, ic))
+		continue;
 	    if (!shape->getFullDetailTriangle(i, a, b, c))
 		continue;
 	} else {
+	    if (!shape->getTriangleVertexIndices(i, ia, ib, ic))
+		continue;
 	    if (!shape->getTriangle(i, a, b, c))
 		continue;
 	}
@@ -666,7 +1058,8 @@ SoBRLMeasureAction::meshShapeAction(SoAction *action, SoNode *node)
 	SbVec3f pointC = measureAction->pointForCoordinateSpace(localToWorld, c);
 
 	measuredShape = TRUE;
-	measureAction->measureTriangle(shape->sourcePath.getValue(), i, pointA, pointB, pointC);
+	measureAction->measureTriangle(sourcePath, editIntentId,
+		editIntentRole, i, pointA, pointB, pointC, ia, ib, ic);
     }
 
     if (measuredShape)
@@ -678,6 +1071,8 @@ SoBRLMeasureAction::resetResults(void)
 {
     this->nearestPoint = SbVec3f(0.0f, 0.0f, 0.0f);
     this->nearestPath = "";
+    this->nearestEditIntentId = "";
+    this->nearestEditIntentRole = "";
     this->bounds.makeEmpty();
     this->totalLength = 0.0f;
     this->surfaceArea = 0.0f;
@@ -688,6 +1083,14 @@ SoBRLMeasureAction::resetResults(void)
     this->segmentCount = 0;
     this->triangleCount = 0;
     this->nearestPrimitiveIndex = -1;
+    this->nearestFaceVertexIndex[0] = -1;
+    this->nearestFaceVertexIndex[1] = -1;
+    this->nearestFaceVertexIndex[2] = -1;
+    this->nearestFaceEdgeSlot = -1;
+    this->nearestFaceEdgeVertexIndex[0] = -1;
+    this->nearestFaceEdgeVertexIndex[1] = -1;
+    this->nearestFaceVertexSlot = -1;
+    this->nearestFaceSingleVertexIndex = -1;
     this->anglePrimitiveIndexA = -1;
     this->anglePrimitiveIndexB = -1;
     this->skippedLodDisplayMeshCount = 0;
@@ -697,6 +1100,8 @@ SoBRLMeasureAction::resetResults(void)
     this->haveAngle = FALSE;
     this->anglePoint = SbVec3f(0.0f, 0.0f, 0.0f);
     this->anglePath = "";
+    this->angleEditIntentId = "";
+    this->angleEditIntentRole = "";
 }
 
 void
@@ -709,12 +1114,38 @@ SoBRLMeasureAction::appendSourceBackedFullDetailRequest(
     BRLObolSourceMeshRequest request;
     if (shape->makeSourceMeshRequest(request)) {
 	request.localToWorld = localToWorld;
+	if (this->haveQueryPoint) {
+	    SbVec3f localQuery = this->queryPoint;
+	    float localDistanceLimit = this->queryDistanceLimit;
+	    if (this->coordinateSpace == WORLD_SPACE) {
+		SbMatrix worldToLocal = localToWorld.inverse();
+		worldToLocal.multVecMatrix(this->queryPoint, localQuery);
+		localDistanceLimit =
+		    measure_source_local_query_distance_limit(worldToLocal,
+			this->queryDistanceLimit);
+	    }
+	    request.queryBoundsValid = 1;
+	    request.queryBounds.makeEmpty();
+	    if (this->haveQueryDistanceLimit && localDistanceLimit >= 0.0f) {
+		SbVec3f delta(localDistanceLimit, localDistanceLimit,
+			localDistanceLimit);
+		request.queryBounds.extendBy(localQuery - delta);
+		request.queryBounds.extendBy(localQuery + delta);
+		request.queryToleranceValid = 1;
+		request.queryTolerance = localDistanceLimit;
+	    } else {
+		request.queryBounds.extendBy(localQuery);
+	    }
+	}
 	this->sourceBackedFullDetailRequests.push_back(request);
     }
 }
 
 void
-SoBRLMeasureAction::measureSegment(const SbString &path, int primitiveIndex,
+SoBRLMeasureAction::measureSegment(const SbString &path,
+	const SbString &editIntentId,
+	const SbString &editIntentRole,
+	int primitiveIndex,
 	const SbVec3f &a, const SbVec3f &b)
 {
     this->bounds.extendBy(a);
@@ -727,6 +1158,8 @@ SoBRLMeasureAction::measureSegment(const SbString &path, int primitiveIndex,
 
     SbVec3f candidate = closest_point_on_segment(this->queryPoint, a, b);
     float dist = (this->queryPoint - candidate).length();
+    if (!this->queryDistanceAllows(dist))
+	return;
     if (dist >= this->nearestDistance)
 	return;
 
@@ -735,17 +1168,23 @@ SoBRLMeasureAction::measureSegment(const SbString &path, int primitiveIndex,
     this->nearestDistance = dist;
     this->nearestPoint = candidate;
     this->nearestPath = path;
+    this->nearestEditIntentId = editIntentId;
+    this->nearestEditIntentRole = editIntentRole;
     this->nearestPrimitiveIndex = primitiveIndex;
 }
 
 void
 SoBRLMeasureAction::considerAngle(const SbString &path,
+	const SbString &editIntentId,
+	const SbString &editIntentRole,
 	int primitiveIndexA,
 	int primitiveIndexB,
 	const SbVec3f &point,
 	float degrees)
 {
     float dist = this->haveQueryPoint ? (this->queryPoint - point).length() : 0.0f;
+    if (!this->queryDistanceAllows(dist))
+	return;
     if (this->haveAngle) {
 	if (!this->haveQueryPoint)
 	    return;
@@ -755,6 +1194,8 @@ SoBRLMeasureAction::considerAngle(const SbString &path,
 
     this->haveAngle = TRUE;
     this->anglePath = path;
+    this->angleEditIntentId = editIntentId;
+    this->angleEditIntentRole = editIntentRole;
     this->anglePoint = point;
     this->angleDegrees = degrees;
     this->angleDistance = dist;
@@ -775,9 +1216,17 @@ SoBRLMeasureAction::pointForCoordinateSpace(const SbMatrix &localToWorld,
 }
 
 void
-SoBRLMeasureAction::measureTriangle(const SbString &path, int primitiveIndex,
-	const SbVec3f &a, const SbVec3f &b, const SbVec3f &c)
+SoBRLMeasureAction::measureTriangle(const SbString &path,
+	const SbString &editIntentId,
+	const SbString &editIntentRole,
+	int primitiveIndex,
+	const SbVec3f &a, const SbVec3f &b, const SbVec3f &c,
+	int vertexIndexA,
+	int vertexIndexB,
+	int vertexIndexC)
 {
+    static const int edges[3][2] = {{0, 1}, {1, 2}, {2, 0}};
+
     this->bounds.extendBy(a);
     this->bounds.extendBy(b);
     this->bounds.extendBy(c);
@@ -789,6 +1238,8 @@ SoBRLMeasureAction::measureTriangle(const SbString &path, int primitiveIndex,
 
     SbVec3f candidate = closest_point_on_triangle(this->queryPoint, a, b, c);
     float dist = (this->queryPoint - candidate).length();
+    if (!this->queryDistanceAllows(dist))
+	return;
     if (dist >= this->nearestDistance)
 	return;
 
@@ -797,7 +1248,24 @@ SoBRLMeasureAction::measureTriangle(const SbString &path, int primitiveIndex,
     this->nearestDistance = dist;
     this->nearestPoint = candidate;
     this->nearestPath = path;
+    this->nearestEditIntentId = editIntentId;
+    this->nearestEditIntentRole = editIntentRole;
     this->nearestPrimitiveIndex = primitiveIndex;
+    this->nearestFaceVertexIndex[0] = vertexIndexA;
+    this->nearestFaceVertexIndex[1] = vertexIndexB;
+    this->nearestFaceVertexIndex[2] = vertexIndexC;
+
+    SbVec3f vertices[3] = {a, b, c};
+    int vertexIndices[3] = {vertexIndexA, vertexIndexB, vertexIndexC};
+    int vertexSlot = nearest_face_vertex_slot(candidate, vertices);
+    int edgeSlot = nearest_face_edge_slot(candidate, vertices);
+    this->nearestFaceVertexSlot = vertexSlot;
+    this->nearestFaceSingleVertexIndex = vertexIndices[vertexSlot];
+    this->nearestFaceEdgeSlot = edgeSlot;
+    this->nearestFaceEdgeVertexIndex[0] =
+	vertexIndices[edges[edgeSlot][0]];
+    this->nearestFaceEdgeVertexIndex[1] =
+	vertexIndices[edges[edgeSlot][1]];
 }
 
 SbBool
@@ -818,4 +1286,12 @@ SoBRLMeasureAction::highlightAllows(SbBool highlighted) const
     if (this->highlightFilter == UNHIGHLIGHTED_ONLY)
 	return !highlighted;
     return TRUE;
+}
+
+SbBool
+SoBRLMeasureAction::queryDistanceAllows(float distance) const
+{
+    if (!this->haveQueryDistanceLimit)
+	return TRUE;
+    return distance <= this->queryDistanceLimit ? TRUE : FALSE;
 }

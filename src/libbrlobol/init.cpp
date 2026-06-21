@@ -21,6 +21,7 @@
 #include "brlobol/line_layer_overlay.h"
 #include "brlobol/lod_mesh_shape.h"
 #include "brlobol/lod_update_action.h"
+#include "brlobol/material_object.h"
 #include "brlobol/measure_action.h"
 #include "brlobol/mesh_lod_submit_action.h"
 #include "brlobol/mesh_residency_action.h"
@@ -85,6 +86,7 @@ brlobol_init(SoDB::ContextManager *contextManager)
     SoBRLLineLayerOverlay::initClass();
     SoBRLMeshShape::initClass();
     SoBRLLodMeshShape::initClass();
+    SoBRLMaterialObject::initClass();
     SoBRLSourceMeshPickAction::initClass();
     SoBRLRealizeAction::initClass();
     SoBRLLodUpdateAction::initClass();

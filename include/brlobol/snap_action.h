@@ -40,7 +40,9 @@ public:
 	FACE_NEAREST = 8,
 	CENTER = 16,
 	CONSTRUCTION_PLANE = 32,
-	ALL_KINDS = ENDPOINT | MIDPOINT | LINE_NEAREST | FACE_NEAREST | CENTER | CONSTRUCTION_PLANE
+	VERTEX = 64,
+	EDGE_NEAREST = 128,
+	ALL_KINDS = ENDPOINT | MIDPOINT | LINE_NEAREST | FACE_NEAREST | CENTER | CONSTRUCTION_PLANE | VERTEX | EDGE_NEAREST
     };
 
     enum SelectionFilter {
@@ -107,7 +109,13 @@ public:
     SnapKind getKind(void) const;
     const SbVec3f &getPoint(void) const;
     const SbString &getPath(void) const;
+    const SbString &getEditIntentId(void) const;
+    const SbString &getEditIntentRole(void) const;
     int getPrimitiveIndex(void) const;
+    int getVertexIndex(void) const;
+    int getEdgeSlot(void) const;
+    int getEdgeVertexIndexA(void) const;
+    int getEdgeVertexIndexB(void) const;
     float getDistance(void) const;
 
 protected:
@@ -120,8 +128,15 @@ private:
 
     void appendSourceBackedFullDetailRequest(const SoBRLMeshShape *shape,
 	    const SbMatrix &localToWorld);
-    void consider(SnapKind kind, const SbString &path, int primitiveIndex,
-	    const SbVec3f &query, const SbVec3f &candidate);
+    void consider(SnapKind kind, const SbString &path,
+	    const SbString &editIntentId,
+	    const SbString &editIntentRole,
+	    int primitiveIndex,
+	    const SbVec3f &query, const SbVec3f &candidate,
+	    int vertexIndex = -1,
+	    int edgeSlot = -1,
+	    int edgeVertexIndexA = -1,
+	    int edgeVertexIndexB = -1);
     SbVec3f pointForCoordinateSpace(const SbMatrix &localToWorld,
 	    const SbVec3f &localPoint) const;
     SbBool selectionAllows(SbBool selected) const;
@@ -129,10 +144,15 @@ private:
     SbVec3f queryPoint;
     SbVec3f candidatePoint;
     SbString candidatePath;
+    SbString candidateEditIntentId;
+    SbString candidateEditIntentRole;
     uint32_t enabledKinds;
     float tolerance;
     float bestDistance;
     int candidatePrimitiveIndex;
+    int candidateVertexIndex;
+    int candidateEdgeSlot;
+    int candidateEdgeVertexIndex[2];
     SnapKind candidateKind;
     SbVec3f constructionPlaneOrigin;
     SbVec3f constructionPlaneNormal;

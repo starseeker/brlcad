@@ -227,11 +227,18 @@ QgSelectPntFilter::eventFilter(QObject *, QEvent *e)
 	return true;
 
     std::vector<QgObolPickRecord> obolPicks;
+    int submittedSourceRequests = 0;
     if (qg_obol_pick_point(view_widget(), v->gv_mouse_x, v->gv_mouse_y,
-	    6.0f, !first_only, obolPicks) > 0) {
+	    6.0f, !first_only, obolPicks,
+	    &submittedSourceRequests) > 0) {
 	std::vector<std::string> paths;
 	for (const QgObolPickRecord &pick : obolPicks)
 	    _qg_append_unique_path(paths, pick.path.c_str());
+	set_selected_paths(v, paths);
+	return true;
+    }
+    if (submittedSourceRequests > 0) {
+	std::vector<std::string> paths;
 	set_selected_paths(v, paths);
 	return true;
     }
@@ -266,7 +273,7 @@ QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
 	int view_width = rt_view_width_from_bsg(v);
 	int view_height = rt_view_height_from_bsg(v);
 	struct bsg_interactive_rect_state rect;
-	if (!bsg_view_interactive_rect_get(v, &rect))
+	if (!rt_view_interactive_rect_from_bsg(&rect, v))
 	    return true;
 	rect.line_width = 1;
 	rect.dim[0] = 0;
@@ -278,14 +285,14 @@ QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
 	rect.cdim[0] = view_width;
 	rect.cdim[1] = view_height;
 	rect.aspect = (fastf_t)rect.cdim[X] / rect.cdim[Y];
-	bsg_view_interactive_rect_set(v, &rect);
+	rt_view_interactive_rect_set_bsg(v, &rect);
 	emit view_updated(QG_VIEW_DRAWN);
 	return true;
     }
 
     if (e->type() == QEvent::MouseMove) {
 	struct bsg_interactive_rect_state rect;
-	if (!bsg_view_interactive_rect_get(v, &rect))
+	if (!rt_view_interactive_rect_from_bsg(&rect, v))
 	    return true;
 	int view_height = rt_view_height_from_bsg(v);
 	rect.draw = 1;
@@ -295,7 +302,7 @@ QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
 	rect.y = ((0.5 - (rect.cdim[Y] - rect.pos[Y]) / (fastf_t)rect.cdim[Y]) / rect.aspect * 2.0);
 	rect.width = rect.dim[X] * 2.0 / (fastf_t)rect.cdim[X];
 	rect.height = rect.dim[Y] * 2.0 / (fastf_t)rect.cdim[X];
-	bsg_view_interactive_rect_set(v, &rect);
+	rt_view_interactive_rect_set_bsg(v, &rect);
 	emit view_updated(QG_VIEW_DRAWN);
 	return true;
     }
@@ -304,9 +311,10 @@ QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
 	int ipx = (int)px;
 	int ipy = (int)py;
 	std::vector<QgObolPickRecord> obolPicks;
+	int submittedSourceRequests = 0;
 	if (qg_obol_pick_rect(view_widget(), ipx, ipy,
 		v->gv_mouse_x, v->gv_mouse_y, 6.0f, first_only,
-		obolPicks) > 0) {
+		obolPicks, &submittedSourceRequests) > 0) {
 	    std::vector<std::string> paths;
 	    for (const QgObolPickRecord &pick : obolPicks)
 		_qg_append_unique_path(paths, pick.path.c_str());
@@ -314,7 +322,7 @@ QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
 		set_selected_paths(v, paths);
 
 		struct bsg_interactive_rect_state rect;
-		if (!bsg_view_interactive_rect_get(v, &rect))
+		if (!rt_view_interactive_rect_from_bsg(&rect, v))
 		    return true;
 		rect.draw = 0;
 		rect.line_width = 0;
@@ -322,10 +330,27 @@ QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
 		rect.pos[1] = 0;
 		rect.dim[0] = 0;
 		rect.dim[1] = 0;
-		bsg_view_interactive_rect_set(v, &rect);
+		rt_view_interactive_rect_set_bsg(v, &rect);
 		emit view_updated(QG_VIEW_DRAWN);
 		return true;
 	    }
+	}
+
+	if (submittedSourceRequests > 0) {
+	    std::vector<std::string> paths;
+	    set_selected_paths(v, paths);
+	    struct bsg_interactive_rect_state rect;
+	    if (!rt_view_interactive_rect_from_bsg(&rect, v))
+		return true;
+	    rect.draw = 0;
+	    rect.line_width = 0;
+	    rect.pos[0] = 0;
+	    rect.pos[1] = 0;
+	    rect.dim[0] = 0;
+	    rect.dim[1] = 0;
+	    rt_view_interactive_rect_set_bsg(v, &rect);
+	    emit view_updated(QG_VIEW_DRAWN);
+	    return true;
 	}
 
 	struct bsg_pick_result *res =
@@ -338,7 +363,7 @@ QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
 	set_selected_result(v, res);
 
 	struct bsg_interactive_rect_state rect;
-	if (!bsg_view_interactive_rect_get(v, &rect))
+	if (!rt_view_interactive_rect_from_bsg(&rect, v))
 	    return true;
 	rect.draw = 0;
 	rect.line_width = 0;
@@ -346,7 +371,7 @@ QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
 	rect.pos[1] = 0;
 	rect.dim[0] = 0;
 	rect.dim[1] = 0;
-	bsg_view_interactive_rect_set(v, &rect);
+	rt_view_interactive_rect_set_bsg(v, &rect);
 	emit view_updated(QG_VIEW_DRAWN);
 	return true;
     }
@@ -456,6 +481,33 @@ _qg_pick_result_from_ray_hits(const struct bsg_pick_result *candidates,
     return res;
 }
 
+static bool
+_qg_select_ray_from_view(struct bsg_view *v, point_t origin, vect_t direction)
+{
+    if (!v)
+	return false;
+
+    fastf_t vx = -FLT_MAX;
+    fastf_t vy = -FLT_MAX;
+    if (!rt_view_screen_to_view_from_bsg(&vx, &vy, v, v->gv_mouse_x,
+	    v->gv_mouse_y))
+	return false;
+    point_t vpnt, mpnt;
+    VSET(vpnt, vx, vy, 0);
+    mat_t view2model;
+    rt_view_view2model_from_bsg(view2model, v);
+    MAT4X3PNT(mpnt, view2model, vpnt);
+    mat_t view_rotation;
+    rt_view_rotation_from_bsg(view_rotation, v);
+    VMOVEN(direction, view_rotation + 8, 3);
+    VUNITIZE(direction);
+    VSCALE(direction, direction, rt_view_radius_from_bsg(v));
+    VADD2(origin, mpnt, direction);
+    VUNITIZE(direction);
+    VSCALE(direction, direction, -1);
+    return true;
+}
+
 bool
 QgSelectRayFilter::eventFilter(QObject *, QEvent *e)
 {
@@ -464,16 +516,43 @@ QgSelectRayFilter::eventFilter(QObject *, QEvent *e)
 	return false;
 
     struct bsg_view *v = view();
-    if (!v || !dbip)
+    if (!v)
 	return false;
     if (e->type() != QEvent::MouseButtonRelease)
 	return true;
     if (m_e->button() != Qt::LeftButton)
 	return true;
 
+    point_t rayOrigin;
+    vect_t rayDirection;
+    if (_qg_select_ray_from_view(v, rayOrigin, rayDirection)) {
+	std::vector<QgObolPickRecord> obolRayPicks;
+	int submittedSourceRequests = 0;
+	if (qg_obol_pick_ray(view_widget(),
+		SbVec3f(rayOrigin[0], rayOrigin[1], rayOrigin[2]),
+		SbVec3f(rayDirection[0], rayDirection[1], rayDirection[2]),
+		!first_only, obolRayPicks,
+		&submittedSourceRequests) > 0) {
+	    std::vector<std::string> paths;
+	    for (const QgObolPickRecord &pick : obolRayPicks)
+		_qg_append_unique_path(paths, pick.path.c_str());
+	    if (!paths.empty()) {
+		set_selected_paths(v, paths);
+		return true;
+	    }
+	}
+	if (submittedSourceRequests > 0) {
+	    std::vector<std::string> paths;
+	    set_selected_paths(v, paths);
+	    return true;
+	}
+    }
+
     std::vector<QgObolPickRecord> obolPicks;
+    int submittedSourceRequests = 0;
     if (qg_obol_pick_point(view_widget(), v->gv_mouse_x, v->gv_mouse_y,
-	    6.0f, !first_only, obolPicks) > 0) {
+	    6.0f, !first_only, obolPicks,
+	    &submittedSourceRequests) > 0) {
 	std::vector<std::string> paths;
 	for (const QgObolPickRecord &pick : obolPicks)
 	    _qg_append_unique_path(paths, pick.path.c_str());
@@ -481,6 +560,17 @@ QgSelectRayFilter::eventFilter(QObject *, QEvent *e)
 	    set_selected_paths(v, paths);
 	    return true;
 	}
+    }
+    if (submittedSourceRequests > 0) {
+	std::vector<std::string> paths;
+	set_selected_paths(v, paths);
+	return true;
+    }
+
+    if (!dbip) {
+	std::vector<std::string> paths;
+	set_selected_paths(v, paths);
+	return true;
     }
 
     struct bsg_pick_result *candidates =
@@ -520,23 +610,6 @@ QgSelectRayFilter::eventFilter(QObject *, QEvent *e)
     }
     size_t ncpus = bu_avail_cpus();
     rt_prep_parallel(rtip, (int)ncpus);
-    fastf_t vx = -FLT_MAX;
-    fastf_t vy = -FLT_MAX;
-    bsg_screen_to_view(v, &vx, &vy, v->gv_mouse_x, v->gv_mouse_y);
-    point_t vpnt, mpnt;
-    VSET(vpnt, vx, vy, 0);
-    mat_t view2model;
-    rt_view_view2model_from_bsg(view2model, v);
-    MAT4X3PNT(mpnt, view2model, vpnt);
-    vect_t dir;
-    mat_t view_rotation;
-    rt_view_rotation_from_bsg(view_rotation, v);
-    VMOVEN(dir, view_rotation + 8, 3);
-    VUNITIZE(dir);
-    VSCALE(dir, dir, v->radius);
-    VADD2(ap->a_ray.r_pt, mpnt, dir);
-    VUNITIZE(dir);
-    VSCALE(ap->a_ray.r_dir, dir, -1);
 
     struct select_rec_state rc;
     rc.cdist = INFINITY;
@@ -547,7 +620,11 @@ QgSelectRayFilter::eventFilter(QObject *, QEvent *e)
     }
     ap->a_uptr = (void *)&rc;
 
-    (void)rt_shootray(ap);
+    if (_qg_select_ray_from_view(v, rayOrigin, rayDirection)) {
+	VMOVE(ap->a_ray.r_pt, rayOrigin);
+	VMOVE(ap->a_ray.r_dir, rayDirection);
+	(void)rt_shootray(ap);
+    }
     bu_free(objs, "objs");
     rt_i_destroy(rtip);
     BU_PUT(resp, struct resource);

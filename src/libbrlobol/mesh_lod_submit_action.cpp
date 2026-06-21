@@ -11,8 +11,11 @@
 #include "brlobol/mesh_lod_submit_action.h"
 #include "brlobol/mesh_shape.h"
 
+#include <Inventor/SbString.h>
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoNode.h>
+
+#include <string.h>
 
 SO_ACTION_SOURCE(SoBRLMeshLodSubmitAction);
 
@@ -258,6 +261,32 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	    submitAction->providerVersion.getString(),
 	    submitAction->qualityTier);
 
+    BRLObolLodCacheKey requestKey = brlobol_lod_cache_key(request);
+    if (!submitAction->useForcedLevel &&
+	    submitAction->reset == 0 &&
+	    shape->lodAvailable.getValue() &&
+	    shape->lodResultKind.getValue() == BRLOBOL_LOD_RESULT_MESH &&
+	    shape->lodProviderStatus.getValue() == BRLOBOL_LOD_PROVIDER_READY &&
+	    requestKey.isValid() &&
+	    shape->lodCacheKey.getValue().getLength() > 0 &&
+	    strcmp(shape->lodCacheKey.getValue().getString(),
+		requestKey.value.getString()) == 0) {
+	submitAction->skippedMeshCount++;
+	submitAction->appendDiagnostic(target, "current LoD request is already resident");
+	return;
+    }
+
+    const SbBool suppressActiveDuplicate =
+	(!submitAction->useForcedLevel && submitAction->reset == 0) ?
+	TRUE : FALSE;
+    if (suppressActiveDuplicate &&
+	    submitAction->service->hasActiveRequest(request)) {
+	submitAction->skippedMeshCount++;
+	submitAction->appendDiagnostic(target,
+		"current LoD request is already active");
+	return;
+    }
+
     BRLObolRtMeshLodProvider *provider = new BRLObolRtMeshLodProvider;
     provider->dbip = submitAction->dbip;
     provider->view = submitAction->view;
@@ -275,10 +304,17 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
     task.realizeData = provider;
     task.realizeDataFree = brlobol_rt_mesh_lod_provider_free;
 
-    if (submitAction->service->submit(task) == 0) {
+    uint64_t taskId = suppressActiveDuplicate ?
+	submitAction->service->submitIfNotActive(task) :
+	submitAction->service->submit(task);
+    if (taskId == 0) {
 	brlobol_rt_mesh_lod_provider_free(provider);
 	submitAction->skippedMeshCount++;
-	submitAction->appendDiagnostic(target, "LoD service rejected mesh task");
+	submitAction->appendDiagnostic(target,
+		suppressActiveDuplicate &&
+		submitAction->service->hasActiveRequest(request) ?
+		"current LoD request is already active" :
+		"LoD service rejected mesh task");
 	return;
     }
 

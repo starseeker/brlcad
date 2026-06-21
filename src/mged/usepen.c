@@ -132,7 +132,7 @@ _highlight_pick_cb(const struct ged_draw_shape_record *rec, void *ud)
 static void
 highlight_from_y(struct mged_state *s, int y) {
     int count;
-    int drawn_count = bsg_view_refresh_drawn_count(view_state->vs_gvp);
+    int drawn_count = rt_view_refresh_drawn_count_from_bsg(view_state->vs_gvp);
 
     /*
      * Divide the mouse into one vertical zone per shape painted in the last
@@ -178,7 +178,7 @@ f_aip(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	return TCL_ERROR;
     }
 
-    if (!bsg_view_refresh_drawn_count(view_state->vs_gvp)) {
+    if (!rt_view_refresh_drawn_count_from_bsg(view_state->vs_gvp)) {
 	return TCL_OK;
     } else if (s->global_editing_state != ST_S_PICK && s->global_editing_state != ST_O_PICK  && s->global_editing_state != ST_O_PATH) {
 	return TCL_OK;

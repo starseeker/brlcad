@@ -118,6 +118,8 @@ public:
     SbBool isGenerationCancelled(uint64_t generation) const;
 
     uint64_t submit(const BRLObolLodTask &task);
+    uint64_t submitIfNotActive(const BRLObolLodTask &task);
+    SbBool hasActiveRequest(const BRLObolLodRequest &request) const;
     size_t drainResults(std::vector<BRLObolLodResult> &results,
 	size_t maxResults = 0);
     size_t drainMatchingResults(std::vector<BRLObolLodResult> &results,

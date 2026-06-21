@@ -238,8 +238,12 @@ bool
 QMeasure2DFilter::get_point()
 {
 	struct bsg_view *v = view();
+	if (!v)
+		return false;
 	fastf_t vx, vy;
-	bsg_screen_to_view(v, &vx, &vy, v->gv_mouse_x, v->gv_mouse_y);
+	if (!rt_view_screen_to_view_from_bsg(&vx, &vy, v,
+		v->gv_mouse_x, v->gv_mouse_y))
+		return false;
 	point_t vpnt;
 	mat_t view2model;
 	VSET(vpnt, vx, vy, 0);

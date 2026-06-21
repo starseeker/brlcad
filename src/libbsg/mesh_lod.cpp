@@ -805,7 +805,7 @@ class POPState {
 	int get_level(fastf_t len);
 
 	// Load/unload data level
-	void set_level(int level);
+    bool set_level(int level);
 
 	// Shrink memory usage (level set routines will have to do more work
 	// after this is run, but the POPState is still viable).  Used after a
@@ -1406,12 +1406,15 @@ POPState::get_level(fastf_t vlen)
     return POP_MAXLEVEL - 1;
 }
 
-void
+bool
 POPState::set_level(int level)
 {
+    if (level > max_pop_threshold_level && !full_detail_setup_clbk)
+	level = max_pop_threshold_level;
+
     // If we're already there and we're not undoing a memshrink, no work to do
     if (level == curr_level && !force_update)
-	return;
+	return true;
 
     // If we're doing a forced update, it's like starting from
     // scratch - reset to 0
@@ -1421,8 +1424,7 @@ POPState::set_level(int level)
 	    (*full_detail_clear_clbk)(lod, detail_clbk_data);
 	shrink_memory();
 	curr_level = -1;
-	set_level(level);
-	return;
+	return set_level(level);
     }
 
     //    int64_t start, elapsed;
@@ -1476,8 +1478,11 @@ POPState::set_level(int level)
 	lod_tris.shrink_to_fit();
 
 	// Use the callback to set up the full data pointers
-	if (full_detail_setup_clbk)
-	    (*full_detail_setup_clbk)(lod, detail_clbk_data);
+	if (full_detail_setup_clbk &&
+		(*full_detail_setup_clbk)(lod, detail_clbk_data) != 0) {
+	    curr_level = -1;
+	    return false;
+	}
     }
 
     //elapsed = bu_gettime() - start;
@@ -1485,6 +1490,7 @@ POPState::set_level(int level)
     //bu_log("lod set_level(%d): %f sec\n", level, seconds);
 
     curr_level = level;
+    return true;
 }
 
 // Rather than committing all data to the cache in one transaction, use keys with
@@ -1890,6 +1896,40 @@ mark_lod_payload_stale(struct bsg_node *s)
     bsg_bump_rev_node(s);
 }
 
+static void
+bsg_mesh_lod_active_data_clear(struct bsg_mesh_lod *l)
+{
+    if (!l)
+	return;
+
+    l->faces = NULL;
+    l->fcnt = 0;
+    l->points = NULL;
+    l->pcnt = 0;
+    l->points_orig = NULL;
+    l->porig_cnt = 0;
+    l->normals = NULL;
+}
+
+static void
+bsg_mesh_lod_active_pop_data_publish(struct bsg_mesh_lod *l, POPState *sp)
+{
+    if (!l || !sp)
+	return;
+
+    l->fcnt = (int)sp->lod_tris.size()/3;
+    l->faces = sp->lod_tris.data();
+    l->points_orig = (const point_t *)sp->lod_tri_pnts.data();
+    l->porig_cnt = (int)sp->lod_tri_pnts.size()/3;
+    if (sp->lod_tri_norms.size() >= sp->lod_tris.size() * 3) {
+	l->normals = (const vect_t *)sp->lod_tri_norms.data();
+    } else {
+	l->normals = NULL;
+    }
+    l->points = (const point_t *)sp->lod_tri_pnts_snapped.data();
+    l->pcnt = (int)sp->lod_tri_pnts_snapped.size()/3;
+}
+
 static struct bsg_mesh_lod *
 mesh_lod_from_node(struct bsg_node *s)
 {
@@ -1913,29 +1953,15 @@ _bsg_mesh_lod_level(struct bsg_mesh_lod *l, struct bsg_node *s, int level, int r
 
     if (reset)
 	sp->force_update = true;
-    sp->set_level(level);
+    if (!sp->set_level(level)) {
+	bsg_mesh_lod_active_data_clear(l);
+	return -1;
+    }
 
     // If we're in POP territory use the local arrays - otherwise, they
     // were already set by the full detail callback.
     if (sp->curr_level <= sp->max_pop_threshold_level) {
-	l->fcnt = (int)sp->lod_tris.size()/3;
-	l->faces = sp->lod_tris.data();
-	l->points_orig = (const point_t *)sp->lod_tri_pnts.data();
-	l->porig_cnt = (int)sp->lod_tri_pnts.size()/3;
-#if 0
-	// TODO - there's still some error with normals - they seem to work,
-	// but when zooming way out and back in (at least on Windows) we're
-	// getting an access violation with some geometry...
-	if (sp->lod_tri_norms.size() >= sp->lod_tris.size()) {
-	    l->normals = (const vect_t *)sp->lod_tri_norms.data();
-	} else {
-	    l->normals = NULL;
-	}
-#else
-	l->normals = NULL;
-#endif
-	l->points = (const point_t *)sp->lod_tri_pnts_snapped.data();
-	l->pcnt = (int)sp->lod_tri_pnts_snapped.size()/3;
+	bsg_mesh_lod_active_pop_data_publish(l, sp);
     }
 
     bsg_log(2, "bsg_mesh_lod_level %s[%d](%d): %d",
@@ -1996,13 +2022,7 @@ bsg_mesh_lod_shrink_memory(struct bsg_mesh_lod *l)
     sp->shrink_memory();
     sp->force_update = true;
 
-    l->faces = NULL;
-    l->fcnt = 0;
-    l->points = NULL;
-    l->pcnt = 0;
-    l->points_orig = NULL;
-    l->porig_cnt = 0;
-    l->normals = NULL;
+    bsg_mesh_lod_active_data_clear(l);
 }
 
 extern "C" int
@@ -2212,11 +2232,34 @@ bsg_mesh_lod_detail_setup_clbk(
 	void *clbk_data
 	)
 {
-    if (!lod || !clbk)
+    if (!lod)
 	return;
 
     struct bsg_mesh_lod_internal *i = (struct bsg_mesh_lod_internal *)lod->i;
     POPState *s = i->s;
+    int had_detail_callbacks = (s->full_detail_setup_clbk ||
+	    s->full_detail_clear_clbk || s->full_detail_free_clbk);
+    if (s->full_detail_free_clbk)
+	(*s->full_detail_free_clbk)(lod, s->detail_clbk_data);
+    else if (s->full_detail_clear_clbk)
+	(*s->full_detail_clear_clbk)(lod, s->detail_clbk_data);
+    if (had_detail_callbacks) {
+	if (s->curr_level < 0) {
+	    bsg_mesh_lod_active_data_clear(lod);
+	} else if (s->curr_level > s->max_pop_threshold_level) {
+	    s->curr_level = -1;
+	    bsg_mesh_lod_active_data_clear(lod);
+	} else {
+	    bsg_mesh_lod_active_pop_data_publish(lod, s);
+	}
+    }
+    s->full_detail_setup_clbk = NULL;
+    s->full_detail_clear_clbk = NULL;
+    s->full_detail_free_clbk = NULL;
+    s->detail_clbk_data = NULL;
+    if (!clbk)
+	return;
+
     s->full_detail_setup_clbk = clbk;
     s->detail_clbk_data = clbk_data;
 }

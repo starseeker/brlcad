@@ -55,6 +55,9 @@ make_pick_db(const char *dbpath)
     point_t bmin = {-1.0, -1.0, -1.0};
     point_t bmax = { 1.0,  1.0,  1.0};
     int ret = mk_rpp(wdbp, "box.s", bmin, bmax) == 0;
+    point_t far_bmin = {-1.0, -1.0, -3.0};
+    point_t far_bmax = { 1.0,  1.0, -2.0};
+    ret = ret && mk_rpp(wdbp, "farbox.s", far_bmin, far_bmax) == 0;
     point_t center = {0.0, 0.0, 0.0};
     ret = ret && mk_sph(wdbp, "implicit.s", center, 0.75) == 0;
 
@@ -65,6 +68,17 @@ make_pick_db(const char *dbpath)
 	mk_addmember("implicit.s", &region.l, NULL, WMOP_UNION) != NULL &&
 	mk_lrcomb(wdbp, "implicit.r", &region, 1, "plastic", "",
 	    color, 77, 2, 33, 100, 0) == 0;
+
+    fastf_t lod_vertices[9] = {
+	-1.0, -1.0, 0.0,
+	 1.0, -1.0, 0.0,
+	-1.0,  1.0, 0.0
+    };
+    int lod_faces[3] = {0, 1, 2};
+    ret = ret && mk_bot(wdbp, "lod-pick.bot", RT_BOT_SOLID,
+	    RT_BOT_UNORIENTED, 0, 3, 1, lod_vertices, lod_faces,
+	    NULL, NULL) == 0;
+
     wdb_close(wdbp);
     return ret;
 }
@@ -112,6 +126,10 @@ qtcad_source_pick_result(const BRLObolLodRequest &request,
     result.mesh.coordIndex.push_back(0);
     result.mesh.coordIndex.push_back(1);
     result.mesh.coordIndex.push_back(2);
+    result.mesh.faceIndex.push_back(42);
+    result.mesh.vertexIndex.push_back(10);
+    result.mesh.vertexIndex.push_back(11);
+    result.mesh.vertexIndex.push_back(12);
     for (const SbVec3f &point : result.mesh.points)
 	result.bounds.extendBy(point);
 
@@ -279,6 +297,8 @@ main(int argc, char **argv)
     lodMesh->sourceName = "lod-pick.bot";
     lodMesh->sourceType = "bot";
     lodMesh->sourceId = 9001;
+    lodMesh->editIntentId = "edit::lod-pick/face";
+    lodMesh->editIntentRole = "exact-pick";
     lodMesh->setIndexedTriangles(lodPoints, 3, lodIndices, 3);
     lodMesh->setPickGeometryPolicy(SoBRLMeshShape::PICK_FULL_DETAIL);
 
@@ -351,13 +371,23 @@ main(int argc, char **argv)
     if (lodPicks[0].path != "/lod-pick.bot" ||
 	    lodPicks[0].sourceName != "lod-pick.bot" ||
 	    lodPicks[0].sourceType != "bot" ||
+	    lodPicks[0].editIntentId != "edit::lod-pick/face" ||
+	    lodPicks[0].editIntentRole != "exact-pick" ||
 	    lodPicks[0].sourceId != 9001 ||
 	    lodPicks[0].primitiveKind != QgObolPickRecord::FACE ||
-	    lodPicks[0].primitiveIndex != 0 ||
+	    lodPicks[0].primitiveIndex != 42 ||
+	    lodPicks[0].faceVertexIndexA != 10 ||
+	    lodPicks[0].faceVertexIndexB != 11 ||
+	    lodPicks[0].faceVertexIndexC != 12 ||
+	    lodPicks[0].nearestFaceEdgeSlot != 1 ||
+	    lodPicks[0].nearestFaceEdgeVertexIndexA != 11 ||
+	    lodPicks[0].nearestFaceEdgeVertexIndexB != 12 ||
+	    lodPicks[0].nearestFaceVertexSlot != 0 ||
+	    lodPicks[0].nearestFaceVertexIndex != 10 ||
 	    lodPicks[0].distance <= 0.0f) {
 	controller->setLodService(NULL);
 	sourceService.stop();
-	FAIL("qtcad Obol source-backed pick should preserve exact mesh identity");
+	FAIL("qtcad Obol source-backed pick should preserve exact mesh, sub-entity identity, and edit intent");
     }
     if (sourceService.queuedResultCountForDiagnostics() != 0) {
 	controller->setLodService(NULL);
@@ -367,12 +397,19 @@ main(int argc, char **argv)
 
     controller->setExactFullDetailBudget(0, 2);
     std::vector<QgObolPickRecord> overBudgetPicks;
+    int overBudgetSubmittedCount = -1;
     if (qg_obol_pick_point(&view, 90, 70, 8.0f, false,
-	    overBudgetPicks) != 0) {
+	    overBudgetPicks, &overBudgetSubmittedCount) != 0) {
 	controller->setExactFullDetailBudget(0, 0);
 	controller->setLodService(NULL);
 	sourceService.stop();
 	FAIL("qtcad source-backed exact Obol pick should not use display LoD as over-budget exact geometry");
+    }
+    if (overBudgetSubmittedCount != 1) {
+	controller->setExactFullDetailBudget(0, 0);
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad source-backed exact Obol pick should report pending submitted source detail");
     }
     if (wait_for_qtcad_source_pick_result(sourceService)) {
 	controller->setExactFullDetailBudget(0, 0);
@@ -391,6 +428,138 @@ main(int argc, char **argv)
 	controller->setLodService(NULL);
 	sourceService.stop();
 	FAIL("qtcad source-backed exact Obol pick should pass controller full-detail budget to source provider");
+    }
+
+    QgSelectPntFilter pendingSourcePickFilter;
+    pendingSourcePickFilter.set_view(view.view());
+    pendingSourcePickFilter.set_view_widget(&view);
+    QMouseEvent pendingSourcePickRelease = mouse_event(
+	    QEvent::MouseButtonRelease, 90, 70, Qt::LeftButton,
+	    Qt::LeftButton);
+    if (!pendingSourcePickFilter.eventFilter(NULL, &pendingSourcePickRelease)) {
+	controller->setExactFullDetailBudget(0, 0);
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad point select filter should consume pending source-backed exact pick");
+    }
+    if (!pendingSourcePickFilter.selected_paths().empty()) {
+	controller->setExactFullDetailBudget(0, 0);
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad point select filter should not fall back to legacy selection while exact source pick is pending");
+    }
+    if (wait_for_qtcad_source_pick_result(sourceService)) {
+	controller->setExactFullDetailBudget(0, 0);
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad point select filter pending source pick result should become ready");
+    }
+    {
+	std::vector<BRLObolLodResult> pendingFilterResults;
+	sourceService.drainResults(pendingFilterResults);
+	if (pendingFilterResults.size() != 1 ||
+		pendingFilterResults[0].providerStatus !=
+		    BRLOBOL_LOD_PROVIDER_FALLBACK) {
+	    controller->setExactFullDetailBudget(0, 0);
+	    controller->setLodService(NULL);
+	    sourceService.stop();
+	    FAIL("qtcad point select filter should submit the pending source-backed exact pick request");
+	}
+    }
+
+    QgSelectBoxFilter pendingSourceBoxFilter;
+    pendingSourceBoxFilter.set_view(view.view());
+    pendingSourceBoxFilter.set_view_widget(&view);
+    QMouseEvent pendingSourceBoxPress = mouse_event(
+	    QEvent::MouseButtonPress, 70, 50, Qt::LeftButton,
+	    Qt::LeftButton);
+    QMouseEvent pendingSourceBoxMove = mouse_event(
+	    QEvent::MouseMove, 110, 90, Qt::NoButton,
+	    Qt::LeftButton);
+    QMouseEvent pendingSourceBoxRelease = mouse_event(
+	    QEvent::MouseButtonRelease, 110, 90, Qt::LeftButton,
+	    Qt::LeftButton);
+    if (!pendingSourceBoxFilter.eventFilter(NULL, &pendingSourceBoxPress) ||
+	    !pendingSourceBoxFilter.eventFilter(NULL, &pendingSourceBoxMove) ||
+	    !pendingSourceBoxFilter.eventFilter(NULL, &pendingSourceBoxRelease)) {
+	controller->setExactFullDetailBudget(0, 0);
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad box select filter should consume pending source-backed exact pick");
+    }
+    if (!pendingSourceBoxFilter.selected_paths().empty()) {
+	controller->setExactFullDetailBudget(0, 0);
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad box select filter should not fall back to legacy selection while exact source pick is pending");
+    }
+    if (wait_for_qtcad_source_pick_result(sourceService)) {
+	controller->setExactFullDetailBudget(0, 0);
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad box select filter pending source pick result should become ready");
+    }
+    {
+	std::vector<BRLObolLodResult> pendingBoxResults;
+	sourceService.drainResults(pendingBoxResults);
+	if (pendingBoxResults.empty()) {
+	    controller->setExactFullDetailBudget(0, 0);
+	    controller->setLodService(NULL);
+	    sourceService.stop();
+	    FAIL("qtcad box select filter should submit pending source-backed exact pick requests");
+	}
+	for (const BRLObolLodResult &result : pendingBoxResults) {
+	    if (result.providerStatus != BRLOBOL_LOD_PROVIDER_FALLBACK) {
+		controller->setExactFullDetailBudget(0, 0);
+		controller->setLodService(NULL);
+		sourceService.stop();
+		FAIL("qtcad box select filter pending source pick should honor full-detail budget fallback");
+	    }
+	}
+    }
+
+    QgSelectRayFilter pendingSourceRayFilter;
+    pendingSourceRayFilter.dbip = gedp->dbip;
+    pendingSourceRayFilter.set_view(view.view());
+    pendingSourceRayFilter.set_view_widget(&view);
+    QMouseEvent pendingSourceRayRelease = mouse_event(
+	    QEvent::MouseButtonRelease, 90, 70, Qt::LeftButton,
+	    Qt::LeftButton);
+    if (!pendingSourceRayFilter.eventFilter(NULL, &pendingSourceRayRelease)) {
+	controller->setExactFullDetailBudget(0, 0);
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad ray select filter should consume pending source-backed exact pick");
+    }
+    if (!pendingSourceRayFilter.selected_paths().empty()) {
+	controller->setExactFullDetailBudget(0, 0);
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad ray select filter should not fall back to legacy selection while exact source pick is pending");
+    }
+    if (wait_for_qtcad_source_pick_result(sourceService)) {
+	controller->setExactFullDetailBudget(0, 0);
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad ray select filter pending source pick result should become ready");
+    }
+    {
+	std::vector<BRLObolLodResult> pendingRayResults;
+	sourceService.drainResults(pendingRayResults);
+	if (pendingRayResults.empty()) {
+	    controller->setExactFullDetailBudget(0, 0);
+	    controller->setLodService(NULL);
+	    sourceService.stop();
+	    FAIL("qtcad ray select filter should submit the pending source-backed exact pick request");
+	}
+	for (const BRLObolLodResult &result : pendingRayResults) {
+	    if (result.providerStatus != BRLOBOL_LOD_PROVIDER_FALLBACK) {
+		controller->setExactFullDetailBudget(0, 0);
+		controller->setLodService(NULL);
+		sourceService.stop();
+		FAIL("qtcad ray select filter pending source pick should honor full-detail budget fallback");
+	    }
+	}
     }
     controller->setExactFullDetailBudget(0, 0);
 
@@ -430,6 +599,134 @@ main(int argc, char **argv)
 	    implicitPicks[0].distance <= 0.0f) {
 	FAIL("qtcad Obol librt exact implicit pick should preserve RT hit identity");
     }
+    if (controller->getRtPickCacheCount() != 1 ||
+	    !controller->getRtPickCache(0) ||
+	    !controller->getRtPickCache(0)->isReady())
+	FAIL("qtcad Obol librt exact implicit pick should retain a controller RT pick cache");
+    BRLObolRtPickCache *implicitRtPickCache = controller->getRtPickCache(0);
+
+    std::vector<QgObolPickRecord> implicitRectPicks;
+    if (qg_obol_pick_rect(&view, 80, 60, 100, 80, 8.0f, false,
+	    implicitRectPicks) <= 0) {
+	FAIL("qtcad Obol rectangle pick should reuse controller-cached librt exact implicit picks");
+    }
+    if (controller->getRtPickCacheCount() != 1 ||
+	    controller->getRtPickCache(0) != implicitRtPickCache)
+	FAIL("qtcad Obol rectangle pick should keep reusing the controller RT pick cache");
+    if (implicitRectPicks[0].path.find("implicit.r") == std::string::npos ||
+	    implicitRectPicks[0].sourceName != "implicit.s" ||
+	    implicitRectPicks[0].primitiveKind !=
+	    QgObolPickRecord::IMPLICIT_SOLID ||
+	    implicitRectPicks[0].distance <= 0.0f) {
+	FAIL("qtcad Obol cached rectangle librt pick should preserve RT hit identity");
+    }
+
+    std::vector<QgObolPickRecord> implicitRayPicks;
+    int implicitRayPickCount = qg_obol_pick_ray(&view,
+	    SbVec3f(0.0f, 0.0f, 5.0f),
+	    SbVec3f(0.0f, 0.0f, -1.0f), false, implicitRayPicks);
+    if (implicitRayPickCount != 1) {
+	fprintf(stderr, "implicit ray pick count=%d cache_count=%d\n",
+		implicitRayPickCount, controller->getRtPickCacheCount());
+	FAIL("qtcad Obol ray pick should reuse controller-cached librt exact implicit picks");
+    }
+    if (controller->getRtPickCacheCount() != 1 ||
+	    controller->getRtPickCache(0) != implicitRtPickCache)
+	FAIL("qtcad Obol ray pick should keep reusing the controller RT pick cache");
+    if (implicitRayPicks[0].path.find("implicit.r") == std::string::npos ||
+	    implicitRayPicks[0].sourceName != "implicit.s" ||
+	    implicitRayPicks[0].primitiveKind !=
+	    QgObolPickRecord::IMPLICIT_SOLID ||
+	    implicitRayPicks[0].distance <= 0.0f)
+	FAIL("qtcad Obol cached ray librt pick should preserve RT hit identity");
+
+    QgSelectRayFilter implicitRayFilter;
+    implicitRayFilter.dbip = gedp->dbip;
+    implicitRayFilter.set_view(view.view());
+    implicitRayFilter.set_view_widget(&view);
+    QMouseEvent implicitRayRelease = mouse_event(QEvent::MouseButtonRelease,
+	    90, 70, Qt::LeftButton, Qt::LeftButton);
+    if (!implicitRayFilter.eventFilter(NULL, &implicitRayRelease))
+	FAIL("qtcad select ray filter should accept the Obol explicit-ray implicit workflow");
+    const std::vector<std::string> &implicitRayPaths =
+	implicitRayFilter.selected_paths();
+    if (implicitRayPaths.size() != 1 ||
+	    implicitRayPaths[0].find("implicit.r") == std::string::npos)
+	FAIL("qtcad select ray filter should expose Obol explicit-ray implicit paths");
+    if (controller->getRtPickCacheCount() != 1 ||
+	    controller->getRtPickCache(0) != implicitRtPickCache)
+	FAIL("qtcad select ray filter should reuse the controller RT pick cache");
+
+    QgSelectRayFilter noLegacyDbRayFilter;
+    noLegacyDbRayFilter.set_view(view.view());
+    noLegacyDbRayFilter.set_view_widget(&view);
+    QMouseEvent noLegacyDbRayRelease = mouse_event(QEvent::MouseButtonRelease,
+	    90, 70, Qt::LeftButton, Qt::LeftButton);
+    if (!noLegacyDbRayFilter.eventFilter(NULL, &noLegacyDbRayRelease))
+	FAIL("qtcad select ray filter should run Obol explicit-ray selection without legacy dbip");
+    const std::vector<std::string> &noLegacyDbRayPaths =
+	noLegacyDbRayFilter.selected_paths();
+    if (noLegacyDbRayPaths.size() != 1 ||
+	    noLegacyDbRayPaths[0].find("implicit.r") == std::string::npos)
+	FAIL("qtcad select ray filter without legacy dbip should expose Obol explicit-ray implicit paths");
+    if (controller->getRtPickCacheCount() != 1 ||
+	    controller->getRtPickCache(0) != implicitRtPickCache)
+	FAIL("qtcad select ray filter without legacy dbip should reuse the controller RT pick cache");
+
+    SoSeparator *mixedRoot = new SoSeparator;
+    mixedRoot->ref();
+    SoBRLDatabaseSource *farBoxDatabase = new SoBRLDatabaseSource;
+    farBoxDatabase->configureDatabaseSource("farbox.s", gedp->dbip,
+	    SoBRLDatabaseSource::SHADED, 6);
+    if (!farBoxDatabase->realizeDatabaseMesh())
+	FAIL("qtcad mixed pick fixture should realize the farther display box");
+    mixedRoot->addChild(farBoxDatabase);
+    SoBRLDatabaseSource *mixedImplicitDatabase = new SoBRLDatabaseSource;
+    mixedImplicitDatabase->configureDatabaseSource("implicit.r", gedp->dbip,
+	    SoBRLDatabaseSource::WIREFRAME, 7);
+    mixedRoot->addChild(mixedImplicitDatabase);
+    controller->setSceneRoot(mixedRoot);
+    mixedRoot->unref();
+    if (camera)
+	camera->position = SbVec3f(0.0f, 0.0f, 5.0f);
+
+    std::vector<QgObolPickRecord> mixedNearestPicks;
+    if (qg_obol_pick_point(&view, 90, 70, 8.0f, false,
+	    mixedNearestPicks) != 1)
+	FAIL("qtcad mixed Obol/RT point pick should return one nearest hit");
+    if (mixedNearestPicks[0].sourceName != "implicit.s" ||
+	    mixedNearestPicks[0].primitiveKind !=
+	    QgObolPickRecord::IMPLICIT_SOLID ||
+	    mixedNearestPicks[0].distance <= 0.0f)
+	FAIL("qtcad mixed Obol/RT point pick should choose the nearer librt hit");
+
+    std::vector<QgObolPickRecord> mixedAllPicks;
+    if (qg_obol_pick_point(&view, 90, 70, 8.0f, true,
+	    mixedAllPicks) < 2)
+	FAIL("qtcad mixed Obol/RT pick-all should keep display and librt hits");
+    bool foundFarBox = false;
+    for (const QgObolPickRecord &pick : mixedAllPicks) {
+	if (pick.path == "/farbox.s" || pick.sourceName == "farbox.s") {
+	    foundFarBox = true;
+	    break;
+	}
+    }
+    if (mixedAllPicks[0].sourceName != "implicit.s" || !foundFarBox)
+	FAIL("qtcad mixed Obol/RT pick-all should order merged hits by distance");
+
+    std::vector<QgObolPickRecord> mixedRayAllPicks;
+    if (qg_obol_pick_ray(&view, SbVec3f(0.0f, 0.0f, 5.0f),
+	    SbVec3f(0.0f, 0.0f, -1.0f), true, mixedRayAllPicks) < 2)
+	FAIL("qtcad mixed Obol/RT ray pick-all should keep display and librt hits");
+    bool foundRayFarBox = false;
+    for (const QgObolPickRecord &pick : mixedRayAllPicks) {
+	if (pick.path == "/farbox.s" || pick.sourceName == "farbox.s") {
+	    foundRayFarBox = true;
+	    break;
+	}
+    }
+    if (mixedRayAllPicks[0].sourceName != "implicit.s" || !foundRayFarBox)
+	FAIL("qtcad mixed Obol/RT ray pick-all should order merged hits by distance");
 
     if (view.dmp())
 	FAIL("qtcad librt exact implicit pick should not initialize the legacy display manager");

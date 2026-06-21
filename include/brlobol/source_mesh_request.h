@@ -47,6 +47,8 @@ struct BRLOBOL_EXPORT BRLObolSourceMeshRequest {
     int ghosted;
     int hiddenLine;
     int editEmphasis;
+    SbString editIntentId;
+    SbString editIntentRole;
     uint32_t lodPolicy;
     int lodAvailable;
     int lodActiveLevel;
@@ -95,6 +97,8 @@ struct BRLOBOL_EXPORT BRLObolSourceMeshRequest {
 	ghosted = 0;
 	hiddenLine = 0;
 	editEmphasis = 0;
+	editIntentId = "";
+	editIntentRole = "";
 	lodPolicy = 0;
 	lodAvailable = 0;
 	lodActiveLevel = -1;

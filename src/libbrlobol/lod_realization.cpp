@@ -149,14 +149,22 @@ void
 BRLObolLodMeshPayload::clear(void)
 {
     points.clear();
+    normals.clear();
     coordIndex.clear();
+    faceIndex.clear();
+    vertexIndex.clear();
 }
 
 SbBool
 BRLObolLodMeshPayload::isValid(void) const
 {
+    const size_t faceCount = coordIndex.size() / 3;
     return !points.empty() && coordIndex.size() >= 3 &&
-	coordIndex.size() % 3 == 0 ? TRUE : FALSE;
+	coordIndex.size() % 3 == 0 &&
+	(normals.empty() || normals.size() == coordIndex.size()) &&
+	(faceIndex.empty() || faceIndex.size() == faceCount) &&
+	(vertexIndex.empty() || vertexIndex.size() == points.size()) ?
+	TRUE : FALSE;
 }
 
 BRLObolLodRequest::BRLObolLodRequest(void)
@@ -357,6 +365,10 @@ brlobol_lod_mesh_payload_from_rt_mesh_data(BRLObolLodMeshPayload &payload,
 	return FALSE;
 
     size_t index_count = data.face_count * 3;
+    if ((data.normals && data.normal_count != index_count) ||
+	    (!data.normals && data.normal_count != 0))
+	return FALSE;
+
     payload.points.reserve(data.point_count);
     for (size_t i = 0; i < data.point_count; i++) {
 	payload.points.push_back(SbVec3f(
@@ -373,6 +385,16 @@ brlobol_lod_mesh_payload_from_rt_mesh_data(BRLObolLodMeshPayload &payload,
 	    return FALSE;
 	}
 	payload.coordIndex.push_back(static_cast<int32_t>(idx));
+    }
+
+    if (data.normals) {
+	payload.normals.reserve(index_count);
+	for (size_t i = 0; i < index_count; i++) {
+	    payload.normals.push_back(SbVec3f(
+		    static_cast<float>(data.normals[i][X]),
+		    static_cast<float>(data.normals[i][Y]),
+		    static_cast<float>(data.normals[i][Z])));
+	}
     }
 
     return payload.isValid();

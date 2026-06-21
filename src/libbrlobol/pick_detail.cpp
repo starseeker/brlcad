@@ -145,14 +145,51 @@ pick_source_full_detail_result_valid(
 	return FALSE;
 
     size_t faceCount = result.mesh.coordIndex.size() / 3;
-    if ((sourceRequest.faceCount != 0 &&
-		sourceRequest.faceCount != static_cast<uint64_t>(faceCount)) ||
-	    (sourceRequest.pointCount != 0 &&
-		sourceRequest.pointCount !=
-		static_cast<uint64_t>(result.mesh.points.size())))
-	return FALSE;
+    if (sourceRequest.faceCount != 0) {
+	const uint64_t resultFaceCount = static_cast<uint64_t>(faceCount);
+	if (sourceRequest.queryRayValid) {
+	    if (resultFaceCount > sourceRequest.faceCount)
+		return FALSE;
+	} else if (sourceRequest.faceCount != resultFaceCount) {
+	    return FALSE;
+	}
+    }
+    if (sourceRequest.pointCount != 0) {
+	const uint64_t resultPointCount =
+	    static_cast<uint64_t>(result.mesh.points.size());
+	if (sourceRequest.queryRayValid) {
+	    if (resultPointCount > sourceRequest.pointCount)
+		return FALSE;
+	    if (resultPointCount < sourceRequest.pointCount &&
+		    result.mesh.vertexIndex.size() != result.mesh.points.size())
+		return FALSE;
+	} else if (sourceRequest.pointCount != resultPointCount) {
+	    return FALSE;
+	}
+    }
 
     return TRUE;
+}
+
+static int
+pick_source_mesh_face_index(const BRLObolLodMeshPayload &mesh,
+	size_t faceSlot, size_t faceCount)
+{
+    if (mesh.faceIndex.size() == faceCount)
+	return static_cast<int>(mesh.faceIndex[faceSlot]);
+    return static_cast<int>(faceSlot);
+}
+
+static int
+pick_source_mesh_vertex_index(const BRLObolLodMeshPayload &mesh,
+	int localIndex)
+{
+    if (localIndex < 0)
+	return localIndex;
+    if (mesh.vertexIndex.size() == mesh.points.size())
+	return static_cast<int>(
+		mesh.vertexIndex[static_cast<size_t>(localIndex)]);
+    return localIndex;
 }
 
 static SbString
@@ -248,45 +285,131 @@ brlobol_pick_rt_miss(struct application *UNUSED(ap))
     return 0;
 }
 
+static SbString
+pick_rt_normalized_object_path(const SbString &objectPath)
+{
+    const char *name = objectPath.getString();
+    while (name && name[0] == '/')
+	name++;
+    return name && name[0] ? SbString(name) : SbString("");
+}
+
+static SbBool
+pick_rt_same_object_paths(const std::vector<SbString> &a,
+	const std::vector<SbString> &b)
+{
+    if (a.size() != b.size())
+	return FALSE;
+    for (size_t i = 0; i < a.size(); i++) {
+	if (strcmp(a[i].getString(), b[i].getString()) != 0)
+	    return FALSE;
+    }
+    return TRUE;
+}
+
+BRLObolRtPickCache::BRLObolRtPickCache(void) :
+    rtip(NULL),
+    database(NULL),
+    ready(FALSE)
+{
+}
+
+BRLObolRtPickCache::~BRLObolRtPickCache(void)
+{
+    this->clear();
+}
+
+void
+BRLObolRtPickCache::clear(void)
+{
+    if (this->rtip)
+	rt_i_destroy(this->rtip);
+    this->rtip = NULL;
+    this->database = NULL;
+    this->objectPaths.clear();
+    this->ready = FALSE;
+}
+
 SbBool
-brlobol_pick_rt_ray(BRLObolRtPickResult &pick,
-	struct db_i *dbip,
-	const std::vector<SbString> &objectPaths,
+BRLObolRtPickCache::prepare(struct db_i *dbip,
+	const std::vector<SbString> &paths)
+{
+    if (!dbip || paths.empty()) {
+	this->clear();
+	return FALSE;
+    }
+
+    std::vector<SbString> normalizedPaths;
+    normalizedPaths.reserve(paths.size());
+    for (size_t i = 0; i < paths.size(); i++) {
+	SbString normalized = pick_rt_normalized_object_path(paths[i]);
+	const char *name = normalized.getString();
+	if (name && name[0] &&
+		db_lookup(dbip, name, LOOKUP_QUIET) != RT_DIR_NULL)
+	    normalizedPaths.push_back(normalized);
+    }
+    if (normalizedPaths.empty()) {
+	this->clear();
+	return FALSE;
+    }
+
+    if (this->ready && this->rtip && this->database == dbip &&
+	    pick_rt_same_object_paths(this->objectPaths, normalizedPaths))
+	return TRUE;
+
+    std::vector<const char *> names;
+    names.reserve(normalizedPaths.size());
+    for (size_t i = 0; i < normalizedPaths.size(); i++)
+	names.push_back(normalizedPaths[i].getString());
+
+    struct rt_i *newRtip = rt_i_create(dbip);
+    if (!newRtip) {
+	this->clear();
+	return FALSE;
+    }
+    newRtip->useair = 1;
+    if (rt_gettrees(newRtip, static_cast<int>(names.size()), &names[0],
+	    1) < 0) {
+	rt_i_destroy(newRtip);
+	this->clear();
+	return FALSE;
+    }
+    newRtip->rti_hasty_prep = 1;
+    rt_prep(newRtip);
+
+    this->clear();
+    this->rtip = newRtip;
+    this->database = dbip;
+    this->objectPaths = normalizedPaths;
+    this->ready = TRUE;
+    return TRUE;
+}
+
+SbBool
+BRLObolRtPickCache::isReady(void) const
+{
+    return this->ready && this->rtip ? TRUE : FALSE;
+}
+
+int
+BRLObolRtPickCache::getObjectPathCount(void) const
+{
+    return static_cast<int>(this->objectPaths.size());
+}
+
+SbBool
+BRLObolRtPickCache::pickRay(BRLObolRtPickResult &pick,
 	const SbVec3f &rayOrigin,
-	const SbVec3f &rayDirection)
+	const SbVec3f &rayDirection) const
 {
     pick.clear();
-    if (!dbip || objectPaths.empty())
+    if (!this->isReady())
 	return FALSE;
 
     SbVec3f direction = rayDirection;
     if (direction.length() <= 0.0f)
 	return FALSE;
     direction.normalize();
-
-    std::vector<const char *> names;
-    names.reserve(objectPaths.size());
-    for (size_t i = 0; i < objectPaths.size(); i++) {
-	const char *name = objectPaths[i].getString();
-	while (name && name[0] == '/')
-	    name++;
-	if (name && name[0] &&
-		db_lookup(dbip, name, LOOKUP_QUIET) != RT_DIR_NULL)
-	    names.push_back(name);
-    }
-    if (names.empty())
-	return FALSE;
-
-    struct rt_i *rtip = rt_i_create(dbip);
-    if (!rtip)
-	return FALSE;
-    rtip->useair = 1;
-    if (rt_gettrees(rtip, static_cast<int>(names.size()), &names[0], 1) < 0) {
-	rt_i_destroy(rtip);
-	return FALSE;
-    }
-    rtip->rti_hasty_prep = 1;
-    rt_prep(rtip);
 
     brlobol_rt_pick_state state;
     struct application ap;
@@ -297,16 +420,31 @@ brlobol_pick_rt_ray(BRLObolRtPickResult &pick,
     ap.a_miss = brlobol_pick_rt_miss;
     ap.a_overlap = NULL;
     ap.a_onehit = 0;
-    ap.a_rt_i = rtip;
+    ap.a_rt_i = this->rtip;
     ap.a_uptr = &state;
-    ap.a_purpose = "brlobol_pick_rt_ray";
+    ap.a_purpose = "BRLObolRtPickCache::pickRay";
     VSET(ap.a_ray.r_pt, rayOrigin[0], rayOrigin[1], rayOrigin[2]);
     VSET(ap.a_ray.r_dir, direction[0], direction[1], direction[2]);
     (void)rt_shootray(&ap);
 
     pick = state.pick;
-    rt_i_destroy(rtip);
     return pick.hit;
+}
+
+SbBool
+brlobol_pick_rt_ray(BRLObolRtPickResult &pick,
+	struct db_i *dbip,
+	const std::vector<SbString> &objectPaths,
+	const SbVec3f &rayOrigin,
+	const SbVec3f &rayDirection)
+{
+    BRLObolRtPickCache cache;
+    if (!cache.prepare(dbip, objectPaths)) {
+	pick.clear();
+	return FALSE;
+    }
+
+    return cache.pickRay(pick, rayOrigin, rayDirection);
 }
 
 static void
@@ -331,6 +469,8 @@ pick_source_fill_detail(SoBRLPickDetail &detail,
 	    sourceRequest.materialColor);
     detail.setMaterialShader(sourceRequest.materialShader);
     detail.setPrimitive(SoBRLPickDetail::FACE, primitiveIndex);
+    detail.setEditIntent(sourceRequest.editIntentId,
+	    sourceRequest.editIntentRole);
     detail.setFaceVertexIndices(vertexIndices[0], vertexIndices[1],
 	    vertexIndices[2]);
     int vertexSlot = pick_source_nearest_face_vertex_slot(localHit,
@@ -361,25 +501,30 @@ brlobol_pick_source_full_detail_result(
 
     size_t faceCount = result.mesh.coordIndex.size() / 3;
     for (size_t i = 0; i < faceCount; i++) {
-	int vertexIndices[3] = {
+	int localVertexIndices[3] = {
 	    result.mesh.coordIndex[i * 3],
 	    result.mesh.coordIndex[i * 3 + 1],
 	    result.mesh.coordIndex[i * 3 + 2]
 	};
-	if (vertexIndices[0] < 0 || vertexIndices[1] < 0 ||
-		vertexIndices[2] < 0 ||
-		static_cast<size_t>(vertexIndices[0]) >=
+	if (localVertexIndices[0] < 0 || localVertexIndices[1] < 0 ||
+		localVertexIndices[2] < 0 ||
+		static_cast<size_t>(localVertexIndices[0]) >=
 		result.mesh.points.size() ||
-		static_cast<size_t>(vertexIndices[1]) >=
+		static_cast<size_t>(localVertexIndices[1]) >=
 		result.mesh.points.size() ||
-		static_cast<size_t>(vertexIndices[2]) >=
+		static_cast<size_t>(localVertexIndices[2]) >=
 		result.mesh.points.size())
 	    return FALSE;
 
 	SbVec3f localVertices[3] = {
-	    result.mesh.points[static_cast<size_t>(vertexIndices[0])],
-	    result.mesh.points[static_cast<size_t>(vertexIndices[1])],
-	    result.mesh.points[static_cast<size_t>(vertexIndices[2])]
+	    result.mesh.points[static_cast<size_t>(localVertexIndices[0])],
+	    result.mesh.points[static_cast<size_t>(localVertexIndices[1])],
+	    result.mesh.points[static_cast<size_t>(localVertexIndices[2])]
+	};
+	int sourceVertexIndices[3] = {
+	    pick_source_mesh_vertex_index(result.mesh, localVertexIndices[0]),
+	    pick_source_mesh_vertex_index(result.mesh, localVertexIndices[1]),
+	    pick_source_mesh_vertex_index(result.mesh, localVertexIndices[2])
 	};
 	SbVec3f worldVertices[3];
 	for (int j = 0; j < 3; j++)
@@ -405,7 +550,8 @@ brlobol_pick_source_full_detail_result(
 	pick.point = worldHit;
 	pick.hit = TRUE;
 	pick_source_fill_detail(pick.detail, sourceRequest,
-		static_cast<int>(i), vertexIndices, localVertices, localHit);
+		pick_source_mesh_face_index(result.mesh, i, faceCount),
+		sourceVertexIndices, localVertices, localHit);
     }
 
     return pick.hit;
@@ -686,6 +832,8 @@ SoBRLPickDetail::SoBRLPickDetail(const SoBRLPickDetail &other) :
     sourceName(other.sourceName),
     sourceType(other.sourceType),
     materialShader(other.materialShader),
+    editIntentId(other.editIntentId),
+    editIntentRole(other.editIntentRole),
     modelPoint(other.modelPoint),
     materialColor(other.materialColor),
     sourceId(other.sourceId),
@@ -717,6 +865,8 @@ SoBRLPickDetail::operator=(const SoBRLPickDetail &other)
     this->sourceName = other.sourceName;
     this->sourceType = other.sourceType;
     this->materialShader = other.materialShader;
+    this->editIntentId = other.editIntentId;
+    this->editIntentRole = other.editIntentRole;
     this->modelPoint = other.modelPoint;
     this->materialColor = other.materialColor;
     this->sourceId = other.sourceId;
@@ -764,6 +914,8 @@ SoBRLPickDetail::clear(void)
     this->sourceName = "";
     this->sourceType = "";
     this->materialShader = "";
+    this->editIntentId = "";
+    this->editIntentRole = "";
     this->modelPoint = SbVec3f(0.0f, 0.0f, 0.0f);
     this->materialColor = SbColor(1.0f, 1.0f, 1.0f);
     this->sourceId = 0;
@@ -928,6 +1080,25 @@ int
 SoBRLPickDetail::getPrimitiveIndex(void) const
 {
     return this->primitiveIndex;
+}
+
+void
+SoBRLPickDetail::setEditIntent(const SbString &id, const SbString &role)
+{
+    this->editIntentId = id;
+    this->editIntentRole = role;
+}
+
+const SbString &
+SoBRLPickDetail::getEditIntentId(void) const
+{
+    return this->editIntentId;
+}
+
+const SbString &
+SoBRLPickDetail::getEditIntentRole(void) const
+{
+    return this->editIntentRole;
 }
 
 void

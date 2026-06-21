@@ -27,16 +27,26 @@ struct QTCAD_EXPORT QgObolSnapRecord {
 	FACE_NEAREST = 8,
 	CENTER = 16,
 	CONSTRUCTION_PLANE = 32,
-	ALL_KINDS = ENDPOINT | MIDPOINT | LINE_NEAREST | FACE_NEAREST | CENTER | CONSTRUCTION_PLANE
+	VERTEX = 64,
+	EDGE_NEAREST = 128,
+	ALL_KINDS = ENDPOINT | MIDPOINT | LINE_NEAREST | FACE_NEAREST | CENTER | CONSTRUCTION_PLANE | VERTEX | EDGE_NEAREST
     };
 
     QgObolSnapRecord(void);
 
     SbVec3f point;
     std::string path;
+    std::string editIntentId;
+    std::string editIntentRole;
     int kind;
     int primitiveIndex;
+    int vertexIndex;
+    int edgeSlot;
+    int edgeVertexIndexA;
+    int edgeVertexIndexB;
+    int submittedSourceRequestCount;
     float distance;
+    bool sourceFullDetailPending;
 };
 
 /**

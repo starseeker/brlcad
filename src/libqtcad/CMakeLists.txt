@@ -54,6 +54,7 @@ set(
   QgObolDatabaseSync.cpp
   QgObolDrawSync.cpp
   QgObolEditPreview.cpp
+  QgObolExport.cpp
   QgObolMeasure.cpp
   QgObolOverlaySync.cpp
   QgObolPick.cpp

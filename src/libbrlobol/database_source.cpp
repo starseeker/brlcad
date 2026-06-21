@@ -10,14 +10,17 @@
 #include "brlobol/database_source.h"
 #include "brlobol/lod_mesh_shape.h"
 #include "brlobol/lod_realization.h"
+#include "brlobol/material_object.h"
 #include "brlobol/mesh_shape.h"
 #include "brlobol/vlist_shape.h"
 
+#include "bu/color.h"
 #include "bu/list.h"
 #include "nmg.h"
 #include "raytrace.h"
 #include "rt/func.h"
 #include "rt/global.h"
+#include "rt/nongeom.h"
 #include "rt/db_fullpath.h"
 #include "rt/tree.h"
 #include "rt/vlist.h"
@@ -196,6 +199,88 @@ make_nop_tree(void)
     return tp;
 }
 
+static void
+material_object_add_properties(SoBRLMaterialObject *object,
+	const char *group,
+	const struct bu_attribute_value_set *properties)
+{
+    const struct bu_attribute_value_pair *avpp = NULL;
+
+    if (!object || !properties)
+	return;
+
+    for (BU_AVS_FOR(avpp, properties))
+	object->addProperty(group, avpp->name, avpp->value);
+}
+
+static SoBRLMaterialObject *
+material_object_from_internal(struct rt_material_internal *material)
+{
+    if (!material)
+	return NULL;
+    RT_CHECK_MATERIAL(material);
+
+    SoBRLMaterialObject *object = new SoBRLMaterialObject;
+    object->materialName = bu_vls_cstr(&material->name);
+    object->parentName = bu_vls_cstr(&material->parent);
+    object->materialSource = bu_vls_cstr(&material->source);
+    material_object_add_properties(object, "physical",
+	    &material->physicalProperties);
+    material_object_add_properties(object, "mechanical",
+	    &material->mechanicalProperties);
+    material_object_add_properties(object, "optical",
+	    &material->opticalProperties);
+    material_object_add_properties(object, "thermal",
+	    &material->thermalProperties);
+    return object;
+}
+
+static void
+assign_material_identity(SoBRLMaterialObject *object,
+	const char *path,
+	const char *sourceName,
+	const char *sourceType,
+	uint32_t sourceId)
+{
+    if (!object)
+	return;
+
+    object->sourcePath = path ? path : "";
+    object->sourceName = sourceName ? sourceName : "";
+    object->sourceType = sourceType ? sourceType : "";
+    object->sourceId = sourceId;
+}
+
+static SoBRLVListShape *
+vlist_from_plot_internal(struct rt_db_internal *intern,
+	const SoBRLDatabaseSource *source)
+{
+    if (!intern || !intern->idb_ptr)
+	return NULL;
+
+    struct bu_list vhead;
+    BU_LIST_INIT(&vhead);
+    struct bg_tess_tol ttol = source_tess_tol(source);
+    struct bn_tol tol = BN_TOL_INIT_TOL;
+    int ret = rt_obj_plot(&vhead, intern, &ttol, &tol);
+    if (ret < 0) {
+	RT_FREE_VLIST(&rt_vlfree, &vhead);
+	return NULL;
+    }
+
+    std::vector<SbVec3f> points;
+    std::vector<int32_t> commands;
+    convert_vlist(points, commands, &vhead);
+    RT_FREE_VLIST(&rt_vlfree, &vhead);
+    if (points.empty() || points.size() != commands.size())
+	return NULL;
+
+    SoBRLVListShape *shape = new SoBRLVListShape;
+    shape->setLineSet(points.data(), commands.data(),
+	    static_cast<int>(points.size()));
+    return shape;
+}
+
 static union tree *
 realize_leaf(struct db_tree_state *tsp,
 	const struct db_full_path *pathp,
@@ -218,13 +303,35 @@ realize_leaf(struct db_tree_state *tsp,
 	return TREE_NULL;
     }
 
+    const char *typeLabel = primitive_type_label(&local_intern);
+    if (local_intern.idb_type == ID_MATERIAL) {
+	SoBRLMaterialObject *materialObject =
+	    material_object_from_internal(static_cast<struct rt_material_internal *>(local_intern.idb_ptr));
+	rt_db_free_internal(&local_intern);
+	if (!materialObject) {
+	    data->failed_shapes++;
+	    set_walk_diagnostic(data, pathp,
+		    "material object realization failed");
+	    return TREE_NULL;
+	}
+	char *path = db_path_to_string(pathp);
+	SoSeparator *leaf = new SoSeparator;
+	assign_material_identity(materialObject, path, dp->d_namep, typeLabel,
+		data->revision);
+	leaf->addChild(materialObject);
+	data->source->addChild(leaf);
+	data->realized_shapes++;
+	if (path)
+	    bu_free(path, "db_path_to_string");
+	return make_nop_tree();
+    }
+
     struct bu_list vhead;
     BU_LIST_INIT(&vhead);
     struct bg_tess_tol ttol = source_tess_tol(data->source);
     struct bn_tol tol = BN_TOL_INIT_TOL;
 
     int ret = rt_obj_plot(&vhead, &local_intern, &ttol, &tol);
-    const char *typeLabel = primitive_type_label(&local_intern);
     if (ret < 0) {
 	char reason[256] = {0};
 	data->failed_shapes++;
@@ -282,20 +389,119 @@ vlist_from_pnts(const struct rt_pnts_internal *pnts)
 	return NULL;
     RT_PNTS_CK_MAGIC(pnts);
 
-    if (pnts->type != RT_PNT_TYPE_PNT)
-	return NULL;
-
     std::vector<SbVec3f> points;
     std::vector<int32_t> commands;
+    std::vector<int> colorValid;
+    std::vector<SbColor> colors;
+    std::vector<int> scaleValid;
+    std::vector<float> scales;
+    std::vector<int> normalValid;
+    std::vector<SbVec3f> normals;
     points.reserve(pnts->count);
     commands.reserve(pnts->count);
 
-    const struct pnt *point = NULL;
-    for (BU_LIST_FOR(point, pnt, &(((struct pnt *)pnts->point)->l))) {
-	points.push_back(SbVec3f(static_cast<float>(point->v[X]),
-		static_cast<float>(point->v[Y]),
-		static_cast<float>(point->v[Z])));
+    colorValid.reserve(pnts->count);
+    colors.reserve(pnts->count);
+    scaleValid.reserve(pnts->count);
+    scales.reserve(pnts->count);
+    normalValid.reserve(pnts->count);
+    normals.reserve(pnts->count);
+
+    const double defaultScale = pnts->scale;
+    auto appendPoint = [&](const fastf_t *v, const struct bu_color *c,
+	    const fastf_t *s, const fastf_t *n) {
+	points.push_back(SbVec3f(static_cast<float>(v[X]),
+		static_cast<float>(v[Y]), static_cast<float>(v[Z])));
 	commands.push_back(SoBRLVListShape::POINT);
+	if (c) {
+	    colorValid.push_back(1);
+	    colors.push_back(SbColor(
+		    static_cast<float>(c->buc_rgb[RED]),
+		    static_cast<float>(c->buc_rgb[GRN]),
+		    static_cast<float>(c->buc_rgb[BLU])));
+	} else {
+	    colorValid.push_back(0);
+	    colors.push_back(SbColor(1.0f, 1.0f, 1.0f));
+	}
+	if (s && *s > 0.0) {
+	    scaleValid.push_back(1);
+	    scales.push_back(static_cast<float>(*s));
+	} else if (!s && defaultScale > 0.0) {
+	    scaleValid.push_back(1);
+	    scales.push_back(static_cast<float>(defaultScale));
+	} else {
+	    scaleValid.push_back(0);
+	    scales.push_back(0.0f);
+	}
+	if (n) {
+	    normalValid.push_back(1);
+	    normals.push_back(SbVec3f(static_cast<float>(n[X]),
+		    static_cast<float>(n[Y]), static_cast<float>(n[Z])));
+	} else {
+	    normalValid.push_back(0);
+	    normals.push_back(SbVec3f(0.0f, 0.0f, 1.0f));
+	}
+    };
+
+    switch (pnts->type) {
+	case RT_PNT_TYPE_PNT:
+	    {
+		const struct pnt *point = NULL;
+		for (BU_LIST_FOR(point, pnt, &(((struct pnt *)pnts->point)->l)))
+		    appendPoint(point->v, NULL, NULL, NULL);
+	    }
+	    break;
+	case RT_PNT_TYPE_COL:
+	    {
+		const struct pnt_color *point = NULL;
+		for (BU_LIST_FOR(point, pnt_color, &(((struct pnt_color *)pnts->point)->l)))
+		    appendPoint(point->v, &point->c, NULL, NULL);
+	    }
+	    break;
+	case RT_PNT_TYPE_SCA:
+	    {
+		const struct pnt_scale *point = NULL;
+		for (BU_LIST_FOR(point, pnt_scale, &(((struct pnt_scale *)pnts->point)->l)))
+		    appendPoint(point->v, NULL, &point->s, NULL);
+	    }
+	    break;
+	case RT_PNT_TYPE_NRM:
+	    {
+		const struct pnt_normal *point = NULL;
+		for (BU_LIST_FOR(point, pnt_normal, &(((struct pnt_normal *)pnts->point)->l)))
+		    appendPoint(point->v, NULL, NULL, point->n);
+	    }
+	    break;
+	case RT_PNT_TYPE_COL_SCA:
+	    {
+		const struct pnt_color_scale *point = NULL;
+		for (BU_LIST_FOR(point, pnt_color_scale, &(((struct pnt_color_scale *)pnts->point)->l)))
+		    appendPoint(point->v, &point->c, &point->s, NULL);
+	    }
+	    break;
+	case RT_PNT_TYPE_COL_NRM:
+	    {
+		const struct pnt_color_normal *point = NULL;
+		for (BU_LIST_FOR(point, pnt_color_normal, &(((struct pnt_color_normal *)pnts->point)->l)))
+		    appendPoint(point->v, &point->c, NULL, point->n);
+	    }
+	    break;
+	case RT_PNT_TYPE_SCA_NRM:
+	    {
+		const struct pnt_scale_normal *point = NULL;
+		for (BU_LIST_FOR(point, pnt_scale_normal, &(((struct pnt_scale_normal *)pnts->point)->l)))
+		    appendPoint(point->v, NULL, &point->s, point->n);
+	    }
+	    break;
+	case RT_PNT_TYPE_COL_SCA_NRM:
+	    {
+		const struct pnt_color_scale_normal *point = NULL;
+		for (BU_LIST_FOR(point, pnt_color_scale_normal, &(((struct pnt_color_scale_normal *)pnts->point)->l)))
+		    appendPoint(point->v, &point->c, &point->s, point->n);
+	    }
+	    break;
+	default:
+	    return NULL;
     }
 
     if (points.empty() || points.size() != commands.size())
@@ -303,6 +509,10 @@ vlist_from_pnts(const struct rt_pnts_internal *pnts)
 
     SoBRLVListShape *shape = new SoBRLVListShape;
     shape->setLineSet(points.data(), commands.data(), static_cast<int>(points.size()));
+    shape->setPointAttributes(colorValid.data(), colors.data(),
+	    scaleValid.data(), scales.data(),
+	    normalValid.data(), normals.data(),
+	    static_cast<int>(points.size()));
     return shape;
 }
 
@@ -582,14 +792,37 @@ realize_mesh_leaf(struct db_tree_state *tsp,
 
     const char *typeLabel = primitive_type_label(&local_intern);
     const int internalType = local_intern.idb_type;
-    SoBRLVListShape *pointShape = NULL;
+    if (internalType == ID_MATERIAL) {
+	SoBRLMaterialObject *materialObject =
+	    material_object_from_internal(static_cast<struct rt_material_internal *>(local_intern.idb_ptr));
+	rt_db_free_internal(&local_intern);
+	if (!materialObject) {
+	    data->failed_shapes++;
+	    set_walk_diagnostic(data, pathp,
+		    "material object realization failed");
+	    return TREE_NULL;
+	}
+	char *path = db_path_to_string(pathp);
+	SoSeparator *leaf = new SoSeparator;
+	assign_material_identity(materialObject, path, dp->d_namep, typeLabel,
+		data->revision);
+	leaf->addChild(materialObject);
+	data->source->addChild(leaf);
+	data->realized_shapes++;
+	if (path)
+	    bu_free(path, "db_path_to_string");
+	return make_nop_tree();
+    }
+    SoBRLVListShape *vlistShape = NULL;
     SoBRLMeshShape *shape = NULL;
     if (internalType == ID_PNTS)
-	pointShape = vlist_from_pnts(static_cast<const struct rt_pnts_internal *>(local_intern.idb_ptr));
+	vlistShape = vlist_from_pnts(static_cast<const struct rt_pnts_internal *>(local_intern.idb_ptr));
+    else if (internalType == ID_SKETCH || internalType == ID_ANNOT)
+	vlistShape = vlist_from_plot_internal(&local_intern, data->source);
     else
 	shape = mesh_from_internal(&local_intern, data->source);
     rt_db_free_internal(&local_intern);
-    if (!pointShape && !shape) {
+    if (!vlistShape && !shape) {
 	char reason[256] = {0};
 	data->failed_shapes++;
 	snprintf(reason, sizeof(reason),
@@ -603,8 +836,8 @@ realize_mesh_leaf(struct db_tree_state *tsp,
     SoSeparator *leaf = new SoSeparator;
     SoMatrixTransform *transform = new SoMatrixTransform;
     transform->matrix = mat_to_sbmatrix(tsp->ts_mat);
-    if (pointShape) {
-	assign_realized_identity(pointShape, tsp, path, dp->d_namep, typeLabel,
+    if (vlistShape) {
+	assign_realized_identity(vlistShape, tsp, path, dp->d_namep, typeLabel,
 		data->revision);
     } else {
 	assign_realized_identity(shape, tsp, path, dp->d_namep, typeLabel,
@@ -613,7 +846,7 @@ realize_mesh_leaf(struct db_tree_state *tsp,
 	    publish_lod_metadata_if_cached(shape, tsp->ts_dbip, dp->d_namep);
     }
     leaf->addChild(transform);
-    leaf->addChild(pointShape ? static_cast<SoNode *>(pointShape) : static_cast<SoNode *>(shape));
+    leaf->addChild(vlistShape ? static_cast<SoNode *>(vlistShape) : static_cast<SoNode *>(shape));
     data->source->addChild(leaf);
     data->realized_shapes++;
     if (path)
@@ -1093,6 +1326,50 @@ SoBRLDatabaseSource::getRealizedMesh(int index) const
     return NULL;
 }
 
+SoBRLMaterialObject *
+SoBRLDatabaseSource::getRealizedMaterialObject(void) const
+{
+    return this->getRealizedMaterialObject(0);
+}
+
+static SoBRLMaterialObject *
+find_material_object_in_node(SoNode *node, int &index)
+{
+    if (!node)
+	return NULL;
+
+    if (node->isOfType(SoBRLMaterialObject::getClassTypeId())) {
+	if (index == 0)
+	    return static_cast<SoBRLMaterialObject *>(node);
+	index--;
+	return NULL;
+    }
+
+    if (node->isOfType(SoGroup::getClassTypeId())) {
+	SoGroup *group = static_cast<SoGroup *>(node);
+	for (int i = 0; i < group->getNumChildren(); i++) {
+	    SoBRLMaterialObject *object =
+		find_material_object_in_node(group->getChild(i), index);
+	    if (object)
+		return object;
+	}
+    }
+
+    return NULL;
+}
+
+SoBRLMaterialObject *
+SoBRLDatabaseSource::getRealizedMaterialObject(int index) const
+{
+    for (int i = 0; i < this->getNumChildren(); i++) {
+	SoBRLMaterialObject *object =
+	    find_material_object_in_node(this->getChild(i), index);
+	if (object)
+	    return object;
+    }
+    return NULL;
+}
+
 static int
 count_shapes_in_node(SoNode *node)
 {
@@ -1146,5 +1423,33 @@ SoBRLDatabaseSource::getRealizedMeshCount(void) const
     int ret = 0;
     for (int i = 0; i < this->getNumChildren(); i++)
 	ret += count_meshes_in_node(this->getChild(i));
+    return ret;
+}
+
+static int
+count_material_objects_in_node(SoNode *node)
+{
+    if (!node)
+	return 0;
+
+    if (node->isOfType(SoBRLMaterialObject::getClassTypeId()))
+	return 1;
+
+    int ret = 0;
+    if (node->isOfType(SoGroup::getClassTypeId())) {
+	SoGroup *group = static_cast<SoGroup *>(node);
+	for (int i = 0; i < group->getNumChildren(); i++)
+	    ret += count_material_objects_in_node(group->getChild(i));
+    }
+
+    return ret;
+}
+
+int
+SoBRLDatabaseSource::getRealizedMaterialObjectCount(void) const
+{
+    int ret = 0;
+    for (int i = 0; i < this->getNumChildren(); i++)
+	ret += count_material_objects_in_node(this->getChild(i));
     return ret;
 }

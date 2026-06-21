@@ -36,6 +36,8 @@ public:
     };
 
     SoSFString previewId;
+    SoSFString editIntentId;
+    SoSFString editIntentRole;
     SoSFUInt32 sourceRevision;
     SoSFUInt32 inputsRevision;
     SoSFUInt32 realizedSourceRevision;
@@ -46,6 +48,7 @@ public:
     SoBRLEditPreview(void);
     static void initClass(void);
 
+    void setEditIntent(const SbString &id, const SbString &role);
     void markSourceRevision(uint32_t revision);
     void markInputsRevision(uint32_t revision);
     SbBool needsRealization(void) const;
@@ -76,6 +79,8 @@ private:
     void markCurrent(void);
 
     SoFieldSensor *previewIdSensor;
+    SoFieldSensor *editIntentIdSensor;
+    SoFieldSensor *editIntentRoleSensor;
     SoFieldSensor *sourceRevisionSensor;
     SoFieldSensor *inputsRevisionSensor;
 };

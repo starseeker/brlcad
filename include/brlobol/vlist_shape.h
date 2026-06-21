@@ -11,6 +11,9 @@
 
 #include "brlobol/defines.h"
 
+#include <Inventor/fields/SoMFBool.h>
+#include <Inventor/fields/SoMFColor.h>
+#include <Inventor/fields/SoMFFloat.h>
 #include <Inventor/fields/SoMFVec3f.h>
 #include <Inventor/fields/SoMFInt32.h>
 #include <Inventor/fields/SoSFBool.h>
@@ -38,6 +41,12 @@ public:
 
     SoMFVec3f point;
     SoMFInt32 command;
+    SoMFBool pointColorValid;
+    SoMFColor pointColor;
+    SoMFBool pointScaleValid;
+    SoMFFloat pointScale;
+    SoMFBool pointNormalValid;
+    SoMFVec3f pointNormal;
     SoSFString sourcePath;
     SoSFString sourceName;
     SoSFString sourceType;
@@ -61,6 +70,8 @@ public:
     SoSFBool ghosted;
     SoSFBool hiddenLine;
     SoSFBool editEmphasis;
+    SoSFString editIntentId;
+    SoSFString editIntentRole;
     SoSFUInt32 lodPolicy;
     SoMFInt32 selectedPrimitive;
     SoMFInt32 highlightedPrimitive;
@@ -69,10 +80,16 @@ public:
     static void initClass(void);
 
     void setLineSet(const SbVec3f *points, const int32_t *commands, int count);
+    void setPointAttributes(const int *colorValid, const SbColor *colors,
+	    const int *scaleValid, const float *scales,
+	    const int *normalValid, const SbVec3f *normals, int count);
     int getSegmentCount(void) const;
     SbBool getSegment(int segmentIndex, SbVec3f &a, SbVec3f &b) const;
     int getPointPrimitiveCount(void) const;
     SbBool getPointPrimitive(int pointIndex, int &primitiveIndex, SbVec3f &pointOut) const;
+    SbBool getPointColor(int primitiveIndex, SbColor &colorOut) const;
+    SbBool getPointScale(int primitiveIndex, float &scaleOut) const;
+    SbBool getPointNormal(int primitiveIndex, SbVec3f &normalOut) const;
     SbBool isPrimitiveSelected(int primitiveIndex) const;
     SbBool isPrimitiveHighlighted(int primitiveIndex) const;
 

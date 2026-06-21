@@ -17,6 +17,7 @@ set(
   lod_service.h
   lod_mesh_shape.h
   lod_update_action.h
+  material_object.h
   measure_action.h
   mesh_lod_submit_action.h
   mesh_residency_action.h

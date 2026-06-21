@@ -18,6 +18,7 @@ set(
   QgObolDatabaseSync.h
   QgObolDrawSync.h
   QgObolEditPreview.h
+  QgObolExport.h
   QgObolMeasure.h
   QgObolOverlaySync.h
   QgObolPick.h

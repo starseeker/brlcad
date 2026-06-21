@@ -11,6 +11,7 @@
 
 #include "brlobol/defines.h"
 #include "brlobol/database_source.h"
+#include "brlobol/pick_detail.h"
 #include "brlobol/scene_controller.h"
 
 #include <Inventor/SbBasic.h>
@@ -22,8 +23,12 @@
 #include <atomic>
 #include <stddef.h>
 #include <stdint.h>
+#include <vector>
 
 class BRLObolLodService;
+class SoBRLExportAction;
+class SoBRLMeasureAction;
+class SoBRLSnapAction;
 class SoCamera;
 class SoNode;
 class SoRenderManager;
@@ -86,6 +91,29 @@ public:
 	uint64_t maxPointCount);
     uint64_t getMaxExactFullDetailFaceCount(void) const;
     uint64_t getMaxExactFullDetailPointCount(void) const;
+    int consumeExportSourceFullDetail(SoBRLExportAction &exportAction,
+	uint64_t generation = 0,
+	int *submittedRequestCount = NULL);
+    int consumeMeasureSourceFullDetail(SoBRLMeasureAction &measureAction,
+	uint64_t generation = 0,
+	int *submittedRequestCount = NULL);
+    int consumeSnapSourceFullDetail(SoBRLSnapAction &snapAction,
+	uint64_t generation = 0,
+	int *submittedRequestCount = NULL);
+    int prepareRtPickCaches(void);
+    int getRtPickCacheCount(void) const;
+    BRLObolRtPickCache *getRtPickCache(int index) const;
+    uint32_t getRtPickCacheSourceRevision(int index) const;
+    int pickSourceMeshExactRay(BRLObolSourceMeshPickResult &pick,
+	const SbVec3f &rayOrigin,
+	const SbVec3f &rayDirection,
+	uint64_t generation = 0,
+	int *submittedRequestCount = NULL);
+    int pickRtExactRay(std::vector<BRLObolRtPickResult> &results,
+	const SbVec3f &rayOrigin,
+	const SbVec3f &rayDirection,
+	SbBool pickAll = FALSE);
+    void clearRtPickCaches(void);
     void setMeshResidencyBudget(size_t maxResidentMeshBytes,
 	SbBool evictDisplayPayloads = TRUE);
     void clearMeshResidencyBudget(void);
@@ -150,6 +178,15 @@ public:
 	int count,
 	uint32_t sourceRevision = 0,
 	uint32_t inputsRevision = 0);
+    int replaceEditPreviewWithIntent(const char *previewId,
+	const char *identity,
+	const char *editIntentId,
+	const char *editIntentRole,
+	const SbVec3f *points,
+	const int32_t *commands,
+	int count,
+	uint32_t sourceRevision = 0,
+	uint32_t inputsRevision = 0);
     int removeEditPreview(const char *previewId);
 
     int replaceDatabaseSource(const char *sourcePath,
@@ -191,6 +228,10 @@ private:
     int lodForcedLevel;
     uint64_t maxExactFullDetailFaceCount;
     uint64_t maxExactFullDetailPointCount;
+    std::vector<BRLObolRtPickCache *> rtPickCaches;
+    std::vector<SbString> rtPickCachePaths;
+    std::vector<struct db_i *> rtPickCacheDatabases;
+    std::vector<uint32_t> rtPickCacheSourceRevisions;
     SbBool meshResidencyBudgetEnabled;
     size_t maxResidentMeshBytes;
     SbBool meshResidencyEvictDisplayPayloads;

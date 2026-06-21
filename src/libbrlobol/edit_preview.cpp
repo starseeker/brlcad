@@ -17,6 +17,8 @@ SO_NODE_SOURCE(SoBRLEditPreview);
 
 SoBRLEditPreview::SoBRLEditPreview(void) :
     previewIdSensor(NULL),
+    editIntentIdSensor(NULL),
+    editIntentRoleSensor(NULL),
     sourceRevisionSensor(NULL),
     inputsRevisionSensor(NULL)
 {
@@ -28,6 +30,8 @@ SoBRLEditPreview::SoBRLEditPreview(void) :
     SO_NODE_DEFINE_ENUM_VALUE(PreviewStatus, FAILED);
 
     SO_NODE_ADD_FIELD(previewId, (""));
+    SO_NODE_ADD_FIELD(editIntentId, (""));
+    SO_NODE_ADD_FIELD(editIntentRole, ("preview"));
     SO_NODE_ADD_FIELD(sourceRevision, (0));
     SO_NODE_ADD_FIELD(inputsRevision, (0));
     SO_NODE_ADD_FIELD(realizedSourceRevision, (0));
@@ -65,6 +69,14 @@ SoBRLEditPreview::attachFieldSensors(void)
     this->previewIdSensor->setPriority(0);
     this->previewIdSensor->attach(&this->previewId);
 
+    this->editIntentIdSensor = new SoFieldSensor(SoBRLEditPreview::fieldSensorCB, this);
+    this->editIntentIdSensor->setPriority(0);
+    this->editIntentIdSensor->attach(&this->editIntentId);
+
+    this->editIntentRoleSensor = new SoFieldSensor(SoBRLEditPreview::fieldSensorCB, this);
+    this->editIntentRoleSensor->setPriority(0);
+    this->editIntentRoleSensor->attach(&this->editIntentRole);
+
     this->sourceRevisionSensor = new SoFieldSensor(SoBRLEditPreview::fieldSensorCB, this);
     this->sourceRevisionSensor->setPriority(0);
     this->sourceRevisionSensor->attach(&this->sourceRevision);
@@ -79,6 +91,10 @@ SoBRLEditPreview::detachFieldSensors(void)
 {
     delete this->previewIdSensor;
     this->previewIdSensor = NULL;
+    delete this->editIntentIdSensor;
+    this->editIntentIdSensor = NULL;
+    delete this->editIntentRoleSensor;
+    this->editIntentRoleSensor = NULL;
     delete this->sourceRevisionSensor;
     this->sourceRevisionSensor = NULL;
     delete this->inputsRevisionSensor;
@@ -90,6 +106,14 @@ SoBRLEditPreview::markStale(void)
 {
     this->stale = TRUE;
     this->previewStatus = STALE;
+}
+
+void
+SoBRLEditPreview::setEditIntent(const SbString &id, const SbString &role)
+{
+    this->editIntentId = id;
+    this->editIntentRole = role.getLength() ? role : SbString("preview");
+    this->markStale();
 }
 
 void
@@ -142,6 +166,10 @@ SoBRLEditPreview::appendLineSet(const SbString &identity,
     shape->sourceType = "edit-preview";
     shape->sourceId = this->sourceRevision.getValue();
     shape->editEmphasis = TRUE;
+    const SbString &intentId = this->editIntentId.getValue();
+    const SbString &intentRole = this->editIntentRole.getValue();
+    shape->editIntentId = intentId.getLength() ? intentId : this->previewId.getValue();
+    shape->editIntentRole = intentRole.getLength() ? intentRole : SbString("preview");
     shape->setLineSet(points, commands, count);
     return shape;
 }

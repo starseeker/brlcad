@@ -88,6 +88,56 @@ rt_mesh_lod_size_to_int(size_t count, int *out)
 }
 
 static int
+rt_mesh_lod_detail_has_payload(const struct rt_mesh_lod_detail *detail)
+{
+    return (detail && (detail->faces || detail->face_count ||
+	    detail->points || detail->point_count ||
+	    detail->points_orig || detail->point_orig_count ||
+	    detail->normals || detail->normal_count));
+}
+
+static int
+rt_mesh_lod_mesh_arrays_validate(
+	const int *faces,
+	size_t face_count_in,
+	const point_t *points,
+	size_t point_count_in,
+	const point_t *points_orig,
+	size_t point_orig_count_in,
+	int *face_count,
+	int *point_count,
+	int *point_orig_count)
+{
+    int fcnt = 0;
+    int pcnt = 0;
+    int porig_cnt = 0;
+
+    if (!rt_mesh_lod_size_to_int(face_count_in, &fcnt) ||
+	    !rt_mesh_lod_size_to_int(point_count_in, &pcnt) ||
+	    !rt_mesh_lod_size_to_int(point_orig_count_in, &porig_cnt))
+	return 0;
+    if (!faces || fcnt <= 0 || !points || pcnt <= 0 ||
+	    !points_orig || porig_cnt <= 0)
+	return 0;
+    if (face_count_in > ((size_t)-1) / 3)
+	return 0;
+
+    size_t index_count = face_count_in * 3;
+    for (size_t i = 0; i < index_count; i++) {
+	if (faces[i] < 0 || faces[i] >= pcnt || faces[i] >= porig_cnt)
+	    return 0;
+    }
+
+    if (face_count)
+	*face_count = fcnt;
+    if (point_count)
+	*point_count = pcnt;
+    if (point_orig_count)
+	*point_orig_count = porig_cnt;
+    return 1;
+}
+
+static int
 rt_mesh_lod_detail_setup_bsg(struct bsg_mesh_lod *lod, void *cb_data)
 {
     struct rt_mesh_lod_detail_callbacks *callbacks =
@@ -96,18 +146,31 @@ rt_mesh_lod_detail_setup_bsg(struct bsg_mesh_lod *lod, void *cb_data)
     int face_count = 0;
     int point_count = 0;
     int point_orig_count = 0;
+    size_t index_count = 0;
 
     if (!lod || !callbacks || !callbacks->setup_clbk)
 	return -1;
 
     rt_mesh_lod_detail_init(&detail);
-    if (callbacks->setup_clbk(&detail, callbacks->cb_data) != 0)
+    if (callbacks->setup_clbk(&detail, callbacks->cb_data) != 0) {
+	if (rt_mesh_lod_detail_has_payload(&detail) && callbacks->clear_clbk)
+	    callbacks->clear_clbk(callbacks->cb_data);
+	rt_mesh_lod_bsg_detail_clear(lod);
 	return -1;
+    }
 
-    if (!rt_mesh_lod_size_to_int(detail.face_count, &face_count) ||
-	    !rt_mesh_lod_size_to_int(detail.point_count, &point_count) ||
-	    !rt_mesh_lod_size_to_int(detail.point_orig_count,
-		&point_orig_count)) {
+    if (!rt_mesh_lod_mesh_arrays_validate(detail.faces, detail.face_count,
+	    detail.points, detail.point_count, detail.points_orig,
+	    detail.point_orig_count, &face_count, &point_count,
+	    &point_orig_count)) {
+	if (callbacks->clear_clbk)
+	    callbacks->clear_clbk(callbacks->cb_data);
+	rt_mesh_lod_bsg_detail_clear(lod);
+	return -1;
+    }
+    index_count = detail.face_count * 3;
+    if ((detail.normals && detail.normal_count != index_count) ||
+	    (!detail.normals && detail.normal_count != 0)) {
 	if (callbacks->clear_clbk)
 	    callbacks->clear_clbk(callbacks->cb_data);
 	rt_mesh_lod_bsg_detail_clear(lod);
@@ -224,12 +287,25 @@ rt_mesh_lod_bot_detail_setup(struct bsg_mesh_lod *lod, void *cb_data)
     struct rt_bot_internal *bot = (struct rt_bot_internal *)cd->intern->idb_ptr;
     RT_BOT_CK_MAGIC(bot);
 
+    int face_count = 0;
+    int point_count = 0;
+    int point_orig_count = 0;
+    if (!rt_mesh_lod_mesh_arrays_validate(bot->faces, bot->num_faces,
+	    (const point_t *)bot->vertices, bot->num_vertices,
+	    (const point_t *)bot->vertices, bot->num_vertices, &face_count,
+	    &point_count, &point_orig_count)) {
+	rt_db_free_internal(cd->intern);
+	BU_PUT(cd->intern, struct rt_db_internal);
+	cd->intern = NULL;
+	return -1;
+    }
+
     lod->faces = bot->faces;
-    lod->fcnt = (int)bot->num_faces;
+    lod->fcnt = face_count;
     lod->points = (const point_t *)bot->vertices;
-    lod->pcnt = (int)bot->num_vertices;
+    lod->pcnt = point_count;
     lod->points_orig = (const point_t *)bot->vertices;
-    lod->porig_cnt = (int)bot->num_vertices;
+    lod->porig_cnt = point_orig_count;
     lod->normals = NULL;
 
     return 0;
@@ -551,6 +627,17 @@ db_mesh_lod_refresh(struct db_i *dbip,
     struct rt_bot_internal *bot = (struct rt_bot_internal *)ip->idb_ptr;
     RT_BOT_CK_MAGIC(bot);
 
+    if (!rt_mesh_lod_mesh_arrays_validate(bot->faces, bot->num_faces,
+	    (const point_t *)bot->vertices, bot->num_vertices,
+	    (const point_t *)bot->vertices, bot->num_vertices, NULL, NULL,
+	    NULL)) {
+	bu_log("Error processing %s - invalid BoT mesh arrays\n", dp->d_namep);
+	rt_db_free_internal(&dbintern);
+	if (status)
+	    *status = current;
+	return BRLCAD_ERROR;
+    }
+
     // Generate and write new data
     unsigned long long key = bsg_mesh_lod_cache(mesh_c, (const point_t *)bot->vertices, bot->num_vertices, NULL, bot->faces, bot->num_faces, 0, 0.66);
     if (!key) {
@@ -612,8 +699,7 @@ db_mesh_lod_store_mesh(struct db_i *dbip,
     if (status)
 	rt_mesh_lod_cache_status_init(status);
 
-    if (!dbip || !dbip->i || !name || !vertices || !vertex_count ||
-	    !faces || !face_count)
+    if (!dbip || !dbip->i || !name)
 	return BRLCAD_ERROR;
 
     struct bsg_mesh_lod_context *mesh_c = rt_mesh_lod_context_ensure(dbip);
@@ -625,6 +711,13 @@ db_mesh_lod_store_mesh(struct db_i *dbip,
 
     rt_mesh_lod_status_current(dbip, mesh_c, name, &current);
     if (!current.directory_found) {
+	if (status)
+	    *status = current;
+	return BRLCAD_ERROR;
+    }
+    if (!vertices || !vertex_count || !faces || !face_count ||
+	    !rt_mesh_lod_mesh_arrays_validate(faces, face_count, vertices,
+		vertex_count, vertices, vertex_count, NULL, NULL, NULL)) {
 	if (status)
 	    *status = current;
 	return BRLCAD_ERROR;
@@ -756,8 +849,9 @@ rt_mesh_lod_has_active_data(const struct rt_mesh_lod *lod)
 	return 0;
 
     const struct bsg_mesh_lod *bsg = lod->bsg;
-    return (bsg->faces && bsg->fcnt > 0 && bsg->points && bsg->pcnt > 0) ?
-	1 : 0;
+    return (bsg->faces && bsg->fcnt > 0 &&
+	    bsg->points && bsg->pcnt > 0 &&
+	    bsg->points_orig && bsg->porig_cnt > 0) ? 1 : 0;
 }
 
 int
@@ -784,7 +878,8 @@ rt_mesh_lod_data_get(const struct rt_mesh_lod *lod, struct rt_mesh_lod_data *dat
     VMOVE(data->bmax, bsg->bmax);
 
     return (data->faces && data->face_count &&
-	    data->points && data->point_count);
+	    data->points && data->point_count &&
+	    data->points_orig && data->point_orig_count);
 }
 
 void
@@ -821,7 +916,7 @@ rt_mesh_lod_info_get(const struct rt_mesh_lod *lod, struct rt_mesh_lod_info *inf
     VMOVE(info->bmin, bsg->bmin);
     VMOVE(info->bmax, bsg->bmax);
 
-    return info->has_faces && info->has_points;
+    return info->has_faces && info->has_points && info->has_original_points;
 }
 
 void
@@ -856,6 +951,15 @@ rt_mesh_lod_detail_callbacks_set(struct rt_mesh_lod *lod,
 	    &rt_mesh_lod_detail_free_bsg);
 
     return 1;
+}
+
+void
+rt_mesh_lod_detail_callbacks_clear(struct rt_mesh_lod *lod)
+{
+    if (!lod || !lod->bsg)
+	return;
+
+    bsg_mesh_lod_detail_setup_clbk(lod->bsg, NULL, NULL);
 }
 
 void

@@ -162,8 +162,8 @@ return;
 	initializeOpenGLFunctions();
 	if (qgcanvas_render_obol_pending(*d, TRUE, TRUE)) {
 	    if (d->v) {
-		(void)bsg_view_refresh_consume(d->v);
-		bsg_view_refresh_complete(d->v);
+		(void)rt_view_refresh_consume_bsg(d->v);
+		rt_view_refresh_complete_bsg(d->v);
 	    }
 	    if (d->dmp)
 		dm_set_native_repaint_pending(d->dmp, 0);
@@ -249,11 +249,11 @@ if (d->ifp)
     // Go ahead and set the flag, but (unlike the rendering thread
     // implementation) we need to do the draw routine every time in paintGL, or
     // we end up with unrendered frames.
-    (void)bsg_view_refresh_consume(d->v);
+    (void)rt_view_refresh_consume_bsg(d->v);
     dm_set_native_repaint_pending(d->dmp, 0);
     dm_draw_objs(d->v);
     dm_draw_end(d->dmp);
-    bsg_view_refresh_complete(d->v);
+    rt_view_refresh_complete_bsg(d->v);
 }
 
 void QgGL::resizeGL(int, int)

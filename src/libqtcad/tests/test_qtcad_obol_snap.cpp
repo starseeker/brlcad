@@ -86,6 +86,16 @@ make_snap_db(const char *dbpath)
     point_t omax = {11.0, 11.0, 11.0};
     ret = ret && mk_rpp(wdbp, "snap_only.s", omin, omax) == 0;
 
+    fastf_t lod_vertices[9] = {
+	-1.0, -1.0, 0.0,
+	 1.0, -1.0, 0.0,
+	-1.0,  1.0, 0.0
+    };
+    int lod_faces[3] = {0, 1, 2};
+    ret = ret && mk_bot(wdbp, "lod-snap.bot", RT_BOT_SOLID,
+	    RT_BOT_UNORIENTED, 0, 3, 1, lod_vertices, lod_faces,
+	    NULL, NULL) == 0;
+
     wdb_close(wdbp);
     return ret;
 }
@@ -134,6 +144,10 @@ qtcad_source_snap_result(const BRLObolLodRequest &request,
     result.mesh.coordIndex.push_back(0);
     result.mesh.coordIndex.push_back(1);
     result.mesh.coordIndex.push_back(2);
+    result.mesh.faceIndex.push_back(42);
+    result.mesh.vertexIndex.push_back(10);
+    result.mesh.vertexIndex.push_back(11);
+    result.mesh.vertexIndex.push_back(12);
     for (const SbVec3f &point : result.mesh.points)
 	result.bounds.extendBy(point);
 
@@ -158,6 +172,41 @@ wait_for_qtcad_source_snap_result(BRLObolLodService &service)
     }
 
     return 1;
+}
+
+static int
+qtcad_make_source_snap_request(BRLObolViewController *controller,
+	const SbVec3f &query,
+	float tolerance,
+	uint32_t enabledKinds,
+	BRLObolLodRequest &request)
+{
+    if (!controller || !controller->getViewport() ||
+	    !controller->getViewport()->getRoot())
+	return 0;
+
+    SoBRLSnapAction snapAction;
+    snapAction.setQueryPoint(query);
+    snapAction.setTolerance(tolerance);
+    snapAction.setEnabledKinds(enabledKinds);
+    snapAction.setPriorityPolicy(SoBRLSnapAction::FEATURE_PRIORITY);
+    snapAction.setGeometryPolicy(SoBRLSnapAction::FULL_DETAIL);
+    snapAction.apply(controller->getViewport()->getRoot());
+    return snapAction.getSourceBackedFullDetailRequestCount() == 1 &&
+	snapAction.makeSourceBackedFullDetailLodRequest(0, request);
+}
+
+static int
+qtcad_submit_source_snap_result(BRLObolLodService &service,
+	const BRLObolLodRequest &request)
+{
+    BRLObolLodTask task;
+    task.request = request;
+    task.realize = qtcad_source_snap_task;
+    if (service.submit(task) == 0)
+	return 0;
+
+    return wait_for_qtcad_source_snap_result(service) == 0;
 }
 
 static QMouseEvent
@@ -280,6 +329,8 @@ main(int argc, char **argv)
     lodMesh->sourceName = "lod-snap.bot";
     lodMesh->sourceType = "bot";
     lodMesh->sourceId = 9101;
+    lodMesh->editIntentId = "edit::lod-snap/face";
+    lodMesh->editIntentRole = "exact-snap";
     lodMesh->setIndexedTriangles(lodPoints, 3, lodIndices, 3);
 
     BRLObolLodRequest displayRequest;
@@ -305,16 +356,9 @@ main(int argc, char **argv)
     lodRoot->unref();
 
     BRLObolLodRequest sourceLodRequest;
-    SoBRLSnapAction seededSnapAction;
-    seededSnapAction.setQueryPoint(SbVec3f(-0.2f, -0.2f, 0.02f));
-    seededSnapAction.setTolerance(0.1f);
-    seededSnapAction.setEnabledKinds(QgObolSnapRecord::FACE_NEAREST);
-    seededSnapAction.setPriorityPolicy(SoBRLSnapAction::FEATURE_PRIORITY);
-    seededSnapAction.setGeometryPolicy(SoBRLSnapAction::FULL_DETAIL);
-    seededSnapAction.apply(controller->getViewport()->getRoot());
-    if (seededSnapAction.getSourceBackedFullDetailRequestCount() != 1 ||
-	    !seededSnapAction.makeSourceBackedFullDetailLodRequest(0,
-		sourceLodRequest))
+    if (!qtcad_make_source_snap_request(controller,
+	    SbVec3f(-0.2f, -0.2f, 0.02f), 0.1f,
+	    QgObolSnapRecord::FACE_NEAREST, sourceLodRequest))
 	FAIL("qtcad LoD snap fixture should build a bounded source full-detail request");
 
     BRLObolLodService sourceService;
@@ -322,15 +366,7 @@ main(int argc, char **argv)
 	FAIL("qtcad LoD snap source service should start");
     controller->setLodService(&sourceService);
 
-    BRLObolLodTask sourceTask;
-    sourceTask.request = sourceLodRequest;
-    sourceTask.realize = qtcad_source_snap_task;
-    if (sourceService.submit(sourceTask) == 0) {
-	controller->setLodService(NULL);
-	sourceService.stop();
-	FAIL("qtcad LoD snap source service should accept the ready task");
-    }
-    if (wait_for_qtcad_source_snap_result(sourceService)) {
+    if (!qtcad_submit_source_snap_result(sourceService, sourceLodRequest)) {
 	controller->setLodService(NULL);
 	sourceService.stop();
 	FAIL("qtcad LoD snap source result should become ready");
@@ -345,17 +381,89 @@ main(int argc, char **argv)
 	FAIL("qtcad exact Obol snap should consume ready source-backed full detail");
     }
     if (exactSnap.path != "/lod-snap.bot" ||
+	    exactSnap.editIntentId != "edit::lod-snap/face" ||
+	    exactSnap.editIntentRole != "exact-snap" ||
 	    exactSnap.kind != QgObolSnapRecord::FACE_NEAREST ||
-	    exactSnap.primitiveIndex != 0 ||
+	    exactSnap.primitiveIndex != 42 ||
+	    exactSnap.vertexIndex != -1 ||
+	    exactSnap.edgeSlot != -1 ||
 	    !near_point(exactSnap.point, -0.2f, -0.2f, 0.0f)) {
 	controller->setLodService(NULL);
 	sourceService.stop();
-	FAIL("qtcad exact Obol snap should preserve source-backed face identity");
+	FAIL("qtcad exact Obol snap should preserve source-backed face identity and edit intent");
     }
     if (sourceService.queuedResultCountForDiagnostics() != 0) {
 	controller->setLodService(NULL);
 	sourceService.stop();
 	FAIL("qtcad exact Obol snap should drain only its matching result");
+    }
+
+    BRLObolLodRequest vertexLodRequest;
+    if (!qtcad_make_source_snap_request(controller,
+	    SbVec3f(-0.96f, -0.96f, 0.0f), 0.1f,
+	    QgObolSnapRecord::VERTEX, vertexLodRequest) ||
+	    !qtcad_submit_source_snap_result(sourceService, vertexLodRequest)) {
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad exact Obol vertex snap source result should become ready");
+    }
+    QgObolSnapRecord vertexSnap;
+    if (!qg_obol_snap_point_full_detail(&view,
+	    SbVec3f(-0.96f, -0.96f, 0.0f), 0.1f,
+	    QgObolSnapRecord::VERTEX, vertexSnap) ||
+	    vertexSnap.path != "/lod-snap.bot" ||
+	    vertexSnap.kind != QgObolSnapRecord::VERTEX ||
+	    vertexSnap.primitiveIndex != 42 ||
+	    vertexSnap.vertexIndex != 10 ||
+	    vertexSnap.edgeSlot != -1 ||
+	    vertexSnap.edgeVertexIndexA != -1 ||
+	    vertexSnap.edgeVertexIndexB != -1 ||
+	    !near_point(vertexSnap.point, -1.0f, -1.0f, 0.0f)) {
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad exact Obol snap should preserve source-backed vertex identity");
+    }
+    if (sourceService.queuedResultCountForDiagnostics() != 0) {
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad exact Obol vertex snap should drain only its matching result");
+    }
+
+    BRLObolLodRequest edgeLodRequest;
+    if (!qtcad_make_source_snap_request(controller,
+	    SbVec3f(0.0f, -0.97f, 0.0f), 0.1f,
+	    QgObolSnapRecord::EDGE_NEAREST, edgeLodRequest) ||
+	    !qtcad_submit_source_snap_result(sourceService, edgeLodRequest)) {
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad exact Obol edge snap source result should become ready");
+    }
+    QgObolSnapRecord edgeSnap;
+    if (!qg_obol_snap_point_full_detail(&view,
+	    SbVec3f(0.0f, -0.97f, 0.0f), 0.1f,
+	    QgObolSnapRecord::EDGE_NEAREST, edgeSnap) ||
+	    edgeSnap.path != "/lod-snap.bot" ||
+	    edgeSnap.kind != QgObolSnapRecord::EDGE_NEAREST ||
+	    edgeSnap.primitiveIndex != 42 ||
+	    edgeSnap.vertexIndex != -1 ||
+	    edgeSnap.edgeSlot != 0 ||
+	    edgeSnap.edgeVertexIndexA != 10 ||
+	    edgeSnap.edgeVertexIndexB != 11 ||
+	    !near_point(edgeSnap.point, 0.0f, -1.0f, 0.0f)) {
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad exact Obol snap should preserve source-backed edge identity");
+    }
+    if (sourceService.queuedResultCountForDiagnostics() != 0) {
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad exact Obol edge snap should drain only its matching result");
+    }
+    if (edgeSnap.sourceFullDetailPending ||
+	    edgeSnap.submittedSourceRequestCount != 0) {
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad exact Obol snap should not report pending source detail after consuming a ready result");
     }
 
     controller->setExactFullDetailBudget(0, 2);
@@ -367,6 +475,13 @@ main(int argc, char **argv)
 	controller->setLodService(NULL);
 	sourceService.stop();
 	FAIL("qtcad exact Obol snap should not treat missing over-budget source detail as a snap candidate");
+    }
+    if (!overBudgetSnap.sourceFullDetailPending ||
+	    overBudgetSnap.submittedSourceRequestCount != 1) {
+	controller->setExactFullDetailBudget(0, 0);
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad exact Obol snap should report pending submitted source detail");
     }
     if (wait_for_qtcad_source_snap_result(sourceService)) {
 	controller->setExactFullDetailBudget(0, 0);

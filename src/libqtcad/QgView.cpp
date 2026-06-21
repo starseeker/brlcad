@@ -37,6 +37,7 @@ extern "C" {
 #include "bu/malloc.h"
 #include "bsg/util.h"
 #include "bsg/view_state.h"
+#include "rt/view_legacy_bsg.h"
 }
 
 #include <algorithm>
@@ -184,7 +185,7 @@ QgView::need_update(QgViewUpdateFlags flags)
     QTCAD_SLOT("QgView::need_update", 1);
     uint32_t refresh_flags = qg_refresh_flags(flags);
     if (struct bsg_view *bv = view())
-	bsg_view_refresh_request(bv, refresh_flags);
+	rt_view_refresh_request_bsg(bv, refresh_flags);
     if (canvas)
 canvas->request_update(refresh_flags);
 }

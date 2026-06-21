@@ -25,8 +25,24 @@ extra runtime.
 
 The focused CTest gates are libbrlobol_prototype and
 test_qtcad_obol_draw_sync.  libbrlobol_prototype requires both staged models
-to load through Obol hierarchy realization and gates shaded mesh export and
-measure traversal for both pinewood.g and havoc.g.  test_qtcad_obol_draw_sync
+to load through Obol hierarchy realization, gates shaded mesh export and
+measure traversal on pinewood.g, and keeps havoc.g as the larger required
+wire hierarchy traversal.  This avoids duplicating havoc.g's expensive shaded
+realization in the prototype gate while retaining required shaded hierarchy
+coverage.  Its wire hierarchy measure uses summary counts for coverage, and
+default connected-angle measurement is covered by a sparse endpoint-bucket
+regression instead of relying on a quadratic all-pairs wire scan.  Vlist
+measure and snap traversal must stay linear over SoBRLVListShape command
+arrays; indexed segment lookup rescans the command stream and made the
+prototype hierarchy measure path scale poorly on pinewood.g and havoc.g.
+Staged RT mesh LoD payload copying also owns optional active normals as a
+provider-neutral triangle-corner array, so normal payloads do not leak the
+underlying RT/BSG cache container into libbrlobol consumers.  The RT mesh-LoD
+provider gate seeds a normal-bearing cached mesh and verifies that the copied
+Obol payload receives the normals through the RT facade.  Generated mesh LoD
+stores use the same triangle-corner normal contract, and rt_view_info verifies
+those normals round-trip through active RT LoD data.
+test_qtcad_obol_draw_sync
 also verifies the real GED draw-observer path used by qged/qtcad: a
 ged_exec_draw command updates a QgView Obol database source and the resulting
 scene is visible through qtcad capture without requiring the test to construct
@@ -63,13 +79,50 @@ test_qtcad_obol_pick verifies point, rectangle, and ray selection workflows
 prefer Obol pick identity and leave the legacy display manager unopened when
 selecting migrated content.  The qtcad selection filter API exposes the
 resulting normalized paths directly for qged consumption instead of requiring
-callers to inspect BSG pick or interaction records.
+callers to inspect BSG pick or interaction records, and the qtcad pick record
+preserves source-backed mesh face, vertex, nearest edge, and edit-intent
+identity for exact picks through the shared BRLObolViewController
+source-backed mesh exact-ray helper.  The same gate verifies qtcad explicit
+ray picks reuse the controller-owned librt exact-pick cache through the shared
+BRLObolViewController RT exact-ray helper, merge display/RT hits in
+ray-distance order, and that QgSelectRayFilter tries the Obol ray helper
+before its legacy BSG/RT fallback even when the filter's legacy `dbip` field
+is unset.
 test_qtcad_obol_measure and test_qtcad_obol_snap verify migrated-content
 measurement overlays and database snap refinement run through Obol without
-opening the legacy display manager.  The measurement gate also asserts that
-the qtcad measurement filter publishes its guide/final segment as Obol line
-overlays, with no BSG measurement feature, cached BSG measure-result path, or
-BSG-pick/raytrace fallback for 3D measurement.
+opening the legacy display manager.  The snap gate also verifies source-backed
+exact snaps preserve face, vertex, and edge-nearest identity through the shared
+BRLObolViewController source-backed snap helper.  The measurement gate also
+verifies source-backed exact measurement preserves nearest face, vertex, edge,
+and edit-intent identity through the shared controller measurement helper, and
+asserts that the qtcad measurement filter publishes its guide/final segment as
+Obol line overlays, with no BSG measurement feature, cached BSG measure-result
+path, or BSG-pick/raytrace fallback for 3D measurement.  qtcad exact export
+records likewise preserve source-backed edit-intent metadata through the shared
+controller export helper, and qtcad exact export/measure/snap/pick tests verify
+pending submitted source-detail work is surfaced separately from immediate
+misses.  The pick gate also verifies the qtcad point, rectangle, and ray
+selection filters skip legacy fallback selection while source-backed exact
+pick detail is pending.
+The LoD service gate verifies controller
+source-backed exact reload submission resolves the matching database source in
+multi-source views and consumes the corresponding database-scoped result.
+The LoD service gate verifies active request-key tracking rejects duplicate
+queued/running source reloads while allowing resubmission after completion.
+It also verifies partially ready multi-request exact export and mesh-pick
+helpers consume the ready source-backed result and submit the still-missing
+source-backed request in the same pass.
+It also verifies direct BoT source-backed snap/pick subset payloads are
+budgeted after source-local scoped face reduction, that scoped misses do not
+expand to whole-object payloads, and that mixed-kind, duplicate, malformed,
+or non-source-local query metadata stays whole-object while measure query
+hints remain whole-object until a bounded measurement provider exists.  The
+same LoD gate also verifies source-backed request conversion replaces stale template
+`source_query.*` params with current request metadata, and that non-forced
+mesh LoD submissions use the same view-policy active level as a direct
+`rt_mesh_lod_load_view` selection for the submitted `rt_view_info` while
+rejecting duplicate queued/running view-policy requests through LoD service
+active-request tracking.
 
 Preserved Identity
 ------------------
@@ -85,9 +138,13 @@ Every realized drawable Obol node must preserve:
 * visibility, selectability, selection, highlight, ghost, hidden-line, edit
   emphasis, LoD policy, and color override fields
 
-Standalone material-object identity, edge and vertex identity, edit-intent
-detail beyond the current draw-intent fields, and stable face/edge/vertex IDs
-for tessellated curved primitives are still migration work.
+Standalone material-object identity, first mesh edge/vertex action identity,
+and typed edit-preview intent identity across pick/snap/measure/export are now
+covered.  SoBRLEditPreview can publish explicit edit-intent id/role metadata
+separate from preview-node identity, while preserving the old preview-id
+fallback.  Broader live edit-tool lifecycle/state semantics and stable
+face/edge/vertex IDs for tessellated curved primitives are still migration
+work.
 
 Coverage Table
 --------------
@@ -113,7 +170,7 @@ Coverage Table
 | superell | rt_obj_plot, rt_obj_tess | SoBRLVListShape for wire; shaded realization currently reports an explicit unsupported tessellation diagnostic | Covered by generated wire test and shaded diagnostic test |
 | metaball | rt_obj_plot, rt_obj_tess when available | SoBRLVListShape for wire, tessellated SoBRLMeshShape where tessellation succeeds | Covered by generated primitive wire/shaded export/measure tests with fine shaded tessellation tolerance |
 | halfspace | rt_obj_plot, rt_obj_tess | SoBRLVListShape for finite wire display; shaded realization currently reports an explicit unsupported tessellation diagnostic because the primitive is unbounded | Covered by generated wire test and shaded diagnostic test |
-| sketch | rt_obj_plot | Obol 2D/3D curve or SoBRLVListShape fallback | Covered by generated sketch wire export/measure test; native curve policy deferred |
+| sketch | rt_obj_plot | Obol 2D/3D curve or SoBRLVListShape fallback | Covered by generated sketch wire and shaded-vlist pick/snap/export/measure tests; native curve policy deferred |
 | extrude | sketch plus extrusion path | SoBRLVListShape for wire, tessellated SoBRLMeshShape where tessellation succeeds | Covered by generated sketch-backed wire/shaded export/measure test |
 | revolve | sketch plus revolution path | SoBRLVListShape for wire; shaded realization currently reports an explicit unsupported tessellation diagnostic | Covered by generated sketch-backed wire test and shaded diagnostic test |
 | cline | rt_obj_plot, rt_obj_tess | SoBRLVListShape for wire, tessellated SoBRLMeshShape where tessellation succeeds | Covered by generated primitive wire/shaded export/measure tests |
@@ -121,14 +178,14 @@ Coverage Table
 | bspline/nurb | NURBS curve/surface path | SoBRLVListShape for wire; future native Obol curve/surface or BREP-backed representation for shaded output | Covered by generated BSpline surface wire test and shaded diagnostic test |
 | dsp/ebm/vol/hf | external/grid/volume-backed draw path | Tessellated SoBRLMeshShape for object-backed DSP/EBM/VOL; legacy HF uses SoBRLVListShape wire fallback and explicit shaded unsupported tessellation diagnostic | Covered for generated object-backed DSP, EBM, and VOL wire/shaded export/measure tests plus generated legacy v4 HF wire/shaded diagnostic test |
 | submodel | referenced model draw path | SoBRLVListShape fallback for same-database referenced models; future native representation can use a SoBRLDatabaseSource-backed sub-scene | Covered by generated same-database submodel wire test and shaded diagnostic test |
-| annot | annotation/text draw path | Obol text/HUD/annotation nodes | Covered by generated line-annotation wire test and shaded diagnostic test; native text realization deferred |
-| pnts | point-cloud draw path | Obol point/marker node or SoBRLVListShape point fallback | Covered by generated point-cloud wire test and shaded diagnostic test; native point node deferred |
+| annot | annotation/text draw path | Obol text/HUD/annotation nodes or SoBRLVListShape fallback for stroked/line annotations | Covered by generated line-annotation wire and shaded-vlist pick/snap/export/measure tests; native text realization deferred |
+| pnts | point-cloud draw path | Obol point/marker node or SoBRLVListShape point fallback with optional color, scale, and normal attributes | Covered by generated point-cloud wire test, shaded point test, all RT point-record attribute variants, global-scale fallback, per-point scale precedence, and transform-aware point attribute export/bounds behavior; native point node deferred |
 | datum | datum helper object | BRL-CAD Obol datum node | Covered by generated datum wire test and shaded diagnostic test |
 | joint | joint/edit helper object | BRL-CAD Obol edit/rigging node or explicit diagnostic | Covered by generated joint wire test and shaded diagnostic test |
 | hrt | primitive draw path | SoBRLVListShape for wire; shaded realization currently reports an explicit unsupported tessellation diagnostic | Covered by generated wire test and shaded diagnostic test |
 | binunif | binary application data | No drawable scene node | Covered by generated wire/shaded no-draw diagnostic tests |
 | constraint | constraint metadata | No drawable scene node | Covered by generated wire/shaded no-draw diagnostic tests |
-| material | material metadata | Obol material field/detail, not standalone geometry | Covered by generated wire/shaded no-draw diagnostic tests |
+| material | material metadata | SoBRLMaterialObject metadata node, not standalone geometry | Covered by generated wire/shaded material-object metadata tests plus no-draw bbox/pick/snap/export/measure checks |
 | script | script metadata/action object | No drawable scene node until a script-backed scene policy exists | Covered by generated wire/shaded no-draw diagnostic tests |
 
 Near-Term Gates
@@ -139,8 +196,9 @@ Near-Term Gates
 2. Promote diagnostic/fallback rows such as BREP, legacy HF, annotation, and
    point-clouds to native Obol representations where that adds stable user
    value.
-3. Add stable standalone material-object, edge, vertex, and edit-intent
-   identity where Obol actions need to report those sub-entities.
+3. Complete broader live edit-tool lifecycle/state semantics and extend stable
+   edge/vertex identity beyond the current indexed-mesh action coverage where
+   native or tessellated curved nodes need to report those sub-entities.
 4. Promote the controlled Generic_Twin.g opt-in workflow gate to a default
    gate after large-BoT staged LoD realization can publish diagnostics for
    invalid BoTs, preserve mixed implicit/mesh identity, and avoid blocking

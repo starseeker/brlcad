@@ -26,6 +26,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "bu/app.h"
 #include "bu/env.h"
@@ -259,16 +260,77 @@ check_mesh_lod_payload(const char *label, struct rt_mesh_lod *lod,
     return 0;
 }
 
+struct mesh_lod_detail_test_data {
+    const fastf_t *vertices;
+    const int *faces;
+    const fastf_t *normals;
+    size_t point_count;
+    size_t point_orig_count;
+    size_t face_count;
+    size_t normal_count;
+    int setup_count;
+    int setup_return;
+    int clear_count;
+    int free_count;
+};
+
+static int
+mesh_lod_detail_setup_cb(struct rt_mesh_lod_detail *detail, void *cb_data)
+{
+    struct mesh_lod_detail_test_data *data =
+	(struct mesh_lod_detail_test_data *)cb_data;
+
+    if (!detail || !data)
+	return -1;
+
+    rt_mesh_lod_detail_init(detail);
+    detail->faces = data->faces;
+    detail->face_count = data->face_count;
+    detail->points = (const point_t *)data->vertices;
+    detail->point_count = data->point_count;
+    detail->points_orig = (const point_t *)data->vertices;
+    detail->point_orig_count = data->point_orig_count ?
+	data->point_orig_count : data->point_count;
+    detail->normals = (const vect_t *)data->normals;
+    detail->normal_count = data->normal_count;
+    data->setup_count++;
+    return data->setup_return;
+}
+
+static int
+mesh_lod_detail_clear_cb(void *cb_data)
+{
+    struct mesh_lod_detail_test_data *data =
+	(struct mesh_lod_detail_test_data *)cb_data;
+
+    if (data)
+	data->clear_count++;
+    return 0;
+}
+
+static int
+mesh_lod_detail_free_cb(void *cb_data)
+{
+    struct mesh_lod_detail_test_data *data =
+	(struct mesh_lod_detail_test_data *)cb_data;
+
+    if (data)
+	data->free_count++;
+    return 0;
+}
+
 static int
 test_mesh_lod_api(void)
 {
     const char *objname = "rt_view_info_lod_bot";
     const char *mesh_objname = "rt_view_info_lod_mesh_payload";
+    const char *invalid_bot_objname = "rt_view_info_invalid_lod_bot";
     const int grid = 12;
     const int vertex_count = (grid + 1) * (grid + 1);
     const int face_count = grid * grid * 2;
     char dbpath[MAXPATHLEN] = {0};
     fastf_t *vertices = NULL;
+    fastf_t *detail_normals = NULL;
     int *faces = NULL;
     int ret = 0;
     char cache_dir[MAXPATHLEN] = {0};
@@ -285,6 +347,8 @@ test_mesh_lod_api(void)
 	    sizeof(fastf_t), "view_info lod vertices");
     faces = (int *)bu_calloc((size_t)face_count * 3,
 	    sizeof(int), "view_info lod faces");
+    detail_normals = (fastf_t *)bu_calloc((size_t)face_count * 3 * 3,
+	    sizeof(fastf_t), "view_info lod detail normals");
     for (int y = 0; y <= grid; y++) {
 	for (int x = 0; x <= grid; x++) {
 	    int idx = y * (grid + 1) + x;
@@ -310,6 +374,11 @@ test_mesh_lod_api(void)
 	    }
 	}
     }
+    for (size_t ni = 0; ni < (size_t)face_count * 3; ni++) {
+	detail_normals[ni * 3 + 0] = 0.0;
+	detail_normals[ni * 3 + 1] = 0.0;
+	detail_normals[ni * 3 + 2] = 1.0;
+    }
 
     FILE *fp = bu_temp_file(dbpath, MAXPATHLEN);
     if (!fp) {
@@ -334,11 +403,21 @@ test_mesh_lod_api(void)
     }
 
     if (mk_bot(wdbp, objname, RT_BOT_SURFACE, RT_BOT_CCW, 0,
-		vertex_count, face_count,
-		vertices, faces, NULL, NULL) < 0) {
+	    vertex_count, face_count,
+	    vertices, faces, NULL, NULL) < 0) {
 	printf("FAIL: mesh lod mk_bot\n");
 	ret = 1;
 	goto cleanup;
+    }
+    {
+	int invalid_faces[3] = {0, 1, 0};
+	invalid_faces[2] = vertex_count;
+	if (mk_bot(wdbp, invalid_bot_objname, RT_BOT_SURFACE, RT_BOT_CCW, 0,
+		vertex_count, 1, vertices, invalid_faces, NULL, NULL) < 0) {
+	    printf("FAIL: mesh lod invalid mk_bot\n");
+	    ret = 1;
+	    goto cleanup;
+	}
     }
     {
 	point_t center = VINIT_ZERO;
@@ -354,6 +433,16 @@ test_mesh_lod_api(void)
 	    cache_status.has_cache_key || cache_status.has_cached_payload ||
 	    cache_status.stale_cache_entry) {
 	printf("FAIL: mesh lod initial cache status\n");
+	ret = 1;
+	goto cleanup;
+    }
+
+    if (db_mesh_lod_refresh(dbip, invalid_bot_objname, &cache_status) !=
+	    BRLCAD_ERROR ||
+	    !cache_status.directory_found || !cache_status.is_bot ||
+	    cache_status.has_cache_key || cache_status.has_cached_payload ||
+	    db_mesh_lod_get(dbip, invalid_bot_objname)) {
+	printf("FAIL: mesh lod invalid BoT cache rejection\n");
 	ret = 1;
 	goto cleanup;
     }
@@ -428,14 +517,15 @@ test_mesh_lod_api(void)
     }
 
     if (!ret) {
-	struct rt_mesh_lod *mesh_lod = NULL;
-	if (db_mesh_lod_store_mesh(dbip, mesh_objname,
-		(const point_t *)vertices, (size_t)vertex_count, NULL, faces,
-		(size_t)face_count, 424242ULL, 0.66, &cache_status) != BRLCAD_OK ||
-		!cache_status.directory_found || cache_status.is_bot ||
-		!cache_status.has_cache_key || !cache_status.has_cached_payload ||
-		cache_status.stale_cache_entry ||
-		!cache_status.generated_cache_entry ||
+	    struct rt_mesh_lod *mesh_lod = NULL;
+	    if (db_mesh_lod_store_mesh(dbip, mesh_objname,
+		    (const point_t *)vertices, (size_t)vertex_count,
+		    (const vect_t *)detail_normals, faces, (size_t)face_count,
+		    424242ULL, 0.66, &cache_status) != BRLCAD_OK ||
+		    !cache_status.directory_found || cache_status.is_bot ||
+		    !cache_status.has_cache_key || !cache_status.has_cached_payload ||
+		    cache_status.stale_cache_entry ||
+		    !cache_status.generated_cache_entry ||
 		!cache_status.cache_key) {
 	    printf("FAIL: mesh lod store generated mesh status\n");
 	    ret = 1;
@@ -450,21 +540,419 @@ test_mesh_lod_api(void)
 		    continue;
 		if (!rt_mesh_lod_data_get(mesh_lod, &data))
 		    continue;
-		if (check_mesh_lod_payload("mesh lod generated mesh", mesh_lod,
-			(size_t)face_count, (size_t)vertex_count)) {
-		    ret = 1;
-		    break;
-		}
-		got_generated_mesh_data = 1;
-		break;
-	    }
+			if (check_mesh_lod_payload("mesh lod generated mesh", mesh_lod,
+				(size_t)face_count, (size_t)vertex_count)) {
+			    ret = 1;
+			    break;
+			}
+			if (!data.normals ||
+				data.normal_count != data.face_count * 3 ||
+				!fastf_equal(data.normals[0][2], 1.0)) {
+			    printf("FAIL: mesh lod generated mesh normals\n");
+			    ret = 1;
+			    break;
+			}
+			got_generated_mesh_data = 1;
+			break;
+		    }
 	    if (!got_generated_mesh_data) {
 		printf("FAIL: mesh lod generated mesh data\n");
 		ret = 1;
 	    }
 	}
+	if (!ret) {
+	    int invalid_store_faces[3] = {0, 0, 1};
+	    struct rt_mesh_lod *preserved_lod = NULL;
+	    invalid_store_faces[1] = vertex_count;
+	    int invalid_store_ret = db_mesh_lod_store_mesh(dbip, mesh_objname,
+		    (const point_t *)vertices, (size_t)vertex_count, NULL,
+		    invalid_store_faces, 1, 777777ULL, 0.66,
+		    &cache_status);
+	    preserved_lod = db_mesh_lod_get(dbip, mesh_objname);
+	    if (invalid_store_ret != BRLCAD_ERROR ||
+		    !cache_status.directory_found || cache_status.is_bot ||
+		    !cache_status.has_cache_key ||
+		    !cache_status.has_cached_payload ||
+		    cache_status.stale_cache_entry ||
+		    cache_status.cache_key != 424242ULL ||
+		    !preserved_lod) {
+		printf("FAIL: mesh lod invalid generated mesh store should preserve existing cache status\n");
+		ret = 1;
+	    }
+	    if (preserved_lod)
+		rt_mesh_lod_destroy(preserved_lod);
+	}
 	if (mesh_lod)
 	    rt_mesh_lod_destroy(mesh_lod);
+    }
+
+    if (!ret) {
+	struct rt_mesh_lod *detail_lod = db_mesh_lod_get(dbip, mesh_objname);
+	struct rt_mesh_lod_data detail_data;
+	struct rt_mesh_lod_info detail_info = RT_MESH_LOD_INFO_INIT;
+	struct mesh_lod_detail_test_data detail_cb_data;
+	struct mesh_lod_detail_test_data replacement_cb_data;
+	struct mesh_lod_detail_test_data active_replacement_cb_data;
+	int detail_got_pop_data = 0;
+	memset(&detail_cb_data, 0, sizeof(detail_cb_data));
+	memset(&replacement_cb_data, 0, sizeof(replacement_cb_data));
+	memset(&active_replacement_cb_data, 0, sizeof(active_replacement_cb_data));
+	detail_cb_data.vertices = vertices;
+	detail_cb_data.faces = faces;
+	detail_cb_data.normals = detail_normals;
+	detail_cb_data.point_count = (size_t)vertex_count;
+	detail_cb_data.face_count = (size_t)face_count;
+	detail_cb_data.normal_count = (size_t)face_count * 3;
+	replacement_cb_data.vertices = vertices;
+	replacement_cb_data.faces = faces;
+	replacement_cb_data.normals = detail_normals;
+	replacement_cb_data.point_count = (size_t)vertex_count;
+	replacement_cb_data.face_count = (size_t)face_count;
+	replacement_cb_data.normal_count = (size_t)face_count * 3;
+	active_replacement_cb_data.vertices = vertices;
+	active_replacement_cb_data.faces = faces;
+	active_replacement_cb_data.normals = detail_normals;
+	active_replacement_cb_data.point_count = (size_t)vertex_count;
+	active_replacement_cb_data.face_count = (size_t)face_count;
+	active_replacement_cb_data.normal_count = (size_t)face_count * 3;
+	if (detail_lod) {
+	    for (int level = 0; level < 16; level++) {
+		if (rt_mesh_lod_load_level(detail_lod, level, 0) < 0)
+		    continue;
+		if (rt_mesh_lod_has_active_data(detail_lod)) {
+		    detail_got_pop_data = 1;
+		    break;
+		}
+	    }
+	}
+	if (!detail_lod || !detail_got_pop_data ||
+		!rt_mesh_lod_detail_callbacks_set(detail_lod,
+		    mesh_lod_detail_setup_cb, mesh_lod_detail_clear_cb,
+		    mesh_lod_detail_free_cb, &detail_cb_data) ||
+		!rt_mesh_lod_detail_callbacks_set(detail_lod,
+		    mesh_lod_detail_setup_cb, mesh_lod_detail_clear_cb,
+		    mesh_lod_detail_free_cb, &replacement_cb_data) ||
+		detail_cb_data.free_count != 1 ||
+		!rt_mesh_lod_has_active_data(detail_lod) ||
+		!rt_mesh_lod_data_get(detail_lod, &detail_data) ||
+		!detail_data.normals ||
+		detail_data.normal_count != detail_data.face_count * 3 ||
+		replacement_cb_data.setup_count != 0) {
+	    printf("FAIL: mesh lod full-detail callback replacement did not preserve active POP data\n");
+	    ret = 1;
+	}
+	if (!ret && (rt_mesh_lod_load_level(detail_lod, 100, 0) < 0 ||
+		!rt_mesh_lod_data_get(detail_lod, &detail_data) ||
+		!rt_mesh_lod_info_get(detail_lod, &detail_info) ||
+		detail_data.normal_count != (size_t)face_count * 3 ||
+		detail_info.normal_count != detail_data.normal_count ||
+		!detail_info.has_normals ||
+		!detail_data.normals ||
+		replacement_cb_data.setup_count != 1)) {
+	    printf("FAIL: mesh lod full-detail callback did not publish valid normals\n");
+	    ret = 1;
+	}
+	if (!ret) {
+	    if (!rt_mesh_lod_detail_callbacks_set(detail_lod,
+		    mesh_lod_detail_setup_cb, mesh_lod_detail_clear_cb,
+		    mesh_lod_detail_free_cb, &active_replacement_cb_data) ||
+		    replacement_cb_data.free_count != 1 ||
+		    rt_mesh_lod_current_level(detail_lod) != -1 ||
+		    rt_mesh_lod_has_active_data(detail_lod) ||
+		    rt_mesh_lod_data_get(detail_lod, &detail_data) ||
+		    rt_mesh_lod_load_level(detail_lod, 100, 0) < 0 ||
+		    !rt_mesh_lod_data_get(detail_lod, &detail_data) ||
+		    detail_data.normal_count != (size_t)face_count * 3 ||
+		    active_replacement_cb_data.setup_count != 1) {
+		printf("FAIL: mesh lod full-detail callback replacement did not invalidate stale borrowed data\n");
+		ret = 1;
+	    }
+	}
+	if (!ret) {
+	    rt_mesh_lod_detail_callbacks_clear(detail_lod);
+	    if (active_replacement_cb_data.free_count != 1 ||
+		    rt_mesh_lod_current_level(detail_lod) != -1 ||
+		    rt_mesh_lod_has_active_data(detail_lod) ||
+		    rt_mesh_lod_data_get(detail_lod, &detail_data) ||
+		    rt_mesh_lod_load_level(detail_lod, 100, 0) < 0 ||
+		!rt_mesh_lod_data_get(detail_lod, &detail_data) ||
+		detail_data.face_count > (size_t)face_count ||
+		detail_data.point_count > (size_t)vertex_count ||
+		!detail_data.normals ||
+		detail_data.normal_count != detail_data.face_count * 3 ||
+		detail_cb_data.setup_count != 0 ||
+		replacement_cb_data.setup_count != 1 ||
+		active_replacement_cb_data.setup_count != 1) {
+		printf("FAIL: mesh lod full-detail callback clear did not release callback ownership\n");
+		ret = 1;
+	    }
+	}
+	if (detail_lod)
+	    rt_mesh_lod_destroy(detail_lod);
+	if (!ret && active_replacement_cb_data.free_count != 1) {
+	    printf("FAIL: mesh lod replacement full-detail callback free was not called\n");
+	    ret = 1;
+	}
+    }
+
+    if (!ret) {
+	struct rt_mesh_lod *invalid_lod = db_mesh_lod_get(dbip, mesh_objname);
+	struct rt_mesh_lod_data invalid_data;
+	struct mesh_lod_detail_test_data invalid_cb_data;
+	int invalid_got_pop_data = 0;
+	int invalid_load_level = -1;
+	memset(&invalid_cb_data, 0, sizeof(invalid_cb_data));
+	invalid_cb_data.vertices = vertices;
+	invalid_cb_data.faces = faces;
+	invalid_cb_data.normals = detail_normals;
+	invalid_cb_data.point_count = (size_t)vertex_count;
+	invalid_cb_data.face_count = (size_t)face_count;
+	invalid_cb_data.normal_count = (size_t)face_count * 3 - 1;
+	if (invalid_lod) {
+	    for (int level = 0; level < 16; level++) {
+		if (rt_mesh_lod_load_level(invalid_lod, level, 0) < 0)
+		    continue;
+		if (rt_mesh_lod_has_active_data(invalid_lod)) {
+		    invalid_got_pop_data = 1;
+		    break;
+		}
+	    }
+	}
+	if (!invalid_lod || !invalid_got_pop_data ||
+		!rt_mesh_lod_detail_callbacks_set(invalid_lod,
+		    mesh_lod_detail_setup_cb, mesh_lod_detail_clear_cb,
+		    mesh_lod_detail_free_cb, &invalid_cb_data)) {
+	    printf("FAIL: mesh lod full-detail callback malformed normal-count setup failed\n");
+	    ret = 1;
+	} else {
+	    invalid_load_level = rt_mesh_lod_load_level(invalid_lod, 100, 1);
+	    if (invalid_load_level >= 0 ||
+		    rt_mesh_lod_current_level(invalid_lod) != -1 ||
+		    rt_mesh_lod_has_active_data(invalid_lod) ||
+		    rt_mesh_lod_data_get(invalid_lod, &invalid_data) ||
+		    invalid_cb_data.setup_count != 1 ||
+		    invalid_cb_data.clear_count < 1) {
+		printf("FAIL: mesh lod full-detail callback setup failure did not clear stale active data\n");
+		ret = 1;
+	    }
+	}
+	if (invalid_lod)
+	    rt_mesh_lod_destroy(invalid_lod);
+	if (!ret && invalid_cb_data.free_count != 1) {
+	    printf("FAIL: mesh lod malformed full-detail callback free was not called\n");
+	    ret = 1;
+	}
+    }
+
+    if (!ret) {
+	struct rt_mesh_lod *missing_array_lod = db_mesh_lod_get(dbip, mesh_objname);
+	struct rt_mesh_lod_data missing_array_data;
+	struct mesh_lod_detail_test_data missing_array_cb_data;
+	int missing_array_got_pop_data = 0;
+	int missing_array_load_level = -1;
+	memset(&missing_array_cb_data, 0, sizeof(missing_array_cb_data));
+	missing_array_cb_data.vertices = vertices;
+	missing_array_cb_data.faces = NULL;
+	missing_array_cb_data.normals = detail_normals;
+	missing_array_cb_data.point_count = (size_t)vertex_count;
+	missing_array_cb_data.face_count = (size_t)face_count;
+	missing_array_cb_data.normal_count = (size_t)face_count * 3;
+	if (missing_array_lod) {
+	    for (int level = 0; level < 16; level++) {
+		if (rt_mesh_lod_load_level(missing_array_lod, level, 0) < 0)
+		    continue;
+		if (rt_mesh_lod_has_active_data(missing_array_lod)) {
+		    missing_array_got_pop_data = 1;
+		    break;
+		}
+	    }
+	}
+	if (!missing_array_lod || !missing_array_got_pop_data ||
+		!rt_mesh_lod_detail_callbacks_set(missing_array_lod,
+		    mesh_lod_detail_setup_cb, mesh_lod_detail_clear_cb,
+		    mesh_lod_detail_free_cb, &missing_array_cb_data)) {
+	    printf("FAIL: mesh lod full-detail callback missing-array setup failed\n");
+	    ret = 1;
+	} else {
+	    missing_array_load_level =
+		rt_mesh_lod_load_level(missing_array_lod, 100, 1);
+	    if (missing_array_load_level >= 0 ||
+		    rt_mesh_lod_current_level(missing_array_lod) != -1 ||
+		    rt_mesh_lod_has_active_data(missing_array_lod) ||
+		    rt_mesh_lod_data_get(missing_array_lod,
+			&missing_array_data) ||
+		    missing_array_cb_data.setup_count != 1 ||
+		    missing_array_cb_data.clear_count < 1) {
+		printf("FAIL: mesh lod full-detail callback missing arrays did not clear stale active data\n");
+		ret = 1;
+	    }
+	}
+	if (missing_array_lod)
+	    rt_mesh_lod_destroy(missing_array_lod);
+	if (!ret && missing_array_cb_data.free_count != 1) {
+	    printf("FAIL: mesh lod missing-array full-detail callback free was not called\n");
+	    ret = 1;
+	}
+    }
+
+    if (!ret) {
+	struct rt_mesh_lod *bad_index_lod = db_mesh_lod_get(dbip, mesh_objname);
+	struct rt_mesh_lod_data bad_index_data;
+	struct mesh_lod_detail_test_data bad_index_cb_data;
+	int bad_index_faces[3] = {0, 0, 1};
+	int bad_index_got_pop_data = 0;
+	int bad_index_load_level = -1;
+	bad_index_faces[1] = vertex_count;
+	memset(&bad_index_cb_data, 0, sizeof(bad_index_cb_data));
+	bad_index_cb_data.vertices = vertices;
+	bad_index_cb_data.faces = bad_index_faces;
+	bad_index_cb_data.normals = detail_normals;
+	bad_index_cb_data.point_count = (size_t)vertex_count;
+	bad_index_cb_data.face_count = 1;
+	bad_index_cb_data.normal_count = 3;
+	if (bad_index_lod) {
+	    for (int level = 0; level < 16; level++) {
+		if (rt_mesh_lod_load_level(bad_index_lod, level, 0) < 0)
+		    continue;
+		if (rt_mesh_lod_has_active_data(bad_index_lod)) {
+		    bad_index_got_pop_data = 1;
+		    break;
+		}
+	    }
+	}
+	if (!bad_index_lod || !bad_index_got_pop_data ||
+		!rt_mesh_lod_detail_callbacks_set(bad_index_lod,
+		    mesh_lod_detail_setup_cb, mesh_lod_detail_clear_cb,
+		    mesh_lod_detail_free_cb, &bad_index_cb_data)) {
+	    printf("FAIL: mesh lod full-detail callback bad-index setup failed\n");
+	    ret = 1;
+	} else {
+	    bad_index_load_level =
+		rt_mesh_lod_load_level(bad_index_lod, 100, 1);
+	    if (bad_index_load_level >= 0 ||
+		    rt_mesh_lod_current_level(bad_index_lod) != -1 ||
+		    rt_mesh_lod_has_active_data(bad_index_lod) ||
+		    rt_mesh_lod_data_get(bad_index_lod,
+			&bad_index_data) ||
+		    bad_index_cb_data.setup_count != 1 ||
+		    bad_index_cb_data.clear_count < 1) {
+		printf("FAIL: mesh lod full-detail callback bad indices did not clear stale active data\n");
+		ret = 1;
+	    }
+	}
+	if (bad_index_lod)
+	    rt_mesh_lod_destroy(bad_index_lod);
+	if (!ret && bad_index_cb_data.free_count != 1) {
+	    printf("FAIL: mesh lod bad-index full-detail callback free was not called\n");
+	    ret = 1;
+	}
+    }
+
+    if (!ret) {
+	struct rt_mesh_lod *bad_orig_index_lod =
+	    db_mesh_lod_get(dbip, mesh_objname);
+	struct rt_mesh_lod_data bad_orig_index_data;
+	struct mesh_lod_detail_test_data bad_orig_index_cb_data;
+	int bad_orig_index_faces[3] = {0, 1, 2};
+	int bad_orig_index_got_pop_data = 0;
+	int bad_orig_index_load_level = -1;
+	memset(&bad_orig_index_cb_data, 0, sizeof(bad_orig_index_cb_data));
+	bad_orig_index_cb_data.vertices = vertices;
+	bad_orig_index_cb_data.faces = bad_orig_index_faces;
+	bad_orig_index_cb_data.normals = detail_normals;
+	bad_orig_index_cb_data.point_count = (size_t)vertex_count;
+	bad_orig_index_cb_data.point_orig_count = 2;
+	bad_orig_index_cb_data.face_count = 1;
+	bad_orig_index_cb_data.normal_count = 3;
+	if (bad_orig_index_lod) {
+	    for (int level = 0; level < 16; level++) {
+		if (rt_mesh_lod_load_level(bad_orig_index_lod, level, 0) < 0)
+		    continue;
+		if (rt_mesh_lod_has_active_data(bad_orig_index_lod)) {
+		    bad_orig_index_got_pop_data = 1;
+		    break;
+		}
+	    }
+	}
+	if (!bad_orig_index_lod || !bad_orig_index_got_pop_data ||
+		!rt_mesh_lod_detail_callbacks_set(bad_orig_index_lod,
+		    mesh_lod_detail_setup_cb, mesh_lod_detail_clear_cb,
+		    mesh_lod_detail_free_cb, &bad_orig_index_cb_data)) {
+	    printf("FAIL: mesh lod full-detail callback bad-original-index setup failed\n");
+	    ret = 1;
+	} else {
+	    bad_orig_index_load_level =
+		rt_mesh_lod_load_level(bad_orig_index_lod, 100, 1);
+	    if (bad_orig_index_load_level >= 0 ||
+		    rt_mesh_lod_current_level(bad_orig_index_lod) != -1 ||
+		    rt_mesh_lod_has_active_data(bad_orig_index_lod) ||
+		    rt_mesh_lod_data_get(bad_orig_index_lod,
+			&bad_orig_index_data) ||
+		    bad_orig_index_cb_data.setup_count != 1 ||
+		    bad_orig_index_cb_data.clear_count < 1) {
+		printf("FAIL: mesh lod full-detail callback bad original indices did not clear stale active data\n");
+		ret = 1;
+	    }
+	}
+	if (bad_orig_index_lod)
+	    rt_mesh_lod_destroy(bad_orig_index_lod);
+	if (!ret && bad_orig_index_cb_data.free_count != 1) {
+	    printf("FAIL: mesh lod bad-original-index full-detail callback free was not called\n");
+	    ret = 1;
+	}
+    }
+
+    if (!ret) {
+	struct rt_mesh_lod *setup_fail_lod =
+	    db_mesh_lod_get(dbip, mesh_objname);
+	struct rt_mesh_lod_data setup_fail_data;
+	struct mesh_lod_detail_test_data setup_fail_cb_data;
+	int setup_fail_got_pop_data = 0;
+	int setup_fail_load_level = -1;
+	memset(&setup_fail_cb_data, 0, sizeof(setup_fail_cb_data));
+	setup_fail_cb_data.vertices = vertices;
+	setup_fail_cb_data.faces = faces;
+	setup_fail_cb_data.normals = detail_normals;
+	setup_fail_cb_data.point_count = (size_t)vertex_count;
+	setup_fail_cb_data.face_count = (size_t)face_count;
+	setup_fail_cb_data.normal_count = (size_t)face_count * 3;
+	setup_fail_cb_data.setup_return = -1;
+	if (setup_fail_lod) {
+	    for (int level = 0; level < 16; level++) {
+		if (rt_mesh_lod_load_level(setup_fail_lod, level, 0) < 0)
+		    continue;
+		if (rt_mesh_lod_has_active_data(setup_fail_lod)) {
+		    setup_fail_got_pop_data = 1;
+		    break;
+		}
+	    }
+	}
+	if (!setup_fail_lod || !setup_fail_got_pop_data ||
+		!rt_mesh_lod_detail_callbacks_set(setup_fail_lod,
+		    mesh_lod_detail_setup_cb, mesh_lod_detail_clear_cb,
+		    mesh_lod_detail_free_cb, &setup_fail_cb_data)) {
+	    printf("FAIL: mesh lod full-detail callback producer-failure setup failed\n");
+	    ret = 1;
+	} else {
+	    setup_fail_load_level =
+		rt_mesh_lod_load_level(setup_fail_lod, 100, 1);
+	    if (setup_fail_load_level >= 0 ||
+		    rt_mesh_lod_current_level(setup_fail_lod) != -1 ||
+		    rt_mesh_lod_has_active_data(setup_fail_lod) ||
+		    rt_mesh_lod_data_get(setup_fail_lod,
+			&setup_fail_data) ||
+		    setup_fail_cb_data.setup_count != 1 ||
+		    setup_fail_cb_data.clear_count < 1) {
+		printf("FAIL: mesh lod full-detail callback producer failure did not clear partial active data\n");
+		ret = 1;
+	    }
+	}
+	if (setup_fail_lod)
+	    rt_mesh_lod_destroy(setup_fail_lod);
+	if (!ret && setup_fail_cb_data.free_count != 1) {
+	    printf("FAIL: mesh lod producer-failure full-detail callback free was not called\n");
+	    ret = 1;
+	}
     }
 
     if (!ret && memshrink_level >= 0) {
@@ -606,6 +1094,7 @@ test_mesh_lod_api(void)
 	printf("FAIL: mesh lod null handling\n");
 	ret = 1;
     }
+    rt_mesh_lod_detail_callbacks_clear(NULL);
     rt_mesh_lod_memshrink(NULL);
 
 cleanup:
@@ -620,6 +1109,8 @@ cleanup:
     bu_dirclear(cache_dir);
     if (vertices)
 	bu_free(vertices, "view_info lod vertices");
+    if (detail_normals)
+	bu_free(detail_normals, "view_info lod detail normals");
     if (faces)
 	bu_free(faces, "view_info lod faces");
     return ret;

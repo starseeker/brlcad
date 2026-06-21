@@ -25,6 +25,7 @@
 #include "brlobol/lod_realization.h"
 #include "brlobol/lod_service.h"
 #include "brlobol/lod_update_action.h"
+#include "brlobol/material_object.h"
 #include "brlobol/measure_action.h"
 #include "brlobol/mesh_lod_submit_action.h"
 #include "brlobol/mesh_residency_action.h"

@@ -123,7 +123,7 @@ to_mouse_append_pnt_common(struct ged *gedp,
     }
 
     tclcad_mouse_sync_dm_dimensions(gdvp);
-    bsg_screen_to_view(gdvp, &x, &y, x, y);
+    rt_view_screen_to_view_from_bsg(&x, &y, gdvp, x, y);
     VSET(view, x, y, 0.0);
 
     tclcad_mouse_sync_dm_dimensions(gdvp);
@@ -212,7 +212,8 @@ to_mouse_brep_selection_append(struct ged *gedp,
 
     /* convert screen point to model-space start point and direction */
     tclcad_mouse_sync_dm_dimensions(gdvp);
-    bsg_screen_to_view(gdvp, &view_pt[X], &view_pt[Y], screen_pt[X], screen_pt[Y]);
+    rt_view_screen_to_view_from_bsg(&view_pt[X], &view_pt[Y], gdvp,
+	    screen_pt[X], screen_pt[Y]);
     view_pt[Z] = 1.0;
 
     rt_view_view2model_from_bsg(view2model, gdvp);
@@ -321,13 +322,15 @@ to_mouse_brep_selection_translate(struct ged *gedp,
 
     /* convert screen-space delta to model-space delta */
     tclcad_mouse_sync_dm_dimensions(gdvp);
-    bsg_screen_to_view(gdvp, &view_start[X], &view_start[Y], gdvp->gv_prevMouseX, gdvp->gv_prevMouseY);
+    rt_view_screen_to_view_from_bsg(&view_start[X], &view_start[Y], gdvp,
+	    gdvp->gv_prevMouseX, gdvp->gv_prevMouseY);
     view_start[Z] = 1;
     rt_view_view2model_from_bsg(view2model, gdvp);
     MAT4X3PNT(model_start, view2model, view_start);
 
     tclcad_mouse_sync_dm_dimensions(gdvp);
-    bsg_screen_to_view(gdvp, &view_end[X], &view_end[Y], screen_end[X], screen_end[Y]);
+    rt_view_screen_to_view_from_bsg(&view_end[X], &view_end[Y], gdvp,
+	    screen_end[X], screen_end[Y]);
     view_end[Z] = 1;
     MAT4X3PNT(model_end, view2model, view_end);
 
@@ -630,7 +633,7 @@ to_mouse_find_arb_edge(struct ged *gedp,
     }
 
     tclcad_mouse_sync_dm_dimensions(gdvp);
-    bsg_screen_to_view(gdvp, &x, &y, x, y);
+    rt_view_screen_to_view_from_bsg(&x, &y, gdvp, x, y);
     VSET(view, x, y, 0.0);
 
     bu_vls_printf(&pt_vls, "%lf %lf %lf", view[X], view[Y], view[Z]);
@@ -692,7 +695,7 @@ to_mouse_find_bot_edge(struct ged *gedp,
     }
 
     tclcad_mouse_sync_dm_dimensions(gdvp);
-    bsg_screen_to_view(gdvp, &x, &y, x, y);
+    rt_view_screen_to_view_from_bsg(&x, &y, gdvp, x, y);
     VSET(view, x, y, 0.0);
 
     bu_vls_printf(&pt_vls, "%lf %lf %lf", view[X], view[Y], view[Z]);
@@ -753,7 +756,7 @@ to_mouse_find_bot_pnt(struct ged *gedp,
     }
 
     tclcad_mouse_sync_dm_dimensions(gdvp);
-    bsg_screen_to_view(gdvp, &x, &y, x, y);
+    rt_view_screen_to_view_from_bsg(&x, &y, gdvp, x, y);
     VSET(view, x, y, 0.0);
 
     bu_vls_printf(&pt_vls, "%lf %lf %lf", view[X], view[Y], view[Z]);
@@ -816,7 +819,7 @@ to_mouse_find_metaball_pnt(struct ged *gedp,
     }
 
     tclcad_mouse_sync_dm_dimensions(gdvp);
-    bsg_screen_to_view(gdvp, &x, &y, x, y);
+    rt_view_screen_to_view_from_bsg(&x, &y, gdvp, x, y);
     VSET(view, x, y, 0.0);
     rt_view_view2model_from_bsg(view2model, gdvp);
     MAT4X3PNT(model, view2model, view);
@@ -881,7 +884,7 @@ to_mouse_find_pipe_pnt(struct ged *gedp,
     }
 
     tclcad_mouse_sync_dm_dimensions(gdvp);
-    bsg_screen_to_view(gdvp, &x, &y, x, y);
+    rt_view_screen_to_view_from_bsg(&x, &y, gdvp, x, y);
     VSET(view, x, y, 0.0);
     rt_view_view2model_from_bsg(view2model, gdvp);
     MAT4X3PNT(model, view2model, view);
@@ -957,7 +960,8 @@ to_mouse_joint_select(
 
     /* convert screen point to model-space start point and direction */
     tclcad_mouse_sync_dm_dimensions(gdvp);
-    bsg_screen_to_view(gdvp, &view_pt[X], &view_pt[Y], screen_pt[X], screen_pt[Y]);
+    rt_view_screen_to_view_from_bsg(&view_pt[X], &view_pt[Y], gdvp,
+	    screen_pt[X], screen_pt[Y]);
     view_pt[Z] = 1.0;
 
     rt_view_view2model_from_bsg(view2model, gdvp);
@@ -1064,13 +1068,15 @@ to_mouse_joint_selection_translate(
 
     /* convert screen-space delta to model-space delta */
     tclcad_mouse_sync_dm_dimensions(gdvp);
-    bsg_screen_to_view(gdvp, &view_start[X], &view_start[Y], gdvp->gv_prevMouseX, gdvp->gv_prevMouseY);
+    rt_view_screen_to_view_from_bsg(&view_start[X], &view_start[Y], gdvp,
+	    gdvp->gv_prevMouseX, gdvp->gv_prevMouseY);
     view_start[Z] = 1;
     rt_view_view2model_from_bsg(view2model, gdvp);
     MAT4X3PNT(model_start, view2model, view_start);
 
     tclcad_mouse_sync_dm_dimensions(gdvp);
-    bsg_screen_to_view(gdvp, &view_end[X], &view_end[Y], screen_end[X], screen_end[Y]);
+    rt_view_screen_to_view_from_bsg(&view_end[X], &view_end[Y], gdvp,
+	    screen_end[X], screen_end[Y]);
     view_end[Z] = 1;
     MAT4X3PNT(model_end, view2model, view_end);
 
@@ -1491,7 +1497,7 @@ to_mouse_move_bot_pnt(struct ged *gedp,
 	MAT4X3PNT(view, model2view, &botip->vertices[vertex_i*3]);
 
 	tclcad_mouse_sync_dm_dimensions(gdvp);
-	bsg_screen_to_view(gdvp, &dx, &dy, x, y);
+	rt_view_screen_to_view_from_bsg(&dx, &dy, gdvp, x, y);
 	dz = view[Z];
 
 	rt_db_free_internal(&intern);
@@ -2196,7 +2202,7 @@ to_mouse_poly_circ_func(Tcl_Interp *interp,
     gdvp->gv_prevMouseY = y;
 
     tclcad_mouse_sync_dm_dimensions(gdvp);
-    bsg_screen_to_view(gdvp, &fx, &fy, x, y);
+    rt_view_screen_to_view_from_bsg(&fx, &fy, gdvp, x, y);
     rt_view_view2model_from_bsg(view2model, gdvp);
 
     {
@@ -2366,7 +2372,7 @@ to_mouse_poly_cont_func(Tcl_Interp *interp,
     gdvp->gv_prevMouseY = y;
 
     tclcad_mouse_sync_dm_dimensions(gdvp);
-    bsg_screen_to_view(gdvp, &fx, &fy, x, y);
+    rt_view_screen_to_view_from_bsg(&fx, &fy, gdvp, x, y);
     VSET(v_pt, fx, fy, gdpsp->gdps_data_vZ);
 
     rt_view_view2model_from_bsg(view2model, gdvp);
@@ -2509,7 +2515,7 @@ to_mouse_poly_ell_func(Tcl_Interp *interp,
 
 
     tclcad_mouse_sync_dm_dimensions(gdvp);
-    bsg_screen_to_view(gdvp, &fx, &fy, x, y);
+    rt_view_screen_to_view_from_bsg(&fx, &fy, gdvp, x, y);
     rt_view_view2model_from_bsg(view2model, gdvp);
 
     {
@@ -2690,7 +2696,7 @@ to_mouse_poly_rect_func(Tcl_Interp *interp,
     gdvp->gv_prevMouseY = y;
 
     tclcad_mouse_sync_dm_dimensions(gdvp);
-    bsg_screen_to_view(gdvp, &fx, &fy, x, y);
+    rt_view_screen_to_view_from_bsg(&fx, &fy, gdvp, x, y);
     rt_view_view2model_from_bsg(view2model, gdvp);
 
     {

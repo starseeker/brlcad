@@ -533,10 +533,10 @@ qgcanvas_request_update(QgCanvasState &s, uint32_t flags)
 {
 	uint32_t requested = flags ? flags : BSG_VIEW_REFRESH_ALL;
 	if (requested & BSG_VIEW_REFRESH_VIEW)
-		qgcanvas_sync_obol_camera(s);
+	qgcanvas_sync_obol_camera(s);
 	qgcanvas_sync_obol_faceplate(s);
 	if (s.v)
-		bsg_view_refresh_request(s.v, requested);
+		rt_view_refresh_request_bsg(s.v, requested);
 	if (s.dmp)
 		dm_set_native_repaint_pending(s.dmp, 1);
 }
@@ -558,7 +558,7 @@ qgcanvas_diff_hashes_check(QgCanvasState &s)
 
 	if (s.dmp && dm_get_native_repaint_pending(s.dmp)) {
 		if (s.v)
-			bsg_view_refresh_request(s.v, BSG_VIEW_REFRESH_FORCE);
+			rt_view_refresh_request_bsg(s.v, BSG_VIEW_REFRESH_FORCE);
 		ret = true;
 	}
 

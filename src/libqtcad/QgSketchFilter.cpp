@@ -60,7 +60,11 @@ QgSketchFilter::screen_to_view(int sx, int sy, vect_t mvec) const
 		return;
 	}
 	fastf_t vx = 0.0, vy = 0.0;
-	bsg_screen_to_view(v, &vx, &vy, (fastf_t)sx, (fastf_t)sy);
+	if (!rt_view_screen_to_view_from_bsg(&vx, &vy, v,
+		(fastf_t)sx, (fastf_t)sy)) {
+		VSETALL(mvec, 0.0);
+		return;
+	}
 	VSET(mvec, vx, vy, 0.0);
 }
 
@@ -80,7 +84,7 @@ QgSketchFilter::screen_to_uv(int sx, int sy,
 
 	/* Unproject screen pixel → model-space 3-D point */
 	point_t p3d;
-	if (bsg_screen_pt(&p3d, (fastf_t)sx, (fastf_t)sy, v) != 0)
+	if (!rt_view_screen_point_from_bsg(p3d, v, (fastf_t)sx, (fastf_t)sy))
 		return false;
 
 	/* Project the 3-D point onto the sketch plane.

@@ -267,11 +267,11 @@ if (d->ifp)
     dm_get_bg(&dm_bg1, &dm_bg2, d->dmp);
     dm_set_bg(d->dmp, dm_bg1[0], dm_bg1[1], dm_bg1[2], dm_bg2[0], dm_bg2[1], dm_bg2[2]);
 
-    (void)bsg_view_refresh_consume(d->v);
+    (void)rt_view_refresh_consume_bsg(d->v);
     dm_draw_begin(d->dmp);
     dm_draw_objs(d->v);
     dm_draw_end(d->dmp);
-    bsg_view_refresh_complete(d->v);
+    rt_view_refresh_complete_bsg(d->v);
 
     // Set up a QImage with the rendered output..
     unsigned char *dm_image;
@@ -548,11 +548,11 @@ bg2r = bg2g = bg2b = QTSW_SCREENSHOT_BG_GREY;
     mat_t model2view;
     rt_view_model2view_from_bsg(model2view, d->v);
     dm_loadmatrix(d->dmp, model2view, 0);
-    (void)bsg_view_refresh_consume(d->v);
+    (void)rt_view_refresh_consume_bsg(d->v);
     dm_draw_begin(d->dmp);
     dm_draw_objs(d->v);
     dm_draw_end(d->dmp);
-    bsg_view_refresh_complete(d->v);
+    rt_view_refresh_complete_bsg(d->v);
 
     unsigned char *vp_image = nullptr;
     if (dm_get_display_image(d->dmp, &vp_image, 1, 1) || !vp_image) return;

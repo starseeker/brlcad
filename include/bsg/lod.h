@@ -127,7 +127,9 @@ bsg_mesh_lod_clear_cache(struct bsg_mesh_lod_context *c, unsigned long long key)
  * Given a set of points and faces, calculate a lookup key and determine if the
  * cache has the LoD data for this particular mesh.  If it does not, do the
  * initial calculations to generate the cached LoD data needed for subsequent
- * lookups, otherwise just return the calculated key.
+ * lookups, otherwise just return the calculated key.  The vn array is
+ * optional; when supplied it must contain one normal per triangle corner in
+ * f order, i.e. fcnt * 3 normals.
  *
  * @return the lookup key calculated from the data */
 BSG_EXPORT unsigned long long

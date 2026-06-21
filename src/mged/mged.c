@@ -1885,7 +1885,7 @@ mged_refresh_request_view(struct mged_state *UNUSED(s), struct _view_state *vsp,
     if (!vsp || !vsp->vs_gvp)
 	return;
 
-    bsg_view_refresh_request(vsp->vs_gvp, flags ? flags : BSG_VIEW_REFRESH_ALL);
+    rt_view_refresh_request_bsg(vsp->vs_gvp, flags ? flags : BSG_VIEW_REFRESH_ALL);
 }
 
 void
@@ -1927,11 +1927,12 @@ mged_refresh_pending(struct mged_state *s)
 	struct mged_dm *p = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
 	if (!p || !p->dm_view_state || !p->dm_view_state->vs_gvp)
 	    continue;
-	if (bsg_view_refresh_dirty(p->dm_view_state->vs_gvp))
+	if (rt_view_refresh_dirty_from_bsg(p->dm_view_state->vs_gvp))
 	    return 1;
     }
 
-    return (view_state && view_state->vs_gvp) ? bsg_view_refresh_dirty(view_state->vs_gvp) : 0;
+    return (view_state && view_state->vs_gvp) ?
+	rt_view_refresh_dirty_from_bsg(view_state->vs_gvp) : 0;
 }
 
 
@@ -1970,7 +1971,7 @@ refresh(struct mged_state *s)
 	struct mged_dm *p = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
 	if (!p->dm_view_state || !p->dm_view_state->vs_gvp)
 	    continue;
-	if (bsg_view_refresh_dirty(p->dm_view_state->vs_gvp))
+	if (rt_view_refresh_dirty_from_bsg(p->dm_view_state->vs_gvp))
 	    mged_dm_repaint_request(p, MGED_REPAINT_VIEW_RECORD);
     }
 
@@ -1986,7 +1987,7 @@ refresh(struct mged_state *s)
 	if (mapped && mged_dm_repaint_pending(p)) {
 	    int restore_zbuffer = 0;
 	    if (p->dm_view_state && p->dm_view_state->vs_gvp)
-		(void)bsg_view_refresh_consume(p->dm_view_state->vs_gvp);
+		(void)rt_view_refresh_consume_bsg(p->dm_view_state->vs_gvp);
 
 	    if (mged_variables->mv_fb &&
 		dm_get_zbuffer(DMP)) {
@@ -2115,7 +2116,7 @@ refresh(struct mged_state *s)
 		dm_draw_end(DMP);
 		dm_set_native_repaint_pending(DMP, 0);
 		if (p->dm_view_state && p->dm_view_state->vs_gvp)
-		    bsg_view_refresh_complete(p->dm_view_state->vs_gvp);
+		    rt_view_refresh_complete_bsg(p->dm_view_state->vs_gvp);
 
 	    }
 	}

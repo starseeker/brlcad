@@ -32,35 +32,76 @@ snap_source_full_detail_result_valid(const BRLObolSourceMeshRequest &sourceReque
 	return FALSE;
 
     size_t faceCount = result.mesh.coordIndex.size() / 3;
-    if ((sourceRequest.faceCount != 0 &&
-		sourceRequest.faceCount != static_cast<uint64_t>(faceCount)) ||
-	    (sourceRequest.pointCount != 0 &&
-		sourceRequest.pointCount !=
-		static_cast<uint64_t>(result.mesh.points.size())))
-	return FALSE;
+    if (sourceRequest.faceCount != 0) {
+	const uint64_t resultFaceCount = static_cast<uint64_t>(faceCount);
+	if (sourceRequest.queryBoundsValid && sourceRequest.queryToleranceValid) {
+	    if (resultFaceCount > sourceRequest.faceCount)
+		return FALSE;
+	} else if (sourceRequest.faceCount != resultFaceCount) {
+	    return FALSE;
+	}
+    }
+    if (sourceRequest.pointCount != 0) {
+	const uint64_t resultPointCount =
+	    static_cast<uint64_t>(result.mesh.points.size());
+	if (sourceRequest.queryBoundsValid && sourceRequest.queryToleranceValid) {
+	    if (resultPointCount > sourceRequest.pointCount)
+		return FALSE;
+	    if (resultPointCount < sourceRequest.pointCount &&
+		    result.mesh.vertexIndex.size() != result.mesh.points.size())
+		return FALSE;
+	} else if (sourceRequest.pointCount != resultPointCount) {
+	    return FALSE;
+	}
+    }
 
     return TRUE;
+}
+
+static int
+snap_source_mesh_face_index(const BRLObolLodMeshPayload &mesh,
+	size_t faceSlot, size_t faceCount)
+{
+    if (mesh.faceIndex.size() == faceCount)
+	return static_cast<int>(mesh.faceIndex[faceSlot]);
+    return static_cast<int>(faceSlot);
+}
+
+static int
+snap_source_mesh_vertex_index(const BRLObolLodMeshPayload &mesh,
+	int localIndex)
+{
+    if (localIndex < 0)
+	return localIndex;
+    if (mesh.vertexIndex.size() == mesh.points.size())
+	return static_cast<int>(
+		mesh.vertexIndex[static_cast<size_t>(localIndex)]);
+    return localIndex;
 }
 
 static int
 snap_kind_priority(SoBRLSnapAction::SnapKind kind)
 {
     switch (kind) {
-	case SoBRLSnapAction::ENDPOINT:
+	case SoBRLSnapAction::VERTEX:
 	    return 0;
-	case SoBRLSnapAction::MIDPOINT:
+	case SoBRLSnapAction::ENDPOINT:
 	    return 1;
-	case SoBRLSnapAction::CENTER:
+	case SoBRLSnapAction::MIDPOINT:
 	    return 2;
-	case SoBRLSnapAction::FACE_NEAREST:
+	case SoBRLSnapAction::EDGE_NEAREST:
 	    return 3;
-	case SoBRLSnapAction::LINE_NEAREST:
+	case SoBRLSnapAction::FACE_NEAREST:
 	    return 4;
-	case SoBRLSnapAction::CONSTRUCTION_PLANE:
+	case SoBRLSnapAction::CENTER:
 	    return 5;
+	case SoBRLSnapAction::LINE_NEAREST:
+	    return 6;
+	case SoBRLSnapAction::CONSTRUCTION_PLANE:
+	    return 7;
 	case SoBRLSnapAction::NONE:
 	default:
-	    return 6;
+	    return 8;
     }
 }
 
@@ -178,10 +219,14 @@ SoBRLSnapAction::SoBRLSnapAction(void) :
     queryPoint(0.0f, 0.0f, 0.0f),
     candidatePoint(0.0f, 0.0f, 0.0f),
     candidatePath(""),
+    candidateEditIntentId(""),
+    candidateEditIntentRole(""),
     enabledKinds(ALL_KINDS),
     tolerance(0.25f),
     bestDistance(FLT_MAX),
     candidatePrimitiveIndex(-1),
+    candidateVertexIndex(-1),
+    candidateEdgeSlot(-1),
     candidateKind(NONE),
     constructionPlaneOrigin(0.0f, 0.0f, 0.0f),
     constructionPlaneNormal(0.0f, 0.0f, 1.0f),
@@ -195,6 +240,8 @@ SoBRLSnapAction::SoBRLSnapAction(void) :
     constructionPlaneEnabled(FALSE)
 {
     SO_ACTION_CONSTRUCTOR(SoBRLSnapAction);
+    this->candidateEdgeVertexIndex[0] = -1;
+    this->candidateEdgeVertexIndex[1] = -1;
 }
 
 SoBRLSnapAction::~SoBRLSnapAction(void)
@@ -350,18 +397,49 @@ SoBRLSnapAction::consumeSourceBackedFullDetailResult(
 	SbVec3f pointC = this->pointForCoordinateSpace(
 		sourceRequest.localToWorld,
 		result.mesh.points[static_cast<size_t>(ic)]);
+	const int sourceFaceIndex =
+	    snap_source_mesh_face_index(result.mesh, i, faceCount);
+	const int sourceIa = snap_source_mesh_vertex_index(result.mesh, ia);
+	const int sourceIb = snap_source_mesh_vertex_index(result.mesh, ib);
+	const int sourceIc = snap_source_mesh_vertex_index(result.mesh, ic);
 	centerBox.extendBy(pointA);
 	centerBox.extendBy(pointB);
 	centerBox.extendBy(pointC);
 
-	this->consider(FACE_NEAREST, sourceRequest.path, static_cast<int>(i),
-		query, snap_closest_point_on_triangle(query, pointA, pointB,
-		    pointC));
+	this->consider(VERTEX, sourceRequest.path,
+		sourceRequest.editIntentId, sourceRequest.editIntentRole,
+		sourceFaceIndex, query, pointA, sourceIa);
+	this->consider(VERTEX, sourceRequest.path,
+		sourceRequest.editIntentId, sourceRequest.editIntentRole,
+		sourceFaceIndex, query, pointB, sourceIb);
+	this->consider(VERTEX, sourceRequest.path,
+		sourceRequest.editIntentId, sourceRequest.editIntentRole,
+		sourceFaceIndex, query, pointC, sourceIc);
+	this->consider(EDGE_NEAREST, sourceRequest.path,
+		sourceRequest.editIntentId, sourceRequest.editIntentRole,
+		sourceFaceIndex, query,
+		snap_closest_point_on_segment(query, pointA, pointB),
+		-1, 0, sourceIa, sourceIb);
+	this->consider(EDGE_NEAREST, sourceRequest.path,
+		sourceRequest.editIntentId, sourceRequest.editIntentRole,
+		sourceFaceIndex, query,
+		snap_closest_point_on_segment(query, pointB, pointC),
+		-1, 1, sourceIb, sourceIc);
+	this->consider(EDGE_NEAREST, sourceRequest.path,
+		sourceRequest.editIntentId, sourceRequest.editIntentRole,
+		sourceFaceIndex, query,
+		snap_closest_point_on_segment(query, pointC, pointA),
+		-1, 2, sourceIc, sourceIa);
+	this->consider(FACE_NEAREST, sourceRequest.path,
+		sourceRequest.editIntentId, sourceRequest.editIntentRole,
+		sourceFaceIndex, query,
+		snap_closest_point_on_triangle(query, pointA, pointB, pointC));
     }
 
     if (!centerBox.isEmpty())
-	this->consider(CENTER, sourceRequest.path, -1, query,
-		centerBox.getCenter());
+	this->consider(CENTER, sourceRequest.path,
+		sourceRequest.editIntentId, sourceRequest.editIntentRole,
+		-1, query, centerBox.getCenter());
 
     return TRUE;
 }
@@ -468,10 +546,46 @@ SoBRLSnapAction::getPath(void) const
     return this->candidatePath;
 }
 
+const SbString &
+SoBRLSnapAction::getEditIntentId(void) const
+{
+    return this->candidateEditIntentId;
+}
+
+const SbString &
+SoBRLSnapAction::getEditIntentRole(void) const
+{
+    return this->candidateEditIntentRole;
+}
+
 int
 SoBRLSnapAction::getPrimitiveIndex(void) const
 {
     return this->candidatePrimitiveIndex;
+}
+
+int
+SoBRLSnapAction::getVertexIndex(void) const
+{
+    return this->candidateVertexIndex;
+}
+
+int
+SoBRLSnapAction::getEdgeSlot(void) const
+{
+    return this->candidateEdgeSlot;
+}
+
+int
+SoBRLSnapAction::getEdgeVertexIndexA(void) const
+{
+    return this->candidateEdgeVertexIndex[0];
+}
+
+int
+SoBRLSnapAction::getEdgeVertexIndexB(void) const
+{
+    return this->candidateEdgeVertexIndex[1];
 }
 
 float
@@ -485,8 +599,14 @@ SoBRLSnapAction::beginTraversal(SoNode *node)
 {
     this->candidatePoint = SbVec3f(0.0f, 0.0f, 0.0f);
     this->candidatePath = "";
+    this->candidateEditIntentId = "";
+    this->candidateEditIntentRole = "";
     this->bestDistance = FLT_MAX;
     this->candidatePrimitiveIndex = -1;
+    this->candidateVertexIndex = -1;
+    this->candidateEdgeSlot = -1;
+    this->candidateEdgeVertexIndex[0] = -1;
+    this->candidateEdgeVertexIndex[1] = -1;
     this->candidateKind = NONE;
     this->foundCandidate = FALSE;
     this->skippedLodDisplayMeshCount = 0;
@@ -496,8 +616,8 @@ SoBRLSnapAction::beginTraversal(SoNode *node)
 	SbVec3f planePoint;
 	if (closest_point_on_plane(this->queryPoint, this->constructionPlaneOrigin,
 		this->constructionPlaneNormal, planePoint)) {
-	    this->consider(CONSTRUCTION_PLANE, this->constructionPlanePath, -1,
-		    this->queryPoint, planePoint);
+	    this->consider(CONSTRUCTION_PLANE, this->constructionPlanePath,
+		    SbString(""), SbString(""), -1, this->queryPoint, planePoint);
 	}
     }
 }
@@ -518,47 +638,73 @@ SoBRLSnapAction::vlistShapeAction(SoAction *action, SoNode *node)
 
     const SbMatrix &localToWorld = SoModelMatrixElement::get(action->getState());
     const SbVec3f query = snapAction->queryPoint;
+    const SbString &sourcePath = shape->sourcePath.getValue();
+    const SbString &editIntentId = shape->editIntentId.getValue();
+    const SbString &editIntentRole = shape->editIntentRole.getValue();
     SbBox3f centerBox;
     centerBox.makeEmpty();
 
-    for (int i = 0; i < shape->getSegmentCount(); i++) {
-	SbVec3f a;
-	SbVec3f b;
-	if (!shape->getSegment(i, a, b))
+    SbVec3f last;
+    SbBool haveLast = FALSE;
+    int segmentIndex = 0;
+    int n = shape->point.getNum();
+    if (shape->command.getNum() < n)
+	n = shape->command.getNum();
+
+    for (int i = 0; i < n; i++) {
+	if (shape->command[i] == SoBRLVListShape::MOVE) {
+	    last = shape->point[i];
+	    haveLast = TRUE;
 	    continue;
+	}
+
+	if (shape->command[i] == SoBRLVListShape::DRAW) {
+	    if (!haveLast) {
+		last = shape->point[i];
+		haveLast = TRUE;
+		continue;
+	    }
+
+	    const int currentSegment = segmentIndex++;
+	    if (!snapAction->selectionAllows(shape->isPrimitiveSelected(currentSegment))) {
+		last = shape->point[i];
+		continue;
+	    }
+
+	    SbVec3f pointA = snapAction->pointForCoordinateSpace(localToWorld, last);
+	    SbVec3f pointB = snapAction->pointForCoordinateSpace(localToWorld, shape->point[i]);
+	    centerBox.extendBy(pointA);
+	    centerBox.extendBy(pointB);
+
+	    snapAction->consider(ENDPOINT, sourcePath, editIntentId,
+		    editIntentRole, currentSegment, query, pointA);
+	    snapAction->consider(ENDPOINT, sourcePath, editIntentId,
+		    editIntentRole, currentSegment, query, pointB);
+	    snapAction->consider(LINE_NEAREST, sourcePath, editIntentId,
+		    editIntentRole, currentSegment, query,
+		    snap_closest_point_on_segment(query, pointA, pointB));
+	    snapAction->consider(MIDPOINT, sourcePath, editIntentId,
+		    editIntentRole, currentSegment, query,
+		    (pointA + pointB) * 0.5f);
+	    last = shape->point[i];
+	    continue;
+	}
+
+	if (shape->command[i] != SoBRLVListShape::POINT)
+	    continue;
+
 	if (!snapAction->selectionAllows(shape->isPrimitiveSelected(i)))
 	    continue;
 
-	SbVec3f pointA = snapAction->pointForCoordinateSpace(localToWorld, a);
-	SbVec3f pointB = snapAction->pointForCoordinateSpace(localToWorld, b);
-	centerBox.extendBy(pointA);
-	centerBox.extendBy(pointB);
-
-	snapAction->consider(ENDPOINT, shape->sourcePath.getValue(), i, query, pointA);
-	snapAction->consider(ENDPOINT, shape->sourcePath.getValue(), i, query, pointB);
-	snapAction->consider(LINE_NEAREST, shape->sourcePath.getValue(), i, query,
-		snap_closest_point_on_segment(query, pointA, pointB));
-	snapAction->consider(MIDPOINT, shape->sourcePath.getValue(), i, query,
-		(pointA + pointB) * 0.5f);
-    }
-
-    for (int i = 0; i < shape->getPointPrimitiveCount(); i++) {
-	SbVec3f point;
-	int primitiveIndex = -1;
-	if (!shape->getPointPrimitive(i, primitiveIndex, point))
-	    continue;
-	if (!snapAction->selectionAllows(shape->isPrimitiveSelected(primitiveIndex)))
-	    continue;
-
-	SbVec3f worldPoint = snapAction->pointForCoordinateSpace(localToWorld, point);
+	SbVec3f worldPoint = snapAction->pointForCoordinateSpace(localToWorld, shape->point[i]);
 	centerBox.extendBy(worldPoint);
-	snapAction->consider(ENDPOINT, shape->sourcePath.getValue(),
-		primitiveIndex, query, worldPoint);
+	snapAction->consider(ENDPOINT, sourcePath, editIntentId,
+		editIntentRole, i, query, worldPoint);
     }
 
     if (!centerBox.isEmpty())
-	snapAction->consider(CENTER, shape->sourcePath.getValue(), -1, query,
-		centerBox.getCenter());
+	snapAction->consider(CENTER, sourcePath, editIntentId, editIntentRole,
+		-1, query, centerBox.getCenter());
 }
 
 void
@@ -583,19 +729,29 @@ SoBRLSnapAction::meshShapeAction(SoAction *action, SoNode *node)
 	return;
     }
     const SbVec3f query = snapAction->queryPoint;
+    const SbString &sourcePath = shape->sourcePath.getValue();
+    const SbString &editIntentId = shape->editIntentId.getValue();
+    const SbString &editIntentRole = shape->editIntentRole.getValue();
     SbBox3f centerBox;
     centerBox.makeEmpty();
 
     int triangleCount = useFullDetail ?
 	shape->getFullDetailTriangleCount() : shape->getTriangleCount();
     for (int i = 0; i < triangleCount; i++) {
+	int ia = -1;
+	int ib = -1;
+	int ic = -1;
 	SbVec3f a;
 	SbVec3f b;
 	SbVec3f c;
 	if (useFullDetail) {
+	    if (!shape->getFullDetailTriangleVertexIndices(i, ia, ib, ic))
+		continue;
 	    if (!shape->getFullDetailTriangle(i, a, b, c))
 		continue;
 	} else {
+	    if (!shape->getTriangleVertexIndices(i, ia, ib, ic))
+		continue;
 	    if (!shape->getTriangle(i, a, b, c))
 		continue;
 	}
@@ -609,13 +765,32 @@ SoBRLSnapAction::meshShapeAction(SoAction *action, SoNode *node)
 	centerBox.extendBy(pointB);
 	centerBox.extendBy(pointC);
 
-	snapAction->consider(FACE_NEAREST, shape->sourcePath.getValue(), i, query,
+	snapAction->consider(VERTEX, sourcePath, editIntentId, editIntentRole,
+		i, query, pointA, ia);
+	snapAction->consider(VERTEX, sourcePath, editIntentId, editIntentRole,
+		i, query, pointB, ib);
+	snapAction->consider(VERTEX, sourcePath, editIntentId, editIntentRole,
+		i, query, pointC, ic);
+	snapAction->consider(EDGE_NEAREST, sourcePath, editIntentId,
+		editIntentRole, i, query,
+		snap_closest_point_on_segment(query, pointA, pointB),
+		-1, 0, ia, ib);
+	snapAction->consider(EDGE_NEAREST, sourcePath, editIntentId,
+		editIntentRole, i, query,
+		snap_closest_point_on_segment(query, pointB, pointC),
+		-1, 1, ib, ic);
+	snapAction->consider(EDGE_NEAREST, sourcePath, editIntentId,
+		editIntentRole, i, query,
+		snap_closest_point_on_segment(query, pointC, pointA),
+		-1, 2, ic, ia);
+	snapAction->consider(FACE_NEAREST, sourcePath, editIntentId,
+		editIntentRole, i, query,
 		snap_closest_point_on_triangle(query, pointA, pointB, pointC));
     }
 
     if (!centerBox.isEmpty())
-	snapAction->consider(CENTER, shape->sourcePath.getValue(), -1, query,
-		centerBox.getCenter());
+	snapAction->consider(CENTER, sourcePath, editIntentId, editIntentRole,
+		-1, query, centerBox.getCenter());
 }
 
 void
@@ -650,8 +825,15 @@ SoBRLSnapAction::appendSourceBackedFullDetailRequest(
 }
 
 void
-SoBRLSnapAction::consider(SnapKind kind, const SbString &path, int primitiveIndex,
-	const SbVec3f &query, const SbVec3f &candidate)
+SoBRLSnapAction::consider(SnapKind kind, const SbString &path,
+	const SbString &editIntentId,
+	const SbString &editIntentRole,
+	int primitiveIndex,
+	const SbVec3f &query, const SbVec3f &candidate,
+	int vertexIndex,
+	int edgeSlot,
+	int edgeVertexIndexA,
+	int edgeVertexIndexB)
 {
     const float tieTolerance = 1.0e-6f;
 
@@ -674,7 +856,13 @@ SoBRLSnapAction::consider(SnapKind kind, const SbString &path, int primitiveInde
     this->foundCandidate = TRUE;
     this->candidateKind = kind;
     this->candidatePath = path;
+    this->candidateEditIntentId = editIntentId;
+    this->candidateEditIntentRole = editIntentRole;
     this->candidatePrimitiveIndex = primitiveIndex;
+    this->candidateVertexIndex = vertexIndex;
+    this->candidateEdgeSlot = edgeSlot;
+    this->candidateEdgeVertexIndex[0] = edgeVertexIndexA;
+    this->candidateEdgeVertexIndex[1] = edgeVertexIndexB;
     this->candidatePoint = candidate;
     this->bestDistance = dist;
 }

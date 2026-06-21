@@ -123,28 +123,38 @@ libbrlobol and qtcad:
   accessors, and the qged selector plugin consumes those paths directly.
   The qtcad point-pick helper also has the first nonblocking source-backed
   exact mesh pick integration: it keeps ordinary display picks as the first
-  pass, then uses SoBRLSourceMeshPickAction, request-filtered LoD result
-  draining, and source-backed request submission for LoD meshes explicitly set
-  to full-detail picking.  Rectangle picks inherit this through their point
-  samples.  qtcad point and rectangle picks also use the libbrlobol direct
-  librt exact ray helper as a database-source fallback for implicit solids and
-  implicit-backed combs when no ordinary display/source-backed mesh hit is
-  available.  Legacy BSG pick paths remain internal fallback.
+  pass, then delegates source-backed full-detail mesh picking to the shared
+  BRLObolViewController exact-ray helper.  Rectangle picks inherit this
+  through their point samples.  qtcad point, ray, and rectangle picks also use
+  the controller-owned reusable librt exact-ray cache as a database-source
+  fallback for implicit solids and implicit-backed combs when no ordinary
+  display/source-backed mesh hit is available.  qtcad pick records now carry
+  source-backed mesh face vertex and nearest edge/vertex identity plus
+  edit-intent metadata for exact mesh hits.  qtcad point, rectangle, and ray
+  selection filters also honor pending source-backed exact-pick submissions by
+  clearing immediate selections and skipping legacy BSG fallback until the
+  exact detail result is ready.  The explicit-ray selection path derives
+  screen-to-view and view-radius data through the RT legacy view adapter
+  boundary, and qtcad sketch plus 2D measurement screen-to-view conversions use
+  the same adapter instead of calling the BSG helper directly.  Legacy BSG pick
+  paths remain internal fallback.
 * qtcad Obol measurement and snap workflows operate on migrated content
   without initializing the legacy display manager.  Measurement overlays are
   now published exclusively through Obol; the qtcad measurement filter no
   longer creates BSG measurement features or caches BSG measure-result
   records, and 3D measurement no longer falls back through BSG pick
-  candidates or direct raytrace prep.  qtcad now exposes a full-detail snap
-  helper that consumes matching ready source-backed LoD results or submits
-  missing source-backed requests through SoBRLSnapAction, while the ordinary
-  interactive snap helper remains display-level.  qtcad also exposes an exact
-  full-detail geometry measure helper that consumes matching source-backed
-  LoD results through SoBRLMeasureAction and reports source-backed counts,
-  bounds, area/length, and nearest-primitive identity.  qtcad exact
-  pick/snap/measure submissions now pass BRLObolViewController's exact
-  full-detail face/point budget to source-backed provider tasks so
-  over-budget whole-object reloads can fall back before mesh allocation.  Snap
+  candidates or direct raytrace prep.  qtcad now exposes full-detail snap,
+  export, and geometry-measure helpers that delegate source-backed LoD
+  drain/submit work to BRLObolViewController while the ordinary interactive
+  snap helper remains display-level.  Those exact helper records report
+  source-backed triangle identity, counts, bounds, area/length, and
+  nearest-primitive plus nearest face/vertex/edge identity, with edit-intent
+  metadata preserved.  They also report submitted source-detail work when a
+  nonblocking exact call has no result yet, giving tool callers an explicit
+  retry/pending signal instead of conflating that state with a true miss.
+  The controller passes its exact full-detail face/point
+  budget to source-backed provider tasks so over-budget whole-object reloads
+  can fall back before mesh allocation.  Snap
   retains
   transitional legacy refinement fallback for non-migrated or view-scoped
   cases.
@@ -159,8 +169,20 @@ libbrlobol and qtcad:
   coordinate indices in SoBRLPickDetail, and SoBRLExportAction triangle
   records carry the same vertex-index identity.  Face pick details also record
   the nearest source edge endpoints, nearest source vertex, and object-space
-  hit point for deterministic mesh sub-entity inspection.  Full standalone
-  edge and vertex picking remain queued.
+  hit point for deterministic mesh sub-entity inspection.  SoBRLSnapAction
+  can now report source-indexed mesh vertex and edge-nearest candidates, and
+  SoBRLMeasureAction records nearest-face vertex/edge identity while
+  preserving the existing face-nearest measurement result.  Edit-preview
+  geometry now carries typed edit-intent role/id metadata through explicit
+  SoBRLEditPreview fields, shape fields, pick details, snap candidates,
+  measure nearest results, export records, and source-backed mesh request
+  identity.  The qtcad edit-preview helper has an additive update-with-intent
+  entry point so callers can keep preview-node identity separate from the
+  live edit operation or target being previewed, and the helper test verifies
+  controller-published custom intent metadata through snap/measure/export
+  traversal.
+  Full standalone edge and vertex picking for non-mesh/native curved entities
+  plus broader live edit-tool lifecycle/state semantics remain queued.
 * libbrlobol BoT mesh realization now copies existing RT-owned mesh LoD
   metadata onto SoBRLMeshShape fields when a neutral rt_mesh_lod cache result
   is already available.  It records active level, counts, snapped-point/normal
@@ -168,6 +190,56 @@ libbrlobol and qtcad:
   cache generation during normal Obol realization.  The bridge now expresses
   that copied metadata as a provider-neutral BRLObolLodRequest/Result and
   geometry-handle record before publishing the existing Obol fields.
+  The neutral BRLObolLodMeshPayload also owns optional active RT mesh normals
+  as one normal per triangle-corner index when a provider publishes them, and
+  rejects mismatched normal counts before staged payload application.
+  Cached POP mesh-LoD normal publication is now bounded by the loaded
+  triangle-index buffer size before librt exposes it, and the brlobol RT
+  mesh-LoD provider test seeds a normal-bearing cache entry to verify the
+  normals survive the RT facade and neutral payload copy.  The RT
+  `db_mesh_lod_store_mesh` and transitional `bsg_mesh_lod_cache` public
+  comments now make the generated-store normal contract explicit: optional
+  normals are one normal per triangle corner in face-index order, and the
+  neutral rt_view_info test stores a normal-bearing generated mesh to verify
+  active LoD data reports `normal_count == face_count * 3`.  Direct cached
+  mesh-LoD views with no full-detail callback now clamp requests above the
+  cached POP threshold to the highest cached POP level instead of clearing the
+  POP arrays and leaving stale active mesh pointers.  The RT full-detail
+  mesh-LoD callback bridge now also validates optional callback normals before
+  lending full-detail arrays to the POP implementation: normals must be absent
+  with a zero count or present as one normal per triangle corner, and malformed
+  normal metadata leaves no active borrowed payload.  Replacing a mesh-LoD
+  detail callback now invokes the previous full-detail free hook before the
+  callback data pointer is overwritten, so provider-owned callback state does
+  not leak when ownership changes on a live LoD handle.  A neutral
+  `rt_mesh_lod_detail_callbacks_clear` helper now releases the installed
+  detail callback owner without destroying the LoD handle, allowing callers to
+  return a live handle to cached POP-only data.  If full-detail callback setup
+  fails, the requested level load now fails, leaves the active level invalid,
+  and clears previously published active mesh arrays instead of reporting a
+  current full-detail level with no active data.
+  Full-detail callback payloads with missing required faces, display points,
+  or original-point arrays, or with face indices outside the supplied
+  display-point or original-point arrays, are now rejected before publication,
+  and the RT regressions cover those failures after a valid POP payload is
+  active.
+  The public RT mesh-LoD active/data/info helpers now use the same required
+  original-point contract, so they do not report a usable active mesh unless
+  faces, display points, and original points are all present.
+  Producer setup callbacks that return failure after filling a partial detail
+  record now have their clear hook invoked before the load fails, and the RT
+  regression verifies stale active data is still cleared.
+  Built-in BoT full-detail publication and cache refresh/store paths now share
+  the same RT mesh-array validation as neutral callbacks, and invalid BoT
+  cache generation is rejected before BSG sees malformed face indices.
+  Invalid generated-mesh replacement stores now return the current cache
+  status and leave an existing generated cache entry intact instead of failing
+  before object status is populated.
+  Replacing or clearing callback ownership while borrowed full-detail arrays
+  are active now invalidates that level immediately, so same-level reloads
+  cannot skip setup against freed provider storage; callback-owner changes
+  made while cached POP data is active republish the POP arrays instead of
+  dropping visible data.
   SoBRLExportAction triangle records now carry that same copied LoD summary
   for diagnostic export and staged-realization verification.
 * libbrlobol now has the first provider-neutral BRLObolLodService skeleton
@@ -232,37 +304,86 @@ libbrlobol and qtcad:
   mismatches as stale results, and exposes whole-object face/point limits so
   callers can refuse over-budget full-detail reloads before falling through to
   chunked detail reads.  BRLObolViewController now owns a per-view exact
-  full-detail budget, and qtcad exact pick/snap/measure submit paths pass
-  those limits to source-backed provider tasks.  Export, measure, and snap
+  full-detail budget, and qtcad exact export/pick/snap/measure submit paths
+  pass those limits to source-backed provider tasks.  Export, measure, and snap
   actions can now convert their recorded source requests into submit-ready RT
   full-detail LoD requests, and BRLObolLodService can submit those source
   requests with provider-owned cleanup.  Those actions can also consume
   returned full-detail mesh payloads using the recorded transform and
   shape-level metadata, and now expose action-level submit and drained-result
-  consume helpers for recorded source-backed requests.  Higher-level
-  exact-operation callers no longer need a separate triangle ingestion path
-  for export, measure, or snap, but still need to call the helpers around
-  their UI/tool workflows.  Exact mesh picking now has a matching
+  consume helpers for recorded source-backed requests.  BRLObolViewController
+  wraps those action-level paths for export, measure, snap, and source-backed
+  mesh ray picking so higher-level callers can share filtered LoD-result drain,
+  source-backed submission, and exact full-detail budget handling.  Exact mesh
+  picking now has a matching
   source-backed traversal action that records full-detail source requests for
   LoD-backed meshes in exact-pick mode, can submit them through the LoD
   service, and can consume drained full-detail results via the shared
   pick-result ray tester.  qtcad point and rectangle picking now route exact
-  mesh picks through that action around provider drain points without blocking
-  the UI, and qtcad's explicit full-detail snap helper routes exact snap
-  queries through the snap action source-backed drain/submit path.  qtcad's
-  full-detail geometry measure helper now routes exact measurement queries
-  through the measure action source-backed drain/submit path.  Other
+  mesh picks through the controller helper around provider drain points without
+  blocking the UI, and qtcad's explicit full-detail snap, export, and geometry
+  measure helpers now delegate source-backed LoD drain/submit work to
+  BRLObolViewController while preserving source-backed face, vertex/edge,
+  nearest-subentity, and edit-intent identity in their qtcad result records.
+  Other
   exact-operation tools still need matching caller-side drain/submit
   integration.  The LoD service now supports request-filtered
   result draining, which lets
   source-backed exact-operation callers consume matching full-detail results
-  without stealing unrelated display-LoD results from the shared queue.  Snap
-  and pick source-backed exact requests now carry source-local query metadata
-  into LoD provider params: snap records bounded query boxes and tolerance,
-  while pick records source-local rays.  This gives the future chunked BoT
-  reader the object identity and query scope needed to avoid whole-object
-  reloads, while leaving the current whole-direct-BoT provider behavior
-  unchanged.
+  without stealing unrelated display-LoD results from the shared queue.
+  BRLObolViewController now resolves each source-backed exact request to the
+  matching database source before submission, stamps controller-submitted
+  full-detail requests with database/source revision identity, and has a
+  multi-source test proving exact reloads do not fall through to the first
+  database source in the view.  BRLObolLodService now exposes active-request
+  lookup plus a unique-submit path, and the RT source full-detail submit
+  helper uses it so repeated exact retries do not enqueue duplicate source
+  reloads while an identical provider request is already queued or running.
+  Controller exact helpers now also treat partially ready multi-request
+  operations as a single pass: they consume ready source-backed payloads and
+  submit the still-missing export/measure/snap or exact-pick requests before
+  returning, avoiding an extra retry cycle per missing mesh.
+  Measure, snap, and pick source-backed exact requests now carry source-local
+  query metadata into LoD provider params: measure records nearest-query point
+  bounds, snap records bounded query boxes and tolerance, and pick records
+  source-local rays.  This gives the future chunked BoT reader the object
+  identity and query scope needed to avoid whole-object reloads, while leaving
+  the current whole-direct-BoT read path in place.  The direct BoT provider
+  can trim returned face payloads and compact subset vertices for explicit
+  bounded measure/snap requests carrying bounds plus tolerance and for
+  exact-pick requests carrying a source-local ray, and it now applies exact
+  full-detail face/point budgets to those scoped payloads after reduction.
+  Only `source_query.space=source_local`
+  enables direct BoT payload reduction or scoped budget bypass; mixed-kind,
+  duplicate, malformed, or non-source-local query metadata stays whole-object
+  for correctness.  Scoped bounds/ray misses now return a terminal no-result fallback instead of
+  silently broadening to a whole-object direct BoT payload.  Those subset
+  payloads now include optional source face- and vertex-index maps so export,
+  measure, snap, and pick consumers preserve the original BoT ids instead of
+  reporting packed subset slots.  The source-request-to-LoD conversion helper
+  now strips stale `source_query.*` params from template requests before
+  appending the current source-backed query metadata, so request identity and
+  provider execution do not drift through duplicate or mixed template params.
+  Pick
+  consumers accept partial source
+  payloads only for ray-scoped requests; non-query full-detail results still
+  require whole-object face counts.  Unbounded measure hint requests
+  deliberately stay whole-object because global nearest-primitive measurement
+  needs a complete search domain.  Measure now has an explicit query distance
+  limit for bounded-neighborhood semantics; with that opt-in, source-backed
+  measure requests carry bounds plus tolerance, resident measurement filters
+  nearest candidates by the same distance, the direct BoT provider may reduce
+  returned faces after scoped bounds selection, and the measure consumer
+  accepts compact source subsets only when source face and compact vertex maps
+  are present.
+  The LoD submit-action gate now also pins non-forced view-policy active-level
+  scheduling by comparing a submitted provider result with the level selected
+  directly by `rt_mesh_lod_load_view` for the same `rt_view_info`; forced-level
+  overrides remain covered separately.  The submit action also skips
+  duplicate provider work when a ready mesh LoD result for the same
+  view/policy/provider request key is already resident or already
+  queued/running in the LoD service, while reset and forced-level submissions
+  still bypass that no-op path.
   Mesh ray
   picking now has the same initial policy split: display-level is the viewport
   default, while explicit full-detail picks use resident preserved source
@@ -278,25 +399,50 @@ libbrlobol and qtcad:
   than tessellated display geometry.  libbrlobol now has the first direct
   librt ray helper for explicit database object paths; it returns the nearest
   implicit/comb hit with point, normal, distance, region/material data, source
-  primitive name/type, and BRL-CAD pick-detail identity.  qtcad point and
-  rectangle picks now call that helper for database-source implicit/comb
-  fallback hits, including camera-derived rays for scenes that have database
-  sources but no display-pickable Obol geometry.
+  primitive name/type, and BRL-CAD pick-detail identity.  qtcad point,
+  explicit ray, and rectangle picks now call that helper for database-source
+  implicit/comb fallback hits, including camera-derived rays for point-pick
+  scenes that have database sources but no display-pickable Obol geometry.
+  BRLObolViewController owns reusable RT exact-pick caches for its current
+  database sources, keeps them across repeated point, ray, and rectangle pick
+  calls when the source signature is unchanged, and clears or rebuilds them
+  when scene/source ownership or source revisions change.  qtcad point and
+  ray picks now merge librt exact candidates into the same distance-ordered
+  record set as display and source-backed mesh picks while suppressing
+  same-path RT/display duplicates, and rectangle picks inherit that ordering
+  through sampled point picks.  QgSelectRayFilter now tries the Obol
+  explicit-ray helper before its legacy BSG/RT fallback, and that Obol ray
+  selection path can run without the filter's legacy `dbip` field.
   POP payload ownership, active-level selection, action/pick consumption of
   source-backed full-detail reloads, chunked detail reads from the recorded
   source requests when no preserved payload is resident,
   optional coarse POP-build spatial/index sidecar metadata for targeted exact
-  picks/snaps, remaining tool integration of the librt exact-pick helper,
-  prep cache ownership for repeated exact rays, result-order refinement across
-  display/source-backed/librt hits, and richer policy-aware provider
-  scheduling are still queued.
-* libbrlobol shaded PNTS realization now preserves basic RT_PNT_TYPE_PNT
-  point clouds as Obol vlist point primitives rather than failing the shaded
-  path or forcing a mesh.  SoBRLVListShape exposes point primitive inspection,
-  SoBRLExportAction exports point records with source identity, snap treats
-  point primitives as endpoint candidates, and prototype tests cover shaded
-  PNTS realization, bbox, pick detail, export, and snap behavior.  Richer PNTS
-  point attributes such as per-point color, scale, and normal remain queued.
+  picks/snaps, remaining non-qtcad tool integration of the librt exact-pick
+  helper, applying the merged ordering policy to those exact-pick tools, and
+  richer policy-aware provider scheduling are still queued.
+* libbrlobol shaded PNTS realization now preserves all RT PNTS point-record
+  variants as Obol vlist point primitives rather than failing the shaded path
+  or forcing a mesh.  SoBRLVListShape exposes point primitive inspection plus
+  optional per-point color, scale, and normal accessors; scale contributes to
+  scene/export bounds, SoBRLExportAction exports point records with source and
+  attribute identity with transform-aware point normals/scale bounds, snap
+  treats point primitives as endpoint candidates, and prototype tests cover
+  shaded PNTS realization, bbox, pick detail, export, snap behavior, every
+  intermediate color/scale/normal attribute layout, global scale fallback,
+  per-point scale precedence, and transformed attribute export.  A native
+  point/marker node remains deferred.
+* libbrlobol shaded sketch and annotation realization now uses the same RT
+  plot-backed SoBRLVListShape geometry as wire mode for those curve-like
+  non-surface primitives.  This keeps annotations and 2-D sketch curves
+  drawable, pickable, snappable, exportable, and measurable in shaded scenes
+  without pretending they are tessellated surface meshes; native Obol text and
+  curve nodes remain queued.
+* libbrlobol standalone material database realization now has a stable Obol
+  representation.  SoBRLMaterialObject stores database path/source identity,
+  material name, parent/source strings, and grouped property key/value pairs
+  without contributing drawable geometry.  Prototype tests cover wire and
+  shaded material-object realization plus no-draw bbox, pick, snap, export,
+  and measure behavior.
 * qtcad still has a transitional BSG-to-Obol camera bridge.  The bridge is
   correctly kept in libqtcad, not libbrlobol.
 * qtcad's visible rendering path is still transitional.  Obol render/readback
@@ -601,9 +747,33 @@ Low-level neutralization:
   DM-to-view width/height sync now uses the same RT dimensions setter, and
   MGED draw/temp-staging plus libged headless DM fallback dimension writes now
   do the same; the pivot guard rejects reintroduced direct production
-  assignments there.  A broad direct-production BSG view-field scan across
-  libged, libtclcad, MGED, qged, and qtcad is now clean for the tracked
-  assignment/matrix-copy patterns.  The former `src/libged/edit/edit.cpp`
+  assignments there.  Direct screen-to-view conversion calls now route through
+  `rt_view_screen_to_view_from_bsg` in libged label creation and TclCAD
+  mouse/polygon/screen conversion paths, leaving remaining direct
+  `bsg_screen_to_view` usage contained to legacy libdm drawing utilities plus
+  the adapter/test implementation.  Direct screen-pixel-to-model-point
+  conversions now route through `rt_view_screen_point_from_bsg` in libged
+  view-object/polygon commands and qtcad view, sketch, and polygon filters,
+  leaving direct `bsg_screen_pt` usage contained to the adapter/test
+  implementation plus libbsg internals.  Interactive rectangle state access
+  now routes through `rt_view_interactive_rect_from_bsg` and
+  `rt_view_interactive_rect_set_bsg` in qtcad box selection, libged
+  rectangle/select/faceplate commands, and TclCAD refresh/rectangle-refresh
+  paths, leaving direct BSG interactive-rectangle get/set calls contained to
+  the adapter/test implementation plus libbsg internals.  View refresh
+  request/dirty/consume/complete/enabled/suppression/drawn-count state now
+  also routes through RT legacy refresh helpers in qtcad canvas/view refresh,
+  TclCAD refresh dispatch, and MGED redraw/drawn-count paths, leaving direct
+  BSG refresh-state calls contained to the adapter/test implementation,
+  libbsg internals, and legacy libdm display glue.  Faceplate center-dot,
+  scale overlay, and params scalar state now route through RT legacy adapters
+  in libged, libtclcad, and QGED view settings, with direct BSG calls contained
+  to the adapter/test implementation plus libbsg internals.  QGED view
+  settings also routes ADC, grid, model-axes, and view-axes top-level
+  faceplate state through the same RT legacy adapter surface.  A broad
+  direct-production BSG view-field scan across libged, libtclcad, MGED, qged,
+  and qtcad is now clean for the tracked assignment/matrix-copy patterns.  The
+  former `src/libged/edit/edit.cpp`
   `rt_edit_view` initializer hit now relies on neutral `rt_edit_view_init`
   defaults rather than a direct field write or the BSG adapter boundary.
   savekey
@@ -902,17 +1072,40 @@ They measure exit-criteria completion, not implementation effort spent.
 
 Next Push:
 
-* Obol realization coverage matrix: 95 percent.  The matrix and required
+* Obol realization coverage matrix: 98 percent.  The matrix and required
   pinewood.g, havoc.g, and m35.g gates exist, and Generic_Twin.g is documented
   as the larger FAA maturity candidate with an opt-in
   BRLOBOL_QTCAD_GENERIC_TWIN=1 draw/readback hook for the final mixed
-  implicit/BoT gate; stable standalone material, standalone edge entity
-  picking, standalone vertex entity picking, and deeper edit-intent identity
-  remain.  Mesh face picks and triangle export records now preserve source
-  vertex indices for face-level inspection/export, and face pick details record
-  nearest edge and vertex identity hints.  Base PNTS point primitives now have
-  shaded Obol realization coverage.
-* libbrlobol database realization: 97 percent.  Real hierarchy realization,
+  implicit/BoT gate; standalone edge entity picking, standalone vertex entity
+  picking, and broader live edit-tool lifecycle semantics remain.  Mesh face
+  picks and triangle export records now preserve source vertex indices for
+  face-level inspection/export, and face pick details record
+  nearest edge and vertex identity hints.  Preview-level edit-intent identity
+  can now be distinct from preview-node identity and propagates through the
+  action/export paths.  PNTS point primitives now have shaded Obol realization
+  coverage for all RT point-record layouts.  The required pinewood.g/havoc.g
+  prototype hierarchy checks now use export and measure action summary counts
+  instead of recursive random-access `getRealizedShape/Mesh(i)` counting, and
+  the count-only wire hierarchy measure now opts out of connected-angle
+  searching while preserving the default measurement behavior elsewhere.
+  Default wire measurement now enumerates connected-angle candidates with
+  endpoint buckets, so sparse line sets avoid the previous all-pairs segment
+  scan while keeping the same shared-vertex tolerance and nearest-angle
+  selection path.  The remaining runtime was havoc.g's shaded realization,
+  which duplicated shaded hierarchy coverage already retained by pinewood.g;
+  havoc.g now stays as the larger wire hierarchy traversal.  This reduces the
+  FreeBSD/clang prototype test from roughly 107 seconds to roughly 1.4 seconds
+  without weakening the hierarchy coverage.  A later timing pass found the
+  remaining large hierarchy measurement cost in SoBRLMeasureAction's indexed
+  vlist access pattern: getSegment(i) rescanned the SoBRLVListShape command
+  stream for every segment.  Measurement and snap action traversal now walk
+  the command stream once, keeping the same segment ordinals, point primitive
+  indices, filters, transforms, bounds, nearest results, and angle behavior.
+  On this FreeBSD/clang build, pinewood.g wire measure fell from about 0.279
+  seconds to about 0.003 seconds, havoc.g wire measure fell from about 0.159
+  seconds to about 0.049 seconds, and libbrlobol_prototype CTest fell from
+  about 1.44 seconds to about 0.96 seconds.
+* libbrlobol database realization: 98 percent.  Real hierarchy realization,
   partial refresh, identity fields, mesh/vlist representation, and tests are
   in place; mesh face pick/export details carry source vertex indices and face
   picks expose nearest edge/vertex identity hints; BoT meshes can publish
@@ -961,13 +1154,19 @@ Next Push:
   controller-owned mesh-budget paths can now enforce a resident mesh byte
   budget across a scene by evicting preserved full detail first and
   source-backed active display payloads second, including automatic
-  enforcement after LoD results are applied.  Snap and pick exact source
-  requests now carry source-local bounded-query metadata into LoD provider
-  params, so the partial-read provider can distinguish whole-object exact
-  reloads from bbox/ray-scoped source queries.  The
-  production large-BoT path still needs source-backed full-detail access that
-  can reload from .g data, fetch bbox/intersection-targeted subsets, or chunk
-  very large meshes instead of requiring a full resident copy.  A candidate
+  enforcement after LoD results are applied.  Measure, snap, and pick exact
+  source requests now carry source-local bounded-query metadata into LoD
+  provider params, so the partial-read provider can distinguish whole-object
+  exact reloads from nearest-point, bbox, or ray-scoped source queries.  The
+  direct BoT provider now uses snap bounds/tolerance and exact-pick rays to
+  reduce returned face payloads, compact subset vertices, preserve source
+  face/vertex ids, and honor face/point budgets after source-local scoped
+  snap/pick reduction without broadening scoped misses to whole-object
+  payloads or trusting mixed/ambiguous/malformed/non-source-local query
+  metadata while keeping measure hint requests whole-object for correctness.
+  The production large-BoT path still needs source-backed full-detail access
+  that can fetch bbox/intersection-targeted subsets or chunk very large meshes
+  instead of requiring a full resident copy.  A candidate
   exact-query optimization is a cached coarse spatial/index sidecar emitted
   while the POP build is already walking source triangles: assign triangles to
   normalized Morton/grid leaves, union real triangle bboxes into leaf bounds,
@@ -979,12 +1178,27 @@ Next Push:
   display-level behavior with an explicit full-detail detail-preserving mode
   that can also use preserved source geometry, and mesh ray picking has an
   explicit display/default versus preserved-full-detail policy split;
-  libbrlobol has the first direct librt ray-query helper for exact CSG
-  implicit and comb-instance hits, returning path/source identity,
-  region/material data, hit point, normal, and distance, while qtcad/tool
-  integration and prep-cache ownership remain; base PNTS shaded point
-  realization/export/snap is covered; native
-  text/curve/material refinements, richer PNTS attributes, standalone edge and
+  libbrlobol has the first reusable BRLObolRtPickCache for exact CSG implicit
+  and comb-instance hits, preparing explicit database object paths once and
+  shooting repeated rays through that RT instance while the existing one-shot
+  helper remains as a wrapper.  It returns path/source identity,
+  region/material data, hit point, normal, and distance.  BRLObolViewController
+  owns the interactive cache lifetime/invalidation path and now exposes both
+  a nonblocking source-backed mesh exact ray helper and a cache-backed exact
+  RT ray helper for non-qtcad callers; qtcad point, explicit ray, and
+  rectangle picks delegate to those shared helpers before applying their
+  display/source duplicate suppression.  Broader non-qtcad exact-pick tool
+  integration remains.
+  qtcad rectangle picks already reuse that cache across sampled
+  implicit/comb exact-pick rays; PNTS shaded point
+  realization/export/snap is covered, including all RT point-record layouts
+  with optional color, scale, and normal attributes on the fallback point
+  shape plus global-scale fallback, per-point scale precedence, and
+  transform-aware attribute export; sketch and annotation shaded realization
+  now use plot-backed vlist geometry with pick/snap/export/measure coverage
+  for curve-like non-surface primitives; standalone material database objects
+  now realize as no-draw SoBRLMaterialObject metadata nodes;
+  native text/curve/material integration refinements, standalone edge and
   vertex entity picking, POP/provider payload ownership, richer provider-level
   active-level policy scheduling, and more shaded converter hardening remain.
   Controller-owned database-source replacement now configures watched source
@@ -1075,8 +1289,9 @@ Next Push:
   consumption helpers plus action-level submit/drain helpers for
   export/measure/snap and exact mesh pick request collection/consumption,
   qtcad source-backed exact pick, snap, and measure caller integration plus
-  controller exact full-detail budget submission, stale source-metrics
-  behavior, and over-budget whole-object fallback coverage;
+  controller exact full-detail budget submission, multi-source exact
+  database-source matching, duplicate-active exact source reload suppression,
+  stale source-metrics behavior, and over-budget whole-object fallback coverage;
   strict mode and final allowlist removal remain.
 * Low-level cleanup: 98 percent.  vlist, plot3, line-layer, RT view-info,
   neutral RT LoD policy snapshots, mesh-LoD handles, sketch polygons,
@@ -1319,10 +1534,20 @@ Completion for this step:
      A dedicated scene traversal action plus explicit and optional
      controller-owned budget paths can now enforce a resident mesh byte budget
      by evicting preserved detail first and source-backed display payloads
-     second.  Source-backed exact snap and pick requests now carry
-     source-local query bounds/tolerance or ray metadata through LoD provider
-     params.  A direct libbrlobol librt ray-query helper now covers exact
-     implicit-solid and comb-instance hit identity.
+     second.  Source-backed exact measure, snap, and pick requests now carry
+     source-local nearest-query bounds, snap bounds/tolerance, or ray metadata
+     through LoD provider params, and the direct BoT provider can reduce snap
+     and pick response payloads from those bounds/tolerance and ray hints
+     while preserving compact subset source face/vertex ids and applying
+     exact full-detail budgets after source-local scoped payload reduction;
+     scoped misses now stay no-result fallbacks instead of whole-object
+     payloads, and mixed/ambiguous/malformed/non-source-local query metadata
+     stays whole-object.  Template source-query params are replaced during
+     full-detail source-request conversion so stale request metadata cannot
+     create duplicate or mixed query hints.  A reusable
+     libbrlobol RT pick cache now covers exact implicit-solid and comb-instance
+     hit identity without re-prepping the same explicit object set for every
+     ray.
      Chunked/bbox-targeted detail reads for out-of-core meshes and
      remaining tool integration/refinement of librt-backed exact CSG/comb
      picks remain.

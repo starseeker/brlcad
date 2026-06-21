@@ -4839,7 +4839,7 @@ to_paint_rect_area(struct ged *gedp,
 
     struct tclcad_view_data *tvd = (struct tclcad_view_data *)gdvp->u_data;
     struct bsg_interactive_rect_state rect;
-    (void)bsg_view_interactive_rect_get(gdvp, &rect);
+    (void)rt_view_interactive_rect_from_bsg(&rect, gdvp);
     (void)fb_refresh(tvd->gdv_fbs.fbs_fbp, rect.pos[X], rect.pos[Y],
 	    rect.dim[X], rect.dim[Y]);
 
@@ -5682,7 +5682,7 @@ to_screen2model(struct ged *gedp,
     }
 
     tclcad_commands_sync_dm_dimensions(gdvp, gdvp);
-    bsg_screen_to_view(gdvp, &x, &y, x, y);
+    rt_view_screen_to_view_from_bsg(&x, &y, gdvp, x, y);
     VSET(view, x, y, 0.0);
     rt_view_view2model_from_bsg(view2model, gdvp);
     MAT4X3PNT(model, view2model, view);
@@ -5733,7 +5733,7 @@ to_screen2view(struct ged *gedp,
     }
 
     tclcad_commands_sync_dm_dimensions(gdvp, gdvp);
-    bsg_screen_to_view(gdvp, &x, &y, x, y);
+    rt_view_screen_to_view_from_bsg(&x, &y, gdvp, x, y);
     VSET(view, x, y, 0.0);
 
     bu_vls_printf(gedp->ged_result_str, "%lf %lf %lf", V3ARGS(view));

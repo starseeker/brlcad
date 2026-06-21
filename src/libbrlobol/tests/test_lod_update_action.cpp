@@ -216,6 +216,12 @@ source_full_detail_result(const BRLObolLodRequest &request)
 }
 
 static BRLObolLodResult
+source_full_detail_task(const BRLObolLodRequest &request, void *UNUSED(userData))
+{
+    return source_full_detail_result(request);
+}
+
+static BRLObolLodResult
 aabb_task(const BRLObolLodRequest &request, void *UNUSED(userData))
 {
     BRLObolLodCounts counts;
@@ -237,6 +243,48 @@ wait_for_service(BRLObolLodService &service)
 
     printf("FAIL: LoD service did not produce update-action result\n");
     return 1;
+}
+
+static int
+submit_source_full_detail_task(BRLObolLodService &service,
+	const BRLObolLodRequest &request)
+{
+    BRLObolLodTask task;
+
+    task.generation = service.beginGeneration();
+    task.request = request;
+    task.realize = source_full_detail_task;
+    if (service.submit(task) == 0 || wait_for_service(service))
+	return 1;
+
+    return 0;
+}
+
+static int
+expected_view_lod_level(struct db_i *dbip,
+	const char *name,
+	const struct rt_view_info *view,
+	int *level)
+{
+    if (!dbip || !name || !view || !level)
+	return 1;
+
+    struct rt_mesh_lod *lod = db_mesh_lod_get(dbip, name);
+    if (!lod)
+	return 1;
+
+    struct rt_mesh_lod_info info = RT_MESH_LOD_INFO_INIT;
+    int ret = 0;
+    if (rt_mesh_lod_load_view(lod, view, 0) < 0 ||
+	    !rt_mesh_lod_info_get(lod, &info) ||
+	    info.active_level < 0) {
+	ret = 1;
+    } else {
+	*level = info.active_level;
+    }
+
+    rt_mesh_lod_destroy(lod);
+    return ret;
 }
 
 static int
@@ -358,8 +406,18 @@ test_rt_exact_pick_provider(void)
     std::vector<SbString> paths;
     paths.push_back("implicit.r");
 
+    BRLObolRtPickCache pickCache;
+    if (!pickCache.prepare(dbip, paths) ||
+	    !pickCache.isReady() ||
+	    pickCache.getObjectPathCount() != 1) {
+	printf("FAIL: RT exact pick provider did not prepare reusable pick cache\n");
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
     BRLObolRtPickResult pick;
-    if (!brlobol_pick_rt_ray(pick, dbip, paths,
+    if (!pickCache.pickRay(pick,
 	    SbVec3f(0.0f, 0.0f, 5.0f),
 	    SbVec3f(0.0f, 0.0f, -1.0f)) ||
 	    !pick.hit ||
@@ -381,10 +439,30 @@ test_rt_exact_pick_provider(void)
     }
 
     BRLObolRtPickResult miss;
-    if (brlobol_pick_rt_ray(miss, dbip, paths,
+    if (pickCache.pickRay(miss,
 	    SbVec3f(10.0f, 10.0f, 5.0f),
 	    SbVec3f(0.0f, 0.0f, -1.0f)) || miss.hit) {
 	printf("FAIL: RT exact pick provider reported a miss ray as a hit\n");
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
+    BRLObolRtPickResult wrapperPick;
+    if (!brlobol_pick_rt_ray(wrapperPick, dbip, paths,
+	    SbVec3f(0.0f, 0.0f, 5.0f),
+	    SbVec3f(0.0f, 0.0f, -1.0f)) ||
+	    !wrapperPick.hit ||
+	    fabsf(wrapperPick.distance - pick.distance) > 1.0e-5f) {
+	printf("FAIL: RT exact pick provider one-shot wrapper did not use cache-backed ray path\n");
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
+    pickCache.clear();
+    if (pickCache.isReady() || pickCache.getObjectPathCount() != 0) {
+	printf("FAIL: RT exact pick provider reusable pick cache did not clear\n");
 	db_close(dbip);
 	bu_file_delete(dbpath);
 	return 1;
@@ -1118,6 +1196,79 @@ test_mesh_lod_submit_action(void)
     view.height = 480;
     view.size = 100.0;
 
+    BRLObolLodRequest activeDuplicateRequest;
+    mesh->makeLodRequest(activeDuplicateRequest,
+	    "db://lod-submit-test",
+	    2026,
+	    55,
+	    66,
+	    BRLOBOL_LOD_DRAW_SHADED,
+	    "rt_mesh_lod",
+	    "rt-cache-v1",
+	    BRLOBOL_LOD_QUALITY_FAST_DISPLAY);
+    BRLObolLodTask activeTask;
+    activeTask.generation = service.beginGeneration();
+    activeTask.request = activeDuplicateRequest;
+    activeTask.realize = aabb_task;
+    activeTask.debugDelayMilliseconds = 200;
+    if (service.submit(activeTask) == 0) {
+	printf("FAIL: LoD submit action active-duplicate fixture did not queue request\n");
+	service.stop();
+	root->unref();
+	db_mesh_lod_clear(dbip);
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	bu_dirclear(cache_dir);
+	return 1;
+    }
+
+    SoBRLMeshLodSubmitAction activeDuplicateSubmit;
+    activeDuplicateSubmit.setService(&service);
+    activeDuplicateSubmit.setDatabase(dbip, "db://lod-submit-test", 2026);
+    activeDuplicateSubmit.setViewInfo(&view);
+    activeDuplicateSubmit.setGeneration(service.beginGeneration());
+    activeDuplicateSubmit.setRevisions(55, 66);
+    activeDuplicateSubmit.apply(root);
+    if (activeDuplicateSubmit.getVisitedMeshCount() != 2 ||
+	    activeDuplicateSubmit.getSubmittedTaskCount() != 0 ||
+	    activeDuplicateSubmit.getSkippedMeshCount() != 2 ||
+	    strstr(activeDuplicateSubmit.getDiagnostics().getString(),
+		"current LoD request is already active") == NULL) {
+	printf("FAIL: LoD submit action did not skip active duplicate view/policy request\n");
+	service.stop();
+	root->unref();
+	db_mesh_lod_clear(dbip);
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	bu_dirclear(cache_dir);
+	return 1;
+    }
+    if (wait_for_service(service)) {
+	service.stop();
+	root->unref();
+	db_mesh_lod_clear(dbip);
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	bu_dirclear(cache_dir);
+	return 1;
+    }
+    {
+	std::vector<BRLObolLodResult> activeResults;
+	service.drainResults(activeResults);
+	if (activeResults.size() != 1 ||
+		!brlobol_lod_result_matches_request(activeResults[0],
+		    activeDuplicateRequest)) {
+	    printf("FAIL: LoD submit action active-duplicate fixture did not preserve queued request\n");
+	    service.stop();
+	    root->unref();
+	    db_mesh_lod_clear(dbip);
+	    db_close(dbip);
+	    bu_file_delete(dbpath);
+	    bu_dirclear(cache_dir);
+	    return 1;
+	}
+    }
+
     SoBRLMeshLodSubmitAction submit;
     submit.setService(&service);
     submit.setDatabase(dbip, "db://lod-submit-test", 2026);
@@ -1150,9 +1301,46 @@ test_mesh_lod_submit_action(void)
 	return 1;
     }
 
+    std::vector<BRLObolLodResult> viewPolicyResults;
+    if (service.drainResults(viewPolicyResults) != 1 ||
+	    viewPolicyResults.size() != 1) {
+	printf("FAIL: LoD submit action result drain failed\n");
+	service.stop();
+	root->unref();
+	db_mesh_lod_clear(dbip);
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	bu_dirclear(cache_dir);
+	return 1;
+    }
+
+    int expectedViewLevel = -1;
+    if (expected_view_lod_level(dbip, "lod-submit.bot", &view,
+	    &expectedViewLevel)) {
+	printf("FAIL: LoD submit action view-policy active level helper failed\n");
+	service.stop();
+	root->unref();
+	db_mesh_lod_clear(dbip);
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	bu_dirclear(cache_dir);
+	return 1;
+    }
+
+    if (viewPolicyResults[0].geometry.activeLevel != expectedViewLevel) {
+	printf("FAIL: LoD submit action did not use view-policy active level\n");
+	service.stop();
+	root->unref();
+	db_mesh_lod_clear(dbip);
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	bu_dirclear(cache_dir);
+	return 1;
+    }
+
     SoBRLLodUpdateAction update;
-    if (update.drainService(service) != 1 ||
-	    update.getResultCount() != 1) {
+    update.setResults(viewPolicyResults);
+    if (update.getResultCount() != 1) {
 	printf("FAIL: LoD submit action result drain failed\n");
 	service.stop();
 	root->unref();
@@ -1200,6 +1388,24 @@ test_mesh_lod_submit_action(void)
 	    ret = 1;
 	}
     }
+    if (!ret) {
+	SoBRLMeshLodSubmitAction duplicateSubmit;
+	duplicateSubmit.setService(&service);
+	duplicateSubmit.setDatabase(dbip, "db://lod-submit-test", 2026);
+	duplicateSubmit.setViewInfo(&view);
+	duplicateSubmit.setGeneration(service.beginGeneration());
+	duplicateSubmit.setRevisions(55, 66);
+	duplicateSubmit.apply(root);
+	if (duplicateSubmit.getVisitedMeshCount() != 2 ||
+		duplicateSubmit.getSubmittedTaskCount() != 0 ||
+		duplicateSubmit.getSkippedMeshCount() != 2 ||
+		strstr(duplicateSubmit.getDiagnostics().getString(),
+		    "current LoD request is already resident") == NULL ||
+		service.queuedResultCountForDiagnostics() != 0) {
+	    printf("FAIL: LoD submit action did not skip already-resident view/policy request\n");
+	    ret = 1;
+	}
+    }
 
     if (!ret) {
 	SoBRLExportAction exactExport;
@@ -1237,6 +1443,48 @@ test_mesh_lod_submit_action(void)
 		    printf("FAIL: exact export did not consume source-backed full-detail LoD result\n");
 		    ret = 1;
 		}
+		if (!ret) {
+		    SoBRLExportAction controllerExport;
+		    controllerExport.apply(root);
+		    BRLObolLodRequest controllerExportRequest;
+		    if (controllerExport.getSourceBackedFullDetailRequestCount() != 1 ||
+			    !controllerExport.makeSourceBackedFullDetailLodRequest(0,
+				controllerExportRequest)) {
+			printf("FAIL: controller source-backed exact export helper did not collect source request\n");
+			ret = 1;
+		    } else {
+			BRLObolLodService controllerExportService;
+			if (!controllerExportService.start(1, TRUE)) {
+			    printf("FAIL: controller source-backed exact export helper service did not start\n");
+			    ret = 1;
+			} else {
+			    if (submit_source_full_detail_task(
+				    controllerExportService,
+				    controllerExportRequest)) {
+				ret = 1;
+			    } else {
+				BRLObolViewController exportController(root,
+					NULL);
+				exportController.setLodService(
+					&controllerExportService);
+				int submittedCount = -1;
+				beforeTriangleCount =
+				    controllerExport.getTriangleCount();
+				if (exportController.consumeExportSourceFullDetail(
+					controllerExport, 0, &submittedCount) != 1 ||
+					submittedCount != 0 ||
+					controllerExport.getTriangleCount() !=
+					beforeTriangleCount + 1 ||
+					controllerExport.getTriangle(
+					    beforeTriangleCount).sourceId != 101) {
+				    printf("FAIL: controller source-backed exact export helper did not consume matching LoD result\n");
+				    ret = 1;
+				}
+			    }
+			    controllerExportService.stop();
+			}
+		    }
+		}
 		BRLObolLodService sourceService;
 		if (!sourceService.start(1, TRUE)) {
 		    printf("FAIL: exact export source-backed submit helper service did not start\n");
@@ -1267,6 +1515,7 @@ test_mesh_lod_submit_action(void)
 
     if (!ret) {
 	SoBRLMeasureAction exactMeasure;
+	exactMeasure.setQueryPoint(SbVec3f(0.25f, 0.25f, 0.0f));
 	exactMeasure.apply(root);
 	if (exactMeasure.getGeometryPolicy() != SoBRLMeasureAction::FULL_DETAIL ||
 		exactMeasure.getTriangleCount() != 1 ||
@@ -1278,11 +1527,27 @@ test_mesh_lod_submit_action(void)
 	    printf("FAIL: exact measure did not request source-backed full-detail LoD mesh\n");
 	    ret = 1;
 	} else {
+	    const BRLObolSourceMeshRequest &measureSourceRequest =
+		exactMeasure.getSourceBackedFullDetailRequest(0);
+	    if (!measureSourceRequest.queryBoundsValid ||
+		    measureSourceRequest.queryBounds.isEmpty() ||
+		    measureSourceRequest.queryToleranceValid) {
+		printf("FAIL: exact measure source-backed request did not carry bounded query metadata\n");
+		ret = 1;
+	    }
+	}
+	if (!ret) {
 	    BRLObolLodRequest sourceLodRequest;
 	    if (!exactMeasure.makeSourceBackedFullDetailLodRequest(0,
 		    sourceLodRequest) ||
 		    check_source_full_detail_lod_request(sourceLodRequest,
-			"/lod-submit.bot", "lod-submit.bot")) {
+			"/lod-submit.bot", "lod-submit.bot") ||
+		    !has_lod_provider_param(sourceLodRequest,
+			"source_query.space") ||
+		    !has_lod_provider_param(sourceLodRequest,
+			"source_query.bounds") ||
+		    has_lod_provider_param(sourceLodRequest,
+			"source_query.tolerance")) {
 		printf("FAIL: exact measure source-backed request did not convert to RT full-detail LoD request\n");
 		ret = 1;
 	    } else {
@@ -1297,6 +1562,99 @@ test_mesh_lod_submit_action(void)
 			exactMeasure.getTriangleCount() != beforeTriangleCount + 1 ||
 			exactMeasure.getSurfaceArea() <= beforeArea) {
 		    printf("FAIL: exact measure did not consume source-backed full-detail LoD result\n");
+		    ret = 1;
+		}
+		if (!ret) {
+		    SoBRLMeasureAction controllerMeasure;
+		    controllerMeasure.setQueryPoint(SbVec3f(0.25f, 0.25f,
+			    0.0f));
+		    controllerMeasure.apply(root);
+		    BRLObolLodRequest controllerMeasureRequest;
+		    if (controllerMeasure.getSourceBackedFullDetailRequestCount() != 1 ||
+			    !controllerMeasure.makeSourceBackedFullDetailLodRequest(0,
+				controllerMeasureRequest)) {
+			printf("FAIL: controller source-backed exact measure helper did not collect source request\n");
+			ret = 1;
+		    } else {
+			BRLObolLodService controllerMeasureService;
+			if (!controllerMeasureService.start(1, TRUE)) {
+			    printf("FAIL: controller source-backed exact measure helper service did not start\n");
+			    ret = 1;
+			} else {
+			    if (submit_source_full_detail_task(
+				    controllerMeasureService,
+				    controllerMeasureRequest)) {
+				ret = 1;
+			    } else {
+				BRLObolViewController measureController(root,
+					NULL);
+				measureController.setLodService(
+					&controllerMeasureService);
+				int submittedCount = -1;
+				beforeTriangleCount =
+				    controllerMeasure.getTriangleCount();
+				beforeArea = controllerMeasure.getSurfaceArea();
+				if (measureController.consumeMeasureSourceFullDetail(
+					controllerMeasure, 0, &submittedCount) != 1 ||
+					submittedCount != 0 ||
+					controllerMeasure.getTriangleCount() !=
+					beforeTriangleCount + 1 ||
+					controllerMeasure.getSurfaceArea() <=
+					beforeArea) {
+				    printf("FAIL: controller source-backed exact measure helper did not consume matching LoD result\n");
+				    ret = 1;
+				}
+			    }
+			    controllerMeasureService.stop();
+			}
+		    }
+		}
+	    }
+	}
+    }
+
+    if (!ret) {
+	SoBRLMeasureAction limitedMeasureMiss;
+	limitedMeasureMiss.setQueryPoint(SbVec3f(5.0f, 5.0f, 0.0f));
+	limitedMeasureMiss.setQueryDistanceLimit(0.1f);
+	limitedMeasureMiss.apply(root);
+	if (!limitedMeasureMiss.hasQueryDistanceLimit() ||
+		fabsf(limitedMeasureMiss.getQueryDistanceLimit() - 0.1f) >
+		1.0e-6f ||
+		limitedMeasureMiss.hasNearestPrimitive()) {
+	    printf("FAIL: exact measure query distance limit did not filter resident nearest primitives\n");
+	    ret = 1;
+	}
+    }
+
+    if (!ret) {
+	SoBRLMeasureAction boundedMeasure;
+	boundedMeasure.setQueryPoint(SbVec3f(0.25f, 0.25f, 0.0f));
+	boundedMeasure.setQueryDistanceLimit(0.5f);
+	boundedMeasure.apply(root);
+	if (boundedMeasure.getSourceBackedFullDetailRequestCount() != 1) {
+	    printf("FAIL: bounded exact measure did not collect source-backed request\n");
+	    ret = 1;
+	} else {
+	    const BRLObolSourceMeshRequest &boundedMeasureRequest =
+		boundedMeasure.getSourceBackedFullDetailRequest(0);
+	    if (!boundedMeasureRequest.queryBoundsValid ||
+		    boundedMeasureRequest.queryBounds.isEmpty() ||
+		    !boundedMeasureRequest.queryToleranceValid ||
+		    boundedMeasureRequest.queryTolerance <= 0.0f) {
+		printf("FAIL: bounded exact measure source-backed request did not carry explicit query tolerance\n");
+		ret = 1;
+	    } else {
+		BRLObolLodRequest boundedMeasureLodRequest;
+		if (!boundedMeasure.makeSourceBackedFullDetailLodRequest(0,
+			boundedMeasureLodRequest) ||
+			!has_lod_provider_param(boundedMeasureLodRequest,
+			    "source_query.space") ||
+			!has_lod_provider_param(boundedMeasureLodRequest,
+			    "source_query.bounds") ||
+			!has_lod_provider_param(boundedMeasureLodRequest,
+			    "source_query.tolerance")) {
+		    printf("FAIL: bounded exact measure source-backed request did not convert explicit query tolerance\n");
 		    ret = 1;
 		}
 	    }
@@ -1360,6 +1718,54 @@ test_mesh_lod_submit_action(void)
 		    printf("FAIL: exact snap did not consume source-backed full-detail LoD result\n");
 		    ret = 1;
 		}
+		if (!ret) {
+		    SoBRLSnapAction controllerSnap;
+		    controllerSnap.setGeometryPolicy(SoBRLSnapAction::FULL_DETAIL);
+		    controllerSnap.setEnabledKinds(SoBRLSnapAction::FACE_NEAREST);
+		    controllerSnap.setQueryPoint(SbVec3f(1.5f, 0.2f, 0.0f));
+		    controllerSnap.setTolerance(0.1f);
+		    controllerSnap.apply(root);
+		    BRLObolLodRequest controllerSnapRequest;
+		    if (controllerSnap.getSourceBackedFullDetailRequestCount() != 1 ||
+			    !controllerSnap.makeSourceBackedFullDetailLodRequest(0,
+				controllerSnapRequest)) {
+			printf("FAIL: controller source-backed exact snap helper did not collect source request\n");
+			ret = 1;
+		    } else {
+			BRLObolLodService controllerSnapService;
+			if (!controllerSnapService.start(1, TRUE)) {
+			    printf("FAIL: controller source-backed exact snap helper service did not start\n");
+			    ret = 1;
+			} else {
+			    if (submit_source_full_detail_task(
+				    controllerSnapService,
+				    controllerSnapRequest)) {
+				ret = 1;
+			    } else {
+				BRLObolViewController snapController(root,
+					NULL);
+				snapController.setLodService(
+					&controllerSnapService);
+				int submittedCount = -1;
+				controllerSnap.setQueryPoint(SbVec3f(0.2f,
+					0.2f, 0.0f));
+				if (snapController.consumeSnapSourceFullDetail(
+					controllerSnap, 0, &submittedCount) != 1 ||
+					submittedCount != 0 ||
+					!controllerSnap.hasCandidate() ||
+					controllerSnap.getKind() !=
+					SoBRLSnapAction::FACE_NEAREST ||
+					controllerSnap.getPrimitiveIndex() != 0 ||
+					strcmp(controllerSnap.getPath().getString(),
+					    "/lod-submit.bot") != 0) {
+				    printf("FAIL: controller source-backed exact snap helper did not consume matching LoD result\n");
+				    ret = 1;
+				}
+			    }
+			    controllerSnapService.stop();
+			}
+		    }
+		}
 		BRLObolSourceMeshPickResult sourcePick;
 		if (!brlobol_pick_source_full_detail_result(sourcePick,
 			exactSnap.getSourceBackedFullDetailRequest(0),
@@ -1411,15 +1817,256 @@ test_mesh_lod_submit_action(void)
 			std::vector<BRLObolLodResult> pickSourceResults;
 			pickSourceResults.push_back(
 				source_full_detail_result(pickLodRequest));
-			if (sourcePickAction.consumeSourceBackedFullDetailResults(
-				actionPick, pickSourceResults) != 1 ||
-				!actionPick.hit ||
-				strcmp(actionPick.detail.getPath().getString(),
-				    "/lod-submit.bot") != 0 ||
-				actionPick.detail.getPrimitiveIndex() != 0) {
-			    printf("FAIL: exact pick action did not collect and consume source-backed full-detail LoD result\n");
-			    ret = 1;
+				if (sourcePickAction.consumeSourceBackedFullDetailResults(
+					actionPick, pickSourceResults) != 1 ||
+					!actionPick.hit ||
+					strcmp(actionPick.detail.getPath().getString(),
+					    "/lod-submit.bot") != 0 ||
+					actionPick.detail.getPrimitiveIndex() != 0) {
+				    printf("FAIL: exact pick action did not collect and consume source-backed full-detail LoD result\n");
+				    ret = 1;
+				}
+				if (!ret) {
+				    BRLObolLodService controllerPickService;
+				    if (!controllerPickService.start(1, TRUE)) {
+					printf("FAIL: controller source-backed exact pick helper service did not start\n");
+					ret = 1;
+				    } else {
+					BRLObolLodTask controllerPickTask;
+					controllerPickTask.generation =
+					    controllerPickService.beginGeneration();
+					controllerPickTask.request = pickLodRequest;
+					controllerPickTask.realize = source_full_detail_task;
+					if (controllerPickService.submit(controllerPickTask) == 0 ||
+						wait_for_service(controllerPickService)) {
+					    ret = 1;
+					} else {
+					    BRLObolViewController pickController(root, NULL);
+					    pickController.setLodService(&controllerPickService);
+					    BRLObolSourceMeshPickResult controllerPick;
+					    int submittedCount = -1;
+					    if (pickController.pickSourceMeshExactRay(
+						    controllerPick,
+						    SbVec3f(0.2f, 0.2f, 5.0f),
+						    SbVec3f(0.0f, 0.0f, -1.0f),
+						    0, &submittedCount) != 1 ||
+						    submittedCount != 0 ||
+						    !controllerPick.hit ||
+						    strcmp(controllerPick.detail.getPath().getString(),
+							"/lod-submit.bot") != 0 ||
+						    controllerPick.detail.getPrimitiveIndex() != 0) {
+						printf("FAIL: controller source-backed exact pick helper did not consume matching LoD result\n");
+						ret = 1;
+					    }
+					}
+					controllerPickService.stop();
+				    }
+				}
+			    }
 			}
+			if (!ret) {
+		    BRLObolSourceMeshRequest mappedSourceRequest =
+			exactSnap.getSourceBackedFullDetailRequest(0);
+		    mappedSourceRequest.faceCount = 0;
+
+		    BRLObolLodResult mappedSourceResult =
+			source_full_detail_result(sourceLodRequest);
+		    mappedSourceResult.mesh.faceIndex.push_back(7);
+		    mappedSourceResult.mesh.vertexIndex.push_back(10);
+		    mappedSourceResult.mesh.vertexIndex.push_back(11);
+		    mappedSourceResult.mesh.vertexIndex.push_back(12);
+
+		    SoBRLExportAction mappedExport;
+		    if (!mappedExport.appendSourceBackedFullDetailResult(
+			    mappedSourceRequest, mappedSourceResult) ||
+			    mappedExport.getTriangleCount() != 1 ||
+			    mappedExport.getTriangle(0).primitiveIndex != 7 ||
+			    mappedExport.getTriangle(0).vertexIndexA != 10 ||
+			    mappedExport.getTriangle(0).vertexIndexB != 11 ||
+			    mappedExport.getTriangle(0).vertexIndexC != 12) {
+			printf("FAIL: exact export did not preserve source face and vertex index mapping\n");
+			ret = 1;
+		    }
+
+		    SoBRLMeasureAction mappedMeasure;
+		    mappedMeasure.setQueryPoint(SbVec3f(0.2f, 0.2f, 0.0f));
+		    if (!mappedMeasure.consumeSourceBackedFullDetailResult(
+			    mappedSourceRequest, mappedSourceResult) ||
+			    !mappedMeasure.hasNearestPrimitive() ||
+			    mappedMeasure.getNearestPrimitiveIndex() != 7 ||
+			    mappedMeasure.getNearestFaceVertexIndexA() != 10 ||
+			    mappedMeasure.getNearestFaceVertexIndexB() != 11 ||
+			    mappedMeasure.getNearestFaceVertexIndexC() != 12 ||
+			    mappedMeasure.getNearestFaceVertexIndex() != 10) {
+			printf("FAIL: exact measure did not preserve source face and vertex index mapping\n");
+			ret = 1;
+		    }
+
+		    BRLObolSourceMeshRequest compactMeasureRequest =
+			mappedSourceRequest;
+		    compactMeasureRequest.faceCount = 2;
+		    compactMeasureRequest.pointCount = 6;
+		    compactMeasureRequest.queryBoundsValid = 1;
+		    compactMeasureRequest.queryBounds = SbBox3f(
+			    SbVec3f(-0.1f, -0.1f, -0.1f),
+			    SbVec3f(0.2f, 0.2f, 0.2f));
+		    compactMeasureRequest.queryToleranceValid = 1;
+		    compactMeasureRequest.queryTolerance = 0.5f;
+		    BRLObolLodResult compactMeasureResult =
+			source_full_detail_result(sourceLodRequest);
+		    compactMeasureResult.mesh.faceIndex.push_back(1);
+		    compactMeasureResult.mesh.vertexIndex.push_back(30);
+		    compactMeasureResult.mesh.vertexIndex.push_back(31);
+		    compactMeasureResult.mesh.vertexIndex.push_back(32);
+		    SoBRLMeasureAction compactMeasure;
+		    compactMeasure.setQueryPoint(SbVec3f(0.0f, 0.0f, 0.0f));
+		    compactMeasure.setQueryDistanceLimit(0.5f);
+		    if (!compactMeasure.consumeSourceBackedFullDetailResult(
+			    compactMeasureRequest, compactMeasureResult) ||
+			    !compactMeasure.hasNearestPrimitive() ||
+			    compactMeasure.getNearestPrimitiveIndex() != 1 ||
+			    compactMeasure.getNearestFaceVertexIndexA() != 30) {
+			printf("FAIL: exact measure did not accept compact bounded source subset with identity mapping\n");
+			ret = 1;
+		    }
+		    BRLObolLodResult compactMeasureNoFaceMap =
+			compactMeasureResult;
+		    compactMeasureNoFaceMap.mesh.faceIndex.clear();
+		    SoBRLMeasureAction rejectedCompactMeasureFaceMap;
+		    if (rejectedCompactMeasureFaceMap.consumeSourceBackedFullDetailResult(
+			    compactMeasureRequest, compactMeasureNoFaceMap)) {
+			printf("FAIL: exact measure accepted compact bounded source subset without face index mapping\n");
+			ret = 1;
+		    }
+		    BRLObolLodResult compactMeasureNoVertexMap =
+			compactMeasureResult;
+		    compactMeasureNoVertexMap.mesh.vertexIndex.clear();
+		    SoBRLMeasureAction rejectedCompactMeasureVertexMap;
+		    if (rejectedCompactMeasureVertexMap.consumeSourceBackedFullDetailResult(
+			    compactMeasureRequest, compactMeasureNoVertexMap)) {
+			printf("FAIL: exact measure accepted compact bounded source subset without vertex index mapping\n");
+			ret = 1;
+		    }
+
+		    SoBRLSnapAction mappedSnap;
+		    mappedSnap.setEnabledKinds(SoBRLSnapAction::FACE_NEAREST);
+		    mappedSnap.setQueryPoint(SbVec3f(0.2f, 0.2f, 0.0f));
+		    mappedSnap.setTolerance(0.5f);
+		    if (!mappedSnap.consumeSourceBackedFullDetailResult(
+			    mappedSourceRequest, mappedSourceResult) ||
+			    !mappedSnap.hasCandidate() ||
+			    mappedSnap.getPrimitiveIndex() != 7) {
+			printf("FAIL: exact snap did not preserve source face index mapping\n");
+			ret = 1;
+		    }
+		    SoBRLSnapAction mappedVertexSnap;
+		    mappedVertexSnap.setEnabledKinds(SoBRLSnapAction::VERTEX);
+		    mappedVertexSnap.setQueryPoint(SbVec3f(0.0f, 0.0f, 0.0f));
+		    mappedVertexSnap.setTolerance(0.5f);
+		    if (!mappedVertexSnap.consumeSourceBackedFullDetailResult(
+			    mappedSourceRequest, mappedSourceResult) ||
+			    !mappedVertexSnap.hasCandidate() ||
+			    mappedVertexSnap.getPrimitiveIndex() != 7 ||
+			    mappedVertexSnap.getVertexIndex() != 10) {
+			printf("FAIL: exact snap did not preserve source vertex index mapping\n");
+			ret = 1;
+		    }
+		    BRLObolSourceMeshRequest compactSnapRequest =
+			mappedSourceRequest;
+		    compactSnapRequest.faceCount = 2;
+		    compactSnapRequest.pointCount = 6;
+		    compactSnapRequest.queryBoundsValid = 1;
+		    compactSnapRequest.queryBounds = SbBox3f(
+			    SbVec3f(-0.1f, -0.1f, -0.1f),
+			    SbVec3f(0.2f, 0.2f, 0.2f));
+		    compactSnapRequest.queryToleranceValid = 1;
+		    compactSnapRequest.queryTolerance = 0.5f;
+		    BRLObolLodResult compactSnapResult =
+			source_full_detail_result(sourceLodRequest);
+		    compactSnapResult.mesh.faceIndex.push_back(1);
+		    compactSnapResult.mesh.vertexIndex.push_back(30);
+		    compactSnapResult.mesh.vertexIndex.push_back(31);
+		    compactSnapResult.mesh.vertexIndex.push_back(32);
+		    SoBRLSnapAction compactSnap;
+		    compactSnap.setEnabledKinds(SoBRLSnapAction::VERTEX);
+		    compactSnap.setQueryPoint(SbVec3f(0.0f, 0.0f, 0.0f));
+		    compactSnap.setTolerance(0.5f);
+		    if (!compactSnap.consumeSourceBackedFullDetailResult(
+			    compactSnapRequest, compactSnapResult) ||
+			    !compactSnap.hasCandidate() ||
+			    compactSnap.getPrimitiveIndex() != 1 ||
+			    compactSnap.getVertexIndex() != 30) {
+			printf("FAIL: exact snap did not accept compact source vertex subset with vertex index mapping\n");
+			ret = 1;
+		    }
+		    BRLObolLodResult compactSnapNoVertexMap =
+			compactSnapResult;
+		    compactSnapNoVertexMap.mesh.vertexIndex.clear();
+		    SoBRLSnapAction rejectedCompactSnap;
+		    if (rejectedCompactSnap.consumeSourceBackedFullDetailResult(
+			    compactSnapRequest, compactSnapNoVertexMap)) {
+			printf("FAIL: exact snap accepted compact source vertex subset without vertex index mapping\n");
+			ret = 1;
+		    }
+
+		    BRLObolSourceMeshPickResult mappedPick;
+		    if (!brlobol_pick_source_full_detail_result(mappedPick,
+			    mappedSourceRequest, mappedSourceResult,
+			    SbVec3f(0.2f, 0.2f, 5.0f),
+			    SbVec3f(0.0f, 0.0f, -1.0f)) ||
+			    !mappedPick.hit ||
+			    mappedPick.detail.getPrimitiveIndex() != 7 ||
+			    mappedPick.detail.getFaceVertexIndexA() != 10 ||
+			    mappedPick.detail.getFaceVertexIndexB() != 11 ||
+			    mappedPick.detail.getFaceVertexIndexC() != 12 ||
+			    mappedPick.detail.getNearestFaceVertexIndex() != 10) {
+			printf("FAIL: exact pick did not preserve source face and vertex index mapping\n");
+			ret = 1;
+		    }
+
+		    BRLObolSourceMeshRequest rayScopedPickRequest =
+			mappedSourceRequest;
+		    rayScopedPickRequest.faceCount = 4;
+		    rayScopedPickRequest.pointCount = 6;
+		    rayScopedPickRequest.queryRayValid = 1;
+		    rayScopedPickRequest.queryRayDirection =
+			SbVec3f(0.0f, 0.0f, -1.0f);
+		    BRLObolLodResult rayScopedPickResult =
+			source_full_detail_result(sourceLodRequest);
+		    rayScopedPickResult.mesh.faceIndex.push_back(2);
+		    rayScopedPickResult.mesh.vertexIndex.push_back(20);
+		    rayScopedPickResult.mesh.vertexIndex.push_back(21);
+		    rayScopedPickResult.mesh.vertexIndex.push_back(22);
+		    BRLObolSourceMeshPickResult rayScopedPick;
+		    if (!brlobol_pick_source_full_detail_result(rayScopedPick,
+			    rayScopedPickRequest, rayScopedPickResult,
+			    SbVec3f(0.2f, 0.2f, 5.0f),
+			    SbVec3f(0.0f, 0.0f, -1.0f)) ||
+			    !rayScopedPick.hit ||
+			    rayScopedPick.detail.getPrimitiveIndex() != 2 ||
+			    rayScopedPick.detail.getFaceVertexIndexA() != 20 ||
+			    rayScopedPick.detail.getFaceVertexIndexB() != 21 ||
+			    rayScopedPick.detail.getFaceVertexIndexC() != 22) {
+			printf("FAIL: exact pick did not accept ray-scoped source face and vertex subset\n");
+			ret = 1;
+		    }
+		    BRLObolLodResult rayScopedPickNoVertexMap =
+			rayScopedPickResult;
+		    rayScopedPickNoVertexMap.mesh.vertexIndex.clear();
+		    if (brlobol_pick_source_full_detail_result(rayScopedPick,
+			    rayScopedPickRequest, rayScopedPickNoVertexMap,
+			    SbVec3f(0.2f, 0.2f, 5.0f),
+			    SbVec3f(0.0f, 0.0f, -1.0f))) {
+			printf("FAIL: exact pick accepted compact ray-scoped source point subset without vertex index mapping\n");
+			ret = 1;
+		    }
+		    rayScopedPickRequest.queryRayValid = 0;
+		    if (brlobol_pick_source_full_detail_result(rayScopedPick,
+			    rayScopedPickRequest, rayScopedPickResult,
+			    SbVec3f(0.2f, 0.2f, 5.0f),
+			    SbVec3f(0.0f, 0.0f, -1.0f))) {
+			printf("FAIL: exact pick accepted non-query source face subset\n");
+			ret = 1;
 		    }
 		}
 	    }
@@ -1561,6 +2208,311 @@ test_mesh_lod_submit_action(void)
     db_close(dbip);
     bu_file_delete(dbpath);
     bu_dirclear(cache_dir);
+    return ret;
+}
+
+static int
+test_view_controller_source_backed_multi_source_exact_submit(void)
+{
+    char wrong_dbpath[MAXPATHLEN] = {0};
+    char right_dbpath[MAXPATHLEN] = {0};
+    struct db_i *wrong_dbip = NULL;
+    struct db_i *right_dbip = NULL;
+
+    if (make_rt_pick_test_db(wrong_dbpath, sizeof(wrong_dbpath),
+	    &wrong_dbip))
+	return 1;
+    if (make_submit_test_db(right_dbpath, sizeof(right_dbpath),
+	    &right_dbip)) {
+	db_close(wrong_dbip);
+	bu_file_delete(wrong_dbpath);
+	return 1;
+    }
+
+    SoSeparator *root = new SoSeparator;
+    root->ref();
+
+    SoBRLDatabaseSource *wrongSource = new SoBRLDatabaseSource;
+    wrongSource->setDatabase(wrong_dbip);
+    wrongSource->path = "implicit.r";
+    wrongSource->sourceRevision = 111;
+
+    SoBRLDatabaseSource *rightSource = new SoBRLDatabaseSource;
+    rightSource->setDatabase(right_dbip);
+    rightSource->path = "lod-submit.bot";
+    rightSource->sourceRevision = 222;
+
+    SoBRLLodMeshShape *mesh = make_lod_mesh("/lod-submit.bot",
+	    "lod-submit.bot");
+    mesh->sourceId = 222;
+    BRLObolLodRequest displayRequest =
+	make_request("/lod-submit.bot", "lod-submit.bot");
+    BRLObolLodResult displayResult = mesh_payload_result(displayRequest);
+    if (!mesh->applyStagedLodResult(displayResult, &displayRequest) ||
+	    !mesh->isLodDisplayActive()) {
+	printf("FAIL: controller multi-source exact submit fixture did not stage LoD mesh\n");
+	root->unref();
+	db_mesh_lod_clear(right_dbip);
+	db_close(right_dbip);
+	db_close(wrong_dbip);
+	bu_file_delete(right_dbpath);
+	bu_file_delete(wrong_dbpath);
+	return 1;
+    }
+
+    rightSource->addChild(mesh);
+    root->addChild(wrongSource);
+    root->addChild(rightSource);
+
+    BRLObolLodService service;
+    if (!service.start(1, TRUE)) {
+	printf("FAIL: controller multi-source source-backed exact service did not start\n");
+	root->unref();
+	db_mesh_lod_clear(right_dbip);
+	db_close(right_dbip);
+	db_close(wrong_dbip);
+	bu_file_delete(right_dbpath);
+	bu_file_delete(wrong_dbpath);
+	return 1;
+    }
+
+    int ret = 0;
+    BRLObolViewController controller(root, NULL);
+    controller.setLodService(&service);
+
+    SoBRLExportAction exportAction;
+    exportAction.apply(root);
+    if (exportAction.getSourceBackedFullDetailRequestCount() != 1) {
+	printf("FAIL: controller multi-source source-backed exact submit did not collect request\n");
+	ret = 1;
+    }
+
+    int submittedCount = -1;
+    if (!ret &&
+	    (controller.consumeExportSourceFullDetail(exportAction,
+		service.beginGeneration(), &submittedCount) != 0 ||
+	    submittedCount != 1)) {
+	printf("FAIL: controller multi-source source-backed exact submit did not submit one request\n");
+	ret = 1;
+    }
+
+    if (!ret && wait_for_service(service))
+	ret = 1;
+
+    if (!ret) {
+	std::vector<BRLObolLodResult> submittedResults;
+	service.drainResults(submittedResults);
+	const char *rightDbId = right_dbip->dbi_filename ?
+	    right_dbip->dbi_filename : "";
+	if (submittedResults.size() != 1 ||
+		submittedResults[0].providerStatus !=
+		    BRLOBOL_LOD_PROVIDER_STALE ||
+		strcmp(submittedResults[0].request.databaseId.getString(),
+		    rightDbId) != 0 ||
+		submittedResults[0].request.sourceRevision != 222 ||
+		strcmp(submittedResults[0].request.objectPath.getString(),
+		    "/lod-submit.bot") != 0) {
+	    printf("FAIL: controller multi-source source-backed exact submit did not use matching database source\n");
+	    ret = 1;
+	} else {
+	    BRLObolLodTask task;
+	    task.generation = service.beginGeneration();
+	    task.request = submittedResults[0].request;
+	    task.realize = source_full_detail_task;
+	    if (service.submit(task) == 0 || wait_for_service(service)) {
+		ret = 1;
+	    } else {
+		const int beforeTriangleCount =
+		    exportAction.getTriangleCount();
+		submittedCount = -1;
+		if (controller.consumeExportSourceFullDetail(exportAction,
+			service.beginGeneration(), &submittedCount) != 1 ||
+			submittedCount != 0 ||
+			exportAction.getTriangleCount() !=
+			    beforeTriangleCount + 1 ||
+			exportAction.getTriangle(beforeTriangleCount).sourceId !=
+			    222) {
+		    printf("FAIL: controller multi-source source-backed exact submit did not consume matching database-scoped result\n");
+		    ret = 1;
+		}
+	    }
+	}
+    }
+
+    service.stop();
+    root->unref();
+    db_mesh_lod_clear(right_dbip);
+    db_close(right_dbip);
+    db_close(wrong_dbip);
+    bu_file_delete(right_dbpath);
+    bu_file_delete(wrong_dbpath);
+    return ret;
+}
+
+static int
+test_view_controller_source_backed_partial_ready_submit(void)
+{
+    char dbpath[MAXPATHLEN] = {0};
+    struct db_i *dbip = NULL;
+
+    if (make_submit_test_db(dbpath, sizeof(dbpath), &dbip))
+	return 1;
+
+    SoSeparator *root = new SoSeparator;
+    root->ref();
+
+    SoBRLDatabaseSource *source = new SoBRLDatabaseSource;
+    source->setDatabase(dbip);
+    source->path = "lod-submit.bot";
+    source->sourceRevision = 333;
+
+    SoBRLLodMeshShape *readyMesh = make_lod_mesh("/lod-submit.bot",
+	    "lod-submit.bot");
+    readyMesh->sourceId = 333;
+    BRLObolLodRequest readyDisplayRequest =
+	make_request("/lod-submit.bot", "lod-submit.bot");
+    BRLObolLodResult readyDisplayResult =
+	mesh_payload_result(readyDisplayRequest);
+    if (!readyMesh->applyStagedLodResult(readyDisplayResult,
+	    &readyDisplayRequest) ||
+	    !readyMesh->isLodDisplayActive()) {
+	printf("FAIL: controller partial-ready exact fixture did not stage ready LoD mesh\n");
+	root->unref();
+	db_mesh_lod_clear(dbip);
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
+    SoBRLLodMeshShape *missingMesh = make_lod_mesh(
+	    "/lod-submit-missing.bot", "lod-submit-missing.bot");
+    missingMesh->sourceId = 333;
+    BRLObolLodRequest missingDisplayRequest =
+	make_request("/lod-submit-missing.bot", "lod-submit-missing.bot");
+    BRLObolLodResult missingDisplayResult =
+	mesh_payload_result(missingDisplayRequest);
+    if (!missingMesh->applyStagedLodResult(missingDisplayResult,
+	    &missingDisplayRequest) ||
+	    !missingMesh->isLodDisplayActive()) {
+	printf("FAIL: controller partial-ready exact fixture did not stage missing LoD mesh\n");
+	root->unref();
+	db_mesh_lod_clear(dbip);
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
+    source->addChild(readyMesh);
+    source->addChild(missingMesh);
+    root->addChild(source);
+
+    BRLObolLodService service;
+    if (!service.start(1, TRUE)) {
+	printf("FAIL: controller partial-ready source-backed exact service did not start\n");
+	root->unref();
+	db_mesh_lod_clear(dbip);
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
+    int ret = 0;
+    SoBRLExportAction exportAction;
+    exportAction.apply(root);
+    if (exportAction.getSourceBackedFullDetailRequestCount() != 2) {
+	printf("FAIL: controller partial-ready source-backed exact test did not collect two requests\n");
+	ret = 1;
+    }
+
+    BRLObolLodRequest readySourceRequest;
+    if (!ret && !exportAction.makeSourceBackedFullDetailLodRequest(0,
+	    readySourceRequest)) {
+	printf("FAIL: controller partial-ready source-backed exact test did not convert ready request\n");
+	ret = 1;
+    }
+
+    if (!ret) {
+	BRLObolLodTask readyTask;
+	readyTask.generation = service.beginGeneration();
+	readyTask.request = readySourceRequest;
+	readyTask.realize = source_full_detail_task;
+	if (service.submit(readyTask) == 0 || wait_for_service(service))
+	    ret = 1;
+    }
+
+    if (!ret) {
+	BRLObolViewController controller(root, NULL);
+	controller.setLodService(&service);
+	const int beforeTriangleCount = exportAction.getTriangleCount();
+	int submittedCount = -1;
+	if (controller.consumeExportSourceFullDetail(exportAction,
+		service.beginGeneration(), &submittedCount) != 1 ||
+		submittedCount != 1 ||
+		exportAction.getTriangleCount() != beforeTriangleCount + 1 ||
+		exportAction.getTriangle(beforeTriangleCount).sourceId != 333) {
+	    printf("FAIL: controller partial-ready exact helper did not consume ready result and submit missing request\n");
+	    ret = 1;
+	}
+    }
+
+    service.stop();
+
+    if (!ret) {
+	readyMesh->setPickGeometryPolicy(SoBRLMeshShape::PICK_FULL_DETAIL);
+	missingMesh->setPickGeometryPolicy(SoBRLMeshShape::PICK_FULL_DETAIL);
+
+	BRLObolLodService pickService;
+	if (!pickService.start(1, TRUE)) {
+	    printf("FAIL: controller partial-ready exact pick service did not start\n");
+	    ret = 1;
+	} else {
+	    const SbVec3f rayOrigin(0.2f, 0.2f, 5.0f);
+	    const SbVec3f rayDirection(0.0f, 0.0f, -1.0f);
+	    SoBRLSourceMeshPickAction requestAction;
+	    requestAction.setRay(rayOrigin, rayDirection);
+	    requestAction.apply(root);
+
+	    BRLObolLodRequest readyPickRequest;
+	    if (requestAction.getSourceBackedFullDetailRequestCount() != 2 ||
+		    !requestAction.makeSourceBackedFullDetailLodRequest(0,
+			readyPickRequest)) {
+		printf("FAIL: controller partial-ready exact pick did not collect two source requests\n");
+		ret = 1;
+	    } else {
+		BRLObolLodTask readyPickTask;
+		readyPickTask.generation = pickService.beginGeneration();
+		readyPickTask.request = readyPickRequest;
+		readyPickTask.realize = source_full_detail_task;
+		if (pickService.submit(readyPickTask) == 0 ||
+			wait_for_service(pickService)) {
+		    ret = 1;
+		} else {
+		    BRLObolViewController pickController(root, NULL);
+		    pickController.setLodService(&pickService);
+		    BRLObolSourceMeshPickResult pick;
+		    int submittedCount = -1;
+		    if (pickController.pickSourceMeshExactRay(pick,
+			    rayOrigin, rayDirection,
+			    pickService.beginGeneration(),
+			    &submittedCount) != 1 ||
+			    submittedCount != 1 ||
+			    !pick.hit ||
+			    strcmp(pick.detail.getPath().getString(),
+				"/lod-submit.bot") != 0 ||
+			    pick.detail.getPrimitiveIndex() != 0) {
+			printf("FAIL: controller partial-ready exact pick helper did not consume ready result and submit missing request\n");
+			ret = 1;
+		    }
+		}
+	    }
+	    pickService.stop();
+	}
+    }
+
+    root->unref();
+    db_mesh_lod_clear(dbip);
+    db_close(dbip);
+    bu_file_delete(dbpath);
     return ret;
 }
 
@@ -1711,12 +2663,13 @@ test_view_controller_lod_submit_and_apply(void)
 	    return 1;
 	}
 	controller.clearRenderRequest();
-	if (controller.submitLodRequestsIfNeeded() != 1 ||
-		controller.getLastLodSubmittedTaskCount() != 1 ||
-		!controller.isRenderRequested() ||
-		strcmp(controller.getRenderReason().getString(),
-		    "lod-submit") != 0) {
-	    printf("FAIL: LoD view controller did not auto-submit changed scene\n");
+	if (controller.submitLodRequestsIfNeeded() != 0 ||
+		controller.getLastLodSubmittedTaskCount() != 0 ||
+		controller.getLastLodSkippedMeshCount() != 1 ||
+		strstr(controller.getLastLodDiagnostics().getString(),
+		    "current LoD request is already resident") == NULL ||
+		controller.isRenderRequested()) {
+	    printf("FAIL: LoD view controller did not skip resident changed-scene LoD request\n");
 	    service.stop();
 	    root->unref();
 	    db_mesh_lod_clear(dbip);
@@ -1735,21 +2688,8 @@ test_view_controller_lod_submit_and_apply(void)
 	    bu_dirclear(cache_dir);
 	    return 1;
 	}
-	if (wait_for_service(service)) {
-	    service.stop();
-	    root->unref();
-	    db_mesh_lod_clear(dbip);
-	    db_close(dbip);
-	    bu_file_delete(dbpath);
-	    bu_dirclear(cache_dir);
-	    return 1;
-	}
-	controller.clearRenderRequest();
-	if (controller.processPendingLodResults() != 1 ||
-		controller.getLastLodAppliedResultCount() != 1 ||
-		strcmp(controller.getRenderReason().getString(),
-		    "lod-result") != 0) {
-	    printf("FAIL: LoD view controller did not apply auto-submit result\n");
+	if (service.queuedResultCountForDiagnostics() != 0) {
+	    printf("FAIL: LoD view controller queued duplicate resident request result\n");
 	    service.stop();
 	    root->unref();
 	    db_mesh_lod_clear(dbip);
@@ -1764,12 +2704,13 @@ test_view_controller_lod_submit_and_apply(void)
 	source->stale = FALSE;
 	source->staleReason = SoBRLDatabaseSource::STALE_NONE;
 	controller.clearRenderRequest();
-	if (controller.submitLodRequestsIfNeeded() != 1 ||
-		controller.getLastLodSubmittedTaskCount() != 1 ||
-		!controller.isRenderRequested() ||
-		strcmp(controller.getRenderReason().getString(),
-		    "lod-submit") != 0) {
-	    printf("FAIL: LoD view controller did not auto-submit threshold policy change\n");
+	if (controller.submitLodRequestsIfNeeded() != 0 ||
+		controller.getLastLodSubmittedTaskCount() != 0 ||
+		controller.getLastLodSkippedMeshCount() != 1 ||
+		strstr(controller.getLastLodDiagnostics().getString(),
+		    "current LoD request is already resident") == NULL ||
+		controller.isRenderRequested()) {
+	    printf("FAIL: LoD view controller did not skip resident threshold policy request\n");
 	    service.stop();
 	    root->unref();
 	    db_mesh_lod_clear(dbip);
@@ -1778,21 +2719,8 @@ test_view_controller_lod_submit_and_apply(void)
 	    bu_dirclear(cache_dir);
 	    return 1;
 	}
-	if (wait_for_service(service)) {
-	    service.stop();
-	    root->unref();
-	    db_mesh_lod_clear(dbip);
-	    db_close(dbip);
-	    bu_file_delete(dbpath);
-	    bu_dirclear(cache_dir);
-	    return 1;
-	}
-	controller.clearRenderRequest();
-	if (controller.processPendingLodResults() != 1 ||
-		controller.getLastLodAppliedResultCount() != 1 ||
-		strcmp(controller.getRenderReason().getString(),
-		    "lod-result") != 0) {
-	    printf("FAIL: LoD view controller did not apply threshold policy result\n");
+	if (service.queuedResultCountForDiagnostics() != 0) {
+	    printf("FAIL: LoD view controller queued duplicate threshold request result\n");
 	    service.stop();
 	    root->unref();
 	    db_mesh_lod_clear(dbip);
@@ -1990,6 +2918,10 @@ main(int argc, char **argv)
     if (test_view_controller_mesh_residency_budget_auto())
 	return 1;
     if (test_mesh_lod_submit_action())
+	return 1;
+    if (test_view_controller_source_backed_multi_source_exact_submit())
+	return 1;
+    if (test_view_controller_source_backed_partial_ready_submit())
 	return 1;
     if (test_view_controller_lod_submit_and_apply())
 	return 1;

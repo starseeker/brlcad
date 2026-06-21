@@ -11,8 +11,6 @@
 #include "qtcad/QgObolMeasure.h"
 
 #include "bg/line_layer.h"
-#include "brlobol/database_source.h"
-#include "brlobol/lod_service.h"
 #include "brlobol/measure_action.h"
 #include "brlobol/view_controller.h"
 #include "bu/color.h"
@@ -28,74 +26,43 @@ QgObolMeasureGeometryRecord::QgObolMeasureGeometryRecord(void) :
     shapeCount(0),
     segmentCount(0),
     triangleCount(0),
+    submittedSourceRequestCount(0),
     surfaceArea(0.0f),
     totalLength(0.0f),
     boundsMin(0.0f, 0.0f, 0.0f),
     boundsMax(0.0f, 0.0f, 0.0f),
     boundsValid(false),
+    sourceFullDetailPending(false),
     hasNearestPrimitive(false),
     nearestPrimitiveKind(NONE),
     nearestPrimitiveIndex(-1),
+    nearestFaceVertexIndexA(-1),
+    nearestFaceVertexIndexB(-1),
+    nearestFaceVertexIndexC(-1),
+    nearestFaceEdgeSlot(-1),
+    nearestFaceEdgeVertexIndexA(-1),
+    nearestFaceEdgeVertexIndexB(-1),
+    nearestFaceVertexSlot(-1),
+    nearestFaceVertexIndex(-1),
+    nearestEditIntentId(),
+    nearestEditIntentRole(),
     nearestPath(),
     nearestPoint(0.0f, 0.0f, 0.0f),
     nearestDistance(0.0f)
 {
 }
 
-static SoBRLDatabaseSource *
-qg_obol_measure_first_database_source(BRLObolViewController *controller)
-{
-    if (!controller)
-	return NULL;
-
-    for (int i = 0; i < controller->getDatabaseSourceCount(); i++) {
-	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
-	if (source && source->getDatabase())
-	    return source;
-    }
-
-    return NULL;
-}
-
-static void
+static int
 qg_obol_measure_consume_source_full_detail(BRLObolViewController *controller,
 	SoBRLMeasureAction &measureAction)
 {
     if (!controller)
-	return;
+	return 0;
 
-    const int requestCount =
-	measureAction.getSourceBackedFullDetailRequestCount();
-    if (requestCount <= 0)
-	return;
-
-    std::vector<BRLObolLodRequest> expectedRequests;
-    for (int i = 0; i < requestCount; i++) {
-	BRLObolLodRequest request;
-	if (measureAction.makeSourceBackedFullDetailLodRequest(i, request))
-	    expectedRequests.push_back(request);
-    }
-    if (expectedRequests.empty())
-	return;
-
-    BRLObolLodService *service = controller->getLodService();
-    if (!service || !service->isRunning())
-	return;
-
-    std::vector<BRLObolLodResult> sourceResults;
-    service->drainMatchingResults(sourceResults, expectedRequests);
-    if (!sourceResults.empty()) {
-	(void)measureAction.consumeSourceBackedFullDetailResults(sourceResults);
-	return;
-    }
-
-    SoBRLDatabaseSource *source =
-	qg_obol_measure_first_database_source(controller);
-    if (source)
-	(void)measureAction.submitSourceBackedFullDetailRequests(service, 0,
-		source->getDatabase(), NULL,
-		controller->getMaxExactFullDetailFaceCount(),
-		controller->getMaxExactFullDetailPointCount());
+    int submitted = 0;
+    (void)controller->consumeMeasureSourceFullDetail(measureAction, 0,
+	    &submitted);
+    return submitted;
 }
 
 static void
@@ -121,6 +88,26 @@ qg_obol_measure_record_from_action(const SoBRLMeasureAction &measureAction,
 	    static_cast<int>(measureAction.getNearestPrimitiveKind());
 	record.nearestPrimitiveIndex =
 	    measureAction.getNearestPrimitiveIndex();
+	record.nearestFaceVertexIndexA =
+	    measureAction.getNearestFaceVertexIndexA();
+	record.nearestFaceVertexIndexB =
+	    measureAction.getNearestFaceVertexIndexB();
+	record.nearestFaceVertexIndexC =
+	    measureAction.getNearestFaceVertexIndexC();
+	record.nearestFaceEdgeSlot =
+	    measureAction.getNearestFaceEdgeSlot();
+	record.nearestFaceEdgeVertexIndexA =
+	    measureAction.getNearestFaceEdgeVertexIndexA();
+	record.nearestFaceEdgeVertexIndexB =
+	    measureAction.getNearestFaceEdgeVertexIndexB();
+	record.nearestFaceVertexSlot =
+	    measureAction.getNearestFaceVertexSlot();
+	record.nearestFaceVertexIndex =
+	    measureAction.getNearestFaceVertexIndex();
+	record.nearestEditIntentId =
+	    measureAction.getNearestEditIntentId().getString();
+	record.nearestEditIntentRole =
+	    measureAction.getNearestEditIntentRole().getString();
 	record.nearestPath = measureAction.getNearestPath().getString();
 	record.nearestPoint = measureAction.getNearestPoint();
 	record.nearestDistance = measureAction.getNearestDistance();
@@ -163,7 +150,10 @@ qg_obol_measure_geometry_full_detail(QgView *display,
     if (query)
 	measureAction.setQueryPoint(*query);
     measureAction.apply(controller->getViewport()->getRoot());
-    qg_obol_measure_consume_source_full_detail(controller, measureAction);
+    record.submittedSourceRequestCount =
+	qg_obol_measure_consume_source_full_detail(controller, measureAction);
+    record.sourceFullDetailPending =
+	record.submittedSourceRequestCount > 0;
 
     if (measureAction.getShapeCount() <= 0 &&
 	    measureAction.getSegmentCount() <= 0 &&

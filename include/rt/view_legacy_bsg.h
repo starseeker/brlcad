@@ -34,6 +34,12 @@
 __BEGIN_DECLS
 
 struct bsg_view;
+struct bsg_adc_state;
+struct bsg_axes;
+struct bsg_grid_state;
+struct bsg_interactive_rect_state;
+struct bsg_other_state;
+struct bsg_params_state;
 struct rt_mesh_lod;
 
 typedef void (*rt_view_bounds_update_callback_bsg_t)(struct bsg_view *);
@@ -47,8 +53,121 @@ rt_view_width_from_bsg(const struct bsg_view *v);
 RT_EXPORT extern int
 rt_view_height_from_bsg(const struct bsg_view *v);
 
+RT_EXPORT extern fastf_t
+rt_view_radius_from_bsg(const struct bsg_view *v);
+
 RT_EXPORT extern int
 rt_view_dimensions_set_bsg(struct bsg_view *v, int width, int height);
+
+RT_EXPORT extern int
+rt_view_screen_to_view_from_bsg(fastf_t *fx,
+				fastf_t *fy,
+				struct bsg_view *v,
+				fastf_t x,
+				fastf_t y);
+
+RT_EXPORT extern int
+rt_view_screen_point_from_bsg(point_t point,
+			      struct bsg_view *v,
+			      fastf_t x,
+			      fastf_t y);
+
+RT_EXPORT extern int
+rt_view_interactive_rect_from_bsg(struct bsg_interactive_rect_state *record,
+				  const struct bsg_view *v);
+
+RT_EXPORT extern int
+rt_view_interactive_rect_set_bsg(struct bsg_view *v,
+				 const struct bsg_interactive_rect_state *record);
+
+RT_EXPORT extern int
+rt_view_adc_from_bsg(struct bsg_adc_state *record,
+		     const struct bsg_view *v);
+
+RT_EXPORT extern int
+rt_view_adc_set_bsg(struct bsg_view *v,
+		    const struct bsg_adc_state *record);
+
+RT_EXPORT extern int
+rt_view_grid_from_bsg(struct bsg_grid_state *record,
+		      const struct bsg_view *v);
+
+RT_EXPORT extern int
+rt_view_grid_set_bsg(struct bsg_view *v,
+		     const struct bsg_grid_state *record);
+
+RT_EXPORT extern int
+rt_view_model_axes_from_bsg(struct bsg_axes *record,
+			    const struct bsg_view *v);
+
+RT_EXPORT extern int
+rt_view_model_axes_set_bsg(struct bsg_view *v,
+			   const struct bsg_axes *record);
+
+RT_EXPORT extern int
+rt_view_view_axes_from_bsg(struct bsg_axes *record,
+			   const struct bsg_view *v);
+
+RT_EXPORT extern int
+rt_view_view_axes_set_bsg(struct bsg_view *v,
+			  const struct bsg_axes *record);
+
+RT_EXPORT extern int
+rt_view_center_dot_from_bsg(struct bsg_other_state *record,
+			    const struct bsg_view *v);
+
+RT_EXPORT extern int
+rt_view_center_dot_set_bsg(struct bsg_view *v,
+			   const struct bsg_other_state *record);
+
+RT_EXPORT extern int
+rt_view_scale_overlay_from_bsg(struct bsg_other_state *record,
+			       const struct bsg_view *v);
+
+RT_EXPORT extern int
+rt_view_scale_overlay_set_bsg(struct bsg_view *v,
+			      const struct bsg_other_state *record);
+
+RT_EXPORT extern int
+rt_view_params_from_bsg(struct bsg_params_state *record,
+			const struct bsg_view *v);
+
+RT_EXPORT extern int
+rt_view_params_set_bsg(struct bsg_view *v,
+		       const struct bsg_params_state *record);
+
+RT_EXPORT extern int
+rt_view_refresh_request_bsg(struct bsg_view *v, uint32_t flags);
+
+RT_EXPORT extern int
+rt_view_refresh_dirty_from_bsg(const struct bsg_view *v);
+
+RT_EXPORT extern uint32_t
+rt_view_refresh_consume_bsg(struct bsg_view *v);
+
+RT_EXPORT extern int
+rt_view_refresh_complete_bsg(struct bsg_view *v);
+
+RT_EXPORT extern int
+rt_view_refresh_enabled_from_bsg(const struct bsg_view *v);
+
+RT_EXPORT extern int
+rt_view_refresh_enabled_set_bsg(struct bsg_view *v, int enabled);
+
+RT_EXPORT extern int
+rt_view_refresh_suppressed_from_bsg(const struct bsg_view *v);
+
+RT_EXPORT extern int
+rt_view_refresh_suppress_begin_bsg(struct bsg_view *v);
+
+RT_EXPORT extern int
+rt_view_refresh_suppress_end_bsg(struct bsg_view *v);
+
+RT_EXPORT extern int
+rt_view_refresh_drawn_count_from_bsg(const struct bsg_view *v);
+
+RT_EXPORT extern int
+rt_view_refresh_drawn_count_set_bsg(struct bsg_view *v, int count);
 
 RT_EXPORT extern int
 rt_view_orientation_quat_from_bsg(quat_t orientation,

@@ -47,6 +47,7 @@ extern "C" {
 #include "bsg/field.h"
 #include "raytrace.h"
 #include "ged/bsg_ged_draw.h"
+#include "rt/view_legacy_bsg.h"
 }
 #include "./ged_view.h"
 #include "../ged_private.h"
@@ -614,7 +615,7 @@ _objs_cmd_update(void *bs, int argc, const char **argv)
 	}
 	v->gv_mouse_x = x;
 	v->gv_mouse_y = y;
-	bsg_screen_pt(&v->gv_point, x, y, v);
+	rt_view_screen_point_from_bsg(v->gv_point, v, x, y);
     }
 
     bsg_feature_ref ref = bsg_feature_find(gd->cv, gd->vobj);

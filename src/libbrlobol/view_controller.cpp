@@ -8,12 +8,16 @@
 #include "common.h"
 
 #include "brlobol/edit_preview.h"
+#include "brlobol/export_action.h"
 #include "brlobol/hud_label_overlay.h"
 #include "brlobol/line_layer_overlay.h"
 #include "brlobol/lod_service.h"
 #include "brlobol/lod_update_action.h"
+#include "brlobol/measure_action.h"
 #include "brlobol/mesh_lod_submit_action.h"
 #include "brlobol/mesh_residency_action.h"
+#include "brlobol/pick_detail.h"
+#include "brlobol/snap_action.h"
 #include "brlobol/view_controller.h"
 #include "raytrace.h"
 #include "rt/view.h"
@@ -31,6 +35,326 @@
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoOrthographicCamera.h>
 #include <Inventor/nodes/SoPerspectiveCamera.h>
+
+static const char *controller_database_id(const struct db_i *dbip);
+
+static SbString
+rt_pick_result_path(const BRLObolRtPickResult &pick)
+{
+    return pick.detail.getPath();
+}
+
+static SbBool
+rt_pick_result_path_recorded(
+	const std::vector<BRLObolRtPickResult> &results,
+	const BRLObolRtPickResult &candidate)
+{
+    const SbString candidatePath = rt_pick_result_path(candidate);
+    if (candidatePath.getLength() == 0)
+	return FALSE;
+
+    for (size_t i = 0; i < results.size(); i++) {
+	if (strcmp(rt_pick_result_path(results[i]).getString(),
+		candidatePath.getString()) == 0)
+	    return TRUE;
+    }
+
+    return FALSE;
+}
+
+static void
+insert_rt_pick_result(std::vector<BRLObolRtPickResult> &results,
+	const BRLObolRtPickResult &pick,
+	SbBool pickAll)
+{
+    if (pickAll) {
+	std::vector<BRLObolRtPickResult>::iterator it = results.begin();
+	while (it != results.end() && it->distance <= pick.distance)
+	    ++it;
+	results.insert(it, pick);
+	return;
+    }
+
+    if (results.empty() || pick.distance < results[0].distance)
+	results.assign(1, pick);
+}
+
+static const char *
+controller_path_skip_slashes(const char *path)
+{
+    if (!path)
+	return "";
+    while (*path == '/')
+	path++;
+    return path;
+}
+
+static const char *
+controller_path_leaf(const char *path)
+{
+    const char *clean = controller_path_skip_slashes(path);
+    const char *slash = strrchr(clean, '/');
+    return slash && slash[1] ? slash + 1 : clean;
+}
+
+static SbBool
+controller_path_contains_request(const char *sourcePath,
+	const char *requestPath)
+{
+    const char *source = controller_path_skip_slashes(sourcePath);
+    const char *request = controller_path_skip_slashes(requestPath);
+    if (!source[0] || !request[0])
+	return FALSE;
+
+    size_t sourceLen = strlen(source);
+    if (strncmp(request, source, sourceLen) != 0)
+	return FALSE;
+
+    return request[sourceLen] == '\0' || request[sourceLen] == '/' ?
+	TRUE : FALSE;
+}
+
+static SbBool
+controller_source_matches_request(SoBRLDatabaseSource *source,
+	const BRLObolSourceMeshRequest &request)
+{
+    if (!source)
+	return FALSE;
+
+    const char *sourcePath = source->path.getValue().getString();
+    if (controller_path_contains_request(sourcePath,
+	    request.path.getString()))
+	return TRUE;
+
+    if (request.path.getLength() > 0)
+	return FALSE;
+
+    const char *sourceName = request.sourceName.getString();
+    if (!sourceName || !sourceName[0])
+	return FALSE;
+
+    const char *cleanSourcePath = controller_path_skip_slashes(sourcePath);
+    return strcmp(sourceName, cleanSourcePath) == 0 ||
+	strcmp(sourceName, controller_path_leaf(sourcePath)) == 0 ? TRUE :
+	FALSE;
+}
+
+static SoBRLDatabaseSource *
+controller_database_source_for_request(BRLObolViewController *controller,
+	const BRLObolSourceMeshRequest &request)
+{
+    SoBRLDatabaseSource *singleSource = NULL;
+    SoBRLDatabaseSource *matchedSource = NULL;
+    int sourceCountWithDatabase = 0;
+    int matchedSourceCount = 0;
+
+    if (!controller)
+	return NULL;
+
+    for (int i = 0; i < controller->getDatabaseSourceCount(); i++) {
+	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
+	if (!source || !source->getDatabase())
+	    continue;
+
+	sourceCountWithDatabase++;
+	if (!singleSource)
+	    singleSource = source;
+
+	if (controller_source_matches_request(source, request)) {
+	    matchedSource = source;
+	    matchedSourceCount++;
+	}
+    }
+
+    if (matchedSourceCount == 1)
+	return matchedSource;
+    if (matchedSourceCount > 1)
+	return NULL;
+
+    return sourceCountWithDatabase == 1 ? singleSource : NULL;
+}
+
+static int
+controller_database_source_count(BRLObolViewController *controller)
+{
+    int count = 0;
+
+    if (!controller)
+	return 0;
+
+    for (int i = 0; i < controller->getDatabaseSourceCount(); i++) {
+	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
+	if (source && source->getDatabase())
+	    count++;
+    }
+
+    return count;
+}
+
+static void
+controller_source_request_template(BRLObolLodRequest &requestTemplate,
+	SoBRLDatabaseSource *source)
+{
+    requestTemplate.clear();
+    if (!source)
+	return;
+
+    requestTemplate.databaseId =
+	controller_database_id(source->getDatabase());
+    requestTemplate.sourceRevision = source->sourceRevision.getValue();
+}
+
+static SbBool
+controller_consume_one_source_full_detail_result(
+	SoBRLExportAction &action,
+	const BRLObolSourceMeshRequest &sourceRequest,
+	const BRLObolLodResult &result)
+{
+    return action.appendSourceBackedFullDetailResult(sourceRequest, result);
+}
+
+static SbBool
+controller_consume_one_source_full_detail_result(
+	SoBRLMeasureAction &action,
+	const BRLObolSourceMeshRequest &sourceRequest,
+	const BRLObolLodResult &result)
+{
+    return action.consumeSourceBackedFullDetailResult(sourceRequest, result);
+}
+
+static SbBool
+controller_consume_one_source_full_detail_result(
+	SoBRLSnapAction &action,
+	const BRLObolSourceMeshRequest &sourceRequest,
+	const BRLObolLodResult &result)
+{
+    return action.consumeSourceBackedFullDetailResult(sourceRequest, result);
+}
+
+template <typename Action>
+static int
+controller_consume_source_full_detail(BRLObolViewController *controller,
+	Action &action,
+	uint64_t generation,
+	int *submittedRequestCount)
+{
+    if (submittedRequestCount)
+	*submittedRequestCount = 0;
+
+    if (!controller)
+	return 0;
+
+    const int requestCount =
+	action.getSourceBackedFullDetailRequestCount();
+    if (requestCount <= 0)
+	return 0;
+
+    BRLObolLodService *service = controller->getLodService();
+    if (!service || !service->isRunning())
+	return 0;
+
+    std::vector<BRLObolLodRequest> expectedRequests;
+    std::vector<BRLObolSourceMeshRequest> expectedSourceRequests;
+    std::vector<int> expectedRequestIndices;
+    std::vector<BRLObolSourceMeshRequest> submitSourceRequests;
+    std::vector<SoBRLDatabaseSource *> requestSources;
+    std::vector<int> submitRequestIndices;
+    const int databaseSourceCount = controller_database_source_count(controller);
+    for (int i = 0; i < requestCount; i++) {
+	const BRLObolSourceMeshRequest &sourceRequest =
+	    action.getSourceBackedFullDetailRequest(i);
+	SoBRLDatabaseSource *source =
+	    controller_database_source_for_request(controller, sourceRequest);
+	if (source) {
+	    BRLObolLodRequest requestTemplate;
+	    controller_source_request_template(requestTemplate, source);
+
+	    BRLObolLodRequest request;
+	    if (action.makeSourceBackedFullDetailLodRequest(i, request,
+		    &requestTemplate)) {
+		expectedRequests.push_back(request);
+		expectedSourceRequests.push_back(sourceRequest);
+		expectedRequestIndices.push_back(i);
+		submitSourceRequests.push_back(sourceRequest);
+		requestSources.push_back(source);
+		submitRequestIndices.push_back(i);
+	    }
+	}
+
+	if (databaseSourceCount <= 1) {
+	    BRLObolLodRequest request;
+	    if (action.makeSourceBackedFullDetailLodRequest(i, request)) {
+		expectedRequests.push_back(request);
+		expectedSourceRequests.push_back(sourceRequest);
+		expectedRequestIndices.push_back(i);
+	    }
+	}
+    }
+    if (expectedRequests.empty() && submitSourceRequests.empty())
+	return 0;
+
+    std::vector<SbBool> requestMatched(
+	    static_cast<size_t>(requestCount), FALSE);
+    int consumed = 0;
+    if (!expectedRequests.empty()) {
+	std::vector<BRLObolLodResult> sourceResults;
+	service->drainMatchingResults(sourceResults, expectedRequests);
+	if (!sourceResults.empty()) {
+	    std::vector<SbBool> used(sourceResults.size(), FALSE);
+	    std::vector<SbBool> requestConsumed(
+		    static_cast<size_t>(requestCount), FALSE);
+
+	    for (size_t i = 0; i < expectedRequests.size(); i++) {
+		const int requestIndex = expectedRequestIndices[i];
+		if (requestIndex < 0 ||
+			static_cast<size_t>(requestIndex) >=
+			requestConsumed.size() ||
+			requestConsumed[static_cast<size_t>(requestIndex)])
+		    continue;
+
+		for (size_t j = 0; j < sourceResults.size(); j++) {
+		    if (used[j] ||
+			    !brlobol_lod_result_matches_request(
+				sourceResults[j], expectedRequests[i]))
+			continue;
+
+		    used[j] = TRUE;
+		    requestMatched[static_cast<size_t>(requestIndex)] =
+			TRUE;
+		    if (controller_consume_one_source_full_detail_result(action,
+			    expectedSourceRequests[i], sourceResults[j])) {
+			requestConsumed[static_cast<size_t>(requestIndex)] =
+			    TRUE;
+			consumed++;
+		    }
+		    break;
+		}
+	    }
+	}
+    }
+
+    int submitted = 0;
+    for (size_t i = 0; i < submitSourceRequests.size(); i++) {
+	const int requestIndex = submitRequestIndices[i];
+	if (requestIndex >= 0 &&
+		static_cast<size_t>(requestIndex) < requestMatched.size() &&
+		requestMatched[static_cast<size_t>(requestIndex)])
+	    continue;
+
+	BRLObolLodRequest requestTemplate;
+	controller_source_request_template(requestTemplate, requestSources[i]);
+	if (brlobol_lod_submit_rt_source_full_detail_request(service,
+		generation, submitSourceRequests[i],
+		requestSources[i]->getDatabase(), &requestTemplate,
+		controller->getMaxExactFullDetailFaceCount(),
+		controller->getMaxExactFullDetailPointCount()) != 0)
+	    submitted++;
+    }
+    if (submittedRequestCount)
+	*submittedRequestCount = submitted;
+
+    return consumed;
+}
 
 BRLObolViewController::BRLObolViewController(void) :
     sceneController(),
@@ -127,6 +451,7 @@ BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
 BRLObolViewController::~BRLObolViewController(void)
 {
     this->setLodService(NULL);
+    this->clearRtPickCaches();
     this->setCamera(NULL);
     this->setSceneRoot(NULL);
     this->renderManager->setSceneGraph(NULL);
@@ -139,6 +464,7 @@ BRLObolViewController::~BRLObolViewController(void)
 void
 BRLObolViewController::setSceneRoot(SoNode *root)
 {
+    this->clearRtPickCaches();
     this->sceneController.setSceneRoot(root);
     this->viewport->setSceneGraph(root);
     this->syncRenderManager();
@@ -540,6 +866,300 @@ uint64_t
 BRLObolViewController::getMaxExactFullDetailPointCount(void) const
 {
     return this->maxExactFullDetailPointCount;
+}
+
+int
+BRLObolViewController::consumeExportSourceFullDetail(
+	SoBRLExportAction &exportAction,
+	uint64_t generation,
+	int *submittedRequestCount)
+{
+    return controller_consume_source_full_detail(this, exportAction,
+	    generation, submittedRequestCount);
+}
+
+int
+BRLObolViewController::consumeMeasureSourceFullDetail(
+	SoBRLMeasureAction &measureAction,
+	uint64_t generation,
+	int *submittedRequestCount)
+{
+    return controller_consume_source_full_detail(this, measureAction,
+	    generation, submittedRequestCount);
+}
+
+int
+BRLObolViewController::consumeSnapSourceFullDetail(
+	SoBRLSnapAction &snapAction,
+	uint64_t generation,
+	int *submittedRequestCount)
+{
+    return controller_consume_source_full_detail(this, snapAction,
+	    generation, submittedRequestCount);
+}
+
+void
+BRLObolViewController::clearRtPickCaches(void)
+{
+    for (size_t i = 0; i < this->rtPickCaches.size(); i++)
+	delete this->rtPickCaches[i];
+    this->rtPickCaches.clear();
+    this->rtPickCachePaths.clear();
+    this->rtPickCacheDatabases.clear();
+    this->rtPickCacheSourceRevisions.clear();
+}
+
+int
+BRLObolViewController::prepareRtPickCaches(void)
+{
+    std::vector<SbString> sourcePaths;
+    std::vector<struct db_i *> sourceDatabases;
+    std::vector<uint32_t> sourceRevisions;
+
+    for (int i = 0; i < this->getDatabaseSourceCount(); i++) {
+	SoBRLDatabaseSource *source = this->getDatabaseSource(i);
+	if (!source || !source->getDatabase() ||
+		source->path.getValue().getLength() == 0)
+	    continue;
+	sourcePaths.push_back(source->path.getValue());
+	sourceDatabases.push_back(source->getDatabase());
+	sourceRevisions.push_back(
+		static_cast<uint32_t>(source->sourceRevision.getValue()));
+    }
+
+    SbBool sameSignature =
+	sourcePaths.size() == this->rtPickCachePaths.size() &&
+	sourceDatabases.size() == this->rtPickCacheDatabases.size() &&
+	sourceRevisions.size() == this->rtPickCacheSourceRevisions.size() &&
+	this->rtPickCaches.size() == this->rtPickCachePaths.size();
+    if (sameSignature) {
+	for (size_t i = 0; i < sourcePaths.size(); i++) {
+	    if (sourceDatabases[i] != this->rtPickCacheDatabases[i] ||
+		    sourceRevisions[i] != this->rtPickCacheSourceRevisions[i] ||
+		    strcmp(sourcePaths[i].getString(),
+			this->rtPickCachePaths[i].getString()) != 0 ||
+		    !this->rtPickCaches[i] ||
+		    !this->rtPickCaches[i]->isReady()) {
+		sameSignature = FALSE;
+		break;
+	    }
+	}
+    }
+
+    if (sameSignature)
+	return static_cast<int>(this->rtPickCaches.size());
+
+    this->clearRtPickCaches();
+    for (size_t i = 0; i < sourcePaths.size(); i++) {
+	std::vector<SbString> objectPaths;
+	objectPaths.push_back(sourcePaths[i]);
+
+	BRLObolRtPickCache *cache = new BRLObolRtPickCache;
+	if (!cache->prepare(sourceDatabases[i], objectPaths)) {
+	    delete cache;
+	    continue;
+	}
+
+	this->rtPickCaches.push_back(cache);
+	this->rtPickCachePaths.push_back(sourcePaths[i]);
+	this->rtPickCacheDatabases.push_back(sourceDatabases[i]);
+	this->rtPickCacheSourceRevisions.push_back(sourceRevisions[i]);
+    }
+
+    return static_cast<int>(this->rtPickCaches.size());
+}
+
+int
+BRLObolViewController::getRtPickCacheCount(void) const
+{
+    return static_cast<int>(this->rtPickCaches.size());
+}
+
+BRLObolRtPickCache *
+BRLObolViewController::getRtPickCache(int index) const
+{
+    if (index < 0 || static_cast<size_t>(index) >= this->rtPickCaches.size())
+	return NULL;
+    return this->rtPickCaches[static_cast<size_t>(index)];
+}
+
+uint32_t
+BRLObolViewController::getRtPickCacheSourceRevision(int index) const
+{
+    if (index < 0 ||
+	    static_cast<size_t>(index) >=
+	    this->rtPickCacheSourceRevisions.size())
+	return 0;
+    return this->rtPickCacheSourceRevisions[static_cast<size_t>(index)];
+}
+
+int
+BRLObolViewController::pickSourceMeshExactRay(
+	BRLObolSourceMeshPickResult &pick,
+	const SbVec3f &rayOrigin,
+	const SbVec3f &rayDirection,
+	uint64_t generation,
+	int *submittedRequestCount)
+{
+    pick.clear();
+    if (submittedRequestCount)
+	*submittedRequestCount = 0;
+
+    if (!this->viewport || !this->viewport->getRoot())
+	return 0;
+
+    BRLObolLodService *service = this->getLodService();
+    if (!service || !service->isRunning())
+	return 0;
+
+    SoBRLSourceMeshPickAction sourcePickAction;
+    sourcePickAction.setRay(rayOrigin, rayDirection);
+    sourcePickAction.apply(this->viewport->getRoot());
+
+    const int requestCount =
+	sourcePickAction.getSourceBackedFullDetailRequestCount();
+    if (requestCount <= 0)
+	return 0;
+
+    std::vector<BRLObolLodRequest> expectedRequests;
+    std::vector<BRLObolSourceMeshRequest> expectedSourceRequests;
+    std::vector<int> expectedRequestIndices;
+    std::vector<BRLObolSourceMeshRequest> submitSourceRequests;
+    std::vector<SoBRLDatabaseSource *> requestSources;
+    std::vector<int> submitRequestIndices;
+    const int databaseSourceCount = controller_database_source_count(this);
+    for (int i = 0; i < requestCount; i++) {
+	const BRLObolSourceMeshRequest &sourceRequest =
+	    sourcePickAction.getSourceBackedFullDetailRequest(i);
+	SoBRLDatabaseSource *source =
+	    controller_database_source_for_request(this, sourceRequest);
+	if (source) {
+	    BRLObolLodRequest requestTemplate;
+	    controller_source_request_template(requestTemplate, source);
+
+	    BRLObolLodRequest request;
+	    if (sourcePickAction.makeSourceBackedFullDetailLodRequest(i,
+		    request, &requestTemplate)) {
+		expectedRequests.push_back(request);
+		expectedSourceRequests.push_back(sourceRequest);
+		expectedRequestIndices.push_back(i);
+		submitSourceRequests.push_back(sourceRequest);
+		requestSources.push_back(source);
+		submitRequestIndices.push_back(i);
+	    }
+	}
+
+	if (databaseSourceCount <= 1) {
+	    BRLObolLodRequest request;
+	    if (sourcePickAction.makeSourceBackedFullDetailLodRequest(i,
+		    request)) {
+		expectedRequests.push_back(request);
+		expectedSourceRequests.push_back(sourceRequest);
+		expectedRequestIndices.push_back(i);
+	    }
+	}
+    }
+    if (expectedRequests.empty() && submitSourceRequests.empty())
+	return 0;
+
+    std::vector<SbBool> requestMatched(
+	    static_cast<size_t>(requestCount), FALSE);
+    if (!expectedRequests.empty()) {
+	std::vector<BRLObolLodResult> sourceResults;
+	service->drainMatchingResults(sourceResults, expectedRequests);
+	if (!sourceResults.empty()) {
+	    std::vector<SbBool> used(sourceResults.size(), FALSE);
+	    std::vector<SbBool> requestConsumed(
+		    static_cast<size_t>(requestCount), FALSE);
+	    for (size_t i = 0; i < expectedRequests.size(); i++) {
+		const int requestIndex = expectedRequestIndices[i];
+		if (requestIndex < 0 ||
+			static_cast<size_t>(requestIndex) >=
+			requestConsumed.size() ||
+			requestConsumed[static_cast<size_t>(requestIndex)])
+		    continue;
+
+		for (size_t j = 0; j < sourceResults.size(); j++) {
+		    if (used[j] ||
+			    !brlobol_lod_result_matches_request(
+				sourceResults[j], expectedRequests[i]))
+			continue;
+
+		    used[j] = TRUE;
+		    requestMatched[static_cast<size_t>(requestIndex)] =
+			TRUE;
+		    BRLObolSourceMeshPickResult candidate;
+		    if (brlobol_pick_source_full_detail_result(candidate,
+			    expectedSourceRequests[i], sourceResults[j],
+			    sourcePickAction.getRayOrigin(),
+			    sourcePickAction.getRayDirection())) {
+			requestConsumed[static_cast<size_t>(requestIndex)] =
+			    TRUE;
+			if (!pick.hit || candidate.distance < pick.distance)
+			    pick = candidate;
+		    }
+		    break;
+		}
+	    }
+	}
+    }
+
+    int submitted = 0;
+    for (size_t i = 0; i < submitSourceRequests.size(); i++) {
+	const int requestIndex = submitRequestIndices[i];
+	if (requestIndex >= 0 &&
+		static_cast<size_t>(requestIndex) < requestMatched.size() &&
+		requestMatched[static_cast<size_t>(requestIndex)])
+	    continue;
+
+	BRLObolLodRequest requestTemplate;
+	controller_source_request_template(requestTemplate, requestSources[i]);
+	if (brlobol_lod_submit_rt_source_full_detail_request(service,
+		generation, submitSourceRequests[i],
+		requestSources[i]->getDatabase(), &requestTemplate,
+		this->getMaxExactFullDetailFaceCount(),
+		this->getMaxExactFullDetailPointCount()) != 0)
+	    submitted++;
+    }
+    if (submittedRequestCount)
+	*submittedRequestCount = submitted;
+
+    if (pick.hit)
+	return 1;
+    pick.clear();
+    return 0;
+}
+
+int
+BRLObolViewController::pickRtExactRay(
+	std::vector<BRLObolRtPickResult> &results,
+	const SbVec3f &rayOrigin,
+	const SbVec3f &rayDirection,
+	SbBool pickAll)
+{
+    results.clear();
+
+    SbVec3f direction = rayDirection;
+    if (direction.length() <= 0.0f)
+	return 0;
+    direction.normalize();
+
+    const int cacheCount = this->prepareRtPickCaches();
+    for (int i = 0; i < cacheCount; i++) {
+	BRLObolRtPickCache *cache = this->getRtPickCache(i);
+	if (!cache || !cache->isReady())
+	    continue;
+
+	BRLObolRtPickResult rtPick;
+	if (!cache->pickRay(rtPick, rayOrigin, direction) || !rtPick.hit)
+	    continue;
+	if (rt_pick_result_path_recorded(results, rtPick))
+	    continue;
+
+	insert_rt_pick_result(results, rtPick, pickAll ? TRUE : FALSE);
+    }
+
+    return static_cast<int>(results.size());
 }
 
 void
@@ -1086,6 +1706,21 @@ BRLObolViewController::replaceEditPreview(const char *previewId,
 	uint32_t sourceRevision,
 	uint32_t inputsRevision)
 {
+    return this->replaceEditPreviewWithIntent(previewId, identity, NULL, NULL,
+	    points, commands, count, sourceRevision, inputsRevision);
+}
+
+int
+BRLObolViewController::replaceEditPreviewWithIntent(const char *previewId,
+	const char *identity,
+	const char *editIntentId,
+	const char *editIntentRole,
+	const SbVec3f *points,
+	const int32_t *commands,
+	int count,
+	uint32_t sourceRevision,
+	uint32_t inputsRevision)
+{
     if (!previewId || !previewId[0] || !points || !commands || count <= 0)
 	return -1;
 
@@ -1107,6 +1742,8 @@ BRLObolViewController::replaceEditPreview(const char *previewId,
 	inputsRevision = preview->inputsRevision.getValue() + 1;
 
     preview->previewId = previewId;
+    preview->setEditIntent(editIntentId ? editIntentId : "",
+	    editIntentRole ? editIntentRole : "preview");
     preview->sourceRevision = sourceRevision;
     preview->inputsRevision = inputsRevision;
     SoBRLVListShape *shape = preview->setLineSet(
@@ -1273,6 +1910,7 @@ BRLObolViewController::replaceDatabaseSource(const char *sourcePath,
     if (childIndex < 0)
 	group->addChild(source);
 
+    this->clearRtPickCaches();
     this->requestRender("database-source");
     return 1;
 }
@@ -1293,6 +1931,7 @@ BRLObolViewController::removeDatabaseSource(const char *sourcePath)
 	return 0;
 
     group->removeChild(childIndex);
+    this->clearRtPickCaches();
     this->requestRender("database-source");
     return 1;
 }
@@ -1313,8 +1952,10 @@ BRLObolViewController::clearDatabaseSources(void)
 	group->removeChild(i);
 	removed++;
     }
-    if (removed)
+    if (removed) {
+	this->clearRtPickCaches();
 	this->requestRender("database-source");
+    }
     return removed;
 }
 

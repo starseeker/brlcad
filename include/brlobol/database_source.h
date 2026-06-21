@@ -22,6 +22,7 @@
 
 class SoBRLVListShape;
 class SoBRLMeshShape;
+class SoBRLMaterialObject;
 class SoFieldSensor;
 class SoSensor;
 struct db_i;
@@ -100,6 +101,9 @@ public:
     SoBRLMeshShape *getRealizedMesh(void) const;
     SoBRLMeshShape *getRealizedMesh(int index) const;
     int getRealizedMeshCount(void) const;
+    SoBRLMaterialObject *getRealizedMaterialObject(void) const;
+    SoBRLMaterialObject *getRealizedMaterialObject(int index) const;
+    int getRealizedMaterialObjectCount(void) const;
 
 protected:
     virtual ~SoBRLDatabaseSource(void);

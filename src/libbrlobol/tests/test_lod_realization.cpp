@@ -149,6 +149,7 @@ static int
 test_rt_mesh_payload_copy(void)
 {
     point_t points[4];
+    vect_t normals[6];
     int faces[6] = {0, 1, 2, 0, 3, 1};
     struct rt_mesh_lod_data data;
     BRLObolLodMeshPayload payload;
@@ -158,16 +159,22 @@ test_rt_mesh_payload_copy(void)
     VSET(points[1], 2.0, 0.0, 0.0);
     VSET(points[2], 0.0, 2.0, 0.0);
     VSET(points[3], 0.0, 0.0, 2.0);
+    for (size_t i = 0; i < 6; i++)
+	VSET(normals[i], 0.0, 0.0, 1.0 + (fastf_t)i);
     data.faces = faces;
     data.face_count = 2;
     data.points = points;
     data.point_count = 4;
+    data.normals = normals;
+    data.normal_count = 6;
 
     if (!brlobol_lod_mesh_payload_from_rt_mesh_data(payload, data) ||
 	    !payload.isValid() ||
 	    payload.points.size() != 4 ||
+	    payload.normals.size() != 6 ||
 	    payload.coordIndex.size() != 6 ||
 	    payload.coordIndex[4] != 3 ||
+	    fabs((double)payload.normals[5][2] - 6.0) > 1.0e-6 ||
 	    fabs((double)payload.points[1][0] - 2.0) > 1.0e-6) {
 	printf("FAIL: RT mesh LoD payload copy\n");
 	return 1;
@@ -179,6 +186,26 @@ test_rt_mesh_payload_copy(void)
 	    !payload.points.empty() ||
 	    !payload.coordIndex.empty()) {
 	printf("FAIL: RT mesh LoD payload copy accepted invalid index\n");
+	return 1;
+    }
+
+    faces[5] = 1;
+    data.normal_count = 5;
+    if (brlobol_lod_mesh_payload_from_rt_mesh_data(payload, data) ||
+	    payload.isValid() ||
+	    !payload.points.empty() ||
+	    !payload.normals.empty() ||
+	    !payload.coordIndex.empty()) {
+	printf("FAIL: RT mesh LoD payload copy accepted invalid normals\n");
+	return 1;
+    }
+
+    data.normals = NULL;
+    data.normal_count = 0;
+    if (!brlobol_lod_mesh_payload_from_rt_mesh_data(payload, data) ||
+	    !payload.isValid() ||
+	    !payload.normals.empty()) {
+	printf("FAIL: RT mesh LoD payload copy rejected mesh without normals\n");
 	return 1;
     }
 

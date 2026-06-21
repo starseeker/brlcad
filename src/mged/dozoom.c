@@ -113,7 +113,7 @@ dozoom(struct mged_state *s, int which_eye)
      */
     struct mged_dm *save_dm_list = s->mged_curr_dm;
 
-    bsg_view_refresh_set_drawn_count(v, 0);
+    rt_view_refresh_drawn_count_set_bsg(v, 0);
 
     /* Keep v->dmp in sync with the active display manager so that
      * dm_draw_objs() can find the DM.  This must be done every frame
@@ -224,7 +224,7 @@ dozoom(struct mged_state *s, int which_eye)
 	ctx.np = &ndrawn;
 	ctx.frame_rev = v->gv_frame_rev;
 	ged_draw_foreach_shape_record(s->gedp, _mged_count_drawn_cb, &ctx);
-	bsg_view_refresh_set_drawn_count(v, ndrawn);
+	rt_view_refresh_drawn_count_set_bsg(v, ndrawn);
     }
 
     if (s->mged_curr_dm != save_dm_list) set_curr_dm(s, save_dm_list);

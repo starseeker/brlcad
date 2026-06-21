@@ -110,6 +110,22 @@ wait_for_settled(BRLObolLodService &service, size_t expectedResults)
     return 1;
 }
 
+static size_t
+provider_param_count(const BRLObolLodRequest &request, const char *name)
+{
+    size_t count = 0;
+
+    if (!name)
+	return 0;
+
+    for (size_t i = 0; i < request.providerParams.size(); i++) {
+	if (strcmp(request.providerParams[i].name.getString(), name) == 0)
+	    count++;
+    }
+
+    return count;
+}
+
 static int
 test_dependency_order_and_cache_write(void)
 {
@@ -868,6 +884,7 @@ static int
 make_provider_test_db(char *dbpath, size_t dbpath_len, struct db_i **dbip_out)
 {
     static const char *objname = "lod-provider.bot";
+    static const char *tri_objname = "lod-two-tri.bot";
     fastf_t vertices[12] = {
 	0.0, 0.0, 0.0,
 	1.0, 0.0, 0.0,
@@ -879,6 +896,18 @@ make_provider_test_db(char *dbpath, size_t dbpath_len, struct db_i **dbip_out)
 	0, 3, 1,
 	1, 3, 2,
 	2, 3, 0
+    };
+    fastf_t tri_vertices[18] = {
+	0.0, 0.0, 0.0,
+	1.0, 0.0, 0.0,
+	0.0, 1.0, 0.0,
+	10.0, 0.0, 0.0,
+	11.0, 0.0, 0.0,
+	10.0, 1.0, 0.0
+    };
+    int tri_faces[6] = {
+	0, 1, 2,
+	3, 4, 5
     };
 
     if (!dbpath || dbpath_len == 0 || !dbip_out)
@@ -914,6 +943,13 @@ make_provider_test_db(char *dbpath, size_t dbpath_len, struct db_i **dbip_out)
 	bu_file_delete(dbpath);
 	return 1;
     }
+    if (mk_bot(wdbp, tri_objname, RT_BOT_SOLID, RT_BOT_UNORIENTED, 0,
+	    6, 2, tri_vertices, tri_faces, NULL, NULL) != 0) {
+	printf("FAIL: LoD RT provider mk_bot disjoint triangles\n");
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
 
     *dbip_out = dbip;
     return 0;
@@ -933,11 +969,98 @@ check_source_full_detail_result(const BRLObolLodResult &result,
 	    !result.mesh.isValid() ||
 	    result.mesh.points.size() != 4 ||
 	    result.mesh.coordIndex.size() != 12 ||
+	    result.mesh.faceIndex.size() != 4 ||
+	    result.mesh.faceIndex[0] != 0 ||
+	    result.mesh.faceIndex[1] != 1 ||
+	    result.mesh.faceIndex[2] != 2 ||
+	    result.mesh.faceIndex[3] != 3 ||
+	    !result.mesh.vertexIndex.empty() ||
 	    !brlobol_lod_result_matches_request(result, request)) {
 	printf("FAIL: LoD RT source full-detail provider %s\n", label);
 	return 1;
     }
 
+    return 0;
+}
+
+static int
+test_active_request_duplicate_suppression(void)
+{
+    BRLObolLodService service;
+    DebugDelayTaskData data;
+
+    if (!service.start(1, TRUE)) {
+	printf("FAIL: LoD service did not start for active-request test\n");
+	return 1;
+    }
+
+    BRLObolLodTask task;
+    task.generation = service.beginGeneration();
+    task.request = make_request("/active-duplicate.bot");
+    task.realize = debug_delay_task;
+    task.realizeData = &data;
+    task.debugDelayMilliseconds = 80;
+
+    uint64_t firstId = service.submitIfNotActive(task);
+    if (firstId == 0 || !service.hasActiveRequest(task.request)) {
+	printf("FAIL: LoD service did not track active request identity\n");
+	service.stop();
+	return 1;
+    }
+
+    uint64_t duplicateId = service.submitIfNotActive(task);
+    if (duplicateId != 0) {
+	printf("FAIL: LoD service accepted duplicate active request\n");
+	service.stop();
+	return 1;
+    }
+
+    if (wait_for_settled(service, 1)) {
+	service.stop();
+	return 1;
+    }
+    if (service.hasActiveRequest(task.request)) {
+	printf("FAIL: LoD service retained active request after completion\n");
+	service.stop();
+	return 1;
+    }
+
+    std::vector<BRLObolLodResult> results;
+    if (service.drainResults(results) != 1 || results.size() != 1) {
+	printf("FAIL: LoD service duplicate suppression changed result count\n");
+	service.stop();
+	return 1;
+    }
+
+    uint64_t secondId = service.submitIfNotActive(task);
+    if (secondId == 0 || secondId == firstId ||
+	    !service.hasActiveRequest(task.request)) {
+	printf("FAIL: LoD service did not allow completed request resubmission\n");
+	service.stop();
+	return 1;
+    }
+    if (wait_for_settled(service, 1)) {
+	service.stop();
+	return 1;
+    }
+
+    results.clear();
+    if (service.drainResults(results) != 1 || results.size() != 1) {
+	printf("FAIL: LoD service completed-request resubmission did not publish result\n");
+	service.stop();
+	return 1;
+    }
+
+    {
+	std::lock_guard<std::mutex> lock(data.mutex);
+	if (data.calls != 2) {
+	    printf("FAIL: LoD service duplicate active request executed unexpectedly\n");
+	    service.stop();
+	    return 1;
+	}
+    }
+
+    service.stop();
     return 0;
 }
 
@@ -968,6 +1091,470 @@ test_rt_source_full_detail_provider_task(void)
     if (check_source_full_detail_result(directResult, request,
 	    "did not return direct BoT mesh result"))
 	ret = 1;
+
+    BRLObolLodRequest scopedRequest = request;
+    scopedRequest.addProviderParam("source_query.space", "source_local");
+    scopedRequest.addProviderParam("source_query.bounds",
+	    "0.7 0.15 -0.05 0.8 0.25 0.05");
+    scopedRequest.addProviderParam("source_query.tolerance", "0.05");
+    BRLObolLodResult scopedResult =
+	brlobol_rt_source_full_detail_provider_task(scopedRequest, &provider);
+    if (scopedResult.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
+	    scopedResult.resultKind != BRLOBOL_LOD_RESULT_FULL_DETAIL ||
+	    scopedResult.mesh.points.size() != 4 ||
+	    scopedResult.mesh.coordIndex.size() != 6 ||
+	    scopedResult.mesh.faceIndex.size() != 2 ||
+	    scopedResult.mesh.faceIndex[0] != 0 ||
+	    scopedResult.mesh.faceIndex[1] != 2 ||
+	    scopedResult.mesh.vertexIndex.size() != 4 ||
+	    scopedResult.mesh.vertexIndex[0] != 0 ||
+	    scopedResult.mesh.vertexIndex[1] != 1 ||
+	    scopedResult.mesh.vertexIndex[2] != 2 ||
+	    scopedResult.mesh.vertexIndex[3] != 3 ||
+	    scopedResult.counts.faceCount != 2 ||
+	    !brlobol_lod_result_matches_request(scopedResult, scopedRequest)) {
+	printf("FAIL: LoD RT source full-detail provider query bounds did not reduce returned face payload\n");
+	ret = 1;
+    }
+
+    BRLObolRtSourceFullDetailProvider scopedLimitProvider;
+    scopedLimitProvider.dbip = dbip;
+    scopedLimitProvider.validateSourceMetrics = TRUE;
+    scopedLimitProvider.maxFullDetailFaceCount = 2;
+    scopedLimitProvider.maxFullDetailPointCount = 4;
+    BRLObolLodResult scopedLimitedResult =
+	brlobol_rt_source_full_detail_provider_task(scopedRequest,
+		&scopedLimitProvider);
+    if (scopedLimitedResult.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
+	    scopedLimitedResult.resultKind != BRLOBOL_LOD_RESULT_FULL_DETAIL ||
+	    scopedLimitedResult.mesh.points.size() != 4 ||
+	    scopedLimitedResult.mesh.coordIndex.size() != 6 ||
+	    scopedLimitedResult.mesh.faceIndex.size() != 2 ||
+	    scopedLimitedResult.counts.faceCount != 2 ||
+	    scopedLimitedResult.counts.pointCount != 4 ||
+	    !brlobol_lod_result_matches_request(scopedLimitedResult,
+		scopedRequest)) {
+	printf("FAIL: LoD RT source full-detail provider scoped bounds limit should apply after payload reduction\n");
+	ret = 1;
+    }
+
+    BRLObolLodRequest emptyScopedRequest = request;
+    emptyScopedRequest.addProviderParam("source_query.space", "source_local");
+    emptyScopedRequest.addProviderParam("source_query.bounds",
+	    "5.0 5.0 5.0 5.1 5.1 5.1");
+    emptyScopedRequest.addProviderParam("source_query.tolerance", "0.05");
+    BRLObolLodResult emptyScopedResult =
+	brlobol_rt_source_full_detail_provider_task(emptyScopedRequest,
+		&provider);
+    if (emptyScopedResult.providerStatus != BRLOBOL_LOD_PROVIDER_FALLBACK ||
+	    emptyScopedResult.resultKind != BRLOBOL_LOD_RESULT_NONE ||
+	    emptyScopedResult.counts.faceCount != 0 ||
+	    emptyScopedResult.counts.pointCount != 0 ||
+	    emptyScopedResult.mesh.isValid() ||
+	    strcmp(emptyScopedResult.diagnostic.getString(),
+		"RT source full-detail provider scoped query matched no faces") != 0 ||
+	    !brlobol_lod_result_matches_request(emptyScopedResult,
+		emptyScopedRequest)) {
+	printf("FAIL: LoD RT source full-detail provider scoped bounds miss should not expand to whole-object payload\n");
+	ret = 1;
+    }
+
+    BRLObolLodRequest wrongSpaceBoundsRequest = request;
+    wrongSpaceBoundsRequest.addProviderParam("source_query.space", "world");
+    wrongSpaceBoundsRequest.addProviderParam("source_query.bounds",
+	    "0.7 0.15 -0.05 0.8 0.25 0.05");
+    wrongSpaceBoundsRequest.addProviderParam("source_query.tolerance",
+	    "0.05");
+    BRLObolLodResult wrongSpaceBoundsResult =
+	brlobol_rt_source_full_detail_provider_task(wrongSpaceBoundsRequest,
+		&provider);
+    if (wrongSpaceBoundsResult.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
+	    wrongSpaceBoundsResult.resultKind !=
+	    BRLOBOL_LOD_RESULT_FULL_DETAIL ||
+	    wrongSpaceBoundsResult.mesh.points.size() != 4 ||
+	    wrongSpaceBoundsResult.mesh.coordIndex.size() != 12 ||
+	    wrongSpaceBoundsResult.counts.faceCount != 4 ||
+	    wrongSpaceBoundsResult.counts.pointCount != 4 ||
+	    !brlobol_lod_result_matches_request(wrongSpaceBoundsResult,
+		wrongSpaceBoundsRequest)) {
+	printf("FAIL: LoD RT source full-detail provider should ignore non-source-local bounds when reducing payloads\n");
+	ret = 1;
+    }
+
+    BRLObolRtSourceFullDetailProvider wrongSpaceLimitProvider;
+    wrongSpaceLimitProvider.dbip = dbip;
+    wrongSpaceLimitProvider.validateSourceMetrics = TRUE;
+    wrongSpaceLimitProvider.maxFullDetailFaceCount = 2;
+    wrongSpaceLimitProvider.maxFullDetailPointCount = 4;
+    BRLObolLodResult wrongSpaceLimitedResult =
+	brlobol_rt_source_full_detail_provider_task(wrongSpaceBoundsRequest,
+		&wrongSpaceLimitProvider);
+    if (wrongSpaceLimitedResult.providerStatus !=
+	    BRLOBOL_LOD_PROVIDER_FALLBACK ||
+	    wrongSpaceLimitedResult.resultKind != BRLOBOL_LOD_RESULT_NONE ||
+	    wrongSpaceLimitedResult.mesh.isValid() ||
+	    strcmp(wrongSpaceLimitedResult.diagnostic.getString(),
+		"RT source full-detail provider request exceeds full-detail limits") != 0 ||
+	    !brlobol_lod_result_matches_request(wrongSpaceLimitedResult,
+		wrongSpaceBoundsRequest)) {
+	printf("FAIL: LoD RT source full-detail provider should not bypass whole-object limits for non-source-local bounds\n");
+	ret = 1;
+    }
+
+    BRLObolLodRequest malformedBoundsRequest = request;
+    malformedBoundsRequest.addProviderParam("source_query.space",
+	    "source_local");
+    malformedBoundsRequest.addProviderParam("source_query.bounds",
+	    "0.7 0.15 -0.05 0.8 0.25 0.05 trailing");
+    malformedBoundsRequest.addProviderParam("source_query.tolerance",
+	    "0.05");
+    BRLObolLodResult malformedBoundsResult =
+	brlobol_rt_source_full_detail_provider_task(malformedBoundsRequest,
+		&provider);
+    if (malformedBoundsResult.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
+	    malformedBoundsResult.resultKind !=
+	    BRLOBOL_LOD_RESULT_FULL_DETAIL ||
+	    malformedBoundsResult.mesh.points.size() != 4 ||
+	    malformedBoundsResult.mesh.coordIndex.size() != 12 ||
+	    malformedBoundsResult.counts.faceCount != 4 ||
+	    malformedBoundsResult.counts.pointCount != 4 ||
+	    !brlobol_lod_result_matches_request(malformedBoundsResult,
+		malformedBoundsRequest)) {
+	printf("FAIL: LoD RT source full-detail provider should ignore malformed source-local bounds when reducing payloads\n");
+	ret = 1;
+    }
+
+    BRLObolLodRequest malformedToleranceRequest = request;
+    malformedToleranceRequest.addProviderParam("source_query.space",
+	    "source_local");
+    malformedToleranceRequest.addProviderParam("source_query.bounds",
+	    "0.7 0.15 -0.05 0.8 0.25 0.05");
+    malformedToleranceRequest.addProviderParam("source_query.tolerance",
+	    "0.05 trailing");
+    BRLObolLodResult malformedToleranceLimitedResult =
+	brlobol_rt_source_full_detail_provider_task(malformedToleranceRequest,
+		&wrongSpaceLimitProvider);
+    if (malformedToleranceLimitedResult.providerStatus !=
+	    BRLOBOL_LOD_PROVIDER_FALLBACK ||
+	    malformedToleranceLimitedResult.resultKind !=
+	    BRLOBOL_LOD_RESULT_NONE ||
+	    malformedToleranceLimitedResult.mesh.isValid() ||
+	    strcmp(malformedToleranceLimitedResult.diagnostic.getString(),
+		"RT source full-detail provider request exceeds full-detail limits") != 0 ||
+	    !brlobol_lod_result_matches_request(
+		malformedToleranceLimitedResult, malformedToleranceRequest)) {
+	printf("FAIL: LoD RT source full-detail provider should not bypass whole-object limits for malformed source-local tolerance\n");
+	ret = 1;
+    }
+
+    BRLObolLodRequest duplicateSpaceBoundsRequest = request;
+    duplicateSpaceBoundsRequest.addProviderParam("source_query.space",
+	    "source_local");
+    duplicateSpaceBoundsRequest.addProviderParam("source_query.space",
+	    "source_local");
+    duplicateSpaceBoundsRequest.addProviderParam("source_query.bounds",
+	    "0.7 0.15 -0.05 0.8 0.25 0.05");
+    duplicateSpaceBoundsRequest.addProviderParam("source_query.tolerance",
+	    "0.05");
+    BRLObolLodResult duplicateSpaceBoundsResult =
+	brlobol_rt_source_full_detail_provider_task(
+		duplicateSpaceBoundsRequest, &provider);
+    if (duplicateSpaceBoundsResult.providerStatus !=
+	    BRLOBOL_LOD_PROVIDER_READY ||
+	    duplicateSpaceBoundsResult.resultKind !=
+	    BRLOBOL_LOD_RESULT_FULL_DETAIL ||
+	    duplicateSpaceBoundsResult.mesh.points.size() != 4 ||
+	    duplicateSpaceBoundsResult.mesh.coordIndex.size() != 12 ||
+	    duplicateSpaceBoundsResult.counts.faceCount != 4 ||
+	    duplicateSpaceBoundsResult.counts.pointCount != 4 ||
+	    !brlobol_lod_result_matches_request(duplicateSpaceBoundsResult,
+		duplicateSpaceBoundsRequest)) {
+	printf("FAIL: LoD RT source full-detail provider should ignore duplicate query-space params when reducing payloads\n");
+	ret = 1;
+    }
+
+    BRLObolLodRequest duplicateBoundsRequest = request;
+    duplicateBoundsRequest.addProviderParam("source_query.space",
+	    "source_local");
+    duplicateBoundsRequest.addProviderParam("source_query.bounds",
+	    "0.7 0.15 -0.05 0.8 0.25 0.05");
+    duplicateBoundsRequest.addProviderParam("source_query.bounds",
+	    "0.7 0.15 -0.05 0.8 0.25 0.05");
+    duplicateBoundsRequest.addProviderParam("source_query.tolerance",
+	    "0.05");
+    BRLObolLodResult duplicateBoundsLimitedResult =
+	brlobol_rt_source_full_detail_provider_task(duplicateBoundsRequest,
+		&wrongSpaceLimitProvider);
+    if (duplicateBoundsLimitedResult.providerStatus !=
+	    BRLOBOL_LOD_PROVIDER_FALLBACK ||
+	    duplicateBoundsLimitedResult.resultKind !=
+	    BRLOBOL_LOD_RESULT_NONE ||
+	    duplicateBoundsLimitedResult.mesh.isValid() ||
+	    strcmp(duplicateBoundsLimitedResult.diagnostic.getString(),
+		"RT source full-detail provider request exceeds full-detail limits") != 0 ||
+	    !brlobol_lod_result_matches_request(duplicateBoundsLimitedResult,
+		duplicateBoundsRequest)) {
+	printf("FAIL: LoD RT source full-detail provider should not bypass whole-object limits for duplicate bounds params\n");
+	ret = 1;
+    }
+
+    BRLObolLodRequest mixedScopedRequest = request;
+    mixedScopedRequest.addProviderParam("source_query.space",
+	    "source_local");
+    mixedScopedRequest.addProviderParam("source_query.bounds",
+	    "0.7 0.15 -0.05 0.8 0.25 0.05");
+    mixedScopedRequest.addProviderParam("source_query.tolerance", "0.05");
+    mixedScopedRequest.addProviderParam("source_query.ray.origin",
+	    "0.2 0.2 5.0");
+    mixedScopedRequest.addProviderParam("source_query.ray.direction",
+	    "0.0 0.0 -1.0");
+    BRLObolLodResult mixedScopedResult =
+	brlobol_rt_source_full_detail_provider_task(mixedScopedRequest,
+		&provider);
+    if (mixedScopedResult.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
+	    mixedScopedResult.resultKind != BRLOBOL_LOD_RESULT_FULL_DETAIL ||
+	    mixedScopedResult.mesh.points.size() != 4 ||
+	    mixedScopedResult.mesh.coordIndex.size() != 12 ||
+	    mixedScopedResult.counts.faceCount != 4 ||
+	    mixedScopedResult.counts.pointCount != 4 ||
+	    !brlobol_lod_result_matches_request(mixedScopedResult,
+		mixedScopedRequest)) {
+	printf("FAIL: LoD RT source full-detail provider should ignore mixed scoped query kinds when reducing payloads\n");
+	ret = 1;
+    }
+
+    BRLObolLodResult mixedScopedLimitedResult =
+	brlobol_rt_source_full_detail_provider_task(mixedScopedRequest,
+		&wrongSpaceLimitProvider);
+    if (mixedScopedLimitedResult.providerStatus !=
+	    BRLOBOL_LOD_PROVIDER_FALLBACK ||
+	    mixedScopedLimitedResult.resultKind != BRLOBOL_LOD_RESULT_NONE ||
+	    mixedScopedLimitedResult.mesh.isValid() ||
+	    strcmp(mixedScopedLimitedResult.diagnostic.getString(),
+		"RT source full-detail provider request exceeds full-detail limits") != 0 ||
+	    !brlobol_lod_result_matches_request(mixedScopedLimitedResult,
+		mixedScopedRequest)) {
+	printf("FAIL: LoD RT source full-detail provider should not bypass whole-object limits for mixed scoped query kinds\n");
+	ret = 1;
+    }
+
+    BRLObolLodRequest rayRequest = request;
+    rayRequest.addProviderParam("source_query.space", "source_local");
+    rayRequest.addProviderParam("source_query.ray.origin",
+	    "0.2 0.2 5.0");
+    rayRequest.addProviderParam("source_query.ray.direction",
+	    "0.0 0.0 -1.0");
+    BRLObolLodResult rayResult =
+	brlobol_rt_source_full_detail_provider_task(rayRequest, &provider);
+    if (rayResult.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
+	    rayResult.resultKind != BRLOBOL_LOD_RESULT_FULL_DETAIL ||
+	    rayResult.mesh.points.size() != 4 ||
+	    rayResult.mesh.coordIndex.size() != 6 ||
+	    rayResult.mesh.faceIndex.size() != 2 ||
+	    rayResult.mesh.faceIndex[0] != 0 ||
+	    rayResult.mesh.faceIndex[1] != 2 ||
+	    rayResult.mesh.vertexIndex.size() != 4 ||
+	    rayResult.mesh.vertexIndex[0] != 0 ||
+	    rayResult.mesh.vertexIndex[1] != 1 ||
+	    rayResult.mesh.vertexIndex[2] != 2 ||
+	    rayResult.mesh.vertexIndex[3] != 3 ||
+	    rayResult.counts.faceCount != 2 ||
+	    !brlobol_lod_result_matches_request(rayResult, rayRequest)) {
+	printf("FAIL: LoD RT source full-detail provider query ray did not reduce returned face payload\n");
+	ret = 1;
+    }
+
+    BRLObolLodRequest compactRayRequest = make_request("/lod-two-tri.bot");
+    compactRayRequest.objectName = "lod-two-tri.bot";
+    compactRayRequest.providerId = "rt_source_full_detail";
+    compactRayRequest.providerVersion = "direct-bot-v1";
+    compactRayRequest.qualityTier = BRLOBOL_LOD_QUALITY_FULL_DETAIL;
+    compactRayRequest.sourceCounts.faceCount = 2;
+    compactRayRequest.sourceCounts.pointCount = 6;
+    compactRayRequest.addProviderParam("source_query.space", "source_local");
+    compactRayRequest.addProviderParam("source_query.ray.origin",
+	    "0.2 0.2 5.0");
+    compactRayRequest.addProviderParam("source_query.ray.direction",
+	    "0.0 0.0 -1.0");
+    BRLObolLodResult compactRayResult =
+	brlobol_rt_source_full_detail_provider_task(compactRayRequest,
+		&provider);
+    if (compactRayResult.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
+	    compactRayResult.resultKind != BRLOBOL_LOD_RESULT_FULL_DETAIL ||
+	    compactRayResult.mesh.points.size() != 3 ||
+	    compactRayResult.mesh.coordIndex.size() != 3 ||
+	    compactRayResult.mesh.coordIndex[0] != 0 ||
+	    compactRayResult.mesh.coordIndex[1] != 1 ||
+	    compactRayResult.mesh.coordIndex[2] != 2 ||
+	    compactRayResult.mesh.faceIndex.size() != 1 ||
+	    compactRayResult.mesh.faceIndex[0] != 0 ||
+	    compactRayResult.mesh.vertexIndex.size() != 3 ||
+	    compactRayResult.mesh.vertexIndex[0] != 0 ||
+	    compactRayResult.mesh.vertexIndex[1] != 1 ||
+	    compactRayResult.mesh.vertexIndex[2] != 2 ||
+	    compactRayResult.counts.faceCount != 1 ||
+	    compactRayResult.counts.pointCount != 3 ||
+	    !brlobol_lod_result_matches_request(compactRayResult,
+		compactRayRequest)) {
+	printf("FAIL: LoD RT source full-detail provider query ray did not compact source vertex payload\n");
+	ret = 1;
+    }
+
+    BRLObolRtSourceFullDetailProvider compactRayLimitProvider;
+    compactRayLimitProvider.dbip = dbip;
+    compactRayLimitProvider.validateSourceMetrics = TRUE;
+    compactRayLimitProvider.maxFullDetailFaceCount = 1;
+    compactRayLimitProvider.maxFullDetailPointCount = 3;
+    BRLObolLodResult compactRayLimitedResult =
+	brlobol_rt_source_full_detail_provider_task(compactRayRequest,
+		&compactRayLimitProvider);
+    if (compactRayLimitedResult.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
+	    compactRayLimitedResult.resultKind != BRLOBOL_LOD_RESULT_FULL_DETAIL ||
+	    compactRayLimitedResult.mesh.points.size() != 3 ||
+	    compactRayLimitedResult.mesh.coordIndex.size() != 3 ||
+	    compactRayLimitedResult.mesh.faceIndex.size() != 1 ||
+	    compactRayLimitedResult.mesh.vertexIndex.size() != 3 ||
+	    compactRayLimitedResult.counts.faceCount != 1 ||
+	    compactRayLimitedResult.counts.pointCount != 3 ||
+	    !brlobol_lod_result_matches_request(compactRayLimitedResult,
+		compactRayRequest)) {
+	printf("FAIL: LoD RT source full-detail provider scoped ray limit should apply after payload reduction\n");
+	ret = 1;
+    }
+
+    BRLObolLodRequest missRayRequest = compactRayRequest;
+    missRayRequest.providerParams.clear();
+    missRayRequest.addProviderParam("source_query.space", "source_local");
+    missRayRequest.addProviderParam("source_query.ray.origin",
+	    "5.0 5.0 5.0");
+    missRayRequest.addProviderParam("source_query.ray.direction",
+	    "0.0 0.0 -1.0");
+    BRLObolLodResult missRayResult =
+	brlobol_rt_source_full_detail_provider_task(missRayRequest, &provider);
+    if (missRayResult.providerStatus != BRLOBOL_LOD_PROVIDER_FALLBACK ||
+	    missRayResult.resultKind != BRLOBOL_LOD_RESULT_NONE ||
+	    missRayResult.counts.faceCount != 0 ||
+	    missRayResult.counts.pointCount != 0 ||
+	    missRayResult.mesh.isValid() ||
+	    strcmp(missRayResult.diagnostic.getString(),
+		"RT source full-detail provider scoped query matched no faces") != 0 ||
+	    !brlobol_lod_result_matches_request(missRayResult,
+		missRayRequest)) {
+	printf("FAIL: LoD RT source full-detail provider scoped ray miss should not expand to whole-object payload\n");
+	ret = 1;
+    }
+
+    BRLObolLodRequest wrongSpaceRayRequest = compactRayRequest;
+    wrongSpaceRayRequest.providerParams.clear();
+    wrongSpaceRayRequest.addProviderParam("source_query.space", "world");
+    wrongSpaceRayRequest.addProviderParam("source_query.ray.origin",
+	    "0.2 0.2 5.0");
+    wrongSpaceRayRequest.addProviderParam("source_query.ray.direction",
+	    "0.0 0.0 -1.0");
+    BRLObolLodResult wrongSpaceRayResult =
+	brlobol_rt_source_full_detail_provider_task(wrongSpaceRayRequest,
+		&provider);
+    if (wrongSpaceRayResult.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
+	    wrongSpaceRayResult.resultKind != BRLOBOL_LOD_RESULT_FULL_DETAIL ||
+	    wrongSpaceRayResult.mesh.points.size() != 6 ||
+	    wrongSpaceRayResult.mesh.coordIndex.size() != 6 ||
+	    !wrongSpaceRayResult.mesh.vertexIndex.empty() ||
+	    wrongSpaceRayResult.counts.faceCount != 2 ||
+	    wrongSpaceRayResult.counts.pointCount != 6 ||
+	    !brlobol_lod_result_matches_request(wrongSpaceRayResult,
+		wrongSpaceRayRequest)) {
+	printf("FAIL: LoD RT source full-detail provider should ignore non-source-local rays when reducing payloads\n");
+	ret = 1;
+    }
+
+    BRLObolLodRequest malformedRayRequest = compactRayRequest;
+    malformedRayRequest.providerParams.clear();
+    malformedRayRequest.addProviderParam("source_query.space",
+	    "source_local");
+    malformedRayRequest.addProviderParam("source_query.ray.origin",
+	    "0.2 0.2 5.0");
+    malformedRayRequest.addProviderParam("source_query.ray.direction",
+	    "0.0 0.0 -1.0 trailing");
+    BRLObolLodResult malformedRayResult =
+	brlobol_rt_source_full_detail_provider_task(malformedRayRequest,
+		&provider);
+    if (malformedRayResult.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
+	    malformedRayResult.resultKind != BRLOBOL_LOD_RESULT_FULL_DETAIL ||
+	    malformedRayResult.mesh.points.size() != 6 ||
+	    malformedRayResult.mesh.coordIndex.size() != 6 ||
+	    !malformedRayResult.mesh.vertexIndex.empty() ||
+	    malformedRayResult.counts.faceCount != 2 ||
+	    malformedRayResult.counts.pointCount != 6 ||
+	    !brlobol_lod_result_matches_request(malformedRayResult,
+		malformedRayRequest)) {
+	printf("FAIL: LoD RT source full-detail provider should ignore malformed source-local rays when reducing payloads\n");
+	ret = 1;
+    }
+
+    BRLObolLodRequest duplicateRayRequest = compactRayRequest;
+    duplicateRayRequest.providerParams.clear();
+    duplicateRayRequest.addProviderParam("source_query.space",
+	    "source_local");
+    duplicateRayRequest.addProviderParam("source_query.ray.origin",
+	    "0.2 0.2 5.0");
+    duplicateRayRequest.addProviderParam("source_query.ray.direction",
+	    "0.0 0.0 -1.0");
+    duplicateRayRequest.addProviderParam("source_query.ray.direction",
+	    "0.0 0.0 -1.0");
+    BRLObolLodResult duplicateRayResult =
+	brlobol_rt_source_full_detail_provider_task(duplicateRayRequest,
+		&provider);
+    if (duplicateRayResult.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
+	    duplicateRayResult.resultKind != BRLOBOL_LOD_RESULT_FULL_DETAIL ||
+	    duplicateRayResult.mesh.points.size() != 6 ||
+	    duplicateRayResult.mesh.coordIndex.size() != 6 ||
+	    !duplicateRayResult.mesh.vertexIndex.empty() ||
+	    duplicateRayResult.counts.faceCount != 2 ||
+	    duplicateRayResult.counts.pointCount != 6 ||
+	    !brlobol_lod_result_matches_request(duplicateRayResult,
+		duplicateRayRequest)) {
+	printf("FAIL: LoD RT source full-detail provider should ignore duplicate ray params when reducing payloads\n");
+	ret = 1;
+    }
+
+    BRLObolLodRequest measureHintRequest = request;
+    measureHintRequest.addProviderParam("source_query.space", "source_local");
+    measureHintRequest.addProviderParam("source_query.bounds",
+	    "0.7 0.15 -0.05 0.8 0.25 0.05");
+    BRLObolLodResult measureHintResult =
+	brlobol_rt_source_full_detail_provider_task(measureHintRequest, &provider);
+    if (measureHintResult.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
+	    measureHintResult.mesh.coordIndex.size() != 12 ||
+	    measureHintResult.mesh.faceIndex.size() != 4 ||
+	    !measureHintResult.mesh.vertexIndex.empty() ||
+	    measureHintResult.counts.faceCount != 4 ||
+	    !brlobol_lod_result_matches_request(measureHintResult,
+		measureHintRequest)) {
+	printf("FAIL: LoD RT source full-detail provider should keep measure query hints whole-object without tolerance\n");
+	ret = 1;
+    }
+
+    BRLObolLodRequest boundedMeasureRequest = request;
+    boundedMeasureRequest.addProviderParam("source_query.space",
+	    "source_local");
+    boundedMeasureRequest.addProviderParam("source_query.bounds",
+	    "0.7 0.15 -0.05 0.8 0.25 0.05");
+    boundedMeasureRequest.addProviderParam("source_query.tolerance", "0.05");
+    BRLObolLodResult boundedMeasureResult =
+	brlobol_rt_source_full_detail_provider_task(boundedMeasureRequest,
+		&provider);
+    if (boundedMeasureResult.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
+	    boundedMeasureResult.mesh.points.size() != 4 ||
+	    boundedMeasureResult.mesh.coordIndex.size() != 6 ||
+	    boundedMeasureResult.mesh.faceIndex.size() != 2 ||
+	    boundedMeasureResult.mesh.vertexIndex.size() != 4 ||
+	    boundedMeasureResult.counts.faceCount != 2 ||
+	    boundedMeasureResult.counts.pointCount != 4 ||
+	    !brlobol_lod_result_matches_request(boundedMeasureResult,
+		boundedMeasureRequest)) {
+	printf("FAIL: LoD RT source full-detail provider should reduce explicit bounded measure query payloads\n");
+	ret = 1;
+    }
 
     BRLObolLodService service;
     if (!service.start(1, TRUE)) {
@@ -1036,6 +1623,65 @@ test_rt_source_full_detail_provider_task(void)
 	ret = 1;
     }
 
+    BRLObolSourceMeshRequest templatedScopedSourceRequest = sourceRequest;
+    templatedScopedSourceRequest.queryBoundsValid = 1;
+    templatedScopedSourceRequest.queryBounds = SbBox3f(
+	    SbVec3f(0.7f, 0.15f, -0.05f),
+	    SbVec3f(0.8f, 0.25f, 0.05f));
+    templatedScopedSourceRequest.queryToleranceValid = 1;
+    templatedScopedSourceRequest.queryTolerance = 0.05f;
+    BRLObolLodRequest staleTemplateRequest = request;
+    staleTemplateRequest.addProviderParam("source_query.space", "world");
+    staleTemplateRequest.addProviderParam("source_query.bounds",
+	    "9.0 9.0 9.0 10.0 10.0 10.0");
+    staleTemplateRequest.addProviderParam("source_query.ray.origin",
+	    "0.2 0.2 5.0");
+    staleTemplateRequest.addProviderParam("source_query.ray.direction",
+	    "0.0 0.0 -1.0");
+    staleTemplateRequest.addProviderParam("provider-template", "kept");
+
+    BRLObolLodRequest cleanTemplatedRequest;
+    if (!brlobol_lod_rt_source_full_detail_request_from_source_mesh_request(
+	    cleanTemplatedRequest, templatedScopedSourceRequest,
+	    &staleTemplateRequest) ||
+	    provider_param_count(cleanTemplatedRequest,
+		"source_query.space") != 1 ||
+	    provider_param_count(cleanTemplatedRequest,
+		"source_query.bounds") != 1 ||
+	    provider_param_count(cleanTemplatedRequest,
+		"source_query.tolerance") != 1 ||
+	    provider_param_count(cleanTemplatedRequest,
+		"source_query.ray.origin") != 0 ||
+	    provider_param_count(cleanTemplatedRequest,
+		"source_query.ray.direction") != 0 ||
+	    provider_param_count(cleanTemplatedRequest,
+		"provider-template") != 1) {
+	printf("FAIL: LoD RT source full-detail helper should replace stale template query params\n");
+	ret = 1;
+    } else {
+	BRLObolRtSourceFullDetailProvider templatedLimitProvider;
+	templatedLimitProvider.dbip = dbip;
+	templatedLimitProvider.validateSourceMetrics = TRUE;
+	templatedLimitProvider.maxFullDetailFaceCount = 2;
+	templatedLimitProvider.maxFullDetailPointCount = 4;
+	BRLObolLodResult cleanTemplatedResult =
+	    brlobol_rt_source_full_detail_provider_task(
+		    cleanTemplatedRequest, &templatedLimitProvider);
+	if (cleanTemplatedResult.providerStatus !=
+		BRLOBOL_LOD_PROVIDER_READY ||
+		cleanTemplatedResult.resultKind !=
+		BRLOBOL_LOD_RESULT_FULL_DETAIL ||
+		cleanTemplatedResult.mesh.coordIndex.size() != 6 ||
+		cleanTemplatedResult.mesh.faceIndex.size() != 2 ||
+		cleanTemplatedResult.counts.faceCount != 2 ||
+		cleanTemplatedResult.counts.pointCount != 4 ||
+		!brlobol_lod_result_matches_request(cleanTemplatedResult,
+		    cleanTemplatedRequest)) {
+	    printf("FAIL: LoD RT source full-detail helper should submit current source query params after template cleanup\n");
+	    ret = 1;
+	}
+    }
+
     BRLObolLodService submitService;
     if (!submitService.start(1, TRUE)) {
 	printf("FAIL: LoD RT source full-detail helper service did not start\n");
@@ -1098,6 +1744,9 @@ test_rt_mesh_provider_task(void)
     char cache_dir[MAXPATHLEN] = {0};
     char dbpath[MAXPATHLEN] = {0};
     struct db_i *dbip = NULL;
+    std::vector<fastf_t> cachedVertices;
+    std::vector<int> cachedFaces;
+    std::vector<fastf_t> cachedNormals;
 
     bu_dir(cache_dir, MAXPATHLEN, BU_DIR_CURR, "brlobol_lod_service_cache", NULL);
     bu_dirclear(cache_dir);
@@ -1105,6 +1754,55 @@ test_rt_mesh_provider_task(void)
     bu_setenv("BU_DIR_CACHE", cache_dir, 1);
 
     if (make_provider_test_db(dbpath, sizeof(dbpath), &dbip)) {
+	bu_dirclear(cache_dir);
+	return 1;
+    }
+
+    const int cachedGrid = 8;
+    cachedVertices.reserve((cachedGrid + 1) * (cachedGrid + 1) * 3);
+    for (int y = 0; y <= cachedGrid; y++) {
+	for (int x = 0; x <= cachedGrid; x++) {
+	    cachedVertices.push_back((fastf_t)x);
+	    cachedVertices.push_back((fastf_t)y);
+	    cachedVertices.push_back(0.0);
+	}
+    }
+    cachedFaces.reserve(cachedGrid * cachedGrid * 6);
+    for (int y = 0; y < cachedGrid; y++) {
+	for (int x = 0; x < cachedGrid; x++) {
+	    int v0 = y * (cachedGrid + 1) + x;
+	    int v1 = v0 + 1;
+	    int v2 = v0 + cachedGrid + 1;
+	    int v3 = v2 + 1;
+	    cachedFaces.push_back(v0);
+	    cachedFaces.push_back(v1);
+	    cachedFaces.push_back(v2);
+	    cachedFaces.push_back(v1);
+	    cachedFaces.push_back(v3);
+	    cachedFaces.push_back(v2);
+	}
+    }
+    cachedNormals.reserve(cachedFaces.size() * 3);
+    for (size_t i = 0; i < cachedFaces.size(); i++) {
+	cachedNormals.push_back(0.0);
+	cachedNormals.push_back(0.0);
+	cachedNormals.push_back(1.0 + (fastf_t)i);
+    }
+
+    struct rt_mesh_lod_cache_status storeStatus =
+	RT_MESH_LOD_CACHE_STATUS_INIT;
+    if (db_mesh_lod_store_mesh(dbip, "lod-provider.bot",
+	    (const point_t *)cachedVertices.data(),
+	    cachedVertices.size() / 3,
+	    (const vect_t *)cachedNormals.data(), cachedFaces.data(),
+	    cachedFaces.size() / 3, 0x12345678, 0.66,
+	    &storeStatus) != BRLCAD_OK ||
+	    !storeStatus.has_cache_key ||
+	    !storeStatus.has_cached_payload) {
+	printf("FAIL: LoD RT provider did not store cached mesh normals\n");
+	db_mesh_lod_clear(dbip);
+	db_close(dbip);
+	bu_file_delete(dbpath);
 	bu_dirclear(cache_dir);
 	return 1;
     }
@@ -1174,6 +1872,35 @@ test_rt_mesh_provider_task(void)
 	    results[0].mesh.coordIndex.size() != 12 ||
 	    !brlobol_lod_result_matches_request(results[0], task.request)) {
 	printf("FAIL: LoD RT provider task did not return cached mesh result\n");
+	ret = 1;
+    }
+
+    BRLObolRtMeshLodProvider cachedNormalProvider;
+    cachedNormalProvider.dbip = dbip;
+    cachedNormalProvider.useForcedLevel = TRUE;
+    cachedNormalProvider.forcedLevel = 1;
+    cachedNormalProvider.refreshMissing = FALSE;
+    BRLObolLodResult cachedNormalResult =
+	brlobol_rt_mesh_lod_provider_task(task.request, &cachedNormalProvider);
+    SbBool sawSeededNormal = FALSE;
+    for (size_t i = 0; i < cachedNormalResult.mesh.normals.size(); i++) {
+	if (cachedNormalResult.mesh.normals[i][2] > 1.5f)
+	    sawSeededNormal = TRUE;
+    }
+    if (cachedNormalResult.resultKind != BRLOBOL_LOD_RESULT_MESH ||
+	    cachedNormalResult.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
+	    cachedNormalResult.geometry.activeLevel != 1 ||
+	    cachedNormalResult.counts.normalCount == 0 ||
+	    cachedNormalResult.counts.normalCount !=
+		cachedNormalResult.mesh.coordIndex.size() ||
+	    !cachedNormalResult.hasNormals ||
+	    !cachedNormalResult.mesh.isValid() ||
+	    cachedNormalResult.mesh.normals.size() !=
+		cachedNormalResult.mesh.coordIndex.size() ||
+	    !sawSeededNormal ||
+	    !brlobol_lod_result_matches_request(cachedNormalResult,
+		task.request)) {
+	printf("FAIL: LoD RT provider did not return cached mesh normals\n");
 	ret = 1;
     }
 
@@ -1277,6 +2004,8 @@ main(int argc, char **argv)
     if (test_task_realize_data_cleanup())
 	return 1;
     if (test_debug_delay_cancellation())
+	return 1;
+    if (test_active_request_duplicate_suppression())
 	return 1;
     if (test_rt_source_full_detail_provider_task())
 	return 1;

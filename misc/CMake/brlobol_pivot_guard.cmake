@@ -187,6 +187,83 @@ function(_brlobol_pivot_guard_check_obol_realization_coverage)
 	"src/libqtcad/tests/CMakeLists.txt must keep the Generic_Twin.g opt-in model dependency")
     endif()
   endif()
+
+  set(_prototype_test
+    "${BRLCAD_SOURCE_DIR}/src/libbrlobol/tests/test_prototype.cpp")
+  if(EXISTS "${_prototype_test}")
+    file(READ "${_prototype_test}" _prototype_test_contents)
+    foreach(_token
+	"exercise_required_hierarchy_model"
+	"required pinewood hierarchy coverage should pass"
+	"required havoc hierarchy coverage should pass"
+	"havoc.g stays wire-only"
+	"hierarchyExport.getLineCount() < min_wire_segments"
+	"hierarchyWireMeasure.setAngleComputationEnabled(FALSE)"
+	"hierarchyWireMeasure.getShapeCount() < min_wire_shapes"
+	"hierarchyMeshExport.getTriangleCount() < min_mesh_triangles"
+	"hierarchyMeshMeasure.getShapeCount() < min_mesh_shapes"
+	"view controller should expose cache-backed RT exact ray picks outside qtcad"
+	"sparse bucketed angle measure should find the connected corner")
+      string(FIND "${_prototype_test_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail(
+	  "src/libbrlobol/tests/test_prototype.cpp missing required hierarchy coverage token ${_token}")
+      endif()
+    endforeach()
+    string(FIND "${_prototype_test_contents}" "total_triangle_count" _idx)
+    if(_idx GREATER -1)
+      _brlobol_pivot_guard_fail(
+	"src/libbrlobol/tests/test_prototype.cpp must not reintroduce slow required-hierarchy total_triangle_count traversal")
+    endif()
+  endif()
+
+  set(_measure_action
+    "${BRLCAD_SOURCE_DIR}/src/libbrlobol/measure_action.cpp")
+  if(EXISTS "${_measure_action}")
+    file(READ "${_measure_action}" _measure_action_contents)
+    foreach(_token
+	"measure_collect_angle_endpoint_candidates"
+	"measure_add_angle_endpoint"
+	"measure_source_local_query_distance_limit"
+	"setQueryDistanceLimit"
+	"queryDistanceAllows"
+	"shape->point.getNum()"
+	"shape->command[i] != SoBRLVListShape::DRAW"
+	"const int currentSegment = segmentIndex++"
+	"connectedPairs")
+      string(FIND "${_measure_action_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail(
+	  "src/libbrlobol/measure_action.cpp missing bucketed connected-angle token ${_token}")
+      endif()
+    endforeach()
+    string(FIND "${_measure_action_contents}" "shape->getSegment(" _idx)
+    if(_idx GREATER -1)
+      _brlobol_pivot_guard_fail(
+	"src/libbrlobol/measure_action.cpp must keep vlist measurement on a linear command-stream traversal")
+    endif()
+  endif()
+
+  set(_snap_action
+    "${BRLCAD_SOURCE_DIR}/src/libbrlobol/snap_action.cpp")
+  if(EXISTS "${_snap_action}")
+    file(READ "${_snap_action}" _snap_action_contents)
+    foreach(_token
+	"shape->point.getNum()"
+	"shape->command[i] == SoBRLVListShape::DRAW"
+	"const int currentSegment = segmentIndex++")
+      string(FIND "${_snap_action_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail(
+	  "src/libbrlobol/snap_action.cpp missing linear vlist traversal token ${_token}")
+      endif()
+    endforeach()
+    string(FIND "${_snap_action_contents}" "shape->getSegment(" _idx)
+    if(_idx GREATER -1)
+      _brlobol_pivot_guard_fail(
+	"src/libbrlobol/snap_action.cpp must keep vlist snapping on a linear command-stream traversal")
+    endif()
+  endif()
 endfunction()
 
 function(_brlobol_pivot_guard_check_libimgstream_boundary)
@@ -747,6 +824,15 @@ function(_brlobol_pivot_guard_check_brlobol_window_host)
 	"setExactFullDetailBudget"
 	"getMaxExactFullDetailFaceCount"
 	"getMaxExactFullDetailPointCount"
+	"consumeExportSourceFullDetail"
+	"consumeMeasureSourceFullDetail"
+	"consumeSnapSourceFullDetail"
+	"prepareRtPickCaches"
+	"getRtPickCache"
+	"getRtPickCacheSourceRevision"
+	"pickSourceMeshExactRay"
+	"pickRtExactRay"
+	"clearRtPickCaches"
 	"setMeshResidencyBudget"
 	"clearMeshResidencyBudget"
 	"hasMeshResidencyBudget"
@@ -784,6 +870,25 @@ function(_brlobol_pivot_guard_check_brlobol_window_host)
 	"BRLObolViewController::setExactFullDetailBudget"
 	"BRLObolViewController::getMaxExactFullDetailFaceCount"
 	"BRLObolViewController::getMaxExactFullDetailPointCount"
+	"BRLObolViewController::consumeExportSourceFullDetail"
+	"BRLObolViewController::consumeMeasureSourceFullDetail"
+	"BRLObolViewController::consumeSnapSourceFullDetail"
+	"controller_database_source_for_request"
+	"controller_source_request_template"
+	"SoBRLExportAction"
+	"SoBRLMeasureAction"
+	"SoBRLSnapAction"
+	"BRLObolViewController::prepareRtPickCaches"
+	"BRLObolViewController::getRtPickCache"
+	"BRLObolViewController::getRtPickCacheSourceRevision"
+	"BRLObolViewController::pickSourceMeshExactRay"
+	"SoBRLSourceMeshPickAction"
+	"drainMatchingResults"
+	"requestMatched"
+	"submitRequestIndices"
+	"brlobol_lod_submit_rt_source_full_detail_request"
+	"BRLObolViewController::pickRtExactRay"
+	"BRLObolViewController::clearRtPickCaches"
 	"BRLObolViewController::setMeshResidencyBudget"
 	"BRLObolViewController::clearMeshResidencyBudget"
 	"BRLObolViewController::enforceMeshResidencyBudget"
@@ -801,6 +906,8 @@ function(_brlobol_pivot_guard_check_brlobol_window_host)
 	"lodUseForcedLevel"
 	"maxExactFullDetailFaceCount"
 	"maxExactFullDetailPointCount"
+	"rtPickCaches"
+	"rtPickCacheSourceRevisions"
 	"meshResidencyBudgetEnabled"
 	"meshResidencyEvictDisplayPayloads"
 	"lastMeshBudgetInitialResidentBytes"
@@ -1803,6 +1910,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	  "db_mesh_lod_refresh"
 	  "db_mesh_lod_invalidate"
 	  "db_mesh_lod_store_mesh"
+	  "faces order, i.e. face_count * 3 normals"
 	  "rt_mesh_lod_load_level"
 	  "rt_mesh_lod_load_view"
 	  "rt_mesh_lod_current_level"
@@ -1811,6 +1919,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	  "rt_mesh_lod_info_get"
 	  "rt_mesh_lod_detail_init"
 	  "rt_mesh_lod_detail_callbacks_set"
+	  "rt_mesh_lod_detail_callbacks_clear"
 	  "rt_mesh_lod_memshrink"
 	  "rt_mesh_lod_destroy")
 	string(FIND "${_contents}" "${_token}" _token_idx)
@@ -1899,7 +2008,37 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_view_unit_conversion_set_bsg
 	rt_view_width_from_bsg
 	rt_view_height_from_bsg
+	rt_view_radius_from_bsg
 	rt_view_dimensions_set_bsg
+	rt_view_screen_to_view_from_bsg
+	rt_view_screen_point_from_bsg
+	rt_view_interactive_rect_from_bsg
+	rt_view_interactive_rect_set_bsg
+	rt_view_adc_from_bsg
+	rt_view_adc_set_bsg
+	rt_view_grid_from_bsg
+	rt_view_grid_set_bsg
+	rt_view_model_axes_from_bsg
+	rt_view_model_axes_set_bsg
+	rt_view_view_axes_from_bsg
+	rt_view_view_axes_set_bsg
+	rt_view_center_dot_from_bsg
+	rt_view_center_dot_set_bsg
+	rt_view_scale_overlay_from_bsg
+	rt_view_scale_overlay_set_bsg
+	rt_view_params_from_bsg
+	rt_view_params_set_bsg
+	rt_view_refresh_request_bsg
+	rt_view_refresh_dirty_from_bsg
+	rt_view_refresh_consume_bsg
+	rt_view_refresh_complete_bsg
+	rt_view_refresh_enabled_from_bsg
+	rt_view_refresh_enabled_set_bsg
+	rt_view_refresh_suppressed_from_bsg
+	rt_view_refresh_suppress_begin_bsg
+	rt_view_refresh_suppress_end_bsg
+	rt_view_refresh_drawn_count_from_bsg
+	rt_view_refresh_drawn_count_set_bsg
 	rt_view_size_from_bsg
 	rt_view_size_set_bsg
 	rt_view_inverse_size_from_bsg
@@ -1994,14 +2133,49 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_mesh_lod_has_active_data
 	rt_mesh_lod_data_get
 	rt_mesh_lod_info_get
+	rt_mesh_lod_mesh_arrays_validate
+	rt_mesh_lod_detail_has_payload
 	rt_mesh_lod_detail_init
 	rt_mesh_lod_detail_callbacks_set
+	rt_mesh_lod_detail_callbacks_clear
 	rt_mesh_lod_detail_setup_bsg)
       string(FIND "${_librt_cache_lod_impl_contents}" "${_token}"
 	_librt_cache_lod_impl_token_idx)
       if(_librt_cache_lod_impl_token_idx EQUAL -1)
 	_brlobol_pivot_guard_fail(
-	  "src/librt/cache_lod.c must keep neutral RT mesh-LoD helper ${_token}")
+	"src/librt/cache_lod.c must keep neutral RT mesh-LoD helper ${_token}")
+      endif()
+    endforeach()
+    foreach(_token
+	"bsg->points_orig && bsg->porig_cnt > 0"
+	"data->points_orig && data->point_orig_count"
+	"info->has_faces && info->has_points && info->has_original_points")
+      string(FIND "${_librt_cache_lod_impl_contents}" "${_token}"
+	_librt_cache_lod_active_data_token_idx)
+      if(_librt_cache_lod_active_data_token_idx EQUAL -1)
+	_brlobol_pivot_guard_fail(
+	  "src/librt/cache_lod.c must require original points for active RT mesh-LoD data token ${_token}")
+      endif()
+    endforeach()
+    foreach(_token
+	"detail.normal_count != index_count"
+	"!detail.normals && detail.normal_count != 0"
+	"bot->faces, bot->num_faces"
+	"invalid BoT mesh arrays"
+	"!faces || fcnt <= 0"
+	"!points || pcnt <= 0"
+	"!points_orig || porig_cnt <= 0"
+	"faces[i] < 0 || faces[i] >= pcnt"
+	"faces[i] >= porig_cnt"
+	"data->normals = bsg->normals"
+	"data->normal_count = (bsg->normals && data->face_count)"
+	"info->normal_count = (bsg->normals && info->face_count)"
+	"info->has_normals = (bsg->normals && info->normal_count)")
+      string(FIND "${_librt_cache_lod_impl_contents}" "${_token}"
+	_librt_cache_lod_normal_token_idx)
+      if(_librt_cache_lod_normal_token_idx EQUAL -1)
+	_brlobol_pivot_guard_fail(
+	  "src/librt/cache_lod.c must keep RT mesh-LoD normal metadata token ${_token}")
       endif()
     endforeach()
     string(REGEX MATCH [[(^|[^_A-Za-z0-9])rt_mesh_lod_bsg[ \t\r\n]*\(]]
@@ -2010,6 +2184,30 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       _brlobol_pivot_guard_fail(
 	"src/librt/cache_lod.c must keep public BSG extraction behind view_legacy_bsg.c")
     endif()
+  endif()
+
+  set(_libbsg_mesh_lod_impl "${BRLCAD_SOURCE_DIR}/src/libbsg/mesh_lod.cpp")
+  if(EXISTS "${_libbsg_mesh_lod_impl}")
+    file(READ "${_libbsg_mesh_lod_impl}" _libbsg_mesh_lod_impl_contents)
+    foreach(_token
+	"level > max_pop_threshold_level && !full_detail_setup_clbk"
+	"if (!sp->set_level(level))"
+	"bsg_mesh_lod_active_data_clear"
+	"bsg_mesh_lod_active_pop_data_publish"
+	"s->curr_level = -1"
+	"return false"
+	"else if (s->full_detail_clear_clbk)"
+	"s->full_detail_setup_clbk = NULL"
+	"s->detail_clbk_data = NULL"
+	"sp->lod_tri_norms.size() >= sp->lod_tris.size() * 3"
+	"l->normals = (const vect_t *)sp->lod_tri_norms.data()"
+	"l->normals = NULL")
+      string(FIND "${_libbsg_mesh_lod_impl_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail(
+	  "src/libbsg/mesh_lod.cpp must keep bounded POP normal publication token ${_token}")
+      endif()
+    endforeach()
   endif()
 
   set(_librt_view_legacy_impl
@@ -2021,6 +2219,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_librt_view_legacy_impl}" _librt_view_legacy_contents)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]bsg/lod\.h]]
+	[[#[ \t]*include[ \t]*[<"]bsg/faceplate\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/view_state\.h]]
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	rt_view_info_from_bsg
@@ -2065,7 +2264,37 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_view_unit_conversion_set_bsg
 	rt_view_width_from_bsg
 	rt_view_height_from_bsg
+	rt_view_radius_from_bsg
 	rt_view_dimensions_set_bsg
+	rt_view_screen_to_view_from_bsg
+	rt_view_screen_point_from_bsg
+	rt_view_interactive_rect_from_bsg
+	rt_view_interactive_rect_set_bsg
+	rt_view_adc_from_bsg
+	rt_view_adc_set_bsg
+	rt_view_grid_from_bsg
+	rt_view_grid_set_bsg
+	rt_view_model_axes_from_bsg
+	rt_view_model_axes_set_bsg
+	rt_view_view_axes_from_bsg
+	rt_view_view_axes_set_bsg
+	rt_view_center_dot_from_bsg
+	rt_view_center_dot_set_bsg
+	rt_view_scale_overlay_from_bsg
+	rt_view_scale_overlay_set_bsg
+	rt_view_params_from_bsg
+	rt_view_params_set_bsg
+	rt_view_refresh_request_bsg
+	rt_view_refresh_dirty_from_bsg
+	rt_view_refresh_consume_bsg
+	rt_view_refresh_complete_bsg
+	rt_view_refresh_enabled_from_bsg
+	rt_view_refresh_enabled_set_bsg
+	rt_view_refresh_suppressed_from_bsg
+	rt_view_refresh_suppress_begin_bsg
+	rt_view_refresh_suppress_end_bsg
+	rt_view_refresh_drawn_count_from_bsg
+	rt_view_refresh_drawn_count_set_bsg
 	rt_view_size_from_bsg
 	rt_view_size_set_bsg
 	rt_view_inverse_size_from_bsg
@@ -2095,6 +2324,20 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_view_snap_tolerance_factor_set_bsg
 	rt_mesh_lod_load_view_scene_ref_bsg
 	rt_mesh_lod_free_scene_ref_bsg
+	bsg_view_adc_get
+	bsg_view_adc_set
+	bsg_view_grid_get
+	bsg_view_grid_set
+	bsg_view_model_axes_get
+	bsg_view_model_axes_set
+	bsg_view_view_axes_get
+	bsg_view_view_axes_set
+	bsg_view_center_dot_get
+	bsg_view_center_dot_set
+	bsg_view_scale_state_get
+	bsg_view_scale_state_set
+	bsg_view_params_get
+	bsg_view_params_set
 	bsg_view_lod_source_policy_get
 	bsg_view_lod_source_policy_set
 	bsg_view_bounds
@@ -2146,6 +2389,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_mesh_lod_info_get
 	rt_mesh_lod_detail_init
 	rt_mesh_lod_detail_callbacks_set
+	rt_mesh_lod_detail_callbacks_clear
 	rt_mesh_lod_memshrink
 	rt_mesh_lod_cache_status_init
 	db_mesh_lod_status
@@ -2153,6 +2397,19 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	db_mesh_lod_invalidate
 	db_mesh_lod_store_mesh
 	db_mesh_lod_update
+	"mesh lod full-detail callback did not publish valid normals"
+	"mesh lod full-detail callback replacement did not preserve active POP data"
+	"mesh lod full-detail callback replacement did not invalidate stale borrowed data"
+	"mesh lod full-detail callback clear did not release callback ownership"
+	"mesh lod full-detail callback setup failure did not clear stale active data"
+	"mesh lod full-detail callback missing arrays did not clear stale active data"
+	"mesh lod full-detail callback bad indices did not clear stale active data"
+	"mesh lod full-detail callback bad original indices did not clear stale active data"
+	"mesh lod full-detail callback producer failure did not clear partial active data"
+	"mesh lod invalid BoT cache rejection"
+	"mesh lod invalid generated mesh store should preserve existing cache status"
+	"mesh lod generated mesh normals"
+	"(const vect_t *)detail_normals"
 	"mesh lod get after reopen")
       string(FIND "${_librt_view_info_test_contents}" "${_token}"
 	_librt_view_info_test_token_idx)
@@ -2232,7 +2489,37 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_view_unit_conversion_set_bsg
 	rt_view_width_from_bsg
 	rt_view_height_from_bsg
+	rt_view_radius_from_bsg
 	rt_view_dimensions_set_bsg
+	rt_view_screen_to_view_from_bsg
+	rt_view_screen_point_from_bsg
+	rt_view_interactive_rect_from_bsg
+	rt_view_interactive_rect_set_bsg
+	rt_view_adc_from_bsg
+	rt_view_adc_set_bsg
+	rt_view_grid_from_bsg
+	rt_view_grid_set_bsg
+	rt_view_model_axes_from_bsg
+	rt_view_model_axes_set_bsg
+	rt_view_view_axes_from_bsg
+	rt_view_view_axes_set_bsg
+	rt_view_center_dot_from_bsg
+	rt_view_center_dot_set_bsg
+	rt_view_scale_overlay_from_bsg
+	rt_view_scale_overlay_set_bsg
+	rt_view_params_from_bsg
+	rt_view_params_set_bsg
+	rt_view_refresh_request_bsg
+	rt_view_refresh_dirty_from_bsg
+	rt_view_refresh_consume_bsg
+	rt_view_refresh_complete_bsg
+	rt_view_refresh_enabled_from_bsg
+	rt_view_refresh_enabled_set_bsg
+	rt_view_refresh_suppressed_from_bsg
+	rt_view_refresh_suppress_begin_bsg
+	rt_view_refresh_suppress_end_bsg
+	rt_view_refresh_drawn_count_from_bsg
+	rt_view_refresh_drawn_count_set_bsg
 	rt_view_size_from_bsg
 	rt_view_size_set_bsg
 	rt_view_inverse_size_from_bsg
@@ -2272,6 +2559,14 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	test_bsg_perspective_adapter
 	test_bsg_camera_adapter
 	test_bsg_mesh_lod_adapter_boundary
+	test_bsg_faceplate_state_adapter
+	bsg_view_adc_get
+	bsg_view_grid_get
+	bsg_view_model_axes_get
+	bsg_view_view_axes_get
+	bsg_view_center_dot_get
+	bsg_view_scale_state_get
+	bsg_view_params_get
 	test_bsg_edit_view_adapter)
       string(FIND "${_librt_view_legacy_bsg_test_contents}" "${_token}"
 	_librt_view_legacy_bsg_test_token_idx)
@@ -3522,6 +3817,65 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endif()
   endif()
 
+  foreach(_rel
+      src/libged/view/faceplate/faceplate.c
+      src/libtclcad/view/faceplate.c
+      src/qged/plugins/view/settings/CADViewSettings.cpp)
+    set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
+    if(EXISTS "${_file}")
+      file(READ "${_file}" _contents)
+      foreach(_token
+	  [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	  [[rt_view_center_dot_from_bsg]]
+	  [[rt_view_center_dot_set_bsg]]
+	  [[rt_view_scale_overlay_from_bsg]]
+	  [[rt_view_scale_overlay_set_bsg]]
+	  [[rt_view_params_from_bsg]]
+	  [[rt_view_params_set_bsg]])
+	string(REGEX MATCH "${_token}" _faceplate_state_token_hit
+	  "${_contents}")
+	if(NOT _faceplate_state_token_hit)
+	  _brlobol_pivot_guard_fail(
+	    "${_rel} must route faceplate scalar state through rt/view_legacy_bsg.h token ${_token}")
+	endif()
+      endforeach()
+      string(REGEX MATCH [[(^|[^A-Za-z0-9_])bsg_view_(center_dot|scale_state|params)_(get|set)([^A-Za-z0-9_]|$)]]
+	_faceplate_state_direct_hit "${_contents}")
+      if(_faceplate_state_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} reintroduced direct BSG faceplate scalar-state access: ${_faceplate_state_direct_hit}")
+      endif()
+    endif()
+  endforeach()
+
+  set(_qged_view_settings "${BRLCAD_SOURCE_DIR}/src/qged/plugins/view/settings/CADViewSettings.cpp")
+  if(EXISTS "${_qged_view_settings}")
+    file(READ "${_qged_view_settings}" _qged_view_settings_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_adc_from_bsg]]
+	[[rt_view_adc_set_bsg]]
+	[[rt_view_grid_from_bsg]]
+	[[rt_view_grid_set_bsg]]
+	[[rt_view_model_axes_from_bsg]]
+	[[rt_view_model_axes_set_bsg]]
+	[[rt_view_view_axes_from_bsg]]
+	[[rt_view_view_axes_set_bsg]])
+      string(REGEX MATCH "${_token}" _qged_view_settings_token_hit
+	"${_qged_view_settings_contents}")
+      if(NOT _qged_view_settings_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/qged/plugins/view/settings/CADViewSettings.cpp must route top-level faceplate state through rt/view_legacy_bsg.h token ${_token}")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[(^|[^A-Za-z0-9_])bsg_view_(adc|grid|model_axes|view_axes)_(get|set)([^A-Za-z0-9_]|$)]]
+      _qged_view_settings_direct_hit "${_qged_view_settings_contents}")
+    if(_qged_view_settings_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/qged/plugins/view/settings/CADViewSettings.cpp reintroduced direct BSG top-level faceplate state access: ${_qged_view_settings_direct_hit}")
+    endif()
+  endif()
+
   set(_libged_fbclear_cmd "${BRLCAD_SOURCE_DIR}/src/libged/fbclear/fbclear.c")
   if(EXISTS "${_libged_fbclear_cmd}")
     file(READ "${_libged_fbclear_cmd}" _libged_fbclear_cmd_contents)
@@ -3747,6 +4101,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_libged_view_labels_cmd}" _libged_view_labels_cmd_contents)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_screen_to_view_from_bsg]]
 	[[rt_view_view2model_from_bsg]])
       string(REGEX MATCH "${_token}" _libged_view_labels_cmd_token_hit
 	"${_libged_view_labels_cmd_contents}")
@@ -3755,7 +4110,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	  "src/libged/view/labels.c must route label view-to-model reads through rt/view_legacy_bsg.h")
       endif()
     endforeach()
-    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
+    string(REGEX MATCH [[((^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)|(^|[^A-Za-z0-9_])bsg_screen_to_view([^A-Za-z0-9_]|$))]]
       _libged_view_labels_cmd_direct_hit "${_libged_view_labels_cmd_contents}")
     if(_libged_view_labels_cmd_direct_hit)
       _brlobol_pivot_guard_fail(
@@ -5176,6 +5531,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[rt_view_lod_policy_from_bsg]]
 	[[rt_view_lod_policy_apply_bsg]]
 	[[rt_view_dimensions_set_bsg]]
+	[[rt_view_screen_to_view_from_bsg]]
 	[[rt_view_center_from_bsg]]
 	[[rt_view_scale_from_bsg]]
 	[[rt_view_model2view_from_bsg]]
@@ -5212,6 +5568,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[(^|[^A-Za-z0-9_])bsg_view_prepare_tcl_snap([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_view_center_linesnap([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_view_(set_)?zclip([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_screen_to_view([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
 	[[gdvp->[ \t\r\n]*gv_coord[ \t\r\n]*=]]
@@ -5238,6 +5595,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[rt_view_view2model_from_bsg]]
 	[[rt_view_rotation_from_bsg]]
 	[[rt_view_dimensions_set_bsg]]
+	[[rt_view_screen_to_view_from_bsg]]
 	[[rt_view_prepare_tcl_snap_bsg]])
       string(REGEX MATCH "${_token}" _libtclcad_mouse_first_adapter_hit
 	"${_libtclcad_mouse_first_contents}")
@@ -5253,6 +5611,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_rotation([^A-Za-z0-9_]|$)]]
 	[[gdvp->[ \t\r\n]*gv_(width|height)[ \t\r\n]*=]]
+	[[(^|[^A-Za-z0-9_])bsg_screen_to_view([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_view_prepare_tcl_snap([^A-Za-z0-9_]|$)]])
       string(REGEX MATCH "${_pat}" _libtclcad_mouse_first_direct_hit
 	"${_libtclcad_mouse_first_contents}")
@@ -5275,6 +5634,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[rt_view_view2model_from_bsg]]
 	[[rt_view_plane_from_bsg]]
 	[[rt_view_dimensions_set_bsg]]
+	[[rt_view_screen_to_view_from_bsg]]
 	[[rt_view_prepare_tcl_snap_bsg]])
       string(REGEX MATCH "${_token}" _libtclcad_polygons_adapter_hit
 	"${_libtclcad_polygons_contents}")
@@ -5290,6 +5650,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
 	[[gdvp->[ \t\r\n]*gv_(width|height)[ \t\r\n]*=]]
+	[[(^|[^A-Za-z0-9_])bsg_screen_to_view([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_view_plane([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_view_prepare_tcl_snap([^A-Za-z0-9_]|$)]])
       string(REGEX MATCH "${_pat}" _libtclcad_polygons_direct_hit
@@ -6106,6 +6467,21 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       endif()
     endforeach()
   endif()
+
+  set(_libbsg_lod_header "${BRLCAD_SOURCE_DIR}/include/bsg/lod.h")
+  if(EXISTS "${_libbsg_lod_header}")
+    file(READ "${_libbsg_lod_header}" _libbsg_lod_header_contents)
+    foreach(_token
+	"bsg_mesh_lod_cache"
+	"one normal per triangle corner"
+	"f order, i.e. fcnt * 3 normals")
+      string(FIND "${_libbsg_lod_header_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail(
+	  "include/bsg/lod.h must document mesh-LoD normal cache contract token ${_token}")
+      endif()
+    endforeach()
+  endif()
 endfunction()
 
 function(_brlobol_pivot_guard_check_librt_sketch_polygon_neutralization)
@@ -6319,6 +6695,7 @@ function(_brlobol_pivot_guard_check_qtcad_obol_test_links)
     test_qtcad_obol_controller
     test_qtcad_obol_draw_sync
     test_qtcad_obol_edit_preview
+    test_qtcad_obol_export
     test_qtcad_obol_faceplate_sync
     test_qtcad_obol_selection_sync
     test_qtcad_obol_pick
@@ -6353,17 +6730,170 @@ function(_brlobol_pivot_guard_check_qtcad_obol_test_links)
   endforeach()
 endfunction()
 
+function(_brlobol_pivot_guard_check_qtcad_obol_edit_preview_intent)
+  foreach(_rel
+      include/qtcad/QgObolEditPreview.h
+      src/libqtcad/QgObolEditPreview.cpp
+      src/libqtcad/tests/test_qtcad_obol_edit_preview.cpp)
+    if(NOT EXISTS "${BRLCAD_SOURCE_DIR}/${_rel}")
+      _brlobol_pivot_guard_fail("${_rel} is required for qtcad Obol edit-preview intent coverage")
+      continue()
+    endif()
+  endforeach()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/include/qtcad/QgObolEditPreview.h" _qtcad_edit_preview_header)
+  string(FIND "${_qtcad_edit_preview_header}" "qg_obol_edit_preview_update_with_intent" _idx)
+  if(_idx EQUAL -1)
+    _brlobol_pivot_guard_fail("include/qtcad/QgObolEditPreview.h missing explicit edit-preview intent helper")
+  endif()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/src/libqtcad/tests/test_qtcad_obol_edit_preview.cpp" _qtcad_edit_preview_test)
+  foreach(_token
+      "SoBRLExportAction"
+      "SoBRLSnapAction"
+      "SoBRLMeasureAction"
+      "editIntentId"
+      "editIntentRole"
+      "qg_obol_edit_preview_update_with_intent"
+      "custom edit preview export should preserve explicit intent metadata"
+      "custom edit preview snap should preserve explicit intent metadata"
+      "custom edit preview measure should preserve explicit intent metadata"
+      "qtcad edit preview export should preserve edit-intent metadata"
+      "qtcad edit preview snap should preserve edit-intent metadata"
+      "qtcad edit preview measure should preserve edit-intent metadata"
+      "replacement edit preview export should keep edit-intent metadata current")
+    string(FIND "${_qtcad_edit_preview_test}" "${_token}" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("src/libqtcad/tests/test_qtcad_obol_edit_preview.cpp missing edit-preview intent coverage token ${_token}")
+    endif()
+  endforeach()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/src/libqtcad/QgObolEditPreview.cpp" _qtcad_edit_preview_impl)
+  foreach(_token
+      "qg_obol_edit_preview_update_with_intent"
+      "obol->replaceEditPreviewWithIntent"
+      "display->need_update(QG_VIEW_DRAWN)"
+      "obol->removeEditPreview")
+    string(FIND "${_qtcad_edit_preview_impl}" "${_token}" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("src/libqtcad/QgObolEditPreview.cpp missing Obol edit-preview bridge token ${_token}")
+    endif()
+  endforeach()
+endfunction()
+
+function(_brlobol_pivot_guard_check_qtcad_obol_export_source_exact)
+  set(_qtcad_export_header
+    "${BRLCAD_SOURCE_DIR}/include/qtcad/QgObolExport.h")
+  set(_qtcad_export_impl
+    "${BRLCAD_SOURCE_DIR}/src/libqtcad/QgObolExport.cpp")
+  set(_qtcad_export_test
+    "${BRLCAD_SOURCE_DIR}/src/libqtcad/tests/test_qtcad_obol_export.cpp")
+
+  foreach(_file IN ITEMS
+      "${_qtcad_export_header}"
+      "${_qtcad_export_impl}"
+      "${_qtcad_export_test}")
+    if(NOT EXISTS "${_file}")
+      file(RELATIVE_PATH _rel "${BRLCAD_SOURCE_DIR}" "${_file}")
+      _brlobol_pivot_guard_fail("${_rel} is required for qtcad Obol source-backed exact export coverage")
+    endif()
+  endforeach()
+
+  if(EXISTS "${_qtcad_export_header}")
+    file(READ "${_qtcad_export_header}" _qtcad_export_header_contents)
+    foreach(_token
+	"QgObolExportGeometryRecord"
+	"QgObolExportTriangleRecord"
+	"editIntentId"
+	"editIntentRole"
+	"submittedSourceRequestCount"
+	"sourceFullDetailPending"
+	"qg_obol_export_geometry_full_detail"
+	"source-backed LoD")
+      string(FIND "${_qtcad_export_header_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("include/qtcad/QgObolExport.h missing source-backed exact export token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  if(EXISTS "${_qtcad_export_impl}")
+    file(READ "${_qtcad_export_impl}" _qtcad_export_impl_contents)
+    foreach(_token
+	"brlobol/export_action.h"
+	"SoBRLExportAction::FULL_DETAIL"
+	"qg_obol_export_consume_source_full_detail"
+	"consumeExportSourceFullDetail"
+	"submittedSourceRequestCount"
+	"sourceFullDetailPending"
+	"triangle.editIntentId"
+	"triangle.editIntentRole")
+      string(FIND "${_qtcad_export_impl_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("src/libqtcad/QgObolExport.cpp missing source-backed exact export token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]brlobol/lod_service\.h]]
+	[[#[ \t]*include[ \t]*[<"]brlobol/database_source\.h]]
+	[[drainMatchingResults]]
+	[[submitSourceBackedFullDetailRequests]]
+	[[getMaxExactFullDetail(Face|Point)Count]])
+      string(REGEX MATCH "${_pat}" _hit "${_qtcad_export_impl_contents}")
+      if(_hit)
+	_brlobol_pivot_guard_fail("src/libqtcad/QgObolExport.cpp reintroduced controller-owned exact export plumbing: ${_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  if(EXISTS "${_qtcad_export_test}")
+    file(READ "${_qtcad_export_test}" _qtcad_export_test_contents)
+    foreach(_token
+	"SoBRLLodMeshShape"
+	"BRLObolLodService"
+	"BRLOBOL_LOD_RESULT_FULL_DETAIL"
+	"SoBRLExportAction"
+	"makeSourceBackedFullDetailLodRequest"
+	"qg_obol_export_geometry_full_detail"
+	"qtcad exact Obol export should consume ready source-backed full detail"
+	"qtcad exact Obol export should preserve source-backed triangle identity and edit intent"
+	"qtcad exact Obol export should pass controller full-detail budget to source provider"
+	"qtcad exact Obol export should report pending submitted source detail"
+	"qtcad source-backed exact Obol export should not initialize the legacy display manager")
+      string(FIND "${_qtcad_export_test_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("src/libqtcad/tests/test_qtcad_obol_export.cpp missing source-backed exact export token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/src/libqtcad/CMakeLists.txt" _qtcad_cmake)
+  string(FIND "${_qtcad_cmake}" "QgObolExport.cpp" _idx)
+  if(_idx EQUAL -1)
+    _brlobol_pivot_guard_fail("src/libqtcad/CMakeLists.txt missing QgObolExport.cpp")
+  endif()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/include/qtcad/CMakeLists.txt" _qtcad_header_cmake)
+  string(FIND "${_qtcad_header_cmake}" "QgObolExport.h" _idx)
+  if(_idx EQUAL -1)
+    _brlobol_pivot_guard_fail("include/qtcad/CMakeLists.txt missing QgObolExport.h")
+  endif()
+endfunction()
+
 function(_brlobol_pivot_guard_check_qtcad_obol_pick_source_exact)
   set(_qtcad_pick_header
     "${BRLCAD_SOURCE_DIR}/include/qtcad/QgObolPick.h")
   set(_qtcad_pick_impl
     "${BRLCAD_SOURCE_DIR}/src/libqtcad/QgObolPick.cpp")
+  set(_qtcad_select_filter
+    "${BRLCAD_SOURCE_DIR}/src/libqtcad/QgSelectFilter.cpp")
   set(_qtcad_pick_test
     "${BRLCAD_SOURCE_DIR}/src/libqtcad/tests/test_qtcad_obol_pick.cpp")
 
   foreach(_file IN ITEMS
       "${_qtcad_pick_header}"
       "${_qtcad_pick_impl}"
+      "${_qtcad_select_filter}"
       "${_qtcad_pick_test}")
     if(NOT EXISTS "${_file}")
       file(RELATIVE_PATH _rel "${BRLCAD_SOURCE_DIR}" "${_file}")
@@ -6376,7 +6906,15 @@ function(_brlobol_pivot_guard_check_qtcad_obol_pick_source_exact)
     foreach(_token
 	"QgObolPickRecord"
 	"IMPLICIT_SOLID"
-	"float distance")
+	"editIntentId"
+	"editIntentRole"
+	"faceVertexIndexA"
+	"nearestFaceEdgeSlot"
+	"nearestFaceEdgeVertexIndexA"
+	"nearestFaceVertexSlot"
+	"float distance"
+	"submittedSourceRequestCount"
+	"qg_obol_pick_ray")
       string(FIND "${_qtcad_pick_header_contents}" "${_token}" _idx)
       if(_idx EQUAL -1)
 	_brlobol_pivot_guard_fail("include/qtcad/QgObolPick.h missing source-backed exact pick token ${_token}")
@@ -6387,24 +6925,47 @@ function(_brlobol_pivot_guard_check_qtcad_obol_pick_source_exact)
   if(EXISTS "${_qtcad_pick_impl}")
     file(READ "${_qtcad_pick_impl}" _qtcad_pick_impl_contents)
     foreach(_token
-	"brlobol/lod_service.h"
-	"BRLObolSourceMeshPickResult"
-	"BRLObolRtPickResult"
-	"SoBRLSourceMeshPickAction"
-	"qg_obol_pick_source_full_detail"
+		"BRLObolSourceMeshPickResult"
+		"BRLObolRtPickResult"
+		"qg_obol_normalized_pick_path"
+		"qg_obol_pick_path_already_recorded"
+		"qg_obol_pick_source_full_detail"
 	"qg_obol_pick_camera_line"
 	"qg_obol_pick_rt_exact"
-	"brlobol_pick_rt_ray"
+	"qg_obol_pick_point_internal"
+	"qg_obol_pick_ray"
+	"submittedSourceRequestCount"
+	"pickAction.setRay(rayOrigin, rayDirection)"
 	"qg_obol_insert_pick_record"
-	"drainMatchingResults"
-	"submitSourceBackedFullDetailRequests"
-	"getMaxExactFullDetailFaceCount"
-	"getMaxExactFullDetailPointCount"
+	"getEditIntentId"
+	"getEditIntentRole"
+	"getFaceVertexIndexA"
+	"getNearestFaceEdgeSlot"
+	"getNearestFaceEdgeVertexIndexA"
+	"getNearestFaceVertexSlot"
+		"pickSourceMeshExactRay"
+		"pickRtExactRay"
 	"getLine"
 	"distance")
       string(FIND "${_qtcad_pick_impl_contents}" "${_token}" _idx)
       if(_idx EQUAL -1)
 	_brlobol_pivot_guard_fail("src/libqtcad/QgObolPick.cpp missing source-backed exact pick token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  if(EXISTS "${_qtcad_select_filter}")
+    file(READ "${_qtcad_select_filter}" _qtcad_select_filter_contents)
+    foreach(_token
+	"qg_obol_pick_point(view_widget()"
+	"qg_obol_pick_rect(view_widget()"
+	"qg_obol_pick_ray(view_widget()"
+	"submittedSourceRequests"
+	"submittedSourceRequests > 0"
+	"set_selected_paths(v, paths);")
+      string(FIND "${_qtcad_select_filter_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("src/libqtcad/QgSelectFilter.cpp missing source-backed exact pick selection token ${_token}")
       endif()
     endforeach()
   endif()
@@ -6417,14 +6978,40 @@ function(_brlobol_pivot_guard_check_qtcad_obol_pick_source_exact)
 	"BRLOBOL_LOD_RESULT_FULL_DETAIL"
 	"SoRayPickAction"
 	"SoBRLSourceMeshPickAction"
+	"mk_bot(wdbp, \"lod-pick.bot\""
 	"makeSourceBackedFullDetailLodRequest"
 	"qtcad LoD pick fixture should build a bounded source full-detail request"
 	"queuedResultCountForDiagnostics"
 	"qtcad Obol point pick should consume ready source-backed full detail"
-	"qtcad Obol source-backed pick should preserve exact mesh identity"
+	"qtcad Obol source-backed pick should preserve exact mesh, sub-entity identity, and edit intent"
+	"nearestFaceEdgeVertexIndexA"
 	"qtcad source-backed exact Obol pick should pass controller full-detail budget to source provider"
+	"qtcad source-backed exact Obol pick should report pending submitted source detail"
+	"qtcad point select filter should consume pending source-backed exact pick"
+	"qtcad point select filter should not fall back to legacy selection while exact source pick is pending"
+	"qtcad point select filter should submit the pending source-backed exact pick request"
+	"qtcad box select filter should consume pending source-backed exact pick"
+	"qtcad box select filter should not fall back to legacy selection while exact source pick is pending"
+	"qtcad box select filter should submit pending source-backed exact pick requests"
+	"qtcad ray select filter should consume pending source-backed exact pick"
+	"qtcad ray select filter should not fall back to legacy selection while exact source pick is pending"
+	"qtcad ray select filter should submit the pending source-backed exact pick request"
 	"qtcad Obol point pick should use librt exact implicit pick"
 	"qtcad Obol librt exact implicit pick should preserve RT hit identity"
+	"qtcad Obol librt exact implicit pick should retain a controller RT pick cache"
+	"qtcad Obol rectangle pick should reuse controller-cached librt exact implicit picks"
+	"qtcad Obol rectangle pick should keep reusing the controller RT pick cache"
+	"qtcad Obol cached rectangle librt pick should preserve RT hit identity"
+	"qtcad Obol ray pick should reuse controller-cached librt exact implicit picks"
+	"qtcad Obol cached ray librt pick should preserve RT hit identity"
+	"qtcad select ray filter should expose Obol explicit-ray implicit paths"
+	"qtcad select ray filter should reuse the controller RT pick cache"
+	"qtcad select ray filter should run Obol explicit-ray selection without legacy dbip"
+	"qtcad select ray filter without legacy dbip should expose Obol explicit-ray implicit paths"
+	"qtcad select ray filter without legacy dbip should reuse the controller RT pick cache"
+	"qtcad mixed Obol/RT point pick should choose the nearer librt hit"
+	"qtcad mixed Obol/RT pick-all should order merged hits by distance"
+	"qtcad mixed Obol/RT ray pick-all should order merged hits by distance"
 	"QgObolPickRecord::IMPLICIT_SOLID")
       string(FIND "${_qtcad_pick_test_contents}" "${_token}" _idx)
       if(_idx EQUAL -1)
@@ -6455,6 +7042,16 @@ function(_brlobol_pivot_guard_check_qtcad_obol_snap_source_exact)
   if(EXISTS "${_qtcad_snap_header}")
     file(READ "${_qtcad_snap_header}" _qtcad_snap_header_contents)
     foreach(_token
+	"VERTEX"
+	"EDGE_NEAREST"
+	"vertexIndex"
+	"edgeSlot"
+	"edgeVertexIndexA"
+	"edgeVertexIndexB"
+	"submittedSourceRequestCount"
+	"sourceFullDetailPending"
+	"editIntentId"
+	"editIntentRole"
 	"qg_obol_snap_point_full_detail"
 	"source-backed LoD")
       string(FIND "${_qtcad_snap_header_contents}" "${_token}" _idx)
@@ -6467,19 +7064,33 @@ function(_brlobol_pivot_guard_check_qtcad_obol_snap_source_exact)
   if(EXISTS "${_qtcad_snap_impl}")
     file(READ "${_qtcad_snap_impl}" _qtcad_snap_impl_contents)
     foreach(_token
-	"brlobol/lod_service.h"
 	"qg_obol_snap_point_with_policy"
 	"qg_obol_snap_point_full_detail"
 	"SoBRLSnapAction::FULL_DETAIL"
+	"getVertexIndex"
+	"getEdgeSlot"
+	"getEdgeVertexIndexA"
+	"getEdgeVertexIndexB"
+	"getEditIntentId"
+	"getEditIntentRole"
 	"qg_obol_snap_consume_source_full_detail"
-	"drainMatchingResults"
-	"consumeSourceBackedFullDetailResults"
-	"submitSourceBackedFullDetailRequests"
-	"getMaxExactFullDetailFaceCount"
-	"getMaxExactFullDetailPointCount")
+	"submittedSourceRequestCount"
+	"sourceFullDetailPending"
+	"consumeSnapSourceFullDetail")
       string(FIND "${_qtcad_snap_impl_contents}" "${_token}" _idx)
       if(_idx EQUAL -1)
 	_brlobol_pivot_guard_fail("src/libqtcad/QgObolSnap.cpp missing source-backed exact snap token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]brlobol/lod_service\.h]]
+	[[#[ \t]*include[ \t]*[<"]brlobol/database_source\.h]]
+	[[drainMatchingResults]]
+	[[submitSourceBackedFullDetailRequests]]
+	[[getMaxExactFullDetail(Face|Point)Count]])
+      string(REGEX MATCH "${_pat}" _hit "${_qtcad_snap_impl_contents}")
+      if(_hit)
+	_brlobol_pivot_guard_fail("src/libqtcad/QgObolSnap.cpp reintroduced controller-owned exact snap plumbing: ${_hit}")
       endif()
     endforeach()
   endif()
@@ -6497,11 +7108,15 @@ function(_brlobol_pivot_guard_check_qtcad_obol_snap_source_exact)
 	"rt_view_snap_lines_set_bsg"
 	"BRLOBOL_LOD_RESULT_FULL_DETAIL"
 	"SoBRLSnapAction"
+	"mk_bot(wdbp, \"lod-snap.bot\""
 	"makeSourceBackedFullDetailLodRequest"
 	"qtcad LoD snap fixture should build a bounded source full-detail request"
 	"qg_obol_snap_point_full_detail"
 	"qtcad exact Obol snap should consume ready source-backed full detail"
-	"qtcad exact Obol snap should preserve source-backed face identity"
+	"qtcad exact Obol snap should preserve source-backed face identity and edit intent"
+	"qtcad exact Obol snap should preserve source-backed vertex identity"
+	"qtcad exact Obol snap should preserve source-backed edge identity"
+	"qtcad exact Obol snap should report pending submitted source detail"
 	"qtcad exact Obol snap should pass controller full-detail budget to source provider")
       string(FIND "${_qtcad_snap_test_contents}" "${_token}" _idx)
       if(_idx EQUAL -1)
@@ -6544,6 +7159,14 @@ function(_brlobol_pivot_guard_check_qtcad_obol_measure_source_exact)
     file(READ "${_qtcad_measure_header}" _qtcad_measure_header_contents)
     foreach(_token
 	"QgObolMeasureGeometryRecord"
+	"nearestFaceVertexIndexA"
+	"nearestFaceEdgeSlot"
+	"nearestFaceEdgeVertexIndexA"
+	"nearestFaceVertexSlot"
+	"nearestEditIntentId"
+	"nearestEditIntentRole"
+	"submittedSourceRequestCount"
+	"sourceFullDetailPending"
 	"qg_obol_measure_geometry_full_detail")
       string(FIND "${_qtcad_measure_header_contents}" "${_token}" _idx)
       if(_idx EQUAL -1)
@@ -6555,18 +7178,32 @@ function(_brlobol_pivot_guard_check_qtcad_obol_measure_source_exact)
   if(EXISTS "${_qtcad_measure_impl}")
     file(READ "${_qtcad_measure_impl}" _qtcad_measure_impl_contents)
     foreach(_token
-	"brlobol/lod_service.h"
 	"brlobol/measure_action.h"
 	"SoBRLMeasureAction::FULL_DETAIL"
 	"qg_obol_measure_consume_source_full_detail"
-	"drainMatchingResults"
-	"consumeSourceBackedFullDetailResults"
-	"submitSourceBackedFullDetailRequests"
-	"getMaxExactFullDetailFaceCount"
-	"getMaxExactFullDetailPointCount")
+	"consumeMeasureSourceFullDetail"
+	"submittedSourceRequestCount"
+	"sourceFullDetailPending"
+	"getNearestFaceVertexIndexA"
+	"getNearestFaceEdgeSlot"
+	"getNearestFaceEdgeVertexIndexA"
+	"getNearestFaceVertexSlot"
+	"getNearestEditIntentId"
+	"getNearestEditIntentRole")
       string(FIND "${_qtcad_measure_impl_contents}" "${_token}" _idx)
       if(_idx EQUAL -1)
 	_brlobol_pivot_guard_fail("src/libqtcad/QgObolMeasure.cpp missing source-backed exact measure token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]brlobol/lod_service\.h]]
+	[[#[ \t]*include[ \t]*[<"]brlobol/database_source\.h]]
+	[[drainMatchingResults]]
+	[[submitSourceBackedFullDetailRequests]]
+	[[getMaxExactFullDetail(Face|Point)Count]])
+      string(REGEX MATCH "${_pat}" _hit "${_qtcad_measure_impl_contents}")
+      if(_hit)
+	_brlobol_pivot_guard_fail("src/libqtcad/QgObolMeasure.cpp reintroduced controller-owned exact measure plumbing: ${_hit}")
       endif()
     endforeach()
   endif()
@@ -6577,10 +7214,14 @@ function(_brlobol_pivot_guard_check_qtcad_obol_measure_source_exact)
 	"SoBRLLodMeshShape"
 	"BRLObolLodService"
 	"BRLOBOL_LOD_RESULT_FULL_DETAIL"
-	"brlobol_lod_rt_source_full_detail_request_from_source_mesh_request"
+	"SoBRLMeasureAction"
+	"makeSourceBackedFullDetailLodRequest"
+	"query-scoped source full-detail request"
 	"qg_obol_measure_geometry_full_detail"
 	"qtcad exact Obol measure should consume ready source-backed full detail"
-	"qtcad exact Obol measure should preserve source-backed face identity"
+	"qtcad exact Obol measure should preserve source-backed face, sub-entity identity, and edit intent"
+	"nearestFaceEdgeVertexIndexA"
+	"qtcad exact Obol measure should report pending submitted source detail"
 	"qtcad exact Obol measure should pass controller full-detail budget to source provider")
       string(FIND "${_qtcad_measure_test_contents}" "${_token}" _idx)
       if(_idx EQUAL -1)
@@ -6888,6 +7529,7 @@ function(_brlobol_pivot_guard_check_qtcad_view_snapshot_adapters)
 	"rt_view_snap_lines_from_bsg"
 	"rt_view_snap_source_flags_from_bsg"
 	"rt_view_snap_kind_mask_from_bsg"
+	"rt_view_screen_point_from_bsg"
 	"rt_view_snap_tolerance_factor_from_bsg")
       string(FIND "${_qtcad_view_filter_contents}" "${_token}" _idx)
       if(_idx EQUAL -1)
@@ -6917,6 +7559,12 @@ function(_brlobol_pivot_guard_check_qtcad_view_snapshot_adapters)
 	  "src/libqtcad/QgViewFilter.cpp reintroduced direct BSG snap policy reads: ${_qtcad_view_filter_snap_policy_direct}")
       endif()
     endforeach()
+    string(REGEX MATCH [[(^|[^A-Za-z0-9_])bsg_screen_pt([^A-Za-z0-9_]|$)]]
+      _qtcad_view_filter_screen_pt_direct "${_qtcad_view_filter_contents}")
+    if(_qtcad_view_filter_screen_pt_direct)
+      _brlobol_pivot_guard_fail(
+	"src/libqtcad/QgViewFilter.cpp reintroduced direct BSG screen-point conversion: ${_qtcad_view_filter_screen_pt_direct}")
+    endif()
   endif()
 
   foreach(_rel
@@ -6961,6 +7609,8 @@ function(_brlobol_pivot_guard_check_qtcad_view_snapshot_adapters)
     foreach(_token
 	"rt/view_legacy_bsg.h"
 	"rt_view_model2view_from_bsg"
+	"rt_view_screen_to_view_from_bsg"
+	"rt_view_screen_point_from_bsg"
 	"rt_view_width_from_bsg")
       string(FIND "${_qtcad_sketch_filter_contents}" "${_token}" _idx)
       if(_idx EQUAL -1)
@@ -6970,7 +7620,9 @@ function(_brlobol_pivot_guard_check_qtcad_view_snapshot_adapters)
     endforeach()
     foreach(_pat
 	[[v->[ \t\r\n]*gv_model2view]]
-	[[v->[ \t\r\n]*gv_width]])
+	[[v->[ \t\r\n]*gv_width]]
+	[[bsg_screen_to_view]]
+	[[bsg_screen_pt]])
       string(REGEX MATCH "${_pat}" _hit "${_qtcad_sketch_filter_contents}")
       if(_hit)
 	_brlobol_pivot_guard_fail(
@@ -6979,6 +7631,31 @@ function(_brlobol_pivot_guard_check_qtcad_view_snapshot_adapters)
     endforeach()
   endif()
 
+  foreach(_rel
+      src/libqtcad/QgPolyFilter.cpp
+      src/libged/view/objs.cpp
+      src/libged/view/polygons.c)
+    set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
+    if(EXISTS "${_file}")
+      file(READ "${_file}" _contents)
+      foreach(_token
+	  [[rt/view_legacy_bsg.h]]
+	  [[rt_view_screen_point_from_bsg]])
+	string(FIND "${_contents}" "${_token}" _idx)
+	if(_idx EQUAL -1)
+	  _brlobol_pivot_guard_fail(
+	    "${_rel} must route screen-point conversion through rt/view_legacy_bsg.h token ${_token}")
+	endif()
+      endforeach()
+      string(REGEX MATCH [[(^|[^A-Za-z0-9_])bsg_screen_pt([^A-Za-z0-9_]|$)]]
+	_screen_point_direct "${_contents}")
+      if(_screen_point_direct)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} reintroduced direct BSG screen-point conversion: ${_screen_point_direct}")
+      endif()
+    endif()
+  endforeach()
+
   set(_qtcad_select_filter "${BRLCAD_SOURCE_DIR}/src/libqtcad/QgSelectFilter.cpp")
   if(EXISTS "${_qtcad_select_filter}")
     file(READ "${_qtcad_select_filter}" _qtcad_select_filter_contents)
@@ -6986,8 +7663,12 @@ function(_brlobol_pivot_guard_check_qtcad_view_snapshot_adapters)
 	"rt/view_legacy_bsg.h"
 	"rt_view_width_from_bsg"
 	"rt_view_height_from_bsg"
+	"rt_view_radius_from_bsg"
+	"rt_view_screen_to_view_from_bsg"
 	"rt_view_view2model_from_bsg"
-	"rt_view_rotation_from_bsg")
+	"rt_view_rotation_from_bsg"
+	"_qg_select_ray_from_view"
+	"qg_obol_pick_ray(view_widget()")
       string(FIND "${_qtcad_select_filter_contents}" "${_token}" _idx)
       if(_idx EQUAL -1)
 	_brlobol_pivot_guard_fail(
@@ -6995,7 +7676,9 @@ function(_brlobol_pivot_guard_check_qtcad_view_snapshot_adapters)
       endif()
     endforeach()
     foreach(_pat
-	[[v->[ \t\r\n]*gv_(width|height|view2model|rotation)]])
+	[[v->[ \t\r\n]*gv_(width|height|view2model|rotation)]]
+	[[v->[ \t\r\n]*radius]]
+	[[bsg_screen_to_view]])
       string(REGEX MATCH "${_pat}" _hit "${_qtcad_select_filter_contents}")
       if(_hit)
 	_brlobol_pivot_guard_fail(
@@ -7004,11 +7687,73 @@ function(_brlobol_pivot_guard_check_qtcad_view_snapshot_adapters)
     endforeach()
   endif()
 
+  foreach(_rel
+      src/libqtcad/QgSelectFilter.cpp
+      src/libged/rect/rect.c
+      src/libged/select/select.c
+      src/libged/view/faceplate/interactive_rect.c
+      src/libtclcad/commands.c
+      src/libtclcad/view/refresh.c)
+    set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
+    if(EXISTS "${_file}")
+      file(READ "${_file}" _contents)
+      foreach(_token
+	  [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	  [[rt_view_interactive_rect_from_bsg]])
+	string(REGEX MATCH "${_token}" _interactive_rect_token_hit
+	  "${_contents}")
+	if(NOT _interactive_rect_token_hit)
+	  _brlobol_pivot_guard_fail(
+	    "${_rel} must route interactive rectangle state through rt/view_legacy_bsg.h token ${_token}")
+	endif()
+      endforeach()
+      string(REGEX MATCH [[(^|[^A-Za-z0-9_])bsg_view_interactive_rect_(get|set)([^A-Za-z0-9_]|$)]]
+	_interactive_rect_direct_hit "${_contents}")
+      if(_interactive_rect_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} reintroduced direct BSG interactive rectangle state access: ${_interactive_rect_direct_hit}")
+      endif()
+    endif()
+  endforeach()
+
+  foreach(_rel
+      src/libqtcad/QgCanvasState.h
+      src/libqtcad/QgView.cpp
+      src/libqtcad/QgGL.cpp
+      src/libqtcad/QgSW.cpp
+      src/libtclcad/view/refresh.c
+      src/mged/usepen.c
+      src/mged/mged.c
+      src/mged/dm-generic.c
+      src/mged/dozoom.c)
+    set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
+    if(EXISTS "${_file}")
+      file(READ "${_file}" _contents)
+      foreach(_token
+	  [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	  [[rt_view_refresh_]])
+	string(REGEX MATCH "${_token}" _refresh_token_hit
+	  "${_contents}")
+	if(NOT _refresh_token_hit)
+	  _brlobol_pivot_guard_fail(
+	    "${_rel} must route refresh state through rt/view_legacy_bsg.h token ${_token}")
+	endif()
+      endforeach()
+      string(REGEX MATCH [[(^|[^A-Za-z0-9_])bsg_view_refresh_(enabled|set_enabled|suppressed|suppress_begin|suppress_end|request|consume|complete|dirty|drawn_count|set_drawn_count)([^A-Za-z0-9_]|$)]]
+	_refresh_direct_hit "${_contents}")
+      if(_refresh_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} reintroduced direct BSG refresh-state access: ${_refresh_direct_hit}")
+      endif()
+    endif()
+  endforeach()
+
   set(_qtcad_measure_filter "${BRLCAD_SOURCE_DIR}/src/libqtcad/QgMeasureFilter.cpp")
   if(EXISTS "${_qtcad_measure_filter}")
     file(READ "${_qtcad_measure_filter}" _qtcad_measure_filter_contents)
     foreach(_token
 	"rt/view_legacy_bsg.h"
+	"rt_view_screen_to_view_from_bsg"
 	"rt_view_view2model_from_bsg")
       string(FIND "${_qtcad_measure_filter_contents}" "${_token}" _idx)
       if(_idx EQUAL -1)
@@ -7016,7 +7761,7 @@ function(_brlobol_pivot_guard_check_qtcad_view_snapshot_adapters)
 	  "src/libqtcad/QgMeasureFilter.cpp must route 2D measurement view-to-model reads through rt/view_legacy_bsg.h token ${_token}")
       endif()
     endforeach()
-    string(REGEX MATCH [[MAT4X3PNT[ \t\r\n]*\([^;]*v->[ \t\r\n]*gv_view2model]]
+    string(REGEX MATCH [[(MAT4X3PNT[ \t\r\n]*\([^;]*v->[ \t\r\n]*gv_view2model|bsg_screen_to_view)]]
       _qtcad_measure_direct "${_qtcad_measure_filter_contents}")
     if(_qtcad_measure_direct)
       _brlobol_pivot_guard_fail(
@@ -7183,10 +7928,14 @@ function(_brlobol_pivot_guard_check_brlobol_mesh_identity)
   foreach(_rel
       include/brlobol/pick_detail.h
       include/brlobol/export_action.h
+      include/brlobol/measure_action.h
       include/brlobol/mesh_shape.h
+      include/brlobol/snap_action.h
       src/libbrlobol/pick_detail.cpp
       src/libbrlobol/mesh_shape.cpp
       src/libbrlobol/export_action.cpp
+      src/libbrlobol/measure_action.cpp
+      src/libbrlobol/snap_action.cpp
       src/libbrlobol/tests/test_prototype.cpp)
     if(NOT EXISTS "${BRLCAD_SOURCE_DIR}/${_rel}")
       _brlobol_pivot_guard_fail("${_rel} is required for Obol mesh vertex identity coverage")
@@ -7210,6 +7959,10 @@ function(_brlobol_pivot_guard_check_brlobol_mesh_identity)
       "faceVertexIndex"
       "BRLObolSourceMeshPickResult"
       "BRLObolRtPickResult"
+      "BRLObolRtPickCache"
+      "prepare"
+      "pickRay"
+      "getObjectPathCount"
       "brlobol_pick_source_full_detail_result"
       "brlobol_pick_rt_ray"
       "IMPLICIT_SOLID"
@@ -7239,14 +7992,21 @@ function(_brlobol_pivot_guard_check_brlobol_mesh_identity)
       "SoBRLPickDetail::setNearestFaceVertex"
       "BRLObolSourceMeshPickResult::clear"
       "BRLObolRtPickResult::clear"
+      "BRLObolRtPickCache::prepare"
+      "BRLObolRtPickCache::pickRay"
+      "BRLObolRtPickCache::clear"
+      "pick_rt_same_object_paths"
       "brlobol_pick_rt_ray"
       "brlobol_pick_rt_hit"
       "rt_shootray"
       "RT_HIT_NORMAL"
       "pick_source_ray_triangle"
       "pick_source_fill_detail"
+      "pick_source_mesh_face_index"
+      "pick_source_mesh_vertex_index"
       "brlobol_pick_source_full_detail_result"
       "pick_source_full_detail_result_valid"
+      "sourceRequest.queryRayValid"
       "SO_ACTION_SOURCE(SoBRLSourceMeshPickAction)"
       "SoBRLSourceMeshPickAction::initClass"
       "SoBRLSourceMeshPickAction::meshShapeAction"
@@ -7305,10 +8065,78 @@ function(_brlobol_pivot_guard_check_brlobol_mesh_identity)
       "shape->getTriangleVertexIndices"
       "record.vertexIndexA"
       "record.vertexIndexB"
-      "record.vertexIndexC")
+      "record.vertexIndexC"
+      "export_source_mesh_vertex_index")
     string(FIND "${_export_impl}" "${_token}" _idx)
     if(_idx EQUAL -1)
       _brlobol_pivot_guard_fail("src/libbrlobol/export_action.cpp missing mesh vertex identity token ${_token}")
+    endif()
+  endforeach()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/include/brlobol/snap_action.h" _snap_header)
+  foreach(_token
+      "VERTEX"
+      "EDGE_NEAREST"
+      "getVertexIndex"
+      "getEdgeSlot"
+      "getEdgeVertexIndexA"
+      "getEdgeVertexIndexB")
+    string(FIND "${_snap_header}" "${_token}" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("include/brlobol/snap_action.h missing mesh sub-entity snap token ${_token}")
+    endif()
+  endforeach()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/src/libbrlobol/snap_action.cpp" _snap_impl)
+  foreach(_token
+      "SoBRLSnapAction::getVertexIndex"
+      "SoBRLSnapAction::getEdgeSlot"
+      "SoBRLSnapAction::getEdgeVertexIndexA"
+      "SoBRLSnapAction::getEdgeVertexIndexB"
+      "snapAction->consider(VERTEX"
+      "snapAction->consider(EDGE_NEAREST"
+      "this->consider(VERTEX"
+      "this->consider(EDGE_NEAREST"
+      "shape->getTriangleVertexIndices"
+      "shape->getFullDetailTriangleVertexIndices"
+      "snap_source_mesh_vertex_index")
+    string(FIND "${_snap_impl}" "${_token}" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("src/libbrlobol/snap_action.cpp missing mesh sub-entity snap token ${_token}")
+    endif()
+  endforeach()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/include/brlobol/measure_action.h" _measure_header)
+  foreach(_token
+      "getNearestFaceVertexIndexA"
+      "getNearestFaceVertexIndexB"
+      "getNearestFaceVertexIndexC"
+      "getNearestFaceEdgeSlot"
+      "getNearestFaceEdgeVertexIndexA"
+      "getNearestFaceEdgeVertexIndexB"
+      "getNearestFaceVertexSlot"
+      "getNearestFaceVertexIndex")
+    string(FIND "${_measure_header}" "${_token}" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("include/brlobol/measure_action.h missing mesh sub-entity measure token ${_token}")
+    endif()
+  endforeach()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/src/libbrlobol/measure_action.cpp" _measure_impl)
+  foreach(_token
+      "SoBRLMeasureAction::getNearestFaceVertexIndexA"
+      "SoBRLMeasureAction::getNearestFaceEdgeSlot"
+      "nearest_face_edge_slot"
+      "nearest_face_vertex_slot"
+      "nearestFaceEdgeVertexIndex"
+      "shape->getTriangleVertexIndices"
+      "shape->getFullDetailTriangleVertexIndices"
+      "this->measureTriangle(sourceRequest.path"
+      "vertexIndices[edges[edgeSlot][0]]"
+      "measure_source_mesh_vertex_index")
+    string(FIND "${_measure_impl}" "${_token}" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("src/libbrlobol/measure_action.cpp missing mesh sub-entity measure token ${_token}")
     endif()
   endforeach()
 
@@ -7324,10 +8152,237 @@ function(_brlobol_pivot_guard_check_brlobol_mesh_identity)
       "getNearestFaceVertexIndex() != 0"
       "tri.vertexIndexA != 0"
       "tri.vertexIndexB != 1"
-      "tri.vertexIndexC != 2")
+      "tri.vertexIndexC != 2"
+      "mesh measure should report nearest transformed mesh face and sub-entity identity"
+      "meshVertexSnap"
+      "SoBRLSnapAction::VERTEX"
+      "getVertexIndex() != 0"
+      "meshEdgeSnap"
+      "SoBRLSnapAction::EDGE_NEAREST"
+      "getEdgeVertexIndexA() != 0"
+      "getEdgeVertexIndexB() != 1")
     string(FIND "${_prototype_test}" "${_token}" _idx)
     if(_idx EQUAL -1)
       _brlobol_pivot_guard_fail("src/libbrlobol/tests/test_prototype.cpp missing mesh vertex identity coverage token ${_token}")
+    endif()
+  endforeach()
+endfunction()
+
+function(_brlobol_pivot_guard_check_brlobol_edit_intent_identity)
+  foreach(_rel
+      include/brlobol/export_action.h
+      include/brlobol/measure_action.h
+      include/brlobol/mesh_shape.h
+      include/brlobol/pick_detail.h
+      include/brlobol/snap_action.h
+      include/brlobol/source_mesh_request.h
+      include/brlobol/edit_preview.h
+      include/brlobol/view_controller.h
+      include/brlobol/vlist_shape.h
+      src/libbrlobol/edit_preview.cpp
+      src/libbrlobol/export_action.cpp
+      src/libbrlobol/measure_action.cpp
+      src/libbrlobol/mesh_shape.cpp
+      src/libbrlobol/pick_detail.cpp
+      src/libbrlobol/snap_action.cpp
+      src/libbrlobol/vlist_shape.cpp
+      src/libbrlobol/tests/test_prototype.cpp)
+    if(NOT EXISTS "${BRLCAD_SOURCE_DIR}/${_rel}")
+      _brlobol_pivot_guard_fail("${_rel} is required for Obol edit-intent identity coverage")
+      continue()
+    endif()
+  endforeach()
+
+  foreach(_rel
+      include/brlobol/mesh_shape.h
+      include/brlobol/vlist_shape.h)
+    file(READ "${BRLCAD_SOURCE_DIR}/${_rel}" _shape_header)
+    foreach(_token
+	"editIntentId"
+	"editIntentRole")
+      string(FIND "${_shape_header}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("${_rel} missing edit-intent field ${_token}")
+      endif()
+    endforeach()
+  endforeach()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/include/brlobol/source_mesh_request.h" _source_request_header)
+  foreach(_token
+      "SbString editIntentId"
+      "SbString editIntentRole"
+      "editIntentId = \"\""
+      "editIntentRole = \"\"")
+    string(FIND "${_source_request_header}" "${_token}" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("include/brlobol/source_mesh_request.h missing edit-intent request token ${_token}")
+    endif()
+  endforeach()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/include/brlobol/pick_detail.h" _pick_header)
+  foreach(_token
+      "setEditIntent"
+      "getEditIntentId"
+      "getEditIntentRole")
+    string(FIND "${_pick_header}" "${_token}" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("include/brlobol/pick_detail.h missing edit-intent detail token ${_token}")
+    endif()
+  endforeach()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/include/brlobol/export_action.h" _export_header)
+  foreach(_token
+      "editIntentId"
+      "editIntentRole")
+    string(FIND "${_export_header}" "${_token}" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("include/brlobol/export_action.h missing edit-intent export token ${_token}")
+    endif()
+  endforeach()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/include/brlobol/snap_action.h" _snap_header)
+  foreach(_token
+      "getEditIntentId"
+      "getEditIntentRole"
+      "candidateEditIntentId"
+      "candidateEditIntentRole")
+    string(FIND "${_snap_header}" "${_token}" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("include/brlobol/snap_action.h missing edit-intent snap token ${_token}")
+    endif()
+  endforeach()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/include/brlobol/measure_action.h" _measure_header)
+  foreach(_token
+      "getNearestEditIntentId"
+      "getNearestEditIntentRole"
+      "nearestEditIntentId"
+      "nearestEditIntentRole")
+    string(FIND "${_measure_header}" "${_token}" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("include/brlobol/measure_action.h missing edit-intent measure token ${_token}")
+    endif()
+  endforeach()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/include/brlobol/edit_preview.h" _edit_preview_header)
+  foreach(_token
+      "SoSFString editIntentId"
+      "SoSFString editIntentRole"
+      "setEditIntent")
+    string(FIND "${_edit_preview_header}" "${_token}" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("include/brlobol/edit_preview.h missing edit-preview intent token ${_token}")
+    endif()
+  endforeach()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/include/brlobol/view_controller.h" _view_controller_header)
+  string(FIND "${_view_controller_header}" "replaceEditPreviewWithIntent" _idx)
+  if(_idx EQUAL -1)
+    _brlobol_pivot_guard_fail("include/brlobol/view_controller.h missing explicit edit-preview intent API")
+  endif()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/src/libbrlobol/pick_detail.cpp" _pick_impl)
+  foreach(_token
+      "SoBRLPickDetail::setEditIntent"
+      "SoBRLPickDetail::getEditIntentId"
+      "SoBRLPickDetail::getEditIntentRole"
+      "sourceRequest.editIntentId")
+    string(FIND "${_pick_impl}" "${_token}" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("src/libbrlobol/pick_detail.cpp missing edit-intent detail implementation token ${_token}")
+    endif()
+  endforeach()
+
+  foreach(_rel
+      src/libbrlobol/vlist_shape.cpp
+      src/libbrlobol/mesh_shape.cpp)
+    file(READ "${BRLCAD_SOURCE_DIR}/${_rel}" _shape_impl)
+    foreach(_token
+	"SO_NODE_ADD_FIELD(editIntentId"
+	"SO_NODE_ADD_FIELD(editIntentRole"
+	"setEditIntent(this->editIntentId")
+      string(FIND "${_shape_impl}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("${_rel} missing edit-intent shape implementation token ${_token}")
+      endif()
+    endforeach()
+  endforeach()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/src/libbrlobol/export_action.cpp" _export_impl)
+  foreach(_token
+      "record.editIntentId = editIntentId"
+      "record.editIntentRole = editIntentRole"
+      "shape->editIntentId.getValue()"
+      "sourceRequest.editIntentId")
+    string(FIND "${_export_impl}" "${_token}" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("src/libbrlobol/export_action.cpp missing edit-intent export token ${_token}")
+    endif()
+  endforeach()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/src/libbrlobol/snap_action.cpp" _snap_impl)
+  foreach(_token
+      "SoBRLSnapAction::getEditIntentId"
+      "candidateEditIntentId = editIntentId"
+      "shape->editIntentId.getValue()"
+      "sourceRequest.editIntentId")
+    string(FIND "${_snap_impl}" "${_token}" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("src/libbrlobol/snap_action.cpp missing edit-intent snap token ${_token}")
+    endif()
+  endforeach()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/src/libbrlobol/measure_action.cpp" _measure_impl)
+  foreach(_token
+      "SoBRLMeasureAction::getNearestEditIntentId"
+      "nearestEditIntentId = editIntentId"
+      "shape->editIntentId.getValue()"
+      "sourceRequest.editIntentId")
+    string(FIND "${_measure_impl}" "${_token}" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("src/libbrlobol/measure_action.cpp missing edit-intent measure token ${_token}")
+    endif()
+  endforeach()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/src/libbrlobol/edit_preview.cpp" _edit_preview_impl)
+  foreach(_token
+      "SO_NODE_ADD_FIELD(editIntentId"
+      "SO_NODE_ADD_FIELD(editIntentRole"
+      "SoBRLEditPreview::setEditIntent"
+      "shape->editIntentId = intentId.getLength()"
+      "shape->editIntentRole = intentRole.getLength()")
+    string(FIND "${_edit_preview_impl}" "${_token}" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("src/libbrlobol/edit_preview.cpp missing edit-preview intent token ${_token}")
+    endif()
+  endforeach()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/src/libbrlobol/view_controller.cpp" _view_controller_impl)
+  foreach(_token
+      "BRLObolViewController::replaceEditPreviewWithIntent"
+      "preview->setEditIntent")
+    string(FIND "${_view_controller_impl}" "${_token}" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("src/libbrlobol/view_controller.cpp missing explicit edit-preview intent token ${_token}")
+    endif()
+  endforeach()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/src/libbrlobol/tests/test_prototype.cpp" _prototype_test)
+  foreach(_token
+      "edit preview should publish typed edit-intent metadata"
+      "edit preview should publish explicit live edit intent fields"
+      "edit preview snap should expose explicit live edit intent"
+      "edit preview measure should expose explicit live edit intent"
+      "edit preview export should expose explicit live edit intent"
+      "getEditIntentId()"
+      "edit preview pick should preserve preview and edit-intent identity"
+      "edit preview snap should preserve edit-intent metadata"
+      "getNearestEditIntentId()"
+      "edit preview measure should preserve edit-intent metadata"
+      "edit preview export should preserve edit-intent metadata")
+    string(FIND "${_prototype_test}" "${_token}" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("src/libbrlobol/tests/test_prototype.cpp missing edit-intent coverage token ${_token}")
     endif()
   endforeach()
 endfunction()
@@ -7527,6 +8582,9 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "attributes"
       "proxy"
       "mesh"
+      "normals"
+      "faceIndex"
+      "vertexIndex"
       "terminal"
       "fallback"
       "diagnostic"
@@ -7567,6 +8625,14 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "BRLOBOL_LOD_PROVIDER_STALE"
       "BRLOBOL_LOD_PROVIDER_CACHE_MISS"
       "BRLObolLodMeshPayload::isValid"
+      "normals.clear"
+      "normals.empty"
+      "normals.size() == coordIndex.size()"
+      "data.normal_count != index_count"
+      "faceIndex.clear"
+      "faceIndex.empty"
+      "vertexIndex.clear"
+      "vertexIndex.empty"
       "brlobol_lod_mesh_payload_from_rt_mesh_data"
       "BRLOBOL_LOD_RESULT_DIRECTORY"
       "BRLOBOL_LOD_RESULT_ATTRIBUTES"
@@ -7608,6 +8674,8 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "cancelGeneration"
       "isGenerationCancelled"
       "submit"
+      "submitIfNotActive"
+      "hasActiveRequest"
       "drainResults"
       "drainMatchingResults"
       "subscribeResultReady"
@@ -7645,6 +8713,10 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "subscriberCv"
       "lod_normalize_result"
       "BRLObolLodService::drainMatchingResults"
+      "BRLObolLodService::submitIfNotActive"
+      "BRLObolLodService::hasActiveRequest"
+      "activeRequestKeys"
+      "lod_active_request_key_recorded_unlocked"
       "BRLOBOL_LOD_PROVIDER_CANCELLED"
       "BRLOBOL_LOD_PROVIDER_STALE"
       "brlobol_rt_mesh_lod_provider_task"
@@ -7663,6 +8735,20 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "source_query.ray.origin"
       "source_query.ray.direction"
       "source_query.tolerance"
+      "lod_remove_source_query_provider_params"
+      "lod_provider_param_has_no_trailing_tokens"
+      "lod_request_query_space_is_source_local"
+      "lod_request_snap_query_bounds"
+      "lod_request_pick_query_ray"
+      "lod_request_has_scoped_subset_query"
+      "lod_parse_bounds_provider_param"
+      "lod_ray_intersects_triangle"
+      "lod_bounds_intersect"
+      "selectedFaces"
+      "RT source full-detail provider scoped query matched no faces"
+      "result.mesh.faceIndex"
+      "result.mesh.vertexIndex"
+      "sourceToLocal"
       "rt_mesh_lod_has_active_data"
       "rt_mesh_lod_load_level"
       "rt_mesh_lod_info_get"
@@ -7827,11 +8913,16 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "BRLObolLodService"
       "SoBRLMeshShape"
       "makeLodRequest"
+      "brlobol_lod_cache_key"
+      "current LoD request is already resident"
       "BRLObolRtMeshLodProvider"
       "brlobol_rt_mesh_lod_provider_task"
       "brlobol_rt_mesh_lod_provider_free"
       "realizeDataFree"
       "service->submit"
+      "service->hasActiveRequest"
+      "service->submitIfNotActive"
+      "current LoD request is already active"
       "isLodBackedMesh"
       "provider->useForcedLevel"
       "provider->forcedLevel"
@@ -8064,6 +9155,7 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "consumeSourceBackedFullDetailResults"
       "skippedLodDisplayMeshCount"
       "export_source_full_detail_result_valid"
+      "export_source_mesh_face_index"
       "brlobol_lod_rt_source_full_detail_request_from_source_mesh_request"
       "brlobol_lod_submit_rt_source_full_detail_request"
       "request.localToWorld = localToWorld"
@@ -8112,9 +9204,13 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "submitSourceBackedFullDetailRequests"
       "consumeSourceBackedFullDetailResults"
       "measure_source_full_detail_result_valid"
+      "measure_source_mesh_face_index"
       "brlobol_lod_rt_source_full_detail_request_from_source_mesh_request"
       "brlobol_lod_submit_rt_source_full_detail_request"
       "request.localToWorld = localToWorld"
+      "this->haveQueryPoint"
+      "request.queryBoundsValid = 1"
+      "request.queryBounds.extendBy(localQuery)"
       "skippedLodDisplayMeshCount")
     string(FIND "${_measure_impl}" "${_token}" _idx)
     if(_idx EQUAL -1)
@@ -8157,6 +9253,7 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "submitSourceBackedFullDetailRequests"
       "consumeSourceBackedFullDetailResults"
       "snap_source_full_detail_result_valid"
+      "snap_source_mesh_face_index"
       "brlobol_lod_rt_source_full_detail_request_from_source_mesh_request"
       "brlobol_lod_submit_rt_source_full_detail_request"
       "request.localToWorld = localToWorld"
@@ -8250,6 +9347,14 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "isLodBackedMesh"
       "isLodPreserveFullDetailEnabled"
       "isLodDisplayActive"
+      "expected_view_lod_level"
+      "rt_mesh_lod_load_view"
+      "LoD submit action did not use view-policy active level"
+      "LoD submit action did not skip already-resident view/policy request"
+      "LoD view controller did not skip resident changed-scene LoD request"
+      "LoD view controller did not skip resident threshold policy request"
+      "LoD view controller queued duplicate resident request result"
+      "LoD view controller queued duplicate threshold request result"
       "LoD-backed mesh retained full-detail payload after display LoD update"
       "LoD-backed mesh request did not keep source metrics without full-detail payload"
       "evictActiveDisplayMesh"
@@ -8271,20 +9376,51 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "exact export did not request source-backed full-detail LoD mesh"
       "exact export source-backed request did not convert to RT full-detail LoD request"
       "exact export did not consume source-backed full-detail LoD result"
+      "controller source-backed exact export helper did not consume matching LoD result"
       "exact export did not submit source-backed full-detail LoD request"
       "exact export source-backed submit helper did not publish stale source result"
+      "controller multi-source source-backed exact submit did not use matching database source"
+      "controller multi-source source-backed exact submit did not consume matching database-scoped result"
+      "test_view_controller_source_backed_partial_ready_submit"
+      "controller partial-ready exact helper did not consume ready result and submit missing request"
+      "controller partial-ready exact pick helper did not consume ready result and submit missing request"
       "exact measure did not request source-backed full-detail LoD mesh"
+      "exact measure source-backed request did not carry bounded query metadata"
       "exact measure source-backed request did not convert to RT full-detail LoD request"
       "exact measure did not consume source-backed full-detail LoD result"
+      "controller source-backed exact measure helper did not consume matching LoD result"
+      "exact measure query distance limit did not filter resident nearest primitives"
+      "bounded exact measure source-backed request did not carry explicit query tolerance"
+      "bounded exact measure source-backed request did not convert explicit query tolerance"
       "exact snap did not request source-backed full-detail LoD mesh"
       "exact snap source-backed request did not carry bounded query metadata"
       "exact snap source-backed request did not convert to RT full-detail LoD request"
       "exact snap did not consume source-backed full-detail LoD result"
+      "controller source-backed exact snap helper did not consume matching LoD result"
       "exact pick did not consume source-backed full-detail LoD result"
-      "SoBRLSourceMeshPickAction"
-      "exact pick action did not collect and consume source-backed full-detail LoD result"
+	      "SoBRLSourceMeshPickAction"
+	      "exact pick action did not collect and consume source-backed full-detail LoD result"
+	      "controller source-backed exact pick helper did not consume matching LoD result"
+	      "mappedSourceResult.mesh.faceIndex"
+      "mappedSourceResult.mesh.vertexIndex"
+      "exact export did not preserve source face and vertex index mapping"
+      "exact measure did not preserve source face and vertex index mapping"
+      "exact measure did not accept compact bounded source subset with identity mapping"
+      "exact measure accepted compact bounded source subset without face index mapping"
+      "exact measure accepted compact bounded source subset without vertex index mapping"
+      "exact snap did not preserve source face index mapping"
+      "exact pick did not preserve source face and vertex index mapping"
+      "exact snap did not preserve source vertex index mapping"
+      "exact snap did not accept compact source vertex subset with vertex index mapping"
+      "exact snap accepted compact source vertex subset without vertex index mapping"
+      "exact pick did not accept ray-scoped source face and vertex subset"
+      "exact pick accepted compact ray-scoped source point subset without vertex index mapping"
+      "exact pick accepted non-query source face subset"
       "test_rt_exact_pick_provider"
       "RT exact pick provider did not return implicit comb hit identity"
+      "BRLObolRtPickCache pickCache"
+      "RT exact pick provider did not prepare reusable pick cache"
+      "RT exact pick provider one-shot wrapper did not use cache-backed ray path"
       "SoBRLPickDetail::IMPLICIT_SOLID"
       "source_query.bounds"
       "source_query.tolerance"
@@ -8295,6 +9431,8 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "BU_DIR_CACHE"
       "getSubmittedTaskCount"
       "getSkippedMeshCount"
+      "activeDuplicateSubmit"
+      "LoD submit action did not skip active duplicate view/policy request"
       "lod-submit.bot"
       "test_view_controller_lod_submit_and_apply"
       "submitLodRequests"
@@ -8346,6 +9484,10 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "BRLOBOL_LOD_PROVIDER_STALE"
       "queuedCacheWriteCountForDiagnostics"
       "delayedTaskCountForDiagnostics"
+      "submitIfNotActive"
+      "hasActiveRequest"
+      "test_active_request_duplicate_suppression"
+      "LoD service accepted duplicate active request"
       "subscribeResultReady"
       "unsubscribeResultReady"
       "result_ready_cb"
@@ -8364,6 +9506,12 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "useForcedLevel"
       "forcedLevel"
       "shrinkAfterCopy"
+      "cachedNormals"
+      "LoD RT provider did not store cached mesh normals"
+      "cachedNormalProvider"
+      "cachedNormalResult.counts.normalCount == 0"
+      "cachedNormalResult.mesh.normals.size() !="
+      "LoD RT provider did not return cached mesh normals"
       "db_mesh_lod_invalidate"
       "cleared_cache_entry"
       "refreshMissing = FALSE"
@@ -8375,6 +9523,31 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "BRLOBOL_LOD_RESULT_FULL_DETAIL"
       "RT source full-detail provider source metrics changed"
       "RT source full-detail provider request exceeds full-detail limits"
+      "LoD RT source full-detail provider query bounds did not reduce returned face payload"
+      "LoD RT source full-detail provider scoped bounds limit should apply after payload reduction"
+      "LoD RT source full-detail provider scoped bounds miss should not expand to whole-object payload"
+      "LoD RT source full-detail provider should ignore non-source-local bounds when reducing payloads"
+      "LoD RT source full-detail provider should not bypass whole-object limits for non-source-local bounds"
+      "LoD RT source full-detail provider should ignore malformed source-local bounds when reducing payloads"
+      "LoD RT source full-detail provider should not bypass whole-object limits for malformed source-local tolerance"
+      "LoD RT source full-detail provider should ignore duplicate query-space params when reducing payloads"
+      "LoD RT source full-detail provider should not bypass whole-object limits for duplicate bounds params"
+      "LoD RT source full-detail provider should ignore mixed scoped query kinds when reducing payloads"
+      "LoD RT source full-detail provider should not bypass whole-object limits for mixed scoped query kinds"
+      "LoD RT source full-detail provider query ray did not reduce returned face payload"
+      "scopedResult.mesh.faceIndex"
+      "scopedResult.mesh.vertexIndex"
+      "compactRayResult.mesh.vertexIndex"
+      "LoD RT source full-detail provider query ray did not compact source vertex payload"
+      "LoD RT source full-detail provider scoped ray limit should apply after payload reduction"
+      "LoD RT source full-detail provider scoped ray miss should not expand to whole-object payload"
+      "LoD RT source full-detail provider should ignore non-source-local rays when reducing payloads"
+      "LoD RT source full-detail provider should ignore malformed source-local rays when reducing payloads"
+      "LoD RT source full-detail provider should ignore duplicate ray params when reducing payloads"
+      "LoD RT source full-detail provider should keep measure query hints whole-object without tolerance"
+      "LoD RT source full-detail provider should reduce explicit bounded measure query payloads"
+      "LoD RT source full-detail helper should replace stale template query params"
+      "LoD RT source full-detail helper should submit current source query params after template cleanup"
       "LoD RT source full-detail helper did not submit source request"
       "test_rt_source_full_detail_provider_task"
       "mesh.isValid"
@@ -8382,6 +9555,115 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
     string(FIND "${_lod_service_test}" "${_token}" _idx)
     if(_idx EQUAL -1)
       _brlobol_pivot_guard_fail("src/libbrlobol/tests/test_lod_service.cpp missing async LoD service coverage token ${_token}")
+    endif()
+  endforeach()
+endfunction()
+
+function(_brlobol_pivot_guard_check_brlobol_material_object)
+  foreach(_rel
+      include/brlobol/material_object.h
+      include/brlobol/database_source.h
+      include/brlobol/CMakeLists.txt
+      src/libbrlobol/material_object.cpp
+      src/libbrlobol/database_source.cpp
+      src/libbrlobol/init.cpp
+      src/libbrlobol/CMakeLists.txt
+      src/libbrlobol/tests/test_prototype.cpp)
+    if(NOT EXISTS "${BRLCAD_SOURCE_DIR}/${_rel}")
+      _brlobol_pivot_guard_fail("${_rel} is required for Obol material object coverage")
+      continue()
+    endif()
+  endforeach()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/include/brlobol/material_object.h" _material_header)
+  foreach(_token
+      "class BRLOBOL_EXPORT SoBRLMaterialObject"
+      "materialName"
+      "parentName"
+      "materialSource"
+      "propertyGroup"
+      "findProperty")
+    string(FIND "${_material_header}" "${_token}" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("include/brlobol/material_object.h missing material metadata token ${_token}")
+    endif()
+  endforeach()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/include/brlobol/database_source.h" _db_source_header)
+  foreach(_token
+      "SoBRLMaterialObject"
+      "getRealizedMaterialObject"
+      "getRealizedMaterialObjectCount")
+    string(FIND "${_db_source_header}" "${_token}" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("include/brlobol/database_source.h missing material object accessor ${_token}")
+    endif()
+  endforeach()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/src/libbrlobol/database_source.cpp" _db_source_impl)
+  foreach(_token
+      "material_object_from_internal"
+      "RT_CHECK_MATERIAL"
+      "internalType == ID_MATERIAL"
+      "assign_material_identity"
+      "count_material_objects_in_node")
+    string(FIND "${_db_source_impl}" "${_token}" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("src/libbrlobol/database_source.cpp missing material object realization token ${_token}")
+    endif()
+  endforeach()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/src/libbrlobol/init.cpp" _init_impl)
+  string(FIND "${_init_impl}" "SoBRLMaterialObject::initClass()" _idx)
+  if(_idx EQUAL -1)
+    _brlobol_pivot_guard_fail("src/libbrlobol/init.cpp must register SoBRLMaterialObject")
+  endif()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/src/libbrlobol/tests/test_prototype.cpp" _prototype_test)
+  foreach(_token
+      "exercise_generated_material_object"
+      "database-backed material wire object coverage"
+      "database-backed material shaded object coverage"
+      "findProperty(\"physical\", \"density\""
+      "material object contributed export geometry")
+    string(FIND "${_prototype_test}" "${_token}" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("src/libbrlobol/tests/test_prototype.cpp missing material object coverage token ${_token}")
+    endif()
+  endforeach()
+endfunction()
+
+function(_brlobol_pivot_guard_check_brlobol_curve_shaded_vlist)
+  foreach(_rel
+      src/libbrlobol/database_source.cpp
+      src/libbrlobol/tests/test_prototype.cpp)
+    if(NOT EXISTS "${BRLCAD_SOURCE_DIR}/${_rel}")
+      _brlobol_pivot_guard_fail("${_rel} is required for Obol curve shaded-vlist coverage")
+      continue()
+    endif()
+  endforeach()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/src/libbrlobol/database_source.cpp" _db_source_impl)
+  foreach(_token
+      "vlist_from_plot_internal"
+      "rt_obj_plot(&vhead, intern"
+      "internalType == ID_SKETCH || internalType == ID_ANNOT")
+    string(FIND "${_db_source_impl}" "${_token}" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("src/libbrlobol/database_source.cpp missing curve shaded-vlist realization token ${_token}")
+    endif()
+  endforeach()
+
+  file(READ "${BRLCAD_SOURCE_DIR}/src/libbrlobol/tests/test_prototype.cpp" _prototype_test)
+  foreach(_token
+      "exercise_generated_primitive_shaded_vlist"
+      "shaded vlist pick did not hit line geometry"
+      "shaded vlist snap did not preserve line/path identity"
+      "database-backed sketch shaded vlist coverage"
+      "database-backed annotation shaded vlist coverage")
+    string(FIND "${_prototype_test}" "${_token}" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("src/libbrlobol/tests/test_prototype.cpp missing curve shaded-vlist coverage token ${_token}")
     endif()
   endforeach()
 endfunction()
@@ -8404,7 +9686,13 @@ function(_brlobol_pivot_guard_check_brlobol_point_identity)
   file(READ "${BRLCAD_SOURCE_DIR}/include/brlobol/vlist_shape.h" _vlist_header)
   foreach(_token
       "getPointPrimitiveCount"
-      "getPointPrimitive")
+      "getPointPrimitive"
+      "pointColorValid"
+      "pointScaleValid"
+      "pointNormalValid"
+      "getPointColor"
+      "getPointScale"
+      "getPointNormal")
     string(FIND "${_vlist_header}" "${_token}" _idx)
     if(_idx EQUAL -1)
       _brlobol_pivot_guard_fail("include/brlobol/vlist_shape.h missing point primitive API ${_token}")
@@ -8416,6 +9704,9 @@ function(_brlobol_pivot_guard_check_brlobol_point_identity)
       "struct PointRecord"
       "getPointCount"
       "appendPoint"
+      "pointColorValid"
+      "pointScaleValid"
+      "pointNormalValid"
       "std::vector<PointRecord> points")
     string(FIND "${_export_header}" "${_token}" _idx)
     if(_idx EQUAL -1)
@@ -8427,7 +9718,16 @@ function(_brlobol_pivot_guard_check_brlobol_point_identity)
   foreach(_token
       "vlist_from_pnts"
       "RT_PNT_TYPE_PNT"
+      "RT_PNT_TYPE_COL"
+      "RT_PNT_TYPE_SCA"
+      "RT_PNT_TYPE_NRM"
+      "RT_PNT_TYPE_COL_SCA"
+      "RT_PNT_TYPE_COL_NRM"
+      "RT_PNT_TYPE_SCA_NRM"
+      "RT_PNT_TYPE_COL_SCA_NRM"
+      "defaultScale"
       "SoBRLVListShape::POINT"
+      "setPointAttributes"
       "internalType == ID_PNTS")
     string(FIND "${_db_source_impl}" "${_token}" _idx)
     if(_idx EQUAL -1)
@@ -8439,7 +9739,16 @@ function(_brlobol_pivot_guard_check_brlobol_point_identity)
   foreach(_token
       "SoBRLExportAction::getPointCount"
       "shape->getPointPrimitiveCount()"
+      "export_transform_point_normal"
+      "export_transform_point_scale"
+      "localToWorld.inverse().transpose()"
+      "shape->getPointColor"
+      "shape->getPointScale"
+      "shape->getPointNormal"
       "SoBRLExportAction::appendPoint"
+      "record.pointColorValid"
+      "record.pointScaleValid"
+      "record.pointNormalValid"
       "record.point = point")
     string(FIND "${_export_impl}" "${_token}" _idx)
     if(_idx EQUAL -1)
@@ -8449,9 +9758,9 @@ function(_brlobol_pivot_guard_check_brlobol_point_identity)
 
   file(READ "${BRLCAD_SOURCE_DIR}/src/libbrlobol/snap_action.cpp" _snap_impl)
   foreach(_token
-      "shape->getPointPrimitiveCount()"
+      "shape->command[i] != SoBRLVListShape::POINT"
       "snapAction->consider(ENDPOINT"
-      "primitiveIndex, query, worldPoint")
+      "editIntentRole, i, query, worldPoint")
     string(FIND "${_snap_impl}" "${_token}" _idx)
     if(_idx EQUAL -1)
       _brlobol_pivot_guard_fail("src/libbrlobol/snap_action.cpp missing point snap token ${_token}")
@@ -8461,7 +9770,25 @@ function(_brlobol_pivot_guard_check_brlobol_point_identity)
   file(READ "${BRLCAD_SOURCE_DIR}/src/libbrlobol/tests/test_prototype.cpp" _prototype_test)
   foreach(_token
       "exercise_generated_pnts_shaded_points"
+      "exercise_generated_pnts_shaded_attributes"
+      "exercise_generated_pnts_attribute_variant"
       "shape->getPointPrimitiveCount() != 2"
+      "RT_PNT_TYPE_COL_SCA_NRM"
+      "pnts_col.s"
+      "pnts_sca.s"
+      "pnts_nrm.s"
+      "pnts_col_sca.s"
+      "pnts_col_nrm.s"
+      "pnts_sca_nrm.s"
+      "pnts_global_scale.s"
+      "pnts_sca_precedence.s"
+      "database-backed PNTS shaded point attribute realization"
+      "database-backed PNTS color-scale attribute variant"
+      "database-backed PNTS scale-normal attribute variant"
+      "database-backed PNTS global scale fallback"
+      "database-backed PNTS per-point scale precedence"
+      "setScale(SbVec3f(2.0f, 3.0f, 4.0f))"
+      "transformed shaded point-attribute export records are wrong"
       "pointExport.getPointCount() != 2"
       "pointSnap.getPrimitiveIndex() != 0"
       "database-backed PNTS shaded point realization")
@@ -8479,6 +9806,9 @@ _brlobol_pivot_guard_check_brlobol_image_source()
 _brlobol_pivot_guard_check_brlobol_image_display()
 _brlobol_pivot_guard_check_brlobol_window_host()
 _brlobol_pivot_guard_check_brlobol_mesh_identity()
+_brlobol_pivot_guard_check_brlobol_edit_intent_identity()
+_brlobol_pivot_guard_check_brlobol_material_object()
+_brlobol_pivot_guard_check_brlobol_curve_shaded_vlist()
 _brlobol_pivot_guard_check_brlobol_point_identity()
 _brlobol_pivot_guard_check_brlobol_lod_metadata()
 _brlobol_pivot_guard_check_plot3_ownership()
@@ -8494,6 +9824,8 @@ _brlobol_pivot_guard_check_librt_edit_knob_neutralization()
 _brlobol_pivot_guard_check_librt_view_info_neutralization()
 _brlobol_pivot_guard_check_librt_sketch_polygon_neutralization()
 _brlobol_pivot_guard_check_qtcad_obol_test_links()
+_brlobol_pivot_guard_check_qtcad_obol_edit_preview_intent()
+_brlobol_pivot_guard_check_qtcad_obol_export_source_exact()
 _brlobol_pivot_guard_check_qtcad_obol_pick_source_exact()
 _brlobol_pivot_guard_check_qtcad_obol_snap_source_exact()
 _brlobol_pivot_guard_check_qtcad_obol_measure_source_exact()
@@ -8518,6 +9850,7 @@ else()
     # listed below are the qtcad Obol-canonical API surface.
     include/qtcad/QgObolDatabaseSync.h
     include/qtcad/QgObolEditPreview.h
+    include/qtcad/QgObolExport.h
     include/qtcad/QgObolMeasure.h
     include/qtcad/QgObolOverlaySync.h
     include/qtcad/QgObolPick.h
@@ -8526,6 +9859,7 @@ else()
     include/qtcad/QgObolWindowHost.h
     src/libqtcad/QgObolDatabaseSync.cpp
     src/libqtcad/QgObolEditPreview.cpp
+    src/libqtcad/QgObolExport.cpp
     src/libqtcad/QgObolMeasure.cpp
     src/libqtcad/QgObolOverlaySync.cpp
     src/libqtcad/QgObolPick.cpp

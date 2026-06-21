@@ -93,7 +93,9 @@ struct rt_mesh_lod_data {
 };
 
 /* Full-detail mesh arrays supplied by producer callbacks.  The callback owns
- * the array lifetimes; RT borrows them until the matching clear/free callback. */
+ * the array lifetimes; RT borrows them until the matching clear/free callback.
+ * Normal payloads are optional, but when present must contain one normal per
+ * triangle corner: normal_count == face_count * 3. */
 struct rt_mesh_lod_detail {
     const int *faces;
     size_t face_count;
@@ -165,6 +167,9 @@ RT_EXPORT extern void rt_mesh_lod_cache_status_init(struct rt_mesh_lod_cache_sta
 RT_EXPORT extern int db_mesh_lod_status(struct db_i *dbip, const char *name, struct rt_mesh_lod_cache_status *status);
 RT_EXPORT extern int db_mesh_lod_refresh(struct db_i *dbip, const char *name, struct rt_mesh_lod_cache_status *status);
 RT_EXPORT extern int db_mesh_lod_invalidate(struct db_i *dbip, const char *name, struct rt_mesh_lod_cache_status *status);
+/* Store caller-owned mesh arrays in the database LoD cache.  normals is
+ * optional; when supplied it must contain one normal per triangle corner in
+ * faces order, i.e. face_count * 3 normals. */
 RT_EXPORT extern int db_mesh_lod_store_mesh(struct db_i *dbip, const char *name, const point_t *vertices, size_t vertex_count, const vect_t *normals, const int *faces, size_t face_count, unsigned long long user_key, fastf_t fidelity_ratio, struct rt_mesh_lod_cache_status *status);
 RT_EXPORT extern struct rt_mesh_lod *db_mesh_lod_get(struct db_i *dbip, const char *name);
 RT_EXPORT extern int rt_mesh_lod_load_level(struct rt_mesh_lod *lod, int level, int reset);
@@ -176,6 +181,7 @@ RT_EXPORT extern void rt_mesh_lod_info_init(struct rt_mesh_lod_info *info);
 RT_EXPORT extern int rt_mesh_lod_info_get(const struct rt_mesh_lod *lod, struct rt_mesh_lod_info *info);
 RT_EXPORT extern void rt_mesh_lod_detail_init(struct rt_mesh_lod_detail *detail);
 RT_EXPORT extern int rt_mesh_lod_detail_callbacks_set(struct rt_mesh_lod *lod, rt_mesh_lod_detail_setup_callback setup_clbk, rt_mesh_lod_detail_clear_callback clear_clbk, rt_mesh_lod_detail_free_callback free_clbk, void *cb_data);
+RT_EXPORT extern void rt_mesh_lod_detail_callbacks_clear(struct rt_mesh_lod *lod);
 RT_EXPORT extern void rt_mesh_lod_memshrink(struct rt_mesh_lod *lod);
 RT_EXPORT extern void rt_mesh_lod_destroy(struct rt_mesh_lod *lod);
 

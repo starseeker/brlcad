@@ -39,7 +39,7 @@ go_refresh_draw(struct ged *gedp, struct bsg_view *gdvp, int restore_zbuffer)
 {
     struct tclcad_view_data *tvd = (struct tclcad_view_data *)gdvp->u_data;
     struct bsg_interactive_rect_state rect = {0};
-    (void)bsg_view_interactive_rect_get(gdvp, &rect);
+    (void)rt_view_interactive_rect_from_bsg(&rect, gdvp);
     if (tvd->gdv_fbs.fbs_mode == TCLCAD_OBJ_FB_MODE_OVERLAY) {
 	if (rect.draw) {
 	    go_draw(gdvp);
@@ -164,14 +164,15 @@ to_refresh_view(struct bsg_view *gdvp)
     if (current_top == NULL || gdvp == NULL)
 	return;
 
-    if (!bsg_view_refresh_enabled(gdvp) || bsg_view_refresh_suppressed(gdvp))
+    if (!rt_view_refresh_enabled_from_bsg(gdvp) ||
+	    rt_view_refresh_suppressed_from_bsg(gdvp))
 	return;
 
-    bsg_view_refresh_request(gdvp, BSG_VIEW_REFRESH_ALL);
+    rt_view_refresh_request_bsg(gdvp, BSG_VIEW_REFRESH_ALL);
     if (to_is_viewable(gdvp)) {
-	(void)bsg_view_refresh_consume(gdvp);
+	(void)rt_view_refresh_consume_bsg(gdvp);
 	go_refresh(current_top->to_gedp, gdvp);
-	bsg_view_refresh_complete(gdvp);
+	rt_view_refresh_complete_bsg(gdvp);
     }
 }
 
@@ -198,7 +199,7 @@ to_refresh_all_enabled(struct tclcad_obj *top)
     struct bu_ptbl *views = bsg_set_views(&top->to_gedp->ged_views);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	gdvp = (struct bsg_view *)BU_PTBL_GET(views, i);
-	if (!bsg_view_refresh_enabled(gdvp))
+	if (!rt_view_refresh_enabled_from_bsg(gdvp))
 	    return 0;
     }
 
@@ -216,7 +217,7 @@ to_refresh_all_set_enabled(struct tclcad_obj *top, int enabled)
     struct bu_ptbl *views = bsg_set_views(&top->to_gedp->ged_views);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	gdvp = (struct bsg_view *)BU_PTBL_GET(views, i);
-	bsg_view_refresh_set_enabled(gdvp, enabled);
+	rt_view_refresh_enabled_set_bsg(gdvp, enabled);
     }
 }
 
@@ -231,7 +232,7 @@ to_refresh_suppress_all_begin(struct tclcad_obj *top)
     struct bu_ptbl *views = bsg_set_views(&top->to_gedp->ged_views);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	gdvp = (struct bsg_view *)BU_PTBL_GET(views, i);
-	bsg_view_refresh_suppress_begin(gdvp);
+	rt_view_refresh_suppress_begin_bsg(gdvp);
     }
 }
 
@@ -246,7 +247,7 @@ to_refresh_suppress_all_end(struct tclcad_obj *top)
     struct bu_ptbl *views = bsg_set_views(&top->to_gedp->ged_views);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	gdvp = (struct bsg_view *)BU_PTBL_GET(views, i);
-	bsg_view_refresh_suppress_end(gdvp);
+	rt_view_refresh_suppress_end_bsg(gdvp);
     }
 }
 

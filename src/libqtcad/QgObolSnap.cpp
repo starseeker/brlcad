@@ -10,8 +10,6 @@
 
 #include "qtcad/QgObolSnap.h"
 
-#include "brlobol/database_source.h"
-#include "brlobol/lod_service.h"
 #include "brlobol/snap_action.h"
 #include "brlobol/view_controller.h"
 #include "qtcad/QgView.h"
@@ -19,14 +17,21 @@
 #include <Inventor/SoViewport.h>
 
 #include <cmath>
-#include <vector>
 
 QgObolSnapRecord::QgObolSnapRecord(void) :
     point(0.0f, 0.0f, 0.0f),
     path(),
+    editIntentId(),
+    editIntentRole(),
     kind(NONE),
     primitiveIndex(-1),
-    distance(0.0f)
+    vertexIndex(-1),
+    edgeSlot(-1),
+    edgeVertexIndexA(-1),
+    edgeVertexIndexB(-1),
+    submittedSourceRequestCount(0),
+    distance(0.0f),
+    sourceFullDetailPending(false)
 {
 }
 
@@ -34,21 +39,25 @@ static int
 qg_obol_snap_kind_priority(int kind)
 {
     switch (kind) {
-	case QgObolSnapRecord::ENDPOINT:
+	case QgObolSnapRecord::VERTEX:
 	    return 0;
-	case QgObolSnapRecord::MIDPOINT:
+	case QgObolSnapRecord::ENDPOINT:
 	    return 1;
-	case QgObolSnapRecord::CENTER:
+	case QgObolSnapRecord::MIDPOINT:
 	    return 2;
-	case QgObolSnapRecord::FACE_NEAREST:
+	case QgObolSnapRecord::EDGE_NEAREST:
 	    return 3;
-	case QgObolSnapRecord::LINE_NEAREST:
+	case QgObolSnapRecord::FACE_NEAREST:
 	    return 4;
-	case QgObolSnapRecord::CONSTRUCTION_PLANE:
+	case QgObolSnapRecord::CENTER:
 	    return 5;
+	case QgObolSnapRecord::LINE_NEAREST:
+	    return 6;
+	case QgObolSnapRecord::CONSTRUCTION_PLANE:
+	    return 7;
 	case QgObolSnapRecord::NONE:
 	default:
-	    return 6;
+	    return 8;
     }
 }
 
@@ -77,64 +86,28 @@ qg_obol_snap_record_from_action(const SoBRLSnapAction &snapAction,
 {
     record.point = snapAction.getPoint();
     record.path = snapAction.getPath().getString();
+    record.editIntentId = snapAction.getEditIntentId().getString();
+    record.editIntentRole = snapAction.getEditIntentRole().getString();
     record.kind = static_cast<int>(snapAction.getKind());
     record.primitiveIndex = snapAction.getPrimitiveIndex();
+    record.vertexIndex = snapAction.getVertexIndex();
+    record.edgeSlot = snapAction.getEdgeSlot();
+    record.edgeVertexIndexA = snapAction.getEdgeVertexIndexA();
+    record.edgeVertexIndexB = snapAction.getEdgeVertexIndexB();
     record.distance = snapAction.getDistance();
 }
 
-static SoBRLDatabaseSource *
-qg_obol_snap_first_database_source(BRLObolViewController *controller)
-{
-    if (!controller)
-	return NULL;
-
-    for (int i = 0; i < controller->getDatabaseSourceCount(); i++) {
-	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
-	if (source && source->getDatabase())
-	    return source;
-    }
-
-    return NULL;
-}
-
-static void
+static int
 qg_obol_snap_consume_source_full_detail(BRLObolViewController *controller,
 	SoBRLSnapAction &snapAction)
 {
     if (!controller)
-	return;
+	return 0;
 
-    const int requestCount =
-	snapAction.getSourceBackedFullDetailRequestCount();
-    if (requestCount <= 0)
-	return;
-
-    std::vector<BRLObolLodRequest> expectedRequests;
-    for (int i = 0; i < requestCount; i++) {
-	BRLObolLodRequest request;
-	if (snapAction.makeSourceBackedFullDetailLodRequest(i, request))
-	    expectedRequests.push_back(request);
-    }
-    if (expectedRequests.empty())
-	return;
-
-    BRLObolLodService *service = controller->getLodService();
-    if (!service || !service->isRunning())
-	return;
-
-    std::vector<BRLObolLodResult> sourceResults;
-    service->drainMatchingResults(sourceResults, expectedRequests);
-    if (!sourceResults.empty()) {
-	(void)snapAction.consumeSourceBackedFullDetailResults(sourceResults);
-	return;
-    }
-
-    SoBRLDatabaseSource *source = qg_obol_snap_first_database_source(controller);
-    if (source)
-	(void)snapAction.submitSourceBackedFullDetailRequests(service, 0,
-		source->getDatabase(), NULL,
-		controller->getMaxExactFullDetailFaceCount(),
-		controller->getMaxExactFullDetailPointCount());
+    int submitted = 0;
+    (void)controller->consumeSnapSourceFullDetail(snapAction, 0,
+	    &submitted);
+    return submitted;
 }
 
 static int
@@ -163,8 +136,12 @@ qg_obol_snap_point_with_policy(QgView *display,
     snapAction.setGeometryPolicy(geometryPolicy);
     snapAction.apply(controller->getViewport()->getRoot());
 
-    if (geometryPolicy == SoBRLSnapAction::FULL_DETAIL)
-	qg_obol_snap_consume_source_full_detail(controller, snapAction);
+    if (geometryPolicy == SoBRLSnapAction::FULL_DETAIL) {
+	record.submittedSourceRequestCount =
+	    qg_obol_snap_consume_source_full_detail(controller, snapAction);
+	record.sourceFullDetailPending =
+	    record.submittedSourceRequestCount > 0;
+    }
 
     if (!snapAction.hasCandidate())
 	return 0;

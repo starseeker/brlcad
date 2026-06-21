@@ -7,6 +7,7 @@ set(TEST_QTCAD_PLUGIN_REUSE_SRCS test_qtcad_plugin_reuse.cpp)
 set(TEST_QTCAD_OBOL_CONTROLLER_SRCS test_qtcad_obol_controller.cpp)
 set(TEST_QTCAD_OBOL_DRAW_SYNC_SRCS test_qtcad_obol_draw_sync.cpp)
 set(TEST_QTCAD_OBOL_EDIT_PREVIEW_SRCS test_qtcad_obol_edit_preview.cpp)
+set(TEST_QTCAD_OBOL_EXPORT_SRCS test_qtcad_obol_export.cpp)
 set(TEST_QTCAD_OBOL_FACEPLATE_SYNC_SRCS test_qtcad_obol_faceplate_sync.cpp)
 set(TEST_QTCAD_OBOL_MEASURE_SRCS test_qtcad_obol_measure.cpp)
 set(TEST_QTCAD_OBOL_OVERLAY_SYNC_SRCS test_qtcad_obol_overlay_sync.cpp)
@@ -351,6 +352,42 @@ if(TARGET test_qtcad_obol_pick)
     APPEND PROPERTY LABELS drawing_baseline)
   distclean(${CMAKE_CURRENT_BINARY_DIR}/qtcad_obol_pick_tmp.g)
 endif(TARGET test_qtcad_obol_pick)
+
+if(TARGET Qt6::Widgets)
+  add_executable(test_qtcad_obol_export ${TEST_QTCAD_OBOL_EXPORT_SRCS})
+  target_link_libraries(
+    test_qtcad_obol_export
+    libqtcad
+    libged
+    libwdb
+    librt
+    libbu
+    Qt6::Widgets
+    )
+endif(TARGET Qt6::Widgets)
+if(NOT TARGET test_qtcad_obol_export AND TARGET Qt5::Widgets)
+  add_executable(test_qtcad_obol_export ${TEST_QTCAD_OBOL_EXPORT_SRCS})
+  target_link_libraries(
+    test_qtcad_obol_export
+    libqtcad
+    libged
+    libwdb
+    librt
+    libbu
+    Qt5::Widgets
+    )
+endif(NOT TARGET test_qtcad_obol_export AND TARGET Qt5::Widgets)
+if(TARGET test_qtcad_obol_export)
+  target_compile_definitions(test_qtcad_obol_export PRIVATE BRLCADBUILD HAVE_CONFIG_H)
+  brlcad_add_test(NAME test_qtcad_obol_export COMMAND test_qtcad_obol_export)
+  set_property(TEST test_qtcad_obol_export
+    APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+  set_property(TEST test_qtcad_obol_export
+    APPEND PROPERTY ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+  set_property(TEST test_qtcad_obol_export
+    APPEND PROPERTY LABELS drawing_baseline)
+  distclean(${CMAKE_CURRENT_BINARY_DIR}/qtcad_obol_export_tmp.g)
+endif(TARGET test_qtcad_obol_export)
 
 if(TARGET Qt6::Widgets)
   add_executable(test_qtcad_obol_snap ${TEST_QTCAD_OBOL_SNAP_SRCS})

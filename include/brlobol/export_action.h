@@ -57,6 +57,8 @@ public:
 	int ghosted;
 	int hiddenLine;
 	int editEmphasis;
+	SbString editIntentId;
+	SbString editIntentRole;
 	uint32_t lodPolicy;
 	int colorOverride;
 	SbColor color;
@@ -82,9 +84,17 @@ public:
 	int ghosted;
 	int hiddenLine;
 	int editEmphasis;
+	SbString editIntentId;
+	SbString editIntentRole;
 	uint32_t lodPolicy;
 	int colorOverride;
 	SbColor color;
+	int pointColorValid;
+	SbColor pointColor;
+	int pointScaleValid;
+	float pointScale;
+	int pointNormalValid;
+	SbVec3f pointNormal;
 	SbVec3f point;
     };
 
@@ -109,6 +119,8 @@ public:
 	int ghosted;
 	int hiddenLine;
 	int editEmphasis;
+	SbString editIntentId;
+	SbString editIntentRole;
 	uint32_t lodPolicy;
 	int lodAvailable;
 	int lodActiveLevel;
@@ -138,6 +150,8 @@ public:
     int getTriangleCount(void) const;
     const TriangleRecord &getTriangle(int index) const;
     const SbBox3f &getBounds(void) const;
+    void setRecordStorageEnabled(SbBool enabled);
+    SbBool isRecordStorageEnabled(void) const;
     void setGeometryPolicy(GeometryPolicy policy);
     GeometryPolicy getGeometryPolicy(void) const;
     unsigned int getSkippedLodDisplayMeshCount(void) const;
@@ -169,13 +183,21 @@ private:
     void resetResults(void);
     void appendSourceBackedFullDetailRequest(const SoBRLMeshShape *shape,
 	    const SbMatrix &localToWorld);
+    void appendLineSummary(const SbVec3f &a, const SbVec3f &b);
+    void appendPointSummary(int pointScaleValid, float pointScale,
+	    const SbVec3f &point);
+    void appendTriangleSummary(const SbVec3f &a, const SbVec3f &b,
+	    const SbVec3f &c);
     void appendLine(const SbString &path, const SbString &sourceName,
 	    const SbString &sourceType, uint32_t sourceId,
 	    int regionId, int airCode, int materialId, int los,
 	    int materialColorValid, const SbColor &materialColor,
 	    const SbString &materialShader, int primitiveIndex,
 	    int selected, int highlighted, int ghosted,
-	    int hiddenLine, int editEmphasis, uint32_t lodPolicy,
+	    int hiddenLine, int editEmphasis,
+	    const SbString &editIntentId,
+	    const SbString &editIntentRole,
+	    uint32_t lodPolicy,
 	    int colorOverride, const SbColor &color,
 	    const SbVec3f &a, const SbVec3f &b);
     void appendPoint(const SbString &path, const SbString &sourceName,
@@ -184,8 +206,14 @@ private:
 	    int materialColorValid, const SbColor &materialColor,
 	    const SbString &materialShader, int primitiveIndex,
 	    int selected, int highlighted, int ghosted,
-	    int hiddenLine, int editEmphasis, uint32_t lodPolicy,
+	    int hiddenLine, int editEmphasis,
+	    const SbString &editIntentId,
+	    const SbString &editIntentRole,
+	    uint32_t lodPolicy,
 	    int colorOverride, const SbColor &color,
+	    int pointColorValid, const SbColor &pointColor,
+	    int pointScaleValid, float pointScale,
+	    int pointNormalValid, const SbVec3f &pointNormal,
 	    const SbVec3f &point);
     void appendTriangle(const SbString &path, const SbString &sourceName,
 	    const SbString &sourceType, uint32_t sourceId,
@@ -194,7 +222,10 @@ private:
 	    const SbString &materialShader, int primitiveIndex,
 	    int vertexIndexA, int vertexIndexB, int vertexIndexC,
 	    int selected, int highlighted, int ghosted,
-	    int hiddenLine, int editEmphasis, uint32_t lodPolicy,
+	    int hiddenLine, int editEmphasis,
+	    const SbString &editIntentId,
+	    const SbString &editIntentRole,
+	    uint32_t lodPolicy,
 	    int lodAvailable, int lodActiveLevel, uint32_t lodFaceCount,
 	    uint32_t lodPointCount, uint32_t lodOriginalPointCount,
 	    uint32_t lodNormalCount, int lodHasSnappedPoints,
@@ -208,7 +239,11 @@ private:
     std::vector<TriangleRecord> triangles;
     std::vector<BRLObolSourceMeshRequest> sourceBackedFullDetailRequests;
     SbBox3f bounds;
+    int lineCount;
+    int pointCount;
+    int triangleCount;
     GeometryPolicy geometryPolicy;
+    SbBool recordStorageEnabled;
     unsigned int skippedLodDisplayMeshCount;
 };
 

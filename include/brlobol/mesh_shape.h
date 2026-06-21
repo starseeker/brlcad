@@ -72,6 +72,8 @@ public:
     SoSFBool ghosted;
     SoSFBool hiddenLine;
     SoSFBool editEmphasis;
+    SoSFString editIntentId;
+    SoSFString editIntentRole;
     SoSFUInt32 lodPolicy;
     SoSFBool lodAvailable;
     SoSFInt32 lodActiveLevel;

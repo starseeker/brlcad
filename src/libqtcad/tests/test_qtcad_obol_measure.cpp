@@ -11,6 +11,7 @@
 #include "brlobol/line_layer_overlay.h"
 #include "brlobol/lod_mesh_shape.h"
 #include "brlobol/lod_service.h"
+#include "brlobol/measure_action.h"
 #include "brlobol/mesh_shape.h"
 #include "brlobol/view_controller.h"
 #include "bu/app.h"
@@ -119,6 +120,10 @@ qtcad_measure_source_result(const BRLObolLodRequest &request,
     result.mesh.coordIndex.push_back(0);
     result.mesh.coordIndex.push_back(1);
     result.mesh.coordIndex.push_back(2);
+    result.mesh.faceIndex.push_back(42);
+    result.mesh.vertexIndex.push_back(10);
+    result.mesh.vertexIndex.push_back(11);
+    result.mesh.vertexIndex.push_back(12);
     for (const SbVec3f &point : result.mesh.points)
 	result.bounds.extendBy(point);
 
@@ -313,6 +318,8 @@ main(int argc, char **argv)
     lodMesh->sourceName = "lod-measure.bot";
     lodMesh->sourceType = "bot";
     lodMesh->sourceId = 9201;
+    lodMesh->editIntentId = "edit::lod-measure/face";
+    lodMesh->editIntentRole = "exact-measure";
     lodMesh->setIndexedTriangles(lodPoints, 3, lodIndices, 3);
 
     BRLObolLodRequest displayRequest;
@@ -338,12 +345,16 @@ main(int argc, char **argv)
     controller->setSceneRoot(lodRoot);
     lodRoot->unref();
 
-    BRLObolSourceMeshRequest sourceMeshRequest;
+    SbVec3f query(-0.2f, -0.2f, 0.02f);
+    SoBRLMeasureAction sourceRequestMeasure;
+    sourceRequestMeasure.setGeometryPolicy(SoBRLMeasureAction::FULL_DETAIL);
+    sourceRequestMeasure.setQueryPoint(query);
+    sourceRequestMeasure.apply(lodRoot);
     BRLObolLodRequest sourceLodRequest;
-    if (!lodMesh->makeSourceMeshRequest(sourceMeshRequest) ||
-	    !brlobol_lod_rt_source_full_detail_request_from_source_mesh_request(
-		sourceLodRequest, sourceMeshRequest, NULL))
-	FAIL("qtcad LoD measure fixture should build a source full-detail request");
+    if (sourceRequestMeasure.getSourceBackedFullDetailRequestCount() != 1 ||
+	    !sourceRequestMeasure.makeSourceBackedFullDetailLodRequest(0,
+		sourceLodRequest))
+	FAIL("qtcad LoD measure fixture should build a query-scoped source full-detail request");
 
     BRLObolLodService sourceService;
     if (!sourceService.start(1, TRUE))
@@ -365,7 +376,6 @@ main(int argc, char **argv)
     }
 
     QgObolMeasureGeometryRecord exactMeasure;
-    SbVec3f query(-0.2f, -0.2f, 0.02f);
     if (!qg_obol_measure_geometry_full_detail(&view, &query, exactMeasure)) {
 	controller->setLodService(NULL);
 	sourceService.stop();
@@ -389,17 +399,33 @@ main(int argc, char **argv)
     }
     if (!exactMeasure.hasNearestPrimitive ||
 	    exactMeasure.nearestPrimitiveKind != QgObolMeasureGeometryRecord::FACE ||
-	    exactMeasure.nearestPrimitiveIndex != 0 ||
+	    exactMeasure.nearestPrimitiveIndex != 42 ||
+	    exactMeasure.nearestFaceVertexIndexA != 10 ||
+	    exactMeasure.nearestFaceVertexIndexB != 11 ||
+	    exactMeasure.nearestFaceVertexIndexC != 12 ||
+	    exactMeasure.nearestFaceEdgeSlot != 1 ||
+	    exactMeasure.nearestFaceEdgeVertexIndexA != 11 ||
+	    exactMeasure.nearestFaceEdgeVertexIndexB != 12 ||
+	    exactMeasure.nearestFaceVertexSlot != 0 ||
+	    exactMeasure.nearestFaceVertexIndex != 10 ||
+	    exactMeasure.nearestEditIntentId != "edit::lod-measure/face" ||
+	    exactMeasure.nearestEditIntentRole != "exact-measure" ||
 	    exactMeasure.nearestPath != "/lod-measure.bot" ||
 	    !near_point(exactMeasure.nearestPoint, -0.2f, -0.2f, 0.0f)) {
 	controller->setLodService(NULL);
 	sourceService.stop();
-	FAIL("qtcad exact Obol measure should preserve source-backed face identity");
+	FAIL("qtcad exact Obol measure should preserve source-backed face, sub-entity identity, and edit intent");
     }
     if (sourceService.queuedResultCountForDiagnostics() != 0) {
 	controller->setLodService(NULL);
 	sourceService.stop();
 	FAIL("qtcad exact Obol measure should drain only its matching result");
+    }
+    if (exactMeasure.sourceFullDetailPending ||
+	    exactMeasure.submittedSourceRequestCount != 0) {
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad exact Obol measure should not report pending source detail after consuming a ready result");
     }
 
     controller->setExactFullDetailBudget(0, 2);
@@ -410,6 +436,13 @@ main(int argc, char **argv)
 	controller->setLodService(NULL);
 	sourceService.stop();
 	FAIL("qtcad exact Obol measure should not treat missing over-budget source detail as measured geometry");
+    }
+    if (!overBudgetMeasure.sourceFullDetailPending ||
+	    overBudgetMeasure.submittedSourceRequestCount != 1) {
+	controller->setExactFullDetailBudget(0, 0);
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad exact Obol measure should report pending submitted source detail");
     }
     if (wait_for_qtcad_measure_source_result(sourceService)) {
 	controller->setExactFullDetailBudget(0, 0);

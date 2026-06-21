@@ -1328,7 +1328,7 @@ to_poly_circ_mode_func(Tcl_Interp *interp,
     gdvp->gv_tcl->gv_polygon_mode = BSG_POLY_CIRCLE_MODE;
 
     tclcad_polygons_sync_dm_dimensions(gdvp);
-    bsg_screen_to_view(gdvp, &fx, &fy, x, y);
+    rt_view_screen_to_view_from_bsg(&fx, &fy, gdvp, x, y);
     VSET(v_pt, fx, fy, gdvp->gv_tcl->gv_data_vZ);
     {
 	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
@@ -1395,7 +1395,7 @@ to_poly_cont_build_func(Tcl_Interp *interp,
     gdvp->gv_tcl->gv_polygon_mode = BSG_POLY_CONTOUR_MODE;
 
     tclcad_polygons_sync_dm_dimensions(gdvp);
-    bsg_screen_to_view(gdvp, &fx, &fy, x, y);
+    rt_view_screen_to_view_from_bsg(&fx, &fy, gdvp, x, y);
     VSET(v_pt, fx, fy, gdvp->gv_tcl->gv_data_vZ);
     {
 	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
@@ -1753,7 +1753,7 @@ to_poly_ell_mode_func(Tcl_Interp *interp,
     gdvp->gv_tcl->gv_polygon_mode = TCLCAD_POLY_ELLIPSE_MODE;
 
     tclcad_polygons_sync_dm_dimensions(gdvp);
-    bsg_screen_to_view(gdvp, &fx, &fy, x, y);
+    rt_view_screen_to_view_from_bsg(&fx, &fy, gdvp, x, y);
     VSET(v_pt, fx, fy, gdvp->gv_tcl->gv_data_vZ);
     {
 	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
@@ -1914,7 +1914,7 @@ to_poly_rect_mode_func(Tcl_Interp *interp,
 	gdvp->gv_tcl->gv_polygon_mode = TCLCAD_POLY_RECTANGLE_MODE;
 
     tclcad_polygons_sync_dm_dimensions(gdvp);
-    bsg_screen_to_view(gdvp, &fx, &fy, x, y);
+    rt_view_screen_to_view_from_bsg(&fx, &fy, gdvp, x, y);
     VSET(v_pt, fx, fy, gdvp->gv_tcl->gv_data_vZ);
     {
 	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);

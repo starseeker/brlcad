@@ -82,7 +82,8 @@ _label_cmd_create(void *bs, int argc, const char **argv)
 	}
     } else {
 	fastf_t fx, fy;
-	if (bsg_screen_to_view(gd->cv, &fx, &fy, (int)p[0], (int)p[1]) < 0) {
+	if (!rt_view_screen_to_view_from_bsg(&fx, &fy, gd->cv,
+		(int)p[0], (int)p[1])) {
 	    return BRLCAD_ERROR;
 	}
 	p[0] = fx;

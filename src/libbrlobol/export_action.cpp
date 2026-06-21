@@ -39,8 +39,98 @@ export_source_full_detail_result_valid(const BRLObolSourceMeshRequest &sourceReq
     return TRUE;
 }
 
+static int
+export_source_mesh_face_index(const BRLObolLodMeshPayload &mesh,
+	size_t faceSlot, size_t faceCount)
+{
+    if (mesh.faceIndex.size() == faceCount)
+	return static_cast<int>(mesh.faceIndex[faceSlot]);
+    return static_cast<int>(faceSlot);
+}
+
+static int
+export_source_mesh_vertex_index(const BRLObolLodMeshPayload &mesh,
+	int localIndex)
+{
+    if (localIndex < 0)
+	return localIndex;
+    if (mesh.vertexIndex.size() == mesh.points.size())
+	return static_cast<int>(
+		mesh.vertexIndex[static_cast<size_t>(localIndex)]);
+    return localIndex;
+}
+
+static SbVec3f
+export_transform_point_normal(const SbMatrix &localToWorld,
+	const SbVec3f &localNormal)
+{
+    SbMatrix normalMatrix = localToWorld.inverse().transpose();
+    SbVec3f worldNormal;
+    normalMatrix.multDirMatrix(localNormal, worldNormal);
+    if (worldNormal.length() > 0.0f)
+	worldNormal.normalize();
+    return worldNormal;
+}
+
+static float
+export_transform_point_scale(const SbMatrix &localToWorld,
+	const SbVec3f &localPoint,
+	const SbVec3f &worldPoint,
+	float localScale)
+{
+    if (localScale <= 0.0f)
+	return localScale;
+
+    const float offset[2] = {-localScale, localScale};
+    float worldScale = 0.0f;
+
+    for (int xi = 0; xi < 2; xi++) {
+	for (int yi = 0; yi < 2; yi++) {
+	    for (int zi = 0; zi < 2; zi++) {
+		SbVec3f localCorner(
+			localPoint[0] + offset[xi],
+			localPoint[1] + offset[yi],
+			localPoint[2] + offset[zi]);
+		SbVec3f worldCorner;
+		localToWorld.multVecMatrix(localCorner, worldCorner);
+		const SbVec3f delta = worldCorner - worldPoint;
+		for (int axis = 0; axis < 3; axis++) {
+		    const float radius = delta[axis] < 0.0f ?
+			-delta[axis] : delta[axis];
+		    if (radius > worldScale)
+			worldScale = radius;
+		}
+	    }
+	}
+    }
+
+    return worldScale;
+}
+
+template <typename Record>
+static void
+export_reserve_records(std::vector<Record> &records, size_t additionalCount)
+{
+    if (additionalCount == 0)
+	return;
+
+    const size_t required = records.size() + additionalCount;
+    if (required <= records.capacity())
+	return;
+
+    size_t grown = records.capacity() > 0 ?
+	records.capacity() * 2 : additionalCount;
+    if (grown < required)
+	grown = required;
+    records.reserve(grown);
+}
+
 SoBRLExportAction::SoBRLExportAction(void) :
+    lineCount(0),
+    pointCount(0),
+    triangleCount(0),
     geometryPolicy(FULL_DETAIL),
+    recordStorageEnabled(TRUE),
     skippedLodDisplayMeshCount(0)
 {
     SO_ACTION_CONSTRUCTOR(SoBRLExportAction);
@@ -64,7 +154,7 @@ SoBRLExportAction::initClass(void)
 int
 SoBRLExportAction::getLineCount(void) const
 {
-    return static_cast<int>(this->lines.size());
+    return this->lineCount;
 }
 
 const SoBRLExportAction::LineRecord &
@@ -76,7 +166,7 @@ SoBRLExportAction::getLine(int index) const
 int
 SoBRLExportAction::getPointCount(void) const
 {
-    return static_cast<int>(this->points.size());
+    return this->pointCount;
 }
 
 const SoBRLExportAction::PointRecord &
@@ -88,7 +178,7 @@ SoBRLExportAction::getPoint(int index) const
 int
 SoBRLExportAction::getTriangleCount(void) const
 {
-    return static_cast<int>(this->triangles.size());
+    return this->triangleCount;
 }
 
 const SoBRLExportAction::TriangleRecord &
@@ -101,6 +191,18 @@ const SbBox3f &
 SoBRLExportAction::getBounds(void) const
 {
     return this->bounds;
+}
+
+void
+SoBRLExportAction::setRecordStorageEnabled(SbBool enabled)
+{
+    this->recordStorageEnabled = enabled ? TRUE : FALSE;
+}
+
+SbBool
+SoBRLExportAction::isRecordStorageEnabled(void) const
+{
+    return this->recordStorageEnabled;
 }
 
 void
@@ -158,6 +260,8 @@ SoBRLExportAction::appendSourceBackedFullDetailResult(
 	return FALSE;
 
     size_t faceCount = result.mesh.coordIndex.size() / 3;
+    if (this->recordStorageEnabled)
+	export_reserve_records(this->triangles, faceCount);
     for (size_t i = 0; i < faceCount; i++) {
 	int ia = result.mesh.coordIndex[i * 3];
 	int ib = result.mesh.coordIndex[i * 3 + 1];
@@ -177,16 +281,27 @@ SoBRLExportAction::appendSourceBackedFullDetailResult(
 		result.mesh.points[static_cast<size_t>(ib)], worldB);
 	sourceRequest.localToWorld.multVecMatrix(
 		result.mesh.points[static_cast<size_t>(ic)], worldC);
+	const int sourceIa = export_source_mesh_vertex_index(result.mesh, ia);
+	const int sourceIb = export_source_mesh_vertex_index(result.mesh, ib);
+	const int sourceIc = export_source_mesh_vertex_index(result.mesh, ic);
+
+	if (!this->recordStorageEnabled) {
+	    this->appendTriangleSummary(worldA, worldB, worldC);
+	    continue;
+	}
 
 	this->appendTriangle(sourceRequest.path, sourceRequest.sourceName,
 		sourceRequest.sourceType, sourceRequest.sourceId,
 		sourceRequest.regionId, sourceRequest.airCode,
 		sourceRequest.materialId, sourceRequest.los,
 		sourceRequest.materialColorValid, sourceRequest.materialColor,
-		sourceRequest.materialShader, static_cast<int>(i),
-		ia, ib, ic, sourceRequest.selected, sourceRequest.highlighted,
+		sourceRequest.materialShader,
+		export_source_mesh_face_index(result.mesh, i, faceCount),
+		sourceIa, sourceIb, sourceIc, sourceRequest.selected,
+		sourceRequest.highlighted,
 		sourceRequest.ghosted, sourceRequest.hiddenLine,
-		sourceRequest.editEmphasis, sourceRequest.lodPolicy,
+		sourceRequest.editEmphasis, sourceRequest.editIntentId,
+		sourceRequest.editIntentRole, sourceRequest.lodPolicy,
 		sourceRequest.lodAvailable, sourceRequest.lodActiveLevel,
 		result.counts.faceCount > 0 ?
 		    static_cast<uint32_t>(result.counts.faceCount) :
@@ -279,56 +394,111 @@ SoBRLExportAction::vlistShapeAction(SoAction *action, SoNode *node)
 	return;
 
     const SbMatrix &localToWorld = SoModelMatrixElement::get(action->getState());
-
-    for (int i = 0; i < shape->getSegmentCount(); i++) {
-	SbVec3f a;
-	SbVec3f b;
-	if (!shape->getSegment(i, a, b))
-	    continue;
-
-	SbVec3f worldA;
-	SbVec3f worldB;
-	localToWorld.multVecMatrix(a, worldA);
-	localToWorld.multVecMatrix(b, worldB);
-
-	exportAction->appendLine(shape->sourcePath.getValue(),
-		shape->sourceName.getValue(), shape->sourceType.getValue(),
-		shape->sourceId.getValue(),
-		shape->regionId.getValue(), shape->airCode.getValue(),
-		shape->materialId.getValue(), shape->los.getValue(),
-		shape->materialColorValid.getValue(),
-		shape->materialColor.getValue(),
-		shape->materialShader.getValue(), i,
-		shape->isPrimitiveSelected(i), shape->isPrimitiveHighlighted(i),
-		shape->ghosted.getValue(), shape->hiddenLine.getValue(),
-		shape->editEmphasis.getValue(), shape->lodPolicy.getValue(),
-		shape->colorOverride.getValue(),
-		shape->color.getValue(), worldA, worldB);
+    if (exportAction->recordStorageEnabled) {
+	export_reserve_records(exportAction->lines,
+		static_cast<size_t>(shape->getSegmentCount()));
+	export_reserve_records(exportAction->points,
+		static_cast<size_t>(shape->getPointPrimitiveCount()));
     }
 
-    for (int i = 0; i < shape->getPointPrimitiveCount(); i++) {
-	SbVec3f point;
-	int primitiveIndex = -1;
-	if (!shape->getPointPrimitive(i, primitiveIndex, point))
+    SbVec3f last;
+    SbBool haveLast = FALSE;
+    int segmentIndex = 0;
+    int n = shape->point.getNum();
+    if (shape->command.getNum() < n)
+	n = shape->command.getNum();
+
+    for (int i = 0; i < n; i++) {
+	if (shape->command[i] == SoBRLVListShape::MOVE) {
+	    last = shape->point[i];
+	    haveLast = TRUE;
 	    continue;
+	}
 
-	SbVec3f worldPoint;
-	localToWorld.multVecMatrix(point, worldPoint);
+	if (shape->command[i] == SoBRLVListShape::DRAW) {
+	    if (haveLast) {
+		SbVec3f worldA;
+		SbVec3f worldB;
+		localToWorld.multVecMatrix(last, worldA);
+		localToWorld.multVecMatrix(shape->point[i], worldB);
 
-	exportAction->appendPoint(shape->sourcePath.getValue(),
-		shape->sourceName.getValue(), shape->sourceType.getValue(),
-		shape->sourceId.getValue(),
-		shape->regionId.getValue(), shape->airCode.getValue(),
-		shape->materialId.getValue(), shape->los.getValue(),
-		shape->materialColorValid.getValue(),
-		shape->materialColor.getValue(),
-		shape->materialShader.getValue(), primitiveIndex,
-		shape->isPrimitiveSelected(primitiveIndex),
-		shape->isPrimitiveHighlighted(primitiveIndex),
-		shape->ghosted.getValue(), shape->hiddenLine.getValue(),
-		shape->editEmphasis.getValue(), shape->lodPolicy.getValue(),
-		shape->colorOverride.getValue(),
-		shape->color.getValue(), worldPoint);
+		if (!exportAction->recordStorageEnabled) {
+		    exportAction->appendLineSummary(worldA, worldB);
+		} else {
+		    exportAction->appendLine(shape->sourcePath.getValue(),
+			    shape->sourceName.getValue(), shape->sourceType.getValue(),
+			    shape->sourceId.getValue(),
+			    shape->regionId.getValue(), shape->airCode.getValue(),
+			    shape->materialId.getValue(), shape->los.getValue(),
+			    shape->materialColorValid.getValue(),
+			    shape->materialColor.getValue(),
+			    shape->materialShader.getValue(), segmentIndex,
+			    shape->isPrimitiveSelected(segmentIndex),
+			    shape->isPrimitiveHighlighted(segmentIndex),
+			    shape->ghosted.getValue(), shape->hiddenLine.getValue(),
+			    shape->editEmphasis.getValue(),
+			    shape->editIntentId.getValue(),
+			    shape->editIntentRole.getValue(),
+			    shape->lodPolicy.getValue(),
+			    shape->colorOverride.getValue(),
+			    shape->color.getValue(), worldA, worldB);
+		}
+		segmentIndex++;
+	    }
+	    last = shape->point[i];
+	    haveLast = TRUE;
+	    continue;
+	}
+
+	if (shape->command[i] == SoBRLVListShape::POINT) {
+	    SbVec3f worldPoint;
+	    localToWorld.multVecMatrix(shape->point[i], worldPoint);
+
+	    float pointScale = 0.0f;
+	    const int pointScaleValid =
+		shape->getPointScale(i, pointScale) ? 1 : 0;
+	    if (pointScaleValid)
+		pointScale = export_transform_point_scale(localToWorld,
+			shape->point[i], worldPoint, pointScale);
+
+	    if (!exportAction->recordStorageEnabled) {
+		exportAction->appendPointSummary(pointScaleValid, pointScale,
+			worldPoint);
+		continue;
+	    }
+
+	    SbColor pointColor(1.0f, 1.0f, 1.0f);
+	    SbVec3f pointNormal(0.0f, 0.0f, 1.0f);
+	    const int pointColorValid =
+		shape->getPointColor(i, pointColor) ? 1 : 0;
+	    const int pointNormalValid =
+		shape->getPointNormal(i, pointNormal) ? 1 : 0;
+	    if (pointNormalValid)
+		pointNormal = export_transform_point_normal(localToWorld,
+			pointNormal);
+
+	    exportAction->appendPoint(shape->sourcePath.getValue(),
+		    shape->sourceName.getValue(), shape->sourceType.getValue(),
+		    shape->sourceId.getValue(),
+		    shape->regionId.getValue(), shape->airCode.getValue(),
+		    shape->materialId.getValue(), shape->los.getValue(),
+		    shape->materialColorValid.getValue(),
+		    shape->materialColor.getValue(),
+		    shape->materialShader.getValue(), i,
+		    shape->isPrimitiveSelected(i),
+		    shape->isPrimitiveHighlighted(i),
+		    shape->ghosted.getValue(), shape->hiddenLine.getValue(),
+		    shape->editEmphasis.getValue(),
+		    shape->editIntentId.getValue(),
+		    shape->editIntentRole.getValue(),
+		    shape->lodPolicy.getValue(),
+		    shape->colorOverride.getValue(),
+		    shape->color.getValue(),
+		    pointColorValid, pointColor,
+		    pointScaleValid, pointScale,
+		    pointNormalValid, pointNormal,
+		    worldPoint);
+	}
     }
 }
 
@@ -357,6 +527,9 @@ SoBRLExportAction::meshShapeAction(SoAction *action, SoNode *node)
 
     int triangleCount = useFullDetail ?
 	shape->getFullDetailTriangleCount() : shape->getTriangleCount();
+    if (exportAction->recordStorageEnabled)
+	export_reserve_records(exportAction->triangles,
+		static_cast<size_t>(triangleCount));
     for (int i = 0; i < triangleCount; i++) {
 	SbVec3f a;
 	SbVec3f b;
@@ -383,6 +556,11 @@ SoBRLExportAction::meshShapeAction(SoAction *action, SoNode *node)
 	localToWorld.multVecMatrix(b, worldB);
 	localToWorld.multVecMatrix(c, worldC);
 
+	if (!exportAction->recordStorageEnabled) {
+	    exportAction->appendTriangleSummary(worldA, worldB, worldC);
+	    continue;
+	}
+
 	exportAction->appendTriangle(shape->sourcePath.getValue(),
 		shape->sourceName.getValue(), shape->sourceType.getValue(),
 		shape->sourceId.getValue(),
@@ -394,7 +572,10 @@ SoBRLExportAction::meshShapeAction(SoAction *action, SoNode *node)
 		ia, ib, ic,
 		shape->isPrimitiveSelected(i), shape->isPrimitiveHighlighted(i),
 		shape->ghosted.getValue(), shape->hiddenLine.getValue(),
-		shape->editEmphasis.getValue(), shape->lodPolicy.getValue(),
+		shape->editEmphasis.getValue(),
+		shape->editIntentId.getValue(),
+		shape->editIntentRole.getValue(),
+		shape->lodPolicy.getValue(),
 		shape->lodAvailable.getValue(),
 		shape->lodActiveLevel.getValue(),
 		shape->lodFaceCount.getValue(),
@@ -417,6 +598,9 @@ SoBRLExportAction::resetResults(void)
     this->points.clear();
     this->triangles.clear();
     this->sourceBackedFullDetailRequests.clear();
+    this->lineCount = 0;
+    this->pointCount = 0;
+    this->triangleCount = 0;
     this->bounds.makeEmpty();
     this->skippedLodDisplayMeshCount = 0;
 }
@@ -436,16 +620,56 @@ SoBRLExportAction::appendSourceBackedFullDetailRequest(
 }
 
 void
+SoBRLExportAction::appendLineSummary(const SbVec3f &a, const SbVec3f &b)
+{
+    this->lineCount++;
+    this->bounds.extendBy(a);
+    this->bounds.extendBy(b);
+}
+
+void
+SoBRLExportAction::appendPointSummary(int pointScaleValid, float pointScale,
+	const SbVec3f &point)
+{
+    this->pointCount++;
+    this->bounds.extendBy(point);
+    if (pointScaleValid && pointScale > 0.0f) {
+	const SbVec3f radius(pointScale, pointScale, pointScale);
+	this->bounds.extendBy(point - radius);
+	this->bounds.extendBy(point + radius);
+    }
+}
+
+void
+SoBRLExportAction::appendTriangleSummary(const SbVec3f &a, const SbVec3f &b,
+	const SbVec3f &c)
+{
+    this->triangleCount++;
+    this->bounds.extendBy(a);
+    this->bounds.extendBy(b);
+    this->bounds.extendBy(c);
+}
+
+void
 SoBRLExportAction::appendLine(const SbString &path, const SbString &sourceName,
 	const SbString &sourceType, uint32_t sourceId,
 	int regionId, int airCode, int materialId, int los,
 	int materialColorValid, const SbColor &materialColor,
 	const SbString &materialShader, int primitiveIndex,
 	int selected, int highlighted, int ghosted,
-	int hiddenLine, int editEmphasis, uint32_t lodPolicy,
+	int hiddenLine, int editEmphasis,
+	const SbString &editIntentId,
+	const SbString &editIntentRole,
+	uint32_t lodPolicy,
 	int colorOverride, const SbColor &color,
 	const SbVec3f &a, const SbVec3f &b)
 {
+    if (!this->recordStorageEnabled) {
+	this->appendLineSummary(a, b);
+	return;
+    }
+
+    this->lineCount++;
     LineRecord record;
     record.path = path;
     record.sourceName = sourceName;
@@ -464,6 +688,8 @@ SoBRLExportAction::appendLine(const SbString &path, const SbString &sourceName,
     record.ghosted = ghosted ? 1 : 0;
     record.hiddenLine = hiddenLine ? 1 : 0;
     record.editEmphasis = editEmphasis ? 1 : 0;
+    record.editIntentId = editIntentId;
+    record.editIntentRole = editIntentRole;
     record.lodPolicy = lodPolicy;
     record.colorOverride = colorOverride ? 1 : 0;
     record.color = color;
@@ -481,10 +707,22 @@ SoBRLExportAction::appendPoint(const SbString &path, const SbString &sourceName,
 	int materialColorValid, const SbColor &materialColor,
 	const SbString &materialShader, int primitiveIndex,
 	int selected, int highlighted, int ghosted,
-	int hiddenLine, int editEmphasis, uint32_t lodPolicy,
+	int hiddenLine, int editEmphasis,
+	const SbString &editIntentId,
+	const SbString &editIntentRole,
+	uint32_t lodPolicy,
 	int colorOverride, const SbColor &color,
+	int pointColorValid, const SbColor &pointColor,
+	int pointScaleValid, float pointScale,
+	int pointNormalValid, const SbVec3f &pointNormal,
 	const SbVec3f &point)
 {
+    if (!this->recordStorageEnabled) {
+	this->appendPointSummary(pointScaleValid, pointScale, point);
+	return;
+    }
+
+    this->pointCount++;
     PointRecord record;
     record.path = path;
     record.sourceName = sourceName;
@@ -503,12 +741,26 @@ SoBRLExportAction::appendPoint(const SbString &path, const SbString &sourceName,
     record.ghosted = ghosted ? 1 : 0;
     record.hiddenLine = hiddenLine ? 1 : 0;
     record.editEmphasis = editEmphasis ? 1 : 0;
+    record.editIntentId = editIntentId;
+    record.editIntentRole = editIntentRole;
     record.lodPolicy = lodPolicy;
     record.colorOverride = colorOverride ? 1 : 0;
     record.color = color;
+    record.pointColorValid = pointColorValid ? 1 : 0;
+    record.pointColor = pointColor;
+    record.pointScaleValid = pointScaleValid ? 1 : 0;
+    record.pointScale = pointScale;
+    record.pointNormalValid = pointNormalValid ? 1 : 0;
+    record.pointNormal = pointNormal;
     record.point = point;
     this->points.push_back(record);
     this->bounds.extendBy(point);
+    if (record.pointScaleValid && record.pointScale > 0.0f) {
+	const SbVec3f radius(record.pointScale, record.pointScale,
+		record.pointScale);
+	this->bounds.extendBy(point - radius);
+	this->bounds.extendBy(point + radius);
+    }
 }
 
 void
@@ -519,7 +771,10 @@ SoBRLExportAction::appendTriangle(const SbString &path,
 	const SbString &materialShader, int primitiveIndex,
 	int vertexIndexA, int vertexIndexB, int vertexIndexC,
 	int selected, int highlighted, int ghosted,
-	int hiddenLine, int editEmphasis, uint32_t lodPolicy,
+	int hiddenLine, int editEmphasis,
+	const SbString &editIntentId,
+	const SbString &editIntentRole,
+	uint32_t lodPolicy,
 	int lodAvailable, int lodActiveLevel, uint32_t lodFaceCount,
 	uint32_t lodPointCount, uint32_t lodOriginalPointCount,
 	uint32_t lodNormalCount, int lodHasSnappedPoints,
@@ -528,6 +783,12 @@ SoBRLExportAction::appendTriangle(const SbString &path,
 	const int colorOverride, const SbColor &color,
 	const SbVec3f &a, const SbVec3f &b, const SbVec3f &c)
 {
+    if (!this->recordStorageEnabled) {
+	this->appendTriangleSummary(a, b, c);
+	return;
+    }
+
+    this->triangleCount++;
     TriangleRecord record;
     record.path = path;
     record.sourceName = sourceName;
@@ -549,6 +810,8 @@ SoBRLExportAction::appendTriangle(const SbString &path,
     record.ghosted = ghosted ? 1 : 0;
     record.hiddenLine = hiddenLine ? 1 : 0;
     record.editEmphasis = editEmphasis ? 1 : 0;
+    record.editIntentId = editIntentId;
+    record.editIntentRole = editIntentRole;
     record.lodPolicy = lodPolicy;
     record.lodAvailable = lodAvailable ? 1 : 0;
     record.lodActiveLevel = lodActiveLevel;

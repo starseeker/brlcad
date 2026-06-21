@@ -28,6 +28,7 @@
 
 #include "bg/plane.h"
 #include "bn/qmath.h"
+#include "bsg/faceplate.h"
 #include "bsg/lod.h"
 #include "bsg/snap.h"
 #include "bsg/util.h"
@@ -73,6 +74,12 @@ rt_view_height_from_bsg(const struct bsg_view *v)
     return v ? v->gv_height : 0;
 }
 
+fastf_t
+rt_view_radius_from_bsg(const struct bsg_view *v)
+{
+    return v ? v->radius : 1.0;
+}
+
 int
 rt_view_dimensions_set_bsg(struct bsg_view *v, int width, int height)
 {
@@ -81,6 +88,316 @@ rt_view_dimensions_set_bsg(struct bsg_view *v, int width, int height)
 
     v->gv_width = width;
     v->gv_height = height;
+    return 1;
+}
+
+int
+rt_view_screen_to_view_from_bsg(fastf_t *fx,
+				fastf_t *fy,
+				struct bsg_view *v,
+				fastf_t x,
+				fastf_t y)
+{
+    if (fx)
+	*fx = 0.0;
+    if (fy)
+	*fy = 0.0;
+    if (!fx || !fy || !v)
+	return 0;
+
+    return bsg_screen_to_view(v, fx, fy, x, y) == 0;
+}
+
+int
+rt_view_screen_point_from_bsg(point_t point,
+			      struct bsg_view *v,
+			      fastf_t x,
+			      fastf_t y)
+{
+    if (point)
+	VSETALL(point, 0.0);
+    if (!point || !v)
+	return 0;
+
+    point_t model_point = VINIT_ZERO;
+    if (bsg_screen_pt(&model_point, x, y, v))
+	return 0;
+
+    VMOVE(point, model_point);
+    return 1;
+}
+
+int
+rt_view_interactive_rect_from_bsg(struct bsg_interactive_rect_state *record,
+				  const struct bsg_view *v)
+{
+    if (record)
+	memset(record, 0, sizeof(struct bsg_interactive_rect_state));
+    if (!record || !v)
+	return 0;
+
+    return bsg_view_interactive_rect_get(v, record);
+}
+
+int
+rt_view_interactive_rect_set_bsg(struct bsg_view *v,
+				 const struct bsg_interactive_rect_state *record)
+{
+    if (!v || !record)
+	return 0;
+
+    bsg_view_interactive_rect_set(v, record);
+    return 1;
+}
+
+int
+rt_view_adc_from_bsg(struct bsg_adc_state *record,
+		     const struct bsg_view *v)
+{
+    if (record)
+	memset(record, 0, sizeof(struct bsg_adc_state));
+    if (!record || !v)
+	return 0;
+
+    return bsg_view_adc_get(v, record);
+}
+
+int
+rt_view_adc_set_bsg(struct bsg_view *v,
+		    const struct bsg_adc_state *record)
+{
+    if (!v || !record)
+	return 0;
+
+    bsg_view_adc_set(v, record);
+    return 1;
+}
+
+int
+rt_view_grid_from_bsg(struct bsg_grid_state *record,
+		      const struct bsg_view *v)
+{
+    if (record)
+	memset(record, 0, sizeof(struct bsg_grid_state));
+    if (!record || !v)
+	return 0;
+
+    return bsg_view_grid_get(v, record);
+}
+
+int
+rt_view_grid_set_bsg(struct bsg_view *v,
+		     const struct bsg_grid_state *record)
+{
+    if (!v || !record)
+	return 0;
+
+    bsg_view_grid_set(v, record);
+    return 1;
+}
+
+int
+rt_view_model_axes_from_bsg(struct bsg_axes *record,
+			    const struct bsg_view *v)
+{
+    if (record)
+	memset(record, 0, sizeof(struct bsg_axes));
+    if (!record || !v)
+	return 0;
+
+    return bsg_view_model_axes_get(v, record);
+}
+
+int
+rt_view_model_axes_set_bsg(struct bsg_view *v,
+			   const struct bsg_axes *record)
+{
+    if (!v || !record)
+	return 0;
+
+    bsg_view_model_axes_set(v, record);
+    return 1;
+}
+
+int
+rt_view_view_axes_from_bsg(struct bsg_axes *record,
+			   const struct bsg_view *v)
+{
+    if (record)
+	memset(record, 0, sizeof(struct bsg_axes));
+    if (!record || !v)
+	return 0;
+
+    return bsg_view_view_axes_get(v, record);
+}
+
+int
+rt_view_view_axes_set_bsg(struct bsg_view *v,
+			  const struct bsg_axes *record)
+{
+    if (!v || !record)
+	return 0;
+
+    bsg_view_view_axes_set(v, record);
+    return 1;
+}
+
+int
+rt_view_center_dot_from_bsg(struct bsg_other_state *record,
+			    const struct bsg_view *v)
+{
+    if (record)
+	memset(record, 0, sizeof(struct bsg_other_state));
+    if (!record || !v)
+	return 0;
+
+    return bsg_view_center_dot_get(v, record);
+}
+
+int
+rt_view_center_dot_set_bsg(struct bsg_view *v,
+			   const struct bsg_other_state *record)
+{
+    if (!v || !record)
+	return 0;
+
+    bsg_view_center_dot_set(v, record);
+    return 1;
+}
+
+int
+rt_view_scale_overlay_from_bsg(struct bsg_other_state *record,
+			       const struct bsg_view *v)
+{
+    if (record)
+	memset(record, 0, sizeof(struct bsg_other_state));
+    if (!record || !v)
+	return 0;
+
+    return bsg_view_scale_state_get(v, record);
+}
+
+int
+rt_view_scale_overlay_set_bsg(struct bsg_view *v,
+			      const struct bsg_other_state *record)
+{
+    if (!v || !record)
+	return 0;
+
+    bsg_view_scale_state_set(v, record);
+    return 1;
+}
+
+int
+rt_view_params_from_bsg(struct bsg_params_state *record,
+			const struct bsg_view *v)
+{
+    if (record)
+	memset(record, 0, sizeof(struct bsg_params_state));
+    if (!record || !v)
+	return 0;
+
+    return bsg_view_params_get(v, record);
+}
+
+int
+rt_view_params_set_bsg(struct bsg_view *v,
+		       const struct bsg_params_state *record)
+{
+    if (!v || !record)
+	return 0;
+
+    bsg_view_params_set(v, record);
+    return 1;
+}
+
+int
+rt_view_refresh_request_bsg(struct bsg_view *v, uint32_t flags)
+{
+    if (!v)
+	return 0;
+
+    bsg_view_refresh_request(v, flags);
+    return 1;
+}
+
+int
+rt_view_refresh_dirty_from_bsg(const struct bsg_view *v)
+{
+    return bsg_view_refresh_dirty(v);
+}
+
+uint32_t
+rt_view_refresh_consume_bsg(struct bsg_view *v)
+{
+    return bsg_view_refresh_consume(v);
+}
+
+int
+rt_view_refresh_complete_bsg(struct bsg_view *v)
+{
+    if (!v)
+	return 0;
+
+    bsg_view_refresh_complete(v);
+    return 1;
+}
+
+int
+rt_view_refresh_enabled_from_bsg(const struct bsg_view *v)
+{
+    return bsg_view_refresh_enabled(v);
+}
+
+int
+rt_view_refresh_enabled_set_bsg(struct bsg_view *v, int enabled)
+{
+    if (!v)
+	return 0;
+
+    bsg_view_refresh_set_enabled(v, enabled);
+    return 1;
+}
+
+int
+rt_view_refresh_suppressed_from_bsg(const struct bsg_view *v)
+{
+    return bsg_view_refresh_suppressed(v);
+}
+
+int
+rt_view_refresh_suppress_begin_bsg(struct bsg_view *v)
+{
+    if (!v)
+	return 0;
+
+    bsg_view_refresh_suppress_begin(v);
+    return 1;
+}
+
+int
+rt_view_refresh_suppress_end_bsg(struct bsg_view *v)
+{
+    if (!v)
+	return 0;
+
+    bsg_view_refresh_suppress_end(v);
+    return 1;
+}
+
+int
+rt_view_refresh_drawn_count_from_bsg(const struct bsg_view *v)
+{
+    return bsg_view_refresh_drawn_count(v);
+}
+
+int
+rt_view_refresh_drawn_count_set_bsg(struct bsg_view *v, int count)
+{
+    if (!v)
+	return 0;
+
+    bsg_view_refresh_set_drawn_count(v, count);
     return 1;
 }
 

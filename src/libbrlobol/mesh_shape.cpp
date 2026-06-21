@@ -74,6 +74,8 @@ SoBRLMeshShape::SoBRLMeshShape(void)
     SO_NODE_ADD_FIELD(ghosted, (FALSE));
     SO_NODE_ADD_FIELD(hiddenLine, (FALSE));
     SO_NODE_ADD_FIELD(editEmphasis, (FALSE));
+    SO_NODE_ADD_FIELD(editIntentId, (""));
+    SO_NODE_ADD_FIELD(editIntentRole, (""));
     SO_NODE_ADD_FIELD(lodPolicy, (0));
     SO_NODE_ADD_FIELD(lodAvailable, (FALSE));
     SO_NODE_ADD_FIELD(lodActiveLevel, (-1));
@@ -282,6 +284,8 @@ SoBRLMeshShape::makeSourceMeshRequest(BRLObolSourceMeshRequest &request) const
     request.ghosted = this->ghosted.getValue();
     request.hiddenLine = this->hiddenLine.getValue();
     request.editEmphasis = this->editEmphasis.getValue();
+    request.editIntentId = this->editIntentId.getValue();
+    request.editIntentRole = this->editIntentRole.getValue();
     request.lodPolicy = this->lodPolicy.getValue();
     request.lodAvailable = this->lodAvailable.getValue();
     request.lodActiveLevel = this->lodActiveLevel.getValue();
@@ -947,6 +951,8 @@ SoBRLMeshShape::createTriangleDetail(SoRayPickAction *UNUSED(action),
 	    this->materialColor.getValue());
     detail->setMaterialShader(this->materialShader.getValue());
     detail->setPrimitive(SoBRLPickDetail::FACE, -1);
+    detail->setEditIntent(this->editIntentId.getValue(),
+	    this->editIntentRole.getValue());
 
     const SoDetail *vertexDetail = v1 ? v1->getDetail() : NULL;
     if (vertexDetail && vertexDetail->isOfType(SoFaceDetail::getClassTypeId())) {

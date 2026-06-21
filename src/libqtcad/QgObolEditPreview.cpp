@@ -24,6 +24,23 @@ qg_obol_edit_preview_update(QgView *display,
 	uint32_t sourceRevision,
 	uint32_t inputsRevision)
 {
+    return qg_obol_edit_preview_update_with_intent(display, previewId,
+	    identity, NULL, NULL, points, commands, count, sourceRevision,
+	    inputsRevision);
+}
+
+int
+qg_obol_edit_preview_update_with_intent(QgView *display,
+	const char *previewId,
+	const char *identity,
+	const char *editIntentId,
+	const char *editIntentRole,
+	const SbVec3f *points,
+	const int32_t *commands,
+	int count,
+	uint32_t sourceRevision,
+	uint32_t inputsRevision)
+{
     if (!display || !previewId || !previewId[0] || !points || !commands ||
 	    count <= 0)
 	return 0;
@@ -32,8 +49,9 @@ qg_obol_edit_preview_update(QgView *display,
     if (!obol)
 	return 0;
 
-    int ret = obol->replaceEditPreview(previewId, identity, points,
-	    commands, count, sourceRevision, inputsRevision);
+    int ret = obol->replaceEditPreviewWithIntent(previewId, identity,
+	    editIntentId, editIntentRole, points, commands, count,
+	    sourceRevision, inputsRevision);
     if (ret < 0)
 	return 0;
 

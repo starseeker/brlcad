@@ -17,6 +17,7 @@ set(
   lod_service.cpp
   lod_mesh_shape.cpp
   lod_update_action.cpp
+  material_object.cpp
   measure_action.cpp
   mesh_lod_submit_action.cpp
   mesh_residency_action.cpp
@@ -90,6 +91,7 @@ cmakefiles(
   lod_service.cpp
   lod_mesh_shape.cpp
   lod_update_action.cpp
+  material_object.cpp
   measure_action.cpp
   mesh_lod_submit_action.cpp
   mesh_residency_action.cpp

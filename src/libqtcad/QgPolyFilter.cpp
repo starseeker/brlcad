@@ -29,6 +29,7 @@ extern "C" {
 #include "bg/polygon.h"
 #include "bsg.h"
 #include "raytrace.h" // For finalize polygon sketch export functionality (TODO - need to move...)
+#include "rt/view_legacy_bsg.h"
 }
 
 #include "qtcad/QgPolyFilter.h"
@@ -66,7 +67,7 @@ QgPolyCreateFilter::eventFilter(QObject *, QEvent *e)
 
 		if (bsg_polygon_ref_is_null(polygon)) {
 
-			bsg_screen_pt(&v->gv_point, v->gv_mouse_x, v->gv_mouse_y, v);
+			rt_view_screen_point_from_bsg(v->gv_point, v, v->gv_mouse_x, v->gv_mouse_y);
 
 			polygon = bsg_create_view_polygon_ref(v, ptype, &v->gv_point);
 			bsg_polygon_set_view(polygon, v);

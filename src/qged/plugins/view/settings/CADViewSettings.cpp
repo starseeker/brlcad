@@ -35,6 +35,7 @@
 #include "bsg/view_state.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgSignalFlags.h"
+#include "rt/view_legacy_bsg.h"
 
 #include "CADViewSettings.h"
 
@@ -199,13 +200,13 @@ CADViewSettings::checkbox_refresh(unsigned long long)
     struct bsg_other_state scale_state = {};
     struct bsg_axes view_axes = {};
     struct bsg_params_state params = {};
-    (void)bsg_view_adc_get(v, &adc);
-    (void)bsg_view_center_dot_get(v, &center_dot);
-    (void)bsg_view_grid_get(v, &grid);
-    (void)bsg_view_model_axes_get(v, &model_axes);
-    (void)bsg_view_scale_state_get(v, &scale_state);
-    (void)bsg_view_view_axes_get(v, &view_axes);
-    (void)bsg_view_params_get(v, &params);
+    (void)rt_view_adc_from_bsg(&adc, v);
+    (void)rt_view_center_dot_from_bsg(&center_dot, v);
+    (void)rt_view_grid_from_bsg(&grid, v);
+    (void)rt_view_model_axes_from_bsg(&model_axes, v);
+    (void)rt_view_scale_overlay_from_bsg(&scale_state, v);
+    (void)rt_view_view_axes_from_bsg(&view_axes, v);
+    (void)rt_view_params_from_bsg(&params, v);
 
     set_ckbx(acsg_ckbx,     rs.lod_source_policy.csg_enabled);
     set_ckbx(amesh_ckbx,    rs.lod_source_policy.mesh_enabled);
@@ -263,13 +264,13 @@ CADViewSettings::view_refresh(unsigned long long)
     struct bsg_other_state scale_state = {};
     struct bsg_axes view_axes = {};
     struct bsg_params_state params = {};
-    (void)bsg_view_adc_get(v, &adc);
-    (void)bsg_view_center_dot_get(v, &center_dot);
-    (void)bsg_view_grid_get(v, &grid);
-    (void)bsg_view_model_axes_get(v, &model_axes);
-    (void)bsg_view_scale_state_get(v, &scale_state);
-    (void)bsg_view_view_axes_get(v, &view_axes);
-    (void)bsg_view_params_get(v, &params);
+    (void)rt_view_adc_from_bsg(&adc, v);
+    (void)rt_view_center_dot_from_bsg(&center_dot, v);
+    (void)rt_view_grid_from_bsg(&grid, v);
+    (void)rt_view_model_axes_from_bsg(&model_axes, v);
+    (void)rt_view_scale_overlay_from_bsg(&scale_state, v);
+    (void)rt_view_view_axes_from_bsg(&view_axes, v);
+    (void)rt_view_params_from_bsg(&params, v);
 
     adc.draw = ckbx_val(adc_ckbx);
     center_dot.gos_draw = ckbx_val(cdot_ckbx);
@@ -286,13 +287,13 @@ CADViewSettings::view_refresh(unsigned long long)
     params.draw_tw     = ckbx_val(params_tw_ckbx);
     params.draw_fps    = ckbx_val(params_fps_ckbx);
 
-    bsg_view_adc_set(v, &adc);
-    bsg_view_center_dot_set(v, &center_dot);
-    bsg_view_grid_set(v, &grid);
-    bsg_view_model_axes_set(v, &model_axes);
-    bsg_view_scale_state_set(v, &scale_state);
-    bsg_view_view_axes_set(v, &view_axes);
-    bsg_view_params_set(v, &params);
+    rt_view_adc_set_bsg(v, &adc);
+    rt_view_center_dot_set_bsg(v, &center_dot);
+    rt_view_grid_set_bsg(v, &grid);
+    rt_view_model_axes_set_bsg(v, &model_axes);
+    rt_view_scale_overlay_set_bsg(v, &scale_state);
+    rt_view_view_axes_set_bsg(v, &view_axes);
+    rt_view_params_set_bsg(v, &params);
 
     emit settings_changed(QG_VIEW_DRAWN);
 }

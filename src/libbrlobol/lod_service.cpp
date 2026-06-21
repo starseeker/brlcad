@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <deque>
 #include <iomanip>
@@ -181,19 +182,238 @@ lod_float_provider_param(float value)
     return SbString(out.str().c_str());
 }
 
+static const BRLObolLodProviderParam *
+lod_provider_param(const BRLObolLodRequest &request, const char *name)
+{
+    const BRLObolLodProviderParam *found = NULL;
+
+    if (!name)
+	return NULL;
+    for (size_t i = 0; i < request.providerParams.size(); i++) {
+	if (strcmp(request.providerParams[i].name.getString(), name) != 0)
+	    continue;
+	if (found)
+	    return NULL;
+	found = &request.providerParams[i];
+    }
+    return found;
+}
+
+static void
+lod_remove_source_query_provider_params(BRLObolLodRequest &request)
+{
+    request.providerParams.erase(
+	    std::remove_if(request.providerParams.begin(),
+		request.providerParams.end(),
+		[](const BRLObolLodProviderParam &param) {
+		    return strncmp(param.name.getString(), "source_query.",
+			    13) == 0;
+		}),
+	    request.providerParams.end());
+}
+
+static SbBool
+lod_provider_param_has_no_trailing_tokens(std::istringstream &in)
+{
+    std::string extra;
+    return in >> extra ? FALSE : TRUE;
+}
+
+static SbBool
+lod_parse_float_provider_param(float &value, const SbString &text)
+{
+    std::istringstream in(text.getString());
+    float parsed = 0.0f;
+    if (!(in >> parsed))
+	return FALSE;
+    if (!std::isfinite(parsed) ||
+	    !lod_provider_param_has_no_trailing_tokens(in))
+	return FALSE;
+    value = parsed;
+    return TRUE;
+}
+
+static SbBool
+lod_parse_vec3_provider_param(SbVec3f &value, const SbString &text)
+{
+    std::istringstream in(text.getString());
+    float v[3] = {0.0f, 0.0f, 0.0f};
+    for (int i = 0; i < 3; i++) {
+	if (!(in >> v[i]))
+	    return FALSE;
+	if (!std::isfinite(v[i]))
+	    return FALSE;
+    }
+    if (!lod_provider_param_has_no_trailing_tokens(in))
+	return FALSE;
+
+    value.setValue(v[0], v[1], v[2]);
+    return TRUE;
+}
+
+static SbBool
+lod_parse_bounds_provider_param(SbBox3f &bounds, const SbString &text)
+{
+    std::istringstream in(text.getString());
+    float v[6] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    for (int i = 0; i < 6; i++) {
+	if (!(in >> v[i]))
+	    return FALSE;
+	if (!std::isfinite(v[i]))
+	    return FALSE;
+    }
+    if (!lod_provider_param_has_no_trailing_tokens(in))
+	return FALSE;
+
+    bounds.makeEmpty();
+    bounds.extendBy(SbVec3f(v[0], v[1], v[2]));
+    bounds.extendBy(SbVec3f(v[3], v[4], v[5]));
+    return !bounds.isEmpty();
+}
+
+static SbBool
+lod_bounds_intersect(const SbBox3f &a, const SbBox3f &b)
+{
+    if (a.isEmpty() || b.isEmpty())
+	return FALSE;
+
+    const SbVec3f amin = a.getMin();
+    const SbVec3f amax = a.getMax();
+    const SbVec3f bmin = b.getMin();
+    const SbVec3f bmax = b.getMax();
+
+    for (int axis = 0; axis < 3; axis++) {
+	if (amax[axis] < bmin[axis] || bmax[axis] < amin[axis])
+	    return FALSE;
+    }
+    return TRUE;
+}
+
+static SbBool
+lod_request_query_space_is_source_local(const BRLObolLodRequest &request)
+{
+    const BRLObolLodProviderParam *spaceParam =
+	lod_provider_param(request, "source_query.space");
+    return spaceParam &&
+	strcmp(spaceParam->value.getString(), "source_local") == 0 ?
+	TRUE : FALSE;
+}
+
+static SbBool
+lod_request_snap_query_bounds(const BRLObolLodRequest &request,
+	SbBox3f &queryBounds)
+{
+    if (!lod_request_query_space_is_source_local(request))
+	return FALSE;
+
+    const BRLObolLodProviderParam *boundsParam =
+	lod_provider_param(request, "source_query.bounds");
+    const BRLObolLodProviderParam *toleranceParam =
+	lod_provider_param(request, "source_query.tolerance");
+    if (!boundsParam || !toleranceParam)
+	return FALSE;
+
+    float tolerance = 0.0f;
+    if (!lod_parse_float_provider_param(tolerance, toleranceParam->value) ||
+	    tolerance < 0.0f)
+	return FALSE;
+
+    return lod_parse_bounds_provider_param(queryBounds, boundsParam->value);
+}
+
+static SbBool
+lod_request_pick_query_ray(const BRLObolLodRequest &request,
+	SbVec3f &rayOrigin,
+	SbVec3f &rayDirection)
+{
+    if (!lod_request_query_space_is_source_local(request))
+	return FALSE;
+
+    const BRLObolLodProviderParam *originParam =
+	lod_provider_param(request, "source_query.ray.origin");
+    const BRLObolLodProviderParam *directionParam =
+	lod_provider_param(request, "source_query.ray.direction");
+    if (!originParam || !directionParam)
+	return FALSE;
+
+    if (!lod_parse_vec3_provider_param(rayOrigin, originParam->value) ||
+	    !lod_parse_vec3_provider_param(rayDirection,
+		directionParam->value) ||
+	    rayDirection.length() <= 0.0f)
+	return FALSE;
+
+    rayDirection.normalize();
+    return TRUE;
+}
+
+static SbBool
+lod_request_has_scoped_subset_query(const BRLObolLodRequest &request)
+{
+    SbBox3f queryBounds;
+    SbVec3f rayOrigin;
+    SbVec3f rayDirection;
+    const SbBool hasBounds =
+	lod_request_snap_query_bounds(request, queryBounds);
+    const SbBool hasRay =
+	lod_request_pick_query_ray(request, rayOrigin, rayDirection);
+
+    return hasBounds != hasRay ? TRUE : FALSE;
+}
+
+static SbBool
+lod_ray_intersects_triangle(const SbVec3f &origin,
+	const SbVec3f &direction,
+	const SbVec3f &a,
+	const SbVec3f &b,
+	const SbVec3f &c)
+{
+    const float epsilon = 1.0e-7f;
+    const SbVec3f ab = b - a;
+    const SbVec3f ac = c - a;
+    const SbVec3f pvec = direction.cross(ac);
+    const float det = ab.dot(pvec);
+    if (det > -epsilon && det < epsilon)
+	return FALSE;
+
+    const float invDet = 1.0f / det;
+    const SbVec3f tvec = origin - a;
+    const float u = tvec.dot(pvec) * invDet;
+    if (u < 0.0f || u > 1.0f)
+	return FALSE;
+
+    const SbVec3f qvec = tvec.cross(ab);
+    const float v = direction.dot(qvec) * invDet;
+    if (v < 0.0f || u + v > 1.0f)
+	return FALSE;
+
+    const float t = ac.dot(qvec) * invDet;
+    return t >= 0.0f ? TRUE : FALSE;
+}
+
 static BRLObolLodResult
 lod_source_full_detail_payload_result(const BRLObolLodRequest &request,
 	const struct rt_bot_internal *bot)
 {
     BRLObolLodResult result;
+    SbBox3f queryBounds;
+    SbBool useQueryBounds =
+	lod_request_snap_query_bounds(request, queryBounds);
+    SbVec3f queryRayOrigin;
+    SbVec3f queryRayDirection;
+    SbBool useQueryRay =
+	lod_request_pick_query_ray(request, queryRayOrigin, queryRayDirection);
+    std::vector<size_t> selectedFaces;
+
+    if (useQueryBounds && useQueryRay) {
+	useQueryBounds = FALSE;
+	useQueryRay = FALSE;
+    }
 
     result.request = request;
     result.cacheKey = brlobol_lod_cache_key(request);
     result.resultKind = BRLOBOL_LOD_RESULT_FULL_DETAIL;
     result.qualityTier = BRLOBOL_LOD_QUALITY_FULL_DETAIL;
     result.providerStatus = BRLOBOL_LOD_PROVIDER_READY;
-    result.counts.faceCount = bot->num_faces;
-    result.counts.pointCount = bot->num_vertices;
     result.terminal = TRUE;
 
     result.geometry.kind = BRLOBOL_LOD_GEOMETRY_OBOL_MESH;
@@ -205,28 +425,110 @@ lod_source_full_detail_payload_result(const BRLObolLodRequest &request,
 
     result.bounds.makeEmpty();
     try {
-	result.mesh.points.reserve(bot->num_vertices);
+	std::vector<SbVec3f> sourcePoints;
+	sourcePoints.reserve(bot->num_vertices);
 	for (size_t i = 0; i < bot->num_vertices; i++) {
 	    SbVec3f point(static_cast<float>(bot->vertices[i * 3]),
 		    static_cast<float>(bot->vertices[i * 3 + 1]),
 		    static_cast<float>(bot->vertices[i * 3 + 2]));
-	    result.mesh.points.push_back(point);
-	    result.bounds.extendBy(point);
+	    sourcePoints.push_back(point);
 	}
 
-	size_t indexCount = bot->num_faces * 3;
-	result.mesh.coordIndex.reserve(indexCount);
-	for (size_t i = 0; i < indexCount; i++) {
-	    int idx = bot->faces[i];
-	    if (idx < 0 || static_cast<size_t>(idx) >= bot->num_vertices) {
+	selectedFaces.reserve(bot->num_faces);
+	for (size_t i = 0; i < bot->num_faces; i++) {
+	    int ia = bot->faces[i * 3];
+	    int ib = bot->faces[i * 3 + 1];
+	    int ic = bot->faces[i * 3 + 2];
+	    if (ia < 0 || ib < 0 || ic < 0 ||
+		    static_cast<size_t>(ia) >= bot->num_vertices ||
+		    static_cast<size_t>(ib) >= bot->num_vertices ||
+		    static_cast<size_t>(ic) >= bot->num_vertices) {
 		result.mesh.clear();
 		result.providerStatus = BRLOBOL_LOD_PROVIDER_ERROR;
 		result.diagnostic =
 		    "RT source full-detail provider BoT has invalid face indices";
 		return result;
 	    }
-	    result.mesh.coordIndex.push_back(static_cast<int32_t>(idx));
+
+	    if (useQueryBounds) {
+		SbBox3f faceBounds;
+		faceBounds.makeEmpty();
+		faceBounds.extendBy(sourcePoints[static_cast<size_t>(ia)]);
+		faceBounds.extendBy(sourcePoints[static_cast<size_t>(ib)]);
+		faceBounds.extendBy(sourcePoints[static_cast<size_t>(ic)]);
+		if (!lod_bounds_intersect(faceBounds, queryBounds))
+		    continue;
+	    }
+	    if (useQueryRay &&
+		    !lod_ray_intersects_triangle(queryRayOrigin,
+			queryRayDirection,
+			sourcePoints[static_cast<size_t>(ia)],
+			sourcePoints[static_cast<size_t>(ib)],
+			sourcePoints[static_cast<size_t>(ic)]))
+		continue;
+	    selectedFaces.push_back(i);
 	}
+
+	if (selectedFaces.empty() && (useQueryBounds || useQueryRay)) {
+	    result.mesh.clear();
+	    result.geometry.clear();
+	    result.bounds.makeEmpty();
+	    result.counts.clear();
+	    result.resultKind = BRLOBOL_LOD_RESULT_NONE;
+	    result.providerStatus = BRLOBOL_LOD_PROVIDER_FALLBACK;
+	    result.diagnostic =
+		"RT source full-detail provider scoped query matched no faces";
+	    return result;
+	}
+
+	if (selectedFaces.empty()) {
+	    selectedFaces.reserve(bot->num_faces);
+	    for (size_t i = 0; i < bot->num_faces; i++)
+		selectedFaces.push_back(i);
+	}
+
+	result.counts.faceCount = selectedFaces.size();
+	result.mesh.coordIndex.reserve(selectedFaces.size() * 3);
+	result.mesh.faceIndex.reserve(selectedFaces.size());
+	if (selectedFaces.size() < bot->num_faces) {
+	    std::vector<int32_t> sourceToLocal(bot->num_vertices, -1);
+	    result.mesh.points.reserve(std::min(bot->num_vertices,
+		    selectedFaces.size() * 3));
+	    result.mesh.vertexIndex.reserve(result.mesh.points.capacity());
+	    for (size_t i = 0; i < selectedFaces.size(); i++) {
+		size_t faceIndex = selectedFaces[i];
+		result.mesh.faceIndex.push_back(static_cast<int32_t>(faceIndex));
+		for (size_t j = 0; j < 3; j++) {
+		    const int sourceIndex = bot->faces[faceIndex * 3 + j];
+		    const size_t sourceSlot = static_cast<size_t>(sourceIndex);
+		    int32_t localIndex = sourceToLocal[sourceSlot];
+		    if (localIndex < 0) {
+			localIndex =
+			    static_cast<int32_t>(result.mesh.points.size());
+			sourceToLocal[sourceSlot] = localIndex;
+			result.mesh.points.push_back(sourcePoints[sourceSlot]);
+			result.mesh.vertexIndex.push_back(
+				static_cast<int32_t>(sourceIndex));
+		    }
+		    result.mesh.coordIndex.push_back(localIndex);
+		    result.bounds.extendBy(
+			    result.mesh.points[static_cast<size_t>(localIndex)]);
+		}
+	    }
+	} else {
+	    result.mesh.points.swap(sourcePoints);
+	    for (size_t i = 0; i < selectedFaces.size(); i++) {
+		size_t faceIndex = selectedFaces[i];
+		result.mesh.faceIndex.push_back(static_cast<int32_t>(faceIndex));
+		for (size_t j = 0; j < 3; j++) {
+		    int idx = bot->faces[faceIndex * 3 + j];
+		    result.mesh.coordIndex.push_back(static_cast<int32_t>(idx));
+		    result.bounds.extendBy(
+			    result.mesh.points[static_cast<size_t>(idx)]);
+		}
+	    }
+	}
+	result.counts.pointCount = result.mesh.points.size();
     } catch (const std::bad_alloc &) {
 	result.mesh.clear();
 	result.providerStatus = BRLOBOL_LOD_PROVIDER_FALLBACK;
@@ -254,7 +556,10 @@ brlobol_rt_source_full_detail_provider_task(
 	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
 	    "RT source full-detail provider has no database");
 
-    if (lod_request_source_counts_known(request) &&
+    const SbBool scopedSubsetRequest =
+	lod_request_has_scoped_subset_query(request);
+
+    if (!scopedSubsetRequest && lod_request_source_counts_known(request) &&
 	    lod_source_full_detail_exceeds_limits(provider,
 		request.sourceCounts.faceCount, request.sourceCounts.pointCount))
 	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_FALLBACK,
@@ -294,7 +599,7 @@ brlobol_rt_source_full_detail_provider_task(
     }
     RT_BOT_CK_MAGIC(bot);
 
-    if (lod_source_full_detail_exceeds_limits(provider,
+    if (!scopedSubsetRequest && lod_source_full_detail_exceeds_limits(provider,
 	    bot->num_faces, bot->num_vertices)) {
 	rt_db_free_internal(&intern);
 	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_FALLBACK,
@@ -314,6 +619,8 @@ brlobol_rt_source_full_detail_provider_task(
     if (bot->num_vertices >
 	    static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
 	    bot->num_faces >
+	    static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
+	    bot->num_faces >
 	    static_cast<size_t>(std::numeric_limits<size_t>::max() / 3)) {
 	rt_db_free_internal(&intern);
 	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_FALLBACK,
@@ -322,6 +629,18 @@ brlobol_rt_source_full_detail_provider_task(
 
     BRLObolLodResult result =
 	lod_source_full_detail_payload_result(request, bot);
+    if (result.providerStatus == BRLOBOL_LOD_PROVIDER_READY &&
+	    lod_source_full_detail_exceeds_limits(provider,
+		result.counts.faceCount, result.counts.pointCount)) {
+	result.mesh.clear();
+	result.geometry.clear();
+	result.bounds.makeEmpty();
+	result.counts.clear();
+	result.resultKind = BRLOBOL_LOD_RESULT_NONE;
+	result.providerStatus = BRLOBOL_LOD_PROVIDER_FALLBACK;
+	result.diagnostic =
+	    "RT source full-detail provider request exceeds full-detail limits";
+    }
     rt_db_free_internal(&intern);
     return result;
 }
@@ -348,6 +667,7 @@ brlobol_lod_rt_source_full_detail_request_from_source_mesh_request(
 	request = *templateRequest;
     else
 	request.clear();
+    lod_remove_source_query_provider_params(request);
 
     request.objectPath = sourceRequest.path.getLength() > 0 ?
 	sourceRequest.path : sourceRequest.sourceName;
@@ -423,7 +743,7 @@ brlobol_lod_submit_rt_source_full_detail_request(
     task.realizeData = provider;
     task.realizeDataFree = brlobol_rt_source_full_detail_provider_free;
 
-    uint64_t taskId = service->submit(task);
+    uint64_t taskId = service->submitIfNotActive(task);
     if (taskId == 0)
 	brlobol_rt_source_full_detail_provider_free(provider);
 
@@ -585,6 +905,7 @@ struct BRLObolLodServicePrivate {
     std::deque<BRLObolLodResult> results;
     std::deque<BRLObolLodCacheWriteItem> cacheWrites;
     std::vector<BRLObolLodSubscriber> subscribers;
+    std::vector<SbString> activeRequestKeys;
     std::set<uint64_t> completed;
     std::set<uint64_t> cancelledGenerations;
     size_t inFlight;
@@ -624,6 +945,44 @@ lod_request_has_identity(const BRLObolLodRequest &request)
 	request.objectName.getLength() > 0 ||
 	request.sourceRevision != 0 ||
 	request.sourceContentHash != 0 ? TRUE : FALSE;
+}
+
+static SbString
+lod_request_active_key(const BRLObolLodRequest &request)
+{
+    return brlobol_lod_cache_key(request).value;
+}
+
+static SbBool
+lod_active_request_key_recorded_unlocked(const BRLObolLodServicePrivate *p,
+	const SbString &key)
+{
+    if (!p || key.getLength() == 0)
+	return FALSE;
+
+    for (size_t i = 0; i < p->activeRequestKeys.size(); i++) {
+	if (strcmp(p->activeRequestKeys[i].getString(),
+		key.getString()) == 0)
+	    return TRUE;
+    }
+
+    return FALSE;
+}
+
+static void
+lod_active_request_key_remove_unlocked(BRLObolLodServicePrivate *p,
+	const SbString &key)
+{
+    if (!p || key.getLength() == 0)
+	return;
+
+    for (size_t i = 0; i < p->activeRequestKeys.size(); i++) {
+	if (strcmp(p->activeRequestKeys[i].getString(),
+		key.getString()) != 0)
+	    continue;
+	p->activeRequestKeys.erase(p->activeRequestKeys.begin() + (long)i);
+	return;
+    }
 }
 
 static BRLObolLodResult
@@ -842,6 +1201,8 @@ lod_finish_task(BRLObolLodServicePrivate *p, const BRLObolLodWorkItem &item,
 	p->completed.insert(item.id);
 	if (p->inFlight > 0)
 	    p->inFlight--;
+	lod_active_request_key_remove_unlocked(p,
+		lod_request_active_key(item.task.request));
 
 	if (item.task.publishResult) {
 	    notifyResultReady = p->results.empty() ? TRUE : FALSE;
@@ -998,6 +1359,7 @@ BRLObolLodService::stop(void)
 	std::lock_guard<std::mutex> lock(this->p->mutex);
 	pending.swap(this->p->pending);
 	this->p->inFlight = 0;
+	this->p->activeRequestKeys.clear();
 	this->p->cacheWriterStopping = TRUE;
     }
     for (size_t i = 0; i < pending.size(); i++)
@@ -1067,36 +1429,67 @@ BRLObolLodService::isGenerationCancelled(uint64_t generation) const
     return lod_generation_cancelled_unlocked(this->p, generation);
 }
 
-uint64_t
-BRLObolLodService::submit(const BRLObolLodTask &task)
+static uint64_t
+lod_service_submit_task(BRLObolLodServicePrivate *p,
+	const BRLObolLodTask &task,
+	SbBool skipActiveDuplicate)
 {
     uint64_t id = 0;
 
     {
-	std::lock_guard<std::mutex> lock(this->p->mutex);
-	if (!this->p->running || this->p->stopping)
+	std::lock_guard<std::mutex> lock(p->mutex);
+	if (!p->running || p->stopping)
 	    return 0;
 
 	BRLObolLodWorkItem item;
-	item.id = this->p->nextTaskId++;
-	if (this->p->nextTaskId == 0)
-	    this->p->nextTaskId++;
+	item.id = p->nextTaskId++;
+	if (p->nextTaskId == 0)
+	    p->nextTaskId++;
 	item.task = task;
 	if (item.task.generation == 0) {
-	    if (this->p->activeGeneration == 0) {
-		this->p->nextGeneration++;
-		this->p->activeGeneration = this->p->nextGeneration;
+	    if (p->activeGeneration == 0) {
+		p->nextGeneration++;
+		p->activeGeneration = p->nextGeneration;
 	    }
-	    item.task.generation = this->p->activeGeneration;
+	    item.task.generation = p->activeGeneration;
 	}
 
+	const SbString activeKey =
+	    lod_request_active_key(item.task.request);
+	if (skipActiveDuplicate &&
+		lod_active_request_key_recorded_unlocked(p, activeKey))
+	    return 0;
+
 	id = item.id;
-	this->p->pending.push_back(item);
-	this->p->inFlight++;
+	p->pending.push_back(item);
+	p->activeRequestKeys.push_back(activeKey);
+	p->inFlight++;
     }
 
-    this->p->workerCv.notify_all();
+    p->workerCv.notify_all();
     return id;
+}
+
+uint64_t
+BRLObolLodService::submit(const BRLObolLodTask &task)
+{
+    return lod_service_submit_task(this->p, task, FALSE);
+}
+
+uint64_t
+BRLObolLodService::submitIfNotActive(const BRLObolLodTask &task)
+{
+    return lod_service_submit_task(this->p, task, TRUE);
+}
+
+SbBool
+BRLObolLodService::hasActiveRequest(
+	const BRLObolLodRequest &request) const
+{
+    const SbString key = lod_request_active_key(request);
+
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return lod_active_request_key_recorded_unlocked(this->p, key);
 }
 
 size_t

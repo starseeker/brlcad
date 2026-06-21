@@ -113,7 +113,7 @@ _poly_cmd_create(void *bs, int argc, const char **argv)
     }
 
     point_t sp;
-    if (bsg_screen_pt(&sp, (fastf_t)x, (fastf_t)y, gd->cv)) {
+    if (!rt_view_screen_point_from_bsg(sp, gd->cv, (fastf_t)x, (fastf_t)y)) {
 	bu_vls_printf(gedp->ged_result_str, "Failed to calculate screen point\n");
 	return BRLCAD_ERROR;
     }

@@ -10,8 +10,6 @@
 
 #include "qtcad/QgObolPick.h"
 
-#include "brlobol/database_source.h"
-#include "brlobol/lod_service.h"
 #include "brlobol/pick_detail.h"
 #include "brlobol/view_controller.h"
 #include "qtcad/QgView.h"
@@ -39,7 +37,10 @@ QgObolPickRecord::QgObolPickRecord(void) :
     sourceName(),
     sourceType(),
     materialShader(),
+    editIntentId(),
+    editIntentRole(),
     point(0.0f, 0.0f, 0.0f),
+    modelPoint(0.0f, 0.0f, 0.0f),
     materialColor(1.0f, 1.0f, 1.0f),
     distance(FLT_MAX),
     sourceId(0),
@@ -49,6 +50,14 @@ QgObolPickRecord::QgObolPickRecord(void) :
     los(0),
     primitiveKind(UNKNOWN),
     primitiveIndex(-1),
+    faceVertexIndexA(-1),
+    faceVertexIndexB(-1),
+    faceVertexIndexC(-1),
+    nearestFaceEdgeSlot(-1),
+    nearestFaceEdgeVertexIndexA(-1),
+    nearestFaceEdgeVertexIndexB(-1),
+    nearestFaceVertexSlot(-1),
+    nearestFaceVertexIndex(-1),
     materialColorValid(false)
 {
 }
@@ -108,6 +117,8 @@ qg_obol_pick_record(const SoBRLPickDetail *detail,
     record.sourceName = detail->getSourceName().getString();
     record.sourceType = detail->getSourceType().getString();
     record.materialShader = detail->getMaterialShader().getString();
+    record.editIntentId = detail->getEditIntentId().getString();
+    record.editIntentRole = detail->getEditIntentRole().getString();
     record.sourceId = detail->getSourceId();
     record.regionId = detail->getRegionId();
     record.airCode = detail->getAirCode();
@@ -115,6 +126,17 @@ qg_obol_pick_record(const SoBRLPickDetail *detail,
     record.los = detail->getLos();
     record.primitiveKind = static_cast<int>(detail->getPrimitiveKind());
     record.primitiveIndex = detail->getPrimitiveIndex();
+    record.faceVertexIndexA = detail->getFaceVertexIndexA();
+    record.faceVertexIndexB = detail->getFaceVertexIndexB();
+    record.faceVertexIndexC = detail->getFaceVertexIndexC();
+    record.nearestFaceEdgeSlot = detail->getNearestFaceEdgeSlot();
+    record.nearestFaceEdgeVertexIndexA =
+	detail->getNearestFaceEdgeVertexIndexA();
+    record.nearestFaceEdgeVertexIndexB =
+	detail->getNearestFaceEdgeVertexIndexB();
+    record.nearestFaceVertexSlot = detail->getNearestFaceVertexSlot();
+    record.nearestFaceVertexIndex = detail->getNearestFaceVertexIndex();
+    record.modelPoint = detail->getModelPoint();
     record.materialColorValid = detail->hasMaterialColor() ? true : false;
     record.materialColor = detail->getMaterialColor();
     return record;
@@ -149,13 +171,48 @@ qg_obol_pick_record(const BRLObolRtPickResult &pick)
     return qg_obol_pick_record(&pick.detail, pick.point, pick.distance);
 }
 
+static std::string
+qg_obol_normalized_pick_path(const std::string &path)
+{
+    size_t start = 0;
+    while (start < path.size() && path[start] == '/')
+	start++;
+    return path.substr(start);
+}
+
+static std::string
+qg_obol_pick_record_path(const QgObolPickRecord &record)
+{
+    return qg_obol_normalized_pick_path(record.path);
+}
+
+static bool
+qg_obol_pick_path_already_recorded(
+	const std::vector<QgObolPickRecord> &records,
+	const QgObolPickRecord &candidate)
+{
+    const std::string candidatePath = qg_obol_pick_record_path(candidate);
+    if (candidatePath.empty())
+	return false;
+
+    for (const QgObolPickRecord &record : records) {
+	if (qg_obol_pick_record_path(record) == candidatePath)
+	    return true;
+    }
+
+    return false;
+}
+
 static void
 qg_obol_insert_pick_record(std::vector<QgObolPickRecord> &records,
 	const QgObolPickRecord &record,
 	bool pickAll)
 {
     if (pickAll) {
-	records.push_back(record);
+	std::vector<QgObolPickRecord>::iterator it = records.begin();
+	while (it != records.end() && it->distance <= record.distance)
+	    ++it;
+	records.insert(it, record);
 	return;
     }
 
@@ -163,73 +220,28 @@ qg_obol_insert_pick_record(std::vector<QgObolPickRecord> &records,
 	records.assign(1, record);
 }
 
-static SoBRLDatabaseSource *
-qg_obol_first_database_source(BRLObolViewController *controller)
-{
-    if (!controller)
-	return NULL;
-
-    for (int i = 0; i < controller->getDatabaseSourceCount(); i++) {
-	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
-	if (source && source->getDatabase())
-	    return source;
-    }
-
-    return NULL;
-}
-
 static int
 qg_obol_pick_source_full_detail(BRLObolViewController *controller,
 	const SbLine &line,
 	bool pickAll,
-	std::vector<QgObolPickRecord> &records)
+	std::vector<QgObolPickRecord> &records,
+	int *submittedSourceRequestCount)
 {
-    if (!controller || !controller->getViewport() ||
-	    !controller->getViewport()->getRoot())
+    if (submittedSourceRequestCount)
+	*submittedSourceRequestCount = 0;
+    if (!controller)
 	return 0;
 
-    BRLObolLodService *service = controller->getLodService();
-    if (!service || !service->isRunning())
-	return 0;
-
-    SoBRLSourceMeshPickAction sourcePickAction;
-    sourcePickAction.setRay(line.getPosition(), line.getDirection());
-    sourcePickAction.apply(controller->getViewport()->getRoot());
-
-    const int requestCount =
-	sourcePickAction.getSourceBackedFullDetailRequestCount();
-    if (requestCount <= 0)
-	return 0;
-
-    std::vector<BRLObolLodRequest> expectedRequests;
-    for (int i = 0; i < requestCount; i++) {
-	BRLObolLodRequest request;
-	if (sourcePickAction.makeSourceBackedFullDetailLodRequest(i, request))
-	    expectedRequests.push_back(request);
-    }
-    if (expectedRequests.empty())
-	return 0;
-
-    std::vector<BRLObolLodResult> sourceResults;
-    service->drainMatchingResults(sourceResults, expectedRequests);
-
-    int added = 0;
-    if (!sourceResults.empty()) {
-	BRLObolSourceMeshPickResult sourcePick;
-	if (sourcePickAction.consumeSourceBackedFullDetailResults(sourcePick,
-		sourceResults) > 0 && sourcePick.hit) {
-	    qg_obol_insert_pick_record(records,
-		    qg_obol_pick_record(sourcePick), pickAll);
-	    added = 1;
-	}
-    } else {
-	SoBRLDatabaseSource *source = qg_obol_first_database_source(controller);
-	if (source)
-	    (void)sourcePickAction.submitSourceBackedFullDetailRequests(
-		    service, 0, source->getDatabase(), NULL,
-		    controller->getMaxExactFullDetailFaceCount(),
-		    controller->getMaxExactFullDetailPointCount());
-    }
+    BRLObolSourceMeshPickResult sourcePick;
+    int submitted = 0;
+    int added = controller->pickSourceMeshExactRay(sourcePick,
+	    line.getPosition(), line.getDirection(), 0, &submitted) > 0 &&
+	sourcePick.hit ? 1 : 0;
+    if (submittedSourceRequestCount)
+	*submittedSourceRequestCount = submitted;
+    if (added)
+	qg_obol_insert_pick_record(records,
+		qg_obol_pick_record(sourcePick), pickAll);
 
     return added;
 }
@@ -270,35 +282,33 @@ qg_obol_pick_rt_exact(BRLObolViewController *controller,
 	return 0;
 
     int added = 0;
-    for (int i = 0; i < controller->getDatabaseSourceCount(); i++) {
-	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
-	if (!source || !source->getDatabase() ||
-		source->path.getValue().getLength() == 0)
+    std::vector<BRLObolRtPickResult> rtPicks;
+    controller->pickRtExactRay(rtPicks, line.getPosition(),
+	    line.getDirection(), pickAll ? TRUE : FALSE);
+    for (size_t i = 0; i < rtPicks.size(); i++) {
+	const BRLObolRtPickResult &rtPick = rtPicks[i];
+	QgObolPickRecord record = qg_obol_pick_record(rtPick);
+	if (qg_obol_pick_path_already_recorded(records, record))
 	    continue;
 
-	std::vector<SbString> paths;
-	paths.push_back(source->path.getValue());
-	BRLObolRtPickResult rtPick;
-	if (!brlobol_pick_rt_ray(rtPick, source->getDatabase(), paths,
-		line.getPosition(), line.getDirection()) || !rtPick.hit)
-	    continue;
-
-	qg_obol_insert_pick_record(records, qg_obol_pick_record(rtPick),
-		pickAll);
+	qg_obol_insert_pick_record(records, record, pickAll);
 	added++;
     }
 
     return added;
 }
 
-int
-qg_obol_pick_point(QgView *display,
+static int
+qg_obol_pick_point_internal(QgView *display,
 	int x,
 	int y,
 	float radiusPixels,
 	bool pickAll,
-	std::vector<QgObolPickRecord> &records)
+	std::vector<QgObolPickRecord> &records,
+	int *submittedSourceRequestCount)
 {
+    if (submittedSourceRequestCount)
+	*submittedSourceRequestCount = 0;
     records.clear();
     if (!display)
 	return 0;
@@ -362,13 +372,92 @@ qg_obol_pick_point(QgView *display,
 		    pickAll);
     }
 
-    qg_obol_pick_source_full_detail(controller, line, pickAll, records);
+    qg_obol_pick_source_full_detail(controller, line, pickAll, records,
+	    submittedSourceRequestCount);
 
-    if (records.empty()) {
+    {
 	SbLine rtLine = line;
-	(void)qg_obol_pick_camera_line(controller, vx, vy, rtLine);
+	if (records.empty())
+	    (void)qg_obol_pick_camera_line(controller, vx, vy, rtLine);
 	qg_obol_pick_rt_exact(controller, rtLine, pickAll, records);
     }
+
+    return static_cast<int>(records.size());
+}
+
+int
+qg_obol_pick_point(QgView *display,
+	int x,
+	int y,
+	float radiusPixels,
+	bool pickAll,
+	std::vector<QgObolPickRecord> &records,
+	int *submittedSourceRequestCount)
+{
+    return qg_obol_pick_point_internal(display, x, y, radiusPixels, pickAll,
+	    records, submittedSourceRequestCount);
+}
+
+int
+qg_obol_pick_ray(QgView *display,
+	const SbVec3f &rayOrigin,
+	const SbVec3f &rayDirection,
+	bool pickAll,
+	std::vector<QgObolPickRecord> &records,
+	int *submittedSourceRequestCount)
+{
+    if (submittedSourceRequestCount)
+	*submittedSourceRequestCount = 0;
+    records.clear();
+    if (!display)
+	return 0;
+
+    BRLObolViewController *controller = display->obolViewController();
+    if (!controller || !controller->getViewport() ||
+	    !controller->getViewport()->getRoot())
+	return 0;
+
+    int width = 0;
+    int height = 0;
+    if (qg_obol_display_extent(display, width, height))
+	controller->setViewportSize(static_cast<unsigned int>(width),
+		static_cast<unsigned int>(height));
+
+    const SbViewportRegion &region = controller->getViewportRegion();
+    SoRayPickAction pickAction(region);
+    pickAction.setRay(rayOrigin, rayDirection);
+    pickAction.setPickAll(pickAll ? TRUE : FALSE);
+    pickAction.apply(controller->getViewport()->getRoot());
+
+    SbLine line;
+    line.setPosDir(rayOrigin, rayDirection);
+    const SbVec3f &origin = line.getPosition();
+
+    if (pickAll) {
+	const SoPickedPointList &pickedPoints =
+	    pickAction.getPickedPointList();
+	for (int i = 0; i < pickedPoints.getLength(); i++) {
+	    const SoPickedPoint *pickedPoint = pickedPoints[i];
+	    const SoBRLPickDetail *detail =
+		qg_obol_brl_pick_detail(pickedPoint);
+	    if (detail)
+		qg_obol_insert_pick_record(records,
+			qg_obol_pick_record(pickedPoint, detail, &origin),
+			pickAll);
+	}
+    } else {
+	const SoPickedPoint *pickedPoint = pickAction.getPickedPoint();
+	const SoBRLPickDetail *detail =
+	    qg_obol_brl_pick_detail(pickedPoint);
+	if (detail)
+	    qg_obol_insert_pick_record(records,
+		    qg_obol_pick_record(pickedPoint, detail, &origin),
+		    pickAll);
+    }
+
+    qg_obol_pick_source_full_detail(controller, line, pickAll, records,
+	    submittedSourceRequestCount);
+    qg_obol_pick_rt_exact(controller, line, pickAll, records);
 
     return static_cast<int>(records.size());
 }
@@ -395,8 +484,11 @@ qg_obol_pick_rect(QgView *display,
 	int y1,
 	float radiusPixels,
 	bool firstOnly,
-	std::vector<QgObolPickRecord> &records)
+	std::vector<QgObolPickRecord> &records,
+	int *submittedSourceRequestCount)
 {
+    if (submittedSourceRequestCount)
+	*submittedSourceRequestCount = 0;
     records.clear();
     if (!display)
 	return 0;
@@ -426,8 +518,11 @@ qg_obol_pick_rect(QgView *display,
 	for (int xi = 0; xi <= xSteps; xi++) {
 	    int x = minX + (width * xi) / xSteps;
 	    std::vector<QgObolPickRecord> sampledRecords;
-	    qg_obol_pick_point(display, x, y, radiusPixels, !firstOnly,
-		    sampledRecords);
+	    int submitted = 0;
+	    qg_obol_pick_point_internal(display, x, y, radiusPixels,
+		    !firstOnly, sampledRecords, &submitted);
+	    if (submittedSourceRequestCount)
+		*submittedSourceRequestCount += submitted;
 	    for (const QgObolPickRecord &record : sampledRecords) {
 		std::string key = qg_obol_pick_unique_key(record);
 		if (!seen.insert(key).second)

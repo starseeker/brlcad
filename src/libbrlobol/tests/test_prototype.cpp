@@ -13,6 +13,7 @@
 #include "bu/app.h"
 #include "bu/env.h"
 #include "bu/file.h"
+#include "bu/time.h"
 #include "raytrace.h"
 #include "rt/view.h"
 #include "wdb.h"
@@ -46,6 +47,44 @@
 	fprintf(stderr, "FAIL: %s\n", _msg); \
 	return 1; \
     } while (0)
+
+class PrototypeTiming {
+public:
+    PrototypeTiming()
+    {
+	const char *enabled_env = getenv("BRLOBOL_PROTOTYPE_TIMING");
+	enabled = (enabled_env && enabled_env[0] && strcmp(enabled_env, "0") != 0);
+	last = bu_gettime();
+	start = last;
+    }
+
+    void checkpoint(const char *label)
+    {
+	if (!enabled)
+	    return;
+
+	int64_t now = bu_gettime();
+	fprintf(stderr, "TIMING prototype %-38s %7.3f s  total %7.3f s\n",
+		label,
+		(now - last) / 1000000.0,
+		(now - start) / 1000000.0);
+	last = now;
+    }
+
+private:
+    int enabled;
+    int64_t start;
+    int64_t last;
+};
+
+static void
+prototype_timing_checkpoint(PrototypeTiming &timing, const char *prefix,
+	const char *phase)
+{
+    char label[128] = {0};
+    snprintf(label, sizeof(label), "%s %s", prefix, phase);
+    timing.checkpoint(label);
+}
 
 class PrototypeContextManager : public SoDB::ContextManager {
 public:
@@ -93,18 +132,6 @@ total_segment_count(SoBRLDatabaseSource *source)
 	SoBRLVListShape *shape = source->getRealizedShape(i);
 	if (shape)
 	    ret += shape->getSegmentCount();
-    }
-    return ret;
-}
-
-static int
-total_triangle_count(SoBRLDatabaseSource *source)
-{
-    int ret = 0;
-    for (int i = 0; i < source->getRealizedMeshCount(); i++) {
-	SoBRLMeshShape *mesh = source->getRealizedMesh(i);
-	if (mesh)
-	    ret += mesh->getTriangleCount();
     }
     return ret;
 }
@@ -643,6 +670,42 @@ make_bspline_surface(struct rt_wdb *wdbp, const char *name)
 }
 
 static int
+make_pnts_attribute_variant(struct rt_wdb *wdbp,
+	const char *name,
+	rt_pnt_type point_type,
+	double defaultScale,
+	const fastf_t vertex[3],
+	const unsigned char *color,
+	const fastf_t *scale,
+	const fastf_t *normal)
+{
+    fastf_t vertices[3] = {
+	vertex[X], vertex[Y], vertex[Z]
+    };
+    unsigned char colors[3] = {0, 0, 0};
+    fastf_t scales[1] = {0.0};
+    fastf_t normals[3] = {0.0, 0.0, 1.0};
+
+    if (color) {
+	colors[0] = color[0];
+	colors[1] = color[1];
+	colors[2] = color[2];
+    }
+    if (scale)
+	scales[0] = *scale;
+    if (normal) {
+	normals[X] = normal[X];
+	normals[Y] = normal[Y];
+	normals[Z] = normal[Z];
+    }
+
+    return mk_pnts(wdbp, name, point_type, defaultScale, 1, vertices,
+	    color ? colors : NULL,
+	    scale ? scales : NULL,
+	    normal ? normals : NULL) == 0;
+}
+
+static int
 write_test_db(char *dbpath, size_t dbpath_len)
 {
     FILE *fp = bu_temp_file(dbpath, dbpath_len);
@@ -966,6 +1029,95 @@ write_test_db(char *dbpath, size_t dbpath_len)
 	wdb_close(wdbp);
 	return 0;
     }
+    fastf_t pnts_attr_vertices[6] = {
+	188.0, 46.0, 2.0,
+	191.0, 49.0, 3.0
+    };
+    unsigned char pnts_attr_colors[6] = {
+	255, 64, 32,
+	16, 160, 255
+    };
+    fastf_t pnts_attr_scales[2] = {
+	1.25, 2.5
+    };
+    fastf_t pnts_attr_normals[6] = {
+	0.0, 0.0, 1.0,
+	0.0, 0.6, 0.8
+    };
+    if (mk_pnts(wdbp, "pnts_attr.s", RT_PNT_TYPE_COL_SCA_NRM,
+	    0.0, 2, pnts_attr_vertices, pnts_attr_colors,
+	    pnts_attr_scales, pnts_attr_normals) != 0) {
+	wdb_close(wdbp);
+	return 0;
+    }
+    fastf_t pnts_col_vertex[3] = {194.0, 46.0, 2.0};
+    unsigned char pnts_col_color[3] = {128, 64, 32};
+    if (!make_pnts_attribute_variant(wdbp, "pnts_col.s",
+	    RT_PNT_TYPE_COL, 0.0, pnts_col_vertex, pnts_col_color,
+	    NULL, NULL)) {
+	wdb_close(wdbp);
+	return 0;
+    }
+    fastf_t pnts_sca_vertex[3] = {197.0, 46.0, 2.0};
+    fastf_t pnts_sca_scale = 1.75;
+    if (!make_pnts_attribute_variant(wdbp, "pnts_sca.s",
+	    RT_PNT_TYPE_SCA, 0.0, pnts_sca_vertex, NULL,
+	    &pnts_sca_scale, NULL)) {
+	wdb_close(wdbp);
+	return 0;
+    }
+    fastf_t pnts_nrm_vertex[3] = {200.0, 46.0, 2.0};
+    fastf_t pnts_nrm_normal[3] = {0.0, 0.0, -1.0};
+    if (!make_pnts_attribute_variant(wdbp, "pnts_nrm.s",
+	    RT_PNT_TYPE_NRM, 0.0, pnts_nrm_vertex, NULL,
+	    NULL, pnts_nrm_normal)) {
+	wdb_close(wdbp);
+	return 0;
+    }
+    fastf_t pnts_col_sca_vertex[3] = {203.0, 46.0, 2.0};
+    unsigned char pnts_col_sca_color[3] = {32, 192, 96};
+    fastf_t pnts_col_sca_scale = 2.25;
+    if (!make_pnts_attribute_variant(wdbp, "pnts_col_sca.s",
+	    RT_PNT_TYPE_COL_SCA, 0.0, pnts_col_sca_vertex,
+	    pnts_col_sca_color, &pnts_col_sca_scale, NULL)) {
+	wdb_close(wdbp);
+	return 0;
+    }
+    fastf_t pnts_col_nrm_vertex[3] = {206.0, 46.0, 2.0};
+    unsigned char pnts_col_nrm_color[3] = {32, 96, 224};
+    fastf_t pnts_col_nrm_normal[3] = {1.0, 0.0, 0.0};
+    if (!make_pnts_attribute_variant(wdbp, "pnts_col_nrm.s",
+	    RT_PNT_TYPE_COL_NRM, 0.0, pnts_col_nrm_vertex,
+	    pnts_col_nrm_color, NULL, pnts_col_nrm_normal)) {
+	wdb_close(wdbp);
+	return 0;
+    }
+    fastf_t pnts_sca_nrm_vertex[3] = {209.0, 46.0, 2.0};
+    fastf_t pnts_sca_nrm_scale = 3.0;
+    fastf_t pnts_sca_nrm_normal[3] = {0.0, -1.0, 0.0};
+    if (!make_pnts_attribute_variant(wdbp, "pnts_sca_nrm.s",
+	    RT_PNT_TYPE_SCA_NRM, 0.0, pnts_sca_nrm_vertex,
+	    NULL, &pnts_sca_nrm_scale, pnts_sca_nrm_normal)) {
+	wdb_close(wdbp);
+	return 0;
+    }
+    fastf_t pnts_global_scale_vertex[3] = {212.0, 46.0, 2.0};
+    unsigned char pnts_global_scale_color[3] = {240, 208, 32};
+    fastf_t pnts_global_scale_normal[3] = {0.0, 0.0, 1.0};
+    if (!make_pnts_attribute_variant(wdbp, "pnts_global_scale.s",
+	    RT_PNT_TYPE_COL_NRM, 1.5, pnts_global_scale_vertex,
+	    pnts_global_scale_color, NULL, pnts_global_scale_normal)) {
+	wdb_close(wdbp);
+	return 0;
+    }
+    fastf_t pnts_sca_precedence_vertex[3] = {215.0, 46.0, 2.0};
+    fastf_t pnts_sca_precedence_scale = 0.5;
+    if (!make_pnts_attribute_variant(wdbp, "pnts_sca_precedence.s",
+	    RT_PNT_TYPE_SCA, 5.0, pnts_sca_precedence_vertex,
+	    NULL, &pnts_sca_precedence_scale, NULL)) {
+	wdb_close(wdbp);
+	return 0;
+    }
 
     if (!make_line_annot(wdbp, "annot.s")) {
 	wdb_close(wdbp);
@@ -1139,6 +1291,8 @@ exercise_required_hierarchy_model(const char *model_file,
 	int min_mesh_triangles,
 	const SbViewportRegion &viewport)
 {
+    PrototypeTiming timing;
+
     char dbpath[MAXPATHLEN] = {0};
     const char *brlcadRoot = getenv("BRLCAD_ROOT");
     if (brlcadRoot) {
@@ -1157,6 +1311,7 @@ exercise_required_hierarchy_model(const char *model_file,
 	fprintf(stderr, "failed to open required Obol hierarchy model: %s\n", dbpath);
 	return 0;
     }
+    prototype_timing_checkpoint(timing, model_file, "open");
 
     SoSeparator *root = new SoSeparator;
     root->ref();
@@ -1180,17 +1335,7 @@ exercise_required_hierarchy_model(const char *model_file,
 	db_close(dbip);
 	return 0;
     }
-
-    int wireShapeCount = source->getRealizedShapeCount();
-    int wireSegmentCount = total_segment_count(source);
-    if (wireShapeCount < min_wire_shapes || wireSegmentCount < min_wire_segments) {
-	fprintf(stderr, "%s wire realization was too small: shapes=%d segments=%d\n",
-		model_file, wireShapeCount, wireSegmentCount);
-	root->unref();
-	db_close(dbip);
-	return 0;
-    }
-
+    prototype_timing_checkpoint(timing, model_file, "wire realize");
     SoGetBoundingBoxAction hierarchyBBoxAction(viewport);
     hierarchyBBoxAction.apply(root);
     SbBox3f bbox = hierarchyBBoxAction.getBoundingBox();
@@ -1202,8 +1347,9 @@ exercise_required_hierarchy_model(const char *model_file,
     }
 
     SoBRLExportAction hierarchyExport;
+    hierarchyExport.setRecordStorageEnabled(FALSE);
     hierarchyExport.apply(root);
-    if (hierarchyExport.getLineCount() != wireSegmentCount ||
+    if (hierarchyExport.getLineCount() < min_wire_segments ||
 	    hierarchyExport.getBounds().isEmpty()) {
 	fprintf(stderr, "%s wire hierarchy export did not match realized line geometry\n",
 		model_file);
@@ -1211,6 +1357,22 @@ exercise_required_hierarchy_model(const char *model_file,
 	db_close(dbip);
 	return 0;
     }
+    prototype_timing_checkpoint(timing, model_file, "wire export");
+    int wireSegmentCount = hierarchyExport.getLineCount();
+
+    SoBRLMeasureAction hierarchyWireMeasure;
+    hierarchyWireMeasure.setAngleComputationEnabled(FALSE);
+    hierarchyWireMeasure.apply(root);
+    if (!hierarchyWireMeasure.hasSegments() ||
+	    hierarchyWireMeasure.getShapeCount() < min_wire_shapes ||
+	    hierarchyWireMeasure.getSegmentCount() != wireSegmentCount) {
+	fprintf(stderr, "%s wire measure did not report hierarchy line metrics\n",
+		model_file);
+	root->unref();
+	db_close(dbip);
+	return 0;
+    }
+    prototype_timing_checkpoint(timing, model_file, "wire measure");
 
     if (min_mesh_shapes > 0 || min_mesh_triangles > 0) {
 	source->drawMode = SoBRLDatabaseSource::SHADED;
@@ -1237,27 +1399,13 @@ exercise_required_hierarchy_model(const char *model_file,
 	    db_close(dbip);
 	    return 0;
 	}
-	if (source->getRealizedMeshCount() < min_mesh_shapes) {
-	    fprintf(stderr, "%s shaded realization produced too few mesh leaves: %d\n",
-		    model_file, source->getRealizedMeshCount());
-	    root->unref();
-	    db_close(dbip);
-	    return 0;
-	}
-
-	int hierarchyTriangleCount = total_triangle_count(source);
-	if (hierarchyTriangleCount < min_mesh_triangles) {
-	    fprintf(stderr, "%s shaded realization produced too few triangles: %d\n",
-		    model_file, hierarchyTriangleCount);
-	    root->unref();
-	    db_close(dbip);
-	    return 0;
-	}
+	prototype_timing_checkpoint(timing, model_file, "shaded realize");
 
 	SoBRLExportAction hierarchyMeshExport;
+	hierarchyMeshExport.setRecordStorageEnabled(FALSE);
 	hierarchyMeshExport.apply(root);
 	if (hierarchyMeshExport.getLineCount() != 0 ||
-		hierarchyMeshExport.getTriangleCount() != hierarchyTriangleCount ||
+		hierarchyMeshExport.getTriangleCount() < min_mesh_triangles ||
 		hierarchyMeshExport.getBounds().isEmpty()) {
 	    fprintf(stderr, "%s shaded export did not match realized mesh geometry\n",
 		    model_file);
@@ -1265,11 +1413,13 @@ exercise_required_hierarchy_model(const char *model_file,
 	    db_close(dbip);
 	    return 0;
 	}
+	prototype_timing_checkpoint(timing, model_file, "shaded export");
+	int hierarchyTriangleCount = hierarchyMeshExport.getTriangleCount();
 
 	SoBRLMeasureAction hierarchyMeshMeasure;
 	hierarchyMeshMeasure.apply(root);
 	if (!hierarchyMeshMeasure.hasFaces() ||
-		hierarchyMeshMeasure.getShapeCount() != source->getRealizedMeshCount() ||
+		hierarchyMeshMeasure.getShapeCount() < min_mesh_shapes ||
 		hierarchyMeshMeasure.getTriangleCount() != hierarchyTriangleCount ||
 		hierarchyMeshMeasure.getSurfaceArea() <= 0.0f) {
 	    fprintf(stderr, "%s shaded measure did not report mesh face metrics\n",
@@ -1278,10 +1428,12 @@ exercise_required_hierarchy_model(const char *model_file,
 	    db_close(dbip);
 	    return 0;
 	}
+	prototype_timing_checkpoint(timing, model_file, "shaded measure");
     }
 
     root->unref();
     db_close(dbip);
+    prototype_timing_checkpoint(timing, model_file, "cleanup");
     return 1;
 }
 
@@ -1473,6 +1625,301 @@ exercise_generated_primitive_wire_diagnostic(struct db_i *dbip,
     bboxAction.apply(root);
     if (!bboxAction.getBoundingBox().isEmpty()) {
 	fprintf(stderr, "%s failed wire realization left drawable scene content\n", name);
+	root->unref();
+	return 0;
+    }
+
+    root->unref();
+    return 1;
+}
+
+static int
+exercise_generated_primitive_shaded_vlist(struct db_i *dbip,
+	const char *name,
+	int min_segments,
+	const SbViewportRegion &viewport)
+{
+    if (!dbip || !name)
+	return 0;
+
+    SbString fullPath;
+    fullPath.sprintf("/%s", name);
+
+    SoSeparator *root = new SoSeparator;
+    root->ref();
+
+    SoBRLDatabaseSource *source = new SoBRLDatabaseSource;
+    source->setDatabase(dbip);
+    source->path = name;
+    source->drawMode = SoBRLDatabaseSource::SHADED;
+    source->sourceRevision = 302;
+    root->addChild(source);
+
+    SoBRLRealizeAction shadedRealize;
+    shadedRealize.apply(root);
+    if (shadedRealize.getRealizedSourceCount() != 1 ||
+	    source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED) {
+	fprintf(stderr, "%s shaded vlist realization failed: %s\n",
+		name,
+		shadedRealize.getDiagnostics().getLength() > 0 ?
+		shadedRealize.getDiagnostics().getString() :
+		source->realizationDiagnostic.getValue().getString());
+	root->unref();
+	return 0;
+    }
+
+    if (source->getRealizedMeshCount() != 0 ||
+	    source->getRealizedShapeCount() != 1) {
+	fprintf(stderr, "%s shaded vlist realization produced meshes=%d shapes=%d\n",
+		name, source->getRealizedMeshCount(),
+		source->getRealizedShapeCount());
+	root->unref();
+	return 0;
+    }
+
+    SoBRLVListShape *shape = source->getRealizedShape();
+    if (!shape ||
+	    shape->getSegmentCount() < min_segments ||
+	    strcmp(shape->sourcePath.getValue().getString(),
+		fullPath.getString()) != 0) {
+	fprintf(stderr, "%s shaded vlist shape did not meet segment/path expectations\n",
+		name);
+	root->unref();
+	return 0;
+    }
+
+    SoGetBoundingBoxAction bboxAction(viewport);
+    bboxAction.apply(root);
+    if (bboxAction.getBoundingBox().isEmpty()) {
+	fprintf(stderr, "%s shaded vlist realization produced an empty bounding box\n",
+		name);
+	root->unref();
+	return 0;
+    }
+
+    SbVec3f segmentA;
+    SbVec3f segmentB;
+    if (!shape->getSegment(0, segmentA, segmentB)) {
+	fprintf(stderr, "%s shaded vlist did not expose its first segment\n",
+		name);
+	root->unref();
+	return 0;
+    }
+    SbVec3f segmentMidpoint(
+	    0.5f * (segmentA[0] + segmentB[0]),
+	    0.5f * (segmentA[1] + segmentB[1]),
+	    0.5f * (segmentA[2] + segmentB[2]));
+
+    SoRayPickAction pickAction(viewport);
+    pickAction.setRay(
+	    SbVec3f(segmentMidpoint[0], segmentMidpoint[1],
+		segmentMidpoint[2] + 5.0f),
+	    SbVec3f(0.0f, 0.0f, -1.0f));
+    pickAction.apply(root);
+    const SoPickedPoint *pickedPoint = pickAction.getPickedPoint();
+    if (!pickedPoint) {
+	fprintf(stderr, "%s shaded vlist pick did not hit line geometry\n",
+		name);
+	root->unref();
+	return 0;
+    }
+    const SoDetail *rawDetail = pickedPoint->getDetail(shape);
+    if (!rawDetail || !rawDetail->isOfType(SoBRLPickDetail::getClassTypeId())) {
+	fprintf(stderr, "%s shaded vlist pick did not return BRL-CAD detail\n",
+		name);
+	root->unref();
+	return 0;
+    }
+    const SoBRLPickDetail *pickDetail =
+	static_cast<const SoBRLPickDetail *>(rawDetail);
+    if (pickDetail->getPrimitiveKind() != SoBRLPickDetail::LINE_SEGMENT ||
+	    strcmp(pickDetail->getPath().getString(),
+		fullPath.getString()) != 0) {
+	fprintf(stderr, "%s shaded vlist pick detail did not preserve line/path identity\n",
+		name);
+	root->unref();
+	return 0;
+    }
+
+    SoBRLSnapAction snapAction;
+    snapAction.setEnabledKinds(SoBRLSnapAction::LINE_NEAREST);
+    snapAction.setQueryPoint(segmentMidpoint);
+    snapAction.setTolerance(0.05f);
+    snapAction.apply(root);
+    if (!snapAction.hasCandidate() ||
+	    snapAction.getKind() != SoBRLSnapAction::LINE_NEAREST ||
+	    snapAction.getPrimitiveIndex() != 0 ||
+	    strcmp(snapAction.getPath().getString(),
+		fullPath.getString()) != 0 ||
+	    !nearly_equal(snapAction.getPoint()[0], segmentMidpoint[0]) ||
+	    !nearly_equal(snapAction.getPoint()[1], segmentMidpoint[1]) ||
+	    !nearly_equal(snapAction.getPoint()[2], segmentMidpoint[2])) {
+	fprintf(stderr, "%s shaded vlist snap did not preserve line/path identity\n",
+		name);
+	root->unref();
+	return 0;
+    }
+
+    SoBRLExportAction shadedExport;
+    shadedExport.apply(root);
+    if (shadedExport.getLineCount() != shape->getSegmentCount() ||
+	    shadedExport.getTriangleCount() != 0 ||
+	    export_path_count(shadedExport, fullPath.getString()) !=
+	    shape->getSegmentCount() ||
+	    shadedExport.getBounds().isEmpty()) {
+	fprintf(stderr, "%s shaded vlist export did not preserve line geometry/path identity\n",
+		name);
+	root->unref();
+	return 0;
+    }
+
+    SoBRLMeasureAction shadedMeasure;
+    shadedMeasure.apply(root);
+    if (!shadedMeasure.hasSegments() ||
+	    shadedMeasure.hasFaces() ||
+	    shadedMeasure.getShapeCount() != 1 ||
+	    shadedMeasure.getSegmentCount() != shape->getSegmentCount() ||
+	    shadedMeasure.getTotalLength() <= 0.0f ||
+	    shadedMeasure.getBounds().isEmpty()) {
+	fprintf(stderr, "%s shaded vlist measure did not report line metrics\n",
+		name);
+	root->unref();
+	return 0;
+    }
+
+    root->unref();
+    return 1;
+}
+
+static int
+exercise_generated_material_object(struct db_i *dbip,
+	const char *name,
+	SoBRLDatabaseSource::DrawMode drawMode,
+	const SbViewportRegion &viewport)
+{
+    if (!dbip || !name)
+	return 0;
+
+    SbString fullPath;
+    fullPath.sprintf("/%s", name);
+    const char *modeName =
+	drawMode == SoBRLDatabaseSource::SHADED ? "shaded" : "wire";
+
+    SoSeparator *root = new SoSeparator;
+    root->ref();
+
+    SoBRLDatabaseSource *source = new SoBRLDatabaseSource;
+    source->setDatabase(dbip);
+    source->path = name;
+    source->drawMode = drawMode;
+    source->sourceRevision = drawMode == SoBRLDatabaseSource::SHADED ? 308 : 307;
+    root->addChild(source);
+
+    SoBRLRealizeAction materialRealize;
+    materialRealize.apply(root);
+    if (materialRealize.getRealizedSourceCount() != 1 ||
+	    materialRealize.getFailedSourceCount() != 0 ||
+	    source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED) {
+	fprintf(stderr, "%s %s material realization failed: %s\n",
+		name, modeName,
+		materialRealize.getDiagnostics().getLength() > 0 ?
+		materialRealize.getDiagnostics().getString() :
+		source->realizationDiagnostic.getValue().getString());
+	root->unref();
+	return 0;
+    }
+
+    if (source->getRealizedShapeCount() != 0 ||
+	    source->getRealizedMeshCount() != 0 ||
+	    source->getRealizedMaterialObjectCount() != 1) {
+	fprintf(stderr, "%s %s material realization produced shapes=%d meshes=%d materialObjects=%d\n",
+		name, modeName, source->getRealizedShapeCount(),
+		source->getRealizedMeshCount(),
+		source->getRealizedMaterialObjectCount());
+	root->unref();
+	return 0;
+    }
+
+    SoBRLMaterialObject *material = source->getRealizedMaterialObject();
+    SbString density;
+    SbString group;
+    SbString propertyName;
+    SbString propertyValue;
+    if (!material ||
+	    strcmp(material->sourcePath.getValue().getString(),
+		fullPath.getString()) != 0 ||
+	    strcmp(material->sourceName.getValue().getString(), name) != 0 ||
+	    strcmp(material->sourceType.getValue().getString(),
+		"material") != 0 ||
+	    strcmp(material->materialName.getValue().getString(),
+		"obol-test-material") != 0 ||
+	    material->parentName.getValue().getLength() != 0 ||
+	    strcmp(material->materialSource.getValue().getString(),
+		"test") != 0 ||
+	    material->getPropertyCount() != 1 ||
+	    !material->getProperty(0, group, propertyName, propertyValue) ||
+	    strcmp(group.getString(), "physical") != 0 ||
+	    strcmp(propertyName.getString(), "density") != 0 ||
+	    strcmp(propertyValue.getString(), "1.0") != 0 ||
+	    !material->findProperty("physical", "density", density) ||
+	    strcmp(density.getString(), "1.0") != 0) {
+	fprintf(stderr, "%s %s material object did not preserve metadata fields\n",
+		name, modeName);
+	root->unref();
+	return 0;
+    }
+
+    SoGetBoundingBoxAction bboxAction(viewport);
+    bboxAction.apply(root);
+    if (!bboxAction.getBoundingBox().isEmpty()) {
+	fprintf(stderr, "%s %s material object contributed drawable bounds\n",
+		name, modeName);
+	root->unref();
+	return 0;
+    }
+
+    SoRayPickAction pickAction(viewport);
+    pickAction.setRay(SbVec3f(0.0f, 0.0f, 5.0f),
+	    SbVec3f(0.0f, 0.0f, -1.0f));
+    pickAction.apply(root);
+    if (pickAction.getPickedPoint()) {
+	fprintf(stderr, "%s %s material object was pickable geometry\n",
+		name, modeName);
+	root->unref();
+	return 0;
+    }
+
+    SoBRLSnapAction snapAction;
+    snapAction.setQueryPoint(SbVec3f(0.0f, 0.0f, 0.0f));
+    snapAction.setTolerance(1.0f);
+    snapAction.apply(root);
+    if (snapAction.hasCandidate()) {
+	fprintf(stderr, "%s %s material object contributed snap geometry\n",
+		name, modeName);
+	root->unref();
+	return 0;
+    }
+
+    SoBRLExportAction exportAction;
+    exportAction.apply(root);
+    if (exportAction.getLineCount() != 0 ||
+	    exportAction.getPointCount() != 0 ||
+	    exportAction.getTriangleCount() != 0 ||
+	    !exportAction.getBounds().isEmpty()) {
+	fprintf(stderr, "%s %s material object contributed export geometry\n",
+		name, modeName);
+	root->unref();
+	return 0;
+    }
+
+    SoBRLMeasureAction measureAction;
+    measureAction.apply(root);
+    if (measureAction.getShapeCount() != 0 ||
+	    measureAction.hasSegments() ||
+	    measureAction.hasFaces() ||
+	    !measureAction.getBounds().isEmpty()) {
+	fprintf(stderr, "%s %s material object contributed measure geometry\n",
+		name, modeName);
 	root->unref();
 	return 0;
     }
@@ -1693,9 +2140,434 @@ exercise_generated_pnts_shaded_points(struct db_i *dbip,
     return 1;
 }
 
+static int
+exercise_generated_pnts_shaded_attributes(struct db_i *dbip,
+	const char *name,
+	const SbViewportRegion &viewport)
+{
+    if (!dbip || !name)
+	return 0;
+
+    SbString fullPath;
+    fullPath.sprintf("/%s", name);
+
+    SoSeparator *root = new SoSeparator;
+    root->ref();
+
+    SoBRLDatabaseSource *source = new SoBRLDatabaseSource;
+    source->setDatabase(dbip);
+    source->path = name;
+    source->drawMode = SoBRLDatabaseSource::SHADED;
+    source->sourceRevision = 303;
+    root->addChild(source);
+
+    SoBRLRealizeAction pointRealize;
+    pointRealize.apply(root);
+    if (pointRealize.getRealizedSourceCount() != 1 ||
+	    source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED) {
+	fprintf(stderr, "%s shaded point-attribute realization failed: %s\n",
+		name,
+		pointRealize.getDiagnostics().getLength() > 0 ?
+		pointRealize.getDiagnostics().getString() :
+		source->realizationDiagnostic.getValue().getString());
+	root->unref();
+	return 0;
+    }
+
+    SoBRLVListShape *shape = source->getRealizedShape();
+    if (!shape ||
+	    shape->getSegmentCount() != 0 ||
+	    shape->getPointPrimitiveCount() != 2 ||
+	    !BU_STR_EQUAL(shape->sourcePath.getValue().getString(), fullPath.getString())) {
+	fprintf(stderr, "%s shaded point-attribute shape did not meet point/path expectations\n", name);
+	root->unref();
+	return 0;
+    }
+
+    int primitiveIndex = -1;
+    SbVec3f point;
+    SbColor color;
+    float scale = 0.0f;
+    SbVec3f normal;
+    if (!shape->getPointPrimitive(0, primitiveIndex, point) ||
+	    primitiveIndex != 0 ||
+	    !shape->getPointColor(primitiveIndex, color) ||
+	    !shape->getPointScale(primitiveIndex, scale) ||
+	    !shape->getPointNormal(primitiveIndex, normal) ||
+	    !nearly_equal(point[0], 188.0f) ||
+	    !nearly_equal(point[1], 46.0f) ||
+	    !nearly_equal(point[2], 2.0f) ||
+	    !nearly_equal(color[0], 1.0f) ||
+	    !nearly_equal(color[1], 64.0f / 255.0f) ||
+	    !nearly_equal(color[2], 32.0f / 255.0f) ||
+	    !nearly_equal(scale, 1.25f) ||
+	    !nearly_equal(normal[0], 0.0f) ||
+	    !nearly_equal(normal[1], 0.0f) ||
+	    !nearly_equal(normal[2], 1.0f)) {
+	fprintf(stderr, "%s first shaded point attributes are wrong\n", name);
+	root->unref();
+	return 0;
+    }
+
+    if (!shape->getPointPrimitive(1, primitiveIndex, point) ||
+	    primitiveIndex != 1 ||
+	    !shape->getPointColor(primitiveIndex, color) ||
+	    !shape->getPointScale(primitiveIndex, scale) ||
+	    !shape->getPointNormal(primitiveIndex, normal) ||
+	    !nearly_equal(point[0], 191.0f) ||
+	    !nearly_equal(point[1], 49.0f) ||
+	    !nearly_equal(point[2], 3.0f) ||
+	    !nearly_equal(color[0], 16.0f / 255.0f) ||
+	    !nearly_equal(color[1], 160.0f / 255.0f) ||
+	    !nearly_equal(color[2], 1.0f) ||
+	    !nearly_equal(scale, 2.5f) ||
+	    !nearly_equal(normal[0], 0.0f) ||
+	    !nearly_equal(normal[1], 0.6f) ||
+	    !nearly_equal(normal[2], 0.8f)) {
+	fprintf(stderr, "%s second shaded point attributes are wrong\n", name);
+	root->unref();
+	return 0;
+    }
+
+    SoGetBoundingBoxAction bboxAction(viewport);
+    bboxAction.apply(root);
+    SbBox3f bbox = bboxAction.getBoundingBox();
+    if (bbox.isEmpty() ||
+	    !nearly_equal(bbox.getMin()[0], 186.75f) ||
+	    !nearly_equal(bbox.getMin()[1], 44.75f) ||
+	    !nearly_equal(bbox.getMin()[2], 0.5f) ||
+	    !nearly_equal(bbox.getMax()[0], 193.5f) ||
+	    !nearly_equal(bbox.getMax()[1], 51.5f) ||
+	    !nearly_equal(bbox.getMax()[2], 5.5f)) {
+	fprintf(stderr, "%s shaded point-attribute bounding box did not include point scale: min=(%g,%g,%g) max=(%g,%g,%g)\n",
+		name, bbox.getMin()[0], bbox.getMin()[1], bbox.getMin()[2],
+		bbox.getMax()[0], bbox.getMax()[1], bbox.getMax()[2]);
+	root->unref();
+	return 0;
+    }
+
+    SoBRLExportAction pointExport;
+    pointExport.apply(root);
+    if (pointExport.getLineCount() != 0 ||
+	    pointExport.getTriangleCount() != 0 ||
+	    pointExport.getPointCount() != 2 ||
+	    export_point_path_count(pointExport, fullPath.getString()) != 2 ||
+	    pointExport.getBounds().isEmpty()) {
+	fprintf(stderr, "%s shaded point-attribute export did not preserve point identity\n", name);
+	root->unref();
+	return 0;
+    }
+    SbBox3f exportBounds = pointExport.getBounds();
+    if (!nearly_equal(exportBounds.getMin()[0], 186.75f) ||
+	    !nearly_equal(exportBounds.getMin()[1], 44.75f) ||
+	    !nearly_equal(exportBounds.getMin()[2], 0.5f) ||
+	    !nearly_equal(exportBounds.getMax()[0], 193.5f) ||
+	    !nearly_equal(exportBounds.getMax()[1], 51.5f) ||
+	    !nearly_equal(exportBounds.getMax()[2], 5.5f)) {
+	fprintf(stderr, "%s shaded point-attribute export bounds did not include point scale: min=(%g,%g,%g) max=(%g,%g,%g)\n",
+		name, exportBounds.getMin()[0], exportBounds.getMin()[1],
+		exportBounds.getMin()[2], exportBounds.getMax()[0],
+		exportBounds.getMax()[1], exportBounds.getMax()[2]);
+	root->unref();
+	return 0;
+    }
+
+    const SoBRLExportAction::PointRecord &firstPoint = pointExport.getPoint(0);
+    const SoBRLExportAction::PointRecord &secondPoint = pointExport.getPoint(1);
+    if (firstPoint.primitiveIndex != 0 ||
+	    !firstPoint.pointColorValid ||
+	    !firstPoint.pointScaleValid ||
+	    !firstPoint.pointNormalValid ||
+	    !nearly_equal(firstPoint.pointColor[0], 1.0f) ||
+	    !nearly_equal(firstPoint.pointColor[1], 64.0f / 255.0f) ||
+	    !nearly_equal(firstPoint.pointColor[2], 32.0f / 255.0f) ||
+	    !nearly_equal(firstPoint.pointScale, 1.25f) ||
+	    !nearly_equal(firstPoint.pointNormal[0], 0.0f) ||
+	    !nearly_equal(firstPoint.pointNormal[1], 0.0f) ||
+	    !nearly_equal(firstPoint.pointNormal[2], 1.0f) ||
+	    secondPoint.primitiveIndex != 1 ||
+	    !secondPoint.pointColorValid ||
+	    !secondPoint.pointScaleValid ||
+	    !secondPoint.pointNormalValid ||
+	    !nearly_equal(secondPoint.pointColor[0], 16.0f / 255.0f) ||
+	    !nearly_equal(secondPoint.pointColor[1], 160.0f / 255.0f) ||
+	    !nearly_equal(secondPoint.pointColor[2], 1.0f) ||
+	    !nearly_equal(secondPoint.pointScale, 2.5f) ||
+	    !nearly_equal(secondPoint.pointNormal[0], 0.0f) ||
+	    !nearly_equal(secondPoint.pointNormal[1], 0.6f) ||
+	    !nearly_equal(secondPoint.pointNormal[2], 0.8f)) {
+	fprintf(stderr, "%s shaded point-attribute export records are wrong\n", name);
+	root->unref();
+	return 0;
+    }
+
+    SoSeparator *transformedRoot = new SoSeparator;
+    transformedRoot->ref();
+
+    SoMatrixTransform *pointTransform = new SoMatrixTransform;
+    SbMatrix pointMatrix;
+    pointMatrix.setScale(SbVec3f(2.0f, 3.0f, 4.0f));
+    pointTransform->matrix = pointMatrix;
+    transformedRoot->addChild(pointTransform);
+
+    SoBRLDatabaseSource *transformedSource = new SoBRLDatabaseSource;
+    transformedSource->setDatabase(dbip);
+    transformedSource->path = name;
+    transformedSource->drawMode = SoBRLDatabaseSource::SHADED;
+    transformedSource->sourceRevision = 305;
+    transformedRoot->addChild(transformedSource);
+
+    SoBRLRealizeAction transformedRealize;
+    transformedRealize.apply(transformedRoot);
+    if (transformedRealize.getRealizedSourceCount() != 1 ||
+	    transformedSource->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED) {
+	fprintf(stderr, "%s transformed shaded point-attribute realization failed: %s\n",
+		name,
+		transformedRealize.getDiagnostics().getLength() > 0 ?
+		transformedRealize.getDiagnostics().getString() :
+		transformedSource->realizationDiagnostic.getValue().getString());
+	transformedRoot->unref();
+	root->unref();
+	return 0;
+    }
+
+    SoBRLExportAction transformedExport;
+    transformedExport.apply(transformedRoot);
+    if (transformedExport.getLineCount() != 0 ||
+	    transformedExport.getTriangleCount() != 0 ||
+	    transformedExport.getPointCount() != 2 ||
+	    export_point_path_count(transformedExport, fullPath.getString()) != 2 ||
+	    transformedExport.getBounds().isEmpty()) {
+	fprintf(stderr, "%s transformed shaded point-attribute export did not preserve point identity\n", name);
+	transformedRoot->unref();
+	root->unref();
+	return 0;
+    }
+
+    const SoBRLExportAction::PointRecord &firstTransformedPoint =
+	transformedExport.getPoint(0);
+    const SoBRLExportAction::PointRecord &secondTransformedPoint =
+	transformedExport.getPoint(1);
+    const float firstTransformedScale = 5.0f;
+    const float secondTransformedScale = 10.0f;
+    const float transformedNormalComponent = 1.0f / sqrtf(2.0f);
+    if (!firstTransformedPoint.pointScaleValid ||
+	    !firstTransformedPoint.pointNormalValid ||
+	    !secondTransformedPoint.pointScaleValid ||
+	    !secondTransformedPoint.pointNormalValid ||
+	    !nearly_equal(firstTransformedPoint.point[0], 376.0f) ||
+	    !nearly_equal(firstTransformedPoint.point[1], 138.0f) ||
+	    !nearly_equal(firstTransformedPoint.point[2], 8.0f) ||
+	    !nearly_equal(firstTransformedPoint.pointScale,
+		firstTransformedScale) ||
+	    !nearly_equal(firstTransformedPoint.pointNormal[0], 0.0f) ||
+	    !nearly_equal(firstTransformedPoint.pointNormal[1], 0.0f) ||
+	    !nearly_equal(firstTransformedPoint.pointNormal[2], 1.0f) ||
+	    !nearly_equal(secondTransformedPoint.point[0], 382.0f) ||
+	    !nearly_equal(secondTransformedPoint.point[1], 147.0f) ||
+	    !nearly_equal(secondTransformedPoint.point[2], 12.0f) ||
+	    !nearly_equal(secondTransformedPoint.pointScale,
+		secondTransformedScale) ||
+	    !nearly_equal(secondTransformedPoint.pointNormal[0], 0.0f) ||
+	    !nearly_equal(secondTransformedPoint.pointNormal[1],
+		transformedNormalComponent) ||
+	    !nearly_equal(secondTransformedPoint.pointNormal[2],
+		transformedNormalComponent)) {
+	fprintf(stderr, "%s transformed shaded point-attribute export records are wrong\n", name);
+	transformedRoot->unref();
+	root->unref();
+	return 0;
+    }
+
+    exportBounds = transformedExport.getBounds();
+    if (!nearly_equal(exportBounds.getMin()[0],
+		376.0f - firstTransformedScale) ||
+	    !nearly_equal(exportBounds.getMin()[1],
+		138.0f - firstTransformedScale) ||
+	    !nearly_equal(exportBounds.getMin()[2],
+		12.0f - secondTransformedScale) ||
+	    !nearly_equal(exportBounds.getMax()[0],
+		382.0f + secondTransformedScale) ||
+	    !nearly_equal(exportBounds.getMax()[1],
+		147.0f + secondTransformedScale) ||
+	    !nearly_equal(exportBounds.getMax()[2],
+		12.0f + secondTransformedScale)) {
+	fprintf(stderr, "%s transformed shaded point-attribute export bounds are wrong: min=(%g,%g,%g) max=(%g,%g,%g)\n",
+		name, exportBounds.getMin()[0], exportBounds.getMin()[1],
+		exportBounds.getMin()[2], exportBounds.getMax()[0],
+		exportBounds.getMax()[1], exportBounds.getMax()[2]);
+	transformedRoot->unref();
+	root->unref();
+	return 0;
+    }
+
+    transformedRoot->unref();
+    root->unref();
+    return 1;
+}
+
+static int
+exercise_generated_pnts_attribute_variant(struct db_i *dbip,
+	const char *name,
+	const SbVec3f &expectedPoint,
+	int expectColor,
+	const SbColor &expectedColor,
+	int expectScale,
+	float expectedScale,
+	int expectNormal,
+	const SbVec3f &expectedNormal,
+	const SbViewportRegion &viewport)
+{
+    if (!dbip || !name)
+	return 0;
+
+    SbString fullPath;
+    fullPath.sprintf("/%s", name);
+
+    SoSeparator *root = new SoSeparator;
+    root->ref();
+
+    SoBRLDatabaseSource *source = new SoBRLDatabaseSource;
+    source->setDatabase(dbip);
+    source->path = name;
+    source->drawMode = SoBRLDatabaseSource::SHADED;
+    source->sourceRevision = 304;
+    root->addChild(source);
+
+    SoBRLRealizeAction pointRealize;
+    pointRealize.apply(root);
+    if (pointRealize.getRealizedSourceCount() != 1 ||
+	    source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED) {
+	fprintf(stderr, "%s shaded point-attribute variant realization failed: %s\n",
+		name,
+		pointRealize.getDiagnostics().getLength() > 0 ?
+		pointRealize.getDiagnostics().getString() :
+		source->realizationDiagnostic.getValue().getString());
+	root->unref();
+	return 0;
+    }
+
+    SoBRLVListShape *shape = source->getRealizedShape();
+    if (!shape ||
+	    shape->getSegmentCount() != 0 ||
+	    shape->getPointPrimitiveCount() != 1 ||
+	    !BU_STR_EQUAL(shape->sourcePath.getValue().getString(), fullPath.getString())) {
+	fprintf(stderr, "%s shaded point-attribute variant shape did not meet point/path expectations\n", name);
+	root->unref();
+	return 0;
+    }
+
+    int primitiveIndex = -1;
+    SbVec3f point;
+    if (!shape->getPointPrimitive(0, primitiveIndex, point) ||
+	    primitiveIndex != 0 ||
+	    !nearly_equal(point[0], expectedPoint[0]) ||
+	    !nearly_equal(point[1], expectedPoint[1]) ||
+	    !nearly_equal(point[2], expectedPoint[2])) {
+	fprintf(stderr, "%s shaded point-attribute variant point is wrong\n", name);
+	root->unref();
+	return 0;
+    }
+
+    SbColor color;
+    float scale = 0.0f;
+    SbVec3f normal;
+    int colorValid = shape->getPointColor(primitiveIndex, color) ? 1 : 0;
+    int scaleValid = shape->getPointScale(primitiveIndex, scale) ? 1 : 0;
+    int normalValid = shape->getPointNormal(primitiveIndex, normal) ? 1 : 0;
+    if (colorValid != expectColor ||
+	    scaleValid != expectScale ||
+	    normalValid != expectNormal ||
+	    (expectColor &&
+		(!nearly_equal(color[0], expectedColor[0]) ||
+		 !nearly_equal(color[1], expectedColor[1]) ||
+		 !nearly_equal(color[2], expectedColor[2]))) ||
+	    (expectScale && !nearly_equal(scale, expectedScale)) ||
+	    (expectNormal &&
+		(!nearly_equal(normal[0], expectedNormal[0]) ||
+		 !nearly_equal(normal[1], expectedNormal[1]) ||
+		 !nearly_equal(normal[2], expectedNormal[2])))) {
+	fprintf(stderr, "%s shaded point-attribute variant accessors are wrong\n", name);
+	root->unref();
+	return 0;
+    }
+
+    const float extent = (expectScale && expectedScale > 0.0f) ?
+	expectedScale : 0.0f;
+    SbVec3f expectedMin(expectedPoint[0] - extent,
+	    expectedPoint[1] - extent,
+	    expectedPoint[2] - extent);
+    SbVec3f expectedMax(expectedPoint[0] + extent,
+	    expectedPoint[1] + extent,
+	    expectedPoint[2] + extent);
+
+    SoGetBoundingBoxAction bboxAction(viewport);
+    bboxAction.apply(root);
+    SbBox3f bbox = bboxAction.getBoundingBox();
+    if (bbox.isEmpty() ||
+	    !nearly_equal(bbox.getMin()[0], expectedMin[0]) ||
+	    !nearly_equal(bbox.getMin()[1], expectedMin[1]) ||
+	    !nearly_equal(bbox.getMin()[2], expectedMin[2]) ||
+	    !nearly_equal(bbox.getMax()[0], expectedMax[0]) ||
+	    !nearly_equal(bbox.getMax()[1], expectedMax[1]) ||
+	    !nearly_equal(bbox.getMax()[2], expectedMax[2])) {
+	fprintf(stderr, "%s shaded point-attribute variant bounding box is wrong\n", name);
+	root->unref();
+	return 0;
+    }
+
+    SoBRLExportAction pointExport;
+    pointExport.apply(root);
+    if (pointExport.getLineCount() != 0 ||
+	    pointExport.getTriangleCount() != 0 ||
+	    pointExport.getPointCount() != 1 ||
+	    export_point_path_count(pointExport, fullPath.getString()) != 1 ||
+	    pointExport.getBounds().isEmpty()) {
+	fprintf(stderr, "%s shaded point-attribute variant export did not preserve point identity\n", name);
+	root->unref();
+	return 0;
+    }
+    const SoBRLExportAction::PointRecord &record = pointExport.getPoint(0);
+    if (record.primitiveIndex != 0 ||
+	    !BU_STR_EQUAL(record.path.getString(), fullPath.getString()) ||
+	    (record.pointColorValid ? 1 : 0) != expectColor ||
+	    (record.pointScaleValid ? 1 : 0) != expectScale ||
+	    (record.pointNormalValid ? 1 : 0) != expectNormal ||
+	    (expectColor &&
+		(!nearly_equal(record.pointColor[0], expectedColor[0]) ||
+		 !nearly_equal(record.pointColor[1], expectedColor[1]) ||
+		 !nearly_equal(record.pointColor[2], expectedColor[2]))) ||
+	    (expectScale && !nearly_equal(record.pointScale, expectedScale)) ||
+	    (expectNormal &&
+		(!nearly_equal(record.pointNormal[0], expectedNormal[0]) ||
+		 !nearly_equal(record.pointNormal[1], expectedNormal[1]) ||
+		 !nearly_equal(record.pointNormal[2], expectedNormal[2])))) {
+	fprintf(stderr, "%s shaded point-attribute variant export record is wrong\n", name);
+	root->unref();
+	return 0;
+    }
+
+    SbBox3f exportBounds = pointExport.getBounds();
+    if (!nearly_equal(exportBounds.getMin()[0], expectedMin[0]) ||
+	    !nearly_equal(exportBounds.getMin()[1], expectedMin[1]) ||
+	    !nearly_equal(exportBounds.getMin()[2], expectedMin[2]) ||
+	    !nearly_equal(exportBounds.getMax()[0], expectedMax[0]) ||
+	    !nearly_equal(exportBounds.getMax()[1], expectedMax[1]) ||
+	    !nearly_equal(exportBounds.getMax()[2], expectedMax[2])) {
+	fprintf(stderr, "%s shaded point-attribute variant export bounds are wrong\n", name);
+	root->unref();
+	return 0;
+    }
+
+    root->unref();
+    return 1;
+}
+
 int
 main(int UNUSED(argc), const char **UNUSED(argv))
 {
+    PrototypeTiming timing;
+
     brlobol_init(NULL);
     PrototypeContextManager prototypeManager;
     brlobol_init(&prototypeManager);
@@ -1847,6 +2719,16 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    !nearly_equal(measureAction.getNearestPoint()[1], 0.2f))
 	FAIL("measure action should report nearest synthetic segment identity and point");
 
+    SoBRLExportAction summaryExport;
+    summaryExport.setRecordStorageEnabled(FALSE);
+    summaryExport.apply(root);
+    if (summaryExport.isRecordStorageEnabled() ||
+	    summaryExport.getLineCount() != shape->getSegmentCount() ||
+	    summaryExport.getPointCount() != 0 ||
+	    summaryExport.getTriangleCount() != 0 ||
+	    summaryExport.getBounds().isEmpty())
+	FAIL("export summary mode should count realized lines without storing records");
+
     SoBRLMeasureAction angleMeasure;
     angleMeasure.setQueryPoint(SbVec3f(halfExtent, halfExtent, 0.0f));
     angleMeasure.apply(root);
@@ -1858,6 +2740,61 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    angleMeasure.getAnglePrimitiveIndexA() < 0 ||
 	    angleMeasure.getAnglePrimitiveIndexB() < 0)
 	FAIL("measure action should report connected-segment corner angles");
+
+    SoBRLMeasureAction noAngleMeasure;
+    noAngleMeasure.setAngleComputationEnabled(FALSE);
+    noAngleMeasure.setQueryPoint(SbVec3f(halfExtent, halfExtent, 0.0f));
+    noAngleMeasure.apply(root);
+    if (noAngleMeasure.isAngleComputationEnabled() ||
+	    !noAngleMeasure.hasSegments() ||
+	    noAngleMeasure.getSegmentCount() != 4 ||
+	    noAngleMeasure.hasAngle())
+	FAIL("measure action should allow count-only callers to skip connected-angle search");
+
+    {
+	SoSeparator *sparseAngleRoot = new SoSeparator;
+	sparseAngleRoot->ref();
+	SoBRLVListShape *sparseAngleShape = new SoBRLVListShape;
+	sparseAngleShape->sourcePath = "/prototype/sparse-angle-bucket";
+
+	std::vector<SbVec3f> sparseAnglePoints;
+	std::vector<int32_t> sparseAngleCommands;
+	const int disconnectedSegmentCount = 256;
+	for (int i = 0; i < disconnectedSegmentCount; i++) {
+	    float x = 100.0f + static_cast<float>(i) * 3.0f;
+	    float y = static_cast<float>(i % 17) * 2.0f;
+	    sparseAnglePoints.push_back(SbVec3f(x, y, 0.0f));
+	    sparseAngleCommands.push_back(SoBRLVListShape::MOVE);
+	    sparseAnglePoints.push_back(SbVec3f(x + 1.0f, y, 0.0f));
+	    sparseAngleCommands.push_back(SoBRLVListShape::DRAW);
+	}
+	sparseAnglePoints.push_back(SbVec3f(0.0f, 0.0f, 0.0f));
+	sparseAngleCommands.push_back(SoBRLVListShape::MOVE);
+	sparseAnglePoints.push_back(SbVec3f(1.0f, 0.0f, 0.0f));
+	sparseAngleCommands.push_back(SoBRLVListShape::DRAW);
+	sparseAnglePoints.push_back(SbVec3f(1.0f, 1.0f, 0.0f));
+	sparseAngleCommands.push_back(SoBRLVListShape::DRAW);
+
+	sparseAngleShape->setLineSet(&sparseAnglePoints[0],
+		&sparseAngleCommands[0],
+		static_cast<int>(sparseAnglePoints.size()));
+	sparseAngleRoot->addChild(sparseAngleShape);
+
+	SoBRLMeasureAction sparseAngleMeasure;
+	sparseAngleMeasure.setQueryPoint(SbVec3f(1.0f, 0.0f, 0.0f));
+	sparseAngleMeasure.apply(sparseAngleRoot);
+	if (!sparseAngleMeasure.hasSegments() ||
+		sparseAngleMeasure.getSegmentCount() != disconnectedSegmentCount + 2 ||
+		!sparseAngleMeasure.hasAngle() ||
+		strcmp(sparseAngleMeasure.getAnglePath().getString(),
+		    "/prototype/sparse-angle-bucket") != 0 ||
+		!nearly_equal(sparseAngleMeasure.getAngleDegrees(), 90.0f) ||
+		!nearly_equal(sparseAngleMeasure.getAnglePoint()[0], 1.0f) ||
+		!nearly_equal(sparseAngleMeasure.getAnglePoint()[1], 0.0f))
+	    FAIL("sparse bucketed angle measure should find the connected corner");
+
+	sparseAngleRoot->unref();
+    }
 
     source->sourceRevision = 4;
     if (!source->needsRealization() ||
@@ -1916,6 +2853,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     }
 
     root->unref();
+    timing.checkpoint("synthetic source/controller");
 
     root = new SoSeparator;
     root->ref();
@@ -1965,6 +2903,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("sensor-driven realization should publish updated Obol geometry");
 
     root->unref();
+    timing.checkpoint("scene controller refresh");
 
     root = new SoSeparator;
     root->ref();
@@ -2031,6 +2970,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     }
 
     root->unref();
+    timing.checkpoint("edit preview");
 
     root = new SoSeparator;
     root->ref();
@@ -2069,6 +3009,12 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (preview->realizedSourceRevision.getValue() != 4 ||
 	    preview->realizedInputsRevision.getValue() != 2)
 	FAIL("edit preview should synchronize realized revision fields");
+    if (strcmp(previewShape->editIntentId.getValue().getString(),
+		"preview::drag-box") != 0 ||
+	    strcmp(previewShape->editIntentRole.getValue().getString(),
+		"preview") != 0 ||
+	    !previewShape->editEmphasis.getValue())
+	FAIL("edit preview should publish typed edit-intent metadata");
     if (!shape_extents_match(previewShape, -1.0f, 1.0f, -1.0f, 1.0f, 0.0f, 0.0f))
 	FAIL("edit preview shape should keep local coordinates under Obol transform nodes");
     root->addChild(preview);
@@ -2094,8 +3040,12 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (!rawDetail || !rawDetail->isOfType(SoBRLPickDetail::getClassTypeId()))
 	FAIL("edit preview pick should return a BRL-CAD Obol pick detail");
     pickDetail = static_cast<const SoBRLPickDetail *>(rawDetail);
-    if (strcmp(pickDetail->getPath().getString(), "preview::drag-box/outline") != 0)
-	FAIL("edit preview pick should preserve preview identity");
+    if (strcmp(pickDetail->getPath().getString(), "preview::drag-box/outline") != 0 ||
+	    strcmp(pickDetail->getEditIntentId().getString(),
+		"preview::drag-box") != 0 ||
+	    strcmp(pickDetail->getEditIntentRole().getString(),
+		"preview") != 0)
+	FAIL("edit preview pick should preserve preview and edit-intent identity");
 
     SoBRLSnapAction previewSnap;
     previewSnap.setQueryPoint(SbVec3f(41.0f, 0.2f, 0.0f));
@@ -2105,6 +3055,9 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("edit preview snap should find transformed preview geometry");
     if (strcmp(previewSnap.getPath().getString(), "preview::drag-box/outline") != 0)
 	FAIL("edit preview snap should preserve preview identity");
+    if (strcmp(previewSnap.getEditIntentId().getString(), "preview::drag-box") != 0 ||
+	    strcmp(previewSnap.getEditIntentRole().getString(), "preview") != 0)
+	FAIL("edit preview snap should preserve edit-intent metadata");
     if (!nearly_equal(previewSnap.getPoint()[0], 41.0f) ||
 	    !nearly_equal(previewSnap.getPoint()[1], 0.2f))
 	FAIL("edit preview snap point should be in transformed model coordinates");
@@ -2130,6 +3083,9 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    !nearly_equal(previewMeasure.getNearestPoint()[0], 41.0f) ||
 	    !nearly_equal(previewMeasure.getNearestPoint()[1], 0.2f))
 	FAIL("edit preview measure should report transformed preview identity");
+    if (strcmp(previewMeasure.getNearestEditIntentId().getString(), "preview::drag-box") != 0 ||
+	    strcmp(previewMeasure.getNearestEditIntentRole().getString(), "preview") != 0)
+	FAIL("edit preview measure should preserve edit-intent metadata");
 
     SoBRLExportAction previewExport;
     previewExport.apply(root);
@@ -2140,6 +3096,12 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (!nearly_equal(previewExport.getLine(0).a[0], 39.0f) ||
 	    !nearly_equal(previewExport.getLine(0).b[0], 41.0f))
 	FAIL("edit preview export should apply Obol transform state");
+    if (!previewExport.getLine(0).editEmphasis ||
+	    strcmp(previewExport.getLine(0).editIntentId.getString(),
+		"preview::drag-box") != 0 ||
+	    strcmp(previewExport.getLine(0).editIntentRole.getString(),
+		"preview") != 0)
+	FAIL("edit preview export should preserve edit-intent metadata");
 
     SbVec3f replacementPoints[5] = {
 	SbVec3f(-2.0f, -0.5f, 0.0f),
@@ -2212,6 +3174,9 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (!replacementSnap.hasCandidate() ||
 	    strcmp(replacementSnap.getPath().getString(), "preview::drag-box/replacement-outline") != 0)
 	FAIL("edit preview replacement snap should use only current preview identity");
+    if (strcmp(replacementSnap.getEditIntentId().getString(), "preview::drag-box") != 0 ||
+	    strcmp(replacementSnap.getEditIntentRole().getString(), "preview") != 0)
+	FAIL("edit preview replacement snap should keep edit-intent metadata current");
     if (!nearly_equal(replacementSnap.getPoint()[0], 47.0f) ||
 	    !nearly_equal(replacementSnap.getPoint()[1], 0.25f))
 	FAIL("edit preview replacement snap should use current transformed geometry");
@@ -2227,6 +3192,60 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (!replacementMeasure.hasNearestSegment() ||
 	    strcmp(replacementMeasure.getNearestPath().getString(), "preview::drag-box/replacement-outline") != 0)
 	FAIL("edit preview replacement measure should report current preview identity");
+    if (strcmp(replacementMeasure.getNearestEditIntentId().getString(), "preview::drag-box") != 0 ||
+	    strcmp(replacementMeasure.getNearestEditIntentRole().getString(), "preview") != 0)
+	FAIL("edit preview replacement measure should keep edit-intent metadata current");
+
+    preview->setEditIntent("edit::box.s/scale-corner", "scale-handle");
+    SoBRLVListShape *customIntentShape = preview->setLineSet(
+	    "preview::drag-box/custom-intent-outline",
+	    previewPoints, previewCommands, 5);
+    if (!customIntentShape ||
+	    preview->needsRealization() ||
+	    strcmp(preview->editIntentId.getValue().getString(),
+		"edit::box.s/scale-corner") != 0 ||
+	    strcmp(preview->editIntentRole.getValue().getString(),
+		"scale-handle") != 0)
+	FAIL("edit preview should publish explicit live edit intent fields");
+    if (strcmp(customIntentShape->editIntentId.getValue().getString(),
+		"edit::box.s/scale-corner") != 0 ||
+	    strcmp(customIntentShape->editIntentRole.getValue().getString(),
+		"scale-handle") != 0)
+	FAIL("edit preview geometry should use explicit edit intent instead of preview id fallback");
+
+    SoBRLSnapAction customIntentSnap;
+    customIntentSnap.setQueryPoint(SbVec3f(1.0f, 0.2f, 0.0f));
+    customIntentSnap.setTolerance(0.3f);
+    customIntentSnap.apply(root);
+    if (!customIntentSnap.hasCandidate() ||
+	    strcmp(customIntentSnap.getPath().getString(),
+		"preview::drag-box/custom-intent-outline") != 0 ||
+	    strcmp(customIntentSnap.getEditIntentId().getString(),
+		"edit::box.s/scale-corner") != 0 ||
+	    strcmp(customIntentSnap.getEditIntentRole().getString(),
+		"scale-handle") != 0)
+	FAIL("edit preview snap should expose explicit live edit intent");
+
+    SoBRLMeasureAction customIntentMeasure;
+    customIntentMeasure.setQueryPoint(SbVec3f(1.0f, 0.2f, 0.0f));
+    customIntentMeasure.apply(root);
+    if (!customIntentMeasure.hasNearestSegment() ||
+	    strcmp(customIntentMeasure.getNearestPath().getString(),
+		"preview::drag-box/custom-intent-outline") != 0 ||
+	    strcmp(customIntentMeasure.getNearestEditIntentId().getString(),
+		"edit::box.s/scale-corner") != 0 ||
+	    strcmp(customIntentMeasure.getNearestEditIntentRole().getString(),
+		"scale-handle") != 0)
+	FAIL("edit preview measure should expose explicit live edit intent");
+
+    SoBRLExportAction customIntentExport;
+    customIntentExport.apply(root);
+    if (customIntentExport.getLineCount() != 4 ||
+	    strcmp(customIntentExport.getLine(0).editIntentId.getString(),
+		"edit::box.s/scale-corner") != 0 ||
+	    strcmp(customIntentExport.getLine(0).editIntentRole.getString(),
+		"scale-handle") != 0)
+	FAIL("edit preview export should expose explicit live edit intent");
 
     preview->inputsRevision = 3;
     if (!preview->needsRealization() ||
@@ -2255,6 +3274,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("edit preview clear should remove transient scene content and become current-empty");
 
     root->unref();
+    timing.checkpoint("mesh shape");
 
     root = new SoSeparator;
     root->ref();
@@ -2448,10 +3468,17 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (!meshMeasure.hasNearestPrimitive() ||
 	    meshMeasure.getNearestPrimitiveKind() != SoBRLMeasureAction::FACE ||
 	    strcmp(meshMeasure.getNearestPath().getString(), "mesh::tri-test") != 0 ||
+	    meshMeasure.getNearestPrimitiveIndex() != 0 ||
+	    meshMeasure.getNearestFaceVertexIndexA() != 0 ||
+	    meshMeasure.getNearestFaceVertexIndexB() != 1 ||
+	    meshMeasure.getNearestFaceVertexIndexC() != 2 ||
+	    meshMeasure.getNearestFaceEdgeSlot() != 1 ||
+	    meshMeasure.getNearestFaceEdgeVertexIndexA() != 1 ||
+	    meshMeasure.getNearestFaceEdgeVertexIndexB() != 2 ||
 	    !nearly_equal(meshMeasure.getNearestPoint()[0], 61.0f) ||
 	    !nearly_equal(meshMeasure.getNearestPoint()[1], 1.0f) ||
 	    !nearly_equal(meshMeasure.getNearestPoint()[2], 0.0f))
-	FAIL("mesh measure should report nearest transformed mesh face identity");
+	FAIL("mesh measure should report nearest transformed mesh face and sub-entity identity");
 
     SoBRLSnapAction meshFaceSnap;
     meshFaceSnap.setEnabledKinds(SoBRLSnapAction::FACE_NEAREST);
@@ -2465,6 +3492,40 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    !nearly_equal(meshFaceSnap.getPoint()[1], 1.0f) ||
 	    !nearly_equal(meshFaceSnap.getPoint()[2], 0.0f))
 	FAIL("snap action should support mesh face-nearest policy");
+
+    SoBRLSnapAction meshVertexSnap;
+    meshVertexSnap.setEnabledKinds(SoBRLSnapAction::VERTEX);
+    meshVertexSnap.setQueryPoint(SbVec3f(60.05f, 0.05f, 0.0f));
+    meshVertexSnap.setTolerance(0.1f);
+    meshVertexSnap.apply(root);
+    if (!meshVertexSnap.hasCandidate() ||
+	    meshVertexSnap.getKind() != SoBRLSnapAction::VERTEX ||
+	    meshVertexSnap.getPrimitiveIndex() != 0 ||
+	    meshVertexSnap.getVertexIndex() != 0 ||
+	    meshVertexSnap.getEdgeSlot() != -1 ||
+	    strcmp(meshVertexSnap.getPath().getString(), "mesh::tri-test") != 0 ||
+	    !nearly_equal(meshVertexSnap.getPoint()[0], 60.0f) ||
+	    !nearly_equal(meshVertexSnap.getPoint()[1], 0.0f) ||
+	    !nearly_equal(meshVertexSnap.getPoint()[2], 0.0f))
+	FAIL("snap action should report mesh vertex identity");
+
+    SoBRLSnapAction meshEdgeSnap;
+    meshEdgeSnap.setEnabledKinds(SoBRLSnapAction::EDGE_NEAREST);
+    meshEdgeSnap.setQueryPoint(SbVec3f(61.0f, -0.05f, 0.0f));
+    meshEdgeSnap.setTolerance(0.1f);
+    meshEdgeSnap.apply(root);
+    if (!meshEdgeSnap.hasCandidate() ||
+	    meshEdgeSnap.getKind() != SoBRLSnapAction::EDGE_NEAREST ||
+	    meshEdgeSnap.getPrimitiveIndex() != 0 ||
+	    meshEdgeSnap.getEdgeSlot() != 0 ||
+	    meshEdgeSnap.getEdgeVertexIndexA() != 0 ||
+	    meshEdgeSnap.getEdgeVertexIndexB() != 1 ||
+	    meshEdgeSnap.getVertexIndex() != -1 ||
+	    strcmp(meshEdgeSnap.getPath().getString(), "mesh::tri-test") != 0 ||
+	    !nearly_equal(meshEdgeSnap.getPoint()[0], 61.0f) ||
+	    !nearly_equal(meshEdgeSnap.getPoint()[1], 0.0f) ||
+	    !nearly_equal(meshEdgeSnap.getPoint()[2], 0.0f))
+	FAIL("snap action should report mesh edge identity");
 
     SoBRLMeasureAction localMeshMeasure;
     localMeshMeasure.setCoordinateSpace(SoBRLMeasureAction::PATH_LOCAL_SPACE);
@@ -3063,6 +4124,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 
     bg_line_layer_builder_free(diagnosticBuilder);
     root->unref();
+    timing.checkpoint("overlays");
 
     char dbpath[MAXPATHLEN] = {0};
     char lodCacheDir[MAXPATHLEN] = {0};
@@ -3190,17 +4252,54 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	if (controllerSource->needsRealization() ||
 		controllerSource->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED)
 	    FAIL("view controller database source replacement should not leave delayed stale sensors after realization");
+	if (dbController.prepareRtPickCaches() != 1 ||
+		dbController.getRtPickCacheCount() != 1 ||
+		!dbController.getRtPickCache(0) ||
+		!dbController.getRtPickCache(0)->isReady() ||
+		dbController.getRtPickCache(0)->getObjectPathCount() != 1)
+		    FAIL("view controller should prepare controller-owned RT pick caches for database sources");
+		BRLObolRtPickCache *rtPickCache = dbController.getRtPickCache(0);
+		std::vector<BRLObolRtPickResult> controllerRtPicks;
+		if (dbController.pickRtExactRay(controllerRtPicks,
+			SbVec3f(0.0f, 0.0f, 10.0f),
+			SbVec3f(0.0f, 0.0f, -1.0f), TRUE) != 1 ||
+			controllerRtPicks.size() != 1 ||
+			!controllerRtPicks[0].hit ||
+			strcmp(controllerRtPicks[0].detail.getSourceName().getString(),
+			    "box.s") != 0 ||
+			strcmp(controllerRtPicks[0].detail.getSourceType().getString(),
+			    "arb8") != 0 ||
+			!strstr(controllerRtPicks[0].detail.getPath().getString(),
+			    "box.s"))
+		    FAIL("view controller should expose cache-backed RT exact ray picks outside qtcad");
+		std::vector<BRLObolRtPickResult> controllerRtMisses;
+		if (dbController.pickRtExactRay(controllerRtMisses,
+			SbVec3f(100.0f, 100.0f, 10.0f),
+			SbVec3f(0.0f, 0.0f, -1.0f), TRUE) != 0 ||
+			!controllerRtMisses.empty())
+		    FAIL("view controller cache-backed RT exact ray pick should report misses outside qtcad");
+		if (dbController.prepareRtPickCaches() != 1 ||
+			dbController.getRtPickCache(0) != rtPickCache)
+		    FAIL("view controller should reuse unchanged RT pick caches");
+	controllerSource->sourceRevision = 99;
+	if (dbController.prepareRtPickCaches() != 1 ||
+		dbController.getRtPickCacheSourceRevision(0) != 99)
+	    FAIL("view controller should invalidate RT pick caches when source revisions change");
 
 	if (dbController.replaceDatabaseSource("/box.s", dbip,
 		    SoBRLDatabaseSource::WIREFRAME, 72) != 1 ||
 		dbController.getDatabaseSourceCount() != 1 ||
 		controllerDbRoot->getNumChildren() != 2 ||
-		dbController.getDatabaseSource(0)->sourceRevision.getValue() != 72)
+		dbController.getDatabaseSource(0)->sourceRevision.getValue() != 72 ||
+		dbController.getRtPickCacheCount() != 0)
 	    FAIL("view controller database source replacement should match slash-equivalent paths");
 
+	if (dbController.prepareRtPickCaches() != 1)
+	    FAIL("view controller should rebuild RT pick caches after source replacement");
 	if (dbController.removeDatabaseSource("box.s") != 1 ||
 		dbController.getDatabaseSourceCount() != 0 ||
-		controllerDbRoot->getNumChildren() != 1)
+		controllerDbRoot->getNumChildren() != 1 ||
+		dbController.getRtPickCacheCount() != 0)
 	    FAIL("view controller database source removal should leave non-source scene nodes");
 
 	if (dbController.replaceDatabaseSource("box.s", dbip,
@@ -3208,9 +4307,11 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 		dbController.replaceDatabaseSource("ball.s", dbip,
 		    SoBRLDatabaseSource::SHADED, 74) != 1 ||
 		dbController.getDatabaseSourceCount() != 2 ||
+		dbController.prepareRtPickCaches() != 2 ||
 		dbController.clearDatabaseSources() != 2 ||
 		dbController.getDatabaseSourceCount() != 0 ||
-		controllerDbRoot->getNumChildren() != 1)
+		controllerDbRoot->getNumChildren() != 1 ||
+		dbController.getRtPickCacheCount() != 0)
 	    FAIL("view controller should clear only database source scene nodes");
     }
     controllerDbRoot->unref();
@@ -3536,6 +4637,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("database-backed tessellated torus measure should report mesh metrics and bounds");
 
     root->unref();
+    timing.checkpoint("database base and curved mesh");
 
     if (!exercise_generated_primitive(dbip, "rpc.s", 1, 1, viewport))
 	FAIL("database-backed RPC primitive coverage should pass");
@@ -3599,6 +4701,8 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 
     if (!exercise_generated_primitive(dbip, "rect.sketch", 1, 0, viewport))
 	FAIL("database-backed sketch wire primitive coverage should pass");
+    if (!exercise_generated_primitive_shaded_vlist(dbip, "rect.sketch", 4, viewport))
+	FAIL("database-backed sketch shaded vlist coverage should pass");
     if (!exercise_generated_primitive(dbip, "extrude.s", 1, 1, viewport))
 	FAIL("database-backed extrude primitive coverage should pass");
     if (!exercise_generated_primitive(dbip, "revolve.s", 1, 0, viewport))
@@ -3635,10 +4739,12 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("database-backed constraint wire diagnostic coverage should pass");
     if (!exercise_generated_primitive_mesh_diagnostic(dbip, "constraint.meta", "constrnt", viewport))
 	FAIL("database-backed constraint shaded diagnostic coverage should pass");
-    if (!exercise_generated_primitive_wire_diagnostic(dbip, "material.meta", "material", viewport))
-	FAIL("database-backed material wire diagnostic coverage should pass");
-    if (!exercise_generated_primitive_mesh_diagnostic(dbip, "material.meta", "material", viewport))
-	FAIL("database-backed material shaded diagnostic coverage should pass");
+    if (!exercise_generated_material_object(dbip, "material.meta",
+	    SoBRLDatabaseSource::WIREFRAME, viewport))
+	FAIL("database-backed material wire object coverage should pass");
+    if (!exercise_generated_material_object(dbip, "material.meta",
+	    SoBRLDatabaseSource::SHADED, viewport))
+	FAIL("database-backed material shaded object coverage should pass");
     if (!exercise_generated_primitive_wire_diagnostic(dbip, "script.meta", "script", viewport))
 	FAIL("database-backed script wire diagnostic coverage should pass");
     if (!exercise_generated_primitive_mesh_diagnostic(dbip, "script.meta", "script", viewport))
@@ -3647,10 +4753,52 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("database-backed PNTS wire primitive coverage should pass");
     if (!exercise_generated_pnts_shaded_points(dbip, "pnts.s", viewport))
 	FAIL("database-backed PNTS shaded point realization should pass");
+    if (!exercise_generated_pnts_shaded_attributes(dbip, "pnts_attr.s", viewport))
+	FAIL("database-backed PNTS shaded point attribute realization should pass");
+    if (!exercise_generated_pnts_attribute_variant(dbip, "pnts_col.s",
+	    SbVec3f(194.0f, 46.0f, 2.0f), 1,
+	    SbColor(128.0f / 255.0f, 64.0f / 255.0f, 32.0f / 255.0f),
+	    0, 0.0f, 0, SbVec3f(0.0f, 0.0f, 1.0f), viewport))
+	FAIL("database-backed PNTS color attribute variant should pass");
+    if (!exercise_generated_pnts_attribute_variant(dbip, "pnts_sca.s",
+	    SbVec3f(197.0f, 46.0f, 2.0f), 0,
+	    SbColor(1.0f, 1.0f, 1.0f),
+	    1, 1.75f, 0, SbVec3f(0.0f, 0.0f, 1.0f), viewport))
+	FAIL("database-backed PNTS scale attribute variant should pass");
+    if (!exercise_generated_pnts_attribute_variant(dbip, "pnts_nrm.s",
+	    SbVec3f(200.0f, 46.0f, 2.0f), 0,
+	    SbColor(1.0f, 1.0f, 1.0f),
+	    0, 0.0f, 1, SbVec3f(0.0f, 0.0f, -1.0f), viewport))
+	FAIL("database-backed PNTS normal attribute variant should pass");
+    if (!exercise_generated_pnts_attribute_variant(dbip, "pnts_col_sca.s",
+	    SbVec3f(203.0f, 46.0f, 2.0f), 1,
+	    SbColor(32.0f / 255.0f, 192.0f / 255.0f, 96.0f / 255.0f),
+	    1, 2.25f, 0, SbVec3f(0.0f, 0.0f, 1.0f), viewport))
+	FAIL("database-backed PNTS color-scale attribute variant should pass");
+    if (!exercise_generated_pnts_attribute_variant(dbip, "pnts_col_nrm.s",
+	    SbVec3f(206.0f, 46.0f, 2.0f), 1,
+	    SbColor(32.0f / 255.0f, 96.0f / 255.0f, 224.0f / 255.0f),
+	    0, 0.0f, 1, SbVec3f(1.0f, 0.0f, 0.0f), viewport))
+	FAIL("database-backed PNTS color-normal attribute variant should pass");
+    if (!exercise_generated_pnts_attribute_variant(dbip, "pnts_sca_nrm.s",
+	    SbVec3f(209.0f, 46.0f, 2.0f), 0,
+	    SbColor(1.0f, 1.0f, 1.0f),
+	    1, 3.0f, 1, SbVec3f(0.0f, -1.0f, 0.0f), viewport))
+	FAIL("database-backed PNTS scale-normal attribute variant should pass");
+    if (!exercise_generated_pnts_attribute_variant(dbip, "pnts_global_scale.s",
+	    SbVec3f(212.0f, 46.0f, 2.0f), 1,
+	    SbColor(240.0f / 255.0f, 208.0f / 255.0f, 32.0f / 255.0f),
+	    1, 1.5f, 1, SbVec3f(0.0f, 0.0f, 1.0f), viewport))
+	FAIL("database-backed PNTS global scale fallback should pass");
+    if (!exercise_generated_pnts_attribute_variant(dbip, "pnts_sca_precedence.s",
+	    SbVec3f(215.0f, 46.0f, 2.0f), 0,
+	    SbColor(1.0f, 1.0f, 1.0f),
+	    1, 0.5f, 0, SbVec3f(0.0f, 0.0f, 1.0f), viewport))
+	FAIL("database-backed PNTS per-point scale precedence should pass");
     if (!exercise_generated_primitive(dbip, "annot.s", 1, 0, viewport))
 	FAIL("database-backed annotation wire primitive coverage should pass");
-    if (!exercise_generated_primitive_mesh_diagnostic(dbip, "annot.s", "annot", viewport))
-	FAIL("database-backed annotation shaded diagnostic coverage should pass");
+    if (!exercise_generated_primitive_shaded_vlist(dbip, "annot.s", 1, viewport))
+	FAIL("database-backed annotation shaded vlist coverage should pass");
     if (!exercise_generated_primitive(dbip, "datum.s", 1, 0, viewport))
 	FAIL("database-backed datum wire primitive coverage should pass");
     if (!exercise_generated_primitive_mesh_diagnostic(dbip, "datum.s", "datum", viewport))
@@ -3667,6 +4815,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("database-backed submodel wire primitive coverage should pass");
     if (!exercise_generated_primitive_mesh_diagnostic(dbip, "submodel.s", "submodel", viewport))
 	FAIL("database-backed submodel shaded diagnostic coverage should pass");
+    timing.checkpoint("generated primitive sweep");
 
     root = new SoSeparator;
     root->ref();
@@ -3693,6 +4842,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("database-backed BoT below LoD threshold should keep the plain mesh shape");
 
     root->unref();
+    timing.checkpoint("BoT LoD source");
 
     root = new SoSeparator;
     root->ref();
@@ -3747,7 +4897,21 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    mesh->lodCacheKey.getValue().getLength() == 0)
 	FAIL("database-backed BoT mesh should publish staged RT LoD result fields");
 
+    SoBRLExportAction botMeshExactExport;
+    botMeshExactExport.apply(root);
+    if (botMeshExactExport.getTriangleCount() != 0 ||
+	    botMeshExactExport.getSourceBackedFullDetailRequestCount() != 1 ||
+	    !BU_STR_EQUAL(botMeshExactExport.getSourceBackedFullDetailRequest(0).path.getString(),
+		"/tet.bot")) {
+	fprintf(stderr, "BoT exact export counts: triangles=%d requests=%d skipped_lod=%u\n",
+		botMeshExactExport.getTriangleCount(),
+		botMeshExactExport.getSourceBackedFullDetailRequestCount(),
+		botMeshExactExport.getSkippedLodDisplayMeshCount());
+	FAIL("database-backed BoT exact export should request source-backed full detail");
+    }
+
     SoBRLExportAction botMeshExport;
+    botMeshExport.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
     botMeshExport.apply(root);
     if (botMeshExport.getTriangleCount() != 4 ||
 	    export_triangle_path_count(botMeshExport, "/tet.bot") != 4)
@@ -4116,14 +5280,19 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     db_close(dbip);
     bu_file_delete(dbpath);
     bu_dirclear(lodCacheDir);
+    timing.checkpoint("assembly and draw intent");
 
     if (!exercise_required_hierarchy_model("pinewood.g", "pinewood",
 	    2, 41, 21, 501, viewport))
 	FAIL("required pinewood hierarchy coverage should pass");
+    timing.checkpoint("pinewood hierarchy");
 
+    /* pinewood.g covers shaded hierarchy; havoc.g stays wire-only to avoid
+     * duplicating its expensive shaded realization in the prototype gate. */
     if (!exercise_required_hierarchy_model("havoc.g", "havoc",
-	    10, 100, 10, 100, viewport))
+	    10, 100, 0, 0, viewport))
 	FAIL("required havoc hierarchy coverage should pass");
+    timing.checkpoint("havoc hierarchy");
 
     return 0;
 }

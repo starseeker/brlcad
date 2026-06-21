@@ -35,7 +35,10 @@ struct QTCAD_EXPORT QgObolPickRecord {
     std::string sourceName;
     std::string sourceType;
     std::string materialShader;
+    std::string editIntentId;
+    std::string editIntentRole;
     SbVec3f point;
+    SbVec3f modelPoint;
     SbColor materialColor;
     float distance;
     uint32_t sourceId;
@@ -45,6 +48,14 @@ struct QTCAD_EXPORT QgObolPickRecord {
     int los;
     int primitiveKind;
     int primitiveIndex;
+    int faceVertexIndexA;
+    int faceVertexIndexB;
+    int faceVertexIndexC;
+    int nearestFaceEdgeSlot;
+    int nearestFaceEdgeVertexIndexA;
+    int nearestFaceEdgeVertexIndexB;
+    int nearestFaceVertexSlot;
+    int nearestFaceVertexIndex;
     bool materialColorValid;
 };
 
@@ -60,7 +71,23 @@ QTCAD_EXPORT int qg_obol_pick_point(QgView *display,
 	int y,
 	float radiusPixels,
 	bool pickAll,
-	std::vector<QgObolPickRecord> &records);
+	std::vector<QgObolPickRecord> &records,
+	int *submittedSourceRequestCount = 0);
+
+/**
+ * Pick BRL-CAD Obol geometry using an explicit model-space ray.  This helper
+ * uses the same display-level, source-backed mesh, and cache-backed librt
+ * exact picking paths as point picks, but lets ray-selection tools provide
+ * their already computed ray directly.
+ *
+ * Returns the number of BRL-CAD Obol pick records appended to @p records.
+ */
+QTCAD_EXPORT int qg_obol_pick_ray(QgView *display,
+	const SbVec3f &rayOrigin,
+	const SbVec3f &rayDirection,
+	bool pickAll,
+	std::vector<QgObolPickRecord> &records,
+	int *submittedSourceRequestCount = 0);
 
 /**
  * Pick BRL-CAD Obol geometry intersecting the Qt widget pixel rectangle
@@ -76,7 +103,8 @@ QTCAD_EXPORT int qg_obol_pick_rect(QgView *display,
 	int y1,
 	float radiusPixels,
 	bool firstOnly,
-	std::vector<QgObolPickRecord> &records);
+	std::vector<QgObolPickRecord> &records,
+	int *submittedSourceRequestCount = 0);
 
 #endif /* QGOBOLPICK_H */
 

@@ -172,7 +172,7 @@ QgViewFilter::view_sync(QEvent *e)
 	m->v->gv_prevMouseY = m->v->gv_mouse_y;
 	m->v->gv_mouse_x = e_x;
 	m->v->gv_mouse_y = e_y;
-	bsg_screen_pt(&m->v->gv_point, (fastf_t)e_x, (fastf_t)e_y, m->v);
+	rt_view_screen_point_from_bsg(m->v->gv_point, m->v, (fastf_t)e_x, (fastf_t)e_y);
 	qg_obol_refine_db_snap(m->display, m->v);
 
 	/* Modifier keys are typically view-nav gestures, not edit operations. */

@@ -29,6 +29,7 @@
 class BRLObolLodService;
 class SoBRLMeshShape;
 struct db_i;
+struct rt_i;
 
 class BRLOBOL_EXPORT SoBRLPickDetail : public SoDetail {
     typedef SoDetail inherited;
@@ -88,6 +89,10 @@ public:
     PrimitiveKind getPrimitiveKind(void) const;
     int getPrimitiveIndex(void) const;
 
+    void setEditIntent(const SbString &id, const SbString &role);
+    const SbString &getEditIntentId(void) const;
+    const SbString &getEditIntentRole(void) const;
+
     void setFaceVertexIndices(int indexA, int indexB, int indexC);
     int getFaceVertexIndex(int vertexSlot) const;
     int getFaceVertexIndexA(void) const;
@@ -111,6 +116,8 @@ private:
     SbString sourceName;
     SbString sourceType;
     SbString materialShader;
+    SbString editIntentId;
+    SbString editIntentRole;
     SbVec3f modelPoint;
     SbColor materialColor;
     uint32_t sourceId;
@@ -147,6 +154,30 @@ struct BRLOBOL_EXPORT BRLObolRtPickResult {
 
     BRLObolRtPickResult(void);
     void clear(void);
+};
+
+class BRLOBOL_EXPORT BRLObolRtPickCache {
+public:
+    BRLObolRtPickCache(void);
+    ~BRLObolRtPickCache(void);
+
+    void clear(void);
+    SbBool prepare(struct db_i *dbip,
+	    const std::vector<SbString> &objectPaths);
+    SbBool isReady(void) const;
+    int getObjectPathCount(void) const;
+    SbBool pickRay(BRLObolRtPickResult &pick,
+	    const SbVec3f &rayOrigin,
+	    const SbVec3f &rayDirection) const;
+
+private:
+    BRLObolRtPickCache(const BRLObolRtPickCache &);
+    BRLObolRtPickCache &operator=(const BRLObolRtPickCache &);
+
+    struct rt_i *rtip;
+    struct db_i *database;
+    std::vector<SbString> objectPaths;
+    SbBool ready;
 };
 
 BRLOBOL_EXPORT SbBool

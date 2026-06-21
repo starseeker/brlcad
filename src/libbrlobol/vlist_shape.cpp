@@ -28,6 +28,12 @@ SoBRLVListShape::SoBRLVListShape(void)
 
     SO_NODE_ADD_EMPTY_MFIELD(point);
     SO_NODE_ADD_EMPTY_MFIELD(command);
+    SO_NODE_ADD_EMPTY_MFIELD(pointColorValid);
+    SO_NODE_ADD_EMPTY_MFIELD(pointColor);
+    SO_NODE_ADD_EMPTY_MFIELD(pointScaleValid);
+    SO_NODE_ADD_EMPTY_MFIELD(pointScale);
+    SO_NODE_ADD_EMPTY_MFIELD(pointNormalValid);
+    SO_NODE_ADD_EMPTY_MFIELD(pointNormal);
     SO_NODE_ADD_FIELD(sourcePath, (""));
     SO_NODE_ADD_FIELD(sourceName, (""));
     SO_NODE_ADD_FIELD(sourceType, (""));
@@ -51,6 +57,8 @@ SoBRLVListShape::SoBRLVListShape(void)
     SO_NODE_ADD_FIELD(ghosted, (FALSE));
     SO_NODE_ADD_FIELD(hiddenLine, (FALSE));
     SO_NODE_ADD_FIELD(editEmphasis, (FALSE));
+    SO_NODE_ADD_FIELD(editIntentId, (""));
+    SO_NODE_ADD_FIELD(editIntentRole, (""));
     SO_NODE_ADD_FIELD(lodPolicy, (0));
     SO_NODE_ADD_EMPTY_MFIELD(selectedPrimitive);
     SO_NODE_ADD_EMPTY_MFIELD(highlightedPrimitive);
@@ -71,11 +79,51 @@ SoBRLVListShape::setLineSet(const SbVec3f *points, const int32_t *commands, int 
 {
     this->point.setNum(0);
     this->command.setNum(0);
+    this->pointColorValid.setNum(0);
+    this->pointColor.setNum(0);
+    this->pointScaleValid.setNum(0);
+    this->pointScale.setNum(0);
+    this->pointNormalValid.setNum(0);
+    this->pointNormal.setNum(0);
     if (!points || !commands || count <= 0)
 	return;
 
     this->point.setValues(0, count, points);
     this->command.setValues(0, count, commands);
+}
+
+void
+SoBRLVListShape::setPointAttributes(const int *colorValid,
+	const SbColor *colors, const int *scaleValid, const float *scales,
+	const int *normalValid, const SbVec3f *normals, int count)
+{
+    this->pointColorValid.setNum(0);
+    this->pointColor.setNum(0);
+    this->pointScaleValid.setNum(0);
+    this->pointScale.setNum(0);
+    this->pointNormalValid.setNum(0);
+    this->pointNormal.setNum(0);
+    if (count <= 0)
+	return;
+
+    if (colorValid && colors) {
+	this->pointColorValid.setNum(count);
+	for (int i = 0; i < count; i++)
+	    this->pointColorValid.set1Value(i, colorValid[i] ? TRUE : FALSE);
+	this->pointColor.setValues(0, count, colors);
+    }
+    if (scaleValid && scales) {
+	this->pointScaleValid.setNum(count);
+	for (int i = 0; i < count; i++)
+	    this->pointScaleValid.set1Value(i, scaleValid[i] ? TRUE : FALSE);
+	this->pointScale.setValues(0, count, scales);
+    }
+    if (normalValid && normals) {
+	this->pointNormalValid.setNum(count);
+	for (int i = 0; i < count; i++)
+	    this->pointNormalValid.set1Value(i, normalValid[i] ? TRUE : FALSE);
+	this->pointNormal.setValues(0, count, normals);
+    }
 }
 
 int
@@ -190,6 +238,48 @@ SoBRLVListShape::getPointPrimitive(int pointIndex, int &primitiveIndex, SbVec3f 
     return FALSE;
 }
 
+SbBool
+SoBRLVListShape::getPointColor(int primitiveIndex, SbColor &colorOut) const
+{
+    colorOut = SbColor(1.0f, 1.0f, 1.0f);
+    if (primitiveIndex < 0 ||
+	    primitiveIndex >= this->pointColorValid.getNum() ||
+	    primitiveIndex >= this->pointColor.getNum() ||
+	    !this->pointColorValid[primitiveIndex])
+	return FALSE;
+
+    colorOut = this->pointColor[primitiveIndex];
+    return TRUE;
+}
+
+SbBool
+SoBRLVListShape::getPointScale(int primitiveIndex, float &scaleOut) const
+{
+    scaleOut = 0.0f;
+    if (primitiveIndex < 0 ||
+	    primitiveIndex >= this->pointScaleValid.getNum() ||
+	    primitiveIndex >= this->pointScale.getNum() ||
+	    !this->pointScaleValid[primitiveIndex])
+	return FALSE;
+
+    scaleOut = this->pointScale[primitiveIndex];
+    return TRUE;
+}
+
+SbBool
+SoBRLVListShape::getPointNormal(int primitiveIndex, SbVec3f &normalOut) const
+{
+    normalOut = SbVec3f(0.0f, 0.0f, 1.0f);
+    if (primitiveIndex < 0 ||
+	    primitiveIndex >= this->pointNormalValid.getNum() ||
+	    primitiveIndex >= this->pointNormal.getNum() ||
+	    !this->pointNormalValid[primitiveIndex])
+	return FALSE;
+
+    normalOut = this->pointNormal[primitiveIndex];
+    return TRUE;
+}
+
 static SbBool
 vlist_int_field_contains(const SoMFInt32 &field, int value)
 {
@@ -212,22 +302,33 @@ SoBRLVListShape::isPrimitiveHighlighted(int primitiveIndex) const
     return this->highlighted.getValue() || vlist_int_field_contains(this->highlightedPrimitive, primitiveIndex);
 }
 
-static void
-set_vlist_gl_color(SoBRLVListShape *shape, int primitiveIndex)
+static SbBool
+set_vlist_gl_state_color(SoBRLVListShape *shape, int primitiveIndex)
 {
     if (shape->isPrimitiveHighlighted(primitiveIndex)) {
 	const SbColor &c = shape->highlightedColor.getValue();
 	glColor3f(c[0], c[1], c[2]);
+	return TRUE;
     } else if (shape->isPrimitiveSelected(primitiveIndex)) {
 	const SbColor &c = shape->selectedColor.getValue();
 	glColor3f(c[0], c[1], c[2]);
+	return TRUE;
     } else if (shape->ghosted.getValue()) {
 	const SbColor &c = shape->ghostedColor.getValue();
 	glColor4f(c[0], c[1], c[2], 0.35f);
+	return TRUE;
     } else if (shape->colorOverride.getValue()) {
 	const SbColor &c = shape->color.getValue();
 	glColor3f(c[0], c[1], c[2]);
+	return TRUE;
     }
+    return FALSE;
+}
+
+static void
+set_vlist_gl_color(SoBRLVListShape *shape, int primitiveIndex)
+{
+    (void)set_vlist_gl_state_color(shape, primitiveIndex);
 }
 
 void
@@ -272,7 +373,11 @@ SoBRLVListShape::GLRender(SoGLRenderAction *action)
     glBegin(GL_POINTS);
     for (int i = 0; i < n; i++) {
 	if (this->command[i] == POINT) {
-	    set_vlist_gl_color(this, i);
+	    if (!set_vlist_gl_state_color(this, i)) {
+		SbColor attrColor;
+		if (this->getPointColor(i, attrColor))
+		    glColor3f(attrColor[0], attrColor[1], attrColor[2]);
+	    }
 	    glVertex3f(this->point[i][0], this->point[i][1], this->point[i][2]);
 	}
     }
@@ -289,8 +394,15 @@ SoBRLVListShape::computeBBox(SoAction *UNUSED(action), SbBox3f &box, SbVec3f &ce
 	return;
     }
 
-    for (int i = 0; i < this->point.getNum(); i++)
+    for (int i = 0; i < this->point.getNum(); i++) {
 	box.extendBy(this->point[i]);
+	float scale = 0.0f;
+	if (this->getPointScale(i, scale) && scale > 0.0f) {
+	    const SbVec3f radius(scale, scale, scale);
+	    box.extendBy(this->point[i] - radius);
+	    box.extendBy(this->point[i] + radius);
+	}
+    }
 
     center = box.isEmpty() ? SbVec3f(0.0f, 0.0f, 0.0f) : box.getCenter();
 }
@@ -336,6 +448,13 @@ SoBRLVListShape::generatePrimitives(SoAction *action)
 	    case POINT:
 		pointDetail.setCoordinateIndex(i);
 		v0.setPoint(this->point[i]);
+		{
+		    SbVec3f normal;
+		    if (this->getPointNormal(i, normal))
+			v0.setNormal(normal);
+		    else
+			v0.setNormal(0.0f, 0.0f, 1.0f);
+		}
 		this->invokePointCallbacks(action, &v0);
 		break;
 	    default:
@@ -363,6 +482,8 @@ SoBRLVListShape::createLineSegmentDetail(SoRayPickAction *UNUSED(action),
 	    this->materialColor.getValue());
     detail->setMaterialShader(this->materialShader.getValue());
     detail->setPrimitive(SoBRLPickDetail::LINE_SEGMENT, -1);
+    detail->setEditIntent(this->editIntentId.getValue(),
+	    this->editIntentRole.getValue());
 
     const SoDetail *vertexDetail = v1 ? v1->getDetail() : NULL;
     if (vertexDetail && vertexDetail->isOfType(SoPointDetail::getClassTypeId())) {
@@ -392,6 +513,8 @@ SoBRLVListShape::createPointDetail(SoRayPickAction *UNUSED(action),
 	    this->materialColor.getValue());
     detail->setMaterialShader(this->materialShader.getValue());
     detail->setPrimitive(SoBRLPickDetail::POINT, -1);
+    detail->setEditIntent(this->editIntentId.getValue(),
+	    this->editIntentRole.getValue());
 
     const SoDetail *vertexDetail = v ? v->getDetail() : NULL;
     if (vertexDetail && vertexDetail->isOfType(SoPointDetail::getClassTypeId())) {

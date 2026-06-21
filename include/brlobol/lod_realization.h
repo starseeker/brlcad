@@ -134,7 +134,10 @@ struct BRLOBOL_EXPORT BRLObolLodGeometryHandle {
 
 struct BRLOBOL_EXPORT BRLObolLodMeshPayload {
     std::vector<SbVec3f> points;
+    std::vector<SbVec3f> normals;
     std::vector<int32_t> coordIndex;
+    std::vector<int32_t> faceIndex;
+    std::vector<int32_t> vertexIndex;
 
     BRLObolLodMeshPayload(void);
     void clear(void);

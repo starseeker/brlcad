@@ -32,6 +32,17 @@ QTCAD_EXPORT int qg_obol_edit_preview_update(QgView *display,
 	uint32_t sourceRevision,
 	uint32_t inputsRevision);
 
+QTCAD_EXPORT int qg_obol_edit_preview_update_with_intent(QgView *display,
+	const char *previewId,
+	const char *identity,
+	const char *editIntentId,
+	const char *editIntentRole,
+	const SbVec3f *points,
+	const int32_t *commands,
+	int count,
+	uint32_t sourceRevision,
+	uint32_t inputsRevision);
+
 QTCAD_EXPORT int qg_obol_edit_preview_clear(QgView *display,
 	const char *previewId);
 
