@@ -113,7 +113,7 @@ _rtif_use_current_view(struct mged_state *s)
 static void
 _rtif_request_current_view_refresh(struct mged_state *s)
 {
-    mged_refresh_request_view(s, view_state, BSG_VIEW_REFRESH_VIEW);
+    mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
     if (s)
 	mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
 }
@@ -350,7 +350,7 @@ work:
 		_rtif_shape_translate_geometry(s, sp_ref, xlate);
 		break;
 	}
-	mged_refresh_request_view(s, view_state, BSG_VIEW_REFRESH_VIEW);
+	mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
 	refresh(s);	/* Draw new display */
     }
 

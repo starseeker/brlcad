@@ -19,8 +19,7 @@
  */
 /** @file CADViewSettings.cpp
  *
- * Widget implementation for viewing and controlling faceplate settings,
- * reflecting the current state of bsg_view_settings and bsg_params_state.
+ * Widget implementation for viewing and controlling faceplate settings.
  *
  */
 
@@ -31,8 +30,6 @@
 #include "bu/opt.h"
 #include "bu/malloc.h"
 #include "bu/str.h"
-#include "bsg/render_settings.h"
-#include "bsg/view_state.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgSignalFlags.h"
 #include "rt/view_legacy_bsg.h"
@@ -188,9 +185,8 @@ CADViewSettings::checkbox_refresh(unsigned long long)
     if (!v)
 	return;
 
-    /* Read render policy through the canonical settings record. */
-    struct bsg_render_settings rs;
-    bsg_render_settings_from_view(&rs, v);
+    struct rt_view_lod_policy lod_policy = RT_VIEW_LOD_POLICY_INIT;
+    (void)rt_view_lod_policy_from_bsg(&lod_policy, v);
 
     /* Top-level faceplate elements */
     struct bsg_adc_state adc = {};
@@ -208,8 +204,8 @@ CADViewSettings::checkbox_refresh(unsigned long long)
     (void)rt_view_view_axes_from_bsg(&view_axes, v);
     (void)rt_view_params_from_bsg(&params, v);
 
-    set_ckbx(acsg_ckbx,     rs.lod_source_policy.csg_enabled);
-    set_ckbx(amesh_ckbx,    rs.lod_source_policy.mesh_enabled);
+    set_ckbx(acsg_ckbx,     lod_policy.csg_enabled);
+    set_ckbx(amesh_ckbx,    lod_policy.mesh_enabled);
     set_ckbx(adc_ckbx,      adc.draw);
     set_ckbx(cdot_ckbx,     center_dot.gos_draw);
     set_ckbx(grid_ckbx,     grid.draw);
@@ -219,7 +215,7 @@ CADViewSettings::checkbox_refresh(unsigned long long)
 
     /* Framebuffer mode (0=off, 1=overlay, 2=underlay) maps directly to
      * combo index. Clamp to a valid range in case of unexpected values. */
-    int fb_mode = (int)rs.fb_mode;
+    int fb_mode = rt_view_framebuffer_mode_from_bsg(v);
     if (fb_mode < 0 || fb_mode > 2)
 	fb_mode = 0;
     fb_mode_combo->blockSignals(true);
@@ -245,17 +241,16 @@ CADViewSettings::view_refresh(unsigned long long)
     if (!v)
 	return;
 
-    /* Start from the current render state so non-widget
-     * policy fields are preserved, overwrite the widget-backed render-policy
-     * fields, then flush back to the view. */
-    struct bsg_render_settings rs;
-    bsg_render_settings_from_view(&rs, v);
-    rs.lod_source_policy.csg_enabled = ckbx_val(acsg_ckbx);
-    rs.lod_source_policy.mesh_enabled = ckbx_val(amesh_ckbx);
-    rs.lod_source_policy.zoom_refresh =
-	rs.lod_source_policy.csg_enabled || rs.lod_source_policy.mesh_enabled;
-    rs.fb_mode            = (bsg_framebuffer_mode)fb_mode_combo->currentIndex();
-    bsg_render_settings_apply_to_view(&rs, v);
+    /* Preserve non-widget LoD policy fields and update only the settings
+     * owned by this widget. */
+    struct rt_view_lod_policy lod_policy = RT_VIEW_LOD_POLICY_INIT;
+    (void)rt_view_lod_policy_from_bsg(&lod_policy, v);
+    lod_policy.csg_enabled = ckbx_val(acsg_ckbx);
+    lod_policy.mesh_enabled = ckbx_val(amesh_ckbx);
+    lod_policy.zoom_refresh =
+	lod_policy.csg_enabled || lod_policy.mesh_enabled;
+    (void)rt_view_lod_policy_apply_bsg(v, &lod_policy);
+    (void)rt_view_framebuffer_mode_set_bsg(v, fb_mode_combo->currentIndex());
 
     struct bsg_adc_state adc = {};
     struct bsg_other_state center_dot = {};

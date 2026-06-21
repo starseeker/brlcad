@@ -36,9 +36,6 @@
 #include "bn.h"
 #include "bg/clip.h"
 
-#include "bsg/export.h"
-#include "bsg/field.h"
-#include "bsg/render.h"
 #include "ged/bsg_ged_draw.h"
 #include "rt/view_legacy_bsg.h"
 #include "../ged_private.h"
@@ -221,13 +218,18 @@ png_draw_segment_cb(const point_t a, const point_t b, void *data)
 }
 
 static void
-draw_png_record(fastf_t perspective, unsigned char **image, const struct bsg_export_record *rec, matp_t psmat, size_t size, size_t half_size)
+draw_png_record(fastf_t perspective,
+		unsigned char **image,
+		const struct ged_draw_view_db_object_record *rec,
+		matp_t psmat,
+		size_t size,
+		size_t half_size)
 {
     struct png_segment_data psd;
 
     if (!rec)
 	return;
-    if (!bsg_export_record_has_segments(rec))
+    if (!ged_draw_view_db_object_record_has_segments(rec))
 	return;
 
     /* delta is used in clipping to insure clipped endpoint is slightly
@@ -246,7 +248,27 @@ draw_png_record(fastf_t perspective, unsigned char **image, const struct bsg_exp
     psd.size = size;
     psd.half_size = half_size;
 
-    (void)bsg_export_record_foreach_segment(rec, png_draw_segment_cb, &psd);
+    (void)ged_draw_view_db_object_record_foreach_segment(rec,
+	    png_draw_segment_cb, &psd);
+}
+
+struct png_draw_record_ctx {
+    fastf_t perspective;
+    unsigned char **image;
+    matp_t psmat;
+    size_t size;
+    size_t half_size;
+};
+
+static int
+draw_png_record_cb(const struct ged_draw_view_db_object_record *rec, void *data)
+{
+    struct png_draw_record_ctx *ctx = (struct png_draw_record_ctx *)data;
+    if (!ctx)
+	return 1;
+    draw_png_record(ctx->perspective, ctx->image, rec, ctx->psmat,
+	    ctx->size, ctx->half_size);
+    return 1;
 }
 
 static void
@@ -275,21 +297,18 @@ dl_png(struct ged *gedp, mat_t model2view, fastf_t perspective, vect_t eye_pos, 
             deering_persp_mat(perspective_mat, l, h, eye_pos);
         }
 
-        bn_mat_mul(newmat, perspective_mat, mat);
-        mat = newmat;
+	bn_mat_mul(newmat, perspective_mat, mat);
+	mat = newmat;
     }
 
-    struct bsg_export_request request;
-    bsg_export_request_init(&request, gedp->ged_gvp);
-    request.query_flags = BSG_EXPORT_QUERY_VISIBLE_ONLY;
-    request.render_flags = BSG_RENDER_FLAG_VISIBLE_ONLY | BSG_RENDER_FLAG_PAYLOAD_PREPARE;
-    struct bsg_export_result *result = bsg_export_query(&request);
-    if (!result)
-	return;
-
-    for (size_t i = 0; i < bsg_export_result_count(result); i++)
-	draw_png_record(perspective, image, bsg_export_result_get(result, i), mat, size, half_size);
-    bsg_export_result_free(result);
+    struct png_draw_record_ctx ctx;
+    ctx.perspective = perspective;
+    ctx.image = image;
+    ctx.psmat = mat;
+    ctx.size = size;
+    ctx.half_size = half_size;
+    ged_draw_foreach_visible_view_record(gedp->ged_gvp,
+	    draw_png_record_cb, &ctx);
 }
 
 

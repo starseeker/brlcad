@@ -37,20 +37,49 @@ extern "C" {
 #include "bu/opt.h"
 #include "bu/path.h"
 #include "bu/vls.h"
-#include "bsg.h"
 #include "bsg/defines.h"
 #include "bsg/draw_intent.h"
 #include "bsg/draw_source.h"
-#include "bsg/export.h"
-#include "bsg/render.h"
+#include "bsg/feature.h"
 #include "bsg/scene_object.h"
 #include "bsg/field.h"
 #include "raytrace.h"
 #include "ged/bsg_ged_draw.h"
 #include "rt/view_legacy_bsg.h"
 }
+#include "../bsg_ged_draw_view_private.h"
 #include "./ged_view.h"
 #include "../ged_private.h"
+
+static struct ged_draw_view_record_query
+_view_obj_query(int list_view, int list_db, int local_only, const char *glob)
+{
+    struct ged_draw_view_record_query query;
+    query.flags = 0;
+    query.glob = glob;
+    query.draw_mode = -1;
+    if (list_view)
+	query.flags |= GED_DRAW_VIEW_RECORD_QUERY_VIEW_OBJECTS;
+    if (list_db)
+	query.flags |= GED_DRAW_VIEW_RECORD_QUERY_DB_OBJECTS;
+    if (local_only)
+	query.flags |= GED_DRAW_VIEW_RECORD_QUERY_LOCAL_ONLY;
+    return query;
+}
+
+struct view_obj_list_state {
+    std::set<std::string> names;
+};
+
+static int
+_view_obj_list_cb(const struct ged_draw_view_db_object_record *rec, void *ud)
+{
+    struct view_obj_list_state *ctx = (struct view_obj_list_state *)ud;
+    if (!ctx || !rec || !rec->path || !rec->path[0])
+	return 1;
+    ctx->names.insert(std::string(rec->path));
+    return 1;
+}
 
 static void
 _view_obj_list(struct bu_vls *out, struct bsg_view *v, int list_view, int list_db, int local_only, const char *glob)
@@ -58,51 +87,13 @@ _view_obj_list(struct bu_vls *out, struct bsg_view *v, int list_view, int list_d
     if (!out || !v || !ged_draw_view_has_scene_root(v))
 	return;
 
-    struct bsg_export_request request;
-    bsg_export_request_init(&request, v);
-    request.query_flags = 0;
-    if (list_view)
-	request.query_flags |= BSG_EXPORT_QUERY_VIEW_OBJECTS;
-    if (list_db)
-	request.query_flags |= BSG_EXPORT_QUERY_DB_OBJECTS;
-    if (local_only)
-	request.query_flags |= BSG_EXPORT_QUERY_LOCAL_ONLY;
-    request.render_flags = BSG_RENDER_FLAG_PAYLOAD_PREPARE;
-    request.glob = glob;
+    struct ged_draw_view_record_query query =
+	_view_obj_query(list_view, list_db, local_only, glob);
+    struct view_obj_list_state ctx;
+    ged_draw_foreach_view_record_query(v, &query, _view_obj_list_cb, &ctx);
 
-    std::set<std::string> names;
-    struct bsg_export_result *result = bsg_export_query(&request);
-    if (!result)
-	return;
-    for (size_t i = 0; i < bsg_export_result_count(result); i++) {
-	const struct bsg_export_record *rec = bsg_export_result_get(result, i);
-	const char *name = rec ? bu_vls_cstr(&rec->path) : NULL;
-	if (name && *name)
-	    names.insert(std::string(name));
-    }
-    for (std::set<std::string>::iterator it = names.begin(); it != names.end(); ++it)
+    for (std::set<std::string>::iterator it = ctx.names.begin(); it != ctx.names.end(); ++it)
 	bu_vls_printf(out, "%s\n", it->c_str());
-    bsg_export_result_free(result);
-}
-
-static const char *
-_view_obj_type_from_role(bsg_render_geometry_role role)
-{
-    switch (role) {
-	case BSG_RENDER_GEOMETRY_ROLE_AXES_WIDGET:
-	    return "axes";
-	case BSG_RENDER_GEOMETRY_ROLE_LINE_SET:
-	    return "line";
-	case BSG_RENDER_GEOMETRY_ROLE_TEXT_LABEL:
-	    return "label";
-	case BSG_RENDER_GEOMETRY_ROLE_POLYGON_REGION:
-	    return "polygon";
-	case BSG_RENDER_GEOMETRY_ROLE_DATABASE_OBJECT:
-	    return "gobj";
-	default:
-	    break;
-    }
-    return "object";
 }
 
 static void
@@ -135,45 +126,69 @@ _view_obj_mode_value_string(struct bu_vls *out, int mode)
     }
 }
 
-static struct bsg_export_result *
-_view_obj_export_find(struct bsg_view *v,
+struct view_obj_record {
+    int found;
+    std::string type_name;
+    int draw_mode;
+    int visible;
+    unsigned char color[3];
+    size_t vlist_structure_count;
+};
+
+struct view_obj_find_state {
+    const char *name;
+    struct view_obj_record *out;
+};
+
+static int
+_view_obj_find_cb(const struct ged_draw_view_db_object_record *rec, void *ud)
+{
+    struct view_obj_find_state *ctx = (struct view_obj_find_state *)ud;
+    if (!ctx || !ctx->out || !rec || !rec->path || !ctx->name)
+	return 1;
+    if (!BU_STR_EQUAL(rec->path, ctx->name))
+	return 1;
+
+    ctx->out->found = 1;
+    ctx->out->type_name = rec->type_name ? rec->type_name : "object";
+    ctx->out->draw_mode = rec->draw_mode;
+    ctx->out->visible = rec->visible;
+    ctx->out->color[0] = rec->color[0];
+    ctx->out->color[1] = rec->color[1];
+    ctx->out->color[2] = rec->color[2];
+    ctx->out->vlist_structure_count = rec->vlist_structure_count;
+    return 0;
+}
+
+static int
+_view_obj_record_find(struct bsg_view *v,
 		      const char *name,
 		      int list_view,
 		      int list_db,
 		      int local_only,
-		      const struct bsg_export_record **out_rec)
+		      struct view_obj_record *out)
 {
-    if (out_rec)
-	*out_rec = NULL;
-    if (!v || !ged_draw_view_has_scene_root(v) || !name || !name[0])
-	return NULL;
-
-    struct bsg_export_request request;
-    bsg_export_request_init(&request, v);
-    request.query_flags = 0;
-    if (list_view)
-	request.query_flags |= BSG_EXPORT_QUERY_VIEW_OBJECTS;
-    if (list_db)
-	request.query_flags |= BSG_EXPORT_QUERY_DB_OBJECTS;
-    if (local_only)
-	request.query_flags |= BSG_EXPORT_QUERY_LOCAL_ONLY;
-    request.render_flags = BSG_RENDER_FLAG_PAYLOAD_PREPARE;
-
-    struct bsg_export_result *result = bsg_export_query(&request);
-    if (!result)
-	return NULL;
-    for (size_t i = 0; i < bsg_export_result_count(result); i++) {
-	const struct bsg_export_record *rec = bsg_export_result_get(result, i);
-	const char *path = rec ? bu_vls_cstr(&rec->path) : NULL;
-	if (path && BU_STR_EQUAL(path, name)) {
-	    if (out_rec)
-		*out_rec = rec;
-	    return result;
-	}
+    if (out) {
+	out->found = 0;
+	out->type_name.clear();
+	out->draw_mode = 0;
+	out->visible = 0;
+	out->color[0] = 0;
+	out->color[1] = 0;
+	out->color[2] = 0;
+	out->vlist_structure_count = 0;
     }
+    if (!v || !ged_draw_view_has_scene_root(v) || !name || !name[0])
+	return 0;
 
-    bsg_export_result_free(result);
-    return NULL;
+    struct ged_draw_view_record_query query =
+	_view_obj_query(list_view, list_db, local_only, NULL);
+    struct view_obj_find_state ctx;
+    ctx.name = name;
+    ctx.out = out;
+    ged_draw_foreach_view_record_query(v, &query, _view_obj_find_cb, &ctx);
+
+    return out ? out->found : 0;
 }
 
 struct view_obj_shape_ref_find_state {
@@ -228,14 +243,9 @@ _view_obj_shape_ref_find(struct ged *gedp,
 			 int local_only)
 {
     ged_draw_shape_ref null_ref = GED_DRAW_SHAPE_REF_NULL;
-    const struct bsg_export_record *export_rec = NULL;
-    struct bsg_export_result *export_result =
-	_view_obj_export_find(v, name, list_view, list_db, local_only, &export_rec);
-    if (!export_rec) {
-	bsg_export_result_free(export_result);
+    struct view_obj_record rec;
+    if (!_view_obj_record_find(v, name, list_view, list_db, local_only, &rec))
 	return null_ref;
-    }
-    bsg_export_result_free(export_result);
 
     struct view_obj_shape_ref_find_state ctx;
     ctx.gedp = gedp;
@@ -362,9 +372,8 @@ _objs_cmd_delete(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    bsg_feature_ref ref = bsg_feature_find(gd->cv, gd->vobj);
-    if (!bsg_feature_ref_is_null(ref)) {
-	if (!bsg_feature_remove(gd->cv, gd->vobj)) {
+    if (ged_draw_view_feature_exists(gd->cv, gd->vobj)) {
+	if (!ged_draw_view_feature_remove(gd->cv, gd->vobj)) {
 	    bu_vls_printf(gedp->ged_result_str, "No view feature named %s\n", gd->vobj);
 	    return BRLCAD_ERROR;
 	}
@@ -569,15 +578,11 @@ _objs_cmd_lcnt(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    const struct bsg_export_record *rec = NULL;
-    struct bsg_export_result *export_result =
-	_view_obj_export_find(gd->cv, gd->vobj, 1, 1, gd->local_obj, &rec);
-    if (rec) {
-	bu_vls_printf(gedp->ged_result_str, "%zu\n", rec->vlist_structure_count);
-	bsg_export_result_free(export_result);
+    struct view_obj_record rec;
+    if (_view_obj_record_find(gd->cv, gd->vobj, 1, 1, gd->local_obj, &rec)) {
+	bu_vls_printf(gedp->ged_result_str, "%zu\n", rec.vlist_structure_count);
 	return BRLCAD_OK;
     }
-    bsg_export_result_free(export_result);
     bu_vls_printf(gedp->ged_result_str, "0\n");
     return BRLCAD_OK;
 }
@@ -613,9 +618,7 @@ _objs_cmd_update(void *bs, int argc, const char **argv)
 	    bu_vls_printf(gedp->ged_result_str, "Invalid argument %s\n", argv[1]);
 	    return BRLCAD_ERROR;
 	}
-	v->gv_mouse_x = x;
-	v->gv_mouse_y = y;
-	rt_view_screen_point_from_bsg(v->gv_point, v, x, y);
+	rt_view_mouse_state_set_bsg(v, x, y);
     }
 
     bsg_feature_ref ref = bsg_feature_find(gd->cv, gd->vobj);
@@ -839,52 +842,43 @@ _view_cmd_objs(void *bs, int argc, const char **argv)
 	}
 
 	if (BU_STR_EQUAL(ucmd, "info")) {
-	    const struct bsg_export_record *rec = NULL;
-	    struct bsg_export_result *export_result =
-		_view_obj_export_find(v, gd->vobj, list_view, list_db, gd->local_obj, &rec);
-	    if (!rec) {
+	    struct view_obj_record rec;
+	    if (!_view_obj_record_find(v, gd->vobj, list_view, list_db, gd->local_obj, &rec)) {
 		bu_vls_free(&gobj_path);
 		bu_vls_printf(gd->gedp->ged_result_str, "No view feature named %s\n", gd->vobj);
 		return BRLCAD_ERROR;
 	    }
 	    if (subcmd_argc == 2) {
-		bu_vls_printf(gedp->ged_result_str, "%s %s\n", gd->vobj, _view_obj_type_from_role(rec->source.geometry_role));
-		bsg_export_result_free(export_result);
+		bu_vls_printf(gedp->ged_result_str, "%s %s\n", gd->vobj, rec.type_name.c_str());
 		bu_vls_free(&gobj_path);
 		return BRLCAD_OK;
 	    }
 	    if (BU_STR_EQUAL(subcmd_argv[2], "mode")) {
-		_view_obj_mode_value_string(gedp->ged_result_str, rec->draw_mode);
-		bsg_export_result_free(export_result);
+		_view_obj_mode_value_string(gedp->ged_result_str, rec.draw_mode);
 		bu_vls_free(&gobj_path);
 		return BRLCAD_OK;
 	    }
 	    if (BU_STR_EQUAL(subcmd_argv[2], "color")) {
 		bu_vls_printf(gedp->ged_result_str, "%d/%d/%d\n",
-			rec->color[0], rec->color[1], rec->color[2]);
-		bsg_export_result_free(export_result);
+			rec.color[0], rec.color[1], rec.color[2]);
 		bu_vls_free(&gobj_path);
 		return BRLCAD_OK;
 	    }
 	    if (BU_STR_EQUAL(subcmd_argv[2], "draw")) {
-		bu_vls_printf(gedp->ged_result_str, "%s\n", rec->visible ? "UP" : "DOWN");
-		bsg_export_result_free(export_result);
+		bu_vls_printf(gedp->ged_result_str, "%s\n", rec.visible ? "UP" : "DOWN");
 		bu_vls_free(&gobj_path);
 		return BRLCAD_OK;
 	    }
 	    if (BU_STR_EQUAL(subcmd_argv[2], "lcnt")) {
-		bu_vls_printf(gedp->ged_result_str, "%zu\n", rec->vlist_structure_count);
-		bsg_export_result_free(export_result);
+		bu_vls_printf(gedp->ged_result_str, "%zu\n", rec.vlist_structure_count);
 		bu_vls_free(&gobj_path);
 		return BRLCAD_OK;
 	    }
 	    if (BU_STR_EQUAL(subcmd_argv[2], "type")) {
-		bu_vls_printf(gedp->ged_result_str, "%s\n", _view_obj_type_from_role(rec->source.geometry_role));
-		bsg_export_result_free(export_result);
+		bu_vls_printf(gedp->ged_result_str, "%s\n", rec.type_name.c_str());
 		bu_vls_free(&gobj_path);
 		return BRLCAD_OK;
 	    }
-	    bsg_export_result_free(export_result);
 	    bu_vls_free(&gobj_path);
 	    bu_vls_printf(gd->gedp->ged_result_str, "Unsupported info field %s", subcmd_argv[2]);
 	    return BRLCAD_ERROR;

@@ -38,12 +38,12 @@
 #include "bsg/database_source.h"
 #include "bsg/draw_intent.h"
 #include "bsg/draw_source.h"
+#include "bsg/export.h"
 #include "bsg/interaction.h"
+#include "bsg/render.h"
 #include "bsg/scene_builder.h"
 #include "bsg/selection.h"
-#include "bsg/view_state.h"
 #include "ged/bsg_ged_draw.h"
-#include "bsg/util.h"
 #include "./ged_private.h"
 #include "./bsg_ged_draw_private.h"
 
@@ -218,7 +218,7 @@ _draw_group_scene_ref_in_view(bsg_scene_ref group_ref, struct bsg_view *v)
     int in_view_scope = _draw_scene_ref_in_view_scope(group_ref);
     if (!v)
 	return !in_view_scope;
-    if (bsg_view_is_independent(v))
+    if (ged_draw_view_is_independent_bsg(v))
 	return in_view_scope && bsg_scene_view(group_ref) == v;
     if (!in_view_scope)
 	return 1;
@@ -234,7 +234,7 @@ ged_draw_group_record_in_view(const struct ged_draw_group_record *rec,
 	return 0;
     if (!v)
 	return !rec->in_view_scope;
-    if (bsg_view_is_independent(v))
+    if (ged_draw_view_is_independent_bsg(v))
 	return rec->in_view_scope && rec->view == v;
     if (!rec->in_view_scope)
 	return 1;
@@ -731,7 +731,7 @@ _ged_draw_fill_shape_record(struct ged *gedp,
     out->selected = 0;
     out->evaluated_region = bsg_scene_legacy_eval_flag(shape_ref);
     struct bsg_selection *selection = (gedp && gedp->ged_gvp) ?
-	bsg_view_selection(gedp->ged_gvp) : NULL;
+	ged_draw_view_selection_bsg(gedp->ged_gvp) : NULL;
     if (selection) {
 	struct bsg_interaction_record *selected =
 	    ged_draw_shape_interaction_record(gedp, out->ref,
@@ -858,6 +858,33 @@ ged_draw_shape_interaction_record(struct ged *gedp,
     if (path)
 	bu_free(path, "db_path_to_string");
     return record;
+}
+
+int
+ged_draw_view_selection_set_highlighted_shape_ref(struct ged *gedp,
+						  struct bsg_view *v,
+						  ged_draw_shape_ref ref)
+{
+    if (!gedp || !v)
+	return 0;
+
+    struct bsg_selection *selection = ged_draw_view_selection_bsg(v);
+    if (!selection)
+	return 0;
+
+    bsg_selection_clear(selection);
+    if (ged_draw_shape_ref_is_null(ref))
+	return 1;
+
+    struct bsg_interaction_record *record =
+	ged_draw_shape_interaction_record(gedp, ref,
+		BSG_INTERACTION_HIGHLIGHTED_REF);
+    if (!record)
+	return 0;
+
+    bsg_selection_add_record(selection, record);
+    bsg_interaction_record_free(record);
+    return 1;
 }
 
 
@@ -1007,6 +1034,216 @@ ged_draw_foreach_shape_record(struct ged *gedp,
     ctx.userdata = userdata;
     bsg_scene_ref root_ref = ged_scene_root_ref(gedp);
     _draw_foreach_shape_scene(root_ref, _foreach_shape_record_cb, &ctx);
+}
+
+
+static void
+_ged_draw_foreach_view_export_record(struct bsg_view *v,
+				     unsigned int query_flags,
+				     unsigned int render_flags,
+				     const char *glob,
+				     int draw_mode,
+				     ged_draw_view_db_object_record_cb cb,
+				     void *userdata)
+{
+    if (!v || !cb)
+	return;
+
+    struct bsg_export_request request;
+    bsg_export_request_init(&request, v);
+    request.query_flags = query_flags;
+    request.render_flags = render_flags;
+    request.glob = glob;
+    if (draw_mode >= 0)
+	request.draw_mode = draw_mode;
+
+    struct bsg_export_result *result = bsg_export_query(&request);
+    if (!result)
+	return;
+
+    for (size_t i = 0; i < bsg_export_result_count(result); i++) {
+	const struct bsg_export_record *export_rec =
+	    bsg_export_result_get(result, i);
+	if (!export_rec)
+	    continue;
+
+	struct ged_draw_view_db_object_record rec;
+	rec.path = bu_vls_cstr(&export_rec->path);
+	switch (export_rec->source.geometry_role) {
+	    case BSG_RENDER_GEOMETRY_ROLE_AXES_WIDGET:
+		rec.type_name = "axes";
+		break;
+	    case BSG_RENDER_GEOMETRY_ROLE_LINE_SET:
+		rec.type_name = "line";
+		break;
+	    case BSG_RENDER_GEOMETRY_ROLE_TEXT_LABEL:
+		rec.type_name = "label";
+		break;
+	    case BSG_RENDER_GEOMETRY_ROLE_POLYGON_REGION:
+		rec.type_name = "polygon";
+		break;
+	    case BSG_RENDER_GEOMETRY_ROLE_DATABASE_OBJECT:
+		rec.type_name = "gobj";
+		break;
+	    default:
+		rec.type_name = "object";
+		break;
+	}
+	rec.draw_mode = export_rec->draw_mode;
+	rec.transparency = export_rec->transparency;
+	rec.evaluated_region = export_rec->evaluated_region;
+	rec.is_database_source =
+	    (export_rec->source.scope == BSG_RENDER_SOURCE_SCOPE_DATABASE);
+	rec.non_database_source = export_rec->non_database_source;
+	rec.highlighted = export_rec->highlighted;
+	rec.visible = export_rec->visible;
+	rec.line_style = export_rec->line_style;
+	rec.color[0] = export_rec->color[0];
+	rec.color[1] = export_rec->color[1];
+	rec.color[2] = export_rec->color[2];
+	MAT_COPY(rec.model_mat, export_rec->model_mat);
+	VMOVE(rec.bounds_center, export_rec->bounds_center);
+	rec.bounds_radius = export_rec->bounds_radius;
+	rec.has_bounds = export_rec->has_bounds;
+	rec.vlist_structure_count = export_rec->vlist_structure_count;
+	rec.vlist_point_count = export_rec->vlist_point_count;
+	rec.detail_token = (uintptr_t)export_rec;
+
+	if (!cb(&rec, userdata))
+	    break;
+    }
+
+    bsg_export_result_free(result);
+}
+
+
+void
+ged_draw_foreach_view_record_query(
+	struct bsg_view *v,
+	const struct ged_draw_view_record_query *query,
+	ged_draw_view_db_object_record_cb cb,
+	void *userdata)
+{
+    if (!v || !query)
+	return;
+
+    unsigned int query_flags = 0;
+    if (query->flags & GED_DRAW_VIEW_RECORD_QUERY_VIEW_OBJECTS)
+	query_flags |= BSG_EXPORT_QUERY_VIEW_OBJECTS;
+    if (query->flags & GED_DRAW_VIEW_RECORD_QUERY_DB_OBJECTS)
+	query_flags |= BSG_EXPORT_QUERY_DB_OBJECTS;
+    if (query->flags & GED_DRAW_VIEW_RECORD_QUERY_LOCAL_ONLY)
+	query_flags |= BSG_EXPORT_QUERY_LOCAL_ONLY;
+
+    _ged_draw_foreach_view_export_record(v, query_flags,
+	    BSG_RENDER_FLAG_PAYLOAD_PREPARE, query->glob, query->draw_mode,
+	    cb, userdata);
+}
+
+
+void
+ged_draw_foreach_view_db_object_record(struct bsg_view *v,
+				       ged_draw_view_db_object_record_cb cb,
+				       void *userdata)
+{
+    _ged_draw_foreach_view_export_record(v, BSG_EXPORT_QUERY_DB_OBJECTS,
+	    BSG_RENDER_FLAG_PAYLOAD_PREPARE, NULL, BSG_EXPORT_DRAW_MODE_ANY,
+	    cb, userdata);
+}
+
+
+void
+ged_draw_foreach_visible_view_db_object_record(struct bsg_view *v,
+					      ged_draw_view_db_object_record_cb cb,
+					      void *userdata)
+{
+    _ged_draw_foreach_view_export_record(v,
+	    BSG_EXPORT_QUERY_VISIBLE_ONLY | BSG_EXPORT_QUERY_DB_OBJECTS,
+	    BSG_RENDER_FLAG_VISIBLE_ONLY | BSG_RENDER_FLAG_PAYLOAD_PREPARE,
+	    NULL,
+	    BSG_EXPORT_DRAW_MODE_ANY, cb, userdata);
+}
+
+
+void
+ged_draw_foreach_visible_view_db_object_record_mode(
+	struct bsg_view *v,
+	int draw_mode,
+	ged_draw_view_db_object_record_cb cb,
+	void *userdata)
+{
+    _ged_draw_foreach_view_export_record(v,
+	    BSG_EXPORT_QUERY_VISIBLE_ONLY | BSG_EXPORT_QUERY_DB_OBJECTS,
+	    BSG_RENDER_FLAG_VISIBLE_ONLY | BSG_RENDER_FLAG_PAYLOAD_PREPARE,
+	    NULL, draw_mode, cb, userdata);
+}
+
+
+void
+ged_draw_foreach_visible_view_record(struct bsg_view *v,
+				     ged_draw_view_db_object_record_cb cb,
+				     void *userdata)
+{
+    _ged_draw_foreach_view_export_record(v, BSG_EXPORT_QUERY_VISIBLE_ONLY,
+	    BSG_RENDER_FLAG_VISIBLE_ONLY | BSG_RENDER_FLAG_PAYLOAD_PREPARE,
+	    NULL, BSG_EXPORT_DRAW_MODE_ANY, cb, userdata);
+}
+
+
+int
+ged_draw_view_db_object_record_foreach_segment(
+	const struct ged_draw_view_db_object_record *rec,
+	ged_draw_view_segment_cb cb,
+	void *userdata)
+{
+    if (!rec || !rec->detail_token || !cb)
+	return 0;
+
+    const struct bsg_export_record *export_rec =
+	(const struct bsg_export_record *)rec->detail_token;
+    return bsg_export_record_foreach_segment(export_rec, cb, userdata);
+}
+
+
+int
+ged_draw_view_db_object_record_foreach_point(
+	const struct ged_draw_view_db_object_record *rec,
+	ged_draw_view_point_cb cb,
+	void *userdata)
+{
+    if (!rec || !rec->detail_token || !cb)
+	return 0;
+
+    const struct bsg_export_record *export_rec =
+	(const struct bsg_export_record *)rec->detail_token;
+    return bsg_export_record_foreach_point(export_rec, cb, userdata);
+}
+
+
+int
+ged_draw_view_db_object_record_has_segments(
+	const struct ged_draw_view_db_object_record *rec)
+{
+    if (!rec || !rec->detail_token)
+	return 0;
+
+    const struct bsg_export_record *export_rec =
+	(const struct bsg_export_record *)rec->detail_token;
+    return bsg_export_record_has_segments(export_rec);
+}
+
+
+void
+ged_draw_view_db_object_record_geometry_report(
+	const struct ged_draw_view_db_object_record *rec,
+	struct bu_vls *out)
+{
+    if (!rec || !rec->detail_token || !out)
+	return;
+
+    const struct bsg_export_record *export_rec =
+	(const struct bsg_export_record *)rec->detail_token;
+    bsg_export_record_geometry_report(export_rec, out);
 }
 
 

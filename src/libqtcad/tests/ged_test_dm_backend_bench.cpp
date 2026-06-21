@@ -56,7 +56,7 @@
 #include <bu.h>
 #include "bu/opt.h"
 #include "bu/time.h"
-#include <bsg/view_state.h>
+#include <rt/view_legacy_bsg.h>
 #define DM_WITH_RT
 #include <dm.h>
 #include <ged.h>
@@ -88,9 +88,9 @@ open_and_draw(const char *gfile, struct bsg_view *view)
 	return NULL;
     if (view) {
 	gedp->ged_gvp = view;
-	bsg_set_add_view(&gedp->ged_views, view);
-	view->gv_base2local = gedp->dbip->dbi_base2local;
-	view->gv_local2base = gedp->dbip->dbi_local2base;
+	rt_view_set_add_view_bsg(&gedp->ged_views, view);
+	rt_view_unit_conversion_set_bsg(view, gedp->dbip->dbi_local2base,
+	    gedp->dbip->dbi_base2local);
     }
 
     const char *ae_av[4] = {"ae", "35", "25", NULL};

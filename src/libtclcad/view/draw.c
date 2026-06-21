@@ -26,8 +26,6 @@
 
 #include "common.h"
 #include "dm/view.h"
-#include "bsg/export.h"
-#include "bsg/render.h"
 #include "ged.h"
 #include "ged/bsg_ged_draw.h"
 #include "rt/view_legacy_bsg.h"
@@ -60,6 +58,64 @@ go_draw(struct bsg_view *gdvp)
     dm_draw_objs(gdvp);
 }
 
+
+struct to_edit_redraw_data {
+    struct ged *gedp;
+    const char **argv;
+    const struct db_full_path *subpath;
+};
+
+
+static int
+to_edit_redraw_record_cb(const struct ged_draw_view_db_object_record *rec,
+			 void *userdata)
+{
+    struct to_edit_redraw_data *d = (struct to_edit_redraw_data *)userdata;
+    if (!rec || !rec->path || !d || !d->gedp || !d->subpath)
+	return 1;
+
+    struct db_full_path rec_path;
+    db_full_path_init(&rec_path);
+    if (db_string_to_path(&rec_path, d->gedp->dbip, rec->path) < 0) {
+	db_free_full_path(&rec_path);
+	return 1;
+    }
+
+    size_t pi;
+    for (pi = 0; pi < d->subpath->fp_len; pi++) {
+	if (!db_full_path_search(&rec_path, d->subpath->fp_names[pi]))
+	    continue;
+
+	/* Match found -- re-execute draw for this path */
+	struct bu_vls mflag = BU_VLS_INIT_ZERO;
+	struct bu_vls xflag = BU_VLS_INIT_ZERO;
+	char *av[5] = {0};
+	int arg = 0;
+
+	av[arg++] = (char *)d->argv[0];
+	if (rec->draw_mode == 4) {
+	    av[arg++] = "-h";
+	} else {
+	    bu_vls_printf(&mflag, "-m%d", rec->draw_mode);
+	    bu_vls_printf(&xflag, "-x%f", rec->transparency);
+	    av[arg++] = bu_vls_addr(&mflag);
+	    av[arg++] = bu_vls_addr(&xflag);
+	}
+	av[arg] = bu_strdup(rec->path);
+
+	ged_exec(d->gedp, arg + 1, (const char **)av);
+
+	bu_free(av[arg], "to_edit_redraw");
+	bu_vls_free(&mflag);
+	bu_vls_free(&xflag);
+	break;
+    }
+
+    db_free_full_path(&rec_path);
+    return 1;
+}
+
+
 int
 to_edit_redraw(struct ged *gedp,
 	       int argc,
@@ -72,65 +128,15 @@ to_edit_redraw(struct ged *gedp,
     if (db_string_to_path(&subpath, gedp->dbip, argv[1]) != 0)
 	return BRLCAD_OK;  /* path not found — nothing to do */
 
-    /* Phase 6: iterate the BSG view tree (BSG_SOURCE_DB) instead of walking
-     * the GED draw scene. */
-    struct bu_ptbl *views = bsg_set_views(&gedp->ged_views);
+    struct to_edit_redraw_data d = {gedp, argv, &subpath};
+
+    /* Iterate view-scoped DB object export records through the GED draw
+     * boundary instead of walking local TclCAD draw state. */
+    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
     size_t vi;
     for (vi = 0; vi < BU_PTBL_LEN(views); vi++) {
 	struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, vi);
-	struct bsg_export_request request;
-	bsg_export_request_init(&request, v);
-	request.query_flags = BSG_EXPORT_QUERY_DB_OBJECTS;
-	request.render_flags = BSG_RENDER_FLAG_PAYLOAD_PREPARE;
-	struct bsg_export_result *result = bsg_export_query(&request);
-	if (!result)
-	    continue;
-
-	size_t oi;
-	for (oi = 0; oi < bsg_export_result_count(result); oi++) {
-	    const struct bsg_export_record *rec = bsg_export_result_get(result, oi);
-	    if (!rec)
-		continue;
-
-	    struct db_full_path rec_path;
-	    db_full_path_init(&rec_path);
-	    if (db_string_to_path(&rec_path, gedp->dbip, bu_vls_cstr(&rec->path)) < 0) {
-		db_free_full_path(&rec_path);
-		continue;
-	    }
-	    size_t pi;
-	    for (pi = 0; pi < subpath.fp_len; pi++) {
-		if (!db_full_path_search(&rec_path, subpath.fp_names[pi]))
-		    continue;
-
-		/* Match found — re-execute draw for this path */
-		struct bu_vls mflag = BU_VLS_INIT_ZERO;
-		struct bu_vls xflag = BU_VLS_INIT_ZERO;
-		char *av[5] = {0};
-		int arg = 0;
-
-		av[arg++] = (char *)argv[0];
-		int dmode = rec->draw_mode;
-		if (dmode == 4) {
-		    av[arg++] = "-h";
-		} else {
-		    bu_vls_printf(&mflag, "-m%d", dmode);
-		    bu_vls_printf(&xflag, "-x%f", rec->transparency);
-		    av[arg++] = bu_vls_addr(&mflag);
-		    av[arg++] = bu_vls_addr(&xflag);
-		}
-		av[arg] = bu_strdup(bu_vls_cstr(&rec->path));
-
-		ged_exec(gedp, arg + 1, (const char **)av);
-
-		bu_free(av[arg], "to_edit_redraw");
-		bu_vls_free(&mflag);
-		bu_vls_free(&xflag);
-		break;
-	    }
-	    db_free_full_path(&rec_path);
-	}
-	bsg_export_result_free(result);
+	ged_draw_foreach_view_db_object_record(v, to_edit_redraw_record_cb, &d);
     }
 
     db_free_full_path(&subpath);

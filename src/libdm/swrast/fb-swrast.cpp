@@ -39,7 +39,6 @@
 extern "C" {
 #include "../include/private.h"
 #include "../dm-gl.h"
-#include "bsg/view_state.h"
 #include "rt/view_legacy_bsg.h"
 }
 
@@ -435,10 +434,9 @@ fb_swrast_open(struct fb *ifp, const char *UNUSED(file), int width, int height)
 	ifp->i->pp = NULL;
 	return -1;
     }
-    bsg_init(canvas_view, NULL);
+    rt_view_init_bsg(canvas_view, NULL);
     rt_view_framebuffer_mode_set_bsg(canvas_view, 1);
-    canvas_view->gv_width = width;
-    canvas_view->gv_height = height;
+    rt_view_dimensions_set_bsg(canvas_view, width, height);
 
 
     {
@@ -446,8 +444,7 @@ fb_swrast_open(struct fb *ifp, const char *UNUSED(file), int width, int height)
 	int lw = qMax(1, static_cast<int>(std::ceil(((qreal)width) / dpr)));
 	int lh = qMax(1, static_cast<int>(std::ceil(((qreal)height) / dpr)));
 	canvas->setFixedSize(lw, lh);
-	canvas_view->gv_width = width;
-	canvas_view->gv_height = height;
+	rt_view_dimensions_set_bsg(canvas_view, width, height);
     }
     qi->mw->adjustSize();
     qi->mw->setFixedSize(qi->mw->size());

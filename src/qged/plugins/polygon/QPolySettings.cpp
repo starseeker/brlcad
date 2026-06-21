@@ -25,7 +25,11 @@
 #include <QString>
 #include <QMessageBox>
 #include "bu/malloc.h"
+#include "bu/str.h"
+#include "bu/vls.h"
+#include "bsg/polygon.h"
 #include "bg/polygon.h"
+#include "rt/view_legacy_bsg.h"
 #include "QPolySettings.h"
 
 QPolySettings::QPolySettings()
@@ -163,7 +167,7 @@ QPolySettings::uniq_obj_name(struct bu_vls *oname, struct bsg_view *v)
     // See if the supplied name will collide.  If it will, then reject.  If we want
     // an output name, fail with a message box
     struct bu_vls ovname = BU_VLS_INIT_ZERO;
-    bsg_uniq_obj_name(&ovname, vname, v);
+    rt_view_unique_object_name_bsg(&ovname, vname, v);
     if (!BU_STR_EQUAL(bu_vls_cstr(&ovname), vname)) {
 	if (!oname)
 	    return false;

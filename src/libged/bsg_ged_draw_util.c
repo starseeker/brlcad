@@ -24,9 +24,12 @@
 
 #include "common.h"
 
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "bu/vls.h"
+#include "bu/log.h"
 #include "bu/ptbl.h"
 #include "bu/str.h"
 #include "bu/color.h"
@@ -50,7 +53,6 @@
 #include "bsg/selection.h"
 #include "bsg/view_set.h"
 #include "bsg/view_state.h"
-#include "bsg/util.h"
 #include "bg/clip.h"
 
 #include "ged.h"
@@ -84,6 +86,35 @@ ged_draw_stale_reason_name(ged_draw_stale_reason reason)
 	default:
 	    return "unknown";
     }
+}
+
+void
+#ifdef USE_BSG_LOG
+ged_draw_log(int level, const char *fmt, ...)
+#else
+ged_draw_log(int UNUSED(level), const char *UNUSED(fmt), ...)
+#endif
+{
+#ifdef USE_BSG_LOG
+    if (level < 0 || !fmt)
+	return;
+
+    const char *brsig = getenv("BSG_LOG");
+    if (!brsig)
+	return;
+
+    if (atoi(brsig) < level)
+	return;
+
+    va_list ap;
+    struct bu_vls msg = BU_VLS_INIT_ZERO;
+    va_start(ap, fmt);
+    bu_vls_vprintf(&msg, fmt, ap);
+    va_end(ap);
+
+    bu_log("%s\n", bu_vls_cstr(&msg));
+    bu_vls_free(&msg);
+#endif
 }
 
 bsg_draw_mode

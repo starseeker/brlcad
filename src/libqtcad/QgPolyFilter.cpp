@@ -27,13 +27,54 @@
 
 extern "C" {
 #include "bg/polygon.h"
-#include "bsg.h"
+#include "bsg/polygon.h"
 #include "raytrace.h" // For finalize polygon sketch export functionality (TODO - need to move...)
 #include "rt/view_legacy_bsg.h"
 }
 
 #include "qtcad/QgPolyFilter.h"
 #include "qtcad/QgSignalFlags.h"
+
+static void
+qg_poly_mouse_xy(QMouseEvent *m_e, int *sx, int *sy)
+{
+	if (!m_e || !sx || !sy)
+		return;
+
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+	*sx = m_e->x();
+	*sy = m_e->y();
+#else
+	*sx = (int)m_e->position().x();
+	*sy = (int)m_e->position().y();
+#endif
+}
+
+static void
+qg_poly_screen_point(struct bsg_view *v, QMouseEvent *m_e, point_t point)
+{
+	VSETALL(point, 0.0);
+	if (!v || !m_e)
+		return;
+
+	int sx = 0;
+	int sy = 0;
+	qg_poly_mouse_xy(m_e, &sx, &sy);
+	(void)rt_view_screen_point_from_bsg(point, v, (fastf_t)sx, (fastf_t)sy);
+}
+
+static int
+qg_poly_update_from_event(bsg_polygon_ref ref, struct bsg_view *v,
+	QMouseEvent *m_e, int utype)
+{
+	if (!m_e)
+		return 0;
+
+	int sx = 0;
+	int sy = 0;
+	qg_poly_mouse_xy(m_e, &sx, &sy);
+	return bsg_polygon_update_screen_pt(ref, v, sx, sy, utype);
+}
 
 bool
 QgPolyFilter::close_polygon()
@@ -67,9 +108,10 @@ QgPolyCreateFilter::eventFilter(QObject *, QEvent *e)
 
 		if (bsg_polygon_ref_is_null(polygon)) {
 
-			rt_view_screen_point_from_bsg(v->gv_point, v, v->gv_mouse_x, v->gv_mouse_y);
+			point_t current_point = VINIT_ZERO;
+			qg_poly_screen_point(v, m_e, current_point);
 
-			polygon = bsg_create_view_polygon_ref(v, ptype, &v->gv_point);
+			polygon = bsg_create_view_polygon_ref(v, ptype, &current_point);
 			bsg_polygon_set_view(polygon, v);
 			bsg_polygon_set_visual(polygon, &edge_color, &fill_color, fill_slope_x, fill_slope_y, fill_density, vZ, fill_poly ? 1 : 0);
 
@@ -88,7 +130,7 @@ QgPolyCreateFilter::eventFilter(QObject *, QEvent *e)
 		// left clicks will append new points
 		struct bsg_polygon_record rec;
 		if (bsg_polygon_record_get(polygon, &rec) && rec.type == BSG_POLYGON_GENERAL) {
-			bsg_polygon_update(polygon, v, BSG_POLYGON_UPDATE_PT_APPEND);
+			qg_poly_update_from_event(polygon, v, m_e, BSG_POLYGON_UPDATE_PT_APPEND);
 			emit view_updated(QG_VIEW_REFRESH);
 			return true;
 		}
@@ -134,7 +176,7 @@ QgPolyCreateFilter::eventFilter(QObject *, QEvent *e)
 		// For every other polygon type, call the libbv update routine
 		// with the view's x,y coordinates
 		if (m_e->buttons().testFlag(Qt::LeftButton) && m_e->modifiers() == Qt::NoModifier) {
-			bsg_polygon_update(polygon, v, BSG_POLYGON_UPDATE_DEFAULT);
+			qg_poly_update_from_event(polygon, v, m_e, BSG_POLYGON_UPDATE_DEFAULT);
 			emit view_updated(QG_VIEW_REFRESH);
 			return true;
 		}
@@ -230,7 +272,7 @@ QgPolyUpdateFilter::eventFilter(QObject *, QEvent *e)
 		// For every other polygon type, call the libbv update routine
 		// with the view's x,y coordinates
 		if (m_e->buttons().testFlag(Qt::LeftButton) && m_e->modifiers() == Qt::NoModifier) {
-			bsg_polygon_update(polygon, view(), BSG_POLYGON_UPDATE_DEFAULT);
+			qg_poly_update_from_event(polygon, view(), m_e, BSG_POLYGON_UPDATE_DEFAULT);
 			emit view_updated(QG_VIEW_REFRESH);
 			return true;
 		}
@@ -255,7 +297,9 @@ QgPolySelectFilter::eventFilter(QObject *, QEvent *e)
 	if (m_e->type() == QEvent::MouseButtonPress && m_e->buttons().testFlag(Qt::LeftButton)) {
 		/* Use typed polygon selection records rather than the legacy
 		 * feature-table and ptbl compatibility path. */
-		polygon = bsg_view_select_polygon_ref(v, &v->gv_point);
+		point_t current_point = VINIT_ZERO;
+		qg_poly_screen_point(v, m_e, current_point);
+		polygon = bsg_view_select_polygon_ref(v, &current_point);
 		if (bsg_polygon_ref_is_null(polygon))
 			return true;
 		struct bsg_polygon_record rec;
@@ -291,14 +335,14 @@ QgPolyPointFilter::eventFilter(QObject *, QEvent *e)
 
 	// If we have a Left release, clear point selection
 	if (m_e->type() == QEvent::MouseButtonRelease) {
-		bsg_polygon_update(polygon, view(), BSG_POLYGON_UPDATE_PT_SELECT_CLEAR);
+		qg_poly_update_from_event(polygon, view(), m_e, BSG_POLYGON_UPDATE_PT_SELECT_CLEAR);
 		emit view_updated(QG_VIEW_REFRESH);
 		return true;
 	}
 
 	// Left press selects a point
 	if (m_e->type() == QEvent::MouseButtonPress && m_e->buttons().testFlag(Qt::LeftButton)) {
-		bsg_polygon_update(polygon, view(), BSG_POLYGON_UPDATE_PT_SELECT);
+		qg_poly_update_from_event(polygon, view(), m_e, BSG_POLYGON_UPDATE_PT_SELECT);
 		emit view_updated(QG_VIEW_REFRESH);
 		return true;
 	}
@@ -314,7 +358,7 @@ QgPolyPointFilter::eventFilter(QObject *, QEvent *e)
 			return true;
 		}
 		if (m_e->buttons().testFlag(Qt::LeftButton) && m_e->modifiers() == Qt::NoModifier) {
-			bsg_polygon_update(polygon, view(), BSG_POLYGON_UPDATE_PT_MOVE);
+			qg_poly_update_from_event(polygon, view(), m_e, BSG_POLYGON_UPDATE_PT_MOVE);
 			emit view_updated(QG_VIEW_REFRESH);
 			return true;
 		}
@@ -340,25 +384,33 @@ QgPolyMoveFilter::eventFilter(QObject *, QEvent *e)
 	if (bsg_polygon_ref_is_null(polygon) && move_objs.empty())
 		return false;
 
+	point_t current_point = VINIT_ZERO;
+	qg_poly_screen_point(v, m_e, current_point);
+
 	// We don't want other stray mouse clicks to do something surprising
 	if (m_e->type() == QEvent::MouseButtonPress || m_e->type() == QEvent::MouseButtonRelease) {
-		VMOVE(v->gv_prev_point, v->gv_point);
+		VMOVE(m_prev_point, current_point);
+		m_prev_point_valid = true;
 		return true;
 	}
 
 	// If we're clicking-and-holding, it's time to move
 	if (m_e->type() == QEvent::MouseMove) {
+		if (!m_prev_point_valid) {
+			VMOVE(m_prev_point, current_point);
+			m_prev_point_valid = true;
+		}
 		if (m_e->buttons().testFlag(Qt::LeftButton) && m_e->modifiers() == Qt::NoModifier) {
 			if (!move_objs.empty()) {
 				for (auto mpoly : move_objs)
-					bsg_polygon_move(mpoly, &v->gv_point, &v->gv_prev_point);
+					bsg_polygon_move(mpoly, &current_point, &m_prev_point);
 			}
 			else {
-				bsg_polygon_move(polygon, &v->gv_point, &v->gv_prev_point);
+				bsg_polygon_move(polygon, &current_point, &m_prev_point);
 			}
 			emit view_updated(QG_VIEW_REFRESH);
 		}
-		VMOVE(v->gv_prev_point, v->gv_point);
+		VMOVE(m_prev_point, current_point);
 		return true;
 	}
 

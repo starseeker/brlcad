@@ -34,7 +34,6 @@
 #include "vmath.h"
 #include "bu/app.h"
 #include "bn.h"
-#include "bsg/util.h"
 #include "tclcad.h"
 #include "ged.h"
 #include "rt/view_legacy_bsg.h"
@@ -482,7 +481,7 @@ mged_refresh_handler(void *clientdata)
     struct mged_state *s = (struct mged_state *)clientdata;
     MGED_CK_STATE(s);
 
-    mged_refresh_request_view(s, view_state, BSG_VIEW_REFRESH_VIEW);
+    mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
     refresh(s);
 }
 
@@ -565,7 +564,7 @@ mged_setup(struct mged_state *s)
     mged_global_db_ctx.post_open_cnt = 0;
 
     BU_ALLOC(view_state->vs_gvp, struct bsg_view);
-    bsg_init(view_state->vs_gvp, NULL);
+    rt_view_init_bsg(view_state->vs_gvp, NULL);
     BU_GET(view_state->vs_gvp->callbacks, struct bu_ptbl);
     bu_ptbl_init(view_state->vs_gvp->callbacks, 8, "bv callbacks");
 
@@ -577,7 +576,7 @@ mged_setup(struct mged_state *s)
 
     view_state->vs_gvp->vset = &s->gedp->ged_views;
 
-    bsg_set_add_view(&s->gedp->ged_views, view_state->vs_gvp);
+    rt_view_set_add_view_bsg(&s->gedp->ged_views, view_state->vs_gvp);
     bu_ptbl_ins(&s->gedp->ged_free_views, (long *)view_state->vs_gvp);
     s->gedp->ged_gvp = view_state->vs_gvp;
 

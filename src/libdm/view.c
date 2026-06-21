@@ -40,7 +40,6 @@
 #include "bsg/material.h"
 #include "bsg/node.h"
 #include "bsg/lod.h"
-#include "bsg/util.h"
 #include "bsg/scene_object.h"
 #include "bsg/view_scope.h"
 #include "bsg/view_state.h"
@@ -1031,7 +1030,7 @@ _dm_draw_label_resolved(struct dm *dmp, const struct bsg_render_item *item)
 	    for (int i = 0; i < 3; i++) {
 		for (int j = 0; j < 3; j++) {
 		    point_t t3d, tpt;
-		    if (bsg_screen_to_view(v, &t3d[0], &t3d[1], (int)xvals[i], (int)yvals[j]) < 0) {
+		    if (!rt_view_screen_to_view_from_bsg(&t3d[0], &t3d[1], v, xvals[i], yvals[j])) {
 			return;
 		    }
 		    t3d[2] = 0;
@@ -1077,7 +1076,7 @@ _dm_draw_label_resolved(struct dm *dmp, const struct bsg_render_item *item)
 		    return;
 	    }
 	}
-	bsg_screen_to_view(v, &l3d[0], &l3d[1], (int)anchor[0], (int)anchor[1]);
+	(void)rt_view_screen_to_view_from_bsg(&l3d[0], &l3d[1], v, anchor[0], anchor[1]);
 	MAT4X3PNT(mpt, v->gv_view2model, l3d);
     } else {
 	VMOVE(mpt, item->geometry.text.position);
@@ -1097,8 +1096,6 @@ _dm_draw_label_resolved(struct dm *dmp, const struct bsg_render_item *item)
 void
 dm_draw_objs(struct bsg_view *v)
 {
-    bsg_log(3, "libdm:dm_draw_objs");
-
     struct dm *dmp = (struct dm *)v->dmp;
     if (!dmp) {
 	bu_log("Warning - dm_draw_objs called when view has no associated display manager\n");

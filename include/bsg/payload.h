@@ -103,7 +103,7 @@ struct bsg_payload_image {
 };
 
 struct bsg_payload_framebuffer {
-    struct fb *fbp;
+    struct fb *fb;
     int mode;
 };
 

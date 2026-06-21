@@ -31,13 +31,12 @@
 
 #include "bsg/interaction.h"
 #include "bsg/selection.h"
-#include "bsg/util.h"
-#include "bsg/view_state.h"
 #include "bu/hash.h"
 #include "bu/path.h"
 #include "bu/vls.h"
 #include "ged/bsg_ged_draw.h"
 #include "ged/selection_state.h"
+#include "rt/view_legacy_bsg.h"
 
 #include "./ged_private.h"
 
@@ -855,10 +854,10 @@ ged_selection_native_view_snapshot(struct ged *gedp,
     if (!gedp)
 	return;
 
-    struct bu_ptbl *views = bsg_set_views(&gedp->ged_views);
+    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
     for (size_t i = 0; views && i < BU_PTBL_LEN(views); i++) {
 	struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, i);
-	struct bsg_selection *selection = bsg_view_selection(v);
+	struct bsg_selection *selection = rt_view_selection_bsg(v);
 	if (!selection)
 	    continue;
 	for (size_t ri = 0; ri < bsg_selection_count(selection); ri++) {
@@ -889,9 +888,9 @@ ged_selection_native_draw_sync_shape_ref(
 	return 1;
 
     struct bsg_view *v = ged_draw_shape_ref_view(ctx->gedp, ref);
-    if (!v || !bsg_view_selection(v))
+    if (!v || !rt_view_selection_bsg(v))
 	v = ctx->gedp->ged_gvp;
-    if (!v || !bsg_view_selection(v))
+    if (!v || !rt_view_selection_bsg(v))
 	return 1;
 
     struct bsg_interaction_record *record =
@@ -902,8 +901,8 @@ ged_selection_native_draw_sync_shape_ref(
     const char *path = bsg_interaction_record_path(record);
     if (path && path[0])
 	(*ctx->new_selection)[v].insert(ged_selection_canonical_path(path));
-    if (!bsg_selection_contains_record(bsg_view_selection(v), record))
-	bsg_selection_add_record(bsg_view_selection(v), record);
+    if (!bsg_selection_contains_record(rt_view_selection_bsg(v), record))
+	bsg_selection_add_record(rt_view_selection_bsg(v), record);
     bsg_interaction_record_free(record);
     return 1;
 }
@@ -1022,10 +1021,10 @@ ged_selection_native_draw_sync(struct ged *gedp,
     std::map<struct bsg_view *, std::set<std::string>> new_selection;
     ged_selection_native_view_snapshot(gedp, old_selection);
 
-    struct bu_ptbl *views = bsg_set_views(&gedp->ged_views);
+    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
     for (size_t i = 0; views && i < BU_PTBL_LEN(views); i++) {
 	struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, i);
-	struct bsg_selection *selection = bsg_view_selection(v);
+	struct bsg_selection *selection = rt_view_selection_bsg(v);
 	if (selection)
 	    bsg_selection_clear(selection);
     }
@@ -1059,7 +1058,7 @@ ged_selection_native_draw_sync(struct ged *gedp,
 	new_selection.clear();
 	for (size_t i = 0; views && i < BU_PTBL_LEN(views); i++) {
 	    struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, i);
-	    struct bsg_selection *selection = bsg_view_selection(v);
+	    struct bsg_selection *selection = rt_view_selection_bsg(v);
 	    if (selection)
 		bsg_selection_clear(selection);
 	}

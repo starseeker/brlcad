@@ -48,7 +48,6 @@
 #include "rt/view.h"
 
 #include "ged/view.h"
-#include "./bsg_ged_draw_private.h"
 #include "../librt/librt_private.h"
 #include "./ged_private.h"
 
@@ -279,7 +278,7 @@ csg_wireframe_update(bsg_scene_ref ref, struct bsg_view *v, int flag)
     if (!policy.csg_enabled)
 	return 0;
 
-    bsg_log(1, "csg_wireframe_update %s[%s]", ged_draw_scene_ref_name(ref), bu_vls_cstr(&v->gv_name));
+    ged_draw_log(1, "csg_wireframe_update %s[%s]", ged_draw_scene_ref_name(ref), bu_vls_cstr(&v->gv_name));
 
     ged_draw_scene_ref_realization_set_roles(ref, 1, 0);
 
@@ -355,7 +354,7 @@ bot_lod_mesh_realize(bsg_scene_ref ref, struct bsg_view *v)
 
     ged_draw_scene_ref_realization_set_roles(ref, 0, 1);
 
-    bsg_log(1, "bot_lod_mesh_realize %s[%s]", ged_draw_scene_ref_name(ref), (v) ? bu_vls_cstr(&v->gv_name) : "NULL");
+    ged_draw_log(1, "bot_lod_mesh_realize %s[%s]", ged_draw_scene_ref_name(ref), (v) ? bu_vls_cstr(&v->gv_name) : "NULL");
 
     struct ged_draw_source_state *d = ged_draw_scene_ref_source_data(ref);
     if (!d)
@@ -430,7 +429,7 @@ brep_lod_mesh_realize(bsg_scene_ref ref, struct bsg_view *v)
     struct ged_draw_source_state *d = ged_draw_scene_ref_source_data(ref);
     if (!d)
 	return;
-    bsg_log(1, "brep_lod_mesh_realize %s[%s]", ged_draw_scene_ref_name(ref), (v) ? bu_vls_cstr(&v->gv_name) : "NULL");
+    ged_draw_log(1, "brep_lod_mesh_realize %s[%s]", ged_draw_scene_ref_name(ref), (v) ? bu_vls_cstr(&v->gv_name) : "NULL");
 
     ged_draw_scene_ref_realization_set_roles(ref, 0, 1);
 
@@ -555,7 +554,7 @@ brep_lod_mesh_realize(bsg_scene_ref ref, struct bsg_view *v)
 static void
 wireframe_plot(bsg_scene_ref ref, struct bsg_view *v, struct rt_db_internal *ip)
 {
-    bsg_log(1, "wireframe_plot %s[%s]", ged_draw_scene_ref_name(ref), (v) ? bu_vls_cstr(&v->gv_name) : "NULL");
+    ged_draw_log(1, "wireframe_plot %s[%s]", ged_draw_scene_ref_name(ref), (v) ? bu_vls_cstr(&v->gv_name) : "NULL");
     struct ged_draw_source_state *d = ged_draw_scene_ref_source_data(ref);
     const struct bn_tol *tol = d->tol;
     const struct bg_tess_tol *ttol = d->ttol;
@@ -622,7 +621,7 @@ ged_draw_scene_ref_realize(bsg_scene_ref ref, struct bsg_view *v)
     if (ged_draw_scene_ref_realization_current(ref) && !v)
 	return;
 
-    bsg_log(1, "draw_scene %s[%s]", ged_draw_scene_ref_name(ref), (v) ? bu_vls_cstr(&v->gv_name) : "NULL");
+    ged_draw_log(1, "draw_scene %s[%s]", ged_draw_scene_ref_name(ref), (v) ? bu_vls_cstr(&v->gv_name) : "NULL");
 
     // If we're not adaptive, trigger the view insensitive drawing routines
     ged_draw_view_lod_policy policy;

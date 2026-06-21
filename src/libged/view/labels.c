@@ -33,11 +33,10 @@
 #include "bu/color.h"
 #include "bu/opt.h"
 #include "bu/vls.h"
-#include "bsg.h"
-#include "bsg/feature.h"
 #include "rt/view_legacy_bsg.h"
 
 #include "../ged_private.h"
+#include "../bsg_ged_draw_view_private.h"
 #include "./ged_view.h"
 
 int
@@ -55,8 +54,7 @@ _label_cmd_create(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    bsg_feature_ref ref = bsg_feature_find(gd->cv, gd->vobj);
-    if (!bsg_feature_ref_is_null(ref)) {
+    if (ged_draw_view_feature_exists(gd->cv, gd->vobj)) {
         bu_vls_printf(gedp->ged_result_str, "View object named %s already exists\n", gd->vobj);
         return BRLCAD_ERROR;
     }
@@ -126,21 +124,9 @@ _label_cmd_create(void *bs, int argc, const char **argv)
 	}
     }
 
-    ref = bsg_feature_create_label(gd->cv, gd->vobj, gd->local_obj);
-    if (bsg_feature_ref_is_null(ref)) {
+    if (!ged_draw_view_label_create(gd->cv, gd->vobj, gd->local_obj,
+	    argv[0], p, target, (argc == 6 || argc == 7))) {
 	bu_vls_printf(gedp->ged_result_str, "Failed to create %s\n", gd->vobj);
-	return BRLCAD_ERROR;
-    }
-    bsg_feature_set_color(ref, 255, 255, 0);
-    struct bsg_feature_label_data l = BSG_FEATURE_LABEL_DATA_INIT;
-    l.text = argv[0];
-    VMOVE(l.point, p);
-    if (argc == 6 || argc == 7) {
-	VMOVE(l.target, target);
-	l.line_flag = 1;
-    }
-    if (!bsg_feature_labels_replace(ref, &l, 1)) {
-	bu_vls_printf(gedp->ged_result_str, "Failed to set label data for %s\n", gd->vobj);
 	return BRLCAD_ERROR;
     }
 

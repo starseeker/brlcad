@@ -191,6 +191,48 @@ struct ged_draw_group_record {
     int shape_count;
 };
 
+struct ged_draw_view_db_object_record {
+    const char *path;                    /**< borrowed; valid during callback */
+    const char *type_name;               /**< borrowed static string */
+    int draw_mode;
+    fastf_t transparency;
+    int evaluated_region;
+    int is_database_source;
+    int non_database_source;
+    int highlighted;
+    int visible;
+    int line_style;
+    unsigned char color[3];
+    mat_t model_mat;
+    point_t bounds_center;
+    fastf_t bounds_radius;
+    int has_bounds;
+    size_t vlist_structure_count;
+    size_t vlist_point_count;
+    uintptr_t detail_token;              /**< private; valid during callback */
+};
+
+typedef int (*ged_draw_view_db_object_record_cb)(
+	const struct ged_draw_view_db_object_record *rec,
+	void *userdata);
+
+typedef int (*ged_draw_view_segment_cb)(const point_t a,
+					const point_t b,
+					void *userdata);
+
+typedef int (*ged_draw_view_point_cb)(const point_t pt,
+				      void *userdata);
+
+#define GED_DRAW_VIEW_RECORD_QUERY_VIEW_OBJECTS 0x01u
+#define GED_DRAW_VIEW_RECORD_QUERY_DB_OBJECTS   0x02u
+#define GED_DRAW_VIEW_RECORD_QUERY_LOCAL_ONLY   0x04u
+
+struct ged_draw_view_record_query {
+    unsigned int flags;
+    const char *glob;
+    int draw_mode;                       /**< negative means any draw mode */
+};
+
 GED_EXPORT extern struct ged_draw_transaction
 ged_draw_transaction_make(ged_draw_transaction_kind kind, const char *path);
 
@@ -419,6 +461,56 @@ ged_draw_foreach_shape_record(struct ged *gedp,
 					void *userdata),
 			      void *userdata);
 
+GED_EXPORT extern void
+ged_draw_foreach_view_record_query(
+	struct bsg_view *v,
+	const struct ged_draw_view_record_query *query,
+	ged_draw_view_db_object_record_cb cb,
+	void *userdata);
+
+GED_EXPORT extern void
+ged_draw_foreach_view_db_object_record(struct bsg_view *v,
+				       ged_draw_view_db_object_record_cb cb,
+				       void *userdata);
+
+GED_EXPORT extern void
+ged_draw_foreach_visible_view_db_object_record(struct bsg_view *v,
+					      ged_draw_view_db_object_record_cb cb,
+					      void *userdata);
+
+GED_EXPORT extern void
+ged_draw_foreach_visible_view_db_object_record_mode(
+	struct bsg_view *v,
+	int draw_mode,
+	ged_draw_view_db_object_record_cb cb,
+	void *userdata);
+
+GED_EXPORT extern void
+ged_draw_foreach_visible_view_record(struct bsg_view *v,
+				     ged_draw_view_db_object_record_cb cb,
+				     void *userdata);
+
+GED_EXPORT extern int
+ged_draw_view_db_object_record_foreach_segment(
+	const struct ged_draw_view_db_object_record *rec,
+	ged_draw_view_segment_cb cb,
+	void *userdata);
+
+GED_EXPORT extern int
+ged_draw_view_db_object_record_foreach_point(
+	const struct ged_draw_view_db_object_record *rec,
+	ged_draw_view_point_cb cb,
+	void *userdata);
+
+GED_EXPORT extern int
+ged_draw_view_db_object_record_has_segments(
+	const struct ged_draw_view_db_object_record *rec);
+
+GED_EXPORT extern void
+ged_draw_view_db_object_record_geometry_report(
+	const struct ged_draw_view_db_object_record *rec,
+	struct bu_vls *out);
+
 GED_EXPORT extern ged_draw_shape_ref
 ged_draw_first_shape_ref(struct ged *gedp);
 
@@ -489,6 +581,11 @@ GED_EXPORT extern struct bsg_interaction_record *
 ged_draw_shape_interaction_record(struct ged *gedp,
 				  ged_draw_shape_ref ref,
 				  bsg_interaction_kind kind);
+
+GED_EXPORT extern int
+ged_draw_view_selection_set_highlighted_shape_ref(struct ged *gedp,
+						  struct bsg_view *v,
+						  ged_draw_shape_ref ref);
 
 /**
  * Returns 1 if @p gedp has at least one drawn shape, 0 otherwise.

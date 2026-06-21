@@ -55,12 +55,10 @@
 #include "bu/str.h"
 #include "bu/units.h"
 #include "bu/vls.h"
-#include "bsg.h"
-#include "bsg/export.h"
 #include "bsg/feature.h"
 #include "bsg/geometry.h"
+#include "bsg/scene_builder.h"
 #include "bg/plot3.h"
-#include "bsg/render.h"
 #include "bsg/view_state.h"
 #include "ged.h"
 #include "ged/bsg_ged_draw.h"
@@ -2425,73 +2423,87 @@ _ged_rt_output_handler(void *clientData, int mask)
 }
 
 
-static void
-bitwise_and_export_record(struct ged *gedp, const struct bsg_export_record *rec, int flag_val)
+struct bitwise_and_record_ctx {
+    struct ged *gedp;
+    int flag_val;
+};
+
+static int
+bitwise_and_export_record(const struct ged_draw_view_db_object_record *rec,
+			  void *data)
 {
-    if (!gedp || !gedp->dbip || !rec || rec->source.scope != BSG_RENDER_SOURCE_SCOPE_DATABASE)
-	return;
+    struct bitwise_and_record_ctx *ctx =
+	(struct bitwise_and_record_ctx *)data;
+    if (!ctx || !ctx->gedp || !ctx->gedp->dbip || !rec ||
+	    !rec->is_database_source || !rec->path)
+	return 1;
 
     struct db_full_path fp;
     db_full_path_init(&fp);
-    if (db_string_to_path(&fp, gedp->dbip, bu_vls_cstr(&rec->path)) < 0)
-	return;
+    if (db_string_to_path(&fp, ctx->gedp->dbip, rec->path) < 0) {
+	db_free_full_path(&fp);
+	return 1;
+    }
     for (size_t i = 0; i < fp.fp_len; i++)
-	DB_FULL_PATH_GET(&fp, i)->d_flags &= flag_val;
+	DB_FULL_PATH_GET(&fp, i)->d_flags &= ctx->flag_val;
     db_free_full_path(&fp);
+    return 1;
 }
 
 static void
 dl_bitwise_and_fullpath(struct ged *gedp, int flag_val)
 {
-    struct bsg_export_request request;
-    bsg_export_request_init(&request, gedp->ged_gvp);
-    request.query_flags = BSG_EXPORT_QUERY_VISIBLE_ONLY | BSG_EXPORT_QUERY_DB_OBJECTS;
-    request.render_flags = BSG_RENDER_FLAG_VISIBLE_ONLY | BSG_RENDER_FLAG_PAYLOAD_PREPARE;
-    struct bsg_export_result *result = bsg_export_query(&request);
-    if (!result)
-	return;
-    for (size_t i = 0; i < bsg_export_result_count(result); i++)
-	bitwise_and_export_record(gedp, bsg_export_result_get(result, i), flag_val);
-    bsg_export_result_free(result);
+    struct bitwise_and_record_ctx ctx;
+    ctx.gedp = gedp;
+    ctx.flag_val = flag_val;
+    ged_draw_foreach_visible_view_db_object_record(gedp->ged_gvp,
+	    bitwise_and_export_record, &ctx);
 }
 
 
-static void
-write_animate_export_record(struct ged *gedp, FILE *fp, const struct bsg_export_record *rec)
+struct write_animate_record_ctx {
+    struct ged *gedp;
+    FILE *fp;
+};
+
+static int
+write_animate_export_record(const struct ged_draw_view_db_object_record *rec,
+			    void *data)
 {
-    if (!gedp || !gedp->dbip || !fp || !rec || rec->source.scope != BSG_RENDER_SOURCE_SCOPE_DATABASE)
-	return;
+    struct write_animate_record_ctx *ctx =
+	(struct write_animate_record_ctx *)data;
+    if (!ctx || !ctx->gedp || !ctx->gedp->dbip || !ctx->fp || !rec ||
+	    !rec->is_database_source || !rec->path)
+	return 1;
 
     struct db_full_path path;
     db_full_path_init(&path);
-    if (db_string_to_path(&path, gedp->dbip, bu_vls_cstr(&rec->path)) < 0)
-	return;
+    if (db_string_to_path(&path, ctx->gedp->dbip, rec->path) < 0) {
+	db_free_full_path(&path);
+	return 1;
+    }
 
     for (size_t i = 0; i < path.fp_len; i++) {
 	if (!(DB_FULL_PATH_GET(&path, i)->d_flags & RT_DIR_USED)) {
 	    struct animate *anp;
 	    for (anp = DB_FULL_PATH_GET(&path, i)->d_animate; anp; anp=anp->an_forw) {
-		db_write_anim(fp, anp);
+		db_write_anim(ctx->fp, anp);
 	    }
 	    DB_FULL_PATH_GET(&path, i)->d_flags |= RT_DIR_USED;
 	}
     }
     db_free_full_path(&path);
+    return 1;
 }
 
 static void
 dl_write_animate(struct ged *gedp, FILE *fp)
 {
-    struct bsg_export_request request;
-    bsg_export_request_init(&request, gedp->ged_gvp);
-    request.query_flags = BSG_EXPORT_QUERY_VISIBLE_ONLY | BSG_EXPORT_QUERY_DB_OBJECTS;
-    request.render_flags = BSG_RENDER_FLAG_VISIBLE_ONLY | BSG_RENDER_FLAG_PAYLOAD_PREPARE;
-    struct bsg_export_result *result = bsg_export_query(&request);
-    if (!result)
-	return;
-    for (size_t i = 0; i < bsg_export_result_count(result); i++)
-	write_animate_export_record(gedp, fp, bsg_export_result_get(result, i));
-    bsg_export_result_free(result);
+    struct write_animate_record_ctx ctx;
+    ctx.gedp = gedp;
+    ctx.fp = fp;
+    ged_draw_foreach_visible_view_db_object_record(gedp->ged_gvp,
+	    write_animate_export_record, &ctx);
 }
 
 void

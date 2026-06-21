@@ -577,7 +577,7 @@ QPolyMod::align_to_poly()
     aet[2] = 0;
     rt_view_aet_set_bsg(v, aet);
 
-    bsg_update(v);
+    rt_view_update_bsg(v);
 
     emit view_updated(QG_VIEW_REFRESH);
 }
@@ -813,12 +813,12 @@ QPolyMod::toggle_line_snapping(bool s)
     if (!v || bsg_polygon_ref_is_null(co))
 	return;
 
-    rt_view_snap_source_flags_set_bsg(v, BSG_SNAP_VIEW);
+    rt_view_snap_source_flags_set_bsg(v, RT_VIEW_SNAP_VIEW_BSG);
     if (!s) {
 	rt_view_snap_lines_set_bsg(v, 0);
-	bsg_view_snap_exclude_feature_clear(v);
+	rt_view_snap_exclude_feature_clear_bsg(v);
     } else {
-	bsg_view_snap_exclude_feature_set(v, co);
+	rt_view_snap_exclude_feature_set_bsg(v, co);
 	rt_view_snap_lines_set_bsg(v, bsg_view_polygon_snap_count(v, co) ? 1 : 0);
     }
 
@@ -832,12 +832,12 @@ QPolyMod::toggle_grid_snapping(bool s)
     if (!v)
 	return;
 
-    rt_view_snap_source_flags_set_bsg(v, BSG_SNAP_VIEW);
+    rt_view_snap_source_flags_set_bsg(v, RT_VIEW_SNAP_VIEW_BSG);
     struct bsg_grid_state grid;
-    if (!bsg_view_grid_get(v, &grid))
+    if (!rt_view_grid_from_bsg(&grid, v))
 	return;
     grid.snap = s ? 1 : 0;
-    bsg_view_grid_set(v, &grid);
+    rt_view_grid_set_bsg(v, &grid);
 
     emit settings_changed(QG_VIEW_DRAWN);
 }
@@ -851,7 +851,7 @@ QPolyMod::checkbox_refresh(unsigned long long)
 
     ps->grid_snapping->blockSignals(true);
     struct bsg_grid_state grid = {};
-    (void)bsg_view_grid_get(v, &grid);
+    (void)rt_view_grid_from_bsg(&grid, v);
     if (grid.snap) {
 	ps->grid_snapping->setCheckState(Qt::Checked);
     } else {

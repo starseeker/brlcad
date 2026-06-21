@@ -29,7 +29,7 @@
 
 extern "C" {
 #include "bg/polygon.h"
-#include "bsg.h"
+#include "bsg/polygon.h"
 }
 
 #include <vector>
@@ -131,6 +131,10 @@ public:
 	QgPolyMoveFilter() = default;
 	bool eventFilter(QObject *, QEvent *e) override;
 	std::vector<bsg_polygon_ref> move_objs;
+
+private:
+	point_t m_prev_point = VINIT_ZERO;
+	bool m_prev_point_valid = false;
 };
 
 

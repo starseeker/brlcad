@@ -29,9 +29,6 @@
 
 
 #include "bu/getopt.h"
-#include "bsg/export.h"
-#include "bsg/render.h"
-#include "bsg/view_state.h"
 #include "ged/bsg_ged_draw.h"
 #include "rt/view_legacy_bsg.h"
 #include "../ged_private.h"
@@ -137,7 +134,7 @@ struct select_bounds_data {
 };
 
 struct select_partial_data {
-    const struct bsg_export_record *rec;
+    const struct ged_draw_view_db_object_record *rec;
     struct select_data *select;
     int seen;
 };
@@ -212,7 +209,7 @@ select_partial_segment_cb(const point_t a, const point_t b, void *data)
 
     if (select_partial_point_matches(pd->select, a) ||
 	    select_partial_point_matches(pd->select, b)) {
-	bu_vls_printf(pd->select->vls, "%s", bu_vls_cstr(&pd->rec->path));
+	bu_vls_printf(pd->select->vls, "%s", pd->rec->path);
 	bu_vls_printf(pd->select->vls, "\n");
 	return 0;
     }
@@ -228,16 +225,17 @@ select_partial_point_cb(const point_t pt, void *data)
 	return 0;
     if (!select_partial_point_matches(pd->select, pt))
 	return 1;
-    bu_vls_printf(pd->select->vls, "%s", bu_vls_cstr(&pd->rec->path));
+    bu_vls_printf(pd->select->vls, "%s", pd->rec->path);
     bu_vls_printf(pd->select->vls, "\n");
     return 0;
 }
 
-static void
-dl_select_record(const struct bsg_export_record *rec, struct select_data *data)
+static int
+dl_select_record(const struct ged_draw_view_db_object_record *rec, void *udata)
 {
+    struct select_data *data = (struct select_data *)udata;
     if (!rec || !data)
-	return;
+	return 1;
 
     point_t vmin, vmax;
     struct select_bounds_data bd;
@@ -249,11 +247,13 @@ dl_select_record(const struct bsg_export_record *rec, struct select_data *data)
     VMOVE(bd.vmin, vmin);
     VMOVE(bd.vmax, vmax);
     bd.seen = 0;
-    (void)bsg_export_record_foreach_segment(rec, select_bounds_segment_cb, &bd);
+    (void)ged_draw_view_db_object_record_foreach_segment(rec,
+	    select_bounds_segment_cb, &bd);
     if (!bd.seen)
-	(void)bsg_export_record_foreach_point(rec, select_bounds_point_cb, &bd);
+	(void)ged_draw_view_db_object_record_foreach_point(rec,
+		select_bounds_point_cb, &bd);
     if (!bd.seen)
-	return;
+	return 1;
     VMOVE(vmin, bd.vmin);
     VMOVE(vmax, bd.vmax);
 
@@ -267,24 +267,25 @@ dl_select_record(const struct bsg_export_record *rec, struct select_data *data)
 	mag = MAGNITUDE(diff);
 
 	if (mag > data->vr)
-	    return;
+	    return 1;
 
 	VSET(vloc, data->vx, data->vy, vmax[Z]);
 	VSUB2(diff, vmax, vloc);
 	mag = MAGNITUDE(diff);
 
 	if (mag > data->vr)
-	    return;
+	    return 1;
 
-	bu_vls_printf(data->vls, "%s", bu_vls_cstr(&rec->path));
+	bu_vls_printf(data->vls, "%s", rec->path);
 	bu_vls_printf(data->vls, "\n");
     } else {
 	if (data->vmin_x <= vmin[X] && vmax[X] <= data->vmax_x &&
 	    data->vmin_y <= vmin[Y] && vmax[Y] <= data->vmax_y) {
-	    bu_vls_printf(data->vls, "%s", bu_vls_cstr(&rec->path));
+	    bu_vls_printf(data->vls, "%s", rec->path);
 	    bu_vls_printf(data->vls, "\n");
 	}
     }
+    return 1;
 }
 
 int
@@ -326,35 +327,32 @@ dl_select(struct ged *gedp, mat_t model2view, struct bu_vls *vls, double vx, dou
         }
     }
 
-    struct bsg_export_request request;
-    bsg_export_request_init(&request, gedp->ged_gvp);
-    request.query_flags = BSG_EXPORT_QUERY_VISIBLE_ONLY | BSG_EXPORT_QUERY_DB_OBJECTS;
-    request.render_flags = BSG_RENDER_FLAG_VISIBLE_ONLY | BSG_RENDER_FLAG_PAYLOAD_PREPARE;
-    struct bsg_export_result *result = bsg_export_query(&request);
-    if (!result)
-	return BRLCAD_OK;
-    for (size_t i = 0; i < bsg_export_result_count(result); i++)
-	dl_select_record(bsg_export_result_get(result, i), &data);
-    bsg_export_result_free(result);
+    ged_draw_foreach_visible_view_db_object_record(gedp->ged_gvp,
+	    dl_select_record, &data);
 
     return BRLCAD_OK;
 }
 
 /* Callback for partial select - checks each vertex */
-static void
-dl_select_partial_record(const struct bsg_export_record *rec, struct select_data *data)
+static int
+dl_select_partial_record(const struct ged_draw_view_db_object_record *rec,
+			 void *udata)
 {
+    struct select_data *data = (struct select_data *)udata;
     if (!rec || !data)
-	return;
+	return 1;
 
     struct select_partial_data pd;
     pd.rec = rec;
     pd.select = data;
     pd.seen = 0;
-    (void)bsg_export_record_foreach_segment(rec, select_partial_segment_cb, &pd);
+    (void)ged_draw_view_db_object_record_foreach_segment(rec,
+	    select_partial_segment_cb, &pd);
     if (pd.seen)
-	return;
-    (void)bsg_export_record_foreach_point(rec, select_partial_point_cb, &pd);
+	return 1;
+    (void)ged_draw_view_db_object_record_foreach_point(rec,
+	    select_partial_point_cb, &pd);
+    return 1;
 }
 
 int
@@ -396,16 +394,8 @@ dl_select_partial(struct ged *gedp, mat_t model2view, struct bu_vls *vls, double
         }
     }
 
-    struct bsg_export_request request;
-    bsg_export_request_init(&request, gedp->ged_gvp);
-    request.query_flags = BSG_EXPORT_QUERY_VISIBLE_ONLY | BSG_EXPORT_QUERY_DB_OBJECTS;
-    request.render_flags = BSG_RENDER_FLAG_VISIBLE_ONLY | BSG_RENDER_FLAG_PAYLOAD_PREPARE;
-    struct bsg_export_result *result = bsg_export_query(&request);
-    if (!result)
-	return BRLCAD_OK;
-    for (size_t i = 0; i < bsg_export_result_count(result); i++)
-	dl_select_partial_record(bsg_export_result_get(result, i), &data);
-    bsg_export_result_free(result);
+    ged_draw_foreach_visible_view_db_object_record(gedp->ged_gvp,
+	    dl_select_partial_record, &data);
 
     return BRLCAD_OK;
 }

@@ -33,7 +33,6 @@
 #include "bu/color.h"
 #include "bu/opt.h"
 #include "bu/vls.h"
-#include "bsg.h"
 #include "bsg/polygon.h"
 #include "bg/polygon.h"
 #include "rt/geom.h"

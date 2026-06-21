@@ -31,6 +31,9 @@
 #include <string.h>
 #include <tcl.h>
 
+#include "bsg/tcl_data.h"
+#include "bu/vls.h"
+#include "dm/fbserv.h"
 #include "ged/defines.h"
 #include "tclcad/defines.h"
 
@@ -55,6 +58,21 @@ TCLCAD_EXPORT extern struct to_cmdtab to_cmds[];
 extern struct tclcad_obj HeadTclcadObj;
 extern struct tclcad_obj *current_top;
 
+// Data specific to an individual view rather than the geometry database
+// instance.
+struct tclcad_view_data {
+    struct ged *gedp;
+    struct bu_vls gdv_edit_motion_delta_callback;
+    int gdv_edit_motion_delta_callback_cnt;
+    struct bu_vls gdv_callback;
+    int gdv_callback_cnt;
+    struct fbserv_obj gdv_fbs;
+    /* Tcl-specific overlay state owned by TclCAD view data.  The view's
+     * Tcl pointer is bound to this record while the view is live and cleared
+     * when the view is freed. */
+    struct bsg_data_tclcad tcl_data;
+};
+
 /**
  * function returns truthfully whether the library has been
  * initialized.  calling this routine with setit true considers the
@@ -74,6 +92,8 @@ extern int tclcad_eval(Tcl_Interp *interp, const char *command, size_t num_args,
  * Evaluates a TCL command, escaping the list of arguments and preserving the TCL result object.
  */
 extern int tclcad_eval_noresult(Tcl_Interp *interp, const char *command, size_t num_args, const char * const *args);
+
+extern void tclcad_view_data_init_bsg(struct tclcad_view_data *tvd, struct ged *gedp);
 
 
 /* Tcl initialization routines */

@@ -51,9 +51,7 @@
 #include "raytrace.h"
 
 #include "bsg/defines.h"
-#include "bsg/export.h"
 #include "bsg/field.h"
-#include "bsg/render.h"
 #include "dm.h"
 
 #include "ged/bsg_ged_draw.h"
@@ -524,11 +522,14 @@ viewdata_dump(struct _ged_bot_dump_client_data *d, struct ged *gedp, FILE *fp)
     return BRLCAD_OK;
 }
 
-static void
-botdump_export_record(const struct bsg_export_record *rec, struct _ged_bot_dump_client_data *d)
+static int
+botdump_export_record(const struct ged_draw_view_db_object_record *rec,
+		      void *data)
 {
-    if (!rec || !d || rec->source.scope != BSG_RENDER_SOURCE_SCOPE_DATABASE)
-	return;
+    struct _ged_bot_dump_client_data *d =
+	(struct _ged_bot_dump_client_data *)data;
+    if (!rec || !d || !rec->is_database_source || !rec->path)
+	return 1;
 
     struct db_i *dbip = d->gedp->dbip;
     struct directory *dp;
@@ -539,27 +540,27 @@ botdump_export_record(const struct bsg_export_record *rec, struct _ged_bot_dump_
 
     MAT_IDN(mat);
 
-    const char *path = bu_vls_cstr(&rec->path);
+    const char *path = rec->path;
     const char *leaf = path ? strrchr(path, '/') : NULL;
     leaf = leaf ? leaf + 1 : path;
     if (!leaf || !leaf[0])
-	return;
+	return 1;
     dp = db_lookup(dbip, leaf, LOOKUP_QUIET);
     if (!dp)
-	return;
+	return 1;
 
     /* get the internal form */
     ret = rt_db_get_internal(&intern, dp, dbip, mat);
 
     if (ret < 0) {
 	bu_log("rt_get_internal failure %d on %s\n", ret, dp->d_namep);
-	return;
+	return 1;
     }
 
     if (ret != ID_BOT) {
 	bu_log("%s is not a bot (ignored)\n", dp->d_namep);
 	rt_db_free_internal(&intern);
-	return;
+	return 1;
     }
 
     /* Write out object color */
@@ -574,22 +575,16 @@ botdump_export_record(const struct bsg_export_record *rec, struct _ged_bot_dump_
     bot = (struct rt_bot_internal *)intern.idb_ptr;
     _ged_bot_dump(d, dp, NULL, bot);
     rt_db_free_internal(&intern);
+    return 1;
 }
 
 static void
 dl_botdump(struct _ged_bot_dump_client_data *d)
 {
-    struct bsg_export_request request;
-    bsg_export_request_init(&request, d->gedp->ged_gvp);
-    request.query_flags = BSG_EXPORT_QUERY_VISIBLE_ONLY | BSG_EXPORT_QUERY_DB_OBJECTS;
-    request.render_flags = BSG_RENDER_FLAG_VISIBLE_ONLY | BSG_RENDER_FLAG_PAYLOAD_PREPARE;
-    struct bsg_export_result *result = bsg_export_query(&request);
-    if (!result)
+    if (!d || !d->gedp)
 	return;
-
-    for (size_t i = 0; i < bsg_export_result_count(result); i++)
-	botdump_export_record(bsg_export_result_get(result, i), d);
-    bsg_export_result_free(result);
+    ged_draw_foreach_visible_view_db_object_record(d->gedp->ged_gvp,
+	    botdump_export_record, d);
 }
 
 void

@@ -29,7 +29,6 @@
 
 extern "C" {
 #include "bu/malloc.h"
-#include "bsg/util.h"
 #include "raytrace.h"
 #include "rt/functab.h"
 #include "rt/geom.h"
@@ -40,6 +39,21 @@ extern "C" {
 
 #include "qtcad/QgSketchFilter.h"
 #include "qtcad/QgSignalFlags.h"
+
+static void
+qg_sketch_mouse_xy(QMouseEvent *m_e, int *sx, int *sy)
+{
+	if (!m_e || !sx || !sy)
+		return;
+
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+	*sx = m_e->x();
+	*sy = m_e->y();
+#else
+	*sx = (int)m_e->position().x();
+	*sy = (int)m_e->position().y();
+#endif
+}
 
 
 /* ------------------------------------------------------------------ */
@@ -197,9 +211,10 @@ QgSketchPickVertexFilter::eventFilter(QObject *, QEvent *e)
 		if (!se)
 			return true;
 
-		struct bsg_view *v = view();
+		int sx = 0, sy = 0;
+		qg_sketch_mouse_xy(m_e, &sx, &sy);
 		vect_t mvec;
-		screen_to_view(v->gv_mouse_x, v->gv_mouse_y, mvec);
+		screen_to_view(sx, sy, mvec);
 		VSET(se->v_pos, mvec[X], mvec[Y], 0.0);
 		se->v_pos_valid = 1;
 
@@ -240,8 +255,6 @@ QgSketchMoveVertexFilter::eventFilter(QObject *, QEvent *e)
 	if (!se || se->curr_vert < 0)
 		return false;
 
-	struct bsg_view *v = view();
-
 	if (m_e->type() == QEvent::MouseButtonPress
 	                && m_e->buttons().testFlag(Qt::LeftButton)) {
 		m_dragging = true;
@@ -257,7 +270,9 @@ QgSketchMoveVertexFilter::eventFilter(QObject *, QEvent *e)
 	                && m_e->buttons().testFlag(Qt::LeftButton)) {
 
 		fastf_t u = 0.0, vv = 0.0;
-		if (!screen_to_uv(v->gv_mouse_x, v->gv_mouse_y, &u, &vv))
+		int sx = 0, sy = 0;
+		qg_sketch_mouse_xy(m_e, &sx, &sy);
+		if (!screen_to_uv(sx, sy, &u, &vv))
 			return true;
 
 		/* Convert base units → local units */
@@ -293,13 +308,14 @@ QgSketchAddVertexFilter::eventFilter(QObject *, QEvent *e)
 	if (!es)
 		return false;
 
-	struct bsg_view *v = view();
 	if (m_e->type() == QEvent::MouseButtonPress
 	                && m_e->buttons().testFlag(Qt::LeftButton)) {
 
 		fastf_t u = 0.0, vv = 0.0;
+		int sx = 0, sy = 0;
+		qg_sketch_mouse_xy(m_e, &sx, &sy);
 		/* Use snap_vertex_uv so the new vertex can snap to an existing one */
-		if (!snap_vertex_uv(v->gv_mouse_x, v->gv_mouse_y, &u, &vv))
+		if (!snap_vertex_uv(sx, sy, &u, &vv))
 			return true;
 
 		/* Convert base units → local units */
@@ -437,8 +453,10 @@ QgSketchPickSegmentFilter::eventFilter(QObject *, QEvent *e)
 		bn_mat_mul(m2v, model2view, es->model_changes);
 
 		/* Cursor in view space */
+		int sx = 0, sy = 0;
+		qg_sketch_mouse_xy(m_e, &sx, &sy);
 		vect_t cursor_v;
-		screen_to_view(v->gv_mouse_x, v->gv_mouse_y, cursor_v);
+		screen_to_view(sx, sy, cursor_v);
 
 		int    best_seg  = -1;
 		fastf_t best_d2  = INFINITY;
@@ -504,11 +522,12 @@ QgSketchMoveSegmentFilter::eventFilter(QObject *, QEvent *e)
 	if (!se || se->curr_seg < 0)
 		return false;
 
-	struct bsg_view *v = view();
 	if (m_e->type() == QEvent::MouseButtonPress
 	                && m_e->buttons().testFlag(Qt::LeftButton)) {
 		/* Record starting UV position */
-		screen_to_uv(v->gv_mouse_x, v->gv_mouse_y, &m_prev_u, &m_prev_v);
+		int sx = 0, sy = 0;
+		qg_sketch_mouse_xy(m_e, &sx, &sy);
+		screen_to_uv(sx, sy, &m_prev_u, &m_prev_v);
 		m_dragging = true;
 		return true;
 	}
@@ -522,7 +541,9 @@ QgSketchMoveSegmentFilter::eventFilter(QObject *, QEvent *e)
 	                && m_e->buttons().testFlag(Qt::LeftButton)) {
 
 		fastf_t cur_u = 0.0, cur_v = 0.0;
-		if (!screen_to_uv(v->gv_mouse_x, v->gv_mouse_y, &cur_u, &cur_v))
+		int sx = 0, sy = 0;
+		qg_sketch_mouse_xy(m_e, &sx, &sy);
+		if (!screen_to_uv(sx, sy, &cur_u, &cur_v))
 			return true;
 
 		fastf_t du = cur_u - m_prev_u;
@@ -640,14 +661,8 @@ QgSketchArcRadiusFilter::eventFilter(QObject *, QEvent *e)
 	if (!m_e)
 		return false;
 
-	int sx, sy;
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-	sx = m_e->x();
-	sy = m_e->y();
-#else
-	sx = (int)m_e->position().x();
-	sy = (int)m_e->position().y();
-#endif
+	int sx = 0, sy = 0;
+	qg_sketch_mouse_xy(m_e, &sx, &sy);
 
 	struct rt_sketch_edit *se = (struct rt_sketch_edit *)es->ipe_ptr;
 	if (!se || se->curr_seg < 0)
@@ -783,8 +798,10 @@ QgSketchSetTangencyFilter::eventFilter(QObject *, QEvent *e)
 		bn_mat_mul(m2v, model2view, es->model_changes);
 
 		/* Cursor in view space */
+		int sx = 0, sy = 0;
+		qg_sketch_mouse_xy(m_e, &sx, &sy);
 		vect_t cursor_v;
-		screen_to_view(v->gv_mouse_x, v->gv_mouse_y, cursor_v);
+		screen_to_view(sx, sy, cursor_v);
 
 		int    best_seg = -1;
 		fastf_t best_d2 = INFINITY;

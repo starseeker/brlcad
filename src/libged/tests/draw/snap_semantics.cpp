@@ -40,9 +40,10 @@
 #include <cmath>
 
 #include <bu.h>
-#include <bsg.h>
+#include "bsg/defines.h"
 #include "bsg/snap_action.h"
 #include "bsg/util.h"
+#include "bsg/view_state.h"
 #include "rt/view_legacy_bsg.h"
 
 #define ASSERT(cond) do { \
@@ -67,8 +68,7 @@ main(int UNUSED(ac), char *av[])
      * ------------------------------------------------------------------ */
     struct bsg_view v;
     bsg_view_init(&v, NULL);
-    v.gv_width  = 512;
-    v.gv_height = 512;
+    rt_view_dimensions_set_bsg(&v, 512, 512);
     struct bsg_grid_state grid;
     bsg_view_grid_get(&v, &grid);
     grid.res_h = 1.0;

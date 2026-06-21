@@ -34,7 +34,6 @@
 #include "bu/color.h"
 #include "bu/opt.h"
 #include "bu/vls.h"
-#include "bsg.h"
 #include "bsg/hud.h"
 #include "rt/view_legacy_bsg.h"
 

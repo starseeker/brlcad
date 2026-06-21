@@ -34,7 +34,6 @@
 #include <cstring>
 
 #include <bu.h>
-#include <bsg.h>
 #include "bsg/database_source.h"
 #include "bsg/tcl_data.h"
 #include "bsg/util.h"
@@ -60,7 +59,7 @@
 #include "bsg/render.h"
 #include "bsg/render_item.h"
 #include "bsg/selection.h"
-#include "bsg/util.h"
+#include "bsg/view_state.h"
 #include "nmg.h"
 #include "rt/db_attr.h"
 #include "wdb.h"

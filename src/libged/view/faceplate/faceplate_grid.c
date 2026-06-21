@@ -33,7 +33,7 @@
 #include "bu/color.h"
 #include "bu/opt.h"
 #include "bu/vls.h"
-#include "bsg.h"
+#include "rt/view_legacy_bsg.h"
 
 #include "../../ged_private.h"
 #include "../ged_view.h"
@@ -410,16 +410,16 @@ _fp_cmd_grid(void *bs, int argc, const char **argv)
 
     if (argc == 1) {
 	struct bsg_grid_state grid;
-	if (!bsg_view_grid_get(v, &grid))
+	if (!rt_view_grid_from_bsg(&grid, v))
 	    return BRLCAD_ERROR;
 	if (BU_STR_EQUAL("1", argv[0])) {
 	    grid.draw = 1;
-	    bsg_view_grid_set(v, &grid);
+	    rt_view_grid_set_bsg(v, &grid);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("0", argv[0])) {
 	    grid.draw = 0;
-	    bsg_view_grid_set(v, &grid);
+	    rt_view_grid_set_bsg(v, &grid);
 	    return BRLCAD_OK;
 	}
     }
@@ -444,7 +444,7 @@ _fp_cmd_grid(void *bs, int argc, const char **argv)
     (void)bu_opt_parse(NULL, acnt, argv, d);
 
     struct bsg_grid_state grid;
-    if (!bsg_view_grid_get(v, &grid))
+    if (!rt_view_grid_from_bsg(&grid, v))
 	return BRLCAD_ERROR;
 
     struct _ged_fp_grid_info ginfo;
@@ -453,7 +453,7 @@ _fp_cmd_grid(void *bs, int argc, const char **argv)
 
     int ret = _ged_subcmd_exec(gedp, d, _fp_grid_cmds, "view faceplate grid", "[options] subcommand [args]", (void *)&ginfo, argc, argv, help, cmd_pos);
     if (ret == BRLCAD_OK)
-	bsg_view_grid_set(v, &grid);
+	rt_view_grid_set_bsg(v, &grid);
     return ret;
 }
 

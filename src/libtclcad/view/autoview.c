@@ -27,6 +27,7 @@
 #include "common.h"
 #include "bu/units.h"
 #include "ged.h"
+#include "rt/view_legacy_bsg.h"
 #include "tclcad.h"
 
 /* Private headers */
@@ -77,7 +78,7 @@ to_autoview(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -97,7 +98,7 @@ to_autoview_all_views(struct tclcad_obj *top)
 {
     struct bsg_view *gdvp;
 
-    struct bu_ptbl *views = bsg_set_views(&top->to_gedp->ged_views);
+    struct bu_ptbl *views = rt_view_set_views_bsg(&top->to_gedp->ged_views);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	gdvp = (struct bsg_view *)BU_PTBL_GET(views, i);
 	to_autoview_view(gdvp, NULL);

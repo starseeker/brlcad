@@ -30,7 +30,6 @@
 
 #ifndef Q_MOC_RUN
 #include "bu/avs.h"
-#include "bsg.h"
 #include "raytrace.h"
 #include "ged.h"
 #endif
@@ -68,4 +67,3 @@ class CADViewModel : public QgKeyValModel
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-

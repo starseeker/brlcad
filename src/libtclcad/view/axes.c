@@ -509,7 +509,7 @@ to_data_axes(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -788,18 +788,18 @@ to_model_axes(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
         bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
         return BRLCAD_ERROR;
     }
 
     struct bsg_axes axes;
-    if (!bsg_view_model_axes_get(gdvp, &axes))
+    if (!rt_view_model_axes_from_bsg(&axes, gdvp))
 	return BRLCAD_ERROR;
     int ret = to_axes(gedp, gdvp, &axes, argc, argv, usage);
     if (ret == BRLCAD_OK)
-	bsg_view_model_axes_set(gdvp, &axes);
+	rt_view_model_axes_set_bsg(gdvp, &axes);
     return ret;
 }
 
@@ -825,11 +825,11 @@ go_view_axes(struct ged *gedp,
     }
 
     struct bsg_axes axes;
-    if (!bsg_view_view_axes_get(gdvp, &axes))
+    if (!rt_view_view_axes_from_bsg(&axes, gdvp))
 	return BRLCAD_ERROR;
     int ret = to_axes(gedp, gdvp, &axes, argc, argv, usage);
     if (ret == BRLCAD_OK)
-	bsg_view_view_axes_set(gdvp, &axes);
+	rt_view_view_axes_set_bsg(gdvp, &axes);
     return ret;
 }
 
@@ -858,18 +858,18 @@ to_view_axes(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
     }
 
     struct bsg_axes axes;
-    if (!bsg_view_view_axes_get(gdvp, &axes))
+    if (!rt_view_view_axes_from_bsg(&axes, gdvp))
 	return BRLCAD_ERROR;
     int ret = to_axes(gedp, gdvp, &axes, argc, argv, usage);
     if (ret == BRLCAD_OK)
-	bsg_view_view_axes_set(gdvp, &axes);
+	rt_view_view_axes_set_bsg(gdvp, &axes);
     return ret;
 }
 

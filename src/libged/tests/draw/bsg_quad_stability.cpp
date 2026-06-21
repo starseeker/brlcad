@@ -43,8 +43,8 @@
 #include <dm.h>
 #include <ged.h>
 #include <ged/bsg_ged_draw.h>
+#include <rt/view_legacy_bsg.h>
 #include "bsg/node.h"
-#include "bsg/util.h"
 #include "bsg/util.h"
 
 extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);
@@ -53,7 +53,7 @@ extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory
 static void
 refresh_view(struct ged *gedp, int vnum)
 {
-    struct bu_ptbl *views = bsg_set_views(&gedp->ged_views);
+    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
     struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, vnum);
     if (!v)
 	return;
@@ -77,7 +77,7 @@ refresh_view(struct ged *gedp, int vnum)
 static int
 grab_view(struct ged *gedp, int vnum, const char *fname)
 {
-    struct bu_ptbl *views = bsg_set_views(&gedp->ged_views);
+    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
     struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, vnum);
     if (!v)
 	return -1;
@@ -153,7 +153,7 @@ main(int ac, char *av[])
     db_add_changed_clbk(gedp->dbip, &ged_changed_callback, (void *)gedp);
 
     /* Remove the default view; we'll add our own four */
-    bsg_set_rm_view(&gedp->ged_views, NULL);
+    rt_view_set_remove_view_bsg(&gedp->ged_views, NULL);
 
     /* az/el per view matching the quad test reference */
     const double aet[4][3] = {{35,25,0},{90,0,0},{0,90,0},{0,0,90}};
@@ -164,11 +164,11 @@ main(int ac, char *av[])
 	BU_GET(v, struct bsg_view);
 	if (!i)
 	    gedp->ged_gvp = v;
-	bsg_init(v, &gedp->ged_views);
+	rt_view_init_bsg(v, &gedp->ged_views);
 	bu_vls_sprintf(&v->gv_name, "V%d", i);
-	bsg_set_add_view(&gedp->ged_views, v);
+	rt_view_set_add_view_bsg(&gedp->ged_views, v);
 	bu_ptbl_ins(&gedp->ged_free_views, (long *)v);
-	(void)bsg_view_independent_scope_ref(v, 1 /*create*/);
+	(void)rt_view_independent_scope_ref_bsg(v, 1 /*create*/);
 
 	/* Attach one swrast DM per view */
 	struct bu_vls dm_name = BU_VLS_INIT_ZERO;
@@ -185,12 +185,11 @@ main(int ac, char *av[])
 	dm_set_zbuffer(dmp, 1);
 	fastf_t wb[6] = {-1, 1, -1, 1, -100, 100};
 	dm_set_win_bounds(dmp, wb);
-	dm_set_vp(dmp, &v->gv_scale);
+	dm_set_vp(dmp, rt_view_scale_storage_from_bsg(v));
 	v->dmp           = dmp;
-	v->gv_width      = dm_get_width(dmp);
-	v->gv_height     = dm_get_height(dmp);
-	v->gv_base2local = gedp->dbip->dbi_base2local;
-	v->gv_local2base = gedp->dbip->dbi_local2base;
+	rt_view_dimensions_set_bsg(v, dm_get_width(dmp), dm_get_height(dmp));
+	rt_view_unit_conversion_set_bsg(v, gedp->dbip->dbi_local2base,
+	    gedp->dbip->dbi_base2local);
 
 	/* BSG scene anchor must be created for each view. */
 	if (!bsg_view_scene_attached(v))
@@ -216,7 +215,7 @@ main(int ac, char *av[])
     ged_exec_draw(gedp, 3, s_av);
 
     /* Force per-view autoview */
-    struct bu_ptbl *views = bsg_set_views(&gedp->ged_views);
+    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
     for (int i = 0; i < 4; i++) {
 	struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, i);
 	gedp->ged_gvp = v;

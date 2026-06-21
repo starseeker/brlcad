@@ -33,7 +33,7 @@
 #include "bu/color.h"
 #include "bu/opt.h"
 #include "bu/vls.h"
-#include "bsg.h"
+#include "rt/view_legacy_bsg.h"
 
 #include "../../ged_private.h"
 #include "../ged_view.h"
@@ -703,16 +703,16 @@ _fp_cmd_model_axes(void *bs, int argc, const char **argv)
 
     if (argc == 1) {
 	struct bsg_axes axes;
-	if (!bsg_view_model_axes_get(v, &axes))
+	if (!rt_view_model_axes_from_bsg(&axes, v))
 	    return BRLCAD_ERROR;
 	if (BU_STR_EQUAL("1", argv[0])) {
 	    axes.draw = 1;
-	    bsg_view_model_axes_set(v, &axes);
+	    rt_view_model_axes_set_bsg(v, &axes);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("0", argv[0])) {
 	    axes.draw = 0;
-	    bsg_view_model_axes_set(v, &axes);
+	    rt_view_model_axes_set_bsg(v, &axes);
 	    return BRLCAD_OK;
 	}
     }
@@ -737,7 +737,7 @@ _fp_cmd_model_axes(void *bs, int argc, const char **argv)
     (void)bu_opt_parse(NULL, acnt, argv, d);
 
     struct bsg_axes axes;
-    if (!bsg_view_model_axes_get(v, &axes))
+    if (!rt_view_model_axes_from_bsg(&axes, v))
 	return BRLCAD_ERROR;
 
     struct _ged_fp_axes_info ainfo;
@@ -746,7 +746,7 @@ _fp_cmd_model_axes(void *bs, int argc, const char **argv)
 
     int ret = _ged_subcmd_exec(gedp, d, _fp_axes_cmds, "view faceplate model_axes", "[options] subcommand [args]", (void *)&ainfo, argc, argv, help, cmd_pos);
     if (ret == BRLCAD_OK)
-	bsg_view_model_axes_set(v, &axes);
+	rt_view_model_axes_set_bsg(v, &axes);
     return ret;
 }
 
@@ -774,16 +774,16 @@ _fp_cmd_view_axes(void *bs, int argc, const char **argv)
 
     if (argc == 1) {
 	struct bsg_axes axes;
-	if (!bsg_view_view_axes_get(v, &axes))
+	if (!rt_view_view_axes_from_bsg(&axes, v))
 	    return BRLCAD_ERROR;
 	if (BU_STR_EQUAL("1", argv[0])) {
 	    axes.draw = 1;
-	    bsg_view_view_axes_set(v, &axes);
+	    rt_view_view_axes_set_bsg(v, &axes);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("0", argv[0])) {
 	    axes.draw = 0;
-	    bsg_view_view_axes_set(v, &axes);
+	    rt_view_view_axes_set_bsg(v, &axes);
 	    return BRLCAD_OK;
 	}
     }
@@ -808,7 +808,7 @@ _fp_cmd_view_axes(void *bs, int argc, const char **argv)
     (void)bu_opt_parse(NULL, acnt, argv, d);
 
     struct bsg_axes axes;
-    if (!bsg_view_view_axes_get(v, &axes))
+    if (!rt_view_view_axes_from_bsg(&axes, v))
 	return BRLCAD_ERROR;
 
     struct _ged_fp_axes_info ainfo;
@@ -817,7 +817,7 @@ _fp_cmd_view_axes(void *bs, int argc, const char **argv)
 
     int ret = _ged_subcmd_exec(gedp, d, _fp_axes_cmds, "view faceplate view_axes", "[options] subcommand [args]", (void *)&ainfo, argc, argv, help, cmd_pos);
     if (ret == BRLCAD_OK)
-	bsg_view_view_axes_set(v, &axes);
+	rt_view_view_axes_set_bsg(v, &axes);
     return ret;
 }
 

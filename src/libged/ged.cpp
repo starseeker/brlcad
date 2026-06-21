@@ -50,9 +50,9 @@
 
 #include "bsg/defines.h"
 #include "bsg/node.h"
-#include "bsg/util.h"
 #include "ged/bsg_ged_draw.h"
 #include "ged/event_txn.h"
+#include "rt/view_legacy_bsg.h"
 #include "./ged_private.h"
 #include "./include/plugin.h"
 
@@ -176,14 +176,14 @@ ged_init(struct ged *gedp)
     bu_vls_init(&gedp->go_name);
 
     // View related containers
-    bsg_set_init(&gedp->ged_views);
+    rt_view_set_init_bsg(&gedp->ged_views);
     BU_PTBL_INIT(&gedp->ged_free_views);
 
     // Establish an initial view
     BU_ALLOC(gedp->ged_gvp, struct bsg_view);
-    bsg_init(gedp->ged_gvp, &gedp->ged_views);
+    rt_view_init_bsg(gedp->ged_gvp, &gedp->ged_views);
     bu_vls_sprintf(&gedp->ged_gvp->gv_name, "default");
-    bsg_set_add_view(&gedp->ged_views, gedp->ged_gvp);
+    rt_view_set_add_view_bsg(&gedp->ged_views, gedp->ged_gvp);
     bu_ptbl_ins(&gedp->ged_free_views, (long *)gedp->ged_gvp);
 
     /* Create a non-opened fbserv */
@@ -345,11 +345,11 @@ ged_free(struct ged *gedp)
 
     for (size_t i = 0; i < BU_PTBL_LEN(&gedp->ged_free_views); i++) {
 	struct bsg_view *gdvp = (struct bsg_view *)BU_PTBL_GET(&gedp->ged_free_views, i);
-	bsg_free(gdvp);
+	rt_view_free_bsg(gdvp);
 	bu_free((void *)gdvp, "bv");
     }
     bu_ptbl_free(&gedp->ged_free_views);
-    bsg_set_free(&gedp->ged_views);
+    rt_view_set_free_bsg(&gedp->ged_views);
 
     if (gedp->i->ged_gdp != GED_DRAWABLE_NULL) {
 

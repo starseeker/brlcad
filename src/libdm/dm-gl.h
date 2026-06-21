@@ -35,7 +35,6 @@
 #include "bsg/vlist.h"
 
 struct bsg_render_item;
-#include "bsg/defines.h"
 #include "dm.h"
 
 #define GL_SILENCE_DEPRECATION 1

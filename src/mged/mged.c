@@ -69,7 +69,6 @@
 #include "raytrace.h"
 #define LIBTERMIO_IMPLEMENTATION
 #include "libtermio.h"
-#include "bsg/util.h"
 #include "ged.h"
 #include "rt/view_legacy_bsg.h"
 #include "tclcad.h"
@@ -421,7 +420,7 @@ new_edit_mats(struct mged_state *s)
 	/* Keep rt_edit’s own cached matrix in sync for external users */
 	MAT_COPY(MEDIT(s)->model2objview, view_state->vs_model2objview);
 
-	mged_refresh_request_view(s, view_state, BSG_VIEW_REFRESH_VIEW);
+	mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
     }
 
     set_curr_dm(s, save_dm_list);
@@ -444,7 +443,7 @@ mged_view_callback(struct bsg_view *gvp,
 	bn_mat_mul(vsp->vs_model2objview, model2view, MEDIT(s)->model_changes);
 	bn_mat_inv(vsp->vs_objview2model, vsp->vs_model2objview);
     }
-    mged_refresh_request_view(s, vsp, BSG_VIEW_REFRESH_VIEW);
+    mged_refresh_request_view(s, vsp, RT_VIEW_REFRESH_VIEW_BSG);
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_VIEW_RECORD);
 }
 
@@ -456,7 +455,7 @@ mged_view_callback(struct bsg_view *gvp,
 void
 new_mats(struct mged_state *s)
 {
-    bsg_update(view_state->vs_gvp);
+    rt_view_update_bsg(view_state->vs_gvp);
 }
 
 static int
@@ -479,14 +478,14 @@ mged_dm_during_clbk(int ac, const char **av, void *UNUSED(u1), void *u2)
             rt_view_zclip_set_bsg(view_state->vs_gvp, dm_get_zclip(DMP));
         }
         if (view_state)
-            mged_refresh_request_view(s, view_state, BSG_VIEW_REFRESH_VIEW);
+            mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
         mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_DEVICE_SETTING);
         return BRLCAD_OK;
     }
 
     if (BU_STR_EQUAL(av[1], "bg") || BU_STR_EQUAL(av[1], "attach")) {
         if (view_state)
-            mged_refresh_request_view(s, view_state, BSG_VIEW_REFRESH_VIEW);
+            mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
         mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_DEVICE_SETTING);
     }
 
@@ -1885,7 +1884,7 @@ mged_refresh_request_view(struct mged_state *UNUSED(s), struct _view_state *vsp,
     if (!vsp || !vsp->vs_gvp)
 	return;
 
-    rt_view_refresh_request_bsg(vsp->vs_gvp, flags ? flags : BSG_VIEW_REFRESH_ALL);
+    rt_view_refresh_request_bsg(vsp->vs_gvp, flags ? flags : RT_VIEW_REFRESH_ALL_BSG);
 }
 
 void
@@ -2906,11 +2905,11 @@ main(int argc, char *argv[])
     MAT_IDN(view_state->vs_ModelDelta);
     if (view_state->vs_gvp) {
 	struct bsg_adc_state adc;
-	bsg_view_grid_set(view_state->vs_gvp, &default_grid_state);
-	if (bsg_view_adc_get(view_state->vs_gvp, &adc)) {
+	rt_view_grid_set_bsg(view_state->vs_gvp, &default_grid_state);
+	if (rt_view_adc_from_bsg(&adc, view_state->vs_gvp)) {
 	    adc.a1 = 45.0;
 	    adc.a2 = 45.0;
-	    bsg_view_adc_set(view_state->vs_gvp, &adc);
+	    rt_view_adc_set_bsg(view_state->vs_gvp, &adc);
 	}
     }
 

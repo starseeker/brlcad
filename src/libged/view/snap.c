@@ -32,7 +32,6 @@
 
 #include "bu/opt.h"
 #include "bu/vls.h"
-#include "bsg/snap.h"
 #include "bsg/snap_action.h"
 #include "dm.h"
 #include "rt/view_legacy_bsg.h"
@@ -185,7 +184,7 @@ ged_view_snap(struct ged *gedp, int argc, const char *argv[])
 	struct bsg_snap_result sres = {0};
 	point_t sample = VINIT_ZERO;
 	VMOVE(sample, view_pt);
-	if (bsg_snap_candidates(gedp->ged_gvp, sample, 0.0, BSG_SNAP_KIND_GRID, &sres) > 0) {
+	if (rt_view_snap_candidates_bsg(gedp->ged_gvp, sample, 0.0, RT_VIEW_SNAP_KIND_GRID_BSG, &sres) > 0) {
 	    point_t vp = VINIT_ZERO;
 	    VMOVE(view_pt, sres.sr_candidates[0].sc_point);
 	    MAT4X3PNT(vp, model2view, view_pt);
@@ -200,7 +199,7 @@ ged_view_snap(struct ged *gedp, int argc, const char *argv[])
 	point_t vp = VINIT_ZERO;
 	int line_snap_ok = 0;
 	VMOVE(sample, view_pt);
-	if (bsg_snap_candidates(gedp->ged_gvp, sample, 0.0, BSG_SNAP_KIND_ENDPOINT, &sres) > 0) {
+	if (rt_view_snap_candidates_bsg(gedp->ged_gvp, sample, 0.0, RT_VIEW_SNAP_KIND_ENDPOINT_BSG, &sres) > 0) {
 	    line_snap_ok = 1;
 	    VMOVE(view_pt, sres.sr_candidates[0].sc_point);
 	    MAT4X3PNT(vp, model2view, view_pt);

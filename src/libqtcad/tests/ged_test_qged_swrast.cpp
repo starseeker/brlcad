@@ -60,10 +60,10 @@
 
 #include <bu.h>
 #include "bu/opt.h"
-#include <bsg/view_state.h>
 #define DM_WITH_RT
 #include <dm.h>
 #include <ged.h>
+#include "rt/view_legacy_bsg.h"
 
 /* Qt + libqtcad headers */
 #include "qtcad/QgModel.h"
@@ -141,9 +141,9 @@ main(int ac, char *av[])
 
     /* Route draw commands into the QgSW view */
     gedp->ged_gvp = sw.view();
-    bsg_set_add_view(&gedp->ged_views, sw.view());
-    sw.view()->gv_base2local = gedp->dbip->dbi_base2local;
-    sw.view()->gv_local2base = gedp->dbip->dbi_local2base;
+    rt_view_set_add_view_bsg(&gedp->ged_views, sw.view());
+    rt_view_unit_conversion_set_bsg(sw.view(),
+	    gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
 
     /* Set az/el so the model is visible */
     const char *ae_av[4] = {"ae", "35", "25", NULL};

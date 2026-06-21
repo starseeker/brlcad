@@ -30,7 +30,6 @@
 
 #include "bu/sort.h"
 #include "bg/polygon.h"
-#include "bsg/util.h"
 #include "ged.h"
 #include "ged/event_txn.h"
 #include "rt/view_legacy_bsg.h"

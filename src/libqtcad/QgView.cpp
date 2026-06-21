@@ -35,8 +35,6 @@
 
 extern "C" {
 #include "bu/malloc.h"
-#include "bsg/util.h"
-#include "bsg/view_state.h"
 #include "rt/view_legacy_bsg.h"
 }
 
@@ -48,19 +46,19 @@ qg_refresh_flags(QgViewUpdateFlags flags)
     uint32_t refresh_flags = 0;
 
     if (!flags)
-	return BSG_VIEW_REFRESH_ALL;
+	return RT_VIEW_REFRESH_ALL_BSG;
     if (flags & QG_VIEW_REFRESH)
-	refresh_flags |= BSG_VIEW_REFRESH_VIEW;
+	refresh_flags |= RT_VIEW_REFRESH_VIEW_BSG;
     if (flags & QG_VIEW_DRAWN)
-	refresh_flags |= BSG_VIEW_REFRESH_DRAW;
+	refresh_flags |= RT_VIEW_REFRESH_DRAW_BSG;
     if (flags & QG_VIEW_SELECT)
-	refresh_flags |= BSG_VIEW_REFRESH_OVERLAY;
+	refresh_flags |= RT_VIEW_REFRESH_OVERLAY_BSG;
     if (flags & QG_VIEW_MODE)
-	refresh_flags |= BSG_VIEW_REFRESH_EDIT;
+	refresh_flags |= RT_VIEW_REFRESH_EDIT_BSG;
     if (flags & QG_VIEW_DB)
-	refresh_flags |= BSG_VIEW_REFRESH_DRAW;
+	refresh_flags |= RT_VIEW_REFRESH_DRAW_BSG;
 
-    return refresh_flags ? refresh_flags : BSG_VIEW_REFRESH_ALL;
+    return refresh_flags ? refresh_flags : RT_VIEW_REFRESH_ALL_BSG;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -181,7 +179,6 @@ QgView::do_view_changed()
 void
 QgView::need_update(QgViewUpdateFlags flags)
 {
-    bsg_log(4, "QgView::need_update");
     QTCAD_SLOT("QgView::need_update", 1);
     uint32_t refresh_flags = qg_refresh_flags(flags);
     if (struct bsg_view *bv = view())

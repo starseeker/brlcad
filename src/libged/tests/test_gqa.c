@@ -28,7 +28,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <bu.h>
-#include <bsg.h>
 #include "bsg/draw_source.h"
 #include "bsg/export.h"
 #include "bg/plot3.h"

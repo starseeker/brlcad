@@ -48,13 +48,13 @@
 #include <fstream>
 
 #include <bu.h>
-#include <bsg.h>
 #include "bsg/feature.h"
 #include "bsg/geometry.h"
 #include "bsg/tcl_data.h"
 #include "bsg/util.h"
 #include "bsg/scene_object.h"
 #include "bsg/draw_source.h"
+#include "bsg/view_state.h"
 #include <dm.h>
 #include <ged.h>
 

@@ -63,6 +63,7 @@
 
 #include <bu.h>
 #include "bu/opt.h"
+#include "rt/view_legacy_bsg.h"
 #include <icv.h>
 #define DM_WITH_RT
 #include <dm.h>
@@ -145,12 +146,12 @@ open_gedp(const char *gfile, int width, int height)
     dm_set_zbuffer(dmp, 1);
     fastf_t wb[6] = {-1, 1, -1, 1, -100, 100};
     dm_set_win_bounds(dmp, wb);
-    dm_set_vp(dmp, &v->gv_scale);
+    dm_set_vp(dmp, rt_view_scale_storage_from_bsg(v));
     v->dmp = dmp;
-    v->gv_width  = dm_get_width(dmp);
-    v->gv_height = dm_get_height(dmp);
-    v->gv_base2local = gedp->dbip->dbi_base2local;
-    v->gv_local2base = gedp->dbip->dbi_local2base;
+    rt_view_dimensions_set_bsg(v, dm_get_width(dmp), dm_get_height(dmp));
+    rt_view_unit_conversion_set_bsg(v,
+	gedp->dbip->dbi_local2base,
+	gedp->dbip->dbi_base2local);
 
     s_av[0] = "ae"; s_av[1] = "35"; s_av[2] = "25"; s_av[3] = NULL;
     ged_exec_ae(gedp, 3, s_av);

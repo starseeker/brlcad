@@ -39,7 +39,6 @@
 #include "raytrace.h"
 #include "rt/geom.h"
 #include "bsg/defines.h"
-#include "bsg/util.h"
 #include "bsg/scene_object.h"
 #include "bsg/draw_ctx.h"
 #include "bsg/scene_builder.h"

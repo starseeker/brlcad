@@ -33,7 +33,6 @@
 #include "bu/color.h"
 #include "bu/opt.h"
 #include "bu/vls.h"
-#include "bsg.h"
 #include "rt/view_legacy_bsg.h"
 
 #include "../../ged_private.h"

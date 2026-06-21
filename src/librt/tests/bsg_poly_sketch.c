@@ -24,7 +24,9 @@
 
 #include "vmath.h"
 #include "bu/app.h"
-#include "bsg.h"
+#include "bsg/defines.h"
+#include "bsg/polygon.h"
+#include "bsg/util.h"
 #include "bu/file.h"
 #include "bg/plane.h"
 #include "raytrace.h"

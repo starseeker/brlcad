@@ -34,24 +34,8 @@
 #include "dm.h"
 #include "ged.h"
 #include "tclcad/defines.h"
-#include "bsg/tcl_data.h"
 
 __BEGIN_DECLS
-
-// Data specific to an individual view rather than the geometry database
-// instance.
-struct tclcad_view_data {
-    struct ged		*gedp;
-    struct bu_vls	gdv_edit_motion_delta_callback;
-    int                 gdv_edit_motion_delta_callback_cnt;
-    struct bu_vls	gdv_callback;
-    int			gdv_callback_cnt;
-    struct fbserv_obj	gdv_fbs;
-    /* Tcl-specific overlay state owned by TclCAD view data.  The view's
-     * Tcl pointer is bound to this record while the view is live and cleared
-     * when the view is freed. */
-    struct bsg_data_tclcad tcl_data;
-};
 
 TCLCAD_EXPORT extern void go_refresh(struct ged *gedp,
 				     struct bsg_view *gdvp);

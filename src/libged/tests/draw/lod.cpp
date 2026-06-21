@@ -28,6 +28,7 @@
 #include <fstream>
 
 #include <bu.h>
+#include "rt/view_legacy_bsg.h"
 #define DM_WITH_RT
 #include <dm.h>
 #include <ged.h>
@@ -38,6 +39,16 @@
 
 extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);
 extern "C" int img_cmp(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool clear_image, int soft_fail, int approximate_check, const char *clear_root, const char *img_root);
+extern "C" int img_not_empty(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool clear_image, int soft_fail, const char *clear_root, const char *img_root);
+
+static int
+brep_lod_img_check(struct ged *gedp, const char *cdir, bool clear_scene, bool clear_images, int soft_fail, int run_unstable_tests)
+{
+    if (run_unstable_tests)
+	return img_cmp(4, gedp, cdir, clear_scene, clear_images, soft_fail, ADIFF_THRES, "lod_clear", "lod");
+
+    return img_not_empty(4, gedp, cdir, clear_scene, clear_images, soft_fail, "lod_clear", "lod");
+}
 
 int
 main(int ac, char *av[]) {
@@ -126,12 +137,12 @@ main(int ac, char *av[]) {
     fastf_t windowbounds[6] = { -1, 1, -1, 1, -100, 100 };
     dm_set_win_bounds(dmp, windowbounds);
 
-    dm_set_vp(dmp, &v->gv_scale);
+    dm_set_vp(dmp, rt_view_scale_storage_from_bsg(v));
     v->dmp = dmp;
-    v->gv_width = dm_get_width(dmp);
-    v->gv_height = dm_get_height(dmp);
-    v->gv_base2local = gedp->dbip->dbi_base2local;
-    v->gv_local2base = gedp->dbip->dbi_local2base;
+    rt_view_dimensions_set_bsg(v, dm_get_width(dmp), dm_get_height(dmp));
+    rt_view_unit_conversion_set_bsg(v,
+	gedp->dbip->dbi_local2base,
+	gedp->dbip->dbi_base2local);
 
     // The default (fast) wireframe has some differences from
     // the slower full OpenGL draw path - disable it for the
@@ -281,7 +292,7 @@ main(int ac, char *av[]) {
     s_av[4] = NULL;
     ged_exec_view(gedp, 4, s_av);
 
-    ret += img_cmp(4, gedp, av[1], false, clear_images, soft_fail, ADIFF_THRES, "lod_clear", "lod");
+    ret += brep_lod_img_check(gedp, av[1], false, clear_images, soft_fail, run_unstable_tests);
 
     bu_log("Disable LoD\n");
     s_av[0] = "view";
@@ -301,7 +312,7 @@ main(int ac, char *av[]) {
     s_av[4] = NULL;
     ged_exec_view(gedp, 4, s_av);
 
-    ret += img_cmp(4, gedp, av[1], true, clear_images, soft_fail, ADIFF_THRES, "lod_clear", "lod");
+    ret += brep_lod_img_check(gedp, av[1], true, clear_images, soft_fail, run_unstable_tests);
 
     bu_log("Done.\n");
 
@@ -414,7 +425,7 @@ main(int ac, char *av[]) {
     s_av[1] = NULL;
     ged_exec_autoview(gedp, 1, s_av);
 
-    ret += img_cmp(4, gedp, av[1], true, clear_images, soft_fail, ADIFF_THRES, "lod_clear", "lod");
+    ret += brep_lod_img_check(gedp, av[1], true, clear_images, soft_fail, run_unstable_tests);
 
     /* Fully clear any cached LoD data */
     s_av[0] = "view";

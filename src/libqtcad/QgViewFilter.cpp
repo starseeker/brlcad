@@ -25,8 +25,7 @@
 #include "common.h"
 
 extern "C" {
-#include "bsg.h"
-#include "bsg/view_state.h"
+#include "bsg/defines.h"
 #include "rt/view_legacy_bsg.h"
 }
 
@@ -34,17 +33,17 @@ extern "C" {
 #include "qtcad/QgViewFilter.h"
 
 static uint32_t
-qg_obol_snap_kinds_from_bsg(bsg_snap_kind_mask kinds)
+qg_obol_snap_kinds_from_rt_mask(unsigned long long kinds)
 {
 	uint32_t obol_kinds = 0;
 
-	if (kinds & BSG_SNAP_KIND_ENDPOINT)
+	if (kinds & RT_VIEW_SNAP_KIND_ENDPOINT_BSG)
 		obol_kinds |= QgObolSnapRecord::ENDPOINT |
 			QgObolSnapRecord::MIDPOINT |
 			QgObolSnapRecord::LINE_NEAREST;
-	if (kinds & BSG_SNAP_KIND_MIDPOINT)
+	if (kinds & RT_VIEW_SNAP_KIND_MIDPOINT_BSG)
 		obol_kinds |= QgObolSnapRecord::MIDPOINT;
-	if (kinds & BSG_SNAP_KIND_OVERLAY_HANDLE)
+	if (kinds & RT_VIEW_SNAP_KIND_OVERLAY_HANDLE_BSG)
 		obol_kinds |= QgObolSnapRecord::CENTER;
 
 	return obol_kinds;
@@ -57,9 +56,9 @@ qg_obol_db_snap_enabled(const struct bsg_view *v)
 		return 0;
 
 	int flags = rt_view_snap_source_flags_from_bsg(v);
-	if (flags == BSG_SNAP_TCL)
+	if (flags == RT_VIEW_SNAP_TCL_BSG)
 		return 0;
-	return !flags || (flags & BSG_SNAP_DB);
+	return !flags || (flags & RT_VIEW_SNAP_DB_BSG);
 }
 
 static float
@@ -84,22 +83,27 @@ qg_obol_refine_db_snap(QgView *display, struct bsg_view *v)
 	if (!display || !qg_obol_db_snap_enabled(v))
 		return;
 
-	uint32_t obol_kinds = qg_obol_snap_kinds_from_bsg(
+	uint32_t obol_kinds = qg_obol_snap_kinds_from_rt_mask(
 		rt_view_snap_kind_mask_from_bsg(v));
 	float tolerance = qg_obol_snap_tolerance(v);
 	if (!obol_kinds || tolerance <= 0.0f)
 		return;
 
 	QgObolSnapRecord record;
-	SbVec3f query((float)v->gv_point[X],
-		(float)v->gv_point[Y],
-		(float)v->gv_point[Z]);
+	point_t query_point = VINIT_ZERO;
+	if (!rt_view_current_point_from_bsg(query_point, v))
+		return;
+
+	SbVec3f query((float)query_point[X],
+		(float)query_point[Y],
+		(float)query_point[Z]);
 	if (!qg_obol_snap_point(display, query, tolerance, obol_kinds, record))
 		return;
 
-	v->gv_point[X] = (fastf_t)record.point[0];
-	v->gv_point[Y] = (fastf_t)record.point[1];
-	v->gv_point[Z] = (fastf_t)record.point[2];
+	point_t snapped_point = VINIT_ZERO;
+	VSET(snapped_point, (fastf_t)record.point[0],
+		(fastf_t)record.point[1], (fastf_t)record.point[2]);
+	(void)rt_view_current_point_set_bsg(v, snapped_point);
 }
 
 class QgView;
@@ -167,12 +171,8 @@ QgViewFilter::view_sync(QEvent *e)
 	e_y = (int)m_e->position().y();
 #endif
 
-	/* Keep bsg_view mouse state synchronized with the event stream. */
-	m->v->gv_prevMouseX = m->v->gv_mouse_x;
-	m->v->gv_prevMouseY = m->v->gv_mouse_y;
-	m->v->gv_mouse_x = e_x;
-	m->v->gv_mouse_y = e_y;
-	rt_view_screen_point_from_bsg(m->v->gv_point, m->v, (fastf_t)e_x, (fastf_t)e_y);
+	/* Keep retained legacy view state synchronized with the event stream. */
+	rt_view_mouse_state_set_bsg(m->v, e_x, e_y);
 	qg_obol_refine_db_snap(m->display, m->v);
 
 	/* Modifier keys are typically view-nav gestures, not edit operations. */

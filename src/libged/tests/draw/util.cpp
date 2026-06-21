@@ -32,6 +32,7 @@
 #include <bu.h>
 #include <icv.h>
 #include <rt/view.h>
+#include <rt/view_legacy_bsg.h>
 #define DM_WITH_RT
 #include <dm.h>
 #include <ged.h>
@@ -70,7 +71,7 @@ ged_changed_callback(struct db_i *dbip, struct directory *dp, int mode, void *u_
 extern "C" void
 dm_refresh(struct ged *gedp)
 {
-    struct bu_ptbl *views = bsg_set_views(&gedp->ged_views);
+    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
     struct bsg_view *v = NULL;
     if (views && BU_PTBL_LEN(views) > 0)
 	v = (struct bsg_view *)BU_PTBL_GET(views, 0);

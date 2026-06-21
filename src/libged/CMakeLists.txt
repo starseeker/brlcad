@@ -748,6 +748,7 @@ set(
   brep/ged_brep.h
   check/check_private.h
   bsg_ged_draw_private.h
+  bsg_ged_draw_view_private.h
   ged_cmd_scanner.cpp
   ged_private.h
   include/plugin.h

@@ -26,7 +26,6 @@
 #include "common.h"
 
 extern "C" {
-#include "bsg.h"
 #include "rt/view_legacy_bsg.h"
 }
 
@@ -34,6 +33,34 @@ extern "C" {
 #include "qtcad/QgMeasureFilter.h"
 #include "qtcad/QgObolMeasure.h"
 #include "qtcad/QgSignalFlags.h"
+
+void
+QgMeasureFilter::update_current_mouse(QMouseEvent *m_e)
+{
+	current_mouse_valid = false;
+	if (!m_e)
+		return;
+
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+	current_mouse_x = m_e->x();
+	current_mouse_y = m_e->y();
+#else
+	current_mouse_x = (int)m_e->position().x();
+	current_mouse_y = (int)m_e->position().y();
+#endif
+	current_mouse_valid = true;
+}
+
+bool
+QgMeasureFilter::current_mouse_xy(int *sx, int *sy) const
+{
+	if (!sx || !sy || !current_mouse_valid)
+		return false;
+
+	*sx = current_mouse_x;
+	*sy = current_mouse_y;
+	return true;
+}
 
 void
 QgMeasureFilter::clear_measure_overlay(struct bsg_view *v)
@@ -112,6 +139,7 @@ QgMeasureFilter::eventFilter(QObject *, QEvent *e)
 	QMouseEvent *m_e = view_sync(e);
 	if (!m_e)
 		return false;
+	update_current_mouse(m_e);
 
 	struct bsg_view *v = view();
 	if (!v)
@@ -240,9 +268,11 @@ QMeasure2DFilter::get_point()
 	struct bsg_view *v = view();
 	if (!v)
 		return false;
+	int sx = 0, sy = 0;
+	if (!current_mouse_xy(&sx, &sy))
+		return false;
 	fastf_t vx, vy;
-	if (!rt_view_screen_to_view_from_bsg(&vx, &vy, v,
-		v->gv_mouse_x, v->gv_mouse_y))
+	if (!rt_view_screen_to_view_from_bsg(&vx, &vy, v, sx, sy))
 		return false;
 	point_t vpnt;
 	mat_t view2model;
@@ -274,8 +304,10 @@ QMeasure3DFilter::get_point()
 		return false;
 
 	SbVec3f obolPoint;
-	if (qg_obol_measure_pick_point(view_widget(), v->gv_mouse_x,
-		v->gv_mouse_y, obolPoint, NULL)) {
+	int sx = 0, sy = 0;
+	if (!current_mouse_xy(&sx, &sy))
+		return false;
+	if (qg_obol_measure_pick_point(view_widget(), sx, sy, obolPoint, NULL)) {
 		VSET(mpnt, obolPoint[0], obolPoint[1], obolPoint[2]);
 		return true;
 	}

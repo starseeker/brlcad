@@ -48,9 +48,7 @@
 #include "bsg/scene_builder.h"
 #include "bsg/scene_object.h"
 #include "bsg/selection.h"
-#include "bsg/view_set.h"
 #include "bsg/view_state.h"
-#include "bsg/util.h"
 #include "bg/clip.h"
 
 #include "ged.h"
@@ -948,7 +946,7 @@ ged_draw_revalidate_db_event(struct ged *gedp, const struct bsg_db_event *ev)
     if (!bsg_scene_ref_is_null(root_ref))
 	bsg_scene_draw_intent_revalidate(root_ref, ev);
 
-    struct bu_ptbl *views = bsg_set_views(&gedp->ged_views);
+    struct bu_ptbl *views = ged_draw_view_set_views_bsg(&gedp->ged_views);
     if (views) {
 	for (size_t vi = 0; vi < BU_PTBL_LEN(views); vi++) {
 	    struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, vi);
@@ -1180,13 +1178,13 @@ ged_draw_txn_view_array(struct ged *gedp,
 	return 0;
 
     size_t count = 0;
-    if (bsg_view_is_independent(v)) {
+    if (ged_draw_view_is_independent_bsg(v)) {
 	count = 1;
     } else {
-	struct bu_ptbl *views = bsg_set_views(&gedp->ged_views);
+	struct bu_ptbl *views = ged_draw_view_set_views_bsg(&gedp->ged_views);
 	for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	    struct bsg_view *lv = (struct bsg_view *)BU_PTBL_GET(views, i);
-	    if (lv && !bsg_view_is_independent(lv))
+	    if (lv && !ged_draw_view_is_independent_bsg(lv))
 		count++;
 	}
 	if (!count)
@@ -1195,14 +1193,14 @@ ged_draw_txn_view_array(struct ged *gedp,
 
     struct bsg_view **out = (struct bsg_view **)bu_calloc(count,
 	    sizeof(struct bsg_view *), "draw transaction view array");
-    if (bsg_view_is_independent(v)) {
+    if (ged_draw_view_is_independent_bsg(v)) {
 	out[0] = v;
     } else {
 	size_t idx = 0;
-	struct bu_ptbl *views = bsg_set_views(&gedp->ged_views);
+	struct bu_ptbl *views = ged_draw_view_set_views_bsg(&gedp->ged_views);
 	for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	    struct bsg_view *lv = (struct bsg_view *)BU_PTBL_GET(views, i);
-	    if (lv && !bsg_view_is_independent(lv))
+	    if (lv && !ged_draw_view_is_independent_bsg(lv))
 		out[idx++] = lv;
 	}
 	if (!idx)
@@ -1247,8 +1245,8 @@ ged_draw_autoview_for_transaction(struct ged *gedp,
     for (size_t i = 0; i < view_count; i++) {
 	if (!views[i])
 	    continue;
-	bsg_autoview(views[i], BSG_AUTOVIEW_SCALE_DEFAULT, 0);
-	adjusted++;
+	if (ged_draw_view_autoview_default_bsg(views[i], 0))
+	    adjusted++;
     }
 
     bu_free(views, "draw transaction view array");

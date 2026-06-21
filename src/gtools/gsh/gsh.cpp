@@ -38,7 +38,7 @@
 
 #include "brlcad_ident.h"
 #include "bu.h"
-#include "bsg.h"
+#include "bsg/defines.h"
 #include "rt/view_legacy_bsg.h"
 
 #define USE_DM 1
@@ -173,7 +173,7 @@ DisplayHash::hash(struct ged *gedp, bool db_index_check, bool qged_display_mode)
 	return false;
 
     d = dm_hash(dmp);
-    v = bsg_hash(bv);
+    v = rt_view_hash_bsg(bv);
 
     if (qged_display_mode) {
 	if (db_index_check) {
@@ -406,7 +406,7 @@ GshState::GshState()
 GshState::~GshState()
 {
 #ifdef USE_DM
-    struct bu_ptbl *views = bsg_set_views(&gedp->ged_views);
+    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, i);
 	if (v->dmp) {

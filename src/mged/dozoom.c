@@ -44,7 +44,6 @@
 #include "vmath.h"
 #include "bn.h"
 #include "bsg/appearance.h"
-#include "bsg/util.h"
 #include "bsg/defines.h"
 #include "dm/view.h"
 #include "ged/bsg_ged_draw.h"

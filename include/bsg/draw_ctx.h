@@ -51,7 +51,7 @@
  *               (set by libged to &ged_drawable::gd_draw_rev at root
  *               creation time).
  *   fso       - opaque pointer to the draw-tree's private scene-node recycle
- *               pool (set by libged via bsg_set_fsos at root creation time).
+ *               pool (set by libged at root creation time).
  *               If NULL, libbsg falls back to each node's own recycle pool.
  *   owner_data - opaque pointer reserved for the owning layer.  libbsg does
  *               not inspect it.

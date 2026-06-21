@@ -60,9 +60,7 @@
 extern "C" {
 #include "bu/ptbl.h"
 #include "bu/malloc.h"
-#include "bsg.h"
-#include "bsg/util.h"
-#include "bsg/view_state.h"
+#include "bsg/adc.h"
 #include "rt/view_legacy_bsg.h"
 #define DM_WITH_RT
 #include "dm.h"
@@ -120,7 +118,7 @@ struct QgCanvasState {
 	/* ---- input-binding flags ---- */
 	bool use_default_keybindings   = true;
 	bool use_default_mousebindings = true;
-	int  lmouse_mode = -1;  /* set to BSG_SCALE in canvas constructor */
+	int  lmouse_mode = -1;  /* set to RT_VIEW_ADJUST_SCALE in canvas constructor */
 
 	/* ---- widget-level tracking ---- */
 	int    current = 1;     /* 1 = this view is active */
@@ -497,10 +495,10 @@ qgcanvas_sync_obol_faceplate(QgCanvasState &s)
 	struct bsg_axes modelAxes = {};
 	struct bsg_axes viewAxes = {};
 	struct bsg_adc_state adc = {};
-	(void)bsg_view_grid_get(s.v, &grid);
-	(void)bsg_view_model_axes_get(s.v, &modelAxes);
-	(void)bsg_view_view_axes_get(s.v, &viewAxes);
-	(void)bsg_view_adc_get(s.v, &adc);
+	(void)rt_view_grid_from_bsg(&grid, s.v);
+	(void)rt_view_model_axes_from_bsg(&modelAxes, s.v);
+	(void)rt_view_view_axes_from_bsg(&viewAxes, s.v);
+	(void)rt_view_adc_from_bsg(&adc, s.v);
 
 	qgcanvas_sync_obol_grid(s, group, grid);
 	qgcanvas_sync_obol_axes(s, group, "faceplate::model_axes", modelAxes);
@@ -524,15 +522,15 @@ static inline void
 qgcanvas_stash_hashes(QgCanvasState &s)
 {
 	s.prev_dhash = s.dmp ? dm_hash(s.dmp) : 0ULL;
-	s.prev_vhash = s.v   ? bsg_hash(s.v)   : 0ULL;
+	s.prev_vhash = s.v   ? rt_view_hash_bsg(s.v) : 0ULL;
 }
 
 /** Request a semantic view refresh and wake the canvas backend. */
 static inline void
 qgcanvas_request_update(QgCanvasState &s, uint32_t flags)
 {
-	uint32_t requested = flags ? flags : BSG_VIEW_REFRESH_ALL;
-	if (requested & BSG_VIEW_REFRESH_VIEW)
+	uint32_t requested = flags ? flags : RT_VIEW_REFRESH_ALL_BSG;
+	if (requested & RT_VIEW_REFRESH_VIEW_BSG)
 	qgcanvas_sync_obol_camera(s);
 	qgcanvas_sync_obol_faceplate(s);
 	if (s.v)
@@ -554,20 +552,20 @@ qgcanvas_diff_hashes_check(QgCanvasState &s)
 {
 	bool ret = false;
 	unsigned long long c_dhash = s.dmp ? dm_hash(s.dmp) : 0ULL;
-	unsigned long long c_vhash = s.v   ? bsg_hash(s.v)   : 0ULL;
+	unsigned long long c_vhash = s.v   ? rt_view_hash_bsg(s.v) : 0ULL;
 
 	if (s.dmp && dm_get_native_repaint_pending(s.dmp)) {
 		if (s.v)
-			rt_view_refresh_request_bsg(s.v, BSG_VIEW_REFRESH_FORCE);
+			rt_view_refresh_request_bsg(s.v, RT_VIEW_REFRESH_FORCE_BSG);
 		ret = true;
 	}
 
 	if (s.prev_dhash != c_dhash) {
-		qgcanvas_request_update(s, BSG_VIEW_REFRESH_FRAMEBUFFER | BSG_VIEW_REFRESH_FORCE);
+		qgcanvas_request_update(s, RT_VIEW_REFRESH_FRAMEBUFFER_BSG | RT_VIEW_REFRESH_FORCE_BSG);
 		ret = true;
 	}
 	if (s.prev_vhash != c_vhash) {
-		qgcanvas_request_update(s, BSG_VIEW_REFRESH_VIEW | BSG_VIEW_REFRESH_DRAW);
+		qgcanvas_request_update(s, RT_VIEW_REFRESH_VIEW_BSG | RT_VIEW_REFRESH_DRAW_BSG);
 		ret = true;
 	}
 	return ret;
@@ -583,7 +581,7 @@ qgcanvas_aet(QgCanvasState &s, double a, double e, double t)
 	double  aetd[3] = {a, e, t};
 	VMOVE(aet_v, aetd);
 	rt_view_aet_set_bsg(s.v, aet_v);
-	bsg_update(s.v);
+	rt_view_update_bsg(s.v);
 	qgcanvas_sync_obol_camera(s);
 }
 

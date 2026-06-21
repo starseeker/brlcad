@@ -40,9 +40,9 @@
 #include "rt/db_attr.h"
 #include "rt/view.h"
 
-#include "bsg/view_set.h"
 #include "ged/bsg_ged_draw.h"
 #include "ged/view.h"
+#include "rt/view_legacy_bsg.h"
 #include "../ged_private.h"
 #include "./ged_draw.h"
 
@@ -295,14 +295,14 @@ ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     if (bu_vls_strlen(&cvls)) {
-	cv = bsg_set_find_view(&gedp->ged_views, bu_vls_cstr(&cvls));
+	cv = rt_view_set_find_view_bsg(&gedp->ged_views, bu_vls_cstr(&cvls));
 	if (!cv) {
 	    bu_vls_printf(gedp->ged_result_str, "Specified view %s not found\n", bu_vls_cstr(&cvls));
 	    bu_vls_free(&cvls);
 	    return BRLCAD_ERROR;
 	}
 
-	if (!bsg_view_is_independent(cv)) {
+	if (!rt_view_is_independent_bsg(cv)) {
 	    bu_vls_printf(gedp->ged_result_str, "Specified view %s is not an independent view, and as such does not support specifying db objects for display in only this view.  To change the view's status, the command 'view independent %s 1' may be applied.\n", bu_vls_cstr(&cvls), bu_vls_cstr(&cvls));
 	    bu_vls_free(&cvls);
 	    return BRLCAD_ERROR;
@@ -311,11 +311,11 @@ ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
 
     // If we don't have a specified view, and the default view isn't a shared view, see if
     // we can find a shared view in the view set.
-    if (!bu_vls_strlen(&cvls) && (!cv || bsg_view_is_independent(cv))) {
-	struct bu_ptbl *views = bsg_set_views(&gedp->ged_views);
+    if (!bu_vls_strlen(&cvls) && (!cv || rt_view_is_independent_bsg(cv))) {
+	struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
 	for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	    struct bsg_view *bv = (struct bsg_view *)BU_PTBL_GET(views, i);
-	    if (!bsg_view_is_independent(bv)) {
+	    if (!rt_view_is_independent_bsg(bv)) {
 		cv = bv;
 		break;
 	    }
@@ -460,7 +460,7 @@ ged_redraw2_core(struct ged *gedp, int argc, const char *argv[])
     int opt_ret = bu_opt_parse(NULL, argc, argv, vd);
     argc = opt_ret;
     if (bu_vls_strlen(&cvls)) {
-	cv = bsg_set_find_view(&gedp->ged_views, bu_vls_cstr(&cvls));
+	cv = rt_view_set_find_view_bsg(&gedp->ged_views, bu_vls_cstr(&cvls));
 	if (!cv) {
 	    bu_vls_printf(gedp->ged_result_str, "Specified view %s not found\n", bu_vls_cstr(&cvls));
 	    bu_vls_free(&cvls);
@@ -470,7 +470,7 @@ ged_redraw2_core(struct ged *gedp, int argc, const char *argv[])
     bu_vls_free(&cvls);
 
     if (!cv) {
-	struct bu_ptbl *views = bsg_set_views(&gedp->ged_views);
+	struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
 	if (!BU_PTBL_LEN(views)) {
 	    bu_vls_printf(gedp->ged_result_str, "No views defined\n");
 	    return BRLCAD_OK;

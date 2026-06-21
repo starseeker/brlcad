@@ -20,7 +20,6 @@
 
 #include "common.h"
 
-#include "bsg/util.h"
 #include "ged.h"
 #include "rt/view.h"
 #include "rt/view_legacy_bsg.h"
@@ -33,7 +32,7 @@ do_zoom(struct ged *gedp, double sf)
 	view_scale = RT_VIEW_MIN_SCALE;
 
     rt_view_scale_set_bsg(gedp->ged_gvp, view_scale);
-    bsg_update(gedp->ged_gvp);
+    rt_view_update_bsg(gedp->ged_gvp);
 
     return BRLCAD_OK;
 }

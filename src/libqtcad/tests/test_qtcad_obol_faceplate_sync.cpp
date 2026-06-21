@@ -8,7 +8,7 @@
 #include "common.h"
 
 extern "C" {
-#include "bsg/view_state.h"
+#include "rt/view_legacy_bsg.h"
 }
 
 #include "brlobol/adc.h"
@@ -102,10 +102,10 @@ main(int argc, char **argv)
     struct bsg_axes modelAxes = {};
     struct bsg_axes viewAxes = {};
     struct bsg_adc_state adc = {};
-    (void)bsg_view_grid_get(bv, &grid);
-    (void)bsg_view_model_axes_get(bv, &modelAxes);
-    (void)bsg_view_view_axes_get(bv, &viewAxes);
-    (void)bsg_view_adc_get(bv, &adc);
+    (void)rt_view_grid_from_bsg(&grid, bv);
+    (void)rt_view_model_axes_from_bsg(&modelAxes, bv);
+    (void)rt_view_view_axes_from_bsg(&viewAxes, bv);
+    (void)rt_view_adc_from_bsg(&adc, bv);
 
     grid.draw = 1;
     VSET(grid.anchor, 1.0, 2.0, 3.0);
@@ -113,23 +113,23 @@ main(int argc, char **argv)
     grid.res_v = 4.0;
     grid.res_major_h = 3;
     grid.res_major_v = 2;
-    bsg_view_grid_set(bv, &grid);
+    rt_view_grid_set_bsg(bv, &grid);
 
     modelAxes.draw = 1;
     VSET(modelAxes.axes_pos, 4.0, 5.0, 6.0);
     modelAxes.axes_size = 7.0;
-    bsg_view_model_axes_set(bv, &modelAxes);
+    rt_view_model_axes_set_bsg(bv, &modelAxes);
 
     viewAxes.draw = 1;
     VSET(viewAxes.axes_pos, -0.8, -0.7, 0.0);
     viewAxes.axes_size = 0.5;
-    bsg_view_view_axes_set(bv, &viewAxes);
+    rt_view_view_axes_set_bsg(bv, &viewAxes);
 
     adc.draw = 1;
     VSET(adc.pos_model, 8.0, 9.0, 0.0);
     adc.a1 = 30.0;
     adc.dst = 12.0;
-    bsg_view_adc_set(bv, &adc);
+    rt_view_adc_set_bsg(bv, &adc);
 
     controller->clearRenderRequest();
     view.need_update(QG_VIEW_DRAWN);
@@ -183,10 +183,10 @@ main(int argc, char **argv)
     modelAxes.draw = 0;
     viewAxes.draw = 0;
     adc.draw = 0;
-    bsg_view_grid_set(bv, &grid);
-    bsg_view_model_axes_set(bv, &modelAxes);
-    bsg_view_view_axes_set(bv, &viewAxes);
-    bsg_view_adc_set(bv, &adc);
+    rt_view_grid_set_bsg(bv, &grid);
+    rt_view_model_axes_set_bsg(bv, &modelAxes);
+    rt_view_view_axes_set_bsg(bv, &viewAxes);
+    rt_view_adc_set_bsg(bv, &adc);
     view.need_update(QG_VIEW_DRAWN);
 
     if (find_overlay(root, "faceplate::grid") ||

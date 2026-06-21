@@ -35,17 +35,25 @@ extern "C" {
 #include "bu/opt.h"
 #include "ged.h"
 #include "ged/bsg_ged_draw.h"
+#include "rt/view_legacy_bsg.h"
 #include "rt/db_fullpath.h"
 #include "rt/directory.h"
 #include "rt/tree.h"
 }
 
-#include "bsg/export.h"
-#include "bsg/render.h"
-#include "bsg/view_set.h"
-
 #include "../alphanum.h"
 #include "../ged_private.h"
+
+struct who_solids_record {
+    std::string path;
+    int highlighted;
+    unsigned char color[3];
+    point_t bounds_center;
+    fastf_t bounds_radius;
+    size_t vlist_structure_count;
+    size_t vlist_point_count;
+    std::string geometry_report;
+};
 
 static void
 who_solids_usage(struct ged *gedp, const char *cmd_name, int subcmd_usage)
@@ -124,7 +132,10 @@ who_solids_path_state(struct db_i *dbip, const char *path, struct db_tree_state 
 
 
 static void
-who_solids_print_export_record(const struct bsg_export_record *rec, struct db_i *dbip, int lvl, struct bu_vls *vls)
+who_solids_print_record(const struct who_solids_record &rec,
+			struct db_i *dbip,
+			int lvl,
+			struct bu_vls *vls)
 {
     struct db_tree_state ts = RT_DBTS_INIT_ZERO;
     unsigned char basecolor[3];
@@ -134,10 +145,10 @@ who_solids_print_export_record(const struct bsg_export_record *rec, struct db_i 
     const char *path = NULL;
     const char *leaf = NULL;
 
-    if (!rec || !dbip || !vls)
+    if (!dbip || !vls)
 	return;
 
-    path = bu_vls_cstr(&rec->path);
+    path = rec.path.c_str();
     if (lvl <= -2) {
 	if (path && *path) {
 	    leaf = strrchr(path, '/');
@@ -149,16 +160,16 @@ who_solids_print_export_record(const struct bsg_export_record *rec, struct db_i 
     }
 
     bu_vls_printf(vls, "%s", path ? path : "");
-    if ((lvl != -1) && rec->highlighted)
+    if ((lvl != -1) && rec.highlighted)
 	bu_vls_printf(vls, " ILLUM");
     bu_vls_printf(vls, "\n");
 
     if (lvl <= 0)
 	return;
 
-    basecolor[0] = rec->color[0];
-    basecolor[1] = rec->color[1];
-    basecolor[2] = rec->color[2];
+    basecolor[0] = rec.color[0];
+    basecolor[1] = rec.color[1];
+    basecolor[2] = rec.color[2];
     if (who_solids_path_state(dbip, path, &ts)) {
 	region_id = ts.ts_regionid;
 	if (ts.ts_mater.ma_color_valid) {
@@ -171,23 +182,23 @@ who_solids_print_export_record(const struct bsg_export_record *rec, struct db_i 
 	db_free_db_tree_state(&ts);
     }
 
-    cflag = (basecolor[0] != rec->color[0] ||
-	     basecolor[1] != rec->color[1] ||
-	     basecolor[2] != rec->color[2]);
+    cflag = (basecolor[0] != rec.color[0] ||
+	     basecolor[1] != rec.color[1] ||
+	     basecolor[2] != rec.color[2]);
 
     bu_vls_printf(vls, "  cent=(%.3f, %.3f, %.3f) sz=%g ",
-		  rec->bounds_center[X] * dbip->dbi_base2local,
-		  rec->bounds_center[Y] * dbip->dbi_base2local,
-		  rec->bounds_center[Z] * dbip->dbi_base2local,
-		  rec->bounds_radius * dbip->dbi_base2local);
+		  rec.bounds_center[X] * dbip->dbi_base2local,
+		  rec.bounds_center[Y] * dbip->dbi_base2local,
+		  rec.bounds_center[Z] * dbip->dbi_base2local,
+		  rec.bounds_radius * dbip->dbi_base2local);
     bu_vls_printf(vls, "reg=%d\n", region_id);
     bu_vls_printf(vls, "  basecolor=(%d, %d, %d) color=(%d, %d, %d)%s%s\n",
 		  basecolor[0],
 		  basecolor[1],
 		  basecolor[2],
-		  rec->color[0],
-		  rec->color[1],
-		  rec->color[2],
+		  rec.color[0],
+		  rec.color[1],
+		  rec.color[2],
 		  dflag ? " D" : "",
 		  cflag ? " C" : "");
 
@@ -195,54 +206,69 @@ who_solids_print_export_record(const struct bsg_export_record *rec, struct db_i 
 	return;
 
     if (lvl > 2)
-	bsg_export_record_geometry_report(rec, vls);
+	bu_vls_printf(vls, "%s", rec.geometry_report.c_str());
 
     bu_vls_printf(vls, "  %zu vlist structures, %zu pts\n",
-		  rec->vlist_structure_count,
-		  rec->vlist_point_count);
+		  rec.vlist_structure_count,
+		  rec.vlist_point_count);
     bu_vls_printf(vls, "  %zu pts (via semantic export)\n",
-		  rec->vlist_point_count);
+		  rec.vlist_point_count);
 }
 
+struct who_solids_collect_ctx {
+    std::vector<struct who_solids_record> objs;
+    int lvl;
+};
+
+static int
+who_solids_collect_record(const struct ged_draw_view_db_object_record *rec,
+			  void *data)
+{
+    struct who_solids_collect_ctx *ctx =
+	(struct who_solids_collect_ctx *)data;
+    if (!ctx || !rec || rec->non_database_source || !rec->path)
+	return 1;
+
+    struct who_solids_record out;
+    out.path = rec->path;
+    out.highlighted = rec->highlighted;
+    out.color[0] = rec->color[0];
+    out.color[1] = rec->color[1];
+    out.color[2] = rec->color[2];
+    VMOVE(out.bounds_center, rec->bounds_center);
+    out.bounds_radius = rec->bounds_radius;
+    out.vlist_structure_count = rec->vlist_structure_count;
+    out.vlist_point_count = rec->vlist_point_count;
+    if (ctx->lvl > 2) {
+	struct bu_vls report = BU_VLS_INIT_ZERO;
+	ged_draw_view_db_object_record_geometry_report(rec, &report);
+	out.geometry_report = bu_vls_cstr(&report);
+	bu_vls_free(&report);
+    }
+    ctx->objs.push_back(out);
+    return 1;
+}
 
 static void
 who_solids_print_view(struct bsg_view *v, struct db_i *dbip, int mode, int lvl, struct bu_vls *vls)
 {
-    std::vector<const struct bsg_export_record *> objs;
+    struct who_solids_collect_ctx ctx;
+    ctx.lvl = lvl;
 
     if (!v)
 	return;
 
-    struct bsg_export_request request;
-    bsg_export_request_init(&request, v);
-    request.query_flags = BSG_EXPORT_QUERY_VISIBLE_ONLY | BSG_EXPORT_QUERY_DB_OBJECTS;
-    request.render_flags = BSG_RENDER_FLAG_VISIBLE_ONLY | BSG_RENDER_FLAG_PAYLOAD_PREPARE;
-    if (mode >= 0)
-	request.draw_mode = mode;
-    struct bsg_export_result *result = bsg_export_query(&request);
-    if (!result)
-	return;
+    ged_draw_foreach_visible_view_db_object_record_mode(v, mode,
+	    who_solids_collect_record, &ctx);
 
-    for (size_t i = 0; i < bsg_export_result_count(result); i++) {
-	const struct bsg_export_record *rec = bsg_export_result_get(result, i);
-	if (!rec)
-	    continue;
-	if (rec->non_database_source)
-	    continue;
-	objs.push_back(rec);
-    }
-
-    std::sort(objs.begin(), objs.end(),
-	      [](const struct bsg_export_record *a, const struct bsg_export_record *b) {
-		  const char *aname = a ? bu_vls_cstr(&a->path) : "";
-		  const char *bname = b ? bu_vls_cstr(&b->path) : "";
-		  return alphanum_impl(aname ? aname : "", bname ? bname : "", NULL) < 0;
+    std::sort(ctx.objs.begin(), ctx.objs.end(),
+	      [](const struct who_solids_record &a,
+		 const struct who_solids_record &b) {
+		  return alphanum_impl(a.path.c_str(), b.path.c_str(), NULL) < 0;
 	      });
 
-    for (size_t i = 0; i < objs.size(); i++)
-	who_solids_print_export_record(objs[i], dbip, lvl, vls);
-
-    bsg_export_result_free(result);
+    for (size_t i = 0; i < ctx.objs.size(); i++)
+	who_solids_print_record(ctx.objs[i], dbip, lvl, vls);
 }
 
 
@@ -306,7 +332,7 @@ who_solids_impl(struct ged *gedp, int argc, const char *argv[], int subcmd_usage
 
     struct bsg_view *v = gedp->ged_gvp;
     if (bu_vls_strlen(&cvls)) {
-	v = bsg_set_find_view(&gedp->ged_views, bu_vls_cstr(&cvls));
+	v = rt_view_set_find_view_bsg(&gedp->ged_views, bu_vls_cstr(&cvls));
 	if (!v) {
 	    bu_vls_printf(gedp->ged_result_str, "Specified view %s not found\n", bu_vls_cstr(&cvls));
 	    bu_vls_free(&cvls);

@@ -33,13 +33,14 @@
 
 #include "bu/hash.h"
 #include "bu/vls.h"
-#include "bsg/defines.h"
 #include "dm/defines.h"
 
 #ifndef DM_VIEW_H
 #define DM_VIEW_H
 
 __BEGIN_DECLS
+
+struct bsg_view;
 
 struct dm_path_edit_params {
     int edit_mode;

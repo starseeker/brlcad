@@ -90,8 +90,8 @@
 #include "bn.h"
 #include "bu/file.h"
 #include "bu/process.h"
-#include "bsg/defines.h"
 #include "dm.h"
+#include "rt/view.h"
 #include "../null/dm-Null.h"
 #include "../dm-gl.h"
 #include "./fb_ogl.h"
@@ -1374,8 +1374,8 @@ struct dm_impl dm_ogl_impl = {
     {0, 0, 0},			/* bg2 color */
     {0, 0, 0},			/* fg color */
     {255, 0, 0},/* geometry default color */
-    {BSG_VIEW_MIN, BSG_VIEW_MIN, BSG_VIEW_MIN},	/* clipmin */
-    {BSG_VIEW_MAX, BSG_VIEW_MAX, BSG_VIEW_MAX},	/* clipmax */
+    {RT_VIEW_MIN, RT_VIEW_MIN, RT_VIEW_MIN},	/* clipmin */
+    {RT_VIEW_MAX, RT_VIEW_MAX, RT_VIEW_MAX},	/* clipmax */
     0,				/* no debugging */
     0,				/* no perspective */
     1,				/* depth buffer is writable */

@@ -28,9 +28,7 @@
 
 #include "dm.h" // For labelvert - see if we really need the dm_set_native_repaint_pending call there...
 
-#include "bsg/export.h"
 #include "bsg/feature.h"
-#include "bsg/render.h"
 
 #include "ged.h"
 #include "ged/bsg_ged_draw.h"
@@ -40,6 +38,7 @@
 /* Callback data for labelvert */
 struct labelvert_data {
     struct directory *dp;
+    struct db_i *dbip;
     double base2local;
     struct bsg_feature_label_data *labels;
     size_t label_count;
@@ -49,14 +48,16 @@ struct labelvert_data {
 #define LABELVERT_FEATURE_NAME "_LABELVERT_ffffff"
 
 static int
-labelvert_record_matches(struct db_i *dbip, const struct bsg_export_record *rec, struct directory *dp)
+labelvert_record_matches(struct db_i *dbip,
+			 const struct ged_draw_view_db_object_record *rec,
+			 struct directory *dp)
 {
-    if (!dbip || !rec || !dp || rec->source.scope != BSG_RENDER_SOURCE_SCOPE_DATABASE)
+    if (!dbip || !rec || !dp || !rec->is_database_source || !rec->path)
 	return 0;
 
     struct db_full_path fp;
     db_full_path_init(&fp);
-    if (db_string_to_path(&fp, dbip, bu_vls_cstr(&rec->path)) < 0)
+    if (db_string_to_path(&fp, dbip, rec->path) < 0)
 	return 0;
     int ret = db_full_path_search(&fp, dp);
     db_free_full_path(&fp);
@@ -119,13 +120,17 @@ labelvert_point_cb(const point_t pt, void *data)
     return labelvert_append_label((struct labelvert_data *)data, pt);
 }
 
-static void
-labelvert_export_record(struct db_i *dbip, const struct bsg_export_record *rec, struct labelvert_data *lvd)
+static int
+labelvert_export_record(const struct ged_draw_view_db_object_record *rec,
+			void *data)
 {
-    if (!lvd || !labelvert_record_matches(dbip, rec, lvd->dp))
-	return;
+    struct labelvert_data *lvd = (struct labelvert_data *)data;
+    if (!lvd || !labelvert_record_matches(lvd->dbip, rec, lvd->dp))
+	return 1;
 
-    (void)bsg_export_record_foreach_point(rec, labelvert_point_cb, lvd);
+    (void)ged_draw_view_db_object_record_foreach_point(rec,
+	    labelvert_point_cb, lvd);
+    return 1;
 }
 
 /* Usage:  labelvert solid(s) */
@@ -145,6 +150,7 @@ ged_labelvert_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     memset(&lvd, 0, sizeof(lvd));
+    lvd.dbip = gedp->dbip;
     lvd.base2local = gedp->dbip->dbi_base2local;
 
     for (i=1; i<argc; i++) {
@@ -153,16 +159,8 @@ ged_labelvert_core(struct ged *gedp, int argc, const char *argv[])
 	    continue;
 	/* Find displayed uses of this database object. */
 	lvd.dp = dp;
-	struct bsg_export_request request;
-	bsg_export_request_init(&request, gedp->ged_gvp);
-	request.query_flags = BSG_EXPORT_QUERY_VISIBLE_ONLY | BSG_EXPORT_QUERY_DB_OBJECTS;
-	request.render_flags = BSG_RENDER_FLAG_VISIBLE_ONLY | BSG_RENDER_FLAG_PAYLOAD_PREPARE;
-	struct bsg_export_result *result = bsg_export_query(&request);
-	if (!result)
-	    continue;
-	for (size_t ri = 0; ri < bsg_export_result_count(result); ri++)
-	    labelvert_export_record(gedp->dbip, bsg_export_result_get(result, ri), &lvd);
-	bsg_export_result_free(result);
+	ged_draw_foreach_visible_view_db_object_record(gedp->ged_gvp,
+		labelvert_export_record, &lvd);
     }
 
     (void)bsg_feature_remove(gedp->ged_gvp, LABELVERT_FEATURE_NAME);

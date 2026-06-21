@@ -8,8 +8,6 @@
 #include "common.h"
 
 extern "C" {
-#include "bsg.h"
-#include "bsg/view_state.h"
 #include "rt/view_legacy_bsg.h"
 }
 
@@ -285,7 +283,7 @@ main(int argc, char **argv)
 
     struct bsg_view *bv = view.view();
     set_center_query(bv, 11.02, 11.02, 11.02);
-    rt_view_snap_source_flags_set_bsg(bv, BSG_SNAP_DB);
+    rt_view_snap_source_flags_set_bsg(bv, RT_VIEW_SNAP_DB_BSG);
     rt_view_snap_lines_set_bsg(bv, 1);
 
     SnapProbeFilter filter;
@@ -294,21 +292,24 @@ main(int argc, char **argv)
     QMouseEvent move = left_move_at(100, 100);
     if (!filter.sync(&move))
 	FAIL("qtcad view filter should accept a snap probe mouse event");
-    if (!nearly_equal((float)bv->gv_point[X], 11.0f) ||
-	    !nearly_equal((float)bv->gv_point[Y], 11.0f) ||
-	    !nearly_equal((float)bv->gv_point[Z], 11.0f))
+    point_t snapped_point = VINIT_ZERO;
+    rt_view_current_point_from_bsg(snapped_point, bv);
+    if (!nearly_equal((float)snapped_point[X], 11.0f) ||
+	    !nearly_equal((float)snapped_point[Y], 11.0f) ||
+	    !nearly_equal((float)snapped_point[Z], 11.0f))
 	FAIL("qtcad view filter should refine database snapping through Obol");
     if (view.dmp())
 	FAIL("qtcad Obol snap refinement should not initialize the legacy display manager");
 
     set_center_query(bv, 11.02, 11.02, 11.02);
-    rt_view_snap_source_flags_set_bsg(bv, BSG_SNAP_VIEW);
+    rt_view_snap_source_flags_set_bsg(bv, RT_VIEW_SNAP_VIEW_BSG);
     QMouseEvent viewScopedMove = left_move_at(100, 100);
     if (!filter.sync(&viewScopedMove))
 	FAIL("qtcad view filter should accept a view-scoped snap probe event");
-    if (nearly_equal((float)bv->gv_point[X], 11.0f) &&
-	    nearly_equal((float)bv->gv_point[Y], 11.0f) &&
-	    nearly_equal((float)bv->gv_point[Z], 11.0f))
+    rt_view_current_point_from_bsg(snapped_point, bv);
+    if (nearly_equal((float)snapped_point[X], 11.0f) &&
+	    nearly_equal((float)snapped_point[Y], 11.0f) &&
+	    nearly_equal((float)snapped_point[Z], 11.0f))
 	FAIL("qtcad view filter should leave view-scoped snapping on the BSG path");
     if (view.dmp())
 	FAIL("qtcad view-scoped snap fallback should not initialize the legacy display manager");

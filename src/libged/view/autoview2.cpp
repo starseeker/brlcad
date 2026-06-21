@@ -28,8 +28,8 @@
 #include <cstdlib>
 
 #include "bu/opt.h"
-#include "bsg/util.h"
 #include "dm.h"
+#include "rt/view_legacy_bsg.h"
 #include "../ged_private.h"
 
 /* Return 1 (and set *v) if the entire string parses as a number. */
@@ -71,7 +71,7 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
     struct bu_vls cvls = BU_VLS_INIT_ZERO;
 
     /* default, 0.5 model scale == 2.0 view factor */
-    fastf_t factor = BSG_AUTOVIEW_SCALE_DEFAULT;
+    fastf_t factor = RT_VIEW_AUTOVIEW_SCALE_DEFAULT;
 
     GED_CHECK_DRAWABLE(gedp, BRLCAD_ERROR);
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
@@ -105,7 +105,7 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
     argc = opt_ret;
 
     if (bu_vls_strlen(&cvls)) {
-	v = bsg_set_find_view(&gedp->ged_views, bu_vls_cstr(&cvls));
+	v = rt_view_set_find_view_bsg(&gedp->ged_views, bu_vls_cstr(&cvls));
 	if (!v) {
 	    bu_vls_printf(gedp->ged_result_str, "Specified view %s not found\n", bu_vls_cstr(&cvls));
 	    bu_vls_free(&cvls);
@@ -138,10 +138,9 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
 	point_t min, max;
 	if (rt_obj_bounds(gedp->ged_result_str, gedp->dbip, argc, argv, 0, min, max) != BRLCAD_OK)
 	    return BRLCAD_ERROR;
-	bsg_autoview_bounds(v, factor, min, max);
+	rt_view_autoview_bounds_bsg(v, factor, min, max);
     } else {
-	// libbsg has the nuts and bolts
-	bsg_autoview(v, factor, all_view_objs);
+	rt_view_autoview_bsg(v, factor, all_view_objs);
     }
 
     return BRLCAD_OK;

@@ -27,8 +27,11 @@
 #include <QLineEdit>
 #include <QCheckBox>
 #include <QComboBox>
-#include "bsg.h"
 #include "qtcad/QgColorRGB.h"
+
+struct bu_vls;
+struct bsg_polygon_record;
+struct bsg_view;
 
 class QPolySettings : public QWidget
 {

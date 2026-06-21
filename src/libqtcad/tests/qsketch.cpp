@@ -85,9 +85,10 @@
 #include "bu/malloc.h"
 #include "bu/str.h"
 #include "bn/tol.h"
-#include "bsg.h"
-#include "bsg/util.h"
-#include "bsg/scene_object.h"
+#include "bsg/defines.h"
+#include "bsg/geometry.h"
+#include "bsg/node.h"
+#include "bsg/separator.h"
 #include "dm.h"
 #include "raytrace.h"
 #include "rt/edit_legacy_bsg.h"
@@ -445,7 +446,7 @@ QSketchEditWindow::QSketchEditWindow(struct db_i *dbip,
 
     /* ---- bsg_view ---- */
     BU_GET(m_bv, struct bsg_view);
-    bsg_init(m_bv, NULL);
+    rt_view_init_bsg(m_bv, NULL);
 
     /* Look along -Z toward +Z (top view, sketch in XY plane face-on).
      * az=0, el=90 gives view +X→right, +Y→up which matches the sketch
@@ -454,7 +455,7 @@ QSketchEditWindow::QSketchEditWindow(struct db_i *dbip,
     VSET(aet, 0.0, 90.0, 0.0);
     rt_view_aet_set_bsg(m_bv, aet);
     rt_view_scale_set_bsg(m_bv, 250.0);
-    bsg_update(m_bv);
+    rt_view_update_bsg(m_bv);
     bu_vls_sprintf(&m_bv->gv_name, "qsketch");
     rt_view_dimensions_set_bsg(m_bv, 700, 700);
 
@@ -663,13 +664,13 @@ QSketchEditWindow::~QSketchEditWindow()
 	rt_edit_destroy(m_es);
     if (m_bv) {
 	/* Destroy the sketch line-set node before releasing the view.  The
-	 * scene anchor is a borrowed view attachment freed by bsg_free(). */
+	 * scene anchor is a borrowed view attachment freed by the view adapter. */
 	if (!bsg_node_ref_is_null(m_sketch_node)) {
 	    bsg_node_ref_destroy(m_sketch_node);
 	    m_sketch_lines = BSG_LINE_SET_REF_NULL_INIT;
 	    m_sketch_node = bsg_node_ref_null();
 	}
-	bsg_free(m_bv);
+	rt_view_free_bsg(m_bv);
 	BU_PUT(m_bv, struct bsg_view);
     }
 }
@@ -1170,7 +1171,7 @@ void QSketchEditWindow::on_fit_view()
     world_center[2] = skt2->V[2] + cx * skt2->u_vec[2] + cy * skt2->v_vec[2];
     rt_view_center_vec_set_bsg(m_bv, world_center);
     rt_view_size_set_bsg(m_bv, span);
-    bsg_update(m_bv);
+    rt_view_update_bsg(m_bv);
 
     m_view->need_update(QG_VIEW_REFRESH);
     set_status("View fitted to sketch bounds.");
@@ -1322,9 +1323,9 @@ void QSketchEditWindow::on_toggle_grid(bool checked)
 {
     if (!m_bv) return;
     struct bsg_grid_state grid;
-    if (!bsg_view_grid_get(m_bv, &grid)) return;
+    if (!rt_view_grid_from_bsg(&grid, m_bv)) return;
     grid.draw = checked ? 1 : 0;
-    bsg_view_grid_set(m_bv, &grid);
+    rt_view_grid_set_bsg(m_bv, &grid);
     m_view->need_update(QG_VIEW_REFRESH);
     set_status(checked ? "Grid enabled." : "Grid disabled.");
 }
@@ -1336,7 +1337,7 @@ void QSketchEditWindow::on_grid_settings()
     if (!m_bv) return;
 
     struct bsg_grid_state grid;
-    if (!bsg_view_grid_get(m_bv, &grid)) return;
+    if (!rt_view_grid_from_bsg(&grid, m_bv)) return;
 
     QDialog dlg(this);
     dlg.setWindowTitle("Grid Settings");
@@ -1418,7 +1419,7 @@ void QSketchEditWindow::on_grid_settings()
     grid.anchor[1]   = (fastf_t)sb_anchor_v->value();
     grid.snap        = cb_snap->isChecked() ? 1 : 0;
     grid.adaptive    = cb_adaptive->isChecked() ? 1 : 0;
-    bsg_view_grid_set(m_bv, &grid);
+    rt_view_grid_set_bsg(m_bv, &grid);
 
     m_view->need_update(QG_VIEW_REFRESH);
     set_status(QString("Grid: H=%1 V=%2 mm  anchor=(%3,%4)  snap=%5.")

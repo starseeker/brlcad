@@ -36,9 +36,8 @@
 #include "bu/units.h"
 #include "vmath.h"
 #include "raytrace.h"
-#include "bsg/export.h"
 #include "bg/plot3.h"
-#include "bsg/render.h"
+#include "ged/bsg_ged_draw.h"
 #include "rt/view_legacy_bsg.h"
 
 #include "./mged.h"
@@ -49,30 +48,29 @@ extern FILE *fdopen(int fd, const char *mode);
 #endif
 
 static int
+_area_check_record(const struct ged_draw_view_db_object_record *rec, void *data)
+{
+    int *area_err = (int *)data;
+    if (!rec || !area_err)
+	return 1;
+
+    if (!rec->evaluated_region && rec->line_style != 0) {
+	*area_err = 1;
+	return 0;
+    }
+
+    return 1;
+}
+
+static int
 _area_has_unsupported_subtraction(struct mged_state *s)
 {
     if (!s || !s->gedp)
 	return 0;
 
     int area_err = 0;
-    struct bsg_export_request request;
-    bsg_export_request_init(&request, s->gedp->ged_gvp);
-    request.query_flags = BSG_EXPORT_QUERY_VISIBLE_ONLY | BSG_EXPORT_QUERY_DB_OBJECTS;
-    request.render_flags = BSG_RENDER_FLAG_VISIBLE_ONLY | BSG_RENDER_FLAG_PAYLOAD_PREPARE;
-
-    struct bsg_export_result *export_result = bsg_export_query(&request);
-    if (!export_result)
-	return 0;
-
-    for (size_t i = 0; i < bsg_export_result_count(export_result); i++) {
-	const struct bsg_export_record *rec =
-	    bsg_export_result_get(export_result, i);
-	if (rec && !rec->evaluated_region && rec->line_style != 0) {
-	    area_err = 1;
-	    break;
-	}
-    }
-    bsg_export_result_free(export_result);
+    ged_draw_foreach_visible_view_db_object_record(s->gedp->ged_gvp,
+	    _area_check_record, &area_err);
     return area_err;
 }
 
@@ -103,10 +101,13 @@ _area_write_segment(const point_t a, const point_t b, void *data)
     return 1;
 }
 
-static void
-_area_write_record(const struct bsg_export_record *rec, struct _area_write_data *d)
+static int
+_area_write_record(const struct ged_draw_view_db_object_record *rec, void *data)
 {
-    (void)bsg_export_record_foreach_segment(rec, _area_write_segment, d);
+    struct _area_write_data *d = (struct _area_write_data *)data;
+    (void)ged_draw_view_db_object_record_foreach_segment(rec,
+	    _area_write_segment, d);
+    return 1;
 }
 
 /* ------------------------------------------------------------------ */
@@ -244,16 +245,8 @@ f_area(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	wd.fp_w = fp_w;
 	wd.rotation = (const mat_t *)&view_rotation;
 	wd.dbip = s->dbip;
-	struct bsg_export_request request;
-	bsg_export_request_init(&request, s->gedp->ged_gvp);
-	request.query_flags = BSG_EXPORT_QUERY_VISIBLE_ONLY | BSG_EXPORT_QUERY_DB_OBJECTS;
-	request.render_flags = BSG_RENDER_FLAG_VISIBLE_ONLY | BSG_RENDER_FLAG_PAYLOAD_PREPARE;
-	struct bsg_export_result *export_result = bsg_export_query(&request);
-	if (export_result) {
-	    for (size_t i = 0; i < bsg_export_result_count(export_result); i++)
-		_area_write_record(bsg_export_result_get(export_result, i), &wd);
-	    bsg_export_result_free(export_result);
-	}
+	ged_draw_foreach_visible_view_db_object_record(s->gedp->ged_gvp,
+		_area_write_record, &wd);
     }
 
     fclose(fp_w);

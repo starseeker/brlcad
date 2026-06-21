@@ -47,13 +47,12 @@
 #include "bsg/scene_builder.h"
 #include "bsg/scene_object.h"
 #include "bsg/selection.h"
-#include "bsg/view_set.h"
 #include "bsg/view_state.h"
-#include "bsg/util.h"
 #include "bg/clip.h"
 
 #include "ged.h"
 #include "ged/bsg_ged_draw.h"
+#include "./bsg_ged_draw_private.h"
 #include "./ged_private.h"
 
 static void
@@ -72,7 +71,7 @@ _sg_view_scene_root_set(struct bsg_view *v, bsg_scene_ref root)
 static bsg_scene_ref
 _sg_root(struct ged *gedp)
 {
-    struct bu_ptbl *views = bsg_set_views(&gedp->ged_views);
+    struct bu_ptbl *views = ged_draw_view_set_views_bsg(&gedp->ged_views);
     bsg_scene_ref root_ref = ged_scene_root_ref(gedp);
     if (!bsg_scene_ref_is_null(root_ref)) {
 	if (gedp->ged_gvp)
@@ -103,7 +102,7 @@ _sg_root(struct ged *gedp)
     /* Store draw-tree bookkeeping on the root so freeing helpers can bump
      * gd_draw_rev and recycle nodes without carrying a ged pointer. */
     gedp->i->ged_gdp->bsg_ctx.draw_rev = &gedp->i->ged_gdp->gd_draw_rev;
-    gedp->i->ged_gdp->bsg_ctx.fso      = bsg_set_fsos(&gedp->ged_views);
+    gedp->i->ged_gdp->bsg_ctx.fso = ged_draw_view_set_recycle_pool_bsg(&gedp->ged_views);
     gedp->i->ged_gdp->bsg_ctx.owner_data = gedp->i->ged_gdp;
     bsg_scene_set_draw_ctx(root_ref, &gedp->i->ged_gdp->bsg_ctx);
 

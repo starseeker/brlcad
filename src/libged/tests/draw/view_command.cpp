@@ -18,7 +18,6 @@
 #include <bu.h>
 #include <ged.h>
 #include <ged/bsg_ged_draw.h>
-#include <bsg.h>
 #include <bsg/backend_scene.h>
 #include <bsg/export.h>
 #include <bsg/measure.h>
@@ -27,6 +26,8 @@
 #include <bsg/render.h>
 #include <bsg/render_item.h>
 #include <bsg/snap_action.h>
+#include <bsg/util.h>
+#include <rt/view_legacy_bsg.h>
 
 #define ASSERT(cond) do { \
     nchecks++; \
@@ -253,15 +254,14 @@ main(int argc, const char **argv)
     if (!gedp)
 	return EXIT_FAILURE;
 
-    bsg_set_rm_view(&gedp->ged_views, NULL);
+    rt_view_set_remove_view_bsg(&gedp->ged_views, NULL);
     struct bsg_view *views[2] = {NULL, NULL};
     for (int i = 0; i < 2; i++) {
 	BU_GET(views[i], struct bsg_view);
-	bsg_init(views[i], &gedp->ged_views);
+	rt_view_init_bsg(views[i], &gedp->ged_views);
 	bu_vls_sprintf(&views[i]->gv_name, "V%d", i);
-	views[i]->gv_width = 640;
-	views[i]->gv_height = 480;
-	bsg_set_add_view(&gedp->ged_views, views[i]);
+	rt_view_dimensions_set_bsg(views[i], 640, 480);
+	rt_view_set_add_view_bsg(&gedp->ged_views, views[i]);
 	bu_ptbl_ins(&gedp->ged_free_views, (long *)views[i]);
 	if (!i)
 	    gedp->ged_gvp = views[i];
@@ -286,6 +286,29 @@ main(int argc, const char **argv)
 
     const char *c5[] = {"view", "obj", "set", "u_line", "arrow", "1", NULL};
     ASSERT(run_view(gedp, 6, c5) == BRLCAD_OK);
+
+    const char *a0[] = {"view", "obj", "create", "u_axes", "axes", "create", "1", "2", "3", NULL};
+    ASSERT_VIEW_OK(gedp, 9, a0);
+    const char *a1[] = {"view", "obj", "create", "u_axes", "axes", "pos", NULL};
+    ASSERT_VIEW_OK(gedp, 6, a1);
+    ASSERT(result_str(gedp).find("1.000000 2.000000 3.000000") != std::string::npos);
+    const char *a2[] = {"view", "obj", "create", "u_axes", "axes", "pos", "4", "5", "6", NULL};
+    ASSERT_VIEW_OK(gedp, 9, a2);
+    const char *a3[] = {"view", "obj", "create", "u_axes", "axes", "size", "12.5", NULL};
+    ASSERT_VIEW_OK(gedp, 7, a3);
+    const char *a4[] = {"view", "obj", "create", "u_axes", "axes", "size", NULL};
+    ASSERT_VIEW_OK(gedp, 6, a4);
+    ASSERT(result_str(gedp).find("12.500000") != std::string::npos);
+    const char *a5[] = {"view", "obj", "create", "u_axes", "axes", "line_width", "3", NULL};
+    ASSERT_VIEW_OK(gedp, 7, a5);
+    const char *a6[] = {"view", "obj", "create", "u_axes", "axes", "line_width", NULL};
+    ASSERT_VIEW_OK(gedp, 6, a6);
+    ASSERT(result_str(gedp).find("3") != std::string::npos);
+    const char *a7[] = {"view", "obj", "create", "u_axes", "axes", "axes_color", "10", "20", "30", NULL};
+    ASSERT_VIEW_OK(gedp, 9, a7);
+    const char *a8[] = {"view", "obj", "create", "u_axes", "axes", "axes_color", NULL};
+    ASSERT_VIEW_OK(gedp, 6, a8);
+    ASSERT(result_str(gedp).find("10 20 30") != std::string::npos);
 
     const char *p0[] = {"view", "obj", "create", "u_poly", "polygon", "create", "10", "10", NULL};
     ASSERT_VIEW_OK(gedp, 8, p0);

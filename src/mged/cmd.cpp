@@ -53,7 +53,6 @@ extern "C" {
 #include "bu/snooze.h"
 #include "bn.h"
 #include "bsg/appearance.h"
-#include "bsg/util.h"
 #include "rt/edit.h"
 #include "rt/geom.h"
 #include "rt/view_legacy_bsg.h"
@@ -815,7 +814,7 @@ cmd_ged_erase_wrapper(ClientData clientData, Tcl_Interp *interpreter, int argc, 
 	return TCL_ERROR;
 
     solid_list_callback(s);
-    mged_refresh_request_all(s, BSG_VIEW_REFRESH_ALL);
+    mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
 
     return TCL_OK;
@@ -889,7 +888,7 @@ cmd_ged_gqa(ClientData clientData, Tcl_Interp *interpreter, int argc, const char
     if (ret)
 	return TCL_ERROR;
 
-    mged_refresh_request_all(s, BSG_VIEW_REFRESH_ALL);
+    mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
 
     return TCL_OK;
@@ -1264,7 +1263,7 @@ cmd_ged_view_wrapper(ClientData clientData, Tcl_Interp *interpreter, int argc, c
 	return TCL_ERROR;
 
     (void)mged_svbase(s);
-    mged_refresh_request_view(s, view_state, BSG_VIEW_REFRESH_VIEW);
+    mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
 
     return TCL_OK;
 }
@@ -2358,7 +2357,7 @@ cmd_units(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *
     set_localunit_TclVar(s);
     sf = s->dbip->dbi_base2local / sf;
     update_grids(s,sf);
-    mged_refresh_request_all(s, BSG_VIEW_REFRESH_ALL);
+    mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
 
     return TCL_OK;
@@ -2915,7 +2914,7 @@ _view_update_rate_flags_viewonly(struct mged_state *s)
 				!ZERO(view_state->k.tra_m[Y]) ||
 				!ZERO(view_state->k.tra_m[Z])) ? 1 : 0;
     view_state->k.sca_flag = (!ZERO(view_state->k.sca)) ? 1 : 0;
-    mged_refresh_request_view(s, view_state, BSG_VIEW_REFRESH_VIEW);
+    mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
 }
 
 static void
@@ -2995,7 +2994,7 @@ _view_mutation_hash(struct mged_state *ms, struct bsg_view *v)
     bu_data_hash_update(state, &rotate_about, sizeof(char));
 
     /* Knob state (rates + absolute values + flags + origins) */
-    bsg_knobs_hash(&v->k, state);
+    rt_view_knobs_hash_bsg(v, state);
 
     /*
      * If we are in an edit mode (solid or object) include the active edit
@@ -3065,7 +3064,7 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
     } else {
 	/* No existing ged_gvp: create ephemeral staging view */
 	staging = (struct bsg_view *)bu_calloc(1, sizeof(struct bsg_view), "temporary staging bsg_view");
-	bsg_init(staging, NULL);
+	rt_view_init_bsg(staging, NULL);
 	created_temp = 1;
 	/* Carry over dimensions for screen-dependent ops */
 	if (mged_view) {
@@ -3124,7 +3123,7 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
 	    if (!created_temp)
 		_view_cache_restore(&prev, staging);
 	    else {
-		bsg_free(staging);
+		rt_view_free_bsg(staging);
 		bu_free(staging, "free staging bsg_view");
 		s->gedp->ged_gvp = NULL;
 	    }
@@ -3147,7 +3146,7 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
 	    if (!created_temp) {
 		_view_cache_restore(&prev, staging);
 	    } else {
-		bsg_free(staging);
+		rt_view_free_bsg(staging);
 		bu_free(staging, "free staging bsg_view");
 		s->gedp->ged_gvp = NULL;
 	    }
@@ -3158,7 +3157,7 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
     /* Success: propagate staging->MGED if distinct */
     if (!shared_view) {
 	_view_copy_from_staging(mged_view, staging, is_knob);
-	mged_refresh_request_view(s, view_state, BSG_VIEW_REFRESH_VIEW);
+	mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
     }
 
     /* Copy updated vs_gvp->k into view_state->k immediately after a confirmed
@@ -3186,7 +3185,7 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
 	    }
 	} else {
 	    /* Ephemeral staging freed; detach from ged */
-	    bsg_free(staging);
+	    rt_view_free_bsg(staging);
 	    bu_free(staging, "free staging bsg_view");
 	    s->gedp->ged_gvp = NULL;
 	}

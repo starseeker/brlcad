@@ -159,7 +159,7 @@ ged_cm_end(struct ged *gedp, vect_t *v, mat_t *m, const int UNUSED(argc), const 
     /* First step:  put eye at view center (view 0, 0, 0) */
     rt_view_rotation_set_bsg(gedp->ged_gvp, (*m));
     rt_view_center_vec_set_bsg(gedp->ged_gvp, (*v));
-    bsg_update(gedp->ged_gvp);
+    rt_view_update_bsg(gedp->ged_gvp);
     mat_t view2model;
     rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
 
@@ -184,7 +184,7 @@ ged_cm_end(struct ged *gedp, vect_t *v, mat_t *m, const int UNUSED(argc), const 
     VSET(xlate, 0.0, 0.0, -1.0);	/* correction factor */
     MAT4X3PNT(new_cent, view2model, xlate);
     rt_view_center_vec_set_bsg(gedp->ged_gvp, new_cent);
-    bsg_update(gedp->ged_gvp);
+    rt_view_update_bsg(gedp->ged_gvp);
 
     /* If new treewalk is needed, get new objects into view. */
     if (preview_tree_walk_needed) {

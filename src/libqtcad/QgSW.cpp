@@ -39,7 +39,6 @@
 #include "qtcad/QgSW.h"
 
 extern "C" {
-#include "bsg/util.h"
 #include "rt/view_legacy_bsg.h"
 }
 
@@ -62,12 +61,12 @@ QgSW::QgSW(QWidget *parent, struct fb *fbp)
     d = new QgCanvasState();
     qgcanvas_init_obol(*d, this);
     d->ifp = fbp;
-    d->lmouse_mode = BSG_SCALE;
+    d->lmouse_mode = RT_VIEW_ADJUST_SCALE;
 
     // Provide a view specific to this widget - set gedp->ged_gvp to v
     // if this is the current view
     BU_GET(d->local_v, struct bsg_view);
-    bsg_init(d->local_v, nullptr);
+    rt_view_init_bsg(d->local_v, nullptr);
     bu_vls_sprintf(&d->local_v->gv_name, "swrast");
     d->v = d->local_v;
     qgcanvas_sync_obol_camera(*d);
@@ -154,8 +153,8 @@ QgSW::set_view(struct bsg_view *nv)
 
 void QgSW::request_update(uint32_t refresh_flags)
 {
-    uint32_t requested = refresh_flags ? refresh_flags : BSG_VIEW_REFRESH_ALL;
-    qgcanvas_request_update(*d, requested | BSG_VIEW_REFRESH_FRAMEBUFFER | BSG_VIEW_REFRESH_FORCE);
+    uint32_t requested = refresh_flags ? refresh_flags : RT_VIEW_REFRESH_ALL_BSG;
+    qgcanvas_request_update(*d, requested | RT_VIEW_REFRESH_FRAMEBUFFER_BSG | RT_VIEW_REFRESH_FORCE_BSG);
     if (d->fb_update_queued)
 return;
     d->fb_update_queued = true;
@@ -165,7 +164,7 @@ return;
 void QgSW::need_update()
 {
     QTCAD_SLOT("QgSW::need_update", 1);
-    request_update(BSG_VIEW_REFRESH_FRAMEBUFFER | BSG_VIEW_REFRESH_FORCE);
+    request_update(RT_VIEW_REFRESH_FRAMEBUFFER_BSG | RT_VIEW_REFRESH_FORCE_BSG);
 }
 
 void QgSW::queued_update()
@@ -310,7 +309,7 @@ void QgSW::resizeEvent(QResizeEvent *e)
 		    rt_view_width_from_bsg(d->v),
 		    rt_view_height_from_bsg(d->v));
 	}
-	qgcanvas_request_update(*d, BSG_VIEW_REFRESH_VIEW | BSG_VIEW_REFRESH_FRAMEBUFFER);
+	qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW_BSG | RT_VIEW_REFRESH_FRAMEBUFFER_BSG);
 	emit changed();
     }
 }
@@ -329,7 +328,7 @@ return;
     rt_view_dimensions_set_bsg(d->v, rsize.width(), rsize.height());
 
     if (d->input.keyPressEvent(d->v, d->x_prev, d->y_prev, k)) {
-qgcanvas_request_update(*d, BSG_VIEW_REFRESH_VIEW);
+qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW_BSG);
 update();
 emit changed();
     }
@@ -357,7 +356,7 @@ return;
     rt_view_dimensions_set_bsg(d->v, rsize.width(), rsize.height());
 
     if (d->input.mousePressEvent(d->v, d->x_prev, d->y_prev, e)) {
-qgcanvas_request_update(*d, BSG_VIEW_REFRESH_VIEW);
+qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW_BSG);
 update();
 emit changed();
     }
@@ -388,7 +387,7 @@ return;
 
     if (d->input.mouseReleaseEvent(d->v, d->x_press_pos, d->y_press_pos,
    d->x_prev, d->y_prev, e, d->lmouse_mode)) {
-qgcanvas_request_update(*d, BSG_VIEW_REFRESH_VIEW);
+qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW_BSG);
 update();
 emit changed();
     }
@@ -411,7 +410,7 @@ return;
 
     int mret = d->input.mouseMoveEvent(d->v, d->x_prev, d->y_prev, e, d->lmouse_mode);
     if (mret > 0) {
-qgcanvas_request_update(*d, BSG_VIEW_REFRESH_VIEW);
+qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW_BSG);
 update();
 emit changed();
     }
@@ -444,7 +443,7 @@ return;
     rt_view_dimensions_set_bsg(d->v, rsize.width(), rsize.height());
 
     if (d->input.wheelEvent(d->v, e)) {
-qgcanvas_request_update(*d, BSG_VIEW_REFRESH_VIEW);
+qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW_BSG);
 update();
 emit changed();
     }

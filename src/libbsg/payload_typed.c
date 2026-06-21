@@ -821,7 +821,7 @@ bsg_payload_framebuffer_create(struct fb *fbp, int mode)
 	return NULL;
     struct bsg_payload_framebuffer *fbpl;
     BU_GET(fbpl, struct bsg_payload_framebuffer);
-    fbpl->fbp = fbp;
+    fbpl->fb = fbp;
     fbpl->mode = mode;
     pl->pl.framebuffer = fbpl;
     pl->pl_free = _framebuffer_payload_free;

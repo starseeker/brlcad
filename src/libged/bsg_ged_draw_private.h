@@ -36,6 +36,7 @@
 #include "bsg/database_source.h"
 #include "bsg/geometry.h"
 #include "bsg/scene_builder.h"
+#include "./bsg_ged_draw_view_private.h"
 #include "ged/bsg_ged_draw.h"
 #include "rt/db_fullpath.h"
 #include "rt/view.h"
@@ -43,6 +44,8 @@
 __BEGIN_DECLS
 
 struct bsg_view;
+struct bsg_view_set;
+struct bu_ptbl;
 struct bsg_appearance_settings;
 struct bg_tess_tol;
 struct bn_tol;
@@ -118,30 +121,9 @@ struct ged_draw_source_state {
     ged_draw_stale_reason stale_reason;
 };
 
-typedef struct rt_view_lod_policy ged_draw_view_lod_policy;
-
 GED_EXPORT extern void ged_draw_source_data_free(void *data);
-GED_EXPORT extern void ged_draw_view_info_from_bsg(struct rt_view_info *view_info,
-						   const struct bsg_view *view);
-GED_EXPORT extern fastf_t ged_draw_view_perspective_from_bsg(const struct bsg_view *view);
-GED_EXPORT extern fastf_t ged_draw_view_scale_from_bsg(const struct bsg_view *view);
-GED_EXPORT extern int ged_draw_view_lod_policy_from_bsg(ged_draw_view_lod_policy *policy,
-							const struct bsg_view *view);
-GED_EXPORT extern int ged_draw_view_lod_policy_apply_bsg(struct bsg_view *view,
-							 const ged_draw_view_lod_policy *policy);
-GED_EXPORT extern int ged_draw_view_lod_policy_apply_bsg_bot_threshold(
-	struct bsg_view *view,
-	const ged_draw_view_lod_policy *policy,
-	size_t bot_threshold);
-GED_EXPORT extern void ged_draw_view_set_lod_bounds_update(struct bsg_view *view);
-GED_EXPORT extern int ged_draw_view_has_lod_bounds_update(const struct bsg_view *view);
 GED_EXPORT extern void ged_draw_scene_ref_realization_set_bsg_view_policy(bsg_scene_ref ref,
 									  const struct bsg_view *view);
-GED_EXPORT extern int ged_draw_mesh_lod_load_view_scene_ref(struct rt_mesh_lod *lod,
-							    bsg_scene_ref visibility_ref,
-							    struct bsg_view *view,
-							    int reset);
-GED_EXPORT extern void ged_draw_mesh_lod_free_scene_ref(bsg_scene_ref ref);
 GED_EXPORT extern int ged_draw_brep_mesh_lod_detail_setup(struct rt_mesh_lod *lod,
 							  struct db_i *dbip,
 							  struct directory *dp,
@@ -159,6 +141,7 @@ GED_EXPORT extern int ged_draw_database_source_record_has_state(
 	const struct bsg_database_source_record *record);
 GED_EXPORT extern const char *ged_draw_database_source_stale_reason_name(
 	bsg_database_source_stale_reason reason);
+GED_EXPORT extern void ged_draw_log(int level, const char *fmt, ...) _BU_ATTR_PRINTF23;
 GED_EXPORT extern void ged_draw_scene_ref_mark_realization_stale(bsg_scene_ref ref,
 								 uint64_t source_revision,
 								 uint64_t inputs_revision,
@@ -414,9 +397,6 @@ GED_EXPORT extern int ged_draw_overlay_geometry_insert(struct ged *gedp,
 GED_EXPORT extern void ged_draw_overlay_erase_name(struct ged *gedp,
 						   const char *name);
 GED_EXPORT extern void ged_draw_scene_ref_release(bsg_scene_ref ref);
-GED_EXPORT extern bsg_scene_ref ged_draw_view_scene_root_ref(const struct bsg_view *v);
-GED_EXPORT extern int ged_draw_view_has_scene_root(const struct bsg_view *v);
-
 GED_EXPORT extern int ged_draw_redraw_group_ref(struct ged *gedp,
 						ged_draw_group_ref ref,
 						int skip_subtractions);

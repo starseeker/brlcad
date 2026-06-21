@@ -29,11 +29,11 @@
 #include <string.h>
 
 #include "bu/opt.h"
-#include "bsg/view_set.h"
 #include "ged/bsg_ged_draw.h"
 #include "ged/database.h"
 #include "ged/view.h"
 #include "rt/db_attr.h"
+#include "rt/view_legacy_bsg.h"
 
 #include "../ged_private.h"
 
@@ -78,14 +78,14 @@ ged_erase2_core(struct ged *gedp, int argc, const char *argv[])
     int opt_ret = bu_opt_parse(NULL, argc, argv, vd);
     argc = opt_ret;
     if (bu_vls_strlen(&cvls)) {
-	v = bsg_set_find_view(&gedp->ged_views, bu_vls_cstr(&cvls));
+	v = rt_view_set_find_view_bsg(&gedp->ged_views, bu_vls_cstr(&cvls));
 	if (!v) {
 	    bu_vls_printf(gedp->ged_result_str, "Specified view %s not found\n", bu_vls_cstr(&cvls));
 	    bu_vls_free(&cvls);
 	    return BRLCAD_ERROR;
 	}
 
-	if (!bsg_view_is_independent(v)) {
+	if (!rt_view_is_independent_bsg(v)) {
 	    bu_vls_printf(gedp->ged_result_str, "Specified view %s is not an independent view, and as such does not support specifying db objects for display in only this view.  To change the view's status, the command 'view independent %s 1' may be applied.\n", bu_vls_cstr(&cvls), bu_vls_cstr(&cvls));
 	    bu_vls_free(&cvls);
 	    return BRLCAD_ERROR;

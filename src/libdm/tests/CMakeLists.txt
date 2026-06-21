@@ -2,7 +2,7 @@
 
 brlcad_addexec(dm_test dm_test.c "libdm;libbu" TEST)
 
-brlcad_addexec(test_dm_backend_draw_item test_backend_draw_item.c "libdm;libbsg;libbu" TEST)
+brlcad_addexec(test_dm_backend_draw_item test_backend_draw_item.c "libdm;librt;libbsg;libbu" TEST)
 brlcad_add_test(NAME dm_backend_draw_item COMMAND test_dm_backend_draw_item "${CMAKE_SOURCE_DIR}")
 if(TEST dm_backend_draw_item)
   set_property(TEST dm_backend_draw_item APPEND PROPERTY LABELS drawing_baseline)

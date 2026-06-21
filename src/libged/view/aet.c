@@ -78,7 +78,7 @@ ged_aet_core(struct ged *gedp, int argc, const char *argv[])
 	    VADD2(aet, view_aet, aet);
 	}
 	rt_view_aet_set_bsg(gedp->ged_gvp, aet);
-	bsg_update(gedp->ged_gvp);
+	rt_view_update_bsg(gedp->ged_gvp);
 
 	return BRLCAD_OK;
     }
@@ -113,7 +113,7 @@ ged_aet_core(struct ged *gedp, int argc, const char *argv[])
 	    VADD2(aet, view_aet, aet);
 	}
 	rt_view_aet_set_bsg(gedp->ged_gvp, aet);
-	bsg_update(gedp->ged_gvp);
+	rt_view_update_bsg(gedp->ged_gvp);
 
 	return BRLCAD_OK;
     }

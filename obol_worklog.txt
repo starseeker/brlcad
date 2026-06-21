@@ -700,7 +700,7 @@ Low-level neutralization:
   the qtcad Obol draw-sync test's center/scale setup now use the same RT
   legacy utility-setter boundary; the qtcad Obol snap center-query test setup
   and qsketch view setup/fit-to-view writes now do as well.  qged polygon
-  snap-line/source-flag UI state
+  snap-line/source-flag/snap-exclude UI state
   and libged snap-semantics test setup now route through the same snap-state
   adapter helpers, and the libged view-independent oversized view setup now
   uses an exact scale-state adapter while polygon refs and grid state remain
@@ -748,10 +748,10 @@ Low-level neutralization:
   MGED draw/temp-staging plus libged headless DM fallback dimension writes now
   do the same; the pivot guard rejects reintroduced direct production
   assignments there.  Direct screen-to-view conversion calls now route through
-  `rt_view_screen_to_view_from_bsg` in libged label creation and TclCAD
-  mouse/polygon/screen conversion paths, leaving remaining direct
-  `bsg_screen_to_view` usage contained to legacy libdm drawing utilities plus
-  the adapter/test implementation.  Direct screen-pixel-to-model-point
+  `rt_view_screen_to_view_from_bsg` in libged label creation, TclCAD
+  mouse/polygon/screen conversion paths, and legacy libdm label-arrow drawing,
+  leaving remaining direct `bsg_screen_to_view` usage contained to the
+  adapter/test implementation.  Direct screen-pixel-to-model-point
   conversions now route through `rt_view_screen_point_from_bsg` in libged
   view-object/polygon commands and qtcad view, sketch, and polygon filters,
   leaving direct `bsg_screen_pt` usage contained to the adapter/test
@@ -763,14 +763,183 @@ Low-level neutralization:
   the adapter/test implementation plus libbsg internals.  View refresh
   request/dirty/consume/complete/enabled/suppression/drawn-count state now
   also routes through RT legacy refresh helpers in qtcad canvas/view refresh,
-  TclCAD refresh dispatch, and MGED redraw/drawn-count paths, leaving direct
-  BSG refresh-state calls contained to the adapter/test implementation,
-  libbsg internals, and legacy libdm display glue.  Faceplate center-dot,
+  TclCAD refresh dispatch, MGED redraw/drawn-count paths, and Tk swrast
+  repaint requests, leaving direct BSG refresh-state calls contained to the
+  adapter/test implementation plus libbsg internals.  Faceplate center-dot,
   scale overlay, and params scalar state now route through RT legacy adapters
   in libged, libtclcad, and QGED view settings, with direct BSG calls contained
   to the adapter/test implementation plus libbsg internals.  QGED view
   settings also routes ADC, grid, model-axes, and view-axes top-level
-  faceplate state through the same RT legacy adapter surface.  A broad
+  faceplate state plus widget-backed LoD policy and framebuffer mode through
+  the same RT legacy adapter surface instead of direct BSG render-settings
+  helpers; qtcad canvas Obol faceplate sync, keybinding toggles, and QGED
+  polygon grid-snapping UI now use those adapters as well.  TclCAD model-axes
+  and view-axes commands
+  now use the same adapter boundary for their top-level axes state updates,
+  and TclCAD command grid-snap decisions read grid state through that boundary
+  as well.  The libged ADC command now snapshots and commits ADC state through
+  the same adapter boundary, and libged grid plus faceplate grid/model-axes/
+  view-axes commands now use it for their top-level grid and axes state
+  updates.  MGED ADC/grid display-state helpers and startup defaults now use
+  the same adapter boundary, leaving direct top-level faceplate state calls
+  contained to the adapter implementation and tests.  qtcad AET keybinding/
+  canvas updates, libged grid vsnap recentering, and MGED `new_mats` derived
+  view refresh now route through `rt_view_update_bsg`.  libged view update
+  commands for zoom, size, scale, center, eye, eye_pos, AET/YPR/quaternion/
+  rotation setters, perspective/projection, lookat, align, rectangle zoom, and
+  vutil transformations now use the same derived-view refresh adapter.  libged
+  preview/loadview camera restoration, mirror post-draw refresh, and QGED
+  polygon alignment now use that adapter as well.  GED autoview, qtcad
+  quad-view default framing, and GED draw transaction autoview now route
+  through RT/GED private autoview adapters instead of direct BSG utility
+  calls.  qtcad mouse and wheel navigation now route BSG-backed adjust
+  math through RT view-adjust adapter flags rather than calling
+  `bsg_adjust` or naming BSG adjust-mode constants directly.  qtcad canvas
+  view-hash tracking now uses `rt_view_hash_bsg` instead of calling
+  `bsg_hash` directly, and gsh display-dirty view hashing now uses the same
+  RT view-hash adapter.  libged/MGED independent-view checks, independent
+  scope lookup, zap clearing, and MGED view init-copy now use RT or GED-private
+  legacy adapters instead of direct BSG utility entry points.  TclCAD 2D
+  snapping, GED view snap candidate queries, and GED grid-center snapping now
+  route through RT snap adapters instead of direct BSG snap utility calls.  GED,
+  MGED, qtcad, and GED draw-record selection storage lookups now route through
+  RT or GED-private selection adapters instead of calling `bsg_view_selection`
+  directly.  MGED highlighted-shape selection mirroring now uses a GED draw
+  helper instead of constructing BSG interaction records in MGED.
+  TclCAD, GED, gsh, and retained GED draw view enumeration and view-name
+  lookup now use RT or GED-private view-set adapters instead of calling
+  `bsg_set_views` or `bsg_set_find_view` directly.  TclCAD edit-redraw DB
+  object iteration now uses a GED draw callback helper instead of direct BSG
+  export requests, and MGED area-plot DB object checks plus segment iteration
+  now use the same GED draw callback boundary.  Libged view vZ DB-object
+  segment iteration now uses that boundary as well.  Libged plot, PS, and PNG
+  diagnostic export loops now consume visible records and segments through the
+  same GED draw facade instead of direct BSG export requests.  Libged
+  labelvert, labelface, and select visible DB-object scans now also use that
+  facade for record, segment, and point iteration instead of direct BSG export
+  requests, and libged RT-write full-path flag/animation scans plus BoT dump
+  visible DB-object traversal now use the same boundary.  The `who solids`
+  detailed visible DB-object report path now also uses the facade, including
+  draw-mode filtering, highlighted state, vlist counts, and geometry-report
+  forwarding.  Libged view-object list/find/info export scans now use a
+  general GED draw view-record query facade for view-object, DB-object,
+  local-only, and glob-filtered queries instead of direct BSG export requests.
+  GED, MGED, qtcad, TclCAD,
+  and libdm BSG-backed view initialization, free, and view-set membership
+  updates now route through RT lifecycle adapters.  GED and MGED view knob
+  reset/hash/command-process/transform/rate-flag utility calls now route
+  through RT legacy view adapters, and retained GED draw root recycle-pool
+  lookup now uses a GED-private adapter instead of calling `bsg_set_fsos`
+  directly.  Libged retained draw debug logging now goes through
+  `ged_draw_log`, which lets the broad `ged_private.h` header avoid
+  `bsg/util.h`; the helper is self-contained, disabled by default like the
+  old BSG logging path, and split GED draw bridge files no longer include the
+  broad utility header.
+  TclCAD view creation now initializes its transitional
+  `bsg_data_tclcad` block through a libtclcad-private view-data helper, and
+  that helper now routes initialization through `rt_view_tclcad_data_init_bsg`
+  instead of calling `bsg_data_tclcad_init` from application code; public
+  `tclcad/draw.h` no longer exposes the concrete TclCAD
+  view-data layout or BSG Tcl data payload.
+  qtcad, TclCAD, MGED, and Tk swrast refresh requests now use RT legacy
+  refresh-flag aliases instead of naming `BSG_VIEW_REFRESH_*` constants
+  directly; direct BSG refresh flags are left only in libbsg and adapter
+  parity tests.
+  qtcad snap refinement, qged polygon snap toggles, and the libged snap
+  command now also use RT legacy snap source/kind aliases instead of naming
+  `BSG_SNAP_*` constants directly.  GED zap clear-scope flags now use RT
+  legacy clear aliases instead of naming `BSG_SOURCE_*` constants directly.
+	  qtcad Obol snap and faceplate-sync tests now route setup view-state through
+	  RT legacy aliases/adapters instead of direct BSG constants/getters/setters.
+	  QgSW offscreen integration test view-set/unit-conversion setup and qsketch
+	  view lifecycle, derived-update, and grid setup paths now also route through
+	  RT legacy view adapters instead of direct BSG view utility calls.
+	  GED multi-view draw, view-command, view-independent, rtwizard, shared
+	  draw utility, and qtcad DM-backend benchmark test setup now route
+	  view-set lifecycle, dimensions, and unit-conversion writes through the
+	  same RT legacy view adapters.
+	  libdm swrast/Tk swrast view-dimension synchronization, qtcad quad-view
+	  unit copying, and libdm backend draw-item test dimensions now also use
+	  RT legacy view adapters instead of direct BSG view field access.
+	  qged current-view unit refresh and GED open/knob database-unit setup now
+	  also route through RT legacy view adapters instead of direct BSG unit
+	  field writes, with pivot-guard checks covering those production setup
+	  paths.
+	  Remaining GED draw-test dimension/unit setup and scale-pointer handoff now
+	  also uses RT legacy view adapters, and the pivot guard rejects direct
+	  setup writes or `&v->gv_scale` in those tests.  The measure semantics
+	  test now links `librt` for the RT adapter symbol on FreeBSD/clang.
+	  The LoD drawing test now uses its existing `-U` unstable-test switch for
+	  the build-config-sensitive BRep LoD pixel baseline; default CTest still
+	  verifies that BRep LoD renders non-empty geometry.
+	  Public `dm.h` no longer includes the BSG umbrella header; it forward declares
+  the remaining pointer-only transitional BSG draw-state types, and libged
+  selection handling now includes its concrete BSG selection dependency
+  directly.  The public BSG framebuffer payload member is now named `fb`
+  instead of `fbp`, avoiding MGED's legacy `fbp` macro in FreeBSD/clang unity
+  builds.  The GED BSG-backed view adapter declarations now live in a narrow
+  `bsg_ged_draw_view_private.h` header, so LoD commands and view-independent
+  draw tests no longer include the full retained draw-scene private bridge.
+  Public `dm/view.h` now keeps `struct bsg_view` opaque instead of including
+  `bsg/defines.h` solely for draw-entry pointer declarations.
+  Top-level public `ged.h` no longer directly includes BSG headers; the
+  remaining public GED BSG dependency is isolated to `ged/defines.h` while
+  `struct ged` still embeds transitional `bsg_view_set` storage.  The swrast
+  private header now forward declares its retained `struct bsg_view` context
+  pointer instead of pulling in the broad BSG umbrella, and `dm-gl.h` no longer
+  includes `bsg/defines.h` directly beyond the retained vlist boundary.
+  qtcad/qged-facing polygon, sketch, view-info, and polygon-settings headers
+  no longer include the broad BSG umbrella; retained transitional polygon/view
+  declarations now use narrow BSG headers or pointer-only forward declarations.
+  qtcad canvas, quad-view, selection, measurement, polygon, and shared
+  view-filter implementation files now also use narrow BSG headers instead of
+  the umbrella.  libged grid, view object, label, line, polygon, axes, and
+  faceplate command files now also include only their needed BSG subsystem
+  headers instead of the umbrella.  The remaining production broad BSG
+  umbrella includes in gsh, libged utility code, and TclCAD mouse/polygon
+  handlers were likewise replaced with narrower subsystem headers.  The
+  matching GED/qtcad/librt test fixtures now also include specific BSG
+  subsystem headers instead of the umbrella.  libged polygon clipping and zoom
+  command code now also avoid `bsg/util.h`; their retained view reads stay on
+  the RT legacy adapter boundary.  qtcad sketch editing also avoids
+  `bsg/util.h` and reads Qt event coordinates directly instead of reaching
+  back into `bsg_view` mouse fields.  qtcad 2-D/3-D measurement filters now
+  capture Qt event coordinates in the filter state and use those for
+  screen-to-view and Obol pick queries instead of reading BSG mouse fields.
+  qtcad point, box, and ray selection filters likewise use Qt event
+  coordinates for Obol and retained BSG fallback pick queries, and shared
+  qtcad view-sync now pushes legacy mouse/current-point state through the RT
+  adapter boundary instead of writing BSG fields directly.  qtcad polygon create,
+  update, select, point-edit, and move filters now pass Qt event
+  coordinates/points into the retained BSG polygon API instead of reading BSG
+  mouse/current/previous point fields directly.  qtcad view updates and qged
+  view-change dispatch no longer keep `bsg/util.h` solely for disabled
+  `bsg_log` tracing; local qtcad slot tracing remains.  qged polygon
+  settings now performs retained view-object unique-name checks through the RT
+  legacy adapter boundary instead of including `bsg/util.h` directly.
+  GED view-object mouse/current-point updates, align command view2model
+  writeback, and qtcad snap-test current-point checks now also use the RT
+  legacy view adapter boundary.
+  TclCAD refresh unit stashing, TclCAD command snap setup, and MGED knob
+  view-mode unit synchronization now set legacy view unit factors through the
+  same adapter boundary instead of writing BSG view fields directly.
+  RT now exposes a narrow previous-mouse adapter, and TclCAD polygon-mode and
+  command seed points use it instead of reading or writing previous mouse
+  fields directly.
+  TclCAD mouse simple previous-mouse readback, BREP/joint selection drag start
+  points, polygon point seeds, and shared mouse-scale updates now use that
+  previous-mouse adapter, and the remaining TclCAD mouse delta paths now
+  snapshot/update previous mouse through a local adapter helper instead of
+  reading or writing previous mouse fields directly.  TclCAD mouse delta
+  clamp and rotate/scale factors now use a grouped RT adapter instead of
+  reading BSG mouse delta fields directly.
+  libdm normalized view clipping, ADC drawing, label placement, GL z-clipping,
+  framebuffer canvas dimension setup, display-manager default clip bounds,
+  and internal pixel/view conversion macros now use RT legacy view adapters or
+  `RT_VIEW_MIN/MAX`, `RT_VIEW_RANGE`, `RT_INV_VIEW`, and `RT_INV_4096` from
+  `rt/view.h` instead of naming BSG view-state details directly; libdm scene
+  drawing no longer keeps `bsg/util.h` solely for disabled `bsg_log` tracing.
+  A broad
   direct-production BSG view-field scan across libged, libtclcad, MGED, qged,
   and qtcad is now clean for the tracked assignment/matrix-copy patterns.  The
   former `src/libged/edit/edit.cpp`
@@ -2313,3 +2482,39 @@ The migration is complete when:
   replacement.
 * Documentation names Obol as the canonical scene API and explains where
   BRL-CAD Obol extensions live.
+
+
+2026-06-21: libged view feature adapter slices
+----------------------------------------------
+
+Moved the `view obj ... line` command's direct BSG feature-overlay operations
+behind the private GED draw view adapter.  `src/libged/view/lines.c` now asks
+the adapter to test line-feature existence, create persistent model annotation
+line features, and append points.  The BSG-backed implementation remains in
+`src/libged/bsg_ged_draw_view.c`, which keeps the transitional feature,
+geometry, and overlay calls at the draw bridge boundary.
+
+The follow-up batches moved label creation, data-axes state, and Tcl data-line
+overlay state through the same boundary.  `src/libged/view/labels.c` now uses
+the adapter for label feature existence and creation/data replacement.
+`src/libged/view/axes.c` now uses a neutral GED draw axes-state record for
+data-axes creation, position, size, line width, and color updates while the
+bridge maps those fields to the temporary BSG axes payload.  `view data_lines`
+and `view sdata_lines` now use the adapter for feature visibility/removal,
+style reads/writes, point copying, and paired line replacement while retaining
+their existing RT snap-line adapter calls.  The gobject overlay create/remove
+path now asks the same adapter to test feature existence, create the temporary
+overlay scene ref, and remove the overlay feature, leaving the wireframe
+gathering and draw-shape fullpath state unchanged for this slice.  The main
+`view obj remove` feature path now also uses the adapter for existence and
+removal, so ordinary removal of those temporary overlay features no longer
+calls `bsg_feature_remove` directly from `src/libged/view/objs.cpp`.
+
+The pivot guard now requires `src/libged/view/lines.c`,
+`src/libged/view/labels.c`, `src/libged/view/axes.c`,
+`src/libged/view/data_lines.c`, and `src/libged/view/gobjs.cpp` to use those
+adapter helpers and rejects direct `bsg_feature_*`, `BSG_FEATURE_*`,
+`BSG_GEOMETRY_*`, `BSG_OVERLAY_*`, and `struct bsg_axes` usage in the migrated
+command files.  It also rejects direct `bsg_feature_remove` in
+`src/libged/view/objs.cpp`.  Generic object style/edit paths remain comparable
+feature-adapter cleanup candidates.

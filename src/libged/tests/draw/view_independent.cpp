@@ -30,11 +30,11 @@
 #include <vector>
 
 #include <bu.h>
-#include <bsg.h>
+#include <bsg/util.h>
 #include <ged.h>
 #include <rt/view_legacy_bsg.h>
 #include "ged/bsg_ged_draw.h"
-#include "../../bsg_ged_draw_private.h"
+#include "../../bsg_ged_draw_view_private.h"
 
 #define ASSERT(cond) do { \
     nchecks++; \
@@ -178,13 +178,13 @@ main(int argc, const char **argv)
     if (!gedp)
 	return EXIT_FAILURE;
 
-    bsg_set_rm_view(&gedp->ged_views, NULL);
+    rt_view_set_remove_view_bsg(&gedp->ged_views, NULL);
     struct bsg_view *views[2] = {NULL, NULL};
     for (int i = 0; i < 2; i++) {
 	BU_GET(views[i], struct bsg_view);
-	bsg_init(views[i], &gedp->ged_views);
+	rt_view_init_bsg(views[i], &gedp->ged_views);
 	bu_vls_sprintf(&views[i]->gv_name, "V%d", i);
-	bsg_set_add_view(&gedp->ged_views, views[i]);
+	rt_view_set_add_view_bsg(&gedp->ged_views, views[i]);
 	bu_ptbl_ins(&gedp->ged_free_views, (long *)views[i]);
 	if (!i)
 	    gedp->ged_gvp = views[i];
@@ -203,14 +203,14 @@ main(int argc, const char **argv)
     ASSERT(drawn_paths(gedp, views[1]).size() == 0);
 
     ASSERT(draw_shared(gedp, "all.g") == BRLCAD_OK);
-    ASSERT(!bsg_view_is_independent(views[0]));
+    ASSERT(!rt_view_is_independent_bsg(views[0]));
     ASSERT(drawn_paths(gedp, views[0]).size() == 1);
     ASSERT(has_path(drawn_paths(gedp, views[0]), "all.g"));
     ASSERT(drawn_paths(gedp, views[1]).size() == 1);
 
     ASSERT(set_view_independent(gedp, "V0", 1) == BRLCAD_OK);
-    ASSERT(bsg_view_is_independent(views[0]));
-    ASSERT(!bsg_scene_ref_is_null(bsg_view_independent_scope_ref(views[0], 0)));
+    ASSERT(rt_view_is_independent_bsg(views[0]));
+    ASSERT(!bsg_scene_ref_is_null(rt_view_independent_scope_ref_bsg(views[0], 0)));
     ASSERT(drawn_paths(gedp, views[0]).size() == 1);
     ASSERT(has_path(drawn_paths(gedp, views[0]), "all.g"));
 
@@ -245,8 +245,8 @@ main(int argc, const char **argv)
     ASSERT(!has_path(drawn_paths(gedp, views[1]), "tor.r"));
 
     ASSERT(set_view_independent(gedp, "V0", 0) == BRLCAD_OK);
-    ASSERT(!bsg_view_is_independent(views[0]));
-    ASSERT(bsg_scene_ref_is_null(bsg_view_independent_scope_ref(views[0], 0)));
+    ASSERT(!rt_view_is_independent_bsg(views[0]));
+    ASSERT(bsg_scene_ref_is_null(rt_view_independent_scope_ref_bsg(views[0], 0)));
     ASSERT(drawn_paths(gedp, views[0]).size() == 2);
     ASSERT(has_path(drawn_paths(gedp, views[0]), "all.g"));
     ASSERT(has_path(drawn_paths(gedp, views[0]), "box.r"));

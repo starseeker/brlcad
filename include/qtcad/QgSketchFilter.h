@@ -49,7 +49,6 @@
 
 extern "C" {
 #include "vmath.h"
-#include "bsg.h"
 #include "rt/edit.h"
 #include "rt/primitives/sketch.h"
 #include "rt/rt_ecmds.h"

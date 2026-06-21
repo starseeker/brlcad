@@ -36,7 +36,6 @@
 #include <QSet>
 #include <QModelIndex>
 
-#include "bsg.h"
 #include "raytrace.h"
 #include "ged.h"
 #include "qtcad/QgModel.h"

@@ -100,7 +100,7 @@ mged_dm_adc_state_set(struct mged_dm *dm, const struct bsg_adc_state *adc)
 {
     if (!dm || !dm->dm_view_state || !dm->dm_view_state->vs_gvp)
 	return;
-    bsg_view_adc_set(dm->dm_view_state->vs_gvp, adc);
+    rt_view_adc_set_bsg(dm->dm_view_state->vs_gvp, adc);
 }
 
 int
@@ -700,7 +700,7 @@ dm_var_init(struct mged_state *s, struct mged_dm *target_dm)
     BU_ALLOC(view_state, struct _view_state);
     *view_state = *target_dm->dm_view_state;			/* struct copy */
     BU_ALLOC(view_state->vs_gvp, struct bsg_view);
-    bsg_view_init_copy(view_state->vs_gvp,
+    rt_view_init_copy_bsg(view_state->vs_gvp,
 	    target_dm->dm_view_state->vs_gvp,
 	    &s->gedp->ged_views);
     BU_GET(view_state->vs_gvp->callbacks, struct bu_ptbl);

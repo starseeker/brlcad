@@ -26,8 +26,6 @@
 #include "common.h"
 
 #include <stdlib.h>
-#include "bsg/util.h"
-#include "bsg/view_set.h"
 #include "ged/bsg_ged_draw.h"
 #include "rt/view_legacy_bsg.h"
 #include "../ged_private.h"
@@ -49,10 +47,10 @@ zap_has_independent_views(struct ged *gedp)
     if (!gedp)
 	return 0;
 
-    struct bu_ptbl *views = bsg_set_views(&gedp->ged_views);
+    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, i);
-	if (v && bsg_view_is_independent(v))
+	if (v && rt_view_is_independent_bsg(v))
 	    return 1;
     }
 
@@ -122,23 +120,23 @@ ged_zap2_core(struct ged *gedp, int argc, const char *argv[])
 	    return BRLCAD_ERROR;
 	}
 
-	v = bsg_set_find_view(&gedp->ged_views, bu_vls_cstr(&cvls));
+	v = rt_view_set_find_view_bsg(&gedp->ged_views, bu_vls_cstr(&cvls));
 	if (!v) {
 	    bu_vls_printf(gedp->ged_result_str, "Specified view %s not found\n", bu_vls_cstr(&cvls));
 	    bu_vls_free(&cvls);
 	    return BRLCAD_ERROR;
 	}
 
-	int flags = BSG_SOURCE_LOCAL;
-	if (clear_solid_objs && bsg_view_is_independent(v)) {
-	    flags |= BSG_SOURCE_DB;
+	int flags = RT_VIEW_CLEAR_LOCAL_BSG;
+	if (clear_solid_objs && rt_view_is_independent_bsg(v)) {
+	    flags |= RT_VIEW_CLEAR_DB_BSG;
 	    zap_draw_db_scope(gedp, v);
 	}
 
 	if (clear_view_objs)
-	    flags |= BSG_SOURCE_VIEW;
+	    flags |= RT_VIEW_CLEAR_VIEW_BSG;
 
-	if (!bsg_clear(v, flags))
+	if (!rt_view_clear_bsg(v, flags))
 	    rt_view_cleared_set_bsg(v, 1);
 
 	bu_vls_free(&cvls);
@@ -154,25 +152,25 @@ ged_zap2_core(struct ged *gedp, int argc, const char *argv[])
     if (clear_solid_objs && !full_canonical_clear)
 	cleared_shared_db = zap_draw_db_scope(gedp, NULL);
 
-    struct bu_ptbl *views = bsg_set_views(&gedp->ged_views);
+    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	v = (struct bsg_view *)BU_PTBL_GET(views, i);
-	if (bsg_view_is_independent(v) && !clear_all_views)
+	if (rt_view_is_independent_bsg(v) && !clear_all_views)
 	    continue;
 	int flags = 0;
 	if (clear_solid_objs) {
-	    flags |= BSG_SOURCE_DB;
+	    flags |= RT_VIEW_CLEAR_DB_BSG;
 	    if (!full_canonical_clear &&
-		    (bsg_view_is_independent(v) || !cleared_shared_db))
-		zap_draw_db_scope(gedp, bsg_view_is_independent(v) ? v : NULL);
+		    (rt_view_is_independent_bsg(v) || !cleared_shared_db))
+		zap_draw_db_scope(gedp, rt_view_is_independent_bsg(v) ? v : NULL);
 	}
 	if (clear_view_objs)
-	    flags |= BSG_SOURCE_VIEW;
-	int nret = bsg_clear(v, flags);
+	    flags |= RT_VIEW_CLEAR_VIEW_BSG;
+	int nret = rt_view_clear_bsg(v, flags);
 	int lret = 1;
 	if (!shared_only) {
-	    flags |= BSG_SOURCE_LOCAL;
-	    lret = bsg_clear(v, flags);
+	    flags |= RT_VIEW_CLEAR_LOCAL_BSG;
+	    lret = rt_view_clear_bsg(v, flags);
 	}
 	if (!nret || !lret)
 	    rt_view_cleared_set_bsg(v, 1);

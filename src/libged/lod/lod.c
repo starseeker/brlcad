@@ -31,7 +31,7 @@
 
 #include "rt/geom.h"
 
-#include "../bsg_ged_draw_private.h"
+#include "../bsg_ged_draw_view_private.h"
 #include "../ged_private.h"
 
 int

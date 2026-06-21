@@ -165,7 +165,7 @@ replot_modified_solid(
     }
     ged_draw_shape_set_highlighted(s->gedp, ref, 1);
 
-    mged_refresh_request_view(s, view_state, BSG_VIEW_REFRESH_VIEW);
+    mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
     return 0;
 }
 

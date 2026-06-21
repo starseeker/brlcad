@@ -19,9 +19,8 @@
  */
 /** @file CADViewSettings.h
  *
- * Widget for controlling and reflecting the current state of view
- * settings (faceplate elements).  Covers all fields in bsg_view_settings
- * and bsg_params_state that have widget-level controls.
+ * Widget for controlling and reflecting the current faceplate and view
+ * parameter state.
  *
  */
 
@@ -29,7 +28,6 @@
 #include <QGroupBox>
 #include <QCheckBox>
 #include <QComboBox>
-#include "bsg/defines.h"
 #include "qtcad/QgTypes.h"
 
 class QgPluginContext;

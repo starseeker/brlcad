@@ -34,6 +34,7 @@
 #include "brlcad_version.h"
 #include "bu/malloc.h"
 #include "bu/file.h"
+#include "bu/log.h"
 #include "bu/vls.h"
 #include "dm.h"
 #include "ged/bsg_ged_draw.h"
@@ -505,7 +506,6 @@ QgEdApp::do_quad_view_change(QgView *cv)
 void
 QgEdApp::do_view_changed(QgViewUpdateFlags flags)
 {
-    bsg_log(1, "QgEdApp::do_view_changed");
     QTCAD_SLOT("QgEdApp::do_view_changed", 1);
 
     if (flags & QG_VIEW_DRAWN) {
@@ -603,8 +603,9 @@ QgEdApp::run_cmd(struct bu_vls *msg, int argc, const char **argv)
     /* Set the local unit conversions */
     if (gedp->dbip) {
 	struct bsg_view *v = w->CurrentView();
-	v->gv_base2local = gedp->dbip->dbi_base2local;
-	v->gv_local2base = gedp->dbip->dbi_local2base;
+	rt_view_unit_conversion_set_bsg(v,
+	    gedp->dbip->dbi_local2base,
+	    gedp->dbip->dbi_base2local);
     }
 
     if (!tmp_av.size()) {

@@ -288,7 +288,7 @@ if(TARGET ged_test_snap_semantics)
     APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
 endif()
 
-brlcad_addexec(ged_test_measure_semantics "measure_semantics.cpp" "libbsg;libbu" TEST)
+brlcad_addexec(ged_test_measure_semantics "measure_semantics.cpp" "librt;libbsg;libbu" TEST)
 if(TARGET ged_test_measure_semantics)
   foreach(tdp ${test_deps})
     if (TARGET ${tdp})

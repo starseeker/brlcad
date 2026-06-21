@@ -24,9 +24,9 @@
  */
 
 #include "bu/getopt.h"
-#include "bsg/util.h"
 #include "ged.h"
 #include "ged/event_txn.h"
+#include "rt/view_legacy_bsg.h"
 
 
 int
@@ -214,7 +214,7 @@ ged_mirror_core(struct ged *gedp, int argc, const char *argv[])
 	const char *e_argv[2] = {"draw", NULL};
 	e_argv[1] = object;
 	(void)ged_exec_draw(gedp, 2, e_argv);
-	bsg_update(gedp->ged_gvp);
+	rt_view_update_bsg(gedp->ged_gvp);
     }
 
     if (event_batch_opened)

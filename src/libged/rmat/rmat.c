@@ -57,7 +57,7 @@ ged_rmat_core(struct ged *gedp, int argc, const char *argv[])
 	    return BRLCAD_ERROR;
 
 	rt_view_rotation_set_bsg(gedp->ged_gvp, rotation);
-	bsg_update(gedp->ged_gvp);
+	rt_view_update_bsg(gedp->ged_gvp);
 
 	return BRLCAD_OK;
     }

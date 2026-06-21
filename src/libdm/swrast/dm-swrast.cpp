@@ -39,9 +39,10 @@ extern "C" {
 #include "vmath.h"
 #include "bu.h"
 #include "bn.h"
-#include "bsg/defines.h"
 #include "dm.h"
 #include "dm/util.h"
+#include "rt/view.h"
+#include "rt/view_legacy_bsg.h"
 #include "../null/dm-Null.h"
 #include "../dm-gl.h"
 }
@@ -88,12 +89,13 @@ swrast_makeCurrent(struct dm *dmp)
     if (dmp->i->dm_debugLevel)
 	fprintf(stderr, "swrast_makeCurrent()\n");
 
-    width = (dmp->i->dm_width > 0) ? dmp->i->dm_width : ((pv->v->gv_width > 0) ? pv->v->gv_width : 512);
-    height = (dmp->i->dm_height > 0) ? dmp->i->dm_height : ((pv->v->gv_height > 0) ? pv->v->gv_height : 512);
+    int view_width = rt_view_width_from_bsg(pv->v);
+    int view_height = rt_view_height_from_bsg(pv->v);
+    width = (dmp->i->dm_width > 0) ? dmp->i->dm_width : ((view_width > 0) ? view_width : 512);
+    height = (dmp->i->dm_height > 0) ? dmp->i->dm_height : ((view_height > 0) ? view_height : 512);
     dmp->i->dm_width = width;
     dmp->i->dm_height = height;
-    pv->v->gv_width = width;
-    pv->v->gv_height = height;
+    rt_view_dimensions_set_bsg(pv->v, width, height);
 
     if (!OSMesaMakeCurrent(pv->ctx, pv->os_b, GL_UNSIGNED_BYTE, width, height)) {
 	fprintf(stderr, "OSMesaMakeCurrent failed!\n");
@@ -120,12 +122,13 @@ swrast_configureWin(struct dm *dmp, int UNUSED(force))
 	return BRLCAD_ERROR;
     }
 
-    int width = (dmp->i->dm_width > 0) ? dmp->i->dm_width : ((pv->v->gv_width > 0) ? pv->v->gv_width : 512);
-    int height = (dmp->i->dm_height > 0) ? dmp->i->dm_height : ((pv->v->gv_height > 0) ? pv->v->gv_height : 512);
+    int view_width = rt_view_width_from_bsg(pv->v);
+    int view_height = rt_view_height_from_bsg(pv->v);
+    int width = (dmp->i->dm_width > 0) ? dmp->i->dm_width : ((view_width > 0) ? view_width : 512);
+    int height = (dmp->i->dm_height > 0) ? dmp->i->dm_height : ((view_height > 0) ? view_height : 512);
     dmp->i->dm_width = width;
     dmp->i->dm_height = height;
-    pv->v->gv_width = width;
-    pv->v->gv_height = height;
+    rt_view_dimensions_set_bsg(pv->v, width, height);
 
     if (!width || !height) {
 	fprintf(stderr, "swrast_configureWin: Zero sized window\n");
@@ -228,12 +231,13 @@ swrast_open(void *ctx, void *UNUSED(interp), int argc, const char **argv)
     // Note - for Qt, dealing with GL_RGB data display was something of a pain.  This backend
     // was switched to RGBA to make it easier to display the output
     privars->ctx = OSMesaCreateContextExt(OSMESA_RGBA, 16, 0, 0, NULL);
-    int width = (!privars->v->gv_width) ? 512 : privars->v->gv_width;
-    int height = (!privars->v->gv_height) ? 512 : privars->v->gv_height;
+    int view_width = rt_view_width_from_bsg(privars->v);
+    int view_height = rt_view_height_from_bsg(privars->v);
+    int width = (view_width <= 0) ? 512 : view_width;
+    int height = (view_height <= 0) ? 512 : view_height;
     dmp->i->dm_width = width;
     dmp->i->dm_height = height;
-    privars->v->gv_width = width;
-    privars->v->gv_height = height;
+    rt_view_dimensions_set_bsg(privars->v, width, height);
     privars->os_b = bu_realloc(privars->os_b, width * height * sizeof(GLubyte)*4, "OSMesa rendering buffer");
     if (!OSMesaMakeCurrent(privars->ctx, privars->os_b, GL_UNSIGNED_BYTE, width, height)) {
 	fprintf(stderr, "OSMesaMakeCurrent failed!\n");
@@ -615,8 +619,8 @@ swrast_getDisplayImage(struct dm *dmp, unsigned char **image, int flip, int alph
     if (cbwidth != width || cbheight != height) {
 	fprintf(stderr, "swrast_getDisplayImage: DIM MISMATCH: dm=(%d,%d) OSMesa_buf=(%d,%d) gv=(%d,%d)\n",
 	       width, height, (int)cbwidth, (int)cbheight,
-	       pv->v ? pv->v->gv_width : -1,
-	       pv->v ? pv->v->gv_height : -1);
+	       pv->v ? rt_view_width_from_bsg(pv->v) : -1,
+	       pv->v ? rt_view_height_from_bsg(pv->v) : -1);
     } else {
 	fprintf(stderr, "swrast_getDisplayImage: dm=(%d,%d) OSMesa_buf=(%d,%d) [OK]\n",
 	       width, height, (int)cbwidth, (int)cbheight);
@@ -757,8 +761,8 @@ struct dm_impl dm_swrast_impl = {
     {0, 0, 0},			/* bg2 color */
     {0, 0, 0},			/* fg color */
     {255, 0, 0},/* geometry default color */
-    {BSG_VIEW_MIN, BSG_VIEW_MIN, BSG_VIEW_MIN},	/* clipmin */
-    {BSG_VIEW_MAX, BSG_VIEW_MAX, BSG_VIEW_MAX},	/* clipmax */
+    {RT_VIEW_MIN, RT_VIEW_MIN, RT_VIEW_MIN},	/* clipmin */
+    {RT_VIEW_MAX, RT_VIEW_MAX, RT_VIEW_MAX},	/* clipmax */
     0,				/* no debugging */
     0,				/* no perspective */
     1,				/* depth buffer is writable */

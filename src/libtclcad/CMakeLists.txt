@@ -41,6 +41,7 @@ set(
   view/lines.c
   view/refresh.c
   view/util.c
+  view_data.c
   wrapper.c
 )
 

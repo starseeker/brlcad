@@ -87,13 +87,20 @@ public:
 public slots:
 	void update_color(struct bu_color *);
 
+protected:
+	bool current_mouse_xy(int *sx, int *sy) const;
+
 private:
 	void clear_measure_overlay(struct bsg_view *v);
 	void update_measure_overlay(int point_count);
+	void update_current_mouse(QMouseEvent *m_e);
 
 	point_t p1 = VINIT_ZERO;
 	point_t p2 = VINIT_ZERO;
 	point_t p3 = VINIT_ZERO;
+	int current_mouse_x = 0;
+	int current_mouse_y = 0;
+	bool current_mouse_valid = false;
 	int obol_overlay_point_count = 0;
 	struct bu_color measure_color = BU_COLOR_YELLOW;
 };

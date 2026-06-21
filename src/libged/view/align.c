@@ -137,10 +137,12 @@ ged_align_core(struct ged *gedp, int argc, const char *argv[])
     // update eye
     point_t new_eye;
     VJOIN1(new_eye, align, -dist, dir);	// new_eye = align_pt - dist * dir
-    MAT_DELTAS_VEC_NEG(gedp->ged_gvp->gv_view2model, new_eye);
+    rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
+    MAT_DELTAS_VEC_NEG(view2model, new_eye);
+    rt_view_view2model_set_bsg(gedp->ged_gvp, view2model);
 
     // done. update the view
-    bsg_update(gedp->ged_gvp);
+    rt_view_update_bsg(gedp->ged_gvp);
 
     return BRLCAD_OK;
 }

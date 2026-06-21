@@ -101,7 +101,7 @@ ged_eye_core(struct ged *gedp, int argc, const char *argv[])
 
     /* First step:  put eye at view center (view 0, 0, 0) */
     rt_view_center_vec_set_bsg(gedp->ged_gvp, eye_model);
-    bsg_update(gedp->ged_gvp);
+    rt_view_update_bsg(gedp->ged_gvp);
 
     /* Second step:  put eye at view 0, 0, 1.
      * For eye to be at 0, 0, 1, the old 0, 0, -1 needs to become 0, 0, 0.
@@ -113,7 +113,7 @@ ged_eye_core(struct ged *gedp, int argc, const char *argv[])
 	MAT4X3PNT(new_cent, view2model, xlate);
     }
     rt_view_center_vec_set_bsg(gedp->ged_gvp, new_cent);
-    bsg_update(gedp->ged_gvp);
+    rt_view_update_bsg(gedp->ged_gvp);
 
     return BRLCAD_OK;
 }

@@ -129,7 +129,7 @@ public:
     virtual void get_obol_viewport_image(QImage &img) = 0;
 
     /**
-     * Request a canvas refresh using bsg/view_state.h BSG_VIEW_REFRESH_*
+     * Request a canvas refresh using rt/view_legacy_bsg.h RT_VIEW_REFRESH_*
      * flags.  This is the typed path used by QgView so migrated Obol state
      * sees the same semantic view/update requests as the legacy renderer.
      */

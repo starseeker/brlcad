@@ -272,7 +272,7 @@ rect_zoom(struct ged *gedp, struct bsg_interactive_rect_state *rect)
     rt_view_center_vec_set_bsg(gedp->ged_gvp, new_model_center);
     rt_view_scale_set_bsg(gedp->ged_gvp,
 	    rt_view_scale_from_bsg(gedp->ged_gvp) * sf);
-    bsg_update(gedp->ged_gvp);
+    rt_view_update_bsg(gedp->ged_gvp);
 
     return BRLCAD_OK;
 }

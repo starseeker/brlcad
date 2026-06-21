@@ -31,7 +31,6 @@
 #include "vmath.h"
 #include "bu/vls.h"
 #include "bn.h"
-#include "bsg.h"
 #include "icv.h"
 
 #include "./dm/defines.h"
@@ -59,6 +58,13 @@ __BEGIN_DECLS
 #  define DM_VALID_FONT_SIZE(_size) (5 <= (_size) && (_size) <= 12 && (_size) != 11)
 #  define DM_FONT_SIZE_TO_NAME(_size) (((_size) == 5) ? FONT5 : (((_size) == 6) ? FONT6 : (((_size) == 7) ? FONT7 : (((_size) == 8) ? FONT8 : (((_size) == 9) ? FONT9 : (((_size) == 10) ? FONT10 : FONT12))))))
 #endif
+
+struct bu_structparse;
+struct bu_structparse_map;
+struct bsg_adc_state;
+struct bsg_axes;
+struct bsg_grid_state;
+struct bsg_interactive_rect_state;
 
 /* This is how a parent application can pass a generic
  * hook function in when setting dm variables.  The dm_hook_data

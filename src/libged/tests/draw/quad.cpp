@@ -35,6 +35,7 @@
 #include <bsg/render_item.h>
 #include <icv.h>
 #include <rt/view.h>
+#include <rt/view_legacy_bsg.h>
 #define DM_WITH_RT
 #include <dm.h>
 #include <ged.h>
@@ -105,7 +106,7 @@ ged_changed_callback(struct db_i *dbip, struct directory *dp, int mode, void *u_
 void
 dm_refresh(struct ged *gedp, int vnum)
 {
-    struct bu_ptbl *views = bsg_set_views(&gedp->ged_views);
+    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
     struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, vnum);
     if (!v)
 	return;
@@ -180,12 +181,12 @@ img_cmp(int vnum, int id, struct ged *gedp, const char *cdir, bool clear, int so
 
     dm_refresh(gedp, vnum);
 
-    struct bu_ptbl *views = bsg_set_views(&gedp->ged_views);
+    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
     struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, vnum);
     if (!v)
 	bu_exit(EXIT_FAILURE, "Invalid view specifier: %d\n", vnum);
     struct dm *dmp = (struct dm *)v->dmp;
-    int cnum = (bsg_view_is_independent(v)) ? vnum : -1;
+    int cnum = rt_view_is_independent_bsg(v) ? vnum : -1;
 
     const char *s_av[4] = {NULL};
     s_av[0] = "screengrab";
@@ -367,7 +368,7 @@ vline(struct ged *gedp, int l_id, int x0, int y0, int z0, int x1, int y1, int z1
     bu_free(points, "feature points copy");
     bu_free(cmds, "feature command copy");
     int render_count = 0;
-    struct bu_ptbl *views = bsg_set_views(&gedp->ged_views);
+    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, i);
 	render_count += render_line_item_count(v, bu_vls_cstr(&lname));
@@ -501,7 +502,7 @@ main(int ac, char *av[]) {
     bu_setenv("DM_SWRAST", "1", 1);
 
     // We don't want the default GED views for this test
-    bsg_set_rm_view(&gedp->ged_views, NULL);
+    rt_view_set_remove_view_bsg(&gedp->ged_views, NULL);
 
     // Set callback so database changes notify public GED services.
     db_add_changed_clbk(gedp->dbip, &ged_changed_callback, (void *)gedp);
@@ -516,9 +517,9 @@ main(int ac, char *av[]) {
 	BU_GET(v, struct bsg_view);
 	if (!i)
 	    gedp->ged_gvp = v;
-	bsg_init(v, &gedp->ged_views);
+	rt_view_init_bsg(v, &gedp->ged_views);
 	bu_vls_sprintf(&v->gv_name, "V%zd", i);
-	bsg_set_add_view(&gedp->ged_views, v);
+	rt_view_set_add_view_bsg(&gedp->ged_views, v);
 	bu_ptbl_ins(&gedp->ged_free_views, (long *)v);
 
 	/* To generate images that will allow us to check if the drawing
@@ -545,12 +546,11 @@ main(int ac, char *av[]) {
 	fastf_t windowbounds[6] = { -1, 1, -1, 1, -100, 100 };
 	dm_set_win_bounds(dmp, windowbounds);
 
-	dm_set_vp(dmp, &v->gv_scale);
+	dm_set_vp(dmp, rt_view_scale_storage_from_bsg(v));
 	v->dmp = dmp;
-	v->gv_width = dm_get_width(dmp);
-	v->gv_height = dm_get_height(dmp);
-	v->gv_base2local = gedp->dbip->dbi_base2local;
-	v->gv_local2base = gedp->dbip->dbi_local2base;
+	rt_view_dimensions_set_bsg(v, dm_get_width(dmp), dm_get_height(dmp));
+	rt_view_unit_conversion_set_bsg(v, gedp->dbip->dbi_local2base,
+	    gedp->dbip->dbi_base2local);
 
 	// The default (fast) wireframe has some differences from
 	// the slower full OpenGL draw path - disable it for the
@@ -649,7 +649,7 @@ main(int ac, char *av[]) {
     /* Check view independent behavior - basic drawing */
     bu_log("Basic independent views drawing test - V1 active\n");
 
-    struct bu_ptbl *views = bsg_set_views(&gedp->ged_views);
+    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	set_independent(gedp, (int)i, 1);
     }

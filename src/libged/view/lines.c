@@ -33,13 +33,9 @@
 #include "bu/color.h"
 #include "bu/opt.h"
 #include "bu/vls.h"
-#include "bsg.h"
-#include "bsg/feature.h"
-#include "bsg/geometry.h"
-#include "bsg/hud.h"
-#include "bsg/overlay.h"
 
 #include "../ged_private.h"
+#include "../bsg_ged_draw_view_private.h"
 #include "./ged_view.h"
 
 int
@@ -57,8 +53,7 @@ _line_cmd_create(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    bsg_feature_ref ref = bsg_feature_find(gd->cv, gd->vobj);
-    if (!bsg_feature_ref_is_null(ref)) {
+    if (ged_draw_view_feature_exists(gd->cv, gd->vobj)) {
         bu_vls_printf(gedp->ged_result_str, "View feature named %s already exists\n", gd->vobj);
         return BRLCAD_ERROR;
     }
@@ -81,19 +76,11 @@ _line_cmd_create(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    ref = bsg_feature_create_lines(gd->cv, gd->vobj, gd->local_obj);
-    if (bsg_feature_ref_is_null(ref)) {
+    if (!ged_draw_view_lines_create_model_annotation(gd->cv, gd->vobj,
+	    gd->local_obj, p)) {
 	bu_vls_printf(gedp->ged_result_str, "Failed to create %s\n", gd->vobj);
 	return BRLCAD_ERROR;
     }
-    bsg_feature_overlay_register_owner(ref, NULL,
-	    BSG_OVERLAY_ROLE_MODEL,
-	    BSG_OVERLAY_CLASS_USER_ANNOTATION,
-	    BSG_OVERLAY_LC_PERSISTENT,
-	    BSG_OVERLAY_ORDER_MODEL,
-	    NULL, 0);
-    int cmd = BSG_GEOMETRY_LINE_MOVE;
-    bsg_feature_points_replace(ref, BSG_FEATURE_LINES, (const point_t *)&p, &cmd, 1);
 
     return BRLCAD_OK;
 }
@@ -113,8 +100,7 @@ _line_cmd_append(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    bsg_feature_ref ref = bsg_feature_find(gd->cv, gd->vobj);
-    if (bsg_feature_ref_is_null(ref)) {
+    if (!ged_draw_view_feature_exists(gd->cv, gd->vobj)) {
         bu_vls_printf(gedp->ged_result_str, "no view feature named %s\n", gd->vobj);
         return BRLCAD_ERROR;
     }
@@ -138,28 +124,8 @@ _line_cmd_append(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    point_t *points = NULL;
-    int *cmds = NULL;
-    size_t point_count = 0;
-    if (!bsg_feature_points_copy(ref, &points, &cmds, &point_count))
-	return BRLCAD_ERROR;
-    point_t *npoints = (point_t *)bu_calloc(point_count + 1, sizeof(point_t), "line append points");
-    int *ncmds = (int *)bu_calloc(point_count + 1, sizeof(int), "line append cmds");
-    for (size_t i = 0; i < point_count; i++) {
-	VMOVE(npoints[i], points[i]);
-	ncmds[i] = cmds ? cmds[i] : ((i == 0) ? BSG_GEOMETRY_LINE_MOVE : BSG_GEOMETRY_LINE_DRAW);
-    }
-    VMOVE(npoints[point_count], p);
-    ncmds[point_count] = BSG_GEOMETRY_LINE_DRAW;
-    int ret = bsg_feature_points_replace(ref, BSG_FEATURE_LINES, (const point_t *)npoints, ncmds, point_count + 1) ?
+    return ged_draw_view_lines_append_point(gd->cv, gd->vobj, p) ?
 	BRLCAD_OK : BRLCAD_ERROR;
-    if (points)
-	bu_free(points, "bsg feature points copy");
-    if (cmds)
-	bu_free(cmds, "bsg feature cmds copy");
-    bu_free(npoints, "line append points");
-    bu_free(ncmds, "line append cmds");
-    return ret;
 
 }
 

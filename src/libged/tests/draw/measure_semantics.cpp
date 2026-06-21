@@ -41,7 +41,8 @@
 #include <cmath>
 
 #include <bu.h>
-#include <bsg.h>
+#include "rt/view_legacy_bsg.h"
+#include "bsg/defines.h"
 #include "bsg/measure.h"
 #include "bsg/util.h"
 
@@ -67,8 +68,7 @@ main(int UNUSED(ac), char *av[])
      * ------------------------------------------------------------------ */
     struct bsg_view v;
     bsg_view_init(&v, NULL);
-    v.gv_width  = 512;
-    v.gv_height = 512;
+    rt_view_dimensions_set_bsg(&v, 512, 512);
 
     /* ------------------------------------------------------------------
      * Test 1: known distance.

@@ -31,7 +31,6 @@
 extern "C" {
 #include "bn/str.h"
 #include "bsg/defines.h"
-#include "bsg/util.h"
 #include "rt/view_legacy_bsg.h"
 }
 
@@ -84,96 +83,96 @@ int CADkeyPressEvent(struct bsg_view *v, int UNUSED(x_prev), int UNUSED(y_prev),
 	switch (k->key()) {
 	case 'A': {
 		struct bsg_adc_state adc;
-		if (!bsg_view_adc_get(v, &adc))
+		if (!rt_view_adc_from_bsg(&adc, v))
 			return 0;
 		adc.draw = !adc.draw;
-		bsg_view_adc_set(v, &adc);
+		rt_view_adc_set_bsg(v, &adc);
 		return 1;
 	}
 	case 'M': {
 		struct bsg_axes axes;
-		if (!bsg_view_model_axes_get(v, &axes))
+		if (!rt_view_model_axes_from_bsg(&axes, v))
 			return 0;
 		axes.draw = !axes.draw;
-		bsg_view_model_axes_set(v, &axes);
+		rt_view_model_axes_set_bsg(v, &axes);
 		return 1;
 	}
 	case 'V': {
 		struct bsg_axes axes;
-		if (!bsg_view_view_axes_get(v, &axes))
+		if (!rt_view_view_axes_from_bsg(&axes, v))
 			return 0;
 		axes.draw = !axes.draw;
-		bsg_view_view_axes_set(v, &axes);
+		rt_view_view_axes_set_bsg(v, &axes);
 		return 1;
 	}
 	case '2': {
 		vect_t aet_vec;
 		bn_decode_vect(aet_vec, "35 -25 0");
 		rt_view_aet_set_bsg(v, aet_vec);
-		bsg_update(v);
+		rt_view_update_bsg(v);
 		return 1;
 	}
 	case '3': {
 		vect_t aet_vec;
 		bn_decode_vect(aet_vec, "35 25 0");
 		rt_view_aet_set_bsg(v, aet_vec);
-		bsg_update(v);
+		rt_view_update_bsg(v);
 		return 1;
 	}
 	case '4': {
 		vect_t aet_vec;
 		bn_decode_vect(aet_vec, "45 45 0");
 		rt_view_aet_set_bsg(v, aet_vec);
-		bsg_update(v);
+		rt_view_update_bsg(v);
 		return 1;
 	}
 	case '5': {
 		vect_t aet_vec;
 		bn_decode_vect(aet_vec, "145 25 0");
 		rt_view_aet_set_bsg(v, aet_vec);
-		bsg_update(v);
+		rt_view_update_bsg(v);
 		return 1;
 	}
 	case '6': {
 		vect_t aet_vec;
 		bn_decode_vect(aet_vec, "215 25 0");
 		rt_view_aet_set_bsg(v, aet_vec);
-		bsg_update(v);
+		rt_view_update_bsg(v);
 		return 1;
 	}
 	case '7': {
 		vect_t aet_vec;
 		bn_decode_vect(aet_vec, "325 25 0");
 		rt_view_aet_set_bsg(v, aet_vec);
-		bsg_update(v);
+		rt_view_update_bsg(v);
 		return 1;
 	}
 	case 'F': {
 		vect_t aet_vec;
 		bn_decode_vect(aet_vec, "0 0 0");
 		rt_view_aet_set_bsg(v, aet_vec);
-		bsg_update(v);
+		rt_view_update_bsg(v);
 		return 1;
 	}
 	case 'T': {
 		vect_t aet_vec;
 		bn_decode_vect(aet_vec, "270 90 0");
 		rt_view_aet_set_bsg(v, aet_vec);
-		bsg_update(v);
+		rt_view_update_bsg(v);
 		return 1;
 	}
 	case 'B': {
 		vect_t aet_vec;
 		bn_decode_vect(aet_vec, "270 -90 0");
 		rt_view_aet_set_bsg(v, aet_vec);
-		bsg_update(v);
+		rt_view_update_bsg(v);
 		return 1;
 	}
 	case 'L': {
 		vect_t aet_vec;
 		bn_decode_vect(aet_vec, "90 0 0");
 		rt_view_aet_set_bsg(v, aet_vec);
-		bsg_update(v);
+		rt_view_update_bsg(v);
 		return 1;
 	}
 	case 'R': {
@@ -185,7 +184,7 @@ int CADkeyPressEvent(struct bsg_view *v, int UNUSED(x_prev), int UNUSED(y_prev),
 			bn_decode_vect(aet_vec, "270 0 0");
 		}
 		rt_view_aet_set_bsg(v, aet_vec);
-		bsg_update(v);
+		rt_view_update_bsg(v);
 		return 1;
 	}
 	default:
@@ -261,39 +260,39 @@ int CADmouseReleaseEvent(struct bsg_view *v, double x_press, double y_press, int
 
 	int dx = 1;
 	int dy = 1;
-	unsigned long long view_flags = BSG_IDLE;
+	unsigned long long view_flags = RT_VIEW_ADJUST_IDLE;
 
 	if (e->button() == Qt::LeftButton) {
 		//bu_log("Release Left\n");
-		if (mode != BSG_CENTER) {
-			view_flags = BSG_SCALE;
+		if (mode != RT_VIEW_ADJUST_CENTER) {
+			view_flags = RT_VIEW_ADJUST_SCALE;
 			dx = 10;
 			dy = 5;
 		}
 		else {
-			view_flags = BSG_CENTER;
+			view_flags = RT_VIEW_ADJUST_CENTER;
 			dx = (int)cx;
 			dy = (int)cy;
 		}
 	}
 	if (e->button() == Qt::RightButton) {
 		//bu_log("Release Right\n");
-		if (mode == BSG_CENTER)
+		if (mode == RT_VIEW_ADJUST_CENTER)
 			return 0;
-		view_flags = BSG_SCALE;
+		view_flags = RT_VIEW_ADJUST_SCALE;
 		dx = 1;
 		dy = 2;
 	}
 
 	if (e->button() == Qt::MiddleButton) {
 		//bu_log("Release Center\n");
-		view_flags = BSG_CENTER;
+		view_flags = RT_VIEW_ADJUST_CENTER;
 		dx = (int)cx;
 		dy = (int)cy;
 	}
 
 	point_t keypt = VINIT_ZERO;
-	return bsg_adjust(v, dx, dy, keypt, 0, view_flags);
+	return rt_view_adjust_bsg(v, dx, dy, keypt, 0, view_flags);
 }
 
 int CADmouseMoveEvent(struct bsg_view *v, int x_prev, int y_prev, QMouseEvent *e, int mode)
@@ -303,7 +302,7 @@ int CADmouseMoveEvent(struct bsg_view *v, int x_prev, int y_prev, QMouseEvent *e
 	if (!v)
 		return 0;
 
-	unsigned long long view_flags = BSG_IDLE;
+	unsigned long long view_flags = RT_VIEW_ADJUST_IDLE;
 
 	if (x_prev == -INT_MAX) {
 		//x_prev = e->x();
@@ -312,25 +311,25 @@ int CADmouseMoveEvent(struct bsg_view *v, int x_prev, int y_prev, QMouseEvent *e
 	}
 
 	view_flags = mode;
-	if (mode == BSG_CENTER)
-		view_flags = BSG_SCALE;
+	if (mode == RT_VIEW_ADJUST_CENTER)
+		view_flags = RT_VIEW_ADJUST_SCALE;
 
 	if (e->buttons().testFlag(Qt::LeftButton)) {
 		//bu_log("Left\n");
 
 		if (e->modifiers().testFlag(Qt::ControlModifier)) {
 			//bu_log("Ctrl+Left\n");
-			view_flags = BSG_ROT;
+			view_flags = RT_VIEW_ADJUST_ROT;
 		}
 
 		if (e->modifiers().testFlag(Qt::ShiftModifier)) {
 			//bu_log("Shift+Left\n");
-			view_flags = BSG_TRANS;
+			view_flags = RT_VIEW_ADJUST_TRANS;
 		}
 
 		if (e->modifiers().testFlag(Qt::ShiftModifier) && e->modifiers().testFlag(Qt::ControlModifier)) {
 			//bu_log("Ctrl+Shift+Left\n");
-			view_flags = BSG_SCALE;
+			view_flags = RT_VIEW_ADJUST_SCALE;
 		}
 	}
 
@@ -360,7 +359,7 @@ int CADmouseMoveEvent(struct bsg_view *v, int x_prev, int y_prev, QMouseEvent *e
 	int dy = e->position().y() - y_prev;
 #endif
 
-	if (view_flags == BSG_SCALE) {
+	if (view_flags == RT_VIEW_ADJUST_SCALE) {
 		// Build in some sensitivity to how much the mouse moved when doing
 		// a motion based scale
 		int mdelta = (abs(dx) > abs(dy)) ? dx : -dy;
@@ -380,17 +379,17 @@ int CADmouseMoveEvent(struct bsg_view *v, int x_prev, int y_prev, QMouseEvent *e
 	// TODO - the key point and the mode/flags are all hardcoded
 	// right now, but eventually for shift grips they will need to
 	// respond to the various mod keys.  The intent is to set flags
-	// based on which mod keys are set to allow bsg_adjust to
+	// based on which mod keys are set to allow rt_view_adjust_bsg to
 	// do the correct math.
 	point_t center;
 	mat_t view_center;
 	rt_view_center_from_bsg(view_center, v);
 	MAT_DELTAS_GET_NEG(center, view_center);
 
-	if (view_flags & (BSG_ROT | BSG_TRANS | BSG_SCALE))
+	if (view_flags & (RT_VIEW_ADJUST_ROT | RT_VIEW_ADJUST_TRANS | RT_VIEW_ADJUST_SCALE))
 		suspend_drag_bounds_update(v);
 
-	return bsg_adjust(v, dx, dy, center, 0, view_flags);
+	return rt_view_adjust_bsg(v, dx, dy, center, 0, view_flags);
 
 }
 
@@ -408,7 +407,7 @@ int CADwheelEvent(struct bsg_view *v, QWheelEvent *e)
 	int dy = 100;
 
 	point_t origin = VINIT_ZERO;
-	return bsg_adjust(v, dx, dy, origin, 0, BSG_SCALE);
+	return rt_view_adjust_bsg(v, dx, dy, origin, 0, RT_VIEW_ADJUST_SCALE);
 
 }
 

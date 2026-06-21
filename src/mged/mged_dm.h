@@ -409,7 +409,7 @@ mged_dm_adc_state_get(struct mged_dm *dm, struct bsg_adc_state *adc)
 {
     if (!dm || !dm->dm_view_state || !dm->dm_view_state->vs_gvp)
 	return 0;
-    return bsg_view_adc_get(dm->dm_view_state->vs_gvp, adc);
+    return rt_view_adc_from_bsg(adc, dm->dm_view_state->vs_gvp);
 }
 
 static inline int
@@ -417,7 +417,7 @@ mged_dm_grid_state_get(struct mged_dm *dm, struct bsg_grid_state *grid)
 {
     if (!dm || !dm->dm_view_state || !dm->dm_view_state->vs_gvp)
 	return 0;
-    return bsg_view_grid_get(dm->dm_view_state->vs_gvp, grid);
+    return rt_view_grid_from_bsg(grid, dm->dm_view_state->vs_gvp);
 }
 
 static inline void
@@ -425,7 +425,7 @@ mged_dm_grid_state_set(struct mged_dm *dm, const struct bsg_grid_state *grid)
 {
     if (!dm || !dm->dm_view_state || !dm->dm_view_state->vs_gvp)
 	return;
-    bsg_view_grid_set(dm->dm_view_state->vs_gvp, grid);
+    rt_view_grid_set_bsg(dm->dm_view_state->vs_gvp, grid);
 }
 
 static inline int

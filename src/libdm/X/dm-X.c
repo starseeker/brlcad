@@ -71,6 +71,7 @@
 #include "bn.h"
 #include "bsg/vlist.h"
 #include "dm.h"
+#include "rt/view.h"
 #include "../null/dm-Null.h"
 #include "./fb_X.h"
 #include "./dm-X.h"
@@ -2247,8 +2248,8 @@ struct dm_impl dm_X_impl = {
     {0, 0, 0},			/* bg2 color */
     {0, 0, 0},			/* fg color */
     {255, 0, 0},/* geometry default color */
-    {BSG_VIEW_MIN, BSG_VIEW_MIN, BSG_VIEW_MIN},	/* clipmin */
-    {BSG_VIEW_MAX, BSG_VIEW_MAX, BSG_VIEW_MAX},	/* clipmax */
+    {RT_VIEW_MIN, RT_VIEW_MIN, RT_VIEW_MIN},	/* clipmin */
+    {RT_VIEW_MAX, RT_VIEW_MAX, RT_VIEW_MAX},	/* clipmax */
     0,				/* no debugging */
     0,				/* no perspective */
     0,				/* depth buffer is not writable */

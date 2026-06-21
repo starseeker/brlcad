@@ -288,7 +288,7 @@ mged_center(struct mged_state *s, point_t center)
     av[4] = (char *)0;
     ged_exec_center(s->gedp, 4, (const char **)av);
     (void)mged_svbase(s);
-    mged_refresh_request_view(s, view_state, BSG_VIEW_REFRESH_VIEW);
+    mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
 }
 
 void

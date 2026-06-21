@@ -39,13 +39,13 @@
 #include "bu/color.h"
 #include "bu/opt.h"
 #include "bu/vls.h"
-#include "bsg.h"
+#include "bsg/appearance.h"
 #include "bsg/defines.h"
 #include "bsg/draw_source.h"
-#include "bsg/feature.h"
 #include "bsg/scene_object.h"
 
 #include "ged/view.h"
+#include "../bsg_ged_draw_view_private.h"
 #include "../ged_private.h"
 #include "./ged_view.h"
 
@@ -73,8 +73,7 @@ _gobjs_cmd_create(void *bs, int argc, const char **argv)
     }
     gd->vobj = argv[0];
 
-    bsg_feature_ref ref = bsg_feature_find(gedp->ged_gvp, argv[1]);
-    if (!bsg_feature_ref_is_null(ref)) {
+    if (ged_draw_view_feature_exists(v, argv[1])) {
 	bu_vls_printf(gedp->ged_result_str, "View feature %s already exists\n", argv[1]);
 	return BRLCAD_ERROR;
     }
@@ -114,10 +113,7 @@ _gobjs_cmd_create(void *bs, int argc, const char **argv)
     }
 
     /* Set up the toplevel object */
-    ref = bsg_feature_create_overlay(v, argv[1], 0);
-    if (bsg_feature_ref_is_null(ref))
-	return BRLCAD_ERROR;
-    bsg_scene_ref g_ref = bsg_feature_ref_as_scene(ref);
+    bsg_scene_ref g_ref = ged_draw_view_overlay_create(v, argv[1]);
     if (bsg_scene_ref_is_null(g_ref))
 	return BRLCAD_ERROR;
     ged_draw_shape_state *state = ged_draw_shape_ref_set_fullpath(g_ref, gedp, fp);
@@ -172,8 +168,8 @@ _gobjs_cmd_delete(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    if (!gd->vobj || bsg_feature_ref_is_null(bsg_feature_find(gd->cv, gd->vobj)) ||
-	    !bsg_feature_remove(gd->cv, gd->vobj)) {
+    if (!gd->vobj || !ged_draw_view_feature_exists(gd->cv, gd->vobj) ||
+	    !ged_draw_view_feature_remove(gd->cv, gd->vobj)) {
 	bu_vls_printf(gedp->ged_result_str, "No view feature named %s\n", gd->vobj ? gd->vobj : "");
 	return BRLCAD_ERROR;
     }

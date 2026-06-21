@@ -110,7 +110,7 @@ ged_lookat_core(struct ged *gedp, int argc, const char *argv[])
     VJOIN1(new_center, eye, -view_scale, dir);
     rt_view_center_vec_set_bsg(gedp->ged_gvp, new_center);
 
-    bsg_update(gedp->ged_gvp);
+    rt_view_update_bsg(gedp->ged_gvp);
 
     return BRLCAD_OK;
 }

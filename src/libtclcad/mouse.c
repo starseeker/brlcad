@@ -21,8 +21,8 @@
 #include "common.h"
 
 #include "bu/path.h"
-#include "bsg.h"
-#include "bsg/node.h"
+#include "bsg/defines.h"
+#include "bsg/feature.h"
 #include "rt/view_legacy_bsg.h"
 #include "tclcad.h"
 
@@ -47,6 +47,69 @@ tclcad_mouse_view_inv_rotation_from_bsg(mat_t inv_rotation, const struct bsg_vie
     bn_mat_inv(inv_rotation, view_rotation);
 }
 
+static void
+tclcad_mouse_previous_get_set(fastf_t *prev_x, fastf_t *prev_y,
+	struct bsg_view *gdvp, fastf_t x, fastf_t y)
+{
+    if (prev_x)
+	*prev_x = 0.0;
+    if (prev_y)
+	*prev_y = 0.0;
+    (void)rt_view_previous_mouse_from_bsg(prev_x, prev_y, gdvp);
+    (void)rt_view_previous_mouse_set_bsg(gdvp, x, y);
+}
+
+static void
+tclcad_mouse_delta_settings(struct rt_view_mouse_delta_settings *settings,
+	const struct bsg_view *gdvp)
+{
+    struct rt_view_mouse_delta_settings zero = RT_VIEW_MOUSE_DELTA_SETTINGS_INIT;
+
+    if (!settings)
+	return;
+
+    *settings = zero;
+    (void)rt_view_mouse_delta_settings_from_bsg(settings, gdvp);
+}
+
+static void
+tclcad_mouse_clamp_delta(fastf_t *dx, fastf_t *dy, const struct bsg_view *gdvp)
+{
+    struct rt_view_mouse_delta_settings settings = RT_VIEW_MOUSE_DELTA_SETTINGS_INIT;
+
+    if (!dx || !dy)
+	return;
+
+    tclcad_mouse_delta_settings(&settings, gdvp);
+    if (*dx < settings.min_delta)
+	*dx = settings.min_delta;
+    else if (settings.max_delta < *dx)
+	*dx = settings.max_delta;
+
+    if (*dy < settings.min_delta)
+	*dy = settings.min_delta;
+    else if (settings.max_delta < *dy)
+	*dy = settings.max_delta;
+}
+
+static fastf_t
+tclcad_mouse_rotate_scale(const struct bsg_view *gdvp)
+{
+    struct rt_view_mouse_delta_settings settings = RT_VIEW_MOUSE_DELTA_SETTINGS_INIT;
+
+    tclcad_mouse_delta_settings(&settings, gdvp);
+    return settings.rotate_scale;
+}
+
+static fastf_t
+tclcad_mouse_scale_scale(const struct bsg_view *gdvp)
+{
+    struct rt_view_mouse_delta_settings settings = RT_VIEW_MOUSE_DELTA_SETTINGS_INIT;
+
+    tclcad_mouse_delta_settings(&settings, gdvp);
+    return settings.scale_scale;
+}
+
 int
 to_get_prev_mouse(struct ged *gedp,
 		  int argc,
@@ -69,13 +132,16 @@ to_get_prev_mouse(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
     }
 
-    bu_vls_printf(gedp->ged_result_str, "%d %d", (int)gdvp->gv_prevMouseX, (int)gdvp->gv_prevMouseY);
+    fastf_t prev_x = 0.0;
+    fastf_t prev_y = 0.0;
+    (void)rt_view_previous_mouse_from_bsg(&prev_x, &prev_y, gdvp);
+    bu_vls_printf(gedp->ged_result_str, "%d %d", (int)prev_x, (int)prev_y);
     return BRLCAD_OK;
 }
 
@@ -110,7 +176,7 @@ to_mouse_append_pnt_common(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -132,7 +198,7 @@ to_mouse_append_pnt_common(struct ged *gedp,
     {
 	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
 	if (snap_kinds)
-	    bsg_snap_point_2d(gedp->ged_gvp, &view[X], &view[Y], snap_kinds);
+	    rt_view_snap_point_2d_bsg(gedp->ged_gvp, &view[X], &view[Y], snap_kinds);
     }
 
     bu_vls_printf(&pt_vls, "%lf %lf %lf", view[X], view[Y], view[Z]);
@@ -183,7 +249,7 @@ to_mouse_brep_selection_append(struct ged *gedp,
     }
 
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -207,8 +273,7 @@ to_mouse_brep_selection_append(struct ged *gedp,
     }
 
     /* stash point coordinates for future drag handling */
-    gdvp->gv_prevMouseX = screen_pt[X];
-    gdvp->gv_prevMouseY = screen_pt[Y];
+    rt_view_previous_mouse_set_bsg(gdvp, screen_pt[X], screen_pt[Y]);
 
     /* convert screen point to model-space start point and direction */
     tclcad_mouse_sync_dm_dimensions(gdvp);
@@ -298,7 +363,7 @@ to_mouse_brep_selection_translate(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -321,9 +386,12 @@ to_mouse_brep_selection_translate(struct ged *gedp,
     }
 
     /* convert screen-space delta to model-space delta */
+    fastf_t prev_x = 0.0;
+    fastf_t prev_y = 0.0;
+    (void)rt_view_previous_mouse_from_bsg(&prev_x, &prev_y, gdvp);
     tclcad_mouse_sync_dm_dimensions(gdvp);
     rt_view_screen_to_view_from_bsg(&view_start[X], &view_start[Y], gdvp,
-	    gdvp->gv_prevMouseX, gdvp->gv_prevMouseY);
+	    prev_x, prev_y);
     view_start[Z] = 1;
     rt_view_view2model_from_bsg(view2model, gdvp);
     MAT4X3PNT(model_start, view2model, view_start);
@@ -359,8 +427,7 @@ to_mouse_brep_selection_translate(struct ged *gedp,
     /* need to tell front-end that we've modified the db */
     tclcad_eval_noresult(current_top->to_interp, "$::ArcherCore::application setSave", 0, NULL);
 
-    gdvp->gv_prevMouseX = screen_end[X];
-    gdvp->gv_prevMouseY = screen_end[Y];
+    rt_view_previous_mouse_set_bsg(gdvp, screen_end[X], screen_end[Y]);
 
     cmd_argc = 2;
     cmd_argv[0] = "draw";
@@ -404,7 +471,7 @@ to_mouse_constrain_rot(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -422,24 +489,16 @@ to_mouse_constrain_rot(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    dx = x - gdvp->gv_prevMouseX;
-    dy = gdvp->gv_prevMouseY - y;
+    fastf_t prev_x = 0.0;
+    fastf_t prev_y = 0.0;
+    tclcad_mouse_previous_get_set(&prev_x, &prev_y, gdvp, x, y);
+    dx = x - prev_x;
+    dy = prev_y - y;
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
+    tclcad_mouse_clamp_delta(&dx, &dy, gdvp);
 
-    if (dx < gdvp->gv_minMouseDelta)
-	dx = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dx)
-	dx = gdvp->gv_maxMouseDelta;
-
-    if (dy < gdvp->gv_minMouseDelta)
-	dy = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dy)
-	dy = gdvp->gv_maxMouseDelta;
-
-    dx *= gdvp->gv_rscale;
-    dy *= gdvp->gv_rscale;
+    dx *= tclcad_mouse_rotate_scale(gdvp);
+    dy *= tclcad_mouse_rotate_scale(gdvp);
 
     if (fabs(dx) > fabs(dy))
 	sf = dx;
@@ -514,7 +573,7 @@ to_mouse_constrain_trans(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -531,21 +590,13 @@ to_mouse_constrain_trans(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    dx = x - gdvp->gv_prevMouseX;
-    dy = gdvp->gv_prevMouseY - y;
+    fastf_t prev_x = 0.0;
+    fastf_t prev_y = 0.0;
+    tclcad_mouse_previous_get_set(&prev_x, &prev_y, gdvp, x, y);
+    dx = x - prev_x;
+    dy = prev_y - y;
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-
-    if (dx < gdvp->gv_minMouseDelta)
-	dx = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dx)
-	dx = gdvp->gv_maxMouseDelta;
-
-    if (dy < gdvp->gv_minMouseDelta)
-	dy = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dy)
-	dy = gdvp->gv_maxMouseDelta;
+    tclcad_mouse_clamp_delta(&dx, &dy, gdvp);
 
     width = dm_get_width((struct dm *)gdvp->dmp);
     inv_width = 1.0 / (fastf_t)width;
@@ -620,7 +671,7 @@ to_mouse_find_arb_edge(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -682,7 +733,7 @@ to_mouse_find_bot_edge(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -743,7 +794,7 @@ to_mouse_find_bot_pnt(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -806,7 +857,7 @@ to_mouse_find_metaball_pnt(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -871,7 +922,7 @@ to_mouse_find_pipe_pnt(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -931,7 +982,7 @@ to_mouse_joint_select(
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -955,8 +1006,7 @@ to_mouse_joint_select(
     }
 
     /* stash point coordinates for future drag handling */
-    gdvp->gv_prevMouseX = screen_pt[X];
-    gdvp->gv_prevMouseY = screen_pt[Y];
+    rt_view_previous_mouse_set_bsg(gdvp, screen_pt[X], screen_pt[Y]);
 
     /* convert screen point to model-space start point and direction */
     tclcad_mouse_sync_dm_dimensions(gdvp);
@@ -1044,7 +1094,7 @@ to_mouse_joint_selection_translate(
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1067,9 +1117,12 @@ to_mouse_joint_selection_translate(
     }
 
     /* convert screen-space delta to model-space delta */
+    fastf_t prev_x = 0.0;
+    fastf_t prev_y = 0.0;
+    (void)rt_view_previous_mouse_from_bsg(&prev_x, &prev_y, gdvp);
     tclcad_mouse_sync_dm_dimensions(gdvp);
     rt_view_screen_to_view_from_bsg(&view_start[X], &view_start[Y], gdvp,
-	    gdvp->gv_prevMouseX, gdvp->gv_prevMouseY);
+	    prev_x, prev_y);
     view_start[Z] = 1;
     rt_view_view2model_from_bsg(view2model, gdvp);
     MAT4X3PNT(model_start, view2model, view_start);
@@ -1104,8 +1157,7 @@ to_mouse_joint_selection_translate(
     /* need to tell front-end that we've modified the db */
     Tcl_Eval(current_top->to_interp, "$::ArcherCore::application setSave");
 
-    gdvp->gv_prevMouseX = screen_end[X];
-    gdvp->gv_prevMouseY = screen_end[Y];
+    rt_view_previous_mouse_set_bsg(gdvp, screen_end[X], screen_end[Y]);
 
     cmd_argc = 3;
     cmd_argv[0] = "get";
@@ -1202,7 +1254,7 @@ to_mouse_move_arb_edge(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1214,21 +1266,13 @@ to_mouse_move_arb_edge(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    dx = x - gdvp->gv_prevMouseX;
-    dy = gdvp->gv_prevMouseY - y;
+    fastf_t prev_x = 0.0;
+    fastf_t prev_y = 0.0;
+    tclcad_mouse_previous_get_set(&prev_x, &prev_y, gdvp, x, y);
+    dx = x - prev_x;
+    dy = prev_y - y;
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-
-    if (dx < gdvp->gv_minMouseDelta)
-	dx = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dx)
-	dx = gdvp->gv_maxMouseDelta;
-
-    if (dy < gdvp->gv_minMouseDelta)
-	dy = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dy)
-	dy = gdvp->gv_maxMouseDelta;
+    tclcad_mouse_clamp_delta(&dx, &dy, gdvp);
 
     width = dm_get_width((struct dm *)gdvp->dmp);
     inv_width = 1.0 / (fastf_t)width;
@@ -1298,7 +1342,7 @@ to_mouse_move_arb_face(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1310,21 +1354,13 @@ to_mouse_move_arb_face(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    dx = x - gdvp->gv_prevMouseX;
-    dy = gdvp->gv_prevMouseY - y;
+    fastf_t prev_x = 0.0;
+    fastf_t prev_y = 0.0;
+    tclcad_mouse_previous_get_set(&prev_x, &prev_y, gdvp, x, y);
+    dx = x - prev_x;
+    dy = prev_y - y;
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-
-    if (dx < gdvp->gv_minMouseDelta)
-	dx = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dx)
-	dx = gdvp->gv_maxMouseDelta;
-
-    if (dy < gdvp->gv_minMouseDelta)
-	dy = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dy)
-	dy = gdvp->gv_maxMouseDelta;
+    tclcad_mouse_clamp_delta(&dx, &dy, gdvp);
 
     width = dm_get_width((struct dm *)gdvp->dmp);
     inv_width = 1.0 / (fastf_t)width;
@@ -1411,7 +1447,7 @@ to_mouse_move_bot_pnt(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1427,22 +1463,14 @@ to_mouse_move_bot_pnt(struct ged *gedp,
     inv_width = 1.0 / (fastf_t)width;
 
     if (rflag) {
-	dx = x - gdvp->gv_prevMouseX;
-	dy = gdvp->gv_prevMouseY - y;
+	fastf_t prev_x = 0.0;
+	fastf_t prev_y = 0.0;
+	tclcad_mouse_previous_get_set(&prev_x, &prev_y, gdvp, x, y);
+	dx = x - prev_x;
+	dy = prev_y - y;
 	dz = 0.0;
 
-	gdvp->gv_prevMouseX = x;
-	gdvp->gv_prevMouseY = y;
-
-	if (dx < gdvp->gv_minMouseDelta)
-	    dx = gdvp->gv_minMouseDelta;
-	else if (gdvp->gv_maxMouseDelta < dx)
-	    dx = gdvp->gv_maxMouseDelta;
-
-	if (dy < gdvp->gv_minMouseDelta)
-	    dy = gdvp->gv_minMouseDelta;
-	else if (gdvp->gv_maxMouseDelta < dy)
-	    dy = gdvp->gv_maxMouseDelta;
+	tclcad_mouse_clamp_delta(&dx, &dy, gdvp);
 
 	tclcad_mouse_view_inv_rotation_from_bsg(v2m_mat, gdvp);
 
@@ -1579,7 +1607,7 @@ to_mouse_move_bot_pnts(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1594,22 +1622,14 @@ to_mouse_move_bot_pnts(struct ged *gedp,
     width = dm_get_width((struct dm *)gdvp->dmp);
     inv_width = 1.0 / (fastf_t)width;
 
-    dx = x - gdvp->gv_prevMouseX;
-    dy = gdvp->gv_prevMouseY - y;
+    fastf_t prev_x = 0.0;
+    fastf_t prev_y = 0.0;
+    tclcad_mouse_previous_get_set(&prev_x, &prev_y, gdvp, x, y);
+    dx = x - prev_x;
+    dy = prev_y - y;
     dz = 0.0;
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-
-    if (dx < gdvp->gv_minMouseDelta)
-	dx = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dx)
-	dx = gdvp->gv_maxMouseDelta;
-
-    if (dy < gdvp->gv_minMouseDelta)
-	dy = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dy)
-	dy = gdvp->gv_maxMouseDelta;
+    tclcad_mouse_clamp_delta(&dx, &dy, gdvp);
 
     tclcad_mouse_view_inv_rotation_from_bsg(v2m_mat, gdvp);
 
@@ -1690,7 +1710,7 @@ to_mouse_move_pnt_common(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1702,21 +1722,13 @@ to_mouse_move_pnt_common(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    dx = x - gdvp->gv_prevMouseX;
-    dy = gdvp->gv_prevMouseY - y;
+    fastf_t prev_x = 0.0;
+    fastf_t prev_y = 0.0;
+    tclcad_mouse_previous_get_set(&prev_x, &prev_y, gdvp, x, y);
+    dx = x - prev_x;
+    dy = prev_y - y;
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-
-    if (dx < gdvp->gv_minMouseDelta)
-	dx = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dx)
-	dx = gdvp->gv_maxMouseDelta;
-
-    if (dy < gdvp->gv_minMouseDelta)
-	dy = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dy)
-	dy = gdvp->gv_maxMouseDelta;
+    tclcad_mouse_clamp_delta(&dx, &dy, gdvp);
 
     width = dm_get_width((struct dm *)gdvp->dmp);
     inv_width = 1.0 / (fastf_t)width;
@@ -1784,7 +1796,7 @@ to_mouse_orotate(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1796,24 +1808,16 @@ to_mouse_orotate(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    dx = y - gdvp->gv_prevMouseY;
-    dy = x - gdvp->gv_prevMouseX;
+    fastf_t prev_x = 0.0;
+    fastf_t prev_y = 0.0;
+    tclcad_mouse_previous_get_set(&prev_x, &prev_y, gdvp, x, y);
+    dx = y - prev_y;
+    dy = x - prev_x;
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
+    tclcad_mouse_clamp_delta(&dx, &dy, gdvp);
 
-    if (dx < gdvp->gv_minMouseDelta)
-	dx = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dx)
-	dx = gdvp->gv_maxMouseDelta;
-
-    if (dy < gdvp->gv_minMouseDelta)
-	dy = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dy)
-	dy = gdvp->gv_maxMouseDelta;
-
-    dx *= gdvp->gv_rscale;
-    dy *= gdvp->gv_rscale;
+    dx *= tclcad_mouse_rotate_scale(gdvp);
+    dy *= tclcad_mouse_rotate_scale(gdvp);
 
     VSET(view, dx, dy, 0.0);
     tclcad_mouse_view_inv_rotation_from_bsg(inv_rot, gdvp);
@@ -1891,7 +1895,7 @@ to_mouse_oscale(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1903,26 +1907,18 @@ to_mouse_oscale(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    dx = x - gdvp->gv_prevMouseX;
-    dy = gdvp->gv_prevMouseY - y;
+    fastf_t prev_x = 0.0;
+    fastf_t prev_y = 0.0;
+    tclcad_mouse_previous_get_set(&prev_x, &prev_y, gdvp, x, y);
+    dx = x - prev_x;
+    dy = prev_y - y;
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-
-    if (dx < gdvp->gv_minMouseDelta)
-	dx = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dx)
-	dx = gdvp->gv_maxMouseDelta;
-
-    if (dy < gdvp->gv_minMouseDelta)
-	dy = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dy)
-	dy = gdvp->gv_maxMouseDelta;
+    tclcad_mouse_clamp_delta(&dx, &dy, gdvp);
 
     width = dm_get_width((struct dm *)gdvp->dmp);
     inv_width = 1.0 / (fastf_t)width;
-    dx *= inv_width * gdvp->gv_sscale;
-    dy *= inv_width * gdvp->gv_sscale;
+    dx *= inv_width * tclcad_mouse_scale_scale(gdvp);
+    dy *= inv_width * tclcad_mouse_scale_scale(gdvp);
 
     if (fabs(dx) < fabs(dy))
 	sf = 1.0 + dy;
@@ -1998,7 +1994,7 @@ to_mouse_otranslate(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -2010,21 +2006,13 @@ to_mouse_otranslate(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    dx = x - gdvp->gv_prevMouseX;
-    dy = gdvp->gv_prevMouseY - y;
+    fastf_t prev_x = 0.0;
+    fastf_t prev_y = 0.0;
+    tclcad_mouse_previous_get_set(&prev_x, &prev_y, gdvp, x, y);
+    dx = x - prev_x;
+    dy = prev_y - y;
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-
-    if (dx < gdvp->gv_minMouseDelta)
-	dx = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dx)
-	dx = gdvp->gv_maxMouseDelta;
-
-    if (dy < gdvp->gv_minMouseDelta)
-	dy = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dy)
-	dy = gdvp->gv_maxMouseDelta;
+    tclcad_mouse_clamp_delta(&dx, &dy, gdvp);
 
     width = dm_get_width((struct dm *)gdvp->dmp);
     inv_width = 1.0 / (fastf_t)width;
@@ -2148,7 +2136,7 @@ to_mouse_poly_circ(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -2198,8 +2186,7 @@ to_mouse_poly_circ_func(Tcl_Interp *interp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
+    rt_view_previous_mouse_set_bsg(gdvp, x, y);
 
     tclcad_mouse_sync_dm_dimensions(gdvp);
     rt_view_screen_to_view_from_bsg(&fx, &fy, gdvp, x, y);
@@ -2208,7 +2195,7 @@ to_mouse_poly_circ_func(Tcl_Interp *interp,
     {
 	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
 	if (snap_kinds)
-	    bsg_snap_point_2d(gedp->ged_gvp, &fx, &fy, snap_kinds);
+	    rt_view_snap_point_2d_bsg(gedp->ged_gvp, &fx, &fy, snap_kinds);
     }
 
     bu_vls_printf(&plist, "{0 ");
@@ -2320,7 +2307,7 @@ to_mouse_poly_cont(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -2368,8 +2355,7 @@ to_mouse_poly_cont_func(Tcl_Interp *interp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
+    rt_view_previous_mouse_set_bsg(gdvp, x, y);
 
     tclcad_mouse_sync_dm_dimensions(gdvp);
     rt_view_screen_to_view_from_bsg(&fx, &fy, gdvp, x, y);
@@ -2460,7 +2446,7 @@ to_mouse_poly_ell(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -2510,8 +2496,7 @@ to_mouse_poly_ell_func(Tcl_Interp *interp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
+    rt_view_previous_mouse_set_bsg(gdvp, x, y);
 
 
     tclcad_mouse_sync_dm_dimensions(gdvp);
@@ -2521,7 +2506,7 @@ to_mouse_poly_ell_func(Tcl_Interp *interp,
     {
 	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
 	if (snap_kinds)
-	    bsg_snap_point_2d(gedp->ged_gvp, &fx, &fy, snap_kinds);
+	    rt_view_snap_point_2d_bsg(gedp->ged_gvp, &fx, &fy, snap_kinds);
     }
 
     bu_vls_printf(&plist, "{0 ");
@@ -2642,7 +2627,7 @@ to_mouse_poly_rect(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -2692,8 +2677,7 @@ to_mouse_poly_rect_func(Tcl_Interp *interp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
+    rt_view_previous_mouse_set_bsg(gdvp, x, y);
 
     tclcad_mouse_sync_dm_dimensions(gdvp);
     rt_view_screen_to_view_from_bsg(&fx, &fy, gdvp, x, y);
@@ -2702,7 +2686,7 @@ to_mouse_poly_rect_func(Tcl_Interp *interp,
     {
 	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
 	if (snap_kinds)
-	    bsg_snap_point_2d(gedp->ged_gvp, &fx, &fy, snap_kinds);
+	    rt_view_snap_point_2d_bsg(gedp->ged_gvp, &fx, &fy, snap_kinds);
     }
 
 
@@ -2799,7 +2783,7 @@ to_mouse_rect(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -2811,8 +2795,11 @@ to_mouse_rect(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    dx = x - gdvp->gv_prevMouseX;
-    dy = dm_get_height((struct dm *)gdvp->dmp) - y - gdvp->gv_prevMouseY;
+    fastf_t prev_x = 0.0;
+    fastf_t prev_y = 0.0;
+    (void)rt_view_previous_mouse_from_bsg(&prev_x, &prev_y, gdvp);
+    dx = x - prev_x;
+    dy = dm_get_height((struct dm *)gdvp->dmp) - y - prev_y;
 
     bu_vls_printf(&dx_vls, "%d", dx);
     bu_vls_printf(&dy_vls, "%d", dy);
@@ -2866,7 +2853,7 @@ to_mouse_rot(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -2878,24 +2865,16 @@ to_mouse_rot(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    dx = gdvp->gv_prevMouseY - y;
-    dy = gdvp->gv_prevMouseX - x;
+    fastf_t prev_x = 0.0;
+    fastf_t prev_y = 0.0;
+    tclcad_mouse_previous_get_set(&prev_x, &prev_y, gdvp, x, y);
+    dx = prev_y - y;
+    dy = prev_x - x;
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
+    tclcad_mouse_clamp_delta(&dx, &dy, gdvp);
 
-    if (dx < gdvp->gv_minMouseDelta)
-	dx = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dx)
-	dx = gdvp->gv_maxMouseDelta;
-
-    if (dy < gdvp->gv_minMouseDelta)
-	dy = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dy)
-	dy = gdvp->gv_maxMouseDelta;
-
-    dx *= gdvp->gv_rscale;
-    dy *= gdvp->gv_rscale;
+    dx *= tclcad_mouse_rotate_scale(gdvp);
+    dy *= tclcad_mouse_rotate_scale(gdvp);
 
     bu_vls_printf(&rot_vls, "%lf %lf 0", dx, dy);
 
@@ -2955,7 +2934,7 @@ to_mouse_rotate_arb_face(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -2967,24 +2946,16 @@ to_mouse_rotate_arb_face(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    dx = y - gdvp->gv_prevMouseY;
-    dy = x - gdvp->gv_prevMouseX;
+    fastf_t prev_x = 0.0;
+    fastf_t prev_y = 0.0;
+    tclcad_mouse_previous_get_set(&prev_x, &prev_y, gdvp, x, y);
+    dx = y - prev_y;
+    dy = x - prev_x;
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
+    tclcad_mouse_clamp_delta(&dx, &dy, gdvp);
 
-    if (dx < gdvp->gv_minMouseDelta)
-	dx = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dx)
-	dx = gdvp->gv_maxMouseDelta;
-
-    if (dy < gdvp->gv_minMouseDelta)
-	dy = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dy)
-	dy = gdvp->gv_maxMouseDelta;
-
-    dx *= gdvp->gv_rscale;
-    dy *= gdvp->gv_rscale;
+    dx *= tclcad_mouse_rotate_scale(gdvp);
+    dy *= tclcad_mouse_rotate_scale(gdvp);
 
     VSET(view, dx, dy, 0.0);
     tclcad_mouse_view_inv_rotation_from_bsg(inv_rot, gdvp);
@@ -3018,6 +2989,7 @@ to_mouse_rotate_arb_face(struct ged *gedp,
 	int _width; \
 	fastf_t _dx, _dy; \
 	fastf_t _inv_width; \
+	fastf_t _prev_x, _prev_y; \
 	fastf_t _sf; \
  \
 	/* must be double for scanf */ \
@@ -3037,7 +3009,7 @@ to_mouse_rotate_arb_face(struct ged *gedp,
 	    return BRLCAD_ERROR; \
 	} \
  \
-        gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]); \
+        gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]); \
         if (!gdvp) { \
 	    bu_vls_printf(gedp->ged_result_str, "View not found - %s", (_argv)[1]); \
 	    return BRLCAD_ERROR; \
@@ -3049,26 +3021,18 @@ to_mouse_rotate_arb_face(struct ged *gedp,
 	    return BRLCAD_ERROR; \
 	} \
  \
-	_dx = _x - (_gdvp)->gv_prevMouseX; \
-	_dy = (_gdvp)->gv_prevMouseY - _y; \
+	(void)rt_view_previous_mouse_from_bsg(&_prev_x, &_prev_y, (_gdvp)); \
+	_dx = _x - _prev_x; \
+	_dy = _prev_y - _y; \
  \
-	(_gdvp)->gv_prevMouseX = _x; \
-	(_gdvp)->gv_prevMouseY = _y; \
+	rt_view_previous_mouse_set_bsg((_gdvp), _x, _y); \
  \
-	if (_dx < (_gdvp)->gv_minMouseDelta) \
-	    _dx = (_gdvp)->gv_minMouseDelta; \
-	else if ((_gdvp)->gv_maxMouseDelta < _dx) \
-	    _dx = (_gdvp)->gv_maxMouseDelta; \
- \
-	if (_dy < (_gdvp)->gv_minMouseDelta) \
-	    _dy = (_gdvp)->gv_minMouseDelta; \
-	else if ((_gdvp)->gv_maxMouseDelta < _dy) \
-	    _dy = (_gdvp)->gv_maxMouseDelta; \
+	tclcad_mouse_clamp_delta(&_dx, &_dy, (_gdvp)); \
  \
 	_width = dm_get_width((struct dm *)(_gdvp)->dmp); \
 	_inv_width = 1.0 / (fastf_t)_width; \
-	_dx *= _inv_width * (_gdvp)->gv_sscale; \
-	_dy *= _inv_width * (_gdvp)->gv_sscale; \
+	_dx *= _inv_width * tclcad_mouse_scale_scale((_gdvp)); \
+	_dy *= _inv_width * tclcad_mouse_scale_scale((_gdvp)); \
  \
 	if (fabs(_dx) > fabs(_dy)) \
 	    _sf = 1.0 + _dx; \
@@ -3108,7 +3072,7 @@ to_data_scale(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -3279,7 +3243,7 @@ to_mouse_protate(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -3291,24 +3255,16 @@ to_mouse_protate(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    dx = y - gdvp->gv_prevMouseY;
-    dy = x - gdvp->gv_prevMouseX;
+    fastf_t prev_x = 0.0;
+    fastf_t prev_y = 0.0;
+    tclcad_mouse_previous_get_set(&prev_x, &prev_y, gdvp, x, y);
+    dx = y - prev_y;
+    dy = x - prev_x;
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
+    tclcad_mouse_clamp_delta(&dx, &dy, gdvp);
 
-    if (dx < gdvp->gv_minMouseDelta)
-	dx = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dx)
-	dx = gdvp->gv_maxMouseDelta;
-
-    if (dy < gdvp->gv_minMouseDelta)
-	dy = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dy)
-	dy = gdvp->gv_maxMouseDelta;
-
-    dx *= gdvp->gv_rscale;
-    dy *= gdvp->gv_rscale;
+    dx *= tclcad_mouse_rotate_scale(gdvp);
+    dy *= tclcad_mouse_rotate_scale(gdvp);
 
     VSET(view, dx, dy, 0.0);
     tclcad_mouse_view_inv_rotation_from_bsg(inv_rot, gdvp);
@@ -3369,7 +3325,7 @@ to_mouse_pscale(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -3381,26 +3337,18 @@ to_mouse_pscale(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    dx = x - gdvp->gv_prevMouseX;
-    dy = gdvp->gv_prevMouseY - y;
+    fastf_t prev_x = 0.0;
+    fastf_t prev_y = 0.0;
+    tclcad_mouse_previous_get_set(&prev_x, &prev_y, gdvp, x, y);
+    dx = x - prev_x;
+    dy = prev_y - y;
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-
-    if (dx < gdvp->gv_minMouseDelta)
-	dx = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dx)
-	dx = gdvp->gv_maxMouseDelta;
-
-    if (dy < gdvp->gv_minMouseDelta)
-	dy = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dy)
-	dy = gdvp->gv_maxMouseDelta;
+    tclcad_mouse_clamp_delta(&dx, &dy, gdvp);
 
     width = dm_get_width((struct dm *)gdvp->dmp);
     inv_width = 1.0 / (fastf_t)width;
-    dx *= inv_width * gdvp->gv_sscale;
-    dy *= inv_width * gdvp->gv_sscale;
+    dx *= inv_width * tclcad_mouse_scale_scale(gdvp);
+    dy *= inv_width * tclcad_mouse_scale_scale(gdvp);
 
     if (fabs(dx) < fabs(dy))
 	sf = 1.0 + dy;
@@ -3465,7 +3413,7 @@ to_mouse_ptranslate(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -3477,21 +3425,13 @@ to_mouse_ptranslate(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    dx = x - gdvp->gv_prevMouseX;
-    dy = gdvp->gv_prevMouseY - y;
+    fastf_t prev_x = 0.0;
+    fastf_t prev_y = 0.0;
+    tclcad_mouse_previous_get_set(&prev_x, &prev_y, gdvp, x, y);
+    dx = x - prev_x;
+    dy = prev_y - y;
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-
-    if (dx < gdvp->gv_minMouseDelta)
-	dx = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dx)
-	dx = gdvp->gv_maxMouseDelta;
-
-    if (dy < gdvp->gv_minMouseDelta)
-	dy = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dy)
-	dy = gdvp->gv_maxMouseDelta;
+    tclcad_mouse_clamp_delta(&dx, &dy, gdvp);
 
     width = dm_get_width((struct dm *)gdvp->dmp);
     inv_width = 1.0 / (fastf_t)width;
@@ -3558,7 +3498,7 @@ to_mouse_trans(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -3570,21 +3510,13 @@ to_mouse_trans(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    dx = gdvp->gv_prevMouseX - x;
-    dy = y - gdvp->gv_prevMouseY;
+    fastf_t prev_x = 0.0;
+    fastf_t prev_y = 0.0;
+    tclcad_mouse_previous_get_set(&prev_x, &prev_y, gdvp, x, y);
+    dx = prev_x - x;
+    dy = y - prev_y;
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-
-    if (dx < gdvp->gv_minMouseDelta)
-	dx = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dx)
-	dx = gdvp->gv_maxMouseDelta;
-
-    if (dy < gdvp->gv_minMouseDelta)
-	dy = gdvp->gv_minMouseDelta;
-    else if (gdvp->gv_maxMouseDelta < dy)
-	dy = gdvp->gv_maxMouseDelta;
+    tclcad_mouse_clamp_delta(&dx, &dy, gdvp);
 
     width = dm_get_width((struct dm *)gdvp->dmp);
     inv_width = 1.0 / (fastf_t)width;

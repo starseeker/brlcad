@@ -49,7 +49,6 @@
 #include "bsg/selection.h"
 #include "bsg/view_set.h"
 #include "bsg/view_state.h"
-#include "bsg/util.h"
 #include "bg/clip.h"
 
 #include "ged.h"

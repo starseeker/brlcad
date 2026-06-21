@@ -28,6 +28,7 @@
 #include "bu/units.h"
 #include "bsg/feature.h"
 #include "ged.h"
+#include "rt/view_legacy_bsg.h"
 #include "tclcad.h"
 
 /* Private headers */
@@ -108,7 +109,7 @@ to_data_labels(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;

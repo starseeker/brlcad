@@ -56,7 +56,6 @@
 
 #include "bu/app.h"
 #include "bu/str.h"
-#include "bsg/view_state.h"
 #include "rt/view_legacy_bsg.h"
 
 extern "C" {

@@ -44,9 +44,7 @@
 #include "bsg/scene_builder.h"
 #include "bsg/scene_object.h"
 #include "bsg/selection.h"
-#include "bsg/view_set.h"
 #include "bsg/view_state.h"
-#include "bsg/util.h"
 #include "bg/clip.h"
 
 #include "ged.h"
@@ -187,8 +185,8 @@ _sg_add_path(struct ged *gedp, const char *name)
 	return bsg_scene_ref_null();
 
     bsg_scene_ref base_ref = root_ref;
-    if (gedp->ged_gvp && bsg_view_is_independent(gedp->ged_gvp)) {
-	bsg_scene_ref scope_ref = bsg_view_independent_scope_ref(gedp->ged_gvp, 1);
+    if (gedp->ged_gvp && ged_draw_view_is_independent_bsg(gedp->ged_gvp)) {
+	bsg_scene_ref scope_ref = ged_draw_view_independent_scope_ref_bsg(gedp->ged_gvp, 1);
 	if (!bsg_scene_ref_is_null(scope_ref))
 	    base_ref = scope_ref;
     }
@@ -320,8 +318,8 @@ _sg_scoped_erase_base_ref(struct ged *gedp, struct bsg_view *v)
     if (!gedp)
 	return bsg_scene_ref_null();
 
-    if (v && bsg_view_is_independent(v))
-	return bsg_view_independent_scope_ref(v, 0);
+    if (v && ged_draw_view_is_independent_bsg(v))
+	return ged_draw_view_independent_scope_ref_bsg(v, 0);
 
     return ged_scene_root_ref(gedp);
 }
@@ -1498,13 +1496,13 @@ ged_draw_clear(struct ged *gedp)
     if (!gedp)
 	return;
 
-    struct bu_ptbl *views = bsg_set_views(&gedp->ged_views);
+    struct bu_ptbl *views = ged_draw_view_set_views_bsg(&gedp->ged_views);
     if (views) {
 	for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	    struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, i);
-	    if (!v || !bsg_view_is_independent(v))
+	    if (!v || !ged_draw_view_is_independent_bsg(v))
 		continue;
-	    bsg_scene_ref scope_ref = bsg_view_independent_scope_ref(v, 0);
+	    bsg_scene_ref scope_ref = ged_draw_view_independent_scope_ref_bsg(v, 0);
 	    (void)_sg_clear_all_groups_under(scope_ref);
 	}
     }

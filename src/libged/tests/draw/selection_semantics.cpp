@@ -40,10 +40,10 @@
 #include <cstring>
 
 #include <bu.h>
-#include <bsg.h>
 #include "bsg/interaction.h"
 #include "bsg/pick.h"
 #include "bsg/selection.h"
+#include "bsg/view_state.h"
 #include <ged.h>
 #include "rt/view_legacy_bsg.h"
 

@@ -30,7 +30,6 @@
 
 #include "vmath.h"
 #include "bsg/adc.h"
-#include "bsg/view_state.h"
 #include "ged.h"
 #include "rt/view.h"
 #include "rt/view_legacy_bsg.h"
@@ -176,11 +175,11 @@ ged_adc_core(struct ged *gedp,
     }
 
     struct bsg_adc_state adc;
-    if (!bsg_view_adc_get(gedp->ged_gvp, &adc))
+    if (!rt_view_adc_from_bsg(&adc, gedp->ged_gvp))
 	return BRLCAD_ERROR;
 #define ADC_COMMIT_RETURN(_ret) \
     do { \
-	bsg_view_adc_set(gedp->ged_gvp, &adc); \
+	rt_view_adc_set_bsg(gedp->ged_gvp, &adc); \
 	return (_ret); \
     } while (0)
 

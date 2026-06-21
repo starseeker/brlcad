@@ -27,6 +27,7 @@
 #include <fstream>
 
 #include <bu.h>
+#include "rt/view_legacy_bsg.h"
 #define DM_WITH_RT
 #include <dm.h>
 #include <ged.h>
@@ -295,12 +296,12 @@ main(int ac, char *av[]) {
 
     // TODO - these syncing operations need to happen whenever the dm size
     // changes - can they be done in dm_set_width/dm_set_height?
-    v->gv_width = dm_get_width(dmp);
-    v->gv_height = dm_get_height(dmp);
-    dm_set_vp(dmp, &v->gv_scale);
+    rt_view_dimensions_set_bsg(v, dm_get_width(dmp), dm_get_height(dmp));
+    dm_set_vp(dmp, rt_view_scale_storage_from_bsg(v));
 
-    v->gv_base2local = gedp->dbip->dbi_base2local;
-    v->gv_local2base = gedp->dbip->dbi_local2base;
+    rt_view_unit_conversion_set_bsg(v,
+	gedp->dbip->dbi_local2base,
+	gedp->dbip->dbi_base2local);
 
     // The default (fast) wireframe has some differences from
     // the slower full OpenGL draw path - disable it for the

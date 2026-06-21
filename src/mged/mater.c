@@ -53,7 +53,7 @@ mged_color_soltab(struct mged_state *s)
     struct ged_draw_transaction refresh =
 	ged_draw_transaction_make(GED_DRAW_TXN_REFRESH_MATERIAL_COLORS, NULL);
     ged_draw_apply_transaction(s->gedp, &refresh, NULL);
-    mged_refresh_request_all(s, BSG_VIEW_REFRESH_ALL);		/* re-write control list with new colors */
+    mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);		/* re-write control list with new colors */
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
 }
 

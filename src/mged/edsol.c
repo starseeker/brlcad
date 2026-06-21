@@ -176,7 +176,7 @@ set_e_axes_pos(struct mged_state *s, int both)
     const short earb5[9][18] = earb5_edit_array;
     const int local_arb_faces[5][24] = rt_arb_faces;
 
-    mged_refresh_request_all(s, BSG_VIEW_REFRESH_ALL);
+    mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
     switch (MEDIT(s)->es_int.idb_type) {
 	case ID_ARB8:
@@ -2441,13 +2441,13 @@ sedit(struct mged_state *s)
 	return;
 
     sedraw = 0;
-    mged_refresh_request_all(s, BSG_VIEW_REFRESH_ALL);
+    mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
 
     switch (MEDIT(s)->edit_flag) {
 
 	case IDLE:
 	    /* do nothing more */
-	    mged_refresh_request_all(s, BSG_VIEW_REFRESH_ALL);
+	    mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
 	    break;
 
 	case ECMD_DSP_SCALE_X:
@@ -3212,7 +3212,7 @@ sedit(struct mged_state *s)
 	    pr_prompt(s);
 	    fixv--;
 	    MEDIT(s)->edit_flag = ECMD_ARB_ROTATE_FACE;
-	    mged_refresh_request_view(s, view_state, BSG_VIEW_REFRESH_VIEW);	/* draw arrow, etc. */
+	    mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);	/* draw arrow, etc. */
 	    set_e_axes_pos(s, 1);
 	    break;
 
@@ -4264,7 +4264,7 @@ sedit(struct mged_state *s)
 		es_eu = (struct edgeuse *)NULL;
 
 		replot_editing_solid(s);
-		mged_refresh_request_view(s, view_state, BSG_VIEW_REFRESH_VIEW);
+		mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
 	    }
 	    break;
 	case ECMD_PIPE_PICK:
@@ -6151,7 +6151,7 @@ f_eqn(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
     replot_editing_solid(s);
 
     /* update display information */
-    mged_refresh_request_view(s, view_state, BSG_VIEW_REFRESH_VIEW);
+    mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
 
     return TCL_OK;
 }
@@ -7089,7 +7089,7 @@ sedit_vpick(struct mged_state *s, point_t v_pos)
 	get_solid_keypoint(s, MEDIT(s)->e_keypoint, &MEDIT(s)->e_keytag, &MEDIT(s)->es_int, MEDIT(s)->e_mat);
     }
     chg_state(s, ST_S_VPICK, ST_S_EDIT, "Vertex Pick Complete");
-    mged_refresh_request_view(s, view_state, BSG_VIEW_REFRESH_VIEW);
+    mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
 }
 
 
@@ -7225,7 +7225,7 @@ f_keypoint(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv
 	    return TCL_ERROR;
     }
 
-    mged_refresh_request_view(s, view_state, BSG_VIEW_REFRESH_VIEW);
+    mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
     return TCL_OK;
 }
 
@@ -7648,7 +7648,7 @@ f_sedit_reset(ClientData clientData, Tcl_Interp *interp, int argc, const char *U
     VSETALL(MEDIT(s)->k.tra_v, 0.0);
 
     set_e_axes_pos(s, 1);
-    mged_refresh_request_all(s, BSG_VIEW_REFRESH_ALL);
+    mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
 
     /* active edit callback */
@@ -7713,7 +7713,7 @@ f_oedit_reset(ClientData clientData, Tcl_Interp *interp, int argc, const char *U
     init_oedit_guts(s);
 
     new_edit_mats(s);
-    mged_refresh_request_all(s, BSG_VIEW_REFRESH_ALL);
+    mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
 
     /* active edit callback */
@@ -7752,7 +7752,7 @@ f_oedit_apply(ClientData clientData, Tcl_Interp *interp, int UNUSED(argc), const
     get_solid_keypoint(s, MEDIT(s)->e_keypoint, &strp, &MEDIT(s)->es_int, MEDIT(s)->e_mat);
     init_oedit_vars(s);
     new_edit_mats(s);
-    mged_refresh_request_all(s, BSG_VIEW_REFRESH_ALL);
+    mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
 
     /* active edit callback */

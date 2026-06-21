@@ -31,10 +31,7 @@
 #include <string.h>
 
 #include "bn.h"
-#include "bsg/export.h"
-#include "bsg/field.h"
 #include "bg/plot3.h"
-#include "bsg/render.h"
 #include "bg/clip.h"
 #include "rt/view.h"
 #include "rt/view_legacy_bsg.h"
@@ -64,7 +61,7 @@ struct plot_data {
 };
 
 struct plot_segment_data {
-    const struct bsg_export_record *rec;
+    const struct ged_draw_view_db_object_record *rec;
     struct plot_data *pd;
 };
 
@@ -116,13 +113,14 @@ plot_integer_segment_cb(const point_t a, const point_t b, void *data)
 }
 
 /* Callback for floating-point 3D plot */
-static void
-plot_floating_record(const struct bsg_export_record *rec, struct plot_data *pd)
+static int
+plot_floating_record(const struct ged_draw_view_db_object_record *rec, void *data)
 {
+    struct plot_data *pd = (struct plot_data *)data;
     if (!rec || !pd)
-	return;
-    if (!bsg_export_record_has_segments(rec))
-	return;
+	return 1;
+    if (!ged_draw_view_db_object_record_has_segments(rec))
+	return 1;
 
     pl_color(pd->fp, rec->color[0], rec->color[1], rec->color[2]);
     if (pd->Dashing != rec->line_style) {
@@ -135,17 +133,20 @@ plot_floating_record(const struct bsg_export_record *rec, struct plot_data *pd)
     struct plot_segment_data sd;
     sd.rec = rec;
     sd.pd = pd;
-    (void)bsg_export_record_foreach_segment(rec, plot_floating_segment_cb, &sd);
+    (void)ged_draw_view_db_object_record_foreach_segment(rec,
+	    plot_floating_segment_cb, &sd);
+    return 1;
 }
 
 /* Callback for integer plot (2D or 3D) */
-static void
-plot_integer_record(const struct bsg_export_record *rec, struct plot_data *pd)
+static int
+plot_integer_record(const struct ged_draw_view_db_object_record *rec, void *data)
 {
+    struct plot_data *pd = (struct plot_data *)data;
     if (!rec || !pd)
-	return;
-    if (!bsg_export_record_has_segments(rec))
-	return;
+	return 1;
+    if (!ged_draw_view_db_object_record_has_segments(rec))
+	return 1;
 
     if (pd->Dashing != rec->line_style) {
 	if (rec->line_style)
@@ -158,7 +159,9 @@ plot_integer_record(const struct bsg_export_record *rec, struct plot_data *pd)
     struct plot_segment_data sd;
     sd.rec = rec;
     sd.pd = pd;
-    (void)bsg_export_record_foreach_segment(rec, plot_integer_segment_cb, &sd);
+    (void)ged_draw_view_db_object_record_foreach_segment(rec,
+	    plot_integer_segment_cb, &sd);
+    return 1;
 }
 
 void
@@ -175,14 +178,6 @@ dl_plot(struct ged *gedp, FILE *fp, mat_t model2view, int floating, mat_t center
     pd.Z_clip = Z_clip;
     pd.Dashing = 0;
 
-    struct bsg_export_request request;
-    bsg_export_request_init(&request, gedp->ged_gvp);
-    request.query_flags = BSG_EXPORT_QUERY_VISIBLE_ONLY;
-    request.render_flags = BSG_RENDER_FLAG_VISIBLE_ONLY | BSG_RENDER_FLAG_PAYLOAD_PREPARE;
-    struct bsg_export_result *result = bsg_export_query(&request);
-    if (!result)
-	return;
-
     if (floating) {
 	pd_3space(fp,
 		  -center[MDX] - scale,
@@ -192,9 +187,8 @@ dl_plot(struct ged *gedp, FILE *fp, mat_t model2view, int floating, mat_t center
 		  -center[MDY] + scale,
 		  -center[MDZ] + scale);
 	pl_linmod(fp, "solid");
-	for (size_t i = 0; i < bsg_export_result_count(result); i++)
-	    plot_floating_record(bsg_export_result_get(result, i), &pd);
-	bsg_export_result_free(result);
+	ged_draw_foreach_visible_view_record(gedp->ged_gvp,
+		plot_floating_record, &pd);
 	return;
     }
 
@@ -222,9 +216,8 @@ dl_plot(struct ged *gedp, FILE *fp, mat_t model2view, int floating, mat_t center
 	pl_space(fp, (int)RT_VIEW_MIN, (int)RT_VIEW_MIN, (int)RT_VIEW_MAX, (int)RT_VIEW_MAX);
     pl_erase(fp);
     pl_linmod(fp, "solid");
-    for (size_t i = 0; i < bsg_export_result_count(result); i++)
-	plot_integer_record(bsg_export_result_get(result, i), &pd);
-    bsg_export_result_free(result);
+    ged_draw_foreach_visible_view_record(gedp->ged_gvp,
+	    plot_integer_record, &pd);
 }
 
 

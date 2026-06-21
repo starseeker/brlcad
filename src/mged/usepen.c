@@ -29,8 +29,6 @@
 
 #include "vmath.h"
 #include "bn.h"
-#include "bsg/interaction.h"
-#include "bsg/selection.h"
 #include "ged/view.h"
 #include "rt/view.h"
 #include "rt/view_legacy_bsg.h"
@@ -82,29 +80,6 @@ mged_highlight_clear(struct mged_state *s)
     mged_highlight_set_shape_ref(s, GED_DRAW_SHAPE_REF_NULL);
 }
 
-static void
-_mged_selection_set_highlighted_ref(struct mged_state *s, struct bsg_view *gvp, ged_draw_shape_ref ref)
-{
-    struct bsg_selection *selection = bsg_view_selection(gvp);
-
-    if (!selection)
-	return;
-
-    struct bsg_interaction_result *result = bsg_interaction_result_create();
-    if (!result)
-	return;
-    if (!ged_draw_shape_ref_is_null(ref)) {
-	struct bsg_interaction_record *record =
-	    ged_draw_shape_interaction_record(s->gedp, ref, BSG_INTERACTION_HIGHLIGHTED_REF);
-	if (record)
-	    bsg_interaction_result_append(result, record);
-    }
-    bsg_interaction_selection_apply(selection, result,
-	    BSG_INTERACTION_APPLY_SET);
-    bsg_interaction_result_free(result);
-}
-
-
 /* Callback: select the shape at position 'count' in display order. */
 struct _highlight_pick_data {
     int count;
@@ -149,9 +124,10 @@ highlight_from_y(struct mged_state *s, int y) {
     /* Mirror the highlighted shape into the view interaction selection so
      * highlight rendering and resolved appearance see a typed record rather
      * than only the legacy global. */
-    _mged_selection_set_highlighted_ref(s, view_state->vs_gvp, mged_highlight.shape);
+    (void)ged_draw_view_selection_set_highlighted_shape_ref(s->gedp,
+	    view_state->vs_gvp, mged_highlight.shape);
 
-    mged_refresh_request_all(s, BSG_VIEW_REFRESH_ALL);
+    mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
 }
 
@@ -220,10 +196,11 @@ f_aip(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 
     /* Keep interaction selection in sync with the highlighted draw ref. */
     {
-	_mged_selection_set_highlighted_ref(s, view_state->vs_gvp, mged_highlight.shape);
+	(void)ged_draw_view_selection_set_highlighted_shape_ref(s->gedp,
+		view_state->vs_gvp, mged_highlight.shape);
     }
 
-    mged_refresh_request_all(s, BSG_VIEW_REFRESH_ALL);
+    mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
     return TCL_OK;
 }
@@ -359,7 +336,7 @@ f_matpick(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[
 	init_oedit(s);
     }
 
-    mged_refresh_request_all(s, BSG_VIEW_REFRESH_ALL);
+    mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
     return TCL_OK;
 }
@@ -513,7 +490,7 @@ f_mouse(
 		highlight_path_pos = hrec.fullpath->fp_len-1 - (
 			(ypos+(int)RT_VIEW_MAX) * (hrec.fullpath->fp_len) / (int)RT_VIEW_RANGE);
 	    if (highlight_path_pos != isave)
-		mged_refresh_request_view(s, view_state, BSG_VIEW_REFRESH_VIEW);
+		mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
 	    return TCL_OK;
 
     } else switch (s->global_editing_state) {
@@ -529,13 +506,13 @@ f_mouse(
 	case ST_O_PICK:
 	    highlight_path_pos = 0;
 	    (void)chg_state(s, ST_O_PICK, ST_O_PATH, "mouse press");
-	    mged_refresh_request_view(s, view_state, BSG_VIEW_REFRESH_VIEW);
+	    mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
 	    return TCL_OK;
 
 	case ST_S_PICK:
 	    /* Check details, Init menu, set state */
 	    init_sedit(s);		/* does chg_state */
-	    mged_refresh_request_view(s, view_state, BSG_VIEW_REFRESH_VIEW);
+	    mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
 	    return TCL_OK;
 
 	case ST_S_EDIT:

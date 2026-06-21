@@ -26,7 +26,6 @@
 #include "common.h"
 
 #include "bu/env.h"
-#include "bsg/util.h"
 #include "ged.h"
 #include "qtcad/QgViewCtrl.h"
 #include "qtcad/QgSignalFlags.h"
@@ -68,28 +67,28 @@ void
 QgViewCtrl::sca_mode()
 {
 	QTCAD_SLOT("QgViewCtrl::sca_mode", 1);
-	emit lmouse_mode(BSG_SCALE);
+	emit lmouse_mode(RT_VIEW_ADJUST_SCALE);
 }
 
 void
 QgViewCtrl::rot_mode()
 {
 	QTCAD_SLOT("QgViewCtrl::rot_mode", 1);
-	emit lmouse_mode(BSG_ROT);
+	emit lmouse_mode(RT_VIEW_ADJUST_ROT);
 }
 
 void
 QgViewCtrl::tra_mode()
 {
 	QTCAD_SLOT("QgViewCtrl::tra_mode", 1);
-	emit lmouse_mode(BSG_TRANS);
+	emit lmouse_mode(RT_VIEW_ADJUST_TRANS);
 }
 
 void
 QgViewCtrl::center_mode()
 {
 	QTCAD_SLOT("QgViewCtrl::center_mode", 1);
-	emit lmouse_mode(BSG_CENTER);
+	emit lmouse_mode(RT_VIEW_ADJUST_CENTER);
 }
 
 

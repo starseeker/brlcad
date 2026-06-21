@@ -95,7 +95,7 @@ ged_eye_pos_core(struct ged *gedp, int argc, const char *argv[])
     mike_persp_mat(pmat, view_eye_pos);
     rt_view_pmat_set_bsg(gedp->ged_gvp, pmat);
 
-    bsg_update(gedp->ged_gvp);
+    rt_view_update_bsg(gedp->ged_gvp);
 
     return BRLCAD_OK;
 }

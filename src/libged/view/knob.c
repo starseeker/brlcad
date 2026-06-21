@@ -66,8 +66,9 @@ ged_knob_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     /* Make sure the view coordinate conversion values match the database */
     struct bsg_view *v = gedp->ged_gvp;
-    v->gv_local2base = (gedp->dbip) ? gedp->dbip->dbi_local2base : 1.0;
-    v->gv_base2local = (gedp->dbip) ? gedp->dbip->dbi_base2local : 1.0;
+    rt_view_unit_conversion_set_bsg(v,
+	(gedp->dbip) ? gedp->dbip->dbi_local2base : 1.0,
+	(gedp->dbip) ? gedp->dbip->dbi_base2local : 1.0);
 
     static const char *usage =
 	"knob [options] x # y # z # for rotation in degrees (may specify one or more of x, y, z)\n"
@@ -137,7 +138,7 @@ ged_knob_core(struct ged *gedp, int argc, const char *argv[])
 		BU_STR_EQUAL(cmd, "clear") || BU_STR_EQUAL(cmd, "stop")) {
 	    // Per MGED, this command seems to reset the rate entries
 	    // but not the absolute entries.
-	    bsg_knobs_reset(&v->k, BSG_KNOBS_RATE);
+	    rt_view_knobs_reset_bsg(v, RT_VIEW_KNOBS_RATE_BSG);
 	    continue;
 	}
 	if (BU_STR_EQUAL(cmd, "calibrate")) {
@@ -170,7 +171,7 @@ ged_knob_core(struct ged *gedp, int argc, const char *argv[])
 	--argc;	++argv;
 
 	// Process the actual command
-	int kp_ret = bsg_knobs_cmd_process(
+	int kp_ret = rt_view_knobs_cmd_process_bsg(
 		&rvec, &do_rot, &tvec, &do_tran,
 		v, cmd, f,
 		origin, model_flag, incr_flag);
@@ -182,7 +183,7 @@ ged_knob_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     if (do_tran) {
-	bsg_knobs_tran(v, tvec, model_flag);
+	rt_view_knobs_translate_bsg(v, tvec, model_flag);
     }
 
     if (do_rot) {
@@ -193,10 +194,10 @@ ged_knob_core(struct ged *gedp, int argc, const char *argv[])
 	    rt_view_keypoint_from_bsg(keypoint, gedp->ged_gvp);
 
 	// Note - we don't (currently) support 'o' coords here, so the obj_rot matrix is always NULL.
-	bsg_knobs_rot(v, rvec, origin, (model_flag ? 'm' : 'v'), NULL, pvt_pt);
+	rt_view_knobs_rotate_bsg(v, rvec, origin, (model_flag ? 'm' : 'v'), NULL, pvt_pt);
     }
 
-    bsg_update_rate_flags(v);
+    rt_view_knobs_update_rate_flags_bsg(v);
 
     return BRLCAD_OK;
 }

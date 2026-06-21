@@ -27,7 +27,9 @@
 
 extern "C" {
 #include "bu/malloc.h"
-#include "bsg.h"
+#include "bsg/interaction.h"
+#include "bsg/pick.h"
+#include "bsg/selection.h"
 #include "raytrace.h"
 #include "rt/view_legacy_bsg.h"
 }
@@ -40,6 +42,21 @@ extern "C" {
 #include "qtcad/QgObolPick.h"
 #include "qtcad/QgSelectFilter.h"
 #include "qtcad/QgSignalFlags.h"
+
+static void
+qg_select_mouse_xy(QMouseEvent *m_e, int *sx, int *sy)
+{
+    if (!m_e || !sx || !sy)
+	return;
+
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+    *sx = m_e->x();
+    *sy = m_e->y();
+#else
+    *sx = (int)m_e->position().x();
+    *sy = (int)m_e->position().y();
+#endif
+}
 
 class QgSelectFilter::QgSelectFilterPrivate {
 public:
@@ -184,7 +201,7 @@ QgSelectFilter::set_selected_result(struct bsg_view *v, void *res)
 	}
     }
 
-    struct bsg_selection *selection = bsg_view_selection(v);
+    struct bsg_selection *selection = rt_view_selection_bsg(v);
     if (selection) {
 	if (m->selected_interactions) {
 	    bsg_interaction_selection_apply(selection,
@@ -205,7 +222,7 @@ QgSelectFilter::set_selected_paths(struct bsg_view *v, const std::vector<std::st
     for (const std::string &path : paths)
 	_qg_append_unique_path(m->selected_path_strings, path.c_str());
 
-    struct bsg_selection *selection = bsg_view_selection(v);
+    struct bsg_selection *selection = rt_view_selection_bsg(v);
     if (selection)
 	bsg_selection_clear(selection);
 }
@@ -226,9 +243,12 @@ QgSelectPntFilter::eventFilter(QObject *, QEvent *e)
     if (!v)
 	return true;
 
+    int sx = 0, sy = 0;
+    qg_select_mouse_xy(m_e, &sx, &sy);
+
     std::vector<QgObolPickRecord> obolPicks;
     int submittedSourceRequests = 0;
-    if (qg_obol_pick_point(view_widget(), v->gv_mouse_x, v->gv_mouse_y,
+    if (qg_obol_pick_point(view_widget(), sx, sy,
 	    6.0f, !first_only, obolPicks,
 	    &submittedSourceRequests) > 0) {
 	std::vector<std::string> paths;
@@ -244,8 +264,8 @@ QgSelectPntFilter::eventFilter(QObject *, QEvent *e)
     }
 
     struct bsg_pick_result *res = first_only ?
-	bsg_pick_nearest(v, v->gv_mouse_x, v->gv_mouse_y) :
-	bsg_pick_point(v, v->gv_mouse_x, v->gv_mouse_y, 0);
+	bsg_pick_nearest(v, sx, sy) :
+	bsg_pick_point(v, sx, sy, 0);
     set_selected_result(v, res);
 
     return true;
@@ -267,9 +287,12 @@ QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
     if (m_e->button() != Qt::LeftButton && e->type() != QEvent::MouseMove)
 	return true;
 
+    int sx = 0, sy = 0;
+    qg_select_mouse_xy(m_e, &sx, &sy);
+
     if (e->type() == QEvent::MouseButtonPress) {
-	px = v->gv_mouse_x;
-	py = v->gv_mouse_y;
+	px = sx;
+	py = sy;
 	int view_width = rt_view_width_from_bsg(v);
 	int view_height = rt_view_height_from_bsg(v);
 	struct bsg_interactive_rect_state rect;
@@ -296,8 +319,8 @@ QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
 	    return true;
 	int view_height = rt_view_height_from_bsg(v);
 	rect.draw = 1;
-	rect.dim[0] = v->gv_mouse_x - px;
-	rect.dim[1] = (view_height - v->gv_mouse_y) - rect.pos[1];
+	rect.dim[0] = sx - px;
+	rect.dim[1] = (view_height - sy) - rect.pos[1];
 	rect.x = (rect.pos[X] / (fastf_t)rect.cdim[X] - 0.5) * 2.0;
 	rect.y = ((0.5 - (rect.cdim[Y] - rect.pos[Y]) / (fastf_t)rect.cdim[Y]) / rect.aspect * 2.0);
 	rect.width = rect.dim[X] * 2.0 / (fastf_t)rect.cdim[X];
@@ -313,7 +336,7 @@ QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
 	std::vector<QgObolPickRecord> obolPicks;
 	int submittedSourceRequests = 0;
 	if (qg_obol_pick_rect(view_widget(), ipx, ipy,
-		v->gv_mouse_x, v->gv_mouse_y, 6.0f, first_only,
+		sx, sy, 6.0f, first_only,
 		obolPicks, &submittedSourceRequests) > 0) {
 	    std::vector<std::string> paths;
 	    for (const QgObolPickRecord &pick : obolPicks)
@@ -354,7 +377,7 @@ QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
 	}
 
 	struct bsg_pick_result *res =
-	    bsg_pick_rect(v, ipx, ipy, v->gv_mouse_x, v->gv_mouse_y);
+	    bsg_pick_rect(v, ipx, ipy, sx, sy);
 	if (first_only && res && bsg_pick_result_count(res) > 1) {
 	    struct bsg_pick_result *nearest = _qg_pick_result_filter_first(res);
 	    bsg_pick_result_free(res);
@@ -482,15 +505,14 @@ _qg_pick_result_from_ray_hits(const struct bsg_pick_result *candidates,
 }
 
 static bool
-_qg_select_ray_from_view(struct bsg_view *v, point_t origin, vect_t direction)
+_qg_select_ray_from_view(struct bsg_view *v, int sx, int sy, point_t origin, vect_t direction)
 {
     if (!v)
 	return false;
 
     fastf_t vx = -FLT_MAX;
     fastf_t vy = -FLT_MAX;
-    if (!rt_view_screen_to_view_from_bsg(&vx, &vy, v, v->gv_mouse_x,
-	    v->gv_mouse_y))
+    if (!rt_view_screen_to_view_from_bsg(&vx, &vy, v, sx, sy))
 	return false;
     point_t vpnt, mpnt;
     VSET(vpnt, vx, vy, 0);
@@ -523,9 +545,12 @@ QgSelectRayFilter::eventFilter(QObject *, QEvent *e)
     if (m_e->button() != Qt::LeftButton)
 	return true;
 
+    int sx = 0, sy = 0;
+    qg_select_mouse_xy(m_e, &sx, &sy);
+
     point_t rayOrigin;
     vect_t rayDirection;
-    if (_qg_select_ray_from_view(v, rayOrigin, rayDirection)) {
+    if (_qg_select_ray_from_view(v, sx, sy, rayOrigin, rayDirection)) {
 	std::vector<QgObolPickRecord> obolRayPicks;
 	int submittedSourceRequests = 0;
 	if (qg_obol_pick_ray(view_widget(),
@@ -550,7 +575,7 @@ QgSelectRayFilter::eventFilter(QObject *, QEvent *e)
 
     std::vector<QgObolPickRecord> obolPicks;
     int submittedSourceRequests = 0;
-    if (qg_obol_pick_point(view_widget(), v->gv_mouse_x, v->gv_mouse_y,
+    if (qg_obol_pick_point(view_widget(), sx, sy,
 	    6.0f, !first_only, obolPicks,
 	    &submittedSourceRequests) > 0) {
 	std::vector<std::string> paths;
@@ -574,7 +599,7 @@ QgSelectRayFilter::eventFilter(QObject *, QEvent *e)
     }
 
     struct bsg_pick_result *candidates =
-	bsg_pick_point(v, v->gv_mouse_x, v->gv_mouse_y, 0);
+	bsg_pick_point(v, sx, sy, 0);
     if (!candidates || !bsg_pick_result_count(candidates)) {
 	set_selected_result(v, candidates);
 	return true;
@@ -620,7 +645,7 @@ QgSelectRayFilter::eventFilter(QObject *, QEvent *e)
     }
     ap->a_uptr = (void *)&rc;
 
-    if (_qg_select_ray_from_view(v, rayOrigin, rayDirection)) {
+    if (_qg_select_ray_from_view(v, sx, sy, rayOrigin, rayDirection)) {
 	VMOVE(ap->a_ray.r_pt, rayOrigin);
 	VMOVE(ap->a_ray.r_dir, rayDirection);
 	(void)rt_shootray(ap);

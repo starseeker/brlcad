@@ -35,9 +35,6 @@
 #include "bn.h"
 #include "bg/clip.h"
 
-#include "bsg/export.h"
-#include "bsg/render.h"
-
 #include "ged/bsg_ged_draw.h"
 #include "rt/view_legacy_bsg.h"
 #include "../ged_private.h"
@@ -164,13 +161,15 @@ ps_draw_segment_cb(const point_t a, const point_t b, void *data)
 }
 
 static void
-ps_draw_record(fastf_t perspective, FILE *fp, const struct bsg_export_record *rec, matp_t psmat)
+ps_draw_record(fastf_t perspective, FILE *fp,
+	       const struct ged_draw_view_db_object_record *rec,
+	       matp_t psmat)
 {
     struct ps_segment_data psd;
 
     if (!rec)
 	return;
-    if (!bsg_export_record_has_segments(rec))
+    if (!ged_draw_view_db_object_record_has_segments(rec))
 	return;
 
     fprintf(fp, "%f %f %f setrgbcolor\n",
@@ -191,7 +190,24 @@ ps_draw_record(fastf_t perspective, FILE *fp, const struct bsg_export_record *re
     psd.fp = fp;
     psd.psmat = psmat;
 
-    (void)bsg_export_record_foreach_segment(rec, ps_draw_segment_cb, &psd);
+    (void)ged_draw_view_db_object_record_foreach_segment(rec,
+	    ps_draw_segment_cb, &psd);
+}
+
+struct ps_draw_record_ctx {
+    fastf_t perspective;
+    FILE *fp;
+    matp_t psmat;
+};
+
+static int
+ps_draw_record_cb(const struct ged_draw_view_db_object_record *rec, void *data)
+{
+    struct ps_draw_record_ctx *ctx = (struct ps_draw_record_ctx *)data;
+    if (!ctx)
+	return 1;
+    ps_draw_record(ctx->perspective, ctx->fp, rec, ctx->psmat);
+    return 1;
 }
 
 static void
@@ -220,21 +236,16 @@ ps_draw_body(struct ged *gedp, FILE *fp, mat_t model2view, fastf_t perspective, 
             deering_persp_mat(perspective_mat, l, h, eye_pos);
         }
 
-        bn_mat_mul(newmat, perspective_mat, mat);
-        mat = newmat;
+	bn_mat_mul(newmat, perspective_mat, mat);
+	mat = newmat;
     }
 
-    struct bsg_export_request request;
-    bsg_export_request_init(&request, gedp->ged_gvp);
-    request.query_flags = BSG_EXPORT_QUERY_VISIBLE_ONLY;
-    request.render_flags = BSG_RENDER_FLAG_VISIBLE_ONLY | BSG_RENDER_FLAG_PAYLOAD_PREPARE;
-    struct bsg_export_result *result = bsg_export_query(&request);
-    if (!result)
-	return;
-
-    for (size_t i = 0; i < bsg_export_result_count(result); i++)
-	ps_draw_record(perspective, fp, bsg_export_result_get(result, i), mat);
-    bsg_export_result_free(result);
+    struct ps_draw_record_ctx ctx;
+    ctx.perspective = perspective;
+    ctx.fp = fp;
+    ctx.psmat = mat;
+    ged_draw_foreach_visible_view_record(gedp->ged_gvp,
+	    ps_draw_record_cb, &ctx);
 }
 
 

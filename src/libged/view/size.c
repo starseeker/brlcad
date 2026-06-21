@@ -76,7 +76,7 @@ ged_size_core(struct ged *gedp, int argc, const char *argv[])
 	if (view_size < RT_VIEW_MIN_SIZE)
 	    view_size = RT_VIEW_MIN_SIZE;
 	rt_view_size_set_bsg(gedp->ged_gvp, view_size);
-	bsg_update(gedp->ged_gvp);
+	rt_view_update_bsg(gedp->ged_gvp);
 
 	return BRLCAD_OK;
     }

@@ -23,6 +23,13 @@
 
 #include "common.h"
 
+#include <string.h>
+
+#include "bu/malloc.h"
+#include "bsg/feature.h"
+#include "bsg/geometry.h"
+#include "bsg/overlay.h"
+#include "bsg/view_set.h"
 #include "rt/view_legacy_bsg.h"
 #include "./bsg_ged_draw_private.h"
 
@@ -73,6 +80,42 @@ ged_draw_view_lod_policy_apply_bsg_bot_threshold(
     return ged_draw_view_lod_policy_apply_bsg(view, &override_policy);
 }
 
+int
+ged_draw_view_autoview_default_bsg(struct bsg_view *view, int all_view_objs)
+{
+    return rt_view_autoview_bsg(view, RT_VIEW_AUTOVIEW_SCALE_DEFAULT, all_view_objs);
+}
+
+struct bsg_selection *
+ged_draw_view_selection_bsg(struct bsg_view *view)
+{
+    return rt_view_selection_bsg(view);
+}
+
+struct bu_ptbl *
+ged_draw_view_set_views_bsg(struct bsg_view_set *view_set)
+{
+    return rt_view_set_views_bsg(view_set);
+}
+
+void *
+ged_draw_view_set_recycle_pool_bsg(struct bsg_view_set *view_set)
+{
+    return bsg_set_fsos(view_set);
+}
+
+int
+ged_draw_view_is_independent_bsg(const struct bsg_view *view)
+{
+    return rt_view_is_independent_bsg(view);
+}
+
+bsg_scene_ref
+ged_draw_view_independent_scope_ref_bsg(struct bsg_view *view, int create)
+{
+    return rt_view_independent_scope_ref_bsg(view, create);
+}
+
 void
 ged_draw_view_set_lod_bounds_update(struct bsg_view *view)
 {
@@ -115,6 +158,370 @@ void
 ged_draw_mesh_lod_free_scene_ref(bsg_scene_ref ref)
 {
     rt_mesh_lod_free_scene_ref_bsg(ref);
+}
+
+int
+ged_draw_view_feature_exists(struct bsg_view *view, const char *name)
+{
+    if (!view || !name)
+	return 0;
+
+    bsg_feature_ref ref = bsg_feature_find(view, name);
+    return !bsg_feature_ref_is_null(ref);
+}
+
+int
+ged_draw_view_feature_remove(struct bsg_view *view, const char *name)
+{
+    if (!view || !name)
+	return 0;
+
+    return bsg_feature_remove(view, name) ? 1 : 0;
+}
+
+int
+ged_draw_view_feature_visible(struct bsg_view *view, const char *name)
+{
+    if (!view || !name)
+	return 0;
+
+    bsg_feature_ref ref = bsg_feature_find(view, name);
+    struct bsg_feature_record rec;
+    return (!bsg_feature_ref_is_null(ref) &&
+	    bsg_feature_record_get(ref, &rec) && rec.visible) ? 1 : 0;
+}
+
+bsg_scene_ref
+ged_draw_view_overlay_create(struct bsg_view *view, const char *name)
+{
+    if (!view || !name)
+	return bsg_scene_ref_null();
+
+    bsg_feature_ref ref = bsg_feature_create_overlay(view, name, 0);
+    if (bsg_feature_ref_is_null(ref))
+	return bsg_scene_ref_null();
+
+    return bsg_feature_ref_as_scene(ref);
+}
+
+int
+ged_draw_view_lines_create_model_annotation(struct bsg_view *view,
+					    const char *name,
+					    int local,
+					    const point_t point)
+{
+    if (!view || !name || !point)
+	return 0;
+
+    bsg_feature_ref ref = bsg_feature_create_lines(view, name, local);
+    if (bsg_feature_ref_is_null(ref))
+	return 0;
+
+    bsg_feature_overlay_register_owner(ref, NULL,
+	    BSG_OVERLAY_ROLE_MODEL,
+	    BSG_OVERLAY_CLASS_USER_ANNOTATION,
+	    BSG_OVERLAY_LC_PERSISTENT,
+	    BSG_OVERLAY_ORDER_MODEL,
+	    NULL, 0);
+
+    int cmd = BSG_GEOMETRY_LINE_MOVE;
+    if (!bsg_feature_points_replace(ref, BSG_FEATURE_LINES,
+		(const point_t *)point, &cmd, 1)) {
+	bsg_feature_remove(view, name);
+	return 0;
+    }
+
+    return 1;
+}
+
+int
+ged_draw_view_lines_append_point(struct bsg_view *view,
+				 const char *name,
+				 const point_t point)
+{
+    if (!view || !name || !point)
+	return 0;
+
+    bsg_feature_ref ref = bsg_feature_find(view, name);
+    if (bsg_feature_ref_is_null(ref))
+	return 0;
+
+    point_t *points = NULL;
+    int *cmds = NULL;
+    size_t point_count = 0;
+    if (!bsg_feature_points_copy(ref, &points, &cmds, &point_count))
+	return 0;
+
+    point_t *npoints = (point_t *)bu_calloc(point_count + 1, sizeof(point_t),
+	    "GED draw view line append points");
+    int *ncmds = (int *)bu_calloc(point_count + 1, sizeof(int),
+	    "GED draw view line append cmds");
+    for (size_t i = 0; i < point_count; i++) {
+	VMOVE(npoints[i], points[i]);
+	ncmds[i] = cmds ? cmds[i] :
+	    ((i == 0) ? BSG_GEOMETRY_LINE_MOVE : BSG_GEOMETRY_LINE_DRAW);
+    }
+    VMOVE(npoints[point_count], point);
+    ncmds[point_count] = BSG_GEOMETRY_LINE_DRAW;
+
+    int ret = bsg_feature_points_replace(ref, BSG_FEATURE_LINES,
+	    (const point_t *)npoints, ncmds, point_count + 1);
+
+    if (points)
+	bu_free(points, "bsg feature points copy");
+    if (cmds)
+	bu_free(cmds, "bsg feature cmds copy");
+    bu_free(npoints, "GED draw view line append points");
+    bu_free(ncmds, "GED draw view line append cmds");
+
+    return ret ? 1 : 0;
+}
+
+int
+ged_draw_view_label_create(struct bsg_view *view,
+			   const char *name,
+			   int local,
+			   const char *text,
+			   const point_t point,
+			   const point_t target,
+			   int has_target)
+{
+    if (!view || !name || !text || !point || (has_target && !target))
+	return 0;
+
+    bsg_feature_ref ref = bsg_feature_create_label(view, name, local);
+    if (bsg_feature_ref_is_null(ref))
+	return 0;
+
+    bsg_feature_set_color(ref, 255, 255, 0);
+
+    struct bsg_feature_label_data label = BSG_FEATURE_LABEL_DATA_INIT;
+    label.text = text;
+    VMOVE(label.point, point);
+    if (has_target) {
+	VMOVE(label.target, target);
+	label.line_flag = 1;
+    }
+
+    return bsg_feature_labels_replace(ref, &label, 1) ? 1 : 0;
+}
+
+int
+ged_draw_view_line_style_get(struct bsg_view *view,
+			     const char *name,
+			     struct ged_draw_view_line_style *style)
+{
+    if (!view || !name || !style)
+	return 0;
+
+    bsg_feature_ref ref = bsg_feature_find(view, name);
+    struct bsg_feature_record rec;
+    if (bsg_feature_ref_is_null(ref) || !bsg_feature_record_get(ref, &rec))
+	return 0;
+
+    style->color[0] = (int)rec.color[0];
+    style->color[1] = (int)rec.color[1];
+    style->color[2] = (int)rec.color[2];
+    style->line_width = rec.line_width;
+    return 1;
+}
+
+int
+ged_draw_view_line_color_set(struct bsg_view *view,
+			     const char *name,
+			     int r,
+			     int g,
+			     int b)
+{
+    if (!view || !name)
+	return 0;
+
+    bsg_feature_ref ref = bsg_feature_find(view, name);
+    if (bsg_feature_ref_is_null(ref))
+	return 0;
+
+    bsg_feature_set_color(ref, r, g, b);
+    return 1;
+}
+
+int
+ged_draw_view_line_width_set(struct bsg_view *view,
+			     const char *name,
+			     int line_width)
+{
+    if (!view || !name)
+	return 0;
+
+    bsg_feature_ref ref = bsg_feature_find(view, name);
+    if (bsg_feature_ref_is_null(ref))
+	return 0;
+
+    bsg_feature_set_line_width(ref, line_width);
+    return 1;
+}
+
+int
+ged_draw_view_lines_points_copy(struct bsg_view *view,
+				const char *name,
+				point_t **points,
+				size_t *point_count)
+{
+    if (points)
+	*points = NULL;
+    if (point_count)
+	*point_count = 0;
+    if (!view || !name || !points || !point_count)
+	return 0;
+
+    bsg_feature_ref ref = bsg_feature_find(view, name);
+    if (bsg_feature_ref_is_null(ref))
+	return 0;
+
+    return bsg_feature_points_copy(ref, points, NULL, point_count) ? 1 : 0;
+}
+
+int
+ged_draw_view_tcl_lines_replace(struct bsg_view *view,
+				const char *name,
+				const point_t *points,
+				size_t point_count,
+				const struct ged_draw_view_line_style *style)
+{
+    if (!view || !name)
+	return 0;
+
+    if (point_count % 2)
+	return 0;
+
+    bsg_feature_remove(view, name);
+
+    if (point_count < 2 || !points)
+	return 1;
+
+    bsg_feature_ref ref = bsg_feature_create_lines(view, name, 1);
+    if (bsg_feature_ref_is_null(ref))
+	return 0;
+
+    bsg_feature_overlay_register_owner(ref, NULL,
+	    BSG_OVERLAY_ROLE_MODEL,
+	    BSG_OVERLAY_CLASS_TCL_OVERLAY,
+	    BSG_OVERLAY_LC_PER_COMMAND,
+	    BSG_OVERLAY_ORDER_POST_TRANSPARENT,
+	    NULL, 0);
+
+    int *cmds = (int *)bu_calloc(point_count, sizeof(int),
+	    "GED draw Tcl data line cmds");
+    for (size_t i = 0; i + 1 < point_count; i += 2) {
+	cmds[i] = BSG_GEOMETRY_LINE_MOVE;
+	cmds[i + 1] = BSG_GEOMETRY_LINE_DRAW;
+    }
+
+    int ret = bsg_feature_points_replace(ref, BSG_FEATURE_LINES,
+	    points, cmds, point_count);
+    bu_free(cmds, "GED draw Tcl data line cmds");
+    if (!ret)
+	return 0;
+
+    if (style)
+	bsg_feature_set_color(ref, style->color[0], style->color[1],
+		style->color[2]);
+    if (style)
+	bsg_feature_set_line_width(ref, style->line_width);
+    bsg_feature_set_visible(ref, 1);
+
+    return 1;
+}
+
+static void
+_ged_draw_view_axes_to_bsg(struct bsg_axes *dst,
+			   const struct ged_draw_view_axes_state *src)
+{
+    memset(dst, 0, sizeof(*dst));
+    if (!src)
+	return;
+
+    VMOVE(dst->axes_pos, src->position);
+    dst->axes_size = src->size;
+    dst->line_width = src->line_width;
+    dst->axes_color[0] = src->color[0];
+    dst->axes_color[1] = src->color[1];
+    dst->axes_color[2] = src->color[2];
+}
+
+static void
+_ged_draw_view_axes_from_bsg(struct ged_draw_view_axes_state *dst,
+			     const struct bsg_axes *src)
+{
+    memset(dst, 0, sizeof(*dst));
+    if (!src)
+	return;
+
+    VMOVE(dst->position, src->axes_pos);
+    dst->size = src->axes_size;
+    dst->line_width = src->line_width;
+    dst->color[0] = src->axes_color[0];
+    dst->color[1] = src->axes_color[1];
+    dst->color[2] = src->axes_color[2];
+}
+
+int
+ged_draw_view_axes_create(struct bsg_view *view,
+			  const char *name,
+			  int local,
+			  const struct ged_draw_view_axes_state *state)
+{
+    if (!view || !name || !state)
+	return 0;
+
+    bsg_feature_ref ref = bsg_feature_create_axes(view, name, local);
+    if (bsg_feature_ref_is_null(ref))
+	return 0;
+
+    struct bsg_axes axes;
+    _ged_draw_view_axes_to_bsg(&axes, state);
+    if (!bsg_feature_axes_state_replace(ref, &axes)) {
+	bsg_feature_remove(view, name);
+	return 0;
+    }
+
+    return 1;
+}
+
+int
+ged_draw_view_axes_state_get(struct bsg_view *view,
+			     const char *name,
+			     struct ged_draw_view_axes_state *state)
+{
+    if (!view || !name || !state)
+	return 0;
+
+    bsg_feature_ref ref = bsg_feature_find(view, name);
+    if (bsg_feature_ref_is_null(ref))
+	return 0;
+
+    struct bsg_axes axes;
+    if (!bsg_feature_axes_state_get(ref, &axes))
+	return 0;
+
+    _ged_draw_view_axes_from_bsg(state, &axes);
+    return 1;
+}
+
+int
+ged_draw_view_axes_state_replace(struct bsg_view *view,
+				 const char *name,
+				 const struct ged_draw_view_axes_state *state)
+{
+    if (!view || !name || !state)
+	return 0;
+
+    bsg_feature_ref ref = bsg_feature_find(view, name);
+    if (bsg_feature_ref_is_null(ref))
+	return 0;
+
+    struct bsg_axes axes;
+    _ged_draw_view_axes_to_bsg(&axes, state);
+    return bsg_feature_axes_state_replace(ref, &axes) ? 1 : 0;
 }
 
 /*

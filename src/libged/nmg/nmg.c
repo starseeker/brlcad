@@ -35,10 +35,9 @@
 
 #include "dm.h"  // For labelface - see if the dm_set_native_repaint_pending is really needed
 
-#include "bsg/export.h"
 #include "bsg/feature.h"
-#include "bsg/render.h"
 #include "ged.h"
+#include "ged/bsg_ged_draw.h"
 #include "../ged_private.h"
 
 
@@ -113,25 +112,29 @@ struct labelface_data {
 #define LABELFACE_FEATURE_NAME "_LABELFACE_ffffff"
 
 static int
-labelface_record_matches(struct db_i *dbip, const struct bsg_export_record *rec, struct directory *dp)
+labelface_record_matches(struct db_i *dbip,
+			 const struct ged_draw_view_db_object_record *rec,
+			 struct directory *dp)
 {
-    if (!dbip || !rec || !dp || rec->source.scope != BSG_RENDER_SOURCE_SCOPE_DATABASE)
+    if (!dbip || !rec || !dp || !rec->is_database_source || !rec->path)
 	return 0;
 
     struct db_full_path fp;
     db_full_path_init(&fp);
-    if (db_string_to_path(&fp, dbip, bu_vls_cstr(&rec->path)) < 0)
+    if (db_string_to_path(&fp, dbip, rec->path) < 0)
 	return 0;
     int ret = db_full_path_search(&fp, dp);
     db_free_full_path(&fp);
     return ret;
 }
 
-static void
-labelface_export_record(const struct bsg_export_record *rec, struct labelface_data *lfd)
+static int
+labelface_export_record(const struct ged_draw_view_db_object_record *rec,
+			void *data)
 {
+    struct labelface_data *lfd = (struct labelface_data *)data;
     if (!lfd || !labelface_record_matches(lfd->dbip, rec, lfd->dp))
-	return;
+	return 1;
 
     get_face_list(lfd->m, lfd->f_list);
     struct face *curr_f;
@@ -163,6 +166,7 @@ labelface_export_record(const struct bsg_export_record *rec, struct labelface_da
 	VSET(lfd->labels[lfd->label_count].color, 255, 255, 255);
 	lfd->label_count++;
     }
+    return 1;
 }
 
 static void
@@ -239,16 +243,8 @@ ged_labelface_core(struct ged *gedp, int argc, const char *argv[])
 
 	/* Find displayed uses of this database object. */
 	lfd.dp = dp;
-	struct bsg_export_request request;
-	bsg_export_request_init(&request, gedp->ged_gvp);
-	request.query_flags = BSG_EXPORT_QUERY_VISIBLE_ONLY | BSG_EXPORT_QUERY_DB_OBJECTS;
-	request.render_flags = BSG_RENDER_FLAG_VISIBLE_ONLY | BSG_RENDER_FLAG_PAYLOAD_PREPARE;
-	struct bsg_export_result *result = bsg_export_query(&request);
-	if (!result)
-	    continue;
-	for (size_t ri = 0; ri < bsg_export_result_count(result); ri++)
-	    labelface_export_record(bsg_export_result_get(result, ri), &lfd);
-	bsg_export_result_free(result);
+	ged_draw_foreach_visible_view_db_object_record(gedp->ged_gvp,
+		labelface_export_record, &lfd);
     }
 
     (void)bsg_feature_remove(gedp->ged_gvp, LABELFACE_FEATURE_NAME);

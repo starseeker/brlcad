@@ -70,7 +70,6 @@
 #include <icv.h>
 #include "bsg/node.h"
 #include "bsg/util.h"
-#include "bsg/view_state.h"
 #include "rt/view_legacy_bsg.h"
 
 extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);
@@ -100,8 +99,8 @@ open_gedp_null(const char *gfile)
     db_add_changed_clbk(gedp->dbip, &ged_changed_callback, (void *)gedp);
 
     struct bsg_view *v = gedp->ged_gvp;
-    v->gv_base2local = gedp->dbip->dbi_base2local;
-    v->gv_local2base = gedp->dbip->dbi_local2base;
+    rt_view_unit_conversion_set_bsg(v, gedp->dbip->dbi_local2base,
+	gedp->dbip->dbi_base2local);
 
     return gedp;
 }
@@ -119,15 +118,15 @@ make_null_view(struct ged *gedp, const char *vname)
 {
     struct bsg_view *v;
     BU_GET(v, struct bsg_view);
-    bsg_init(v, &gedp->ged_views);
+    rt_view_init_bsg(v, &gedp->ged_views);
     bu_vls_sprintf(&v->gv_name, "%s", vname);
-    v->gv_base2local = gedp->dbip->dbi_base2local;
-    v->gv_local2base = gedp->dbip->dbi_local2base;
+    rt_view_unit_conversion_set_bsg(v, gedp->dbip->dbi_local2base,
+	gedp->dbip->dbi_base2local);
 
     /* Every new libtclcad view gets a retained BSG scene anchor. */
     (void)bsg_view_scene_separator_ref(v, 1);
 
-    bsg_set_add_view(&gedp->ged_views, v);
+    rt_view_set_add_view_bsg(&gedp->ged_views, v);
     bu_ptbl_ins(&gedp->ged_free_views, (long *)v);
 
     return v;
@@ -368,12 +367,11 @@ open_gedp_swrast(const char *gfile, int width, int height)
     dm_set_zbuffer(dmp, 1);
     fastf_t wb[6] = {-1, 1, -1, 1, -100, 100};
     dm_set_win_bounds(dmp, wb);
-    dm_set_vp(dmp, &v->gv_scale);
+    dm_set_vp(dmp, rt_view_scale_storage_from_bsg(v));
     v->dmp           = dmp;
-    v->gv_width      = dm_get_width(dmp);
-    v->gv_height     = dm_get_height(dmp);
-    v->gv_base2local = gedp->dbip->dbi_base2local;
-    v->gv_local2base = gedp->dbip->dbi_local2base;
+    rt_view_dimensions_set_bsg(v, dm_get_width(dmp), dm_get_height(dmp));
+    rt_view_unit_conversion_set_bsg(v, gedp->dbip->dbi_local2base,
+	gedp->dbip->dbi_base2local);
 
     return gedp;
 }

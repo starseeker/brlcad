@@ -77,6 +77,7 @@
 #include "ged.h"
 #include "ged/bsg_ged_draw.h"
 #include "ged/event_txn.h"
+#include "rt/view_legacy_bsg.h"
 #include "wdb.h"
 
 // We have to use different I/O mechanisms based on which

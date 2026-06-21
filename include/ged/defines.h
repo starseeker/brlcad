@@ -35,7 +35,6 @@
 #include "bu/vls.h"
 #include "bsg/defines.h"
 #include "rt/search.h"
-#include "bsg/defines.h"
 #include "dm/fbserv.h" // for fbserv_obj
 #include "rt/wdb.h" // for struct rt_wdb
 

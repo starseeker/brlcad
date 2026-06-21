@@ -32,9 +32,10 @@
 #include "common.h"
 
 #include "bg/polygon.h"
-#include "bsg.h"
+#include "bsg/defines.h"
 #include "bsg/feature.h"
 #include "bsg/geometry.h"
+#include "bsg/overlay.h"
 #include "bg/lseg.h"
 #include "rt/view_legacy_bsg.h"
 #include "tclcad.h"
@@ -1193,7 +1194,7 @@ to_data_polygons(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1266,7 +1267,7 @@ to_poly_circ_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1323,8 +1324,7 @@ to_poly_circ_mode_func(Tcl_Interp *interp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
+    rt_view_previous_mouse_set_bsg(gdvp, x, y);
     gdvp->gv_tcl->gv_polygon_mode = BSG_POLY_CIRCLE_MODE;
 
     tclcad_polygons_sync_dm_dimensions(gdvp);
@@ -1333,7 +1333,7 @@ to_poly_circ_mode_func(Tcl_Interp *interp,
     {
 	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
 	if (snap_kinds)
-	    bsg_snap_point_2d(gedp->ged_gvp, &v_pt[X], &v_pt[Y], snap_kinds);
+	    rt_view_snap_point_2d_bsg(gedp->ged_gvp, &v_pt[X], &v_pt[Y], snap_kinds);
     }
 
     MAT4X3PNT(m_pt, gdpsp->gdps_view2model, v_pt);
@@ -1390,8 +1390,7 @@ to_poly_cont_build_func(Tcl_Interp *interp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
+    rt_view_previous_mouse_set_bsg(gdvp, x, y);
     gdvp->gv_tcl->gv_polygon_mode = BSG_POLY_CONTOUR_MODE;
 
     tclcad_polygons_sync_dm_dimensions(gdvp);
@@ -1400,7 +1399,7 @@ to_poly_cont_build_func(Tcl_Interp *interp,
     {
 	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
 	if (snap_kinds)
-	    bsg_snap_point_2d(gedp->ged_gvp, &v_pt[X], &v_pt[Y], snap_kinds);
+	    rt_view_snap_point_2d_bsg(gedp->ged_gvp, &v_pt[X], &v_pt[Y], snap_kinds);
     }
 
     MAT4X3PNT(m_pt, gdpsp->gdps_view2model, v_pt);
@@ -1523,13 +1522,13 @@ to_poly_cont_build(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
     }
 
-    gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1594,7 +1593,7 @@ to_poly_cont_build_end(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1691,7 +1690,7 @@ to_poly_ell_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1748,8 +1747,7 @@ to_poly_ell_mode_func(Tcl_Interp *interp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
+    rt_view_previous_mouse_set_bsg(gdvp, x, y);
     gdvp->gv_tcl->gv_polygon_mode = TCLCAD_POLY_ELLIPSE_MODE;
 
     tclcad_polygons_sync_dm_dimensions(gdvp);
@@ -1758,7 +1756,7 @@ to_poly_ell_mode_func(Tcl_Interp *interp,
     {
 	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
 	if (snap_kinds)
-	    bsg_snap_point_2d(gedp->ged_gvp, &v_pt[X], &v_pt[Y], snap_kinds);
+	    rt_view_snap_point_2d_bsg(gedp->ged_gvp, &v_pt[X], &v_pt[Y], snap_kinds);
     }
 
     MAT4X3PNT(m_pt, gdpsp->gdps_view2model, v_pt);
@@ -1839,7 +1837,7 @@ to_poly_rect_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp = bsg_set_find_view(&gedp->ged_views, argv[1]);
+    gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1905,8 +1903,7 @@ to_poly_rect_mode_func(Tcl_Interp *interp,
 	    return BRLCAD_ERROR;
 	}
     }
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
+    rt_view_previous_mouse_set_bsg(gdvp, x, y);
 
     if (sflag)
 	gdvp->gv_tcl->gv_polygon_mode = TCLCAD_POLY_SQUARE_MODE;
@@ -1919,7 +1916,7 @@ to_poly_rect_mode_func(Tcl_Interp *interp,
     {
 	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
 	if (snap_kinds)
-	    bsg_snap_point_2d(gedp->ged_gvp, &v_pt[X], &v_pt[Y], snap_kinds);
+	    rt_view_snap_point_2d_bsg(gedp->ged_gvp, &v_pt[X], &v_pt[Y], snap_kinds);
     }
 
     MAT4X3PNT(m_pt, gdpsp->gdps_view2model, v_pt);

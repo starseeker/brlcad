@@ -133,7 +133,7 @@ ged_qvrot_core(struct ged *gedp, int argc, const char *argv[])
     bn_mat_angles(rotation, 270.0 + el * RAD2DEG, 0.0, 270.0 - az * RAD2DEG);
     rt_view_rotation_set_bsg(gedp->ged_gvp, rotation);
     usejoy(gedp, 0.0, 0.0, theta*DEG2RAD);
-    bsg_update(gedp->ged_gvp);
+    rt_view_update_bsg(gedp->ged_gvp);
 
     return BRLCAD_OK;
 }

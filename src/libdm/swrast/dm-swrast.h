@@ -32,8 +32,6 @@ extern "C" {
 #include "OSMesa/gl.h"
 #include "OSMesa/osmesa.h"
 
-#include "bsg.h"
-
 /* For portable text in OpenGL, use fontstash */
 #if defined(__GNUC__) && !defined(__clang__)
 #  pragma GCC diagnostic push
@@ -61,6 +59,7 @@ extern "C" {
 #endif
 }
 
+struct bsg_view;
 extern struct dm dm_swrast;
 
 struct swrast_vars {

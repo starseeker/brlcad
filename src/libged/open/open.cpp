@@ -29,6 +29,7 @@
 
 #include "bu/cmd.h"
 #include "bu/opt.h"
+#include "rt/view_legacy_bsg.h"
 #include "../../librt/librt_private.h"
 
 #include "ged/event_txn.h"
@@ -137,8 +138,9 @@ ged_opendb_core(struct ged *gedp, int argc, const char *argv[])
 
     // Set the view units, if we have a view
     if (gedp->ged_gvp) {
-	gedp->ged_gvp->gv_base2local = gedp->dbip->dbi_base2local;
-	gedp->ged_gvp->gv_local2base = gedp->dbip->dbi_local2base;
+	rt_view_unit_conversion_set_bsg(gedp->ged_gvp,
+	    gedp->dbip->dbi_local2base,
+	    gedp->dbip->dbi_base2local);
     }
 
     return BRLCAD_OK;

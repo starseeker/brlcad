@@ -31,13 +31,13 @@
 #include "bu/malloc.h"
 #include "bu/log.h"
 #include "bu/vls.h"
-#include "bsg/defines.h"
 #include "bsg/geometry.h"
 #include "bsg/node.h"
 #include "bsg/render_item.h"
 #include "bsg/separator.h"
 #include "bsg/util.h"
 #include "dm.h"
+#include "rt/view_legacy_bsg.h"
 #include "../include/private.h"
 
 static int g_fail = 0;
@@ -288,8 +288,7 @@ test_annotation_curve_dm_output(void)
     BU_ALLOC(v, struct bsg_view);
     bsg_view_init(v, NULL);
     v->dmp = dmp;
-    v->gv_width = 512;
-    v->gv_height = 512;
+    rt_view_dimensions_set_bsg(v, 512, 512);
     MAT_IDN(v->gv_model2view);
     MAT_IDN(v->gv_view2model);
 
@@ -391,8 +390,7 @@ test_annotation_display_text_position(void)
     BU_ALLOC(v, struct bsg_view);
     bsg_view_init(v, NULL);
     v->dmp = dmp;
-    v->gv_width = 200;
-    v->gv_height = 200;
+    rt_view_dimensions_set_bsg(v, 200, 200);
     MAT_IDN(v->gv_model2view);
     MAT_IDN(v->gv_view2model);
 

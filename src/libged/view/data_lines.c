@@ -44,65 +44,19 @@
 #include <string.h>
 
 #include "bu/cmd.h"
+#include "bu/malloc.h"
 #include "bu/opt.h"
 #include "bu/str.h"
 #include "bu/vls.h"
-#include "bsg/feature.h"
-#include "bsg/geometry.h"
-#include "bsg/field.h"
-#include "bsg/draw_source.h"
-#include "bsg/scene_object.h"
-#include "bsg/hud.h"
-#include "bsg/overlay.h"
 #include "rt/view_legacy_bsg.h"
 #include "../ged_private.h"
+#include "../bsg_ged_draw_view_private.h"
 #include "./ged_view.h"
 
 struct view_dlines_state {
     struct ged *gedp;
     const char *bsg_name;
 };
-
-/* Phase T1 (drawing_stack_modernization): BSG-first helper – rebuild the BSG
- * VIEW_SCOPE line object from an explicit point array.
- *
- * Pass draw=1 to create/replace the object; draw=0 to only remove it. */
-static void
-_rebuild_bsg_dlines(struct bsg_view *v, const char *bsg_name,
-		    int draw, point_t *pts, int npts,
-		    int *color, int line_width)
-{
-    if (!v || !bsg_name)
-	return;
-
-    bsg_feature_remove(v, bsg_name);
-
-    if (!draw || npts < 2 || !pts)
-	return;
-
-    bsg_feature_ref ref = bsg_feature_create_lines(v, bsg_name, 1 /* local */);
-    if (bsg_feature_ref_is_null(ref))
-	return;
-    bsg_feature_overlay_register_owner(ref, NULL,
-	    BSG_OVERLAY_ROLE_MODEL,
-	    BSG_OVERLAY_CLASS_TCL_OVERLAY,
-	    BSG_OVERLAY_LC_PER_COMMAND,
-	    BSG_OVERLAY_ORDER_POST_TRANSPARENT,
-	    NULL, 0);
-
-    int *cmds = (int *)bu_calloc(npts, sizeof(int), "data line cmds");
-    for (int i = 0; i + 1 < npts; i += 2) {
-	cmds[i] = BSG_GEOMETRY_LINE_MOVE;
-	cmds[i+1] = BSG_GEOMETRY_LINE_DRAW;
-    }
-    bsg_feature_points_replace(ref, BSG_FEATURE_LINES, (const point_t *)pts, cmds, (size_t)npts);
-    bu_free(cmds, "data line cmds");
-
-    if (color)
-	bsg_feature_set_color(ref, color[0], color[1], color[2]);
-    bsg_feature_set_line_width(ref, line_width);
-    bsg_feature_set_visible(ref, 1);
-}
 
 static int
 _view_dlines_cmd_draw(void *bs, int argc, const char **argv)
@@ -112,10 +66,8 @@ _view_dlines_cmd_draw(void *bs, int argc, const char **argv)
     struct bsg_view *v = gedp->ged_gvp;
 
     if (argc == 1) {
-	struct bsg_feature_record rec;
-	bsg_feature_ref ref = bsg_feature_find(v, vs->bsg_name);
 	bu_vls_printf(gedp->ged_result_str, "%d",
-		(!bsg_feature_ref_is_null(ref) && bsg_feature_record_get(ref, &rec) && rec.visible) ? 1 : 0);
+		ged_draw_view_feature_visible(v, vs->bsg_name));
 	return BRLCAD_OK;
     }
 
@@ -126,7 +78,7 @@ _view_dlines_cmd_draw(void *bs, int argc, const char **argv)
 
 	/* BSG is the sole owner; just remove or hide the object. */
 	if (!i)
-	    bsg_feature_remove(v, vs->bsg_name);
+	    ged_draw_view_feature_remove(v, vs->bsg_name);
 	/* draw=1 is a no-op here; use "points" to create/re-enable. */
 
 	ged_refresh_cb(gedp);
@@ -168,11 +120,10 @@ _view_dlines_cmd_color(void *bs, int argc, const char **argv)
     struct bsg_view *v = gedp->ged_gvp;
 
     if (argc == 1) {
-	bsg_feature_ref ref = bsg_feature_find(v, vs->bsg_name);
-	struct bsg_feature_record rec;
-	if (!bsg_feature_ref_is_null(ref) && bsg_feature_record_get(ref, &rec)) {
+	struct ged_draw_view_line_style style = {{0, 0, 0}, 0};
+	if (ged_draw_view_line_style_get(v, vs->bsg_name, &style)) {
 	    bu_vls_printf(gedp->ged_result_str, "%d %d %d",
-			  (int)rec.color[0], (int)rec.color[1], (int)rec.color[2]);
+			  style.color[0], style.color[1], style.color[2]);
 	} else
 	    bu_vls_printf(gedp->ged_result_str, "0 0 0");
 	return BRLCAD_OK;
@@ -193,9 +144,7 @@ _view_dlines_cmd_color(void *bs, int argc, const char **argv)
 		b < 0 || 255 < b)
 	    return BRLCAD_ERROR;
 
-	bsg_feature_ref ref = bsg_feature_find(v, vs->bsg_name);
-	if (!bsg_feature_ref_is_null(ref))
-	    bsg_feature_set_color(ref, r, g, b);
+	ged_draw_view_line_color_set(v, vs->bsg_name, r, g, b);
 
 	ged_refresh_cb(gedp);
 
@@ -213,10 +162,9 @@ _view_dlines_cmd_line_width(void *bs, int argc, const char **argv)
     struct bsg_view *v = gedp->ged_gvp;
 
     if (argc == 1) {
-	bsg_feature_ref ref = bsg_feature_find(v, vs->bsg_name);
-	struct bsg_feature_record rec;
-	if (!bsg_feature_ref_is_null(ref) && bsg_feature_record_get(ref, &rec))
-	    bu_vls_printf(gedp->ged_result_str, "%d", rec.line_width);
+	struct ged_draw_view_line_style style = {{0, 0, 0}, 0};
+	if (ged_draw_view_line_style_get(v, vs->bsg_name, &style))
+	    bu_vls_printf(gedp->ged_result_str, "%d", style.line_width);
 	else
 	    bu_vls_printf(gedp->ged_result_str, "0");
 	return BRLCAD_OK;
@@ -228,9 +176,7 @@ _view_dlines_cmd_line_width(void *bs, int argc, const char **argv)
 	if (bu_sscanf(argv[1], "%d", &line_width) != 1)
 	    return BRLCAD_ERROR;
 
-	bsg_feature_ref ref = bsg_feature_find(v, vs->bsg_name);
-	if (!bsg_feature_ref_is_null(ref))
-	    bsg_feature_set_line_width(ref, line_width);
+	ged_draw_view_line_width_set(v, vs->bsg_name, line_width);
 
 	ged_refresh_cb(gedp);
 
@@ -249,15 +195,14 @@ _view_dlines_cmd_points(void *bs, int argc, const char **argv)
     int i;
 
     if (argc == 1) {
-	bsg_feature_ref ref = bsg_feature_find(v, vs->bsg_name);
 	point_t *points = NULL;
 	size_t point_count = 0;
-	if (!bsg_feature_ref_is_null(ref) &&
-		bsg_feature_points_copy(ref, &points, NULL, &point_count)) {
+	if (ged_draw_view_lines_points_copy(v, vs->bsg_name, &points,
+		&point_count)) {
 	    for (size_t j = 0; j < point_count; j++)
 		bu_vls_printf(gedp->ged_result_str, " {%lf %lf %lf} ", V3ARGS(points[j]));
 	    if (points)
-		bu_free(points, "bsg feature points copy");
+		bu_free(points, "GED draw view line points copy");
 	}
 	return BRLCAD_OK;
     }
@@ -278,19 +223,11 @@ _view_dlines_cmd_points(void *bs, int argc, const char **argv)
 	}
 
 	/* BSG is the sole persistent store; preserve style from existing object. */
-	int saved_color[3] = {255, 255, 0}; /* default yellow */
-	int saved_lw = 0;
-	bsg_feature_ref old_ref = bsg_feature_find(v, vs->bsg_name);
-	struct bsg_feature_record rec;
-	if (!bsg_feature_ref_is_null(old_ref) && bsg_feature_record_get(old_ref, &rec)) {
-	    saved_color[0] = (int)rec.color[0];
-	    saved_color[1] = (int)rec.color[1];
-	    saved_color[2] = (int)rec.color[2];
-	    saved_lw = rec.line_width;
-	}
+	struct ged_draw_view_line_style saved_style = {{255, 255, 0}, 0};
+	(void)ged_draw_view_line_style_get(v, vs->bsg_name, &saved_style);
 
 	if (ac < 2) {
-	    bsg_feature_remove(v, vs->bsg_name);
+	    ged_draw_view_feature_remove(v, vs->bsg_name);
 	    ged_refresh_cb(gedp);
 	    bu_free((char *)av, "av");
 	    return BRLCAD_OK;
@@ -310,8 +247,13 @@ _view_dlines_cmd_points(void *bs, int argc, const char **argv)
 	    VMOVE(pts[i], scan);
 	}
 
-	_rebuild_bsg_dlines(v, vs->bsg_name, 1 /* draw=1 on explicit set */,
-			   pts, ac, saved_color, saved_lw);
+	if (!ged_draw_view_tcl_lines_replace(v, vs->bsg_name,
+		(const point_t *)pts, (size_t)ac, &saved_style)) {
+	    bu_free((void *)pts, "data points");
+	    ged_refresh_cb(gedp);
+	    bu_free((char *)av, "av");
+	    return BRLCAD_ERROR;
+	}
 	bu_free((void *)pts, "data points");
 
 	ged_refresh_cb(gedp);
