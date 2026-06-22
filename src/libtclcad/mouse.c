@@ -196,7 +196,7 @@ to_mouse_append_pnt_common(struct ged *gedp,
 
     gedp->ged_gvp = gdvp;
     {
-	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
+	unsigned long long snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
 	if (snap_kinds)
 	    rt_view_snap_point_2d_bsg(gedp->ged_gvp, &view[X], &view[Y], snap_kinds);
     }
@@ -2193,7 +2193,7 @@ to_mouse_poly_circ_func(Tcl_Interp *interp,
     rt_view_view2model_from_bsg(view2model, gdvp);
 
     {
-	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
+	unsigned long long snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
 	if (snap_kinds)
 	    rt_view_snap_point_2d_bsg(gedp->ged_gvp, &fx, &fy, snap_kinds);
     }
@@ -2504,7 +2504,7 @@ to_mouse_poly_ell_func(Tcl_Interp *interp,
     rt_view_view2model_from_bsg(view2model, gdvp);
 
     {
-	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
+	unsigned long long snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
 	if (snap_kinds)
 	    rt_view_snap_point_2d_bsg(gedp->ged_gvp, &fx, &fy, snap_kinds);
     }
@@ -2684,7 +2684,7 @@ to_mouse_poly_rect_func(Tcl_Interp *interp,
     rt_view_view2model_from_bsg(view2model, gdvp);
 
     {
-	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
+	unsigned long long snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
 	if (snap_kinds)
 	    rt_view_snap_point_2d_bsg(gedp->ged_gvp, &fx, &fy, snap_kinds);
     }

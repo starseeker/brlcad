@@ -19,15 +19,15 @@
  */
 /** @file selection_semantics.cpp
  *
- * Verify that bsg_selection is consistent with bsg_pick_result after a GED
- * draw+pick cycle.
+ * Verify that view selection is consistent with opaque RT legacy pick results
+ * after a GED draw+pick cycle.
  *
  * Strategy:
  *   1. Open moss.g, draw the scene.
- *   2. Run a screen-center point pick; collect bsg_pick_result.
- *   3. Convert pick hits to interaction records and apply them to selection.
- *   4. Verify bsg_selection_count > 0 and interaction-record containment.
- *   5. bsg_selection_clear; verify count drops to 0.
+ *   2. Run a screen-center point pick; collect rt_view_pick_result_bsg.
+ *   3. Apply the pick result through the RT legacy selection adapter.
+ *   4. Verify selected path callback data and selection count.
+ *   5. rt_view_selection_clear_bsg; verify count drops to 0.
  *
  * No display hardware required (headless GED).
  *
@@ -38,12 +38,9 @@
 
 #include <fstream>
 #include <cstring>
+#include <string>
 
 #include <bu.h>
-#include "bsg/interaction.h"
-#include "bsg/pick.h"
-#include "bsg/selection.h"
-#include "bsg/view_state.h"
 #include <ged.h>
 #include "rt/view_legacy_bsg.h"
 
@@ -57,6 +54,21 @@
 
 static int nchecks = 0;
 static int nfails  = 0;
+
+struct selected_path_state {
+    int count;
+    std::string last_path;
+};
+
+static void
+selection_path_callback(const char *path, void *data)
+{
+    struct selected_path_state *state = (struct selected_path_state *)data;
+    if (!state || !path || !path[0])
+	return;
+    state->count++;
+    state->last_path = path;
+}
 
 
 int
@@ -121,42 +133,37 @@ main(int ac, char *av[])
     }
 
     /* ------------------------------------------------------------------
-     * Test 1: bsg_selection lifecycle round-trip
+     * Test 1: selection lifecycle round-trip
      * ------------------------------------------------------------------ */
-    struct bsg_selection *sel = bsg_view_selection(v);
-    ASSERT(sel != NULL);
-    if (!sel) {
-	bu_log("SKIP: view has no gv_selected — bsg_selection not wired\n");
+    ASSERT(rt_view_selection_available_bsg(v));
+    if (!rt_view_selection_available_bsg(v)) {
+	bu_log("SKIP: view has no gv_selected - selection not wired\n");
 	ged_close(gedp);
 	return 0;
     }
 
-    ASSERT(bsg_selection_count(sel) == 0);
+    ASSERT(rt_view_selection_count_bsg(v) == 0);
 
     /* ------------------------------------------------------------------
      * Test 2: pick then add to selection
      * ------------------------------------------------------------------ */
     int cx = rt_view_width_from_bsg(v) / 2;
     int cy = rt_view_height_from_bsg(v) / 2;
-    struct bsg_pick_result *pr = bsg_pick_point(v, cx, cy, 0);
-    if (pr && bsg_pick_result_count(pr) > 0) {
-	struct bsg_interaction_result *ir = bsg_interaction_from_pick_result(pr);
-	const struct bsg_interaction_record *rec = bsg_interaction_result_get(ir, 0);
-	const char *path = bsg_interaction_record_path(rec);
-	if (rec && path && path[0]) {
-	    bsg_interaction_selection_apply(sel, ir, BSG_INTERACTION_APPLY_SET);
-	    ASSERT(bsg_selection_count(sel) == 1);
-	    ASSERT(bsg_selection_contains_record(sel, rec));
-	}
-	bsg_interaction_result_free(ir);
+    struct rt_view_pick_result_bsg *pr = rt_view_pick_point_bsg(v, cx, cy, 0);
+    if (pr && rt_view_pick_result_count_bsg(pr) > 0) {
+	struct selected_path_state path_state = {0, std::string()};
+	ASSERT(rt_view_selection_set_pick_result_ref_bsg(v, pr,
+		    selection_path_callback, &path_state));
+	ASSERT(path_state.count > 0);
+	ASSERT(!path_state.last_path.empty());
+	ASSERT(rt_view_selection_count_bsg(v) == 1);
     }
 
     /* Clear and verify */
-    bsg_selection_clear(sel);
-    ASSERT(bsg_selection_count(sel) == 0);
+    ASSERT(rt_view_selection_clear_bsg(v));
+    ASSERT(rt_view_selection_count_bsg(v) == 0);
 
-    if (pr)
-	bsg_pick_result_free(pr);
+    rt_view_pick_result_free_bsg(pr);
 
     ged_close(gedp);
 

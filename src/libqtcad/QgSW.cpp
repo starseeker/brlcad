@@ -37,6 +37,7 @@
 
 #include "QgCanvasState.h"   /* pimpl definition + shared helpers */
 #include "qtcad/QgSW.h"
+#include "qtcad/QgLegacyViewBsg.h"
 
 extern "C" {
 #include "rt/view_legacy_bsg.h"
@@ -65,9 +66,11 @@ QgSW::QgSW(QWidget *parent, struct fb *fbp)
 
     // Provide a view specific to this widget - set gedp->ged_gvp to v
     // if this is the current view
-    BU_GET(d->local_v, struct bsg_view);
-    rt_view_init_bsg(d->local_v, nullptr);
-    bu_vls_sprintf(&d->local_v->gv_name, "swrast");
+    struct bsg_view *local_bv = nullptr;
+    BU_GET(local_bv, struct bsg_view);
+    rt_view_init_bsg(local_bv, nullptr);
+    bu_vls_sprintf(&local_bv->gv_name, "swrast");
+    d->local_v = qg_legacy_view_from_bsg(local_bv);
     d->v = d->local_v;
     qgcanvas_sync_obol_camera(*d);
 
@@ -98,12 +101,15 @@ else
     fb_put(d->ifp);
     }
     qgcanvas_destroy_obol(*d);
-    BU_PUT(d->local_v, struct bv);
+    struct bsg_view *local_bv = qgcanvas_bsg_local_view(*d);
+    BU_PUT(local_bv, struct bv);
+    d->local_v = nullptr;
+    d->v = nullptr;
     delete d;
     d = nullptr;
 }
 
-struct bsg_view *
+qg_legacy_view *
 QgSW::view() const
 {
     return d->v;
@@ -146,7 +152,7 @@ QgSW::setDisplayManagerSet(struct bu_ptbl *set)
 }
 
 void
-QgSW::set_view(struct bsg_view *nv)
+QgSW::set_view(qg_legacy_view *nv)
 {
     qgcanvas_set_view(*d, nv);
 }
@@ -178,6 +184,7 @@ void QgSW::paintEvent(QPaintEvent *e)
     // Without a view, SWrast can't work
     if (!d->v)
 return;
+    struct bsg_view *bv = qgcanvas_bsg_view(*d);
 
     if (qgcanvas_obol_scene_has_content(*d)) {
 	QImage obolImage;
@@ -195,11 +202,11 @@ return;
 if (!d->dmp) {
     // swrast will need to know the window size
     QSize rsize = qgcanvas_render_size(this);
-    rt_view_dimensions_set_bsg(d->v, rsize.width(), rsize.height());
+    qg_legacy_view_dimensions_set(d->v, rsize.width(), rsize.height());
 
     // Do the standard libdm attach to get our rendering backend.
     const char *acmd = "attach";
-    d->dmp = dm_open((void *)d->v, nullptr, "swrast", 1, &acmd);
+    d->dmp = dm_open((void *)bv, nullptr, "swrast", 1, &acmd);
     if (!d->dmp)
 return;
 
@@ -224,13 +231,14 @@ fastf_t windowbounds[6] = { -1, 1, -1, 1, QTSW_ZMIN, QTSW_ZMAX };
 dm_set_win_bounds(d->dmp, windowbounds);
 
 // Associate the view scale with the dmp
-dm_set_vp(d->dmp, rt_view_scale_storage_from_bsg(d->v));
+dm_set_vp(d->dmp, rt_view_scale_storage_from_bsg(bv));
 
 // Let the view know it has an associated dm.
-d->v->dmp = d->dmp;
+bv->dmp = d->dmp;
 
 // Set the view width and height to match the dm
-rt_view_dimensions_set_bsg(d->v, dm_get_width(d->dmp), dm_get_height(d->dmp));
+qg_legacy_view_dimensions_set(d->v, dm_get_width(d->dmp),
+	dm_get_height(d->dmp));
 
 // If we have a ptbl defining the current dm set and/or an unset
 // pointer to indicate the current dm, go ahead and set them.
@@ -259,18 +267,19 @@ dm_configure_win(d->dmp, 0);
 if (d->ifp)
     fb_configure_window(d->ifp, rsize.width(), rsize.height());
     }
-    rt_view_dimensions_set_bsg(d->v, dm_get_width(d->dmp), dm_get_height(d->dmp));
+    qg_legacy_view_dimensions_set(d->v, dm_get_width(d->dmp),
+	    dm_get_height(d->dmp));
 
     unsigned char *dm_bg1;
     unsigned char *dm_bg2;
     dm_get_bg(&dm_bg1, &dm_bg2, d->dmp);
     dm_set_bg(d->dmp, dm_bg1[0], dm_bg1[1], dm_bg1[2], dm_bg2[0], dm_bg2[1], dm_bg2[2]);
 
-    (void)rt_view_refresh_consume_bsg(d->v);
+    (void)rt_view_refresh_consume_bsg(bv);
     dm_draw_begin(d->dmp);
-    dm_draw_objs(d->v);
+    dm_draw_objs(bv);
     dm_draw_end(d->dmp);
-    rt_view_refresh_complete_bsg(d->v);
+    rt_view_refresh_complete_bsg(bv);
 
     // Set up a QImage with the rendered output..
     unsigned char *dm_image;
@@ -302,12 +311,12 @@ void QgSW::resizeEvent(QResizeEvent *e)
 	QSize rsize = qgcanvas_render_size(this);
 	dm_set_width(d->dmp, rsize.width());
 	dm_set_height(d->dmp, rsize.height());
-	rt_view_dimensions_set_bsg(d->v, rsize.width(), rsize.height());
+	qg_legacy_view_dimensions_set(d->v, rsize.width(), rsize.height());
 	dm_configure_win(d->dmp, 0);
 	if (d->ifp) {
 	    fb_configure_window(d->ifp,
-		    rt_view_width_from_bsg(d->v),
-		    rt_view_height_from_bsg(d->v));
+		    qg_legacy_view_width_get(d->v),
+		    qg_legacy_view_height_get(d->v));
 	}
 	qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW_BSG | RT_VIEW_REFRESH_FRAMEBUFFER_BSG);
 	emit changed();
@@ -325,9 +334,10 @@ return;
     // Let bv know what the current view width and height are, in
     // case the dx/dy mouse translations need that information
     QSize rsize = qgcanvas_render_size(this);
-    rt_view_dimensions_set_bsg(d->v, rsize.width(), rsize.height());
+    qg_legacy_view_dimensions_set(d->v, rsize.width(), rsize.height());
 
-    if (d->input.keyPressEvent(d->v, d->x_prev, d->y_prev, k)) {
+    if (d->input.keyPressEvent(d->v, d->x_prev,
+	    d->y_prev, k)) {
 qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW_BSG);
 update();
 emit changed();
@@ -353,9 +363,10 @@ return;
     // Let bv know what the current view width and height are, in
     // case the dx/dy mouse translations need that information
     QSize rsize = qgcanvas_render_size(this);
-    rt_view_dimensions_set_bsg(d->v, rsize.width(), rsize.height());
+    qg_legacy_view_dimensions_set(d->v, rsize.width(), rsize.height());
 
-    if (d->input.mousePressEvent(d->v, d->x_prev, d->y_prev, e)) {
+    if (d->input.mousePressEvent(d->v, d->x_prev,
+	    d->y_prev, e)) {
 qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW_BSG);
 update();
 emit changed();
@@ -385,8 +396,9 @@ return;
     d->x_prev = -INT_MAX;
     d->y_prev = -INT_MAX;
 
-    if (d->input.mouseReleaseEvent(d->v, d->x_press_pos, d->y_press_pos,
-   d->x_prev, d->y_prev, e, d->lmouse_mode)) {
+    if (d->input.mouseReleaseEvent(d->v,
+	    d->x_press_pos, d->y_press_pos, d->x_prev, d->y_prev, e,
+	    d->lmouse_mode)) {
 qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW_BSG);
 update();
 emit changed();
@@ -406,9 +418,10 @@ return;
     // Let bv know what the current view width and height are, in
     // case the dx/dy mouse translations need that information
     QSize rsize = qgcanvas_render_size(this);
-    rt_view_dimensions_set_bsg(d->v, rsize.width(), rsize.height());
+    qg_legacy_view_dimensions_set(d->v, rsize.width(), rsize.height());
 
-    int mret = d->input.mouseMoveEvent(d->v, d->x_prev, d->y_prev, e, d->lmouse_mode);
+    int mret = d->input.mouseMoveEvent(d->v,
+	    d->x_prev, d->y_prev, e, d->lmouse_mode);
     if (mret > 0) {
 qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW_BSG);
 update();
@@ -440,7 +453,7 @@ return;
     // Let bv know what the current view width and height are, in
     // case the dx/dy mouse translations need that information
     QSize rsize = qgcanvas_render_size(this);
-    rt_view_dimensions_set_bsg(d->v, rsize.width(), rsize.height());
+    qg_legacy_view_dimensions_set(d->v, rsize.width(), rsize.height());
 
     if (d->input.wheelEvent(d->v, e)) {
 qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW_BSG);
@@ -497,6 +510,7 @@ void QgSW::get_viewport_image(QImage &img)
 {
     img = QImage();  /* null sentinel */
     if (!d->v) return;
+    struct bsg_view *bv = qgcanvas_bsg_view(*d);
 
     if (qgcanvas_obol_scene_has_content(*d)) {
 	qgcanvas_get_obol_viewport_image(*d, this, img, true);
@@ -509,9 +523,9 @@ void QgSW::get_viewport_image(QImage &img)
 if (!d->dmp) {
     int rw = (width()  > 50) ? width()  : 800;
     int rh = (height() > 50) ? height() : 600;
-    rt_view_dimensions_set_bsg(d->v, rw, rh);
+    qg_legacy_view_dimensions_set(d->v, rw, rh);
     const char *acmd = "attach";
-    d->dmp = dm_open((void *)d->v, nullptr, "swrast", 1, &acmd);
+    d->dmp = dm_open((void *)bv, nullptr, "swrast", 1, &acmd);
     if (!d->dmp) return;
     dm_set_udata(d->dmp, this);
 }
@@ -520,9 +534,10 @@ dm_set_pathname(d->dmp, "SWDM");
 dm_set_zbuffer(d->dmp, 1);
 fastf_t windowbounds[6] = { -1, 1, -1, 1, QTSW_ZMIN, QTSW_ZMAX };
 dm_set_win_bounds(d->dmp, windowbounds);
-dm_set_vp(d->dmp, rt_view_scale_storage_from_bsg(d->v));
-d->v->dmp       = d->dmp;
-rt_view_dimensions_set_bsg(d->v, dm_get_width(d->dmp), dm_get_height(d->dmp));
+dm_set_vp(d->dmp, rt_view_scale_storage_from_bsg(bv));
+bv->dmp       = d->dmp;
+qg_legacy_view_dimensions_set(d->v, dm_get_width(d->dmp),
+	dm_get_height(d->dmp));
 if (d->dm_set)
     bu_ptbl_ins_unique(d->dm_set, (long int *)d->dmp);
 d->m_init = true;
@@ -545,13 +560,13 @@ bg2r = bg2g = bg2b = QTSW_SCREENSHOT_BG_GREY;
     }
     dm_set_bg(d->dmp, bg1r, bg1g, bg1b, bg2r, bg2g, bg2b);
     mat_t model2view;
-    rt_view_model2view_from_bsg(model2view, d->v);
+    rt_view_model2view_from_bsg(model2view, bv);
     dm_loadmatrix(d->dmp, model2view, 0);
-    (void)rt_view_refresh_consume_bsg(d->v);
+    (void)rt_view_refresh_consume_bsg(bv);
     dm_draw_begin(d->dmp);
-    dm_draw_objs(d->v);
+    dm_draw_objs(bv);
     dm_draw_end(d->dmp);
-    rt_view_refresh_complete_bsg(d->v);
+    rt_view_refresh_complete_bsg(bv);
 
     unsigned char *vp_image = nullptr;
     if (dm_get_display_image(d->dmp, &vp_image, 1, 1) || !vp_image) return;

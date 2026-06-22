@@ -61,10 +61,10 @@ __BEGIN_DECLS
 
 struct bu_structparse;
 struct bu_structparse_map;
-struct bsg_adc_state;
-struct bsg_axes;
-struct bsg_grid_state;
-struct bsg_interactive_rect_state;
+struct rt_view_adc_state;
+struct rt_view_axes_state;
+struct rt_view_grid_state;
+struct rt_view_interactive_rect_state;
 
 /* This is how a parent application can pass a generic
  * hook function in when setting dm variables.  The dm_hook_data
@@ -104,16 +104,16 @@ DM_EXPORT extern int dm_processOptions(struct dm *dmp, struct bu_vls *init_proc_
 
 /* adc.c */
 DM_EXPORT extern void dm_draw_adc(struct dm *dmp,
-				  struct bsg_adc_state *adcp, mat_t view2model, mat_t model2view);
+				  struct rt_view_adc_state *adcp, mat_t view2model, mat_t model2view);
 
 /* axes.c */
-DM_EXPORT extern void dm_draw_scene_axes_payload(struct dm *dmp, const struct bsg_axes *axes);
+DM_EXPORT extern void dm_draw_scene_axes_payload(struct dm *dmp, const struct rt_view_axes_state *axes);
 
 
 DM_EXPORT extern void dm_draw_hud_axes(struct dm *dmp,
 				   fastf_t viewSize,
 				   const mat_t rmat,
-				   struct bsg_axes *bnasp);
+				   const struct rt_view_axes_state *bnasp);
 
 /* clip.c */
 DM_EXPORT extern int clip(fastf_t *,
@@ -127,7 +127,7 @@ DM_EXPORT extern int vclip(point_t,
 
 /* grid.c */
 DM_EXPORT extern void dm_draw_grid(struct dm *dmp,
-				   struct bsg_grid_state *ggsp,
+				   struct rt_view_grid_state *ggsp,
 				   fastf_t scale,
 				   mat_t model2view,
 				   fastf_t base2local);
@@ -148,7 +148,7 @@ DM_EXPORT extern int dm_draw_prim_labels(struct dm *dmp,
 
 /* rect.c */
 DM_EXPORT extern void dm_draw_rect(struct dm *dmp,
-				   struct bsg_interactive_rect_state *grsp);
+				   const struct rt_view_interactive_rect_state *grsp);
 
 /* scale.c */
 DM_EXPORT extern void dm_draw_scale(struct dm *dmp,

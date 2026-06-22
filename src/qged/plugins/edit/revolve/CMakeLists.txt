@@ -11,7 +11,7 @@ if(BRLCAD_ENABLE_QT)
   )
 endif(BRLCAD_ENABLE_QT)
 
-set(revolve_srcs QRevolve.cpp revolve.cpp)
+set(revolve_srcs QRevolve.cpp revolve.cpp ../qged_edit_preview_util.cpp)
 
 set(revolve_moc_hdrs QRevolve.h EditRevolveFactory.h)
 

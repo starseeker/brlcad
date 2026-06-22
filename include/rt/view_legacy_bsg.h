@@ -27,6 +27,7 @@
 #define RT_VIEW_LEGACY_BSG_H
 
 #include "common.h"
+#include "bg/polygon.h"
 #include "bsg/scene_builder.h"
 #include "bsg/view_state.h"
 #include "rt/defines.h"
@@ -35,22 +36,23 @@
 __BEGIN_DECLS
 
 struct bsg_view;
-struct bsg_adc_state;
-struct bsg_axes;
-struct bsg_grid_state;
-struct bsg_interactive_rect_state;
-struct bsg_other_state;
-struct bsg_params_state;
-struct bsg_selection;
+struct rt_view_pick_result_bsg;
 struct bsg_snap_result;
+struct db_i;
+struct directory;
 struct rt_mesh_lod;
 struct bsg_view_knobs;
 struct bsg_view_set;
+struct bu_color;
 struct bu_data_hash_state;
 struct bu_ptbl;
 struct bu_vls;
 
 typedef void (*rt_view_bounds_update_callback_bsg_t)(struct bsg_view *);
+typedef void (*rt_view_selection_path_callback_bsg_t)(const char *path, void *data);
+typedef int (*rt_view_polygon_record_callback_bsg_t)(rt_view_polygon_ref ref,
+						     const struct rt_view_polygon_record *record,
+						     void *data);
 
 enum rt_view_knobs_category_bsg {
     RT_VIEW_KNOBS_ALL_BSG = 0,
@@ -86,6 +88,9 @@ enum rt_view_knobs_category_bsg {
 
 RT_EXPORT extern void
 rt_view_info_from_bsg(struct rt_view_info *info, const struct bsg_view *v);
+
+RT_EXPORT extern const char *
+rt_view_name_from_bsg(const struct bsg_view *v);
 
 RT_EXPORT extern int
 rt_view_width_from_bsg(const struct bsg_view *v);
@@ -146,68 +151,68 @@ rt_view_unique_object_name_bsg(struct bu_vls *oname,
 			       struct bsg_view *v);
 
 RT_EXPORT extern int
-rt_view_interactive_rect_from_bsg(struct bsg_interactive_rect_state *record,
-				  const struct bsg_view *v);
+rt_view_interactive_rect_state_from_bsg(struct rt_view_interactive_rect_state *record,
+					const struct bsg_view *v);
 
 RT_EXPORT extern int
-rt_view_interactive_rect_set_bsg(struct bsg_view *v,
-				 const struct bsg_interactive_rect_state *record);
+rt_view_interactive_rect_state_set_bsg(struct bsg_view *v,
+				       const struct rt_view_interactive_rect_state *record);
 
 RT_EXPORT extern int
-rt_view_adc_from_bsg(struct bsg_adc_state *record,
-		     const struct bsg_view *v);
-
-RT_EXPORT extern int
-rt_view_adc_set_bsg(struct bsg_view *v,
-		    const struct bsg_adc_state *record);
-
-RT_EXPORT extern int
-rt_view_grid_from_bsg(struct bsg_grid_state *record,
-		      const struct bsg_view *v);
-
-RT_EXPORT extern int
-rt_view_grid_set_bsg(struct bsg_view *v,
-		     const struct bsg_grid_state *record);
-
-RT_EXPORT extern int
-rt_view_model_axes_from_bsg(struct bsg_axes *record,
-			    const struct bsg_view *v);
-
-RT_EXPORT extern int
-rt_view_model_axes_set_bsg(struct bsg_view *v,
-			   const struct bsg_axes *record);
-
-RT_EXPORT extern int
-rt_view_view_axes_from_bsg(struct bsg_axes *record,
+rt_view_adc_state_from_bsg(struct rt_view_adc_state *record,
 			   const struct bsg_view *v);
 
 RT_EXPORT extern int
-rt_view_view_axes_set_bsg(struct bsg_view *v,
-			  const struct bsg_axes *record);
+rt_view_adc_state_set_bsg(struct bsg_view *v,
+			  const struct rt_view_adc_state *record);
 
 RT_EXPORT extern int
-rt_view_center_dot_from_bsg(struct bsg_other_state *record,
+rt_view_grid_state_from_bsg(struct rt_view_grid_state *record,
 			    const struct bsg_view *v);
 
 RT_EXPORT extern int
-rt_view_center_dot_set_bsg(struct bsg_view *v,
-			   const struct bsg_other_state *record);
+rt_view_grid_state_set_bsg(struct bsg_view *v,
+			   const struct rt_view_grid_state *record);
 
 RT_EXPORT extern int
-rt_view_scale_overlay_from_bsg(struct bsg_other_state *record,
-			       const struct bsg_view *v);
+rt_view_model_axes_state_from_bsg(struct rt_view_axes_state *record,
+				  const struct bsg_view *v);
 
 RT_EXPORT extern int
-rt_view_scale_overlay_set_bsg(struct bsg_view *v,
-			      const struct bsg_other_state *record);
+rt_view_model_axes_state_set_bsg(struct bsg_view *v,
+				 const struct rt_view_axes_state *record);
 
 RT_EXPORT extern int
-rt_view_params_from_bsg(struct bsg_params_state *record,
-			const struct bsg_view *v);
+rt_view_view_axes_state_from_bsg(struct rt_view_axes_state *record,
+				 const struct bsg_view *v);
 
 RT_EXPORT extern int
-rt_view_params_set_bsg(struct bsg_view *v,
-		       const struct bsg_params_state *record);
+rt_view_view_axes_state_set_bsg(struct bsg_view *v,
+				const struct rt_view_axes_state *record);
+
+RT_EXPORT extern int
+rt_view_center_dot_state_from_bsg(struct rt_view_other_state *record,
+				  const struct bsg_view *v);
+
+RT_EXPORT extern int
+rt_view_center_dot_state_set_bsg(struct bsg_view *v,
+				 const struct rt_view_other_state *record);
+
+RT_EXPORT extern int
+rt_view_scale_overlay_state_from_bsg(struct rt_view_other_state *record,
+				     const struct bsg_view *v);
+
+RT_EXPORT extern int
+rt_view_scale_overlay_state_set_bsg(struct bsg_view *v,
+				    const struct rt_view_other_state *record);
+
+RT_EXPORT extern int
+rt_view_params_state_from_bsg(struct rt_view_params_state *record,
+			      const struct bsg_view *v);
+
+RT_EXPORT extern int
+rt_view_params_state_set_bsg(struct bsg_view *v,
+			     const struct rt_view_params_state *record);
 
 RT_EXPORT extern int
 rt_view_refresh_request_bsg(struct bsg_view *v, uint32_t flags);
@@ -307,11 +312,67 @@ rt_view_snap_point_2d_bsg(struct bsg_view *v,
 RT_EXPORT extern int
 rt_view_snap_grid_2d_bsg(struct bsg_view *v, fastf_t *vx, fastf_t *vy);
 
-RT_EXPORT extern struct bsg_selection *
-rt_view_selection_bsg(struct bsg_view *v);
+RT_EXPORT extern struct rt_view_pick_result_bsg *
+rt_view_pick_point_bsg(struct bsg_view *v, int x, int y, int first_only);
 
-RT_EXPORT extern const struct bsg_selection *
-rt_view_selection_const_bsg(const struct bsg_view *v);
+RT_EXPORT extern struct rt_view_pick_result_bsg *
+rt_view_pick_nearest_bsg(struct bsg_view *v, int x, int y);
+
+RT_EXPORT extern struct rt_view_pick_result_bsg *
+rt_view_pick_rect_bsg(struct bsg_view *v, int x0, int y0, int x1, int y1);
+
+RT_EXPORT extern struct rt_view_pick_result_bsg *
+rt_view_pick_semantic_path_bsg(struct bsg_view *v, const char *path_pattern);
+
+RT_EXPORT extern struct rt_view_pick_result_bsg *
+rt_view_pick_result_create_bsg(void);
+
+RT_EXPORT extern void
+rt_view_pick_result_free_bsg(struct rt_view_pick_result_bsg *result);
+
+RT_EXPORT extern size_t
+rt_view_pick_result_count_bsg(const struct rt_view_pick_result_bsg *result);
+
+RT_EXPORT extern int
+rt_view_pick_result_path_bsg(const struct rt_view_pick_result_bsg *result,
+			     size_t index,
+			     struct bu_vls *path_out);
+
+RT_EXPORT extern fastf_t
+rt_view_pick_result_hit_dist_bsg(const struct rt_view_pick_result_bsg *result,
+				 size_t index);
+
+RT_EXPORT extern int
+rt_view_pick_result_append_path_bsg(struct rt_view_pick_result_bsg *result,
+				    struct bsg_view *v,
+				    int screen_x,
+				    int screen_y,
+				    const char *source_path,
+				    fastf_t hit_dist);
+
+RT_EXPORT extern int
+rt_view_pick_result_append_copy_bsg(struct rt_view_pick_result_bsg *dest,
+				    const struct rt_view_pick_result_bsg *src,
+				    size_t index,
+				    fastf_t hit_dist);
+
+RT_EXPORT extern struct rt_view_pick_result_bsg *
+rt_view_pick_result_filter_first_bsg(const struct rt_view_pick_result_bsg *src);
+
+RT_EXPORT extern int
+rt_view_selection_available_bsg(struct bsg_view *v);
+
+RT_EXPORT extern size_t
+rt_view_selection_count_bsg(struct bsg_view *v);
+
+RT_EXPORT extern int
+rt_view_selection_set_pick_result_ref_bsg(struct bsg_view *v,
+					  const struct rt_view_pick_result_bsg *result,
+					  rt_view_selection_path_callback_bsg_t callback,
+					  void *data);
+
+RT_EXPORT extern int
+rt_view_selection_clear_bsg(struct bsg_view *v);
 
 RT_EXPORT extern struct bu_ptbl *
 rt_view_set_views_bsg(struct bsg_view_set *s);
@@ -342,10 +403,6 @@ rt_view_knobs_reset_bsg(struct bsg_view *v, int category);
 
 RT_EXPORT extern int
 rt_view_knob_state_reset_bsg(struct bsg_view_knobs *knobs, int category);
-
-RT_EXPORT extern unsigned long long
-rt_view_knob_state_hash_bsg(struct bsg_view_knobs *knobs,
-			    struct bu_data_hash_state *state);
 
 RT_EXPORT extern unsigned long long
 rt_view_knobs_hash_bsg(struct bsg_view *v,
@@ -553,6 +610,94 @@ rt_view_snap_lines_from_bsg(const struct bsg_view *v);
 RT_EXPORT extern int
 rt_view_snap_lines_set_bsg(struct bsg_view *v, int enabled);
 
+RT_EXPORT extern rt_view_polygon_ref
+rt_view_polygon_create_bsg(struct bsg_view *v, int type, point_t *fp);
+
+RT_EXPORT extern rt_view_polygon_ref
+rt_view_polygon_select_bsg(struct bsg_view *v, point_t *cp);
+
+RT_EXPORT extern rt_view_polygon_ref
+rt_view_polygon_find_bsg(struct bsg_view *v, const char *name);
+
+RT_EXPORT extern rt_view_polygon_ref
+rt_view_polygon_dup_bsg(struct bsg_view *v, const char *name, const char *new_name);
+
+RT_EXPORT extern void
+rt_view_polygon_visit_records_bsg(struct bsg_view *v,
+				  rt_view_polygon_record_callback_bsg_t callback,
+				  void *data);
+
+RT_EXPORT extern size_t
+rt_view_polygon_snap_count_bsg(struct bsg_view *v, rt_view_polygon_ref exclude);
+
+RT_EXPORT extern int
+rt_view_polygon_clear_point_selection_bsg(struct bsg_view *v);
+
+RT_EXPORT extern int
+rt_view_polygon_ref_is_null_bsg(rt_view_polygon_ref ref);
+
+RT_EXPORT extern int
+rt_view_polygon_record_get_bsg(rt_view_polygon_ref ref, struct rt_view_polygon_record *record);
+
+RT_EXPORT extern int
+rt_view_polygon_update_bsg(rt_view_polygon_ref ref, struct bsg_view *v, int utype);
+
+RT_EXPORT extern int
+rt_view_polygon_update_screen_pt_bsg(rt_view_polygon_ref ref, struct bsg_view *v,
+				     int x, int y, int utype);
+
+RT_EXPORT extern int
+rt_view_polygon_move_bsg(rt_view_polygon_ref ref, point_t *current_point,
+			 point_t *previous_point);
+
+RT_EXPORT extern int
+rt_view_polygon_set_name_bsg(rt_view_polygon_ref ref, const char *name);
+
+RT_EXPORT extern int
+rt_view_polygon_set_view_bsg(rt_view_polygon_ref ref, struct bsg_view *v);
+
+RT_EXPORT extern int
+rt_view_polygon_set_visual_bsg(rt_view_polygon_ref ref,
+			       const struct bu_color *edge_color,
+			       const struct bu_color *fill_color,
+			       fastf_t fill_slope_x,
+			       fastf_t fill_slope_y,
+			       fastf_t fill_density,
+			       fastf_t vZ,
+			       int fill_flag);
+
+RT_EXPORT extern int
+rt_view_polygon_set_open_bsg(rt_view_polygon_ref ref, int open);
+
+RT_EXPORT extern int
+rt_view_polygon_close_bsg(rt_view_polygon_ref ref);
+
+RT_EXPORT extern int
+rt_view_polygon_clear_selected_point_bsg(rt_view_polygon_ref ref);
+
+RT_EXPORT extern int
+rt_view_polygon_remove_bsg(rt_view_polygon_ref ref);
+
+RT_EXPORT extern void *
+rt_view_polygon_user_data_bsg(rt_view_polygon_ref ref);
+
+RT_EXPORT extern int
+rt_view_polygon_user_data_set_bsg(rt_view_polygon_ref ref, void *user_data);
+
+RT_EXPORT extern int
+rt_view_polygon_csg_bsg(rt_view_polygon_ref target, rt_view_polygon_ref stencil, bg_clip_t op);
+
+RT_EXPORT extern rt_view_polygon_ref
+rt_view_polygon_import_sketch_bsg(const char *name, struct db_i *dbip,
+				  struct directory *dp, struct bsg_view *v);
+
+RT_EXPORT extern struct directory *
+rt_view_polygon_export_sketch_bsg(struct db_i *dbip, const char *name,
+				  rt_view_polygon_ref ref);
+
+RT_EXPORT extern int
+rt_view_polygon_snap_exclude_set_bsg(struct bsg_view *v, rt_view_polygon_ref ref);
+
 RT_EXPORT extern int
 rt_view_snap_source_flags_from_bsg(const struct bsg_view *v);
 
@@ -561,10 +706,6 @@ rt_view_snap_source_flags_set_bsg(struct bsg_view *v, int flags);
 
 RT_EXPORT extern unsigned long long
 rt_view_snap_kind_mask_from_bsg(const struct bsg_view *v);
-
-RT_EXPORT extern int
-rt_view_snap_exclude_feature_from_bsg(bsg_feature_ref *ref,
-				      const struct bsg_view *v);
 
 RT_EXPORT extern int
 rt_view_snap_exclude_feature_set_bsg(struct bsg_view *v, bsg_feature_ref ref);

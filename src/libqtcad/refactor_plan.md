@@ -37,7 +37,7 @@ Phase 3 — Canvas widget unification
 Current tree notes:
 - QgCanvasBase abstract interface (include/qtcad/QgCanvasBase.h) introduced: non-QObject pure-virtual mixin with signals changed()/init_done() (connected via asQObject()), slots need_update()/queued_update()/set_lmouse_move_default(int), all accessors, and isValid().
 - QgCanvasState pimpl struct (src/libqtcad/QgCanvasState.h) consolidates the duplicated private state of QgGL and QgSW; shared inline helpers (qgcanvas_render_size, qgcanvas_stash_hashes, qgcanvas_diff_hashes_check, qgcanvas_aet, qgcanvas_set_view) eliminate the textual duplication previously present in both canvas .cpp files.
-- QgCanvasInput class (src/libqtcad/QgCanvasInput.h/.cpp) replaces the old bindings.h free-function API with a per-canvas-instance class whose drag-tracking maps are instance members rather than global statics; cross-canvas interference is therefore impossible.
+- QgCanvasInput class (src/libqtcad/QgCanvasInput.h/.cpp) replaced the deleted legacy free-function input API with a per-canvas-instance class whose drag-tracking maps are instance members rather than global statics; cross-canvas interference is therefore impossible.
 - QgGL and QgSW now inherit QgCanvasBase in addition to QOpenGLWidget/QWidget; their public headers carry only a forward-declared QgCanvasState* pimpl pointer (no STL/libdm/libbv member exposure); render_to_file() and get_viewport_image() added to QgGL.
 - QgView now holds a single QgCanvasBase *canvas pointer; the #ifdef BRLCAD_OPENGL duplication that previously appeared in every method body has been replaced with a single make_canvas() factory function plus virtual dispatch; the class header no longer includes QgGL.h or QgSW.h.
 - Phase 3 is complete.

@@ -54,10 +54,10 @@ int
 common_dm(struct mged_state *s, int argc, const char *argv[])
 {
     int status;
-    struct bsg_adc_state adc_record = {0};
-    struct bsg_adc_state *adc = &adc_record;
-    struct bsg_grid_state grid_record = {0};
-    struct bsg_grid_state *grid = &grid_record;
+    struct rt_view_adc_state adc_record = {0};
+    struct rt_view_adc_state *adc = &adc_record;
+    struct rt_view_grid_state grid_record = RT_VIEW_GRID_STATE_INIT;
+    struct rt_view_grid_state *grid = &grid_record;
     struct bu_vls vls = BU_VLS_INIT_ZERO;
 
     if (s->dbip == DBI_NULL)

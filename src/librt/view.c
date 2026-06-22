@@ -25,6 +25,7 @@
 
 #include "common.h"
 
+#include <math.h>
 #include <stdlib.h>
 
 #include "librt_private.h"
@@ -204,6 +205,71 @@ rt_view_solid_point_spacing(const struct rt_view_info *info, fastf_t solid_width
     p2[X] = sqrt((radius * radius) - (p2[Y] * p2[Y]));
 
     return DIST_PNT2_PNT2(p1, p2) / view_lod_policy(info).point_scale;
+}
+
+void
+rt_view_adc_model_to_view(struct rt_view_adc_state *adcs, mat_t model2view, fastf_t amax)
+{
+    if (!adcs || !model2view)
+	return;
+
+    MAT4X3PNT(adcs->pos_view, model2view, adcs->pos_model);
+    adcs->dv_x = adcs->pos_view[X] * amax;
+    adcs->dv_y = adcs->pos_view[Y] * amax;
+}
+
+void
+rt_view_adc_grid_to_view(struct rt_view_adc_state *adcs, mat_t model2view, fastf_t amax)
+{
+    point_t model_pt = VINIT_ZERO;
+    point_t view_pt;
+
+    if (!adcs || !model2view)
+	return;
+
+    MAT4X3PNT(view_pt, model2view, model_pt);
+    VADD2(adcs->pos_view, view_pt, adcs->pos_grid);
+    adcs->dv_x = adcs->pos_view[X] * amax;
+    adcs->dv_y = adcs->pos_view[Y] * amax;
+}
+
+void
+rt_view_adc_view_to_grid(struct rt_view_adc_state *adcs, mat_t model2view)
+{
+    point_t model_pt = VINIT_ZERO;
+    point_t view_pt;
+
+    if (!adcs || !model2view)
+	return;
+
+    MAT4X3PNT(view_pt, model2view, model_pt);
+    VSUB2(adcs->pos_grid, adcs->pos_view, view_pt);
+}
+
+void
+rt_view_adc_reset(struct rt_view_adc_state *adcs, mat_t view2model, mat_t model2view)
+{
+    if (!adcs || !view2model || !model2view)
+	return;
+
+    adcs->dv_x = adcs->dv_y = 0;
+    adcs->dv_a1 = adcs->dv_a2 = 0;
+    adcs->dv_dist = 0;
+
+    VSETALL(adcs->pos_view, 0.0);
+    MAT4X3PNT(adcs->pos_model, view2model, adcs->pos_view);
+    adcs->dst = (adcs->dv_dist * RT_INV_VIEW + 1.0) * M_SQRT1_2;
+    adcs->a1 = adcs->a2 = 45.0;
+    rt_view_adc_view_to_grid(adcs, model2view);
+
+    VSETALL(adcs->anchor_pt_a1, 0.0);
+    VSETALL(adcs->anchor_pt_a2, 0.0);
+    VSETALL(adcs->anchor_pt_dst, 0.0);
+
+    adcs->anchor_pos = 0;
+    adcs->anchor_a1 = 0;
+    adcs->anchor_a2 = 0;
+    adcs->anchor_dst = 0;
 }
 
 

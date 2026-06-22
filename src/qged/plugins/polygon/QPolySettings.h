@@ -30,8 +30,8 @@
 #include "qtcad/QgColorRGB.h"
 
 struct bu_vls;
-struct bsg_polygon_record;
-struct bsg_view;
+struct rt_view_polygon_record;
+class QgPluginContext;
 
 class QPolySettings : public QWidget
 {
@@ -57,7 +57,7 @@ class QPolySettings : public QWidget
 	QCheckBox *line_snapping;
 	QCheckBox *grid_snapping;
 
-	bool uniq_obj_name(struct bu_vls *oname, struct bsg_view *v);
+	bool uniq_obj_name(struct bu_vls *oname, const QgPluginContext *ctx);
 
     signals:
 	void settings_changed();
@@ -68,7 +68,7 @@ class QPolySettings : public QWidget
 	void do_settings_changed();
 	void do_line_snapping_changed();
 	void do_grid_snapping_changed();
-	void settings_sync(const struct bsg_polygon_record *p);
+	void settings_sync(const struct rt_view_polygon_record *p);
 
     private slots:
 	void sketch_sync_toggled(bool);

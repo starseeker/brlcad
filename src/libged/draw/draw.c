@@ -39,7 +39,6 @@
 #include "bsg/appearance.h"
 #include "bsg/draw_intent.h"
 #include "bsg/draw_source.h"
-#include "bsg/feature.h"
 #include "bsg/scene_object.h"
 #include "bsg/material.h"
 #include "bsg/node.h"
@@ -47,6 +46,7 @@
 #include "nmg/display.h"
 #include "rt/view.h"
 #include "../bsg_ged_draw_private.h"
+#include "../bsg_ged_draw_view_private.h"
 #include "../ged_private.h"
 #include "./ged_draw.h"
 
@@ -1520,9 +1520,8 @@ _ged_drawtrees(struct ged *gedp, int argc, const char *argv[], int kind, struct 
 		    int handled = ged_diagnostic_line_layer_publish(gedp,
 			    "nmg::_EDGEUSES_", dgcdp.draw_edge_uses_plot);
 		    if (!handled && gedp->ged_gvp) {
-			(void)bsg_feature_replace_line_layer_builder(gedp->ged_gvp,
-				"nmg::_EDGEUSES_", 0,
-				(const struct bsg_line_layer_builder *)dgcdp.draw_edge_uses_plot, NULL);
+			(void)ged_draw_view_line_layer_builder_replace(gedp->ged_gvp,
+				"nmg::_EDGEUSES_", 0, dgcdp.draw_edge_uses_plot);
 		    }
 		    bg_line_layer_builder_free(dgcdp.draw_edge_uses_plot);
 		    dgcdp.draw_edge_uses_plot = NULL;

@@ -35,7 +35,6 @@
 #include "bu/vls.h"
 #include "bsg/defines.h"
 #include "rt/search.h"
-#include "dm/fbserv.h" // for fbserv_obj
 #include "rt/wdb.h" // for struct rt_wdb
 
 
@@ -75,6 +74,7 @@
 struct ged;
 struct ged_selection_set;
 struct bg_line_layer_builder;
+struct fbserv_obj;
 
 struct ged_diagnostic_hud_label {
     const char *label_id;

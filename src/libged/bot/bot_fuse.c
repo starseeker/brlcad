@@ -32,9 +32,9 @@
 #include "bu/getopt.h"
 #include "bu/parallel.h"
 #include "rt/geom.h"
-#include "bsg/feature.h"
 #include "bg/plot3.h"
 
+#include "../bsg_ged_draw_view_private.h"
 #include "../ged_private.h"
 
 struct bot_fuse_line_data {
@@ -166,14 +166,14 @@ show_dangling_edges(struct ged *gedp, const uint32_t *magic_p, const char *name,
 	    struct bu_vls nroot = BU_VLS_INIT_ZERO;
 	    bu_vls_sprintf(&nroot, "bot_fuse::%s", name);
 	    struct bsg_view *view = gedp->ged_gvp;
-	    struct bsg_feature_style style = BSG_FEATURE_STYLE_INIT;
+	    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
 	    style.color_valid = 1;
 	    VSET(style.color, 255, 255, 0);
 	    if (lines.count)
-		(void)bsg_feature_replace_lines(view, bu_vls_cstr(&nroot), 0,
-			(const point_t *)lines.points, lines.count, &style);
+		(void)ged_draw_view_lines_replace(view, bu_vls_cstr(&nroot), 0,
+			(const point_t *)lines.points, NULL, lines.count, &style);
 	    else
-		(void)bsg_feature_remove(view, bu_vls_cstr(&nroot));
+		(void)ged_draw_view_feature_remove(view, bu_vls_cstr(&nroot));
 	    bu_vls_free(&nroot);
 	}
 	bot_fuse_lines_free(&lines);

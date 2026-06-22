@@ -55,11 +55,10 @@
 #include "bsg/draw_intent.h"
 #include "bsg/export.h"
 #include "bg/plot3.h"
-#include "bsg/interaction.h"
 #include "bsg/render.h"
 #include "bsg/render_item.h"
-#include "bsg/selection.h"
 #include "bsg/view_state.h"
+#include "bg/line_layer.h"
 #include "nmg.h"
 #include "rt/db_attr.h"
 #include "wdb.h"
@@ -2440,11 +2439,11 @@ main(int ac, char *av[])
     {
 	point_t p1 = {0, 0, 0}, p2 = {100, 100, 100};
 	point_t points[2];
-	int commands[2] = {BSG_GEOMETRY_LINE_MOVE, BSG_GEOMETRY_LINE_DRAW};
+	int commands[2] = {BG_GEOMETRY_LINE_MOVE, BG_GEOMETRY_LINE_DRAW};
 	VMOVE(points[0], p1);
 	VMOVE(points[1], p2);
 	struct ged_draw_overlay_geometry geometry = {};
-	geometry.kind = BSG_GEOMETRY_NODE_LINE_SET;
+	geometry.kind = GED_DRAW_OVERLAY_GEOMETRY_LINE_SET;
 	geometry.points = (const point_t *)points;
 	geometry.point_count = 2;
 	geometry.commands = commands;
@@ -3163,13 +3162,10 @@ main(int ac, char *av[])
 	    bsg_scene_set_highlighted(test_scene_ref_from_node(first), 0);
 	    const char *select_av[4] = {"select", "add", path, NULL};
 	    ASSERT(ged_exec_select(gedp, 3, select_av) == BRLCAD_OK);
-	    ASSERT(gedp->ged_gvp && bsg_view_selection(gedp->ged_gvp));
 	    ged_draw_shape_ref first_ref = ged_draw_shape_ref_from_node(gedp, first);
-	    struct bsg_interaction_record *first_record =
-		ged_draw_shape_interaction_record(gedp, first_ref, BSG_INTERACTION_SELECTED_PATH);
-	    ASSERT(first_record != NULL);
-	    ASSERT(bsg_selection_contains_record(bsg_view_selection(gedp->ged_gvp), first_record));
-	    bsg_interaction_record_free(first_record);
+	    struct ged_draw_shape_record first_selected_record;
+	    ASSERT(ged_draw_shape_record_get(gedp, first_ref, &first_selected_record) == 1);
+	    ASSERT(first_selected_record.selected);
 
 	    struct bsg_render_request *req =
 		bsg_render_request_create(gedp->ged_gvp, NULL);
@@ -3419,10 +3415,10 @@ main(int ac, char *av[])
 	{
 	    point_t p1 = {0, 0, 0};
 	    point_t points[1];
-	    int commands[1] = {BSG_GEOMETRY_LINE_MOVE};
+	    int commands[1] = {BG_GEOMETRY_LINE_MOVE};
 	    VMOVE(points[0], p1);
 	    struct ged_draw_overlay_geometry geometry = {};
-	    geometry.kind = BSG_GEOMETRY_NODE_LINE_SET;
+	    geometry.kind = GED_DRAW_OVERLAY_GEOMETRY_LINE_SET;
 	    geometry.points = (const point_t *)points;
 	    geometry.point_count = 1;
 	    geometry.commands = commands;
@@ -3490,10 +3486,10 @@ main(int ac, char *av[])
 
 	    point_t p = {1, 1, 1};
 	    point_t points[1];
-	    int commands[1] = {BSG_GEOMETRY_LINE_MOVE};
+	    int commands[1] = {BG_GEOMETRY_LINE_MOVE};
 	    VMOVE(points[0], p);
 	    struct ged_draw_overlay_geometry geometry = {};
-	    geometry.kind = BSG_GEOMETRY_NODE_LINE_SET;
+	    geometry.kind = GED_DRAW_OVERLAY_GEOMETRY_LINE_SET;
 	    geometry.points = (const point_t *)points;
 	    geometry.point_count = 1;
 	    geometry.commands = commands;

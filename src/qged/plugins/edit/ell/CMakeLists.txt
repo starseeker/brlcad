@@ -11,7 +11,7 @@ if(BRLCAD_ENABLE_QT)
   )
 endif(BRLCAD_ENABLE_QT)
 
-set(ell_srcs QEll.cpp ell.cpp)
+set(ell_srcs QEll.cpp ell.cpp ../qged_edit_preview_util.cpp)
 
 set(ell_moc_hdrs QEll.h EditEllFactory.h)
 

@@ -35,7 +35,7 @@
  * -----------
  * - Wire pick_cb to face-selection logic (ray/BV intersection).
  * - Wire snap_cb to vertex snapping during drag.
- * - Add a BSG_OVERLAY_CLASS_EDIT_HANDLE child node per selected vertex.
+ * - Add an edit-handle child node per selected vertex.
  */
 
 #ifndef QBOT_H
@@ -46,9 +46,9 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QGroupBox>
-#include "bsg/feature.h"
 #include "raytrace.h"
 #include "qtcad/QgTypes.h"
+#include "../qged_edit_preview_util.h"
 
 class QgPluginContext;
 
@@ -85,12 +85,11 @@ class QBot : public QWidget
 	struct directory *dp = NULL;
 	struct rt_bot_internal *bot = NULL;  /* shallow pointer into rt_db_internal */
 	/* Edit-preview overlay feature. */
-	bsg_feature_ref p = BSG_FEATURE_REF_NULL_INIT;
+	qged_edit_feature_ref p = QGED_EDIT_FEATURE_REF_NULL;
 	struct bu_vls oname = BU_VLS_INIT_ZERO;
 	QgPluginContext *m_ctx = nullptr;
 
 	struct ged *getGed() const;
-	struct bsg_view *getView() const;
 };
 
 #endif /* QBOT_H */

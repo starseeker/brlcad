@@ -113,7 +113,7 @@ extern struct _mged_variables default_mged_variables;
 extern struct _color_scheme default_color_scheme;
 
 /* defined in grid.c */
-extern struct bsg_grid_state default_grid_state;
+extern struct rt_view_grid_state default_grid_state;
 
 /* defined in axes.c */
 extern struct _axes_state default_axes_state;
@@ -2073,13 +2073,13 @@ refresh(struct mged_state *s)
 			if (rubber_band->rb_active || rubber_band->rb_draw)
 			    draw_rect(s);
 
-			struct bsg_grid_state grid = {0};
+			struct rt_view_grid_state grid = {0};
 			(void)mged_dm_grid_state_get(s->mged_curr_dm, &grid);
 			if (grid.draw)
 			    draw_grid(s);
 
 			/* Compute and display angle/distance cursor */
-			struct bsg_adc_state adc = {0};
+			struct rt_view_adc_state adc = {0};
 			(void)mged_dm_adc_state_get(s->mged_curr_dm, &adc);
 			if (adc.draw)
 			    adcursor(s);
@@ -2904,12 +2904,12 @@ main(int argc, char *argv[])
     view_ring_init(s->mged_curr_dm->dm_view_state, (struct _view_state *)NULL);
     MAT_IDN(view_state->vs_ModelDelta);
     if (view_state->vs_gvp) {
-	struct bsg_adc_state adc;
-	rt_view_grid_set_bsg(view_state->vs_gvp, &default_grid_state);
-	if (rt_view_adc_from_bsg(&adc, view_state->vs_gvp)) {
+	struct rt_view_adc_state adc;
+	rt_view_grid_state_set_bsg(view_state->vs_gvp, &default_grid_state);
+	if (rt_view_adc_state_from_bsg(&adc, view_state->vs_gvp)) {
 	    adc.a1 = 45.0;
 	    adc.a2 = 45.0;
-	    rt_view_adc_set_bsg(view_state->vs_gvp, &adc);
+	    rt_view_adc_state_set_bsg(view_state->vs_gvp, &adc);
 	}
     }
 

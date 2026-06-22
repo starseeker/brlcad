@@ -40,9 +40,9 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QGroupBox>
-#include "bsg/feature.h"
 #include "raytrace.h"
 #include "qtcad/QgTypes.h"
+#include "../qged_edit_preview_util.h"
 
 class QgPluginContext;
 
@@ -79,12 +79,11 @@ class QExtrude : public QWidget
 	struct directory *dp = NULL;
 	struct rt_extrude_internal extr;
 	/* Edit-scope overlay feature. */
-	bsg_feature_ref p = BSG_FEATURE_REF_NULL_INIT;
+	qged_edit_feature_ref p = QGED_EDIT_FEATURE_REF_NULL;
 	struct bu_vls oname = BU_VLS_INIT_ZERO;
 	QgPluginContext *m_ctx = nullptr;
 
 	struct ged *getGed() const;
-	struct bsg_view *getView() const;
 };
 
 #endif /* QEXTRUDE_H */

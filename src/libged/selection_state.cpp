@@ -29,8 +29,6 @@
 #include <string>
 #include <vector>
 
-#include "bsg/interaction.h"
-#include "bsg/selection.h"
 #include "bu/hash.h"
 #include "bu/path.h"
 #include "bu/vls.h"
@@ -38,6 +36,7 @@
 #include "ged/selection_state.h"
 #include "rt/view_legacy_bsg.h"
 
+#include "./bsg_ged_draw_private.h"
 #include "./ged_private.h"
 
 
@@ -847,6 +846,26 @@ ged_selection_native_hash(const ged_native_selection_set *set)
 }
 
 
+struct ged_selection_native_view_snapshot_ctx {
+    std::map<struct bsg_view *, std::set<std::string>> *snapshot;
+};
+
+
+static int
+ged_selection_native_view_snapshot_cb(struct bsg_view *view,
+				      const char *path,
+				      void *data)
+{
+    struct ged_selection_native_view_snapshot_ctx *ctx =
+	(struct ged_selection_native_view_snapshot_ctx *)data;
+    if (!ctx || !ctx->snapshot || !view || !path || !path[0])
+	return 1;
+
+    (*ctx->snapshot)[view].insert(ged_selection_canonical_path(path));
+    return 1;
+}
+
+
 static void
 ged_selection_native_view_snapshot(struct ged *gedp,
 				   std::map<struct bsg_view *, std::set<std::string>> &snapshot)
@@ -854,19 +873,14 @@ ged_selection_native_view_snapshot(struct ged *gedp,
     if (!gedp)
 	return;
 
+    struct ged_selection_native_view_snapshot_ctx ctx;
+    ctx.snapshot = &snapshot;
+
     struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
     for (size_t i = 0; views && i < BU_PTBL_LEN(views); i++) {
 	struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, i);
-	struct bsg_selection *selection = rt_view_selection_bsg(v);
-	if (!selection)
-	    continue;
-	for (size_t ri = 0; ri < bsg_selection_count(selection); ri++) {
-	    const struct bsg_interaction_record *record =
-		bsg_selection_record(selection, ri);
-	    const char *path = bsg_interaction_record_path(record);
-	    if (path && path[0])
-		snapshot[v].insert(ged_selection_canonical_path(path));
-	}
+	ged_draw_view_selection_path_foreach(v,
+		ged_selection_native_view_snapshot_cb, &ctx);
     }
 }
 
@@ -888,22 +902,19 @@ ged_selection_native_draw_sync_shape_ref(
 	return 1;
 
     struct bsg_view *v = ged_draw_shape_ref_view(ctx->gedp, ref);
-    if (!v || !rt_view_selection_bsg(v))
-	v = ctx->gedp->ged_gvp;
-    if (!v || !rt_view_selection_bsg(v))
+    struct bsg_view *selection_view = NULL;
+    struct bu_vls path = BU_VLS_INIT_ZERO;
+    if (!ged_draw_view_selection_add_shape_ref(ctx->gedp, v, ref,
+	    &selection_view, &path)) {
+	bu_vls_free(&path);
 	return 1;
+    }
 
-    struct bsg_interaction_record *record =
-	ged_draw_shape_ref_selection_record(ctx->gedp, ref, v);
-    if (!record)
-	return 1;
-
-    const char *path = bsg_interaction_record_path(record);
-    if (path && path[0])
-	(*ctx->new_selection)[v].insert(ged_selection_canonical_path(path));
-    if (!bsg_selection_contains_record(rt_view_selection_bsg(v), record))
-	bsg_selection_add_record(rt_view_selection_bsg(v), record);
-    bsg_interaction_record_free(record);
+    const char *path_str = bu_vls_cstr(&path);
+    if (selection_view && path_str && path_str[0])
+	(*ctx->new_selection)[selection_view].insert(
+		ged_selection_canonical_path(path_str));
+    bu_vls_free(&path);
     return 1;
 }
 
@@ -1024,9 +1035,7 @@ ged_selection_native_draw_sync(struct ged *gedp,
     struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
     for (size_t i = 0; views && i < BU_PTBL_LEN(views); i++) {
 	struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, i);
-	struct bsg_selection *selection = rt_view_selection_bsg(v);
-	if (selection)
-	    bsg_selection_clear(selection);
+	ged_draw_view_selection_clear(v);
     }
 
     struct ged_selection_native_draw_sync_ctx ctx;
@@ -1058,9 +1067,7 @@ ged_selection_native_draw_sync(struct ged *gedp,
 	new_selection.clear();
 	for (size_t i = 0; views && i < BU_PTBL_LEN(views); i++) {
 	    struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, i);
-	    struct bsg_selection *selection = rt_view_selection_bsg(v);
-	    if (selection)
-		bsg_selection_clear(selection);
+	    ged_draw_view_selection_clear(v);
 	}
 	ged_selection_draw_sync_note_shape_scan(gedp);
 	ged_draw_foreach_shape_record(gedp, ged_selection_native_draw_sync_cb,

@@ -32,8 +32,8 @@
 #include "rt/db_fullpath.h"
 #include "rt/db_diff.h"
 #include "analyze.h"
-#include "bsg/feature.h"
 
+#include "../bsg_ged_draw_view_private.h"
 #include "../ged_private.h"
 
 static void check_walk(
@@ -74,14 +74,15 @@ gdiff_replace_line_feature(struct bsg_view *view, const char *name,
     size_t point_count = 0;
     point_t *points = gdiff_segment_points(segments, &point_count);
     if (!point_count || !points) {
-	(void)bsg_feature_remove(view, name);
+	(void)ged_draw_view_feature_remove(view, name);
 	return;
     }
 
-    struct bsg_feature_style style = BSG_FEATURE_STYLE_INIT;
+    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
     style.color_valid = 1;
     VSET(style.color, r, g, b);
-    (void)bsg_feature_replace_lines(view, name, 0, (const point_t *)points, point_count, &style);
+    (void)ged_draw_view_lines_replace(view, name, 0, (const point_t *)points,
+	    NULL, point_count, &style);
     bu_free(points, "gdiff segment points");
 }
 
@@ -408,10 +409,10 @@ ged_gdiff_core(struct ged *gedp, int argc, const char *argv[])
     if (view_left || view_overlap || view_right) {
 	if (gedp->ged_gvp) {
 	    struct bsg_view *view = gedp->ged_gvp;
-	    (void)bsg_feature_remove(view, "gdiff");
-	    (void)bsg_feature_remove(view, "gdiff::left");
-	    (void)bsg_feature_remove(view, "gdiff::overlap");
-	    (void)bsg_feature_remove(view, "gdiff::right");
+	    (void)ged_draw_view_feature_remove(view, "gdiff");
+	    (void)ged_draw_view_feature_remove(view, "gdiff::left");
+	    (void)ged_draw_view_feature_remove(view, "gdiff::overlap");
+	    (void)ged_draw_view_feature_remove(view, "gdiff::right");
 	    if (view_left)
 		gdiff_replace_line_feature(view, "gdiff::left", results->left, 255, 0, 0);
 	    if (view_overlap)

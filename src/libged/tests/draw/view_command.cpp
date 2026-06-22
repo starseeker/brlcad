@@ -21,7 +21,6 @@
 #include <bsg/backend_scene.h>
 #include <bsg/export.h>
 #include <bsg/measure.h>
-#include <bsg/pick.h>
 #include <bsg/polygon.h>
 #include <bsg/render.h>
 #include <bsg/render_item.h>
@@ -209,13 +208,13 @@ test_command_report_record_consistency(struct ged *gedp, struct bsg_view *v)
 	}
     }
 
-    struct bsg_pick_result *pick = bsg_pick_semantic_path(v, "all.g");
+    struct rt_view_pick_result_bsg *pick = rt_view_pick_semantic_path_bsg(v, "all.g");
+    struct bu_vls pick_path = BU_VLS_INIT_ZERO;
     ASSERT(pick != NULL);
-    ASSERT(bsg_pick_result_count(pick) > 0);
-    if (pick && bsg_pick_result_count(pick) > 0) {
-	struct bsg_pick_record *pr = bsg_pick_result_get(pick, 0);
-	ASSERT(pr != NULL);
-	ASSERT(pr && BU_STR_EQUAL(bu_vls_cstr(&pr->pr_source_path), "all.g"));
+    ASSERT(rt_view_pick_result_count_bsg(pick) > 0);
+    if (pick && rt_view_pick_result_count_bsg(pick) > 0) {
+	ASSERT(rt_view_pick_result_path_bsg(pick, 0, &pick_path));
+	ASSERT(BU_STR_EQUAL(bu_vls_cstr(&pick_path), "all.g"));
     }
 
     point_t sample = VINIT_ZERO;
@@ -233,7 +232,8 @@ test_command_report_record_consistency(struct ged *gedp, struct bsg_view *v)
     ASSERT(fabs(measure.mr_distance - 1.0) < 1.0e-9);
 
     bsg_snap_result_free(&snap);
-    bsg_pick_result_free(pick);
+    bu_vls_free(&pick_path);
+    rt_view_pick_result_free_bsg(pick);
     bsg_backend_scene_destroy(scene);
     free_render_items(&items);
     bsg_export_result_free(export_result);
@@ -279,6 +279,18 @@ main(int argc, const char **argv)
     ASSERT(run_view(gedp, 6, c2) == BRLCAD_OK);
     const char *c3[] = {"view", "obj", "info", "u_line", "draw", NULL};
     ASSERT(run_view(gedp, 5, c3) == BRLCAD_OK);
+    ASSERT(result_str(gedp).find("DOWN") != std::string::npos);
+    const char *c3a[] = {"view", "obj", "set", "u_line", "draw", "1", NULL};
+    ASSERT(run_view(gedp, 6, c3a) == BRLCAD_OK);
+    const char *c3b[] = {"view", "obj", "info", "u_line", "draw", NULL};
+    ASSERT(run_view(gedp, 5, c3b) == BRLCAD_OK);
+    ASSERT(result_str(gedp).find("UP") != std::string::npos);
+
+    const char *c3c[] = {"view", "obj", "set", "u_line", "color", "10/20/30", NULL};
+    ASSERT(run_view(gedp, 6, c3c) == BRLCAD_OK);
+    const char *c3d[] = {"view", "obj", "info", "u_line", "color", NULL};
+    ASSERT(run_view(gedp, 5, c3d) == BRLCAD_OK);
+    ASSERT(result_str(gedp).find("10/20/30") != std::string::npos);
 
     const char *c4[] = {"view", "obj", "list", "u_*", NULL};
     ASSERT(run_view(gedp, 4, c4) == BRLCAD_OK);
@@ -286,6 +298,11 @@ main(int argc, const char **argv)
 
     const char *c5[] = {"view", "obj", "set", "u_line", "arrow", "1", NULL};
     ASSERT(run_view(gedp, 6, c5) == BRLCAD_OK);
+    const char *c5a[] = {"view", "obj", "set", "u_line", "update", "12", "34", NULL};
+    ASSERT(run_view(gedp, 7, c5a) == BRLCAD_OK);
+    const char *c5b[] = {"view", "vZ", "-N", "u_line", NULL};
+    ASSERT(run_view(gedp, 4, c5b) == BRLCAD_OK);
+    ASSERT(!result_str(gedp).empty());
 
     const char *a0[] = {"view", "obj", "create", "u_axes", "axes", "create", "1", "2", "3", NULL};
     ASSERT_VIEW_OK(gedp, 9, a0);

@@ -27,10 +27,18 @@
 #include "bu/malloc.h"
 #include "bu/str.h"
 #include "bu/vls.h"
-#include "bsg/polygon.h"
-#include "bg/polygon.h"
-#include "rt/view_legacy_bsg.h"
+#include "bu/color.h"
+#include "qtcad/QgLegacyView.h"
+#include "qtcad/QgPluginContext.h"
+#include "qtcad/QgView.h"
+#include "rt/view.h"
 #include "QPolySettings.h"
+
+static qg_legacy_view *
+qpolysettings_view(const QgPluginContext *ctx)
+{
+    return ctx ? ctx->activeView() : nullptr;
+}
 
 QPolySettings::QPolySettings()
     : QWidget()
@@ -149,9 +157,10 @@ QPolySettings::~QPolySettings()
 }
 
 bool
-QPolySettings::uniq_obj_name(struct bu_vls *oname, struct bsg_view *v)
+QPolySettings::uniq_obj_name(struct bu_vls *oname, const QgPluginContext *ctx)
 {
-    if (!v || !oname)
+    qg_legacy_view *v = qpolysettings_view(ctx);
+    if (!v)
 	return false;
 
     char *vname = NULL;
@@ -167,22 +176,31 @@ QPolySettings::uniq_obj_name(struct bu_vls *oname, struct bsg_view *v)
     // See if the supplied name will collide.  If it will, then reject.  If we want
     // an output name, fail with a message box
     struct bu_vls ovname = BU_VLS_INIT_ZERO;
-    rt_view_unique_object_name_bsg(&ovname, vname, v);
-    if (!BU_STR_EQUAL(bu_vls_cstr(&ovname), vname)) {
-	if (!oname)
-	    return false;
+    if (!qg_legacy_view_unique_object_name(&ovname, vname, v)) {
+	if (vname)
+	    bu_free(vname, "vname");
+	return false;
+    }
+    const char *candidate = vname ? vname : bu_vls_cstr(&ovname);
+    if (!BU_STR_EQUAL(bu_vls_cstr(&ovname), candidate)) {
 	QMessageBox msgBox;
-	msgBox.setText("Proposed object name already exists in view.");
-	msgBox.exec();
+	if (oname) {
+	    msgBox.setText("Proposed object name already exists in view.");
+	    msgBox.exec();
+	}
 	bu_vls_free(&ovname);
-	bu_free(vname, "vname");
+	if (vname)
+	    bu_free(vname, "vname");
 	return false;
     }
 
     // Unique.  If we want it returned, do the printing
     if (oname)
-	bu_vls_sprintf(oname, "%s", vname);
+	bu_vls_sprintf(oname, "%s", candidate);
 
+    bu_vls_free(&ovname);
+    if (vname)
+	bu_free(vname, "vname");
     return true;
 }
 
@@ -222,7 +240,7 @@ QPolySettings::do_grid_snapping_changed()
 
 
 void
-QPolySettings::settings_sync(const struct bsg_polygon_record *p)
+QPolySettings::settings_sync(const struct rt_view_polygon_record *p)
 {
     if (!p)
 	return;

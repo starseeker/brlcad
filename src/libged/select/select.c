@@ -651,8 +651,8 @@ ged_rselect_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_interactive_rect_state rect;
-    if (!rt_view_interactive_rect_from_bsg(&rect, gedp->ged_gvp))
+    struct rt_view_interactive_rect_state rect;
+    if (!rt_view_interactive_rect_state_from_bsg(&rect, gedp->ged_gvp))
 	return BRLCAD_ERROR;
 
     if (botip != (struct rt_bot_internal *)NULL) {

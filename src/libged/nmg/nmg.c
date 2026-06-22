@@ -35,9 +35,9 @@
 
 #include "dm.h"  // For labelface - see if the dm_set_native_repaint_pending is really needed
 
-#include "bsg/feature.h"
 #include "ged.h"
 #include "ged/bsg_ged_draw.h"
+#include "../bsg_ged_draw_view_private.h"
 #include "../ged_private.h"
 
 
@@ -104,7 +104,7 @@ struct labelface_data {
     struct model *m;
     struct db_i *dbip;
     struct bu_list *f_list;
-    struct bsg_feature_label_data *labels;
+    struct ged_draw_view_label_data *labels;
     size_t label_count;
     size_t label_capacity;
 };
@@ -144,10 +144,10 @@ labelface_export_record(const struct ged_draw_view_db_object_record *rec,
 
 	if (lfd->label_count + 1 > lfd->label_capacity) {
 	    size_t ncap = lfd->label_capacity ? lfd->label_capacity * 2 : 64;
-	    lfd->labels = (struct bsg_feature_label_data *)bu_realloc(lfd->labels,
-		    ncap * sizeof(struct bsg_feature_label_data), "labelface label data");
+	    lfd->labels = (struct ged_draw_view_label_data *)bu_realloc(lfd->labels,
+		    ncap * sizeof(struct ged_draw_view_label_data), "labelface label data");
 	    for (size_t i = lfd->label_capacity; i < ncap; i++) {
-		struct bsg_feature_label_data init = BSG_FEATURE_LABEL_DATA_INIT;
+		struct ged_draw_view_label_data init = GED_DRAW_VIEW_LABEL_DATA_INIT;
 		lfd->labels[i] = init;
 	    }
 	    lfd->label_capacity = ncap;
@@ -158,7 +158,7 @@ labelface_export_record(const struct ged_draw_view_db_object_record *rec,
 	avg_pt[2] = (curr_f->min_pt[2] + curr_f->max_pt[2]) / 2;
 	snprintf(label, sizeof(label), " %d", (int)curr_f->index);
 
-	struct bsg_feature_label_data init = BSG_FEATURE_LABEL_DATA_INIT;
+	struct ged_draw_view_label_data init = GED_DRAW_VIEW_LABEL_DATA_INIT;
 	lfd->labels[lfd->label_count] = init;
 	lfd->labels[lfd->label_count].text = bu_strdup(label);
 	VMOVE(lfd->labels[lfd->label_count].point, avg_pt);
@@ -247,16 +247,11 @@ ged_labelface_core(struct ged *gedp, int argc, const char *argv[])
 		labelface_export_record, &lfd);
     }
 
-    (void)bsg_feature_remove(gedp->ged_gvp, LABELFACE_FEATURE_NAME);
-    if (lfd.label_count) {
-	bsg_feature_ref ref = bsg_feature_create_label(gedp->ged_gvp,
-		LABELFACE_FEATURE_NAME, 0);
-	if (bsg_feature_ref_is_null(ref) ||
-		!bsg_feature_labels_replace(ref, lfd.labels, lfd.label_count)) {
-	    labelface_data_free(&lfd);
-	    bu_vls_printf(gedp->ged_result_str, "failed to create labelface feature\n");
-	    return BRLCAD_ERROR;
-	}
+    if (!ged_draw_view_labels_replace(gedp->ged_gvp, LABELFACE_FEATURE_NAME,
+		0, lfd.labels, lfd.label_count)) {
+	labelface_data_free(&lfd);
+	bu_vls_printf(gedp->ged_result_str, "failed to create labelface feature\n");
+	return BRLCAD_ERROR;
     }
 
     labelface_data_free(&lfd);

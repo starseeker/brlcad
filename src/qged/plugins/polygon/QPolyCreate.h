@@ -32,11 +32,13 @@
 #include <QRadioButton>
 #include "bg/polygon_types.h"
 #include "qtcad/QgColorRGB.h"
-#include "qtcad/QgPolyFilter.h"
-#include "qtcad/QgView.h"
+#include "qtcad/QgTypes.h"
+#include "rt/view.h"
 #include "QPolySettings.h"
 
 class QgPluginContext;
+class QgPolyCreateFilter;
+class QgPolyFilter;
 
 class QPolyCreate : public QWidget
 {
@@ -102,7 +104,7 @@ class QPolyCreate : public QWidget
     private:
 	bg_clip_t op = bg_Union;
 	int poly_cnt = 0;
-	bsg_polygon_ref p = BSG_POLYGON_REF_NULL_INIT;
+	rt_view_polygon_ref p = RT_VIEW_POLYGON_REF_NULL_INIT;
 	bool do_bool = false;
 
 	QgPolyFilter *cf = NULL;
@@ -110,7 +112,6 @@ class QPolyCreate : public QWidget
 	QgPluginContext *m_ctx = nullptr;
 
 	struct ged *getGed() const;
-	struct bsg_view *getView() const;
 };
 
 #endif //QPOLYCREATE_H

@@ -34,6 +34,7 @@
 #include "bu/malloc.h"
 #include "bu/sort.h"
 #include "bu/str.h"
+#include "bu/vls.h"
 #include "bsg/appearance.h"
 #include "bsg/database_source.h"
 #include "bsg/draw_intent.h"
@@ -42,7 +43,6 @@
 #include "bsg/interaction.h"
 #include "bsg/render.h"
 #include "bsg/scene_builder.h"
-#include "bsg/selection.h"
 #include "ged/bsg_ged_draw.h"
 #include "./ged_private.h"
 #include "./bsg_ged_draw_private.h"
@@ -66,6 +66,11 @@ static int
 _draw_foreach_shape_scene(bsg_scene_ref ref,
 			  int (*cb)(bsg_scene_ref, void *),
 			  void *userdata);
+
+static struct bsg_interaction_record *
+_ged_draw_make_interaction_record(struct ged *gedp,
+				  ged_draw_shape_ref ref,
+				  bsg_interaction_kind kind);
 
 
 static const char *
@@ -730,14 +735,13 @@ _ged_draw_fill_shape_record(struct ged *gedp,
     out->highlighted = bsg_scene_highlighted(shape_ref);
     out->selected = 0;
     out->evaluated_region = bsg_scene_legacy_eval_flag(shape_ref);
-    struct bsg_selection *selection = (gedp && gedp->ged_gvp) ?
-	ged_draw_view_selection_bsg(gedp->ged_gvp) : NULL;
-    if (selection) {
+    if (gedp && gedp->ged_gvp) {
 	struct bsg_interaction_record *selected =
-	    ged_draw_shape_interaction_record(gedp, out->ref,
+	    _ged_draw_make_interaction_record(gedp, out->ref,
 		    BSG_INTERACTION_SELECTED_PATH);
 	if (selected) {
-	    out->selected = bsg_selection_contains_record(selection, selected);
+	    out->selected = ged_draw_view_selection_contains_record(
+		    gedp->ged_gvp, selected);
 	    bsg_interaction_record_free(selected);
 	}
     }
@@ -816,8 +820,8 @@ ged_draw_shape_record_get(struct ged *gedp,
 }
 
 
-struct bsg_interaction_record *
-ged_draw_shape_interaction_record(struct ged *gedp,
+static struct bsg_interaction_record *
+_ged_draw_make_interaction_record(struct ged *gedp,
 				  ged_draw_shape_ref ref,
 				  bsg_interaction_kind kind)
 {
@@ -868,23 +872,59 @@ ged_draw_view_selection_set_highlighted_shape_ref(struct ged *gedp,
     if (!gedp || !v)
 	return 0;
 
-    struct bsg_selection *selection = ged_draw_view_selection_bsg(v);
-    if (!selection)
+    if (!ged_draw_view_selection_set_record(v, NULL))
 	return 0;
-
-    bsg_selection_clear(selection);
     if (ged_draw_shape_ref_is_null(ref))
 	return 1;
 
     struct bsg_interaction_record *record =
-	ged_draw_shape_interaction_record(gedp, ref,
-		BSG_INTERACTION_HIGHLIGHTED_REF);
+	_ged_draw_make_interaction_record(gedp, ref,
+	BSG_INTERACTION_HIGHLIGHTED_REF);
     if (!record)
 	return 0;
 
-    bsg_selection_add_record(selection, record);
+    int ret = ged_draw_view_selection_add_record(v, record);
     bsg_interaction_record_free(record);
-    return 1;
+    return ret;
+}
+
+int
+ged_draw_view_selection_add_shape_ref(struct ged *gedp,
+				      struct bsg_view *view,
+				      ged_draw_shape_ref ref,
+				      struct bsg_view **selection_view,
+				      struct bu_vls *path)
+{
+    if (selection_view)
+	*selection_view = NULL;
+    if (path)
+	bu_vls_trunc(path, 0);
+
+    if (!gedp || ged_draw_shape_ref_is_null(ref))
+	return 0;
+
+    struct bsg_view *target = view;
+    if (!ged_draw_view_selection_available(target))
+	target = gedp->ged_gvp;
+    if (!ged_draw_view_selection_available(target))
+	return 0;
+
+    struct bsg_interaction_record *record =
+	ged_draw_shape_ref_selection_record(gedp, ref, target);
+    if (!record)
+	return 0;
+
+    const char *record_path = bsg_interaction_record_path(record);
+    if (path && record_path && record_path[0])
+	bu_vls_strcpy(path, record_path);
+
+    int ret = ged_draw_view_selection_add_record(target, record);
+
+    bsg_interaction_record_free(record);
+
+    if (selection_view)
+	*selection_view = target;
+    return ret;
 }
 
 

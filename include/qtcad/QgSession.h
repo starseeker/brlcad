@@ -52,11 +52,11 @@
 #include <QObject>
 
 #include "qtcad/defines.h"
+#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgSignalFlags.h"
 
 /* Forward declarations — implementation includes the full BRL-CAD headers. */
 struct bu_vls;
-struct bsg_view;
 struct db_i;
 struct directory;
 struct ged;
@@ -77,6 +77,16 @@ public:
 
     /* Return the current database pointer, or nullptr when no file is open. */
     struct db_i *dbip() const;
+
+    /* Return the current GED active view handle, or nullptr when no active
+     * view is available.  This is a transitional accessor while qtcad still
+     * shares retained staged view state with GED. */
+    qg_legacy_view *activeView() const;
+
+    /* Set the current GED active view pointer.  This is the write-side
+     * counterpart to activeView() while qtcad still shares retained staged
+     * view state with GED. */
+    void setActiveView(qg_legacy_view *view);
 
     /* Notify all db_changed subscribers that the database has changed.
      * Pass the new struct db_i * (may be nullptr on close). */

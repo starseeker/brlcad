@@ -39,7 +39,6 @@
 #include "bu/opt.h"
 #include "bu/sort.h"
 #include "bu/str.h"
-#include "bsg/geometry.h"
 #include "bsg/appearance.h"
 #include "bsg/draw_intent.h"
 #include "bsg/view_state.h"
@@ -259,7 +258,7 @@ draw_mesh_lod_publish(bsg_scene_ref ref, const struct rt_mesh_lod *lod)
 	indices[out++] = -1;
     }
 
-    int ret = bsg_geometry_ref_update_indexed_face_set(ged_draw_scene_ref_geometry_ref(ref),
+    int ret = ged_draw_scene_ref_update_indexed_face_set(ref,
 	    points, point_count, normals, normal_count, indices, index_count);
     bu_free(normals, "mesh lod indexed-face normals");
     bu_free(indices, "mesh lod indexed-face indices");

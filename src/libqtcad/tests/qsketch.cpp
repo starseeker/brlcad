@@ -1322,10 +1322,10 @@ void QSketchEditWindow::on_mode_set_tangency()
 void QSketchEditWindow::on_toggle_grid(bool checked)
 {
     if (!m_bv) return;
-    struct bsg_grid_state grid;
-    if (!rt_view_grid_from_bsg(&grid, m_bv)) return;
+    struct rt_view_grid_state grid;
+    if (!rt_view_grid_state_from_bsg(&grid, m_bv)) return;
     grid.draw = checked ? 1 : 0;
-    rt_view_grid_set_bsg(m_bv, &grid);
+    rt_view_grid_state_set_bsg(m_bv, &grid);
     m_view->need_update(QG_VIEW_REFRESH);
     set_status(checked ? "Grid enabled." : "Grid disabled.");
 }
@@ -1336,8 +1336,8 @@ void QSketchEditWindow::on_grid_settings()
 {
     if (!m_bv) return;
 
-    struct bsg_grid_state grid;
-    if (!rt_view_grid_from_bsg(&grid, m_bv)) return;
+    struct rt_view_grid_state grid;
+    if (!rt_view_grid_state_from_bsg(&grid, m_bv)) return;
 
     QDialog dlg(this);
     dlg.setWindowTitle("Grid Settings");
@@ -1419,7 +1419,7 @@ void QSketchEditWindow::on_grid_settings()
     grid.anchor[1]   = (fastf_t)sb_anchor_v->value();
     grid.snap        = cb_snap->isChecked() ? 1 : 0;
     grid.adaptive    = cb_adaptive->isChecked() ? 1 : 0;
-    rt_view_grid_set_bsg(m_bv, &grid);
+    rt_view_grid_state_set_bsg(m_bv, &grid);
 
     m_view->need_update(QG_VIEW_REFRESH);
     set_status(QString("Grid: H=%1 V=%2 mm  anchor=(%3,%4)  snap=%5.")

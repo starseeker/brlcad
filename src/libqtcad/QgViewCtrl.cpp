@@ -27,14 +27,29 @@
 
 #include "bu/env.h"
 #include "ged.h"
+#include "qtcad/QgLegacyView.h"
+#include "qtcad/QgSession.h"
 #include "qtcad/QgViewCtrl.h"
 #include "qtcad/QgSignalFlags.h"
 #include "rt/view_legacy_bsg.h"
 
-
-QgViewCtrl::QgViewCtrl(QWidget *pparent, struct ged *pgedp) : QToolBar(pparent)
+static qg_legacy_view *
+qgviewctrl_active_view(const QgViewCtrl *ctrl)
 {
-	gedp = pgedp;
+	QgSession *session = ctrl ? ctrl->session() : nullptr;
+	return session ? session->activeView() : nullptr;
+}
+
+static struct ged *
+qgviewctrl_ged(const QgViewCtrl *ctrl)
+{
+	QgSession *session = ctrl ? ctrl->session() : nullptr;
+	return session ? session->ged() : nullptr;
+}
+
+QgViewCtrl::QgViewCtrl(QWidget *pparent, QgSession *session) : QToolBar(pparent)
+{
+	m_session = session;
 
 	this->setStyleSheet("QToolButton{margin:0px;}");
 
@@ -61,6 +76,18 @@ QgViewCtrl::QgViewCtrl(QWidget *pparent, struct ged *pgedp) : QToolBar(pparent)
 
 QgViewCtrl::~QgViewCtrl()
 {
+}
+
+QgSession *
+QgViewCtrl::session() const
+{
+	return m_session;
+}
+
+void
+QgViewCtrl::setSession(QgSession *session)
+{
+	m_session = session;
 }
 
 void
@@ -96,6 +123,9 @@ void
 QgViewCtrl::fbclear_cmd()
 {
 	QTCAD_SLOT("QgViewCtrl::fbclear_cmd", 1);
+	struct ged *gedp = qgviewctrl_ged(this);
+	if (!gedp)
+		return;
 	const char *av[2] = {nullptr};
 	av[0] = "fbclear";
 	ged_exec_fbclear(gedp, 1, (const char **)av);
@@ -106,21 +136,22 @@ void
 QgViewCtrl::fb_mode_cmd()
 {
 	QTCAD_SLOT("QgViewCtrl::fb_mode_cmd", 1);
-	if (!gedp->ged_gvp)
+	qg_legacy_view *v = qgviewctrl_active_view(this);
+	if (!v)
 		return;
-	struct bsg_view *v = gedp->ged_gvp;
-	switch (rt_view_framebuffer_mode_from_bsg(v)) {
+	switch (qg_legacy_view_framebuffer_mode_get(v)) {
 	case 0:
-		rt_view_framebuffer_mode_set_bsg(v, 2);
+		qg_legacy_view_framebuffer_mode_set(v, 2);
 		break;
 	case 2:
-		rt_view_framebuffer_mode_set_bsg(v, 1);
+		qg_legacy_view_framebuffer_mode_set(v, 1);
 		break;
 	case 1:
-		rt_view_framebuffer_mode_set_bsg(v, 0);
+		qg_legacy_view_framebuffer_mode_set(v, 0);
 		break;
 	default:
-		bu_log("Error - invalid fb mode: %d\n", rt_view_framebuffer_mode_from_bsg(v));
+		bu_log("Error - invalid fb mode: %d\n",
+			qg_legacy_view_framebuffer_mode_get(v));
 	}
 	emit view_changed(QG_VIEW_REFRESH);
 }
@@ -129,10 +160,10 @@ void
 QgViewCtrl::do_view_update(QgViewUpdateFlags flags)
 {
 	QTCAD_SLOT("QgViewCtrl::do_view_update", 1);
-	if (!gedp->ged_gvp || !flags)
+	qg_legacy_view *v = qgviewctrl_active_view(this);
+	if (!v || !flags)
 		return;
-	struct bsg_view *v = gedp->ged_gvp;
-	switch (rt_view_framebuffer_mode_from_bsg(v)) {
+	switch (qg_legacy_view_framebuffer_mode_get(v)) {
 	case 0:
 		fb_mode->setIcon(QIcon(QPixmap(":images/view/framebuffer_off.png")));
 		break;
@@ -143,7 +174,8 @@ QgViewCtrl::do_view_update(QgViewUpdateFlags flags)
 		fb_mode->setIcon(QIcon(QPixmap(":images/view/framebuffer_underlay.png")));
 		break;
 	default:
-		bu_log("Error - invalid fb mode: %d\n", rt_view_framebuffer_mode_from_bsg(v));
+		bu_log("Error - invalid fb mode: %d\n",
+			qg_legacy_view_framebuffer_mode_get(v));
 	}
 }
 
@@ -170,6 +202,9 @@ void
 QgViewCtrl::raytrace_cmd()
 {
 	QTCAD_SLOT("QgViewCtrl::raytrace_cmd", 1);
+	struct ged *gedp = qgviewctrl_ged(this);
+	if (!gedp)
+		return;
 	const char *av[4] = {nullptr};
 	struct bu_vls pid_str = BU_VLS_INIT_ZERO;
 

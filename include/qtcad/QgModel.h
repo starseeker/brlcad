@@ -83,7 +83,6 @@
 
 /* Forward declarations — the implementation includes the full headers. */
 struct bu_vls;
-struct bsg_view;
 struct db_i;
 struct directory;
 struct ged;
@@ -257,6 +256,7 @@ public:
 	// .g Db interface and containers
 	int run_cmd(struct bu_vls *msg, int argc, const char **argv);
 	int drawPaths(const std::vector<std::string> &paths);
+	int drawnPathState(const char *path) const;
 
 	/* Return the session that owns the GED context for this model. */
 	QgSession *session() const

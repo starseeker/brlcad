@@ -33,9 +33,9 @@
 
 #include "bu/getopt.h"
 
-#include "bsg/feature.h"
 #include "raytrace.h"
 
+#include "../bsg_ged_draw_view_private.h"
 #include "./joint.h"
 #include "../ged_private.h"
 
@@ -326,14 +326,14 @@ joint_mesh(struct ged *gedp, int argc, const char *argv[])
 
     if (gedp->ged_gvp) {
 	struct bsg_view *view = gedp->ged_gvp;
-	struct bsg_feature_style style = BSG_FEATURE_STYLE_INIT;
+	struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
 	style.color_valid = 1;
 	VSET(style.color, 0, 255, 255);
 	if (lines.count)
-	    (void)bsg_feature_replace_lines(view, "joint", 0,
-		    (const point_t *)lines.points, lines.count, &style);
+	    (void)ged_draw_view_lines_replace(view, "joint", 0,
+		    (const point_t *)lines.points, NULL, lines.count, &style);
 	else
-	    (void)bsg_feature_remove(view, "joint");
+	    (void)ged_draw_view_feature_remove(view, "joint");
     }
 
     joint_lines_free(&lines);

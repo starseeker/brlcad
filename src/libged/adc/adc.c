@@ -29,18 +29,17 @@
 
 
 #include "vmath.h"
-#include "bsg/adc.h"
 #include "ged.h"
 #include "rt/view.h"
 #include "rt/view_legacy_bsg.h"
 
-void ged_calc_adc_pos(struct bsg_view *gvp, struct bsg_adc_state *adc);
-void ged_calc_adc_a1(struct bsg_view *gvp, struct bsg_adc_state *adc);
-void ged_calc_adc_a2(struct bsg_view *gvp, struct bsg_adc_state *adc);
-void ged_calc_adc_dst(struct bsg_view *gvp, struct bsg_adc_state *adc);
+void ged_calc_adc_pos(struct bsg_view *gvp, struct rt_view_adc_state *adc);
+void ged_calc_adc_a1(struct bsg_view *gvp, struct rt_view_adc_state *adc);
+void ged_calc_adc_a2(struct bsg_view *gvp, struct rt_view_adc_state *adc);
+void ged_calc_adc_dst(struct bsg_view *gvp, struct rt_view_adc_state *adc);
 
 static void
-adc_vls_print(struct bsg_view *gvp, const struct bsg_adc_state *adc, fastf_t base2local, struct bu_vls *out_vp)
+adc_vls_print(struct bsg_view *gvp, const struct rt_view_adc_state *adc, fastf_t base2local, struct bu_vls *out_vp)
 {
     fastf_t view_scale = rt_view_scale_from_bsg(gvp);
 
@@ -174,12 +173,12 @@ ged_adc_core(struct ged *gedp,
 	user_pt[i] = scanval;
     }
 
-    struct bsg_adc_state adc;
-    if (!rt_view_adc_from_bsg(&adc, gedp->ged_gvp))
+    struct rt_view_adc_state adc;
+    if (!rt_view_adc_state_from_bsg(&adc, gedp->ged_gvp))
 	return BRLCAD_ERROR;
 #define ADC_COMMIT_RETURN(_ret) \
     do { \
-	rt_view_adc_set_bsg(gedp->ged_gvp, &adc); \
+	rt_view_adc_state_set_bsg(gedp->ged_gvp, &adc); \
 	return (_ret); \
     } while (0)
 
@@ -290,7 +289,7 @@ ged_adc_core(struct ged *gedp,
 	if (argc == 1) {
 	    if (!adc.anchor_pos) {
 		adc.pos_grid[X] += user_pt[0] / adc_scale;
-		adc_grid_to_adc_view(&adc, view2model, RT_VIEW_MAX);
+		rt_view_adc_grid_to_view(&adc, view2model, RT_VIEW_MAX);
 		MAT4X3PNT(adc.pos_model, view2model, adc.pos_view);
 	    }
 
@@ -305,7 +304,7 @@ ged_adc_core(struct ged *gedp,
 	if (argc == 1) {
 	    if (!adc.anchor_pos) {
 		adc.pos_grid[Y] += user_pt[0] / adc_scale;
-		adc_grid_to_adc_view(&adc, view2model, RT_VIEW_MAX);
+		rt_view_adc_grid_to_view(&adc, view2model, RT_VIEW_MAX);
 		MAT4X3PNT(adc.pos_model, view2model, adc.pos_view);
 	    }
 
@@ -333,7 +332,7 @@ ged_adc_core(struct ged *gedp,
 		}
 
 		adc.pos_grid[Z] = 0.0;
-		adc_grid_to_adc_view(&adc, view2model, RT_VIEW_MAX);
+		rt_view_adc_grid_to_view(&adc, view2model, RT_VIEW_MAX);
 		MAT4X3PNT(adc.pos_model, view2model, adc.pos_model);
 	    }
 
@@ -349,8 +348,8 @@ ged_adc_core(struct ged *gedp,
 	    if (!adc.anchor_pos) {
 		double pval = (gedp->dbip) ? (user_pt[0] * gedp->dbip->dbi_local2base) : user_pt[0];
 		adc.pos_model[X] += pval;
-		adc_model_to_adc_view(&adc, model2view, RT_VIEW_MAX);
-		adc_view_to_adc_grid(&adc, model2view);
+		rt_view_adc_model_to_view(&adc, model2view, RT_VIEW_MAX);
+		rt_view_adc_view_to_grid(&adc, model2view);
 	    }
 
 	    ADC_COMMIT_RETURN(BRLCAD_OK);
@@ -365,8 +364,8 @@ ged_adc_core(struct ged *gedp,
 	    if (!adc.anchor_pos) {
 		double pval = (gedp->dbip) ? (user_pt[0] * gedp->dbip->dbi_local2base) : user_pt[0];
 		adc.pos_model[Y] += pval;
-		adc_model_to_adc_view(&adc, model2view, RT_VIEW_MAX);
-		adc_view_to_adc_grid(&adc, model2view);
+		rt_view_adc_model_to_view(&adc, model2view, RT_VIEW_MAX);
+		rt_view_adc_view_to_grid(&adc, model2view);
 	    }
 
 	    ADC_COMMIT_RETURN(BRLCAD_OK);
@@ -381,8 +380,8 @@ ged_adc_core(struct ged *gedp,
 	    if (!adc.anchor_pos) {
 		double pval = (gedp->dbip) ? (user_pt[0] * gedp->dbip->dbi_local2base) : user_pt[0];
 		adc.pos_model[Z] += pval;
-		adc_model_to_adc_view(&adc, model2view, RT_VIEW_MAX);
-		adc_view_to_adc_grid(&adc, model2view);
+		rt_view_adc_model_to_view(&adc, model2view, RT_VIEW_MAX);
+		rt_view_adc_view_to_grid(&adc, model2view);
 	    }
 
 	    ADC_COMMIT_RETURN(BRLCAD_OK);
@@ -406,8 +405,8 @@ ged_adc_core(struct ged *gedp,
 		VMOVE(adc.pos_model, user_pt);
 	    }
 
-	    adc_model_to_adc_view(&adc, model2view, RT_VIEW_MAX);
-	    adc_view_to_adc_grid(&adc, model2view);
+	    rt_view_adc_model_to_view(&adc, model2view, RT_VIEW_MAX);
+	    rt_view_adc_view_to_grid(&adc, model2view);
 
 	    ADC_COMMIT_RETURN(BRLCAD_OK);
 	}
@@ -430,7 +429,7 @@ ged_adc_core(struct ged *gedp,
 
 		adc.pos_view[X] = adc.dv_x * RT_INV_VIEW;
 		adc.pos_view[Y] = adc.dv_y * RT_INV_VIEW;
-		adc_view_to_adc_grid(&adc, model2view);
+		rt_view_adc_view_to_grid(&adc, model2view);
 		MAT4X3PNT(adc.pos_model, view2model, adc.pos_view);
 	    }
 
@@ -455,7 +454,7 @@ ged_adc_core(struct ged *gedp,
 
 		adc.pos_view[X] = adc.dv_x * RT_INV_VIEW;
 		adc.pos_view[Y] = adc.dv_y * RT_INV_VIEW;
-		adc_view_to_adc_grid(&adc, model2view);
+		rt_view_adc_view_to_grid(&adc, model2view);
 		MAT4X3PNT(adc.pos_model, view2model, adc.pos_view);
 	    }
 
@@ -628,7 +627,7 @@ ged_adc_core(struct ged *gedp,
 
     if (BU_STR_EQUAL(parameter, "reset")) {
 	if (argc == 0) {
-	    adc_reset(&adc, view2model, model2view);
+	    rt_view_adc_reset(&adc, view2model, model2view);
 
 	    ADC_COMMIT_RETURN(BRLCAD_OK);
 	}
@@ -655,7 +654,7 @@ ged_adc_core(struct ged *gedp,
 
 
 void
-ged_calc_adc_pos(struct bsg_view *gvp, struct bsg_adc_state *adc)
+ged_calc_adc_pos(struct bsg_view *gvp, struct rt_view_adc_state *adc)
 {
     mat_t model2view;
     mat_t view2model;
@@ -663,20 +662,20 @@ ged_calc_adc_pos(struct bsg_view *gvp, struct bsg_adc_state *adc)
     rt_view_view2model_from_bsg(view2model, gvp);
 
     if (adc->anchor_pos == 1) {
-	adc_model_to_adc_view(adc, model2view, RT_VIEW_MAX);
-	adc_view_to_adc_grid(adc, model2view);
+	rt_view_adc_model_to_view(adc, model2view, RT_VIEW_MAX);
+	rt_view_adc_view_to_grid(adc, model2view);
     } else if (adc->anchor_pos == 2) {
-	adc_grid_to_adc_view(adc, view2model, RT_VIEW_MAX);
+	rt_view_adc_grid_to_view(adc, view2model, RT_VIEW_MAX);
 	MAT4X3PNT(adc->pos_model, view2model, adc->pos_view);
     } else {
-	adc_view_to_adc_grid(adc, model2view);
+	rt_view_adc_view_to_grid(adc, model2view);
 	MAT4X3PNT(adc->pos_model, view2model, adc->pos_view);
     }
 }
 
 
 void
-ged_calc_adc_a1(struct bsg_view *gvp, struct bsg_adc_state *adc)
+ged_calc_adc_a1(struct bsg_view *gvp, struct rt_view_adc_state *adc)
 {
     if (adc->anchor_a1) {
 	fastf_t dx, dy;
@@ -697,7 +696,7 @@ ged_calc_adc_a1(struct bsg_view *gvp, struct bsg_adc_state *adc)
 
 
 void
-ged_calc_adc_a2(struct bsg_view *gvp, struct bsg_adc_state *adc)
+ged_calc_adc_a2(struct bsg_view *gvp, struct rt_view_adc_state *adc)
 {
     if (adc->anchor_a2) {
 	fastf_t dx, dy;
@@ -718,7 +717,7 @@ ged_calc_adc_a2(struct bsg_view *gvp, struct bsg_adc_state *adc)
 
 
 void
-ged_calc_adc_dst(struct bsg_view *gvp, struct bsg_adc_state *adc)
+ged_calc_adc_dst(struct bsg_view *gvp, struct rt_view_adc_state *adc)
 {
     if (adc->anchor_dst) {
 	fastf_t dist;

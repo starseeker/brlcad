@@ -26,11 +26,13 @@
 #include <QCheckBox>
 #include <QLabel>
 #include <QLineEdit>
-#include "qtcad/QgColorRGB.h"
-#include "qtcad/QgMeasureFilter.h"
 #include "qtcad/QgSignalFlags.h"
 
 class QgPluginContext;
+class QgColorRGB;
+class QgMeasureFilter;
+class QMeasure2DFilter;
+class QMeasure3DFilter;
 
 class CADViewMeasure : public QWidget
 {

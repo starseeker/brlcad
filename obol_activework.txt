@@ -69,8 +69,8 @@ Next Push:
 * libbrlobol database realization: 98 percent.
 * Obol diagnostic overlays: 45 percent.
 * qtcad visible Obol rendering: 64 percent.
-* Guardrails and inventory: 97 percent.
-* Low-level cleanup: 98 percent.
+* Guardrails and inventory: 98 percent.
+* Low-level cleanup: 99 percent.
 * libimgstream migration batch: 57 percent.
 * Framebuffer display ownership: 39 percent.
 
@@ -79,8 +79,8 @@ Migration Phases:
 * Phase 1, architecture freeze and guardrails: 80 percent.
 * Phase 2, productionize libbrlobol: 97 percent.
 * Phase 3, migrate qged/qtcad: 52 percent.
-* Phase 4, migrate libged, libtclcad, and mged: 26 percent.
-* Phase 5, remove lower-level BSG/DM dependencies: 52 percent.
+* Phase 4, migrate libged, libtclcad, and mged: 28 percent.
+* Phase 5, remove lower-level BSG/DM dependencies: 54 percent.
 * Phase 6, hard removal: 5 percent.
 
 
@@ -120,18 +120,56 @@ Recently Completed Slices
 
 * libged `view obj ... line`, `view obj ... label`, `view obj ... axes`,
   Tcl data-line, gobject overlay create, and generic view-object feature
-  removal command paths now route user annotation, data axes, Tcl line/label,
-  and gobject feature existence, creation, overlay ownership, style,
-  point-copy, point-replace, axes-state get/replace, and removal through the
-  private GED draw view adapter instead of calling BSG feature, geometry, HUD,
-  or overlay APIs directly from the command files.  The pivot guard now
-  prevents those direct feature-overlay calls from returning to
-  `src/libged/view/lines.c`,
+  draw/color/arrow/update/removal command paths now route user annotation,
+  data axes, Tcl line/label, and gobject feature existence, creation, overlay
+  ownership, style, point-copy, point-replace, axes-state get/replace,
+  realize/update, removal, `view vZ` feature-depth reads, and
+  `view selections` count queries, faceplate HUD sync, and `view snap`
+  grid/endpoint first-candidate queries through the private GED draw view
+  adapter instead of calling BSG feature, selection, snap-result, geometry,
+  HUD, or overlay APIs directly from the command files.  `view obj ... polygon`
+  creation, edit/update, area/overlap, fill/fill-color, sketch import/export,
+  and CSG command paths now also use neutral polygon handles and records from
+  that adapter, leaving the retained BSG polygon refs, data reads, and
+  sketch-legacy conversion calls inside the bridge.  Joint mesh,
+  BoT fuse/check
+  and face-plot, lint plot, gdiff, and preview eye-path diagnostic line
+  overlays now also publish/remove named line features through the same
+  adapter boundary, and `labelvert`/`labelface` now replace named label
+  features through neutral label records owned by that adapter.  Diagnostic
+  line-layer fallbacks in check-overlaps, gqa, draw edge-use, vutil NMG edge,
+  and brep plot publishing also route their retained BSG fallback through the
+  adapter while the primary handler remains `bg_line_layer`-based.  Uplot
+  feature publishing now builds neutral named line-layer records with BG line
+  commands and routes replacement through the same adapter.  The pivot guard
+  now prevents those direct feature-overlay calls from returning to
+  `src/libged/view/view.c`, `src/libged/view/lines.c`,
   `src/libged/view/labels.c`, `src/libged/view/axes.c`,
   `src/libged/view/data_lines.c`, and `src/libged/view/gobjs.cpp`, and
-  prevents direct `bsg_feature_remove` from returning to
-  `src/libged/view/objs.cpp`; generic object style/edit paths remain
-  follow-up feature-adapter cleanup candidates.
+  prevents direct BSG feature API use from returning to
+  `src/libged/view/objs.cpp` or the migrated diagnostic line-overlay
+  producers, including the migrated label, snap-result, and line-layer
+  fallback producers.  The libged `adc` command now also operates on neutral
+  `rt_view_adc_state` records and RT ADC math helpers, and the standalone
+  libged `grid` command and `view faceplate grid` command now use neutral
+  `rt_view_grid_state` records.  The libged faceplate center-dot, scale, and
+  params commands now use neutral RT scalar faceplate records, with the
+  temporary BSG faceplate ADC/grid/scalar get/set conversion confined to the
+  RT legacy view adapter.
+  Qray stale-feature cleanup in `src/libged/nirt/nirt.cpp` and rtcheck
+  prefix cleanup in `src/libged/rtcheck/rtcheck2.cpp` now route through the
+  same private adapter.  BRep indexed face-set publishing in
+  `src/libged/brep/plot.cpp` now also uses the adapter boundary.  Evaluated
+  wireframe line-set construction in `src/libged/draw/bigE.c` and
+  `src/libged/wireframe_eval.c` now uses neutral BG line-command tokens
+  instead of including BSG geometry just for move/draw commands.  Vdraw
+  overlay send now uses neutral BG line-command tokens and GED-private
+  overlay geometry kind values, leaving the BSG mapping inside the overlay
+  bridge.  Mesh LoD indexed-face geometry updates in `src/libged/draw.cpp`
+  now route through a GED draw bridge helper, and the raw
+  `ged_draw_scene_ref_geometry_ref` escape hatch has been retired.  Broader
+  non-feature edit paths and lower-level BSG/geometry bridge cleanup remain
+  follow-up cleanup candidates.
 * qtcad migrated-content readback, GL/SW capture, navigation, selection,
   snap, measurement, and overlay helpers can use Obol without initializing
   legacy DM for migrated content.  qtcad Obol camera sync, snap tolerance,
@@ -140,6 +178,22 @@ Recently Completed Slices
   view adapter boundary instead of direct BSG view reads.
   qtcad framebuffer-mode toggle/readback now uses the same adapter boundary
   rather than calling BSG view-state helpers directly.
+  qtcad view-control toolbar construction now receives `QgSession` instead of
+  a raw GED pointer, and its framebuffer mode toggle/status path reaches the
+  active view through the session-owned transitional accessor.
+  qged active-view writes now use the session-owned setter, and the main-window
+  public interface no longer exposes a BSG-returning `CurrentView()` method.
+  qtcad quad-view construction now receives `QgSession`; its startup, quad
+  layout, and temporary per-view draw propagation active-view swaps use the
+  session-owned read/write accessors instead of direct GED active-view writes.
+  The unused BSG-returning `QgQuadView::view(int)` public accessor has been
+  removed, leaving the quad-view header free of raw GED/BSG view exposure.
+  qged command-time unit conversion and palette element dimension refresh now
+  use the session active-view accessor rather than reading the current display
+  widget's staged view pointer directly.
+  qged draw-observer transaction scoping now uses the qtcad Obol view-sync
+  helper rather than comparing display and transaction BSG view pointers in app
+  code.
   qtcad 2D measurement view-to-model conversion, quad-view source unit/size
   copies, and SW/GL fallback framebuffer-size or matrix-load reads now follow
   the same adapter boundary while legacy view state writes remain transitional.
@@ -151,8 +205,34 @@ Recently Completed Slices
   qtcad quad-view visible-path propagation now uses Obol export identity in
   display-level mode instead of a direct BSG export query.
   qtcad selection's public header now exposes selected paths without naming
-  legacy BSG pick-result objects; the remaining BSG pick-result fallback is
-  internal to the implementation.
+  legacy BSG pick-result objects, and the remaining BSG pick-result fallback
+  now uses opaque RT legacy pick-result handles for fallback point/rectangle
+  picks, result count/path/free operations, first-result filtering, ray-hit
+  result copying, and selection application.  Its protected selection helper
+  API is now view-implicit, keeping `bsg_view` out of `QgSelectFilter.h` while
+  the implementation continues to use the staged RT legacy selection adapter.
+  The old public
+  `rt_view_selection_set_pick_result_bsg` BSG-shaped setter has been retired;
+  callers and tests use `rt_view_selection_set_pick_result_ref_bsg` with
+  opaque `rt_view_pick_result_bsg` handles.  BSG pick record construction and
+  result ownership are confined to the RT legacy adapter.  The libged draw
+  command and selection-semantics tests now use the same opaque pick-result
+  helpers, including the semantic-path pick wrapper, instead of including
+  `bsg/pick.h` or reading `bsg_pick_record` fields directly.
+  The public `rt_view_selection_bsg` selection-object getter has also been
+  retired; migrated tests and GED selection-count plumbing use
+  `rt_view_selection_available_bsg` / `rt_view_selection_count_bsg` plus the
+  existing clear/apply helpers, leaving raw `bsg_selection` access inside the
+  GED-private draw bridge where records still need the staged BSG backing
+  object.  That GED-private bridge has been narrowed as well: draw records no
+  longer include `bsg/selection.h` or receive raw selection objects through
+  `ged_draw_view_selection_bsg`; they use record-level
+  `ged_draw_view_selection_*_record` helpers, while the temporary
+  `bsg_selection` operations stay confined to `bsg_ged_draw_view.c`.
+  The public GED draw header no longer includes `bsg/interaction.h` or
+  exports `ged_draw_shape_interaction_record`; draw-scene selection tests use
+  neutral `ged_draw_shape_record.selected` state, leaving BSG interaction
+  record construction inside the GED records bridge.
   qtcad GED draw observer sync and real-model Obol draw/readback workflows now
   keep controller-owned database sources realized after delayed Obol field
   sensors drain, and the full in-tree qtcad Obol workflow gate passes for the
@@ -488,33 +568,55 @@ Recently Completed Slices
   view-object/polygon commands and qtcad view, sketch, and polygon filters,
   leaving direct `bsg_screen_pt` usage contained to the adapter/test
   implementation plus libbsg internals.  Interactive rectangle state access
-  now routes through `rt_view_interactive_rect_from_bsg` and
-  `rt_view_interactive_rect_set_bsg` in qtcad box selection, libged
+  now routes through RT legacy adapters in qtcad box selection, libged
   rectangle/select/faceplate commands, and TclCAD refresh/rectangle-refresh
-  paths, leaving direct BSG interactive-rectangle get/set calls contained to
-  the adapter/test implementation plus libbsg internals.  View refresh
+  paths; those command and tool paths now use neutral
+  `rt_view_interactive_rect_state` records and wrappers, leaving BSG-shaped
+  rectangle records in the legacy adapter/test implementation plus libbsg
+  internals.  The public libdm rectangle draw helper also takes neutral
+  interactive rectangle state.  View refresh
   request/dirty/consume/complete/enabled/suppression/drawn-count state now
   also routes through RT legacy refresh helpers in qtcad canvas/view refresh,
   TclCAD refresh dispatch, MGED redraw/drawn-count paths, and Tk swrast
   repaint requests, leaving direct BSG refresh-state calls contained to the
   adapter/test implementation plus libbsg internals.  Faceplate center-dot,
-  scale overlay, and params scalar state now route through RT legacy adapters
-  in libged, libtclcad, and QGED view settings, with direct BSG calls contained
-  to the adapter/test implementation plus libbsg internals.  QGED view
-  settings also routes ADC, grid, model-axes, and view-axes top-level
-  faceplate state plus widget-backed LoD policy and framebuffer mode through
-  the same RT legacy adapter surface instead of direct BSG render-settings
-  helpers; qtcad canvas Obol faceplate sync, keybinding toggles, and QGED
-  polygon grid-snapping UI now use those adapters as well.  TclCAD model-axes
-  and view-axes commands
-  now use the same adapter boundary for their top-level axes state updates,
-  and TclCAD command grid-snap decisions read grid state through that boundary
-  as well.  The libged ADC command now snapshots and commits ADC state through
-  the same adapter boundary, and libged grid plus faceplate grid/model-axes/
-  view-axes commands now use it for their top-level grid and axes state
-  updates.  MGED ADC/grid display-state helpers and startup defaults now use
-  the same adapter boundary, leaving direct top-level faceplate state calls
-  contained to the adapter implementation and tests.  qtcad AET keybinding/
+  scale overlay, and params scalar state now route through RT legacy adapters,
+  with direct BSG calls contained to the adapter/test implementation plus
+  libbsg internals.  QGED view settings now uses neutral
+  `rt_view_adc_state`, `rt_view_grid_state`, `rt_view_axes_state`,
+  `rt_view_other_state`, and `rt_view_params_state` records for its top-level
+  faceplate state, while qtcad Obol faceplate sync and qtcad keybinding
+  toggles use neutral ADC/grid/axes records for the state they publish.
+  QGED polygon grid-snapping controls, qtcad sketch grid setup, TclCAD
+  command grid-snap decisions, and MGED grid command/structparse defaults,
+  share/rset copies, refresh draw toggles, and motion/common-DM snap reads
+  now also use neutral `rt_view_grid_state` records for grid
+  draw/snap/settings state.
+  TclCAD center-dot, view-params, view-scale, model-axes, and view-axes
+  commands now use neutral `rt_view_other_state`, `rt_view_params_state`, and
+  `rt_view_axes_state` records for their top-level faceplate state updates.
+  The libged ADC command now snapshots and commits ADC state through
+  the same adapter boundary, standalone libged grid and faceplate grid
+  commands now use neutral `rt_view_grid_state` records, and libged faceplate
+  model-axes/view-axes commands now use neutral `rt_view_axes_state` records
+  with conversion confined to the RT legacy view adapter.  MGED ADC command,
+  draw/status/scroll/keybinding helpers, share/startup copies, and grid-state
+  wrappers/startup defaults now use the same neutral state-record adapter
+  boundary, leaving direct top-level faceplate state calls contained to the
+  adapter implementation and tests.  The public libdm ADC/grid/axes draw
+  helpers now also take neutral `rt_view_adc_state`, `rt_view_grid_state`,
+  and `rt_view_axes_state` records; the retained BSG HUD grid and axes
+  payload conversions are local to `src/libdm/view.c`.  MGED direct
+  edit/model/view axes drawing now constructs neutral axes state before
+  calling libdm.  The obsolete BSG-shaped RT legacy faceplate state wrappers
+  have been removed from `rt/view_legacy_bsg.h`; the neutral `_state_`
+  adapters are now the only RT legacy wrapper surface for ADC, grid, axes,
+  scalar faceplate, and interactive rectangle state.  Adapter/test-only
+  const-selection, snap-exclude getter, and knob-state hash RT wrappers were
+  also removed from that legacy header, and the guard rejects the underlying
+  direct const-selection BSG getter from returning to that adapter/test
+  surface.
+  qtcad AET keybinding/
   canvas updates, libged grid vsnap recentering, and MGED `new_mats` derived
   view refresh now route through `rt_view_update_bsg`.  libged view update
   commands for zoom, size, scale, center, eye, eye_pos, AET/YPR/quaternion/
@@ -536,8 +638,30 @@ Recently Completed Slices
   route through RT snap adapters instead of direct BSG snap utility calls.  GED,
   MGED, qtcad, and GED draw-record selection storage lookups now route through
   RT or GED-private selection adapters instead of calling `bsg_view_selection`
-  directly.  MGED highlighted-shape selection mirroring now uses a GED draw
-  helper instead of constructing BSG interaction records in MGED.
+  directly.  Libged native selection draw-sync path enumeration, selection
+  clearing, and shape-ref selection adds now also route through GED private
+  selection helpers instead of opening BSG selection/interaction records in
+  `selection_state.cpp`.  qtcad selection filters now apply pick results and
+  clear view selection through RT legacy selection helpers instead of opening
+  BSG selection/interaction records in `QgSelectFilter.cpp`; legacy BSG
+  pick-result production remains staged for the later pick migration.  qged
+  edit-preview plugins now publish begin/update/commit lifecycle events
+  through the shared qged preview helper instead of constructing BSG
+  interaction records directly in each plugin.  The ELL, revolve, extrude,
+  and BOT edit-preview plugins now also route preview feature refs, overlay
+  creation/removal, visibility, color/touch updates, and ELL edit labels
+  through that helper, leaving the retained BSG feature/overlay bridge in
+  `qged_edit_preview_util.cpp`, qged-owned line-command tokens in place of
+  BSG geometry command names, and the retained BSG interaction-record
+  create/free bridge in `qged_edit_preview_util.cpp` instead of the plugin
+  files.  The edit-preview plugin implementations no longer include
+  `ged/bsg_ged_draw.h` directly, and their plugin headers no longer expose a
+  private `bsg_view`-returning `getView()` method.  The qged edit-preview
+  helper API now takes `QgPluginContext` for staged view access, leaving
+  direct `bsg_view` spelling inside `qged_edit_preview_util.cpp` rather than
+  the plugin helper header or plugin files.  MGED highlighted-shape selection
+  mirroring now uses a GED draw helper instead of constructing BSG interaction
+  records in MGED.
   TclCAD, GED, gsh, and retained GED draw view enumeration and view-name
   lookup now use RT or GED-private view-set adapters instead of calling
   `bsg_set_views` or `bsg_set_find_view` directly.  TclCAD edit-redraw DB
@@ -581,6 +705,43 @@ Recently Completed Slices
   command now also use RT legacy snap source/kind aliases instead of naming
   `BSG_SNAP_*` constants directly.  GED zap clear-scope flags now use RT
   legacy clear aliases instead of naming `BSG_SOURCE_*` constants directly.
+	  qged polygon line-snap toggles, top-level point-selection clears,
+	  create/modify view-polygon lookup/duplication/enumeration, and qtcad
+	  polygon create/select filters now route polygon view-level calls through
+	  RT legacy adapters instead of calling the BSG polygon view API directly.
+	  qtcad polygon filter type and update-mode names are now qtcad-owned
+	  constants instead of public BSG polygon names; BSG polygon refs, records,
+	  and object mutation calls remain staged for the later polygon-object
+	  migration.
+	  qtcad/qged polygon filter and plugin headers now also use qtcad-owned
+	  polygon ref spelling and null initialization (`qg_polygon_ref` and
+	  `QG_POLYGON_REF_NULL_INIT`) instead of exposing `bsg_polygon_ref` in that
+	  caller boundary.  BSG polygon predicates, records, and object mutation
+	  calls remain staged for the later polygon-object migration.
+	  qtcad/qged polygon callers now route low-level polygon predicates, record
+	  reads, basic mutations, movement, CSG/remove, and user-data access through
+	  RT legacy polygon-object adapters.  The staged BSG polygon record shape
+	  remains follow-up neutralization work.
+	  RT now owns a neutral polygon record (`rt_view_polygon_record`) and the
+	  qtcad/qged polygon tools use the qtcad alias `qg_polygon_record` instead
+	  of naming `struct bsg_polygon_record` or including `bsg/polygon.h`
+	  directly.  BSG record copying is confined to the RT legacy adapter; the
+	  lower-level sketch conversion remains staged in librt.
+	  qged polygon sketch import/export now also routes through RT legacy view
+	  wrappers instead of including `rt/primitives/sketch_legacy_bsg.h` or
+	  calling the BSG sketch bridge symbols directly.
+	  qtcad/qged polygon refs now use RT-owned `rt_view_polygon_ref` storage
+	  through the `qg_polygon_ref` alias, and the polygon RT legacy adapters
+	  convert to BSG feature refs internally.  qged polygon line-snap exclusion
+	  uses a polygon-specific wrapper instead of passing polygon refs through
+	  the generic feature-exclude setter.
+	  qged polygon create/modify/settings widget headers no longer expose
+	  private `bsg_view` accessors or include the qtcad view/filter headers for
+	  polygon state; the remaining staged view lookup is implementation-local
+	  and comes through `QgPluginContext`.  Polygon view-name validation now uses
+	  that context instead of `gedp->ged_gvp`, and the validation-only
+	  `uniq_obj_name(NULL, ...)` path correctly reports uniqueness without
+	  requiring an output buffer.
 	  qtcad Obol snap and faceplate-sync tests now route setup view-state through
 	  RT legacy aliases/adapters instead of direct BSG constants/getters/setters.
 	  QgSW offscreen integration test view-set/unit-conversion setup and qsketch
@@ -613,7 +774,11 @@ Recently Completed Slices
 	  now snapshot/update previous mouse through a local adapter helper instead
 	  of reading or writing previous mouse fields directly.  TclCAD mouse
 	  delta clamp and rotate/scale factors now use a grouped RT adapter
-	  instead of reading BSG mouse delta fields directly.
+	  instead of reading BSG mouse delta fields directly.  TclCAD snap mask
+	  preparation now uses the RT adapter's neutral integer mask type instead
+	  of naming the BSG snap-mask typedef in caller code, and TclCAD polygon
+	  command modes now use TclCAD-owned constants instead of BSG polygon-mode
+	  names.
 	  Public `dm.h` no longer includes the BSG umbrella header; it forward declares
   the remaining pointer-only transitional BSG draw-state types, and libged
   selection handling now includes its concrete BSG selection dependency
@@ -648,6 +813,9 @@ Recently Completed Slices
   back into `bsg_view` mouse fields.  qtcad 2-D/3-D measurement filters now
   capture Qt event coordinates in the filter state and use those for
   screen-to-view and Obol pick queries instead of reading BSG mouse fields.
+  The private measurement overlay clear helper is now view-implicit, keeping
+  `bsg_view` spelling out of `QgMeasureFilter.h` while retained view reads stay
+  in the implementation.
   qtcad point, box, and ray selection filters likewise use Qt event
   coordinates for Obol and retained BSG fallback pick queries, and shared
   qtcad view-sync now pushes legacy mouse/current-point state through the RT
@@ -659,6 +827,146 @@ Recently Completed Slices
   `bsg_log` tracing; local qtcad slot tracing remains.  qged polygon
   settings now performs retained view-object unique-name checks through the RT
   legacy adapter boundary instead of including `bsg/util.h` directly.
+  qged view-info and host-status active-view names now route through
+  `rt_view_name_from_bsg` instead of reading `gv_name` directly.  qged view
+  info/select/measure widget headers no longer include `ged.h`, raytrace, or
+  qtcad selection/measure filter headers for pointer-only state, and selector
+  and measure implementations resolve the staged active view through
+  `QgPluginContext` instead of `gedp->ged_gvp`.
+  `QgPluginContext` no longer exposes a public BSG active-view accessor; qged
+  plugins now resolve staged compatibility view pointers through
+  `getViewWidget()` in implementation-local helpers, with the existing
+  `QgModel`/`QgSession` fallback kept for startup/null-host paths.
+  `QgPluginContext::activeView()` now owns that fallback as an opaque
+  `qg_legacy_view *` convenience method, so qged plugins no longer open-code
+  the widget/session lookup.  Plugins that still call retained RT/BSG APIs
+  convert only that opaque handle at the local legacy boundary, and the pivot
+  guard rejects direct qged plugin `ctx->model->session()->activeView()`
+  fallback logic from returning.
+  `QgViewFilter.h` also no longer exposes raw BSG view setter/getter methods;
+  installed filters now keep only the `QgView` widget in the public base API,
+  and retained compatibility view resolution is implementation-local to the
+  filter and plugin `.cpp` files.
+  The shared qtcad view-filter implementation now depends on
+  `rt/view_legacy_bsg.h` for retained snap policy and tolerance reads without
+  including `bsg/defines.h` directly.  The qtcad draw-sync test likewise no
+  longer includes `bsg/util.h`; its staged draw transaction coverage still
+  uses `ged/bsg_ged_draw.h` where retained GED transaction types are the
+  behavior under test.  The pivot guard rejects both stale includes from
+  returning to these paths.
+  The remaining stale public qtcad model/sketch header BSG spellings were
+  removed as well: `QgModel.h` no longer forward declares `bsg_view`, and the
+  sketch-filter usage notes describe the `QgView` installation path without
+  exposing the retained view pointer.
+  qged's framebuffer server header now forward declares the retained
+  `fbserv_obj` pointer type instead of including `dm/fbserv.h`; the libdm
+  framebuffer-server dependency is confined to `fbserv.cpp` while the broader
+  framebuffer/display-host migration remains queued.
+  GED's public defines header likewise now forward declares `fbserv_obj` for
+  the retained `ged_fbs` pointer, with libged/qged implementation files
+  including `dm/fbserv.h` only where they dereference or allocate the object.
+  The obsolete qtcad `bindings.h`/`bindings.cpp` free-function input layer was
+  deleted entirely; `QgCanvasInput` is now the only qtcad CAD input-binding
+  implementation, keeping drag-update state per canvas instead of in retired
+  global maps.  `QgCanvasInput.h` now accepts the opaque `qg_legacy_view *`
+  handle and hides drag callback storage behind an implementation pimpl,
+  leaving `rt/view_legacy_bsg.h` and the qtcad/BSG adapter in
+  `QgCanvasInput.cpp` where the retained staged view is actually adapted.
+  qtcad/qged Obol overlay, selection, and draw observer sync now route
+  active-display acceptance through `qg_obol_display_accepts_ged_active_view`,
+  keeping the transitional `ged_gvp` comparison behind a qtcad helper whose
+  public header exposes only `struct ged` and `QgView` forward declarations.
+	  qtcad tree draw toggles and model `DrawnDisplayRole` queries now use
+	  `QgModel::drawnPathState`, with the remaining active-view lookup confined to
+	  `QgModel.cpp` instead of having `QgTreeView` read `gedp->ged_gvp` directly.
+	  The qgmodel model-tester draw-state assertions now use the same
+	  `QgModel::drawnPathState` boundary instead of including
+	  `ged/bsg_ged_draw.h` and passing `gedp->ged_gvp` to
+	  `ged_draw_path_state` directly.
+	  `QgSession::activeView` now owns the qtcad session-level read of GED's
+	  current BSG-backed active view, so `QgModel` draw-state helpers and qged
+	  plugin-context fallback view access no longer read `ged_gvp` directly.
+  The main qtcad canvas/session public boundary now exposes the opaque
+  `qg_legacy_view *` handle instead of `struct bsg_view *`.  `QgCanvasBase`,
+  `QgView`, `QgSession`, `QgGL`, and `QgSW` no longer publish BSG view spelling
+  in their APIs; `QgLegacyViewBsg.h` is the explicit transitional adapter used
+  by implementation files, qged plugin helpers, libdm Qt framebuffer bridges,
+	  and BSG-facing tests that still need the retained staged view pointer.  The
+	  pivot guard now requires the opaque handle headers and rejects BSG view
+	  exposure from those public qtcad headers.
+	  `QgLegacyView.cpp` now owns neutral qtcad helpers for legacy-view dimension
+	  and unit-conversion writes.  qged command execution and palette activation
+	  call those helpers on the opaque session active view instead of including
+	  `rt/view_legacy_bsg.h` or `QgLegacyViewBsg.h` in `QgEdApp.cpp`; the retained
+	  BSG cast and RT adapter calls are confined to libqtcad.
+	  QgViewCtrl framebuffer mode toggle/status updates now use the same opaque
+	  legacy-view helper boundary, so the toolbar no longer includes the qtcad
+	  BSG adapter or calls the RT framebuffer-mode wrappers directly.
+	  QgGL and QgSW viewport-size synchronization now call the opaque
+	  legacy-view dimension helpers as well; retained RT dimension get/set calls
+	  for those widgets are confined to `QgLegacyView.cpp`.
+	  QgQuadView initial and post-propagation quadrant unit/size copies now use
+	  the same opaque legacy-view helpers instead of direct RT legacy
+	  unit/dimension get/set wrappers.
+	  QgCanvasState view swaps and QgCanvasInput motion scaling now use the
+	  opaque dimension/height helpers as well, keeping those size reads and
+	  writes behind the qtcad legacy-view boundary.
+	  QgViewFilter snap tolerance, QgSketchFilter vertex-snap scaling, and
+	  QgSelectFilter box-selection dimensions now use the same opaque
+	  width/height helpers; those filters keep BSG adapters only for the
+	  retained staged snap, transform, selection, and pick APIs.
+	  CADViewSettings now reads and writes LoD, framebuffer, and top-level
+	  faceplate state through opaque qtcad legacy-view helpers as well; the
+	  settings plugin includes neutral `rt/view.h` state records but no longer
+	  includes the qtcad BSG adapter or the RT legacy-BSG wrapper header.
+	  CADViewModel and HostStatusCommon now use opaque qtcad legacy-view
+	  helpers for view info, name, AET, and center reads, so those lightweight
+	  qged plugins no longer include the qtcad BSG adapter or RT legacy-BSG
+	  wrapper header either.
+	  CADViewMeasure and CADViewSelector now use opaque qtcad legacy-view
+	  handles for their qged-side active-view availability checks, so those
+	  plugin files no longer include `QgLegacyViewBsg.h` or spell raw
+	  `bsg_view` either; selection and measurement behavior still lives in the
+	  libqtcad filters.
+	  QPolySettings now uses the opaque qtcad legacy-view helper for
+	  view-object unique-name checks, removing the qtcad BSG adapter and
+	  RT legacy-BSG wrapper header from the polygon settings widget.
+	  QPolyCreate and QPolyMod now use the same opaque qtcad legacy-view
+	  helper surface for polygon duplicate/find/visit, sketch import/export,
+	  snap source/line/exclude state, grid snap state, alignment view writes,
+	  and polygon ref operations.  The qged polygon create/modify plugin
+	  files no longer include the qtcad BSG adapter or `rt/view_legacy_bsg.h`,
+	  call `qg_legacy_view_to_bsg`, spell `struct bsg_view`, or call the
+	  RT legacy-BSG polygon/view wrappers directly.
+	  QgPolyFilter now consumes that opaque helper surface too for screen-point
+	  conversion, create/select, screen-point update, close, move, visual/name,
+	  CSG, and ref predicates.  The libqtcad polygon filter no longer includes
+	  `QgLegacyViewBsg.h` or `rt/view_legacy_bsg.h`, calls
+	  `qg_legacy_view_to_bsg`, spells `struct bsg_view`, or names the retained
+	  RT legacy-BSG polygon helpers directly.
+	  The private qtcad canvas state now stores `qg_legacy_view *` handles for
+	  its active and widget-local views as well.  `QgGL`, `QgSW`, and
+	  `QgCanvasState` adapt those handles at the legacy RT/DM call boundary via
+  `QgLegacyViewBsg.h`, so raw `bsg_view *` storage is no longer part of the
+  shared canvas pimpl.  The pivot guard requires the opaque canvas-state
+  fields and rejects reverting `qgcanvas_set_view` to a raw BSG view
+  signature.
+  qtcad dense real-model coverage is now split into named CTest cases with
+  180-second per-test timeouts.  The m35 interaction path uses nearest-pick
+  semantics for its normal correctness assertions, while
+  `m35_wire_pick_all_stress` keeps the real-world dense wireframe pick-all
+  trial as a separate stress case.  The qtcad Obol pick wrapper now appends
+  pick-all hits and stable-sorts them once, avoiding the old quadratic
+  middle-insert ordering path while preserving nearest-first records; the
+  pivot guard rejects the previous insert loop and requires the stress case.
+  The havoc.g real-model test runtime was also traced to the test helper's
+  realized-geometry validation, not Obol sync: direct timing showed roughly
+  22 seconds in the legacy GED draw transaction, 0.5 seconds in Obol sync,
+  and 49 seconds in a quadratic `getRealizedShapeCount` /
+  `getRealizedShape(i)` loop.  The helper now traverses the realized scene
+  graph once to count wire shapes/segments or meshes/triangles, preserving the
+  same correctness checks while reducing the havoc geometry-count phase to
+  about 0.010 seconds and the full havoc case to about 23 seconds.
   libdm normalized view clipping, ADC drawing, label placement, GL z-clipping,
   framebuffer canvas dimension setup, display-manager default clip bounds,
   and internal pixel/view conversion macros now use RT legacy view adapters or

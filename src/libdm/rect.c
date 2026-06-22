@@ -29,11 +29,15 @@
 
 #include "vmath.h"
 #include "dm.h"
+#include "rt/view.h"
 #include "./include/private.h"
 
 void
-dm_draw_rect(struct dm *dmp, struct bsg_interactive_rect_state *grsp)
+dm_draw_rect(struct dm *dmp, const struct rt_view_interactive_rect_state *grsp)
 {
+    if (!dmp || !grsp)
+	return;
+
     if (ZERO(grsp->width) &&
 	ZERO(grsp->height))
 	return;

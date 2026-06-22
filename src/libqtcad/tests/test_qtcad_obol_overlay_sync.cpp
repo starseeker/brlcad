@@ -17,6 +17,7 @@
 #include "bu/file.h"
 #include "bu/str.h"
 #include "ged.h"
+#include "qtcad/QgLegacyViewBsg.h"
 #include "qtcad/QgObolOverlaySync.h"
 #include "qtcad/QgView.h"
 #include "wdb.h"
@@ -134,7 +135,7 @@ main(int argc, char **argv)
 
     QgView view(NULL, QgView_SW, NULL);
     view.resize(180, 140);
-    gedp->ged_gvp = view.view();
+    gedp->ged_gvp = qg_legacy_view_to_bsg(view.view());
 
     QgView otherView(NULL, QgView_SW, NULL);
     otherView.resize(180, 140);

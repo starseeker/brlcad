@@ -94,8 +94,8 @@ class QgEdApp : public QApplication
 	// This slot is used for quad view configurations - it is called if the
 	// user uses the mouse to select one of multiple views.  This slot has
 	// the responsibility to notify GUI elements of a view change via
-	// do_view_change, after updating the current gedp->ged_gvp pointer to
-	// refer to the now-current view.
+	// do_view_change, after updating the session's active view to refer to
+	// the now-current view.
 	void do_quad_view_change(QgView *);
 
        	/* Utility slots */

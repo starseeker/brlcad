@@ -25,8 +25,8 @@
 #include <string.h>
 
 #include "bg/line_layer.h"
-#include "bsg/feature.h"
 
+#include "../bsg_ged_draw_view_private.h"
 #include "../ged_private.h"
 #include "./check_private.h"
 
@@ -400,9 +400,8 @@ int check_overlaps(struct ged *gedp, struct current_state *state,
 	int handled = ged_diagnostic_line_layer_publish(gedp,
 		"check::overlaps", check_plot.builder);
 	if (!handled && gedp->ged_gvp) {
-	    (void)bsg_feature_replace_line_layer_builder(gedp->ged_gvp,
-		    "check::overlaps", 0,
-		    (const struct bsg_line_layer_builder *)check_plot.builder, NULL);
+	    (void)ged_draw_view_line_layer_builder_replace(gedp->ged_gvp,
+		    "check::overlaps", 0, check_plot.builder);
 	}
 	ged_check_plot_free(&check_plot);
     }

@@ -28,6 +28,9 @@
 #include <QVBoxLayout>
 #include <QtGlobal>
 #include "qtcad/QgPluginContext.h"
+#include "qtcad/QgColorRGB.h"
+#include "qtcad/QgLegacyView.h"
+#include "qtcad/QgMeasureFilter.h"
 #include "qtcad/QgSignalFlags.h"
 #include "qtcad/QgView.h"
 
@@ -40,6 +43,12 @@
 #include "ged.h"
 
 #include "./CADViewMeasure.h"
+
+static qg_legacy_view *
+qged_measure_view(const QgPluginContext *ctx)
+{
+    return ctx ? ctx->activeView() : nullptr;
+}
 
 static QgView *
 qged_measure_view_from_event_object(QObject *object)
@@ -130,7 +139,7 @@ void
 CADViewMeasure::adjust_text()
 {
     struct ged *gedp = m_ctx ? m_ctx->getGed() : nullptr;
-    if (!gedp || !gedp->ged_gvp)
+    if (!gedp || !gedp->dbip || !mf)
 	return;
 
 
@@ -168,14 +177,18 @@ bool
 CADViewMeasure::eventFilter(QObject *o, QEvent *e)
 {
     struct ged *gedp = m_ctx ? m_ctx->getGed() : nullptr;
-    if (!gedp || !gedp->ged_gvp)
+    if (!gedp)
 	return false;
-    struct bsg_view *v = gedp->ged_gvp;
+    QgView *display = qged_measure_view_from_event_object(o);
+    if (!display && m_ctx)
+	display = m_ctx->getViewWidget();
+    qg_legacy_view *v = display ? display->view() : qged_measure_view(m_ctx);
+    if (!v)
+	return false;
 
     mf = (measure_3d->isChecked()) ? (QgMeasureFilter *)f3d : (QgMeasureFilter *)f2d;
 
-    mf->set_view(v);
-    mf->set_view_widget(qged_measure_view_from_event_object(o));
+    mf->set_view_widget(display);
     update_color();
 
     // Connect whatever the current filter is to pass on updating signals from

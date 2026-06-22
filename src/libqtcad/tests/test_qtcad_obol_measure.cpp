@@ -21,6 +21,7 @@
 #include "bu/str.h"
 #include "ged.h"
 #include "ged/bsg_ged_draw.h"
+#include "qtcad/QgLegacyViewBsg.h"
 #include "qtcad/QgMeasureFilter.h"
 #include "qtcad/QgObolDrawSync.h"
 #include "qtcad/QgObolMeasure.h"
@@ -206,7 +207,7 @@ main(int argc, char **argv)
 
     QgView view(NULL, QgView_SW, NULL);
     view.resize(180, 140);
-    gedp->ged_gvp = view.view();
+    gedp->ged_gvp = qg_legacy_view_to_bsg(view.view());
 
     BRLObolViewController *controller = view.obolViewController();
     if (!controller)
@@ -218,7 +219,7 @@ main(int argc, char **argv)
     shaded_settings.draw_mode = BSG_DRAW_MODE_SHADED;
     struct ged_draw_transaction draw_box =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "box.s");
-    draw_box.view = view.view();
+    draw_box.view = qg_legacy_view_to_bsg(view.view());
     draw_box.appearance = &shaded_settings;
     if (!apply_and_sync(gedp, &view, &draw_box))
 	FAIL("GED shaded draw should sync box source into Obol");
@@ -260,7 +261,6 @@ main(int argc, char **argv)
 	FAIL("qtcad Obol measure clear should not initialize the legacy display manager");
 
     QMeasure3DFilter filter;
-    filter.set_view(view.view());
     filter.set_view_widget(&view);
     filter.update_color(&green);
 

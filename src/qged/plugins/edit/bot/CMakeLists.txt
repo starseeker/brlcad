@@ -11,7 +11,7 @@ if(BRLCAD_ENABLE_QT)
   )
 endif(BRLCAD_ENABLE_QT)
 
-set(bot_srcs QBot.cpp bot.cpp)
+set(bot_srcs QBot.cpp bot.cpp ../qged_edit_preview_util.cpp)
 
 set(bot_moc_hdrs QBot.h EditBotFactory.h)
 

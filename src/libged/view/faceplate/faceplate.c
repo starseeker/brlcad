@@ -34,9 +34,9 @@
 #include "bu/color.h"
 #include "bu/opt.h"
 #include "bu/vls.h"
-#include "bsg/hud.h"
 #include "rt/view_legacy_bsg.h"
 
+#include "../../bsg_ged_draw_view_private.h"
 #include "../../ged_private.h"
 #include "../ged_view.h"
 #include "./faceplate.h"
@@ -85,8 +85,8 @@ _fp_cmd_center_dot(void *ds, int argc, const char **argv)
     struct _ged_fp_info *gd = (struct _ged_fp_info *)ds;
     struct ged *gedp = gd->gedp;
     struct bsg_view *v = gedp->ged_gvp;
-    struct bsg_other_state center_dot;
-    if (!rt_view_center_dot_from_bsg(&center_dot, v))
+    struct rt_view_other_state center_dot;
+    if (!rt_view_center_dot_state_from_bsg(&center_dot, v))
 	return BRLCAD_ERROR;
 
     if (!argc) {
@@ -103,12 +103,12 @@ _fp_cmd_center_dot(void *ds, int argc, const char **argv)
     if (argc == 1) {
 	if (BU_STR_EQUAL("1", argv[0])) {
 	    center_dot.gos_draw = 1;
-	    rt_view_center_dot_set_bsg(v, &center_dot);
+	    rt_view_center_dot_state_set_bsg(v, &center_dot);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("0", argv[0])) {
 	    center_dot.gos_draw = 0;
-	    rt_view_center_dot_set_bsg(v, &center_dot);
+	    rt_view_center_dot_state_set_bsg(v, &center_dot);
 	    return BRLCAD_OK;
 	}
 	bu_vls_printf(gedp->ged_result_str, "value %s is invalid - valid values are 0 or 1\n", argv[0]);
@@ -128,7 +128,7 @@ _fp_cmd_center_dot(void *ds, int argc, const char **argv)
 	}
 	int *cls = (int *)(center_dot.gos_line_color);
 	bu_color_to_rgb_ints(&c, &cls[0], &cls[1], &cls[2]);
-	rt_view_center_dot_set_bsg(v, &center_dot);
+	rt_view_center_dot_state_set_bsg(v, &center_dot);
 	return BRLCAD_OK;
     }
 
@@ -193,8 +193,8 @@ _fp_cmd_scale(void *ds, int argc, const char **argv)
     struct _ged_fp_info *gd = (struct _ged_fp_info *)ds;
     struct ged *gedp = gd->gedp;
     struct bsg_view *v = gedp->ged_gvp;
-    struct bsg_other_state scale_state;
-    if (!rt_view_scale_overlay_from_bsg(&scale_state, v))
+    struct rt_view_other_state scale_state;
+    if (!rt_view_scale_overlay_state_from_bsg(&scale_state, v))
 	return BRLCAD_ERROR;
 
     if (!argc) {
@@ -211,12 +211,12 @@ _fp_cmd_scale(void *ds, int argc, const char **argv)
     if (argc == 1) {
 	if (BU_STR_EQUAL("1", argv[0])) {
 	    scale_state.gos_draw = 1;
-	    rt_view_scale_overlay_set_bsg(v, &scale_state);
+	    rt_view_scale_overlay_state_set_bsg(v, &scale_state);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("0", argv[0])) {
 	    scale_state.gos_draw = 0;
-	    rt_view_scale_overlay_set_bsg(v, &scale_state);
+	    rt_view_scale_overlay_state_set_bsg(v, &scale_state);
 	    return BRLCAD_OK;
 	}
 	bu_vls_printf(gedp->ged_result_str, "value %s is invalid - valid values are 0 or 1\n", argv[0]);
@@ -236,7 +236,7 @@ _fp_cmd_scale(void *ds, int argc, const char **argv)
 	}
 	int *cls = (int *)(scale_state.gos_line_color);
 	bu_color_to_rgb_ints(&c, &cls[0], &cls[1], &cls[2]);
-	rt_view_scale_overlay_set_bsg(v, &scale_state);
+	rt_view_scale_overlay_state_set_bsg(v, &scale_state);
 	return BRLCAD_OK;
     }
 
@@ -259,8 +259,8 @@ _fp_cmd_params(void *ds, int argc, const char **argv)
     struct _ged_fp_info *gd = (struct _ged_fp_info *)ds;
     struct ged *gedp = gd->gedp;
     struct bsg_view *v = gedp->ged_gvp;
-    struct bsg_params_state params;
-    if (!rt_view_params_from_bsg(&params, v))
+    struct rt_view_params_state params;
+    if (!rt_view_params_state_from_bsg(&params, v))
 	return BRLCAD_ERROR;
 
     if (!argc) {
@@ -285,12 +285,12 @@ _fp_cmd_params(void *ds, int argc, const char **argv)
     if (argc == 1) {
 	if (BU_STR_EQUAL("1", argv[0])) {
 	    params.draw = 1;
-	    rt_view_params_set_bsg(v, &params);
+	    rt_view_params_state_set_bsg(v, &params);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("0", argv[0])) {
 	    params.draw = 0;
-	    rt_view_params_set_bsg(v, &params);
+	    rt_view_params_state_set_bsg(v, &params);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("size", argv[0])) {
@@ -335,7 +335,7 @@ _fp_cmd_params(void *ds, int argc, const char **argv)
 	    }
 	    int *cls = (int *)(params.color);
 	    bu_color_to_rgb_ints(&c, &cls[0], &cls[1], &cls[2]);
-	    rt_view_params_set_bsg(v, &params);
+	    rt_view_params_state_set_bsg(v, &params);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("size", argv[0]))  {
@@ -344,7 +344,7 @@ _fp_cmd_params(void *ds, int argc, const char **argv)
 	    } else {
 		params.draw_size = 1;
 	    }
-	    rt_view_params_set_bsg(v, &params);
+	    rt_view_params_state_set_bsg(v, &params);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("center", argv[0]))  {
@@ -353,7 +353,7 @@ _fp_cmd_params(void *ds, int argc, const char **argv)
 	    } else {
 		params.draw_center = 1;
 	    }
-	    rt_view_params_set_bsg(v, &params);
+	    rt_view_params_state_set_bsg(v, &params);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("az", argv[0]))  {
@@ -362,7 +362,7 @@ _fp_cmd_params(void *ds, int argc, const char **argv)
 	    } else {
 		params.draw_az = 1;
 	    }
-	    rt_view_params_set_bsg(v, &params);
+	    rt_view_params_state_set_bsg(v, &params);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("el", argv[0]))  {
@@ -371,7 +371,7 @@ _fp_cmd_params(void *ds, int argc, const char **argv)
 	    } else {
 		params.draw_el = 1;
 	    }
-	    rt_view_params_set_bsg(v, &params);
+	    rt_view_params_state_set_bsg(v, &params);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("tw", argv[0]))  {
@@ -380,7 +380,7 @@ _fp_cmd_params(void *ds, int argc, const char **argv)
 	    } else {
 		params.draw_tw = 1;
 	    }
-	    rt_view_params_set_bsg(v, &params);
+	    rt_view_params_state_set_bsg(v, &params);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("fps", argv[0]))  {
@@ -389,7 +389,7 @@ _fp_cmd_params(void *ds, int argc, const char **argv)
 	    } else {
 		params.draw_fps = 1;
 	    }
-	    rt_view_params_set_bsg(v, &params);
+	    rt_view_params_state_set_bsg(v, &params);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("font_size", argv[0])) {
@@ -400,7 +400,7 @@ _fp_cmd_params(void *ds, int argc, const char **argv)
 		bu_vls_printf(gedp->ged_result_str, "invalid font size specification\n");
 	    }
 	    params.font_size = fsize;
-	    rt_view_params_set_bsg(v, &params);
+	    rt_view_params_state_set_bsg(v, &params);
 	    return BRLCAD_OK;
 	}
 	bu_vls_printf(gedp->ged_result_str, "unknown subcommand %s\n", argv[0]);
@@ -468,7 +468,7 @@ ged_faceplate_core(struct ged *gedp, int argc, const char *argv[])
     int ret;
     if (bu_cmd(_fp_cmds, ac, argv, 0, (void *)&gd, &ret) == BRLCAD_OK) {
 	if (ret == BRLCAD_OK)
-	    (void)bsg_hud_sync(gedp->ged_gvp);
+	    (void)ged_draw_view_hud_sync(gedp->ged_gvp);
 	return ret;
     } else {
 	bu_vls_printf(gedp->ged_result_str, "subcommand %s not defined", argv[0]);

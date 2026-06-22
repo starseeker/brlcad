@@ -41,6 +41,7 @@
 #include "bu/env.h"
 #include "bu/process.h"
 #include "raytrace.h"
+#include "dm/fbserv.h"
 #include "dm.h"
 #include "rt/view_legacy_bsg.h"
 

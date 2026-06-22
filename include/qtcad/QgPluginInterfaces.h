@@ -116,8 +116,8 @@ Q_DECLARE_INTERFACE(IQgDialogFactory, QGTCAD_IID("IQgDialogFactory"))
  * IQgCommand -- ged-style command callable from a QgConsole.
  * ------------------------------------------------------------------
  * Lets plugins extend the host's console with commands that have
- * access to a QgPluginContext (and therefore to the host's ged and
- * bsg_view).  The host wires invocation; the plugin provides the
+ * access to a QgPluginContext (and therefore to the host's GED context and
+ * active view widget).  The host wires invocation; the plugin provides the
  * verb name(s) and the run() callback.
  */
 class QTCAD_EXPORT IQgCommand

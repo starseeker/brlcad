@@ -29,8 +29,8 @@
  *
  * Accessors are deliberately function-pointer/std::function style so
  * the context can re-resolve handles on demand: the underlying ged*
- * and bsg_view* may change across the lifetime of the host (db reopen,
- * view swap, quad-view switching) without the context having to be
+ * and active view widget may change across the lifetime of the host
+ * (db reopen, view swap, quad-view switching) without the context having to be
  * rebuilt.
  *
  * QgPluginContext does not own any of the resources it exposes -- it
@@ -45,13 +45,13 @@
 #include <QObject>
 #include <QString>
 #include "qtcad/defines.h"
+#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgTypes.h"
 
 /* Forward declarations: callers that actually need the full types
  * can include them directly.  Keeping these out of the API header
  * minimises transitive include pressure for hosts. */
 struct ged;
-struct bsg_view;
 class QgModel;
 class QgView;
 
@@ -73,10 +73,10 @@ class QTCAD_EXPORT QgPluginNotifier : public QObject
 	/* The active .g database has changed (open/close/reopen). */
 	void dbChanged();
 
-	/* The active bsg_view has changed (e.g. quad-view switch). */
+	/* The active view has changed (e.g. quad-view switch). */
 	void viewChanged();
 
-	/* The active bsg_view's contents/settings updated; payload is the
+	/* The active view's contents/settings updated; payload is the
 	 * standard QgViewUpdateFlags bitmask. */
 	void viewUpdated(QgViewUpdateFlags flags);
 
@@ -97,10 +97,6 @@ class QTCAD_EXPORT QgPluginContext
 	/* Accessor: the host's current ged*.  May return NULL when no
 	 * database is open. */
 	std::function<struct ged *()> gedAccessor;
-
-	/* Accessor: the host's currently-active bsg_view*.  May return
-	 * NULL when no view is set up. */
-	std::function<struct bsg_view *()> viewAccessor;
 
 	/* Accessor: the host's currently-active QgView widget.  May return
 	 * NULL for non-visual hosts or during startup. */
@@ -127,8 +123,8 @@ class QTCAD_EXPORT QgPluginContext
 
 	/* Convenience wrappers. */
 	struct ged *getGed() const { return gedAccessor ? gedAccessor() : nullptr; }
-	struct bsg_view *getView() const { return viewAccessor ? viewAccessor() : nullptr; }
 	QgView *getViewWidget() const { return viewWidgetAccessor ? viewWidgetAccessor() : nullptr; }
+	qg_legacy_view *activeView() const;
 	void logMessage(const QString &msg) const { if (log) log(msg); }
 };
 

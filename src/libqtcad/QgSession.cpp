@@ -25,9 +25,11 @@
 #include "common.h"
 
 #include "bu/env.h"
+#include "ged.h"
 #include "raytrace.h"
 
 #include "qtcad/QgSession.h"
+#include "qtcad/QgLegacyViewBsg.h"
 #include "qtcad/QgUtil.h"
 #include "qtcad/QgSignalFlags.h"
 
@@ -98,6 +100,19 @@ struct db_i *
 QgSession::dbip() const
 {
     return gedp ? gedp->dbip : nullptr;
+}
+
+qg_legacy_view *
+QgSession::activeView() const
+{
+    return gedp ? qg_legacy_view_from_bsg(gedp->ged_gvp) : nullptr;
+}
+
+void
+QgSession::setActiveView(qg_legacy_view *view)
+{
+    if (gedp)
+	gedp->ged_gvp = qg_legacy_view_to_bsg(view);
 }
 
 void

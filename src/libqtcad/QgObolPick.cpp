@@ -209,15 +209,27 @@ qg_obol_insert_pick_record(std::vector<QgObolPickRecord> &records,
 	bool pickAll)
 {
     if (pickAll) {
-	std::vector<QgObolPickRecord>::iterator it = records.begin();
-	while (it != records.end() && it->distance <= record.distance)
-	    ++it;
-	records.insert(it, record);
+	records.push_back(record);
 	return;
     }
 
     if (records.empty() || record.distance < records[0].distance)
 	records.assign(1, record);
+}
+
+static bool
+qg_obol_pick_record_nearer(const QgObolPickRecord &a,
+	const QgObolPickRecord &b)
+{
+    return a.distance < b.distance;
+}
+
+static void
+qg_obol_sort_pick_records(std::vector<QgObolPickRecord> &records)
+{
+    if (records.size() > 1)
+	std::stable_sort(records.begin(), records.end(),
+		qg_obol_pick_record_nearer);
 }
 
 static int
@@ -353,6 +365,8 @@ qg_obol_pick_point_internal(QgView *display,
     if (pickAll) {
 	const SoPickedPointList &pickedPoints =
 	    pickAction.getPickedPointList();
+	if (pickedPoints.getLength() > 0)
+	    records.reserve(records.size() + pickedPoints.getLength());
 	for (int i = 0; i < pickedPoints.getLength(); i++) {
 	    const SoPickedPoint *pickedPoint = pickedPoints[i];
 	    const SoBRLPickDetail *detail =
@@ -381,6 +395,9 @@ qg_obol_pick_point_internal(QgView *display,
 	    (void)qg_obol_pick_camera_line(controller, vx, vy, rtLine);
 	qg_obol_pick_rt_exact(controller, rtLine, pickAll, records);
     }
+
+    if (pickAll)
+	qg_obol_sort_pick_records(records);
 
     return static_cast<int>(records.size());
 }
@@ -436,6 +453,8 @@ qg_obol_pick_ray(QgView *display,
     if (pickAll) {
 	const SoPickedPointList &pickedPoints =
 	    pickAction.getPickedPointList();
+	if (pickedPoints.getLength() > 0)
+	    records.reserve(records.size() + pickedPoints.getLength());
 	for (int i = 0; i < pickedPoints.getLength(); i++) {
 	    const SoPickedPoint *pickedPoint = pickedPoints[i];
 	    const SoBRLPickDetail *detail =
@@ -458,6 +477,9 @@ qg_obol_pick_ray(QgView *display,
     qg_obol_pick_source_full_detail(controller, line, pickAll, records,
 	    submittedSourceRequestCount);
     qg_obol_pick_rt_exact(controller, line, pickAll, records);
+
+    if (pickAll)
+	qg_obol_sort_pick_records(records);
 
     return static_cast<int>(records.size());
 }

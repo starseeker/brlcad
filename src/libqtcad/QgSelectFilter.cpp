@@ -27,9 +27,7 @@
 
 extern "C" {
 #include "bu/malloc.h"
-#include "bsg/interaction.h"
-#include "bsg/pick.h"
-#include "bsg/selection.h"
+#include "bu/vls.h"
 #include "raytrace.h"
 #include "rt/view_legacy_bsg.h"
 }
@@ -39,9 +37,25 @@ extern "C" {
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include "qtcad/QgLegacyView.h"
+#include "qtcad/QgLegacyViewBsg.h"
 #include "qtcad/QgObolPick.h"
 #include "qtcad/QgSelectFilter.h"
 #include "qtcad/QgSignalFlags.h"
+#include "qtcad/QgView.h"
+
+static qg_legacy_view *
+qg_select_filter_legacy_view(const QgSelectFilter *filter)
+{
+    QgView *display = filter ? filter->view_widget() : nullptr;
+    return display ? display->view() : nullptr;
+}
+
+static struct bsg_view *
+qg_select_filter_view(const QgSelectFilter *filter)
+{
+    return qg_legacy_view_to_bsg(qg_select_filter_legacy_view(filter));
+}
 
 static void
 qg_select_mouse_xy(QMouseEvent *m_e, int *sx, int *sy)
@@ -60,70 +74,9 @@ qg_select_mouse_xy(QMouseEvent *m_e, int *sx, int *sy)
 
 class QgSelectFilter::QgSelectFilterPrivate {
 public:
-    struct bsg_pick_result *selected_result = nullptr;
-    struct bsg_interaction_result *selected_interactions = nullptr;
+    struct rt_view_pick_result_bsg *selected_result = nullptr;
     std::vector<std::string> selected_path_strings;
 };
-
-static struct bsg_pick_record *
-_qg_pick_record_create(struct bsg_view *v, int sx, int sy,
-	const char *source_path, fastf_t hit_dist = -1.0)
-{
-    if (!source_path || !source_path[0])
-	return nullptr;
-
-    struct bsg_pick_record *pr;
-    BU_GET(pr, struct bsg_pick_record);
-    bu_vls_init(&pr->pr_source_path);
-    bu_vls_init(&pr->pr_instance_path);
-    pr->pr_scene = BSG_SCENE_REF_NULL_INIT;
-    pr->pr_feature = BSG_FEATURE_REF_NULL_INIT;
-    pr->pr_valid = 1;
-    pr->pr_view = v;
-    pr->pr_screen_x = sx;
-    pr->pr_screen_y = sy;
-    pr->pr_primitive_id = -1;
-    pr->pr_subelement_id = -1;
-    pr->pr_hit_dist = hit_dist;
-    bu_vls_sprintf(&pr->pr_source_path, "%s", source_path);
-    bu_vls_sprintf(&pr->pr_instance_path, "%s", bu_vls_cstr(&pr->pr_source_path));
-    if (bu_vls_strlen(&pr->pr_source_path) == 0)
-	pr->pr_valid = 0;
-    return pr;
-}
-
-static struct bsg_pick_result *
-_qg_pick_result_filter_first(const struct bsg_pick_result *src)
-{
-    struct bsg_pick_result *res = bsg_pick_result_create();
-    if (!res || !src || !bsg_pick_result_count(src))
-	return res;
-
-    struct bsg_pick_record *src_pr = bsg_pick_result_get(src, 0);
-    struct bsg_pick_record *pr = _qg_pick_record_create(src_pr->pr_view,
-	src_pr->pr_screen_x, src_pr->pr_screen_y, bu_vls_cstr(&src_pr->pr_source_path),
-	src_pr->pr_hit_dist);
-    if (pr) {
-	pr->pr_feature = src_pr->pr_feature;
-	pr->pr_valid = src_pr->pr_valid;
-	bu_ptbl_ins(&res->pr_records, (long *)pr);
-    }
-    return res;
-}
-
-static const char *
-_qg_pick_record_target(const struct bsg_pick_record *pr)
-{
-    if (!pr)
-	return NULL;
-
-    const char *spath = bu_vls_cstr(&pr->pr_source_path);
-    if (spath && spath[0])
-	return spath;
-
-    const char *ipath = bu_vls_cstr(&pr->pr_instance_path);
-    return (ipath && ipath[0]) ? ipath : NULL;
-}
 
 static std::string
 _qg_normalize_path(const char *path)
@@ -143,6 +96,26 @@ _qg_append_unique_path(std::vector<std::string> &paths, const char *path)
 	return;
     if (std::find(paths.begin(), paths.end(), normalized) == paths.end())
 	paths.push_back(normalized);
+}
+
+static std::string
+_qg_pick_result_path(const struct rt_view_pick_result_bsg *result, size_t index)
+{
+    struct bu_vls path = BU_VLS_INIT_ZERO;
+    std::string ret;
+    if (rt_view_pick_result_path_bsg(result, index, &path))
+	ret = bu_vls_cstr(&path);
+    bu_vls_free(&path);
+    return ret;
+}
+
+static void
+_qg_append_unique_path_cb(const char *path, void *data)
+{
+    std::vector<std::string> *paths =
+	static_cast<std::vector<std::string> *>(data);
+    if (paths)
+	_qg_append_unique_path(*paths, path);
 }
 
 QgSelectFilter::QgSelectFilter() :
@@ -172,48 +145,27 @@ QgSelectFilter::clear_selected_result()
 
     m->selected_path_strings.clear();
     if (m->selected_result) {
-	bsg_pick_result_free(m->selected_result);
+	rt_view_pick_result_free_bsg(m->selected_result);
 	m->selected_result = nullptr;
-    }
-    if (m->selected_interactions) {
-	bsg_interaction_result_free(m->selected_interactions);
-	m->selected_interactions = nullptr;
     }
 }
 
 void
-QgSelectFilter::set_selected_result(struct bsg_view *v, void *res)
+QgSelectFilter::set_selected_result(struct rt_view_pick_result_bsg *res)
 {
     clear_selected_result();
     if (!m)
 	return;
 
-    m->selected_result = static_cast<struct bsg_pick_result *>(res);
-    if (m->selected_result) {
-	m->selected_interactions = bsg_interaction_from_pick_result(m->selected_result);
-	if (m->selected_interactions) {
-	    for (size_t i = 0; i < bsg_interaction_result_count(m->selected_interactions); i++) {
-		const struct bsg_interaction_record *rec =
-		    bsg_interaction_result_get(m->selected_interactions, i);
-		_qg_append_unique_path(m->selected_path_strings,
-		    bsg_interaction_record_path(rec));
-	    }
-	}
-    }
-
-    struct bsg_selection *selection = rt_view_selection_bsg(v);
-    if (selection) {
-	if (m->selected_interactions) {
-	    bsg_interaction_selection_apply(selection,
-		    m->selected_interactions, BSG_INTERACTION_APPLY_SET);
-	} else {
-	    bsg_selection_clear(selection);
-	}
-    }
+    m->selected_result = res;
+    struct bsg_view *v = qg_select_filter_view(this);
+    if (v)
+	rt_view_selection_set_pick_result_ref_bsg(v, m->selected_result,
+		_qg_append_unique_path_cb, &m->selected_path_strings);
 }
 
 void
-QgSelectFilter::set_selected_paths(struct bsg_view *v, const std::vector<std::string> &paths)
+QgSelectFilter::set_selected_paths(const std::vector<std::string> &paths)
 {
     clear_selected_result();
     if (!m)
@@ -222,9 +174,9 @@ QgSelectFilter::set_selected_paths(struct bsg_view *v, const std::vector<std::st
     for (const std::string &path : paths)
 	_qg_append_unique_path(m->selected_path_strings, path.c_str());
 
-    struct bsg_selection *selection = rt_view_selection_bsg(v);
-    if (selection)
-	bsg_selection_clear(selection);
+    struct bsg_view *v = qg_select_filter_view(this);
+    if (v)
+	rt_view_selection_clear_bsg(v);
 }
 
 bool
@@ -234,7 +186,7 @@ QgSelectPntFilter::eventFilter(QObject *, QEvent *e)
     if (!m_e)
 	return false;
 
-    struct bsg_view *v = view();
+    struct bsg_view *v = qg_select_filter_view(this);
 
     if (e->type() != QEvent::MouseButtonRelease)
 	return true;
@@ -254,19 +206,19 @@ QgSelectPntFilter::eventFilter(QObject *, QEvent *e)
 	std::vector<std::string> paths;
 	for (const QgObolPickRecord &pick : obolPicks)
 	    _qg_append_unique_path(paths, pick.path.c_str());
-	set_selected_paths(v, paths);
+	set_selected_paths(paths);
 	return true;
     }
     if (submittedSourceRequests > 0) {
 	std::vector<std::string> paths;
-	set_selected_paths(v, paths);
+	set_selected_paths(paths);
 	return true;
     }
 
-    struct bsg_pick_result *res = first_only ?
-	bsg_pick_nearest(v, sx, sy) :
-	bsg_pick_point(v, sx, sy, 0);
-    set_selected_result(v, res);
+    struct rt_view_pick_result_bsg *res = first_only ?
+	rt_view_pick_nearest_bsg(v, sx, sy) :
+	rt_view_pick_point_bsg(v, sx, sy, 0);
+    set_selected_result(res);
 
     return true;
 }
@@ -278,7 +230,7 @@ QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
     if (!m_e)
 	return false;
 
-    struct bsg_view *v = view();
+    struct bsg_view *v = qg_select_filter_view(this);
     if (!v)
 	return false;
 
@@ -293,10 +245,11 @@ QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
     if (e->type() == QEvent::MouseButtonPress) {
 	px = sx;
 	py = sy;
-	int view_width = rt_view_width_from_bsg(v);
-	int view_height = rt_view_height_from_bsg(v);
-	struct bsg_interactive_rect_state rect;
-	if (!rt_view_interactive_rect_from_bsg(&rect, v))
+	qg_legacy_view *lv = qg_select_filter_legacy_view(this);
+	int view_width = qg_legacy_view_width_get(lv);
+	int view_height = qg_legacy_view_height_get(lv);
+	struct rt_view_interactive_rect_state rect;
+	if (!rt_view_interactive_rect_state_from_bsg(&rect, v))
 	    return true;
 	rect.line_width = 1;
 	rect.dim[0] = 0;
@@ -308,16 +261,17 @@ QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
 	rect.cdim[0] = view_width;
 	rect.cdim[1] = view_height;
 	rect.aspect = (fastf_t)rect.cdim[X] / rect.cdim[Y];
-	rt_view_interactive_rect_set_bsg(v, &rect);
+	rt_view_interactive_rect_state_set_bsg(v, &rect);
 	emit view_updated(QG_VIEW_DRAWN);
 	return true;
     }
 
     if (e->type() == QEvent::MouseMove) {
-	struct bsg_interactive_rect_state rect;
-	if (!rt_view_interactive_rect_from_bsg(&rect, v))
+	struct rt_view_interactive_rect_state rect;
+	if (!rt_view_interactive_rect_state_from_bsg(&rect, v))
 	    return true;
-	int view_height = rt_view_height_from_bsg(v);
+	qg_legacy_view *lv = qg_select_filter_legacy_view(this);
+	int view_height = qg_legacy_view_height_get(lv);
 	rect.draw = 1;
 	rect.dim[0] = sx - px;
 	rect.dim[1] = (view_height - sy) - rect.pos[1];
@@ -325,7 +279,7 @@ QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
 	rect.y = ((0.5 - (rect.cdim[Y] - rect.pos[Y]) / (fastf_t)rect.cdim[Y]) / rect.aspect * 2.0);
 	rect.width = rect.dim[X] * 2.0 / (fastf_t)rect.cdim[X];
 	rect.height = rect.dim[Y] * 2.0 / (fastf_t)rect.cdim[X];
-	rt_view_interactive_rect_set_bsg(v, &rect);
+	rt_view_interactive_rect_state_set_bsg(v, &rect);
 	emit view_updated(QG_VIEW_DRAWN);
 	return true;
     }
@@ -342,10 +296,10 @@ QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
 	    for (const QgObolPickRecord &pick : obolPicks)
 		_qg_append_unique_path(paths, pick.path.c_str());
 	    if (!paths.empty()) {
-		set_selected_paths(v, paths);
+		set_selected_paths(paths);
 
-		struct bsg_interactive_rect_state rect;
-		if (!rt_view_interactive_rect_from_bsg(&rect, v))
+		struct rt_view_interactive_rect_state rect;
+		if (!rt_view_interactive_rect_state_from_bsg(&rect, v))
 		    return true;
 		rect.draw = 0;
 		rect.line_width = 0;
@@ -353,7 +307,7 @@ QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
 		rect.pos[1] = 0;
 		rect.dim[0] = 0;
 		rect.dim[1] = 0;
-		rt_view_interactive_rect_set_bsg(v, &rect);
+		rt_view_interactive_rect_state_set_bsg(v, &rect);
 		emit view_updated(QG_VIEW_DRAWN);
 		return true;
 	    }
@@ -361,9 +315,9 @@ QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
 
 	if (submittedSourceRequests > 0) {
 	    std::vector<std::string> paths;
-	    set_selected_paths(v, paths);
-	    struct bsg_interactive_rect_state rect;
-	    if (!rt_view_interactive_rect_from_bsg(&rect, v))
+	    set_selected_paths(paths);
+	    struct rt_view_interactive_rect_state rect;
+	    if (!rt_view_interactive_rect_state_from_bsg(&rect, v))
 		return true;
 	    rect.draw = 0;
 	    rect.line_width = 0;
@@ -371,22 +325,23 @@ QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
 	    rect.pos[1] = 0;
 	    rect.dim[0] = 0;
 	    rect.dim[1] = 0;
-	    rt_view_interactive_rect_set_bsg(v, &rect);
+	    rt_view_interactive_rect_state_set_bsg(v, &rect);
 	    emit view_updated(QG_VIEW_DRAWN);
 	    return true;
 	}
 
-	struct bsg_pick_result *res =
-	    bsg_pick_rect(v, ipx, ipy, sx, sy);
-	if (first_only && res && bsg_pick_result_count(res) > 1) {
-	    struct bsg_pick_result *nearest = _qg_pick_result_filter_first(res);
-	    bsg_pick_result_free(res);
+	struct rt_view_pick_result_bsg *res =
+	    rt_view_pick_rect_bsg(v, ipx, ipy, sx, sy);
+	if (first_only && res && rt_view_pick_result_count_bsg(res) > 1) {
+	    struct rt_view_pick_result_bsg *nearest =
+		rt_view_pick_result_filter_first_bsg(res);
+	    rt_view_pick_result_free_bsg(res);
 	    res = nearest;
 	}
-	set_selected_result(v, res);
+	set_selected_result(res);
 
-	struct bsg_interactive_rect_state rect;
-	if (!rt_view_interactive_rect_from_bsg(&rect, v))
+	struct rt_view_interactive_rect_state rect;
+	if (!rt_view_interactive_rect_state_from_bsg(&rect, v))
 	    return true;
 	rect.draw = 0;
 	rect.line_width = 0;
@@ -394,7 +349,7 @@ QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
 	rect.pos[1] = 0;
 	rect.dim[0] = 0;
 	rect.dim[1] = 0;
-	rt_view_interactive_rect_set_bsg(v, &rect);
+	rt_view_interactive_rect_state_set_bsg(v, &rect);
 	emit view_updated(QG_VIEW_DRAWN);
 	return true;
     }
@@ -456,19 +411,18 @@ _ovlp_record(struct application *ap, struct partition *pp, struct region *reg1, 
     return 1;
 }
 
-static struct bsg_pick_result *
-_qg_pick_result_from_ray_hits(const struct bsg_pick_result *candidates,
+static struct rt_view_pick_result_bsg *
+_qg_pick_result_from_ray_hits(const struct rt_view_pick_result_bsg *candidates,
 			      const struct select_rec_state *rc,
 			      int first_only)
 {
-    struct bsg_pick_result *res = bsg_pick_result_create();
+    struct rt_view_pick_result_bsg *res = rt_view_pick_result_create_bsg();
     if (!res || !candidates || !rc)
 	return res;
 
     std::unordered_set<std::string> seen_paths;
-    for (size_t i = 0; i < bsg_pick_result_count(candidates); i++) {
-	struct bsg_pick_record *src = bsg_pick_result_get(candidates, i);
-	std::string key = _qg_normalize_path(_qg_pick_record_target(src));
+    for (size_t i = 0; i < rt_view_pick_result_count_bsg(candidates); i++) {
+	std::string key = _qg_normalize_path(_qg_pick_result_path(candidates, i).c_str());
 	if (key.empty())
 	    continue;
 
@@ -483,19 +437,12 @@ _qg_pick_result_from_ray_hits(const struct bsg_pick_result *candidates,
 	if (!seen_paths.insert(key).second)
 	    continue;
 
-	fastf_t hit_dist = src->pr_hit_dist;
+	fastf_t hit_dist = rt_view_pick_result_hit_dist_bsg(candidates, i);
 	std::unordered_map<std::string, fastf_t>::const_iterator h_it = rc->hits.find(key);
 	if (h_it != rc->hits.end())
 	    hit_dist = h_it->second;
 
-	struct bsg_pick_record *pr = _qg_pick_record_create(src->pr_view,
-		src->pr_screen_x, src->pr_screen_y, bu_vls_cstr(&src->pr_source_path),
-		hit_dist);
-	if (pr) {
-	    pr->pr_feature = src->pr_feature;
-	    pr->pr_valid = src->pr_valid;
-	    bu_ptbl_ins(&res->pr_records, (long *)pr);
-	}
+	rt_view_pick_result_append_copy_bsg(res, candidates, i, hit_dist);
 
 	if (first_only)
 	    break;
@@ -537,7 +484,7 @@ QgSelectRayFilter::eventFilter(QObject *, QEvent *e)
     if (!m_e)
 	return false;
 
-    struct bsg_view *v = view();
+    struct bsg_view *v = qg_select_filter_view(this);
     if (!v)
 	return false;
     if (e->type() != QEvent::MouseButtonRelease)
@@ -562,13 +509,13 @@ QgSelectRayFilter::eventFilter(QObject *, QEvent *e)
 	    for (const QgObolPickRecord &pick : obolRayPicks)
 		_qg_append_unique_path(paths, pick.path.c_str());
 	    if (!paths.empty()) {
-		set_selected_paths(v, paths);
+		set_selected_paths(paths);
 		return true;
 	    }
 	}
 	if (submittedSourceRequests > 0) {
 	    std::vector<std::string> paths;
-	    set_selected_paths(v, paths);
+	    set_selected_paths(paths);
 	    return true;
 	}
     }
@@ -582,26 +529,27 @@ QgSelectRayFilter::eventFilter(QObject *, QEvent *e)
 	for (const QgObolPickRecord &pick : obolPicks)
 	    _qg_append_unique_path(paths, pick.path.c_str());
 	if (!paths.empty()) {
-	    set_selected_paths(v, paths);
+	    set_selected_paths(paths);
 	    return true;
 	}
     }
     if (submittedSourceRequests > 0) {
 	std::vector<std::string> paths;
-	set_selected_paths(v, paths);
+	set_selected_paths(paths);
 	return true;
     }
 
     if (!dbip) {
 	std::vector<std::string> paths;
-	set_selected_paths(v, paths);
+	set_selected_paths(paths);
 	return true;
     }
 
-    struct bsg_pick_result *candidates =
-	bsg_pick_point(v, sx, sy, 0);
-    if (!candidates || !bsg_pick_result_count(candidates)) {
-	set_selected_result(v, candidates);
+    struct rt_view_pick_result_bsg *candidates =
+	rt_view_pick_point_bsg(v, sx, sy, 0);
+    size_t candidate_count = rt_view_pick_result_count_bsg(candidates);
+    if (!candidates || !candidate_count) {
+	set_selected_result(candidates);
 	return true;
     }
 
@@ -620,17 +568,19 @@ QgSelectRayFilter::eventFilter(QObject *, QEvent *e)
     rt_init_resource(resp, 0, rtip);
     ap->a_resource = resp;
     ap->a_rt_i = rtip;
-    const char **objs = (const char **)bu_calloc(bsg_pick_result_count(candidates) + 1, sizeof(char *), "objs");
-    for (size_t i = 0; i < bsg_pick_result_count(candidates); i++) {
-	struct bsg_pick_record *pr = bsg_pick_result_get(candidates, i);
-	objs[i] = _qg_pick_record_target(pr);
+    std::vector<std::string> candidate_paths;
+    candidate_paths.reserve(candidate_count);
+    const char **objs = (const char **)bu_calloc(candidate_count + 1, sizeof(char *), "objs");
+    for (size_t i = 0; i < candidate_count; i++) {
+	candidate_paths.push_back(_qg_pick_result_path(candidates, i));
+	objs[i] = candidate_paths.back().empty() ? nullptr : candidate_paths.back().c_str();
     }
-    if (rt_gettrees_and_attrs(rtip, nullptr, (int)bsg_pick_result_count(candidates), objs, 1)) {
+    if (rt_gettrees_and_attrs(rtip, nullptr, (int)candidate_count, objs, 1)) {
 	bu_free(objs, "objs");
 	rt_i_destroy(rtip);
 	BU_PUT(resp, struct resource);
 	BU_PUT(ap, struct application);
-	bsg_pick_result_free(candidates);
+	rt_view_pick_result_free_bsg(candidates);
 	return false;
     }
     size_t ncpus = bu_avail_cpus();
@@ -655,10 +605,10 @@ QgSelectRayFilter::eventFilter(QObject *, QEvent *e)
     BU_PUT(resp, struct resource);
     BU_PUT(ap, struct application);
 
-    struct bsg_pick_result *res =
+    struct rt_view_pick_result_bsg *res =
 	_qg_pick_result_from_ray_hits(candidates, &rc, first_only);
-    bsg_pick_result_free(candidates);
-    set_selected_result(v, res);
+    rt_view_pick_result_free_bsg(candidates);
+    set_selected_result(res);
 
     return true;
 }

@@ -41,7 +41,7 @@
 
 struct _ged_fp_irect_info {
     struct _ged_view_info *gd;
-    struct bsg_interactive_rect_state *r;
+    struct rt_view_interactive_rect_state *r;
 };
 
 int
@@ -61,7 +61,7 @@ _fp_irect_cmd_draw(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bsg_interactive_rect_state *r = rinfo->r;
+    struct rt_view_interactive_rect_state *r = rinfo->r;
     if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%d\n", r->draw);
 	return BRLCAD_OK;
@@ -101,7 +101,7 @@ _fp_irect_cmd_line_width(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bsg_interactive_rect_state *r = rinfo->r;
+    struct rt_view_interactive_rect_state *r = rinfo->r;
     if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%d\n", r->line_width);
 	return BRLCAD_OK;
@@ -141,7 +141,7 @@ _fp_irect_cmd_line_style(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bsg_interactive_rect_state *r = rinfo->r;
+    struct rt_view_interactive_rect_state *r = rinfo->r;
     if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%d\n", r->line_style);
 	return BRLCAD_OK;
@@ -180,7 +180,7 @@ _fp_irect_cmd_pos(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bsg_interactive_rect_state *r = rinfo->r;
+    struct rt_view_interactive_rect_state *r = rinfo->r;
      if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%d %d\n", r->pos[0], r->pos[1]);
 	return BRLCAD_OK;
@@ -222,7 +222,7 @@ _fp_irect_cmd_dim(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bsg_interactive_rect_state *r = rinfo->r;
+    struct rt_view_interactive_rect_state *r = rinfo->r;
      if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%d %d\n", r->dim[0], r->dim[1]);
 	return BRLCAD_OK;
@@ -265,7 +265,7 @@ _fp_irect_cmd_x(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bsg_interactive_rect_state *r = rinfo->r;
+    struct rt_view_interactive_rect_state *r = rinfo->r;
     bu_vls_printf(gedp->ged_result_str, "%g\n", r->x);
     return BRLCAD_OK;
 }
@@ -287,7 +287,7 @@ _fp_irect_cmd_y(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bsg_interactive_rect_state *r = rinfo->r;
+    struct rt_view_interactive_rect_state *r = rinfo->r;
     bu_vls_printf(gedp->ged_result_str, "%g\n", r->y);
     return BRLCAD_OK;
 }
@@ -309,7 +309,7 @@ _fp_irect_cmd_width(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bsg_interactive_rect_state *r = rinfo->r;
+    struct rt_view_interactive_rect_state *r = rinfo->r;
     bu_vls_printf(gedp->ged_result_str, "%g\n", r->width);
     return BRLCAD_OK;
 }
@@ -331,7 +331,7 @@ _fp_irect_cmd_height(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bsg_interactive_rect_state *r = rinfo->r;
+    struct rt_view_interactive_rect_state *r = rinfo->r;
     bu_vls_printf(gedp->ged_result_str, "%g\n", r->height);
     return BRLCAD_OK;
 }
@@ -353,7 +353,7 @@ _fp_irect_cmd_bg(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bsg_interactive_rect_state *r = rinfo->r;
+    struct rt_view_interactive_rect_state *r = rinfo->r;
     if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%d %d %d\n", V3ARGS(r->bg));
 	return BRLCAD_OK;
@@ -394,7 +394,7 @@ _fp_irect_cmd_color(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bsg_interactive_rect_state *r = rinfo->r;
+    struct rt_view_interactive_rect_state *r = rinfo->r;
     if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%d %d %d\n", V3ARGS(r->color));
 	return BRLCAD_OK;
@@ -435,7 +435,7 @@ _fp_irect_cmd_cdim(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bsg_interactive_rect_state *r = rinfo->r;
+    struct rt_view_interactive_rect_state *r = rinfo->r;
      if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%d %d\n", r->cdim[0], r->cdim[1]);
 	return BRLCAD_OK;
@@ -501,17 +501,17 @@ _fp_cmd_irect(void *bs, int argc, const char **argv)
     argc--; argv++;
 
     if (argc == 1) {
-	struct bsg_interactive_rect_state rect;
-	if (!rt_view_interactive_rect_from_bsg(&rect, v))
+	struct rt_view_interactive_rect_state rect;
+	if (!rt_view_interactive_rect_state_from_bsg(&rect, v))
 	    return BRLCAD_ERROR;
 	if (BU_STR_EQUAL("1", argv[0])) {
 	    rect.draw = 1;
-	    rt_view_interactive_rect_set_bsg(v, &rect);
+	    rt_view_interactive_rect_state_set_bsg(v, &rect);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("0", argv[0])) {
 	    rect.draw = 0;
-	    rt_view_interactive_rect_set_bsg(v, &rect);
+	    rt_view_interactive_rect_state_set_bsg(v, &rect);
 	    return BRLCAD_OK;
 	}
     }
@@ -535,8 +535,8 @@ _fp_cmd_irect(void *bs, int argc, const char **argv)
     int acnt = (cmd_pos >= 0) ? cmd_pos : argc;
     (void)bu_opt_parse(NULL, acnt, argv, d);
 
-    struct bsg_interactive_rect_state rect;
-    if (!rt_view_interactive_rect_from_bsg(&rect, v))
+    struct rt_view_interactive_rect_state rect;
+    if (!rt_view_interactive_rect_state_from_bsg(&rect, v))
 	return BRLCAD_ERROR;
 
     struct _ged_fp_irect_info rinfo;
@@ -545,7 +545,7 @@ _fp_cmd_irect(void *bs, int argc, const char **argv)
 
     int ret = _ged_subcmd_exec(gedp, d, _fp_irect_cmds, "view faceplate irect", "[options] subcommand [args]", (void *)&rinfo, argc, argv, help, cmd_pos);
     if (ret == BRLCAD_OK)
-	rt_view_interactive_rect_set_bsg(v, &rect);
+	rt_view_interactive_rect_state_set_bsg(v, &rect);
     return ret;
 }
 

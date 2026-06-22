@@ -37,6 +37,7 @@
 #include "bu/log.h"
 #include "bu/malloc.h"
 #include "bu/vls.h"
+#include "dm/fbserv.h"
 #include "dm.h"
 #include "./fbserv.h"
 #include "qtcad/QgGL.h"

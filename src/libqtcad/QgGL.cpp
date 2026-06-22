@@ -35,6 +35,7 @@
 
 #include "QgCanvasState.h"   /* pimpl definition + shared helpers */
 #include "qtcad/QgGL.h"
+#include "qtcad/QgLegacyViewBsg.h"
 
 extern "C" {
 #include "rt/view_legacy_bsg.h"
@@ -60,9 +61,11 @@ QgGL::QgGL(QWidget *parent, struct fb *fbp)
 
     // Provide a view specific to this widget - set gedp->ged_gvp to v
     // if this is the current view
-    BU_GET(d->local_v, struct bsg_view);
-    rt_view_init_bsg(d->local_v, nullptr);
-    bu_vls_sprintf(&d->local_v->gv_name, "qtgl");
+    struct bsg_view *local_bv = nullptr;
+    BU_GET(local_bv, struct bsg_view);
+    rt_view_init_bsg(local_bv, nullptr);
+    bu_vls_sprintf(&local_bv->gv_name, "qtgl");
+    d->local_v = qg_legacy_view_from_bsg(local_bv);
     d->v = d->local_v;
     qgcanvas_sync_obol_camera(*d);
 
@@ -94,12 +97,15 @@ else
     fb_put(d->ifp);
     }
     qgcanvas_destroy_obol(*d);
-    BU_PUT(d->local_v, struct bv);
+    struct bsg_view *local_bv = qgcanvas_bsg_local_view(*d);
+    BU_PUT(local_bv, struct bv);
+    d->local_v = nullptr;
+    d->v = nullptr;
     delete d;
     d = nullptr;
 }
 
-struct bsg_view *
+qg_legacy_view *
 QgGL::view() const
 {
     return d->v;
@@ -142,7 +148,7 @@ QgGL::setDisplayManagerSet(struct bu_ptbl *set)
 }
 
 void
-QgGL::set_view(struct bsg_view *nv)
+QgGL::set_view(qg_legacy_view *nv)
 {
     qgcanvas_set_view(*d, nv);
 }
@@ -160,9 +166,10 @@ return;
 	qgcanvas_sync_obol_camera(*d);
 	initializeOpenGLFunctions();
 	if (qgcanvas_render_obol_pending(*d, TRUE, TRUE)) {
-	    if (d->v) {
-		(void)rt_view_refresh_consume_bsg(d->v);
-		rt_view_refresh_complete_bsg(d->v);
+	    struct bsg_view *bv = qgcanvas_bsg_view(*d);
+	    if (bv) {
+		(void)rt_view_refresh_consume_bsg(bv);
+		rt_view_refresh_complete_bsg(bv);
 	    }
 	    if (d->dmp)
 		dm_set_native_repaint_pending(d->dmp, 0);
@@ -206,14 +213,16 @@ fastf_t windowbounds[6] = { -1, 1, -1, 1, QTGL_ZMIN, QTGL_ZMAX };
 dm_set_win_bounds(d->dmp, windowbounds);
 
 if (d->v) {
+    struct bsg_view *bv = qgcanvas_bsg_view(*d);
     // Associate the view scale with the dmp
-    dm_set_vp(d->dmp, rt_view_scale_storage_from_bsg(d->v));
+    dm_set_vp(d->dmp, rt_view_scale_storage_from_bsg(bv));
 
     // Let the view know it now has an associated display manager
-    d->v->dmp = d->dmp;
+    bv->dmp = d->dmp;
 
     // Set the view width and height to match the dm
-    rt_view_dimensions_set_bsg(d->v, dm_get_width(d->dmp), dm_get_height(d->dmp));
+    qg_legacy_view_dimensions_set(d->v, dm_get_width(d->dmp),
+	    dm_get_height(d->dmp));
 }
 
 // If we have a ptbl defining the current dm set and/or an unset
@@ -228,6 +237,7 @@ emit init_done();
 
     if (!d->m_init || !d->dmp || !d->v)
 return;
+    struct bsg_view *bv = qgcanvas_bsg_view(*d);
 
     QSize rsize = qgcanvas_render_size(this);
     if (dm_get_width(d->dmp) != rsize.width() || dm_get_height(d->dmp) != rsize.height()) {
@@ -237,7 +247,8 @@ dm_configure_win(d->dmp, 0);
 if (d->ifp)
     fb_configure_window(d->ifp, rsize.width(), rsize.height());
     }
-    rt_view_dimensions_set_bsg(d->v, dm_get_width(d->dmp), dm_get_height(d->dmp));
+    qg_legacy_view_dimensions_set(d->v, dm_get_width(d->dmp),
+	    dm_get_height(d->dmp));
 
     // Re-draw the background to clear any previous drawing
     unsigned char *dm_bg1;
@@ -248,11 +259,11 @@ if (d->ifp)
     // Go ahead and set the flag, but (unlike the rendering thread
     // implementation) we need to do the draw routine every time in paintGL, or
     // we end up with unrendered frames.
-    (void)rt_view_refresh_consume_bsg(d->v);
+    (void)rt_view_refresh_consume_bsg(bv);
     dm_set_native_repaint_pending(d->dmp, 0);
-    dm_draw_objs(d->v);
+    dm_draw_objs(bv);
     dm_draw_end(d->dmp);
-    rt_view_refresh_complete_bsg(d->v);
+    rt_view_refresh_complete_bsg(bv);
 }
 
 void QgGL::resizeGL(int, int)
@@ -261,11 +272,12 @@ void QgGL::resizeGL(int, int)
     if (!d->dmp || !d->v)
 return;
     dm_configure_win(d->dmp, 0);
-    rt_view_dimensions_set_bsg(d->v, dm_get_width(d->dmp), dm_get_height(d->dmp));
+    qg_legacy_view_dimensions_set(d->v, dm_get_width(d->dmp),
+	    dm_get_height(d->dmp));
     if (d->ifp) {
 fb_configure_window(d->ifp,
-	rt_view_width_from_bsg(d->v),
-	rt_view_height_from_bsg(d->v));
+	qg_legacy_view_width_get(d->v),
+	qg_legacy_view_height_get(d->v));
     }
     if (d->dmp)
 qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW_BSG);
@@ -281,12 +293,12 @@ return;
     QSize rsize = qgcanvas_render_size(this);
     dm_set_width(d->dmp, rsize.width());
     dm_set_height(d->dmp, rsize.height());
-    rt_view_dimensions_set_bsg(d->v, rsize.width(), rsize.height());
+    qg_legacy_view_dimensions_set(d->v, rsize.width(), rsize.height());
     dm_configure_win(d->dmp, 0);
     if (d->ifp) {
 fb_configure_window(d->ifp,
-	rt_view_width_from_bsg(d->v),
-	rt_view_height_from_bsg(d->v));
+	qg_legacy_view_width_get(d->v),
+	qg_legacy_view_height_get(d->v));
     }
     if (d->dmp)
 qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW_BSG);
@@ -326,9 +338,10 @@ return;
     // Let bv know what the current view width and height are, in
     // case the dx/dy mouse translations need that information
     QSize rsize = qgcanvas_render_size(this);
-    rt_view_dimensions_set_bsg(d->v, rsize.width(), rsize.height());
+    qg_legacy_view_dimensions_set(d->v, rsize.width(), rsize.height());
 
-    if (d->input.keyPressEvent(d->v, d->x_prev, d->y_prev, k)) {
+    if (d->input.keyPressEvent(d->v, d->x_prev,
+	    d->y_prev, k)) {
 qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW_BSG);
 update();
 emit changed();
@@ -354,9 +367,10 @@ return;
     // Let bv know what the current view width and height are, in
     // case the dx/dy mouse translations need that information
     QSize rsize = qgcanvas_render_size(this);
-    rt_view_dimensions_set_bsg(d->v, rsize.width(), rsize.height());
+    qg_legacy_view_dimensions_set(d->v, rsize.width(), rsize.height());
 
-    if (d->input.mousePressEvent(d->v, d->x_prev, d->y_prev, e)) {
+    if (d->input.mousePressEvent(d->v, d->x_prev,
+	    d->y_prev, e)) {
 qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW_BSG);
 update();
 emit changed();
@@ -387,8 +401,9 @@ return;
     d->x_prev = -INT_MAX;
     d->y_prev = -INT_MAX;
 
-    if (d->input.mouseReleaseEvent(d->v, d->x_press_pos, d->y_press_pos,
-   d->x_prev, d->y_prev, e, d->lmouse_mode)) {
+    if (d->input.mouseReleaseEvent(d->v,
+	    d->x_press_pos, d->y_press_pos, d->x_prev, d->y_prev, e,
+	    d->lmouse_mode)) {
 qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW_BSG);
 update();
 emit changed();
@@ -407,9 +422,10 @@ return;
     // Let bv know what the current view width and height are, in
     // case the dx/dy mouse translations need that information
     QSize rsize = qgcanvas_render_size(this);
-    rt_view_dimensions_set_bsg(d->v, rsize.width(), rsize.height());
+    qg_legacy_view_dimensions_set(d->v, rsize.width(), rsize.height());
 
-    int mret = d->input.mouseMoveEvent(d->v, d->x_prev, d->y_prev, e, d->lmouse_mode);
+    int mret = d->input.mouseMoveEvent(d->v,
+	    d->x_prev, d->y_prev, e, d->lmouse_mode);
     if (mret > 0) {
 qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW_BSG);
 update();
@@ -441,7 +457,7 @@ return;
     // Let bv know what the current view width and height are, in
     // case the dx/dy mouse translations need that information
     QSize rsize = qgcanvas_render_size(this);
-    rt_view_dimensions_set_bsg(d->v, rsize.width(), rsize.height());
+    qg_legacy_view_dimensions_set(d->v, rsize.width(), rsize.height());
 
     if (d->input.wheelEvent(d->v, e)) {
 qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW_BSG);

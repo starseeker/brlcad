@@ -26,6 +26,7 @@
 
 #include "common.h"
 #include "vmath.h"
+#include "bu/color.h"
 #include "bu/list.h"
 #include "bu/hash.h"
 #include "bu/ptbl.h"
@@ -76,6 +77,132 @@ struct rt_view_info {
     int height;
     fastf_t size;
     struct rt_view_lod_settings lod;
+};
+
+struct rt_view_interactive_rect_state {
+    int active;
+    int draw;
+    int line_width;
+    int line_style;
+    int pos[2];
+    int dim[2];
+    fastf_t x;
+    fastf_t y;
+    fastf_t width;
+    fastf_t height;
+    int bg[3];
+    int color[3];
+    int cdim[2];
+    fastf_t aspect;
+};
+
+struct rt_view_adc_state {
+    int         draw;
+    int         dv_x;
+    int         dv_y;
+    int         dv_a1;
+    int         dv_a2;
+    int         dv_dist;
+    fastf_t     pos_model[3];
+    fastf_t     pos_view[3];
+    fastf_t     pos_grid[3];
+    fastf_t     a1;
+    fastf_t     a2;
+    fastf_t     dst;
+    int         anchor_pos;
+    int         anchor_a1;
+    int         anchor_a2;
+    int         anchor_dst;
+    fastf_t     anchor_pt_a1[3];
+    fastf_t     anchor_pt_a2[3];
+    fastf_t     anchor_pt_dst[3];
+    int         line_color[3];
+    int         tick_color[3];
+    int         line_width;
+};
+
+struct rt_view_grid_state {
+    int       rc;
+    int       draw;
+    int       adaptive;
+    int       snap;
+    fastf_t   anchor[3];
+    fastf_t   res_h;
+    fastf_t   res_v;
+    int       res_major_h;
+    int       res_major_v;
+    int       color[3];
+};
+
+struct rt_view_axes_state {
+    int       draw;
+    point_t   axes_pos;
+    fastf_t   axes_size;
+    int       line_width;
+    int       axes_color[3];
+    int       pos_only;
+    int       label_flag;
+    int       label_color[3];
+    int       triple_color;
+    int       tick_enabled;
+    int       tick_length;
+    int       tick_major_length;
+    fastf_t   tick_interval;
+    int       ticks_per_major;
+    int       tick_threshold;
+    int       tick_color[3];
+    int       tick_major_color[3];
+};
+
+struct rt_view_other_state {
+    int gos_draw;
+    int gos_line_color[3];
+    int gos_text_color[3];
+    int gos_font_size;
+};
+
+struct rt_view_params_state {
+    int draw;
+    int draw_size;
+    int draw_center;
+    int draw_az;
+    int draw_el;
+    int draw_tw;
+    int draw_fps;
+    int color[3];
+    int font_size;
+};
+
+typedef struct rt_view_polygon_ref {
+    uintptr_t token;
+    uint64_t revision;
+} rt_view_polygon_ref;
+
+#define RT_VIEW_POLYGON_REF_NULL_INIT {0, 0}
+#ifdef __cplusplus
+#  define RT_VIEW_POLYGON_REF_NULL rt_view_polygon_ref{0, 0}
+#else
+#  define RT_VIEW_POLYGON_REF_NULL ((rt_view_polygon_ref){0, 0})
+#endif
+
+struct rt_view_polygon_record {
+    rt_view_polygon_ref ref;
+    const char *name;
+    int type;
+    int fill_flag;
+    vect2d_t fill_dir;
+    fastf_t fill_delta;
+    struct bu_color fill_color;
+    unsigned char edge_color[3];
+    long curr_contour_i;
+    long curr_point_i;
+    int first_contour_open;
+    size_t contour_count;
+    size_t point_count;
+    point_t origin_point;
+    plane_t vp;
+    fastf_t vZ;
+    void *user_data;
 };
 
 /* Borrowed active LoD arrays; valid until the LoD is reloaded or destroyed. */
@@ -146,6 +273,12 @@ struct rt_mesh_lod_cache_status {
 #define RT_VIEW_LOD_SETTINGS_INIT { 1.0, 1.0, 1.0, 0 }
 #define RT_VIEW_LOD_POLICY_INIT { RT_VIEW_LOD_AUTO, 0, 0, 0, 0, 0, 1.0, 1.0, 1.0 }
 #define RT_VIEW_INFO_INIT { 1, 1, 1.0, RT_VIEW_LOD_SETTINGS_INIT }
+#define RT_VIEW_INTERACTIVE_RECT_STATE_INIT { 0, 0, 0, 0, {0, 0}, {0, 0}, 0.0, 0.0, 0.0, 0.0, {0, 0, 0}, {0, 0, 0}, {0, 0}, 0.0 }
+#define RT_VIEW_ADC_STATE_INIT { 0, 0, 0, 0, 0, 0, VINIT_ZERO, VINIT_ZERO, VINIT_ZERO, 0.0, 0.0, 0.0, 0, 0, 0, 0, VINIT_ZERO, VINIT_ZERO, VINIT_ZERO, {0, 0, 0}, {0, 0, 0}, 0 }
+#define RT_VIEW_GRID_STATE_INIT { 0, 0, 0, 0, VINIT_ZERO, 0.0, 0.0, 0, 0, {0, 0, 0} }
+#define RT_VIEW_AXES_STATE_INIT { 0, VINIT_ZERO, 0.0, 0, {0, 0, 0}, 0, 0, {0, 0, 0}, 0, 0, 0, 0, 0.0, 0, 0, {0, 0, 0}, {0, 0, 0} }
+#define RT_VIEW_OTHER_STATE_INIT { 0, {0, 0, 0}, {0, 0, 0}, 0 }
+#define RT_VIEW_PARAMS_STATE_INIT { 0, 0, 0, 0, 0, 0, 0, {0, 0, 0}, 0 }
 #define RT_MESH_LOD_INFO_INIT { -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, VINIT_ZERO, VINIT_ZERO }
 #define RT_MESH_LOD_CACHE_STATUS_INIT { 0, 0, 0, 0, 0, 0, 0, 0, 0 }
 
@@ -157,6 +290,10 @@ RT_EXPORT extern fastf_t rt_view_lod_curve_scale(const struct rt_view_info *info
 RT_EXPORT extern size_t rt_view_lod_bot_threshold(const struct rt_view_info *info);
 RT_EXPORT extern fastf_t rt_view_avg_sample_spacing(const struct rt_view_info *info);
 RT_EXPORT extern fastf_t rt_view_solid_point_spacing(const struct rt_view_info *info, fastf_t solid_width);
+RT_EXPORT extern void rt_view_adc_model_to_view(struct rt_view_adc_state *adcs, mat_t model2view, fastf_t amax);
+RT_EXPORT extern void rt_view_adc_grid_to_view(struct rt_view_adc_state *adcs, mat_t model2view, fastf_t amax);
+RT_EXPORT extern void rt_view_adc_view_to_grid(struct rt_view_adc_state *adcs, mat_t model2view);
+RT_EXPORT extern void rt_view_adc_reset(struct rt_view_adc_state *adcs, mat_t view2model, mat_t model2view);
 
 /* Routines for managing the mesh LoD cache */
 RT_EXPORT extern void db_mesh_lod_init(struct db_i *dbip, int verbose);

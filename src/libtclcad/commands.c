@@ -3693,7 +3693,7 @@ to_idle_mode(struct ged *gedp,
 	need_refresh = 1;
     }
 
-    if (mode != BSG_POLY_CONTOUR_MODE ||
+    if (mode != TCLCAD_POLY_CONTOUR_MODE ||
 	    gdvp->gv_tcl->gv_data_polygons.gdps_cflag == 0)
     {
 	struct bu_vls bindings = BU_VLS_INIT_ZERO;
@@ -3706,8 +3706,8 @@ to_idle_mode(struct ged *gedp,
 	bu_vls_free(&bindings);
     }
 
-    struct bsg_grid_state grid;
-    (void)rt_view_grid_from_bsg(&grid, gdvp);
+    struct rt_view_grid_state grid;
+    (void)rt_view_grid_state_from_bsg(&grid, gdvp);
     if (grid.snap &&
 	    (mode == TCLCAD_TRANSLATE_MODE ||
 	     mode == TCLCAD_CONSTRAINED_TRANSLATE_MODE))
@@ -4819,8 +4819,8 @@ to_paint_rect_area(struct ged *gedp,
     (void)dm_set_depth_mask((struct dm *)gdvp->dmp, 0);
 
     struct tclcad_view_data *tvd = (struct tclcad_view_data *)gdvp->u_data;
-    struct bsg_interactive_rect_state rect;
-    (void)rt_view_interactive_rect_from_bsg(&rect, gdvp);
+    struct rt_view_interactive_rect_state rect = RT_VIEW_INTERACTIVE_RECT_STATE_INIT;
+    (void)rt_view_interactive_rect_state_from_bsg(&rect, gdvp);
     (void)fb_refresh(tvd->gdv_fbs.fbs_fbp, rect.pos[X], rect.pos[Y],
 	    rect.dim[X], rect.dim[Y]);
 
@@ -5812,15 +5812,15 @@ to_snap_view(struct ged *gedp,
 	    gedp->dbip->dbi_base2local);
 
     gedp->ged_gvp = gdvp;
-    struct bsg_grid_state grid;
-    (void)rt_view_grid_from_bsg(&grid, gedp->ged_gvp);
+    struct rt_view_grid_state grid;
+    (void)rt_view_grid_state_from_bsg(&grid, gedp->ged_gvp);
     if (!rt_view_snap_lines_from_bsg(gedp->ged_gvp) && !grid.snap) {
 	bu_vls_printf(gedp->ged_result_str, "%lf %lf", fvx, fvy);
 	return BRLCAD_OK;
     }
 
     {
-	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
+	unsigned long long snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
 	if (snap_kinds)
 	    rt_view_snap_point_2d_bsg(gedp->ged_gvp, &fvx, &fvy, snap_kinds);
     }
@@ -6287,8 +6287,8 @@ to_vslew(struct ged *gedp,
     bu_vls_free(&slew_vec);
 
     if (ret == BRLCAD_OK) {
-	struct bsg_grid_state grid;
-	(void)rt_view_grid_from_bsg(&grid, gdvp);
+	struct rt_view_grid_state grid;
+	(void)rt_view_grid_state_from_bsg(&grid, gdvp);
 	if (grid.snap) {
 
 	    tclcad_commands_sync_dm_dimensions(gdvp, gdvp);

@@ -17,6 +17,7 @@
 #include "ged.h"
 #include "ged/bsg_ged_draw.h"
 #include "ged/selection_state.h"
+#include "qtcad/QgLegacyViewBsg.h"
 #include "qtcad/QgObolDrawSync.h"
 #include "qtcad/QgObolSelectionSync.h"
 #include "qtcad/QgView.h"
@@ -116,7 +117,7 @@ main(int argc, char **argv)
 
     QgView view(NULL, QgView_SW, NULL);
     view.resize(180, 140);
-    gedp->ged_gvp = view.view();
+    gedp->ged_gvp = qg_legacy_view_to_bsg(view.view());
 
     BRLObolViewController *controller = view.obolViewController();
     if (!controller)
@@ -125,7 +126,7 @@ main(int argc, char **argv)
 
     struct ged_draw_transaction draw_box =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "box.s");
-    draw_box.view = view.view();
+    draw_box.view = qg_legacy_view_to_bsg(view.view());
     if (!apply_and_sync(gedp, &view, &draw_box))
 	FAIL("GED wire draw should sync box source into Obol");
 
@@ -133,7 +134,7 @@ main(int argc, char **argv)
     shaded_settings.draw_mode = BSG_DRAW_MODE_SHADED;
     struct ged_draw_transaction draw_ball =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "ball.s");
-    draw_ball.view = view.view();
+    draw_ball.view = qg_legacy_view_to_bsg(view.view());
     draw_ball.appearance = &shaded_settings;
     if (!apply_and_sync(gedp, &view, &draw_ball))
 	FAIL("GED shaded draw should sync ball source into Obol");

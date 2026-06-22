@@ -85,11 +85,11 @@ copy_faceplate_record(int uflag, struct mged_dm *src, struct mged_dm *dst, int i
 	return;
 
     if (is_adc) {
-	struct bsg_adc_state adc;
+	struct rt_view_adc_state adc;
 	if (mged_dm_adc_state_get(src, &adc))
 	    mged_dm_adc_state_set(dst, &adc);
     } else {
-	struct bsg_grid_state grid;
+	struct rt_view_grid_state grid;
 	if (mged_dm_grid_state_get(src, &grid))
 	    mged_dm_grid_state_set(dst, &grid);
     }
@@ -284,7 +284,7 @@ f_rset (ClientData clientData, Tcl_Interp *interpreter, int argc, const char *ar
     MGED_CK_CMD(ctp);
     struct mged_state *s = ctp->s;
 
-    struct bsg_grid_state grid = {0};
+    struct rt_view_grid_state grid = {0};
     struct bu_vls vls = BU_VLS_INIT_ZERO;
     (void)mged_dm_grid_state_get(s->mged_curr_dm, &grid);
 

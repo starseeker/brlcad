@@ -30,8 +30,8 @@
 
 #include "bu/cmd.h"
 #include "bg/line_layer.h"
-#include "bsg/feature.h"
 #include "brep/defines.h"
+#include "../bsg_ged_draw_view_private.h"
 #include "../ged_private.h"
 #include "./ged_brep.h"
 
@@ -1042,9 +1042,8 @@ _brep_plot_publish(struct ged *gedp, struct bg_line_layer_builder *plot, const c
     bu_vls_sprintf(&nroot, "brep::%s", sname);
     int handled = ged_diagnostic_line_layer_publish(gedp, bu_vls_cstr(&nroot), plot);
     if (!handled && gedp->ged_gvp) {
-	struct bsg_view *view = gedp->ged_gvp;
-	(void)bsg_feature_replace_line_layer_builder(view, bu_vls_cstr(&nroot), 0,
-		(const struct bsg_line_layer_builder *)plot, NULL);
+	(void)ged_draw_view_line_layer_builder_replace(gedp->ged_gvp,
+		bu_vls_cstr(&nroot), 0, plot);
     }
     bu_vls_free(&nroot);
 }
@@ -1062,7 +1061,7 @@ brep_plot_publish_indexed_face_set(struct ged *gedp,
     if (!gedp || !gedp->ged_gvp || !sname || !points || !point_count || !indices || !index_count)
 	return BRLCAD_ERROR;
 
-    struct bsg_feature_style style = BSG_FEATURE_STYLE_INIT;
+    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
     style.color_valid = 1;
     style.color[0] = 255;
     style.color[1] = 255;
@@ -1070,14 +1069,14 @@ brep_plot_publish_indexed_face_set(struct ged *gedp,
 
     struct bu_vls nroot = BU_VLS_INIT_ZERO;
     bu_vls_sprintf(&nroot, "brep::%s", sname);
-    bsg_feature_ref ref = bsg_feature_replace_indexed_face_set(gedp->ged_gvp,
+    int ret = ged_draw_view_indexed_face_set_replace(gedp->ged_gvp,
 	    bu_vls_cstr(&nroot), 0,
 	    points, point_count,
 	    normals, normal_count,
 	    indices, index_count,
 	    &style);
     bu_vls_free(&nroot);
-    return bsg_feature_ref_is_null(ref) ? BRLCAD_ERROR : BRLCAD_OK;
+    return ret ? BRLCAD_OK : BRLCAD_ERROR;
 }
 
 static int

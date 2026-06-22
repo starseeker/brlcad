@@ -30,6 +30,7 @@
 #include "qtcad/QgGL.h"
 #include "qtcad/QgSW.h"
 #include "qtcad/QgView.h"
+#include "qtcad/QgLegacyViewBsg.h"
 #include "qtcad/QgViewFilter.h"
 #include "qtcad/QgSignalFlags.h"
 
@@ -181,13 +182,15 @@ QgView::need_update(QgViewUpdateFlags flags)
 {
     QTCAD_SLOT("QgView::need_update", 1);
     uint32_t refresh_flags = qg_refresh_flags(flags);
-    if (struct bsg_view *bv = view())
+    if (qg_legacy_view *lv = view()) {
+	struct bsg_view *bv = qg_legacy_view_to_bsg(lv);
 	rt_view_refresh_request_bsg(bv, refresh_flags);
+    }
     if (canvas)
 canvas->request_update(refresh_flags);
 }
 
-struct bsg_view *
+qg_legacy_view *
 QgView::view()
 {
     return canvas ? canvas->view() : nullptr;
@@ -212,7 +215,7 @@ QgView::obolViewController()
 }
 
 void
-QgView::set_view(struct bsg_view *nv)
+QgView::set_view(qg_legacy_view *nv)
 {
     if (canvas)
 canvas->set_view(nv);
@@ -266,7 +269,6 @@ QgView::installFilter(QgViewFilter *f)
     if (!f)
 	return;
     f->set_view_widget(this);
-    f->set_view(view());
     add_event_filter(f);
 }
 
@@ -299,7 +301,6 @@ QgView::clearFilter(QgViewFilter *f)
     if (!f)
 	return;
     clear_event_filter(f);
-    f->set_view(nullptr);
     f->set_view_widget(nullptr);
 }
 

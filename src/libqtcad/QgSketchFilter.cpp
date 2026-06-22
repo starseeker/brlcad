@@ -38,7 +38,23 @@ extern "C" {
 }
 
 #include "qtcad/QgSketchFilter.h"
+#include "qtcad/QgLegacyView.h"
+#include "qtcad/QgLegacyViewBsg.h"
 #include "qtcad/QgSignalFlags.h"
+#include "qtcad/QgView.h"
+
+static qg_legacy_view *
+qg_sketch_filter_legacy_view(const QgSketchFilter *filter)
+{
+	QgView *display = filter ? filter->view_widget() : nullptr;
+	return display ? display->view() : nullptr;
+}
+
+static struct bsg_view *
+qg_sketch_filter_view(const QgSketchFilter *filter)
+{
+	return qg_legacy_view_to_bsg(qg_sketch_filter_legacy_view(filter));
+}
 
 static void
 qg_sketch_mouse_xy(QMouseEvent *m_e, int *sx, int *sy)
@@ -68,7 +84,7 @@ QgSketchFilter::QgSketchFilter(QObject *parent)
 void
 QgSketchFilter::screen_to_view(int sx, int sy, vect_t mvec) const
 {
-	struct bsg_view *v = view();
+	struct bsg_view *v = qg_sketch_filter_view(this);
 	if (!v) {
 		VSETALL(mvec, 0.0);
 		return;
@@ -86,7 +102,7 @@ bool
 QgSketchFilter::screen_to_uv(int sx, int sy,
                              fastf_t *u_out, fastf_t *v_out) const
 {
-	struct bsg_view *v = view();
+	struct bsg_view *v = qg_sketch_filter_view(this);
 	if (!v || !es)
 		return false;
 
@@ -123,7 +139,7 @@ QgSketchFilter::snap_vertex_uv(int sx, int sy,
 	if (!screen_to_uv(sx, sy, u_out, v_out))
 		return false;
 
-	struct bsg_view *v = view();
+	struct bsg_view *v = qg_sketch_filter_view(this);
 	if (snap_px <= 0.0 || !es || !v)
 		return true;
 
@@ -144,7 +160,8 @@ QgSketchFilter::snap_vertex_uv(int sx, int sy,
 
 	/* Convert snap_px to view-space units.
 	 * One pixel = 2 / gv_width view units in X. */
-	int view_width = rt_view_width_from_bsg(v);
+	qg_legacy_view *lv = qg_sketch_filter_legacy_view(this);
+	int view_width = qg_legacy_view_width_get(lv);
 	fastf_t px_to_view = (view_width > 0)
 	                     ? (2.0 / (fastf_t)view_width)
 	                     : 0.005;
@@ -447,7 +464,7 @@ QgSketchPickSegmentFilter::eventFilter(QObject *, QEvent *e)
 
 		/* Build model→view matrix including any edit transform */
 		mat_t m2v;
-		struct bsg_view *v = view();
+		struct bsg_view *v = qg_sketch_filter_view(this);
 		mat_t model2view;
 		rt_view_model2view_from_bsg(model2view, v);
 		bn_mat_mul(m2v, model2view, es->model_changes);
@@ -646,7 +663,7 @@ sketch_arc_center_uv(const struct rt_sketch_internal *skt,
 bool
 QgSketchArcRadiusFilter::eventFilter(QObject *, QEvent *e)
 {
-	struct bsg_view *v = view();
+	struct bsg_view *v = qg_sketch_filter_view(this);
 	if (!es || !v)
 		return false;
 
@@ -792,7 +809,7 @@ QgSketchSetTangencyFilter::eventFilter(QObject *, QEvent *e)
 
 		/* Build model→view matrix */
 		mat_t m2v;
-		struct bsg_view *v = view();
+		struct bsg_view *v = qg_sketch_filter_view(this);
 		mat_t model2view;
 		rt_view_model2view_from_bsg(model2view, v);
 		bn_mat_mul(m2v, model2view, es->model_changes);

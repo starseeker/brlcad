@@ -28,12 +28,6 @@
 
 #include "qtcad/QgKeyVal.h"
 
-#ifndef Q_MOC_RUN
-#include "bu/avs.h"
-#include "raytrace.h"
-#include "ged.h"
-#endif
-
 class QgPluginContext;
 
 class CADViewModel : public QgKeyValModel

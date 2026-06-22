@@ -55,15 +55,16 @@
 #include "bu/str.h"
 #include "bu/units.h"
 #include "bu/vls.h"
-#include "bsg/feature.h"
-#include "bsg/geometry.h"
+#include "bg/line_layer.h"
 #include "bsg/scene_builder.h"
 #include "bg/plot3.h"
 #include "bsg/view_state.h"
+#include "dm/fbserv.h"
 #include "ged.h"
 #include "ged/bsg_ged_draw.h"
 #include "ged/event_txn.h"
 #include "rt/view_legacy_bsg.h"
+#include "./bsg_ged_draw_view_private.h"
 #include "./ged_private.h"
 
 extern "C" bsg_scene_ref
@@ -1481,7 +1482,7 @@ ged_uplot_append_text(struct ged_uplot_stream *ctx, const char *text)
 
 	VSET(local, offset, 0.0, 0.0);
 	VADD2(point, last_pos, local);
-	(void)ged_uplot_layer_append(layer, point, BSG_GEOMETRY_LINE_MOVE);
+	(void)ged_uplot_layer_append(layer, point, BG_GEOMETRY_LINE_MOVE);
 
 	for (int *stroke_ptr = plot3_font_getchar(cp); *stroke_ptr != PLOT3_FONT_LAST;
 		stroke_ptr++) {
@@ -1502,7 +1503,7 @@ ged_uplot_append_text(struct ged_uplot_stream *ctx, const char *text)
 		    (ysign * (stroke % 11)) * 0.1 * ctx->char_size, 0.0);
 	    VADD2(point, last_pos, local);
 	    (void)ged_uplot_layer_append(layer, point,
-		    draw ? BSG_GEOMETRY_LINE_DRAW : BSG_GEOMETRY_LINE_MOVE);
+		    draw ? BG_GEOMETRY_LINE_DRAW : BG_GEOMETRY_LINE_MOVE);
 	}
     }
 }
@@ -1544,59 +1545,59 @@ ged_uplot_process_value(struct ged_uplot_stream *ctx, FILE *fp, int c)
 	case 'm':
 	case 'o':
 	    arg[Z] = 0;
-	    (void)ged_uplot_layer_append(layer, arg, BSG_GEOMETRY_LINE_MOVE);
+	    (void)ged_uplot_layer_append(layer, arg, BG_GEOMETRY_LINE_MOVE);
 	    VMOVE(ctx->lpnt, arg);
 	    ctx->moved = 1;
 	    break;
 	case 'M':
 	case 'O':
-	    (void)ged_uplot_layer_append(layer, arg, BSG_GEOMETRY_LINE_MOVE);
+	    (void)ged_uplot_layer_append(layer, arg, BG_GEOMETRY_LINE_MOVE);
 	    VMOVE(ctx->lpnt, arg);
 	    ctx->moved = 1;
 	    break;
 	case 'n':
 	case 'q':
 	    if (!ctx->moved) {
-		(void)ged_uplot_layer_append(layer, ctx->lpnt, BSG_GEOMETRY_LINE_MOVE);
+		(void)ged_uplot_layer_append(layer, ctx->lpnt, BG_GEOMETRY_LINE_MOVE);
 		ctx->moved = 1;
 	    }
 	    arg[Z] = 0;
-	    (void)ged_uplot_layer_append(layer, arg, BSG_GEOMETRY_LINE_DRAW);
+	    (void)ged_uplot_layer_append(layer, arg, BG_GEOMETRY_LINE_DRAW);
 	    VMOVE(ctx->lpnt, arg);
 	    break;
 	case 'N':
 	case 'Q':
 	    if (!ctx->moved) {
-		(void)ged_uplot_layer_append(layer, ctx->lpnt, BSG_GEOMETRY_LINE_MOVE);
+		(void)ged_uplot_layer_append(layer, ctx->lpnt, BG_GEOMETRY_LINE_MOVE);
 		ctx->moved = 1;
 	    }
-	    (void)ged_uplot_layer_append(layer, arg, BSG_GEOMETRY_LINE_DRAW);
+	    (void)ged_uplot_layer_append(layer, arg, BG_GEOMETRY_LINE_DRAW);
 	    VMOVE(ctx->lpnt, arg);
 	    break;
 	case 'l':
 	case 'v':
 	    VSET(a, arg[0], arg[1], 0.0);
 	    VSET(b, arg[2], arg[3], 0.0);
-	    (void)ged_uplot_layer_append(layer, a, BSG_GEOMETRY_LINE_MOVE);
-	    (void)ged_uplot_layer_append(layer, b, BSG_GEOMETRY_LINE_DRAW);
+	    (void)ged_uplot_layer_append(layer, a, BG_GEOMETRY_LINE_MOVE);
+	    (void)ged_uplot_layer_append(layer, b, BG_GEOMETRY_LINE_DRAW);
 	    break;
 	case 'L':
 	case 'V':
 	    VSET(a, arg[0], arg[1], arg[2]);
 	    VSET(b, arg[3], arg[4], arg[5]);
-	    (void)ged_uplot_layer_append(layer, a, BSG_GEOMETRY_LINE_MOVE);
-	    (void)ged_uplot_layer_append(layer, b, BSG_GEOMETRY_LINE_DRAW);
+	    (void)ged_uplot_layer_append(layer, a, BG_GEOMETRY_LINE_MOVE);
+	    (void)ged_uplot_layer_append(layer, b, BG_GEOMETRY_LINE_DRAW);
 	    break;
 	case 'p':
 	case 'x':
 	    arg[Z] = 0;
-	    (void)ged_uplot_layer_append(layer, arg, BSG_GEOMETRY_LINE_MOVE);
-	    (void)ged_uplot_layer_append(layer, arg, BSG_GEOMETRY_LINE_DRAW);
+	    (void)ged_uplot_layer_append(layer, arg, BG_GEOMETRY_LINE_MOVE);
+	    (void)ged_uplot_layer_append(layer, arg, BG_GEOMETRY_LINE_DRAW);
 	    break;
 	case 'P':
 	case 'X':
-	    (void)ged_uplot_layer_append(layer, arg, BSG_GEOMETRY_LINE_MOVE);
-	    (void)ged_uplot_layer_append(layer, arg, BSG_GEOMETRY_LINE_DRAW);
+	    (void)ged_uplot_layer_append(layer, arg, BG_GEOMETRY_LINE_MOVE);
+	    (void)ged_uplot_layer_append(layer, arg, BG_GEOMETRY_LINE_DRAW);
 	    break;
 	case 'C':
 	{
@@ -1654,11 +1655,11 @@ ged_uplot_publish_feature(struct ged *gedp, const char *name, struct ged_uplot_s
 	    live_layers++;
     }
 
-    struct bsg_feature_line_layer *layers = NULL;
+    struct ged_draw_view_line_layer_data *layers = NULL;
     char **names = NULL;
     if (live_layers) {
-	layers = (struct bsg_feature_line_layer *)bu_calloc(live_layers,
-		sizeof(struct bsg_feature_line_layer), "ged uplot feature layers");
+	layers = (struct ged_draw_view_line_layer_data *)bu_calloc(live_layers,
+		sizeof(struct ged_draw_view_line_layer_data), "ged uplot feature layers");
 	names = (char **)bu_calloc(live_layers, sizeof(char *), "ged uplot feature layer names");
     }
 
@@ -1666,7 +1667,7 @@ ged_uplot_publish_feature(struct ged *gedp, const char *name, struct ged_uplot_s
     for (size_t i = 0; i < ctx->layer_count; i++) {
 	if (!ctx->layers[i].count)
 	    continue;
-	struct bsg_feature_line_layer init = BSG_FEATURE_LINE_LAYER_INIT;
+	struct ged_draw_view_line_layer_data init = GED_DRAW_VIEW_LINE_LAYER_DATA_INIT;
 	layers[idx] = init;
 	layers[idx].points = (const point_t *)ctx->layers[i].points;
 	layers[idx].commands = ctx->layers[i].commands;
@@ -1687,9 +1688,8 @@ ged_uplot_publish_feature(struct ged *gedp, const char *name, struct ged_uplot_s
 	idx++;
     }
 
-    bsg_feature_ref ref = bsg_feature_replace_line_layers(gedp->ged_gvp,
-	    name, 0, layers, live_layers, NULL);
-    int ret = (live_layers && bsg_feature_ref_is_null(ref)) ? BRLCAD_ERROR : BRLCAD_OK;
+    int ret = ged_draw_view_line_layers_replace(gedp->ged_gvp, name, 0,
+	    layers, live_layers, NULL) ? BRLCAD_OK : BRLCAD_ERROR;
 
     for (size_t i = 0; i < live_layers; i++) {
 	if (names[i])

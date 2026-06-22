@@ -11,7 +11,7 @@ if(BRLCAD_ENABLE_QT)
   )
 endif(BRLCAD_ENABLE_QT)
 
-set(extrude_srcs QExtrude.cpp extrude.cpp)
+set(extrude_srcs QExtrude.cpp extrude.cpp ../qged_edit_preview_util.cpp)
 
 set(extrude_moc_hdrs QExtrude.h EditExtrudeFactory.h)
 

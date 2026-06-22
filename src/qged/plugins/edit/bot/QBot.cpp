@@ -21,8 +21,8 @@
  *
  * Edit-preview BOT editor.
  *
- * The transient preview feature owns typed edit-preview callbacks and emits
- * edit-preview interaction records.
+ * The transient preview feature owns typed edit-preview callbacks and routes
+ * lifecycle events through the shared qged preview helper.
  */
 
 #include "common.h"
@@ -35,12 +35,8 @@
 #include "ged.h"
 #include "rt/db_io.h"
 #include "rt/directory.h"
-#include "bsg/feature.h"
-#include "bsg/interaction.h"
-#include "bsg/overlay.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgSignalFlags.h"
-#include "ged/bsg_ged_draw.h"
 #include "../qged_edit_preview_util.h"
 #include "QBot.h"
 
@@ -55,7 +51,7 @@ _bot_preview_revision(void *UNUSED(preview_ctx))
 }
 
 static int
-_bot_preview_update(void *preview_ctx, struct bsg_view *UNUSED(v))
+_bot_preview_update(void *preview_ctx)
 {
     QBot *self = (QBot *)preview_ctx;
     if (!self)
@@ -67,22 +63,12 @@ _bot_preview_update(void *preview_ctx, struct bsg_view *UNUSED(v))
 /* pick_cb stub: ray-pick for face / vertex selection.
  * Filled in once the BOT editor gains interactive selection logic. */
 static int
-_bot_preview_pick(void *UNUSED(preview_ctx), struct bsg_view *UNUSED(v),
-	       int UNUSED(x), int UNUSED(y), void *UNUSED(pick_out))
+_bot_preview_pick(void *UNUSED(preview_ctx), int UNUSED(x), int UNUSED(y),
+		  void *UNUSED(pick_out))
 {
     /* TODO: intersect sample ray against BOT faces/vertices. */
     return 0;
 }
-
-static void
-_bot_publish_preview(struct bsg_view *v, bsg_feature_ref feature,
-	bsg_edit_preview_op op, const char *source_path)
-{
-    struct bsg_interaction_record *record =
-	bsg_interaction_edit_preview_record(v, feature, op, source_path);
-    bsg_interaction_record_free(record);
-}
-
 
 /* ---- QBot constructor --------------------------------------------------- */
 
@@ -128,12 +114,11 @@ QBot::QBot()
 
 QBot::~QBot()
 {
-    struct bsg_view *v = getView();
     qged_edit_feature_clear_geometry_view(
 	    m_ctx ? m_ctx->getViewWidget() : nullptr, "_bot_edit", p);
-    if (!bsg_feature_ref_is_null(p) && v) {
-	bsg_feature_remove(v, "_bot_edit");
-	p = BSG_FEATURE_REF_NULL_INIT;
+    if (!qged_edit_feature_ref_is_null(p) && m_ctx) {
+	qged_edit_feature_remove(m_ctx, "_bot_edit");
+	p = QGED_EDIT_FEATURE_REF_NULL;
     }
     bu_vls_free(&oname);
 }
@@ -144,14 +129,6 @@ QBot::getGed() const
     if (!m_ctx)
 	return nullptr;
     return m_ctx->getGed();
-}
-
-struct bsg_view *
-QBot::getView() const
-{
-    if (!m_ctx)
-	return nullptr;
-    return m_ctx->getView();
 }
 
 void
@@ -169,7 +146,7 @@ QBot::read_from_db()
 void
 QBot::write_to_db()
 {
-    _bot_publish_preview(getView(), p, BSG_EDIT_PREVIEW_COMMIT,
+    qged_edit_preview_publish_event(m_ctx, p, QGED_EDIT_PREVIEW_COMMIT,
 	    bu_vls_cstr(&oname));
     emit view_updated(QG_VIEW_DB);
 }
@@ -180,55 +157,33 @@ QBot::update_obj_wireframe()
     struct ged *gedp = getGed();
     if (!gedp)
 	return;
-    struct bsg_view *v = getView();
-    if (!v)
-	return;
     QgView *display = m_ctx ? m_ctx->getViewWidget() : nullptr;
 
-    p = bsg_feature_find(v, "_bot_edit");
-    if (bsg_feature_ref_is_null(p)) {
-	p = bsg_feature_create_overlay(v, "_bot_edit", 1/*local*/);
-	if (!bsg_feature_ref_is_null(p))
-	    bsg_feature_overlay_register_owner(p, this,
-		    BSG_OVERLAY_ROLE_MODEL,
-		    BSG_OVERLAY_CLASS_EDIT_HANDLE,
-		    BSG_OVERLAY_LC_PER_TOOL,
-		    BSG_OVERLAY_ORDER_POST_TRANSPARENT,
-		    NULL, 0);
-
-	if (!bsg_feature_ref_is_null(p)) {
-	    struct bsg_edit_preview_ops ops = BSG_EDIT_PREVIEW_OPS_INIT;
-	    ops.revision_cb = _bot_preview_revision;
-	    ops.update_cb = _bot_preview_update;
-	    ops.pick_cb = _bot_preview_pick;
-	    bsg_feature_edit_preview_attach(p, this, NULL, &ops);
-	    _bot_publish_preview(v, p, BSG_EDIT_PREVIEW_BEGIN,
-		    bu_vls_cstr(&oname));
-	}
-    }
-    if (bsg_feature_ref_is_null(p) && !display)
+    struct qged_edit_preview_callbacks callbacks = QGED_EDIT_PREVIEW_CALLBACKS_INIT;
+    callbacks.revision_cb = _bot_preview_revision;
+    callbacks.update_cb = _bot_preview_update;
+    callbacks.pick_cb = _bot_preview_pick;
+    p = qged_edit_feature_overlay_ensure(m_ctx, "_bot_edit", this, this,
+	    &callbacks, bu_vls_cstr(&oname));
+    if (qged_edit_feature_ref_is_null(p) && !display)
 	return;
 
     if (!gedp->dbip || !bu_vls_strlen(&oname)) {
 	qged_edit_feature_clear_geometry_view(display, "_bot_edit", p);
-	if (!bsg_feature_ref_is_null(p))
-	    bsg_feature_set_visible(p, 0);
+	qged_edit_feature_set_visible(p, 0);
 	return;
     }
 
     dp = db_lookup(gedp->dbip, bu_vls_cstr(&oname), LOOKUP_QUIET);
     if (!dp || dp->d_minor_type != DB5_MINORTYPE_BRLCAD_BOT) {
 	qged_edit_feature_clear_geometry_view(display, "_bot_edit", p);
-	if (!bsg_feature_ref_is_null(p))
-	    bsg_feature_set_visible(p, 0);
+	qged_edit_feature_set_visible(p, 0);
 	return;
     }
 
     qged_edit_feature_clear_geometry_view(display, "_bot_edit", p);
-    if (!bsg_feature_ref_is_null(p)) {
-	bsg_feature_set_view(p, v);
-	bsg_feature_set_visible(p, 1);
-    }
+    qged_edit_feature_set_view(p, m_ctx);
+    qged_edit_feature_set_visible(p, 1);
 
     /* Load and plot the BOT geometry. */
     struct rt_db_internal intern = RT_DB_INTERNAL_INIT_ZERO;
@@ -242,9 +197,9 @@ QBot::update_obj_wireframe()
     const struct rt_bot_internal *bot_ip =
 	(const struct rt_bot_internal *)intern.idb_ptr;
     if (qged_edit_feature_replace_bot_face_lines_view(display, "_bot_edit",
-	    p, BSG_FEATURE_TRANSIENT_PREVIEW, bot_ip) &&
-	    !bsg_feature_ref_is_null(p)) {
-	_bot_publish_preview(v, p, BSG_EDIT_PREVIEW_UPDATE,
+	    p, QGED_EDIT_FEATURE_TRANSIENT_PREVIEW, bot_ip) &&
+	    !qged_edit_feature_ref_is_null(p)) {
+	qged_edit_preview_publish_event(m_ctx, p, QGED_EDIT_PREVIEW_UPDATE,
 		bu_vls_cstr(&oname));
     }
     rt_db_free_internal(&intern);
@@ -255,11 +210,9 @@ QBot::update_obj_wireframe()
     bu_opt_color(NULL, 1, (const char **)&av[0], (void *)&cval);
     unsigned char rgb[3] = {0, 0, 0};
     bu_color_to_rgb_chars(&cval, rgb);
-    if (!bsg_feature_ref_is_null(p))
-	bsg_feature_set_color(p, rgb[0], rgb[1], rgb[2]);
+    qged_edit_feature_set_color(p, rgb[0], rgb[1], rgb[2]);
 
-    if (!bsg_feature_ref_is_null(p))
-	bsg_feature_edit_preview_touch(p);
+    qged_edit_feature_touch(p);
 }
 
 void

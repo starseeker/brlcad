@@ -16,6 +16,7 @@
 #include "brlobol/vlist_shape.h"
 #include "bu/vls.h"
 #include "ged/selection_state.h"
+#include "qtcad/QgObolViewSync.h"
 #include "qtcad/QgView.h"
 
 #include <string>
@@ -144,7 +145,7 @@ qg_obol_sync_selection_state(struct ged *gedp,
     if (!gedp || !display)
 	return 0;
 
-    if (gedp->ged_gvp && display->view() != gedp->ged_gvp)
+    if (!qg_obol_display_accepts_ged_active_view(gedp, display))
 	return 0;
 
     BRLObolViewController *obol = display->obolViewController();

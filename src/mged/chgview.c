@@ -1699,7 +1699,7 @@ mged_print_knobvals(struct mged_state *s, Tcl_Interp *interp)
 	}
     }
 
-    struct bsg_adc_state adc = {0};
+    struct rt_view_adc_state adc = {0};
     (void)mged_dm_adc_state_get(s->mged_curr_dm, &adc);
     if (adc.draw) {
 	bu_vls_printf(&vls, "xadc = %d\n", adc.dv_x);

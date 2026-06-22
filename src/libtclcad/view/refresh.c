@@ -38,8 +38,8 @@ void
 go_refresh_draw(struct ged *gedp, struct bsg_view *gdvp, int restore_zbuffer)
 {
     struct tclcad_view_data *tvd = (struct tclcad_view_data *)gdvp->u_data;
-    struct bsg_interactive_rect_state rect = {0};
-    (void)rt_view_interactive_rect_from_bsg(&rect, gdvp);
+    struct rt_view_interactive_rect_state rect = RT_VIEW_INTERACTIVE_RECT_STATE_INIT;
+    (void)rt_view_interactive_rect_state_from_bsg(&rect, gdvp);
     if (tvd->gdv_fbs.fbs_mode == TCLCAD_OBJ_FB_MODE_OVERLAY) {
 	if (rect.draw) {
 	    go_draw(gdvp);

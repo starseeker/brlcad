@@ -116,7 +116,7 @@ QgEdMainWindow::CreateWidgets(int canvas_type)
     // of either a single display or showing 4 views in a grid arrangement
     // (the "quad" view).  By default it displays a single view, unless
     // overridden by a user option.
-    c4 = new QgQuadView(cw, gedp, canvas_type);
+    c4 = new QgQuadView(cw, m->session(), canvas_type);
     if (!c4) {
 	QMessageBox *msgbox = new QMessageBox();
 	msgbox->setText("Fatal error: unable to create QgQuadView widget");
@@ -126,7 +126,7 @@ QgEdMainWindow::CreateWidgets(int canvas_type)
     c4->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Minimum);
 
     // Define a graphical toolbar with control widgets
-    vcw = new QgViewCtrl(cw, gedp);
+    vcw = new QgViewCtrl(cw, m->session());
     vcw->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Minimum);
 
     // Having set up the central widget's components, we now define dockable
@@ -621,12 +621,6 @@ QgView *
 QgEdMainWindow::CurrentDisplay()
 {
     return c4->get();
-}
-
-struct bsg_view *
-QgEdMainWindow::CurrentView()
-{
-    return c4->view();
 }
 
 void

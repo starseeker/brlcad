@@ -40,8 +40,8 @@
 #include "raytrace.h"
 #include "rt/func.h"
 
+#include "bg/line_layer.h"
 #include "bsg/draw_intent.h"
-#include "bsg/geometry.h"
 #include "../bsg_ged_draw_private.h"
 #include "../ged_private.h"
 #include "./ged_draw.h"
@@ -1338,14 +1338,14 @@ shoot_and_plot(point_t start_pt,
 	    bu_log("\t\tDRAW (%g %g %g)", V3ARGS(pt));
 #endif
 
-	    bigE_line_set_append(lines, pt, BSG_GEOMETRY_LINE_MOVE);
+	    bigE_line_set_append(lines, pt, BG_GEOMETRY_LINE_MOVE);
 	    VJOIN1(pt, rp.r_pt, seg->seg_out.hit_dist, rp.r_dir);
 
 #ifdef debug
 	    bu_log("<->(%g %g %g)\n", V3ARGS(pt));
 #endif
 
-	    bigE_line_set_append(lines, pt, BSG_GEOMETRY_LINE_DRAW);
+	    bigE_line_set_append(lines, pt, BG_GEOMETRY_LINE_DRAW);
 	}
 
     }

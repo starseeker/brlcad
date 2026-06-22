@@ -49,6 +49,7 @@ set(
   QgFlowLayout.cpp
   QgGeomImport.cpp
   QgKeyVal.cpp
+  QgLegacyView.cpp
   QgMeasureFilter.cpp
   QgModel.cpp
   QgObolDatabaseSync.cpp
@@ -60,6 +61,7 @@ set(
   QgObolPick.cpp
   QgObolSnap.cpp
   QgObolSelectionSync.cpp
+  QgObolViewSync.cpp
   QgObolWindowHost.cpp
   QgPaletteController.cpp
   QgPluginCommands.cpp
@@ -138,8 +140,6 @@ set(
   README
   ${qtcad_srcs}
   ${qtcad_hdrs}
-  bindings.h
-  bindings.cpp
   QgCanvasInput.h
   QgCanvasState.h
   qtcad_resources.qrc

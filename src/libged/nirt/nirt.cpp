@@ -57,9 +57,9 @@
 #include "rt/view_legacy_bsg.h"
 
 #include "bsg/appearance.h"
-#include "bsg/feature.h"
 #include "bsg/node.h"
 #include "ged/bsg_ged_draw.h"
+#include "../bsg_ged_draw_view_private.h"
 #include "../qray.h"
 #include "../ged_private.h"
 
@@ -601,8 +601,8 @@ ged_nirt_core(struct ged *gedp, int argc, const char *argv[])
 
     /* Whether or not we're doing graphics, if we took a shot we should clear any
      * old objects from prior shots. */
-    struct bsg_view *view = gedp->ged_gvp;
-    bsg_feature_remove(view, bu_vls_cstr(&gedp->i->ged_gdp->gd_qray_basename));
+    (void)ged_draw_view_feature_remove(gedp->ged_gvp,
+	    bu_vls_cstr(&gedp->i->ged_gdp->gd_qray_basename));
 
     /* If we're supposed to do graphics, look for the plot file */
     if (DG_QRAY_GRAPHICS(gedp->i->ged_gdp) && bu_vls_strlen(&nv.plotfile)) {

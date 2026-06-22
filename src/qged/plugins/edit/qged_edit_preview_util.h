@@ -28,14 +28,12 @@
 #include <vector>
 
 #include "bg/defines.h"
-#include "bu/log.h"
 #include "bu/malloc.h"
-#include "bsg/feature.h"
-#include "bsg/geometry.h"
 #include "qtcad/QgObolEditPreview.h"
 #include "vmath.h"
 #include "rt/db_internal.h"
 #include "rt/geom.h"
+#include "rt/misc.h"
 
 
 #define QGED_EDIT_ELL_PREVIEW_SEGMENTS 64
@@ -43,12 +41,106 @@
 #define QGED_EDIT_CURVE_PREVIEW_MAX_SEGMENTS 256
 
 
+class QgPluginContext;
+
+struct qged_edit_feature_ref {
+    uintptr_t token;
+    uint64_t revision;
+};
+
+#define QGED_EDIT_FEATURE_REF_NULL_INIT {0, 0}
+
+#ifdef __cplusplus
+#  define QGED_EDIT_FEATURE_REF_NULL qged_edit_feature_ref{0, 0}
+#else
+#  define QGED_EDIT_FEATURE_REF_NULL ((struct qged_edit_feature_ref){0, 0})
+#endif
+
+enum qged_edit_feature_family {
+    QGED_EDIT_FEATURE_UNKNOWN = 0,
+    QGED_EDIT_FEATURE_TRANSIENT_PREVIEW = 1
+};
+
+struct qged_edit_preview_callbacks {
+    uint64_t (*revision_cb)(void *);
+    int (*update_cb)(void *);
+    int (*pick_cb)(void *, int, int, void *);
+};
+
+#define QGED_EDIT_PREVIEW_CALLBACKS_INIT { NULL, NULL, NULL }
+
 struct qged_edit_preview_lines {
     point_t *points;
     int *cmds;
     size_t count;
     size_t capacity;
 };
+
+enum qged_edit_preview_event {
+    QGED_EDIT_PREVIEW_BEGIN = 0,
+    QGED_EDIT_PREVIEW_UPDATE,
+    QGED_EDIT_PREVIEW_COMMIT,
+    QGED_EDIT_PREVIEW_CANCEL,
+    QGED_EDIT_PREVIEW_REPLACE_SOURCE,
+    QGED_EDIT_PREVIEW_DISCARD
+};
+
+enum qged_edit_preview_line_command {
+    QGED_EDIT_PREVIEW_LINE_MOVE = 0,
+    QGED_EDIT_PREVIEW_LINE_DRAW = 1,
+    QGED_EDIT_PREVIEW_POINT_DRAW = 12
+};
+
+
+int
+qged_edit_feature_ref_is_null(struct qged_edit_feature_ref ref);
+
+int
+qged_edit_preview_publish_event(const QgPluginContext *ctx,
+				struct qged_edit_feature_ref feature,
+				enum qged_edit_preview_event event,
+				const char *source_path);
+
+struct qged_edit_feature_ref
+qged_edit_feature_overlay_ensure(const QgPluginContext *ctx,
+				 const char *name,
+				 const void *owner,
+				 void *preview_ctx,
+				 const struct qged_edit_preview_callbacks *callbacks,
+				 const char *source_path);
+
+
+struct qged_edit_feature_ref
+qged_edit_feature_label_ensure(const QgPluginContext *ctx,
+			       const char *name,
+			       const void *owner);
+
+
+int
+qged_edit_feature_remove(const QgPluginContext *ctx, const char *name);
+
+
+void
+qged_edit_feature_set_view(struct qged_edit_feature_ref ref, const QgPluginContext *ctx);
+
+
+void
+qged_edit_feature_set_visible(struct qged_edit_feature_ref ref, int visible);
+
+
+void
+qged_edit_feature_set_color(struct qged_edit_feature_ref ref, int r, int g, int b);
+
+
+int
+qged_edit_feature_touch(struct qged_edit_feature_ref ref);
+
+
+int
+qged_edit_feature_labels_replace(struct qged_edit_feature_ref ref,
+				 const struct rt_point_labels *point_labels,
+				 int label_count,
+				 const unsigned char color[3]);
 
 
 static inline void
@@ -119,33 +211,26 @@ qged_edit_preview_lines_append_line(struct qged_edit_preview_lines *lines,
 				    const point_t a,
 				    const point_t b)
 {
-    return qged_edit_preview_lines_append(lines, a, BSG_GEOMETRY_LINE_MOVE) &&
-	qged_edit_preview_lines_append(lines, b, BSG_GEOMETRY_LINE_DRAW);
+    return qged_edit_preview_lines_append(lines, a, QGED_EDIT_PREVIEW_LINE_MOVE) &&
+	qged_edit_preview_lines_append(lines, b, QGED_EDIT_PREVIEW_LINE_DRAW);
 }
 
 
-static inline int
-qged_edit_preview_lines_replace(bsg_feature_ref ref,
-				enum bsg_feature_family family,
-				const struct qged_edit_preview_lines *lines)
-{
-    size_t count = lines ? lines->count : 0;
-    return bsg_feature_points_replace(ref, family,
-	    count ? (const point_t *)lines->points : NULL,
-	    count ? lines->cmds : NULL,
-	    count);
-}
+int
+qged_edit_preview_lines_replace(struct qged_edit_feature_ref ref,
+				enum qged_edit_feature_family family,
+				const struct qged_edit_preview_lines *lines);
 
 
 static inline int32_t
 qged_edit_preview_obol_command(int cmd)
 {
     switch (cmd) {
-	case BSG_GEOMETRY_LINE_MOVE:
+	case QGED_EDIT_PREVIEW_LINE_MOVE:
 	    return QG_OBOL_EDIT_PREVIEW_MOVE;
-	case BSG_GEOMETRY_LINE_DRAW:
+	case QGED_EDIT_PREVIEW_LINE_DRAW:
 	    return QG_OBOL_EDIT_PREVIEW_DRAW;
-	case BSG_GEOMETRY_POINT_DRAW:
+	case QGED_EDIT_PREVIEW_POINT_DRAW:
 	    return QG_OBOL_EDIT_PREVIEW_POINT;
 	default:
 	    return QG_OBOL_EDIT_PREVIEW_MOVE;
@@ -183,11 +268,11 @@ qged_edit_preview_lines_replace_obol(QgView *display,
 static inline int
 qged_edit_preview_lines_replace_view(QgView *display,
 				     const char *preview_id,
-				     bsg_feature_ref ref,
-				     enum bsg_feature_family family,
+				     struct qged_edit_feature_ref ref,
+				     enum qged_edit_feature_family family,
 				     const struct qged_edit_preview_lines *lines)
 {
-    int bsg_ret = bsg_feature_ref_is_null(ref) ? 0 :
+    int bsg_ret = qged_edit_feature_ref_is_null(ref) ? 0 :
 	qged_edit_preview_lines_replace(ref, family, lines);
     int obol_ret = qged_edit_preview_lines_replace_obol(display, preview_id,
 	    lines);
@@ -195,19 +280,16 @@ qged_edit_preview_lines_replace_view(QgView *display,
 }
 
 
-static inline int
-qged_edit_feature_clear_geometry(bsg_feature_ref ref)
-{
-    return bsg_feature_points_replace(ref, BSG_FEATURE_UNKNOWN, NULL, NULL, 0);
-}
+int
+qged_edit_feature_clear_geometry(struct qged_edit_feature_ref ref);
 
 
 static inline int
 qged_edit_feature_clear_geometry_view(QgView *display,
 				      const char *preview_id,
-				      bsg_feature_ref ref)
+				      struct qged_edit_feature_ref ref)
 {
-    int bsg_ret = bsg_feature_ref_is_null(ref) ? 0 :
+    int bsg_ret = qged_edit_feature_ref_is_null(ref) ? 0 :
 	qged_edit_feature_clear_geometry(ref);
     int obol_ret = qg_obol_edit_preview_clear(display, preview_id);
     return bsg_ret || obol_ret;
@@ -217,14 +299,14 @@ qged_edit_feature_clear_geometry_view(QgView *display,
 static inline int
 qged_edit_feature_replace_bot_face_lines_view(QgView *display,
 					     const char *preview_id,
-					     bsg_feature_ref ref,
-					     enum bsg_feature_family family,
+					     struct qged_edit_feature_ref ref,
+					     enum qged_edit_feature_family family,
 					     const struct rt_bot_internal *bot);
 
 
 static inline int
-qged_edit_feature_replace_bot_face_lines(bsg_feature_ref ref,
-					 enum bsg_feature_family family,
+qged_edit_feature_replace_bot_face_lines(struct qged_edit_feature_ref ref,
+					 enum qged_edit_feature_family family,
 					 const struct rt_bot_internal *bot)
 {
     return qged_edit_feature_replace_bot_face_lines_view(NULL, NULL, ref,
@@ -235,8 +317,8 @@ qged_edit_feature_replace_bot_face_lines(bsg_feature_ref ref,
 static inline int
 qged_edit_feature_replace_bot_face_lines_view(QgView *display,
 					     const char *preview_id,
-					     bsg_feature_ref ref,
-					     enum bsg_feature_family family,
+					     struct qged_edit_feature_ref ref,
+					     enum qged_edit_feature_family family,
 					     const struct rt_bot_internal *bot)
 {
     if (!bot)
@@ -273,13 +355,13 @@ qged_edit_feature_replace_bot_face_lines_view(QgView *display,
 	VMOVE(pt1, p1);
 	VMOVE(pt2, p2);
 	if (!qged_edit_preview_lines_append(&lines, pt0,
-		BSG_GEOMETRY_LINE_MOVE) ||
+		QGED_EDIT_PREVIEW_LINE_MOVE) ||
 		!qged_edit_preview_lines_append(&lines, pt1,
-		    BSG_GEOMETRY_LINE_DRAW) ||
+		    QGED_EDIT_PREVIEW_LINE_DRAW) ||
 		!qged_edit_preview_lines_append(&lines, pt2,
-		    BSG_GEOMETRY_LINE_DRAW) ||
+		    QGED_EDIT_PREVIEW_LINE_DRAW) ||
 		!qged_edit_preview_lines_append(&lines, pt0,
-		    BSG_GEOMETRY_LINE_DRAW))
+		    QGED_EDIT_PREVIEW_LINE_DRAW))
 	    goto fail;
     }
 
@@ -309,8 +391,8 @@ qged_edit_ell_append_loop(point_t *points,
 	double theta = M_2PI * (double)i / (double)QGED_EDIT_ELL_PREVIEW_SEGMENTS;
 	VJOIN2(points[*point_idx], ell->v, cos(theta), axis_a,
 		sin(theta), axis_b);
-	cmds[*point_idx] = (i == 0) ? BSG_GEOMETRY_LINE_MOVE :
-	    BSG_GEOMETRY_LINE_DRAW;
+	cmds[*point_idx] = (i == 0) ? QGED_EDIT_PREVIEW_LINE_MOVE :
+	    QGED_EDIT_PREVIEW_LINE_DRAW;
 	(*point_idx)++;
     }
 }
@@ -319,14 +401,14 @@ qged_edit_ell_append_loop(point_t *points,
 static inline int
 qged_edit_feature_replace_ell_wireframe_view(QgView *display,
 					    const char *preview_id,
-					    bsg_feature_ref ref,
-					    enum bsg_feature_family family,
+					    struct qged_edit_feature_ref ref,
+					    enum qged_edit_feature_family family,
 					    const struct rt_ell_internal *ell);
 
 
 static inline int
-qged_edit_feature_replace_ell_wireframe(bsg_feature_ref ref,
-					enum bsg_feature_family family,
+qged_edit_feature_replace_ell_wireframe(struct qged_edit_feature_ref ref,
+					enum qged_edit_feature_family family,
 					const struct rt_ell_internal *ell)
 {
     return qged_edit_feature_replace_ell_wireframe_view(NULL, NULL, ref,
@@ -337,8 +419,8 @@ qged_edit_feature_replace_ell_wireframe(bsg_feature_ref ref,
 static inline int
 qged_edit_feature_replace_ell_wireframe_view(QgView *display,
 					    const char *preview_id,
-					    bsg_feature_ref ref,
-					    enum bsg_feature_family family,
+					    struct qged_edit_feature_ref ref,
+					    enum qged_edit_feature_family family,
 					    const struct rt_ell_internal *ell)
 {
     if (!ell)
@@ -524,20 +606,20 @@ qged_edit_sketch_append_carc_seg(struct qged_edit_preview_lines *lines,
 	oldv = 0.0;
 	VJOIN2(start_pt, center, oldu, semi_a, oldv, semi_b);
 	if (!qged_edit_preview_lines_append(lines, start_pt,
-		BSG_GEOMETRY_LINE_MOVE))
+		QGED_EDIT_PREVIEW_LINE_MOVE))
 	    return 0;
 	for (int i = 1; i < nsegs; i++) {
 	    newu = oldu * cosdel - oldv * sindel;
 	    newv = oldu * sindel + oldv * cosdel;
 	    VJOIN2(pt, center, newu, semi_a, newv, semi_b);
 	    if (!qged_edit_preview_lines_append(lines, pt,
-		    BSG_GEOMETRY_LINE_DRAW))
+		    QGED_EDIT_PREVIEW_LINE_DRAW))
 		return 0;
 	    oldu = newu;
 	    oldv = newv;
 	}
 	return qged_edit_preview_lines_append(lines, start_pt,
-		BSG_GEOMETRY_LINE_DRAW);
+		QGED_EDIT_PREVIEW_LINE_DRAW);
     }
 
     V2MOVE(start2d, sketch->verts[csg->start]);
@@ -588,14 +670,14 @@ qged_edit_sketch_append_carc_seg(struct qged_edit_preview_lines *lines,
     oldu = (start2d[0] - center2d[0]);
     oldv = (start2d[1] - center2d[1]);
     if (!qged_edit_preview_lines_append(lines, start_pt,
-	    BSG_GEOMETRY_LINE_MOVE))
+	    QGED_EDIT_PREVIEW_LINE_MOVE))
 	return 0;
     for (int i = 0; i < nsegs; i++) {
 	newu = oldu * cosdel - oldv * sindel;
 	newv = oldu * sindel + oldv * cosdel;
 	VJOIN2(pt, center, newu, u_vec, newv, v_vec);
 	if (!qged_edit_preview_lines_append(lines, pt,
-		BSG_GEOMETRY_LINE_DRAW))
+		QGED_EDIT_PREVIEW_LINE_DRAW))
 	    return 0;
 	oldu = newu;
 	oldv = newv;
@@ -655,7 +737,7 @@ qged_edit_sketch_append_bezier_seg(struct qged_edit_preview_lines *lines,
 	}
 	VJOIN2(pt, V, work[0][X], u_vec, work[0][Y], v_vec);
 	if (!qged_edit_preview_lines_append(lines, pt,
-		si ? BSG_GEOMETRY_LINE_DRAW : BSG_GEOMETRY_LINE_MOVE))
+		si ? QGED_EDIT_PREVIEW_LINE_DRAW : QGED_EDIT_PREVIEW_LINE_MOVE))
 	    goto cleanup;
     }
     ret = 1;
@@ -772,7 +854,7 @@ qged_edit_sketch_append_nurb_seg(struct qged_edit_preview_lines *lines,
 	    qged_edit_sketch_point(pt, V, u_vec, v_vec, sketch,
 		    nsg->ctl_points[i]);
 	    if (!qged_edit_preview_lines_append(lines, pt,
-		    i ? BSG_GEOMETRY_LINE_DRAW : BSG_GEOMETRY_LINE_MOVE))
+		    i ? QGED_EDIT_PREVIEW_LINE_DRAW : QGED_EDIT_PREVIEW_LINE_MOVE))
 		return 0;
 	}
 	return 1;
@@ -799,7 +881,7 @@ qged_edit_sketch_append_nurb_seg(struct qged_edit_preview_lines *lines,
 	    return 0;
 	VJOIN2(pt, V, uv[X], u_vec, uv[Y], v_vec);
 	if (!qged_edit_preview_lines_append(lines, pt,
-		si ? BSG_GEOMETRY_LINE_DRAW : BSG_GEOMETRY_LINE_MOVE))
+		si ? QGED_EDIT_PREVIEW_LINE_DRAW : QGED_EDIT_PREVIEW_LINE_MOVE))
 	    return 0;
     }
 
@@ -865,8 +947,8 @@ qged_edit_sketch_append_curve(struct qged_edit_preview_lines *lines,
 static inline int
 qged_edit_feature_replace_extrude_wireframe_view(QgView *display,
 					    const char *preview_id,
-					    bsg_feature_ref ref,
-					    enum bsg_feature_family family,
+					    struct qged_edit_feature_ref ref,
+					    enum qged_edit_feature_family family,
 					    const struct rt_extrude_internal *extrude,
 					    const struct bg_tess_tol *ttol)
 {
@@ -924,8 +1006,8 @@ cleanup:
 
 
 static inline int
-qged_edit_feature_replace_extrude_wireframe(bsg_feature_ref ref,
-					    enum bsg_feature_family family,
+qged_edit_feature_replace_extrude_wireframe(struct qged_edit_feature_ref ref,
+					    enum qged_edit_feature_family family,
 					    const struct rt_extrude_internal *extrude,
 					    const struct bg_tess_tol *ttol)
 {
@@ -1040,8 +1122,8 @@ qged_edit_revolve_append_end_lines(struct qged_edit_preview_lines *lines,
 static inline int
 qged_edit_feature_replace_revolve_wireframe_view(QgView *display,
 					    const char *preview_id,
-					    bsg_feature_ref ref,
-					    enum bsg_feature_family family,
+					    struct qged_edit_feature_ref ref,
+					    enum qged_edit_feature_family family,
 					    const struct rt_revolve_internal *revolve,
 					    const struct bg_tess_tol *ttol)
 {
@@ -1143,11 +1225,11 @@ qged_edit_feature_replace_revolve_wireframe_view(QgView *display,
 	}
 	if (narc > 0) {
 	    if (!qged_edit_preview_lines_append(&lines, ell[0],
-		    BSG_GEOMETRY_LINE_MOVE))
+		    QGED_EDIT_PREVIEW_LINE_MOVE))
 		goto cleanup;
 	    for (size_t j = 1; j < narc; j++) {
 		if (!qged_edit_preview_lines_append(&lines, ell[j],
-			BSG_GEOMETRY_LINE_DRAW))
+			QGED_EDIT_PREVIEW_LINE_DRAW))
 		    goto cleanup;
 	    }
 	}
@@ -1155,11 +1237,11 @@ qged_edit_feature_replace_revolve_wireframe_view(QgView *display,
 	    VSCALE(cir[narc], rEnd, verts[i][X]);
 	    VADD3(ell[narc], revolve->v3d, cir[narc], height);
 	    if (!qged_edit_preview_lines_append(&lines, ell[narc],
-		    narc ? BSG_GEOMETRY_LINE_DRAW : BSG_GEOMETRY_LINE_MOVE))
+		    narc ? QGED_EDIT_PREVIEW_LINE_DRAW : QGED_EDIT_PREVIEW_LINE_MOVE))
 		goto cleanup;
 	} else if (narc > 0) {
 	    if (!qged_edit_preview_lines_append(&lines, ell[0],
-		    BSG_GEOMETRY_LINE_DRAW))
+		    QGED_EDIT_PREVIEW_LINE_DRAW))
 		goto cleanup;
 	}
     }
@@ -1225,8 +1307,8 @@ cleanup:
 
 
 static inline int
-qged_edit_feature_replace_revolve_wireframe(bsg_feature_ref ref,
-					    enum bsg_feature_family family,
+qged_edit_feature_replace_revolve_wireframe(struct qged_edit_feature_ref ref,
+					    enum qged_edit_feature_family family,
 					    const struct rt_revolve_internal *revolve,
 					    const struct bg_tess_tol *ttol)
 {

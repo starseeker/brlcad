@@ -46,7 +46,7 @@
 int
 to_axes(struct ged *gedp,
 	struct bsg_view *gdvp,
-	struct bsg_axes *gasp,
+	struct rt_view_axes_state *gasp,
 	int argc,
 	const char *argv[],
 	const char *usage)
@@ -794,12 +794,12 @@ to_model_axes(struct ged *gedp,
         return BRLCAD_ERROR;
     }
 
-    struct bsg_axes axes;
-    if (!rt_view_model_axes_from_bsg(&axes, gdvp))
+    struct rt_view_axes_state axes;
+    if (!rt_view_model_axes_state_from_bsg(&axes, gdvp))
 	return BRLCAD_ERROR;
     int ret = to_axes(gedp, gdvp, &axes, argc, argv, usage);
     if (ret == BRLCAD_OK)
-	rt_view_model_axes_set_bsg(gdvp, &axes);
+	rt_view_model_axes_state_set_bsg(gdvp, &axes);
     return ret;
 }
 
@@ -824,12 +824,12 @@ go_view_axes(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_axes axes;
-    if (!rt_view_view_axes_from_bsg(&axes, gdvp))
+    struct rt_view_axes_state axes;
+    if (!rt_view_view_axes_state_from_bsg(&axes, gdvp))
 	return BRLCAD_ERROR;
     int ret = to_axes(gedp, gdvp, &axes, argc, argv, usage);
     if (ret == BRLCAD_OK)
-	rt_view_view_axes_set_bsg(gdvp, &axes);
+	rt_view_view_axes_state_set_bsg(gdvp, &axes);
     return ret;
 }
 
@@ -864,12 +864,12 @@ to_view_axes(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_axes axes;
-    if (!rt_view_view_axes_from_bsg(&axes, gdvp))
+    struct rt_view_axes_state axes;
+    if (!rt_view_view_axes_state_from_bsg(&axes, gdvp))
 	return BRLCAD_ERROR;
     int ret = to_axes(gedp, gdvp, &axes, argc, argv, usage);
     if (ret == BRLCAD_OK)
-	rt_view_view_axes_set_bsg(gdvp, &axes);
+	rt_view_view_axes_state_set_bsg(gdvp, &axes);
     return ret;
 }
 

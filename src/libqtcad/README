@@ -66,8 +66,8 @@ new file, place it in the category that best matches its responsibility.
     `defines.h`         - `QTCAD_EXPORT` macro and env-driven slot/event
                           tracing macros (`QTCAD_SLOT`, `QTCAD_EVENT`)
     `QgSignalFlags.h`   - bitmask flags passed through view-update signals
-    `bindings.{h,cpp}`  - shared key / mouse / wheel event handlers used by
-                          the canvas widgets (private to libqtcad)
+    `QgCanvasInput`     - per-canvas key / mouse / wheel event handling used
+                          by the canvas widgets (private to libqtcad)
     `qtcad_resources.qrc` - icon resources
 
 Signal / slot conventions

@@ -41,7 +41,7 @@
 
 struct _ged_fp_grid_info {
     struct _ged_view_info *gd;
-    struct bsg_grid_state *g;
+    struct rt_view_grid_state *g;
 };
 
 int
@@ -61,7 +61,7 @@ _fp_grid_cmd_draw(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bsg_grid_state *g = ginfo->g;
+    struct rt_view_grid_state *g = ginfo->g;
     if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%d\n", g->draw);
 	return BRLCAD_OK;
@@ -101,7 +101,7 @@ _fp_grid_cmd_snap(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bsg_grid_state *g = ginfo->g;
+    struct rt_view_grid_state *g = ginfo->g;
     if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%d\n", g->snap);
 	return BRLCAD_OK;
@@ -140,7 +140,7 @@ _fp_grid_cmd_anchor(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bsg_grid_state *g = ginfo->g;
+    struct rt_view_grid_state *g = ginfo->g;
      if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%g %g %g\n", V3ARGS(g->anchor));
 	return BRLCAD_OK;
@@ -179,7 +179,7 @@ _fp_grid_cmd_res_h(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bsg_grid_state *g = ginfo->g;
+    struct rt_view_grid_state *g = ginfo->g;
     if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%g\n", g->res_h);
 	return BRLCAD_OK;
@@ -222,7 +222,7 @@ _fp_grid_cmd_res_v(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bsg_grid_state *g = ginfo->g;
+    struct rt_view_grid_state *g = ginfo->g;
     if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%g\n", g->res_v);
 	return BRLCAD_OK;
@@ -265,7 +265,7 @@ _fp_grid_cmd_res_major_h(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bsg_grid_state *g = ginfo->g;
+    struct rt_view_grid_state *g = ginfo->g;
     if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%d\n", g->res_major_h);
 	return BRLCAD_OK;
@@ -308,7 +308,7 @@ _fp_grid_cmd_res_major_v(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bsg_grid_state *g = ginfo->g;
+    struct rt_view_grid_state *g = ginfo->g;
     if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%d\n", g->res_major_v);
 	return BRLCAD_OK;
@@ -351,7 +351,7 @@ _fp_grid_cmd_color(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bsg_grid_state *g = ginfo->g;
+    struct rt_view_grid_state *g = ginfo->g;
     if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%d %d %d\n", g->color[0], g->color[1], g->color[2]);
 	return BRLCAD_OK;
@@ -409,17 +409,17 @@ _fp_cmd_grid(void *bs, int argc, const char **argv)
     argc--; argv++;
 
     if (argc == 1) {
-	struct bsg_grid_state grid;
-	if (!rt_view_grid_from_bsg(&grid, v))
+	struct rt_view_grid_state grid;
+	if (!rt_view_grid_state_from_bsg(&grid, v))
 	    return BRLCAD_ERROR;
 	if (BU_STR_EQUAL("1", argv[0])) {
 	    grid.draw = 1;
-	    rt_view_grid_set_bsg(v, &grid);
+	    rt_view_grid_state_set_bsg(v, &grid);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("0", argv[0])) {
 	    grid.draw = 0;
-	    rt_view_grid_set_bsg(v, &grid);
+	    rt_view_grid_state_set_bsg(v, &grid);
 	    return BRLCAD_OK;
 	}
     }
@@ -443,8 +443,8 @@ _fp_cmd_grid(void *bs, int argc, const char **argv)
     int acnt = (cmd_pos >= 0) ? cmd_pos : argc;
     (void)bu_opt_parse(NULL, acnt, argv, d);
 
-    struct bsg_grid_state grid;
-    if (!rt_view_grid_from_bsg(&grid, v))
+    struct rt_view_grid_state grid;
+    if (!rt_view_grid_state_from_bsg(&grid, v))
 	return BRLCAD_ERROR;
 
     struct _ged_fp_grid_info ginfo;
@@ -453,7 +453,7 @@ _fp_cmd_grid(void *bs, int argc, const char **argv)
 
     int ret = _ged_subcmd_exec(gedp, d, _fp_grid_cmds, "view faceplate grid", "[options] subcommand [args]", (void *)&ginfo, argc, argv, help, cmd_pos);
     if (ret == BRLCAD_OK)
-	rt_view_grid_set_bsg(v, &grid);
+	rt_view_grid_state_set_bsg(v, &grid);
     return ret;
 }
 

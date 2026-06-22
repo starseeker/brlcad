@@ -173,10 +173,10 @@ static void
 motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 {
     struct bu_vls cmd = BU_VLS_INIT_ZERO;
-    struct bsg_adc_state adc_record = {0};
-    struct bsg_adc_state *adc = &adc_record;
-    struct bsg_grid_state grid_record = {0};
-    struct bsg_grid_state *grid = &grid_record;
+    struct rt_view_adc_state adc_record = {0};
+    struct rt_view_adc_state *adc = &adc_record;
+    struct rt_view_grid_state grid_record = RT_VIEW_GRID_STATE_INIT;
+    struct rt_view_grid_state *grid = &grid_record;
     int save_edflag = -1;
     fastf_t f;
     fastf_t fx, fy;

@@ -13,6 +13,8 @@ set(
   QgGL.h
   QgGeomImport.h
   QgKeyVal.h
+  QgLegacyView.h
+  QgLegacyViewBsg.h
   QgMeasureFilter.h
   QgModel.h
   QgObolDatabaseSync.h
@@ -24,6 +26,7 @@ set(
   QgObolPick.h
   QgObolSnap.h
   QgObolSelectionSync.h
+  QgObolViewSync.h
   QgPaletteController.h
   QgPluginApi.h
   QgPluginCommands.h

@@ -26,13 +26,18 @@
 #include <QPainter>
 #include <QString>
 
-#include "bu/sort.h"
-#include "bu/avs.h"
-#include "bu/malloc.h"
+#include "bu/vls.h"
+#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgSignalFlags.h"
-#include "rt/view_legacy_bsg.h"
+#include "rt/view.h"
 #include "CADViewModel.h"
+
+static qg_legacy_view *
+qged_view_model_view(const QgPluginContext *ctx)
+{
+    return ctx ? ctx->activeView() : nullptr;
+}
 
 CADViewModel::CADViewModel(QObject *parentobj)
     : QgKeyValModel(parentobj)
@@ -56,7 +61,7 @@ CADViewModel::update()
 void
 CADViewModel::refresh(unsigned long long)
 {
-    struct bsg_view *v = m_ctx ? m_ctx->getView() : nullptr;
+    qg_legacy_view *v = qged_view_model_view(m_ctx);
     if (!v)
 	return;
 
@@ -71,11 +76,12 @@ CADViewModel::refresh(unsigned long long)
     m_root = new QgKeyValNode();
     beginResetModel();
 
-    rt_view_info_from_bsg(&view_info, v);
-    rt_view_aet_from_bsg(aet, v);
-    rt_view_center_from_bsg(view_center, v);
+    qg_legacy_view_info_get(v, &view_info);
+    qg_legacy_view_aet_get(v, aet);
+    qg_legacy_view_center_get(v, view_center);
 
-    standard_nodes.insert("Name", add_pair("Name", bu_vls_cstr(&v->gv_name), m_root, i));
+    const char *view_name = qg_legacy_view_name_get(v);
+    standard_nodes.insert("Name", add_pair("Name", view_name ? view_name : "", m_root, i));
     bu_vls_sprintf(&val, "%g", view_info.size);
     standard_nodes.insert("Size", add_pair("Size", bu_vls_cstr(&val), m_root, i));
     bu_vls_sprintf(&val, "%d", view_info.width);

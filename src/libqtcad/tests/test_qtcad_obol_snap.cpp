@@ -22,6 +22,7 @@ extern "C" {
 #include "bu/file.h"
 #include "ged.h"
 #include "ged/bsg_ged_draw.h"
+#include "qtcad/QgLegacyViewBsg.h"
 #include "qtcad/QgObolDrawSync.h"
 #include "qtcad/QgObolSnap.h"
 #include "qtcad/QgView.h"
@@ -248,7 +249,7 @@ main(int argc, char **argv)
 
     QgView view(NULL, QgView_SW, NULL);
     view.resize(200, 200);
-    gedp->ged_gvp = view.view();
+    gedp->ged_gvp = qg_legacy_view_to_bsg(view.view());
 
     BRLObolViewController *controller = view.obolViewController();
     if (!controller)
@@ -258,7 +259,7 @@ main(int argc, char **argv)
 
     struct ged_draw_transaction draw_box =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "box.s");
-    draw_box.view = view.view();
+    draw_box.view = qg_legacy_view_to_bsg(view.view());
     if (!apply_and_sync(gedp, &view, &draw_box))
 	FAIL("GED wire draw should sync box source into Obol");
 
@@ -281,13 +282,12 @@ main(int argc, char **argv)
     if (view.dmp())
 	FAIL("qtcad Obol snap setup should not initialize the legacy display manager");
 
-    struct bsg_view *bv = view.view();
+    struct bsg_view *bv = qg_legacy_view_to_bsg(view.view());
     set_center_query(bv, 11.02, 11.02, 11.02);
     rt_view_snap_source_flags_set_bsg(bv, RT_VIEW_SNAP_DB_BSG);
     rt_view_snap_lines_set_bsg(bv, 1);
 
     SnapProbeFilter filter;
-    filter.set_view(bv);
     filter.set_view_widget(&view);
     QMouseEvent move = left_move_at(100, 100);
     if (!filter.sync(&move))

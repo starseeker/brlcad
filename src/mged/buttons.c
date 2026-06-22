@@ -506,7 +506,7 @@ bsg_adcursor(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc)
     struct cmdtab *ctp = (struct cmdtab *)clientData;
     MGED_CK_CMD(ctp);
     struct mged_state *s = ctp->s;
-    struct bsg_adc_state adc;
+    struct rt_view_adc_state adc;
 
     if (!mged_dm_adc_state_get(s->mged_curr_dm, &adc))
 	return TCL_ERROR;

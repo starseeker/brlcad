@@ -105,7 +105,7 @@
 #include "bu/malloc.h"
 #include "bn.h"
 #include "vmath.h"
-#include "bsg/geometry.h"
+#include "bg/line_layer.h"
 #include "raytrace.h"
 #include "nmg.h"
 
@@ -490,10 +490,10 @@ vdraw_cmd_to_line_geometry(int command, int *geometry_cmd)
 	return 0;
     switch (command) {
 	case VDRAW_CMD_LINE_MOVE:
-	    *geometry_cmd = BSG_GEOMETRY_LINE_MOVE;
+	    *geometry_cmd = BG_GEOMETRY_LINE_MOVE;
 	    return 1;
 	case VDRAW_CMD_LINE_DRAW:
-	    *geometry_cmd = BSG_GEOMETRY_LINE_DRAW;
+	    *geometry_cmd = BG_GEOMETRY_LINE_DRAW;
 	    return 1;
 	default:
 	    return 0;
@@ -614,7 +614,7 @@ vdraw_overlay_line_geometry_from_curve(const struct vd_curve *curve,
 	    "vdraw overlay line commands");
 
     for (size_t i = 0; curve && i < curve->vdc_count && idx < count; i++) {
-	int geometry_cmd = BSG_GEOMETRY_LINE_MOVE;
+	int geometry_cmd = BG_GEOMETRY_LINE_MOVE;
 	if (!vdraw_cmd_to_line_geometry(curve->vdc_commands[i], &geometry_cmd))
 	    continue;
 	VMOVE(pg->points[idx], curve->vdc_points[i]);
@@ -622,7 +622,7 @@ vdraw_overlay_line_geometry_from_curve(const struct vd_curve *curve,
 	idx++;
     }
 
-    pg->geometry.kind = BSG_GEOMETRY_NODE_LINE_SET;
+    pg->geometry.kind = GED_DRAW_OVERLAY_GEOMETRY_LINE_SET;
     pg->geometry.points = (const point_t *)pg->points;
     pg->geometry.point_count = idx;
     pg->geometry.commands = pg->commands;
@@ -644,7 +644,7 @@ vdraw_overlay_point_geometry_from_curve(const struct vd_curve *curve,
     for (size_t i = 0; curve && i < curve->vdc_count && idx < count; i++, idx++)
 	VMOVE(pg->points[idx], curve->vdc_points[i]);
 
-    pg->geometry.kind = BSG_GEOMETRY_NODE_POINT_SET;
+    pg->geometry.kind = GED_DRAW_OVERLAY_GEOMETRY_POINT_SET;
     pg->geometry.points = (const point_t *)pg->points;
     pg->geometry.point_count = idx;
     return 1;
@@ -698,7 +698,7 @@ vdraw_overlay_face_geometry_from_curve(const struct vd_curve *curve,
 	}
     }
 
-    pg->geometry.kind = BSG_GEOMETRY_NODE_INDEXED_FACE_SET;
+    pg->geometry.kind = GED_DRAW_OVERLAY_GEOMETRY_INDEXED_FACE_SET;
     pg->geometry.points = (const point_t *)pg->points;
     pg->geometry.point_count = point_idx;
     pg->geometry.normals = (const vect_t *)pg->normals;

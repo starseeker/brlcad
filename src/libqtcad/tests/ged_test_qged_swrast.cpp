@@ -66,6 +66,7 @@
 #include "rt/view_legacy_bsg.h"
 
 /* Qt + libqtcad headers */
+#include "qtcad/QgLegacyViewBsg.h"
 #include "qtcad/QgModel.h"
 #include "qtcad/QgSW.h"
 
@@ -128,7 +129,7 @@ main(int ac, char *av[])
     QgSW sw;
     sw.resize(512, 512);
 
-    SWCHECK(sw.view() != NULL, "QgSW::view() must be non-NULL after construction");
+    SWCHECK(qg_legacy_view_to_bsg(sw.view()) != NULL, "QgSW::view() must be non-NULL after construction");
 
     /* ---- Open moss.g and hook up the model ---- */
     struct ged *gedp = ged_open("db", "moss_qgswrast_tmp.g", 1);
@@ -140,9 +141,9 @@ main(int ac, char *av[])
     }
 
     /* Route draw commands into the QgSW view */
-    gedp->ged_gvp = sw.view();
-    rt_view_set_add_view_bsg(&gedp->ged_views, sw.view());
-    rt_view_unit_conversion_set_bsg(sw.view(),
+    gedp->ged_gvp = qg_legacy_view_to_bsg(sw.view());
+    rt_view_set_add_view_bsg(&gedp->ged_views, qg_legacy_view_to_bsg(sw.view()));
+    rt_view_unit_conversion_set_bsg(qg_legacy_view_to_bsg(sw.view()),
 	    gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
 
     /* Set az/el so the model is visible */
@@ -155,7 +156,7 @@ main(int ac, char *av[])
     const char *av_av[1] = {"autoview"};
     ged_exec_autoview(gedp, 1, av_av);
 
-    SWCHECK(sw.view() && bsg_view_scene_attached(sw.view()),
+    SWCHECK(qg_legacy_view_to_bsg(sw.view()) && bsg_view_scene_attached(qg_legacy_view_to_bsg(sw.view())),
             "after binding QgSW view to GED and drawing, view scene ref must be non-NULL");
 
     /* ---- Force paintEvent via QWidget::render() ---- */

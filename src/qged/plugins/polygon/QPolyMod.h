@@ -28,12 +28,16 @@
 #include <QPushButton>
 #include <QRadioButton>
 #include "qtcad/QgColorRGB.h"
-#include "qtcad/QgPolyFilter.h"
-#include "qtcad/QgView.h"
 #include "qtcad/QgSignalFlags.h"
+#include "rt/view.h"
 #include "QPolySettings.h"
 
 class QgPluginContext;
+class QgPolyFilter;
+class QgPolyMoveFilter;
+class QgPolyPointFilter;
+class QgPolySelectFilter;
+class QgPolyUpdateFilter;
 
 class QPolyMod : public QWidget
 {
@@ -107,9 +111,9 @@ class QPolyMod : public QWidget
 	bool eventFilter(QObject *, QEvent *);
 
     private:
-	void poly_type_settings(const struct bsg_polygon_record *ip);
+	void poly_type_settings(const struct rt_view_polygon_record *ip);
 	int poly_cnt = 0;
-	bsg_polygon_ref p = BSG_POLYGON_REF_NULL_INIT;
+	rt_view_polygon_ref p = RT_VIEW_POLYGON_REF_NULL_INIT;
 	bool do_bool = false;
 
 	QgPolyFilter *cf = NULL;
@@ -120,7 +124,6 @@ class QPolyMod : public QWidget
 	QgPluginContext *m_ctx = nullptr;
 
 	struct ged *getGed() const;
-	struct bsg_view *getView() const;
 };
 
 

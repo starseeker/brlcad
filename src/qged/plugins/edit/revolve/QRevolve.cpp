@@ -21,8 +21,8 @@
  *
  * Edit-preview revolve-solid editor.
  *
- * The transient preview feature owns typed edit-preview callbacks and emits
- * edit-preview interaction records for begin/update/commit events.
+ * The transient preview feature owns typed edit-preview callbacks and routes
+ * begin/update/commit events through the shared qged preview helper.
  */
 
 #include "common.h"
@@ -34,13 +34,9 @@
 #include "ged.h"
 #include "rt/db_io.h"
 #include "rt/directory.h"
-#include "bsg/feature.h"
-#include "bsg/interaction.h"
-#include "bsg/overlay.h"
 #include "qtcad/QgGedEventBatch.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgSignalFlags.h"
-#include "ged/bsg_ged_draw.h"
 #include "../qged_edit_preview_util.h"
 #include "QRevolve.h"
 
@@ -54,22 +50,13 @@ _revolve_preview_revision(void *UNUSED(preview_ctx))
 }
 
 static int
-_revolve_preview_update(void *preview_ctx, struct bsg_view *UNUSED(v))
+_revolve_preview_update(void *preview_ctx)
 {
     QRevolve *self = (QRevolve *)preview_ctx;
     if (!self)
 	return 0;
     QMetaObject::invokeMethod(self, "update_obj_wireframe", Qt::DirectConnection);
     return 1;
-}
-
-static void
-_revolve_publish_preview(struct bsg_view *v, bsg_feature_ref feature,
-	bsg_edit_preview_op op, const char *source_path)
-{
-    struct bsg_interaction_record *record =
-	bsg_interaction_edit_preview_record(v, feature, op, source_path);
-    bsg_interaction_record_free(record);
 }
 
 /* ---- QRevolve constructor ----------------------------------------------- */
@@ -118,12 +105,11 @@ QRevolve::QRevolve()
 
 QRevolve::~QRevolve()
 {
-    struct bsg_view *v = getView();
     qged_edit_feature_clear_geometry_view(
 	    m_ctx ? m_ctx->getViewWidget() : nullptr, "_revolve_edit", p);
-    if (!bsg_feature_ref_is_null(p) && v) {
-	bsg_feature_remove(v, "_revolve_edit");
-	p = BSG_FEATURE_REF_NULL_INIT;
+    if (!qged_edit_feature_ref_is_null(p) && m_ctx) {
+	qged_edit_feature_remove(m_ctx, "_revolve_edit");
+	p = QGED_EDIT_FEATURE_REF_NULL;
     }
     bu_vls_free(&oname);
 }
@@ -134,14 +120,6 @@ QRevolve::getGed() const
     if (!m_ctx)
 	return nullptr;
     return m_ctx->getGed();
-}
-
-struct bsg_view *
-QRevolve::getView() const
-{
-    if (!m_ctx)
-	return nullptr;
-    return m_ctx->getView();
 }
 
 void
@@ -192,7 +170,7 @@ QRevolve::write_to_db()
 	    return;
     }
 
-    _revolve_publish_preview(getView(), p, BSG_EDIT_PREVIEW_COMMIT,
+    qged_edit_preview_publish_event(m_ctx, p, QGED_EDIT_PREVIEW_COMMIT,
 	    bu_vls_cstr(&oname));
     emit view_updated(QG_VIEW_DB);
 }
@@ -203,62 +181,40 @@ QRevolve::update_obj_wireframe()
     struct ged *gedp = getGed();
     if (!gedp)
 	return;
-    struct bsg_view *v = getView();
-    if (!v)
-	return;
     QgView *display = m_ctx ? m_ctx->getViewWidget() : nullptr;
 
-    p = bsg_feature_find(v, "_revolve_edit");
-    if (bsg_feature_ref_is_null(p)) {
-	p = bsg_feature_create_overlay(v, "_revolve_edit", 1/*local*/);
-	if (!bsg_feature_ref_is_null(p))
-	    bsg_feature_overlay_register_owner(p, this,
-		    BSG_OVERLAY_ROLE_MODEL,
-		    BSG_OVERLAY_CLASS_EDIT_HANDLE,
-		    BSG_OVERLAY_LC_PER_TOOL,
-		    BSG_OVERLAY_ORDER_POST_TRANSPARENT,
-		    NULL, 0);
-
-	if (!bsg_feature_ref_is_null(p)) {
-	    struct bsg_edit_preview_ops ops = BSG_EDIT_PREVIEW_OPS_INIT;
-	    ops.revision_cb = _revolve_preview_revision;
-	    ops.update_cb = _revolve_preview_update;
-	    bsg_feature_edit_preview_attach(p, this, NULL, &ops);
-	    _revolve_publish_preview(v, p, BSG_EDIT_PREVIEW_BEGIN,
-		    bu_vls_cstr(&oname));
-	}
-    }
-    if (bsg_feature_ref_is_null(p) && !display)
+    struct qged_edit_preview_callbacks callbacks = QGED_EDIT_PREVIEW_CALLBACKS_INIT;
+    callbacks.revision_cb = _revolve_preview_revision;
+    callbacks.update_cb = _revolve_preview_update;
+    p = qged_edit_feature_overlay_ensure(m_ctx, "_revolve_edit", this, this,
+	    &callbacks, bu_vls_cstr(&oname));
+    if (qged_edit_feature_ref_is_null(p) && !display)
 	return;
 
     if (!gedp->dbip || !bu_vls_strlen(&oname)) {
 	qged_edit_feature_clear_geometry_view(display, "_revolve_edit", p);
-	if (!bsg_feature_ref_is_null(p))
-	    bsg_feature_set_visible(p, 0);
+	qged_edit_feature_set_visible(p, 0);
 	return;
     }
 
     dp = db_lookup(gedp->dbip, bu_vls_cstr(&oname), LOOKUP_QUIET);
     if (!dp || dp->d_minor_type != DB5_MINORTYPE_BRLCAD_REVOLVE) {
 	qged_edit_feature_clear_geometry_view(display, "_revolve_edit", p);
-	if (!bsg_feature_ref_is_null(p))
-	    bsg_feature_set_visible(p, 0);
+	qged_edit_feature_set_visible(p, 0);
 	return;
     }
 
     qged_edit_feature_clear_geometry_view(display, "_revolve_edit", p);
-    if (!bsg_feature_ref_is_null(p)) {
-	bsg_feature_set_view(p, v);
-	bsg_feature_set_visible(p, 1);
-    }
+    qged_edit_feature_set_view(p, m_ctx);
+    qged_edit_feature_set_visible(p, 1);
 
     struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
     if (!wdbp)
 	return;
     if (qged_edit_feature_replace_revolve_wireframe_view(display,
-	    "_revolve_edit", p, BSG_FEATURE_TRANSIENT_PREVIEW, &rev,
-	    &wdbp->wdb_ttol) && !bsg_feature_ref_is_null(p))
-	_revolve_publish_preview(v, p, BSG_EDIT_PREVIEW_UPDATE,
+	    "_revolve_edit", p, QGED_EDIT_FEATURE_TRANSIENT_PREVIEW, &rev,
+	    &wdbp->wdb_ttol) && !qged_edit_feature_ref_is_null(p))
+	qged_edit_preview_publish_event(m_ctx, p, QGED_EDIT_PREVIEW_UPDATE,
 		bu_vls_cstr(&oname));
 
     const char *wcolor = "255/255/255";
@@ -267,11 +223,9 @@ QRevolve::update_obj_wireframe()
     bu_opt_color(NULL, 1, (const char **)&av[0], (void *)&cval);
     unsigned char rgb[3] = {0, 0, 0};
     bu_color_to_rgb_chars(&cval, rgb);
-    if (!bsg_feature_ref_is_null(p))
-	bsg_feature_set_color(p, rgb[0], rgb[1], rgb[2]);
+    qged_edit_feature_set_color(p, rgb[0], rgb[1], rgb[2]);
 
-    if (!bsg_feature_ref_is_null(p))
-	bsg_feature_edit_preview_touch(p);
+    qged_edit_feature_touch(p);
 }
 
 void

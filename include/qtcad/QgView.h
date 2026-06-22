@@ -30,6 +30,7 @@
 #include <QBoxLayout>
 #include <QWidget>
 #include "qtcad/defines.h"
+#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgTypes.h"
 
 class QgCanvasBase;
@@ -38,7 +39,6 @@ class QObject;
 class QgViewFilter;
 class BRLObolViewController;
 
-struct bsg_view;
 struct dm;
 struct fb;
 
@@ -68,12 +68,12 @@ void get_obol_viewport_image(QImage &img);
 
 bool isValid();
 
-struct bsg_view * view();
+qg_legacy_view * view();
 struct dm * dmp();
 struct fb * ifp();
 BRLObolViewController *obolViewController();
 
-void set_view(struct bsg_view *);
+void set_view(qg_legacy_view *);
 
 void aet(double a, double e, double t);
 

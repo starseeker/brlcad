@@ -114,47 +114,37 @@ adc_view_local_scale(struct mged_state *s)
 
 
 static void
-adc_model_To_adc_view(struct mged_state *s, struct bsg_adc_state *adc)
+adc_model_To_adc_view(struct mged_state *s, struct rt_view_adc_state *adc)
 {
     mat_t model2view;
 
     rt_view_model2view_from_bsg(model2view, view_state->vs_gvp);
-    MAT4X3PNT(adc->pos_view, model2view, adc->pos_model);
-    adc->dv_x = adc->pos_view[X] * RT_VIEW_MAX;
-    adc->dv_y = adc->pos_view[Y] * RT_VIEW_MAX;
+    rt_view_adc_model_to_view(adc, model2view, RT_VIEW_MAX);
 }
 
 
 static void
-adc_grid_To_adc_view(struct mged_state *s, struct bsg_adc_state *adc)
+adc_grid_To_adc_view(struct mged_state *s, struct rt_view_adc_state *adc)
 {
-    point_t model_pt = VINIT_ZERO;
-    point_t view_pt;
     mat_t model2view;
 
     rt_view_model2view_from_bsg(model2view, view_state->vs_gvp);
-    MAT4X3PNT(view_pt, model2view, model_pt);
-    VADD2(adc->pos_view, view_pt, adc->pos_grid);
-    adc->dv_x = adc->pos_view[X] * RT_VIEW_MAX;
-    adc->dv_y = adc->pos_view[Y] * RT_VIEW_MAX;
+    rt_view_adc_grid_to_view(adc, model2view, RT_VIEW_MAX);
 }
 
 
 static void
-adc_view_To_adc_grid(struct mged_state *s, struct bsg_adc_state *adc)
+adc_view_To_adc_grid(struct mged_state *s, struct rt_view_adc_state *adc)
 {
-    point_t model_pt = VINIT_ZERO;
-    point_t view_pt;
     mat_t model2view;
 
     rt_view_model2view_from_bsg(model2view, view_state->vs_gvp);
-    MAT4X3PNT(view_pt, model2view, model_pt);
-    VSUB2(adc->pos_grid, adc->pos_view, view_pt);
+    rt_view_adc_view_to_grid(adc, model2view);
 }
 
 
 static void
-calc_adc_pos(struct mged_state *s, struct bsg_adc_state *adc)
+calc_adc_pos(struct mged_state *s, struct rt_view_adc_state *adc)
 {
     mat_t view2model;
 
@@ -174,7 +164,7 @@ calc_adc_pos(struct mged_state *s, struct bsg_adc_state *adc)
 
 
 static void
-calc_adc_a1(struct mged_state *s, struct bsg_adc_state *adc)
+calc_adc_a1(struct mged_state *s, struct rt_view_adc_state *adc)
 {
     if (adc->anchor_a1) {
 	fastf_t dx, dy;
@@ -195,7 +185,7 @@ calc_adc_a1(struct mged_state *s, struct bsg_adc_state *adc)
 
 
 static void
-calc_adc_a2(struct mged_state *s, struct bsg_adc_state *adc)
+calc_adc_a2(struct mged_state *s, struct rt_view_adc_state *adc)
 {
     if (adc->anchor_a2) {
 	fastf_t dx, dy;
@@ -216,7 +206,7 @@ calc_adc_a2(struct mged_state *s, struct bsg_adc_state *adc)
 
 
 static void
-calc_adc_dst(struct mged_state *s, struct bsg_adc_state *adc)
+calc_adc_dst(struct mged_state *s, struct rt_view_adc_state *adc)
 {
     if (adc->anchor_dst) {
 	fastf_t dist;
@@ -238,7 +228,7 @@ calc_adc_dst(struct mged_state *s, struct bsg_adc_state *adc)
 
 
 static void
-draw_ticks(struct mged_state *s, struct bsg_adc_state *adc, fastf_t angle)
+draw_ticks(struct mged_state *s, struct rt_view_adc_state *adc, fastf_t angle)
 {
     fastf_t c_tdist;
     fastf_t d1, d2;
@@ -310,8 +300,8 @@ draw_ticks(struct mged_state *s, struct bsg_adc_state *adc, fastf_t angle)
 void
 adcursor(struct mged_state *s)
 {
-    struct bsg_adc_state adc_record;
-    struct bsg_adc_state *adc = &adc_record;
+    struct rt_view_adc_state adc_record;
+    struct rt_view_adc_state *adc = &adc_record;
     fastf_t x1, Y1;	/* not "y1", due to conflict with math lib */
     fastf_t x2, y2;
     fastf_t x3, y3;
@@ -399,34 +389,19 @@ adcursor(struct mged_state *s)
 
 
 static void
-mged_adc_reset(struct mged_state *s, struct bsg_adc_state *adc)
+mged_adc_reset(struct mged_state *s, struct rt_view_adc_state *adc)
 {
+    mat_t model2view;
     mat_t view2model;
 
-    adc->dv_x = adc->dv_y = 0;
-    adc->dv_a1 = adc->dv_a2 = 0;
-    adc->dv_dist = 0;
-
-    VSETALL(adc->pos_view, 0.0);
+    rt_view_model2view_from_bsg(model2view, view_state->vs_gvp);
     rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
-    MAT4X3PNT(adc->pos_model, view2model, adc->pos_view);
-    adc->dst = (adc->dv_dist * RT_INV_VIEW + 1.0) * M_SQRT1_2;
-    adc->a1 = adc->a2 = 45.0;
-    adc_view_To_adc_grid(s, adc);
-
-    VSETALL(adc->anchor_pt_a1, 0.0);
-    VSETALL(adc->anchor_pt_a2, 0.0);
-    VSETALL(adc->anchor_pt_dst, 0.0);
-
-    adc->anchor_pos = 0;
-    adc->anchor_a1 = 0;
-    adc->anchor_a2 = 0;
-    adc->anchor_dst = 0;
+    rt_view_adc_reset(adc, view2model, model2view);
 }
 
 
 static void
-adc_print_vars(struct mged_state *s, struct bsg_adc_state *adc)
+adc_print_vars(struct mged_state *s, struct rt_view_adc_state *adc)
 {
     struct bu_vls vls = BU_VLS_INIT_ZERO;
     fastf_t view_local_scale = adc_view_local_scale(s);
@@ -480,8 +455,8 @@ f_adc (
     struct bu_vls vls = BU_VLS_INIT_ZERO;
     const char *parameter;
     const char **argp = argv;
-    struct bsg_adc_state adc_record;
-    struct bsg_adc_state *adc = &adc_record;
+    struct rt_view_adc_state adc_record;
+    struct rt_view_adc_state *adc = &adc_record;
     point_t user_pt;		/* Value(s) provided by user */
     point_t scaled_pos;
     fastf_t view_local_scale;

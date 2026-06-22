@@ -69,6 +69,7 @@ extern struct fb qtgl_interface;
 
 #include <QApplication>
 #include <QtGlobal>
+#include "qtcad/QgLegacyViewBsg.h"
 #include "qtglwin.h"
 
 struct qtglinfo {
@@ -535,7 +536,7 @@ fb_qtgl_open(struct fb *ifp, const char *UNUSED(file), int width, int height)
 	ifp->i->pp = NULL;
 	return -1;
     }
-    struct bsg_view *canvas_view = canvas->view();
+    struct bsg_view *canvas_view = qg_legacy_view_to_bsg(canvas->view());
     if (!canvas_view) {
 	dm_close(dmp);
 	qt_destroy(qi);

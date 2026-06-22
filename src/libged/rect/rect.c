@@ -30,7 +30,6 @@
 
 
 #include "vmath.h"
-#include "bsg/view_state.h"
 #include "rt/view_legacy_bsg.h"
 
 #include "../ged_private.h"
@@ -56,7 +55,7 @@ rect_usage(struct ged *gedp, const char *argv0)
 
 
 static void
-rect_vls_print(struct ged *gedp, const struct bsg_interactive_rect_state *rect)
+rect_vls_print(struct ged *gedp, const struct rt_view_interactive_rect_state *rect)
 {
     bu_vls_printf(gedp->ged_result_str, "bg = %d %d %d\n",
 		  rect->bg[0],
@@ -86,7 +85,7 @@ rect_vls_print(struct ged *gedp, const struct bsg_interactive_rect_state *rect)
  * position and dimensions in normalized view coordinates.
  */
 static void
-rect_image2view(struct bsg_interactive_rect_state *grsp)
+rect_image2view(struct rt_view_interactive_rect_state *grsp)
 {
     grsp->x = (grsp->pos[X] / (fastf_t)grsp->cdim[X] - 0.5) * 2.0;
     grsp->y = ((0.5 - (grsp->cdim[Y] - grsp->pos[Y]) / (fastf_t)grsp->cdim[Y]) / grsp->aspect * 2.0);
@@ -99,7 +98,7 @@ rect_image2view(struct bsg_interactive_rect_state *grsp)
  * Adjust the rubber band rectangle to have the same aspect ratio as the window.
  */
 static void
-rect_adjust_for_zoom(struct bsg_interactive_rect_state *grsp)
+rect_adjust_for_zoom(struct rt_view_interactive_rect_state *grsp)
 {
     fastf_t width, height;
 
@@ -128,7 +127,7 @@ rect_adjust_for_zoom(struct bsg_interactive_rect_state *grsp)
 
 
 static int
-rect_rt(struct ged *gedp, const struct bsg_interactive_rect_state *rect, int port)
+rect_rt(struct ged *gedp, const struct rt_view_interactive_rect_state *rect, int port)
 {
     int xmin, xmax;
     int ymin, ymax;
@@ -211,7 +210,7 @@ rect_rt(struct ged *gedp, const struct bsg_interactive_rect_state *rect, int por
 
 
 static int
-rect_zoom(struct ged *gedp, struct bsg_interactive_rect_state *rect)
+rect_zoom(struct ged *gedp, struct rt_view_interactive_rect_state *rect)
 {
     fastf_t width, height;
     fastf_t sf;
@@ -332,8 +331,8 @@ ged_rect_core(struct ged *gedp,
 	user_pt[i] = scan;
     }
 
-    struct bsg_interactive_rect_state rect;
-    if (!rt_view_interactive_rect_from_bsg(&rect, gedp->ged_gvp))
+    struct rt_view_interactive_rect_state rect;
+    if (!rt_view_interactive_rect_state_from_bsg(&rect, gedp->ged_gvp))
 	return BRLCAD_ERROR;
 
     if (BU_STR_EQUAL(parameter, "draw")) {
@@ -347,7 +346,7 @@ ged_rect_core(struct ged *gedp,
 		rect.draw = 1;
 	    else
 		rect.draw = 0;
-	    rt_view_interactive_rect_set_bsg(gedp->ged_gvp, &rect);
+	    rt_view_interactive_rect_state_set_bsg(gedp->ged_gvp, &rect);
 
 	    return BRLCAD_OK;
 	}
@@ -368,7 +367,7 @@ ged_rect_core(struct ged *gedp,
 	    rect.aspect = (fastf_t)rect.cdim[X] / rect.cdim[Y];
 
 	    rect_image2view(&rect);
-	    rt_view_interactive_rect_set_bsg(gedp->ged_gvp, &rect);
+	    rt_view_interactive_rect_state_set_bsg(gedp->ged_gvp, &rect);
 
 	    return BRLCAD_OK;
 	}
@@ -388,7 +387,7 @@ ged_rect_core(struct ged *gedp,
 	    rect.dim[Y] = user_pt[Y];
 
 	    rect_image2view(&rect);
-	    rt_view_interactive_rect_set_bsg(gedp->ged_gvp, &rect);
+	    rt_view_interactive_rect_state_set_bsg(gedp->ged_gvp, &rect);
 
 	    return BRLCAD_OK;
 	}
@@ -408,7 +407,7 @@ ged_rect_core(struct ged *gedp,
 	    rect.pos[Y] = user_pt[Y];
 
 	    rect_image2view(&rect);
-	    rt_view_interactive_rect_set_bsg(gedp->ged_gvp, &rect);
+	    rt_view_interactive_rect_state_set_bsg(gedp->ged_gvp, &rect);
 
 	    return BRLCAD_OK;
 	}
@@ -428,7 +427,7 @@ ged_rect_core(struct ged *gedp,
 	    rect.bg[0] = (int)user_pt[X];
 	    rect.bg[1] = (int)user_pt[Y];
 	    rect.bg[2] = (int)user_pt[Z];
-	    rt_view_interactive_rect_set_bsg(gedp->ged_gvp, &rect);
+	    rt_view_interactive_rect_state_set_bsg(gedp->ged_gvp, &rect);
 
 	    return BRLCAD_OK;
 	}
@@ -448,7 +447,7 @@ ged_rect_core(struct ged *gedp,
 	    rect.color[0] = (int)user_pt[X];
 	    rect.color[1] = (int)user_pt[Y];
 	    rect.color[2] = (int)user_pt[Z];
-	    rt_view_interactive_rect_set_bsg(gedp->ged_gvp, &rect);
+	    rt_view_interactive_rect_state_set_bsg(gedp->ged_gvp, &rect);
 
 	    return BRLCAD_OK;
 	}
@@ -468,7 +467,7 @@ ged_rect_core(struct ged *gedp,
 		rect.line_style = 0;
 	    else
 		rect.line_style = 1;
-	    rt_view_interactive_rect_set_bsg(gedp->ged_gvp, &rect);
+	    rt_view_interactive_rect_state_set_bsg(gedp->ged_gvp, &rect);
 
 	    return BRLCAD_OK;
 	}
@@ -488,7 +487,7 @@ ged_rect_core(struct ged *gedp,
 		rect.line_width = 0;
 	    else
 		rect.line_width = i;
-	    rt_view_interactive_rect_set_bsg(gedp->ged_gvp, &rect);
+	    rt_view_interactive_rect_state_set_bsg(gedp->ged_gvp, &rect);
 
 	    return BRLCAD_OK;
 	}
@@ -509,7 +508,7 @@ ged_rect_core(struct ged *gedp,
 	if (argc == 0) {
 	    int ret = rect_zoom(gedp, &rect);
 	    if (ret == BRLCAD_OK)
-		rt_view_interactive_rect_set_bsg(gedp->ged_gvp, &rect);
+		rt_view_interactive_rect_state_set_bsg(gedp->ged_gvp, &rect);
 	    return ret;
 	}
 

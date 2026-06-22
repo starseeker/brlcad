@@ -36,15 +36,17 @@
 #include "bu/file.h"
 #include "bu/log.h"
 #include "bu/vls.h"
+#include "dm/fbserv.h"
 #include "dm.h"
 #include "ged/bsg_ged_draw.h"
 #include "ged/db_index.h"
 #include "ged/selection_state.h"
-#include "rt/view_legacy_bsg.h"
 #include "qtcad/QgGeomImport.h"
+#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgObolDrawSync.h"
 #include "qtcad/QgObolOverlaySync.h"
 #include "qtcad/QgObolSelectionSync.h"
+#include "qtcad/QgObolViewSync.h"
 #include "qtcad/QgPluginCommands.h"
 #include "qtcad/QgPluginInterfaces.h"
 #include "qtcad/QgPluginManager.h"
@@ -68,7 +70,7 @@ qged_line_layer_overlay_handler(struct ged *gedp,
     if (!display)
 	return 0;
 
-    if (gedp && gedp->ged_gvp && display->view() != gedp->ged_gvp)
+    if (!qg_obol_display_accepts_ged_active_view(gedp, display))
 	return 0;
 
     return qg_obol_sync_line_layer_overlay(gedp, name, builder, display);
@@ -87,7 +89,7 @@ qged_hud_label_overlay_handler(struct ged *gedp,
     if (!display)
 	return 0;
 
-    if (gedp && gedp->ged_gvp && display->view() != gedp->ged_gvp)
+    if (!qg_obol_display_accepts_ged_active_view(gedp, display))
 	return 0;
 
     return qg_obol_sync_hud_label_overlay(gedp, label, display);
@@ -106,13 +108,26 @@ qged_obol_draw_observer(struct ged *gedp,
     QgView *display = a->w->CurrentDisplay();
     if (!display)
 	return;
-    if (txn && txn->view && display->view() != txn->view)
+    if (!qg_obol_display_accepts_draw_transaction_view(txn, display))
 	return;
-    if ((!txn || !txn->view) && gedp && gedp->ged_gvp &&
-	    display->view() != gedp->ged_gvp)
+    if ((!txn || !txn->view) &&
+	    !qg_obol_display_accepts_ged_active_view(gedp, display))
 	return;
 
     (void)qg_obol_sync_draw_transaction(gedp, txn, result, display);
+}
+
+static qg_legacy_view *
+qged_current_view(QgEdMainWindow *w)
+{
+    QgView *display = w ? w->CurrentDisplay() : NULL;
+    return display ? display->view() : NULL;
+}
+
+static qg_legacy_view *
+qged_session_active_view(QgModel *mdl)
+{
+    return (mdl && mdl->session()) ? mdl->session()->activeView() : NULL;
 }
 
 int
@@ -282,13 +297,6 @@ QgEdApp::QgEdApp(int &argc, char *argv[], int swrast_mode, int quad_mode) :QAppl
     m_plugin_context.gedAccessor = [this]() -> struct ged * {
 	return mdl ? mdl->ged() : GED_NULL;
     };
-    m_plugin_context.viewAccessor = [this]() -> struct bsg_view * {
-	/* Prefer the main window's current display when it exists; before window
-	 * construction falls back to the model's current ged view pointer. */
-	if (w)
-	    return w->CurrentView();
-	return (mdl && mdl->ged()) ? mdl->ged()->ged_gvp : NULL;
-    };
     m_plugin_context.viewWidgetAccessor = [this]() -> QgView * {
 	return w ? w->CurrentDisplay() : NULL;
     };
@@ -348,7 +356,7 @@ QgEdApp::QgEdApp(int &argc, char *argv[], int swrast_mode, int quad_mode) :QAppl
     struct ged *gedp = mdl->ged();
 
     // Let GED know to use the QgQuadView view as its current view
-    gedp->ged_gvp = w->CurrentView();
+    mdl->session()->setActiveView(qged_current_view(w));
     ged_diagnostic_line_layer_handler_set(gedp,
 	    &qged_line_layer_overlay_handler, (void *)this);
     ged_diagnostic_hud_label_handler_set(gedp,
@@ -495,7 +503,8 @@ void
 QgEdApp::do_quad_view_change(QgView *cv)
 {
     QTCAD_SLOT("QgEdApp::do_quad_view_change", 1);
-    mdl->ged()->ged_gvp = cv->view();
+    if (mdl && mdl->session())
+	mdl->session()->setActiveView(cv ? cv->view() : NULL);
     if (w)
 	w->setActiveView(cv);
     if (m_plugin_notifier)
@@ -602,8 +611,7 @@ QgEdApp::run_cmd(struct bu_vls *msg, int argc, const char **argv)
 
     /* Set the local unit conversions */
     if (gedp->dbip) {
-	struct bsg_view *v = w->CurrentView();
-	rt_view_unit_conversion_set_bsg(v,
+	qg_legacy_view_unit_conversion_set(qged_session_active_view(mdl),
 	    gedp->dbip->dbi_local2base,
 	    gedp->dbip->dbi_base2local);
     }
@@ -856,10 +864,8 @@ QgEdApp::element_selected(QgToolPaletteElement *el)
 
     if (el->use_event_filter)
 	curr_view->add_event_filter(controls);
-    if (curr_view->view()) {
-	rt_view_dimensions_set_bsg(curr_view->view(),
-		curr_view->width(), curr_view->height());
-    }
+    qg_legacy_view_dimensions_set(qged_session_active_view(mdl),
+	    curr_view->width(), curr_view->height());
 }
 
 void

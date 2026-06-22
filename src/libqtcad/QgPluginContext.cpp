@@ -20,7 +20,9 @@
 
 #include "common.h"
 
+#include "qtcad/QgModel.h"
 #include "qtcad/QgPluginContext.h"
+#include "qtcad/QgView.h"
 
 QgPluginNotifier::QgPluginNotifier(QObject *parent)
     : QObject(parent)
@@ -28,6 +30,16 @@ QgPluginNotifier::QgPluginNotifier(QObject *parent)
 }
 
 QgPluginNotifier::~QgPluginNotifier() = default;
+
+qg_legacy_view *
+QgPluginContext::activeView() const
+{
+    QgView *view = this->getViewWidget();
+    if (view)
+	return view->view();
+    return (this->model && this->model->session()) ?
+	this->model->session()->activeView() : nullptr;
+}
 
 /*
  * Local Variables:

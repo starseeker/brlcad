@@ -39,11 +39,19 @@
 #include "bu/vls.h"
 #include "bg/aabb_ray.h"
 #include "bg/plane.h"
+#include "ged.h"
 #include "ged/selection_state.h"
 
+#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgSelectFilter.h"
 #include "qtcad/QgView.h"
 #include "./CADViewSelector.h"
+
+static qg_legacy_view *
+qged_selector_view(const QgPluginContext *ctx)
+{
+    return ctx ? ctx->activeView() : nullptr;
+}
 
 static QgView *
 qged_view_from_event_object(QObject *object)
@@ -325,7 +333,7 @@ void
 CADViewSelector::do_draw_selections()
 {
     struct ged *gedp = m_ctx ? m_ctx->getGed() : nullptr;
-    if (!gedp || !gedp->ged_gvp)
+    if (!gedp || !qged_selector_view(m_ctx))
 	return;
 
     std::vector<std::string> paths = qged_selection_paths(gedp);
@@ -351,7 +359,7 @@ void
 CADViewSelector::do_erase_selections()
 {
     struct ged *gedp = m_ctx ? m_ctx->getGed() : nullptr;
-    if (!gedp || !gedp->ged_gvp)
+    if (!gedp || !qged_selector_view(m_ctx))
 	return;
 
     std::vector<std::string> paths = qged_selection_paths(gedp);
@@ -380,9 +388,14 @@ CADViewSelector::eventFilter(QObject *o, QEvent *e)
 	return false;
 
     struct ged *gedp = m_ctx ? m_ctx->getGed() : nullptr;
-    if (!gedp || !gedp->ged_gvp)
+    if (!gedp)
 	return false;
-    struct bsg_view *v = gedp->ged_gvp;
+    QgView *display = qged_view_from_event_object(o);
+    if (!display && m_ctx)
+	display = m_ctx->getViewWidget();
+    qg_legacy_view *v = display ? display->view() : qged_selector_view(m_ctx);
+    if (!v)
+	return false;
 
     // Set the libqtcad filter based on current options
     cf = pf;
@@ -394,12 +407,11 @@ CADViewSelector::eventFilter(QObject *o, QEvent *e)
     }
 
     // Inform the filter of the current settings and view
-    cf->set_view(v);
     cf->first_only = select_all_depth_ckbx->isChecked() ? false : true;
 
     // TODO - create and/or connect the signals and slots so cf can
     // properly trigger updating and drawing
-    cf->set_view_widget(qged_view_from_event_object(o));
+    cf->set_view_widget(display);
     bool ret = cf->eventFilter(o, e);
     if (!ret)
 	return false;

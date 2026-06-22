@@ -194,7 +194,7 @@ to_extract_contours_av(Tcl_Interp *interp, struct ged *gedp, struct bsg_view *gd
 	point_ac = ac;
 
 	/* point_ac includes a hole flag */
-	if (mode != BSG_POLY_CONTOUR_MODE && point_ac < 4) {
+	if (mode != TCLCAD_POLY_CONTOUR_MODE && point_ac < 4) {
 	    bu_vls_printf(gedp->ged_result_str, "There must be at least 3 points per contour");
 	    Tcl_Free((char *)point_av);
 	    return BRLCAD_ERROR;
@@ -1325,13 +1325,13 @@ to_poly_circ_mode_func(Tcl_Interp *interp,
     }
 
     rt_view_previous_mouse_set_bsg(gdvp, x, y);
-    gdvp->gv_tcl->gv_polygon_mode = BSG_POLY_CIRCLE_MODE;
+    gdvp->gv_tcl->gv_polygon_mode = TCLCAD_POLY_CIRCLE_MODE;
 
     tclcad_polygons_sync_dm_dimensions(gdvp);
     rt_view_screen_to_view_from_bsg(&fx, &fy, gdvp, x, y);
     VSET(v_pt, fx, fy, gdvp->gv_tcl->gv_data_vZ);
     {
-	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
+	unsigned long long snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
 	if (snap_kinds)
 	    rt_view_snap_point_2d_bsg(gedp->ged_gvp, &v_pt[X], &v_pt[Y], snap_kinds);
     }
@@ -1391,13 +1391,13 @@ to_poly_cont_build_func(Tcl_Interp *interp,
     }
 
     rt_view_previous_mouse_set_bsg(gdvp, x, y);
-    gdvp->gv_tcl->gv_polygon_mode = BSG_POLY_CONTOUR_MODE;
+    gdvp->gv_tcl->gv_polygon_mode = TCLCAD_POLY_CONTOUR_MODE;
 
     tclcad_polygons_sync_dm_dimensions(gdvp);
     rt_view_screen_to_view_from_bsg(&fx, &fy, gdvp, x, y);
     VSET(v_pt, fx, fy, gdvp->gv_tcl->gv_data_vZ);
     {
-	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
+	unsigned long long snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
 	if (snap_kinds)
 	    rt_view_snap_point_2d_bsg(gedp->ged_gvp, &v_pt[X], &v_pt[Y], snap_kinds);
     }
@@ -1754,7 +1754,7 @@ to_poly_ell_mode_func(Tcl_Interp *interp,
     rt_view_screen_to_view_from_bsg(&fx, &fy, gdvp, x, y);
     VSET(v_pt, fx, fy, gdvp->gv_tcl->gv_data_vZ);
     {
-	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
+	unsigned long long snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
 	if (snap_kinds)
 	    rt_view_snap_point_2d_bsg(gedp->ged_gvp, &v_pt[X], &v_pt[Y], snap_kinds);
     }
@@ -1914,7 +1914,7 @@ to_poly_rect_mode_func(Tcl_Interp *interp,
     rt_view_screen_to_view_from_bsg(&fx, &fy, gdvp, x, y);
     VSET(v_pt, fx, fy, gdvp->gv_tcl->gv_data_vZ);
     {
-	bsg_snap_kind_mask snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
+	unsigned long long snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
 	if (snap_kinds)
 	    rt_view_snap_point_2d_bsg(gedp->ged_gvp, &v_pt[X], &v_pt[Y], snap_kinds);
     }

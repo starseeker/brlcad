@@ -46,7 +46,6 @@
 #include "bu/time.h"
 
 #include "ged.h"
-#include "ged/bsg_ged_draw.h"
 #include "ged/event_txn.h"
 #include "qtcad/QgModel.h"
 #include "wdb.h"
@@ -181,9 +180,8 @@ main(int argc, char *argv[])
     QAbstractItemModelTester tester(amodel, QAbstractItemModelTester::FailureReportingMode::Fatal);
 
     struct ged *gedp = model.ged();
-    TCHECK(gedp != nullptr && gedp->ged_gvp != nullptr,
-	    "QgModel exposes a GED with a current view");
-    if (gedp && gedp->ged_gvp) {
+    TCHECK(gedp != nullptr, "QgModel exposes a GED context");
+    if (gedp) {
 	QModelIndex all_idx = find_top_level_item(amodel, "all.g");
 	TCHECK(all_idx.isValid(), "QgModel can resolve top-level all.g item");
 	QSignalSpy drawn_spy(amodel, &QAbstractItemModel::dataChanged);
@@ -191,7 +189,7 @@ main(int argc, char *argv[])
 	int before_draw_signals = drawn_spy.count();
 	TCHECK(model.draw("all.g") == BRLCAD_OK,
 		"QgModel draw action succeeds through retained draw state");
-	TCHECK(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", -1) == 1,
+	TCHECK(model.drawnPathState("all.g") == 1,
 		"QgModel draw action updates canonical drawn state");
 	TCHECK(drawn_spy.count() > before_draw_signals,
 		"QgModel draw action emits dataChanged for drawn role");
@@ -201,7 +199,7 @@ main(int argc, char *argv[])
 	int before_erase_signals = drawn_spy.count();
 	TCHECK(model.erase("all.g") == BRLCAD_OK,
 		"QgModel erase action succeeds through retained draw state");
-	TCHECK(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", -1) == 0,
+	TCHECK(model.drawnPathState("all.g") == 0,
 		"QgModel erase action updates canonical drawn state");
 	TCHECK(drawn_spy.count() > before_erase_signals,
 		"QgModel erase action emits dataChanged for drawn role");
@@ -230,9 +228,9 @@ main(int argc, char *argv[])
 	model.resetNotificationStats();
 	TCHECK(model.draw("all.g/box.r") == BRLCAD_OK,
 		"QgModel child-path draw succeeds through retained draw state");
-	TCHECK(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g/box.r", -1) == 1,
+	TCHECK(model.drawnPathState("all.g/box.r") == 1,
 		"QgModel child-path draw updates canonical child drawn state");
-	TCHECK(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", -1) == 2,
+	TCHECK(model.drawnPathState("all.g") == 2,
 		"QgModel child-path draw updates canonical parent partial drawn state");
 	TCHECK(drawn_spy.count() > before_child_draw_signals,
 		"QgModel child-path draw emits dataChanged for drawn role");
@@ -252,7 +250,7 @@ main(int argc, char *argv[])
 		    "QgModel DrawnDisplayRole reads canonical drawn state for child path");
 	TCHECK(model.erase("all.g/box.r") == BRLCAD_OK,
 		"QgModel child-path erase succeeds through retained draw state");
-	TCHECK(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g/box.r", -1) == 0,
+	TCHECK(model.drawnPathState("all.g/box.r") == 0,
 		"QgModel child-path erase clears canonical child drawn state");
 	TCHECK(all_persistent.isValid() && box_persistent.isValid(),
 		"QgModel persistent indexes survive child draw/erase data updates");
@@ -260,7 +258,7 @@ main(int argc, char *argv[])
 	int before_run_draw_signals = drawn_spy.count();
 	TCHECK(model.run_cmd(gedp->ged_result_str, 2, run_draw_av) == BRLCAD_OK,
 		"QgModel run_cmd draw succeeds");
-	TCHECK(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", -1) == 1,
+	TCHECK(model.drawnPathState("all.g") == 1,
 		"QgModel run_cmd draw updates canonical drawn state");
 	TCHECK(drawn_spy.count() > before_run_draw_signals,
 		"QgModel run_cmd draw emits drawn role dataChanged");
@@ -271,7 +269,7 @@ main(int argc, char *argv[])
 	int before_redraw_signals = drawn_spy.count();
 	TCHECK(model.run_cmd(gedp->ged_result_str, 2, redraw_av) == BRLCAD_OK,
 		"QgModel run_cmd redraw succeeds");
-	TCHECK(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", -1) == 1,
+	TCHECK(model.drawnPathState("all.g") == 1,
 		"QgModel run_cmd redraw preserves canonical drawn state");
 	TCHECK(drawn_spy.count() > before_redraw_signals,
 		"QgModel run_cmd redraw emits drawn role dataChanged");
@@ -282,7 +280,7 @@ main(int argc, char *argv[])
 	int before_zap_signals = drawn_spy.count();
 	TCHECK(model.run_cmd(gedp->ged_result_str, 1, zap_av) == BRLCAD_OK,
 		"QgModel run_cmd zap succeeds");
-	TCHECK(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", -1) == 0,
+	TCHECK(model.drawnPathState("all.g") == 0,
 		"QgModel run_cmd zap clears canonical drawn state");
 	TCHECK(drawn_spy.count() > before_zap_signals,
 		"QgModel run_cmd zap emits drawn role dataChanged");
@@ -298,7 +296,7 @@ main(int argc, char *argv[])
 	int before_run_erase_signals = drawn_spy.count();
 	TCHECK(model.run_cmd(gedp->ged_result_str, 2, run_erase_av) == BRLCAD_OK,
 		"QgModel run_cmd erase succeeds");
-	TCHECK(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", -1) == 0,
+	TCHECK(model.drawnPathState("all.g") == 0,
 		"QgModel run_cmd erase updates canonical drawn state");
 	TCHECK(drawn_spy.count() > before_run_erase_signals,
 		"QgModel run_cmd erase emits drawn role dataChanged");
@@ -1974,8 +1972,7 @@ main(int argc, char *argv[])
 		    "event bridge tracks expanded all.g/platform.r item path before remove");
 	    TCHECK(event_model.draw("all.g") == BRLCAD_OK,
 		    "event bridge draw all.g succeeds before direct remove");
-	    TCHECK(event_gedp && ged_draw_path_state(event_gedp,
-		    event_gedp->ged_gvp, "all.g/platform.r", -1) == 1,
+	    TCHECK(event_model.drawnPathState("all.g/platform.r") == 1,
 		    "event bridge canonical draw state includes platform.r before remove");
 	    const char *remove_av[4] = {"remove", "all.g", "platform.r", NULL};
 	    int before_remove_db_signals = db_spy.count();
@@ -2009,11 +2006,9 @@ main(int argc, char *argv[])
 		    "event bridge retires removed all.g/platform.r item path after direct remove");
 	    TCHECK(find_top_level_item(event_amodel, "platform.r").isValid(),
 		    "event bridge keeps unreferenced platform.r object as a top-level item");
-	    TCHECK(event_gedp && ged_draw_path_state(event_gedp,
-		    event_gedp->ged_gvp, "all.g/platform.r", -1) == 0,
+	    TCHECK(event_model.drawnPathState("all.g/platform.r") == 0,
 		    "event bridge canonical draw state erases removed platform.r path");
-	    TCHECK(event_gedp && ged_draw_path_state(event_gedp,
-		    event_gedp->ged_gvp, "all.g", -1) == 1,
+	    TCHECK(event_model.drawnPathState("all.g") == 1,
 		    "event bridge canonical draw state keeps parent all.g drawn after remove redraw");
 	    if (all_after_remove_idx.isValid())
 		TCHECK(event_amodel->data(all_after_remove_idx, DrawnDisplayRole).toInt() == 1,
@@ -2024,8 +2019,7 @@ main(int argc, char *argv[])
 		    "event bridge exposes unreferenced platform.r top-level item before kill");
 	    TCHECK(event_model.draw("platform.r") == BRLCAD_OK,
 		    "event bridge draw platform.r succeeds before direct kill");
-	    TCHECK(event_gedp && ged_draw_path_state(event_gedp,
-		    event_gedp->ged_gvp, "platform.r", -1) == 1,
+	    TCHECK(event_model.drawnPathState("platform.r") == 1,
 		    "event bridge canonical draw state includes platform.r before kill");
 	    if (platform_top_idx.isValid())
 		TCHECK(event_amodel->data(platform_top_idx, DrawnDisplayRole).toInt() == 1,
@@ -2051,8 +2045,7 @@ main(int argc, char *argv[])
 		    "event bridge model removes killed platform.r top-level item");
 	    TCHECK(!model_has_item_path(&event_model, "platform.r"),
 		    "event bridge retires killed platform.r item path after direct kill");
-	    TCHECK(event_gedp && ged_draw_path_state(event_gedp,
-		    event_gedp->ged_gvp, "platform.r", -1) == 0,
+	    TCHECK(event_model.drawnPathState("platform.r") == 0,
 		    "event bridge canonical draw state erases killed platform.r path");
 
 	    const char *move_av[4] = {"move", "all.g", "all_qg_event.g", NULL};

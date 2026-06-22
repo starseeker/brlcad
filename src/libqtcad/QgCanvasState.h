@@ -45,6 +45,7 @@
 #include "brlobol/grid.h"
 #include "brlobol/view_controller.h"
 #include "QgObolContextManager.h"
+#include "qtcad/QgLegacyViewBsg.h"
 
 #include <Inventor/SbMatrix.h>
 #include <Inventor/SbRotation.h>
@@ -60,7 +61,6 @@
 extern "C" {
 #include "bu/ptbl.h"
 #include "bu/malloc.h"
-#include "bsg/adc.h"
 #include "rt/view_legacy_bsg.h"
 #define DM_WITH_RT
 #include "dm.h"
@@ -76,14 +76,15 @@ extern "C" {
  *
  * Ownership summary
  * ─────────────────
- * local_v  – Allocated by BU_GET in the canvas constructor; freed by BU_PUT
- *            in the canvas destructor.  The canvas owns it unconditionally.
+ * local_v  – Opaque handle for the view allocated by BU_GET in the canvas
+ *            constructor; freed by BU_PUT in the canvas destructor.  The
+ *            canvas owns it unconditionally.
  *
  * v        – Normally points to local_v (the widget-owned view).  When
  *            QgCanvasBase::set_view() is called with a non-null external
- *            view, v points to that caller-owned bsg_view instead.  Passing
- *            nullptr to set_view() reverts v back to local_v.  The canvas
- *            never frees v — it only frees local_v.
+ *            view, v points to that caller-owned qg_legacy_view instead.
+ *            Passing nullptr to set_view() reverts v back to local_v.  The
+ *            canvas never frees v — it only frees local_v.
  *
  * dmp      – Opened lazily in the first paint event via dm_open(); closed
  *            by dm_close() in the canvas destructor.  The canvas owns it.
@@ -102,13 +103,13 @@ extern "C" {
  */
 struct QgCanvasState {
 	/* ---- view / dm / fb plumbing ---- */
-	struct bsg_view    *v = nullptr;       /* active view: normally == local_v,
+	qg_legacy_view *v = nullptr;           /* active view: normally == local_v,
 	                                       set_view() can redirect to an
-	                                       external caller-owned bsg_view       */
+	                                       external caller-owned legacy view     */
 	struct dm       *dmp = nullptr;     /* libdm display manager (canvas owns) */
 	struct fb       *ifp = nullptr;     /* framebuffer (see ownership note)  */
 	struct bu_ptbl  *dm_set = nullptr;  /* shared DM table (caller owns)     */
-	struct bsg_view    *local_v = nullptr; /* widget-owned view (canvas owns)   */
+	qg_legacy_view *local_v = nullptr;     /* widget-owned view (canvas owns)   */
 	BRLObolViewController *obol = nullptr; /* Obol-canonical view controller */
 
 	/* ---- hash tracking for incremental updates ---- */
@@ -147,6 +148,20 @@ qgcanvas_render_size(const QWidget *w)
 	qreal dpr = w->devicePixelRatioF();
 	return QSize(qMax(1, static_cast<int>(std::ceil(w->width()  * dpr))),
 	             qMax(1, static_cast<int>(std::ceil(w->height() * dpr))));
+}
+
+/** Transitional adapter for canvas helpers that still call legacy RT/DM APIs. */
+static inline struct bsg_view *
+qgcanvas_bsg_view(QgCanvasState &s)
+{
+	return qg_legacy_view_to_bsg(s.v);
+}
+
+/** Transitional adapter for callers that need the canvas-owned view. */
+static inline struct bsg_view *
+qgcanvas_bsg_local_view(QgCanvasState &s)
+{
+	return qg_legacy_view_to_bsg(s.local_v);
 }
 
 /** Keep the Obol view controller viewport aligned with the Qt canvas. */
@@ -194,7 +209,8 @@ qgcanvas_request_obol_render_if_idle(QgCanvasState &s, const char *reason)
 static inline void
 qgcanvas_sync_obol_camera(QgCanvasState &s)
 {
-	if (!s.obol || !s.v || !s.obol->getCamera())
+	struct bsg_view *bv = qgcanvas_bsg_view(s);
+	if (!s.obol || !bv || !s.obol->getCamera())
 		return;
 
 	SoCamera *camera = s.obol->getCamera();
@@ -202,7 +218,7 @@ qgcanvas_sync_obol_camera(QgCanvasState &s)
 	mat_t orientation_mat;
 	MAT_IDN(orientation_mat);
 	mat_t view_rotation;
-	rt_view_rotation_from_bsg(view_rotation, s.v);
+	rt_view_rotation_from_bsg(view_rotation, bv);
 	orientation_mat[0] = view_rotation[0];
 	orientation_mat[1] = view_rotation[4];
 	orientation_mat[2] = view_rotation[8];
@@ -215,7 +231,7 @@ qgcanvas_sync_obol_camera(QgCanvasState &s)
 
 	vect_t center;
 	mat_t view_center;
-	rt_view_center_from_bsg(view_center, s.v);
+	rt_view_center_from_bsg(view_center, bv);
 	MAT_DELTAS_GET_NEG(center, view_center);
 
 	vect_t view_z;
@@ -223,11 +239,11 @@ qgcanvas_sync_obol_camera(QgCanvasState &s)
 	view_z[Y] = orientation_mat[6];
 	view_z[Z] = orientation_mat[10];
 
-	double scale = rt_view_scale_from_bsg(s.v);
+	double scale = rt_view_scale_from_bsg(bv);
 	if (scale <= SMALL_FASTF)
 		scale = 1.0;
 
-	double height_angle = rt_view_perspective_from_bsg(s.v) * DEG2RAD;
+	double height_angle = rt_view_perspective_from_bsg(bv) * DEG2RAD;
 	if (height_angle <= SMALL_FASTF)
 		height_angle = 2.0 * std::atan(0.1);
 	if (height_angle < 0.001)
@@ -385,7 +401,7 @@ static inline void
 qgcanvas_sync_obol_axes(QgCanvasState &s,
 	SoGroup *group,
 	const char *overlayId,
-	const struct bsg_axes &state)
+	const struct rt_view_axes_state &state)
 {
 	const int childIndex = qgcanvas_find_obol_axes_child(group, overlayId);
 	if (!state.draw) {
@@ -415,7 +431,7 @@ qgcanvas_sync_obol_axes(QgCanvasState &s,
 static inline void
 qgcanvas_sync_obol_grid(QgCanvasState &s,
 	SoGroup *group,
-	const struct bsg_grid_state &state)
+	const struct rt_view_grid_state &state)
 {
 	const char *overlayId = "faceplate::grid";
 	const int childIndex = qgcanvas_find_obol_grid_child(group, overlayId);
@@ -451,7 +467,7 @@ qgcanvas_sync_obol_grid(QgCanvasState &s,
 static inline void
 qgcanvas_sync_obol_adc(QgCanvasState &s,
 	SoGroup *group,
-	const struct bsg_adc_state &state)
+	const struct rt_view_adc_state &state)
 {
 	const char *overlayId = "faceplate::adc";
 	const int childIndex = qgcanvas_find_obol_adc_child(group, overlayId);
@@ -483,7 +499,8 @@ qgcanvas_sync_obol_adc(QgCanvasState &s,
 static inline void
 qgcanvas_sync_obol_faceplate(QgCanvasState &s)
 {
-	if (!s.obol || !s.v)
+	struct bsg_view *bv = qgcanvas_bsg_view(s);
+	if (!s.obol || !bv)
 		return;
 
 	SoNode *root = s.obol->getSceneRoot();
@@ -491,14 +508,14 @@ qgcanvas_sync_obol_faceplate(QgCanvasState &s)
 		return;
 	SoGroup *group = static_cast<SoGroup *>(root);
 
-	struct bsg_grid_state grid = {};
-	struct bsg_axes modelAxes = {};
-	struct bsg_axes viewAxes = {};
-	struct bsg_adc_state adc = {};
-	(void)rt_view_grid_from_bsg(&grid, s.v);
-	(void)rt_view_model_axes_from_bsg(&modelAxes, s.v);
-	(void)rt_view_view_axes_from_bsg(&viewAxes, s.v);
-	(void)rt_view_adc_from_bsg(&adc, s.v);
+	struct rt_view_grid_state grid = {};
+	struct rt_view_axes_state modelAxes = {};
+	struct rt_view_axes_state viewAxes = {};
+	struct rt_view_adc_state adc = {};
+	(void)rt_view_grid_state_from_bsg(&grid, bv);
+	(void)rt_view_model_axes_state_from_bsg(&modelAxes, bv);
+	(void)rt_view_view_axes_state_from_bsg(&viewAxes, bv);
+	(void)rt_view_adc_state_from_bsg(&adc, bv);
 
 	qgcanvas_sync_obol_grid(s, group, grid);
 	qgcanvas_sync_obol_axes(s, group, "faceplate::model_axes", modelAxes);
@@ -521,20 +538,22 @@ qgcanvas_render_obol_pending(QgCanvasState &s,
 static inline void
 qgcanvas_stash_hashes(QgCanvasState &s)
 {
+	struct bsg_view *bv = qgcanvas_bsg_view(s);
 	s.prev_dhash = s.dmp ? dm_hash(s.dmp) : 0ULL;
-	s.prev_vhash = s.v   ? rt_view_hash_bsg(s.v) : 0ULL;
+	s.prev_vhash = bv ? rt_view_hash_bsg(bv) : 0ULL;
 }
 
 /** Request a semantic view refresh and wake the canvas backend. */
 static inline void
 qgcanvas_request_update(QgCanvasState &s, uint32_t flags)
 {
+	struct bsg_view *bv = qgcanvas_bsg_view(s);
 	uint32_t requested = flags ? flags : RT_VIEW_REFRESH_ALL_BSG;
 	if (requested & RT_VIEW_REFRESH_VIEW_BSG)
 	qgcanvas_sync_obol_camera(s);
 	qgcanvas_sync_obol_faceplate(s);
-	if (s.v)
-		rt_view_refresh_request_bsg(s.v, requested);
+	if (bv)
+		rt_view_refresh_request_bsg(bv, requested);
 	if (s.dmp)
 		dm_set_native_repaint_pending(s.dmp, 1);
 }
@@ -551,12 +570,13 @@ static inline bool
 qgcanvas_diff_hashes_check(QgCanvasState &s)
 {
 	bool ret = false;
+	struct bsg_view *bv = qgcanvas_bsg_view(s);
 	unsigned long long c_dhash = s.dmp ? dm_hash(s.dmp) : 0ULL;
-	unsigned long long c_vhash = s.v   ? rt_view_hash_bsg(s.v) : 0ULL;
+	unsigned long long c_vhash = bv ? rt_view_hash_bsg(bv) : 0ULL;
 
 	if (s.dmp && dm_get_native_repaint_pending(s.dmp)) {
-		if (s.v)
-			rt_view_refresh_request_bsg(s.v, RT_VIEW_REFRESH_FORCE_BSG);
+		if (bv)
+			rt_view_refresh_request_bsg(bv, RT_VIEW_REFRESH_FORCE_BSG);
 		ret = true;
 	}
 
@@ -575,19 +595,20 @@ qgcanvas_diff_hashes_check(QgCanvasState &s)
 static inline void
 qgcanvas_aet(QgCanvasState &s, double a, double e, double t)
 {
-	if (!s.v)
+	struct bsg_view *bv = qgcanvas_bsg_view(s);
+	if (!bv)
 		return;
 	fastf_t aet_v[3];
 	double  aetd[3] = {a, e, t};
 	VMOVE(aet_v, aetd);
-	rt_view_aet_set_bsg(s.v, aet_v);
-	rt_view_update_bsg(s.v);
+	rt_view_aet_set_bsg(bv, aet_v);
+	rt_view_update_bsg(bv);
 	qgcanvas_sync_obol_camera(s);
 }
 
-/** Bind an external bsg_view (or nullptr to revert to the widget-local view). */
+/** Bind an external legacy view (or nullptr to revert to the widget-local view). */
 static inline void
-qgcanvas_set_view(QgCanvasState &s, struct bsg_view *nv)
+qgcanvas_set_view(QgCanvasState &s, qg_legacy_view *nv)
 {
 	if (!nv) {
 		/* Revert to the widget-owned local view. */
@@ -596,13 +617,15 @@ qgcanvas_set_view(QgCanvasState &s, struct bsg_view *nv)
 		return;
 	}
 	s.v = nv;
+	struct bsg_view *bv = qgcanvas_bsg_view(s);
 	if (!s.dmp) {
 		qgcanvas_sync_obol_camera(s);
 		return;
 	}
-	s.v->dmp = s.dmp;
+	bv->dmp = s.dmp;
 	dm_configure_win(s.dmp, 0);
-	rt_view_dimensions_set_bsg(s.v, dm_get_width(s.dmp), dm_get_height(s.dmp));
+	qg_legacy_view_dimensions_set(s.v, dm_get_width(s.dmp),
+		dm_get_height(s.dmp));
 	qgcanvas_sync_obol_camera(s);
 }
 

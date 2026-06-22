@@ -27,13 +27,20 @@
 
 extern "C" {
 #include "bg/polygon.h"
-#include "bsg/polygon.h"
 #include "raytrace.h" // For finalize polygon sketch export functionality (TODO - need to move...)
-#include "rt/view_legacy_bsg.h"
 }
 
+#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgPolyFilter.h"
 #include "qtcad/QgSignalFlags.h"
+#include "qtcad/QgView.h"
+
+static qg_legacy_view *
+qg_poly_filter_view(const QgPolyFilter *filter)
+{
+	QgView *display = filter ? filter->view_widget() : nullptr;
+	return display ? display->view() : nullptr;
+}
 
 static void
 qg_poly_mouse_xy(QMouseEvent *m_e, int *sx, int *sy)
@@ -51,7 +58,7 @@ qg_poly_mouse_xy(QMouseEvent *m_e, int *sx, int *sy)
 }
 
 static void
-qg_poly_screen_point(struct bsg_view *v, QMouseEvent *m_e, point_t point)
+qg_poly_screen_point(qg_legacy_view *v, QMouseEvent *m_e, point_t point)
 {
 	VSETALL(point, 0.0);
 	if (!v || !m_e)
@@ -60,12 +67,12 @@ qg_poly_screen_point(struct bsg_view *v, QMouseEvent *m_e, point_t point)
 	int sx = 0;
 	int sy = 0;
 	qg_poly_mouse_xy(m_e, &sx, &sy);
-	(void)rt_view_screen_point_from_bsg(point, v, (fastf_t)sx, (fastf_t)sy);
+	(void)qg_legacy_view_screen_point_get(v, point, (fastf_t)sx, (fastf_t)sy);
 }
 
 static int
-qg_poly_update_from_event(bsg_polygon_ref ref, struct bsg_view *v,
-	QMouseEvent *m_e, int utype)
+qg_poly_update_from_event(qg_polygon_ref ref, qg_legacy_view *v,
+	QMouseEvent *m_e, qg_polygon_update_mode utype)
 {
 	if (!m_e)
 		return 0;
@@ -73,7 +80,7 @@ qg_poly_update_from_event(bsg_polygon_ref ref, struct bsg_view *v,
 	int sx = 0;
 	int sy = 0;
 	qg_poly_mouse_xy(m_e, &sx, &sy);
-	return bsg_polygon_update_screen_pt(ref, v, sx, sy, utype);
+	return qg_legacy_view_polygon_update_screen_point(ref, v, sx, sy, utype);
 }
 
 bool
@@ -81,9 +88,9 @@ QgPolyFilter::close_polygon()
 {
 	// Close the general polygon - if that's what we're creating,
 	// at this point it will still be open.
-	struct bsg_polygon_record rec;
-	if (bsg_polygon_record_get(polygon, &rec) && rec.first_contour_open) {
-		if (!bsg_polygon_close(polygon)) {
+	qg_polygon_record rec;
+	if (qg_legacy_view_polygon_record_get(polygon, &rec) && rec.first_contour_open) {
+		if (!qg_legacy_view_polygon_close(polygon)) {
 			polygon = {0, 0};
 			return false;
 		}
@@ -99,38 +106,38 @@ QgPolyCreateFilter::eventFilter(QObject *, QEvent *e)
 	if (!m_e)
 		return false;
 
-	struct bsg_view *v = view();
+	qg_legacy_view *v = qg_poly_filter_view(this);
 	if (!v)
 		return false;
 
 	// Handle Left Click
 	if (m_e->type() == QEvent::MouseButtonPress && m_e->buttons().testFlag(Qt::LeftButton)) {
 
-		if (bsg_polygon_ref_is_null(polygon)) {
+		if (qg_legacy_view_polygon_ref_is_null(polygon)) {
 
 			point_t current_point = VINIT_ZERO;
 			qg_poly_screen_point(v, m_e, current_point);
 
-			polygon = bsg_create_view_polygon_ref(v, ptype, &current_point);
-			bsg_polygon_set_view(polygon, v);
-			bsg_polygon_set_visual(polygon, &edge_color, &fill_color, fill_slope_x, fill_slope_y, fill_density, vZ, fill_poly ? 1 : 0);
+			polygon = qg_legacy_view_polygon_create(v, ptype, &current_point);
+			qg_legacy_view_polygon_set_view(polygon, v);
+			qg_legacy_view_polygon_set_visual(polygon, &edge_color, &fill_color, fill_slope_x, fill_slope_y, fill_density, vZ, fill_poly ? 1 : 0);
 
 			// It doesn't get a "proper" name until its finalized
-			bsg_polygon_set_name(polygon, "_tmp_view_polygon");
+			qg_legacy_view_polygon_set_name(polygon, "_tmp_view_polygon");
 
 			emit view_updated(QG_VIEW_REFRESH);
 			return true;
 		}
 
 		// If we don't have a polygon at this point, we're done - subsequent logic assumes it
-		if (bsg_polygon_ref_is_null(polygon))
+		if (qg_legacy_view_polygon_ref_is_null(polygon))
 			return true;
 
 		// If we are in the process of creating a general polygon, after the initial creation
 		// left clicks will append new points
-		struct bsg_polygon_record rec;
-		if (bsg_polygon_record_get(polygon, &rec) && rec.type == BSG_POLYGON_GENERAL) {
-			qg_poly_update_from_event(polygon, v, m_e, BSG_POLYGON_UPDATE_PT_APPEND);
+		qg_polygon_record rec;
+		if (qg_legacy_view_polygon_record_get(polygon, &rec) && rec.type == QG_POLYGON_GENERAL) {
+			qg_poly_update_from_event(polygon, v, m_e, QG_POLYGON_UPDATE_PT_APPEND);
 			emit view_updated(QG_VIEW_REFRESH);
 			return true;
 		}
@@ -142,12 +149,12 @@ QgPolyCreateFilter::eventFilter(QObject *, QEvent *e)
 
 	if (m_e->type() == QEvent::MouseButtonPress && m_e->buttons().testFlag(Qt::RightButton)) {
 		// No-op if we're not in the process of creating a polygon
-		if (bsg_polygon_ref_is_null(polygon))
+		if (qg_legacy_view_polygon_ref_is_null(polygon))
 			return true;
 
 		// Non-general polygon creation doesn't use right click.
-		struct bsg_polygon_record rec;
-		if (!bsg_polygon_record_get(polygon, &rec) || rec.type != BSG_POLYGON_GENERAL)
+		qg_polygon_record rec;
+		if (!qg_legacy_view_polygon_record_get(polygon, &rec) || rec.type != QG_POLYGON_GENERAL)
 			return true;
 
 		// When creating a general polygon, right click indicates we're done.
@@ -165,18 +172,18 @@ QgPolyCreateFilter::eventFilter(QObject *, QEvent *e)
 	// adjusts the shape
 	if (m_e->type() == QEvent::MouseMove) {
 		// No-op if no current polygon is defined
-		if (bsg_polygon_ref_is_null(polygon))
+		if (qg_legacy_view_polygon_ref_is_null(polygon))
 			return true;
 
 		// General polygon creation doesn't use mouse movement.
-		struct bsg_polygon_record rec;
-		if (bsg_polygon_record_get(polygon, &rec) && rec.type == BSG_POLYGON_GENERAL)
+		qg_polygon_record rec;
+		if (qg_legacy_view_polygon_record_get(polygon, &rec) && rec.type == QG_POLYGON_GENERAL)
 			return true;
 
 		// For every other polygon type, call the libbv update routine
 		// with the view's x,y coordinates
 		if (m_e->buttons().testFlag(Qt::LeftButton) && m_e->modifiers() == Qt::NoModifier) {
-			qg_poly_update_from_event(polygon, v, m_e, BSG_POLYGON_UPDATE_DEFAULT);
+			qg_poly_update_from_event(polygon, v, m_e, QG_POLYGON_UPDATE_DEFAULT);
 			emit view_updated(QG_VIEW_REFRESH);
 			return true;
 		}
@@ -187,14 +194,14 @@ QgPolyCreateFilter::eventFilter(QObject *, QEvent *e)
 	if (m_e->type() == QEvent::MouseButtonRelease) {
 
 		// No-op if no current polygon is defined
-		if (bsg_polygon_ref_is_null(polygon))
+		if (qg_legacy_view_polygon_ref_is_null(polygon))
 			return true;
 
 		// General polygons are finalized by a right-click close, since
 		// appending multiple points requires multiple mouse click-and-release
 		// operations
-		struct bsg_polygon_record rec;
-		if (bsg_polygon_record_get(polygon, &rec) && rec.type == BSG_POLYGON_GENERAL)
+		qg_polygon_record rec;
+		if (qg_legacy_view_polygon_record_get(polygon, &rec) && rec.type == QG_POLYGON_GENERAL)
 			return true;
 
 		// For all non-general polygons, mouse release is the signal
@@ -213,7 +220,7 @@ QgPolyCreateFilter::finalize(bool)
 {
 	int icnt = 0;
 
-	if (bsg_polygon_ref_is_null(polygon))
+	if (qg_legacy_view_polygon_ref_is_null(polygon))
 		return;
 
 	if (!close_polygon())
@@ -221,24 +228,24 @@ QgPolyCreateFilter::finalize(bool)
 
 	if (op == bg_None || bool_objs.empty()) {
 		// No interactions, so we're keeping it - assign a proper name
-		bsg_polygon_set_name(polygon, vname.c_str());
+		qg_legacy_view_polygon_set_name(polygon, vname.c_str());
 	}
 	else {
 
 		for (auto target : bool_objs) {
-			icnt += bsg_polygon_csg_ref(target, polygon, op);
+			icnt += qg_legacy_view_polygon_csg(target, polygon, op);
 		}
 
 		// When doing boolean operations, the convention is if there were one
 		// or more interactions with other polygons, the original polygon is
 		// not retained
 		if (icnt || op == bg_Difference || op == bg_Intersection) {
-			bsg_polygon_remove(polygon);
+			qg_legacy_view_polygon_remove(polygon);
 			polygon = {0, 0};
 		}
 		else {
 			// No interactions, so we're keeping it - assign a proper name
-			bsg_polygon_set_name(polygon, vname.c_str());
+			qg_legacy_view_polygon_set_name(polygon, vname.c_str());
 		}
 	}
 
@@ -254,7 +261,7 @@ QgPolyUpdateFilter::eventFilter(QObject *, QEvent *e)
 		return false;
 
 	// The update filter needs an active polygon to operate on
-	if (bsg_polygon_ref_is_null(polygon))
+	if (qg_legacy_view_polygon_ref_is_null(polygon))
 		return false;
 
 	// We don't want other stray mouse clicks to do something surprising
@@ -265,14 +272,14 @@ QgPolyUpdateFilter::eventFilter(QObject *, QEvent *e)
 	if (m_e->type() == QEvent::MouseMove) {
 
 		// General polygon creation doesn't use mouse movement.
-		struct bsg_polygon_record rec;
-		if (bsg_polygon_record_get(polygon, &rec) && rec.type == BSG_POLYGON_GENERAL)
+		qg_polygon_record rec;
+		if (qg_legacy_view_polygon_record_get(polygon, &rec) && rec.type == QG_POLYGON_GENERAL)
 			return true;
 
 		// For every other polygon type, call the libbv update routine
 		// with the view's x,y coordinates
 		if (m_e->buttons().testFlag(Qt::LeftButton) && m_e->modifiers() == Qt::NoModifier) {
-			qg_poly_update_from_event(polygon, view(), m_e, BSG_POLYGON_UPDATE_DEFAULT);
+			qg_poly_update_from_event(polygon, qg_poly_filter_view(this), m_e, QG_POLYGON_UPDATE_DEFAULT);
 			emit view_updated(QG_VIEW_REFRESH);
 			return true;
 		}
@@ -289,7 +296,7 @@ QgPolySelectFilter::eventFilter(QObject *, QEvent *e)
 	if (!m_e)
 		return false;
 
-	struct bsg_view *v = view();
+	qg_legacy_view *v = qg_poly_filter_view(this);
 	if (!v)
 		return false;
 
@@ -299,11 +306,11 @@ QgPolySelectFilter::eventFilter(QObject *, QEvent *e)
 		 * feature-table and ptbl compatibility path. */
 		point_t current_point = VINIT_ZERO;
 		qg_poly_screen_point(v, m_e, current_point);
-		polygon = bsg_view_select_polygon_ref(v, &current_point);
-		if (bsg_polygon_ref_is_null(polygon))
+		polygon = qg_legacy_view_polygon_select(v, &current_point);
+		if (qg_legacy_view_polygon_ref_is_null(polygon))
 			return true;
-		struct bsg_polygon_record rec;
-		if (bsg_polygon_record_get(polygon, &rec)) {
+		qg_polygon_record rec;
+		if (qg_legacy_view_polygon_record_get(polygon, &rec)) {
 			ptype = rec.type;
 			close_general_poly = rec.first_contour_open;
 		}
@@ -326,23 +333,23 @@ QgPolyPointFilter::eventFilter(QObject *, QEvent *e)
 		return false;
 
 	// The point filter needs an active general polygon to operate on
-	if (bsg_polygon_ref_is_null(polygon) || ptype != BSG_POLYGON_GENERAL)
+	if (qg_legacy_view_polygon_ref_is_null(polygon) || ptype != QG_POLYGON_GENERAL)
 		return false;
 
-	struct bsg_polygon_record rec;
-	if (!bsg_polygon_record_get(polygon, &rec))
+	qg_polygon_record rec;
+	if (!qg_legacy_view_polygon_record_get(polygon, &rec))
 		return false;
 
 	// If we have a Left release, clear point selection
 	if (m_e->type() == QEvent::MouseButtonRelease) {
-		qg_poly_update_from_event(polygon, view(), m_e, BSG_POLYGON_UPDATE_PT_SELECT_CLEAR);
+		qg_poly_update_from_event(polygon, qg_poly_filter_view(this), m_e, QG_POLYGON_UPDATE_PT_SELECT_CLEAR);
 		emit view_updated(QG_VIEW_REFRESH);
 		return true;
 	}
 
 	// Left press selects a point
 	if (m_e->type() == QEvent::MouseButtonPress && m_e->buttons().testFlag(Qt::LeftButton)) {
-		qg_poly_update_from_event(polygon, view(), m_e, BSG_POLYGON_UPDATE_PT_SELECT);
+		qg_poly_update_from_event(polygon, qg_poly_filter_view(this), m_e, QG_POLYGON_UPDATE_PT_SELECT);
 		emit view_updated(QG_VIEW_REFRESH);
 		return true;
 	}
@@ -358,7 +365,7 @@ QgPolyPointFilter::eventFilter(QObject *, QEvent *e)
 			return true;
 		}
 		if (m_e->buttons().testFlag(Qt::LeftButton) && m_e->modifiers() == Qt::NoModifier) {
-			qg_poly_update_from_event(polygon, view(), m_e, BSG_POLYGON_UPDATE_PT_MOVE);
+			qg_poly_update_from_event(polygon, qg_poly_filter_view(this), m_e, QG_POLYGON_UPDATE_PT_MOVE);
 			emit view_updated(QG_VIEW_REFRESH);
 			return true;
 		}
@@ -376,12 +383,12 @@ QgPolyMoveFilter::eventFilter(QObject *, QEvent *e)
 	if (!m_e)
 		return false;
 
-	struct bsg_view *v = view();
+	qg_legacy_view *v = qg_poly_filter_view(this);
 	if (!v)
 		return false;
 
 	// The move filter needs an active polygon to operate on
-	if (bsg_polygon_ref_is_null(polygon) && move_objs.empty())
+	if (qg_legacy_view_polygon_ref_is_null(polygon) && move_objs.empty())
 		return false;
 
 	point_t current_point = VINIT_ZERO;
@@ -403,10 +410,10 @@ QgPolyMoveFilter::eventFilter(QObject *, QEvent *e)
 		if (m_e->buttons().testFlag(Qt::LeftButton) && m_e->modifiers() == Qt::NoModifier) {
 			if (!move_objs.empty()) {
 				for (auto mpoly : move_objs)
-					bsg_polygon_move(mpoly, &current_point, &m_prev_point);
+					qg_legacy_view_polygon_move(mpoly, &current_point, &m_prev_point);
 			}
 			else {
-				bsg_polygon_move(polygon, &current_point, &m_prev_point);
+				qg_legacy_view_polygon_move(polygon, &current_point, &m_prev_point);
 			}
 			emit view_updated(QG_VIEW_REFRESH);
 		}

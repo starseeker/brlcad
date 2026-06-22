@@ -186,12 +186,48 @@ dm_add_item_arrows(struct dm *dmp, const struct bsg_render_item *item)
 }
 
 static void
+_dm_axes_state_from_bsg(struct rt_view_axes_state *dst, const struct bsg_axes *src)
+{
+    if (!dst)
+	return;
+    memset(dst, 0, sizeof(*dst));
+    if (!src)
+	return;
+    dst->draw = src->draw;
+    VMOVE(dst->axes_pos, src->axes_pos);
+    dst->axes_size = src->axes_size;
+    dst->line_width = src->line_width;
+    dst->axes_color[0] = src->axes_color[0];
+    dst->axes_color[1] = src->axes_color[1];
+    dst->axes_color[2] = src->axes_color[2];
+    dst->pos_only = src->pos_only;
+    dst->label_flag = src->label_flag;
+    dst->label_color[0] = src->label_color[0];
+    dst->label_color[1] = src->label_color[1];
+    dst->label_color[2] = src->label_color[2];
+    dst->triple_color = src->triple_color;
+    dst->tick_enabled = src->tick_enabled;
+    dst->tick_length = src->tick_length;
+    dst->tick_major_length = src->tick_major_length;
+    dst->tick_interval = src->tick_interval;
+    dst->ticks_per_major = src->ticks_per_major;
+    dst->tick_threshold = src->tick_threshold;
+    dst->tick_color[0] = src->tick_color[0];
+    dst->tick_color[1] = src->tick_color[1];
+    dst->tick_color[2] = src->tick_color[2];
+    dst->tick_major_color[0] = src->tick_major_color[0];
+    dst->tick_major_color[1] = src->tick_major_color[1];
+    dst->tick_major_color[2] = src->tick_major_color[2];
+}
+
+static void
 _dm_draw_hud_axes_feature(struct dm *dmp, struct bsg_view *v, const struct bsg_axes *src, int model_axes)
 {
     if (!src)
 	return;
 
-    struct bsg_axes axes = *src;
+    struct rt_view_axes_state axes = RT_VIEW_AXES_STATE_INIT;
+    _dm_axes_state_from_bsg(&axes, src);
     if (model_axes) {
 	point_t map;
 	point_t save_map;
@@ -217,7 +253,20 @@ _dm_draw_hud_grid(struct dm *dmp, struct bsg_view *v, const struct bsg_grid_stat
 {
     if (!grid)
 	return;
-    dm_draw_grid(dmp, (struct bsg_grid_state *)grid, v->gv_scale, v->gv_model2view, v->gv_base2local);
+    struct rt_view_grid_state grid_state = RT_VIEW_GRID_STATE_INIT;
+    grid_state.rc = grid->rc;
+    grid_state.draw = grid->draw;
+    grid_state.adaptive = grid->adaptive;
+    grid_state.snap = grid->snap;
+    VMOVE(grid_state.anchor, grid->anchor);
+    grid_state.res_h = grid->res_h;
+    grid_state.res_v = grid->res_v;
+    grid_state.res_major_h = grid->res_major_h;
+    grid_state.res_major_v = grid->res_major_v;
+    grid_state.color[0] = grid->color[0];
+    grid_state.color[1] = grid->color[1];
+    grid_state.color[2] = grid->color[2];
+    dm_draw_grid(dmp, &grid_state, v->gv_scale, v->gv_model2view, v->gv_base2local);
 }
 
 
@@ -904,8 +953,11 @@ _dm_scene_draw_item(void *dmp_ptr, const struct bsg_render_item *item)
     (void)dm_backend_draw_item(dmp, item);
 
     dm_add_item_arrows(dmp, item);
-    if (_dm_item_is_axes_overlay(item))
-	dm_draw_scene_axes_payload(dmp, &item->geometry.overlay.axes);
+    if (_dm_item_is_axes_overlay(item)) {
+	struct rt_view_axes_state axes = RT_VIEW_AXES_STATE_INIT;
+	_dm_axes_state_from_bsg(&axes, &item->geometry.overlay.axes);
+	dm_draw_scene_axes_payload(dmp, &axes);
+    }
     if (item->geometry.kind == BSG_RENDER_GEOMETRY_TEXT)
 	_dm_draw_label_resolved(dmp, item);
     if (item->geometry.kind == BSG_RENDER_GEOMETRY_ANNOTATION)

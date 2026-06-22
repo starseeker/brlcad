@@ -40,7 +40,7 @@ static void set_grid_draw(const struct bu_structparse *, const char *, void *, c
 static void set_grid_res(const struct bu_structparse *, const char *, void *, const char *, void *);
 
 
-struct bsg_grid_state default_grid_state = {
+struct rt_view_grid_state default_grid_state = {
     /* rc */		1,
     /* draw */		0,
     /* non-adaptive*/   0,
@@ -54,7 +54,7 @@ struct bsg_grid_state default_grid_state = {
 };
 
 
-#define GRID_O(_m) bu_offsetof(struct bsg_grid_state, _m)
+#define GRID_O(_m) bu_offsetof(struct rt_view_grid_state, _m)
 struct bu_structparse grid_vparse[] = {
     {"%d", 1, "draw",	GRID_O(draw),        set_grid_draw, NULL, NULL },
     {"%d", 1, "snap",	GRID_O(snap),        grid_set_dirty_flag, NULL, NULL },
@@ -93,7 +93,7 @@ set_grid_draw(const struct bu_structparse *sdp,
 	      void *data)
 {
     struct mged_state *s = (struct mged_state *)data;
-    struct bsg_grid_state *grid = (struct bsg_grid_state *)base;
+    struct rt_view_grid_state *grid = (struct rt_view_grid_state *)base;
     MGED_CK_STATE(s);
 
     if (s->dbip == DBI_NULL) {
@@ -147,8 +147,8 @@ set_grid_res(const struct bu_structparse *sdp,
 void
 draw_grid(struct mged_state *s)
 {
-    struct bsg_grid_state grid_record;
-    struct bsg_grid_state *grid = &grid_record;
+    struct rt_view_grid_state grid_record;
+    struct rt_view_grid_state *grid = &grid_record;
     int i, j;
     int nh, nv;
     int nv_dots, nh_dots;
@@ -252,8 +252,8 @@ snap_to_grid(
     fastf_t *mx,		/* input and return values */
     fastf_t *my)		/* input and return values */
 {
-    struct bsg_grid_state grid_record;
-    struct bsg_grid_state *grid = &grid_record;
+    struct rt_view_grid_state grid_record;
+    struct rt_view_grid_state *grid = &grid_record;
     int nh, nv;		/* whole grid units */
     point_t view_pt;
     point_t view_grid_anchor;
@@ -392,8 +392,8 @@ snap_view_center_to_grid(struct mged_state *s)
 void
 round_to_grid(struct mged_state *s, fastf_t *view_dx, fastf_t *view_dy)
 {
-    struct bsg_grid_state grid_record;
-    struct bsg_grid_state *grid = &grid_record;
+    struct rt_view_grid_state grid_record;
+    struct rt_view_grid_state *grid = &grid_record;
     fastf_t grid_units_h, grid_units_v;
     fastf_t sf, inv_sf;
     fastf_t view_scale;
@@ -439,8 +439,8 @@ round_to_grid(struct mged_state *s, fastf_t *view_dx, fastf_t *view_dy)
 void
 snap_view_to_grid(struct mged_state *s, fastf_t view_dx, fastf_t view_dy)
 {
-    struct bsg_grid_state grid_record;
-    struct bsg_grid_state *grid = &grid_record;
+    struct rt_view_grid_state grid_record;
+    struct rt_view_grid_state *grid = &grid_record;
     point_t model_pt, view_pt;
     point_t vcenter, diff;
     mat_t view_center;
@@ -479,8 +479,8 @@ update_grids(struct mged_state *s, fastf_t sf)
 
     for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
 	struct mged_dm *dlp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	struct bsg_grid_state grid_record;
-	struct bsg_grid_state *grid = &grid_record;
+	struct rt_view_grid_state grid_record;
+	struct rt_view_grid_state *grid = &grid_record;
 	if (!mged_dm_grid_state_get(dlp, grid))
 	    continue;
 	grid->res_h *= sf;
@@ -508,8 +508,8 @@ f_grid_set (ClientData clientData, Tcl_Interp *interpreter, int argc, const char
     MGED_CK_CMD(ctp);
     struct mged_state *s = ctp->s;
 
-    struct bsg_grid_state grid_record;
-    struct bsg_grid_state *grid = &grid_record;
+    struct rt_view_grid_state grid_record;
+    struct rt_view_grid_state *grid = &grid_record;
     struct bu_vls vls = BU_VLS_INIT_ZERO;
 
     if (argc < 1 || 5 < argc) {

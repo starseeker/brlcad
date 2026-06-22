@@ -13,6 +13,7 @@
 #include "brlobol/view_controller.h"
 #include "bu/vls.h"
 #include "ged/bsg_ged_draw.h"
+#include "qtcad/QgLegacyViewBsg.h"
 #include "qtcad/QgObolDatabaseSync.h"
 #include "qtcad/QgView.h"
 
@@ -198,7 +199,8 @@ qg_obol_sync_draw_transaction(struct ged *gedp,
     if (!obol)
 	return 0;
 
-    struct bsg_view *view = txn->view ? txn->view : display->view();
+    struct bsg_view *view = txn->view ? txn->view :
+	qg_legacy_view_to_bsg(display->view());
     uint32_t sourceRevision = qg_obol_source_revision(result);
     int changed = 0;
 

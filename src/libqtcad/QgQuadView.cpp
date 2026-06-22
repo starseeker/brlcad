@@ -26,8 +26,8 @@
  * take place with the xy coordinates matching the current widget.  However, a
  * mouse click over the quad widget but NOT located with xy coordinates over
  * the currently selected view should change the selected view (updating
- * gedp->ged_gvp, perhaps changing the background or some other visual
- * signature of which widget is currently active.
+ * the session active view, perhaps changing the background or some other
+ * visual signature of which widget is currently active.
  *
  * One open question is whether the faceplate settings of the previous
  * selection should be copied/transferred to the new current selection (in
@@ -50,15 +50,25 @@
 #include "brlobol/export_action.h"
 #include "brlobol/view_controller.h"
 #include "bu/str.h"
+#include "ged.h"
 #include "ged/defines.h"
 #include "ged/commands.h"
 #include "rt/view_legacy_bsg.h"
+#include "qtcad/QgLegacyView.h"
+#include "qtcad/QgLegacyViewBsg.h"
 #include "qtcad/QgQuadView.h"
+#include "qtcad/QgSession.h"
 #include "qtcad/QgView.h"
 
 #include <Inventor/SoViewport.h>
 
 static const char *VIEW_NAMES[] = {"Q1", "Q2", "Q3", "Q4"};
+
+static struct bsg_view *
+qg_quad_bsg_view(QgView *view)
+{
+	return view ? qg_legacy_view_to_bsg(view->view()) : nullptr;
+}
 
 static void
 qg_quad_insert_obol_path(std::set<std::string> &paths, const SbString &path)
@@ -98,17 +108,21 @@ qg_quad_obol_visible_paths(QgView *view)
  * @brief Construct a new Qt C A D Quad:: Qt C A D Quad object
  *
  * @param parent   Parent Qt widget
- * @param gedpRef  Associated GED struct
+ * @param session  Associated qtcad/GED session
  * @param type     Requesting either a GL or SWRAST display mechanism
  */
-QgQuadView::QgQuadView(QWidget *parent, struct ged *gedpRef, int type) : QWidget(parent)
+QgQuadView::QgQuadView(QWidget *parent, QgSession *session, int type) : QWidget(parent)
 {
-	gedp = gedpRef;
+	m_session = session;
 	graphicsType = type;
 
 	views[UPPER_RIGHT_QUADRANT] = createView(UPPER_RIGHT_QUADRANT);
-	rt_view_set_add_view_bsg(&gedp->ged_views, views[UPPER_RIGHT_QUADRANT]->view());
-	gedp->ged_gvp = views[UPPER_RIGHT_QUADRANT]->view();
+	struct ged *gedp = m_session ? m_session->ged() : nullptr;
+	if (gedp)
+		rt_view_set_add_view_bsg(&gedp->ged_views,
+			qg_quad_bsg_view(views[UPPER_RIGHT_QUADRANT]));
+	if (m_session)
+		m_session->setActiveView(views[UPPER_RIGHT_QUADRANT]->view());
 
 	views[UPPER_RIGHT_QUADRANT]->set_current(1);
 	currentView = views[UPPER_RIGHT_QUADRANT];
@@ -154,11 +168,15 @@ QgView *
 QgQuadView::createView(unsigned int index)
 {
 	QgView *view = new QgView(this, graphicsType);
-	bu_vls_sprintf(&view->view()->gv_name, "%s", VIEW_NAMES[index]);
+	struct bsg_view *bv = qg_quad_bsg_view(view);
+	if (bv)
+		bu_vls_sprintf(&bv->gv_name, "%s", VIEW_NAMES[index]);
 	view->set_current(0);
 	view->installEventFilter(this);
 
-	view->view()->vset = &gedp->ged_views;
+	struct ged *gedp = m_session ? m_session->ged() : nullptr;
+	if (gedp && bv)
+		bv->vset = &gedp->ged_views;
 	/* Independent view state is managed by BSG view-scope records. */
 
 	QObject::connect(view, &QgView::changed, this, &QgQuadView::do_view_changed);
@@ -196,6 +214,7 @@ QgQuadView::createLayout()
 void
 QgQuadView::changeToSingleFrame()
 {
+	struct ged *gedp = m_session ? m_session->ged() : nullptr;
 	QGridLayout *layout = (QGridLayout *)this->layout();
 	if (layout == nullptr) {
 		layout = createLayout();
@@ -207,7 +226,9 @@ QgQuadView::changeToSingleFrame()
 		// Don't want use cpu for views that are not visible
 		if (views[i] != nullptr) {
 			views[i]->disconnect();
-			rt_view_set_remove_view_bsg(&gedp->ged_views, views[i]->view());
+			if (gedp)
+				rt_view_set_remove_view_bsg(&gedp->ged_views,
+					qg_quad_bsg_view(views[i]));
 			delete views[i];
 			views[i] = nullptr;
 		}
@@ -238,6 +259,7 @@ QgQuadView::changeToSingleFrame()
 void
 QgQuadView::changeToQuadFrame()
 {
+	struct ged *gedp = m_session ? m_session->ged() : nullptr;
 	for (int i = UPPER_RIGHT_QUADRANT + 1; i < LOWER_RIGHT_QUADRANT + 1; i++) {
 		if (views[i] == nullptr) {
 			// Make the new view
@@ -245,22 +267,24 @@ QgQuadView::changeToQuadFrame()
 
 			// Out of the gate, have the new view units match the first view's
 			// units (which should usually be based on the database units)
-			rt_view_unit_conversion_set_bsg(views[i]->view(),
-				rt_view_local2base_from_bsg(views[0]->view()),
-				rt_view_base2local_from_bsg(views[0]->view()));
+			qg_legacy_view_unit_conversion_set(views[i]->view(),
+				qg_legacy_view_local2base_get(views[0]->view()),
+				qg_legacy_view_base2local_get(views[0]->view()));
 
 			// For initial layout calculations, we need to set a screen width
 			// and height.  This won't be right in the end, but it gives
 			// the LoD bounds update something to work with
-			rt_view_dimensions_set_bsg(views[i]->view(),
-				rt_view_width_from_bsg(views[UPPER_RIGHT_QUADRANT]->view()),
-				rt_view_height_from_bsg(views[UPPER_RIGHT_QUADRANT]->view()));
+			qg_legacy_view_dimensions_set(views[i]->view(),
+				qg_legacy_view_width_get(views[UPPER_RIGHT_QUADRANT]->view()),
+				qg_legacy_view_height_get(views[UPPER_RIGHT_QUADRANT]->view()));
 		}
 		// Copy the LoD source policy so all quadrants use the same
 		// source-selection behavior.
-		rt_view_lod_policy_copy_bsg(views[i]->view(),
-			views[UPPER_RIGHT_QUADRANT]->view());
-		rt_view_set_add_view_bsg(&gedp->ged_views, views[i]->view());
+		rt_view_lod_policy_copy_bsg(qg_quad_bsg_view(views[i]),
+			qg_quad_bsg_view(views[UPPER_RIGHT_QUADRANT]));
+		if (gedp)
+			rt_view_set_add_view_bsg(&gedp->ged_views,
+				qg_quad_bsg_view(views[i]));
 	}
 
 	// Define the spacers
@@ -313,34 +337,35 @@ QgQuadView::changeToQuadFrame()
 	// but if we don't do it here we'll start out with blank windows until something notifies
 	// the draw logic it needs to do updates.
 	for (int i = UPPER_RIGHT_QUADRANT + 1; i < LOWER_RIGHT_QUADRANT + 1; i++) {
-		rt_view_autoview_bsg(views[i]->view(), RT_VIEW_AUTOVIEW_SCALE_DEFAULT, 0);
-		rt_view_lod_bounds_update_bsg(views[i]->view());
+		rt_view_autoview_bsg(qg_quad_bsg_view(views[i]), RT_VIEW_AUTOVIEW_SCALE_DEFAULT, 0);
+		rt_view_lod_bounds_update_bsg(qg_quad_bsg_view(views[i]));
 	}
 	{
 		std::set<std::string> paths =
 			qg_quad_obol_visible_paths(views[UPPER_RIGHT_QUADRANT]);
-		if (!paths.empty()) {
-			struct bsg_view *saved_view = gedp->ged_gvp;
+		if (gedp && m_session && !paths.empty()) {
+			qg_legacy_view *saved_view = m_session->activeView();
 			for (int j = UPPER_RIGHT_QUADRANT + 1; j < LOWER_RIGHT_QUADRANT + 1; j++) {
-				gedp->ged_gvp = views[j]->view();
+				m_session->setActiveView(views[j]->view());
 				for (const std::string &path : paths) {
 					const char *draw_av[] = {"draw", path.c_str(), nullptr};
 					(void)ged_exec(gedp, 2, draw_av);
 				}
 			}
-			gedp->ged_gvp = saved_view;
+			m_session->setActiveView(saved_view);
 		}
 	}
 
 	for (int i = UPPER_RIGHT_QUADRANT + 1; i < LOWER_RIGHT_QUADRANT + 1; i++) {
-		rt_view_dimensions_set_bsg(views[i]->view(),
-			rt_view_width_from_bsg(views[UPPER_RIGHT_QUADRANT]->view()),
-			rt_view_height_from_bsg(views[UPPER_RIGHT_QUADRANT]->view()));
+		qg_legacy_view_dimensions_set(views[i]->view(),
+			qg_legacy_view_width_get(views[UPPER_RIGHT_QUADRANT]->view()),
+			qg_legacy_view_height_get(views[UPPER_RIGHT_QUADRANT]->view()));
 	}
 
 	// Current view selection pieces
 	select(UPPER_RIGHT_QUADRANT);
-	gedp->ged_gvp = views[UPPER_RIGHT_QUADRANT]->view();
+	if (m_session)
+		m_session->setActiveView(views[UPPER_RIGHT_QUADRANT]->view());
 	views[UPPER_RIGHT_QUADRANT]->set_current(1);
 	currentView = views[UPPER_RIGHT_QUADRANT];
 }
@@ -396,18 +421,6 @@ QgQuadView::default_views(int all_views)
 	if (views[LOWER_RIGHT_QUADRANT] != nullptr) {
 		views[LOWER_RIGHT_QUADRANT]->aet(90, 0, 0);
 	}
-}
-
-struct bsg_view *
-QgQuadView::view(int quadrantId)
-{
-	if (quadrantId > LOWER_RIGHT_QUADRANT || quadrantId < UPPER_RIGHT_QUADRANT) quadrantId = UPPER_RIGHT_QUADRANT;
-
-	if (views[quadrantId] != nullptr) {
-		return views[quadrantId]->view();
-	}
-
-	return currentView->view();
 }
 
 QgView *

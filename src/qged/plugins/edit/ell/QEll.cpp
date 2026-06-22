@@ -31,15 +31,12 @@
 #include "ged.h"
 #include "rt/db_io.h"
 #include "rt/directory.h"
-#include "bsg/feature.h"
-#include "bsg/hud.h"
-#include "bsg/overlay.h"
 #include "qtcad/QgGedEventBatch.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgSignalFlags.h"
-#include "ged/bsg_ged_draw.h"
 #include "../qged_edit_preview_util.h"
 #include "QEll.h"
+
 
 QEll::QEll()
     : QWidget()
@@ -97,14 +94,13 @@ QEll::QEll()
 
 QEll::~QEll()
 {
-    struct bsg_view *v = getView();
     qged_edit_feature_clear_geometry_view(
 	    m_ctx ? m_ctx->getViewWidget() : nullptr, "_ell_edit", p);
-    if (v) {
-	bsg_feature_remove(v, "_ell_edit");
-	bsg_feature_remove(v, "_ell_edit_labels");
+    if (m_ctx) {
+	qged_edit_feature_remove(m_ctx, "_ell_edit");
+	qged_edit_feature_remove(m_ctx, "_ell_edit_labels");
     }
-    p = BSG_FEATURE_REF_NULL_INIT;
+    p = QGED_EDIT_FEATURE_REF_NULL;
     bu_vls_free(&oname);
 }
 
@@ -112,12 +108,6 @@ struct ged *
 QEll::getGed() const
 {
     return m_ctx ? m_ctx->getGed() : nullptr;
-}
-
-struct bsg_view *
-QEll::getView() const
-{
-    return m_ctx ? m_ctx->getView() : nullptr;
 }
 
 void
@@ -197,34 +187,20 @@ QEll::update_obj_wireframe()
     struct ged *gedp = getGed();
     if (!gedp)
 	return;
-    struct bsg_view *v = getView();
-    if (!v)
-	return;
     QgView *display = m_ctx ? m_ctx->getViewWidget() : nullptr;
 
     // Resolve the edit object fresh in case it was removed externally
     // (e.g. by a clear/zap command).
-    p = bsg_feature_find(v, "_ell_edit");
-    if (bsg_feature_ref_is_null(p)) {
-	p = bsg_feature_create_overlay(v, "_ell_edit", 1/*local*/);
-	if (!bsg_feature_ref_is_null(p))
-	    bsg_feature_overlay_register_owner(p, this,
-		    BSG_OVERLAY_ROLE_MODEL,
-		    BSG_OVERLAY_CLASS_EDIT_HANDLE,
-		    BSG_OVERLAY_LC_PER_TOOL,
-		    BSG_OVERLAY_ORDER_POST_TRANSPARENT,
-		    NULL, 0);
-    }
-    if (bsg_feature_ref_is_null(p) && !display)
+    p = qged_edit_feature_overlay_ensure(m_ctx, "_ell_edit", this, NULL, NULL, NULL);
+    if (qged_edit_feature_ref_is_null(p) && !display)
 	return;
 
     // No active db or object name means there is nothing to edit - make sure
     // the edit wireframe is hidden.
     if (!gedp->dbip || !bu_vls_strlen(&oname)) {
 	qged_edit_feature_clear_geometry_view(display, "_ell_edit", p);
-	if (!bsg_feature_ref_is_null(p))
-	    bsg_feature_set_visible(p, 0);
-	bsg_feature_remove(v, "_ell_edit_labels");
+	qged_edit_feature_set_visible(p, 0);
+	qged_edit_feature_remove(m_ctx, "_ell_edit_labels");
 	return;
     }
 
@@ -233,15 +209,13 @@ QEll::update_obj_wireframe()
     dp = db_lookup(gedp->dbip, bu_vls_cstr(&oname), LOOKUP_QUIET);
     if (!dp || dp->d_minor_type != DB5_MINORTYPE_BRLCAD_ELL) {
 	qged_edit_feature_clear_geometry_view(display, "_ell_edit", p);
-	if (!bsg_feature_ref_is_null(p))
-	    bsg_feature_set_visible(p, 0);
-	bsg_feature_remove(v, "_ell_edit_labels");
+	qged_edit_feature_set_visible(p, 0);
+	qged_edit_feature_remove(m_ctx, "_ell_edit_labels");
 	return;
     }
 
     qged_edit_feature_clear_geometry_view(display, "_ell_edit", p);
-    if (!bsg_feature_ref_is_null(p))
-	bsg_feature_set_view(p, v);
+    qged_edit_feature_set_view(p, m_ctx);
 
     // Set up the rt_db_internal and trigger the plotting routine with the
     // current ell parameters
@@ -255,7 +229,7 @@ QEll::update_obj_wireframe()
 	return;
     struct bn_tol *tol = &wdbp->wdb_tol;
     qged_edit_feature_replace_ell_wireframe_view(display, "_ell_edit",
-	    p, BSG_FEATURE_TRANSIENT_PREVIEW,
+	    p, QGED_EDIT_FEATURE_TRANSIENT_PREVIEW,
 	    (const struct rt_ell_internal *)intern.idb_ptr);
 
     // At least for now, mimic the MGED behavior and make editing wireframes white
@@ -265,8 +239,7 @@ QEll::update_obj_wireframe()
     bu_opt_color(NULL, 1, (const char **)&av[0], (void *)&cval);
     unsigned char rgb[3] = {0, 0, 0};
     bu_color_to_rgb_chars(&cval, rgb);
-    if (!bsg_feature_ref_is_null(p))
-	bsg_feature_set_color(p, rgb[0], rgb[1], rgb[2]);
+    qged_edit_feature_set_color(p, rgb[0], rgb[1], rgb[2]);
 
     // When editing, we show the labels (if any)
     struct rt_point_labels pl[8+1];
@@ -276,35 +249,15 @@ QEll::update_obj_wireframe()
     if (intern.idb_meth->ft_labels)
 	lcnt = intern.idb_meth->ft_labels(pl, 8, idn_mat, &intern, tol);
 
-    bsg_feature_ref labels_ref = bsg_feature_find(v, "_ell_edit_labels");
-    if (bsg_feature_ref_is_null(labels_ref))
-	labels_ref = bsg_feature_create_label(v, "_ell_edit_labels", 1/*local*/);
-    if (!bsg_feature_ref_is_null(labels_ref)) {
-	bsg_feature_overlay_register_owner(labels_ref, this,
-		BSG_OVERLAY_ROLE_MODEL,
-		BSG_OVERLAY_CLASS_EDIT_HANDLE,
-		BSG_OVERLAY_LC_PER_TOOL,
-		BSG_OVERLAY_ORDER_POST_TRANSPARENT,
-		NULL, 1);
-	struct bsg_feature_label_data *labels = NULL;
-	if (lcnt > 0)
-	    labels = (struct bsg_feature_label_data *)bu_calloc((size_t)lcnt,
-		    sizeof(struct bsg_feature_label_data), "ell edit labels");
-	for (int i = 0; i < lcnt; i++) {
-	    labels[i].text = pl[i].str;
-	    VMOVE(labels[i].point, pl[i].pt);
-	    labels[i].color_valid = 1;
-	    VSET(labels[i].color, 255, 255, 0);
-	    labels[i].anchor = BSG_ANCHOR_AUTO;
-	}
-	bsg_feature_labels_replace(labels_ref, labels, (size_t)lcnt);
-	bsg_feature_set_visible(labels_ref, lcnt > 0 ? 1 : 0);
-	if (labels)
-	    bu_free(labels, "ell edit labels");
+    struct qged_edit_feature_ref labels_ref =
+	qged_edit_feature_label_ensure(m_ctx, "_ell_edit_labels", this);
+    if (!qged_edit_feature_ref_is_null(labels_ref)) {
+	const unsigned char label_color[3] = {255, 255, 0};
+	qged_edit_feature_labels_replace(labels_ref, pl, lcnt, label_color);
+	qged_edit_feature_set_visible(labels_ref, lcnt > 0 ? 1 : 0);
     }
 
-    if (!bsg_feature_ref_is_null(p))
-	bsg_feature_set_visible(p, 1);
+    qged_edit_feature_set_visible(p, 1);
     // TODO - we should be able to set UP or DOWN on the various labels
     // when their respective controls are enabled/disabled...
 
@@ -317,25 +270,12 @@ QEll::update_viewobj_name(const QString &)
     struct ged *gedp = getGed();
     if (!gedp || !gedp->dbip)
 	return;
-    struct bsg_view *v = getView();
-    if (!v)
-	return;
     QgView *display = m_ctx ? m_ctx->getViewWidget() : nullptr;
 
     // Resolve/create the edit view feature.  Don't trust cached pointers here
     // since clear/zap may have removed it.
-    p = bsg_feature_find(v, "_ell_edit");
-    if (bsg_feature_ref_is_null(p)) {
-	p = bsg_feature_create_overlay(v, "_ell_edit", 1/*local*/);
-	if (!bsg_feature_ref_is_null(p))
-	    bsg_feature_overlay_register_owner(p, this,
-		    BSG_OVERLAY_ROLE_MODEL,
-		    BSG_OVERLAY_CLASS_EDIT_HANDLE,
-		    BSG_OVERLAY_LC_PER_TOOL,
-		    BSG_OVERLAY_ORDER_POST_TRANSPARENT,
-		    NULL, 0);
-    }
-    if (bsg_feature_ref_is_null(p) && !display)
+    p = qged_edit_feature_overlay_ensure(m_ctx, "_ell_edit", this, NULL, NULL, NULL);
+    if (qged_edit_feature_ref_is_null(p) && !display)
 	return;
 
     // Make sure the view feature names match whatever the dialog says
@@ -360,9 +300,8 @@ QEll::update_viewobj_name(const QString &)
 	} else {
 	    ged_draw_set_highlighted_shape_ref(gedp, GED_DRAW_SHAPE_REF_NULL);
 	    qged_edit_feature_clear_geometry_view(display, "_ell_edit", p);
-	    if (!bsg_feature_ref_is_null(p))
-		bsg_feature_set_visible(p, 0);
-	    bsg_feature_remove(v, "_ell_edit_labels");
+	    qged_edit_feature_set_visible(p, 0);
+	    qged_edit_feature_remove(m_ctx, "_ell_edit_labels");
 	    emit view_updated(QG_VIEW_REFRESH);
 	}
     }

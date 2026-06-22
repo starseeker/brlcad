@@ -30,9 +30,18 @@ extern "C" {
 }
 
 #include <string>
+#include "qtcad/QgLegacyViewBsg.h"
 #include "qtcad/QgMeasureFilter.h"
 #include "qtcad/QgObolMeasure.h"
 #include "qtcad/QgSignalFlags.h"
+#include "qtcad/QgView.h"
+
+static struct bsg_view *
+qg_measure_filter_view(const QgMeasureFilter *filter)
+{
+	QgView *display = filter ? filter->view_widget() : nullptr;
+	return display ? qg_legacy_view_to_bsg(display->view()) : nullptr;
+}
 
 void
 QgMeasureFilter::update_current_mouse(QMouseEvent *m_e)
@@ -63,9 +72,8 @@ QgMeasureFilter::current_mouse_xy(int *sx, int *sy) const
 }
 
 void
-QgMeasureFilter::clear_measure_overlay(struct bsg_view *v)
+QgMeasureFilter::clear_measure_overlay()
 {
-	(void)v;
 	obol_overlay_point_count = 0;
 	(void)qg_obol_measure_clear_overlay(view_widget(), oname.c_str());
 }
@@ -141,13 +149,13 @@ QgMeasureFilter::eventFilter(QObject *, QEvent *e)
 		return false;
 	update_current_mouse(m_e);
 
-	struct bsg_view *v = view();
+	struct bsg_view *v = qg_measure_filter_view(this);
 	if (!v)
 		return false;
 
 	if (e->type() == QEvent::MouseButtonPress) {
 		if (m_e->button() == Qt::RightButton) {
-			clear_measure_overlay(v);
+			clear_measure_overlay();
 			mode = 0;
 			VSETALL(p1, 0.0);
 			VSETALL(p2, 0.0);
@@ -156,7 +164,7 @@ QgMeasureFilter::eventFilter(QObject *, QEvent *e)
 			return true;
 		}
 		if (mode == 4) {
-			clear_measure_overlay(v);
+			clear_measure_overlay();
 			mode = 0;
 			emit view_updated(QG_VIEW_REFRESH);
 			return true;
@@ -219,7 +227,7 @@ QgMeasureFilter::eventFilter(QObject *, QEvent *e)
 	if (e->type() == QEvent::MouseButtonRelease) {
 		if (m_e->button() == Qt::RightButton) {
 			mode = 0;
-			clear_measure_overlay(v);
+			clear_measure_overlay();
 			emit view_updated(QG_VIEW_REFRESH);
 			return true;
 		}
@@ -265,7 +273,7 @@ QgMeasureFilter::eventFilter(QObject *, QEvent *e)
 bool
 QMeasure2DFilter::get_point()
 {
-	struct bsg_view *v = view();
+	struct bsg_view *v = qg_measure_filter_view(this);
 	if (!v)
 		return false;
 	int sx = 0, sy = 0;
@@ -299,7 +307,7 @@ QMeasure3DFilter::~QMeasure3DFilter()
 bool
 QMeasure3DFilter::get_point()
 {
-	struct bsg_view *v = view();
+	struct bsg_view *v = qg_measure_filter_view(this);
 	if (!v)
 		return false;
 

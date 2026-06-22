@@ -28,11 +28,10 @@
 
 #include "dm.h" // For labelvert - see if we really need the dm_set_native_repaint_pending call there...
 
-#include "bsg/feature.h"
-
 #include "ged.h"
 #include "ged/bsg_ged_draw.h"
 #include "ged/view.h"
+#include "../bsg_ged_draw_view_private.h"
 #include "../ged_private.h"
 
 /* Callback data for labelvert */
@@ -40,7 +39,7 @@ struct labelvert_data {
     struct directory *dp;
     struct db_i *dbip;
     double base2local;
-    struct bsg_feature_label_data *labels;
+    struct ged_draw_view_label_data *labels;
     size_t label_count;
     size_t label_capacity;
 };
@@ -91,10 +90,10 @@ labelvert_append_label(struct labelvert_data *lvd, const point_t pt)
 
     if (lvd->label_count + 1 > lvd->label_capacity) {
 	size_t ncap = lvd->label_capacity ? lvd->label_capacity * 2 : 64;
-	lvd->labels = (struct bsg_feature_label_data *)bu_realloc(lvd->labels,
-		ncap * sizeof(struct bsg_feature_label_data), "labelvert label data");
+	lvd->labels = (struct ged_draw_view_label_data *)bu_realloc(lvd->labels,
+		ncap * sizeof(struct ged_draw_view_label_data), "labelvert label data");
 	for (size_t i = lvd->label_capacity; i < ncap; i++) {
-	    struct bsg_feature_label_data init = BSG_FEATURE_LABEL_DATA_INIT;
+	    struct ged_draw_view_label_data init = GED_DRAW_VIEW_LABEL_DATA_INIT;
 	    lvd->labels[i] = init;
 	}
 	lvd->label_capacity = ncap;
@@ -104,7 +103,7 @@ labelvert_append_label(struct labelvert_data *lvd, const point_t pt)
 	    pt[0] * lvd->base2local,
 	    pt[1] * lvd->base2local,
 	    pt[2] * lvd->base2local);
-    struct bsg_feature_label_data init = BSG_FEATURE_LABEL_DATA_INIT;
+    struct ged_draw_view_label_data init = GED_DRAW_VIEW_LABEL_DATA_INIT;
     lvd->labels[lvd->label_count] = init;
     lvd->labels[lvd->label_count].text = bu_strdup(label);
     VMOVE(lvd->labels[lvd->label_count].point, pt);
@@ -163,16 +162,11 @@ ged_labelvert_core(struct ged *gedp, int argc, const char *argv[])
 		labelvert_export_record, &lvd);
     }
 
-    (void)bsg_feature_remove(gedp->ged_gvp, LABELVERT_FEATURE_NAME);
-    if (lvd.label_count) {
-	bsg_feature_ref ref = bsg_feature_create_label(gedp->ged_gvp,
-		LABELVERT_FEATURE_NAME, 0);
-	if (bsg_feature_ref_is_null(ref) ||
-		!bsg_feature_labels_replace(ref, lvd.labels, lvd.label_count)) {
-	    labelvert_data_free(&lvd);
-	    bu_vls_printf(gedp->ged_result_str, "failed to create labelvert feature\n");
-	    return BRLCAD_ERROR;
-	}
+    if (!ged_draw_view_labels_replace(gedp->ged_gvp, LABELVERT_FEATURE_NAME,
+		0, lvd.labels, lvd.label_count)) {
+	labelvert_data_free(&lvd);
+	bu_vls_printf(gedp->ged_result_str, "failed to create labelvert feature\n");
+	return BRLCAD_ERROR;
     }
 
     labelvert_data_free(&lvd);

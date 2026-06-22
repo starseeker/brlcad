@@ -12,6 +12,7 @@
 
 #include "brlobol/view_controller.h"
 #include "ged.h"
+#include "qtcad/QgObolViewSync.h"
 #include "qtcad/QgView.h"
 
 static int
@@ -33,7 +34,7 @@ qg_obol_sync_line_layer_overlay(struct ged *gedp,
     if (!display || !name || !builder)
 	return 0;
 
-    if (gedp && gedp->ged_gvp && display->view() != gedp->ged_gvp)
+    if (!qg_obol_display_accepts_ged_active_view(gedp, display))
 	return 0;
 
     BRLObolViewController *obol = display->obolViewController();
@@ -56,7 +57,7 @@ qg_obol_sync_hud_label_overlay(struct ged *gedp,
     if (!display || !label || !label->label_id)
 	return 0;
 
-    if (gedp && gedp->ged_gvp && display->view() != gedp->ged_gvp)
+    if (!qg_obol_display_accepts_ged_active_view(gedp, display))
 	return 0;
 
     BRLObolViewController *obol = display->obolViewController();

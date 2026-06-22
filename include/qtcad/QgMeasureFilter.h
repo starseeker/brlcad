@@ -91,7 +91,7 @@ protected:
 	bool current_mouse_xy(int *sx, int *sy) const;
 
 private:
-	void clear_measure_overlay(struct bsg_view *v);
+	void clear_measure_overlay();
 	void update_measure_overlay(int point_count);
 	void update_current_mouse(QMouseEvent *m_e);
 

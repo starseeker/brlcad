@@ -36,7 +36,7 @@
 #include <QTcpSocket>
 #include <iostream>
 
-#include "dm/fbserv.h"
+struct fbserv_obj;
 
 // Per client info (TCP path)
 class QFBSocket : public QObject
@@ -83,7 +83,7 @@ class QFBServer : public QTcpServer
     Q_OBJECT
 
     public:
-	QFBServer(struct fbserv_obj *fp = NULL);
+	QFBServer(struct fbserv_obj *fp = nullptr);
 	~QFBServer();
 
 	int port = -1;

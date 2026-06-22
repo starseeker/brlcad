@@ -29,7 +29,8 @@
 
 extern "C" {
 #include "bg/polygon.h"
-#include "bsg/polygon.h"
+#include "bu/color.h"
+#include "rt/view.h"
 }
 
 #include <vector>
@@ -39,6 +40,27 @@ extern "C" {
 #include <QWidget>
 #include "qtcad/defines.h"
 #include "qtcad/QgViewFilter.h"
+
+enum qg_polygon_type {
+	QG_POLYGON_GENERAL = 0,
+	QG_POLYGON_CIRCLE = 1,
+	QG_POLYGON_ELLIPSE = 2,
+	QG_POLYGON_RECTANGLE = 3,
+	QG_POLYGON_SQUARE = 4
+};
+
+enum qg_polygon_update_mode {
+	QG_POLYGON_UPDATE_DEFAULT = 0,
+	QG_POLYGON_UPDATE_PROPS_ONLY = 1,
+	QG_POLYGON_UPDATE_PT_SELECT = 2,
+	QG_POLYGON_UPDATE_PT_SELECT_CLEAR = 3,
+	QG_POLYGON_UPDATE_PT_MOVE = 4,
+	QG_POLYGON_UPDATE_PT_APPEND = 5
+};
+
+typedef rt_view_polygon_ref qg_polygon_ref;
+#define QG_POLYGON_REF_NULL_INIT RT_VIEW_POLYGON_REF_NULL_INIT
+typedef struct rt_view_polygon_record qg_polygon_record;
 
 // Filters designed for specific editing modes
 class QTCAD_EXPORT QgPolyFilter : public QgViewFilter {
@@ -64,8 +86,8 @@ public:
 	bool close_polygon();
 
 	bg_clip_t op = bg_None;
-	bsg_polygon_ref polygon = BSG_POLYGON_REF_NULL_INIT;
-	int ptype = BSG_POLYGON_CIRCLE;
+	qg_polygon_ref polygon = QG_POLYGON_REF_NULL_INIT;
+	int ptype = QG_POLYGON_CIRCLE;
 	bool close_general_poly = true; // set to false if application wants to allow non-closed polygons
 	struct bu_color fill_color = BU_COLOR_BLUE;
 	struct bu_color edge_color = BU_COLOR_YELLOW;
@@ -87,7 +109,7 @@ public:
 	bool eventFilter(QObject *, QEvent *e) override;
 	void finalize(bool);
 
-	std::vector<bsg_polygon_ref> bool_objs;
+	std::vector<qg_polygon_ref> bool_objs;
 };
 
 class QTCAD_EXPORT QgPolyUpdateFilter : public QgPolyFilter {
@@ -99,7 +121,7 @@ public:
 	QgPolyUpdateFilter() = default;
 	bool eventFilter(QObject *, QEvent *e) override;
 
-	std::vector<bsg_polygon_ref> bool_objs;
+	std::vector<qg_polygon_ref> bool_objs;
 };
 
 class QTCAD_EXPORT QgPolySelectFilter : public QgPolyFilter {
@@ -130,7 +152,7 @@ class QTCAD_EXPORT QgPolyMoveFilter : public QgPolyFilter {
 public:
 	QgPolyMoveFilter() = default;
 	bool eventFilter(QObject *, QEvent *e) override;
-	std::vector<bsg_polygon_ref> move_objs;
+	std::vector<qg_polygon_ref> move_objs;
 
 private:
 	point_t m_prev_point = VINIT_ZERO;

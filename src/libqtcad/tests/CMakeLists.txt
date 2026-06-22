@@ -537,13 +537,24 @@ if(TARGET test_qtcad_obol_real_models)
   if(TARGET Generic_Twin.g)
     add_dependencies(test_qtcad_obol_real_models Generic_Twin.g)
   endif(TARGET Generic_Twin.g)
-  brlcad_add_test(NAME test_qtcad_obol_real_models COMMAND test_qtcad_obol_real_models)
-  set_property(TEST test_qtcad_obol_real_models
-    APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
-  set_property(TEST test_qtcad_obol_real_models
-    APPEND PROPERTY ENVIRONMENT QT_QPA_PLATFORM=offscreen)
-  set_property(TEST test_qtcad_obol_real_models
-    APPEND PROPERTY LABELS drawing_baseline)
+  foreach(_qtcad_real_model_case
+      pinewood_wire
+      pinewood_shaded
+      havoc_wire
+      m35_wire_interactions
+      m35_wire_pick_all_stress)
+    brlcad_add_test(
+      NAME test_qtcad_obol_real_models_${_qtcad_real_model_case}
+      COMMAND test_qtcad_obol_real_models ${_qtcad_real_model_case})
+    set_tests_properties(test_qtcad_obol_real_models_${_qtcad_real_model_case}
+      PROPERTIES TIMEOUT 180)
+    set_property(TEST test_qtcad_obol_real_models_${_qtcad_real_model_case}
+      APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+    set_property(TEST test_qtcad_obol_real_models_${_qtcad_real_model_case}
+      APPEND PROPERTY ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+    set_property(TEST test_qtcad_obol_real_models_${_qtcad_real_model_case}
+      APPEND PROPERTY LABELS drawing_baseline)
+  endforeach()
 endif(TARGET test_qtcad_obol_real_models)
 
 # Qt / QgSW headless integration test (Phase 4 BSG + dm-swrast via Qt widget path).

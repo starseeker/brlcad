@@ -16,6 +16,7 @@
 #include "bu/env.h"
 #include "bu/file.h"
 #include "ged.h"
+#include "qtcad/QgLegacyViewBsg.h"
 #include "qtcad/QgObolExport.h"
 #include "qtcad/QgView.h"
 #include "wdb.h"
@@ -144,7 +145,7 @@ main(int argc, char **argv)
 
     QgView view(NULL, QgView_SW, NULL);
     view.resize(180, 140);
-    gedp->ged_gvp = view.view();
+    gedp->ged_gvp = qg_legacy_view_to_bsg(view.view());
 
     BRLObolViewController *controller = view.obolViewController();
     if (!controller)

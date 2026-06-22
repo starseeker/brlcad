@@ -46,6 +46,7 @@ __BEGIN_DECLS
 struct bsg_view;
 struct bsg_view_set;
 struct bu_ptbl;
+struct bu_vls;
 struct bsg_appearance_settings;
 struct bg_tess_tol;
 struct bn_tol;
@@ -93,8 +94,15 @@ typedef struct ged_draw_shape_state {
     uint64_t geometry_revision;
 } ged_draw_shape_state;
 
+enum ged_draw_overlay_geometry_kind {
+    GED_DRAW_OVERLAY_GEOMETRY_NONE = 0,
+    GED_DRAW_OVERLAY_GEOMETRY_LINE_SET,
+    GED_DRAW_OVERLAY_GEOMETRY_POINT_SET,
+    GED_DRAW_OVERLAY_GEOMETRY_INDEXED_FACE_SET
+};
+
 struct ged_draw_overlay_geometry {
-    bsg_geometry_node_kind kind;
+    enum ged_draw_overlay_geometry_kind kind;
     const point_t *points;
     size_t point_count;
     const int *commands;
@@ -287,6 +295,13 @@ GED_EXPORT extern int ged_draw_scene_ref_publish_indexed_face_set(bsg_scene_ref 
 								  size_t normal_count,
 								  const int *indices,
 								  size_t index_count);
+GED_EXPORT extern int ged_draw_scene_ref_update_indexed_face_set(bsg_scene_ref ref,
+								 const point_t *points,
+								 size_t point_count,
+								 const vect_t *normals,
+								 size_t normal_count,
+								 const int *indices,
+								 size_t index_count);
 GED_EXPORT extern int ged_draw_scene_ref_publish_line_set(bsg_scene_ref ref,
 							  const point_t *points,
 							  const int *commands,
@@ -304,7 +319,6 @@ GED_EXPORT extern int ged_draw_scene_ref_geometry_publish_nmg_region(bsg_scene_r
 GED_EXPORT extern int ged_draw_scene_ref_geometry_publish_nmg_model(bsg_scene_ref ref,
 								    const struct model *m,
 								    int style);
-GED_EXPORT extern bsg_geometry_ref ged_draw_scene_ref_geometry_ref(bsg_scene_ref ref);
 GED_EXPORT extern int ged_draw_scene_ref_update_bounds_from_geometry(bsg_scene_ref ref,
 								     int *bad_cmd);
 GED_EXPORT extern void ged_draw_scene_ref_set_draw_center(bsg_scene_ref ref,
@@ -540,6 +554,11 @@ GED_EXPORT extern struct bsg_view *ged_draw_shape_ref_view(struct ged *gedp,
 GED_EXPORT extern struct bsg_interaction_record *ged_draw_shape_ref_selection_record(struct ged *gedp,
 										    ged_draw_shape_ref ref,
 										    struct bsg_view *fallback_view);
+GED_EXPORT extern int ged_draw_view_selection_add_shape_ref(struct ged *gedp,
+							    struct bsg_view *view,
+							    ged_draw_shape_ref ref,
+							    struct bsg_view **selection_view,
+							    struct bu_vls *path);
 GED_EXPORT extern void ged_draw_append_scene_ref_to_last_group(struct ged *gedp,
 							       bsg_scene_ref shape_ref);
 GED_EXPORT extern int ged_draw_group_scene_ref_is_overlay(bsg_scene_ref group_ref);

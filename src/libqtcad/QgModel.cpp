@@ -61,6 +61,7 @@
 #define ALPHANUM_IMPL
 #include "../libged/alphanum.h"
 
+#include "qtcad/QgLegacyViewBsg.h"
 #include "qtcad/QgModel.h"
 #include "qtcad/QgSession.h"
 #include "qtcad/QgUtil.h"
@@ -141,6 +142,13 @@ qgmodel_path_has_queued_ancestor(const std::vector<std::string> &paths,
 static std::unordered_map<const QgModel *, QgModel::DrawTimingStats>
 qgmodel_draw_timing_stats;
 static std::unordered_set<const QgModel *> qgmodel_draw_timing_enabled;
+
+static struct bsg_view *
+qgmodel_active_view(const QgModel *model)
+{
+	QgSession *session = model ? model->session() : nullptr;
+	return session ? qg_legacy_view_to_bsg(session->activeView()) : nullptr;
+}
 
 static bool
 qgmodel_draw_timing_is_enabled(const QgModel *model)
@@ -1869,9 +1877,7 @@ QgModel::data(const QModelIndex &index, int role) const
 		return QVariant::fromValue((void *)(qi->dp));
 	if (role == DrawnDisplayRole) {
 		std::string path = item_path(qi);
-		if (path.empty())
-			return QVariant(0);
-		return QVariant(ged_draw_path_state(gedp, gedp->ged_gvp, path.c_str(), -1));
+		return QVariant(drawnPathState(path.c_str()));
 	}
 	if (role == SelectDisplayRole) {
 		return QVariant(ged_selection_is_path_selected(gedp, nullptr, qi->path_hash()));
@@ -2523,6 +2529,18 @@ QgModel::run_cmd(struct bu_vls *msg, int argc, const char **argv)
 // are potentially triggered from QActions.  TODO - it might be better to have
 // these live in the selection proxy model...
 int
+QgModel::drawnPathState(const char *path) const
+{
+	QTCAD_SLOT("QgModel::drawnPathState", 1);
+	if (!path || !path[0])
+		return 0;
+
+	struct ged *gedp = m_session ? m_session->ged() : NULL;
+	struct bsg_view *view = qgmodel_active_view(this);
+	return (gedp && view) ? ged_draw_path_state(gedp, view, path, -1) : 0;
+}
+
+int
 QgModel::draw_action()
 {
 	QTCAD_SLOT("QgModel::draw_action", 1);
@@ -2544,7 +2562,8 @@ QgModel::drawPaths(const std::vector<std::string> &paths)
 {
 	QTCAD_SLOT("QgModel::drawPaths", 1);
 	struct ged *gedp = m_session ? m_session->ged() : NULL;
-	if (!gedp || !gedp->ged_gvp || paths.empty())
+	struct bsg_view *view = qgmodel_active_view(this);
+	if (!gedp || !view || paths.empty())
 		return BRLCAD_ERROR;
 
 	std::vector<const char *> draw_paths;
@@ -2561,14 +2580,14 @@ QgModel::drawPaths(const std::vector<std::string> &paths)
 		qgmodel_draw_timing_stats_for(this).draw_calls++;
 	int64_t blank_slate_start_us = timing_enabled ?
 		bu_gettime() : 0;
-	int blank_slate = !ged_draw_has_paths(gedp, gedp->ged_gvp, -1);
+	int blank_slate = !ged_draw_has_paths(gedp, view, -1);
 	if (timing_enabled)
 		qgmodel_draw_timing_stats_for(this).blank_slate_check_us +=
 			(uint64_t)(bu_gettime() - blank_slate_start_us);
 
 	struct ged_draw_transaction txn =
 		ged_draw_transaction_make(GED_DRAW_TXN_DRAW, NULL);
-	txn.view = gedp->ged_gvp;
+	txn.view = view;
 	txn.autoview = blank_slate;
 	txn.paths = draw_paths.data();
 	txn.path_count = (int)draw_paths.size();
@@ -2651,12 +2670,13 @@ QgModel::erase(const char *inst_path)
 {
 	QTCAD_SLOT("QgModel::erase", 1);
 	struct ged *gedp = m_session ? m_session->ged() : NULL;
-	if (!gedp || !gedp->ged_gvp || !inst_path || !inst_path[0])
+	struct bsg_view *view = qgmodel_active_view(this);
+	if (!gedp || !view || !inst_path || !inst_path[0])
 		return BRLCAD_ERROR;
 
 	struct ged_draw_transaction txn =
 		ged_draw_transaction_make(GED_DRAW_TXN_ERASE, inst_path);
-	txn.view = gedp->ged_gvp;
+	txn.view = view;
 
 	struct ged_draw_transaction_result result;
 	ged_draw_transaction_result_init(&result);

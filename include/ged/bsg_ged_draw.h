@@ -50,7 +50,6 @@
 #include "bu/ptbl.h"
 #include "bu/vls.h"
 #include "bsg/draw_intent.h"
-#include "bsg/interaction.h"
 #include "ged/defines.h"
 
 /* Forward declaration to keep the include surface narrow.  Callers that
@@ -576,11 +575,6 @@ ged_draw_highlighted_shape_ref(const struct ged *gedp);
 
 GED_EXPORT extern ged_draw_shape_ref
 ged_draw_highlight_shape_ref_by_name(struct ged *gedp, const char *name);
-
-GED_EXPORT extern struct bsg_interaction_record *
-ged_draw_shape_interaction_record(struct ged *gedp,
-				  ged_draw_shape_ref ref,
-				  bsg_interaction_kind kind);
 
 GED_EXPORT extern int
 ged_draw_view_selection_set_highlighted_shape_ref(struct ged *gedp,

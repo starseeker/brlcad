@@ -28,9 +28,9 @@
 #include <string.h>
 
 #include "bg/line_layer.h"
-#include "bsg/feature.h"
 #include "nmg/display.h"
 #include "rt/view_legacy_bsg.h"
+#include "./bsg_ged_draw_view_private.h"
 #include "./ged_private.h"
 #include "ged/view.h"
 #include "ged/bsg_ged_draw.h"
@@ -196,8 +196,8 @@ nmg_plot_eu(struct ged *gedp, struct edgeuse *es_eu, const struct bn_tol *tol)
     nmg_line_layer_around_eu(plot, es_eu, tab, 1, tol);
     int handled = ged_diagnostic_line_layer_publish(gedp, "nmg::_EU_", plot);
     if (!handled && gedp->ged_gvp) {
-	(void)bsg_feature_replace_line_layer_builder(gedp->ged_gvp,
-		"nmg::_EU_", 0, (const struct bsg_line_layer_builder *)plot, NULL);
+	(void)ged_draw_view_line_layer_builder_replace(gedp->ged_gvp,
+		"nmg::_EU_", 0, plot);
     }
 
     bg_line_layer_builder_free(plot);

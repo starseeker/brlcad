@@ -53,6 +53,7 @@ extern struct fb swrast_interface;
 // with any other dm backend to achieve the same results.
 #include <QApplication>
 #include <QtGlobal>
+#include "qtcad/QgLegacyViewBsg.h"
 #include "swrastwin.h"
 #endif
 
@@ -427,7 +428,7 @@ fb_swrast_open(struct fb *ifp, const char *UNUSED(file), int width, int height)
 	return -1;
     }
 
-    struct bsg_view *canvas_view = canvas->view();
+    struct bsg_view *canvas_view = qg_legacy_view_to_bsg(canvas->view());
     if (!canvas_view) {
 	qt_destroy(qi);
 	free(ifp->i->pp);

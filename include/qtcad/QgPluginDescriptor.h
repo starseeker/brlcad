@@ -70,8 +70,8 @@ class QTCAD_EXPORT QgPluginDescriptor
 	 * .g database is open. */
 	bool requiresOpenDb = false;
 
-	/* If true, the host should hide/disable this factory until a
-	 * bsg_view is available. */
+	/* If true, the host should hide/disable this factory until an
+	 * active view is available. */
 	bool requiresView = false;
 
 	/* Free-form long description for the "plugins info" command. */

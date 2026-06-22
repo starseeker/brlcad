@@ -33,10 +33,13 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QRadioButton>
-#include "ged.h"
-#include "qtcad/QgSelectFilter.h"
+#include "qtcad/QgTypes.h"
 
 class QgPluginContext;
+class QgSelectBoxFilter;
+class QgSelectFilter;
+class QgSelectPntFilter;
+class QgSelectRayFilter;
 
 class CADViewSelector : public QWidget
 {

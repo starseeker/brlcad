@@ -50,7 +50,6 @@ class QWheelEvent;
 class BRLObolViewController;
 
 struct bu_ptbl;
-struct bsg_view;
 struct dm;
 struct fb;
 struct QgCanvasState;  /* private implementation — defined in QgCanvasState.h */
@@ -70,12 +69,12 @@ QWidget *canvasWidget() override { return this; }
 QObject *asQObject()    override { return this; }
 bool isValid() const    override { return true; }
 
-struct bsg_view *view()           const override;
+qg_legacy_view *view()           const override;
 struct dm    *displayManager() const override;
 struct fb    *frameBuffer()    const override;
 BRLObolViewController *obolViewController() const override;
 
-void set_view(struct bsg_view *)               override;
+void set_view(qg_legacy_view *)               override;
 void setDisplayManagerSet(struct bu_ptbl *) override;
 
 void stash_hashes() override;

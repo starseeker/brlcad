@@ -34,10 +34,10 @@
 #include "bu/cmd.h"
 #include "bu/getopt.h"
 
-#include "bsg/feature.h"
-#include "bsg/geometry.h"
+#include "bg/line_layer.h"
 #include "rt/view_legacy_bsg.h"
 
+#include "../bsg_ged_draw_view_private.h"
 #include "../ged_private.h"
 extern "C" {
 #include "./ged_draw.h"
@@ -152,7 +152,7 @@ ged_cm_end(struct ged *gedp, vect_t *v, mat_t *m, const int UNUSED(argc), const 
 
     /* Record eye path as a polyline.  Move, then draws */
     if (draw_eye_path) {
-	int cmd = preview_eye_path.count ? BSG_GEOMETRY_LINE_DRAW : BSG_GEOMETRY_LINE_MOVE;
+	int cmd = preview_eye_path.count ? BG_GEOMETRY_LINE_DRAW : BG_GEOMETRY_LINE_MOVE;
 	(void)preview_line_append(&preview_eye_path, (*v), cmd);
     }
 
@@ -172,10 +172,10 @@ ged_cm_end(struct ged *gedp, vect_t *v, mat_t *m, const int UNUSED(argc), const 
     MAT4X3PNT(xm, view2model, xv);
     MAT4X3PNT(ym, view2model, yv);
     if (draw_eye_path) {
-	(void)preview_line_append(&preview_eye_path, xm, BSG_GEOMETRY_LINE_DRAW);
-	(void)preview_line_append(&preview_eye_path, (*v), BSG_GEOMETRY_LINE_MOVE);
-	(void)preview_line_append(&preview_eye_path, ym, BSG_GEOMETRY_LINE_DRAW);
-	(void)preview_line_append(&preview_eye_path, (*v), BSG_GEOMETRY_LINE_MOVE);
+	(void)preview_line_append(&preview_eye_path, xm, BG_GEOMETRY_LINE_DRAW);
+	(void)preview_line_append(&preview_eye_path, (*v), BG_GEOMETRY_LINE_MOVE);
+	(void)preview_line_append(&preview_eye_path, ym, BG_GEOMETRY_LINE_DRAW);
+	(void)preview_line_append(&preview_eye_path, (*v), BG_GEOMETRY_LINE_MOVE);
     }
 
     /* Second step:  put eye at view 0, 0, 1.
@@ -489,16 +489,14 @@ ged_preview_core(struct ged *gedp, int argc, const char *argv[])
 
     if (draw_eye_path) {
 	struct bsg_view *view = gedp->ged_gvp;
-	(void)bsg_feature_remove(view, "preview::eye_path");
+	(void)ged_draw_view_feature_remove(view, "preview::eye_path");
 	if (preview_eye_path.count) {
-	    bsg_feature_ref ref = bsg_feature_create_lines(view, "preview::eye_path", 0);
-	    if (!bsg_feature_ref_is_null(ref)) {
-		(void)bsg_feature_points_replace(ref, BSG_FEATURE_LINES,
-			(const point_t *)preview_eye_path.points,
-			preview_eye_path.cmds,
-			preview_eye_path.count);
-		bsg_feature_set_color(ref, 255, 255, 0);
-	    }
+	    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+	    style.color_valid = 1;
+	    VSET(style.color, 255, 255, 0);
+	    (void)ged_draw_view_lines_replace(view, "preview::eye_path", 0,
+		    (const point_t *)preview_eye_path.points,
+		    preview_eye_path.cmds, preview_eye_path.count, &style);
 	}
     }
 

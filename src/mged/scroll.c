@@ -100,7 +100,7 @@ struct scroll_item sl_adc_menu[] = {
 void
 set_scroll(struct mged_state *s)
 {
-    struct bsg_adc_state adc = {0};
+    struct rt_view_adc_state adc = {0};
 
     (void)mged_dm_adc_state_get(s->mged_curr_dm, &adc);
 
@@ -297,7 +297,7 @@ sl_itol(struct scroll_item *mptr, double val)
 static void
 second_menu_scroll_display(fastf_t *f, struct scroll_item *mptr, struct mged_state *s)
 {
-    struct bsg_adc_state adc = {0};
+    struct rt_view_adc_state adc = {0};
 
     (void)mged_dm_adc_state_get(s->mged_curr_dm, &adc);
 

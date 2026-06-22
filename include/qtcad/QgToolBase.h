@@ -31,7 +31,7 @@
  *                         intercept view events while active
  *   - refresh()         : (re)populate widget from current view state
  *   - onDbChanged()     : the active .g database has changed
- *   - onViewChanged()   : the active bsg_view has changed
+ *   - onViewChanged()   : the active view has changed
  *
  * QgToolBase owns the widget and (optionally) the view-event-filter
  * object via Qt parentage.  It is host-agnostic: it only knows about

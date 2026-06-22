@@ -157,12 +157,6 @@ ged_draw_scene_ref_geometry_clear(bsg_scene_ref ref)
 }
 
 
-bsg_geometry_ref
-ged_draw_scene_ref_geometry_ref(bsg_scene_ref ref)
-{
-    return bsg_scene_ref_as_geometry(ref);
-}
-
 static void
 _ged_draw_bounds_include_point(point_t bmin, point_t bmax, const point_t pt)
 {
@@ -2297,6 +2291,36 @@ ged_draw_scene_ref_publish_indexed_face_set(bsg_scene_ref ref,
 	return 0;
 
     int ok = bsg_geometry_ref_set_indexed_face_set(bsg_scene_ref_as_geometry(ref),
+	    points, point_count, normals, normal_count, indices, index_count);
+    if (!ok)
+	return 0;
+
+    shape_data->geometry_command_count = point_count;
+    shape_data->geometry_revision++;
+    bsg_scene_invalidate(ref);
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_update_indexed_face_set(bsg_scene_ref ref,
+					   const point_t *points,
+					   size_t point_count,
+					   const vect_t *normals,
+					   size_t normal_count,
+					   const int *indices,
+					   size_t index_count)
+{
+    ged_draw_shape_state *shape_data = ged_draw_shape_state_get_scene_ref(ref);
+
+    if (!shape_data)
+	return 0;
+    if (!point_count || !index_count)
+	return ged_draw_scene_ref_geometry_clear(ref);
+    if (!points || !indices)
+	return 0;
+
+    int ok = bsg_geometry_ref_update_indexed_face_set(bsg_scene_ref_as_geometry(ref),
 	    points, point_count, normals, normal_count, indices, index_count);
     if (!ok)
 	return 0;

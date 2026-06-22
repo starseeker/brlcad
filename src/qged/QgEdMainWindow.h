@@ -42,7 +42,6 @@
 #include <QStatusBar>
 #include <QTreeView>
 
-#include "ged.h"
 #include "qtcad/QgAttributesModel.h"
 #include "qtcad/QgConsole.h"
 #include "qtcad/QgDockWidget.h"
@@ -73,7 +72,6 @@ class QgEdMainWindow : public QMainWindow
 
 	// Get the currently active view of the quad/central display widget
 	QgView * CurrentDisplay();
-	struct bsg_view * CurrentView();
 
 	// Checkpoint display state (used for subsequent diff)
 	void DisplayCheckpoint();

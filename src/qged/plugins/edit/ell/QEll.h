@@ -30,10 +30,10 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QRadioButton>
-#include "bsg/feature.h"
 #include "raytrace.h"
 #include "qtcad/QgColorRGB.h"
 #include "qtcad/QgTypes.h"
+#include "../qged_edit_preview_util.h"
 
 class QgPluginContext;
 
@@ -76,12 +76,11 @@ class QEll : public QWidget
     private:
 	struct directory *dp = NULL;
 	struct rt_ell_internal ell;
-	bsg_feature_ref p = BSG_FEATURE_REF_NULL_INIT;
+	qged_edit_feature_ref p = QGED_EDIT_FEATURE_REF_NULL;
 	struct bu_vls oname = BU_VLS_INIT_ZERO;
 	QgPluginContext *m_ctx = nullptr;
 
 	struct ged *getGed() const;
-	struct bsg_view *getView() const;
 };
 
 #endif //QELL_H

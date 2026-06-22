@@ -16,6 +16,7 @@ extern "C" {
 #include "brlobol/grid.h"
 #include "brlobol/view_controller.h"
 #include "brlobol/vlist_shape.h"
+#include "qtcad/QgLegacyViewBsg.h"
 #include "qtcad/QgSignalFlags.h"
 #include "qtcad/QgView.h"
 #include "vmath.h"
@@ -87,7 +88,7 @@ main(int argc, char **argv)
     QgView view(NULL, QgView_SW, NULL);
     view.resize(160, 120);
 
-    struct bsg_view *bv = view.view();
+    struct bsg_view *bv = qg_legacy_view_to_bsg(view.view());
     if (!bv)
 	FAIL("QgView should expose transitional BSG view state");
     if (view.dmp())
@@ -98,14 +99,14 @@ main(int argc, char **argv)
     if (!root)
 	FAIL("QgView should expose an Obol scene root");
 
-    struct bsg_grid_state grid = {};
-    struct bsg_axes modelAxes = {};
-    struct bsg_axes viewAxes = {};
-    struct bsg_adc_state adc = {};
-    (void)rt_view_grid_from_bsg(&grid, bv);
-    (void)rt_view_model_axes_from_bsg(&modelAxes, bv);
-    (void)rt_view_view_axes_from_bsg(&viewAxes, bv);
-    (void)rt_view_adc_from_bsg(&adc, bv);
+    struct rt_view_grid_state grid = {};
+    struct rt_view_axes_state modelAxes = {};
+    struct rt_view_axes_state viewAxes = {};
+    struct rt_view_adc_state adc = {};
+    (void)rt_view_grid_state_from_bsg(&grid, bv);
+    (void)rt_view_model_axes_state_from_bsg(&modelAxes, bv);
+    (void)rt_view_view_axes_state_from_bsg(&viewAxes, bv);
+    (void)rt_view_adc_state_from_bsg(&adc, bv);
 
     grid.draw = 1;
     VSET(grid.anchor, 1.0, 2.0, 3.0);
@@ -113,23 +114,23 @@ main(int argc, char **argv)
     grid.res_v = 4.0;
     grid.res_major_h = 3;
     grid.res_major_v = 2;
-    rt_view_grid_set_bsg(bv, &grid);
+    rt_view_grid_state_set_bsg(bv, &grid);
 
     modelAxes.draw = 1;
     VSET(modelAxes.axes_pos, 4.0, 5.0, 6.0);
     modelAxes.axes_size = 7.0;
-    rt_view_model_axes_set_bsg(bv, &modelAxes);
+    rt_view_model_axes_state_set_bsg(bv, &modelAxes);
 
     viewAxes.draw = 1;
     VSET(viewAxes.axes_pos, -0.8, -0.7, 0.0);
     viewAxes.axes_size = 0.5;
-    rt_view_view_axes_set_bsg(bv, &viewAxes);
+    rt_view_view_axes_state_set_bsg(bv, &viewAxes);
 
     adc.draw = 1;
     VSET(adc.pos_model, 8.0, 9.0, 0.0);
     adc.a1 = 30.0;
     adc.dst = 12.0;
-    rt_view_adc_set_bsg(bv, &adc);
+    rt_view_adc_state_set_bsg(bv, &adc);
 
     controller->clearRenderRequest();
     view.need_update(QG_VIEW_DRAWN);
@@ -183,10 +184,10 @@ main(int argc, char **argv)
     modelAxes.draw = 0;
     viewAxes.draw = 0;
     adc.draw = 0;
-    rt_view_grid_set_bsg(bv, &grid);
-    rt_view_model_axes_set_bsg(bv, &modelAxes);
-    rt_view_view_axes_set_bsg(bv, &viewAxes);
-    rt_view_adc_set_bsg(bv, &adc);
+    rt_view_grid_state_set_bsg(bv, &grid);
+    rt_view_model_axes_state_set_bsg(bv, &modelAxes);
+    rt_view_view_axes_state_set_bsg(bv, &viewAxes);
+    rt_view_adc_state_set_bsg(bv, &adc);
     view.need_update(QG_VIEW_DRAWN);
 
     if (find_overlay(root, "faceplate::grid") ||

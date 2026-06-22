@@ -64,8 +64,8 @@ to_faceplate(struct ged *gedp,
     }
 
     if (BU_STR_EQUAL(argv[2], "center_dot")) {
-	struct bsg_other_state center_dot;
-	if (!rt_view_center_dot_from_bsg(&center_dot, gdvp))
+	struct rt_view_other_state center_dot;
+	if (!rt_view_center_dot_state_from_bsg(&center_dot, gdvp))
 	    goto bad;
 	if (BU_STR_EQUAL(argv[3], "draw")) {
 	    if (argc == 4) {
@@ -80,7 +80,7 @@ to_faceplate(struct ged *gedp,
 		else
 		    center_dot.gos_draw = 0;
 
-		rt_view_center_dot_set_bsg(gdvp, &center_dot);
+		rt_view_center_dot_state_set_bsg(gdvp, &center_dot);
 		to_refresh_view(gdvp);
 		return BRLCAD_OK;
 	    }
@@ -99,7 +99,7 @@ to_faceplate(struct ged *gedp,
 		    goto bad;
 
 		VSET(center_dot.gos_line_color, r, g, b);
-		rt_view_center_dot_set_bsg(gdvp, &center_dot);
+		rt_view_center_dot_state_set_bsg(gdvp, &center_dot);
 		to_refresh_view(gdvp);
 		return BRLCAD_OK;
 	    }
@@ -149,8 +149,8 @@ to_faceplate(struct ged *gedp,
     }
 
     if (BU_STR_EQUAL(argv[2], "view_params")) {
-	struct bsg_params_state params;
-	if (!rt_view_params_from_bsg(&params, gdvp))
+	struct rt_view_params_state params;
+	if (!rt_view_params_state_from_bsg(&params, gdvp))
 	    goto bad;
 	if (BU_STR_EQUAL(argv[3], "draw")) {
 	    if (argc == 4) {
@@ -165,7 +165,7 @@ to_faceplate(struct ged *gedp,
 		else
 		    params.draw = 0;
 
-		rt_view_params_set_bsg(gdvp, &params);
+		rt_view_params_state_set_bsg(gdvp, &params);
 		to_refresh_view(gdvp);
 		return BRLCAD_OK;
 	    }
@@ -184,7 +184,7 @@ to_faceplate(struct ged *gedp,
 		    goto bad;
 
 		VSET(params.color, r, g, b);
-		rt_view_params_set_bsg(gdvp, &params);
+		rt_view_params_state_set_bsg(gdvp, &params);
 		to_refresh_view(gdvp);
 		return BRLCAD_OK;
 	    }
@@ -194,8 +194,8 @@ to_faceplate(struct ged *gedp,
     }
 
     if (BU_STR_EQUAL(argv[2], "view_scale")) {
-	struct bsg_other_state scale_state;
-	if (!rt_view_scale_overlay_from_bsg(&scale_state, gdvp))
+	struct rt_view_other_state scale_state;
+	if (!rt_view_scale_overlay_state_from_bsg(&scale_state, gdvp))
 	    goto bad;
 	if (BU_STR_EQUAL(argv[3], "draw")) {
 	    if (argc == 4) {
@@ -210,7 +210,7 @@ to_faceplate(struct ged *gedp,
 		else
 		    scale_state.gos_draw = 0;
 
-		rt_view_scale_overlay_set_bsg(gdvp, &scale_state);
+		rt_view_scale_overlay_state_set_bsg(gdvp, &scale_state);
 		to_refresh_view(gdvp);
 		return BRLCAD_OK;
 	    }
@@ -229,7 +229,7 @@ to_faceplate(struct ged *gedp,
 		    goto bad;
 
 		VSET(scale_state.gos_line_color, r, g, b);
-		rt_view_scale_overlay_set_bsg(gdvp, &scale_state);
+		rt_view_scale_overlay_state_set_bsg(gdvp, &scale_state);
 		to_refresh_view(gdvp);
 		return BRLCAD_OK;
 	    }

@@ -32,12 +32,10 @@
 #include "qtcad/QgTypes.h"
 
 class QEvent;
+class QgSession;
 class QgView;
 class QGridLayout;
 class QPoint;
-
-struct bsg_view;
-struct ged;
 
 // Abbreviations:
 //
@@ -52,7 +50,7 @@ class QTCAD_EXPORT QgQuadView : public QWidget {
 
 
 public:
-	explicit QgQuadView(QWidget *parent, struct ged *gedpRef, int type);
+	explicit QgQuadView(QWidget *parent, QgSession *session, int type);
 	~QgQuadView();
 
 	void stash_hashes(); // Store current dmp and v hash values
@@ -65,7 +63,6 @@ public:
 	QgView *get(const QPoint &p); // Test is global point coordinates correspond to one of the quad view
 	QgView *get(QEvent *e); // Given a MouseButtonPress QEvent, see if the point identifies a view
 	QgView *curr_view(); // return the currently selected view
-	struct bsg_view * view(int quadrant_id = UPPER_RIGHT_QUADRANT);
 
 	void select(int quadrant_num);
 	void select(const char *id); // valid inputs: ur, ul, ll and lr
@@ -103,7 +100,7 @@ private:
 	QgView *views[4] = {nullptr, nullptr, nullptr, nullptr};
 	QgView *currentView = nullptr;
 	// We need to hang on to this because we don't create the other quad views until the user switches mode
-	struct ged *gedp = nullptr;
+	QgSession *m_session = nullptr;
 
 	// Hang on to these pointers so when we need to clean up memory we have them
 	QGridLayout *currentLayout = nullptr;

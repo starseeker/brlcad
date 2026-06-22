@@ -32,9 +32,9 @@
 
 #include "bu/opt.h"
 #include "bu/vls.h"
-#include "bsg/snap_action.h"
 #include "dm.h"
 #include "rt/view_legacy_bsg.h"
+#include "../bsg_ged_draw_view_private.h"
 #include "../ged_private.h"
 #include "./ged_view.h"
 
@@ -181,31 +181,31 @@ ged_view_snap(struct ged *gedp, int argc, const char *argv[])
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     if (use_grid) {
-	struct bsg_snap_result sres = {0};
 	point_t sample = VINIT_ZERO;
+	point_t snapped = VINIT_ZERO;
 	VMOVE(sample, view_pt);
-	if (rt_view_snap_candidates_bsg(gedp->ged_gvp, sample, 0.0, RT_VIEW_SNAP_KIND_GRID_BSG, &sres) > 0) {
+	if (ged_draw_view_snap_first_candidate(gedp->ged_gvp, sample,
+		GED_DRAW_VIEW_SNAP_GRID, snapped)) {
 	    point_t vp = VINIT_ZERO;
-	    VMOVE(view_pt, sres.sr_candidates[0].sc_point);
+	    VMOVE(view_pt, snapped);
 	    MAT4X3PNT(vp, model2view, view_pt);
 	    V2SET(view_pt_2d, vp[0], vp[1]);
 	}
-	bsg_snap_result_free(&sres);
     }
 
     if (use_lines) {
-	struct bsg_snap_result sres = {0};
 	point_t sample = VINIT_ZERO;
+	point_t snapped = VINIT_ZERO;
 	point_t vp = VINIT_ZERO;
 	int line_snap_ok = 0;
 	VMOVE(sample, view_pt);
-	if (rt_view_snap_candidates_bsg(gedp->ged_gvp, sample, 0.0, RT_VIEW_SNAP_KIND_ENDPOINT_BSG, &sres) > 0) {
+	if (ged_draw_view_snap_first_candidate(gedp->ged_gvp, sample,
+		GED_DRAW_VIEW_SNAP_ENDPOINT, snapped)) {
 	    line_snap_ok = 1;
-	    VMOVE(view_pt, sres.sr_candidates[0].sc_point);
+	    VMOVE(view_pt, snapped);
 	    MAT4X3PNT(vp, model2view, view_pt);
 	    V2SET(view_pt_2d, vp[0], vp[1]);
 	}
-	bsg_snap_result_free(&sres);
 	if (!line_snap_ok) {
 	    bu_vls_printf(gedp->ged_result_str, "no lines close enough for snapping");
 	    return BRLCAD_OK;

@@ -29,12 +29,17 @@
 #include "bg/plane.h"
 #include "bn/qmath.h"
 #include "bsg/faceplate.h"
+#include "bsg/interaction.h"
 #include "bsg/lod.h"
+#include "bsg/pick.h"
+#include "bsg/polygon.h"
+#include "bsg/selection.h"
 #include "bsg/snap.h"
 #include "bsg/snap_action.h"
 #include "bsg/util.h"
 #include "bsg/view_set.h"
 #include "bsg/view_state.h"
+#include "rt/primitives/sketch_legacy_bsg.h"
 #include "rt/view_legacy_bsg.h"
 
 struct bsg_mesh_lod *
@@ -62,6 +67,12 @@ rt_view_info_from_bsg(struct rt_view_info *info, const struct bsg_view *v)
 	info->lod.bot_threshold = policy.bot_threshold;
     }
     rt_view_info_sanitize(info);
+}
+
+const char *
+rt_view_name_from_bsg(const struct bsg_view *v)
+{
+    return (v && bu_vls_strlen(&v->gv_name)) ? bu_vls_cstr(&v->gv_name) : NULL;
 }
 
 int
@@ -230,187 +241,569 @@ rt_view_unique_object_name_bsg(struct bu_vls *oname,
     return 1;
 }
 
-int
-rt_view_interactive_rect_from_bsg(struct bsg_interactive_rect_state *record,
-				  const struct bsg_view *v)
+static void
+_rt_view_interactive_rect_from_bsg_state(struct rt_view_interactive_rect_state *dst,
+					 const struct bsg_interactive_rect_state *src)
 {
-    if (record)
-	memset(record, 0, sizeof(struct bsg_interactive_rect_state));
-    if (!record || !v)
-	return 0;
+    memset(dst, 0, sizeof(*dst));
+    if (!src)
+	return;
 
-    return bsg_view_interactive_rect_get(v, record);
+    dst->active = src->active;
+    dst->draw = src->draw;
+    dst->line_width = src->line_width;
+    dst->line_style = src->line_style;
+    dst->pos[0] = src->pos[0];
+    dst->pos[1] = src->pos[1];
+    dst->dim[0] = src->dim[0];
+    dst->dim[1] = src->dim[1];
+    dst->x = src->x;
+    dst->y = src->y;
+    dst->width = src->width;
+    dst->height = src->height;
+    dst->bg[0] = src->bg[0];
+    dst->bg[1] = src->bg[1];
+    dst->bg[2] = src->bg[2];
+    dst->color[0] = src->color[0];
+    dst->color[1] = src->color[1];
+    dst->color[2] = src->color[2];
+    dst->cdim[0] = src->cdim[0];
+    dst->cdim[1] = src->cdim[1];
+    dst->aspect = src->aspect;
+}
+
+static void
+_rt_view_interactive_rect_to_bsg_state(struct bsg_interactive_rect_state *dst,
+				       const struct rt_view_interactive_rect_state *src)
+{
+    memset(dst, 0, sizeof(*dst));
+    if (!src)
+	return;
+
+    dst->active = src->active;
+    dst->draw = src->draw;
+    dst->line_width = src->line_width;
+    dst->line_style = src->line_style;
+    dst->pos[0] = src->pos[0];
+    dst->pos[1] = src->pos[1];
+    dst->dim[0] = src->dim[0];
+    dst->dim[1] = src->dim[1];
+    dst->x = src->x;
+    dst->y = src->y;
+    dst->width = src->width;
+    dst->height = src->height;
+    dst->bg[0] = src->bg[0];
+    dst->bg[1] = src->bg[1];
+    dst->bg[2] = src->bg[2];
+    dst->color[0] = src->color[0];
+    dst->color[1] = src->color[1];
+    dst->color[2] = src->color[2];
+    dst->cdim[0] = src->cdim[0];
+    dst->cdim[1] = src->cdim[1];
+    dst->aspect = src->aspect;
 }
 
 int
-rt_view_interactive_rect_set_bsg(struct bsg_view *v,
-				 const struct bsg_interactive_rect_state *record)
+rt_view_interactive_rect_state_from_bsg(struct rt_view_interactive_rect_state *record,
+					const struct bsg_view *v)
 {
-    if (!v || !record)
+    if (record)
+	memset(record, 0, sizeof(*record));
+    if (!record || !v)
 	return 0;
 
-    bsg_view_interactive_rect_set(v, record);
+    struct bsg_interactive_rect_state bsg_record = {0};
+    if (!bsg_view_interactive_rect_get(v, &bsg_record))
+	return 0;
+
+    _rt_view_interactive_rect_from_bsg_state(record, &bsg_record);
     return 1;
 }
 
 int
-rt_view_adc_from_bsg(struct bsg_adc_state *record,
-		     const struct bsg_view *v)
-{
-    if (record)
-	memset(record, 0, sizeof(struct bsg_adc_state));
-    if (!record || !v)
-	return 0;
-
-    return bsg_view_adc_get(v, record);
-}
-
-int
-rt_view_adc_set_bsg(struct bsg_view *v,
-		    const struct bsg_adc_state *record)
+rt_view_interactive_rect_state_set_bsg(struct bsg_view *v,
+				       const struct rt_view_interactive_rect_state *record)
 {
     if (!v || !record)
 	return 0;
 
-    bsg_view_adc_set(v, record);
+    struct bsg_interactive_rect_state bsg_record = {0};
+    _rt_view_interactive_rect_to_bsg_state(&bsg_record, record);
+    bsg_view_interactive_rect_set(v, &bsg_record);
     return 1;
 }
 
-int
-rt_view_grid_from_bsg(struct bsg_grid_state *record,
-		      const struct bsg_view *v)
+static void
+_rt_view_adc_from_bsg_state(struct rt_view_adc_state *dst,
+			    const struct bsg_adc_state *src)
 {
-    if (record)
-	memset(record, 0, sizeof(struct bsg_grid_state));
-    if (!record || !v)
-	return 0;
+    memset(dst, 0, sizeof(*dst));
+    if (!src)
+	return;
 
-    return bsg_view_grid_get(v, record);
+    dst->draw = src->draw;
+    dst->dv_x = src->dv_x;
+    dst->dv_y = src->dv_y;
+    dst->dv_a1 = src->dv_a1;
+    dst->dv_a2 = src->dv_a2;
+    dst->dv_dist = src->dv_dist;
+    VMOVE(dst->pos_model, src->pos_model);
+    VMOVE(dst->pos_view, src->pos_view);
+    VMOVE(dst->pos_grid, src->pos_grid);
+    dst->a1 = src->a1;
+    dst->a2 = src->a2;
+    dst->dst = src->dst;
+    dst->anchor_pos = src->anchor_pos;
+    dst->anchor_a1 = src->anchor_a1;
+    dst->anchor_a2 = src->anchor_a2;
+    dst->anchor_dst = src->anchor_dst;
+    VMOVE(dst->anchor_pt_a1, src->anchor_pt_a1);
+    VMOVE(dst->anchor_pt_a2, src->anchor_pt_a2);
+    VMOVE(dst->anchor_pt_dst, src->anchor_pt_dst);
+    dst->line_color[0] = src->line_color[0];
+    dst->line_color[1] = src->line_color[1];
+    dst->line_color[2] = src->line_color[2];
+    dst->tick_color[0] = src->tick_color[0];
+    dst->tick_color[1] = src->tick_color[1];
+    dst->tick_color[2] = src->tick_color[2];
+    dst->line_width = src->line_width;
+}
+
+static void
+_rt_view_adc_to_bsg_state(struct bsg_adc_state *dst,
+			  const struct rt_view_adc_state *src)
+{
+    memset(dst, 0, sizeof(*dst));
+    if (!src)
+	return;
+
+    dst->draw = src->draw;
+    dst->dv_x = src->dv_x;
+    dst->dv_y = src->dv_y;
+    dst->dv_a1 = src->dv_a1;
+    dst->dv_a2 = src->dv_a2;
+    dst->dv_dist = src->dv_dist;
+    VMOVE(dst->pos_model, src->pos_model);
+    VMOVE(dst->pos_view, src->pos_view);
+    VMOVE(dst->pos_grid, src->pos_grid);
+    dst->a1 = src->a1;
+    dst->a2 = src->a2;
+    dst->dst = src->dst;
+    dst->anchor_pos = src->anchor_pos;
+    dst->anchor_a1 = src->anchor_a1;
+    dst->anchor_a2 = src->anchor_a2;
+    dst->anchor_dst = src->anchor_dst;
+    VMOVE(dst->anchor_pt_a1, src->anchor_pt_a1);
+    VMOVE(dst->anchor_pt_a2, src->anchor_pt_a2);
+    VMOVE(dst->anchor_pt_dst, src->anchor_pt_dst);
+    dst->line_color[0] = src->line_color[0];
+    dst->line_color[1] = src->line_color[1];
+    dst->line_color[2] = src->line_color[2];
+    dst->tick_color[0] = src->tick_color[0];
+    dst->tick_color[1] = src->tick_color[1];
+    dst->tick_color[2] = src->tick_color[2];
+    dst->line_width = src->line_width;
 }
 
 int
-rt_view_grid_set_bsg(struct bsg_view *v,
-		     const struct bsg_grid_state *record)
-{
-    if (!v || !record)
-	return 0;
-
-    bsg_view_grid_set(v, record);
-    return 1;
-}
-
-int
-rt_view_model_axes_from_bsg(struct bsg_axes *record,
-			    const struct bsg_view *v)
-{
-    if (record)
-	memset(record, 0, sizeof(struct bsg_axes));
-    if (!record || !v)
-	return 0;
-
-    return bsg_view_model_axes_get(v, record);
-}
-
-int
-rt_view_model_axes_set_bsg(struct bsg_view *v,
-			   const struct bsg_axes *record)
-{
-    if (!v || !record)
-	return 0;
-
-    bsg_view_model_axes_set(v, record);
-    return 1;
-}
-
-int
-rt_view_view_axes_from_bsg(struct bsg_axes *record,
+rt_view_adc_state_from_bsg(struct rt_view_adc_state *record,
 			   const struct bsg_view *v)
 {
     if (record)
-	memset(record, 0, sizeof(struct bsg_axes));
+	memset(record, 0, sizeof(*record));
     if (!record || !v)
 	return 0;
 
-    return bsg_view_view_axes_get(v, record);
-}
-
-int
-rt_view_view_axes_set_bsg(struct bsg_view *v,
-			  const struct bsg_axes *record)
-{
-    if (!v || !record)
+    struct bsg_adc_state bsg_record = {0};
+    if (!bsg_view_adc_get(v, &bsg_record))
 	return 0;
 
-    bsg_view_view_axes_set(v, record);
+    _rt_view_adc_from_bsg_state(record, &bsg_record);
     return 1;
 }
 
 int
-rt_view_center_dot_from_bsg(struct bsg_other_state *record,
+rt_view_adc_state_set_bsg(struct bsg_view *v,
+			  const struct rt_view_adc_state *record)
+{
+    if (!v || !record)
+	return 0;
+
+    struct bsg_adc_state bsg_record = {0};
+    _rt_view_adc_to_bsg_state(&bsg_record, record);
+    bsg_view_adc_set(v, &bsg_record);
+    return 1;
+}
+
+static void
+_rt_view_grid_from_bsg_state(struct rt_view_grid_state *dst,
+			     const struct bsg_grid_state *src)
+{
+    memset(dst, 0, sizeof(*dst));
+    if (!src)
+	return;
+
+    dst->rc = src->rc;
+    dst->draw = src->draw;
+    dst->adaptive = src->adaptive;
+    dst->snap = src->snap;
+    VMOVE(dst->anchor, src->anchor);
+    dst->res_h = src->res_h;
+    dst->res_v = src->res_v;
+    dst->res_major_h = src->res_major_h;
+    dst->res_major_v = src->res_major_v;
+    dst->color[0] = src->color[0];
+    dst->color[1] = src->color[1];
+    dst->color[2] = src->color[2];
+}
+
+static void
+_rt_view_grid_to_bsg_state(struct bsg_grid_state *dst,
+			   const struct rt_view_grid_state *src)
+{
+    memset(dst, 0, sizeof(*dst));
+    if (!src)
+	return;
+
+    dst->rc = src->rc;
+    dst->draw = src->draw;
+    dst->adaptive = src->adaptive;
+    dst->snap = src->snap;
+    VMOVE(dst->anchor, src->anchor);
+    dst->res_h = src->res_h;
+    dst->res_v = src->res_v;
+    dst->res_major_h = src->res_major_h;
+    dst->res_major_v = src->res_major_v;
+    dst->color[0] = src->color[0];
+    dst->color[1] = src->color[1];
+    dst->color[2] = src->color[2];
+}
+
+int
+rt_view_grid_state_from_bsg(struct rt_view_grid_state *record,
 			    const struct bsg_view *v)
 {
     if (record)
-	memset(record, 0, sizeof(struct bsg_other_state));
+	memset(record, 0, sizeof(*record));
     if (!record || !v)
 	return 0;
 
-    return bsg_view_center_dot_get(v, record);
-}
-
-int
-rt_view_center_dot_set_bsg(struct bsg_view *v,
-			   const struct bsg_other_state *record)
-{
-    if (!v || !record)
+    struct bsg_grid_state bsg_record = {0};
+    if (!bsg_view_grid_get(v, &bsg_record))
 	return 0;
 
-    bsg_view_center_dot_set(v, record);
+    _rt_view_grid_from_bsg_state(record, &bsg_record);
     return 1;
 }
 
 int
-rt_view_scale_overlay_from_bsg(struct bsg_other_state *record,
-			       const struct bsg_view *v)
-{
-    if (record)
-	memset(record, 0, sizeof(struct bsg_other_state));
-    if (!record || !v)
-	return 0;
-
-    return bsg_view_scale_state_get(v, record);
-}
-
-int
-rt_view_scale_overlay_set_bsg(struct bsg_view *v,
-			      const struct bsg_other_state *record)
+rt_view_grid_state_set_bsg(struct bsg_view *v,
+			   const struct rt_view_grid_state *record)
 {
     if (!v || !record)
 	return 0;
 
-    bsg_view_scale_state_set(v, record);
+    struct bsg_grid_state bsg_record = {0};
+    _rt_view_grid_to_bsg_state(&bsg_record, record);
+    bsg_view_grid_set(v, &bsg_record);
+    return 1;
+}
+
+static void
+_rt_view_axes_from_bsg_state(struct rt_view_axes_state *dst,
+			     const struct bsg_axes *src)
+{
+    memset(dst, 0, sizeof(*dst));
+    if (!src)
+	return;
+
+    dst->draw = src->draw;
+    VMOVE(dst->axes_pos, src->axes_pos);
+    dst->axes_size = src->axes_size;
+    dst->line_width = src->line_width;
+    dst->axes_color[0] = src->axes_color[0];
+    dst->axes_color[1] = src->axes_color[1];
+    dst->axes_color[2] = src->axes_color[2];
+    dst->pos_only = src->pos_only;
+    dst->label_flag = src->label_flag;
+    dst->label_color[0] = src->label_color[0];
+    dst->label_color[1] = src->label_color[1];
+    dst->label_color[2] = src->label_color[2];
+    dst->triple_color = src->triple_color;
+    dst->tick_enabled = src->tick_enabled;
+    dst->tick_length = src->tick_length;
+    dst->tick_major_length = src->tick_major_length;
+    dst->tick_interval = src->tick_interval;
+    dst->ticks_per_major = src->ticks_per_major;
+    dst->tick_threshold = src->tick_threshold;
+    dst->tick_color[0] = src->tick_color[0];
+    dst->tick_color[1] = src->tick_color[1];
+    dst->tick_color[2] = src->tick_color[2];
+    dst->tick_major_color[0] = src->tick_major_color[0];
+    dst->tick_major_color[1] = src->tick_major_color[1];
+    dst->tick_major_color[2] = src->tick_major_color[2];
+}
+
+static void
+_rt_view_axes_to_bsg_state(struct bsg_axes *dst,
+			   const struct rt_view_axes_state *src)
+{
+    memset(dst, 0, sizeof(*dst));
+    if (!src)
+	return;
+
+    dst->draw = src->draw;
+    VMOVE(dst->axes_pos, src->axes_pos);
+    dst->axes_size = src->axes_size;
+    dst->line_width = src->line_width;
+    dst->axes_color[0] = src->axes_color[0];
+    dst->axes_color[1] = src->axes_color[1];
+    dst->axes_color[2] = src->axes_color[2];
+    dst->pos_only = src->pos_only;
+    dst->label_flag = src->label_flag;
+    dst->label_color[0] = src->label_color[0];
+    dst->label_color[1] = src->label_color[1];
+    dst->label_color[2] = src->label_color[2];
+    dst->triple_color = src->triple_color;
+    dst->tick_enabled = src->tick_enabled;
+    dst->tick_length = src->tick_length;
+    dst->tick_major_length = src->tick_major_length;
+    dst->tick_interval = src->tick_interval;
+    dst->ticks_per_major = src->ticks_per_major;
+    dst->tick_threshold = src->tick_threshold;
+    dst->tick_color[0] = src->tick_color[0];
+    dst->tick_color[1] = src->tick_color[1];
+    dst->tick_color[2] = src->tick_color[2];
+    dst->tick_major_color[0] = src->tick_major_color[0];
+    dst->tick_major_color[1] = src->tick_major_color[1];
+    dst->tick_major_color[2] = src->tick_major_color[2];
+}
+
+int
+rt_view_model_axes_state_from_bsg(struct rt_view_axes_state *record,
+				  const struct bsg_view *v)
+{
+    if (record)
+	memset(record, 0, sizeof(*record));
+    if (!record || !v)
+	return 0;
+
+    struct bsg_axes bsg_record = {0};
+    if (!bsg_view_model_axes_get(v, &bsg_record))
+	return 0;
+
+    _rt_view_axes_from_bsg_state(record, &bsg_record);
     return 1;
 }
 
 int
-rt_view_params_from_bsg(struct bsg_params_state *record,
-			const struct bsg_view *v)
-{
-    if (record)
-	memset(record, 0, sizeof(struct bsg_params_state));
-    if (!record || !v)
-	return 0;
-
-    return bsg_view_params_get(v, record);
-}
-
-int
-rt_view_params_set_bsg(struct bsg_view *v,
-		       const struct bsg_params_state *record)
+rt_view_model_axes_state_set_bsg(struct bsg_view *v,
+				 const struct rt_view_axes_state *record)
 {
     if (!v || !record)
 	return 0;
 
-    bsg_view_params_set(v, record);
+    struct bsg_axes bsg_record = {0};
+    _rt_view_axes_to_bsg_state(&bsg_record, record);
+    bsg_view_model_axes_set(v, &bsg_record);
+    return 1;
+}
+
+int
+rt_view_view_axes_state_from_bsg(struct rt_view_axes_state *record,
+				 const struct bsg_view *v)
+{
+    if (record)
+	memset(record, 0, sizeof(*record));
+    if (!record || !v)
+	return 0;
+
+    struct bsg_axes bsg_record = {0};
+    if (!bsg_view_view_axes_get(v, &bsg_record))
+	return 0;
+
+    _rt_view_axes_from_bsg_state(record, &bsg_record);
+    return 1;
+}
+
+int
+rt_view_view_axes_state_set_bsg(struct bsg_view *v,
+				const struct rt_view_axes_state *record)
+{
+    if (!v || !record)
+	return 0;
+
+    struct bsg_axes bsg_record = {0};
+    _rt_view_axes_to_bsg_state(&bsg_record, record);
+    bsg_view_view_axes_set(v, &bsg_record);
+    return 1;
+}
+
+static void
+_rt_view_other_from_bsg_state(struct rt_view_other_state *dst,
+			      const struct bsg_other_state *src)
+{
+    memset(dst, 0, sizeof(*dst));
+    if (!src)
+	return;
+
+    dst->gos_draw = src->gos_draw;
+    dst->gos_line_color[0] = src->gos_line_color[0];
+    dst->gos_line_color[1] = src->gos_line_color[1];
+    dst->gos_line_color[2] = src->gos_line_color[2];
+    dst->gos_text_color[0] = src->gos_text_color[0];
+    dst->gos_text_color[1] = src->gos_text_color[1];
+    dst->gos_text_color[2] = src->gos_text_color[2];
+    dst->gos_font_size = src->gos_font_size;
+}
+
+static void
+_rt_view_other_to_bsg_state(struct bsg_other_state *dst,
+			    const struct rt_view_other_state *src)
+{
+    memset(dst, 0, sizeof(*dst));
+    if (!src)
+	return;
+
+    dst->gos_draw = src->gos_draw;
+    dst->gos_line_color[0] = src->gos_line_color[0];
+    dst->gos_line_color[1] = src->gos_line_color[1];
+    dst->gos_line_color[2] = src->gos_line_color[2];
+    dst->gos_text_color[0] = src->gos_text_color[0];
+    dst->gos_text_color[1] = src->gos_text_color[1];
+    dst->gos_text_color[2] = src->gos_text_color[2];
+    dst->gos_font_size = src->gos_font_size;
+}
+
+int
+rt_view_center_dot_state_from_bsg(struct rt_view_other_state *record,
+				  const struct bsg_view *v)
+{
+    if (record)
+	memset(record, 0, sizeof(*record));
+    if (!record || !v)
+	return 0;
+
+    struct bsg_other_state bsg_record = {0};
+    if (!bsg_view_center_dot_get(v, &bsg_record))
+	return 0;
+
+    _rt_view_other_from_bsg_state(record, &bsg_record);
+    return 1;
+}
+
+int
+rt_view_center_dot_state_set_bsg(struct bsg_view *v,
+				 const struct rt_view_other_state *record)
+{
+    if (!v || !record)
+	return 0;
+
+    struct bsg_other_state bsg_record = {0};
+    _rt_view_other_to_bsg_state(&bsg_record, record);
+    bsg_view_center_dot_set(v, &bsg_record);
+    return 1;
+}
+
+int
+rt_view_scale_overlay_state_from_bsg(struct rt_view_other_state *record,
+				     const struct bsg_view *v)
+{
+    if (record)
+	memset(record, 0, sizeof(*record));
+    if (!record || !v)
+	return 0;
+
+    struct bsg_other_state bsg_record = {0};
+    if (!bsg_view_scale_state_get(v, &bsg_record))
+	return 0;
+
+    _rt_view_other_from_bsg_state(record, &bsg_record);
+    return 1;
+}
+
+int
+rt_view_scale_overlay_state_set_bsg(struct bsg_view *v,
+				    const struct rt_view_other_state *record)
+{
+    if (!v || !record)
+	return 0;
+
+    struct bsg_other_state bsg_record = {0};
+    _rt_view_other_to_bsg_state(&bsg_record, record);
+    bsg_view_scale_state_set(v, &bsg_record);
+    return 1;
+}
+
+static void
+_rt_view_params_from_bsg_state(struct rt_view_params_state *dst,
+			       const struct bsg_params_state *src)
+{
+    memset(dst, 0, sizeof(*dst));
+    if (!src)
+	return;
+
+    dst->draw = src->draw;
+    dst->draw_size = src->draw_size;
+    dst->draw_center = src->draw_center;
+    dst->draw_az = src->draw_az;
+    dst->draw_el = src->draw_el;
+    dst->draw_tw = src->draw_tw;
+    dst->draw_fps = src->draw_fps;
+    dst->color[0] = src->color[0];
+    dst->color[1] = src->color[1];
+    dst->color[2] = src->color[2];
+    dst->font_size = src->font_size;
+}
+
+static void
+_rt_view_params_to_bsg_state(struct bsg_params_state *dst,
+			     const struct rt_view_params_state *src)
+{
+    memset(dst, 0, sizeof(*dst));
+    if (!src)
+	return;
+
+    dst->draw = src->draw;
+    dst->draw_size = src->draw_size;
+    dst->draw_center = src->draw_center;
+    dst->draw_az = src->draw_az;
+    dst->draw_el = src->draw_el;
+    dst->draw_tw = src->draw_tw;
+    dst->draw_fps = src->draw_fps;
+    dst->color[0] = src->color[0];
+    dst->color[1] = src->color[1];
+    dst->color[2] = src->color[2];
+    dst->font_size = src->font_size;
+}
+
+int
+rt_view_params_state_from_bsg(struct rt_view_params_state *record,
+			      const struct bsg_view *v)
+{
+    if (record)
+	memset(record, 0, sizeof(*record));
+    if (!record || !v)
+	return 0;
+
+    struct bsg_params_state bsg_record = {0};
+    if (!bsg_view_params_get(v, &bsg_record))
+	return 0;
+
+    _rt_view_params_from_bsg_state(record, &bsg_record);
+    return 1;
+}
+
+int
+rt_view_params_state_set_bsg(struct bsg_view *v,
+			     const struct rt_view_params_state *record)
+{
+    if (!v || !record)
+	return 0;
+
+    struct bsg_params_state bsg_record = {0};
+    _rt_view_params_to_bsg_state(&bsg_record, record);
+    bsg_view_params_set(v, &bsg_record);
     return 1;
 }
 
@@ -659,16 +1052,265 @@ rt_view_snap_grid_2d_bsg(struct bsg_view *v, fastf_t *vx, fastf_t *vy)
     return bsg_snap_grid_2d(v, vx, vy);
 }
 
-struct bsg_selection *
-rt_view_selection_bsg(struct bsg_view *v)
+static struct bsg_pick_result *
+rt_view_pick_result_to_bsg(struct rt_view_pick_result_bsg *result)
+{
+    return (struct bsg_pick_result *)result;
+}
+
+static const struct bsg_pick_result *
+rt_view_pick_result_const_to_bsg(const struct rt_view_pick_result_bsg *result)
+{
+    return (const struct bsg_pick_result *)result;
+}
+
+static struct rt_view_pick_result_bsg *
+rt_view_pick_result_from_bsg(struct bsg_pick_result *result)
+{
+    return (struct rt_view_pick_result_bsg *)result;
+}
+
+static const char *
+rt_view_pick_record_path(const struct bsg_pick_record *record)
+{
+    if (!record)
+	return NULL;
+
+    const char *source_path = bu_vls_cstr(&record->pr_source_path);
+    if (source_path && source_path[0])
+	return source_path;
+
+    const char *instance_path = bu_vls_cstr(&record->pr_instance_path);
+    return (instance_path && instance_path[0]) ? instance_path : NULL;
+}
+
+struct rt_view_pick_result_bsg *
+rt_view_pick_point_bsg(struct bsg_view *v, int x, int y, int first_only)
+{
+    return rt_view_pick_result_from_bsg(bsg_pick_point(v, x, y, first_only));
+}
+
+struct rt_view_pick_result_bsg *
+rt_view_pick_nearest_bsg(struct bsg_view *v, int x, int y)
+{
+    return rt_view_pick_result_from_bsg(bsg_pick_nearest(v, x, y));
+}
+
+struct rt_view_pick_result_bsg *
+rt_view_pick_rect_bsg(struct bsg_view *v, int x0, int y0, int x1, int y1)
+{
+    return rt_view_pick_result_from_bsg(bsg_pick_rect(v, x0, y0, x1, y1));
+}
+
+struct rt_view_pick_result_bsg *
+rt_view_pick_semantic_path_bsg(struct bsg_view *v, const char *path_pattern)
+{
+    return rt_view_pick_result_from_bsg(bsg_pick_semantic_path(v, path_pattern));
+}
+
+struct rt_view_pick_result_bsg *
+rt_view_pick_result_create_bsg(void)
+{
+    return rt_view_pick_result_from_bsg(bsg_pick_result_create());
+}
+
+void
+rt_view_pick_result_free_bsg(struct rt_view_pick_result_bsg *result)
+{
+    bsg_pick_result_free(rt_view_pick_result_to_bsg(result));
+}
+
+size_t
+rt_view_pick_result_count_bsg(const struct rt_view_pick_result_bsg *result)
+{
+    return bsg_pick_result_count(rt_view_pick_result_const_to_bsg(result));
+}
+
+int
+rt_view_pick_result_path_bsg(const struct rt_view_pick_result_bsg *result,
+			     size_t index,
+			     struct bu_vls *path_out)
+{
+    if (!path_out)
+	return 0;
+    bu_vls_trunc(path_out, 0);
+
+    const struct bsg_pick_result *bsg_result =
+	rt_view_pick_result_const_to_bsg(result);
+    const struct bsg_pick_record *record =
+	bsg_pick_result_get(bsg_result, index);
+    const char *path = rt_view_pick_record_path(record);
+    if (!path || !path[0])
+	return 0;
+
+    bu_vls_sprintf(path_out, "%s", path);
+    return 1;
+}
+
+fastf_t
+rt_view_pick_result_hit_dist_bsg(const struct rt_view_pick_result_bsg *result,
+				 size_t index)
+{
+    const struct bsg_pick_result *bsg_result =
+	rt_view_pick_result_const_to_bsg(result);
+    const struct bsg_pick_record *record =
+	bsg_pick_result_get(bsg_result, index);
+    return record ? record->pr_hit_dist : -1.0;
+}
+
+int
+rt_view_pick_result_append_path_bsg(struct rt_view_pick_result_bsg *result,
+				    struct bsg_view *v,
+				    int screen_x,
+				    int screen_y,
+				    const char *source_path,
+				    fastf_t hit_dist)
+{
+    if (!result || !source_path || !source_path[0])
+	return 0;
+
+    struct bsg_pick_result *bsg_result = rt_view_pick_result_to_bsg(result);
+    struct bsg_pick_record *record;
+    BU_GET(record, struct bsg_pick_record);
+    bu_vls_init(&record->pr_source_path);
+    bu_vls_init(&record->pr_instance_path);
+    record->pr_scene = (bsg_scene_ref)BSG_SCENE_REF_NULL_INIT;
+    record->pr_feature = (bsg_feature_ref)BSG_FEATURE_REF_NULL_INIT;
+    record->pr_valid = 1;
+    record->pr_view = v;
+    record->pr_screen_x = screen_x;
+    record->pr_screen_y = screen_y;
+    record->pr_primitive_id = -1;
+    record->pr_subelement_id = -1;
+    record->pr_hit_dist = hit_dist;
+    bu_vls_sprintf(&record->pr_source_path, "%s", source_path);
+    bu_vls_sprintf(&record->pr_instance_path, "%s", source_path);
+    bu_ptbl_ins(&bsg_result->pr_records, (long *)record);
+    return 1;
+}
+
+int
+rt_view_pick_result_append_copy_bsg(struct rt_view_pick_result_bsg *dest,
+				    const struct rt_view_pick_result_bsg *src,
+				    size_t index,
+				    fastf_t hit_dist)
+{
+    if (!dest || !src)
+	return 0;
+
+    const struct bsg_pick_result *bsg_src =
+	rt_view_pick_result_const_to_bsg(src);
+    const struct bsg_pick_record *src_record =
+	bsg_pick_result_get(bsg_src, index);
+    if (!src_record)
+	return 0;
+
+    struct bsg_pick_result *bsg_dest = rt_view_pick_result_to_bsg(dest);
+    struct bsg_pick_record *record;
+    BU_GET(record, struct bsg_pick_record);
+    bu_vls_init(&record->pr_source_path);
+    bu_vls_init(&record->pr_instance_path);
+    record->pr_scene = src_record->pr_scene;
+    record->pr_feature = src_record->pr_feature;
+    record->pr_valid = src_record->pr_valid;
+    record->pr_view = src_record->pr_view;
+    record->pr_screen_x = src_record->pr_screen_x;
+    record->pr_screen_y = src_record->pr_screen_y;
+    record->pr_primitive_id = src_record->pr_primitive_id;
+    record->pr_subelement_id = src_record->pr_subelement_id;
+    record->pr_hit_dist = hit_dist;
+    bu_vls_sprintf(&record->pr_source_path, "%s",
+	    bu_vls_cstr(&src_record->pr_source_path));
+    bu_vls_sprintf(&record->pr_instance_path, "%s",
+	    bu_vls_cstr(&src_record->pr_instance_path));
+    bu_ptbl_ins(&bsg_dest->pr_records, (long *)record);
+    return 1;
+}
+
+struct rt_view_pick_result_bsg *
+rt_view_pick_result_filter_first_bsg(const struct rt_view_pick_result_bsg *src)
+{
+    struct rt_view_pick_result_bsg *result = rt_view_pick_result_create_bsg();
+    if (!result)
+	return NULL;
+    if (rt_view_pick_result_count_bsg(src) > 0)
+	rt_view_pick_result_append_copy_bsg(result, src, 0,
+		rt_view_pick_result_hit_dist_bsg(src, 0));
+    return result;
+}
+
+static struct bsg_selection *
+rt_view_selection_get_bsg(struct bsg_view *v)
 {
     return bsg_view_selection(v);
 }
 
-const struct bsg_selection *
-rt_view_selection_const_bsg(const struct bsg_view *v)
+int
+rt_view_selection_available_bsg(struct bsg_view *v)
 {
-    return bsg_view_selection_const(v);
+    return rt_view_selection_get_bsg(v) ? 1 : 0;
+}
+
+size_t
+rt_view_selection_count_bsg(struct bsg_view *v)
+{
+    struct bsg_selection *selection = rt_view_selection_get_bsg(v);
+    return selection ? bsg_selection_count(selection) : 0;
+}
+
+static int
+rt_view_selection_apply_pick_result_bsg(struct bsg_view *v,
+					const struct bsg_pick_result *result,
+					rt_view_selection_path_callback_bsg_t callback,
+					void *data)
+{
+    struct bsg_interaction_result *interactions = result ?
+	bsg_interaction_from_pick_result(result) : NULL;
+    if (!interactions) {
+	struct bsg_selection *selection = rt_view_selection_get_bsg(v);
+	if (!selection)
+	    return 0;
+	bsg_selection_clear(selection);
+	return 1;
+    }
+
+    if (callback) {
+	for (size_t i = 0; i < bsg_interaction_result_count(interactions); i++) {
+	    const struct bsg_interaction_record *record =
+		bsg_interaction_result_get(interactions, i);
+	    const char *path = bsg_interaction_record_path(record);
+	    if (path && path[0])
+		callback(path, data);
+	}
+    }
+
+    struct bsg_selection *selection = rt_view_selection_get_bsg(v);
+    if (selection)
+	bsg_interaction_selection_apply(selection, interactions,
+		BSG_INTERACTION_APPLY_SET);
+    bsg_interaction_result_free(interactions);
+    return selection ? 1 : 0;
+}
+
+int
+rt_view_selection_set_pick_result_ref_bsg(struct bsg_view *v,
+					  const struct rt_view_pick_result_bsg *result,
+					  rt_view_selection_path_callback_bsg_t callback,
+					  void *data)
+{
+    return rt_view_selection_apply_pick_result_bsg(v,
+	    rt_view_pick_result_const_to_bsg(result), callback, data);
+}
+
+int
+rt_view_selection_clear_bsg(struct bsg_view *v)
+{
+    struct bsg_selection *selection = rt_view_selection_get_bsg(v);
+    if (!selection)
+	return 0;
+
+    bsg_selection_clear(selection);
+    return 1;
 }
 
 struct bu_ptbl *
@@ -749,17 +1391,10 @@ rt_view_knob_state_reset_bsg(struct bsg_view_knobs *knobs, int category)
 }
 
 unsigned long long
-rt_view_knob_state_hash_bsg(struct bsg_view_knobs *knobs,
-			    struct bu_data_hash_state *state)
-{
-    return bsg_knobs_hash(knobs, state);
-}
-
-unsigned long long
 rt_view_knobs_hash_bsg(struct bsg_view *v,
 		       struct bu_data_hash_state *state)
 {
-    return v ? rt_view_knob_state_hash_bsg(&v->k, state) : 0ULL;
+    return v ? bsg_knobs_hash(&v->k, state) : 0ULL;
 }
 
 int
@@ -1374,6 +2009,280 @@ rt_view_snap_lines_set_bsg(struct bsg_view *v, int enabled)
     return 1;
 }
 
+static bsg_feature_ref
+rt_view_polygon_ref_to_bsg(rt_view_polygon_ref ref)
+{
+    bsg_feature_ref bsg_ref = {ref.token, ref.revision};
+    return bsg_ref;
+}
+
+static rt_view_polygon_ref
+rt_view_polygon_ref_from_bsg(bsg_feature_ref ref)
+{
+    rt_view_polygon_ref rt_ref = {ref.token, ref.revision};
+    return rt_ref;
+}
+
+rt_view_polygon_ref
+rt_view_polygon_create_bsg(struct bsg_view *v, int type, point_t *fp)
+{
+    if (!v || !fp)
+	return RT_VIEW_POLYGON_REF_NULL;
+
+    return rt_view_polygon_ref_from_bsg(bsg_create_view_polygon_ref(v, type, fp));
+}
+
+rt_view_polygon_ref
+rt_view_polygon_select_bsg(struct bsg_view *v, point_t *cp)
+{
+    if (!v || !cp)
+	return RT_VIEW_POLYGON_REF_NULL;
+
+    return rt_view_polygon_ref_from_bsg(bsg_view_select_polygon_ref(v, cp));
+}
+
+rt_view_polygon_ref
+rt_view_polygon_find_bsg(struct bsg_view *v, const char *name)
+{
+    if (!v || !name)
+	return RT_VIEW_POLYGON_REF_NULL;
+
+    return rt_view_polygon_ref_from_bsg(bsg_view_polygon_find_ref(v, name));
+}
+
+rt_view_polygon_ref
+rt_view_polygon_dup_bsg(struct bsg_view *v, const char *name, const char *new_name)
+{
+    if (!v || !name || !new_name)
+	return RT_VIEW_POLYGON_REF_NULL;
+
+    return rt_view_polygon_ref_from_bsg(bsg_view_polygon_dup_ref(v, name, new_name));
+}
+
+static void
+rt_view_polygon_record_from_bsg(struct rt_view_polygon_record *record,
+				const struct bsg_polygon_record *bsg_record)
+{
+    if (!record || !bsg_record)
+	return;
+
+    memset(record, 0, sizeof(*record));
+    record->ref.token = bsg_record->ref.token;
+    record->ref.revision = bsg_record->ref.revision;
+    record->name = bsg_record->name;
+    record->type = bsg_record->type;
+    record->fill_flag = bsg_record->fill_flag;
+    V2MOVE(record->fill_dir, bsg_record->fill_dir);
+    record->fill_delta = bsg_record->fill_delta;
+    BU_COLOR_CPY(&record->fill_color, &bsg_record->fill_color);
+    record->edge_color[0] = bsg_record->edge_color[0];
+    record->edge_color[1] = bsg_record->edge_color[1];
+    record->edge_color[2] = bsg_record->edge_color[2];
+    record->curr_contour_i = bsg_record->curr_contour_i;
+    record->curr_point_i = bsg_record->curr_point_i;
+    record->first_contour_open = bsg_record->first_contour_open;
+    record->contour_count = bsg_record->contour_count;
+    record->point_count = bsg_record->point_count;
+    VMOVE(record->origin_point, bsg_record->origin_point);
+    HMOVE(record->vp, bsg_record->vp);
+    record->vZ = bsg_record->vZ;
+    record->user_data = bsg_record->user_data;
+}
+
+struct rt_view_polygon_visit_record_state {
+    rt_view_polygon_record_callback_bsg_t callback;
+    void *data;
+};
+
+static int
+rt_view_polygon_visit_record_bsg_cb(bsg_feature_ref ref,
+				    const struct bsg_polygon_record *bsg_record,
+				    void *data)
+{
+    struct rt_view_polygon_visit_record_state *state =
+	(struct rt_view_polygon_visit_record_state *)data;
+    if (!state || !state->callback || !bsg_record)
+	return 0;
+
+    struct rt_view_polygon_record record;
+    rt_view_polygon_record_from_bsg(&record, bsg_record);
+    return state->callback(rt_view_polygon_ref_from_bsg(ref), &record, state->data);
+}
+
+void
+rt_view_polygon_visit_records_bsg(struct bsg_view *v,
+				  rt_view_polygon_record_callback_bsg_t callback,
+				  void *data)
+{
+    if (!v || !callback)
+	return;
+
+    struct rt_view_polygon_visit_record_state state;
+    state.callback = callback;
+    state.data = data;
+    bsg_view_polygon_visit_records(v, rt_view_polygon_visit_record_bsg_cb,
+	    &state);
+}
+
+size_t
+rt_view_polygon_snap_count_bsg(struct bsg_view *v, rt_view_polygon_ref exclude)
+{
+    if (!v)
+	return 0;
+
+    return bsg_view_polygon_snap_count(v, rt_view_polygon_ref_to_bsg(exclude));
+}
+
+int
+rt_view_polygon_clear_point_selection_bsg(struct bsg_view *v)
+{
+    if (!v)
+	return 0;
+
+    return bsg_view_polygon_clear_point_selection(v);
+}
+
+int
+rt_view_polygon_ref_is_null_bsg(rt_view_polygon_ref ref)
+{
+    return bsg_polygon_ref_is_null(rt_view_polygon_ref_to_bsg(ref));
+}
+
+int
+rt_view_polygon_record_get_bsg(rt_view_polygon_ref ref, struct rt_view_polygon_record *record)
+{
+    if (!record)
+	return 0;
+
+    struct bsg_polygon_record bsg_record;
+    if (!bsg_polygon_record_get(rt_view_polygon_ref_to_bsg(ref), &bsg_record))
+	return 0;
+
+    rt_view_polygon_record_from_bsg(record, &bsg_record);
+    return 1;
+}
+
+int
+rt_view_polygon_update_bsg(rt_view_polygon_ref ref, struct bsg_view *v, int utype)
+{
+    return bsg_polygon_update(rt_view_polygon_ref_to_bsg(ref), v, utype);
+}
+
+int
+rt_view_polygon_update_screen_pt_bsg(rt_view_polygon_ref ref, struct bsg_view *v,
+				     int x, int y, int utype)
+{
+    return bsg_polygon_update_screen_pt(rt_view_polygon_ref_to_bsg(ref), v, x, y, utype);
+}
+
+int
+rt_view_polygon_move_bsg(rt_view_polygon_ref ref, point_t *current_point,
+			 point_t *previous_point)
+{
+    if (!current_point || !previous_point)
+	return 0;
+
+    return bsg_polygon_move(rt_view_polygon_ref_to_bsg(ref), current_point, previous_point);
+}
+
+int
+rt_view_polygon_set_name_bsg(rt_view_polygon_ref ref, const char *name)
+{
+    if (!name)
+	return 0;
+
+    return bsg_polygon_set_name(rt_view_polygon_ref_to_bsg(ref), name);
+}
+
+int
+rt_view_polygon_set_view_bsg(rt_view_polygon_ref ref, struct bsg_view *v)
+{
+    return bsg_polygon_set_view(rt_view_polygon_ref_to_bsg(ref), v);
+}
+
+int
+rt_view_polygon_set_visual_bsg(rt_view_polygon_ref ref,
+			       const struct bu_color *edge_color,
+			       const struct bu_color *fill_color,
+			       fastf_t fill_slope_x,
+			       fastf_t fill_slope_y,
+			       fastf_t fill_density,
+			       fastf_t vZ,
+			       int fill_flag)
+{
+    return bsg_polygon_set_visual(rt_view_polygon_ref_to_bsg(ref), edge_color, fill_color, fill_slope_x,
+	    fill_slope_y, fill_density, vZ, fill_flag);
+}
+
+int
+rt_view_polygon_set_open_bsg(rt_view_polygon_ref ref, int open)
+{
+    return bsg_polygon_set_open(rt_view_polygon_ref_to_bsg(ref), open);
+}
+
+int
+rt_view_polygon_close_bsg(rt_view_polygon_ref ref)
+{
+    return bsg_polygon_close(rt_view_polygon_ref_to_bsg(ref));
+}
+
+int
+rt_view_polygon_clear_selected_point_bsg(rt_view_polygon_ref ref)
+{
+    return bsg_polygon_clear_selected_point(rt_view_polygon_ref_to_bsg(ref));
+}
+
+int
+rt_view_polygon_remove_bsg(rt_view_polygon_ref ref)
+{
+    return bsg_polygon_remove(rt_view_polygon_ref_to_bsg(ref));
+}
+
+void *
+rt_view_polygon_user_data_bsg(rt_view_polygon_ref ref)
+{
+    return bsg_polygon_user_data(rt_view_polygon_ref_to_bsg(ref));
+}
+
+int
+rt_view_polygon_user_data_set_bsg(rt_view_polygon_ref ref, void *user_data)
+{
+    return bsg_polygon_user_data_set(rt_view_polygon_ref_to_bsg(ref), user_data);
+}
+
+int
+rt_view_polygon_csg_bsg(rt_view_polygon_ref target, rt_view_polygon_ref stencil, bg_clip_t op)
+{
+    return bsg_polygon_csg_ref(rt_view_polygon_ref_to_bsg(target),
+	    rt_view_polygon_ref_to_bsg(stencil), op);
+}
+
+rt_view_polygon_ref
+rt_view_polygon_import_sketch_bsg(const char *name, struct db_i *dbip,
+				  struct directory *dp, struct bsg_view *v)
+{
+    if (!name || !dbip || !dp || !v)
+	return RT_VIEW_POLYGON_REF_NULL;
+
+    return rt_view_polygon_ref_from_bsg(db_sketch_to_view_polygon_ref(name, dbip, dp, v));
+}
+
+struct directory *
+rt_view_polygon_export_sketch_bsg(struct db_i *dbip, const char *name,
+				  rt_view_polygon_ref ref)
+{
+    if (!dbip || !name)
+	return NULL;
+
+    return db_view_polygon_ref_to_sketch(dbip, name, rt_view_polygon_ref_to_bsg(ref));
+}
+
+int
+rt_view_polygon_snap_exclude_set_bsg(struct bsg_view *v, rt_view_polygon_ref ref)
+{
+    return rt_view_snap_exclude_feature_set_bsg(v, rt_view_polygon_ref_to_bsg(ref));
+}
+
 int
 rt_view_snap_source_flags_from_bsg(const struct bsg_view *v)
 {
@@ -1394,16 +2303,6 @@ unsigned long long
 rt_view_snap_kind_mask_from_bsg(const struct bsg_view *v)
 {
     return (unsigned long long)bsg_view_snap_kind_mask(v);
-}
-
-int
-rt_view_snap_exclude_feature_from_bsg(bsg_feature_ref *ref,
-				      const struct bsg_view *v)
-{
-    if (!ref || !v)
-	return 0;
-
-    return bsg_view_snap_exclude_feature_get(v, ref);
 }
 
 int

@@ -61,6 +61,7 @@
 #include <dm.h>
 #include <ged.h>
 
+#include "qtcad/QgLegacyViewBsg.h"
 #include "qtcad/QgSW.h"
 #ifdef BRLCAD_OPENGL
 #  include "qtcad/QgGL.h"
@@ -167,7 +168,7 @@ main(int ac, char *av[])
 
     QgSW sw;
     sw.resize(512, 512);
-    struct ged *gedp_sw = open_and_draw("dmbench_swrast_tmp.g", sw.view());
+    struct ged *gedp_sw = open_and_draw("dmbench_swrast_tmp.g", qg_legacy_view_to_bsg(sw.view()));
     if (!gedp_sw) {
 	bu_log("SKIP swrast: ged_open failed\n");
     } else {
@@ -185,7 +186,7 @@ main(int ac, char *av[])
 		unsigned char *bg1, *bg2;
 		dm_get_bg(&bg1, &bg2, sw.displayManager());
 		dm_set_bg(sw.displayManager(), bg1[0], bg1[1], bg1[2], bg2[0], bg2[1], bg2[2]);
-		dm_draw_objs(sw.view());
+		dm_draw_objs(qg_legacy_view_to_bsg(sw.view()));
 		dm_draw_end(sw.displayManager());
 	    }
 
@@ -195,7 +196,7 @@ main(int ac, char *av[])
 		unsigned char *bg1, *bg2;
 		dm_get_bg(&bg1, &bg2, sw.displayManager());
 		dm_set_bg(sw.displayManager(), bg1[0], bg1[1], bg1[2], bg2[0], bg2[1], bg2[2]);
-		dm_draw_objs(sw.view());
+		dm_draw_objs(qg_legacy_view_to_bsg(sw.view()));
 		dm_draw_end(sw.displayManager());
 	    }
 	    int64_t elapsed_sw = bu_gettime() - t0;
@@ -220,7 +221,7 @@ main(int ac, char *av[])
 
     QgGL gl;
     gl.resize(512, 512);
-    struct ged *gedp_gl = open_and_draw("dmbench_qtgl_tmp.g", gl.view());
+    struct ged *gedp_gl = open_and_draw("dmbench_qtgl_tmp.g", qg_legacy_view_to_bsg(gl.view()));
     if (!gedp_gl) {
 	bu_log("SKIP qtgl: ged_open failed\n");
     } else {
@@ -242,7 +243,7 @@ main(int ac, char *av[])
 		unsigned char *bg1, *bg2;
 		dm_get_bg(&bg1, &bg2, gl.displayManager());
 		dm_set_bg(gl.displayManager(), bg1[0], bg1[1], bg1[2], bg2[0], bg2[1], bg2[2]);
-		dm_draw_objs(gl.view());
+		dm_draw_objs(qg_legacy_view_to_bsg(gl.view()));
 		dm_draw_end(gl.displayManager());
 	    }
 
@@ -251,7 +252,7 @@ main(int ac, char *av[])
 		unsigned char *bg1, *bg2;
 		dm_get_bg(&bg1, &bg2, gl.displayManager());
 		dm_set_bg(gl.displayManager(), bg1[0], bg1[1], bg1[2], bg2[0], bg2[1], bg2[2]);
-		dm_draw_objs(gl.view());
+		dm_draw_objs(qg_legacy_view_to_bsg(gl.view()));
 		dm_draw_end(gl.displayManager());
 	    }
 	    int64_t elapsed_gl = bu_gettime() - t0;

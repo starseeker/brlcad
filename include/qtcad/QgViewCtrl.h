@@ -34,7 +34,7 @@
 #include "qtcad/defines.h"
 #include "qtcad/QgTypes.h"
 
-struct ged;
+class QgSession;
 
 // TODO - add save scene image
 //
@@ -51,16 +51,11 @@ class QTCAD_EXPORT QgViewCtrl : public QToolBar {
 
 
 public:
-	QgViewCtrl(QWidget *p, struct ged *pgedp);
+	QgViewCtrl(QWidget *p, QgSession *session);
 	~QgViewCtrl();
 
-	struct ged *ged() const {
-		return gedp;
-	}
-	void set_ged(struct ged *pgedp)
-	{
-		gedp = pgedp;
-	}
+	QgSession *session() const;
+	void setSession(QgSession *session);
 	int iconSize() const
 	{
 		return icon_size;
@@ -97,7 +92,7 @@ public slots:
 	void raytrace_done();
 
 private:
-	struct ged *gedp = nullptr;
+	QgSession *m_session = nullptr;
 	int icon_size = 25;
 
 	// Left mouse behavior controls (when not using a tool or editing)

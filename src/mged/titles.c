@@ -541,7 +541,7 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
      * This way the adc info will be displayed during editing
      */
 
-    struct bsg_adc_state adc = {0};
+    struct rt_view_adc_state adc = {0};
     (void)mged_dm_adc_state_get(s->mged_curr_dm, &adc);
     if (adc.draw) {
 	fastf_t f;

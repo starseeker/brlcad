@@ -46,10 +46,10 @@
 #include "vmath.h"
 #include "raytrace.h"
 #include "bg/line_layer.h"
-#include "bsg/feature.h"
 #include "bg/plot3.h"
 #include "analyze.h"
 
+#include "../bsg_ged_draw_view_private.h"
 #include "../ged_private.h"
 
 struct analyze_densities *_gd_densities;
@@ -2782,9 +2782,8 @@ aborted:
 	    int handled = ged_diagnostic_line_layer_publish(gedp,
 		    "gqa::overlaps", ged_gqa_plot.builder);
 	    if (!handled && gedp->ged_gvp) {
-		(void)bsg_feature_replace_line_layer_builder(gedp->ged_gvp,
-			"gqa::overlaps", 0,
-			(const struct bsg_line_layer_builder *)ged_gqa_plot.builder, NULL);
+		(void)ged_draw_view_line_layer_builder_replace(gedp->ged_gvp,
+			"gqa::overlaps", 0, ged_gqa_plot.builder);
 	    }
 	}
 	if (analysis_flags & ANALYSIS_PLOT_OVERLAPS)

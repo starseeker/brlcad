@@ -96,11 +96,11 @@ void set_curr_dm(struct mged_state *s, struct mged_dm *nc)
 }
 
 void
-mged_dm_adc_state_set(struct mged_dm *dm, const struct bsg_adc_state *adc)
+mged_dm_adc_state_set(struct mged_dm *dm, const struct rt_view_adc_state *adc)
 {
     if (!dm || !dm->dm_view_state || !dm->dm_view_state->vs_gvp)
 	return;
-    rt_view_adc_set_bsg(dm->dm_view_state->vs_gvp, adc);
+    rt_view_adc_state_set_bsg(dm->dm_view_state->vs_gvp, adc);
 }
 
 int

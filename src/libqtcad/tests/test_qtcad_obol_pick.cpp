@@ -18,6 +18,7 @@
 #include "bu/file.h"
 #include "ged.h"
 #include "ged/bsg_ged_draw.h"
+#include "qtcad/QgLegacyViewBsg.h"
 #include "qtcad/QgObolDrawSync.h"
 #include "qtcad/QgObolPick.h"
 #include "qtcad/QgSelectFilter.h"
@@ -189,7 +190,7 @@ main(int argc, char **argv)
 
     QgView view(NULL, QgView_SW, NULL);
     view.resize(180, 140);
-    gedp->ged_gvp = view.view();
+    gedp->ged_gvp = qg_legacy_view_to_bsg(view.view());
 
     BRLObolViewController *controller = view.obolViewController();
     if (!controller)
@@ -201,7 +202,7 @@ main(int argc, char **argv)
     shaded_settings.draw_mode = BSG_DRAW_MODE_SHADED;
     struct ged_draw_transaction draw_box =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "box.s");
-    draw_box.view = view.view();
+    draw_box.view = qg_legacy_view_to_bsg(view.view());
     draw_box.appearance = &shaded_settings;
     if (!apply_and_sync(gedp, &view, &draw_box))
 	FAIL("GED shaded draw should sync box source into Obol");
@@ -221,7 +222,6 @@ main(int argc, char **argv)
 	FAIL("qtcad Obol point pick should not initialize the legacy display manager");
 
     QgSelectPntFilter filter;
-    filter.set_view(view.view());
     filter.set_view_widget(&view);
     QMouseEvent release = mouse_event(QEvent::MouseButtonRelease, 90, 70,
 	    Qt::LeftButton, Qt::LeftButton);
@@ -249,7 +249,6 @@ main(int argc, char **argv)
 	FAIL("qtcad Obol rectangle pick should not initialize the legacy display manager");
 
     QgSelectBoxFilter boxFilter;
-    boxFilter.set_view(view.view());
     boxFilter.set_view_widget(&view);
     QMouseEvent boxPress = mouse_event(QEvent::MouseButtonPress, 70, 50,
 	    Qt::LeftButton, Qt::LeftButton);
@@ -269,7 +268,6 @@ main(int argc, char **argv)
 
     QgSelectRayFilter rayFilter;
     rayFilter.dbip = gedp->dbip;
-    rayFilter.set_view(view.view());
     rayFilter.set_view_widget(&view);
     QMouseEvent rayRelease = mouse_event(QEvent::MouseButtonRelease, 90, 70,
 	    Qt::LeftButton, Qt::LeftButton);
@@ -431,7 +429,6 @@ main(int argc, char **argv)
     }
 
     QgSelectPntFilter pendingSourcePickFilter;
-    pendingSourcePickFilter.set_view(view.view());
     pendingSourcePickFilter.set_view_widget(&view);
     QMouseEvent pendingSourcePickRelease = mouse_event(
 	    QEvent::MouseButtonRelease, 90, 70, Qt::LeftButton,
@@ -468,7 +465,6 @@ main(int argc, char **argv)
     }
 
     QgSelectBoxFilter pendingSourceBoxFilter;
-    pendingSourceBoxFilter.set_view(view.view());
     pendingSourceBoxFilter.set_view_widget(&view);
     QMouseEvent pendingSourceBoxPress = mouse_event(
 	    QEvent::MouseButtonPress, 70, 50, Qt::LeftButton,
@@ -520,7 +516,6 @@ main(int argc, char **argv)
 
     QgSelectRayFilter pendingSourceRayFilter;
     pendingSourceRayFilter.dbip = gedp->dbip;
-    pendingSourceRayFilter.set_view(view.view());
     pendingSourceRayFilter.set_view_widget(&view);
     QMouseEvent pendingSourceRayRelease = mouse_event(
 	    QEvent::MouseButtonRelease, 90, 70, Qt::LeftButton,
@@ -642,7 +637,6 @@ main(int argc, char **argv)
 
     QgSelectRayFilter implicitRayFilter;
     implicitRayFilter.dbip = gedp->dbip;
-    implicitRayFilter.set_view(view.view());
     implicitRayFilter.set_view_widget(&view);
     QMouseEvent implicitRayRelease = mouse_event(QEvent::MouseButtonRelease,
 	    90, 70, Qt::LeftButton, Qt::LeftButton);
@@ -658,7 +652,6 @@ main(int argc, char **argv)
 	FAIL("qtcad select ray filter should reuse the controller RT pick cache");
 
     QgSelectRayFilter noLegacyDbRayFilter;
-    noLegacyDbRayFilter.set_view(view.view());
     noLegacyDbRayFilter.set_view_widget(&view);
     QMouseEvent noLegacyDbRayRelease = mouse_event(QEvent::MouseButtonRelease,
 	    90, 70, Qt::LeftButton, Qt::LeftButton);

@@ -59,19 +59,19 @@ _ged_overlay_publish_geometry(bsg_scene_ref ref,
 	return 0;
 
     switch (geometry->kind) {
-	case BSG_GEOMETRY_NODE_LINE_SET:
+	case GED_DRAW_OVERLAY_GEOMETRY_LINE_SET:
 	    if (geometry->point_count != geometry->command_count)
 		return 0;
 	    ok = bsg_geometry_ref_set_line_set(bsg_scene_ref_as_geometry(ref),
 		    geometry->points, geometry->commands, geometry->point_count);
 	    command_count = geometry->point_count;
 	    break;
-	case BSG_GEOMETRY_NODE_POINT_SET:
+	case GED_DRAW_OVERLAY_GEOMETRY_POINT_SET:
 	    ok = bsg_geometry_ref_set_point_set(bsg_scene_ref_as_geometry(ref),
 		    geometry->points, geometry->point_count);
 	    command_count = geometry->point_count;
 	    break;
-	case BSG_GEOMETRY_NODE_INDEXED_FACE_SET:
+	case GED_DRAW_OVERLAY_GEOMETRY_INDEXED_FACE_SET:
 	    ok = bsg_geometry_ref_set_indexed_face_set(bsg_scene_ref_as_geometry(ref),
 		    geometry->points, geometry->point_count,
 		    geometry->normals, geometry->normal_count,
@@ -97,16 +97,16 @@ _ged_overlay_publish_geometry(bsg_scene_ref ref,
 
 static bsg_scene_ref
 _ged_overlay_create_scene(struct bsg_view *v, const char *name,
-			  bsg_geometry_node_kind kind)
+			  enum ged_draw_overlay_geometry_kind kind)
 {
     switch (kind) {
-	case BSG_GEOMETRY_NODE_LINE_SET:
+	case GED_DRAW_OVERLAY_GEOMETRY_LINE_SET:
 	    return bsg_geometry_ref_as_scene(
 		    bsg_line_set_ref_as_geometry(bsg_line_set_ref_create(v, name)));
-	case BSG_GEOMETRY_NODE_POINT_SET:
+	case GED_DRAW_OVERLAY_GEOMETRY_POINT_SET:
 	    return bsg_geometry_ref_as_scene(
 		    bsg_point_set_ref_as_geometry(bsg_point_set_ref_create(v, name)));
-	case BSG_GEOMETRY_NODE_INDEXED_FACE_SET:
+	case GED_DRAW_OVERLAY_GEOMETRY_INDEXED_FACE_SET:
 	    return bsg_geometry_ref_as_scene(
 		    bsg_indexed_face_set_ref_as_geometry(
 			bsg_indexed_face_set_ref_create(v, name)));

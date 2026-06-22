@@ -28,9 +28,9 @@
 
 #include "common.h"
 
-#include "bsg/polygon.h"
 #include "ged.h"
 #include "ged/bsg_ged_draw.h"
+#include "../bsg_ged_draw_view_private.h"
 
 __BEGIN_DECLS
 
@@ -42,7 +42,7 @@ struct _ged_view_info {
     const char *vobj;
     const char *gobj_dbpath;
     struct bsg_view *cv;
-    bsg_polygon_ref polygon_ref;
+    ged_draw_view_polygon_ref polygon_ref;
     ged_draw_shape_ref shape_ref;
     int local_obj;
 };

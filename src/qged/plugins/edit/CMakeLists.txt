@@ -25,6 +25,7 @@ add_subdirectory(bot)
 
 cmakefiles(
   CMakeLists.txt
+  qged_edit_preview_util.cpp
   qged_edit_preview_util.h
 )
 

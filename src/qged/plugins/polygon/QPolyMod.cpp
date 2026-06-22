@@ -30,27 +30,39 @@
 #include <QtGlobal>
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgGedEventBatch.h"
+#include "qtcad/QgLegacyView.h"
+#include "qtcad/QgPolyFilter.h"
+#include "qtcad/QgView.h"
 #include "ged.h"
 #include "rt/directory.h"
 #include "rt/db_io.h"
-#include "rt/primitives/sketch_legacy_bsg.h"
-#include "rt/view_legacy_bsg.h"
 #include "QPolyCreate.h"
 #include "QPolyMod.h"
-#include "bsg/polygon.h"
 
 /* Collect polygon objects (optionally excluding one). */
 struct _qpolymod_poly_collect {
-    std::vector<bsg_polygon_ref> *polys;
-    bsg_polygon_ref exclude;
+    std::vector<qg_polygon_ref> *polys;
+    qg_polygon_ref exclude;
 };
 extern "C" int
-_qpolymod_poly_collect_cb(bsg_polygon_ref ref, const struct bsg_polygon_record *, void *data)
+_qpolymod_poly_collect_cb(qg_polygon_ref ref, const qg_polygon_record *, void *data)
 {
     struct _qpolymod_poly_collect *s = (struct _qpolymod_poly_collect *)data;
     if (ref.token != s->exclude.token)
 	s->polys->push_back(ref);
     return 1;
+}
+
+static qg_legacy_view *
+qpolymod_view(const QgPluginContext *ctx)
+{
+    return ctx ? ctx->activeView() : nullptr;
+}
+
+static QgView *
+qpolymod_view_widget(const QgPluginContext *ctx)
+{
+    return ctx ? ctx->getViewWidget() : nullptr;
 }
 
 QPolyMod::QPolyMod()
@@ -199,12 +211,6 @@ QPolyMod::getGed() const
     return m_ctx ? m_ctx->getGed() : nullptr;
 }
 
-struct bsg_view *
-QPolyMod::getView() const
-{
-    return m_ctx ? m_ctx->getView() : nullptr;
-}
-
 void
 QPolyMod::app_mod_names_reset(void *)
 {
@@ -217,7 +223,7 @@ QPolyMod::mod_names_reset()
     struct ged *gedp = getGed();
     if (!gedp)
 	return;
-    struct bsg_view *v = getView();
+    qg_legacy_view *v = qpolymod_view(m_ctx);
     if (!v)
 	return;
 
@@ -225,20 +231,20 @@ QPolyMod::mod_names_reset()
     mod_names->blockSignals(true);
     mod_names->clear();
     if (gedp) {
-	std::vector<bsg_polygon_ref> polyvec;
+	std::vector<qg_polygon_ref> polyvec;
 	struct _qpolymod_poly_collect pc;
 	pc.polys = &polyvec;
 	pc.exclude = {0, 0};
-	bsg_view_polygon_visit_records(v, _qpolymod_poly_collect_cb, &pc);
+	qg_legacy_view_polygon_visit_records(v, _qpolymod_poly_collect_cb, &pc);
 	for (auto s : polyvec) {
-	    struct bsg_polygon_record rec;
-	    if (bsg_polygon_record_get(s, &rec) && rec.name)
+	    qg_polygon_record rec;
+	    if (qg_legacy_view_polygon_record_get(s, &rec) && rec.name)
 		mod_names->addItem(rec.name);
 	}
     }
-    if (!bsg_polygon_ref_is_null(p)) {
-	struct bsg_polygon_record rec;
-	bsg_polygon_record_get(p, &rec);
+    if (!qg_legacy_view_polygon_ref_is_null(p)) {
+	qg_polygon_record rec;
+	qg_legacy_view_polygon_record_get(p, &rec);
 	int cind = mod_names->findText(rec.name ? rec.name : "");
 	mod_names->setCurrentIndex(cind);
     } else {
@@ -252,11 +258,11 @@ QPolyMod::mod_names_reset()
 }
 
 void
-QPolyMod::poly_type_settings(const struct bsg_polygon_record *ip)
+QPolyMod::poly_type_settings(const struct rt_view_polygon_record *ip)
 {
     if (!ip || !ip->contour_count)
 	return;
-    if (ip->type == BSG_POLYGON_GENERAL) {
+    if (ip->type == QG_POLYGON_GENERAL) {
 	general_mode_opts->setEnabled(true);
 	close_general_poly->setEnabled(true);
 	close_general_poly->blockSignals(true);
@@ -289,10 +295,10 @@ void
 QPolyMod::polygon_update_props()
 {
     struct ged *gedp = getGed();
-    if (!gedp || bsg_polygon_ref_is_null(p))
+    if (!gedp || qg_legacy_view_polygon_ref_is_null(p))
 	return;
 
-    bsg_polygon_set_visual(p, &ps->edge_color->bc, &ps->fill_color->bc,
+    qg_legacy_view_polygon_set_visual(p, &ps->edge_color->bc, &ps->fill_color->bc,
 	    (fastf_t)(ps->fill_slope_x->text().toDouble()),
 	    (fastf_t)(ps->fill_slope_y->text().toDouble()),
 	    (fastf_t)(ps->fill_density->text().toDouble()),
@@ -306,7 +312,7 @@ QPolyMod::toplevel_config(bool)
 {
     // Initialize
     struct ged *gedp = getGed();
-    struct bsg_view *v = getView();
+    qg_legacy_view *v = qpolymod_view(m_ctx);
     if (!gedp || !v)
 	return;
     bool draw_change = false;
@@ -316,7 +322,7 @@ QPolyMod::toplevel_config(bool)
     // when we're switching modes at this level, we always start with a
     // blank slate for points.
     if (gedp)
-	draw_change = bsg_view_polygon_clear_point_selection(v) ? true : false;
+	draw_change = qg_legacy_view_polygon_clear_point_selection(v) ? true : false;
 
     // Make sure the Combo box list is current.
     mod_names_reset();
@@ -324,9 +330,9 @@ QPolyMod::toplevel_config(bool)
     // If we have a current p, we know the current type - enable/disable
     // the general settings on that basis
 
-    if (!bsg_polygon_ref_is_null(p)) {
-	struct bsg_polygon_record rec;
-	if (bsg_polygon_record_get(p, &rec))
+    if (!qg_legacy_view_polygon_ref_is_null(p)) {
+	qg_polygon_record rec;
+	if (qg_legacy_view_polygon_record_get(p, &rec))
 	    poly_type_settings(&rec);
     }
 
@@ -341,17 +347,17 @@ QPolyMod::clear_pnt_selection(bool checked)
     if (checked)
 	return;
     int ptype = -1;
-    struct bsg_polygon_record rec;
-    if (!bsg_polygon_ref_is_null(p)) {
-	if (!bsg_polygon_record_get(p, &rec))
+    qg_polygon_record rec;
+    if (!qg_legacy_view_polygon_ref_is_null(p)) {
+	if (!qg_legacy_view_polygon_record_get(p, &rec))
 	    return;
 	ptype = rec.type;
     }
-    if (ptype != BSG_POLYGON_GENERAL) {
+    if (ptype != QG_POLYGON_GENERAL) {
 	return;
     }
     bu_log("got pnt selection clear\n");
-    bsg_polygon_clear_selected_point(p);
+    qg_legacy_view_polygon_clear_selected_point(p);
 
     struct ged *gedp = getGed();
     if (!gedp)
@@ -366,15 +372,15 @@ QPolyMod::select(const QString &poly)
     struct ged *gedp = getGed();
     if (!gedp)
 	return;
-    struct bsg_view *v = getView();
+    qg_legacy_view *v = qpolymod_view(m_ctx);
     if (!v)
 	return;
 
     p = {0, 0};
-    p = bsg_view_polygon_find_ref(v, poly.toLocal8Bit().data());
-    if (!bsg_polygon_ref_is_null(p)) {
-	struct bsg_polygon_record rec;
-	if (!bsg_polygon_record_get(p, &rec))
+    p = qg_legacy_view_polygon_find(v, poly.toLocal8Bit().data());
+    if (!qg_legacy_view_polygon_ref_is_null(p)) {
+	qg_polygon_record rec;
+	if (!qg_legacy_view_polygon_record_get(p, &rec))
 	    return;
 	poly_type_settings(&rec);
 	ps->settings_sync(&rec);
@@ -398,13 +404,13 @@ void
 QPolyMod::toggle_closed_poly(bool checked)
 {
     int ptype = -1;
-    struct bsg_polygon_record rec;
-    if (!bsg_polygon_ref_is_null(p)) {
-	if (bsg_polygon_record_get(p, &rec))
+    qg_polygon_record rec;
+    if (!qg_legacy_view_polygon_ref_is_null(p)) {
+	if (qg_legacy_view_polygon_record_get(p, &rec))
 	    ptype = rec.type;
     }
 
-    if (ptype != BSG_POLYGON_GENERAL) {
+    if (ptype != QG_POLYGON_GENERAL) {
 	if (!checked) {
 	    close_general_poly->blockSignals(true);
 	    close_general_poly->setChecked(true);
@@ -421,17 +427,17 @@ QPolyMod::toggle_closed_poly(bool checked)
     if (!rec.contour_count)
 	return;
 
-    if (checked && ptype == BSG_POLYGON_GENERAL) {
+    if (checked && ptype == QG_POLYGON_GENERAL) {
 	// A contour with less than 3 points can't be closed
 	if (rec.point_count < 3)
-	    bsg_polygon_set_open(p, 1);
+	    qg_legacy_view_polygon_set_open(p, 1);
 	else
-	    bsg_polygon_set_open(p, 0);
+	    qg_legacy_view_polygon_set_open(p, 0);
     } else {
-	bsg_polygon_set_open(p, 1);
+	qg_legacy_view_polygon_set_open(p, 1);
     }
 
-    bsg_polygon_record_get(p, &rec);
+    qg_legacy_view_polygon_record_get(p, &rec);
 
     close_general_poly->blockSignals(true);
     append_pnt->blockSignals(true);
@@ -456,13 +462,16 @@ QPolyMod::toggle_closed_poly(bool checked)
     struct ged *gedp = getGed();
     if (!gedp)
 	return;
+    qg_legacy_view *v = qpolymod_view(m_ctx);
+    if (!v)
+	return;
 
-    if (do_bool && rec.type == BSG_POLYGON_GENERAL && close_general_poly->isChecked()) {
-	std::vector<bsg_polygon_ref> targets;
+    if (do_bool && rec.type == QG_POLYGON_GENERAL && close_general_poly->isChecked()) {
+	std::vector<qg_polygon_ref> targets;
 	struct _qpolymod_poly_collect pc;
 	pc.polys = &targets;
 	pc.exclude = p;
-	bsg_view_polygon_visit_records(getView(), _qpolymod_poly_collect_cb, &pc);
+	qg_legacy_view_polygon_visit_records(v, _qpolymod_poly_collect_cb, &pc);
 
 	bg_clip_t op = bg_Union;
 	if (do_bool) {
@@ -476,25 +485,25 @@ QPolyMod::toggle_closed_poly(bool checked)
 	// If we're closing a general polygon and we're in boolean op mode,
 	// that's our signal to complete the operation
 	int pcnt = 0;
-	std::vector<bsg_polygon_ref> cleanup;
+	std::vector<qg_polygon_ref> cleanup;
 	for (auto target : targets) {
-	    pcnt += bsg_polygon_csg_ref(target, p, op);
-	    struct bsg_polygon_record target_rec;
-	    if (!bsg_polygon_record_get(target, &target_rec) || !target_rec.contour_count)
+	    pcnt += qg_legacy_view_polygon_csg(target, p, op);
+	    qg_polygon_record target_rec;
+	    if (!qg_legacy_view_polygon_record_get(target, &target_rec) || !target_rec.contour_count)
 		cleanup.push_back(target);
 	}
 	for (size_t i = 0; i < cleanup.size(); i++) {
-	    bsg_polygon_remove(cleanup[i]);
+	    qg_legacy_view_polygon_remove(cleanup[i]);
 	}
 	if (pcnt || op != bg_Union) {
-	    bsg_polygon_remove(p);
+	    qg_legacy_view_polygon_remove(p);
 	    p = {0, 0};
 	}
 	do_bool = false;
     }
 
-    if (!bsg_polygon_ref_is_null(p)) {
-	bsg_polygon_update(p, getView(), BSG_POLYGON_UPDATE_DEFAULT);
+    if (!qg_legacy_view_polygon_ref_is_null(p)) {
+	qg_legacy_view_polygon_update(p, v, QG_POLYGON_UPDATE_DEFAULT);
     }
 
     toplevel_config(false);
@@ -506,13 +515,16 @@ void
 QPolyMod::apply_bool_op()
 {
     struct ged *gedp = getGed();
-    if (bsg_polygon_ref_is_null(p))
+    if (qg_legacy_view_polygon_ref_is_null(p))
 	return;
     if (!gedp)
 	return;
+    qg_legacy_view *v = qpolymod_view(m_ctx);
+    if (!v)
+	return;
 
-    struct bsg_polygon_record rec;
-    if (!bsg_polygon_record_get(p, &rec) || !rec.contour_count)
+    qg_polygon_record rec;
+    if (!qg_legacy_view_polygon_record_get(p, &rec) || !rec.contour_count)
 	return;
 
     if (rec.first_contour_open) {
@@ -530,21 +542,21 @@ QPolyMod::apply_bool_op()
 	op = bg_Intersection;
     }
 
-    std::vector<bsg_polygon_ref> targets;
+    std::vector<qg_polygon_ref> targets;
     struct _qpolymod_poly_collect pc;
     pc.polys = &targets;
     pc.exclude = p;
-    bsg_view_polygon_visit_records(getView(), _qpolymod_poly_collect_cb, &pc);
+    qg_legacy_view_polygon_visit_records(v, _qpolymod_poly_collect_cb, &pc);
 
-    std::vector<bsg_polygon_ref> cleanup;
+    std::vector<qg_polygon_ref> cleanup;
     for (auto target : targets) {
-	bsg_polygon_csg_ref(target, p, op);
-	struct bsg_polygon_record target_rec;
-	if (!bsg_polygon_record_get(target, &target_rec) || !target_rec.contour_count)
+	qg_legacy_view_polygon_csg(target, p, op);
+	qg_polygon_record target_rec;
+	if (!qg_legacy_view_polygon_record_get(target, &target_rec) || !target_rec.contour_count)
 	    cleanup.push_back(target);
     }
     for (size_t i = 0; i < cleanup.size(); i++) {
-	bsg_polygon_remove(cleanup[i]);
+	qg_legacy_view_polygon_remove(cleanup[i]);
     }
 
     emit view_updated(QG_VIEW_REFRESH);
@@ -554,30 +566,30 @@ void
 QPolyMod::align_to_poly()
 {
     struct ged *gedp = getGed();
-    if (bsg_polygon_ref_is_null(p))
+    if (qg_legacy_view_polygon_ref_is_null(p))
 	return;
     if (!gedp)
 	return;
 
-    struct bsg_polygon_record rec;
-    if (!bsg_polygon_record_get(p, &rec))
+    qg_polygon_record rec;
+    if (!qg_legacy_view_polygon_record_get(p, &rec))
 	return;
 
     point_t center;
     vect_t dir = VINIT_ZERO;
     VSET(dir, rec.vp[0], rec.vp[1], rec.vp[2]);
     bg_plane_pt_at(&center, &rec.vp, 0, 0);
-    struct bsg_view *v = getView();
+    qg_legacy_view *v = qpolymod_view(m_ctx);
     if (!v)
 	return;
 
-    rt_view_center_vec_set_bsg(v, center);
+    qg_legacy_view_center_vec_set(v, center);
     vect_t aet = VINIT_ZERO;
     bn_ae_vec(&aet[0], &aet[1], dir);
     aet[2] = 0;
-    rt_view_aet_set_bsg(v, aet);
+    qg_legacy_view_aet_set(v, aet);
 
-    rt_view_update_bsg(v);
+    qg_legacy_view_update(v);
 
     emit view_updated(QG_VIEW_REFRESH);
 }
@@ -586,12 +598,12 @@ void
 QPolyMod::delete_poly()
 {
     struct ged *gedp = getGed();
-    if (bsg_polygon_ref_is_null(p))
+    if (qg_legacy_view_polygon_ref_is_null(p))
 	return;
     if (!gedp)
 	return;
 
-    bsg_polygon_remove(p);
+    qg_legacy_view_polygon_remove(p);
     mod_names->setCurrentIndex(0);
     if (mod_names->currentText().length()) {
 	select(mod_names->currentText());
@@ -649,7 +661,7 @@ QPolyMod::sketch_name_edit()
 	    sname = bu_strdup(ps->sketch_name->text().toLocal8Bit().data());
 	}
 
-	void *poly_udata = bsg_polygon_user_data(p);
+	void *poly_udata = qg_legacy_view_polygon_user_data(p);
 	if (!sname && poly_udata) {
 	    struct directory *dp = (struct directory *)poly_udata;
 	    ps->sketch_name->setPlaceholderText(QString(dp->d_namep));
@@ -661,7 +673,7 @@ QPolyMod::sketch_name_edit()
 	    // matches, then a save operation will replace the old copy with an
 	    // updated version.
 	    bool match_curr = false;
-	    poly_udata = bsg_polygon_user_data(p);
+	    poly_udata = qg_legacy_view_polygon_user_data(p);
 	    if (poly_udata) {
 		struct directory *dp = (struct directory *)poly_udata;
 		if (BU_STR_EQUAL(dp->d_namep, sname)) {
@@ -697,7 +709,7 @@ QPolyMod::sketch_name_update()
     if (!gedp)
 	return;
 
-    if (bsg_polygon_ref_is_null(p) || !ps->sketch_sync->isChecked()) {
+    if (qg_legacy_view_polygon_ref_is_null(p) || !ps->sketch_sync->isChecked()) {
 	return;
     }
 
@@ -727,7 +739,7 @@ QPolyMod::sketch_name_update()
     struct directory *sk_dp = RT_DIR_NULL;
     {
 	QgGedEventBatch event_batch(gedp);
-	void *poly_udata = bsg_polygon_user_data(p);
+	void *poly_udata = qg_legacy_view_polygon_user_data(p);
 	if (poly_udata) {
 	    // remove previous dp, if name is different.  If name
 	    // matches, we're done
@@ -752,10 +764,10 @@ QPolyMod::sketch_name_update()
 	    ged_exec_kill(gedp, ac, av);
 	}
 
-	sk_dp = db_view_polygon_ref_to_sketch(gedp->dbip, sk_name, p);
+	sk_dp = qg_legacy_view_polygon_export_sketch(gedp->dbip, sk_name, p);
     }
 
-    bsg_polygon_user_data_set(p, (void *)sk_dp);
+    qg_legacy_view_polygon_user_data_set(p, (void *)sk_dp);
     emit view_updated(QG_VIEW_DB);
 
     bu_free(sk_name, "name copy");
@@ -776,7 +788,7 @@ QPolyMod::view_name_edit()
     if (!gedp)
 	return;
 
-    if (!ps->uniq_obj_name(NULL, gedp->ged_gvp)) {
+    if (!ps->uniq_obj_name(NULL, m_ctx)) {
 	ps->view_name->setStyleSheet("color: rgb(255,0,0)");
     } else {
 	ps->view_name->setStyleSheet("");
@@ -787,19 +799,22 @@ void
 QPolyMod::view_name_update()
 {
     struct ged *gedp = getGed();
-    if (bsg_polygon_ref_is_null(p))
+    if (qg_legacy_view_polygon_ref_is_null(p))
 	return;
     if (!gedp)
+	return;
+    qg_legacy_view *v = qpolymod_view(m_ctx);
+    if (!v)
 	return;
 
     // Make sure the name is unique
     struct bu_vls vname = BU_VLS_INIT_ZERO;
-    if (!ps->uniq_obj_name(&vname, gedp->ged_gvp)) {
+    if (!ps->uniq_obj_name(&vname, m_ctx)) {
 	bu_vls_free(&vname);
 	return;
     }
 
-    bsg_polygon_set_name(p, bu_vls_cstr(&vname));
+    qg_legacy_view_polygon_set_name(p, bu_vls_cstr(&vname));
     bu_vls_free(&vname);
     emit view_updated(QG_VIEW_REFRESH);
 }
@@ -808,18 +823,18 @@ QPolyMod::view_name_update()
 void
 QPolyMod::toggle_line_snapping(bool s)
 {
-    struct bsg_view *v = (cf) ? cf->view() : NULL;
-    bsg_polygon_ref co = (cf) ? cf->polygon : bsg_polygon_ref{0, 0};
-    if (!v || bsg_polygon_ref_is_null(co))
+    qg_legacy_view *v = qpolymod_view(m_ctx);
+    qg_polygon_ref co = (cf) ? cf->polygon : qg_polygon_ref{0, 0};
+    if (!v || qg_legacy_view_polygon_ref_is_null(co))
 	return;
 
-    rt_view_snap_source_flags_set_bsg(v, RT_VIEW_SNAP_VIEW_BSG);
+    qg_legacy_view_snap_source_view_only_set(v);
     if (!s) {
-	rt_view_snap_lines_set_bsg(v, 0);
-	rt_view_snap_exclude_feature_clear_bsg(v);
+	qg_legacy_view_snap_lines_set(v, 0);
+	qg_legacy_view_snap_exclude_clear(v);
     } else {
-	rt_view_snap_exclude_feature_set_bsg(v, co);
-	rt_view_snap_lines_set_bsg(v, bsg_view_polygon_snap_count(v, co) ? 1 : 0);
+	qg_legacy_view_polygon_snap_exclude_set(v, co);
+	qg_legacy_view_snap_lines_set(v, qg_legacy_view_polygon_snap_count(v, co) ? 1 : 0);
     }
 
     emit settings_changed(QG_VIEW_DRAWN);
@@ -828,16 +843,16 @@ QPolyMod::toggle_line_snapping(bool s)
 void
 QPolyMod::toggle_grid_snapping(bool s)
 {
-    struct bsg_view *v = (cf) ? cf->view() : NULL;
+    qg_legacy_view *v = qpolymod_view(m_ctx);
     if (!v)
 	return;
 
-    rt_view_snap_source_flags_set_bsg(v, RT_VIEW_SNAP_VIEW_BSG);
-    struct bsg_grid_state grid;
-    if (!rt_view_grid_from_bsg(&grid, v))
+    qg_legacy_view_snap_source_view_only_set(v);
+    struct rt_view_grid_state grid;
+    if (!qg_legacy_view_grid_state_get(v, &grid))
 	return;
     grid.snap = s ? 1 : 0;
-    rt_view_grid_set_bsg(v, &grid);
+    qg_legacy_view_grid_state_set(v, &grid);
 
     emit settings_changed(QG_VIEW_DRAWN);
 }
@@ -845,13 +860,13 @@ QPolyMod::toggle_grid_snapping(bool s)
 void
 QPolyMod::checkbox_refresh(unsigned long long)
 {
-    struct bsg_view *v = (cf) ? cf->view() : NULL;
+    qg_legacy_view *v = qpolymod_view(m_ctx);
     if (!v)
 	return;
 
     ps->grid_snapping->blockSignals(true);
-    struct bsg_grid_state grid = {};
-    (void)rt_view_grid_from_bsg(&grid, v);
+    struct rt_view_grid_state grid = {};
+    (void)qg_legacy_view_grid_state_get(v, &grid);
     if (grid.snap) {
 	ps->grid_snapping->setCheckState(Qt::Checked);
     } else {
@@ -860,7 +875,7 @@ QPolyMod::checkbox_refresh(unsigned long long)
     ps->grid_snapping->blockSignals(false);
 
     ps->line_snapping->blockSignals(true);
-    if (rt_view_snap_lines_from_bsg(v)) {
+    if (qg_legacy_view_snap_lines_get(v)) {
 	ps->line_snapping->setCheckState(Qt::Checked);
     } else {
 	ps->line_snapping->setCheckState(Qt::Unchecked);
@@ -881,14 +896,14 @@ QPolyMod::eventFilter(QObject *, QEvent *e)
     struct ged *gedp = getGed();
     if (!gedp)
 	return false;
-    struct bsg_view *v = getView();
-    if (!v)
+    QgView *display = qpolymod_view_widget(m_ctx);
+    if (!display || !display->view())
 	return false;
 
     // We might be selecting or modifying - if the former, we may
     // not have a current polygon.
-    struct bsg_polygon_record rec;
-    int have_rec = bsg_polygon_record_get(p, &rec);
+    qg_polygon_record rec;
+    int have_rec = qg_legacy_view_polygon_record_get(p, &rec);
 
     // The mouse filter to use depends on the mode - find out
     cf = puf;
@@ -896,15 +911,15 @@ QPolyMod::eventFilter(QObject *, QEvent *e)
 	cf = psf;
     if (move_mode->isChecked())
 	cf = pmf;
-    if (update_mode->isChecked() && have_rec && rec.type == BSG_POLYGON_GENERAL) {
+    if (update_mode->isChecked() && have_rec && rec.type == QG_POLYGON_GENERAL) {
 	if (append_pnt->isChecked() || select_pnt->isChecked())
 	    cf = ppf;
     }
 
     // Set libqtcad know what the current polygon is
     cf->polygon = p;
-    cf->set_view(v);
-    cf->ptype = have_rec ? rec.type : BSG_POLYGON_GENERAL;
+    cf->set_view_widget(display);
+    cf->ptype = have_rec ? rec.type : QG_POLYGON_GENERAL;
     checkbox_refresh(0);
 
     // Connect whatever the current filter is to pass on updating signals from
@@ -926,7 +941,7 @@ QPolyMod::eventFilter(QObject *, QEvent *e)
 
     // Retrieve the polygon ref from the libqtcad data container.
     p = cf->polygon;
-    have_rec = bsg_polygon_record_get(p, &rec);
+    have_rec = qg_legacy_view_polygon_record_get(p, &rec);
 
     // If we need to, update our selected list entry
     if (select_mode->isChecked() && have_rec) {

@@ -44,7 +44,7 @@
 #include "raytrace.h"
 #include "rt/func.h"
 
-#include "bsg/geometry.h"
+#include "bg/line_layer.h"
 #include "bsg/scene_builder.h"
 #include "./ged_private.h"
 
@@ -1151,9 +1151,9 @@ shoot_and_plot(point_t start_pt,
 
 	    dgcdp->nvectors++;
 	    VJOIN1(pt, rp.r_pt, seg->seg_in.hit_dist, rp.r_dir);
-	    bigE_line_append(dgcdp, pt, BSG_GEOMETRY_LINE_MOVE);
+	    bigE_line_append(dgcdp, pt, BG_GEOMETRY_LINE_MOVE);
 	    VJOIN1(pt, rp.r_pt, seg->seg_out.hit_dist, rp.r_dir);
-	    bigE_line_append(dgcdp, pt, BSG_GEOMETRY_LINE_DRAW);
+	    bigE_line_append(dgcdp, pt, BG_GEOMETRY_LINE_DRAW);
 	}
 
     }

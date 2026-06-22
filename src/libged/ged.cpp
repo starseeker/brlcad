@@ -46,6 +46,7 @@
 #include "rt/geom.h"
 #include "raytrace.h"
 #include "bg/plot3.h"
+#include "dm/fbserv.h"
 #include "dm.h"
 
 #include "bsg/defines.h"

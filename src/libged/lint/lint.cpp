@@ -35,8 +35,8 @@ extern "C" {
 #include "bu/opt.h"
 #include "wdb.h"
 }
-#include "bsg/feature.h"
-#include "bsg/geometry.h"
+#include "bg/line_layer.h"
+#include "../bsg_ged_draw_view_private.h"
 #include "ged/event_txn.h"
 #include "./ged_lint.h"
 
@@ -78,13 +78,13 @@ lint_data::plot_append_triangle(struct rt_bot_internal *bot, int tri_ind)
 	plot_point_capacity = ncap;
     }
     VMOVE(plot_points[plot_point_count], v[0]);
-    plot_cmds[plot_point_count++] = BSG_GEOMETRY_LINE_MOVE;
+    plot_cmds[plot_point_count++] = BG_GEOMETRY_LINE_MOVE;
     VMOVE(plot_points[plot_point_count], v[1]);
-    plot_cmds[plot_point_count++] = BSG_GEOMETRY_LINE_DRAW;
+    plot_cmds[plot_point_count++] = BG_GEOMETRY_LINE_DRAW;
     VMOVE(plot_points[plot_point_count], v[2]);
-    plot_cmds[plot_point_count++] = BSG_GEOMETRY_LINE_DRAW;
+    plot_cmds[plot_point_count++] = BG_GEOMETRY_LINE_DRAW;
     VMOVE(plot_points[plot_point_count], v[0]);
-    plot_cmds[plot_point_count++] = BSG_GEOMETRY_LINE_DRAW;
+    plot_cmds[plot_point_count++] = BG_GEOMETRY_LINE_DRAW;
 }
 
 void
@@ -97,17 +97,17 @@ lint_data::plot_publish(const char *name)
 	return;
 
     struct bsg_view *view = gedp->ged_gvp;
-    struct bsg_feature_style style = BSG_FEATURE_STYLE_INIT;
+    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
     unsigned char rgb[3] = {255, 255, 0};
     if (color)
 	bu_color_to_rgb_chars(color, rgb);
     style.color_valid = 1;
     VSET(style.color, rgb[0], rgb[1], rgb[2]);
     if (plot_point_count)
-	(void)bsg_feature_replace_lines(view, name, 0,
-		(const point_t *)plot_points, plot_point_count, &style);
+	(void)ged_draw_view_lines_replace(view, name, 0,
+		(const point_t *)plot_points, plot_cmds, plot_point_count, &style);
     else
-	(void)bsg_feature_remove(view, name);
+	(void)ged_draw_view_feature_remove(view, name);
 }
 
 std::string

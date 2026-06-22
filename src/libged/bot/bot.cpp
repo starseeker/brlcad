@@ -45,14 +45,14 @@
 #include "bu/opt.h"
 #include "bu/tbl.h"
 #include "bg/chull.h"
+#include "bg/line_layer.h"
 #include "bg/pca.h"
 #include "bg/trimesh.h"
-#include "bsg/feature.h"
-#include "bsg/geometry.h"
 #include "ged/event_txn.h"
 #include "rt/geom.h"
 #include "wdb.h"
 
+#include "../bsg_ged_draw_view_private.h"
 #include "./ged_bot.h"
 #include "../ged_private.h"
 
@@ -710,27 +710,26 @@ _bot_cmd_plot(void *bs, int argc, const char **argv)
 	for (int i = 0; i < 3; i++)
 	    VMOVE(v[i], &bot->vertices[bot->faces[*f_it*3+i]*3]);
 	VMOVE(points[pi], v[0]);
-	cmds[pi++] = BSG_GEOMETRY_LINE_MOVE;
+	cmds[pi++] = BG_GEOMETRY_LINE_MOVE;
 	VMOVE(points[pi], v[1]);
-	cmds[pi++] = BSG_GEOMETRY_LINE_DRAW;
+	cmds[pi++] = BG_GEOMETRY_LINE_DRAW;
 	VMOVE(points[pi], v[2]);
-	cmds[pi++] = BSG_GEOMETRY_LINE_DRAW;
+	cmds[pi++] = BG_GEOMETRY_LINE_DRAW;
 	VMOVE(points[pi], v[0]);
-	cmds[pi++] = BSG_GEOMETRY_LINE_DRAW;
+	cmds[pi++] = BG_GEOMETRY_LINE_DRAW;
     }
 
     if (gb->gedp->ged_gvp) {
 	struct bu_vls nroot = BU_VLS_INIT_ZERO;
 	bu_vls_sprintf(&nroot, "bot::%s", "_bot_face_plot");
 	struct bsg_view *view = gb->gedp->ged_gvp;
-	(void)bsg_feature_remove(view, bu_vls_cstr(&nroot));
+	(void)ged_draw_view_feature_remove(view, bu_vls_cstr(&nroot));
 	if (point_count) {
-	    bsg_feature_ref ref = bsg_feature_create_lines(view, bu_vls_cstr(&nroot), 0);
-	    if (!bsg_feature_ref_is_null(ref)) {
-		(void)bsg_feature_points_replace(ref, BSG_FEATURE_LINES,
-			(const point_t *)points, cmds, point_count);
-		bsg_feature_set_color(ref, rgb[0], rgb[1], rgb[2]);
-	    }
+	    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+	    style.color_valid = 1;
+	    VSET(style.color, rgb[0], rgb[1], rgb[2]);
+	    (void)ged_draw_view_lines_replace(view, bu_vls_cstr(&nroot), 0,
+		    (const point_t *)points, cmds, point_count, &style);
 	}
 	bu_vls_free(&nroot);
     }

@@ -33,16 +33,14 @@
 #include "bu/malloc.h"
 #include "bu/vls.h"
 
-#include "bsg/feature.h"
-#include "bsg/selection.h"
 #include "ged/bsg_ged_draw.h"
 #include "rt/view_legacy_bsg.h"
+#include "../bsg_ged_draw_view_private.h"
 #include "../ged_private.h"
 #include "./ged_view.h"
 
 /* Visit context + callbacks for the "view vZ" autodetect path. */
 struct _view_vZ_ctx {
-    struct bsg_view *cv;
     mat_t model2view;
     int calc_mode;
     double vZ;
@@ -94,10 +92,10 @@ _view_vZ_segment_cb(const point_t a, const point_t b, void *data)
 }
 
 static int
-_view_vZ_feature_visit_cb(bsg_feature_ref ref, const struct bsg_feature_record *UNUSED(rec), void *data)
+_view_vZ_feature_depth_cb(fastf_t depth, void *data)
 {
     struct _view_vZ_ctx *c = (struct _view_vZ_ctx *)data;
-    return _view_vZ_consider(c, bsg_feature_view_depth(ref, c->cv, c->calc_mode));
+    return _view_vZ_consider(c, depth);
 }
 
 static void
@@ -461,7 +459,7 @@ _view_cmd_selections(void *bs, int argc, const char **argv)
     }
 
     bu_vls_printf(gd->gedp->ged_result_str, "%zu",
-		  bsg_selection_count(rt_view_selection_bsg(v)));
+		  ged_draw_view_selection_count(v));
 
     return BRLCAD_OK;
 }
@@ -571,9 +569,9 @@ _view_cmd_vZ(void *bs, int argc, const char **argv)
     if (calc_mode != -1) {
 	struct bsg_view *v = gd->cv;
 	if (bu_vls_strlen(&calc_target)) {
-	    bsg_feature_ref feature = bsg_feature_find(v, bu_vls_cstr(&calc_target));
-	    if (!bsg_feature_ref_is_null(feature)) {
-		fastf_t vZ = bsg_feature_view_depth(feature, gd->cv, calc_mode);
+	    fastf_t vZ = 0.0;
+	    if (ged_draw_view_feature_depth(v, bu_vls_cstr(&calc_target),
+			calc_mode, &vZ)) {
 		bu_vls_sprintf(gedp->ged_result_str, "%0.15f", vZ);
 		return BRLCAD_OK;
 	    } else {
@@ -584,12 +582,12 @@ _view_cmd_vZ(void *bs, int argc, const char **argv)
 	} else {
 	    /* Check all drawn view features and database leaves. */
 	    struct _view_vZ_ctx ctx;
-	    ctx.cv = gd->cv;
 	    rt_view_model2view_from_bsg(ctx.model2view, gd->cv);
 	    ctx.calc_mode = calc_mode;
 	    ctx.vZ = (calc_mode) ? -DBL_MAX : DBL_MAX;
 	    ctx.have_vz = 0;
-	    bsg_feature_visit(v, BSG_FEATURE_SCOPE_ALL, _view_vZ_feature_visit_cb, &ctx);
+	    ged_draw_view_feature_depth_foreach(v, calc_mode,
+		    _view_vZ_feature_depth_cb, &ctx);
 	    _view_vZ_visit_db_exports(v, &ctx);
 	    if (ctx.have_vz) {
 		bu_vls_sprintf(gedp->ged_result_str, "%0.15f", ctx.vZ);
@@ -731,7 +729,7 @@ ged_view_core(struct ged *gedp, int argc, const char *argv[])
     gd.cmds = _view_cmds;
     gd.cv = NULL;
     gd.gobj_dbpath = NULL;
-    gd.polygon_ref = (bsg_polygon_ref)BSG_POLYGON_REF_NULL_INIT;
+    gd.polygon_ref = GED_DRAW_VIEW_POLYGON_REF_NULL;
     gd.shape_ref = GED_DRAW_SHAPE_REF_NULL;
     gd.verbosity = 0;
 

@@ -101,6 +101,8 @@ main(int argc, char **argv)
     context.viewWidgetAccessor = [&view]() -> QgView * { return &view; };
     if (context.getViewWidget() != &view)
 	FAIL("plugin context should expose the active QgView widget");
+    if (context.activeView() != view.view())
+	FAIL("plugin context should expose the active opaque legacy view");
 
     BRLObolViewController *controller = view.obolViewController();
     if (!controller)

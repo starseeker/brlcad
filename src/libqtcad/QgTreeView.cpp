@@ -38,7 +38,6 @@
 #include "qtcad/QgTreeView.h"
 #include "qtcad/QgSignalFlags.h"
 
-#include "ged/bsg_ged_draw.h"
 #include "raytrace.h"
 
 void gObjDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const
@@ -308,15 +307,11 @@ QgTreeView::do_draw_toggle(const QModelIndex &index)
 	if (!m->ged())
 		return;
 
-	struct bsg_view *v = m->ged()->ged_gvp;
-	if (!v)
-		return;
-
 	std::string path = m->item_path(cnode);
 	if (path.empty())
 		return;
 
-	if (!ged_draw_path_state(m->ged(), v, path.c_str(), -1))
+	if (!m->drawnPathState(path.c_str()))
 		m->draw(path.c_str());
 	else
 		m->erase(path.c_str());

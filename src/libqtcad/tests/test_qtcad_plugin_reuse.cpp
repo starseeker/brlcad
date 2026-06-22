@@ -132,16 +132,17 @@ main(int argc, char *argv[])
     TCHECK(!dialog_descs.isEmpty(),"at least one qged.dialog plugin discovered");
 
     /* ================================================================
-     * 5. QgPluginContext with NULL ged/bsg_view -- simulates a minimal host
+     * 5. QgPluginContext with NULL GED/view -- simulates a minimal host
      *    (no ged instance, no open database).
      * ================================================================ */
     QgPluginNotifier notifier;
     QgPluginContext ctx;
     ctx.hostName = QStringLiteral("test_qtcad_plugin_reuse");
     ctx.notifier = &notifier;
-    /* Deliberately leave gedAccessor and viewAccessor as nullptr
+    /* Deliberately leave gedAccessor and viewWidgetAccessor as nullptr
      * to exercise the null-safe paths in the sample plugins. */
     ctx.log = [](const QString &msg) { bu_log("plugin: %s\n", qPrintable(msg)); };
+    TCHECK(ctx.activeView() == nullptr, "empty plugin context has no active legacy view");
 
     /* ================================================================
      * 6. IQgCommand: enumerate, find host_status_command, invoke it.

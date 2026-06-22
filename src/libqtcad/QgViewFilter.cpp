@@ -25,11 +25,13 @@
 #include "common.h"
 
 extern "C" {
-#include "bsg/defines.h"
 #include "rt/view_legacy_bsg.h"
 }
 
 #include "qtcad/QgObolSnap.h"
+#include "qtcad/QgLegacyView.h"
+#include "qtcad/QgLegacyViewBsg.h"
+#include "qtcad/QgView.h"
 #include "qtcad/QgViewFilter.h"
 
 static uint32_t
@@ -62,11 +64,14 @@ qg_obol_db_snap_enabled(const struct bsg_view *v)
 }
 
 static float
-qg_obol_snap_tolerance(const struct bsg_view *v)
+qg_obol_snap_tolerance(const qg_legacy_view *lv, const struct bsg_view *v)
 {
-	int width = rt_view_width_from_bsg(v);
-	int height = rt_view_height_from_bsg(v);
-	if (!v || width <= 0 || height <= 0)
+	if (!lv || !v)
+		return 0.0f;
+
+	int width = qg_legacy_view_width_get(lv);
+	int height = qg_legacy_view_height_get(lv);
+	if (width <= 0 || height <= 0)
 		return 0.0f;
 
 	double lavg = ((double)width + (double)height) * 0.5;
@@ -78,14 +83,15 @@ qg_obol_snap_tolerance(const struct bsg_view *v)
 }
 
 static void
-qg_obol_refine_db_snap(QgView *display, struct bsg_view *v)
+qg_obol_refine_db_snap(QgView *display, qg_legacy_view *lv,
+	struct bsg_view *v)
 {
 	if (!display || !qg_obol_db_snap_enabled(v))
 		return;
 
 	uint32_t obol_kinds = qg_obol_snap_kinds_from_rt_mask(
 		rt_view_snap_kind_mask_from_bsg(v));
-	float tolerance = qg_obol_snap_tolerance(v);
+	float tolerance = qg_obol_snap_tolerance(lv, v);
 	if (!obol_kinds || tolerance <= 0.0f)
 		return;
 
@@ -106,11 +112,8 @@ qg_obol_refine_db_snap(QgView *display, struct bsg_view *v)
 	(void)rt_view_current_point_set_bsg(v, snapped_point);
 }
 
-class QgView;
-
 class QgViewFilter::QgViewFilterPrivate {
 public:
-	struct bsg_view *v = nullptr;
 	QgView *display = nullptr;
 };
 
@@ -122,18 +125,6 @@ QgViewFilter::QgViewFilter(QObject *parent)
 QgViewFilter::~QgViewFilter()
 {
 	delete m;
-}
-
-void
-QgViewFilter::set_view(struct bsg_view *nv)
-{
-	m->v = nv;
-}
-
-struct bsg_view *
-QgViewFilter::view() const
-{
-	return m->v;
 }
 
 void
@@ -151,7 +142,9 @@ QgViewFilter::view_widget() const
 QMouseEvent *
 QgViewFilter::view_sync(QEvent *e)
 {
-	if (!m->v)
+	qg_legacy_view *lv = m->display ? m->display->view() : nullptr;
+	struct bsg_view *v = qg_legacy_view_to_bsg(lv);
+	if (!v)
 		return nullptr;
 
 	/* If this is not a supported mouse event, there is nothing to do. */
@@ -172,8 +165,8 @@ QgViewFilter::view_sync(QEvent *e)
 #endif
 
 	/* Keep retained legacy view state synchronized with the event stream. */
-	rt_view_mouse_state_set_bsg(m->v, e_x, e_y);
-	qg_obol_refine_db_snap(m->display, m->v);
+	rt_view_mouse_state_set_bsg(v, e_x, e_y);
+	qg_obol_refine_db_snap(m->display, lv, v);
 
 	/* Modifier keys are typically view-nav gestures, not edit operations. */
 	if (m_e->modifiers() != Qt::NoModifier)
