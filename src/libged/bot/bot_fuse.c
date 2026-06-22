@@ -162,10 +162,10 @@ show_dangling_edges(struct ged *gedp, const uint32_t *magic_p, const char *name,
 
     if (out_type == 1) {
 	/* Add overlay */
-	if (gedp->ged_gvp) {
+	struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
+	if (view) {
 	    struct bu_vls nroot = BU_VLS_INIT_ZERO;
 	    bu_vls_sprintf(&nroot, "bot_fuse::%s", name);
-	    struct bsg_view *view = gedp->ged_gvp;
 	    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
 	    style.color_valid = 1;
 	    VSET(style.color, 255, 255, 0);

@@ -107,22 +107,28 @@ dm_backend_end_frame(struct dm *dmp)
 }
 
 int
-dm_backend_draw_item(struct dm *dmp, const struct bsg_render_item *item)
+dm_backend_draw_item(struct dm *dmp, const void *render_item_ctx)
 {
+    const struct bsg_render_item *item =
+	(const struct bsg_render_item *)render_item_ctx;
+
     if (UNLIKELY(!dmp || !item || item->geometry.kind == BSG_RENDER_GEOMETRY_NONE)) return -1;
     const struct dm_backend_ops *ops = dm_get_backend_ops(dmp);
     if (ops && ops->draw_item)
-	return ops->draw_item(dmp, item);
+	return ops->draw_item(dmp, render_item_ctx);
     return -1;
 }
 
 void
-dm_backend_invalidate_item(struct dm *dmp, const struct bsg_render_item *item, unsigned int reason_mask)
+dm_backend_invalidate_item(struct dm *dmp, const void *render_item_ctx, unsigned int reason_mask)
 {
+    const struct bsg_render_item *item =
+	(const struct bsg_render_item *)render_item_ctx;
+
     if (UNLIKELY(!dmp || !item)) return;
     const struct dm_backend_ops *ops = dm_get_backend_ops(dmp);
     if (ops && ops->invalidate_item)
-	ops->invalidate_item(dmp, item, reason_mask);
+	ops->invalidate_item(dmp, render_item_ctx, reason_mask);
     else
 	dm_backend_resource_invalidate(dmp,
 		item->source.source_id ? item->source.source_id : item->geometry.source_identity);
@@ -773,14 +779,20 @@ dm_get_display_image(struct dm *dmp, unsigned char **image, int flip, int alpha)
 }
 
 int
-dm_draw_device_vlist(struct dm *dmp, bsg_vlist *vp)
+dm_draw_device_vlist(struct dm *dmp, bg_vlist *vp)
 {
     if (UNLIKELY(!dmp)) return 0;
     return dmp->i->dm_drawVList(dmp, vp);
 }
 
 int
-dm_draw_device_vlist_hidden_line(struct dm *dmp, bsg_vlist *vp)
+dm_draw_device_bg_vlist(struct dm *dmp, bg_vlist *vp)
+{
+    return dm_draw_device_vlist(dmp, vp);
+}
+
+int
+dm_draw_device_vlist_hidden_line(struct dm *dmp, bg_vlist *vp)
 {
     if (UNLIKELY(!dmp)) return 0;
     return dmp->i->dm_drawVListHiddenLine(dmp, vp);
@@ -969,7 +981,7 @@ dm_draw_points_3d(struct dm *dmp, int npoints, point_t *points)
     return dmp->i->dm_drawPoints3D(dmp, npoints, points);
 }
 int
-dm_draw(struct dm *dmp, bsg_vlist *(*callback)(void *), void **data)
+dm_draw(struct dm *dmp, bg_vlist *(*callback)(void *), void **data)
 {
     if (UNLIKELY(!dmp)) return 0;
     return dmp->i->dm_draw(dmp, callback, data);

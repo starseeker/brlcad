@@ -47,7 +47,7 @@ zap_has_independent_views(struct ged *gedp)
     if (!gedp)
 	return 0;
 
-    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, i);
 	if (v && rt_view_is_independent_bsg(v))
@@ -120,7 +120,7 @@ ged_zap2_core(struct ged *gedp, int argc, const char *argv[])
 	    return BRLCAD_ERROR;
 	}
 
-	v = rt_view_set_find_view_bsg(&gedp->ged_views, bu_vls_cstr(&cvls));
+	v = (struct bsg_view *)ged_view_find_ctx(gedp, bu_vls_cstr(&cvls));
 	if (!v) {
 	    bu_vls_printf(gedp->ged_result_str, "Specified view %s not found\n", bu_vls_cstr(&cvls));
 	    bu_vls_free(&cvls);
@@ -152,7 +152,7 @@ ged_zap2_core(struct ged *gedp, int argc, const char *argv[])
     if (clear_solid_objs && !full_canonical_clear)
 	cleared_shared_db = zap_draw_db_scope(gedp, NULL);
 
-    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	v = (struct bsg_view *)BU_PTBL_GET(views, i);
 	if (rt_view_is_independent_bsg(v) && !clear_all_views)

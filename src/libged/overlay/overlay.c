@@ -104,13 +104,14 @@ ged_overlay_core(struct ged *gedp, int argc, const char *argv[])
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    if (!gedp->ged_gvp) {
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+    if (!v) {
 	bu_vls_printf(gedp->ged_result_str, ": no current view set\n");
 	bu_vls_free(&vname);
 	return BRLCAD_ERROR;
     }
 
-    dmp = (struct dm *)gedp->ged_gvp->dmp;
+    dmp = (struct dm *)rt_view_display_manager_from_bsg(v);
     if (!dmp) {
 	bu_vls_printf(gedp->ged_result_str, ": no display manager currently active");
 	bu_vls_free(&vname);
@@ -135,12 +136,12 @@ ged_overlay_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     if (!write_fb && NEAR_ZERO(size, VUNITIZE_TOL)) {
-	if (!gedp->ged_gvp) {
+	if (!v) {
 	    bu_vls_printf(gedp->ged_result_str, ": no character size specified, and could not determine default value");
 	    bu_vls_free(&vname);
 	    return BRLCAD_ERROR;
 	}
-	size = rt_view_scale_from_bsg(gedp->ged_gvp) * 0.01;
+	size = rt_view_scale_from_bsg(v) * 0.01;
     }
 
     argc = opt_ret;

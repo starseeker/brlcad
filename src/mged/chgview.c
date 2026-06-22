@@ -927,7 +927,7 @@ edit_com(struct mged_state *s,
 	    curr_cmd_list = &head_cmd_list;
 	}
 
-	s->gedp->ged_gvp = view_state->vs_gvp;
+	ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 
 	non_empty = ged_draw_has_shapes(s->gedp);
 
@@ -951,7 +951,7 @@ edit_com(struct mged_state *s,
 
     set_curr_dm(s, save_m_dmp);
     curr_cmd_list = save_cmd_list;
-    s->gedp->ged_gvp = view_state->vs_gvp;
+    ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 
     return TCL_OK;
 }
@@ -994,7 +994,7 @@ cmd_autoview(ClientData clientData, Tcl_Interp *interp, int argc, const char *ar
 	    curr_cmd_list = &head_cmd_list;
 	}
 
-	s->gedp->ged_gvp = view_state->vs_gvp;
+	ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 
 	{
 	    int ac = 1;
@@ -1021,7 +1021,7 @@ cmd_autoview(ClientData clientData, Tcl_Interp *interp, int argc, const char *ar
     }
     set_curr_dm(s, save_m_dmp);
     curr_cmd_list = save_cmd_list;
-    s->gedp->ged_gvp = view_state->vs_gvp;
+    ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 
     return TCL_OK;
 }
@@ -2078,8 +2078,9 @@ mged_zoom(struct mged_state *s, double val)
 
     ret = TCL_OK;
     struct rt_view_lod_policy lod_policy = RT_VIEW_LOD_POLICY_INIT;
-    if (s->gedp->ged_gvp &&
-	rt_view_lod_policy_from_bsg(&lod_policy, s->gedp->ged_gvp) &&
+    struct bsg_view *active_view = (struct bsg_view *)ged_view_active_ctx(s->gedp);
+    if (active_view &&
+	rt_view_lod_policy_from_bsg(&lod_policy, active_view) &&
 	lod_policy.csg_enabled && lod_policy.zoom_refresh) {
 	ret = redraw_visible_objects(s);
     }

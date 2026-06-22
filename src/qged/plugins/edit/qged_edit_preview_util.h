@@ -272,11 +272,11 @@ qged_edit_preview_lines_replace_view(QgView *display,
 				     enum qged_edit_feature_family family,
 				     const struct qged_edit_preview_lines *lines)
 {
-    int bsg_ret = qged_edit_feature_ref_is_null(ref) ? 0 :
+    int legacy_ret = qged_edit_feature_ref_is_null(ref) ? 0 :
 	qged_edit_preview_lines_replace(ref, family, lines);
     int obol_ret = qged_edit_preview_lines_replace_obol(display, preview_id,
 	    lines);
-    return bsg_ret || obol_ret;
+    return legacy_ret || obol_ret;
 }
 
 
@@ -289,10 +289,10 @@ qged_edit_feature_clear_geometry_view(QgView *display,
 				      const char *preview_id,
 				      struct qged_edit_feature_ref ref)
 {
-    int bsg_ret = qged_edit_feature_ref_is_null(ref) ? 0 :
+    int legacy_ret = qged_edit_feature_ref_is_null(ref) ? 0 :
 	qged_edit_feature_clear_geometry(ref);
     int obol_ret = qg_obol_edit_preview_clear(display, preview_id);
-    return bsg_ret || obol_ret;
+    return legacy_ret || obol_ret;
 }
 
 

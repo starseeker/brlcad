@@ -2613,8 +2613,9 @@ ged_gqa_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
+    struct bsg_view *active_view = (struct bsg_view *)ged_view_active_ctx(gedp);
     overlay_enabled = (analysis_flags & ANALYSIS_PLOT_OVERLAPS) &&
-	(gedp->ged_gvp || ged_diagnostic_line_layer_handler_available(gedp));
+	(active_view || ged_diagnostic_line_layer_handler_available(gedp));
     if (analysis_flags & ANALYSIS_PLOT_OVERLAPS) {
 	memset(&ged_gqa_plot, 0, sizeof(ged_gqa_plot));
 	if (overlay_enabled)
@@ -2781,8 +2782,8 @@ aborted:
 	if (overlay_enabled) {
 	    int handled = ged_diagnostic_line_layer_publish(gedp,
 		    "gqa::overlaps", ged_gqa_plot.builder);
-	    if (!handled && gedp->ged_gvp) {
-		(void)ged_draw_view_line_layer_builder_replace(gedp->ged_gvp,
+	    if (!handled && active_view) {
+		(void)ged_draw_view_line_layer_builder_replace(active_view,
 			"gqa::overlaps", 0, ged_gqa_plot.builder);
 	    }
 	}

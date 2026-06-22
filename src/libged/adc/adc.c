@@ -129,7 +129,7 @@ ged_adc_core(struct ged *gedp,
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
-    struct bsg_view *v = gedp->ged_gvp;
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
     fastf_t view_scale = rt_view_scale_from_bsg(v);
     fastf_t adc_scale = (gedp->dbip) ? view_scale * gedp->dbip->dbi_base2local : view_scale;
     double sval = (gedp->dbip) ? gedp->dbip->dbi_local2base : 1.0;
@@ -174,11 +174,11 @@ ged_adc_core(struct ged *gedp,
     }
 
     struct rt_view_adc_state adc;
-    if (!rt_view_adc_state_from_bsg(&adc, gedp->ged_gvp))
+    if (!rt_view_adc_state_from_bsg(&adc, v))
 	return BRLCAD_ERROR;
 #define ADC_COMMIT_RETURN(_ret) \
     do { \
-	rt_view_adc_state_set_bsg(gedp->ged_gvp, &adc); \
+	rt_view_adc_state_set_bsg(v, &adc); \
 	return (_ret); \
     } while (0)
 
@@ -478,7 +478,7 @@ ged_adc_core(struct ged *gedp,
 	    }
 
 	    adc.anchor_pos = i;
-	    ged_calc_adc_pos(gedp->ged_gvp, &adc);
+	    ged_calc_adc_pos(v, &adc);
 
 	    ADC_COMMIT_RETURN(BRLCAD_OK);
 	}
@@ -499,7 +499,7 @@ ged_adc_core(struct ged *gedp,
 	    else
 		adc.anchor_a1 = 0;
 
-	    ged_calc_adc_a1(gedp->ged_gvp, &adc);
+	    ged_calc_adc_a1(v, &adc);
 
 	    ADC_COMMIT_RETURN(BRLCAD_OK);
 	}
@@ -523,7 +523,7 @@ ged_adc_core(struct ged *gedp,
 		VMOVE(adc.anchor_pt_a1, user_pt);
 	    }
 
-	    ged_calc_adc_a1(gedp->ged_gvp, &adc);
+	    ged_calc_adc_a1(v, &adc);
 
 	    ADC_COMMIT_RETURN(BRLCAD_OK);
 	}
@@ -545,7 +545,7 @@ ged_adc_core(struct ged *gedp,
 	    else
 		adc.anchor_a2 = 0;
 
-	    ged_calc_adc_a2(gedp->ged_gvp, &adc);
+	    ged_calc_adc_a2(v, &adc);
 
 	    ADC_COMMIT_RETURN(BRLCAD_OK);
 	}
@@ -570,7 +570,7 @@ ged_adc_core(struct ged *gedp,
 		VMOVE(adc.anchor_pt_a2, user_pt);
 	    }
 
-	    ged_calc_adc_a2(gedp->ged_gvp, &adc);
+	    ged_calc_adc_a2(v, &adc);
 
 	    ADC_COMMIT_RETURN(BRLCAD_OK);
 	}
@@ -592,7 +592,7 @@ ged_adc_core(struct ged *gedp,
 	    } else
 		adc.anchor_dst = 0;
 
-	    ged_calc_adc_dst(gedp->ged_gvp, &adc);
+	    ged_calc_adc_dst(v, &adc);
 
 	    ADC_COMMIT_RETURN(BRLCAD_OK);
 	}
@@ -616,7 +616,7 @@ ged_adc_core(struct ged *gedp,
 		VMOVE(adc.anchor_pt_dst, user_pt);
 	    }
 
-	    ged_calc_adc_dst(gedp->ged_gvp, &adc);
+	    ged_calc_adc_dst(v, &adc);
 
 	    ADC_COMMIT_RETURN(BRLCAD_OK);
 	}
@@ -637,7 +637,7 @@ ged_adc_core(struct ged *gedp,
     }
 
     if (BU_STR_EQUAL(parameter, "vars")) {
-	adc_vls_print(gedp->ged_gvp, &adc, sval, gedp->ged_result_str);
+	adc_vls_print(v, &adc, sval, gedp->ged_result_str);
 	ADC_COMMIT_RETURN(BRLCAD_OK);
     }
 

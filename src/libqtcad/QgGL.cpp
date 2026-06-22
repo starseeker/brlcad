@@ -35,11 +35,6 @@
 
 #include "QgCanvasState.h"   /* pimpl definition + shared helpers */
 #include "qtcad/QgGL.h"
-#include "qtcad/QgLegacyViewBsg.h"
-
-extern "C" {
-#include "rt/view_legacy_bsg.h"
-}
 
 // FROM MGED
 #define XMIN            (-2048)
@@ -51,21 +46,34 @@ extern "C" {
 #define QTGL_ZMIN -2048
 #define QTGL_ZMAX 2047
 
-QgGL::QgGL(QWidget *parent, struct fb *fbp)
+static thread_local qg_legacy_fb *qggl_bridge_framebuffer = nullptr;
+
+struct QgGLBridgeFramebufferScope {
+    explicit QgGLBridgeFramebufferScope(qg_legacy_fb *fbp)
+	: previous(qggl_bridge_framebuffer)
+    {
+	qggl_bridge_framebuffer = fbp;
+    }
+
+    ~QgGLBridgeFramebufferScope()
+    {
+	qggl_bridge_framebuffer = previous;
+    }
+
+    qg_legacy_fb *previous = nullptr;
+};
+
+QgGL::QgGL(QWidget *parent)
     : QOpenGLWidget(parent)
 {
     d = new QgCanvasState();
     qgcanvas_init_obol(*d, this);
-    d->ifp = fbp;
-    d->lmouse_mode = RT_VIEW_ADJUST_SCALE;
+    d->ifp = qggl_bridge_framebuffer;
+    d->lmouse_mode = QG_LEGACY_VIEW_ADJUST_SCALE;
 
     // Provide a view specific to this widget - set gedp->ged_gvp to v
     // if this is the current view
-    struct bsg_view *local_bv = nullptr;
-    BU_GET(local_bv, struct bsg_view);
-    rt_view_init_bsg(local_bv, nullptr);
-    bu_vls_sprintf(&local_bv->gv_name, "qtgl");
-    d->local_v = qg_legacy_view_from_bsg(local_bv);
+    d->local_v = qg_legacy_view_local_create("qtgl");
     d->v = d->local_v;
     qgcanvas_sync_obol_camera(*d);
 
@@ -75,10 +83,8 @@ QgGL::QgGL(QWidget *parent, struct fb *fbp)
 
     // If we weren't supplied with a framebuffer, allocate one.
     // We don't open it until we have the dmp.
-    if (!d->ifp) {
-d->ifp = fb_raw("qtgl");
-fb_set_standalone(d->ifp, 0);
-    }
+    if (!d->ifp)
+d->ifp = qg_legacy_view_framebuffer_raw_create("qtgl");
 
     // This is an important Qt setting for interactivity - it allowing key
     // bindings to propagate to this widget and trigger actions such as
@@ -86,19 +92,19 @@ fb_set_standalone(d->ifp, 0);
     setFocusPolicy(Qt::WheelFocus);
 }
 
+QgGL *
+QgCanvasBridgeFactory::create_qtgl(QWidget *parent, qg_legacy_fb *fbp)
+{
+    QgGLBridgeFramebufferScope scope(fbp);
+    return new QgGL(parent);
+}
+
 QgGL::~QgGL()
 {
-    if (d->dmp)
-dm_close(d->dmp);
-    if (d->ifp && !fb_get_standalone(d->ifp)) {
-if (d->m_init)
-    fb_close_existing(d->ifp);
-else
-    fb_put(d->ifp);
-    }
+    qg_legacy_view_dm_close(d->dmp);
+    qg_legacy_view_framebuffer_release(d->ifp, d->m_init);
     qgcanvas_destroy_obol(*d);
-    struct bsg_view *local_bv = qgcanvas_bsg_local_view(*d);
-    BU_PUT(local_bv, struct bv);
+    qg_legacy_view_local_free(d->local_v);
     d->local_v = nullptr;
     d->v = nullptr;
     delete d;
@@ -111,16 +117,10 @@ QgGL::view() const
     return d->v;
 }
 
-struct dm *
-QgGL::displayManager() const
+bool
+QgGL::legacyBackendInitialized() const
 {
-    return d->dmp;
-}
-
-struct fb *
-QgGL::frameBuffer() const
-{
-    return d->ifp;
+    return d->dmp != nullptr;
 }
 
 BRLObolViewController *
@@ -142,12 +142,6 @@ QgGL::set_current(int active)
 }
 
 void
-QgGL::setDisplayManagerSet(struct bu_ptbl *set)
-{
-    d->dm_set = set;
-}
-
-void
 QgGL::set_view(qg_legacy_view *nv)
 {
     qgcanvas_set_view(*d, nv);
@@ -166,13 +160,12 @@ return;
 	qgcanvas_sync_obol_camera(*d);
 	initializeOpenGLFunctions();
 	if (qgcanvas_render_obol_pending(*d, TRUE, TRUE)) {
-	    struct bsg_view *bv = qgcanvas_bsg_view(*d);
-	    if (bv) {
-		(void)rt_view_refresh_consume_bsg(bv);
-		rt_view_refresh_complete_bsg(bv);
+	    if (d->v) {
+		(void)qg_legacy_view_refresh_consume(d->v);
+		qg_legacy_view_refresh_complete(d->v);
 	    }
 	    if (d->dmp)
-		dm_set_native_repaint_pending(d->dmp, 0);
+		qg_legacy_view_dm_native_repaint_pending_set(d->dmp, 0);
 	    if (!d->obol_paint_initialized) {
 		d->obol_paint_initialized = true;
 		emit init_done();
@@ -189,46 +182,22 @@ if (!d->dmp) {
     // using standard OpenGL functions.
     initializeOpenGLFunctions();
 
-    // Do the standard libdm attach to get our rendering backend.
-    const char *acmd = "attach";
-    d->dmp = dm_open((void *)this, nullptr, "qtgl", 1, &acmd);
+    d->dmp = qg_legacy_view_dm_open_qtgl((void *)this);
     if (!d->dmp)
 return;
 
     // If we have a framebuffer, now we can open it
-    if (d->ifp) {
-struct fb_platform_specific *fbps = fb_get_platform_specific(FB_QTGL_MAGIC);
-fbps->data = (void *)d->dmp;
-fb_setup_existing(d->ifp, dm_get_width(d->dmp), dm_get_height(d->dmp), fbps);
-fb_put_platform_specific(fbps);
-    }
-
-    dm_set_pathname(d->dmp, "QTDM");
+    (void)qg_legacy_view_dm_framebuffer_setup_existing(d->ifp, d->dmp);
 }
 
 // QTGL_ZMIN and QTGL_ZMAX are historical - need better
 // documentation on why those specific values are used.
-//fastf_t windowbounds[6] = { XMIN, XMAX, YMIN, YMAX, QTGL_ZMIN, QTGL_ZMAX };
-fastf_t windowbounds[6] = { -1, 1, -1, 1, QTGL_ZMIN, QTGL_ZMAX };
-dm_set_win_bounds(d->dmp, windowbounds);
+(void)qg_legacy_view_dm_setup_qtgl(d->dmp, QTGL_ZMIN, QTGL_ZMAX);
 
 if (d->v) {
-    struct bsg_view *bv = qgcanvas_bsg_view(*d);
-    // Associate the view scale with the dmp
-    dm_set_vp(d->dmp, rt_view_scale_storage_from_bsg(bv));
-
-    // Let the view know it now has an associated display manager
-    bv->dmp = d->dmp;
-
-    // Set the view width and height to match the dm
-    qg_legacy_view_dimensions_set(d->v, dm_get_width(d->dmp),
-	    dm_get_height(d->dmp));
+    qg_legacy_view_dm_bind(d->v, d->dmp);
+    qg_legacy_view_dm_sync_dimensions(d->v, d->dmp);
 }
-
-// If we have a ptbl defining the current dm set and/or an unset
-// pointer to indicate the current dm, go ahead and set them.
-if (d->dm_set)
-    bu_ptbl_ins_unique(d->dm_set, (long int *)d->dmp);
 
 // Ready to go
 d->m_init = true;
@@ -237,33 +206,29 @@ emit init_done();
 
     if (!d->m_init || !d->dmp || !d->v)
 return;
-    struct bsg_view *bv = qgcanvas_bsg_view(*d);
 
     QSize rsize = qgcanvas_render_size(this);
-    if (dm_get_width(d->dmp) != rsize.width() || dm_get_height(d->dmp) != rsize.height()) {
-dm_set_width(d->dmp, rsize.width());
-dm_set_height(d->dmp, rsize.height());
-dm_configure_win(d->dmp, 0);
+    if (qg_legacy_view_dm_width_get(d->dmp) != rsize.width() ||
+	    qg_legacy_view_dm_height_get(d->dmp) != rsize.height()) {
+qg_legacy_view_dm_dimensions_set(d->dmp, rsize.width(), rsize.height());
+qg_legacy_view_dm_configure_window(d->dmp, 0);
 if (d->ifp)
-    fb_configure_window(d->ifp, rsize.width(), rsize.height());
+    qg_legacy_view_framebuffer_configure(d->ifp, rsize.width(),
+	    rsize.height());
     }
-    qg_legacy_view_dimensions_set(d->v, dm_get_width(d->dmp),
-	    dm_get_height(d->dmp));
+    qg_legacy_view_dm_sync_dimensions(d->v, d->dmp);
 
     // Re-draw the background to clear any previous drawing
-    unsigned char *dm_bg1;
-    unsigned char *dm_bg2;
-    dm_get_bg(&dm_bg1, &dm_bg2, d->dmp);
-    dm_set_bg(d->dmp, dm_bg1[0], dm_bg1[1], dm_bg1[2], dm_bg2[0], dm_bg2[1], dm_bg2[2]);
+    qg_legacy_view_dm_background_restore(d->dmp);
 
     // Go ahead and set the flag, but (unlike the rendering thread
     // implementation) we need to do the draw routine every time in paintGL, or
     // we end up with unrendered frames.
-    (void)rt_view_refresh_consume_bsg(bv);
-    dm_set_native_repaint_pending(d->dmp, 0);
-    dm_draw_objs(bv);
-    dm_draw_end(d->dmp);
-    rt_view_refresh_complete_bsg(bv);
+    (void)qg_legacy_view_refresh_consume(d->v);
+    qg_legacy_view_dm_native_repaint_pending_set(d->dmp, 0);
+    qg_legacy_view_dm_draw(d->v);
+    qg_legacy_view_dm_draw_end(d->dmp);
+    qg_legacy_view_refresh_complete(d->v);
 }
 
 void QgGL::resizeGL(int, int)
@@ -271,16 +236,15 @@ void QgGL::resizeGL(int, int)
     qgcanvas_sync_obol_viewport(*d, this);
     if (!d->dmp || !d->v)
 return;
-    dm_configure_win(d->dmp, 0);
-    qg_legacy_view_dimensions_set(d->v, dm_get_width(d->dmp),
-	    dm_get_height(d->dmp));
+    qg_legacy_view_dm_configure_window(d->dmp, 0);
+    qg_legacy_view_dm_sync_dimensions(d->v, d->dmp);
     if (d->ifp) {
-fb_configure_window(d->ifp,
+qg_legacy_view_framebuffer_configure(d->ifp,
 	qg_legacy_view_width_get(d->v),
 	qg_legacy_view_height_get(d->v));
     }
     if (d->dmp)
-qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW_BSG);
+qgcanvas_request_update(*d, QG_LEGACY_VIEW_REFRESH_VIEW);
     emit changed();
 }
 
@@ -291,23 +255,22 @@ void QgGL::resizeEvent(QResizeEvent *e)
     if (!d->dmp || !d->v)
 return;
     QSize rsize = qgcanvas_render_size(this);
-    dm_set_width(d->dmp, rsize.width());
-    dm_set_height(d->dmp, rsize.height());
+    qg_legacy_view_dm_dimensions_set(d->dmp, rsize.width(), rsize.height());
     qg_legacy_view_dimensions_set(d->v, rsize.width(), rsize.height());
-    dm_configure_win(d->dmp, 0);
+    qg_legacy_view_dm_configure_window(d->dmp, 0);
     if (d->ifp) {
-fb_configure_window(d->ifp,
+qg_legacy_view_framebuffer_configure(d->ifp,
 	qg_legacy_view_width_get(d->v),
 	qg_legacy_view_height_get(d->v));
     }
     if (d->dmp)
-qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW_BSG);
+qgcanvas_request_update(*d, QG_LEGACY_VIEW_REFRESH_VIEW);
     emit changed();
 }
 
 void QgGL::request_update(uint32_t refresh_flags)
 {
-    uint32_t requested = refresh_flags ? refresh_flags : RT_VIEW_REFRESH_ALL_BSG;
+    uint32_t requested = refresh_flags ? refresh_flags : QG_LEGACY_VIEW_REFRESH_ALL;
     qgcanvas_request_update(*d, requested);
     if (d->fb_update_queued)
 return;
@@ -318,7 +281,7 @@ return;
 void QgGL::need_update()
 {
     QTCAD_SLOT("QgGL::need_update", 1);
-    request_update(RT_VIEW_REFRESH_VIEW_BSG);
+    request_update(QG_LEGACY_VIEW_REFRESH_VIEW);
 }
 
 void QgGL::queued_update()
@@ -342,7 +305,7 @@ return;
 
     if (d->input.keyPressEvent(d->v, d->x_prev,
 	    d->y_prev, k)) {
-qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW_BSG);
+qgcanvas_request_update(*d, QG_LEGACY_VIEW_REFRESH_VIEW);
 update();
 emit changed();
     }
@@ -353,7 +316,8 @@ emit changed();
 void QgGL::mousePressEvent(QMouseEvent *e)
 {
 
-    if (d->ifp && fb_get_standalone(d->ifp) && e->button() == Qt::RightButton) {
+    if (qg_legacy_view_framebuffer_standalone_get(d->ifp) &&
+	    e->button() == Qt::RightButton) {
 if (window())
     window()->close();
 return;
@@ -371,7 +335,7 @@ return;
 
     if (d->input.mousePressEvent(d->v, d->x_prev,
 	    d->y_prev, e)) {
-qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW_BSG);
+qgcanvas_request_update(*d, QG_LEGACY_VIEW_REFRESH_VIEW);
 update();
 emit changed();
     }
@@ -404,7 +368,7 @@ return;
     if (d->input.mouseReleaseEvent(d->v,
 	    d->x_press_pos, d->y_press_pos, d->x_prev, d->y_prev, e,
 	    d->lmouse_mode)) {
-qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW_BSG);
+qgcanvas_request_update(*d, QG_LEGACY_VIEW_REFRESH_VIEW);
 update();
 emit changed();
     }
@@ -427,7 +391,7 @@ return;
     int mret = d->input.mouseMoveEvent(d->v,
 	    d->x_prev, d->y_prev, e, d->lmouse_mode);
     if (mret > 0) {
-qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW_BSG);
+qgcanvas_request_update(*d, QG_LEGACY_VIEW_REFRESH_VIEW);
 update();
 emit changed();
     }
@@ -460,7 +424,7 @@ return;
     qg_legacy_view_dimensions_set(d->v, rsize.width(), rsize.height());
 
     if (d->input.wheelEvent(d->v, e)) {
-qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW_BSG);
+qgcanvas_request_update(*d, QG_LEGACY_VIEW_REFRESH_VIEW);
 update();
 emit changed();
     }

@@ -27,7 +27,6 @@
 #include "bu/log.h"
 #include "bsg/appearance.h"
 #include "bsg/geometry.h"
-#include "bsg/overlay.h"
 #include "bsg/scene_builder.h"
 #include "bsg/scene_object.h"
 
@@ -41,10 +40,10 @@ void
 ged_draw_overlay_erase_name(struct ged *gedp, const char *name)
 {
     struct bsg_view *v = gedp ? gedp->ged_gvp : NULL;
-    bsg_scene_ref ref = bsg_overlay_find_scene(v, name);
+    bsg_scene_ref ref = ged_draw_view_overlay_scene_find(v, name);
     if (!bsg_scene_ref_is_null(ref))
 	ged_draw_scene_ref_highlight_free_cb(ref);
-    bsg_overlay_erase_name(v, name);
+    ged_draw_view_overlay_name_erase(v, name);
 }
 
 
@@ -145,9 +144,8 @@ ged_draw_overlay_geometry_insert(struct ged *gedp, const char *name,
 	    name, geometry->kind);
     if (bsg_scene_ref_is_null(overlay_scene))
 	return -1;
-    (void)bsg_overlay_register_scene_owner(overlay_scene, gedp, BSG_OVERLAY_ROLE_MODEL,
-	    BSG_OVERLAY_CLASS_COMMAND_RESULT, BSG_OVERLAY_LC_PERSISTENT,
-	    BSG_OVERLAY_ORDER_MODEL, name, 0);
+    (void)ged_draw_view_overlay_command_result_owner_set(overlay_scene,
+	    gedp, name);
     bsg_scene_set_name(overlay_scene, name);
 
     if (!ged_draw_scene_ref_prepare(gedp, overlay_scene)) {
@@ -161,7 +159,7 @@ ged_draw_overlay_geometry_insert(struct ged *gedp, const char *name,
     }
     bsg_scene_update_bounds(overlay_scene, gedp->ged_gvp);
 
-    if (!bsg_overlay_append_scene(gedp->ged_gvp, overlay_scene)) {
+    if (!ged_draw_view_overlay_scene_append(gedp->ged_gvp, overlay_scene)) {
 	bsg_scene_ref_destroy(overlay_scene);
 	return -1;
     }

@@ -38,6 +38,82 @@ but they must not directly link libdm, libbsg, or dm_plugins:
 
 * qtcad Obol tests: no direct libdm/libbsg/dm_plugins link
 
+Selected converter and simulation build targets that do not use BSG APIs are
+guarded separately so stale build-only direct libbsg links do not return:
+
+* selected converter and simulate build targets: no direct libbsg link
+
+The QgSW swrast integration test exercises the retained qtcad/GED/libdm bridge
+path, but it must not directly link libbsg when it uses only qtcad legacy-view
+helpers:
+
+* qtcad QgSW swrast integration test: no direct libbsg link
+
+The GED selection semantics test exercises transitional RT pick/selection
+adapters, but it must not directly link libbsg while its source avoids BSG
+pick/selection headers and calls:
+
+* ged selection semantics test: no direct libbsg link
+
+The GED snap semantics test exercises transitional RT snap adapters, but it
+must not directly link libbsg while its source avoids direct BSG snap/grid
+headers and calls.  Generated link lines may still include libbsg through
+retained librt transitives until the lower-level owner migrates:
+
+* ged snap semantics test: no direct libbsg link
+
+The GED measure semantics test exercises transitional RT measure adapters, but
+it must not directly link libbsg while its source avoids direct BSG measure
+headers and calls.  Generated link lines may still include libbsg through
+retained librt transitives until the lower-level owner migrates:
+
+* ged measure semantics test: no direct libbsg link
+
+The GED independent-view test exercises transitional RT/GED independent-scope
+adapters, but it must not directly link libbsg while its source avoids direct
+BSG utility calls for independent-scope inspection.  Generated link lines may
+still include libbsg through retained libged/librt transitives until those
+owner libraries migrate:
+
+* ged independent-view test: no direct libbsg link
+
+The GED mged shaded-mode test exercises retained GED/DM shaded rendering and
+swrast readback behavior, but it must not directly link libbsg while its
+source avoids direct BSG defines/API use and routes view setup through
+`rt/view_legacy_bsg.h`.  Generated link lines may still include libbsg through
+retained libged/libdm transitives until those owner libraries migrate:
+
+* ged mged shaded-mode test: no direct libbsg link
+
+The GED quad-stability and rtwizard tests exercise retained GED/DM
+BSG-backed scene behavior, but they must not directly link libbsg while their
+source routes scene-anchor creation, attached checks, and shared-scene checks
+through `rt/view_legacy_bsg.h`.  Generated link lines may still include
+libbsg through retained libged/libdm/librt transitives until those owner
+libraries migrate:
+
+* ged quad-stability test: no direct libbsg link
+* ged rtwizard test: no direct libbsg link
+
+The GED view-command test still directly links libbsg for retained
+backend-scene render/export coverage, but its snap, measure, and polygon
+semantic utility checks are guarded at the source boundary.  Those checks must
+use `rt/view_legacy_bsg.h` wrappers rather than direct BSG utility headers,
+records, calls, or the broad `bsg/util.h` include until a larger
+backend-neutral render/export surface can replace the remaining structural BSG
+coverage:
+
+* ged view-command semantic utility checks: no direct BSG utility API use
+
+The GED mged BSG draw test still directly links libbsg for retained render
+request/batch coverage, but its scene attachment and center-dot state checks
+are guarded at the source boundary.  Those checks must use
+`rt/view_legacy_bsg.h` wrappers and neutral `rt_view_other_state` records
+rather than direct BSG utility/view-state headers, records, or calls until the
+remaining render checks can move behind a backend-neutral surface:
+
+* ged mged BSG utility view-state checks: no direct BSG utility/view-state API use
+
 Phase Ownership
 ---------------
 
@@ -49,8 +125,8 @@ Phase Ownership
 | libtclcad/mged | libtclcad depends on libged, libdm, and libbsg; mged depends on libtclcad and still hosts DM-backed display workflows | Phase 4 | TclCAD/mged view creation, refresh, input, faceplate, and readback use the Obol bridge/offscreen path |
 | libimgstream | Initial libimgstream target depends on libicv, libbn, and libbu only; it provides opaque RGB/RGBA memory streams, stream info snapshots, dirty-region generation, subscriber callbacks, producer begin/end state, icv_image_t snapshot conversion, first fb_compat memory-stream wrappers including RGB/BW rect compatibility, legacy view/getview, window, zoom, cursor/getcursor, scursor, setcursor, reset, viewport, and no-op non-display poll/poll-rate behavior, raw RGB file sink/source compatibility, /dev/stack fan-out compatibility, /dev/null, /dev/debug, and /dev/txt diagnostic sink compatibility, neutral colormap rmap/wmap compatibility, parsed remote/display framebuffer spec normalization, and toolkit-neutral display-host callback delegation without linking libdm, libbsg, or libbrlobol | Phase 5 | Framebuffer storage, streaming, producer/subscriber, transport, fbserv, and fb compatibility behavior move here while display-capable requests delegate to Obol/libbrlobol display hosts |
 | libdm/libbsg | libdm depends on libbsg and provides display/framebuffer/plugin behavior; libbsg remains the compatibility scene layer | Phase 5 and Phase 6 | Framebuffer storage, streaming, producer/subscriber, transport, fbserv, and fb compatibility behavior move to libimgstream; static image/codecs/lookup-table behavior moves to libicv; display-capable framebuffer behavior moves to Obol/libbrlobol image nodes and display-host/window-host paths; then libdm/libbsg and dm_plugins are removed |
-| low-level librt/libbrep/libnmg/libanalyze | src/libbrep, src/libnmg, and NIRT no longer link libbsg directly; include/bg and src/libbg no longer include BSG headers; src/librt, src/libnmg, and NIRT no longer have direct bsg/vlist.h users; librt primitive wire/LoD emitters use RT_PRIMITIVE_* line-command names instead of BSG_GEOMETRY_* names; include/rt and non-test src/librt no longer include the broad bsg.h umbrella header; include/rt/edit.h owns rt_edit_knobs plus its reset/hash helpers instead of embedding bsg_view_knobs from bsg/defines.h, struct rt_edit stores an RT-owned rt_edit_view snapshot instead of a BSG view pointer, BSG-backed edit entry points have moved to explicit include/rt/edit_legacy_bsg.h compatibility adapters, src/librt/edit.cpp is free of BSG edit adapter logic, src/librt/edit_legacy_bsg.cpp owns the BSG view-state adapter implementation, and the src/librt/tests/edit primitive edit tests construct RT-owned edit views without BSG setup; include/rt/view.h owns neutral rt_view_info/rt_view_lod_settings snapshots for RT primitive plot, LoD realization, and indexed-face-set callbacks plus rt_view_info_sanitize for adapter-boundary defaults and RT-prefixed view metric helpers used by primitive LoD code, src/librt/view.c is free of BSG adapter logic, BSG-backed callers use include/rt/view_legacy_bsg.h plus src/librt/view_legacy_bsg.c adapters, libged's lower primitive publication helpers now pass rt_view_info snapshots into those RT callbacks, src/librt/tests/view_info.c stays BSG-free, and src/librt/tests/view_legacy_bsg.c owns the transitional adapter coverage; include/rt/view.h returns opaque rt_mesh_lod handles instead of public bsg_mesh_lod pointers from db_mesh_lod_get, provides RT-owned rt_mesh_lod_load_level, rt_mesh_lod_load_view, and rt_mesh_lod_data_get helpers, limits BSG extraction to include/rt/view_legacy_bsg.h, librt private database state owns a self-initializing opaque rt_mesh_lod_context instead of bsg_mesh_lod_context, and src/librt/tests/lod.c validates cached LoD levels through the RT mesh-LoD helpers without BSG scene-node setup; include/rt/primitives/sketch.h returns opaque rt_sketch_polygon handles for sketch polygon conversion, src/librt/primitives/sketch/polygons.c stores RT-owned polygon state without BSG headers, and old bsg_polygon_ref adapters are limited to include/rt/primitives/sketch_legacy_bsg.h plus src/librt/primitives/sketch/polygons_legacy_bsg.c; NIRT segment plotting uses BG vlist/vlblock helpers through libanalyze's direct libbg dependency; remaining BSG vlist/vlblock references are in libdm display paths, compatibility headers/tests, and legacy conversion/tools | Phase 5 | Neutral vlist, plot, line-layer, view-info, mesh-LoD handles, sketch polygon conversion handles, and diagnostic containers use bg/rt names and do not require BSG scene/display APIs |
-| utility applications | fb, fbserv, rt, art, util, and remrt keep direct libdm rows in source_dirs.cmake; dxf-g, IGES drawing import, g-jack, g-off, ganalyze, and tea_nmg now use bg/vlist.h directly for vlist/uplot work instead of bsg/vlist.h compatibility aliases | Phase 5 | Each remaining libdm use is deleted, routed through libimgstream/fb_compat, replaced by Obol readback/display, or assigned to libicv image-processing utilities; converted utility vlist/debug output paths stay on BG/RT names rather than BSG names |
+| low-level librt/libbrep/libnmg/libanalyze | src/libbrep, src/libnmg, and NIRT no longer link libbsg directly; include/bg and src/libbg no longer include BSG headers; src/librt, src/libnmg, and NIRT no longer have direct bsg/vlist.h users; librt primitive wire/LoD emitters use RT_PRIMITIVE_* line-command names instead of BSG_GEOMETRY_* names; include/rt and non-test src/librt no longer include the broad bsg.h umbrella header; include/rt/edit.h owns rt_edit_knobs plus its reset/hash helpers instead of embedding bsg_view_knobs from bsg/defines.h, struct rt_edit stores an RT-owned rt_edit_view snapshot instead of a BSG view pointer, BSG-backed edit entry points have moved to explicit include/rt/edit_legacy_bsg.h compatibility adapters, src/librt/edit.cpp is free of BSG edit adapter logic, src/librt/edit_legacy_bsg.cpp owns the BSG view-state adapter implementation, and the src/librt/tests/edit primitive edit tests construct RT-owned edit views without BSG setup; include/rt/view.h owns neutral rt_view_info/rt_view_lod_settings snapshots for RT primitive plot, LoD realization, and indexed-face-set callbacks plus rt_view_info_sanitize for adapter-boundary defaults and RT-prefixed view metric helpers used by primitive LoD code, src/librt/view.c is free of BSG adapter logic, BSG-backed callers use include/rt/view_legacy_bsg.h plus src/librt/view_legacy_bsg.c adapters, libged's lower primitive publication helpers now pass rt_view_info snapshots into those RT callbacks, src/librt/tests/view_info.c stays BSG-free, and src/librt/tests/view_legacy_bsg.c owns the transitional adapter coverage; include/rt/view.h returns opaque rt_mesh_lod handles instead of public bsg_mesh_lod pointers from db_mesh_lod_get, provides RT-owned rt_mesh_lod_load_level, rt_mesh_lod_load_view, and rt_mesh_lod_data_get helpers, limits BSG extraction to include/rt/view_legacy_bsg.h, librt private database state owns a self-initializing opaque rt_mesh_lod_context instead of bsg_mesh_lod_context, and src/librt/tests/lod.c validates cached LoD levels through the RT mesh-LoD helpers without BSG scene-node setup; include/rt/primitives/sketch.h returns opaque rt_sketch_polygon handles for sketch polygon conversion, src/librt/primitives/sketch/polygons.c stores RT-owned polygon state without BSG headers, and old bsg_polygon_ref adapters are limited to include/rt/primitives/sketch_legacy_bsg.h plus src/librt/primitives/sketch/polygons_legacy_bsg.c; NIRT segment plotting uses BG vlist/vlblock helpers through libanalyze's direct libbg dependency; libdm direct-vlist callbacks and backends now use bg_vlist/BG_VLIST spelling, with the plot backend routing uplot export through rt_vlist_to_uplot; remaining BSG vlist/vlblock references are confined to compatibility headers/tests and legacy conversion/tools | Phase 5 | Neutral vlist, plot, line-layer, view-info, mesh-LoD handles, sketch polygon conversion handles, and diagnostic containers use bg/rt names and do not require BSG scene/display APIs |
+| utility applications | fb, fbserv, rt, art, util, and remrt keep direct libdm rows in source_dirs.cmake; dxf-g, IGES drawing import, g-jack, g-off, ganalyze, tea_nmg, and plot3-dm now use bg/vlist.h or RT/BG vlist helpers for vlist/uplot work instead of bsg/vlist.h compatibility aliases; the Unigraphics, Cubit, and Creo build-only converter targets plus the ged-simulate plugin no longer carry stale direct libbsg link rows when their source trees do not use BSG APIs | Phase 5 | Each remaining libdm use is deleted, routed through libimgstream/fb_compat, replaced by Obol readback/display, or assigned to libicv image-processing utilities; converted utility vlist/debug output paths stay on BG/RT names rather than BSG names |
 
 Guard Expansion Rules
 ---------------------

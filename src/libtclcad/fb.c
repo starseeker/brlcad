@@ -982,7 +982,8 @@ to_open_fbs(struct bsg_view *gdvp, Tcl_Interp *interp)
     if (tvd->gdv_fbs.fbs_fbp != FB_NULL)
 	return TCL_OK;
 
-    tvd->gdv_fbs.fbs_fbp = dm_get_fb((struct dm *)gdvp->dmp);
+    struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(gdvp);
+    tvd->gdv_fbs.fbs_fbp = dmp ? dm_get_fb(dmp) : FB_NULL;
 
     if (tvd->gdv_fbs.fbs_fbp == FB_NULL) {
 	Tcl_Obj *obj;
@@ -1026,7 +1027,7 @@ to_set_fb_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = (struct bsg_view *)ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1082,7 +1083,7 @@ to_listen(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
+    struct bsg_view *gdvp = (struct bsg_view *)ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;

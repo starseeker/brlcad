@@ -81,7 +81,7 @@ swrast_makeCurrent(struct dm *dmp)
     struct swrast_vars *pv = (struct swrast_vars *)dmp->i->dm_vars.priv_vars;
     int width, height;
 
-    if (!pv || !pv->ctx || !pv->v) {
+    if (!pv || !pv->ctx || !pv->view_ctx) {
 	fprintf(stderr, "swrast_configureWin: Couldn't make context current\n");
 	return BRLCAD_ERROR;
     }
@@ -89,13 +89,13 @@ swrast_makeCurrent(struct dm *dmp)
     if (dmp->i->dm_debugLevel)
 	fprintf(stderr, "swrast_makeCurrent()\n");
 
-    int view_width = rt_view_width_from_bsg(pv->v);
-    int view_height = rt_view_height_from_bsg(pv->v);
+    int view_width = rt_view_context_width_from_bsg(pv->view_ctx);
+    int view_height = rt_view_context_height_from_bsg(pv->view_ctx);
     width = (dmp->i->dm_width > 0) ? dmp->i->dm_width : ((view_width > 0) ? view_width : 512);
     height = (dmp->i->dm_height > 0) ? dmp->i->dm_height : ((view_height > 0) ? view_height : 512);
     dmp->i->dm_width = width;
     dmp->i->dm_height = height;
-    rt_view_dimensions_set_bsg(pv->v, width, height);
+    rt_view_context_dimensions_set_bsg(pv->view_ctx, width, height);
 
     if (!OSMesaMakeCurrent(pv->ctx, pv->os_b, GL_UNSIGNED_BYTE, width, height)) {
 	fprintf(stderr, "OSMesaMakeCurrent failed!\n");
@@ -117,18 +117,18 @@ swrast_configureWin(struct dm *dmp, int UNUSED(force))
 {
     struct swrast_vars *pv = (struct swrast_vars *)dmp->i->dm_vars.priv_vars;
 
-    if (!pv || !pv->ctx || !pv->v) {
+    if (!pv || !pv->ctx || !pv->view_ctx) {
 	fprintf(stderr, "swrast_configureWin: Couldn't make context current\n");
 	return BRLCAD_ERROR;
     }
 
-    int view_width = rt_view_width_from_bsg(pv->v);
-    int view_height = rt_view_height_from_bsg(pv->v);
+    int view_width = rt_view_context_width_from_bsg(pv->view_ctx);
+    int view_height = rt_view_context_height_from_bsg(pv->view_ctx);
     int width = (dmp->i->dm_width > 0) ? dmp->i->dm_width : ((view_width > 0) ? view_width : 512);
     int height = (dmp->i->dm_height > 0) ? dmp->i->dm_height : ((view_height > 0) ? view_height : 512);
     dmp->i->dm_width = width;
     dmp->i->dm_height = height;
-    rt_view_dimensions_set_bsg(pv->v, width, height);
+    rt_view_context_dimensions_set_bsg(pv->view_ctx, width, height);
 
     if (!width || !height) {
 	fprintf(stderr, "swrast_configureWin: Zero sized window\n");
@@ -227,17 +227,17 @@ swrast_open(void *ctx, void *UNUSED(interp), int argc, const char **argv)
 
     BU_ALLOC(dmp->i->dm_vars.priv_vars, struct swrast_vars);
     privars = (struct swrast_vars *)dmp->i->dm_vars.priv_vars;
-    privars->v = (struct bsg_view *)ctx;
+    privars->view_ctx = ctx;
     // Note - for Qt, dealing with GL_RGB data display was something of a pain.  This backend
     // was switched to RGBA to make it easier to display the output
     privars->ctx = OSMesaCreateContextExt(OSMESA_RGBA, 16, 0, 0, NULL);
-    int view_width = rt_view_width_from_bsg(privars->v);
-    int view_height = rt_view_height_from_bsg(privars->v);
+    int view_width = rt_view_context_width_from_bsg(privars->view_ctx);
+    int view_height = rt_view_context_height_from_bsg(privars->view_ctx);
     int width = (view_width <= 0) ? 512 : view_width;
     int height = (view_height <= 0) ? 512 : view_height;
     dmp->i->dm_width = width;
     dmp->i->dm_height = height;
-    rt_view_dimensions_set_bsg(privars->v, width, height);
+    rt_view_context_dimensions_set_bsg(privars->view_ctx, width, height);
     privars->os_b = bu_realloc(privars->os_b, width * height * sizeof(GLubyte)*4, "OSMesa rendering buffer");
     if (!OSMesaMakeCurrent(privars->ctx, privars->os_b, GL_UNSIGNED_BYTE, width, height)) {
 	fprintf(stderr, "OSMesaMakeCurrent failed!\n");
@@ -619,8 +619,8 @@ swrast_getDisplayImage(struct dm *dmp, unsigned char **image, int flip, int alph
     if (cbwidth != width || cbheight != height) {
 	fprintf(stderr, "swrast_getDisplayImage: DIM MISMATCH: dm=(%d,%d) OSMesa_buf=(%d,%d) gv=(%d,%d)\n",
 	       width, height, (int)cbwidth, (int)cbheight,
-	       pv->v ? rt_view_width_from_bsg(pv->v) : -1,
-	       pv->v ? rt_view_height_from_bsg(pv->v) : -1);
+	       pv->view_ctx ? rt_view_context_width_from_bsg(pv->view_ctx) : -1,
+	       pv->view_ctx ? rt_view_context_height_from_bsg(pv->view_ctx) : -1);
     } else {
 	fprintf(stderr, "swrast_getDisplayImage: dm=(%d,%d) OSMesa_buf=(%d,%d) [OK]\n",
 	       width, height, (int)cbwidth, (int)cbheight);

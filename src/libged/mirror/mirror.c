@@ -212,9 +212,12 @@ ged_mirror_core(struct ged *gedp, int argc, const char *argv[])
 	/* draw the new object */
 	const char *object = (const char *)argv[bu_optind+1];
 	const char *e_argv[2] = {"draw", NULL};
+	struct bsg_view *view = NULL;
 	e_argv[1] = object;
 	(void)ged_exec_draw(gedp, 2, e_argv);
-	rt_view_update_bsg(gedp->ged_gvp);
+	view = (struct bsg_view *)ged_view_active_ctx(gedp);
+	if (view)
+	    rt_view_update_bsg(view);
     }
 
     if (event_batch_opened)

@@ -5,6 +5,7 @@ endif(BRLCAD_ENABLE_QT)
 # TODO - need this now for code in lower level directories,
 # need to do some cleanup.
 include_directories(${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
+include_directories(${BRLCAD_SOURCE_DIR}/src/libqtcad)
 
 # NOTE: We can't use the CMake global values for automoc et. al.
 # because most of BRL-CAD's targets are not Qt targets.  We don't

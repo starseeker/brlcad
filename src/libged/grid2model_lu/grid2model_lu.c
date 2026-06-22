@@ -63,9 +63,10 @@ ged_grid2model_lu_core(struct ged *gedp, int argc, const char *argv[])
 	goto bad;
     scan[Z] = 0.0;
 
-    rt_view_model2view_from_bsg(model2view, gedp->ged_gvp);
-    rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
-    view_scale = rt_view_scale_from_bsg(gedp->ged_gvp);
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+    rt_view_model2view_from_bsg(model2view, v);
+    rt_view_view2model_from_bsg(view2model, v);
+    view_scale = rt_view_scale_from_bsg(v);
     f = 1.0 / (view_scale * gedp->dbip->dbi_base2local);
     VSCALE(diff, scan, f);
     MAT4X3PNT(mo_view_pt, model2view, model_pt);

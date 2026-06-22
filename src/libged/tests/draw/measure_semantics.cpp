@@ -19,13 +19,13 @@
  */
 /** @file measure_semantics.cpp
  *
- * Verify that bsg_measure_candidates returns semantic distance records
- * consistent with DIST_PNT_PNT for known point pairs.
+ * Verify that the transitional RT measure adapter returns semantic distance
+ * records consistent with DIST_PNT_PNT for known point pairs.
  *
  * Strategy:
  *   1. Create a headless view.
- *   2. Call bsg_measure_candidates(v, a, b, &mr) for two known points.
- *   3. If mr.mr_valid, verify mr.mr_distance ≈ DIST_PNT_PNT(a, b) within
+ *   2. Call the RT measure adapter for two known points.
+ *   3. If the result is valid, verify distance matches DIST_PNT_PNT(a, b) within
  *      a small epsilon (measure candidates are allowed to refine the distance,
  *      but must not be wildly inconsistent with the straight-line distance).
  *   4. Verify NULL guards do not crash.
@@ -42,9 +42,6 @@
 
 #include <bu.h>
 #include "rt/view_legacy_bsg.h"
-#include "bsg/defines.h"
-#include "bsg/measure.h"
-#include "bsg/util.h"
 
 #define ASSERT(cond) do { \
     nchecks++; \
@@ -67,7 +64,7 @@ main(int UNUSED(ac), char *av[])
      * Build a minimal headless view.
      * ------------------------------------------------------------------ */
     struct bsg_view v;
-    bsg_view_init(&v, NULL);
+    rt_view_init_bsg(&v, NULL);
     rt_view_dimensions_set_bsg(&v, 512, 512);
 
     /* ------------------------------------------------------------------
@@ -79,46 +76,46 @@ main(int UNUSED(ac), char *av[])
 	double expected = DIST_PNT_PNT(a, b);
 	ASSERT(fabs(expected - 5.0) < 1e-9);
 
-	struct bsg_measure_result mr = {0.0, 0.0, 0.0, 0};
-	int rc = bsg_measure_candidates(&v, a, b, &mr);
+	struct rt_view_measure_result mr = RT_VIEW_MEASURE_RESULT_INIT;
+	int rc = rt_view_measure_candidates_bsg(&v, a, b, &mr);
 	ASSERT(rc >= 0);
-	if (mr.mr_valid) {
-	    /* mr_distance must not deviate from straight-line by more than
+	if (mr.valid) {
+	    /* distance must not deviate from straight-line by more than
 	     * 1 % (candidates may snap, but not teleport). */
-	    double err = fabs(mr.mr_distance - expected);
+	    double err = fabs(mr.distance - expected);
 	    ASSERT(err / expected < 0.01);
 	}
     }
 
     /* ------------------------------------------------------------------
-     * Test 2: zero-length segment — must not crash, distance >= 0.
+     * Test 2: zero-length segment - must not crash, distance >= 0.
      * ------------------------------------------------------------------ */
     {
 	point_t a = {1.0, 2.0, 3.0};
 	point_t b = {1.0, 2.0, 3.0};
-	struct bsg_measure_result mr = {0.0, 0.0, 0.0, 0};
-	int rc = bsg_measure_candidates(&v, a, b, &mr);
+	struct rt_view_measure_result mr = RT_VIEW_MEASURE_RESULT_INIT;
+	int rc = rt_view_measure_candidates_bsg(&v, a, b, &mr);
 	ASSERT(rc >= 0);
-	if (mr.mr_valid)
-	    ASSERT(mr.mr_distance >= 0.0);
+	if (mr.valid)
+	    ASSERT(mr.distance >= 0.0);
     }
 
     /* ------------------------------------------------------------------
-     * Test 3: NULL guards — must not crash.
+     * Test 3: NULL guards - must not crash.
      * ------------------------------------------------------------------ */
     {
 	point_t a = VINIT_ZERO;
 	point_t b = VINIT_ZERO;
 	/* Passing NULL for out must return 0 without crashing. */
-	int rc = bsg_measure_candidates(&v, a, b, NULL);
+	int rc = rt_view_measure_candidates_bsg(&v, a, b, NULL);
 	ASSERT(rc == 0);
 	/* Passing NULL view is also valid (falls back to no projection). */
-	struct bsg_measure_result mr = {0.0, 0.0, 0.0, 0};
-	rc = bsg_measure_candidates(NULL, a, b, &mr);
-	ASSERT(rc == 0);   /* zero-length segment → 0 regardless of view */
+	struct rt_view_measure_result mr = RT_VIEW_MEASURE_RESULT_INIT;
+	rc = rt_view_measure_candidates_bsg(NULL, a, b, &mr);
+	ASSERT(rc == 0);   /* zero-length segment returns 0 regardless of view */
     }
 
-    bsg_view_free(&v);
+    rt_view_free_bsg(&v);
 
     bu_log("measure semantic records: %d checks, %d failures\n", nchecks, nfails);
     return nfails ? 1 : 0;

@@ -24,9 +24,9 @@
  *
  * Both paths delegate to dm_draw_objs(), which resolves the retained BSG
  * scene to render batches.  Highlighted edit-mode objects are rendered at
- * their edited position by setting view_state->vs_gvp->gv_edit_mat to point at
- * vs_model2objview before the draw call; render-item drawing picks this up and
- * swaps the modelview matrix for the duration of each such object.
+ * their edited position by staging the edit matrix on the retained view
+ * before the draw call; render-item drawing picks this up and swaps the
+ * modelview matrix for the duration of each such object.
  *
  * The stereo path (which_eye == 1 or 2) builds a Deering perspective matrix
  * with a left/right eye offset and installs it into v->gv_pmat; dm_draw_objs()
@@ -65,8 +65,9 @@ mat_t identity;
 unsigned char geometry_default_color[] = { 255, 0, 0 };
 
 /* Count draw records whose drawn revision matches the view's current
- * gv_frame_rev, i.e. shapes that were actually painted in the frame just
- * rendered.  Stored in the view refresh record for mouse-pick sequencing. */
+ * current retained-view frame revision, i.e. shapes that were actually
+ * painted in the frame just rendered.  Stored in the view refresh record for
+ * mouse-pick sequencing. */
 struct _mged_count_drawn_ctx {
     int *np;
     uint64_t frame_rev;
@@ -114,11 +115,11 @@ dozoom(struct mged_state *s, int which_eye)
 
     rt_view_refresh_drawn_count_set_bsg(v, 0);
 
-    /* Keep v->dmp in sync with the active display manager so that
+    /* Keep the retained view's display manager in sync so that
      * dm_draw_objs() can find the DM.  This must be done every frame
      * because set_curr_dm() (called from refresh()) updates
-     * s->mged_curr_dm without updating the view's dmp pointer. */
-    v->dmp = (void *)DMP;
+     * s->mged_curr_dm without updating the view's display pointer. */
+    rt_view_display_manager_set_bsg(v, (void *)DMP);
 
     /* gv_pmat may be replaced for the stereo path; remember the original
      * so we can restore it before returning. */
@@ -177,11 +178,11 @@ dozoom(struct mged_state *s, int which_eye)
 	deering_persp_mat(perspective_mat, l, h, eye);
 	rt_view_pmat_set_bsg(v, perspective_mat);
 
-	/* Force dm_draw_objs() to apply the perspective matrix even if
-	 * v->gv_perspective itself was 0 (it gates the dm_loadpmatrix call
-	 * on SMALL_FASTF < gv_perspective). */
+	/* Force dm_draw_objs() to apply the perspective matrix even when the
+	 * retained view perspective was 0; dm_draw_objs() gates the projection
+	 * load on a non-zero perspective angle. */
 	if (view_perspective < SMALL_FASTF)
-	    v->gv_perspective = persp;
+	    rt_view_perspective_set_bsg(v, persp);
 
 	/* Stereo viewport / scissor selection.  gl_loadMatrix() inspects
 	 * which_eye (1 = right, 2 = left) and adjusts glViewport+glScissor
@@ -193,9 +194,9 @@ dozoom(struct mged_state *s, int which_eye)
     /* Expose the edit-mode matrix on the view so render-item drawing can use
      * it for highlighted edit objects without a second pass. */
     if (s->global_editing_state != ST_VIEW)
-	v->gv_edit_mat = view_state->vs_model2objview;
+	rt_view_edit_matrix_set_bsg(v, view_state->vs_model2objview);
     else
-	v->gv_edit_mat = NULL;
+	rt_view_edit_matrix_clear_bsg(v);
 
     /* dm_draw_objs() handles:
      *   - framebuffer overlay/underlay
@@ -208,20 +209,21 @@ dozoom(struct mged_state *s, int which_eye)
     dm_draw_objs(v);
 
     /* Clear edit-mat pointer now that the frame is done. */
-    v->gv_edit_mat = NULL;
+    rt_view_edit_matrix_clear_bsg(v);
 
     /* Restore gv_pmat (no-op for which_eye == 0). */
     rt_view_pmat_set_bsg(v, saved_pmat);
 
     /* Count drawn objects for usepen.c zone-based picking.  Each rendered
      * shape records the bsg_view frame revision when painted; comparing the
-     * semantic draw record against gv_frame_rev gives a frame-by-frame
-     * "what got drawn" count without application graph traversal. */
+     * semantic draw record against the retained frame revision gives a
+     * frame-by-frame "what got drawn" count without application graph
+     * traversal. */
     if (s->gedp && ged_draw_scene_available(s->gedp)) {
 	int ndrawn = 0;
 	struct _mged_count_drawn_ctx ctx;
 	ctx.np = &ndrawn;
-	ctx.frame_rev = v->gv_frame_rev;
+	ctx.frame_rev = rt_view_frame_revision_from_bsg(v);
 	ged_draw_foreach_shape_record(s->gedp, _mged_count_drawn_cb, &ctx);
 	rt_view_refresh_drawn_count_set_bsg(v, ndrawn);
     }

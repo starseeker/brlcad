@@ -719,10 +719,10 @@ _bot_cmd_plot(void *bs, int argc, const char **argv)
 	cmds[pi++] = BG_GEOMETRY_LINE_DRAW;
     }
 
-    if (gb->gedp->ged_gvp) {
+    struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gb->gedp);
+    if (view) {
 	struct bu_vls nroot = BU_VLS_INIT_ZERO;
 	bu_vls_sprintf(&nroot, "bot::%s", "_bot_face_plot");
-	struct bsg_view *view = gb->gedp->ged_gvp;
 	(void)ged_draw_view_feature_remove(view, bu_vls_cstr(&nroot));
 	if (point_count) {
 	    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;

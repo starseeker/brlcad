@@ -59,11 +59,10 @@ extern "C" {
 #endif
 }
 
-struct bsg_view;
 extern struct dm dm_swrast;
 
 struct swrast_vars {
-    struct bsg_view *v;
+    void *view_ctx;
     OSMesaContext ctx;
     void *os_b;
     struct FONScontext *fs;

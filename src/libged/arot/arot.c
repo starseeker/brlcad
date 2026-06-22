@@ -43,7 +43,8 @@ ged_arot_core(struct ged *gedp, int argc, const char *argv[])
     if ((ret = ged_arot_args(gedp, argc, argv, rmat)) != BRLCAD_OK)
 	return ret;
 
-    return _ged_do_rot(gedp, rt_view_coord_from_bsg(gedp->ged_gvp), rmat, NULL);
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+    return _ged_do_rot(gedp, rt_view_coord_from_bsg(v), rmat, NULL);
 }
 
 

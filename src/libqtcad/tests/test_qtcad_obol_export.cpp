@@ -16,7 +16,6 @@
 #include "bu/env.h"
 #include "bu/file.h"
 #include "ged.h"
-#include "qtcad/QgLegacyViewBsg.h"
 #include "qtcad/QgObolExport.h"
 #include "qtcad/QgView.h"
 #include "wdb.h"
@@ -143,9 +142,9 @@ main(int argc, char **argv)
     if (!gedp)
 	FAIL("failed to open qtcad Obol export test database");
 
-    QgView view(NULL, QgView_SW, NULL);
+    QgView view(NULL, QgView_SW);
     view.resize(180, 140);
-    gedp->ged_gvp = qg_legacy_view_to_bsg(view.view());
+    qg_legacy_view_ged_active_set(gedp, view.view());
 
     BRLObolViewController *controller = view.obolViewController();
     if (!controller)
@@ -310,7 +309,7 @@ main(int argc, char **argv)
     }
     controller->setExactFullDetailBudget(0, 0);
 
-    if (view.dmp()) {
+    if (view.legacyBackendInitialized()) {
 	controller->setLodService(NULL);
 	sourceService.stop();
 	FAIL("qtcad source-backed exact Obol export should not initialize the legacy display manager");

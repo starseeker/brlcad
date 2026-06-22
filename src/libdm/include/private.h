@@ -38,7 +38,7 @@ extern void *fb_backends;
 #include <stdlib.h>
 
 #include "vmath.h"
-#include "bsg/vlist.h"
+#include "bg/vlist.h"
 #include "dm.h"
 #include "rt/view.h"
 
@@ -111,8 +111,9 @@ extern struct fb memory_interface, fb_null_interface;
 
 /* Private direct-device drawing for in-tree utilities and backend adapters.
  * Normal application drawing must use retained render records instead. */
-DM_EXPORT extern int dm_draw_device_vlist(struct dm *dmp, bsg_vlist *vp);
-DM_EXPORT extern int dm_draw_device_vlist_hidden_line(struct dm *dmp, bsg_vlist *vp);
+DM_EXPORT extern int dm_draw_device_vlist(struct dm *dmp, bg_vlist *vp);
+DM_EXPORT extern int dm_draw_device_bg_vlist(struct dm *dmp, bg_vlist *vp);
+DM_EXPORT extern int dm_draw_device_vlist_hidden_line(struct dm *dmp, bg_vlist *vp);
 
 /* Shared memory (shmget et. al.) key common to multiple framebuffers */
 #define SHMEM_KEY 42
@@ -198,8 +199,8 @@ __END_DECLS
     static int _dmtype##_drawPoint2D(struct dm *dmp, fastf_t x, fastf_t y); \
     static int _dmtype##_drawPoint3D(struct dm *dmp, point_t point); \
     static int _dmtype##_drawPoints3D(struct dm *dmp, int npoints, point_t *points); \
-    static int _dmtype##_drawVList(struct dm *dmp, bsg_vlist *vp); \
-    static int _dmtype##_draw(struct dm *dmp, bsg_vlist *(*callback_function)(void *), void **data); \
+    static int _dmtype##_drawVList(struct dm *dmp, bg_vlist *vp); \
+    static int _dmtype##_draw(struct dm *dmp, bg_vlist *(*callback_function)(void *), void **data); \
     static int _dmtype##_setFGColor(struct dm *dmp, unsigned char r, unsigned char g, unsigned char b, int strict, fastf_t transparency); \
     static int _dmtype##_setBGColor(struct dm *dmp, unsigned char r, unsigned char g, unsigned char b); \
     static int _dmtype##_setLineAttr(struct dm *dmp, int width, int style); \

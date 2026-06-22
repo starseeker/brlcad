@@ -40,8 +40,6 @@
 
 __BEGIN_DECLS
 
-struct bsg_view;
-
 struct dm_path_edit_params {
     int edit_mode;
     double dx;
@@ -56,7 +54,7 @@ struct dm_view_data {
     int                 cache_on;
 };
 
-DM_EXPORT extern void dm_draw_faceplate(struct bsg_view *v);
+DM_EXPORT extern void dm_draw_faceplate(void *view_ctx);
 
 /* As a temporary measure, require client codes to specifically ask to enable
  * the bits that require librt in the headers if they're not going to be
@@ -67,7 +65,7 @@ DM_EXPORT extern void dm_draw_faceplate(struct bsg_view *v);
 #endif /* DM_WITH_RT */
 
 /* Stripped down form of dm_draw_viewobjs that does just what's needed for the new setup */
-DM_EXPORT extern void dm_draw_objs(struct bsg_view *v);
+DM_EXPORT extern void dm_draw_objs(void *view_ctx);
 
 __END_DECLS
 

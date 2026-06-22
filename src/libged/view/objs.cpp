@@ -665,10 +665,10 @@ _view_cmd_objs(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
     if (!ged_draw_view_has_scene_root(gd->cv)) {
-	struct bsg_view *cv = gedp->ged_gvp;
-	gedp->ged_gvp = gd->cv;
+	void *cv = ged_view_active_ctx(gedp);
+	ged_view_active_ctx_set(gedp, gd->cv);
 	ged_draw_ensure_root(gedp);
-	gedp->ged_gvp = cv;
+	ged_view_active_ctx_set(gedp, cv);
     }
 
     // See if we have any high level options set

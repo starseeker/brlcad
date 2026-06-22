@@ -54,7 +54,7 @@ ged_lod_core(struct ged *gedp, int argc, const char *argv[])
 	return GED_HELP;
     }
 
-    gvp = gedp->ged_gvp;
+    gvp = (struct bsg_view *)ged_view_active_ctx(gedp);
     if (gvp == NULL) {
 	return BRLCAD_OK;
     }

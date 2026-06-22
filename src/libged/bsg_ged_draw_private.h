@@ -551,9 +551,6 @@ GED_EXPORT extern int ged_draw_shape_ref_pipeline_candidate(struct ged *gedp,
 							    ged_draw_shape_ref ref);
 GED_EXPORT extern struct bsg_view *ged_draw_shape_ref_view(struct ged *gedp,
 							   ged_draw_shape_ref ref);
-GED_EXPORT extern struct bsg_interaction_record *ged_draw_shape_ref_selection_record(struct ged *gedp,
-										    ged_draw_shape_ref ref,
-										    struct bsg_view *fallback_view);
 GED_EXPORT extern int ged_draw_view_selection_add_shape_ref(struct ged *gedp,
 							    struct bsg_view *view,
 							    ged_draw_shape_ref ref,

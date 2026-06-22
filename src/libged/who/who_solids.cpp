@@ -35,7 +35,6 @@ extern "C" {
 #include "bu/opt.h"
 #include "ged.h"
 #include "ged/bsg_ged_draw.h"
-#include "rt/view_legacy_bsg.h"
 #include "rt/db_fullpath.h"
 #include "rt/directory.h"
 #include "rt/tree.h"
@@ -250,7 +249,7 @@ who_solids_collect_record(const struct ged_draw_view_db_object_record *rec,
 }
 
 static void
-who_solids_print_view(struct bsg_view *v, struct db_i *dbip, int mode, int lvl, struct bu_vls *vls)
+who_solids_print_view(void *v, struct db_i *dbip, int mode, int lvl, struct bu_vls *vls)
 {
     struct who_solids_collect_ctx ctx;
     ctx.lvl = lvl;
@@ -330,9 +329,9 @@ who_solids_impl(struct ged *gedp, int argc, const char *argv[], int subcmd_usage
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *v = gedp->ged_gvp;
+    void *v = ged_view_active_ctx(gedp);
     if (bu_vls_strlen(&cvls)) {
-	v = rt_view_set_find_view_bsg(&gedp->ged_views, bu_vls_cstr(&cvls));
+	v = ged_view_find_ctx(gedp, bu_vls_cstr(&cvls));
 	if (!v) {
 	    bu_vls_printf(gedp->ged_result_str, "Specified view %s not found\n", bu_vls_cstr(&cvls));
 	    bu_vls_free(&cvls);

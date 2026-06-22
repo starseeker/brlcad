@@ -39,7 +39,6 @@
 extern "C" {
 #include "../include/private.h"
 #include "../dm-gl.h"
-#include "rt/view_legacy_bsg.h"
 }
 
 extern "C" {
@@ -53,7 +52,8 @@ extern struct fb swrast_interface;
 // with any other dm backend to achieve the same results.
 #include <QApplication>
 #include <QtGlobal>
-#include "qtcad/QgLegacyViewBsg.h"
+#include "QgLegacyViewDm.h"
+#include "qtcad/QgSW.h"
 #include "swrastwin.h"
 #endif
 
@@ -419,7 +419,7 @@ fb_swrast_open(struct fb *ifp, const char *UNUSED(file), int width, int height)
 
 #ifdef SWRAST_QT
     qi->qapp = new QApplication(qi->ac, qi->av);
-    qi->mw = new QgSWWin(ifp);
+    qi->mw = new QgSWWin(qg_legacy_view_framebuffer_handle_from_raw(ifp));
     QgSW *canvas = qi->mw->canvasWidget();
     if (!canvas) {
 	qt_destroy(qi);
@@ -428,16 +428,15 @@ fb_swrast_open(struct fb *ifp, const char *UNUSED(file), int width, int height)
 	return -1;
     }
 
-    struct bsg_view *canvas_view = qg_legacy_view_to_bsg(canvas->view());
+    qg_legacy_view *canvas_view = canvas->view();
     if (!canvas_view) {
 	qt_destroy(qi);
 	free(ifp->i->pp);
 	ifp->i->pp = NULL;
 	return -1;
     }
-    rt_view_init_bsg(canvas_view, NULL);
-    rt_view_framebuffer_mode_set_bsg(canvas_view, 1);
-    rt_view_dimensions_set_bsg(canvas_view, width, height);
+    qg_legacy_view_framebuffer_mode_set(canvas_view, 1);
+    qg_legacy_view_dimensions_set(canvas_view, width, height);
 
 
     {
@@ -445,7 +444,7 @@ fb_swrast_open(struct fb *ifp, const char *UNUSED(file), int width, int height)
 	int lw = qMax(1, static_cast<int>(std::ceil(((qreal)width) / dpr)));
 	int lh = qMax(1, static_cast<int>(std::ceil(((qreal)height) / dpr)));
 	canvas->setFixedSize(lw, lh);
-	rt_view_dimensions_set_bsg(canvas_view, width, height);
+	qg_legacy_view_dimensions_set(canvas_view, width, height);
     }
     qi->mw->adjustSize();
     qi->mw->setFixedSize(qi->mw->size());
@@ -453,8 +452,7 @@ fb_swrast_open(struct fb *ifp, const char *UNUSED(file), int width, int height)
     qi->qapp->processEvents();
 
     // Do the standard libdm attach to get our rendering backend.
-    const char *acmd = "attach";
-    struct dm *dmp = dm_open((void *)canvas_view, NULL, "swrast", 1, &acmd);
+    qg_legacy_dm *dmp = qg_legacy_view_dm_open_swrast(canvas_view, canvas);
     if (!dmp)
 	return -1;
 

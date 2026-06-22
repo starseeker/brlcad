@@ -29,7 +29,7 @@
 
 #include "vmath.h"
 #include "bu/malloc.h"
-#include "bsg/vlist.h"
+#include "bg/vlist.h"
 #include "dm.h"
 #include "../null/dm-Null.h"
 #include "../include/private.h"
@@ -180,21 +180,21 @@ null_drawPoints3D(struct dm *UNUSED(dmp), int UNUSED(npoints), point_t *UNUSED(p
 
 
 int
-null_drawVList(struct dm *UNUSED(dmp), bsg_vlist *UNUSED(vp))
+null_drawVList(struct dm *UNUSED(dmp), bg_vlist *UNUSED(vp))
 {
     return 0;
 }
 
 
 int
-null_drawVListHiddenLine(struct dm *UNUSED(dmp), bsg_vlist *UNUSED(vp))
+null_drawVListHiddenLine(struct dm *UNUSED(dmp), bg_vlist *UNUSED(vp))
 {
     return 0;
 }
 
 
 int
-null_draw(struct dm *dmp, bsg_vlist *(*callback_function)(void *), void **data)
+null_draw(struct dm *dmp, bg_vlist *(*callback_function)(void *), void **data)
 {
     return dmp == NULL && callback_function == NULL && data == NULL;
 }

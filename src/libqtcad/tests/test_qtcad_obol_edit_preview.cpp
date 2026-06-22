@@ -94,7 +94,7 @@ main(int argc, char **argv)
 {
     QApplication app(argc, argv);
 
-    QgView view(NULL, QgView_SW, NULL);
+    QgView view(NULL, QgView_SW);
     view.resize(160, 120);
 
     QgPluginContext context;

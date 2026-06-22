@@ -30,25 +30,23 @@
 
 __BEGIN_DECLS
 
-struct bsg_view;
-
 RT_EXPORT extern void
-rt_edit_view_from_bsg(struct rt_edit_view *ev, const struct bsg_view *v);
+rt_edit_view_from_bsg(struct rt_edit_view *ev, const void *view_ctx);
 
 RT_EXPORT extern struct rt_edit *
 rt_edit_create_bsg(struct db_full_path *dfp, struct db_i *dbip,
-		   struct bn_tol *, const struct bsg_view *v);
+		   struct bn_tol *, const void *view_ctx);
 
 RT_EXPORT extern int
 rt_edit_reinit_bsg(struct rt_edit *s, struct db_full_path *dfp,
 		   struct db_i *dbip, struct bn_tol *tol,
-		   const struct bsg_view *v);
+		   const void *view_ctx);
 
 RT_EXPORT extern int
 rt_edit_knob_cmd_process_bsg(
 	struct rt_edit *s,
 	vect_t *rvec, int *do_rot, vect_t *tvec, int *do_tran, int *do_sca,
-	const struct bsg_view *v, const char *cmd, fastf_t f,
+	const void *view_ctx, const char *cmd, fastf_t f,
 	char origin, int incr_flag, void *u_data
 	);
 

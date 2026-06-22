@@ -2044,6 +2044,7 @@ ged_E_core(struct ged *gedp, int argc, const char *argv[])
     int ac = 1;
     char *av[2];
     struct _ged_client_data *dgcdp;
+    struct bsg_view *view;
     static const char *usage = "[-C#/#/# -s] objects(s)";
 
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
@@ -2062,7 +2063,8 @@ ged_E_core(struct ged *gedp, int argc, const char *argv[])
     /* XXX: where is this released? */
     BU_ALLOC(dgcdp, struct _ged_client_data);
     dgcdp->gedp = gedp;
-    dgcdp->v = gedp->ged_gvp;
+    view = (struct bsg_view *)ged_view_active_ctx(gedp);
+    dgcdp->v = view;
     dgcdp->wdbp = wdb_dbopen(dgcdp->gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
     dgcdp->do_polysolids = 0;
     dgcdp->vs.color_override = 0;

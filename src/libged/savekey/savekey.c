@@ -69,6 +69,7 @@ ged_savekey_core(struct ged *gedp, int argc, const char *argv[])
     mat_t view2model;
     vect_t eye_model;
     vect_t temp;
+    struct bsg_view *v;
     static const char *usage = "file [time]";
 
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
@@ -101,9 +102,10 @@ ged_savekey_core(struct ged *gedp, int argc, const char *argv[])
     /*
      * Eye is in conventional place.
      */
-    rt_view_info_from_bsg(&view_info, gedp->ged_gvp);
-    rt_view_rotation_from_bsg(rotation, gedp->ged_gvp);
-    rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
+    v = (struct bsg_view *)ged_view_active_ctx(gedp);
+    rt_view_info_from_bsg(&view_info, v);
+    rt_view_rotation_from_bsg(rotation, v);
+    rt_view_view2model_from_bsg(view2model, v);
     VSET(temp, 0.0, 0.0, 1.0);
     MAT4X3PNT(eye_model, view2model, temp);
     savekey_rt_oldwrite(fp, view_info.size, rotation, eye_model);

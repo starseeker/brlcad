@@ -41,13 +41,11 @@
 #include "bsg/draw_source.h"
 #include "bsg/field.h"
 #include "bsg/geometry.h"
-#include "bsg/interaction.h"
 #include "bsg/material.h"
 #include "bsg/payload.h"
 #include "bg/plot3.h"
 #include "bsg/scene_builder.h"
 #include "bsg/scene_object.h"
-#include "bsg/selection.h"
 #include "bsg/view_set.h"
 #include "bsg/view_state.h"
 #include "bg/clip.h"
@@ -347,9 +345,11 @@ ged_draw_shape_ref_publish_primitive_wireframe(struct ged *gedp,
 					       struct rt_db_internal *ip,
 					       const struct bg_tess_tol *ttol,
 					       const struct bn_tol *tol,
-					       struct bsg_view *v,
+					       void *view_ctx,
 					       int adaptive)
 {
+    struct bsg_view *v = (struct bsg_view *)view_ctx;
+
     bsg_scene_ref shape_ref = ged_draw_registry_shape_scene_ref(gedp, ref);
     if (bsg_scene_ref_is_null(shape_ref))
 	return -1;
@@ -588,42 +588,6 @@ ged_draw_shape_ref_view(struct ged *gedp, ged_draw_shape_ref ref)
 {
     bsg_scene_ref shape_ref = ged_draw_registry_shape_scene_ref(gedp, ref);
     return bsg_scene_ref_is_null(shape_ref) ? NULL : bsg_scene_view(shape_ref);
-}
-
-
-struct bsg_interaction_record *
-ged_draw_shape_ref_selection_record(struct ged *gedp, ged_draw_shape_ref ref,
-				    struct bsg_view *fallback_view)
-{
-    bsg_scene_ref shape_ref = ged_draw_registry_shape_scene_ref(gedp, ref);
-    struct ged_draw_shape_record rec;
-    struct bsg_view *v;
-    const char *source_path = NULL;
-    char *path = NULL;
-
-    if (bsg_scene_ref_is_null(shape_ref))
-	return NULL;
-
-    v = bsg_scene_view(shape_ref);
-    if (!v)
-	v = fallback_view;
-
-    if (ged_draw_shape_record_get(gedp, ref, &rec) && rec.fullpath) {
-	path = db_path_to_string(rec.fullpath);
-	if (path)
-	    source_path = path;
-    }
-    if (!source_path)
-	source_path = bsg_scene_name(shape_ref);
-
-    bsg_feature_ref feature = BSG_FEATURE_REF_NULL_INIT;
-    struct bsg_interaction_record *record =
-	bsg_interaction_record_create_ref(v, BSG_INTERACTION_SELECTED_PATH,
-		feature, ged_draw_dbpath_skip_lead_slash(source_path), NULL);
-
-    if (path)
-	bu_free(path, "ged draw shape selection path");
-    return record;
 }
 
 

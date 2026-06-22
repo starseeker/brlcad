@@ -34,9 +34,10 @@
 #include "rt/db_fullpath.h"
 #include "rt/db_instance.h"
 #include "ged/defines.h"
-#include "ged/bsg_ged_draw.h"
 
 __BEGIN_DECLS
+
+GED_EXPORT extern int ged_draw_scene_available(struct ged *gedp);
 
 
 /** Check if a drawable exists */
@@ -52,7 +53,7 @@ __BEGIN_DECLS
 
 /** Check if a view exists */
 #define GED_CHECK_VIEW(_gedp, _flags) \
-    if (_gedp->ged_gvp == GED_VIEW_NULL) { \
+    if (ged_view_active_ctx(_gedp) == GED_VIEW_NULL) { \
 	int ged_check_view_quiet = (_flags) & GED_QUIET; \
 	if (!ged_check_view_quiet) { \
 	    bu_vls_trunc((_gedp)->ged_result_str, 0); \
@@ -61,7 +62,7 @@ __BEGIN_DECLS
 	return (_flags); \
     }
 
-GED_EXPORT extern int ged_export_polygon(struct ged *gedp, bsg_data_polygon_state *gdpsp, size_t polygon_i, const char *sname);
+GED_EXPORT extern int ged_export_polygon(struct ged *gedp, void *polygon_state, size_t polygon_i, const char *sname);
 GED_EXPORT extern struct bg_polygon *ged_import_polygon(struct ged *gedp, const char *sname);
 GED_EXPORT extern int ged_polygons_overlap(struct ged *gedp, struct bg_polygon *polyA, struct bg_polygon *polyB);
 GED_EXPORT extern void ged_polygon_fill_segments(struct ged *gedp, struct bg_polygon *poly, vect2d_t vfilldir, fastf_t vfilldelta);

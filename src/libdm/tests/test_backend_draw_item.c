@@ -132,8 +132,11 @@ open_null_dm(void)
 }
 
 static int
-count_draw_item(struct dm *UNUSED(dmp), const struct bsg_render_item *item)
+count_draw_item(struct dm *UNUSED(dmp), const void *render_item_ctx)
 {
+    const struct bsg_render_item *item =
+	(const struct bsg_render_item *)render_item_ctx;
+
     if (!item || item->geometry.kind == BSG_RENDER_GEOMETRY_NONE ||
 	    !item->source.source_id)
 	return -1;
@@ -559,6 +562,62 @@ file_has_token(const char *path, const char *token)
 }
 
 static void
+test_private_dm_vlist_hygiene(const char *source_root)
+{
+    if (!source_root)
+	return;
+
+    bu_log("=== private dm direct-vlist hygiene ===\n");
+
+    const char *files[] = {
+	"src/libdm/include/private.h",
+	"src/libdm/include/calltable.h",
+	"src/libdm/dm-generic.c",
+	"src/libdm/dm-gl.h",
+	"src/libdm/dm-gl.c",
+	"src/libdm/X/dm-X.c",
+	"src/libdm/plot/dm-plot.c",
+	"src/libdm/postscript/dm-ps.c",
+	"src/libdm/null/dm-Null.h",
+	"src/libdm/null/dm-Null.c",
+	"src/libdm/txt/dm-txt.c"
+    };
+    const char *forbidden[] = {
+	"bsg/vlist.h",
+	"bsg_vlist",
+	"BSG_VLIST"
+    };
+
+    struct bu_vls path = BU_VLS_INIT_ZERO;
+    for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
+	bu_vls_sprintf(&path, "%s/%s", source_root, files[i]);
+	DMCHECK(file_has_token(bu_vls_cstr(&path), "bg_vlist") == 1,
+		"private dm direct-vlist source uses neutral bg_vlist spelling");
+	for (size_t j = 0; j < sizeof(forbidden) / sizeof(forbidden[0]); j++) {
+	    int ret = file_has_token(bu_vls_cstr(&path), forbidden[j]);
+	    if (ret < 0) {
+		DMCHECK(0, "could not open private dm direct-vlist source");
+		break;
+	    }
+	    if (ret) {
+		struct bu_vls msg = BU_VLS_INIT_ZERO;
+		bu_vls_sprintf(&msg, "private dm direct-vlist source contains legacy token: %s", forbidden[j]);
+		DMCHECK(0, bu_vls_cstr(&msg));
+		bu_vls_free(&msg);
+	    }
+	}
+    }
+
+    bu_vls_sprintf(&path, "%s/src/libdm/plot/dm-plot.c", source_root);
+    DMCHECK(file_has_token(bu_vls_cstr(&path), "rt_vlist_to_uplot") == 1,
+	    "plot backend routes floating vlist export through the RT vlist bridge");
+    DMCHECK(file_has_token(bu_vls_cstr(&path), "bsg_vlist_to_uplot") == 0,
+	    "plot backend does not call the BSG vlist uplot wrapper");
+
+    bu_vls_free(&path);
+}
+
+static void
 test_retained_gl_source_hygiene(const char *source_root)
 {
     if (!source_root)
@@ -627,8 +686,24 @@ test_public_dm_header_hygiene(const char *source_root)
     bu_vls_sprintf(&path, "%s/include/dm/vlist.h", source_root);
     DMCHECK(file_has_token(bu_vls_cstr(&path), "dm_draw(") == 1,
 	    "legacy dm_draw prototype is isolated in dm/vlist.h");
+    DMCHECK(file_has_token(bu_vls_cstr(&path), "bg/vlist.h") == 1,
+	    "legacy dm_draw prototype uses the neutral BG vlist spelling");
+    DMCHECK(file_has_token(bu_vls_cstr(&path), "bsg/vlist.h") == 0,
+	    "legacy dm_draw prototype does not include the BSG vlist compatibility header");
+    DMCHECK(file_has_token(bu_vls_cstr(&path), "bsg_vlist") == 0,
+	    "legacy dm_draw prototype does not expose the BSG vlist compatibility typedef");
     DMCHECK(file_has_token(bu_vls_cstr(&path), "drawVList") == 0,
 	    "direct drawVList hooks remain backend-local and out of dm/vlist.h");
+
+    bu_vls_sprintf(&path, "%s/include/dm/view.h", source_root);
+    DMCHECK(file_has_token(bu_vls_cstr(&path), "dm_draw_faceplate(void *") == 1,
+	    "legacy faceplate draw prototype uses an opaque view context");
+    DMCHECK(file_has_token(bu_vls_cstr(&path), "dm_draw_objs(void *") == 1,
+	    "legacy draw prototype uses an opaque view context");
+    DMCHECK(file_has_token(bu_vls_cstr(&path), "struct bsg_view") == 0,
+	    "legacy draw prototypes do not expose BSG view spelling");
+    DMCHECK(file_has_token(bu_vls_cstr(&path), "bsg/") == 0,
+	    "legacy draw prototypes do not include BSG headers");
 
     bu_vls_free(&path);
 }
@@ -645,6 +720,7 @@ main(int argc, const char **argv)
     test_generic_rotated_text_stroke_fallback();
     test_postscript_rotated_text_output(argc > 1 ? argv[1] : NULL);
     test_plot_rotated_text_output(argc > 1 ? argv[1] : NULL);
+    test_private_dm_vlist_hygiene(argc > 1 ? argv[1] : NULL);
     test_retained_gl_source_hygiene(argc > 1 ? argv[1] : NULL);
     test_public_dm_header_hygiene(argc > 1 ? argv[1] : NULL);
 

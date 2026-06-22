@@ -37,7 +37,7 @@
  * rendering occurs; the view feature is purely a lightweight camera container.
  *
  * Stage C ensures that libtclcad/commands.c creates a retained scene anchor
- * through bsg_view_scene_separator_ref(..., 1) for every new view, including the null-DM
+ * for every new view, including the null-DM
  * "v1" view above.  This test exercises the equivalent C-API path and
  * verifies:
  *
@@ -68,8 +68,6 @@
 #include <dm.h>
 #include <ged.h>
 #include <icv.h>
-#include "bsg/node.h"
-#include "bsg/util.h"
 #include "rt/view_legacy_bsg.h"
 
 extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);
@@ -123,8 +121,8 @@ make_null_view(struct ged *gedp, const char *vname)
     rt_view_unit_conversion_set_bsg(v, gedp->dbip->dbi_local2base,
 	gedp->dbip->dbi_base2local);
 
-    /* Every new libtclcad view gets a retained BSG scene anchor. */
-    (void)bsg_view_scene_separator_ref(v, 1);
+    /* Every new libtclcad view gets a retained scene anchor. */
+    (void)rt_view_scene_anchor_ensure_bsg(v);
 
     rt_view_set_add_view_bsg(&gedp->ged_views, v);
     bu_ptbl_ins(&gedp->ged_free_views, (long *)v);
@@ -159,7 +157,7 @@ test_null_view_scene_ref(const char *datadir)
     struct bsg_view *v1 = make_null_view(gedp, "v1");
 
     int fail = 0;
-    if (!bsg_view_scene_attached(v1)) {
+    if (!rt_view_scene_attached_bsg(v1)) {
 	bu_log("FAIL: secondary null-DM view has no BSG root\n");
 	fail = 1;
     } else {
@@ -167,7 +165,7 @@ test_null_view_scene_ref(const char *datadir)
     }
 
     /* Also verify the default GED view has a BSG root (set by ged_open). */
-    if (!bsg_view_scene_attached(gedp->ged_gvp)) {
+    if (!rt_view_scene_attached_bsg(gedp->ged_gvp)) {
 	bu_log("FAIL: default GED view has no BSG root\n");
 	fail = 1;
     } else {
@@ -313,7 +311,7 @@ test_nodisplaylist_path(const char *datadir)
 	snprintf(vname[i], sizeof(vname[i]), "v%d", i + 1);
 	views[i] = make_null_view(gedp, vname[i]);
 
-	if (!bsg_view_scene_attached(views[i])) {
+	if (!rt_view_scene_attached_bsg(views[i])) {
 	    bu_log("FAIL: view '%s' has no BSG root; go_draw_dlist fallback would be used\n", vname[i]);
 	    fail = 1;
 	}
@@ -327,7 +325,7 @@ test_nodisplaylist_path(const char *datadir)
     /* Phase F: the view scene ref is shared across views in the same GED draw set. */
     int shared = 1;
     for (int i = 0; i < 4; i++) {
-	if (!bsg_view_scene_shared(views[i], gedp->ged_gvp)) {
+	if (!rt_view_scene_shared_bsg(views[i], gedp->ged_gvp)) {
 	    bu_log("FAIL: view '%s' scene ref is not shared with the active GED draw root\n", vname[i]);
 	    shared = 0;
 	    fail = 1;
@@ -450,7 +448,7 @@ test_gui_swrast_render(const char *datadir)
     int fail = 0;
 
     /* BSG root must be set on the swrast-DM view (same guarantee as null-DM) */
-    if (!bsg_view_scene_attached(gedp->ged_gvp)) {
+    if (!rt_view_scene_attached_bsg(gedp->ged_gvp)) {
 	bu_log("FAIL: swrast-DM view has no BSG root\n");
 	fail = 1;
     } else {

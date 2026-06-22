@@ -9,11 +9,10 @@
 #ifndef QGOBOLVIEWSYNC_H
 #define QGOBOLVIEWSYNC_H
 
-#include "qtcad/defines.h"
+#include "qtcad/QgLegacyView.h"
 
 class QgView;
 struct ged;
-struct ged_draw_transaction;
 
 /**
  * Return non-zero when @p display should accept a sync publication scoped to
@@ -29,7 +28,7 @@ QTCAD_EXPORT int qg_obol_display_accepts_ged_active_view(struct ged *gedp,
  * treated as unscoped and accepted.
  */
 QTCAD_EXPORT int qg_obol_display_accepts_draw_transaction_view(
-	const struct ged_draw_transaction *txn, QgView *display);
+	const qg_legacy_view_draw_transaction *txn, QgView *display);
 
 #endif /* QGOBOLVIEWSYNC_H */
 

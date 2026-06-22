@@ -85,14 +85,8 @@
 #include "bu/malloc.h"
 #include "bu/str.h"
 #include "bn/tol.h"
-#include "bsg/defines.h"
-#include "bsg/geometry.h"
-#include "bsg/node.h"
-#include "bsg/separator.h"
-#include "dm.h"
 #include "raytrace.h"
-#include "rt/edit_legacy_bsg.h"
-#include "rt/view_legacy_bsg.h"
+#include "rt/edit.h"
 #include "rt/functab.h"
 #include "rt/geom.h"
 #include "rt/db_internal.h"
@@ -135,8 +129,9 @@
 #include <QWidgetAction>
 
 #include "qtcad/QgSignalFlags.h"
+#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgSketchFilter.h"
-#include "qtcad/QgLegacyViewBsg.h"
+#include "QgLegacyViewSketch.h"
 #include "qtcad/QgSW.h"
 #include "qtcad/QgView.h"
 
@@ -178,19 +173,19 @@ sketch_create_empty(struct db_i *dbip, const char *name)
 /* ------------------------------------------------------------------ */
 
 /*
- * Build sketch wireframe geometry for the sketch's BSG line-set node.
- * Rendering now flows through the normal BSG render path (no custom frame
+ * Build sketch wireframe geometry for the sketch's retained line-set node.
+ * Rendering now flows through the normal retained render path (no custom frame
  * callback bypass).  The librt sketch helper publishes typed line-set arrays
  * directly, so qsketch does not depend on primitive plot/vlist conversion.
  */
 static int
-sketch_realization_to_line_set(bsg_line_set_ref lines,
+sketch_realization_to_line_set(qg_legacy_view_sketch_lines *lines,
 			       const struct rt_primitive_lod_realization *realization)
 {
     if (!realization || !realization->has_line_set)
-	return bsg_line_set_ref_set_points(lines, NULL, NULL, 0);
+	return qg_legacy_view_sketch_lines_set_points(lines, NULL, NULL, 0);
 
-    return bsg_line_set_ref_set_points(lines,
+    return qg_legacy_view_sketch_lines_set_points(lines,
 	    (const point_t *)realization->line_points,
 	    realization->line_commands,
 	    realization->line_count);
@@ -405,12 +400,10 @@ private:
     /* ---- data ---- */
     struct db_i          *m_dbip = NULL;
     struct directory     *m_dp   = NULL;
-    struct bsg_view         *m_bv   = NULL;
+    qg_legacy_view   *m_legacy_view = NULL;
     struct rt_edit       *m_es   = NULL;
     struct bn_tol         m_tol;
-    bsg_separator_ref  m_scene_root = BSG_SEPARATOR_REF_NULL_INIT;
-    bsg_line_set_ref   m_sketch_lines = BSG_LINE_SET_REF_NULL_INIT;
-    bsg_node_ref       m_sketch_node = BSG_NODE_REF_NULL_INIT;
+    struct qg_legacy_view_sketch_lines *m_sketch_lines = NULL;
 
     /* ---- Qt UI ---- */
     QgView          *m_view   = NULL;
@@ -445,26 +438,29 @@ QSketchEditWindow::QSketchEditWindow(struct db_i *dbip,
     /* ---- tolerance ---- */
     BN_TOL_INIT(&m_tol);
 
-    /* ---- bsg_view ---- */
-    BU_GET(m_bv, struct bsg_view);
-    rt_view_init_bsg(m_bv, NULL);
+    /* ---- staged view ---- */
+    m_legacy_view = qg_legacy_view_local_create("qsketch");
+    if (!m_legacy_view) {
+	bu_log("qsketch: staged view creation failed\n");
+	return;
+    }
 
     /* Look along -Z toward +Z (top view, sketch in XY plane face-on).
      * az=0, el=90 gives view +X→right, +Y→up which matches the sketch
      * u_vec (1,0,0) and v_vec (0,1,0) defaults. */
     vect_t aet;
     VSET(aet, 0.0, 90.0, 0.0);
-    rt_view_aet_set_bsg(m_bv, aet);
-    rt_view_scale_set_bsg(m_bv, 250.0);
-    rt_view_update_bsg(m_bv);
-    bu_vls_sprintf(&m_bv->gv_name, "qsketch");
-    rt_view_dimensions_set_bsg(m_bv, 700, 700);
+    qg_legacy_view_aet_set(m_legacy_view, aet);
+    qg_legacy_view_scale_set(m_legacy_view, 250.0);
+    qg_legacy_view_update(m_legacy_view);
+    qg_legacy_view_dimensions_set(m_legacy_view, 700, 700);
 
     /* ---- rt_edit ---- */
     struct db_full_path fp;
     db_full_path_init(&fp);
     db_add_node_to_full_path(&fp, dp);
-    m_es = rt_edit_create_bsg(&fp, dbip, &m_tol, m_bv);
+    m_es = qg_legacy_view_sketch_edit_create(m_legacy_view, &fp, dbip,
+	    &m_tol);
     db_free_full_path(&fp);
 
     if (!m_es) {
@@ -480,18 +476,13 @@ QSketchEditWindow::QSketchEditWindow(struct db_i *dbip,
 
     /* ----  QgView ---- */
     m_view = new QgView(this, QgView_SW);
-    m_view->set_view(qg_legacy_view_from_bsg(m_bv));
+    m_view->set_view(m_legacy_view);
 
-    /* Create a field-backed BSG line-set node for the sketch wireframe under
-     * the view's initialized scene anchor.  qsketch refreshes the line-set
-     * fields explicitly after each edit command. */
-    m_scene_root = bsg_view_scene_separator_ref(m_bv, 1);
-    m_sketch_lines = bsg_line_set_ref_create(m_bv, "sketch_wireframe");
-    m_sketch_node = bsg_line_set_ref_as_node(m_sketch_lines);
-    if (!bsg_node_ref_is_null(m_sketch_node)) {
-	bsg_node_ref_set_color(m_sketch_node, 255, 255, 0); /* yellow wireframe */
-	bsg_separator_ref_append_child(m_scene_root, m_sketch_node);
-    }
+    /* Create a field-backed line-set node for the sketch wireframe under the
+     * view's initialized scene anchor.  qsketch refreshes the line-set fields
+     * explicitly after each edit command. */
+    m_sketch_lines = qg_legacy_view_sketch_lines_create(m_legacy_view,
+	    "sketch_wireframe", 255, 255, 0);
 
     /* ---- vertex table — allow multi-row selection ---- */
     m_vtable = new QTableWidget(this);
@@ -663,16 +654,12 @@ QSketchEditWindow::~QSketchEditWindow()
     clear_filter();
     if (m_es)
 	rt_edit_destroy(m_es);
-    if (m_bv) {
-	/* Destroy the sketch line-set node before releasing the view.  The
-	 * scene anchor is a borrowed view attachment freed by the view adapter. */
-	if (!bsg_node_ref_is_null(m_sketch_node)) {
-	    bsg_node_ref_destroy(m_sketch_node);
-	    m_sketch_lines = BSG_LINE_SET_REF_NULL_INIT;
-	    m_sketch_node = bsg_node_ref_null();
-	}
-	rt_view_free_bsg(m_bv);
-	BU_PUT(m_bv, struct bsg_view);
+    if (m_legacy_view) {
+	/* Destroy the sketch line-set before releasing the view. */
+	qg_legacy_view_sketch_lines_destroy(m_sketch_lines);
+	m_sketch_lines = NULL;
+	qg_legacy_view_local_destroy(m_legacy_view);
+	m_legacy_view = NULL;
     }
 }
 
@@ -740,8 +727,8 @@ void
 QSketchEditWindow::update_sketch_geometry()
 {
     /* Regenerate the sketch wireframe from the current rt_edit state and push
-     * it into the BSG line-set fields. */
-    if (!m_es || bsg_node_ref_is_null(m_sketch_node)) return;
+     * it into the retained line-set fields. */
+    if (!m_es || qg_legacy_view_sketch_lines_is_null(m_sketch_lines)) return;
 
     struct rt_primitive_lod_realization realization;
     memset(&realization, 0, sizeof(realization));
@@ -761,7 +748,7 @@ QSketchEditWindow::update_sketch_geometry()
     if (ok)
 	sketch_realization_to_line_set(m_sketch_lines, &realization);
     else
-	bsg_line_set_ref_set_points(m_sketch_lines, NULL, NULL, 0);
+	qg_legacy_view_sketch_lines_set_points(m_sketch_lines, NULL, NULL, 0);
     sketch_realization_free(&realization);
 }
 
@@ -1170,9 +1157,9 @@ void QSketchEditWindow::on_fit_view()
     world_center[0] = skt2->V[0] + cx * skt2->u_vec[0] + cy * skt2->v_vec[0];
     world_center[1] = skt2->V[1] + cx * skt2->u_vec[1] + cy * skt2->v_vec[1];
     world_center[2] = skt2->V[2] + cx * skt2->u_vec[2] + cy * skt2->v_vec[2];
-    rt_view_center_vec_set_bsg(m_bv, world_center);
-    rt_view_size_set_bsg(m_bv, span);
-    rt_view_update_bsg(m_bv);
+    qg_legacy_view_center_vec_set(m_legacy_view, world_center);
+    qg_legacy_view_size_set(m_legacy_view, span);
+    qg_legacy_view_update(m_legacy_view);
 
     m_view->need_update(QG_VIEW_REFRESH);
     set_status("View fitted to sketch bounds.");
@@ -1322,11 +1309,11 @@ void QSketchEditWindow::on_mode_set_tangency()
 
 void QSketchEditWindow::on_toggle_grid(bool checked)
 {
-    if (!m_bv) return;
+    if (!m_legacy_view) return;
     struct rt_view_grid_state grid;
-    if (!rt_view_grid_state_from_bsg(&grid, m_bv)) return;
+    if (!qg_legacy_view_grid_state_get(m_legacy_view, &grid)) return;
     grid.draw = checked ? 1 : 0;
-    rt_view_grid_state_set_bsg(m_bv, &grid);
+    qg_legacy_view_grid_state_set(m_legacy_view, &grid);
     m_view->need_update(QG_VIEW_REFRESH);
     set_status(checked ? "Grid enabled." : "Grid disabled.");
 }
@@ -1335,10 +1322,10 @@ void QSketchEditWindow::on_toggle_grid(bool checked)
 
 void QSketchEditWindow::on_grid_settings()
 {
-    if (!m_bv) return;
+    if (!m_legacy_view) return;
 
     struct rt_view_grid_state grid;
-    if (!rt_view_grid_state_from_bsg(&grid, m_bv)) return;
+    if (!qg_legacy_view_grid_state_get(m_legacy_view, &grid)) return;
 
     QDialog dlg(this);
     dlg.setWindowTitle("Grid Settings");
@@ -1420,7 +1407,7 @@ void QSketchEditWindow::on_grid_settings()
     grid.anchor[1]   = (fastf_t)sb_anchor_v->value();
     grid.snap        = cb_snap->isChecked() ? 1 : 0;
     grid.adaptive    = cb_adaptive->isChecked() ? 1 : 0;
-    rt_view_grid_state_set_bsg(m_bv, &grid);
+    qg_legacy_view_grid_state_set(m_legacy_view, &grid);
 
     m_view->need_update(QG_VIEW_REFRESH);
     set_status(QString("Grid: H=%1 V=%2 mm  anchor=(%3,%4)  snap=%5.")

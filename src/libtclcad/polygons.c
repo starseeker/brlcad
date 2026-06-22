@@ -31,46 +31,44 @@
 
 #include "common.h"
 
+#include "bg/line_layer.h"
 #include "bg/polygon.h"
-#include "bsg/defines.h"
-#include "bsg/feature.h"
-#include "bsg/geometry.h"
-#include "bsg/overlay.h"
 #include "bg/lseg.h"
 #include "rt/view_legacy_bsg.h"
 #include "tclcad.h"
 
 /* Private headers */
+#include "../libged/bsg_ged_draw_view_private.h"
 #include "./tclcad_private.h"
 #include "./view/view.h"
 
 static void
 tclcad_polygons_sync_dm_dimensions(struct bsg_view *gdvp)
 {
-    rt_view_dimensions_set_bsg(gdvp, dm_get_width((struct dm *)gdvp->dmp),
-	    dm_get_height((struct dm *)gdvp->dmp));
+    struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(gdvp);
+    if (dmp)
+	rt_view_dimensions_set_bsg(gdvp, dm_get_width(dmp), dm_get_height(dmp));
 }
 
-/* Phase T1 (drawing_stack_modernization): keep a BSG VIEW_SCOPE object in sync
- * with the gv_tcl data-polygons state so the modern BSG renderer picks up
+/* Phase T1 (drawing_stack_modernization): keep a retained draw-view feature in
+ * sync with the gv_tcl data-polygons state so the modern renderer picks up
  * polygon outlines without the legacy dm_draw_polys path.
  *
- * One scene object per polygon-group (data or sdata) is created under the
- * local view scope.  All polygon contours are packed into a single typed
- * feature line set so the object can be rendered by the standard render-batch
- * path.
+ * One scene feature per polygon-group (data or sdata) is created under the
+ * local view scope.  All polygon contours are packed into a single typed line
+ * set through the private GED draw-view adapter.
  *
  * Per-contour dash style is not preserved here (s_soldash is a per-object
  * flag); hole contours are rendered with the same style as regular ones.
  * The closing segment of the active contour is omitted when a contour-mode
  * build is in progress (gdps_cflag != 0). */
 static void
-_sync_tcl_polygons_to_bsg(struct bsg_view *v, bsg_data_polygon_state *gdpsp, const char *bsg_name)
+_sync_tcl_polygons_to_draw_view(struct bsg_view *v, bsg_data_polygon_state *gdpsp, const char *bsg_name)
 {
     if (!v || !gdpsp || !bsg_name)
 	return;
 
-    bsg_feature_remove(v, bsg_name);
+    ged_draw_view_feature_remove(v, bsg_name);
 
     if (!gdpsp->gdps_draw || gdpsp->gdps_polygons.num_polygons < 1)
 	return;
@@ -104,22 +102,22 @@ _sync_tcl_polygons_to_bsg(struct bsg_view *v, bsg_data_polygon_state *gdpsp, con
 		continue;
 	    point_t *pts = pg->contour[j].point;
 	    VMOVE(points[point_i], pts[0]);
-	    cmds[point_i++] = BSG_GEOMETRY_LINE_MOVE;
+	    cmds[point_i++] = BG_GEOMETRY_LINE_MOVE;
 	    for (size_t k = 1; k < npts; k++) {
 		VMOVE(points[point_i], pts[k]);
-		cmds[point_i++] = BSG_GEOMETRY_LINE_DRAW;
+		cmds[point_i++] = BG_GEOMETRY_LINE_DRAW;
 	    }
 	    int building = (gdpsp->gdps_cflag
 			    && i == gdpsp->gdps_curr_polygon_i
 			    && j == pg->num_contours - 1);
 	    if (!building && npts >= 2) {
 		VMOVE(points[point_i], pts[0]);
-		cmds[point_i++] = BSG_GEOMETRY_LINE_DRAW;
+		cmds[point_i++] = BG_GEOMETRY_LINE_DRAW;
 	    }
 	}
     }
 
-    struct bsg_feature_style style = BSG_FEATURE_STYLE_INIT;
+    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
     style.visible = 1;
     style.color_valid = 1;
     style.color[0] = (unsigned char)gdpsp->gdps_color[0];
@@ -128,21 +126,10 @@ _sync_tcl_polygons_to_bsg(struct bsg_view *v, bsg_data_polygon_state *gdpsp, con
     style.line_width = gdpsp->gdps_line_width;
     style.line_style = gdpsp->gdps_line_style;
 
-    bsg_feature_ref ref = bsg_feature_replace_lines(v, bsg_name, 1 /* local */,
-	    (const point_t *)points, point_count, &style);
-    bsg_feature_points_replace(ref, BSG_FEATURE_POLYGON, (const point_t *)points, cmds, point_count);
+    (void)ged_draw_view_tcl_polygons_replace(v, bsg_name,
+	    (const point_t *)points, cmds, point_count, &style);
     bu_free(points, "tcl polygon feature points");
     bu_free(cmds, "tcl polygon feature cmds");
-    if (bsg_feature_ref_is_null(ref))
-	return;
-
-    bsg_feature_overlay_register_owner(ref, NULL,
-			       BSG_OVERLAY_ROLE_MODEL,
-			       BSG_OVERLAY_CLASS_POLYGON_EDIT,
-			       BSG_OVERLAY_LC_PER_TOOL,
-			       BSG_OVERLAY_ORDER_POST_TRANSPARENT,
-			       NULL,
-			       0);
 }
 
 static void
@@ -352,7 +339,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 	    else
 		gdpsp->gdps_draw = 0;
 
-	    _sync_tcl_polygons_to_bsg(gdvp, gdpsp, bsg_name);
+	    _sync_tcl_polygons_to_draw_view(gdvp, gdpsp, bsg_name);
 
 
 	    to_refresh_view(gdvp);
@@ -379,7 +366,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 	    else
 		gdpsp->gdps_moveAll = 0;
 
-	    _sync_tcl_polygons_to_bsg(gdvp, gdpsp, bsg_name);
+	    _sync_tcl_polygons_to_draw_view(gdvp, gdpsp, bsg_name);
 
 
 	    to_refresh_view(gdvp);
@@ -431,7 +418,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 	    /* Set the color for polygon i */
 	    VSET(gdpsp->gdps_polygons.polygon[i].gp_color, r, g, b);
 
-	    _sync_tcl_polygons_to_bsg(gdvp, gdpsp, bsg_name);
+	    _sync_tcl_polygons_to_draw_view(gdvp, gdpsp, bsg_name);
 
 
 	    to_refresh_view(gdvp);
@@ -478,7 +465,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 	    /* Set the default polygon color */
 	    VSET(gdpsp->gdps_color, r, g, b);
 
-	    _sync_tcl_polygons_to_bsg(gdvp, gdpsp, bsg_name);
+	    _sync_tcl_polygons_to_draw_view(gdvp, gdpsp, bsg_name);
 
 
 	    to_refresh_view(gdvp);
@@ -521,7 +508,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 
 	    gdpsp->gdps_polygons.polygon[i].gp_line_width = line_width;
 
-	    _sync_tcl_polygons_to_bsg(gdvp, gdpsp, bsg_name);
+	    _sync_tcl_polygons_to_draw_view(gdvp, gdpsp, bsg_name);
 
 
 	    to_refresh_view(gdvp);
@@ -560,7 +547,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 	    /* Set the default line width */
 	    gdpsp->gdps_line_width = line_width;
 
-	    _sync_tcl_polygons_to_bsg(gdvp, gdpsp, bsg_name);
+	    _sync_tcl_polygons_to_draw_view(gdvp, gdpsp, bsg_name);
 
 
 	    to_refresh_view(gdvp);
@@ -604,7 +591,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 	    else
 		gdpsp->gdps_polygons.polygon[i].gp_line_style = 1;
 
-	    _sync_tcl_polygons_to_bsg(gdvp, gdpsp, bsg_name);
+	    _sync_tcl_polygons_to_draw_view(gdvp, gdpsp, bsg_name);
 
 
 	    to_refresh_view(gdvp);
@@ -645,7 +632,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 	    /* Set the default line style */
 	    gdpsp->gdps_line_style = line_style;
 
-	    _sync_tcl_polygons_to_bsg(gdvp, gdpsp, bsg_name);
+	    _sync_tcl_polygons_to_draw_view(gdvp, gdpsp, bsg_name);
 
 
 	    to_refresh_view(gdvp);
@@ -695,7 +682,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 
 	    Tcl_Free((char *)contour_av);
 
-	    _sync_tcl_polygons_to_bsg(gdvp, gdpsp, bsg_name);
+	    _sync_tcl_polygons_to_draw_view(gdvp, gdpsp, bsg_name);
 
 
 	    to_refresh_view(gdvp);
@@ -772,7 +759,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 	/* Free the clipped polygon container */
 	bu_free((void *)gpp, "clip gpp");
 
-	_sync_tcl_polygons_to_bsg(gdvp, gdpsp, bsg_name);
+	_sync_tcl_polygons_to_draw_view(gdvp, gdpsp, bsg_name);
 
 
 	to_refresh_view(gdvp);
@@ -827,7 +814,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 	gdpsp->gdps_polygons.polygon[i].gp_line_style = gdpsp->gdps_line_style;
 	gdpsp->gdps_polygons.polygon[i].gp_line_width = gdpsp->gdps_line_width;
 
-	_sync_tcl_polygons_to_bsg(gdvp, gdpsp, bsg_name);
+	_sync_tcl_polygons_to_draw_view(gdvp, gdpsp, bsg_name);
 
 
 	to_refresh_view(gdvp);
@@ -973,7 +960,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 	    gdpsp->gdps_target_polygon_i = 0;
 
 	    if (polygon_ac < 1) {
-		_sync_tcl_polygons_to_bsg(gdvp, gdpsp, bsg_name);
+		_sync_tcl_polygons_to_draw_view(gdvp, gdpsp, bsg_name);
 
 		to_refresh_view(gdvp);
 		return BRLCAD_OK;
@@ -985,7 +972,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 	    }
 
 	    Tcl_Free((char *)polygon_av);
-	    _sync_tcl_polygons_to_bsg(gdvp, gdpsp, bsg_name);
+	    _sync_tcl_polygons_to_draw_view(gdvp, gdpsp, bsg_name);
 
 	    to_refresh_view(gdvp);
 	    return BRLCAD_OK;
@@ -1030,7 +1017,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 	gdpsp->gdps_polygons.polygon[i].hole = gp.hole;
 	gdpsp->gdps_polygons.polygon[i].contour = gp.contour;
 
-	_sync_tcl_polygons_to_bsg(gdvp, gdpsp, bsg_name);
+	_sync_tcl_polygons_to_draw_view(gdvp, gdpsp, bsg_name);
 
 
 	to_refresh_view(gdvp);
@@ -1065,7 +1052,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 											   gdpsp->gdps_polygons.polygon[i].contour[j].num_points * sizeof(point_t),
 											   "realloc point");
 	VMOVE(gdpsp->gdps_polygons.polygon[i].contour[j].point[k], pt);
-	_sync_tcl_polygons_to_bsg(gdvp, gdpsp, bsg_name);
+	_sync_tcl_polygons_to_draw_view(gdvp, gdpsp, bsg_name);
 
 	to_refresh_view(gdvp);
 	return BRLCAD_OK;
@@ -1124,7 +1111,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 	    goto bad;
 
 	VMOVE(gdpsp->gdps_polygons.polygon[i].contour[j].point[k], pt);
-	_sync_tcl_polygons_to_bsg(gdvp, gdpsp, bsg_name);
+	_sync_tcl_polygons_to_draw_view(gdvp, gdpsp, bsg_name);
 
 	to_refresh_view(gdvp);
 	return BRLCAD_OK;
@@ -1138,11 +1125,12 @@ bad:
 int
 go_data_polygons(Tcl_Interp *interp,
 		 struct ged *gedp,
-		 struct bsg_view *gdvp,
+		 void *draw_view_ctx,
 		 int argc,
 		 const char *argv[],
 		 const char *usage)
 {
+    struct bsg_view *gdvp = (struct bsg_view *)draw_view_ctx;
     int ret;
 
     /* initialize result */
@@ -1194,7 +1182,7 @@ to_data_polygons(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
+    gdvp = (struct bsg_view *)ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1215,11 +1203,12 @@ to_data_polygons(struct ged *gedp,
 int
 go_poly_circ_mode(Tcl_Interp *interp,
 		  struct ged *gedp,
-		  struct bsg_view *gdvp,
+		  void *draw_view_ctx,
 		  int argc,
 		  const char *argv[],
 		  const char *usage)
 {
+    struct bsg_view *gdvp = (struct bsg_view *)draw_view_ctx;
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
@@ -1267,7 +1256,7 @@ to_poly_circ_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
+    gdvp = (struct bsg_view *)ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1277,7 +1266,8 @@ to_poly_circ_mode(struct ged *gedp,
     argv[1] = argv[0];
     ret = to_poly_circ_mode_func(current_top->to_interp, gedp, gdvp, argc-1, argv+1, usage);
 
-    struct bu_vls *pathname = dm_get_pathname((struct dm *)gdvp->dmp);
+    struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(gdvp);
+    struct bu_vls *pathname = dmp ? dm_get_pathname(dmp) : NULL;
     if (pathname && bu_vls_strlen(pathname)) {
 	bu_vls_printf(&bindings, "bind %s <Motion> {%s mouse_poly_circ %s %%x %%y}",
 		      bu_vls_cstr(pathname),
@@ -1316,7 +1306,7 @@ to_poly_circ_mode_func(Tcl_Interp *interp,
 
     _sync_tcl_polygon_view_snapshot(gdvp, gdpsp);
 
-    gedp->ged_gvp = gdvp;
+    ged_view_active_ctx_set(gedp, gdvp);
 
     if (bu_sscanf(argv[1], "%d", &x) != 1 ||
 	bu_sscanf(argv[2], "%d", &y) != 1) {
@@ -1331,9 +1321,9 @@ to_poly_circ_mode_func(Tcl_Interp *interp,
     rt_view_screen_to_view_from_bsg(&fx, &fy, gdvp, x, y);
     VSET(v_pt, fx, fy, gdvp->gv_tcl->gv_data_vZ);
     {
-	unsigned long long snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
+	unsigned long long snap_kinds = rt_view_prepare_tcl_snap_bsg(gdvp);
 	if (snap_kinds)
-	    rt_view_snap_point_2d_bsg(gedp->ged_gvp, &v_pt[X], &v_pt[Y], snap_kinds);
+	    rt_view_snap_point_2d_bsg(gdvp, &v_pt[X], &v_pt[Y], snap_kinds);
     }
 
     MAT4X3PNT(m_pt, gdpsp->gdps_view2model, v_pt);
@@ -1382,7 +1372,7 @@ to_poly_cont_build_func(Tcl_Interp *interp,
 
     _sync_tcl_polygon_view_snapshot(gdvp, gdpsp);
 
-    gedp->ged_gvp = gdvp;
+    ged_view_active_ctx_set(gedp, gdvp);
 
     if (bu_sscanf(argv[1], "%d", &x) != 1 ||
 	bu_sscanf(argv[2], "%d", &y) != 1) {
@@ -1397,9 +1387,9 @@ to_poly_cont_build_func(Tcl_Interp *interp,
     rt_view_screen_to_view_from_bsg(&fx, &fy, gdvp, x, y);
     VSET(v_pt, fx, fy, gdvp->gv_tcl->gv_data_vZ);
     {
-	unsigned long long snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
+	unsigned long long snap_kinds = rt_view_prepare_tcl_snap_bsg(gdvp);
 	if (snap_kinds)
-	    rt_view_snap_point_2d_bsg(gedp->ged_gvp, &v_pt[X], &v_pt[Y], snap_kinds);
+	    rt_view_snap_point_2d_bsg(gdvp, &v_pt[X], &v_pt[Y], snap_kinds);
     }
 
     MAT4X3PNT(m_pt, gdpsp->gdps_view2model, v_pt);
@@ -1426,7 +1416,8 @@ to_poly_cont_build_func(Tcl_Interp *interp,
 	(void)to_data_polygons_func(interp, gedp, gdvp, ac, (const char **)av);
 	bu_vls_free(&plist);
 
-	struct bu_vls *pathname = dm_get_pathname((struct dm *)gdvp->dmp);
+	struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(gdvp);
+	struct bu_vls *pathname = dmp ? dm_get_pathname(dmp) : NULL;
 	if (doBind && pathname && bu_vls_strlen(pathname)) {
 	    bu_vls_printf(&bindings, "bind %s <Motion> {%s mouse_poly_cont %s %%x %%y}",
 			  bu_vls_cstr(pathname),
@@ -1471,11 +1462,12 @@ to_poly_cont_build_func(Tcl_Interp *interp,
 int
 go_poly_cont_build(Tcl_Interp *interp,
 		   struct ged *gedp,
-		   struct bsg_view *gdvp,
+		   void *draw_view_ctx,
 		   int argc,
 		   const char *argv[],
 		   const char *usage)
 {
+    struct bsg_view *gdvp = (struct bsg_view *)draw_view_ctx;
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
@@ -1522,13 +1514,13 @@ to_poly_cont_build(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
+    gdvp = (struct bsg_view *)ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
     }
 
-    gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
+    gdvp = (struct bsg_view *)ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1548,11 +1540,12 @@ to_poly_cont_build(struct ged *gedp,
 int
 go_poly_cont_build_end(Tcl_Interp *UNUSED(interp),
 		       struct ged *gedp,
-		       struct bsg_view *gdvp,
+		       void *draw_view_ctx,
 		       int argc,
 		       const char *argv[],
 		       const char *usage)
 {
+    struct bsg_view *gdvp = (struct bsg_view *)draw_view_ctx;
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
@@ -1593,7 +1586,7 @@ to_poly_cont_build_end(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
+    gdvp = (struct bsg_view *)ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1614,7 +1607,7 @@ to_poly_cont_build_end(struct ged *gedp,
 	    gdpsp = &gdvp->gv_tcl->gv_data_polygons;
 	    bsg_name = "_tcl_data_polygons";
 	}
-	_sync_tcl_polygons_to_bsg(gdvp, gdpsp, bsg_name);
+	_sync_tcl_polygons_to_draw_view(gdvp, gdpsp, bsg_name);
     }
     to_refresh_view(gdvp);
     return ret;
@@ -1638,11 +1631,12 @@ to_poly_cont_build_end_func(struct bsg_view *gdvp,
 int
 go_poly_ell_mode(Tcl_Interp *interp,
 		 struct ged *gedp,
-		 struct bsg_view *gdvp,
+		 void *draw_view_ctx,
 		 int argc,
 		 const char *argv[],
 		 const char *usage)
 {
+    struct bsg_view *gdvp = (struct bsg_view *)draw_view_ctx;
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
@@ -1690,7 +1684,7 @@ to_poly_ell_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
+    gdvp = (struct bsg_view *)ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1700,7 +1694,8 @@ to_poly_ell_mode(struct ged *gedp,
     argv[1] = argv[0];
     ret = to_poly_ell_mode_func(current_top->to_interp, gedp, gdvp, argc-1, argv+1, usage);
 
-    struct bu_vls *pathname = dm_get_pathname((struct dm *)gdvp->dmp);
+    struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(gdvp);
+    struct bu_vls *pathname = dmp ? dm_get_pathname(dmp) : NULL;
     if (pathname && bu_vls_strlen(pathname)) {
 	bu_vls_printf(&bindings, "bind %s <Motion> {%s mouse_poly_ell %s %%x %%y}",
 		      bu_vls_cstr(pathname),
@@ -1739,7 +1734,7 @@ to_poly_ell_mode_func(Tcl_Interp *interp,
 
     _sync_tcl_polygon_view_snapshot(gdvp, gdpsp);
 
-    gedp->ged_gvp = gdvp;
+    ged_view_active_ctx_set(gedp, gdvp);
 
     if (bu_sscanf(argv[1], "%d", &x) != 1 ||
 	bu_sscanf(argv[2], "%d", &y) != 1) {
@@ -1754,9 +1749,9 @@ to_poly_ell_mode_func(Tcl_Interp *interp,
     rt_view_screen_to_view_from_bsg(&fx, &fy, gdvp, x, y);
     VSET(v_pt, fx, fy, gdvp->gv_tcl->gv_data_vZ);
     {
-	unsigned long long snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
+	unsigned long long snap_kinds = rt_view_prepare_tcl_snap_bsg(gdvp);
 	if (snap_kinds)
-	    rt_view_snap_point_2d_bsg(gedp->ged_gvp, &v_pt[X], &v_pt[Y], snap_kinds);
+	    rt_view_snap_point_2d_bsg(gdvp, &v_pt[X], &v_pt[Y], snap_kinds);
     }
 
     MAT4X3PNT(m_pt, gdpsp->gdps_view2model, v_pt);
@@ -1785,11 +1780,12 @@ to_poly_ell_mode_func(Tcl_Interp *interp,
 int
 go_poly_rect_mode(Tcl_Interp *interp,
 		  struct ged *gedp,
-		  struct bsg_view *gdvp,
+		  void *draw_view_ctx,
 		  int argc,
 		  const char *argv[],
 		  const char *usage)
 {
+    struct bsg_view *gdvp = (struct bsg_view *)draw_view_ctx;
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
@@ -1837,7 +1833,7 @@ to_poly_rect_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
+    gdvp = (struct bsg_view *)ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1847,7 +1843,8 @@ to_poly_rect_mode(struct ged *gedp,
     argv[1] = argv[0];
     ret = to_poly_rect_mode_func(current_top->to_interp, gedp, gdvp, argc-1, argv+1, usage);
 
-    struct bu_vls *pathname = dm_get_pathname((struct dm *)gdvp->dmp);
+    struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(gdvp);
+    struct bu_vls *pathname = dmp ? dm_get_pathname(dmp) : NULL;
     if (pathname && bu_vls_strlen(pathname)) {
 	bu_vls_printf(&bindings, "bind %s <Motion> {%s mouse_poly_rect %s %%x %%y}",
 		      bu_vls_cstr(pathname),
@@ -1887,7 +1884,7 @@ to_poly_rect_mode_func(Tcl_Interp *interp,
 
     _sync_tcl_polygon_view_snapshot(gdvp, gdpsp);
 
-    gedp->ged_gvp = gdvp;
+    ged_view_active_ctx_set(gedp, gdvp);
 
     if (bu_sscanf(argv[1], "%d", &x) != 1 ||
 	bu_sscanf(argv[2], "%d", &y) != 1) {
@@ -1914,9 +1911,9 @@ to_poly_rect_mode_func(Tcl_Interp *interp,
     rt_view_screen_to_view_from_bsg(&fx, &fy, gdvp, x, y);
     VSET(v_pt, fx, fy, gdvp->gv_tcl->gv_data_vZ);
     {
-	unsigned long long snap_kinds = rt_view_prepare_tcl_snap_bsg(gedp->ged_gvp);
+	unsigned long long snap_kinds = rt_view_prepare_tcl_snap_bsg(gdvp);
 	if (snap_kinds)
-	    rt_view_snap_point_2d_bsg(gedp->ged_gvp, &v_pt[X], &v_pt[Y], snap_kinds);
+	    rt_view_snap_point_2d_bsg(gdvp, &v_pt[X], &v_pt[Y], snap_kinds);
     }
 
     MAT4X3PNT(m_pt, gdpsp->gdps_view2model, v_pt);

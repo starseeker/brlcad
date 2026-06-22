@@ -32,6 +32,7 @@
 #include "bu/getopt.h"
 #include "dm.h"
 #include "ged.h"
+#include "rt/view_legacy_bsg.h"
 
 struct png2fb_state {
     double def_screen_gamma;	/* Don't add more gamma, default = 1.0*/
@@ -147,12 +148,13 @@ ged_png2fb_core(struct ged *gedp, int argc, const char *argv[])
 
     struct png2fb_state p2fbs = PNG2FB_STATE_INIT_ZERO;
 
-    if (!gedp->ged_gvp) {
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+    if (!v) {
 	bu_vls_printf(gedp->ged_result_str, "no current view set\n");
 	return BRLCAD_ERROR;
     }
 
-    struct dm *dmp = (struct dm *)gedp->ged_gvp->dmp;
+    struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(v);
     if (!dmp) {
 	bu_vls_printf(gedp->ged_result_str, "no display manager currently active");
 	return BRLCAD_ERROR;

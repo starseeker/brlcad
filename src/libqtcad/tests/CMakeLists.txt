@@ -1,4 +1,4 @@
-include_directories(${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
+include_directories(${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
 set(QGMODEL_SRCS qgmodel.cpp)
 set(QGVIEW_SRCS qgview.cpp)
@@ -571,7 +571,6 @@ if(TARGET Qt6::Widgets)
     libqtcad
     libged
     libdm
-    libbsg
     librt
     libbu
     Qt6::Widgets
@@ -683,8 +682,9 @@ if(TARGET Qt6::Widgets)
 # add_executable(ged_test_dm_backend_bench ged_test_dm_backend_bench.cpp)
 # target_include_directories(ged_test_dm_backend_bench PRIVATE
 #   "${CMAKE_SOURCE_DIR}/src/libged"
+#   "${CMAKE_SOURCE_DIR}/src/libqtcad"
 #   )
-# set(_bench_libs libqtcad libged libdm libbsg librt libbu Qt6::Widgets)
+# set(_bench_libs libqtcad libged libdm librt libbu Qt6::Widgets)
 # if(TARGET dm-swrast)
 #   list(APPEND _bench_libs dm-swrast)
 # endif()

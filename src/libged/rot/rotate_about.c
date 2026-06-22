@@ -43,13 +43,15 @@ ged_rotate_about_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     /* get "rotate about" point */
     if (argc == 1) {
 	bu_vls_printf(gedp->ged_result_str, "%c",
-		rt_view_rotate_about_from_bsg(gedp->ged_gvp));
+		rt_view_rotate_about_from_bsg(v));
 	return BRLCAD_OK;
     }
 
@@ -60,7 +62,7 @@ ged_rotate_about_core(struct ged *gedp, int argc, const char *argv[])
 	    case 'k':
 	    case 'm':
 	    case 'v':
-		rt_view_rotate_about_set_bsg(gedp->ged_gvp, argv[1][0]);
+		rt_view_rotate_about_set_bsg(v, argv[1][0]);
 		return BRLCAD_OK;
 	}
     }

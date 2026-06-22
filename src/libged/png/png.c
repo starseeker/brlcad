@@ -272,7 +272,7 @@ draw_png_record_cb(const struct ged_draw_view_db_object_record *rec, void *data)
 }
 
 static void
-dl_png(struct ged *gedp, mat_t model2view, fastf_t perspective, vect_t eye_pos, size_t size, size_t half_size, unsigned char **image)
+dl_png(struct bsg_view *v, mat_t model2view, fastf_t perspective, vect_t eye_pos, size_t size, size_t half_size, unsigned char **image)
 {
     mat_t newmat;
     matp_t mat;
@@ -307,7 +307,7 @@ dl_png(struct ged *gedp, mat_t model2view, fastf_t perspective, vect_t eye_pos, 
     ctx.psmat = mat;
     ctx.size = size;
     ctx.half_size = half_size;
-    ged_draw_foreach_visible_view_record(gedp->ged_gvp,
+    ged_draw_foreach_visible_view_record(v,
 	    draw_png_record_cb, &ctx);
 }
 
@@ -322,6 +322,7 @@ draw_png(struct ged *gedp, FILE *fp)
     mat_t model2view;
     point_t eye_pos;
     fastf_t perspective;
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
 
     /* TODO: explain why this is size+1 */
     size_t num_bytes_per_row = (img_size+1) * 3;
@@ -372,10 +373,10 @@ draw_png(struct ged *gedp, FILE *fp)
 	image[i] = (unsigned char *)(bytes + ((img_size-i) * num_bytes_per_row));
     }
 
-    rt_view_model2view_from_bsg(model2view, gedp->ged_gvp);
-    perspective = rt_view_perspective_from_bsg(gedp->ged_gvp);
-    rt_view_eye_pos_from_bsg(eye_pos, gedp->ged_gvp);
-    dl_png(gedp, model2view, perspective, eye_pos, (size_t)img_size, (size_t)img_half_size, image);
+    rt_view_model2view_from_bsg(model2view, v);
+    perspective = rt_view_perspective_from_bsg(v);
+    rt_view_eye_pos_from_bsg(eye_pos, v);
+    dl_png(v, model2view, perspective, eye_pos, (size_t)img_size, (size_t)img_half_size, image);
 
     /* Write out pixels */
     png_write_image(png_p, image);

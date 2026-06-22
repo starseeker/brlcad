@@ -19,8 +19,9 @@
  */
 /** @file QgLegacyViewBsg.h
  *
- * Explicit adapter between qtcad's opaque legacy view handle and the
- * retained staged BSG view pointer.
+ * Private adapter between qtcad's opaque legacy view handle and the retained
+ * staged BSG view pointer.  This is intentionally not an installed qtcad
+ * header; public qtcad code should use QgLegacyView.h helpers instead.
  */
 
 #ifndef QGLEGACYVIEWBSG_H

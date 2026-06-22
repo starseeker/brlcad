@@ -40,7 +40,6 @@
 #include "bsg/draw_intent.h"
 #include "bsg/draw_source.h"
 #include "bsg/export.h"
-#include "bsg/interaction.h"
 #include "bsg/render.h"
 #include "bsg/scene_builder.h"
 #include "ged/bsg_ged_draw.h"
@@ -67,18 +66,54 @@ _draw_foreach_shape_scene(bsg_scene_ref ref,
 			  int (*cb)(bsg_scene_ref, void *),
 			  void *userdata);
 
-static struct bsg_interaction_record *
-_ged_draw_make_interaction_record(struct ged *gedp,
-				  ged_draw_shape_ref ref,
-				  bsg_interaction_kind kind);
-
-
 static const char *
 _dbpath_skip_lead_slash(const char *s)
 {
     if (s && *s == '/')
 	return s + 1;
     return s;
+}
+
+
+static int
+_ged_draw_shape_ref_selection_path(struct ged *gedp,
+				   ged_draw_shape_ref ref,
+				   struct bu_vls *path_out)
+{
+    if (path_out)
+	bu_vls_trunc(path_out, 0);
+    if (!gedp || ged_draw_shape_ref_is_null(ref) || !path_out)
+	return 0;
+
+    bsg_scene_ref shape_ref = _draw_scene_for_shape_ref(gedp, ref);
+    if (bsg_scene_ref_is_null(shape_ref))
+	return 0;
+
+    char *path = NULL;
+    const char *source_path = NULL;
+    ged_draw_shape_state *shape_data = ged_draw_scene_ref_shape_state(shape_ref);
+    if (shape_data && shape_data->s_fullpath.fp_len > 0) {
+	path = db_path_to_string(&shape_data->s_fullpath);
+	source_path = path;
+    } else {
+	const struct db_full_path *fp = ged_draw_scene_ref_fullpath(shape_ref);
+	if (fp) {
+	    path = db_path_to_string(fp);
+	    source_path = path;
+	}
+    }
+    if ((!source_path || !source_path[0]) && shape_data &&
+	    shape_data->display_name && shape_data->display_name[0])
+	source_path = shape_data->display_name;
+    if ((!source_path || !source_path[0]) && bsg_scene_name(shape_ref))
+	source_path = bsg_scene_name(shape_ref);
+
+    if (source_path && source_path[0])
+	bu_vls_strcpy(path_out, _dbpath_skip_lead_slash(source_path));
+    if (path)
+	bu_free(path, "ged draw shape selection path");
+
+    return bu_vls_strlen(path_out) > 0 ? 1 : 0;
 }
 
 
@@ -233,8 +268,10 @@ _draw_group_scene_ref_in_view(bsg_scene_ref group_ref, struct bsg_view *v)
 
 int
 ged_draw_group_record_in_view(const struct ged_draw_group_record *rec,
-			      struct bsg_view *v)
+			      void *view_ctx)
 {
+    struct bsg_view *v = (struct bsg_view *)view_ctx;
+
     if (!rec)
 	return 0;
     if (!v)
@@ -298,10 +335,12 @@ _draw_path_state_shape_scene_cb(bsg_scene_ref shape_ref, void *ud)
 
 int
 ged_draw_path_state(struct ged *gedp,
-		    struct bsg_view *v,
+		    void *view_ctx,
 		    const char *path,
 		    int mode)
 {
+    struct bsg_view *v = (struct bsg_view *)view_ctx;
+
     if (!gedp || !path)
 	return 0;
 
@@ -609,11 +648,13 @@ _draw_has_paths_shape_scene_cb(bsg_scene_ref shape_ref, void *ud)
 
 size_t
 ged_draw_list_paths(struct ged *gedp,
-		    struct bsg_view *v,
+		    void *view_ctx,
 		    int mode,
 		    int expanded,
 		    struct bu_vls *result)
 {
+    struct bsg_view *v = (struct bsg_view *)view_ctx;
+
     if (!gedp || !result)
 	return 0;
 
@@ -650,9 +691,11 @@ ged_draw_list_paths(struct ged *gedp,
 
 int
 ged_draw_has_paths(struct ged *gedp,
-		   struct bsg_view *v,
+		   void *view_ctx,
 		   int mode)
 {
+    struct bsg_view *v = (struct bsg_view *)view_ctx;
+
     if (!gedp)
 	return 0;
 
@@ -736,14 +779,13 @@ _ged_draw_fill_shape_record(struct ged *gedp,
     out->selected = 0;
     out->evaluated_region = bsg_scene_legacy_eval_flag(shape_ref);
     if (gedp && gedp->ged_gvp) {
-	struct bsg_interaction_record *selected =
-	    _ged_draw_make_interaction_record(gedp, out->ref,
-		    BSG_INTERACTION_SELECTED_PATH);
-	if (selected) {
-	    out->selected = ged_draw_view_selection_contains_record(
-		    gedp->ged_gvp, selected);
-	    bsg_interaction_record_free(selected);
-	}
+	struct bu_vls selected_path = BU_VLS_INIT_ZERO;
+	if (_ged_draw_shape_ref_selection_path(gedp, out->ref, &selected_path))
+	    out->selected = ged_draw_view_selection_contains_path(
+		    gedp->ged_gvp,
+		    GED_DRAW_VIEW_SELECTION_SELECTED_PATH,
+		    bu_vls_cstr(&selected_path));
+	bu_vls_free(&selected_path);
     }
     struct ged_draw_source_state *d = ged_draw_scene_ref_source_data(shape_ref);
     if (!shape_data && d) {
@@ -820,71 +862,32 @@ ged_draw_shape_record_get(struct ged *gedp,
 }
 
 
-static struct bsg_interaction_record *
-_ged_draw_make_interaction_record(struct ged *gedp,
-				  ged_draw_shape_ref ref,
-				  bsg_interaction_kind kind)
-{
-    if (!gedp || ged_draw_shape_ref_is_null(ref))
-	return NULL;
-
-    bsg_scene_ref shape_ref = _draw_scene_for_shape_ref(gedp, ref);
-    if (bsg_scene_ref_is_null(shape_ref))
-	return NULL;
-
-    char *path = NULL;
-    const char *source_path = NULL;
-    ged_draw_shape_state *shape_data = ged_draw_scene_ref_shape_state(shape_ref);
-    if (shape_data && shape_data->s_fullpath.fp_len > 0) {
-	path = db_path_to_string(&shape_data->s_fullpath);
-	source_path = path;
-    } else {
-	const struct db_full_path *fp = ged_draw_scene_ref_fullpath(shape_ref);
-	if (fp) {
-	    path = db_path_to_string(fp);
-	    source_path = path;
-	}
-    }
-    if ((!source_path || !source_path[0]) && shape_data &&
-	    shape_data->display_name && shape_data->display_name[0]) {
-	source_path = shape_data->display_name;
-    }
-    if ((!source_path || !source_path[0]) &&
-	    bsg_scene_name(shape_ref)) {
-	source_path = bsg_scene_name(shape_ref);
-    }
-
-    struct bsg_interaction_record *record =
-	bsg_interaction_record_create_ref(gedp->ged_gvp, kind,
-		(bsg_feature_ref)BSG_FEATURE_REF_NULL_INIT,
-		_dbpath_skip_lead_slash(source_path), NULL);
-
-    if (path)
-	bu_free(path, "db_path_to_string");
-    return record;
-}
-
 int
 ged_draw_view_selection_set_highlighted_shape_ref(struct ged *gedp,
-						  struct bsg_view *v,
+						  void *view_ctx,
 						  ged_draw_shape_ref ref)
 {
+    struct bsg_view *v = (struct bsg_view *)view_ctx;
+
     if (!gedp || !v)
 	return 0;
 
-    if (!ged_draw_view_selection_set_record(v, NULL))
+    if (!ged_draw_view_selection_set_path(v,
+	    GED_DRAW_VIEW_SELECTION_ALL, NULL))
 	return 0;
     if (ged_draw_shape_ref_is_null(ref))
 	return 1;
 
-    struct bsg_interaction_record *record =
-	_ged_draw_make_interaction_record(gedp, ref,
-	BSG_INTERACTION_HIGHLIGHTED_REF);
-    if (!record)
+    struct bu_vls highlighted_path = BU_VLS_INIT_ZERO;
+    if (!_ged_draw_shape_ref_selection_path(gedp, ref, &highlighted_path)) {
+	bu_vls_free(&highlighted_path);
 	return 0;
+    }
 
-    int ret = ged_draw_view_selection_add_record(v, record);
-    bsg_interaction_record_free(record);
+    int ret = ged_draw_view_selection_add_path(v,
+	    GED_DRAW_VIEW_SELECTION_HIGHLIGHTED_REF,
+	    bu_vls_cstr(&highlighted_path));
+    bu_vls_free(&highlighted_path);
     return ret;
 }
 
@@ -909,18 +912,19 @@ ged_draw_view_selection_add_shape_ref(struct ged *gedp,
     if (!ged_draw_view_selection_available(target))
 	return 0;
 
-    struct bsg_interaction_record *record =
-	ged_draw_shape_ref_selection_record(gedp, ref, target);
-    if (!record)
+    struct bu_vls selected_path = BU_VLS_INIT_ZERO;
+    if (!_ged_draw_shape_ref_selection_path(gedp, ref, &selected_path)) {
+	bu_vls_free(&selected_path);
 	return 0;
+    }
 
-    const char *record_path = bsg_interaction_record_path(record);
-    if (path && record_path && record_path[0])
-	bu_vls_strcpy(path, record_path);
+    if (path && bu_vls_strlen(&selected_path) > 0)
+	bu_vls_strcpy(path, bu_vls_cstr(&selected_path));
 
-    int ret = ged_draw_view_selection_add_record(target, record);
-
-    bsg_interaction_record_free(record);
+    int ret = ged_draw_view_selection_add_path(target,
+	    GED_DRAW_VIEW_SELECTION_SELECTED_PATH,
+	    bu_vls_cstr(&selected_path));
+    bu_vls_free(&selected_path);
 
     if (selection_view)
 	*selection_view = target;
@@ -1159,11 +1163,13 @@ _ged_draw_foreach_view_export_record(struct bsg_view *v,
 
 void
 ged_draw_foreach_view_record_query(
-	struct bsg_view *v,
+	void *view_ctx,
 	const struct ged_draw_view_record_query *query,
 	ged_draw_view_db_object_record_cb cb,
 	void *userdata)
 {
+    struct bsg_view *v = (struct bsg_view *)view_ctx;
+
     if (!v || !query)
 	return;
 
@@ -1182,10 +1188,12 @@ ged_draw_foreach_view_record_query(
 
 
 void
-ged_draw_foreach_view_db_object_record(struct bsg_view *v,
+ged_draw_foreach_view_db_object_record(void *view_ctx,
 				       ged_draw_view_db_object_record_cb cb,
 				       void *userdata)
 {
+    struct bsg_view *v = (struct bsg_view *)view_ctx;
+
     _ged_draw_foreach_view_export_record(v, BSG_EXPORT_QUERY_DB_OBJECTS,
 	    BSG_RENDER_FLAG_PAYLOAD_PREPARE, NULL, BSG_EXPORT_DRAW_MODE_ANY,
 	    cb, userdata);
@@ -1193,10 +1201,12 @@ ged_draw_foreach_view_db_object_record(struct bsg_view *v,
 
 
 void
-ged_draw_foreach_visible_view_db_object_record(struct bsg_view *v,
+ged_draw_foreach_visible_view_db_object_record(void *view_ctx,
 					      ged_draw_view_db_object_record_cb cb,
 					      void *userdata)
 {
+    struct bsg_view *v = (struct bsg_view *)view_ctx;
+
     _ged_draw_foreach_view_export_record(v,
 	    BSG_EXPORT_QUERY_VISIBLE_ONLY | BSG_EXPORT_QUERY_DB_OBJECTS,
 	    BSG_RENDER_FLAG_VISIBLE_ONLY | BSG_RENDER_FLAG_PAYLOAD_PREPARE,
@@ -1207,11 +1217,13 @@ ged_draw_foreach_visible_view_db_object_record(struct bsg_view *v,
 
 void
 ged_draw_foreach_visible_view_db_object_record_mode(
-	struct bsg_view *v,
+	void *view_ctx,
 	int draw_mode,
 	ged_draw_view_db_object_record_cb cb,
 	void *userdata)
 {
+    struct bsg_view *v = (struct bsg_view *)view_ctx;
+
     _ged_draw_foreach_view_export_record(v,
 	    BSG_EXPORT_QUERY_VISIBLE_ONLY | BSG_EXPORT_QUERY_DB_OBJECTS,
 	    BSG_RENDER_FLAG_VISIBLE_ONLY | BSG_RENDER_FLAG_PAYLOAD_PREPARE,
@@ -1220,10 +1232,12 @@ ged_draw_foreach_visible_view_db_object_record_mode(
 
 
 void
-ged_draw_foreach_visible_view_record(struct bsg_view *v,
+ged_draw_foreach_visible_view_record(void *view_ctx,
 				     ged_draw_view_db_object_record_cb cb,
 				     void *userdata)
 {
+    struct bsg_view *v = (struct bsg_view *)view_ctx;
+
     _ged_draw_foreach_view_export_record(v, BSG_EXPORT_QUERY_VISIBLE_ONLY,
 	    BSG_RENDER_FLAG_VISIBLE_ONLY | BSG_RENDER_FLAG_PAYLOAD_PREPARE,
 	    NULL, BSG_EXPORT_DRAW_MODE_ANY, cb, userdata);

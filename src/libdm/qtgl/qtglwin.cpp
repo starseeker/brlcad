@@ -22,10 +22,12 @@
  */
 
 #include "qtglwin.h"
+#include "QgLegacyViewDm.h"
+#include "qtcad/QgGL.h"
 
-QgGLWin::QgGLWin(struct fb *fbp)
+QgGLWin::QgGLWin(qg_legacy_fb *fbp)
 {
-    canvas = new QgGL(this, fbp);
+    canvas = QgCanvasBridgeFactory::create_qtgl(this, fbp);
     this->setCentralWidget(canvas);
     canvas->setMinimumSize(1,1);
 }
@@ -40,4 +42,3 @@ QgGLWin::QgGLWin(struct fb *fbp)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-

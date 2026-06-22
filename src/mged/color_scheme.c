@@ -298,13 +298,13 @@ cs_set_bg(const struct bu_structparse *UNUSED(sdp),
 		  color_scheme->cs_bg[1],
 		  color_scheme->cs_bg[2]);
 
-    // set_curr_dm will update ged_gvp, but we don't
-    // want that here - stash the current ged_gvp
+    // set_curr_dm will update the active GED view, but we don't
+    // want that here - stash the current active-view
     // state.  Need to rethink how we're managing
     // the notion of the "current" dm in situations
     // where we act on all dm instances.  set_curr_dm
     // should probably be replaced with get_next_dm
-    struct bsg_view *cbv = s->gedp->ged_gvp;
+    void *cbv = ged_view_active_ctx(s->gedp);
     for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
 	struct mged_dm *m_dmp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
 	if (m_dmp->dm_color_scheme == color_scheme) {
@@ -316,7 +316,7 @@ cs_set_bg(const struct bu_structparse *UNUSED(sdp),
 
     bu_vls_free(&vls);
     set_curr_dm(s, save_curr_m_dmp);
-    s->gedp->ged_gvp = cbv;
+    ged_view_active_ctx_set(s->gedp, cbv);
 }
 
 

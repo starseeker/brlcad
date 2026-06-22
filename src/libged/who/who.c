@@ -128,7 +128,7 @@ ged_who_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     if (list_real)
-	who_append_real_paths(gedp, gedp->ged_gvp);
+	who_append_real_paths(gedp, (struct bsg_view *)ged_view_active_ctx(gedp));
 
     if (list_overlays) {
 	struct who_record_ctx ctx = {gedp};

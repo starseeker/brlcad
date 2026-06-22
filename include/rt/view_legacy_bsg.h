@@ -37,6 +37,7 @@ __BEGIN_DECLS
 
 struct bsg_view;
 struct rt_view_pick_result_bsg;
+struct rt_view_snap_result_bsg;
 struct bsg_snap_result;
 struct db_i;
 struct directory;
@@ -48,11 +49,47 @@ struct bu_data_hash_state;
 struct bu_ptbl;
 struct bu_vls;
 
+RT_EXPORT extern int
+rt_view_context_is_bsg(const void *ctx);
+
+RT_EXPORT extern int
+rt_view_context_width_from_bsg(const void *ctx);
+
+RT_EXPORT extern int
+rt_view_context_height_from_bsg(const void *ctx);
+
+RT_EXPORT extern int
+rt_view_context_dimensions_set_bsg(void *ctx, int width, int height);
+
+RT_EXPORT extern int
+rt_view_context_refresh_request_bsg(void *ctx, uint32_t flags);
+
+RT_EXPORT extern void *
+rt_view_display_manager_from_bsg(const struct bsg_view *v);
+
+RT_EXPORT extern int
+rt_view_display_manager_set_bsg(struct bsg_view *v, void *dmp);
+
 typedef void (*rt_view_bounds_update_callback_bsg_t)(struct bsg_view *);
+typedef void (*rt_view_update_callback_bsg_t)(struct bsg_view *, void *);
 typedef void (*rt_view_selection_path_callback_bsg_t)(const char *path, void *data);
 typedef int (*rt_view_polygon_record_callback_bsg_t)(rt_view_polygon_ref ref,
 						     const struct rt_view_polygon_record *record,
 						     void *data);
+
+RT_EXPORT extern int
+rt_view_update_callback_set_bsg(struct bsg_view *v,
+				rt_view_update_callback_bsg_t callback,
+				void *data);
+
+RT_EXPORT extern int
+rt_view_edit_matrix_set_bsg(struct bsg_view *v, matp_t edit_mat);
+
+RT_EXPORT extern int
+rt_view_edit_matrix_clear_bsg(struct bsg_view *v);
+
+RT_EXPORT extern uint64_t
+rt_view_frame_revision_from_bsg(const struct bsg_view *v);
 
 enum rt_view_knobs_category_bsg {
     RT_VIEW_KNOBS_ALL_BSG = 0,
@@ -303,6 +340,40 @@ rt_view_snap_candidates_bsg(struct bsg_view *v,
 			    unsigned long long kinds,
 			    struct bsg_snap_result *out);
 
+RT_EXPORT extern struct rt_view_snap_result_bsg *
+rt_view_snap_result_create_bsg(void);
+
+RT_EXPORT extern void
+rt_view_snap_result_free_bsg(struct rt_view_snap_result_bsg *result);
+
+RT_EXPORT extern size_t
+rt_view_snap_result_count_bsg(const struct rt_view_snap_result_bsg *result);
+
+RT_EXPORT extern int
+rt_view_snap_result_point_bsg(const struct rt_view_snap_result_bsg *result,
+			      size_t index,
+			      point_t point_out);
+
+RT_EXPORT extern fastf_t
+rt_view_snap_result_distance_bsg(const struct rt_view_snap_result_bsg *result,
+				 size_t index);
+
+RT_EXPORT extern unsigned long long
+rt_view_snap_result_kind_bsg(const struct rt_view_snap_result_bsg *result,
+			     size_t index);
+
+RT_EXPORT extern int
+rt_view_snap_result_source_path_bsg(const struct rt_view_snap_result_bsg *result,
+				    size_t index,
+				    struct bu_vls *path_out);
+
+RT_EXPORT extern int
+rt_view_snap_candidates_result_bsg(struct bsg_view *v,
+				   point_t sample,
+				   double tol,
+				   unsigned long long kinds,
+				   struct rt_view_snap_result_bsg *out);
+
 RT_EXPORT extern int
 rt_view_snap_point_2d_bsg(struct bsg_view *v,
 			  fastf_t *vx,
@@ -311,6 +382,12 @@ rt_view_snap_point_2d_bsg(struct bsg_view *v,
 
 RT_EXPORT extern int
 rt_view_snap_grid_2d_bsg(struct bsg_view *v, fastf_t *vx, fastf_t *vy);
+
+RT_EXPORT extern int
+rt_view_measure_candidates_bsg(struct bsg_view *v,
+			       point_t a,
+			       point_t b,
+			       struct rt_view_measure_result *out);
 
 RT_EXPORT extern struct rt_view_pick_result_bsg *
 rt_view_pick_point_bsg(struct bsg_view *v, int x, int y, int first_only);
@@ -442,8 +519,20 @@ rt_view_is_independent_bsg(const struct bsg_view *v);
 RT_EXPORT extern bsg_scene_ref
 rt_view_independent_scope_ref_bsg(struct bsg_view *v, int create);
 
+RT_EXPORT extern int
+rt_view_independent_scope_is_null_bsg(struct bsg_view *v, int create);
+
 RT_EXPORT extern void
 rt_view_independent_scope_destroy_bsg(struct bsg_view *v);
+
+RT_EXPORT extern int
+rt_view_scene_attached_bsg(const struct bsg_view *v);
+
+RT_EXPORT extern int
+rt_view_scene_anchor_ensure_bsg(struct bsg_view *v);
+
+RT_EXPORT extern int
+rt_view_scene_shared_bsg(const struct bsg_view *a, const struct bsg_view *b);
 
 RT_EXPORT extern void
 rt_view_init_copy_bsg(struct bsg_view *dest,
@@ -610,6 +699,58 @@ rt_view_snap_lines_from_bsg(const struct bsg_view *v);
 RT_EXPORT extern int
 rt_view_snap_lines_set_bsg(struct bsg_view *v, int enabled);
 
+RT_EXPORT extern int
+rt_view_feature_ref_is_null_bsg(rt_view_feature_ref ref);
+
+RT_EXPORT extern int
+rt_view_edit_preview_publish_event_bsg(struct bsg_view *v,
+				       rt_view_feature_ref feature,
+				       enum rt_view_edit_preview_event event,
+				       const char *source_path);
+
+RT_EXPORT extern rt_view_feature_ref
+rt_view_feature_overlay_ensure_bsg(struct bsg_view *v,
+				   const char *name,
+				   const void *owner,
+				   void *preview_ctx,
+				   const struct rt_view_edit_preview_callbacks *callbacks,
+				   const char *source_path);
+
+RT_EXPORT extern rt_view_feature_ref
+rt_view_feature_label_ensure_bsg(struct bsg_view *v,
+				 const char *name,
+				 const void *owner);
+
+RT_EXPORT extern int
+rt_view_feature_remove_bsg(struct bsg_view *v, const char *name);
+
+RT_EXPORT extern void
+rt_view_feature_set_view_bsg(rt_view_feature_ref ref, struct bsg_view *v);
+
+RT_EXPORT extern void
+rt_view_feature_set_visible_bsg(rt_view_feature_ref ref, int visible);
+
+RT_EXPORT extern void
+rt_view_feature_set_color_bsg(rt_view_feature_ref ref, int r, int g, int b);
+
+RT_EXPORT extern int
+rt_view_feature_touch_bsg(rt_view_feature_ref ref);
+
+RT_EXPORT extern int
+rt_view_feature_labels_replace_bsg(rt_view_feature_ref ref,
+				   const struct rt_view_feature_label *labels,
+				   size_t label_count);
+
+RT_EXPORT extern int
+rt_view_feature_points_replace_bsg(rt_view_feature_ref ref,
+				   enum rt_view_feature_family family,
+				   const point_t *points,
+				   const int *cmds,
+				   size_t point_count);
+
+RT_EXPORT extern int
+rt_view_feature_clear_geometry_bsg(rt_view_feature_ref ref);
+
 RT_EXPORT extern rt_view_polygon_ref
 rt_view_polygon_create_bsg(struct bsg_view *v, int type, point_t *fp);
 
@@ -708,7 +849,8 @@ RT_EXPORT extern unsigned long long
 rt_view_snap_kind_mask_from_bsg(const struct bsg_view *v);
 
 RT_EXPORT extern int
-rt_view_snap_exclude_feature_set_bsg(struct bsg_view *v, bsg_feature_ref ref);
+rt_view_snap_exclude_feature_set_bsg(struct bsg_view *v,
+				     rt_view_feature_ref ref);
 
 RT_EXPORT extern int
 rt_view_snap_exclude_feature_clear_bsg(struct bsg_view *v);

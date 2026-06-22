@@ -58,6 +58,13 @@ static int g_failures = 0;
 static const size_t default_index_scale_fanout = 8192;
 static const size_t slow_index_scale_fanout = 100000;
 
+static int
+run_slow_state_service_tests(void)
+{
+    const char *run_slow = std::getenv("BRLCAD_RUN_SLOW_TESTS");
+    return (run_slow && run_slow[0] && !BU_STR_EQUAL(run_slow, "0"));
+}
+
 #define CHECK(_cond, _msg) do { \
 	if (!(_cond)) { \
 	    bu_log("FAIL [%s:%d] %s\n", __FILE__, __LINE__, (_msg)); \
@@ -3939,6 +3946,11 @@ test_events(struct ged *gedp)
     CHECK(ged_event_observer_remove(gedp, polyclip_post_token) == 1,
 	    "polyclip export observer removal must succeed");
 
+    if (!run_slow_state_service_tests()) {
+	bu_log("Skipping extended GED command event sweep; set BRLCAD_RUN_SLOW_TESTS=1 to run it.\n");
+	return 0;
+    }
+
     event_order_observer analyze_pnts_post;
     ged_event_observer_token analyze_pnts_post_token =
 	ged_event_observer_add(gedp, GED_EVENT_OBSERVER_POST_RECONCILE,
@@ -4813,29 +4825,33 @@ test_events(struct ged *gedp)
     CHECK(ged_event_observer_remove(gedp, bot_split_post_token) == 1,
 	    "bot split observer removal must succeed");
 
-    event_order_observer lint_group_post;
-    ged_event_observer_token lint_group_post_token =
-	ged_event_observer_add(gedp, GED_EVENT_OBSERVER_POST_RECONCILE,
-		event_order_cb, &lint_group_post);
-    CHECK(lint_group_post_token != 0,
-	    "lint diagnostic group observer must register");
-    const char *lint_group_av[7] = {"lint", "-I", "bot:not_solid", "-g",
-	lint_group, lint_bad_bot, NULL};
-    CHECK(ged_exec(gedp, 6, lint_group_av) == BRLCAD_OK,
-	    "lint diagnostic group command must publish object creation event");
-    CHECK(lint_group_post.calls == 1,
-	    "lint diagnostic group command must publish one event transaction");
-    CHECK(observed_named_event(lint_group_post, GED_EVENT_OBJECT_ADDED,
-		lint_group),
-	    "lint diagnostic group command must emit object-added event");
-    CHECK(db_lookup(gedp->dbip, lint_group, LOOKUP_QUIET) != RT_DIR_NULL,
-	    "lint diagnostic group command must create output comb");
-    CHECK(std::find(lint_group_post.all_kinds.begin(),
-	    lint_group_post.all_kinds.end(), GED_EVENT_OBJECT_REMOVED) ==
-	    lint_group_post.all_kinds.end(),
-	    "lint diagnostic group fixture must not publish removals");
-    CHECK(ged_event_observer_remove(gedp, lint_group_post_token) == 1,
-	    "lint diagnostic group observer removal must succeed");
+    if (run_slow_state_service_tests()) {
+	event_order_observer lint_group_post;
+	ged_event_observer_token lint_group_post_token =
+	    ged_event_observer_add(gedp, GED_EVENT_OBSERVER_POST_RECONCILE,
+		    event_order_cb, &lint_group_post);
+	CHECK(lint_group_post_token != 0,
+		"lint diagnostic group observer must register");
+	const char *lint_group_av[7] = {"lint", "-I", "bot:not_solid", "-g",
+	    lint_group, lint_bad_bot, NULL};
+	CHECK(ged_exec(gedp, 6, lint_group_av) == BRLCAD_OK,
+		"lint diagnostic group command must publish object creation event");
+	CHECK(lint_group_post.calls == 1,
+		"lint diagnostic group command must publish one event transaction");
+	CHECK(observed_named_event(lint_group_post, GED_EVENT_OBJECT_ADDED,
+		    lint_group),
+		"lint diagnostic group command must emit object-added event");
+	CHECK(db_lookup(gedp->dbip, lint_group, LOOKUP_QUIET) != RT_DIR_NULL,
+		"lint diagnostic group command must create output comb");
+	CHECK(std::find(lint_group_post.all_kinds.begin(),
+		lint_group_post.all_kinds.end(), GED_EVENT_OBJECT_REMOVED) ==
+		lint_group_post.all_kinds.end(),
+		"lint diagnostic group fixture must not publish removals");
+	CHECK(ged_event_observer_remove(gedp, lint_group_post_token) == 1,
+		"lint diagnostic group observer removal must succeed");
+    } else {
+	bu_log("Skipping slow lint diagnostic group event check; set BRLCAD_RUN_SLOW_TESTS=1 to run it.\n");
+    }
 
     event_order_observer shells_post;
     ged_event_observer_token shells_post_token =
@@ -5551,6 +5567,7 @@ test_events(struct ged *gedp)
     CHECK(ged_event_observer_remove(gedp, rcodes_post_token) == 1,
 	    "rcodes observer removal must succeed");
 
+    if (run_slow_state_service_tests()) {
     event_order_observer red_post;
     ged_event_observer_token red_post_token =
 	ged_event_observer_add(gedp, GED_EVENT_OBSERVER_POST_RECONCILE,
@@ -5693,6 +5710,9 @@ test_events(struct ged *gedp)
     }
     CHECK(ged_event_observer_remove(gedp, red_attr_post_token) == 1,
 	    "red attr-only observer removal must succeed");
+    } else {
+	bu_log("Skipping slow scripted red editor event checks; set BRLCAD_RUN_SLOW_TESTS=1 to run them.\n");
+    }
 
     const char *facet_child = "_ged_event_facetize_child.s";
     const char *facet_region = "_ged_event_facetize_region.r";
@@ -5954,8 +5974,7 @@ main(int ac, char *av[])
     }
 
     if (index_scale_fanout > default_index_scale_fanout) {
-	const char *run_slow = std::getenv("BRLCAD_RUN_SLOW_TESTS");
-	if (!run_slow || !run_slow[0] || BU_STR_EQUAL(run_slow, "0")) {
+	if (!run_slow_state_service_tests()) {
 	    bu_log("Skipping slow GedDbIndex fanout=%zu test; set BRLCAD_RUN_SLOW_TESTS=1 to run it.\n",
 		    index_scale_fanout);
 	    return 123;

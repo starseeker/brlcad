@@ -27,12 +27,13 @@
 static int
 do_zoom(struct ged *gedp, double sf)
 {
-    fastf_t view_scale = rt_view_scale_from_bsg(gedp->ged_gvp) / sf;
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+    fastf_t view_scale = rt_view_scale_from_bsg(v) / sf;
     if (view_scale < RT_VIEW_MIN_SCALE)
 	view_scale = RT_VIEW_MIN_SCALE;
 
-    rt_view_scale_set_bsg(gedp->ged_gvp, view_scale);
-    rt_view_update_bsg(gedp->ged_gvp);
+    rt_view_scale_set_bsg(v, view_scale);
+    rt_view_update_bsg(v);
 
     return BRLCAD_OK;
 }

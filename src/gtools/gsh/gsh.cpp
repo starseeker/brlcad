@@ -48,6 +48,7 @@
 #endif
 
 #include "ged.h"
+#include "ged/bsg_ged_draw.h"
 #include "ged/db_index.h"
 
 #define DEFAULT_GSH_PROMPT "g> "
@@ -164,11 +165,11 @@ bool
 DisplayHash::hash(struct ged *gedp, bool db_index_check, bool qged_display_mode)
 {
     d = 0; v = 0; l = 0; g = 0;
-    struct bsg_view *bv = gedp->ged_gvp;
+    struct bsg_view *bv = (struct bsg_view *)ged_view_active_ctx(gedp);
     if (!bv)
 	return false;
 
-    struct dm *dmp = (struct dm *)bv->dmp;
+    struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(bv);
     if (!dmp)
 	return false;
 
@@ -198,11 +199,11 @@ DisplayHash::hash(struct ged *gedp, bool db_index_check, bool qged_display_mode)
 void
 DisplayHash::dirty(struct ged *gedp, const DisplayHash &o)
 {
-    struct bsg_view *bv = gedp->ged_gvp;
+    struct bsg_view *bv = (struct bsg_view *)ged_view_active_ctx(gedp);
     if (!bv)
 	return;
 
-    struct dm *dmp = (struct dm *)bv->dmp;
+    struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(bv);
     if (!dmp)
 	return;
 
@@ -406,12 +407,13 @@ GshState::GshState()
 GshState::~GshState()
 {
 #ifdef USE_DM
-    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, i);
-	if (v->dmp) {
-	    dm_close((struct dm *)v->dmp);
-	    v->dmp = NULL;
+	struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(v);
+	if (dmp) {
+	    dm_close(dmp);
+	    rt_view_display_manager_set_bsg(v, NULL);
 	}
     }
 #endif
@@ -578,8 +580,8 @@ GshState::view_update()
 
     hashes.dirty(gedp, prev_hash);
 
-    struct bsg_view *v = gedp->ged_gvp;
-    struct dm *dmp = (struct dm *)v->dmp;
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+    struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(v);
     if (dm_get_native_repaint_pending(dmp)) {
 	if (qged_display_mode) {
 	    unsigned char *dm_bg1;

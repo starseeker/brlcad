@@ -43,7 +43,6 @@
 #include "bsg/draw_source.h"
 #include "bsg/field.h"
 #include "bsg/geometry.h"
-#include "bsg/interaction.h"
 #include "bsg/material.h"
 #include "bsg/node.h"
 #include "bsg/payload.h"
@@ -117,12 +116,12 @@ ged_draw_log(int UNUSED(level), const char *UNUSED(fmt), ...)
 #endif
 }
 
-bsg_draw_mode
+int
 ged_draw_default_mode(const struct ged *gedp)
 {
     if (!gedp || !gedp->i || !gedp->i->ged_gdp)
 	return BSG_DRAW_MODE_WIRE;
-    return (bsg_draw_mode)gedp->i->ged_gdp->gd_shaded_mode;
+    return gedp->i->ged_gdp->gd_shaded_mode;
 }
 
 unsigned long long

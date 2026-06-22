@@ -30,7 +30,7 @@
 #include "tcl.h"
 #include "vmath.h"
 #include "bu/malloc.h"
-#include "bsg/vlist.h"
+#include "bg/vlist.h"
 #include "dm.h"
 #include "../include/private.h"
 
@@ -192,7 +192,7 @@ txt_drawPoints3D(struct dm *UNUSED(dmp), int UNUSED(npoints), point_t *UNUSED(po
 
 
 static int
-txt_drawVList(struct dm *UNUSED(dmp), bsg_vlist *UNUSED(vp))
+txt_drawVList(struct dm *UNUSED(dmp), bg_vlist *UNUSED(vp))
 {
     bu_log("drawVList called\n");
     return 0;
@@ -200,7 +200,7 @@ txt_drawVList(struct dm *UNUSED(dmp), bsg_vlist *UNUSED(vp))
 
 
 static int
-txt_drawVListHiddenLine(struct dm *UNUSED(dmp), bsg_vlist *UNUSED(vp))
+txt_drawVListHiddenLine(struct dm *UNUSED(dmp), bg_vlist *UNUSED(vp))
 {
     bu_log("drawVListHiddenLine called\n");
     return 0;
@@ -208,7 +208,7 @@ txt_drawVListHiddenLine(struct dm *UNUSED(dmp), bsg_vlist *UNUSED(vp))
 
 
 static int
-txt_draw(struct dm *dmp, bsg_vlist *(*callback_function)(void *), void **data)
+txt_draw(struct dm *dmp, bg_vlist *(*callback_function)(void *), void **data)
 {
     bu_log("draw called\n");
     return dmp == NULL && callback_function == NULL && data == NULL;

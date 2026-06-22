@@ -42,7 +42,10 @@ _ged_do_rot(struct ged *gedp,
 	    int (*func)(struct ged *, char, char, mat_t))
 {
     mat_t temp1, temp2;
-    char rotate_about = rt_view_rotate_about_from_bsg(gedp->ged_gvp);
+    struct bsg_view *gvp = (struct bsg_view *)ged_view_active_ctx(gedp);
+    if (!gvp)
+	return BRLCAD_ERROR;
+    char rotate_about = rt_view_rotate_about_from_bsg(gvp);
 
     if (func != (int (*)(struct ged *, char, char, mat_t))0)
 	return (*func)(gedp, coord, rotate_about, rmat);
@@ -51,7 +54,7 @@ _ged_do_rot(struct ged *gedp,
 	case 'm': {
 	    /* transform model rotations into view rotations */
 	    mat_t view_rotation;
-	    rt_view_rotation_from_bsg(view_rotation, gedp->ged_gvp);
+	    rt_view_rotation_from_bsg(view_rotation, gvp);
 	    bn_mat_inv(temp1, view_rotation);
 	    bn_mat_mul(temp2, view_rotation, rmat);
 	    bn_mat_mul(rmat, temp2, temp1);
@@ -72,7 +75,7 @@ _ged_do_rot(struct ged *gedp,
 	point_t new_cent_view;
 	point_t new_cent_model;
 
-	rt_view_model2view_from_bsg(model2view, gedp->ged_gvp);
+	rt_view_model2view_from_bsg(model2view, gvp);
 
 	switch (rotate_about) {
 	    case 'e':
@@ -80,7 +83,7 @@ _ged_do_rot(struct ged *gedp,
 		break;
 	    case 'k': {
 		point_t keypoint;
-		rt_view_keypoint_from_bsg(keypoint, gedp->ged_gvp);
+		rt_view_keypoint_from_bsg(keypoint, gvp);
 		MAT4X3PNT(rot_pt, model2view, keypoint);
 		break;
 	    }
@@ -99,19 +102,19 @@ _ged_do_rot(struct ged *gedp,
 	/* Convert origin in new (viewchg) coords back to old view coords */
 	VSET(new_origin, 0.0, 0.0, 0.0);
 	MAT4X3PNT(new_cent_view, viewchginv, new_origin);
-	rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
+	rt_view_view2model_from_bsg(view2model, gvp);
 	MAT4X3PNT(new_cent_model, view2model, new_cent_view);
-	rt_view_center_vec_set_bsg(gedp->ged_gvp, new_cent_model);
+	rt_view_center_vec_set_bsg(gvp, new_cent_model);
     }
 
     /* pure rotation */
     {
 	mat_t view_rotation;
-	rt_view_rotation_from_bsg(view_rotation, gedp->ged_gvp);
+	rt_view_rotation_from_bsg(view_rotation, gvp);
 	bn_mat_mul2(rmat, view_rotation);
-	rt_view_rotation_set_bsg(gedp->ged_gvp, view_rotation);
+	rt_view_rotation_set_bsg(gvp, view_rotation);
     }
-    rt_view_update_bsg(gedp->ged_gvp);
+    rt_view_update_bsg(gvp);
 
     return BRLCAD_OK;
 }
@@ -122,11 +125,14 @@ _ged_do_slew(struct ged *gedp, vect_t svec)
 {
     point_t model_center;
     mat_t view2model;
+    struct bsg_view *gvp = (struct bsg_view *)ged_view_active_ctx(gedp);
+    if (!gvp)
+	return BRLCAD_ERROR;
 
-    rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
+    rt_view_view2model_from_bsg(view2model, gvp);
     MAT4X3PNT(model_center, view2model, svec);
-    rt_view_center_vec_set_bsg(gedp->ged_gvp, model_center);
-    rt_view_update_bsg(gedp->ged_gvp);
+    rt_view_center_vec_set_bsg(gvp, model_center);
+    rt_view_update_bsg(gvp);
 
     return BRLCAD_OK;
 }
@@ -141,6 +147,9 @@ _ged_do_tra(struct ged *gedp,
     point_t delta;
     point_t work;
     point_t vc, nvc;
+    struct bsg_view *gvp = (struct bsg_view *)ged_view_active_ctx(gedp);
+    if (!gvp)
+	return BRLCAD_ERROR;
 
     if (func != (int (*)(struct ged *, char, vect_t))0)
 	return (*func)(gedp, coord, tvec);
@@ -150,19 +159,19 @@ _ged_do_tra(struct ged *gedp,
 	    VSCALE(delta, tvec, -gedp->dbip->dbi_base2local);
 	    {
 		mat_t view_center;
-		rt_view_center_from_bsg(view_center, gedp->ged_gvp);
+		rt_view_center_from_bsg(view_center, gvp);
 		MAT_DELTAS_GET_NEG(vc, view_center);
 	    }
 	    break;
 	case 'v':
 	default:
 	    VSCALE(tvec, tvec, -2.0 * gedp->dbip->dbi_base2local *
-		    rt_view_inverse_size_from_bsg(gedp->ged_gvp));
+		    rt_view_inverse_size_from_bsg(gvp));
 	    {
 		mat_t view2model;
 		mat_t view_center;
-		rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
-		rt_view_center_from_bsg(view_center, gedp->ged_gvp);
+		rt_view_view2model_from_bsg(view2model, gvp);
+		rt_view_center_from_bsg(view_center, gvp);
 		MAT4X3PNT(work, view2model, tvec);
 		MAT_DELTAS_GET_NEG(vc, view_center);
 	    }
@@ -171,8 +180,8 @@ _ged_do_tra(struct ged *gedp,
     }
 
     VSUB2(nvc, vc, delta);
-    rt_view_center_vec_set_bsg(gedp->ged_gvp, nvc);
-    rt_view_update_bsg(gedp->ged_gvp);
+    rt_view_center_vec_set_bsg(gvp, nvc);
+    rt_view_update_bsg(gvp);
 
     return BRLCAD_OK;
 }
@@ -195,8 +204,9 @@ nmg_plot_eu(struct ged *gedp, struct edgeuse *es_eu, const struct bn_tol *tol)
 
     nmg_line_layer_around_eu(plot, es_eu, tab, 1, tol);
     int handled = ged_diagnostic_line_layer_publish(gedp, "nmg::_EU_", plot);
-    if (!handled && gedp->ged_gvp) {
-	(void)ged_draw_view_line_layer_builder_replace(gedp->ged_gvp,
+    struct bsg_view *gvp = (struct bsg_view *)ged_view_active_ctx(gedp);
+    if (!handled && gvp) {
+	(void)ged_draw_view_line_layer_builder_replace(gvp,
 		"nmg::_EU_", 0, plot);
     }
 

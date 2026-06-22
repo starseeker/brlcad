@@ -9,12 +9,10 @@
 #ifndef QGOBOLDRAWSYNC_H
 #define QGOBOLDRAWSYNC_H
 
-#include "qtcad/defines.h"
+#include "qtcad/QgLegacyView.h"
 
 class QgView;
 struct ged;
-struct ged_draw_transaction;
-struct ged_draw_transaction_result;
 
 /**
  * Synchronize one reconciled GED draw transaction into a QgView's Obol
@@ -26,8 +24,8 @@ struct ged_draw_transaction_result;
  * scene.  Returns non-zero when the Obol scene changed.
  */
 QTCAD_EXPORT int qg_obol_sync_draw_transaction(struct ged *gedp,
-	const struct ged_draw_transaction *txn,
-	const struct ged_draw_transaction_result *result,
+	const qg_legacy_view_draw_transaction *txn,
+	const qg_legacy_view_draw_transaction_result *result,
 	QgView *display);
 
 #endif /* QGOBOLDRAWSYNC_H */

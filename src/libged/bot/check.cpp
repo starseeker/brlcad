@@ -281,10 +281,10 @@ draw_edges(struct ged *gedp, struct rt_bot_internal *bot, int num_edges, int edg
 	VSET(points[curr_edge * 2 + 1], bot->vertices[p2*3], bot->vertices[p2*3+1], bot->vertices[p2*3+2]);
     }
 
-    if (gedp->ged_gvp) {
+    struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
+    if (view) {
 	struct bu_vls nroot = BU_VLS_INIT_ZERO;
 	bu_vls_sprintf(&nroot, "bot_check::%s", draw_name);
-	struct bsg_view *view = gedp->ged_gvp;
 	if (points && num_edges > 0) {
 	    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
 	    style.color_valid = 1;

@@ -84,7 +84,7 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
     int all_view_objs = 0;
     int print_help = 0;
     fastf_t scale = -1.0;
-    struct bsg_view *v = gedp->ged_gvp;
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
 
     struct bu_opt_desc d[5];
     BU_OPT(d[0], "h", "help",      "",        NULL,     &print_help, "Print help and exit");
@@ -105,7 +105,7 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
     argc = opt_ret;
 
     if (bu_vls_strlen(&cvls)) {
-	v = rt_view_set_find_view_bsg(&gedp->ged_views, bu_vls_cstr(&cvls));
+	v = (struct bsg_view *)ged_view_find_ctx(gedp, bu_vls_cstr(&cvls));
 	if (!v) {
 	    bu_vls_printf(gedp->ged_result_str, "Specified view %s not found\n", bu_vls_cstr(&cvls));
 	    bu_vls_free(&cvls);

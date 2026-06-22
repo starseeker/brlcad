@@ -87,10 +87,38 @@ compare_polygon_data(const struct bsg_polygon *op, const struct bsg_polygon *rp,
     }
 }
 
-static void
-compare_polygon_refs(bsg_polygon_ref orig, bsg_polygon_ref rt, const char *msg)
+static bsg_polygon_ref
+test_polygon_ref_to_bsg(rt_view_polygon_ref ref)
 {
-    compare_polygon_data(bsg_polygon_data(orig), bsg_polygon_data(rt), msg);
+    bsg_polygon_ref bsg_ref = { ref.token, ref.revision };
+    return bsg_ref;
+}
+
+static rt_view_polygon_ref
+test_polygon_ref_from_bsg(bsg_polygon_ref ref)
+{
+    rt_view_polygon_ref rt_ref = { ref.token, ref.revision };
+    return rt_ref;
+}
+
+static int
+test_polygon_ref_is_null(rt_view_polygon_ref ref)
+{
+    return bsg_polygon_ref_is_null(test_polygon_ref_to_bsg(ref));
+}
+
+static void
+compare_polygon_refs(bsg_polygon_ref orig, rt_view_polygon_ref rt, const char *msg)
+{
+    compare_polygon_data(bsg_polygon_data(orig),
+	    bsg_polygon_data(test_polygon_ref_to_bsg(rt)), msg);
+}
+
+static void
+compare_rt_polygon_refs(rt_view_polygon_ref orig, rt_view_polygon_ref rt, const char *msg)
+{
+    compare_polygon_data(bsg_polygon_data(test_polygon_ref_to_bsg(orig)),
+	    bsg_polygon_data(test_polygon_ref_to_bsg(rt)), msg);
 }
 
 static void
@@ -131,12 +159,13 @@ test_non_origin_plane_roundtrip(void)
     if (bsg_polygon_ref_is_null(pobj))
 	bu_exit(EXIT_FAILURE, "Failed to create non-origin polygon ref\n");
 
-    struct directory *odp = db_view_polygon_ref_to_sketch(wfp->dbip, "roundtrip.s", pobj);
+    struct directory *odp = db_view_polygon_ref_to_sketch(wfp->dbip, "roundtrip.s",
+	    test_polygon_ref_from_bsg(pobj));
     if (odp == RT_DIR_NULL)
 	bu_exit(EXIT_FAILURE, "Failed to write non-origin polygon ref to output database %s\n", ofile);
 
-    bsg_polygon_ref rtobj = db_sketch_to_view_polygon_ref("roundtrip_rt", wfp->dbip, odp, v);
-    if (bsg_polygon_ref_is_null(rtobj))
+    rt_view_polygon_ref rtobj = db_sketch_to_view_polygon_ref("roundtrip_rt", wfp->dbip, odp, v);
+    if (test_polygon_ref_is_null(rtobj))
 	bu_exit(EXIT_FAILURE, "Failed to recreate non-origin polygon ref from sketch\n");
 
     compare_polygon_refs(pobj, rtobj, "non-origin plane polygon roundtrip");
@@ -180,9 +209,9 @@ main(int argc, char *argv[])
     BU_GET(v, struct bsg_view);
     bsg_init(v, NULL);
 
-    bsg_polygon_ref pobj = db_sketch_to_view_polygon_ref("poly", dbip, dp, v);
+    rt_view_polygon_ref pobj = db_sketch_to_view_polygon_ref("poly", dbip, dp, v);
 
-    if (bsg_polygon_ref_is_null(pobj))
+    if (test_polygon_ref_is_null(pobj))
 	bu_exit(EXIT_FAILURE, "Failed to create polygon ref from poly.s\n");
 
     char ofile[MAXPATHLEN];
@@ -195,11 +224,11 @@ main(int argc, char *argv[])
     if (odp == RT_DIR_NULL)
 	bu_exit(EXIT_FAILURE, "Failed to write polygon ref to output database %s\n", ofile);
 
-    bsg_polygon_ref opobj = db_sketch_to_view_polygon_ref("poly_out", wfp->dbip, odp, v);
-    if (bsg_polygon_ref_is_null(opobj))
+    rt_view_polygon_ref opobj = db_sketch_to_view_polygon_ref("poly_out", wfp->dbip, odp, v);
+    if (test_polygon_ref_is_null(opobj))
 	bu_exit(EXIT_FAILURE, "Failed to create polygon ref from exported poly.s\n");
 
-    compare_polygon_refs(pobj, opobj, "imported sketch polygon roundtrip");
+    compare_rt_polygon_refs(pobj, opobj, "imported sketch polygon roundtrip");
 
     db_close(dbip);
     db_close(wfp->dbip);

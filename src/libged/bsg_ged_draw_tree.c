@@ -39,7 +39,6 @@
 #include "bsg/draw_source.h"
 #include "bsg/field.h"
 #include "bsg/geometry.h"
-#include "bsg/interaction.h"
 #include "bsg/material.h"
 #include "bsg/scene_builder.h"
 #include "bsg/scene_object.h"
@@ -1521,8 +1520,10 @@ ged_draw_clear(struct ged *gedp)
 
 
 int
-ged_draw_clear_view(struct ged *gedp, struct bsg_view *v)
+ged_draw_clear_view(struct ged *gedp, void *view_ctx)
 {
+    struct bsg_view *v = (struct bsg_view *)view_ctx;
+
     if (!gedp)
 	return 0;
 

@@ -92,6 +92,7 @@ ged_rtwizard_core(struct ged *gedp, int argc, const char *argv[])
     char **gd_rt_cmd = NULL;
     int gd_rt_cmd_len = 0;
     int ret = BRLCAD_OK;
+    struct bsg_view *v;
 
     const char *bin;
     char rtscript[256] = {0};
@@ -104,7 +105,8 @@ ged_rtwizard_core(struct ged *gedp, int argc, const char *argv[])
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    perspective = rt_view_perspective_from_bsg(gedp->ged_gvp);
+    v = (struct bsg_view *)ged_view_active_ctx(gedp);
+    perspective = rt_view_perspective_from_bsg(v);
     if (perspective > 0)
 	/* rtwizard --no_gui -perspective p -i db.g --viewsize size --orientation "A B C D" --eye_pt "X Y Z" */
 	args = argc + 1 + 1 + 1 + 2 + 2 + 2 + 2 + 2;
@@ -122,8 +124,8 @@ ged_rtwizard_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     _ged_rt_set_eye_model(gedp, eye_model);
-    rt_view_info_from_bsg(&view_info, gedp->ged_gvp);
-    rt_view_orientation_quat_from_bsg(quat, gedp->ged_gvp);
+    rt_view_info_from_bsg(&view_info, v);
+    rt_view_orientation_quat_from_bsg(quat, v);
 
     bu_vls_printf(&size_vls, "%.15e", view_info.size);
     bu_vls_printf(&orient_vls, "%.15e %.15e %.15e %.15e", V4ARGS(quat));

@@ -59,15 +59,16 @@ _brep_pick_ray_from_view(struct _ged_brep_ipick *gib, point_t origin, vect_t dir
 	double diag_len)
 {
     struct ged *gedp = gib->gb->gedp;
-    if (!gedp->ged_gvp) {
+    struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
+    if (!view) {
 	bu_vls_printf(gib->vls, "no viewport available and no ray specified\n");
 	return BRLCAD_ERROR;
     }
 
     mat_t view_center;
     mat_t view_rotation;
-    rt_view_center_from_bsg(view_center, gedp->ged_gvp);
-    rt_view_rotation_from_bsg(view_rotation, gedp->ged_gvp);
+    rt_view_center_from_bsg(view_center, view);
+    rt_view_rotation_from_bsg(view_rotation, view);
     MAT_DELTAS_GET_NEG(origin, view_center);
     VSCALE(origin, origin, gedp->dbip->dbi_base2local);
     VMOVEN(dir, view_rotation + 8, 3);

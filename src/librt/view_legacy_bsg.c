@@ -28,9 +28,15 @@
 
 #include "bg/plane.h"
 #include "bn/qmath.h"
+#include "bu/malloc.h"
+#include "bu/ptbl.h"
+#include "bu/vls.h"
 #include "bsg/faceplate.h"
+#include "bsg/feature.h"
 #include "bsg/interaction.h"
 #include "bsg/lod.h"
+#include "bsg/measure.h"
+#include "bsg/node.h"
 #include "bsg/pick.h"
 #include "bsg/polygon.h"
 #include "bsg/selection.h"
@@ -44,6 +50,98 @@
 
 struct bsg_mesh_lod *
 _rt_mesh_lod_bsg(struct rt_mesh_lod *lod);
+
+int
+rt_view_context_is_bsg(const void *ctx)
+{
+    const struct bsg_view *v = (const struct bsg_view *)ctx;
+    return (v && v->magic == BSG_VIEW_MAGIC) ? 1 : 0;
+}
+
+int
+rt_view_context_width_from_bsg(const void *ctx)
+{
+    return rt_view_width_from_bsg((const struct bsg_view *)ctx);
+}
+
+int
+rt_view_context_height_from_bsg(const void *ctx)
+{
+    return rt_view_height_from_bsg((const struct bsg_view *)ctx);
+}
+
+int
+rt_view_context_dimensions_set_bsg(void *ctx, int width, int height)
+{
+    return rt_view_dimensions_set_bsg((struct bsg_view *)ctx, width, height);
+}
+
+int
+rt_view_context_refresh_request_bsg(void *ctx, uint32_t flags)
+{
+    struct bsg_view *v = (struct bsg_view *)ctx;
+    if (!v)
+	return 0;
+
+    bsg_view_refresh_request(v, flags);
+    return 1;
+}
+
+void *
+rt_view_display_manager_from_bsg(const struct bsg_view *v)
+{
+    return v ? v->dmp : NULL;
+}
+
+int
+rt_view_display_manager_set_bsg(struct bsg_view *v, void *dmp)
+{
+    if (!v)
+	return 0;
+
+    v->dmp = dmp;
+    return 1;
+}
+
+int
+rt_view_update_callback_set_bsg(struct bsg_view *v,
+				rt_view_update_callback_bsg_t callback,
+				void *data)
+{
+    if (!v)
+	return 0;
+
+    if (callback && !v->callbacks) {
+	BU_GET(v->callbacks, struct bu_ptbl);
+	bu_ptbl_init(v->callbacks, 8, "rt view BSG callbacks");
+    }
+
+    v->gv_callback = callback;
+    v->gv_clientData = data;
+    return 1;
+}
+
+int
+rt_view_edit_matrix_set_bsg(struct bsg_view *v, matp_t edit_mat)
+{
+    if (!v)
+	return 0;
+
+    v->gv_edit_mat = edit_mat;
+    return 1;
+}
+
+int
+rt_view_edit_matrix_clear_bsg(struct bsg_view *v)
+{
+    return rt_view_edit_matrix_set_bsg(v, NULL);
+}
+
+uint64_t
+rt_view_frame_revision_from_bsg(const struct bsg_view *v)
+{
+    return v ? v->gv_frame_rev : 0;
+}
 
 void
 rt_view_info_from_bsg(struct rt_view_info *info, const struct bsg_view *v)
@@ -1034,6 +1132,122 @@ rt_view_snap_candidates_bsg(struct bsg_view *v,
     return bsg_snap_candidates(v, sample, tol, (bsg_snap_kind_mask)kinds, out);
 }
 
+static struct bsg_snap_result *
+rt_view_snap_result_to_bsg(struct rt_view_snap_result_bsg *result)
+{
+    return (struct bsg_snap_result *)result;
+}
+
+static const struct bsg_snap_result *
+rt_view_snap_result_const_to_bsg(const struct rt_view_snap_result_bsg *result)
+{
+    return (const struct bsg_snap_result *)result;
+}
+
+struct rt_view_snap_result_bsg *
+rt_view_snap_result_create_bsg(void)
+{
+    struct bsg_snap_result *result = NULL;
+
+    BU_ALLOC(result, struct bsg_snap_result);
+    bsg_snap_result_init(result);
+    return (struct rt_view_snap_result_bsg *)result;
+}
+
+void
+rt_view_snap_result_free_bsg(struct rt_view_snap_result_bsg *result)
+{
+    struct bsg_snap_result *bsg_result = rt_view_snap_result_to_bsg(result);
+
+    if (!bsg_result)
+	return;
+
+    bsg_snap_result_free(bsg_result);
+    BU_PUT(bsg_result, struct bsg_snap_result);
+}
+
+size_t
+rt_view_snap_result_count_bsg(const struct rt_view_snap_result_bsg *result)
+{
+    const struct bsg_snap_result *bsg_result =
+	rt_view_snap_result_const_to_bsg(result);
+
+    return bsg_result ? bsg_result->sr_cnt : 0;
+}
+
+int
+rt_view_snap_result_point_bsg(const struct rt_view_snap_result_bsg *result,
+			      size_t index,
+			      point_t point_out)
+{
+    const struct bsg_snap_result *bsg_result =
+	rt_view_snap_result_const_to_bsg(result);
+
+    if (!bsg_result || !point_out || index >= bsg_result->sr_cnt)
+	return 0;
+
+    VMOVE(point_out, bsg_result->sr_candidates[index].sc_point);
+    return 1;
+}
+
+fastf_t
+rt_view_snap_result_distance_bsg(const struct rt_view_snap_result_bsg *result,
+				 size_t index)
+{
+    const struct bsg_snap_result *bsg_result =
+	rt_view_snap_result_const_to_bsg(result);
+
+    if (!bsg_result || index >= bsg_result->sr_cnt)
+	return 0.0;
+
+    return bsg_result->sr_candidates[index].sc_distance;
+}
+
+unsigned long long
+rt_view_snap_result_kind_bsg(const struct rt_view_snap_result_bsg *result,
+			     size_t index)
+{
+    const struct bsg_snap_result *bsg_result =
+	rt_view_snap_result_const_to_bsg(result);
+
+    if (!bsg_result || index >= bsg_result->sr_cnt)
+	return 0ULL;
+
+    return (unsigned long long)bsg_result->sr_candidates[index].sc_kind;
+}
+
+int
+rt_view_snap_result_source_path_bsg(const struct rt_view_snap_result_bsg *result,
+				    size_t index,
+				    struct bu_vls *path_out)
+{
+    const struct bsg_snap_result *bsg_result =
+	rt_view_snap_result_const_to_bsg(result);
+
+    if (!bsg_result || !path_out || index >= bsg_result->sr_cnt)
+	return 0;
+
+    bu_vls_sprintf(path_out, "%s",
+	    bu_vls_cstr(&bsg_result->sr_candidates[index].sc_source_path));
+    return 1;
+}
+
+int
+rt_view_snap_candidates_result_bsg(struct bsg_view *v,
+				   point_t sample,
+				   double tol,
+				   unsigned long long kinds,
+				   struct rt_view_snap_result_bsg *out)
+{
+    struct bsg_snap_result *bsg_out = rt_view_snap_result_to_bsg(out);
+
+    if (!bsg_out)
+	return 0;
+
+    return bsg_snap_candidates(v, sample, tol, (bsg_snap_kind_mask)kinds,
+			       bsg_out);
+}
+
 int
 rt_view_snap_point_2d_bsg(struct bsg_view *v,
 			  fastf_t *vx,
@@ -1050,6 +1264,39 @@ rt_view_snap_grid_2d_bsg(struct bsg_view *v, fastf_t *vx, fastf_t *vy)
 	return 0;
 
     return bsg_snap_grid_2d(v, vx, vy);
+}
+
+static void
+_rt_view_measure_from_bsg_result(struct rt_view_measure_result *dst,
+				 const struct bsg_measure_result *src)
+{
+    memset(dst, 0, sizeof(*dst));
+    if (!src)
+	return;
+
+    dst->distance = src->mr_distance;
+    dst->projection = src->mr_projection;
+    dst->normal_alignment = src->mr_normal_alignment;
+    dst->valid = src->mr_valid;
+}
+
+int
+rt_view_measure_candidates_bsg(struct bsg_view *v,
+			       point_t a,
+			       point_t b,
+			       struct rt_view_measure_result *out)
+{
+    struct bsg_measure_result bsg_result = {0.0, 0.0, 0.0, 0};
+    int ret = 0;
+
+    if (out)
+	memset(out, 0, sizeof(*out));
+    if (!out)
+	return 0;
+
+    ret = bsg_measure_candidates(v, a, b, &bsg_result);
+    _rt_view_measure_from_bsg_result(out, &bsg_result);
+    return ret;
 }
 
 static struct bsg_pick_result *
@@ -1462,10 +1709,46 @@ rt_view_independent_scope_ref_bsg(struct bsg_view *v, int create)
     return bsg_view_independent_scope_ref(v, create);
 }
 
+int
+rt_view_independent_scope_is_null_bsg(struct bsg_view *v, int create)
+{
+    return bsg_scene_ref_is_null(rt_view_independent_scope_ref_bsg(v, create));
+}
+
 void
 rt_view_independent_scope_destroy_bsg(struct bsg_view *v)
 {
     bsg_view_independent_scope_destroy(v);
+}
+
+int
+rt_view_scene_attached_bsg(const struct bsg_view *v)
+{
+    if (!v)
+	return 0;
+
+    return bsg_view_scene_attached(v);
+}
+
+int
+rt_view_scene_anchor_ensure_bsg(struct bsg_view *v)
+{
+    bsg_separator_ref root;
+
+    if (!v)
+	return 0;
+
+    root = bsg_view_scene_separator_ref(v, 1);
+    return !bsg_node_ref_is_null(bsg_separator_ref_as_node(root));
+}
+
+int
+rt_view_scene_shared_bsg(const struct bsg_view *a, const struct bsg_view *b)
+{
+    if (!a || !b)
+	return 0;
+
+    return bsg_view_scene_shared(a, b);
 }
 
 void
@@ -2010,6 +2293,311 @@ rt_view_snap_lines_set_bsg(struct bsg_view *v, int enabled)
 }
 
 static bsg_feature_ref
+rt_view_feature_ref_to_bsg(rt_view_feature_ref ref)
+{
+    bsg_feature_ref bsg_ref = {ref.token, ref.revision};
+    return bsg_ref;
+}
+
+static rt_view_feature_ref
+rt_view_feature_ref_from_bsg(bsg_feature_ref ref)
+{
+    rt_view_feature_ref rt_ref = {ref.token, ref.revision};
+    return rt_ref;
+}
+
+static enum bsg_feature_family
+rt_view_feature_family_to_bsg(enum rt_view_feature_family family)
+{
+    switch (family) {
+	case RT_VIEW_FEATURE_TRANSIENT_PREVIEW:
+	    return BSG_FEATURE_TRANSIENT_PREVIEW;
+	case RT_VIEW_FEATURE_UNKNOWN:
+	default:
+	    return BSG_FEATURE_UNKNOWN;
+    }
+}
+
+static bsg_edit_preview_op
+rt_view_edit_preview_event_to_bsg(enum rt_view_edit_preview_event event)
+{
+    switch (event) {
+	case RT_VIEW_EDIT_PREVIEW_BEGIN:
+	    return BSG_EDIT_PREVIEW_BEGIN;
+	case RT_VIEW_EDIT_PREVIEW_UPDATE:
+	    return BSG_EDIT_PREVIEW_UPDATE;
+	case RT_VIEW_EDIT_PREVIEW_COMMIT:
+	    return BSG_EDIT_PREVIEW_COMMIT;
+	case RT_VIEW_EDIT_PREVIEW_CANCEL:
+	    return BSG_EDIT_PREVIEW_CANCEL;
+	case RT_VIEW_EDIT_PREVIEW_REPLACE_SOURCE:
+	    return BSG_EDIT_PREVIEW_REPLACE_SOURCE;
+	case RT_VIEW_EDIT_PREVIEW_DISCARD:
+	    return BSG_EDIT_PREVIEW_DISCARD;
+	default:
+	    return BSG_EDIT_PREVIEW_UPDATE;
+    }
+}
+
+struct rt_view_edit_preview_callback_bridge {
+    void *preview_ctx;
+    struct rt_view_edit_preview_callbacks callbacks;
+};
+
+static void
+rt_view_edit_preview_bridge_free(void *bridge_ctx)
+{
+    if (bridge_ctx)
+	bu_free(bridge_ctx, "RT view edit preview callback bridge");
+}
+
+static uint64_t
+rt_view_edit_preview_bridge_revision(void *bridge_ctx)
+{
+    struct rt_view_edit_preview_callback_bridge *bridge =
+	(struct rt_view_edit_preview_callback_bridge *)bridge_ctx;
+    if (!bridge || !bridge->callbacks.revision_cb)
+	return 0;
+
+    return bridge->callbacks.revision_cb(bridge->preview_ctx);
+}
+
+static int
+rt_view_edit_preview_bridge_update(void *bridge_ctx, struct bsg_view *UNUSED(v))
+{
+    struct rt_view_edit_preview_callback_bridge *bridge =
+	(struct rt_view_edit_preview_callback_bridge *)bridge_ctx;
+    if (!bridge || !bridge->callbacks.update_cb)
+	return 0;
+
+    return bridge->callbacks.update_cb(bridge->preview_ctx);
+}
+
+static int
+rt_view_edit_preview_bridge_pick(void *bridge_ctx, struct bsg_view *UNUSED(v),
+				 int x, int y, void *pick_out)
+{
+    struct rt_view_edit_preview_callback_bridge *bridge =
+	(struct rt_view_edit_preview_callback_bridge *)bridge_ctx;
+    if (!bridge || !bridge->callbacks.pick_cb)
+	return 0;
+
+    return bridge->callbacks.pick_cb(bridge->preview_ctx, x, y, pick_out);
+}
+
+static int
+rt_view_edit_preview_callbacks_to_bsg(struct bsg_edit_preview_ops *ops,
+				      const struct rt_view_edit_preview_callbacks *callbacks,
+				      void *preview_ctx)
+{
+    if (!ops || !callbacks)
+	return 0;
+    if (!callbacks->revision_cb && !callbacks->update_cb &&
+	    !callbacks->pick_cb)
+	return 1;
+
+    struct rt_view_edit_preview_callback_bridge *bridge =
+	(struct rt_view_edit_preview_callback_bridge *)bu_calloc(1,
+		sizeof(struct rt_view_edit_preview_callback_bridge),
+		"RT view edit preview callback bridge");
+    bridge->preview_ctx = preview_ctx;
+    bridge->callbacks = *callbacks;
+
+    ops->preview_ctx = bridge;
+    ops->owns_preview_ctx = 1;
+    ops->revision_cb = callbacks->revision_cb ?
+	rt_view_edit_preview_bridge_revision : NULL;
+    ops->update_cb = callbacks->update_cb ?
+	rt_view_edit_preview_bridge_update : NULL;
+    ops->pick_cb = callbacks->pick_cb ?
+	rt_view_edit_preview_bridge_pick : NULL;
+    ops->free_cb = rt_view_edit_preview_bridge_free;
+    return 1;
+}
+
+int
+rt_view_feature_ref_is_null_bsg(rt_view_feature_ref ref)
+{
+    return bsg_feature_ref_is_null(rt_view_feature_ref_to_bsg(ref));
+}
+
+int
+rt_view_edit_preview_publish_event_bsg(struct bsg_view *v,
+				       rt_view_feature_ref feature,
+				       enum rt_view_edit_preview_event event,
+				       const char *source_path)
+{
+    struct bsg_interaction_record *record =
+	bsg_interaction_edit_preview_record(v, rt_view_feature_ref_to_bsg(feature),
+		rt_view_edit_preview_event_to_bsg(event), source_path);
+    if (!record)
+	return 0;
+
+    bsg_interaction_record_free(record);
+    return 1;
+}
+
+rt_view_feature_ref
+rt_view_feature_overlay_ensure_bsg(struct bsg_view *v,
+				   const char *name,
+				   const void *owner,
+				   void *preview_ctx,
+				   const struct rt_view_edit_preview_callbacks *callbacks,
+				   const char *source_path)
+{
+    if (!v || !name)
+	return RT_VIEW_FEATURE_REF_NULL;
+
+    bsg_feature_ref ref = bsg_feature_find(v, name);
+    if (bsg_feature_ref_is_null(ref)) {
+	ref = bsg_feature_create_overlay(v, name, 1 /* local */);
+	if (!bsg_feature_ref_is_null(ref)) {
+	    bsg_feature_overlay_register_owner(ref, owner,
+		    BSG_OVERLAY_ROLE_MODEL,
+		    BSG_OVERLAY_CLASS_EDIT_HANDLE,
+		    BSG_OVERLAY_LC_PER_TOOL,
+		    BSG_OVERLAY_ORDER_POST_TRANSPARENT,
+		    NULL, 0);
+
+	    if (callbacks) {
+		struct bsg_edit_preview_ops ops = BSG_EDIT_PREVIEW_OPS_INIT;
+		if (rt_view_edit_preview_callbacks_to_bsg(&ops, callbacks,
+			    preview_ctx)) {
+		    int attached = bsg_feature_edit_preview_attach(ref,
+			    preview_ctx, NULL, &ops);
+		    if (!attached && ops.owns_preview_ctx && ops.preview_ctx)
+			rt_view_edit_preview_bridge_free(ops.preview_ctx);
+		    rt_view_edit_preview_publish_event_bsg(v,
+			    rt_view_feature_ref_from_bsg(ref),
+			    RT_VIEW_EDIT_PREVIEW_BEGIN, source_path);
+		}
+	    }
+	}
+    }
+
+    return rt_view_feature_ref_from_bsg(ref);
+}
+
+rt_view_feature_ref
+rt_view_feature_label_ensure_bsg(struct bsg_view *v,
+				 const char *name,
+				 const void *owner)
+{
+    if (!v || !name)
+	return RT_VIEW_FEATURE_REF_NULL;
+
+    bsg_feature_ref ref = bsg_feature_find(v, name);
+    if (bsg_feature_ref_is_null(ref))
+	ref = bsg_feature_create_label(v, name, 1 /* local */);
+    if (!bsg_feature_ref_is_null(ref)) {
+	bsg_feature_overlay_register_owner(ref, owner,
+		BSG_OVERLAY_ROLE_MODEL,
+		BSG_OVERLAY_CLASS_EDIT_HANDLE,
+		BSG_OVERLAY_LC_PER_TOOL,
+		BSG_OVERLAY_ORDER_POST_TRANSPARENT,
+		NULL, 1);
+    }
+
+    return rt_view_feature_ref_from_bsg(ref);
+}
+
+int
+rt_view_feature_remove_bsg(struct bsg_view *v, const char *name)
+{
+    return (v && name) ? bsg_feature_remove(v, name) : 0;
+}
+
+void
+rt_view_feature_set_view_bsg(rt_view_feature_ref ref, struct bsg_view *v)
+{
+    if (!rt_view_feature_ref_is_null_bsg(ref))
+	bsg_feature_set_view(rt_view_feature_ref_to_bsg(ref), v);
+}
+
+void
+rt_view_feature_set_visible_bsg(rt_view_feature_ref ref, int visible)
+{
+    if (!rt_view_feature_ref_is_null_bsg(ref))
+	bsg_feature_set_visible(rt_view_feature_ref_to_bsg(ref), visible);
+}
+
+void
+rt_view_feature_set_color_bsg(rt_view_feature_ref ref, int r, int g, int b)
+{
+    if (!rt_view_feature_ref_is_null_bsg(ref))
+	bsg_feature_set_color(rt_view_feature_ref_to_bsg(ref), r, g, b);
+}
+
+int
+rt_view_feature_touch_bsg(rt_view_feature_ref ref)
+{
+    return rt_view_feature_ref_is_null_bsg(ref) ? 0 :
+	bsg_feature_edit_preview_touch(rt_view_feature_ref_to_bsg(ref));
+}
+
+int
+rt_view_feature_labels_replace_bsg(rt_view_feature_ref ref,
+				   const struct rt_view_feature_label *labels,
+				   size_t label_count)
+{
+    if (rt_view_feature_ref_is_null_bsg(ref))
+	return 0;
+    if (label_count && !labels)
+	return 0;
+
+    struct bsg_feature_label_data *bsg_labels = NULL;
+    if (label_count > 0) {
+	bsg_labels = (struct bsg_feature_label_data *)bu_calloc(label_count,
+		sizeof(struct bsg_feature_label_data),
+		"RT view feature labels");
+	for (size_t i = 0; i < label_count; i++) {
+	    struct bsg_feature_label_data init = BSG_FEATURE_LABEL_DATA_INIT;
+	    bsg_labels[i] = init;
+	    bsg_labels[i].text = labels[i].text;
+	    VMOVE(bsg_labels[i].point, labels[i].point);
+	    bsg_labels[i].color_valid = labels[i].color_valid;
+	    bsg_labels[i].color[0] = labels[i].color[0];
+	    bsg_labels[i].color[1] = labels[i].color[1];
+	    bsg_labels[i].color[2] = labels[i].color[2];
+	    bsg_labels[i].anchor = BSG_ANCHOR_AUTO;
+	}
+    }
+
+    int ret = bsg_feature_labels_replace(rt_view_feature_ref_to_bsg(ref),
+	    bsg_labels, label_count);
+    if (bsg_labels)
+	bu_free(bsg_labels, "RT view feature labels");
+    return ret;
+}
+
+int
+rt_view_feature_points_replace_bsg(rt_view_feature_ref ref,
+				   enum rt_view_feature_family family,
+				   const point_t *points,
+				   const int *cmds,
+				   size_t point_count)
+{
+    if (rt_view_feature_ref_is_null_bsg(ref))
+	return 0;
+
+    return bsg_feature_points_replace(rt_view_feature_ref_to_bsg(ref),
+	    rt_view_feature_family_to_bsg(family),
+	    point_count ? points : NULL,
+	    point_count ? cmds : NULL,
+	    point_count);
+}
+
+int
+rt_view_feature_clear_geometry_bsg(rt_view_feature_ref ref)
+{
+    if (rt_view_feature_ref_is_null_bsg(ref))
+	return 0;
+
+    return bsg_feature_points_replace(rt_view_feature_ref_to_bsg(ref),
+	    BSG_FEATURE_UNKNOWN, NULL, NULL, 0);
+}
+
+static bsg_feature_ref
 rt_view_polygon_ref_to_bsg(rt_view_polygon_ref ref)
 {
     bsg_feature_ref bsg_ref = {ref.token, ref.revision};
@@ -2264,7 +2852,7 @@ rt_view_polygon_import_sketch_bsg(const char *name, struct db_i *dbip,
     if (!name || !dbip || !dp || !v)
 	return RT_VIEW_POLYGON_REF_NULL;
 
-    return rt_view_polygon_ref_from_bsg(db_sketch_to_view_polygon_ref(name, dbip, dp, v));
+    return db_sketch_to_view_polygon_ref(name, dbip, dp, v);
 }
 
 struct directory *
@@ -2274,13 +2862,14 @@ rt_view_polygon_export_sketch_bsg(struct db_i *dbip, const char *name,
     if (!dbip || !name)
 	return NULL;
 
-    return db_view_polygon_ref_to_sketch(dbip, name, rt_view_polygon_ref_to_bsg(ref));
+    return db_view_polygon_ref_to_sketch(dbip, name, ref);
 }
 
 int
 rt_view_polygon_snap_exclude_set_bsg(struct bsg_view *v, rt_view_polygon_ref ref)
 {
-    return rt_view_snap_exclude_feature_set_bsg(v, rt_view_polygon_ref_to_bsg(ref));
+    rt_view_feature_ref feature_ref = {ref.token, ref.revision};
+    return rt_view_snap_exclude_feature_set_bsg(v, feature_ref);
 }
 
 int
@@ -2306,12 +2895,13 @@ rt_view_snap_kind_mask_from_bsg(const struct bsg_view *v)
 }
 
 int
-rt_view_snap_exclude_feature_set_bsg(struct bsg_view *v, bsg_feature_ref ref)
+rt_view_snap_exclude_feature_set_bsg(struct bsg_view *v,
+				     rt_view_feature_ref ref)
 {
     if (!v)
 	return 0;
 
-    bsg_view_snap_exclude_feature_set(v, ref);
+    bsg_view_snap_exclude_feature_set(v, rt_view_feature_ref_to_bsg(ref));
     return 1;
 }
 

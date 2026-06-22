@@ -29,12 +29,13 @@
  * the measured time includes the same per-frame overhead that production qged
  * experiences:
  *
- *   dm-swrast path: QgSW::paintEvent  → dm_draw_objs (Mesa OSMesa CPU path)
- *   dm-qtgl  path:  QgGL::paintGL     → dm_draw_objs (hardware OpenGL path)
+ *   dm-swrast path: QgSW::paintEvent  → qtcad DM draw bridge
+ *   dm-qtgl  path:  QgGL::paintGL     → qtcad DM draw bridge
  *
  * After each widget's DM is initialised by the first paint call, the timing
- * loop calls dm_draw_objs + dm_draw_end directly on the widget's dmp pointer,
- * bypassing the Qt repaint event overhead so we measure only the DM cost.
+ * loop calls dm_draw_objs + dm_draw_end through the retained test-only
+ * legacy-view bridge, bypassing the Qt repaint event overhead so we measure
+ * only the DM cost.
  *
  * The swrast section always runs (no display hardware required; uses Qt's
  * offscreen platform).  The qtgl section requires a working OpenGL context;
@@ -56,12 +57,9 @@
 #include <bu.h>
 #include "bu/opt.h"
 #include "bu/time.h"
-#include <rt/view_legacy_bsg.h>
-#define DM_WITH_RT
-#include <dm.h>
 #include <ged.h>
 
-#include "qtcad/QgLegacyViewBsg.h"
+#include "QgLegacyViewDm.h"
 #include "qtcad/QgSW.h"
 #ifdef BRLCAD_OPENGL
 #  include "qtcad/QgGL.h"
@@ -80,17 +78,25 @@ print_bench_result(const char *backend, int n, int64_t elapsed_us)
 }
 
 /* ------------------------------------------------------------------ */
+/* Test-only retained backend access.  Do not mirror this in public API. */
+static qg_legacy_dm *
+legacy_dm(qg_legacy_view *view)
+{
+    return qg_legacy_view_display_manager_get(view);
+}
+
+/* ------------------------------------------------------------------ */
 /* Set up GED for drawing: open file, bind the widget view, draw all.g */
 static struct ged *
-open_and_draw(const char *gfile, struct bsg_view *view)
+open_and_draw(const char *gfile, qg_legacy_view *view)
 {
     struct ged *gedp = ged_open("db", gfile, 1);
     if (!gedp)
 	return NULL;
     if (view) {
-	gedp->ged_gvp = view;
-	rt_view_set_add_view_bsg(&gedp->ged_views, view);
-	rt_view_unit_conversion_set_bsg(view, gedp->dbip->dbi_local2base,
+	qg_legacy_view_ged_active_set(gedp, view);
+	qg_legacy_view_ged_view_set_add(gedp, view);
+	qg_legacy_view_unit_conversion_set(view, gedp->dbip->dbi_local2base,
 	    gedp->dbip->dbi_base2local);
     }
 
@@ -168,7 +174,7 @@ main(int ac, char *av[])
 
     QgSW sw;
     sw.resize(512, 512);
-    struct ged *gedp_sw = open_and_draw("dmbench_swrast_tmp.g", qg_legacy_view_to_bsg(sw.view()));
+    struct ged *gedp_sw = open_and_draw("dmbench_swrast_tmp.g", sw.view());
     if (!gedp_sw) {
 	bu_log("SKIP swrast: ged_open failed\n");
     } else {
@@ -178,26 +184,23 @@ main(int ac, char *av[])
 	sw.render(&img_sw);
 	QCoreApplication::processEvents();
 
-	if (!sw.displayManager()) {
+	qg_legacy_dm *sw_dmp = legacy_dm(sw.view());
+	if (!sw_dmp) {
 	    bu_log("SKIP swrast: DM did not initialise after first paint\n");
 	} else {
 	    /* Warm-up: one extra draw before timing */
 	    {
-		unsigned char *bg1, *bg2;
-		dm_get_bg(&bg1, &bg2, sw.displayManager());
-		dm_set_bg(sw.displayManager(), bg1[0], bg1[1], bg1[2], bg2[0], bg2[1], bg2[2]);
-		dm_draw_objs(qg_legacy_view_to_bsg(sw.view()));
-		dm_draw_end(sw.displayManager());
+		qg_legacy_view_dm_background_restore(sw_dmp);
+		qg_legacy_view_dm_draw(sw.view());
+		qg_legacy_view_dm_draw_end(sw_dmp);
 	    }
 
 	    /* Timed loop */
 	    int64_t t0 = bu_gettime();
 	    for (int i = 0; i < n_iters; i++) {
-		unsigned char *bg1, *bg2;
-		dm_get_bg(&bg1, &bg2, sw.displayManager());
-		dm_set_bg(sw.displayManager(), bg1[0], bg1[1], bg1[2], bg2[0], bg2[1], bg2[2]);
-		dm_draw_objs(qg_legacy_view_to_bsg(sw.view()));
-		dm_draw_end(sw.displayManager());
+		qg_legacy_view_dm_background_restore(sw_dmp);
+		qg_legacy_view_dm_draw(sw.view());
+		qg_legacy_view_dm_draw_end(sw_dmp);
 	    }
 	    int64_t elapsed_sw = bu_gettime() - t0;
 	    print_bench_result("swrast", n_iters, elapsed_sw);
@@ -221,39 +224,36 @@ main(int ac, char *av[])
 
     QgGL gl;
     gl.resize(512, 512);
-    struct ged *gedp_gl = open_and_draw("dmbench_qtgl_tmp.g", qg_legacy_view_to_bsg(gl.view()));
+    struct ged *gedp_gl = open_and_draw("dmbench_qtgl_tmp.g", gl.view());
     if (!gedp_gl) {
 	bu_log("SKIP qtgl: ged_open failed\n");
     } else {
 	/* QgGL uses paintGL triggered by show() + processEvents().
 	 * On the offscreen platform a QOpenGLWidget context may not be
-	 * available — we detect that by gl.displayManager() remaining NULL. */
+	 * available — we detect that by legacy_dm(gl.view()) remaining NULL. */
 	gl.show();
 	QCoreApplication::processEvents();
 	/* Give Qt a second attempt in case init is asynchronous */
 	QCoreApplication::processEvents();
 
-	if (!gl.displayManager()) {
+	qg_legacy_dm *gl_dmp = legacy_dm(gl.view());
+	if (!gl_dmp) {
 	    bu_log("SKIP qtgl: OpenGL context not available on this platform "
 		   "(expected in headless / CI environments — run on hardware "
 		   "with a GPU to collect qtgl timing data)\n");
 	} else {
 	    /* Warm-up */
 	    {
-		unsigned char *bg1, *bg2;
-		dm_get_bg(&bg1, &bg2, gl.displayManager());
-		dm_set_bg(gl.displayManager(), bg1[0], bg1[1], bg1[2], bg2[0], bg2[1], bg2[2]);
-		dm_draw_objs(qg_legacy_view_to_bsg(gl.view()));
-		dm_draw_end(gl.displayManager());
+		qg_legacy_view_dm_background_restore(gl_dmp);
+		qg_legacy_view_dm_draw(gl.view());
+		qg_legacy_view_dm_draw_end(gl_dmp);
 	    }
 
 	    int64_t t0 = bu_gettime();
 	    for (int i = 0; i < n_iters; i++) {
-		unsigned char *bg1, *bg2;
-		dm_get_bg(&bg1, &bg2, gl.displayManager());
-		dm_set_bg(gl.displayManager(), bg1[0], bg1[1], bg1[2], bg2[0], bg2[1], bg2[2]);
-		dm_draw_objs(qg_legacy_view_to_bsg(gl.view()));
-		dm_draw_end(gl.displayManager());
+		qg_legacy_view_dm_background_restore(gl_dmp);
+		qg_legacy_view_dm_draw(gl.view());
+		qg_legacy_view_dm_draw_end(gl_dmp);
 	    }
 	    int64_t elapsed_gl = bu_gettime() - t0;
 	    print_bench_result("qtgl", n_iters, elapsed_gl);

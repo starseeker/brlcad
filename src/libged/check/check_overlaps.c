@@ -338,8 +338,9 @@ int check_overlaps(struct ged *gedp, struct current_state *state,
     FILE *plot_overlaps = NULL;
     char *name = "overlaps.plot3";
     int overlap_color[3] = { 255, 255, 0 };	/* yellow */
+    struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
     int overlay_enabled = options->overlaps_overlay_flag &&
-	(gedp->ged_gvp || ged_diagnostic_line_layer_handler_available(gedp));
+	(view || ged_diagnostic_line_layer_handler_available(gedp));
 
     /* init overlaps list */
     BU_LIST_INIT(&(overlapList.l));
@@ -399,8 +400,8 @@ int check_overlaps(struct ged *gedp, struct current_state *state,
     if (overlay_enabled) {
 	int handled = ged_diagnostic_line_layer_publish(gedp,
 		"check::overlaps", check_plot.builder);
-	if (!handled && gedp->ged_gvp) {
-	    (void)ged_draw_view_line_layer_builder_replace(gedp->ged_gvp,
+	if (!handled && view) {
+	    (void)ged_draw_view_line_layer_builder_replace(view,
 		    "check::overlaps", 0, check_plot.builder);
 	}
 	ged_check_plot_free(&check_plot);

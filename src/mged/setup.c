@@ -564,21 +564,18 @@ mged_setup(struct mged_state *s)
     mged_global_db_ctx.post_open_cnt = 0;
 
     BU_ALLOC(view_state->vs_gvp, struct bsg_view);
-    rt_view_init_bsg(view_state->vs_gvp, NULL);
-    BU_GET(view_state->vs_gvp->callbacks, struct bu_ptbl);
-    bu_ptbl_init(view_state->vs_gvp->callbacks, 8, "bv callbacks");
+    struct bsg_view_set *view_set = (struct bsg_view_set *)ged_view_set_ctx(s->gedp);
+    rt_view_init_bsg(view_state->vs_gvp, view_set);
 
-    view_state->vs_gvp->gv_callback = mged_view_callback;
-    view_state->vs_gvp->gv_clientData = (void *)view_state;
+    rt_view_update_callback_set_bsg(view_state->vs_gvp,
+	    mged_view_callback, (void *)view_state);
     mat_t view_center;
     rt_view_center_from_bsg(view_center, view_state->vs_gvp);
     MAT_DELTAS_GET_NEG(view_state->vs_orig_pos, view_center);
 
-    view_state->vs_gvp->vset = &s->gedp->ged_views;
-
-    rt_view_set_add_view_bsg(&s->gedp->ged_views, view_state->vs_gvp);
+    rt_view_set_add_view_bsg(view_set, view_state->vs_gvp);
     bu_ptbl_ins(&s->gedp->ged_free_views, (long *)view_state->vs_gvp);
-    s->gedp->ged_gvp = view_state->vs_gvp;
+    ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 
     /* register commands */
     cmd_setup(s);

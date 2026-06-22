@@ -23,9 +23,9 @@
  *
  * Legacy display-manager vlist drawing API.
  *
- * New drawing code should publish typed BSG render records and render them
+ * New drawing code should publish typed render records and render them
  * through dm_backend_draw_item().  This header is isolated so modern dm.h
- * clients do not inherit the legacy bsg_vlist dependency.
+ * clients do not inherit the legacy BSG vlist dependency.
  */
 
 #ifndef DM_VLIST_H
@@ -33,7 +33,7 @@
 
 #include "common.h"
 
-#include "bsg/vlist.h"
+#include "bg/vlist.h"
 #include "dm/defines.h"
 
 __BEGIN_DECLS
@@ -41,7 +41,7 @@ __BEGIN_DECLS
 struct dm;
 
 DM_EXPORT extern int dm_draw(struct dm *dmp,
-			     bsg_vlist *(*callback)(void *),
+			     bg_vlist *(*callback)(void *),
 			     void **data);
 
 __END_DECLS

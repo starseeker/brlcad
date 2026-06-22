@@ -68,19 +68,19 @@ Next Push:
 * Obol realization coverage matrix: 98 percent.
 * libbrlobol database realization: 98 percent.
 * Obol diagnostic overlays: 45 percent.
-* qtcad visible Obol rendering: 64 percent.
-* Guardrails and inventory: 98 percent.
+* qtcad visible Obol rendering: 67 percent.
+* Guardrails and inventory: 99 percent.
 * Low-level cleanup: 99 percent.
 * libimgstream migration batch: 57 percent.
-* Framebuffer display ownership: 39 percent.
+* Framebuffer display ownership: 58 percent.
 
 Migration Phases:
 
 * Phase 1, architecture freeze and guardrails: 80 percent.
 * Phase 2, productionize libbrlobol: 97 percent.
-* Phase 3, migrate qged/qtcad: 52 percent.
-* Phase 4, migrate libged, libtclcad, and mged: 28 percent.
-* Phase 5, remove lower-level BSG/DM dependencies: 54 percent.
+* Phase 3, migrate qged/qtcad: 67 percent.
+* Phase 4, migrate libged, libtclcad, and mged: 52 percent.
+* Phase 5, remove lower-level BSG/DM dependencies: 67 percent.
 * Phase 6, hard removal: 5 percent.
 
 
@@ -117,6 +117,471 @@ Decisions That Should Guide New Work
 
 Recently Completed Slices
 -------------------------
+
+* The `ged_test_mged_bsg` draw test still links libbsg directly for retained
+  BSG render request/batch coverage, but its utility view-state checks no
+  longer use direct BSG scene or faceplate state APIs.  Scene attachment now
+  goes through `rt_view_scene_attached_bsg`, and center-dot state read/write
+  goes through `rt_view_center_dot_state_from_bsg` and
+  `rt_view_center_dot_state_set_bsg` with a neutral `rt_view_other_state`
+  record.  The pivot guard now rejects direct `bsg/util.h`,
+  `bsg/view_state.h`, `bsg_view_scene_attached`,
+  `bsg_view_center_dot_get/set`, or `struct bsg_other_state` use in this test
+  while preserving its intentional BSG render API coverage.
+
+* The `ged_test_bsg_quad_stability` and `ged_test_rtwizard_bsg` draw tests no
+  longer link libbsg directly.  Both tests still validate retained GED/DM
+  BSG-backed scene behavior, but their scene-anchor setup, attached checks,
+  and shared-scene checks now route through `rt/view_legacy_bsg.h` wrappers
+  (`rt_view_scene_anchor_ensure_bsg`, `rt_view_scene_attached_bsg`, and
+  `rt_view_scene_shared_bsg`) instead of direct BSG scene utility headers and
+  calls.  The `rt_view_legacy_bsg` adapter test covers the new scene-anchor
+  helpers, and the pivot guard rejects direct BSG scene-anchor source use or a
+  direct libbsg relink for these two tests.  Generated link lines may still
+  carry libbsg transitively through retained `libged`/`libdm`/`librt` owners
+  until those paths migrate.
+
+* The `ged_test_mged_shaded_mode_bsg` draw test no longer links libbsg
+  directly.  The test still exercises retained GED/DM shaded-mode rendering,
+  lighting, zbuffer, zclip, screengrab, and semantic draw-record behavior, but
+  it no longer includes the stale `bsg/defines.h` header and does not require
+  a direct libbsg target dependency.  Its retained view setup continues to use
+  `rt/view_legacy_bsg.h` wrappers, and the pivot guard now rejects a direct
+  libbsg relink or direct BSG defines use for this shaded-mode test.  The
+  generated link can still carry libbsg transitively through retained
+  `libged`/`libdm` owners until those paths migrate.
+
+* The `ged_test_view_independent` draw test no longer links libbsg directly.
+  The test still exercises the retained BSG-backed independent-view scope
+  behavior through GED/RT bridge types, but its independent-scope null
+  inspection now uses the new `rt_view_independent_scope_is_null_bsg` wrapper
+  instead of direct `bsg_scene_ref_is_null` utility access.  The
+  `rt_view_legacy_bsg` adapter test covers null, live, and destroyed
+  independent-scope cases, and the pivot guard rejects both direct BSG utility
+  source use and a direct libbsg relink for the independent-view test.
+  Generated link lines still carry libbsg transitively through retained
+  `libged`/`librt` paths until those phase owners migrate.
+
+* The `ged_test_view_command` draw test still links libbsg directly for its
+  retained backend-scene render/export coverage, but its semantic utility
+  checks no longer reach through direct BSG snap, measure, or polygon record
+  APIs.  `rt/view_legacy_bsg.h` now exposes
+  `rt_view_snap_result_source_path_bsg` beside the existing opaque snap-result
+  helpers, and `view_command.cpp` now uses RT wrappers for snap candidates,
+  measurement candidates, and polygon record lookup.  The `rt_view_legacy_bsg`
+  adapter test covers the snap source-path accessor, and the pivot guard now
+  rejects direct BSG semantic utility headers/calls and the stale
+  `bsg/util.h` include from returning to the view-command test while
+  preserving its intentional structural BSG coverage.
+
+* The `ged_test_measure_semantics` draw test no longer links libbsg
+  directly.  `rt/view.h` now owns a neutral `rt_view_measure_result` value
+  record, and `rt/view_legacy_bsg.h` exposes a retained BSG-backed
+  `rt_view_measure_candidates_bsg` adapter that converts BSG measurement
+  results into that neutral record.  `measure_semantics.cpp` now routes view
+  lifecycle, dimension setup, measurement candidate collection, and result
+  inspection through the RT surface instead of direct BSG measure headers and
+  APIs.  The `rt_view_legacy_bsg` adapter test covers the new conversion, and
+  the pivot guard rejects direct BSG measure source use or a direct libbsg
+  relink for the GED measure semantics target.  The generated link still
+  carries libbsg transitively through retained `librt` until that lower-level
+  owner migrates.
+
+* The `ged_test_snap_semantics` draw test no longer links libbsg directly.
+  `rt/view_legacy_bsg.h` now exposes opaque snap-result helpers for retained
+  BSG-backed views, and `snap_semantics.cpp` routes view lifecycle, grid
+  state, snap-source setup, candidate collection, snap-result inspection, and
+  2D snap calls through that RT adapter surface instead of direct BSG
+  snap/grid headers and APIs.  The `rt_view_legacy_bsg` adapter test covers
+  the new snap-result helpers, and the pivot guard now rejects direct BSG snap
+  source use or a direct libbsg relink for the GED snap semantics target.
+  The generated link still carries libbsg transitively through retained
+  `librt` until that lower-level owner migrates.
+
+* Stale build-only direct libbsg links have been removed from selected
+  converter and simulation targets whose source trees do not use BSG APIs.
+  The Unigraphics `ug-g`, Cubit `g-sat`, and Creo `creo-brl` shim/link
+  package rows now rely on their neutral RT/WDB/BG/NMG dependencies instead
+  of directly listing libbsg.  The `ged-simulate` plugin link row now omits
+  libbsg as well.  Generated link commands still pull libbsg transitively
+  through retained libraries such as librt, libwdb, and libged until those
+  phase owners migrate.  The pivot guard records this dependency-boundary
+  cleanup and rejects both direct libbsg relinks in those CMake files and
+  direct BSG API use in the corresponding source trees.
+
+* The `ged_test_qged_swrast` qtcad/QgSW integration test no longer links
+  libbsg directly.  The test already routes view binding and scene checks
+  through `qtcad/QgLegacyView.h` helpers; it still links the retained
+  libqtcad/libged/libdm path and therefore still sees libbsg transitively
+  until those owner libraries migrate.  The disabled DM backend benchmark
+  link template was adjusted the same way, and the pivot guard now rejects
+  direct libbsg relinks for this qtcad bridge-test path.
+
+* The `ged_test_selection_semantics` draw test no longer links libbsg
+  directly.  Its source still validates the transitional retained view path,
+  but pick/result/selection access is now through `rt/view_legacy_bsg.h`
+  helper APIs rather than direct BSG pick or selection headers.  The pivot
+  guard now rejects a direct libbsg relink while preserving the existing
+  source-level adapter-surface checks.
+
+* The libdm direct-vlist backend path now uses neutral BG vlist spelling.
+  `src/libdm/include/calltable.h`, `src/libdm/include/private.h`,
+  `dm-generic.c`, the null/txt/X/plot/postscript backends, and the shared GL
+  vlist path now use `bg_vlist` callback signatures and `BG_VLIST_*` command
+  names instead of `bsg_vlist`/`BSG_VLIST_*`.  The plot backend routes
+  floating uplot export through `rt_vlist_to_uplot`; the retained render-item
+  and LoD BSG backend work is unchanged.  The pivot guard and
+  `dm_backend_draw_item` test now reject BSG vlist spelling from returning to
+  these direct-vlist files.
+
+* The low-level utility vlist cleanup has been extended through
+  `src/util/plot3-dm.c`.  The utility now stores imported plot data as
+  `struct bg_vlblock`, iterates `bg_vlist`, uses `BG_VLIST_*` command names,
+  and frees plot blocks with `bg_vlblock_free` instead of source-level BSG
+  vlist aliases.  Direct device drawing is routed through the private
+  `dm_draw_device_bg_vlist` wrapper, which is now BG-typed through libdm's
+  direct-vlist backend hooks.  `plot3-dm` now links directly to `librt`/`libbg`
+  instead of `libbsg`, and the pivot guard includes `plot3-dm.c` in the
+  utility vlist neutralization check.
+
+* The neutral GED view-context accessor migration has been extended through
+  the remaining MGED command-dispatch active-view path in `cmd.cpp`.  GED
+  wrapper commands, DM/screengrab handoff, command-window and winset focus
+  changes, postscript attach/release, `blast`/`draw`, simulate view-argument
+  injection, and `view` staging now use `ged_view_active_ctx` and
+  `ged_view_active_ctx_set` instead of reaching through `s->gedp->ged_gvp`.
+  Retained display-manager, view lifecycle, view cache, and view-math
+  operations remain routed through `rt/view_legacy_bsg.h` adapters.  The
+  pivot guard now requires the neutral accessor tokens in `cmd.cpp` and
+  rejects direct GED view-storage reach-through from returning.  Remaining
+  direct non-test, non-adapter libged/MGED view-storage access is now confined
+  to core GED ownership/accessor implementation in `ged.cpp`.
+
+* The neutral GED view-context accessor migration has been extended through
+  the remaining `chgview.c` active-view command paths.  `edit_com`,
+  `cmd_autoview`, and `mged_zoom` now use `ged_view_active_ctx_set` and
+  `ged_view_active_ctx` for temporary current-view selection, final active
+  view restore, and zoom-refresh LoD policy inspection.  Retained view-scale,
+  autoview, refresh, knob, and LoD adapters remain routed through
+  `rt/view_legacy_bsg.h`.  The pivot guard now requires the neutral accessor
+  tokens there and rejects direct GED view-storage reach-through from
+  returning.  Remaining MGED direct active-view reach-through is now confined
+  to `cmd.cpp`.
+
+* The neutral GED view-context accessor migration has been extended through
+  a first MGED helper batch.  `overlay.c`, `plot.c`, `color_scheme.c`,
+  `rtif.c`, `dm-generic.c`, `setup.c`, and `attach.c` now use
+  `ged_view_active_ctx`, `ged_view_active_ctx_set`, and/or
+  `ged_view_set_ctx` for active-view handoff, active-view save/restore,
+  visible-record enumeration, DM command forwarding, startup view
+  registration, and copied-DM view registration.  Retained display-manager,
+  update-callback, LoD, and view lifecycle operations remain routed through
+  `rt/view_legacy_bsg.h` adapters.  The pivot guard now requires the neutral
+  accessor tokens in this MGED batch and rejects direct GED view-storage
+  reach-through from returning there.  Remaining MGED direct active-view
+  reach-through is concentrated in `cmd.cpp` and `chgview.c`.
+
+* The neutral GED view-context accessor migration has been extended through
+  the libged display-manager command/binding path.  `dm.c` now uses
+  `ged_view_active_ctx`, `ged_view_set_views_ctx`, `ged_view_find_ctx`, and
+  `ged_view_set_ctx` for current-view lookup, DM listing/name collision
+  checks, target-view lookup, and transitional view registration.  The
+  retained DM pointer, fallback dimensions, view-scale, and view creation
+  operations remain routed through `rt/view_legacy_bsg.h` adapters.  The
+  pivot guard now requires the neutral GED accessor tokens there and rejects
+  direct GED view-storage reach-through from returning.  Remaining direct
+  non-test, non-adapter libged view-storage access is now confined to core GED
+  ownership/accessor implementation in `ged.cpp`.
+
+* The neutral GED view-context accessor migration has been extended through
+  the libged view command and view-object command dispatch paths.  `view.c`
+  now uses `ged_view_active_ctx`, `ged_view_active_ctx_set`,
+  `ged_view_find_ctx`, and `ged_view_set_views_ctx` for temporary current-view
+  swaps, named-view lookup, view listing, and default current-view selection.
+  `view/objs.cpp` now uses the active-view accessors before ensuring a
+  view-specific scene root.  The pivot guard now requires those neutral
+  accessor tokens there and rejects direct GED view-storage reach-through from
+  returning.
+
+* The neutral GED view-context accessor migration has been extended through
+  `ged_util.cpp`, the shared libged utility helper layer.  Rotation/translation
+  default coordinate reads, visible path listing, uplot feature publishing,
+  RT eye-model and write-script snapshots, and visible-record export helpers
+  now borrow the current view with `ged_view_active_ctx` before calling
+  retained RT view or private GED draw adapters.  The pivot guard now requires
+  the neutral accessor token there and rejects direct GED view-storage
+  reach-through from returning.
+
+* The neutral GED view-context accessor migration has been extended through a
+  draw/view restore helper batch.  `draw/loadview.cpp`, `draw/preview.cpp`,
+  `view/autoview2.cpp`, `draw/bigE.c`, and `draw/draw.c` now borrow the
+  current view with `ged_view_active_ctx`, and `autoview -V` uses
+  `ged_view_find_ctx`, before invoking retained RT view, LoD, autoview, or
+  private GED draw adapters.  The pivot guard now requires those neutral
+  accessor tokens there and rejects direct GED view-storage reach-through from
+  returning.
+
+* The neutral GED view-context accessor migration has been extended through a
+  residual command/helper batch covering database-open view unit setup,
+  mirror post-draw refresh, joint overlay publishing, rtcheck overlap glyphs,
+  and nirt/qray view snapshots.  `open.cpp`, `mirror.c`, `joint.c`,
+  `rtcheck2.cpp`, and `nirt.cpp` now borrow the current view with
+  `ged_view_active_ctx` before calling retained RT view or private GED draw
+  adapters.  The pivot guard now requires the neutral accessor token in those
+  files and rejects direct GED view-storage reach-through from returning.
+
+* The neutral GED view-context accessor migration has been extended through a
+  path/query/snapshot helper batch.  `who.c`, `garbage_collect.cpp`, `how.c`,
+  `brep/tikz.cpp`, and `check.c` now borrow the current view with
+  `ged_view_active_ctx` before visible-path enumeration, garbage-collection
+  draw-list inspection, display/listing lookups, TikZ AET output, and
+  view-derived check setup.  The pivot guard now requires the neutral accessor
+  token in those files and rejects direct GED view-storage reach-through from
+  returning.
+
+* The neutral GED view-context accessor migration has been extended through
+  the `labelvert` and `labelface` overlay-label command paths.  `illum.c` and
+  `nmg.c` now borrow the current view with `ged_view_active_ctx` before
+  visible-record enumeration, retained label feature replacement, and display
+  manager repaint notification.  The pivot guard now requires the neutral
+  accessor token there and rejects direct GED view-storage reach-through from
+  returning.
+
+* The neutral GED view-context accessor migration has been extended through a
+  residual BoT command batch.  BoT face plotting, BoT check edge overlays,
+  `bot_fuse` open-edge overlays, and `bot_dump` visible-record export now
+  borrow the current view with `ged_view_active_ctx` before calling retained
+  GED draw feature, line, and visible-record helpers.  The pivot guard now
+  requires the neutral accessor token in those BoT command files and rejects
+  direct GED view-storage reach-through from returning.
+
+* The neutral GED view-context accessor migration has been extended through
+  the libged `select`/`rselect` command implementation.  Bot point selection,
+  visible-record selection, partial selection, and interactive-rectangle
+  selection now borrow the current view with `ged_view_active_ctx` before
+  calling retained model-to-view, visible-record enumeration, and faceplate
+  interactive-rectangle adapters.  The pivot guard now requires the neutral
+  accessor token there and rejects direct GED view-storage reach-through from
+  returning.
+
+* The neutral GED view-context accessor migration has been extended through
+  `vutil.c`, the shared libged view utility helper layer.  `_ged_do_rot`,
+  `_ged_do_slew`, `_ged_do_tra`, and `nmg_plot_eu` now borrow the current view
+  with `ged_view_active_ctx` before calling retained RT rotate-about, matrix,
+  center, update, inverse-size, and diagnostic line-layer fallback helpers.
+  The pivot guard now requires the neutral accessor token there and rejects
+  direct GED view-storage reach-through from returning.
+
+* The neutral GED view-context accessor migration has been extended through a
+  view-math/query command batch.  BREP pick, BoT pick, `solids_on_ray`,
+  polygon clipping/fill helpers, metaball point selection/addition, pipe
+  point selection/addition, `move_arb_edge`, and BoT nearest edge/point
+  helpers now borrow the current view with `ged_view_active_ctx` before
+  calling retained RT view-matrix, center, rotation, plane, and scale
+  adapters.  The pivot guard now requires the neutral accessor token in those
+  files and rejects direct GED view-storage reach-through from returning.
+
+* The neutral GED view-context accessor migration has been extended through a
+  diagnostic overlay command batch.  `gdiff`, `gqa`, `check overlaps`, and
+  BREP plot publishing now borrow the current view with `ged_view_active_ctx`
+  before falling back to retained GED draw feature, line-layer, or indexed
+  face-set helpers.  The neutral diagnostic line-layer publishing path remains
+  first, and the pivot guard now requires the neutral accessor token in those
+  files so direct GED view-storage reach-through cannot return.
+
+* The neutral GED view-context accessor migration has been extended through a
+  view faceplate command batch.  `view faceplate`, `center_dot`, `fb`,
+  `scale`, `params`, `grid`, `model_axes`, `view_axes`, and `irect` now
+  borrow the current view with `ged_view_active_ctx` before calling retained
+  RT faceplate/grid/axes/interactive-rectangle adapters or HUD sync helpers.
+  The pivot guard now requires the neutral accessor token in those faceplate
+  command files and rejects direct GED view-storage reach-through from
+  returning.
+
+* The neutral GED view-context accessor migration has been extended through a
+  small state/overlay command batch.  `adc`, `rotate_about`, `lod`, and
+  `lint` now borrow the current view with `ged_view_active_ctx` before calling
+  retained ADC, rotate-about, LOD, or GED draw overlay helpers.  The pivot
+  guard now requires the neutral accessor token in those files and rejects
+  direct GED view-storage reach-through from returning.
+
+* The neutral GED view-context accessor migration has been extended through a
+  view-interaction state batch.  `grid`, `rect`, `view snap`, `view knob`, and
+  `view data_lines` now borrow the current view with `ged_view_active_ctx`
+  before calling retained RT view-state adapters or GED draw helpers.  Local
+  helpers and data-line subcommand callbacks now receive the borrowed view
+  explicitly instead of rereading GED view storage.  The pivot guard now
+  requires the neutral accessor token in those files and rejects direct GED
+  view-storage reach-through from returning.
+
+* The neutral GED view-context accessor migration has been extended through an
+  output/snapshot libged command batch.  `png`, `ps`/`postscript`, `plot`,
+  `savekey`, `saveview`, and `rtwizard` now borrow the current view with
+  `ged_view_active_ctx` before visible-record enumeration and projection/view
+  snapshot calls.  Their retained RT and GED draw adapters remain in place,
+  but helper routines now receive the borrowed view explicitly where they need
+  it.  The pivot guard now requires the neutral accessor token in those files
+  and rejects direct GED view-storage reach-through from returning.
+
+* The neutral GED view-context accessor migration has been extended through a
+  second scalar view-state libged batch.  `view2model`, `view2model_lu`,
+  `view2grid_lu`, `view2model_vec`, `m2v_point`, `v2m_point`, `pmodel2view`,
+  `rot_point`, `scale`, `rmat`, `pmat`, `perspective`, `setview`, and the
+  compact `view` subcommands for `aet`, `viewdir`, `ypr`, `qvrot`, `quat`,
+  `size`, `center`, `eye`, `lookat`, and `align` now borrow the current view
+  with `ged_view_active_ctx` before calling retained RT view adapters.  The
+  pivot guard now requires the neutral accessor token in those files and
+  rejects direct GED view-storage reach-through from returning.
+
+* The neutral GED view-context accessor migration has been extended through a
+  framebuffer/display-facing libged command batch.  `fbclear`, `fb2pix`,
+  `pix2fb`, `png2fb`, `overlay`, `ert`, and `rt` now borrow the current view
+  with `ged_view_active_ctx` before using the retained RT framebuffer,
+  display-manager, scale, perspective, and framebuffer-mode adapters.  The
+  commands still keep their transitional RT/DM behavior, but no longer read
+  GED's retained `ged_gvp` storage directly.  The pivot guard now requires the
+  neutral accessor token in those files and rejects direct GED view-storage
+  reach-through from returning.
+
+* The neutral GED view-context accessor migration has been extended through a
+  scalar active-view libged command batch.  `arot`, `zoom`, `orient`,
+  `keypoint`, `isize`, `get_eyemodel`, `eye_pos`, `model2view`,
+  `model2view_lu`, `grid2view_lu`, `model2grid_lu`, and `grid2model_lu` now
+  borrow the current view with `ged_view_active_ctx` before calling retained
+  RT view adapters, instead of reading `gedp->ged_gvp` directly.  The pivot
+  guard now requires that neutral accessor token in those files and rejects
+  direct GED view-storage reach-through from returning.
+
+* The neutral GED view-context accessor migration has started moving libged
+  command paths and gsh off direct GED view-storage reach-through.  The
+  `zap`, `draw`, `erase`, `who`, `who solids`, `screengrab`, native-selection
+  sync, and geometry-shell display-hash paths now use `ged_view_active_ctx`,
+  `ged_view_set_views_ctx`, and/or `ged_view_find_ctx` instead of reading
+  `gedp->ged_gvp`, `gedp->ged_views`, or calling the retained view-set RT
+  wrappers directly.  The `who` command files now treat the view as an opaque
+  GED draw context and no longer include `rt/view_legacy_bsg.h`.  The pivot
+  guard now requires the neutral GED accessor tokens in this migrated
+  libged/gsh batch and rejects the old direct storage routes from returning.
+
+* The remaining TclCAD command-table direct GED view-storage reach-throughs
+  have been migrated.  `src/libtclcad/commands.c` now uses
+  `ged_view_find_ctx` for named view lookup, `ged_view_set_views_ctx` for
+  view-set iteration, `ged_view_active_ctx`/`ged_view_active_ctx_set` for
+  current-view reads and command dispatch, and `ged_view_set_ctx` for the
+  retained view initialization/registration path.  This completes the current
+  TclCAD file batch that was directly reaching into `gedp->ged_gvp`,
+  `gedp->ged_views`, or `current_top->to_gedp->ged_views`.  The pivot guard
+  now rejects those direct storage routes from returning to the migrated
+  TclCAD files.
+
+* The TclCAD mouse command layer has been moved off direct GED view-storage
+  access.  `src/libtclcad/mouse.c` now uses `ged_view_find_ctx` for named view
+  lookup and `ged_view_active_ctx_set` before dispatching commands that must
+  operate on the resolved view.  Mouse snap and view-math helper calls now use
+  the already-resolved borrowed view where they previously reread
+  `gedp->ged_gvp`.  The pivot guard now rejects direct `ged_gvp`,
+  `ged_views`, `rt_view_set_views_bsg`, or `rt_view_set_find_view_bsg`
+  reach-through from returning to `mouse.c`.
+
+* The TclCAD framebuffer and polygon command paths have been moved off direct
+  GED view-storage access.  `src/libtclcad/fb.c` now uses
+  `ged_view_find_ctx` for framebuffer mode/listener view lookup, and
+  `src/libtclcad/polygons.c` now uses `ged_view_find_ctx` for polygon command
+  view lookup plus `ged_view_active_ctx_set` for the polygon-mode commands
+  that intentionally make the command view active.  Polygon snap preparation
+  now operates on the already-resolved borrowed view instead of rereading
+  `gedp->ged_gvp`.  The pivot guard now rejects direct `ged_gvp`,
+  `ged_views`, `rt_view_set_views_bsg`, or `rt_view_set_find_view_bsg`
+  reach-through from returning to those files while preserving their retained
+  transitional RT view-operation calls.
+
+* The neutral GED view-context accessor migration has been extended across the
+  smaller TclCAD view-object command wrappers.  Data-line, data-label,
+  faceplate, data/model/view axes, and data-arrow TclCAD commands now find
+  borrowed views with `ged_view_find_ctx`, and the data-line command's
+  temporary current-view swaps now use `ged_view_active_ctx` and
+  `ged_view_active_ctx_set` instead of directly reading or assigning
+  `gedp->ged_gvp`.  The pivot guard now rejects direct `ged_gvp`,
+  `ged_views`, `rt_view_set_views_bsg`, or `rt_view_set_find_view_bsg`
+  reach-through from returning to this migrated view-command batch.
+
+* The neutral GED view-context accessor boundary has been extended to cover
+  common borrowed view-set operations.  `include/ged/defines.h` now exports
+  `ged_view_set_views_ctx` and `ged_view_find_ctx`, and `src/libged/ged.cpp`
+  localizes the retained calls to `rt_view_set_views_bsg` and
+  `rt_view_set_find_view_bsg` behind those APIs.  TclCAD wrapper,
+  refresh/autoview, and edit-redraw callers now use the neutral GED accessors
+  for view lookup, view-set iteration, and current-view assignment instead of
+  reaching directly into `gedp->ged_views`, `top->to_gedp->ged_views`, or
+  `gedp->ged_gvp`.  The pivot guard now requires those neutral GED accessor
+  tokens in the migrated TclCAD batch and rejects the old direct
+  view-set/current-view route from returning there.
+
+* Neutral GED view-context accessors have been introduced as the next
+  preparatory step toward hiding GED's retained BSG view storage.  Public
+  `GED_VIEW_NULL` is now a `void *` null token, `ged_view_active_ctx`,
+  `ged_view_active_ctx_set`, and `ged_view_set_ctx` expose the current
+  borrowed view and view-set context opaquely, and the public `GED_CHECK_VIEW`
+  macro no longer reaches directly into `gedp->ged_gvp`.  qtcad's private
+  legacy bridge now uses these GED accessors for active-view get/set and
+  view-set add/remove/attach instead of touching `struct ged` view fields
+  directly.  The pivot guard now requires those accessor tokens and rejects
+  direct `ged_gvp`/`ged_views` field access from returning to the qtcad legacy
+  bridge.
+
+* The public GED draw-scene header has been narrowed at the view-context
+  boundary.  `include/ged/bsg_ged_draw.h` no longer forward declares or names
+  `struct bsg_view`; draw transactions, group records, view-record iteration,
+  path/list queries, view-scope clearing, highlighted-selection mirroring, and
+  primitive-wireframe publishing now expose borrowed view contexts as opaque
+  `void *` handles.  The retained casts back to `struct bsg_view *` are
+  localized in the GED draw implementation files, and qtcad's private legacy
+  bridge performs the only C++ cast needed when translating a GED transaction
+  into its private wrapper.  The pivot guard now rejects public BSG view
+  spelling from returning to the installed GED draw-scene header.
+
+* The public GED draw-scene header has been narrowed at the draw-mode and
+  draw-appearance boundary.  `include/ged/bsg_ged_draw.h` no longer includes
+  `bsg/draw_intent.h`, exposes `bsg_draw_mode`, or names
+  `bsg_appearance_settings`; public shape/group records and
+  `ged_draw_default_mode` now use integer draw-mode values, and
+  `ged_draw_transaction::appearance` is an opaque borrowed backend appearance
+  context.  The retained BSG appearance cast is confined to
+  `src/libged/bsg_ged_draw_transactions.c`, with qtcad's private legacy bridge
+  explicitly including `bsg/draw_intent.h` for its retained draw-mode asserts
+  and appearance storage.
+
+* The public DM backend render-item dispatch contract has been narrowed.
+  `include/dm.h` no longer forward declares or names `bsg_render_item` or
+  `bsg_render_request`; `dm_backend_ops::draw_item`,
+  `dm_backend_ops::invalidate_item`, `dm_backend_draw_item`, and
+  `dm_backend_invalidate_item` now use opaque `const void *render_item_ctx`
+  handles.  The retained BSG render-item validation and fallback invalidation
+  logic is localized in `src/libdm/dm-generic.c`, while GL backend dispatch
+  uses private adapter callbacks in `src/libdm/dm-gl_lod.cpp` to cast back to
+  the retained BSG item before calling the existing GL renderer.  The pivot
+  guard now rejects public BSG render-item/request spelling from returning to
+  `include/dm.h`.
+
+* The public RT edit legacy adapter has been narrowed.  The installed
+  `include/rt/edit_legacy_bsg.h` header no longer forward declares or names
+  `struct bsg_view`; its transitional edit snapshot, create/reinit, and knob
+  command wrappers now take opaque `const void *view_ctx` values.  The retained
+  BSG cast remains confined to `src/librt/edit_legacy_bsg.cpp`, which already
+  routes view reads through `rt/view_legacy_bsg.h`.  The pivot guard now rejects
+  public BSG view exposure from returning to the installed edit legacy header.
+
+* The public RT sketch legacy adapter has been narrowed.  The installed
+  `include/rt/primitives/sketch_legacy_bsg.h` header no longer includes
+  `bsg/polygon.h`, forward declares `struct bsg_view`, or exposes
+  `bsg_polygon_ref`; sketch import/export now use neutral `rt_view_polygon_ref`
+  handles and opaque `void *` view contexts.  The retained BSG view cast,
+  polygon-ref conversion, and polygon record reads are confined to
+  `src/librt/primitives/sketch/polygons_legacy_bsg.c`.  The RT view bridge,
+  GED draw-view polygon sketch bridge, and `rt_bv_poly_sketch` roundtrip test
+  now call the sketch adapter through the neutral handle boundary, and the
+  pivot guard prevents public BSG polygon/view spelling from returning to the
+  installed sketch adapter header.
 
 * libged `view obj ... line`, `view obj ... label`, `view obj ... axes`,
   Tcl data-line, gobject overlay create, and generic view-object feature
@@ -195,8 +660,90 @@ Recently Completed Slices
   helper rather than comparing display and transaction BSG view pointers in app
   code.
   qtcad 2D measurement view-to-model conversion, quad-view source unit/size
-  copies, and SW/GL fallback framebuffer-size or matrix-load reads now follow
-  the same adapter boundary while legacy view state writes remain transitional.
+  copies, and SW/GL fallback framebuffer-size, matrix-load, display-image
+  readback, DM include, and fallback framebuffer/DM lifecycle calls now follow
+  the same adapter boundary while legacy view state writes remain
+  transitional.  The retained qtcad DM/fb fallback helper declarations have
+  also moved out of the installed `QgLegacyView.h` API into the private
+  `src/libqtcad/QgLegacyViewDm.h` bridge header, leaving the public
+  legacy-view header focused on neutral transitional view operations.
+  `QgCanvasBase` and `QgView` now expose a neutral
+  `legacyBackendInitialized()` readiness query instead of raw `struct dm *` /
+  `struct fb *` accessors, and `QgView` no longer accepts a retained
+  framebuffer pointer in its public constructor.  `QgGL` and `QgSW` public
+  headers now also expose `legacyBackendInitialized()` without raw
+  display-manager or framebuffer getters; tests that only checked fallback
+  readiness use that neutral query, and the retained raw-DM benchmark source
+  now uses the private qtcad DM bridge for retained display-manager lookup,
+  view binding, background restore, and draw/end timing.  The remaining
+  framebuffer-backed `QgGL`/`QgSW` construction path used by the qtgl/swrast
+  libdm framebuffer windows now routes through the private
+  `QgCanvasBridgeFactory` declarations in `src/libqtcad/QgLegacyViewDm.h`;
+  the installed concrete canvas headers no longer forward-declare `struct fb`
+  or publish retained framebuffer constructor parameters.  The standalone
+  qtgl/swrast Qt window headers now use the opaque qtcad `qg_legacy_fb`
+  framebuffer handle and forward-declared canvas classes instead of including
+  `dm.h` or concrete qtcad canvas headers; retained display-manager details
+  stay in the private implementation/bridge path.  The private qtcad retained-DM
+  bridge now exposes distinct opaque `struct qg_legacy_dm` and
+  `struct qg_legacy_fb` handle types instead of `struct dm *` /
+  `struct fb *`, keeping the retained casts inside `QgLegacyView.cpp`; the
+  qtgl/swrast framebuffer wrappers convert raw framebuffer pointers through
+  the same named bridge helper and qtgl now uses the same bridge open/close
+  helpers as swrast.  The dead
+  `setDisplayManagerSet(struct bu_ptbl *)` public hook and its private
+  display-manager-table insert helper have also been retired, leaving the
+  public canvas surface free of the retained shared-DM-table vocabulary.
+  The explicit BSG cast adapter `QgLegacyViewBsg.h` has also moved out of the
+  installed qtcad headers into `src/libqtcad`, leaving it available only to
+  the bridge implementation, libdm plugin fallback setup, and remaining
+  legacy-facing tests.  The normal qtcad Obol workflow tests for draw sync,
+  selection sync, overlay sync, pick, measure, export, real-model, snap, and
+  faceplate-sync workflows now set active GED view, transaction view scope,
+  retained draw appearance, snap query state, and faceplate state through the
+  opaque qtcad legacy-view helper surface instead of including
+  `QgLegacyViewBsg.h`, including
+  `rt/view_legacy_bsg.h`, or converting to `bsg_view *` directly.
+  `ged_test_qged_swrast` now also binds its QgSW view, view-set registration,
+  unit conversion, and scene-attached assertion through qtcad legacy-view
+  helpers instead of reaching through the private BSG cast adapter.
+  The standalone qtgl/swrast framebuffer wrappers now use qtcad legacy-view
+  helpers for framebuffer mode, dimensions, and swrast attach setup instead of
+  including `rt/view_legacy_bsg.h` or converting the canvas view to a raw BSG
+  pointer themselves.
+  The qtcad legacy-view draw bridge now owns migrated workflow test
+  transaction construction, appearance setup, observer registration,
+  apply/result lifecycle, and the redraw/draw/erase convenience helper
+  forwarding path, leaving raw retained GED transaction make/apply/result
+  calls concentrated in `QgLegacyView.cpp` wrapper functions.  The installed
+  qtcad header now uses qtcad-owned draw transaction/result records instead of
+  typedefing the retained GED transaction structs; observer callbacks are
+  bridged through `QgLegacyView.cpp`.
+  qtcad edit-preview feature helpers now also route through the RT legacy view
+  adapter instead of calling BSG feature/interaction APIs directly.  Neutral
+  `rt_view_feature_ref`, edit-preview event/callback, and feature-label types
+  live in `rt/view.h`; `rt/view_legacy_bsg.h` exposes the transitional
+  `rt_view_feature_*_bsg` wrappers; and `QgLegacyView.cpp` maps its public
+  qtcad feature helpers to that RT surface.  Direct `bsg/feature.h`,
+  `bsg/interaction.h`, `bsg_feature_*`, `bsg_interaction_*`,
+  `BSG_FEATURE_*`, and `BSG_OVERLAY_*` usage is now guarded out of
+  `QgLegacyView.cpp`.
+  The remaining generic snap-exclude feature wrapper now takes neutral
+  `rt_view_feature_ref` at the RT legacy adapter boundary; conversion to
+  `bsg_feature_ref` stays inside `src/librt/view_legacy_bsg.c`, and the
+  polygon snap-exclude wrapper feeds that neutral feature ref internally.
+  The qtgl display-manager open path now also rejects retained BSG view
+  contexts through `rt_view_context_is_bsg`, so `dm-qtgl.cpp` no longer
+  includes `bsg/defines.h` or checks `BSG_VIEW_MAGIC` directly.
+  The swrast display-manager private context now keeps the retained view as an
+  opaque pointer and synchronizes dimensions through RT legacy context helpers,
+  leaving `dm-swrast.h` free of `struct bsg_view` exposure.
+  The tkswrast plugin now uses the same opaque swrast view-context route for
+  refresh requests and dimension updates, with a context refresh helper in the
+  RT legacy adapter.  qged framebuffer-server update callbacks now recover
+  framebuffer-backed Qt canvases and DM init messages through the private
+  qtcad DM bridge instead of including `dm.h` or calling `fb_get_dm`,
+  `dm_get_ctx`, or `dm_get_udata` directly.
   qged current-view unit refresh and GED open/knob database-unit setup now
   route through the RT legacy view adapter rather than writing BSG unit fields
   directly.
@@ -206,11 +753,15 @@ Recently Completed Slices
   display-level mode instead of a direct BSG export query.
   qtcad selection's public header now exposes selected paths without naming
   legacy BSG pick-result objects, and the remaining BSG pick-result fallback
-  now uses opaque RT legacy pick-result handles for fallback point/rectangle
-  picks, result count/path/free operations, first-result filtering, ray-hit
-  result copying, and selection application.  Its protected selection helper
-  API is now view-implicit, keeping `bsg_view` out of `QgSelectFilter.h` while
-  the implementation continues to use the staged RT legacy selection adapter.
+  now uses opaque qtcad legacy-view pick-result handles for fallback point,
+  rectangle, and exact-ray candidate picks, result count/path/free operations,
+  first-result filtering, ray-hit result copying, rectangle state, selection
+  application, and screen-ray construction.  Its protected selection helper
+  API is now view-implicit, keeping `bsg_view` out of `QgSelectFilter.h`, and
+  `QgSelectFilter.cpp` no longer includes `QgLegacyViewBsg.h` or
+  `rt/view_legacy_bsg.h`, calls `qg_legacy_view_to_bsg`, spells
+  `struct bsg_view`, or calls the retained RT legacy-BSG pick/selection/view
+  helpers directly.
   The old public
   `rt_view_selection_set_pick_result_bsg` BSG-shaped setter has been retired;
   callers and tests use `rt_view_selection_set_pick_result_ref_bsg` with
@@ -226,13 +777,42 @@ Recently Completed Slices
   GED-private draw bridge where records still need the staged BSG backing
   object.  That GED-private bridge has been narrowed as well: draw records no
   longer include `bsg/selection.h` or receive raw selection objects through
-  `ged_draw_view_selection_bsg`; they use record-level
-  `ged_draw_view_selection_*_record` helpers, while the temporary
-  `bsg_selection` operations stay confined to `bsg_ged_draw_view.c`.
+  `ged_draw_view_selection_bsg`; they use neutral path/kind helpers
+  (`ged_draw_view_selection_*_path` plus `GED_DRAW_VIEW_SELECTION_*`), while
+  temporary `bsg_selection` and `bsg_interaction_record` operations stay
+  confined to `bsg_ged_draw_view.c`.  The draw ref bridge no longer includes
+  `bsg/interaction.h` or `bsg/selection.h` for selection-record construction.
+  A follow-up GED bridge include sweep removed stale `bsg/interaction.h`
+  includes from draw util/tree/transaction/state/root/material/highlight/draft
+  units; the remaining interaction-record dependency in the GED draw bridge is
+  the intended view adapter.  GED command-result overlay insertion now also
+  routes BSG overlay registry find/erase/append/owner-tagging through the same
+  view adapter; `bsg_ged_draw_overlay.c` no longer includes `bsg/overlay.h` or
+  spells `BSG_OVERLAY_*` directly, while retained scene/geometry creation stays
+  in that bridge for the staged BSG backend.
+  The public legacy `dm_draw` surface in `include/dm/vlist.h` now exposes
+  typed render records through neutral `bg_vlist` and `bg/vlist.h`, with
+  direct public `bsg/vlist.h`, `bsg_vlist`, and `BSG_VLIST_*` exposure guarded
+  out; backend-private retained vlist internals remain staged behind the DM
+  bridge.  The public legacy DM draw entries in `include/dm/view.h` now take
+  opaque view-context pointers instead of naming `struct bsg_view`; the cast
+  back to retained BSG state is confined to `src/libdm/view.c` until the
+  backend is replaced.  `include/ged/view.h` no longer includes the broad
+  `ged/bsg_ged_draw.h` header or exposes `bsg_data_polygon_state` for polygon
+  export; `ged_export_polygon` takes an opaque polygon-state context and the
+  retained BSG cast lives in `src/libged/polyclip.cpp`.  `selection_state.cpp`
+  now uses the narrow GED draw-view bridge include plus local helper
+  declarations instead of the broader private BSG draw header, and stale "view
+  object" terminology was removed from the TclCAD polygon and qtcad legacy-view
+  comments.  `include/tclcad/draw.h` has also been narrowed to forward
+  declarations plus opaque `void *` draw-view contexts; the retained
+  `struct bsg_view` casts now live at the libtclcad exported command entry
+  points instead of in the public TclCAD draw API, and the header no longer
+  drags in `dm.h`, `ged.h`, or direct BSG spelling.
   The public GED draw header no longer includes `bsg/interaction.h` or
   exports `ged_draw_shape_interaction_record`; draw-scene selection tests use
-  neutral `ged_draw_shape_record.selected` state, leaving BSG interaction
-  record construction inside the GED records bridge.
+  neutral `ged_draw_shape_record.selected` state, leaving retained BSG
+  interaction record construction in the GED view adapter only.
   qtcad GED draw observer sync and real-model Obol draw/readback workflows now
   keep controller-owned database sources realized after delayed Obol field
   sensors drain, and the full in-tree qtcad Obol workflow gate passes for the
@@ -492,7 +1072,8 @@ Recently Completed Slices
   edit-pick plus solid/object edit mouse-projection view snapshots through the
   adapter.  MGED dozoom perspective, eye-position, model-to-view, and saved
   projection-matrix read snapshots now also use the adapter while live
-  projection-matrix writes and stereo fallback writes remain transitional.
+  projection-matrix writes remain transitional; the stereo fallback perspective
+  write now uses the RT legacy perspective setter.
   The libged selection semantics pick-point width/height reads and rtwizard
   view-matrix comparison reads now use the same adapter boundary.  The librt
   edit BSG
@@ -520,10 +1101,12 @@ Recently Completed Slices
   of calling the BSG view-state helper directly.  libged loadview restore
   writes now use RT legacy setter adapters for size, rotation, center, and
   perspective instead of calling BSG utility setters directly.  qtcad
-  keybinding/canvas AET writes, qtcad Obol snap-test snap-state setup, and
-  the qtcad Obol draw-sync test's center/scale setup now use the same RT
-  legacy utility-setter boundary; the qtcad Obol snap center-query test setup
-  and qsketch view setup/fit-to-view writes now do as well.  qged polygon
+  keybinding/canvas AET writes now use the same RT legacy utility-setter
+  boundary; the qtcad Obol draw-sync and snap test center/query setup now use
+  the opaque qtcad legacy-view wrapper for that same retained state.  The
+  qtcad Obol snap source/line/current-point checks and faceplate-sync state
+  setup now also use qtcad legacy-view helpers.  qsketch view setup/fit-to-view
+  writes now do as well.  qged polygon
   snap-line/source-flag/snap-exclude UI state
   and libged snap-semantics test setup now route through the same snap-state
   adapter helpers, and the libged view-independent oversized view setup now
@@ -552,6 +1135,74 @@ Recently Completed Slices
   The libged perspective command and MGED perspective variable hooks now also
   route direct perspective field writes through the RT legacy setter while
   preserving their existing projection-matrix and display-manager sync logic.
+  MGED command forwarding, screengrab, overlay execution, RT/RTCHECK view
+  setup, DM command forwarding, and dozoom frame setup now update the retained
+  view display-manager pointer through `rt_view_display_manager_set_bsg`
+  instead of writing the BSG `dmp` field directly.
+  libged DM command lookup/list/attach now reads and writes that borrowed
+  display-manager pointer through the same RT legacy boundary, and TclCAD
+  new-view DM setup uses the setter/getter for its initial handoff while the
+  broader TclCAD DM read cleanup remains queued.  The private qtcad canvas
+  bridge factory is also exported so FreeBSD/clang runtime plugin loading can
+  resolve the swrast/qtgl DM plugin bridge symbols.
+  The remaining compact libged command-side display-manager consumers
+  (`screengrab`, `ert`, `fb2pix`, `fbclear`, `pix2fb`, `png2fb`, `overlay`,
+  `rt`, `ged_rt_fb_refresh`, and the label repaint hooks) now read the
+  retained pointer through `rt_view_display_manager_from_bsg`, leaving no
+  production libged direct `dmp` field access outside the RT legacy adapter.
+  The first TclCAD display-manager read batch now uses the same getter in
+  wrapper dimension sync and perspective sync, viewability pathname checks,
+  view draw setup, and axes fallback-width calculations; direct retained
+  `dmp` reads are guarded out of those files.
+  TclCAD refresh and framebuffer-open paths now also use the getter for
+  draw-begin/end, zbuffer/depth-mask, framebuffer refresh dimensions,
+  interactive-rectangle drawing, and display-manager framebuffer lookup.
+  TclCAD polygon dimension sync and motion-binding pathname lookup now use the
+  same display-manager getter, leaving polygon command setup free of direct
+  retained `dmp` reads.
+  TclCAD mouse command setup now has a local display-manager helper boundary
+  for live width/height/pathname queries and dimension sync, so mouse
+  interaction scaling and motion-binding setup no longer read `dmp` directly.
+  TclCAD command-dispatch display-manager access is now behind a local helper
+  backed by `rt_view_display_manager_from_bsg`, and the new-view handoff still
+  uses `rt_view_display_manager_set_bsg`; production `src/libtclcad` no longer
+  reads or writes the retained `dmp` field directly.
+  gsh display hashing, dirty marking, view refresh, and display-manager close
+  cleanup now also use `rt_view_display_manager_from_bsg` /
+  `rt_view_display_manager_set_bsg`; `src/libdm/view.c` uses the getter for
+  HUD render requests and `dm_draw_objs`, leaving the remaining `dmp` hits in
+  that file limited to a local arrow-drawing payload rather than
+  `struct bsg_view`.
+  The private qtcad legacy-view display-manager bridge now also delegates its
+  get/set implementation to the RT legacy display-manager adapters, removing
+  the last direct `struct bsg_view::dmp` access from `QgLegacyView.cpp`.
+  MGED view setup/attach now installs retained update callbacks through
+  `rt_view_update_callback_set_bsg`, and MGED draw framing uses
+  `rt_view_edit_matrix_*_bsg` plus `rt_view_frame_revision_from_bsg` instead
+  of touching retained callback/edit-matrix/frame-revision fields directly.
+  TclCAD data-arrow feature access now routes through the private GED
+  draw-view adapter for feature existence, visibility, style, point-copy,
+  replace, removal, and arrow-tip get/set operations; `view/arrows.c` no
+  longer includes `bsg/feature.h` or the TclCAD BSG move-helper header.
+  TclCAD data-axes feature access now uses the same GED draw-view adapter
+  boundary for feature existence, visibility, style, point-copy, center-copy,
+  replacement, removal, and size-preserving rebuilds; `view/axes.c` no longer
+  includes `bsg/feature.h` or the TclCAD BSG move-helper header.
+  TclCAD data-polygon outline publishing now packs local contour points with
+  neutral `BG_GEOMETRY_LINE_*` commands and delegates typed polygon feature
+  replacement plus overlay ownership to the private GED draw-view adapter;
+  `polygons.c` no longer includes direct BSG feature, geometry, or overlay
+  headers.
+  TclCAD data-label feature access now routes label publish, draw existence,
+  color readback, label enumeration, and retained label point updates through
+  the same GED draw-view adapter boundary; `view/labels.c` no longer includes
+  direct `bsg/feature.h` or calls `bsg_feature_*`.  TclCAD command and mouse
+  label movement/readback paths now use the same GED label facade helpers,
+  and the old TclCAD BSG move-helper header has been retired in favor of a
+  neutral draw-view move-helper that routes data arrows, axes, and lines
+  movement/readback/scaling through GED draw-view helpers.  Production
+  `src/libtclcad` no longer includes direct BSG feature/overlay headers or
+  calls `bsg_feature_*`.
   qtcad/qged production viewport dimension sync now uses a paired RT legacy
   width/height setter for GL, SW, shared canvas-state, quad-view, and
   current-view application updates; test fixture direct width/height setup
@@ -641,10 +1292,12 @@ Recently Completed Slices
   directly.  Libged native selection draw-sync path enumeration, selection
   clearing, and shape-ref selection adds now also route through GED private
   selection helpers instead of opening BSG selection/interaction records in
-  `selection_state.cpp`.  qtcad selection filters now apply pick results and
-  clear view selection through RT legacy selection helpers instead of opening
-  BSG selection/interaction records in `QgSelectFilter.cpp`; legacy BSG
-  pick-result production remains staged for the later pick migration.  qged
+  `selection_state.cpp`.  qtcad selection filters now apply pick results,
+  clear view selection, run fallback picks, maintain rectangle state, and
+  derive exact-pick rays through the qtcad opaque legacy-view helper surface
+  instead of opening BSG selection/interaction/pick/view records in
+  `QgSelectFilter.cpp`; retained BSG pick-result production remains staged
+  inside the legacy-view adapter.  qged
   edit-preview plugins now publish begin/update/commit lifecycle events
   through the shared qged preview helper instead of constructing BSG
   interaction records directly in each plugin.  The ELL, revolve, extrude,
@@ -743,10 +1396,12 @@ Recently Completed Slices
 	  `uniq_obj_name(NULL, ...)` path correctly reports uniqueness without
 	  requiring an output buffer.
 	  qtcad Obol snap and faceplate-sync tests now route setup view-state through
-	  RT legacy aliases/adapters instead of direct BSG constants/getters/setters.
-	  QgSW offscreen integration test view-set/unit-conversion setup and qsketch
-	  view lifecycle, derived-update, and grid setup paths now also route through
-	  RT legacy view adapters instead of direct BSG view utility calls.
+	  opaque qtcad legacy-view helpers instead of direct BSG constants/getters/
+	  setters or direct RT legacy-BSG view calls.
+	  QgSW offscreen integration test view-set/unit-conversion setup now routes
+	  through qtcad legacy-view helpers, and qsketch view lifecycle,
+	  derived-update, fit-to-view, and grid setup paths now use the same opaque
+	  qtcad helper surface instead of direct BSG view utility calls.
 	  GED multi-view draw, view-command, view-independent, rtwizard, shared
 	  draw utility, and qtcad DM-backend benchmark test setup now route
 	  view-set lifecycle, dimensions, and unit-conversion writes through the
@@ -759,9 +1414,10 @@ Recently Completed Slices
 	  field writes.
 	  Remaining GED draw-test dimension/unit setup and scale-pointer handoff now
 	  also uses RT legacy view adapters instead of direct BSG view fields.
-	  GED view-object mouse/current-point updates, align command view2model
-	  writeback, and qtcad snap-test current-point checks now also use the RT
-	  legacy view adapter boundary.
+	  GED view-object mouse/current-point updates and align command view2model
+	  writeback now also use the RT legacy view adapter boundary, while qtcad
+	  snap-test current-point checks use the opaque qtcad legacy-view helper
+	  backed by that boundary.
 	  TclCAD refresh unit stashing, TclCAD command snap setup, and MGED knob
 	  view-mode unit synchronization now set legacy view unit factors through
 	  the same adapter boundary instead of writing BSG view fields directly.
@@ -821,8 +1477,10 @@ Recently Completed Slices
   `QgLegacyViewBsg.h` or `rt/view_legacy_bsg.h` directly.
   qtcad point, box, and ray selection filters likewise use Qt event
   coordinates for Obol and retained BSG fallback pick queries, and shared
-  qtcad view-sync now pushes legacy mouse/current-point state through the RT
-  adapter boundary instead of writing BSG fields directly.  qtcad polygon create,
+  qtcad view-sync now pushes legacy mouse/current-point state through the
+  opaque `QgLegacyView.h` helper surface.  The shared view filter also reads
+  retained snap source/kind/tolerance state through qtcad-local helpers instead
+  of including the qtcad BSG adapter or `rt/view_legacy_bsg.h` directly.  qtcad polygon create,
   update, select, point-edit, and move filters now pass Qt event
   coordinates/points into the retained BSG polygon API instead of reading BSG
   mouse/current/previous point fields directly.  qtcad view updates and qged
@@ -852,19 +1510,22 @@ Recently Completed Slices
   filter and plugin `.cpp` files.
   The shared qtcad view-filter implementation now depends on
   `rt/view_legacy_bsg.h` for retained snap policy and tolerance reads without
-  including `bsg/defines.h` directly.  The qtcad draw-sync test likewise no
-  longer includes `bsg/util.h`; its staged draw transaction coverage still
-  uses `ged/bsg_ged_draw.h` where retained GED transaction types are the
-  behavior under test.  The pivot guard rejects both stale includes from
-  returning to these paths.
+  including `bsg/defines.h` directly.  The qtcad draw-sync test likewise now
+  routes active-view, transaction-view, center, and scale setup through
+  qtcad legacy-view helpers; its staged draw transaction coverage still uses
+  `ged/bsg_ged_draw.h` where retained GED transaction types are the behavior
+  under test.  The pivot guard rejects the stale direct BSG view setup from
+  returning to this path.
   The remaining stale public qtcad model/sketch header BSG spellings were
   removed as well: `QgModel.h` no longer forward declares `bsg_view`, and the
   sketch-filter usage notes describe the `QgView` installation path without
   exposing the retained view pointer.
-  qged's framebuffer server header now forward declares the retained
-  `fbserv_obj` pointer type instead of including `dm/fbserv.h`; the libdm
-  framebuffer-server dependency is confined to `fbserv.cpp` while the broader
-  framebuffer/display-host migration remains queued.
+  qged's framebuffer server header no longer exposes the retained
+  `fbserv_obj` type or raw framebuffer-server callback prototypes.  Its Qt
+  helper classes carry opaque `void *` server state, while the libdm
+  framebuffer-server dependency and callback signatures are confined to
+  `fbserv.cpp` as the broader framebuffer/display-host migration remains
+  queued.
   GED's public defines header likewise now forward declares `fbserv_obj` for
   the retained `ged_fbs` pointer, with libged/qged implementation files
   including `dm/fbserv.h` only where they dereference or allocate the object.
@@ -879,6 +1540,11 @@ Recently Completed Slices
   active-display acceptance through `qg_obol_display_accepts_ged_active_view`,
   keeping the transitional `ged_gvp` comparison behind a qtcad helper whose
   public header exposes only `struct ged` and `QgView` forward declarations.
+	  qged draw-observer registration/removal, explicit redraw transactions, and
+	  draw-transaction view-presence checks now route through `QgLegacyView`
+	  helpers too.  `QgEdApp.cpp` no longer includes `ged/bsg_ged_draw.h`, calls
+	  GED draw observer/transaction functions directly, or reads `txn->view`;
+	  those retained GED draw adapter operations are confined to `QgLegacyView.cpp`.
 	  qtcad tree draw toggles and model `DrawnDisplayRole` queries now use
 	  `QgModel::drawnPathState`, with the remaining active-view lookup confined to
 	  `QgModel.cpp` instead of having `QgTreeView` read `gedp->ged_gvp` directly.
@@ -958,13 +1624,170 @@ Recently Completed Slices
 	  `rt/view_legacy_bsg.h`, calls `qg_legacy_view_to_bsg`, spells
 	  `struct bsg_view`, or names those retained RT legacy-BSG view helpers
 	  directly.
+	  QgViewFilter now uses the same opaque helper surface for snap policy,
+	  snap kind, tolerance, current-point, and mouse-state synchronization, so
+	  the shared filter no longer includes the qtcad BSG adapter or
+	  `rt/view_legacy_bsg.h`.  QgSession and the Obol active-view sync helper
+	  now also use qtcad legacy-view helpers for GED active-view and
+	  draw-transaction view handles instead of adapting through
+	  `QgLegacyViewBsg.h` or reading `ged_gvp` / `txn->view` directly.
+	  QgView refresh requests now use qtcad-local legacy-view refresh flag
+	  names and `qg_legacy_view_refresh_request`, so the wrapper widget no
+	  longer includes the qtcad BSG adapter or `rt/view_legacy_bsg.h` for
+	  staged-view refresh requests.
+	  QgCanvasInput keypress handling now toggles ADC/model-axes/view-axes
+	  state and applies AET presets through `QgLegacyView.h` helpers instead
+	  of converting the opaque view to `bsg_view *` for those key-driven state
+	  updates.  Mouse adjustment, drag-center lookup, and drag bounds callback
+	  suspend/restore now use the same helper surface, so direct input-side
+	  adapter use is confined to `QgLegacyView.cpp`.
+	  QgModel draw-state queries and draw/erase transaction view scoping now
+	  use qtcad legacy-view helpers for path-state checks, blank-slate checks,
+	  and transaction view assignment instead of locally adapting the session
+	  active view through `QgLegacyViewBsg.h`.
+	  QgModel draw observer registration, scene-revision checks, draw-result
+	  path extraction, transaction path inspection, view-only transaction
+	  classification, and draw/erase transaction application now route through
+	  the same helper surface.  `QgModel.cpp` no longer includes
+	  `ged/bsg_ged_draw.h`, calls GED draw observer/transaction APIs directly,
+	  names `GED_DRAW_TXN_*`, or reads draw transaction/result fields.
+	  QgObolDrawSync now uses qtcad legacy-view helpers for transaction view
+	  lookup, GED database access, transaction kind/path/mode/result inspection,
+	  full-scene draw-list enumeration, and draw-state mode checks.  The Obol
+	  draw sync implementation no longer includes `ged/bsg_ged_draw.h` or
+	  `QgLegacyViewBsg.h`, calls `qg_legacy_view_to_bsg`, spells
+	  `struct bsg_view`, names `GED_DRAW_TXN_*` / `BSG_DRAW_MODE_*`, calls
+	  `ged_draw_path_state` / `ged_draw_list_paths` / `ged_draw_default_mode`
+	  directly, reads `gedp->dbip`, or reads GED draw transaction/result fields.
+	  QEll draw-highlight updates now use `QgLegacyView` helpers as well, so the
+	  ELL edit plugin no longer calls `ged_draw_highlight_shape_ref_by_name`,
+	  `ged_draw_set_highlighted_shape_ref`, or names `GED_DRAW_SHAPE_REF_NULL`
+	  directly.
+	  qtcad mouse-adjust mode values are now expressed as
+	  `QG_LEGACY_VIEW_ADJUST_*` constants in `QgLegacyView.h`, matching the
+	  retained RT adapter bit values without exposing those RT names to the UI
+	  controller path.  `QgViewCtrl.cpp` no longer includes
+	  `rt/view_legacy_bsg.h`; `QgGL.cpp` and `QgSW.cpp` keep the lower legacy
+	  backend bridge where they still set up the retained view adapter.
+	  QgQuadView now uses qtcad legacy-view helpers for quad view naming,
+	  GED view-set add/remove/attach operations, LoD policy copy, and default
+	  autoview/bounds updates.  The quad-view widget no longer includes
+	  `QgLegacyViewBsg.h` or `rt/view_legacy_bsg.h`, calls
+	  `qg_legacy_view_to_bsg`, spells `struct bsg_view`, or names those
+	  retained RT view-set/LoD/autoview adapters directly.
 	  The private qtcad canvas state now stores `qg_legacy_view *` handles for
 	  its active and widget-local views as well.  `QgGL`, `QgSW`, and
-	  `QgCanvasState` adapt those handles at the legacy RT/DM call boundary via
-	  `QgLegacyViewBsg.h`, so raw `bsg_view *` storage is no longer part of the
-	  shared canvas pimpl.  The pivot guard requires the opaque canvas-state
-	  fields and rejects reverting `qgcanvas_set_view` to a raw BSG view
-	  signature.
+	  `QgCanvasState` route the remaining legacy DM open/draw bridge through
+	  `QgLegacyView` helpers, so raw `bsg_view *` storage and adapter spelling
+	  are no longer part of the shared canvas pimpl or fallback canvas
+	  implementations.  The pivot guard requires the opaque canvas-state fields
+	  and rejects reverting `qgcanvas_set_view` or the canvas DM bridge to raw
+	  BSG view access.
+	  qtcad canvas hash, native-repaint, configure-window, and DM size
+	  operations now also route through `QgLegacyView` helpers.
+	  `QgCanvasState.h` no longer includes `dm.h` or defines `DM_WITH_RT`; it
+	  keeps only forward-declared retained DM/FB/PTBL handles while the direct
+	  libdm fallback lifecycle stays local to `QgGL.cpp` and `QgSW.cpp`.
+	  The retained canvas DM/view binding sequence is now semantic as well:
+	  `QgLegacyView` owns the temporary `dm_set_vp` scale pointer coupling,
+	  BSG view display-manager assignment, and view-dimension sync from the
+	  DM.  `QgGL.cpp`, `QgSW.cpp`, and `QgCanvasState.h` use
+	  `qg_legacy_view_dm_bind` and `qg_legacy_view_dm_sync_dimensions` instead
+	  of assembling those retained backend details inline, and the pivot guard
+	  rejects direct scale-storage/display-manager coupling from returning to
+	  the canvas layer.
+	  Retained canvas DM-table registration and existing-framebuffer setup are
+	  now bridged through `QgLegacyView` as well.  `QgGL.cpp` and `QgSW.cpp`
+	  no longer include `bu/ptbl.h`, call `bu_ptbl_ins_unique`, or assemble
+	  `fb_platform_specific` / `fb_setup_existing` records directly for the
+	  temporary libdm fallback; the pivot guard requires the helper route and
+	  rejects those lower-level setup calls from returning to the canvas
+	  implementations.
+	  Raw framebuffer creation, retained framebuffer release, standalone
+	  checks, and resize configuration now also route through `QgLegacyView`.
+	  `QgGL.cpp` and `QgSW.cpp` no longer call `fb_raw`,
+	  `fb_set_standalone`, `fb_get_standalone`, `fb_close_existing`,
+	  `fb_put`, or `fb_configure_window` directly; the pivot guard rejects
+	  those retained framebuffer lifecycle calls from returning to the canvas
+	  implementations.
+	  The retained qtcad fallback DM open/close lifecycle is now bridged too.
+	  `QgLegacyView` owns qtgl and swrast `dm_open` calls, SW app-widget
+	  udata attachment, and `dm_close`; `QgGL.cpp` and `QgSW.cpp` use typed
+	  `qg_legacy_view_dm_open_*` / `qg_legacy_view_dm_close` helpers instead
+	  of opening, closing, or assigning SW udata directly.
+	  Retained backend setup policy is now typed as well.  `QgLegacyView`
+	  owns the qtgl/SW display-manager path names, SW zbuffer enable, and
+	  temporary window-bound setup; `QgGL.cpp` and `QgSW.cpp` call
+	  `qg_legacy_view_dm_setup_qtgl` or `qg_legacy_view_dm_setup_swrast`
+	  rather than spelling `dm_set_pathname`, `dm_set_zbuffer`, or
+	  `dm_set_win_bounds` directly.
+	  Draw-time retained background and draw-boundary calls are now behind
+	  `QgLegacyView` helpers as well.  The canvas files no longer call
+	  `dm_get_bg`, `dm_set_bg`, `dm_draw_begin`, or `dm_draw_end` directly;
+	  SW screenshot background adjustment uses copied qtcad bridge records
+	  instead of raw libdm background pointers.
+	  The canvas-state snapshot path has now moved its local view lifetime,
+	  camera rotation/center/scale/perspective reads, faceplate state reads,
+	  refresh request/consume/complete handling, view hashes, AET updates,
+	  display-manager attachment, scale-storage coupling, and SW screenshot
+	  model2view load through `QgLegacyView` helpers.  `QgCanvasState.h`,
+	  `QgGL.cpp`, and `QgSW.cpp` no longer include `rt/view_legacy_bsg.h` or call
+	  those RT legacy-view wrappers directly; the remaining lower libdm
+	  retained-view handoff is named explicitly through `QgLegacyView` DM bridge
+	  helpers.
+	  The qged edit-preview compatibility helper now routes retained
+	  feature/interaction operations through semantic `QgLegacyView` helpers.
+	  `QgLegacyView` owns the staged BSG feature ref conversion, edit-preview
+	  callback bridge, overlay owner registration, lifecycle event record
+	  creation, label replacement, point replacement, and clear/remove/style
+	  operations.  `qged_edit_preview_util.cpp` no longer includes
+	  `bsg/feature.h` or `bsg/interaction.h`, spells raw `bsg_view`,
+	  names `bsg_feature_*` / `bsg_interaction_*` APIs, maps
+	  `BSG_EDIT_PREVIEW_*`, `BSG_FEATURE_*`, `BSG_OVERLAY_*`, or
+	  `BSG_ANCHOR_*` constants, or uses the old raw
+	  `qg_legacy_view_edit_preview_context` escape hatch.  The pivot guard now
+	  requires the `QgLegacyView` helper route and rejects direct BSG
+	  edit-preview bridge access from returning to qged.
+	  qged framebuffer-server setup now also has a named bridge.  `fbserv.cpp`
+	  owns the retained `dm/fbserv.h` and `dm.h` dependencies, assigns the GED
+	  framebuffer-server callback table through
+	  `qdm_configure_ged_fbserv_handlers`, and exposes `qdm_init_messages` for
+	  filtered DM startup diagnostics.  `QgEdApp.cpp` no longer includes
+	  `dm/fbserv.h` or `dm.h`, writes `gedp->ged_fbs` callback slots directly,
+	  or calls `dm_init_msgs` directly.  The pivot guard requires this route and
+	  rejects direct qged app-side framebuffer-server/libdm setup from returning.
+	  `fbserv.h` now also avoids exposing the retained `fbserv_obj` type or raw
+	  callback prototypes; its Qt helper classes keep only opaque `void *`
+	  server state, and the pivot guard rejects retained framebuffer-server type
+	  leakage from returning to the qged header.
+	  The qtcad draw-observer transaction type boundary now uses qtcad-local
+	  `qg_legacy_view_draw_transaction` and
+	  `qg_legacy_view_draw_transaction_result` aliases from `QgLegacyView.h`.
+	  `QgModel`, `QgObolDrawSync`, `QgObolViewSync`, and the qged Obol draw
+	  observer no longer expose `struct ged_draw_transaction` or
+	  `struct ged_draw_transaction_result` in their qtcad/qged-facing
+	  signatures; those raw GED names are confined to the central legacy-view
+	  adapter and tests.  The pivot guard now requires the qtcad-local names and
+	  rejects direct GED draw transaction type exposure from returning to those
+	  headers and implementations.
+	  The installed qtcad draw transaction record has now been tightened from a
+	  public semantic struct to fixed opaque in-place storage.  `QgLegacyView.cpp`
+	  owns the private transaction storage record, uses placement construction in
+	  `qg_legacy_view_draw_transaction_init`, and translates to/from retained
+	  GED transactions inside the bridge.  Existing migrated callers continue to
+	  use stack transaction records plus qtcad init/setter/accessor functions,
+	  including the new `qg_legacy_view_draw_transaction_autoview_set`; the pivot
+	  guard rejects the old public transaction fields from returning to
+	  `QgLegacyView.h`.
+	  The qtcad draw result record has now been tightened further: the installed
+	  `QgLegacyView.h` result type stores only an opaque private implementation
+	  token, no longer includes `bu/vls.h`, and exposes result status, scene
+	  revision, names, and errors only through qtcad accessor functions.
+	  `QgLegacyView.cpp` owns the result storage and copies retained GED result
+	  data into it; the real-model diagnostic path now uses
+	  `qg_legacy_view_draw_result_errors` instead of reading `result.errors`
+	  directly.  The pivot guard rejects public result `bu_vls` storage and
+	  direct migrated-test result-field reads from returning.
 	  qtcad dense real-model coverage is now split into named CTest cases with
 	  180-second per-test timeouts.  The m35 interaction path uses nearest-pick
 	  semantics for its normal correctness assertions, while
@@ -981,9 +1804,35 @@ Recently Completed Slices
 	  graph once to count wire shapes/segments or meshes/triangles, preserving the
 	  same correctness checks while reducing the havoc geometry-count phase to
 	  about 0.010 seconds and the full havoc case to about 23 seconds.
-	  The standalone qsketch fixture still owns a retained raw BSG test/demo
-	  view, but now adapts it through the explicit `QgLegacyViewBsg.h` boundary
-	  when handing it to `QgView::set_view`, matching the opaque qtcad view API.
+	  The standalone qsketch fixture now owns its staged view as an opaque
+	  `qg_legacy_view *`, uses qtcad legacy-view helpers for view lifecycle,
+	  setup, fit-to-view, and grid state.  Its retained edit creation and
+	  field-backed sketch line-set scene nodes now route through the private
+	  `QgLegacyViewSketch.h` qtcad bridge, so `qsketch.cpp` no longer includes
+	  `QgLegacyViewBsg.h`, calls `qg_legacy_view_to_bsg`, or spells raw BSG
+	  node/line-set refs.  The stale direct `dm.h` include is gone too, leaving
+	  qsketch's retained display access through qtcad view/capture helpers and
+	  the private sketch bridge; the pivot guard now rejects direct libdm or BSG
+	  headers from returning to qsketch.
+	  The migrated qtcad Obol workflow tests now also route retained draw
+	  appearance through `qg_legacy_view_draw_appearance` and
+	  `qg_legacy_view_draw_transaction_appearance_set`.  Draw sync, selection,
+	  pick, measure, and real-model coverage keep their wire/shaded assertions,
+	  but no longer include `ged/bsg_ged_draw.h`, spell
+	  `bsg_appearance_settings`, write transaction `.appearance` directly, or
+	  use `BSG_DRAW_MODE_*` constants.  The pivot guard enforces that the
+	  retained appearance storage stays inside `QgLegacyView.cpp`.  The same
+	  migrated workflow tests now also route draw observer registration and draw
+	  transaction result init/apply/free through `QgLegacyView.h` helpers,
+	  keeping raw `ged_draw_observer_*`, `ged_draw_apply_transaction`, and
+	  `ged_draw_transaction_result_*` calls out of those tests while the
+	  retained calls remain centralized in `QgLegacyView.cpp`.  Draw transaction
+	  construction and borrowed multi-path setup now also use
+	  `qg_legacy_view_draw_transaction_init` and
+	  `qg_legacy_view_draw_transaction_paths_set`, so the same tests no longer
+	  spell `ged_draw_transaction_make`, `GED_DRAW_TXN_*`, raw
+	  `struct ged_draw_transaction`, or transaction `.paths` / `.path_count`
+	  assignments.
 	  libdm normalized view clipping, ADC drawing, label placement, GL z-clipping,
 	  framebuffer canvas dimension setup, display-manager default clip bounds,
 	  and internal pixel/view conversion macros now use RT legacy view adapters or

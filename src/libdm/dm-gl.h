@@ -32,7 +32,7 @@
 
 #include "vmath.h"
 #include "bu.h"
-#include "bsg/vlist.h"
+#include "bg/vlist.h"
 
 struct bsg_render_item;
 #include "dm.h"
@@ -152,7 +152,7 @@ DMGL_EXPORT extern int drawLine3D(struct dm *dmp, point_t pt1, point_t pt2, cons
 DMGL_EXPORT extern int drawLines3D(struct dm *dmp, int npoints, point_t *points, int lflag, const char *log_bu, float *wireColor);
 
 DMGL_EXPORT extern int gl_debug(struct dm *dmp, int vl);
-DMGL_EXPORT extern int gl_draw(struct dm *dmp, bsg_vlist *(*callback_function)(void *), void **data);
+DMGL_EXPORT extern int gl_draw(struct dm *dmp, bg_vlist *(*callback_function)(void *), void **data);
 DMGL_EXPORT extern int gl_drawBegin(struct dm *dmp);
 DMGL_EXPORT extern int gl_drawEnd(struct dm *dmp);
 DMGL_EXPORT extern int gl_drawLine2D(struct dm *dmp, fastf_t X1, fastf_t Y1, fastf_t X2, fastf_t Y2);
@@ -161,8 +161,8 @@ DMGL_EXPORT extern int gl_drawLines3D(struct dm *dmp, int npoints, point_t *poin
 DMGL_EXPORT extern int gl_drawPoint2D(struct dm *dmp, fastf_t x, fastf_t y);
 DMGL_EXPORT extern int gl_drawPoint3D(struct dm *dmp, point_t point);
 DMGL_EXPORT extern int gl_drawPoints3D(struct dm *dmp, int npoints, point_t *points);
-DMGL_EXPORT extern int gl_drawVList(struct dm *dmp, bsg_vlist *vp);
-DMGL_EXPORT extern int gl_drawVListHiddenLine(struct dm *dmp, bsg_vlist *vp);
+DMGL_EXPORT extern int gl_drawVList(struct dm *dmp, bg_vlist *vp);
+DMGL_EXPORT extern int gl_drawVListHiddenLine(struct dm *dmp, bg_vlist *vp);
 DMGL_EXPORT extern int gl_draw_item(struct dm *dmp, const struct bsg_render_item *item);
 DMGL_EXPORT extern void gl_command_list_delete_enqueue(struct dm *dmp, unsigned int list);
 DMGL_EXPORT extern void gl_command_list_delete_flush(struct dm *dmp);

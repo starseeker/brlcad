@@ -17,8 +17,7 @@
 #include "bu/env.h"
 #include "bu/file.h"
 #include "ged.h"
-#include "ged/bsg_ged_draw.h"
-#include "qtcad/QgLegacyViewBsg.h"
+#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgObolDrawSync.h"
 #include "qtcad/QgObolPick.h"
 #include "qtcad/QgSelectFilter.h"
@@ -87,13 +86,13 @@ make_pick_db(const char *dbpath)
 static int
 apply_and_sync(struct ged *gedp,
 	QgView *view,
-	struct ged_draw_transaction *txn)
+	qg_legacy_view_draw_transaction *txn)
 {
-    struct ged_draw_transaction_result result;
-    ged_draw_transaction_result_init(&result);
-    int draw_ret = ged_draw_apply_transaction(gedp, txn, &result);
+    qg_legacy_view_draw_transaction_result result;
+    qg_legacy_view_draw_result_init(&result);
+    int draw_ret = qg_legacy_view_draw_transaction_apply(gedp, txn, &result);
     int changed = qg_obol_sync_draw_transaction(gedp, txn, &result, view);
-    ged_draw_transaction_result_free(&result);
+    qg_legacy_view_draw_result_free(&result);
 
     return draw_ret >= 0 && changed != 0;
 }
@@ -188,9 +187,9 @@ main(int argc, char **argv)
     if (!gedp)
 	FAIL("failed to open qtcad Obol pick test database");
 
-    QgView view(NULL, QgView_SW, NULL);
+    QgView view(NULL, QgView_SW);
     view.resize(180, 140);
-    gedp->ged_gvp = qg_legacy_view_to_bsg(view.view());
+    qg_legacy_view_ged_active_set(gedp, view.view());
 
     BRLObolViewController *controller = view.obolViewController();
     if (!controller)
@@ -198,13 +197,17 @@ main(int argc, char **argv)
     controller->clearDatabaseSources();
     controller->setViewportSize(180, 140);
 
-    struct bsg_appearance_settings shaded_settings = BSG_APPEARANCE_SETTINGS_INIT;
-    shaded_settings.draw_mode = BSG_DRAW_MODE_SHADED;
-    struct ged_draw_transaction draw_box =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "box.s");
-    draw_box.view = qg_legacy_view_to_bsg(view.view());
-    draw_box.appearance = &shaded_settings;
-    if (!apply_and_sync(gedp, &view, &draw_box))
+    qg_legacy_view_draw_appearance *shaded_appearance =
+	qg_legacy_view_draw_appearance_create(QG_LEGACY_VIEW_DRAW_MODE_SHADED);
+    qg_legacy_view_draw_transaction draw_box;
+    qg_legacy_view_draw_transaction_init(&draw_box,
+	    QG_LEGACY_VIEW_DRAW_TXN_DRAW, "box.s");
+    qg_legacy_view_draw_transaction_view_set(&draw_box, view.view());
+    qg_legacy_view_draw_transaction_appearance_set(&draw_box,
+	    shaded_appearance);
+    int drew_box = apply_and_sync(gedp, &view, &draw_box);
+    qg_legacy_view_draw_appearance_destroy(shaded_appearance);
+    if (!drew_box)
 	FAIL("GED shaded draw should sync box source into Obol");
 
     controller->getViewport()->viewAll();
@@ -218,7 +221,7 @@ main(int argc, char **argv)
 	    picks[0].sourceName != "box.s" ||
 	    picks[0].sourceType != "arb8")
 	FAIL("qtcad Obol pick record should preserve BRL-CAD pick detail identity");
-    if (view.dmp())
+    if (view.legacyBackendInitialized())
 	FAIL("qtcad Obol point pick should not initialize the legacy display manager");
 
     QgSelectPntFilter filter;
@@ -230,7 +233,7 @@ main(int argc, char **argv)
     const std::vector<std::string> &paths = filter.selected_paths();
     if (paths.size() != 1 || paths[0] != "box.s")
 	FAIL("qtcad select point filter should expose normalized Obol pick paths");
-    if (view.dmp())
+    if (view.legacyBackendInitialized())
 	FAIL("qtcad select point filter should not initialize the legacy display manager for Obol picks");
 
     std::vector<QgObolPickRecord> rectPicks;
@@ -245,7 +248,7 @@ main(int argc, char **argv)
     }
     if (!foundRectPath)
 	FAIL("qtcad Obol rectangle pick should preserve BRL-CAD path identity");
-    if (view.dmp())
+    if (view.legacyBackendInitialized())
 	FAIL("qtcad Obol rectangle pick should not initialize the legacy display manager");
 
     QgSelectBoxFilter boxFilter;
@@ -263,7 +266,7 @@ main(int argc, char **argv)
     const std::vector<std::string> &boxPaths = boxFilter.selected_paths();
     if (boxPaths.size() != 1 || boxPaths[0] != "box.s")
 	FAIL("qtcad select box filter should expose normalized Obol pick paths");
-    if (view.dmp())
+    if (view.legacyBackendInitialized())
 	FAIL("qtcad select box filter should not initialize the legacy display manager for Obol picks");
 
     QgSelectRayFilter rayFilter;
@@ -276,7 +279,7 @@ main(int argc, char **argv)
     const std::vector<std::string> &rayPaths = rayFilter.selected_paths();
     if (rayPaths.size() != 1 || rayPaths[0] != "box.s")
 	FAIL("qtcad select ray filter should expose normalized Obol pick paths");
-    if (view.dmp())
+    if (view.legacyBackendInitialized())
 	FAIL("qtcad select ray filter should not initialize the legacy display manager for Obol picks");
 
     SoSeparator *lodRoot = new SoSeparator;
@@ -558,7 +561,7 @@ main(int argc, char **argv)
     }
     controller->setExactFullDetailBudget(0, 0);
 
-    if (view.dmp()) {
+    if (view.legacyBackendInitialized()) {
 	controller->setLodService(NULL);
 	sourceService.stop();
 	FAIL("qtcad source-backed Obol pick should not initialize the legacy display manager");
@@ -721,7 +724,7 @@ main(int argc, char **argv)
     if (mixedRayAllPicks[0].sourceName != "implicit.s" || !foundRayFarBox)
 	FAIL("qtcad mixed Obol/RT ray pick-all should order merged hits by distance");
 
-    if (view.dmp())
+    if (view.legacyBackendInitialized())
 	FAIL("qtcad librt exact implicit pick should not initialize the legacy display manager");
 
     ged_close(gedp);

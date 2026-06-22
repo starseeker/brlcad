@@ -26,15 +26,14 @@
 
 #include "common.h"
 #include "bu/units.h"
-#include "bsg/feature.h"
 #include "ged.h"
 #include "rt/view_legacy_bsg.h"
 #include "tclcad.h"
 
 /* Private headers */
+#include "../../libged/bsg_ged_draw_view_private.h"
 #include "../tclcad_private.h"
 #include "../view/view.h"
-#include "../bsg_move_helpers.h"
 
 /* Phase T3 (drawing_stack_modernization): the "view get" introspection path
  * (getters in to_data_arrows_func) now recovers values by reading the BSG
@@ -45,14 +44,51 @@
  * (color, line_width, tip_length, tip_width, draw) or rebuild it from scratch
  * preserving current style (points).  gv_tcl is no longer mirrored. */
 
+static void
+_tclcad_data_arrow_rebuild_style(struct bsg_view *view,
+				 const char *name,
+				 struct ged_draw_view_feature_style *style)
+{
+    if (!style)
+	return;
+
+    struct ged_draw_view_feature_style saved = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+    saved.visible = 1;
+    saved.color_valid = 1;
+    saved.color[0] = 255;
+    saved.color[1] = 255;
+    saved.color[2] = 0;
+    saved.line_width = 0;
+    saved.arrow = 1;
+    saved.arrow_tip_length = 0.0;
+    saved.arrow_tip_width = 0.0;
+
+    struct ged_draw_view_feature_style current = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+    if (ged_draw_view_feature_style_get(view, name, &current)) {
+	saved.visible = current.visible;
+	if (current.color_valid) {
+	    saved.color_valid = 1;
+	    saved.color[0] = current.color[0];
+	    saved.color[1] = current.color[1];
+	    saved.color[2] = current.color[2];
+	}
+	saved.line_width = current.line_width;
+	saved.arrow_tip_length = current.arrow_tip_length;
+	saved.arrow_tip_width = current.arrow_tip_width;
+    }
+
+    *style = saved;
+}
+
 int
 go_data_arrows(Tcl_Interp *interp,
 	       struct ged *gedp,
-	       struct bsg_view *gdvp,
+	       void *draw_view_ctx,
 	       int argc,
 	       const char *argv[],
 	       const char *usage)
 {
+    struct bsg_view *gdvp = (struct bsg_view *)draw_view_ctx;
     int ret;
 
     /* initialize result */
@@ -104,7 +140,7 @@ to_data_arrows(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
+    gdvp = (struct bsg_view *)ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -132,8 +168,8 @@ to_data_arrows_func(Tcl_Interp *interp,
 
     if (BU_STR_EQUAL(argv[1], "draw")) {
 	if (argc == 2) {
-	    bsg_feature_ref ref = bsg_feature_find(gdvp, bsg_name);
-	    bu_vls_printf(gedp->ged_result_str, "%d", bsg_feature_ref_is_null(ref) ? 0 : 1);
+	    bu_vls_printf(gedp->ged_result_str, "%d",
+			  ged_draw_view_feature_exists(gdvp, bsg_name) ? 1 : 0);
 	    return BRLCAD_OK;
 	}
 
@@ -143,9 +179,7 @@ to_data_arrows_func(Tcl_Interp *interp,
 	    if (bu_sscanf(argv[2], "%d", &i) != 1)
 		goto bad;
 
-	    bsg_feature_ref ref = bsg_feature_find(gdvp, bsg_name);
-	    if (!bsg_feature_ref_is_null(ref))
-		bsg_feature_set_visible(ref, i ? 1 : 0);
+	    ged_draw_view_feature_visible_set(gdvp, bsg_name, i ? 1 : 0);
 	    /* If no BSG object exists and draw=1 is requested, nothing to show
 	     * yet (no points have been set); silently no-op. */
 
@@ -158,9 +192,8 @@ to_data_arrows_func(Tcl_Interp *interp,
 
     if (BU_STR_EQUAL(argv[1], "color")) {
 	if (argc == 2) {
-	    bsg_feature_ref ref = bsg_feature_find(gdvp, bsg_name);
-	    struct bsg_feature_style style = BSG_FEATURE_STYLE_INIT;
-	    if (bsg_feature_style_get(ref, &style) && style.color_valid) {
+	    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+	    if (ged_draw_view_feature_style_get(gdvp, bsg_name, &style) && style.color_valid) {
 		bu_vls_printf(gedp->ged_result_str, "%d %d %d",
 			      (int)style.color[0], (int)style.color[1], (int)style.color[2]);
 	    } else {
@@ -184,9 +217,7 @@ to_data_arrows_func(Tcl_Interp *interp,
 		b < 0 || 255 < b)
 		goto bad;
 
-	    bsg_feature_ref ref = bsg_feature_find(gdvp, bsg_name);
-	    if (!bsg_feature_ref_is_null(ref))
-		bsg_feature_set_color(ref, r, g, b);
+	    ged_draw_view_line_color_set(gdvp, bsg_name, r, g, b);
 
 	    to_refresh_view(gdvp);
 	    return BRLCAD_OK;
@@ -197,9 +228,8 @@ to_data_arrows_func(Tcl_Interp *interp,
 
     if (BU_STR_EQUAL(argv[1], "line_width")) {
 	if (argc == 2) {
-	    bsg_feature_ref ref = bsg_feature_find(gdvp, bsg_name);
-	    struct bsg_feature_style style = BSG_FEATURE_STYLE_INIT;
-	    if (bsg_feature_style_get(ref, &style))
+	    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+	    if (ged_draw_view_feature_style_get(gdvp, bsg_name, &style))
 		bu_vls_printf(gedp->ged_result_str, "%d", style.line_width);
 	    else
 		bu_vls_printf(gedp->ged_result_str, "0");
@@ -212,9 +242,7 @@ to_data_arrows_func(Tcl_Interp *interp,
 	    if (bu_sscanf(argv[2], "%d", &line_width) != 1)
 		goto bad;
 
-	    bsg_feature_ref ref = bsg_feature_find(gdvp, bsg_name);
-	    if (!bsg_feature_ref_is_null(ref))
-		bsg_feature_set_line_width(ref, line_width);
+	    ged_draw_view_line_width_set(gdvp, bsg_name, line_width);
 
 	    to_refresh_view(gdvp);
 	    return BRLCAD_OK;
@@ -227,13 +255,12 @@ to_data_arrows_func(Tcl_Interp *interp,
 	register int i;
 
 	if (argc == 2) {
-	    bsg_feature_ref ref = bsg_feature_find(gdvp, bsg_name);
 	    point_t *pts = NULL;
 	    size_t npts = 0;
-	    if (bsg_feature_points_copy(ref, &pts, NULL, &npts)) {
+	    if (ged_draw_view_feature_points_copy(gdvp, bsg_name, &pts, &npts)) {
 		for (size_t _j = 0; _j < npts; _j++)
 		    bu_vls_printf(gedp->ged_result_str, " {%lf %lf %lf} ", V3ARGS(pts[_j]));
-		bu_free(pts, "bsg feature points copy");
+		bu_free(pts, "GED draw view feature points copy");
 	    }
 	    return BRLCAD_OK;
 	}
@@ -254,13 +281,12 @@ to_data_arrows_func(Tcl_Interp *interp,
 	    }
 
 	    /* T3: save style from existing BSG object before replacing it. */
-	    int saved_color[3]; int saved_lw, saved_tl, saved_tw, saved_vis;
-	    bsg_feature_ref old_ref = bsg_feature_find(gdvp, bsg_name);
-	    _bsg_read_style(old_ref, saved_color, &saved_lw, &saved_tl, &saved_tw, &saved_vis);
+	    struct ged_draw_view_feature_style saved_style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+	    _tclcad_data_arrow_rebuild_style(gdvp, bsg_name, &saved_style);
 
 	    /* Clear out: remove old BSG object. */
 	    if (ac < 2) {
-		bsg_feature_remove(gdvp, bsg_name);
+		ged_draw_view_feature_remove(gdvp, bsg_name);
 		Tcl_Free((char *)av);
 		to_refresh_view(gdvp);
 		return BRLCAD_OK;
@@ -281,8 +307,8 @@ to_data_arrows_func(Tcl_Interp *interp,
 	    }
 
 	    /* T3: rebuild BSG from new points, preserving style (no gv_tcl write). */
-	    _bsg_rebuild_arrows(gdvp, bsg_name, pts, ac,
-			       saved_color, saved_lw, saved_tl, saved_tw, saved_vis);
+	    (void)ged_draw_view_tcl_arrows_replace(gdvp, bsg_name, pts, (size_t)ac,
+		    &saved_style);
 	    bu_free(pts, "arrow points");
 	    Tcl_Free((char *)av);
 	    to_refresh_view(gdvp);
@@ -292,9 +318,8 @@ to_data_arrows_func(Tcl_Interp *interp,
 
     if (BU_STR_EQUAL(argv[1], "tip_length")) {
 	if (argc == 2) {
-	    bsg_feature_ref ref = bsg_feature_find(gdvp, bsg_name);
 	    fastf_t tip_length = 0.0;
-	    if (bsg_feature_arrow_tip_get(ref, &tip_length, NULL)) {
+	    if (ged_draw_view_arrow_tip_get(gdvp, bsg_name, &tip_length, NULL)) {
 		bu_vls_printf(gedp->ged_result_str, "%d", (int)tip_length);
 	    } else {
 		bu_vls_printf(gedp->ged_result_str, "0");
@@ -308,10 +333,9 @@ to_data_arrows_func(Tcl_Interp *interp,
 	    if (bu_sscanf(argv[2], "%d", &tip_length) != 1)
 		goto bad;
 
-	    bsg_feature_ref ref = bsg_feature_find(gdvp, bsg_name);
 	    fastf_t tip_width = 0.0;
-	    if (bsg_feature_arrow_tip_get(ref, NULL, &tip_width))
-		bsg_feature_arrow_tip_set(ref, (fastf_t)tip_length, tip_width);
+	    if (ged_draw_view_arrow_tip_get(gdvp, bsg_name, NULL, &tip_width))
+		ged_draw_view_arrow_tip_set(gdvp, bsg_name, (fastf_t)tip_length, tip_width);
 
 	    to_refresh_view(gdvp);
 	    return BRLCAD_OK;
@@ -322,9 +346,8 @@ to_data_arrows_func(Tcl_Interp *interp,
 
     if (BU_STR_EQUAL(argv[1], "tip_width")) {
 	if (argc == 2) {
-	    bsg_feature_ref ref = bsg_feature_find(gdvp, bsg_name);
 	    fastf_t tip_width = 0.0;
-	    if (bsg_feature_arrow_tip_get(ref, NULL, &tip_width)) {
+	    if (ged_draw_view_arrow_tip_get(gdvp, bsg_name, NULL, &tip_width)) {
 		bu_vls_printf(gedp->ged_result_str, "%d", (int)tip_width);
 	    } else {
 		bu_vls_printf(gedp->ged_result_str, "0");
@@ -338,10 +361,9 @@ to_data_arrows_func(Tcl_Interp *interp,
 	    if (bu_sscanf(argv[2], "%d", &tip_width) != 1)
 		goto bad;
 
-	    bsg_feature_ref ref = bsg_feature_find(gdvp, bsg_name);
 	    fastf_t tip_length = 0.0;
-	    if (bsg_feature_arrow_tip_get(ref, &tip_length, NULL))
-		bsg_feature_arrow_tip_set(ref, tip_length, (fastf_t)tip_width);
+	    if (ged_draw_view_arrow_tip_get(gdvp, bsg_name, &tip_length, NULL))
+		ged_draw_view_arrow_tip_set(gdvp, bsg_name, tip_length, (fastf_t)tip_width);
 
 	    to_refresh_view(gdvp);
 	    return BRLCAD_OK;

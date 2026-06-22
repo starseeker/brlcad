@@ -1064,10 +1064,10 @@ _ged_drawtrees(struct ged *gedp, int argc, const char *argv[], int kind, struct 
 	memset(&dgcdp, 0, sizeof(struct _ged_client_data));
 	dgcdp.gedp = gedp;
 
-	gvp = gedp->ged_gvp;
+	gvp = (struct bsg_view *)ged_view_active_ctx(gedp);
 	dgcdp.v = gvp;
 
-	if (gedp && gedp->ged_gvp)
+	if (gvp)
 	    lod_policy_cached_valid = ged_draw_view_lod_policy_from_bsg(&lod_policy_cached, gvp);
 
 	if (lod_policy_cached_valid && lod_policy_cached.csg_enabled)
@@ -1275,7 +1275,7 @@ _ged_drawtrees(struct ged *gedp, int argc, const char *argv[], int kind, struct 
 		if (shaded_mode_override != _GED_SHADED_MODE_UNSET) {
 		    dgcdp.vs.draw_mode = shaded_mode_override;
 		} else if (ged_draw_default_mode(gedp)) {
-		    bsg_draw_mode default_mode = ged_draw_default_mode(gedp);
+		    int default_mode = ged_draw_default_mode(gedp);
 		    dgcdp.vs.draw_mode = (int)default_mode;
 		}
 		break;
@@ -1393,7 +1393,7 @@ _ged_drawtrees(struct ged *gedp, int argc, const char *argv[], int kind, struct 
 			bsg_data.transparency= dgcdp.vs.transparency;
 			bsg_data.draw_mode = dgcdp.vs.draw_mode;
 			bsg_data.vs = dgcdp.vs;
-			bsg_data.v = gedp->ged_gvp;
+			bsg_data.v = dgcdp.v;
 			bsg_data.gedp = gedp;
 
 		    {
@@ -1440,12 +1440,12 @@ _ged_drawtrees(struct ged *gedp, int argc, const char *argv[], int kind, struct 
 		if (dgcdp.autoview) {
 		    const char *autoview_args[1] = {"autoview"};
 		    ged_exec_autoview(gedp, 1, autoview_args);
-		}
+			}
 
-		/* Set the view threshold */
-		if (gedp && gedp->ged_gvp && lod_policy_cached_valid)
-		    (void)ged_draw_view_lod_policy_apply_bsg_bot_threshold(
-			    gedp->ged_gvp, &lod_policy_cached, (size_t)bot_threshold);
+			/* Set the view threshold */
+			if (dgcdp.v && lod_policy_cached_valid)
+			    (void)ged_draw_view_lod_policy_apply_bsg_bot_threshold(
+				    dgcdp.v, &lod_policy_cached, (size_t)bot_threshold);
 
 		/* calculate plot vlists for shapes of each draw path */
 		for (i = 0; i < argc; ++i) {
@@ -1455,13 +1455,13 @@ _ged_drawtrees(struct ged *gedp, int argc, const char *argv[], int kind, struct 
 			continue;
 		    }
 
-		    ret = ged_draw_redraw_group_ref(gedp, draw_group_ref,
-			    dgcdp.vs.draw_non_subtract_only);
-		    if (ret < 0) {
-			/* restore view bot threshold */
-			if (gedp && gedp->ged_gvp && lod_policy_cached_valid)
-			    (void)ged_draw_view_lod_policy_apply_bsg(
-				    gedp->ged_gvp, &lod_policy_cached);
+			    ret = ged_draw_redraw_group_ref(gedp, draw_group_ref,
+				    dgcdp.vs.draw_non_subtract_only);
+			    if (ret < 0) {
+				/* restore view bot threshold */
+				if (dgcdp.v && lod_policy_cached_valid)
+				    (void)ged_draw_view_lod_policy_apply_bsg(
+					    dgcdp.v, &lod_policy_cached);
 
 			bu_vls_printf(gedp->ged_result_str, "%s: %s redraw failure\n", argv[0], argv[i]);
 			if (filtered_argv)
@@ -1470,10 +1470,10 @@ _ged_drawtrees(struct ged *gedp, int argc, const char *argv[], int kind, struct 
 		    }
 		}
 
-		/* restore view bot threshold */
-		if (gedp && gedp->ged_gvp && lod_policy_cached_valid)
-		    (void)ged_draw_view_lod_policy_apply_bsg(
-			    gedp->ged_gvp, &lod_policy_cached);
+			/* restore view bot threshold */
+			if (dgcdp.v && lod_policy_cached_valid)
+			    (void)ged_draw_view_lod_policy_apply_bsg(
+				    dgcdp.v, &lod_policy_cached);
 
 		bu_free(paths_to_draw, "draw paths");
 	    }
@@ -1519,8 +1519,8 @@ _ged_drawtrees(struct ged *gedp, int argc, const char *argv[], int kind, struct 
 		if (dgcdp.draw_edge_uses) {
 		    int handled = ged_diagnostic_line_layer_publish(gedp,
 			    "nmg::_EDGEUSES_", dgcdp.draw_edge_uses_plot);
-		    if (!handled && gedp->ged_gvp) {
-			(void)ged_draw_view_line_layer_builder_replace(gedp->ged_gvp,
+		    if (!handled && dgcdp.v) {
+			(void)ged_draw_view_line_layer_builder_replace(dgcdp.v,
 				"nmg::_EDGEUSES_", 0, dgcdp.draw_edge_uses_plot);
 		    }
 		    bg_line_layer_builder_free(dgcdp.draw_edge_uses_plot);

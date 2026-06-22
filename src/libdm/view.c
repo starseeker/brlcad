@@ -879,12 +879,13 @@ _dm_framebuffer_draw_item(void *dmp_ptr, const struct bsg_render_item *item)
 static int
 _dm_hud_render_request(struct bsg_view *v, struct bsg_backend_adapter *adapter)
 {
-    if (!v || !v->dmp)
+    struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(v);
+    if (!dmp)
 	return 0;
     if (bsg_hud_sync(v) != 0)
 	return 0;
 
-    struct bsg_render_request *req = bsg_render_request_create(v, v->dmp);
+    struct bsg_render_request *req = bsg_render_request_create(v, dmp);
     if (!req)
 	return 0;
     bsg_render_request_set_flags(req, BSG_RENDER_FLAG_VISIBLE_ONLY | BSG_RENDER_FLAG_HUD_PASS);
@@ -1021,8 +1022,9 @@ _dm_scene_end_request(void *UNUSED(dmp_ptr), const struct bsg_render_request *UN
 
 
 void
-dm_draw_faceplate(struct bsg_view *v)
+dm_draw_faceplate(void *view_ctx)
 {
+    struct bsg_view *v = (struct bsg_view *)view_ctx;
     static struct bsg_backend_adapter hud_adapter = {NULL, NULL, _dm_hud_draw_item, NULL, NULL, NULL, NULL};
     (void)_dm_hud_render_request(v, &hud_adapter);
 }
@@ -1146,9 +1148,10 @@ _dm_draw_label_resolved(struct dm *dmp, const struct bsg_render_item *item)
 // Interactive visuals arrive as retained payload and overlay records before
 // libdm resolves the view to render items.
 void
-dm_draw_objs(struct bsg_view *v)
+dm_draw_objs(void *view_ctx)
 {
-    struct dm *dmp = (struct dm *)v->dmp;
+    struct bsg_view *v = (struct bsg_view *)view_ctx;
+    struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(v);
     if (!dmp) {
 	bu_log("Warning - dm_draw_objs called when view has no associated display manager\n");
 	return;

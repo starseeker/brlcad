@@ -407,8 +407,8 @@ ged_gdiff_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     if (view_left || view_overlap || view_right) {
-	if (gedp->ged_gvp) {
-	    struct bsg_view *view = gedp->ged_gvp;
+	struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
+	if (view) {
 	    (void)ged_draw_view_feature_remove(view, "gdiff");
 	    (void)ged_draw_view_feature_remove(view, "gdiff::left");
 	    (void)ged_draw_view_feature_remove(view, "gdiff::overlap");

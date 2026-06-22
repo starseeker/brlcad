@@ -51,6 +51,8 @@ ged_align_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
@@ -105,14 +107,14 @@ ged_align_core(struct ged *gedp, int argc, const char *argv[])
     // get center as point
     point_t tmp = {0.0, 0.0, 0.0};
     mat_t view_center;
-    rt_view_center_from_bsg(view_center, gedp->ged_gvp);
+    rt_view_center_from_bsg(view_center, v);
     MAT4X3PNT(center, view_center, tmp);
     VSCALE(center, center, -1.0);
 
     // calculate eye / center / align_pt distances
     vect_t xlate = {0.0, 0.0, 1.0};
     mat_t view2model;
-    rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
+    rt_view_view2model_from_bsg(view2model, v);
     MAT4X3PNT(eye, view2model, xlate);
     VSCALE(eye, eye, scale);
     double dist_eye_center = DIST_PNT_PNT(center, eye);
@@ -130,19 +132,19 @@ ged_align_core(struct ged *gedp, int argc, const char *argv[])
 
     // update view ae using direction
     vect_t view_aet;
-    rt_view_aet_from_bsg(view_aet, gedp->ged_gvp);
+    rt_view_aet_from_bsg(view_aet, v);
     VSET(view_aet, new_az, new_el, view_aet[Z]);
-    rt_view_aet_set_bsg(gedp->ged_gvp, view_aet);
+    rt_view_aet_set_bsg(v, view_aet);
 
     // update eye
     point_t new_eye;
     VJOIN1(new_eye, align, -dist, dir);	// new_eye = align_pt - dist * dir
-    rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
+    rt_view_view2model_from_bsg(view2model, v);
     MAT_DELTAS_VEC_NEG(view2model, new_eye);
-    rt_view_view2model_set_bsg(gedp->ged_gvp, view2model);
+    rt_view_view2model_set_bsg(v, view2model);
 
     // done. update the view
-    rt_view_update_bsg(gedp->ged_gvp);
+    rt_view_update_bsg(v);
 
     return BRLCAD_OK;
 }

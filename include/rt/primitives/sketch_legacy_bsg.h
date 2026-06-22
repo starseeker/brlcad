@@ -26,22 +26,20 @@
 #define RT_PRIMITIVES_SKETCH_LEGACY_BSG_H
 
 #include "common.h"
-#include "bsg/polygon.h"
 #include "rt/defines.h"
 #include "rt/primitives/sketch.h"
+#include "rt/view.h"
 
 __BEGIN_DECLS
 
-struct bsg_view;
+RT_EXPORT extern rt_view_polygon_ref
+db_sketch_to_view_polygon_ref(const char *sname, struct db_i *dbip, struct directory *dp, void *view_ctx);
 
-RT_EXPORT extern bsg_polygon_ref
-db_sketch_to_view_polygon_ref(const char *sname, struct db_i *dbip, struct directory *dp, struct bsg_view *sv);
-
-RT_EXPORT extern bsg_polygon_ref
-db_sketch_to_view_polygon_scoped_ref(const char *sname, struct db_i *dbip, struct directory *dp, struct bsg_view *sv, int local);
+RT_EXPORT extern rt_view_polygon_ref
+db_sketch_to_view_polygon_scoped_ref(const char *sname, struct db_i *dbip, struct directory *dp, void *view_ctx, int local);
 
 RT_EXPORT extern struct directory *
-db_view_polygon_ref_to_sketch(struct db_i *dbip, const char *sname, bsg_polygon_ref ref);
+db_view_polygon_ref_to_sketch(struct db_i *dbip, const char *sname, rt_view_polygon_ref ref);
 
 __END_DECLS
 

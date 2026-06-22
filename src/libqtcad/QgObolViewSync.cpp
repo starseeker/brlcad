@@ -10,9 +10,7 @@
 
 #include "qtcad/QgObolViewSync.h"
 
-#include "ged.h"
-#include "ged/bsg_ged_draw.h"
-#include "qtcad/QgLegacyViewBsg.h"
+#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgView.h"
 
 int
@@ -21,23 +19,25 @@ qg_obol_display_accepts_ged_active_view(struct ged *gedp, QgView *display)
     if (!display)
 	return 0;
 
-    if (!gedp || !gedp->ged_gvp)
+    qg_legacy_view *active_view = qg_legacy_view_ged_active_get(gedp);
+    if (!active_view)
 	return 1;
 
-    return qg_legacy_view_to_bsg(display->view()) == gedp->ged_gvp;
+    return display->view() == active_view;
 }
 
 int
 qg_obol_display_accepts_draw_transaction_view(
-	const struct ged_draw_transaction *txn, QgView *display)
+	const qg_legacy_view_draw_transaction *txn, QgView *display)
 {
     if (!display)
 	return 0;
 
-    if (!txn || !txn->view)
+    qg_legacy_view *txn_view = qg_legacy_view_draw_transaction_view_get(txn);
+    if (!txn_view)
 	return 1;
 
-    return qg_legacy_view_to_bsg(display->view()) == txn->view;
+    return display->view() == txn_view;
 }
 
 // Local Variables:

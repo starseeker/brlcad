@@ -324,15 +324,15 @@ joint_mesh(struct ged *gedp, int argc, const char *argv[])
 	}
     }
 
-    if (gedp->ged_gvp) {
-	struct bsg_view *view = gedp->ged_gvp;
+    {
+	struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
 	struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
 	style.color_valid = 1;
 	VSET(style.color, 0, 255, 255);
-	if (lines.count)
+	if (view && lines.count)
 	    (void)ged_draw_view_lines_replace(view, "joint", 0,
 		    (const point_t *)lines.points, NULL, lines.count, &style);
-	else
+	else if (view)
 	    (void)ged_draw_view_feature_remove(view, "joint");
     }
 

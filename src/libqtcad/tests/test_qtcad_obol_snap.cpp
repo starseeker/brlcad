@@ -7,10 +7,6 @@
 
 #include "common.h"
 
-extern "C" {
-#include "rt/view_legacy_bsg.h"
-}
-
 #include "brlobol/database_source.h"
 #include "brlobol/lod_mesh_shape.h"
 #include "brlobol/lod_service.h"
@@ -21,8 +17,7 @@ extern "C" {
 #include "bu/env.h"
 #include "bu/file.h"
 #include "ged.h"
-#include "ged/bsg_ged_draw.h"
-#include "qtcad/QgLegacyViewBsg.h"
+#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgObolDrawSync.h"
 #include "qtcad/QgObolSnap.h"
 #include "qtcad/QgView.h"
@@ -102,13 +97,13 @@ make_snap_db(const char *dbpath)
 static int
 apply_and_sync(struct ged *gedp,
 	QgView *view,
-	struct ged_draw_transaction *txn)
+	qg_legacy_view_draw_transaction *txn)
 {
-    struct ged_draw_transaction_result result;
-    ged_draw_transaction_result_init(&result);
-    int draw_ret = ged_draw_apply_transaction(gedp, txn, &result);
+    qg_legacy_view_draw_transaction_result result;
+    qg_legacy_view_draw_result_init(&result);
+    int draw_ret = qg_legacy_view_draw_transaction_apply(gedp, txn, &result);
     int changed = qg_obol_sync_draw_transaction(gedp, txn, &result, view);
-    ged_draw_transaction_result_free(&result);
+    qg_legacy_view_draw_result_free(&result);
 
     return draw_ret >= 0 && changed != 0;
 }
@@ -221,14 +216,14 @@ left_move_at(int x, int y)
 }
 
 static void
-set_center_query(struct bsg_view *v, fastf_t x, fastf_t y, fastf_t z)
+set_center_query(qg_legacy_view *view, fastf_t x, fastf_t y, fastf_t z)
 {
     mat_t view2model;
-    rt_view_dimensions_set_bsg(v, 200, 200);
-    rt_view_size_set_bsg(v, 2.0);
+    qg_legacy_view_dimensions_set(view, 200, 200);
+    qg_legacy_view_size_set(view, 2.0);
     MAT_IDN(view2model);
     MAT_DELTAS(view2model, x, y, z);
-    rt_view_view2model_set_bsg(v, view2model);
+    qg_legacy_view_view2model_set(view, view2model);
 }
 
 int
@@ -247,9 +242,9 @@ main(int argc, char **argv)
     if (!gedp)
 	FAIL("failed to open qtcad Obol snap test database");
 
-    QgView view(NULL, QgView_SW, NULL);
+    QgView view(NULL, QgView_SW);
     view.resize(200, 200);
-    gedp->ged_gvp = qg_legacy_view_to_bsg(view.view());
+    qg_legacy_view_ged_active_set(gedp, view.view());
 
     BRLObolViewController *controller = view.obolViewController();
     if (!controller)
@@ -257,9 +252,10 @@ main(int argc, char **argv)
     controller->clearDatabaseSources();
     controller->setViewportSize(200, 200);
 
-    struct ged_draw_transaction draw_box =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "box.s");
-    draw_box.view = qg_legacy_view_to_bsg(view.view());
+    qg_legacy_view_draw_transaction draw_box;
+    qg_legacy_view_draw_transaction_init(&draw_box,
+	    QG_LEGACY_VIEW_DRAW_TXN_DRAW, "box.s");
+    qg_legacy_view_draw_transaction_view_set(&draw_box, view.view());
     if (!apply_and_sync(gedp, &view, &draw_box))
 	FAIL("GED wire draw should sync box source into Obol");
 
@@ -272,20 +268,19 @@ main(int argc, char **argv)
 	    record.primitiveIndex < 0 ||
 	    !near_point(record.point, 1.0f, 1.0f, 1.0f))
 	FAIL("qtcad Obol snap helper should preserve endpoint identity");
-    if (view.dmp())
+    if (view.legacyBackendInitialized())
 	FAIL("qtcad Obol snap helper should not initialize the legacy display manager");
 
     if (controller->replaceDatabaseSource("snap_only.s", gedp->dbip,
 	    SoBRLDatabaseSource::WIREFRAME, 2) <= 0 ||
 	    !controller->realizePending())
 	FAIL("test should add an Obol-only snap source");
-    if (view.dmp())
+    if (view.legacyBackendInitialized())
 	FAIL("qtcad Obol snap setup should not initialize the legacy display manager");
 
-    struct bsg_view *bv = qg_legacy_view_to_bsg(view.view());
-    set_center_query(bv, 11.02, 11.02, 11.02);
-    rt_view_snap_source_flags_set_bsg(bv, RT_VIEW_SNAP_DB_BSG);
-    rt_view_snap_lines_set_bsg(bv, 1);
+    set_center_query(view.view(), 11.02, 11.02, 11.02);
+    qg_legacy_view_snap_source_db_set(view.view());
+    qg_legacy_view_snap_lines_set(view.view(), 1);
 
     SnapProbeFilter filter;
     filter.set_view_widget(&view);
@@ -293,25 +288,25 @@ main(int argc, char **argv)
     if (!filter.sync(&move))
 	FAIL("qtcad view filter should accept a snap probe mouse event");
     point_t snapped_point = VINIT_ZERO;
-    rt_view_current_point_from_bsg(snapped_point, bv);
+    qg_legacy_view_current_point_get(view.view(), snapped_point);
     if (!nearly_equal((float)snapped_point[X], 11.0f) ||
 	    !nearly_equal((float)snapped_point[Y], 11.0f) ||
 	    !nearly_equal((float)snapped_point[Z], 11.0f))
 	FAIL("qtcad view filter should refine database snapping through Obol");
-    if (view.dmp())
+    if (view.legacyBackendInitialized())
 	FAIL("qtcad Obol snap refinement should not initialize the legacy display manager");
 
-    set_center_query(bv, 11.02, 11.02, 11.02);
-    rt_view_snap_source_flags_set_bsg(bv, RT_VIEW_SNAP_VIEW_BSG);
+    set_center_query(view.view(), 11.02, 11.02, 11.02);
+    qg_legacy_view_snap_source_view_only_set(view.view());
     QMouseEvent viewScopedMove = left_move_at(100, 100);
     if (!filter.sync(&viewScopedMove))
 	FAIL("qtcad view filter should accept a view-scoped snap probe event");
-    rt_view_current_point_from_bsg(snapped_point, bv);
+    qg_legacy_view_current_point_get(view.view(), snapped_point);
     if (nearly_equal((float)snapped_point[X], 11.0f) &&
 	    nearly_equal((float)snapped_point[Y], 11.0f) &&
 	    nearly_equal((float)snapped_point[Z], 11.0f))
 	FAIL("qtcad view filter should leave view-scoped snapping on the BSG path");
-    if (view.dmp())
+    if (view.legacyBackendInitialized())
 	FAIL("qtcad view-scoped snap fallback should not initialize the legacy display manager");
 
     SoSeparator *lodRoot = new SoSeparator;
@@ -504,7 +499,7 @@ main(int argc, char **argv)
     }
     controller->setExactFullDetailBudget(0, 0);
 
-    if (view.dmp()) {
+    if (view.legacyBackendInitialized()) {
 	controller->setLodService(NULL);
 	sourceService.stop();
 	FAIL("qtcad source-backed exact Obol snap should not initialize the legacy display manager");

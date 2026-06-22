@@ -74,6 +74,20 @@ rt_sketch_polygon_type_to_bsg(int type)
     }
 }
 
+static bsg_polygon_ref
+rt_sketch_polygon_ref_to_bsg(rt_view_polygon_ref ref)
+{
+    bsg_polygon_ref bsg_ref = { ref.token, ref.revision };
+    return bsg_ref;
+}
+
+static rt_view_polygon_ref
+rt_sketch_polygon_ref_from_bsg(bsg_polygon_ref ref)
+{
+    rt_view_polygon_ref rt_ref = { ref.token, ref.revision };
+    return rt_ref;
+}
+
 static void
 rt_sketch_polygon_to_bsg(struct bsg_polygon *bp, const struct rt_sketch_polygon *poly)
 {
@@ -180,21 +194,23 @@ db_sketch_view_attrs_apply(struct db_i *dbip, struct directory *dp, struct bsg_v
     bu_avs_free(&lavs);
 }
 
-bsg_polygon_ref
-db_sketch_to_view_polygon_ref(const char *sname, struct db_i *dbip, struct directory *dp, struct bsg_view *sv)
+rt_view_polygon_ref
+db_sketch_to_view_polygon_ref(const char *sname, struct db_i *dbip, struct directory *dp, void *view_ctx)
 {
-    return db_sketch_to_view_polygon_scoped_ref(sname, dbip, dp, sv, 0);
+    return db_sketch_to_view_polygon_scoped_ref(sname, dbip, dp, view_ctx, 0);
 }
 
-bsg_polygon_ref
-db_sketch_to_view_polygon_scoped_ref(const char *sname, struct db_i *dbip, struct directory *dp, struct bsg_view *sv, int local)
+rt_view_polygon_ref
+db_sketch_to_view_polygon_scoped_ref(const char *sname, struct db_i *dbip, struct directory *dp, void *view_ctx, int local)
 {
+    struct bsg_view *sv = (struct bsg_view *)view_ctx;
+
     if (!sv)
-	return (bsg_polygon_ref)BSG_POLYGON_REF_NULL_INIT;
+	return RT_VIEW_POLYGON_REF_NULL;
 
     struct rt_sketch_polygon *poly = db_sketch_to_polygon(sname, dbip, dp);
     if (!poly)
-	return (bsg_polygon_ref)BSG_POLYGON_REF_NULL_INIT;
+	return RT_VIEW_POLYGON_REF_NULL;
 
     db_sketch_view_attrs_apply(dbip, dp, sv);
 
@@ -208,18 +224,20 @@ db_sketch_to_view_polygon_scoped_ref(const char *sname, struct db_i *dbip, struc
     }
 
     rt_sketch_polygon_destroy(poly);
-    return ref;
+    return rt_sketch_polygon_ref_from_bsg(ref);
 }
 
 struct directory *
-db_view_polygon_ref_to_sketch(struct db_i *dbip, const char *sname, bsg_polygon_ref ref)
+db_view_polygon_ref_to_sketch(struct db_i *dbip, const char *sname, rt_view_polygon_ref ref)
 {
     struct bsg_polygon_record rec;
-    if (!bsg_polygon_record_get(ref, &rec))
+    bsg_polygon_ref bsg_ref = rt_sketch_polygon_ref_to_bsg(ref);
+
+    if (!bsg_polygon_record_get(bsg_ref, &rec))
 	return NULL;
 
     struct rt_sketch_polygon poly;
-    rt_sketch_polygon_from_bsg(&poly, bsg_polygon_data(ref));
+    rt_sketch_polygon_from_bsg(&poly, bsg_polygon_data(bsg_ref));
     return db_sketch_polygon_to_sketch(dbip, sname, &poly, rec.edge_color);
 }
 
@@ -232,4 +250,3 @@ db_view_polygon_ref_to_sketch(struct db_i *dbip, const char *sname, bsg_polygon_
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-

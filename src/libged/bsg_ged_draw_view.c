@@ -148,41 +148,99 @@ ged_draw_view_selection_clear(struct bsg_view *view)
     return rt_view_selection_clear_bsg(view);
 }
 
-int
-ged_draw_view_selection_contains_record(
-	struct bsg_view *view,
-	const struct bsg_interaction_record *record)
+static int
+_ged_draw_view_selection_kind_bsg(enum ged_draw_view_selection_kind kind)
 {
-    struct bsg_selection *selection = ged_draw_view_selection_get_bsg(view);
-    return selection ? bsg_selection_contains_record(selection, record) : 0;
+    switch (kind) {
+	case GED_DRAW_VIEW_SELECTION_SELECTED_PATH:
+	    return BSG_INTERACTION_SELECTED_PATH;
+	case GED_DRAW_VIEW_SELECTION_HIGHLIGHTED_REF:
+	    return BSG_INTERACTION_HIGHLIGHTED_REF;
+	default:
+	    return 0;
+    }
+}
+
+static struct bsg_interaction_record *
+_ged_draw_view_selection_record_create(struct bsg_view *view,
+				       enum ged_draw_view_selection_kind kind,
+				       const char *path)
+{
+    if (!path || !path[0])
+	return NULL;
+
+    int bsg_kind = _ged_draw_view_selection_kind_bsg(kind);
+    if (!bsg_kind)
+	return NULL;
+
+    bsg_feature_ref feature = BSG_FEATURE_REF_NULL_INIT;
+    return bsg_interaction_record_create_ref(view,
+	    (bsg_interaction_kind)bsg_kind,
+	    feature,
+	    ged_draw_dbpath_skip_lead_slash(path),
+	    NULL);
 }
 
 int
-ged_draw_view_selection_add_record(
+ged_draw_view_selection_contains_path(
 	struct bsg_view *view,
-	const struct bsg_interaction_record *record)
+	enum ged_draw_view_selection_kind kind,
+	const char *path)
 {
     struct bsg_selection *selection = ged_draw_view_selection_get_bsg(view);
-    if (!selection || !record)
+    if (!selection)
+	return 0;
+
+    struct bsg_interaction_record *record =
+	_ged_draw_view_selection_record_create(view, kind, path);
+    if (!record)
+	return 0;
+
+    int ret = bsg_selection_contains_record(selection, record) ? 1 : 0;
+    bsg_interaction_record_free(record);
+    return ret;
+}
+
+int
+ged_draw_view_selection_add_path(
+	struct bsg_view *view,
+	enum ged_draw_view_selection_kind kind,
+	const char *path)
+{
+    struct bsg_selection *selection = ged_draw_view_selection_get_bsg(view);
+    if (!selection)
+	return 0;
+
+    struct bsg_interaction_record *record =
+	_ged_draw_view_selection_record_create(view, kind, path);
+    if (!record)
 	return 0;
 
     if (!bsg_selection_contains_record(selection, record))
 	bsg_selection_add_record(selection, record);
+    bsg_interaction_record_free(record);
     return 1;
 }
 
 int
-ged_draw_view_selection_set_record(
+ged_draw_view_selection_set_path(
 	struct bsg_view *view,
-	const struct bsg_interaction_record *record)
+	enum ged_draw_view_selection_kind kind,
+	const char *path)
 {
     struct bsg_selection *selection = ged_draw_view_selection_get_bsg(view);
     if (!selection)
 	return 0;
 
     bsg_selection_clear(selection);
-    if (record)
+    if (path && path[0]) {
+	struct bsg_interaction_record *record =
+	    _ged_draw_view_selection_record_create(view, kind, path);
+	if (!record)
+	    return 0;
 	bsg_selection_add_record(selection, record);
+	bsg_interaction_record_free(record);
+    }
     return 1;
 }
 
@@ -383,6 +441,54 @@ ged_draw_view_feature_visible(struct bsg_view *view, const char *name)
     struct bsg_feature_record rec;
     return (!bsg_feature_ref_is_null(ref) &&
 	    bsg_feature_record_get(ref, &rec) && rec.visible) ? 1 : 0;
+}
+
+int
+ged_draw_view_feature_visible_set(struct bsg_view *view, const char *name, int visible)
+{
+    if (!view || !name)
+	return 0;
+
+    bsg_feature_ref ref = bsg_feature_find(view, name);
+    if (bsg_feature_ref_is_null(ref))
+	return 0;
+
+    bsg_feature_set_visible(ref, visible ? 1 : 0);
+    return 1;
+}
+
+bsg_scene_ref
+ged_draw_view_overlay_scene_find(struct bsg_view *view, const char *name)
+{
+    return bsg_overlay_find_scene(view, name);
+}
+
+void
+ged_draw_view_overlay_name_erase(struct bsg_view *view, const char *name)
+{
+    bsg_overlay_erase_name(view, name);
+}
+
+int
+ged_draw_view_overlay_scene_append(struct bsg_view *view, bsg_scene_ref scene)
+{
+    return bsg_overlay_append_scene(view, scene);
+}
+
+int
+ged_draw_view_overlay_command_result_owner_set(bsg_scene_ref scene,
+					       const void *owner,
+					       const char *source_path)
+{
+    if (bsg_scene_ref_is_null(scene))
+	return 0;
+
+    return bsg_overlay_register_scene_owner(scene, owner,
+	    BSG_OVERLAY_ROLE_MODEL,
+	    BSG_OVERLAY_CLASS_COMMAND_RESULT,
+	    BSG_OVERLAY_LC_PERSISTENT,
+	    BSG_OVERLAY_ORDER_MODEL,
+	    source_path, 0);
 }
 
 bsg_scene_ref
@@ -620,6 +726,58 @@ ged_draw_view_lines_replace(struct bsg_view *view,
 }
 
 int
+ged_draw_view_tcl_polygons_replace(struct bsg_view *view,
+				   const char *name,
+				   const point_t *points,
+				   const int *cmds,
+				   size_t point_count,
+				   const struct ged_draw_view_feature_style *style)
+{
+    if (!view || !name)
+	return 0;
+
+    bsg_feature_remove(view, name);
+    if (!points || !cmds || !point_count)
+	return 1;
+
+    int *bsg_cmds = (int *)bu_calloc(point_count, sizeof(int),
+	    "GED draw Tcl polygon feature cmds");
+    for (size_t i = 0; i < point_count; i++) {
+	bsg_cmds[i] = (cmds[i] == BG_GEOMETRY_LINE_MOVE) ?
+	    BSG_GEOMETRY_LINE_MOVE : BSG_GEOMETRY_LINE_DRAW;
+    }
+
+    struct bsg_feature_style bsg_style = BSG_FEATURE_STYLE_INIT;
+    const struct bsg_feature_style *bsg_stylep = NULL;
+    if (style) {
+	_ged_draw_view_feature_style_to_bsg(&bsg_style, style);
+	bsg_stylep = &bsg_style;
+    }
+
+    bsg_feature_ref ref = bsg_feature_replace_lines(view, name, 1 /* local */,
+	    points, point_count, bsg_stylep);
+    int ret = 0;
+    if (!bsg_feature_ref_is_null(ref)) {
+	ret = bsg_feature_points_replace(ref, BSG_FEATURE_POLYGON, points,
+		bsg_cmds, point_count) ? 1 : 0;
+	if (ret) {
+	    bsg_feature_overlay_register_owner(ref, NULL,
+		    BSG_OVERLAY_ROLE_MODEL,
+		    BSG_OVERLAY_CLASS_POLYGON_EDIT,
+		    BSG_OVERLAY_LC_PER_TOOL,
+		    BSG_OVERLAY_ORDER_POST_TRANSPARENT,
+		    NULL, 0);
+	}
+    }
+    bu_free(bsg_cmds, "GED draw Tcl polygon feature cmds");
+
+    if (!ret)
+	bsg_feature_remove(view, name);
+
+    return ret;
+}
+
+int
 ged_draw_view_line_layer_builder_replace(struct bsg_view *view,
 					 const char *name,
 					 int local,
@@ -853,6 +1011,69 @@ ged_draw_view_labels_replace(struct bsg_view *view,
 }
 
 int
+ged_draw_view_tcl_labels_replace(struct bsg_view *view,
+				 const char *name,
+				 int draw,
+				 const struct ged_draw_view_label_data *labels,
+				 size_t label_count)
+{
+    if (!view || !name)
+	return 0;
+
+    if (!draw || !labels || !label_count) {
+	bsg_feature_remove(view, name);
+	return 1;
+    }
+
+    return ged_draw_view_labels_replace(view, name, 1, labels, label_count);
+}
+
+size_t
+ged_draw_view_label_count(struct bsg_view *view,
+			  const char *name)
+{
+    if (!view || !name)
+	return 0;
+
+    bsg_feature_ref ref = bsg_feature_find(view, name);
+    return bsg_feature_label_count(ref);
+}
+
+int
+ged_draw_view_label_copy(struct bsg_view *view,
+			 const char *name,
+			 size_t index,
+			 struct bu_vls *text,
+			 point_t point,
+			 unsigned char rgb[3])
+{
+    if (!view || !name)
+	return 0;
+
+    bsg_feature_ref ref = bsg_feature_find(view, name);
+    if (bsg_feature_ref_is_null(ref))
+	return 0;
+
+    return bsg_feature_label_copy(ref, index, text, point, rgb) ? 1 : 0;
+}
+
+int
+ged_draw_view_label_point_set(struct bsg_view *view,
+			      const char *name,
+			      size_t index,
+			      const point_t point)
+{
+    if (!view || !name || !point)
+	return 0;
+
+    bsg_feature_ref ref = bsg_feature_find(view, name);
+    if (bsg_feature_ref_is_null(ref))
+	return 0;
+
+    return bsg_feature_label_point_set(ref, index, point) ? 1 : 0;
+}
+
+int
 ged_draw_view_line_style_get(struct bsg_view *view,
 			     const char *name,
 			     struct ged_draw_view_line_style *style)
@@ -907,10 +1128,10 @@ ged_draw_view_line_width_set(struct bsg_view *view,
 }
 
 int
-ged_draw_view_lines_points_copy(struct bsg_view *view,
-				const char *name,
-				point_t **points,
-				size_t *point_count)
+ged_draw_view_feature_points_copy(struct bsg_view *view,
+				  const char *name,
+				  point_t **points,
+				  size_t *point_count)
 {
     if (points)
 	*points = NULL;
@@ -924,6 +1145,15 @@ ged_draw_view_lines_points_copy(struct bsg_view *view,
 	return 0;
 
     return bsg_feature_points_copy(ref, points, NULL, point_count) ? 1 : 0;
+}
+
+int
+ged_draw_view_lines_points_copy(struct bsg_view *view,
+				const char *name,
+				point_t **points,
+				size_t *point_count)
+{
+    return ged_draw_view_feature_points_copy(view, name, points, point_count);
 }
 
 int
@@ -974,6 +1204,137 @@ ged_draw_view_tcl_lines_replace(struct bsg_view *view,
     if (style)
 	bsg_feature_set_line_width(ref, style->line_width);
     bsg_feature_set_visible(ref, 1);
+
+    return 1;
+}
+
+int
+ged_draw_view_arrow_tip_get(struct bsg_view *view,
+			    const char *name,
+			    fastf_t *tip_length,
+			    fastf_t *tip_width)
+{
+    if (tip_length)
+	*tip_length = 0.0;
+    if (tip_width)
+	*tip_width = 0.0;
+    if (!view || !name)
+	return 0;
+
+    bsg_feature_ref ref = bsg_feature_find(view, name);
+    if (bsg_feature_ref_is_null(ref))
+	return 0;
+
+    return bsg_feature_arrow_tip_get(ref, tip_length, tip_width) ? 1 : 0;
+}
+
+int
+ged_draw_view_arrow_tip_set(struct bsg_view *view,
+			    const char *name,
+			    fastf_t tip_length,
+			    fastf_t tip_width)
+{
+    if (!view || !name)
+	return 0;
+
+    bsg_feature_ref ref = bsg_feature_find(view, name);
+    if (bsg_feature_ref_is_null(ref))
+	return 0;
+
+    return bsg_feature_arrow_tip_set(ref, tip_length, tip_width) ? 1 : 0;
+}
+
+int
+ged_draw_view_tcl_arrows_replace(struct bsg_view *view,
+				 const char *name,
+				 const point_t *points,
+				 size_t point_count,
+				 const struct ged_draw_view_feature_style *style)
+{
+    if (!view || !name)
+	return 0;
+
+    if (point_count % 2)
+	return 0;
+
+    if (!points || !point_count) {
+	if (!points && point_count)
+	    return 0;
+	bsg_feature_remove(view, name);
+	return 1;
+    }
+
+    struct bsg_feature_style bsg_style = BSG_FEATURE_STYLE_INIT;
+    const struct bsg_feature_style *bsg_stylep = NULL;
+    if (style) {
+	_ged_draw_view_feature_style_to_bsg(&bsg_style, style);
+	bsg_stylep = &bsg_style;
+    }
+
+    bsg_feature_ref ref = bsg_feature_replace_arrow(view, name, 1 /* local */,
+	    points, point_count, bsg_stylep);
+    if (bsg_feature_ref_is_null(ref))
+	return 0;
+
+    bsg_feature_overlay_register_owner(ref, NULL,
+	    BSG_OVERLAY_ROLE_MODEL,
+	    BSG_OVERLAY_CLASS_TCL_OVERLAY,
+	    BSG_OVERLAY_LC_PER_COMMAND,
+	    BSG_OVERLAY_ORDER_POST_TRANSPARENT,
+	    NULL, 0);
+
+    return 1;
+}
+
+int
+ged_draw_view_feature_axes_centers_copy(struct bsg_view *view,
+					const char *name,
+					point_t **centers,
+					size_t *center_count)
+{
+    if (centers)
+	*centers = NULL;
+    if (center_count)
+	*center_count = 0;
+    if (!view || !name || !centers || !center_count)
+	return 0;
+
+    bsg_feature_ref ref = bsg_feature_find(view, name);
+    if (bsg_feature_ref_is_null(ref))
+	return 0;
+
+    return bsg_feature_axes_centers_copy(ref, centers, center_count) ? 1 : 0;
+}
+
+int
+ged_draw_view_tcl_axes_replace(struct bsg_view *view,
+			       const char *name,
+			       const point_t *centers,
+			       size_t center_count,
+			       fastf_t half_axes_size,
+			       const struct ged_draw_view_feature_style *style)
+{
+    if (!view || !name || !centers || !center_count)
+	return 0;
+
+    struct bsg_feature_style bsg_style = BSG_FEATURE_STYLE_INIT;
+    const struct bsg_feature_style *bsg_stylep = NULL;
+    if (style) {
+	_ged_draw_view_feature_style_to_bsg(&bsg_style, style);
+	bsg_stylep = &bsg_style;
+    }
+
+    bsg_feature_ref ref = bsg_feature_replace_axes(view, name, 1 /* local */,
+	    centers, center_count, half_axes_size, bsg_stylep);
+    if (bsg_feature_ref_is_null(ref))
+	return 0;
+
+    bsg_feature_overlay_register_owner(ref, NULL,
+	    BSG_OVERLAY_ROLE_MODEL,
+	    BSG_OVERLAY_CLASS_TCL_OVERLAY,
+	    BSG_OVERLAY_LC_PER_COMMAND,
+	    BSG_OVERLAY_ORDER_POST_TRANSPARENT,
+	    NULL, 0);
 
     return 1;
 }
@@ -1084,6 +1445,20 @@ _ged_draw_view_polygon_ref_from_bsg(bsg_polygon_ref ref)
     return ged_ref;
 }
 
+static rt_view_polygon_ref
+_ged_draw_view_polygon_ref_to_rt(ged_draw_view_polygon_ref ref)
+{
+    rt_view_polygon_ref rt_ref = { ref.token, ref.revision };
+    return rt_ref;
+}
+
+static ged_draw_view_polygon_ref
+_ged_draw_view_polygon_ref_from_rt(rt_view_polygon_ref ref)
+{
+    ged_draw_view_polygon_ref ged_ref = { ref.token, ref.revision };
+    return ged_ref;
+}
+
 int
 ged_draw_view_polygon_ref_is_null(ged_draw_view_polygon_ref ref)
 {
@@ -1130,7 +1505,7 @@ ged_draw_view_polygon_import_sketch(const char *name,
 				    struct bsg_view *view,
 				    int local)
 {
-    return _ged_draw_view_polygon_ref_from_bsg(
+    return _ged_draw_view_polygon_ref_from_rt(
 	    db_sketch_to_view_polygon_scoped_ref(name, dbip, dp, view, local));
 }
 
@@ -1140,7 +1515,7 @@ ged_draw_view_polygon_export_sketch(struct db_i *dbip,
 				    ged_draw_view_polygon_ref ref)
 {
     return db_view_polygon_ref_to_sketch(dbip, name,
-	    _ged_draw_view_polygon_ref_to_bsg(ref)) ? 1 : 0;
+	    _ged_draw_view_polygon_ref_to_rt(ref)) ? 1 : 0;
 }
 
 int

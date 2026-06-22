@@ -41,12 +41,12 @@
 
 __BEGIN_DECLS
 
-struct bsg_interaction_record;
 struct bsg_view;
 struct bsg_view_set;
 struct bg_line_layer_builder;
 struct bn_tol;
 struct bu_ptbl;
+struct bu_vls;
 struct db_i;
 struct directory;
 struct rt_mesh_lod;
@@ -60,6 +60,12 @@ typedef int (*ged_draw_view_selection_path_cb)(struct bsg_view *view,
 enum ged_draw_view_snap_kind {
     GED_DRAW_VIEW_SNAP_GRID = 1,
     GED_DRAW_VIEW_SNAP_ENDPOINT = 2
+};
+
+enum ged_draw_view_selection_kind {
+    GED_DRAW_VIEW_SELECTION_ALL = -1,
+    GED_DRAW_VIEW_SELECTION_SELECTED_PATH = 0,
+    GED_DRAW_VIEW_SELECTION_HIGHLIGHTED_REF = 1
 };
 
 struct ged_draw_view_line_style {
@@ -181,15 +187,18 @@ GED_EXPORT extern int ged_draw_view_selection_path_foreach(struct bsg_view *view
 							   ged_draw_view_selection_path_cb cb,
 							   void *data);
 GED_EXPORT extern int ged_draw_view_selection_clear(struct bsg_view *view);
-GED_EXPORT extern int ged_draw_view_selection_contains_record(
+GED_EXPORT extern int ged_draw_view_selection_contains_path(
 	struct bsg_view *view,
-	const struct bsg_interaction_record *record);
-GED_EXPORT extern int ged_draw_view_selection_add_record(
+	enum ged_draw_view_selection_kind kind,
+	const char *path);
+GED_EXPORT extern int ged_draw_view_selection_add_path(
 	struct bsg_view *view,
-	const struct bsg_interaction_record *record);
-GED_EXPORT extern int ged_draw_view_selection_set_record(
+	enum ged_draw_view_selection_kind kind,
+	const char *path);
+GED_EXPORT extern int ged_draw_view_selection_set_path(
 	struct bsg_view *view,
-	const struct bsg_interaction_record *record);
+	enum ged_draw_view_selection_kind kind,
+	const char *path);
 GED_EXPORT extern int ged_draw_view_snap_first_candidate(struct bsg_view *view,
 							 const point_t sample,
 							 enum ged_draw_view_snap_kind kind,
@@ -216,6 +225,18 @@ GED_EXPORT extern int ged_draw_view_features_remove_prefix(struct bsg_view *view
 							   const char *prefix);
 GED_EXPORT extern int ged_draw_view_feature_visible(struct bsg_view *view,
 						    const char *name);
+GED_EXPORT extern int ged_draw_view_feature_visible_set(struct bsg_view *view,
+							const char *name,
+							int visible);
+GED_EXPORT extern bsg_scene_ref ged_draw_view_overlay_scene_find(struct bsg_view *view,
+								 const char *name);
+GED_EXPORT extern void ged_draw_view_overlay_name_erase(struct bsg_view *view,
+							const char *name);
+GED_EXPORT extern int ged_draw_view_overlay_scene_append(struct bsg_view *view,
+							 bsg_scene_ref scene);
+GED_EXPORT extern int ged_draw_view_overlay_command_result_owner_set(bsg_scene_ref scene,
+								     const void *owner,
+								     const char *source_path);
 GED_EXPORT extern bsg_scene_ref ged_draw_view_overlay_create(struct bsg_view *view,
 							     const char *name);
 GED_EXPORT extern int ged_draw_view_feature_depth(struct bsg_view *view,
@@ -253,6 +274,12 @@ GED_EXPORT extern int ged_draw_view_lines_replace(struct bsg_view *view,
 						  const int *cmds,
 						  size_t point_count,
 						  const struct ged_draw_view_feature_style *style);
+GED_EXPORT extern int ged_draw_view_tcl_polygons_replace(struct bsg_view *view,
+							 const char *name,
+							 const point_t *points,
+							 const int *cmds,
+							 size_t point_count,
+							 const struct ged_draw_view_feature_style *style);
 GED_EXPORT extern int ged_draw_view_line_layer_builder_replace(struct bsg_view *view,
 							       const char *name,
 							       int local,
@@ -282,6 +309,23 @@ GED_EXPORT extern int ged_draw_view_labels_replace(struct bsg_view *view,
 						   int local,
 						   const struct ged_draw_view_label_data *labels,
 						   size_t label_count);
+GED_EXPORT extern int ged_draw_view_tcl_labels_replace(struct bsg_view *view,
+						       const char *name,
+						       int draw,
+						       const struct ged_draw_view_label_data *labels,
+						       size_t label_count);
+GED_EXPORT extern size_t ged_draw_view_label_count(struct bsg_view *view,
+						   const char *name);
+GED_EXPORT extern int ged_draw_view_label_copy(struct bsg_view *view,
+					       const char *name,
+					       size_t index,
+					       struct bu_vls *text,
+					       point_t point,
+					       unsigned char rgb[3]);
+GED_EXPORT extern int ged_draw_view_label_point_set(struct bsg_view *view,
+						    const char *name,
+						    size_t index,
+						    const point_t point);
 GED_EXPORT extern int ged_draw_view_line_style_get(struct bsg_view *view,
 						   const char *name,
 						   struct ged_draw_view_line_style *style);
@@ -293,6 +337,10 @@ GED_EXPORT extern int ged_draw_view_line_color_set(struct bsg_view *view,
 GED_EXPORT extern int ged_draw_view_line_width_set(struct bsg_view *view,
 						   const char *name,
 						   int line_width);
+GED_EXPORT extern int ged_draw_view_feature_points_copy(struct bsg_view *view,
+							const char *name,
+							point_t **points,
+							size_t *point_count);
 GED_EXPORT extern int ged_draw_view_lines_points_copy(struct bsg_view *view,
 						      const char *name,
 						      point_t **points,
@@ -302,6 +350,29 @@ GED_EXPORT extern int ged_draw_view_tcl_lines_replace(struct bsg_view *view,
 						      const point_t *points,
 						      size_t point_count,
 						      const struct ged_draw_view_line_style *style);
+GED_EXPORT extern int ged_draw_view_arrow_tip_get(struct bsg_view *view,
+						  const char *name,
+						  fastf_t *tip_length,
+						  fastf_t *tip_width);
+GED_EXPORT extern int ged_draw_view_arrow_tip_set(struct bsg_view *view,
+						  const char *name,
+						  fastf_t tip_length,
+						  fastf_t tip_width);
+GED_EXPORT extern int ged_draw_view_tcl_arrows_replace(struct bsg_view *view,
+						       const char *name,
+						       const point_t *points,
+						       size_t point_count,
+						       const struct ged_draw_view_feature_style *style);
+GED_EXPORT extern int ged_draw_view_feature_axes_centers_copy(struct bsg_view *view,
+							      const char *name,
+							      point_t **centers,
+							      size_t *center_count);
+GED_EXPORT extern int ged_draw_view_tcl_axes_replace(struct bsg_view *view,
+						     const char *name,
+						     const point_t *centers,
+						     size_t center_count,
+						     fastf_t half_axes_size,
+						     const struct ged_draw_view_feature_style *style);
 GED_EXPORT extern int ged_draw_view_axes_create(struct bsg_view *view,
 						const char *name,
 						int local,

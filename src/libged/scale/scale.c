@@ -54,13 +54,15 @@ ged_scale_core(struct ged *gedp, int argc, const char *argv[])
     if (sf1 <= SMALL_FASTF || INFINITY < sf1)
 	return BRLCAD_OK;
 
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+
     /* scale the view */
-    fastf_t view_scale = rt_view_scale_from_bsg(gedp->ged_gvp) * sf1;
+    fastf_t view_scale = rt_view_scale_from_bsg(v) * sf1;
     if (view_scale < RT_VIEW_MIN_SIZE)
 	view_scale = RT_VIEW_MIN_SIZE;
 
-    rt_view_scale_set_bsg(gedp->ged_gvp, view_scale);
-    rt_view_update_bsg(gedp->ged_gvp);
+    rt_view_scale_set_bsg(v, view_scale);
+    rt_view_update_bsg(v);
 
     return BRLCAD_OK;
 }

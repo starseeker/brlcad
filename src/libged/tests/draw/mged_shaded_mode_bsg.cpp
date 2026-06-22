@@ -68,7 +68,6 @@
 #define DM_WITH_RT
 #include <dm.h>
 #include <ged.h>
-#include "bsg/defines.h"
 #include "ged/bsg_ged_draw.h"
 
 extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);

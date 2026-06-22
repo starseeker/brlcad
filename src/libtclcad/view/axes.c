@@ -26,22 +26,68 @@
 
 #include "common.h"
 #include "bu/units.h"
-#include "bsg/feature.h"
 #include "dm.h"
 #include "ged.h"
 #include "rt/view_legacy_bsg.h"
 #include "tclcad.h"
 
 /* Private headers */
+#include "../../libged/bsg_ged_draw_view_private.h"
 #include "../tclcad_private.h"
 #include "../view/view.h"
-#include "../bsg_move_helpers.h"
 
-/* Phase T3 (drawing_stack_modernization): all getters and setters in
- * to_data_axes_func now operate on BSG objects directly.  gv_tcl is no longer
- * read or written by this path; BSG is the sole canonical store.
+/* Phase T3 (drawing_stack_modernization): data-axes getters and setters now
+ * operate through the private GED draw-view adapter.  gv_tcl is no longer
+ * read or written by this path; the retained draw-view feature is the sole
+ * canonical store.
  * BVDAS_DEFAULT_DM_WIDTH is the pixel-width fallback for dm_width in sf calcs. */
 #define BVDAS_DEFAULT_DM_WIDTH 512  /* fallback pixel width when no DM is attached */
+
+static void
+_tclcad_data_axes_rebuild_style(struct bsg_view *view,
+				const char *name,
+				struct ged_draw_view_feature_style *style)
+{
+    if (!style)
+	return;
+
+    struct ged_draw_view_feature_style saved = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+    saved.visible = 1;
+    saved.color_valid = 1;
+    saved.color[0] = 255;
+    saved.color[1] = 255;
+    saved.color[2] = 0;
+    saved.line_width = 0;
+
+    struct ged_draw_view_feature_style current = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+    if (ged_draw_view_feature_style_get(view, name, &current)) {
+	saved.visible = current.visible;
+	if (current.color_valid) {
+	    saved.color[0] = current.color[0];
+	    saved.color[1] = current.color[1];
+	    saved.color[2] = current.color[2];
+	}
+	saved.line_width = current.line_width;
+    }
+
+    *style = saved;
+}
+
+static fastf_t
+_tclcad_data_axes_display_scale(struct bsg_view *view)
+{
+    fastf_t dm_width = (fastf_t)BVDAS_DEFAULT_DM_WIDTH;
+    struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(view);
+    if (dmp) {
+	int width = dm_get_width(dmp);
+	if (width > 0)
+	    dm_width = (fastf_t)width;
+    }
+
+    struct rt_view_info view_info = RT_VIEW_INFO_INIT;
+    rt_view_info_from_bsg(&view_info, view);
+    return view_info.size / dm_width;
+}
 
 int
 to_axes(struct ged *gedp,
@@ -454,11 +500,12 @@ bad:
 int
 go_data_axes(Tcl_Interp *interp,
 	     struct ged *gedp,
-	     struct bsg_view *gdvp,
+	     void *draw_view_ctx,
 	     int argc,
 	     const char *argv[],
 	     const char *usage)
 {
+    struct bsg_view *gdvp = (struct bsg_view *)draw_view_ctx;
     int ret;
 
     /* initialize result */
@@ -509,7 +556,7 @@ to_data_axes(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
+    gdvp = (struct bsg_view *)ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -536,8 +583,8 @@ to_data_axes_func(Tcl_Interp *interp,
 
     if (BU_STR_EQUAL(argv[1], "draw")) {
 	if (argc == 2) {
-	    bsg_feature_ref ref = bsg_feature_find(gdvp, bsg_name);
-	    bu_vls_printf(gedp->ged_result_str, "%d", bsg_feature_ref_is_null(ref) ? 0 : 1);
+	    bu_vls_printf(gedp->ged_result_str, "%d",
+			  ged_draw_view_feature_exists(gdvp, bsg_name) ? 1 : 0);
 	    return BRLCAD_OK;
 	}
 
@@ -547,9 +594,7 @@ to_data_axes_func(Tcl_Interp *interp,
 	    if (bu_sscanf(argv[2], "%d", &i) != 1)
 		goto bad;
 
-	    bsg_feature_ref ref = bsg_feature_find(gdvp, bsg_name);
-	    if (!bsg_feature_ref_is_null(ref))
-		bsg_feature_set_visible(ref, i ? 1 : 0);
+	    ged_draw_view_feature_visible_set(gdvp, bsg_name, i ? 1 : 0);
 
 	    to_refresh_view(gdvp);
 	    return BRLCAD_OK;
@@ -560,9 +605,8 @@ to_data_axes_func(Tcl_Interp *interp,
 
     if (BU_STR_EQUAL(argv[1], "color")) {
 	if (argc == 2) {
-	    bsg_feature_ref ref = bsg_feature_find(gdvp, bsg_name);
-	    struct bsg_feature_style style = BSG_FEATURE_STYLE_INIT;
-	    if (bsg_feature_style_get(ref, &style) && style.color_valid) {
+	    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+	    if (ged_draw_view_feature_style_get(gdvp, bsg_name, &style) && style.color_valid) {
 		bu_vls_printf(gedp->ged_result_str, "%d %d %d",
 			      (int)style.color[0], (int)style.color[1], (int)style.color[2]);
 	    } else {
@@ -586,9 +630,7 @@ to_data_axes_func(Tcl_Interp *interp,
 		b < 0 || 255 < b)
 		goto bad;
 
-	    bsg_feature_ref ref = bsg_feature_find(gdvp, bsg_name);
-	    if (!bsg_feature_ref_is_null(ref))
-		bsg_feature_set_color(ref, r, g, b);
+	    ged_draw_view_line_color_set(gdvp, bsg_name, r, g, b);
 
 	    to_refresh_view(gdvp);
 	    return BRLCAD_OK;
@@ -599,9 +641,8 @@ to_data_axes_func(Tcl_Interp *interp,
 
     if (BU_STR_EQUAL(argv[1], "line_width")) {
 	if (argc == 2) {
-	    bsg_feature_ref ref = bsg_feature_find(gdvp, bsg_name);
-	    struct bsg_feature_style style = BSG_FEATURE_STYLE_INIT;
-	    if (bsg_feature_style_get(ref, &style))
+	    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+	    if (ged_draw_view_feature_style_get(gdvp, bsg_name, &style))
 		bu_vls_printf(gedp->ged_result_str, "%d", style.line_width);
 	    else
 		bu_vls_printf(gedp->ged_result_str, "0");
@@ -614,9 +655,7 @@ to_data_axes_func(Tcl_Interp *interp,
 	    if (bu_sscanf(argv[2], "%d", &line_width) != 1)
 		goto bad;
 
-	    bsg_feature_ref ref = bsg_feature_find(gdvp, bsg_name);
-	    if (!bsg_feature_ref_is_null(ref))
-		bsg_feature_set_line_width(ref, line_width);
+	    ged_draw_view_line_width_set(gdvp, bsg_name, line_width);
 
 	    to_refresh_view(gdvp);
 	    return BRLCAD_OK;
@@ -629,29 +668,18 @@ to_data_axes_func(Tcl_Interp *interp,
 	if (argc == 2) {
 	    /* T3: recover the encoded half-size from BSG X-axis endpoints and
 	     * back-compute size = 2*half / sf.  Returns approximate value. */
-	    bsg_feature_ref ref = bsg_feature_find(gdvp, bsg_name);
-	    if (!bsg_feature_ref_is_null(ref)) {
-		point_t *_all = NULL;
-		int _ntotal = _bsg_extract_pts(ref, &_all);
-		if (_ntotal >= 2) {
-		    fastf_t _half = (_all[1][X] - _all[0][X]) * 0.5;
-		    fastf_t _dm_width = (fastf_t)BVDAS_DEFAULT_DM_WIDTH;
-		    if (gdvp->dmp) {
-			int _w = dm_get_width((struct dm *)gdvp->dmp);
-			if (_w > 0) _dm_width = (fastf_t)_w;
-		    }
-		    struct rt_view_info _view = RT_VIEW_INFO_INIT;
-		    rt_view_info_from_bsg(&_view, gdvp);
-		    fastf_t _sf = _view.size / _dm_width;
-		    fastf_t _size = (_sf > 0.0) ? (_half * 2.0 / _sf) : 0.0;
-		    bu_vls_printf(gedp->ged_result_str, "%lf", _size);
-		} else {
-		    bu_vls_printf(gedp->ged_result_str, "0.0");
-		}
-		bu_free(_all, "bsg pts");
+	    point_t *all = NULL;
+	    size_t total = 0;
+	    if (ged_draw_view_feature_points_copy(gdvp, bsg_name, &all, &total) && total >= 2) {
+		fastf_t half = (all[1][X] - all[0][X]) * 0.5;
+		fastf_t sf = _tclcad_data_axes_display_scale(gdvp);
+		fastf_t size = (sf > 0.0) ? (half * 2.0 / sf) : 0.0;
+		bu_vls_printf(gedp->ged_result_str, "%lf", size);
 	    } else {
 		bu_vls_printf(gedp->ged_result_str, "0.0");
 	    }
+	    if (all)
+		bu_free(all, "GED draw view feature points copy");
 	    return BRLCAD_OK;
 	}
 
@@ -662,25 +690,21 @@ to_data_axes_func(Tcl_Interp *interp,
 		goto bad;
 
 	    /* T3: extract current centers, rebuild with new halfAxesSize; no gv_tcl write. */
-	    bsg_feature_ref old_ref = bsg_feature_find(gdvp, bsg_name);
-	    int _color[3]; int _lw, _vis;
-	    _bsg_read_style(old_ref, _color, &_lw, NULL, NULL, &_vis);
+	    struct ged_draw_view_feature_style saved_style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+	    _tclcad_data_axes_rebuild_style(gdvp, bsg_name, &saved_style);
 
-	    point_t *_cpts = NULL;
-	    int _ncpts = !bsg_feature_ref_is_null(old_ref) ? _bsg_extract_axes_centers(old_ref, &_cpts) : 0;
+	    point_t *cpts = NULL;
+	    size_t ncpts = 0;
+	    (void)ged_draw_view_feature_axes_centers_copy(gdvp, bsg_name, &cpts, &ncpts);
 
-	    fastf_t _dm_width = (fastf_t)BVDAS_DEFAULT_DM_WIDTH;
-	    if (gdvp->dmp) {
-		int _w = dm_get_width((struct dm *)gdvp->dmp);
-		if (_w > 0) _dm_width = (fastf_t)_w;
-	    }
-	    struct rt_view_info _view = RT_VIEW_INFO_INIT;
-	    rt_view_info_from_bsg(&_view, gdvp);
-	    fastf_t _sf = _view.size / _dm_width;
-	    fastf_t _half = (fastf_t)size * 0.5f * _sf;
+	    fastf_t sf = _tclcad_data_axes_display_scale(gdvp);
+	    fastf_t half = (fastf_t)size * 0.5f * sf;
 
-	    _bsg_rebuild_axes(gdvp, bsg_name, _cpts, _ncpts, _half, _color, _lw, _vis);
-	    bu_free(_cpts, "bsg axes pts");
+	    if (cpts && ncpts)
+		(void)ged_draw_view_tcl_axes_replace(gdvp, bsg_name, cpts, ncpts,
+			half, &saved_style);
+	    if (cpts)
+		bu_free(cpts, "GED draw view axes centers copy");
 
 	    to_refresh_view(gdvp);
 	    return BRLCAD_OK;
@@ -694,13 +718,13 @@ to_data_axes_func(Tcl_Interp *interp,
 
 	if (argc == 2) {
 	    /* T3: recover center points from BSG vlist. */
-	    bsg_feature_ref ref = bsg_feature_find(gdvp, bsg_name);
-	    if (!bsg_feature_ref_is_null(ref)) {
-		point_t *_cpts = NULL;
-		int _ncpts = _bsg_extract_axes_centers(ref, &_cpts);
-		for (i = 0; i < _ncpts; ++i)
-		    bu_vls_printf(gedp->ged_result_str, " {%lf %lf %lf} ", V3ARGS(_cpts[i]));
-		bu_free(_cpts, "bsg axes pts");
+	    point_t *cpts = NULL;
+	    size_t ncpts = 0;
+	    if (ged_draw_view_feature_axes_centers_copy(gdvp, bsg_name, &cpts, &ncpts)) {
+		for (size_t j = 0; j < ncpts; ++j)
+		    bu_vls_printf(gedp->ged_result_str, " {%lf %lf %lf} ", V3ARGS(cpts[j]));
+		if (cpts)
+		    bu_free(cpts, "GED draw view axes centers copy");
 	    }
 	    return BRLCAD_OK;
 	}
@@ -715,23 +739,21 @@ to_data_axes_func(Tcl_Interp *interp,
 	    }
 
 	    /* T3: save style and size from existing BSG object before replacing it. */
-	    bsg_feature_ref old_ref = bsg_feature_find(gdvp, bsg_name);
-	    int _color[3]; int _lw, _vis;
-	    _bsg_read_style(old_ref, _color, &_lw, NULL, NULL, &_vis);
+	    struct ged_draw_view_feature_style saved_style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+	    _tclcad_data_axes_rebuild_style(gdvp, bsg_name, &saved_style);
 
 	    /* Recover halfAxesSize from existing object (use default 1.0 if none). */
-	    fastf_t _half = 1.0;
-	    if (!bsg_feature_ref_is_null(old_ref)) {
-		point_t *_all = NULL;
-		int _ntotal = _bsg_extract_pts(old_ref, &_all);
-		if (_ntotal >= 2)
-		    _half = (_all[1][X] - _all[0][X]) * 0.5;
-		bu_free(_all, "bsg pts");
-	    }
+	    fastf_t half = 1.0;
+	    point_t *all = NULL;
+	    size_t total = 0;
+	    if (ged_draw_view_feature_points_copy(gdvp, bsg_name, &all, &total) && total >= 2)
+		half = (all[1][X] - all[0][X]) * 0.5;
+	    if (all)
+		bu_free(all, "GED draw view feature points copy");
 
-	    /* Clear out: remove old BSG object. */
+	    /* Clear out: remove old GED draw-view feature. */
 	    if (ac < 1) {
-		bsg_feature_remove(gdvp, bsg_name);
+		ged_draw_view_feature_remove(gdvp, bsg_name);
 		to_refresh_view(gdvp);
 		Tcl_Free((char *)av);
 		return BRLCAD_OK;
@@ -752,7 +774,8 @@ to_data_axes_func(Tcl_Interp *interp,
 	    }
 
 	    /* T3: rebuild BSG from new centers, preserving style; no gv_tcl write. */
-	    _bsg_rebuild_axes(gdvp, bsg_name, pts, ac, _half, _color, _lw, _vis);
+	    (void)ged_draw_view_tcl_axes_replace(gdvp, bsg_name, pts, (size_t)ac,
+		    half, &saved_style);
 	    bu_free(pts, "axes points");
 	    Tcl_Free((char *)av);
 	    to_refresh_view(gdvp);
@@ -788,7 +811,7 @@ to_model_axes(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
+    gdvp = (struct bsg_view *)ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
         bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
         return BRLCAD_ERROR;
@@ -805,11 +828,12 @@ to_model_axes(struct ged *gedp,
 
 int
 go_view_axes(struct ged *gedp,
-	     struct bsg_view *gdvp,
+	     void *draw_view_ctx,
 	     int argc,
 	     const char *argv[],
 	     const char *usage)
 {
+    struct bsg_view *gdvp = (struct bsg_view *)draw_view_ctx;
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
@@ -858,7 +882,7 @@ to_view_axes(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
+    gdvp = (struct bsg_view *)ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;

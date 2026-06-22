@@ -583,7 +583,10 @@ dl_botdump(struct _ged_bot_dump_client_data *d)
 {
     if (!d || !d->gedp)
 	return;
-    ged_draw_foreach_visible_view_db_object_record(d->gedp->ged_gvp,
+    struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(d->gedp);
+    if (!view)
+	return;
+    ged_draw_foreach_visible_view_db_object_record(view,
 	    botdump_export_record, d);
 }
 

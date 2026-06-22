@@ -32,6 +32,7 @@
 #include "common.h"
 #include "bu/units.h"
 #include "ged.h"
+#include "rt/view_legacy_bsg.h"
 #include "tclcad.h"
 
 /* Private headers */
@@ -43,7 +44,8 @@ to_is_viewable(struct bsg_view *gdvp)
 {
     int result_int;
 
-    const struct bu_vls *pathvls = dm_get_pathname((struct dm *)gdvp->dmp);
+    struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(gdvp);
+    const struct bu_vls *pathvls = dmp ? dm_get_pathname(dmp) : NULL;
     if (!pathvls || !bu_vls_strlen(pathvls)) {
 	return 0;
     }

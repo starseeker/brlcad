@@ -49,7 +49,7 @@ ged_erase2_core(struct ged *gedp, int argc, const char *argv[])
 {
     static const char *usage = "[[-r] | [[-o] -A attribute value ...]] [object(s)]";
     const char *cmdName = argv[0];
-    struct bsg_view *v = gedp->ged_gvp;
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
     int recursive = 0;
     int flag_A_attr = 0;
     int flag_o_nonunique = 0;
@@ -78,7 +78,7 @@ ged_erase2_core(struct ged *gedp, int argc, const char *argv[])
     int opt_ret = bu_opt_parse(NULL, argc, argv, vd);
     argc = opt_ret;
     if (bu_vls_strlen(&cvls)) {
-	v = rt_view_set_find_view_bsg(&gedp->ged_views, bu_vls_cstr(&cvls));
+	v = (struct bsg_view *)ged_view_find_ctx(gedp, bu_vls_cstr(&cvls));
 	if (!v) {
 	    bu_vls_printf(gedp->ged_result_str, "Specified view %s not found\n", bu_vls_cstr(&cvls));
 	    bu_vls_free(&cvls);

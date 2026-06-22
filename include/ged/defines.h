@@ -54,7 +54,7 @@
 /* GED_DISPLAY_LIST_NULL is deprecated — use NULL directly */
 #define GED_DISPLAY_LIST_NULL ((struct display_list *)0)
 #define GED_DRAWABLE_NULL ((struct ged_drawable *)0)
-#define GED_VIEW_NULL ((struct bsg_view *)0)
+#define GED_VIEW_NULL ((void *)0)
 
 #define GED_RESULT_NULL ((void *)0)
 
@@ -305,6 +305,12 @@ GED_EXPORT void ged_destroy(struct ged *);
 // done with it.
 GED_EXPORT extern void ged_init(struct ged *gedp);
 GED_EXPORT extern void ged_free(struct ged *gedp);
+
+GED_EXPORT extern void *ged_view_active_ctx(const struct ged *gedp);
+GED_EXPORT extern void ged_view_active_ctx_set(struct ged *gedp, void *view_ctx);
+GED_EXPORT extern void *ged_view_set_ctx(struct ged *gedp);
+GED_EXPORT extern struct bu_ptbl *ged_view_set_views_ctx(struct ged *gedp);
+GED_EXPORT extern void *ged_view_find_ctx(struct ged *gedp, const char *name);
 
 // Associate a callback function pointer for a command.  If mode is less than
 // zero, function will be registered to run BEFORE actual cmd logic is run, and

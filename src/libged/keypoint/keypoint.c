@@ -49,8 +49,9 @@ ged_keypoint_core(struct ged *gedp, int argc, const char *argv[])
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     /* get keypoint */
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
     if (argc == 1) {
-	rt_view_keypoint_from_bsg(keypoint, gedp->ged_gvp);
+	rt_view_keypoint_from_bsg(keypoint, v);
 	VSCALE(keypoint, keypoint, gedp->dbip->dbi_base2local);
 	bn_encode_vect(gedp->ged_result_str, keypoint, 1);
 
@@ -89,7 +90,7 @@ ged_keypoint_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     VSCALE(keypoint, keypoint, gedp->dbip->dbi_local2base);
-    rt_view_keypoint_set_bsg(gedp->ged_gvp, keypoint);
+    rt_view_keypoint_set_bsg(v, keypoint);
 
     return BRLCAD_OK;
 }

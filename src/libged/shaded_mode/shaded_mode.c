@@ -57,8 +57,8 @@ ged_shaded_mode_core(struct ged *gedp, int argc, const char *argv[])
 
     /* get shaded mode */
     if (argc == 1) {
-	bsg_draw_mode mode = ged_draw_default_mode(gedp);
-	bu_vls_printf(gedp->ged_result_str, "%d", (int)mode);
+	int mode = ged_draw_default_mode(gedp);
+	bu_vls_printf(gedp->ged_result_str, "%d", mode);
 	return BRLCAD_OK;
     }
 

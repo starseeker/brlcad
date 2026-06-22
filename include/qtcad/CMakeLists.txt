@@ -14,7 +14,6 @@ set(
   QgGeomImport.h
   QgKeyVal.h
   QgLegacyView.h
-  QgLegacyViewBsg.h
   QgMeasureFilter.h
   QgModel.h
   QgObolDatabaseSync.h

@@ -116,7 +116,7 @@ ged_how_core(struct ged *gedp, int argc, const char *argv[])
     struct how_find_ctx ctx;
     memset(&ctx, 0, sizeof(ctx));
     ctx.path = obj_arg;
-    ctx.view = gedp->ged_gvp;
+    ctx.view = (struct bsg_view *)ged_view_active_ctx(gedp);
     ged_draw_foreach_group_record(gedp, how_group_match_cb, &ctx);
     if (!ctx.match)
 	goto not_found;

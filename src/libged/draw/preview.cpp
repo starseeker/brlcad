@@ -149,6 +149,9 @@ ged_cm_end(struct ged *gedp, vect_t *v, mat_t *m, const int UNUSED(argc), const 
     /* Only display the frames the user is interested in */
     if (preview_currentframe < preview_desiredframe) return 0;
     if (preview_finalframe && preview_currentframe > preview_finalframe) return 0;
+    struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
+    if (!view)
+	return -1;
 
     /* Record eye path as a polyline.  Move, then draws */
     if (draw_eye_path) {
@@ -157,11 +160,11 @@ ged_cm_end(struct ged *gedp, vect_t *v, mat_t *m, const int UNUSED(argc), const 
     }
 
     /* First step:  put eye at view center (view 0, 0, 0) */
-    rt_view_rotation_set_bsg(gedp->ged_gvp, (*m));
-    rt_view_center_vec_set_bsg(gedp->ged_gvp, (*v));
-    rt_view_update_bsg(gedp->ged_gvp);
+    rt_view_rotation_set_bsg(view, (*m));
+    rt_view_center_vec_set_bsg(view, (*v));
+    rt_view_update_bsg(view);
     mat_t view2model;
-    rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
+    rt_view_view2model_from_bsg(view2model, view);
 
     /*
      * Compute camera orientation notch to right (+X) and up (+Y)
@@ -183,8 +186,8 @@ ged_cm_end(struct ged *gedp, vect_t *v, mat_t *m, const int UNUSED(argc), const 
     */
     VSET(xlate, 0.0, 0.0, -1.0);	/* correction factor */
     MAT4X3PNT(new_cent, view2model, xlate);
-    rt_view_center_vec_set_bsg(gedp->ged_gvp, new_cent);
-    rt_view_update_bsg(gedp->ged_gvp);
+    rt_view_center_vec_set_bsg(view, new_cent);
+    rt_view_update_bsg(view);
 
     /* If new treewalk is needed, get new objects into view. */
     if (preview_tree_walk_needed) {
@@ -353,6 +356,9 @@ ged_preview_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
     GED_CHECK_DRAWABLE(gedp, BRLCAD_ERROR);
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
+    struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
+    if (!view)
+	return BRLCAD_ERROR;
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -450,10 +456,10 @@ ged_preview_core(struct ged *gedp, int argc, const char *argv[])
      * Initialize the view to the current one provided by the ged
      * structure in case a view specification is never given.
      */
-    rt_view_rotation_from_bsg(*ged_viewrot, gedp->ged_gvp);
+    rt_view_rotation_from_bsg(*ged_viewrot, view);
     VSET(temp, 0.0, 0.0, 1.0);
     mat_t view2model;
-    rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
+    rt_view_view2model_from_bsg(view2model, view);
     MAT4X3PNT(*ged_eye_model, view2model, temp);
 
     if (image_name) {
@@ -488,7 +494,6 @@ ged_preview_core(struct ged *gedp, int argc, const char *argv[])
     fp = NULL;
 
     if (draw_eye_path) {
-	struct bsg_view *view = gedp->ged_gvp;
 	(void)ged_draw_view_feature_remove(view, "preview::eye_path");
 	if (preview_eye_path.count) {
 	    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;

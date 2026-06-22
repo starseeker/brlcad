@@ -84,7 +84,7 @@ _fp_cmd_center_dot(void *ds, int argc, const char **argv)
 
     struct _ged_fp_info *gd = (struct _ged_fp_info *)ds;
     struct ged *gedp = gd->gedp;
-    struct bsg_view *v = gedp->ged_gvp;
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
     struct rt_view_other_state center_dot;
     if (!rt_view_center_dot_state_from_bsg(&center_dot, v))
 	return BRLCAD_ERROR;
@@ -150,7 +150,7 @@ _fp_cmd_fb(void *ds, int argc, const char **argv)
 
     struct _ged_fp_info *gd = (struct _ged_fp_info *)ds;
     struct ged *gedp = gd->gedp;
-    struct bsg_view *v = gedp->ged_gvp;
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
 
     if (!argc) {
 	bu_vls_printf(gedp->ged_result_str, "%d", rt_view_framebuffer_mode_from_bsg(v));
@@ -192,7 +192,7 @@ _fp_cmd_scale(void *ds, int argc, const char **argv)
 
     struct _ged_fp_info *gd = (struct _ged_fp_info *)ds;
     struct ged *gedp = gd->gedp;
-    struct bsg_view *v = gedp->ged_gvp;
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
     struct rt_view_other_state scale_state;
     if (!rt_view_scale_overlay_state_from_bsg(&scale_state, v))
 	return BRLCAD_ERROR;
@@ -258,7 +258,7 @@ _fp_cmd_params(void *ds, int argc, const char **argv)
 
     struct _ged_fp_info *gd = (struct _ged_fp_info *)ds;
     struct ged *gedp = gd->gedp;
-    struct bsg_view *v = gedp->ged_gvp;
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
     struct rt_view_params_state params;
     if (!rt_view_params_state_from_bsg(&params, v))
 	return BRLCAD_ERROR;
@@ -460,7 +460,8 @@ ged_faceplate_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_OK;
     }
 
-    if (!gedp->ged_gvp) {
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+    if (!v) {
 	bu_vls_printf(gedp->ged_result_str, ": no current view set");
 	return BRLCAD_ERROR;
     }
@@ -468,7 +469,7 @@ ged_faceplate_core(struct ged *gedp, int argc, const char *argv[])
     int ret;
     if (bu_cmd(_fp_cmds, ac, argv, 0, (void *)&gd, &ret) == BRLCAD_OK) {
 	if (ret == BRLCAD_OK)
-	    (void)ged_draw_view_hud_sync(gedp->ged_gvp);
+	    (void)ged_draw_view_hud_sync(v);
 	return ret;
     } else {
 	bu_vls_printf(gedp->ged_result_str, "subcommand %s not defined", argv[0]);

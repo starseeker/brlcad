@@ -60,7 +60,8 @@ static void
 gc_collect_paths(struct ged *gedp, std::vector<std::string> &who_objs)
 {
     struct bu_vls paths = BU_VLS_INIT_ZERO;
-    ged_draw_list_paths(gedp, gedp ? gedp->ged_gvp : NULL, -1, 1, &paths);
+    void *view = ged_view_active_ctx(gedp);
+    ged_draw_list_paths(gedp, view, -1, 1, &paths);
 
     const char *s = bu_vls_cstr(&paths);
     const char *start = s;

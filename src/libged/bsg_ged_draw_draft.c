@@ -40,7 +40,6 @@
 #include "bsg/draw_source.h"
 #include "bsg/field.h"
 #include "bsg/geometry.h"
-#include "bsg/interaction.h"
 #include "bsg/material.h"
 #include "bsg/node.h"
 #include "bsg/payload.h"

@@ -45,6 +45,8 @@ ged_rot_point_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
@@ -88,7 +90,7 @@ ged_rot_point_core(struct ged *gedp, int argc, const char *argv[])
 
     /* Rotate the incoming point */
     mat_t rotation;
-    rt_view_rotation_from_bsg(rotation, gedp->ged_gvp);
+    rt_view_rotation_from_bsg(rotation, v);
     bn_mat_inv(invRot, rotation);
     MAT4X3PNT(rpoint, invRot, point);
     bn_encode_vect(gedp->ged_result_str, rpoint, 1);

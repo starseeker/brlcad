@@ -44,8 +44,6 @@
 #include <ged.h>
 #include <ged/bsg_ged_draw.h>
 #include <rt/view_legacy_bsg.h>
-#include "bsg/node.h"
-#include "bsg/util.h"
 
 extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);
 
@@ -192,8 +190,8 @@ main(int ac, char *av[])
 	    gedp->dbip->dbi_base2local);
 
 	/* BSG scene anchor must be created for each view. */
-	if (!bsg_view_scene_attached(v))
-	    (void)bsg_view_scene_separator_ref(v, 1);
+	if (!rt_view_scene_attached_bsg(v))
+	    (void)rt_view_scene_anchor_ensure_bsg(v);
 
 	/* Set distinct az/el */
 	struct bu_vls vname = BU_VLS_INIT_ZERO;

@@ -31,15 +31,13 @@
 
 extern "C" {
 #include "bn/str.h"
-#include "rt/view_legacy_bsg.h"
 }
 
 #include "qtcad/defines.h"
-#include "qtcad/QgLegacyViewBsg.h"
 #include "QgCanvasInput.h"
 
 struct QgCanvasInput::Impl {
-	std::unordered_map<qg_legacy_view *, rt_view_bounds_update_callback_bsg_t> drag_bounds_updates;
+	std::unordered_map<qg_legacy_view *, qg_legacy_view_bounds_update_state *> drag_bounds_updates;
 	std::unordered_map<qg_legacy_view *, long long> drag_update_ts;
 };
 
@@ -50,20 +48,29 @@ QgCanvasInput::QgCanvasInput() :
 
 QgCanvasInput::~QgCanvasInput()
 {
+	for (auto &entry : m->drag_bounds_updates)
+		qg_legacy_view_bounds_update_restore(entry.first, entry.second, 0);
 	delete m;
+}
+
+static int
+qgcanvasinput_set_aet(qg_legacy_view *v, const char *aet_string)
+{
+	vect_t aet_vec;
+	bn_decode_vect(aet_vec, aet_string);
+	(void)qg_legacy_view_aet_set(v, aet_vec);
+	(void)qg_legacy_view_update(v);
+	return 1;
 }
 
 void
 QgCanvasInput::suspendDragBoundsUpdate(qg_legacy_view *v)
 {
-	struct bsg_view *bv = qg_legacy_view_to_bsg(v);
-	rt_view_bounds_update_callback_bsg_t bounds_update =
-		rt_view_bounds_update_callback_from_bsg(bv);
-	if (!bounds_update)
-		return;
 	if (m->drag_bounds_updates.find(v) == m->drag_bounds_updates.end()) {
-		m->drag_bounds_updates[v] = bounds_update;
-		rt_view_bounds_update_callback_set_bsg(bv, nullptr);
+		qg_legacy_view_bounds_update_state *state =
+			qg_legacy_view_bounds_update_suspend(v);
+		if (state)
+			m->drag_bounds_updates[v] = state;
 	}
 }
 
@@ -72,13 +79,10 @@ QgCanvasInput::restoreDragBoundsUpdate(qg_legacy_view *v, int refresh_bounds)
 {
 	if (!v)
 		return;
-	struct bsg_view *bv = qg_legacy_view_to_bsg(v);
 	auto it = m->drag_bounds_updates.find(v);
 	if (it == m->drag_bounds_updates.end())
 		return;
-	rt_view_bounds_update_callback_set_bsg(bv, it->second);
-	if (refresh_bounds)
-		rt_view_bounds_update_callback_call_bsg(bv);
+	qg_legacy_view_bounds_update_restore(v, it->second, refresh_bounds);
 	m->drag_bounds_updates.erase(it);
 	m->drag_update_ts.erase(v);
 }
@@ -92,7 +96,6 @@ QgCanvasInput::keyPressEvent(qg_legacy_view *v, int UNUSED(x_prev),
 	QTCAD_EVENT("keyPress", 1);
 	if (!v)
 		return 0;
-	struct bsg_view *bv = qg_legacy_view_to_bsg(v);
 #if 0
 	QString kstr = QKeySequence(k->key()).toString();
 	bu_log("%s\n", kstr.toStdString().c_str());
@@ -100,109 +103,63 @@ QgCanvasInput::keyPressEvent(qg_legacy_view *v, int UNUSED(x_prev),
 	switch (k->key()) {
 		case 'A': {
 			struct rt_view_adc_state adc;
-			if (!rt_view_adc_state_from_bsg(&adc, bv))
+			if (!qg_legacy_view_adc_state_get(v, &adc))
 				return 0;
 			adc.draw = !adc.draw;
-			rt_view_adc_state_set_bsg(bv, &adc);
+			qg_legacy_view_adc_state_set(v, &adc);
 			return 1;
 		}
 		case 'M': {
 			struct rt_view_axes_state axes;
-			if (!rt_view_model_axes_state_from_bsg(&axes, bv))
+			if (!qg_legacy_view_model_axes_state_get(v, &axes))
 				return 0;
 			axes.draw = !axes.draw;
-			rt_view_model_axes_state_set_bsg(bv, &axes);
+			qg_legacy_view_model_axes_state_set(v, &axes);
 			return 1;
 		}
 		case 'V': {
 			struct rt_view_axes_state axes;
-			if (!rt_view_view_axes_state_from_bsg(&axes, bv))
+			if (!qg_legacy_view_view_axes_state_get(v, &axes))
 				return 0;
 			axes.draw = !axes.draw;
-			rt_view_view_axes_state_set_bsg(bv, &axes);
+			qg_legacy_view_view_axes_state_set(v, &axes);
 			return 1;
 		}
 		case '2': {
-				vect_t aet_vec;
-				bn_decode_vect(aet_vec, "35 -25 0");
-				rt_view_aet_set_bsg(bv, aet_vec);
-				rt_view_update_bsg(bv);
-				return 1;
+				return qgcanvasinput_set_aet(v, "35 -25 0");
 			}
 		case '3': {
-				vect_t aet_vec;
-				bn_decode_vect(aet_vec, "35 25 0");
-				rt_view_aet_set_bsg(bv, aet_vec);
-				rt_view_update_bsg(bv);
-				return 1;
+				return qgcanvasinput_set_aet(v, "35 25 0");
 			}
 		case '4': {
-				vect_t aet_vec;
-				bn_decode_vect(aet_vec, "45 45 0");
-				rt_view_aet_set_bsg(bv, aet_vec);
-				rt_view_update_bsg(bv);
-				return 1;
+				return qgcanvasinput_set_aet(v, "45 45 0");
 			}
 		case '5': {
-				vect_t aet_vec;
-				bn_decode_vect(aet_vec, "145 25 0");
-				rt_view_aet_set_bsg(bv, aet_vec);
-				rt_view_update_bsg(bv);
-				return 1;
+				return qgcanvasinput_set_aet(v, "145 25 0");
 			}
 		case '6': {
-				vect_t aet_vec;
-				bn_decode_vect(aet_vec, "215 25 0");
-				rt_view_aet_set_bsg(bv, aet_vec);
-				rt_view_update_bsg(bv);
-				return 1;
+				return qgcanvasinput_set_aet(v, "215 25 0");
 			}
 		case '7': {
-				vect_t aet_vec;
-				bn_decode_vect(aet_vec, "325 25 0");
-				rt_view_aet_set_bsg(bv, aet_vec);
-				rt_view_update_bsg(bv);
-				return 1;
+				return qgcanvasinput_set_aet(v, "325 25 0");
 			}
 		case 'F': {
-				vect_t aet_vec;
-				bn_decode_vect(aet_vec, "0 0 0");
-				rt_view_aet_set_bsg(bv, aet_vec);
-				rt_view_update_bsg(bv);
-				return 1;
+				return qgcanvasinput_set_aet(v, "0 0 0");
 			}
 		case 'T': {
-				vect_t aet_vec;
-				bn_decode_vect(aet_vec, "270 90 0");
-				rt_view_aet_set_bsg(bv, aet_vec);
-				rt_view_update_bsg(bv);
-				return 1;
+				return qgcanvasinput_set_aet(v, "270 90 0");
 			}
 		case 'B': {
-				vect_t aet_vec;
-				bn_decode_vect(aet_vec, "270 -90 0");
-				rt_view_aet_set_bsg(bv, aet_vec);
-				rt_view_update_bsg(bv);
-				return 1;
+				return qgcanvasinput_set_aet(v, "270 -90 0");
 			}
 		case 'L': {
-				vect_t aet_vec;
-				bn_decode_vect(aet_vec, "90 0 0");
-				rt_view_aet_set_bsg(bv, aet_vec);
-				rt_view_update_bsg(bv);
-				return 1;
+				return qgcanvasinput_set_aet(v, "90 0 0");
 			}
 		case 'R': {
-				vect_t aet_vec;
 				if (k->modifiers().testFlag(Qt::ShiftModifier) == true) {
-					bn_decode_vect(aet_vec, "180 0 0");
+					return qgcanvasinput_set_aet(v, "180 0 0");
 				}
-				else {
-					bn_decode_vect(aet_vec, "270 0 0");
-				}
-				rt_view_aet_set_bsg(bv, aet_vec);
-				rt_view_update_bsg(bv);
-				return 1;
+				return qgcanvasinput_set_aet(v, "270 0 0");
 			}
 		default:
 			break;
@@ -252,7 +209,6 @@ QgCanvasInput::mouseReleaseEvent(qg_legacy_view *v, double x_press,
 
 	if (!v)
 		return 0;
-	struct bsg_view *bv = qg_legacy_view_to_bsg(v);
 
 	restoreDragBoundsUpdate(v, 1);
 
@@ -283,39 +239,39 @@ QgCanvasInput::mouseReleaseEvent(qg_legacy_view *v, double x_press,
 
 	int dx = 1;
 	int dy = 1;
-	unsigned long long view_flags = RT_VIEW_ADJUST_IDLE;
+	unsigned long long view_flags = QG_LEGACY_VIEW_ADJUST_IDLE;
 
 	if (e->button() == Qt::LeftButton) {
 		//bu_log("Release Left\n");
-		if (mode != RT_VIEW_ADJUST_CENTER) {
-			view_flags = RT_VIEW_ADJUST_SCALE;
+		if (mode != QG_LEGACY_VIEW_ADJUST_CENTER) {
+			view_flags = QG_LEGACY_VIEW_ADJUST_SCALE;
 			dx = 10;
 			dy = 5;
 		}
 		else {
-			view_flags = RT_VIEW_ADJUST_CENTER;
+			view_flags = QG_LEGACY_VIEW_ADJUST_CENTER;
 			dx = (int)cx;
 			dy = (int)cy;
 		}
 	}
 	if (e->button() == Qt::RightButton) {
 		//bu_log("Release Right\n");
-		if (mode == RT_VIEW_ADJUST_CENTER)
+		if (mode == QG_LEGACY_VIEW_ADJUST_CENTER)
 			return 0;
-		view_flags = RT_VIEW_ADJUST_SCALE;
+		view_flags = QG_LEGACY_VIEW_ADJUST_SCALE;
 		dx = 1;
 		dy = 2;
 	}
 
 	if (e->button() == Qt::MiddleButton) {
 		//bu_log("Release Center\n");
-		view_flags = RT_VIEW_ADJUST_CENTER;
+		view_flags = QG_LEGACY_VIEW_ADJUST_CENTER;
 		dx = (int)cx;
 		dy = (int)cy;
 	}
 
 	point_t keypt = VINIT_ZERO;
-	return rt_view_adjust_bsg(bv, dx, dy, keypt, 0, view_flags);
+	return qg_legacy_view_adjust(v, dx, dy, keypt, 0, view_flags);
 }
 
 int
@@ -326,9 +282,8 @@ QgCanvasInput::mouseMoveEvent(qg_legacy_view *v, int x_prev, int y_prev,
 
 	if (!v)
 		return 0;
-	struct bsg_view *bv = qg_legacy_view_to_bsg(v);
 
-	unsigned long long view_flags = RT_VIEW_ADJUST_IDLE;
+	unsigned long long view_flags = QG_LEGACY_VIEW_ADJUST_IDLE;
 
 	if (x_prev == -INT_MAX) {
 		//x_prev = e->x();
@@ -337,25 +292,25 @@ QgCanvasInput::mouseMoveEvent(qg_legacy_view *v, int x_prev, int y_prev,
 	}
 
 	view_flags = mode;
-	if (mode == RT_VIEW_ADJUST_CENTER)
-		view_flags = RT_VIEW_ADJUST_SCALE;
+	if (mode == QG_LEGACY_VIEW_ADJUST_CENTER)
+		view_flags = QG_LEGACY_VIEW_ADJUST_SCALE;
 
 	if (e->buttons().testFlag(Qt::LeftButton)) {
 		//bu_log("Left\n");
 
 		if (e->modifiers().testFlag(Qt::ControlModifier)) {
 			//bu_log("Ctrl+Left\n");
-			view_flags = RT_VIEW_ADJUST_ROT;
+			view_flags = QG_LEGACY_VIEW_ADJUST_ROT;
 		}
 
 		if (e->modifiers().testFlag(Qt::ShiftModifier)) {
 			//bu_log("Shift+Left\n");
-			view_flags = RT_VIEW_ADJUST_TRANS;
+			view_flags = QG_LEGACY_VIEW_ADJUST_TRANS;
 		}
 
 		if (e->modifiers().testFlag(Qt::ShiftModifier) && e->modifiers().testFlag(Qt::ControlModifier)) {
 			//bu_log("Ctrl+Shift+Left\n");
-			view_flags = RT_VIEW_ADJUST_SCALE;
+			view_flags = QG_LEGACY_VIEW_ADJUST_SCALE;
 		}
 	}
 
@@ -385,7 +340,7 @@ QgCanvasInput::mouseMoveEvent(qg_legacy_view *v, int x_prev, int y_prev,
 	int dy = e->position().y() - y_prev;
 #endif
 
-	if (view_flags == RT_VIEW_ADJUST_SCALE) {
+	if (view_flags == QG_LEGACY_VIEW_ADJUST_SCALE) {
 		// Build in some sensitivity to how much the mouse moved when doing
 		// a motion based scale
 		int mdelta = (abs(dx) > abs(dy)) ? dx : -dy;
@@ -406,17 +361,17 @@ QgCanvasInput::mouseMoveEvent(qg_legacy_view *v, int x_prev, int y_prev,
 	// TODO - the key point and the mode/flags are all hardcoded
 	// right now, but eventually for shift grips they will need to
 	// respond to the various mod keys.  The intent is to set flags
-	// based on which mod keys are set to allow rt_view_adjust_bsg to
+	// based on which mod keys are set to allow qg_legacy_view_adjust to
 	// do the correct math.
 	point_t center;
 	mat_t view_center;
-	rt_view_center_from_bsg(view_center, bv);
+	qg_legacy_view_center_get(v, view_center);
 	MAT_DELTAS_GET_NEG(center, view_center);
 
-	if (view_flags & (RT_VIEW_ADJUST_ROT | RT_VIEW_ADJUST_TRANS | RT_VIEW_ADJUST_SCALE))
+	if (view_flags & (QG_LEGACY_VIEW_ADJUST_ROT | QG_LEGACY_VIEW_ADJUST_TRANS | QG_LEGACY_VIEW_ADJUST_SCALE))
 		suspendDragBoundsUpdate(v);
 
-	return rt_view_adjust_bsg(bv, dx, dy, center, 0, view_flags);
+	return qg_legacy_view_adjust(v, dx, dy, center, 0, view_flags);
 }
 
 int
@@ -426,7 +381,6 @@ QgCanvasInput::wheelEvent(qg_legacy_view *v, QWheelEvent *e)
 
 	if (!v)
 		return 0;
-	struct bsg_view *bv = qg_legacy_view_to_bsg(v);
 
 	QPoint delta = e->angleDelta();
 	int mdelta = -1 * delta.y() / 8;
@@ -435,7 +389,7 @@ QgCanvasInput::wheelEvent(qg_legacy_view *v, QWheelEvent *e)
 	int dy = 100;
 
 	point_t origin = VINIT_ZERO;
-	return rt_view_adjust_bsg(bv, dx, dy, origin, 0, RT_VIEW_ADJUST_SCALE);
+	return qg_legacy_view_adjust(v, dx, dy, origin, 0, QG_LEGACY_VIEW_ADJUST_SCALE);
 }
 
 // Local Variables:

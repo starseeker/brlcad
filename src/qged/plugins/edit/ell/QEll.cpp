@@ -32,6 +32,7 @@
 #include "rt/db_io.h"
 #include "rt/directory.h"
 #include "qtcad/QgGedEventBatch.h"
+#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgSignalFlags.h"
 #include "../qged_edit_preview_util.h"
@@ -295,10 +296,11 @@ QEll::update_viewobj_name(const QString &)
     if (ndp != dp) {
 	dp = ndp;
 	if (dp) {
-	    ged_draw_highlight_shape_ref_by_name(gedp, bu_vls_cstr(&oname));
+	    qg_legacy_view_draw_highlight_shape_by_name(gedp,
+		    bu_vls_cstr(&oname));
 	    read_from_db();
 	} else {
-	    ged_draw_set_highlighted_shape_ref(gedp, GED_DRAW_SHAPE_REF_NULL);
+	    qg_legacy_view_draw_highlight_clear(gedp);
 	    qged_edit_feature_clear_geometry_view(display, "_ell_edit", p);
 	    qged_edit_feature_set_visible(p, 0);
 	    qged_edit_feature_remove(m_ctx, "_ell_edit_labels");

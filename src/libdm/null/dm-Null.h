@@ -27,7 +27,7 @@
 
 #include "common.h"
 
-#include "bsg/vlist.h"
+#include "bg/vlist.h"
 #include "dm.h"
 
 #ifndef DM_NULL_EXPORT
@@ -108,15 +108,15 @@ null_drawPoints3D(struct dm *dmp, int npoints, point_t *points);
 
 
 DM_NULL_EXPORT extern int
-null_drawVList(struct dm *dmp, bsg_vlist *vp);
+null_drawVList(struct dm *dmp, bg_vlist *vp);
 
 
 DM_NULL_EXPORT extern int
-null_drawVListHiddenLine(struct dm *dmp, bsg_vlist *vp);
+null_drawVListHiddenLine(struct dm *dmp, bg_vlist *vp);
 
 
 DM_NULL_EXPORT extern int
-null_draw(struct dm *dmp, bsg_vlist *(*callback_function)(void *), void **data);
+null_draw(struct dm *dmp, bg_vlist *(*callback_function)(void *), void **data);
 
 
 DM_NULL_EXPORT extern int
@@ -200,7 +200,7 @@ null_getDisplayImage(struct dm *dmp, unsigned char **image, int flip, int alpha)
 
 
 DM_NULL_EXPORT extern int
-null_draw(struct dm *dmp, bsg_vlist *(*callback_function)(void *), void **data);
+null_draw(struct dm *dmp, bg_vlist *(*callback_function)(void *), void **data);
 
 
 DM_NULL_EXPORT extern int

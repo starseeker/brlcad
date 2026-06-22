@@ -40,7 +40,6 @@
 #include "bsg/draw_source.h"
 #include "bsg/field.h"
 #include "bsg/geometry.h"
-#include "bsg/interaction.h"
 #include "bsg/material.h"
 #include "bsg/node.h"
 #include "bsg/payload.h"
@@ -1542,7 +1541,7 @@ _ged_draw_apply_draw(struct ged *gedp,
     }
     struct bsg_appearance_settings settings = BSG_APPEARANCE_SETTINGS_INIT;
     if (txn->appearance)
-	settings = *txn->appearance;
+	settings = *(const struct bsg_appearance_settings *)txn->appearance;
 
     for (int i = 0; i < draw_count; i++) {
 	struct ged_draw_transaction erase_txn =

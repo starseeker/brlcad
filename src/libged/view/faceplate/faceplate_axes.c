@@ -686,14 +686,14 @@ _fp_cmd_model_axes(void *bs, int argc, const char **argv)
     int help = 0;
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    struct bsg_view *v = gedp->ged_gvp;
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
 
     const char *usage_string = "view faceplate model_axes subcmd [args]";
     const char *purpose_string = "manipulate view axes";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
 
-    if (!gedp->ged_gvp) {
+    if (!v) {
 	bu_vls_printf(gedp->ged_result_str, ": no view current in GED");
 	return BRLCAD_ERROR;
     }
@@ -756,14 +756,14 @@ _fp_cmd_view_axes(void *bs, int argc, const char **argv)
     int help = 0;
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    struct bsg_view *v = gedp->ged_gvp;
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
 
     const char *usage_string = "view faceplate view_axes subcmd [args]";
     const char *purpose_string = "manipulate view axes";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
 
-    if (!gedp->ged_gvp) {
+    if (!v) {
 	bu_vls_printf(gedp->ged_result_str, ": no view current in GED");
 	return BRLCAD_ERROR;
     }

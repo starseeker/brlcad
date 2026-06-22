@@ -99,17 +99,18 @@ ged_screen_grab_core(struct ged *gedp, int argc, const char *argv[])
 
     argc = opt_ret;
 
-    struct dm *cdmp = (gedp->ged_gvp) ? (struct dm *)gedp->ged_gvp->dmp : NULL;
+    struct bsg_view *gvp = (struct bsg_view *)ged_view_active_ctx(gedp);
+    struct dm *cdmp = (struct dm *)rt_view_display_manager_from_bsg(gvp);
 
-    if (bu_vls_strlen(&dm_name) && gedp->ged_gvp) {
+    if (bu_vls_strlen(&dm_name) && gvp) {
 	// We have a name - see if we can match it.
-	struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
+	struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
 	for (size_t j = 0; j < BU_PTBL_LEN(views); j++) {
 	    if (dmp)
 		break;
 	    struct bsg_view *gdvp = (struct bsg_view *)BU_PTBL_GET(views, j);
-	    struct dm *ndmp = (struct dm *)gdvp->dmp;
-	    if (!bu_vls_strcmp(dm_get_pathname(ndmp), &dm_name))
+	    struct dm *ndmp = (struct dm *)rt_view_display_manager_from_bsg(gdvp);
+	    if (ndmp && !bu_vls_strcmp(dm_get_pathname(ndmp), &dm_name))
 		dmp = ndmp;
 	}
 	if (!dmp) {

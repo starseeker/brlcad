@@ -49,7 +49,8 @@ ged_model2view_core(struct ged *gedp, int argc, const char *argv[])
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    rt_view_model2view_from_bsg(model2view, gedp->ged_gvp);
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+    rt_view_model2view_from_bsg(model2view, v);
 
     /* get the model2view matrix */
     if (argc == 1) {

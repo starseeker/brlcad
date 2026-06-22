@@ -44,7 +44,7 @@
 #ifdef BRLCAD_OPENGL
 class TestQgGL : public QgGL {
 public:
-    explicit TestQgGL(QWidget *parent = NULL) : QgGL(parent, NULL) {}
+    explicit TestQgGL(QWidget *parent = NULL) : QgGL(parent) {}
     void runKeyPressForTest(QKeyEvent *event) { this->keyPressEvent(event); }
     void runMouseMoveForTest(QMouseEvent *event) { this->mouseMoveEvent(event); }
     void runPaintGLForTest(void) { this->paintGL(); }
@@ -54,7 +54,7 @@ public:
 
 class TestQgSW : public QgSW {
 public:
-    explicit TestQgSW(QWidget *parent = NULL) : QgSW(parent, NULL) {}
+    explicit TestQgSW(QWidget *parent = NULL) : QgSW(parent) {}
     void runKeyPressForTest(QKeyEvent *event) { this->keyPressEvent(event); }
     void runMouseMoveForTest(QMouseEvent *event) { this->mouseMoveEvent(event); }
     void runWheelForTest(QWheelEvent *event) { this->wheelEvent(event); }
@@ -127,7 +127,7 @@ main(int argc, char **argv)
 {
     QApplication app(argc, argv);
 
-    QgView view(NULL, QgView_SW, NULL);
+    QgView view(NULL, QgView_SW);
     view.resize(160, 120);
     if (!SoDB::getContextManager())
 	FAIL("QgView should install an Obol context manager");
@@ -234,7 +234,7 @@ main(int argc, char **argv)
 	FAIL("QgView visible SW capture should use populated Obol scenes");
     if (controller->isRenderRequested())
 	FAIL("QgView visible SW capture should consume Obol render requests");
-    if (view.dmp())
+    if (view.legacyBackendInitialized())
 	FAIL("QgView visible SW capture should not initialize the legacy display manager for Obol content");
 
     controller->requestRender("sw-visible-paint");
@@ -246,7 +246,7 @@ main(int argc, char **argv)
     painter.end();
     if (controller->isRenderRequested())
 	FAIL("QgView visible SW paint should consume Obol render requests");
-    if (view.dmp())
+    if (view.legacyBackendInitialized())
 	FAIL("QgView visible SW paint should bypass the legacy display manager for Obol content");
     if (lit_pixel_count(paintTarget) < 10)
 	FAIL("QgView visible SW paint should draw populated Obol scenes");
@@ -278,7 +278,7 @@ main(int argc, char **argv)
 	FAIL("QgSW default key navigation should update the Obol camera without legacy DM");
     if (!swController->isRenderRequested())
 	FAIL("QgSW default key navigation should request an Obol render without legacy DM");
-    if (swCanvas.displayManager())
+    if (swCanvas.legacyBackendInitialized())
 	FAIL("QgSW default key navigation should not initialize the legacy display manager");
 
     SbVec3f beforeWheel = swCamera->position.getValue();
@@ -290,7 +290,7 @@ main(int argc, char **argv)
 	FAIL("QgSW wheel navigation should update the Obol camera without legacy DM");
     if (!swController->isRenderRequested())
 	FAIL("QgSW wheel navigation should request an Obol render without legacy DM");
-    if (swCanvas.displayManager())
+    if (swCanvas.legacyBackendInitialized())
 	FAIL("QgSW wheel navigation should not initialize the legacy display manager");
 
     SbVec3f beforeDrag = swCamera->position.getValue();
@@ -304,10 +304,10 @@ main(int argc, char **argv)
 	FAIL("QgSW drag navigation should update the Obol camera without legacy DM");
     if (!swController->isRenderRequested())
 	FAIL("QgSW drag navigation should request an Obol render without legacy DM");
-    if (swCanvas.displayManager())
+    if (swCanvas.legacyBackendInitialized())
 	FAIL("QgSW drag navigation should not initialize the legacy display manager");
 
-    QgView glView(NULL, QgView_GL, NULL);
+    QgView glView(NULL, QgView_GL);
     glView.resize(128, 96);
     if (glView.view_type() == QgView_GL) {
 	BRLObolViewController *glController = glView.obolViewController();
@@ -335,7 +335,7 @@ main(int argc, char **argv)
 	    FAIL("QgGL visible capture should use Obol readback before legacy GL initialization");
 	if (glController->isRenderRequested())
 	    FAIL("QgGL visible capture should consume Obol render requests");
-	if (glView.dmp())
+	if (glView.legacyBackendInitialized())
 	    FAIL("QgGL visible capture should not initialize the legacy display manager for Obol content");
 
 #ifdef BRLCAD_OPENGL
@@ -369,7 +369,7 @@ main(int argc, char **argv)
 		FAIL("QgGL default key navigation should update the Obol camera without legacy DM");
 	    if (!paintController->isRenderRequested())
 		FAIL("QgGL default key navigation should request an Obol render without legacy DM");
-	    if (glCanvas.displayManager())
+	    if (glCanvas.legacyBackendInitialized())
 		FAIL("QgGL default key navigation should not initialize the legacy display manager");
 
 	    SbVec3f beforeGLWheel = paintCamera->position.getValue();
@@ -381,7 +381,7 @@ main(int argc, char **argv)
 		FAIL("QgGL wheel navigation should update the Obol camera without legacy DM");
 	    if (!paintController->isRenderRequested())
 		FAIL("QgGL wheel navigation should request an Obol render without legacy DM");
-	    if (glCanvas.displayManager())
+	    if (glCanvas.legacyBackendInitialized())
 		FAIL("QgGL wheel navigation should not initialize the legacy display manager");
 
 	    SbVec3f beforeGLDrag = paintCamera->position.getValue();
@@ -395,7 +395,7 @@ main(int argc, char **argv)
 		FAIL("QgGL drag navigation should update the Obol camera without legacy DM");
 	    if (!paintController->isRenderRequested())
 		FAIL("QgGL drag navigation should request an Obol render without legacy DM");
-	    if (glCanvas.displayManager())
+	    if (glCanvas.legacyBackendInitialized())
 		FAIL("QgGL drag navigation should not initialize the legacy display manager");
 	    paintController->requestRender("gl-visible-paint");
 
@@ -404,7 +404,7 @@ main(int argc, char **argv)
 	    glCanvas.doneCurrent();
 	    if (paintController->isRenderRequested())
 		FAIL("QgGL visible paint should consume Obol render requests");
-	    if (glCanvas.displayManager())
+	    if (glCanvas.legacyBackendInitialized())
 		FAIL("QgGL visible paint should bypass the legacy display manager for Obol content");
 	}
 #endif

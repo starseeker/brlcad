@@ -34,10 +34,30 @@
 #include "bu/vls.h"
 #include "ged/bsg_ged_draw.h"
 #include "ged/selection_state.h"
-#include "rt/view_legacy_bsg.h"
 
-#include "./bsg_ged_draw_private.h"
+#include "./bsg_ged_draw_view_private.h"
 #include "./ged_private.h"
+
+
+typedef int (*ged_draw_scene_ref_index_cb)(bsg_scene_ref ref, void *userdata);
+
+extern ged_draw_shape_ref ged_draw_shape_ref_from_scene_ref(struct ged *gedp,
+							    bsg_scene_ref ref);
+extern int ged_draw_shape_index_for_component(struct ged *gedp,
+					      const char *path,
+					      ged_draw_scene_ref_index_cb cb,
+					      void *userdata);
+extern int ged_draw_shape_index_for_path_hash(struct ged *gedp,
+					      unsigned long long path_hash,
+					      ged_draw_scene_ref_index_cb cb,
+					      void *userdata);
+extern struct bsg_view *ged_draw_shape_ref_view(struct ged *gedp,
+						ged_draw_shape_ref ref);
+extern int ged_draw_view_selection_add_shape_ref(struct ged *gedp,
+						 struct bsg_view *view,
+						 ged_draw_shape_ref ref,
+						 struct bsg_view **selection_view,
+						 struct bu_vls *path);
 
 
 struct ged_native_selection_set {
@@ -876,7 +896,7 @@ ged_selection_native_view_snapshot(struct ged *gedp,
     struct ged_selection_native_view_snapshot_ctx ctx;
     ctx.snapshot = &snapshot;
 
-    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     for (size_t i = 0; views && i < BU_PTBL_LEN(views); i++) {
 	struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, i);
 	ged_draw_view_selection_path_foreach(v,
@@ -1032,7 +1052,7 @@ ged_selection_native_draw_sync(struct ged *gedp,
     std::map<struct bsg_view *, std::set<std::string>> new_selection;
     ged_selection_native_view_snapshot(gedp, old_selection);
 
-    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     for (size_t i = 0; views && i < BU_PTBL_LEN(views); i++) {
 	struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, i);
 	ged_draw_view_selection_clear(v);

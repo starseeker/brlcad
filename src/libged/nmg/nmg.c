@@ -37,6 +37,7 @@
 
 #include "ged.h"
 #include "ged/bsg_ged_draw.h"
+#include "rt/view_legacy_bsg.h"
 #include "../bsg_ged_draw_view_private.h"
 #include "../ged_private.h"
 
@@ -228,6 +229,13 @@ ged_labelface_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
+    struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
+    if (!view) {
+	rt_db_free_internal(&internal);
+	bu_vls_printf(gedp->ged_result_str, ": no current view set");
+	return BRLCAD_ERROR;
+    }
+
     m = (struct model *)internal.idb_ptr;
     NMG_CK_MODEL(m);
 
@@ -243,11 +251,11 @@ ged_labelface_core(struct ged *gedp, int argc, const char *argv[])
 
 	/* Find displayed uses of this database object. */
 	lfd.dp = dp;
-	ged_draw_foreach_visible_view_db_object_record(gedp->ged_gvp,
+	ged_draw_foreach_visible_view_db_object_record(view,
 		labelface_export_record, &lfd);
     }
 
-    if (!ged_draw_view_labels_replace(gedp->ged_gvp, LABELFACE_FEATURE_NAME,
+    if (!ged_draw_view_labels_replace(view, LABELFACE_FEATURE_NAME,
 		0, lfd.labels, lfd.label_count)) {
 	labelface_data_free(&lfd);
 	bu_vls_printf(gedp->ged_result_str, "failed to create labelface feature\n");
@@ -255,7 +263,7 @@ ged_labelface_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     labelface_data_free(&lfd);
-    struct dm *dmp = (struct dm *)gedp->ged_gvp->dmp;
+    struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(view);
     if (dmp)
 	dm_set_native_repaint_pending(dmp, 1);
     return BRLCAD_OK;

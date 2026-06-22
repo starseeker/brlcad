@@ -702,6 +702,40 @@ ged_rt_fb_set(struct ged *gedp, const char *fb_dev)
     gedip->rt_fb_dev = (fb_dev) ? std::string(fb_dev) : std::string();
 }
 
+extern "C" GED_EXPORT void *
+ged_view_active_ctx(const struct ged *gedp)
+{
+    return gedp ? (void *)gedp->ged_gvp : NULL;
+}
+
+extern "C" GED_EXPORT void
+ged_view_active_ctx_set(struct ged *gedp, void *view_ctx)
+{
+    if (gedp)
+	gedp->ged_gvp = (struct bsg_view *)view_ctx;
+}
+
+extern "C" GED_EXPORT void *
+ged_view_set_ctx(struct ged *gedp)
+{
+    return gedp ? (void *)&gedp->ged_views : NULL;
+}
+
+extern "C" GED_EXPORT struct bu_ptbl *
+ged_view_set_views_ctx(struct ged *gedp)
+{
+    return gedp ? rt_view_set_views_bsg(&gedp->ged_views) : NULL;
+}
+
+extern "C" GED_EXPORT void *
+ged_view_find_ctx(struct ged *gedp, const char *name)
+{
+    if (!gedp || !name)
+	return NULL;
+
+    return (void *)rt_view_set_find_view_bsg(&gedp->ged_views, name);
+}
+
 extern "C" GED_EXPORT const char *
 ged_rt_fb_get(struct ged *gedp)
 {
@@ -720,11 +754,15 @@ ged_rt_fb_refresh(struct ged *gedp)
 {
     const char *dm_name = NULL;
 
-    if (!gedp || !gedp->ged_gvp || !gedp->ged_gvp->dmp)
+    if (!gedp || !gedp->ged_gvp)
 	return;
 
     GED_CK_MAGIC(gedp);
-    dm_name = dm_get_dm_name((struct dm *)gedp->ged_gvp->dmp);
+    struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(gedp->ged_gvp);
+    if (!dmp)
+	return;
+
+    dm_name = dm_get_dm_name(dmp);
     if (!dm_name)
 	return;
 

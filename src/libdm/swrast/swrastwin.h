@@ -27,15 +27,16 @@
 #define QTSWRASTWIN_H
 
 #include <QMainWindow>
-#include "dm.h"
-#include "qtcad/QgSW.h"
+
+class QgSW;
+struct qg_legacy_fb;
 
 class QgSWWin : public QMainWindow
 {
     Q_OBJECT
     Q_DISABLE_COPY_MOVE(QgSWWin)
     public:
-	QgSWWin(struct fb *fbp);
+	QgSWWin(qg_legacy_fb *fbp);
 	QgSW *canvasWidget() const
 	{
 	    return canvas;

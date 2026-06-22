@@ -59,8 +59,9 @@ ged_model2grid_lu_core(struct ged *gedp, int argc, const char *argv[])
     if (argc != 4)
 	goto bad;
 
-    rt_view_model2view_from_bsg(model2view, gedp->ged_gvp);
-    view_scale = rt_view_scale_from_bsg(gedp->ged_gvp);
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+    rt_view_model2view_from_bsg(model2view, v);
+    view_scale = rt_view_scale_from_bsg(v);
     MAT4X3PNT(mo_view_pt, model2view, model_pt);
 
     if (sscanf(argv[1], "%lf", &scan[X]) != 1 ||

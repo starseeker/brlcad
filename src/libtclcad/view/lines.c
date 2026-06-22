@@ -38,11 +38,12 @@
 int
 go_data_lines(Tcl_Interp *UNUSED(interp),
 	      struct ged *gedp,
-	      struct bsg_view *gdvp,
+	      void *draw_view_ctx,
 	      int argc,
 	      const char *argv[],
 	      const char *usage)
 {
+    struct bsg_view *gdvp = (struct bsg_view *)draw_view_ctx;
     int ret;
 
     /* initialize result */
@@ -61,12 +62,12 @@ go_data_lines(Tcl_Interp *UNUSED(interp),
     to_refresh_suppress_all_begin(current_top);
 
 
-    struct bsg_view *btmp = gedp->ged_gvp;
-    gedp->ged_gvp = gdvp;
+    struct bsg_view *btmp = (struct bsg_view *)ged_view_active_ctx(gedp);
+    ged_view_active_ctx_set(gedp, gdvp);
 
     ret = ged_exec(gedp, argc, argv);
 
-    gedp->ged_gvp = btmp;
+    ged_view_active_ctx_set(gedp, btmp);
 
     to_refresh_suppress_all_end(current_top);
     to_refresh_view(gdvp);
@@ -102,7 +103,7 @@ to_data_lines(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp = rt_view_set_find_view_bsg(&gedp->ged_views, argv[1]);
+    gdvp = (struct bsg_view *)ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -112,12 +113,12 @@ to_data_lines(struct ged *gedp,
     argv[1] = argv[0];
     argv[0] = "view";
 
-    struct bsg_view *btmp = gedp->ged_gvp;
-    gedp->ged_gvp = gdvp;
+    struct bsg_view *btmp = (struct bsg_view *)ged_view_active_ctx(gedp);
+    ged_view_active_ctx_set(gedp, gdvp);
 
     ret = ged_exec_view(gedp, argc, argv);
 
-    gedp->ged_gvp = btmp;
+    ged_view_active_ctx_set(gedp, btmp);
 
     to_refresh_view(gdvp);
 

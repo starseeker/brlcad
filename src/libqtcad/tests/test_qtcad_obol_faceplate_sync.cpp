@@ -7,16 +7,11 @@
 
 #include "common.h"
 
-extern "C" {
-#include "rt/view_legacy_bsg.h"
-}
-
 #include "brlobol/adc.h"
 #include "brlobol/axes.h"
 #include "brlobol/grid.h"
 #include "brlobol/view_controller.h"
 #include "brlobol/vlist_shape.h"
-#include "qtcad/QgLegacyViewBsg.h"
 #include "qtcad/QgSignalFlags.h"
 #include "qtcad/QgView.h"
 #include "vmath.h"
@@ -85,13 +80,12 @@ main(int argc, char **argv)
 {
     QApplication app(argc, argv);
 
-    QgView view(NULL, QgView_SW, NULL);
+    QgView view(NULL, QgView_SW);
     view.resize(160, 120);
 
-    struct bsg_view *bv = qg_legacy_view_to_bsg(view.view());
-    if (!bv)
-	FAIL("QgView should expose transitional BSG view state");
-    if (view.dmp())
+    if (!view.view())
+	FAIL("QgView should expose transitional view state");
+    if (view.legacyBackendInitialized())
 	FAIL("test should start before legacy DM initialization");
 
     BRLObolViewController *controller = view.obolViewController();
@@ -103,10 +97,10 @@ main(int argc, char **argv)
     struct rt_view_axes_state modelAxes = {};
     struct rt_view_axes_state viewAxes = {};
     struct rt_view_adc_state adc = {};
-    (void)rt_view_grid_state_from_bsg(&grid, bv);
-    (void)rt_view_model_axes_state_from_bsg(&modelAxes, bv);
-    (void)rt_view_view_axes_state_from_bsg(&viewAxes, bv);
-    (void)rt_view_adc_state_from_bsg(&adc, bv);
+    (void)qg_legacy_view_grid_state_get(view.view(), &grid);
+    (void)qg_legacy_view_model_axes_state_get(view.view(), &modelAxes);
+    (void)qg_legacy_view_view_axes_state_get(view.view(), &viewAxes);
+    (void)qg_legacy_view_adc_state_get(view.view(), &adc);
 
     grid.draw = 1;
     VSET(grid.anchor, 1.0, 2.0, 3.0);
@@ -114,27 +108,27 @@ main(int argc, char **argv)
     grid.res_v = 4.0;
     grid.res_major_h = 3;
     grid.res_major_v = 2;
-    rt_view_grid_state_set_bsg(bv, &grid);
+    qg_legacy_view_grid_state_set(view.view(), &grid);
 
     modelAxes.draw = 1;
     VSET(modelAxes.axes_pos, 4.0, 5.0, 6.0);
     modelAxes.axes_size = 7.0;
-    rt_view_model_axes_state_set_bsg(bv, &modelAxes);
+    qg_legacy_view_model_axes_state_set(view.view(), &modelAxes);
 
     viewAxes.draw = 1;
     VSET(viewAxes.axes_pos, -0.8, -0.7, 0.0);
     viewAxes.axes_size = 0.5;
-    rt_view_view_axes_state_set_bsg(bv, &viewAxes);
+    qg_legacy_view_view_axes_state_set(view.view(), &viewAxes);
 
     adc.draw = 1;
     VSET(adc.pos_model, 8.0, 9.0, 0.0);
     adc.a1 = 30.0;
     adc.dst = 12.0;
-    rt_view_adc_state_set_bsg(bv, &adc);
+    qg_legacy_view_adc_state_set(view.view(), &adc);
 
     controller->clearRenderRequest();
     view.need_update(QG_VIEW_DRAWN);
-    if (view.dmp())
+    if (view.legacyBackendInitialized())
 	FAIL("Obol faceplate sync should not require legacy DM initialization");
     if (!controller->isRenderRequested() ||
 	    strcmp(controller->getRenderReason().getString(), "faceplate") != 0)
@@ -184,10 +178,10 @@ main(int argc, char **argv)
     modelAxes.draw = 0;
     viewAxes.draw = 0;
     adc.draw = 0;
-    rt_view_grid_state_set_bsg(bv, &grid);
-    rt_view_model_axes_state_set_bsg(bv, &modelAxes);
-    rt_view_view_axes_state_set_bsg(bv, &viewAxes);
-    rt_view_adc_state_set_bsg(bv, &adc);
+    qg_legacy_view_grid_state_set(view.view(), &grid);
+    qg_legacy_view_model_axes_state_set(view.view(), &modelAxes);
+    qg_legacy_view_view_axes_state_set(view.view(), &viewAxes);
+    qg_legacy_view_adc_state_set(view.view(), &adc);
     view.need_update(QG_VIEW_DRAWN);
 
     if (find_overlay(root, "faceplate::grid") ||

@@ -27,7 +27,7 @@
  *   1. Normal wireframe rendering  (objects are drawn, image is non-empty)
  *   2. Illumination                (highlighted objects render white)
  *   3. Edit-mode matrix            (gv_edit_mat shifts illuminated objects)
- *   4. Faceplate center dot        (enabled through bsg_view_center_dot)
+ *   4. Faceplate center dot        (enabled through RT center-dot state)
  *   5. BSG render stability        (pixel-identical output across repeated renders)
  *
  * Uses dm-swrast for off-screen rendering; no display hardware required.
@@ -51,11 +51,9 @@
 #include <dm.h>
 #include <ged.h>
 #include "ged/bsg_ged_draw.h"
-#include "bsg/util.h"
 #include "bsg/defines.h"
 #include "bsg/render.h"
 #include "bsg/render_item.h"
-#include "bsg/view_state.h"
 
 extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);
 
@@ -93,6 +91,22 @@ do_full_refresh(struct ged *gedp)
     dm_draw_begin(dmp);
     dm_draw_objs(v);
     dm_draw_end(dmp);
+}
+
+static int
+set_center_dot_state(struct bsg_view *v, int draw, int r, int g, int b)
+{
+    struct rt_view_other_state center_dot = RT_VIEW_OTHER_STATE_INIT;
+
+    if (!rt_view_center_dot_state_from_bsg(&center_dot, v))
+	return 0;
+
+    center_dot.gos_draw = draw;
+    center_dot.gos_line_color[0] = r;
+    center_dot.gos_line_color[1] = g;
+    center_dot.gos_line_color[2] = b;
+
+    return rt_view_center_dot_state_set_bsg(v, &center_dot);
 }
 
 static int
@@ -213,7 +227,7 @@ test_wireframe(const char *datadir)
     struct bsg_view *v = gedp->ged_gvp;
 
     /* Ensure BSG root is present */
-    if (!bsg_view_scene_attached(v)) {
+    if (!rt_view_scene_attached_bsg(v)) {
 	bu_log("FAIL: view scene ref is NULL after ged_open\n");
 	ged_close(gedp);
 	bu_file_delete("mged_bsg_t1.g");
@@ -412,20 +426,25 @@ test_faceplate(const char *datadir)
     ged_exec_autoview(gedp, 1, s_av);
 
     struct bsg_view *v = gedp->ged_gvp;
-    struct bsg_other_state center_dot;
 
     /* Render without center dot */
-    bsg_view_center_dot_get(v, &center_dot);
-    center_dot.gos_draw = 0;
-    bsg_view_center_dot_set(v, &center_dot);
+    if (!set_center_dot_state(v, 0, 0, 0, 0)) {
+	bu_log("FAIL: center dot state disable failed\n");
+	bu_file_delete("mged_bsg_t4.g");
+	ged_close(gedp);
+	return 1;
+    }
     do_refresh(gedp);
     capture(gedp, "mged_bsg_t4_nodot.png");
 
     /* Render with center dot enabled (white) */
-    bsg_view_center_dot_get(v, &center_dot);
-    center_dot.gos_draw = 1;
-    VSET(center_dot.gos_line_color, 255, 255, 255);
-    bsg_view_center_dot_set(v, &center_dot);
+    if (!set_center_dot_state(v, 1, 255, 255, 255)) {
+	bu_log("FAIL: center dot state enable failed\n");
+	bu_file_delete("mged_bsg_t4_nodot.png");
+	bu_file_delete("mged_bsg_t4.g");
+	ged_close(gedp);
+	return 1;
+    }
     do_refresh(gedp);
     capture(gedp, "mged_bsg_t4_dot.png");
 
@@ -441,9 +460,7 @@ test_faceplate(const char *datadir)
 	bu_log("PASS: center dot adds %ld white pixels\n", w_dot - w_nodot);
     }
 
-    bsg_view_center_dot_get(v, &center_dot);
-    center_dot.gos_draw = 0;
-    bsg_view_center_dot_set(v, &center_dot);
+    set_center_dot_state(v, 0, 0, 0, 0);
     bu_file_delete("mged_bsg_t4_nodot.png");
     bu_file_delete("mged_bsg_t4_dot.png");
     bu_file_delete("mged_bsg_t4.g");

@@ -305,7 +305,8 @@ ged_find_arb_edge_nearest_pnt_core(struct ged *gedp, int argc, const char *argv[
     }
 
     mat_t model2view;
-    rt_view_model2view_from_bsg(model2view, gedp->ged_gvp);
+    struct bsg_view *gvp = (struct bsg_view *)ged_view_active_ctx(gedp);
+    rt_view_model2view_from_bsg(model2view, gvp);
     (void)rt_arb_find_e_nearest_pt2(&edge, &vi1, &vi2, &intern, view, model2view, ptol);
     bu_vls_printf(gedp->ged_result_str, "%d %d %d", edge, vi1, vi2);
 

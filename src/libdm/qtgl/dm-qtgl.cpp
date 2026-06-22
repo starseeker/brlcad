@@ -40,9 +40,9 @@ extern "C" {
 #include "vmath.h"
 #include "bu.h"
 #include "bn.h"
-#include "bsg/defines.h"
 #include "dm.h"
 #include "rt/view.h"
+#include "rt/view_legacy_bsg.h"
 #include "../null/dm-Null.h"
 #include "../dm-gl.h"
 }
@@ -202,11 +202,9 @@ qtgl_open(void *ctx, void *UNUSED(interp), int argc, const char **argv)
     struct dm_qtvars *pubvars = NULL;
     struct qtgl_vars *privars = NULL;
 
-    /* Make sure we have a ctx - if not, we can't proceed.  struct bsg_view
-     * gets passed in as a "default" context when the application hasn't
-     * supplied anything else, so we check the magic value to catch it. */
-    struct bsg_view *vctx = (struct bsg_view *)ctx;
-    if (!ctx || vctx->magic == BSG_VIEW_MAGIC)
+    /* Make sure we have a Qt widget context.  A retained BSG view can still
+     * arrive as a default context when no application widget is available. */
+    if (!ctx || rt_view_context_is_bsg(ctx))
 	return NULL;
 
     BU_GET(dmp, struct dm);

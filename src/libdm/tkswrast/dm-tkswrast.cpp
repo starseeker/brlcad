@@ -100,8 +100,9 @@ tkswrast_request_repaint(struct dm *dmp, unsigned int flags)
     dm_set_native_repaint_pending(dmp, 1);
 
     struct swrast_vars *sv = (struct swrast_vars *)dmp->i->dm_vars.priv_vars;
-    if (sv && sv->v)
-	rt_view_refresh_request_bsg(sv->v, flags ? flags : RT_VIEW_REFRESH_ALL_BSG);
+    if (sv && sv->view_ctx)
+	rt_view_context_refresh_request_bsg(sv->view_ctx,
+		flags ? flags : RT_VIEW_REFRESH_ALL_BSG);
 }
 
 static unsigned long
@@ -205,7 +206,7 @@ tkswrast_configureWin(struct dm *dmp, int force)
 {
     struct tkswrast_vars *tv = (struct tkswrast_vars *)dmp->i->dm_udata;
     struct swrast_vars *sv = (struct swrast_vars *)dmp->i->dm_vars.priv_vars;
-    if (!tv || !sv || !sv->v)
+    if (!tv || !sv || !sv->view_ctx)
 	return BRLCAD_ERROR;
 
     int width = Tk_Width(tv->xtkwin);
@@ -237,7 +238,7 @@ tkswrast_configureWin(struct dm *dmp, int force)
     if (!Tk_IsMapped(tv->xtkwin) && width > 1 && height > 1)
 	Tk_MapWindow(tv->xtkwin);
 
-    rt_view_dimensions_set_bsg(sv->v, width, height);
+    rt_view_context_dimensions_set_bsg(sv->view_ctx, width, height);
 
     dmp->i->dm_width = width;
     dmp->i->dm_height = height;
@@ -525,8 +526,8 @@ tkswrast_open(void *ctx, void *vinterp, int argc, const char **argv)
 	    dmp->i->dm_width = pw;
 	    dmp->i->dm_height = ph;
 	    Tk_GeometryRequest(tv->xtkwin, pw, ph);
-	    if (sv && sv->v)
-		rt_view_dimensions_set_bsg(sv->v, pw, ph);
+	    if (sv && sv->view_ctx)
+		rt_view_context_dimensions_set_bsg(sv->view_ctx, pw, ph);
 	}
     }
     Tk_SetWindowBackground(tv->xtkwin, tkswrast_black_pixel(tv->xtkwin));

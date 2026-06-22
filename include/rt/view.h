@@ -96,6 +96,13 @@ struct rt_view_interactive_rect_state {
     fastf_t aspect;
 };
 
+struct rt_view_measure_result {
+    fastf_t distance;
+    fastf_t projection;
+    fastf_t normal_alignment;
+    int valid;
+};
+
 struct rt_view_adc_state {
     int         draw;
     int         dv_x;
@@ -173,10 +180,53 @@ struct rt_view_params_state {
     int font_size;
 };
 
+typedef struct rt_view_feature_ref {
+    uintptr_t token;
+    uint64_t revision;
+} rt_view_feature_ref;
+
+#define RT_VIEW_FEATURE_REF_NULL_INIT {0, 0}
+#ifdef __cplusplus
+#  define RT_VIEW_FEATURE_REF_NULL rt_view_feature_ref{0, 0}
+#else
+#  define RT_VIEW_FEATURE_REF_NULL ((rt_view_feature_ref){0, 0})
+#endif
+
+enum rt_view_feature_family {
+    RT_VIEW_FEATURE_UNKNOWN = 0,
+    RT_VIEW_FEATURE_TRANSIENT_PREVIEW = 1
+};
+
+enum rt_view_edit_preview_event {
+    RT_VIEW_EDIT_PREVIEW_BEGIN = 0,
+    RT_VIEW_EDIT_PREVIEW_UPDATE,
+    RT_VIEW_EDIT_PREVIEW_COMMIT,
+    RT_VIEW_EDIT_PREVIEW_CANCEL,
+    RT_VIEW_EDIT_PREVIEW_REPLACE_SOURCE,
+    RT_VIEW_EDIT_PREVIEW_DISCARD
+};
+
+struct rt_view_edit_preview_callbacks {
+    uint64_t (*revision_cb)(void *);
+    int (*update_cb)(void *);
+    int (*pick_cb)(void *, int, int, void *);
+};
+
+#define RT_VIEW_EDIT_PREVIEW_CALLBACKS_INIT { 0, 0, 0 }
+
+struct rt_view_feature_label {
+    const char *text;
+    point_t point;
+    int color_valid;
+    unsigned char color[3];
+};
+
 typedef struct rt_view_polygon_ref {
     uintptr_t token;
     uint64_t revision;
 } rt_view_polygon_ref;
+
+#define RT_VIEW_POLYGON_GENERAL 0
 
 #define RT_VIEW_POLYGON_REF_NULL_INIT {0, 0}
 #ifdef __cplusplus
@@ -274,6 +324,7 @@ struct rt_mesh_lod_cache_status {
 #define RT_VIEW_LOD_POLICY_INIT { RT_VIEW_LOD_AUTO, 0, 0, 0, 0, 0, 1.0, 1.0, 1.0 }
 #define RT_VIEW_INFO_INIT { 1, 1, 1.0, RT_VIEW_LOD_SETTINGS_INIT }
 #define RT_VIEW_INTERACTIVE_RECT_STATE_INIT { 0, 0, 0, 0, {0, 0}, {0, 0}, 0.0, 0.0, 0.0, 0.0, {0, 0, 0}, {0, 0, 0}, {0, 0}, 0.0 }
+#define RT_VIEW_MEASURE_RESULT_INIT { 0.0, 0.0, 0.0, 0 }
 #define RT_VIEW_ADC_STATE_INIT { 0, 0, 0, 0, 0, 0, VINIT_ZERO, VINIT_ZERO, VINIT_ZERO, 0.0, 0.0, 0.0, 0, 0, 0, 0, VINIT_ZERO, VINIT_ZERO, VINIT_ZERO, {0, 0, 0}, {0, 0, 0}, 0 }
 #define RT_VIEW_GRID_STATE_INIT { 0, 0, 0, 0, VINIT_ZERO, 0.0, 0.0, 0, 0, {0, 0, 0} }
 #define RT_VIEW_AXES_STATE_INIT { 0, VINIT_ZERO, 0.0, 0, {0, 0, 0}, 0, 0, {0, 0, 0}, 0, 0, 0, 0, 0.0, 0, 0, {0, 0, 0}, {0, 0, 0} }

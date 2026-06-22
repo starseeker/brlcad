@@ -57,12 +57,13 @@ ged_fbclear_core(struct ged *gedp, int argc, const char *argv[])
 
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
-    if (!gedp->ged_gvp || !gedp->ged_gvp->dmp) {
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+    struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(v);
+    if (!dmp) {
 	bu_vls_printf(gedp->ged_result_str, "no display manager currently active");
 	return BRLCAD_ERROR;
     }
 
-    struct dm *dmp = (struct dm *)gedp->ged_gvp->dmp;
     struct fb *fbp = dm_get_fb(dmp);
 
     if (!fbp) {
@@ -109,7 +110,7 @@ ged_fbclear_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
 
     if (reset_mode)
-	rt_view_framebuffer_mode_set_bsg(gedp->ged_gvp, 0);
+	rt_view_framebuffer_mode_set_bsg(v, 0);
 
     (void)dm_draw_begin(dmp);
     fb_refresh(fbp, 0, 0, fb_getwidth(fbp), fb_getheight(fbp));

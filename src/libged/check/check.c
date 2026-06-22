@@ -647,8 +647,13 @@ int ged_check_core(struct ged *gedp, int argc, const char *argv[])
 	    struct rt_view_info view_info = RT_VIEW_INFO_INIT;
 	    point_t eye_model;
 	    quat_t quat;
-	    rt_view_info_from_bsg(&view_info, gedp->ged_gvp);
-	    rt_view_orientation_quat_from_bsg(quat, gedp->ged_gvp);
+	    struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
+	    if (!view) {
+		error = 1;
+		goto freemem;
+	    }
+	    rt_view_info_from_bsg(&view_info, view);
+	    rt_view_orientation_quat_from_bsg(quat, view);
 	    _ged_rt_set_eye_model(gedp, eye_model);
 	    analyze_set_view_information(state, view_info.size, &eye_model, &quat);
 	}

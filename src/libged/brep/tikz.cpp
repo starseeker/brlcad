@@ -141,7 +141,12 @@ brep_tikz(struct _ged_brep_info *gb, const char *outfile)
     bu_vls_printf(&tikz, "\\begin{document}\n\n");
     // Translate view az/el into tikz-3dplot variation
     vect_t view_aet;
-    rt_view_aet_from_bsg(view_aet, gedp->ged_gvp);
+    struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
+    if (!view) {
+	bu_vls_free(&tikz);
+	return BRLCAD_ERROR;
+    }
+    rt_view_aet_from_bsg(view_aet, view);
     bu_vls_printf(&tikz, "\\tdplotsetmaincoords{%f}{%f}\n", 90 + -1*view_aet[1], -1*(-90 + -1 * view_aet[0]));
 
     // Need bbox dimensions to determine proper scale factor - do this with db_search so it will

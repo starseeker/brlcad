@@ -41,12 +41,10 @@
 #include "bn.h"
 #include "raytrace.h"
 
-#include "bsg/vlist.h"
+#include "bg/vlist.h"
 #include "dm.h"
 #include "./dm-ps.h"
 #include "../null/dm-Null.h"
-
-#include "bsg/defines.h"
 
 #include "../include/private.h"
 
@@ -411,10 +409,10 @@ ps_loadMatrix(struct dm *dmp, fastf_t *mat, int which_eye)
 
 /* ARGSUSED */
 static int
-ps_drawVList(struct dm *dmp, bsg_vlist *vp)
+ps_drawVList(struct dm *dmp, bg_vlist *vp)
 {
     static vect_t last;
-    bsg_vlist *tvp;
+    bg_vlist *tvp;
     point_t *pt_prev=NULL;
     fastf_t dist_prev=1.0;
     fastf_t dist;
@@ -435,7 +433,7 @@ ps_drawVList(struct dm *dmp, bsg_vlist *vp)
     if (delta < SQRT_SMALL_FASTF)
 	delta = SQRT_SMALL_FASTF;
 
-    for (BU_LIST_FOR(tvp, bsg_vlist, &vp->l)) {
+    for (BU_LIST_FOR(tvp, bg_vlist, &vp->l)) {
 	int i;
 	int nused = tvp->nused;
 	int *cmd = tvp->cmd;
@@ -443,24 +441,24 @@ ps_drawVList(struct dm *dmp, bsg_vlist *vp)
 	for (i = 0; i < nused; i++, cmd++, pt++) {
 	    static vect_t start, fin;
 	    switch (*cmd) {
-		case BSG_VLIST_POLY_START:
-		case BSG_VLIST_POLY_VERTNORM:
-		case BSG_VLIST_TRI_START:
-		case BSG_VLIST_TRI_VERTNORM:
+		case BG_VLIST_POLY_START:
+		case BG_VLIST_POLY_VERTNORM:
+		case BG_VLIST_TRI_START:
+		case BG_VLIST_TRI_VERTNORM:
 		    continue;
-		case BSG_VLIST_MODEL_MAT:
+		case BG_VLIST_MODEL_MAT:
 		    MAT_COPY(psmat, mod_mat);
 		    continue;
-		case BSG_VLIST_DISPLAY_MAT:
+		case BG_VLIST_DISPLAY_MAT:
 		    MAT4X3PNT(tlate, (mod_mat), *pt);
 		    disp_mat[3] = tlate[0];
 		    disp_mat[7] = tlate[1];
 		    disp_mat[11] = tlate[2];
 		    MAT_COPY(psmat, disp_mat);
 		    continue;
-		case BSG_VLIST_POLY_MOVE:
-		case BSG_VLIST_LINE_MOVE:
-		case BSG_VLIST_TRI_MOVE:
+		case BG_VLIST_POLY_MOVE:
+		case BG_VLIST_LINE_MOVE:
+		case BG_VLIST_TRI_MOVE:
 		    /* Move, not draw */
 		    if (dmp->i->dm_perspective > 0) {
 			/* cannot apply perspective transformation to
@@ -479,11 +477,11 @@ ps_drawVList(struct dm *dmp, bsg_vlist *vp)
 		    } else
 			MAT4X3PNT(last, psmat, *pt);
 		    continue;
-		case BSG_VLIST_POLY_DRAW:
-		case BSG_VLIST_POLY_END:
-		case BSG_VLIST_LINE_DRAW:
-		case BSG_VLIST_TRI_DRAW:
-		case BSG_VLIST_TRI_END:
+		case BG_VLIST_POLY_DRAW:
+		case BG_VLIST_POLY_END:
+		case BG_VLIST_LINE_DRAW:
+		case BG_VLIST_TRI_DRAW:
+		case BG_VLIST_TRI_END:
 		    /* draw */
 		    if (dmp->i->dm_perspective > 0) {
 			/* cannot apply perspective transformation to
@@ -557,12 +555,12 @@ ps_drawVList(struct dm *dmp, bsg_vlist *vp)
 
 /* ARGSUSED */
 static int
-ps_draw(struct dm *dmp, bsg_vlist *(*callback_function)(void *), void **data)
+ps_draw(struct dm *dmp, bg_vlist *(*callback_function)(void *), void **data)
 {
-    bsg_vlist *vp;
+    bg_vlist *vp;
     if (!callback_function) {
 	if (data) {
-	    vp = (bsg_vlist *)data;
+	    vp = (bg_vlist *)data;
 	    ps_drawVList(dmp, vp);
 	}
     } else {

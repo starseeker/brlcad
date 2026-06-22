@@ -229,10 +229,11 @@ ged_solids_on_ray_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    rt_view_center_from_bsg(view_center, gedp->ged_gvp);
-    rt_view_rotation_from_bsg(view_rotation, gedp->ged_gvp);
-    rt_view_model2view_from_bsg(model2view, gedp->ged_gvp);
-    view_scale = rt_view_scale_from_bsg(gedp->ged_gvp);
+    struct bsg_view *gvp = (struct bsg_view *)ged_view_active_ctx(gedp);
+    rt_view_center_from_bsg(view_center, gvp);
+    rt_view_rotation_from_bsg(view_rotation, gvp);
+    rt_view_model2view_from_bsg(model2view, gvp);
+    view_scale = rt_view_scale_from_bsg(gvp);
 
     MAT_DELTAS_GET_NEG(ray_orig, view_center);
     /*

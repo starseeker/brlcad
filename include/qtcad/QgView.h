@@ -39,24 +39,21 @@ class QObject;
 class QgViewFilter;
 class BRLObolViewController;
 
-struct dm;
-struct fb;
-
 class QTCAD_EXPORT QgView : public QWidget {
 Q_OBJECT
 Q_DISABLE_COPY_MOVE(QgView)
 
 
 public:
-explicit QgView(QWidget *parent = nullptr, int type = QgView_AUTO, struct fb *fbp = nullptr);
+explicit QgView(QWidget *parent = nullptr, int type = QgView_AUTO);
 ~QgView();
 
 int view_type();
 void set_current(int);
 int current();
 
-void stash_hashes(); // Store current dmp and v hash values
-bool diff_hashes();  // Set dmp dirty flag if current hashes != stashed hashes.  (Does not update   stored hash values - use stash_hashes for that operation.)
+void stash_hashes(); // Store current backend and view hash values
+bool diff_hashes();  // Set backend dirty flag if current hashes != stashed hashes.  (Does not update stored hash values - use stash_hashes for that operation.)
 
 void save_image(int quad = 0);
 void render_to_file(const QString &filename);
@@ -69,8 +66,7 @@ void get_obol_viewport_image(QImage &img);
 bool isValid();
 
 qg_legacy_view * view();
-struct dm * dmp();
-struct fb * ifp();
+bool legacyBackendInitialized() const;
 BRLObolViewController *obolViewController();
 
 void set_view(qg_legacy_view *);

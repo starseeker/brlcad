@@ -31,8 +31,10 @@ extern "C" {
 }
 
 void
-rt_edit_view_from_bsg(struct rt_edit_view *ev, const struct bsg_view *v)
+rt_edit_view_from_bsg(struct rt_edit_view *ev, const void *view_ctx)
 {
+    const struct bsg_view *v = (const struct bsg_view *)view_ctx;
+
     if (!ev)
 	return;
 
@@ -49,8 +51,9 @@ rt_edit_view_from_bsg(struct rt_edit_view *ev, const struct bsg_view *v)
 
 struct rt_edit *
 rt_edit_create_bsg(struct db_full_path *dfp, struct db_i *dbip,
-		   struct bn_tol *tol, const struct bsg_view *v)
+		   struct bn_tol *tol, const void *view_ctx)
 {
+    const struct bsg_view *v = (const struct bsg_view *)view_ctx;
     struct rt_edit_view ev;
 
     if (!v)
@@ -63,8 +66,9 @@ rt_edit_create_bsg(struct db_full_path *dfp, struct db_i *dbip,
 int
 rt_edit_reinit_bsg(struct rt_edit *s, struct db_full_path *dfp,
 		   struct db_i *dbip, struct bn_tol *tol,
-		   const struct bsg_view *v)
+		   const void *view_ctx)
 {
+    const struct bsg_view *v = (const struct bsg_view *)view_ctx;
     struct rt_edit_view ev;
 
     if (!v)
@@ -78,9 +82,10 @@ int
 rt_edit_knob_cmd_process_bsg(
 	struct rt_edit *s,
 	vect_t *rvec, int *do_rot, vect_t *tvec, int *do_tran, int *do_sca,
-	const struct bsg_view *v, const char *cmd, fastf_t f,
+	const void *view_ctx, const char *cmd, fastf_t f,
 	char origin, int incr_flag, void *u_data)
 {
+    const struct bsg_view *v = (const struct bsg_view *)view_ctx;
     struct rt_edit_view ev;
 
     if (!v)

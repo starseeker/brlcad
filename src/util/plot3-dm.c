@@ -39,6 +39,7 @@
 #include "bu/app.h"
 #include "bu/getopt.h"
 #include "vmath.h"
+#include "bg/vlist.h"
 #include "rt/db4.h"
 #include "raytrace.h"
 #include "rt/vlist.h"
@@ -81,7 +82,7 @@ struct plot_list{
     int pl_draw;
     int pl_edit;
     struct bu_vls pl_name;
-    struct bsg_vlblock *pl_vbp;
+    struct bg_vlblock *pl_vbp;
 };
 
 
@@ -186,7 +187,7 @@ refresh(void) {
 		    rgb = plp->pl_vbp->rgb[i];
 		    dm_set_fg(dmp, (rgb>>16) & 0xFF, (rgb>>8) & 0xFF, rgb & 0xFF, 0, (fastf_t)0.0);
 		}
-		dm_draw_device_vlist(dmp, (bsg_vlist *)&plp->pl_vbp->head[i]);
+		dm_draw_device_bg_vlist(dmp, (bg_vlist *)&plp->pl_vbp->head[i]);
 	    }
     }
 
@@ -495,7 +496,7 @@ static void
 size_reset(void)
 {
     size_t i;
-    bsg_vlist *tvp;
+    bg_vlist *tvp;
     vect_t min, max;
     vect_t center;
     vect_t radial;
@@ -505,13 +506,13 @@ size_reset(void)
     VSETALL(max, -INFINITY);
 
     for (BU_LIST_FOR(plp, plot_list, &HeadPlot.l)) {
-	struct bsg_vlblock *vbp;
+	struct bg_vlblock *vbp;
 
 	vbp = plp->pl_vbp;
 	for (i=0; i < vbp->nused; i++) {
-	    bsg_vlist *vp = (bsg_vlist *)&vbp->head[i];
+	    bg_vlist *vp = (bg_vlist *)&vbp->head[i];
 
-	    for (BU_LIST_FOR(tvp, bsg_vlist, &vp->l)) {
+	    for (BU_LIST_FOR(tvp, bg_vlist, &vp->l)) {
 		int j;
 		int nused = tvp->nused;
 		int *cmd = tvp->cmd;
@@ -519,19 +520,19 @@ size_reset(void)
 
 		for (j = 0; j < nused; j++, cmd++, pt++) {
 		    switch (*cmd) {
-			case BSG_VLIST_POLY_START:
-			case BSG_VLIST_POLY_VERTNORM:
-			case BSG_VLIST_TRI_START:
-			case BSG_VLIST_TRI_VERTNORM:
+			case BG_VLIST_POLY_START:
+			case BG_VLIST_POLY_VERTNORM:
+			case BG_VLIST_TRI_START:
+			case BG_VLIST_TRI_VERTNORM:
 			    break;
-			case BSG_VLIST_LINE_MOVE:
-			case BSG_VLIST_LINE_DRAW:
-			case BSG_VLIST_POLY_MOVE:
-			case BSG_VLIST_POLY_DRAW:
-			case BSG_VLIST_POLY_END:
-			case BSG_VLIST_TRI_MOVE:
-			case BSG_VLIST_TRI_DRAW:
-			case BSG_VLIST_TRI_END:
+			case BG_VLIST_LINE_MOVE:
+			case BG_VLIST_LINE_DRAW:
+			case BG_VLIST_POLY_MOVE:
+			case BG_VLIST_POLY_DRAW:
+			case BG_VLIST_POLY_END:
+			case BG_VLIST_TRI_MOVE:
+			case BG_VLIST_TRI_DRAW:
+			case BG_VLIST_TRI_END:
 			    VMIN(min, *pt);
 			    VMAX(max, *pt);
 			    break;
@@ -612,7 +613,7 @@ cmd_openpl(ClientData UNUSED(clientData), Tcl_Interp *interp, int argc, char **a
 	for (BU_LIST_FOR(plp, plot_list, &HeadPlot.l)) {
 	    /* found object with same name */
 	    if (BU_STR_EQUAL(bu_vls_addr(&plp->pl_name), bnp)) {
-		bsg_vlblock_free(plp->pl_vbp);
+		bg_vlblock_free(plp->pl_vbp);
 		goto up_to_vl;
 	    }
 	}
@@ -739,7 +740,7 @@ cmd_closepl(ClientData UNUSED(clientData), Tcl_Interp *interp, int argc, char **
 	    if (BU_STR_EQUAL(argv[i], bu_vls_addr(&plp->pl_name))) {
 		BU_LIST_DEQUEUE(&plp->l);
 		bu_vls_free(&plp->pl_name);
-		bsg_vlblock_free(plp->pl_vbp);
+		bg_vlblock_free(plp->pl_vbp);
 		bu_free((void *)plp, "cmd_closepl");
 		break;
 	    }

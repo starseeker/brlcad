@@ -271,12 +271,11 @@ DM_EXPORT extern void dm_set_bound_flag(struct dm *dmp, int bound);
 
 /* Modern renderer-backend contract.
  *
- * struct dm_backend_ops is the display-manager-side counterpart of
- * bsg_backend_adapter.  A backend (dm-gl, dm-swrast, future dm-obol)
- * registers a single static dm_backend_ops with each dm instance it
- * creates; scene rendering invokes backend operations through the thin
- * dm_backend_*() wrappers below, which forward resolved bsg_render_item
- * records to the registered ops.
+ * struct dm_backend_ops is the display-manager-side backend dispatch table.
+ * A backend (dm-gl, dm-swrast, future dm-obol) registers a single static
+ * dm_backend_ops with each dm instance it creates; scene rendering invokes
+ * backend operations through the thin dm_backend_*() wrappers below, which
+ * forward resolved render-item contexts to the registered ops.
  *
  * Lifecycle of a backend resource:
  *  - draw_item:      per-frame draw of one resolved render item.  Required
@@ -288,8 +287,6 @@ DM_EXPORT extern void dm_set_bound_flag(struct dm *dmp, int bound);
  *
  * The actual backend_ops pointer lives in struct dm_impl (libdm-private)
  * and is set during dm initialization. */
-struct bsg_render_request;
-struct bsg_render_item;
 struct dm_backend_resource;
 
 typedef void (*dm_backend_resource_free_fn)(struct dm *dmp,
@@ -309,8 +306,8 @@ struct dm_backend_resource {
 struct dm_backend_ops {
     uint32_t type_tag;                                                     /**< @brief backend type tag */
     int  (*begin_frame)(struct dm *dmp);                                   /**< @brief optional backend frame begin */
-    int  (*draw_item)(struct dm *dmp, const struct bsg_render_item *item); /**< @brief resolved render-item draw; required for scene rendering */
-    void (*invalidate_item)(struct dm *dmp, const struct bsg_render_item *item, unsigned int reason_mask); /**< @brief mark item/source resources stale */
+    int  (*draw_item)(struct dm *dmp, const void *render_item_ctx);         /**< @brief resolved render-item draw; required for scene rendering */
+    void (*invalidate_item)(struct dm *dmp, const void *render_item_ctx, unsigned int reason_mask); /**< @brief mark item/source resources stale */
     void (*release_source)(struct dm *dmp, uint64_t source_identity);      /**< @brief release resources for a render source */
     void (*end_frame)(struct dm *dmp);                                     /**< @brief optional backend frame end */
 };
@@ -322,10 +319,10 @@ DM_EXPORT extern void dm_set_backend_ops(struct dm *dmp, const struct dm_backend
 /* Backend-ops dispatch wrappers.  Each is safe to call with a NULL dmp or
  * a NULL ops pointer.  Scene drawing requires draw_item; there is no node-only
  * fallback from the modern render path. */
-DM_EXPORT extern int  dm_backend_draw_item(struct dm *dmp, const struct bsg_render_item *item);
+DM_EXPORT extern int  dm_backend_draw_item(struct dm *dmp, const void *render_item_ctx);
 DM_EXPORT extern int  dm_backend_begin_frame(struct dm *dmp);
 DM_EXPORT extern void dm_backend_end_frame(struct dm *dmp);
-DM_EXPORT extern void dm_backend_invalidate_item(struct dm *dmp, const struct bsg_render_item *item, unsigned int reason_mask);
+DM_EXPORT extern void dm_backend_invalidate_item(struct dm *dmp, const void *render_item_ctx, unsigned int reason_mask);
 DM_EXPORT extern void dm_backend_release_source(struct dm *dmp, uint64_t source_identity);
 
 DM_EXPORT extern struct dm_backend_resource *

@@ -52,7 +52,8 @@ ged_rt_framebuffer_device(struct ged *gedp)
     if (fbdev && fbdev[0])
 	return fbdev;
 
-    if (gedp->ged_gvp && gedp->ged_gvp->dmp)
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+    if (rt_view_display_manager_from_bsg(v))
 	return "/dev/ogl";
 
     return NULL;
@@ -88,8 +89,9 @@ ged_rt_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
     const char *fbdev = ged_rt_framebuffer_device(gedp);
-    perspective = rt_view_perspective_from_bsg(gedp->ged_gvp);
+    perspective = rt_view_perspective_from_bsg(v);
     if (fbdev) {
 	args = argc + 9 + 2 + (int)ged_who_argc(gedp);
     } else {

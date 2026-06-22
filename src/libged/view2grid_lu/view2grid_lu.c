@@ -53,6 +53,8 @@ ged_view2grid_lu_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
@@ -64,8 +66,8 @@ ged_view2grid_lu_core(struct ged *gedp, int argc, const char *argv[])
 	sscanf(argv[3], "%lf", &view_pt[Z]) != 1)
 	goto bad;
 
-    rt_view_model2view_from_bsg(model2view, gedp->ged_gvp);
-    view_scale = rt_view_scale_from_bsg(gedp->ged_gvp);
+    rt_view_model2view_from_bsg(model2view, v);
+    view_scale = rt_view_scale_from_bsg(v);
     MAT4X3PNT(mo_view_pt, model2view, model_pt);
     f = view_scale * b2lval;
     VSCALE(mo_view_pt, mo_view_pt, f);

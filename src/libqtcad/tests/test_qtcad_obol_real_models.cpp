@@ -17,8 +17,7 @@
 #include "bu/str.h"
 #include "bu/time.h"
 #include "ged.h"
-#include "ged/bsg_ged_draw.h"
-#include "qtcad/QgLegacyViewBsg.h"
+#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgObolDrawSync.h"
 #include "qtcad/QgObolMeasure.h"
 #include "qtcad/QgObolPick.h"
@@ -49,7 +48,7 @@ struct model_case {
     const char *name;
     const char *file;
     const char *root;
-    int bsgDrawMode;
+    int legacyDrawMode;
     int obolDrawMode;
     int minWireShapes;
     int minWireSegments;
@@ -314,9 +313,9 @@ sync_draw_case(const struct model_case &testCase)
 	return 0;
     }
 
-    QgView view(NULL, QgView_SW, NULL);
+    QgView view(NULL, QgView_SW);
     view.resize(220, 170);
-    gedp->ged_gvp = qg_legacy_view_to_bsg(view.view());
+    qg_legacy_view_ged_active_set(gedp, view.view());
 
     BRLObolViewController *controller = view.obolViewController();
     if (!controller) {
@@ -325,30 +324,33 @@ sync_draw_case(const struct model_case &testCase)
     }
     controller->clearDatabaseSources();
 
-    struct bsg_appearance_settings settings = BSG_APPEARANCE_SETTINGS_INIT;
-    settings.draw_mode = testCase.bsgDrawMode;
+    qg_legacy_view_draw_appearance *appearance =
+	qg_legacy_view_draw_appearance_create(testCase.legacyDrawMode);
 
-    struct ged_draw_transaction txn =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, testCase.root);
-    txn.view = qg_legacy_view_to_bsg(view.view());
-    txn.appearance = &settings;
+    qg_legacy_view_draw_transaction txn;
+    qg_legacy_view_draw_transaction_init(&txn,
+	    QG_LEGACY_VIEW_DRAW_TXN_DRAW, testCase.root);
+    qg_legacy_view_draw_transaction_view_set(&txn, view.view());
+    qg_legacy_view_draw_transaction_appearance_set(&txn, appearance);
 
-    struct ged_draw_transaction_result result;
-    ged_draw_transaction_result_init(&result);
+    qg_legacy_view_draw_transaction_result result;
+    qg_legacy_view_draw_result_init(&result);
     int64_t phaseStart = bu_gettime();
-    int drawRet = ged_draw_apply_transaction(gedp, &txn, &result);
+    int drawRet = qg_legacy_view_draw_transaction_apply(gedp, &txn, &result);
     print_timing(testCase, "ged-draw-transaction", phaseStart);
     phaseStart = bu_gettime();
     int changed = qg_obol_sync_draw_transaction(gedp, &txn, &result, &view);
     print_timing(testCase, "obol-sync-transaction", phaseStart);
+    qg_legacy_view_draw_appearance_destroy(appearance);
     if (drawRet < 0) {
+	const char *drawErrors = qg_legacy_view_draw_result_errors(&result);
 	fprintf(stderr, "%s:%s GED draw failed: %s\n", testCase.file,
-		testCase.root, bu_vls_cstr(&result.errors));
-	ged_draw_transaction_result_free(&result);
+		testCase.root, drawErrors ? drawErrors : "");
+	qg_legacy_view_draw_result_free(&result);
 	ged_close(gedp);
 	return 0;
     }
-    ged_draw_transaction_result_free(&result);
+    qg_legacy_view_draw_result_free(&result);
 
     if (!changed || controller->getDatabaseSourceCount() != 1) {
 	fprintf(stderr, "%s:%s did not create one Obol database source\n",
@@ -412,7 +414,7 @@ sync_draw_case(const struct model_case &testCase)
 	ged_close(gedp);
 	return 0;
     }
-    if (view.dmp()) {
+    if (view.legacyBackendInitialized()) {
 	fprintf(stderr, "%s:%s qtcad Obol real-model capture initialized the legacy display manager\n",
 		testCase.file, testCase.root);
 	ged_close(gedp);
@@ -439,15 +441,15 @@ main(int argc, char **argv)
     QApplication app(argc, argv);
 
     const struct model_case cases[] = {
-	{"pinewood_wire", "pinewood.g", "pinewood", BSG_DRAW_MODE_WIRE,
+	{"pinewood_wire", "pinewood.g", "pinewood", QG_LEGACY_VIEW_DRAW_MODE_WIRE,
 	    SoBRLDatabaseSource::WIREFRAME, 2, 41, 0, 0, 0, 0},
-	{"pinewood_shaded", "pinewood.g", "pinewood", BSG_DRAW_MODE_SHADED,
+	{"pinewood_shaded", "pinewood.g", "pinewood", QG_LEGACY_VIEW_DRAW_MODE_SHADED,
 	    SoBRLDatabaseSource::SHADED, 0, 0, 21, 501, 0, 0},
-	{"havoc_wire", "havoc.g", "havoc", BSG_DRAW_MODE_WIRE,
+	{"havoc_wire", "havoc.g", "havoc", QG_LEGACY_VIEW_DRAW_MODE_WIRE,
 	    SoBRLDatabaseSource::WIREFRAME, 10, 100, 0, 0, 0, 0},
-	{"m35_wire_interactions", "m35.g", "all.g", BSG_DRAW_MODE_WIRE,
+	{"m35_wire_interactions", "m35.g", "all.g", QG_LEGACY_VIEW_DRAW_MODE_WIRE,
 	    SoBRLDatabaseSource::WIREFRAME, 100, 1000, 0, 0, 1, 0},
-	{"m35_wire_pick_all_stress", "m35.g", "all.g", BSG_DRAW_MODE_WIRE,
+	{"m35_wire_pick_all_stress", "m35.g", "all.g", QG_LEGACY_VIEW_DRAW_MODE_WIRE,
 	    SoBRLDatabaseSource::WIREFRAME, 100, 1000, 0, 0, 1, 1}
     };
 
@@ -462,7 +464,7 @@ main(int argc, char **argv)
 
     if (BU_STR_EQUAL(getenv("BRLOBOL_QTCAD_GENERIC_TWIN"), "1")) {
 	const struct model_case genericTwinCase = {
-	    "generic_twin_wire", "faa/Generic_Twin.g", "all", BSG_DRAW_MODE_WIRE,
+	    "generic_twin_wire", "faa/Generic_Twin.g", "all", QG_LEGACY_VIEW_DRAW_MODE_WIRE,
 	    SoBRLDatabaseSource::WIREFRAME, 100, 1000, 0, 0, 0, 0
 	};
 	if (should_run_case(argc, argv, genericTwinCase.name)) {

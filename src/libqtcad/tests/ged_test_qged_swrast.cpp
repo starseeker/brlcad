@@ -27,25 +27,26 @@
  *   • once the widget view is bound to an active GED draw scene, the public
  *     scene ref is non-NULL.
  *   • QgSW::paintEvent() runs without crashing on the offscreen platform.
- *   • dm_draw_objs() called through the Qt paint path produces a non-blank
+ *   • drawing through the Qt paint path produces a non-blank
  *     framebuffer when geometry is present in the view.
- *   • The DM is correctly initialised via the Qt path (dm_open called from
- *     inside paintEvent's m_init block).
+ *   • The retained fallback is correctly initialised when migrated Obol
+ *     rendering does not satisfy the paint/readback path.
  *
  * Strategy:
  *   1. Set QT_QPA_PLATFORM=offscreen so no display hardware is needed.
  *   2. Create QApplication.
  *   3. Create QgSW widget and resize to 512×512.
- *   4. Open moss.g with ged_open and set gedp->ged_gvp = sw.view().
+ *   4. Open moss.g with ged_open and bind sw.view() through qtcad helpers.
  *   5. Register sw.view() with the view set and set base2local / local2base.
  *   6. Draw all.g via ged_exec_draw.
  *   7. Force paintEvent via QWidget::render() on a QImage surface.
  *      (render() calls QWidget::paintEvent internally.)
- *   8. Read framebuffer content via dm_get_display_image after DM init.
+ *   8. Read rendered content via QgSW::get_viewport_image.
  *   9. Verify:
- *      a. bsg_view_scene_attached(sw.view()) is true (after GED bind + draw)
- *      b. sw.displayManager() != NULL  (DM opened during paintEvent)
- *      c. At least one pixel differs from the background color (geometry rendered)
+ *      a. the sw.view() scene is attached after GED bind + draw.
+ *      b. QgSW either produced migrated Obol image output or initialized the
+ *         retained fallback backend.
+ *      c. Available rendered image output contains non-background pixels.
  *
  * Usage: ged_test_qged_swrast [-c] <directory-containing-moss.g>
  */
@@ -60,13 +61,10 @@
 
 #include <bu.h>
 #include "bu/opt.h"
-#define DM_WITH_RT
-#include <dm.h>
 #include <ged.h>
-#include "rt/view_legacy_bsg.h"
 
 /* Qt + libqtcad headers */
-#include "qtcad/QgLegacyViewBsg.h"
+#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgModel.h"
 #include "qtcad/QgSW.h"
 
@@ -79,6 +77,25 @@ static int g_fail = 0;
             g_fail++; \
         } \
     } while (0)
+
+static bool
+image_has_nonbackground_pixels(const QImage &image)
+{
+    if (image.isNull())
+	return false;
+
+    QImage rgba = image.convertToFormat(QImage::Format_RGBA8888);
+    for (int y = 0; y < rgba.height(); y++) {
+	const unsigned char *scan = rgba.constScanLine(y);
+	for (int x = 0; x < rgba.width(); x++) {
+	    const unsigned char *px = scan + x * 4;
+	    if (px[0] > 30 || px[1] > 30 || px[2] > 30)
+		return true;
+	}
+    }
+
+    return false;
+}
 
 /* ================================================================== */
 int
@@ -125,11 +142,11 @@ main(int ac, char *av[])
     char *fake_argv[2] = { av[0], NULL };
     QApplication app(fake_argc, fake_argv);
 
-    /* ---- Create QgSW widget (exercises bsg_scene_root_create) ---- */
+    /* ---- Create QgSW widget (exercises retained scene-root setup) ---- */
     QgSW sw;
     sw.resize(512, 512);
 
-    SWCHECK(qg_legacy_view_to_bsg(sw.view()) != NULL, "QgSW::view() must be non-NULL after construction");
+    SWCHECK(sw.view() != NULL, "QgSW::view() must be non-NULL after construction");
 
     /* ---- Open moss.g and hook up the model ---- */
     struct ged *gedp = ged_open("db", "moss_qgswrast_tmp.g", 1);
@@ -141,9 +158,9 @@ main(int ac, char *av[])
     }
 
     /* Route draw commands into the QgSW view */
-    gedp->ged_gvp = qg_legacy_view_to_bsg(sw.view());
-    rt_view_set_add_view_bsg(&gedp->ged_views, qg_legacy_view_to_bsg(sw.view()));
-    rt_view_unit_conversion_set_bsg(qg_legacy_view_to_bsg(sw.view()),
+    qg_legacy_view_ged_active_set(gedp, sw.view());
+    qg_legacy_view_ged_view_set_add(gedp, sw.view());
+    qg_legacy_view_unit_conversion_set(sw.view(),
 	    gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
 
     /* Set az/el so the model is visible */
@@ -156,7 +173,7 @@ main(int ac, char *av[])
     const char *av_av[1] = {"autoview"};
     ged_exec_autoview(gedp, 1, av_av);
 
-    SWCHECK(qg_legacy_view_to_bsg(sw.view()) && bsg_view_scene_attached(qg_legacy_view_to_bsg(sw.view())),
+    SWCHECK(qg_legacy_view_scene_attached(sw.view()),
             "after binding QgSW view to GED and drawing, view scene ref must be non-NULL");
 
     /* ---- Force paintEvent via QWidget::render() ---- */
@@ -169,37 +186,32 @@ main(int ac, char *av[])
     /* Process any pending Qt events that paintEvent may have queued */
     QCoreApplication::processEvents();
 
-    /* If paintEvent ran and initialised the DM, sw.displayManager() must be set now */
-    SWCHECK(sw.displayManager() != NULL, "sw.displayManager() must be non-NULL after first paintEvent (DM opened)");
+    bool paint_has_nonbg = image_has_nonbackground_pixels(img);
+    bool legacy_backend_after_paint = sw.legacyBackendInitialized();
 
-    /* ---- Check framebuffer has non-background pixels ---- */
-    bool has_nonbg = false;
-    if (sw.displayManager()) {
-        unsigned char *dm_image = NULL;
-        int gr = dm_get_display_image(sw.displayManager(), &dm_image, 1, 1);
-        if (gr == 0 && dm_image) {
-            /* Background is typically dark grey or near-black.
-             * We just need at least one pixel that is NOT pure black,
-             * indicating that wireframe lines were drawn. */
-            int W = dm_get_width(sw.displayManager());
-            int H = dm_get_height(sw.displayManager());
-            for (int p = 0; p < W * H * 4 && !has_nonbg; p += 4) {
-                /* Check RGB — skip alpha byte [p+3] */
-                if (dm_image[p] > 30 || dm_image[p+1] > 30 || dm_image[p+2] > 30)
-                    has_nonbg = true;
-            }
-            bu_free(dm_image, "dm image check");
-        } else {
-            bu_log("  dm_get_display_image returned %d (may not be supported on offscreen)\n", gr);
-            /* Not a hard failure — the offscreen platform may not support
-             * dm_get_display_image, but we still verified the scene ref and dmp. */
-            has_nonbg = true;   /* skip pixel check for this platform */
-        }
-    }
+    /* ---- Check rendered output has non-background pixels ---- */
+    QImage viewport_image;
+    sw.get_viewport_image(viewport_image);
 
-    if (sw.displayManager()) {
-        SWCHECK(has_nonbg,
-                "framebuffer must have non-background pixels (geometry was drawn)");
+    bool legacy_backend_after_readback = sw.legacyBackendInitialized();
+    bool viewport_image_available = !viewport_image.isNull();
+    bool viewport_has_nonbg = image_has_nonbackground_pixels(viewport_image);
+
+    SWCHECK(legacy_backend_after_paint || legacy_backend_after_readback ||
+	    paint_has_nonbg || viewport_image_available,
+	    "QgSW must either produce migrated Obol output or initialize the retained fallback backend");
+
+    if (viewport_image_available) {
+	SWCHECK(viewport_has_nonbg,
+		"viewport image must have non-background pixels (geometry was drawn)");
+    } else if (legacy_backend_after_readback) {
+	bu_log("  QgSW::get_viewport_image returned a null image "
+	       "(may not be supported on offscreen)\n");
+	/* Not a hard failure: the offscreen platform may not support readback,
+	 * but the fallback backend did initialize. */
+    } else {
+	SWCHECK(paint_has_nonbg,
+		"paint output must have non-background pixels when no readback image is available");
     }
 
     /* Summarise */

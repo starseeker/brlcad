@@ -14,7 +14,7 @@ Current tree notes:
 Phase 2 — Encapsulation pass
 
 Current tree notes:
-- This phase is started but not finished: QgGL/QgSW already expose defaultMouseMode as Q_PROPERTY and already have basic view()/displayManager()/frameBuffer() getters.
+- This phase is started but not finished: QgGL/QgSW already expose defaultMouseMode as Q_PROPERTY and the public canvas surface now uses view()/legacyBackendInitialized() rather than raw display-manager/framebuffer getters; the BSG cast adapter is private to src/libqtcad rather than installed.
 - QgView now keeps its active event-filter pointer private and manages it through add/remove helpers rather than exposing raw external writes.
 - The standalone dm Qt window wrappers now expose their QgGL/QgSW canvases through accessors instead of public member pointers.
 - QgToolPaletteElement now exposes its button/control/scroll state through accessors instead of public data members.
@@ -150,8 +150,8 @@ Current tree notes:
 - QgEdApp.cpp (qt_delete_io_handler): updated to use `findListener()`,
   `removeListener()`, and `disconnectNotifier()` instead of reaching into
   QgConsole's internal map and QgConsoleListener's private notifier member.
-- QgCanvasState.h: expanded ownership documentation for v/local_v/dmp/ifp/
-  dm_set.  Fixed `qgcanvas_set_view(s, nullptr)` to revert `s.v` to
+- QgCanvasState.h: expanded ownership documentation for v/local_v/dmp/ifp.
+  Fixed `qgcanvas_set_view(s, nullptr)` to revert `s.v` to
   `s.local_v` (the widget-owned view) instead of setting it to `nullptr`,
   consistent with the documented contract in QgCanvasBase.h.
 - Phase 9 is complete.

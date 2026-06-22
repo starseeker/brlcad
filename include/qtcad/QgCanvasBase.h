@@ -54,10 +54,6 @@ class QString;
 class QWidget;
 class BRLObolViewController;
 
-struct bu_ptbl;
-struct dm;
-struct fb;
-
 class QTCAD_EXPORT QgCanvasBase {
 public:
     virtual ~QgCanvasBase() = default;
@@ -78,20 +74,14 @@ public:
     /** Transitional view handle associated with this canvas (may be nullptr). */
     virtual qg_legacy_view *view() const = 0;
 
-    /** Underlying libdm display manager (nullptr before first paint). */
-    virtual struct dm *displayManager() const = 0;
-
-    /** Framebuffer handle (may be nullptr). */
-    virtual struct fb *frameBuffer() const = 0;
+    /** True once the retained fallback backend has been initialized. */
+    virtual bool legacyBackendInitialized() const = 0;
 
     /** Obol-canonical view controller for migrated drawing code. */
     virtual BRLObolViewController *obolViewController() const = 0;
 
     /** Bind an external transitional view.  Pass nullptr to revert to the local view. */
     virtual void set_view(qg_legacy_view *) = 0;
-
-    /** Register this canvas's DM in a shared display-manager table. */
-    virtual void setDisplayManagerSet(struct bu_ptbl *) = 0;
 
     /** Store current DM and view hash values for later comparison. */
     virtual void stash_hashes() = 0;
@@ -129,9 +119,9 @@ public:
     virtual void get_obol_viewport_image(QImage &img) = 0;
 
     /**
-     * Request a canvas refresh using rt/view_legacy_bsg.h RT_VIEW_REFRESH_*
-     * flags.  This is the typed path used by QgView so migrated Obol state
-     * sees the same semantic view/update requests as the legacy renderer.
+     * Request a canvas refresh using qtcad legacy-view refresh flags.  This
+     * is the typed path used by QgView so migrated Obol state sees the same
+     * semantic view/update requests as the legacy renderer.
      */
     virtual void request_update(uint32_t refresh_flags) = 0;
 

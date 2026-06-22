@@ -77,6 +77,7 @@
 #include <QModelIndex>
 
 #include "qtcad/defines.h"
+#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgRoles.h"
 #include "qtcad/QgSession.h"
 #include "qtcad/QgTypes.h"
@@ -86,8 +87,6 @@ struct bu_vls;
 struct db_i;
 struct directory;
 struct ged;
-struct ged_draw_transaction;
-struct ged_draw_transaction_result;
 struct ged_event;
 struct ged_event_txn_result;
 
@@ -476,11 +475,13 @@ private:
 				   bool terminal_subtree = true);
 	void notifyDrawnItemsChanged();
 	void notifyDrawnPathChanged(const char *path);
-	void notifyDrawnTransactionChanged(const struct ged_draw_transaction_result *result,
+	void notifyDrawnTransactionChanged(
+					   const qg_legacy_view_draw_transaction_result *result,
 					   const char *fallback_path);
 	void flushPendingDrawNotifications();
-	void handleDrawTransactionEvent(const struct ged_draw_transaction *txn,
-					const struct ged_draw_transaction_result *result);
+	void handleDrawTransactionEvent(
+					const qg_legacy_view_draw_transaction *txn,
+					const qg_legacy_view_draw_transaction_result *result);
 	void recordPendingDatabaseEventPaths(const struct ged_event_txn_result *result);
 	void notifyPendingDatabaseEventItemsChanged(bool terminal_subtree);
 	void flushPendingDatabaseEventNotifications();
@@ -488,8 +489,8 @@ private:
 				    size_t event_count,
 				    const struct ged_event_txn_result *result);
 	static void drawObserverCallback(struct ged *gedp,
-					 const struct ged_draw_transaction *txn,
-					 const struct ged_draw_transaction_result *result,
+					 const qg_legacy_view_draw_transaction *txn,
+					 const qg_legacy_view_draw_transaction_result *result,
 					 void *client_data);
 	static void eventObserverCallback(struct ged *gedp,
 					  const struct ged_event *events,

@@ -28,6 +28,7 @@
 
 #include "common.h"
 
+#include "bsg/tcl_data.h"
 #include "bu/sort.h"
 #include "bg/polygon.h"
 #include "ged.h"
@@ -35,8 +36,9 @@
 #include "rt/view_legacy_bsg.h"
 
 int
-ged_export_polygon(struct ged *gedp, bsg_data_polygon_state *gdpsp, size_t polygon_i, const char *sname)
+ged_export_polygon(struct ged *gedp, void *polygon_state, size_t polygon_i, const char *sname)
 {
+    bsg_data_polygon_state *gdpsp = (bsg_data_polygon_state *)polygon_state;
     size_t j, k, n;
     size_t num_verts = 0;
     struct rt_db_internal internal;
@@ -50,6 +52,9 @@ ged_export_polygon(struct ged *gedp, bsg_data_polygon_state *gdpsp, size_t polyg
 
     GED_CHECK_EXISTS(gedp, sname, LOOKUP_QUIET, BRLCAD_ERROR);
     RT_DB_INTERNAL_INIT(&internal);
+
+    if (!gdpsp)
+	return BRLCAD_ERROR;
 
     if (polygon_i >= gdpsp->gdps_polygons.num_polygons ||
 	gdpsp->gdps_polygons.polygon[polygon_i].num_contours < 1)
@@ -315,11 +320,12 @@ ged_polygons_overlap(struct ged *gedp, struct bg_polygon *polyA, struct bg_polyg
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
+    struct bsg_view *gvp = (struct bsg_view *)ged_view_active_ctx(gedp);
 
     plane_t pl;
-    rt_view_plane_from_bsg(&pl, gedp->ged_gvp);
+    rt_view_plane_from_bsg(&pl, gvp);
 
-    fastf_t view_scale = rt_view_scale_from_bsg(gedp->ged_gvp);
+    fastf_t view_scale = rt_view_scale_from_bsg(gvp);
     return bg_polygons_overlap(polyA, polyB, &pl, &wdbp->wdb_tol, view_scale);
 }
 
@@ -363,9 +369,10 @@ ged_polygon_fill_segments(struct ged *gedp, struct bg_polygon *poly, vect2d_t vf
     struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
     mat_t model2view;
     mat_t view2model;
+    struct bsg_view *gvp = (struct bsg_view *)ged_view_active_ctx(gedp);
 
-    rt_view_model2view_from_bsg(model2view, gedp->ged_gvp);
-    rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
+    rt_view_model2view_from_bsg(model2view, gvp);
+    rt_view_view2model_from_bsg(view2model, gvp);
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);

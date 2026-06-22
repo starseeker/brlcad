@@ -53,9 +53,7 @@
 #include "ged.h"
 #include "ged/defines.h"
 #include "ged/commands.h"
-#include "rt/view_legacy_bsg.h"
 #include "qtcad/QgLegacyView.h"
-#include "qtcad/QgLegacyViewBsg.h"
 #include "qtcad/QgQuadView.h"
 #include "qtcad/QgSession.h"
 #include "qtcad/QgView.h"
@@ -63,12 +61,6 @@
 #include <Inventor/SoViewport.h>
 
 static const char *VIEW_NAMES[] = {"Q1", "Q2", "Q3", "Q4"};
-
-static struct bsg_view *
-qg_quad_bsg_view(QgView *view)
-{
-	return view ? qg_legacy_view_to_bsg(view->view()) : nullptr;
-}
 
 static void
 qg_quad_insert_obol_path(std::set<std::string> &paths, const SbString &path)
@@ -119,8 +111,8 @@ QgQuadView::QgQuadView(QWidget *parent, QgSession *session, int type) : QWidget(
 	views[UPPER_RIGHT_QUADRANT] = createView(UPPER_RIGHT_QUADRANT);
 	struct ged *gedp = m_session ? m_session->ged() : nullptr;
 	if (gedp)
-		rt_view_set_add_view_bsg(&gedp->ged_views,
-			qg_quad_bsg_view(views[UPPER_RIGHT_QUADRANT]));
+		qg_legacy_view_ged_view_set_add(gedp,
+			views[UPPER_RIGHT_QUADRANT]->view());
 	if (m_session)
 		m_session->setActiveView(views[UPPER_RIGHT_QUADRANT]->view());
 
@@ -168,15 +160,12 @@ QgView *
 QgQuadView::createView(unsigned int index)
 {
 	QgView *view = new QgView(this, graphicsType);
-	struct bsg_view *bv = qg_quad_bsg_view(view);
-	if (bv)
-		bu_vls_sprintf(&bv->gv_name, "%s", VIEW_NAMES[index]);
+	qg_legacy_view_name_set(view->view(), VIEW_NAMES[index]);
 	view->set_current(0);
 	view->installEventFilter(this);
 
 	struct ged *gedp = m_session ? m_session->ged() : nullptr;
-	if (gedp && bv)
-		bv->vset = &gedp->ged_views;
+	qg_legacy_view_ged_view_set_attach(gedp, view->view());
 	/* Independent view state is managed by BSG view-scope records. */
 
 	QObject::connect(view, &QgView::changed, this, &QgQuadView::do_view_changed);
@@ -227,8 +216,8 @@ QgQuadView::changeToSingleFrame()
 		if (views[i] != nullptr) {
 			views[i]->disconnect();
 			if (gedp)
-				rt_view_set_remove_view_bsg(&gedp->ged_views,
-					qg_quad_bsg_view(views[i]));
+				qg_legacy_view_ged_view_set_remove(gedp,
+					views[i]->view());
 			delete views[i];
 			views[i] = nullptr;
 		}
@@ -280,11 +269,10 @@ QgQuadView::changeToQuadFrame()
 		}
 		// Copy the LoD source policy so all quadrants use the same
 		// source-selection behavior.
-		rt_view_lod_policy_copy_bsg(qg_quad_bsg_view(views[i]),
-			qg_quad_bsg_view(views[UPPER_RIGHT_QUADRANT]));
+		qg_legacy_view_lod_policy_copy(views[i]->view(),
+			views[UPPER_RIGHT_QUADRANT]->view());
 		if (gedp)
-			rt_view_set_add_view_bsg(&gedp->ged_views,
-				qg_quad_bsg_view(views[i]));
+			qg_legacy_view_ged_view_set_add(gedp, views[i]->view());
 	}
 
 	// Define the spacers
@@ -337,8 +325,8 @@ QgQuadView::changeToQuadFrame()
 	// but if we don't do it here we'll start out with blank windows until something notifies
 	// the draw logic it needs to do updates.
 	for (int i = UPPER_RIGHT_QUADRANT + 1; i < LOWER_RIGHT_QUADRANT + 1; i++) {
-		rt_view_autoview_bsg(qg_quad_bsg_view(views[i]), RT_VIEW_AUTOVIEW_SCALE_DEFAULT, 0);
-		rt_view_lod_bounds_update_bsg(qg_quad_bsg_view(views[i]));
+		qg_legacy_view_autoview_default(views[i]->view(), 0);
+		qg_legacy_view_lod_bounds_update(views[i]->view());
 	}
 	{
 		std::set<std::string> paths =

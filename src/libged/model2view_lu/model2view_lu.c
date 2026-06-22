@@ -61,8 +61,9 @@ ged_model2view_lu_core(struct ged *gedp, int argc, const char *argv[])
 	sscanf(argv[3], "%lf", &model_pt[Z]) != 1)
 	goto bad;
 
-    rt_view_model2view_from_bsg(model2view, gedp->ged_gvp);
-    view_scale = rt_view_scale_from_bsg(gedp->ged_gvp);
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+    rt_view_model2view_from_bsg(model2view, v);
+    view_scale = rt_view_scale_from_bsg(v);
     VSCALE(model_pt, model_pt, l2bval);
     MAT4X3PNT(view_pt, model2view, model_pt);
     f = view_scale * b2lval;

@@ -33,7 +33,6 @@ else(NOT DEFINED BRLCAD_BUILDTEST_EXTERNALS)
       libbrep
       libbg
       libnmg
-      libbsg
       libbn
       libbu
       ${TCL_LIBRARY}

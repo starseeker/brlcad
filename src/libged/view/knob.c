@@ -65,7 +65,7 @@ ged_knob_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     /* Make sure the view coordinate conversion values match the database */
-    struct bsg_view *v = gedp->ged_gvp;
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
     rt_view_unit_conversion_set_bsg(v,
 	(gedp->dbip) ? gedp->dbip->dbi_local2base : 1.0,
 	(gedp->dbip) ? gedp->dbip->dbi_base2local : 1.0);
@@ -110,7 +110,7 @@ ged_knob_core(struct ged *gedp, int argc, const char *argv[])
     argc = opt_ret;
     if (argc == 1) {
 	// print current values
-	print_knob_vals(gedp->ged_result_str, gedp->ged_gvp);
+	print_knob_vals(gedp->ged_result_str, v);
 	return BRLCAD_OK;
     }
 
@@ -191,7 +191,7 @@ ged_knob_core(struct ged *gedp, int argc, const char *argv[])
 	const pointp_t pvt_pt = (origin == 'k') ? keypoint : NULL;
 
 	if (pvt_pt)
-	    rt_view_keypoint_from_bsg(keypoint, gedp->ged_gvp);
+	    rt_view_keypoint_from_bsg(keypoint, v);
 
 	// Note - we don't (currently) support 'o' coords here, so the obj_rot matrix is always NULL.
 	rt_view_knobs_rotate_bsg(v, rvec, origin, (model_flag ? 'm' : 'v'), NULL, pvt_pt);

@@ -33,8 +33,9 @@
  * Archer> view sdata_lines line_width 100
  * Archer> view sdata_lines color 255 0 0
  *
- * Note that gedp->ged_gvp must be set to the correct display manager before
- * calling this command to put the output in the correct display manager.
+ * Note that the active GED view must be set to the correct display manager
+ * before calling this command to put the output in the correct display
+ * manager.
  */
 
 #include "common.h"
@@ -55,6 +56,7 @@
 
 struct view_dlines_state {
     struct ged *gedp;
+    struct bsg_view *v;
     const char *bsg_name;
 };
 
@@ -63,7 +65,7 @@ _view_dlines_cmd_draw(void *bs, int argc, const char **argv)
 {
     struct view_dlines_state *vs = (struct view_dlines_state *)bs;
     struct ged *gedp = vs->gedp;
-    struct bsg_view *v = gedp->ged_gvp;
+    struct bsg_view *v = vs->v;
 
     if (argc == 1) {
 	bu_vls_printf(gedp->ged_result_str, "%d",
@@ -94,8 +96,9 @@ _view_dlines_cmd_snap(void *bs, int argc, const char **argv)
 {
     struct view_dlines_state *vs = (struct view_dlines_state *)bs;
     struct ged *gedp = vs->gedp;
+    struct bsg_view *v = vs->v;
     if (argc == 1) {
-	bu_vls_printf(gedp->ged_result_str, "%d", rt_view_snap_lines_from_bsg(gedp->ged_gvp));
+	bu_vls_printf(gedp->ged_result_str, "%d", rt_view_snap_lines_from_bsg(v));
 	return BRLCAD_OK;
     }
 
@@ -104,7 +107,7 @@ _view_dlines_cmd_snap(void *bs, int argc, const char **argv)
 
 	if (bu_sscanf(argv[1], "%d", &i) != 1) return BRLCAD_ERROR;
 
-	rt_view_snap_lines_set_bsg(gedp->ged_gvp, i);
+	rt_view_snap_lines_set_bsg(v, i);
 
 	return BRLCAD_OK;
     }
@@ -117,7 +120,7 @@ _view_dlines_cmd_color(void *bs, int argc, const char **argv)
 {
     struct view_dlines_state *vs = (struct view_dlines_state *)bs;
     struct ged *gedp = vs->gedp;
-    struct bsg_view *v = gedp->ged_gvp;
+    struct bsg_view *v = vs->v;
 
     if (argc == 1) {
 	struct ged_draw_view_line_style style = {{0, 0, 0}, 0};
@@ -159,7 +162,7 @@ _view_dlines_cmd_line_width(void *bs, int argc, const char **argv)
 {
     struct view_dlines_state *vs = (struct view_dlines_state *)bs;
     struct ged *gedp = vs->gedp;
-    struct bsg_view *v = gedp->ged_gvp;
+    struct bsg_view *v = vs->v;
 
     if (argc == 1) {
 	struct ged_draw_view_line_style style = {{0, 0, 0}, 0};
@@ -191,7 +194,7 @@ _view_dlines_cmd_points(void *bs, int argc, const char **argv)
 {
     struct view_dlines_state *vs = (struct view_dlines_state *)bs;
     struct ged *gedp = vs->gedp;
-    struct bsg_view *v = gedp->ged_gvp;
+    struct bsg_view *v = vs->v;
     int i;
 
     if (argc == 1) {
@@ -294,6 +297,9 @@ ged_view_data_lines(struct ged *gedp, int argc, const char *argv[])
 	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", argv[0], usage);
 	return BRLCAD_ERROR;
     }
+
+    GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
+    vs.v = (struct bsg_view *)ged_view_active_ctx(gedp);
 
     if (argv[0][0] == 's') {
 	vs.bsg_name = "_tcl_sdata_lines";

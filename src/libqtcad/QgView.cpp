@@ -30,13 +30,11 @@
 #include "qtcad/QgGL.h"
 #include "qtcad/QgSW.h"
 #include "qtcad/QgView.h"
-#include "qtcad/QgLegacyViewBsg.h"
 #include "qtcad/QgViewFilter.h"
 #include "qtcad/QgSignalFlags.h"
 
 extern "C" {
 #include "bu/malloc.h"
-#include "rt/view_legacy_bsg.h"
 }
 
 #include <algorithm>
@@ -47,19 +45,19 @@ qg_refresh_flags(QgViewUpdateFlags flags)
     uint32_t refresh_flags = 0;
 
     if (!flags)
-	return RT_VIEW_REFRESH_ALL_BSG;
+	return QG_LEGACY_VIEW_REFRESH_ALL;
     if (flags & QG_VIEW_REFRESH)
-	refresh_flags |= RT_VIEW_REFRESH_VIEW_BSG;
+	refresh_flags |= QG_LEGACY_VIEW_REFRESH_VIEW;
     if (flags & QG_VIEW_DRAWN)
-	refresh_flags |= RT_VIEW_REFRESH_DRAW_BSG;
+	refresh_flags |= QG_LEGACY_VIEW_REFRESH_DRAW;
     if (flags & QG_VIEW_SELECT)
-	refresh_flags |= RT_VIEW_REFRESH_OVERLAY_BSG;
+	refresh_flags |= QG_LEGACY_VIEW_REFRESH_OVERLAY;
     if (flags & QG_VIEW_MODE)
-	refresh_flags |= RT_VIEW_REFRESH_EDIT_BSG;
+	refresh_flags |= QG_LEGACY_VIEW_REFRESH_EDIT;
     if (flags & QG_VIEW_DB)
-	refresh_flags |= RT_VIEW_REFRESH_DRAW_BSG;
+	refresh_flags |= QG_LEGACY_VIEW_REFRESH_DRAW;
 
-    return refresh_flags ? refresh_flags : RT_VIEW_REFRESH_ALL_BSG;
+    return refresh_flags ? refresh_flags : QG_LEGACY_VIEW_REFRESH_ALL;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -68,28 +66,28 @@ qg_refresh_flags(QgViewUpdateFlags flags)
 /* in every QgView method body.                                            */
 /* ---------------------------------------------------------------------- */
 static QgCanvasBase *
-make_canvas(QWidget *parent, int type, struct fb *fbp)
+make_canvas(QWidget *parent, int type)
 {
     switch (type) {
 #ifdef BRLCAD_OPENGL
     case QgView_GL:
-return new QgGL(parent, fbp);
+return new QgGL(parent);
 #endif
     case QgView_SW:
-return new QgSW(parent, fbp);
+return new QgSW(parent);
     default:
 /* QgView_AUTO or any other value: prefer hardware GL, fall back to SW */
 #ifdef BRLCAD_OPENGL
-return new QgGL(parent, fbp);
+return new QgGL(parent);
 #else
-return new QgSW(parent, fbp);
+return new QgSW(parent);
 #endif
     }
 }
 
 /* ---------------------------------------------------------------------- */
 
-QgView::QgView(QWidget *parent, int type, struct fb *fbp)
+QgView::QgView(QWidget *parent, int type)
     : QWidget(parent)
 {
     this->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -97,7 +95,7 @@ QgView::QgView(QWidget *parent, int type, struct fb *fbp)
     l->setSpacing(0);
     l->setContentsMargins(0, 0, 0, 0);
 
-    canvas = make_canvas(this, type, fbp);
+    canvas = make_canvas(this, type);
     if (!canvas)
 return;
 
@@ -182,10 +180,8 @@ QgView::need_update(QgViewUpdateFlags flags)
 {
     QTCAD_SLOT("QgView::need_update", 1);
     uint32_t refresh_flags = qg_refresh_flags(flags);
-    if (qg_legacy_view *lv = view()) {
-	struct bsg_view *bv = qg_legacy_view_to_bsg(lv);
-	rt_view_refresh_request_bsg(bv, refresh_flags);
-    }
+    if (qg_legacy_view *lv = view())
+	qg_legacy_view_refresh_request(lv, refresh_flags);
     if (canvas)
 canvas->request_update(refresh_flags);
 }
@@ -196,16 +192,10 @@ QgView::view()
     return canvas ? canvas->view() : nullptr;
 }
 
-struct dm *
-QgView::dmp()
+bool
+QgView::legacyBackendInitialized() const
 {
-    return canvas ? canvas->displayManager() : nullptr;
-}
-
-struct fb *
-QgView::ifp()
-{
-    return canvas ? canvas->frameBuffer() : nullptr;
+    return canvas ? canvas->legacyBackendInitialized() : false;
 }
 
 BRLObolViewController *

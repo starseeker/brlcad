@@ -48,10 +48,6 @@ class QResizeEvent;
 class QString;
 class QWheelEvent;
 class BRLObolViewController;
-
-struct bu_ptbl;
-struct dm;
-struct fb;
 struct QgCanvasState;  /* private implementation — defined in QgCanvasState.h */
 
 class QTCAD_EXPORT QgSW : public QWidget, public QgCanvasBase {
@@ -61,7 +57,7 @@ Q_PROPERTY(int defaultMouseMode READ lmouseMoveDefault WRITE set_lmouse_move_def
 
 
 public:
-explicit QgSW(QWidget *parent = nullptr, struct fb *fbp = nullptr);
+explicit QgSW(QWidget *parent = nullptr);
 ~QgSW() override;
 
 /* -- QgCanvasBase interface -- */
@@ -70,12 +66,10 @@ QObject *asQObject()    override { return this; }
 bool isValid() const    override { return true; }
 
 qg_legacy_view *view()           const override;
-struct dm    *displayManager() const override;
-struct fb    *frameBuffer()    const override;
+bool legacyBackendInitialized() const override;
 BRLObolViewController *obolViewController() const override;
 
 void set_view(qg_legacy_view *)               override;
-void setDisplayManagerSet(struct bu_ptbl *) override;
 
 void stash_hashes() override;
 bool diff_hashes()  override;

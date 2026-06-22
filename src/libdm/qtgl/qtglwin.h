@@ -27,15 +27,16 @@
 #define QTGLWIN_H
 
 #include <QMainWindow>
-#include "dm.h"
-#include "qtcad/QgGL.h"
+
+class QgGL;
+struct qg_legacy_fb;
 
 class QgGLWin : public QMainWindow
 {
     Q_OBJECT
     Q_DISABLE_COPY_MOVE(QgGLWin)
     public:
-	QgGLWin(struct fb *fbp);
+	QgGLWin(qg_legacy_fb *fbp);
 	QgGL *canvasWidget() const
 	{
 	    return canvas;

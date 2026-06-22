@@ -105,9 +105,11 @@ _rtif_use_current_view(struct mged_state *s)
     if (!s || !s->gedp || !view_state || !view_state->vs_gvp)
 	return;
 
-    s->gedp->ged_gvp = view_state->vs_gvp;
-    if (s->mged_curr_dm)
-	s->gedp->ged_gvp->dmp = (void *)s->mged_curr_dm->dm_dmp;
+    ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
+    struct bsg_view *gvp = (struct bsg_view *)ged_view_active_ctx(s->gedp);
+    if (s->mged_curr_dm && gvp)
+	rt_view_display_manager_set_bsg(gvp,
+		(void *)s->mged_curr_dm->dm_dmp);
 }
 
 static void

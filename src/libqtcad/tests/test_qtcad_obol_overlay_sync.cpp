@@ -17,7 +17,6 @@
 #include "bu/file.h"
 #include "bu/str.h"
 #include "ged.h"
-#include "qtcad/QgLegacyViewBsg.h"
 #include "qtcad/QgObolOverlaySync.h"
 #include "qtcad/QgView.h"
 #include "wdb.h"
@@ -133,11 +132,11 @@ main(int argc, char **argv)
 	    !add_line_point(builder, 0, 255, 255, 0.0, 40.0, 0.0, BG_GEOMETRY_LINE_DRAW))
 	FAIL("failed to populate qtcad diagnostic line-layer builder");
 
-    QgView view(NULL, QgView_SW, NULL);
+    QgView view(NULL, QgView_SW);
     view.resize(180, 140);
-    gedp->ged_gvp = qg_legacy_view_to_bsg(view.view());
+    qg_legacy_view_ged_active_set(gedp, view.view());
 
-    QgView otherView(NULL, QgView_SW, NULL);
+    QgView otherView(NULL, QgView_SW);
     otherView.resize(180, 140);
     if (qg_obol_sync_line_layer_overlay(gedp, "qtcad::wrong-view",
 		builder, &otherView) != 0)

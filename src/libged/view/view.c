@@ -167,10 +167,10 @@ typedef int (*view_core_cmd_func)(struct ged *, int, const char **);
 static int
 _view_call_on_gd_view(struct _ged_view_info *gd, view_core_cmd_func cmd, int argc, const char **argv)
 {
-    struct bsg_view *cv = gd->gedp->ged_gvp;
-    gd->gedp->ged_gvp = gd->cv;
+    void *cv = ged_view_active_ctx(gd->gedp);
+    ged_view_active_ctx_set(gd->gedp, gd->cv);
     int ret = cmd(gd->gedp, argc, argv);
-    gd->gedp->ged_gvp = cv;
+    ged_view_active_ctx_set(gd->gedp, cv);
     return ret;
 }
 
@@ -331,7 +331,7 @@ _view_cmd_independent(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *v = rt_view_set_find_view_bsg(&gedp->ged_views, argv[0]);
+    struct bsg_view *v = (struct bsg_view *)ged_view_find_ctx(gedp, argv[0]);
     if (!v) {
 	bu_vls_printf(gedp->ged_result_str, "view %s not found\n", argv[0]);
 	return BRLCAD_ERROR;
@@ -362,10 +362,10 @@ _view_cmd_independent(void *bs, int argc, const char **argv)
 	    return BRLCAD_ERROR;
 	}
 
-	struct bsg_view *cv = gedp->ged_gvp;
-	gedp->ged_gvp = v;
+	void *cv = ged_view_active_ctx(gedp);
+	ged_view_active_ctx_set(gedp, v);
 	ged_draw_ensure_root(gedp);
-	gedp->ged_gvp = cv;
+	ged_view_active_ctx_set(gedp, cv);
 
 	if (!ged_draw_view_has_scene_root(v) ||
 		bsg_scene_ref_is_null(rt_view_independent_scope_ref_bsg(v, 1))) {
@@ -414,10 +414,11 @@ _view_cmd_list(void *bs, int argc, const char **argv)
     }
 
     struct ged *gedp = gd->gedp;
-    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
+    void *active_view = ged_view_active_ctx(gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, i);
-	if (v != gedp->ged_gvp) {
+	if ((void *)v != active_view) {
 	    bu_vls_printf(gedp->ged_result_str, "  %s\n", bu_vls_cstr(&v->gv_name));
 	} else {
 	    bu_vls_printf(gedp->ged_result_str, "* %s\n", bu_vls_cstr(&v->gv_name));
@@ -796,21 +797,14 @@ ged_view_core(struct ged *gedp, int argc, const char *argv[])
 
     // Either a view was specified, or we use the current view
     if (bu_vls_strlen(&vname)) {
-	struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
-	for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	    struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, i);
-	    if (BU_STR_EQUAL(bu_vls_cstr(&vname), bu_vls_cstr(&v->gv_name))) {
-		gd.cv = v;
-		break;
-	    }
-	}
+	gd.cv = (struct bsg_view *)ged_view_find_ctx(gedp, bu_vls_cstr(&vname));
 	if (!gd.cv) {
 	    bu_vls_printf(gedp->ged_result_str, ": invalid view name: %s", bu_vls_cstr(&vname));
 	    bu_vls_free(&vname);
 	    return BRLCAD_ERROR;
 	}
     } else {
-	gd.cv = gedp->ged_gvp;
+	gd.cv = (struct bsg_view *)ged_view_active_ctx(gedp);
     }
 
     if (!gd.cv) {

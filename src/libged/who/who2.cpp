@@ -27,7 +27,6 @@
 
 #include "ged.h"
 #include "ged/bsg_ged_draw.h"
-#include "rt/view_legacy_bsg.h"
 
 #include "../ged_private.h"
 
@@ -97,9 +96,9 @@ ged_who2_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *v = gedp->ged_gvp;
+    void *v = ged_view_active_ctx(gedp);
     if (bu_vls_strlen(&cvls)) {
-	v = rt_view_set_find_view_bsg(&gedp->ged_views, bu_vls_cstr(&cvls));
+	v = ged_view_find_ctx(gedp, bu_vls_cstr(&cvls));
 	if (!v) {
 	    bu_vls_printf(gedp->ged_result_str, "Specified view %s not found\n", bu_vls_cstr(&cvls));
 	    bu_vls_free(&cvls);

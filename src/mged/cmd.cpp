@@ -692,8 +692,8 @@ cmd_ged_simulate_wrapper(ClientData clientData, Tcl_Interp *interpreter, int arg
 	    has_view = 1;
     }
 
-    if (has_output && !has_view && s->gedp && s->gedp->ged_gvp) {
-	struct bsg_view *bv = s->gedp->ged_gvp;
+    struct bsg_view *bv = s->gedp ? (struct bsg_view *)ged_view_active_ctx(s->gedp) : NULL;
+    if (has_output && !has_view && bv) {
 	quat_t quat;
 	point_t eye_pos;
 	fastf_t view_size;
@@ -1250,8 +1250,8 @@ cmd_ged_view_wrapper(ClientData clientData, Tcl_Interp *interpreter, int argc, c
     if (s->gedp == GED_NULL)
 	return TCL_OK;
 
-    if (!s->gedp->ged_gvp)
-	s->gedp->ged_gvp = view_state->vs_gvp;
+    if (!ged_view_active_ctx(s->gedp))
+	ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 
     ret = run_ged_async(s, [&]() -> int { return (*ctp->ged_func)(s->gedp, argc, (const char **)argv); });
     GED_OUTPUT;
@@ -1285,9 +1285,13 @@ cmd_ged_dm_wrapper(ClientData clientData, Tcl_Interp *interpreter, int argc, con
     else
 	return TCL_OK;
 
-    if (!s->gedp->ged_gvp)
-	s->gedp->ged_gvp = view_state->vs_gvp;
-    s->gedp->ged_gvp->dmp = (void *)s->mged_curr_dm->dm_dmp;
+    struct bsg_view *active_view = (struct bsg_view *)ged_view_active_ctx(s->gedp);
+    if (!active_view) {
+	ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
+	active_view = (struct bsg_view *)ged_view_active_ctx(s->gedp);
+    }
+    rt_view_display_manager_set_bsg(active_view,
+	    (void *)s->mged_curr_dm->dm_dmp);
 
     ret = (*ctp->ged_func)(s->gedp, argc, (const char **)argv);
     GED_OUTPUT;
@@ -1328,9 +1332,13 @@ cmd_screengrab(ClientData clientData, Tcl_Interp *interpreter, int argc, const c
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_DEVICE_SETTING);
     refresh(s);
 
-    if (!s->gedp->ged_gvp)
-	s->gedp->ged_gvp = view_state->vs_gvp;
-    s->gedp->ged_gvp->dmp = (void *)s->mged_curr_dm->dm_dmp;
+    struct bsg_view *active_view = (struct bsg_view *)ged_view_active_ctx(s->gedp);
+    if (!active_view) {
+	ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
+	active_view = (struct bsg_view *)ged_view_active_ctx(s->gedp);
+    }
+    rt_view_display_manager_set_bsg(active_view,
+	    (void *)s->mged_curr_dm->dm_dmp);
 
     ret = (*ctp->ged_func)(s->gedp, argc, (const char **)argv);
     GED_OUTPUT;
@@ -1569,7 +1577,7 @@ cmd_cmd_win(ClientData clientData, Tcl_Interp *interpreter, int argc, const char
 	    set_curr_dm(s, curr_cmd_list->cl_tie);
 
 	    if (s->gedp != GED_NULL)
-		s->gedp->ged_gvp = view_state->vs_gvp;
+		ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 	}
 
 	bu_vls_trunc(&curr_cmd_list->cl_more_default, 0);
@@ -2043,7 +2051,7 @@ f_postscript(ClientData clientData, Tcl_Interp *interpreter, int argc, const cha
 	return TCL_OK;
 
     dml = s->mged_curr_dm;
-    s->gedp->ged_gvp = view_state->vs_gvp;
+    ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
     status = mged_attach(s, "postscript", argc, argv);
     if (status == TCL_ERROR)
 	return TCL_ERROR;
@@ -2064,7 +2072,7 @@ f_postscript(ClientData clientData, Tcl_Interp *interpreter, int argc, const cha
     view_state = vsp;  /* restore state info pointer */
     status = Tcl_Eval(interpreter, "release");
     set_curr_dm(s, dml);
-    s->gedp->ged_gvp = view_state->vs_gvp;
+    ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 
     return status;
 }
@@ -2108,7 +2116,7 @@ f_winset(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
 		curr_cmd_list = &head_cmd_list;
 
 	    if (s->gedp != GED_NULL)
-		s->gedp->ged_gvp = view_state->vs_gvp;
+		ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 
 	    return TCL_OK;
 	}
@@ -2466,7 +2474,7 @@ cmd_blast(ClientData clientData, Tcl_Interp *UNUSED(interpreter), int argc, cons
 	    curr_cmd_list = &head_cmd_list;
 	}
 
-	s->gedp->ged_gvp = view_state->vs_gvp;
+	ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 
 	non_empty = ged_draw_has_shapes(s->gedp);
 
@@ -2485,7 +2493,7 @@ cmd_blast(ClientData clientData, Tcl_Interp *UNUSED(interpreter), int argc, cons
 
     set_curr_dm(s, save_m_dmp);
     curr_cmd_list = save_cmd_list;
-    s->gedp->ged_gvp = view_state->vs_gvp;
+    ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 
     return TCL_OK;
 }
@@ -2504,7 +2512,7 @@ cmd_draw(ClientData clientData, Tcl_Interp *UNUSED(interpreter), int argc, const
     struct bsg_view *gvp = NULL;
 
     if (s->gedp)
-	gvp = s->gedp->ged_gvp;
+	gvp = (struct bsg_view *)ged_view_active_ctx(s->gedp);
 
     if (gvp && DMP) {
 	rt_view_dimensions_set_bsg(gvp, dm_get_width(DMP), dm_get_height(DMP));
@@ -3037,8 +3045,8 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
     }
 
     if (argc < 2) {
-	if (!s->gedp->ged_gvp)
-	    s->gedp->ged_gvp = view_state->vs_gvp;
+	if (!ged_view_active_ctx(s->gedp))
+	    ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 	int ret = run_ged_async(s, [&]() -> int { return ged_exec_view(s->gedp, argc, (const char **)argv); });
 	GED_OUTPUT;
 	return (ret == BRLCAD_OK || (ret & GED_HELP)) ? TCL_OK : TCL_ERROR;
@@ -3054,12 +3062,13 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
     int created_temp = 0;
     struct bsg_view *staging = NULL;
 
-    if (s->gedp->ged_gvp) {
-	if (s->gedp->ged_gvp == mged_view) {
+    struct bsg_view *active_view = (struct bsg_view *)ged_view_active_ctx(s->gedp);
+    if (active_view) {
+	if (active_view == mged_view) {
 	    shared_view = 1;
-	    staging = s->gedp->ged_gvp;
+	    staging = active_view;
 	} else {
-	    staging = s->gedp->ged_gvp;
+	    staging = active_view;
 	}
     } else {
 	/* No existing ged_gvp: create ephemeral staging view */
@@ -3108,7 +3117,7 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
 
     /* Point ged at staging (if we created a temp or if distinct) */
     if (created_temp || !shared_view)
-	s->gedp->ged_gvp = staging;
+	ged_view_active_ctx_set(s->gedp, staging);
 
     /* Compute pre-mutation hash */
     unsigned long long pre_hash = _view_mutation_hash(s, staging);
@@ -3125,7 +3134,7 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
 	    else {
 		rt_view_free_bsg(staging);
 		bu_free(staging, "free staging bsg_view");
-		s->gedp->ged_gvp = NULL;
+		ged_view_active_ctx_set(s->gedp, NULL);
 	    }
 	}
 	return TCL_OK;
@@ -3148,7 +3157,7 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
 	    } else {
 		rt_view_free_bsg(staging);
 		bu_free(staging, "free staging bsg_view");
-		s->gedp->ged_gvp = NULL;
+		ged_view_active_ctx_set(s->gedp, NULL);
 	    }
 	}
 	return TCL_ERROR;
@@ -3187,7 +3196,7 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
 	    /* Ephemeral staging freed; detach from ged */
 	    rt_view_free_bsg(staging);
 	    bu_free(staging, "free staging bsg_view");
-	    s->gedp->ged_gvp = NULL;
+	    ged_view_active_ctx_set(s->gedp, NULL);
 	}
     }
 

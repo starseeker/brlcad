@@ -815,8 +815,12 @@ ged_rot_args(struct ged *gedp, int argc, const char *argv[], char *coord, mat_t 
 	*coord = argv[1][1];
 	--argc;
 	++argv;
-    } else
-	*coord = rt_view_coord_from_bsg(gedp->ged_gvp);
+    } else {
+	struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
+	if (!view)
+	    return BRLCAD_ERROR;
+	*coord = rt_view_coord_from_bsg(view);
+    }
 
     if (argc != 2 && argc != 4) {
 	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", argv[0], usage);
@@ -933,8 +937,12 @@ ged_tra_args(struct ged *gedp, int argc, const char *argv[], char *coord, vect_t
 	*coord = argv[1][1];
 	--argc;
 	++argv;
-    } else
-	*coord = rt_view_coord_from_bsg(gedp->ged_gvp);
+    } else {
+	struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
+	if (!view)
+	    return BRLCAD_ERROR;
+	*coord = rt_view_coord_from_bsg(view);
+    }
 
     if (argc != 2 && argc != 4) {
 	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", argv[0], usage);
@@ -1036,7 +1044,8 @@ static size_t
 _ged_draw_intent_path_count(struct ged *gedp)
 {
     struct bu_vls paths = BU_VLS_INIT_ZERO;
-    size_t count = ged_draw_list_paths(gedp, gedp ? gedp->ged_gvp : NULL,
+    void *view = gedp ? ged_view_active_ctx(gedp) : NULL;
+    size_t count = ged_draw_list_paths(gedp, view,
 	    -1, 0, &paths);
     bu_vls_free(&paths);
     return count;
@@ -1106,7 +1115,7 @@ ged_who_argv(struct ged *gedp, char **start, const char **end)
     }
 
     struct bu_vls paths = BU_VLS_INIT_ZERO;
-    ged_draw_list_paths(gedp, gedp->ged_gvp, -1, 0, &paths);
+    ged_draw_list_paths(gedp, ged_view_active_ctx(gedp), -1, 0, &paths);
     int count = _ged_draw_path_list_fill_argv(gedp, &paths, start, end);
     bu_vls_free(&paths);
     return count;
@@ -1646,7 +1655,8 @@ ged_uplot_parse_stream(struct ged_uplot_stream *ctx, FILE *fp)
 static int
 ged_uplot_publish_feature(struct ged *gedp, const char *name, struct ged_uplot_stream *ctx)
 {
-    if (!gedp || !name || !ctx || !gedp->ged_gvp)
+    struct bsg_view *view = gedp ? (struct bsg_view *)ged_view_active_ctx(gedp) : NULL;
+    if (!view || !name || !ctx)
 	return BRLCAD_ERROR;
 
     size_t live_layers = 0;
@@ -1688,7 +1698,7 @@ ged_uplot_publish_feature(struct ged *gedp, const char *name, struct ged_uplot_s
 	idx++;
     }
 
-    int ret = ged_draw_view_line_layers_replace(gedp->ged_gvp, name, 0,
+    int ret = ged_draw_view_line_layers_replace(view, name, 0,
 	    layers, live_layers, NULL) ? BRLCAD_OK : BRLCAD_ERROR;
 
     for (size_t i = 0; i < live_layers; i++) {
@@ -1706,7 +1716,7 @@ ged_uplot_publish_feature(struct ged *gedp, const char *name, struct ged_uplot_s
 extern "C" int
 _ged_draw_uplot_to_feature(struct ged *gedp, FILE *fp, const char *name, double char_size, int mode)
 {
-    if (!gedp || !fp || !name || !gedp->ged_gvp)
+    if (!gedp || !fp || !name || !ged_view_active_ctx(gedp))
 	return BRLCAD_ERROR;
 
     struct ged_uplot_stream ctx;
@@ -1724,7 +1734,7 @@ extern "C" int
 _ged_draw_uplot_files_to_feature(struct ged *gedp, const char * const *files, size_t file_count,
 	const char *name, double char_size, int mode)
 {
-    if (!gedp || !files || !file_count || !name || !gedp->ged_gvp)
+    if (!gedp || !files || !file_count || !name || !ged_view_active_ctx(gedp))
 	return BRLCAD_ERROR;
 
     struct ged_uplot_stream ctx;
@@ -2230,12 +2240,15 @@ void
 _ged_rt_set_eye_model(struct ged *gedp,
 		      vect_t eye_model)
 {
-    if (rt_view_zclip_from_bsg(gedp->ged_gvp) ||
-	    rt_view_perspective_from_bsg(gedp->ged_gvp) > 0) {
+    struct bsg_view *view = gedp ? (struct bsg_view *)ged_view_active_ctx(gedp) : NULL;
+    if (!view)
+	return;
+    if (rt_view_zclip_from_bsg(view) ||
+	    rt_view_perspective_from_bsg(view) > 0) {
 	mat_t view2model;
 	vect_t temp;
 
-	rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
+	rt_view_view2model_from_bsg(view2model, view);
 	VSET(temp, 0.0, 0.0, 1.0);
 	MAT4X3PNT(eye_model, view2model, temp);
     } else {
@@ -2250,8 +2263,8 @@ _ged_rt_set_eye_model(struct ged *gedp,
 	vect_t diag2;
 	point_t ecenter;
 
-	rt_view_center_from_bsg(view_center, gedp->ged_gvp);
-	rt_view_rotation_from_bsg(view_rotation, gedp->ged_gvp);
+	rt_view_center_from_bsg(view_center, view);
+	rt_view_rotation_from_bsg(view_rotation, view);
 	MAT_DELTAS_GET_NEG(eye_model, view_center);
 
 	for (i = 0; i < 3; ++i) {
@@ -2456,7 +2469,7 @@ dl_bitwise_and_fullpath(struct ged *gedp, int flag_val)
     struct bitwise_and_record_ctx ctx;
     ctx.gedp = gedp;
     ctx.flag_val = flag_val;
-    ged_draw_foreach_visible_view_db_object_record(gedp->ged_gvp,
+    ged_draw_foreach_visible_view_db_object_record(ged_view_active_ctx(gedp),
 	    bitwise_and_export_record, &ctx);
 }
 
@@ -2502,7 +2515,7 @@ dl_write_animate(struct ged *gedp, FILE *fp)
     struct write_animate_record_ctx ctx;
     ctx.gedp = gedp;
     ctx.fp = fp;
-    ged_draw_foreach_visible_view_db_object_record(gedp->ged_gvp,
+    ged_draw_foreach_visible_view_db_object_record(ged_view_active_ctx(gedp),
 	    write_animate_export_record, &ctx);
 }
 
@@ -2515,6 +2528,9 @@ _ged_rt_write(struct ged *gedp,
 {
     struct rt_view_info view_info = RT_VIEW_INFO_INIT;
     quat_t quat;
+    struct bsg_view *view = gedp ? (struct bsg_view *)ged_view_active_ctx(gedp) : NULL;
+    if (!view)
+	return;
 
     /* Double-precision IEEE floating point only guarantees 15-17
      * digits of precision; single-precision only 6-9 significant
@@ -2525,8 +2541,8 @@ _ged_rt_write(struct ged *gedp,
      * from 9->14 "should" be safe as it's above our calculation
      * tolerance and above single-precision capability.
      */
-    rt_view_info_from_bsg(&view_info, gedp->ged_gvp);
-    rt_view_orientation_quat_from_bsg(quat, gedp->ged_gvp);
+    rt_view_info_from_bsg(&view_info, view);
+    rt_view_orientation_quat_from_bsg(quat, view);
     fprintf(fp, "viewsize %.14e;\n", view_info.size);
     fprintf(fp, "orientation %.14e %.14e %.14e %.14e;\n", V4ARGS(quat));
     fprintf(fp, "eye_pt %.14e %.14e %.14e;\n",
@@ -2544,7 +2560,7 @@ _ged_rt_write(struct ged *gedp,
     if (argc >= 0) {
 	if (!argc) {
 	    struct bu_vls paths = BU_VLS_INIT_ZERO;
-	    ged_draw_list_paths(gedp, gedp->ged_gvp, -1, 0, &paths);
+	    ged_draw_list_paths(gedp, view, -1, 0, &paths);
 	    const char *path = bu_vls_cstr(&paths);
 	    while (path && *path) {
 		const char *nl = strchr(path, '\n');

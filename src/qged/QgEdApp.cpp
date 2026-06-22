@@ -36,9 +36,6 @@
 #include "bu/file.h"
 #include "bu/log.h"
 #include "bu/vls.h"
-#include "dm/fbserv.h"
-#include "dm.h"
-#include "ged/bsg_ged_draw.h"
 #include "ged/db_index.h"
 #include "ged/selection_state.h"
 #include "qtcad/QgGeomImport.h"
@@ -97,8 +94,8 @@ qged_hud_label_overlay_handler(struct ged *gedp,
 
 static void
 qged_obol_draw_observer(struct ged *gedp,
-	const struct ged_draw_transaction *txn,
-	const struct ged_draw_transaction_result *result,
+	const qg_legacy_view_draw_transaction *txn,
+	const qg_legacy_view_draw_transaction_result *result,
 	void *client_data)
 {
     QgEdApp *a = static_cast<QgEdApp *>(client_data);
@@ -110,7 +107,7 @@ qged_obol_draw_observer(struct ged *gedp,
 	return;
     if (!qg_obol_display_accepts_draw_transaction_view(txn, display))
 	return;
-    if ((!txn || !txn->view) &&
+    if (!qg_legacy_view_draw_transaction_has_view(txn) &&
 	    !qg_obol_display_accepts_ged_active_view(gedp, display))
 	return;
 
@@ -361,31 +358,14 @@ QgEdApp::QgEdApp(int &argc, char *argv[], int swrast_mode, int quad_mode) :QAppl
 	    &qged_line_layer_overlay_handler, (void *)this);
     ged_diagnostic_hud_label_handler_set(gedp,
 	    &qged_hud_label_overlay_handler, (void *)this);
-    m_obol_draw_observer_token = ged_draw_observer_add(gedp,
+    m_obol_draw_observer_token = qg_legacy_view_draw_observer_add(gedp,
 	    &qged_obol_draw_observer, (void *)this);
-
-    // Set up the connections needed for embedded raytracing
-    gedp->ged_fbs->fbs_is_listening = &qdm_is_listening;
-    gedp->ged_fbs->fbs_listen_on_port = &qdm_listen_on_port;
-    gedp->ged_fbs->fbs_open_server_handler = &qdm_open_server_handler;
-    gedp->ged_fbs->fbs_close_server_handler = &qdm_close_server_handler;
 
     // Unfortunately, there are technical differences involved with
     // the embedded fb mechanisms depending on whether we are using
     // the system native OpenGL or our fallback software rasterizer
     int type = w->CurrentDisplay()->view_type();
-#ifdef BRLCAD_OPENGL
-    if (type == QgView_GL) {
-	gedp->ged_fbs->fbs_open_client_handler     = &qdm_open_client_handler;
-	gedp->ged_fbs->fbs_open_ipc_client_handler = &qdm_open_ipc_client_handler;
-    }
-#endif
-    if (type == QgView_SW) {
-	gedp->ged_fbs->fbs_open_client_handler     = &qdm_open_sw_client_handler;
-	gedp->ged_fbs->fbs_open_ipc_client_handler = &qdm_open_ipc_sw_client_handler;
-    }
-    gedp->ged_fbs->fbs_close_client_handler     = &qdm_close_client_handler;
-    gedp->ged_fbs->fbs_close_ipc_client_handler = &qdm_close_ipc_client_handler;
+    qdm_configure_ged_fbserv_handlers(gedp, type);
 
     // Read the saved window size, if any
     QSettings settings("BRL-CAD", "QGED");
@@ -471,7 +451,7 @@ QgEdApp::QgEdApp(int &argc, char *argv[], int swrast_mode, int quad_mode) :QAppl
 	w->console->printString("\n");
 	have_msg = 1;
     }
-    std::string dm_msgs(dm_init_msgs());
+    std::string dm_msgs(qdm_init_messages());
     if (dm_msgs.size()) {
 	if (dm_msgs.find("qtgl") != std::string::npos || dm_msgs.find("swrast") != std::string::npos) {
 	    w->console->printString(dm_msgs.c_str());
@@ -489,7 +469,8 @@ QgEdApp::QgEdApp(int &argc, char *argv[], int swrast_mode, int quad_mode) :QAppl
 QgEdApp::~QgEdApp() {
     if (mdl && mdl->ged()) {
 	if (m_obol_draw_observer_token) {
-	    ged_draw_observer_remove(mdl->ged(), m_obol_draw_observer_token);
+	    qg_legacy_view_draw_observer_remove(mdl->ged(),
+		    m_obol_draw_observer_token);
 	    m_obol_draw_observer_token = 0;
 	}
 	ged_diagnostic_line_layer_handler_set(mdl->ged(), NULL, NULL);
@@ -518,9 +499,7 @@ QgEdApp::do_view_changed(QgViewUpdateFlags flags)
     QTCAD_SLOT("QgEdApp::do_view_changed", 1);
 
     if (flags & QG_VIEW_DRAWN) {
-	struct ged_draw_transaction txn =
-	    ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
-	ged_draw_apply_transaction(mdl->ged(), &txn, NULL);
+	qg_legacy_view_draw_redraw(mdl->ged());
     }
 
     if ((flags & QG_VIEW_SELECT) || (flags & QG_VIEW_DRAWN)) {

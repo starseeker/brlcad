@@ -31,7 +31,6 @@
 #include "qtcad/QgSession.h"
 #include "qtcad/QgViewCtrl.h"
 #include "qtcad/QgSignalFlags.h"
-#include "rt/view_legacy_bsg.h"
 
 static qg_legacy_view *
 qgviewctrl_active_view(const QgViewCtrl *ctrl)
@@ -94,28 +93,28 @@ void
 QgViewCtrl::sca_mode()
 {
 	QTCAD_SLOT("QgViewCtrl::sca_mode", 1);
-	emit lmouse_mode(RT_VIEW_ADJUST_SCALE);
+	emit lmouse_mode(QG_LEGACY_VIEW_ADJUST_SCALE);
 }
 
 void
 QgViewCtrl::rot_mode()
 {
 	QTCAD_SLOT("QgViewCtrl::rot_mode", 1);
-	emit lmouse_mode(RT_VIEW_ADJUST_ROT);
+	emit lmouse_mode(QG_LEGACY_VIEW_ADJUST_ROT);
 }
 
 void
 QgViewCtrl::tra_mode()
 {
 	QTCAD_SLOT("QgViewCtrl::tra_mode", 1);
-	emit lmouse_mode(RT_VIEW_ADJUST_TRANS);
+	emit lmouse_mode(QG_LEGACY_VIEW_ADJUST_TRANS);
 }
 
 void
 QgViewCtrl::center_mode()
 {
 	QTCAD_SLOT("QgViewCtrl::center_mode", 1);
-	emit lmouse_mode(RT_VIEW_ADJUST_CENTER);
+	emit lmouse_mode(QG_LEGACY_VIEW_ADJUST_CENTER);
 }
 
 

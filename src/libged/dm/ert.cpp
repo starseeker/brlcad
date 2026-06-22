@@ -61,12 +61,13 @@ ged_ert_core(struct ged *gedp, int argc, const char *argv[])
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    if (!gedp->ged_gvp) {
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+    if (!v) {
 	bu_vls_printf(gedp->ged_result_str, "no current view set\n");
 	return BRLCAD_ERROR;
     }
 
-    struct dm *dmp = (struct dm *)gedp->ged_gvp->dmp;
+    struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(v);
     if (!dmp) {
 	bu_vls_printf(gedp->ged_result_str, "no current display manager set\n");
 	return BRLCAD_ERROR;
@@ -96,9 +97,9 @@ ged_ert_core(struct ged *gedp, int argc, const char *argv[])
     //     gv_fb_mode = 0) — see src/libged/fbclear/fbclear.c.
     //   * Programmatic callers that need to restore the prior fb_mode
     //     should snapshot it before invoking ert and write it back after.
-    int prior_fb_mode = rt_view_framebuffer_mode_from_bsg(gedp->ged_gvp);
+    int prior_fb_mode = rt_view_framebuffer_mode_from_bsg(v);
     if (!prior_fb_mode)
-	rt_view_framebuffer_mode_set_bsg(gedp->ged_gvp, 2);
+	rt_view_framebuffer_mode_set_bsg(v, 2);
 
     // Have a framebuffer to target and objects to raytrace.  Next we need a
     // framebuffer server.
@@ -150,7 +151,7 @@ ged_ert_core(struct ged *gedp, int argc, const char *argv[])
     double aspect = (double)width/(double)height;
     bu_vls_sprintf(&wstr, "%.14e", aspect);
     args.push_back(std::string(bu_vls_cstr(&wstr)));
-    fastf_t perspective = rt_view_perspective_from_bsg(gedp->ged_gvp);
+    fastf_t perspective = rt_view_perspective_from_bsg(v);
     if (perspective > 0) {
 	args.push_back(std::string("-p"));
 	bu_vls_sprintf(&wstr, "%.14e", perspective);

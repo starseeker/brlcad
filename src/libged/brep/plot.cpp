@@ -1041,8 +1041,9 @@ _brep_plot_publish(struct ged *gedp, struct bg_line_layer_builder *plot, const c
     struct bu_vls nroot = BU_VLS_INIT_ZERO;
     bu_vls_sprintf(&nroot, "brep::%s", sname);
     int handled = ged_diagnostic_line_layer_publish(gedp, bu_vls_cstr(&nroot), plot);
-    if (!handled && gedp->ged_gvp) {
-	(void)ged_draw_view_line_layer_builder_replace(gedp->ged_gvp,
+    struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
+    if (!handled && view) {
+	(void)ged_draw_view_line_layer_builder_replace(view,
 		bu_vls_cstr(&nroot), 0, plot);
     }
     bu_vls_free(&nroot);
@@ -1058,7 +1059,11 @@ brep_plot_publish_indexed_face_set(struct ged *gedp,
 				   const int *indices,
 				   size_t index_count)
 {
-    if (!gedp || !gedp->ged_gvp || !sname || !points || !point_count || !indices || !index_count)
+    if (!gedp || !sname || !points || !point_count || !indices || !index_count)
+	return BRLCAD_ERROR;
+
+    struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
+    if (!view)
 	return BRLCAD_ERROR;
 
     struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
@@ -1069,7 +1074,7 @@ brep_plot_publish_indexed_face_set(struct ged *gedp,
 
     struct bu_vls nroot = BU_VLS_INIT_ZERO;
     bu_vls_sprintf(&nroot, "brep::%s", sname);
-    int ret = ged_draw_view_indexed_face_set_replace(gedp->ged_gvp,
+    int ret = ged_draw_view_indexed_face_set_replace(view,
 	    bu_vls_cstr(&nroot), 0,
 	    points, point_count,
 	    normals, normal_count,

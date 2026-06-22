@@ -41,7 +41,10 @@
 void
 go_draw(struct bsg_view *gdvp)
 {
-    struct dm *dmp = (struct dm *)gdvp->dmp;
+    struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(gdvp);
+    if (!dmp)
+	return;
+
     mat_t model2view;
     mat_t pmat;
     fastf_t perspective = rt_view_perspective_from_bsg(gdvp);
@@ -132,7 +135,7 @@ to_edit_redraw(struct ged *gedp,
 
     /* Iterate view-scoped DB object export records through the GED draw
      * boundary instead of walking local TclCAD draw state. */
-    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     size_t vi;
     for (vi = 0; vi < BU_PTBL_LEN(views); vi++) {
 	struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, vi);

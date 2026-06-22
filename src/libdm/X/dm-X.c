@@ -69,7 +69,7 @@
 #include "bu/malloc.h"
 #include "bu/str.h"
 #include "bn.h"
-#include "bsg/vlist.h"
+#include "bg/vlist.h"
 #include "dm.h"
 #include "rt/view.h"
 #include "../null/dm-Null.h"
@@ -885,10 +885,10 @@ X_loadMatrix(struct dm *dmp, fastf_t *mat, int which_eye)
 
 
 static int
-X_drawVList(struct dm *dmp, bsg_vlist *vp)
+X_drawVList(struct dm *dmp, bg_vlist *vp)
 {
     static vect_t spnt, lpnt, pnt;
-    bsg_vlist *tvp;
+    bg_vlist *tvp;
     XSegment segbuf[1024];	/* XDrawSegments list */
     XSegment *segp;		/* current segment */
     int nseg;		        /* number of segments */
@@ -914,7 +914,7 @@ X_drawVList(struct dm *dmp, bsg_vlist *vp)
 
     nseg = 0;
     segp = segbuf;
-    for (BU_LIST_FOR(tvp, bsg_vlist, &vp->l)) {
+    for (BU_LIST_FOR(tvp, bg_vlist, &vp->l)) {
 	int i;
 	int nused = tvp->nused;
 	int *cmd = tvp->cmd;
@@ -928,24 +928,24 @@ X_drawVList(struct dm *dmp, bsg_vlist *vp)
 	/* Integerize and let the X server do the clipping */
 	for (i = 0; i < nused; i++, cmd++, pt++) {
 	    switch (*cmd) {
-		case BSG_VLIST_POLY_START:
-		case BSG_VLIST_POLY_VERTNORM:
-		case BSG_VLIST_TRI_START:
-		case BSG_VLIST_TRI_VERTNORM:
+		case BG_VLIST_POLY_START:
+		case BG_VLIST_POLY_VERTNORM:
+		case BG_VLIST_TRI_START:
+		case BG_VLIST_TRI_VERTNORM:
 		    continue;
-		case BSG_VLIST_MODEL_MAT:
+		case BG_VLIST_MODEL_MAT:
 		    privars->xmat = &(privars->mod_mat[0]);
 		    continue;
-		case BSG_VLIST_DISPLAY_MAT:
+		case BG_VLIST_DISPLAY_MAT:
 		    MAT4X3PNT(tlate, privars->mod_mat, *pt);
 		    privars->disp_mat[3] = tlate[0];
 		    privars->disp_mat[7] = tlate[1];
 		    privars->disp_mat[11] = tlate[2];
 		    privars->xmat = &(privars->disp_mat[0]);
 		    continue;
-		case BSG_VLIST_POLY_MOVE:
-		case BSG_VLIST_LINE_MOVE:
-		case BSG_VLIST_TRI_MOVE:
+		case BG_VLIST_POLY_MOVE:
+		case BG_VLIST_LINE_MOVE:
+		case BG_VLIST_TRI_MOVE:
 		    /* Move, not draw */
 		    if (dmp->i->dm_debugLevel > 2) {
 			bu_log("before transformation:\n");
@@ -974,11 +974,11 @@ X_drawVList(struct dm *dmp, bsg_vlist *vp)
 		    lpnt[1] *= 2047 * dmp->i->dm_aspect;
 		    lpnt[2] *= 2047;
 		    continue;
-		case BSG_VLIST_POLY_DRAW:
-		case BSG_VLIST_POLY_END:
-		case BSG_VLIST_LINE_DRAW:
-		case BSG_VLIST_TRI_DRAW:
-		case BSG_VLIST_TRI_END:
+		case BG_VLIST_POLY_DRAW:
+		case BG_VLIST_POLY_END:
+		case BG_VLIST_LINE_DRAW:
+		case BG_VLIST_TRI_DRAW:
+		case BG_VLIST_TRI_END:
 		    /* draw */
 		    if (dmp->i->dm_debugLevel > 2) {
 			bu_log("before transformation:\n");
@@ -1115,7 +1115,7 @@ X_drawVList(struct dm *dmp, bsg_vlist *vp)
 			segp = segbuf;
 		    }
 		    break;
-		case BSG_VLIST_POINT_DRAW:
+		case BG_VLIST_POINT_DRAW:
 		    if (dmp->i->dm_debugLevel > 2) {
 			bu_log("before transformation:\n");
 			bu_log("pt - %lf %lf %lf\n", V3ARGS(*pt));
@@ -1165,7 +1165,7 @@ X_drawVList(struct dm *dmp, bsg_vlist *vp)
 			XFillArc(pubvars->dpy, privars->pix, privars->gc, upperLeft[X], upperLeft[Y], pointSize, pointSize, 0, 360*64);
 		    }
 		    break;
-		case BSG_VLIST_POINT_SIZE:
+		case BG_VLIST_POINT_SIZE:
 		    pointSize = (*pt)[0];
 		    if (pointSize < DM_X_DEFAULT_POINT_SIZE) {
 			pointSize = DM_X_DEFAULT_POINT_SIZE;
@@ -1197,12 +1197,12 @@ X_drawVList(struct dm *dmp, bsg_vlist *vp)
 
 
 static int
-X_draw(struct dm *dmp, bsg_vlist *(*callback_function)(void *), void **data)
+X_draw(struct dm *dmp, bg_vlist *(*callback_function)(void *), void **data)
 {
-    bsg_vlist *vp;
+    bg_vlist *vp;
     if (!callback_function) {
 	if (data) {
-	    vp = (bsg_vlist *)data;
+	    vp = (bg_vlist *)data;
 	    X_drawVList(dmp, vp);
 	}
     } else {

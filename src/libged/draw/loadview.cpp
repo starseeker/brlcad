@@ -46,8 +46,11 @@ _ged_cm_vsize(struct ged *gedp, vect_t *UNUSED(v), mat_t *UNUSED(m), const int a
 {
     if (argc < 2)
 	return -1;
+    struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
+    if (!view)
+	return -1;
     /* for some reason, scale is supposed to be half of size... */
-    rt_view_size_set_bsg(gedp->ged_gvp, atof(argv[1]));
+    rt_view_size_set_bsg(view, atof(argv[1]));
     return 0;
 }
 
@@ -162,13 +165,16 @@ _ged_cm_end(struct ged *gedp, vect_t *v, mat_t *m, const int argc, const char **
 
     if (argc < 0 || argv == NULL)
 	return 1;
+    struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
+    if (!view)
+	return -1;
 
     /* now we have to finish view calculations that are deferred until
      * the end command runs.
      */
-    rt_view_rotation_set_bsg(gedp->ged_gvp, (*m));
-    rt_view_center_vec_set_bsg(gedp->ged_gvp, (*v));
-    rt_view_update_bsg(gedp->ged_gvp);
+    rt_view_rotation_set_bsg(view, (*m));
+    rt_view_center_vec_set_bsg(view, (*v));
+    rt_view_update_bsg(view);
 
     struct bu_vls eye = BU_VLS_INIT_ZERO;
     bu_vls_printf(&eye, "%lf %lf %lf", V3ARGS((*v)));
@@ -308,6 +314,9 @@ ged_loadview_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
+    struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
+    if (!view)
+	return BRLCAD_ERROR;
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -334,7 +343,7 @@ ged_loadview_core(struct ged *gedp, int argc, const char *argv[])
     /* turn perspective mode off, by default.  A "-p" option in the
      * view script will turn it back on.
      */
-    rt_view_perspective_set_bsg(gedp->ged_gvp, 0.0);
+    rt_view_perspective_set_bsg(view, 0.0);
 
     /* iterate over the contents of the raytrace script */
     /* TODO: change to bu_fgets or bu_vls_fgets */

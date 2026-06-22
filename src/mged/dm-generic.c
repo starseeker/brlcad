@@ -70,8 +70,9 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 
 	/* redraw after scaling */
 	struct rt_view_lod_policy lod_policy = RT_VIEW_LOD_POLICY_INIT;
-	if (s->gedp && s->gedp->ged_gvp &&
-	    rt_view_lod_policy_from_bsg(&lod_policy, s->gedp->ged_gvp) &&
+	struct bsg_view *active_view = s->gedp ? (struct bsg_view *)ged_view_active_ctx(s->gedp) : NULL;
+	if (active_view &&
+	    rt_view_lod_policy_from_bsg(&lod_policy, active_view) &&
 	    lod_policy.csg_enabled &&
 	    lod_policy.zoom_refresh &&
 	    (am_mode == AMM_SCALE ||
@@ -686,10 +687,14 @@ dm_commands(int argc, const char *argv[], void *data)
         BU_STR_EQUAL(argv[0], "list") || BU_STR_EQUAL(argv[0], "type") ||
         BU_STR_EQUAL(argv[0], "types") ||
         BU_STR_EQUAL(argv[0], "width")) {
-        if (!s->gedp->ged_gvp)
-            s->gedp->ged_gvp = view_state->vs_gvp;
-        if (s->gedp->ged_gvp)
-            s->gedp->ged_gvp->dmp = (void *)s->mged_curr_dm->dm_dmp;
+	struct bsg_view *active_view = (struct bsg_view *)ged_view_active_ctx(s->gedp);
+        if (!active_view) {
+            ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
+	    active_view = (struct bsg_view *)ged_view_active_ctx(s->gedp);
+	}
+        if (active_view)
+            rt_view_display_manager_set_bsg(active_view,
+		    (void *)s->mged_curr_dm->dm_dmp);
 
         const char **av = (const char **)bu_calloc((size_t)argc + 2, sizeof(char *), "dm forward argv");
         av[0] = "dm";

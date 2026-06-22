@@ -30,7 +30,6 @@
 #include <vector>
 
 #include <bu.h>
-#include <bsg/util.h>
 #include <ged.h>
 #include <rt/view_legacy_bsg.h>
 #include "ged/bsg_ged_draw.h"
@@ -210,7 +209,7 @@ main(int argc, const char **argv)
 
     ASSERT(set_view_independent(gedp, "V0", 1) == BRLCAD_OK);
     ASSERT(rt_view_is_independent_bsg(views[0]));
-    ASSERT(!bsg_scene_ref_is_null(rt_view_independent_scope_ref_bsg(views[0], 0)));
+    ASSERT(!rt_view_independent_scope_is_null_bsg(views[0], 0));
     ASSERT(drawn_paths(gedp, views[0]).size() == 1);
     ASSERT(has_path(drawn_paths(gedp, views[0]), "all.g"));
 
@@ -246,7 +245,7 @@ main(int argc, const char **argv)
 
     ASSERT(set_view_independent(gedp, "V0", 0) == BRLCAD_OK);
     ASSERT(!rt_view_is_independent_bsg(views[0]));
-    ASSERT(bsg_scene_ref_is_null(rt_view_independent_scope_ref_bsg(views[0], 0)));
+    ASSERT(rt_view_independent_scope_is_null_bsg(views[0], 0));
     ASSERT(drawn_paths(gedp, views[0]).size() == 2);
     ASSERT(has_path(drawn_paths(gedp, views[0]), "all.g"));
     ASSERT(has_path(drawn_paths(gedp, views[0]), "box.r"));

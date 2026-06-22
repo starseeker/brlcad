@@ -85,12 +85,12 @@ void set_curr_dm(struct mged_state *s, struct mged_dm *nc)
 	return;
     }
 
-	s->mged_curr_dm = nc;
-    if (nc != MGED_DM_NULL && nc->dm_view_state) {
-	s->gedp->ged_gvp = nc->dm_view_state->vs_gvp;
-    } else {
-	if (s->gedp) {
-	    s->gedp->ged_gvp = NULL;
+    s->mged_curr_dm = nc;
+    if (s->gedp) {
+	if (nc != MGED_DM_NULL && nc->dm_view_state) {
+	    ged_view_active_ctx_set(s->gedp, nc->dm_view_state->vs_gvp);
+	} else {
+	    ged_view_active_ctx_set(s->gedp, NULL);
 	}
     }
 }
@@ -521,7 +521,7 @@ mged_attach(struct mged_state *s, const char *wp_name, int argc, const char *arg
     (void)dm_set_win_bounds(DMP, windowbounds);
     mged_fb_open(s);
 
-    s->gedp->ged_gvp = s->mged_curr_dm->dm_view_state->vs_gvp;
+    ged_view_active_ctx_set(s->gedp, s->mged_curr_dm->dm_view_state->vs_gvp);
 
     return TCL_OK;
 
@@ -700,17 +700,15 @@ dm_var_init(struct mged_state *s, struct mged_dm *target_dm)
     BU_ALLOC(view_state, struct _view_state);
     *view_state = *target_dm->dm_view_state;			/* struct copy */
     BU_ALLOC(view_state->vs_gvp, struct bsg_view);
+    struct bsg_view_set *view_set = (struct bsg_view_set *)ged_view_set_ctx(s->gedp);
     rt_view_init_copy_bsg(view_state->vs_gvp,
 	    target_dm->dm_view_state->vs_gvp,
-	    &s->gedp->ged_views);
-    BU_GET(view_state->vs_gvp->callbacks, struct bu_ptbl);
-    bu_ptbl_init(view_state->vs_gvp->callbacks, 8, "bv callbacks");
+	    view_set);
 
-    view_state->vs_gvp->vset = &s->gedp->ged_views;
     /* Independent view state is managed through BSG view-scope records. */
 
-    view_state->vs_gvp->gv_callback = mged_view_callback;
-    view_state->vs_gvp->gv_clientData = (void *)view_state;
+    rt_view_update_callback_set_bsg(view_state->vs_gvp,
+	    mged_view_callback, (void *)view_state);
     struct rt_view_lod_policy lod_policy = RT_VIEW_LOD_POLICY_INIT;
     if (rt_view_lod_policy_from_bsg(&lod_policy, view_state->vs_gvp)) {
 	lod_policy.csg_enabled = 0;

@@ -282,7 +282,7 @@ ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
      * view.  In order to set up the correct default views, we need to know
      * if a specific view has in fact been specified.  We do a preliminary
      * option check to figure this out */
-    struct bsg_view *cv = gedp->ged_gvp;
+    struct bsg_view *cv = (struct bsg_view *)ged_view_active_ctx(gedp);
     struct bu_vls cvls = BU_VLS_INIT_ZERO;
     struct bu_opt_desc vd[2];
     BU_OPT(vd[0],  "V", "view",    "name",      &bu_opt_vls, &cvls,   "specify view to draw on");
@@ -295,7 +295,7 @@ ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     if (bu_vls_strlen(&cvls)) {
-	cv = rt_view_set_find_view_bsg(&gedp->ged_views, bu_vls_cstr(&cvls));
+	cv = (struct bsg_view *)ged_view_find_ctx(gedp, bu_vls_cstr(&cvls));
 	if (!cv) {
 	    bu_vls_printf(gedp->ged_result_str, "Specified view %s not found\n", bu_vls_cstr(&cvls));
 	    bu_vls_free(&cvls);
@@ -312,7 +312,7 @@ ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
     // If we don't have a specified view, and the default view isn't a shared view, see if
     // we can find a shared view in the view set.
     if (!bu_vls_strlen(&cvls) && (!cv || rt_view_is_independent_bsg(cv))) {
-	struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
+	struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
 	for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	    struct bsg_view *bv = (struct bsg_view *)BU_PTBL_GET(views, i);
 	    if (!rt_view_is_independent_bsg(bv)) {
@@ -460,7 +460,7 @@ ged_redraw2_core(struct ged *gedp, int argc, const char *argv[])
     int opt_ret = bu_opt_parse(NULL, argc, argv, vd);
     argc = opt_ret;
     if (bu_vls_strlen(&cvls)) {
-	cv = rt_view_set_find_view_bsg(&gedp->ged_views, bu_vls_cstr(&cvls));
+	cv = (struct bsg_view *)ged_view_find_ctx(gedp, bu_vls_cstr(&cvls));
 	if (!cv) {
 	    bu_vls_printf(gedp->ged_result_str, "Specified view %s not found\n", bu_vls_cstr(&cvls));
 	    bu_vls_free(&cvls);
@@ -470,7 +470,7 @@ ged_redraw2_core(struct ged *gedp, int argc, const char *argv[])
     bu_vls_free(&cvls);
 
     if (!cv) {
-	struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
+	struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
 	if (!BU_PTBL_LEN(views)) {
 	    bu_vls_printf(gedp->ged_result_str, "No views defined\n");
 	    return BRLCAD_OK;

@@ -49,7 +49,6 @@
 #include "bu/list.h"
 #include "bu/ptbl.h"
 #include "bu/vls.h"
-#include "bsg/draw_intent.h"
 #include "ged/defines.h"
 
 /* Forward declaration to keep the include surface narrow.  Callers that
@@ -59,7 +58,6 @@ struct db_full_path;
 struct db_i;
 struct bn_tol;
 struct bg_tess_tol;
-struct bsg_view;
 
 typedef enum ged_draw_stale_reason {
     GED_DRAW_STALE_NONE = 0,
@@ -98,9 +96,9 @@ struct ged_draw_transaction {
     const char **paths;               /**< optional borrowed draw path array */
     int path_count;                   /**< entries in @p paths */
     const struct db_full_path *dfp;   /**< optional structured path target */
-    struct bsg_view *view;            /**< optional view scope for view-aware transactions */
+    void *view;                       /**< optional borrowed view context for view-aware transactions */
     int mode;                         /**< optional draw-mode filter; <0 means all modes */
-    const struct bsg_appearance_settings *appearance; /**< optional borrowed draw settings */
+    const void *appearance;           /**< optional borrowed backend draw-appearance settings */
     int autoview;                     /**< draw transaction may update view bounds */
     double value;                     /**< visibility/highlight/transparency/mode */
     ged_draw_stale_reason stale_reason;
@@ -170,7 +168,7 @@ struct ged_draw_shape_record {
     uint64_t realized_inputs_revision;
     uint64_t drawn_revision;
     fastf_t transparency;
-    bsg_draw_mode draw_mode;
+    int draw_mode;
     int line_width;
     point_t center;
 };
@@ -178,8 +176,8 @@ struct ged_draw_shape_record {
 struct ged_draw_group_record {
     ged_draw_group_ref ref;
     const char *path;                    /**< borrowed */
-    struct bsg_view *view;               /**< borrowed; NULL for view-independent groups */
-    bsg_draw_mode draw_mode;
+    void *view;                          /**< borrowed view context; NULL for view-independent groups */
+    int draw_mode;
     fastf_t transparency;
     int visible;
     int is_overlay;
@@ -306,7 +304,7 @@ ged_draw_apply_erase_path_prefix(struct ged *gedp,
  * Return the current default draw mode used by draw commands that do not
  * specify an explicit render style override.
  */
-GED_EXPORT extern bsg_draw_mode
+GED_EXPORT extern int
 ged_draw_default_mode(const struct ged *gedp);
 
 /**
@@ -462,30 +460,30 @@ ged_draw_foreach_shape_record(struct ged *gedp,
 
 GED_EXPORT extern void
 ged_draw_foreach_view_record_query(
-	struct bsg_view *v,
+	void *view_ctx,
 	const struct ged_draw_view_record_query *query,
 	ged_draw_view_db_object_record_cb cb,
 	void *userdata);
 
 GED_EXPORT extern void
-ged_draw_foreach_view_db_object_record(struct bsg_view *v,
+ged_draw_foreach_view_db_object_record(void *view_ctx,
 				       ged_draw_view_db_object_record_cb cb,
 				       void *userdata);
 
 GED_EXPORT extern void
-ged_draw_foreach_visible_view_db_object_record(struct bsg_view *v,
+ged_draw_foreach_visible_view_db_object_record(void *view_ctx,
 					      ged_draw_view_db_object_record_cb cb,
 					      void *userdata);
 
 GED_EXPORT extern void
 ged_draw_foreach_visible_view_db_object_record_mode(
-	struct bsg_view *v,
+	void *view_ctx,
 	int draw_mode,
 	ged_draw_view_db_object_record_cb cb,
 	void *userdata);
 
 GED_EXPORT extern void
-ged_draw_foreach_visible_view_record(struct bsg_view *v,
+ged_draw_foreach_visible_view_record(void *view_ctx,
 				     ged_draw_view_db_object_record_cb cb,
 				     void *userdata);
 
@@ -567,7 +565,7 @@ ged_draw_shape_ref_publish_primitive_wireframe(struct ged *gedp,
 					       struct rt_db_internal *ip,
 					       const struct bg_tess_tol *ttol,
 					       const struct bn_tol *tol,
-					       struct bsg_view *v,
+					       void *view_ctx,
 					       int adaptive);
 
 GED_EXPORT extern ged_draw_shape_ref
@@ -578,7 +576,7 @@ ged_draw_highlight_shape_ref_by_name(struct ged *gedp, const char *name);
 
 GED_EXPORT extern int
 ged_draw_view_selection_set_highlighted_shape_ref(struct ged *gedp,
-						  struct bsg_view *v,
+						  void *view_ctx,
 						  ged_draw_shape_ref ref);
 
 /**
@@ -602,7 +600,7 @@ ged_draw_has_shapes(struct ged *gedp);
  */
 GED_EXPORT extern int
 ged_draw_path_state(struct ged *gedp,
-		    struct bsg_view *v,
+		    void *view_ctx,
 		    const char *path,
 		    int mode);
 
@@ -618,7 +616,7 @@ ged_draw_path_state(struct ged *gedp,
  */
 GED_EXPORT extern int
 ged_draw_group_record_in_view(const struct ged_draw_group_record *rec,
-			      struct bsg_view *v);
+			      void *view_ctx);
 
 /**
  * Append retained draw paths to @p result and return the number appended.
@@ -631,7 +629,7 @@ ged_draw_group_record_in_view(const struct ged_draw_group_record *rec,
  */
 GED_EXPORT extern size_t
 ged_draw_list_paths(struct ged *gedp,
-		    struct bsg_view *v,
+		    void *view_ctx,
 		    int mode,
 		    int expanded,
 		    struct bu_vls *result);
@@ -643,7 +641,7 @@ ged_draw_list_paths(struct ged *gedp,
  */
 GED_EXPORT extern int
 ged_draw_has_paths(struct ged *gedp,
-		   struct bsg_view *v,
+		   void *view_ctx,
 		   int mode);
 
 /**
@@ -669,7 +667,7 @@ ged_draw_clear(struct ged *gedp);
  * Returns the number of top-level retained draw groups removed.
  */
 GED_EXPORT extern int
-ged_draw_clear_view(struct ged *gedp, struct bsg_view *v);
+ged_draw_clear_view(struct ged *gedp, void *view_ctx);
 
 /**
  * Return 1 if any scene groups exist (i.e., something is drawn), 0 if the

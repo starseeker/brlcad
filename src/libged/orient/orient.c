@@ -80,8 +80,9 @@ ged_orient_core(struct ged *gedp, int argc, const char *argv[])
 
     mat_t rotation;
     quat_quat2mat(rotation, quat);
-    rt_view_rotation_set_bsg(gedp->ged_gvp, rotation);
-    rt_view_update_bsg(gedp->ged_gvp);
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+    rt_view_rotation_set_bsg(v, rotation);
+    rt_view_update_bsg(v);
 
     return BRLCAD_OK;
 }

@@ -69,7 +69,7 @@ _area_has_unsupported_subtraction(struct mged_state *s)
 	return 0;
 
     int area_err = 0;
-    ged_draw_foreach_visible_view_db_object_record(s->gedp->ged_gvp,
+    ged_draw_foreach_visible_view_db_object_record(ged_view_active_ctx(s->gedp),
 	    _area_check_record, &area_err);
     return area_err;
 }
@@ -245,7 +245,7 @@ f_area(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	wd.fp_w = fp_w;
 	wd.rotation = (const mat_t *)&view_rotation;
 	wd.dbip = s->dbip;
-	ged_draw_foreach_visible_view_db_object_record(s->gedp->ged_gvp,
+	ged_draw_foreach_visible_view_db_object_record(ged_view_active_ctx(s->gedp),
 		_area_write_record, &wd);
     }
 

@@ -40,13 +40,15 @@ ged_view2model_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     /* get the view2model matrix */
     if (argc == 1) {
 	mat_t view2model;
-	rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
+	rt_view_view2model_from_bsg(view2model, v);
 	bn_encode_mat(gedp->ged_result_str, view2model, 1);
 	return BRLCAD_OK;
     }

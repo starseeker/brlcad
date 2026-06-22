@@ -111,17 +111,22 @@ ged_view_snap(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_OK;
     }
 
+    GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
+    GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
+
+    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+
     /* Handle tolerance */
     if (stol < DBL_MAX || stol < -DBL_MAX + 1) {
 	if (stol > -DBL_MAX) {
-	    rt_view_snap_tolerance_factor_set_bsg(gedp->ged_gvp, stol);
+	    rt_view_snap_tolerance_factor_set_bsg(v, stol);
 	    if (!opt_ret) {
-		bu_vls_printf(gedp->ged_result_str, "%g", rt_view_snap_tolerance_factor_from_bsg(gedp->ged_gvp));
+		bu_vls_printf(gedp->ged_result_str, "%g", rt_view_snap_tolerance_factor_from_bsg(v));
 		return BRLCAD_OK;
 	    }
 	} else {
 	    // Report current tolerance
-	    bu_vls_printf(gedp->ged_result_str, "%g", rt_view_snap_tolerance_factor_from_bsg(gedp->ged_gvp));
+	    bu_vls_printf(gedp->ged_result_str, "%g", rt_view_snap_tolerance_factor_from_bsg(v));
 	    return BRLCAD_OK;
 	}
     }
@@ -135,8 +140,8 @@ ged_view_snap(struct ged *gedp, int argc, const char *argv[])
 
     mat_t model2view;
     mat_t view2model;
-    rt_view_model2view_from_bsg(model2view, gedp->ged_gvp);
-    rt_view_view2model_from_bsg(view2model, gedp->ged_gvp);
+    rt_view_model2view_from_bsg(model2view, v);
+    rt_view_view2model_from_bsg(view2model, v);
 
     /* We may get a 2D screen point or a 3D model space point.  Either
      * should work - whatever we get, set up both points so we have
@@ -174,9 +179,6 @@ ged_view_snap(struct ged *gedp, int argc, const char *argv[])
 	VMOVE(view_pt, p);
     }
 
-    GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
-    GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
-
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
@@ -184,7 +186,7 @@ ged_view_snap(struct ged *gedp, int argc, const char *argv[])
 	point_t sample = VINIT_ZERO;
 	point_t snapped = VINIT_ZERO;
 	VMOVE(sample, view_pt);
-	if (ged_draw_view_snap_first_candidate(gedp->ged_gvp, sample,
+	if (ged_draw_view_snap_first_candidate(v, sample,
 		GED_DRAW_VIEW_SNAP_GRID, snapped)) {
 	    point_t vp = VINIT_ZERO;
 	    VMOVE(view_pt, snapped);
@@ -199,7 +201,7 @@ ged_view_snap(struct ged *gedp, int argc, const char *argv[])
 	point_t vp = VINIT_ZERO;
 	int line_snap_ok = 0;
 	VMOVE(sample, view_pt);
-	if (ged_draw_view_snap_first_candidate(gedp->ged_gvp, sample,
+	if (ged_draw_view_snap_first_candidate(v, sample,
 		GED_DRAW_VIEW_SNAP_ENDPOINT, snapped)) {
 	    line_snap_ok = 1;
 	    VMOVE(view_pt, snapped);

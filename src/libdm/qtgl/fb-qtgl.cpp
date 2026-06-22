@@ -56,7 +56,6 @@
 
 #include "bu/app.h"
 #include "bu/str.h"
-#include "rt/view_legacy_bsg.h"
 
 extern "C" {
 #include "../include/private.h"
@@ -69,7 +68,8 @@ extern struct fb qtgl_interface;
 
 #include <QApplication>
 #include <QtGlobal>
-#include "qtcad/QgLegacyViewBsg.h"
+#include "QgLegacyViewDm.h"
+#include "qtcad/QgGL.h"
 #include "qtglwin.h"
 
 struct qtglinfo {
@@ -508,7 +508,7 @@ fb_qtgl_open(struct fb *ifp, const char *UNUSED(file), int width, int height)
     fmt.setDepthBufferSize(24);
     QSurfaceFormat::setDefaultFormat(fmt);
 
-    qi->mw = new QgGLWin(ifp);
+    qi->mw = new QgGLWin(qg_legacy_view_framebuffer_handle_from_raw(ifp));
     QgGL *canvas = qi->mw->canvasWidget();
     if (!canvas) {
 	qt_destroy(qi);
@@ -528,23 +528,22 @@ fb_qtgl_open(struct fb *ifp, const char *UNUSED(file), int width, int height)
     qi->qapp->processEvents();
 
     // Do the standard libdm attach to get our rendering backend.
-    const char *acmd = "attach";
-    struct dm *dmp = dm_open((void *)canvas, NULL, "qtgl", 1, &acmd);
+    qg_legacy_dm *dmp = qg_legacy_view_dm_open_qtgl((void *)canvas);
     if (!dmp) {
 	qt_destroy(qi);
 	free(ifp->i->pp);
 	ifp->i->pp = NULL;
 	return -1;
     }
-    struct bsg_view *canvas_view = qg_legacy_view_to_bsg(canvas->view());
+    qg_legacy_view *canvas_view = canvas->view();
     if (!canvas_view) {
-	dm_close(dmp);
+	qg_legacy_view_dm_close(dmp);
 	qt_destroy(qi);
 	free(ifp->i->pp);
 	ifp->i->pp = NULL;
 	return -1;
     }
-    rt_view_framebuffer_mode_set_bsg(canvas_view, 1);
+    qg_legacy_view_framebuffer_mode_set(canvas_view, 1);
 
     struct fb_platform_specific fbps;
     fbps.magic = FB_QTGL_MAGIC;

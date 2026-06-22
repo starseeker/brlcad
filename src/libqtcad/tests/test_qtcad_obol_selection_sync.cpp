@@ -15,9 +15,8 @@
 #include "bu/env.h"
 #include "bu/file.h"
 #include "ged.h"
-#include "ged/bsg_ged_draw.h"
 #include "ged/selection_state.h"
-#include "qtcad/QgLegacyViewBsg.h"
+#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgObolDrawSync.h"
 #include "qtcad/QgObolSelectionSync.h"
 #include "qtcad/QgView.h"
@@ -55,13 +54,13 @@ make_selection_sync_db(const char *dbpath)
 static int
 apply_and_sync(struct ged *gedp,
 	QgView *view,
-	struct ged_draw_transaction *txn)
+	qg_legacy_view_draw_transaction *txn)
 {
-    struct ged_draw_transaction_result result;
-    ged_draw_transaction_result_init(&result);
-    int draw_ret = ged_draw_apply_transaction(gedp, txn, &result);
+    qg_legacy_view_draw_transaction_result result;
+    qg_legacy_view_draw_result_init(&result);
+    int draw_ret = qg_legacy_view_draw_transaction_apply(gedp, txn, &result);
     int changed = qg_obol_sync_draw_transaction(gedp, txn, &result, view);
-    ged_draw_transaction_result_free(&result);
+    qg_legacy_view_draw_result_free(&result);
 
     return draw_ret >= 0 && changed != 0;
 }
@@ -115,28 +114,33 @@ main(int argc, char **argv)
     if (!gedp)
 	FAIL("failed to open qtcad Obol selection-sync test database");
 
-    QgView view(NULL, QgView_SW, NULL);
+    QgView view(NULL, QgView_SW);
     view.resize(180, 140);
-    gedp->ged_gvp = qg_legacy_view_to_bsg(view.view());
+    qg_legacy_view_ged_active_set(gedp, view.view());
 
     BRLObolViewController *controller = view.obolViewController();
     if (!controller)
 	FAIL("QgView should expose an Obol controller");
     controller->clearDatabaseSources();
 
-    struct ged_draw_transaction draw_box =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "box.s");
-    draw_box.view = qg_legacy_view_to_bsg(view.view());
+    qg_legacy_view_draw_transaction draw_box;
+    qg_legacy_view_draw_transaction_init(&draw_box,
+	    QG_LEGACY_VIEW_DRAW_TXN_DRAW, "box.s");
+    qg_legacy_view_draw_transaction_view_set(&draw_box, view.view());
     if (!apply_and_sync(gedp, &view, &draw_box))
 	FAIL("GED wire draw should sync box source into Obol");
 
-    struct bsg_appearance_settings shaded_settings = BSG_APPEARANCE_SETTINGS_INIT;
-    shaded_settings.draw_mode = BSG_DRAW_MODE_SHADED;
-    struct ged_draw_transaction draw_ball =
-	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "ball.s");
-    draw_ball.view = qg_legacy_view_to_bsg(view.view());
-    draw_ball.appearance = &shaded_settings;
-    if (!apply_and_sync(gedp, &view, &draw_ball))
+    qg_legacy_view_draw_appearance *shaded_appearance =
+	qg_legacy_view_draw_appearance_create(QG_LEGACY_VIEW_DRAW_MODE_SHADED);
+    qg_legacy_view_draw_transaction draw_ball;
+    qg_legacy_view_draw_transaction_init(&draw_ball,
+	    QG_LEGACY_VIEW_DRAW_TXN_DRAW, "ball.s");
+    qg_legacy_view_draw_transaction_view_set(&draw_ball, view.view());
+    qg_legacy_view_draw_transaction_appearance_set(&draw_ball,
+	    shaded_appearance);
+    int drew_ball = apply_and_sync(gedp, &view, &draw_ball);
+    qg_legacy_view_draw_appearance_destroy(shaded_appearance);
+    if (!drew_ball)
 	FAIL("GED shaded draw should sync ball source into Obol");
 
     SoBRLDatabaseSource *box = find_source(controller, "box.s");

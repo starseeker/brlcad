@@ -20,12 +20,8 @@
 #include <ged/bsg_ged_draw.h>
 #include <bsg/backend_scene.h>
 #include <bsg/export.h>
-#include <bsg/measure.h>
-#include <bsg/polygon.h>
 #include <bsg/render.h>
 #include <bsg/render_item.h>
-#include <bsg/snap_action.h>
-#include <bsg/util.h>
 #include <rt/view_legacy_bsg.h>
 
 #define ASSERT(cond) do { \
@@ -218,20 +214,26 @@ test_command_report_record_consistency(struct ged *gedp, struct bsg_view *v)
     }
 
     point_t sample = VINIT_ZERO;
-    struct bsg_snap_result snap = {NULL, 0};
-    int snap_count = bsg_snap_candidates(v, sample, 1.0, BSG_SNAP_KIND_ENDPOINT, &snap);
+    struct rt_view_snap_result_bsg *snap = rt_view_snap_result_create_bsg();
+    ASSERT(snap != NULL);
+    int snap_count = snap ? rt_view_snap_candidates_result_bsg(v, sample, 1.0,
+	    RT_VIEW_SNAP_KIND_ENDPOINT_BSG, snap) : 0;
     ASSERT(snap_count >= 0);
-    if (snap_count > 0 && snap.sr_cnt > 0)
-	ASSERT(bu_vls_strlen(&snap.sr_candidates[0].sc_source_path) > 0);
+    if (snap_count > 0 && rt_view_snap_result_count_bsg(snap) > 0) {
+	struct bu_vls snap_path = BU_VLS_INIT_ZERO;
+	ASSERT(rt_view_snap_result_source_path_bsg(snap, 0, &snap_path));
+	ASSERT(bu_vls_strlen(&snap_path) > 0);
+	bu_vls_free(&snap_path);
+    }
 
     point_t a = VINIT_ZERO;
     point_t b = {1.0, 0.0, 0.0};
-    struct bsg_measure_result measure = {0.0, 0.0, 0.0, 0};
-    ASSERT(bsg_measure_candidates(v, a, b, &measure) == 1);
-    ASSERT(measure.mr_valid);
-    ASSERT(fabs(measure.mr_distance - 1.0) < 1.0e-9);
+    struct rt_view_measure_result measure = RT_VIEW_MEASURE_RESULT_INIT;
+    ASSERT(rt_view_measure_candidates_bsg(v, a, b, &measure) == 1);
+    ASSERT(measure.valid);
+    ASSERT(fabs(measure.distance - 1.0) < 1.0e-9);
 
-    bsg_snap_result_free(&snap);
+    rt_view_snap_result_free_bsg(snap);
     bu_vls_free(&pick_path);
     rt_view_pick_result_free_bsg(pick);
     bsg_backend_scene_destroy(scene);
@@ -344,11 +346,11 @@ main(int argc, const char **argv)
     const char *p7[] = {"view", "obj", "create", "u_poly", "polygon", "area", NULL};
     ASSERT_VIEW_OK(gedp, 6, p7);
     ASSERT(!result_str(gedp).empty());
-    bsg_polygon_ref poly_ref = bsg_view_polygon_find_ref(views[0], "u_poly");
-    ASSERT(!bsg_polygon_ref_is_null(poly_ref));
-    struct bsg_polygon_record poly_rec;
-    ASSERT(bsg_polygon_record_get(poly_ref, &poly_rec));
-    ASSERT(poly_rec.type == BSG_POLYGON_GENERAL);
+    rt_view_polygon_ref poly_ref = rt_view_polygon_find_bsg(views[0], "u_poly");
+    ASSERT(!rt_view_polygon_ref_is_null_bsg(poly_ref));
+    struct rt_view_polygon_record poly_rec = {};
+    ASSERT(rt_view_polygon_record_get_bsg(poly_ref, &poly_rec));
+    ASSERT(poly_rec.type == RT_VIEW_POLYGON_GENERAL);
     ASSERT(poly_rec.contour_count == 1);
     ASSERT(poly_rec.point_count == 4);
     ASSERT(poly_rec.first_contour_open == 0);

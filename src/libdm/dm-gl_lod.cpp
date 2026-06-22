@@ -712,9 +712,18 @@ gl_backend_handle_get(struct dm *dmp, const struct bsg_render_item *item, int mo
 
 extern "C" int gl_draw_item(struct dm *dmp, const struct bsg_render_item *item);
 
-static void
-gl_backend_invalidate_item(struct dm *dmp, const struct bsg_render_item *item, unsigned int UNUSED(reason_mask))
+static int
+gl_backend_draw_item(struct dm *dmp, const void *render_item_ctx)
 {
+    return gl_draw_item(dmp, (const struct bsg_render_item *)render_item_ctx);
+}
+
+static void
+gl_backend_invalidate_item(struct dm *dmp, const void *render_item_ctx, unsigned int UNUSED(reason_mask))
+{
+    const struct bsg_render_item *item =
+	(const struct bsg_render_item *)render_item_ctx;
+
     if (!dmp || !item)
 	return;
     dm_backend_resource_invalidate(dmp, gl_item_source_identity(item));
@@ -741,7 +750,7 @@ gl_backend_end_frame(struct dm *dmp)
 extern "C" const struct dm_backend_ops gl_backend_ops = {
     BSG_BACKEND_GL,
     gl_backend_begin_frame,
-    gl_draw_item,
+    gl_backend_draw_item,
     gl_backend_invalidate_item,
     gl_backend_release_source,
     gl_backend_end_frame

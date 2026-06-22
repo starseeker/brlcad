@@ -29,7 +29,6 @@
 #include "raytrace.h"
 
 #include "qtcad/QgSession.h"
-#include "qtcad/QgLegacyViewBsg.h"
 #include "qtcad/QgUtil.h"
 #include "qtcad/QgSignalFlags.h"
 
@@ -105,14 +104,13 @@ QgSession::dbip() const
 qg_legacy_view *
 QgSession::activeView() const
 {
-    return gedp ? qg_legacy_view_from_bsg(gedp->ged_gvp) : nullptr;
+    return qg_legacy_view_ged_active_get(gedp);
 }
 
 void
 QgSession::setActiveView(qg_legacy_view *view)
 {
-    if (gedp)
-	gedp->ged_gvp = qg_legacy_view_to_bsg(view);
+    qg_legacy_view_ged_active_set(gedp, view);
 }
 
 void

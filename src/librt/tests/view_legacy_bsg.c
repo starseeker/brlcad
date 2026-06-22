@@ -34,6 +34,9 @@
 #include "bu/app.h"
 #include "bu/malloc.h"
 #include "bu/str.h"
+#include "bsg/feature.h"
+#include "bsg/geometry.h"
+#include "bsg/measure.h"
 #include "bsg/polygon.h"
 #include "bsg/scene_builder.h"
 #include "bsg/snap.h"
@@ -196,11 +199,21 @@ free_view(struct bsg_view *v)
 }
 
 static int test_bounds_update_count = 0;
+static int test_update_callback_count = 0;
 
 static void
 test_bounds_update_callback(struct bsg_view *UNUSED(v))
 {
     test_bounds_update_count++;
+}
+
+static void
+test_update_callback(struct bsg_view *UNUSED(v), void *data)
+{
+    int *token = (int *)data;
+    test_update_callback_count++;
+    if (token)
+	(*token)++;
 }
 
 struct test_selection_path_callback_state {
@@ -244,6 +257,44 @@ static bsg_polygon_ref
 test_polygon_ref_to_bsg(rt_view_polygon_ref ref)
 {
     bsg_polygon_ref bsg_ref = {ref.token, ref.revision};
+    return bsg_ref;
+}
+
+struct test_feature_preview_callback_state {
+    uint64_t revision;
+    int pick_calls;
+    int last_x;
+    int last_y;
+    int pick_value;
+};
+
+static uint64_t
+test_feature_preview_revision(void *data)
+{
+    struct test_feature_preview_callback_state *state =
+	(struct test_feature_preview_callback_state *)data;
+    return state ? state->revision : 0;
+}
+
+static int
+test_feature_preview_pick(void *data, int x, int y, void *pick_out)
+{
+    struct test_feature_preview_callback_state *state =
+	(struct test_feature_preview_callback_state *)data;
+    if (!state || !pick_out)
+	return 0;
+
+    state->pick_calls++;
+    state->last_x = x;
+    state->last_y = y;
+    *(int *)pick_out = state->pick_value;
+    return 1;
+}
+
+static bsg_feature_ref
+test_feature_ref_to_bsg(rt_view_feature_ref ref)
+{
+    bsg_feature_ref bsg_ref = {ref.token, ref.revision};
     return bsg_ref;
 }
 
@@ -404,6 +455,124 @@ test_bsg_perspective_adapter(void)
     if (!rt_view_perspective_set_bsg(v, 12.5) ||
 	    !fastf_equal(rt_view_perspective_from_bsg(v), 12.5)) {
 	printf("FAIL: BSG perspective set adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+
+cleanup:
+    free_view(v);
+    return ret ? 1 : 0;
+}
+
+static int
+test_bsg_display_manager_adapter(void)
+{
+    struct bsg_view *v = make_view("rt_view_display_manager_adapter");
+    int token = 0;
+    void *dmp = &token;
+    int ret = 0;
+
+    if (rt_view_display_manager_from_bsg(NULL)) {
+	printf("FAIL: null BSG display-manager adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+    if (rt_view_display_manager_set_bsg(NULL, dmp)) {
+	printf("FAIL: null BSG display-manager set adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+
+    if (!rt_view_display_manager_set_bsg(v, dmp) ||
+	    rt_view_display_manager_from_bsg(v) != dmp ||
+	    v->dmp != dmp) {
+	printf("FAIL: BSG display-manager set/get adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+
+    if (!rt_view_display_manager_set_bsg(v, NULL) ||
+	    rt_view_display_manager_from_bsg(v) != NULL ||
+	    v->dmp != NULL) {
+	printf("FAIL: BSG display-manager clear adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+
+cleanup:
+    free_view(v);
+    return ret ? 1 : 0;
+}
+
+static int
+test_bsg_view_runtime_adapter(void)
+{
+    struct bsg_view *v = make_view("rt_view_runtime_adapter");
+    int token = 0;
+    mat_t edit_mat;
+    int ret = 0;
+
+    MAT_IDN(edit_mat);
+
+    if (rt_view_update_callback_set_bsg(NULL, test_update_callback, &token)) {
+	printf("FAIL: null BSG update callback set adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+    if (rt_view_edit_matrix_set_bsg(NULL, edit_mat)) {
+	printf("FAIL: null BSG edit matrix set adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+    if (rt_view_edit_matrix_clear_bsg(NULL)) {
+	printf("FAIL: null BSG edit matrix clear adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+    if (rt_view_frame_revision_from_bsg(NULL)) {
+	printf("FAIL: null BSG frame revision adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+
+    test_update_callback_count = 0;
+    if (!rt_view_update_callback_set_bsg(v, test_update_callback, &token) ||
+	    v->gv_callback != test_update_callback ||
+	    v->gv_clientData != &token ||
+	    !v->callbacks) {
+	printf("FAIL: BSG update callback set adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+    bsg_update(v);
+    if (test_update_callback_count != 1 || token != 1) {
+	printf("FAIL: BSG update callback adapter did not fire\n");
+	ret = 1;
+	goto cleanup;
+    }
+
+    if (!rt_view_update_callback_set_bsg(v, NULL, NULL) ||
+	    v->gv_callback || v->gv_clientData) {
+	printf("FAIL: BSG update callback clear adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+
+    if (!rt_view_edit_matrix_set_bsg(v, edit_mat) ||
+	    v->gv_edit_mat != edit_mat) {
+	printf("FAIL: BSG edit matrix set adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+    if (!rt_view_edit_matrix_clear_bsg(v) || v->gv_edit_mat) {
+	printf("FAIL: BSG edit matrix clear adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+
+    v->gv_frame_rev = 42;
+    if (rt_view_frame_revision_from_bsg(v) != 42) {
+	printf("FAIL: BSG frame revision adapter\n");
 	ret = 1;
 	goto cleanup;
     }
@@ -842,7 +1011,11 @@ test_bsg_snap_adapter(void)
     struct bsg_view *adapter = make_view("rt_view_snap_adapter");
     struct bsg_snap_result direct_res = {0};
     struct bsg_snap_result adapter_res = {0};
+    struct rt_view_snap_result_bsg *wrapped_res = NULL;
     point_t sample = VINIT_ZERO;
+    point_t wrapped_point = VINIT_ZERO;
+    point_t bad_point = VINIT_ZERO;
+    struct bu_vls wrapped_path = BU_VLS_INIT_ZERO;
     fastf_t direct_x = 0.1;
     fastf_t direct_y = 0.1;
     fastf_t adapter_x = 0.1;
@@ -851,7 +1024,8 @@ test_bsg_snap_adapter(void)
     fastf_t direct_grid_y = 0.1;
     fastf_t adapter_grid_x = 0.1;
     fastf_t adapter_grid_y = 0.1;
-    bsg_feature_ref feature = {1234, 5678};
+    rt_view_feature_ref feature = {1234, 5678};
+    bsg_feature_ref direct_feature_seed = {feature.token, feature.revision};
     bsg_feature_ref direct_feature = BSG_FEATURE_REF_NULL_INIT;
     bsg_feature_ref adapter_feature = BSG_FEATURE_REF_NULL_INIT;
     int direct_cnt = 0;
@@ -873,6 +1047,22 @@ test_bsg_snap_adapter(void)
 		RT_VIEW_SNAP_KIND_TANGENT_BSG |
 		RT_VIEW_SNAP_KIND_OVERLAY_HANDLE_BSG) == 0) {
 	printf("FAIL: BSG snap flag alias coverage\n");
+	ret = 1;
+	goto cleanup;
+    }
+
+    wrapped_res = rt_view_snap_result_create_bsg();
+    if (!wrapped_res ||
+	    rt_view_snap_result_count_bsg(NULL) != 0 ||
+	    rt_view_snap_result_point_bsg(NULL, 0, bad_point) ||
+	    rt_view_snap_result_point_bsg(wrapped_res, 0, NULL) ||
+	    rt_view_snap_result_distance_bsg(NULL, 0) != 0.0 ||
+	    rt_view_snap_result_kind_bsg(NULL, 0) != 0ULL ||
+	    rt_view_snap_result_source_path_bsg(NULL, 0, &wrapped_path) ||
+	    rt_view_snap_result_source_path_bsg(wrapped_res, 0, NULL) ||
+	    rt_view_snap_candidates_result_bsg(adapter, sample, 0.0,
+		RT_VIEW_SNAP_KIND_GRID_BSG, NULL)) {
+	printf("FAIL: null/empty BSG snap-result adapter arguments\n");
 	ret = 1;
 	goto cleanup;
     }
@@ -918,6 +1108,32 @@ test_bsg_snap_adapter(void)
 	goto cleanup;
     }
 
+    if (rt_view_snap_candidates_result_bsg(adapter, sample, 0.0,
+		RT_VIEW_SNAP_KIND_GRID_BSG, wrapped_res) != adapter_cnt ||
+	    rt_view_snap_result_count_bsg(wrapped_res) != adapter_res.sr_cnt ||
+	    (adapter_res.sr_cnt &&
+	     (!rt_view_snap_result_point_bsg(wrapped_res, 0, wrapped_point) ||
+	      !VNEAR_EQUAL(wrapped_point, adapter_res.sr_candidates[0].sc_point,
+		  SMALL_FASTF) ||
+	      !fastf_equal(rt_view_snap_result_distance_bsg(wrapped_res, 0),
+		  adapter_res.sr_candidates[0].sc_distance) ||
+	      rt_view_snap_result_kind_bsg(wrapped_res, 0) !=
+		  (unsigned long long)adapter_res.sr_candidates[0].sc_kind ||
+	      !rt_view_snap_result_source_path_bsg(wrapped_res, 0,
+		  &wrapped_path) ||
+	      !BU_STR_EQUAL(bu_vls_cstr(&wrapped_path),
+		  bu_vls_cstr(&adapter_res.sr_candidates[0].sc_source_path)))) ||
+	    rt_view_snap_result_point_bsg(wrapped_res, adapter_res.sr_cnt,
+		wrapped_point) ||
+	    rt_view_snap_result_distance_bsg(wrapped_res, adapter_res.sr_cnt) != 0.0 ||
+	    rt_view_snap_result_kind_bsg(wrapped_res, adapter_res.sr_cnt) != 0ULL ||
+	    rt_view_snap_result_source_path_bsg(wrapped_res, adapter_res.sr_cnt,
+		&wrapped_path)) {
+	printf("FAIL: BSG opaque snap-result adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+
     if (bsg_snap_point_2d(direct, &direct_x, &direct_y,
 		RT_VIEW_SNAP_KIND_GRID_BSG) !=
 	    rt_view_snap_point_2d_bsg(adapter, &adapter_x, &adapter_y,
@@ -938,7 +1154,7 @@ test_bsg_snap_adapter(void)
 	goto cleanup;
     }
 
-    bsg_view_snap_exclude_feature_set(direct, feature);
+    bsg_view_snap_exclude_feature_set(direct, direct_feature_seed);
     if (!rt_view_snap_exclude_feature_set_bsg(adapter, feature) ||
 	    !bsg_view_snap_exclude_feature_get(direct, &direct_feature) ||
 	    !bsg_view_snap_exclude_feature_get(adapter, &adapter_feature) ||
@@ -950,8 +1166,8 @@ test_bsg_snap_adapter(void)
     }
 
     bsg_view_snap_exclude_feature_clear(direct);
-    direct_feature = feature;
-    adapter_feature = feature;
+    direct_feature = direct_feature_seed;
+    adapter_feature = direct_feature_seed;
     if (!rt_view_snap_exclude_feature_clear_bsg(adapter)) {
 	printf("FAIL: BSG snap-exclude clear adapter\n");
 	ret = 1;
@@ -970,10 +1186,242 @@ test_bsg_snap_adapter(void)
     }
 
 cleanup:
+    bu_vls_free(&wrapped_path);
     bsg_snap_result_free(&direct_res);
     bsg_snap_result_free(&adapter_res);
+    rt_view_snap_result_free_bsg(wrapped_res);
     free_view(direct);
     free_view(adapter);
+    return ret ? 1 : 0;
+}
+
+static int
+same_rt_measure_as_bsg(const struct rt_view_measure_result *rt_result,
+		       const struct bsg_measure_result *bsg_result)
+{
+    return rt_result &&
+	bsg_result &&
+	rt_result->valid == bsg_result->mr_valid &&
+	fastf_equal(rt_result->distance, bsg_result->mr_distance) &&
+	fastf_equal(rt_result->projection, bsg_result->mr_projection) &&
+	fastf_equal(rt_result->normal_alignment,
+	    bsg_result->mr_normal_alignment);
+}
+
+static int
+test_bsg_measure_adapter(void)
+{
+    struct bsg_view *direct = make_view("rt_view_measure_direct");
+    struct bsg_view *adapter = make_view("rt_view_measure_adapter");
+    struct bsg_measure_result direct_res = {0.0, 0.0, 0.0, 0};
+    struct rt_view_measure_result adapter_res = RT_VIEW_MEASURE_RESULT_INIT;
+    point_t a = VINIT_ZERO;
+    point_t b = VINIT_ZERO;
+    int direct_ret = 0;
+    int adapter_ret = 0;
+    int ret = 0;
+
+    VSET(a, 0.0, 0.0, 0.0);
+    VSET(b, 3.0, 4.0, 0.0);
+
+    if (rt_view_measure_candidates_bsg(adapter, a, b, NULL)) {
+	printf("FAIL: null BSG measure adapter result argument\n");
+	ret = 1;
+	goto cleanup;
+    }
+
+    direct_ret = bsg_measure_candidates(direct, a, b, &direct_res);
+    adapter_ret = rt_view_measure_candidates_bsg(adapter, a, b, &adapter_res);
+    if (direct_ret != adapter_ret ||
+	    !same_rt_measure_as_bsg(&adapter_res, &direct_res)) {
+	printf("FAIL: BSG measure adapter result mismatch\n");
+	ret = 1;
+	goto cleanup;
+    }
+
+    memset(&direct_res, 0, sizeof(direct_res));
+    memset(&adapter_res, 0, sizeof(adapter_res));
+    direct_ret = bsg_measure_candidates(NULL, a, b, &direct_res);
+    adapter_ret = rt_view_measure_candidates_bsg(NULL, a, b, &adapter_res);
+    if (direct_ret != adapter_ret ||
+	    !same_rt_measure_as_bsg(&adapter_res, &direct_res)) {
+	printf("FAIL: null-view BSG measure adapter result mismatch\n");
+	ret = 1;
+	goto cleanup;
+    }
+
+    VMOVE(b, a);
+    adapter_res.distance = 7.0;
+    adapter_res.projection = 8.0;
+    adapter_res.normal_alignment = 9.0;
+    adapter_res.valid = 1;
+    adapter_ret = rt_view_measure_candidates_bsg(adapter, a, b, &adapter_res);
+    if (adapter_ret ||
+	    adapter_res.valid ||
+	    !fastf_equal(adapter_res.distance, 0.0) ||
+	    !fastf_equal(adapter_res.projection, 0.0) ||
+	    !fastf_equal(adapter_res.normal_alignment, 0.0)) {
+	printf("FAIL: zero-length BSG measure adapter result\n");
+	ret = 1;
+	goto cleanup;
+    }
+
+cleanup:
+    free_view(direct);
+    free_view(adapter);
+    return ret ? 1 : 0;
+}
+
+static int
+test_bsg_feature_adapter(void)
+{
+    struct bsg_view *v = make_view("rt_view_feature_adapter");
+    const int owner_token = 42;
+    rt_view_feature_ref null_ref = RT_VIEW_FEATURE_REF_NULL;
+    rt_view_feature_ref label_ref = RT_VIEW_FEATURE_REF_NULL;
+    rt_view_feature_ref preview_ref = RT_VIEW_FEATURE_REF_NULL;
+    bsg_feature_ref bsg_label = BSG_FEATURE_REF_NULL_INIT;
+    bsg_feature_ref bsg_preview = BSG_FEATURE_REF_NULL_INIT;
+    struct bu_vls label_text = BU_VLS_INIT_ZERO;
+    point_t label_point = VINIT_ZERO;
+    unsigned char label_color[3] = {0, 0, 0};
+    point_t preview_points[2] = {VINIT_ZERO, VINIT_ZERO};
+    int preview_cmds[2] = {BSG_GEOMETRY_LINE_MOVE, BSG_GEOMETRY_LINE_DRAW};
+    point_t *copied_points = NULL;
+    int *copied_cmds = NULL;
+    size_t copied_count = 0;
+    struct test_feature_preview_callback_state callback_state = {37, 0, 0, 0, 29};
+    struct rt_view_edit_preview_callbacks callbacks =
+	RT_VIEW_EDIT_PREVIEW_CALLBACKS_INIT;
+    int pick_value = 0;
+    int ret = 0;
+
+    if (!v) {
+	printf("FAIL: BSG feature adapter view allocation\n");
+	return 1;
+    }
+
+    if (!rt_view_feature_ref_is_null_bsg(null_ref) ||
+	    !rt_view_feature_ref_is_null_bsg(
+		rt_view_feature_overlay_ensure_bsg(NULL, "bad", NULL, NULL,
+		    NULL, NULL)) ||
+	    !rt_view_feature_ref_is_null_bsg(
+		rt_view_feature_label_ensure_bsg(NULL, "bad", NULL)) ||
+	    rt_view_feature_remove_bsg(NULL, "bad") ||
+	    rt_view_feature_labels_replace_bsg(null_ref, NULL, 0) ||
+	    rt_view_feature_points_replace_bsg(null_ref,
+		RT_VIEW_FEATURE_UNKNOWN, NULL, NULL, 0) ||
+	    rt_view_feature_clear_geometry_bsg(null_ref) ||
+	    rt_view_feature_touch_bsg(null_ref)) {
+	printf("FAIL: BSG feature adapter null argument handling\n");
+	ret = 1;
+	goto cleanup;
+    }
+
+    label_ref = rt_view_feature_label_ensure_bsg(v, "feature_label",
+	    &owner_token);
+    bsg_label = test_feature_ref_to_bsg(label_ref);
+    struct bsg_feature_record label_record;
+    if (rt_view_feature_ref_is_null_bsg(label_ref) ||
+	    !bsg_feature_record_get(bsg_label, &label_record) ||
+	    label_record.family != BSG_FEATURE_LABEL) {
+	printf("FAIL: BSG label feature ensure adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+
+    struct rt_view_feature_label labels[1];
+    memset(labels, 0, sizeof(labels));
+    labels[0].text = "adapter label";
+    VSET(labels[0].point, 1.0, 2.0, 3.0);
+    labels[0].color_valid = 1;
+    labels[0].color[0] = 10;
+    labels[0].color[1] = 20;
+    labels[0].color[2] = 30;
+    if (!rt_view_feature_labels_replace_bsg(label_ref, labels, 1) ||
+	    bsg_feature_label_count(bsg_label) != 1 ||
+	    !bsg_feature_label_copy(bsg_label, 0, &label_text, label_point,
+		label_color) ||
+	    !BU_STR_EQUAL(bu_vls_cstr(&label_text), labels[0].text) ||
+	    !VNEAR_EQUAL(label_point, labels[0].point, SMALL_FASTF) ||
+	    label_color[0] != labels[0].color[0] ||
+	    label_color[1] != labels[0].color[1] ||
+	    label_color[2] != labels[0].color[2]) {
+	printf("FAIL: BSG label feature replace adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+
+    rt_view_feature_set_visible_bsg(label_ref, 0);
+    rt_view_feature_set_color_bsg(label_ref, 4, 5, 6);
+    if (!bsg_feature_record_get(bsg_label, &label_record) ||
+	    label_record.visible != 0 ||
+	    label_record.color[0] != 4 ||
+	    label_record.color[1] != 5 ||
+	    label_record.color[2] != 6) {
+	printf("FAIL: BSG feature style adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+
+    callbacks.revision_cb = test_feature_preview_revision;
+    callbacks.pick_cb = test_feature_preview_pick;
+    preview_ref = rt_view_feature_overlay_ensure_bsg(v, "feature_preview",
+	    &owner_token, &callback_state, &callbacks, "source.s");
+    bsg_preview = test_feature_ref_to_bsg(preview_ref);
+    struct bsg_feature_record preview_record;
+    if (rt_view_feature_ref_is_null_bsg(preview_ref) ||
+	    !bsg_feature_record_get(bsg_preview, &preview_record) ||
+	    preview_record.family != BSG_FEATURE_OVERLAY ||
+	    bsg_feature_edit_preview_revision(bsg_preview) !=
+		callback_state.revision ||
+	    !bsg_feature_edit_preview_pick(bsg_preview, v, 7, 11,
+		&pick_value) ||
+	    callback_state.pick_calls != 1 ||
+	    callback_state.last_x != 7 ||
+	    callback_state.last_y != 11 ||
+	    pick_value != callback_state.pick_value ||
+	    !rt_view_edit_preview_publish_event_bsg(v, preview_ref,
+		RT_VIEW_EDIT_PREVIEW_COMMIT, "source.s")) {
+	printf("FAIL: BSG edit-preview feature adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+
+    VSET(preview_points[1], 9.0, 8.0, 7.0);
+    if (!rt_view_feature_points_replace_bsg(preview_ref,
+		RT_VIEW_FEATURE_TRANSIENT_PREVIEW, preview_points,
+		preview_cmds, 2) ||
+	    !bsg_feature_record_get(bsg_preview, &preview_record) ||
+	    preview_record.family != BSG_FEATURE_TRANSIENT_PREVIEW ||
+	    !bsg_feature_points_copy(bsg_preview, &copied_points,
+		&copied_cmds, &copied_count) ||
+	    copied_count != 2 ||
+	    !VNEAR_EQUAL(copied_points[1], preview_points[1], SMALL_FASTF) ||
+	    copied_cmds[0] != preview_cmds[0] ||
+	    copied_cmds[1] != preview_cmds[1] ||
+	    !rt_view_feature_clear_geometry_bsg(preview_ref)) {
+	printf("FAIL: BSG feature geometry adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+
+    if (!rt_view_feature_remove_bsg(v, "feature_label") ||
+	    !rt_view_feature_remove_bsg(v, "feature_preview") ||
+	    !bsg_feature_ref_is_null(bsg_feature_find(v, "feature_label")) ||
+	    !bsg_feature_ref_is_null(bsg_feature_find(v, "feature_preview"))) {
+	printf("FAIL: BSG feature remove adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+
+cleanup:
+    bu_vls_free(&label_text);
+    if (copied_points)
+	bu_free(copied_points, "RT view feature adapter copied points");
+    if (copied_cmds)
+	bu_free(copied_cmds, "RT view feature adapter copied commands");
+    free_view(v);
     return ret ? 1 : 0;
 }
 
@@ -1044,6 +1492,12 @@ test_bsg_view_scope_adapter(void)
     bu_vls_sprintf(&lifecycle_view->gv_name, "rt_view_lifecycle_adapter");
     if (lifecycle_view->magic != BSG_VIEW_MAGIC || lifecycle_view->vset) {
 	printf("FAIL: BSG view init adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+    if (rt_view_context_is_bsg(NULL) ||
+	    !rt_view_context_is_bsg(lifecycle_view)) {
+	printf("FAIL: BSG view context adapter\n");
 	ret = 1;
 	goto cleanup;
     }
@@ -1197,10 +1651,39 @@ test_bsg_view_scope_adapter(void)
 	ret = 1;
 	goto cleanup;
     }
+    if (!rt_view_independent_scope_is_null_bsg(NULL, 1)) {
+	printf("FAIL: null BSG independent-scope null adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
     rt_view_independent_scope_destroy_bsg(NULL);
+
+    if (rt_view_scene_attached_bsg(NULL) ||
+	    rt_view_scene_anchor_ensure_bsg(NULL) ||
+	    rt_view_scene_shared_bsg(NULL, v)) {
+	printf("FAIL: null BSG scene-anchor adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
 
     if (bsg_scene_ref_is_null(bsg_view_scene_ref_ensure(v))) {
 	printf("FAIL: BSG view scope adapter test scene root setup\n");
+	ret = 1;
+	goto cleanup;
+    }
+    if (!rt_view_scene_attached_bsg(v)) {
+	printf("FAIL: BSG scene-attached adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+    if (!rt_view_scene_anchor_ensure_bsg(v) ||
+	    !rt_view_scene_attached_bsg(v)) {
+	printf("FAIL: BSG scene-anchor ensure adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+    if (!rt_view_scene_shared_bsg(v, v)) {
+	printf("FAIL: BSG scene-shared adapter\n");
 	ret = 1;
 	goto cleanup;
     }
@@ -1218,6 +1701,11 @@ test_bsg_view_scope_adapter(void)
 	ret = 1;
 	goto cleanup;
     }
+    if (rt_view_independent_scope_is_null_bsg(v, 0)) {
+	printf("FAIL: BSG independent-scope non-null adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
 
     if (!rt_view_is_independent_bsg(v) ||
 	    rt_view_is_independent_bsg(v) != bsg_view_is_independent(v)) {
@@ -1229,6 +1717,23 @@ test_bsg_view_scope_adapter(void)
     rt_view_independent_scope_destroy_bsg(v);
     if (rt_view_is_independent_bsg(v)) {
 	printf("FAIL: BSG independent-scope destroy adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+    if (!rt_view_independent_scope_is_null_bsg(v, 0)) {
+	printf("FAIL: BSG independent-scope destroyed-null adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+    bsg_view_scene_ref_detach(v);
+    if (rt_view_scene_attached_bsg(v)) {
+	printf("FAIL: BSG detached scene-attached adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+    if (!rt_view_scene_anchor_ensure_bsg(v) ||
+	    !rt_view_scene_attached_bsg(v)) {
+	printf("FAIL: BSG detached scene-anchor ensure adapter\n");
 	ret = 1;
 	goto cleanup;
     }
@@ -2797,8 +3302,19 @@ test_bsg_mesh_lod_adapter_boundary(void)
 	ret = 1;
 	goto cleanup;
     }
+    if (rt_view_context_width_from_bsg(NULL) != 0 ||
+	    rt_view_context_height_from_bsg(NULL) != 0) {
+	printf("FAIL: null BSG context width/height adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
     if (rt_view_dimensions_set_bsg(NULL, 123, 456)) {
 	printf("FAIL: null BSG raw dimensions set adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+    if (rt_view_context_dimensions_set_bsg(NULL, 123, 456)) {
+	printf("FAIL: null BSG context dimensions set adapter\n");
 	ret = 1;
 	goto cleanup;
     }
@@ -2823,6 +3339,20 @@ test_bsg_mesh_lod_adapter_boundary(void)
     if (rt_view_width_from_bsg(v) != 123 ||
 	    rt_view_height_from_bsg(v) != 456) {
 	printf("FAIL: BSG raw width/height adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+    if (rt_view_context_width_from_bsg(v) != 123 ||
+	    rt_view_context_height_from_bsg(v) != 456) {
+	printf("FAIL: BSG context width/height adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+
+    if (!rt_view_context_dimensions_set_bsg(v, 321, 654) ||
+	    rt_view_width_from_bsg(v) != 321 ||
+	    rt_view_height_from_bsg(v) != 654) {
+	printf("FAIL: BSG context dimensions set adapter\n");
 	ret = 1;
 	goto cleanup;
     }
@@ -3090,6 +3620,7 @@ test_bsg_mesh_lod_adapter_boundary(void)
     }
 
     if (rt_view_refresh_request_bsg(NULL, RT_VIEW_REFRESH_VIEW_BSG) ||
+	    rt_view_context_refresh_request_bsg(NULL, RT_VIEW_REFRESH_VIEW_BSG) ||
 	    rt_view_refresh_dirty_from_bsg(NULL) ||
 	    rt_view_refresh_consume_bsg(NULL) ||
 	    rt_view_refresh_complete_bsg(NULL) ||
@@ -3112,6 +3643,16 @@ test_bsg_mesh_lod_adapter_boundary(void)
 	    rt_view_refresh_dirty_from_bsg(v) ||
 	    !rt_view_refresh_complete_bsg(v)) {
 	printf("FAIL: BSG refresh dirty/consume adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+    rt_view_refresh_complete_bsg(v);
+    if (!rt_view_context_refresh_request_bsg(v, RT_VIEW_REFRESH_VIEW_BSG) ||
+	    !rt_view_refresh_dirty_from_bsg(v) ||
+	    !(rt_view_refresh_consume_bsg(v) & RT_VIEW_REFRESH_VIEW_BSG) ||
+	    rt_view_refresh_dirty_from_bsg(v) ||
+	    !rt_view_refresh_complete_bsg(v)) {
+	printf("FAIL: BSG context refresh dirty/consume adapter\n");
 	ret = 1;
 	goto cleanup;
     }
@@ -3263,9 +3804,17 @@ main(int argc, char *argv[])
 	return 1;
     if (test_bsg_snap_adapter())
 	return 1;
+    if (test_bsg_measure_adapter())
+	return 1;
+    if (test_bsg_feature_adapter())
+	return 1;
     if (test_bsg_view_scope_adapter())
 	return 1;
     if (test_bsg_perspective_adapter())
+	return 1;
+    if (test_bsg_display_manager_adapter())
+	return 1;
+    if (test_bsg_view_runtime_adapter())
 	return 1;
     if (test_bsg_camera_adapter())
 	return 1;

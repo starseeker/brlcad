@@ -38,17 +38,50 @@
 #include "bu/malloc.h"
 #include "bu/vls.h"
 #include "dm/fbserv.h"
-#include "dm.h"
+#include "ged.h"
 #include "./fbserv.h"
+#include "QgLegacyViewDm.h"
 #include "qtcad/QgGL.h"
 #include "qtcad/QgSW.h"
+#include "qtcad/QgTypes.h"
 #include <QElapsedTimer>
 
 namespace {
 static const qint64 DRAIN_TIME_BUDGET_MS = 4;
 static const size_t DRAIN_BYTES_BUDGET = 512 * 1024;
 static const int DRAIN_ITERATION_CAP = 256;
+
+static struct fbserv_obj *
+qdm_fbserv_obj(void *fbsp)
+{
+    return static_cast<struct fbserv_obj *>(fbsp);
 }
+
+static qg_legacy_fb *
+qdm_framebuffer_handle(struct fbserv_obj *fbsp)
+{
+    return fbsp ? qg_legacy_view_framebuffer_handle_from_raw(fbsp->fbs_fbp) :
+	nullptr;
+}
+
+}
+
+static int qdm_is_listening(struct fbserv_obj *fbsp);
+static int qdm_listen_on_port(struct fbserv_obj *fbsp, int available_port);
+static void qdm_open_server_handler(struct fbserv_obj *fbsp);
+static void qdm_close_server_handler(struct fbserv_obj *fbsp);
+#ifdef BRLCAD_OPENGL
+static void qdm_open_client_handler(struct fbserv_obj *fbsp, int i,
+	void *data);
+static void qdm_open_ipc_client_handler(struct fbserv_obj *fbsp, int i,
+	void *data);
+#endif
+static void qdm_open_sw_client_handler(struct fbserv_obj *fbsp, int i,
+	void *data);
+static void qdm_open_ipc_sw_client_handler(struct fbserv_obj *fbsp, int i,
+	void *data);
+static void qdm_close_client_handler(struct fbserv_obj *fbsp, int i);
+static void qdm_close_ipc_client_handler(struct fbserv_obj *fbsp, int i);
 
 void
 QFBSocket::client_handler()
@@ -56,16 +89,18 @@ QFBSocket::client_handler()
     QTCAD_SLOT("QFBSocket::client_handler", 1);
     bu_log("client_handler\n");
 
+    struct fbserv_obj *fbs = qdm_fbserv_obj(fbsp);
+
     /* If our client slot has already been torn down (e.g. socket
      * disconnected, drop_client called), there is nothing to do. */
-    if (!fbsp || ind < 0 || ind >= MAX_CLIENTS)
+    if (!fbs || ind < 0 || ind >= MAX_CLIENTS)
 	return;
-    struct pkg_conn *pkc = fbsp->fbs_clients[ind].fbsc_pkg;
+    struct pkg_conn *pkc = fbs->fbs_clients[ind].fbsc_pkg;
     if (!pkc || !s)
 	return;
 
     /* Set the current framebuffer pointer for callback functions */
-    pkc->pkc_server_data = (void *)fbsp->fbs_fbp;
+    pkc->pkc_server_data = (void *)fbs->fbs_fbp;
 
     // Read data.  NOTE:  we're using the Qt read routines rather than
     // pkg_suckin, so we can't call fbs_existing_client_hander from libdm.
@@ -109,11 +144,11 @@ QFBSocket::client_handler()
     emit updated();
 
     // If we've got callbacks, execute them now.
-    if (fbsp->fbs_callback != (void (*)(void *))FBS_CALLBACK_NULL) {
+    if (fbs->fbs_callback != (void (*)(void *))FBS_CALLBACK_NULL) {
 	/* need to cast func pointer explicitly to get the function call */
 	void (*cfp)(void *);
-	cfp = (void (*)(void *))fbsp->fbs_callback;
-	cfp(fbsp->fbs_clientData);
+	cfp = (void (*)(void *))fbs->fbs_callback;
+	cfp(fbs->fbs_clientData);
     }
 }
 
@@ -126,15 +161,16 @@ void
 QFBSocket::on_disconnected()
 {
     QTCAD_SLOT("QFBSocket::on_disconnected", 1);
-    if (!fbsp || ind < 0 || ind >= MAX_CLIENTS)
+    struct fbserv_obj *fbs = qdm_fbserv_obj(fbsp);
+    if (!fbs || ind < 0 || ind >= MAX_CLIENTS)
 	return;
-    if (fbsp->fbs_clients[ind].fbsc_fd == 0)
+    if (fbs->fbs_clients[ind].fbsc_fd == 0)
 	return;	/* already dropped */
-    fbs_drop_client(fbsp, ind);
+    fbs_drop_client(fbs, ind);
 }
 
 
-QFBServer::QFBServer(struct fbserv_obj *fp)
+QFBServer::QFBServer(void *fp)
 {
     fbsp = fp;
 }
@@ -166,7 +202,7 @@ QFBServer::on_Connect()
 	return;
     }
 
-    fs->ind = fbs_new_client(fbsp, pc, (void *)fs);
+    fs->ind = fbs_new_client(qdm_fbserv_obj(fbsp), pc, (void *)fs);
     if (fs->ind == -1) {
 	bu_log("new connection failed");
 	pkg_close(pc);
@@ -176,7 +212,7 @@ QFBServer::on_Connect()
 }
 
 /* Check if we're already listening. */
-int
+static int
 qdm_is_listening(struct fbserv_obj *fbsp)
 {
     bu_log("is_listening\n");
@@ -186,7 +222,7 @@ qdm_is_listening(struct fbserv_obj *fbsp)
     return 0;
 }
 
-int
+static int
 qdm_listen_on_port(struct fbserv_obj *fbsp, int available_port)
 {
     bu_log("listen on port\n");
@@ -204,7 +240,7 @@ qdm_listen_on_port(struct fbserv_obj *fbsp, int available_port)
     return 0;
 }
 
-void
+static void
 qdm_open_server_handler(struct fbserv_obj *fbsp)
 {
     bu_log("open_server_handler\n");
@@ -214,7 +250,7 @@ qdm_open_server_handler(struct fbserv_obj *fbsp)
     QObject::connect(nl, &QTcpServer::newConnection, nl, &QFBServer::on_Connect, Qt::QueuedConnection);
 }
 
-void
+static void
 qdm_close_server_handler(struct fbserv_obj *fbsp)
 {
     bu_log("close_server_handler\n");
@@ -223,7 +259,7 @@ qdm_close_server_handler(struct fbserv_obj *fbsp)
 }
 
 #ifdef BRLCAD_OPENGL
-void
+static void
 qdm_open_client_handler(struct fbserv_obj *fbsp, int i, void *data)
 {
     bu_log("open_client_handler\n");
@@ -233,7 +269,8 @@ qdm_open_client_handler(struct fbserv_obj *fbsp, int i, void *data)
     /* Phase D2: tear down on remote disconnect. */
     QObject::connect(s->s, &QTcpSocket::disconnected, s, &QFBSocket::on_disconnected, Qt::QueuedConnection);
 
-    QgGL *ctx = (QgGL *)dm_get_ctx(fb_get_dm(fbsp->fbs_fbp));
+    QgGL *ctx =
+	qg_legacy_view_framebuffer_qtgl_canvas_get(qdm_framebuffer_handle(fbsp));
     if (ctx) {
 	QObject::connect(s, &QFBSocket::updated, ctx, &QgGL::need_update, Qt::QueuedConnection);
     }
@@ -250,7 +287,7 @@ qdm_open_client_handler(struct fbserv_obj *fbsp, int i, void *data)
 // pointer.)  The advantage of using a generic swrast backend is that such a
 // setup allows us to use the same logic both for Qt widget rendering and
 // headless image generation.
-void
+static void
 qdm_open_sw_client_handler(struct fbserv_obj *fbsp, int i, void *data)
 {
     bu_log("open_client_handler\n");
@@ -260,13 +297,14 @@ qdm_open_sw_client_handler(struct fbserv_obj *fbsp, int i, void *data)
     /* Phase D2: tear down on remote disconnect. */
     QObject::connect(s->s, &QTcpSocket::disconnected, s, &QFBSocket::on_disconnected, Qt::QueuedConnection);
 
-    QgSW *ctx = (QgSW *)dm_get_udata(fb_get_dm(fbsp->fbs_fbp));
+    QgSW *ctx =
+	qg_legacy_view_framebuffer_swrast_canvas_get(qdm_framebuffer_handle(fbsp));
     if (ctx) {
 	QObject::connect(s, &QFBSocket::updated, ctx, &QgSW::need_update, Qt::QueuedConnection);
     }
 }
 
-void
+static void
 qdm_close_client_handler(struct fbserv_obj *fbsp, int i)
 {
     bu_log("close_client_handler\n");
@@ -277,6 +315,41 @@ qdm_close_client_handler(struct fbserv_obj *fbsp, int i)
 	s->deleteLater();
     }
     fbsp->fbs_clients[i].fbsc_chan = NULL;
+}
+
+void
+qdm_configure_ged_fbserv_handlers(struct ged *gedp, int view_type)
+{
+    if (!gedp || !gedp->ged_fbs)
+	return;
+
+    gedp->ged_fbs->fbs_is_listening = &qdm_is_listening;
+    gedp->ged_fbs->fbs_listen_on_port = &qdm_listen_on_port;
+    gedp->ged_fbs->fbs_open_server_handler = &qdm_open_server_handler;
+    gedp->ged_fbs->fbs_close_server_handler = &qdm_close_server_handler;
+
+#ifdef BRLCAD_OPENGL
+    if (view_type == QgView_GL) {
+	gedp->ged_fbs->fbs_open_client_handler = &qdm_open_client_handler;
+	gedp->ged_fbs->fbs_open_ipc_client_handler =
+	    &qdm_open_ipc_client_handler;
+    }
+#endif
+    if (view_type == QgView_SW) {
+	gedp->ged_fbs->fbs_open_client_handler = &qdm_open_sw_client_handler;
+	gedp->ged_fbs->fbs_open_ipc_client_handler =
+	    &qdm_open_ipc_sw_client_handler;
+    }
+
+    gedp->ged_fbs->fbs_close_client_handler = &qdm_close_client_handler;
+    gedp->ged_fbs->fbs_close_ipc_client_handler =
+	&qdm_close_ipc_client_handler;
+}
+
+const char *
+qdm_init_messages(void)
+{
+    return qg_legacy_view_dm_init_messages();
 }
 
 
@@ -296,10 +369,12 @@ QFBIPCSocket::ipc_handler()
 {
     QTCAD_SLOT("QFBIPCSocket::ipc_handler", 1);
 
-    if (!fbsp || ind < 0 || ind >= MAX_CLIENTS)
+    struct fbserv_obj *fbs = qdm_fbserv_obj(fbsp);
+
+    if (!fbs || ind < 0 || ind >= MAX_CLIENTS)
 	return;
 
-    struct fbserv_client *fbsc = &fbsp->fbs_clients[ind];
+    struct fbserv_client *fbsc = &fbs->fbs_clients[ind];
     struct pkg_conn *pkc = fbsc->fbsc_pkg;
     if (!pkc) {
 	if (notifier) notifier->setEnabled(false);
@@ -358,9 +433,9 @@ QFBIPCSocket::ipc_handler()
 	    bu_log("QFBIPCSocket::ipc_handler: pkg_process error\n");
 	emit updated();
 
-	if (fbsp->fbs_callback != (void (*)(void *))FBS_CALLBACK_NULL) {
-	    void (*cfp)(void *) = (void (*)(void *))fbsp->fbs_callback;
-	    cfp(fbsp->fbs_clientData);
+	if (fbs->fbs_callback != (void (*)(void *))FBS_CALLBACK_NULL) {
+	    void (*cfp)(void *) = (void (*)(void *))fbs->fbs_callback;
+	    cfp(fbs->fbs_clientData);
 	}
     }
 
@@ -374,7 +449,7 @@ QFBIPCSocket::ipc_handler()
     if (got_real_eof || got_error) {
 	bu_log("QFBIPCSocket::ipc_handler: ind=%d got_real_eof=%d got_error=%d data_read=%d -> dropping client\n",
 	       ind, got_real_eof, got_error, data_read);
-	fbs_drop_client(fbsp, ind);
+	fbs_drop_client(fbs, ind);
 	return;
     }
 
@@ -384,7 +459,7 @@ QFBIPCSocket::ipc_handler()
 
 
 #ifdef BRLCAD_OPENGL
-void
+static void
 qdm_open_ipc_client_handler(struct fbserv_obj *fbsp, int i, void *UNUSED(data))
 {
     bu_log("open_ipc_client_handler (GL)\n");
@@ -399,7 +474,8 @@ qdm_open_ipc_client_handler(struct fbserv_obj *fbsp, int i, void *UNUSED(data))
     QObject::connect(s->notifier, &QSocketNotifier::activated,
 		     s, &QFBIPCSocket::ipc_handler, Qt::QueuedConnection);
 
-    QgGL *ctx = (QgGL *)dm_get_ctx(fb_get_dm(fbsp->fbs_fbp));
+    QgGL *ctx =
+	qg_legacy_view_framebuffer_qtgl_canvas_get(qdm_framebuffer_handle(fbsp));
     if (ctx) {
 	QObject::connect(s, &QFBIPCSocket::updated,
 			 ctx, &QgGL::need_update, Qt::QueuedConnection);
@@ -407,7 +483,7 @@ qdm_open_ipc_client_handler(struct fbserv_obj *fbsp, int i, void *UNUSED(data))
 }
 #endif
 
-void
+static void
 qdm_open_ipc_sw_client_handler(struct fbserv_obj *fbsp, int i, void *UNUSED(data))
 {
     bu_log("open_ipc_client_handler (SW)\n");
@@ -422,14 +498,15 @@ qdm_open_ipc_sw_client_handler(struct fbserv_obj *fbsp, int i, void *UNUSED(data
     QObject::connect(s->notifier, &QSocketNotifier::activated,
 		     s, &QFBIPCSocket::ipc_handler, Qt::QueuedConnection);
 
-    QgSW *ctx = (QgSW *)dm_get_udata(fb_get_dm(fbsp->fbs_fbp));
+    QgSW *ctx =
+	qg_legacy_view_framebuffer_swrast_canvas_get(qdm_framebuffer_handle(fbsp));
     if (ctx) {
 	QObject::connect(s, &QFBIPCSocket::updated,
 			 ctx, &QgSW::need_update, Qt::QueuedConnection);
     }
 }
 
-void
+static void
 qdm_close_ipc_client_handler(struct fbserv_obj *fbsp, int i)
 {
     bu_log("close_ipc_client_handler\n");
