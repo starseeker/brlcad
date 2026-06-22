@@ -470,7 +470,10 @@ function(_brlobol_pivot_guard_check_legacy_header_include_hygiene)
 	[[qg_legacy_view_center_vec_set]]
 	[[qg_legacy_view_aet_set]]
 	[[qg_legacy_view_update]]
+	[[qg_legacy_view_screen_to_view]]
 	[[qg_legacy_view_screen_point_get]]
+	[[qg_legacy_view_view2model_get]]
+	[[qg_legacy_view_model2view_get]]
 	[[qg_legacy_view_polygon_ref_is_null]]
 	[[qg_legacy_view_polygon_record_get]]
 	[[qg_legacy_view_polygon_create]]
@@ -11911,18 +11914,25 @@ function(_brlobol_pivot_guard_check_qtcad_view_snapshot_adapters)
   if(EXISTS "${_qtcad_sketch_filter}")
     file(READ "${_qtcad_sketch_filter}" _qtcad_sketch_filter_contents)
     foreach(_token
-	"rt/view_legacy_bsg.h"
-	"rt_view_model2view_from_bsg"
-	"rt_view_screen_to_view_from_bsg"
-	"rt_view_screen_point_from_bsg"
+	"qtcad/QgLegacyView.h"
+	"qg_legacy_view_model2view_get"
+	"qg_legacy_view_screen_to_view"
+	"qg_legacy_view_screen_point_get"
 	"qg_legacy_view_width_get")
       string(FIND "${_qtcad_sketch_filter_contents}" "${_token}" _idx)
       if(_idx EQUAL -1)
 	_brlobol_pivot_guard_fail(
-	  "src/libqtcad/QgSketchFilter.cpp must route sketch view snapshots through rt/view_legacy_bsg.h token ${_token}")
+	  "src/libqtcad/QgSketchFilter.cpp must route sketch view snapshots through qtcad/QgLegacyView.h token ${_token}")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]qtcad/QgLegacyViewBsg\.h]]
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[(^|[^A-Za-z0-9_])qg_legacy_view_to_bsg([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_screen_to_view_from_bsg([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_screen_point_from_bsg([^A-Za-z0-9_]|$)]]
 	[[#[ \t]*include[ \t]*[<"]bsg/util\.h]]
 	[[rt_view_width_from_bsg]]
 	"gv_mouse_[xy]"
@@ -12199,16 +12209,16 @@ function(_brlobol_pivot_guard_check_qtcad_view_snapshot_adapters)
   if(EXISTS "${_qtcad_measure_filter}")
     file(READ "${_qtcad_measure_filter}" _qtcad_measure_filter_contents)
     foreach(_token
-	"rt/view_legacy_bsg.h"
-	"rt_view_screen_to_view_from_bsg"
-	"rt_view_view2model_from_bsg")
+	"qtcad/QgLegacyView.h"
+	"qg_legacy_view_screen_to_view"
+	"qg_legacy_view_view2model_get")
       string(FIND "${_qtcad_measure_filter_contents}" "${_token}" _idx)
       if(_idx EQUAL -1)
 	_brlobol_pivot_guard_fail(
-	  "src/libqtcad/QgMeasureFilter.cpp must route 2D measurement view-to-model reads through rt/view_legacy_bsg.h token ${_token}")
+	  "src/libqtcad/QgMeasureFilter.cpp must route 2D measurement view-to-model reads through qtcad/QgLegacyView.h token ${_token}")
       endif()
     endforeach()
-    string(REGEX MATCH [[(MAT4X3PNT[ \t\r\n]*\([^;]*v->[ \t\r\n]*gv_view2model|bsg_screen_to_view|gv_mouse_[xy])]]
+    string(REGEX MATCH [[(#[ \t]*include[ \t]*[<"]qtcad/QgLegacyViewBsg\.h|#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h|(^|[^A-Za-z0-9_])qg_legacy_view_to_bsg([^A-Za-z0-9_]|$)|struct[ \t\r\n]+bsg_view|(^|[^A-Za-z0-9_])rt_view_screen_to_view_from_bsg([^A-Za-z0-9_]|$)|(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg([^A-Za-z0-9_]|$)|MAT4X3PNT[ \t\r\n]*\([^;]*v->[ \t\r\n]*gv_view2model|bsg_screen_to_view|gv_mouse_[xy])]]
       _qtcad_measure_direct "${_qtcad_measure_filter_contents}")
     if(_qtcad_measure_direct)
       _brlobol_pivot_guard_fail(

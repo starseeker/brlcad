@@ -809,13 +809,16 @@ Recently Completed Slices
   subsystem headers instead of the umbrella.  libged polygon clipping and zoom
   command code now also avoid `bsg/util.h`; their retained view reads stay on
   the RT legacy adapter boundary.  qtcad sketch editing also avoids
-  `bsg/util.h` and reads Qt event coordinates directly instead of reaching
-  back into `bsg_view` mouse fields.  qtcad 2-D/3-D measurement filters now
+  `bsg/util.h`, reads Qt event coordinates directly instead of reaching
+  back into `bsg_view` mouse fields, and now routes its retained
+  screen-to-view, screen-point, width, and model-to-view reads through the
+  opaque `QgLegacyView.h` helper surface.  qtcad 2-D/3-D measurement filters now
   capture Qt event coordinates in the filter state and use those for
   screen-to-view and Obol pick queries instead of reading BSG mouse fields.
-  The private measurement overlay clear helper is now view-implicit, keeping
-  `bsg_view` spelling out of `QgMeasureFilter.h` while retained view reads stay
-  in the implementation.
+  The private measurement overlay clear helper is now view-implicit, and
+  `QgMeasureFilter.cpp` routes its retained screen-to-view and view-to-model
+  reads through the opaque `QgLegacyView.h` helper surface instead of including
+  `QgLegacyViewBsg.h` or `rt/view_legacy_bsg.h` directly.
   qtcad point, box, and ray selection filters likewise use Qt event
   coordinates for Obol and retained BSG fallback pick queries, and shared
   qtcad view-sync now pushes legacy mouse/current-point state through the RT
@@ -944,35 +947,49 @@ Recently Completed Slices
 	  `QgLegacyViewBsg.h` or `rt/view_legacy_bsg.h`, calls
 	  `qg_legacy_view_to_bsg`, spells `struct bsg_view`, or names the retained
 	  RT legacy-BSG polygon helpers directly.
+	  QgMeasureFilter now uses the same opaque qtcad helper surface for 2-D
+	  screen-to-view and view-to-model conversion, so the measurement filter
+	  implementation no longer includes the qtcad BSG adapter or
+	  `rt/view_legacy_bsg.h`, calls `qg_legacy_view_to_bsg`, or spells
+	  `struct bsg_view`.
+	  QgSketchFilter now uses the opaque helper surface for screen-to-view,
+	  screen-point, width, and model-to-view reads, so the sketch filter
+	  implementation no longer includes the qtcad BSG adapter or
+	  `rt/view_legacy_bsg.h`, calls `qg_legacy_view_to_bsg`, spells
+	  `struct bsg_view`, or names those retained RT legacy-BSG view helpers
+	  directly.
 	  The private qtcad canvas state now stores `qg_legacy_view *` handles for
 	  its active and widget-local views as well.  `QgGL`, `QgSW`, and
 	  `QgCanvasState` adapt those handles at the legacy RT/DM call boundary via
-  `QgLegacyViewBsg.h`, so raw `bsg_view *` storage is no longer part of the
-  shared canvas pimpl.  The pivot guard requires the opaque canvas-state
-  fields and rejects reverting `qgcanvas_set_view` to a raw BSG view
-  signature.
-  qtcad dense real-model coverage is now split into named CTest cases with
-  180-second per-test timeouts.  The m35 interaction path uses nearest-pick
-  semantics for its normal correctness assertions, while
-  `m35_wire_pick_all_stress` keeps the real-world dense wireframe pick-all
-  trial as a separate stress case.  The qtcad Obol pick wrapper now appends
-  pick-all hits and stable-sorts them once, avoiding the old quadratic
-  middle-insert ordering path while preserving nearest-first records; the
-  pivot guard rejects the previous insert loop and requires the stress case.
-  The havoc.g real-model test runtime was also traced to the test helper's
-  realized-geometry validation, not Obol sync: direct timing showed roughly
-  22 seconds in the legacy GED draw transaction, 0.5 seconds in Obol sync,
-  and 49 seconds in a quadratic `getRealizedShapeCount` /
-  `getRealizedShape(i)` loop.  The helper now traverses the realized scene
-  graph once to count wire shapes/segments or meshes/triangles, preserving the
-  same correctness checks while reducing the havoc geometry-count phase to
-  about 0.010 seconds and the full havoc case to about 23 seconds.
-  libdm normalized view clipping, ADC drawing, label placement, GL z-clipping,
-  framebuffer canvas dimension setup, display-manager default clip bounds,
-  and internal pixel/view conversion macros now use RT legacy view adapters or
-  `RT_VIEW_MIN/MAX`, `RT_VIEW_RANGE`, `RT_INV_VIEW`, and `RT_INV_4096` from
-  `rt/view.h` instead of naming BSG view-state details directly; libdm scene
-  drawing no longer keeps `bsg/util.h` solely for disabled `bsg_log` tracing.
+	  `QgLegacyViewBsg.h`, so raw `bsg_view *` storage is no longer part of the
+	  shared canvas pimpl.  The pivot guard requires the opaque canvas-state
+	  fields and rejects reverting `qgcanvas_set_view` to a raw BSG view
+	  signature.
+	  qtcad dense real-model coverage is now split into named CTest cases with
+	  180-second per-test timeouts.  The m35 interaction path uses nearest-pick
+	  semantics for its normal correctness assertions, while
+	  `m35_wire_pick_all_stress` keeps the real-world dense wireframe pick-all
+	  trial as a separate stress case.  The qtcad Obol pick wrapper now appends
+	  pick-all hits and stable-sorts them once, avoiding the old quadratic
+	  middle-insert ordering path while preserving nearest-first records; the
+	  pivot guard rejects the previous insert loop and requires the stress case.
+	  The havoc.g real-model test runtime was also traced to the test helper's
+	  realized-geometry validation, not Obol sync: direct timing showed roughly
+	  22 seconds in the legacy GED draw transaction, 0.5 seconds in Obol sync,
+	  and 49 seconds in a quadratic `getRealizedShapeCount` /
+	  `getRealizedShape(i)` loop.  The helper now traverses the realized scene
+	  graph once to count wire shapes/segments or meshes/triangles, preserving the
+	  same correctness checks while reducing the havoc geometry-count phase to
+	  about 0.010 seconds and the full havoc case to about 23 seconds.
+	  The standalone qsketch fixture still owns a retained raw BSG test/demo
+	  view, but now adapts it through the explicit `QgLegacyViewBsg.h` boundary
+	  when handing it to `QgView::set_view`, matching the opaque qtcad view API.
+	  libdm normalized view clipping, ADC drawing, label placement, GL z-clipping,
+	  framebuffer canvas dimension setup, display-manager default clip bounds,
+	  and internal pixel/view conversion macros now use RT legacy view adapters or
+	  `RT_VIEW_MIN/MAX`, `RT_VIEW_RANGE`, `RT_INV_VIEW`, and `RT_INV_4096` from
+	  `rt/view.h` instead of naming BSG view-state details directly; libdm scene
+	  drawing no longer keeps `bsg/util.h` solely for disabled `bsg_log` tracing.
 * libimgstream exists with core in-memory streams, dirty notifications,
   snapshots, several fb compatibility wrappers, raw file, stack fan-out,
   diagnostic sinks, colormap state, spec parsing, and display-host delegation.

@@ -25,22 +25,18 @@
 
 #include "common.h"
 
-extern "C" {
-#include "rt/view_legacy_bsg.h"
-}
-
 #include <string>
-#include "qtcad/QgLegacyViewBsg.h"
+#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgMeasureFilter.h"
 #include "qtcad/QgObolMeasure.h"
 #include "qtcad/QgSignalFlags.h"
 #include "qtcad/QgView.h"
 
-static struct bsg_view *
+static qg_legacy_view *
 qg_measure_filter_view(const QgMeasureFilter *filter)
 {
 	QgView *display = filter ? filter->view_widget() : nullptr;
-	return display ? qg_legacy_view_to_bsg(display->view()) : nullptr;
+	return display ? display->view() : nullptr;
 }
 
 void
@@ -149,7 +145,7 @@ QgMeasureFilter::eventFilter(QObject *, QEvent *e)
 		return false;
 	update_current_mouse(m_e);
 
-	struct bsg_view *v = qg_measure_filter_view(this);
+	qg_legacy_view *v = qg_measure_filter_view(this);
 	if (!v)
 		return false;
 
@@ -273,19 +269,20 @@ QgMeasureFilter::eventFilter(QObject *, QEvent *e)
 bool
 QMeasure2DFilter::get_point()
 {
-	struct bsg_view *v = qg_measure_filter_view(this);
+	qg_legacy_view *v = qg_measure_filter_view(this);
 	if (!v)
 		return false;
 	int sx = 0, sy = 0;
 	if (!current_mouse_xy(&sx, &sy))
 		return false;
 	fastf_t vx, vy;
-	if (!rt_view_screen_to_view_from_bsg(&vx, &vy, v, sx, sy))
+	if (!qg_legacy_view_screen_to_view(v, &vx, &vy, sx, sy))
 		return false;
 	point_t vpnt;
 	mat_t view2model;
 	VSET(vpnt, vx, vy, 0);
-	rt_view_view2model_from_bsg(view2model, v);
+	if (!qg_legacy_view_view2model_get(v, view2model))
+		return false;
 	MAT4X3PNT(mpnt, view2model, vpnt);
 	return true;
 }
@@ -307,7 +304,7 @@ QMeasure3DFilter::~QMeasure3DFilter()
 bool
 QMeasure3DFilter::get_point()
 {
-	struct bsg_view *v = qg_measure_filter_view(this);
+	qg_legacy_view *v = qg_measure_filter_view(this);
 	if (!v)
 		return false;
 

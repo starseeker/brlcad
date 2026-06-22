@@ -136,6 +136,7 @@
 
 #include "qtcad/QgSignalFlags.h"
 #include "qtcad/QgSketchFilter.h"
+#include "qtcad/QgLegacyViewBsg.h"
 #include "qtcad/QgSW.h"
 #include "qtcad/QgView.h"
 
@@ -479,7 +480,7 @@ QSketchEditWindow::QSketchEditWindow(struct db_i *dbip,
 
     /* ----  QgView ---- */
     m_view = new QgView(this, QgView_SW);
-    m_view->set_view(m_bv);
+    m_view->set_view(qg_legacy_view_from_bsg(m_bv));
 
     /* Create a field-backed BSG line-set node for the sketch wireframe under
      * the view's initialized scene anchor.  qsketch refreshes the line-set

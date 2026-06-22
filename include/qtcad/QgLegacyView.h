@@ -162,11 +162,26 @@ QTCAD_EXPORT extern int qg_legacy_view_aet_set(qg_legacy_view *view,
 
 QTCAD_EXPORT extern int qg_legacy_view_update(qg_legacy_view *view);
 
+QTCAD_EXPORT extern int qg_legacy_view_screen_to_view(
+	qg_legacy_view *view,
+	fastf_t *vx,
+	fastf_t *vy,
+	fastf_t sx,
+	fastf_t sy);
+
 QTCAD_EXPORT extern int qg_legacy_view_screen_point_get(
 	qg_legacy_view *view,
 	point_t point,
 	fastf_t sx,
 	fastf_t sy);
+
+QTCAD_EXPORT extern int qg_legacy_view_view2model_get(
+	const qg_legacy_view *view,
+	mat_t view2model);
+
+QTCAD_EXPORT extern int qg_legacy_view_model2view_get(
+	const qg_legacy_view *view,
+	mat_t model2view);
 
 QTCAD_EXPORT extern int qg_legacy_view_polygon_ref_is_null(
 	rt_view_polygon_ref ref);

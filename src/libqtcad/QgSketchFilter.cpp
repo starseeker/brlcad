@@ -34,12 +34,10 @@ extern "C" {
 #include "rt/geom.h"
 #include "rt/primitives/sketch.h"
 #include "rt/rt_ecmds.h"
-#include "rt/view_legacy_bsg.h"
 }
 
 #include "qtcad/QgSketchFilter.h"
 #include "qtcad/QgLegacyView.h"
-#include "qtcad/QgLegacyViewBsg.h"
 #include "qtcad/QgSignalFlags.h"
 #include "qtcad/QgView.h"
 
@@ -48,12 +46,6 @@ qg_sketch_filter_legacy_view(const QgSketchFilter *filter)
 {
 	QgView *display = filter ? filter->view_widget() : nullptr;
 	return display ? display->view() : nullptr;
-}
-
-static struct bsg_view *
-qg_sketch_filter_view(const QgSketchFilter *filter)
-{
-	return qg_legacy_view_to_bsg(qg_sketch_filter_legacy_view(filter));
 }
 
 static void
@@ -84,13 +76,13 @@ QgSketchFilter::QgSketchFilter(QObject *parent)
 void
 QgSketchFilter::screen_to_view(int sx, int sy, vect_t mvec) const
 {
-	struct bsg_view *v = qg_sketch_filter_view(this);
+	qg_legacy_view *v = qg_sketch_filter_legacy_view(this);
 	if (!v) {
 		VSETALL(mvec, 0.0);
 		return;
 	}
 	fastf_t vx = 0.0, vy = 0.0;
-	if (!rt_view_screen_to_view_from_bsg(&vx, &vy, v,
+	if (!qg_legacy_view_screen_to_view(v, &vx, &vy,
 		(fastf_t)sx, (fastf_t)sy)) {
 		VSETALL(mvec, 0.0);
 		return;
@@ -102,7 +94,7 @@ bool
 QgSketchFilter::screen_to_uv(int sx, int sy,
                              fastf_t *u_out, fastf_t *v_out) const
 {
-	struct bsg_view *v = qg_sketch_filter_view(this);
+	qg_legacy_view *v = qg_sketch_filter_legacy_view(this);
 	if (!v || !es)
 		return false;
 
@@ -114,7 +106,7 @@ QgSketchFilter::screen_to_uv(int sx, int sy,
 
 	/* Unproject screen pixel → model-space 3-D point */
 	point_t p3d;
-	if (!rt_view_screen_point_from_bsg(p3d, v, (fastf_t)sx, (fastf_t)sy))
+	if (!qg_legacy_view_screen_point_get(v, p3d, (fastf_t)sx, (fastf_t)sy))
 		return false;
 
 	/* Project the 3-D point onto the sketch plane.
@@ -139,7 +131,7 @@ QgSketchFilter::snap_vertex_uv(int sx, int sy,
 	if (!screen_to_uv(sx, sy, u_out, v_out))
 		return false;
 
-	struct bsg_view *v = qg_sketch_filter_view(this);
+	qg_legacy_view *v = qg_sketch_filter_legacy_view(this);
 	if (snap_px <= 0.0 || !es || !v)
 		return true;
 
@@ -151,7 +143,7 @@ QgSketchFilter::snap_vertex_uv(int sx, int sy,
 	/* Model→view transform (including any edit transform) */
 	mat_t m2v;
 	mat_t model2view;
-	rt_view_model2view_from_bsg(model2view, v);
+	(void)qg_legacy_view_model2view_get(v, model2view);
 	bn_mat_mul(m2v, model2view, es->model_changes);
 
 	/* Cursor in view space */
@@ -160,8 +152,7 @@ QgSketchFilter::snap_vertex_uv(int sx, int sy,
 
 	/* Convert snap_px to view-space units.
 	 * One pixel = 2 / gv_width view units in X. */
-	qg_legacy_view *lv = qg_sketch_filter_legacy_view(this);
-	int view_width = qg_legacy_view_width_get(lv);
+	int view_width = qg_legacy_view_width_get(v);
 	fastf_t px_to_view = (view_width > 0)
 	                     ? (2.0 / (fastf_t)view_width)
 	                     : 0.005;
@@ -464,9 +455,9 @@ QgSketchPickSegmentFilter::eventFilter(QObject *, QEvent *e)
 
 		/* Build model→view matrix including any edit transform */
 		mat_t m2v;
-		struct bsg_view *v = qg_sketch_filter_view(this);
+		qg_legacy_view *v = qg_sketch_filter_legacy_view(this);
 		mat_t model2view;
-		rt_view_model2view_from_bsg(model2view, v);
+		(void)qg_legacy_view_model2view_get(v, model2view);
 		bn_mat_mul(m2v, model2view, es->model_changes);
 
 		/* Cursor in view space */
@@ -663,7 +654,7 @@ sketch_arc_center_uv(const struct rt_sketch_internal *skt,
 bool
 QgSketchArcRadiusFilter::eventFilter(QObject *, QEvent *e)
 {
-	struct bsg_view *v = qg_sketch_filter_view(this);
+	qg_legacy_view *v = qg_sketch_filter_legacy_view(this);
 	if (!es || !v)
 		return false;
 
@@ -809,9 +800,9 @@ QgSketchSetTangencyFilter::eventFilter(QObject *, QEvent *e)
 
 		/* Build model→view matrix */
 		mat_t m2v;
-		struct bsg_view *v = qg_sketch_filter_view(this);
+		qg_legacy_view *v = qg_sketch_filter_legacy_view(this);
 		mat_t model2view;
-		rt_view_model2view_from_bsg(model2view, v);
+		(void)qg_legacy_view_model2view_get(v, model2view);
 		bn_mat_mul(m2v, model2view, es->model_changes);
 
 		/* Cursor in view space */

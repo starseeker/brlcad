@@ -3297,6 +3297,29 @@ name/visual updates, CSG, removal, and record/ref checks route through
 FreeBSD/clang caught that the screen-point adapter needs a mutable staged
 view handle, so `qg_legacy_view_screen_point_get` intentionally takes
 `qg_legacy_view *`.
+The qtcad measurement filter now uses that same opaque helper boundary for
+its remaining staged view reads.  `QgLegacyView.h` owns screen-to-view and
+view-to-model wrappers, and `QgMeasureFilter.cpp` no longer includes
+`QgLegacyViewBsg.h` or `rt/view_legacy_bsg.h`, calls
+`qg_legacy_view_to_bsg`, spells `struct bsg_view`, or names
+`rt_view_screen_to_view_from_bsg` / `rt_view_view2model_from_bsg` directly.
+The pivot guard requires those qtcad helper calls and rejects the direct
+measurement adapter tokens from returning.
+The qtcad sketch filter now follows the same pattern for its remaining
+retained view reads.  `QgLegacyView.h` owns the added model-to-view wrapper
+beside the screen-to-view, screen-point, and width helpers, and
+`QgSketchFilter.cpp` no longer includes `QgLegacyViewBsg.h` or
+`rt/view_legacy_bsg.h`, calls `qg_legacy_view_to_bsg`, spells
+`struct bsg_view`, or names `rt_view_model2view_from_bsg`,
+`rt_view_screen_to_view_from_bsg`, or `rt_view_screen_point_from_bsg`
+directly.  The pivot guard now requires the opaque sketch helper tokens and
+rejects the old direct adapter path.
+Building the standalone `qsketch` fixture on FreeBSD/clang exposed a retained
+test/demo boundary mismatch: it still owns a raw staged `bsg_view *`, while
+`QgView::set_view` now accepts `qg_legacy_view *`.  The fixture now adapts that
+pointer through the explicit `QgLegacyViewBsg.h` boundary at the `set_view`
+call, preserving the existing qsketch BSG fixture ownership while restoring
+the target build.
 
 The long `havoc_wire` qtcad real-model runtime was traced with
 `BRLOBOL_QTCAD_REAL_MODEL_TIMING=1`.  Before the fix the case spent about

@@ -279,11 +279,33 @@ qg_legacy_view_update(qg_legacy_view *view)
 }
 
 int
+qg_legacy_view_screen_to_view(qg_legacy_view *view, fastf_t *vx,
+	fastf_t *vy, fastf_t sx, fastf_t sy)
+{
+    return rt_view_screen_to_view_from_bsg(vx, vy, qg_legacy_view_to_bsg(view),
+	    sx, sy);
+}
+
+int
 qg_legacy_view_screen_point_get(qg_legacy_view *view, point_t point,
 	fastf_t sx, fastf_t sy)
 {
     return rt_view_screen_point_from_bsg(point, qg_legacy_view_to_bsg(view),
 	    sx, sy);
+}
+
+int
+qg_legacy_view_view2model_get(const qg_legacy_view *view, mat_t view2model)
+{
+    rt_view_view2model_from_bsg(view2model, qg_legacy_view_to_bsg(view));
+    return view && view2model;
+}
+
+int
+qg_legacy_view_model2view_get(const qg_legacy_view *view, mat_t model2view)
+{
+    rt_view_model2view_from_bsg(model2view, qg_legacy_view_to_bsg(view));
+    return view && model2view;
 }
 
 int
