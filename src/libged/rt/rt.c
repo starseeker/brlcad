@@ -36,8 +36,6 @@
 #include "bu/app.h"
 #include "bu/process.h"
 
-#include "rt/view_legacy_bsg.h"
-
 #include "../ged_private.h"
 
 
@@ -52,8 +50,8 @@ ged_rt_framebuffer_device(struct ged *gedp)
     if (fbdev && fbdev[0])
 	return fbdev;
 
-    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
-    if (rt_view_display_manager_from_bsg(v))
+    void *view_ctx = ged_view_active_ctx(gedp);
+    if (ged_view_context_display_manager_get(view_ctx))
 	return "/dev/ogl";
 
     return NULL;
@@ -89,9 +87,9 @@ ged_rt_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+    void *view_ctx = ged_view_active_ctx(gedp);
     const char *fbdev = ged_rt_framebuffer_device(gedp);
-    perspective = rt_view_perspective_from_bsg(v);
+    perspective = ged_view_context_perspective_get(view_ctx);
     if (fbdev) {
 	args = argc + 9 + 2 + (int)ged_who_argc(gedp);
     } else {

@@ -30,7 +30,6 @@
 #include "bu/mime.h"
 #include "icv.h"
 #include "dm.h"
-#include "rt/view_legacy_bsg.h"
 
 #include "../ged_private.h"
 
@@ -104,14 +103,14 @@ ged_overlay_core(struct ged *gedp, int argc, const char *argv[])
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
-    if (!v) {
+    void *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx) {
 	bu_vls_printf(gedp->ged_result_str, ": no current view set\n");
 	bu_vls_free(&vname);
 	return BRLCAD_ERROR;
     }
 
-    dmp = (struct dm *)rt_view_display_manager_from_bsg(v);
+    dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
     if (!dmp) {
 	bu_vls_printf(gedp->ged_result_str, ": no display manager currently active");
 	bu_vls_free(&vname);
@@ -136,12 +135,12 @@ ged_overlay_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     if (!write_fb && NEAR_ZERO(size, VUNITIZE_TOL)) {
-	if (!v) {
+	if (!view_ctx) {
 	    bu_vls_printf(gedp->ged_result_str, ": no character size specified, and could not determine default value");
 	    bu_vls_free(&vname);
 	    return BRLCAD_ERROR;
 	}
-	size = rt_view_scale_from_bsg(v) * 0.01;
+	size = ged_view_context_scale_get(view_ctx) * 0.01;
     }
 
     argc = opt_ret;

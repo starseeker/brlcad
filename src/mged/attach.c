@@ -45,8 +45,8 @@
 #include "bu/env.h"
 #include "bu/ptbl.h"
 #include "ged.h"
+#include "ged/view.h"
 #include "rt/view.h"
-#include "rt/view_legacy_bsg.h"
 #include "tclcad.h"
 
 #include "./mged.h"
@@ -100,7 +100,7 @@ mged_dm_adc_state_set(struct mged_dm *dm, const struct rt_view_adc_state *adc)
 {
     if (!dm || !dm->dm_view_state || !dm->dm_view_state->vs_gvp)
 	return;
-    rt_view_adc_state_set_bsg(dm->dm_view_state->vs_gvp, adc);
+    ged_view_context_adc_state_set(dm->dm_view_state->vs_gvp, adc);
 }
 
 int
@@ -127,7 +127,7 @@ mged_dm_init(
 	return TCL_ERROR;
 
     /*XXXX this eventually needs to move into Ogl's private structure */
-    dm_set_vp(DMP, rt_view_scale_storage_from_bsg(view_state->vs_gvp));
+    dm_set_vp(DMP, ged_view_context_scale_storage_get(view_state->vs_gvp));
     dm_set_perspective(DMP, mged_variables->mv_perspective_mode);
 
 #ifdef HAVE_TK
@@ -699,23 +699,22 @@ dm_var_init(struct mged_state *s, struct mged_dm *target_dm)
 
     BU_ALLOC(view_state, struct _view_state);
     *view_state = *target_dm->dm_view_state;			/* struct copy */
-    BU_ALLOC(view_state->vs_gvp, struct bsg_view);
-    struct bsg_view_set *view_set = (struct bsg_view_set *)ged_view_set_ctx(s->gedp);
-    rt_view_init_copy_bsg(view_state->vs_gvp,
-	    target_dm->dm_view_state->vs_gvp,
-	    view_set);
+    void *target_view_ctx = target_dm->dm_view_state->vs_gvp;
+    void *view_set_ctx = ged_view_set_ctx(s->gedp);
+    void *view_ctx = ged_view_context_create_copy_with_set(target_view_ctx, view_set_ctx);
+    view_state->vs_gvp = view_ctx;
 
     /* Independent view state is managed through BSG view-scope records. */
 
-    rt_view_update_callback_set_bsg(view_state->vs_gvp,
+    ged_view_context_update_callback_set(view_ctx,
 	    mged_view_callback, (void *)view_state);
     struct rt_view_lod_policy lod_policy = RT_VIEW_LOD_POLICY_INIT;
-    if (rt_view_lod_policy_from_bsg(&lod_policy, view_state->vs_gvp)) {
+    if (ged_view_context_lod_policy_get(&lod_policy, view_ctx)) {
 	lod_policy.csg_enabled = 0;
 	lod_policy.zoom_refresh = 0;
 	lod_policy.point_scale = 1.0;
 	lod_policy.curve_scale = 1.0;
-	rt_view_lod_policy_apply_bsg(view_state->vs_gvp, &lod_policy);
+	ged_view_context_lod_policy_apply(view_ctx, &lod_policy);
     }
     view_state->vs_rc = 1;
     view_ring_init(s->mged_curr_dm->dm_view_state, (struct _view_state *)NULL);

@@ -31,8 +31,6 @@
 #include "ged.h"
 #include "ged/bsg_ged_draw.h"
 #include "ged/view.h"
-#include "rt/view_legacy_bsg.h"
-#include "../bsg_ged_draw_view_private.h"
 #include "../ged_private.h"
 
 /* Callback data for labelvert */
@@ -149,8 +147,8 @@ ged_labelvert_core(struct ged *gedp, int argc, const char *argv[])
 	return GED_HELP;
     }
 
-    struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
-    if (!view) {
+    void *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx) {
 	bu_vls_printf(gedp->ged_result_str, ": no current view set");
 	return BRLCAD_ERROR;
     }
@@ -165,11 +163,11 @@ ged_labelvert_core(struct ged *gedp, int argc, const char *argv[])
 	    continue;
 	/* Find displayed uses of this database object. */
 	lvd.dp = dp;
-	ged_draw_foreach_visible_view_db_object_record(view,
+	ged_draw_foreach_visible_view_db_object_record(view_ctx,
 		labelvert_export_record, &lvd);
     }
 
-    if (!ged_draw_view_labels_replace(view, LABELVERT_FEATURE_NAME,
+    if (!ged_draw_view_context_labels_replace(view_ctx, LABELVERT_FEATURE_NAME,
 		0, lvd.labels, lvd.label_count)) {
 	labelvert_data_free(&lvd);
 	bu_vls_printf(gedp->ged_result_str, "failed to create labelvert feature\n");
@@ -177,7 +175,7 @@ ged_labelvert_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     labelvert_data_free(&lvd);
-    struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(view);
+    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
     if (dmp)
 	dm_set_native_repaint_pending(dmp, 1);
     return BRLCAD_OK;

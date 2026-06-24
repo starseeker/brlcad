@@ -37,8 +37,8 @@
 #include "raytrace.h"
 #include "nmg.h"
 #include "rt/geom.h"
-#include "rt/view_legacy_bsg.h"
 #include "ged.h"
+#include "ged/view.h"
 #include "wdb.h"
 
 #include "./mged.h"
@@ -76,9 +76,10 @@ f_make(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	char scale[128];
 	mat_t view_center;
 	fastf_t view_scale;
+	void *view_ctx = view_state->vs_gvp;
 
-	rt_view_center_from_bsg(view_center, view_state->vs_gvp);
-	view_scale = rt_view_scale_from_bsg(view_state->vs_gvp);
+	ged_view_context_center_get(view_center, view_ctx);
+	view_scale = ged_view_context_scale_get(view_ctx);
 
 	sprintf(center, "%.17f %.17f %.17f",
 		(ZERO(view_center[MDX])) ? 0.0 : -view_center[MDX],

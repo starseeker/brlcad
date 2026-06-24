@@ -28,9 +28,10 @@
 
 #include "common.h"
 
+#include <time.h>
+
 #include "ged/bsg_ged_draw.h"
 #include "ged.h"
-#include "../ged_private.h"
 
 __BEGIN_DECLS
 
@@ -44,8 +45,8 @@ struct ged_shape_data {
     int wireframe_color[3];
     fastf_t transparency;
     int draw_mode;
-    struct bsg_appearance_settings vs;
-    struct bsg_view *v;
+    struct ged_draw_appearance_settings vs;
+    void *view_ctx;
 };
 
 struct _ged_client_data {
@@ -55,7 +56,7 @@ struct _ged_client_data {
     ged_draw_group_ref draw_group_ref;
     int fastpath_count;			/* statistics */
     struct bg_line_layer_builder *draw_edge_uses_plot;
-    struct bsg_view *v;
+    void *view_ctx;
 
     /* bigE related members */
     struct application *ap;
@@ -80,7 +81,7 @@ struct _ged_client_data {
     int draw_edge_uses;
     int do_not_draw_nmg_solids_during_debugging;
 
-    struct bsg_appearance_settings vs;
+    struct ged_draw_appearance_settings vs;
 };
 
 struct ged_command_tab {

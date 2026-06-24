@@ -12,16 +12,12 @@
 #include "common.h"
 
 #include <cmath>
+#include <cstdio>
 #include <string>
-#include <vector>
 
 #include <bu.h>
 #include <ged.h>
 #include <ged/bsg_ged_draw.h>
-#include <bsg/backend_scene.h>
-#include <bsg/export.h>
-#include <bsg/render.h>
-#include <bsg/render_item.h>
 #include <rt/view_legacy_bsg.h>
 
 #define ASSERT(cond) do { \
@@ -65,76 +61,8 @@ assert_view_ok(struct ged *gedp, int argc, const char **argv, int line)
 
 #define ASSERT_VIEW_OK(gedp, argc, argv) assert_view_ok((gedp), (argc), (argv), __LINE__)
 
-static int
-collect_render_items(struct bsg_view *v, struct bu_ptbl *items)
-{
-    bu_ptbl_init(items, 4, "view command render items");
-    struct bsg_render_request *req = bsg_render_request_create(v, NULL);
-    struct bsg_render_batch *batch = bsg_render_batch_create();
-    if (!req || !batch) {
-	bsg_render_request_destroy(req);
-	bsg_render_batch_destroy(batch);
-	return -1;
-    }
-    bsg_render_request_set_flags(req, BSG_RENDER_FLAG_VISIBLE_ONLY | BSG_RENDER_FLAG_PAYLOAD_PREPARE);
-    int ret = bsg_render_request_collect(req, batch);
-    if (ret >= 0)
-	(void)bsg_render_batch_move_items(batch, items);
-    bsg_render_batch_destroy(batch);
-    bsg_render_request_destroy(req);
-    return ret;
-}
-
 static void
-free_render_items(struct bu_ptbl *items)
-{
-    if (!items)
-	return;
-    for (size_t i = 0; i < BU_PTBL_LEN(items); i++)
-	bsg_render_item_free((struct bsg_render_item *)BU_PTBL_GET(items, i));
-    bu_ptbl_free(items);
-}
-
-static int
-path_matches_drawn_prefix(const char *path, const char *drawn_prefix)
-{
-    if (!path || !drawn_prefix)
-	return 0;
-    size_t n = strlen(drawn_prefix);
-    return BU_STR_EQUAL(path, drawn_prefix) ||
-	(strlen(path) > n && bu_strncmp(path, drawn_prefix, n) == 0 && path[n] == '/');
-}
-
-static int
-find_export_record(const struct bsg_export_result *result, const char *drawn_prefix)
-{
-    if (!result || !drawn_prefix)
-	return -1;
-    for (size_t i = 0; i < bsg_export_result_count(result); i++) {
-	const struct bsg_export_record *rec = bsg_export_result_get(result, i);
-	if (rec && path_matches_drawn_prefix(bu_vls_cstr(&rec->path), drawn_prefix))
-	    return (int)i;
-    }
-    return -1;
-}
-
-static int
-find_render_item(const struct bu_ptbl *items, const char *drawn_prefix)
-{
-    if (!items || !drawn_prefix)
-	return -1;
-    for (size_t i = 0; i < BU_PTBL_LEN(items); i++) {
-	const struct bsg_render_item *item =
-	    (const struct bsg_render_item *)BU_PTBL_GET(items, i);
-	if (item && item->source.name &&
-		path_matches_drawn_prefix(item->source.name, drawn_prefix))
-	    return (int)i;
-    }
-    return -1;
-}
-
-static void
-refresh_scene_records(struct ged *gedp, struct bsg_view *v)
+refresh_scene_records(struct ged *gedp, void *v)
 {
     struct ged_draw_transaction txn =
 	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
@@ -143,7 +71,7 @@ refresh_scene_records(struct ged *gedp, struct bsg_view *v)
 }
 
 static void
-test_command_report_record_consistency(struct ged *gedp, struct bsg_view *v)
+test_command_report_record_consistency(struct ged *gedp, void *v)
 {
     const char *draw_av[] = {"draw", "all.g", NULL};
     ASSERT(ged_exec_draw(gedp, 2, draw_av) == BRLCAD_OK);
@@ -159,52 +87,18 @@ test_command_report_record_consistency(struct ged *gedp, struct bsg_view *v)
     ASSERT(solids.find("all.g") != std::string::npos);
     ASSERT(solids.find("cent=") != std::string::npos);
 
-    struct bsg_export_request ereq;
-    bsg_export_request_init(&ereq, v);
-    ereq.query_flags = BSG_EXPORT_QUERY_VISIBLE_ONLY | BSG_EXPORT_QUERY_DB_OBJECTS;
-    ereq.render_flags = BSG_RENDER_FLAG_VISIBLE_ONLY | BSG_RENDER_FLAG_PAYLOAD_PREPARE;
-    struct bsg_export_result *export_result = bsg_export_query(&ereq);
-    ASSERT(export_result != NULL);
-    int export_i = find_export_record(export_result, "all.g");
-    ASSERT(export_i >= 0);
-    const struct bsg_export_record *export_rec =
-	(export_i >= 0) ? bsg_export_result_get(export_result, (size_t)export_i) : NULL;
-    ASSERT(export_rec != NULL);
+    struct rt_view_render_export_consistency_bsg consistency =
+	RT_VIEW_RENDER_EXPORT_CONSISTENCY_BSG_INIT;
+    ASSERT(rt_view_context_render_export_consistency_bsg(v, "all.g",
+	    &consistency));
+    ASSERT(consistency.export_record_found);
+    ASSERT(consistency.render_item_found);
+    ASSERT(consistency.export_render_consistent);
+    ASSERT(consistency.backend_node_found);
+    ASSERT(consistency.export_backend_consistent);
 
-    struct bu_ptbl items = BU_PTBL_INIT_ZERO;
-    ASSERT(collect_render_items(v, &items) > 0);
-    int item_i = find_render_item(&items, "all.g");
-    ASSERT(item_i >= 0);
-    const struct bsg_render_item *item =
-	(item_i >= 0) ? (const struct bsg_render_item *)BU_PTBL_GET(&items, (size_t)item_i) : NULL;
-    ASSERT(item != NULL);
-
-    if (export_rec && item) {
-	ASSERT(export_rec->cache_identity == item->cache_identity);
-	ASSERT(export_rec->source.source_id == item->source.source_id);
-	ASSERT(export_rec->geometry_revision == item->geometry.revision);
-	ASSERT(export_rec->payload_revision == item->payload_revision);
-	ASSERT(export_rec->draw_mode == item->appearance.draw_mode);
-	ASSERT(export_rec->visible == item->visible);
-    }
-
-    struct bsg_backend_scene *scene = bsg_backend_scene_create();
-    ASSERT(scene != NULL);
-    ASSERT(bsg_backend_scene_render_request(v, scene,
-		BSG_RENDER_FLAG_VISIBLE_ONLY | BSG_RENDER_FLAG_PAYLOAD_PREPARE) > 0);
-    if (export_rec && scene) {
-	const struct bsg_backend_scene_node *node =
-	    bsg_backend_scene_find(scene, export_rec->cache_identity);
-	ASSERT(node != NULL);
-	if (node) {
-	    ASSERT(node->source_identity == export_rec->source.source_id);
-	    ASSERT(node->geometry.revision == export_rec->geometry_revision);
-	    ASSERT(node->material.draw_mode == export_rec->draw_mode);
-	    ASSERT(node->selection.visible == export_rec->visible);
-	}
-    }
-
-    struct rt_view_pick_result_bsg *pick = rt_view_pick_semantic_path_bsg(v, "all.g");
+    struct rt_view_pick_result_bsg *pick =
+	rt_view_context_pick_semantic_path_bsg(v, "all.g");
     struct bu_vls pick_path = BU_VLS_INIT_ZERO;
     ASSERT(pick != NULL);
     ASSERT(rt_view_pick_result_count_bsg(pick) > 0);
@@ -216,8 +110,8 @@ test_command_report_record_consistency(struct ged *gedp, struct bsg_view *v)
     point_t sample = VINIT_ZERO;
     struct rt_view_snap_result_bsg *snap = rt_view_snap_result_create_bsg();
     ASSERT(snap != NULL);
-    int snap_count = snap ? rt_view_snap_candidates_result_bsg(v, sample, 1.0,
-	    RT_VIEW_SNAP_KIND_ENDPOINT_BSG, snap) : 0;
+    int snap_count = snap ? rt_view_context_snap_candidates_result_bsg(v,
+	    sample, 1.0, RT_VIEW_SNAP_KIND_ENDPOINT_BSG, snap) : 0;
     ASSERT(snap_count >= 0);
     if (snap_count > 0 && rt_view_snap_result_count_bsg(snap) > 0) {
 	struct bu_vls snap_path = BU_VLS_INIT_ZERO;
@@ -229,16 +123,13 @@ test_command_report_record_consistency(struct ged *gedp, struct bsg_view *v)
     point_t a = VINIT_ZERO;
     point_t b = {1.0, 0.0, 0.0};
     struct rt_view_measure_result measure = RT_VIEW_MEASURE_RESULT_INIT;
-    ASSERT(rt_view_measure_candidates_bsg(v, a, b, &measure) == 1);
+    ASSERT(rt_view_context_measure_candidates_bsg(v, a, b, &measure) == 1);
     ASSERT(measure.valid);
     ASSERT(fabs(measure.distance - 1.0) < 1.0e-9);
 
     rt_view_snap_result_free_bsg(snap);
     bu_vls_free(&pick_path);
     rt_view_pick_result_free_bsg(pick);
-    bsg_backend_scene_destroy(scene);
-    free_render_items(&items);
-    bsg_export_result_free(export_result);
 }
 
 int
@@ -256,17 +147,20 @@ main(int argc, const char **argv)
     if (!gedp)
 	return EXIT_FAILURE;
 
-    rt_view_set_remove_view_bsg(&gedp->ged_views, NULL);
-    struct bsg_view *views[2] = {NULL, NULL};
+    void *view_set_ctx = ged_view_set_ctx(gedp);
+    ASSERT(rt_view_set_context_remove_bsg(view_set_ctx, NULL));
+    void *views[2] = {NULL, NULL};
     for (int i = 0; i < 2; i++) {
-	BU_GET(views[i], struct bsg_view);
-	rt_view_init_bsg(views[i], &gedp->ged_views);
-	bu_vls_sprintf(&views[i]->gv_name, "V%d", i);
-	rt_view_dimensions_set_bsg(views[i], 640, 480);
-	rt_view_set_add_view_bsg(&gedp->ged_views, views[i]);
+	char view_name[16];
+	snprintf(view_name, sizeof(view_name), "V%d", i);
+	views[i] = rt_view_context_create_bsg();
+	ASSERT(views[i] != NULL);
+	ASSERT(rt_view_context_name_set_bsg(views[i], view_name));
+	ASSERT(rt_view_context_dimensions_set_bsg(views[i], 640, 480));
+	ASSERT(rt_view_set_context_add_bsg(view_set_ctx, views[i]));
 	bu_ptbl_ins(&gedp->ged_free_views, (long *)views[i]);
 	if (!i)
-	    gedp->ged_gvp = views[i];
+	    ged_view_active_ctx_set(gedp, views[i]);
     }
 
     test_command_report_record_consistency(gedp, views[0]);
@@ -346,7 +240,8 @@ main(int argc, const char **argv)
     const char *p7[] = {"view", "obj", "create", "u_poly", "polygon", "area", NULL};
     ASSERT_VIEW_OK(gedp, 6, p7);
     ASSERT(!result_str(gedp).empty());
-    rt_view_polygon_ref poly_ref = rt_view_polygon_find_bsg(views[0], "u_poly");
+    rt_view_polygon_ref poly_ref =
+	rt_view_context_polygon_find_bsg(views[0], "u_poly");
     ASSERT(!rt_view_polygon_ref_is_null_bsg(poly_ref));
     struct rt_view_polygon_record poly_rec = {};
     ASSERT(rt_view_polygon_record_get_bsg(poly_ref, &poly_rec));

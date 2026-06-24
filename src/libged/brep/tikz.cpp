@@ -27,7 +27,6 @@
 
 #include "brep.h"
 #include "raytrace.h"
-#include "rt/view_legacy_bsg.h"
 
 #include "./ged_brep.h"
 
@@ -141,12 +140,12 @@ brep_tikz(struct _ged_brep_info *gb, const char *outfile)
     bu_vls_printf(&tikz, "\\begin{document}\n\n");
     // Translate view az/el into tikz-3dplot variation
     vect_t view_aet;
-    struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
-    if (!view) {
+    void *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx) {
 	bu_vls_free(&tikz);
 	return BRLCAD_ERROR;
     }
-    rt_view_aet_from_bsg(view_aet, view);
+    ged_view_context_aet_get(view_aet, view_ctx);
     bu_vls_printf(&tikz, "\\tdplotsetmaincoords{%f}{%f}\n", 90 + -1*view_aet[1], -1*(-90 + -1 * view_aet[0]));
 
     // Need bbox dimensions to determine proper scale factor - do this with db_search so it will

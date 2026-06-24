@@ -33,10 +33,8 @@
 #include "bu/color.h"
 #include "bu/opt.h"
 #include "bu/vls.h"
-#include "rt/view_legacy_bsg.h"
 
 #include "../ged_private.h"
-#include "../bsg_ged_draw_view_private.h"
 #include "./ged_view.h"
 
 int
@@ -54,7 +52,7 @@ _label_cmd_create(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    if (ged_draw_view_feature_exists(gd->cv, gd->vobj)) {
+    if (ged_draw_view_context_feature_exists(gd->cv, gd->vobj)) {
         bu_vls_printf(gedp->ged_result_str, "View object named %s already exists\n", gd->vobj);
         return BRLCAD_ERROR;
     }
@@ -80,7 +78,7 @@ _label_cmd_create(void *bs, int argc, const char **argv)
 	}
     } else {
 	fastf_t fx, fy;
-	if (!rt_view_screen_to_view_from_bsg(&fx, &fy, gd->cv,
+	if (!ged_view_context_screen_to_view(&fx, &fy, gd->cv,
 		(int)p[0], (int)p[1])) {
 	    return BRLCAD_ERROR;
 	}
@@ -90,7 +88,7 @@ _label_cmd_create(void *bs, int argc, const char **argv)
 	point_t tp;
 	VMOVE(tp, p);
 	mat_t view2model;
-	rt_view_view2model_from_bsg(view2model, gd->cv);
+	ged_view_context_view2model_get(view2model, gd->cv);
 	MAT4X3PNT(p, view2model, tp);
     }
     point_t target;
@@ -124,7 +122,7 @@ _label_cmd_create(void *bs, int argc, const char **argv)
 	}
     }
 
-    if (!ged_draw_view_label_create(gd->cv, gd->vobj, gd->local_obj,
+    if (!ged_draw_view_context_label_create(gd->cv, gd->vobj, gd->local_obj,
 	    argv[0], p, target, (argc == 6 || argc == 7))) {
 	bu_vls_printf(gedp->ged_result_str, "Failed to create %s\n", gd->vobj);
 	return BRLCAD_ERROR;

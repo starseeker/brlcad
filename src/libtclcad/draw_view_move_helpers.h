@@ -34,7 +34,7 @@
 #include "bu/malloc.h"
 #include "vmath.h"
 
-#include "../libged/bsg_ged_draw_view_private.h"
+#include "ged/bsg_ged_draw.h"
 
 __BEGIN_DECLS
 
@@ -51,7 +51,7 @@ _tclcad_draw_view_point_count(size_t point_count)
 }
 
 TCLCAD_DRAW_VIEW_HELPER_STATIC int
-_tclcad_draw_view_points_copy(struct bsg_view *view,
+_tclcad_draw_view_points_copy(void *view_ctx,
 			      const char *feature_name,
 			      point_t **pts_out)
 {
@@ -59,7 +59,7 @@ _tclcad_draw_view_points_copy(struct bsg_view *view,
 	return 0;
     *pts_out = NULL;
     size_t total = 0;
-    if (!ged_draw_view_feature_points_copy(view, feature_name, pts_out, &total) ||
+    if (!ged_draw_view_context_feature_points_copy(view_ctx, feature_name, pts_out, &total) ||
 	    !*pts_out)
 	return 0;
     int count = _tclcad_draw_view_point_count(total);
@@ -71,7 +71,7 @@ _tclcad_draw_view_points_copy(struct bsg_view *view,
 }
 
 TCLCAD_DRAW_VIEW_HELPER_STATIC int
-_tclcad_draw_view_axes_centers_copy(struct bsg_view *view,
+_tclcad_draw_view_axes_centers_copy(void *view_ctx,
 				    const char *feature_name,
 				    point_t **pts_out)
 {
@@ -79,7 +79,7 @@ _tclcad_draw_view_axes_centers_copy(struct bsg_view *view,
 	return 0;
     *pts_out = NULL;
     size_t total = 0;
-    if (!ged_draw_view_feature_axes_centers_copy(view, feature_name,
+    if (!ged_draw_view_context_feature_axes_centers_copy(view_ctx, feature_name,
 		pts_out, &total) || !*pts_out)
 	return 0;
     int count = _tclcad_draw_view_point_count(total);
@@ -91,7 +91,7 @@ _tclcad_draw_view_axes_centers_copy(struct bsg_view *view,
 }
 
 TCLCAD_DRAW_VIEW_HELPER_STATIC void
-_tclcad_draw_view_style_read(struct bsg_view *view,
+_tclcad_draw_view_style_read(void *view_ctx,
 			     const char *feature_name,
 			     int color_out[3],
 			     int *lw_out,
@@ -114,7 +114,7 @@ _tclcad_draw_view_style_read(struct bsg_view *view,
 	*visible_out = 1;
 
     struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
-    if (!ged_draw_view_feature_style_get(view, feature_name, &style))
+    if (!ged_draw_view_context_feature_style_get(view_ctx, feature_name, &style))
 	return;
 
     if (color_out && style.color_valid) {
@@ -133,7 +133,7 @@ _tclcad_draw_view_style_read(struct bsg_view *view,
 }
 
 TCLCAD_DRAW_VIEW_HELPER_STATIC void
-_tclcad_draw_view_arrows_replace(struct bsg_view *view,
+_tclcad_draw_view_arrows_replace(void *view_ctx,
 				 const char *feature_name,
 				 point_t *pts,
 				 int npts,
@@ -143,7 +143,7 @@ _tclcad_draw_view_arrows_replace(struct bsg_view *view,
 				 int tip_width,
 				 int visible)
 {
-    if (!view || !feature_name || !pts || npts < 2)
+    if (!view_ctx || !feature_name || !pts || npts < 2)
 	return;
 
     struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
@@ -159,12 +159,12 @@ _tclcad_draw_view_arrows_replace(struct bsg_view *view,
     style.arrow_tip_length = (fastf_t)tip_length;
     style.arrow_tip_width = (fastf_t)tip_width;
 
-    (void)ged_draw_view_tcl_arrows_replace(view, feature_name,
+    (void)ged_draw_view_context_tcl_arrows_replace(view_ctx, feature_name,
 	    (const point_t *)pts, (size_t)npts, &style);
 }
 
 TCLCAD_DRAW_VIEW_HELPER_STATIC void
-_tclcad_draw_view_lines_replace(struct bsg_view *view,
+_tclcad_draw_view_lines_replace(void *view_ctx,
 				const char *feature_name,
 				point_t *pts,
 				int npts,
@@ -172,7 +172,7 @@ _tclcad_draw_view_lines_replace(struct bsg_view *view,
 				int line_width,
 				int visible)
 {
-    if (!view || !feature_name || !pts || npts < 2)
+    if (!view_ctx || !feature_name || !pts || npts < 2)
 	return;
 
     struct ged_draw_view_line_style style = {{255, 255, 0}, 0};
@@ -183,13 +183,13 @@ _tclcad_draw_view_lines_replace(struct bsg_view *view,
     }
     style.line_width = line_width;
 
-    if (ged_draw_view_tcl_lines_replace(view, feature_name,
+    if (ged_draw_view_context_tcl_lines_replace(view_ctx, feature_name,
 		(const point_t *)pts, (size_t)npts, &style))
-	(void)ged_draw_view_feature_visible_set(view, feature_name, visible);
+	(void)ged_draw_view_context_feature_visible_set(view_ctx, feature_name, visible);
 }
 
 TCLCAD_DRAW_VIEW_HELPER_STATIC void
-_tclcad_draw_view_axes_replace(struct bsg_view *view,
+_tclcad_draw_view_axes_replace(void *view_ctx,
 			       const char *feature_name,
 			       point_t *centers,
 			       int center_count,
@@ -198,7 +198,7 @@ _tclcad_draw_view_axes_replace(struct bsg_view *view,
 			       int line_width,
 			       int visible)
 {
-    if (!view || !feature_name || !centers || center_count < 1)
+    if (!view_ctx || !feature_name || !centers || center_count < 1)
 	return;
 
     struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
@@ -211,7 +211,7 @@ _tclcad_draw_view_axes_replace(struct bsg_view *view,
     }
     style.line_width = line_width;
 
-    (void)ged_draw_view_tcl_axes_replace(view, feature_name,
+    (void)ged_draw_view_context_tcl_axes_replace(view_ctx, feature_name,
 	    (const point_t *)centers, (size_t)center_count,
 	    half_axes_size, &style);
 }

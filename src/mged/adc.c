@@ -30,8 +30,8 @@
 #include "bu/vls.h"
 #include "vmath.h"
 #include "ged.h"
+#include "ged/view.h"
 #include "rt/view.h"
-#include "rt/view_legacy_bsg.h"
 #include "./mged.h"
 #include "./mged_dm.h"
 
@@ -109,7 +109,8 @@ adc_set_scroll(struct mged_state *s)
 static fastf_t
 adc_view_local_scale(struct mged_state *s)
 {
-    return rt_view_scale_from_bsg(view_state->vs_gvp) * s->dbip->dbi_base2local;
+    void *view_ctx = view_state->vs_gvp;
+    return ged_view_context_scale_get(view_ctx) * s->dbip->dbi_base2local;
 }
 
 
@@ -117,8 +118,9 @@ static void
 adc_model_To_adc_view(struct mged_state *s, struct rt_view_adc_state *adc)
 {
     mat_t model2view;
+    void *view_ctx = view_state->vs_gvp;
 
-    rt_view_model2view_from_bsg(model2view, view_state->vs_gvp);
+    ged_view_context_model2view_get(model2view, view_ctx);
     rt_view_adc_model_to_view(adc, model2view, RT_VIEW_MAX);
 }
 
@@ -127,8 +129,9 @@ static void
 adc_grid_To_adc_view(struct mged_state *s, struct rt_view_adc_state *adc)
 {
     mat_t model2view;
+    void *view_ctx = view_state->vs_gvp;
 
-    rt_view_model2view_from_bsg(model2view, view_state->vs_gvp);
+    ged_view_context_model2view_get(model2view, view_ctx);
     rt_view_adc_grid_to_view(adc, model2view, RT_VIEW_MAX);
 }
 
@@ -137,8 +140,9 @@ static void
 adc_view_To_adc_grid(struct mged_state *s, struct rt_view_adc_state *adc)
 {
     mat_t model2view;
+    void *view_ctx = view_state->vs_gvp;
 
-    rt_view_model2view_from_bsg(model2view, view_state->vs_gvp);
+    ged_view_context_model2view_get(model2view, view_ctx);
     rt_view_adc_view_to_grid(adc, model2view);
 }
 
@@ -147,17 +151,18 @@ static void
 calc_adc_pos(struct mged_state *s, struct rt_view_adc_state *adc)
 {
     mat_t view2model;
+    void *view_ctx = view_state->vs_gvp;
 
     if (adc->anchor_pos == 1) {
 	adc_model_To_adc_view(s, adc);
 	adc_view_To_adc_grid(s, adc);
     } else if (adc->anchor_pos == 2) {
 	adc_grid_To_adc_view(s, adc);
-	rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+	ged_view_context_view2model_get(view2model, view_ctx);
 	MAT4X3PNT(adc->pos_model, view2model, adc->pos_view);
     } else {
 	adc_view_To_adc_grid(s, adc);
-	rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+	ged_view_context_view2model_get(view2model, view_ctx);
 	MAT4X3PNT(adc->pos_model, view2model, adc->pos_view);
     }
 }
@@ -170,8 +175,9 @@ calc_adc_a1(struct mged_state *s, struct rt_view_adc_state *adc)
 	fastf_t dx, dy;
 	point_t view_pt;
 	mat_t model2view;
+	void *view_ctx = view_state->vs_gvp;
 
-	rt_view_model2view_from_bsg(model2view, view_state->vs_gvp);
+	ged_view_context_model2view_get(model2view, view_ctx);
 	MAT4X3PNT(view_pt, model2view, adc->anchor_pt_a1);
 	dx = view_pt[X] * RT_VIEW_MAX - adc->dv_x;
 	dy = view_pt[Y] * RT_VIEW_MAX - adc->dv_y;
@@ -191,8 +197,9 @@ calc_adc_a2(struct mged_state *s, struct rt_view_adc_state *adc)
 	fastf_t dx, dy;
 	point_t view_pt;
 	mat_t model2view;
+	void *view_ctx = view_state->vs_gvp;
 
-	rt_view_model2view_from_bsg(model2view, view_state->vs_gvp);
+	ged_view_context_model2view_get(model2view, view_ctx);
 	MAT4X3PNT(view_pt, model2view, adc->anchor_pt_a2);
 	dx = view_pt[X] * RT_VIEW_MAX - adc->dv_x;
 	dy = view_pt[Y] * RT_VIEW_MAX - adc->dv_y;
@@ -213,8 +220,9 @@ calc_adc_dst(struct mged_state *s, struct rt_view_adc_state *adc)
 	fastf_t dx, dy;
 	point_t view_pt;
 	mat_t model2view;
+	void *view_ctx = view_state->vs_gvp;
 
-	rt_view_model2view_from_bsg(model2view, view_state->vs_gvp);
+	ged_view_context_model2view_get(model2view, view_ctx);
 	MAT4X3PNT(view_pt, model2view, adc->anchor_pt_dst);
 
 	dx = view_pt[X] * RT_VIEW_MAX - adc->dv_x;
@@ -393,9 +401,10 @@ mged_adc_reset(struct mged_state *s, struct rt_view_adc_state *adc)
 {
     mat_t model2view;
     mat_t view2model;
+    void *view_ctx = view_state->vs_gvp;
 
-    rt_view_model2view_from_bsg(model2view, view_state->vs_gvp);
-    rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+    ged_view_context_model2view_get(model2view, view_ctx);
+    ged_view_context_view2model_get(view2model, view_ctx);
     rt_view_adc_reset(adc, view2model, model2view);
 }
 
@@ -463,8 +472,11 @@ f_adc (
     mat_t view2model;
     int incr_flag;
     int i;
+    void *view_ctx;
 
     CHECK_DBI_NULL;
+
+    view_ctx = view_state->vs_gvp;
 
 #define ADC_RETURN(_ret) do { \
 	mged_dm_adc_state_set(s->mged_curr_dm, adc); \
@@ -475,7 +487,7 @@ f_adc (
 	return TCL_ERROR;
 
     view_local_scale = adc_view_local_scale(s);
-    rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+    ged_view_context_view2model_get(view2model, view_ctx);
 
     if (6 < argc) {
 	bu_vls_printf(&vls, "help adc");

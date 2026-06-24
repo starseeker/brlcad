@@ -3896,14 +3896,14 @@ test_events(struct ged *gedp)
     CHECK(ged_event_observer_remove(gedp, bev_post_token) == 1,
 	    "bev observer removal must succeed");
 
-    bsg_data_polygon_state polyclip_state;
+    struct ged_polygon_export_state polyclip_state;
     std::memset(&polyclip_state, 0, sizeof(polyclip_state));
-    MAT_IDN(polyclip_state.gdps_rotation);
-    MAT_IDN(polyclip_state.gdps_model2view);
-    MAT_IDN(polyclip_state.gdps_view2model);
-    polyclip_state.gdps_scale = 1.0;
-    VSET(polyclip_state.gdps_origin, 0.0, 0.0, 0.0);
-    polyclip_state.gdps_data_vZ = 0.0;
+    MAT_IDN(polyclip_state.rotation);
+    MAT_IDN(polyclip_state.model2view);
+    MAT_IDN(polyclip_state.view2model);
+    polyclip_state.scale = 1.0;
+    VSET(polyclip_state.origin, 0.0, 0.0, 0.0);
+    polyclip_state.data_vZ = 0.0;
     int polyclip_hole = 0;
     point_t polyclip_points[4];
     VSET(polyclip_points[0], 0.0, 0.0, 0.0);
@@ -3919,8 +3919,8 @@ test_events(struct ged *gedp)
     polyclip_polygon.num_contours = 1;
     polyclip_polygon.hole = &polyclip_hole;
     polyclip_polygon.contour = &polyclip_contour;
-    polyclip_state.gdps_polygons.num_polygons = 1;
-    polyclip_state.gdps_polygons.polygon = &polyclip_polygon;
+    polyclip_state.polygons.num_polygons = 1;
+    polyclip_state.polygons.polygon = &polyclip_polygon;
 
     event_order_observer polyclip_post;
     ged_event_observer_token polyclip_post_token =
@@ -5898,14 +5898,17 @@ test_draw(struct ged *gedp)
 	    "retained draw state must contain shapes after draw");
     CHECK(ged_draw_scene_revision(gedp) > 0,
 	    "draw scene revision must advance after draw");
-    CHECK(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", -1) == 1,
+    void *view_ctx = ged_view_active_ctx(gedp);
+    CHECK(view_ctx != NULL,
+	    "draw test must have an active GED view context");
+    CHECK(ged_draw_path_state(gedp, view_ctx, "all.g", -1) == 1,
 	    "draw path_state must report all.g fully drawn");
-    CHECK(ged_draw_path_state(gedp, gedp->ged_gvp,
+    CHECK(ged_draw_path_state(gedp, view_ctx,
 		"all.g/platform.r", -1) == 1,
 	    "draw path_state must report child path drawn");
 
     struct bu_vls group_paths = BU_VLS_INIT_ZERO;
-    CHECK(ged_draw_list_paths(gedp, gedp->ged_gvp, -1, 0, &group_paths) > 0,
+    CHECK(ged_draw_list_paths(gedp, view_ctx, -1, 0, &group_paths) > 0,
 	    "draw list must report command-level paths");
     CHECK(std::string(bu_vls_cstr(&group_paths)).find("all.g") !=
 	    std::string::npos,
@@ -5913,7 +5916,7 @@ test_draw(struct ged *gedp)
     bu_vls_free(&group_paths);
 
     struct bu_vls leaf_paths = BU_VLS_INIT_ZERO;
-    CHECK(ged_draw_list_paths(gedp, gedp->ged_gvp, -1, 1, &leaf_paths) > 0,
+    CHECK(ged_draw_list_paths(gedp, view_ctx, -1, 1, &leaf_paths) > 0,
 	    "expanded draw list must report realized leaf paths");
     CHECK(std::string(bu_vls_cstr(&leaf_paths)).find("platform.r") !=
 	    std::string::npos,
@@ -5923,7 +5926,7 @@ test_draw(struct ged *gedp)
     const char *erase_av[2] = {"erase", "all.g"};
     CHECK(ged_exec_erase(gedp, 2, erase_av) == BRLCAD_OK,
 	    "erase all.g must succeed");
-    CHECK(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", -1) == 0,
+    CHECK(ged_draw_path_state(gedp, view_ctx, "all.g", -1) == 0,
 	    "draw path_state must clear after erase");
 
     return 0;

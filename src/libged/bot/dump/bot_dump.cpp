@@ -50,8 +50,6 @@
 
 #include "raytrace.h"
 
-#include "bsg/defines.h"
-#include "bsg/field.h"
 #include "dm.h"
 
 #include "ged/bsg_ged_draw.h"
@@ -583,10 +581,10 @@ dl_botdump(struct _ged_bot_dump_client_data *d)
 {
     if (!d || !d->gedp)
 	return;
-    struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(d->gedp);
-    if (!view)
+    void *view_ctx = ged_view_active_ctx(d->gedp);
+    if (!view_ctx)
 	return;
-    ged_draw_foreach_visible_view_db_object_record(view,
+    ged_draw_foreach_visible_view_db_object_record(view_ctx,
 	    botdump_export_record, d);
 }
 

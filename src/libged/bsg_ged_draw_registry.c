@@ -618,6 +618,47 @@ ged_draw_shape_index_for_component(struct ged *gedp,
 }
 
 
+struct ged_draw_shape_ref_index_ctx {
+    struct ged *gedp;
+    ged_draw_shape_ref_index_cb cb;
+    void *userdata;
+};
+
+
+static int
+_ged_draw_shape_ref_index_cb(bsg_scene_ref scene_ref, void *userdata)
+{
+    struct ged_draw_shape_ref_index_ctx *ctx =
+	(struct ged_draw_shape_ref_index_ctx *)userdata;
+    if (!ctx || !ctx->cb)
+	return 1;
+
+    ged_draw_shape_ref ref =
+	ged_draw_shape_ref_from_scene_ref(ctx->gedp, scene_ref);
+    if (ged_draw_shape_ref_is_null(ref))
+	return 1;
+    return (*ctx->cb)(ref, ctx->userdata);
+}
+
+
+int
+ged_draw_shape_ref_index_for_component(struct ged *gedp,
+				       const char *path,
+				       ged_draw_shape_ref_index_cb cb,
+				       void *userdata)
+{
+    if (!cb)
+	return ged_draw_shape_index_for_component(gedp, path, NULL, userdata);
+
+    struct ged_draw_shape_ref_index_ctx ctx;
+    ctx.gedp = gedp;
+    ctx.cb = cb;
+    ctx.userdata = userdata;
+    return ged_draw_shape_index_for_component(gedp, path,
+	    _ged_draw_shape_ref_index_cb, &ctx);
+}
+
+
 int
 ged_draw_group_index_for_component(struct ged *gedp,
 				   const char *path,
@@ -673,6 +714,25 @@ ged_draw_shape_index_for_path_hash(struct ged *gedp,
 				   void *userdata)
 {
     return _ged_draw_index_for_path_hash(gedp, path_hash, 0, cb, userdata);
+}
+
+
+int
+ged_draw_shape_ref_index_for_path_hash(struct ged *gedp,
+				       unsigned long long path_hash,
+				       ged_draw_shape_ref_index_cb cb,
+				       void *userdata)
+{
+    if (!cb)
+	return ged_draw_shape_index_for_path_hash(gedp, path_hash, NULL,
+		userdata);
+
+    struct ged_draw_shape_ref_index_ctx ctx;
+    ctx.gedp = gedp;
+    ctx.cb = cb;
+    ctx.userdata = userdata;
+    return ged_draw_shape_index_for_path_hash(gedp, path_hash,
+	    _ged_draw_shape_ref_index_cb, &ctx);
 }
 
 

@@ -26,6 +26,7 @@
 #include "common.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -33,7 +34,6 @@
 #include <ged.h>
 #include <rt/view_legacy_bsg.h>
 #include "ged/bsg_ged_draw.h"
-#include "../../bsg_ged_draw_view_private.h"
 
 #define ASSERT(cond) do { \
     nchecks++; \
@@ -47,7 +47,7 @@ static int nchecks = 0;
 static int nfails = 0;
 
 static std::vector<std::string>
-drawn_paths(struct ged *gedp, struct bsg_view *v)
+drawn_paths(struct ged *gedp, void *v)
 {
     std::vector<std::string> ret;
     struct bu_vls paths = BU_VLS_INIT_ZERO;
@@ -177,39 +177,43 @@ main(int argc, const char **argv)
     if (!gedp)
 	return EXIT_FAILURE;
 
-    rt_view_set_remove_view_bsg(&gedp->ged_views, NULL);
-    struct bsg_view *views[2] = {NULL, NULL};
+    void *view_set_ctx = ged_view_set_ctx(gedp);
+    ASSERT(rt_view_set_context_remove_bsg(view_set_ctx, NULL));
+    void *views[2] = {NULL, NULL};
     for (int i = 0; i < 2; i++) {
-	BU_GET(views[i], struct bsg_view);
-	rt_view_init_bsg(views[i], &gedp->ged_views);
-	bu_vls_sprintf(&views[i]->gv_name, "V%d", i);
-	rt_view_set_add_view_bsg(&gedp->ged_views, views[i]);
+	char view_name[16];
+	snprintf(view_name, sizeof(view_name), "V%d", i);
+	views[i] = rt_view_context_create_bsg();
+	ASSERT(views[i] != NULL);
+	ASSERT(rt_view_context_name_set_bsg(views[i], view_name));
+	ASSERT(rt_view_set_context_add_bsg(view_set_ctx, views[i]));
 	bu_ptbl_ins(&gedp->ged_free_views, (long *)views[i]);
 	if (!i)
-	    gedp->ged_gvp = views[i];
+	    ged_view_active_ctx_set(gedp, views[i]);
     }
 
     for (int i = 0; i < 2; i++) {
-	rt_view_scale_state_set_bsg(views[i], 1.0e9, 1.0, 0.0, 1.0e9, 1.0 / 1.0e9);
+	ASSERT(rt_view_context_scale_state_set_bsg(views[i], 1.0e9, 1.0,
+		0.0, 1.0e9, 1.0 / 1.0e9));
     }
     ASSERT(draw_shared_autoview(gedp, "all.g") == BRLCAD_OK);
-    ASSERT(ged_draw_view_has_lod_bounds_update(views[0]));
-    ASSERT(ged_draw_view_has_lod_bounds_update(views[1]));
-    ASSERT(views[0]->gv_size < 1.0e8);
-    ASSERT(views[1]->gv_size < 1.0e8);
+    ASSERT(rt_view_context_lod_bounds_callback_is_bsg(views[0]));
+    ASSERT(rt_view_context_lod_bounds_callback_is_bsg(views[1]));
+    ASSERT(rt_view_context_size_from_bsg(views[0]) < 1.0e8);
+    ASSERT(rt_view_context_size_from_bsg(views[1]) < 1.0e8);
     ASSERT(zap_current(gedp) == BRLCAD_OK);
     ASSERT(drawn_paths(gedp, views[0]).size() == 0);
     ASSERT(drawn_paths(gedp, views[1]).size() == 0);
 
     ASSERT(draw_shared(gedp, "all.g") == BRLCAD_OK);
-    ASSERT(!rt_view_is_independent_bsg(views[0]));
+    ASSERT(!rt_view_context_is_independent_bsg(views[0]));
     ASSERT(drawn_paths(gedp, views[0]).size() == 1);
     ASSERT(has_path(drawn_paths(gedp, views[0]), "all.g"));
     ASSERT(drawn_paths(gedp, views[1]).size() == 1);
 
     ASSERT(set_view_independent(gedp, "V0", 1) == BRLCAD_OK);
-    ASSERT(rt_view_is_independent_bsg(views[0]));
-    ASSERT(!rt_view_independent_scope_is_null_bsg(views[0], 0));
+    ASSERT(rt_view_context_is_independent_bsg(views[0]));
+    ASSERT(!rt_view_context_independent_scope_is_null_bsg(views[0], 0));
     ASSERT(drawn_paths(gedp, views[0]).size() == 1);
     ASSERT(has_path(drawn_paths(gedp, views[0]), "all.g"));
 
@@ -244,8 +248,8 @@ main(int argc, const char **argv)
     ASSERT(!has_path(drawn_paths(gedp, views[1]), "tor.r"));
 
     ASSERT(set_view_independent(gedp, "V0", 0) == BRLCAD_OK);
-    ASSERT(!rt_view_is_independent_bsg(views[0]));
-    ASSERT(rt_view_independent_scope_is_null_bsg(views[0], 0));
+    ASSERT(!rt_view_context_is_independent_bsg(views[0]));
+    ASSERT(rt_view_context_independent_scope_is_null_bsg(views[0], 0));
     ASSERT(drawn_paths(gedp, views[0]).size() == 2);
     ASSERT(has_path(drawn_paths(gedp, views[0]), "all.g"));
     ASSERT(has_path(drawn_paths(gedp, views[0]), "box.r"));

@@ -29,8 +29,6 @@
 #include <ctype.h>
 #include <string.h>
 
-#include "rt/view_legacy_bsg.h"
-
 #include "../ged_private.h"
 #include "./ged_view.h"
 
@@ -44,14 +42,14 @@ ged_aet_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
-    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+    void *view_ctx = ged_view_active_ctx(gedp);
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     /* get aet */
     if (argc == 1) {
-	rt_view_aet_from_bsg(aet, v);
+	ged_view_context_aet_get(aet, view_ctx);
 	bn_encode_vect(gedp->ged_result_str, aet, 1);
 	return BRLCAD_OK;
     }
@@ -76,11 +74,11 @@ ged_aet_core(struct ged *gedp, int argc, const char *argv[])
 
 	if (iflag) {
 	    vect_t view_aet;
-	    rt_view_aet_from_bsg(view_aet, v);
+	    ged_view_context_aet_get(view_aet, view_ctx);
 	    VADD2(aet, view_aet, aet);
 	}
-	rt_view_aet_set_bsg(v, aet);
-	rt_view_update_bsg(v);
+	ged_view_context_aet_set(view_ctx, aet);
+	ged_view_context_update(view_ctx);
 
 	return BRLCAD_OK;
     }
@@ -111,11 +109,11 @@ ged_aet_core(struct ged *gedp, int argc, const char *argv[])
 
 	if (iflag) {
 	    vect_t view_aet;
-	    rt_view_aet_from_bsg(view_aet, v);
+	    ged_view_context_aet_get(view_aet, view_ctx);
 	    VADD2(aet, view_aet, aet);
 	}
-	rt_view_aet_set_bsg(v, aet);
-	rt_view_update_bsg(v);
+	ged_view_context_aet_set(view_ctx, aet);
+	ged_view_context_update(view_ctx);
 
 	return BRLCAD_OK;
     }

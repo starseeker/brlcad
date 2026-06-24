@@ -34,36 +34,26 @@
 #include <cstring>
 
 #include <bu.h>
-#include "bsg/database_source.h"
-#include "bsg/tcl_data.h"
-#include "bsg/util.h"
-#include "bsg/scene_object.h"
-#include "bsg/payload.h"
 #include "dm.h"
 #include <ged.h>
 #include "ged/bsg_ged_draw.h"
 #include "ged/db_index.h"
 #include "ged/selection_state.h"
-#include "bsg/defines.h"
-#include "bsg/draw_set.h"
-#include "bsg/draw_source.h"
-#include "bsg/field.h"
-#include "bsg/material.h"
-#include "bsg/node.h"
-#include "bsg/appearance.h"
-#include "bsg/backend_scene.h"
-#include "bsg/draw_intent.h"
-#include "bsg/export.h"
 #include "bg/plot3.h"
-#include "bsg/render.h"
-#include "bsg/render_item.h"
-#include "bsg/view_state.h"
 #include "bg/line_layer.h"
 #include "nmg.h"
 #include "rt/db_attr.h"
 #include "wdb.h"
 #include "../../bsg_ged_draw_private.h"
 #include "../../ged_private.h"
+
+typedef void test_scene_context;
+
+static void *
+test_active_view_ctx(struct ged *gedp)
+{
+    return gedp ? ged_view_active_ctx(gedp) : NULL;
+}
 
 
 #define ASSERT(cond) do { \
@@ -91,34 +81,9 @@ test_uplot_stream_process_args(struct ged_uplot_stream *stream, int command,
     return ret;
 }
 
-static bsg_node_ref
-test_node_ref_from_node(struct bsg_node *node)
-{
-    bsg_object_ref object = BSG_OBJECT_REF_NULL_INIT;
-    object.opaque = node;
-    return bsg_node_ref_from_object(object);
-}
-
-static void
-touch_visibility_field(struct bsg_node *node)
-{
-    if (!node)
-	return;
-    bsg_node_ref ref = test_node_ref_from_node(node);
-    bsg_field_ref field = bsg_node_ref_visibility_field(ref);
-    (void)bsg_field_touch(field);
-}
-
-static int
-node_is_a(struct bsg_node *node, bsg_type_id type)
-{
-    if (!node)
-	return 0;
-    bsg_node_ref ref = test_node_ref_from_node(node);
-    return bsg_node_is_a(ref, type);
-}
-
 static int nfails  = 0;
+
+#define TEST_LINE_VIEW_MAX_SAMPLES 8
 
 struct draw_observer_test_state {
     struct ged *gedp;
@@ -395,67 +360,70 @@ test_shape_record_by_path(struct ged *gedp,
 }
 
 
-static struct bsg_node *
+static test_scene_context *
 test_scene_root(struct ged *gedp)
 {
-    return (gedp && gedp->ged_gvp) ? (struct bsg_node *)bsg_view_scene_ref(gedp->ged_gvp).opaque : NULL;
-}
-
-
-static auto
-test_scene_ref_from_node(struct bsg_node *node)
-{
-    auto ref = ged_draw_first_shape_scene_ref(NULL);
-    ref.opaque = node;
-    return ref;
-}
-
-
-template <typename Ref>
-static struct bsg_node *
-test_node_from_scene_ref(Ref ref)
-{
-    return (struct bsg_node *)ref.opaque;
+    return gedp ? (test_scene_context *)ged_draw_view_context_scene_root(
+	    test_active_view_ctx(gedp)) : NULL;
 }
 
 
 static size_t
-test_scene_child_count(struct bsg_node *node)
+test_scene_child_count(test_scene_context *node)
 {
-    return bsg_scene_child_count(test_scene_ref_from_node(node));
+    struct ged_draw_scene_tree_summary tree_summary;
+    return ged_draw_scene_context_tree_summary(node, &tree_summary) &&
+	tree_summary.valid ? tree_summary.child_count : 0;
 }
 
 
-static struct bsg_node *
-test_scene_child_at(struct bsg_node *node, size_t idx)
+static test_scene_context *
+test_scene_child_at(test_scene_context *node, size_t idx)
 {
-    return test_node_from_scene_ref(bsg_scene_child_at(test_scene_ref_from_node(node), idx));
+    return (test_scene_context *)ged_draw_scene_context_child_at(node, idx);
 }
 
 
-static struct bsg_node *
-test_scene_parent(struct bsg_node *node)
+static test_scene_context *
+test_scene_parent(test_scene_context *node)
 {
-    return test_node_from_scene_ref(bsg_scene_parent(test_scene_ref_from_node(node)));
+    return (test_scene_context *)ged_draw_scene_context_parent(node);
 }
 
 
 static const char *
-test_scene_name(struct bsg_node *node)
+test_scene_name(test_scene_context *node)
 {
-    return bsg_scene_name(test_scene_ref_from_node(node));
+    return ged_draw_scene_context_name(node);
 }
 
 
-static struct bsg_node *
-test_find_shape_by_dbpath(struct bsg_node *node, const char *path)
+static int
+test_scene_is_group(test_scene_context *node)
+{
+    struct ged_draw_scene_tree_summary tree_summary;
+    return ged_draw_scene_context_tree_summary(node, &tree_summary) &&
+	tree_summary.valid && tree_summary.is_group;
+}
+
+
+static int
+test_scene_is_shape(test_scene_context *node)
+{
+    struct ged_draw_scene_tree_summary tree_summary;
+    return ged_draw_scene_context_tree_summary(node, &tree_summary) &&
+	tree_summary.valid && tree_summary.is_shape;
+}
+
+
+static test_scene_context *
+test_find_shape_by_dbpath(test_scene_context *node, const char *path)
 {
     if (!node || !path)
 	return NULL;
 
-    auto ref = test_scene_ref_from_node(node);
-    if (node_is_a(node, bsg_shape_type())) {
-	const struct db_full_path *fp = ged_draw_scene_ref_fullpath(ref);
+    if (test_scene_is_shape(node)) {
+	const struct db_full_path *fp = ged_draw_scene_context_fullpath(node);
 	if (fp && fp->fp_len > 0) {
 	    char *fp_path = db_path_to_string(fp);
 	    int matched = 0;
@@ -475,7 +443,7 @@ test_find_shape_by_dbpath(struct bsg_node *node, const char *path)
     }
 
     for (size_t i = 0; i < test_scene_child_count(node); i++) {
-	struct bsg_node *found =
+	test_scene_context *found =
 	    test_find_shape_by_dbpath(test_scene_child_at(node, i), path);
 	if (found)
 	    return found;
@@ -516,25 +484,6 @@ count_point_cb(const point_t UNUSED(pt), void *ud)
 }
 
 
-static const struct bsg_export_record *
-find_export_record_by_source_and_kind(const struct bsg_export_result *result,
-				      const char *name,
-				      bsg_render_geometry_kind kind)
-{
-    if (!result || !name)
-	return NULL;
-
-    for (size_t i = 0; i < bsg_export_result_count(result); i++) {
-	const struct bsg_export_record *rec = bsg_export_result_get(result, i);
-	if (rec && rec->source.name && BU_STR_EQUAL(rec->source.name, name) &&
-		rec->geometry.kind == kind)
-	    return rec;
-    }
-
-    return NULL;
-}
-
-
 static int
 source_name_matches_drawn_prefix(const char *name, const char *prefix)
 {
@@ -552,137 +501,562 @@ source_name_matches_drawn_prefix(const char *name, const char *prefix)
 }
 
 
-static const struct bsg_export_record *
-find_export_record_by_source_prefix_and_kind(const struct bsg_export_result *result,
-					     const char *prefix,
-					     bsg_render_geometry_kind kind)
-{
-    if (!result || !prefix)
-	return NULL;
-
-    for (size_t i = 0; i < bsg_export_result_count(result); i++) {
-	const struct bsg_export_record *rec = bsg_export_result_get(result, i);
-	if (rec && source_name_matches_drawn_prefix(rec->source.name, prefix) &&
-		rec->geometry.kind == kind)
-	    return rec;
-    }
-
-    return NULL;
-}
-
-
-static const struct bsg_render_item *
-find_render_item_by_source_prefix_and_kind(const struct bsg_render_batch *batch,
-					   const char *prefix,
-					   bsg_render_geometry_kind kind)
-{
-    if (!batch || !prefix)
-	return NULL;
-
-    for (size_t i = 0; i < bsg_render_batch_count(batch); i++) {
-	const struct bsg_render_item *item = bsg_render_batch_get(batch, i);
-	if (item && source_name_matches_drawn_prefix(item->source.name, prefix) &&
-		item->geometry.kind == kind)
-	    return item;
-    }
-
-    return NULL;
-}
-
-
-static int
-test_scene_visible(struct bsg_node *node)
-{
-    return bsg_scene_visible(test_scene_ref_from_node(node));
-}
-
-
-static struct bsg_node *
+static test_scene_context *
 ged_draw_first_shape(struct ged *gedp)
 {
-    return test_node_from_scene_ref(ged_draw_first_shape_scene_ref(gedp));
-}
-
-
-static struct bsg_node *
-ged_draw_shape_at(struct ged *gedp, int idx)
-{
-    return test_node_from_scene_ref(
-	    ged_draw_registry_shape_scene_ref(gedp,
-		ged_draw_shape_ref_at(gedp, idx)));
+    return (test_scene_context *)ged_draw_first_shape_context(gedp);
 }
 
 
 static int
-ged_draw_shape_index(struct ged *gedp, struct bsg_node *shape)
+test_shape_record_at(struct ged *gedp, int idx, struct ged_draw_shape_record *rec)
+{
+    if (!rec)
+	return 0;
+
+    memset(rec, 0, sizeof(*rec));
+    ged_draw_shape_ref ref = ged_draw_shape_ref_at(gedp, idx);
+    if (ged_draw_shape_ref_is_null(ref))
+	return 0;
+
+    return ged_draw_shape_record_get(gedp, ref, rec);
+}
+
+
+static int
+test_first_shape_group_records(struct ged *gedp,
+			       struct ged_draw_shape_record *shape_rec,
+			       struct ged_draw_group_record *group_rec)
+{
+    if (!shape_rec || !group_rec)
+	return 0;
+
+    memset(shape_rec, 0, sizeof(*shape_rec));
+    memset(group_rec, 0, sizeof(*group_rec));
+    ged_draw_shape_ref shape_ref = ged_draw_first_shape_ref(gedp);
+    if (ged_draw_shape_ref_is_null(shape_ref) ||
+	    !ged_draw_shape_record_get(gedp, shape_ref, shape_rec))
+	return 0;
+
+    ged_draw_group_ref group_ref = ged_draw_group_ref_of_shape(gedp, shape_ref);
+    if (ged_draw_group_ref_is_null(group_ref))
+	return 0;
+
+    return ged_draw_group_record_get(gedp, group_ref, group_rec);
+}
+
+
+struct test_selected_view_record_ctx {
+    const char *path;
+    int saw_selected;
+    int saw_path_selected;
+};
+
+
+static int
+test_selected_view_record_cb(const struct ged_draw_view_db_object_record *rec,
+			     void *ud)
+{
+    struct test_selected_view_record_ctx *ctx =
+	(struct test_selected_view_record_ctx *)ud;
+
+    if (!ctx || !rec || !rec->is_database_source || !rec->selected ||
+	    !rec->highlighted)
+	return 1;
+
+    ctx->saw_selected = 1;
+    if (test_db_path_names_equal(rec->path, ctx->path)) {
+	ctx->saw_path_selected = 1;
+	return 0;
+    }
+
+    return 1;
+}
+
+
+static int
+test_selected_visible_view_record(struct ged *gedp, const char *path)
+{
+    struct test_selected_view_record_ctx ctx = {path, 0, 0};
+
+    ged_draw_foreach_visible_view_db_object_record(
+	    test_active_view_ctx(gedp),
+	    test_selected_view_record_cb,
+	    &ctx);
+
+    return ctx.saw_path_selected || ctx.saw_selected;
+}
+
+
+struct test_qray_view_record_ctx {
+    const char *prefix;
+    size_t items;
+    size_t segments;
+    int saw_red;
+    int saw_blue;
+};
+
+
+static int
+test_qray_view_record_cb(const struct ged_draw_view_db_object_record *rec,
+			 void *ud)
+{
+    struct test_qray_view_record_ctx *ctx =
+	(struct test_qray_view_record_ctx *)ud;
+    const char *path = rec ? rec->path : NULL;
+
+    if (!ctx || !ctx->prefix || !rec || !path || !rec->type_name ||
+	    bu_strncmp(path, ctx->prefix, strlen(ctx->prefix)) != 0 ||
+	    !BU_STR_EQUAL(rec->type_name, "line") ||
+	    rec->vlist_point_count == 0)
+	return 1;
+
+    ASSERT(rec->is_view_source);
+    ASSERT(!rec->is_database_source);
+    ASSERT(rec->non_database_source);
+
+    struct segment_count_state segs = {0};
+    ASSERT(ged_draw_view_db_object_record_foreach_segment(rec,
+	    count_segment_cb, &segs) == 1);
+    ctx->items++;
+    ctx->segments += segs.count;
+    if (rec->color[0] == 255 && rec->color[1] == 0 && rec->color[2] == 0)
+	ctx->saw_red = 1;
+    if (rec->color[0] == 0 && rec->color[1] == 0 && rec->color[2] == 255)
+	ctx->saw_blue = 1;
+
+    return 1;
+}
+
+
+static int
+test_qray_view_records(struct ged *gedp, const char *prefix)
+{
+    struct test_qray_view_record_ctx ctx = {prefix, 0, 0, 0, 0};
+    struct ged_draw_view_record_query query;
+
+    memset(&query, 0, sizeof(query));
+    query.flags = GED_DRAW_VIEW_RECORD_QUERY_VIEW_OBJECTS;
+    query.draw_mode = -1;
+    ged_draw_foreach_view_record_query(
+	    test_active_view_ctx(gedp),
+	    &query,
+	    test_qray_view_record_cb,
+	    &ctx);
+
+    return ctx.items == 2 && ctx.segments == 2 && ctx.saw_red && ctx.saw_blue;
+}
+
+
+struct test_view_record_geometry_count_ctx {
+    const char *prefix;
+    const char *geometry_name;
+    size_t count;
+};
+
+
+static int
+test_view_record_geometry_count_cb(
+	const struct ged_draw_view_db_object_record *rec,
+	void *ud)
+{
+    struct test_view_record_geometry_count_ctx *ctx =
+	(struct test_view_record_geometry_count_ctx *)ud;
+
+    if (!ctx || !rec || !ctx->prefix || !ctx->geometry_name ||
+	    !rec->path || !rec->geometry_name)
+	return 1;
+
+    if (source_name_matches_drawn_prefix(rec->path, ctx->prefix) &&
+	    BU_STR_EQUAL(rec->geometry_name, ctx->geometry_name))
+	ctx->count++;
+
+    return 1;
+}
+
+
+static size_t
+test_visible_db_view_record_geometry_count(struct ged *gedp,
+					   const char *prefix,
+					   const char *geometry_name)
+{
+    struct test_view_record_geometry_count_ctx ctx = {prefix, geometry_name, 0};
+
+    ged_draw_foreach_visible_view_db_object_record(
+	    test_active_view_ctx(gedp),
+	    test_view_record_geometry_count_cb,
+	    &ctx);
+
+    return ctx.count;
+}
+
+
+struct test_annotation_view_record_ctx {
+    const char *path;
+    const char *text;
+    uint64_t *cache_identity;
+    uint64_t *source_identity;
+    int found;
+};
+
+
+static int
+test_annotation_view_record_cb(
+	const struct ged_draw_view_db_object_record *rec,
+	void *ud)
+{
+    struct test_annotation_view_record_ctx *ctx =
+	(struct test_annotation_view_record_ctx *)ud;
+
+    if (!ctx || !rec || !ctx->path || !ctx->text || !rec->path ||
+	    !rec->geometry_name ||
+	    !source_name_matches_drawn_prefix(rec->path, ctx->path) ||
+	    !BU_STR_EQUAL(rec->geometry_name, "annotation"))
+	return 1;
+
+    ASSERT(rec->is_database_source);
+    ASSERT(!rec->non_database_source);
+
+    struct ged_draw_view_annotation_summary summary;
+    ASSERT(ged_draw_view_db_object_record_annotation_summary(rec, 1, &summary));
+    ASSERT(summary.valid);
+    ASSERT(summary.display_space);
+    ASSERT(summary.point_count == 2);
+    ASSERT(summary.segment_count == 2);
+    ASSERT(summary.has_point);
+    if (summary.has_point) {
+	point_t annot_local_expected;
+	VSET(annot_local_expected, 0.2, 0.3, 0.0);
+	ASSERT(VNEAR_EQUAL(summary.point, annot_local_expected, SMALL_FASTF));
+    }
+    ASSERT(summary.line_segment_valid);
+    ASSERT(summary.line_start == 0);
+    ASSERT(summary.line_end == 1);
+    ASSERT(summary.text_segment_valid);
+    ASSERT(summary.text_ref_point == 1);
+    ASSERT(summary.text != NULL && BU_STR_EQUAL(summary.text, ctx->text));
+    ASSERT(summary.cache_identity != 0);
+    if (ctx->cache_identity)
+	*ctx->cache_identity = summary.cache_identity;
+    if (ctx->source_identity)
+	*ctx->source_identity = summary.source_identity;
+    ctx->found++;
+    return 0;
+}
+
+
+static int
+test_visible_annotation_view_record(struct ged *gedp,
+				    const char *path,
+				    const char *text,
+				    uint64_t *cache_identity,
+				    uint64_t *source_identity)
+{
+    struct test_annotation_view_record_ctx ctx =
+	{path, text, cache_identity, source_identity, 0};
+
+    ged_draw_foreach_visible_view_db_object_record(
+	    test_active_view_ctx(gedp),
+	    test_annotation_view_record_cb,
+	    &ctx);
+
+    return ctx.found == 1;
+}
+
+
+struct test_surface_view_record {
+    struct ged_draw_view_surface_summary summary;
+    fastf_t transparency;
+    int draw_mode;
+    int visible;
+    int highlighted;
+    int line_style;
+    unsigned char color[3];
+    size_t segment_count;
+    size_t point_count;
+    size_t index_sample_count;
+    int index_sample[4];
+};
+
+
+struct test_line_view_record {
+    struct ged_draw_view_line_summary summary;
+    fastf_t transparency;
+    int draw_mode;
+    int visible;
+    int highlighted;
+    int line_style;
+    unsigned char color[3];
+    size_t segment_count;
+    size_t point_count;
+    size_t sample_count;
+    point_t sample_points[TEST_LINE_VIEW_MAX_SAMPLES];
+    int sample_commands[TEST_LINE_VIEW_MAX_SAMPLES];
+    uint64_t cache_identity;
+    uint64_t source_identity;
+};
+
+
+struct test_line_view_record_ctx {
+    const char *path;
+    int draw_mode;
+    size_t sample_count;
+    struct test_line_view_record *out;
+    int found;
+};
+
+
+static int
+test_line_view_record_cb(
+	const struct ged_draw_view_db_object_record *rec,
+	void *ud)
+{
+    struct test_line_view_record_ctx *ctx =
+	(struct test_line_view_record_ctx *)ud;
+
+    if (!ctx || !ctx->out || !rec || !ctx->path || !rec->path ||
+	    !rec->geometry_name ||
+	    !source_name_matches_drawn_prefix(rec->path, ctx->path) ||
+	    !BU_STR_EQUAL(rec->geometry_name, "line-set") ||
+	    (ctx->draw_mode >= 0 && rec->draw_mode != ctx->draw_mode))
+	return 1;
+
+    ASSERT(rec->is_database_source);
+    ASSERT(rec->is_database_intent);
+    ASSERT(!rec->non_database_source);
+    ASSERT(!rec->is_view_source);
+    ASSERT(!rec->is_local_source);
+
+    memset(ctx->out, 0, sizeof(*ctx->out));
+    ASSERT(ged_draw_view_db_object_record_line_summary(
+	    rec, &ctx->out->summary) == 1);
+    ASSERT(ctx->out->summary.valid);
+    ctx->out->transparency = rec->transparency;
+    ctx->out->draw_mode = rec->draw_mode;
+    ctx->out->visible = rec->visible;
+    ctx->out->highlighted = rec->highlighted;
+    ctx->out->line_style = rec->line_style;
+    ctx->out->color[0] = rec->color[0];
+    ctx->out->color[1] = rec->color[1];
+    ctx->out->color[2] = rec->color[2];
+    ctx->out->cache_identity = rec->cache_identity;
+    ctx->out->source_identity = rec->source_identity;
+    ASSERT(ctx->out->summary.cache_identity == rec->cache_identity);
+    ASSERT(ctx->out->summary.source_identity == rec->source_identity);
+
+    struct segment_count_state segments = {0};
+    ASSERT(ged_draw_view_db_object_record_foreach_segment(
+	    rec, count_segment_cb, &segments) >= 0);
+    ctx->out->segment_count = segments.count;
+
+    struct point_count_state points = {0};
+    ASSERT(ged_draw_view_db_object_record_foreach_point(
+	    rec, count_point_cb, &points) >= 0);
+    ctx->out->point_count = points.count;
+    ASSERT(ctx->out->summary.point_count == points.count);
+
+    ASSERT(ctx->sample_count <= ctx->out->summary.point_count);
+    ctx->out->sample_count = ctx->sample_count;
+    if (ctx->out->sample_count > TEST_LINE_VIEW_MAX_SAMPLES)
+	ctx->out->sample_count = TEST_LINE_VIEW_MAX_SAMPLES;
+    if (ctx->out->sample_count > ctx->out->summary.point_count)
+	ctx->out->sample_count = ctx->out->summary.point_count;
+    for (size_t i = 0; i < ctx->out->sample_count; i++) {
+	ASSERT(ged_draw_view_db_object_record_line_point_at(
+		rec, i, ctx->out->sample_points[i]) == 1);
+	ASSERT(ged_draw_view_db_object_record_line_command_at(
+		rec, i, &ctx->out->sample_commands[i]) == 1);
+    }
+
+    ctx->found++;
+    return 0;
+}
+
+
+static int
+test_visible_line_view_record(struct ged *gedp,
+			      const char *path,
+			      int draw_mode,
+			      size_t sample_count,
+			      struct test_line_view_record *out)
+{
+    if (!out)
+	return 0;
+
+    memset(out, 0, sizeof(*out));
+    struct test_line_view_record_ctx ctx = {path, draw_mode, sample_count, out, 0};
+
+    ged_draw_foreach_visible_view_db_object_record(
+	    test_active_view_ctx(gedp),
+	    test_line_view_record_cb,
+	    &ctx);
+
+    return ctx.found == 1;
+}
+
+
+struct test_surface_view_record_ctx {
+    const char *path;
+    int draw_mode;
+    size_t index_sample_count;
+    struct test_surface_view_record *out;
+    int found;
+};
+
+
+static int
+test_surface_view_record_cb(
+	const struct ged_draw_view_db_object_record *rec,
+	void *ud)
+{
+    struct test_surface_view_record_ctx *ctx =
+	(struct test_surface_view_record_ctx *)ud;
+
+    if (!ctx || !ctx->out || !rec || !ctx->path || !rec->path ||
+	    !rec->geometry_name ||
+	    !source_name_matches_drawn_prefix(rec->path, ctx->path) ||
+	    !BU_STR_EQUAL(rec->geometry_name, "indexed-face-set") ||
+	    (ctx->draw_mode >= 0 && rec->draw_mode != ctx->draw_mode))
+	return 1;
+
+    ASSERT(rec->is_database_source);
+    ASSERT(rec->is_database_intent);
+    ASSERT(!rec->non_database_source);
+    ASSERT(!rec->is_view_source);
+    ASSERT(!rec->is_local_source);
+
+    memset(ctx->out, 0, sizeof(*ctx->out));
+    ASSERT(ged_draw_view_db_object_record_surface_summary(
+	    rec, &ctx->out->summary));
+    ASSERT(ctx->out->summary.valid);
+    ctx->out->transparency = rec->transparency;
+    ctx->out->draw_mode = rec->draw_mode;
+    ctx->out->visible = rec->visible;
+    ctx->out->highlighted = rec->highlighted;
+    ctx->out->line_style = rec->line_style;
+    ctx->out->color[0] = rec->color[0];
+    ctx->out->color[1] = rec->color[1];
+    ctx->out->color[2] = rec->color[2];
+
+    struct segment_count_state segments = {0};
+    ASSERT(ged_draw_view_db_object_record_foreach_segment(
+	    rec, count_segment_cb, &segments) >= 0);
+    ctx->out->segment_count = segments.count;
+
+    struct point_count_state points = {0};
+    ASSERT(ged_draw_view_db_object_record_foreach_point(
+	    rec, count_point_cb, &points) >= 0);
+    ctx->out->point_count = points.count;
+
+    for (size_t i = 0; i < ctx->index_sample_count &&
+	    i < sizeof(ctx->out->index_sample) / sizeof(ctx->out->index_sample[0]);
+	    i++) {
+	ASSERT(ged_draw_view_db_object_record_surface_index_at(
+		rec, i, &ctx->out->index_sample[i]));
+	ctx->out->index_sample_count++;
+    }
+
+    ctx->found++;
+    return 0;
+}
+
+
+static int
+test_visible_surface_view_record(struct ged *gedp,
+				 const char *path,
+				 int draw_mode,
+				 size_t index_sample_count,
+				 struct test_surface_view_record *out)
+{
+    if (!out)
+	return 0;
+
+    memset(out, 0, sizeof(*out));
+    struct test_surface_view_record_ctx ctx =
+	{path, draw_mode, index_sample_count, out, 0};
+
+    ged_draw_foreach_visible_view_db_object_record(
+	    test_active_view_ctx(gedp),
+	    test_surface_view_record_cb,
+	    &ctx);
+
+    return ctx.found == 1;
+}
+
+
+static test_scene_context *
+ged_draw_shape_at(struct ged *gedp, int idx)
+{
+    return (test_scene_context *)ged_draw_shape_ref_context(gedp,
+	    ged_draw_shape_ref_at(gedp, idx));
+}
+
+
+static int
+ged_draw_shape_index(struct ged *gedp, test_scene_context *shape)
 {
     return ged_draw_shape_ref_index(gedp,
-	    ged_draw_shape_ref_from_scene_ref(gedp,
-		test_scene_ref_from_node(shape)));
+	    ged_draw_shape_ref_from_context(gedp, shape));
 }
 
 
-static struct bsg_node *
-ged_draw_advance_shape(struct ged *gedp, struct bsg_node *shape, int delta)
+static test_scene_context *
+ged_draw_advance_shape(struct ged *gedp, test_scene_context *shape, int delta)
 {
-    ged_draw_shape_ref ref = ged_draw_shape_ref_from_scene_ref(gedp,
-	    test_scene_ref_from_node(shape));
-    return test_node_from_scene_ref(
-	    ged_draw_registry_shape_scene_ref(gedp,
-		ged_draw_advance_shape_ref(gedp, ref, delta)));
+    ged_draw_shape_ref ref = ged_draw_shape_ref_from_context(gedp, shape);
+    return (test_scene_context *)ged_draw_shape_ref_context(gedp,
+	    ged_draw_advance_shape_ref(gedp, ref, delta));
 }
 
 
-static struct bsg_node *
-ged_draw_next_shape(struct ged *gedp, struct bsg_node *shape)
+static test_scene_context *
+ged_draw_next_shape(struct ged *gedp, test_scene_context *shape)
 {
     return ged_draw_advance_shape(gedp, shape, 1);
 }
 
 
-static struct bsg_node *
-ged_draw_group_of_shape(struct ged *gedp, struct bsg_node *shape)
+static test_scene_context *
+ged_draw_group_of_shape(struct ged *gedp, test_scene_context *shape)
 {
-    ged_draw_shape_ref ref = ged_draw_shape_ref_from_scene_ref(gedp,
-	    test_scene_ref_from_node(shape));
-    return test_node_from_scene_ref(
-	    ged_draw_registry_group_scene_ref(gedp,
-		ged_draw_group_ref_of_shape(gedp, ref)));
+    ged_draw_shape_ref ref = ged_draw_shape_ref_from_context(gedp, shape);
+    return (test_scene_context *)ged_draw_group_ref_context(gedp,
+	    ged_draw_group_ref_of_shape(gedp, ref));
 }
 
 
 static int
-ged_draw_group_dbpath(struct ged *gedp, struct bsg_node *group, struct db_full_path *out)
+ged_draw_group_dbpath(struct ged *gedp, test_scene_context *group, struct db_full_path *out)
 {
-    return ged_draw_group_scene_ref_dbpath(gedp, test_scene_ref_from_node(group), out);
+    return ged_draw_group_context_dbpath(gedp, group, out);
 }
 
 
 static int
-ged_draw_group_is_overlay(struct bsg_node *group)
+ged_draw_group_is_overlay(test_scene_context *group)
 {
-    return ged_draw_group_scene_ref_is_overlay(test_scene_ref_from_node(group));
+    return ged_draw_group_context_is_overlay(group);
 }
 
 
 static const struct db_full_path *
-ged_draw_shape_fullpath(struct bsg_node *shape)
+ged_draw_shape_fullpath(test_scene_context *shape)
 {
-    return ged_draw_scene_ref_fullpath(test_scene_ref_from_node(shape));
+    return ged_draw_scene_context_fullpath(shape);
 }
 
 
 static ged_draw_shape_ref
-ged_draw_shape_ref_from_node(struct ged *gedp, struct bsg_node *shape)
+ged_draw_shape_ref_from_node(struct ged *gedp, test_scene_context *shape)
 {
-    return ged_draw_shape_ref_from_scene_ref(gedp, test_scene_ref_from_node(shape));
+    return ged_draw_shape_ref_from_context(gedp, shape);
 }
 
 
-static struct bsg_node *
+static test_scene_context *
 ged_draw_shape_node_from_cache_ref(struct ged *gedp, ged_draw_shape_ref ref)
 {
-    return test_node_from_scene_ref(ged_draw_shape_scene_ref_from_cache_ref(gedp, ref));
+    return (test_scene_context *)ged_draw_shape_ref_cache_context(gedp, ref);
 }
 
 
@@ -702,7 +1076,8 @@ publish_nmg_test_shape(struct ged *gedp, const struct nmgregion *r, int style)
     if (ged_draw_group_ref_is_null(group_ref))
 	return shape_ref;
 
-    draft = ged_draw_shape_draft_create(gedp, gedp->ged_gvp, 0);
+    draft = ged_draw_shape_draft_create_context(gedp,
+	    test_active_view_ctx(gedp), 0);
     ASSERT(draft != NULL);
     if (!draft)
 	return shape_ref;
@@ -745,7 +1120,8 @@ publish_nmg_test_shape_with_late_state(struct ged *gedp,
 	return shape_ref;
     }
 
-    draft = ged_draw_shape_draft_create(gedp, gedp->ged_gvp, 0);
+    draft = ged_draw_shape_draft_create_context(gedp,
+	    test_active_view_ctx(gedp), 0);
     ASSERT(draft != NULL);
     if (!draft) {
 	db_free_full_path(&dfp);
@@ -844,56 +1220,56 @@ nmg_test_make_loop_edges_plinear_cnurb(struct loopuse *lu,
 }
 
 
-template <typename Ref>
 static int
-test_group_shape_cb(Ref ref, void *ud)
+test_group_shape_cb(test_scene_context *node, test_scene_context **out)
 {
-    if (bsg_scene_child_count(ref) == 0) {
-	*(Ref *)ud = ref;
+    size_t child_count = test_scene_child_count(node);
+    if (child_count == 0) {
+	*out = node;
 	return 0;
     }
-    for (size_t i = 0; i < bsg_scene_child_count(ref); i++) {
-	if (!test_group_shape_cb(bsg_scene_child_at(ref, i), ud))
+    for (size_t i = 0; i < child_count; i++) {
+	if (!test_group_shape_cb(test_scene_child_at(node, i), out))
 	    return 0;
     }
     return 1;
 }
 
 
-template <typename Ref>
 static int
-test_group_last_shape_cb(Ref ref, void *ud)
+test_group_last_shape_cb(test_scene_context *node, test_scene_context **out)
 {
-    if (bsg_scene_child_count(ref) == 0) {
-	*(Ref *)ud = ref;
+    size_t child_count = test_scene_child_count(node);
+    if (child_count == 0) {
+	*out = node;
 	return 1;
     }
-    for (size_t i = 0; i < bsg_scene_child_count(ref); i++)
-	(void)test_group_last_shape_cb(bsg_scene_child_at(ref, i), ud);
+    for (size_t i = 0; i < child_count; i++)
+	(void)test_group_last_shape_cb(test_scene_child_at(node, i), out);
     return 1;
 }
 
 
-static struct bsg_node *
-ged_draw_group_first_shape(struct bsg_node *group)
+static test_scene_context *
+ged_draw_group_first_shape(test_scene_context *group)
 {
-    auto ref = ged_draw_first_shape_scene_ref(NULL);
-    (void)test_group_shape_cb(test_scene_ref_from_node(group), &ref);
-    return test_node_from_scene_ref(ref);
+    test_scene_context *shape = NULL;
+    (void)test_group_shape_cb(group, &shape);
+    return shape;
 }
 
 
-static struct bsg_node *
-ged_draw_group_last_shape(struct bsg_node *group)
+static test_scene_context *
+ged_draw_group_last_shape(test_scene_context *group)
 {
-    auto ref = ged_draw_first_shape_scene_ref(NULL);
-    (void)test_group_last_shape_cb(test_scene_ref_from_node(group), &ref);
-    return test_node_from_scene_ref(ref);
+    test_scene_context *shape = NULL;
+    (void)test_group_last_shape_cb(group, &shape);
+    return shape;
 }
 
 
 static int
-ged_draw_group_has_shapes(struct bsg_node *group)
+ged_draw_group_has_shapes(test_scene_context *group)
 {
     return ged_draw_group_first_shape(group) ? 1 : 0;
 }
@@ -904,134 +1280,41 @@ assert_shaded_surface_payload_for_source_prefix(struct ged *gedp,
 						const char *source_prefix,
 						int draw_mode)
 {
-    struct bsg_render_request *req = NULL;
-    struct bsg_render_batch *batch = NULL;
-    const struct bsg_render_item *face_item = NULL;
+    struct test_surface_view_record surface;
 
-    req = bsg_render_request_create(gedp->ged_gvp, NULL);
-    batch = bsg_render_batch_create();
-    ASSERT(req != NULL);
-    ASSERT(batch != NULL);
-    if (req && batch) {
-	bsg_render_request_set_flags(req, BSG_RENDER_FLAG_VISIBLE_ONLY);
-	ASSERT(bsg_render_request_collect(req, batch) > 0);
-	face_item = find_render_item_by_source_prefix_and_kind(batch,
-		source_prefix, BSG_RENDER_GEOMETRY_INDEXED_FACE_SET);
-	ASSERT(face_item != NULL);
-	if (face_item) {
-	    struct segment_count_state wire_segments = {0};
-	    struct segment_count_state line_segments = {0};
-	    struct bsg_export_request ereq;
-	    struct bsg_export_result *export_result = NULL;
+    ASSERT(test_visible_surface_view_record(gedp, source_prefix, draw_mode,
+	    0, &surface));
+    ASSERT(surface.summary.valid);
+    ASSERT(surface.draw_mode == draw_mode);
+    ASSERT(surface.summary.point_count > 0);
+    ASSERT(surface.summary.normal_count > 0);
+    ASSERT(surface.summary.index_count > 0);
+    ASSERT(surface.summary.face_count > 0);
+    ASSERT(surface.summary.normals_per_index);
+    ASSERT(surface.summary.material_valid == 1);
+    ASSERT(surface.summary.material_draw_mode == draw_mode);
+    ASSERT(NEAR_EQUAL(surface.summary.material_transparency,
+	    surface.transparency, SMALL_FASTF));
+    ASSERT(surface.segment_count == 3 * surface.summary.face_count);
+    ASSERT(surface.segment_count > 0);
+    ASSERT(surface.point_count == surface.summary.point_count);
+    ASSERT(surface.summary.cache_identity != 0);
+    ASSERT(surface.summary.source_identity != 0);
 
-	    ASSERT(face_item->source.scope ==
-		    BSG_RENDER_SOURCE_SCOPE_DATABASE);
-	    ASSERT(face_item->source.draw_intent ==
-		    BSG_RENDER_DRAW_INTENT_DATABASE);
-	    ASSERT(face_item->source.non_database_source == 0);
-	    ASSERT(face_item->appearance.draw_mode == draw_mode);
-	    ASSERT(face_item->geometry.surface.point_count > 0);
-	    ASSERT(face_item->geometry.surface.normal_count > 0);
-	    ASSERT(face_item->geometry.surface.index_count > 0);
-	    ASSERT(face_item->geometry.surface.face_count > 0);
-	    ASSERT(face_item->geometry.surface.normal_kind ==
-		    BSG_RENDER_SURFACE_NORMALS_PER_INDEX);
-	    ASSERT(face_item->geometry.surface.material_valid == 1);
-	    ASSERT(face_item->geometry.surface.material.draw_mode == draw_mode);
-	    ASSERT(NEAR_EQUAL(
-		    face_item->geometry.surface.material.transparency,
-		    face_item->appearance.transparency, SMALL_FASTF));
-	    ASSERT(bsg_render_item_foreach_wire_segment(face_item,
-		    count_segment_cb, &wire_segments) == 3 *
-		face_item->geometry.surface.face_count);
-	    ASSERT(wire_segments.count > 0);
-	    ASSERT(bsg_render_item_foreach_line_segment(face_item,
-		    count_segment_cb, &line_segments) == 0);
-	    ASSERT(line_segments.count == 0);
-
-	    bsg_export_request_init(&ereq, gedp->ged_gvp);
-	    ereq.query_flags =
-		BSG_EXPORT_QUERY_VISIBLE_ONLY |
-		BSG_EXPORT_QUERY_DB_OBJECTS;
-	    ereq.render_flags = BSG_RENDER_FLAG_VISIBLE_ONLY;
-	    export_result = bsg_export_query(&ereq);
-	    ASSERT(export_result != NULL);
-	    if (export_result) {
-		const struct bsg_export_record *face_rec =
-		    find_export_record_by_source_prefix_and_kind(export_result,
-			    source_prefix, BSG_RENDER_GEOMETRY_INDEXED_FACE_SET);
-		ASSERT(face_rec != NULL);
-		if (face_rec) {
-		    struct segment_count_state export_segments = {0};
-		    struct point_count_state export_points = {0};
-		    struct bsg_backend_scene *scene = NULL;
-
-		    ASSERT(face_rec->cache_identity ==
-			    face_item->cache_identity);
-		    ASSERT(face_rec->source.source_id ==
-			    face_item->source.source_id);
-		    ASSERT(face_rec->draw_mode == draw_mode);
-		    ASSERT(face_rec->geometry.surface.point_count ==
-			    face_item->geometry.surface.point_count);
-		    ASSERT(face_rec->geometry.surface.normal_count ==
-			    face_item->geometry.surface.normal_count);
-		    ASSERT(face_rec->geometry.surface.index_count ==
-			    face_item->geometry.surface.index_count);
-		    ASSERT(face_rec->geometry.surface.face_count ==
-			    face_item->geometry.surface.face_count);
-		    ASSERT(face_rec->geometry.surface.normal_kind ==
-			    face_item->geometry.surface.normal_kind);
-		    ASSERT(face_rec->geometry.surface.material_valid == 1);
-		    ASSERT(bsg_export_record_foreach_segment(face_rec,
-			    count_segment_cb, &export_segments) ==
-			wire_segments.count);
-		    ASSERT(export_segments.count == wire_segments.count);
-		    ASSERT(bsg_export_record_foreach_point(face_rec,
-			    count_point_cb, &export_points) ==
-			face_item->geometry.surface.point_count);
-		    ASSERT(export_points.count ==
-			    face_item->geometry.surface.point_count);
-
-		    scene = bsg_backend_scene_create();
-		    ASSERT(scene != NULL);
-		    if (scene) {
-			const struct bsg_backend_scene_node *node = NULL;
-			ASSERT(bsg_backend_scene_render_request(gedp->ged_gvp,
-				scene, BSG_RENDER_FLAG_VISIBLE_ONLY) > 0);
-			node = bsg_backend_scene_find(scene,
-				face_rec->cache_identity);
-			ASSERT(node != NULL);
-			if (node) {
-			    ASSERT(node->geometry.kind ==
-				    BSG_RENDER_GEOMETRY_INDEXED_FACE_SET);
-			    ASSERT(node->geometry.surface.point_count ==
-				    face_rec->geometry.surface.point_count);
-			    ASSERT(node->geometry.surface.normal_count ==
-				    face_rec->geometry.surface.normal_count);
-			    ASSERT(node->geometry.surface.index_count ==
-				    face_rec->geometry.surface.index_count);
-			    ASSERT(node->geometry.surface.face_count ==
-				    face_rec->geometry.surface.face_count);
-			    ASSERT(node->geometry.surface.normal_kind ==
-				    face_rec->geometry.surface.normal_kind);
-			    ASSERT(node->geometry.surface.material_valid == 1);
-			    ASSERT(node->source_identity ==
-				    face_rec->source.source_id);
-			    ASSERT(node->material.draw_mode == draw_mode);
-			    ASSERT(node->selection.visible == face_rec->visible);
-			}
-			bsg_backend_scene_destroy(scene);
-		    }
-		}
-		bsg_export_result_free(export_result);
-	    }
-	}
-    }
-
-    if (batch)
-	bsg_render_batch_destroy(batch);
-    if (req)
-	bsg_render_request_destroy(req);
+    struct ged_draw_view_rendered_object_summary rendered;
+    ASSERT(ged_draw_view_rendered_object_summary(test_active_view_ctx(gedp),
+	    surface.summary.cache_identity, &rendered));
+    ASSERT(rendered.found);
+    ASSERT(rendered.is_indexed_face_set);
+    ASSERT(rendered.surface_point_count == surface.summary.point_count);
+    ASSERT(rendered.surface_normal_count == surface.summary.normal_count);
+    ASSERT(rendered.surface_index_count == surface.summary.index_count);
+    ASSERT(rendered.surface_face_count == surface.summary.face_count);
+    ASSERT(rendered.surface_normals_per_index);
+    ASSERT(rendered.surface_material_valid == 1);
+    ASSERT(rendered.source_identity == surface.summary.source_identity);
+    ASSERT(rendered.material_draw_mode == draw_mode);
+    ASSERT(rendered.selection_visible == surface.visible);
 }
 
 
@@ -1137,23 +1420,22 @@ main(int ac, char *av[])
 	shape_ref = publish_nmg_test_shape(gedp, r, GED_DRAW_NMG_STYLE_VECTOR);
 
 	if (!ged_draw_shape_ref_is_null(shape_ref)) {
-	    struct bsg_node *shape = ged_draw_shape_node_from_cache_ref(gedp, shape_ref);
-	    bsg_line_set_ref lines = bsg_node_ref_as_line_set(test_node_ref_from_node(shape));
-	    bsg_geometry_ref geometry = bsg_line_set_ref_as_geometry(lines);
+	    struct ged_draw_view_line_summary line_summary;
 	    point_t got = VINIT_ZERO;
 	    int command = -1;
 
-	    ASSERT(shape != NULL);
-	    ASSERT(bsg_geometry_ref_kind(geometry) == BSG_GEOMETRY_NODE_LINE_SET);
-	    ASSERT(bsg_line_set_ref_point_count(lines) == 2);
-	    ASSERT(bsg_line_set_ref_point_at(lines, 0, got) &&
+	    ASSERT(ged_draw_shape_ref_line_summary(gedp, shape_ref,
+		    &line_summary));
+	    ASSERT(line_summary.valid);
+	    ASSERT(line_summary.point_count == 2);
+	    ASSERT(ged_draw_shape_ref_line_point_at(gedp, shape_ref, 0, got) &&
 		    VNEAR_EQUAL(got, point, SMALL_FASTF));
-	    ASSERT(bsg_line_set_ref_command_at(lines, 0, &command) &&
-		    command == BSG_GEOMETRY_LINE_MOVE);
-	    ASSERT(bsg_line_set_ref_point_at(lines, 1, got) &&
+	    ASSERT(ged_draw_shape_ref_line_command_at(gedp, shape_ref, 0,
+		    &command) && command == GED_DRAW_VIEW_LINE_MOVE);
+	    ASSERT(ged_draw_shape_ref_line_point_at(gedp, shape_ref, 1, got) &&
 		    VNEAR_EQUAL(got, point, SMALL_FASTF));
-	    ASSERT(bsg_line_set_ref_command_at(lines, 1, &command) &&
-		    command == BSG_GEOMETRY_LINE_DRAW);
+	    ASSERT(ged_draw_shape_ref_line_command_at(gedp, shape_ref, 1,
+		    &command) && command == GED_DRAW_VIEW_LINE_DRAW);
 	}
 
 	ged_draw_clear(gedp);
@@ -1188,9 +1470,6 @@ main(int ac, char *av[])
 		GED_DRAW_NMG_STYLE_POLYGON | GED_DRAW_NMG_STYLE_NO_SURFACES);
 
 	if (!ged_draw_shape_ref_is_null(shape_ref)) {
-	    struct bsg_node *shape = ged_draw_shape_node_from_cache_ref(gedp, shape_ref);
-	    bsg_line_set_ref lines = bsg_node_ref_as_line_set(test_node_ref_from_node(shape));
-	    bsg_geometry_ref geometry = bsg_line_set_ref_as_geometry(lines);
 	    const point_t expected_points[4] = {
 		{0.0, 0.0, 0.0},
 		{1.0, 0.0, 0.0},
@@ -1198,22 +1477,25 @@ main(int ac, char *av[])
 		{0.0, 0.0, 0.0}
 	    };
 	    const int expected_commands[4] = {
-		BSG_GEOMETRY_LINE_MOVE,
-		BSG_GEOMETRY_LINE_DRAW,
-		BSG_GEOMETRY_LINE_DRAW,
-		BSG_GEOMETRY_LINE_DRAW
+		GED_DRAW_VIEW_LINE_MOVE,
+		GED_DRAW_VIEW_LINE_DRAW,
+		GED_DRAW_VIEW_LINE_DRAW,
+		GED_DRAW_VIEW_LINE_DRAW
 	    };
+	    struct ged_draw_view_line_summary line_summary;
 
-	    ASSERT(shape != NULL);
-	    ASSERT(bsg_geometry_ref_kind(geometry) == BSG_GEOMETRY_NODE_LINE_SET);
-	    ASSERT(bsg_line_set_ref_point_count(lines) == 4);
+	    ASSERT(ged_draw_shape_ref_line_summary(gedp, shape_ref,
+		    &line_summary));
+	    ASSERT(line_summary.valid);
+	    ASSERT(line_summary.point_count == 4);
 	    for (size_t i = 0; i < 4; i++) {
 		point_t got = VINIT_ZERO;
 		int command = -1;
-		ASSERT(bsg_line_set_ref_point_at(lines, i, got) &&
-			VNEAR_EQUAL(got, expected_points[i], SMALL_FASTF));
-		ASSERT(bsg_line_set_ref_command_at(lines, i, &command) &&
-			command == expected_commands[i]);
+		ASSERT(ged_draw_shape_ref_line_point_at(gedp, shape_ref, i,
+			got) && VNEAR_EQUAL(got, expected_points[i],
+			    SMALL_FASTF));
+		ASSERT(ged_draw_shape_ref_line_command_at(gedp, shape_ref, i,
+			&command) && command == expected_commands[i]);
 	    }
 	}
 
@@ -1226,24 +1508,23 @@ main(int ac, char *av[])
 		GED_DRAW_NMG_STYLE_VISUALIZE_NORMALS);
 
 	if (!ged_draw_shape_ref_is_null(shape_ref)) {
-	    struct bsg_node *shape = ged_draw_shape_node_from_cache_ref(gedp, shape_ref);
-	    bsg_line_set_ref lines = bsg_node_ref_as_line_set(test_node_ref_from_node(shape));
-	    bsg_geometry_ref geometry = bsg_line_set_ref_as_geometry(lines);
 	    point_t centroid = {1.0 / 3.0, 1.0 / 3.0, 0.0};
+	    struct ged_draw_view_line_summary line_summary;
 	    point_t got = VINIT_ZERO;
 	    point_t tip = VINIT_ZERO;
 	    int command = -1;
 
-	    ASSERT(shape != NULL);
-	    ASSERT(bsg_geometry_ref_kind(geometry) == BSG_GEOMETRY_NODE_LINE_SET);
-	    ASSERT(bsg_line_set_ref_point_count(lines) == 6);
-	    ASSERT(bsg_line_set_ref_command_at(lines, 4, &command) &&
-		    command == BSG_GEOMETRY_LINE_MOVE);
-	    ASSERT(bsg_line_set_ref_point_at(lines, 4, got) &&
+	    ASSERT(ged_draw_shape_ref_line_summary(gedp, shape_ref,
+		    &line_summary));
+	    ASSERT(line_summary.valid);
+	    ASSERT(line_summary.point_count == 6);
+	    ASSERT(ged_draw_shape_ref_line_command_at(gedp, shape_ref, 4,
+		    &command) && command == GED_DRAW_VIEW_LINE_MOVE);
+	    ASSERT(ged_draw_shape_ref_line_point_at(gedp, shape_ref, 4, got) &&
 		    VNEAR_EQUAL(got, centroid, SMALL_FASTF));
-	    ASSERT(bsg_line_set_ref_command_at(lines, 5, &command) &&
-		    command == BSG_GEOMETRY_LINE_DRAW);
-	    ASSERT(bsg_line_set_ref_point_at(lines, 5, tip));
+	    ASSERT(ged_draw_shape_ref_line_command_at(gedp, shape_ref, 5,
+		    &command) && command == GED_DRAW_VIEW_LINE_DRAW);
+	    ASSERT(ged_draw_shape_ref_line_point_at(gedp, shape_ref, 5, tip));
 	    ASSERT(NEAR_EQUAL(tip[X], centroid[X], SMALL_FASTF));
 	    ASSERT(NEAR_EQUAL(tip[Y], centroid[Y], SMALL_FASTF));
 	    ASSERT(!NEAR_ZERO(tip[Z] - centroid[Z], SMALL_FASTF));
@@ -1281,39 +1562,40 @@ main(int ac, char *av[])
 	shape_ref = publish_nmg_test_shape_with_late_state(gedp, r,
 		GED_DRAW_NMG_STYLE_POLYGON |
 		GED_DRAW_NMG_STYLE_VISUALIZE_NORMALS,
-		material_rgb, 1, 5, 0.25, BSG_DRAW_MODE_SHADED);
+		material_rgb, 1, 5, 0.25, GED_DRAW_MODE_SHADED);
 
 	if (!ged_draw_shape_ref_is_null(shape_ref)) {
-	    struct bsg_node *shape = ged_draw_shape_node_from_cache_ref(gedp, shape_ref);
-	    auto shape_scene_ref = test_scene_ref_from_node(shape);
-	    bsg_indexed_face_set_ref faces = bsg_node_ref_as_indexed_face_set(
-		    test_node_ref_from_node(shape));
-	    bsg_geometry_ref face_geometry =
-		bsg_indexed_face_set_ref_as_geometry(faces);
-	    struct bsg_node *source = test_scene_parent(shape);
-	    struct bsg_node *normal_shape = NULL;
+	    test_scene_context *shape = ged_draw_shape_node_from_cache_ref(gedp, shape_ref);
+	    struct ged_draw_shape_geometry_summary face_geometry;
+	    struct ged_draw_scene_display_summary face_display;
+	    test_scene_context *source = test_scene_parent(shape);
+	    struct ged_draw_scene_display_summary source_display;
+	    test_scene_context *normal_shape = NULL;
 
 	    ASSERT(shape != NULL);
-	    ASSERT(bsg_geometry_ref_kind(face_geometry) ==
-		    BSG_GEOMETRY_NODE_INDEXED_FACE_SET);
-	    ASSERT(bsg_draw_intent_path(bsg_scene_draw_intent(shape_scene_ref)) &&
-		    BU_STR_EQUAL(bsg_draw_intent_path(
-			    bsg_scene_draw_intent(shape_scene_ref)), "all.g"));
-	    ASSERT(bsg_scene_line_style(shape_scene_ref) == 1);
-	    ASSERT(bsg_scene_line_width(shape_scene_ref) == 5);
-	    ASSERT(NEAR_EQUAL(bsg_scene_transparency(shape_scene_ref), 0.25,
-			SMALL_FASTF));
-	    ASSERT(bsg_scene_dmode(shape_scene_ref) == BSG_DRAW_MODE_SHADED);
-	    ASSERT(bsg_field_multi_count(
-			bsg_geometry_ref_coordinates_field(face_geometry)) == 3);
-	    ASSERT(bsg_field_multi_count(
-			bsg_geometry_ref_indices_field(face_geometry)) == 4);
+	    ASSERT(ged_draw_shape_context_geometry_summary(shape, &face_geometry));
+	    ASSERT(face_geometry.valid);
+	    ASSERT(BU_STR_EQUAL(face_geometry.geometry_name, "indexed-face-set"));
+	    ASSERT(ged_draw_scene_context_display_summary(shape, &face_display));
+	    ASSERT(face_display.valid);
+	    ASSERT(face_display.has_draw_intent);
+	    ASSERT(face_display.intent_path &&
+		    BU_STR_EQUAL(face_display.intent_path, "all.g"));
+	    ASSERT(face_display.line_style == 1);
+	    ASSERT(face_display.line_width == 5);
+	    ASSERT(NEAR_EQUAL(face_display.transparency, 0.25, SMALL_FASTF));
+	    ASSERT(face_display.draw_mode == GED_DRAW_MODE_SHADED);
+	    ASSERT(face_geometry.point_count == 3);
+	    ASSERT(face_geometry.index_count == 4);
 	    ASSERT(source != NULL);
-	    ASSERT(node_is_a(source, bsg_database_source_type()));
+	    ASSERT(ged_draw_scene_context_display_summary(source,
+		    &source_display));
+	    ASSERT(source_display.valid);
+	    ASSERT(source_display.is_database_source);
 	    ASSERT(test_scene_child_count(source) == 2);
 
 	    for (size_t i = 0; i < test_scene_child_count(source); i++) {
-		struct bsg_node *child = test_scene_child_at(source, i);
+		test_scene_context *child = test_scene_child_at(source, i);
 		if (child != shape &&
 			BU_STR_EQUAL(test_scene_name(child), "nmg_surface_normals")) {
 		    normal_shape = child;
@@ -1323,218 +1605,122 @@ main(int ac, char *av[])
 
 	    ASSERT(normal_shape != NULL);
 	    if (normal_shape) {
-		auto normal_ref = test_scene_ref_from_node(normal_shape);
-		bsg_line_set_ref lines = bsg_node_ref_as_line_set(
-			test_node_ref_from_node(normal_shape));
-		bsg_geometry_ref line_geometry = bsg_line_set_ref_as_geometry(lines);
+		struct ged_draw_view_line_summary line_summary;
+		struct ged_draw_scene_display_summary normal_display;
 		point_t centroid = {1.0 / 3.0, 1.0 / 3.0, 0.0};
 		point_t got = VINIT_ZERO;
 		point_t tip = VINIT_ZERO;
 		int command = -1;
-		unsigned char mat_r = 0;
-		unsigned char mat_g = 0;
-		unsigned char mat_b = 0;
 
-		ASSERT(bsg_scene_is_database_source(normal_ref));
-		ASSERT(bsg_draw_intent_path(bsg_scene_draw_intent(normal_ref)) &&
-			BU_STR_EQUAL(bsg_draw_intent_path(
-				bsg_scene_draw_intent(normal_ref)), "all.g"));
-		ASSERT(bsg_draw_intent_mode(bsg_scene_draw_intent(normal_ref)) ==
-			BSG_DRAW_MODE_SHADED);
-		ASSERT(bsg_scene_visible(normal_ref) ==
-			bsg_scene_visible(shape_scene_ref));
-		ASSERT(bsg_scene_line_style(normal_ref) ==
-			bsg_scene_line_style(shape_scene_ref));
-		ASSERT(bsg_scene_line_width(normal_ref) ==
-			bsg_scene_line_width(shape_scene_ref));
-		ASSERT(NEAR_EQUAL(bsg_scene_transparency(normal_ref),
-			bsg_scene_transparency(shape_scene_ref), SMALL_FASTF));
-		ASSERT(bsg_scene_dmode(normal_ref) ==
-			bsg_scene_dmode(shape_scene_ref));
-		ASSERT(bsg_scene_highlighted(normal_ref) ==
-			bsg_scene_highlighted(shape_scene_ref));
-		bsg_scene_material_get_rgb(normal_ref, &mat_r, &mat_g, &mat_b);
-		ASSERT(mat_r == material_rgb[0] && mat_g == material_rgb[1] &&
-			mat_b == material_rgb[2]);
-		ASSERT(bsg_geometry_ref_kind(line_geometry) ==
-			BSG_GEOMETRY_NODE_LINE_SET);
-		ASSERT(bsg_line_set_ref_point_count(lines) == 2);
-		ASSERT(bsg_line_set_ref_command_at(lines, 0, &command) &&
-			command == BSG_GEOMETRY_LINE_MOVE);
-		ASSERT(bsg_line_set_ref_point_at(lines, 0, got) &&
+		ASSERT(ged_draw_scene_context_display_summary(normal_shape,
+			&normal_display));
+		ASSERT(normal_display.valid);
+		ASSERT(normal_display.is_database_source);
+		ASSERT(normal_display.has_draw_intent);
+		ASSERT(normal_display.intent_path &&
+			BU_STR_EQUAL(normal_display.intent_path, "all.g"));
+		ASSERT(normal_display.intent_draw_mode ==
+			GED_DRAW_MODE_SHADED);
+		ASSERT(normal_display.visible == face_display.visible);
+		ASSERT(normal_display.line_style == face_display.line_style);
+		ASSERT(normal_display.line_width == face_display.line_width);
+		ASSERT(NEAR_EQUAL(normal_display.transparency,
+			face_display.transparency, SMALL_FASTF));
+		ASSERT(normal_display.draw_mode == face_display.draw_mode);
+		ASSERT(normal_display.highlighted == face_display.highlighted);
+		ASSERT(normal_display.material_valid);
+		ASSERT(normal_display.material_color[0] == material_rgb[0] &&
+			normal_display.material_color[1] == material_rgb[1] &&
+			normal_display.material_color[2] == material_rgb[2]);
+		ASSERT(ged_draw_shape_context_line_summary(normal_shape,
+			&line_summary));
+		ASSERT(line_summary.valid);
+		ASSERT(line_summary.point_count == 2);
+		ASSERT(ged_draw_shape_context_line_command_at(normal_shape,
+			0, &command) && command == GED_DRAW_VIEW_LINE_MOVE);
+		ASSERT(ged_draw_shape_context_line_point_at(normal_shape, 0,
+			got) &&
 			VNEAR_EQUAL(got, centroid, SMALL_FASTF));
-		ASSERT(bsg_line_set_ref_command_at(lines, 1, &command) &&
-			command == BSG_GEOMETRY_LINE_DRAW);
-		ASSERT(bsg_line_set_ref_point_at(lines, 1, tip));
+		ASSERT(ged_draw_shape_context_line_command_at(normal_shape,
+			1, &command) && command == GED_DRAW_VIEW_LINE_DRAW);
+		ASSERT(ged_draw_shape_context_line_point_at(normal_shape, 1,
+			tip));
 		ASSERT(NEAR_EQUAL(tip[X], centroid[X], SMALL_FASTF));
 		ASSERT(NEAR_EQUAL(tip[Y], centroid[Y], SMALL_FASTF));
 		ASSERT(!NEAR_ZERO(tip[Z] - centroid[Z], SMALL_FASTF));
 	    }
 
 	    {
-		struct bsg_render_request *req =
-		    bsg_render_request_create(gedp->ged_gvp, NULL);
-		struct bsg_render_batch *batch = bsg_render_batch_create();
-		const struct bsg_render_item *face_item = NULL;
-		const struct bsg_render_item *normal_item = NULL;
-		int saw_face = 0;
-		int saw_normals = 0;
+		struct test_surface_view_record face_record;
+		struct test_line_view_record normal_record;
 
-		ASSERT(req != NULL);
-		ASSERT(batch != NULL);
-		if (req && batch) {
-		    bsg_render_request_set_flags(req, BSG_RENDER_FLAG_VISIBLE_ONLY);
-		    ASSERT(bsg_render_request_collect(req, batch) > 0);
-		    for (size_t i = 0; i < bsg_render_batch_count(batch); i++) {
-			const struct bsg_render_item *item =
-			    bsg_render_batch_get(batch, i);
-			if (!item || !item->source.name ||
-				!BU_STR_EQUAL(item->source.name, "all.g"))
-			    continue;
-			ASSERT(item->source.scope == BSG_RENDER_SOURCE_SCOPE_DATABASE);
-			ASSERT(item->source.draw_intent ==
-				BSG_RENDER_DRAW_INTENT_DATABASE);
-			ASSERT(item->source.non_database_source == 0);
-			ASSERT(item->appearance.color[0] == material_rgb[0] &&
-				item->appearance.color[1] == material_rgb[1] &&
-				item->appearance.color[2] == material_rgb[2]);
-			ASSERT(item->appearance.line_style == 1);
-			ASSERT(item->appearance.line_width == 5);
-			ASSERT(NEAR_EQUAL(item->appearance.transparency, 0.25,
-				SMALL_FASTF));
-			ASSERT(item->appearance.draw_mode == BSG_DRAW_MODE_SHADED);
-			ASSERT(item->appearance.highlighted == 1);
-			if (item->geometry.kind == BSG_RENDER_GEOMETRY_INDEXED_FACE_SET) {
-			    saw_face = 1;
-			    face_item = item;
-			}
-			if (item->geometry.kind == BSG_RENDER_GEOMETRY_LINE_SET) {
-			    saw_normals = 1;
-			    normal_item = item;
-			}
-		    }
-		    ASSERT(saw_face == 1);
-		    ASSERT(saw_normals == 1);
-		    ASSERT(face_item != NULL);
-		    ASSERT(normal_item != NULL);
-		    if (face_item) {
-			struct segment_count_state segs = {0};
-			struct segment_count_state lines = {0};
+		ASSERT(test_visible_surface_view_record(gedp, "all.g",
+			GED_DRAW_MODE_SHADED, 0, &face_record));
+		ASSERT(test_visible_line_view_record(gedp, "all.g",
+			GED_DRAW_MODE_SHADED, 0, &normal_record));
 
-			ASSERT(face_item->geometry.surface.point_count == 3);
-			ASSERT(face_item->geometry.surface.normal_count == 3);
-			ASSERT(face_item->geometry.surface.index_count == 4);
-			ASSERT(face_item->geometry.surface.face_count == 1);
-			ASSERT(face_item->geometry.surface.normal_kind ==
-				BSG_RENDER_SURFACE_NORMALS_PER_INDEX);
-			ASSERT(face_item->geometry.surface.material_valid == 1);
-			ASSERT(face_item->geometry.surface.material.color[0] ==
-				material_rgb[0] &&
-				face_item->geometry.surface.material.color[1] ==
-				material_rgb[1] &&
-				face_item->geometry.surface.material.color[2] ==
-				material_rgb[2]);
-			ASSERT(NEAR_EQUAL(
-				face_item->geometry.surface.material.transparency,
-				0.25, SMALL_FASTF));
-			ASSERT(face_item->geometry.surface.material.draw_mode ==
-				BSG_DRAW_MODE_SHADED);
-			ASSERT(face_item->geometry.surface.material.highlighted == 1);
-			ASSERT(bsg_render_item_foreach_wire_segment(face_item,
-				count_segment_cb, &segs) == 3);
-			ASSERT(segs.count == 3);
-			ASSERT(bsg_render_item_foreach_line_segment(face_item,
-				count_segment_cb, &lines) == 0);
-			ASSERT(lines.count == 0);
+		ASSERT(face_record.summary.valid);
+		ASSERT(face_record.summary.point_count == 3);
+		ASSERT(face_record.summary.normal_count == 3);
+		ASSERT(face_record.summary.index_count == 4);
+		ASSERT(face_record.summary.face_count == 1);
+		ASSERT(face_record.summary.normals_per_index);
+		ASSERT(face_record.summary.material_valid == 1);
+		ASSERT(face_record.summary.material_color[0] == material_rgb[0] &&
+			face_record.summary.material_color[1] == material_rgb[1] &&
+			face_record.summary.material_color[2] == material_rgb[2]);
+		ASSERT(NEAR_EQUAL(face_record.summary.material_transparency,
+			0.25, SMALL_FASTF));
+		ASSERT(face_record.summary.material_draw_mode ==
+			GED_DRAW_MODE_SHADED);
+		ASSERT(face_record.summary.material_highlighted == 1);
+		ASSERT(face_record.color[0] == material_rgb[0] &&
+			face_record.color[1] == material_rgb[1] &&
+			face_record.color[2] == material_rgb[2]);
+		ASSERT(face_record.line_style == 1);
+		ASSERT(NEAR_EQUAL(face_record.transparency, 0.25, SMALL_FASTF));
+		ASSERT(face_record.draw_mode == GED_DRAW_MODE_SHADED);
+		ASSERT(face_record.highlighted == 1);
+		ASSERT(face_record.segment_count == 3);
+		ASSERT(face_record.point_count == 3);
+		ASSERT(face_record.summary.cache_identity != 0);
+		ASSERT(face_record.summary.source_identity != 0);
 
-			struct bsg_export_request ereq;
-			bsg_export_request_init(&ereq, gedp->ged_gvp);
-			ereq.query_flags =
-			    BSG_EXPORT_QUERY_VISIBLE_ONLY |
-			    BSG_EXPORT_QUERY_DB_OBJECTS;
-			ereq.render_flags = BSG_RENDER_FLAG_VISIBLE_ONLY;
-			struct bsg_export_result *export_result =
-			    bsg_export_query(&ereq);
-			ASSERT(export_result != NULL);
-			if (export_result) {
-			    const struct bsg_export_record *face_rec =
-				find_export_record_by_source_and_kind(
-					export_result, "all.g",
-					BSG_RENDER_GEOMETRY_INDEXED_FACE_SET);
-			    ASSERT(face_rec != NULL);
-			    if (face_rec) {
-				struct segment_count_state export_segs = {0};
-				struct point_count_state export_points = {0};
+		ASSERT(normal_record.color[0] == material_rgb[0] &&
+			normal_record.color[1] == material_rgb[1] &&
+			normal_record.color[2] == material_rgb[2]);
+		ASSERT(normal_record.line_style == 1);
+		ASSERT(NEAR_EQUAL(normal_record.transparency, 0.25,
+			SMALL_FASTF));
+		ASSERT(normal_record.draw_mode == GED_DRAW_MODE_SHADED);
+		ASSERT(normal_record.highlighted == 1);
+		ASSERT(normal_record.segment_count == 1);
+		ASSERT(normal_record.point_count == 2);
+		ASSERT(normal_record.cache_identity != 0);
+		ASSERT(normal_record.source_identity != 0);
 
-				ASSERT(face_rec->cache_identity ==
-					face_item->cache_identity);
-				ASSERT(face_rec->source.source_id ==
-					face_item->source.source_id);
-				ASSERT(face_rec->geometry.surface.point_count ==
-					face_item->geometry.surface.point_count);
-				ASSERT(face_rec->geometry.surface.normal_count ==
-					face_item->geometry.surface.normal_count);
-				ASSERT(face_rec->geometry.surface.index_count ==
-					face_item->geometry.surface.index_count);
-				ASSERT(face_rec->geometry.surface.face_count ==
-					face_item->geometry.surface.face_count);
-				ASSERT(face_rec->geometry.surface.normal_kind ==
-					face_item->geometry.surface.normal_kind);
-				ASSERT(face_rec->geometry.surface.material_valid == 1);
-				ASSERT(face_rec->draw_mode == BSG_DRAW_MODE_SHADED);
-				ASSERT(NEAR_EQUAL(face_rec->transparency, 0.25,
-					SMALL_FASTF));
-				ASSERT(bsg_export_record_foreach_segment(face_rec,
-					count_segment_cb, &export_segs) == 3);
-				ASSERT(export_segs.count == 3);
-				ASSERT(bsg_export_record_foreach_point(face_rec,
-					count_point_cb, &export_points) == 3);
-				ASSERT(export_points.count == 3);
-
-				struct bsg_backend_scene *scene =
-				    bsg_backend_scene_create();
-				ASSERT(scene != NULL);
-				if (scene) {
-				    ASSERT(bsg_backend_scene_render_request(
-					    gedp->ged_gvp, scene,
-					    BSG_RENDER_FLAG_VISIBLE_ONLY) > 0);
-				    const struct bsg_backend_scene_node *node =
-					bsg_backend_scene_find(scene,
-						face_rec->cache_identity);
-				    ASSERT(node != NULL);
-				    if (node) {
-					ASSERT(node->geometry.kind ==
-						BSG_RENDER_GEOMETRY_INDEXED_FACE_SET);
-					ASSERT(node->geometry.surface.point_count ==
-						face_rec->geometry.surface.point_count);
-					ASSERT(node->geometry.surface.normal_count ==
-						face_rec->geometry.surface.normal_count);
-					ASSERT(node->geometry.surface.index_count ==
-						face_rec->geometry.surface.index_count);
-					ASSERT(node->geometry.surface.face_count ==
-						face_rec->geometry.surface.face_count);
-					ASSERT(node->geometry.surface.normal_kind ==
-						face_rec->geometry.surface.normal_kind);
-					ASSERT(node->geometry.surface.material_valid == 1);
-					ASSERT(node->source_identity ==
-						face_rec->source.source_id);
-					ASSERT(node->material.draw_mode ==
-						BSG_DRAW_MODE_SHADED);
-					ASSERT(NEAR_EQUAL(node->material.transparency,
-						0.25, SMALL_FASTF));
-					ASSERT(node->selection.highlighted == 1);
-				    }
-				    bsg_backend_scene_destroy(scene);
-				}
-			    }
-			    bsg_export_result_free(export_result);
-			}
-		    }
-		}
-		if (batch)
-		    bsg_render_batch_destroy(batch);
-		if (req)
-		    bsg_render_request_destroy(req);
+		struct ged_draw_view_rendered_object_summary rendered;
+		ASSERT(ged_draw_view_rendered_object_summary(test_active_view_ctx(gedp),
+			face_record.summary.cache_identity, &rendered));
+		ASSERT(rendered.found);
+		ASSERT(rendered.is_indexed_face_set);
+		ASSERT(rendered.surface_point_count ==
+			face_record.summary.point_count);
+		ASSERT(rendered.surface_normal_count ==
+			face_record.summary.normal_count);
+		ASSERT(rendered.surface_index_count ==
+			face_record.summary.index_count);
+		ASSERT(rendered.surface_face_count ==
+			face_record.summary.face_count);
+		ASSERT(rendered.surface_normals_per_index);
+		ASSERT(rendered.surface_material_valid == 1);
+		ASSERT(rendered.source_identity ==
+			face_record.summary.source_identity);
+		ASSERT(rendered.material_draw_mode ==
+			GED_DRAW_MODE_SHADED);
+		ASSERT(NEAR_EQUAL(rendered.material_transparency,
+			0.25, SMALL_FASTF));
+		ASSERT(rendered.selection_highlighted == 1);
 	    }
 
 	    ASSERT(ged_draw_shape_count(gedp) == 1);
@@ -1580,30 +1766,30 @@ main(int ac, char *av[])
 
 	shape_ref = publish_nmg_test_shape_with_late_state(gedp, r,
 		GED_DRAW_NMG_STYLE_POLYGON,
-		material_rgb, 1, 4, 0.5, BSG_DRAW_MODE_SHADED);
+		material_rgb, 1, 4, 0.5, GED_DRAW_MODE_SHADED);
 
 	if (!ged_draw_shape_ref_is_null(shape_ref)) {
-	    struct bsg_node *shape = ged_draw_shape_node_from_cache_ref(gedp, shape_ref);
-	    bsg_indexed_face_set_ref faces = bsg_node_ref_as_indexed_face_set(
-		    test_node_ref_from_node(shape));
-	    bsg_geometry_ref face_geometry =
-		bsg_indexed_face_set_ref_as_geometry(faces);
-	    struct bsg_node *source = test_scene_parent(shape);
-	    struct bsg_node *wire_shape = NULL;
+	    test_scene_context *shape = ged_draw_shape_node_from_cache_ref(gedp, shape_ref);
+	    struct ged_draw_shape_geometry_summary face_geometry;
+	    test_scene_context *source = test_scene_parent(shape);
+	    struct ged_draw_scene_display_summary source_display;
+	    test_scene_context *wire_shape = NULL;
 
 	    ASSERT(shape != NULL);
-	    ASSERT(bsg_geometry_ref_kind(face_geometry) ==
-		    BSG_GEOMETRY_NODE_INDEXED_FACE_SET);
-	    ASSERT(bsg_field_multi_count(
-			bsg_geometry_ref_coordinates_field(face_geometry)) == 3);
-	    ASSERT(bsg_field_multi_count(
-			bsg_geometry_ref_indices_field(face_geometry)) == 4);
+	    ASSERT(ged_draw_shape_context_geometry_summary(shape, &face_geometry));
+	    ASSERT(face_geometry.valid);
+	    ASSERT(BU_STR_EQUAL(face_geometry.geometry_name, "indexed-face-set"));
+	    ASSERT(face_geometry.point_count == 3);
+	    ASSERT(face_geometry.index_count == 4);
 	    ASSERT(source != NULL);
-	    ASSERT(node_is_a(source, bsg_database_source_type()));
+	    ASSERT(ged_draw_scene_context_display_summary(source,
+		    &source_display));
+	    ASSERT(source_display.valid);
+	    ASSERT(source_display.is_database_source);
 	    ASSERT(test_scene_child_count(source) == 2);
 
 	    for (size_t i = 0; i < test_scene_child_count(source); i++) {
-		struct bsg_node *child = test_scene_child_at(source, i);
+		test_scene_context *child = test_scene_child_at(source, i);
 		if (child != shape &&
 			BU_STR_EQUAL(test_scene_name(child), "nmg_mixed_wire")) {
 		    wire_shape = child;
@@ -1613,37 +1799,43 @@ main(int ac, char *av[])
 
 	    ASSERT(wire_shape != NULL);
 	    if (wire_shape) {
-		auto wire_ref = test_scene_ref_from_node(wire_shape);
-		bsg_line_set_ref lines = bsg_node_ref_as_line_set(
-			test_node_ref_from_node(wire_shape));
-		bsg_geometry_ref line_geometry = bsg_line_set_ref_as_geometry(lines);
+		struct ged_draw_view_line_summary line_summary;
+		struct ged_draw_scene_display_summary wire_display;
 		point_t got = VINIT_ZERO;
 		int command = -1;
 
-		ASSERT(bsg_scene_is_database_source(wire_ref));
-		ASSERT(bsg_scene_line_style(wire_ref) == 1);
-		ASSERT(bsg_scene_line_width(wire_ref) == 4);
-		ASSERT(NEAR_EQUAL(bsg_scene_transparency(wire_ref), 0.5,
+		ASSERT(ged_draw_scene_context_display_summary(wire_shape,
+			&wire_display));
+		ASSERT(wire_display.valid);
+		ASSERT(wire_display.is_database_source);
+		ASSERT(wire_display.line_style == 1);
+		ASSERT(wire_display.line_width == 4);
+		ASSERT(NEAR_EQUAL(wire_display.transparency, 0.5,
 			SMALL_FASTF));
-		ASSERT(bsg_scene_dmode(wire_ref) == BSG_DRAW_MODE_SHADED);
-		ASSERT(bsg_geometry_ref_kind(line_geometry) ==
-			BSG_GEOMETRY_NODE_LINE_SET);
-		ASSERT(bsg_line_set_ref_point_count(lines) == 4);
-		ASSERT(bsg_line_set_ref_command_at(lines, 0, &command) &&
-			command == BSG_GEOMETRY_LINE_MOVE);
-		ASSERT(bsg_line_set_ref_point_at(lines, 0, got) &&
+		ASSERT(wire_display.draw_mode == GED_DRAW_MODE_SHADED);
+		ASSERT(ged_draw_shape_context_line_summary(wire_shape,
+			&line_summary));
+		ASSERT(line_summary.valid);
+		ASSERT(line_summary.point_count == 4);
+		ASSERT(ged_draw_shape_context_line_command_at(wire_shape,
+			0, &command) && command == GED_DRAW_VIEW_LINE_MOVE);
+		ASSERT(ged_draw_shape_context_line_point_at(wire_shape, 0,
+			got) &&
 			VNEAR_EQUAL(got, w0, SMALL_FASTF));
-		ASSERT(bsg_line_set_ref_command_at(lines, 1, &command) &&
-			command == BSG_GEOMETRY_LINE_DRAW);
-		ASSERT(bsg_line_set_ref_point_at(lines, 1, got) &&
+		ASSERT(ged_draw_shape_context_line_command_at(wire_shape,
+			1, &command) && command == GED_DRAW_VIEW_LINE_DRAW);
+		ASSERT(ged_draw_shape_context_line_point_at(wire_shape, 1,
+			got) &&
 			VNEAR_EQUAL(got, w1, SMALL_FASTF));
-		ASSERT(bsg_line_set_ref_command_at(lines, 2, &command) &&
-			command == BSG_GEOMETRY_LINE_MOVE);
-		ASSERT(bsg_line_set_ref_point_at(lines, 2, got) &&
+		ASSERT(ged_draw_shape_context_line_command_at(wire_shape,
+			2, &command) && command == GED_DRAW_VIEW_LINE_MOVE);
+		ASSERT(ged_draw_shape_context_line_point_at(wire_shape, 2,
+			got) &&
 			VNEAR_EQUAL(got, w1, SMALL_FASTF));
-		ASSERT(bsg_line_set_ref_command_at(lines, 3, &command) &&
-			command == BSG_GEOMETRY_LINE_DRAW);
-		ASSERT(bsg_line_set_ref_point_at(lines, 3, got) &&
+		ASSERT(ged_draw_shape_context_line_command_at(wire_shape,
+			3, &command) && command == GED_DRAW_VIEW_LINE_DRAW);
+		ASSERT(ged_draw_shape_context_line_point_at(wire_shape, 3,
+			got) &&
 			VNEAR_EQUAL(got, w0, SMALL_FASTF));
 	    }
 
@@ -1708,28 +1900,27 @@ main(int ac, char *av[])
 		GED_DRAW_NMG_STYLE_POLYGON | GED_DRAW_NMG_STYLE_NO_SURFACES);
 
 	if (!ged_draw_shape_ref_is_null(shape_ref)) {
-	    struct bsg_node *shape = ged_draw_shape_node_from_cache_ref(gedp, shape_ref);
-	    bsg_line_set_ref lines = bsg_node_ref_as_line_set(
-		    test_node_ref_from_node(shape));
-	    bsg_geometry_ref geometry = bsg_line_set_ref_as_geometry(lines);
 	    const size_t expected_count = 4 * (10 + 2) - 3;
+	    struct ged_draw_view_line_summary line_summary;
 	    point_t got = VINIT_ZERO;
 	    int command = -1;
 	    int saw_surface_sample = 0;
 
-	    ASSERT(shape != NULL);
-	    ASSERT(bsg_geometry_ref_kind(geometry) == BSG_GEOMETRY_NODE_LINE_SET);
-	    ASSERT(bsg_line_set_ref_point_count(lines) == expected_count);
-	    ASSERT(bsg_line_set_ref_command_at(lines, 0, &command) &&
-		    command == BSG_GEOMETRY_LINE_MOVE);
-	    ASSERT(bsg_line_set_ref_point_at(lines, 0, got) &&
+	    ASSERT(ged_draw_shape_ref_line_summary(gedp, shape_ref,
+		    &line_summary));
+	    ASSERT(line_summary.valid);
+	    ASSERT(line_summary.point_count == expected_count);
+	    ASSERT(ged_draw_shape_ref_line_command_at(gedp, shape_ref, 0,
+		    &command) && command == GED_DRAW_VIEW_LINE_MOVE);
+	    ASSERT(ged_draw_shape_ref_line_point_at(gedp, shape_ref, 0, got) &&
 		    VNEAR_EQUAL(got, p0, SMALL_FASTF));
-	    ASSERT(bsg_line_set_ref_point_at(lines, expected_count - 1, got) &&
-		    VNEAR_EQUAL(got, p0, SMALL_FASTF));
+	    ASSERT(ged_draw_shape_ref_line_point_at(gedp, shape_ref,
+		    expected_count - 1, got) && VNEAR_EQUAL(got, p0,
+			SMALL_FASTF));
 	    for (size_t i = 1; i < expected_count; i++) {
-		ASSERT(bsg_line_set_ref_command_at(lines, i, &command) &&
-			command == BSG_GEOMETRY_LINE_DRAW);
-		if (bsg_line_set_ref_point_at(lines, i, got) &&
+		ASSERT(ged_draw_shape_ref_line_command_at(gedp, shape_ref, i,
+			&command) && command == GED_DRAW_VIEW_LINE_DRAW);
+		if (ged_draw_shape_ref_line_point_at(gedp, shape_ref, i, got) &&
 			got[Z] > 0.01 && got[Z] < 0.5)
 		    saw_surface_sample = 1;
 	    }
@@ -1759,73 +1950,60 @@ main(int ac, char *av[])
 
 	ASSERT(ged_exec(gedp, 2, draw_av) == BRLCAD_OK);
 
-	struct bsg_node *submodel_shape =
+	test_scene_context *submodel_shape =
 	    test_find_shape_by_dbpath(test_scene_root(gedp), submodel_name);
 	ASSERT(submodel_shape != NULL);
 	if (submodel_shape) {
-	    auto submodel_shape_ref = test_scene_ref_from_node(submodel_shape);
-	    struct bsg_node *submodel_source = test_scene_parent(submodel_shape);
-	    struct bsg_node *leaf_source = NULL;
-	    struct bsg_node *leaf_shape = NULL;
+	    struct ged_draw_scene_display_summary submodel_display;
+	    test_scene_context *submodel_source = test_scene_parent(submodel_shape);
+	    struct ged_draw_scene_display_summary submodel_source_display;
+	    test_scene_context *leaf_source = NULL;
+	    test_scene_context *leaf_shape = NULL;
 	    size_t submodel_source_child_count = 0;
 
-	    ASSERT(bsg_scene_is_database_source(submodel_shape_ref));
+	    ASSERT(ged_draw_scene_context_display_summary(submodel_shape,
+		    &submodel_display));
+	    ASSERT(submodel_display.valid);
+	    ASSERT(submodel_display.is_database_source);
 	    ASSERT(submodel_source != NULL);
-	    ASSERT(node_is_a(submodel_source, bsg_database_source_type()));
+	    ASSERT(ged_draw_scene_context_display_summary(submodel_source,
+		    &submodel_source_display));
+	    ASSERT(submodel_source_display.valid);
+	    ASSERT(submodel_source_display.is_database_source);
 	    submodel_source_child_count = test_scene_child_count(submodel_source);
 	    ASSERT(submodel_source_child_count > 1);
 
 	    for (size_t i = 0; i < submodel_source_child_count; i++) {
-		struct bsg_node *child = test_scene_child_at(submodel_source, i);
+		test_scene_context *child = test_scene_child_at(submodel_source, i);
+		struct ged_draw_scene_display_summary candidate_source_display;
 		if (child == submodel_shape ||
-			!node_is_a(child, bsg_database_source_type()))
+			!ged_draw_scene_context_display_summary(child,
+				&candidate_source_display) ||
+			!candidate_source_display.is_database_source)
 		    continue;
 
-		auto candidate_source_ref = test_scene_ref_from_node(child);
-		const struct bsg_draw_intent *candidate_source_intent =
-		    bsg_scene_draw_intent(candidate_source_ref);
-		if (!candidate_source_intent ||
-			!bsg_draw_intent_path(candidate_source_intent) ||
+		if (!candidate_source_display.has_draw_intent ||
+			!candidate_source_display.intent_path ||
 			!source_name_matches_drawn_prefix(
-			    bsg_draw_intent_path(candidate_source_intent),
-			    "all.g"))
+			    candidate_source_display.intent_path, "all.g"))
 		    continue;
 
 		for (size_t j = 0; j < test_scene_child_count(child); j++) {
-		    struct bsg_node *candidate_shape = test_scene_child_at(child, j);
-		    bsg_node_ref candidate_node_ref =
-			test_node_ref_from_node(candidate_shape);
-		    auto candidate_shape_ref =
-			test_scene_ref_from_node(candidate_shape);
-		    bsg_geometry_ref geometry = BSG_GEOMETRY_REF_NULL_INIT;
-		    if (node_is_a(candidate_shape, bsg_line_set_type()))
-			geometry = bsg_line_set_ref_as_geometry(
-				bsg_node_ref_as_line_set(candidate_node_ref));
-		    else if (node_is_a(candidate_shape, bsg_point_set_type()))
-			geometry = bsg_point_set_ref_as_geometry(
-				bsg_node_ref_as_point_set(candidate_node_ref));
-		    else if (node_is_a(candidate_shape,
-				bsg_indexed_line_set_type()))
-			geometry = bsg_indexed_line_set_ref_as_geometry(
-				bsg_node_ref_as_indexed_line_set(
-				    candidate_node_ref));
-		    else if (node_is_a(candidate_shape,
-				bsg_indexed_face_set_type()))
-			geometry = bsg_indexed_face_set_ref_as_geometry(
-				bsg_node_ref_as_indexed_face_set(
-				    candidate_node_ref));
-		    bsg_geometry_node_kind geometry_kind =
-			bsg_geometry_ref_kind(geometry);
+		    test_scene_context *candidate_shape = test_scene_child_at(child, j);
+		    struct ged_draw_shape_geometry_summary geometry_summary;
+		    int have_geometry_summary =
+			ged_draw_shape_context_geometry_summary(candidate_shape,
+				&geometry_summary);
 		    int typed_geometry =
-			geometry_kind == BSG_GEOMETRY_NODE_LINE_SET ||
-			geometry_kind == BSG_GEOMETRY_NODE_POINT_SET ||
-			geometry_kind == BSG_GEOMETRY_NODE_INDEXED_LINE_SET ||
-			geometry_kind == BSG_GEOMETRY_NODE_INDEXED_FACE_SET;
+			have_geometry_summary &&
+			(BU_STR_EQUAL(geometry_summary.geometry_name, "line-set") ||
+			 BU_STR_EQUAL(geometry_summary.geometry_name, "point-set") ||
+			 BU_STR_EQUAL(geometry_summary.geometry_name, "indexed-line-set") ||
+			 BU_STR_EQUAL(geometry_summary.geometry_name, "indexed-face-set"));
 
-		    if (ged_draw_scene_ref_shape_state(candidate_shape_ref) &&
+		    if (ged_draw_shape_context_has_state(candidate_shape) &&
 			    typed_geometry &&
-			    bsg_field_multi_count(
-				bsg_geometry_ref_coordinates_field(geometry)) > 0) {
+			    geometry_summary.point_count > 0) {
 			leaf_source = child;
 			leaf_shape = candidate_shape;
 			break;
@@ -1838,29 +2016,29 @@ main(int ac, char *av[])
 	    ASSERT(leaf_source != NULL);
 	    ASSERT(leaf_shape != NULL);
 	    if (leaf_source && leaf_shape) {
-		auto leaf_source_ref = test_scene_ref_from_node(leaf_source);
-		auto leaf_shape_ref = test_scene_ref_from_node(leaf_shape);
-		const struct bsg_draw_intent *leaf_source_intent =
-		    bsg_scene_draw_intent(leaf_source_ref);
-		const struct bsg_draw_intent *leaf_shape_intent =
-		    bsg_scene_draw_intent(leaf_shape_ref);
+		struct ged_draw_scene_display_summary leaf_source_display;
+		struct ged_draw_scene_display_summary leaf_shape_display;
 		vect_t mn, mx;
 
 		ASSERT(test_scene_child_count(leaf_source) >= 1);
-		ASSERT(leaf_source_intent != NULL);
-		ASSERT(bsg_draw_intent_path(leaf_source_intent) &&
+		ASSERT(ged_draw_scene_context_display_summary(leaf_source,
+			&leaf_source_display));
+		ASSERT(leaf_source_display.valid);
+		ASSERT(leaf_source_display.has_draw_intent);
+		ASSERT(leaf_source_display.intent_path &&
 			source_name_matches_drawn_prefix(
-			    bsg_draw_intent_path(leaf_source_intent), "all.g"));
+			    leaf_source_display.intent_path, "all.g"));
 
-		ASSERT(ged_draw_scene_ref_shape_state(leaf_shape_ref) != NULL);
-		ASSERT(test_node_from_scene_ref(
-			ged_draw_shape_source_ref(leaf_shape_ref)) ==
-			leaf_source);
-		ASSERT(bsg_scene_is_database_source(leaf_shape_ref));
-		ASSERT(leaf_shape_intent != NULL);
-		ASSERT(bsg_draw_intent_path(leaf_shape_intent) &&
+		ASSERT(ged_draw_shape_context_has_state(leaf_shape));
+		ASSERT(ged_draw_shape_context_source(leaf_shape) == leaf_source);
+		ASSERT(ged_draw_scene_context_display_summary(leaf_shape,
+			&leaf_shape_display));
+		ASSERT(leaf_shape_display.valid);
+		ASSERT(leaf_shape_display.is_database_source);
+		ASSERT(leaf_shape_display.has_draw_intent);
+		ASSERT(leaf_shape_display.intent_path &&
 			source_name_matches_drawn_prefix(
-			    bsg_draw_intent_path(leaf_shape_intent), "all.g"));
+			    leaf_shape_display.intent_path, "all.g"));
 		ASSERT(ged_draw_bounds(gedp, &mn, &mx, 0) == 0);
 	    }
 
@@ -1894,22 +2072,29 @@ main(int ac, char *av[])
 		    LOOKUP_QUIET) != RT_DIR_NULL);
 	    ASSERT(ged_exec(gedp, 2, external_draw_av) == BRLCAD_OK);
 
-	    struct bsg_node *external_shape =
+	    test_scene_context *external_shape =
 		test_find_shape_by_dbpath(test_scene_root(gedp),
 			external_submodel_name);
 	    ASSERT(external_shape != NULL);
 	    if (external_shape) {
-		struct bsg_node *external_source = test_scene_parent(external_shape);
+		test_scene_context *external_source = test_scene_parent(external_shape);
+		struct ged_draw_scene_display_summary external_source_display;
 		size_t nested_sources = 0;
 
 		ASSERT(external_source != NULL);
-		ASSERT(node_is_a(external_source, bsg_database_source_type()));
+		ASSERT(ged_draw_scene_context_display_summary(external_source,
+			&external_source_display));
+		ASSERT(external_source_display.valid);
+		ASSERT(external_source_display.is_database_source);
 		ASSERT(test_scene_child_count(external_source) > 1);
 		for (size_t i = 0; i < test_scene_child_count(external_source);
 			i++) {
-		    struct bsg_node *child = test_scene_child_at(external_source, i);
+		    test_scene_context *child = test_scene_child_at(external_source, i);
+		    struct ged_draw_scene_display_summary child_display;
 		    if (child != external_shape &&
-			    node_is_a(child, bsg_database_source_type()) &&
+			    ged_draw_scene_context_display_summary(child,
+				&child_display) &&
+			    child_display.is_database_source &&
 			    test_scene_child_count(child) > 0)
 			nested_sources++;
 		}
@@ -1973,109 +2158,31 @@ main(int ac, char *av[])
 	ASSERT(db_lookup(gedp->dbip, annot_name, LOOKUP_QUIET) != RT_DIR_NULL);
 
 	ASSERT(ged_exec(gedp, 2, draw_av) == BRLCAD_OK);
-	struct bsg_node *annot_shape =
+	test_scene_context *annot_shape =
 	    test_find_shape_by_dbpath(test_scene_root(gedp), annot_name);
+	struct ged_draw_shape_geometry_summary annot_geometry;
 	ASSERT(annot_shape != NULL);
 	if (annot_shape) {
-	    bsg_node_ref annot_node_ref = test_node_ref_from_node(annot_shape);
-	    bsg_annotation_ref annot_ref =
-		bsg_node_ref_as_annotation(annot_node_ref);
-	    bsg_geometry_ref geometry =
-		bsg_annotation_ref_as_geometry(annot_ref);
-	    ASSERT(node_is_a(annot_shape, bsg_annotation_type()));
-	    ASSERT(bsg_geometry_ref_kind(geometry) ==
-		    BSG_GEOMETRY_NODE_ANNOTATION);
+	    ASSERT(ged_draw_shape_context_geometry_summary(annot_shape,
+		    &annot_geometry));
+	    ASSERT(annot_geometry.valid);
+	    ASSERT(BU_STR_EQUAL(annot_geometry.geometry_name, "annotation"));
 
-	    struct bsg_render_request *req =
-		bsg_render_request_create(gedp->ged_gvp, NULL);
-	    struct bsg_render_batch *batch = bsg_render_batch_create();
-	    ASSERT(req != NULL);
-	    ASSERT(batch != NULL);
-	    if (req && batch) {
-		bsg_render_request_set_flags(req,
-			BSG_RENDER_FLAG_VISIBLE_ONLY);
-		ASSERT(bsg_render_request_collect(req, batch) > 0);
-		const struct bsg_render_item *item =
-		    find_render_item_by_source_prefix_and_kind(batch,
-			    annot_name, BSG_RENDER_GEOMETRY_ANNOTATION);
-		ASSERT(item != NULL);
-		if (item) {
-		    ASSERT(item->source.scope ==
-			    BSG_RENDER_SOURCE_SCOPE_DATABASE);
-		    ASSERT(item->source.draw_intent ==
-			    BSG_RENDER_DRAW_INTENT_DATABASE);
-		    ASSERT(item->geometry.annotation.space ==
-			    BSG_ANNOTATION_SPACE_DISPLAY);
-		    ASSERT(item->geometry.annotation.point_count == 2);
-		    ASSERT(item->geometry.annotation.segment_count == 2);
-		    point_t annot_local_expected;
-		    VSET(annot_local_expected, 0.2, 0.3, 0.0);
-		    ASSERT(VNEAR_EQUAL(item->geometry.annotation.points[1],
-			    annot_local_expected, SMALL_FASTF));
-		    ASSERT(item->geometry.annotation.segments != NULL);
-		    if (item->geometry.annotation.segments) {
-			ASSERT(item->geometry.annotation.segments[0].kind ==
-				BSG_ANNOTATION_SEGMENT_LINE);
-			ASSERT(item->geometry.annotation.segments[0].data.line.start == 0);
-			ASSERT(item->geometry.annotation.segments[0].data.line.end == 1);
-			ASSERT(item->geometry.annotation.segments[1].kind ==
-				BSG_ANNOTATION_SEGMENT_TEXT);
-			ASSERT(item->geometry.annotation.segments[1].data.text.ref_pt == 1);
-			ASSERT(BU_STR_EQUAL(
-				item->geometry.annotation.segments[1].data.text.text,
-				"typed note"));
-		    }
-		}
-	    }
+	    uint64_t annot_cache_identity = 0;
+	    uint64_t annot_source_identity = 0;
+	    ASSERT(test_visible_annotation_view_record(gedp, annot_name,
+		    "typed note", &annot_cache_identity,
+		    &annot_source_identity));
+	    ASSERT(annot_cache_identity != 0);
+	    ASSERT(annot_source_identity != 0);
 
-	    struct bsg_export_request ereq;
-	    bsg_export_request_init(&ereq, gedp->ged_gvp);
-	    ereq.query_flags =
-		BSG_EXPORT_QUERY_VISIBLE_ONLY |
-		BSG_EXPORT_QUERY_DB_OBJECTS;
-	    ereq.render_flags = BSG_RENDER_FLAG_VISIBLE_ONLY;
-	    struct bsg_export_result *export_result =
-		bsg_export_query(&ereq);
-	    ASSERT(export_result != NULL);
-	    if (export_result) {
-		const struct bsg_export_record *rec =
-		    find_export_record_by_source_prefix_and_kind(export_result,
-			    annot_name, BSG_RENDER_GEOMETRY_ANNOTATION);
-		ASSERT(rec != NULL);
-		if (rec) {
-		    ASSERT((rec->roles & BSG_EXPORT_RECORD_ANNOTATION) != 0);
-		    ASSERT(rec->geometry.annotation.segment_count == 2);
-		    ASSERT(rec->geometry.annotation.segments != NULL);
-		    if (rec->geometry.annotation.segments)
-			ASSERT(BU_STR_EQUAL(
-				rec->geometry.annotation.segments[1].data.text.text,
-				"typed note"));
-		}
-		bsg_export_result_free(export_result);
-	    }
-
-	    struct bsg_backend_scene *scene = bsg_backend_scene_create();
-	    ASSERT(scene != NULL);
-	    if (scene) {
-		ASSERT(bsg_backend_scene_render_request(gedp->ged_gvp,
-			scene, BSG_RENDER_FLAG_VISIBLE_ONLY) > 0);
-		if (batch) {
-		    const struct bsg_render_item *item =
-			find_render_item_by_source_prefix_and_kind(batch,
-				annot_name, BSG_RENDER_GEOMETRY_ANNOTATION);
-		    if (item) {
-			const struct bsg_backend_scene_node *node =
-			    bsg_backend_scene_find(scene, item->cache_identity);
-			ASSERT(node != NULL);
-			if (node) {
-			    ASSERT(node->geometry.kind ==
-				    BSG_RENDER_GEOMETRY_ANNOTATION);
-			    ASSERT(node->geometry.annotation.segment_count == 2);
-			}
-		    }
-		}
-		bsg_backend_scene_destroy(scene);
-	    }
+	    struct ged_draw_view_rendered_object_summary rendered;
+	    ASSERT(ged_draw_view_rendered_object_summary(test_active_view_ctx(gedp),
+		    annot_cache_identity, &rendered));
+	    ASSERT(rendered.found);
+	    ASSERT(rendered.is_annotation);
+	    ASSERT(rendered.annotation_segment_count == 2);
+	    ASSERT(rendered.source_identity == annot_source_identity);
 
 	    struct ged_draw_transaction redraw_op =
 		ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, annot_name);
@@ -2083,41 +2190,21 @@ main(int ac, char *av[])
 	    annot_shape =
 		test_find_shape_by_dbpath(test_scene_root(gedp), annot_name);
 	    ASSERT(annot_shape != NULL);
-	    if (annot_shape)
-		ASSERT(node_is_a(annot_shape, bsg_annotation_type()));
-
-	    struct bsg_render_request *redraw_req =
-		bsg_render_request_create(gedp->ged_gvp, NULL);
-	    struct bsg_render_batch *redraw_batch = bsg_render_batch_create();
-	    ASSERT(redraw_req != NULL);
-	    ASSERT(redraw_batch != NULL);
-	    if (redraw_req && redraw_batch) {
-		bsg_render_request_set_flags(redraw_req,
-			BSG_RENDER_FLAG_VISIBLE_ONLY);
-		ASSERT(bsg_render_request_collect(redraw_req,
-			redraw_batch) > 0);
-		const struct bsg_render_item *redraw_item =
-		    find_render_item_by_source_prefix_and_kind(redraw_batch,
-			    annot_name, BSG_RENDER_GEOMETRY_ANNOTATION);
-		ASSERT(redraw_item != NULL);
-		if (redraw_item) {
-		    ASSERT(redraw_item->geometry.annotation.segment_count == 2);
-		    ASSERT(redraw_item->geometry.annotation.segments != NULL);
-		    if (redraw_item->geometry.annotation.segments)
-			ASSERT(BU_STR_EQUAL(
-			    redraw_item->geometry.annotation.segments[1].data.text.text,
-			    "typed note"));
-		}
+	    if (annot_shape) {
+		ASSERT(ged_draw_shape_context_geometry_summary(annot_shape,
+			&annot_geometry));
+		ASSERT(annot_geometry.valid);
+		ASSERT(BU_STR_EQUAL(annot_geometry.geometry_name,
+			"annotation"));
 	    }
-	    if (redraw_batch)
-		bsg_render_batch_destroy(redraw_batch);
-	    if (redraw_req)
-		bsg_render_request_destroy(redraw_req);
 
-	    if (batch)
-		bsg_render_batch_destroy(batch);
-	    if (req)
-		bsg_render_request_destroy(req);
+	    annot_cache_identity = 0;
+	    annot_source_identity = 0;
+	    ASSERT(test_visible_annotation_view_record(gedp, annot_name,
+		    "typed note", &annot_cache_identity,
+		    &annot_source_identity));
+	    ASSERT(annot_cache_identity != 0);
+	    ASSERT(annot_source_identity != 0);
 	}
 
 	ged_draw_clear(gedp);
@@ -2129,8 +2216,13 @@ main(int ac, char *av[])
 	    annot_shape =
 		test_find_shape_by_dbpath(test_scene_root(gedp), annot_name);
 	    ASSERT(annot_shape != NULL);
-	    if (annot_shape)
-		ASSERT(node_is_a(annot_shape, bsg_annotation_type()));
+	    if (annot_shape) {
+		ASSERT(ged_draw_shape_context_geometry_summary(annot_shape,
+			&annot_geometry));
+		ASSERT(annot_geometry.valid);
+		ASSERT(BU_STR_EQUAL(annot_geometry.geometry_name,
+			"annotation"));
+	    }
 	}
 
 	ged_draw_clear(gedp);
@@ -2162,7 +2254,7 @@ main(int ac, char *av[])
 	ASSERT(ged_exec(gedp, 3, draw_av) == BRLCAD_OK);
 	ASSERT(scene_group_count(gedp) > 0);
 	assert_shaded_surface_payload_for_source_prefix(gedp, "all.bot",
-		BSG_DRAW_MODE_SHADED_BOTS);
+		GED_DRAW_MODE_SHADED_BOTS);
 	ged_draw_clear(gedp);
 	ASSERT(scene_group_count(gedp) == 0);
     }
@@ -2189,33 +2281,18 @@ main(int ac, char *av[])
 	ASSERT(db_lookup(gedp->dbip, cw_bot, LOOKUP_QUIET) != RT_DIR_NULL);
 	ASSERT(ged_exec(gedp, 3, draw_av) == BRLCAD_OK);
 	{
-	    struct bsg_render_request *req =
-		bsg_render_request_create(gedp->ged_gvp, NULL);
-	    struct bsg_render_batch *batch = bsg_render_batch_create();
-	    ASSERT(req != NULL);
-	    ASSERT(batch != NULL);
-	    if (req && batch) {
-		bsg_render_request_set_flags(req, BSG_RENDER_FLAG_VISIBLE_ONLY);
-		ASSERT(bsg_render_request_collect(req, batch) > 0);
-		const struct bsg_render_item *item =
-		    find_render_item_by_source_prefix_and_kind(batch,
-			    cw_bot, BSG_RENDER_GEOMETRY_INDEXED_FACE_SET);
-		ASSERT(item != NULL);
-		if (item) {
-		    ASSERT(item->geometry.surface.index_count == 4);
-		    ASSERT(item->geometry.surface.indices != NULL);
-		    if (item->geometry.surface.indices) {
-			ASSERT(item->geometry.surface.indices[0] == 0);
-			ASSERT(item->geometry.surface.indices[1] == 2);
-			ASSERT(item->geometry.surface.indices[2] == 1);
-			ASSERT(item->geometry.surface.indices[3] == -1);
-		    }
-		}
+	    struct test_surface_view_record surface;
+	    ASSERT(test_visible_surface_view_record(gedp, cw_bot,
+		    GED_DRAW_MODE_SHADED_BOTS, 4, &surface));
+	    ASSERT(surface.summary.valid);
+	    ASSERT(surface.summary.index_count == 4);
+	    ASSERT(surface.index_sample_count == 4);
+	    if (surface.index_sample_count == 4) {
+		ASSERT(surface.index_sample[0] == 0);
+		ASSERT(surface.index_sample[1] == 2);
+		ASSERT(surface.index_sample[2] == 1);
+		ASSERT(surface.index_sample[3] == -1);
 	    }
-	    if (batch)
-		bsg_render_batch_destroy(batch);
-	    if (req)
-		bsg_render_request_destroy(req);
 	}
 	ged_draw_clear(gedp);
 	ASSERT(scene_group_count(gedp) == 0);
@@ -2233,28 +2310,13 @@ main(int ac, char *av[])
 	ASSERT(ged_exec(gedp, 3, fallback_av) == BRLCAD_OK);
 	ASSERT(scene_group_count(gedp) > 0);
 	assert_shaded_surface_payload_for_source_prefix(gedp, "all.bot",
-		BSG_DRAW_MODE_SHADED_BOTS);
+		GED_DRAW_MODE_SHADED_BOTS);
 	ged_draw_clear(gedp);
 	ASSERT(scene_group_count(gedp) == 0);
 
 	ASSERT(ged_exec(gedp, 4, strict_av) == BRLCAD_OK);
-	{
-	    struct bsg_render_request *req =
-		bsg_render_request_create(gedp->ged_gvp, NULL);
-	    struct bsg_render_batch *batch = bsg_render_batch_create();
-	    ASSERT(req != NULL);
-	    ASSERT(batch != NULL);
-	    if (req && batch) {
-		bsg_render_request_set_flags(req, BSG_RENDER_FLAG_VISIBLE_ONLY);
-		(void)bsg_render_request_collect(req, batch);
-		ASSERT(find_render_item_by_source_prefix_and_kind(batch,
-			    "all.bot", BSG_RENDER_GEOMETRY_INDEXED_FACE_SET) == NULL);
-	    }
-	    if (batch)
-		bsg_render_batch_destroy(batch);
-	    if (req)
-		bsg_render_request_destroy(req);
-	}
+	ASSERT(test_visible_db_view_record_geometry_count(gedp, "all.bot",
+		"indexed-face-set") == 0);
 	ged_draw_test_force_primitive_face_set_failure(0);
 	ged_draw_clear(gedp);
 	ASSERT(scene_group_count(gedp) == 0);
@@ -2275,7 +2337,7 @@ main(int ac, char *av[])
 	ASSERT(ged_exec(gedp, 3, draw_av) == BRLCAD_OK);
 	ASSERT(scene_group_count(gedp) > 0);
 	assert_shaded_surface_payload_for_source_prefix(gedp, "all.brep",
-		BSG_DRAW_MODE_SHADED_BOTS);
+		GED_DRAW_MODE_SHADED_BOTS);
 	ged_draw_clear(gedp);
 	ASSERT(scene_group_count(gedp) == 0);
     }
@@ -2291,18 +2353,18 @@ main(int ac, char *av[])
     int after_draw = scene_group_count(gedp);
     ASSERT(after_draw > 0);
     ASSERT(ged_draw_path_state(NULL, NULL, "all.g", -1) == 0);
-    ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, NULL, -1) == 0);
-    ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "definitely_no_such_obj", -1) == 0);
-    ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", -1) == 1);
-    ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "/all.g/", -1) == 1);
-    ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g/platform.r", -1) == 1);
-    ASSERT(ged_draw_has_paths(gedp, gedp->ged_gvp, -1) == 1);
+    ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), NULL, -1) == 0);
+    ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "definitely_no_such_obj", -1) == 0);
+    ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g", -1) == 1);
+    ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "/all.g/", -1) == 1);
+    ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g/platform.r", -1) == 1);
+    ASSERT(ged_draw_has_paths(gedp, test_active_view_ctx(gedp), -1) == 1);
     {
 	struct bu_vls group_paths = BU_VLS_INIT_ZERO;
 	struct bu_vls leaf_paths = BU_VLS_INIT_ZERO;
-	ASSERT(ged_draw_list_paths(gedp, gedp->ged_gvp, -1, 0, &group_paths) > 0);
+	ASSERT(ged_draw_list_paths(gedp, test_active_view_ctx(gedp), -1, 0, &group_paths) > 0);
 	ASSERT(vls_has_line(&group_paths, "all.g"));
-	ASSERT(ged_draw_list_paths(gedp, gedp->ged_gvp, -1, 1, &leaf_paths) > 0);
+	ASSERT(ged_draw_list_paths(gedp, test_active_view_ctx(gedp), -1, 1, &leaf_paths) > 0);
 	ASSERT(vls_has_line(&leaf_paths, "all.g/platform.r/platform.s"));
 	bu_vls_free(&group_paths);
 	bu_vls_free(&leaf_paths);
@@ -2314,16 +2376,16 @@ main(int ac, char *av[])
 	ged_draw_erase_path(gedp, &dfp);
 	db_free_full_path(&dfp);
     }
-    ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", -1) == 2);
-    ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g/box.r", -1) == 0);
-    ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g/platform.r", -1) == 1);
+    ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g", -1) == 2);
+    ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g/box.r", -1) == 0);
+    ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g/platform.r", -1) == 1);
     {
 	struct bu_vls group_paths = BU_VLS_INIT_ZERO;
 	struct bu_vls leaf_paths = BU_VLS_INIT_ZERO;
-	ASSERT(ged_draw_list_paths(gedp, gedp->ged_gvp, -1, 0, &group_paths) > 0);
+	ASSERT(ged_draw_list_paths(gedp, test_active_view_ctx(gedp), -1, 0, &group_paths) > 0);
 	ASSERT(!vls_has_line(&group_paths, "all.g"));
 	ASSERT(vls_has_line(&group_paths, "all.g/platform.r"));
-	ASSERT(ged_draw_list_paths(gedp, gedp->ged_gvp, -1, 1, &leaf_paths) > 0);
+	ASSERT(ged_draw_list_paths(gedp, test_active_view_ctx(gedp), -1, 1, &leaf_paths) > 0);
 	ASSERT(!vls_has_line(&leaf_paths, "all.g/box.r/box.s"));
 	ASSERT(vls_has_line(&leaf_paths, "all.g/platform.r/platform.s"));
 	bu_vls_free(&group_paths);
@@ -2348,14 +2410,14 @@ main(int ac, char *av[])
     {
 	const char *child_av[3] = {"draw", "all.g/box.r", NULL};
 	ASSERT(ged_exec(gedp, 2, child_av) == BRLCAD_OK);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g/box.r", -1) == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", -1) == 2);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g/box.r", -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g", -1) == 2);
 
 	struct ged_draw_transaction txn =
 	    ged_draw_transaction_make(GED_DRAW_TXN_ERASE, "all.g/box.r");
-	txn.view = gedp->ged_gvp;
+	txn.view = test_active_view_ctx(gedp);
 	ASSERT(ged_draw_apply_transaction(gedp, &txn, NULL) > 0);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g/box.r", -1) == 0);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g/box.r", -1) == 0);
     }
     ged_draw_clear(gedp);
     {
@@ -2463,10 +2525,10 @@ main(int ac, char *av[])
 
 	/* The _overlays group must be present as a root child and be identified as overlay storage. */
 	{
-	    struct bsg_node *root = test_scene_root(gedp);
-	    struct bsg_node *overlays_grp = NULL;
+	    test_scene_context *root = test_scene_root(gedp);
+	    test_scene_context *overlays_grp = NULL;
 	    for (size_t i = 0; i < test_scene_child_count(root); i++) {
-		struct bsg_node *g = test_scene_child_at(root, i);
+		test_scene_context *g = test_scene_child_at(root, i);
 		if (BU_STR_EQUAL("_overlays", test_scene_name(g))) {
 		    overlays_grp = g;
 		    break;
@@ -2477,7 +2539,7 @@ main(int ac, char *av[])
 
 	    /* The overlay shape must be retained under overlay storage. */
 	    if (overlays_grp && test_scene_child_count(overlays_grp) > 0) {
-		struct bsg_node *sp = test_scene_child_at(overlays_grp, 0);
+		test_scene_context *sp = test_scene_child_at(overlays_grp, 0);
 		ASSERT(sp != NULL);
 		/* No database entry should exist for this name. */
 		ASSERT(db_lookup(gedp->dbip, "_ged_test_overlay", LOOKUP_QUIET)
@@ -2512,107 +2574,26 @@ main(int ac, char *av[])
 	    ASSERT(_ged_uplot_stream_publish_feature(gedp, stream,
 		    qray_name) == BRLCAD_OK);
 
-	    bsg_feature_ref ref = bsg_feature_find(gedp->ged_gvp, qray_name);
-	    ASSERT(!bsg_feature_ref_is_null(ref));
 	    ASSERT(db_lookup(gedp->dbip, qray_name, LOOKUP_QUIET) ==
 		    RT_DIR_NULL);
 
-	    struct bsg_feature_record record;
-	    memset(&record, 0, sizeof(record));
-	    ASSERT(bsg_feature_record_get(ref, &record));
-	    ASSERT(record.family == BSG_FEATURE_OVERLAY);
-	    ASSERT(record.child_count == 2);
-	    ASSERT(record.geometry_command_count == 4);
+	    struct ged_draw_view_feature_summary feature_summary =
+		GED_DRAW_VIEW_FEATURE_SUMMARY_INIT;
+	    ASSERT(ged_draw_view_context_feature_summary(test_active_view_ctx(gedp), qray_name,
+		    &feature_summary));
+	    ASSERT(feature_summary.exists);
+	    ASSERT(feature_summary.is_overlay);
+	    ASSERT(feature_summary.child_count == 2);
+	    ASSERT(feature_summary.geometry_command_count == 4);
 
-	    struct bsg_node *parent = (struct bsg_node *)ref.token;
-	    struct bsg_node *red_child = test_scene_child_at(parent, 0);
-	    struct bsg_node *blue_child = test_scene_child_at(parent, 1);
-	    ASSERT(red_child != NULL);
-	    ASSERT(blue_child != NULL);
-	    if (red_child && blue_child) {
-		bsg_node_ref red_ref = test_node_ref_from_node(red_child);
-		bsg_node_ref blue_ref = test_node_ref_from_node(blue_child);
-		bsg_line_set_ref red_lines = bsg_node_ref_as_line_set(red_ref);
-		bsg_line_set_ref blue_lines = bsg_node_ref_as_line_set(blue_ref);
-		ASSERT(!bsg_node_ref_is_null(
-			bsg_line_set_ref_as_node(red_lines)));
-		ASSERT(!bsg_node_ref_is_null(
-			bsg_line_set_ref_as_node(blue_lines)));
-		ASSERT(bsg_line_set_ref_point_count(red_lines) == 2);
-		ASSERT(bsg_line_set_ref_point_count(blue_lines) == 2);
-		int command = -1;
-		ASSERT(bsg_line_set_ref_command_at(red_lines, 0, &command) &&
-			command == BSG_GEOMETRY_LINE_MOVE);
-		ASSERT(bsg_line_set_ref_command_at(red_lines, 1, &command) &&
-			command == BSG_GEOMETRY_LINE_DRAW);
-		ASSERT(bsg_line_set_ref_command_at(blue_lines, 0, &command) &&
-			command == BSG_GEOMETRY_LINE_MOVE);
-		ASSERT(bsg_line_set_ref_command_at(blue_lines, 1, &command) &&
-			command == BSG_GEOMETRY_LINE_DRAW);
-		unsigned char rgb[3] = {0, 0, 0};
-		bsg_node_ref_color(red_ref, &rgb[0], &rgb[1], &rgb[2]);
-		ASSERT(rgb[0] == 255 && rgb[1] == 0 && rgb[2] == 0);
-		bsg_node_ref_color(blue_ref, &rgb[0], &rgb[1], &rgb[2]);
-		ASSERT(rgb[0] == 0 && rgb[1] == 0 && rgb[2] == 255);
-	    }
+	    ASSERT(test_qray_view_records(gedp, qray_name));
 
-	    struct bsg_render_request *req =
-		bsg_render_request_create(gedp->ged_gvp, NULL);
-	    struct bsg_render_batch *batch = bsg_render_batch_create();
-	    ASSERT(req != NULL);
-	    ASSERT(batch != NULL);
-	    if (req && batch) {
-		size_t qray_name_len = strlen(qray_name);
-		size_t qray_render_items = 0;
-		size_t qray_render_segments = 0;
-		int saw_red_render = 0;
-		int saw_blue_render = 0;
-
-		bsg_render_request_set_flags(req, BSG_RENDER_FLAG_VISIBLE_ONLY);
-		ASSERT(bsg_render_request_collect(req, batch) > 0);
-		for (size_t i = 0; i < bsg_render_batch_count(batch); i++) {
-		    const struct bsg_render_item *item =
-			bsg_render_batch_get(batch, i);
-		    const char *source_name = item ? item->source.name : NULL;
-		    if (!item || !source_name ||
-			    bu_strncmp(source_name, qray_name, qray_name_len) != 0)
-			continue;
-		    if (item->geometry.kind != BSG_RENDER_GEOMETRY_LINE_SET ||
-			    item->geometry.arrays.point_count == 0)
-			continue;
-
-		    struct segment_count_state segs = {0};
-		    qray_render_items++;
-		    ASSERT(item->phase == BSG_RENDER_PHASE_OVERLAY);
-		    ASSERT(item->context.overlay_pass == 1);
-		    ASSERT(item->source.scope !=
-			    BSG_RENDER_SOURCE_SCOPE_DATABASE);
-		    ASSERT(item->source.geometry_role ==
-			    BSG_RENDER_GEOMETRY_ROLE_LINE_SET);
-		    ASSERT(item->source.non_database_source == 1);
-		    ASSERT(item->non_database_source == 1);
-		    ASSERT(bsg_render_item_foreach_line_segment(item,
-			    count_segment_cb, &segs) == 1);
-		    qray_render_segments += segs.count;
-		    if (item->appearance.color[0] == 255 &&
-			    item->appearance.color[1] == 0 &&
-			    item->appearance.color[2] == 0)
-			saw_red_render = 1;
-		    if (item->appearance.color[0] == 0 &&
-			    item->appearance.color[1] == 0 &&
-			    item->appearance.color[2] == 255)
-			saw_blue_render = 1;
-		}
-		ASSERT(qray_render_items == 2);
-		ASSERT(qray_render_segments == 2);
-		ASSERT(saw_red_render && saw_blue_render);
-	    }
-	    bsg_render_batch_destroy(batch);
-	    bsg_render_request_destroy(req);
-
-	    ASSERT(bsg_feature_remove(gedp->ged_gvp, qray_name) == 1);
-	    ASSERT(bsg_feature_ref_is_null(bsg_feature_find(gedp->ged_gvp,
-		    qray_name)));
+	    ASSERT(ged_draw_view_context_feature_remove(test_active_view_ctx(gedp),
+		    qray_name) == 1);
+	    ASSERT(ged_draw_view_context_feature_summary(test_active_view_ctx(gedp), qray_name,
+		    &feature_summary));
+	    ASSERT(!feature_summary.exists);
+	    ASSERT(!test_qray_view_records(gedp, qray_name));
 	    _ged_uplot_stream_free(stream);
 	}
     }
@@ -2638,7 +2619,7 @@ main(int ac, char *av[])
 	    db_free_full_path(&dfp);
 	}
 	ASSERT(scene_group_count(gedp) < before);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", -1) == 0);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g", -1) == 0);
 
 	/* Re-draw and try erase_all_dbpaths. */
 	ged_exec(gedp, 2, s_av);
@@ -2666,26 +2647,26 @@ main(int ac, char *av[])
 	const char *draw_hidden_av[3] = {"draw", "-h", "all.g"};
 	const char *draw_attr_av[4] = {"draw", "-A", "ged_draw_attr_test", "yes"};
 	ASSERT(ged_exec(gedp, 2, draw_av) == BRLCAD_OK);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", -1) == 1);
-	ASSERT(ged_draw_has_paths(gedp, gedp->ged_gvp, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g", -1) == 1);
+	ASSERT(ged_draw_has_paths(gedp, test_active_view_ctx(gedp), -1) == 1);
 	ASSERT(ged_exec_autoview(gedp, 1, autoview_av) == BRLCAD_OK);
 	ASSERT(ged_exec(gedp, 1, lod_av) == BRLCAD_OK);
 	ASSERT(ged_exec_erase(gedp, 2, erase_av) == BRLCAD_OK);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", -1) == 0);
-	ASSERT(ged_draw_has_paths(gedp, gedp->ged_gvp, -1) == 0);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g", -1) == 0);
+	ASSERT(ged_draw_has_paths(gedp, test_active_view_ctx(gedp), -1) == 0);
 	ASSERT(ged_exec(gedp, 2, draw_av) == BRLCAD_OK);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g", -1) == 1);
 	ASSERT(ged_exec_erase(gedp, 3, erase_recursive_av) == BRLCAD_OK);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", -1) == 0);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g", -1) == 0);
 	ASSERT(ged_exec(gedp, 2, draw_av) == BRLCAD_OK);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g", -1) == 1);
 	ASSERT(ged_exec_zap(gedp, 1, zap_av) == BRLCAD_OK);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", -1) == 0);
-	ASSERT(ged_draw_has_paths(gedp, gedp->ged_gvp, -1) == 0);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g", -1) == 0);
+	ASSERT(ged_draw_has_paths(gedp, test_active_view_ctx(gedp), -1) == 0);
 	ASSERT(ged_exec(gedp, 3, draw_hidden_av) == BRLCAD_OK);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", BSG_DRAW_MODE_HIDDEN_LINE) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g", GED_DRAW_MODE_HIDDEN_LINE) == 1);
 	ASSERT(ged_exec_zap(gedp, 1, zap_av) == BRLCAD_OK);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", -1) == 0);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g", -1) == 0);
 	{
 	    struct directory *attr_dp = db_lookup(gedp->dbip, "platform.r", LOOKUP_QUIET);
 	    ASSERT(attr_dp != RT_DIR_NULL);
@@ -2695,9 +2676,9 @@ main(int ac, char *av[])
 		bu_avs_add(&avs, "ged_draw_attr_test", "yes");
 		ASSERT(db5_update_attributes(attr_dp, &avs, gedp->dbip) == 0);
 		ASSERT(ged_exec(gedp, 4, draw_attr_av) == BRLCAD_OK);
-		ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "platform.r", -1) == 1);
+		ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "platform.r", -1) == 1);
 		ASSERT(ged_exec_erase(gedp, 4, erase_attr_av) == BRLCAD_OK);
-		ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "platform.r", -1) == 0);
+		ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "platform.r", -1) == 0);
 	    }
 	}
     }
@@ -2737,10 +2718,10 @@ main(int ac, char *av[])
 	ASSERT(scene_group_count(gedp) == 0);
 
 	ged_exec(gedp, 2, s_av);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g", -1) == 1);
 	op = ged_draw_transaction_make(GED_DRAW_TXN_CLEAR_SCOPE, NULL);
 	ASSERT(ged_draw_apply_transaction(gedp, &op, NULL) == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", -1) == 0);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g", -1) == 0);
 	ASSERT(scene_group_count(gedp) == 0);
 
 	op = ged_draw_transaction_make(GED_DRAW_TXN_NONE, NULL);
@@ -2749,15 +2730,16 @@ main(int ac, char *av[])
 	ASSERT(ged_draw_apply_transaction(gedp, NULL, NULL) == 0);
 
 	const char *draw_paths[3] = {"all.g", "box.r", NULL};
-	struct bsg_appearance_settings draw_vs = BSG_APPEARANCE_SETTINGS_INIT;
-	draw_vs.draw_mode = BSG_DRAW_MODE_HIDDEN_LINE;
+	struct ged_draw_appearance_settings draw_vs =
+	    GED_DRAW_APPEARANCE_SETTINGS_INIT;
+	draw_vs.draw_mode = GED_DRAW_MODE_HIDDEN_LINE;
 	draw_vs.s_line_width = 5;
 	draw_vs.color_override = 1;
 	draw_vs.color[0] = 10;
 	draw_vs.color[1] = 20;
 	draw_vs.color[2] = 30;
 	op = ged_draw_transaction_make(GED_DRAW_TXN_DRAW, NULL);
-	op.view = gedp->ged_gvp;
+	op.view = test_active_view_ctx(gedp);
 	op.paths = draw_paths;
 	op.path_count = 2;
 	op.appearance = &draw_vs;
@@ -2770,13 +2752,13 @@ main(int ac, char *av[])
 	ASSERT(strstr(bu_vls_cstr(&result.names), "all.g") != NULL);
 	ASSERT(strstr(bu_vls_cstr(&result.names), "box.r") != NULL);
 	ged_draw_transaction_result_free(&result);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", BSG_DRAW_MODE_HIDDEN_LINE) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g", GED_DRAW_MODE_HIDDEN_LINE) == 1);
 	{
 	    ged_draw_shape_ref first_ref = ged_draw_first_shape_ref(gedp);
 	    struct ged_draw_shape_record rec;
 	    ASSERT(!ged_draw_shape_ref_is_null(first_ref));
 	    ASSERT(ged_draw_shape_record_get(gedp, first_ref, &rec) == 1);
-	    ASSERT(rec.draw_mode == BSG_DRAW_MODE_HIDDEN_LINE);
+	    ASSERT(rec.draw_mode == GED_DRAW_MODE_HIDDEN_LINE);
 	    ASSERT(rec.line_width == 5);
 	}
 	op = ged_draw_transaction_make(GED_DRAW_TXN_CLEAR, NULL);
@@ -2784,7 +2766,7 @@ main(int ac, char *av[])
 
 	const char *child_draw_paths[3] = {"all.g/box.r", "all.g/platform.r", NULL};
 	op = ged_draw_transaction_make(GED_DRAW_TXN_DRAW, NULL);
-	op.view = gedp->ged_gvp;
+	op.view = test_active_view_ctx(gedp);
 	op.paths = child_draw_paths;
 	op.path_count = 2;
 	ged_draw_transaction_result_init(&result);
@@ -2796,8 +2778,8 @@ main(int ac, char *av[])
 	ASSERT(strstr(bu_vls_cstr(&result.names), "all.g/box.r") != NULL);
 	ASSERT(strstr(bu_vls_cstr(&result.names), "all.g/platform.r") != NULL);
 	ged_draw_transaction_result_free(&result);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g/box.r", -1) == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g/platform.r", -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g/box.r", -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g/platform.r", -1) == 1);
 	op = ged_draw_transaction_make(GED_DRAW_TXN_CLEAR, NULL);
 	ASSERT(ged_draw_apply_transaction(gedp, &op, NULL) == 1);
 
@@ -2811,7 +2793,7 @@ main(int ac, char *av[])
 	ASSERT(token != 0);
 
 	op = ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "all.g");
-	op.view = gedp->ged_gvp;
+	op.view = test_active_view_ctx(gedp);
 	ASSERT(ged_draw_apply_transaction(gedp, &op, NULL) == 1);
 	ASSERT(obs.calls == 1);
 	ASSERT(obs.last_kind == GED_DRAW_TXN_DRAW);
@@ -2839,7 +2821,7 @@ main(int ac, char *av[])
 	ASSERT(self_obs.self_token != 0);
 
 	op = ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "all.g");
-	op.view = gedp->ged_gvp;
+	op.view = test_active_view_ctx(gedp);
 	ASSERT(ged_draw_apply_transaction(gedp, &op, NULL) == 1);
 	ASSERT(self_obs.calls == 1);
 	op = ged_draw_transaction_make(GED_DRAW_TXN_ERASE, "all.g");
@@ -2849,7 +2831,7 @@ main(int ac, char *av[])
 	int calls_before_remove = obs.calls;
 	ASSERT(ged_draw_observer_remove(gedp, token) == 1);
 	op = ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "all.g");
-	op.view = gedp->ged_gvp;
+	op.view = test_active_view_ctx(gedp);
 	ASSERT(ged_draw_apply_transaction(gedp, &op, NULL) == 1);
 	ASSERT(obs.calls == calls_before_remove);
 	ASSERT(ged_draw_observer_remove(gedp, token) == 0);
@@ -2859,7 +2841,7 @@ main(int ac, char *av[])
 
 	ASSERT(ged_event_txn_available(gedp) == 1);
 	ged_exec(gedp, 2, s_av);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g", -1) == 1);
 
 	struct event_observer_test_state internal_obs;
 	struct event_observer_test_state post_obs;
@@ -2892,7 +2874,7 @@ main(int ac, char *av[])
 	ASSERT(internal_obs.last_kind == GED_EVENT_OBJECT_MODIFIED);
 	ASSERT(post_obs.last_kind == GED_EVENT_OBJECT_MODIFIED);
 	ASSERT(post_obs.last_coalesced_count == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g", -1) == 1);
 	ged_event_txn_result_free(&eresult);
 
 	ged_event_txn_result_init(&eresult);
@@ -2967,7 +2949,7 @@ main(int ac, char *av[])
 	ASSERT(event_self_obs.self_token != 0);
 	ASSERT(ged_event_notify_object_modified(gedp, "all.g", 0, NULL) >= 0);
 	ASSERT(event_self_obs.calls == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g", -1) == 1);
 	ASSERT(ged_event_notify_object_modified(gedp, "all.g", 0, NULL) >= 0);
 	ASSERT(event_self_obs.calls == 1);
 
@@ -2988,9 +2970,9 @@ main(int ac, char *av[])
 	const char *s_av[3] = {"draw", "all.g", NULL};
 	ged_exec(gedp, 2, s_av);
 
-	struct bsg_node *first = ged_draw_first_shape(gedp);
-	ASSERT(first != NULL);
-	ASSERT(ZERO(bsg_scene_transparency(test_scene_ref_from_node(first)) - 1.0));
+	struct ged_draw_shape_record first_rec;
+	ASSERT(test_shape_record_at(gedp, 0, &first_rec));
+	ASSERT(ZERO(first_rec.transparency - 1.0));
 
 	struct ged_draw_transaction op =
 	    ged_draw_transaction_make_value(GED_DRAW_TXN_TRANSPARENCY,
@@ -3001,12 +2983,14 @@ main(int ac, char *av[])
 	ASSERT(result.affected_shapes > 0);
 	ASSERT(strstr(bu_vls_cstr(&result.names), "all.g") != NULL);
 	ged_draw_transaction_result_free(&result);
-	ASSERT(ZERO(bsg_scene_transparency(test_scene_ref_from_node(first)) - 0.35));
+	ASSERT(test_shape_record_at(gedp, 0, &first_rec));
+	ASSERT(ZERO(first_rec.transparency - 0.35));
 	ASSERT(ged_draw_apply_transaction(gedp, &op, NULL) == 0);
 
 	const char *tr_av[4] = {"set_transparency", "all.g", "0.65", NULL};
 	ged_exec(gedp, 3, tr_av);
-	ASSERT(ZERO(bsg_scene_transparency(test_scene_ref_from_node(first)) - 0.65));
+	ASSERT(test_shape_record_at(gedp, 0, &first_rec));
+	ASSERT(ZERO(first_rec.transparency - 0.65));
 
 	op = ged_draw_transaction_make_value(GED_DRAW_TXN_TRANSPARENCY,
 					   NULL, 0.2);
@@ -3022,18 +3006,18 @@ main(int ac, char *av[])
      * ---------------------------------------------------------------- */
     bu_log("[5d] draw default/material operation intents...\n");
     {
-	ASSERT(ged_draw_default_mode(gedp) == BSG_DRAW_MODE_WIRE);
+	ASSERT(ged_draw_default_mode(gedp) == GED_DRAW_MODE_WIRE);
 
 	struct ged_draw_transaction op =
 	    ged_draw_transaction_make_value(GED_DRAW_TXN_DEFAULT_DRAW_MODE,
-					  NULL, (double)BSG_DRAW_MODE_SHADED);
+					  NULL, (double)GED_DRAW_MODE_SHADED);
 	ASSERT(ged_draw_apply_transaction(gedp, &op, NULL) == 1);
-	ASSERT(ged_draw_default_mode(gedp) == BSG_DRAW_MODE_SHADED);
+	ASSERT(ged_draw_default_mode(gedp) == GED_DRAW_MODE_SHADED);
 	ASSERT(ged_draw_apply_transaction(gedp, &op, NULL) == 0);
 
 	const char *sm_av[3] = {"shaded_mode", "1", NULL};
 	ged_exec(gedp, 2, sm_av);
-	ASSERT(ged_draw_default_mode(gedp) == BSG_DRAW_MODE_SHADED_BOTS);
+	ASSERT(ged_draw_default_mode(gedp) == GED_DRAW_MODE_SHADED_BOTS);
 
 	uint64_t rev0 = ged_draw_material_revision(gedp);
 	op = ged_draw_transaction_make(GED_DRAW_TXN_MATERIAL_CHANGED, NULL);
@@ -3046,9 +3030,9 @@ main(int ac, char *av[])
 	ASSERT(ged_draw_material_revision(gedp) == rev1);
 
 	op = ged_draw_transaction_make_value(GED_DRAW_TXN_DEFAULT_DRAW_MODE,
-					   NULL, (double)BSG_DRAW_MODE_WIRE);
+					   NULL, (double)GED_DRAW_MODE_WIRE);
 	ged_draw_apply_transaction(gedp, &op, NULL);
-	ASSERT(ged_draw_default_mode(gedp) == BSG_DRAW_MODE_WIRE);
+	ASSERT(ged_draw_default_mode(gedp) == GED_DRAW_MODE_WIRE);
     }
 
     /* ---------------------------------------------------------------- *
@@ -3056,49 +3040,52 @@ main(int ac, char *av[])
      * ---------------------------------------------------------------- */
     bu_log("[5e] draw visibility operation intents...\n");
     {
-	struct bsg_node *first = ged_draw_first_shape(gedp);
-	ASSERT(first != NULL);
-	struct bsg_node *group = ged_draw_group_of_shape(gedp, first);
-	ASSERT(group != NULL);
-	ASSERT(test_scene_visible(group));
-	ASSERT(test_scene_visible(first));
+	struct ged_draw_shape_record first_rec;
+	struct ged_draw_group_record group_rec;
+	ASSERT(test_first_shape_group_records(gedp, &first_rec, &group_rec));
+	ASSERT(group_rec.visible);
+	ASSERT(first_rec.visible);
 
 	struct ged_draw_transaction op =
 	    ged_draw_transaction_make_value(GED_DRAW_TXN_VISIBILITY,
 					  "all.g", 0.0);
 	ASSERT(ged_draw_apply_transaction(gedp, &op, NULL) > 0);
-	ASSERT(!test_scene_visible(group));
-	ASSERT(!test_scene_visible(first));
+	ASSERT(test_first_shape_group_records(gedp, &first_rec, &group_rec));
+	ASSERT(!group_rec.visible);
+	ASSERT(!first_rec.visible);
 
 	op = ged_draw_transaction_make_value(GED_DRAW_TXN_VISIBILITY,
 					   "all.g", 1.0);
 	ASSERT(ged_draw_apply_transaction(gedp, &op, NULL) > 0);
-	ASSERT(test_scene_visible(group));
-	ASSERT(test_scene_visible(first));
+	ASSERT(test_first_shape_group_records(gedp, &first_rec, &group_rec));
+	ASSERT(group_rec.visible);
+	ASSERT(first_rec.visible);
 
-	const struct db_full_path *fp = ged_draw_shape_fullpath(first);
-	ASSERT(fp != NULL);
-	const char *leaf = (fp && fp->fp_len) ? DB_FULL_PATH_CUR_DIR(fp)->d_namep : NULL;
+	const char *leaf = first_rec.leaf_name;
 	ASSERT(leaf != NULL);
 	if (leaf) {
 	    op = ged_draw_transaction_make_value(GED_DRAW_TXN_VISIBILITY,
 					       leaf, 0.0);
 	    ASSERT(ged_draw_apply_transaction(gedp, &op, NULL) > 0);
-	    ASSERT(!test_scene_visible(first));
+	    ASSERT(test_shape_record_at(gedp, 0, &first_rec));
+	    ASSERT(!first_rec.visible);
 
 	    op = ged_draw_transaction_make_value(GED_DRAW_TXN_VISIBILITY,
 					       leaf, 1.0);
 	    ASSERT(ged_draw_apply_transaction(gedp, &op, NULL) > 0);
-	    ASSERT(test_scene_visible(first));
+	    ASSERT(test_shape_record_at(gedp, 0, &first_rec));
+	    ASSERT(first_rec.visible);
 	}
 
 	const char *hide_av[3] = {"hide", "all.g", NULL};
 	ged_exec(gedp, 2, hide_av);
-	ASSERT(!test_scene_visible(group));
+	ASSERT(test_first_shape_group_records(gedp, &first_rec, &group_rec));
+	ASSERT(!group_rec.visible);
 	const char *unhide_av[3] = {"unhide", "all.g", NULL};
 	ged_exec(gedp, 2, unhide_av);
-	ASSERT(test_scene_visible(group));
-	ASSERT(test_scene_visible(first));
+	ASSERT(test_first_shape_group_records(gedp, &first_rec, &group_rec));
+	ASSERT(group_rec.visible);
+	ASSERT(first_rec.visible);
     }
 
     /* ---------------------------------------------------------------- *
@@ -3122,21 +3109,22 @@ main(int ac, char *av[])
      * ---------------------------------------------------------------- */
     bu_log("[5g] draw highlight operation intent...\n");
     {
-	struct bsg_node *first = ged_draw_first_shape(gedp);
-	ASSERT(first != NULL);
-	const struct db_full_path *fp = ged_draw_shape_fullpath(first);
-	const char *leaf = (fp && fp->fp_len) ? DB_FULL_PATH_CUR_DIR(fp)->d_namep : NULL;
+	struct ged_draw_shape_record first_rec;
+	ASSERT(test_shape_record_at(gedp, 0, &first_rec));
+	const char *leaf = first_rec.leaf_name;
 	ASSERT(leaf != NULL);
 	if (leaf) {
 	    struct ged_draw_transaction op =
 		ged_draw_transaction_make_value(GED_DRAW_TXN_HIGHLIGHT,
 					      leaf, 1.0);
 	    ASSERT(ged_draw_apply_transaction(gedp, &op, NULL) > 0);
-	    ASSERT(bsg_scene_highlighted(test_scene_ref_from_node(first)));
+	    ASSERT(test_shape_record_at(gedp, 0, &first_rec));
+	    ASSERT(first_rec.highlighted);
 
 	    const char *illum_av[4] = {"illum", "-n", leaf, NULL};
 	    ASSERT(ged_exec(gedp, 3, illum_av) == BRLCAD_OK);
-	    ASSERT(!bsg_scene_highlighted(test_scene_ref_from_node(first)));
+	    ASSERT(test_shape_record_at(gedp, 0, &first_rec));
+	    ASSERT(!first_rec.highlighted);
 	}
 
 	struct ged_draw_transaction op =
@@ -3150,7 +3138,7 @@ main(int ac, char *av[])
      * ---------------------------------------------------------------- */
     bu_log("[5h] GED selection render bridge...\n");
     {
-	struct bsg_node *first = ged_draw_first_shape(gedp);
+	test_scene_context *first = ged_draw_first_shape(gedp);
 	ASSERT(first != NULL);
 	const struct db_full_path *fp = ged_draw_shape_fullpath(first);
 	ASSERT(fp != NULL);
@@ -3159,41 +3147,17 @@ main(int ac, char *av[])
 	if (path) {
 	    const char *clear_av[3] = {"select", "clear", NULL};
 	    ASSERT(ged_exec_select(gedp, 2, clear_av) == BRLCAD_OK);
-	    bsg_scene_set_highlighted(test_scene_ref_from_node(first), 0);
+	    ged_draw_shape_ref first_ref = ged_draw_shape_ref_from_node(gedp, first);
+	    ASSERT(!ged_draw_shape_ref_is_null(first_ref));
+	    ASSERT(ged_draw_shape_set_highlighted(gedp, first_ref, 0) == 1);
 	    const char *select_av[4] = {"select", "add", path, NULL};
 	    ASSERT(ged_exec_select(gedp, 3, select_av) == BRLCAD_OK);
-	    ged_draw_shape_ref first_ref = ged_draw_shape_ref_from_node(gedp, first);
+	    first_ref = ged_draw_shape_ref_from_node(gedp, first);
+	    ASSERT(!ged_draw_shape_ref_is_null(first_ref));
 	    struct ged_draw_shape_record first_selected_record;
 	    ASSERT(ged_draw_shape_record_get(gedp, first_ref, &first_selected_record) == 1);
 	    ASSERT(first_selected_record.selected);
-
-	    struct bsg_render_request *req =
-		bsg_render_request_create(gedp->ged_gvp, NULL);
-	    struct bsg_render_batch *batch = bsg_render_batch_create();
-	    ASSERT(req != NULL);
-	    ASSERT(batch != NULL);
-	    bsg_render_request_set_flags(req, BSG_RENDER_FLAG_VISIBLE_ONLY);
-	    ASSERT(bsg_render_request_collect(req, batch) > 0);
-	    int saw_selected = 0;
-	    for (size_t i = 0; i < bsg_render_batch_count(batch); i++) {
-		const struct bsg_render_item *item = bsg_render_batch_get(batch, i);
-		const char *item_path = item->source.name;
-		const char *test_path = path;
-		if (item_path && item_path[0] == '/')
-		    item_path++;
-		if (test_path && test_path[0] == '/')
-		    test_path++;
-		if (item_path && test_path && BU_STR_EQUAL(item_path, test_path)) {
-		    saw_selected = item->selected && item->highlighted &&
-			item->appearance.highlighted;
-		}
-		if (item->selected && item->highlighted && item->appearance.highlighted &&
-			item->source.scope == BSG_RENDER_SOURCE_SCOPE_DATABASE)
-		    saw_selected = 1;
-	    }
-	    ASSERT(saw_selected);
-	    bsg_render_batch_destroy(batch);
-	    bsg_render_request_destroy(req);
+	    ASSERT(test_selected_visible_view_record(gedp, path));
 
 	    ASSERT(ged_exec_select(gedp, 2, clear_av) == BRLCAD_OK);
 	    bu_free(path, "selection bridge path");
@@ -3224,8 +3188,8 @@ main(int ac, char *av[])
 	ASSERT(count > 0);
 
 	/* shape_at(0) must be non-NULL and equal to first_shape. */
-	struct bsg_node *first = ged_draw_first_shape(gedp);
-	struct bsg_node *at0 = ged_draw_shape_at(gedp, 0);
+	test_scene_context *first = ged_draw_first_shape(gedp);
+	test_scene_context *at0 = ged_draw_shape_at(gedp, 0);
 	ASSERT(at0 != NULL);
 	ASSERT(at0 == first);
 
@@ -3244,53 +3208,56 @@ main(int ac, char *av[])
 	ASSERT(first_rec.visible == 1);
 	ASSERT(first_rec.stale == 0);
 	ASSERT(first_rec.stale_reason != NULL);
-	auto db_source_ancestor = [](struct bsg_node *n) -> struct bsg_node * {
-	    for (struct bsg_node *p = n ? test_scene_parent(n) : NULL;
+	auto db_source_ancestor = [](test_scene_context *n) -> test_scene_context * {
+	    for (test_scene_context *p = n ? test_scene_parent(n) : NULL;
 		    p != NULL;
 		    p = test_scene_parent(p)) {
-		bsg_node_ref pref = test_node_ref_from_node(p);
-		if (bsg_node_is_a(pref, bsg_database_source_type()))
+		struct ged_draw_database_source_summary source_summary;
+		if (ged_draw_scene_context_source_summary(p, &source_summary) &&
+			source_summary.valid &&
+			source_summary.is_database_source)
 		    return p;
 	    }
 	    return NULL;
 	};
-	struct bsg_node *first_source_node = db_source_ancestor(first);
+	test_scene_context *first_source_node = db_source_ancestor(first);
 	ASSERT(first_source_node != NULL);
 	ASSERT(first_source_node != first);
-	bsg_database_source_ref first_source =
-	    bsg_database_source_ref_from_node(
-		    test_node_ref_from_node(first));
-	bsg_database_source_ref first_source_container =
-	    bsg_database_source_ref_from_node(
-		    test_node_ref_from_node(first_source_node));
-	struct bsg_database_source_record first_source_rec;
-	memset(&first_source_rec, 0, sizeof(first_source_rec));
-	ASSERT(bsg_database_source_record_get(first_source, &first_source_rec) == 1);
-	struct bsg_database_source_record first_source_container_rec;
-	memset(&first_source_container_rec, 0, sizeof(first_source_container_rec));
-	ASSERT(bsg_database_source_record_get(first_source_container,
-		    &first_source_container_rec) == 1);
+	struct ged_draw_database_source_summary first_source_summary;
+	ASSERT(ged_draw_scene_context_source_summary(first,
+		&first_source_summary));
+	ASSERT(first_source_summary.valid);
+	ASSERT(first_source_summary.is_database_source);
+	ASSERT(first_source_summary.has_state);
+	struct ged_draw_database_source_summary first_source_container_summary;
+	ASSERT(ged_draw_scene_context_source_summary(first_source_node,
+		&first_source_container_summary));
+	ASSERT(first_source_container_summary.valid);
+	ASSERT(first_source_container_summary.is_database_source);
+	ASSERT(first_source_container_summary.has_state);
 	char *first_path = db_path_to_string(first_rec.fullpath);
-	ASSERT(first_source_rec.database_path != NULL);
-	ASSERT(BU_STR_EQUAL(first_source_rec.database_path, first_path));
-	ASSERT(BU_STR_EQUAL(first_source_container_rec.database_path, first_path));
-	ASSERT(first_source_rec.source_revision == first_rec.source_revision);
-	ASSERT(first_source_container_rec.source_revision ==
+	ASSERT(first_source_summary.database_path != NULL);
+	ASSERT(BU_STR_EQUAL(first_source_summary.database_path, first_path));
+	ASSERT(BU_STR_EQUAL(first_source_container_summary.database_path,
+		first_path));
+	ASSERT(first_source_summary.source_revision == first_rec.source_revision);
+	ASSERT(first_source_container_summary.source_revision ==
 		first_rec.source_revision);
-	ASSERT(first_source_rec.realized_source_revision ==
+	ASSERT(first_source_summary.realized_source_revision ==
 		first_rec.realized_source_revision);
-	ASSERT(first_source_container_rec.realized_source_revision ==
+	ASSERT(first_source_container_summary.realized_source_revision ==
 		first_rec.realized_source_revision);
-	ASSERT(first_source_rec.stale_reason == BSG_DATABASE_SOURCE_STALE_NONE);
-	ASSERT(first_source_container_rec.stale_reason ==
-		BSG_DATABASE_SOURCE_STALE_NONE);
+	ASSERT(!first_source_summary.stale);
+	ASSERT(!first_source_container_summary.stale);
+	ASSERT(BU_STR_EQUAL(first_source_summary.stale_reason, "current"));
+	ASSERT(BU_STR_EQUAL(first_source_container_summary.stale_reason,
+		"current"));
 	bu_free(first_path, "db_path_to_string");
-	ASSERT(first_rec.evaluated_region == bsg_scene_legacy_eval_flag(test_scene_ref_from_node(first)));
-	bsg_scene_set_legacy_eval_flag(test_scene_ref_from_node(first), 1);
+	ASSERT(ged_draw_shape_ref_set_evaluated_region(gedp, first_ref, 1));
 	struct ged_draw_shape_record eval_rec;
 	ASSERT(ged_draw_shape_record_get(gedp, first_ref, &eval_rec) == 1);
 	ASSERT(eval_rec.evaluated_region == 1);
-	bsg_scene_set_legacy_eval_flag(test_scene_ref_from_node(first), 0);
+	ASSERT(ged_draw_shape_ref_set_evaluated_region(gedp, first_ref, 0));
 
 	ged_draw_group_ref first_group_ref = ged_draw_group_ref_of_shape(gedp, first_ref);
 	ASSERT(!ged_draw_group_ref_is_null(first_group_ref));
@@ -3328,24 +3295,27 @@ main(int ac, char *av[])
 	ASSERT(stale_rec.stale == 1);
 	ASSERT(stale_rec.source_revision > stale_rec.realized_source_revision);
 	ASSERT(BU_STR_EQUAL(stale_rec.stale_reason, "source-changed"));
-	struct bsg_database_source_record stale_source_rec;
-	memset(&stale_source_rec, 0, sizeof(stale_source_rec));
-	ASSERT(bsg_database_source_record_get(first_source, &stale_source_rec) == 1);
-	ASSERT(stale_source_rec.source_revision == stale_rec.source_revision);
-	ASSERT(stale_source_rec.realized_source_revision ==
+	struct ged_draw_database_source_summary stale_source_summary;
+	ASSERT(ged_draw_scene_context_source_summary(first,
+		&stale_source_summary));
+	ASSERT(stale_source_summary.valid);
+	ASSERT(stale_source_summary.source_revision == stale_rec.source_revision);
+	ASSERT(stale_source_summary.realized_source_revision ==
 		stale_rec.realized_source_revision);
-	ASSERT(stale_source_rec.stale_reason ==
-		BSG_DATABASE_SOURCE_STALE_SOURCE_CHANGED);
-	struct bsg_database_source_record stale_source_container_rec;
-	memset(&stale_source_container_rec, 0, sizeof(stale_source_container_rec));
-	ASSERT(bsg_database_source_record_get(first_source_container,
-		    &stale_source_container_rec) == 1);
-	ASSERT(stale_source_container_rec.source_revision ==
+	ASSERT(stale_source_summary.stale);
+	ASSERT(BU_STR_EQUAL(stale_source_summary.stale_reason,
+		"source-changed"));
+	struct ged_draw_database_source_summary stale_source_container_summary;
+	ASSERT(ged_draw_scene_context_source_summary(first_source_node,
+		&stale_source_container_summary));
+	ASSERT(stale_source_container_summary.valid);
+	ASSERT(stale_source_container_summary.source_revision ==
 		stale_rec.source_revision);
-	ASSERT(stale_source_container_rec.realized_source_revision ==
+	ASSERT(stale_source_container_summary.realized_source_revision ==
 		stale_rec.realized_source_revision);
-	ASSERT(stale_source_container_rec.stale_reason ==
-		BSG_DATABASE_SOURCE_STALE_SOURCE_CHANGED);
+	ASSERT(stale_source_container_summary.stale);
+	ASSERT(BU_STR_EQUAL(stale_source_container_summary.stale_reason,
+		"source-changed"));
 	struct ged_draw_transaction redraw_op =
 	    ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
 	ASSERT(ged_draw_apply_transaction(gedp, &redraw_op, NULL) > 0);
@@ -3353,34 +3323,33 @@ main(int ac, char *av[])
 	ASSERT(!ged_draw_shape_ref_is_null(first_ref));
 	first = ged_draw_shape_node_from_cache_ref(gedp, first_ref);
 	ASSERT(first != NULL);
-	first_source = bsg_database_source_ref_from_node(
-		test_node_ref_from_node(first));
 	first_source_node = db_source_ancestor(first);
 	ASSERT(first_source_node != NULL);
-	first_source_container = bsg_database_source_ref_from_node(
-		test_node_ref_from_node(first_source_node));
 	struct ged_draw_shape_record current_rec;
 	ASSERT(ged_draw_shape_record_get(gedp, first_ref, &current_rec) == 1);
 	ASSERT(current_rec.stale == 0);
 	ASSERT(current_rec.source_revision == current_rec.realized_source_revision);
 	ASSERT(BU_STR_EQUAL(current_rec.stale_reason, "current"));
-	struct bsg_database_source_record current_source_rec;
-	memset(&current_source_rec, 0, sizeof(current_source_rec));
-	ASSERT(bsg_database_source_record_get(first_source, &current_source_rec) == 1);
-	ASSERT(current_source_rec.source_revision == current_rec.source_revision);
-	ASSERT(current_source_rec.realized_source_revision ==
+	struct ged_draw_database_source_summary current_source_summary;
+	ASSERT(ged_draw_scene_context_source_summary(first,
+		&current_source_summary));
+	ASSERT(current_source_summary.valid);
+	ASSERT(current_source_summary.source_revision == current_rec.source_revision);
+	ASSERT(current_source_summary.realized_source_revision ==
 		current_rec.realized_source_revision);
-	ASSERT(current_source_rec.stale_reason == BSG_DATABASE_SOURCE_STALE_NONE);
-	struct bsg_database_source_record current_source_container_rec;
-	memset(&current_source_container_rec, 0, sizeof(current_source_container_rec));
-	ASSERT(bsg_database_source_record_get(first_source_container,
-		    &current_source_container_rec) == 1);
-	ASSERT(current_source_container_rec.source_revision ==
+	ASSERT(!current_source_summary.stale);
+	ASSERT(BU_STR_EQUAL(current_source_summary.stale_reason, "current"));
+	struct ged_draw_database_source_summary current_source_container_summary;
+	ASSERT(ged_draw_scene_context_source_summary(first_source_node,
+		&current_source_container_summary));
+	ASSERT(current_source_container_summary.valid);
+	ASSERT(current_source_container_summary.source_revision ==
 		current_rec.source_revision);
-	ASSERT(current_source_container_rec.realized_source_revision ==
+	ASSERT(current_source_container_summary.realized_source_revision ==
 		current_rec.realized_source_revision);
-	ASSERT(current_source_container_rec.stale_reason ==
-		BSG_DATABASE_SOURCE_STALE_NONE);
+	ASSERT(!current_source_container_summary.stale);
+	ASSERT(BU_STR_EQUAL(current_source_container_summary.stale_reason,
+		"current"));
 
 	/* shape_index must round-trip with shape_at. */
 	int idx_first = ged_draw_shape_index(gedp, first);
@@ -3388,7 +3357,7 @@ main(int ac, char *av[])
 	ASSERT(ged_draw_shape_ref_index(gedp, first_ref) == 0);
 
 	/* last shape: shape_at(-1) should wrap to count-1. */
-	struct bsg_node *last = ged_draw_shape_at(gedp, -1);
+	test_scene_context *last = ged_draw_shape_at(gedp, -1);
 	ASSERT(last != NULL);
 	int idx_last = ged_draw_shape_index(gedp, last);
 	ASSERT(idx_last == count - 1);
@@ -3396,13 +3365,13 @@ main(int ac, char *av[])
 	ASSERT(ged_draw_shape_ref_index(gedp, last_ref) == count - 1);
 
 	/* advance_shape wraps correctly: last+1 == first. */
-	struct bsg_node *wrap_fwd = ged_draw_advance_shape(gedp, last, 1);
+	test_scene_context *wrap_fwd = ged_draw_advance_shape(gedp, last, 1);
 	ASSERT(wrap_fwd == first);
 	ged_draw_shape_ref wrap_fwd_ref = ged_draw_advance_shape_ref(gedp, last_ref, 1);
 	ASSERT(ged_draw_shape_ref_index(gedp, wrap_fwd_ref) == 0);
 
 	/* advance_shape backward: first-1 == last. */
-	struct bsg_node *wrap_bwd = ged_draw_advance_shape(gedp, first, -1);
+	test_scene_context *wrap_bwd = ged_draw_advance_shape(gedp, first, -1);
 	ASSERT(wrap_bwd == last);
 	ged_draw_shape_ref wrap_bwd_ref = ged_draw_advance_shape_ref(gedp, first_ref, -1);
 	ASSERT(ged_draw_shape_ref_index(gedp, wrap_bwd_ref) == count - 1);
@@ -3480,7 +3449,7 @@ main(int ac, char *av[])
 	    const char *s_av[3] = {"draw", "all.g", NULL};
 	    ged_exec(gedp, 2, s_av);
 	    uint64_t rev_pre = ged_draw_scene_revision(gedp);
-	    struct bsg_node *first_before_overlay = ged_draw_first_shape(gedp);
+	    test_scene_context *first_before_overlay = ged_draw_first_shape(gedp);
 	    ASSERT(first_before_overlay != NULL);
 	    ged_draw_shape_ref cache_ref = ged_draw_shape_ref_from_node(gedp, first_before_overlay);
 
@@ -3523,14 +3492,14 @@ main(int ac, char *av[])
 	    ged_exec(gedp, 2, s_av);
 	}
 
-	struct bsg_node *root = test_scene_root(gedp);
+	test_scene_context *root = test_scene_root(gedp);
 	ASSERT(root != NULL);
 
 	/* Root should have exactly one non-_overlays child after drawing "all.g" */
 	int real_groups = 0;
-	struct bsg_node *all_g_group = NULL;
+	test_scene_context *all_g_group = NULL;
 	for (size_t i = 0; i < test_scene_child_count(root); i++) {
-	    struct bsg_node *g = test_scene_child_at(root, i);
+	    test_scene_context *g = test_scene_child_at(root, i);
 	    if (!BU_STR_EQUAL("_overlays", test_scene_name(g))) {
 		real_groups++;
 		if (!all_g_group)
@@ -3547,8 +3516,8 @@ main(int ac, char *av[])
 	 * multi-level hierarchy in moss.g */
 	int has_subgroup = 0;
 	for (size_t i = 0; i < test_scene_child_count(all_g_group); i++) {
-	    struct bsg_node *c = test_scene_child_at(all_g_group, i);
-	    if (node_is_a(c, bsg_group_type())) {
+	    test_scene_context *c = test_scene_child_at(all_g_group, i);
+	    if (test_scene_is_group(c)) {
 		has_subgroup = 1;
 		break;
 	    }
@@ -3557,13 +3526,13 @@ main(int ac, char *av[])
 
 	/* group_first_shape and group_last_shape must return SHAPE nodes
 	 * (not GROUP nodes) even when children include sub-groups */
-	struct bsg_node *fs = ged_draw_group_first_shape(all_g_group);
+	test_scene_context *fs = ged_draw_group_first_shape(all_g_group);
 	ASSERT(fs != NULL);
-	ASSERT(node_is_a(fs, bsg_shape_type()));
+	ASSERT(test_scene_is_shape(fs));
 
-	struct bsg_node *ls = ged_draw_group_last_shape(all_g_group);
+	test_scene_context *ls = ged_draw_group_last_shape(all_g_group);
 	ASSERT(ls != NULL);
-	ASSERT(node_is_a(ls, bsg_shape_type()));
+	ASSERT(test_scene_is_shape(ls));
 
 	/* group_is_nonempty must return 1 when shapes exist in sub-tree */
 	ASSERT(ged_draw_group_has_shapes(all_g_group) == 1);
@@ -3604,7 +3573,7 @@ main(int ac, char *av[])
 	ASSERT(ged_draw_shape_ref_is_null(ged_draw_highlighted_shape_ref(gedp)));
 
 	/* Highlight the first shape. */
-	struct bsg_node *s0 = ged_draw_shape_at(gedp, 0);
+	test_scene_context *s0 = ged_draw_shape_at(gedp, 0);
 	ASSERT(s0 != NULL);
 	ged_draw_shape_ref s0_ref = ged_draw_shape_ref_at(gedp, 0);
 	ASSERT(ged_draw_shape_ref_index(gedp, s0_ref) == 0);
@@ -3615,11 +3584,13 @@ main(int ac, char *av[])
 
 	/* highlighted-shape lookup returns s0's ref and s0 is highlighted. */
 	ASSERT(ged_draw_highlighted_shape_ref(gedp).token == s0_ref.token);
-	ASSERT(bsg_scene_highlighted(test_scene_ref_from_node(s0)));
+	ASSERT(test_shape_record_at(gedp, 0, &s0_rec));
+	ASSERT(s0_rec.highlighted);
 
 	/* highlight flag(DOWN) should run in O(1) — s0 is the tracked shape. */
 	ged_draw_set_highlight_state(gedp, 0);
-	ASSERT(!bsg_scene_highlighted(test_scene_ref_from_node(s0)));
+	ASSERT(test_shape_record_at(gedp, 0, &s0_rec));
+	ASSERT(!s0_rec.highlighted);
 	ASSERT(ged_draw_shape_ref_is_null(ged_draw_highlighted_shape_ref(gedp)));
 
 	/* Path-prefix highlighting can mark multiple records and deliberately
@@ -3629,35 +3600,43 @@ main(int ac, char *av[])
 	ASSERT(prefix_matches > 0);
 	ASSERT(ged_draw_shape_ref_is_null(ged_draw_highlighted_shape_ref(gedp)));
 	struct ged_draw_shape_record s0_prefix_rec;
-	ASSERT(ged_draw_shape_record_get(gedp, s0_ref, &s0_prefix_rec) == 1);
+	ASSERT(test_shape_record_at(gedp, 0, &s0_prefix_rec));
 	ASSERT(s0_prefix_rec.highlighted == 1);
 	ged_draw_set_highlight_state(gedp, 0);
-	ASSERT(!bsg_scene_highlighted(test_scene_ref_from_node(s0)));
+	ASSERT(test_shape_record_at(gedp, 0, &s0_rec));
+	ASSERT(!s0_rec.highlighted);
 
 	/* highlight(s0) then highlight(s1) clears s0 and highlights s1. */
 	if (ns >= 2) {
-	    struct bsg_node *s1 = ged_draw_shape_at(gedp, 1);
-	    ASSERT(s1 != NULL);
+	    struct ged_draw_shape_record s1_rec;
 	    ged_draw_shape_ref s1_ref = ged_draw_shape_ref_at(gedp, 1);
+	    ASSERT(!ged_draw_shape_ref_is_null(s1_ref));
+	    s0_ref = ged_draw_shape_ref_at(gedp, 0);
+	    ASSERT(!ged_draw_shape_ref_is_null(s0_ref));
 	    ged_draw_set_highlighted_shape_ref(gedp, s0_ref);
-	    ASSERT(bsg_scene_highlighted(test_scene_ref_from_node(s0)));
+	    ASSERT(test_shape_record_at(gedp, 0, &s0_rec));
+	    ASSERT(s0_rec.highlighted);
 	    ged_draw_set_highlighted_shape_ref(gedp, s1_ref);
-	    ASSERT(!bsg_scene_highlighted(test_scene_ref_from_node(s0)));
-	    ASSERT(bsg_scene_highlighted(test_scene_ref_from_node(s1)));
+	    ASSERT(test_shape_record_at(gedp, 0, &s0_rec));
+	    ASSERT(!s0_rec.highlighted);
+	    ASSERT(test_shape_record_at(gedp, 1, &s1_rec));
+	    ASSERT(s1_rec.highlighted);
 	    ASSERT(ged_draw_highlighted_shape_ref(gedp).token == s1_ref.token);
 	    /* Clean up */
 	    ged_draw_set_highlight_state(gedp, 0);
-	    ASSERT(!bsg_scene_highlighted(test_scene_ref_from_node(s1)));
+	    ASSERT(test_shape_record_at(gedp, 1, &s1_rec));
+	    ASSERT(!s1_rec.highlighted);
 	}
 
 	/* highlight(NULL) invalidates tracking — subsequent highlight flag(DOWN)
 	 * falls back to O(N) sweep (both paths yield correct result). */
-	bsg_scene_set_highlighted(test_scene_ref_from_node(s0), 1);
+	ASSERT(ged_draw_shape_set_highlighted(gedp, s0_ref, 1) == 1);
 	ged_draw_highlighted_shape_ref_invalidate(gedp);
 	ASSERT(ged_draw_shape_ref_is_null(ged_draw_highlighted_shape_ref(gedp)));
 	ged_draw_set_highlight_state(gedp, 0);  /* O(N) fallback */
 	/* After O(N) sweep, s0 must not be highlighted. */
-	ASSERT(!bsg_scene_highlighted(test_scene_ref_from_node(s0)));
+	ASSERT(test_shape_record_at(gedp, 0, &s0_rec));
+	ASSERT(!s0_rec.highlighted);
 
 	/* B4 activated: material color refresh does NOT bump material revision by itself.
 	 * The counter is event-driven: only ged_draw_bump_material_revision() moves it.
@@ -3673,7 +3652,10 @@ main(int ac, char *av[])
 
 	/* Verify the first shape was stamped with rev0. */
 	ASSERT(s0 != NULL);
-	ASSERT((uint64_t)bsg_scene_material_revision(test_scene_ref_from_node(s0)) == rev0);
+	struct ged_draw_shape_material_summary s0_material;
+	ASSERT(ged_draw_shape_ref_material_summary(gedp, s0_ref, &s0_material));
+	ASSERT(s0_material.valid);
+	ASSERT(s0_material.material_revision == rev0);
 
 	/* Simulate a material-change event: bump the counter. */
 	ged_draw_bump_material_revision(gedp);
@@ -3684,18 +3666,22 @@ main(int ac, char *av[])
 	 * them with the new rev, but the counter itself stays put. */
 	ged_draw_refresh_material_colors(gedp);
 	ASSERT(ged_draw_material_revision(gedp) == rev1);  /* unchanged */
-	ASSERT((uint64_t)bsg_scene_material_revision(test_scene_ref_from_node(s0)) == rev1);      /* stamped at rev1 */
+	ASSERT(ged_draw_shape_ref_material_summary(gedp, s0_ref, &s0_material));
+	ASSERT(s0_material.material_revision == rev1);      /* stamped at rev1 */
 
 	/* A second call without a bump must skip all already-stamped shapes.
 	 * Verify by force-setting a known color and checking it is unchanged. */
-	bsg_scene_material_set_rgb(test_scene_ref_from_node(s0), 123, 45, 67);
+	unsigned char forced_material_rgb[3] = {123, 45, 67};
+	ASSERT(ged_draw_shape_ref_set_material_color(gedp, s0_ref,
+		forced_material_rgb));
+	s0_ref = ged_draw_shape_ref_at(gedp, 0);
+	ASSERT(!ged_draw_shape_ref_is_null(s0_ref));
 	ged_draw_refresh_material_colors(gedp);  /* skip: material revision is current */
-	unsigned char r = 0, g = 0, b = 0;
-	bsg_scene_material_get_rgb(test_scene_ref_from_node(s0), &r, &g, &b);
-	ASSERT(r == 123);         /* must be unchanged */
-	ASSERT(g == 45);
-	ASSERT(b == 67);
-	ASSERT((uint64_t)bsg_scene_material_revision(test_scene_ref_from_node(s0)) == rev1);  /* stamp unchanged */
+	ASSERT(ged_draw_shape_ref_material_summary(gedp, s0_ref, &s0_material));
+	ASSERT(s0_material.material_color[0] == 123);         /* must be unchanged */
+	ASSERT(s0_material.material_color[1] == 45);
+	ASSERT(s0_material.material_color[2] == 67);
+	ASSERT(s0_material.material_revision == rev1);  /* stamp unchanged */
 
 	/* highlight pointer is cleared by zap. */
 	ged_draw_shape_ref zap_highlight_ref = ged_draw_shape_ref_at(gedp, 0);
@@ -3721,53 +3707,60 @@ main(int ac, char *av[])
 	    ged_exec(gedp, 2, dav);
 	}
 
-	struct bsg_view *v = gedp->ged_gvp;
-	ASSERT(v != NULL);
+	void *view_ctx = test_active_view_ctx(gedp);
+	ASSERT(view_ctx != NULL);
 
 	/* The view scene ref must be set now (registered by draw-scene setup). */
-	ASSERT(bsg_view_scene_attached(v));
+	ASSERT(ged_draw_view_context_scene_attached(view_ctx));
 
 	/* The public view carries only an opaque handle. */
-	ASSERT(bsg_view_scene_attached(v));
+	ASSERT(ged_draw_view_context_scene_attached(view_ctx));
 
 	/* Internal BSG traversal smoke test. */
-	bsg_node *draw_root = test_scene_root(gedp);
+	test_scene_context *draw_root = test_scene_root(gedp);
 	ASSERT(draw_root != NULL);
 
 	/* The draw root must have at least one child group (from the draw) */
-	struct bsg_node *dr = (struct bsg_node *)draw_root;
-	ASSERT(test_scene_child_count(dr) > 0);
+	test_scene_context *dr = (test_scene_context *)draw_root;
+	struct ged_draw_scene_tree_summary draw_root_tree;
+	ASSERT(ged_draw_scene_context_tree_summary(draw_root, &draw_root_tree));
+	ASSERT(draw_root_tree.valid);
+	ASSERT(draw_root_tree.child_count > 0);
 
 	/* The draw root should have depth 0 (no parent). */
-	ASSERT(bsg_scene_draw_tree_depth(test_scene_ref_from_node(draw_root)) == 0);
+	ASSERT(draw_root_tree.draw_tree_depth == 0);
+	ASSERT(!draw_root_tree.has_parent);
 
 	/* A child's depth should be 1. */
-	struct bsg_node *first_child = test_scene_child_at(dr, 0);
+	test_scene_context *first_child = test_scene_child_at(dr, 0);
 	ASSERT(first_child != NULL);
-	if (node_is_a(first_child, bsg_group_type()) ||
-	    node_is_a(first_child, bsg_shape_type())) {
-	    ASSERT(bsg_scene_draw_tree_depth(test_scene_ref_from_node(first_child)) == 1);
+	struct ged_draw_scene_tree_summary first_child_tree;
+	ASSERT(ged_draw_scene_context_tree_summary(first_child, &first_child_tree));
+	ASSERT(first_child_tree.valid);
+	if (first_child_tree.is_group || first_child_tree.is_shape) {
+	    ASSERT(first_child_tree.draw_tree_depth == 1);
+	    ASSERT(first_child_tree.has_parent);
 	}
 
-	/* bsg_scene_root_sync is a no-op; the retained scene is maintained by
-	 * draw/erase mutation paths. */
-	struct bsg_node *bsg_r = test_scene_root(gedp);
-	ASSERT(bsg_r == dr);
-	ASSERT(test_scene_child_count(bsg_r) ==
+	/* The retained scene is maintained by draw/erase mutation paths. */
+	test_scene_context *retained_root = test_scene_root(gedp);
+	ASSERT(retained_root == dr);
+	ASSERT(test_scene_child_count(retained_root) ==
 	       test_scene_child_count(dr));
 
 	/* The children pointers must match exactly (same ptbl). */
 	for (size_t i = 0; i < test_scene_child_count(dr); i++) {
-	    ASSERT(test_scene_child_at(bsg_r, i) ==
+	    ASSERT(test_scene_child_at(retained_root, i) ==
 		   test_scene_child_at(dr, i));
 	}
 
 	/* After zap the draw root has no children. */
 	ged_draw_clear(gedp);
-	ASSERT(test_scene_child_count(bsg_r) == 0);
+	ASSERT(ged_draw_scene_context_tree_summary(retained_root, &draw_root_tree));
+	ASSERT(draw_root_tree.child_count == 0);
 
 	/* The view scene ref itself remains valid after zap (scene anchor not freed). */
-	ASSERT(bsg_view_scene_attached(v));
+	ASSERT(ged_draw_view_context_scene_attached(view_ctx));
     }
 
     /* ---------------------------------------------------------------- *
@@ -3797,7 +3790,7 @@ main(int ac, char *av[])
 	    ged_exec(gedp, 2, dav);
 	}
 
-	struct bsg_node *root = test_scene_root(gedp);
+	test_scene_context *root = test_scene_root(gedp);
 	ASSERT(root != NULL);
 
 	/* First query: cache is cold, must compute. */
@@ -3812,11 +3805,11 @@ main(int ac, char *av[])
 	ASSERT(VNEAR_EQUAL(min1, min2, SMALL_FASTF));
 	ASSERT(VNEAR_EQUAL(max1, max2, SMALL_FASTF));
 
-	/* Cross-check vs an explicit walk: bsg_scene_subtree_bbox(include_overlays=1)
+	/* Cross-check vs an explicit walk: the scene-context subtree bounds query
 	 * bypasses the cache, so for a tree with no overlays it must agree
 	 * with the cached non-overlay value. */
 	vect_t min3, max3;
-	int empty3 = bsg_scene_subtree_bbox(test_scene_ref_from_node(root), &min3, &max3, 1);
+	int empty3 = ged_draw_scene_context_subtree_bounds(root, &min3, &max3, 1);
 	ASSERT(empty3 == 0);
 	ASSERT(VNEAR_EQUAL(min1, min3, SMALL_FASTF));
 	ASSERT(VNEAR_EQUAL(max1, max3, SMALL_FASTF));
@@ -3850,10 +3843,10 @@ main(int ac, char *av[])
 	    ged_exec(gedp, 1, s_av);
 	}
 
-	/* Initial gv_frame_rev is 0; nothing has been drawn yet. */
-	struct bsg_view *v = gedp->ged_gvp;
-	ASSERT(v != NULL);
-	ASSERT(v->gv_frame_rev == 0);
+	/* Initial view frame revision is 0; nothing has been drawn yet. */
+	void *view_ctx = test_active_view_ctx(gedp);
+	ASSERT(view_ctx != NULL);
+	ASSERT(ged_draw_view_context_frame_revision(view_ctx) == 0);
 
 	/* Draw something so we have shapes to stamp. */
 	{
@@ -3867,9 +3860,9 @@ main(int ac, char *av[])
 	/* Frame revision changes must not mutate the semantic draw record set.
 	 * The off-screen swrast test exercises the render-time drawn-revision
 	 * stamping path; this command-layer test stays on public GED records. */
-	v->gv_frame_rev++;
+	ged_draw_view_context_bump_frame_revision(view_ctx);
 	ASSERT(ged_draw_shape_count(gedp) == counted);
-	v->gv_frame_rev++;
+	ged_draw_view_context_bump_frame_revision(view_ctx);
 	ASSERT(ged_draw_shape_count(gedp) == counted);
 
 	/* Zap/redraw should rebuild the same semantic record count, not
@@ -3896,7 +3889,7 @@ main(int ac, char *av[])
     /* ---------------------------------------------------------------- *
      * [14] Highlight draw-ref tracker + highlight revision.            *
      *      Verify the highlight-state revision counter bumps on        *
-     *      draw-ref transitions, and that node field touches are not    *
+     *      draw-ref transitions, and that visibility mutations are not  *
      *      authoritative highlight state.                              *
      * ---------------------------------------------------------------- */
     {
@@ -3912,9 +3905,9 @@ main(int ac, char *av[])
 	}
 
 	/* Locate a shape under the draw root. */
-	struct bsg_node *root = test_scene_root(gedp);
+	test_scene_context *root = test_scene_root(gedp);
 	ASSERT(root != NULL);
-	struct bsg_node *target = ged_draw_first_shape(gedp);
+	test_scene_context *target = ged_draw_first_shape(gedp);
 	ASSERT(target != NULL);
 	ged_draw_shape_ref target_ref = ged_draw_first_shape_ref(gedp);
 	ASSERT(!ged_draw_shape_ref_is_null(target_ref));
@@ -3927,31 +3920,37 @@ main(int ac, char *av[])
 	uint64_t r1 = ged_draw_highlight_revision(gedp);
 	ASSERT(r1 > r0);
 	ASSERT(ged_draw_highlighted_shape_ref(gedp).token == target_ref.token);
-	ASSERT(bsg_scene_highlighted(test_scene_ref_from_node(target)));
+	struct ged_draw_shape_record target_rec;
+	ASSERT(test_shape_record_at(gedp, 0, &target_rec));
+	ASSERT(target_rec.highlighted);
 
-	/* Touching a field on the highlighted shape does not change semantic
+	/* Visibility changes on the highlighted shape do not change semantic
 	 * highlight identity. */
-	touch_visibility_field((bsg_node *)target);
+	ASSERT(ged_draw_shape_ref_set_visible(gedp, target_ref, 0));
 	uint64_t r2 = ged_draw_highlight_revision(gedp);
 	ASSERT(r2 == r1);
 
-	/* Touching a field on a non-highlighted node does NOT bump. */
-	struct bsg_node *other = ged_draw_next_shape(gedp, target);
+	/* Visibility changes on a non-highlighted node do NOT bump. */
+	test_scene_context *other = ged_draw_next_shape(gedp, target);
 	if (other && other != target) {
-	    touch_visibility_field((bsg_node *)other);
+	    ged_draw_shape_ref other_ref = ged_draw_shape_ref_from_node(gedp, other);
+	    ASSERT(!ged_draw_shape_ref_is_null(other_ref));
+	    ASSERT(ged_draw_shape_ref_set_visible(gedp, other_ref, 0));
 	    uint64_t r3 = ged_draw_highlight_revision(gedp);
 	    ASSERT(r3 == r2);
 	}
 
-	/* Transition target -> NULL: rev bumps; sensor gets torn down. */
+	/* Transition target -> NULL: rev bumps. */
 	ged_draw_set_highlighted_shape_ref(gedp, GED_DRAW_SHAPE_REF_NULL);
 	uint64_t r4 = ged_draw_highlight_revision(gedp);
 	ASSERT(r4 > r2);
 	ASSERT(ged_draw_shape_ref_is_null(ged_draw_highlighted_shape_ref(gedp)));
 
-	/* After teardown, touching the previously-highlighted shape still
+	/* After teardown, changing the previously-highlighted shape visibility still
 	 * does not bump highlight revision. */
-	touch_visibility_field((bsg_node *)target);
+	target_ref = ged_draw_shape_ref_from_node(gedp, target);
+	ASSERT(!ged_draw_shape_ref_is_null(target_ref));
+	ASSERT(ged_draw_shape_ref_set_visible(gedp, target_ref, 1));
 	uint64_t r5 = ged_draw_highlight_revision(gedp);
 	ASSERT(r5 == r4);
 
@@ -3988,13 +3987,13 @@ main(int ac, char *av[])
 	memset(&grec, 0, sizeof(grec));
 	ASSERT(ged_draw_group_record_get(gedp, g, &grec) == 1);
 	ASSERT(BU_STR_EQUAL(grec.path, "all.g"));
-	ASSERT(grec.draw_mode == BSG_DRAW_MODE_WIRE);
+	ASSERT(grec.draw_mode == GED_DRAW_MODE_WIRE);
 
 	/* Draw-intent metadata is the canonical path/mode source. */
-	ASSERT(ged_draw_group_ref_set_mode(gedp, g, BSG_DRAW_MODE_HIDDEN_LINE) == 1);
+	ASSERT(ged_draw_group_ref_set_mode(gedp, g, GED_DRAW_MODE_HIDDEN_LINE) == 1);
 	memset(&grec, 0, sizeof(grec));
 	ASSERT(ged_draw_group_record_get(gedp, g, &grec) == 1);
-	ASSERT(grec.draw_mode == BSG_DRAW_MODE_HIDDEN_LINE);
+	ASSERT(grec.draw_mode == GED_DRAW_MODE_HIDDEN_LINE);
 	ASSERT(BU_STR_EQUAL(grec.path, "all.g"));
 
 	/* group_set_dbpath keeps the draw-intent path synchronized. */
@@ -4028,16 +4027,16 @@ main(int ac, char *av[])
 
 	ASSERT(ged_exec(gedp, 1, zap_av) == BRLCAD_OK);
 	ASSERT(ged_exec(gedp, 2, draw_av) == BRLCAD_OK);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g", -1) == 1);
 
 	ASSERT(ged_exec(gedp, 3, move_av) == BRLCAD_OK);
 	ASSERT(db_lookup(gedp->dbip, "all.g", LOOKUP_QUIET) == RT_DIR_NULL);
 	ASSERT(db_lookup(gedp->dbip, "all_renamed.g", LOOKUP_QUIET) != RT_DIR_NULL);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", -1) == 0);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all_renamed.g", -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g", -1) == 0);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all_renamed.g", -1) == 1);
 	{
 	    struct bu_vls paths = BU_VLS_INIT_ZERO;
-	    ASSERT(ged_draw_list_paths(gedp, gedp->ged_gvp, -1, 0, &paths) > 0);
+	    ASSERT(ged_draw_list_paths(gedp, test_active_view_ctx(gedp), -1, 0, &paths) > 0);
 	    ASSERT(!vls_has_line(&paths, "all.g"));
 	    ASSERT(vls_has_line(&paths, "all_renamed.g"));
 	    bu_vls_free(&paths);
@@ -4046,8 +4045,8 @@ main(int ac, char *av[])
 	ASSERT(ged_exec(gedp, 3, move_back_av) == BRLCAD_OK);
 	ASSERT(db_lookup(gedp->dbip, "all.g", LOOKUP_QUIET) != RT_DIR_NULL);
 	ASSERT(db_lookup(gedp->dbip, "all_renamed.g", LOOKUP_QUIET) == RT_DIR_NULL);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g", -1) == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all_renamed.g", -1) == 0);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g", -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all_renamed.g", -1) == 0);
 	ged_draw_clear(gedp);
 	ASSERT(scene_group_count(gedp) == 0);
 
@@ -4055,16 +4054,16 @@ main(int ac, char *av[])
 	const char *mvall_av[4] = {"move_all", "platform.r", "platform_renamed.r", NULL};
 	const char *mvall_back_av[4] = {"move_all", "platform_renamed.r", "platform.r", NULL};
 	ASSERT(ged_exec(gedp, 2, draw_child_av) == BRLCAD_OK);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g/platform.r", -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g/platform.r", -1) == 1);
 
 	ASSERT(ged_exec(gedp, 3, mvall_av) == BRLCAD_OK);
 	ASSERT(db_lookup(gedp->dbip, "platform.r", LOOKUP_QUIET) == RT_DIR_NULL);
 	ASSERT(db_lookup(gedp->dbip, "platform_renamed.r", LOOKUP_QUIET) != RT_DIR_NULL);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g/platform.r", -1) == 0);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g/platform_renamed.r", -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g/platform.r", -1) == 0);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g/platform_renamed.r", -1) == 1);
 	{
 	    struct bu_vls paths = BU_VLS_INIT_ZERO;
-	    ASSERT(ged_draw_list_paths(gedp, gedp->ged_gvp, -1, 0, &paths) > 0);
+	    ASSERT(ged_draw_list_paths(gedp, test_active_view_ctx(gedp), -1, 0, &paths) > 0);
 	    ASSERT(!vls_has_line(&paths, "all.g/platform.r"));
 	    ASSERT(vls_has_line(&paths, "all.g/platform_renamed.r"));
 	    bu_vls_free(&paths);
@@ -4073,24 +4072,24 @@ main(int ac, char *av[])
 	ASSERT(ged_exec(gedp, 3, mvall_back_av) == BRLCAD_OK);
 	ASSERT(db_lookup(gedp->dbip, "platform.r", LOOKUP_QUIET) != RT_DIR_NULL);
 	ASSERT(db_lookup(gedp->dbip, "platform_renamed.r", LOOKUP_QUIET) == RT_DIR_NULL);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g/platform.r", -1) == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g/platform_renamed.r", -1) == 0);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g/platform.r", -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g/platform_renamed.r", -1) == 0);
 	ged_draw_clear(gedp);
 	ASSERT(scene_group_count(gedp) == 0);
 
 	const char *prefix_av[4] = {"prefix", "pre_", "platform.r", NULL};
 	const char *prefix_restore_av[4] = {"move_all", "pre_platform.r", "platform.r", NULL};
 	ASSERT(ged_exec(gedp, 2, draw_child_av) == BRLCAD_OK);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g/platform.r", -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g/platform.r", -1) == 1);
 
 	ASSERT(ged_exec(gedp, 3, prefix_av) == BRLCAD_OK);
 	ASSERT(db_lookup(gedp->dbip, "platform.r", LOOKUP_QUIET) == RT_DIR_NULL);
 	ASSERT(db_lookup(gedp->dbip, "pre_platform.r", LOOKUP_QUIET) != RT_DIR_NULL);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g/platform.r", -1) == 0);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g/pre_platform.r", -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g/platform.r", -1) == 0);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g/pre_platform.r", -1) == 1);
 	{
 	    struct bu_vls paths = BU_VLS_INIT_ZERO;
-	    ASSERT(ged_draw_list_paths(gedp, gedp->ged_gvp, -1, 0, &paths) > 0);
+	    ASSERT(ged_draw_list_paths(gedp, test_active_view_ctx(gedp), -1, 0, &paths) > 0);
 	    ASSERT(!vls_has_line(&paths, "all.g/platform.r"));
 	    ASSERT(vls_has_line(&paths, "all.g/pre_platform.r"));
 	    bu_vls_free(&paths);
@@ -4099,8 +4098,8 @@ main(int ac, char *av[])
 	ASSERT(ged_exec(gedp, 3, prefix_restore_av) == BRLCAD_OK);
 	ASSERT(db_lookup(gedp->dbip, "platform.r", LOOKUP_QUIET) != RT_DIR_NULL);
 	ASSERT(db_lookup(gedp->dbip, "pre_platform.r", LOOKUP_QUIET) == RT_DIR_NULL);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g/platform.r", -1) == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, "all.g/pre_platform.r", -1) == 0);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g/platform.r", -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), "all.g/pre_platform.r", -1) == 0);
 	ged_draw_clear(gedp);
 	ASSERT(scene_group_count(gedp) == 0);
     }
@@ -4141,18 +4140,18 @@ main(int ac, char *av[])
 	ASSERT(ged_exec(gedp, 1, zap_av) == BRLCAD_OK);
 	ASSERT(ged_exec(gedp, 2, draw_parent_av) == BRLCAD_OK);
 	ASSERT(ged_exec(gedp, 2, draw_child_av) == BRLCAD_OK);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, kr_parent, -1) == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, kr_child_path, -1) == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, kr_sibling_path, -1) == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, kr_child, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), kr_parent, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), kr_child_path, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), kr_sibling_path, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), kr_child, -1) == 1);
 
 	ASSERT(ged_exec(gedp, 2, killrefs_av) == BRLCAD_OK);
 	ASSERT(db_lookup(gedp->dbip, kr_child, LOOKUP_QUIET) != RT_DIR_NULL);
 	ASSERT(db_lookup(gedp->dbip, kr_parent, LOOKUP_QUIET) != RT_DIR_NULL);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, kr_child_path, -1) == 0);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, kr_child, -1) == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, kr_sibling_path, -1) == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, kr_parent, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), kr_child_path, -1) == 0);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), kr_child, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), kr_sibling_path, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), kr_parent, -1) == 1);
 
 	ged_draw_clear(gedp);
 	ASSERT(scene_group_count(gedp) == 0);
@@ -4195,18 +4194,18 @@ main(int ac, char *av[])
 	ASSERT(ged_exec(gedp, 1, zap_av) == BRLCAD_OK);
 	ASSERT(ged_exec(gedp, 2, draw_parent_av) == BRLCAD_OK);
 	ASSERT(ged_exec(gedp, 2, draw_child_av) == BRLCAD_OK);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, cr_parent, -1) == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, cr_child_path, -1) == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, cr_sibling_path, -1) == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, cr_child, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), cr_parent, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), cr_child_path, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), cr_sibling_path, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), cr_child, -1) == 1);
 
 	ASSERT(ged_exec(gedp, 3, remove_child_av) == BRLCAD_OK);
 	ASSERT(db_lookup(gedp->dbip, cr_child, LOOKUP_QUIET) != RT_DIR_NULL);
 	ASSERT(db_lookup(gedp->dbip, cr_parent, LOOKUP_QUIET) != RT_DIR_NULL);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, cr_child_path, -1) == 0);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, cr_child, -1) == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, cr_sibling_path, -1) == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, cr_parent, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), cr_child_path, -1) == 0);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), cr_child, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), cr_sibling_path, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), cr_parent, -1) == 1);
 	ASSERT(test_shape_record_by_path(gedp, cr_child_path, NULL) == 0);
 
 	struct ged_draw_shape_record sibling_rec;
@@ -4254,16 +4253,16 @@ main(int ac, char *av[])
 	ASSERT(ged_exec(gedp, 1, zap_av) == BRLCAD_OK);
 	ASSERT(ged_exec(gedp, 2, draw_parent_av) == BRLCAD_OK);
 	ASSERT(ged_exec(gedp, 2, draw_child_av) == BRLCAD_OK);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, rm_child_path, -1) == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, rm_sibling_path, -1) == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, rm_child, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), rm_child_path, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), rm_sibling_path, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), rm_child, -1) == 1);
 
 	ASSERT(ged_exec(gedp, 2, kill_child_av) == BRLCAD_OK);
 	ASSERT(db_lookup(gedp->dbip, rm_child, LOOKUP_QUIET) == RT_DIR_NULL);
 	ASSERT(db_lookup(gedp->dbip, rm_parent, LOOKUP_QUIET) != RT_DIR_NULL);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, rm_child_path, -1) == 0);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, rm_child, -1) == 0);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, rm_sibling_path, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), rm_child_path, -1) == 0);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), rm_child, -1) == 0);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), rm_sibling_path, -1) == 1);
 
 	ged_draw_clear(gedp);
 	ASSERT(scene_group_count(gedp) == 0);
@@ -4301,8 +4300,8 @@ main(int ac, char *av[])
 	const char *draw_parent_av[3] = {"draw", up_parent, NULL};
 	ASSERT(ged_exec(gedp, 1, zap_av) == BRLCAD_OK);
 	ASSERT(ged_exec(gedp, 2, draw_parent_av) == BRLCAD_OK);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, up_child_path, -1) == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, up_sibling_path, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), up_child_path, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), up_sibling_path, -1) == 1);
 
 	struct ged_draw_shape_record child_rec;
 	memset(&child_rec, 0, sizeof(child_rec));
@@ -4341,7 +4340,7 @@ main(int ac, char *av[])
 	ASSERT(child_rec.stale == 0);
 	ASSERT(child_rec.source_revision == child_rec.realized_source_revision);
 	ASSERT(BU_STR_EQUAL(child_rec.stale_reason, "current"));
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, up_sibling_path, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), up_sibling_path, -1) == 1);
 	memset(&sibling_rec, 0, sizeof(sibling_rec));
 	ASSERT(test_shape_record_by_path(gedp, up_sibling_path, &sibling_rec) == 1);
 	ASSERT(sibling_rec.stale == 0);
@@ -4392,8 +4391,8 @@ main(int ac, char *av[])
 	ASSERT(ged_exec(gedp, 1, zap_av) == BRLCAD_OK);
 	ASSERT(ged_exec(gedp, 2, draw_parent_a_av) == BRLCAD_OK);
 	ASSERT(ged_exec(gedp, 2, draw_parent_b_av) == BRLCAD_OK);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, ei_child_path_a, -1) == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, ei_child_path_b, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), ei_child_path_a, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), ei_child_path_b, -1) == 1);
 
 	struct ged_draw_shape_record before_a;
 	struct ged_draw_shape_record before_b;
@@ -4442,8 +4441,8 @@ main(int ac, char *av[])
 	bu_vls_trunc(gedp->ged_result_str, 0);
 	ASSERT(ged_exec(gedp, 7, edit_child_av) == BRLCAD_OK);
 
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, ei_child_path_a, -1) == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, ei_child_path_b, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), ei_child_path_a, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), ei_child_path_b, -1) == 1);
 	struct ged_draw_shape_record after_a;
 	struct ged_draw_shape_record after_b;
 	memset(&after_a, 0, sizeof(after_a));
@@ -4592,15 +4591,16 @@ main(int ac, char *av[])
 	const char *group_child_av[4] = {"g", cu_parent, cu_child_b, NULL};
 
 	ASSERT(ged_exec(gedp, 1, zap_av) == BRLCAD_OK);
-	struct bsg_appearance_settings cu_settings = BSG_APPEARANCE_SETTINGS_INIT;
+	struct ged_draw_appearance_settings cu_settings =
+	    GED_DRAW_APPEARANCE_SETTINGS_INIT;
 	cu_settings.s_line_width = 7;
 	struct ged_draw_transaction draw_txn =
 	    ged_draw_transaction_make(GED_DRAW_TXN_DRAW, cu_parent);
-	draw_txn.view = gedp->ged_gvp;
+	draw_txn.view = test_active_view_ctx(gedp);
 	draw_txn.appearance = &cu_settings;
 	ASSERT(ged_draw_apply_transaction(gedp, &draw_txn, NULL) == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, cu_child_a_path, -1) == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, cu_child_b_path, -1) == 0);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), cu_child_a_path, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), cu_child_b_path, -1) == 0);
 	struct ged_draw_shape_record child_a_rec;
 	memset(&child_a_rec, 0, sizeof(child_a_rec));
 	ASSERT(test_shape_record_by_path(gedp, cu_child_a_path, &child_a_rec) == 1);
@@ -4617,9 +4617,9 @@ main(int ac, char *av[])
 	ASSERT(cu_index_stats.group_component_queries >= 1);
 	ASSERT(cu_index_stats.shape_component_candidates >= 1);
 	ASSERT(cu_index_stats.group_component_candidates >= 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, cu_parent, -1) == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, cu_child_a_path, -1) == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp, cu_child_b_path, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), cu_parent, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), cu_child_a_path, -1) == 1);
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp), cu_child_b_path, -1) == 1);
 	struct ged_draw_shape_record child_b_rec;
 	memset(&child_b_rec, 0, sizeof(child_b_rec));
 	ASSERT(test_shape_record_by_path(gedp, cu_child_b_path, &child_b_rec) == 1);
@@ -4701,11 +4701,11 @@ main(int ac, char *av[])
 	    ASSERT(ged_draw_apply_transaction(gedp, &draw_unrelated, NULL) == 1);
 	}
 
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp,
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp),
 		scale_target_path_a, -1) == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp,
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp),
 		scale_target_path_b, -1) == 1);
-	ASSERT(ged_draw_path_state(gedp, gedp->ged_gvp,
+	ASSERT(ged_draw_path_state(gedp, test_active_view_ctx(gedp),
 		unrelated0_path, -1) == 1);
 
 	ASSERT(ged_selection_clear(gedp, NULL) == 1);
@@ -4774,7 +4774,7 @@ main(int ac, char *av[])
     /* ---------------------------------------------------------------- *
      * [16] Backend-owned resource cache.                                *
      *      Resources are keyed by render-item cache/source identity and  *
-     *      owned by the display manager, not bsg_node.                   *
+     *      owned by the display manager, not scene node.                   *
      * ---------------------------------------------------------------- */
     {
 	bu_log("[16] Backend-owned resource cache...\n");
@@ -4800,26 +4800,23 @@ main(int ac, char *av[])
 	struct dm *dmp = dm_open(NULL, NULL, "nu", 1, &av0);
 	ASSERT(dmp != NULL);
 
+	const uint64_t backend_identity = 0x9001;
 	ASSERT(dm_backend_begin_frame(dmp) == 0);
 	struct dm_backend_resource *r = dm_backend_resource_get(dmp,
-		0x1001, 0x501, BSG_BACKEND_GL, 1,
+		0x1001, 0x501, backend_identity, 1,
 		phase16_helpers::free_resource);
 	ASSERT(r != NULL);
 	r->handle = &st;
 	dm_backend_resource_touch(dmp, r);
 
-	struct bsg_render_item *item = bsg_render_item_create();
-	item->cache_identity = 0x1001;
-	item->source.source_id = 0x501;
-	item->geometry.source_identity = 0x501;
-	dm_backend_invalidate_item(dmp, item, BSG_INVALIDATE_PAYLOAD);
+	dm_backend_resource_invalidate(dmp, 0x501);
 	ASSERT(r->stale == 1);
 	dm_backend_release_source(dmp, 0x501);
 	ASSERT(st.free_calls == 1);
 	ASSERT(st.last_cache_identity == 0x1001);
 	ASSERT(st.last_source_identity == 0x501);
 
-	r = dm_backend_resource_get(dmp, 0x1002, 0x502, BSG_BACKEND_GL, 1,
+	r = dm_backend_resource_get(dmp, 0x1002, 0x502, backend_identity, 1,
 		phase16_helpers::free_resource);
 	ASSERT(r != NULL);
 	r->handle = &st;
@@ -4830,9 +4827,8 @@ main(int ac, char *av[])
 	ASSERT(st.last_cache_identity == 0x1002);
 	ASSERT(st.last_source_identity == 0x502);
 
-	dm_backend_invalidate_item(NULL, item, BSG_INVALIDATE_ALL);
+	dm_backend_resource_invalidate(NULL, 0x501);
 	dm_backend_release_source(NULL, 0x501);
-	bsg_render_item_free(item);
 	dm_close(dmp);
     }
 

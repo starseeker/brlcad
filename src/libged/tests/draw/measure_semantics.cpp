@@ -63,9 +63,9 @@ main(int UNUSED(ac), char *av[])
     /* ------------------------------------------------------------------
      * Build a minimal headless view.
      * ------------------------------------------------------------------ */
-    struct bsg_view v;
-    rt_view_init_bsg(&v, NULL);
-    rt_view_dimensions_set_bsg(&v, 512, 512);
+    void *view = rt_view_context_create_bsg();
+    ASSERT(view != NULL);
+    ASSERT(rt_view_context_dimensions_set_bsg(view, 512, 512));
 
     /* ------------------------------------------------------------------
      * Test 1: known distance.
@@ -77,7 +77,7 @@ main(int UNUSED(ac), char *av[])
 	ASSERT(fabs(expected - 5.0) < 1e-9);
 
 	struct rt_view_measure_result mr = RT_VIEW_MEASURE_RESULT_INIT;
-	int rc = rt_view_measure_candidates_bsg(&v, a, b, &mr);
+	int rc = rt_view_context_measure_candidates_bsg(view, a, b, &mr);
 	ASSERT(rc >= 0);
 	if (mr.valid) {
 	    /* distance must not deviate from straight-line by more than
@@ -94,7 +94,7 @@ main(int UNUSED(ac), char *av[])
 	point_t a = {1.0, 2.0, 3.0};
 	point_t b = {1.0, 2.0, 3.0};
 	struct rt_view_measure_result mr = RT_VIEW_MEASURE_RESULT_INIT;
-	int rc = rt_view_measure_candidates_bsg(&v, a, b, &mr);
+	int rc = rt_view_context_measure_candidates_bsg(view, a, b, &mr);
 	ASSERT(rc >= 0);
 	if (mr.valid)
 	    ASSERT(mr.distance >= 0.0);
@@ -107,15 +107,15 @@ main(int UNUSED(ac), char *av[])
 	point_t a = VINIT_ZERO;
 	point_t b = VINIT_ZERO;
 	/* Passing NULL for out must return 0 without crashing. */
-	int rc = rt_view_measure_candidates_bsg(&v, a, b, NULL);
+	int rc = rt_view_context_measure_candidates_bsg(view, a, b, NULL);
 	ASSERT(rc == 0);
 	/* Passing NULL view is also valid (falls back to no projection). */
 	struct rt_view_measure_result mr = RT_VIEW_MEASURE_RESULT_INIT;
-	rc = rt_view_measure_candidates_bsg(NULL, a, b, &mr);
+	rc = rt_view_context_measure_candidates_bsg(NULL, a, b, &mr);
 	ASSERT(rc == 0);   /* zero-length segment returns 0 regardless of view */
     }
 
-    rt_view_free_bsg(&v);
+    rt_view_context_free_bsg(view);
 
     bu_log("measure semantic records: %d checks, %d failures\n", nchecks, nfails);
     return nfails ? 1 : 0;

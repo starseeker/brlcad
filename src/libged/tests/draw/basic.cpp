@@ -281,8 +281,8 @@ main(int ac, char *av[]) {
     s_av[4] = NULL;
     ged_exec_dm(gedp, 4, s_av);
 
-    struct bsg_view *v = gedp->ged_gvp;
-    struct dm *dmp = (struct dm *)v->dmp;
+    void *v = ged_view_active_ctx(gedp);
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
     dm_set_width(dmp, 512);
     dm_set_height(dmp, 512);
 
@@ -296,10 +296,10 @@ main(int ac, char *av[]) {
 
     // TODO - these syncing operations need to happen whenever the dm size
     // changes - can they be done in dm_set_width/dm_set_height?
-    rt_view_dimensions_set_bsg(v, dm_get_width(dmp), dm_get_height(dmp));
-    dm_set_vp(dmp, rt_view_scale_storage_from_bsg(v));
+    rt_view_context_dimensions_set_bsg(v, dm_get_width(dmp), dm_get_height(dmp));
+    dm_set_vp(dmp, rt_view_context_scale_storage_from_bsg(v));
 
-    rt_view_unit_conversion_set_bsg(v,
+    rt_view_context_unit_conversion_set_bsg(v,
 	gedp->dbip->dbi_local2base,
 	gedp->dbip->dbi_base2local);
 

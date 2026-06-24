@@ -33,7 +33,7 @@
 #include "bu/color.h"
 #include "bu/opt.h"
 #include "bu/vls.h"
-#include "rt/view_legacy_bsg.h"
+#include "rt/view.h"
 
 #include "../../ged_private.h"
 #include "../ged_view.h"
@@ -686,14 +686,14 @@ _fp_cmd_model_axes(void *bs, int argc, const char **argv)
     int help = 0;
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+    void *view_ctx = ged_view_active_ctx(gedp);
 
     const char *usage_string = "view faceplate model_axes subcmd [args]";
     const char *purpose_string = "manipulate view axes";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
 
-    if (!v) {
+    if (!view_ctx) {
 	bu_vls_printf(gedp->ged_result_str, ": no view current in GED");
 	return BRLCAD_ERROR;
     }
@@ -703,16 +703,16 @@ _fp_cmd_model_axes(void *bs, int argc, const char **argv)
 
     if (argc == 1) {
 	struct rt_view_axes_state axes;
-	if (!rt_view_model_axes_state_from_bsg(&axes, v))
+	if (!ged_view_context_model_axes_state_get(&axes, view_ctx))
 	    return BRLCAD_ERROR;
 	if (BU_STR_EQUAL("1", argv[0])) {
 	    axes.draw = 1;
-	    rt_view_model_axes_state_set_bsg(v, &axes);
+	    ged_view_context_model_axes_state_set(view_ctx, &axes);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("0", argv[0])) {
 	    axes.draw = 0;
-	    rt_view_model_axes_state_set_bsg(v, &axes);
+	    ged_view_context_model_axes_state_set(view_ctx, &axes);
 	    return BRLCAD_OK;
 	}
     }
@@ -737,7 +737,7 @@ _fp_cmd_model_axes(void *bs, int argc, const char **argv)
     (void)bu_opt_parse(NULL, acnt, argv, d);
 
     struct rt_view_axes_state axes;
-    if (!rt_view_model_axes_state_from_bsg(&axes, v))
+    if (!ged_view_context_model_axes_state_get(&axes, view_ctx))
 	return BRLCAD_ERROR;
 
     struct _ged_fp_axes_info ainfo;
@@ -746,7 +746,7 @@ _fp_cmd_model_axes(void *bs, int argc, const char **argv)
 
     int ret = _ged_subcmd_exec(gedp, d, _fp_axes_cmds, "view faceplate model_axes", "[options] subcommand [args]", (void *)&ainfo, argc, argv, help, cmd_pos);
     if (ret == BRLCAD_OK)
-	rt_view_model_axes_state_set_bsg(v, &axes);
+	ged_view_context_model_axes_state_set(view_ctx, &axes);
     return ret;
 }
 
@@ -756,14 +756,14 @@ _fp_cmd_view_axes(void *bs, int argc, const char **argv)
     int help = 0;
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+    void *view_ctx = ged_view_active_ctx(gedp);
 
     const char *usage_string = "view faceplate view_axes subcmd [args]";
     const char *purpose_string = "manipulate view axes";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
 
-    if (!v) {
+    if (!view_ctx) {
 	bu_vls_printf(gedp->ged_result_str, ": no view current in GED");
 	return BRLCAD_ERROR;
     }
@@ -774,16 +774,16 @@ _fp_cmd_view_axes(void *bs, int argc, const char **argv)
 
     if (argc == 1) {
 	struct rt_view_axes_state axes;
-	if (!rt_view_view_axes_state_from_bsg(&axes, v))
+	if (!ged_view_context_view_axes_state_get(&axes, view_ctx))
 	    return BRLCAD_ERROR;
 	if (BU_STR_EQUAL("1", argv[0])) {
 	    axes.draw = 1;
-	    rt_view_view_axes_state_set_bsg(v, &axes);
+	    ged_view_context_view_axes_state_set(view_ctx, &axes);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("0", argv[0])) {
 	    axes.draw = 0;
-	    rt_view_view_axes_state_set_bsg(v, &axes);
+	    ged_view_context_view_axes_state_set(view_ctx, &axes);
 	    return BRLCAD_OK;
 	}
     }
@@ -808,7 +808,7 @@ _fp_cmd_view_axes(void *bs, int argc, const char **argv)
     (void)bu_opt_parse(NULL, acnt, argv, d);
 
     struct rt_view_axes_state axes;
-    if (!rt_view_view_axes_state_from_bsg(&axes, v))
+    if (!ged_view_context_view_axes_state_get(&axes, view_ctx))
 	return BRLCAD_ERROR;
 
     struct _ged_fp_axes_info ainfo;
@@ -817,7 +817,7 @@ _fp_cmd_view_axes(void *bs, int argc, const char **argv)
 
     int ret = _ged_subcmd_exec(gedp, d, _fp_axes_cmds, "view faceplate view_axes", "[options] subcommand [args]", (void *)&ainfo, argc, argv, help, cmd_pos);
     if (ret == BRLCAD_OK)
-	rt_view_view_axes_state_set_bsg(v, &axes);
+	ged_view_context_view_axes_state_set(view_ctx, &axes);
     return ret;
 }
 

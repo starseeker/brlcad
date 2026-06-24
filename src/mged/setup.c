@@ -36,7 +36,7 @@
 #include "bn.h"
 #include "tclcad.h"
 #include "ged.h"
-#include "rt/view_legacy_bsg.h"
+#include "ged/view.h"
 
 /* local headers */
 #include "./mged.h"
@@ -563,17 +563,17 @@ mged_setup(struct mged_state *s)
     mged_global_db_ctx.old_dbip = NULL;
     mged_global_db_ctx.post_open_cnt = 0;
 
-    BU_ALLOC(view_state->vs_gvp, struct bsg_view);
-    struct bsg_view_set *view_set = (struct bsg_view_set *)ged_view_set_ctx(s->gedp);
-    rt_view_init_bsg(view_state->vs_gvp, view_set);
+    void *view_set_ctx = ged_view_set_ctx(s->gedp);
+    void *view_ctx = ged_view_context_create_with_set(view_set_ctx);
+    view_state->vs_gvp = view_ctx;
 
-    rt_view_update_callback_set_bsg(view_state->vs_gvp,
+    ged_view_context_update_callback_set(view_ctx,
 	    mged_view_callback, (void *)view_state);
     mat_t view_center;
-    rt_view_center_from_bsg(view_center, view_state->vs_gvp);
+    ged_view_context_center_get(view_center, view_ctx);
     MAT_DELTAS_GET_NEG(view_state->vs_orig_pos, view_center);
 
-    rt_view_set_add_view_bsg(view_set, view_state->vs_gvp);
+    ged_view_set_context_add(view_set_ctx, view_ctx);
     bu_ptbl_ins(&s->gedp->ged_free_views, (long *)view_state->vs_gvp);
     ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 

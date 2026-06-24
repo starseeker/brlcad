@@ -33,8 +33,6 @@
 #include "bu/file.h"
 #include "bu/getopt.h"
 
-#include "rt/view_legacy_bsg.h"
-
 #include "../ged_private.h"
 #include "ged/bsg_ged_draw.h"
 
@@ -72,10 +70,10 @@ basename_without_suffix(const char *p1, const char *suff)
 
 
 static void
-saveview_write_draw_paths(struct ged *gedp, struct bsg_view *v, FILE *fp)
+saveview_write_draw_paths(struct ged *gedp, void *view_ctx, FILE *fp)
 {
     struct bu_vls paths = BU_VLS_INIT_ZERO;
-    ged_draw_list_paths(gedp, v, -1, 0, &paths);
+    ged_draw_list_paths(gedp, view_ctx, -1, 0, &paths);
 
     const char *path = bu_vls_cstr(&paths);
     while (path && *path) {
@@ -105,7 +103,7 @@ ged_saveview_core(struct ged *gedp, int argc, const char *argv[])
     char outpix[255] = {0};
     char inputg[255] = {0};
     const char *cmdname = argv[0];
-    struct bsg_view *v;
+    void *view_ctx;
     static const char *usage = "[-e] [-i] [-l] [-o] filename [args]";
 
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
@@ -177,8 +175,8 @@ ged_saveview_core(struct ged *gedp, int argc, const char *argv[])
     if (outlog[0] == '\0') {
 	snprintf(outlog, 255, "%s.log", base);
     }
-    v = (struct bsg_view *)ged_view_active_ctx(gedp);
-    perspective = rt_view_perspective_from_bsg(v);
+    view_ctx = ged_view_active_ctx(gedp);
+    perspective = ged_view_context_perspective_get(view_ctx);
 
     /* Do not specify -v option to rt; batch jobs must print everything. -Mike */
     fprintf(fp, "#!/bin/sh\n%s -M ", rtcmd);
@@ -196,7 +194,7 @@ ged_saveview_core(struct ged *gedp, int argc, const char *argv[])
     fprintf(fp, " '%s'\\\n ", inputg);
 
     /* Write out exportable draw source paths. */
-    saveview_write_draw_paths(gedp, v, fp);
+    saveview_write_draw_paths(gedp, view_ctx, fp);
 
     fprintf(fp, "\\\n 2>> %s\\\n", outlog);
     fprintf(fp, " <<EOF\n");

@@ -39,18 +39,18 @@
 
 
 void
-go_draw(struct bsg_view *gdvp)
+go_draw(void *view_ctx)
 {
-    struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(gdvp);
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(view_ctx);
     if (!dmp)
 	return;
 
     mat_t model2view;
     mat_t pmat;
-    fastf_t perspective = rt_view_perspective_from_bsg(gdvp);
+    fastf_t perspective = rt_view_context_perspective_from_bsg(view_ctx);
 
-    rt_view_model2view_from_bsg(model2view, gdvp);
-    rt_view_pmat_from_bsg(pmat, gdvp);
+    rt_view_context_model2view_from_bsg(model2view, view_ctx);
+    rt_view_context_pmat_from_bsg(pmat, view_ctx);
     (void)dm_loadmatrix(dmp, model2view, 0);
 
     if (SMALL_FASTF < perspective)
@@ -58,7 +58,7 @@ go_draw(struct bsg_view *gdvp)
     else
 	(void)dm_loadpmatrix(dmp, (fastf_t *)NULL);
 
-    dm_draw_objs(gdvp);
+    dm_draw_objs(view_ctx);
 }
 
 
@@ -138,8 +138,8 @@ to_edit_redraw(struct ged *gedp,
     struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     size_t vi;
     for (vi = 0; vi < BU_PTBL_LEN(views); vi++) {
-	struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, vi);
-	ged_draw_foreach_view_db_object_record(v, to_edit_redraw_record_cb, &d);
+	void *view_ctx = BU_PTBL_GET(views, vi);
+	ged_draw_foreach_view_db_object_record(view_ctx, to_edit_redraw_record_cb, &d);
     }
 
     db_free_full_path(&subpath);

@@ -36,7 +36,7 @@
 
 struct how_find_ctx {
     const char *path;
-    struct bsg_view *view;
+    void *view_ctx;
     const struct ged_draw_group_record *match;
     struct ged_draw_group_record rec;
 };
@@ -49,7 +49,7 @@ how_group_match_cb(const struct ged_draw_group_record *rec, void *ud)
 	return 1;
     if (rec->is_overlay || !rec->visible || rec->shape_count <= 0)
 	return 1;
-    if (!ged_draw_group_record_in_view(rec, ctx->view))
+    if (!ged_draw_group_record_in_view(rec, ctx->view_ctx))
 	return 1;
 
     if (BU_STR_EQUAL(rec->path, ctx->path)) {
@@ -116,7 +116,7 @@ ged_how_core(struct ged *gedp, int argc, const char *argv[])
     struct how_find_ctx ctx;
     memset(&ctx, 0, sizeof(ctx));
     ctx.path = obj_arg;
-    ctx.view = (struct bsg_view *)ged_view_active_ctx(gedp);
+    ctx.view_ctx = ged_view_active_ctx(gedp);
     ged_draw_foreach_group_record(gedp, how_group_match_cb, &ctx);
     if (!ctx.match)
 	goto not_found;

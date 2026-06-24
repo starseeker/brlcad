@@ -32,7 +32,6 @@
 #include "ged.h"
 #include "ged/view.h"
 #include "rt/view.h"
-#include "rt/view_legacy_bsg.h"
 
 #include "./mged.h"
 #include "./sedit.h"
@@ -248,11 +247,12 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
     if (s->dbip == DBI_NULL)
 	return;
 
-    rt_view_info_from_bsg(&view_info, view_state->vs_gvp);
-    rt_view_center_from_bsg(view_center, view_state->vs_gvp);
-    rt_view_aet_from_bsg(view_aet, view_state->vs_gvp);
-    view_perspective = rt_view_perspective_from_bsg(view_state->vs_gvp);
-    view_scale = rt_view_scale_from_bsg(view_state->vs_gvp);
+    void *view_ctx = view_state->vs_gvp;
+    ged_view_context_info_get(&view_info, view_ctx);
+    ged_view_context_center_get(view_center, view_ctx);
+    ged_view_context_aet_get(view_aet, view_ctx);
+    view_perspective = ged_view_context_perspective_get(view_ctx);
+    view_scale = ged_view_context_scale_get(view_ctx);
 
     /* Set the Tcl variables to the appropriate values. */
 

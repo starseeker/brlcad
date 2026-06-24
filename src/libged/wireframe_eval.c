@@ -45,8 +45,7 @@
 #include "rt/func.h"
 
 #include "bg/line_layer.h"
-#include "bsg/scene_builder.h"
-#include "./ged_private.h"
+#include "ged/bsg_ged_draw.h"
 
 struct bigE_data {
     struct db_i *dbip;
@@ -1831,22 +1830,24 @@ fix_halfs(struct bigE_data *dgcdp)
 
 
 int
-ged_draw_scene_ref_eval_wireframe(bsg_scene_ref ref)
+ged_draw_shape_ref_eval_wireframe(struct ged *gedp, ged_draw_shape_ref ref)
 {
 
     struct bigE_data dgcdp;
     int ret = BRLCAD_OK;
 
-    struct ged_draw_source_state *d = ged_draw_scene_ref_source_data(ref);
-    if (!d)
+    struct ged_draw_shape_source_snapshot source;
+    if (!ged_draw_shape_ref_source_snapshot(gedp, ref, &source))
 	return BRLCAD_OK;
+    if (!source.dbip || !source.tol || !source.ttol)
+	return BRLCAD_ERROR;
 
-    dgcdp.dbip = d->dbip;
+    dgcdp.dbip = source.dbip;
     dgcdp.do_polysolids = 0;
-    dgcdp.fp = (struct db_full_path *)ged_draw_scene_ref_fullpath(ref);
-    dgcdp.tol = d->tol;
-    dgcdp.ttol = d->ttol;
-    dgcdp.vlfree = ged_draw_scene_ref_geometry_pool(ref);
+    dgcdp.fp = (struct db_full_path *)source.fullpath;
+    dgcdp.tol = source.tol;
+    dgcdp.ttol = source.ttol;
+    dgcdp.vlfree = &rt_vlfree;
     dgcdp.line_points = NULL;
     dgcdp.line_commands = NULL;
     dgcdp.line_count = 0;
@@ -1873,7 +1874,7 @@ ged_draw_scene_ref_eval_wireframe(bsg_scene_ref ref)
 	db_path_to_vls(&ppath, dgcdp.fp);
 	path = bu_vls_cstr(&ppath);
     } else {
-	path = ged_draw_scene_ref_name(ref);
+	path = source.name;
     }
 
     if (!path || rt_gettrees(dgcdp.rtip, 1, (const char **)&path, 1)) {
@@ -1900,7 +1901,7 @@ ged_draw_scene_ref_eval_wireframe(bsg_scene_ref ref)
 	free_etree(eptr, &dgcdp);
 	bu_ptbl_reset(&dgcdp.leaf_list);
     }
-    if (!ged_draw_scene_ref_publish_line_set(ref,
+    if (!ged_draw_shape_ref_publish_line_set(gedp, ref,
 	    (const point_t *)dgcdp.line_points, dgcdp.line_commands,
 	    dgcdp.line_count))
 	ret = BRLCAD_ERROR;

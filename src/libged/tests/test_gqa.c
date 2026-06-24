@@ -28,10 +28,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <bu.h>
-#include "bsg/draw_source.h"
-#include "bsg/export.h"
 #include "bg/plot3.h"
-#include "bsg/scene_object.h"
 #include <ged.h>
 #include <ged/bsg_ged_draw.h>
 
@@ -43,6 +40,11 @@ struct gqa_segment_writer {
 struct gqa_label_capture {
     size_t count;
     char text[256];
+};
+
+struct gqa_record_capture {
+    struct gqa_segment_writer *writer;
+    const char *plot_fname;
 };
 
 static int
@@ -66,6 +68,31 @@ write_gqa_segment(const point_t a, const point_t b, void *data)
     struct gqa_segment_writer *writer = (struct gqa_segment_writer *)data;
     pdv_3line(writer->fp, a, b);
     writer->count++;
+    return 1;
+}
+
+static int
+capture_gqa_record(const struct ged_draw_view_db_object_record *rec, void *data)
+{
+    struct gqa_record_capture *capture = (struct gqa_record_capture *)data;
+    struct gqa_segment_writer *writer = capture ? capture->writer : NULL;
+
+    if (!writer || !rec || !rec->path || !strstr(rec->path, "gqa::overlaps"))
+	return 1;
+    if (!rec->vlist_point_count)
+	return 1;
+
+    if (!writer->fp) {
+	writer->fp = fopen(capture->plot_fname, "wb");
+	if (!writer->fp)
+	    bu_exit(EXIT_FAILURE, "Could not open %s for writing\n",
+		    capture->plot_fname);
+	pl_color(writer->fp, 255, 255, 0);
+    }
+    printf("found %s;\n", rec->path);
+    (void)ged_draw_view_db_object_record_foreach_segment(rec,
+	    write_gqa_segment, writer);
+
     return 1;
 }
 
@@ -98,26 +125,17 @@ main(int ac, char *av[]) {
 	    !strstr(label_capture.text, "gqa overlaps:"))
 	bu_exit(EXIT_FAILURE, "No GQA overlap summary HUD label published.\n");
 
-    struct bsg_export_result *result =
-	bsg_export_scene(gedp->ged_gvp,
-	    BSG_EXPORT_QUERY_VISIBLE_ONLY | BSG_EXPORT_QUERY_VIEW_OBJECTS);
-    if (result) {
-	for (size_t i = 0; i < bsg_export_result_count(result); i++) {
-	    const struct bsg_export_record *rec = bsg_export_result_get(result, i);
-	    if (!rec || !strstr(bu_vls_cstr(&rec->path), "gqa::overlaps"))
-		continue;
-	    if (!bsg_export_record_has_segments(rec))
-		continue;
-	    if (!writer.fp) {
-		writer.fp = fopen(gqa_plot_fname, "wb");
-		if (!writer.fp)
-		    bu_exit(EXIT_FAILURE, "Could not open %s for writing\n", gqa_plot_fname);
-		pl_color(writer.fp, 255, 255, 0);
-	    }
-	    printf("found %s;\n", bu_vls_cstr(&rec->path));
-	    (void)bsg_export_record_foreach_segment(rec, write_gqa_segment, &writer);
-	}
-    }
+    void *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx)
+	bu_exit(EXIT_FAILURE, "No active GED view context available.\n");
+
+    struct ged_draw_view_record_query query;
+    memset(&query, 0, sizeof(query));
+    query.flags = GED_DRAW_VIEW_RECORD_QUERY_VIEW_OBJECTS;
+    query.draw_mode = -1;
+    struct gqa_record_capture record_capture = {&writer, gqa_plot_fname};
+    ged_draw_foreach_view_record_query(view_ctx, &query, capture_gqa_record,
+	    &record_capture);
 
     if (writer.count) {
 	printf("Writing plot data to %s for inspection with overlay command\n", gqa_plot_fname);
@@ -125,11 +143,9 @@ main(int ac, char *av[]) {
     } else {
 	if (writer.fp)
 	    fclose(writer.fp);
-	bsg_export_result_free(result);
 	bu_exit(EXIT_FAILURE, "No GQA plotting data found.\n");
     }
 
-    bsg_export_result_free(result);
     ged_close(gedp);
 
     return 0;

@@ -47,9 +47,9 @@
 #include "raytrace.h"
 #include "bg/line_layer.h"
 #include "bg/plot3.h"
+#include "ged/bsg_ged_draw.h"
 #include "analyze.h"
 
-#include "../bsg_ged_draw_view_private.h"
 #include "../ged_private.h"
 
 struct analyze_densities *_gd_densities;
@@ -2613,7 +2613,7 @@ ged_gqa_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *active_view = (struct bsg_view *)ged_view_active_ctx(gedp);
+    void *active_view = ged_view_active_ctx(gedp);
     overlay_enabled = (analysis_flags & ANALYSIS_PLOT_OVERLAPS) &&
 	(active_view || ged_diagnostic_line_layer_handler_available(gedp));
     if (analysis_flags & ANALYSIS_PLOT_OVERLAPS) {
@@ -2783,7 +2783,7 @@ aborted:
 	    int handled = ged_diagnostic_line_layer_publish(gedp,
 		    "gqa::overlaps", ged_gqa_plot.builder);
 	    if (!handled && active_view) {
-		(void)ged_draw_view_line_layer_builder_replace(active_view,
+		(void)ged_draw_view_context_line_layer_builder_replace(active_view,
 			"gqa::overlaps", 0, ged_gqa_plot.builder);
 	    }
 	}

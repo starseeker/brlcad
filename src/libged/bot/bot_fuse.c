@@ -31,10 +31,10 @@
 
 #include "bu/getopt.h"
 #include "bu/parallel.h"
+#include "ged/bsg_ged_draw.h"
 #include "rt/geom.h"
 #include "bg/plot3.h"
 
-#include "../bsg_ged_draw_view_private.h"
 #include "../ged_private.h"
 
 struct bot_fuse_line_data {
@@ -162,18 +162,18 @@ show_dangling_edges(struct ged *gedp, const uint32_t *magic_p, const char *name,
 
     if (out_type == 1) {
 	/* Add overlay */
-	struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
-	if (view) {
+	void *view_ctx = ged_view_active_ctx(gedp);
+	if (view_ctx) {
 	    struct bu_vls nroot = BU_VLS_INIT_ZERO;
 	    bu_vls_sprintf(&nroot, "bot_fuse::%s", name);
 	    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
 	    style.color_valid = 1;
 	    VSET(style.color, 255, 255, 0);
 	    if (lines.count)
-		(void)ged_draw_view_lines_replace(view, bu_vls_cstr(&nroot), 0,
+		(void)ged_draw_view_context_lines_replace(view_ctx, bu_vls_cstr(&nroot), 0,
 			(const point_t *)lines.points, NULL, lines.count, &style);
 	    else
-		(void)ged_draw_view_feature_remove(view, bu_vls_cstr(&nroot));
+		(void)ged_draw_view_context_feature_remove(view_ctx, bu_vls_cstr(&nroot));
 	    bu_vls_free(&nroot);
 	}
 	bot_fuse_lines_free(&lines);

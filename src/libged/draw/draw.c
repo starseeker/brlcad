@@ -36,17 +36,9 @@
 
 #include "bg/line_layer.h"
 #include "ged/bsg_ged_draw.h"
-#include "bsg/appearance.h"
-#include "bsg/draw_intent.h"
-#include "bsg/draw_source.h"
-#include "bsg/scene_object.h"
-#include "bsg/material.h"
-#include "bsg/node.h"
-#include "bsg/payload.h"
 #include "nmg/display.h"
 #include "rt/view.h"
 #include "../bsg_ged_draw_private.h"
-#include "../bsg_ged_draw_view_private.h"
 #include "../ged_private.h"
 #include "./ged_draw.h"
 
@@ -160,7 +152,7 @@ dl_commit_published_draft(ged_draw_shape_draft *draft,
 
     ged_draw_shape_draft_set_transparency(draft, dgcdp->vs.transparency);
     ged_draw_shape_draft_set_draw_mode(draft, dgcdp->vs.draw_mode);
-    ged_draw_shape_draft_apply_settings(draft, &dgcdp->vs);
+    ged_draw_shape_draft_apply_appearance_settings(draft, &dgcdp->vs);
 
     bu_semaphore_acquire(RT_SEM_MODEL);
     ged_draw_shape_draft_commit_to_group(draft, dgcdp->draw_group_ref);
@@ -177,10 +169,10 @@ dl_add_line_set(int dashflag, const point_t *points, const int *commands,
 		unsigned char *wireframe_color_override,
 		struct _ged_client_data *dgcdp)
 {
-    if (!dgcdp || !dgcdp->v)
+    if (!dgcdp || !dgcdp->view_ctx)
 	return 0;
 
-    ged_draw_shape_draft *draft = ged_draw_shape_draft_create(dgcdp->gedp, dgcdp->v, 1);
+    ged_draw_shape_draft *draft = ged_draw_shape_draft_create_context(dgcdp->gedp, dgcdp->view_ctx, 1);
     if (!draft)
 	return 0;
 
@@ -200,10 +192,10 @@ dl_add_line_set(int dashflag, const point_t *points, const int *commands,
 static int
 dl_add_nmg_region(int dashflag, const struct nmgregion *r, int style, const struct db_full_path *pathp, struct db_tree_state *tsp, unsigned char *wireframe_color_override, struct _ged_client_data *dgcdp)
 {
-    if (!dgcdp || !dgcdp->v || !r)
+    if (!dgcdp || !dgcdp->view_ctx || !r)
 	return 0;
 
-    ged_draw_shape_draft *draft = ged_draw_shape_draft_create(dgcdp->gedp, dgcdp->v, 1);
+    ged_draw_shape_draft *draft = ged_draw_shape_draft_create_context(dgcdp->gedp, dgcdp->view_ctx, 1);
     if (!draft)
 	return 0;
 
@@ -224,10 +216,10 @@ dl_add_primitive_face_set(int dashflag, const struct rt_db_internal *ip, const s
 {
     int ok = 0;
 
-    if (!dgcdp || !dgcdp->v || !ip)
+    if (!dgcdp || !dgcdp->view_ctx || !ip)
 	return 0;
 
-    ged_draw_shape_draft *draft = ged_draw_shape_draft_create(dgcdp->gedp, dgcdp->v, 1);
+    ged_draw_shape_draft *draft = ged_draw_shape_draft_create_context(dgcdp->gedp, dgcdp->view_ctx, 1);
     if (!draft)
 	return 0;
 
@@ -236,7 +228,7 @@ dl_add_primitive_face_set(int dashflag, const struct rt_db_internal *ip, const s
     if (!ged_draw_test_force_face_set_failure &&
 	    ip->idb_meth && ip->idb_meth->ft_indexed_face_set) {
 	struct rt_view_info view_info;
-	ged_draw_view_info_from_bsg(&view_info, dgcdp->v);
+	ged_draw_view_context_info_from_bsg(&view_info, dgcdp->view_ctx);
 	ok = ged_draw_shape_draft_publish_primitive_face_set(draft,
 		(struct rt_db_internal *)ip, tsp ? tsp->ts_ttol : NULL,
 		tsp ? tsp->ts_tol : NULL, &view_info);
@@ -257,10 +249,10 @@ dl_add_primitive_wireframe_line_set(int dashflag, const struct rt_db_internal *i
 {
     int ok = 0;
 
-    if (!dgcdp || !dgcdp->v || !ip)
+    if (!dgcdp || !dgcdp->view_ctx || !ip)
 	return 0;
 
-    ged_draw_shape_draft *draft = ged_draw_shape_draft_create(dgcdp->gedp, dgcdp->v, 1);
+    ged_draw_shape_draft *draft = ged_draw_shape_draft_create_context(dgcdp->gedp, dgcdp->view_ctx, 1);
     if (!draft)
 	return 0;
 
@@ -356,7 +348,7 @@ append_shape_to_draw_group(
     }
 
     /* create shape */
-    ged_draw_shape_draft *draft = ged_draw_shape_draft_create(bsg_data->gedp, bsg_data->v, 1);
+    ged_draw_shape_draft *draft = ged_draw_shape_draft_create_context(bsg_data->gedp, bsg_data->view_ctx, 1);
     if (!draft)
 	return TREE_NULL;
     ged_draw_shape_draft_mark_db_object(draft);
@@ -473,7 +465,7 @@ append_shape_to_draw_group(
 
     ged_draw_shape_draft_set_transparency(draft, bsg_data->transparency);
     ged_draw_shape_draft_set_draw_mode(draft, bsg_data->draw_mode);
-    ged_draw_shape_draft_apply_settings(draft, &bsg_data->vs);
+    ged_draw_shape_draft_apply_appearance_settings(draft, &bsg_data->vs);
 
     /* append shape to draw group */
     bu_semaphore_acquire(RT_SEM_MODEL);
@@ -1059,16 +1051,16 @@ _ged_drawtrees(struct ged *gedp, int argc, const char *argv[], int kind, struct 
     if (_dgcdp != (struct _ged_client_data *)0) {
 	dgcdp = *_dgcdp;            /* struct copy */
     } else {
-	struct bsg_view *gvp;
+	void *view_ctx;
 
 	memset(&dgcdp, 0, sizeof(struct _ged_client_data));
 	dgcdp.gedp = gedp;
 
-	gvp = (struct bsg_view *)ged_view_active_ctx(gedp);
-	dgcdp.v = gvp;
+	view_ctx = ged_view_active_ctx(gedp);
+	dgcdp.view_ctx = view_ctx;
 
-	if (gvp)
-	    lod_policy_cached_valid = ged_draw_view_lod_policy_from_bsg(&lod_policy_cached, gvp);
+	if (view_ctx)
+	    lod_policy_cached_valid = ged_draw_view_context_lod_policy_from_bsg(&lod_policy_cached, view_ctx);
 
 	if (lod_policy_cached_valid && lod_policy_cached.csg_enabled)
 	    dgcdp.autoview = 1;
@@ -1335,7 +1327,7 @@ _ged_drawtrees(struct ged *gedp, int argc, const char *argv[], int kind, struct 
 		    if (ged_draw_group_ref_is_null(dgcdp.draw_group_ref))
 			continue;
 
-		    ged_draw_group_ref_set_appearance(gedp,
+		    ged_draw_group_ref_set_appearance_settings(gedp,
 			    dgcdp.draw_group_ref, &dgcdp.vs);
 
 		    dgcdp_save = dgcdp;
@@ -1393,7 +1385,7 @@ _ged_drawtrees(struct ged *gedp, int argc, const char *argv[], int kind, struct 
 			bsg_data.transparency= dgcdp.vs.transparency;
 			bsg_data.draw_mode = dgcdp.vs.draw_mode;
 			bsg_data.vs = dgcdp.vs;
-			bsg_data.v = dgcdp.v;
+			bsg_data.view_ctx = dgcdp.view_ctx;
 			bsg_data.gedp = gedp;
 
 		    {
@@ -1414,7 +1406,7 @@ _ged_drawtrees(struct ged *gedp, int argc, const char *argv[], int kind, struct 
 			continue;
 		    }
 
-		    ged_draw_group_ref_set_appearance(gedp,
+		    ged_draw_group_ref_set_appearance_settings(gedp,
 			    dgcdp.draw_group_ref, &dgcdp.vs);
 
 		    av[0] = (char *)argv[i];
@@ -1443,9 +1435,9 @@ _ged_drawtrees(struct ged *gedp, int argc, const char *argv[], int kind, struct 
 			}
 
 			/* Set the view threshold */
-			if (dgcdp.v && lod_policy_cached_valid)
-			    (void)ged_draw_view_lod_policy_apply_bsg_bot_threshold(
-				    dgcdp.v, &lod_policy_cached, (size_t)bot_threshold);
+			if (dgcdp.view_ctx && lod_policy_cached_valid)
+			    (void)ged_draw_view_context_lod_policy_apply_bsg_bot_threshold(
+				    dgcdp.view_ctx, &lod_policy_cached, (size_t)bot_threshold);
 
 		/* calculate plot vlists for shapes of each draw path */
 		for (i = 0; i < argc; ++i) {
@@ -1459,9 +1451,9 @@ _ged_drawtrees(struct ged *gedp, int argc, const char *argv[], int kind, struct 
 				    dgcdp.vs.draw_non_subtract_only);
 			    if (ret < 0) {
 				/* restore view bot threshold */
-				if (dgcdp.v && lod_policy_cached_valid)
-				    (void)ged_draw_view_lod_policy_apply_bsg(
-					    dgcdp.v, &lod_policy_cached);
+				if (dgcdp.view_ctx && lod_policy_cached_valid)
+				    (void)ged_draw_view_context_lod_policy_apply_bsg(
+					    dgcdp.view_ctx, &lod_policy_cached);
 
 			bu_vls_printf(gedp->ged_result_str, "%s: %s redraw failure\n", argv[0], argv[i]);
 			if (filtered_argv)
@@ -1471,9 +1463,9 @@ _ged_drawtrees(struct ged *gedp, int argc, const char *argv[], int kind, struct 
 		}
 
 			/* restore view bot threshold */
-			if (dgcdp.v && lod_policy_cached_valid)
-			    (void)ged_draw_view_lod_policy_apply_bsg(
-				    dgcdp.v, &lod_policy_cached);
+			if (dgcdp.view_ctx && lod_policy_cached_valid)
+			    (void)ged_draw_view_context_lod_policy_apply_bsg(
+				    dgcdp.view_ctx, &lod_policy_cached);
 
 		bu_free(paths_to_draw, "draw paths");
 	    }
@@ -1501,7 +1493,7 @@ _ged_drawtrees(struct ged *gedp, int argc, const char *argv[], int kind, struct 
 		    if (ged_draw_group_ref_is_null(dgcdp.draw_group_ref))
 			continue;
 
-		    ged_draw_group_ref_set_appearance(gedp,
+		    ged_draw_group_ref_set_appearance_settings(gedp,
 			    dgcdp.draw_group_ref, &dgcdp.vs);
 
 		    av[0] = (char *)argv[i];
@@ -1519,8 +1511,8 @@ _ged_drawtrees(struct ged *gedp, int argc, const char *argv[], int kind, struct 
 		if (dgcdp.draw_edge_uses) {
 		    int handled = ged_diagnostic_line_layer_publish(gedp,
 			    "nmg::_EDGEUSES_", dgcdp.draw_edge_uses_plot);
-		    if (!handled && dgcdp.v) {
-			(void)ged_draw_view_line_layer_builder_replace(dgcdp.v,
+		    if (!handled && dgcdp.view_ctx) {
+			(void)ged_draw_view_context_line_layer_builder_replace(dgcdp.view_ctx,
 				"nmg::_EDGEUSES_", 0, dgcdp.draw_edge_uses_plot);
 		    }
 		    bg_line_layer_builder_free(dgcdp.draw_edge_uses_plot);

@@ -35,7 +35,6 @@
 #include "bu/vls.h"
 #include "bg/polygon_types.h"
 #include "rt/geom.h"
-#include "rt/view_legacy_bsg.h"
 
 #include "../ged_private.h"
 #include "./ged_view.h"
@@ -47,7 +46,7 @@ _poly_ref(struct _ged_view_info *gd)
     if (!gd)
 	return GED_DRAW_VIEW_POLYGON_REF_NULL;
     if (ged_draw_view_polygon_ref_is_null(gd->polygon_ref))
-	gd->polygon_ref = ged_draw_view_polygon_find_scoped(gd->cv, gd->vobj, gd->local_obj);
+	gd->polygon_ref = ged_draw_view_context_polygon_find_scoped(gd->cv, gd->vobj, gd->local_obj);
     return gd->polygon_ref;
 }
 
@@ -66,13 +65,13 @@ _poly_exists(struct _ged_view_info *gd)
 static void
 _poly_update(struct _ged_view_info *gd, int op)
 {
-    (void)ged_draw_view_polygon_update(_poly_ref(gd), gd ? gd->cv : NULL, op);
+    (void)ged_draw_view_context_polygon_update(_poly_ref(gd), gd ? gd->cv : NULL, op);
 }
 
 static int
 _poly_update_screen(struct _ged_view_info *gd, int x, int y, int op)
 {
-    return ged_draw_view_polygon_update_screen_pt(_poly_ref(gd), gd ? gd->cv : NULL, x, y, op) ? BRLCAD_OK : BRLCAD_ERROR;
+    return ged_draw_view_context_polygon_update_screen_pt(_poly_ref(gd), gd ? gd->cv : NULL, x, y, op) ? BRLCAD_OK : BRLCAD_ERROR;
 }
 
 int
@@ -110,7 +109,7 @@ _poly_cmd_create(void *bs, int argc, const char **argv)
     }
 
     point_t sp;
-    if (!rt_view_screen_point_from_bsg(sp, gd->cv, (fastf_t)x, (fastf_t)y)) {
+    if (!ged_view_context_screen_point(sp, gd->cv, (fastf_t)x, (fastf_t)y)) {
 	bu_vls_printf(gedp->ged_result_str, "Failed to calculate screen point\n");
 	return BRLCAD_ERROR;
     }
@@ -131,7 +130,7 @@ _poly_cmd_create(void *bs, int argc, const char **argv)
 	}
     }
 
-    gd->polygon_ref = ged_draw_view_polygon_create(gd->cv, gd->vobj, gd->local_obj, type, sp);
+    gd->polygon_ref = ged_draw_view_context_polygon_create(gd->cv, gd->vobj, gd->local_obj, type, sp);
     if (ged_draw_view_polygon_ref_is_null(gd->polygon_ref)) {
 	bu_vls_printf(gedp->ged_result_str, "Failed to create %s\n", gd->vobj);
 	return BRLCAD_ERROR;
@@ -475,7 +474,7 @@ _poly_cmd_area(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
     fastf_t area = 0.0;
-    if (!ged_draw_view_polygon_area(_poly_ref(gd), gd->cv, &area)) {
+    if (!ged_draw_view_context_polygon_area(_poly_ref(gd), gd->cv, &area)) {
 	bu_vls_printf(gedp->ged_result_str, "Specified object is not a view polygon.\n");
 	return BRLCAD_ERROR;
     }
@@ -513,8 +512,7 @@ _poly_cmd_overlap(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *v = gd->cv;
-    ged_draw_view_polygon_ref other_ref = ged_draw_view_polygon_find(v, argv[0]);
+    ged_draw_view_polygon_ref other_ref = ged_draw_view_context_polygon_find(gd->cv, argv[0]);
     if (ged_draw_view_polygon_ref_is_null(other_ref)) {
 	bu_vls_printf(gedp->ged_result_str, "View object %s does not exist\n", argv[0]);
 	return BRLCAD_ERROR;
@@ -523,7 +521,7 @@ _poly_cmd_overlap(void *bs, int argc, const char **argv)
     // Have two polygons.  Check for overlaps, using the origin plane of the
     // obj1 polygon.
     int ovlp = 0;
-    if (!ged_draw_view_polygon_overlap(_poly_ref(gd), v, argv[0],
+    if (!ged_draw_view_context_polygon_overlap(_poly_ref(gd), gd->cv, argv[0],
 	    &wdbp->wdb_tol, &ovlp)) {
 	bu_vls_printf(gedp->ged_result_str, "%s is not a view polygon.\n", argv[0]);
 	return BRLCAD_ERROR;
@@ -570,7 +568,7 @@ _poly_cmd_import(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    gd->polygon_ref = ged_draw_view_polygon_import_sketch(gd->vobj, gedp->dbip, dp, gd->cv, gd->local_obj);
+    gd->polygon_ref = ged_draw_view_context_polygon_import_sketch(gd->vobj, gedp->dbip, dp, gd->cv, gd->local_obj);
     if (ged_draw_view_polygon_ref_is_null(gd->polygon_ref)) {
 	bu_vls_printf(gedp->ged_result_str, "Failed to create %s\n", gd->vobj);
 	return BRLCAD_ERROR;
@@ -773,8 +771,7 @@ _poly_cmd_csg(void *bs, int argc, const char **argv)
 	    break;
     }
 
-    struct bsg_view *v = gd->cv;
-    ged_draw_view_polygon_ref other_ref = ged_draw_view_polygon_find(v, argv[1]);
+    ged_draw_view_polygon_ref other_ref = ged_draw_view_context_polygon_find(gd->cv, argv[1]);
     if (ged_draw_view_polygon_ref_is_null(other_ref)) {
 	bu_vls_printf(gedp->ged_result_str, "View object %s does not exist\n", argv[1]);
 	return BRLCAD_ERROR;
@@ -782,7 +779,7 @@ _poly_cmd_csg(void *bs, int argc, const char **argv)
 
     ged_draw_view_polygon_ref target_ref = _poly_ref(gd);
     if (ged_draw_view_polygon_ref_is_null(target_ref) ||
-	    !ged_draw_view_polygon_csg(target_ref, v, argv[1], op))
+	    !ged_draw_view_context_polygon_csg(target_ref, gd->cv, argv[1], op))
 	return BRLCAD_ERROR;
 
     return BRLCAD_OK;

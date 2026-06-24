@@ -27,7 +27,8 @@
  *   2. Run a screen-center point pick; collect rt_view_pick_result_bsg.
  *   3. Apply the pick result through the RT legacy selection adapter.
  *   4. Verify selected path callback data and selection count.
- *   5. rt_view_selection_clear_bsg; verify count drops to 0.
+ *   5. Clear selection through the opaque RT context adapter; verify count
+ *      drops to 0.
  *
  * No display hardware required (headless GED).
  *
@@ -124,7 +125,7 @@ main(int ac, char *av[])
     ged_exec(gedp, 2, draw_av);
 
     /* Obtain the default view. */
-    struct bsg_view *v = gedp->ged_gvp;
+    void *v = ged_view_active_ctx(gedp);
     ASSERT(v != NULL);
 
     if (!v) {
@@ -135,33 +136,34 @@ main(int ac, char *av[])
     /* ------------------------------------------------------------------
      * Test 1: selection lifecycle round-trip
      * ------------------------------------------------------------------ */
-    ASSERT(rt_view_selection_available_bsg(v));
-    if (!rt_view_selection_available_bsg(v)) {
+    ASSERT(rt_view_context_selection_available_bsg(v));
+    if (!rt_view_context_selection_available_bsg(v)) {
 	bu_log("SKIP: view has no gv_selected - selection not wired\n");
 	ged_close(gedp);
 	return 0;
     }
 
-    ASSERT(rt_view_selection_count_bsg(v) == 0);
+    ASSERT(rt_view_context_selection_count_bsg(v) == 0);
 
     /* ------------------------------------------------------------------
      * Test 2: pick then add to selection
      * ------------------------------------------------------------------ */
-    int cx = rt_view_width_from_bsg(v) / 2;
-    int cy = rt_view_height_from_bsg(v) / 2;
-    struct rt_view_pick_result_bsg *pr = rt_view_pick_point_bsg(v, cx, cy, 0);
+    int cx = rt_view_context_width_from_bsg(v) / 2;
+    int cy = rt_view_context_height_from_bsg(v) / 2;
+    struct rt_view_pick_result_bsg *pr =
+	rt_view_context_pick_point_bsg(v, cx, cy, 0);
     if (pr && rt_view_pick_result_count_bsg(pr) > 0) {
 	struct selected_path_state path_state = {0, std::string()};
-	ASSERT(rt_view_selection_set_pick_result_ref_bsg(v, pr,
+	ASSERT(rt_view_context_selection_set_pick_result_ref_bsg(v, pr,
 		    selection_path_callback, &path_state));
 	ASSERT(path_state.count > 0);
 	ASSERT(!path_state.last_path.empty());
-	ASSERT(rt_view_selection_count_bsg(v) == 1);
+	ASSERT(rt_view_context_selection_count_bsg(v) == 1);
     }
 
     /* Clear and verify */
-    ASSERT(rt_view_selection_clear_bsg(v));
-    ASSERT(rt_view_selection_count_bsg(v) == 0);
+    ASSERT(rt_view_context_selection_clear_bsg(v));
+    ASSERT(rt_view_context_selection_count_bsg(v) == 0);
 
     rt_view_pick_result_free_bsg(pr);
 

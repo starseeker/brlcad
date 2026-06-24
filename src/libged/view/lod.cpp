@@ -34,9 +34,9 @@
 #include "bu/str.h"
 #include "bu/time.h"
 #include "bu/vls.h"
+#include "ged/bsg_ged_draw.h"
 #include "rt/view.h"
 
-#include "../bsg_ged_draw_view_private.h"
 #include "../ged_private.h"
 #include "./ged_view.h"
 
@@ -51,7 +51,7 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
     }
 
     struct ged *gedp = gd->gedp;
-    struct bsg_view *gvp;
+    void *view_ctx;
     int print_help = 0;
     static const char *usage = "view lod [csg|mesh] [0|1]\n"
 	"view lod cache [clear [all_files] | exists] \n"
@@ -85,19 +85,19 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    gvp = gd->cv;
-    if (gvp == NULL) {
+    view_ctx = gd->cv;
+    if (view_ctx == NULL) {
 	bu_vls_printf(gedp->ged_result_str, "no current view defined\n");
 	return BRLCAD_ERROR;
     }
 
     ged_draw_view_lod_policy lod_policy;
-    if (!ged_draw_view_lod_policy_from_bsg(&lod_policy, gvp)) {
+    if (!ged_draw_view_context_lod_policy_from_bsg(&lod_policy, view_ctx)) {
 	bu_vls_printf(gedp->ged_result_str, "unable to read LoD policy\n");
 	return BRLCAD_ERROR;
     }
     auto commit_lod_policy = [&]() {
-	ged_draw_view_lod_policy_apply_bsg(gvp, &lod_policy);
+	ged_draw_view_context_lod_policy_apply_bsg(view_ctx, &lod_policy);
 	int rac = 1;
 	const char *rav[1] = {"redraw"};
 	ged_exec_redraw(gedp, rac, (const char **)rav);

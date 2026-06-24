@@ -29,8 +29,6 @@
 #include <ctype.h>
 #include <string.h>
 
-#include "rt/view_legacy_bsg.h"
-
 #include "../ged_private.h"
 
 
@@ -49,9 +47,9 @@ ged_keypoint_core(struct ged *gedp, int argc, const char *argv[])
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     /* get keypoint */
-    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+    void *view_ctx = ged_view_active_ctx(gedp);
     if (argc == 1) {
-	rt_view_keypoint_from_bsg(keypoint, v);
+	ged_view_context_keypoint_get(keypoint, view_ctx);
 	VSCALE(keypoint, keypoint, gedp->dbip->dbi_base2local);
 	bn_encode_vect(gedp->ged_result_str, keypoint, 1);
 
@@ -90,7 +88,7 @@ ged_keypoint_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     VSCALE(keypoint, keypoint, gedp->dbip->dbi_local2base);
-    rt_view_keypoint_set_bsg(v, keypoint);
+    ged_view_context_keypoint_set(view_ctx, keypoint);
 
     return BRLCAD_OK;
 }

@@ -40,11 +40,11 @@
 #include "../view/view.h"
 
 int
-to_is_viewable(struct bsg_view *gdvp)
+to_is_viewable(void *view_ctx)
 {
     int result_int;
 
-    struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(gdvp);
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(view_ctx);
     const struct bu_vls *pathvls = dmp ? dm_get_pathname(dmp) : NULL;
     if (!pathvls || !bu_vls_strlen(pathvls)) {
 	return 0;

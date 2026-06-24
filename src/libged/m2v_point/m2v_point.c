@@ -28,8 +28,6 @@
 #include <stdlib.h>
 #include <ctype.h>
 
-#include "rt/view_legacy_bsg.h"
-
 #include "../ged_private.h"
 
 
@@ -45,7 +43,7 @@ ged_m2v_point_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
-    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+    void *view_ctx = ged_view_active_ctx(gedp);
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -88,7 +86,7 @@ ged_m2v_point_core(struct ged *gedp, int argc, const char *argv[])
 
     /* Convert the incoming model point to a view point */
     mat_t model2view;
-    rt_view_model2view_from_bsg(model2view, v);
+    ged_view_context_model2view_get(model2view, view_ctx);
     MAT4X3PNT(view, model2view, model);
     bn_encode_vect(gedp->ged_result_str, view, 1);
 

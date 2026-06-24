@@ -25,7 +25,7 @@
 
 
 #include "vmath.h"
-#include "rt/view_legacy_bsg.h"
+#include "ged/view.h"
 
 #include "./sedit.h"
 #include "./mged.h"
@@ -371,8 +371,9 @@ void
 set_absolute_view_tran(struct mged_state *s)
 {
     mat_t model2view;
+    void *view_ctx = view_state->vs_gvp;
 
-    rt_view_model2view_from_bsg(model2view, view_state->vs_gvp);
+    ged_view_context_model2view_get(model2view, view_ctx);
 
     /* calculate absolute_tran */
     MAT4X3PNT(view_state->k.tra_v_abs, model2view, view_state->vs_orig_pos);
@@ -388,9 +389,10 @@ set_absolute_model_tran(struct mged_state *s)
     point_t diff;
     mat_t view_center;
     fastf_t view_scale;
+    void *view_ctx = view_state->vs_gvp;
 
-    rt_view_center_from_bsg(view_center, view_state->vs_gvp);
-    view_scale = rt_view_scale_from_bsg(view_state->vs_gvp);
+    ged_view_context_center_get(view_center, view_ctx);
+    view_scale = ged_view_context_scale_get(view_ctx);
 
     /* calculate absolute_model_tran */
     MAT_DELTAS_GET_NEG(new_pos, view_center);
@@ -447,7 +449,8 @@ set_perspective(const struct bu_structparse *sdp,
 	mged_variables->mv_perspective_mode = 0;
 
     /* keep view feature in sync */
-    rt_view_perspective_set_bsg(view_state->vs_gvp, mged_variables->mv_perspective);
+    void *view_ctx = view_state->vs_gvp;
+    ged_view_context_perspective_set(view_ctx, mged_variables->mv_perspective);
 
     /* keep display manager in sync */
     dm_set_perspective(DMP, mged_variables->mv_perspective_mode);
@@ -469,7 +472,8 @@ establish_perspective(const struct bu_structparse *sdp,
 	perspective_table[perspective_angle] : -1;
 
     /* keep view feature in sync */
-    rt_view_perspective_set_bsg(view_state->vs_gvp, mged_variables->mv_perspective);
+    void *view_ctx = view_state->vs_gvp;
+    ged_view_context_perspective_set(view_ctx, mged_variables->mv_perspective);
 
     /* keep display manager in sync */
     dm_set_perspective(DMP, mged_variables->mv_perspective_mode);
@@ -511,7 +515,8 @@ toggle_perspective(const struct bu_structparse *sdp,
     mged_variables->mv_perspective = perspective_table[perspective_angle];
 
     /* keep view feature in sync */
-    rt_view_perspective_set_bsg(view_state->vs_gvp, mged_variables->mv_perspective);
+    void *view_ctx = view_state->vs_gvp;
+    ged_view_context_perspective_set(view_ctx, mged_variables->mv_perspective);
 
     /* keep display manager in sync */
     dm_set_perspective(DMP, mged_variables->mv_perspective_mode);
@@ -529,7 +534,8 @@ set_coords(const struct bu_structparse *UNUSED(sdp),
 {
     struct mged_state *s = (struct mged_state *)data;
     MGED_CK_STATE(s);
-    rt_view_coord_set_bsg(view_state->vs_gvp, mged_variables->mv_coords);
+    void *view_ctx = view_state->vs_gvp;
+    ged_view_context_coord_set(view_ctx, mged_variables->mv_coords);
 }
 
 
@@ -542,7 +548,8 @@ set_rotate_about(const struct bu_structparse *UNUSED(sdp),
 {
     struct mged_state *s = (struct mged_state *)data;
     MGED_CK_STATE(s);
-    rt_view_rotate_about_set_bsg(view_state->vs_gvp, mged_variables->mv_rotate_about);
+    void *view_ctx = view_state->vs_gvp;
+    ged_view_context_rotate_about_set(view_ctx, mged_variables->mv_rotate_about);
 }
 
 

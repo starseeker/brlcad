@@ -27,7 +27,7 @@
 #include "bu/log.h"
 #include "bu/getopt.h"
 
-#include "rt/view_legacy_bsg.h"
+#include "rt/view.h"
 
 #include "../ged_private.h"
 #include "./check_private.h"
@@ -647,13 +647,13 @@ int ged_check_core(struct ged *gedp, int argc, const char *argv[])
 	    struct rt_view_info view_info = RT_VIEW_INFO_INIT;
 	    point_t eye_model;
 	    quat_t quat;
-	    struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
-	    if (!view) {
+	    void *view_ctx = ged_view_active_ctx(gedp);
+	    if (!view_ctx) {
 		error = 1;
 		goto freemem;
 	    }
-	    rt_view_info_from_bsg(&view_info, view);
-	    rt_view_orientation_quat_from_bsg(quat, view);
+	    ged_view_context_info_get(&view_info, view_ctx);
+	    ged_view_context_orientation_quat_get(quat, view_ctx);
 	    _ged_rt_set_eye_model(gedp, eye_model);
 	    analyze_set_view_information(state, view_info.size, &eye_model, &quat);
 	}

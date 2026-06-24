@@ -29,8 +29,6 @@
 #include <ctype.h>
 #include <string.h>
 
-#include "rt/view_legacy_bsg.h"
-
 #include "../ged_private.h"
 
 
@@ -43,8 +41,8 @@ ged_arot_core(struct ged *gedp, int argc, const char *argv[])
     if ((ret = ged_arot_args(gedp, argc, argv, rmat)) != BRLCAD_OK)
 	return ret;
 
-    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
-    return _ged_do_rot(gedp, rt_view_coord_from_bsg(v), rmat, NULL);
+    void *view_ctx = ged_view_active_ctx(gedp);
+    return _ged_do_rot(gedp, ged_view_context_coord_get(view_ctx), rmat, NULL);
 }
 
 

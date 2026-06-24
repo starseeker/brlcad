@@ -30,7 +30,6 @@
 #include <string.h>
 
 #include "rt/view.h"
-#include "rt/view_legacy_bsg.h"
 
 #include "../ged_private.h"
 
@@ -54,15 +53,15 @@ ged_scale_core(struct ged *gedp, int argc, const char *argv[])
     if (sf1 <= SMALL_FASTF || INFINITY < sf1)
 	return BRLCAD_OK;
 
-    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+    void *view_ctx = ged_view_active_ctx(gedp);
 
     /* scale the view */
-    fastf_t view_scale = rt_view_scale_from_bsg(v) * sf1;
+    fastf_t view_scale = ged_view_context_scale_get(view_ctx) * sf1;
     if (view_scale < RT_VIEW_MIN_SIZE)
 	view_scale = RT_VIEW_MIN_SIZE;
 
-    rt_view_scale_set_bsg(v, view_scale);
-    rt_view_update_bsg(v);
+    ged_view_context_scale_set(view_ctx, view_scale);
+    ged_view_context_update(view_ctx);
 
     return BRLCAD_OK;
 }

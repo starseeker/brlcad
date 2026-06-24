@@ -36,7 +36,7 @@ extern "C" {
 #include "wdb.h"
 }
 #include "bg/line_layer.h"
-#include "../bsg_ged_draw_view_private.h"
+#include "ged/bsg_ged_draw.h"
 #include "ged/event_txn.h"
 #include "./ged_lint.h"
 
@@ -93,8 +93,8 @@ lint_data::plot_publish(const char *name)
     if (!do_plot || !gedp || !name)
 	return;
 
-    struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
-    if (!view)
+    void *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx)
 	return;
 
     struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
@@ -104,10 +104,10 @@ lint_data::plot_publish(const char *name)
     style.color_valid = 1;
     VSET(style.color, rgb[0], rgb[1], rgb[2]);
     if (plot_point_count)
-	(void)ged_draw_view_lines_replace(view, name, 0,
+	(void)ged_draw_view_context_lines_replace(view_ctx, name, 0,
 		(const point_t *)plot_points, plot_cmds, plot_point_count, &style);
     else
-	(void)ged_draw_view_feature_remove(view, name);
+	(void)ged_draw_view_context_feature_remove(view_ctx, name);
 }
 
 std::string

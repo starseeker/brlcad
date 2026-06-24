@@ -59,6 +59,94 @@ rt_view_info_sanitize(struct rt_view_info *info)
 	info->lod.point_scale = 1.0;
 }
 
+int
+rt_view_knobs_state_reset(struct rt_view_knobs *knobs, int category)
+{
+    if (!knobs)
+	return 0;
+
+    if (!category || category == RT_VIEW_KNOBS_RATE) {
+	knobs->rot_m_flag = 0;
+	VSETALL(knobs->rot_m, 0.0);
+	knobs->rot_o_flag = 0;
+	VSETALL(knobs->rot_o, 0.0);
+	knobs->rot_v_flag = 0;
+	VSETALL(knobs->rot_v, 0.0);
+	knobs->tra_m_flag = 0;
+	VSETALL(knobs->tra_m, 0.0);
+	knobs->tra_v_flag = 0;
+	VSETALL(knobs->tra_v, 0.0);
+	knobs->sca_flag = 0;
+	knobs->sca = 0.0;
+    }
+
+    if (!category || category == RT_VIEW_KNOBS_ABS) {
+	VSETALL(knobs->rot_m_abs, 0.0);
+	VSETALL(knobs->rot_m_abs_last, 0.0);
+	VSETALL(knobs->rot_o_abs, 0.0);
+	VSETALL(knobs->rot_o_abs_last, 0.0);
+	VSETALL(knobs->rot_v_abs, 0.0);
+	VSETALL(knobs->rot_v_abs_last, 0.0);
+	VSETALL(knobs->tra_m_abs, 0.0);
+	VSETALL(knobs->tra_m_abs_last, 0.0);
+	VSETALL(knobs->tra_v_abs, 0.0);
+	VSETALL(knobs->tra_v_abs_last, 0.0);
+	knobs->sca_abs = 0.0;
+    }
+
+    return 1;
+}
+
+unsigned long long
+rt_view_knobs_state_hash(const struct rt_view_knobs *knobs,
+			 struct bu_data_hash_state *state)
+{
+    if (!knobs)
+	return 0ULL;
+
+    int own_state = 0;
+    if (!state) {
+	state = bu_data_hash_create();
+	if (!state)
+	    return 0ULL;
+	own_state = 1;
+    }
+
+    bu_data_hash_update(state, &knobs->rot_m, sizeof(knobs->rot_m));
+    bu_data_hash_update(state, &knobs->rot_m_flag, sizeof(knobs->rot_m_flag));
+    bu_data_hash_update(state, &knobs->origin_m, sizeof(knobs->origin_m));
+    bu_data_hash_update(state, &knobs->rot_o, sizeof(knobs->rot_o));
+    bu_data_hash_update(state, &knobs->rot_o_flag, sizeof(knobs->rot_o_flag));
+    bu_data_hash_update(state, &knobs->origin_o, sizeof(knobs->origin_o));
+    bu_data_hash_update(state, &knobs->rot_v, sizeof(knobs->rot_v));
+    bu_data_hash_update(state, &knobs->rot_v_flag, sizeof(knobs->rot_v_flag));
+    bu_data_hash_update(state, &knobs->origin_v, sizeof(knobs->origin_v));
+    bu_data_hash_update(state, &knobs->sca, sizeof(knobs->sca));
+    bu_data_hash_update(state, &knobs->sca_flag, sizeof(knobs->sca_flag));
+    bu_data_hash_update(state, &knobs->tra_m, sizeof(knobs->tra_m));
+    bu_data_hash_update(state, &knobs->tra_m_flag, sizeof(knobs->tra_m_flag));
+    bu_data_hash_update(state, &knobs->tra_v, sizeof(knobs->tra_v));
+    bu_data_hash_update(state, &knobs->tra_v_flag, sizeof(knobs->tra_v_flag));
+    bu_data_hash_update(state, &knobs->rot_m_abs, sizeof(knobs->rot_m_abs));
+    bu_data_hash_update(state, &knobs->rot_m_abs_last, sizeof(knobs->rot_m_abs_last));
+    bu_data_hash_update(state, &knobs->rot_o_abs, sizeof(knobs->rot_o_abs));
+    bu_data_hash_update(state, &knobs->rot_o_abs_last, sizeof(knobs->rot_o_abs_last));
+    bu_data_hash_update(state, &knobs->rot_v_abs, sizeof(knobs->rot_v_abs));
+    bu_data_hash_update(state, &knobs->rot_v_abs_last, sizeof(knobs->rot_v_abs_last));
+    bu_data_hash_update(state, &knobs->sca_abs, sizeof(knobs->sca_abs));
+    bu_data_hash_update(state, &knobs->tra_m_abs, sizeof(knobs->tra_m_abs));
+    bu_data_hash_update(state, &knobs->tra_m_abs_last, sizeof(knobs->tra_m_abs_last));
+    bu_data_hash_update(state, &knobs->tra_v_abs, sizeof(knobs->tra_v_abs));
+    bu_data_hash_update(state, &knobs->tra_v_abs_last, sizeof(knobs->tra_v_abs_last));
+
+    if (!own_state)
+	return 0ULL;
+
+    unsigned long long hv = bu_data_hash_val(state);
+    bu_data_hash_destroy(state);
+    return hv;
+}
+
 void
 rt_view_lod_policy_init(struct rt_view_lod_policy *policy)
 {

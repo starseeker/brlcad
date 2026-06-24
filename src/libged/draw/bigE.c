@@ -41,7 +41,6 @@
 #include "rt/func.h"
 
 #include "bg/line_layer.h"
-#include "bsg/draw_intent.h"
 #include "../bsg_ged_draw_private.h"
 #include "../ged_private.h"
 #include "./ged_draw.h"
@@ -2044,7 +2043,6 @@ ged_E_core(struct ged *gedp, int argc, const char *argv[])
     int ac = 1;
     char *av[2];
     struct _ged_client_data *dgcdp;
-    struct bsg_view *view;
     static const char *usage = "[-C#/#/# -s] objects(s)";
 
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
@@ -2063,13 +2061,12 @@ ged_E_core(struct ged *gedp, int argc, const char *argv[])
     /* XXX: where is this released? */
     BU_ALLOC(dgcdp, struct _ged_client_data);
     dgcdp->gedp = gedp;
-    view = (struct bsg_view *)ged_view_active_ctx(gedp);
-    dgcdp->v = view;
+    dgcdp->view_ctx = ged_view_active_ctx(gedp);
     dgcdp->wdbp = wdb_dbopen(dgcdp->gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
     dgcdp->do_polysolids = 0;
     dgcdp->vs.color_override = 0;
     dgcdp->vs.transparency = 0;
-    dgcdp->vs.draw_mode = BSG_DRAW_MODE_EVAL_WIRE;
+    dgcdp->vs.draw_mode = GED_DRAW_MODE_EVAL_WIRE;
 
     /* Parse options. */
     bu_optind = 1;          /* re-init bu_getopt() */
@@ -2127,9 +2124,9 @@ ged_E_core(struct ged *gedp, int argc, const char *argv[])
 
 	/* bigE is the evaluated-wireframe draw mode. */
 	if (!ged_draw_group_ref_is_null(dgcdp->draw_group_ref)) {
-	    struct bsg_appearance_settings settings = dgcdp->vs;
-	    settings.draw_mode = BSG_DRAW_MODE_EVAL_WIRE;
-	    ged_draw_group_ref_set_appearance(gedp, dgcdp->draw_group_ref,
+	    struct ged_draw_appearance_settings settings = dgcdp->vs;
+	    settings.draw_mode = GED_DRAW_MODE_EVAL_WIRE;
+	    ged_draw_group_ref_set_appearance_settings(gedp, dgcdp->draw_group_ref,
 		    &settings);
 	}
 

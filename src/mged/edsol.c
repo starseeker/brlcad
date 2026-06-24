@@ -39,9 +39,6 @@
 #include "wdb.h"
 #include "rt/db4.h"
 #include "ged/view.h"
-#include "rt/view_legacy_bsg.h"
-#include "bsg/appearance.h"
-#include "bsg/draw_source.h"
 
 #include "./mged.h"
 #include "./sedit.h"
@@ -3645,7 +3642,7 @@ sedit(struct mged_state *s)
 			{
 			    mat_t view2model;
 			    VSET(work, 0.0, 0.0, 0.0);
-			    rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+			    ged_view_context_view2model_get(view2model, view_state->vs_gvp);
 			    MAT4X3PNT(rot_point, view2model, work);
 			}
 			break;
@@ -3653,7 +3650,7 @@ sedit(struct mged_state *s)
 			{
 			    mat_t view2model;
 			    VSET(work, 0.0, 0.0, 1.0);
-			    rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+			    ged_view_context_view2model_get(view2model, view_state->vs_gvp);
 			    MAT4X3PNT(rot_point, view2model, work);
 			}
 			break;
@@ -4009,7 +4006,7 @@ sedit(struct mged_state *s)
 
 			/* Get view direction vector */
 			VSET(view_z_dir, 0.0, 0.0, 1.0);
-			rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+			ged_view_context_view2model_get(view2model, view_state->vs_gvp);
 			MAT4X3VEC(view_dir, view2model, view_z_dir);
 
 			/* intersect line through new_pt with plane of loop */
@@ -4164,7 +4161,7 @@ sedit(struct mged_state *s)
 
 			/* Get view direction vector */
 			VSET(view_z_dir, 0.0, 0.0, 1.0);
-			rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+			ged_view_context_view2model_get(view2model, view_state->vs_gvp);
 			MAT4X3VEC(view_dir, view2model, view_z_dir);
 
 			/* intersect line through new_pt with plane of loop */
@@ -4472,7 +4469,7 @@ sedit(struct mged_state *s)
 
 		/* Get view direction vector */
 		VSET(z_dir, 0.0, 0.0, 1.0);
-		rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+		ged_view_context_view2model_get(view2model, view_state->vs_gvp);
 		MAT4X3VEC(view_dir, view2model, z_dir);
 		find_ars_nearest_pnt(&es_ars_crv, &es_ars_col, ars, pick_pt, view_dir);
 		VMOVE(es_pt, &ars->curves[es_ars_crv][es_ars_col*3]);
@@ -4796,7 +4793,7 @@ sedit(struct mged_state *s)
 		     * that passes through ARS point being moved
 		    */
 		    VSET(view_dir, 0.0, 0.0, 1.0);
-		    rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+		    ged_view_context_view2model_get(view2model, view_state->vs_gvp);
 		    MAT4X3VEC(view_pl, view2model, view_dir);
 		    VUNITIZE(view_pl);
 		    view_pl[W] = VDOT(view_pl, &ars->curves[es_ars_crv][es_ars_col*3]);
@@ -4851,7 +4848,7 @@ sedit(struct mged_state *s)
 		     * that passes through ARS point being moved
 		    */
 		    VSET(view_dir, 0.0, 0.0, 1.0);
-		    rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+		    ged_view_context_view2model_get(view2model, view_state->vs_gvp);
 		    MAT4X3VEC(view_pl, view2model, view_dir);
 		    VUNITIZE(view_pl);
 		    view_pl[W] = VDOT(view_pl, &ars->curves[es_ars_crv][es_ars_col*3]);
@@ -4905,7 +4902,7 @@ sedit(struct mged_state *s)
 		     * that passes through ARS point being moved
 		    */
 		    VSET(view_dir, 0.0, 0.0, 1.0);
-		    rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+		    ged_view_context_view2model_get(view2model, view_state->vs_gvp);
 		    MAT4X3VEC(view_pl, view2model, view_dir);
 		    VUNITIZE(view_pl);
 		    view_pl[W] = VDOT(view_pl, &ars->curves[es_ars_crv][es_ars_col*3]);
@@ -5099,7 +5096,7 @@ sedit(struct mged_state *s)
 
 		/* get a direction vector in model space corresponding to z-direction in view */
 		VSET(work, 0.0, 0.0, 1.0);
-		rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+		ged_view_context_view2model_get(view2model, view_state->vs_gvp);
 		MAT4X3VEC(dir, view2model, work);
 
 		for (BU_LIST_FOR(ps, wdb_metaball_pnt, &metaball->metaball_ctrl_head)) {
@@ -5223,15 +5220,15 @@ update_edit_absolute_tran(struct mged_state *s, vect_t view_pos)
     vect_t diff;
     mat_t view2model;
     mat_t model2view;
-    fastf_t inv_Viewscale = 1/rt_view_scale_from_bsg(view_state->vs_gvp);
+    fastf_t inv_Viewscale = 1/ged_view_context_scale_get(view_state->vs_gvp);
 
-    rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+    ged_view_context_view2model_get(view2model, view_state->vs_gvp);
     MAT4X3PNT(model_pos, view2model, view_pos);
     VSUB2(diff, model_pos, MEDIT(s)->e_axes_pos);
     VSCALE(MEDIT(s)->k.tra_m_abs, diff, inv_Viewscale);
     VMOVE(MEDIT(s)->k.tra_m_abs_last, MEDIT(s)->k.tra_m_abs);
 
-    rt_view_model2view_from_bsg(model2view, view_state->vs_gvp);
+    ged_view_context_model2view_get(model2view, view_state->vs_gvp);
     MAT4X3PNT(ea_view_pos, model2view, MEDIT(s)->e_axes_pos);
     VSUB2(MEDIT(s)->k.tra_v_abs, view_pos, ea_view_pos);
     VMOVE(MEDIT(s)->k.tra_v_abs_last, MEDIT(s)->k.tra_v_abs);
@@ -5243,8 +5240,8 @@ edsol_mouse_project_model_from_view_xy(struct mged_state *s, point_t model_pt, p
     mat_t model2view;
     mat_t view2model;
 
-    rt_view_model2view_from_bsg(model2view, view_state->vs_gvp);
-    rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+    ged_view_context_model2view_get(model2view, view_state->vs_gvp);
+    ged_view_context_view2model_get(view2model, view_state->vs_gvp);
     MAT4X3PNT(view_pt, model2view, src_model_pt);
     view_pt[X] = mousevec[X];
     view_pt[Y] = mousevec[Y];
@@ -5428,7 +5425,7 @@ sedit_mouse(struct mged_state *s, const vect_t mousevec)
 
 		RT_BOT_CK_MAGIC(bot);
 
-		rt_view_model2view_from_bsg(model2view, view_state->vs_gvp);
+		ged_view_context_model2view_get(model2view, view_state->vs_gvp);
 		MAT4X3PNT(pos_view, model2view, MEDIT(s)->curr_e_axes_pos);
 		pos_view[X] = mousevec[X];
 		pos_view[Y] = mousevec[Y];
@@ -5459,7 +5456,7 @@ sedit_mouse(struct mged_state *s, const vect_t mousevec)
 
 		RT_BOT_CK_MAGIC(bot);
 
-		rt_view_model2view_from_bsg(model2view, view_state->vs_gvp);
+		ged_view_context_model2view_get(model2view, view_state->vs_gvp);
 		MAT4X3PNT(pos_view, model2view, MEDIT(s)->curr_e_axes_pos);
 		pos_view[X] = mousevec[X];
 		pos_view[Y] = mousevec[Y];
@@ -5494,7 +5491,7 @@ sedit_mouse(struct mged_state *s, const vect_t mousevec)
 
 		RT_BOT_CK_MAGIC(bot);
 
-		rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+		ged_view_context_view2model_get(view2model, view_state->vs_gvp);
 		VSET(tmp, mousevec[X], mousevec[Y], 0.0);
 		MAT4X3PNT(start_pt, view2model, tmp);
 		VSET(tmp, 0, 0, 1);
@@ -5560,7 +5557,7 @@ sedit_mouse(struct mged_state *s, const vect_t mousevec)
 		tmp_tol.perp = 0.0;
 		tmp_tol.para = 1 - tmp_tol.perp;
 
-		rt_view_model2view_from_bsg(model2view, view_state->vs_gvp);
+		ged_view_context_model2view_get(model2view, view_state->vs_gvp);
 		MAT4X3PNT(pos_view, model2view, MEDIT(s)->curr_e_axes_pos);
 		pos_view[X] = mousevec[X];
 		pos_view[Y] = mousevec[Y];
@@ -5744,7 +5741,7 @@ objedit_mouse(struct mged_state *s, const vect_t mousevec)
 	if (movedir & UARROW)
 	    pos_view[Y] = mousevec[Y];
 
-	rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+	ged_view_context_view2model_get(view2model, view_state->vs_gvp);
 	MAT4X3PNT(pos_model, view2model, pos_view); /* NOT objview */
 	MAT4X3PNT(tr_temp, MEDIT(s)->model_changes, temp);
 	VSUB2(tr_temp, pos_model, tr_temp);
@@ -6449,7 +6446,7 @@ mged_param(struct mged_state *s, Tcl_Interp *interp, int argc, fastf_t *argvect)
 
     if (SEDIT_TRAN) {
 	vect_t diff;
-	fastf_t inv_Viewscale = 1/rt_view_scale_from_bsg(view_state->vs_gvp);
+	fastf_t inv_Viewscale = 1/ged_view_context_scale_get(view_state->vs_gvp);
 
 	VSUB2(diff, MEDIT(s)->e_para, MEDIT(s)->e_axes_pos);
 	VSCALE(MEDIT(s)->k.tra_m_abs, diff, inv_Viewscale);

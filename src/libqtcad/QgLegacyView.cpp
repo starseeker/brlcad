@@ -26,18 +26,13 @@
 
 #include <new>
 
-#include "bsg/geometry.h"
-#include "bsg/draw_intent.h"
-#include "bsg/node.h"
-#include "bsg/separator.h"
-#include "bsg/view_state.h"
 #include "bu/malloc.h"
 #include "bu/vls.h"
 #include "dm.h"
 #include "ged.h"
 #include "ged/bsg_ged_draw.h"
 #include "rt/edit_legacy_bsg.h"
-#include "QgLegacyViewBsg.h"
+#include "QgLegacyViewContext.h"
 #include "QgLegacyViewDm.h"
 #include "QgLegacyViewSketch.h"
 #include "qtcad/QgLegacyView.h"
@@ -46,11 +41,11 @@ extern "C" {
 #include "rt/view_legacy_bsg.h"
 }
 
-static_assert(QG_LEGACY_VIEW_DRAW_MODE_WIRE == BSG_DRAW_MODE_WIRE,
-	"qtcad draw mode constants must track retained draw modes");
+static_assert(QG_LEGACY_VIEW_DRAW_MODE_WIRE == GED_DRAW_MODE_WIRE,
+	"qtcad draw mode constants must track GED draw modes");
 static_assert(QG_LEGACY_VIEW_DRAW_MODE_SHADED_BOTS ==
-	BSG_DRAW_MODE_SHADED_BOTS,
-	"qtcad draw mode constants must track retained draw modes");
+	GED_DRAW_MODE_SHADED_BOTS,
+	"qtcad draw mode constants must track GED draw modes");
 
 static struct dm *
 qg_legacy_dm_to_dm(qg_legacy_dm *dmp)
@@ -75,16 +70,16 @@ qg_legacy_fb_from_fb(struct fb *ifp)
 {
     return reinterpret_cast<qg_legacy_fb *>(ifp);
 }
-static_assert(QG_LEGACY_VIEW_DRAW_MODE_SHADED == BSG_DRAW_MODE_SHADED,
-	"qtcad draw mode constants must track retained draw modes");
-static_assert(QG_LEGACY_VIEW_DRAW_MODE_EVAL_WIRE == BSG_DRAW_MODE_EVAL_WIRE,
-	"qtcad draw mode constants must track retained draw modes");
+static_assert(QG_LEGACY_VIEW_DRAW_MODE_SHADED == GED_DRAW_MODE_SHADED,
+	"qtcad draw mode constants must track GED draw modes");
+static_assert(QG_LEGACY_VIEW_DRAW_MODE_EVAL_WIRE == GED_DRAW_MODE_EVAL_WIRE,
+	"qtcad draw mode constants must track GED draw modes");
 static_assert(QG_LEGACY_VIEW_DRAW_MODE_HIDDEN_LINE ==
-	BSG_DRAW_MODE_HIDDEN_LINE,
-	"qtcad draw mode constants must track retained draw modes");
+	GED_DRAW_MODE_HIDDEN_LINE,
+	"qtcad draw mode constants must track GED draw modes");
 static_assert(QG_LEGACY_VIEW_DRAW_MODE_EVAL_POINTS ==
-	BSG_DRAW_MODE_EVAL_POINTS,
-	"qtcad draw mode constants must track retained draw modes");
+	GED_DRAW_MODE_EVAL_POINTS,
+	"qtcad draw mode constants must track GED draw modes");
 static_assert((int)QG_LEGACY_VIEW_FEATURE_UNKNOWN ==
 	(int)RT_VIEW_FEATURE_UNKNOWN,
 	"qtcad feature constants must track neutral RT feature constants");
@@ -140,12 +135,11 @@ struct qg_legacy_view_draw_result_storage {
 };
 
 struct qg_legacy_view_sketch_lines {
-    bsg_line_set_ref lines = BSG_LINE_SET_REF_NULL_INIT;
-    bsg_node_ref node = BSG_NODE_REF_NULL_INIT;
+    void *ctx = nullptr;
 };
 
 struct qg_legacy_view_draw_appearance {
-    struct bsg_appearance_settings settings;
+    struct ged_draw_appearance_settings settings;
 };
 
 static_assert(sizeof(qg_legacy_view_draw_transaction) >=
@@ -156,7 +150,7 @@ static_assert(alignof(qg_legacy_view_draw_transaction) >=
 	"qtcad draw transaction opaque storage is under-aligned");
 
 static qg_legacy_view_pick_result *
-qg_pick_result_from_bsg(struct rt_view_pick_result_bsg *result)
+qg_pick_result_from_rt(void *result)
 {
     return reinterpret_cast<qg_legacy_view_pick_result *>(result);
 }
@@ -367,12 +361,11 @@ qg_draw_transaction_from_ged(qg_legacy_view_draw_transaction *qtxn,
     storage->paths = gtxn->paths;
     storage->path_count = gtxn->path_count;
     storage->dfp = gtxn->dfp;
-    storage->view = qg_legacy_view_from_bsg(
-	    static_cast<struct bsg_view *>(gtxn->view));
+    storage->view = qg_legacy_view_from_context(gtxn->view);
     storage->mode = gtxn->mode;
     if (gtxn->appearance) {
-	const struct bsg_appearance_settings *appearance =
-	    (const struct bsg_appearance_settings *)gtxn->appearance;
+	const struct ged_draw_appearance_settings *appearance =
+	    (const struct ged_draw_appearance_settings *)gtxn->appearance;
 	storage->appearance_draw_mode = appearance->draw_mode;
     }
     storage->autoview = gtxn->autoview;
@@ -398,7 +391,7 @@ qg_draw_transaction_to_ged(const qg_legacy_view_draw_transaction *qtxn)
     gtxn.paths = storage->paths;
     gtxn.path_count = storage->path_count;
     gtxn.dfp = storage->dfp;
-    gtxn.view = qg_legacy_view_to_bsg(storage->view);
+    gtxn.view = qg_legacy_view_to_context(storage->view);
     gtxn.mode = storage->mode;
     gtxn.appearance = storage->appearance ? &storage->appearance->settings :
 	nullptr;
@@ -460,51 +453,44 @@ qg_draw_observer_bridge_callback(struct ged *gedp,
     qg_legacy_view_draw_result_free(&qresult);
 }
 
-static struct rt_view_pick_result_bsg *
-qg_pick_result_to_bsg(qg_legacy_view_pick_result *result)
+static void *
+qg_pick_result_to_rt(qg_legacy_view_pick_result *result)
 {
-    return reinterpret_cast<struct rt_view_pick_result_bsg *>(result);
+    return reinterpret_cast<void *>(result);
 }
 
-static const struct rt_view_pick_result_bsg *
-qg_pick_result_const_to_bsg(const qg_legacy_view_pick_result *result)
+static const void *
+qg_pick_result_const_to_rt(const qg_legacy_view_pick_result *result)
 {
-    return reinterpret_cast<const struct rt_view_pick_result_bsg *>(result);
+    return reinterpret_cast<const void *>(result);
 }
 
 qg_legacy_view *
 qg_legacy_view_local_create(const char *name)
 {
-    struct bsg_view *bv = nullptr;
-    BU_GET(bv, struct bsg_view);
-    rt_view_init_bsg(bv, nullptr);
+    void *view_ctx = rt_view_context_create_bsg();
     if (name)
-	bu_vls_sprintf(&bv->gv_name, "%s", name);
-    return qg_legacy_view_from_bsg(bv);
+	rt_view_context_name_set_bsg(view_ctx, name);
+    return qg_legacy_view_from_context(view_ctx);
 }
 
 void
 qg_legacy_view_local_free(qg_legacy_view *view)
 {
-    struct bsg_view *bv = qg_legacy_view_to_bsg(view);
-    if (!bv)
-	return;
-
     /* Canvas-local views may outlive GED scene cleanup in tests and app
      * shutdown; keep the historical qtcad release behavior until the lower
      * retained view source is retired. */
-    BU_PUT(bv, struct bsg_view);
+    rt_view_context_release_storage_bsg(qg_legacy_view_to_context(view));
 }
 
 void
 qg_legacy_view_local_destroy(qg_legacy_view *view)
 {
-    struct bsg_view *bv = qg_legacy_view_to_bsg(view);
-    if (!bv)
+    void *view_ctx = qg_legacy_view_to_context(view);
+    if (!view_ctx)
 	return;
 
-    rt_view_free_bsg(bv);
-    BU_PUT(bv, struct bsg_view);
+    rt_view_context_free_bsg(view_ctx);
 }
 
 struct rt_edit *
@@ -513,10 +499,10 @@ qg_legacy_view_sketch_edit_create(qg_legacy_view *view,
 	struct db_i *dbip,
 	struct bn_tol *tol)
 {
-    struct bsg_view *bv = qg_legacy_view_to_bsg(view);
-    if (!bv || !dfp || !dbip || !tol)
+    void *view_ctx = qg_legacy_view_to_context(view);
+    if (!view_ctx || !dfp || !dbip || !tol)
 	return nullptr;
-    return rt_edit_create_bsg(dfp, dbip, tol, bv);
+    return rt_edit_create_bsg(dfp, dbip, tol, view_ctx);
 }
 
 struct qg_legacy_view_sketch_lines *
@@ -526,23 +512,12 @@ qg_legacy_view_sketch_lines_create(qg_legacy_view *view,
 	unsigned char g,
 	unsigned char b)
 {
-    struct bsg_view *bv = qg_legacy_view_to_bsg(view);
-    if (!bv || !name)
+    void *view_ctx = qg_legacy_view_to_context(view);
+    if (!view_ctx || !name)
 	return nullptr;
 
-    struct qg_legacy_view_sketch_lines *lines =
-	new qg_legacy_view_sketch_lines;
-    lines->lines = bsg_line_set_ref_create(bv, name);
-    lines->node = bsg_line_set_ref_as_node(lines->lines);
-    if (bsg_node_ref_is_null(lines->node))
-	return lines;
-
-    bsg_separator_ref root = bsg_view_scene_separator_ref(bv, 1);
-    bsg_node_ref root_node = bsg_separator_ref_as_node(root);
-    if (!bsg_node_ref_is_null(root_node)) {
-	bsg_node_ref_set_color(lines->node, r, g, b);
-	bsg_separator_ref_append_child(root, lines->node);
-    }
+    struct qg_legacy_view_sketch_lines *lines = new qg_legacy_view_sketch_lines;
+    lines->ctx = rt_view_context_line_set_create_bsg(view_ctx, name, r, g, b);
 
     return lines;
 }
@@ -551,7 +526,7 @@ int
 qg_legacy_view_sketch_lines_is_null(
 	const struct qg_legacy_view_sketch_lines *lines)
 {
-    return (!lines || bsg_node_ref_is_null(lines->node));
+    return (!lines || rt_view_line_set_context_is_null_bsg(lines->ctx));
 }
 
 int
@@ -563,8 +538,8 @@ qg_legacy_view_sketch_lines_set_points(
 {
     if (qg_legacy_view_sketch_lines_is_null(lines))
 	return 0;
-    return bsg_line_set_ref_set_points(lines->lines, points, commands,
-	    point_count);
+    return rt_view_line_set_context_set_points_bsg(lines->ctx, points,
+	    commands, point_count);
 }
 
 void
@@ -573,28 +548,27 @@ qg_legacy_view_sketch_lines_destroy(
 {
     if (!lines)
 	return;
-    if (!bsg_node_ref_is_null(lines->node))
-	bsg_node_ref_destroy(lines->node);
+    rt_view_line_set_context_destroy_bsg(lines->ctx);
     delete lines;
 }
 
 int
 qg_legacy_view_dimensions_set(qg_legacy_view *view, int width, int height)
 {
-    return rt_view_dimensions_set_bsg(qg_legacy_view_to_bsg(view), width,
-	    height);
+    return rt_view_context_dimensions_set_bsg(qg_legacy_view_to_context(view),
+	    width, height);
 }
 
 int
 qg_legacy_view_width_get(const qg_legacy_view *view)
 {
-    return rt_view_width_from_bsg(qg_legacy_view_to_bsg(view));
+    return rt_view_context_width_from_bsg(qg_legacy_view_to_context(view));
 }
 
 int
 qg_legacy_view_height_get(const qg_legacy_view *view)
 {
-    return rt_view_height_from_bsg(qg_legacy_view_to_bsg(view));
+    return rt_view_context_height_from_bsg(qg_legacy_view_to_context(view));
 }
 
 int
@@ -602,32 +576,26 @@ qg_legacy_view_unit_conversion_set(qg_legacy_view *view,
 	double local2base,
 	double base2local)
 {
-    return rt_view_unit_conversion_set_bsg(qg_legacy_view_to_bsg(view),
+    return rt_view_context_unit_conversion_set_bsg(qg_legacy_view_to_context(view),
 	    local2base, base2local);
 }
 
 int
 qg_legacy_view_name_set(qg_legacy_view *view, const char *name)
 {
-    struct bsg_view *bv = qg_legacy_view_to_bsg(view);
-    if (!bv || !name)
-	return 0;
-
-    bu_vls_sprintf(&bv->gv_name, "%s", name);
-    return 1;
+    return rt_view_context_name_set_bsg(qg_legacy_view_to_context(view), name);
 }
 
 qg_legacy_view *
 qg_legacy_view_ged_active_get(struct ged *gedp)
 {
-    return qg_legacy_view_from_bsg(
-	    static_cast<struct bsg_view *>(ged_view_active_ctx(gedp)));
+    return qg_legacy_view_from_context(ged_view_active_ctx(gedp));
 }
 
 void
 qg_legacy_view_ged_active_set(struct ged *gedp, qg_legacy_view *view)
 {
-    ged_view_active_ctx_set(gedp, qg_legacy_view_to_bsg(view));
+    ged_view_active_ctx_set(gedp, qg_legacy_view_to_context(view));
 }
 
 struct db_i *
@@ -642,10 +610,8 @@ qg_legacy_view_ged_view_set_add(struct ged *gedp, qg_legacy_view *view)
     if (!gedp || !view)
 	return 0;
 
-    rt_view_set_add_view_bsg(
-	    static_cast<struct bsg_view_set *>(ged_view_set_ctx(gedp)),
-	    qg_legacy_view_to_bsg(view));
-    return 1;
+    return rt_view_set_context_add_bsg(ged_view_set_ctx(gedp),
+	    qg_legacy_view_to_context(view));
 }
 
 int
@@ -654,21 +620,18 @@ qg_legacy_view_ged_view_set_remove(struct ged *gedp, qg_legacy_view *view)
     if (!gedp || !view)
 	return 0;
 
-    rt_view_set_remove_view_bsg(
-	    static_cast<struct bsg_view_set *>(ged_view_set_ctx(gedp)),
-	    qg_legacy_view_to_bsg(view));
-    return 1;
+    return rt_view_set_context_remove_bsg(ged_view_set_ctx(gedp),
+	    qg_legacy_view_to_context(view));
 }
 
 int
 qg_legacy_view_ged_view_set_attach(struct ged *gedp, qg_legacy_view *view)
 {
-    struct bsg_view *bv = qg_legacy_view_to_bsg(view);
-    if (!gedp || !bv)
+    if (!gedp || !view)
 	return 0;
 
-    bv->vset = static_cast<struct bsg_view_set *>(ged_view_set_ctx(gedp));
-    return 1;
+    return rt_view_context_view_set_attach_bsg(qg_legacy_view_to_context(view),
+	    ged_view_set_ctx(gedp));
 }
 
 qg_legacy_view *
@@ -740,7 +703,7 @@ qg_legacy_view_draw_appearance_create(int draw_mode)
 {
     qg_legacy_view_draw_appearance *appearance =
 	new qg_legacy_view_draw_appearance;
-    appearance->settings = BSG_APPEARANCE_SETTINGS_INIT;
+    appearance->settings = GED_DRAW_APPEARANCE_SETTINGS_INIT;
     if (draw_mode >= 0)
 	appearance->settings.draw_mode = draw_mode;
     return appearance;
@@ -772,20 +735,20 @@ int
 qg_legacy_view_draw_path_state(struct ged *gedp, qg_legacy_view *view,
 	const char *path, int mode)
 {
-    return ged_draw_path_state(gedp, qg_legacy_view_to_bsg(view), path, mode);
+    return ged_draw_path_state(gedp, qg_legacy_view_to_context(view), path, mode);
 }
 
 int
 qg_legacy_view_draw_has_paths(struct ged *gedp, qg_legacy_view *view, int mode)
 {
-    return ged_draw_has_paths(gedp, qg_legacy_view_to_bsg(view), mode);
+    return ged_draw_has_paths(gedp, qg_legacy_view_to_context(view), mode);
 }
 
 size_t
 qg_legacy_view_draw_list_paths(struct ged *gedp, qg_legacy_view *view,
 	int mode, int expanded, struct bu_vls *paths)
 {
-    return ged_draw_list_paths(gedp, qg_legacy_view_to_bsg(view), mode,
+    return ged_draw_list_paths(gedp, qg_legacy_view_to_context(view), mode,
 	    expanded, paths);
 }
 
@@ -798,8 +761,7 @@ qg_legacy_view_draw_scene_revision(struct ged *gedp)
 int
 qg_legacy_view_scene_attached(const qg_legacy_view *view)
 {
-    const struct bsg_view *bv = qg_legacy_view_to_bsg(view);
-    return bv ? bsg_view_scene_attached(bv) : 0;
+    return rt_view_context_scene_attached_bsg(qg_legacy_view_to_context(view));
 }
 
 uintptr_t
@@ -1080,33 +1042,34 @@ qg_legacy_view_draw_highlight_clear(struct ged *gedp)
 int
 qg_legacy_view_refresh_request(qg_legacy_view *view, unsigned flags)
 {
-    return rt_view_refresh_request_bsg(qg_legacy_view_to_bsg(view), flags);
+    return rt_view_context_refresh_request_bsg(qg_legacy_view_to_context(view),
+	    flags);
 }
 
 uint32_t
 qg_legacy_view_refresh_consume(qg_legacy_view *view)
 {
-    return rt_view_refresh_consume_bsg(qg_legacy_view_to_bsg(view));
+    return rt_view_context_refresh_consume_bsg(qg_legacy_view_to_context(view));
 }
 
 int
 qg_legacy_view_refresh_complete(qg_legacy_view *view)
 {
-    return rt_view_refresh_complete_bsg(qg_legacy_view_to_bsg(view));
+    return rt_view_context_refresh_complete_bsg(qg_legacy_view_to_context(view));
 }
 
 struct qg_legacy_view_bounds_update_state *
 qg_legacy_view_bounds_update_suspend(qg_legacy_view *view)
 {
-    struct bsg_view *bv = qg_legacy_view_to_bsg(view);
+    void *view_ctx = qg_legacy_view_to_context(view);
     rt_view_bounds_update_callback_bsg_t callback =
-	rt_view_bounds_update_callback_from_bsg(bv);
+	rt_view_context_bounds_update_callback_from_bsg(view_ctx);
     if (!callback)
 	return nullptr;
 
     auto *state = new qg_legacy_view_bounds_update_state;
     state->callback = callback;
-    rt_view_bounds_update_callback_set_bsg(bv, nullptr);
+    rt_view_context_bounds_update_callback_set_bsg(view_ctx, nullptr);
     return state;
 }
 
@@ -1119,11 +1082,11 @@ qg_legacy_view_bounds_update_restore(qg_legacy_view *view,
 	return 0;
 
     int restored = 0;
-    struct bsg_view *bv = qg_legacy_view_to_bsg(view);
-    if (bv) {
-	rt_view_bounds_update_callback_set_bsg(bv, state->callback);
+    void *view_ctx = qg_legacy_view_to_context(view);
+    if (view_ctx) {
+	rt_view_context_bounds_update_callback_set_bsg(view_ctx, state->callback);
 	if (refresh_bounds)
-	    rt_view_bounds_update_callback_call_bsg(bv);
+	    rt_view_context_bounds_update_callback_call_bsg(view_ctx);
 	restored = 1;
     }
 
@@ -1139,80 +1102,82 @@ qg_legacy_view_adjust(qg_legacy_view *view,
 	int mode,
 	unsigned long long flags)
 {
-    return rt_view_adjust_bsg(qg_legacy_view_to_bsg(view), dx, dy, keypoint,
-	    mode, flags);
+    return rt_view_context_adjust_bsg(qg_legacy_view_to_context(view), dx, dy,
+	    keypoint, mode, flags);
 }
 
 double
 qg_legacy_view_local2base_get(const qg_legacy_view *view)
 {
-    return rt_view_local2base_from_bsg(qg_legacy_view_to_bsg(view));
+    return rt_view_context_local2base_from_bsg(qg_legacy_view_to_context(view));
 }
 
 double
 qg_legacy_view_base2local_get(const qg_legacy_view *view)
 {
-    return rt_view_base2local_from_bsg(qg_legacy_view_to_bsg(view));
+    return rt_view_context_base2local_from_bsg(qg_legacy_view_to_context(view));
 }
 
 void
 qg_legacy_view_info_get(const qg_legacy_view *view, struct rt_view_info *info)
 {
-    rt_view_info_from_bsg(info, qg_legacy_view_to_bsg(view));
+    rt_view_context_info_from_bsg(info, qg_legacy_view_to_context(view));
 }
 
 const char *
 qg_legacy_view_name_get(const qg_legacy_view *view)
 {
-    return rt_view_name_from_bsg(qg_legacy_view_to_bsg(view));
+    return rt_view_context_name_from_bsg(qg_legacy_view_to_context(view));
 }
 
 int
 qg_legacy_view_aet_get(const qg_legacy_view *view, vect_t aet)
 {
-    return rt_view_aet_from_bsg(aet, qg_legacy_view_to_bsg(view));
+    return rt_view_context_aet_from_bsg(aet, qg_legacy_view_to_context(view));
 }
 
 int
 qg_legacy_view_center_get(const qg_legacy_view *view, mat_t center)
 {
-    return rt_view_center_from_bsg(center, qg_legacy_view_to_bsg(view));
+    return rt_view_context_center_from_bsg(center,
+	    qg_legacy_view_to_context(view));
 }
 
 int
 qg_legacy_view_rotation_get(const qg_legacy_view *view, mat_t rotation)
 {
-    return rt_view_rotation_from_bsg(rotation, qg_legacy_view_to_bsg(view));
+    return rt_view_context_rotation_from_bsg(rotation,
+	    qg_legacy_view_to_context(view));
 }
 
 fastf_t
 qg_legacy_view_scale_get(const qg_legacy_view *view)
 {
-    return rt_view_scale_from_bsg(qg_legacy_view_to_bsg(view));
+    return rt_view_context_scale_from_bsg(qg_legacy_view_to_context(view));
 }
 
 int
 qg_legacy_view_scale_set(qg_legacy_view *view, fastf_t scale)
 {
-    return rt_view_scale_set_bsg(qg_legacy_view_to_bsg(view), scale);
+    return rt_view_context_scale_set_bsg(qg_legacy_view_to_context(view), scale);
 }
 
 fastf_t
 qg_legacy_view_perspective_get(const qg_legacy_view *view)
 {
-    return rt_view_perspective_from_bsg(qg_legacy_view_to_bsg(view));
+    return rt_view_context_perspective_from_bsg(qg_legacy_view_to_context(view));
 }
 
 fastf_t *
 qg_legacy_view_scale_storage_get(qg_legacy_view *view)
 {
-    return rt_view_scale_storage_from_bsg(qg_legacy_view_to_bsg(view));
+    return rt_view_context_scale_storage_from_bsg(qg_legacy_view_to_context(view));
 }
 
 int
 qg_legacy_view_display_manager_set(qg_legacy_view *view, qg_legacy_dm *dmp)
 {
-    return rt_view_display_manager_set_bsg(qg_legacy_view_to_bsg(view),
+    return rt_view_context_display_manager_set_bsg(qg_legacy_view_to_context(view),
 	    qg_legacy_dm_to_dm(dmp));
 }
 
@@ -1220,7 +1185,8 @@ qg_legacy_dm *
 qg_legacy_view_display_manager_get(qg_legacy_view *view)
 {
     return qg_legacy_dm_from_dm(reinterpret_cast<struct dm *>(
-		rt_view_display_manager_from_bsg(qg_legacy_view_to_bsg(view))));
+		rt_view_context_display_manager_from_bsg(
+		    qg_legacy_view_to_context(view))));
 }
 
 int
@@ -1524,17 +1490,17 @@ qg_legacy_view_framebuffer_configure(qg_legacy_fb *ifp, int width, int height)
 void *
 qg_legacy_view_dm_open_context(qg_legacy_view *view)
 {
-    return (void *)qg_legacy_view_to_bsg(view);
+    return qg_legacy_view_to_context(view);
 }
 
 int
 qg_legacy_view_dm_draw(qg_legacy_view *view)
 {
-    struct bsg_view *bv = qg_legacy_view_to_bsg(view);
-    if (!bv)
+    void *view_ctx = qg_legacy_view_to_context(view);
+    if (!view_ctx)
 	return 0;
 
-    dm_draw_objs(bv);
+    dm_draw_objs(view_ctx);
     return 1;
 }
 
@@ -1556,7 +1522,8 @@ qg_legacy_view_edit_preview_publish_event(qg_legacy_view *view,
 	qg_legacy_view_edit_preview_event event,
 	const char *source_path)
 {
-    return rt_view_edit_preview_publish_event_bsg(qg_legacy_view_to_bsg(view),
+    return rt_view_context_edit_preview_publish_event_bsg(
+	    qg_legacy_view_to_context(view),
 	    qg_feature_ref_to_rt(feature),
 	    qg_edit_preview_event_to_rt(event),
 	    source_path);
@@ -1578,8 +1545,8 @@ qg_legacy_view_feature_overlay_ensure(qg_legacy_view *view,
 	rt_callbacksp = &rt_callbacks;
     }
 
-    return qg_feature_ref_from_rt(rt_view_feature_overlay_ensure_bsg(
-		qg_legacy_view_to_bsg(view),
+    return qg_feature_ref_from_rt(rt_view_context_feature_overlay_ensure_bsg(
+		qg_legacy_view_to_context(view),
 		name,
 		owner,
 		preview_ctx,
@@ -1592,22 +1559,23 @@ qg_legacy_view_feature_label_ensure(qg_legacy_view *view,
 	const char *name,
 	const void *owner)
 {
-    return qg_feature_ref_from_rt(rt_view_feature_label_ensure_bsg(
-		qg_legacy_view_to_bsg(view), name, owner));
+    return qg_feature_ref_from_rt(rt_view_context_feature_label_ensure_bsg(
+			qg_legacy_view_to_context(view), name, owner));
 }
 
 int
 qg_legacy_view_feature_remove(qg_legacy_view *view, const char *name)
 {
-    return rt_view_feature_remove_bsg(qg_legacy_view_to_bsg(view), name);
+    return rt_view_context_feature_remove_bsg(qg_legacy_view_to_context(view),
+	    name);
 }
 
 void
 qg_legacy_view_feature_set_view(qg_legacy_view_feature_ref ref,
 	qg_legacy_view *view)
 {
-    rt_view_feature_set_view_bsg(qg_feature_ref_to_rt(ref),
-	    qg_legacy_view_to_bsg(view));
+    rt_view_feature_set_context_bsg(qg_feature_ref_to_rt(ref),
+	    qg_legacy_view_to_context(view));
 }
 
 void
@@ -1687,207 +1655,214 @@ qg_legacy_view_feature_clear_geometry(qg_legacy_view_feature_ref ref)
 unsigned long long
 qg_legacy_view_hash(const qg_legacy_view *view)
 {
-    return rt_view_hash_bsg(qg_legacy_view_to_bsg(view));
+    return rt_view_context_hash_bsg(qg_legacy_view_to_context(view));
 }
 
 int
 qg_legacy_view_unique_object_name(struct bu_vls *name, const char *seed,
 	qg_legacy_view *view)
 {
-    return rt_view_unique_object_name_bsg(name, seed,
-	    qg_legacy_view_to_bsg(view));
+    return rt_view_context_unique_object_name_bsg(name, seed,
+	    qg_legacy_view_to_context(view));
 }
 
 int
 qg_legacy_view_framebuffer_mode_get(const qg_legacy_view *view)
 {
-    return rt_view_framebuffer_mode_from_bsg(qg_legacy_view_to_bsg(view));
+    return rt_view_context_framebuffer_mode_from_bsg(
+	    qg_legacy_view_to_context(view));
 }
 
 int
 qg_legacy_view_framebuffer_mode_set(qg_legacy_view *view, int mode)
 {
-    return rt_view_framebuffer_mode_set_bsg(qg_legacy_view_to_bsg(view), mode);
+    return rt_view_context_framebuffer_mode_set_bsg(
+	    qg_legacy_view_to_context(view), mode);
 }
 
 int
 qg_legacy_view_lod_policy_get(const qg_legacy_view *view,
 	struct rt_view_lod_policy *policy)
 {
-    return rt_view_lod_policy_from_bsg(policy, qg_legacy_view_to_bsg(view));
+    return rt_view_context_lod_policy_from_bsg(policy,
+	    qg_legacy_view_to_context(view));
 }
 
 int
 qg_legacy_view_lod_policy_apply(qg_legacy_view *view,
 	const struct rt_view_lod_policy *policy)
 {
-    return rt_view_lod_policy_apply_bsg(qg_legacy_view_to_bsg(view), policy);
+    return rt_view_context_lod_policy_apply_bsg(qg_legacy_view_to_context(view),
+	    policy);
 }
 
 int
 qg_legacy_view_lod_policy_copy(qg_legacy_view *dst, const qg_legacy_view *src)
 {
-    return rt_view_lod_policy_copy_bsg(qg_legacy_view_to_bsg(dst),
-	    qg_legacy_view_to_bsg(src));
+    return rt_view_context_lod_policy_copy_bsg(qg_legacy_view_to_context(dst),
+	    qg_legacy_view_to_context(src));
 }
 
 int
 qg_legacy_view_autoview_default(qg_legacy_view *view, int all_view_objs)
 {
-    return rt_view_autoview_bsg(qg_legacy_view_to_bsg(view),
+    return rt_view_context_autoview_bsg(qg_legacy_view_to_context(view),
 	    RT_VIEW_AUTOVIEW_SCALE_DEFAULT, all_view_objs);
 }
 
 int
 qg_legacy_view_lod_bounds_update(qg_legacy_view *view)
 {
-    if (!view)
-	return 0;
-
-    rt_view_lod_bounds_update_bsg(qg_legacy_view_to_bsg(view));
-    return 1;
+    return rt_view_context_lod_bounds_update_bsg(qg_legacy_view_to_context(view));
 }
 
 int
 qg_legacy_view_adc_state_get(const qg_legacy_view *view,
 	struct rt_view_adc_state *state)
 {
-    return rt_view_adc_state_from_bsg(state, qg_legacy_view_to_bsg(view));
+    return rt_view_context_adc_state_from_bsg(state,
+	    qg_legacy_view_to_context(view));
 }
 
 int
 qg_legacy_view_adc_state_set(qg_legacy_view *view,
 	const struct rt_view_adc_state *state)
 {
-    return rt_view_adc_state_set_bsg(qg_legacy_view_to_bsg(view), state);
+    return rt_view_context_adc_state_set_bsg(qg_legacy_view_to_context(view),
+	    state);
 }
 
 int
 qg_legacy_view_center_dot_state_get(const qg_legacy_view *view,
 	struct rt_view_other_state *state)
 {
-    return rt_view_center_dot_state_from_bsg(state,
-	    qg_legacy_view_to_bsg(view));
+    return rt_view_context_center_dot_state_from_bsg(state,
+	    qg_legacy_view_to_context(view));
 }
 
 int
 qg_legacy_view_center_dot_state_set(qg_legacy_view *view,
 	const struct rt_view_other_state *state)
 {
-    return rt_view_center_dot_state_set_bsg(qg_legacy_view_to_bsg(view),
-	    state);
+    return rt_view_context_center_dot_state_set_bsg(
+	    qg_legacy_view_to_context(view), state);
 }
 
 int
 qg_legacy_view_grid_state_get(const qg_legacy_view *view,
 	struct rt_view_grid_state *state)
 {
-    return rt_view_grid_state_from_bsg(state, qg_legacy_view_to_bsg(view));
+    return rt_view_context_grid_state_from_bsg(state,
+	    qg_legacy_view_to_context(view));
 }
 
 int
 qg_legacy_view_grid_state_set(qg_legacy_view *view,
 	const struct rt_view_grid_state *state)
 {
-    return rt_view_grid_state_set_bsg(qg_legacy_view_to_bsg(view), state);
+    return rt_view_context_grid_state_set_bsg(qg_legacy_view_to_context(view),
+	    state);
 }
 
 int
 qg_legacy_view_model_axes_state_get(const qg_legacy_view *view,
 	struct rt_view_axes_state *state)
 {
-    return rt_view_model_axes_state_from_bsg(state,
-	    qg_legacy_view_to_bsg(view));
+    return rt_view_context_model_axes_state_from_bsg(state,
+	    qg_legacy_view_to_context(view));
 }
 
 int
 qg_legacy_view_model_axes_state_set(qg_legacy_view *view,
 	const struct rt_view_axes_state *state)
 {
-    return rt_view_model_axes_state_set_bsg(qg_legacy_view_to_bsg(view),
-	    state);
+    return rt_view_context_model_axes_state_set_bsg(
+	    qg_legacy_view_to_context(view), state);
 }
 
 int
 qg_legacy_view_scale_overlay_state_get(const qg_legacy_view *view,
 	struct rt_view_other_state *state)
 {
-    return rt_view_scale_overlay_state_from_bsg(state,
-	    qg_legacy_view_to_bsg(view));
+    return rt_view_context_scale_overlay_state_from_bsg(state,
+	    qg_legacy_view_to_context(view));
 }
 
 int
 qg_legacy_view_scale_overlay_state_set(qg_legacy_view *view,
 	const struct rt_view_other_state *state)
 {
-    return rt_view_scale_overlay_state_set_bsg(qg_legacy_view_to_bsg(view),
-	    state);
+    return rt_view_context_scale_overlay_state_set_bsg(
+	    qg_legacy_view_to_context(view), state);
 }
 
 int
 qg_legacy_view_view_axes_state_get(const qg_legacy_view *view,
 	struct rt_view_axes_state *state)
 {
-    return rt_view_view_axes_state_from_bsg(state,
-	    qg_legacy_view_to_bsg(view));
+    return rt_view_context_view_axes_state_from_bsg(state,
+	    qg_legacy_view_to_context(view));
 }
 
 int
 qg_legacy_view_view_axes_state_set(qg_legacy_view *view,
 	const struct rt_view_axes_state *state)
 {
-    return rt_view_view_axes_state_set_bsg(qg_legacy_view_to_bsg(view),
-	    state);
+    return rt_view_context_view_axes_state_set_bsg(
+	    qg_legacy_view_to_context(view), state);
 }
 
 int
 qg_legacy_view_params_state_get(const qg_legacy_view *view,
 	struct rt_view_params_state *state)
 {
-    return rt_view_params_state_from_bsg(state, qg_legacy_view_to_bsg(view));
+    return rt_view_context_params_state_from_bsg(state,
+	    qg_legacy_view_to_context(view));
 }
 
 int
 qg_legacy_view_params_state_set(qg_legacy_view *view,
 	const struct rt_view_params_state *state)
 {
-    return rt_view_params_state_set_bsg(qg_legacy_view_to_bsg(view), state);
+    return rt_view_context_params_state_set_bsg(qg_legacy_view_to_context(view),
+	    state);
 }
 
 int
 qg_legacy_view_snap_source_view_only_set(qg_legacy_view *view)
 {
-    return rt_view_snap_source_flags_set_bsg(qg_legacy_view_to_bsg(view),
+    return rt_view_context_snap_source_flags_set_bsg(qg_legacy_view_to_context(view),
 	    RT_VIEW_SNAP_VIEW_BSG);
 }
 
 int
 qg_legacy_view_snap_source_db_set(qg_legacy_view *view)
 {
-    return rt_view_snap_source_flags_set_bsg(qg_legacy_view_to_bsg(view),
+    return rt_view_context_snap_source_flags_set_bsg(qg_legacy_view_to_context(view),
 	    RT_VIEW_SNAP_DB_BSG);
 }
 
 int
 qg_legacy_view_snap_lines_get(const qg_legacy_view *view)
 {
-    return rt_view_snap_lines_from_bsg(qg_legacy_view_to_bsg(view));
+    return rt_view_context_snap_lines_from_bsg(qg_legacy_view_to_context(view));
 }
 
 int
 qg_legacy_view_snap_lines_set(qg_legacy_view *view, int enabled)
 {
-    return rt_view_snap_lines_set_bsg(qg_legacy_view_to_bsg(view), enabled);
+    return rt_view_context_snap_lines_set_bsg(qg_legacy_view_to_context(view),
+	    enabled);
 }
 
 int
 qg_legacy_view_db_snap_enabled(const qg_legacy_view *view)
 {
-    const struct bsg_view *bv = qg_legacy_view_to_bsg(view);
-    if (!bv || !rt_view_snap_lines_from_bsg(bv))
+    const void *view_ctx = qg_legacy_view_to_context(view);
+    if (!view_ctx || !rt_view_context_snap_lines_from_bsg(view_ctx))
 	return 0;
 
-    int flags = rt_view_snap_source_flags_from_bsg(bv);
+    int flags = rt_view_context_snap_source_flags_from_bsg(view_ctx);
     if (flags == RT_VIEW_SNAP_TCL_BSG)
 	return 0;
 
@@ -1899,7 +1874,7 @@ qg_legacy_view_snap_kind_mask_get(const qg_legacy_view *view)
 {
     unsigned kinds = 0;
     unsigned long long bsg_kinds =
-	rt_view_snap_kind_mask_from_bsg(qg_legacy_view_to_bsg(view));
+	rt_view_context_snap_kind_mask_from_bsg(qg_legacy_view_to_context(view));
 
     if (bsg_kinds & RT_VIEW_SNAP_KIND_GRID_BSG)
 	kinds |= QG_LEGACY_VIEW_SNAP_KIND_GRID;
@@ -1922,97 +1897,105 @@ qg_legacy_view_snap_kind_mask_get(const qg_legacy_view *view)
 fastf_t
 qg_legacy_view_size_get(const qg_legacy_view *view)
 {
-    return rt_view_size_from_bsg(qg_legacy_view_to_bsg(view));
+    return rt_view_context_size_from_bsg(qg_legacy_view_to_context(view));
 }
 
 int
 qg_legacy_view_size_set(qg_legacy_view *view, fastf_t size)
 {
-    return rt_view_size_set_bsg(qg_legacy_view_to_bsg(view), size);
+    return rt_view_context_size_set_bsg(qg_legacy_view_to_context(view), size);
 }
 
 double
 qg_legacy_view_snap_tolerance_factor_get(const qg_legacy_view *view)
 {
-    return rt_view_snap_tolerance_factor_from_bsg(qg_legacy_view_to_bsg(view));
+    return rt_view_context_snap_tolerance_factor_from_bsg(
+	    qg_legacy_view_to_context(view));
 }
 
 int
 qg_legacy_view_snap_exclude_clear(qg_legacy_view *view)
 {
-    return rt_view_snap_exclude_feature_clear_bsg(qg_legacy_view_to_bsg(view));
+    return rt_view_context_snap_exclude_feature_clear_bsg(
+	    qg_legacy_view_to_context(view));
 }
 
 int
 qg_legacy_view_center_vec_set(qg_legacy_view *view, const point_t center)
 {
-    return rt_view_center_vec_set_bsg(qg_legacy_view_to_bsg(view), center);
+    return rt_view_context_center_vec_set_bsg(qg_legacy_view_to_context(view),
+	    center);
 }
 
 int
 qg_legacy_view_aet_set(qg_legacy_view *view, const vect_t aet)
 {
-    return rt_view_aet_set_bsg(qg_legacy_view_to_bsg(view), aet);
+    return rt_view_context_aet_set_bsg(qg_legacy_view_to_context(view), aet);
 }
 
 int
 qg_legacy_view_update(qg_legacy_view *view)
 {
-    return rt_view_update_bsg(qg_legacy_view_to_bsg(view));
+    return rt_view_context_update_bsg(qg_legacy_view_to_context(view));
 }
 
 int
 qg_legacy_view_screen_to_view(qg_legacy_view *view, fastf_t *vx,
 	fastf_t *vy, fastf_t sx, fastf_t sy)
 {
-    return rt_view_screen_to_view_from_bsg(vx, vy, qg_legacy_view_to_bsg(view),
-	    sx, sy);
+    return rt_view_context_screen_to_view_from_bsg(vx, vy,
+	    qg_legacy_view_to_context(view), sx, sy);
 }
 
 int
 qg_legacy_view_screen_point_get(qg_legacy_view *view, point_t point,
 	fastf_t sx, fastf_t sy)
 {
-    return rt_view_screen_point_from_bsg(point, qg_legacy_view_to_bsg(view),
-	    sx, sy);
+    return rt_view_context_screen_point_from_bsg(point,
+	    qg_legacy_view_to_context(view), sx, sy);
 }
 
 int
 qg_legacy_view_current_point_get(const qg_legacy_view *view, point_t point)
 {
-    return rt_view_current_point_from_bsg(point, qg_legacy_view_to_bsg(view));
+    return rt_view_context_current_point_from_bsg(point,
+	    qg_legacy_view_to_context(view));
 }
 
 int
 qg_legacy_view_current_point_set(qg_legacy_view *view, const point_t point)
 {
-    return rt_view_current_point_set_bsg(qg_legacy_view_to_bsg(view), point);
+    return rt_view_context_current_point_set_bsg(qg_legacy_view_to_context(view),
+	    point);
 }
 
 int
 qg_legacy_view_mouse_state_set(qg_legacy_view *view, int x, int y)
 {
-    return rt_view_mouse_state_set_bsg(qg_legacy_view_to_bsg(view), x, y);
+    return rt_view_context_mouse_state_set_bsg(qg_legacy_view_to_context(view),
+	    x, y);
 }
 
 int
 qg_legacy_view_view2model_get(const qg_legacy_view *view, mat_t view2model)
 {
-    rt_view_view2model_from_bsg(view2model, qg_legacy_view_to_bsg(view));
+    rt_view_context_view2model_from_bsg(view2model,
+	    qg_legacy_view_to_context(view));
     return view && view2model;
 }
 
 int
 qg_legacy_view_view2model_set(qg_legacy_view *view, const mat_t view2model)
 {
-    return rt_view_view2model_set_bsg(qg_legacy_view_to_bsg(view),
+    return rt_view_context_view2model_set_bsg(qg_legacy_view_to_context(view),
 	    view2model);
 }
 
 int
 qg_legacy_view_model2view_get(const qg_legacy_view *view, mat_t model2view)
 {
-    rt_view_model2view_from_bsg(model2view, qg_legacy_view_to_bsg(view));
+    rt_view_context_model2view_from_bsg(model2view,
+	    qg_legacy_view_to_context(view));
     return view && model2view;
 }
 
@@ -2020,13 +2003,13 @@ int
 qg_legacy_view_ray_from_screen(qg_legacy_view *view, int sx, int sy,
 	point_t origin, vect_t direction)
 {
-    struct bsg_view *bv = qg_legacy_view_to_bsg(view);
-    if (!bv || !origin || !direction)
+    void *view_ctx = qg_legacy_view_to_context(view);
+    if (!view_ctx || !origin || !direction)
 	return 0;
 
     fastf_t vx = -FLT_MAX;
     fastf_t vy = -FLT_MAX;
-    if (!rt_view_screen_to_view_from_bsg(&vx, &vy, bv, sx, sy))
+    if (!rt_view_context_screen_to_view_from_bsg(&vx, &vy, view_ctx, sx, sy))
 	return 0;
 
     point_t vpnt;
@@ -2034,14 +2017,14 @@ qg_legacy_view_ray_from_screen(qg_legacy_view *view, int sx, int sy,
     VSET(vpnt, vx, vy, 0);
 
     mat_t view2model;
-    rt_view_view2model_from_bsg(view2model, bv);
+    rt_view_context_view2model_from_bsg(view2model, view_ctx);
     MAT4X3PNT(mpnt, view2model, vpnt);
 
     mat_t view_rotation;
-    rt_view_rotation_from_bsg(view_rotation, bv);
+    rt_view_context_rotation_from_bsg(view_rotation, view_ctx);
     VMOVEN(direction, view_rotation + 8, 3);
     VUNITIZE(direction);
-    VSCALE(direction, direction, rt_view_radius_from_bsg(bv));
+    VSCALE(direction, direction, rt_view_context_radius_from_bsg(view_ctx));
     VADD2(origin, mpnt, direction);
     VUNITIZE(direction);
     VSCALE(direction, direction, -1);
@@ -2052,62 +2035,63 @@ int
 qg_legacy_view_interactive_rect_state_get(qg_legacy_view *view,
 	struct rt_view_interactive_rect_state *state)
 {
-    return rt_view_interactive_rect_state_from_bsg(state,
-	    qg_legacy_view_to_bsg(view));
+    return rt_view_context_interactive_rect_state_from_bsg(state,
+	    qg_legacy_view_to_context(view));
 }
 
 int
 qg_legacy_view_interactive_rect_state_set(qg_legacy_view *view,
 	const struct rt_view_interactive_rect_state *state)
 {
-    return rt_view_interactive_rect_state_set_bsg(qg_legacy_view_to_bsg(view),
-	    state);
+    return rt_view_context_interactive_rect_state_set_bsg(
+	    qg_legacy_view_to_context(view), state);
 }
 
 qg_legacy_view_pick_result *
 qg_legacy_view_pick_point(qg_legacy_view *view, int x, int y, int first_only)
 {
-    return qg_pick_result_from_bsg(rt_view_pick_point_bsg(
-	    qg_legacy_view_to_bsg(view), x, y, first_only));
+    return qg_pick_result_from_rt(rt_view_context_pick_point_bsg(
+	    qg_legacy_view_to_context(view), x, y, first_only));
 }
 
 qg_legacy_view_pick_result *
 qg_legacy_view_pick_nearest(qg_legacy_view *view, int x, int y)
 {
-    return qg_pick_result_from_bsg(rt_view_pick_nearest_bsg(
-	    qg_legacy_view_to_bsg(view), x, y));
+    return qg_pick_result_from_rt(rt_view_context_pick_nearest_bsg(
+	    qg_legacy_view_to_context(view), x, y));
 }
 
 qg_legacy_view_pick_result *
 qg_legacy_view_pick_rect(qg_legacy_view *view, int x0, int y0, int x1, int y1)
 {
-    return qg_pick_result_from_bsg(rt_view_pick_rect_bsg(
-	    qg_legacy_view_to_bsg(view), x0, y0, x1, y1));
+    return qg_pick_result_from_rt(rt_view_context_pick_rect_bsg(
+	    qg_legacy_view_to_context(view), x0, y0, x1, y1));
 }
 
 qg_legacy_view_pick_result *
 qg_legacy_view_pick_result_create(void)
 {
-    return qg_pick_result_from_bsg(rt_view_pick_result_create_bsg());
+    return qg_pick_result_from_rt(rt_view_pick_result_context_create_bsg());
 }
 
 void
 qg_legacy_view_pick_result_free(qg_legacy_view_pick_result *result)
 {
-    rt_view_pick_result_free_bsg(qg_pick_result_to_bsg(result));
+    rt_view_pick_result_context_free_bsg(qg_pick_result_to_rt(result));
 }
 
 size_t
 qg_legacy_view_pick_result_count(const qg_legacy_view_pick_result *result)
 {
-    return rt_view_pick_result_count_bsg(qg_pick_result_const_to_bsg(result));
+    return rt_view_pick_result_context_count_bsg(qg_pick_result_const_to_rt(
+		result));
 }
 
 int
 qg_legacy_view_pick_result_path(const qg_legacy_view_pick_result *result,
 	size_t index, struct bu_vls *path_out)
 {
-    return rt_view_pick_result_path_bsg(qg_pick_result_const_to_bsg(result),
+    return rt_view_pick_result_context_path_bsg(qg_pick_result_const_to_rt(result),
 	    index, path_out);
 }
 
@@ -2115,24 +2099,25 @@ fastf_t
 qg_legacy_view_pick_result_hit_dist(const qg_legacy_view_pick_result *result,
 	size_t index)
 {
-    return rt_view_pick_result_hit_dist_bsg(qg_pick_result_const_to_bsg(result),
-	    index);
+    return rt_view_pick_result_context_hit_dist_bsg(
+	    qg_pick_result_const_to_rt(result), index);
 }
 
 int
 qg_legacy_view_pick_result_append_copy(qg_legacy_view_pick_result *dest,
 	const qg_legacy_view_pick_result *src, size_t index, fastf_t hit_dist)
 {
-    return rt_view_pick_result_append_copy_bsg(qg_pick_result_to_bsg(dest),
-	    qg_pick_result_const_to_bsg(src), index, hit_dist);
+    return rt_view_pick_result_context_append_copy_bsg(
+	    qg_pick_result_to_rt(dest), qg_pick_result_const_to_rt(src), index,
+	    hit_dist);
 }
 
 qg_legacy_view_pick_result *
 qg_legacy_view_pick_result_filter_first(
 	const qg_legacy_view_pick_result *src)
 {
-    return qg_pick_result_from_bsg(rt_view_pick_result_filter_first_bsg(
-	    qg_pick_result_const_to_bsg(src)));
+    return qg_pick_result_from_rt(rt_view_pick_result_context_filter_first_bsg(
+	    qg_pick_result_const_to_rt(src)));
 }
 
 int
@@ -2141,14 +2126,15 @@ qg_legacy_view_selection_set_pick_result_ref(qg_legacy_view *view,
 	qg_legacy_view_selection_path_callback_t callback,
 	void *data)
 {
-    return rt_view_selection_set_pick_result_ref_bsg(qg_legacy_view_to_bsg(view),
-	    qg_pick_result_const_to_bsg(result), callback, data);
+    return rt_view_context_selection_set_pick_result_context_bsg(
+	    qg_legacy_view_to_context(view), qg_pick_result_const_to_rt(result),
+	    callback, data);
 }
 
 int
 qg_legacy_view_selection_clear(qg_legacy_view *view)
 {
-    return rt_view_selection_clear_bsg(qg_legacy_view_to_bsg(view));
+    return rt_view_context_selection_clear_bsg(qg_legacy_view_to_context(view));
 }
 
 int
@@ -2168,28 +2154,29 @@ rt_view_polygon_ref
 qg_legacy_view_polygon_create(qg_legacy_view *view, int type,
 	point_t *first_point)
 {
-    return rt_view_polygon_create_bsg(qg_legacy_view_to_bsg(view), type,
+    return rt_view_context_polygon_create_bsg(qg_legacy_view_to_context(view), type,
 	    first_point);
 }
 
 rt_view_polygon_ref
 qg_legacy_view_polygon_select(qg_legacy_view *view, point_t *current_point)
 {
-    return rt_view_polygon_select_bsg(qg_legacy_view_to_bsg(view),
+    return rt_view_context_polygon_select_bsg(qg_legacy_view_to_context(view),
 	    current_point);
 }
 
 rt_view_polygon_ref
 qg_legacy_view_polygon_find(qg_legacy_view *view, const char *name)
 {
-    return rt_view_polygon_find_bsg(qg_legacy_view_to_bsg(view), name);
+    return rt_view_context_polygon_find_bsg(qg_legacy_view_to_context(view), name);
 }
 
 rt_view_polygon_ref
 qg_legacy_view_polygon_dup(qg_legacy_view *view, const char *name,
 	const char *new_name)
 {
-    return rt_view_polygon_dup_bsg(qg_legacy_view_to_bsg(view), name, new_name);
+    return rt_view_context_polygon_dup_bsg(qg_legacy_view_to_context(view), name,
+	    new_name);
 }
 
 void
@@ -2197,30 +2184,31 @@ qg_legacy_view_polygon_visit_records(qg_legacy_view *view,
 	qg_legacy_view_polygon_record_callback_t callback,
 	void *data)
 {
-    rt_view_polygon_visit_records_bsg(qg_legacy_view_to_bsg(view), callback,
-	    data);
+    rt_view_context_polygon_visit_records_bsg(qg_legacy_view_to_context(view),
+	    callback, data);
 }
 
 size_t
 qg_legacy_view_polygon_snap_count(qg_legacy_view *view,
 	rt_view_polygon_ref exclude)
 {
-    return rt_view_polygon_snap_count_bsg(qg_legacy_view_to_bsg(view),
+    return rt_view_context_polygon_snap_count_bsg(qg_legacy_view_to_context(view),
 	    exclude);
 }
 
 int
 qg_legacy_view_polygon_clear_point_selection(qg_legacy_view *view)
 {
-    return rt_view_polygon_clear_point_selection_bsg(
-	    qg_legacy_view_to_bsg(view));
+    return rt_view_context_polygon_clear_point_selection_bsg(
+	    qg_legacy_view_to_context(view));
 }
 
 int
 qg_legacy_view_polygon_update(rt_view_polygon_ref ref, qg_legacy_view *view,
 	int utype)
 {
-    return rt_view_polygon_update_bsg(ref, qg_legacy_view_to_bsg(view), utype);
+    return rt_view_polygon_update_context_bsg(ref, qg_legacy_view_to_context(view),
+	    utype);
 }
 
 int
@@ -2230,8 +2218,8 @@ qg_legacy_view_polygon_update_screen_point(rt_view_polygon_ref ref,
 	int y,
 	int utype)
 {
-    return rt_view_polygon_update_screen_pt_bsg(ref,
-	    qg_legacy_view_to_bsg(view), x, y, utype);
+    return rt_view_polygon_update_screen_pt_context_bsg(ref,
+	    qg_legacy_view_to_context(view), x, y, utype);
 }
 
 int
@@ -2250,7 +2238,7 @@ qg_legacy_view_polygon_set_name(rt_view_polygon_ref ref, const char *name)
 int
 qg_legacy_view_polygon_set_view(rt_view_polygon_ref ref, qg_legacy_view *view)
 {
-    return rt_view_polygon_set_view_bsg(ref, qg_legacy_view_to_bsg(view));
+    return rt_view_polygon_set_context_bsg(ref, qg_legacy_view_to_context(view));
 }
 
 int
@@ -2316,8 +2304,8 @@ qg_legacy_view_polygon_import_sketch(const char *name, struct db_i *dbip,
 	struct directory *dp,
 	qg_legacy_view *view)
 {
-    return rt_view_polygon_import_sketch_bsg(name, dbip, dp,
-	    qg_legacy_view_to_bsg(view));
+    return rt_view_polygon_import_sketch_context_bsg(name, dbip, dp,
+	    qg_legacy_view_to_context(view));
 }
 
 struct directory *
@@ -2331,8 +2319,8 @@ int
 qg_legacy_view_polygon_snap_exclude_set(qg_legacy_view *view,
 	rt_view_polygon_ref ref)
 {
-    return rt_view_polygon_snap_exclude_set_bsg(qg_legacy_view_to_bsg(view),
-	    ref);
+    return rt_view_context_polygon_snap_exclude_set_bsg(
+	    qg_legacy_view_to_context(view), ref);
 }
 
 /*

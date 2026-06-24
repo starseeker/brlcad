@@ -40,7 +40,6 @@
 #include "dm.h"
 #include "ged.h"
 #include "bu/str.h"
-#include "rt/view_legacy_bsg.h"
 
 
 #define FB_CONSTRAIN(_v, _a, _b) \
@@ -57,8 +56,8 @@ ged_fbclear_core(struct ged *gedp, int argc, const char *argv[])
 
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
-    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
-    struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(v);
+    void *view_ctx = ged_view_active_ctx(gedp);
+    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
     if (!dmp) {
 	bu_vls_printf(gedp->ged_result_str, "no display manager currently active");
 	return BRLCAD_ERROR;
@@ -110,7 +109,7 @@ ged_fbclear_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
 
     if (reset_mode)
-	rt_view_framebuffer_mode_set_bsg(v, 0);
+	ged_view_context_framebuffer_mode_set(view_ctx, 0);
 
     (void)dm_draw_begin(dmp);
     fb_refresh(fbp, 0, 0, fb_getwidth(fbp), fb_getheight(fbp));

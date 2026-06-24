@@ -24,13 +24,13 @@
 
 #include "vmath.h"
 #include "bu/app.h"
-#include "bsg/defines.h"
-#include "bsg/polygon.h"
-#include "bsg/util.h"
 #include "bu/file.h"
 #include "bg/plane.h"
+#include "bg/polygon.h"
 #include "raytrace.h"
-#include "rt/primitives/sketch_legacy_bsg.h"
+#include "rt/primitives/sketch.h"
+
+#include "../primitives/sketch/polygons_private.h"
 
 /* Compare model-space points using the standard BN distance tolerance. */
 static int
@@ -40,17 +40,17 @@ points_within_tolerance(point_t a, point_t b)
 }
 
 static void
-compare_polygon_data(const struct bsg_polygon *op, const struct bsg_polygon *rp, const char *msg)
+compare_polygon_data(const struct bg_polygon *op, const struct bg_polygon *rp, const char *msg)
 {
     if (!op || !rp)
 	bu_exit(EXIT_FAILURE, "%s: missing polygon data\n", msg);
 
-    if (op->polygon.num_contours != rp->polygon.num_contours)
+    if (op->num_contours != rp->num_contours)
 	bu_exit(EXIT_FAILURE, "%s: contour count changed\n", msg);
 
-    for (size_t i = 0; i < op->polygon.num_contours; i++) {
-	size_t pcnt = op->polygon.contour[i].num_points;
-	if (pcnt != rp->polygon.contour[i].num_points)
+    for (size_t i = 0; i < op->num_contours; i++) {
+	size_t pcnt = op->contour[i].num_points;
+	if (pcnt != rp->contour[i].num_points)
 	    bu_exit(EXIT_FAILURE, "%s: contour point count changed\n", msg);
 
 	int contour_match = 0;
@@ -58,7 +58,7 @@ compare_polygon_data(const struct bsg_polygon *op, const struct bsg_polygon *rp,
 	    int match = 1;
 	    for (size_t j = 0; j < pcnt; j++) {
 		size_t rj = (offset + j) % pcnt;
-		if (!points_within_tolerance(op->polygon.contour[i].point[j], rp->polygon.contour[i].point[rj])) {
+		if (!points_within_tolerance(op->contour[i].point[j], rp->contour[i].point[rj])) {
 		    match = 0;
 		    break;
 		}
@@ -71,7 +71,7 @@ compare_polygon_data(const struct bsg_polygon *op, const struct bsg_polygon *rp,
 	    match = 1;
 	    for (size_t j = 0; j < pcnt; j++) {
 		size_t rj = (offset + pcnt - j) % pcnt;
-		if (!points_within_tolerance(op->polygon.contour[i].point[j], rp->polygon.contour[i].point[rj])) {
+		if (!points_within_tolerance(op->contour[i].point[j], rp->contour[i].point[rj])) {
 		    match = 0;
 		    break;
 		}
@@ -87,38 +87,11 @@ compare_polygon_data(const struct bsg_polygon *op, const struct bsg_polygon *rp,
     }
 }
 
-static bsg_polygon_ref
-test_polygon_ref_to_bsg(rt_view_polygon_ref ref)
-{
-    bsg_polygon_ref bsg_ref = { ref.token, ref.revision };
-    return bsg_ref;
-}
-
-static rt_view_polygon_ref
-test_polygon_ref_from_bsg(bsg_polygon_ref ref)
-{
-    rt_view_polygon_ref rt_ref = { ref.token, ref.revision };
-    return rt_ref;
-}
-
-static int
-test_polygon_ref_is_null(rt_view_polygon_ref ref)
-{
-    return bsg_polygon_ref_is_null(test_polygon_ref_to_bsg(ref));
-}
-
 static void
-compare_polygon_refs(bsg_polygon_ref orig, rt_view_polygon_ref rt, const char *msg)
+compare_rt_polygon_data(const struct rt_sketch_polygon *orig, const struct rt_sketch_polygon *rt, const char *msg)
 {
-    compare_polygon_data(bsg_polygon_data(orig),
-	    bsg_polygon_data(test_polygon_ref_to_bsg(rt)), msg);
-}
-
-static void
-compare_rt_polygon_refs(rt_view_polygon_ref orig, rt_view_polygon_ref rt, const char *msg)
-{
-    compare_polygon_data(bsg_polygon_data(test_polygon_ref_to_bsg(orig)),
-	    bsg_polygon_data(test_polygon_ref_to_bsg(rt)), msg);
+    compare_polygon_data(rt_sketch_polygon_bg_polygon(orig),
+	    rt_sketch_polygon_bg_polygon(rt), msg);
 }
 
 static void
@@ -130,13 +103,9 @@ test_non_origin_plane_roundtrip(void)
     if (!wfp)
 	bu_exit(EXIT_FAILURE, "Failed to create output database %s\n", ofile);
 
-    struct bsg_view *v;
-    BU_GET(v, struct bsg_view);
-    bsg_init(v, NULL);
-
-    struct bsg_polygon p;
+    struct rt_sketch_polygon p;
     memset(&p, 0, sizeof(p));
-    p.type = BSG_POLYGON_GENERAL;
+    p.type = RT_SKETCH_POLYGON_GENERAL;
     p.curr_contour_i = -1;
     p.curr_point_i = -1;
     p.polygon.num_contours = 1;
@@ -155,21 +124,17 @@ test_non_origin_plane_roundtrip(void)
     vect_t plane_n = {0.0, 0.0, 1.0};
     bg_plane_pt_nrml(&p.vp, plane_pt, plane_n);
 
-    bsg_polygon_ref pobj = bsg_polygon_ref_create_from_data(v, "roundtrip", 0, &p);
-    if (bsg_polygon_ref_is_null(pobj))
-	bu_exit(EXIT_FAILURE, "Failed to create non-origin polygon ref\n");
-
-    struct directory *odp = db_view_polygon_ref_to_sketch(wfp->dbip, "roundtrip.s",
-	    test_polygon_ref_from_bsg(pobj));
+    struct directory *odp = db_sketch_polygon_to_sketch(wfp->dbip, "roundtrip.s", &p, NULL);
     if (odp == RT_DIR_NULL)
-	bu_exit(EXIT_FAILURE, "Failed to write non-origin polygon ref to output database %s\n", ofile);
+	bu_exit(EXIT_FAILURE, "Failed to write non-origin polygon to output database %s\n", ofile);
 
-    rt_view_polygon_ref rtobj = db_sketch_to_view_polygon_ref("roundtrip_rt", wfp->dbip, odp, v);
-    if (test_polygon_ref_is_null(rtobj))
-	bu_exit(EXIT_FAILURE, "Failed to recreate non-origin polygon ref from sketch\n");
+    struct rt_sketch_polygon *rtobj = db_sketch_to_polygon("roundtrip_rt", wfp->dbip, odp);
+    if (!rtobj)
+	bu_exit(EXIT_FAILURE, "Failed to recreate non-origin polygon from sketch\n");
 
-    compare_polygon_refs(pobj, rtobj, "non-origin plane polygon roundtrip");
+    compare_rt_polygon_data(&p, rtobj, "non-origin plane polygon roundtrip");
 
+    rt_sketch_polygon_destroy(rtobj);
     bg_polygon_free(&p.polygon);
     db_close(wfp->dbip);
     bu_file_delete(ofile);
@@ -204,15 +169,9 @@ main(int argc, char *argv[])
     if (dp == RT_DIR_NULL)
 	bu_exit(EXIT_FAILURE, "ERROR: Unable to look up object poly.s\n");
 
-    // Create the view
-    struct bsg_view *v;
-    BU_GET(v, struct bsg_view);
-    bsg_init(v, NULL);
-
-    rt_view_polygon_ref pobj = db_sketch_to_view_polygon_ref("poly", dbip, dp, v);
-
-    if (test_polygon_ref_is_null(pobj))
-	bu_exit(EXIT_FAILURE, "Failed to create polygon ref from poly.s\n");
+    struct rt_sketch_polygon *pobj = db_sketch_to_polygon("poly", dbip, dp);
+    if (!pobj)
+	bu_exit(EXIT_FAILURE, "Failed to create polygon from poly.s\n");
 
     char ofile[MAXPATHLEN];
     bu_dir(ofile, MAXPATHLEN, BU_DIR_CURR, "poly_sketch_out.g", NULL);
@@ -220,16 +179,18 @@ main(int argc, char *argv[])
     if (!wfp)
 	bu_exit(EXIT_FAILURE, "Failed to create output database %s\n", ofile);
 
-    struct directory *odp = db_view_polygon_ref_to_sketch(wfp->dbip, "poly.s", pobj);
+    struct directory *odp = db_sketch_polygon_to_sketch(wfp->dbip, "poly.s", pobj, NULL);
     if (odp == RT_DIR_NULL)
-	bu_exit(EXIT_FAILURE, "Failed to write polygon ref to output database %s\n", ofile);
+	bu_exit(EXIT_FAILURE, "Failed to write polygon to output database %s\n", ofile);
 
-    rt_view_polygon_ref opobj = db_sketch_to_view_polygon_ref("poly_out", wfp->dbip, odp, v);
-    if (test_polygon_ref_is_null(opobj))
-	bu_exit(EXIT_FAILURE, "Failed to create polygon ref from exported poly.s\n");
+    struct rt_sketch_polygon *opobj = db_sketch_to_polygon("poly_out", wfp->dbip, odp);
+    if (!opobj)
+	bu_exit(EXIT_FAILURE, "Failed to create polygon from exported poly.s\n");
 
-    compare_rt_polygon_refs(pobj, opobj, "imported sketch polygon roundtrip");
+    compare_rt_polygon_data(pobj, opobj, "imported sketch polygon roundtrip");
 
+    rt_sketch_polygon_destroy(opobj);
+    rt_sketch_polygon_destroy(pobj);
     db_close(dbip);
     db_close(wfp->dbip);
     bu_file_delete(ofile);

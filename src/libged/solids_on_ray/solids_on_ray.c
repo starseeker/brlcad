@@ -32,7 +32,6 @@
 #include "bn.h"
 #include "bu/cmd.h"
 #include "rt/view.h"
-#include "rt/view_legacy_bsg.h"
 
 
 #include "../ged_private.h"
@@ -229,11 +228,11 @@ ged_solids_on_ray_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gvp = (struct bsg_view *)ged_view_active_ctx(gedp);
-    rt_view_center_from_bsg(view_center, gvp);
-    rt_view_rotation_from_bsg(view_rotation, gvp);
-    rt_view_model2view_from_bsg(model2view, gvp);
-    view_scale = rt_view_scale_from_bsg(gvp);
+    void *view_ctx = ged_view_active_ctx(gedp);
+    ged_view_context_center_get(view_center, view_ctx);
+    ged_view_context_rotation_get(view_rotation, view_ctx);
+    ged_view_context_model2view_get(model2view, view_ctx);
+    view_scale = ged_view_context_scale_get(view_ctx);
 
     MAT_DELTAS_GET_NEG(ray_orig, view_center);
     /*

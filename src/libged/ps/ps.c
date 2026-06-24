@@ -36,7 +36,6 @@
 #include "bg/clip.h"
 
 #include "ged/bsg_ged_draw.h"
-#include "rt/view_legacy_bsg.h"
 #include "../ged_private.h"
 
 static void
@@ -211,7 +210,7 @@ ps_draw_record_cb(const struct ged_draw_view_db_object_record *rec, void *data)
 }
 
 static void
-ps_draw_body(struct bsg_view *v, FILE *fp, mat_t model2view, fastf_t perspective, vect_t eye_pos)
+ps_draw_body(void *view_ctx, FILE *fp, mat_t model2view, fastf_t perspective, vect_t eye_pos)
 {
     mat_t newmat;
     matp_t mat;
@@ -244,7 +243,7 @@ ps_draw_body(struct bsg_view *v, FILE *fp, mat_t model2view, fastf_t perspective
     ctx.perspective = perspective;
     ctx.fp = fp;
     ctx.psmat = mat;
-    ged_draw_foreach_visible_view_record(v,
+    ged_draw_foreach_visible_view_record(view_ctx,
 	    ps_draw_record_cb, &ctx);
 }
 
@@ -269,12 +268,12 @@ ps_draw_footer(FILE *fp)
 
 
 static void
-dl_ps(struct bsg_view *v, FILE *fp, int border, char *font, char *title, char *creator, int linewidth, fastf_t scale, int xoffset, int yoffset, mat_t model2view, fastf_t perspective, vect_t eye_pos, float red, float green, float blue)
+dl_ps(void *view_ctx, FILE *fp, int border, char *font, char *title, char *creator, int linewidth, fastf_t scale, int xoffset, int yoffset, mat_t model2view, fastf_t perspective, vect_t eye_pos, float red, float green, float blue)
 {
     ps_draw_header(fp, font, title, creator, linewidth, scale, xoffset, yoffset);
     if (border)
 	ps_draw_border(fp, red, green, blue);
-    ps_draw_body(v, fp, model2view, perspective, eye_pos);
+    ps_draw_body(view_ctx, fp, model2view, perspective, eye_pos);
     ps_draw_footer(fp);
 
 }
@@ -299,7 +298,7 @@ ged_ps_core(struct ged *gedp, int argc, const char *argv[])
     mat_t model2view;
     point_t eye_pos;
     fastf_t perspective;
-    struct bsg_view *v = NULL;
+    void *view_ctx = NULL;
 
     float border_red = 0.0;
     float border_green = 0.0;
@@ -424,11 +423,11 @@ ged_ps_core(struct ged *gedp, int argc, const char *argv[])
 	goto bad;
     }
 
-    v = (struct bsg_view *)ged_view_active_ctx(gedp);
-    rt_view_model2view_from_bsg(model2view, v);
-    perspective = rt_view_perspective_from_bsg(v);
-    rt_view_eye_pos_from_bsg(eye_pos, v);
-    dl_ps(v, fp, border, bu_vls_addr(&font), bu_vls_addr(&title), bu_vls_addr(&creator), linewidth, scale, xoffset, yoffset, model2view, perspective, eye_pos, border_red, border_green, border_blue);
+    view_ctx = ged_view_active_ctx(gedp);
+    ged_view_context_model2view_get(model2view, view_ctx);
+    perspective = ged_view_context_perspective_get(view_ctx);
+    ged_view_context_eye_pos_get(eye_pos, view_ctx);
+    dl_ps(view_ctx, fp, border, bu_vls_addr(&font), bu_vls_addr(&title), bu_vls_addr(&creator), linewidth, scale, xoffset, yoffset, model2view, perspective, eye_pos, border_red, border_green, border_blue);
 
     fclose(fp);
 

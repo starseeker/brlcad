@@ -37,16 +37,9 @@ extern "C" {
 #include "bu/opt.h"
 #include "bu/path.h"
 #include "bu/vls.h"
-#include "bsg/defines.h"
-#include "bsg/draw_intent.h"
-#include "bsg/draw_source.h"
-#include "bsg/scene_object.h"
-#include "bsg/field.h"
 #include "raytrace.h"
 #include "ged/bsg_ged_draw.h"
-#include "rt/view_legacy_bsg.h"
 }
-#include "../bsg_ged_draw_view_private.h"
 #include "./ged_view.h"
 #include "../ged_private.h"
 
@@ -81,15 +74,15 @@ _view_obj_list_cb(const struct ged_draw_view_db_object_record *rec, void *ud)
 }
 
 static void
-_view_obj_list(struct bu_vls *out, struct bsg_view *v, int list_view, int list_db, int local_only, const char *glob)
+_view_obj_list(struct bu_vls *out, void *view_ctx, int list_view, int list_db, int local_only, const char *glob)
 {
-    if (!out || !v || !ged_draw_view_has_scene_root(v))
+    if (!out || !view_ctx || !ged_draw_view_context_scene_attached(view_ctx))
 	return;
 
     struct ged_draw_view_record_query query =
 	_view_obj_query(list_view, list_db, local_only, glob);
     struct view_obj_list_state ctx;
-    ged_draw_foreach_view_record_query(v, &query, _view_obj_list_cb, &ctx);
+    ged_draw_foreach_view_record_query(view_ctx, &query, _view_obj_list_cb, &ctx);
 
     for (std::set<std::string>::iterator it = ctx.names.begin(); it != ctx.names.end(); ++it)
 	bu_vls_printf(out, "%s\n", it->c_str());
@@ -103,20 +96,20 @@ _view_obj_mode_value_string(struct bu_vls *out, int mode)
 	return;
     }
     switch (mode) {
-	case BSG_DRAW_MODE_WIRE:
+	case GED_DRAW_MODE_WIRE:
 	    bu_vls_printf(out, "wireframe");
 	    break;
-	case BSG_DRAW_MODE_SHADED_BOTS:
-	case BSG_DRAW_MODE_SHADED:
+	case GED_DRAW_MODE_SHADED_BOTS:
+	case GED_DRAW_MODE_SHADED:
 	    bu_vls_printf(out, "shaded");
 	    break;
-	case BSG_DRAW_MODE_EVAL_WIRE:
+	case GED_DRAW_MODE_EVAL_WIRE:
 	    bu_vls_printf(out, "evaluated_wireframe");
 	    break;
-	case BSG_DRAW_MODE_HIDDEN_LINE:
+	case GED_DRAW_MODE_HIDDEN_LINE:
 	    bu_vls_printf(out, "hidden_line");
 	    break;
-	case BSG_DRAW_MODE_EVAL_POINTS:
+	case GED_DRAW_MODE_EVAL_POINTS:
 	    bu_vls_printf(out, "evaluated_points");
 	    break;
 	default:
@@ -160,7 +153,7 @@ _view_obj_find_cb(const struct ged_draw_view_db_object_record *rec, void *ud)
 }
 
 static int
-_view_obj_record_find(struct bsg_view *v,
+_view_obj_record_find(void *view_ctx,
 		      const char *name,
 		      int list_view,
 		      int list_db,
@@ -177,7 +170,7 @@ _view_obj_record_find(struct bsg_view *v,
 	out->color[2] = 0;
 	out->vlist_structure_count = 0;
     }
-    if (!v || !ged_draw_view_has_scene_root(v) || !name || !name[0])
+    if (!view_ctx || !ged_draw_view_context_scene_attached(view_ctx) || !name || !name[0])
 	return 0;
 
     struct ged_draw_view_record_query query =
@@ -185,7 +178,7 @@ _view_obj_record_find(struct bsg_view *v,
     struct view_obj_find_state ctx;
     ctx.name = name;
     ctx.out = out;
-    ged_draw_foreach_view_record_query(v, &query, _view_obj_find_cb, &ctx);
+    ged_draw_foreach_view_record_query(view_ctx, &query, _view_obj_find_cb, &ctx);
 
     return out ? out->found : 0;
 }
@@ -235,7 +228,7 @@ _view_obj_shape_ref_find_cb(const struct ged_draw_shape_record *rec, void *ud)
 
 static ged_draw_shape_ref
 _view_obj_shape_ref_find(struct ged *gedp,
-			 struct bsg_view *v,
+			 void *view_ctx,
 			 const char *name,
 			 int list_view,
 			 int list_db,
@@ -243,7 +236,7 @@ _view_obj_shape_ref_find(struct ged *gedp,
 {
     ged_draw_shape_ref null_ref = GED_DRAW_SHAPE_REF_NULL;
     struct view_obj_record rec;
-    if (!_view_obj_record_find(v, name, list_view, list_db, local_only, &rec))
+    if (!_view_obj_record_find(view_ctx, name, list_view, list_db, local_only, &rec))
 	return null_ref;
 
     struct view_obj_shape_ref_find_state ctx;
@@ -303,9 +296,9 @@ _objs_cmd_draw(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    if (ged_draw_view_feature_exists(gd->cv, gd->vobj)) {
+    if (ged_draw_view_context_feature_exists(gd->cv, gd->vobj)) {
 	struct ged_draw_view_feature_style style;
-	if (!ged_draw_view_feature_style_get(gd->cv, gd->vobj, &style)) {
+	if (!ged_draw_view_context_feature_style_get(gd->cv, gd->vobj, &style)) {
 	    bu_vls_printf(gedp->ged_result_str, "No view feature named %s\n", gd->vobj);
 	    return BRLCAD_ERROR;
 	}
@@ -315,12 +308,12 @@ _objs_cmd_draw(void *bs, int argc, const char **argv)
 	}
 	if (BU_STR_EQUAL(argv[0], "DOWN")) {
 	    style.visible = 0;
-	    ged_draw_view_feature_style_apply(gd->cv, gd->vobj, &style, 0);
+	    ged_draw_view_context_feature_style_apply(gd->cv, gd->vobj, &style, 0);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL(argv[0], "UP")) {
 	    style.visible = 1;
-	    ged_draw_view_feature_style_apply(gd->cv, gd->vobj, &style, 0);
+	    ged_draw_view_context_feature_style_apply(gd->cv, gd->vobj, &style, 0);
 	    return BRLCAD_OK;
 	}
 	bu_vls_printf(gedp->ged_result_str, "Invalid argument %s\n", argv[0]);
@@ -370,8 +363,8 @@ _objs_cmd_delete(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    if (ged_draw_view_feature_exists(gd->cv, gd->vobj)) {
-	if (!ged_draw_view_feature_remove(gd->cv, gd->vobj)) {
+    if (ged_draw_view_context_feature_exists(gd->cv, gd->vobj)) {
+	if (!ged_draw_view_context_feature_remove(gd->cv, gd->vobj)) {
 	    bu_vls_printf(gedp->ged_result_str, "No view feature named %s\n", gd->vobj);
 	    return BRLCAD_ERROR;
 	}
@@ -419,9 +412,9 @@ _objs_cmd_color(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    if (ged_draw_view_feature_exists(gd->cv, gd->vobj) && !(recurse && ac == 0)) {
+    if (ged_draw_view_context_feature_exists(gd->cv, gd->vobj) && !(recurse && ac == 0)) {
 	struct ged_draw_view_feature_style style;
-	if (!ged_draw_view_feature_style_get(gd->cv, gd->vobj, &style)) {
+	if (!ged_draw_view_context_feature_style_get(gd->cv, gd->vobj, &style)) {
 	    bu_vls_printf(gedp->ged_result_str, "No view feature named %s\n", gd->vobj);
 	    return BRLCAD_ERROR;
 	}
@@ -438,7 +431,7 @@ _objs_cmd_color(void *bs, int argc, const char **argv)
 	}
 	bu_color_to_rgb_chars(&val, style.color);
 	style.color_valid = 1;
-	ged_draw_view_feature_style_apply(gd->cv, gd->vobj, &style, recurse);
+	ged_draw_view_context_feature_style_apply(gd->cv, gd->vobj, &style, recurse);
 	return BRLCAD_OK;
     }
 
@@ -504,9 +497,9 @@ _objs_cmd_arrow(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    if (ged_draw_view_feature_exists(gd->cv, gd->vobj)) {
+    if (ged_draw_view_context_feature_exists(gd->cv, gd->vobj)) {
 	struct ged_draw_view_feature_style style;
-	if (!ged_draw_view_feature_style_get(gd->cv, gd->vobj, &style)) {
+	if (!ged_draw_view_context_feature_style_get(gd->cv, gd->vobj, &style)) {
 	    bu_vls_printf(gedp->ged_result_str, "No view feature named %s\n", gd->vobj);
 	    return BRLCAD_ERROR;
 	}
@@ -516,7 +509,7 @@ _objs_cmd_arrow(void *bs, int argc, const char **argv)
 	}
 	if (BU_STR_EQUAL(argv[0], "0") || BU_STR_EQUAL(argv[0], "1")) {
 	    style.arrow = BU_STR_EQUAL(argv[0], "1") ? 1 : 0;
-	    ged_draw_view_feature_style_apply(gd->cv, gd->vobj, &style, 0);
+	    ged_draw_view_context_feature_style_apply(gd->cv, gd->vobj, &style, 0);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL(argv[0], "width"))  {
@@ -527,7 +520,7 @@ _objs_cmd_arrow(void *bs, int argc, const char **argv)
 		    return BRLCAD_ERROR;
 		}
 		style.arrow_tip_width = width;
-		ged_draw_view_feature_style_apply(gd->cv, gd->vobj, &style, 0);
+		ged_draw_view_context_feature_style_apply(gd->cv, gd->vobj, &style, 0);
 		return BRLCAD_OK;
 	    }
 	    bu_vls_printf(gedp->ged_result_str, "%f\n", style.arrow_tip_width);
@@ -541,7 +534,7 @@ _objs_cmd_arrow(void *bs, int argc, const char **argv)
 		    return BRLCAD_ERROR;
 		}
 		style.arrow_tip_length = length;
-		ged_draw_view_feature_style_apply(gd->cv, gd->vobj, &style, 0);
+		ged_draw_view_context_feature_style_apply(gd->cv, gd->vobj, &style, 0);
 		return BRLCAD_OK;
 	    }
 	    bu_vls_printf(gedp->ged_result_str, "%f\n", style.arrow_tip_length);
@@ -600,7 +593,6 @@ _objs_cmd_update(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *v = gd->cv;
     if (argc) {
 	int x, y;
 	if (bu_opt_int(NULL, 1, (const char **)&argv[0], (void *)&x) != 1 || x < 0) {
@@ -611,11 +603,11 @@ _objs_cmd_update(void *bs, int argc, const char **argv)
 	    bu_vls_printf(gedp->ged_result_str, "Invalid argument %s\n", argv[1]);
 	    return BRLCAD_ERROR;
 	}
-	rt_view_mouse_state_set_bsg(v, x, y);
+	ged_view_context_mouse_state_set(gd->cv, x, y);
     }
 
-    if (ged_draw_view_feature_exists(gd->cv, gd->vobj)) {
-	(void)ged_draw_view_feature_realize(gd->cv, gd->vobj, 1);
+    if (ged_draw_view_context_feature_exists(gd->cv, gd->vobj)) {
+	(void)ged_draw_view_context_feature_realize(gd->cv, gd->vobj, 1);
 	return BRLCAD_OK;
     }
 
@@ -624,7 +616,7 @@ _objs_cmd_update(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    ged_draw_shape_ref_realize(gedp, gd->shape_ref, v);
+    ged_draw_shape_ref_realize_context(gedp, gd->shape_ref, gd->cv);
 
     return BRLCAD_OK;
 }
@@ -664,7 +656,7 @@ _view_cmd_objs(void *bs, int argc, const char **argv)
 	bu_vls_printf(gedp->ged_result_str, ": no view current in GED");
 	return BRLCAD_ERROR;
     }
-    if (!ged_draw_view_has_scene_root(gd->cv)) {
+    if (!ged_draw_view_context_scene_attached(gd->cv)) {
 	void *cv = ged_view_active_ctx(gedp);
 	ged_view_active_ctx_set(gedp, gd->cv);
 	ged_draw_ensure_root(gedp);
@@ -717,7 +709,7 @@ _view_cmd_objs(void *bs, int argc, const char **argv)
     gd->local_obj = not_shared;
     gd->gobj_dbpath = bu_vls_strlen(&gobj_path) ? bu_vls_cstr(&gobj_path) : NULL;
 
-    struct bsg_view *v = gd->cv;
+    void *view_ctx = gd->cv;
     if (help) {
 	int hargc = (cmd_pos >= 0) ? argc - cmd_pos : 0;
 	const char **hargv = (cmd_pos >= 0) ? &argv[cmd_pos] : NULL;
@@ -735,7 +727,7 @@ _view_cmd_objs(void *bs, int argc, const char **argv)
 		    argv[first_pos]);
 	    return BRLCAD_ERROR;
 	}
-	_view_obj_list(gd->gedp->ged_result_str, v, list_view, list_db, gd->local_obj, NULL);
+	_view_obj_list(gd->gedp->ged_result_str, view_ctx, list_view, list_db, gd->local_obj, NULL);
 	bu_vls_free(&gobj_path);
 	return BRLCAD_OK;
     }
@@ -759,7 +751,7 @@ _view_cmd_objs(void *bs, int argc, const char **argv)
 		bu_vls_printf(gd->gedp->ged_result_str, "Usage: view obj [-V view] [-L] list [glob_pattern]");
 		return BRLCAD_ERROR;
 	    }
-	    _view_obj_list(gd->gedp->ged_result_str, v, list_view, list_db, gd->local_obj, glob);
+	    _view_obj_list(gd->gedp->ged_result_str, view_ctx, list_view, list_db, gd->local_obj, glob);
 	    bu_vls_free(&gobj_path);
 	    return BRLCAD_OK;
 	}
@@ -784,7 +776,7 @@ _view_cmd_objs(void *bs, int argc, const char **argv)
 	    gd->vobj = subcmd_argv[1];
 	    const int find_view_objs = 1;
 	    const int find_db_objs = 1;
-	    gd->shape_ref = _view_obj_shape_ref_find(gedp, v, gd->vobj, find_view_objs, find_db_objs, gd->local_obj);
+	    gd->shape_ref = _view_obj_shape_ref_find(gedp, view_ctx, gd->vobj, find_view_objs, find_db_objs, gd->local_obj);
 	    const char *otype = subcmd_argv[2];
 	    const char **cargv = subcmd_argv + 2;
 	    int cargc = subcmd_argc - 2;
@@ -805,7 +797,7 @@ _view_cmd_objs(void *bs, int argc, const char **argv)
 		}
 		ret = _view_cmd_lines(bs, cargc, cargv);
 		if (ret == BRLCAD_OK) {
-		    gd->shape_ref = _view_obj_shape_ref_find(gedp, v, gd->vobj, 1, 1, gd->local_obj);
+		    gd->shape_ref = _view_obj_shape_ref_find(gedp, view_ctx, gd->vobj, 1, 1, gd->local_obj);
 		    const char *aargv[3] = {"arrow", "1", NULL};
 		    ret = _objs_cmd_arrow(bs, 2, aargv);
 		}
@@ -824,7 +816,7 @@ _view_cmd_objs(void *bs, int argc, const char **argv)
 	    return BRLCAD_ERROR;
 	}
 	gd->vobj = subcmd_argv[1];
-	gd->shape_ref = _view_obj_shape_ref_find(gedp, v, gd->vobj, list_view, list_db, gd->local_obj);
+	gd->shape_ref = _view_obj_shape_ref_find(gedp, view_ctx, gd->vobj, list_view, list_db, gd->local_obj);
 
 	if (BU_STR_EQUAL(ucmd, "remove")) {
 	    const char *rargv[2] = {"del", NULL};
@@ -835,7 +827,7 @@ _view_cmd_objs(void *bs, int argc, const char **argv)
 
 	if (BU_STR_EQUAL(ucmd, "info")) {
 	    struct view_obj_record rec;
-	    if (!_view_obj_record_find(v, gd->vobj, list_view, list_db, gd->local_obj, &rec)) {
+	    if (!_view_obj_record_find(view_ctx, gd->vobj, list_view, list_db, gd->local_obj, &rec)) {
 		bu_vls_free(&gobj_path);
 		bu_vls_printf(gd->gedp->ged_result_str, "No view feature named %s\n", gd->vobj);
 		return BRLCAD_ERROR;
@@ -877,7 +869,7 @@ _view_cmd_objs(void *bs, int argc, const char **argv)
 	}
 
 	if (BU_STR_EQUAL(ucmd, "set")) {
-	    if ((!ged_draw_view_feature_exists(v, gd->vobj) && ged_draw_shape_ref_is_null(gd->shape_ref)) || subcmd_argc < 4) {
+	    if ((!ged_draw_view_context_feature_exists(view_ctx, gd->vobj) && ged_draw_shape_ref_is_null(gd->shape_ref)) || subcmd_argc < 4) {
 		bu_vls_free(&gobj_path);
 		bu_vls_printf(gd->gedp->ged_result_str, "Usage: view obj [-V view] [-L] set <name> <field> <value>");
 		return BRLCAD_ERROR;

@@ -46,6 +46,7 @@ struct rt_mesh_lod;
 #define RT_INV_4096 0.000244140625
 #define RT_VIEW_MIN_SIZE 0.0001
 #define RT_VIEW_MIN_SCALE 0.00005
+#define RT_VIEW_AUTOVIEW_SCALE_DEFAULT -1
 
 struct rt_view_lod_settings {
     fastf_t scale;
@@ -78,6 +79,71 @@ struct rt_view_info {
     fastf_t size;
     struct rt_view_lod_settings lod;
 };
+
+struct rt_view_knobs {
+    vect_t rot_m;
+    int rot_m_flag;
+    char origin_m;
+    void *rot_m_udata;
+
+    vect_t rot_o;
+    int rot_o_flag;
+    char origin_o;
+    void *rot_o_udata;
+
+    vect_t rot_v;
+    int rot_v_flag;
+    char origin_v;
+    void *rot_v_udata;
+
+    fastf_t sca;
+    int sca_flag;
+    void *sca_udata;
+
+    vect_t tra_m;
+    int tra_m_flag;
+    void *tra_m_udata;
+
+    vect_t tra_v;
+    int tra_v_flag;
+    void *tra_v_udata;
+
+    vect_t rot_m_abs;
+    vect_t rot_m_abs_last;
+    vect_t rot_o_abs;
+    vect_t rot_o_abs_last;
+    vect_t rot_v_abs;
+    vect_t rot_v_abs_last;
+
+    fastf_t sca_abs;
+
+    vect_t tra_m_abs;
+    vect_t tra_m_abs_last;
+    vect_t tra_v_abs;
+    vect_t tra_v_abs_last;
+};
+
+enum rt_view_knobs_category {
+    RT_VIEW_KNOBS_ALL = 0,
+    RT_VIEW_KNOBS_RATE = 1,
+    RT_VIEW_KNOBS_ABS = 2
+};
+
+struct rt_view_knob_values {
+    vect_t rate_rotation;
+    vect_t rate_translation;
+    fastf_t rate_scale;
+    vect_t absolute_rotation;
+    vect_t absolute_translation;
+    fastf_t absolute_scale;
+};
+
+RT_EXPORT extern int
+rt_view_knobs_state_reset(struct rt_view_knobs *knobs, int category);
+
+RT_EXPORT extern unsigned long long
+rt_view_knobs_state_hash(const struct rt_view_knobs *knobs,
+			 struct bu_data_hash_state *state);
 
 struct rt_view_interactive_rect_state {
     int active;

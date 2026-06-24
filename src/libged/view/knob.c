@@ -26,37 +26,39 @@
 #include "common.h"
 
 #include <string.h>
-#include "rt/view_legacy_bsg.h"
+#include "rt/view.h"
 #include "../ged_private.h"
 #include "./ged_view.h"
 
 static void
-print_knob_vals(struct bu_vls *o, struct bsg_view *v)
+print_knob_vals(struct bu_vls *o, void *view_ctx)
 {
-    if (!o || !v)
+    struct rt_view_knob_values values;
+
+    if (!o || !ged_view_context_knob_values_get(&values, view_ctx))
 	return;
 
     bu_vls_printf(o, "rate - rotation:\n");
-    bu_vls_printf(o, " x = %f\n", v->k.rot_v[X]);
-    bu_vls_printf(o, " y = %f\n", v->k.rot_v[Y]);
-    bu_vls_printf(o, " z = %f\n", v->k.rot_v[Z]);
+    bu_vls_printf(o, " x = %f\n", values.rate_rotation[X]);
+    bu_vls_printf(o, " y = %f\n", values.rate_rotation[Y]);
+    bu_vls_printf(o, " z = %f\n", values.rate_rotation[Z]);
     bu_vls_printf(o, "rate - translation (skew):\n");
-    bu_vls_printf(o, " X = %f\n", v->k.tra_v[X]);
-    bu_vls_printf(o, " Y = %f\n", v->k.tra_v[Y]);
-    bu_vls_printf(o, " Z = %f\n", v->k.tra_v[Z]);
+    bu_vls_printf(o, " X = %f\n", values.rate_translation[X]);
+    bu_vls_printf(o, " Y = %f\n", values.rate_translation[Y]);
+    bu_vls_printf(o, " Z = %f\n", values.rate_translation[Z]);
     bu_vls_printf(o, "rate - scale:\n");
-    bu_vls_printf(o, " S = %f\n", v->k.sca);
+    bu_vls_printf(o, " S = %f\n", values.rate_scale);
 
     bu_vls_printf(o, "absolute - rotation:\n");
-    bu_vls_printf(o, " ax = %f\n", v->k.rot_v_abs[X]);
-    bu_vls_printf(o, " ay = %f\n", v->k.rot_v_abs[Y]);
-    bu_vls_printf(o, " az = %f\n", v->k.rot_v_abs[Z]);
+    bu_vls_printf(o, " ax = %f\n", values.absolute_rotation[X]);
+    bu_vls_printf(o, " ay = %f\n", values.absolute_rotation[Y]);
+    bu_vls_printf(o, " az = %f\n", values.absolute_rotation[Z]);
     bu_vls_printf(o, "absolute - translation (skew):\n");
-    bu_vls_printf(o, " aX = %f\n", v->k.tra_v_abs[X]);
-    bu_vls_printf(o, " aY = %f\n", v->k.tra_v_abs[Y]);
-    bu_vls_printf(o, " aZ = %f\n", v->k.tra_v_abs[Z]);
+    bu_vls_printf(o, " aX = %f\n", values.absolute_translation[X]);
+    bu_vls_printf(o, " aY = %f\n", values.absolute_translation[Y]);
+    bu_vls_printf(o, " aZ = %f\n", values.absolute_translation[Z]);
     bu_vls_printf(o, "absolute - scale:\n");
-    bu_vls_printf(o, " aS = %f\n", rt_view_absolute_scale_from_bsg(v));
+    bu_vls_printf(o, " aS = %f\n", values.absolute_scale);
 }
 
 int
@@ -65,8 +67,8 @@ ged_knob_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     /* Make sure the view coordinate conversion values match the database */
-    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
-    rt_view_unit_conversion_set_bsg(v,
+    void *view_ctx = ged_view_active_ctx(gedp);
+    ged_view_context_unit_conversion_set(view_ctx,
 	(gedp->dbip) ? gedp->dbip->dbi_local2base : 1.0,
 	(gedp->dbip) ? gedp->dbip->dbi_base2local : 1.0);
 
@@ -110,7 +112,7 @@ ged_knob_core(struct ged *gedp, int argc, const char *argv[])
     argc = opt_ret;
     if (argc == 1) {
 	// print current values
-	print_knob_vals(gedp->ged_result_str, v);
+	print_knob_vals(gedp->ged_result_str, view_ctx);
 	return BRLCAD_OK;
     }
 
@@ -121,7 +123,7 @@ ged_knob_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
     if (!model_flag && !view_flag)
-	model_flag = (rt_view_coord_from_bsg(v) == 'm') ? 1 : 0;
+	model_flag = (ged_view_context_coord_get(view_ctx) == 'm') ? 1 : 0;
 
     int do_tran = 0;
     int do_rot = 0;
@@ -138,17 +140,11 @@ ged_knob_core(struct ged *gedp, int argc, const char *argv[])
 		BU_STR_EQUAL(cmd, "clear") || BU_STR_EQUAL(cmd, "stop")) {
 	    // Per MGED, this command seems to reset the rate entries
 	    // but not the absolute entries.
-	    rt_view_knobs_reset_bsg(v, RT_VIEW_KNOBS_RATE_BSG);
+	    ged_view_context_knobs_reset(view_ctx, RT_VIEW_KNOBS_RATE);
 	    continue;
 	}
 	if (BU_STR_EQUAL(cmd, "calibrate")) {
-	    /* Reset BOTH model and view absolute translation baselines and their
-	     * corresponding last arrays so switching coord systems after a
-	     * calibrate does not introduce stale deltas. */
-	    VSETALL(v->k.tra_v_abs, 0.0);
-	    VSETALL(v->k.tra_v_abs_last, 0.0);
-	    VSETALL(v->k.tra_m_abs, 0.0);
-	    VSETALL(v->k.tra_m_abs_last, 0.0);
+	    ged_view_context_knobs_calibrate(view_ctx);
 	    continue;
 	}
 
@@ -171,9 +167,9 @@ ged_knob_core(struct ged *gedp, int argc, const char *argv[])
 	--argc;	++argv;
 
 	// Process the actual command
-	int kp_ret = rt_view_knobs_cmd_process_bsg(
+	int kp_ret = ged_view_context_knobs_cmd_process(
 		&rvec, &do_rot, &tvec, &do_tran,
-		v, cmd, f,
+		view_ctx, cmd, f,
 		origin, model_flag, incr_flag);
 
 	if (kp_ret != BRLCAD_OK) {
@@ -183,7 +179,7 @@ ged_knob_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     if (do_tran) {
-	rt_view_knobs_translate_bsg(v, tvec, model_flag);
+	ged_view_context_knobs_translate(view_ctx, tvec, model_flag);
     }
 
     if (do_rot) {
@@ -191,13 +187,14 @@ ged_knob_core(struct ged *gedp, int argc, const char *argv[])
 	const pointp_t pvt_pt = (origin == 'k') ? keypoint : NULL;
 
 	if (pvt_pt)
-	    rt_view_keypoint_from_bsg(keypoint, v);
+	    ged_view_context_keypoint_get(keypoint, view_ctx);
 
 	// Note - we don't (currently) support 'o' coords here, so the obj_rot matrix is always NULL.
-	rt_view_knobs_rotate_bsg(v, rvec, origin, (model_flag ? 'm' : 'v'), NULL, pvt_pt);
+	ged_view_context_knobs_rotate(view_ctx, rvec, origin,
+	    (model_flag ? 'm' : 'v'), NULL, pvt_pt);
     }
 
-    rt_view_knobs_update_rate_flags_bsg(v);
+    ged_view_context_knobs_update_rate_flags(view_ctx);
 
     return BRLCAD_OK;
 }

@@ -142,7 +142,7 @@ set(
   ${qtcad_hdrs}
   QgCanvasInput.h
   QgCanvasState.h
-  QgLegacyViewBsg.h
+  QgLegacyViewContext.h
   QgLegacyViewDm.h
   QgLegacyViewSketch.h
   qtcad_resources.qrc

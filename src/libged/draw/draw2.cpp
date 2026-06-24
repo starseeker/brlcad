@@ -36,20 +36,22 @@
 #include "bu/cmd.h"
 #include "bu/opt.h"
 #include "bu/sort.h"
+#include "bu/str.h"
 #include "nmg.h"
 #include "rt/db_attr.h"
+#include "rt/db_io.h"
 #include "rt/view.h"
 
 #include "ged/bsg_ged_draw.h"
+#include "ged/database.h"
 #include "ged/view.h"
-#include "rt/view_legacy_bsg.h"
-#include "../ged_private.h"
-#include "./ged_draw.h"
+
+static const int DRAW_MODE_UNSET = -1;
 
 static int
 draw_opt_color(struct bu_vls *msg, size_t argc, const char **argv, void *data)
 {
-    struct bsg_appearance_settings *vs = (struct bsg_appearance_settings *)data;
+    struct ged_draw_appearance_settings *vs = (struct ged_draw_appearance_settings *)data;
     struct bu_color c;
     int ret = bu_opt_color(msg, argc, argv, (void *)&c);
     if (ret == 1 || ret == 3) {
@@ -59,25 +61,42 @@ draw_opt_color(struct bu_vls *msg, size_t argc, const char **argv, void *data)
     return ret;
 }
 
+static void
+draw_cmd_help(struct ged *gedp, const char *usage, struct bu_opt_desc *d)
+{
+    struct bu_vls str = BU_VLS_INIT_ZERO;
+    char *option_help;
+
+    bu_vls_sprintf(&str, "%s", usage);
+
+    if ((option_help = bu_opt_describe(d, NULL))) {
+	bu_vls_printf(&str, "Options:\n%s\n", option_help);
+	bu_free(option_help, "help str");
+    }
+
+    bu_vls_vlscat(gedp->ged_result_str, &str);
+    bu_vls_free(&str);
+}
+
 
 static int
 draw_user_mode_to_internal(int mode)
 {
     switch (mode) {
 	case 0:
-	    return BSG_DRAW_MODE_WIRE;
+	    return GED_DRAW_MODE_WIRE;
 	case 1:
-	    return BSG_DRAW_MODE_SHADED_BOTS;
+	    return GED_DRAW_MODE_SHADED_BOTS;
 	case 2:
-	    return BSG_DRAW_MODE_SHADED;
+	    return GED_DRAW_MODE_SHADED;
 	case 3:
-	    return BSG_DRAW_MODE_EVAL_WIRE;
+	    return GED_DRAW_MODE_EVAL_WIRE;
 	case 4:
-	    return BSG_DRAW_MODE_HIDDEN_LINE;
+	    return GED_DRAW_MODE_HIDDEN_LINE;
 	case 5:
-	    return BSG_DRAW_MODE_EVAL_POINTS;
+	    return GED_DRAW_MODE_EVAL_POINTS;
 	default:
-	    return (mode < 0) ? _GED_SHADED_MODE_UNSET : BSG_DRAW_MODE_SHADED;
+	    return (mode < 0) ? DRAW_MODE_UNSET : GED_DRAW_MODE_SHADED;
     }
 }
 
@@ -282,7 +301,7 @@ ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
      * view.  In order to set up the correct default views, we need to know
      * if a specific view has in fact been specified.  We do a preliminary
      * option check to figure this out */
-    struct bsg_view *cv = (struct bsg_view *)ged_view_active_ctx(gedp);
+    void *cv = ged_view_active_ctx(gedp);
     struct bu_vls cvls = BU_VLS_INIT_ZERO;
     struct bu_opt_desc vd[2];
     BU_OPT(vd[0],  "V", "view",    "name",      &bu_opt_vls, &cvls,   "specify view to draw on");
@@ -295,14 +314,14 @@ ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     if (bu_vls_strlen(&cvls)) {
-	cv = (struct bsg_view *)ged_view_find_ctx(gedp, bu_vls_cstr(&cvls));
+	cv = ged_view_find_ctx(gedp, bu_vls_cstr(&cvls));
 	if (!cv) {
 	    bu_vls_printf(gedp->ged_result_str, "Specified view %s not found\n", bu_vls_cstr(&cvls));
 	    bu_vls_free(&cvls);
 	    return BRLCAD_ERROR;
 	}
 
-	if (!rt_view_is_independent_bsg(cv)) {
+	if (!ged_view_context_is_independent(cv)) {
 	    bu_vls_printf(gedp->ged_result_str, "Specified view %s is not an independent view, and as such does not support specifying db objects for display in only this view.  To change the view's status, the command 'view independent %s 1' may be applied.\n", bu_vls_cstr(&cvls), bu_vls_cstr(&cvls));
 	    bu_vls_free(&cvls);
 	    return BRLCAD_ERROR;
@@ -311,11 +330,11 @@ ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
 
     // If we don't have a specified view, and the default view isn't a shared view, see if
     // we can find a shared view in the view set.
-    if (!bu_vls_strlen(&cvls) && (!cv || rt_view_is_independent_bsg(cv))) {
+    if (!bu_vls_strlen(&cvls) && (!cv || ged_view_context_is_independent(cv))) {
 	struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
 	for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	    struct bsg_view *bv = (struct bsg_view *)BU_PTBL_GET(views, i);
-	    if (!rt_view_is_independent_bsg(bv)) {
+	    void *bv = (void *)BU_PTBL_GET(views, i);
+	    if (!ged_view_context_is_independent(bv)) {
 		cv = bv;
 		break;
 	    }
@@ -333,7 +352,7 @@ ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
     /* User settings may override various options - set up to collect them.
      * Option defaults may be overridden for the purposes of the current draw
      * command by command line options. */
-    struct bsg_appearance_settings vs = BSG_APPEARANCE_SETTINGS_INIT;
+    struct ged_draw_appearance_settings vs = GED_DRAW_APPEARANCE_SETTINGS_INIT;
 
     int drawing_modes[6] = {-1, 0, 0, 0, 0, 0};
     struct bu_opt_desc d[19];
@@ -359,7 +378,7 @@ ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
 
     /* If no args, must be wanting help */
     if (!argc) {
-	_ged_cmd_help(gedp, usage, d);
+	draw_cmd_help(gedp, usage, d);
 	return BRLCAD_OK;
     }
 
@@ -386,7 +405,7 @@ ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
     bu_vls_free(&omsg);
 
     if (print_help) {
-	_ged_cmd_help(gedp, usage, d);
+	draw_cmd_help(gedp, usage, d);
 	return BRLCAD_OK;
     }
 
@@ -414,7 +433,7 @@ ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
 	}
     }
     if (drawing_modes[0] > -1) {
-	vs.draw_mode = (bsg_draw_mode)draw_user_mode_to_internal(drawing_modes[0]);
+	vs.draw_mode = draw_user_mode_to_internal(drawing_modes[0]);
     }
 
     // Before we start doing anything with the object set, record if things are
@@ -452,7 +471,7 @@ ged_redraw2_core(struct ged *gedp, int argc, const char *argv[])
 
     /* redraw may operate on a specific user specified view, or on
      * all views (default) */
-    struct bsg_view *cv = NULL;
+    void *cv = NULL;
     struct bu_vls cvls = BU_VLS_INIT_ZERO;
     struct bu_opt_desc vd[2];
     BU_OPT(vd[0],  "V", "view",    "name",      &bu_opt_vls, &cvls,   "specify view to draw on");
@@ -460,7 +479,7 @@ ged_redraw2_core(struct ged *gedp, int argc, const char *argv[])
     int opt_ret = bu_opt_parse(NULL, argc, argv, vd);
     argc = opt_ret;
     if (bu_vls_strlen(&cvls)) {
-	cv = (struct bsg_view *)ged_view_find_ctx(gedp, bu_vls_cstr(&cvls));
+	cv = ged_view_find_ctx(gedp, bu_vls_cstr(&cvls));
 	if (!cv) {
 	    bu_vls_printf(gedp->ged_result_str, "Specified view %s not found\n", bu_vls_cstr(&cvls));
 	    bu_vls_free(&cvls);

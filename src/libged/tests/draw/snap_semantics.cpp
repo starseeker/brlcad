@@ -62,15 +62,15 @@ main(int UNUSED(ac), char *av[])
     /* ------------------------------------------------------------------
      * Build a minimal headless view with grid snap enabled.
      * ------------------------------------------------------------------ */
-    struct bsg_view v;
-    rt_view_init_bsg(&v, NULL);
-    rt_view_dimensions_set_bsg(&v, 512, 512);
+    void *view = rt_view_context_create_bsg();
+    ASSERT(view != NULL);
+    ASSERT(rt_view_context_dimensions_set_bsg(view, 512, 512));
     struct rt_view_grid_state grid = RT_VIEW_GRID_STATE_INIT;
-    ASSERT(rt_view_grid_state_from_bsg(&grid, &v));
+    ASSERT(rt_view_context_grid_state_from_bsg(&grid, view));
     grid.res_h = 1.0;
     grid.res_v = 1.0;
-    ASSERT(rt_view_grid_state_set_bsg(&v, &grid));
-    rt_view_snap_source_flags_set_bsg(&v, 0);
+    ASSERT(rt_view_context_grid_state_set_bsg(view, &grid));
+    ASSERT(rt_view_context_snap_source_flags_set_bsg(view, 0));
 
     /* ------------------------------------------------------------------
      * Test 1: snap candidates near origin with GRID kind.
@@ -79,7 +79,7 @@ main(int UNUSED(ac), char *av[])
 	point_t sample = {0.4, 0.4, 0.0};
 	struct rt_view_snap_result_bsg *sr = rt_view_snap_result_create_bsg();
 	ASSERT(sr != NULL);
-	int cnt = rt_view_snap_candidates_result_bsg(&v, sample, 0.0,
+	int cnt = rt_view_context_snap_candidates_result_bsg(view, sample, 0.0,
 		RT_VIEW_SNAP_KIND_GRID_BSG, sr);
 	/* A valid grid snap should return at least 1 candidate and the
 	 * nearest snapped point should be within one grid cell of sample. */
@@ -88,7 +88,7 @@ main(int UNUSED(ac), char *av[])
 	    point_t snapped = VINIT_ZERO;
 	    ASSERT(rt_view_snap_result_point_bsg(sr, 0, snapped));
 	    double dist = DIST_PNT_PNT(snapped, sample);
-	    ASSERT(rt_view_grid_state_from_bsg(&grid, &v));
+	    ASSERT(rt_view_context_grid_state_from_bsg(&grid, view));
 	    ASSERT(dist <= grid.res_h * 1.5);
 	}
 	rt_view_snap_result_free_bsg(sr);
@@ -100,7 +100,8 @@ main(int UNUSED(ac), char *av[])
     {
 	fastf_t vx = 0.0, vy = 0.0;
 	/* Place the sample near the view center (0,0 in view space). */
-	rt_view_snap_point_2d_bsg(&v, &vx, &vy, RT_VIEW_SNAP_KIND_GRID_BSG);
+	rt_view_context_snap_point_2d_bsg(view, &vx, &vy,
+		RT_VIEW_SNAP_KIND_GRID_BSG);
 	/* Result should be finite (no NaN/Inf). */
 	ASSERT(std::isfinite((double)vx));
 	ASSERT(std::isfinite((double)vy));
@@ -113,15 +114,16 @@ main(int UNUSED(ac), char *av[])
 	struct rt_view_snap_result_bsg *sr = rt_view_snap_result_create_bsg();
 	ASSERT(sr != NULL);
 	point_t p = VINIT_ZERO;
-	int r = rt_view_snap_candidates_result_bsg(NULL, p, 0.0,
+	int r = rt_view_context_snap_candidates_result_bsg(NULL, p, 0.0,
 		RT_VIEW_SNAP_KIND_GRID_BSG, sr);
 	ASSERT(r == 0);
 	fastf_t vx = 0.0, vy = 0.0;
-	rt_view_snap_point_2d_bsg(NULL, &vx, &vy, RT_VIEW_SNAP_KIND_GRID_BSG);
+	rt_view_context_snap_point_2d_bsg(NULL, &vx, &vy,
+		RT_VIEW_SNAP_KIND_GRID_BSG);
 	rt_view_snap_result_free_bsg(sr);
     }
 
-    rt_view_free_bsg(&v);
+    rt_view_context_free_bsg(view);
 
     bu_log("snap semantic records: %d checks, %d failures\n", nchecks, nfails);
     return nfails ? 1 : 0;

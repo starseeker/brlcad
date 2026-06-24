@@ -31,7 +31,6 @@
 #include "bu/cmd.h"
 #include "ged/event_txn.h"
 #include "rt/geom.h"
-#include "rt/view_legacy_bsg.h"
 #include "raytrace.h"
 #include "wdb.h"
 
@@ -173,8 +172,8 @@ ged_find_metaball_pnt_nearest_pnt(struct ged *gedp, int argc, const char *argv[]
     }
 
     mat_t view2model;
-    struct bsg_view *gvp = (struct bsg_view *)ged_view_active_ctx(gedp);
-    rt_view_view2model_from_bsg(view2model, gvp);
+    void *view_ctx = ged_view_active_ctx(gedp);
+    ged_view_context_view2model_get(view2model, view_ctx);
     nearest = find_metaball_pnt_nearest_pnt(&((struct rt_metaball_internal *)intern.idb_ptr)->metaball_ctrl_head,
 					    model_pt, view2model);
     pt_i = _ged_get_metaball_i_pnt((struct rt_metaball_internal *)intern.idb_ptr, nearest);
@@ -308,9 +307,9 @@ ged_metaball_add_pnt_core(struct ged *gedp, int argc, const char *argv[])
 
     mat_t model2view;
     mat_t view2model;
-    struct bsg_view *gvp = (struct bsg_view *)ged_view_active_ctx(gedp);
-    rt_view_model2view_from_bsg(model2view, gvp);
-    rt_view_view2model_from_bsg(view2model, gvp);
+    void *view_ctx = ged_view_active_ctx(gedp);
+    ged_view_context_model2view_get(model2view, view_ctx);
+    ged_view_context_view2model_get(view2model, view_ctx);
 
     MAT4X3PNT(view_coord, model2view, lastmbp->coord);
     view_mb_pt[Z] = view_coord[Z];

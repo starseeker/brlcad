@@ -34,7 +34,6 @@
 #include "bg/plot3.h"
 #include "bg/clip.h"
 #include "rt/view.h"
-#include "rt/view_legacy_bsg.h"
 
 #include "ged/bsg_ged_draw.h"
 #include "../ged_private.h"
@@ -165,7 +164,7 @@ plot_integer_record(const struct ged_draw_view_db_object_record *rec, void *data
 }
 
 void
-dl_plot(struct bsg_view *v, FILE *fp, mat_t model2view, int floating, mat_t center, fastf_t scale, int Three_D, int Z_clip)
+dl_plot(void *view_ctx, FILE *fp, mat_t model2view, int floating, mat_t center, fastf_t scale, int Three_D, int Z_clip)
 {
     struct plot_data pd;
 
@@ -187,7 +186,7 @@ dl_plot(struct bsg_view *v, FILE *fp, mat_t model2view, int floating, mat_t cent
 		  -center[MDY] + scale,
 		  -center[MDZ] + scale);
 	pl_linmod(fp, "solid");
-	ged_draw_foreach_visible_view_record(v,
+	ged_draw_foreach_visible_view_record(view_ctx,
 		plot_floating_record, &pd);
 	return;
     }
@@ -216,7 +215,7 @@ dl_plot(struct bsg_view *v, FILE *fp, mat_t model2view, int floating, mat_t cent
 	pl_space(fp, (int)RT_VIEW_MIN, (int)RT_VIEW_MIN, (int)RT_VIEW_MAX, (int)RT_VIEW_MAX);
     pl_erase(fp);
     pl_linmod(fp, "solid");
-    ged_draw_foreach_visible_view_record(v,
+    ged_draw_foreach_visible_view_record(view_ctx,
 	    plot_integer_record, &pd);
 }
 
@@ -237,7 +236,7 @@ ged_plot_core(struct ged *gedp, int argc, const char *argv[])
     mat_t center;
     mat_t model2view;
     fastf_t scale;
-    struct bsg_view *v;
+    void *view_ctx;
     static const char *plot_usage = "file [2|3] [f] [g] [z]";
 
     GED_CHECK_DRAWABLE(gedp, BRLCAD_ERROR);
@@ -315,11 +314,11 @@ ged_plot_core(struct ged *gedp, int argc, const char *argv[])
 	is_pipe = 0;
     }
 
-    v = (struct bsg_view *)ged_view_active_ctx(gedp);
-    rt_view_model2view_from_bsg(model2view, v);
-    rt_view_center_from_bsg(center, v);
-    scale = rt_view_scale_from_bsg(v);
-    dl_plot(v, fp, model2view, floating, center, scale, Three_D, Z_clip);
+    view_ctx = ged_view_active_ctx(gedp);
+    ged_view_context_model2view_get(model2view, view_ctx);
+    ged_view_context_center_get(center, view_ctx);
+    scale = ged_view_context_scale_get(view_ctx);
+    dl_plot(view_ctx, fp, model2view, floating, center, scale, Three_D, Z_clip);
 
     if (is_pipe)
 	(void)pclose(fp);

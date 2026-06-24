@@ -144,6 +144,28 @@ ged_draw_scene_ref_geometry_pool(bsg_scene_ref ref)
 
 
 int
+ged_draw_scene_ref_is_null(bsg_scene_ref ref)
+{
+    return bsg_scene_ref_is_null(ref);
+}
+
+
+size_t
+ged_draw_scene_ref_child_count(bsg_scene_ref ref)
+{
+    return bsg_scene_ref_is_null(ref) ? 0 : bsg_scene_child_count(ref);
+}
+
+
+bsg_scene_ref
+ged_draw_scene_ref_child_at(bsg_scene_ref ref, size_t idx)
+{
+    return bsg_scene_ref_is_null(ref) ? bsg_scene_ref_null() :
+	bsg_scene_child_at(ref, idx);
+}
+
+
+int
 ged_draw_scene_ref_geometry_clear(bsg_scene_ref ref)
 {
     ged_draw_shape_state *shape_data = ged_draw_shape_state_get_scene_ref(ref);
@@ -343,6 +365,31 @@ ged_draw_scene_ref_set_draw_center(bsg_scene_ref ref, const point_t center)
 
 
 int
+ged_draw_scene_ref_bounds(bsg_scene_ref ref, point_t min, point_t max)
+{
+    if (bsg_scene_ref_is_null(ref) || !min || !max)
+	return 0;
+
+    bsg_scene_bounds(ref, min, max);
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_set_bounds(bsg_scene_ref ref,
+			      const point_t min,
+			      const point_t max,
+			      int valid)
+{
+    if (bsg_scene_ref_is_null(ref) || !min || !max)
+	return 0;
+
+    bsg_scene_set_bounds(ref, min, max, valid);
+    return 1;
+}
+
+
+int
 ged_draw_scene_ref_set_bounds_from_minmax(bsg_scene_ref ref,
 					  const point_t min,
 					  const point_t max,
@@ -365,6 +412,18 @@ ged_draw_scene_ref_set_bounds_from_minmax(bsg_scene_ref ref,
     if (set_scene_bounds)
 	bsg_scene_set_bounds(ref, min, max, 1);
     return 1;
+}
+
+int
+ged_draw_scene_ref_update_bounds_context(bsg_scene_ref ref, void *view_ctx)
+{
+    return bsg_scene_update_bounds(ref, (struct bsg_view *)view_ctx);
+}
+
+void *
+ged_draw_scene_ref_view_context(bsg_scene_ref ref)
+{
+    return (void *)bsg_scene_view(ref);
 }
 
 
@@ -399,6 +458,13 @@ int
 ged_draw_scene_ref_line_style(bsg_scene_ref ref)
 {
     return bsg_scene_line_style(ref);
+}
+
+
+int
+ged_draw_scene_ref_strict_fallback(bsg_scene_ref ref)
+{
+    return bsg_scene_strict_fallback(ref);
 }
 
 
@@ -2227,10 +2293,12 @@ ged_draw_scene_ref_publish_primitive_wireframe(bsg_scene_ref ref,
 					       struct rt_db_internal *ip,
 					       const struct bg_tess_tol *ttol,
 					       const struct bn_tol *tol,
-					       struct bsg_view *v,
+					       void *view_ctx,
 					       const struct rt_view_info *view_info,
 					       int adaptive)
 {
+    struct bsg_view *v = (struct bsg_view *)view_ctx;
+
     if (!adaptive || (ip && (ip->idb_type == ID_SUBMODEL ||
 		    ip->idb_type == ID_ANNOT))) {
 	int direct = _ged_draw_scene_ref_publish_direct_primitive_wireframe(

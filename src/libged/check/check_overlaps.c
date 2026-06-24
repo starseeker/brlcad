@@ -25,8 +25,8 @@
 #include <string.h>
 
 #include "bg/line_layer.h"
+#include "ged/bsg_ged_draw.h"
 
-#include "../bsg_ged_draw_view_private.h"
 #include "../ged_private.h"
 #include "./check_private.h"
 
@@ -338,9 +338,9 @@ int check_overlaps(struct ged *gedp, struct current_state *state,
     FILE *plot_overlaps = NULL;
     char *name = "overlaps.plot3";
     int overlap_color[3] = { 255, 255, 0 };	/* yellow */
-    struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
+    void *view_ctx = ged_view_active_ctx(gedp);
     int overlay_enabled = options->overlaps_overlay_flag &&
-	(view || ged_diagnostic_line_layer_handler_available(gedp));
+	(view_ctx || ged_diagnostic_line_layer_handler_available(gedp));
 
     /* init overlaps list */
     BU_LIST_INIT(&(overlapList.l));
@@ -400,8 +400,8 @@ int check_overlaps(struct ged *gedp, struct current_state *state,
     if (overlay_enabled) {
 	int handled = ged_diagnostic_line_layer_publish(gedp,
 		"check::overlaps", check_plot.builder);
-	if (!handled && view) {
-	    (void)ged_draw_view_line_layer_builder_replace(view,
+	if (!handled && view_ctx) {
+	    (void)ged_draw_view_context_line_layer_builder_replace(view_ctx,
 		    "check::overlaps", 0, check_plot.builder);
 	}
 	ged_check_plot_free(&check_plot);

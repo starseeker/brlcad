@@ -168,6 +168,12 @@ _ged_draw_shape_draft_sync_aux_geometry(ged_draw_shape_draft *draft)
 
 
 ged_draw_shape_draft *
+ged_draw_shape_draft_create_context(struct ged *gedp, void *view_ctx, int registered)
+{
+    return ged_draw_shape_draft_create(gedp, (struct bsg_view *)view_ctx, registered);
+}
+
+ged_draw_shape_draft *
 ged_draw_shape_draft_create(struct ged *gedp, struct bsg_view *v, int registered)
 {
     (void)registered;
@@ -523,6 +529,19 @@ ged_draw_shape_draft_apply_settings(ged_draw_shape_draft *draft,
     if (!draft || bsg_scene_ref_is_null(draft->shape_ref) || !settings)
 	return 0;
     return bsg_scene_apply_appearance_settings(draft->shape_ref, settings);
+}
+
+
+int
+ged_draw_shape_draft_apply_appearance_settings(ged_draw_shape_draft *draft,
+					       const struct ged_draw_appearance_settings *settings)
+{
+    if (!settings)
+	return 0;
+
+    struct bsg_appearance_settings bsg_settings = BSG_APPEARANCE_SETTINGS_INIT;
+    ged_draw_bsg_appearance_from_neutral(&bsg_settings, settings);
+    return ged_draw_shape_draft_apply_settings(draft, &bsg_settings);
 }
 
 

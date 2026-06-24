@@ -32,6 +32,7 @@
 #include "bu/malloc.h"
 #include "bu/ptbl.h"
 #include "bu/str.h"
+#include "bsg/appearance.h"
 #include "bsg/database_source.h"
 #include "bsg/draw_ctx.h"
 #include "bsg/draw_intent.h"
@@ -1367,7 +1368,7 @@ ged_draw_group_ref_set_dbpath(struct ged *gedp,
 int
 ged_draw_group_ref_set_mode(struct ged *gedp,
 			    ged_draw_group_ref ref,
-			    bsg_draw_mode mode)
+			    int mode)
 {
     bsg_scene_ref group_ref = ged_draw_registry_group_scene_ref(gedp, ref);
     if (bsg_scene_ref_is_null(group_ref))
@@ -1375,7 +1376,7 @@ ged_draw_group_ref_set_mode(struct ged *gedp,
 
     struct bsg_draw_intent *di = bsg_scene_draw_intent(group_ref);
     if (di) {
-	bsg_draw_intent_set_mode(di, mode);
+	bsg_draw_intent_set_mode(di, (bsg_draw_mode)mode);
 	return 1;
     }
 
@@ -1383,7 +1384,7 @@ ged_draw_group_ref_set_mode(struct ged *gedp,
     if (!path)
 	path = bsg_scene_name(group_ref);
     bsg_scene_set_draw_intent(group_ref,
-	    bsg_draw_intent_create(path, mode));
+	    bsg_draw_intent_create(path, (bsg_draw_mode)mode));
     return 1;
 }
 
@@ -1414,6 +1415,20 @@ ged_draw_group_ref_set_appearance(struct ged *gedp,
 
     bsg_draw_intent_set_appearance(di, settings);
     return 1;
+}
+
+
+int
+ged_draw_group_ref_set_appearance_settings(struct ged *gedp,
+					   ged_draw_group_ref ref,
+					   const struct ged_draw_appearance_settings *settings)
+{
+    if (!settings)
+	return 0;
+
+    struct bsg_appearance_settings bsg_settings = BSG_APPEARANCE_SETTINGS_INIT;
+    ged_draw_bsg_appearance_from_neutral(&bsg_settings, settings);
+    return ged_draw_group_ref_set_appearance(gedp, ref, &bsg_settings);
 }
 
 

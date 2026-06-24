@@ -106,13 +106,14 @@ main(int ac, char *av[]) {
     s_av[2] = "swrast";
     s_av[3] = "SW";
     s_av[4] = NULL;
-    if (ged_exec_dm(gedp, 4, s_av) != BRLCAD_OK || !gedp->ged_gvp || !gedp->ged_gvp->dmp) {
+    int dm_attach_ret = ged_exec_dm(gedp, 4, s_av);
+    void *v = ged_view_active_ctx(gedp);
+    if (dm_attach_ret != BRLCAD_OK || !v || !rt_view_context_display_manager_from_bsg(v)) {
 	bu_exit(EXIT_FAILURE, "failed to attach swrast display manager: %s\n",
 		bu_vls_strlen(gedp->ged_result_str) ? bu_vls_cstr(gedp->ged_result_str) : "no display manager available");
     }
 
-    struct bsg_view *v = gedp->ged_gvp;
-    struct dm *dmp = (struct dm *)gedp->ged_gvp->dmp;
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
     dm_set_width(dmp, 512);
     dm_set_height(dmp, 512);
 
@@ -123,10 +124,10 @@ main(int ac, char *av[]) {
     fastf_t windowbounds[6] = { -1, 1, -1, 1, -100, 100 };
     dm_set_win_bounds(dmp, windowbounds);
 
-    dm_set_vp(dmp, rt_view_scale_storage_from_bsg(v));
-    v->dmp = dmp;
-    rt_view_dimensions_set_bsg(v, dm_get_width(dmp), dm_get_height(dmp));
-    rt_view_unit_conversion_set_bsg(v,
+    dm_set_vp(dmp, rt_view_context_scale_storage_from_bsg(v));
+    rt_view_context_display_manager_set_bsg(v, dmp);
+    rt_view_context_dimensions_set_bsg(v, dm_get_width(dmp), dm_get_height(dmp));
+    rt_view_context_unit_conversion_set_bsg(v,
 	gedp->dbip->dbi_local2base,
 	gedp->dbip->dbi_base2local);
 
@@ -218,12 +219,12 @@ main(int ac, char *av[]) {
     bu_log("Testing turning on frames per second reporting...\n");
 
     // So we don't get random values here, override the timing variable values
-    dmp = (struct dm *)gedp->ged_gvp->dmp;
+    dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
     if (!dmp) {
 	bu_exit(EXIT_FAILURE, "no active display manager available for fps faceplate test\n");
     }
     dmp->start_time = 0;
-    bsg_view_set_frametime(v, 1000000000);
+    rt_view_context_frametime_set_bsg(v, 1000000000);
 
     s_av[0] = "view";
     s_av[1] = "faceplate";

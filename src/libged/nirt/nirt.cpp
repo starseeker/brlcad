@@ -54,12 +54,8 @@
 #include "bu/process.h"
 #include "vmath.h"
 #include "rt/view.h"
-#include "rt/view_legacy_bsg.h"
 
-#include "bsg/appearance.h"
-#include "bsg/node.h"
 #include "ged/bsg_ged_draw.h"
-#include "../bsg_ged_draw_view_private.h"
 #include "../qray.h"
 #include "../ged_private.h"
 
@@ -236,7 +232,7 @@ ged_nirt_core(struct ged *gedp, int argc, const char *argv[])
     /* Doing work with the database - start setting up */
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
-    struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
+    void *view_ctx = ged_view_active_ctx(gedp);
 
     // There are two possible sources of settings - the ones we deduce
     // from view state, and the ones we get from the user.  User supplied
@@ -361,7 +357,7 @@ ged_nirt_core(struct ged *gedp, int argc, const char *argv[])
      * explicitly supplied by one of the above. */
     if (VNEAR_ZERO(nv.center_model, VUNITIZE_TOL)) {
 	mat_t view_center;
-	rt_view_center_from_bsg(view_center, view);
+	ged_view_context_center_get(view_center, view_ctx);
 	MAT_DELTAS_GET_NEG(nv.center_model, view_center);
 	/* Because we are preparing an input for the nirt command line, we need
 	 * to convert to local units - lower level logic will be expecting
@@ -522,7 +518,7 @@ ged_nirt_core(struct ged *gedp, int argc, const char *argv[])
     // calculate the ray direction from the view.
     vect_t dir = VINIT_ZERO;
     mat_t view_rotation;
-    rt_view_rotation_from_bsg(view_rotation, view);
+    ged_view_context_rotation_get(view_rotation, view_ctx);
     VMOVEN(dir, view_rotation + 8, 3);
     VSCALE(dir, dir, -1.0);
     bu_vls_sprintf(&nirt_cmd, "dir %0.17f %0.17f %0.17f", V3ARGS(dir));
@@ -602,14 +598,14 @@ ged_nirt_core(struct ged *gedp, int argc, const char *argv[])
 
     /* Whether or not we're doing graphics, if we took a shot we should clear any
      * old objects from prior shots. */
-    (void)ged_draw_view_feature_remove(view,
+    (void)ged_draw_view_context_feature_remove(view_ctx,
 	    bu_vls_cstr(&gedp->i->ged_gdp->gd_qray_basename));
 
     /* If we're supposed to do graphics, look for the plot file */
     if (DG_QRAY_GRAPHICS(gedp->i->ged_gdp) && bu_vls_strlen(&nv.plotfile)) {
 	FILE *fp = fopen(bu_vls_cstr(&nv.plotfile), "rb");
 	if (fp) {
-	    fastf_t csize = view ? rt_view_scale_from_bsg(view) * 0.01 : 1.0;
+	    fastf_t csize = view_ctx ? ged_view_context_scale_get(view_ctx) * 0.01 : 1.0;
 	    int pret = _ged_draw_uplot_to_feature(gedp, fp,
 		    bu_vls_cstr(&gedp->i->ged_gdp->gd_qray_basename),
 		    csize, gedp->i->ged_gdp->gd_uplotOutputMode);
@@ -650,7 +646,7 @@ ged_vnirt_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_DRAWABLE(gedp, BRLCAD_ERROR);
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
-    struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
+    void *view_ctx = ged_view_active_ctx(gedp);
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -686,7 +682,7 @@ ged_vnirt_core(struct ged *gedp, int argc, const char *argv[])
     /* Calculate point from which to fire ray. */
     VSCALE(view_ray_orig, scan, sf);
     mat_t view2model;
-    rt_view_view2model_from_bsg(view2model, view);
+    ged_view_context_view2model_get(view2model, view_ctx);
     MAT4X3PNT(center_model, view2model, view_ray_orig);
     /* Initial center_model value will be in base units, and main nirt
      * evaluation path assumes inputs are in local units, so convert. */

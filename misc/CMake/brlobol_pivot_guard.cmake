@@ -64,8 +64,54 @@ function(_brlobol_pivot_guard_check_file _file)
     string(REGEX MATCH "${_pat}" _hit "${_contents}")
     if(_hit)
       _brlobol_pivot_guard_fail("${_rel}: ${_hit}")
-    endif()
+      endif()
   endforeach()
+
+  set(_ged_tcl_overlay_bsg_test "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/tcl_overlay_bsg.cpp")
+  if(EXISTS "${_ged_tcl_overlay_bsg_test}")
+    file(READ "${_ged_tcl_overlay_bsg_test}" _ged_tcl_overlay_bsg_contents)
+    foreach(_token
+	ged_view_active_ctx
+	ged_draw_view_context_scene_attached
+	ged_draw_view_context_tcl_lines_replace
+	ged_draw_view_context_feature_exists
+	ged_draw_view_context_feature_summary
+	ged_draw_view_context_feature_points_copy
+	ged_draw_view_context_feature_line_command_at
+	ged_draw_view_context_feature_style_get
+	ged_draw_view_context_tcl_arrows_replace
+	ged_draw_view_context_tcl_axes_replace
+	ged_draw_view_context_tcl_polygons_replace
+	ged_draw_view_context_tcl_labels_replace
+	rt_view_context_display_manager_from_bsg
+	rt_view_context_display_manager_set_bsg)
+      string(FIND "${_ged_tcl_overlay_bsg_contents}" "${_token}" _ged_tcl_overlay_token_idx)
+      if(_ged_tcl_overlay_token_idx EQUAL -1)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/tests/draw/tcl_overlay_bsg.cpp must route retained Tcl overlay lifecycle checks through opaque GED/RT context helper ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]\.\./\.\./bsg_ged_draw_view_private\.h]]
+	[[#[ \t]*include[ \t]*[<"]bsg/]]
+	[[gedp[ \t\r\n]*->[ \t\r\n]*ged_gvp]]
+	[[->[ \t\r\n]*dmp]]
+	[[(^|[^A-Za-z0-9_])struct[ \t\r\n]+bsg_view([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_view_[A-Za-z0-9_]*[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])BSG_FEATURE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_GEOMETRY_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_OVERLAY_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_ANCHOR_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_(feature_exists|feature_visible|feature_visible_set|feature_style_get|line_color_set|line_width_set|feature_points_copy|tcl_lines_replace|tcl_polygons_replace|tcl_labels_replace|label_count|label_copy|label_point_set|arrow_tip_get|arrow_tip_set|tcl_arrows_replace|feature_axes_centers_copy|tcl_axes_replace)[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _ged_tcl_overlay_direct_hit
+	"${_ged_tcl_overlay_bsg_contents}")
+      if(_ged_tcl_overlay_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/tests/draw/tcl_overlay_bsg.cpp reintroduced direct BSG view/feature access instead of opaque GED/RT context helpers: ${_ged_tcl_overlay_direct_hit}")
+      endif()
+    endforeach()
+  endif()
 endfunction()
 
 function(_brlobol_pivot_guard_require_inventory_token _contents _token)
@@ -339,7 +385,100 @@ function(_brlobol_pivot_guard_check_legacy_header_include_hygiene)
     foreach(_token
 	"ged_draw_scene_available"
 	"ged_view_active_ctx(_gedp)"
-	"ged_export_polygon(struct ged *gedp, void *polygon_state")
+	"struct ged_polygon_export_state"
+	"GED_VIEW_CLEAR_DB"
+	"GED_VIEW_CLEAR_VIEW"
+	"GED_VIEW_CLEAR_LOCAL"
+	"ged_view_context_scale_get"
+	"ged_view_context_scale_set"
+	"ged_view_context_update"
+	"ged_view_context_is_independent"
+	"ged_view_context_independent_scope_is_null"
+	"ged_view_context_independent_scope_destroy"
+	"ged_view_context_clear"
+	"ged_view_context_cleared_set"
+	"ged_view_context_refresh_drawn_count_get"
+	"ged_view_context_refresh_request"
+	"ged_view_context_name_get"
+	"ged_view_context_create_with_set"
+	"ged_view_context_create_copy_with_set"
+	"ged_view_set_context_add"
+	"ged_view_context_update_callback_set"
+	"ged_view_context_display_manager_get"
+	"ged_view_context_display_manager_set"
+	"ged_view_context_width_get"
+	"ged_view_context_height_get"
+	"ged_view_context_dimensions_set"
+	"ged_view_context_scale_storage_get"
+	"ged_view_context_framebuffer_mode_get"
+	"ged_view_context_framebuffer_mode_set"
+	"ged_view_context_perspective_get"
+	"ged_view_context_perspective_set"
+	"ged_view_context_size_get"
+	"ged_view_context_size_set"
+	"ged_view_context_inverse_size_get"
+	"ged_view_context_eye_pos_get"
+	"ged_view_context_eye_pos_set"
+	"ged_view_context_keypoint_get"
+	"ged_view_context_keypoint_set"
+	"ged_view_context_rotate_about_get"
+	"ged_view_context_rotate_about_set"
+	"ged_view_context_coord_get"
+	"ged_view_context_coord_set"
+	"ged_view_context_zclip_get"
+	"ged_view_context_zclip_set"
+	"ged_view_context_autoview"
+	"ged_view_context_autoview_bounds"
+	"ged_view_context_screen_to_view"
+	"ged_view_context_screen_point"
+	"ged_view_context_mouse_state_set"
+	"ged_view_context_model2view_get"
+	"ged_view_context_view2model_get"
+	"ged_view_context_view2model_set"
+	"ged_view_context_pmodel2view_get"
+	"ged_view_context_pmat_get"
+	"ged_view_context_pmat_set"
+	"ged_view_context_center_get"
+	"ged_view_context_center_vec_set"
+	"ged_view_context_rotation_get"
+	"ged_view_context_rotation_set"
+	"ged_view_context_plane_get"
+	"ged_view_context_aet_get"
+	"ged_view_context_aet_set"
+	"ged_view_context_info_get"
+	"ged_view_context_orientation_quat_get"
+	"ged_view_context_adc_state_get"
+	"ged_view_context_adc_state_set"
+	"ged_view_context_knob_values_get"
+	"ged_view_context_knobs_reset"
+	"ged_view_context_knobs_calibrate"
+	"ged_view_context_knobs_cmd_process"
+	"ged_view_context_knobs_translate"
+	"ged_view_context_knobs_rotate"
+	"ged_view_context_knobs_update_rate_flags"
+	"ged_view_context_grid_state_get"
+	"ged_view_context_grid_state_set"
+	"ged_view_context_model_axes_state_get"
+	"ged_view_context_model_axes_state_set"
+	"ged_view_context_view_axes_state_get"
+	"ged_view_context_view_axes_state_set"
+	"ged_view_context_center_dot_state_get"
+	"ged_view_context_center_dot_state_set"
+	"ged_view_context_scale_overlay_state_get"
+	"ged_view_context_scale_overlay_state_set"
+	"ged_view_context_params_state_get"
+	"ged_view_context_params_state_set"
+	"ged_view_context_snap_grid_2d"
+	"ged_view_context_interactive_rect_state_get"
+	"ged_view_context_interactive_rect_state_set"
+	"ged_view_context_snap_lines_get"
+	"ged_view_context_snap_lines_set"
+	"ged_view_context_snap_tolerance_factor_get"
+	"ged_view_context_snap_tolerance_factor_set"
+	"ged_view_context_unit_conversion_set"
+	"ged_view_context_lod_policy_get"
+	"ged_view_context_lod_policy_apply"
+	"ged_export_polygon(struct ged *gedp, const struct ged_polygon_export_state *polygon_state")
       string(FIND "${_ged_view_header_contents}" "${_token}"
 	_ged_view_header_token_idx)
       if(_ged_view_header_token_idx EQUAL -1)
@@ -522,6 +661,7 @@ function(_brlobol_pivot_guard_check_legacy_header_include_hygiene)
 	  "${_rel} reintroduced BSG vlist spelling after libdm direct-vlist neutralization: ${_libdm_direct_vlist_bsg_hit}")
       endif()
     endforeach()
+
   endforeach()
 
   foreach(_rel
@@ -852,14 +992,11 @@ function(_brlobol_pivot_guard_check_legacy_header_include_hygiene)
   else()
     file(READ "${_qtcad_legacy_view_src}" _qtcad_legacy_view_src_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]bsg/view_state\.h]]
 	[[#[ \t]*include[ \t]*[<"]dm\.h]]
 	[[#[ \t]*include[ \t]*[<"]ged\.h]]
 	[[#[ \t]*include[ \t]*[<"]ged/bsg_ged_draw\.h]]
-	[[#[ \t]*include[ \t]*["]QgLegacyViewBsg\.h]]
+	[[#[ \t]*include[ \t]*["]QgLegacyViewContext\.h]]
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[qg_legacy_view_from_bsg]]
-	[[qg_legacy_view_to_bsg]]
 	[[qg_legacy_view_local_create]]
 	[[qg_legacy_view_local_free]]
 	[[qg_legacy_view_local_destroy]]
@@ -878,8 +1015,9 @@ function(_brlobol_pivot_guard_check_legacy_header_include_hygiene)
 	[[qg_legacy_view_draw_appearance_create]]
 	[[qg_legacy_view_draw_appearance_destroy]]
 	[[qg_legacy_view_draw_transaction_appearance_set]]
-	[[struct[ \t\r\n]+bsg_appearance_settings]]
-	[[BSG_APPEARANCE_SETTINGS_INIT]]
+	[[struct[ \t\r\n]+ged_draw_appearance_settings]]
+	[[GED_DRAW_APPEARANCE_SETTINGS_INIT]]
+	[[GED_DRAW_MODE_HIDDEN_LINE]]
 	[[qg_legacy_view_draw_path_state]]
 	[[qg_legacy_view_draw_has_paths]]
 	[[qg_legacy_view_draw_list_paths]]
@@ -920,6 +1058,8 @@ function(_brlobol_pivot_guard_check_legacy_header_include_hygiene)
 	[[qg_legacy_view_feature_labels_replace]]
 	[[qg_legacy_view_feature_points_replace]]
 	[[qg_legacy_view_feature_clear_geometry]]
+	[[qg_legacy_view_from_context]]
+	[[qg_legacy_view_to_context]]
 	[[qg_feature_ref_to_rt]]
 	[[qg_feature_ref_from_rt]]
 	[[qg_feature_family_to_rt]]
@@ -930,14 +1070,14 @@ function(_brlobol_pivot_guard_check_legacy_header_include_hygiene)
 	[[RT_VIEW_FEATURE_TRANSIENT_PREVIEW]]
 	[[RT_VIEW_EDIT_PREVIEW_BEGIN]]
 	[[rt_view_feature_ref_is_null_bsg]]
-	[[rt_view_edit_preview_publish_event_bsg]]
-	[[rt_view_feature_overlay_ensure_bsg]]
-	[[rt_view_feature_label_ensure_bsg]]
-	[[rt_view_feature_remove_bsg]]
-	[[rt_view_feature_set_view_bsg]]
-	[[rt_view_feature_set_visible_bsg]]
-	[[rt_view_feature_set_color_bsg]]
-	[[rt_view_feature_touch_bsg]]
+		[[rt_view_context_edit_preview_publish_event_bsg]]
+		[[rt_view_context_feature_overlay_ensure_bsg]]
+		[[rt_view_context_feature_label_ensure_bsg]]
+		[[rt_view_context_feature_remove_bsg]]
+		[[rt_view_feature_set_context_bsg]]
+		[[rt_view_feature_set_visible_bsg]]
+		[[rt_view_feature_set_color_bsg]]
+		[[rt_view_feature_touch_bsg]]
 	[[rt_view_feature_labels_replace_bsg]]
 	[[rt_view_feature_points_replace_bsg]]
 	[[rt_view_feature_clear_geometry_bsg]]
@@ -963,105 +1103,117 @@ function(_brlobol_pivot_guard_check_legacy_header_include_hygiene)
 	[[ged_draw_highlight_shape_ref_by_name]]
 	[[ged_draw_set_highlighted_shape_ref]]
 	[[GED_DRAW_SHAPE_REF_NULL]]
-	[[bsg_view_scene_attached]]
+	[[rt_view_context_scene_attached_bsg]]
 	[[dm_draw_objs]]
 	[[ged_draw_path_state]]
 	[[ged_draw_has_paths]]
 	[[ged_draw_list_paths]]
-	[[rt_view_init_bsg]]
-	[[rt_view_free_bsg]]
-	[[rt_view_refresh_request_bsg]]
-	[[rt_view_refresh_consume_bsg]]
-	[[rt_view_refresh_complete_bsg]]
-	[[bu_vls_sprintf]]
-	[[rt_view_set_add_view_bsg]]
-	[[rt_view_set_remove_view_bsg]]
-	[[rt_view_lod_policy_copy_bsg]]
-	[[rt_view_autoview_bsg]]
-	[[rt_view_lod_bounds_update_bsg]]
-	[[rt_view_dimensions_set_bsg]]
-	[[rt_view_width_from_bsg]]
-	[[rt_view_height_from_bsg]]
-	[[rt_view_unit_conversion_set_bsg]]
-	[[rt_view_local2base_from_bsg]]
-	[[rt_view_base2local_from_bsg]]
-	[[rt_view_info_from_bsg]]
-	[[rt_view_name_from_bsg]]
-	[[rt_view_aet_from_bsg]]
-	[[rt_view_center_from_bsg]]
-	[[rt_view_rotation_from_bsg]]
-	[[rt_view_scale_from_bsg]]
-	[[rt_view_scale_set_bsg]]
-	[[rt_view_perspective_from_bsg]]
-	[[rt_view_scale_storage_from_bsg]]
+	[[rt_view_context_create_bsg]]
+	[[rt_view_context_free_bsg]]
+	[[rt_view_context_release_storage_bsg]]
+	[[rt_view_context_view_set_attach_bsg]]
+	[[rt_view_context_refresh_request_bsg]]
+	[[rt_view_context_refresh_consume_bsg]]
+	[[rt_view_context_refresh_complete_bsg]]
+	[[rt_view_context_name_set_bsg]]
+	[[rt_view_context_name_from_bsg]]
+	[[rt_view_set_context_add_bsg]]
+	[[rt_view_set_context_remove_bsg]]
+	[[rt_view_context_bounds_update_callback_from_bsg]]
+	[[rt_view_context_bounds_update_callback_set_bsg]]
+	[[rt_view_context_bounds_update_callback_call_bsg]]
+	[[rt_view_context_adjust_bsg]]
+	[[rt_view_context_lod_policy_copy_bsg]]
+	[[rt_view_context_autoview_bsg]]
+	[[rt_view_context_lod_bounds_update_bsg]]
+	[[rt_view_context_dimensions_set_bsg]]
+	[[rt_view_context_width_from_bsg]]
+	[[rt_view_context_height_from_bsg]]
+	[[rt_view_context_unit_conversion_set_bsg]]
+	[[rt_view_context_local2base_from_bsg]]
+	[[rt_view_context_base2local_from_bsg]]
+	[[rt_view_context_info_from_bsg]]
+	[[rt_view_context_aet_from_bsg]]
+	[[rt_view_context_center_from_bsg]]
+	[[rt_view_context_rotation_from_bsg]]
+	[[rt_view_context_scale_from_bsg]]
+	[[rt_view_context_scale_set_bsg]]
+	[[rt_view_context_perspective_from_bsg]]
+	[[rt_view_context_scale_storage_from_bsg]]
 	[[qg_legacy_view_display_manager_get]]
-	[[rt_view_display_manager_from_bsg]]
-	[[rt_view_display_manager_set_bsg]]
-	[[rt_view_hash_bsg]]
-	[[rt_view_unique_object_name_bsg]]
-	[[rt_view_framebuffer_mode_from_bsg]]
-	[[rt_view_framebuffer_mode_set_bsg]]
-	[[rt_view_lod_policy_from_bsg]]
-	[[rt_view_lod_policy_apply_bsg]]
-	[[rt_view_adc_state_from_bsg]]
-	[[rt_view_adc_state_set_bsg]]
-	[[rt_view_center_dot_state_from_bsg]]
-	[[rt_view_center_dot_state_set_bsg]]
-	[[rt_view_grid_state_from_bsg]]
-	[[rt_view_grid_state_set_bsg]]
-	[[rt_view_model_axes_state_from_bsg]]
-	[[rt_view_model_axes_state_set_bsg]]
-	[[rt_view_scale_overlay_state_from_bsg]]
-	[[rt_view_scale_overlay_state_set_bsg]]
-	[[rt_view_view_axes_state_from_bsg]]
-	[[rt_view_view_axes_state_set_bsg]]
-	[[rt_view_params_state_from_bsg]]
-	[[rt_view_params_state_set_bsg]]
+	[[rt_view_context_display_manager_from_bsg]]
+	[[rt_view_context_display_manager_set_bsg]]
+	[[rt_view_context_hash_bsg]]
+	[[rt_view_context_unique_object_name_bsg]]
+	[[rt_view_context_framebuffer_mode_from_bsg]]
+	[[rt_view_context_framebuffer_mode_set_bsg]]
+	[[rt_view_context_lod_policy_from_bsg]]
+	[[rt_view_context_lod_policy_apply_bsg]]
+	[[rt_view_context_adc_state_from_bsg]]
+	[[rt_view_context_adc_state_set_bsg]]
+	[[rt_view_context_center_dot_state_from_bsg]]
+	[[rt_view_context_center_dot_state_set_bsg]]
+	[[rt_view_context_grid_state_from_bsg]]
+	[[rt_view_context_grid_state_set_bsg]]
+	[[rt_view_context_model_axes_state_from_bsg]]
+	[[rt_view_context_model_axes_state_set_bsg]]
+	[[rt_view_context_scale_overlay_state_from_bsg]]
+	[[rt_view_context_scale_overlay_state_set_bsg]]
+	[[rt_view_context_view_axes_state_from_bsg]]
+	[[rt_view_context_view_axes_state_set_bsg]]
+	[[rt_view_context_params_state_from_bsg]]
+	[[rt_view_context_params_state_set_bsg]]
 	[[RT_VIEW_SNAP_VIEW_BSG]]
 	[[RT_VIEW_SNAP_DB_BSG]]
-	[[rt_view_snap_source_flags_set_bsg]]
-	[[rt_view_snap_lines_from_bsg]]
-	[[rt_view_snap_lines_set_bsg]]
-	[[rt_view_snap_exclude_feature_clear_bsg]]
-	[[rt_view_center_vec_set_bsg]]
-	[[rt_view_aet_set_bsg]]
-	[[rt_view_update_bsg]]
-	[[rt_view_screen_to_view_from_bsg]]
-	[[rt_view_view2model_from_bsg]]
-	[[rt_view_view2model_set_bsg]]
-	[[rt_view_model2view_from_bsg]]
-	[[rt_view_screen_point_from_bsg]]
-	[[rt_view_radius_from_bsg]]
-	[[rt_view_interactive_rect_state_from_bsg]]
-	[[rt_view_interactive_rect_state_set_bsg]]
-	[[rt_view_pick_point_bsg]]
-	[[rt_view_pick_nearest_bsg]]
-	[[rt_view_pick_rect_bsg]]
-	[[rt_view_pick_result_create_bsg]]
-	[[rt_view_pick_result_free_bsg]]
-	[[rt_view_pick_result_count_bsg]]
-	[[rt_view_pick_result_path_bsg]]
-	[[rt_view_pick_result_hit_dist_bsg]]
-	[[rt_view_pick_result_append_copy_bsg]]
-	[[rt_view_pick_result_filter_first_bsg]]
-	[[rt_view_selection_set_pick_result_ref_bsg]]
-	[[rt_view_selection_clear_bsg]]
-	[[rt_view_size_set_bsg]]
+	[[rt_view_context_snap_source_flags_set_bsg]]
+	[[rt_view_context_snap_lines_from_bsg]]
+	[[rt_view_context_snap_lines_set_bsg]]
+	[[rt_view_context_snap_kind_mask_from_bsg]]
+	[[rt_view_context_size_from_bsg]]
+	[[rt_view_context_size_set_bsg]]
+	[[rt_view_context_snap_tolerance_factor_from_bsg]]
+	[[rt_view_context_snap_exclude_feature_clear_bsg]]
+	[[rt_view_context_center_vec_set_bsg]]
+	[[rt_view_context_aet_set_bsg]]
+	[[rt_view_context_update_bsg]]
+	[[rt_view_context_screen_to_view_from_bsg]]
+	[[rt_view_context_screen_point_from_bsg]]
+	[[rt_view_context_current_point_from_bsg]]
+	[[rt_view_context_current_point_set_bsg]]
+	[[rt_view_context_mouse_state_set_bsg]]
+	[[rt_view_context_view2model_from_bsg]]
+	[[rt_view_context_view2model_set_bsg]]
+	[[rt_view_context_model2view_from_bsg]]
+	[[rt_view_context_radius_from_bsg]]
+	[[rt_view_context_interactive_rect_state_from_bsg]]
+	[[rt_view_context_interactive_rect_state_set_bsg]]
+	[[rt_view_context_pick_point_bsg]]
+	[[rt_view_context_pick_nearest_bsg]]
+	[[rt_view_context_pick_rect_bsg]]
+		[[rt_view_pick_result_context_create_bsg]]
+		[[rt_view_pick_result_context_free_bsg]]
+		[[rt_view_pick_result_context_count_bsg]]
+		[[rt_view_pick_result_context_path_bsg]]
+		[[rt_view_pick_result_context_hit_dist_bsg]]
+		[[rt_view_pick_result_context_append_copy_bsg]]
+		[[rt_view_pick_result_context_filter_first_bsg]]
+		[[rt_view_context_selection_set_pick_result_context_bsg]]
+	[[rt_view_context_selection_clear_bsg]]
 	[[rt_view_polygon_ref_is_null_bsg]]
 	[[rt_view_polygon_record_get_bsg]]
-	[[rt_view_polygon_create_bsg]]
-	[[rt_view_polygon_select_bsg]]
-	[[rt_view_polygon_find_bsg]]
-	[[rt_view_polygon_dup_bsg]]
-	[[rt_view_polygon_visit_records_bsg]]
-	[[rt_view_polygon_snap_count_bsg]]
-	[[rt_view_polygon_clear_point_selection_bsg]]
-	[[rt_view_polygon_update_bsg]]
-	[[rt_view_polygon_update_screen_pt_bsg]]
-	[[rt_view_polygon_move_bsg]]
-	[[rt_view_polygon_set_name_bsg]]
-	[[rt_view_polygon_set_view_bsg]]
-	[[rt_view_polygon_set_visual_bsg]]
+		[[rt_view_context_polygon_create_bsg]]
+		[[rt_view_context_polygon_select_bsg]]
+		[[rt_view_context_polygon_find_bsg]]
+		[[rt_view_context_polygon_dup_bsg]]
+		[[rt_view_context_polygon_visit_records_bsg]]
+		[[rt_view_context_polygon_snap_count_bsg]]
+		[[rt_view_context_polygon_clear_point_selection_bsg]]
+		[[rt_view_polygon_update_context_bsg]]
+		[[rt_view_polygon_update_screen_pt_context_bsg]]
+		[[rt_view_polygon_move_bsg]]
+		[[rt_view_polygon_set_name_bsg]]
+		[[rt_view_polygon_set_context_bsg]]
+		[[rt_view_polygon_set_visual_bsg]]
 	[[rt_view_polygon_set_open_bsg]]
 	[[rt_view_polygon_close_bsg]]
 	[[rt_view_polygon_clear_selected_point_bsg]]
@@ -1069,9 +1221,9 @@ function(_brlobol_pivot_guard_check_legacy_header_include_hygiene)
 	[[rt_view_polygon_user_data_bsg]]
 	[[rt_view_polygon_user_data_set_bsg]]
 	[[rt_view_polygon_csg_bsg]]
-	[[rt_view_polygon_import_sketch_bsg]]
-	[[rt_view_polygon_export_sketch_bsg]]
-	[[rt_view_polygon_snap_exclude_set_bsg]]
+		[[rt_view_polygon_import_sketch_context_bsg]]
+		[[rt_view_polygon_export_sketch_bsg]]
+		[[rt_view_context_polygon_snap_exclude_set_bsg]]
 	[[QgLegacyViewSketch\.h]]
 	[[qg_legacy_view_sketch_edit_create]]
 	[[qg_legacy_view_sketch_lines_create]]
@@ -1079,14 +1231,10 @@ function(_brlobol_pivot_guard_check_legacy_header_include_hygiene)
 	[[qg_legacy_view_sketch_lines_set_points]]
 	[[qg_legacy_view_sketch_lines_destroy]]
 	[[rt_edit_create_bsg]]
-	[[bsg_view_scene_separator_ref]]
-	[[bsg_line_set_ref_create]]
-	[[bsg_line_set_ref_as_node]]
-	[[bsg_line_set_ref_set_points]]
-	[[bsg_node_ref_is_null]]
-	[[bsg_node_ref_set_color]]
-	[[bsg_node_ref_destroy]]
-	[[bsg_separator_ref_append_child]])
+	[[rt_view_context_line_set_create_bsg]]
+	[[rt_view_line_set_context_is_null_bsg]]
+	[[rt_view_line_set_context_set_points_bsg]]
+	[[rt_view_line_set_context_destroy_bsg]])
       string(REGEX MATCH "${_token}" _qtcad_legacy_view_src_token_hit
 	"${_qtcad_legacy_view_src_contents}")
       if(NOT _qtcad_legacy_view_src_token_hit)
@@ -1102,6 +1250,101 @@ function(_brlobol_pivot_guard_check_legacy_header_include_hygiene)
 	"src/libqtcad/QgLegacyView.cpp reintroduced direct BSG view display-manager field access: ${_qtcad_legacy_view_src_dmp_direct_hit}")
     endif()
     foreach(_pat
+	[[->[ \t\r\n]*gv_name]]
+	[[bu_vls_(cstr|addr|strlen|sprintf)[ \t\r\n]*\([^;\n]*gv_name]]
+	[[(^|[^A-Za-z0-9_])rt_view_name_from_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _qtcad_legacy_view_src_name_direct_hit
+	"${_qtcad_legacy_view_src_contents}")
+      if(_qtcad_legacy_view_src_name_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libqtcad/QgLegacyView.cpp reintroduced direct BSG view-name access: ${_qtcad_legacy_view_src_name_direct_hit}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])rt_view_framebuffer_mode_(from|set)_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_(center_dot|scale_overlay|params)_state_(from|set)_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_(grid_state|interactive_rect_state)_(from|set)_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_(model_axes|view_axes)_state_(from|set)_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _qtcad_legacy_view_src_faceplate_direct_hit
+	"${_qtcad_legacy_view_src_contents}")
+      if(_qtcad_legacy_view_src_faceplate_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libqtcad/QgLegacyView.cpp reintroduced typed BSG faceplate/framebuffer state access: ${_qtcad_legacy_view_src_faceplate_direct_hit}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])rt_view_dimensions_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_(width|height)_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_unit_conversion_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_refresh_(request|consume|complete)_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_(local2base|base2local)_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_info_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_(center|rotation|scale|perspective)_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_storage_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_display_manager_(from|set)_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_lod_policy_(from|apply)_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_snap_source_flags_(from|set)_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_snap_lines_(from|set)_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_aet_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_aet_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_update_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_screen_to_view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_(view2model|model2view)_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_adc_state_(from|set)_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_snap_kind_mask_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_size_(from|set)_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_snap_tolerance_factor_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_vec_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_screen_point_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_current_point_(from|set)_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_mouse_state_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_radius_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_set_(add|remove)_view_bsg[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])rt_view_pick_(point|nearest|rect)_bsg[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])rt_view_selection_(set_pick_result_ref|clear)_bsg[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])rt_view_pick_result_(create|free|count|path|hit_dist|append_copy|filter_first)_bsg[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])rt_view_context_selection_set_pick_result_ref_bsg[ \t\r\n]*\(]]
+		[[struct[ \t\r\n]+rt_view_pick_result_bsg]]
+		[[(^|[^A-Za-z0-9_])rt_view_bounds_update_callback_(from|set|call)_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_adjust_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_lod_policy_copy_bsg[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])rt_view_autoview_bsg[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])rt_view_lod_bounds_update_bsg[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])rt_view_hash_bsg[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])rt_view_unique_object_name_bsg[ \t\r\n]*\(]]
+			[[(^|[^A-Za-z0-9_])rt_view_snap_exclude_feature_clear_bsg[ \t\r\n]*\(]]
+			[[(^|[^A-Za-z0-9_])rt_view_edit_preview_publish_event_bsg[ \t\r\n]*\(]]
+			[[(^|[^A-Za-z0-9_])rt_view_feature_(overlay_ensure|label_ensure|remove|set_view)_bsg[ \t\r\n]*\(]]
+			[[(^|[^A-Za-z0-9_])rt_view_polygon_(create|select|find|dup|visit_records|snap_count|clear_point_selection|update|update_screen_pt|set_view|import_sketch|snap_exclude_set)_bsg[ \t\r\n]*\(]]
+			[[static_cast[ \t\r\n]*<[ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*[*][ \t\r\n]*>]]
+			[[struct[ \t\r\n]+bsg_view]]
+			[[qg_legacy_view_to_bsg]]
+			[[#[ \t]*include[ \t]*[<"]bsg/view_state\.h]]
+			[[rt_view_context_[A-Za-z0-9_]*_bsg[ \t\r\n]*\([^;]*qg_legacy_view_to_bsg[ \t\r\n]*\(]]
+			[[ged_draw_(path_state|has_paths|list_paths)[ \t\r\n]*\([^;]*qg_legacy_view_to_bsg[ \t\r\n]*\(]]
+			[[dm_draw_objs[ \t\r\n]*\([^;]*qg_legacy_view_to_bsg[ \t\r\n]*\(]]
+			[[rt_edit_create_bsg[ \t\r\n]*\([^;]*qg_legacy_view_to_bsg[ \t\r\n]*\(]]
+			[[(^|[^A-Za-z0-9_])rt_view_context_(init|free_contents)_bsg[ \t\r\n]*\(]]
+			[[#[ \t]*include[ \t]*[<"]bsg/geometry\.h]]
+			[[#[ \t]*include[ \t]*[<"]bsg/node\.h]]
+			[[#[ \t]*include[ \t]*[<"]bsg/separator\.h]]
+			[[(^|[^A-Za-z0-9_])bsg_(line_set_ref|node_ref|separator_ref)[A-Za-z0-9_]*]]
+			[[(^|[^A-Za-z0-9_])BSG_LINE_SET_REF_NULL_INIT([^A-Za-z0-9_]|$)]]
+			[[(^|[^A-Za-z0-9_])bsg_view_scene_separator_ref[ \t\r\n]*\(]]
+			[[(^|[^A-Za-z0-9_])rt_view_init_bsg[ \t\r\n]*\(]]
+			[[(^|[^A-Za-z0-9_])rt_view_free_bsg[ \t\r\n]*\(]]
+			[[(^|[^A-Za-z0-9_])bsg_view_scene_attached[ \t\r\n]*\(]]
+	[[->[ \t\r\n]*vset[ \t\r\n]*=]])
+      string(REGEX MATCH "${_pat}" _qtcad_legacy_view_src_context_direct_hit
+	"${_qtcad_legacy_view_src_contents}")
+      if(_qtcad_legacy_view_src_context_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libqtcad/QgLegacyView.cpp reintroduced typed RT view-state access where context wrappers are required: ${_qtcad_legacy_view_src_context_direct_hit}")
+      endif()
+    endforeach()
+    foreach(_pat
 	[[gedp[ \t\r\n]*->[ \t\r\n]*ged_gvp]]
 	[[&[ \t\r\n]*gedp[ \t\r\n]*->[ \t\r\n]*ged_views]]
 	[[gedp[ \t\r\n]*->[ \t\r\n]*ged_views]])
@@ -1113,6 +1356,11 @@ function(_brlobol_pivot_guard_check_legacy_header_include_hygiene)
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]bsg/draw_intent\.h]]
+	[[struct[ \t\r\n]+bsg_appearance_settings]]
+	[[(^|[^A-Za-z0-9_])bsg_appearance_settings([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_APPEARANCE_SETTINGS_INIT([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_DRAW_MODE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/interaction\.h]]
 	[[(^|[^A-Za-z0-9_])struct[ \t]+bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
@@ -1141,27 +1389,39 @@ function(_brlobol_pivot_guard_check_legacy_header_include_hygiene)
   endif()
 
   set(_qtcad_legacy_view_bsg_header "${BRLCAD_SOURCE_DIR}/src/libqtcad/QgLegacyViewBsg.h")
-  if(NOT EXISTS "${_qtcad_legacy_view_bsg_header}")
+  if(EXISTS "${_qtcad_legacy_view_bsg_header}")
     _brlobol_pivot_guard_fail(
-      "src/libqtcad/QgLegacyViewBsg.h is required as the private qtcad/BSG adapter")
+      "src/libqtcad/QgLegacyViewBsg.h must remain retired from the qtcad implementation")
+  endif()
+
+  set(_qtcad_legacy_view_context_header "${BRLCAD_SOURCE_DIR}/src/libqtcad/QgLegacyViewContext.h")
+  if(NOT EXISTS "${_qtcad_legacy_view_context_header}")
+    _brlobol_pivot_guard_fail(
+      "src/libqtcad/QgLegacyViewContext.h is required as the private qtcad view-context adapter")
   else()
-    file(READ "${_qtcad_legacy_view_bsg_header}" _qtcad_legacy_view_bsg_contents)
+    file(READ "${_qtcad_legacy_view_context_header}" _qtcad_legacy_view_context_contents)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]qtcad/QgLegacyView\.h]]
-	[[struct[ \t]+bsg_view[ \t]*;]]
-	[[qg_legacy_view_from_bsg]]
-	[[qg_legacy_view_to_bsg]])
+	[[qg_legacy_view_from_context]]
+	[[qg_legacy_view_to_context]])
       string(REGEX MATCH "${_token}" _qtcad_legacy_view_bsg_token_hit
-	"${_qtcad_legacy_view_bsg_contents}")
+	"${_qtcad_legacy_view_context_contents}")
       if(NOT _qtcad_legacy_view_bsg_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libqtcad/QgLegacyViewBsg.h must own private qtcad/BSG adapter token ${_token}")
+	  "src/libqtcad/QgLegacyViewContext.h must own private qtcad view-context adapter token ${_token}")
       endif()
     endforeach()
-    string(FIND "${_qtcad_legacy_view_bsg_contents}" "QTCAD_EXPORT" _qtcad_legacy_view_bsg_export_idx)
+    string(REGEX MATCH [[(struct[ \t\r\n]+bsg_view|qg_legacy_view_(from|to)_bsg|QTCAD_EXPORT)]]
+      _qtcad_legacy_view_context_direct_hit
+      "${_qtcad_legacy_view_context_contents}")
+    if(_qtcad_legacy_view_context_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libqtcad/QgLegacyViewContext.h reintroduced BSG or public export exposure: ${_qtcad_legacy_view_context_direct_hit}")
+    endif()
+    string(FIND "${_qtcad_legacy_view_context_contents}" "QTCAD_EXPORT" _qtcad_legacy_view_bsg_export_idx)
     if(NOT _qtcad_legacy_view_bsg_export_idx EQUAL -1)
       _brlobol_pivot_guard_fail(
-	"src/libqtcad/QgLegacyViewBsg.h must remain a private adapter without QTCAD_EXPORT")
+	"src/libqtcad/QgLegacyViewContext.h must remain a private adapter without QTCAD_EXPORT")
     endif()
   endif()
 
@@ -1232,9 +1492,15 @@ function(_brlobol_pivot_guard_check_legacy_header_include_hygiene)
     endif()
     string(FIND "${_qtcad_src_cmake_contents}" "QgLegacyViewBsg.h"
       _qtcad_legacy_view_bsg_src_cmake_idx)
-    if(_qtcad_legacy_view_bsg_src_cmake_idx EQUAL -1)
+    if(NOT _qtcad_legacy_view_bsg_src_cmake_idx EQUAL -1)
       _brlobol_pivot_guard_fail(
-	"src/libqtcad/CMakeLists.txt must list private QgLegacyViewBsg.h for the qtcad/BSG adapter")
+	"src/libqtcad/CMakeLists.txt must not list retired QgLegacyViewBsg.h")
+    endif()
+    string(FIND "${_qtcad_src_cmake_contents}" "QgLegacyViewContext.h"
+      _qtcad_legacy_view_context_src_cmake_idx)
+    if(_qtcad_legacy_view_context_src_cmake_idx EQUAL -1)
+      _brlobol_pivot_guard_fail(
+	"src/libqtcad/CMakeLists.txt must list private QgLegacyViewContext.h for the qtcad context adapter")
     endif()
     string(FIND "${_qtcad_src_cmake_contents}" "QgLegacyViewSketch.h"
       _qtcad_legacy_view_sketch_src_cmake_idx)
@@ -1328,6 +1594,94 @@ function(_brlobol_pivot_guard_check_legacy_header_include_hygiene)
 	  [[void[ \t\r\n]*[*][ \t\r\n]*view_ctx]]
 	  [[const[ \t\r\n]+void[ \t\r\n]*[*][ \t\r\n]*appearance]]
 	  [[int[ \t\r\n]+draw_mode]]
+	  [[typedef[ \t\r\n]+enum[ \t\r\n]+ged_draw_mode]]
+	  [[GED_DRAW_MODE_HIDDEN_LINE]]
+	  [[struct[ \t\r\n]+ged_draw_appearance_settings]]
+	  [[GED_DRAW_APPEARANCE_SETTINGS_INIT]]
+	  [[struct[ \t\r\n]+ged_draw_view_db_object_record[^{]*\{[^}]*int[ \t\r\n]+selected]]
+	  [[struct[ \t\r\n]+ged_draw_view_db_object_record[^{]*\{[^}]*const[ \t\r\n]+char[ \t\r\n]*[*][ \t\r\n]*geometry_name]]
+	  [[struct[ \t\r\n]+ged_draw_view_db_object_record[^{]*\{[^}]*int[ \t\r\n]+is_database_intent]]
+	  [[struct[ \t\r\n]+ged_draw_view_db_object_record[^{]*\{[^}]*int[ \t\r\n]+is_local_source]]
+	  [[struct[ \t\r\n]+ged_draw_view_db_object_record[^{]*\{[^}]*int[ \t\r\n]+is_view_source]]
+	  [[struct[ \t\r\n]+ged_draw_view_db_object_record[^{]*\{[^}]*uint64_t[ \t\r\n]+cache_identity]]
+	  [[struct[ \t\r\n]+ged_draw_view_db_object_record[^{]*\{[^}]*uint64_t[ \t\r\n]+source_identity]]
+	  [[struct[ \t\r\n]+ged_draw_view_annotation_summary[^{]*\{[^}]*uint64_t[ \t\r\n]+cache_identity]]
+	  [[struct[ \t\r\n]+ged_draw_view_annotation_summary[^{]*\{[^}]*uint64_t[ \t\r\n]+source_identity]]
+	  [[struct[ \t\r\n]+ged_draw_view_line_summary]]
+	  [[struct[ \t\r\n]+ged_draw_view_surface_summary]]
+	  [[struct[ \t\r\n]+ged_draw_view_rendered_object_summary]]
+	  [[struct[ \t\r\n]+ged_draw_view_feature_summary]]
+	  [[GED_DRAW_VIEW_FEATURE_SUMMARY_INIT]]
+	  [[ged_draw_view_db_object_record_annotation_summary]]
+	  [[ged_draw_view_db_object_record_line_summary]]
+	  [[ged_draw_view_db_object_record_line_point_at]]
+	  [[ged_draw_view_db_object_record_line_command_at]]
+	  [[ged_draw_shape_ref_line_summary]]
+	  [[ged_draw_shape_ref_line_point_at]]
+	  [[ged_draw_shape_ref_line_command_at]]
+	  [[ged_draw_shape_context_line_summary]]
+	  [[ged_draw_shape_context_line_point_at]]
+	  [[ged_draw_shape_context_line_command_at]]
+	  [[struct[ \t\r\n]+ged_draw_shape_geometry_summary]]
+	  [[struct[ \t\r\n]+ged_draw_shape_geometry_summary[^{]*\{[^}]*size_t[ \t\r\n]+index_count]]
+	  [[ged_draw_shape_context_geometry_summary]]
+	  [[ged_draw_first_shape_context]]
+	  [[ged_draw_shape_ref_context]]
+	  [[ged_draw_shape_ref_cache_context]]
+	  [[ged_draw_group_ref_context]]
+	  [[ged_draw_shape_ref_from_context]]
+	  [[ged_draw_shape_context_has_state]]
+	  [[ged_draw_shape_context_source]]
+	  [[ged_draw_view_context_scene_root]]
+	  [[ged_draw_view_context_scene_attached]]
+	  [[ged_draw_view_context_frame_revision]]
+	  [[ged_draw_view_context_bump_frame_revision]]
+	  [[ged_draw_view_context_feature_remove]]
+	  [[ged_draw_view_context_feature_exists]]
+	  [[ged_draw_view_context_feature_visible_set]]
+	  [[ged_draw_view_context_feature_style_get]]
+	  [[ged_draw_view_context_gobject_create]]
+	  [[ged_draw_view_context_tcl_polygons_replace]]
+	  [[ged_draw_view_context_tcl_labels_replace]]
+	  [[ged_draw_view_context_label_count]]
+	  [[ged_draw_view_context_label_copy]]
+	  [[ged_draw_view_context_label_point_set]]
+	  [[ged_draw_view_context_line_color_set]]
+	  [[ged_draw_view_context_line_width_set]]
+	  [[ged_draw_view_context_feature_points_copy]]
+	  [[ged_draw_view_context_tcl_lines_replace]]
+	  [[ged_draw_view_context_arrow_tip_get]]
+	  [[ged_draw_view_context_arrow_tip_set]]
+	  [[ged_draw_view_context_tcl_arrows_replace]]
+	  [[ged_draw_view_context_feature_axes_centers_copy]]
+	  [[ged_draw_view_context_tcl_axes_replace]]
+	  [[struct[ \t\r\n]+ged_draw_view_feature_style]]
+	  [[GED_DRAW_VIEW_FEATURE_STYLE_INIT]]
+	  [[struct[ \t\r\n]+ged_draw_view_label_data]]
+	  [[GED_DRAW_VIEW_LABEL_DATA_INIT]]
+	  [[ged_draw_view_context_feature_summary]]
+	  [[ged_draw_view_context_info_from_bsg]]
+	  [[ged_draw_scene_context_fullpath]]
+	  [[ged_draw_group_context_dbpath]]
+	  [[ged_draw_group_context_is_overlay]]
+	  [[struct[ \t\r\n]+ged_draw_scene_display_summary]]
+	  [[ged_draw_scene_context_display_summary]]
+	  [[struct[ \t\r\n]+ged_draw_database_source_summary]]
+	  [[struct[ \t\r\n]+ged_draw_shape_material_summary]]
+	  [[struct[ \t\r\n]+ged_draw_scene_tree_summary]]
+	  [[ged_draw_scene_context_source_summary]]
+	  [[ged_draw_scene_context_tree_summary]]
+	  [[ged_draw_scene_context_child_at]]
+	  [[ged_draw_scene_context_parent]]
+	  [[ged_draw_scene_context_name]]
+	  [[ged_draw_scene_context_subtree_bounds]]
+	  [[ged_draw_shape_ref_material_summary]]
+	  [[ged_draw_shape_ref_set_visible]]
+	  [[ged_draw_shape_ref_set_material_color]]
+	  [[ged_draw_shape_ref_set_evaluated_region]]
+	  [[ged_draw_view_db_object_record_surface_summary]]
+	  [[ged_draw_view_db_object_record_surface_index_at]]
+	  [[ged_draw_view_rendered_object_summary]]
 	  [[GED_EXPORT[ \t\r\n]+extern[ \t\r\n]+int[ \t\r\n]+ged_draw_default_mode]])
 	string(REGEX MATCH "${_token}" _ged_bsg_draw_neutral_token_hit
 	  "${_contents}")
@@ -1495,6 +1849,40 @@ function(_brlobol_pivot_guard_check_legacy_header_include_hygiene)
 	"${_rel} reintroduced the broad BSG umbrella include after test fixture include narrowing: ${_test_umbrella_hit}")
     endif()
   endforeach()
+
+  set(_libged_gqa_test "${BRLCAD_SOURCE_DIR}/src/libged/tests/test_gqa.c")
+  if(EXISTS "${_libged_gqa_test}")
+    file(READ "${_libged_gqa_test}" _libged_gqa_test_contents)
+    foreach(_token
+	[[ged_view_active_ctx]]
+	[[struct[ \t\r\n]+ged_draw_view_record_query]]
+	[[GED_DRAW_VIEW_RECORD_QUERY_VIEW_OBJECTS]]
+	[[struct[ \t\r\n]+ged_draw_view_db_object_record]]
+	[[ged_draw_foreach_view_record_query]]
+	[[ged_draw_view_db_object_record_foreach_segment]]
+	[[rec->[ \t\r\n]*path]]
+	[[rec->[ \t\r\n]*vlist_point_count]])
+      string(REGEX MATCH "${_token}" _libged_gqa_test_token_hit
+	"${_libged_gqa_test_contents}")
+      if(NOT _libged_gqa_test_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/tests/test_gqa.c must validate GQA overlap overlay geometry through neutral GED view-record token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]bsg/]]
+	[[gedp[ \t\r\n]*->[ \t\r\n]*ged_gvp]]
+	[[(^|[^A-Za-z0-9_])bsg_export_[A-Za-z0-9_]*[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_export_(result|record)([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_EXPORT_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _libged_gqa_test_direct_hit
+	"${_libged_gqa_test_contents}")
+      if(_libged_gqa_test_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/tests/test_gqa.c reintroduced direct BSG export/view access: ${_libged_gqa_test_direct_hit}")
+      endif()
+    endforeach()
+  endif()
 endfunction()
 
 function(_brlobol_pivot_guard_check_libimgstream_boundary)
@@ -3054,11 +3442,12 @@ function(_brlobol_pivot_guard_check_librt_edit_knob_neutralization)
 	"src/mged/cmd.cpp must use rt_edit_knobs_hash for rt_edit::k")
     endif()
     foreach(_token
+	[[#[ \t]*include[ \t]*[<"]ged/bsg_ged_draw\.h]]
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_orientation_quat_from_bsg]]
-	[[rt_view_eye_pos_from_bsg]]
-	[[rt_view_scale_from_bsg]]
-	[[rt_view_size_from_bsg]])
+	[[rt_view_context_orientation_quat_from_bsg]]
+	[[rt_view_context_eye_pos_from_bsg]]
+	[[rt_view_context_scale_from_bsg]]
+	[[rt_view_context_size_from_bsg]])
       string(REGEX MATCH "${_token}" _mged_cmd_view_arg_token_hit
 	"${_mged_cmd_contents}")
       if(NOT _mged_cmd_view_arg_token_hit)
@@ -3067,6 +3456,11 @@ function(_brlobol_pivot_guard_check_librt_edit_knob_neutralization)
       endif()
     endforeach()
     foreach(_pat
+	[[struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*bv]]
+	[[bv[ \t\r\n]*=[ \t\r\n]*\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_orientation_quat_from_bsg[ \t\r\n]*\(]]
+	[[rt_view_eye_pos_from_bsg[^\n;]*bv]]
+	[[rt_view_size_from_bsg[^\n;]*bv]]
 	[[bv->[ \t\r\n]*gv_rotation]]
 	[[bv->[ \t\r\n]*gv_eye_pos]]
 	[[bv->[ \t\r\n]*gv_size]]
@@ -3079,39 +3473,42 @@ function(_brlobol_pivot_guard_check_librt_edit_knob_neutralization)
       endif()
     endforeach()
     foreach(_token
-	[[rt_view_width_from_bsg]]
-	[[rt_view_height_from_bsg]]
-	[[rt_view_dimensions_set_bsg]]
-	[[rt_view_scale_state_set_bsg]]
-	[[rt_view_initial_scale_from_bsg]]
-	[[rt_view_absolute_scale_from_bsg]]
-	[[rt_view_local2base_from_bsg]]
-	[[rt_view_base2local_from_bsg]]
-	[[rt_view_unit_conversion_set_bsg]]
-	[[rt_view_inverse_size_from_bsg]]
-	[[rt_view_perspective_from_bsg]]
-	[[rt_view_perspective_set_bsg]]
-	[[rt_view_coord_from_bsg]]
-	[[rt_view_coord_set_bsg]]
-	[[rt_view_rotate_about_from_bsg]]
-	[[rt_view_rotate_about_set_bsg]]
-	[[rt_view_keypoint_from_bsg]]
-	[[rt_view_keypoint_set_bsg]]
-	[[rt_view_aet_from_bsg]]
-	[[rt_view_aet_state_set_bsg]]
-	[[rt_view_rotation_from_bsg]]
-	[[rt_view_rotation_set_bsg]]
-	[[rt_view_center_from_bsg]]
-	[[rt_view_center_vec_set_bsg]]
-	[[rt_view_model2view_from_bsg]]
-	[[rt_view_model2view_set_bsg]]
-	[[rt_view_view2model_from_bsg]]
-	[[rt_view_view2model_set_bsg]]
-	[[rt_view_pmodel2view_from_bsg]]
-	[[rt_view_pmodel2view_set_bsg]]
-	[[rt_view_pmat_from_bsg]]
-	[[rt_view_pmat_set_bsg]]
-	[[rt_view_eye_pos_set_bsg]])
+	[[rt_view_context_width_from_bsg]]
+	[[rt_view_context_height_from_bsg]]
+	[[rt_view_context_dimensions_set_bsg]]
+	[[rt_view_context_init_bsg]]
+	[[rt_view_context_free_contents_bsg]]
+	[[rt_view_context_scale_state_set_bsg]]
+	[[rt_view_context_initial_scale_from_bsg]]
+	[[rt_view_context_absolute_scale_from_bsg]]
+	[[rt_view_context_local2base_from_bsg]]
+	[[rt_view_context_base2local_from_bsg]]
+	[[rt_view_context_unit_conversion_set_bsg]]
+	[[rt_view_context_inverse_size_from_bsg]]
+	[[rt_view_context_perspective_from_bsg]]
+	[[rt_view_context_perspective_set_bsg]]
+	[[rt_view_context_coord_from_bsg]]
+	[[rt_view_context_coord_set_bsg]]
+	[[rt_view_context_rotate_about_from_bsg]]
+	[[rt_view_context_rotate_about_set_bsg]]
+	[[rt_view_context_keypoint_from_bsg]]
+	[[rt_view_context_keypoint_set_bsg]]
+	[[rt_view_context_aet_from_bsg]]
+	[[rt_view_context_aet_state_set_bsg]]
+	[[rt_view_context_rotation_from_bsg]]
+	[[rt_view_context_rotation_set_bsg]]
+	[[rt_view_context_center_from_bsg]]
+	[[rt_view_context_center_vec_set_bsg]]
+	[[rt_view_context_model2view_from_bsg]]
+	[[rt_view_context_model2view_set_bsg]]
+	[[rt_view_context_view2model_from_bsg]]
+	[[rt_view_context_view2model_set_bsg]]
+	[[rt_view_context_pmodel2view_from_bsg]]
+	[[rt_view_context_pmodel2view_set_bsg]]
+	[[rt_view_context_pmat_from_bsg]]
+	[[rt_view_context_pmat_set_bsg]]
+	[[rt_view_context_eye_pos_set_bsg]]
+	[[rt_view_context_knobs_hash_bsg]])
       string(REGEX MATCH "${_token}" _mged_cmd_cache_token_hit
 	"${_mged_cmd_contents}")
       if(NOT _mged_cmd_cache_token_hit)
@@ -3122,6 +3519,9 @@ function(_brlobol_pivot_guard_check_librt_edit_knob_neutralization)
     foreach(_pat
 	[[(c|dst)->gv_(scale|i_scale|a_scale|local2base|base2local|size|isize|perspective|coord|rotate_about)[ \t]*=[^\n;]*(v|src)->gv_]]
 	[[staging->gv_(width|height)[ \t]*=[^\n;]*mged_view->gv_]]
+	[[struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*gvp]]
+	[[gvp[ \t\r\n]*=[ \t\r\n]*\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[rt_view_dimensions_set_bsg[^\n;]*gvp]]
 	[[gvp->[ \t\r\n]*gv_(width|height)[ \t\r\n]*=]]
 	[[staging->[ \t\r\n]*gv_(width|height)[ \t\r\n]*=]]
 	[[staging->[ \t\r\n]*gv_(local2base|base2local)[ \t\r\n]*=]]
@@ -3139,7 +3539,8 @@ function(_brlobol_pivot_guard_check_librt_edit_knob_neutralization)
 	[[rt_view_(model2view|view2model|pmodel2view)_from_bsg[^\n;]*dst->gv_]]
 	[[VMOVE[^\n;]*(c|dst)->gv_(eye_pos|keypoint|aet)[^\n;]*(v|src)->gv_]]
 	[[MAT_COPY[^\n;]*(c|dst)->gv_(rotation|center|model2view|view2model|pmodel2view|pmat)[^\n;]*(v|src)->gv_]]
-	[[bu_data_hash_update[^\n;]*&v->gv_(scale|i_scale|a_scale|size|isize|perspective|center|rotation|model2view|view2model|pmodel2view|pmat|eye_pos|keypoint|aet|coord|rotate_about)]])
+	[[bu_data_hash_update[^\n;]*&v->gv_(scale|i_scale|a_scale|size|isize|perspective|center|rotation|model2view|view2model|pmodel2view|pmat|eye_pos|keypoint|aet|coord|rotate_about)]]
+	[[(^|[^A-Za-z0-9_])rt_view_(width_from|height_from|dimensions_set|init|free|scale_from|scale_state_set|initial_scale_from|absolute_scale_from|local2base_from|base2local_from|unit_conversion_set|inverse_size_from|perspective_from|perspective_set|coord_from|coord_set|rotate_about_from|rotate_about_set|eye_pos_from|eye_pos_set|keypoint_from|keypoint_set|aet_from|aet_state_set|rotation_from|rotation_set|center_from|center_vec_set|model2view_from|model2view_set|view2model_from|view2model_set|pmodel2view_from|pmodel2view_set|pmat_from|pmat_set|knobs_hash)_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _mged_cmd_cache_direct_hit
 	"${_mged_cmd_contents}")
       if(_mged_cmd_cache_direct_hit)
@@ -3151,16 +3552,13 @@ function(_brlobol_pivot_guard_check_librt_edit_knob_neutralization)
 
   foreach(_rel
       src/mged/cmd.cpp
-      src/mged/dm-generic.c
-      src/mged/dozoom.c
-      src/mged/overlay.c
-      src/mged/rtif.c)
+      src/mged/dozoom.c)
     set(_mged_dmp_file "${BRLCAD_SOURCE_DIR}/${_rel}")
     if(EXISTS "${_mged_dmp_file}")
       file(READ "${_mged_dmp_file}" _mged_dmp_contents)
       foreach(_token
 	  [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	  [[rt_view_display_manager_set_bsg]])
+	  [[rt_view_context_display_manager_set_bsg]])
 	string(REGEX MATCH "${_token}" _mged_dmp_token_hit
 	  "${_mged_dmp_contents}")
 	if(NOT _mged_dmp_token_hit)
@@ -3174,8 +3572,140 @@ function(_brlobol_pivot_guard_check_librt_edit_knob_neutralization)
 	_brlobol_pivot_guard_fail(
 	  "${_rel} reintroduced direct BSG view display-manager field writes: ${_mged_dmp_direct_hit}")
       endif()
+      string(REGEX MATCH [[(^|[^A-Za-z0-9_])rt_view_display_manager_set_bsg[ \t\r\n]*\(]]
+	_mged_dmp_typed_hit "${_mged_dmp_contents}")
+      if(_mged_dmp_typed_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} reintroduced typed BSG view display-manager setter access: ${_mged_dmp_typed_hit}")
+      endif()
     endif()
   endforeach()
+
+  set(_mged_dm_generic_dmp_impl "${BRLCAD_SOURCE_DIR}/src/mged/dm-generic.c")
+  if(EXISTS "${_mged_dm_generic_dmp_impl}")
+    file(READ "${_mged_dm_generic_dmp_impl}" _mged_dm_generic_dmp_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]ged/view\.h]]
+	[[ged_view_context_display_manager_set]])
+      string(REGEX MATCH "${_token}" _mged_dm_generic_dmp_token_hit
+	"${_mged_dm_generic_dmp_contents}")
+      if(NOT _mged_dm_generic_dmp_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/dm-generic.c must route display-manager handoff through GED view-context token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[->[ \t\r\n]*dmp[ \t\r\n]*=]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_display_manager_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_display_manager_set_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _mged_dm_generic_dmp_direct_hit
+	"${_mged_dm_generic_dmp_contents}")
+      if(_mged_dm_generic_dmp_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/dm-generic.c reintroduced direct BSG view display-manager handoff: ${_mged_dm_generic_dmp_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_mged_overlay_impl "${BRLCAD_SOURCE_DIR}/src/mged/overlay.c")
+  if(EXISTS "${_mged_overlay_impl}")
+    file(READ "${_mged_overlay_impl}" _mged_overlay_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]ged/view\.h]]
+	[[ged_view_context_display_manager_set]])
+      string(REGEX MATCH "${_token}" _mged_overlay_adapter_hit
+	"${_mged_overlay_contents}")
+      if(NOT _mged_overlay_adapter_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/overlay.c must route display-manager handoff through GED view-context facades")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[->[ \t\r\n]*dmp[ \t\r\n]*=]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_display_manager_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_display_manager_set_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _mged_overlay_direct_hit
+	"${_mged_overlay_contents}")
+      if(_mged_overlay_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/overlay.c reintroduced direct BSG view display-manager handoff: ${_mged_overlay_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  foreach(_rel
+      src/mged/buttons.c
+      src/mged/chgview.c
+      src/mged/cmd.cpp)
+    set(_mged_stale_bsg_include_file "${BRLCAD_SOURCE_DIR}/${_rel}")
+    if(EXISTS "${_mged_stale_bsg_include_file}")
+      file(READ "${_mged_stale_bsg_include_file}" _mged_stale_bsg_include_contents)
+      string(REGEX MATCH [[#[ \t]*include[ \t]*[<"]bsg/appearance\.h]]
+	_mged_stale_bsg_include_hit "${_mged_stale_bsg_include_contents}")
+      if(_mged_stale_bsg_include_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} reintroduced stale direct BSG appearance include: ${_mged_stale_bsg_include_hit}")
+      endif()
+    endif()
+  endforeach()
+
+  set(_mged_dozoom_stale_bsg_include_file "${BRLCAD_SOURCE_DIR}/src/mged/dozoom.c")
+  if(EXISTS "${_mged_dozoom_stale_bsg_include_file}")
+    file(READ "${_mged_dozoom_stale_bsg_include_file}" _mged_dozoom_stale_bsg_include_contents)
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]bsg/appearance\.h]]
+	[[#[ \t]*include[ \t]*[<"]bsg/defines\.h]])
+      string(REGEX MATCH "${_pat}" _mged_dozoom_stale_bsg_include_hit
+	"${_mged_dozoom_stale_bsg_include_contents}")
+      if(_mged_dozoom_stale_bsg_include_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/dozoom.c reintroduced stale direct BSG draw-frame include: ${_mged_dozoom_stale_bsg_include_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_mged_chgtree_stale_bsg_include_file "${BRLCAD_SOURCE_DIR}/src/mged/chgtree.c")
+  if(EXISTS "${_mged_chgtree_stale_bsg_include_file}")
+    file(READ "${_mged_chgtree_stale_bsg_include_file}" _mged_chgtree_stale_bsg_include_contents)
+    string(REGEX MATCH [[#[ \t]*include[ \t]*[<"]bsg/node\.h]]
+      _mged_chgtree_stale_bsg_include_hit "${_mged_chgtree_stale_bsg_include_contents}")
+    if(_mged_chgtree_stale_bsg_include_hit)
+      _brlobol_pivot_guard_fail(
+	"src/mged/chgtree.c reintroduced stale direct BSG node include: ${_mged_chgtree_stale_bsg_include_hit}")
+    endif()
+  endif()
+
+  set(_mged_rtif_dmp_file "${BRLCAD_SOURCE_DIR}/src/mged/rtif.c")
+  if(EXISTS "${_mged_rtif_dmp_file}")
+    file(READ "${_mged_rtif_dmp_file}" _mged_rtif_dmp_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]ged/view\.h]]
+	[[ged_view_active_ctx]]
+	[[ged_view_context_display_manager_set]])
+      string(REGEX MATCH "${_token}" _mged_rtif_dmp_token_hit
+	"${_mged_rtif_dmp_contents}")
+      if(NOT _mged_rtif_dmp_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/rtif.c must route view display-manager handoff through GED view-context token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[(^|[^A-Za-z0-9_])struct[ \t\r\n]+bsg_view([^A-Za-z0-9_]|$)]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_display_manager_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_display_manager_set_bsg[ \t\r\n]*\(]]
+	[[->[ \t\r\n]*dmp[ \t\r\n]*=]])
+      string(REGEX MATCH "${_pat}" _mged_rtif_dmp_direct_hit
+	"${_mged_rtif_dmp_contents}")
+      if(_mged_rtif_dmp_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/rtif.c reintroduced typed/direct BSG display-manager access: ${_mged_rtif_dmp_direct_hit}")
+      endif()
+    endforeach()
+  endif()
 
   foreach(_rel
       src/mged/setup.c
@@ -3184,21 +3714,27 @@ function(_brlobol_pivot_guard_check_librt_edit_knob_neutralization)
     if(EXISTS "${_mged_update_callback_file}")
       file(READ "${_mged_update_callback_file}" _mged_update_callback_contents)
       foreach(_token
-	  [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	  [[rt_view_update_callback_set_bsg]])
+	  [[#[ \t]*include[ \t]*[<"]ged/view\.h]]
+	  [[ged_view_context_update_callback_set]])
 	string(REGEX MATCH "${_token}" _mged_update_callback_token_hit
 	  "${_mged_update_callback_contents}")
 	if(NOT _mged_update_callback_token_hit)
 	  _brlobol_pivot_guard_fail(
-	    "${_rel} must route retained BSG view update callbacks through rt/view_legacy_bsg.h token ${_token}")
+	    "${_rel} must route retained view update callbacks through GED view-context token ${_token}")
 	endif()
       endforeach()
-      string(REGEX MATCH [[->[ \t\r\n]*(gv_callback|gv_clientData|callbacks)([^A-Za-z0-9_]|$)]]
-	_mged_update_callback_direct_hit "${_mged_update_callback_contents}")
-      if(_mged_update_callback_direct_hit)
-	_brlobol_pivot_guard_fail(
-	  "${_rel} reintroduced direct BSG view update callback state access: ${_mged_update_callback_direct_hit}")
-      endif()
+      foreach(_pat
+	  [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	  [[->[ \t\r\n]*(gv_callback|gv_clientData|callbacks)([^A-Za-z0-9_]|$)]]
+	  [[(^|[^A-Za-z0-9_])rt_view_context_update_callback_set_bsg[ \t\r\n]*\(]]
+	  [[(^|[^A-Za-z0-9_])rt_view_update_callback_set_bsg[ \t\r\n]*\(]])
+	string(REGEX MATCH "${_pat}" _mged_update_callback_direct_hit
+	  "${_mged_update_callback_contents}")
+	if(_mged_update_callback_direct_hit)
+	  _brlobol_pivot_guard_fail(
+	    "${_rel} reintroduced direct/typed BSG view update callback state access: ${_mged_update_callback_direct_hit}")
+	endif()
+      endforeach()
     endif()
   endforeach()
 
@@ -3207,9 +3743,9 @@ function(_brlobol_pivot_guard_check_librt_edit_knob_neutralization)
     file(READ "${_mged_dozoom_runtime_file}" _mged_dozoom_runtime_contents)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_edit_matrix_set_bsg]]
-	[[rt_view_edit_matrix_clear_bsg]]
-	[[rt_view_frame_revision_from_bsg]])
+	[[rt_view_context_edit_matrix_set_bsg]]
+	[[rt_view_context_edit_matrix_clear_bsg]]
+	[[rt_view_context_frame_revision_from_bsg]])
       string(REGEX MATCH "${_token}" _mged_dozoom_runtime_token_hit
 	"${_mged_dozoom_runtime_contents}")
       if(NOT _mged_dozoom_runtime_token_hit)
@@ -3223,61 +3759,298 @@ function(_brlobol_pivot_guard_check_librt_edit_knob_neutralization)
       _brlobol_pivot_guard_fail(
 	"src/mged/dozoom.c reintroduced direct retained edit-matrix/frame-revision field access: ${_mged_dozoom_runtime_direct_hit}")
     endif()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])rt_view_edit_matrix_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_edit_matrix_clear_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_frame_revision_from_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _mged_dozoom_runtime_typed_hit
+	"${_mged_dozoom_runtime_contents}")
+      if(_mged_dozoom_runtime_typed_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/dozoom.c reintroduced typed retained edit-matrix/frame-revision access: ${_mged_dozoom_runtime_typed_hit}")
+      endif()
+    endforeach()
   endif()
 
   set(_libged_dm_dmp_file "${BRLCAD_SOURCE_DIR}/src/libged/dm/dm.c")
   if(EXISTS "${_libged_dm_dmp_file}")
     file(READ "${_libged_dm_dmp_file}" _libged_dm_dmp_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_display_manager_from_bsg]]
-	[[rt_view_display_manager_set_bsg]])
+	[[ged_view_context_display_manager_get]]
+	[[ged_view_context_display_manager_set]])
       string(REGEX MATCH "${_token}" _libged_dm_dmp_token_hit
 	"${_libged_dm_dmp_contents}")
       if(NOT _libged_dm_dmp_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/dm/dm.c must route BSG view display-manager access through rt/view_legacy_bsg.h token ${_token}")
+	  "src/libged/dm/dm.c must route BSG view display-manager access through public GED view-context token ${_token}")
       endif()
     endforeach()
-    string(REGEX MATCH [[->[ \t\r\n]*dmp([^A-Za-z0-9_]|$)]]
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[#[ \t]*include[ \t]*[<"]bsg/(defines|node)\.h]]
+	[[(^|[^A-Za-z0-9_])struct[ \t\r\n]+bsg_view([^A-Za-z0-9_]|$)]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)]]
+	[[BU_(GET|ALLOC)[ \t\r\n]*\([^;\n]*struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[->[ \t\r\n]*dmp([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_init_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_init_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_set_add_view_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_display_manager_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_display_manager_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_display_manager_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_display_manager_set_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}"
       _libged_dm_dmp_direct_hit "${_libged_dm_dmp_contents}")
-    if(_libged_dm_dmp_direct_hit)
-      _brlobol_pivot_guard_fail(
-	"src/libged/dm/dm.c reintroduced direct BSG view display-manager field access: ${_libged_dm_dmp_direct_hit}")
-    endif()
+      if(_libged_dm_dmp_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/dm/dm.c reintroduced typed/direct BSG display-manager access: ${_libged_dm_dmp_direct_hit}")
+      endif()
+    endforeach()
   endif()
+
+  set(_libged_ged_lifecycle_file "${BRLCAD_SOURCE_DIR}/src/libged/ged.cpp")
+  if(EXISTS "${_libged_ged_lifecycle_file}")
+    file(READ "${_libged_ged_lifecycle_file}" _libged_ged_lifecycle_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view_context_create_with_set_bsg]]
+	[[rt_view_set_context_add_bsg]]
+	[[rt_view_context_free_bsg]]
+	[[rt_view_context_display_manager_from_bsg]])
+      string(REGEX MATCH "${_token}" _libged_ged_lifecycle_token_hit
+	"${_libged_ged_lifecycle_contents}")
+      if(NOT _libged_ged_lifecycle_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/ged.cpp must route GED-owned BSG view lifecycle/display-manager access through opaque RT view-context token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])struct[ \t\r\n]+bsg_view([^A-Za-z0-9_]|$)]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)]]
+	[[BU_(GET|ALLOC)[ \t\r\n]*\([^;\n]*struct[ \t\r\n]+bsg_view]]
+	[[(^|[^A-Za-z0-9_])rt_view_init_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_free_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_set_add_view_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_display_manager_from_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}"
+	_libged_ged_lifecycle_direct_hit
+	"${_libged_ged_lifecycle_contents}")
+      if(_libged_ged_lifecycle_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/ged.cpp reintroduced typed/direct BSG view lifecycle access: ${_libged_ged_lifecycle_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_view_name_cmd "${BRLCAD_SOURCE_DIR}/src/libged/view/view.c")
+  if(EXISTS "${_libged_view_name_cmd}")
+    file(READ "${_libged_view_name_cmd}" _libged_view_name_cmd_contents)
+    foreach(_token
+	[[ged_view_context_name_get]]
+	[[_view_name]])
+      string(REGEX MATCH "${_token}" _libged_view_name_cmd_token_hit
+	"${_libged_view_name_cmd_contents}")
+      if(NOT _libged_view_name_cmd_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/view.c must route view-name access through GED view-context facade token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[->[ \t\r\n]*gv_name]]
+	[[bu_vls_(cstr|addr|strlen|sprintf)[ \t\r\n]*\([^;\n]*gv_name]]
+	[[(^|[^A-Za-z0-9_])rt_view_name_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_name_from_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_view_name_cmd_direct_hit
+	"${_libged_view_name_cmd_contents}")
+      if(_libged_view_name_cmd_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/view.c reintroduced direct BSG view-name access: ${_libged_view_name_cmd_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_view_context_cmd "${BRLCAD_SOURCE_DIR}/src/libged/view/view.c")
+  if(EXISTS "${_libged_view_context_cmd}")
+    file(READ "${_libged_view_context_cmd}" _libged_view_context_cmd_contents)
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_(active|find)_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_is_independent_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_independent_scope_is_null_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_independent_scope_destroy_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_info_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_is_independent_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_independent_scope_is_null_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_independent_scope_destroy_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_info_from_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_view_context_cmd_direct_hit
+	"${_libged_view_context_cmd_contents}")
+      if(_libged_view_context_cmd_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/view.c reintroduced direct RT/BSG view-context access: ${_libged_view_context_cmd_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_dm_view_name_file "${BRLCAD_SOURCE_DIR}/src/libged/dm/dm.c")
+  if(EXISTS "${_libged_dm_view_name_file}")
+    file(READ "${_libged_dm_view_name_file}" _libged_dm_view_name_contents)
+    foreach(_token
+	[[ged_view_context_name_get]]
+	[[_dm_view_name]])
+      string(REGEX MATCH "${_token}" _libged_dm_view_name_token_hit
+	"${_libged_dm_view_name_contents}")
+      if(NOT _libged_dm_view_name_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/dm/dm.c must route view-name access through GED view-context facade token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[->[ \t\r\n]*gv_name]]
+	[[bu_vls_(cstr|addr|strlen|sprintf)[ \t\r\n]*\([^;\n]*gv_name]]
+	[[(^|[^A-Za-z0-9_])rt_view_name_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_name_from_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_dm_view_name_direct_hit
+	"${_libged_dm_view_name_contents}")
+      if(_libged_dm_view_name_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/dm/dm.c reintroduced direct BSG view-name access: ${_libged_dm_view_name_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  foreach(_rel_token
+      "src/libged/ged.cpp|rt_view_context_name_set_bsg")
+    string(REGEX REPLACE "^([^|]+)\\|.*$" "\\1" _rel "${_rel_token}")
+    string(REGEX REPLACE "^[^|]+\\|" "" _tokens "${_rel_token}")
+    set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
+    if(NOT EXISTS "${_file}")
+      continue()
+    endif()
+    file(READ "${_file}" _contents)
+    string(REGEX MATCH [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+      _libged_view_name_header_hit "${_contents}")
+    if(NOT _libged_view_name_header_hit)
+      _brlobol_pivot_guard_fail(
+	"${_rel} must include rt/view_legacy_bsg.h for transitional BSG view-name adapters")
+    endif()
+    string(REPLACE "|" ";" _tokens "${_tokens}")
+    foreach(_token IN LISTS _tokens)
+      string(REGEX MATCH "${_token}" _libged_view_name_token_hit "${_contents}")
+      if(NOT _libged_view_name_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} must route BSG view-name access through rt/view_legacy_bsg.h token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[->[ \t\r\n]*gv_name]]
+	[[bu_vls_(cstr|addr|strlen|sprintf)[ \t\r\n]*\([^;\n]*gv_name]])
+      string(REGEX MATCH "${_pat}" _libged_view_name_direct_hit "${_contents}")
+      if(_libged_view_name_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} reintroduced direct BSG view-name access: ${_libged_view_name_direct_hit}")
+      endif()
+    endforeach()
+  endforeach()
+
+  foreach(_rel
+      src/libged/ged.cpp)
+    set(_libged_dmp_read_file "${BRLCAD_SOURCE_DIR}/${_rel}")
+    if(EXISTS "${_libged_dmp_read_file}")
+      file(READ "${_libged_dmp_read_file}" _libged_dmp_read_contents)
+      foreach(_token
+	  [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	  [[rt_view_context_display_manager_from_bsg]])
+	string(REGEX MATCH "${_token}" _libged_dmp_read_token_hit
+	  "${_libged_dmp_read_contents}")
+	if(NOT _libged_dmp_read_token_hit)
+	  _brlobol_pivot_guard_fail(
+	    "${_rel} must route BSG view display-manager reads through rt/view_legacy_bsg.h context token ${_token}")
+	endif()
+      endforeach()
+      foreach(_pat
+	  [[->[ \t\r\n]*dmp([^A-Za-z0-9_]|$)]]
+	  [[(^|[^A-Za-z0-9_])rt_view_display_manager_from_bsg[ \t\r\n]*\(]])
+	string(REGEX MATCH "${_pat}" _libged_dmp_read_direct_hit
+	  "${_libged_dmp_read_contents}")
+	if(_libged_dmp_read_direct_hit)
+	  _brlobol_pivot_guard_fail(
+	    "${_rel} reintroduced direct BSG view display-manager access: ${_libged_dmp_read_direct_hit}")
+	endif()
+      endforeach()
+    endif()
+  endforeach()
 
   foreach(_rel
       src/libged/dm/screengrab.c
       src/libged/dm/ert.cpp
       src/libged/fb2pix/fb2pix.c
       src/libged/fbclear/fbclear.c
-      src/libged/ged.cpp
-      src/libged/illum/illum.c
-      src/libged/nmg/nmg.c
       src/libged/overlay/overlay.c
       src/libged/pix2fb/pix2fb.c
       src/libged/png2fb/png2fb.c
       src/libged/rt/rt.c)
-    set(_libged_dmp_read_file "${BRLCAD_SOURCE_DIR}/${_rel}")
-    if(EXISTS "${_libged_dmp_read_file}")
-      file(READ "${_libged_dmp_read_file}" _libged_dmp_read_contents)
+    set(_libged_context_dmp_command_file "${BRLCAD_SOURCE_DIR}/${_rel}")
+    if(EXISTS "${_libged_context_dmp_command_file}")
+      file(READ "${_libged_context_dmp_command_file}" _libged_context_dmp_command_contents)
       foreach(_token
-	  [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	  [[rt_view_display_manager_from_bsg]])
-	string(REGEX MATCH "${_token}" _libged_dmp_read_token_hit
-	  "${_libged_dmp_read_contents}")
-	if(NOT _libged_dmp_read_token_hit)
+	  [[ged_view_active_ctx]]
+	  [[ged_view_context_display_manager_get]])
+	string(REGEX MATCH "${_token}" _libged_context_dmp_command_token_hit
+	  "${_libged_context_dmp_command_contents}")
+	if(NOT _libged_context_dmp_command_token_hit)
 	  _brlobol_pivot_guard_fail(
-	    "${_rel} must route BSG view display-manager reads through rt/view_legacy_bsg.h token ${_token}")
+	    "${_rel} must route display-manager reads through the opaque GED view-context facade")
 	endif()
       endforeach()
-      string(REGEX MATCH [[->[ \t\r\n]*dmp([^A-Za-z0-9_]|$)]]
-	_libged_dmp_read_direct_hit "${_libged_dmp_read_contents}")
-      if(_libged_dmp_read_direct_hit)
-	_brlobol_pivot_guard_fail(
-	  "${_rel} reintroduced direct BSG view display-manager field access: ${_libged_dmp_read_direct_hit}")
-      endif()
+      foreach(_pat
+	  [[struct[ \t\r\n]+bsg_view]]
+	  [[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	  [[->[ \t\r\n]*dmp([^A-Za-z0-9_]|$)]]
+	  [[(^|[^A-Za-z0-9_])rt_view_context_display_manager_from_bsg[ \t\r\n]*\(]]
+	  [[(^|[^A-Za-z0-9_])rt_view_display_manager_from_bsg[ \t\r\n]*\(]])
+	string(REGEX MATCH "${_pat}" _libged_context_dmp_command_direct_hit
+	  "${_libged_context_dmp_command_contents}")
+	if(_libged_context_dmp_command_direct_hit)
+	  _brlobol_pivot_guard_fail(
+	    "${_rel} reintroduced typed BSG display-manager command access: ${_libged_context_dmp_command_direct_hit}")
+	endif()
+      endforeach()
+    endif()
+  endforeach()
+
+  foreach(_rel
+      src/libged/illum/illum.c
+      src/libged/nmg/nmg.c)
+    set(_libged_context_dmp_read_file "${BRLCAD_SOURCE_DIR}/${_rel}")
+    if(EXISTS "${_libged_context_dmp_read_file}")
+      file(READ "${_libged_context_dmp_read_file}" _libged_context_dmp_read_contents)
+      foreach(_token
+	  [[ged_view_context_display_manager_get]])
+	string(REGEX MATCH "${_token}" _libged_context_dmp_read_token_hit
+	  "${_libged_context_dmp_read_contents}")
+	if(NOT _libged_context_dmp_read_token_hit)
+	  _brlobol_pivot_guard_fail(
+	    "${_rel} must route BSG view display-manager reads through the GED view-context facade")
+	endif()
+      endforeach()
+      foreach(_pat
+	  [[->[ \t\r\n]*dmp([^A-Za-z0-9_]|$)]]
+	  [[(^|[^A-Za-z0-9_])rt_view_context_display_manager_from_bsg[ \t\r\n]*\(]]
+	  [[(^|[^A-Za-z0-9_])rt_view_display_manager_from_bsg[ \t\r\n]*\(]])
+	string(REGEX MATCH "${_pat}" _libged_context_dmp_read_direct_hit
+	  "${_libged_context_dmp_read_contents}")
+	if(_libged_context_dmp_read_direct_hit)
+	  _brlobol_pivot_guard_fail(
+	    "${_rel} reintroduced direct or typed BSG view display-manager access: ${_libged_context_dmp_read_direct_hit}")
+	endif()
+      endforeach()
     endif()
   endforeach()
 
@@ -3286,8 +4059,8 @@ function(_brlobol_pivot_guard_check_librt_edit_knob_neutralization)
     file(READ "${_libtclcad_commands_dmp_file}" _libtclcad_commands_dmp_contents)
     foreach(_token
 	[[tclcad_commands_display_manager]]
-	[[rt_view_display_manager_from_bsg]]
-	[[rt_view_display_manager_set_bsg]])
+	[[rt_view_context_display_manager_from_bsg]]
+	[[rt_view_context_display_manager_set_bsg]])
       string(REGEX MATCH "${_token}" _libtclcad_commands_dmp_token_hit
 	"${_libtclcad_commands_dmp_contents}")
       if(NOT _libtclcad_commands_dmp_token_hit)
@@ -3300,6 +4073,12 @@ function(_brlobol_pivot_guard_check_librt_edit_knob_neutralization)
     if(_libtclcad_commands_dmp_direct_hit)
       _brlobol_pivot_guard_fail(
 	"src/libtclcad/commands.c reintroduced direct BSG view display-manager field access: ${_libtclcad_commands_dmp_direct_hit}")
+    endif()
+    string(REGEX MATCH [[(^|[^A-Za-z0-9_])rt_view_display_manager_(from|set)_bsg[ \t\r\n]*\(]]
+      _libtclcad_commands_dmp_typed_hit "${_libtclcad_commands_dmp_contents}")
+    if(_libtclcad_commands_dmp_typed_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libtclcad/commands.c reintroduced typed BSG display-manager adapter access: ${_libtclcad_commands_dmp_typed_hit}")
     endif()
   endif()
 
@@ -3315,9 +4094,10 @@ function(_brlobol_pivot_guard_check_librt_edit_knob_neutralization)
     set(_libtclcad_dmp_read_file "${BRLCAD_SOURCE_DIR}/${_rel}")
     if(EXISTS "${_libtclcad_dmp_read_file}")
       file(READ "${_libtclcad_dmp_read_file}" _libtclcad_dmp_read_contents)
+      set(_libtclcad_dmp_required_token [[rt_view_context_display_manager_from_bsg]])
       foreach(_token
 	  [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	  [[rt_view_display_manager_from_bsg]])
+	  ${_libtclcad_dmp_required_token})
 	string(REGEX MATCH "${_token}" _libtclcad_dmp_read_token_hit
 	  "${_libtclcad_dmp_read_contents}")
 	if(NOT _libtclcad_dmp_read_token_hit)
@@ -3330,6 +4110,37 @@ function(_brlobol_pivot_guard_check_librt_edit_knob_neutralization)
       if(_libtclcad_dmp_read_direct_hit)
 	_brlobol_pivot_guard_fail(
 	  "${_rel} reintroduced direct BSG view display-manager field access: ${_libtclcad_dmp_read_direct_hit}")
+      endif()
+      string(REGEX MATCH [[(^|[^A-Za-z0-9_])rt_view_display_manager_from_bsg[ \t\r\n]*\(]]
+	_libtclcad_dmp_typed_read_hit "${_libtclcad_dmp_read_contents}")
+      if(_libtclcad_dmp_typed_read_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} reintroduced typed BSG display-manager adapter access: ${_libtclcad_dmp_typed_read_hit}")
+      endif()
+    endif()
+  endforeach()
+
+  foreach(_rel
+      src/libtclcad/mouse.c
+      src/libtclcad/polygons.c)
+    set(_libtclcad_dim_sync_file "${BRLCAD_SOURCE_DIR}/${_rel}")
+    if(EXISTS "${_libtclcad_dim_sync_file}")
+      file(READ "${_libtclcad_dim_sync_file}" _libtclcad_dim_sync_contents)
+      foreach(_token
+	  [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	  [[rt_view_context_dimensions_set_bsg]])
+	string(REGEX MATCH "${_token}" _libtclcad_dim_sync_token_hit
+	  "${_libtclcad_dim_sync_contents}")
+	if(NOT _libtclcad_dim_sync_token_hit)
+	  _brlobol_pivot_guard_fail(
+	    "${_rel} must route retained BSG view dimension writes through rt/view_legacy_bsg.h token ${_token}")
+	endif()
+      endforeach()
+      string(REGEX MATCH [[(^|[^A-Za-z0-9_])rt_view_dimensions_set_bsg[ \t\r\n]*\(]]
+	_libtclcad_dim_sync_typed_hit "${_libtclcad_dim_sync_contents}")
+      if(_libtclcad_dim_sync_typed_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} reintroduced typed BSG dimension writes instead of opaque RT view-context wrappers: ${_libtclcad_dim_sync_typed_hit}")
       endif()
     endif()
   endforeach()
@@ -3376,6 +4187,13 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	  "struct rt_view_axes_state"
 	  "struct rt_view_other_state"
 	  "struct rt_view_params_state"
+	  "struct rt_view_knobs"
+	  "enum rt_view_knobs_category"
+	  "RT_VIEW_KNOBS_RATE"
+	  "RT_VIEW_KNOBS_ABS"
+	  "struct rt_view_knob_values"
+	  "rt_view_knobs_state_reset"
+	  "rt_view_knobs_state_hash"
 	  "typedef struct rt_view_feature_ref"
 	  "RT_VIEW_FEATURE_REF_NULL_INIT"
 	  "RT_VIEW_FEATURE_REF_NULL"
@@ -3479,10 +4297,49 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_view_legacy_bsg_header}" _view_legacy_bsg_contents)
     foreach(_token
 	rt_view_context_is_bsg
+	rt_view_context_create_bsg
+	rt_view_context_create_copy_with_set_bsg
+	rt_view_context_free_bsg
+	rt_view_context_release_storage_bsg
+	rt_view_context_tclcad_data_set_bsg
+	rt_view_context_name_set_bsg
+	rt_view_context_name_from_bsg
 	rt_view_context_width_from_bsg
 	rt_view_context_height_from_bsg
 	rt_view_context_dimensions_set_bsg
+	rt_view_context_screen_to_view_from_bsg
+	rt_view_context_previous_mouse_from_bsg
+	rt_view_context_previous_mouse_set_bsg
+	rt_view_context_display_manager_from_bsg
+	rt_view_context_display_manager_set_bsg
+	rt_view_context_edit_matrix_set_bsg
+	rt_view_context_edit_matrix_clear_bsg
+	rt_view_context_frame_revision_from_bsg
 	rt_view_context_refresh_request_bsg
+	rt_view_context_refresh_dirty_from_bsg
+	rt_view_context_refresh_consume_bsg
+	rt_view_context_refresh_complete_bsg
+	rt_view_context_refresh_enabled_from_bsg
+	rt_view_context_refresh_enabled_set_bsg
+	rt_view_context_refresh_suppressed_from_bsg
+	rt_view_context_refresh_suppress_begin_bsg
+	rt_view_context_refresh_suppress_end_bsg
+	rt_view_context_refresh_drawn_count_from_bsg
+	rt_view_context_refresh_drawn_count_set_bsg
+	rt_view_context_scale_from_bsg
+	rt_view_context_scale_storage_from_bsg
+	rt_view_context_size_from_bsg
+	rt_view_context_scale_state_set_bsg
+	rt_view_context_unit_conversion_set_bsg
+	rt_view_context_local2base_from_bsg
+	rt_view_context_base2local_from_bsg
+	rt_view_context_frametime_set_bsg
+	rt_view_context_lod_bounds_callback_is_bsg
+	rt_view_context_is_independent_bsg
+	rt_view_context_independent_scope_is_null_bsg
+	rt_view_set_context_add_bsg
+	rt_view_set_context_remove_bsg
+	rt_view_context_init_bsg
 	rt_view_display_manager_from_bsg
 	rt_view_display_manager_set_bsg
 	rt_view_update_callback_set_bsg
@@ -3490,17 +4347,23 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_view_edit_matrix_clear_bsg
 	rt_view_frame_revision_from_bsg
 	rt_view_info_from_bsg
+	rt_view_context_info_from_bsg
 	rt_view_width_from_bsg
 	rt_view_height_from_bsg
 	rt_view_dimensions_set_bsg
 	rt_view_orientation_quat_from_bsg
 	rt_view_aet_from_bsg
 	rt_view_aet_set_bsg
+	rt_view_context_aet_set_bsg
 	rt_view_aet_state_set_bsg
+	rt_view_context_aet_state_set_bsg
 	rt_view_update_bsg
+	rt_view_context_update_bsg
 	RT_VIEW_AUTOVIEW_SCALE_DEFAULT
 	rt_view_autoview_bsg
+	rt_view_context_autoview_bsg
 	rt_view_autoview_bounds_bsg
+	rt_view_context_autoview_bounds_bsg
 	RT_VIEW_ADJUST_IDLE
 	RT_VIEW_ADJUST_ROT
 	RT_VIEW_ADJUST_TRANS
@@ -3514,28 +4377,52 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_view_adjust_bsg
 	rt_view_hash_bsg
 	rt_view_snap_candidates_bsg
+	rt_view_snap_candidates_result_bsg
+	rt_view_context_snap_candidates_result_bsg
+	rt_view_measure_candidates_bsg
+	rt_view_context_measure_candidates_bsg
 	rt_view_snap_point_2d_bsg
+	rt_view_context_snap_point_2d_bsg
 	rt_view_snap_grid_2d_bsg
+	rt_view_context_snap_grid_2d_bsg
 	rt_view_selection_available_bsg
+	rt_view_context_selection_available_bsg
 	rt_view_selection_count_bsg
+	rt_view_context_selection_count_bsg
 	rt_view_pick_point_bsg
+	rt_view_context_pick_point_bsg
 	rt_view_pick_nearest_bsg
+	rt_view_context_pick_nearest_bsg
 	rt_view_pick_rect_bsg
+	rt_view_context_pick_rect_bsg
 	rt_view_pick_semantic_path_bsg
+	rt_view_context_pick_semantic_path_bsg
 	rt_view_pick_result_create_bsg
+	rt_view_pick_result_context_create_bsg
 	rt_view_pick_result_free_bsg
+	rt_view_pick_result_context_free_bsg
 	rt_view_pick_result_count_bsg
+	rt_view_pick_result_context_count_bsg
 	rt_view_pick_result_path_bsg
+	rt_view_pick_result_context_path_bsg
 	rt_view_pick_result_hit_dist_bsg
+	rt_view_pick_result_context_hit_dist_bsg
 	rt_view_pick_result_append_path_bsg
+	rt_view_pick_result_context_append_path_bsg
 	rt_view_pick_result_append_copy_bsg
+	rt_view_pick_result_context_append_copy_bsg
 	rt_view_pick_result_filter_first_bsg
+	rt_view_pick_result_context_filter_first_bsg
 	rt_view_selection_set_pick_result_ref_bsg
+	rt_view_context_selection_set_pick_result_ref_bsg
+	rt_view_context_selection_set_pick_result_context_bsg
 	rt_view_selection_clear_bsg
+	rt_view_context_selection_clear_bsg
 	rt_view_set_views_bsg
 	rt_view_set_find_view_bsg
 	rt_view_set_init_bsg
 	rt_view_set_free_bsg
+	rt_view_context_init_bsg
 	rt_view_init_bsg
 	rt_view_free_bsg
 	rt_view_set_add_view_bsg
@@ -3546,35 +4433,70 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_view_knobs_reset_bsg
 	rt_view_knob_state_reset_bsg
 	rt_view_knobs_hash_bsg
+	rt_view_context_knobs_hash_bsg
 	rt_view_knobs_cmd_process_bsg
 	rt_view_knobs_translate_bsg
 	rt_view_knobs_rotate_bsg
 	rt_view_knobs_update_rate_flags_bsg
 	rt_view_is_independent_bsg
+	rt_view_scene_ref_bsg
+	RT_VIEW_SCENE_REF_BSG_NULL_INIT
+	rt_view_scene_ref_null_bsg
+	rt_view_scene_ref_is_null_bsg
+	rt_view_scene_ref_equal_bsg
 	rt_view_independent_scope_ref_bsg
 	rt_view_independent_scope_destroy_bsg
+	rt_view_scene_attached_bsg
+	rt_view_context_scene_attached_bsg
+	rt_view_scene_anchor_ensure_bsg
+	rt_view_context_scene_anchor_ensure_bsg
+	rt_view_scene_shared_bsg
+	rt_view_context_scene_shared_bsg
+	rt_view_context_create_with_set_bsg
+	rt_view_visible_render_summary_bsg
+	rt_view_context_visible_render_summary_bsg
+	rt_view_context_named_line_render_count_bsg
+	rt_view_render_export_consistency_bsg
+	rt_view_context_render_export_consistency_bsg
 	rt_view_init_copy_bsg
 	rt_view_clear_bsg
 	RT_VIEW_CLEAR_DB_BSG
 	RT_VIEW_CLEAR_VIEW_BSG
 	RT_VIEW_CLEAR_LOCAL_BSG
 	rt_view_perspective_from_bsg
+	rt_view_context_perspective_from_bsg
 	rt_view_perspective_set_bsg
+	rt_view_context_perspective_set_bsg
+	rt_view_context_display_manager_from_bsg
+	rt_view_context_display_manager_set_bsg
+	rt_view_context_edit_matrix_set_bsg
+	rt_view_context_edit_matrix_clear_bsg
 	rt_view_model2view_from_bsg
+	rt_view_context_model2view_from_bsg
 	rt_view_model2view_set_bsg
+	rt_view_context_model2view_set_bsg
 	rt_view_view2model_from_bsg
+	rt_view_context_view2model_from_bsg
 	rt_view_view2model_set_bsg
 	rt_view_pmodel2view_from_bsg
 	rt_view_pmodel2view_set_bsg
+	rt_view_context_pmodel2view_set_bsg
 	rt_view_pmat_from_bsg
+	rt_view_context_pmat_from_bsg
 	rt_view_pmat_set_bsg
+	rt_view_context_pmat_set_bsg
 	rt_view_rotation_from_bsg
+	rt_view_context_rotation_from_bsg
 	rt_view_rotation_set_bsg
 	rt_view_center_from_bsg
+	rt_view_context_center_from_bsg
 	rt_view_center_vec_set_bsg
 	rt_view_plane_from_bsg
+	rt_view_context_plane_from_bsg
 	rt_view_lod_policy_from_bsg
+	rt_view_context_lod_policy_from_bsg
 	rt_view_lod_policy_apply_bsg
+	rt_view_context_lod_policy_apply_bsg
 	rt_view_lod_policy_copy_bsg
 	rt_view_lod_bounds_update_bsg
 	rt_view_lod_bounds_callback_set_bsg
@@ -3586,6 +4508,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_view_scale_from_bsg
 	rt_view_scale_set_bsg
 	rt_view_scale_storage_from_bsg
+	rt_view_context_scale_storage_from_bsg
 	rt_view_scale_state_set_bsg
 	rt_view_initial_scale_from_bsg
 	rt_view_initial_scale_set_bsg
@@ -3594,31 +4517,51 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_view_local2base_from_bsg
 	rt_view_base2local_from_bsg
 	rt_view_unit_conversion_set_bsg
+	rt_view_context_unit_conversion_set_bsg
+	rt_view_context_frametime_set_bsg
 	rt_view_width_from_bsg
 	rt_view_height_from_bsg
 	rt_view_radius_from_bsg
 	rt_view_dimensions_set_bsg
 	rt_view_screen_to_view_from_bsg
+	rt_view_context_screen_to_view_from_bsg
 	rt_view_screen_point_from_bsg
 	rt_view_previous_mouse_from_bsg
+	rt_view_context_previous_mouse_from_bsg
 	rt_view_previous_mouse_set_bsg
+	rt_view_context_previous_mouse_set_bsg
 	rt_view_mouse_delta_settings_from_bsg
+	rt_view_context_mouse_delta_settings_from_bsg
 	rt_view_interactive_rect_state_from_bsg
+	rt_view_context_interactive_rect_state_from_bsg
 	rt_view_interactive_rect_state_set_bsg
+	rt_view_context_interactive_rect_state_set_bsg
 	rt_view_adc_state_from_bsg
 	rt_view_adc_state_set_bsg
 	rt_view_grid_state_from_bsg
+	rt_view_context_grid_state_from_bsg
 	rt_view_grid_state_set_bsg
+	rt_view_context_grid_state_set_bsg
 	rt_view_model_axes_state_from_bsg
+	rt_view_context_model_axes_state_from_bsg
 	rt_view_model_axes_state_set_bsg
+	rt_view_context_model_axes_state_set_bsg
 	rt_view_view_axes_state_from_bsg
+	rt_view_context_view_axes_state_from_bsg
 	rt_view_view_axes_state_set_bsg
+	rt_view_context_view_axes_state_set_bsg
 	rt_view_center_dot_state_from_bsg
+	rt_view_context_center_dot_state_from_bsg
 	rt_view_center_dot_state_set_bsg
+	rt_view_context_center_dot_state_set_bsg
 	rt_view_scale_overlay_state_from_bsg
+	rt_view_context_scale_overlay_state_from_bsg
 	rt_view_scale_overlay_state_set_bsg
+	rt_view_context_scale_overlay_state_set_bsg
 	rt_view_params_state_from_bsg
+	rt_view_context_params_state_from_bsg
 	rt_view_params_state_set_bsg
+	rt_view_context_params_state_set_bsg
 	rt_view_refresh_request_bsg
 	rt_view_refresh_dirty_from_bsg
 	rt_view_refresh_consume_bsg
@@ -3641,17 +4584,25 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_view_size_set_bsg
 	rt_view_inverse_size_from_bsg
 	rt_view_eye_pos_from_bsg
+	rt_view_context_eye_pos_from_bsg
 	rt_view_eye_pos_set_bsg
+	rt_view_context_eye_pos_set_bsg
 	rt_view_keypoint_from_bsg
 	rt_view_keypoint_set_bsg
 	rt_view_rotate_about_from_bsg
 	rt_view_rotate_about_set_bsg
 	rt_view_coord_from_bsg
+	rt_view_context_coord_from_bsg
 	rt_view_coord_set_bsg
+	rt_view_context_coord_set_bsg
 	rt_view_snap_lines_from_bsg
+	rt_view_context_snap_lines_from_bsg
 	rt_view_snap_lines_set_bsg
+	rt_view_context_snap_lines_set_bsg
 	rt_view_snap_source_flags_from_bsg
+	rt_view_context_snap_source_flags_from_bsg
 	rt_view_snap_source_flags_set_bsg
+	rt_view_context_snap_source_flags_set_bsg
 	rt_view_snap_kind_mask_from_bsg
 	rt_view_snap_exclude_feature_set_bsg
 	rt_view_snap_exclude_feature_clear_bsg
@@ -3660,6 +4611,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_view_feature_overlay_ensure_bsg
 	rt_view_feature_label_ensure_bsg
 	rt_view_feature_remove_bsg
+	rt_view_feature_summary_bsg
 	rt_view_feature_set_view_bsg
 	rt_view_feature_set_visible_bsg
 	rt_view_feature_set_color_bsg
@@ -3667,6 +4619,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_view_feature_labels_replace_bsg
 	rt_view_feature_points_replace_bsg
 	rt_view_feature_clear_geometry_bsg
+	rt_view_context_feature_geometry_summary_bsg
 	RT_VIEW_SNAP_SHARED_BSG
 	RT_VIEW_SNAP_LOCAL_BSG
 	RT_VIEW_SNAP_DB_BSG
@@ -3680,17 +4633,39 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	RT_VIEW_SNAP_KIND_TANGENT_BSG
 	RT_VIEW_SNAP_KIND_OVERLAY_HANDLE_BSG
 	rt_view_prepare_tcl_snap_bsg
+	rt_view_context_prepare_tcl_snap_bsg
 	rt_view_center_linesnap_bsg
+	rt_view_context_center_linesnap_bsg
 	rt_view_zclip_from_bsg
+	rt_view_context_zclip_from_bsg
 	rt_view_zclip_set_bsg
+	rt_view_context_zclip_set_bsg
 	rt_view_framebuffer_mode_from_bsg
+	rt_view_context_framebuffer_mode_from_bsg
 	rt_view_framebuffer_mode_set_bsg
+	rt_view_context_framebuffer_mode_set_bsg
 	rt_view_cleared_from_bsg
 	rt_view_cleared_set_bsg
 	rt_view_settings_shared_bsg
 	rt_view_snap_tolerance_factor_from_bsg
 	rt_view_snap_tolerance_factor_set_bsg
-	rt_mesh_lod_load_view_scene_ref_bsg
+		rt_view_context_polygon_create_bsg
+		rt_view_context_polygon_select_bsg
+		rt_view_context_polygon_find_bsg
+		rt_view_context_polygon_dup_bsg
+		rt_view_context_polygon_visit_records_bsg
+		rt_view_context_polygon_snap_count_bsg
+		rt_view_context_polygon_clear_point_selection_bsg
+		rt_view_polygon_update_context_bsg
+			rt_view_polygon_update_screen_pt_context_bsg
+			rt_view_polygon_set_context_bsg
+			rt_view_polygon_import_sketch_context_bsg
+			rt_view_context_polygon_snap_exclude_set_bsg
+			rt_view_context_line_set_create_bsg
+			rt_view_line_set_context_is_null_bsg
+			rt_view_line_set_context_set_points_bsg
+			rt_view_line_set_context_destroy_bsg
+			rt_mesh_lod_load_view_scene_ref_bsg
 	rt_mesh_lod_free_scene_ref_bsg)
       string(FIND "${_view_legacy_bsg_contents}" "${_token}"
 	_view_legacy_adapter_idx)
@@ -3711,6 +4686,46 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       _brlobol_pivot_guard_fail(
 	"include/rt/view_legacy_bsg.h reintroduced BSG feature refs in the public RT legacy adapter surface: ${_view_legacy_bsg_feature_ref_hit}")
     endif()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]bsg/]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_ref([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _view_legacy_bsg_transitive_hit
+	"${_view_legacy_bsg_contents}")
+      if(_view_legacy_bsg_transitive_hit)
+	_brlobol_pivot_guard_fail(
+	  "include/rt/view_legacy_bsg.h must not expose direct BSG scene headers or bsg_scene_ref handles: ${_view_legacy_bsg_transitive_hit}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])rt_view_knobs_state_reset[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_knobs_state_hash[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _view_legacy_neutral_knobs_hit
+	"${_view_legacy_bsg_contents}")
+      if(_view_legacy_neutral_knobs_hit)
+	_brlobol_pivot_guard_fail(
+	  "include/rt/view_legacy_bsg.h must leave neutral RT knob-state helpers in rt/view.h: ${_view_legacy_neutral_knobs_hit}")
+      endif()
+    endforeach()
+    foreach(_token
+	[[rt_view_context_tclcad_data_set_bsg[ \t\r\n]*\([ \t\r\n]*void[ \t\r\n]*\*[ \t\r\n]*ctx[ \t\r\n]*,[ \t\r\n]*void[ \t\r\n]*\*[ \t\r\n]*tcl_data[ \t\r\n]*\)]])
+      string(REGEX MATCH "${_token}" _view_legacy_tclcad_opaque_sig_hit
+	"${_view_legacy_bsg_contents}")
+      if(NOT _view_legacy_tclcad_opaque_sig_hit)
+	_brlobol_pivot_guard_fail(
+	  "include/rt/view_legacy_bsg.h must keep TclCAD data adapter signatures opaque: ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[struct[ \t\r\n]+bsg_data_tclcad]]
+	[[rt_view_context_tclcad_data_set_bsg[ \t\r\n]*\([^;]*bsg_data_tclcad]]
+	[[rt_view_tclcad_data_init_bsg]])
+      string(REGEX MATCH "${_pat}" _view_legacy_tclcad_typed_sig_hit
+	"${_view_legacy_bsg_contents}")
+      if(_view_legacy_tclcad_typed_sig_hit)
+	_brlobol_pivot_guard_fail(
+	  "include/rt/view_legacy_bsg.h reintroduced RT-level TclCAD data initialization or BSG TclCAD data types in public adapter signatures: ${_view_legacy_tclcad_typed_sig_hit}")
+      endif()
+    endforeach()
   endif()
 
   set(_librt_view_impl "${BRLCAD_SOURCE_DIR}/src/librt/view.c")
@@ -3725,6 +4740,8 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_view_lod_bot_threshold
 	rt_view_avg_sample_spacing
 	rt_view_solid_point_spacing
+	rt_view_knobs_state_reset
+	rt_view_knobs_state_hash
 	rt_view_adc_model_to_view
 	rt_view_adc_grid_to_view
 	rt_view_adc_view_to_grid
@@ -3740,7 +4757,10 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       [[#[ \t]*include[ \t]*[<"]bsg/view_state\.h]]
       [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
       [[(^|[^A-Za-z0-9_])rt_view_info_from_bsg([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])rt_view_context_knobs_state_from_bsg[ \t\r\n]*\(]]
+      [[(^|[^A-Za-z0-9_])rt_view_context_knobs_state_set_bsg[ \t\r\n]*\(]]
       [[(^|[^A-Za-z0-9_])bsg_view([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])bsg_view_knobs([^A-Za-z0-9_]|$)]]
       [[(^|[^A-Za-z0-9_])primitive_lod_curve_scale([^A-Za-z0-9_]|$)]]
       [[(^|[^A-Za-z0-9_])primitive_lod_bot_threshold([^A-Za-z0-9_]|$)]]
       [[(^|[^A-Za-z0-9_])view_avg_sample_spacing([^A-Za-z0-9_]|$)]]
@@ -3751,6 +4771,21 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       if(_hit)
 	_brlobol_pivot_guard_fail(
 	  "src/librt/view.c reintroduced BSG view adapter logic into neutral RT view helpers: ${_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_librt_view_legacy_impl "${BRLCAD_SOURCE_DIR}/src/librt/view_legacy_bsg.c")
+  if(EXISTS "${_librt_view_legacy_impl}")
+    file(READ "${_librt_view_legacy_impl}" _librt_view_legacy_impl_contents)
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])rt_view_knobs_state_reset[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_knobs_state_hash[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _view_legacy_impl_neutral_knobs_hit
+	"${_librt_view_legacy_impl_contents}")
+      if(_view_legacy_impl_neutral_knobs_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/librt/view_legacy_bsg.c must not own neutral RT knob-state helper implementations: ${_view_legacy_impl_neutral_knobs_hit}")
       endif()
     endforeach()
   endif()
@@ -3864,40 +4899,91 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[#[ \t]*include[ \t]*[<"]bsg/view_state\.h]]
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	rt_view_context_is_bsg
+	rt_view_context_create_bsg
+	rt_view_context_free_bsg
+	rt_view_context_release_storage_bsg
+	rt_view_context_name_set_bsg
+	rt_view_context_name_from_bsg
 	rt_view_context_width_from_bsg
 	rt_view_context_height_from_bsg
 	rt_view_context_dimensions_set_bsg
+	rt_view_context_display_manager_from_bsg
+	rt_view_context_display_manager_set_bsg
+	rt_view_context_edit_matrix_set_bsg
+	rt_view_context_edit_matrix_clear_bsg
+	rt_view_context_frame_revision_from_bsg
 	rt_view_context_refresh_request_bsg
+	rt_view_context_refresh_dirty_from_bsg
+	rt_view_context_refresh_consume_bsg
+	rt_view_context_refresh_complete_bsg
+	rt_view_context_refresh_enabled_from_bsg
+	rt_view_context_refresh_enabled_set_bsg
+	rt_view_context_refresh_suppressed_from_bsg
+	rt_view_context_refresh_suppress_begin_bsg
+	rt_view_context_refresh_suppress_end_bsg
+	rt_view_context_refresh_drawn_count_from_bsg
+	rt_view_context_refresh_drawn_count_set_bsg
+	rt_view_context_scale_from_bsg
+	rt_view_context_scale_storage_from_bsg
+	rt_view_context_size_from_bsg
+	rt_view_context_scale_state_set_bsg
+	rt_view_context_unit_conversion_set_bsg
+	rt_view_context_local2base_from_bsg
+	rt_view_context_base2local_from_bsg
+	rt_view_context_frametime_set_bsg
+	rt_view_context_lod_bounds_callback_is_bsg
+	rt_view_context_is_independent_bsg
+	rt_view_context_independent_scope_is_null_bsg
+	rt_view_set_context_add_bsg
+	rt_view_set_context_remove_bsg
+	rt_view_context_init_bsg
 	rt_view_display_manager_from_bsg
 	rt_view_display_manager_set_bsg
 	rt_view_info_from_bsg
+	rt_view_context_info_from_bsg
 	rt_view_orientation_quat_from_bsg
 	rt_view_aet_from_bsg
 	rt_view_aet_set_bsg
+	rt_view_context_aet_set_bsg
 	rt_view_aet_state_set_bsg
+	rt_view_context_aet_state_set_bsg
 	rt_view_update_bsg
+	rt_view_context_update_bsg
 	rt_view_autoview_bsg
+	rt_view_context_autoview_bsg
 	rt_view_autoview_bounds_bsg
+	rt_view_context_autoview_bounds_bsg
 	rt_view_adjust_bsg
 	rt_view_perspective_from_bsg
+	rt_view_context_perspective_from_bsg
 	rt_view_perspective_set_bsg
 	rt_view_display_manager_from_bsg
 	rt_view_display_manager_set_bsg
 	rt_view_model2view_from_bsg
+	rt_view_context_model2view_from_bsg
 	rt_view_model2view_set_bsg
+	rt_view_context_model2view_set_bsg
 	rt_view_view2model_from_bsg
+	rt_view_context_view2model_from_bsg
 	rt_view_view2model_set_bsg
 	rt_view_pmodel2view_from_bsg
 	rt_view_pmodel2view_set_bsg
+	rt_view_context_pmodel2view_set_bsg
 	rt_view_pmat_from_bsg
+	rt_view_context_pmat_from_bsg
 	rt_view_pmat_set_bsg
 	rt_view_rotation_from_bsg
+	rt_view_context_rotation_from_bsg
 	rt_view_rotation_set_bsg
 	rt_view_center_from_bsg
+	rt_view_context_center_from_bsg
 	rt_view_center_vec_set_bsg
 	rt_view_plane_from_bsg
+	rt_view_context_plane_from_bsg
 	rt_view_lod_policy_from_bsg
+	rt_view_context_lod_policy_from_bsg
 	rt_view_lod_policy_apply_bsg
+	rt_view_context_lod_policy_apply_bsg
 	rt_view_lod_policy_copy_bsg
 	rt_view_lod_bounds_update_bsg
 	rt_view_lod_bounds_callback_set_bsg
@@ -3921,19 +5007,34 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_view_radius_from_bsg
 	rt_view_dimensions_set_bsg
 	rt_view_screen_to_view_from_bsg
+	rt_view_context_screen_to_view_from_bsg
 	rt_view_screen_point_from_bsg
+	rt_view_previous_mouse_from_bsg
+	rt_view_context_previous_mouse_from_bsg
+	rt_view_previous_mouse_set_bsg
+	rt_view_context_previous_mouse_set_bsg
 	rt_view_interactive_rect_state_from_bsg
+	rt_view_context_interactive_rect_state_from_bsg
 	rt_view_interactive_rect_state_set_bsg
+	rt_view_context_interactive_rect_state_set_bsg
 	rt_view_model_axes_state_from_bsg
+	rt_view_context_model_axes_state_from_bsg
 	rt_view_model_axes_state_set_bsg
+	rt_view_context_model_axes_state_set_bsg
 	rt_view_view_axes_state_from_bsg
+	rt_view_context_view_axes_state_from_bsg
 	rt_view_view_axes_state_set_bsg
+	rt_view_context_view_axes_state_set_bsg
 	rt_view_center_dot_state_from_bsg
 	rt_view_center_dot_state_set_bsg
 	rt_view_scale_overlay_state_from_bsg
+	rt_view_context_scale_overlay_state_from_bsg
 	rt_view_scale_overlay_state_set_bsg
+	rt_view_context_scale_overlay_state_set_bsg
 	rt_view_params_state_from_bsg
+	rt_view_context_params_state_from_bsg
 	rt_view_params_state_set_bsg
+	rt_view_context_params_state_set_bsg
 	rt_view_refresh_request_bsg
 	rt_view_refresh_dirty_from_bsg
 	rt_view_refresh_consume_bsg
@@ -3949,15 +5050,21 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_view_size_set_bsg
 	rt_view_inverse_size_from_bsg
 	rt_view_eye_pos_from_bsg
+	rt_view_context_eye_pos_from_bsg
 	rt_view_eye_pos_set_bsg
+	rt_view_context_eye_pos_set_bsg
 	rt_view_keypoint_from_bsg
 	rt_view_keypoint_set_bsg
 	rt_view_rotate_about_from_bsg
 	rt_view_rotate_about_set_bsg
 	rt_view_coord_from_bsg
+	rt_view_context_coord_from_bsg
 	rt_view_coord_set_bsg
+	rt_view_context_coord_set_bsg
 	rt_view_snap_lines_from_bsg
+	rt_view_context_snap_lines_from_bsg
 	rt_view_snap_lines_set_bsg
+	rt_view_context_snap_lines_set_bsg
 	rt_view_snap_source_flags_from_bsg
 	rt_view_snap_source_flags_set_bsg
 	rt_view_snap_kind_mask_from_bsg
@@ -3980,6 +5087,8 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_view_feature_labels_replace_bsg
 	rt_view_feature_points_replace_bsg
 	rt_view_feature_clear_geometry_bsg
+	rt_view_feature_summary_bsg
+	rt_view_context_feature_geometry_summary_bsg
 	bsg_feature_find
 	bsg_feature_create_overlay
 	bsg_feature_create_label
@@ -3991,11 +5100,17 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	bsg_interaction_edit_preview_record
 	bsg_interaction_record_free
 	rt_view_prepare_tcl_snap_bsg
+	rt_view_context_prepare_tcl_snap_bsg
 	rt_view_center_linesnap_bsg
+	rt_view_context_center_linesnap_bsg
 	rt_view_zclip_from_bsg
+	rt_view_context_zclip_from_bsg
 	rt_view_zclip_set_bsg
+	rt_view_context_zclip_set_bsg
 	rt_view_framebuffer_mode_from_bsg
+	rt_view_context_framebuffer_mode_from_bsg
 	rt_view_framebuffer_mode_set_bsg
+	rt_view_context_framebuffer_mode_set_bsg
 	rt_view_cleared_from_bsg
 	rt_view_cleared_set_bsg
 	rt_view_settings_shared_bsg
@@ -4008,13 +5123,17 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	bsg_view_adc_get
 	bsg_view_adc_set
 	rt_view_grid_state_from_bsg
+	rt_view_context_grid_state_from_bsg
 	rt_view_grid_state_set_bsg
+	rt_view_context_grid_state_set_bsg
 	bsg_view_grid_get
 	bsg_view_grid_set
 	bsg_view_model_axes_get
 	bsg_view_model_axes_set
 	bsg_view_view_axes_get
 	bsg_view_view_axes_set
+	rt_view_context_center_dot_state_from_bsg
+	rt_view_context_center_dot_state_set_bsg
 	bsg_view_center_dot_get
 	bsg_view_center_dot_set
 	bsg_view_scale_state_get
@@ -4033,27 +5152,50 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	bsg_snap_point_2d
 	bsg_snap_grid_2d
 	rt_view_snap_candidates_bsg
+	rt_view_snap_candidates_result_bsg
+	rt_view_context_snap_candidates_result_bsg
+	rt_view_measure_candidates_bsg
+	rt_view_context_measure_candidates_bsg
 	rt_view_snap_point_2d_bsg
+	rt_view_context_snap_point_2d_bsg
 	rt_view_snap_grid_2d_bsg
+	rt_view_context_snap_grid_2d_bsg
 	bsg_view_selection
 	rt_view_selection_get_bsg
 	rt_view_selection_available_bsg
+	rt_view_context_selection_available_bsg
 	rt_view_selection_count_bsg
+	rt_view_context_selection_count_bsg
 	rt_view_pick_point_bsg
+	rt_view_context_pick_point_bsg
 	rt_view_pick_nearest_bsg
+	rt_view_context_pick_nearest_bsg
 	rt_view_pick_rect_bsg
+	rt_view_context_pick_rect_bsg
 	rt_view_pick_semantic_path_bsg
+	rt_view_context_pick_semantic_path_bsg
 	rt_view_pick_result_create_bsg
+	rt_view_pick_result_context_create_bsg
 	rt_view_pick_result_free_bsg
+	rt_view_pick_result_context_free_bsg
 	rt_view_pick_result_count_bsg
+	rt_view_pick_result_context_count_bsg
 	rt_view_pick_result_path_bsg
+	rt_view_pick_result_context_path_bsg
 	rt_view_pick_result_hit_dist_bsg
+	rt_view_pick_result_context_hit_dist_bsg
 	rt_view_pick_result_append_path_bsg
+	rt_view_pick_result_context_append_path_bsg
 	rt_view_pick_result_append_copy_bsg
+	rt_view_pick_result_context_append_copy_bsg
 	rt_view_pick_result_filter_first_bsg
+	rt_view_pick_result_context_filter_first_bsg
 	rt_view_selection_apply_pick_result_bsg
 	rt_view_selection_set_pick_result_ref_bsg
+	rt_view_context_selection_set_pick_result_ref_bsg
+	rt_view_context_selection_set_pick_result_context_bsg
 	rt_view_selection_clear_bsg
+	rt_view_context_selection_clear_bsg
 	bsg_interaction_from_pick_result
 	bsg_interaction_selection_apply
 	bsg_selection_clear
@@ -4063,17 +5205,24 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_view_set_find_view_bsg
 	rt_view_set_init_bsg
 	rt_view_set_free_bsg
+	rt_view_context_init_bsg
 	rt_view_init_bsg
 	rt_view_free_bsg
 	rt_view_set_add_view_bsg
 	rt_view_set_remove_view_bsg
 	rt_view_knobs_reset_bsg
+	rt_view_context_knobs_reset_bsg
 	rt_view_knob_state_reset_bsg
 	rt_view_knobs_hash_bsg
-	rt_view_knobs_cmd_process_bsg
+	rt_view_context_knobs_cmd_process_bsg
 	rt_view_knobs_translate_bsg
+	rt_view_context_knobs_translate_bsg
 	rt_view_knobs_rotate_bsg
+	rt_view_context_knobs_rotate_bsg
 	rt_view_knobs_update_rate_flags_bsg
+	rt_view_context_knobs_update_rate_flags_bsg
+	rt_view_context_knob_values_from_bsg
+	rt_view_context_knobs_calibrate_bsg
 	bsg_knobs_reset
 	bsg_knobs_hash
 	bsg_knobs_cmd_process
@@ -4088,7 +5237,35 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_view_is_independent_bsg
 	rt_view_independent_scope_ref_bsg
 	rt_view_independent_scope_destroy_bsg
-	rt_view_init_copy_bsg
+	rt_view_scene_attached_bsg
+	rt_view_context_scene_attached_bsg
+	rt_view_scene_anchor_ensure_bsg
+	rt_view_context_scene_anchor_ensure_bsg
+	rt_view_scene_shared_bsg
+	rt_view_context_scene_shared_bsg
+	rt_view_context_create_with_set_bsg
+	rt_view_visible_render_summary_bsg
+	rt_view_context_visible_render_summary_bsg
+	rt_view_context_named_line_render_count_bsg
+	rt_view_render_export_consistency_bsg
+	rt_view_context_render_export_consistency_bsg
+		rt_view_context_polygon_create_bsg
+		rt_view_context_polygon_select_bsg
+		rt_view_context_polygon_find_bsg
+		rt_view_context_polygon_dup_bsg
+		rt_view_context_polygon_visit_records_bsg
+		rt_view_context_polygon_snap_count_bsg
+		rt_view_context_polygon_clear_point_selection_bsg
+		rt_view_polygon_update_context_bsg
+			rt_view_polygon_update_screen_pt_context_bsg
+			rt_view_polygon_set_context_bsg
+			rt_view_polygon_import_sketch_context_bsg
+			rt_view_context_polygon_snap_exclude_set_bsg
+			rt_view_context_line_set_create_bsg
+			rt_view_line_set_context_is_null_bsg
+			rt_view_line_set_context_set_points_bsg
+			rt_view_line_set_context_destroy_bsg
+			rt_view_init_copy_bsg
 	rt_view_clear_bsg
 	bsg_view_bounds
 	quat_mat2quat
@@ -4200,35 +5377,56 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	"rt/view_legacy_bsg.h"
 	rt_edit_view_from_bsg
 	rt_view_info_from_bsg
+	rt_view_context_info_from_bsg
+	rt_view_context_release_storage_bsg
+	"rt_view_release_storage_adapter"
 	rt_view_orientation_quat_from_bsg
 	rt_view_aet_from_bsg
 	rt_view_aet_set_bsg
+	rt_view_context_aet_set_bsg
 	rt_view_aet_state_set_bsg
+	rt_view_context_aet_state_set_bsg
+	rt_view_context_update_bsg
 	RT_VIEW_AUTOVIEW_SCALE_DEFAULT
 	rt_view_autoview_bsg
+	rt_view_context_autoview_bsg
 	rt_view_autoview_bounds_bsg
+	rt_view_context_autoview_bounds_bsg
 	RT_VIEW_ADJUST_SCALE
 	RT_VIEW_ADJUST_TRANS
 	RT_VIEW_ADJUST_ROT
 	RT_VIEW_ADJUST_CENTER
 	rt_view_adjust_bsg
 	rt_view_perspective_from_bsg
+	rt_view_context_perspective_from_bsg
 	rt_view_perspective_set_bsg
+	rt_view_context_display_manager_from_bsg
+	rt_view_context_display_manager_set_bsg
 	rt_view_model2view_from_bsg
+	rt_view_context_model2view_from_bsg
 	rt_view_model2view_set_bsg
+	rt_view_context_model2view_set_bsg
 	rt_view_view2model_from_bsg
+	rt_view_context_view2model_from_bsg
 	rt_view_view2model_set_bsg
 	rt_view_pmodel2view_from_bsg
 	rt_view_pmodel2view_set_bsg
+	rt_view_context_pmodel2view_set_bsg
 	rt_view_pmat_from_bsg
+	rt_view_context_pmat_from_bsg
 	rt_view_pmat_set_bsg
 	rt_view_rotation_from_bsg
+	rt_view_context_rotation_from_bsg
 	rt_view_rotation_set_bsg
 	rt_view_center_from_bsg
+	rt_view_context_center_from_bsg
 	rt_view_center_vec_set_bsg
 	rt_view_plane_from_bsg
+	rt_view_context_plane_from_bsg
 	rt_view_lod_policy_from_bsg
+	rt_view_context_lod_policy_from_bsg
 	rt_view_lod_policy_apply_bsg
+	rt_view_context_lod_policy_apply_bsg
 	rt_view_lod_policy_copy_bsg
 	rt_view_lod_bounds_update_bsg
 	rt_view_lod_bounds_callback_set_bsg
@@ -4239,6 +5437,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_view_scale_from_bsg
 	rt_view_scale_set_bsg
 	rt_view_scale_storage_from_bsg
+	rt_view_context_scale_storage_from_bsg
 	rt_view_scale_state_set_bsg
 	rt_view_initial_scale_from_bsg
 	rt_view_initial_scale_set_bsg
@@ -4247,45 +5446,81 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_view_local2base_from_bsg
 	rt_view_base2local_from_bsg
 	rt_view_unit_conversion_set_bsg
+	rt_view_context_unit_conversion_set_bsg
+	rt_view_context_local2base_from_bsg
+	rt_view_context_base2local_from_bsg
+	rt_view_context_frametime_set_bsg
+	bsg_view_frametime
 	rt_view_width_from_bsg
 	rt_view_height_from_bsg
 	rt_view_radius_from_bsg
 	rt_view_dimensions_set_bsg
 	rt_view_screen_to_view_from_bsg
+	rt_view_context_screen_to_view_from_bsg
 	rt_view_screen_point_from_bsg
+	rt_view_previous_mouse_from_bsg
+	rt_view_context_previous_mouse_from_bsg
+	rt_view_previous_mouse_set_bsg
+	rt_view_context_previous_mouse_set_bsg
 	rt_view_interactive_rect_state_from_bsg
+	rt_view_context_interactive_rect_state_from_bsg
 	rt_view_interactive_rect_state_set_bsg
+	rt_view_context_interactive_rect_state_set_bsg
 	RT_VIEW_INTERACTIVE_RECT_STATE_INIT
 	rt_view_adc_state_from_bsg
 	rt_view_adc_state_set_bsg
 	RT_VIEW_ADC_STATE_INIT
 	rt_view_grid_state_from_bsg
+	rt_view_context_grid_state_from_bsg
 	rt_view_grid_state_set_bsg
+	rt_view_context_grid_state_set_bsg
 	RT_VIEW_GRID_STATE_INIT
 	rt_view_model_axes_state_from_bsg
+	rt_view_context_model_axes_state_from_bsg
 	rt_view_model_axes_state_set_bsg
+	rt_view_context_model_axes_state_set_bsg
 	rt_view_view_axes_state_from_bsg
+	rt_view_context_view_axes_state_from_bsg
 	rt_view_view_axes_state_set_bsg
+	rt_view_context_view_axes_state_set_bsg
 	RT_VIEW_AXES_STATE_INIT
 	rt_view_center_dot_state_from_bsg
+	rt_view_context_center_dot_state_from_bsg
 	rt_view_center_dot_state_set_bsg
+	rt_view_context_center_dot_state_set_bsg
 	rt_view_scale_overlay_state_from_bsg
+	rt_view_context_scale_overlay_state_from_bsg
 	rt_view_scale_overlay_state_set_bsg
+	rt_view_context_scale_overlay_state_set_bsg
 	rt_view_params_state_from_bsg
+	rt_view_context_params_state_from_bsg
 	rt_view_params_state_set_bsg
+	rt_view_context_params_state_set_bsg
 	RT_VIEW_OTHER_STATE_INIT
 	RT_VIEW_PARAMS_STATE_INIT
 	rt_view_refresh_request_bsg
+	rt_view_context_refresh_request_bsg
 	rt_view_refresh_dirty_from_bsg
+	rt_view_context_refresh_dirty_from_bsg
 	rt_view_refresh_consume_bsg
+	rt_view_context_refresh_consume_bsg
 	rt_view_refresh_complete_bsg
+	rt_view_context_refresh_complete_bsg
 	rt_view_refresh_enabled_from_bsg
+	rt_view_context_refresh_enabled_from_bsg
 	rt_view_refresh_enabled_set_bsg
+	rt_view_context_refresh_enabled_set_bsg
 	rt_view_refresh_suppressed_from_bsg
+	rt_view_context_refresh_suppressed_from_bsg
 	rt_view_refresh_suppress_begin_bsg
+	rt_view_context_refresh_suppress_begin_bsg
 	rt_view_refresh_suppress_end_bsg
+	rt_view_context_refresh_suppress_end_bsg
 	rt_view_refresh_drawn_count_from_bsg
+	rt_view_context_refresh_drawn_count_from_bsg
 	rt_view_refresh_drawn_count_set_bsg
+	rt_view_context_refresh_drawn_count_set_bsg
+	rt_view_context_frame_revision_from_bsg
 	RT_VIEW_REFRESH_VIEW_BSG
 	RT_VIEW_REFRESH_DRAW_BSG
 	RT_VIEW_REFRESH_EDIT_BSG
@@ -4297,17 +5532,25 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_view_size_set_bsg
 	rt_view_inverse_size_from_bsg
 	rt_view_eye_pos_from_bsg
+	rt_view_context_eye_pos_from_bsg
 	rt_view_eye_pos_set_bsg
+	rt_view_context_eye_pos_set_bsg
 	rt_view_keypoint_from_bsg
 	rt_view_keypoint_set_bsg
 	rt_view_rotate_about_from_bsg
 	rt_view_rotate_about_set_bsg
 	rt_view_coord_from_bsg
+	rt_view_context_coord_from_bsg
 	rt_view_coord_set_bsg
+	rt_view_context_coord_set_bsg
 	rt_view_snap_lines_from_bsg
+	rt_view_context_snap_lines_from_bsg
 	rt_view_snap_lines_set_bsg
+	rt_view_context_snap_lines_set_bsg
 	rt_view_snap_source_flags_from_bsg
+	rt_view_context_snap_source_flags_from_bsg
 	rt_view_snap_source_flags_set_bsg
+	rt_view_context_snap_source_flags_set_bsg
 	rt_view_snap_kind_mask_from_bsg
 	rt_view_snap_exclude_feature_set_bsg
 	rt_view_snap_exclude_feature_clear_bsg
@@ -4324,11 +5567,17 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	RT_VIEW_SNAP_KIND_TANGENT_BSG
 	RT_VIEW_SNAP_KIND_OVERLAY_HANDLE_BSG
 	rt_view_prepare_tcl_snap_bsg
+	rt_view_context_prepare_tcl_snap_bsg
 	rt_view_center_linesnap_bsg
+	rt_view_context_center_linesnap_bsg
 	rt_view_zclip_from_bsg
+	rt_view_context_zclip_from_bsg
 	rt_view_zclip_set_bsg
+	rt_view_context_zclip_set_bsg
 	rt_view_framebuffer_mode_from_bsg
+	rt_view_context_framebuffer_mode_from_bsg
 	rt_view_framebuffer_mode_set_bsg
+	rt_view_context_framebuffer_mode_set_bsg
 	rt_view_cleared_from_bsg
 	rt_view_cleared_set_bsg
 	rt_view_settings_shared_bsg
@@ -4359,7 +5608,9 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	bsg_snap_grid_2d
 	rt_view_snap_candidates_bsg
 	rt_view_snap_point_2d_bsg
+	rt_view_context_snap_point_2d_bsg
 	rt_view_snap_grid_2d_bsg
+	rt_view_context_snap_grid_2d_bsg
 	test_bsg_feature_adapter
 	rt_view_feature_ref_is_null_bsg
 	rt_view_feature_overlay_ensure_bsg
@@ -4369,6 +5620,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_view_feature_set_color_bsg
 	rt_view_feature_points_replace_bsg
 	rt_view_feature_clear_geometry_bsg
+	rt_view_feature_summary_bsg
 	rt_view_edit_preview_publish_event_bsg
 	rt_view_feature_remove_bsg
 	bsg_feature_record_get
@@ -4376,25 +5628,59 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	bsg_feature_edit_preview_revision
 	bsg_feature_edit_preview_pick
 	bsg_feature_points_copy
+	rt_view_context_feature_geometry_summary_bsg
 	rt_view_selection_available_bsg
+	rt_view_context_selection_available_bsg
 	rt_view_selection_count_bsg
+	rt_view_context_selection_count_bsg
+	rt_view_context_pick_point_bsg
+	rt_view_context_pick_nearest_bsg
+	rt_view_context_pick_rect_bsg
 	rt_view_pick_result_create_bsg
+	rt_view_pick_result_context_create_bsg
 	rt_view_pick_result_free_bsg
+	rt_view_pick_result_context_free_bsg
 	rt_view_pick_result_count_bsg
+	rt_view_pick_result_context_count_bsg
 	rt_view_pick_result_path_bsg
+	rt_view_pick_result_context_path_bsg
 	rt_view_pick_result_hit_dist_bsg
+	rt_view_pick_result_context_hit_dist_bsg
 	rt_view_pick_result_append_path_bsg
+	rt_view_pick_result_context_append_path_bsg
 	rt_view_pick_result_append_copy_bsg
+	rt_view_pick_result_context_append_copy_bsg
 	rt_view_pick_result_filter_first_bsg
+	rt_view_pick_result_context_filter_first_bsg
 	rt_view_selection_set_pick_result_ref_bsg
-	rt_view_selection_clear_bsg
-	test_bsg_view_scope_adapter
+	rt_view_context_selection_set_pick_result_ref_bsg
+		rt_view_context_selection_set_pick_result_context_bsg
+		rt_view_selection_clear_bsg
+		rt_view_context_selection_clear_bsg
+		rt_view_context_polygon_create_bsg
+		rt_view_context_polygon_select_bsg
+		rt_view_context_polygon_find_bsg
+		rt_view_context_polygon_dup_bsg
+		rt_view_context_polygon_visit_records_bsg
+		rt_view_context_polygon_snap_count_bsg
+		rt_view_context_polygon_clear_point_selection_bsg
+		rt_view_polygon_update_context_bsg
+			rt_view_polygon_update_screen_pt_context_bsg
+			rt_view_polygon_set_context_bsg
+			rt_view_polygon_import_sketch_context_bsg
+			rt_view_context_polygon_snap_exclude_set_bsg
+			rt_view_context_line_set_create_bsg
+			rt_view_line_set_context_is_null_bsg
+			rt_view_line_set_context_set_points_bsg
+			rt_view_line_set_context_destroy_bsg
+			test_bsg_view_scope_adapter
 	bsg_set_views
 	rt_view_set_views_bsg
 	bsg_set_find_view
 	rt_view_set_find_view_bsg
 	rt_view_set_init_bsg
 	rt_view_set_free_bsg
+	rt_view_context_init_bsg
 	rt_view_init_bsg
 	rt_view_free_bsg
 	rt_view_set_add_view_bsg
@@ -4403,12 +5689,18 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	RT_VIEW_KNOBS_RATE_BSG
 	RT_VIEW_KNOBS_ABS_BSG
 	rt_view_knobs_reset_bsg
+	rt_view_context_knobs_reset_bsg
 	rt_view_knob_state_reset_bsg
 	rt_view_knobs_hash_bsg
-	rt_view_knobs_cmd_process_bsg
+	rt_view_context_knobs_cmd_process_bsg
 	rt_view_knobs_translate_bsg
+	rt_view_context_knobs_translate_bsg
 	rt_view_knobs_rotate_bsg
+	rt_view_context_knobs_rotate_bsg
 	rt_view_knobs_update_rate_flags_bsg
+	rt_view_context_knobs_update_rate_flags_bsg
+	rt_view_context_knob_values_from_bsg
+	rt_view_context_knobs_calibrate_bsg
 	bsg_knobs_reset
 	bsg_knobs_hash
 	bsg_knobs_cmd_process
@@ -4422,6 +5714,15 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_view_is_independent_bsg
 	rt_view_independent_scope_ref_bsg
 	rt_view_independent_scope_destroy_bsg
+	rt_view_scene_attached_bsg
+	rt_view_context_scene_attached_bsg
+	rt_view_scene_anchor_ensure_bsg
+	rt_view_context_scene_anchor_ensure_bsg
+	rt_view_scene_shared_bsg
+	rt_view_context_scene_shared_bsg
+	rt_view_visible_render_summary_bsg
+	rt_view_context_visible_render_summary_bsg
+	rt_view_context_named_line_render_count_bsg
 	rt_view_init_copy_bsg
 	rt_view_clear_bsg
 	RT_VIEW_CLEAR_VIEW_BSG
@@ -4505,14 +5806,13 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 
     file(READ "${_file}" _ged_view_snapshot_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_info_from_bsg]]
-	[[rt_view_orientation_quat_from_bsg]])
+	[[ged_view_context_info_get]]
+	[[ged_view_context_orientation_quat_get]])
       string(REGEX MATCH "${_token}" _ged_view_snapshot_token_hit
 	"${_ged_view_snapshot_contents}")
       if(NOT _ged_view_snapshot_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "${_rel} must route view size/orientation extraction through rt/view_legacy_bsg.h")
+	  "${_rel} must route view size/orientation extraction through GED view-context facades")
       endif()
     endforeach()
 
@@ -4526,6 +5826,34 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	  "${_rel} reintroduced direct BSG view size/orientation reads: ${_ged_view_snapshot_direct_hit}")
       endif()
     endforeach()
+
+    if(_rel STREQUAL "src/libged/check/check.c" OR
+	_rel STREQUAL "src/libged/rtwizard/rtwizard.c")
+      foreach(_token
+	  [[ged_view_context_info_get]]
+	  [[ged_view_context_orientation_quat_get]])
+	string(REGEX MATCH "${_token}" _ged_context_view_snapshot_token_hit
+	  "${_ged_view_snapshot_contents}")
+	if(NOT _ged_context_view_snapshot_token_hit)
+	  _brlobol_pivot_guard_fail(
+	    "${_rel} must route view size/orientation reads through GED view-context facades")
+	endif()
+      endforeach()
+      foreach(_pat
+	  [[struct[ \t\r\n]+bsg_view]]
+	  [[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	  [[(^|[^A-Za-z0-9_])rt_view_info_from_bsg[ \t\r\n]*\(]]
+	  [[(^|[^A-Za-z0-9_])rt_view_orientation_quat_from_bsg[ \t\r\n]*\(]]
+	  [[(^|[^A-Za-z0-9_])rt_view_context_info_from_bsg[ \t\r\n]*\(]]
+	  [[(^|[^A-Za-z0-9_])rt_view_context_orientation_quat_from_bsg[ \t\r\n]*\(]])
+	string(REGEX MATCH "${_pat}" _ged_context_view_snapshot_typed_hit
+	  "${_ged_view_snapshot_contents}")
+	if(_ged_context_view_snapshot_typed_hit)
+	  _brlobol_pivot_guard_fail(
+	    "${_rel} reintroduced typed BSG view size/orientation snapshot access: ${_ged_context_view_snapshot_typed_hit}")
+	endif()
+      endforeach()
+    endif()
   endforeach()
 
   foreach(_rel
@@ -4543,13 +5871,12 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 
     file(READ "${_file}" _ged_perspective_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_perspective_from_bsg]])
+	[[ged_view_context_perspective_get]])
       string(REGEX MATCH "${_token}" _ged_perspective_token_hit
 	"${_ged_perspective_contents}")
       if(NOT _ged_perspective_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "${_rel} must route RT command perspective reads through rt/view_legacy_bsg.h")
+	  "${_rel} must route RT command perspective reads through the GED view-context facade")
       endif()
     endforeach()
 
@@ -4560,23 +5887,72 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	"${_rel} reintroduced direct BSG view perspective reads: ${_ged_direct_perspective_hit}")
     endif()
 
+    if(_rel STREQUAL "src/libged/view/saveview.c")
+      foreach(_pat
+	  [[struct[ \t]+bsg_view]]
+	  [[\(struct[ \t]+bsg_view[ \t]*\*[ \t]*\)[ \t]*ged_view_active_ctx]]
+	  [[(^|[^A-Za-z0-9_])rt_view_context_perspective_from_bsg[ \t\r\n]*\(]]
+	  [[(^|[^A-Za-z0-9_])rt_view_perspective_from_bsg([^A-Za-z0-9_]|$)]])
+	string(REGEX MATCH "${_pat}" _ged_saveview_typed_hit
+	  "${_ged_perspective_contents}")
+	if(_ged_saveview_typed_hit)
+	  _brlobol_pivot_guard_fail(
+	    "src/libged/view/saveview.c reintroduced typed BSG perspective/draw-path access: ${_ged_saveview_typed_hit}")
+	endif()
+      endforeach()
+      string(REGEX MATCH [[ged_view_context_perspective_get]]
+	_ged_saveview_context_perspective_hit "${_ged_perspective_contents}")
+      if(NOT _ged_saveview_context_perspective_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/saveview.c must route perspective reads through ged_view_context_perspective_get")
+      endif()
+    endif()
+
+    if(_rel STREQUAL "src/libged/rt/rt.c" OR
+	_rel STREQUAL "src/libged/dm/ert.cpp" OR
+	_rel STREQUAL "src/libged/rtwizard/rtwizard.c")
+      foreach(_pat
+	  [[struct[ \t\r\n]+bsg_view]]
+	  [[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	  [[(^|[^A-Za-z0-9_])rt_view_context_perspective_from_bsg[ \t\r\n]*\(]]
+	  [[(^|[^A-Za-z0-9_])rt_view_perspective_from_bsg[ \t\r\n]*\(]])
+	string(REGEX MATCH "${_pat}" _ged_context_perspective_typed_hit
+	  "${_ged_perspective_contents}")
+	if(_ged_context_perspective_typed_hit)
+	  _brlobol_pivot_guard_fail(
+	    "${_rel} reintroduced typed BSG perspective command access: ${_ged_context_perspective_typed_hit}")
+	endif()
+      endforeach()
+      string(REGEX MATCH [[ged_view_context_perspective_get]]
+	_ged_context_perspective_token_hit "${_ged_perspective_contents}")
+      if(NOT _ged_context_perspective_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} must route perspective reads through ged_view_context_perspective_get")
+      endif()
+    endif()
+
     if(_rel STREQUAL "src/libged/dm/ert.cpp")
       foreach(_token
-	  [[rt_view_framebuffer_mode_from_bsg]]
-	  [[rt_view_framebuffer_mode_set_bsg]])
+	  [[ged_view_context_framebuffer_mode_get]]
+	  [[ged_view_context_framebuffer_mode_set]])
 	string(REGEX MATCH "${_token}" _ged_ert_fb_token_hit
 	  "${_ged_perspective_contents}")
 	if(NOT _ged_ert_fb_token_hit)
 	  _brlobol_pivot_guard_fail(
-	    "src/libged/dm/ert.cpp must route framebuffer mode view-state access through rt/view_legacy_bsg.h")
+	    "src/libged/dm/ert.cpp must route framebuffer mode view-state access through the GED view-context facade")
 	endif()
       endforeach()
-      string(REGEX MATCH [[(^|[^A-Za-z0-9_])bsg_view_(set_)?framebuffer_mode([^A-Za-z0-9_]|$)]]
-	_ged_ert_fb_direct_hit "${_ged_perspective_contents}")
-      if(_ged_ert_fb_direct_hit)
-	_brlobol_pivot_guard_fail(
-	  "src/libged/dm/ert.cpp reintroduced direct BSG framebuffer mode view-state access: ${_ged_ert_fb_direct_hit}")
-      endif()
+      foreach(_pat
+	  [[(^|[^A-Za-z0-9_])bsg_view_(set_)?framebuffer_mode([^A-Za-z0-9_]|$)]]
+	  [[(^|[^A-Za-z0-9_])rt_view_context_framebuffer_mode_(from|set)_bsg[ \t\r\n]*\(]]
+	  [[(^|[^A-Za-z0-9_])rt_view_framebuffer_mode_(from|set)_bsg[ \t\r\n]*\(]])
+	string(REGEX MATCH "${_pat}" _ged_ert_fb_direct_hit
+	  "${_ged_perspective_contents}")
+	if(_ged_ert_fb_direct_hit)
+	  _brlobol_pivot_guard_fail(
+	    "src/libged/dm/ert.cpp reintroduced direct or typed BSG framebuffer mode view-state access: ${_ged_ert_fb_direct_hit}")
+	endif()
+      endforeach()
     endif()
   endforeach()
 
@@ -4584,23 +5960,32 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_ged_eye_model_helper}")
     file(READ "${_ged_eye_model_helper}" _ged_eye_model_helper_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_view2model_from_bsg]]
-	[[rt_view_center_from_bsg]]
-	[[rt_view_rotation_from_bsg]]
-	[[rt_view_zclip_from_bsg]])
+	[[ged_view_context_view2model_get]]
+	[[ged_view_context_center_get]]
+	[[ged_view_context_rotation_get]]
+	[[ged_view_context_zclip_get]]
+	[[ged_view_context_perspective_get]])
       string(REGEX MATCH "${_token}" _ged_eye_model_helper_token_hit
 	"${_ged_eye_model_helper_contents}")
       if(NOT _ged_eye_model_helper_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/ged_util.cpp must route eye-model view snapshot reads through rt/view_legacy_bsg.h")
+	  "src/libged/ged_util.cpp must route eye-model view snapshot reads through opaque RT/GED view-context helpers")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_rotation([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])bsg_view_zclip([^A-Za-z0-9_]|$)]])
+	[[(^|[^A-Za-z0-9_])bsg_view_zclip([^A-Za-z0-9_]|$)]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	  [[(^|[^A-Za-z0-9_])rt_view_(view2model|center|rotation|zclip|perspective)_from_bsg[ \t\r\n]*\(]]
+	  [[(^|[^A-Za-z0-9_])rt_view_context_view2model_from_bsg[ \t\r\n]*\(]]
+	  [[(^|[^A-Za-z0-9_])rt_view_context_center_from_bsg[ \t\r\n]*\(]]
+	  [[(^|[^A-Za-z0-9_])rt_view_context_rotation_from_bsg[ \t\r\n]*\(]]
+	  [[(^|[^A-Za-z0-9_])rt_view_context_perspective_from_bsg[ \t\r\n]*\(]]
+	  [[(^|[^A-Za-z0-9_])rt_view_context_zclip_from_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _ged_eye_model_helper_direct_hit
 	"${_ged_eye_model_helper_contents}")
       if(_ged_eye_model_helper_direct_hit)
@@ -4614,42 +5999,56 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_nirt_impl}")
     file(READ "${_libged_nirt_impl}" _libged_nirt_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_center_from_bsg]]
-	[[rt_view_rotation_from_bsg]]
-	[[rt_view_scale_from_bsg]]
-	[[rt_view_view2model_from_bsg]])
+	[[ged_view_context_center_get]]
+	[[ged_view_context_rotation_get]]
+	[[ged_view_context_scale_get]]
+	[[ged_view_context_view2model_get]])
       string(REGEX MATCH "${_token}" _libged_nirt_token_hit
 	"${_libged_nirt_contents}")
       if(NOT _libged_nirt_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/nirt/nirt.cpp must route NIRT view snapshot reads through rt/view_legacy_bsg.h")
+	  "src/libged/nirt/nirt.cpp must route NIRT view snapshot reads through GED view-context facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_rotation([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]])
+	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_rotation_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_view2model_from_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_nirt_direct_hit
 	"${_libged_nirt_contents}")
       if(_libged_nirt_direct_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/nirt/nirt.cpp reintroduced direct BSG NIRT view snapshot reads: ${_libged_nirt_direct_hit}")
+	  "src/libged/nirt/nirt.cpp reintroduced direct or typed BSG NIRT view snapshot reads: ${_libged_nirt_direct_hit}")
       endif()
     endforeach()
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
-	[[ged_draw_view_feature_remove]])
+	[[#[ \t]*include[ \t]*[<"]ged/bsg_ged_draw\.h]]
+	[[ged_draw_view_context_feature_remove]])
       string(REGEX MATCH "${_token}" _libged_nirt_qray_token_hit
 	"${_libged_nirt_contents}")
       if(NOT _libged_nirt_qray_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/nirt/nirt.cpp must route qray feature cleanup through the private GED draw view adapter")
+	  "src/libged/nirt/nirt.cpp must route qray feature cleanup through the public GED draw view context facade")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
+	[[#[ \t]*include[ \t]*[<"]bsg/(appearance|node)\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
+	[[(^|[^A-Za-z0-9_])bsg_(appearance|node)[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_(APPEARANCE|NODE)_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])struct[ \t]+bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
@@ -4667,19 +6066,25 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_bot_pick_impl}")
     file(READ "${_libged_bot_pick_impl}" _libged_bot_pick_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_center_from_bsg]]
-	[[rt_view_rotation_from_bsg]])
+	[[ged_view_context_center_get]]
+	[[ged_view_context_rotation_get]])
       string(REGEX MATCH "${_token}" _libged_bot_pick_token_hit
 	"${_libged_bot_pick_contents}")
       if(NOT _libged_bot_pick_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/bot/pick.cpp must route viewport pick ray reads through rt/view_legacy_bsg.h")
+	  "src/libged/bot/pick.cpp must route viewport pick ray reads through GED view-context facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])gv_rotation([^A-Za-z0-9_]|$)]])
+	[[(^|[^A-Za-z0-9_])gv_rotation([^A-Za-z0-9_]|$)]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_rotation_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_from_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_bot_pick_direct_hit
 	"${_libged_bot_pick_contents}")
       if(_libged_bot_pick_direct_hit)
@@ -4693,19 +6098,25 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_brep_pick_impl}")
     file(READ "${_libged_brep_pick_impl}" _libged_brep_pick_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_center_from_bsg]]
-	[[rt_view_rotation_from_bsg]])
+	[[ged_view_context_center_get]]
+	[[ged_view_context_rotation_get]])
       string(REGEX MATCH "${_token}" _libged_brep_pick_token_hit
 	"${_libged_brep_pick_contents}")
       if(NOT _libged_brep_pick_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/brep/pick.cpp must route viewport pick ray reads through rt/view_legacy_bsg.h")
+	  "src/libged/brep/pick.cpp must route viewport pick ray reads through GED view-context facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])gv_rotation([^A-Za-z0-9_]|$)]])
+	[[(^|[^A-Za-z0-9_])gv_rotation([^A-Za-z0-9_]|$)]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_rotation_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_from_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_brep_pick_direct_hit
 	"${_libged_brep_pick_contents}")
       if(_libged_brep_pick_direct_hit)
@@ -4719,16 +6130,15 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_ged_view_coord_helper}")
     file(READ "${_ged_view_coord_helper}" _ged_view_coord_helper_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_coord_from_bsg]])
+	[[ged_view_context_coord_get]])
       string(REGEX MATCH "${_token}" _ged_view_coord_helper_token_hit
 	"${_ged_view_coord_helper_contents}")
       if(NOT _ged_view_coord_helper_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/ged_util.cpp must route default coord reads through rt/view_legacy_bsg.h")
+	  "src/libged/ged_util.cpp must route default coord reads through ged_view_context_coord_get")
       endif()
     endforeach()
-    string(REGEX MATCH [[\*[ \t]*coord[ \t]*=[^\n;]*gv_coord]]
+    string(REGEX MATCH [[(\*[ \t]*coord[ \t]*=[^\n;]*gv_coord|struct[ \t\r\n]+bsg_view|\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx|(^|[^A-Za-z0-9_])rt_view_coord_from_bsg[ \t\r\n]*\(|(^|[^A-Za-z0-9_])rt_view_context_coord_from_bsg[ \t\r\n]*\()]]
       _ged_view_coord_helper_direct_hit "${_ged_view_coord_helper_contents}")
     if(_ged_view_coord_helper_direct_hit)
       _brlobol_pivot_guard_fail(
@@ -4740,21 +6150,27 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_arot_coord_impl}")
     file(READ "${_libged_arot_coord_impl}" _libged_arot_coord_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_coord_from_bsg]])
+	[[ged_view_context_coord_get]])
       string(REGEX MATCH "${_token}" _libged_arot_coord_adapter_hit
 	"${_libged_arot_coord_contents}")
       if(NOT _libged_arot_coord_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/arot/arot.c must route default coord reads through rt/view_legacy_bsg.h")
+	  "src/libged/arot/arot.c must route default coord reads through ged_view_context_coord_get")
       endif()
     endforeach()
-    string(REGEX MATCH [[_ged_do_rot[^\n;]*gv_coord]]
-      _libged_arot_coord_direct_hit "${_libged_arot_coord_contents}")
-    if(_libged_arot_coord_direct_hit)
-      _brlobol_pivot_guard_fail(
-	"src/libged/arot/arot.c reintroduced direct BSG default coord reads: ${_libged_arot_coord_direct_hit}")
-    endif()
+    foreach(_pat
+	[[_ged_do_rot[^\n;]*gv_coord]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_coord_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_coord_from_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_arot_coord_direct_hit
+	"${_libged_arot_coord_contents}")
+      if(_libged_arot_coord_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/arot/arot.c reintroduced direct BSG default coord reads: ${_libged_arot_coord_direct_hit}")
+      endif()
+    endforeach()
   endif()
 
   set(_ged_savekey_file "${BRLCAD_SOURCE_DIR}/src/libged/savekey/savekey.c")
@@ -4764,22 +6180,29 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   else()
     file(READ "${_ged_savekey_file}" _ged_savekey_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_info_from_bsg]]
-	[[rt_view_rotation_from_bsg]]
-	[[rt_view_view2model_from_bsg]])
+	[[ged_view_context_info_get]]
+	[[ged_view_context_rotation_get]]
+	[[ged_view_context_view2model_get]])
       string(REGEX MATCH "${_token}" _ged_savekey_token_hit
 	"${_ged_savekey_contents}")
       if(NOT _ged_savekey_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/savekey/savekey.c must route RT -M view reads through rt/view_legacy_bsg.h")
+	  "src/libged/savekey/savekey.c must route RT -M view reads through GED view-context facades")
       endif()
     endforeach()
 
     foreach(_pat
 	[[(^|[^A-Za-z0-9_])gv_size([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_rotation([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]])
+	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
+	[[struct[ \t]+bsg_view]]
+	[[\(struct[ \t]+bsg_view[ \t]*\*[ \t]*\)[ \t]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_info_from_bsg([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_from_bsg([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_info_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_rotation_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_view2model_from_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _ged_savekey_direct_hit
 	"${_ged_savekey_contents}")
       if(_ged_savekey_direct_hit)
@@ -4802,8 +6225,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 
     file(READ "${_file}" _ged_export_camera_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_model2view_from_bsg]]
+	[[ged_view_context_model2view_get]]
 	[[ged_draw_foreach_visible_view_record]]
 	[[ged_draw_view_db_object_record_foreach_segment]]
 	[[ged_draw_view_db_object_record_has_segments]])
@@ -4817,24 +6239,24 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 
     if("${_rel}" STREQUAL "src/libged/plot/plot.c")
       foreach(_token
-	  [[rt_view_center_from_bsg]]
-	  [[rt_view_scale_from_bsg]])
+	  [[ged_view_context_center_get]]
+	  [[ged_view_context_scale_get]])
 	string(REGEX MATCH "${_token}" _ged_plot_camera_token_hit
 	  "${_ged_export_camera_contents}")
 	if(NOT _ged_plot_camera_token_hit)
 	  _brlobol_pivot_guard_fail(
-	    "${_rel} must route plot camera center/scale reads through rt/view_legacy_bsg.h")
+	    "${_rel} must route plot camera model/center/scale reads through GED view-context facades")
 	endif()
       endforeach()
     else()
       foreach(_token
-	  [[rt_view_perspective_from_bsg]]
-	  [[rt_view_eye_pos_from_bsg]])
+	  [[ged_view_context_perspective_get]]
+	  [[ged_view_context_eye_pos_get]])
 	string(REGEX MATCH "${_token}" _ged_bitmap_camera_token_hit
 	  "${_ged_export_camera_contents}")
 	if(NOT _ged_bitmap_camera_token_hit)
 	  _brlobol_pivot_guard_fail(
-	    "${_rel} must route bitmap/vector perspective camera reads through rt/view_legacy_bsg.h")
+	    "${_rel} must route bitmap/vector perspective and eye camera reads through GED view-context facades")
 	endif()
       endforeach()
     endif()
@@ -4849,7 +6271,19 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[(^|[^A-Za-z0-9_])bsg_export_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_EXPORT_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_RENDER_FLAG_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])struct[ \t]+bsg_export_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]])
+	[[(^|[^A-Za-z0-9_])struct[ \t]+bsg_export_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_perspective_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_perspective_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_eye_pos_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_eye_pos_from_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _ged_export_camera_direct_hit
 	"${_ged_export_camera_contents}")
       if(_ged_export_camera_direct_hit)
@@ -4875,21 +6309,25 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endif()
     file(READ "${_file}" _ged_model2view_conv_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_model2view_from_bsg]])
+	[[ged_view_context_model2view_get]])
       string(REGEX MATCH "${_token}" _ged_model2view_conv_token_hit
 	"${_ged_model2view_conv_contents}")
       if(NOT _ged_model2view_conv_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "${_rel} must route model2view conversion reads through rt/view_legacy_bsg.h")
+	  "${_rel} must route model2view conversion reads through GED view-context facade ${_token}")
       endif()
     endforeach()
-    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
-      _ged_model2view_conv_direct_hit "${_ged_model2view_conv_contents}")
-    if(_ged_model2view_conv_direct_hit)
-      _brlobol_pivot_guard_fail(
-	"${_rel} reintroduced direct BSG model2view conversion reads: ${_ged_model2view_conv_direct_hit}")
-    endif()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view[A-Za-z0-9_]*model2view_from_bsg]]
+	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _ged_model2view_conv_direct_hit
+	"${_ged_model2view_conv_contents}")
+      if(_ged_model2view_conv_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} reintroduced direct BSG model2view conversion reads: ${_ged_model2view_conv_direct_hit}")
+      endif()
+    endforeach()
   endforeach()
 
   foreach(_rel
@@ -4905,21 +6343,25 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endif()
     file(READ "${_file}" _ged_view2model_conv_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_view2model_from_bsg]])
+	[[ged_view_context_view2model_get]])
       string(REGEX MATCH "${_token}" _ged_view2model_conv_token_hit
 	"${_ged_view2model_conv_contents}")
       if(NOT _ged_view2model_conv_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "${_rel} must route view2model conversion reads through rt/view_legacy_bsg.h")
+	  "${_rel} must route view2model conversion reads through GED view-context facade ${_token}")
       endif()
     endforeach()
-    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
-      _ged_view2model_conv_direct_hit "${_ged_view2model_conv_contents}")
-    if(_ged_view2model_conv_direct_hit)
-      _brlobol_pivot_guard_fail(
-	"${_rel} reintroduced direct BSG view2model conversion reads: ${_ged_view2model_conv_direct_hit}")
-    endif()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[rt_view[A-Za-z0-9_]*view2model_from_bsg]]
+	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _ged_view2model_conv_direct_hit
+	"${_ged_view2model_conv_contents}")
+      if(_ged_view2model_conv_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} reintroduced direct BSG view2model conversion reads: ${_ged_view2model_conv_direct_hit}")
+      endif()
+    endforeach()
   endforeach()
 
   foreach(_rel
@@ -4934,21 +6376,26 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 
     file(READ "${_file}" _ged_view_rotation_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_rotation_from_bsg]])
+	[[ged_view_context_rotation_get]])
       string(REGEX MATCH "${_token}" _ged_view_rotation_token_hit
 	"${_ged_view_rotation_contents}")
       if(NOT _ged_view_rotation_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "${_rel} must route view rotation reads through rt/view_legacy_bsg.h")
+	  "${_rel} must route view rotation reads through GED view-context facade ${_token}")
       endif()
     endforeach()
-    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_rotation([^A-Za-z0-9_]|$)]]
-      _ged_view_rotation_direct_hit "${_ged_view_rotation_contents}")
-    if(_ged_view_rotation_direct_hit)
-      _brlobol_pivot_guard_fail(
-	"${_rel} reintroduced direct BSG view rotation reads: ${_ged_view_rotation_direct_hit}")
-    endif()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_rotation_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])gv_rotation([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _ged_view_rotation_direct_hit
+	"${_ged_view_rotation_contents}")
+      if(_ged_view_rotation_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} reintroduced direct BSG view rotation reads: ${_ged_view_rotation_direct_hit}")
+      endif()
+    endforeach()
   endforeach()
 
   foreach(_rel
@@ -4957,7 +6404,37 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       src/libged/model2grid_lu/model2grid_lu.c
       src/libged/view2grid_lu/view2grid_lu.c
       src/libged/grid2model_lu/grid2model_lu.c
-      src/libged/grid2view_lu/grid2view_lu.c
+      src/libged/grid2view_lu/grid2view_lu.c)
+    set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
+    if(NOT EXISTS "${_file}")
+      _brlobol_pivot_guard_fail(
+	"${_rel} is required for GED local-unit view-scale conversion facade checks")
+      continue()
+    endif()
+    file(READ "${_file}" _ged_view_scale_conv_contents)
+    foreach(_token
+	[[ged_view_context_scale_get]])
+      string(REGEX MATCH "${_token}" _ged_view_scale_conv_token_hit
+	"${_ged_view_scale_conv_contents}")
+      if(NOT _ged_view_scale_conv_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} must route local-unit view-scale reads through opaque RT/GED view-context token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_from_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _ged_view_scale_conv_direct_hit
+	"${_ged_view_scale_conv_contents}")
+      if(_ged_view_scale_conv_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} reintroduced direct RT/BSG local-unit view-scale reads: ${_ged_view_scale_conv_direct_hit}")
+      endif()
+    endforeach()
+  endforeach()
+
+  foreach(_rel
       src/libged/overlay/overlay.c)
     set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
     if(NOT EXISTS "${_file}")
@@ -4967,21 +6444,25 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endif()
     file(READ "${_file}" _ged_view_scale_conv_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_scale_from_bsg]])
+	[[ged_view_context_scale_get]])
       string(REGEX MATCH "${_token}" _ged_view_scale_conv_token_hit
 	"${_ged_view_scale_conv_contents}")
       if(NOT _ged_view_scale_conv_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "${_rel} must route view-scale conversion reads through rt/view_legacy_bsg.h")
+	  "${_rel} must route view-scale conversion reads through the GED view-context facade")
       endif()
     endforeach()
-    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
-      _ged_view_scale_conv_direct_hit "${_ged_view_scale_conv_contents}")
-    if(_ged_view_scale_conv_direct_hit)
-      _brlobol_pivot_guard_fail(
-	"${_rel} reintroduced direct BSG view-scale conversion reads: ${_ged_view_scale_conv_direct_hit}")
-    endif()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_from_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _ged_view_scale_conv_direct_hit
+	"${_ged_view_scale_conv_contents}")
+      if(_ged_view_scale_conv_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} reintroduced direct RT/BSG view-scale conversion reads: ${_ged_view_scale_conv_direct_hit}")
+      endif()
+    endforeach()
   endforeach()
 
   foreach(_rel
@@ -4993,29 +6474,71 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       continue()
     endif()
     file(READ "${_file}" _lod_policy_boundary_contents)
-    string(REGEX MATCH [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-      _lod_policy_boundary_header_hit "${_lod_policy_boundary_contents}")
-    if(NOT _lod_policy_boundary_header_hit)
-      _brlobol_pivot_guard_fail(
-	"${_rel} must use rt/view_legacy_bsg.h for transitional BSG LoD policy adaptation")
-    endif()
-    if("${_rel}" STREQUAL "src/mged/attach.c")
+    if("${_rel}" STREQUAL "src/mged/dm-generic.c")
       foreach(_token
-	  rt_view_lod_policy_from_bsg
-	  rt_view_lod_policy_apply_bsg)
-	string(FIND "${_lod_policy_boundary_contents}" "${_token}"
-	  _lod_policy_boundary_attach_idx)
-	if(_lod_policy_boundary_attach_idx EQUAL -1)
+	  [[#[ \t]*include[ \t]*[<"]ged/view\.h]]
+	  [[ged_view_context_lod_policy_get]])
+	string(REGEX MATCH "${_token}" _lod_policy_boundary_dm_generic_hit
+	  "${_lod_policy_boundary_contents}")
+	if(NOT _lod_policy_boundary_dm_generic_hit)
 	  _brlobol_pivot_guard_fail(
-	    "${_rel} must route copied display LoD policy through ${_token}")
+	    "${_rel} must inspect zoom-refresh LoD policy through GED view-context token ${_token}")
+	endif()
+      endforeach()
+      foreach(_pat
+	  [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	  [[(^|[^A-Za-z0-9_])rt_view_context_lod_policy_from_bsg[ \t\r\n]*\(]]
+	  [[(^|[^A-Za-z0-9_])rt_view_lod_policy_from_bsg[ \t\r\n]*\(]])
+	string(REGEX MATCH "${_pat}" _lod_policy_boundary_dm_generic_direct_hit
+	  "${_lod_policy_boundary_contents}")
+	if(_lod_policy_boundary_dm_generic_direct_hit)
+	  _brlobol_pivot_guard_fail(
+	    "${_rel} reintroduced direct RT/BSG LoD policy access: ${_lod_policy_boundary_dm_generic_direct_hit}")
+	endif()
+      endforeach()
+    elseif("${_rel}" STREQUAL "src/mged/attach.c")
+      foreach(_token
+	  [[#[ \t]*include[ \t]*[<"]ged/view\.h]]
+	  [[ged_view_context_lod_policy_get]]
+	  [[ged_view_context_lod_policy_apply]])
+	string(REGEX MATCH "${_token}" _lod_policy_boundary_attach_hit
+	  "${_lod_policy_boundary_contents}")
+	if(NOT _lod_policy_boundary_attach_hit)
+	  _brlobol_pivot_guard_fail(
+	    "${_rel} must route copied display LoD policy through GED view-context token ${_token}")
+	endif()
+      endforeach()
+      foreach(_pat
+	  [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	  [[(^|[^A-Za-z0-9_])rt_view_context_lod_policy_from_bsg[ \t\r\n]*\(]]
+	  [[(^|[^A-Za-z0-9_])rt_view_context_lod_policy_apply_bsg[ \t\r\n]*\(]]
+	  [[(^|[^A-Za-z0-9_])rt_view_lod_policy_from_bsg[ \t\r\n]*\(]]
+	  [[(^|[^A-Za-z0-9_])rt_view_lod_policy_apply_bsg[ \t\r\n]*\(]])
+	string(REGEX MATCH "${_pat}" _lod_policy_boundary_attach_direct_hit
+	  "${_lod_policy_boundary_contents}")
+	if(_lod_policy_boundary_attach_direct_hit)
+	  _brlobol_pivot_guard_fail(
+	  "${_rel} reintroduced direct RT/BSG copied-display LoD policy access: ${_lod_policy_boundary_attach_direct_hit}")
 	endif()
       endforeach()
     else()
-      string(FIND "${_lod_policy_boundary_contents}" "rt_view_lod_policy_from_bsg"
+      string(REGEX MATCH [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	_lod_policy_boundary_header_hit "${_lod_policy_boundary_contents}")
+      if(NOT _lod_policy_boundary_header_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} must use rt/view_legacy_bsg.h for transitional BSG LoD policy adaptation")
+      endif()
+      string(FIND "${_lod_policy_boundary_contents}" "rt_view_context_lod_policy_from_bsg"
 	_lod_policy_boundary_from_idx)
       if(_lod_policy_boundary_from_idx EQUAL -1)
 	_brlobol_pivot_guard_fail(
-	  "${_rel} must inspect zoom-refresh LoD policy through rt_view_lod_policy_from_bsg")
+	  "${_rel} must inspect zoom-refresh LoD policy through rt_view_context_lod_policy_from_bsg")
+      endif()
+      string(REGEX MATCH [[(^|[^A-Za-z0-9_])rt_view_lod_policy_from_bsg[ \t\r\n]*\(]]
+	_lod_policy_boundary_typed_hit "${_lod_policy_boundary_contents}")
+      if(_lod_policy_boundary_typed_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} reintroduced typed BSG LoD policy access: ${_lod_policy_boundary_typed_hit}")
       endif()
     endif()
     foreach(_pat
@@ -5114,28 +6637,36 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_dm_view_dims_impl}")
     file(READ "${_libged_dm_view_dims_impl}" _libged_dm_view_dims_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_width_from_bsg]]
-	[[rt_view_height_from_bsg]]
-	[[rt_view_dimensions_set_bsg]]
-	[[rt_view_scale_storage_from_bsg]])
+	[[ged_view_context_width_get]]
+	[[ged_view_context_height_get]]
+	[[ged_view_context_dimensions_set]]
+	[[ged_view_context_scale_storage_get]])
       string(REGEX MATCH "${_token}" _libged_dm_view_dims_token_hit
 	"${_libged_dm_view_dims_contents}")
       if(NOT _libged_dm_view_dims_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/dm/dm.c must route DM fallback view reads through rt/view_legacy_bsg.h")
+	  "src/libged/dm/dm.c must route DM fallback view reads through GED view-context facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[if[ \t\r\n]*\([ \t\r\n]*![ \t\r\n]*target_view->[ \t\r\n]*gv_width[ \t\r\n]*\)]]
 	[[if[ \t\r\n]*\([ \t\r\n]*![ \t\r\n]*target_view->[ \t\r\n]*gv_height[ \t\r\n]*\)]]
 	[[target_view->[ \t\r\n]*gv_(width|height)[ \t\r\n]*=]]
-	[[dm_set_vp[ \t\r\n]*\([^;]*gv_scale]])
+	[[dm_set_vp[ \t\r\n]*\([^;]*gv_scale]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_width_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_height_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_dimensions_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_storage_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_width_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_height_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_dimensions_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_storage_from_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_dm_view_dims_direct_hit
 	"${_libged_dm_view_dims_contents}")
       if(_libged_dm_view_dims_direct_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/dm/dm.c reintroduced direct BSG DM fallback view reads: ${_libged_dm_view_dims_direct_hit}")
+	  "src/libged/dm/dm.c reintroduced typed/direct BSG DM fallback view reads: ${_libged_dm_view_dims_direct_hit}")
       endif()
     endforeach()
   endif()
@@ -5145,23 +6676,33 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_solids_on_ray_impl}")
     file(READ "${_libged_solids_on_ray_impl}" _libged_solids_on_ray_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_center_from_bsg]]
-	[[rt_view_rotation_from_bsg]]
-	[[rt_view_model2view_from_bsg]]
-	[[rt_view_scale_from_bsg]])
+	[[ged_view_context_center_get]]
+	[[ged_view_context_rotation_get]]
+	[[ged_view_context_model2view_get]]
+	[[ged_view_context_scale_get]])
       string(REGEX MATCH "${_token}" _libged_solids_on_ray_token_hit
 	"${_libged_solids_on_ray_contents}")
       if(NOT _libged_solids_on_ray_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/solids_on_ray/solids_on_ray.c must route ray view reads through rt/view_legacy_bsg.h")
+	  "src/libged/solids_on_ray/solids_on_ray.c must route ray view reads through GED view-context facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_rotation([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]])
+	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_rotation_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_solids_on_ray_direct_hit
 	"${_libged_solids_on_ray_contents}")
       if(_libged_solids_on_ray_direct_hit)
@@ -5175,13 +6716,12 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_adc_impl}")
     file(READ "${_libged_adc_impl}" _libged_adc_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_scale_from_bsg]]
-	[[rt_view_model2view_from_bsg]]
-	[[rt_view_view2model_from_bsg]]
+	[[ged_view_context_scale_get]]
+	[[ged_view_context_model2view_get]]
+	[[ged_view_context_view2model_get]]
 	[[struct[ \t\r\n]+rt_view_adc_state]]
-	[[rt_view_adc_state_from_bsg]]
-	[[rt_view_adc_state_set_bsg]]
+	[[ged_view_context_adc_state_get]]
+	[[ged_view_context_adc_state_set]]
 	[[rt_view_adc_model_to_view]]
 	[[rt_view_adc_grid_to_view]]
 	[[rt_view_adc_view_to_grid]]
@@ -5190,16 +6730,29 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	"${_libged_adc_contents}")
       if(NOT _libged_adc_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/adc/adc.c must route ADC view state through rt/view_legacy_bsg.h token ${_token}")
+	  "src/libged/adc/adc.c must route ADC view state through GED view-context facade token ${_token}")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
 	[[#[ \t]*include[ \t]*[<"]bsg/adc\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/view_state\.h]]
+	[[struct[ \t\r\n]+bsg_view]]
 	[[struct[ \t\r\n]+bsg_adc_state]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_adc_state_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_adc_state_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_adc_state_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_adc_state_set_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])rt_view_adc_from_bsg([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])rt_view_adc_set_bsg([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])adc_model_to_adc_view([^A-Za-z0-9_]|$)]]
@@ -5220,28 +6773,47 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_grid_impl}")
     file(READ "${_libged_grid_impl}" _libged_grid_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_center_from_bsg]]
-	[[rt_view_center_vec_set_bsg]]
-	[[rt_view_update_bsg]]
-	[[rt_view_model2view_from_bsg]]
-	[[rt_view_view2model_from_bsg]]
+	[[#[ \t]*include[ \t]*[<"]rt/view\.h]]
+	[[ged_view_context_center_get]]
+	[[ged_view_context_center_vec_set]]
+	[[ged_view_context_update]]
+	[[ged_view_context_model2view_get]]
+	[[ged_view_context_view2model_get]]
 	[[struct[ \t\r\n]+rt_view_grid_state]]
-	[[rt_view_grid_state_from_bsg]]
-	[[rt_view_grid_state_set_bsg]]
-	[[rt_view_snap_grid_2d_bsg]])
+	[[ged_view_context_grid_state_get]]
+	[[ged_view_context_grid_state_set]]
+	[[ged_view_context_snap_grid_2d]])
       string(REGEX MATCH "${_token}" _libged_grid_token_hit
 	"${_libged_grid_contents}")
       if(NOT _libged_grid_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/grid/grid.c must route grid view-state access through rt/view_legacy_bsg.h token ${_token}")
+	  "src/libged/grid/grid.c must route grid view-state access through GED view-context facade token ${_token}")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
 	[[MAT_DELTAS_GET_NEG[ \t\r\n]*\([^;]*gv_center]]
 	[[MAT_DELTAS_VEC_NEG[ \t\r\n]*\([^;]*gv_center]]
+	[[struct[ \t]+bsg_view]]
+	[[\(struct[ \t]+bsg_view[ \t]*\*[ \t]*\)[ \t]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_vec_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_update_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_update_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_grid_state_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_grid_state_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_snap_grid_2d_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_vec_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_grid_state_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_grid_state_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_snap_grid_2d_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])bsg_update([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_snap_grid_2d([^A-Za-z0-9_]|$)]]
 	[[struct[ \t\r\n]+bsg_grid_state]]
@@ -5261,13 +6833,14 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_eye_cmd}")
     file(READ "${_libged_eye_cmd}" _libged_eye_cmd_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_view2model_from_bsg]])
+	[[ged_view_context_view2model_get]]
+	[[ged_view_context_center_vec_set]]
+	[[ged_view_context_update]])
       string(REGEX MATCH "${_token}" _libged_eye_cmd_token_hit
 	"${_libged_eye_cmd_contents}")
       if(NOT _libged_eye_cmd_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/eye.c must route eye view-to-model reads through rt/view_legacy_bsg.h")
+	  "src/libged/view/eye.c must route eye view-to-model reads, center writes, and refresh through GED view-context facade ${_token}")
       endif()
     endforeach()
     string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
@@ -5282,32 +6855,71 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       _brlobol_pivot_guard_fail(
 	"src/libged/view/eye.c reintroduced direct BSG eye center writes: ${_libged_eye_cmd_center_direct_hit}")
     endif()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_vec_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_vec_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_update_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_update_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_eye_cmd_typed_hit
+	"${_libged_eye_cmd_contents}")
+      if(_libged_eye_cmd_typed_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/eye.c reintroduced typed RT view access: ${_libged_eye_cmd_typed_hit}")
+      endif()
+    endforeach()
   endif()
 
   set(_libged_rect_impl "${BRLCAD_SOURCE_DIR}/src/libged/rect/rect.c")
   if(EXISTS "${_libged_rect_impl}")
     file(READ "${_libged_rect_impl}" _libged_rect_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_center_from_bsg]]
-	[[rt_view_model2view_from_bsg]]
-	[[rt_view_view2model_from_bsg]]
-	[[rt_view_scale_from_bsg]]
-	[[rt_view_center_vec_set_bsg]]
-	[[rt_view_scale_set_bsg]])
+	[[#[ \t]*include[ \t]*[<"]rt/view\.h]]
+	[[ged_view_context_center_get]]
+	[[ged_view_context_model2view_get]]
+	[[ged_view_context_view2model_get]]
+	[[ged_view_context_center_vec_set]]
+	[[ged_view_context_interactive_rect_state_get]]
+	[[ged_view_context_interactive_rect_state_set]]
+	[[ged_view_context_scale_get]]
+	[[ged_view_context_scale_set]]
+	[[ged_view_context_update]])
       string(REGEX MATCH "${_token}" _libged_rect_token_hit
 	"${_libged_rect_contents}")
       if(NOT _libged_rect_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/rect/rect.c must route rectangle-zoom view reads through rt/view_legacy_bsg.h")
+	  "src/libged/rect/rect.c must route rectangle-zoom view access through GED view-context facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
 	[[MAT_DELTAS_GET_NEG[ \t\r\n]*\([^;]*gv_center]]
 	[[MAT_DELTAS_VEC_NEG[ \t\r\n]*\([^;]*gv_center]]
-	[[(^|[^A-Za-z0-9_])gv_scale[ \t]*[*/+-]?=]])
+	[[(^|[^A-Za-z0-9_])gv_scale[ \t]*[*/+-]?=]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_vec_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_interactive_rect_state_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_interactive_rect_state_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_update_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_vec_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_interactive_rect_state_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_interactive_rect_state_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_update_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_rect_direct_hit
 	"${_libged_rect_contents}")
       if(_libged_rect_direct_hit)
@@ -5321,26 +6933,39 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_lookat_cmd}")
     file(READ "${_libged_lookat_cmd}" _libged_lookat_cmd_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_view2model_from_bsg]]
-	[[rt_view_aet_from_bsg]]
-	[[rt_view_scale_from_bsg]]
-	[[rt_view_aet_set_bsg]]
-	[[rt_view_center_vec_set_bsg]])
+	[[ged_view_context_view2model_get]]
+	[[ged_view_context_aet_get]]
+	[[ged_view_context_aet_set]]
+	[[ged_view_context_center_vec_set]]
+	[[ged_view_context_scale_get]]
+	[[ged_view_context_update]])
       string(REGEX MATCH "${_token}" _libged_lookat_cmd_token_hit
 	"${_libged_lookat_cmd_contents}")
       if(NOT _libged_lookat_cmd_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/lookat.c must route lookat view reads through rt/view_legacy_bsg.h")
+	  "src/libged/view/lookat.c must route lookat view reads through GED view-context facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
 	"gv_aet[ \t\r\n]*\\[[ \t\r\n]*Z[ \t\r\n]*\\]"
 	[[MAT_DELTAS_VEC_NEG[ \t\r\n]*\([^;]*gv_center]]
 	[[VSET[ \t\r\n]*\([^;]*gv_aet]]
-	[[bsg_mat_aet[ \t\r\n]*\(]])
+	[[bsg_mat_aet[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_aet_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_aet_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_vec_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_update_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_aet_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_aet_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_vec_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_update_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_lookat_cmd_direct_hit
 	"${_libged_lookat_cmd_contents}")
       if(_libged_lookat_cmd_direct_hit)
@@ -5354,20 +6979,25 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_qvrot_cmd}")
     file(READ "${_libged_qvrot_cmd}" _libged_qvrot_cmd_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_rotation_from_bsg]]
-	[[rt_view_rotation_set_bsg]])
+	[[ged_view_context_rotation_get]]
+	[[ged_view_context_rotation_set]]
+	[[ged_view_context_update]])
       string(REGEX MATCH "${_token}" _libged_qvrot_cmd_token_hit
 	"${_libged_qvrot_cmd_contents}")
       if(NOT _libged_qvrot_cmd_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/qvrot.c must route incremental rotation reads through rt/view_legacy_bsg.h")
+	  "src/libged/view/qvrot.c must route incremental rotation reads/writes through GED view-context facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[bn_mat_mul2[^\n;]*gv_rotation]]
 	[[bn_mat_angles[^\n;]*gv_rotation]]
-	[[MAT_COPY[^\n;]*gv_rotation]])
+	[[MAT_COPY[^\n;]*gv_rotation]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_rotation_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_rotation_set_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_qvrot_cmd_direct_hit
 	"${_libged_qvrot_cmd_contents}")
       if(_libged_qvrot_cmd_direct_hit)
@@ -5382,32 +7012,39 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_rtcheck2_impl}")
     file(READ "${_libged_rtcheck2_impl}" _libged_rtcheck2_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_scale_from_bsg]])
+	[[ged_view_context_scale_get]])
       string(REGEX MATCH "${_token}" _libged_rtcheck2_token_hit
 	"${_libged_rtcheck2_contents}")
       if(NOT _libged_rtcheck2_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/rtcheck/rtcheck2.cpp must route overlap glyph scale through rt/view_legacy_bsg.h")
+	  "src/libged/rtcheck/rtcheck2.cpp must route overlap glyph scale through the GED view-context facade")
       endif()
     endforeach()
-    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
-      _libged_rtcheck2_direct_hit "${_libged_rtcheck2_contents}")
-    if(_libged_rtcheck2_direct_hit)
-      _brlobol_pivot_guard_fail(
-	"src/libged/rtcheck/rtcheck2.cpp reintroduced direct BSG overlap glyph scale reads: ${_libged_rtcheck2_direct_hit}")
-    endif()
-    foreach(_token
-	[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
-	[[ged_draw_view_features_remove_prefix]]
-	[[_ged_uplot_stream_publish_feature]])
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_rtcheck2_direct_hit
+	"${_libged_rtcheck2_contents}")
+      if(_libged_rtcheck2_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/rtcheck/rtcheck2.cpp reintroduced direct or typed BSG overlap glyph scale reads: ${_libged_rtcheck2_direct_hit}")
+      endif()
+	    endforeach()
+	    foreach(_token
+		[[#[ \t]*include[ \t]*[<"]ged/bsg_ged_draw\.h]]
+		[[ged_draw_view_context_features_remove_prefix]]
+		[[_ged_uplot_stream_publish_feature]])
       string(REGEX MATCH "${_token}" _libged_rtcheck2_feature_token_hit
 	"${_libged_rtcheck2_contents}")
-      if(NOT _libged_rtcheck2_feature_token_hit)
-	_brlobol_pivot_guard_fail(
-	  "src/libged/rtcheck/rtcheck2.cpp must route rtcheck feature cleanup through the private GED draw view adapter")
-      endif()
-    endforeach()
+	      if(NOT _libged_rtcheck2_feature_token_hit)
+		_brlobol_pivot_guard_fail(
+		  "src/libged/rtcheck/rtcheck2.cpp must route rtcheck feature cleanup through the public GED draw-view context facade")
+	      endif()
+	    endforeach()
     foreach(_pat
 	[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
 	[[(^|[^A-Za-z0-9_])struct[ \t]+bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
@@ -5436,16 +7073,18 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       endif()
     endforeach()
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_scale_from_bsg]])
+	[[ged_view_context_scale_get]]
+	[[ged_view_context_scale_set]]
+	[[ged_view_context_update]])
       string(REGEX MATCH "${_token}" _libged_zoom_adapter_hit
 	"${_libged_zoom_contents}")
       if(NOT _libged_zoom_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/zoom/zoom.c must route zoom view-scale reads through rt/view_legacy_bsg.h")
+	  "src/libged/zoom/zoom.c must route zoom view-scale reads/writes through opaque GED view-context helpers")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/util\.h]]
 	[[(^|[^A-Za-z0-9_])BSG_MINVIEWSCALE([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_MINVIEWSIZE([^A-Za-z0-9_]|$)]])
@@ -5460,12 +7099,20 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[gv_scale[ \t]*=]]
 	[[gv_scale[ \t]*/=]]
 	[[gv_size[ \t]*=[^\n;]*gv_scale]]
-	[[gv_isize[ \t]*=[^\n;]*gv_size]])
+	[[gv_isize[ \t]*=[^\n;]*gv_size]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_update_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_update_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_zoom_bsg_readback_hit
 	"${_libged_zoom_contents}")
       if(_libged_zoom_bsg_readback_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/zoom/zoom.c reintroduced direct BSG zoom readbacks: ${_libged_zoom_bsg_readback_hit}")
+	  "src/libged/zoom/zoom.c reintroduced direct BSG zoom view access: ${_libged_zoom_bsg_readback_hit}")
       endif()
     endforeach()
   endif()
@@ -5506,21 +7153,25 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_scale_impl}")
     file(READ "${_libged_scale_impl}" _libged_scale_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_scale_from_bsg]]
-	[[rt_view_scale_set_bsg]])
+	[[ged_view_context_scale_get]]
+	[[ged_view_context_scale_set]]
+	[[ged_view_context_update]])
       string(REGEX MATCH "${_token}" _libged_scale_adapter_hit
 	"${_libged_scale_contents}")
       if(NOT _libged_scale_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/scale/scale.c must route scale-command view-scale reads through rt/view_legacy_bsg.h")
+	  "src/libged/scale/scale.c must route scale-command view-scale reads/writes through opaque GED view-context helpers")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[gv_scale[ \t]*=]]
 	[[gv_scale[ \t]*\*=]]
 	[[gv_size[ \t]*=[^\n;]*gv_scale]]
-	[[gv_isize[ \t]*=[^\n;]*gv_size]])
+	[[gv_isize[ \t]*=[^\n;]*gv_size]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_update_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_scale_readback_hit
 	"${_libged_scale_contents}")
       if(_libged_scale_readback_hit)
@@ -5534,14 +7185,14 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_view_size_cmd}")
     file(READ "${_libged_view_size_cmd}" _libged_view_size_cmd_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_info_from_bsg]]
-	[[rt_view_size_set_bsg]])
+	[[ged_view_context_size_get]]
+	[[ged_view_context_size_set]]
+	[[ged_view_context_update]])
       string(REGEX MATCH "${_token}" _libged_view_size_cmd_token_hit
 	"${_libged_view_size_cmd_contents}")
       if(NOT _libged_view_size_cmd_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/size.c must route query output through rt/view_legacy_bsg.h")
+	  "src/libged/view/size.c must route query output and refresh through opaque RT/GED view-context helpers")
       endif()
     endforeach()
     string(REGEX MATCH [[bu_vls_printf[^\n;]*gv_size]]
@@ -5553,7 +7204,13 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     foreach(_pat
 	[[gv_size[ \t]*=]]
 	[[gv_isize[ \t]*=[^\n;]*gv_size]]
-	[[gv_scale[ \t]*=[^\n;]*gv_size]])
+	[[gv_scale[ \t]*=[^\n;]*gv_size]]
+	[[(^|[^A-Za-z0-9_])rt_view_info_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_info_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_size_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_size_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_update_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_update_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_view_size_cmd_readback_hit
 	"${_libged_view_size_cmd_contents}")
       if(_libged_view_size_cmd_readback_hit)
@@ -5567,14 +7224,14 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_view_center_cmd}")
     file(READ "${_libged_view_center_cmd}" _libged_view_center_cmd_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_center_from_bsg]]
-	[[rt_view_center_vec_set_bsg]])
+	[[ged_view_context_center_get]]
+	[[ged_view_context_center_vec_set]]
+	[[ged_view_context_update]])
       string(REGEX MATCH "${_token}" _libged_view_center_cmd_token_hit
 	"${_libged_view_center_cmd_contents}")
       if(NOT _libged_view_center_cmd_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/center.cpp must route query output through rt/view_legacy_bsg.h")
+	  "src/libged/view/center.cpp must route query output, center writes, and refresh through GED view-context facade ${_token}")
       endif()
     endforeach()
     string(REGEX MATCH [[MAT_DELTAS_GET_NEG[ \t\r\n]*\([^;]*gv_center]]
@@ -5591,28 +7248,50 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       _brlobol_pivot_guard_fail(
 	"src/libged/view/center.cpp reintroduced direct BSG center writes: ${_libged_view_center_cmd_set_direct_hit}")
     endif()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_vec_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_vec_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_update_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_update_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_view_center_cmd_typed_hit
+	"${_libged_view_center_cmd_contents}")
+      if(_libged_view_center_cmd_typed_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/center.cpp reintroduced typed RT center access: ${_libged_view_center_cmd_typed_hit}")
+      endif()
+    endforeach()
   endif()
 
   set(_libged_view_aet_cmd "${BRLCAD_SOURCE_DIR}/src/libged/view/aet.c")
   if(EXISTS "${_libged_view_aet_cmd}")
     file(READ "${_libged_view_aet_cmd}" _libged_view_aet_cmd_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_aet_from_bsg]]
-	[[rt_view_aet_set_bsg]])
+	[[ged_view_context_aet_get]]
+	[[ged_view_context_aet_set]]
+	[[ged_view_context_update]])
       string(REGEX MATCH "${_token}" _libged_view_aet_cmd_token_hit
 	"${_libged_view_aet_cmd_contents}")
       if(NOT _libged_view_aet_cmd_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/aet.c must route query output through rt/view_legacy_bsg.h")
+	  "src/libged/view/aet.c must route query output and refresh through GED view-context facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[bn_encode_vect[^\n;]*gv_aet]]
 	[[VADD2[^\n;]*gv_aet[^\n;]*gv_aet]]
 	[[VMOVE[^\n;]*gv_aet]]
 	[[VSET[^\n;]*gv_aet]]
-	[[bsg_mat_aet[ \t\r\n]*\(]])
+	[[bsg_mat_aet[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_aet_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_aet_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_aet_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_aet_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_update_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_update_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_view_aet_cmd_direct_hit
 	"${_libged_view_aet_cmd_contents}")
       if(_libged_view_aet_cmd_direct_hit)
@@ -5626,29 +7305,36 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_brep_tikz_cmd}")
     file(READ "${_libged_brep_tikz_cmd}" _libged_brep_tikz_cmd_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_aet_from_bsg]])
+	[[ged_view_context_aet_get]])
       string(REGEX MATCH "${_token}" _libged_brep_tikz_token_hit
 	"${_libged_brep_tikz_cmd_contents}")
       if(NOT _libged_brep_tikz_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/brep/tikz.cpp must route TikZ AET output through rt/view_legacy_bsg.h")
+	  "src/libged/brep/tikz.cpp must route TikZ AET output through the GED view-context facade")
       endif()
     endforeach()
-    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_aet([^A-Za-z0-9_]|$)]]
-      _libged_brep_tikz_direct_hit "${_libged_brep_tikz_cmd_contents}")
-    if(_libged_brep_tikz_direct_hit)
-      _brlobol_pivot_guard_fail(
-	"src/libged/brep/tikz.cpp reintroduced direct BSG TikZ AET output: ${_libged_brep_tikz_direct_hit}")
-    endif()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[(^|[^A-Za-z0-9_])gv_aet([^A-Za-z0-9_]|$)]]
+	[[struct[ \t]+bsg_view]]
+	[[\(struct[ \t]+bsg_view[ \t]*\*[ \t]*\)[ \t]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_aet_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_aet_from_bsg([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _libged_brep_tikz_direct_hit
+	"${_libged_brep_tikz_cmd_contents}")
+      if(_libged_brep_tikz_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/brep/tikz.cpp reintroduced direct BSG TikZ AET output: ${_libged_brep_tikz_direct_hit}")
+      endif()
+    endforeach()
   endif()
 
   set(_libged_select_cmd "${BRLCAD_SOURCE_DIR}/src/libged/select/select.c")
   if(EXISTS "${_libged_select_cmd}")
     file(READ "${_libged_select_cmd}" _libged_select_cmd_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_model2view_from_bsg]]
+	[[ged_view_context_model2view_get]]
+	[[ged_view_context_interactive_rect_state_get]]
 	[[ged_draw_foreach_visible_view_db_object_record]]
 	[[ged_draw_view_db_object_record_foreach_segment]]
 	[[ged_draw_view_db_object_record_foreach_point]])
@@ -5656,12 +7342,19 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	"${_libged_select_cmd_contents}")
       if(NOT _libged_select_cmd_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/select/select.c must route selection model-to-view reads and visible DB-object iteration through adapter helpers")
+	  "src/libged/select/select.c must route selection view snapshots and visible DB-object iteration through context/adapter helpers")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/(export|render)\.h]]
 	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_interactive_rect_state_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_interactive_rect_state_from_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])bsg_export_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_EXPORT_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_RENDER_FLAG_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
@@ -5670,7 +7363,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	"${_libged_select_cmd_contents}")
       if(_libged_select_cmd_direct_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/select/select.c reintroduced direct BSG selection view/export access: ${_libged_select_cmd_direct_hit}")
+	  "src/libged/select/select.c reintroduced direct or typed BSG selection view/export access: ${_libged_select_cmd_direct_hit}")
       endif()
     endforeach()
   endif()
@@ -5679,22 +7372,28 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       src/libged/illum/illum.c
       src/libged/nmg/nmg.c)
     set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
-    if(EXISTS "${_file}")
-      file(READ "${_file}" _contents)
-      foreach(_token
-	  [[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
-	  [[ged_draw_foreach_visible_view_db_object_record]]
-	  [[struct[ \t]+ged_draw_view_label_data]]
+	    if(EXISTS "${_file}")
+	      file(READ "${_file}" _contents)
+	      foreach(_token
+		  [[#[ \t]*include[ \t]*[<"]ged/bsg_ged_draw\.h]]
+		  [[ged_draw_foreach_visible_view_db_object_record]]
+		  [[struct[ \t]+ged_draw_view_label_data]]
 	  [[GED_DRAW_VIEW_LABEL_DATA_INIT]]
-	  [[ged_draw_view_labels_replace]])
+	  [[ged_draw_view_context_labels_replace]]
+	  [[ged_view_context_display_manager_get]])
 	string(REGEX MATCH "${_token}" _libged_label_cmd_token_hit
 	  "${_contents}")
 	if(NOT _libged_label_cmd_token_hit)
 	  _brlobol_pivot_guard_fail(
-	    "${_rel} must route visible DB-object iteration and label feature replacement through GED draw adapter helpers")
+	    "${_rel} must route visible DB-object iteration, label feature replacement, and repaint lookup through opaque context helpers")
 	endif()
       endforeach()
       foreach(_pat
+	  [[struct[ \t\r\n]+bsg_view]]
+	  [[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	  [[(^|[^A-Za-z0-9_])ged_draw_view_labels_replace[ \t\r\n]*\(]]
+	  [[(^|[^A-Za-z0-9_])rt_view_context_display_manager_from_bsg[ \t\r\n]*\(]]
+	  [[(^|[^A-Za-z0-9_])rt_view_display_manager_from_bsg[ \t\r\n]*\(]]
 	  [[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
 	  [[#[ \t]*include[ \t]*[<"]bsg/(export|render)\.h]]
 	  [[(^|[^A-Za-z0-9_])struct[ \t]+bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
@@ -5715,6 +7414,40 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endif()
   endforeach()
 
+  foreach(_rel
+      src/libged/who/who.c
+      src/libged/how/how.c
+      src/libged/bot/dump/bot_dump.cpp)
+    set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
+    if(EXISTS "${_file}")
+      file(READ "${_file}" _libged_path_query_context_contents)
+      foreach(_token
+	  [[ged_view_active_ctx]])
+	string(REGEX MATCH "${_token}" _libged_path_query_context_token_hit
+	  "${_libged_path_query_context_contents}")
+	if(NOT _libged_path_query_context_token_hit)
+	  _brlobol_pivot_guard_fail(
+	    "${_rel} must borrow active views through GED context accessors")
+	endif()
+      endforeach()
+      foreach(_pat
+	  [[#[ \t]*include[ \t]*[<"]bsg/(defines|field)\.h]]
+	  [[struct[ \t\r\n]+bsg_view]]
+	  [[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	  [[gedp[ \t\r\n]*->[ \t\r\n]*ged_gvp]]
+	  [[gedp[ \t\r\n]*->[ \t\r\n]*ged_views]]
+	  [[(^|[^A-Za-z0-9_])rt_view_set_views_bsg[ \t\r\n]*\(]]
+	  [[(^|[^A-Za-z0-9_])rt_view_set_find_view_bsg[ \t\r\n]*\(]])
+	string(REGEX MATCH "${_pat}" _libged_path_query_context_direct_hit
+	  "${_libged_path_query_context_contents}")
+	if(_libged_path_query_context_direct_hit)
+	  _brlobol_pivot_guard_fail(
+	    "${_rel} reintroduced typed BSG active-view path/query access: ${_libged_path_query_context_direct_hit}")
+	endif()
+      endforeach()
+    endif()
+  endforeach()
+
   set(_libged_illum_cmd "${BRLCAD_SOURCE_DIR}/src/libged/illum/illum.c")
   if(EXISTS "${_libged_illum_cmd}")
     file(READ "${_libged_illum_cmd}" _libged_illum_cmd_contents)
@@ -5727,29 +7460,33 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   endif()
 
   set(_libged_uplot_util "${BRLCAD_SOURCE_DIR}/src/libged/ged_util.cpp")
-  if(EXISTS "${_libged_uplot_util}")
-    file(READ "${_libged_uplot_util}" _libged_uplot_util_contents)
-    foreach(_token
-	[[#[ \t]*include[ \t]*[<"]bg/line_layer\.h]]
-	[[#[ \t]*include[ \t]*[<"]\./bsg_ged_draw_view_private\.h]]
-	[[BG_GEOMETRY_LINE_MOVE]]
-	[[GED_DRAW_VIEW_LINE_LAYER_DATA_INIT]]
-	[[ged_draw_view_line_layers_replace]])
+	  if(EXISTS "${_libged_uplot_util}")
+	    file(READ "${_libged_uplot_util}" _libged_uplot_util_contents)
+	    foreach(_token
+		[[#[ \t]*include[ \t]*[<"]bg/line_layer\.h]]
+		[[#[ \t]*include[ \t]*[<"]ged/bsg_ged_draw\.h]]
+		[[BG_GEOMETRY_LINE_MOVE]]
+		[[GED_DRAW_VIEW_LINE_LAYER_DATA_INIT]]
+	[[ged_draw_view_context_line_layers_replace]])
       string(REGEX MATCH "${_token}" _libged_uplot_util_token_hit
 	"${_libged_uplot_util_contents}")
-      if(NOT _libged_uplot_util_token_hit)
-	_brlobol_pivot_guard_fail(
-	  "src/libged/ged_util.cpp must route uplot feature line-layer publishing through neutral BG commands and the private GED draw view adapter")
-      endif()
-    endforeach()
+	      if(NOT _libged_uplot_util_token_hit)
+		_brlobol_pivot_guard_fail(
+		  "src/libged/ged_util.cpp must route uplot feature line-layer publishing through neutral BG commands and the public GED draw-view context facade")
+	      endif()
+	    endforeach()
     foreach(_pat
 	[[#[ \t]*include[ \t]*[<"]bsg/(feature|geometry)\.h]]
+	[[#[ \t]*include[ \t]*[<"]bsg/view_state\.h]]
 	[[(^|[^A-Za-z0-9_])struct[ \t]+bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_FEATURE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_GEOMETRY_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])bsg_line_layer_builder([^A-Za-z0-9_]|$)]])
+	[[(^|[^A-Za-z0-9_])bsg_line_layer_builder([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_line_layers_replace[ \t\r\n]*\(]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]])
       string(REGEX MATCH "${_pat}" _libged_uplot_util_direct_hit
 	"${_libged_uplot_util_contents}")
       if(_libged_uplot_util_direct_hit)
@@ -5819,55 +7556,68 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_polyclip_impl}")
     file(READ "${_libged_polyclip_impl}" _libged_polyclip_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_model2view_from_bsg]]
-	[[rt_view_view2model_from_bsg]]
-	[[rt_view_scale_from_bsg]]
-	[[rt_view_plane_from_bsg]])
+	[[ged_view_context_model2view_get]]
+	[[ged_view_context_view2model_get]]
+	[[ged_view_context_scale_get]]
+	[[ged_view_context_plane_get]])
       string(REGEX MATCH "${_token}" _libged_polyclip_token_hit
 	"${_libged_polyclip_contents}")
       if(NOT _libged_polyclip_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/polyclip.cpp must route polygon view transform reads through rt/view_legacy_bsg.h")
+	  "src/libged/polyclip.cpp must route polygon view transform reads through GED view-context facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/util\.h]]
+	[[#[ \t]*include[ \t]*[<"]bsg/tcl_data\.h]]
+	[[(^|[^A-Za-z0-9_])bsg_data_polygon_state([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])bsg_view_plane([^A-Za-z0-9_]|$)]])
+	[[(^|[^A-Za-z0-9_])bsg_view_plane([^A-Za-z0-9_]|$)]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_plane_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_plane_from_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_polyclip_direct_hit
 	"${_libged_polyclip_contents}")
       if(_libged_polyclip_direct_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/polyclip.cpp reintroduced direct BSG polygon view transform reads: ${_libged_polyclip_direct_hit}")
+	  "src/libged/polyclip.cpp reintroduced direct or typed BSG polygon view transform reads: ${_libged_polyclip_direct_hit}")
       endif()
     endforeach()
   endif()
 
   set(_libged_view_snap_cmd "${BRLCAD_SOURCE_DIR}/src/libged/view/snap.c")
-  if(EXISTS "${_libged_view_snap_cmd}")
-    file(READ "${_libged_view_snap_cmd}" _libged_view_snap_cmd_contents)
-    foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
-	[[rt_view_model2view_from_bsg]]
-	[[rt_view_view2model_from_bsg]]
+	  if(EXISTS "${_libged_view_snap_cmd}")
+	    file(READ "${_libged_view_snap_cmd}" _libged_view_snap_cmd_contents)
+	    foreach(_token
+		[[#[ \t]*include[ \t]*[<"]\./ged_view\.h]]
+		[[ged_view_context_model2view_get]]
+	[[ged_view_context_view2model_get]]
 	[[GED_DRAW_VIEW_SNAP_GRID]]
 	[[GED_DRAW_VIEW_SNAP_ENDPOINT]]
-	[[ged_draw_view_snap_first_candidate]]
-	[[rt_view_snap_tolerance_factor_from_bsg]]
-	[[rt_view_snap_tolerance_factor_set_bsg]])
+	[[ged_draw_view_context_snap_first_candidate]]
+	[[ged_view_context_snap_tolerance_factor_get]]
+	[[ged_view_context_snap_tolerance_factor_set]])
       string(REGEX MATCH "${_token}" _libged_view_snap_cmd_token_hit
 	"${_libged_view_snap_cmd_contents}")
       if(NOT _libged_view_snap_cmd_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/snap.c must route snap view transform reads through rt/view_legacy_bsg.h")
+	  "src/libged/view/snap.c must route snap view-state access through GED view-context facades")
       endif()
-    endforeach()
-    foreach(_pat
-	[[#[ \t]*include[ \t]*[<"]bsg/snap_action\.h]]
+	    endforeach()
+	    foreach(_pat
+		[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+		[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
+		[[#[ \t]*include[ \t]*[<"]bsg/snap_action\.h]]
 	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_SNAP_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
@@ -5875,7 +7625,18 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[struct[ \t\r\n]+bsg_snap_result]]
 	[[(^|[^A-Za-z0-9_])bsg_snap_result_free([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])rt_view_snap_candidates_bsg([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])bsg_view_(set_)?snap_tolerance_factor([^A-Za-z0-9_]|$)]])
+	[[(^|[^A-Za-z0-9_])bsg_view_(set_)?snap_tolerance_factor([^A-Za-z0-9_]|$)]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_snap_tolerance_factor_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_snap_tolerance_factor_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_snap_tolerance_factor_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_snap_tolerance_factor_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_snap_first_candidate[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_view_snap_cmd_direct_hit
 	"${_libged_view_snap_cmd_contents}")
       if(_libged_view_snap_cmd_direct_hit)
@@ -5886,29 +7647,43 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   endif()
 
   set(_libged_view_data_lines_cmd "${BRLCAD_SOURCE_DIR}/src/libged/view/data_lines.c")
-  if(EXISTS "${_libged_view_data_lines_cmd}")
-    file(READ "${_libged_view_data_lines_cmd}" _libged_view_data_lines_cmd_contents)
-    foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_snap_lines_from_bsg]]
-	[[rt_view_snap_lines_set_bsg]]
-	[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
-	[[ged_draw_view_feature_visible]]
-	[[ged_draw_view_feature_remove]]
-	[[ged_draw_view_line_style_get]]
-	[[ged_draw_view_line_color_set]]
-	[[ged_draw_view_line_width_set]]
-	[[ged_draw_view_lines_points_copy]]
-	[[ged_draw_view_tcl_lines_replace]])
+	  if(EXISTS "${_libged_view_data_lines_cmd}")
+	    file(READ "${_libged_view_data_lines_cmd}" _libged_view_data_lines_cmd_contents)
+	    foreach(_token
+		[[ged_view_context_snap_lines_get]]
+		[[ged_view_context_snap_lines_set]]
+		[[#[ \t]*include[ \t]*[<"]\./ged_view\.h]]
+		[[ged_draw_view_context_feature_visible]]
+	[[ged_draw_view_context_feature_remove]]
+	[[ged_draw_view_context_line_style_get]]
+	[[ged_draw_view_context_line_color_set]]
+	[[ged_draw_view_context_line_width_set]]
+	[[ged_draw_view_context_lines_points_copy]]
+	[[ged_draw_view_context_tcl_lines_replace]])
       string(REGEX MATCH "${_token}" _libged_view_data_lines_cmd_token_hit
 	"${_libged_view_data_lines_cmd_contents}")
       if(NOT _libged_view_data_lines_cmd_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/data_lines.c must route snap-line view-state and feature overlay edits through adapter helpers")
+	  "src/libged/view/data_lines.c must route snap-line view-state and feature overlay edits through GED facades")
       endif()
-    endforeach()
-    foreach(_pat
-	[[#[ \t]*include[ \t]*[<"]bsg/view_state\.h]]
+	    endforeach()
+	    foreach(_pat
+		[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+		[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
+		[[#[ \t]*include[ \t]*[<"]bsg/view_state\.h]]
+	[[struct[ \t]+bsg_view]]
+	[[\(struct[ \t]+bsg_view[ \t]*\*[ \t]*\)[ \t]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_snap_lines_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_snap_lines_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_snap_lines_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_snap_lines_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_feature_visible[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_feature_remove[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_line_style_get[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_line_color_set[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_line_width_set[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_lines_points_copy[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_tcl_lines_replace[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])bsg_view_(set_)?snap_lines([^A-Za-z0-9_]|$)]]
 	[[#[ \t]*include[ \t]*[<"]bsg/(feature|geometry|field|draw_source|scene_object|hud|overlay)\.h]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
@@ -5925,24 +7700,25 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endforeach()
   endif()
 
-  set(_libged_view_lines_cmd "${BRLCAD_SOURCE_DIR}/src/libged/view/lines.c")
-  if(EXISTS "${_libged_view_lines_cmd}")
-    file(READ "${_libged_view_lines_cmd}" _libged_view_lines_cmd_contents)
-    foreach(_token
-	[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
-	[[ged_draw_view_feature_exists]]
-	[[ged_draw_view_lines_create_model_annotation]]
-	[[ged_draw_view_lines_append_point]])
+	  set(_libged_view_lines_cmd "${BRLCAD_SOURCE_DIR}/src/libged/view/lines.c")
+	  if(EXISTS "${_libged_view_lines_cmd}")
+	    file(READ "${_libged_view_lines_cmd}" _libged_view_lines_cmd_contents)
+	    foreach(_token
+		[[#[ \t]*include[ \t]*[<"]\./ged_view\.h]]
+		[[ged_draw_view_context_feature_exists]]
+		[[ged_draw_view_context_lines_create_model_annotation]]
+		[[ged_draw_view_context_lines_append_point]])
       string(REGEX MATCH "${_token}" _libged_view_lines_cmd_token_hit
 	"${_libged_view_lines_cmd_contents}")
-      if(NOT _libged_view_lines_cmd_token_hit)
-	_brlobol_pivot_guard_fail(
-	  "src/libged/view/lines.c must route view line feature edits through the private GED draw view adapter")
-      endif()
-    endforeach()
-    foreach(_pat
-	[[#[ \t]*include[ \t]*[<"]bsg/(feature|geometry|hud|overlay)\.h]]
-	[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
+	      if(NOT _libged_view_lines_cmd_token_hit)
+		_brlobol_pivot_guard_fail(
+		  "src/libged/view/lines.c must route view line feature edits through public GED draw-view context helpers")
+	      endif()
+	    endforeach()
+	    foreach(_pat
+		[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
+		[[#[ \t]*include[ \t]*[<"]bsg/(feature|geometry|hud|overlay)\.h]]
+		[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_FEATURE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_GEOMETRY_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
@@ -5956,26 +7732,27 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endforeach()
   endif()
 
-  set(_libged_view_axes_cmd "${BRLCAD_SOURCE_DIR}/src/libged/view/axes.c")
-  if(EXISTS "${_libged_view_axes_cmd}")
-    file(READ "${_libged_view_axes_cmd}" _libged_view_axes_cmd_contents)
-    foreach(_token
-	[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
-	[[struct ged_draw_view_axes_state]]
-	[[ged_draw_view_feature_exists]]
-	[[ged_draw_view_axes_create]]
-	[[ged_draw_view_axes_state_get]]
-	[[ged_draw_view_axes_state_replace]])
+	  set(_libged_view_axes_cmd "${BRLCAD_SOURCE_DIR}/src/libged/view/axes.c")
+	  if(EXISTS "${_libged_view_axes_cmd}")
+	    file(READ "${_libged_view_axes_cmd}" _libged_view_axes_cmd_contents)
+	    foreach(_token
+		[[#[ \t]*include[ \t]*[<"]\./ged_view\.h]]
+		[[struct ged_draw_view_axes_state]]
+		[[ged_draw_view_context_feature_exists]]
+	[[ged_draw_view_context_axes_create]]
+	[[ged_draw_view_context_axes_state_get]]
+	[[ged_draw_view_context_axes_state_replace]])
       string(REGEX MATCH "${_token}" _libged_view_axes_cmd_token_hit
 	"${_libged_view_axes_cmd_contents}")
-      if(NOT _libged_view_axes_cmd_token_hit)
-	_brlobol_pivot_guard_fail(
-	  "src/libged/view/axes.c must route data-axes feature edits through the private GED draw view adapter")
-      endif()
-    endforeach()
-    foreach(_pat
-	[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
-	[[(^|[^A-Za-z0-9_])struct[ \t]+bsg_axes([^A-Za-z0-9_]|$)]]
+	      if(NOT _libged_view_axes_cmd_token_hit)
+		_brlobol_pivot_guard_fail(
+		  "src/libged/view/axes.c must route data-axes feature edits through public GED draw-view context helpers")
+	      endif()
+	    endforeach()
+	    foreach(_pat
+		[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
+		[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
+		[[(^|[^A-Za-z0-9_])struct[ \t]+bsg_axes([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_FEATURE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]])
@@ -5992,21 +7769,27 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_view_gobjs_cmd}")
     file(READ "${_libged_view_gobjs_cmd}" _libged_view_gobjs_cmd_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
-	[[ged_draw_view_feature_exists]]
-	[[ged_draw_view_feature_remove]]
-	[[ged_draw_view_overlay_create]])
+	[[#[ \t]*include[ \t]*[<"]ged/bsg_ged_draw\.h]]
+	[[ged_draw_view_context_feature_exists]]
+	[[ged_draw_view_context_feature_remove]]
+	[[ged_draw_view_context_gobject_create]])
       string(REGEX MATCH "${_token}" _libged_view_gobjs_cmd_token_hit
 	"${_libged_view_gobjs_cmd_contents}")
       if(NOT _libged_view_gobjs_cmd_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/gobjs.cpp must route gobject overlay feature creation/removal through the private GED draw view adapter")
+	  "src/libged/view/gobjs.cpp must route gobject overlay feature creation/removal through the public GED draw-view facade")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
+	[[#[ \t]*include[ \t]*[<"]bsg/]]
 	[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_ref([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_appearance_settings([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_overlay_create([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_APPEARANCE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_FEATURE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]])
       string(REGEX MATCH "${_pat}" _libged_view_gobjs_cmd_direct_hit
 	"${_libged_view_gobjs_cmd_contents}")
@@ -6021,25 +7804,30 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_view_objs_cmd}")
     file(READ "${_libged_view_objs_cmd}" _libged_view_objs_cmd_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
-	[[ged_draw_view_feature_exists]]
-	[[ged_draw_view_feature_remove]]
+	[[#[ \t]*include[ \t]*[<"]ged/bsg_ged_draw\.h]]
+	[[GED_DRAW_MODE_WIRE]]
+	[[ged_draw_view_context_feature_exists]]
+	[[ged_draw_view_context_feature_remove]]
 	[[struct[ \t]+ged_draw_view_feature_style]]
-	[[ged_draw_view_feature_style_get]]
-	[[ged_draw_view_feature_style_apply]]
-	[[ged_draw_view_feature_realize]])
+	[[ged_draw_view_context_feature_style_get]]
+	[[ged_draw_view_context_feature_style_apply]]
+	[[ged_draw_view_context_feature_realize]]
+	[[ged_draw_shape_ref_realize_context]])
       string(REGEX MATCH "${_token}" _libged_view_objs_cmd_token_hit
 	"${_libged_view_objs_cmd_contents}")
       if(NOT _libged_view_objs_cmd_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/objs.cpp must route generic view-object feature style/removal/update paths through the private GED draw view adapter")
+	  "src/libged/view/objs.cpp must route generic view-object feature style/removal/update paths through the public GED draw-view facade")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
+	[[#[ \t]*include[ \t]*[<"]bsg/]]
 	[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
 	[[(^|[^A-Za-z0-9_])struct[ \t]+bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_DRAW_MODE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_FEATURE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]])
       string(REGEX MATCH "${_pat}" _libged_view_objs_cmd_direct_hit
 	"${_libged_view_objs_cmd_contents}")
@@ -6055,13 +7843,15 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_libged_snap_semantics_test}" _libged_snap_semantics_test_contents)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_init_bsg]]
-	[[rt_view_grid_state_set_bsg]]
-	[[rt_view_snap_source_flags_set_bsg]]
-	[[rt_view_snap_candidates_result_bsg]]
+	[[rt_view_context_create_bsg]]
+	[[rt_view_context_dimensions_set_bsg]]
+	[[rt_view_context_grid_state_from_bsg]]
+	[[rt_view_context_grid_state_set_bsg]]
+	[[rt_view_context_snap_source_flags_set_bsg]]
+	[[rt_view_context_snap_candidates_result_bsg]]
 	[[rt_view_snap_result_point_bsg]]
-	[[rt_view_snap_point_2d_bsg]]
-	[[rt_view_free_bsg]])
+	[[rt_view_context_snap_point_2d_bsg]]
+	[[rt_view_context_free_bsg]])
       string(REGEX MATCH "${_token}" _libged_snap_semantics_token_hit
 	"${_libged_snap_semantics_test_contents}")
       if(NOT _libged_snap_semantics_token_hit)
@@ -6071,6 +7861,15 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endforeach()
     foreach(_pat
 	[[#[ \t]*include[ \t]*[<"]bsg/]]
+	[[(^|[^A-Za-z0-9_])struct[ \t\r\n]+bsg_view([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_init_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_free_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_dimensions_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_grid_state_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_grid_state_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_snap_source_flags_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_snap_candidates_result_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_snap_point_2d_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])bsg_view_(init|free|grid_get|grid_set|set_snap_source_flags)([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_snap_(candidates|point_2d|result_init|result_free)([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_SNAP_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
@@ -6106,11 +7905,11 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_faceplate_cmd}")
     file(READ "${_libged_faceplate_cmd}" _libged_faceplate_cmd_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[#[ \t]*include[ \t]*[<"]\.\./\.\./bsg_ged_draw_view_private\.h]]
-	[[rt_view_framebuffer_mode_from_bsg]]
-	[[rt_view_framebuffer_mode_set_bsg]]
-	[[ged_draw_view_hud_sync]])
+	[[#[ \t]*include[ \t]*[<"]rt/view\.h]]
+	[[#[ \t]*include[ \t]*[<"]ged/bsg_ged_draw\.h]]
+	[[ged_view_context_framebuffer_mode_get]]
+	[[ged_view_context_framebuffer_mode_set]]
+	[[ged_draw_view_context_hud_sync]])
       string(REGEX MATCH "${_token}" _libged_faceplate_fb_token_hit
 	"${_libged_faceplate_cmd_contents}")
       if(NOT _libged_faceplate_fb_token_hit)
@@ -6119,8 +7918,13 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[#[ \t]*include[ \t]*[<"]\.\./\.\./bsg_ged_draw_view_private\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/hud\.h]]
 	[[(^|[^A-Za-z0-9_])bsg_hud_sync([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_hud_sync[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_framebuffer_mode_(from|set)_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_framebuffer_mode_(from|set)_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])bsg_view_(set_)?framebuffer_mode([^A-Za-z0-9_]|$)]])
       string(REGEX MATCH "${_pat}" _libged_faceplate_fb_direct_hit
 	"${_libged_faceplate_cmd_contents}")
@@ -6135,23 +7939,24 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_faceplate_scalar}")
     file(READ "${_libged_faceplate_scalar}" _libged_faceplate_scalar_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[#[ \t]*include[ \t]*[<"]rt/view\.h]]
 	[[struct[ \t\r\n]+rt_view_other_state]]
-	[[rt_view_center_dot_state_from_bsg]]
-	[[rt_view_center_dot_state_set_bsg]]
-	[[rt_view_scale_overlay_state_from_bsg]]
-	[[rt_view_scale_overlay_state_set_bsg]]
+	[[ged_view_context_center_dot_state_get]]
+	[[ged_view_context_center_dot_state_set]]
+	[[ged_view_context_scale_overlay_state_get]]
+	[[ged_view_context_scale_overlay_state_set]]
 	[[struct[ \t\r\n]+rt_view_params_state]]
-	[[rt_view_params_state_from_bsg]]
-	[[rt_view_params_state_set_bsg]])
+	[[ged_view_context_params_state_get]]
+	[[ged_view_context_params_state_set]])
       string(REGEX MATCH "${_token}" _libged_faceplate_scalar_token_hit
 	"${_libged_faceplate_scalar_contents}")
       if(NOT _libged_faceplate_scalar_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/faceplate/faceplate.c must route scalar faceplate state through neutral RT view records: ${_token}")
+	  "src/libged/view/faceplate/faceplate.c must route scalar faceplate state through GED view-context facade token ${_token}")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[struct[ \t\r\n]+bsg_other_state]]
 	[[struct[ \t\r\n]+bsg_params_state]]
 	[[(^|[^A-Za-z0-9_])rt_view_center_dot_from_bsg([^A-Za-z0-9_]|$)]]
@@ -6160,6 +7965,8 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[(^|[^A-Za-z0-9_])rt_view_scale_overlay_set_bsg([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])rt_view_params_from_bsg([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])rt_view_params_set_bsg([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_(center_dot|scale_overlay|params)_state_(from|set)_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_(center_dot|scale_overlay|params)_state_(from|set)_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])bsg_view_(center_dot|scale_state|params)_(get|set)([^A-Za-z0-9_]|$)]])
       string(REGEX MATCH "${_pat}" _libged_faceplate_scalar_direct_hit
 	"${_libged_faceplate_scalar_contents}")
@@ -6189,15 +7996,20 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	    [[qg_legacy_view_params_state_set]])
       else()
 	set(_faceplate_scalar_tokens
-	    [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	    [[struct[ \t\r\n]+rt_view_other_state]]
-	    [[rt_view_center_dot_state_from_bsg]]
-	    [[rt_view_center_dot_state_set_bsg]]
-	    [[rt_view_scale_overlay_state_from_bsg]]
-	    [[rt_view_scale_overlay_state_set_bsg]]
+		    [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+		    [[void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
+		    [[view_ctx[ \t\r\n]*=[ \t\r\n]*ged_view_find_ctx]]
+		    [[tclcad_view_prim_labels_state_from_view_ctx]]
+		    [[tclcad_view_prim_labels_state_set]]
+		    [[to_refresh_view[ \t\r\n]*\([ \t\r\n]*view_ctx[ \t\r\n]*\)]]
+		    [[struct[ \t\r\n]+rt_view_other_state]]
+		    [[rt_view_context_center_dot_state_from_bsg]]
+		    [[rt_view_context_center_dot_state_set_bsg]]
+		    [[rt_view_context_scale_overlay_state_from_bsg]]
+	    [[rt_view_context_scale_overlay_state_set_bsg]]
 	    [[struct[ \t\r\n]+rt_view_params_state]]
-	    [[rt_view_params_state_from_bsg]]
-	    [[rt_view_params_state_set_bsg]])
+	    [[rt_view_context_params_state_from_bsg]]
+	    [[rt_view_context_params_state_set_bsg]])
       endif()
       foreach(_token ${_faceplate_scalar_tokens})
 	string(REGEX MATCH "${_token}" _faceplate_state_token_hit
@@ -6212,10 +8024,18 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	  [[struct[ \t\r\n]+bsg_params_state]]
 	  [[(^|[^A-Za-z0-9_])rt_view_center_dot_from_bsg([^A-Za-z0-9_]|$)]]
 	  [[(^|[^A-Za-z0-9_])rt_view_center_dot_set_bsg([^A-Za-z0-9_]|$)]]
+	  [[(^|[^A-Za-z0-9_])rt_view_center_dot_state_from_bsg([^A-Za-z0-9_]|$)]]
+	  [[(^|[^A-Za-z0-9_])rt_view_center_dot_state_set_bsg([^A-Za-z0-9_]|$)]]
 	  [[(^|[^A-Za-z0-9_])rt_view_scale_overlay_from_bsg([^A-Za-z0-9_]|$)]]
 	  [[(^|[^A-Za-z0-9_])rt_view_scale_overlay_set_bsg([^A-Za-z0-9_]|$)]]
-	  [[(^|[^A-Za-z0-9_])rt_view_params_from_bsg([^A-Za-z0-9_]|$)]]
-	  [[(^|[^A-Za-z0-9_])rt_view_params_set_bsg([^A-Za-z0-9_]|$)]])
+	  [[(^|[^A-Za-z0-9_])rt_view_scale_overlay_state_from_bsg([^A-Za-z0-9_]|$)]]
+		  [[(^|[^A-Za-z0-9_])rt_view_scale_overlay_state_set_bsg([^A-Za-z0-9_]|$)]]
+		  [[(^|[^A-Za-z0-9_])rt_view_params_from_bsg([^A-Za-z0-9_]|$)]]
+		  [[(^|[^A-Za-z0-9_])rt_view_params_set_bsg([^A-Za-z0-9_]|$)]]
+		  [[(^|[^A-Za-z0-9_])rt_view_params_state_from_bsg([^A-Za-z0-9_]|$)]]
+		  [[(^|[^A-Za-z0-9_])rt_view_params_state_set_bsg([^A-Za-z0-9_]|$)]]
+		  [[tcl_data[ \t\r\n]*\.[ \t\r\n]*gv_prim_labels]]
+		  [[(^|[^A-Za-z0-9_])gv_prim_labels([^A-Za-z0-9_]|$)]])
 	string(REGEX MATCH "${_pat}" _faceplate_state_old_hit
 	  "${_contents}")
 	if(_faceplate_state_old_hit)
@@ -6245,6 +8065,19 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	      "${_rel} reintroduced direct RT legacy-BSG faceplate scalar access: ${_faceplate_state_qged_old_hit}")
 	  endif()
 	endforeach()
+      else()
+	foreach(_pat
+	    [[struct[ \t\r\n]+bsg_view]]
+	    [[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_find_ctx]]
+	    [[->[ \t\r\n]*gv_tcl]]
+	    [[(^|[^A-Za-z0-9_])gdvp([^A-Za-z0-9_]|$)]])
+	  string(REGEX MATCH "${_pat}" _faceplate_state_tclcad_old_hit
+	    "${_contents}")
+	  if(_faceplate_state_tclcad_old_hit)
+	    _brlobol_pivot_guard_fail(
+	      "${_rel} reintroduced direct BSG TclCAD faceplate view access: ${_faceplate_state_tclcad_old_hit}")
+	  endif()
+	endforeach()
       endif()
     endif()
   endforeach()
@@ -6253,19 +8086,24 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_faceplate_grid}")
     file(READ "${_libged_faceplate_grid}" _libged_faceplate_grid_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[#[ \t]*include[ \t]*[<"]rt/view\.h]]
 	[[struct[ \t\r\n]+rt_view_grid_state]]
-	[[rt_view_grid_state_from_bsg]]
-	[[rt_view_grid_state_set_bsg]])
+	[[ged_view_context_grid_state_get]]
+	[[ged_view_context_grid_state_set]])
       string(REGEX MATCH "${_token}" _libged_faceplate_grid_token_hit
 	"${_libged_faceplate_grid_contents}")
       if(NOT _libged_faceplate_grid_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/faceplate/faceplate_grid.c must route grid state through rt/view_legacy_bsg.h token ${_token}")
+	  "src/libged/view/faceplate/faceplate_grid.c must route grid state through GED view-context facade token ${_token}")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[struct[ \t\r\n]+bsg_grid_state]]
+	[[(^|[^A-Za-z0-9_])rt_view_grid_state_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_grid_state_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_grid_state_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_grid_state_set_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])rt_view_grid_from_bsg([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])rt_view_grid_set_bsg([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_view_grid_(get|set)([^A-Za-z0-9_]|$)]])
@@ -6278,29 +8116,66 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endforeach()
   endif()
 
+  set(_libged_faceplate_irect "${BRLCAD_SOURCE_DIR}/src/libged/view/faceplate/interactive_rect.c")
+  if(EXISTS "${_libged_faceplate_irect}")
+    file(READ "${_libged_faceplate_irect}" _libged_faceplate_irect_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/view\.h]]
+	[[struct[ \t\r\n]+rt_view_interactive_rect_state]]
+	[[ged_view_context_interactive_rect_state_get]]
+	[[ged_view_context_interactive_rect_state_set]])
+      string(REGEX MATCH "${_token}" _libged_faceplate_irect_token_hit
+	"${_libged_faceplate_irect_contents}")
+      if(NOT _libged_faceplate_irect_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/faceplate/interactive_rect.c must route interactive rectangle state through GED view-context facade token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[struct[ \t\r\n]+bsg_interactive_rect_state]]
+	[[(^|[^A-Za-z0-9_])rt_view_interactive_rect_state_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_interactive_rect_state_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_interactive_rect_state_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_interactive_rect_state_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_interactive_rect_from_bsg([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_interactive_rect_set_bsg([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_view_interactive_rect_(get|set)([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _libged_faceplate_irect_direct_hit
+	"${_libged_faceplate_irect_contents}")
+      if(_libged_faceplate_irect_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/faceplate/interactive_rect.c reintroduced direct BSG interactive rectangle state access: ${_libged_faceplate_irect_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
   set(_libged_faceplate_axes "${BRLCAD_SOURCE_DIR}/src/libged/view/faceplate/faceplate_axes.c")
   if(EXISTS "${_libged_faceplate_axes}")
     file(READ "${_libged_faceplate_axes}" _libged_faceplate_axes_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[#[ \t]*include[ \t]*[<"]rt/view\.h]]
 	[[struct[ \t\r\n]+rt_view_axes_state]]
-	[[rt_view_model_axes_state_from_bsg]]
-	[[rt_view_model_axes_state_set_bsg]]
-	[[rt_view_view_axes_state_from_bsg]]
-	[[rt_view_view_axes_state_set_bsg]])
+	[[ged_view_context_model_axes_state_get]]
+	[[ged_view_context_model_axes_state_set]]
+	[[ged_view_context_view_axes_state_get]]
+	[[ged_view_context_view_axes_state_set]])
       string(REGEX MATCH "${_token}" _libged_faceplate_axes_token_hit
 	"${_libged_faceplate_axes_contents}")
       if(NOT _libged_faceplate_axes_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/faceplate/faceplate_axes.c must route axes state through rt/view_legacy_bsg.h token ${_token}")
+	  "src/libged/view/faceplate/faceplate_axes.c must route axes state through GED view-context facade token ${_token}")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[struct[ \t\r\n]+bsg_axes]]
 	[[(^|[^A-Za-z0-9_])rt_view_model_axes_from_bsg([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])rt_view_model_axes_set_bsg([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])rt_view_view_axes_from_bsg([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])rt_view_view_axes_set_bsg([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_(model_axes|view_axes)_state_(from|set)_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_(model_axes|view_axes)_state_(from|set)_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])bsg_view_(model_axes|view_axes)_(get|set)([^A-Za-z0-9_]|$)]])
       string(REGEX MATCH "${_pat}" _libged_faceplate_axes_direct_hit
 	"${_libged_faceplate_axes_contents}")
@@ -6425,8 +8300,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_fbclear_cmd}")
     file(READ "${_libged_fbclear_cmd}" _libged_fbclear_cmd_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_framebuffer_mode_set_bsg]])
+	[[ged_view_context_framebuffer_mode_set]])
       string(REGEX MATCH "${_token}" _libged_fbclear_fb_token_hit
 	"${_libged_fbclear_cmd_contents}")
       if(NOT _libged_fbclear_fb_token_hit)
@@ -6436,7 +8310,10 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endforeach()
     foreach(_pat
 	[[#[ \t]*include[ \t]*[<"]bsg/view_state\.h]]
-	[[(^|[^A-Za-z0-9_])bsg_view_(set_)?framebuffer_mode([^A-Za-z0-9_]|$)]])
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[(^|[^A-Za-z0-9_])bsg_view_(set_)?framebuffer_mode([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_framebuffer_mode_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_framebuffer_mode_set_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_fbclear_fb_direct_hit
 	"${_libged_fbclear_cmd_contents}")
       if(_libged_fbclear_fb_direct_hit)
@@ -6624,21 +8501,33 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	    file(READ "${_libdm_backend_draw_item_test}" _libdm_backend_draw_item_contents)
 	    foreach(_token
 		[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-		[[rt_view_dimensions_set_bsg]])
+		[[rt_view_context_create_bsg]]
+		[[rt_view_context_free_bsg]]
+		[[rt_view_context_dimensions_set_bsg]]
+		[[rt_view_context_display_manager_set_bsg]]
+		[[rt_view_context_model_matrices_identity_bsg]]
+		[[rt_view_line_render_item_create_bsg]]
+		[[rt_view_render_item_free_bsg]]
+		[[rt_view_annotation_curves_add_bsg]]
+		[[rt_view_annotation_display_text_add_bsg]])
 	      string(REGEX MATCH "${_token}" _libdm_backend_draw_item_token_hit
 		"${_libdm_backend_draw_item_contents}")
 	      if(NOT _libdm_backend_draw_item_token_hit)
 		_brlobol_pivot_guard_fail(
-		  "src/libdm/tests/test_backend_draw_item.c must route test view dimensions through rt/view_legacy_bsg.h token ${_token}")
+		  "src/libdm/tests/test_backend_draw_item.c must route retained BSG test fixtures through rt/view_legacy_bsg.h token ${_token}")
 	      endif()
 	    endforeach()
 	    foreach(_pat
+		[[#[ \t]*include[ \t]*[<"]bsg/]]
+		[[(^|[^A-Za-z0-9_])bsg_(annotation|render|shape|node|separator|view)_[A-Za-z0-9_]*[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])BSG_(ANNOTATION|RENDER)_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+		[[(^|[^A-Za-z0-9_])rt_view_dimensions_set_bsg([^A-Za-z0-9_]|$)]]
 		[[v->[ \t\r\n]*gv_(width|height)[ \t\r\n]*=]])
 	      string(REGEX MATCH "${_pat}" _libdm_backend_draw_item_direct_hit
 		"${_libdm_backend_draw_item_contents}")
 	      if(_libdm_backend_draw_item_direct_hit)
 		_brlobol_pivot_guard_fail(
-		  "src/libdm/tests/test_backend_draw_item.c reintroduced direct BSG test view dimensions: ${_libdm_backend_draw_item_direct_hit}")
+		  "src/libdm/tests/test_backend_draw_item.c reintroduced direct BSG fixture source use: ${_libdm_backend_draw_item_direct_hit}")
 	      endif()
 	    endforeach()
 	  endif()
@@ -6646,10 +8535,11 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	  set(_libdm_tests_cmake "${BRLCAD_SOURCE_DIR}/src/libdm/tests/CMakeLists.txt")
 	  if(EXISTS "${_libdm_tests_cmake}")
 	    file(READ "${_libdm_tests_cmake}" _libdm_tests_cmake_contents)
-	    string(FIND "${_libdm_tests_cmake_contents}" "test_dm_backend_draw_item test_backend_draw_item.c \"libdm;librt;libbsg;libbu\"" _idx)
-	    if(_idx EQUAL -1)
+	    string(REGEX MATCH [[test_dm_backend_draw_item[^\n]*libbsg]] _libdm_backend_draw_item_link_hit
+	      "${_libdm_tests_cmake_contents}")
+	    if(_libdm_backend_draw_item_link_hit)
 	      _brlobol_pivot_guard_fail(
-		"src/libdm/tests/CMakeLists.txt must link test_dm_backend_draw_item with librt for rt/view_legacy_bsg.h dimension setup")
+		"src/libdm/tests/CMakeLists.txt reintroduced a direct libbsg link for test_dm_backend_draw_item")
 	    endif()
 	  endif()
 
@@ -6951,24 +8841,41 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_zap_cmd}")
     file(READ "${_libged_zap_cmd}" _libged_zap_cmd_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_cleared_set_bsg]])
+	[[#[ \t]*include[ \t]*[<"]ged/view\.h]]
+	[[ged_view_find_ctx]]
+	[[ged_view_set_views_ctx]]
+	[[ged_view_context_is_independent]]
+	[[ged_view_context_clear]]
+	[[ged_view_context_cleared_set]]
+	[[GED_VIEW_CLEAR_DB]]
+	[[GED_VIEW_CLEAR_VIEW]]
+	[[GED_VIEW_CLEAR_LOCAL]])
       string(REGEX MATCH "${_token}" _libged_zap_cleared_token_hit
 	"${_libged_zap_cmd_contents}")
       if(NOT _libged_zap_cleared_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/zap/zap2.cpp must route cleared-state view-state access through rt/view_legacy_bsg.h")
+	  "src/libged/zap/zap2.cpp must route view lookup, clear, independent-state, and cleared-state access through GED view-context facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/view_state\.h]]
+	[[(^|[^A-Za-z0-9_])struct[ \t\r\n]+bsg_view([^A-Za-z0-9_]|$)]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)]]
 	[[(^|[^A-Za-z0-9_])bsg_view_(set_)?cleared([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_is_independent_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_is_independent_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_clear_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_clear_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_cleared_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_cleared_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])RT_VIEW_CLEAR_(DB|VIEW|LOCAL)_BSG([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_SOURCE_(DB|VIEW|LOCAL)([^A-Za-z0-9_]|$)]])
       string(REGEX MATCH "${_pat}" _libged_zap_cleared_direct_hit
 	"${_libged_zap_cmd_contents}")
       if(_libged_zap_cleared_direct_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/zap/zap2.cpp reintroduced direct BSG cleared-state view-state access: ${_libged_zap_cleared_direct_hit}")
+	  "src/libged/zap/zap2.cpp reintroduced typed BSG view-state access instead of opaque RT view-context helpers: ${_libged_zap_cleared_direct_hit}")
       endif()
     endforeach()
   endif()
@@ -7061,6 +8968,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endif()
     file(READ "${_file}" _contents)
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/selection\.h]]
 	[[(^|[^A-Za-z0-9_])ged_draw_view_selection_bsg([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_selection_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
@@ -7098,29 +9006,39 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_selection_state_impl}")
 	    file(READ "${_libged_selection_state_impl}" _libged_selection_state_contents)
 	    foreach(_token
-		[[#[ \t]*include[ \t]*[<"]\./bsg_ged_draw_view_private\.h]]
-		[[ged_draw_shape_ref_from_scene_ref]]
-		[[ged_draw_shape_index_for_component]]
-		[[ged_draw_shape_index_for_path_hash]]
-		[[ged_draw_shape_ref_view]]
-		[[ged_draw_view_selection_path_foreach]]
-		[[ged_draw_view_selection_add_shape_ref]]
-		[[ged_draw_view_selection_clear]]
+		[[#[ \t]*include[ \t]*[<"]ged/bsg_ged_draw\.h]]
+		[[ged_draw_shape_ref_index_for_component]]
+		[[ged_draw_shape_ref_index_for_path_hash]]
+		[[ged_draw_shape_ref_view_context]]
+		[[ged_draw_view_context_selection_path_foreach]]
+		[[ged_draw_view_selection_add_shape_ref_context]]
+		[[ged_draw_view_context_selection_clear]]
 	[[ged_view_set_views_ctx]])
       string(REGEX MATCH "${_token}" _libged_selection_state_token_hit
 	"${_libged_selection_state_contents}")
       if(NOT _libged_selection_state_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/selection_state.cpp must route draw-selection sync through GED private selection helpers")
+	  "src/libged/selection_state.cpp must route draw-selection sync through public GED draw selection helpers")
       endif()
     endforeach()
 	    foreach(_pat
 		[[#[ \t]*include[ \t]*[<"]\./bsg_ged_draw_private\.h]]
+		[[#[ \t]*include[ \t]*[<"]\./bsg_ged_draw_view_private\.h]]
 		[[#[ \t]*include[ \t]*[<"]bsg/(interaction|selection)\.h]]
+		[[(^|[^A-Za-z0-9_])bsg_scene_ref([^A-Za-z0-9_]|$)]]
+		[[(^|[^A-Za-z0-9_])struct[ \t\r\n]+bsg_view([^A-Za-z0-9_]|$)]]
+		[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)]]
 		[[(^|[^A-Za-z0-9_])bsg_selection_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_interaction_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_interaction_record([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])rt_view_selection_bsg([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])ged_draw_shape_ref_from_scene_ref[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_shape_index_for_component[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_shape_index_for_path_hash[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_shape_ref_view[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_selection_path_foreach[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_selection_add_shape_ref[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_selection_clear[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_shape_ref_selection_record([^A-Za-z0-9_]|$)]])
       string(REGEX MATCH "${_pat}" _libged_selection_state_direct_hit
 	"${_libged_selection_state_contents}")
@@ -7136,8 +9054,6 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       src/libtclcad/view/refresh.c
       src/libtclcad/view/draw.c
       src/libtclcad/view/autoview.c
-      src/libtclcad/view/lines.c
-      src/libtclcad/view/labels.c
       src/libtclcad/view/faceplate.c
       src/libtclcad/view/axes.c
       src/libtclcad/view/arrows.c
@@ -7153,7 +9069,6 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       src/libged/draw/draw2.cpp
       src/libged/erase/erase2.cpp
       src/libged/dm/screengrab.c
-      src/libged/dm/dm.c
       src/libged/view/view.c
       src/libged/view/autoview2.cpp
       src/gtools/gsh/gsh.cpp
@@ -7231,12 +9146,26 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	  "${_rel} reintroduced direct BSG knob utility access: ${_knob_direct_hit}")
       endif()
     endforeach()
+    if("${_rel}" MATCHES "^src/mged/")
+      foreach(_pat
+	  [[(^|[^A-Za-z0-9_])bsg_view_knobs([^A-Za-z0-9_]|$)]]
+	  [[vs_gvp[ \t\r\n]*->[ \t\r\n]*k]]
+	  [[mged_view[ \t\r\n]*->[ \t\r\n]*k]]
+	  [[staging[ \t\r\n]*->[ \t\r\n]*k]]
+	  [[active_view[ \t\r\n]*->[ \t\r\n]*k]])
+	string(REGEX MATCH "${_pat}" _mged_knob_state_direct_hit "${_contents}")
+	if(_mged_knob_state_direct_hit)
+	  _brlobol_pivot_guard_fail(
+	    "${_rel} reintroduced direct BSG retained-view knob-state access: ${_mged_knob_state_direct_hit}")
+	endif()
+      endforeach()
+    endif()
   endforeach()
 
   foreach(_rel_token
-      "src/libged/view/knob.c|rt_view_knobs_reset_bsg|rt_view_knobs_cmd_process_bsg|rt_view_knobs_translate_bsg|rt_view_knobs_rotate_bsg|rt_view_knobs_update_rate_flags_bsg"
-      "src/mged/chgview.c|rt_view_knobs_reset_bsg|rt_view_knobs_cmd_process_bsg|rt_view_knobs_translate_bsg|rt_view_knobs_rotate_bsg|rt_view_knob_state_reset_bsg"
-      "src/mged/cmd.cpp|rt_view_knobs_hash_bsg")
+      "src/libged/view/knob.c|ged_view_context_knob_values_get|ged_view_context_unit_conversion_set|ged_view_context_coord_get|ged_view_context_knobs_reset|ged_view_context_knobs_calibrate|ged_view_context_knobs_cmd_process|ged_view_context_knobs_translate|ged_view_context_keypoint_get|ged_view_context_knobs_rotate|ged_view_context_knobs_update_rate_flags|RT_VIEW_KNOBS_RATE"
+      "src/mged/chgview.c|rt_view_context_knobs_reset_bsg|rt_view_context_knobs_cmd_process_bsg|rt_view_context_knobs_translate_bsg|rt_view_context_knobs_rotate_bsg|rt_view_context_knobs_state_from_bsg|rt_view_context_knobs_state_set_bsg"
+      "src/mged/cmd.cpp|rt_view_context_knobs_hash_bsg|rt_view_context_knobs_state_from_bsg|rt_view_context_knobs_state_set_bsg")
     string(REGEX REPLACE "^([^|]+)\\|.*$" "\\1" _rel "${_rel_token}")
     string(REGEX REPLACE "^[^|]+\\|" "" _tokens "${_rel_token}")
     set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
@@ -7276,7 +9205,12 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       list(APPEND _tokens ged_draw_view_set_views_bsg)
     endif()
     if("${_rel}" STREQUAL "src/libged/bsg_ged_draw_scene_root.c")
-      list(APPEND _tokens ged_draw_view_set_recycle_pool_bsg)
+      list(APPEND _tokens ged_draw_view_set_recycle_pool_bsg
+		ged_draw_view_context_scene_root
+		ged_draw_view_context_scene_attached
+		ged_draw_view_context_frame_revision
+		ged_draw_view_context_bump_frame_revision
+		bsg_view_scene_ref)
     endif()
     if("${_rel}" STREQUAL "src/libged/bsg_ged_draw_records.c")
       list(APPEND _tokens ged_draw_view_selection_available
@@ -7307,6 +9241,43 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	"${_rel} must use bsg_ged_draw_private.h instead of direct RT legacy BSG adapters: ${_draw_direct_rt_adapter_hit}")
     endif()
     if("${_rel}" STREQUAL "src/libged/bsg_ged_draw_records.c")
+      string(REGEX MATCH [[rec[.]selected[ \t\r\n]*=[ \t\r\n]*export_rec->[ \t\r\n]*selected]]
+	_draw_record_selected_export_hit "${_contents}")
+      if(NOT _draw_record_selected_export_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/bsg_ged_draw_records.c must preserve export selected state in neutral GED view records")
+      endif()
+      foreach(_token
+	  [[rec[.]geometry_name[ \t\r\n]*=]]
+	  [["indexed-face-set"]]
+	  [[rec[.]is_database_intent[ \t\r\n]*=]]
+	  [[rec[.]is_local_source[ \t\r\n]*=]]
+	  [[rec[.]is_view_source[ \t\r\n]*=]]
+	  [[rec[.]cache_identity[ \t\r\n]*=]]
+	  [[rec[.]source_identity[ \t\r\n]*=]]
+	  [[out->[ \t\r\n]*cache_identity[ \t\r\n]*=]]
+	  [[out->[ \t\r\n]*source_identity[ \t\r\n]*=]]
+	  [[ged_draw_view_db_object_record_annotation_summary]]
+	  [[ged_draw_view_db_object_record_line_summary]]
+	  [[ged_draw_view_db_object_record_line_point_at]]
+	  [[ged_draw_view_db_object_record_line_command_at]]
+	  [[ged_draw_view_db_object_record_surface_summary]]
+	  [[ged_draw_view_db_object_record_surface_index_at]]
+	  [[ged_draw_view_rendered_object_summary]]
+	  [[BSG_RENDER_GEOMETRY_LINE_SET]]
+	  [[bsg_backend_scene_render_request]]
+	  [[bsg_backend_scene_find]]
+	  [[normals_per_index]]
+	  [[BSG_ANNOTATION_SEGMENT_TEXT]]
+	  [[BSG_RENDER_DRAW_INTENT_OVERLAY]]
+	  [[BSG_RENDER_DRAW_INTENT_HUD]])
+	string(REGEX MATCH "${_token}" _draw_record_source_scope_hit
+	  "${_contents}")
+	if(NOT _draw_record_source_scope_hit)
+	  _brlobol_pivot_guard_fail(
+	    "src/libged/bsg_ged_draw_records.c must preserve export view/local source state in neutral GED view records")
+	endif()
+      endforeach()
       foreach(_pat
 	  [[#[ \t]*include[ \t]*[<"]bsg/interaction\.h]]
 	  [[(^|[^A-Za-z0-9_])struct[ \t]+bsg_interaction_record([^A-Za-z0-9_]|$)]]
@@ -7328,6 +9299,62 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	    "${BRLCAD_SOURCE_DIR}/src/libged/bsg_ged_draw_refs.c")
 	  if(EXISTS "${_libged_draw_refs_impl}")
 	    file(READ "${_libged_draw_refs_impl}" _libged_draw_refs_contents)
+	    foreach(_token
+		[[ged_draw_shape_ref_line_summary]]
+		[[ged_draw_shape_ref_line_point_at]]
+		[[ged_draw_shape_ref_line_command_at]]
+		[[ged_draw_shape_context_line_summary]]
+		[[ged_draw_shape_context_line_point_at]]
+		[[ged_draw_shape_context_line_command_at]]
+		[[ged_draw_shape_context_geometry_summary]]
+		[[ged_draw_first_shape_context]]
+		[[ged_draw_shape_ref_context]]
+		[[ged_draw_shape_ref_cache_context]]
+		[[ged_draw_group_ref_context]]
+		[[ged_draw_shape_ref_from_context]]
+		[[ged_draw_shape_context_has_state]]
+		[[ged_draw_shape_context_source]]
+		[[ged_draw_scene_context_fullpath]]
+		[[ged_draw_group_context_dbpath]]
+		[[ged_draw_group_context_is_overlay]]
+		[[ged_draw_scene_context_display_summary]]
+		[[ged_draw_scene_context_source_summary]]
+		[[ged_draw_scene_context_tree_summary]]
+		[[ged_draw_scene_context_child_at]]
+		[[ged_draw_scene_context_parent]]
+		[[ged_draw_scene_context_name]]
+		[[ged_draw_scene_context_subtree_bounds]]
+		[[ged_draw_shape_ref_material_summary]]
+		[[ged_draw_shape_ref_set_visible]]
+		[[ged_draw_shape_ref_set_material_color]]
+		[[ged_draw_shape_ref_set_evaluated_region]]
+		[[_ged_draw_geometry_kind_name]]
+		[[GED_DRAW_VIEW_LINE_MOVE]]
+		[[bsg_scene_draw_intent]]
+		[[bsg_scene_is_database_source]]
+		[[bsg_scene_material_get_rgb]]
+		[[bsg_scene_material_revision]]
+		[[bsg_scene_material_set_rgb]]
+		[[bsg_scene_set_legacy_eval_flag]]
+		[[bsg_scene_draw_tree_depth]]
+		[[bsg_scene_child_at]]
+		[[bsg_scene_parent]]
+		[[bsg_scene_name]]
+		[[bsg_scene_subtree_bbox]]
+		[[bsg_scene_ref_type]]
+		[[bsg_database_source_record_get]]
+		[[ged_draw_database_source_stale_reason_name]]
+		[[bsg_geometry_ref_coordinates_field]]
+		[[bsg_geometry_ref_indices_field]]
+		[[out->[ \t\r\n]*index_count[ \t\r\n]*=]]
+		[[bsg_geometry_ref_primitive_sets_field]])
+	      string(REGEX MATCH "${_token}" _draw_refs_line_accessor_hit
+		"${_libged_draw_refs_contents}")
+	      if(NOT _draw_refs_line_accessor_hit)
+		_brlobol_pivot_guard_fail(
+		  "src/libged/bsg_ged_draw_refs.c must preserve neutral shape-ref line accessors")
+	      endif()
+	    endforeach()
 	    foreach(_pat
 		[[#[ \t]*include[ \t]*[<"]bsg/(interaction|selection)\.h]]
 		[[(^|[^A-Za-z0-9_])struct[ \t]+bsg_interaction_record([^A-Za-z0-9_]|$)]]
@@ -7346,13 +9373,6 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	  endif()
 
   foreach(_rel
-      src/libged/zap/zap2.cpp
-      src/libged/draw/draw2.cpp
-      src/libged/erase/erase2.cpp
-      src/libged/dm/screengrab.c
-      src/libged/dm/dm.c
-      src/libged/view/view.c
-      src/libged/view/autoview2.cpp
       src/gtools/gsh/gsh.cpp
 	      src/libged/ged.cpp
 	      src/libged/tests/draw/aet.cpp
@@ -7363,13 +9383,10 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	      src/libged/tests/draw/view_command.cpp
 	      src/libged/tests/draw/view_independent.cpp
 	      src/mged/cmd.cpp
-      src/mged/setup.c
       src/libtclcad/wrapper.c
       src/libtclcad/view/refresh.c
       src/libtclcad/view/draw.c
       src/libtclcad/view/autoview.c
-      src/libtclcad/view/lines.c
-      src/libtclcad/view/labels.c
       src/libtclcad/view/faceplate.c
       src/libtclcad/view/axes.c
       src/libtclcad/view/arrows.c
@@ -7377,9 +9394,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       src/libtclcad/mouse.c
       src/libtclcad/fb.c
       src/libtclcad/commands.c
-      src/mged/usepen.c
-      src/mged/chgview.c
-      src/mged/attach.c)
+      src/mged/chgview.c)
     set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
     if(NOT EXISTS "${_file}")
       continue()
@@ -7396,43 +9411,42 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   endforeach()
 
   foreach(_rel_token
-      "src/libged/zap/zap2.cpp|rt_view_is_independent_bsg|rt_view_clear_bsg|RT_VIEW_CLEAR_DB_BSG|RT_VIEW_CLEAR_VIEW_BSG|RT_VIEW_CLEAR_LOCAL_BSG"
-      "src/libged/draw/draw2.cpp|rt_view_is_independent_bsg"
-      "src/libged/erase/erase2.cpp|rt_view_is_independent_bsg"
-      "src/libged/dm/dm.c|rt_view_init_bsg|rt_view_set_add_view_bsg"
-      "src/libged/view/view.c|rt_view_is_independent_bsg|rt_view_independent_scope_ref_bsg|rt_view_independent_scope_destroy_bsg|ged_draw_view_selection_count"
-	      "src/libged/ged.cpp|rt_view_set_init_bsg|rt_view_init_bsg|rt_view_set_add_view_bsg|rt_view_free_bsg|rt_view_set_free_bsg"
-	      "src/libged/tests/draw/aet.cpp|rt_view_set_views_bsg|rt_view_set_remove_view_bsg|rt_view_init_bsg|rt_view_set_add_view_bsg|rt_view_dimensions_set_bsg|rt_view_unit_conversion_set_bsg|rt_view_scale_storage_from_bsg|rt_view_aet_set_bsg|rt_view_update_bsg"
-	      "src/libged/tests/draw/basic.cpp|rt_view_dimensions_set_bsg|rt_view_unit_conversion_set_bsg|rt_view_scale_storage_from_bsg"
-	      "src/libged/tests/draw/bsg_quad_stability.cpp|rt_view_set_views_bsg|rt_view_set_remove_view_bsg|rt_view_init_bsg|rt_view_set_add_view_bsg|rt_view_dimensions_set_bsg|rt_view_unit_conversion_set_bsg|rt_view_scale_storage_from_bsg|rt_view_independent_scope_ref_bsg|rt_view_scene_attached_bsg|rt_view_scene_anchor_ensure_bsg"
-	      "src/libged/tests/draw/bsg_render_stability.cpp|rt_view_dimensions_set_bsg|rt_view_unit_conversion_set_bsg|rt_view_scale_storage_from_bsg"
-	      "src/libged/tests/draw/faceplate.cpp|rt_view_dimensions_set_bsg|rt_view_unit_conversion_set_bsg|rt_view_scale_storage_from_bsg"
-	      "src/libged/tests/draw/lod.cpp|rt_view_dimensions_set_bsg|rt_view_unit_conversion_set_bsg|rt_view_scale_storage_from_bsg"
-	      "src/libged/tests/draw/lod_crossrun.cpp|rt_view_dimensions_set_bsg|rt_view_unit_conversion_set_bsg|rt_view_scale_storage_from_bsg"
-	      "src/libged/tests/draw/measure_semantics.cpp|rt_view_dimensions_set_bsg"
-	      "src/libged/tests/draw/mged_bsg.cpp|rt_view_dimensions_set_bsg|rt_view_unit_conversion_set_bsg|rt_view_scale_storage_from_bsg|rt_view_scene_attached_bsg|RT_VIEW_OTHER_STATE_INIT|rt_view_center_dot_state_from_bsg|rt_view_center_dot_state_set_bsg"
-	      "src/libged/tests/draw/mged_shaded_mode_bsg.cpp|rt_view_dimensions_set_bsg|rt_view_unit_conversion_set_bsg|rt_view_scale_storage_from_bsg"
-	      "src/libged/tests/draw/quad.cpp|rt_view_set_views_bsg|rt_view_set_remove_view_bsg|rt_view_init_bsg|rt_view_set_add_view_bsg|rt_view_dimensions_set_bsg|rt_view_unit_conversion_set_bsg|rt_view_scale_storage_from_bsg|rt_view_is_independent_bsg"
-	      "src/libged/tests/draw/rtwizard_bsg.cpp|rt_view_init_bsg|rt_view_set_add_view_bsg|rt_view_dimensions_set_bsg|rt_view_unit_conversion_set_bsg|rt_view_scale_storage_from_bsg|rt_view_scene_anchor_ensure_bsg|rt_view_scene_attached_bsg|rt_view_scene_shared_bsg"
-	      "src/libged/tests/draw/select.cpp|rt_view_dimensions_set_bsg|rt_view_unit_conversion_set_bsg|rt_view_scale_storage_from_bsg"
-	      "src/libged/tests/draw/snap_semantics.cpp|rt_view_dimensions_set_bsg"
-	      "src/libged/tests/draw/util.cpp|rt_view_set_views_bsg"
-      "src/libged/tests/draw/view_command.cpp|rt_view_set_remove_view_bsg|rt_view_init_bsg|rt_view_set_add_view_bsg|rt_view_dimensions_set_bsg|rt_view_pick_semantic_path_bsg|rt_view_pick_result_path_bsg|rt_view_pick_result_free_bsg"
-      "src/libged/tests/draw/view_independent.cpp|rt_view_set_remove_view_bsg|rt_view_init_bsg|rt_view_set_add_view_bsg|rt_view_is_independent_bsg|rt_view_independent_scope_is_null_bsg"
-	      "src/mged/cmd.cpp|rt_view_init_bsg|rt_view_free_bsg"
-	      "src/mged/setup.c|rt_view_init_bsg|rt_view_set_add_view_bsg"
-      "src/libtclcad/view_data.c|rt_view_tclcad_data_init_bsg"
-      "src/libged/selection_state.cpp|ged_draw_view_selection_path_foreach|ged_draw_view_selection_add_shape_ref|ged_draw_view_selection_clear"
-      "src/libtclcad/wrapper.c|rt_view_display_manager_from_bsg|rt_view_dimensions_set_bsg|rt_view_perspective_from_bsg"
-      "src/libtclcad/view/refresh.c|rt_view_display_manager_from_bsg|rt_view_refresh_enabled_from_bsg"
-      "src/libtclcad/view/draw.c|rt_view_display_manager_from_bsg|rt_view_model2view_from_bsg"
-      "src/libtclcad/view/faceplate.c|rt_view_center_dot_state_from_bsg|rt_view_params_state_from_bsg"
-      "src/libtclcad/view/axes.c|rt_view_display_manager_from_bsg|rt_view_model_axes_state_from_bsg"
-      "src/libtclcad/polygons.c|rt_view_display_manager_from_bsg|rt_view_prepare_tcl_snap_bsg"
-      "src/libtclcad/mouse.c|rt_view_display_manager_from_bsg|rt_view_prepare_tcl_snap_bsg"
-      "src/libtclcad/fb.c|rt_view_display_manager_from_bsg"
-      "src/libtclcad/commands.c|rt_view_display_manager_from_bsg|rt_view_init_bsg|rt_view_set_add_view_bsg|rt_view_prepare_tcl_snap_bsg"
-      "src/mged/attach.c|rt_view_init_copy_bsg")
+      "src/libged/zap/zap2.cpp|ged_view_context_is_independent|ged_view_context_clear|ged_view_context_cleared_set|GED_VIEW_CLEAR_DB|GED_VIEW_CLEAR_VIEW|GED_VIEW_CLEAR_LOCAL"
+      "src/libged/draw/draw2.cpp|ged_view_context_is_independent"
+      "src/libged/erase/erase2.cpp|ged_view_context_is_independent"
+      "src/libged/dm/dm.c|ged_view_context_create_with_set|ged_view_set_context_add"
+      "src/libged/view/view.c|ged_view_context_is_independent|ged_view_context_independent_scope_is_null|ged_view_context_independent_scope_destroy|ged_draw_view_context_selection_count"
+	      "src/libged/ged.cpp|rt_view_set_init_bsg|rt_view_context_create_with_set_bsg|rt_view_context_name_set_bsg|rt_view_set_context_add_bsg|rt_view_context_free_bsg|rt_view_set_free_bsg|rt_view_context_display_manager_from_bsg"
+	      "src/libged/tests/draw/aet.cpp|ged_view_set_ctx|ged_view_set_views_ctx|ged_view_active_ctx_set|rt_view_context_create_with_set_bsg|rt_view_set_context_remove_bsg|rt_view_set_context_add_bsg|rt_view_context_name_set_bsg|rt_view_context_display_manager_from_bsg|rt_view_context_display_manager_set_bsg|rt_view_context_dimensions_set_bsg|rt_view_context_unit_conversion_set_bsg|rt_view_context_scale_storage_from_bsg|rt_view_context_aet_set_bsg|rt_view_context_update_bsg"
+	      "src/libged/tests/draw/basic.cpp|ged_view_active_ctx|rt_view_context_display_manager_from_bsg|rt_view_context_dimensions_set_bsg|rt_view_context_unit_conversion_set_bsg|rt_view_context_scale_storage_from_bsg"
+	      "src/libged/tests/draw/bsg_quad_stability.cpp|ged_view_set_ctx|ged_view_set_views_ctx|ged_view_active_ctx_set|rt_view_context_create_bsg|rt_view_set_context_remove_bsg|rt_view_set_context_add_bsg|rt_view_context_name_set_bsg|rt_view_context_display_manager_from_bsg|rt_view_context_display_manager_set_bsg|rt_view_context_dimensions_set_bsg|rt_view_context_unit_conversion_set_bsg|rt_view_context_scale_storage_from_bsg|rt_view_context_independent_scope_is_null_bsg|rt_view_context_scene_attached_bsg|rt_view_context_scene_anchor_ensure_bsg"
+	      "src/libged/tests/draw/bsg_render_stability.cpp|ged_view_active_ctx|rt_view_context_display_manager_from_bsg|rt_view_context_display_manager_set_bsg|rt_view_context_dimensions_set_bsg|rt_view_context_unit_conversion_set_bsg|rt_view_context_scale_storage_from_bsg"
+	      "src/libged/tests/draw/faceplate.cpp|ged_view_active_ctx|rt_view_context_display_manager_from_bsg|rt_view_context_display_manager_set_bsg|rt_view_context_dimensions_set_bsg|rt_view_context_unit_conversion_set_bsg|rt_view_context_scale_storage_from_bsg|rt_view_context_frametime_set_bsg"
+	      "src/libged/tests/draw/lod.cpp|ged_view_active_ctx|rt_view_context_display_manager_from_bsg|rt_view_context_display_manager_set_bsg|rt_view_context_dimensions_set_bsg|rt_view_context_unit_conversion_set_bsg|rt_view_context_scale_storage_from_bsg"
+	      "src/libged/tests/draw/lod_crossrun.cpp|ged_view_active_ctx|rt_view_context_display_manager_from_bsg|rt_view_context_display_manager_set_bsg|rt_view_context_dimensions_set_bsg|rt_view_context_unit_conversion_set_bsg|rt_view_context_scale_storage_from_bsg"
+	      "src/libged/tests/draw/measure_semantics.cpp|rt_view_context_create_bsg|rt_view_context_dimensions_set_bsg|rt_view_context_measure_candidates_bsg|rt_view_context_free_bsg"
+	      "src/libged/tests/draw/mged_bsg.cpp|ged_view_active_ctx|rt_view_context_display_manager_from_bsg|rt_view_context_display_manager_set_bsg|rt_view_context_dimensions_set_bsg|rt_view_context_unit_conversion_set_bsg|rt_view_context_scale_storage_from_bsg|rt_view_context_scene_attached_bsg|RT_VIEW_OTHER_STATE_INIT|rt_view_context_center_dot_state_from_bsg|rt_view_context_center_dot_state_set_bsg|rt_view_context_edit_matrix_clear_bsg|rt_view_context_edit_matrix_set_bsg|RT_VIEW_RENDER_SUMMARY_BSG_INIT|rt_view_context_visible_render_summary_bsg"
+	      "src/libged/tests/draw/mged_shaded_mode_bsg.cpp|ged_view_active_ctx|rt_view_context_display_manager_from_bsg|rt_view_context_display_manager_set_bsg|rt_view_context_dimensions_set_bsg|rt_view_context_unit_conversion_set_bsg|rt_view_context_scale_storage_from_bsg"
+	      "src/libged/tests/draw/quad.cpp|ged_view_set_ctx|ged_view_set_views_ctx|ged_view_active_ctx_set|rt_view_context_create_with_set_bsg|rt_view_set_context_remove_bsg|rt_view_set_context_add_bsg|rt_view_context_name_set_bsg|rt_view_context_display_manager_from_bsg|rt_view_context_display_manager_set_bsg|rt_view_context_dimensions_set_bsg|rt_view_context_unit_conversion_set_bsg|rt_view_context_scale_storage_from_bsg|rt_view_context_is_independent_bsg|rt_view_context_feature_geometry_summary_bsg|rt_view_context_named_line_render_count_bsg"
+	      "src/libged/tests/draw/rtwizard_bsg.cpp|ged_view_active_ctx|ged_view_active_ctx_set|ged_view_set_ctx|rt_view_context_create_with_set_bsg|rt_view_context_name_set_bsg|rt_view_set_context_add_bsg|rt_view_context_display_manager_from_bsg|rt_view_context_display_manager_set_bsg|rt_view_context_dimensions_set_bsg|rt_view_context_unit_conversion_set_bsg|rt_view_context_scale_storage_from_bsg|rt_view_context_scene_anchor_ensure_bsg|rt_view_context_scene_attached_bsg|rt_view_context_scene_shared_bsg|rt_view_context_model2view_from_bsg"
+	      "src/libged/tests/draw/select.cpp|ged_view_active_ctx|rt_view_context_display_manager_from_bsg|rt_view_context_display_manager_set_bsg|rt_view_context_dimensions_set_bsg|rt_view_context_unit_conversion_set_bsg|rt_view_context_scale_storage_from_bsg"
+      "src/libged/tests/draw/snap_semantics.cpp|rt_view_context_create_bsg|rt_view_context_dimensions_set_bsg|rt_view_context_grid_state_from_bsg|rt_view_context_grid_state_set_bsg|rt_view_context_snap_source_flags_set_bsg|rt_view_context_snap_candidates_result_bsg|rt_view_context_snap_point_2d_bsg|rt_view_context_free_bsg"
+      "src/libged/tests/test_state_services.cpp|ged_view_active_ctx|void *view_ctx|ged_draw_path_state|ged_draw_list_paths"
+	      "src/libged/tests/draw/util.cpp|ged_view_set_views_ctx|ged_view_active_ctx|rt_view_context_display_manager_from_bsg"
+      "src/libged/tests/draw/view_command.cpp|rt_view_set_context_remove_bsg|rt_view_context_create_bsg|rt_view_context_name_set_bsg|rt_view_context_dimensions_set_bsg|rt_view_set_context_add_bsg|rt_view_context_render_export_consistency_bsg|rt_view_context_pick_semantic_path_bsg|rt_view_pick_result_path_bsg|rt_view_pick_result_free_bsg|rt_view_context_snap_candidates_result_bsg|rt_view_context_measure_candidates_bsg|rt_view_context_polygon_find_bsg"
+      "src/libged/tests/draw/view_independent.cpp|rt_view_set_context_remove_bsg|rt_view_context_create_bsg|rt_view_context_name_set_bsg|rt_view_set_context_add_bsg|rt_view_context_scale_state_set_bsg|rt_view_context_lod_bounds_callback_is_bsg|rt_view_context_is_independent_bsg|rt_view_context_independent_scope_is_null_bsg"
+	      "src/mged/cmd.cpp|rt_view_context_init_bsg|rt_view_context_free_contents_bsg"
+      "src/libtclcad/view_data.c|tclcad_view_state_init|tclcad_view_data_init|rt_view_context_user_data_from_bsg|rt_view_context_user_data_set_bsg|rt_view_context_tclcad_data_set_bsg|tclcad_view_data_bind_view_ctx|tclcad_view_data_unbind_view_ctx|tclcad_view_tcl_data_from_view_ctx|tclcad_view_label_state_from_view_ctx|tclcad_view_prim_labels_state_from_view_ctx|tclcad_view_prim_labels_state_set"
+      "src/libged/selection_state.cpp|ged_draw_shape_ref_index_for_component|ged_draw_shape_ref_index_for_path_hash|ged_draw_shape_ref_view_context|ged_draw_view_context_selection_path_foreach|ged_draw_view_selection_add_shape_ref_context|ged_draw_view_context_selection_clear"
+      "src/libtclcad/wrapper.c|rt_view_context_display_manager_from_bsg|rt_view_context_dimensions_set_bsg|rt_view_context_perspective_from_bsg|rt_view_context_lod_policy_from_bsg"
+      "src/libtclcad/view/refresh.c|rt_view_context_display_manager_from_bsg|rt_view_context_interactive_rect_state_from_bsg|rt_view_context_local2base_from_bsg|rt_view_context_base2local_from_bsg|rt_view_context_unit_conversion_set_bsg|rt_view_context_refresh_enabled_from_bsg|rt_view_context_refresh_suppressed_from_bsg|rt_view_context_refresh_request_bsg|rt_view_context_refresh_consume_bsg|rt_view_context_refresh_complete_bsg|rt_view_context_refresh_enabled_set_bsg|rt_view_context_refresh_suppress_begin_bsg|rt_view_context_refresh_suppress_end_bsg"
+      "src/libtclcad/view/draw.c|rt_view_context_display_manager_from_bsg|rt_view_context_model2view_from_bsg|rt_view_context_perspective_from_bsg|rt_view_context_pmat_from_bsg"
+      "src/libtclcad/view/faceplate.c|rt_view_context_center_dot_state_from_bsg|rt_view_context_center_dot_state_set_bsg|rt_view_context_scale_overlay_state_from_bsg|rt_view_context_scale_overlay_state_set_bsg|rt_view_context_params_state_from_bsg|rt_view_context_params_state_set_bsg|tclcad_view_prim_labels_state_from_view_ctx|tclcad_view_prim_labels_state_set"
+      "src/libtclcad/view/axes.c|rt_view_context_display_manager_from_bsg|rt_view_context_info_from_bsg|rt_view_context_model_axes_state_from_bsg|rt_view_context_model_axes_state_set_bsg|rt_view_context_view_axes_state_from_bsg|rt_view_context_view_axes_state_set_bsg"
+      "src/libtclcad/polygons.c|rt_view_context_display_manager_from_bsg|rt_view_context_dimensions_set_bsg|rt_view_context_name_from_bsg|tclcad_polygons_view_name|rt_view_context_scale_from_bsg|rt_view_context_center_from_bsg|rt_view_context_rotation_from_bsg|rt_view_context_model2view_from_bsg|rt_view_context_view2model_from_bsg|rt_view_context_plane_from_bsg|rt_view_context_screen_to_view_from_bsg|rt_view_context_previous_mouse_set_bsg|rt_view_context_prepare_tcl_snap_bsg|rt_view_context_snap_point_2d_bsg|tclcad_view_polygon_state_from_view_ctx|tclcad_view_polygon_mode_from_view_ctx|tclcad_view_polygon_mode_set|tclcad_view_data_vZ_from_view_ctx"
+      "src/libtclcad/mouse.c|rt_view_context_display_manager_from_bsg|rt_view_context_name_from_bsg|tclcad_mouse_view_name|rt_view_context_width_from_bsg|rt_view_context_height_from_bsg|rt_view_context_dimensions_set_bsg|rt_view_context_scale_from_bsg|rt_view_context_size_from_bsg|rt_view_context_model2view_from_bsg|rt_view_context_view2model_from_bsg|rt_view_context_rotation_from_bsg|rt_view_context_screen_to_view_from_bsg|rt_view_context_previous_mouse_from_bsg|rt_view_context_previous_mouse_set_bsg|rt_view_context_mouse_delta_settings_from_bsg|rt_view_context_prepare_tcl_snap_bsg|rt_view_context_snap_point_2d_bsg|tclcad_view_data_from_view_ctx"
+      "src/libtclcad/fb.c|rt_view_context_display_manager_from_bsg"
+      "src/libtclcad/commands.c|rt_view_context_display_manager_from_bsg|rt_view_context_display_manager_set_bsg|rt_view_context_dimensions_set_bsg|rt_view_context_name_set_bsg|rt_view_context_name_from_bsg|tclcad_commands_view_name|rt_view_context_unit_conversion_set_bsg|rt_view_context_local2base_from_bsg|rt_view_context_scale_from_bsg|rt_view_context_center_from_bsg|rt_view_context_model2view_from_bsg|rt_view_context_view2model_from_bsg|rt_view_context_screen_to_view_from_bsg|rt_view_context_previous_mouse_from_bsg|rt_view_context_previous_mouse_set_bsg|rt_view_context_interactive_rect_state_from_bsg|rt_view_context_lod_policy_from_bsg|rt_view_context_lod_policy_apply_bsg|rt_view_context_grid_state_from_bsg|rt_view_context_coord_from_bsg|rt_view_context_coord_set_bsg|rt_view_context_snap_lines_from_bsg|rt_view_context_center_linesnap_bsg|rt_view_context_zclip_from_bsg|rt_view_context_zclip_set_bsg|rt_view_context_init_bsg|rt_view_set_context_add_bsg|rt_view_context_prepare_tcl_snap_bsg|rt_view_context_snap_point_2d_bsg|tclcad_view_polygon_mode_from_view_ctx|tclcad_view_polygon_mode_set|tclcad_view_polygon_state_from_view_ctx|tclcad_view_data_vZ_from_view_ctx|tclcad_view_data_vZ_set|tclcad_view_hide_from_view_ctx|tclcad_view_polygon_cflag_from_view_ctx|tclcad_view_polygon_cflag_clear")
     string(REGEX REPLACE "^([^|]+)\\|.*$" "\\1" _rel "${_rel_token}")
     string(REGEX REPLACE "^[^|]+\\|" "" _tokens "${_rel_token}")
     set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
@@ -7456,7 +9470,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       "src/libtclcad/view/draw.c|ged_view_set_views_ctx"
       "src/libtclcad/view/autoview.c|ged_view_set_views_ctx|ged_view_find_ctx|ged_view_active_ctx_set"
       "src/libtclcad/view/lines.c|ged_view_find_ctx|ged_view_active_ctx|ged_view_active_ctx_set"
-      "src/libtclcad/view/labels.c|ged_view_find_ctx"
+      "src/libtclcad/view/labels.c|ged_view_find_ctx|tclcad_view_label_state_from_view_ctx"
       "src/libtclcad/view/faceplate.c|ged_view_find_ctx"
       "src/libtclcad/view/axes.c|ged_view_find_ctx"
       "src/libtclcad/view/arrows.c|ged_view_find_ctx"
@@ -7612,13 +9626,16 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   set(_libtclcad_view_labels_cmd "${BRLCAD_SOURCE_DIR}/src/libtclcad/view/labels.c")
   if(EXISTS "${_libtclcad_view_labels_cmd}")
     file(READ "${_libtclcad_view_labels_cmd}" _libtclcad_view_labels_cmd_contents)
-    foreach(_token
-	[[#[ \t]*include[ \t]*[<"]\.\./\.\./libged/bsg_ged_draw_view_private\.h]]
+	    foreach(_token
+		[[to_data_labels_func[ \t\r\n]*\(]]
+		[[void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
+		[[tclcad_view_label_state_from_view_ctx]]
+		[[#[ \t]*include[ \t]*[<"]ged/bsg_ged_draw\.h]]
 	[[_tclcad_data_labels_sync_draw_view]]
-	[[ged_draw_view_feature_exists]]
-	[[ged_draw_view_tcl_labels_replace]]
-	[[ged_draw_view_label_count]]
-	[[ged_draw_view_label_copy]])
+	[[ged_draw_view_context_feature_exists]]
+	[[ged_draw_view_context_tcl_labels_replace]]
+	[[ged_draw_view_context_label_count]]
+	[[ged_draw_view_context_label_copy]])
       string(REGEX MATCH "${_token}" _libtclcad_view_labels_token_hit
 	"${_libtclcad_view_labels_cmd_contents}")
       if(NOT _libtclcad_view_labels_token_hit)
@@ -7627,7 +9644,17 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[to_data_labels_func[ \t\r\n]*\([ \t\r\n]*Tcl_Interp[ \t\r\n]*\*[ \t\r\n]*interp[ \t\r\n]*,[ \t\r\n]*struct[ \t\r\n]+ged[ \t\r\n]*\*[ \t\r\n]*gedp[ \t\r\n]*,[ \t\r\n]*struct[ \t\r\n]+bsg_view]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_find_ctx]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*draw_view_ctx]]
+	[[->[ \t\r\n]*gv_tcl]]
 	[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
+	[[#[ \t]*include[ \t]*[<"]\.\./\.\./libged/bsg_ged_draw_view_private\.h]]
+	[[ged_draw_view_feature_exists[ \t\r\n]*\(]]
+	[[ged_draw_view_tcl_labels_replace[ \t\r\n]*\(]]
+	[[ged_draw_view_label_(count|copy|point_set)[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_FEATURE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]])
@@ -7642,29 +9669,40 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 
   set(_libtclcad_view_arrows_cmd "${BRLCAD_SOURCE_DIR}/src/libtclcad/view/arrows.c")
   if(EXISTS "${_libtclcad_view_arrows_cmd}")
-    file(READ "${_libtclcad_view_arrows_cmd}" _libtclcad_view_arrows_cmd_contents)
-    foreach(_token
-	[[#[ \t]*include[ \t]*[<"]\.\./\.\./libged/bsg_ged_draw_view_private\.h]]
-	[[ged_draw_view_feature_exists]]
-	[[ged_draw_view_feature_visible_set]]
-	[[ged_draw_view_feature_style_get]]
-	[[ged_draw_view_line_color_set]]
-	[[ged_draw_view_line_width_set]]
-	[[ged_draw_view_feature_points_copy]]
-	[[ged_draw_view_feature_remove]]
-	[[ged_draw_view_tcl_arrows_replace]]
-	[[ged_draw_view_arrow_tip_get]]
-	[[ged_draw_view_arrow_tip_set]])
+	    file(READ "${_libtclcad_view_arrows_cmd}" _libtclcad_view_arrows_cmd_contents)
+	    foreach(_token
+		[[to_data_arrows_func[ \t\r\n]*\(]]
+		[[void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
+		[[#[ \t]*include[ \t]*[<"]ged/bsg_ged_draw\.h]]
+		[[ged_draw_view_context_feature_exists]]
+	[[ged_draw_view_context_feature_visible_set]]
+	[[ged_draw_view_context_feature_style_get]]
+	[[ged_draw_view_context_line_color_set]]
+	[[ged_draw_view_context_line_width_set]]
+	[[ged_draw_view_context_feature_points_copy]]
+	[[ged_draw_view_context_feature_remove]]
+	[[ged_draw_view_context_tcl_arrows_replace]]
+	[[ged_draw_view_context_arrow_tip_get]]
+	[[ged_draw_view_context_arrow_tip_set]])
       string(REGEX MATCH "${_token}" _libtclcad_view_arrows_token_hit
 	"${_libtclcad_view_arrows_cmd_contents}")
       if(NOT _libtclcad_view_arrows_token_hit)
 	_brlobol_pivot_guard_fail(
 	  "src/libtclcad/view/arrows.c must route data-arrow feature access through the private GED draw view adapter")
       endif()
-    endforeach()
-    foreach(_pat
-	[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
-	[[#[ \t]*include[ \t]*[<"]\.\./bsg_move_helpers\.h]]
+	    endforeach()
+	    foreach(_pat
+		[[to_data_arrows_func[ \t\r\n]*\([ \t\r\n]*Tcl_Interp[ \t\r\n]*\*[ \t\r\n]*interp[ \t\r\n]*,[ \t\r\n]*struct[ \t\r\n]+ged[ \t\r\n]*\*[ \t\r\n]*gedp[ \t\r\n]*,[ \t\r\n]*struct[ \t\r\n]+bsg_view]]
+		[[struct[ \t\r\n]+bsg_view]]
+		[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_find_ctx]]
+		[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*draw_view_ctx]]
+		[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
+		[[#[ \t]*include[ \t]*[<"]\.\./bsg_move_helpers\.h]]
+		[[#[ \t]*include[ \t]*[<"]\.\./\.\./libged/bsg_ged_draw_view_private\.h]]
+	[[ged_draw_view_feature_(exists|visible_set|style_get|points_copy|remove)[ \t\r\n]*\(]]
+	[[ged_draw_view_line_(color|width)_set[ \t\r\n]*\(]]
+	[[ged_draw_view_tcl_arrows_replace[ \t\r\n]*\(]]
+	[[ged_draw_view_arrow_tip_(get|set)[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])_bsg_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]])
@@ -7678,8 +9716,8 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   endif()
 
   foreach(_rel_token
-      "src/libtclcad/commands.c|../libged/bsg_ged_draw_view_private.h|ged_draw_view_label_count|ged_draw_view_label_copy|ged_draw_view_label_point_set"
-      "src/libtclcad/mouse.c|../libged/bsg_ged_draw_view_private.h|ged_draw_view_label_count|ged_draw_view_label_copy|ged_draw_view_label_point_set")
+      "src/libtclcad/commands.c|ged/bsg_ged_draw.h|ged_draw_view_context_label_count|ged_draw_view_context_label_copy|ged_draw_view_context_label_point_set"
+      "src/libtclcad/mouse.c|ged/bsg_ged_draw.h|ged_draw_view_context_label_count|ged_draw_view_context_label_copy|ged_draw_view_context_label_point_set")
     string(REGEX REPLACE "^([^|]+)\\|.*$" "\\1" _rel "${_rel_token}")
     string(REGEX REPLACE "^[^|]+\\|" "" _tokens "${_rel_token}")
     set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
@@ -7696,6 +9734,9 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       endif()
     endforeach()
     foreach(_pat
+	[[ged_draw_view_feature_exists[ \t\r\n]*\(]]
+	[[ged_draw_view_label_(count|copy|point_set)[ \t\r\n]*\(]]
+	[[#[ \t]*include[ \t]*[<"]\.\./libged/bsg_ged_draw_view_private\.h]]
 	[[bsg_feature_label_(count|copy|point_set)[ \t\r\n]*\(]]
 	[[bsg_feature_find[ \t\r\n]*\([^;\n]*_tcl_s?data_labels]])
       string(REGEX MATCH "${_pat}" _libtclcad_label_consumer_direct_hit
@@ -7715,14 +9756,14 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   else()
     file(READ "${_libtclcad_draw_view_move_helpers}" _libtclcad_draw_view_move_helpers_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]\.\./libged/bsg_ged_draw_view_private\.h]]
-	[[ged_draw_view_feature_points_copy]]
-	[[ged_draw_view_feature_axes_centers_copy]]
-	[[ged_draw_view_feature_style_get]]
-	[[ged_draw_view_tcl_arrows_replace]]
-	[[ged_draw_view_tcl_lines_replace]]
-	[[ged_draw_view_feature_visible_set]]
-	[[ged_draw_view_tcl_axes_replace]]
+	[[#[ \t]*include[ \t]*[<"]ged/bsg_ged_draw\.h]]
+	[[ged_draw_view_context_feature_points_copy]]
+	[[ged_draw_view_context_feature_axes_centers_copy]]
+	[[ged_draw_view_context_feature_style_get]]
+	[[ged_draw_view_context_tcl_arrows_replace]]
+	[[ged_draw_view_context_tcl_lines_replace]]
+	[[ged_draw_view_context_feature_visible_set]]
+	[[ged_draw_view_context_tcl_axes_replace]]
 	[[_tclcad_draw_view_points_copy]]
 	[[_tclcad_draw_view_axes_centers_copy]]
 	[[_tclcad_draw_view_style_read]]
@@ -7738,6 +9779,10 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endforeach()
     foreach(_pat
 	[[#[ \t]*include[ \t]*[<"]bsg/(feature|overlay)\.h]]
+	[[#[ \t]*include[ \t]*[<"]\.\./libged/bsg_ged_draw_view_private\.h]]
+	[[struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*view]]
+	[[ged_draw_view_feature_(points_copy|axes_centers_copy|style_get|visible_set)[ \t\r\n]*\(]]
+	[[ged_draw_view_tcl_(arrows|lines|axes)_replace[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_FEATURE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
@@ -7788,6 +9833,11 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_file}" _contents)
     foreach(_pat
 	[[#[ \t]*include[ \t]*[<"]bsg/(feature|overlay)\.h]]
+	[[ged_draw_view_feature_(exists|visible|visible_set|style_get|points_copy|axes_centers_copy|remove)[ \t\r\n]*\(]]
+	[[ged_draw_view_line_(color|width)_set[ \t\r\n]*\(]]
+	[[ged_draw_view_tcl_(arrows|axes|lines|labels|polygons)_replace[ \t\r\n]*\(]]
+	[[ged_draw_view_label_(count|copy|point_set)[ \t\r\n]*\(]]
+	[[ged_draw_view_arrow_tip_(get|set)[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_FEATURE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
@@ -7878,35 +9928,161 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endforeach()
   endforeach()
 
+  foreach(_rel
+      src/libged/tests/draw/aet.cpp
+      src/libged/tests/draw/basic.cpp
+      src/libged/tests/draw/bsg_render_stability.cpp
+      src/libged/tests/draw/faceplate.cpp
+      src/libged/tests/draw/lod.cpp
+      src/libged/tests/draw/lod_crossrun.cpp
+      src/libged/tests/draw/util.cpp
+      src/libged/tests/draw/select.cpp)
+    set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
+    if(NOT EXISTS "${_file}")
+      continue()
+    endif()
+    file(READ "${_file}" _contents)
+    foreach(_pat
+	[[gedp[ \t\r\n]*->[ \t\r\n]*ged_gvp]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[->[ \t\r\n]*dmp]]
+	[[->[ \t\r\n]*gv_name]]
+	[[(^|[^A-Za-z0-9_])rt_view_set_views_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_set_remove_view_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_init_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_set_add_view_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_dimensions_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_unit_conversion_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_storage_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_aet_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_update_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_view_set_frametime[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _draw_test_context_direct_hit
+	"${_contents}")
+      if(_draw_test_context_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} reintroduced direct retained BSG view setup instead of opaque RT view-context wrappers: ${_draw_test_context_direct_hit}")
+      endif()
+    endforeach()
+  endforeach()
+
+  set(_libged_quad_test "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/quad.cpp")
+  if(EXISTS "${_libged_quad_test}")
+    file(READ "${_libged_quad_test}" _libged_quad_test_contents)
+    foreach(_pat
+	[[gedp[ \t\r\n]*->[ \t\r\n]*ged_gvp]]
+	[[->[ \t\r\n]*dmp]]
+	[[->[ \t\r\n]*gv_name]]
+	[[(^|[^A-Za-z0-9_])rt_view_set_views_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_set_remove_view_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_init_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_set_add_view_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_dimensions_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_unit_conversion_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_storage_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_is_independent_bsg[ \t\r\n]*\(]]
+	[[#[ \t]*include[ \t]*[<"]bsg/(feature|render|render_item)\.h]]
+	[[(^|[^A-Za-z0-9_])struct[ \t\r\n]+bsg_view([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_render_[A-Za-z0-9_]*[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])BSG_RENDER_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_GEOMETRY_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])render_line_item_count[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_quad_test_direct_hit
+	"${_libged_quad_test_contents}")
+      if(_libged_quad_test_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/tests/draw/quad.cpp reintroduced direct retained BSG setup or feature/render assertions instead of opaque RT view-context wrappers: ${_libged_quad_test_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_draw_setup_tests_cmake "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/CMakeLists.txt")
+  if(EXISTS "${_libged_draw_setup_tests_cmake}")
+    file(READ "${_libged_draw_setup_tests_cmake}" _libged_draw_setup_tests_cmake_contents)
+    foreach(_target
+	ged_test_draw
+	ged_test_aet
+	ged_test_faceplate
+	ged_test_lod
+	ged_test_select_draw
+	ged_test_bsg_render_stability
+	ged_test_lod_crossrun)
+      string(REGEX MATCH "${_target}[^\\n]*libbsg"
+	_libged_draw_setup_test_libbsg_hit
+	"${_libged_draw_setup_tests_cmake_contents}")
+      if(_libged_draw_setup_test_libbsg_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_target} must not directly link libbsg while retained view setup routes through opaque RT view-context wrappers")
+      endif()
+    endforeach()
+  endif()
+
   set(_ged_mged_bsg_test "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/mged_bsg.cpp")
   if(EXISTS "${_ged_mged_bsg_test}")
     file(READ "${_ged_mged_bsg_test}" _ged_mged_bsg_test_contents)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_scene_attached_bsg]]
+	[[ged_view_active_ctx]]
+	[[rt_view_context_display_manager_from_bsg]]
+	[[rt_view_context_display_manager_set_bsg]]
+	[[rt_view_context_dimensions_set_bsg]]
+	[[rt_view_context_unit_conversion_set_bsg]]
+	[[rt_view_context_scale_storage_from_bsg]]
+	[[rt_view_context_scene_attached_bsg]]
 	[[struct[ \t\r\n]+rt_view_other_state]]
 	[[RT_VIEW_OTHER_STATE_INIT]]
-	[[rt_view_center_dot_state_from_bsg]]
-	[[rt_view_center_dot_state_set_bsg]])
+	[[rt_view_context_center_dot_state_from_bsg]]
+	[[rt_view_context_center_dot_state_set_bsg]]
+	[[rt_view_context_edit_matrix_clear_bsg]]
+	[[rt_view_context_edit_matrix_set_bsg]]
+	[[struct[ \t\r\n]+rt_view_render_summary_bsg]]
+	[[RT_VIEW_RENDER_SUMMARY_BSG_INIT]]
+	[[rt_view_context_visible_render_summary_bsg]])
       string(REGEX MATCH "${_token}" _ged_mged_bsg_token_hit
 	"${_ged_mged_bsg_test_contents}")
       if(NOT _ged_mged_bsg_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/tests/draw/mged_bsg.cpp must route utility view-state checks through rt/view_legacy_bsg.h token ${_token}")
+	  "src/libged/tests/draw/mged_bsg.cpp must route retained view setup and state checks through opaque rt/view_legacy_bsg.h context token ${_token}")
       endif()
     endforeach()
     foreach(_pat
-	[[#[ \t]*include[ \t]*[<"]bsg/(util|view_state)\.h]]
+	[[#[ \t]*include[ \t]*[<"]bsg/(defines|render|render_item|util|view_state)\.h]]
 	[[struct[ \t\r\n]+bsg_other_state]]
+	[[gedp[ \t\r\n]*->[ \t\r\n]*ged_gvp]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[->[ \t\r\n]*dmp]]
+	[[->[ \t\r\n]*gv_edit_mat]]
 	[[(^|[^A-Za-z0-9_])bsg_view_scene_attached([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])bsg_view_center_dot_(get|set)([^A-Za-z0-9_]|$)]])
+	[[(^|[^A-Za-z0-9_])bsg_view_center_dot_(get|set)([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_dimensions_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_unit_conversion_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_storage_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scene_attached_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_dot_state_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_dot_state_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_edit_matrix_clear_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_edit_matrix_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_visible_render_summary_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_render_[A-Za-z0-9_]*[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])BSG_RENDER_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]])
       string(REGEX MATCH "${_pat}" _ged_mged_bsg_direct_hit
 	"${_ged_mged_bsg_test_contents}")
       if(_ged_mged_bsg_direct_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/tests/draw/mged_bsg.cpp reintroduced direct BSG utility/view-state access: ${_ged_mged_bsg_direct_hit}")
+	  "src/libged/tests/draw/mged_bsg.cpp reintroduced direct BSG utility/view-state or typed setup access: ${_ged_mged_bsg_direct_hit}")
       endif()
     endforeach()
+    set(_ged_mged_bsg_tests_cmake "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/CMakeLists.txt")
+    if(EXISTS "${_ged_mged_bsg_tests_cmake}")
+      file(READ "${_ged_mged_bsg_tests_cmake}" _ged_mged_bsg_tests_cmake_contents)
+      string(REGEX MATCH [[ged_test_mged_bsg[^\n]*mged_bsg\.cpp[^\n]*libbsg]]
+	_ged_mged_bsg_libbsg_hit "${_ged_mged_bsg_tests_cmake_contents}")
+      if(_ged_mged_bsg_libbsg_hit)
+	_brlobol_pivot_guard_fail(
+	  "ged_test_mged_bsg must not directly link libbsg while render summary checks route through rt/view_legacy_bsg.h")
+      endif()
+    endif()
   endif()
 
   set(_ged_mged_shaded_mode_test "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/mged_shaded_mode_bsg.cpp")
@@ -7914,24 +10090,33 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_ged_mged_shaded_mode_test}" _ged_mged_shaded_mode_test_contents)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_dimensions_set_bsg]]
-	[[rt_view_unit_conversion_set_bsg]]
-	[[rt_view_scale_storage_from_bsg]])
+	[[ged_view_active_ctx]]
+	[[rt_view_context_display_manager_from_bsg]]
+	[[rt_view_context_display_manager_set_bsg]]
+	[[rt_view_context_dimensions_set_bsg]]
+	[[rt_view_context_unit_conversion_set_bsg]]
+	[[rt_view_context_scale_storage_from_bsg]])
       string(REGEX MATCH "${_token}" _ged_mged_shaded_mode_token_hit
 	"${_ged_mged_shaded_mode_test_contents}")
       if(NOT _ged_mged_shaded_mode_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/tests/draw/mged_shaded_mode_bsg.cpp must route retained view setup through rt/view_legacy_bsg.h")
+	  "src/libged/tests/draw/mged_shaded_mode_bsg.cpp must route retained view setup through opaque rt/view_legacy_bsg.h context wrappers")
       endif()
     endforeach()
     foreach(_pat
 	[[#[ \t]*include[ \t]*[<"]bsg/defines\.h]]
-	[[(^|[^A-Za-z0-9_])BSG_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]])
+	[[(^|[^A-Za-z0-9_])BSG_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[gedp[ \t\r\n]*->[ \t\r\n]*ged_gvp]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[->[ \t\r\n]*dmp]]
+	[[(^|[^A-Za-z0-9_])rt_view_dimensions_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_unit_conversion_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_storage_from_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _ged_mged_shaded_mode_direct_hit
 	"${_ged_mged_shaded_mode_test_contents}")
       if(_ged_mged_shaded_mode_direct_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/tests/draw/mged_shaded_mode_bsg.cpp reintroduced direct BSG defines use: ${_ged_mged_shaded_mode_direct_hit}")
+	  "src/libged/tests/draw/mged_shaded_mode_bsg.cpp reintroduced direct BSG defines or retained-view setup use: ${_ged_mged_shaded_mode_direct_hit}")
       endif()
     endforeach()
     set(_ged_mged_shaded_mode_tests_cmake "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/CMakeLists.txt")
@@ -7952,10 +10137,11 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_libged_measure_semantics_test}" _libged_measure_semantics_test_contents)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_init_bsg]]
-	[[rt_view_measure_candidates_bsg]]
+	[[rt_view_context_create_bsg]]
+	[[rt_view_context_dimensions_set_bsg]]
+	[[rt_view_context_measure_candidates_bsg]]
 	[[RT_VIEW_MEASURE_RESULT_INIT]]
-	[[rt_view_free_bsg]])
+	[[rt_view_context_free_bsg]])
       string(REGEX MATCH "${_token}" _libged_measure_semantics_token_hit
 	"${_libged_measure_semantics_test_contents}")
       if(NOT _libged_measure_semantics_token_hit)
@@ -7965,6 +10151,11 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endforeach()
     foreach(_pat
 	[[#[ \t]*include[ \t]*[<"]bsg/]]
+	[[(^|[^A-Za-z0-9_])struct[ \t\r\n]+bsg_view([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_init_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_free_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_dimensions_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_measure_candidates_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])bsg_view_(init|free)([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_measure_(candidates|result)([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])struct[ \t]+bsg_measure_result([^A-Za-z0-9_]|$)]]
@@ -8007,25 +10198,45 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_file}" _contents)
     foreach(_pat
 	[[(^|[^A-Za-z0-9_])bsg_snap_point_2d([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])bsg_snap_candidates([^A-Za-z0-9_]|$)]])
+	[[(^|[^A-Za-z0-9_])bsg_snap_candidates([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_snap_point_2d_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _snap_direct_hit "${_contents}")
       if(_snap_direct_hit)
 	_brlobol_pivot_guard_fail(
 	  "${_rel} reintroduced direct BSG snap utility use: ${_snap_direct_hit}")
       endif()
     endforeach()
-    string(FIND "${_contents}" "rt/view_legacy_bsg.h" _idx)
-    if(_idx EQUAL -1)
-      _brlobol_pivot_guard_fail(
-	"${_rel} must include rt/view_legacy_bsg.h for transitional snap adapters")
+    if("${_rel}" STREQUAL "src/libged/view/snap.c")
+      foreach(_token
+	  [[ged_view_context_model2view_get]]
+	  [[ged_view_context_view2model_get]]
+	  [[ged_view_context_snap_tolerance_factor_get]]
+	  [[ged_view_context_snap_tolerance_factor_set]])
+	string(REGEX MATCH "${_token}" _snap_ged_token_hit "${_contents}")
+	if(NOT _snap_ged_token_hit)
+	  _brlobol_pivot_guard_fail(
+	    "${_rel} must route snap view-state access through GED facade ${_token}")
+	endif()
+      endforeach()
+      string(FIND "${_contents}" "rt/view_legacy_bsg.h" _idx)
+      if(NOT _idx EQUAL -1)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} reintroduced rt/view_legacy_bsg.h after moving snap state behind GED facades")
+      endif()
+    else()
+      string(FIND "${_contents}" "rt/view_legacy_bsg.h" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} must include rt/view_legacy_bsg.h for transitional snap adapters")
+      endif()
     endif()
   endforeach()
 
   foreach(_rel_token
-      "src/libtclcad/polygons.c|rt_view_snap_point_2d_bsg"
-      "src/libtclcad/mouse.c|rt_view_snap_point_2d_bsg"
-      "src/libtclcad/commands.c|rt_view_snap_point_2d_bsg"
-      "src/libged/view/snap.c|ged_draw_view_snap_first_candidate")
+      "src/libtclcad/polygons.c|rt_view_context_snap_point_2d_bsg"
+      "src/libtclcad/mouse.c|rt_view_context_snap_point_2d_bsg"
+      "src/libtclcad/commands.c|rt_view_context_snap_point_2d_bsg"
+      "src/libged/view/snap.c|ged_draw_view_context_snap_first_candidate")
     string(REGEX REPLACE "^([^|]+)\\|.*$" "\\1" _rel "${_rel_token}")
     string(REGEX REPLACE "^[^|]+\\|" "" _tokens "${_rel_token}")
     set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
@@ -8060,6 +10271,12 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	  "src/gtools/gsh/gsh.cpp must route view hash, cleared-state, and display-manager view-state access through rt/view_legacy_bsg.h")
       endif()
     endforeach()
+    string(REGEX MATCH [[#[ \t]*include[ \t]*[<"]bsg/]]
+      _gtools_gsh_bsg_include_hit "${_gtools_gsh_contents}")
+    if(_gtools_gsh_bsg_include_hit)
+      _brlobol_pivot_guard_fail(
+	"src/gtools/gsh/gsh.cpp reintroduced direct BSG includes; route retained view access through rt/view_legacy_bsg.h: ${_gtools_gsh_bsg_include_hit}")
+    endif()
     string(REGEX MATCH [[(^|[^A-Za-z0-9_])bsg_hash([^A-Za-z0-9_]|$)]]
       _gtools_gsh_hash_direct_hit "${_gtools_gsh_contents}")
     if(_gtools_gsh_hash_direct_hit)
@@ -8087,13 +10304,14 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]\./ged_view\.h]]
 	[[ged_draw_view_polygon_ref]]
-	[[ged_draw_view_polygon_create]]
+	[[ged_draw_view_context_polygon_create]]
 	[[ged_draw_view_polygon_record_get]]
-	[[ged_draw_view_polygon_area]]
-	[[ged_draw_view_polygon_overlap]]
-	[[ged_draw_view_polygon_import_sketch]]
+	[[ged_view_context_screen_point]]
+	[[ged_draw_view_context_polygon_area]]
+	[[ged_draw_view_context_polygon_overlap]]
+	[[ged_draw_view_context_polygon_import_sketch]]
 	[[ged_draw_view_polygon_export_sketch]]
-	[[ged_draw_view_polygon_csg]])
+	[[ged_draw_view_context_polygon_csg]])
       string(REGEX MATCH "${_token}" _libged_view_polygons_cmd_token_hit
 	"${_libged_view_polygons_cmd_contents}")
       if(NOT _libged_view_polygons_cmd_token_hit)
@@ -8102,6 +10320,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/polygon\.h]]
 	[[#[ \t]*include[ \t]*[<"]rt/primitives/sketch_legacy_bsg\.h]]
 	[[(^|[^A-Za-z0-9_])bsg_polygon([^A-Za-z0-9_]|$)]]
@@ -8111,6 +10330,8 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[(^|[^A-Za-z0-9_])db_sketch_to_view_polygon([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])db_view_polygon_ref_to_sketch([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_screen_point_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_screen_point_from_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]])
       string(REGEX MATCH "${_pat}" _libged_view_polygons_cmd_direct_hit
 	"${_libged_view_polygons_cmd_contents}")
@@ -8123,20 +10344,23 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 
   set(_libged_view_private_header
     "${BRLCAD_SOURCE_DIR}/src/libged/view/ged_view.h")
-  if(EXISTS "${_libged_view_private_header}")
-    file(READ "${_libged_view_private_header}" _libged_view_private_header_contents)
-    foreach(_token
-	[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
-	[[ged_draw_view_polygon_ref[ \t\r\n]+polygon_ref]])
+	  if(EXISTS "${_libged_view_private_header}")
+	    file(READ "${_libged_view_private_header}" _libged_view_private_header_contents)
+	    foreach(_token
+		[[#[ \t]*include[ \t]*[<"]ged/bsg_ged_draw\.h]]
+		[[void[ \t\r\n]*\*[ \t\r\n]*cv]]
+		[[ged_draw_view_polygon_ref[ \t\r\n]+polygon_ref]])
       string(REGEX MATCH "${_token}" _libged_view_private_header_token_hit
 	"${_libged_view_private_header_contents}")
       if(NOT _libged_view_private_header_token_hit)
 	_brlobol_pivot_guard_fail(
 	  "src/libged/view/ged_view.h must keep polygon command state on neutral GED draw-view polygon refs via ${_token}")
       endif()
-    endforeach()
-    foreach(_pat
-	[[#[ \t]*include[ \t]*[<"]bsg/polygon\.h]]
+	    endforeach()
+	    foreach(_pat
+		[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
+		[[#[ \t]*include[ \t]*[<"]bsg/polygon\.h]]
+		[[struct[ \t]+bsg_view[ \t\r\n]*\*[ \t\r\n]*cv]]
 	[[(^|[^A-Za-z0-9_])bsg_polygon_ref([^A-Za-z0-9_]|$)]])
       string(REGEX MATCH "${_pat}" _libged_view_private_header_direct_hit
 	"${_libged_view_private_header_contents}")
@@ -8158,6 +10382,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endif()
     foreach(_pat
 	[[(^|[^A-Za-z0-9_])bsg_polygon_ref([^A-Za-z0-9_]|$)]]
+	[[gd[.]cv[ \t\r\n]*=[ \t\r\n]*\(struct[ \t]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)]]
 	[[(^|[^A-Za-z0-9_])BSG_POLYGON_REF_NULL_INIT([^A-Za-z0-9_]|$)]])
       string(REGEX MATCH "${_pat}" _libged_view_cmd_polygon_direct_hit
 	"${_libged_view_cmd_contents}")
@@ -8172,20 +10397,22 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_view_objs_cmd}")
     file(READ "${_libged_view_objs_cmd}" _libged_view_objs_cmd_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_mouse_state_set_bsg]]
+	[[ged_view_context_mouse_state_set]]
 	[[ged_draw_foreach_view_record_query]])
       string(REGEX MATCH "${_token}" _libged_view_objs_cmd_token_hit
 	"${_libged_view_objs_cmd_contents}")
       if(NOT _libged_view_objs_cmd_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/objs.cpp must route view-object mouse/current-point state and export scans through adapter helpers")
+	  "src/libged/view/objs.cpp must route view-object mouse/current-point state and export scans through GED/context helpers")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[v->[ \t\r\n]*gv_mouse_[xy][ \t\r\n]*=]]
 	[[v->[ \t\r\n]*gv_prevMouse[XY][ \t\r\n]*=]]
 	[[v->[ \t\r\n]*gv_point]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_mouse_state_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_mouse_state_set_bsg[ \t\r\n]*\(]]
 	[[#[ \t]*include[ \t]*[<"]bsg/(export|render)\.h]]
 	[[(^|[^A-Za-z0-9_])bsg_export_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_EXPORT_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
@@ -8204,23 +10431,27 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_view_vz_cmd}")
     file(READ "${_libged_view_vz_cmd}" _libged_view_vz_cmd_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
-	[[rt_view_model2view_from_bsg]]
+	[[#[ \t]*include[ \t]*[<"]ged/bsg_ged_draw\.h]]
+	[[ged_view_context_model2view_get]]
 	[[ged_draw_foreach_visible_view_db_object_record]]
 	[[ged_draw_view_db_object_record_foreach_segment]]
-	[[ged_draw_view_feature_depth]]
-	[[ged_draw_view_feature_depth_foreach]])
+	[[ged_draw_view_context_feature_depth]]
+	[[ged_draw_view_context_feature_depth_foreach]])
       string(REGEX MATCH "${_token}" _libged_view_vz_cmd_token_hit
 	"${_libged_view_vz_cmd_contents}")
       if(NOT _libged_view_vz_cmd_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/view.c must route vZ view reads, feature-depth reads, and DB-object segment iteration through adapter helpers")
+	  "src/libged/view/view.c must route vZ view reads, feature-depth reads, and DB-object segment iteration through context/adapter helpers")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/(export|render)\.h]]
 	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_model2view_from_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_FEATURE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
@@ -8249,19 +10480,19 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     if(NOT EXISTS "${_file}")
       continue()
     endif()
-    file(READ "${_file}" _libged_line_overlay_contents)
-    foreach(_token
-	[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
-	[[GED_DRAW_VIEW_FEATURE_STYLE_INIT]]
-	[[ged_draw_view_lines_replace]]
-	[[ged_draw_view_feature_remove]])
+	    file(READ "${_file}" _libged_line_overlay_contents)
+	    foreach(_token
+		[[#[ \t]*include[ \t]*[<"]ged/bsg_ged_draw\.h]]
+		[[GED_DRAW_VIEW_FEATURE_STYLE_INIT]]
+		[[ged_draw_view(_context)?_lines_replace]]
+	[[ged_draw_view(_context)?_feature_remove]])
       string(REGEX MATCH "${_token}" _libged_line_overlay_token_hit
 	"${_libged_line_overlay_contents}")
-      if(NOT _libged_line_overlay_token_hit)
-	_brlobol_pivot_guard_fail(
-	  "${_rel} must route diagnostic line-overlay feature replacement/removal through the private GED draw view adapter")
-      endif()
-    endforeach()
+	      if(NOT _libged_line_overlay_token_hit)
+		_brlobol_pivot_guard_fail(
+		  "${_rel} must route diagnostic line-overlay feature replacement/removal through the public GED draw-view context facade")
+	      endif()
+	    endforeach()
     foreach(_pat
 	[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/geometry\.h]]
@@ -8275,6 +10506,44 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       if(_libged_line_overlay_direct_hit)
 	_brlobol_pivot_guard_fail(
 	  "${_rel} reintroduced direct BSG diagnostic line-overlay feature access: ${_libged_line_overlay_direct_hit}")
+      endif()
+    endforeach()
+  endforeach()
+
+  foreach(_rel
+      src/libged/joint/joint.c
+      src/libged/bot/bot_fuse.c
+      src/libged/bot/check.cpp
+      src/libged/lint/lint.cpp
+      src/libged/gdiff/gdiff.c
+      src/libged/bot/bot.cpp
+      src/libged/draw/preview.cpp)
+    set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
+    if(NOT EXISTS "${_file}")
+      continue()
+    endif()
+    file(READ "${_file}" _libged_context_line_overlay_contents)
+    foreach(_token
+	[[ged_view_active_ctx]]
+	[[ged_draw_view_context_lines_replace]]
+	[[ged_draw_view_context_feature_remove]])
+      string(REGEX MATCH "${_token}" _libged_context_line_overlay_token_hit
+	"${_libged_context_line_overlay_contents}")
+      if(NOT _libged_context_line_overlay_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} must publish/remove diagnostic line-overlay features through opaque GED draw view context helpers")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_lines_replace[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_feature_remove[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_context_line_overlay_direct_hit
+	"${_libged_context_line_overlay_contents}")
+      if(_libged_context_line_overlay_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} reintroduced typed BSG diagnostic line-overlay feature publication: ${_libged_context_line_overlay_direct_hit}")
       endif()
     endforeach()
   endforeach()
@@ -8299,7 +10568,11 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]bsg/scene_builder\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/geometry\.h]]
+	[[#[ \t]*include[ \t]*[<"]bsg/draw_intent\.h]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_ref([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_DRAW_MODE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_GEOMETRY_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]])
       string(REGEX MATCH "${_pat}" _libged_evaluated_wireframe_direct_hit
 	"${_libged_evaluated_wireframe_contents}")
@@ -8309,6 +10582,60 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       endif()
     endforeach()
   endforeach()
+
+  set(_libged_wireframe_eval "${BRLCAD_SOURCE_DIR}/src/libged/wireframe_eval.c")
+  if(EXISTS "${_libged_wireframe_eval}")
+    file(READ "${_libged_wireframe_eval}" _libged_wireframe_eval_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]ged/bsg_ged_draw\.h]]
+	[[ged_draw_shape_ref_eval_wireframe]]
+	[[ged_draw_shape_ref_source_snapshot]]
+	[[ged_draw_shape_ref_publish_line_set]])
+      string(REGEX MATCH "${_token}" _libged_wireframe_eval_token_hit
+	"${_libged_wireframe_eval_contents}")
+      if(NOT _libged_wireframe_eval_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/wireframe_eval.c must route evaluated-wireframe source and line-set publication through GED draw shape-ref facade helpers")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])ged_draw_scene_ref_(source_data|fullpath|geometry_pool|name|publish_line_set|eval_wireframe)[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_wireframe_eval_direct_hit
+	"${_libged_wireframe_eval_contents}")
+      if(_libged_wireframe_eval_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/wireframe_eval.c reintroduced direct BSG scene-ref evaluated-wireframe access: ${_libged_wireframe_eval_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_points_eval "${BRLCAD_SOURCE_DIR}/src/libged/points_eval.c")
+  if(EXISTS "${_libged_points_eval}")
+    file(READ "${_libged_points_eval}" _libged_points_eval_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]ged/bsg_ged_draw\.h]]
+	[[ged_draw_shape_ref_eval_points]]
+	[[ged_draw_shape_ref_source_snapshot]]
+	[[ged_draw_shape_ref_publish_indexed_face_set]])
+      string(REGEX MATCH "${_token}" _libged_points_eval_token_hit
+	"${_libged_points_eval_contents}")
+      if(NOT _libged_points_eval_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/points_eval.c must route sampled evaluated-point source and indexed-face publication through GED draw shape-ref facade helpers")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]\./ged_private\.h]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_ref([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])ged_draw_scene_ref_(source_data|leaf_dp|publish_indexed_face_set|eval_points)[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_points_eval_direct_hit
+	"${_libged_points_eval_contents}")
+      if(_libged_points_eval_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/points_eval.c reintroduced direct BSG scene-ref sampled evaluated-point access: ${_libged_points_eval_direct_hit}")
+      endif()
+    endforeach()
+  endif()
 
   set(_libged_vdraw_cmd "${BRLCAD_SOURCE_DIR}/src/libged/vdraw/vdraw.c")
   if(EXISTS "${_libged_vdraw_cmd}")
@@ -8350,20 +10677,21 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     if(NOT EXISTS "${_file}")
       continue()
     endif()
-    file(READ "${_file}" _libged_line_layer_contents)
-    foreach(_token
-	[[#[ \t]*include[ \t]*[<"](\.\./|\./)?bsg_ged_draw_view_private\.h]]
-	[[ged_diagnostic_line_layer_publish]]
-	[[ged_draw_view_line_layer_builder_replace]])
+	    file(READ "${_file}" _libged_line_layer_contents)
+	    foreach(_token
+		[[#[ \t]*include[ \t]*[<"]((\.\./|\./)?bsg_ged_draw_view_private|ged/bsg_ged_draw)\.h]]
+		[[ged_diagnostic_line_layer_publish]]
+		[[ged_draw_view_context_line_layer_builder_replace]])
       string(REGEX MATCH "${_token}" _libged_line_layer_token_hit
 	"${_libged_line_layer_contents}")
       if(NOT _libged_line_layer_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "${_rel} must route diagnostic line-layer fallback feature replacement through the private GED draw view adapter")
+	  "${_rel} must route diagnostic line-layer fallback feature replacement through the private GED draw view context adapter")
       endif()
     endforeach()
     foreach(_pat
 	[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_line_layer_builder_replace[ \t]*\(]]
 	[[(^|[^A-Za-z0-9_])struct[ \t]+bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
@@ -8380,20 +10708,20 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 
   set(_libged_brep_plot_cmd "${BRLCAD_SOURCE_DIR}/src/libged/brep/plot.cpp")
   if(EXISTS "${_libged_brep_plot_cmd}")
-    file(READ "${_libged_brep_plot_cmd}" _libged_brep_plot_contents)
-    foreach(_token
-	[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
-	[[ged_diagnostic_line_layer_publish]]
-	[[ged_draw_view_line_layer_builder_replace]]
+	    file(READ "${_libged_brep_plot_cmd}" _libged_brep_plot_contents)
+	    foreach(_token
+		[[#[ \t]*include[ \t]*[<"]ged/bsg_ged_draw\.h]]
+		[[ged_diagnostic_line_layer_publish]]
+		[[ged_draw_view_context_line_layer_builder_replace]]
 	[[GED_DRAW_VIEW_FEATURE_STYLE_INIT]]
-	[[ged_draw_view_indexed_face_set_replace]])
+	[[ged_draw_view_context_indexed_face_set_replace]])
       string(REGEX MATCH "${_token}" _libged_brep_plot_token_hit
 	"${_libged_brep_plot_contents}")
-      if(NOT _libged_brep_plot_token_hit)
-	_brlobol_pivot_guard_fail(
-	  "src/libged/brep/plot.cpp must route diagnostic line-layer fallback and indexed face-set replacement through the private GED draw view adapter")
-      endif()
-    endforeach()
+	      if(NOT _libged_brep_plot_token_hit)
+		_brlobol_pivot_guard_fail(
+		  "src/libged/brep/plot.cpp must route diagnostic line-layer fallback and indexed face-set replacement through the public GED draw-view context facade")
+	      endif()
+	    endforeach()
     foreach(_pat
 	[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
 	[[(^|[^A-Za-z0-9_])struct[ \t]+bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
@@ -8401,12 +10729,125 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_FEATURE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_replace_line_layer_builder([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])bsg_line_layer_builder([^A-Za-z0-9_]|$)]])
+	[[(^|[^A-Za-z0-9_])bsg_line_layer_builder([^A-Za-z0-9_]|$)]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_line_layer_builder_replace[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_indexed_face_set_replace[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_brep_plot_direct_line_layer_hit
 	"${_libged_brep_plot_contents}")
       if(_libged_brep_plot_direct_line_layer_hit)
 	_brlobol_pivot_guard_fail(
 	  "src/libged/brep/plot.cpp reintroduced direct BSG diagnostic line-layer or indexed face-set access: ${_libged_brep_plot_direct_line_layer_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_erase_cmd "${BRLCAD_SOURCE_DIR}/src/libged/erase/erase2.cpp")
+  if(EXISTS "${_libged_erase_cmd}")
+    file(READ "${_libged_erase_cmd}" _libged_erase_cmd_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]ged/view\.h]]
+	[[ged_view_active_ctx]]
+	[[ged_view_find_ctx]]
+	[[ged_view_context_is_independent]])
+      string(REGEX MATCH "${_token}" _libged_erase_cmd_token_hit
+	"${_libged_erase_cmd_contents}")
+      if(NOT _libged_erase_cmd_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/erase/erase2.cpp must keep erase view lookup and independent-view checks on GED view-context facades")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_find_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_is_independent_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_is_independent_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_erase_cmd_direct_hit
+	"${_libged_erase_cmd_contents}")
+      if(_libged_erase_cmd_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/erase/erase2.cpp reintroduced typed erase view access: ${_libged_erase_cmd_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_draw2_cmd "${BRLCAD_SOURCE_DIR}/src/libged/draw/draw2.cpp")
+  if(EXISTS "${_libged_draw2_cmd}")
+    file(READ "${_libged_draw2_cmd}" _libged_draw2_cmd_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]ged/bsg_ged_draw\.h]]
+	[[#[ \t]*include[ \t]*[<"]ged/view\.h]]
+	[[ged_view_active_ctx]]
+	[[ged_view_find_ctx]]
+	[[ged_view_set_views_ctx]]
+	[[ged_view_context_is_independent]]
+	[[GED_DRAW_MODE_WIRE]]
+	[[GED_DRAW_MODE_EVAL_POINTS]]
+	[[struct[ \t\r\n]+ged_draw_appearance_settings]]
+	[[GED_DRAW_APPEARANCE_SETTINGS_INIT]]
+	[[draw_cmd_help]]
+	[[DRAW_MODE_UNSET]])
+      string(REGEX MATCH "${_token}" _libged_draw2_cmd_token_hit
+	"${_libged_draw2_cmd_contents}")
+      if(NOT _libged_draw2_cmd_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/draw/draw2.cpp must route draw/redraw view selection through opaque RT view-context helpers")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[#[ \t]*include[ \t]*[<"]\.\./ged_private\.h]]
+	[[#[ \t]*include[ \t]*[<"](\./)?ged_draw\.h]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_find_ctx]]
+	[[(^|[^A-Za-z0-9_])_ged_cmd_help[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])_GED_SHADED_MODE_UNSET([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_is_independent_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_is_independent_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])BSG_DRAW_MODE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_draw_mode([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_appearance_settings([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_APPEARANCE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _libged_draw2_cmd_direct_hit
+	"${_libged_draw2_cmd_contents}")
+      if(_libged_draw2_cmd_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/draw/draw2.cpp reintroduced typed draw/redraw view selection access: ${_libged_draw2_cmd_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_lod_cmd "${BRLCAD_SOURCE_DIR}/src/libged/lod/lod.c")
+  if(EXISTS "${_libged_lod_cmd}")
+    file(READ "${_libged_lod_cmd}" _libged_lod_cmd_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]ged/bsg_ged_draw\.h]]
+	[[#[ \t]*include[ \t]*[<"]rt/view\.h]]
+	[[ged_view_active_ctx]]
+	[[ged_draw_view_context_lod_policy_from_bsg]]
+	[[ged_draw_view_context_lod_policy_apply_bsg]])
+      string(REGEX MATCH "${_token}" _libged_lod_cmd_token_hit
+	"${_libged_lod_cmd_contents}")
+      if(NOT _libged_lod_cmd_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/lod/lod.c must route command LoD policy access through opaque GED draw-view context helpers")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_lod_policy_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_lod_policy_apply_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_lod_cmd_direct_hit
+	"${_libged_lod_cmd_contents}")
+      if(_libged_lod_cmd_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/lod/lod.c reintroduced typed LoD policy view access: ${_libged_lod_cmd_direct_hit}")
       endif()
     endforeach()
   endif()
@@ -8422,24 +10863,30 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endif()
     file(READ "${_file}" _libged_prim_edit_transform_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_model2view_from_bsg]]
-	[[rt_view_view2model_from_bsg]])
+	[[ged_view_context_model2view_get]]
+	[[ged_view_context_view2model_get]])
       string(REGEX MATCH "${_token}" _libged_prim_edit_transform_token_hit
 	"${_libged_prim_edit_transform_contents}")
       if(NOT _libged_prim_edit_transform_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "${_rel} must route primitive edit transform reads through rt/view_legacy_bsg.h")
+	  "${_rel} must route primitive edit transform reads through GED view-context matrix facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]])
+	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_view2model_from_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_prim_edit_transform_direct_hit
 	"${_libged_prim_edit_transform_contents}")
       if(_libged_prim_edit_transform_direct_hit)
 	_brlobol_pivot_guard_fail(
-	  "${_rel} reintroduced direct BSG primitive edit transform reads: ${_libged_prim_edit_transform_direct_hit}")
+	  "${_rel} reintroduced direct or typed BSG primitive edit transform reads: ${_libged_prim_edit_transform_direct_hit}")
       endif()
     endforeach()
   endforeach()
@@ -8455,65 +10902,83 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endif()
     file(READ "${_file}" _libged_subentity_transform_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_model2view_from_bsg]])
+	[[ged_view_context_model2view_get]])
       string(REGEX MATCH "${_token}" _libged_subentity_transform_token_hit
 	"${_libged_subentity_transform_contents}")
       if(NOT _libged_subentity_transform_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "${_rel} must route subentity selection model-to-view reads through rt/view_legacy_bsg.h")
+	  "${_rel} must route subentity selection model-to-view reads through the GED view-context matrix facade")
       endif()
     endforeach()
-    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
-      _libged_subentity_transform_direct_hit
-      "${_libged_subentity_transform_contents}")
-    if(_libged_subentity_transform_direct_hit)
-      _brlobol_pivot_guard_fail(
-	"${_rel} reintroduced direct BSG subentity selection model-to-view reads: ${_libged_subentity_transform_direct_hit}")
-    endif()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_model2view_from_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_subentity_transform_direct_hit
+	"${_libged_subentity_transform_contents}")
+      if(_libged_subentity_transform_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} reintroduced direct or typed BSG subentity selection model-to-view reads: ${_libged_subentity_transform_direct_hit}")
+      endif()
+    endforeach()
   endforeach()
 
   set(_libged_rot_point_cmd "${BRLCAD_SOURCE_DIR}/src/libged/rot_point/rot_point.c")
   if(EXISTS "${_libged_rot_point_cmd}")
     file(READ "${_libged_rot_point_cmd}" _libged_rot_point_cmd_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_rotation_from_bsg]])
+	[[ged_view_context_rotation_get]])
       string(REGEX MATCH "${_token}" _libged_rot_point_cmd_token_hit
 	"${_libged_rot_point_cmd_contents}")
       if(NOT _libged_rot_point_cmd_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/rot_point/rot_point.c must route rotation reads through rt/view_legacy_bsg.h")
+	  "src/libged/rot_point/rot_point.c must route rotation reads through ged_view_context_rotation_get")
       endif()
     endforeach()
-    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_rotation([^A-Za-z0-9_]|$)]]
-      _libged_rot_point_cmd_direct_hit "${_libged_rot_point_cmd_contents}")
-    if(_libged_rot_point_cmd_direct_hit)
-      _brlobol_pivot_guard_fail(
-	"src/libged/rot_point/rot_point.c reintroduced direct BSG rotation reads: ${_libged_rot_point_cmd_direct_hit}")
-    endif()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[(^|[^A-Za-z0-9_])gv_rotation([^A-Za-z0-9_]|$)]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_rotation_from_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_rot_point_cmd_direct_hit
+	"${_libged_rot_point_cmd_contents}")
+      if(_libged_rot_point_cmd_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/rot_point/rot_point.c reintroduced direct BSG rotation reads: ${_libged_rot_point_cmd_direct_hit}")
+      endif()
+    endforeach()
   endif()
 
   set(_libged_view_labels_cmd "${BRLCAD_SOURCE_DIR}/src/libged/view/labels.c")
-  if(EXISTS "${_libged_view_labels_cmd}")
-    file(READ "${_libged_view_labels_cmd}" _libged_view_labels_cmd_contents)
-    foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_screen_to_view_from_bsg]]
-	[[rt_view_view2model_from_bsg]]
-	[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
-	[[ged_draw_view_feature_exists]]
-	[[ged_draw_view_label_create]])
+	  if(EXISTS "${_libged_view_labels_cmd}")
+	    file(READ "${_libged_view_labels_cmd}" _libged_view_labels_cmd_contents)
+	    foreach(_token
+		[[ged_view_context_screen_to_view]]
+		[[ged_view_context_view2model_get]]
+		[[#[ \t]*include[ \t]*[<"]\./ged_view\.h]]
+		[[ged_draw_view_context_feature_exists]]
+		[[ged_draw_view_context_label_create]])
       string(REGEX MATCH "${_token}" _libged_view_labels_cmd_token_hit
 	"${_libged_view_labels_cmd_contents}")
       if(NOT _libged_view_labels_cmd_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/labels.c must route label view-to-model reads and label feature creation through adapter helpers")
+	  "src/libged/view/labels.c must route label screen/model reads and label feature creation through context/adapter helpers")
       endif()
-    endforeach()
-    foreach(_pat
-	[[((^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)|(^|[^A-Za-z0-9_])bsg_screen_to_view([^A-Za-z0-9_]|$))]]
-	[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
+	    endforeach()
+	    foreach(_pat
+		[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+		[[((^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)|(^|[^A-Za-z0-9_])bsg_screen_to_view([^A-Za-z0-9_]|$))]]
+		[[(^|[^A-Za-z0-9_])rt_view_screen_to_view_from_bsg[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])rt_view_context_screen_to_view_from_bsg[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])rt_view_context_view2model_from_bsg[ \t\r\n]*\(]]
+		[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
+		[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_FEATURE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]])
@@ -8527,8 +10992,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   endif()
 
   foreach(_rel
-      src/libged/view/ypr.c
-      src/libged/rmat/rmat.c)
+      src/libged/view/ypr.c)
     set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
     if(NOT EXISTS "${_file}")
       _brlobol_pivot_guard_fail(
@@ -8537,13 +11001,12 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endif()
     file(READ "${_file}" _libged_view_rotation_query_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_rotation_from_bsg]])
+	[[ged_view_context_rotation_get]])
       string(REGEX MATCH "${_token}" _libged_view_rotation_query_token_hit
 	"${_libged_view_rotation_query_contents}")
       if(NOT _libged_view_rotation_query_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "${_rel} must route rotation query output through rt/view_legacy_bsg.h")
+	  "${_rel} must route rotation query output through GED view-context facade ${_token}")
       endif()
     endforeach()
   endforeach()
@@ -8551,35 +11014,67 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   set(_libged_view_ypr_cmd "${BRLCAD_SOURCE_DIR}/src/libged/view/ypr.c")
   if(EXISTS "${_libged_view_ypr_cmd}")
     file(READ "${_libged_view_ypr_cmd}" _libged_view_ypr_cmd_contents)
-    string(REGEX MATCH [[bn_mat_trn[ \t\r\n]*\([^,;]*,[^;]*gv_rotation]]
-      _libged_view_ypr_cmd_direct_hit "${_libged_view_ypr_cmd_contents}")
-    if(_libged_view_ypr_cmd_direct_hit)
-      _brlobol_pivot_guard_fail(
-	"src/libged/view/ypr.c reintroduced direct BSG query output: ${_libged_view_ypr_cmd_direct_hit}")
-    endif()
-    string(REGEX MATCH [[bn_mat_trn[ \t\r\n]*\([^;]*gv_rotation]]
-      _libged_view_ypr_cmd_set_direct_hit "${_libged_view_ypr_cmd_contents}")
-    if(_libged_view_ypr_cmd_set_direct_hit)
-      _brlobol_pivot_guard_fail(
-	"src/libged/view/ypr.c reintroduced direct BSG rotation writes: ${_libged_view_ypr_cmd_set_direct_hit}")
-    endif()
+    foreach(_token
+	[[ged_view_context_rotation_get]]
+	[[ged_view_context_rotation_set]]
+	[[ged_view_context_update]])
+      string(REGEX MATCH "${_token}" _libged_view_ypr_cmd_token_hit
+	"${_libged_view_ypr_cmd_contents}")
+      if(NOT _libged_view_ypr_cmd_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/ypr.c must route rotation reads/writes through GED view-context facades")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[bn_mat_trn[ \t\r\n]*\([^,;]*,[^;]*gv_rotation]]
+	[[bn_mat_trn[ \t\r\n]*\([^;]*gv_rotation]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_rotation_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_rotation_set_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_view_ypr_cmd_direct_hit
+	"${_libged_view_ypr_cmd_contents}")
+      if(_libged_view_ypr_cmd_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/view/ypr.c reintroduced direct BSG rotation access: ${_libged_view_ypr_cmd_direct_hit}")
+      endif()
+    endforeach()
   endif()
 
   set(_libged_rmat_cmd "${BRLCAD_SOURCE_DIR}/src/libged/rmat/rmat.c")
   if(EXISTS "${_libged_rmat_cmd}")
     file(READ "${_libged_rmat_cmd}" _libged_rmat_cmd_contents)
-    string(REGEX MATCH [[bn_encode_mat[^\n;]*gv_rotation]]
-      _libged_rmat_cmd_direct_hit "${_libged_rmat_cmd_contents}")
-    if(_libged_rmat_cmd_direct_hit)
-      _brlobol_pivot_guard_fail(
-	"src/libged/rmat/rmat.c reintroduced direct BSG query output: ${_libged_rmat_cmd_direct_hit}")
-    endif()
-    string(REGEX MATCH [[MAT_COPY[^\n;]*gv_rotation]]
-      _libged_rmat_cmd_set_direct_hit "${_libged_rmat_cmd_contents}")
-    if(_libged_rmat_cmd_set_direct_hit)
-      _brlobol_pivot_guard_fail(
-	"src/libged/rmat/rmat.c reintroduced direct BSG rotation writes: ${_libged_rmat_cmd_set_direct_hit}")
-    endif()
+    foreach(_token
+	[[ged_view_context_rotation_get]]
+	[[ged_view_context_rotation_set]]
+	[[ged_view_context_update]])
+      string(REGEX MATCH "${_token}" _libged_rmat_cmd_token_hit
+	"${_libged_rmat_cmd_contents}")
+      if(NOT _libged_rmat_cmd_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/rmat/rmat.c must route rotation get/set and refresh through opaque RT/GED view-context helpers")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[bn_encode_mat[^\n;]*gv_rotation]]
+	[[MAT_COPY[^\n;]*gv_rotation]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_rotation_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_rotation_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_update_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_update_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_rmat_cmd_direct_hit
+	"${_libged_rmat_cmd_contents}")
+      if(_libged_rmat_cmd_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/rmat/rmat.c reintroduced direct BSG rotation access: ${_libged_rmat_cmd_direct_hit}")
+      endif()
+    endforeach()
   endif()
 
   foreach(_rel
@@ -8589,19 +11084,23 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     if(EXISTS "${_file}")
       file(READ "${_file}" _libged_rotation_setter_contents)
       foreach(_token
-	  [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	  [[rt_view_rotation_set_bsg]])
+	  [[ged_view_context_rotation_set]]
+	  [[ged_view_context_update]])
 	string(REGEX MATCH "${_token}" _libged_rotation_setter_token_hit
 	  "${_libged_rotation_setter_contents}")
 	if(NOT _libged_rotation_setter_token_hit)
 	  _brlobol_pivot_guard_fail(
-	    "${_rel} must route rotation writes through rt/view_legacy_bsg.h")
+	    "${_rel} must route rotation writes through GED view-context facade ${_token}")
 	endif()
       endforeach()
       foreach(_pat
+	  [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	  [[quat_quat2mat[^\n;]*gv_rotation]]
 	  [[bn_mat_angles[^\n;]*gv_rotation]]
-	  [[MAT_COPY[^\n;]*gv_rotation]])
+	  [[MAT_COPY[^\n;]*gv_rotation]]
+	  [[_rotation_set_bsg]]
+	  [[(^|[^A-Za-z0-9_])rt_view_rotation_set_bsg[ \t\r\n]*\(]]
+	  [[(^|[^A-Za-z0-9_])rt_view_context_rotation_set_bsg[ \t\r\n]*\(]])
 	string(REGEX MATCH "${_pat}" _libged_rotation_setter_direct_hit
 	  "${_libged_rotation_setter_contents}")
 	if(_libged_rotation_setter_direct_hit)
@@ -8616,79 +11115,87 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_pmat_cmd}")
     file(READ "${_libged_pmat_cmd}" _libged_pmat_cmd_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_pmat_from_bsg]]
-	[[rt_view_pmat_set_bsg]])
+	[[ged_view_context_pmat_get]]
+	[[ged_view_context_pmat_set]])
       string(REGEX MATCH "${_token}" _libged_pmat_cmd_token_hit
 	"${_libged_pmat_cmd_contents}")
       if(NOT _libged_pmat_cmd_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/pmat/pmat.c must route projection-matrix access through rt/view_legacy_bsg.h")
+	  "src/libged/pmat/pmat.c must route projection-matrix access through GED view-context facades")
       endif()
     endforeach()
-    string(REGEX MATCH [[bn_encode_mat[^\n;]*gv_pmat|MAT_COPY[^\n;]*gv_pmat]]
-      _libged_pmat_cmd_direct_hit "${_libged_pmat_cmd_contents}")
-    if(_libged_pmat_cmd_direct_hit)
-      _brlobol_pivot_guard_fail(
-	"src/libged/pmat/pmat.c reintroduced direct BSG projection-matrix access: ${_libged_pmat_cmd_direct_hit}")
-    endif()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[bn_encode_mat[^\n;]*gv_pmat]]
+	[[MAT_COPY[^\n;]*gv_pmat]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_pmat_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_pmat_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_pmat_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_pmat_set_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_pmat_cmd_direct_hit
+	"${_libged_pmat_cmd_contents}")
+      if(_libged_pmat_cmd_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/pmat/pmat.c reintroduced direct BSG projection-matrix access: ${_libged_pmat_cmd_direct_hit}")
+      endif()
+    endforeach()
   endif()
 
   set(_libged_pmodel2view_cmd "${BRLCAD_SOURCE_DIR}/src/libged/pmodel2view/pmodel2view.c")
   if(EXISTS "${_libged_pmodel2view_cmd}")
     file(READ "${_libged_pmodel2view_cmd}" _libged_pmodel2view_cmd_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_pmodel2view_from_bsg]])
+	[[ged_view_context_pmodel2view_get]])
       string(REGEX MATCH "${_token}" _libged_pmodel2view_cmd_token_hit
 	"${_libged_pmodel2view_cmd_contents}")
       if(NOT _libged_pmodel2view_cmd_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/pmodel2view/pmodel2view.c must route projected-model-to-view query output through rt/view_legacy_bsg.h")
+	  "src/libged/pmodel2view/pmodel2view.c must route projected-model-to-view query output through the GED view-context facade")
       endif()
     endforeach()
-    string(REGEX MATCH [[bn_encode_mat[^\n;]*gv_pmodel2view]]
-      _libged_pmodel2view_cmd_direct_hit "${_libged_pmodel2view_cmd_contents}")
-    if(_libged_pmodel2view_cmd_direct_hit)
-      _brlobol_pivot_guard_fail(
-	"src/libged/pmodel2view/pmodel2view.c reintroduced direct BSG projected-model-to-view query output: ${_libged_pmodel2view_cmd_direct_hit}")
-    endif()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[bn_encode_mat[^\n;]*gv_pmodel2view]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_pmodel2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_pmodel2view_from_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_pmodel2view_cmd_direct_hit
+	"${_libged_pmodel2view_cmd_contents}")
+      if(_libged_pmodel2view_cmd_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/pmodel2view/pmodel2view.c reintroduced direct BSG projected-model-to-view query output: ${_libged_pmodel2view_cmd_direct_hit}")
+      endif()
+    endforeach()
   endif()
 
   set(_libged_view_quat_cmd "${BRLCAD_SOURCE_DIR}/src/libged/view/quat.c")
   if(EXISTS "${_libged_view_quat_cmd}")
     file(READ "${_libged_view_quat_cmd}" _libged_view_quat_cmd_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_orientation_quat_from_bsg]])
+	[[ged_view_context_orientation_quat_get]]
+	[[ged_view_context_rotation_set]]
+	[[ged_view_context_update]])
       string(REGEX MATCH "${_token}" _libged_view_quat_cmd_token_hit
 	"${_libged_view_quat_cmd_contents}")
       if(NOT _libged_view_quat_cmd_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/quat.c must route quaternion query output through rt/view_legacy_bsg.h")
+	  "src/libged/view/quat.c must route quaternion reads and rotation writes through GED view-context facades")
       endif()
     endforeach()
-    string(REGEX MATCH [[quat_mat2quat[ \t\r\n]*\([^;]*gv_rotation]]
-      _libged_view_quat_cmd_direct_hit "${_libged_view_quat_cmd_contents}")
-    if(_libged_view_quat_cmd_direct_hit)
-      _brlobol_pivot_guard_fail(
-	"src/libged/view/quat.c reintroduced direct BSG query output: ${_libged_view_quat_cmd_direct_hit}")
-    endif()
-    foreach(_token
-	[[rt_view_rotation_set_bsg]])
-      string(REGEX MATCH "${_token}" _libged_view_quat_cmd_set_token_hit
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[quat_mat2quat[ \t\r\n]*\([^;]*gv_rotation]]
+	[[quat_quat2mat[^\n;]*gv_rotation]]
+	[[(^|[^A-Za-z0-9_])rt_view_orientation_quat_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_orientation_quat_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_rotation_set_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_view_quat_cmd_direct_hit
 	"${_libged_view_quat_cmd_contents}")
-      if(NOT _libged_view_quat_cmd_set_token_hit)
+      if(_libged_view_quat_cmd_direct_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/quat.c must route quaternion rotation writes through rt/view_legacy_bsg.h")
+	  "src/libged/view/quat.c reintroduced direct BSG quaternion or rotation access: ${_libged_view_quat_cmd_direct_hit}")
       endif()
     endforeach()
-    string(REGEX MATCH [[quat_quat2mat[^\n;]*gv_rotation]]
-      _libged_view_quat_cmd_set_direct_hit "${_libged_view_quat_cmd_contents}")
-    if(_libged_view_quat_cmd_set_direct_hit)
-      _brlobol_pivot_guard_fail(
-	"src/libged/view/quat.c reintroduced direct BSG rotation writes: ${_libged_view_quat_cmd_set_direct_hit}")
-    endif()
   endif()
 
   set(_libged_perspective_cmd
@@ -8696,24 +11203,27 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_perspective_cmd}")
     file(READ "${_libged_perspective_cmd}" _libged_perspective_cmd_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_perspective_from_bsg]]
-	[[rt_view_perspective_set_bsg]]
-	[[rt_view_pmat_set_bsg]])
+	[[ged_view_context_perspective_get]]
+	[[ged_view_context_perspective_set]]
+	[[ged_view_context_pmat_set]])
       string(REGEX MATCH "${_token}" _libged_perspective_cmd_token_hit
 	"${_libged_perspective_cmd_contents}")
       if(NOT _libged_perspective_cmd_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/perspective/perspective.c must route query output plus perspective/projection-matrix writes through rt/view_legacy_bsg.h")
+	  "src/libged/perspective/perspective.c must route query output, perspective writes, and projection-matrix writes through GED view-context facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[gedp->[ \t\r\n]*ged_gvp->[ \t\r\n]*gv_perspective[ \t\r\n]*=]]
 	[[bu_vls_printf[^\n;]*gv_perspective]]
 	[[if[ \t]*\([^\n;]*gv_perspective]]
 	[[persp_mat[^\n;]*gv_perspective]]
 	[[persp_mat[^\n;]*gv_pmat]]
-	[[MAT_COPY[^\n;]*gv_pmat]])
+	[[MAT_COPY[^\n;]*gv_pmat]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_pmat_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_pmat_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_perspective_(from|set)_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_perspective_cmd_direct_hit
 	"${_libged_perspective_cmd_contents}")
       if(_libged_perspective_cmd_direct_hit)
@@ -8727,22 +11237,31 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_eye_pos_cmd}")
     file(READ "${_libged_eye_pos_cmd}" _libged_eye_pos_cmd_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_eye_pos_from_bsg]]
-	[[rt_view_eye_pos_set_bsg]]
-	[[rt_view_pmat_set_bsg]])
+	[[ged_view_context_eye_pos_get]]
+	[[ged_view_context_eye_pos_set]]
+	[[ged_view_context_pmat_set]]
+	[[ged_view_context_update]])
       string(REGEX MATCH "${_token}" _libged_eye_pos_cmd_token_hit
 	"${_libged_eye_pos_cmd_contents}")
       if(NOT _libged_eye_pos_cmd_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/eye_pos/eye_pos.c must route eye-position and projection-matrix access through rt/view_legacy_bsg.h")
+	  "src/libged/eye_pos/eye_pos.c must route eye-position, projection-matrix, and refresh access through GED view-context facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[VSCALE[ \t\r\n]*\([^,;]*,[^;]*gv_eye_pos]]
 	[[VMOVE[^\n;]*gv_eye_pos]]
 	[[mike_persp_mat[^\n;]*gv_eye_pos]]
-	[[mike_persp_mat[^\n;]*gv_pmat]])
+	[[mike_persp_mat[^\n;]*gv_pmat]]
+	[[(^|[^A-Za-z0-9_])rt_view_eye_pos_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_eye_pos_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_eye_pos_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_eye_pos_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_pmat_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_pmat_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_update_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_update_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_eye_pos_cmd_direct_hit
 	"${_libged_eye_pos_cmd_contents}")
       if(_libged_eye_pos_cmd_direct_hit)
@@ -8756,20 +11275,24 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_view_cmd_impl}")
     file(READ "${_libged_view_cmd_impl}" _libged_view_cmd_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_info_from_bsg]]
-	[[ged_draw_view_selection_count]])
+	[[#[ \t]*include[ \t]*[<"]ged/bsg_ged_draw\.h]]
+	[[ged_view_context_info_get]]
+	[[ged_draw_view_context_selection_count]])
       string(REGEX MATCH "${_token}" _libged_view_cmd_token_hit
 	"${_libged_view_cmd_contents}")
       if(NOT _libged_view_cmd_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/view.c must route width/height and selection-count query output through adapter helpers")
+	  "src/libged/view/view.c must route width/height and selection-count query output through context/adapter helpers")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/selection\.h]]
 	[[(^|[^A-Za-z0-9_])bsg_selection_count([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])rt_view_selection_bsg([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_info_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_info_from_bsg[ \t\r\n]*\(]]
 	[[bu_vls_printf[^\n;]*gv_width]]
 	[[bu_vls_printf[^\n;]*gv_height]])
       string(REGEX MATCH "${_pat}" _libged_view_cmd_direct_hit
@@ -8855,12 +11378,13 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     if("${_rel}" STREQUAL "src/mged/mged_dm.h")
       foreach(_token
 	  [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	  [[rt_view_size_from_bsg]]
-	  [[rt_view_scale_from_bsg]]
-	  [[rt_view_settings_shared_bsg]]
-	  [[rt_view_adc_state_from_bsg]]
-	  [[rt_view_grid_state_from_bsg]]
-	  [[rt_view_grid_state_set_bsg]])
+	  [[struct[ \t\r\n]+rt_view_knobs]]
+	  [[rt_view_context_size_from_bsg]]
+	  [[rt_view_context_scale_from_bsg]]
+	  [[rt_view_context_settings_shared_bsg]]
+	  [[rt_view_context_adc_state_from_bsg]]
+	  [[rt_view_context_grid_state_from_bsg]]
+	  [[rt_view_context_grid_state_set_bsg]])
 	string(REGEX MATCH "${_token}" _mged_dm_view_macro_token_hit
 	  "${_mged_rt_inverse_view_contents}")
 	if(NOT _mged_dm_view_macro_token_hit)
@@ -8869,9 +11393,17 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	endif()
       endforeach()
       foreach(_pat
+	  [[#[ \t]*include[ \t]*[<"]bsg/view_state\.h]]
 	  [[#[ \t]*define[ \t]+VIEWSIZE[^\n]*gv_size]]
 	  [[#[ \t]*define[ \t]+VIEWFACTOR[^\n]*gv_scale]]
+	  [[(^|[^A-Za-z0-9_])bsg_view_knobs([^A-Za-z0-9_]|$)]]
 	  [[(^|[^A-Za-z0-9_])bsg_view_settings_shared([^A-Za-z0-9_]|$)]]
+	  [[(^|[^A-Za-z0-9_])rt_view_size_from_bsg[ \t\r\n]*\(]]
+	  [[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\(]]
+	  [[(^|[^A-Za-z0-9_])rt_view_settings_shared_bsg[ \t\r\n]*\(]]
+	  [[(^|[^A-Za-z0-9_])rt_view_adc_state_from_bsg[ \t\r\n]*\(]]
+	  [[(^|[^A-Za-z0-9_])rt_view_grid_state_from_bsg[ \t\r\n]*\(]]
+	  [[(^|[^A-Za-z0-9_])rt_view_grid_state_set_bsg[ \t\r\n]*\(]]
 	  [[struct[ \t\r\n]+bsg_adc_state]]
 	  [[(^|[^A-Za-z0-9_])rt_view_adc_from_bsg([^A-Za-z0-9_]|$)]]
 	  [[(^|[^A-Za-z0-9_])rt_view_adc_set_bsg([^A-Za-z0-9_]|$)]]
@@ -8894,22 +11426,41 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_mged_attach_impl}" _mged_attach_contents)
     foreach(_token
 	"rt/view.h"
-	"rt/view_legacy_bsg.h"
-	"rt_view_scale_storage_from_bsg"
-	"rt_view_adc_state_set_bsg"
+	"ged/view.h"
+	"ged_view_context_scale_storage_get"
+	"ged_view_context_adc_state_set"
+	"ged_view_context_create_copy_with_set"
+	"ged_view_context_update_callback_set"
+	"ged_view_context_lod_policy_get"
+	"ged_view_context_lod_policy_apply"
 	"RT_VIEW_MIN"
 	"RT_VIEW_MAX")
       string(FIND "${_mged_attach_contents}" "${_token}" _mged_attach_token_idx)
       if(_mged_attach_token_idx EQUAL -1)
 	_brlobol_pivot_guard_fail(
-	  "src/mged/attach.c must use RT-owned view adapters/constants ${_token}")
+	  "src/mged/attach.c must use GED/RT-owned view adapters/constants ${_token}")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[BU_(GET|ALLOC)[ \t\r\n]*\([^;\n]*struct[ \t\r\n]+bsg_view]]
+	[[struct[ \t\r\n]+bsg_view]]
 	[[(^|[^A-Za-z0-9_])BSG_VIEW_(MIN|MAX)([^A-Za-z0-9_]|$)]]
 	[[struct[ \t\r\n]+bsg_adc_state]]
 	[[(^|[^A-Za-z0-9_])rt_view_adc_set_bsg([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_view_adc_set([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_adc_state_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_adc_state_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_storage_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_storage_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_init_copy_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_init_copy_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_create_copy_with_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_update_callback_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_lod_policy_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_lod_policy_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_lod_policy_apply_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_lod_policy_apply_bsg[ \t\r\n]*\(]]
 	[[dm_set_vp[ \t\r\n]*\([^;]*gv_scale]])
       string(REGEX MATCH "${_pat}" _mged_attach_bsg_view_hit
 	"${_mged_attach_contents}")
@@ -8984,25 +11535,36 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_mged_titles_impl}")
     file(READ "${_mged_titles_impl}" _mged_titles_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_info_from_bsg]]
-	[[rt_view_center_from_bsg]]
-	[[rt_view_aet_from_bsg]]
-	[[rt_view_perspective_from_bsg]]
-	[[rt_view_scale_from_bsg]])
+	[[#[ \t]*include[ \t]*[<"]ged/view\.h]]
+	[[ged_view_context_info_get]]
+	[[ged_view_context_center_get]]
+	[[ged_view_context_aet_get]]
+	[[ged_view_context_perspective_get]]
+	[[ged_view_context_scale_get]])
       string(REGEX MATCH "${_token}" _mged_titles_adapter_hit
 	"${_mged_titles_contents}")
       if(NOT _mged_titles_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/mged/titles.c must route title/status view reads through rt/view_legacy_bsg.h")
+	  "src/mged/titles.c must route title/status view reads through GED view-context facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_size([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_aet([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_perspective([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]])
+	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_info_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_aet_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_perspective_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_info_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_aet_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_perspective_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _mged_titles_direct_view_hit
 	"${_mged_titles_contents}")
       if(_mged_titles_direct_view_hit)
@@ -9016,19 +11578,24 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_mged_chgmodel_impl}")
     file(READ "${_mged_chgmodel_impl}" _mged_chgmodel_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_center_from_bsg]]
-	[[rt_view_scale_from_bsg]])
+	[[#[ \t]*include[ \t]*[<"]ged/view\.h]]
+	[[ged_view_context_center_get]]
+	[[ged_view_context_scale_get]])
       string(REGEX MATCH "${_token}" _mged_chgmodel_adapter_hit
 	"${_mged_chgmodel_contents}")
       if(NOT _mged_chgmodel_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/mged/chgmodel.c must route make default view center/scale reads through rt/view_legacy_bsg.h")
+	  "src/mged/chgmodel.c must route make default view center/scale reads through GED view-context facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]])
+	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _mged_chgmodel_direct_hit
 	"${_mged_chgmodel_contents}")
       if(_mged_chgmodel_direct_hit)
@@ -9042,20 +11609,23 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_mged_plot_impl}")
     file(READ "${_mged_plot_impl}" _mged_plot_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_rotation_from_bsg]]
+	[[#[ \t]*include[ \t]*[<"]ged/view\.h]]
+	[[ged_view_context_rotation_get]]
 	[[ged_draw_foreach_visible_view_db_object_record]]
 	[[ged_draw_view_db_object_record_foreach_segment]])
       string(REGEX MATCH "${_token}" _mged_plot_adapter_hit
 	"${_mged_plot_contents}")
       if(NOT _mged_plot_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/mged/plot.c must route area view rotation and DB object export reads through adapter helpers")
+	  "src/mged/plot.c must route area view rotation and DB object export reads through GED view/draw helpers")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/(export|render)\.h]]
 	[[(^|[^A-Za-z0-9_])gv_rotation([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_rotation_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_from_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])bsg_export_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_EXPORT_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_RENDER_FLAG_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
@@ -9073,16 +11643,16 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_mged_scroll_impl}")
     file(READ "${_mged_scroll_impl}" _mged_scroll_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_scale_from_bsg]])
+	[[#[ \t]*include[ \t]*[<"]ged/view\.h]]
+	[[ged_view_context_scale_get]])
       string(REGEX MATCH "${_token}" _mged_scroll_adapter_hit
 	"${_mged_scroll_contents}")
       if(NOT _mged_scroll_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/mged/scroll.c must route slider view-scale reads through rt/view_legacy_bsg.h")
+	  "src/mged/scroll.c must route slider view-scale reads through GED view-context facades")
       endif()
     endforeach()
-    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
+    string(REGEX MATCH [[(#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h|(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)|(^|[^A-Za-z0-9_])rt_view_context_scale_from_bsg[ \t\r\n]*\(|(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\()]]
       _mged_scroll_direct_hit "${_mged_scroll_contents}")
     if(_mged_scroll_direct_hit)
       _brlobol_pivot_guard_fail(
@@ -9094,23 +11664,30 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_mged_axes_impl}")
     file(READ "${_mged_axes_impl}" _mged_axes_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_info_from_bsg]]
-	[[rt_view_model2view_from_bsg]]
-	[[rt_view_rotation_from_bsg]]
+	[[#[ \t]*include[ \t]*[<"]ged/view\.h]]
+	[[ged_view_context_info_get]]
+	[[ged_view_context_model2view_get]]
+	[[ged_view_context_rotation_get]]
 	[[struct[ \t\r\n]+rt_view_axes_state]])
       string(REGEX MATCH "${_token}" _mged_axes_adapter_hit
 	"${_mged_axes_contents}")
       if(NOT _mged_axes_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/mged/axes.c must route axes overlay view reads through rt/view_legacy_bsg.h")
+	  "src/mged/axes.c must route axes overlay view reads through GED view-context facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[(^|[^A-Za-z0-9_])gv_size([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_rotation([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
-	[[struct[ \t\r\n]+bsg_axes]])
+	[[struct[ \t\r\n]+bsg_axes]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_info_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_rotation_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_info_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_from_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _mged_axes_direct_hit
 	"${_mged_axes_contents}")
       if(_mged_axes_direct_hit)
@@ -9124,21 +11701,28 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_mged_rect_impl}")
     file(READ "${_mged_rect_impl}" _mged_rect_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_center_from_bsg]]
-	[[rt_view_model2view_from_bsg]]
-	[[rt_view_view2model_from_bsg]])
+	[[#[ \t]*include[ \t]*[<"]ged/view\.h]]
+	[[ged_view_context_center_get]]
+	[[ged_view_context_model2view_get]]
+	[[ged_view_context_view2model_get]])
       string(REGEX MATCH "${_token}" _mged_rect_adapter_hit
 	"${_mged_rect_contents}")
       if(NOT _mged_rect_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/mged/rect.c must route rectangle zoom view reads through rt/view_legacy_bsg.h")
+	  "src/mged/rect.c must route rectangle zoom view reads through GED view-context facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]])
+	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _mged_rect_direct_hit
 	"${_mged_rect_contents}")
       if(_mged_rect_direct_hit)
@@ -9152,16 +11736,16 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_mged_edpipe_impl}")
     file(READ "${_mged_edpipe_impl}" _mged_edpipe_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_view2model_from_bsg]])
+	[[#[ \t]*include[ \t]*[<"]ged/view\.h]]
+	[[ged_view_context_view2model_get]])
       string(REGEX MATCH "${_token}" _mged_edpipe_adapter_hit
 	"${_mged_edpipe_contents}")
       if(NOT _mged_edpipe_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/mged/edpipe.c must route pipe pick direction reads through rt/view_legacy_bsg.h")
+	  "src/mged/edpipe.c must route pipe pick direction reads through GED view-context facades")
       endif()
     endforeach()
-    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
+    string(REGEX MATCH [[(#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h|(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)|(^|[^A-Za-z0-9_])rt_view_context_view2model_from_bsg[ \t\r\n]*\(|(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg[ \t\r\n]*\()]]
       _mged_edpipe_direct_hit "${_mged_edpipe_contents}")
     if(_mged_edpipe_direct_hit)
       _brlobol_pivot_guard_fail(
@@ -9173,16 +11757,17 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_mged_usepen_impl}")
     file(READ "${_mged_usepen_impl}" _mged_usepen_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_center_from_bsg]])
+	[[#[ \t]*include[ \t]*[<"]ged/view\.h]]
+	[[ged_view_context_center_get]]
+	[[ged_view_context_refresh_drawn_count_get]])
       string(REGEX MATCH "${_token}" _mged_usepen_adapter_hit
 	"${_mged_usepen_contents}")
       if(NOT _mged_usepen_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/mged/usepen.c must route view-centered transform reads through rt/view_legacy_bsg.h")
+	  "src/mged/usepen.c must route highlight and view-centered transform reads through GED view-context facades")
       endif()
     endforeach()
-    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
+    string(REGEX MATCH [[(#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h|(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)|(^|[^A-Za-z0-9_])rt_view_context_center_from_bsg[ \t\r\n]*\(|(^|[^A-Za-z0-9_])rt_view_context_refresh_drawn_count_from_bsg[ \t\r\n]*\(|(^|[^A-Za-z0-9_])rt_view_center_from_bsg[ \t\r\n]*\(|(^|[^A-Za-z0-9_])rt_view_refresh_drawn_count_from_bsg[ \t\r\n]*\()]]
       _mged_usepen_direct_hit "${_mged_usepen_contents}")
     if(_mged_usepen_direct_hit)
       _brlobol_pivot_guard_fail(
@@ -9194,21 +11779,38 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_mged_setup_impl}")
     file(READ "${_mged_setup_impl}" _mged_setup_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_center_from_bsg]])
+	[[#[ \t]*include[ \t]*[<"]ged/view\.h]]
+	[[ged_view_context_create_with_set]]
+	[[ged_view_context_update_callback_set]]
+	[[ged_view_context_center_get]]
+	[[ged_view_set_context_add]])
       string(REGEX MATCH "${_token}" _mged_setup_adapter_hit
 	"${_mged_setup_contents}")
       if(NOT _mged_setup_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/mged/setup.c must route initial view-center reads through rt/view_legacy_bsg.h")
+	  "src/mged/setup.c must route initial view lifecycle and center reads through GED view-context facades")
       endif()
     endforeach()
-    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
-      _mged_setup_direct_hit "${_mged_setup_contents}")
-    if(_mged_setup_direct_hit)
-      _brlobol_pivot_guard_fail(
-	"src/mged/setup.c reintroduced direct BSG initial view-center reads: ${_mged_setup_direct_hit}")
-    endif()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[BU_(GET|ALLOC)[ \t\r\n]*\([^;\n]*struct[ \t\r\n]+bsg_view]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_init_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_init_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_update_callback_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_update_callback_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_create_with_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_set_add_view_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _mged_setup_direct_hit
+	"${_mged_setup_contents}")
+      if(_mged_setup_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/setup.c reintroduced direct BSG initial view lifecycle/read access: ${_mged_setup_direct_hit}")
+      endif()
+    endforeach()
   endif()
 
   set(_mged_chgview_status_impl "${BRLCAD_SOURCE_DIR}/src/mged/chgview.c")
@@ -9216,13 +11818,13 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_mged_chgview_status_impl}" _mged_chgview_status_contents)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_scale_from_bsg]]
-	[[rt_view_initial_scale_from_bsg]]
-	[[rt_view_absolute_scale_from_bsg]]
-	[[rt_view_center_from_bsg]]
-	[[rt_view_rotation_from_bsg]]
-	[[rt_view_model2view_from_bsg]]
-	[[rt_view_view2model_from_bsg]])
+	[[rt_view_context_scale_from_bsg]]
+	[[rt_view_context_initial_scale_from_bsg]]
+	[[rt_view_context_absolute_scale_from_bsg]]
+	[[rt_view_context_center_from_bsg]]
+	[[rt_view_context_rotation_from_bsg]]
+	[[rt_view_context_model2view_from_bsg]]
+	[[rt_view_context_view2model_from_bsg]])
       string(REGEX MATCH "${_token}" _mged_chgview_status_adapter_hit
 	"${_mged_chgview_status_contents}")
       if(NOT _mged_chgview_status_adapter_hit)
@@ -9232,7 +11834,14 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endforeach()
     foreach(_pat
 	[[bu_vls_printf[^;]*gv_scale]]
-	[[mged_bn_mat_print[^\n;]*gv_(center|rotation|model2view|view2model)]])
+	[[mged_bn_mat_print[^\n;]*gv_(center|rotation|model2view|view2model)]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_initial_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_absolute_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _mged_chgview_status_direct_hit
 	"${_mged_chgview_status_contents}")
       if(_mged_chgview_status_direct_hit)
@@ -9246,25 +11855,38 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_mged_grid_impl}")
     file(READ "${_mged_grid_impl}" _mged_grid_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_info_from_bsg]]
-	[[rt_view_scale_from_bsg]]
-	[[rt_view_center_from_bsg]]
-	[[rt_view_center_vec_set_bsg]]
-	[[rt_view_model2view_from_bsg]]
-	[[rt_view_view2model_from_bsg]])
+	[[#[ \t]*include[ \t]*[<"]ged/view\.h]]
+	[[ged_view_context_info_get]]
+	[[ged_view_context_scale_get]]
+	[[ged_view_context_center_get]]
+	[[ged_view_context_center_vec_set]]
+	[[ged_view_context_model2view_get]]
+	[[ged_view_context_view2model_get]])
       string(REGEX MATCH "${_token}" _mged_grid_adapter_hit
 	"${_mged_grid_contents}")
       if(NOT _mged_grid_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/mged/grid.c must route grid view read snapshots through rt/view_legacy_bsg.h")
+	  "src/mged/grid.c must route grid view read snapshots through GED view-context facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[(^|[^A-Za-z0-9_])gv_size([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_info_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_vec_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_info_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_vec_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg[ \t\r\n]*\(]]
 	[[MAT_DELTAS_GET_NEG[ \t\r\n]*\([^;]*gv_center]]
 	[[MAT_DELTAS_VEC_NEG[ \t\r\n]*\([^;]*gv_center]])
       string(REGEX MATCH "${_pat}" _mged_grid_direct_hit
@@ -9312,11 +11934,11 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_mged_adc_impl}")
     file(READ "${_mged_adc_impl}" _mged_adc_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[#[ \t]*include[ \t]*[<"]ged/view\.h]]
 	[[struct[ \t\r\n]+rt_view_adc_state]]
-	[[rt_view_scale_from_bsg]]
-	[[rt_view_model2view_from_bsg]]
-	[[rt_view_view2model_from_bsg]]
+	[[ged_view_context_scale_get]]
+	[[ged_view_context_model2view_get]]
+	[[ged_view_context_view2model_get]]
 	[[rt_view_adc_model_to_view]]
 	[[rt_view_adc_grid_to_view]]
 	[[rt_view_adc_view_to_grid]]
@@ -9325,13 +11947,20 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	"${_mged_adc_contents}")
       if(NOT _mged_adc_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/mged/adc.c must route ADC view scale/matrix reads through rt/view_legacy_bsg.h")
+	  "src/mged/adc.c must route ADC view scale/matrix reads through GED view-context facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg[ \t\r\n]*\(]]
 	[[struct[ \t\r\n]+bsg_adc_state]]
 	[[(^|[^A-Za-z0-9_])rt_view_adc_from_bsg([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])rt_view_adc_set_bsg([^A-Za-z0-9_]|$)]]
@@ -9390,27 +12019,40 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_mged_set_impl}")
     file(READ "${_mged_set_impl}" _mged_set_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_scale_from_bsg]]
-	[[rt_view_center_from_bsg]]
-	[[rt_view_model2view_from_bsg]]
-	[[rt_view_perspective_set_bsg]]
-	[[rt_view_coord_set_bsg]]
-	[[rt_view_rotate_about_set_bsg]])
+	[[#[ \t]*include[ \t]*[<"]ged/view\.h]]
+	[[ged_view_context_scale_get]]
+	[[ged_view_context_center_get]]
+	[[ged_view_context_model2view_get]]
+	[[ged_view_context_perspective_set]]
+	[[ged_view_context_coord_set]]
+	[[ged_view_context_rotate_about_set]])
       string(REGEX MATCH "${_token}" _mged_set_adapter_hit
 	"${_mged_set_contents}")
       if(NOT _mged_set_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/mged/set.c must route view reads/simple setters through rt/view_legacy_bsg.h")
+	  "src/mged/set.c must route view reads/simple setters through GED view-context facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
 	[[vs_gvp->[ \t\r\n]*gv_perspective[ \t\r\n]*=]]
 	[[vs_gvp->[ \t\r\n]*gv_coord[ \t\r\n]*=]]
-	[[vs_gvp->[ \t\r\n]*gv_rotate_about[ \t\r\n]*=]])
+	[[vs_gvp->[ \t\r\n]*gv_rotate_about[ \t\r\n]*=]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_perspective_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_coord_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_rotate_about_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_perspective_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_coord_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotate_about_set_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _mged_set_direct_hit
 	"${_mged_set_contents}")
       if(_mged_set_direct_hit)
@@ -9425,16 +12067,24 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_mged_chgview_edit_reads_impl}" _mged_chgview_edit_reads_contents)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_scale_from_bsg]]
-	[[rt_view_center_from_bsg]]
-	[[rt_view_rotation_from_bsg]]
-	[[rt_view_scale_set_bsg]]
-	[[rt_view_initial_scale_set_bsg]]
-	[[rt_view_absolute_scale_set_bsg]]
-	[[rt_view_unit_conversion_set_bsg]]
-	[[rt_view_center_vec_set_bsg]]
-	[[rt_view_rotation_set_bsg]]
-	[[rt_view_view2model_from_bsg]])
+	[[rt_view_context_scale_from_bsg]]
+	[[rt_view_context_center_from_bsg]]
+	[[rt_view_context_rotation_from_bsg]]
+	[[rt_view_context_scale_set_bsg]]
+	[[rt_view_context_initial_scale_from_bsg]]
+	[[rt_view_context_initial_scale_set_bsg]]
+	[[rt_view_context_absolute_scale_from_bsg]]
+	[[rt_view_context_absolute_scale_set_bsg]]
+	[[rt_view_context_unit_conversion_set_bsg]]
+	[[rt_view_context_center_vec_set_bsg]]
+	[[rt_view_context_rotation_set_bsg]]
+	[[rt_view_context_model2view_from_bsg]]
+	[[rt_view_context_view2model_from_bsg]]
+	[[rt_view_context_knobs_reset_bsg]]
+	[[rt_view_context_knobs_cmd_process_bsg]]
+	[[rt_view_context_knobs_translate_bsg]]
+	[[rt_view_context_knobs_rotate_bsg]]
+	[[rt_view_context_lod_policy_from_bsg]])
       string(REGEX MATCH "${_token}" _mged_chgview_edit_reads_adapter_hit
 	"${_mged_chgview_edit_reads_contents}")
       if(NOT _mged_chgview_edit_reads_adapter_hit)
@@ -9443,9 +12093,9 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       endif()
     endforeach()
     foreach(_token
-	[[rt_view_coord_from_bsg]]
-	[[rt_view_coord_set_bsg]]
-	[[rt_view_rotate_about_from_bsg]])
+	[[rt_view_context_coord_from_bsg]]
+	[[rt_view_context_coord_set_bsg]]
+	[[rt_view_context_rotate_about_from_bsg]])
       string(REGEX MATCH "${_token}" _mged_chgview_coord_adapter_hit
 	"${_mged_chgview_edit_reads_contents}")
       if(NOT _mged_chgview_coord_adapter_hit)
@@ -9478,7 +12128,28 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_(local2base|base2local)[ \t\r\n]*=]]
 	[[MAT_COPY[ \t\r\n]*\([^\n,]*view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_rotation[^;]*vs_current_view->[ \t\r\n]*vr_rot_mat]]
 	[[MAT_COPY[ \t\r\n]*\([^\n,]*view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_center[^;]*vs_current_view->[ \t\r\n]*vr_tvc_mat]]
-	[[view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_scale[ \t\r\n]*=[^\n;]*vs_current_view->[ \t\r\n]*vr_scale]])
+	[[view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_scale[ \t\r\n]*=[^\n;]*vs_current_view->[ \t\r\n]*vr_scale]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_initial_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_initial_scale_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_absolute_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_absolute_scale_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_unit_conversion_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_vec_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_coord_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_coord_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotate_about_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_knobs_reset_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_knobs_cmd_process_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_knobs_translate_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_knobs_rotate_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_lod_policy_from_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _mged_chgview_edit_reads_direct_hit
 	"${_mged_chgview_edit_reads_contents}")
       if(_mged_chgview_edit_reads_direct_hit)
@@ -9492,25 +12163,41 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_mged_dm_generic_event_impl}")
     file(READ "${_mged_dm_generic_event_impl}" _mged_dm_generic_event_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_scale_from_bsg]]
-	[[rt_view_center_from_bsg]]
-	[[rt_view_model2view_from_bsg]]
-	[[rt_view_view2model_from_bsg]]
-	[[rt_view_zclip_set_bsg]])
+	[[#[ \t]*include[ \t]*[<"]ged/view\.h]]
+	[[ged_view_context_scale_get]]
+	[[ged_view_context_center_get]]
+	[[ged_view_context_model2view_get]]
+	[[ged_view_context_view2model_get]]
+	[[ged_view_context_refresh_request]]
+	[[ged_view_context_zclip_set]]
+	[[ged_view_context_lod_policy_get]]
+	[[ged_view_context_display_manager_set]])
       string(REGEX MATCH "${_token}" _mged_dm_generic_event_adapter_hit
 	"${_mged_dm_generic_event_contents}")
       if(NOT _mged_dm_generic_event_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/mged/dm-generic.c must route mouse/ADC input view reads through rt/view_legacy_bsg.h")
+	  "src/mged/dm-generic.c must route mouse/ADC input view reads through GED view-context facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])bsg_view_set_zclip([^A-Za-z0-9_]|$)]])
+	[[(^|[^A-Za-z0-9_])bsg_view_set_zclip([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_refresh_request_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_zclip_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_refresh_request_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_zclip_set_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _mged_dm_generic_event_direct_hit
 	"${_mged_dm_generic_event_contents}")
       if(_mged_dm_generic_event_direct_hit)
@@ -9524,21 +12211,28 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_mged_doevent_impl}")
     file(READ "${_mged_doevent_impl}" _mged_doevent_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_scale_from_bsg]]
-	[[rt_view_center_from_bsg]]
-	[[rt_view_view2model_from_bsg]])
+	[[#[ \t]*include[ \t]*[<"]ged/view\.h]]
+	[[ged_view_context_scale_get]]
+	[[ged_view_context_center_get]]
+	[[ged_view_context_view2model_get]])
       string(REGEX MATCH "${_token}" _mged_doevent_adapter_hit
 	"${_mged_doevent_contents}")
       if(NOT _mged_doevent_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/mged/doevent.c must route motion-event view reads through rt/view_legacy_bsg.h")
+	  "src/mged/doevent.c must route motion-event view reads through GED view-context facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]])
+	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _mged_doevent_direct_hit
 	"${_mged_doevent_contents}")
       if(_mged_doevent_direct_hit)
@@ -9553,13 +12247,17 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_mged_main_view_reads_impl}" _mged_main_view_reads_contents)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_scale_from_bsg]]
-	[[rt_view_model2view_from_bsg]]
-	[[rt_view_update_bsg]]
-	[[rt_view_zclip_set_bsg]]
-	[[rt_view_adc_state_from_bsg]]
-	[[rt_view_adc_state_set_bsg]]
-	[[rt_view_grid_state_set_bsg]])
+	[[rt_view_context_scale_from_bsg]]
+	[[rt_view_context_model2view_from_bsg]]
+	[[rt_view_context_update_bsg]]
+	[[rt_view_context_zclip_set_bsg]]
+	[[rt_view_context_refresh_request_bsg]]
+	[[rt_view_context_refresh_dirty_from_bsg]]
+	[[rt_view_context_refresh_consume_bsg]]
+	[[rt_view_context_refresh_complete_bsg]]
+	[[rt_view_context_adc_state_from_bsg]]
+	[[rt_view_context_adc_state_set_bsg]]
+	[[rt_view_context_grid_state_set_bsg]])
       string(REGEX MATCH "${_token}" _mged_main_view_reads_adapter_hit
 	"${_mged_main_view_reads_contents}")
       if(NOT _mged_main_view_reads_adapter_hit)
@@ -9577,7 +12275,18 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[struct[ \t\r\n]+bsg_grid_state]]
 	[[(^|[^A-Za-z0-9_])rt_view_grid_set_bsg([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_view_(adc|grid)_(get|set)([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])bsg_view_set_zclip([^A-Za-z0-9_]|$)]])
+	[[(^|[^A-Za-z0-9_])bsg_view_set_zclip([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_update_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_zclip_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_refresh_request_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_refresh_dirty_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_refresh_consume_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_refresh_complete_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_adc_state_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_adc_state_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_grid_state_set_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _mged_main_view_reads_direct_hit
 	"${_mged_main_view_reads_contents}")
       if(_mged_main_view_reads_direct_hit)
@@ -9592,12 +12301,12 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_mged_dozoom_view_reads_impl}" _mged_dozoom_view_reads_contents)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_perspective_from_bsg]]
-	[[rt_view_perspective_set_bsg]]
-	[[rt_view_eye_pos_from_bsg]]
-	[[rt_view_model2view_from_bsg]]
-	[[rt_view_pmat_from_bsg]]
-	[[rt_view_pmat_set_bsg]])
+	[[rt_view_context_perspective_from_bsg]]
+	[[rt_view_context_perspective_set_bsg]]
+	[[rt_view_context_eye_pos_from_bsg]]
+	[[rt_view_context_model2view_from_bsg]]
+	[[rt_view_context_pmat_from_bsg]]
+	[[rt_view_context_pmat_set_bsg]])
       string(REGEX MATCH "${_token}" _mged_dozoom_view_reads_adapter_hit
 	"${_mged_dozoom_view_reads_contents}")
       if(NOT _mged_dozoom_view_reads_adapter_hit)
@@ -9621,33 +12330,60 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	  "src/mged/dozoom.c reintroduced direct BSG perspective/eye/model-to-view/projection-matrix access: ${_mged_dozoom_view_reads_direct_hit}")
       endif()
     endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])rt_view_perspective_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_perspective_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_eye_pos_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_pmat_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_pmat_set_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _mged_dozoom_view_reads_typed_hit
+	"${_mged_dozoom_view_reads_contents}")
+      if(_mged_dozoom_view_reads_typed_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/mged/dozoom.c reintroduced typed perspective/eye/model-to-view/projection-matrix access: ${_mged_dozoom_view_reads_typed_hit}")
+      endif()
+    endforeach()
   endif()
 
   set(_mged_buttons_view_save_impl "${BRLCAD_SOURCE_DIR}/src/mged/buttons.c")
   if(EXISTS "${_mged_buttons_view_save_impl}")
     file(READ "${_mged_buttons_view_save_impl}" _mged_buttons_view_save_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_scale_from_bsg]]
-	[[rt_view_rotation_from_bsg]]
-	[[rt_view_center_from_bsg]]
-	[[rt_view_scale_set_bsg]]
-	[[rt_view_rotation_set_bsg]]
-	[[rt_view_center_vec_set_bsg]])
+	[[#[ \t]*include[ \t]*[<"]ged/view\.h]]
+	[[ged_view_context_scale_get]]
+	[[ged_view_context_rotation_get]]
+	[[ged_view_context_center_get]]
+	[[ged_view_context_scale_set]]
+	[[ged_view_context_rotation_set]]
+	[[ged_view_context_center_vec_set]])
       string(REGEX MATCH "${_token}" _mged_buttons_view_save_adapter_hit
 	"${_mged_buttons_view_save_contents}")
       if(NOT _mged_buttons_view_save_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/mged/buttons.c must route saved-view snapshots through rt/view_legacy_bsg.h")
+	  "src/mged/buttons.c must route saved-view snapshots through GED view-context facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[sav_vscale[ \t]*=[^;\n]*gv_scale]]
 	[[MAT_COPY[ \t\r\n]*\([ \t\r\n]*sav_viewrot[^;]*gv_rotation]]
 	[[MAT_COPY[ \t\r\n]*\([ \t\r\n]*sav_toviewcenter[^;]*gv_center]]
 	[[view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_scale[ \t\r\n]*=[^\n;]*sav_vscale]]
 	[[MAT_COPY[ \t\r\n]*\([^\n,]*view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_rotation[^;]*sav_viewrot]]
-	[[MAT_COPY[ \t\r\n]*\([^\n,]*view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_center[^;]*sav_toviewcenter]])
+	[[MAT_COPY[ \t\r\n]*\([^\n,]*view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_center[^;]*sav_toviewcenter]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_rotation_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_rotation_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_vec_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_vec_set_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _mged_buttons_view_save_direct_hit
 	"${_mged_buttons_view_save_contents}")
       if(_mged_buttons_view_save_direct_hit)
@@ -9661,24 +12397,38 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_mged_rtif_view_reads_impl}")
     file(READ "${_mged_rtif_view_reads_impl}" _mged_rtif_view_reads_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_scale_set_bsg]]
-	[[rt_view_rotation_set_bsg]]
-	[[rt_view_center_vec_set_bsg]]
-	[[rt_view_view2model_from_bsg]])
+	[[#[ \t]*include[ \t]*[<"]ged/view\.h]]
+	[[ged_view_context_scale_set]]
+	[[ged_view_context_rotation_set]]
+	[[ged_view_context_center_vec_set]]
+	[[ged_view_context_view2model_get]]
+	[[ged_view_context_display_manager_set]])
       string(REGEX MATCH "${_token}" _mged_rtif_view_reads_adapter_hit
 	"${_mged_rtif_view_reads_contents}")
       if(NOT _mged_rtif_view_reads_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/mged/rtif.c must route RT command view access through rt/view_legacy_bsg.h")
+	  "src/mged/rtif.c must route RT command view access through GED view-context facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_scale[ \t\r\n]*=]]
 	[[MAT_COPY[ \t\r\n]*\([^\n,]*view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_rotation]]
 	[[MAT_IDN[ \t\r\n]*\([^\n;]*view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_rotation]]
 	[[MAT_DELTAS_VEC_NEG[ \t\r\n]*\([^;]*view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_center]]
-	[[MAT4X3PNT[^\n;]*gv_view2model]])
+	[[MAT4X3PNT[^\n;]*gv_view2model]]
+	[[(^|[^A-Za-z0-9_])struct[ \t\r\n]+bsg_view([^A-Za-z0-9_]|$)]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_display_manager_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_rotation_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_vec_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_display_manager_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_vec_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _mged_rtif_view_reads_direct_hit
 	"${_mged_rtif_view_reads_contents}")
       if(_mged_rtif_view_reads_direct_hit)
@@ -9692,18 +12442,20 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_mged_edsol_abs_tran_impl}")
     file(READ "${_mged_edsol_abs_tran_impl}" _mged_edsol_abs_tran_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_scale_from_bsg]]
-	[[rt_view_model2view_from_bsg]]
-	[[rt_view_view2model_from_bsg]])
+	[[#[ \t]*include[ \t]*[<"]ged/view\.h]]
+	[[ged_view_context_scale_get]]
+	[[ged_view_context_model2view_get]]
+	[[ged_view_context_view2model_get]])
       string(REGEX MATCH "${_token}" _mged_edsol_abs_tran_adapter_hit
 	"${_mged_edsol_abs_tran_contents}")
       if(NOT _mged_edsol_abs_tran_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/mged/edsol.c must route absolute translation bookkeeping reads through rt/view_legacy_bsg.h")
+	  "src/mged/edsol.c must route edit view snapshot reads through GED view-context facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[#[ \t]*include[ \t]*[<"]bsg/(appearance|draw_source)\.h]]
 	[[inv_Viewscale[ \t]*=[^\n;]*/[^\n;]*gv_scale]]
 	[[MAT4X3PNT[ \t\r\n]*\([ \t\r\n]*model_pos[^;]*gv_view2model]]
 	[[MAT4X3PNT[ \t\r\n]*\([ \t\r\n]*ea_view_pos[^;]*gv_model2view]]
@@ -9716,7 +12468,13 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[MAT4X3PNT[ \t\r\n]*\([ \t\r\n]*start_pt[^;]*gv_view2model]]
 	[[MAT4X3VEC[ \t\r\n]*\([ \t\r\n]*dir[^;]*gv_view2model[^;]*tmp]]
 	[[view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_model2view]]
-	[[view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_view2model]])
+	[[view_state->[ \t\r\n]*vs_gvp->[ \t\r\n]*gv_view2model]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _mged_edsol_abs_tran_direct_hit
 	"${_mged_edsol_abs_tran_contents}")
       if(_mged_edsol_abs_tran_direct_hit)
@@ -9730,26 +12488,39 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_align_view_reads_impl}")
     file(READ "${_libged_align_view_reads_impl}" _libged_align_view_reads_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_center_from_bsg]]
-	[[rt_view_view2model_from_bsg]]
-	[[rt_view_view2model_set_bsg]]
-	[[rt_view_aet_from_bsg]]
-	[[rt_view_aet_set_bsg]])
+	[[ged_view_context_center_get]]
+	[[ged_view_context_view2model_get]]
+	[[ged_view_context_view2model_set]]
+	[[ged_view_context_aet_get]]
+	[[ged_view_context_aet_set]]
+	[[ged_view_context_update]])
       string(REGEX MATCH "${_token}" _libged_align_view_reads_adapter_hit
 	"${_libged_align_view_reads_contents}")
       if(NOT _libged_align_view_reads_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/align.c must route center/eye/AET reads through rt/view_legacy_bsg.h")
+	  "src/libged/view/align.c must route center/eye/AET reads and refresh through GED view-context facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[MAT4X3PNT[^\n;]*gv_center]]
 	[[MAT4X3PNT[^\n;]*gv_view2model]]
 	[[MAT_DELTAS_VEC_NEG[^\n;]*gv_view2model]]
 	[[gv_aet[ \t]*\[]]
 	[[VSET[^\n;]*gv_aet]]
-	[[bsg_mat_aet[ \t\r\n]*\(]])
+	[[bsg_mat_aet[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_aet_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_aet_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_update_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_view2model_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_aet_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_aet_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_update_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_align_view_reads_direct_hit
 	"${_libged_align_view_reads_contents}")
       if(_libged_align_view_reads_direct_hit)
@@ -9763,24 +12534,25 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_vutil_view_reads_impl}")
     file(READ "${_libged_vutil_view_reads_impl}" _libged_vutil_view_reads_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_rotation_from_bsg]]
-	[[rt_view_model2view_from_bsg]]
-	[[rt_view_view2model_from_bsg]]
-	[[rt_view_center_from_bsg]]
-	[[rt_view_inverse_size_from_bsg]]
-	[[rt_view_keypoint_from_bsg]]
-	[[rt_view_rotate_about_from_bsg]]
-	[[rt_view_center_vec_set_bsg]]
-	[[rt_view_rotation_set_bsg]])
+	[[ged_view_context_rotation_get]]
+	[[ged_view_context_model2view_get]]
+	[[ged_view_context_view2model_get]]
+	[[ged_view_context_center_get]]
+	[[ged_view_context_inverse_size_get]]
+	[[ged_view_context_keypoint_get]]
+	[[ged_view_context_rotate_about_get]]
+	[[ged_view_context_center_vec_set]]
+	[[ged_view_context_rotation_set]]
+	[[ged_view_context_update]])
       string(REGEX MATCH "${_token}" _libged_vutil_view_reads_adapter_hit
 	"${_libged_vutil_view_reads_contents}")
       if(NOT _libged_vutil_view_reads_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/vutil.c must route rotation/translation helper view reads through rt/view_legacy_bsg.h")
+	  "src/libged/vutil.c must route rotation/translation helper view reads and refresh through GED view-context facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[bn_mat_inv[ \t\r\n]*\([^;]*gv_rotation]]
 	[[bn_mat_mul[ \t\r\n]*\([^;]*gv_rotation]]
 	[[bn_mat_mul2[ \t\r\n]*\([^;]*gv_rotation]]
@@ -9791,7 +12563,27 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[MAT_COPY[^\n;]*gv_rotation]]
 	[[(^|[^A-Za-z0-9_])gv_isize([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_keypoint([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])gv_rotate_about([^A-Za-z0-9_]|$)]])
+	[[(^|[^A-Za-z0-9_])gv_rotate_about([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_inverse_size_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_keypoint_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotate_about_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_inverse_size_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_keypoint_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_rotate_about_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_rotation_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_vec_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_vec_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_rotation_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_update_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_update_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_vutil_view_reads_direct_hit
 	"${_libged_vutil_view_reads_contents}")
       if(_libged_vutil_view_reads_direct_hit)
@@ -9802,14 +12594,11 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   endif()
 
   foreach(_rel
-      src/libged/zoom/zoom.c
       src/libged/eye_pos/eye_pos.c
       src/libged/view/ypr.c
       src/libged/view/size.c
       src/libged/view/qvrot.c
       src/libged/view/quat.c
-      src/libged/view/lookat.c
-      src/libged/rect/rect.c
       src/libged/orient/orient.c
       src/libged/perspective/perspective.c
       src/libged/pmat/pmat.c
@@ -9819,7 +12608,6 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       src/libged/view/center.cpp
       src/libged/view/align.c
       src/libged/view/aet.c
-      src/libged/scale/scale.c
       src/libged/setview/setview.c)
     set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
     if(NOT EXISTS "${_file}")
@@ -9829,16 +12617,15 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endif()
     file(READ "${_file}" _libged_view_update_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_update_bsg]])
+	[[ged_view_context_update]])
       string(REGEX MATCH "${_token}" _libged_view_update_token_hit
 	"${_libged_view_update_contents}")
       if(NOT _libged_view_update_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "${_rel} must route derived-view refresh through rt/view_legacy_bsg.h token ${_token}")
+	  "${_rel} must route derived-view refresh through opaque RT/GED view-context token ${_token}")
       endif()
     endforeach()
-    string(REGEX MATCH [[(^|[^A-Za-z0-9_])bsg_update([^A-Za-z0-9_]|$)]]
+    string(REGEX MATCH [[((^|[^A-Za-z0-9_])bsg_update([^A-Za-z0-9_]|$)|(^|[^A-Za-z0-9_])rt_view[A-Za-z0-9_]*update_bsg[ \t\r\n]*\()]]
       _libged_view_update_direct_hit "${_libged_view_update_contents}")
     if(_libged_view_update_direct_hit)
       _brlobol_pivot_guard_fail(
@@ -9850,20 +12637,26 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_autoview_impl}")
     file(READ "${_libged_autoview_impl}" _libged_autoview_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[RT_VIEW_AUTOVIEW_SCALE_DEFAULT]]
-	[[rt_view_autoview_bsg]]
-	[[rt_view_autoview_bounds_bsg]])
+	[[ged_view_context_autoview]]
+	[[ged_view_context_autoview_bounds]])
       string(REGEX MATCH "${_token}" _libged_autoview_token_hit
 	"${_libged_autoview_contents}")
       if(NOT _libged_autoview_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/autoview2.cpp must route autoview behavior through rt/view_legacy_bsg.h token ${_token}")
+	  "src/libged/view/autoview2.cpp must route autoview behavior through GED view-context facade token ${_token}")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/util\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/view_set\.h]]
+	[[struct[ \t]+bsg_view]]
+	[[\(struct[ \t]+bsg_view[ \t]*\*[ \t]*\)[ \t]*ged_view_(active|find)_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_autoview_bsg([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_autoview_bounds_bsg([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_autoview_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_autoview_bounds_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])BSG_AUTOVIEW_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_autoview([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_autoview_bounds([^A-Za-z0-9_]|$)]])
@@ -9880,83 +12673,194 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_isize_impl}")
     file(READ "${_libged_isize_impl}" _libged_isize_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_inverse_size_from_bsg]])
+	[[ged_view_context_inverse_size_get]])
       string(REGEX MATCH "${_token}" _libged_isize_adapter_hit
 	"${_libged_isize_contents}")
       if(NOT _libged_isize_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/isize/isize.c must route inverse view-size reads through rt/view_legacy_bsg.h")
+	  "src/libged/isize/isize.c must route inverse view-size reads through ged_view_context_inverse_size_get")
       endif()
     endforeach()
-    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_isize([^A-Za-z0-9_]|$)]]
-      _libged_isize_direct_hit "${_libged_isize_contents}")
-    if(_libged_isize_direct_hit)
-      _brlobol_pivot_guard_fail(
-	"src/libged/isize/isize.c reintroduced direct BSG inverse view-size reads: ${_libged_isize_direct_hit}")
-    endif()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])gv_isize([^A-Za-z0-9_]|$)]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_inverse_size_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_inverse_size_from_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_isize_direct_hit
+	"${_libged_isize_contents}")
+      if(_libged_isize_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/isize/isize.c reintroduced direct BSG inverse view-size reads: ${_libged_isize_direct_hit}")
+      endif()
+    endforeach()
   endif()
 
   set(_libged_keypoint_impl "${BRLCAD_SOURCE_DIR}/src/libged/keypoint/keypoint.c")
   if(EXISTS "${_libged_keypoint_impl}")
     file(READ "${_libged_keypoint_impl}" _libged_keypoint_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_keypoint_from_bsg]]
-	[[rt_view_keypoint_set_bsg]])
+	[[ged_view_context_keypoint_get]]
+	[[ged_view_context_keypoint_set]])
       string(REGEX MATCH "${_token}" _libged_keypoint_adapter_hit
 	"${_libged_keypoint_contents}")
       if(NOT _libged_keypoint_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/keypoint/keypoint.c must route keypoint get/set through rt/view_legacy_bsg.h")
+	  "src/libged/keypoint/keypoint.c must route keypoint get/set through GED view-context facades")
       endif()
     endforeach()
-    string(REGEX MATCH [[(^|[^A-Za-z0-9_])gv_keypoint([^A-Za-z0-9_]|$)]]
-      _libged_keypoint_direct_hit "${_libged_keypoint_contents}")
-    if(_libged_keypoint_direct_hit)
-      _brlobol_pivot_guard_fail(
-	"src/libged/keypoint/keypoint.c reintroduced direct BSG keypoint access: ${_libged_keypoint_direct_hit}")
-    endif()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])gv_keypoint([^A-Za-z0-9_]|$)]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_keypoint_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_keypoint_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_keypoint_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_keypoint_set_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_keypoint_direct_hit
+	"${_libged_keypoint_contents}")
+      if(_libged_keypoint_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/keypoint/keypoint.c reintroduced direct BSG keypoint access: ${_libged_keypoint_direct_hit}")
+      endif()
+    endforeach()
   endif()
 
   set(_libged_rotate_about_impl "${BRLCAD_SOURCE_DIR}/src/libged/rot/rotate_about.c")
   if(EXISTS "${_libged_rotate_about_impl}")
     file(READ "${_libged_rotate_about_impl}" _libged_rotate_about_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_rotate_about_from_bsg]]
-	[[rt_view_rotate_about_set_bsg]])
+	[[ged_view_context_rotate_about_get]]
+	[[ged_view_context_rotate_about_set]])
       string(REGEX MATCH "${_token}" _libged_rotate_about_adapter_hit
 	"${_libged_rotate_about_contents}")
       if(NOT _libged_rotate_about_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/rot/rotate_about.c must route rotate-about get/set through rt/view_legacy_bsg.h")
+	  "src/libged/rot/rotate_about.c must route rotate-about get/set through GED view-context facades")
       endif()
     endforeach()
-    string(REGEX MATCH [[gedp->[ \t\r\n]*ged_gvp->[ \t\r\n]*gv_rotate_about]]
-      _libged_rotate_about_direct_hit "${_libged_rotate_about_contents}")
-    if(_libged_rotate_about_direct_hit)
-      _brlobol_pivot_guard_fail(
-	"src/libged/rot/rotate_about.c reintroduced direct BSG rotate-about access: ${_libged_rotate_about_direct_hit}")
-    endif()
+    foreach(_pat
+	[[gedp->[ \t\r\n]*ged_gvp->[ \t\r\n]*gv_rotate_about]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotate_about_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotate_about_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_rotate_about_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_rotate_about_set_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_rotate_about_direct_hit
+	"${_libged_rotate_about_contents}")
+      if(_libged_rotate_about_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/rot/rotate_about.c reintroduced direct BSG rotate-about access: ${_libged_rotate_about_direct_hit}")
+      endif()
+    endforeach()
   endif()
+
+  foreach(_rel
+      src/libged/arot/arot.c
+      src/libged/orient/orient.c
+      src/libged/keypoint/keypoint.c
+      src/libged/isize/isize.c
+      src/libged/model2view/model2view.c
+      src/libged/model2view_lu/model2view_lu.c
+      src/libged/m2v_point/m2v_point.c
+      src/libged/v2m_point/v2m_point.c
+      src/libged/zoom/zoom.c
+      src/libged/rmat/rmat.c
+      src/libged/rot_point/rot_point.c
+      src/libged/view2model_lu/view2model_lu.c
+      src/libged/view2model_vec/view2model_vec.c
+      src/libged/view2model/view2model.c
+      src/libged/view2grid_lu/view2grid_lu.c
+      src/libged/grid2view_lu/grid2view_lu.c
+      src/libged/grid2model_lu/grid2model_lu.c
+      src/libged/model2grid_lu/model2grid_lu.c
+      src/libged/get_eyemodel/get_eyemodel.c
+      src/libged/rot/rotate_about.c
+      src/libged/scale/scale.c
+      src/libged/pmodel2view/pmodel2view.c
+      src/libged/pmat/pmat.c
+      src/libged/perspective/perspective.c
+      src/libged/setview/setview.c
+      src/libged/view/ypr.c
+      src/libged/view/qvrot.c
+      src/libged/view/quat.c
+      src/libged/eye_pos/eye_pos.c
+      src/libged/view/aet.c
+      src/libged/view/viewdir.c
+      src/libged/view/size.c
+      src/libged/view/eye.c
+      src/libged/view/center.cpp
+      src/libged/view/lookat.c
+      src/libged/view/align.c
+      src/libged/vutil.c)
+    set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
+    if(NOT EXISTS "${_file}")
+      _brlobol_pivot_guard_fail(
+	"${_rel} is required for migrated GED small view-command context checks")
+      continue()
+    endif()
+    file(READ "${_file}" _libged_small_view_cmd_contents)
+    foreach(_pat
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_update_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_coord_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_info_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_keypoint_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_keypoint_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_inverse_size_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_pmodel2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_pmat_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_pmat_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_perspective_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_perspective_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_orientation_quat_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotate_about_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotate_about_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_aet_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_aet_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_size_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_vec_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_eye_pos_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_eye_pos_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_set_bsg[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_small_view_cmd_direct_hit
+	"${_libged_small_view_cmd_contents}")
+      if(_libged_small_view_cmd_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} reintroduced typed BSG access in the migrated small GED view-command batch: ${_libged_small_view_cmd_direct_hit}")
+      endif()
+    endforeach()
+  endforeach()
 
   set(_libged_open_impl "${BRLCAD_SOURCE_DIR}/src/libged/open/open.cpp")
   if(EXISTS "${_libged_open_impl}")
     file(READ "${_libged_open_impl}" _libged_open_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_unit_conversion_set_bsg]])
+	[[ged_view_context_unit_conversion_set]])
       string(REGEX MATCH "${_token}" _libged_open_unit_adapter_hit
 	"${_libged_open_contents}")
       if(NOT _libged_open_unit_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/open/open.cpp must route database unit setup through rt/view_legacy_bsg.h")
+	  "src/libged/open/open.cpp must route database unit setup through GED view-context facade ${_token}")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
 	[[gedp->[ \t\r\n]*ged_gvp->[ \t\r\n]*gv_base2local[ \t\r\n]*=]]
-	[[gedp->[ \t\r\n]*ged_gvp->[ \t\r\n]*gv_local2base[ \t\r\n]*=]])
+	[[gedp->[ \t\r\n]*ged_gvp->[ \t\r\n]*gv_local2base[ \t\r\n]*=]]
+	[[(^|[^A-Za-z0-9_])rt_view_unit_conversion_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_unit_conversion_set_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_open_unit_direct_hit
 	"${_libged_open_contents}")
       if(_libged_open_unit_direct_hit)
@@ -9970,43 +12874,61 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_view_knob_impl}")
     file(READ "${_libged_view_knob_impl}" _libged_view_knob_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_keypoint_from_bsg]]
-	[[rt_view_absolute_scale_from_bsg]]
-	[[rt_view_unit_conversion_set_bsg]])
+	[[#[ \t]*include[ \t]*[<"]rt/view\.h]]
+	[[struct[ \t\r\n]+rt_view_knob_values]]
+	[[ged_view_context_knob_values_get]]
+	[[ged_view_context_unit_conversion_set]]
+	[[ged_view_context_coord_get]]
+	[[ged_view_context_knobs_reset]]
+	[[RT_VIEW_KNOBS_RATE]]
+	[[ged_view_context_knobs_calibrate]]
+	[[ged_view_context_knobs_cmd_process]]
+	[[ged_view_context_knobs_translate]]
+	[[ged_view_context_keypoint_get]]
+	[[ged_view_context_knobs_rotate]]
+	[[ged_view_context_knobs_update_rate_flags]])
       string(REGEX MATCH "${_token}" _libged_view_knob_adapter_hit
 	"${_libged_view_knob_contents}")
       if(NOT _libged_view_knob_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/knob.c must route keypoint-origin rotation reads through rt/view_legacy_bsg.h")
+	  "src/libged/view/knob.c must route knob view-state access through GED view-context facade token ${_token}")
       endif()
     endforeach()
-    string(REGEX MATCH [[gv_coord[ \t]*==[ \t]*'m']]
-      _libged_view_knob_coord_direct_hit "${_libged_view_knob_contents}")
-    if(_libged_view_knob_coord_direct_hit)
-      _brlobol_pivot_guard_fail(
-	"src/libged/view/knob.c reintroduced direct BSG coord default reads: ${_libged_view_knob_coord_direct_hit}")
-    endif()
-    string(REGEX MATCH [[bsg_knobs_rot[^\n;]*gv_keypoint]]
-      _libged_view_knob_direct_hit "${_libged_view_knob_contents}")
-    if(_libged_view_knob_direct_hit)
-      _brlobol_pivot_guard_fail(
-	"src/libged/view/knob.c reintroduced direct BSG keypoint-origin rotation reads: ${_libged_view_knob_direct_hit}")
-    endif()
-    string(REGEX MATCH [[bu_vls_printf[^\n;]*gv_a_scale]]
-      _libged_view_knob_a_scale_direct_hit "${_libged_view_knob_contents}")
-    if(_libged_view_knob_a_scale_direct_hit)
-      _brlobol_pivot_guard_fail(
-	"src/libged/view/knob.c reintroduced direct BSG absolute-scale query output: ${_libged_view_knob_a_scale_direct_hit}")
-    endif()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[->[ \t\r\n]*k[ \t\r\n]*\.]]
+	[[gv_coord[ \t]*==[ \t]*'m']]
+	[[bsg_knobs_rot[^\n;]*gv_keypoint]]
+	[[bu_vls_printf[^\n;]*gv_a_scale]]
+	[[(^|[^A-Za-z0-9_])RT_VIEW_KNOBS_(ALL|RATE|ABS)_BSG([^A-Za-z0-9_]|$)]]
 	[[v->[ \t\r\n]*gv_base2local[ \t\r\n]*=]]
-	[[v->[ \t\r\n]*gv_local2base[ \t\r\n]*=]])
+	[[v->[ \t\r\n]*gv_local2base[ \t\r\n]*=]]
+	[[(^|[^A-Za-z0-9_])rt_view_keypoint_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_coord_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_keypoint_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_coord_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_absolute_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_unit_conversion_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_unit_conversion_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_knobs_reset_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_knobs_cmd_process_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_knobs_translate_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_knobs_rotate_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_knobs_update_rate_flags_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_knob_values_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_knobs_reset_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_knobs_calibrate_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_knobs_cmd_process_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_knobs_translate_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_knobs_rotate_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_knobs_update_rate_flags_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_view_knob_unit_direct_hit
 	"${_libged_view_knob_contents}")
       if(_libged_view_knob_unit_direct_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/knob.c reintroduced direct BSG database unit setup: ${_libged_view_knob_unit_direct_hit}")
+	  "src/libged/view/knob.c reintroduced direct BSG knob view-state access: ${_libged_view_knob_unit_direct_hit}")
       endif()
     endforeach()
   endif()
@@ -10015,24 +12937,40 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_preview_view_reads_impl}")
     file(READ "${_libged_preview_view_reads_impl}" _libged_preview_view_reads_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_rotation_from_bsg]]
-	[[rt_view_rotation_set_bsg]]
-	[[rt_view_center_vec_set_bsg]]
-	[[rt_view_update_bsg]]
-	[[rt_view_view2model_from_bsg]])
+	[[ged_view_context_rotation_get]]
+	[[ged_view_context_rotation_set]]
+	[[ged_view_context_center_vec_set]]
+	[[ged_view_context_update]]
+	[[ged_view_context_view2model_get]]
+	[[ged_draw_view_context_feature_remove]]
+	[[ged_draw_view_context_lines_replace]])
       string(REGEX MATCH "${_token}" _libged_preview_view_reads_adapter_hit
 	"${_libged_preview_view_reads_contents}")
       if(NOT _libged_preview_view_reads_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/draw/preview.cpp must route preview camera view access through rt/view_legacy_bsg.h")
+	  "src/libged/draw/preview.cpp must route preview camera view access through GED view-context facade ${_token}")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
 	[[MAT_COPY[ \t\r\n]*\([^\n,]*gedp->[ \t\r\n]*ged_gvp->[ \t\r\n]*gv_rotation]]
 	[[MAT_DELTAS_VEC_NEG[ \t\r\n]*\([^\n,]*gedp->[ \t\r\n]*ged_gvp->[ \t\r\n]*gv_center]]
 	[[(^|[^A-Za-z0-9_])bsg_update([^A-Za-z0-9_]|$)]]
-	[[MAT4X3PNT[^\n;]*gv_view2model]])
+	[[MAT4X3PNT[^\n;]*gv_view2model]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_vec_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_update_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_update_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_rotation_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_rotation_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_vec_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_feature_remove[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_lines_replace[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_preview_view_reads_direct_hit
 	"${_libged_preview_view_reads_contents}")
       if(_libged_preview_view_reads_direct_hit)
@@ -10046,25 +12984,37 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_loadview_impl}")
     file(READ "${_libged_loadview_impl}" _libged_loadview_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_size_set_bsg]]
-	[[rt_view_rotation_set_bsg]]
-	[[rt_view_center_vec_set_bsg]]
-	[[rt_view_update_bsg]]
-	[[rt_view_perspective_set_bsg]])
+	[[ged_view_context_size_set]]
+	[[ged_view_context_rotation_set]]
+	[[ged_view_context_center_vec_set]]
+	[[ged_view_context_update]]
+	[[ged_view_context_perspective_set]])
       string(REGEX MATCH "${_token}" _libged_loadview_adapter_hit
 	"${_libged_loadview_contents}")
       if(NOT _libged_loadview_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/draw/loadview.cpp must route view restore writes through rt/view_legacy_bsg.h")
+	  "src/libged/draw/loadview.cpp must route view restore writes through opaque RT/GED view-context token ${_token}")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
 	[[(^|[^A-Za-z0-9_])bsg_view_set_size([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_view_set_rotation([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_view_set_center_vec([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_update([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])bsg_view_set_perspective([^A-Za-z0-9_]|$)]])
+	[[(^|[^A-Za-z0-9_])bsg_view_set_perspective([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_size_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_size_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_vec_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_rotation_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_center_vec_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_update_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_update_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_perspective_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_perspective_set_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_loadview_direct_hit
 	"${_libged_loadview_contents}")
       if(_libged_loadview_direct_hit)
@@ -10078,18 +13028,23 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_mirror_impl}")
     file(READ "${_libged_mirror_impl}" _libged_mirror_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_update_bsg]])
+	[[ged_view_active_ctx]]
+	[[ged_view_context_update]])
       string(REGEX MATCH "${_token}" _libged_mirror_token_hit
 	"${_libged_mirror_contents}")
       if(NOT _libged_mirror_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/mirror/mirror.c must route post-draw view refresh through rt/view_legacy_bsg.h token ${_token}")
+	  "src/libged/mirror/mirror.c must route post-draw view refresh through opaque GED view-context token ${_token}")
       endif()
     endforeach()
     foreach(_pat
 	[[#[ \t]*include[ \t]*[<"]bsg/util\.h]]
-	[[(^|[^A-Za-z0-9_])bsg_update([^A-Za-z0-9_]|$)]])
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])bsg_update([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_update_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_update_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_mirror_direct_hit
 	"${_libged_mirror_contents}")
       if(_libged_mirror_direct_hit)
@@ -10103,10 +13058,12 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libtclcad_view_draw_impl}")
     file(READ "${_libtclcad_view_draw_impl}" _libtclcad_view_draw_contents)
     foreach(_token
+	[[go_draw[ \t\r\n]*\([ \t\r\n]*void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_model2view_from_bsg]]
-	[[rt_view_perspective_from_bsg]]
-	[[rt_view_pmat_from_bsg]]
+	[[rt_view_context_model2view_from_bsg]]
+	[[rt_view_context_perspective_from_bsg]]
+	[[rt_view_context_pmat_from_bsg]]
+	[[void[ \t\r\n]*\*[ \t\r\n]*view_ctx[ \t\r\n]*=[ \t\r\n]*BU_PTBL_GET[ \t\r\n]*\([ \t\r\n]*views]]
 	[[ged_draw_foreach_view_db_object_record]])
       string(REGEX MATCH "${_token}" _libtclcad_view_draw_adapter_hit
 	"${_libtclcad_view_draw_contents}")
@@ -10116,13 +13073,18 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       endif()
     endforeach()
     foreach(_pat
+	[[go_draw[ \t\r\n]*\([ \t\r\n]*struct[ \t\r\n]+bsg_view]]
 	[[#[ \t]*include[ \t]*[<"]bsg/(export|render)\.h]]
 	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])gv_perspective([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_perspective_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_pmat_from_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])bsg_export_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_EXPORT_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_RENDER_FLAG_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])struct[ \t]+bsg_export_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[struct[ \t\r\n]+bsg_view]]
 	[[dm_loadpmatrix[^\n;]*gv_pmat]])
       string(REGEX MATCH "${_pat}" _libtclcad_view_draw_direct_hit
 	"${_libtclcad_view_draw_contents}")
@@ -10137,15 +13099,45 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libtclcad_view_refresh_impl}")
     file(READ "${_libtclcad_view_refresh_impl}" _libtclcad_view_refresh_contents)
     foreach(_token
+	[[to_refresh_view[ \t\r\n]*\([ \t\r\n]*void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_local2base_from_bsg]]
-	[[rt_view_base2local_from_bsg]]
-	[[rt_view_unit_conversion_set_bsg]])
+	[[rt_view_context_interactive_rect_state_from_bsg]]
+	[[rt_view_context_local2base_from_bsg]]
+	[[rt_view_context_base2local_from_bsg]]
+	[[rt_view_context_unit_conversion_set_bsg]]
+	[[rt_view_context_refresh_enabled_from_bsg]]
+	[[rt_view_context_refresh_suppressed_from_bsg]]
+	[[rt_view_context_refresh_request_bsg]]
+	[[rt_view_context_refresh_consume_bsg]]
+		[[rt_view_context_refresh_complete_bsg]]
+		[[rt_view_context_refresh_enabled_set_bsg]]
+		[[rt_view_context_refresh_suppress_begin_bsg]]
+		[[rt_view_context_refresh_suppress_end_bsg]]
+		[[tclcad_view_data_from_view_ctx]]
+		[[go_draw[ \t\r\n]*\([ \t\r\n]*draw_view_ctx[ \t\r\n]*\)]]
+		[[dm_draw_objs[ \t\r\n]*\([ \t\r\n]*draw_view_ctx[ \t\r\n]*\)]])
       string(REGEX MATCH "${_token}" _libtclcad_view_refresh_adapter_hit
 	"${_libtclcad_view_refresh_contents}")
       if(NOT _libtclcad_view_refresh_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libtclcad/view/refresh.c must route unit-conversion stash reads through rt/view_legacy_bsg.h")
+	  "src/libtclcad/view/refresh.c must route refresh state through rt/view_legacy_bsg.h context token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[to_refresh_view[ \t\r\n]*\([ \t\r\n]*struct[ \t\r\n]+bsg_view]]
+	[[(^|[^A-Za-z0-9_])rt_view_interactive_rect_state_from_bsg[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])rt_view_local2base_from_bsg[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])rt_view_base2local_from_bsg[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])rt_view_refresh_[A-Za-z0-9_]*[ \t\r\n]*\(]]
+		[[struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*gdvp[ \t\r\n]*=[ \t\r\n]*\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*draw_view_ctx]]
+		[[gdvp->[ \t\r\n]*u_data]]
+		[[go_draw[ \t\r\n]*\([ \t\r\n]*gdvp[ \t\r\n]*\)]]
+		[[dm_draw_objs[ \t\r\n]*\([ \t\r\n]*gdvp[ \t\r\n]*\)]])
+      string(REGEX MATCH "${_pat}" _libtclcad_view_refresh_typed_hit
+	"${_libtclcad_view_refresh_contents}")
+      if(_libtclcad_view_refresh_typed_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libtclcad/view/refresh.c reintroduced typed BSG refresh adapter access: ${_libtclcad_view_refresh_typed_hit}")
       endif()
     endforeach()
     string(REGEX MATCH [[double[^\n;]*=[^\n;]*gdvp->[ \t\r\n]*gv_(local2base|base2local)]]
@@ -10160,25 +13152,172 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       _brlobol_pivot_guard_fail(
 	"src/libtclcad/view/refresh.c reintroduced direct BSG unit-conversion writes: ${_libtclcad_view_refresh_write_hit}")
     endif()
+    string(REGEX MATCH [[(^|[^A-Za-z0-9_])rt_view_unit_conversion_set_bsg[ \t\r\n]*\(]]
+      _libtclcad_view_refresh_typed_write_hit "${_libtclcad_view_refresh_contents}")
+    if(_libtclcad_view_refresh_typed_write_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libtclcad/view/refresh.c reintroduced typed BSG unit-conversion writes: ${_libtclcad_view_refresh_typed_write_hit}")
+    endif()
   endif()
 
-  set(_libtclcad_wrapper_impl "${BRLCAD_SOURCE_DIR}/src/libtclcad/wrapper.c")
-  if(EXISTS "${_libtclcad_wrapper_impl}")
-    file(READ "${_libtclcad_wrapper_impl}" _libtclcad_wrapper_contents)
+  set(_libtclcad_view_api_header "${BRLCAD_SOURCE_DIR}/src/libtclcad/view/view.h")
+  if(EXISTS "${_libtclcad_view_api_header}")
+		    file(READ "${_libtclcad_view_api_header}" _libtclcad_view_api_header_contents)
+		    foreach(_token
+			[[to_data_arrows_func[ \t\r\n]*\(]]
+			[[to_data_axes_func[ \t\r\n]*\(]]
+			[[to_data_labels_func[ \t\r\n]*\(]]
+			[[void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
+			[[to_axes[ \t\r\n]*\(]]
+			[[to_autoview_view[ \t\r\n]*\([ \t\r\n]*void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
+			[[go_draw[ \t\r\n]*\([ \t\r\n]*void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
+		[[to_refresh_view[ \t\r\n]*\([ \t\r\n]*void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
+		[[to_is_viewable[ \t\r\n]*\([ \t\r\n]*void[ \t\r\n]*\*[ \t\r\n]*view_ctx]])
+      string(REGEX MATCH "${_token}" _libtclcad_view_api_header_token_hit
+	"${_libtclcad_view_api_header_contents}")
+      if(NOT _libtclcad_view_api_header_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libtclcad/view/view.h must expose migrated draw/refresh/viewable helpers through opaque view_ctx signatures")
+      endif()
+		    endforeach()
+		    foreach(_pat
+			[[to_data_arrows_func[ \t\r\n]*\([ \t\r\n]*Tcl_Interp[ \t\r\n]*\*[ \t\r\n]*interp[ \t\r\n]*,[ \t\r\n]*struct[ \t\r\n]+ged[ \t\r\n]*\*[ \t\r\n]*gedp[ \t\r\n]*,[ \t\r\n]*struct[ \t\r\n]+bsg_view]]
+			[[to_data_axes_func[ \t\r\n]*\([ \t\r\n]*Tcl_Interp[ \t\r\n]*\*[ \t\r\n]*interp[ \t\r\n]*,[ \t\r\n]*struct[ \t\r\n]+ged[ \t\r\n]*\*[ \t\r\n]*gedp[ \t\r\n]*,[ \t\r\n]*struct[ \t\r\n]+bsg_view]]
+			[[to_data_labels_func[ \t\r\n]*\([ \t\r\n]*Tcl_Interp[ \t\r\n]*\*[ \t\r\n]*interp[ \t\r\n]*,[ \t\r\n]*struct[ \t\r\n]+ged[ \t\r\n]*\*[ \t\r\n]*gedp[ \t\r\n]*,[ \t\r\n]*struct[ \t\r\n]+bsg_view]]
+			[[to_axes[ \t\r\n]*\([ \t\r\n]*struct[ \t\r\n]+ged[ \t\r\n]*\*[ \t\r\n]*gedp[ \t\r\n]*,[ \t\r\n]*struct[ \t\r\n]+bsg_view]]
+			[[to_autoview_view[ \t\r\n]*\([ \t\r\n]*struct[ \t\r\n]+bsg_view]]
+			[[go_draw[ \t\r\n]*\([ \t\r\n]*struct[ \t\r\n]+bsg_view]]
+		[[to_refresh_view[ \t\r\n]*\([ \t\r\n]*struct[ \t\r\n]+bsg_view]]
+		[[to_is_viewable[ \t\r\n]*\([ \t\r\n]*struct[ \t\r\n]+bsg_view]])
+      string(REGEX MATCH "${_pat}" _libtclcad_view_api_header_direct_hit
+	"${_libtclcad_view_api_header_contents}")
+      if(_libtclcad_view_api_header_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libtclcad/view/view.h reintroduced typed BSG signatures for migrated draw/refresh/viewable helpers: ${_libtclcad_view_api_header_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libtclcad_view_util_impl "${BRLCAD_SOURCE_DIR}/src/libtclcad/view/util.c")
+  if(EXISTS "${_libtclcad_view_util_impl}")
+    file(READ "${_libtclcad_view_util_impl}" _libtclcad_view_util_contents)
     foreach(_token
+	[[to_is_viewable[ \t\r\n]*\([ \t\r\n]*void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
+	[[rt_view_context_display_manager_from_bsg]])
+      string(REGEX MATCH "${_token}" _libtclcad_view_util_token_hit
+	"${_libtclcad_view_util_contents}")
+      if(NOT _libtclcad_view_util_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libtclcad/view/util.c must route viewable checks through an opaque view_ctx and RT context display-manager helper")
+      endif()
+    endforeach()
+    string(REGEX MATCH [[to_is_viewable[ \t\r\n]*\([ \t\r\n]*struct[ \t\r\n]+bsg_view]]
+      _libtclcad_view_util_direct_hit "${_libtclcad_view_util_contents}")
+    if(_libtclcad_view_util_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libtclcad/view/util.c reintroduced typed BSG to_is_viewable signature: ${_libtclcad_view_util_direct_hit}")
+    endif()
+	  endif()
+
+	  set(_libtclcad_view_autoview_impl "${BRLCAD_SOURCE_DIR}/src/libtclcad/view/autoview.c")
+	  if(EXISTS "${_libtclcad_view_autoview_impl}")
+	    file(READ "${_libtclcad_view_autoview_impl}" _libtclcad_view_autoview_contents)
+	    foreach(_token
+			[[to_autoview_view[ \t\r\n]*\([ \t\r\n]*void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
+			[[tclcad_view_data_from_view_ctx]]
+			[[ged_view_active_ctx_set[ \t\r\n]*\([ \t\r\n]*tvd->[ \t\r\n]*gedp[ \t\r\n]*,[ \t\r\n]*view_ctx]]
+		[[to_refresh_view[ \t\r\n]*\([ \t\r\n]*view_ctx[ \t\r\n]*\)]]
+		[[view_ctx[ \t\r\n]*=[ \t\r\n]*ged_view_find_ctx]]
+		[[void[ \t\r\n]*\*[ \t\r\n]*view_ctx[ \t\r\n]*=[ \t\r\n]*BU_PTBL_GET[ \t\r\n]*\([ \t\r\n]*views]])
+	      string(REGEX MATCH "${_token}" _libtclcad_view_autoview_token_hit
+		"${_libtclcad_view_autoview_contents}")
+	      if(NOT _libtclcad_view_autoview_token_hit)
+		_brlobol_pivot_guard_fail(
+		  "src/libtclcad/view/autoview.c must keep the autoview helper and view-table traversal on opaque view_ctx values")
+	      endif()
+	    endforeach()
+	    foreach(_pat
+			[[to_autoview_view[ \t\r\n]*\([ \t\r\n]*struct[ \t\r\n]+bsg_view]]
+			[[struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*gdvp[ \t\r\n]*=[ \t\r\n]*\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*view_ctx]]
+			[[gdvp->[ \t\r\n]*u_data]]
+			[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_find_ctx]]
+		[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*BU_PTBL_GET[ \t\r\n]*\([ \t\r\n]*views]])
+	      string(REGEX MATCH "${_pat}" _libtclcad_view_autoview_direct_hit
+		"${_libtclcad_view_autoview_contents}")
+	      if(_libtclcad_view_autoview_direct_hit)
+		_brlobol_pivot_guard_fail(
+		  "src/libtclcad/view/autoview.c reintroduced typed BSG autoview helper or view lookup/traversal casts: ${_libtclcad_view_autoview_direct_hit}")
+	      endif()
+	    endforeach()
+	  endif()
+
+	  set(_libtclcad_view_lines_cmd "${BRLCAD_SOURCE_DIR}/src/libtclcad/view/lines.c")
+	  if(EXISTS "${_libtclcad_view_lines_cmd}")
+	    file(READ "${_libtclcad_view_lines_cmd}" _libtclcad_view_lines_cmd_contents)
+	    foreach(_token
+		[[void[ \t\r\n]*\*[ \t\r\n]*active_view_ctx[ \t\r\n]*=[ \t\r\n]*ged_view_active_ctx[ \t\r\n]*\([ \t\r\n]*gedp[ \t\r\n]*\)]]
+		[[ged_view_active_ctx_set[ \t\r\n]*\([ \t\r\n]*gedp[ \t\r\n]*,[ \t\r\n]*draw_view_ctx[ \t\r\n]*\)]]
+		[[ged_view_active_ctx_set[ \t\r\n]*\([ \t\r\n]*gedp[ \t\r\n]*,[ \t\r\n]*view_ctx[ \t\r\n]*\)]]
+		[[to_refresh_view[ \t\r\n]*\([ \t\r\n]*draw_view_ctx[ \t\r\n]*\)]]
+		[[to_refresh_view[ \t\r\n]*\([ \t\r\n]*view_ctx[ \t\r\n]*\)]])
+	      string(REGEX MATCH "${_token}" _libtclcad_view_lines_token_hit
+		"${_libtclcad_view_lines_cmd_contents}")
+	      if(NOT _libtclcad_view_lines_token_hit)
+		_brlobol_pivot_guard_fail(
+		  "src/libtclcad/view/lines.c must keep data-line active-view handoff and refresh on opaque view contexts")
+	      endif()
+	    endforeach()
+	    foreach(_pat
+		[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+		[[struct[ \t\r\n]+bsg_view]]
+		[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+		[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_find_ctx]]
+		[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*draw_view_ctx]])
+	      string(REGEX MATCH "${_pat}" _libtclcad_view_lines_direct_hit
+		"${_libtclcad_view_lines_cmd_contents}")
+	      if(_libtclcad_view_lines_direct_hit)
+		_brlobol_pivot_guard_fail(
+		  "src/libtclcad/view/lines.c reintroduced typed BSG data-line view handoff: ${_libtclcad_view_lines_direct_hit}")
+	      endif()
+	    endforeach()
+	  endif()
+
+	  set(_libtclcad_wrapper_impl "${BRLCAD_SOURCE_DIR}/src/libtclcad/wrapper.c")
+	  if(EXISTS "${_libtclcad_wrapper_impl}")
+	    file(READ "${_libtclcad_wrapper_impl}" _libtclcad_wrapper_contents)
+	    foreach(_token
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_dimensions_set_bsg]]
-	[[rt_view_perspective_from_bsg]]
-	[[rt_view_lod_policy_from_bsg]])
-      string(REGEX MATCH "${_token}" _libtclcad_wrapper_adapter_hit
-	"${_libtclcad_wrapper_contents}")
-      if(NOT _libtclcad_wrapper_adapter_hit)
+	[[rt_view_context_display_manager_from_bsg]]
+	[[rt_view_context_dimensions_set_bsg]]
+	[[rt_view_context_perspective_from_bsg]]
+		[[rt_view_context_lod_policy_from_bsg]]
+		[[to_is_viewable[ \t\r\n]*\([ \t\r\n]*view_ctx[ \t\r\n]*\)]]
+			[[tclcad_wrapper_sync_dm_dimensions[ \t\r\n]*\([ \t\r\n]*ged_view_active_ctx[ \t\r\n]*\([ \t\r\n]*gedp[ \t\r\n]*\)[ \t\r\n]*,[ \t\r\n]*view_ctx]]
+		[[view_ctx[ \t\r\n]*=[ \t\r\n]*ged_view_find_ctx]]
+			[[ged_view_active_ctx_set[ \t\r\n]*\([ \t\r\n]*gedp[ \t\r\n]*,[ \t\r\n]*view_ctx]]
+			[[tclcad_wrapper_sync_dm_dimensions[ \t\r\n]*\([ \t\r\n]*view_ctx[ \t\r\n]*,[ \t\r\n]*view_ctx]]
+			[[tclcad_view_data_from_view_ctx]]
+			[[to_refresh_view[ \t\r\n]*\([ \t\r\n]*view_ctx[ \t\r\n]*\)]])
+	      string(REGEX MATCH "${_token}" _libtclcad_wrapper_adapter_hit
+		"${_libtclcad_wrapper_contents}")
+	      if(NOT _libtclcad_wrapper_adapter_hit)
 	_brlobol_pivot_guard_fail(
 	  "src/libtclcad/wrapper.c must route perspective, dimensions, and zoom-refresh LoD policy access through rt/view_legacy_bsg.h")
       endif()
     endforeach()
     foreach(_pat
 	[[(^|[^A-Za-z0-9_])gv_perspective([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_perspective_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_lod_policy_from_bsg[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])tclcad_wrapper_sync_dm_dimensions[ \t\r\n]*\([ \t\r\n]*struct[ \t\r\n]+bsg_view]]
+		[[tclcad_wrapper_sync_dm_dimensions[ \t\r\n]*\([ \t\r\n]*\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx[ \t\r\n]*\(]]
+			[[tclcad_wrapper_sync_dm_dimensions[ \t\r\n]*\([ \t\r\n]*gdvp[ \t\r\n]*,[ \t\r\n]*gdvp]]
+			[[struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*gdvp[ \t\r\n]*=[ \t\r\n]*\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*view_ctx]]
+			[[gdvp->[ \t\r\n]*u_data]]
+			[[gdvp[ \t\r\n]*=[ \t\r\n]*\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_find_ctx]]
+		[[ged_refresh_clientdata[ \t\r\n]*=[ \t\r\n]*\([ \t\r\n]*void[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*gdvp]]
+		[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*BU_PTBL_GET[ \t\r\n]*\([ \t\r\n]*views]]
+		[[(^|[^A-Za-z0-9_])rt_view_dimensions_set_bsg[ \t\r\n]*\(]]
 	[[gedp->[ \t\r\n]*ged_gvp->[ \t\r\n]*gv_(width|height)[ \t\r\n]*=]]
 	[[gdvp->[ \t\r\n]*gv_(width|height)[ \t\r\n]*=]]
 	[[struct[ \t\r\n]+bsg_lod_source_policy_settings]]
@@ -10192,27 +13331,74 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endforeach()
   endif()
 
+  set(_libtclcad_fb_impl "${BRLCAD_SOURCE_DIR}/src/libtclcad/fb.c")
+  if(EXISTS "${_libtclcad_fb_impl}")
+    file(READ "${_libtclcad_fb_impl}" _libtclcad_fb_contents)
+	    foreach(_token
+		[[to_fbs_callback[ \t\r\n]*\([ \t\r\n]*void[ \t\r\n]*\*[ \t\r\n]*clientData]]
+		[[to_close_fbs[ \t\r\n]*\([ \t\r\n]*void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
+		[[to_open_fbs[ \t\r\n]*\([ \t\r\n]*void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
+		[[to_refresh_view[ \t\r\n]*\([ \t\r\n]*clientData[ \t\r\n]*\)]]
+		[[to_refresh_view[ \t\r\n]*\([ \t\r\n]*view_ctx[ \t\r\n]*\)]]
+		[[rt_view_context_display_manager_from_bsg]]
+		[[tclcad_view_data_from_view_ctx]]
+		[[void[ \t\r\n]*\*[ \t\r\n]*view_ctx[ \t\r\n]*=[ \t\r\n]*ged_view_find_ctx]])
+      string(REGEX MATCH "${_token}" _libtclcad_fb_token_hit
+	"${_libtclcad_fb_contents}")
+      if(NOT _libtclcad_fb_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libtclcad/fb.c must keep framebuffer callback refresh and display-manager lookup on opaque RT view-context helpers")
+      endif()
+    endforeach()
+	    string(REGEX MATCH [[struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*gdvp[ \t\r\n]*=[ \t\r\n]*\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*clientData]]
+	      _libtclcad_fb_callback_cast_hit "${_libtclcad_fb_contents}")
+	    if(_libtclcad_fb_callback_cast_hit)
+      _brlobol_pivot_guard_fail(
+		"src/libtclcad/fb.c reintroduced typed BSG cast in framebuffer refresh callback: ${_libtclcad_fb_callback_cast_hit}")
+	    endif()
+	    foreach(_pat
+		[[to_close_fbs[ \t\r\n]*\([ \t\r\n]*struct[ \t\r\n]+bsg_view]]
+		[[to_open_fbs[ \t\r\n]*\([ \t\r\n]*struct[ \t\r\n]+bsg_view]]
+		[[struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*gdvp[ \t\r\n]*=[ \t\r\n]*\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_find_ctx]]
+		[[gdvp->[ \t\r\n]*u_data]])
+	      string(REGEX MATCH "${_pat}" _libtclcad_fb_view_data_direct_hit
+		"${_libtclcad_fb_contents}")
+	      if(_libtclcad_fb_view_data_direct_hit)
+		_brlobol_pivot_guard_fail(
+		  "src/libtclcad/fb.c reintroduced typed BSG framebuffer view-data access: ${_libtclcad_fb_view_data_direct_hit}")
+	      endif()
+	    endforeach()
+	  endif()
+
   set(_libtclcad_view_axes_impl "${BRLCAD_SOURCE_DIR}/src/libtclcad/view/axes.c")
   if(EXISTS "${_libtclcad_view_axes_impl}")
     file(READ "${_libtclcad_view_axes_impl}" _libtclcad_view_axes_contents)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[#[ \t]*include[ \t]*[<"]\.\./\.\./libged/bsg_ged_draw_view_private\.h]]
-	[[rt_view_info_from_bsg]]
-	[[ged_draw_view_feature_exists]]
-	[[ged_draw_view_feature_visible_set]]
-	[[ged_draw_view_feature_style_get]]
-	[[ged_draw_view_line_color_set]]
-	[[ged_draw_view_line_width_set]]
-	[[ged_draw_view_feature_points_copy]]
-	[[ged_draw_view_feature_axes_centers_copy]]
-	[[ged_draw_view_tcl_axes_replace]]
-	[[ged_draw_view_feature_remove]]
+	[[#[ \t]*include[ \t]*[<"]ged/bsg_ged_draw\.h]]
+	[[to_axes[ \t\r\n]*\(]]
+	[[to_data_axes_func[ \t\r\n]*\(]]
+	[[void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
+	[[to_axes[ \t\r\n]*\(gedp,[ \t\r\n]*view_ctx]]
+	[[to_axes[ \t\r\n]*\(gedp,[ \t\r\n]*draw_view_ctx]]
+	[[to_data_axes_func[ \t\r\n]*\(interp,[ \t\r\n]*gedp,[ \t\r\n]*draw_view_ctx]]
+	[[to_data_axes_func[ \t\r\n]*\(current_top->[ \t\r\n]*to_interp,[ \t\r\n]*gedp,[ \t\r\n]*view_ctx]]
+	[[view_ctx[ \t\r\n]*=[ \t\r\n]*ged_view_find_ctx]]
+	[[rt_view_context_info_from_bsg]]
+	[[ged_draw_view_context_feature_exists]]
+	[[ged_draw_view_context_feature_visible_set]]
+	[[ged_draw_view_context_feature_style_get]]
+	[[ged_draw_view_context_line_color_set]]
+	[[ged_draw_view_context_line_width_set]]
+	[[ged_draw_view_context_feature_points_copy]]
+	[[ged_draw_view_context_feature_axes_centers_copy]]
+	[[ged_draw_view_context_tcl_axes_replace]]
+	[[ged_draw_view_context_feature_remove]]
 	[[struct[ \t\r\n]+rt_view_axes_state]]
-	[[rt_view_model_axes_state_from_bsg]]
-	[[rt_view_model_axes_state_set_bsg]]
-	[[rt_view_view_axes_state_from_bsg]]
-	[[rt_view_view_axes_state_set_bsg]])
+	[[rt_view_context_model_axes_state_from_bsg]]
+	[[rt_view_context_model_axes_state_set_bsg]]
+	[[rt_view_context_view_axes_state_from_bsg]]
+	[[rt_view_context_view_axes_state_set_bsg]])
       string(REGEX MATCH "${_token}" _libtclcad_view_axes_adapter_hit
 	"${_libtclcad_view_axes_contents}")
       if(NOT _libtclcad_view_axes_adapter_hit)
@@ -10221,15 +13407,30 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       endif()
     endforeach()
     foreach(_pat
+	[[to_data_axes_func[ \t\r\n]*\([ \t\r\n]*Tcl_Interp[ \t\r\n]*\*[ \t\r\n]*interp[ \t\r\n]*,[ \t\r\n]*struct[ \t\r\n]+ged[ \t\r\n]*\*[ \t\r\n]*gedp[ \t\r\n]*,[ \t\r\n]*struct[ \t\r\n]+bsg_view]]
+	[[to_axes[ \t\r\n]*\([ \t\r\n]*struct[ \t\r\n]+ged[ \t\r\n]*\*[ \t\r\n]*gedp[ \t\r\n]*,[ \t\r\n]*struct[ \t\r\n]+bsg_view]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_find_ctx]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*draw_view_ctx]]
+	[[(^|[^A-Za-z0-9_])gdvp([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_size([^A-Za-z0-9_]|$)]]
 	[[struct[ \t\r\n]+bsg_axes]]
+	[[(^|[^A-Za-z0-9_])rt_view_info_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_model_axes_state_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_model_axes_state_set_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])rt_view_model_axes_from_bsg([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])rt_view_model_axes_set_bsg([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_view_axes_state_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_view_axes_state_set_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])rt_view_view_axes_from_bsg([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])rt_view_view_axes_set_bsg([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_view_(model_axes|view_axes)_(get|set)([^A-Za-z0-9_]|$)]]
 	[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
 	[[#[ \t]*include[ \t]*[<"]\.\./bsg_move_helpers\.h]]
+	[[#[ \t]*include[ \t]*[<"]\.\./\.\./libged/bsg_ged_draw_view_private\.h]]
+	[[ged_draw_view_feature_(exists|visible_set|style_get|points_copy|axes_centers_copy|remove)[ \t\r\n]*\(]]
+	[[ged_draw_view_line_(color|width)_set[ \t\r\n]*\(]]
+	[[ged_draw_view_tcl_axes_replace[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])_bsg_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]])
@@ -10247,26 +13448,59 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_libtclcad_commands_impl}" _libtclcad_commands_contents)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[tclcad_view_data_init_bsg]]
-	[[rt_view_lod_policy_from_bsg]]
-	[[rt_view_lod_policy_apply_bsg]]
-	[[rt_view_dimensions_set_bsg]]
-	[[rt_view_screen_to_view_from_bsg]]
-	[[rt_view_center_from_bsg]]
-	[[rt_view_scale_from_bsg]]
-	[[rt_view_model2view_from_bsg]]
-	[[rt_view_view2model_from_bsg]]
-	[[rt_view_snap_lines_from_bsg]]
-	[[rt_view_prepare_tcl_snap_bsg]]
-	[[rt_view_center_linesnap_bsg]]
+	[[tclcad_view_data_init]]
+	[[rt_view_context_lod_policy_from_bsg]]
+	[[rt_view_context_lod_policy_apply_bsg]]
+	[[rt_view_context_display_manager_from_bsg]]
+	[[rt_view_context_dimensions_set_bsg]]
+	[[rt_view_context_screen_to_view_from_bsg]]
+	[[rt_view_context_center_from_bsg]]
+	[[rt_view_context_scale_from_bsg]]
+	[[rt_view_context_model2view_from_bsg]]
+	[[rt_view_context_view2model_from_bsg]]
+	[[rt_view_context_snap_lines_from_bsg]]
+	[[rt_view_context_prepare_tcl_snap_bsg]]
+	[[rt_view_context_center_linesnap_bsg]]
 	[[struct[ \t\r\n]+rt_view_grid_state]]
-	[[rt_view_grid_state_from_bsg]]
-	[[rt_view_local2base_from_bsg]]
-	[[rt_view_unit_conversion_set_bsg]]
-	[[rt_view_previous_mouse_from_bsg]]
-	[[rt_view_previous_mouse_set_bsg]]
-	[[rt_view_zclip_from_bsg]]
-	[[rt_view_zclip_set_bsg]])
+	[[rt_view_context_grid_state_from_bsg]]
+	[[rt_view_context_local2base_from_bsg]]
+	[[rt_view_context_unit_conversion_set_bsg]]
+	[[rt_view_context_previous_mouse_from_bsg]]
+	[[rt_view_context_previous_mouse_set_bsg]]
+	[[rt_view_context_coord_from_bsg]]
+	[[rt_view_context_coord_set_bsg]]
+	[[rt_view_context_display_manager_set_bsg]]
+	[[rt_view_context_name_set_bsg]]
+	[[rt_view_context_name_from_bsg]]
+	[[tclcad_commands_display_manager[ \t\r\n]*\([ \t\r\n]*const[ \t\r\n]+void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
+	[[tclcad_commands_view_name]]
+	[[tclcad_commands_view_name[ \t\r\n]*\([ \t\r\n]*const[ \t\r\n]+void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
+	[[rt_view_context_create_with_set_bsg]]
+	[[rt_view_set_context_add_bsg]]
+	[[rt_view_context_callbacks_set_bsg]]
+	[[tclcad_view_data_from_view_ctx]]
+	[[tclcad_view_polygon_mode_from_view_ctx]]
+	[[tclcad_view_polygon_mode_set]]
+	[[tclcad_view_polygon_state_from_view_ctx]]
+	[[tclcad_view_data_vZ_from_view_ctx]]
+	[[tclcad_view_data_vZ_set]]
+	[[tclcad_view_hide_from_view_ctx]]
+	[[tclcad_view_polygon_cflag_from_view_ctx]]
+	[[tclcad_view_polygon_cflag_clear]]
+	[[tclcad_view_data_bind_view_ctx]]
+	[[tclcad_view_data_unbind_view_ctx]]
+	[[rt_view_context_zclip_from_bsg]]
+	[[rt_view_context_zclip_set_bsg]]
+	[[void[ \t\r\n]*\*[ \t\r\n]*gdvp[ \t\r\n]*=[ \t\r\n]*ged_view_find_ctx[ \t\r\n]*\(]]
+	[[void[ \t\r\n]*\*[ \t\r\n]*gdvp[ \t\r\n]*=[ \t\r\n]*draw_view_ctx]]
+	[[gdvp[ \t\r\n]*=[ \t\r\n]*BU_PTBL_GET[ \t\r\n]*\(]]
+	[[to_data_move_func[ \t\r\n]*\([^;{}]*void[ \t\r\n]*\*[ \t\r\n]*gdvp]]
+	[[to_data_move_object_mode_func[ \t\r\n]*\([^;{}]*void[ \t\r\n]*\*[ \t\r\n]*gdvp]]
+	[[to_data_move_point_mode_func[ \t\r\n]*\([^;{}]*void[ \t\r\n]*\*[ \t\r\n]*gdvp]]
+	[[to_data_pick_func[ \t\r\n]*\([^;{}]*void[ \t\r\n]*\*[ \t\r\n]*gdvp]]
+	[[to_init_default_bindings[ \t\r\n]*\([ \t\r\n]*void[ \t\r\n]*\*[ \t\r\n]*gdvp]]
+	[[void[ \t\r\n]*\*[ \t\r\n]*new_view_ctx[ \t\r\n]*=]]
+	[[reuse_active_view]])
       string(REGEX MATCH "${_token}" _libtclcad_commands_adapter_hit
 	"${_libtclcad_commands_contents}")
       if(NOT _libtclcad_commands_adapter_hit)
@@ -10274,20 +13508,30 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	  "src/libtclcad/commands.c must route TclCAD LoD policy and command view/dimension access through rt/view_legacy_bsg.h")
       endif()
     endforeach()
-    foreach(_token
-	[[rt_view_coord_from_bsg]]
-	[[rt_view_coord_set_bsg]])
-      string(REGEX MATCH "${_token}" _libtclcad_commands_coord_adapter_hit
-	"${_libtclcad_commands_contents}")
-      if(NOT _libtclcad_commands_coord_adapter_hit)
-	_brlobol_pivot_guard_fail(
-	  "src/libtclcad/commands.c must route set_coord get/set through rt/view_legacy_bsg.h")
-      endif()
-    endforeach()
     foreach(_pat
 	[[struct[ \t\r\n]+bsg_lod_source_policy_settings]]
 	[[bsg_view_lod_source_policy_get]]
 	[[bsg_view_lod_source_policy_set]]
+	[[(^|[^A-Za-z0-9_])rt_view_lod_policy_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_lod_policy_apply_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_display_manager_set_bsg[ \t\r\n]*\(]]
+	[[struct[ \t\r\n]+bsg_view_set]]
+	[[(^|[^A-Za-z0-9_])rt_view_init_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_set_add_view_bsg[ \t\r\n]*\(]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[BU_ALLOC[ \t\r\n]*\([^;\n]*struct[ \t\r\n]+bsg_view]]
+	[[->[ \t\r\n]*callbacks]]
+	[[active_gdvp]]
+	[[new_gdvp]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_init_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])tclcad_commands_display_manager[ \t\r\n]*\([ \t\r\n]*const[ \t\r\n]+struct[ \t\r\n]+bsg_view]]
+	[[(^|[^A-Za-z0-9_])tclcad_commands_sync_dm_dimensions[ \t\r\n]*\([ \t\r\n]*struct[ \t\r\n]+bsg_view]]
+	[[tclcad_commands_sync_dm_dimensions[ \t\r\n]*\([ \t\r\n]*\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx[ \t\r\n]*\(]]
+	[[struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*gdvp]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*(ged_view_find_ctx|draw_view_ctx|BU_PTBL_GET)]]
+	[[to_data_(move|pick)[A-Za-z_]*_func[ \t\r\n]*\([^;{}]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*]]
+	[[to_init_default_bindings[ \t\r\n]*\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*]]
+	[[(^|[^A-Za-z0-9_])rt_view_dimensions_set_bsg[ \t\r\n]*\(]]
 	[[gedp->[ \t\r\n]*ged_gvp->[ \t\r\n]*gv_(width|height)[ \t\r\n]*=]]
 	[[gdvp->[ \t\r\n]*gv_(width|height|local2base|base2local)[ \t\r\n]*=]]
 	[[gdvp->[ \t\r\n]*gv_prevMouse(X|Y)]]
@@ -10296,13 +13540,40 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[(^|[^A-Za-z0-9_])bsg_view_center_linesnap([^A-Za-z0-9_]|$)]]
 	[[struct[ \t\r\n]+bsg_grid_state]]
 	[[(^|[^A-Za-z0-9_])rt_view_grid_from_bsg([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_grid_state_from_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])bsg_view_grid_get([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_view_(set_)?zclip([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_snap_lines_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_snap_lines_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_prepare_tcl_snap_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_linesnap_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_zclip_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_zclip_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_coord_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_coord_set_bsg[ \t\r\n]*\(]]
+	[[->[ \t\r\n]*gv_name]]
 	[[(^|[^A-Za-z0-9_])bsg_screen_to_view([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_data_tclcad_init([^A-Za-z0-9_]|$)]]
+	[[gdvp->[ \t\r\n]*u_data]]
+	[[data->[ \t\r\n]*gdvp->[ \t\r\n]*u_data]]
+	[[active_gdvp->[ \t\r\n]*u_data]]
+	[[new_gdvp->[ \t\r\n]*u_data]]
+	[[gdvp->[ \t\r\n]*gv_tcl]]
+	[[->[ \t\r\n]*gv_tcl[ \t\r\n]*=]]
+	[[tclcad_view_tcl_data_from_view_ctx[^\n;]*->[ \t\r\n]*gv_]]
+	[[gv_(polygon_mode|data_vZ|hide|data_polygons|sdata_polygons)]]
 	[[#[ \t]*include[ \t]*[<"]bsg/util\.h]]
 	[[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_screen_to_view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_previous_mouse_(from|set)_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_unit_conversion_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_local2base_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_base2local_from_bsg[ \t\r\n]*\(]]
 	[[gdvp->[ \t\r\n]*gv_coord[ \t\r\n]*=]]
 	[[bu_vls_printf[^\n;]*gv_coord]]
 	[[MAT4X3PNT[^\n;]*gdvp->gv_model2view]]
@@ -10312,20 +13583,154 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       if(_libtclcad_commands_bsg_policy_hit)
 	_brlobol_pivot_guard_fail(
 	  "src/libtclcad/commands.c reintroduced direct BSG LoD policy/view reads or dimension writes: ${_libtclcad_commands_bsg_policy_hit}")
+	  endif()
+	endforeach()
       endif()
-    endforeach()
-  endif()
 
-  set(_libtclcad_view_data_adapter "${BRLCAD_SOURCE_DIR}/src/libtclcad/view_data.c")
-  if(NOT EXISTS "${_libtclcad_view_data_adapter}")
-    _brlobol_pivot_guard_fail(
+      set(_libtclcad_private_header "${BRLCAD_SOURCE_DIR}/src/libtclcad/tclcad_private.h")
+      if(NOT EXISTS "${_libtclcad_private_header}")
+	_brlobol_pivot_guard_fail(
+	  "src/libtclcad/tclcad_private.h is required for TclCAD private state aliases")
+      else()
+	file(READ "${_libtclcad_private_header}" _libtclcad_private_header_contents)
+	foreach(_token
+	    [[typedef[ \t\r\n]+struct[ \t\r\n]+tclcad_view_state]]
+	    [[typedef[ \t\r\n]+struct[ \t\r\n]+tclcad_polygon_state]]
+	    [[typedef[ \t\r\n]+struct[ \t\r\n]+tclcad_data_label_state]]
+	    [[gv_data_arrows]]
+	    [[gv_data_axes]]
+	    [[gv_prim_labels]]
+	    [[tclcad_view_state[ \t\r\n]+tcl_data]]
+	    [[tclcad_view_state[ \t\r\n]*\*[ \t\r\n]*tclcad_view_tcl_data_from_view_ctx]]
+	    [[tclcad_polygon_state[ \t\r\n]*\*[ \t\r\n]*tclcad_view_polygon_state_from_view_ctx]]
+	    [[tclcad_view_polygon_mode_from_view_ctx]]
+	    [[tclcad_view_polygon_mode_set]]
+	    [[tclcad_view_data_vZ_from_view_ctx]]
+	    [[tclcad_view_data_vZ_set]]
+	    [[tclcad_view_hide_from_view_ctx]]
+	    [[tclcad_view_polygon_cflag_from_view_ctx]]
+	    [[tclcad_view_polygon_cflag_clear]]
+	    [[tclcad_view_label_state_from_view_ctx]]
+	    [[tclcad_view_prim_labels_state_from_view_ctx]]
+	    [[tclcad_view_prim_labels_state_set]])
+	  string(REGEX MATCH "${_token}" _libtclcad_private_state_token_hit
+	    "${_libtclcad_private_header_contents}")
+	  if(NOT _libtclcad_private_state_token_hit)
+	    _brlobol_pivot_guard_fail(
+	      "src/libtclcad/tclcad_private.h must expose TclCAD-local state aliases for transitional Tcl data token ${_token}")
+	  endif()
+	endforeach()
+	foreach(_pat
+	    [[#[ \t]*include[ \t]*[<"]bsg/tcl_data\.h]]
+	    [[struct[ \t\r\n]+bsg_data_tclcad]]
+	    [[(^|[^A-Za-z0-9_])bsg_data_polygon_state([^A-Za-z0-9_]|$)]]
+	    [[struct[ \t\r\n]+bsg_data_label_state]])
+	  string(REGEX MATCH "${_pat}" _libtclcad_private_bsg_tcl_data_hit
+	    "${_libtclcad_private_header_contents}")
+	  if(_libtclcad_private_bsg_tcl_data_hit)
+	    _brlobol_pivot_guard_fail(
+	      "src/libtclcad/tclcad_private.h reintroduced BSG Tcl-data type exposure instead of TclCAD-private records: ${_libtclcad_private_bsg_tcl_data_hit}")
+	  endif()
+	endforeach()
+      endif()
+
+      foreach(_rel
+	  src/libtclcad/commands.c
+	  src/libtclcad/mouse.c
+	  src/libtclcad/polygons.c
+	  src/libtclcad/view/labels.c
+	  src/libtclcad/view_data.c)
+	set(_libtclcad_tcl_state_file "${BRLCAD_SOURCE_DIR}/${_rel}")
+	if(EXISTS "${_libtclcad_tcl_state_file}")
+	  file(READ "${_libtclcad_tcl_state_file}" _libtclcad_tcl_state_contents)
+	  set(_libtclcad_tcl_state_required_tokens)
+	  if("${_rel}" STREQUAL "src/libtclcad/polygons.c")
+	    list(APPEND _libtclcad_tcl_state_required_tokens
+	      [[tclcad_view_polygon_state_from_view_ctx]]
+	      [[tclcad_polygon_state]])
+	  elseif("${_rel}" STREQUAL "src/libtclcad/view/labels.c")
+	    list(APPEND _libtclcad_tcl_state_required_tokens
+	      [[tclcad_view_label_state_from_view_ctx]]
+	      [[tclcad_label_state]])
+	  elseif("${_rel}" STREQUAL "src/libtclcad/view_data.c")
+	    list(APPEND _libtclcad_tcl_state_required_tokens
+	      [[tclcad_view_state]])
+	  else()
+	    list(APPEND _libtclcad_tcl_state_required_tokens
+	      [[tclcad_polygon_state]])
+	  endif()
+	  foreach(_token IN LISTS _libtclcad_tcl_state_required_tokens)
+	    string(REGEX MATCH "${_token}" _libtclcad_tcl_state_token_hit
+	      "${_libtclcad_tcl_state_contents}")
+	    if(NOT _libtclcad_tcl_state_token_hit)
+	      _brlobol_pivot_guard_fail(
+		"${_rel} must use TclCAD-local state aliases for transitional Tcl data token ${_token}")
+	    endif()
+	  endforeach()
+	  if(NOT "${_rel}" STREQUAL "src/libtclcad/view_data.c")
+	    foreach(_pat
+		[[struct[ \t\r\n]+bsg_data_tclcad]]
+		[[(^|[^A-Za-z0-9_])bsg_data_polygon_state([^A-Za-z0-9_]|$)]]
+		[[struct[ \t\r\n]+bsg_data_label_state]])
+	      string(REGEX MATCH "${_pat}" _libtclcad_tcl_state_direct_hit
+		"${_libtclcad_tcl_state_contents}")
+	      if(_libtclcad_tcl_state_direct_hit)
+		_brlobol_pivot_guard_fail(
+		  "${_rel} reintroduced BSG Tcl-data type spelling outside the view-data adapter: ${_libtclcad_tcl_state_direct_hit}")
+	      endif()
+	    endforeach()
+	  endif()
+	  if("${_rel}" STREQUAL "src/libtclcad/view/labels.c")
+	    foreach(_pat
+		[[tcl_data[ \t\r\n]*\.[ \t\r\n]*gv_(data_labels|sdata_labels)]]
+		[[(^|[^A-Za-z0-9_])gv_(data_labels|sdata_labels)([^A-Za-z0-9_]|$)]])
+	      string(REGEX MATCH "${_pat}" _libtclcad_label_state_direct_hit
+		"${_libtclcad_tcl_state_contents}")
+	      if(_libtclcad_label_state_direct_hit)
+		_brlobol_pivot_guard_fail(
+		  "${_rel} reintroduced raw retained Tcl label-state member access: ${_libtclcad_label_state_direct_hit}")
+	      endif()
+	    endforeach()
+	  endif()
+	endif()
+      endforeach()
+
+      set(_libtclcad_view_data_adapter "${BRLCAD_SOURCE_DIR}/src/libtclcad/view_data.c")
+      if(NOT EXISTS "${_libtclcad_view_data_adapter}")
+	_brlobol_pivot_guard_fail(
       "src/libtclcad/view_data.c is required for TclCAD BSG view-data initialization isolation")
   else()
     file(READ "${_libtclcad_view_data_adapter}" _libtclcad_view_data_adapter_contents)
-    foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[tclcad_view_data_init_bsg]]
-	[[rt_view_tclcad_data_init_bsg]])
+	    foreach(_token
+		[[#[ \t]*include[ \t]*[<"]bsg/tcl_data\.h]]
+		[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+		[[TCLCAD_LAYOUT_SIZE]]
+		[[TCLCAD_LAYOUT_OFFSET]]
+		[[tclcad_view_state]]
+		[[struct[ \t\r\n]+bsg_data_tclcad]]
+		[[bsg_data_polygon_state]]
+		[[tclcad_polygon_state_init]]
+		[[tclcad_view_state_init]]
+		[[TCLCAD_DEFAULT_FONT_SIZE]]
+		[[tclcad_view_data_init]]
+		[[tclcad_view_data_from_view_ctx]]
+		[[rt_view_context_user_data_from_bsg]]
+		[[tclcad_view_tcl_data_from_view_ctx]]
+		[[tclcad_view_polygon_state_from_view_ctx]]
+		[[tclcad_view_polygon_mode_from_view_ctx]]
+		[[tclcad_view_polygon_mode_set]]
+		[[tclcad_view_data_vZ_from_view_ctx]]
+		[[tclcad_view_data_vZ_set]]
+		[[tclcad_view_hide_from_view_ctx]]
+		[[tclcad_view_polygon_cflag_from_view_ctx]]
+		[[tclcad_view_polygon_cflag_clear]]
+		[[tclcad_view_label_state_from_view_ctx]]
+		[[tclcad_view_prim_labels_state_from_view_ctx]]
+		[[tclcad_view_prim_labels_state_set]]
+		[[tclcad_view_data_bind_view_ctx]]
+		[[tclcad_view_data_unbind_view_ctx]]
+		[[rt_view_context_user_data_set_bsg]]
+		[[rt_view_context_tclcad_data_set_bsg]])
       string(REGEX MATCH "${_token}" _libtclcad_view_data_adapter_hit
 	"${_libtclcad_view_data_adapter_contents}")
       if(NOT _libtclcad_view_data_adapter_hit)
@@ -10334,8 +13739,13 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]bsg/defines\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/util\.h]]
-	[[bsg_data_tclcad_init[ \t\r\n]*\(]])
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)]]
+	[[->[ \t\r\n]*u_data]]
+	[[bsg_data_tclcad_init[ \t\r\n]*\(]]
+	[[rt_view_tclcad_data_init_bsg[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libtclcad_view_data_direct_hit
 	"${_libtclcad_view_data_adapter_contents}")
       if(_libtclcad_view_data_direct_hit)
@@ -10379,16 +13789,35 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   set(_libtclcad_private_header "${BRLCAD_SOURCE_DIR}/src/libtclcad/tclcad_private.h")
   if(EXISTS "${_libtclcad_private_header}")
     file(READ "${_libtclcad_private_header}" _libtclcad_private_header_contents)
-    foreach(_token
-	[[#[ \t]*include[ \t]*[<"]bsg/tcl_data\.h]]
-	[[struct[ \t\r\n]+tclcad_view_data]]
-	[[struct[ \t\r\n]+bsg_data_tclcad]]
-	[[tclcad_view_data_init_bsg]])
+	    foreach(_token
+		[[struct[ \t\r\n]+tclcad_view_data]]
+		[[tclcad_view_state]]
+		[[tclcad_polygon_state]]
+		[[tclcad_label_state]]
+	    [[tclcad_view_data_init]]
+	    [[tclcad_view_data_from_view_ctx]]
+	    [[to_close_fbs[ \t\r\n]*\([ \t\r\n]*void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
+	    [[to_open_fbs[ \t\r\n]*\([ \t\r\n]*void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
+	    [[to_mouse_poly_circ_func[ \t\r\n]*\([^;]*void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
+	    [[to_mouse_poly_cont_func[ \t\r\n]*\([^;]*void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
+	    [[to_mouse_poly_ell_func[ \t\r\n]*\([^;]*void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
+	    [[to_mouse_poly_rect_func[ \t\r\n]*\([^;]*void[ \t\r\n]*\*[ \t\r\n]*view_ctx]])
       string(REGEX MATCH "${_token}" _libtclcad_private_header_bsg_data_hit
 	"${_libtclcad_private_header_contents}")
-      if(NOT _libtclcad_private_header_bsg_data_hit)
+     if(NOT _libtclcad_private_header_bsg_data_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libtclcad/tclcad_private.h must own TclCAD BSG view-data internals token ${_token}")
+	  "src/libtclcad/tclcad_private.h must keep TclCAD private view-data internals and opaque helper token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]bsg/tcl_data\.h]]
+	[[struct[ \t\r\n]+bsg_data_tclcad]]
+	[[to_mouse_poly_(circ|cont|ell|rect)_func[ \t\r\n]*\([^;]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*]])
+      string(REGEX MATCH "${_pat}" _libtclcad_private_header_mouse_poly_sig_hit
+	"${_libtclcad_private_header_contents}")
+      if(_libtclcad_private_header_mouse_poly_sig_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libtclcad/tclcad_private.h reintroduced typed BSG private state or mouse polygon helper signatures: ${_libtclcad_private_header_mouse_poly_sig_hit}")
       endif()
     endforeach()
   endif()
@@ -10408,42 +13837,79 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_libtclcad_mouse_first_impl}" _libtclcad_mouse_first_contents)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_scale_from_bsg]]
-	[[rt_view_size_from_bsg]]
-	[[rt_view_model2view_from_bsg]]
-	[[rt_view_view2model_from_bsg]]
-	[[rt_view_rotation_from_bsg]]
-	[[rt_view_dimensions_set_bsg]]
-	[[rt_view_screen_to_view_from_bsg]]
-	[[rt_view_previous_mouse_from_bsg]]
-	[[rt_view_previous_mouse_set_bsg]]
-	[[rt_view_mouse_delta_settings_from_bsg]]
-	[[rt_view_prepare_tcl_snap_bsg]])
+	[[rt_view_context_scale_from_bsg]]
+	[[rt_view_context_size_from_bsg]]
+	[[rt_view_context_model2view_from_bsg]]
+	[[rt_view_context_view2model_from_bsg]]
+	[[rt_view_context_rotation_from_bsg]]
+	[[rt_view_context_width_from_bsg]]
+	[[rt_view_context_height_from_bsg]]
+	[[rt_view_context_dimensions_set_bsg]]
+	[[rt_view_context_screen_to_view_from_bsg]]
+	[[rt_view_context_previous_mouse_from_bsg]]
+	[[rt_view_context_previous_mouse_set_bsg]]
+	    [[rt_view_context_mouse_delta_settings_from_bsg]]
+	    [[rt_view_context_name_from_bsg]]
+	    [[tclcad_mouse_view_name]]
+	    [[tclcad_mouse_display_manager[ \t\r\n]*\([ \t\r\n]*const[ \t\r\n]+void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
+	    [[tclcad_mouse_sync_dm_dimensions[ \t\r\n]*\([ \t\r\n]*void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
+	    [[tclcad_mouse_previous_get_set[ \t\r\n]*\([^{}]*void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
+	    [[tclcad_mouse_clamp_delta[ \t\r\n]*\([^{}]*const[ \t\r\n]+void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
+	    [[void[ \t\r\n]*\*[ \t\r\n]*gdvp[ \t\r\n]*=[ \t\r\n]*ged_view_find_ctx[ \t\r\n]*\(]]
+	    [[\(_gdvp\)[ \t\r\n]*=[ \t\r\n]*ged_view_find_ctx[ \t\r\n]*\(]]
+	    [[tclcad_view_data_from_view_ctx]]
+	    [[rt_view_context_prepare_tcl_snap_bsg]]
+	    [[void[ \t\r\n]*\*[ \t\r\n]*view_ctx[ \t\r\n]*=[ \t\r\n]*draw_view_ctx]]
+	    [[void[ \t\r\n]*\*[ \t\r\n]*view_ctx[ \t\r\n]*=[ \t\r\n]*ged_view_find_ctx[ \t\r\n]*\(]]
+	    [[tclcad_view_polygon_state_from_view_ctx]]
+	    [[tclcad_view_polygon_mode_from_view_ctx]]
+	    [[to_mouse_poly_circ_func[ \t\r\n]*\([^{}]*void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
+	    [[to_mouse_poly_cont_func[ \t\r\n]*\([^{}]*void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
+	    [[to_mouse_poly_ell_func[ \t\r\n]*\([^{}]*void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
+	    [[to_mouse_poly_rect_func[ \t\r\n]*\([^{}]*void[ \t\r\n]*\*[ \t\r\n]*view_ctx]])
       string(REGEX MATCH "${_token}" _libtclcad_mouse_first_adapter_hit
 	"${_libtclcad_mouse_first_contents}")
       if(NOT _libtclcad_mouse_first_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libtclcad/mouse.c must route simple selection/point input view reads and dimension writes through rt/view_legacy_bsg.h")
+	  "src/libtclcad/mouse.c must route simple selection/point input view reads, dimension writes, and mouse polygon contexts through rt/view_legacy_bsg.h")
       endif()
     endforeach()
     foreach(_pat
 	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])gv_size([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_size_from_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])gv_rotation([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_from_bsg[ \t\r\n]*\(]]
 	[[gdvp->[ \t\r\n]*gv_(width|height)[ \t\r\n]*=]]
+	[[(^|[^A-Za-z0-9_])rt_view_width_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_height_from_bsg[ \t\r\n]*\(]]
 	[[gdvp->[ \t\r\n]*gv_prevMouse(X|Y)]]
 	[[\(_gdvp\)->[ \t\r\n]*gv_prevMouse(X|Y)]]
+	[[(^|[^A-Za-z0-9_])rt_view_previous_mouse_(from|set)_bsg[ \t\r\n]*\(]]
 	[[gdvp->[ \t\r\n]*gv_(minMouseDelta|maxMouseDelta|rscale|sscale)]]
 	[[\(_gdvp\)->[ \t\r\n]*gv_(minMouseDelta|maxMouseDelta|rscale|sscale)]]
-	[[(^|[^A-Za-z0-9_])bsg_screen_to_view([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])bsg_view_prepare_tcl_snap([^A-Za-z0-9_]|$)]])
-      string(REGEX MATCH "${_pat}" _libtclcad_mouse_first_direct_hit
+	[[->[ \t\r\n]*gv_name]]
+	[[gdvp->[ \t\r\n]*u_data]]
+	[[(^|[^A-Za-z0-9_])rt_view_mouse_delta_settings_from_bsg[ \t\r\n]*\(]]
+	    [[(^|[^A-Za-z0-9_])rt_view_screen_to_view_from_bsg[ \t\r\n]*\(]]
+	    [[(^|[^A-Za-z0-9_])bsg_screen_to_view([^A-Za-z0-9_]|$)]]
+	    [[(^|[^A-Za-z0-9_])rt_view_prepare_tcl_snap_bsg[ \t\r\n]*\(]]
+	    [[(^|[^A-Za-z0-9_])bsg_view_prepare_tcl_snap([^A-Za-z0-9_]|$)]]
+	    [[tcl_data[ \t\r\n]*\.[ \t\r\n]*gv_(polygon_mode|data_polygons|sdata_polygons)]]
+	    [[(^|[^A-Za-z0-9_])gv_(polygon_mode|data_polygons|sdata_polygons)([^A-Za-z0-9_]|$)]]
+	    [[struct[ \t\r\n]+bsg_view]]
+	    [[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)]]
+	    [[to_mouse_poly_(circ|cont|ell|rect)_func[ \t\r\n]*\([^{}]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*]])
+	      string(REGEX MATCH "${_pat}" _libtclcad_mouse_first_direct_hit
 	"${_libtclcad_mouse_first_contents}")
       if(_libtclcad_mouse_first_direct_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libtclcad/mouse.c reintroduced direct BSG mouse view snapshot reads or dimension writes: ${_libtclcad_mouse_first_direct_hit}")
+	  "src/libtclcad/mouse.c reintroduced direct/typed BSG mouse view access, dimension writes, typed mouse polygon helper signatures, or raw retained Tcl polygon state access: ${_libtclcad_mouse_first_direct_hit}")
       endif()
     endforeach()
   endif()
@@ -10453,20 +13919,27 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_libtclcad_polygons_impl}" _libtclcad_polygons_contents)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_scale_from_bsg]]
-	[[rt_view_center_from_bsg]]
-	[[rt_view_rotation_from_bsg]]
-	[[rt_view_model2view_from_bsg]]
-	[[rt_view_view2model_from_bsg]]
-	[[rt_view_plane_from_bsg]]
-	[[rt_view_dimensions_set_bsg]]
-	[[rt_view_screen_to_view_from_bsg]]
-	[[rt_view_previous_mouse_set_bsg]]
-	[[rt_view_prepare_tcl_snap_bsg]]
-	[[#[ \t]*include[ \t]*[<"]\.\./libged/bsg_ged_draw_view_private\.h]]
+	[[rt_view_context_scale_from_bsg]]
+	[[rt_view_context_center_from_bsg]]
+	[[rt_view_context_rotation_from_bsg]]
+	[[rt_view_context_model2view_from_bsg]]
+	[[rt_view_context_view2model_from_bsg]]
+	[[rt_view_context_plane_from_bsg]]
+	[[rt_view_context_name_from_bsg]]
+	[[tclcad_polygons_view_name]]
+	[[rt_view_context_dimensions_set_bsg]]
+	[[rt_view_context_screen_to_view_from_bsg]]
+	[[rt_view_context_previous_mouse_set_bsg]]
+		[[rt_view_context_prepare_tcl_snap_bsg]]
+		[[tclcad_view_polygon_state_from_view_ctx]]
+		[[tclcad_view_polygon_mode_from_view_ctx]]
+		[[tclcad_view_polygon_mode_set]]
+		[[tclcad_view_data_vZ_from_view_ctx]]
+		[[void[ \t\r\n]*[*][ \t\r\n]*gdvp]]
+		[[#[ \t]*include[ \t]*[<"]ged/bsg_ged_draw\.h]]
 	[[#[ \t]*include[ \t]*[<"]bg/line_layer\.h]]
-	[[ged_draw_view_feature_remove]]
-	[[ged_draw_view_tcl_polygons_replace]]
+	[[ged_draw_view_context_feature_remove]]
+	[[ged_draw_view_context_tcl_polygons_replace]]
 	[[GED_DRAW_VIEW_FEATURE_STYLE_INIT]]
 	[[BG_GEOMETRY_LINE_MOVE]]
 	[[BG_GEOMETRY_LINE_DRAW]])
@@ -10479,16 +13952,37 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endforeach()
     foreach(_pat
 	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_from_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])gv_center([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_center_from_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])gv_rotation([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_rotation_from_bsg[ \t\r\n]*\(]]
+	[[#[ \t]*include[ \t]*[<"]\.\./libged/bsg_ged_draw_view_private\.h]]
 	[[(^|[^A-Za-z0-9_])gv_model2view([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])gv_view2model([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_view2model_from_bsg[ \t\r\n]*\(]]
 	[[gdvp->[ \t\r\n]*gv_(width|height)[ \t\r\n]*=]]
 	[[gdvp->[ \t\r\n]*gv_prevMouse[XY][ \t\r\n]*=]]
+	[[->[ \t\r\n]*gv_name]]
+	[[(^|[^A-Za-z0-9_])rt_view_previous_mouse_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_screen_to_view_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_plane_from_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])bsg_screen_to_view([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_view_plane([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])bsg_view_prepare_tcl_snap([^A-Za-z0-9_]|$)]]
-	[[#[ \t]*include[ \t]*[<"]bsg/(defines|feature|geometry|overlay)\.h]]
+	[[(^|[^A-Za-z0-9_])rt_view_prepare_tcl_snap_bsg[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])bsg_view_prepare_tcl_snap([^A-Za-z0-9_]|$)]]
+		[[gdvp->[ \t\r\n]*gv_tcl]]
+		[[->[ \t\r\n]*gv_tcl[ \t\r\n]*=]]
+		[[tclcad_view_tcl_data_from_view_ctx[^\n;]*->[ \t\r\n]*gv_]]
+		[[tclcad_polygons_tcl_data]]
+		[[tclcad_polygons_state]]
+		[[(^|[^A-Za-z0-9_])gv_(polygon_mode|data_vZ|data_polygons|sdata_polygons)([^A-Za-z0-9_]|$)]]
+		[[struct[ \t\r\n]+bsg_view]]
+		[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*[*][ \t\r\n]*\)[ \t\r\n]*(draw_view_ctx|ged_view_find_ctx)]]
+		[[#[ \t]*include[ \t]*[<"]bsg/(defines|feature|geometry|overlay)\.h]]
+	[[ged_draw_view_feature_remove[ \t\r\n]*\(]]
+	[[ged_draw_view_tcl_polygons_replace[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_GEOMETRY_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
@@ -10496,10 +13990,10 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[(^|[^A-Za-z0-9_])BSG_OVERLAY_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]])
       string(REGEX MATCH "${_pat}" _libtclcad_polygons_direct_hit
 	"${_libtclcad_polygons_contents}")
-      if(_libtclcad_polygons_direct_hit)
-	_brlobol_pivot_guard_fail(
-	  "src/libtclcad/polygons.c reintroduced direct BSG polygon view snapshot, dimension, or feature access: ${_libtclcad_polygons_direct_hit}")
-      endif()
+	      if(_libtclcad_polygons_direct_hit)
+		_brlobol_pivot_guard_fail(
+		  "src/libtclcad/polygons.c reintroduced direct/typed BSG polygon view snapshot, dimension, Tcl data, or feature access: ${_libtclcad_polygons_direct_hit}")
+	      endif()
     endforeach()
   endif()
 
@@ -10657,10 +14151,12 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	ged_draw_view_scale_from_bsg
 	ged_draw_view_lod_policy_from_bsg
 	ged_draw_view_lod_policy_apply_bsg
-	ged_draw_view_lod_policy_apply_bsg_bot_threshold
-	ged_draw_view_autoview_default_bsg
-	ged_draw_view_hud_sync
-	ged_draw_view_snap_first_candidate
+		ged_draw_view_lod_policy_apply_bsg_bot_threshold
+		ged_draw_view_autoview_default_bsg
+		ged_draw_view_hud_sync
+		ged_draw_view_context_hud_sync
+		ged_draw_view_snap_first_candidate
+		ged_draw_view_context_snap_first_candidate
 	ged_draw_view_set_recycle_pool_bsg
 	ged_draw_view_set_lod_bounds_update
 	ged_draw_view_has_lod_bounds_update
@@ -10668,9 +14164,14 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	ged_draw_mesh_lod_load_view_scene_ref
 	ged_draw_mesh_lod_free_scene_ref
 	ged_draw_view_selection_count
+	ged_draw_view_context_selection_count
 	ged_draw_view_feature_exists
+	ged_draw_view_context_feature_remove
+	ged_draw_view_context_feature_summary
 	ged_draw_view_lines_create_model_annotation
+	ged_draw_view_context_lines_create_model_annotation
 	ged_draw_view_lines_append_point
+	ged_draw_view_context_lines_append_point
 	    ged_draw_view_feature_remove
 	    ged_draw_view_features_remove_prefix
 	    ged_draw_view_feature_visible
@@ -10680,17 +14181,23 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	    ged_draw_view_overlay_scene_append
 	    ged_draw_view_overlay_command_result_owner_set
 	    ged_draw_view_overlay_create
+	    ged_draw_view_context_overlay_create
 	ged_draw_view_feature_depth
+	ged_draw_view_context_feature_depth
 	ged_draw_view_feature_depth_foreach
+	ged_draw_view_context_feature_depth_foreach
 	ged_draw_view_feature_style_get
 	ged_draw_view_feature_style_apply
+	ged_draw_view_context_feature_style_apply
 	ged_draw_view_feature_realize
+	ged_draw_view_context_feature_realize
 	ged_draw_view_indexed_face_set_replace
 	ged_draw_view_lines_replace
 	ged_draw_view_tcl_polygons_replace
 	ged_draw_view_line_layer_builder_replace
 	ged_draw_view_line_layers_replace
 	ged_draw_view_label_create
+	ged_draw_view_context_label_create
 	ged_draw_view_labels_replace
 	ged_draw_view_tcl_labels_replace
 	ged_draw_view_label_count
@@ -10708,27 +14215,39 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	ged_draw_view_feature_axes_centers_copy
 	ged_draw_view_tcl_axes_replace
 	    ged_draw_view_axes_create
+	    ged_draw_view_context_axes_create
 	    ged_draw_view_axes_state_get
+	    ged_draw_view_context_axes_state_get
 	    ged_draw_view_axes_state_replace
+	    ged_draw_view_context_axes_state_replace
 	    ged_draw_view_polygon_ref_is_null
 	    ged_draw_view_polygon_find
+	    ged_draw_view_context_polygon_find
 	    ged_draw_view_polygon_find_scoped
+	    ged_draw_view_context_polygon_find_scoped
 	    ged_draw_view_polygon_create
+	    ged_draw_view_context_polygon_create
 	    ged_draw_view_polygon_import_sketch
+	    ged_draw_view_context_polygon_import_sketch
 	    ged_draw_view_polygon_export_sketch
 	    ged_draw_view_polygon_record_get
 	    ged_draw_view_polygon_has_data
 	    ged_draw_view_polygon_update
+	    ged_draw_view_context_polygon_update
+	    ged_draw_view_context_polygon_update_screen_pt
 	    ged_draw_view_polygon_update_screen_pt
 	    ged_draw_view_polygon_set_current
 	    ged_draw_view_polygon_set_contour_open
 	    ged_draw_view_polygon_set_all_contours_open
 	    ged_draw_view_polygon_area
+	    ged_draw_view_context_polygon_area
 	    ged_draw_view_polygon_overlap
+	    ged_draw_view_context_polygon_overlap
 	    ged_draw_view_polygon_set_fill
 	    ged_draw_view_polygon_fill_color_get
 	    ged_draw_view_polygon_fill_color_set
 	    ged_draw_view_polygon_csg
+	    ged_draw_view_context_polygon_csg
 	    rt_view_lod_bounds_callback_set_bsg
 	rt_view_lod_bounds_callback_is_bsg
 	rt_view_perspective_from_bsg
@@ -10794,37 +14313,28 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       _brlobol_pivot_guard_fail(
 	"src/libged/bsg_ged_draw_view_private.h must expose the private GED view LoD policy snapshot")
     endif()
-	foreach(_token
-	    [[enum[ \t]+ged_draw_view_snap_kind]]
-	    [[GED_DRAW_VIEW_SNAP_GRID]]
-	    [[GED_DRAW_VIEW_SNAP_ENDPOINT]]
-	    [[enum[ \t]+ged_draw_view_polygon_type]]
-	    [[struct[ \t]+ged_draw_view_polygon_record]]
-	    [[GED_DRAW_VIEW_POLYGON_REF_NULL]])
-      string(REGEX MATCH "${_token}" _ged_view_private_snap_token_hit
-	"${_ged_bsg_draw_view_private_contents}")
-      if(NOT _ged_view_private_snap_token_hit)
-	_brlobol_pivot_guard_fail(
-	  "src/libged/bsg_ged_draw_view_private.h must expose private GED snap adapter token ${_token}")
-      endif()
-    endforeach()
 	foreach(_func
 	ged_draw_view_perspective_from_bsg
 	ged_draw_view_scale_from_bsg
 	ged_draw_view_lod_policy_from_bsg
 	ged_draw_view_lod_policy_apply_bsg
-	ged_draw_view_lod_policy_apply_bsg_bot_threshold
-	ged_draw_view_autoview_default_bsg
-	ged_draw_view_hud_sync
-	ged_draw_view_set_lod_bounds_update
+		ged_draw_view_lod_policy_apply_bsg_bot_threshold
+		ged_draw_view_autoview_default_bsg
+		ged_draw_view_hud_sync
+		ged_draw_view_context_hud_sync
+		ged_draw_view_set_lod_bounds_update
 	ged_draw_view_has_lod_bounds_update
 	ged_draw_mesh_lod_load_view_scene_ref
 	ged_draw_mesh_lod_free_scene_ref
 	ged_draw_view_selection_count
+	ged_draw_view_context_selection_count
 	ged_draw_view_snap_first_candidate
+	ged_draw_view_context_snap_first_candidate
 	ged_draw_view_feature_exists
 	ged_draw_view_lines_create_model_annotation
+	ged_draw_view_context_lines_create_model_annotation
 	ged_draw_view_lines_append_point
+	ged_draw_view_context_lines_append_point
 		ged_draw_view_feature_remove
 		ged_draw_view_features_remove_prefix
 		ged_draw_view_feature_visible
@@ -10834,17 +14344,23 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 		ged_draw_view_overlay_scene_append
 		ged_draw_view_overlay_command_result_owner_set
 		ged_draw_view_overlay_create
+		ged_draw_view_context_overlay_create
 	ged_draw_view_feature_depth
+	ged_draw_view_context_feature_depth
 	ged_draw_view_feature_depth_foreach
+	ged_draw_view_context_feature_depth_foreach
 	ged_draw_view_feature_style_get
 	ged_draw_view_feature_style_apply
+	ged_draw_view_context_feature_style_apply
 	ged_draw_view_feature_realize
+	ged_draw_view_context_feature_realize
 	ged_draw_view_indexed_face_set_replace
 	ged_draw_view_lines_replace
 	ged_draw_view_tcl_polygons_replace
 	ged_draw_view_line_layer_builder_replace
 	ged_draw_view_line_layers_replace
 	ged_draw_view_label_create
+	ged_draw_view_context_label_create
 	ged_draw_view_labels_replace
 	ged_draw_view_tcl_labels_replace
 	ged_draw_view_label_count
@@ -10862,27 +14378,39 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	    ged_draw_view_feature_axes_centers_copy
 	    ged_draw_view_tcl_axes_replace
 	    ged_draw_view_axes_create
+	    ged_draw_view_context_axes_create
 	    ged_draw_view_axes_state_get
+	    ged_draw_view_context_axes_state_get
 	    ged_draw_view_axes_state_replace
+	    ged_draw_view_context_axes_state_replace
 	    ged_draw_view_polygon_ref_is_null
 	    ged_draw_view_polygon_find
+	    ged_draw_view_context_polygon_find
 	    ged_draw_view_polygon_find_scoped
+	    ged_draw_view_context_polygon_find_scoped
 	    ged_draw_view_polygon_create
+	    ged_draw_view_context_polygon_create
 	    ged_draw_view_polygon_import_sketch
+	    ged_draw_view_context_polygon_import_sketch
 	    ged_draw_view_polygon_export_sketch
 	    ged_draw_view_polygon_record_get
 	    ged_draw_view_polygon_has_data
 	    ged_draw_view_polygon_update
+	    ged_draw_view_context_polygon_update
 	    ged_draw_view_polygon_update_screen_pt
+	    ged_draw_view_context_polygon_update_screen_pt
 	    ged_draw_view_polygon_set_current
 	    ged_draw_view_polygon_set_contour_open
 	    ged_draw_view_polygon_set_all_contours_open
 	    ged_draw_view_polygon_area
+	    ged_draw_view_context_polygon_area
 	    ged_draw_view_polygon_overlap
+	    ged_draw_view_context_polygon_overlap
 	    ged_draw_view_polygon_set_fill
 	    ged_draw_view_polygon_fill_color_get
 	    ged_draw_view_polygon_fill_color_set
-	    ged_draw_view_polygon_csg)
+	    ged_draw_view_polygon_csg
+	    ged_draw_view_context_polygon_csg)
       string(FIND "${_ged_bsg_draw_view_private_contents}" "${_func}"
 	_ged_view_private_lod_adapter_idx)
       if(_ged_view_private_lod_adapter_idx EQUAL -1)
@@ -10892,8 +14420,107 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endforeach()
 	  else()
 	    _brlobol_pivot_guard_fail(
-	      "src/libged/bsg_ged_draw_view_private.h is required for narrow GED BSG view adapters")
+	  "src/libged/bsg_ged_draw_view_private.h is required for narrow GED BSG view adapters")
 	  endif()
+
+  set(_ged_bsg_draw_public_header
+    "${BRLCAD_SOURCE_DIR}/include/ged/bsg_ged_draw.h")
+  if(EXISTS "${_ged_bsg_draw_public_header}")
+    file(READ "${_ged_bsg_draw_public_header}" _ged_bsg_draw_public_header_contents)
+    foreach(_token
+	[[struct[ \t]+ged_draw_view_line_layer_data]]
+	[[GED_DRAW_VIEW_LINE_LAYER_DATA_INIT]]
+	[[typedef[ \t]+struct[ \t]+rt_view_lod_policy[ \t]+ged_draw_view_lod_policy]]
+	[[enum[ \t]+ged_draw_view_snap_kind]]
+	[[GED_DRAW_VIEW_SNAP_GRID]]
+	[[struct[ \t]+ged_draw_view_axes_state]]
+	[[enum[ \t]+ged_draw_view_polygon_type]]
+	[[GED_DRAW_VIEW_POLYGON_REF_NULL]]
+	[[struct[ \t]+ged_draw_view_polygon_record]]
+	[[ged_draw_view_context_features_remove_prefix]]
+	[[ged_draw_view_context_feature_visible]]
+	[[ged_draw_view_context_snap_first_candidate]]
+	[[ged_draw_view_context_hud_sync]]
+	[[ged_draw_view_context_selection_count]]
+	[[ged_draw_view_context_selection_path_foreach]]
+	[[ged_draw_view_context_selection_clear]]
+	[[ged_draw_view_selection_add_shape_ref_context]]
+	[[ged_draw_shape_ref_index_for_component]]
+	[[ged_draw_shape_ref_index_for_path_hash]]
+	[[ged_draw_shape_ref_view_context]]
+	[[ged_draw_view_context_feature_depth]]
+	[[ged_draw_view_context_feature_depth_foreach]]
+	[[ged_draw_view_context_info_from_bsg]]
+	[[ged_draw_view_context_lod_policy_from_bsg]]
+	[[ged_draw_view_context_lod_policy_apply_bsg]]
+	[[ged_draw_view_context_lod_policy_apply_bsg_bot_threshold]]
+	[[ged_draw_view_context_indexed_face_set_replace]]
+	[[ged_draw_view_context_lines_replace]]
+	[[ged_draw_view_context_lines_create_model_annotation]]
+	[[ged_draw_view_context_lines_append_point]]
+	[[ged_draw_view_context_line_layer_builder_replace]]
+	[[ged_draw_view_context_line_layers_replace]]
+	[[ged_draw_view_context_line_style_get]]
+	[[ged_draw_view_context_lines_points_copy]]
+	[[ged_draw_view_context_labels_replace]]
+	[[ged_draw_view_context_label_create]]
+	[[ged_draw_view_context_axes_create]]
+	[[ged_draw_view_context_axes_state_get]]
+	[[ged_draw_view_context_axes_state_replace]]
+	[[ged_draw_view_context_gobject_create]]
+	[[ged_draw_view_polygon_ref_is_null]]
+	[[ged_draw_view_context_polygon_create]]
+	[[ged_draw_view_context_polygon_update_screen_pt]]
+	[[ged_draw_view_context_polygon_import_sketch]]
+	[[ged_draw_view_context_polygon_csg]])
+      string(REGEX MATCH "${_token}" _ged_draw_public_header_token_hit
+	"${_ged_bsg_draw_public_header_contents}")
+      if(NOT _ged_draw_public_header_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "include/ged/bsg_ged_draw.h must expose public opaque GED draw-view context token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  foreach(_rel
+      src/libged/check/check_overlaps.c
+      src/libged/draw/preview.cpp
+      src/libged/brep/plot.cpp
+      src/libged/gqa/gqa.cpp
+      src/libged/gdiff/gdiff.c
+      src/libged/lint/lint.cpp
+      src/libged/bot/bot.cpp
+      src/libged/bot/check.cpp
+      src/libged/bot/bot_fuse.c
+      src/libged/illum/illum.c
+      src/libged/nmg/nmg.c
+      src/libged/rtcheck/rtcheck2.cpp
+      src/libged/vutil.c
+      src/libged/ged_util.cpp
+      src/libged/joint/joint.c)
+    set(_ged_draw_context_caller "${BRLCAD_SOURCE_DIR}/${_rel}")
+    if(EXISTS "${_ged_draw_context_caller}")
+      file(READ "${_ged_draw_context_caller}" _ged_draw_context_caller_contents)
+      string(FIND "${_ged_draw_context_caller_contents}"
+	"ged/bsg_ged_draw.h"
+	_ged_draw_context_public_header_idx)
+      if(_ged_draw_context_public_header_idx EQUAL -1)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} must use the public GED draw-view context facade")
+      endif()
+      foreach(_pat
+	  [[#[ \t]*include[ \t]*[<"](\.\./|\./)?bsg_ged_draw_view_private\.h]]
+	  [[struct[ \t\r\n]+bsg_view]]
+	  [[(^|[^A-Za-z0-9_])ged_draw_view_(features_remove_prefix|indexed_face_set_replace|lines_replace|line_layer_builder_replace|line_layers_replace|labels_replace)[ \t\r\n]*\(]])
+	string(REGEX MATCH "${_pat}" _ged_draw_context_private_hit
+	  "${_ged_draw_context_caller_contents}")
+	if(_ged_draw_context_private_hit)
+	  _brlobol_pivot_guard_fail(
+	    "${_rel} reintroduced private/typed GED draw-view access after public context facade migration: ${_ged_draw_context_private_hit}")
+	endif()
+      endforeach()
+    endif()
+  endforeach()
 
 	  set(_ged_bsg_draw_overlay_impl
 	    "${BRLCAD_SOURCE_DIR}/src/libged/bsg_ged_draw_overlay.c")
@@ -10920,6 +14547,16 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	      if(_ged_overlay_direct_bsg_hit)
 		_brlobol_pivot_guard_fail(
 		  "src/libged/bsg_ged_draw_overlay.c reintroduced direct BSG overlay registry access: ${_ged_overlay_direct_bsg_hit}")
+	      endif()
+	    endforeach()
+	    foreach(_pat
+		[[to_close_fbs[ \t\r\n]*\([ \t\r\n]*struct[ \t\r\n]+bsg_view]]
+		[[to_open_fbs[ \t\r\n]*\([ \t\r\n]*struct[ \t\r\n]+bsg_view]])
+	      string(REGEX MATCH "${_pat}" _libtclcad_private_header_old_fb_sig_hit
+		"${_libtclcad_private_header_contents}")
+	      if(_libtclcad_private_header_old_fb_sig_hit)
+		_brlobol_pivot_guard_fail(
+		  "src/libtclcad/tclcad_private.h reintroduced typed BSG framebuffer helper signatures: ${_libtclcad_private_header_old_fb_sig_hit}")
 	      endif()
 	    endforeach()
 	  endif()
@@ -11051,16 +14688,25 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   set(_ged_private_header "${BRLCAD_SOURCE_DIR}/src/libged/ged_private.h")
   if(EXISTS "${_ged_private_header}")
     file(READ "${_ged_private_header}" _ged_private_header_contents)
+    string(REGEX MATCH [[struct[ \t\r\n]+ged_draw_appearance_settings[ \t\r\n]*\*[ \t\r\n]*vs]]
+      _ged_private_header_neutral_appearance_hit
+      "${_ged_private_header_contents}")
+    if(NOT _ged_private_header_neutral_appearance_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/ged_private.h must keep draw_data_t appearance storage on neutral ged_draw_appearance_settings")
+    endif()
     foreach(_pat
 	[[#[ \t]*include[ \t]*[<"]bsg/lod\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/util\.h]]
+	[[struct[ \t\r\n]+bsg_appearance_settings]]
+	[[(^|[^A-Za-z0-9_])bsg_appearance_settings([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])mesh_c([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_mesh_lod_context([^A-Za-z0-9_]|$)]])
       string(REGEX MATCH "${_pat}" _ged_private_header_mesh_c_hit
 	"${_ged_private_header_contents}")
       if(_ged_private_header_mesh_c_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/ged_private.h must not carry BSG mesh-LoD context or include bsg/lod.h for draw_data_t: ${_ged_private_header_mesh_c_hit}")
+	  "src/libged/ged_private.h must not carry BSG mesh-LoD or appearance settings in draw_data_t: ${_ged_private_header_mesh_c_hit}")
       endif()
     endforeach()
   endif()
@@ -11158,8 +14804,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   foreach(_rel
       src/libged/bsg_ged_draw_draft.c
       src/libged/bsg_ged_draw_refs.c
-      src/libged/bsg_ged_draw_transactions.c
-      src/libged/draw/draw.c)
+      src/libged/bsg_ged_draw_transactions.c)
     set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
     if(NOT EXISTS "${_file}")
       continue()
@@ -11197,6 +14842,143 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endforeach()
   endforeach()
 
+  set(_libged_draw_client_header "${BRLCAD_SOURCE_DIR}/src/libged/draw/ged_draw.h")
+  if(EXISTS "${_libged_draw_client_header}")
+    file(READ "${_libged_draw_client_header}" _libged_draw_client_header_contents)
+    foreach(_token
+	[[void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
+	[[struct[ \t\r\n]+ged_draw_appearance_settings[ \t\r\n]+vs]])
+      string(REGEX MATCH "${_token}" _libged_draw_client_header_token_hit
+	"${_libged_draw_client_header_contents}")
+      if(NOT _libged_draw_client_header_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/draw/ged_draw.h must keep draw pipeline view client data as opaque view_ctx")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]\.\./ged_private\.h]]
+	[[#[ \t]*include[ \t]*[<"]bsg/]]
+	[[struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*v[ \t\r\n]*;]]
+	[[struct[ \t\r\n]+bsg_appearance_settings]]
+	[[(^|[^A-Za-z0-9_])bsg_appearance_settings([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_APPEARANCE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _libged_draw_client_header_direct_hit
+	"${_libged_draw_client_header_contents}")
+      if(_libged_draw_client_header_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/draw/ged_draw.h reintroduced typed BSG view client-data storage: ${_libged_draw_client_header_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_draw_client_cmd "${BRLCAD_SOURCE_DIR}/src/libged/draw/draw.c")
+  if(EXISTS "${_libged_draw_client_cmd}")
+    file(READ "${_libged_draw_client_cmd}" _libged_draw_client_cmd_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]ged/bsg_ged_draw\.h]]
+	[[#[ \t]*include[ \t]*[<"](\.\./|\./)?bsg_ged_draw_private\.h]]
+	[[ged_view_active_ctx]]
+	[[dgcdp[.]view_ctx]]
+	[[bsg_data[.]view_ctx]]
+	[[ged_draw_shape_draft_create_context]]
+	[[ged_draw_view_context_info_from_bsg]]
+	[[ged_draw_view_context_lod_policy_from_bsg]]
+	[[ged_draw_view_context_lod_policy_apply_bsg]]
+	[[ged_draw_view_context_lod_policy_apply_bsg_bot_threshold]]
+	[[ged_draw_view_context_line_layer_builder_replace]]
+	[[ged_draw_shape_draft_apply_appearance_settings]]
+	[[ged_draw_group_ref_set_appearance_settings]])
+      string(REGEX MATCH "${_token}" _libged_draw_client_cmd_token_hit
+	"${_libged_draw_client_cmd_contents}")
+      if(NOT _libged_draw_client_cmd_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/draw/draw.c must keep draw client-data view access on opaque GED draw-view context helper ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"](\.\./|\./)?bsg_ged_draw_view_private\.h]]
+	[[struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*gvp]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[dgcdp[.]v([^A-Za-z0-9_]|$)]]
+	[[dgcdp->[ \t\r\n]*v([^A-Za-z0-9_]|$)]]
+	[[bsg_data[.]v([^A-Za-z0-9_]|$)]]
+	[[#[ \t]*include[ \t]*[<"]bsg/(appearance|draw_intent|draw_source|scene_object|material|node|payload)\.h]]
+	[[struct[ \t\r\n]+bsg_appearance_settings]]
+	[[(^|[^A-Za-z0-9_])bsg_appearance_settings([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_APPEARANCE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])ged_draw_group_ref_set_appearance[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_shape_draft_apply_settings[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_shape_draft_create[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_info_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_lod_policy_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_lod_policy_apply_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_lod_policy_apply_bsg_bot_threshold[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_draw_client_cmd_direct_hit
+	"${_libged_draw_client_cmd_contents}")
+      if(_libged_draw_client_cmd_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/draw/draw.c reintroduced typed BSG draw client-data view access: ${_libged_draw_client_cmd_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_bigE_client_cmd "${BRLCAD_SOURCE_DIR}/src/libged/draw/bigE.c")
+  if(EXISTS "${_libged_bigE_client_cmd}")
+    file(READ "${_libged_bigE_client_cmd}" _libged_bigE_client_cmd_contents)
+    foreach(_token
+	[[ged_view_active_ctx]]
+	[[dgcdp->[ \t\r\n]*view_ctx]]
+	[[struct[ \t\r\n]+ged_draw_appearance_settings]]
+	[[ged_draw_group_ref_set_appearance_settings]]
+	[[GED_DRAW_MODE_EVAL_WIRE]])
+      string(REGEX MATCH "${_token}" _libged_bigE_client_cmd_token_hit
+	"${_libged_bigE_client_cmd_contents}")
+      if(NOT _libged_bigE_client_cmd_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/draw/bigE.c must seed evaluated-wireframe draw client data with opaque view_ctx token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[dgcdp->[ \t\r\n]*v([^A-Za-z0-9_]|$)]]
+	[[struct[ \t\r\n]+bsg_appearance_settings]]
+	[[(^|[^A-Za-z0-9_])bsg_appearance_settings([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])ged_draw_group_ref_set_appearance[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])BSG_DRAW_MODE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _libged_bigE_client_cmd_direct_hit
+	"${_libged_bigE_client_cmd_contents}")
+      if(_libged_bigE_client_cmd_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/draw/bigE.c reintroduced typed BSG evaluated-wireframe client-data view access: ${_libged_bigE_client_cmd_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_draw_txn_client "${BRLCAD_SOURCE_DIR}/src/libged/bsg_ged_draw_transactions.c")
+  if(EXISTS "${_libged_draw_txn_client}")
+    file(READ "${_libged_draw_txn_client}" _libged_draw_txn_client_contents)
+    string(REGEX MATCH [[dgcdp[.]view_ctx]] _libged_draw_txn_client_token_hit
+      "${_libged_draw_txn_client_contents}")
+    if(NOT _libged_draw_txn_client_token_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/bsg_ged_draw_transactions.c must seed draw client data with opaque view_ctx")
+    endif()
+    string(REGEX MATCH [[dgcdp[.]vs[ \t\r\n]*=[ \t\r\n]*neutral_settings]]
+      _libged_draw_txn_neutral_appearance_token_hit
+      "${_libged_draw_txn_client_contents}")
+    if(NOT _libged_draw_txn_neutral_appearance_token_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/bsg_ged_draw_transactions.c must seed draw client data with neutral appearance settings")
+    endif()
+    string(REGEX MATCH [[dgcdp[.]v([^A-Za-z0-9_]|$)]]
+      _libged_draw_txn_client_direct_hit "${_libged_draw_txn_client_contents}")
+    if(_libged_draw_txn_client_direct_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libged/bsg_ged_draw_transactions.c reintroduced typed draw client-data view storage: ${_libged_draw_txn_client_direct_hit}")
+    endif()
+  endif()
+
   set(_ged_draw_cpp "${BRLCAD_SOURCE_DIR}/src/libged/draw.cpp")
   if(EXISTS "${_ged_draw_cpp}")
     file(READ "${_ged_draw_cpp}" _ged_draw_cpp_contents)
@@ -11207,11 +14989,11 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       _brlobol_pivot_guard_fail(
 	"src/libged/draw.cpp must rely on ged_private.h for the full GED draw bridge boundary instead of directly including bsg_ged_draw_private.h")
     endif()
-    string(FIND "${_ged_draw_cpp_contents}" "ged_draw_view_info_from_bsg"
+    string(FIND "${_ged_draw_cpp_contents}" "ged_draw_view_context_info_from_bsg"
       _ged_draw_cpp_adapter_idx)
     if(_ged_draw_cpp_adapter_idx EQUAL -1)
       _brlobol_pivot_guard_fail(
-	"src/libged/draw.cpp must use ged_draw_view_info_from_bsg at the BSG-owning wrapper boundary")
+	"src/libged/draw.cpp must use ged_draw_view_context_info_from_bsg at the opaque draw-view wrapper boundary")
     endif()
     string(FIND "${_ged_draw_cpp_contents}" "ged_draw_log"
       _ged_draw_cpp_log_idx)
@@ -11219,18 +15001,100 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       _brlobol_pivot_guard_fail(
 	"src/libged/draw.cpp must route retained draw debug logging through ged_draw_log")
     endif()
+    foreach(_token
+	[[draw_view_name_bsg]]
+	[[ged_draw_view_context_name_from_bsg]]
+	[[ged_draw_view_context_perspective_from_bsg]]
+	[[ged_draw_view_context_obb_from_bsg]]
+	[[ged_draw_view_context_scale_from_bsg]])
+      string(REGEX MATCH "${_token}" _ged_draw_cpp_view_name_token_hit
+	"${_ged_draw_cpp_contents}")
+      if(NOT _ged_draw_cpp_view_name_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/draw.cpp must route retained draw view-context access through GED draw-view wrapper token ${_token}")
+      endif()
+    endforeach()
     string(FIND "${_ged_draw_cpp_contents}" "ged_draw_scene_ref_update_indexed_face_set"
       _ged_draw_cpp_indexed_face_update_idx)
     if(_ged_draw_cpp_indexed_face_update_idx EQUAL -1)
       _brlobol_pivot_guard_fail(
 	"src/libged/draw.cpp must update mesh-LoD indexed face sets through the GED draw bridge")
     endif()
+    string(FIND "${_ged_draw_cpp_contents}" "ged_draw_shape_draft_apply_appearance_settings"
+      _ged_draw_cpp_neutral_appearance_idx)
+    if(_ged_draw_cpp_neutral_appearance_idx EQUAL -1)
+      _brlobol_pivot_guard_fail(
+	"src/libged/draw.cpp must apply draw-walk appearance through the neutral GED appearance helper")
+    endif()
+    string(FIND "${_ged_draw_cpp_contents}" "ged_draw_scene_ref_strict_fallback"
+      _ged_draw_cpp_strict_fallback_idx)
+    if(_ged_draw_cpp_strict_fallback_idx EQUAL -1)
+      _brlobol_pivot_guard_fail(
+	"src/libged/draw.cpp must query strict fallback through the GED draw bridge")
+    endif()
+    foreach(_token
+	[[GED_DRAW_MODE_WIRE]]
+	[[GED_DRAW_MODE_SHADED_BOTS]]
+	[[GED_DRAW_MODE_SHADED]]
+	[[GED_DRAW_MODE_EVAL_WIRE]]
+	[[GED_DRAW_MODE_HIDDEN_LINE]]
+	[[GED_DRAW_MODE_EVAL_POINTS]])
+      string(REGEX MATCH "${_token}" _ged_draw_cpp_neutral_mode_hit
+	"${_ged_draw_cpp_contents}")
+      if(NOT _ged_draw_cpp_neutral_mode_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/draw.cpp must use neutral GED draw-mode token ${_token}")
+      endif()
+    endforeach()
+    foreach(_token
+	[[ged_draw_scene_ref_is_null]]
+	[[ged_draw_scene_ref_bounds]]
+	[[ged_draw_scene_ref_set_bounds]]
+	[[ged_draw_scene_ref_child_count]]
+	[[ged_draw_scene_ref_child_at]]
+	[[ged_draw_scene_ref_release]])
+      string(REGEX MATCH "${_token}" _ged_draw_cpp_scene_ref_token_hit
+	"${_ged_draw_cpp_contents}")
+      if(NOT _ged_draw_cpp_scene_ref_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/draw.cpp must route retained scene-ref operation through GED draw bridge token ${_token}")
+      endif()
+    endforeach()
     foreach(_pat
-	[[#[ \t]*include[ \t]*[<"]bsg/geometry\.h]]
+	[[#[ \t]*include[ \t]*[<"]bsg/]]
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[struct[ \t\r\n]+bsg_appearance_settings]]
+	[[(^|[^A-Za-z0-9_])bsg_appearance_settings([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_APPEARANCE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_DRAW_MODE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])ged_draw_shape_draft_apply_settings[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_strict_fallback[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])bsg_geometry_ref_update_indexed_face_set([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])ged_draw_scene_ref_geometry_ref([^A-Za-z0-9_]|$)]]
 	[[#[ \t]*include[ \t]*[<"]bsg/util\.h]]
-	[[(^|[^A-Za-z0-9_])bsg_log[ \t\r\n]*\(]])
+	[[(^|[^A-Za-z0-9_])bsg_log[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_ref_is_null[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_bounds[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_set_bounds[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_child_count[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_child_at[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_ref_destroy[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_name_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_perspective_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_obb_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_context_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])struct[ \t\r\n]+bsg_view([^A-Za-z0-9_]|$)]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_update_bounds[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_view[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_info_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_lod_policy_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_perspective_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_mesh_lod_load_view_scene_ref[ \t\r\n]*\(]]
+	[[->[ \t\r\n]*obb_]]
+	[[->[ \t\r\n]*gv_name]]
+	[[bu_vls_(cstr|addr|strlen)[ \t\r\n]*\([^;\n]*gv_name]])
       string(REGEX MATCH "${_pat}" _ged_draw_cpp_bsg_util_hit
 	"${_ged_draw_cpp_contents}")
       if(_ged_draw_cpp_bsg_util_hit)
@@ -11286,8 +15150,13 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_ged_view_independent_test}" _ged_view_independent_test_contents)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_scale_state_set_bsg]]
-	[[rt_view_independent_scope_is_null_bsg]])
+	[[rt_view_context_create_bsg]]
+	[[rt_view_context_name_set_bsg]]
+	[[rt_view_set_context_add_bsg]]
+	[[rt_view_context_scale_state_set_bsg]]
+	[[rt_view_context_lod_bounds_callback_is_bsg]]
+	[[rt_view_context_is_independent_bsg]]
+	[[rt_view_context_independent_scope_is_null_bsg]])
       string(REGEX MATCH "${_token}" _ged_view_independent_test_token_hit
 	"${_ged_view_independent_test_contents}")
       if(NOT _ged_view_independent_test_token_hit)
@@ -11297,7 +15166,15 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endforeach()
     foreach(_pat
 	[[#[ \t]*include[ \t]*[<"]bsg/util\.h]]
+	[[#[ \t]*include[ \t]*[<"].*bsg_ged_draw_view_private\.h]]
+	[[(^|[^A-Za-z0-9_])struct[ \t\r\n]+bsg_view([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_scene_ref_is_null([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_has_lod_bounds_update[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_set_remove_view_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_init_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_set_add_view_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_is_independent_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_independent_scope_is_null_bsg[ \t\r\n]*\(]]
 	[=[views\[[^]]+\]->[ \t\r\n]*gv_(scale|size|isize)[ \t\r\n]*=]=])
       string(REGEX MATCH "${_pat}" _ged_view_independent_test_direct_hit
 	"${_ged_view_independent_test_contents}")
@@ -11353,7 +15230,97 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_ged_draw_scene_test}")
     file(READ "${_ged_draw_scene_test}" _ged_draw_scene_test_contents)
     foreach(_token
+	[[test_active_view_ctx]]
+	[[ged_view_active_ctx]]
+	[[ged_draw_shape_draft_create_context]]
+	[[test_shape_record_at]]
+	[[test_first_shape_group_records]]
+	[[test_selected_visible_view_record]]
+	[[test_qray_view_records]]
+	[[test_visible_db_view_record_geometry_count]]
+	[[test_visible_annotation_view_record]]
+	[[test_visible_surface_view_record]]
+	[[test_visible_line_view_record]]
+	[[ged_draw_view_context_feature_summary]]
+	[[ged_draw_view_context_feature_remove]]
+	[[GED_DRAW_VIEW_FEATURE_SUMMARY_INIT]]
 	[[ged_draw_shape_record_get]]
+	[[ged_draw_group_record_get]]
+	[[ged_draw_foreach_view_record_query]]
+	[[ged_draw_foreach_visible_view_db_object_record]]
+	[[ged_draw_view_db_object_record_foreach_segment]]
+	[[ged_draw_view_db_object_record_annotation_summary]]
+	[[ged_draw_view_db_object_record_line_summary]]
+	[[ged_draw_view_db_object_record_line_point_at]]
+	[[ged_draw_view_db_object_record_line_command_at]]
+	[[ged_draw_shape_ref_line_summary]]
+	[[ged_draw_shape_ref_line_point_at]]
+	[[ged_draw_shape_ref_line_command_at]]
+	[[ged_draw_shape_context_line_summary]]
+	[[ged_draw_shape_context_line_point_at]]
+	[[ged_draw_shape_context_line_command_at]]
+	[[ged_draw_shape_context_geometry_summary]]
+	[[ged_draw_first_shape_context]]
+	[[ged_draw_shape_ref_context]]
+	[[ged_draw_shape_ref_cache_context]]
+	[[ged_draw_group_ref_context]]
+	[[ged_draw_shape_ref_from_context]]
+	[[ged_draw_shape_context_has_state]]
+	[[ged_draw_shape_context_source]]
+	[[test_scene_context]]
+	[[ged_draw_view_context_scene_root]]
+	[[ged_draw_view_context_scene_attached]]
+	[[ged_draw_view_context_frame_revision]]
+	[[ged_draw_view_context_bump_frame_revision]]
+	[[ged_draw_scene_context_fullpath]]
+	[[ged_draw_group_context_dbpath]]
+	[[ged_draw_group_context_is_overlay]]
+	[[ged_draw_scene_context_display_summary]]
+	[[ged_draw_scene_context_source_summary]]
+	[[ged_draw_scene_context_tree_summary]]
+	[[ged_draw_scene_context_child_at]]
+	[[ged_draw_scene_context_parent]]
+	[[ged_draw_scene_context_name]]
+	[[ged_draw_scene_context_subtree_bounds]]
+	[[GED_DRAW_MODE_HIDDEN_LINE]]
+	[[struct[ \t\r\n]+ged_draw_appearance_settings]]
+	[[GED_DRAW_APPEARANCE_SETTINGS_INIT]]
+	[[ged_draw_shape_ref_material_summary]]
+	[[ged_draw_shape_ref_set_visible]]
+	[[ged_draw_shape_ref_set_material_color]]
+	[[ged_draw_shape_ref_set_evaluated_region]]
+	[[ged_draw_view_db_object_record_surface_summary]]
+	[[ged_draw_view_db_object_record_surface_index_at]]
+	[[ged_draw_view_rendered_object_summary]]
+	[[GED_DRAW_VIEW_LINE_MOVE]]
+	[[sample_commands]]
+	[[annot_cache_identity]]
+	[[annot_source_identity]]
+	[[annot_geometry.geometry_name]]
+	[[face_geometry.index_count]]
+	[[face_display.intent_path]]
+	[[source_display.is_database_source]]
+	[[normal_display.material_color]]
+	[[wire_display.line_width]]
+	[[candidate_source_display.intent_path]]
+	[[leaf_source_display.intent_path]]
+	[[leaf_shape_display.intent_path]]
+	[[submodel_source_display.is_database_source]]
+	[[external_source_display.is_database_source]]
+	[[child_display.is_database_source]]
+	[[first_source_summary.source_revision]]
+	[[first_source_container_summary.stale_reason]]
+	[[stale_source_summary.stale_reason]]
+	[[current_source_summary.stale_reason]]
+	[[s0_material.material_revision]]
+	[[forced_material_rgb]]
+	[[Visibility changes on the highlighted shape]]
+	[[draw_root_tree.draw_tree_depth]]
+	[[first_child_tree.draw_tree_depth]]
+	[[first_child_tree.is_group]]
+	[[test_scene_is_group]]
+	[[test_scene_is_shape]]
+	[["indexed-face-set"]]
 	[[first_selected_record.selected]])
       string(REGEX MATCH "${_token}" _ged_draw_scene_selection_token_hit
 	"${_ged_draw_scene_test_contents}")
@@ -11363,8 +15330,120 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]bsg/(tcl_data|util|scene_object|payload|draw_set|draw_source|field|material|node)\.h]]
+	[[#[ \t]*include[ \t]*[<"]bsg/(backend_scene|export)\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/(interaction|selection)\.h]]
+	[[#[ \t]*include[ \t]*[<"]bsg/(appearance|defines|draw_intent)\.h]]
+	[[#[ \t]*include[ \t]*[<"]bsg/view_state\.h]]
+	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	[[gedp[ \t\r\n]*->[ \t\r\n]*ged_gvp]]
+	[[(^|[^A-Za-z0-9_])ged_draw_shape_draft_create[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])RT_VIEW_FEATURE_SUMMARY_BSG_INIT([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])struct[ \t\r\n]+rt_view_feature_summary_bsg([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_feature_(summary|remove)_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])BSG_DRAW_MODE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_appearance_settings([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_APPEARANCE_SETTINGS_INIT([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])ged_draw_shape_interaction_record([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_scene_attached_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])struct[ \t\r\n]+bsg_node([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_node[ \t\r\n]*\*]]
+	[[(^|[^A-Za-z0-9_])struct[ \t\r\n]+bsg_view([^A-Za-z0-9_]|$)]]
+	[[->[ \t\r\n]*gv_frame_rev([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_view_scene_attached([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_view_scene_ref[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_backend_scene_[A-Za-z0-9_]*[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])struct[ \t\r\n]+bsg_backend_scene[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])test_scene_visible[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_transparency[ \t\r\n]*\([ \t\r\n]*test_scene_ref_from_node]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_highlighted[ \t\r\n]*\([ \t\r\n]*test_scene_ref_from_node]]
+	[[(^|[^A-Za-z0-9_])item->[ \t\r\n]*selected]]
+	[[(^|[^A-Za-z0-9_])qray_render_items([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])qray_render_segments([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])redraw_req([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])redraw_batch([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])find_export_record_by_source_prefix_and_kind([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])find_render_item_by_source_prefix_and_kind([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])find_export_record_by_source_and_kind([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_render_request_create[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_render_batch_create[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_render_request_collect[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_render_request_set_flags[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_render_batch_(count|get)[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_render_item_create[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_render_item_free[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_export_query[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_export_request_init[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_export_record_foreach_(segment|point)[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_render_item_foreach_(wire|line)_segment[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_line_set_ref_(point_count|point_at|command_at)[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_line_set_ref_as_geometry[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_node_ref_as_line_set[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_indexed_face_set_ref_as_geometry[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_node_ref_as_indexed_face_set[ \t\r\n]*\(]]
+	[[#[ \t]*include[ \t]*[<"]bsg/database_source\.h]]
+	[[(^|[^A-Za-z0-9_])bsg_database_source_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_DATABASE_SOURCE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_legacy_eval_flag[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_set_legacy_eval_flag[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_set_highlighted[ \t\r\n]*\([ \t\r\n]*test_scene_ref_from_node]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_material_(revision|set_rgb|get_rgb)[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_draw_tree_depth[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_child_count[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_child_at[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_parent[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_name[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_subtree_bbox[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_database_source_type[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_node_is_a[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_group_type[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_shape_type[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])node_is_a[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])test_node_ref_from_node[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])touch_visibility_field[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_node_ref_from_object[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])BSG_OBJECT_REF[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_node_ref_visibility_field[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_field_touch[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])test_scene_ref_from_node[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])test_node_from_scene_ref[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_scene_ref_shape_state[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_scene_ref_fullpath[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_shape_source_ref[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_shape_ref_from_scene_ref[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_registry_shape_scene_ref[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_registry_group_scene_ref[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_shape_scene_ref_from_cache_ref[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_first_shape_scene_ref[ \t\r\n]*\(]]
+	[[bsg_geometry_ref_coordinates_field[ \t\r\n]*\([ \t\r\n]*face_geometry[ \t\r\n]*\)]]
+	[[bsg_geometry_ref_indices_field[ \t\r\n]*\([ \t\r\n]*face_geometry[ \t\r\n]*\)]]
+	[[(^|[^A-Za-z0-9_])bsg_annotation_ref_as_geometry[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_node_ref_as_annotation[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_annotation_type[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])BSG_GEOMETRY_NODE_ANNOTATION([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])shape_scene_ref([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_(line_style|line_width|transparency|dmode|highlighted|visible|is_database_source|material_get_rgb)[ \t\r\n]*\([ \t\r\n]*(normal_ref|wire_ref)]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_draw_intent[ \t\r\n]*\([ \t\r\n]*(normal_ref|wire_ref)]]
+	[[(^|[^A-Za-z0-9_])submodel_shape_ref([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])candidate_source_ref([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])candidate_source_intent([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])leaf_source_ref([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])leaf_source_intent([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])leaf_shape_intent([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_is_database_source[ \t\r\n]*\([ \t\r\n]*(submodel_shape_ref|leaf_shape_ref)]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_draw_intent[ \t\r\n]*\([ \t\r\n]*(candidate_source_ref|leaf_source_ref|leaf_shape_ref)]]
+	[[(^|[^A-Za-z0-9_])bsg_draw_intent_path[ \t\r\n]*\([ \t\r\n]*(candidate_source_intent|leaf_source_intent|leaf_shape_intent)]]
+	[[node_is_a[ \t\r\n]*\([ \t\r\n]*source[^;]*bsg_database_source_type]]
+	[[node_is_a[ \t\r\n]*\([ \t\r\n]*(submodel_source|external_source)[^;]*bsg_database_source_type]]
+	[[(^|[^A-Za-z0-9_])BSG_RENDER_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_EXPORT_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])struct[ \t\r\n]+bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_FEATURE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_render_item([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_BACKEND_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_INVALIDATE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_interaction_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_INTERACTION_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_selection_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]])
@@ -11375,6 +15454,20 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	  "src/libged/tests/draw/ged_draw_scene.cpp reintroduced direct BSG interaction/selection checks: ${_ged_draw_scene_selection_direct_hit}")
       endif()
     endforeach()
+    set(_ged_draw_scene_tests_cmake
+      "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/CMakeLists.txt")
+    if(EXISTS "${_ged_draw_scene_tests_cmake}")
+      file(READ "${_ged_draw_scene_tests_cmake}"
+	_ged_draw_scene_tests_cmake_contents)
+      string(REGEX MATCH
+	[[ged_test_ged_draw_scene[^\n]*ged_draw_scene\.cpp[^\n]*libbsg]]
+	_ged_draw_scene_libbsg_hit
+	"${_ged_draw_scene_tests_cmake_contents}")
+      if(_ged_draw_scene_libbsg_hit)
+	_brlobol_pivot_guard_fail(
+	  "ged_test_ged_draw_scene must not directly link libbsg while structural coverage routes through GED context helpers")
+      endif()
+    endif()
   endif()
 
   set(_libged_selection_semantics_test "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/selection_semantics.cpp")
@@ -11382,15 +15475,16 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_libged_selection_semantics_test}" _selection_semantics_contents)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_width_from_bsg]]
-	[[rt_view_height_from_bsg]]
-	[[rt_view_pick_point_bsg]]
+	[[ged_view_active_ctx]]
+	[[rt_view_context_width_from_bsg]]
+	[[rt_view_context_height_from_bsg]]
+	[[rt_view_context_pick_point_bsg]]
 	[[rt_view_pick_result_count_bsg]]
 	[[rt_view_pick_result_free_bsg]]
-	[[rt_view_selection_available_bsg]]
-	[[rt_view_selection_count_bsg]]
-	[[rt_view_selection_set_pick_result_ref_bsg]]
-	[[rt_view_selection_clear_bsg]])
+	[[rt_view_context_selection_available_bsg]]
+	[[rt_view_context_selection_count_bsg]]
+	[[rt_view_context_selection_set_pick_result_ref_bsg]]
+	[[rt_view_context_selection_clear_bsg]])
       string(REGEX MATCH "${_token}" _selection_semantics_adapter_hit
 	"${_selection_semantics_contents}")
       if(NOT _selection_semantics_adapter_hit)
@@ -11399,8 +15493,17 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       endif()
     endforeach()
     foreach(_pat
+	[[gedp[ \t\r\n]*->[ \t\r\n]*ged_gvp]]
+	[[(^|[^A-Za-z0-9_])struct[ \t\r\n]+bsg_view([^A-Za-z0-9_]|$)]]
 	[[v->[ \t\r\n]*gv_width]]
 	[[v->[ \t\r\n]*gv_height]]
+	[[(^|[^A-Za-z0-9_])rt_view_width_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_height_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_pick_point_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_selection_available_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_selection_count_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_selection_set_pick_result_ref_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_selection_clear_bsg[ \t\r\n]*\(]]
 	[[#[ \t]*include[ \t]*[<"]bsg/(interaction|pick|selection)\.h]]
 	[[(^|[^A-Za-z0-9_])bsg_selection_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_selection([^A-Za-z0-9_]|$)]]
@@ -11438,15 +15541,22 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_libged_view_command_test}" _view_command_contents)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_pick_semantic_path_bsg]]
+	[[rt_view_set_context_remove_bsg]]
+	[[rt_view_context_create_bsg]]
+	[[rt_view_context_name_set_bsg]]
+	[[rt_view_context_dimensions_set_bsg]]
+	[[rt_view_set_context_add_bsg]]
+	[[rt_view_context_pick_semantic_path_bsg]]
 	[[rt_view_pick_result_count_bsg]]
 	[[rt_view_pick_result_path_bsg]]
 	[[rt_view_pick_result_free_bsg]]
-	[[rt_view_snap_candidates_result_bsg]]
+	[[rt_view_context_snap_candidates_result_bsg]]
 	[[rt_view_snap_result_source_path_bsg]]
 	[[rt_view_snap_result_free_bsg]]
-	[[rt_view_measure_candidates_bsg]]
-	[[rt_view_polygon_find_bsg]]
+	[[rt_view_context_measure_candidates_bsg]]
+	[[RT_VIEW_RENDER_EXPORT_CONSISTENCY_BSG_INIT]]
+	[[rt_view_context_render_export_consistency_bsg]]
+	[[rt_view_context_polygon_find_bsg]]
 	[[rt_view_polygon_record_get_bsg]]
 	[[RT_VIEW_POLYGON_GENERAL]])
       string(REGEX MATCH "${_token}" _view_command_pick_adapter_hit
@@ -11458,8 +15568,30 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endforeach()
     foreach(_pat
 	[[#[ \t]*include[ \t]*[<"]bsg/util\.h]]
+	[[#[ \t]*include[ \t]*[<"]bsg/(backend_scene|export|render|render_item)\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/pick\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/(measure|polygon|snap_action)\.h]]
+	[[(^|[^A-Za-z0-9_])struct[ \t\r\n]+bsg_view([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_view_set_remove_view_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_init_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_set_add_view_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_dimensions_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_render_export_consistency_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_pick_semantic_path_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_snap_candidates_result_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_measure_candidates_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_polygon_find_bsg[ \t\r\n]*\(]]
+	[[gedp[ \t\r\n]*->[ \t\r\n]*ged_gvp]]
+	[[&[ \t\r\n]*gedp[ \t\r\n]*->[ \t\r\n]*ged_views]]
+	[[->[ \t\r\n]*gv_]]
+	[[(^|[^A-Za-z0-9_])bsg_backend_scene_[A-Za-z0-9_]*[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_export_[A-Za-z0-9_]*[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_render_[A-Za-z0-9_]*[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])struct[ \t]+bsg_backend_scene[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])struct[ \t]+bsg_export_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])struct[ \t]+bsg_render_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_EXPORT_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_RENDER_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_pick_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_pick_result([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_pick_record([^A-Za-z0-9_]|$)]]
@@ -11482,25 +15614,60 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endforeach()
   endif()
 
+  set(_libged_view_command_tests_cmake "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/CMakeLists.txt")
+  if(EXISTS "${_libged_view_command_tests_cmake}")
+    file(READ "${_libged_view_command_tests_cmake}" _view_command_tests_cmake_contents)
+    string(REGEX MATCH [[ged_test_view_command[^\n]*view_command\.cpp[^\n]*libbsg]]
+      _view_command_libbsg_link_hit "${_view_command_tests_cmake_contents}")
+    if(_view_command_libbsg_link_hit)
+      _brlobol_pivot_guard_fail(
+	"ged_test_view_command must not directly link libbsg while render/export/backend checks route through rt/view_legacy_bsg.h")
+    endif()
+  endif()
+
   set(_libged_rtwizard_bsg_test "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/rtwizard_bsg.cpp")
   if(EXISTS "${_libged_rtwizard_bsg_test}")
     file(READ "${_libged_rtwizard_bsg_test}" _rtwizard_bsg_contents)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_model2view_from_bsg]]
-	[[rt_view_scene_anchor_ensure_bsg]]
-	[[rt_view_scene_attached_bsg]]
-	[[rt_view_scene_shared_bsg]])
+	[[ged_view_active_ctx]]
+	[[ged_view_active_ctx_set]]
+	[[ged_view_set_ctx]]
+	[[rt_view_context_create_with_set_bsg]]
+	[[rt_view_context_name_set_bsg]]
+	[[rt_view_set_context_add_bsg]]
+	[[rt_view_context_display_manager_from_bsg]]
+	[[rt_view_context_display_manager_set_bsg]]
+	[[rt_view_context_dimensions_set_bsg]]
+	[[rt_view_context_unit_conversion_set_bsg]]
+	[[rt_view_context_scale_storage_from_bsg]]
+	[[rt_view_context_scene_anchor_ensure_bsg]]
+	[[rt_view_context_scene_attached_bsg]]
+	[[rt_view_context_scene_shared_bsg]]
+	[[rt_view_context_model2view_from_bsg]])
       string(REGEX MATCH "${_token}" _rtwizard_bsg_adapter_hit
 	"${_rtwizard_bsg_contents}")
       if(NOT _rtwizard_bsg_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/tests/draw/rtwizard_bsg.cpp must route view matrix and scene-anchor checks through rt/view_legacy_bsg.h")
+	  "src/libged/tests/draw/rtwizard_bsg.cpp must route retained view setup, view matrix reads, and scene-anchor checks through opaque rt/view_legacy_bsg.h context wrappers")
       endif()
     endforeach()
     foreach(_pat
 	[[v->[ \t\r\n]*gv_model2view]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[gedp[ \t\r\n]*->[ \t\r\n]*ged_gvp]]
+	[[->[ \t\r\n]*dmp]]
+	[[->[ \t\r\n]*gv_name]]
 	[[#[ \t]*include[ \t]*[<"]bsg/(node|util)\.h]]
+	[[(^|[^A-Za-z0-9_])rt_view_init_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_set_add_view_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_dimensions_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_unit_conversion_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_storage_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scene_anchor_ensure_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scene_attached_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scene_shared_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_model2view_from_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])bsg_view_scene_(attached|separator_ref|shared)([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_scene_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_separator_ref([^A-Za-z0-9_]|$)]])
@@ -11508,7 +15675,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	"${_rtwizard_bsg_contents}")
       if(_rtwizard_bsg_direct_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/tests/draw/rtwizard_bsg.cpp reintroduced direct BSG view matrix or scene-anchor access: ${_rtwizard_bsg_direct_hit}")
+	  "src/libged/tests/draw/rtwizard_bsg.cpp reintroduced direct BSG retained-view setup, view matrix, or scene-anchor access: ${_rtwizard_bsg_direct_hit}")
       endif()
     endforeach()
     set(_rtwizard_bsg_tests_cmake "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/CMakeLists.txt")
@@ -11528,17 +15695,44 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_libged_bsg_quad_stability_test}" _bsg_quad_stability_contents)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[rt_view_scene_attached_bsg]]
-	[[rt_view_scene_anchor_ensure_bsg]])
+	[[ged_view_set_ctx]]
+	[[ged_view_set_views_ctx]]
+	[[ged_view_active_ctx_set]]
+	[[rt_view_context_create_bsg]]
+	[[rt_view_set_context_remove_bsg]]
+	[[rt_view_set_context_add_bsg]]
+	[[rt_view_context_name_set_bsg]]
+	[[rt_view_context_display_manager_from_bsg]]
+	[[rt_view_context_display_manager_set_bsg]]
+	[[rt_view_context_dimensions_set_bsg]]
+	[[rt_view_context_unit_conversion_set_bsg]]
+	[[rt_view_context_scale_storage_from_bsg]]
+	[[rt_view_context_independent_scope_is_null_bsg]]
+	[[rt_view_context_scene_attached_bsg]]
+	[[rt_view_context_scene_anchor_ensure_bsg]])
       string(REGEX MATCH "${_token}" _bsg_quad_stability_adapter_hit
 	"${_bsg_quad_stability_contents}")
       if(NOT _bsg_quad_stability_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/tests/draw/bsg_quad_stability.cpp must route scene-anchor checks through rt/view_legacy_bsg.h")
+	  "src/libged/tests/draw/bsg_quad_stability.cpp must route retained view setup and scene-anchor checks through opaque rt/view_legacy_bsg.h context wrappers")
       endif()
     endforeach()
     foreach(_pat
 	[[#[ \t]*include[ \t]*[<"]bsg/(node|util)\.h]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[gedp[ \t\r\n]*->[ \t\r\n]*ged_gvp]]
+	[[->[ \t\r\n]*dmp]]
+	[[->[ \t\r\n]*gv_name]]
+	[[(^|[^A-Za-z0-9_])rt_view_set_views_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_set_remove_view_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_init_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_set_add_view_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_dimensions_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_unit_conversion_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scale_storage_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_independent_scope_ref_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scene_attached_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])rt_view_scene_anchor_ensure_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])bsg_view_scene_(attached|separator_ref|shared)([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_scene_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_separator_ref([^A-Za-z0-9_]|$)]])
@@ -11546,7 +15740,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	"${_bsg_quad_stability_contents}")
       if(_bsg_quad_stability_direct_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/tests/draw/bsg_quad_stability.cpp reintroduced direct BSG scene-anchor access: ${_bsg_quad_stability_direct_hit}")
+	  "src/libged/tests/draw/bsg_quad_stability.cpp reintroduced direct BSG scene-anchor or retained-view setup access: ${_bsg_quad_stability_direct_hit}")
       endif()
     endforeach()
     set(_bsg_quad_stability_tests_cmake "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/CMakeLists.txt")
@@ -11707,13 +15901,15 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_ged_draw_impl}" _ged_draw_contents)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]rt/view\.h]]
+	draw_view_name_bsg
+	ged_draw_view_context_name_from_bsg
 	db_mesh_lod_status
 	db_mesh_lod_refresh
 	db_mesh_lod_store_mesh
 	db_mesh_lod_get
 	rt_mesh_lod_info_get
 	rt_mesh_lod_data_get
-	ged_draw_mesh_lod_load_view_scene_ref
+	ged_draw_mesh_lod_load_view_scene_ref_context
 	ged_draw_brep_mesh_lod_detail_setup)
       string(REGEX MATCH "${_token}" _ged_draw_lod_token_hit
 	"${_ged_draw_contents}")
@@ -11742,23 +15938,37 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	"src/libged/draw.cpp must route BSG scene-ref mesh-LoD view loading through ged_draw_mesh_lod_load_view_scene_ref: ${_ged_draw_bsg_lod_view_load_hit}")
     endif()
     foreach(_token
-	ged_draw_view_perspective_from_bsg
-	ged_draw_view_scale_from_bsg)
+	ged_draw_view_context_lod_policy_from_bsg
+	ged_draw_view_context_info_from_bsg
+	ged_draw_view_context_perspective_from_bsg
+	ged_draw_view_context_scale_from_bsg
+	ged_draw_view_context_obb_from_bsg
+	ged_draw_scene_ref_update_bounds_context
+	ged_draw_scene_ref_view_context
+	ged_draw_scene_ref_realization_set_view_context_policy)
       string(REGEX MATCH "${_token}" _ged_draw_view_snapshot_token_hit
 	"${_ged_draw_contents}")
       if(NOT _ged_draw_view_snapshot_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/draw.cpp must route draw view snapshot reads through private GED draw view helpers")
+	  "src/libged/draw.cpp must route draw view snapshot and scene-ref reads through opaque context helpers")
       endif()
     endforeach()
     foreach(_pat
 	[[(^|[^A-Za-z0-9_])gv_perspective([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]])
+	[[(^|[^A-Za-z0-9_])gv_scale([^A-Za-z0-9_]|$)]]
+	[[->[ \t\r\n]*obb_]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_perspective_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_scale_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_info_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_lod_policy_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_update_bounds[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_view[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_mesh_lod_load_view_scene_ref[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _ged_draw_view_snapshot_direct_hit
 	"${_ged_draw_contents}")
       if(_ged_draw_view_snapshot_direct_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/draw.cpp reintroduced direct BSG draw view snapshot reads: ${_ged_draw_view_snapshot_direct_hit}")
+	  "src/libged/draw.cpp reintroduced direct/typed BSG draw view snapshot reads: ${_ged_draw_view_snapshot_direct_hit}")
       endif()
     endforeach()
     foreach(_pat
@@ -11804,7 +16014,10 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_ged_view_lod_impl}")
     file(READ "${_ged_view_lod_impl}" _ged_view_lod_contents)
     foreach(_token
+	[[#[ \t]*include[ \t]*[<"]ged/bsg_ged_draw\.h]]
 	[[#[ \t]*include[ \t]*[<"]rt/view\.h]]
+	[[ged_draw_view_context_lod_policy_from_bsg]]
+	[[ged_draw_view_context_lod_policy_apply_bsg]]
 	db_mesh_lod_clear
 	db_mesh_lod_refresh
 	db_mesh_lod_status
@@ -11830,7 +16043,10 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	"src/libged/view/lod.cpp must inspect LoD cache keys through RT status helpers: ${_ged_view_lod_bsg_key_get_hit}")
     endif()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/lod\.h]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_lod_policy_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_lod_policy_apply_bsg[ \t\r\n]*\(]]
 	[[bsg_mesh_lod_cache]]
 	[[bsg_mesh_lod_key_put]])
       string(REGEX MATCH "${_pat}" _ged_view_lod_bsg_cache_hit
@@ -12004,6 +16220,12 @@ function(_brlobol_pivot_guard_check_librt_sketch_polygon_neutralization)
       _brlobol_pivot_guard_fail(
 	"src/librt/CMakeLists.txt must build src/librt/primitives/sketch/polygons_legacy_bsg.c")
     endif()
+    string(REGEX MATCH [[rt_bv_poly_sketch[^\n]*bsg_poly_sketch\.c[^\n]*libbsg]]
+      _rt_bv_poly_sketch_libbsg_hit "${_librt_cmake_contents}")
+    if(_rt_bv_poly_sketch_libbsg_hit)
+      _brlobol_pivot_guard_fail(
+	"rt_bv_poly_sketch must not directly link libbsg while sketch roundtrip coverage uses RT-owned polygon data")
+    endif()
   endif()
 
   foreach(_rel
@@ -12015,10 +16237,36 @@ function(_brlobol_pivot_guard_check_librt_sketch_polygon_neutralization)
       file(READ "${_file}" _contents)
       string(FIND "${_contents}" "rt/primitives/sketch_legacy_bsg.h"
 	_legacy_include_idx)
-      if("${_rel}" STREQUAL "src/librt/tests/bsg_poly_sketch.c" AND
-	  _legacy_include_idx EQUAL -1)
-	_brlobol_pivot_guard_fail(
-	  "${_rel} must include rt/primitives/sketch_legacy_bsg.h for BSG polygon conversion adapters")
+      if("${_rel}" STREQUAL "src/librt/tests/bsg_poly_sketch.c")
+	foreach(_token
+	    "rt/primitives/sketch.h"
+	    "db_sketch_to_polygon"
+	    "db_sketch_polygon_to_sketch"
+	    "rt_sketch_polygon_bg_polygon"
+	    "rt_sketch_polygon_destroy")
+	  string(FIND "${_contents}" "${_token}" _rt_poly_sketch_token_idx)
+	  if(_rt_poly_sketch_token_idx EQUAL -1)
+	    _brlobol_pivot_guard_fail(
+	      "${_rel} must test sketch roundtrips through RT-owned polygon token ${_token}")
+	  endif()
+	endforeach()
+	foreach(_pat
+	    [[#[ \t]*include[ \t]*[<"]bsg/]]
+	    [[#[ \t]*include[ \t]*[<"]rt/primitives/sketch_legacy_bsg\.h]]
+	    [[(^|[^A-Za-z0-9_])bsg_polygon_ref([^A-Za-z0-9_]|$)]]
+	    [[(^|[^A-Za-z0-9_])bsg_polygon([^A-Za-z0-9_]|$)]]
+	    [[(^|[^A-Za-z0-9_])bsg_view([^A-Za-z0-9_]|$)]]
+	    [[(^|[^A-Za-z0-9_])BSG_POLYGON_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	    [[(^|[^A-Za-z0-9_])db_sketch_to_view_polygon_ref([^A-Za-z0-9_]|$)]]
+	    [[(^|[^A-Za-z0-9_])db_sketch_to_view_polygon_scoped_ref([^A-Za-z0-9_]|$)]]
+	    [[(^|[^A-Za-z0-9_])db_view_polygon_ref_to_sketch([^A-Za-z0-9_]|$)]])
+	  string(REGEX MATCH "${_pat}" _rt_poly_sketch_direct_hit
+	    "${_contents}")
+	  if(_rt_poly_sketch_direct_hit)
+	    _brlobol_pivot_guard_fail(
+	      "${_rel} reintroduced direct BSG sketch polygon adapter use: ${_rt_poly_sketch_direct_hit}")
+	  endif()
+	endforeach()
       endif()
       if(_rel STREQUAL "src/qged/plugins/polygon/QPolyCreate.cpp" OR
 	  _rel STREQUAL "src/qged/plugins/polygon/QPolyMod.cpp")
@@ -12672,10 +16920,16 @@ function(_brlobol_pivot_guard_check_tclcad_snap_mask_boundary)
       continue()
     endif()
     file(READ "${_file}" _contents)
-    string(FIND "${_contents}" "rt_view_prepare_tcl_snap_bsg" _idx)
+    string(FIND "${_contents}" "rt_view_context_prepare_tcl_snap_bsg" _idx)
     if(_idx EQUAL -1)
       _brlobol_pivot_guard_fail(
-	"${_rel} must route Tcl snap mask preparation through rt_view_prepare_tcl_snap_bsg")
+	"${_rel} must route Tcl snap mask preparation through rt_view_context_prepare_tcl_snap_bsg")
+    endif()
+    string(REGEX MATCH [[(^|[^A-Za-z0-9_])rt_view_prepare_tcl_snap_bsg[ \t\r\n]*\(]]
+      _tclcad_snap_mask_typed_hit "${_contents}")
+    if(_tclcad_snap_mask_typed_hit)
+      _brlobol_pivot_guard_fail(
+	"${_rel} reintroduced typed Tcl snap mask preparation: ${_tclcad_snap_mask_typed_hit}")
     endif()
     string(REGEX MATCH [[(^|[^A-Za-z0-9_])bsg_snap_kind_mask([^A-Za-z0-9_]|$)]]
       _tclcad_snap_mask_direct_hit "${_contents}")
@@ -14269,15 +18523,14 @@ function(_brlobol_pivot_guard_check_qtcad_view_snapshot_adapters)
     if(EXISTS "${_file}")
       file(READ "${_file}" _contents)
       foreach(_token
-	  [[rt/view_legacy_bsg.h]]
-	  [[rt_view_screen_point_from_bsg]])
+	  [[ged_view_context_screen_point]])
 	string(FIND "${_contents}" "${_token}" _idx)
 	if(_idx EQUAL -1)
 	  _brlobol_pivot_guard_fail(
-	    "${_rel} must route screen-point conversion through rt/view_legacy_bsg.h token ${_token}")
+	    "${_rel} must route screen-point conversion through GED view-context facade token ${_token}")
 	endif()
       endforeach()
-      string(REGEX MATCH [[(^|[^A-Za-z0-9_])bsg_screen_pt([^A-Za-z0-9_]|$)]]
+      string(REGEX MATCH [[(#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h|(^|[^A-Za-z0-9_])bsg_screen_pt([^A-Za-z0-9_]|$)|(^|[^A-Za-z0-9_])rt_view_screen_point_from_bsg[ \t\r\n]*\(|(^|[^A-Za-z0-9_])rt_view_context_screen_point_from_bsg[ \t\r\n]*\()]]
 	_screen_point_direct "${_contents}")
       if(_screen_point_direct)
 	_brlobol_pivot_guard_fail(
@@ -14394,7 +18647,7 @@ function(_brlobol_pivot_guard_check_qtcad_view_snapshot_adapters)
       foreach(_token
 	  [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	  [[struct[ \t\r\n]+rt_view_interactive_rect_state]]
-	  [[rt_view_interactive_rect_state_from_bsg]])
+	  [[rt_view_context_interactive_rect_state_from_bsg]])
 	string(REGEX MATCH "${_token}" _interactive_rect_token_hit
 	  "${_contents}")
 	if(NOT _interactive_rect_token_hit)
@@ -14404,6 +18657,7 @@ function(_brlobol_pivot_guard_check_qtcad_view_snapshot_adapters)
       endforeach()
       foreach(_pat
 	  [[struct[ \t\r\n]+bsg_interactive_rect_state]]
+	  [[(^|[^A-Za-z0-9_])rt_view_interactive_rect_state_from_bsg[ \t\r\n]*\(]]
 	  [[(^|[^A-Za-z0-9_])rt_view_interactive_rect_from_bsg([^A-Za-z0-9_]|$)]]
 	  [[(^|[^A-Za-z0-9_])rt_view_interactive_rect_set_bsg([^A-Za-z0-9_]|$)]]
 	  [[(^|[^A-Za-z0-9_])bsg_view_interactive_rect_(get|set)([^A-Za-z0-9_]|$)]])
@@ -14424,14 +18678,32 @@ function(_brlobol_pivot_guard_check_qtcad_view_snapshot_adapters)
     if(EXISTS "${_file}")
       file(READ "${_file}" _contents)
       foreach(_token
-	  [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	  [[struct[ \t]+rt_view_interactive_rect_state]]
-	  [[rt_view_interactive_rect_state_from_bsg]])
+	  [[ged_view_context_interactive_rect_state_get]])
 	string(REGEX MATCH "${_token}" _interactive_rect_neutral_token_hit
 	  "${_contents}")
 	if(NOT _interactive_rect_neutral_token_hit)
 	  _brlobol_pivot_guard_fail(
-	    "${_rel} must route interactive rectangle state through neutral RT view records via ${_token}")
+	    "${_rel} must route interactive rectangle state through GED view-context facades via ${_token}")
+	endif()
+      endforeach()
+      if(NOT "${_rel}" STREQUAL "src/libged/select/select.c")
+	string(REGEX MATCH [[ged_view_context_interactive_rect_state_set]]
+	  _interactive_rect_neutral_set_token_hit "${_contents}")
+	if(NOT _interactive_rect_neutral_set_token_hit)
+	  _brlobol_pivot_guard_fail(
+	    "${_rel} must route interactive rectangle state writes through ged_view_context_interactive_rect_state_set")
+	endif()
+      endif()
+      foreach(_pat
+	  [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+	  [[(^|[^A-Za-z0-9_])rt_view_context_interactive_rect_state_from_bsg[ \t\r\n]*\(]]
+	  [[(^|[^A-Za-z0-9_])rt_view_context_interactive_rect_state_set_bsg[ \t\r\n]*\(]])
+	string(REGEX MATCH "${_pat}" _interactive_rect_neutral_direct_hit
+	  "${_contents}")
+	if(_interactive_rect_neutral_direct_hit)
+	  _brlobol_pivot_guard_fail(
+	    "${_rel} reintroduced direct RT legacy interactive rectangle state access: ${_interactive_rect_neutral_direct_hit}")
 	endif()
       endforeach()
       foreach(_pat
@@ -14456,9 +18728,7 @@ function(_brlobol_pivot_guard_check_qtcad_view_snapshot_adapters)
       src/libqtcad/QgGL.cpp
       src/libqtcad/QgSW.cpp
       src/libtclcad/view/refresh.c
-      src/mged/usepen.c
       src/mged/mged.c
-      src/mged/dm-generic.c
       src/mged/dozoom.c)
     set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
     if(EXISTS "${_file}")
@@ -14551,7 +18821,7 @@ function(_brlobol_pivot_guard_check_qtcad_view_snapshot_adapters)
       else()
 	foreach(_token
 	    [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	    [[rt_view_refresh_]])
+	    [[rt_view[A-Za-z0-9_]*refresh_]])
 	  string(REGEX MATCH "${_token}" _refresh_token_hit
 	    "${_contents}")
 	  if(NOT _refresh_token_hit)

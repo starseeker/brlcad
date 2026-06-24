@@ -77,8 +77,8 @@ extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory
 static void
 do_refresh(struct ged *gedp)
 {
-    struct bsg_view *v = gedp->ged_gvp;
-    struct dm *dmp = (struct dm *)v->dmp;
+    void *v = ged_view_active_ctx(gedp);
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
     dm_draw_begin(dmp);
     dm_draw_objs(v);
     dm_draw_end(dmp);
@@ -137,18 +137,18 @@ open_gedp(const char *gfile, int width, int height)
     s_av[0] = "dm"; s_av[1] = "attach"; s_av[2] = "swrast"; s_av[3] = "SW"; s_av[4] = NULL;
     ged_exec_dm(gedp, 4, s_av);
 
-    struct bsg_view *v = gedp->ged_gvp;
-    struct dm *dmp  = (struct dm *)v->dmp;
+    void *v = ged_view_active_ctx(gedp);
+    struct dm *dmp  = (struct dm *)rt_view_context_display_manager_from_bsg(v);
     dm_set_width(dmp, width);
     dm_set_height(dmp, height);
     dm_configure_win(dmp, 0);
     dm_set_zbuffer(dmp, 1);
     fastf_t wb[6] = {-1, 1, -1, 1, -100, 100};
     dm_set_win_bounds(dmp, wb);
-    dm_set_vp(dmp, rt_view_scale_storage_from_bsg(v));
-    v->dmp = dmp;
-    rt_view_dimensions_set_bsg(v, dm_get_width(dmp), dm_get_height(dmp));
-    rt_view_unit_conversion_set_bsg(v,
+    dm_set_vp(dmp, rt_view_context_scale_storage_from_bsg(v));
+    rt_view_context_display_manager_set_bsg(v, dmp);
+    rt_view_context_dimensions_set_bsg(v, dm_get_width(dmp), dm_get_height(dmp));
+    rt_view_context_unit_conversion_set_bsg(v,
 	gedp->dbip->dbi_local2base,
 	gedp->dbip->dbi_base2local);
 
@@ -180,7 +180,8 @@ test_dm_lighting_flags(const char *datadir)
     struct ged *gedp = open_gedp("smb_t1.g", 256, 256);
     if (!gedp) { bu_log("FAIL: ged_open failed\n"); bu_file_delete("smb_t1.g"); return 1; }
 
-    struct dm *dmp = (struct dm *)gedp->ged_gvp->dmp;
+    void *v = ged_view_active_ctx(gedp);
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
     int fail = 0;
 
     /* --- turn everything ON (val=1) --------------------------------------- */
@@ -362,7 +363,8 @@ test_geometry_default_color(const char *datadir)
     struct ged *gedp = open_gedp("smb_t3.g", 256, 256);
     if (!gedp) { bu_file_delete("smb_t3.g"); return 1; }
 
-    struct dm *dmp = (struct dm *)gedp->ged_gvp->dmp;
+    void *v = ged_view_active_ctx(gedp);
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
     int fail = 0;
 
     /* Set a recognisable test colour */

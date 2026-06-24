@@ -30,23 +30,12 @@
 
 #include "common.h"
 
-#include <ctype.h>
-#include <cstdlib>
-#include <cstring>
-#include <string>
-
 #include "bu/cmd.h"
-#include "bu/color.h"
-#include "bu/opt.h"
+#include "bu/str.h"
 #include "bu/vls.h"
-#include "bsg/appearance.h"
-#include "bsg/defines.h"
-#include "bsg/draw_source.h"
-#include "bsg/scene_object.h"
 
+#include "ged/bsg_ged_draw.h"
 #include "ged/view.h"
-#include "../bsg_ged_draw_view_private.h"
-#include "../ged_private.h"
 #include "./ged_view.h"
 
 int
@@ -54,9 +43,7 @@ _gobjs_cmd_create(void *bs, int argc, const char **argv)
 {
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
-    struct db_i *dbip = gedp->dbip;
-    struct bsg_view *v = gd->cv;
+    void *view_ctx = gd->cv;
     const char *usage_string = "view gobjs name create";
     const char *purpose_string = "create an editing view obj from a database solid/comb";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
@@ -73,77 +60,9 @@ _gobjs_cmd_create(void *bs, int argc, const char **argv)
     }
     gd->vobj = argv[0];
 
-    if (ged_draw_view_feature_exists(v, argv[1])) {
-	bu_vls_printf(gedp->ged_result_str, "View feature %s already exists\n", argv[1]);
+    if (!ged_draw_view_context_gobject_create(gedp, view_ctx, gd->vobj,
+	    argv[1], gedp->ged_result_str))
 	return BRLCAD_ERROR;
-    }
-
-    /* Make sure we have a valid db object as an argument */
-    struct db_full_path *fp;
-    BU_GET(fp, struct db_full_path);
-    db_full_path_init(fp);
-    int ret = db_string_to_path(fp, dbip, gd->vobj);
-    if (ret < 0) {
-	// Invalid path
-	db_free_full_path(fp);
-	BU_PUT(fp, struct db_full_path);
-	bu_vls_printf(gedp->ged_result_str, "Invalid path: %s\n", gd->vobj);
-	return BRLCAD_ERROR;
-    }
-    mat_t mat;
-    MAT_IDN(mat);
-    if (!db_path_to_mat(dbip, fp, mat, fp->fp_len-1)) {
-	db_free_full_path(fp);
-	BU_PUT(fp, struct db_full_path);
-	bu_vls_printf(gedp->ged_result_str, "Invalid path matrix: %s\n", gd->vobj);
-	return BRLCAD_ERROR;
-    }
-
-    // We will need a local copy of the internal structure to support manipulating
-    // the scene object (and generating new wireframes) without altering the on-disk
-    // .g object.
-    struct rt_db_internal *ip;
-    BU_GET(ip, struct rt_db_internal);
-    RT_DB_INTERNAL_INIT(ip);
-    ret = rt_db_get_internal(ip, DB_FULL_PATH_CUR_DIR(fp), dbip, mat);
-    if (ret < 0) {
-	db_free_full_path(fp);
-	BU_PUT(fp, struct db_full_path);
-	return BRLCAD_ERROR;
-    }
-
-    /* Set up the toplevel object */
-    bsg_scene_ref g_ref = ged_draw_view_overlay_create(v, argv[1]);
-    if (bsg_scene_ref_is_null(g_ref))
-	return BRLCAD_ERROR;
-    ged_draw_shape_state *state = ged_draw_shape_ref_set_fullpath(g_ref, gedp, fp);
-    if (state) {
-	state->u_data = (void *)ip;
-	state->u_data_kind = GED_DRAW_SHAPE_USER_DATA_RT_DB_INTERNAL;
-    }
-
-    // Set up drawing settings
-    unsigned char wcolor[3] = {255,255,255};
-    struct bsg_appearance_settings vs = BSG_APPEARANCE_SETTINGS_INIT;
-
-    // We have a tree walk ahead to populate the wireframe - set up the client
-    // data structure.
-    std::map<struct directory *, fastf_t> s_size;
-    struct draw_data_t dd;
-    dd.gedp = gedp;
-    dd.dbip = gedp->dbip;
-    dd.v = v;
-    dd.tol = &wdbp->wdb_tol;
-    dd.ttol = &wdbp->wdb_ttol;
-    dd.color_inherit = 0;
-    dd.bound_only = 0;
-    dd.s_size = &s_size;
-    bu_color_from_rgb_chars(&dd.c, wcolor);
-    dd.vs = &vs;
-    dd.g_ref = g_ref;
-
-    // Create a wireframe from the current state of the specified object
-    draw_gather_paths(fp, &mat, (void *)&dd);
 
     // TODO - set the object callbacks
 
@@ -168,8 +87,8 @@ _gobjs_cmd_delete(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    if (!gd->vobj || !ged_draw_view_feature_exists(gd->cv, gd->vobj) ||
-	    !ged_draw_view_feature_remove(gd->cv, gd->vobj)) {
+    if (!gd->vobj || !ged_draw_view_context_feature_exists(gd->cv, gd->vobj) ||
+	    !ged_draw_view_context_feature_remove(gd->cv, gd->vobj)) {
 	bu_vls_printf(gedp->ged_result_str, "No view feature named %s\n", gd->vobj ? gd->vobj : "");
 	return BRLCAD_ERROR;
     }

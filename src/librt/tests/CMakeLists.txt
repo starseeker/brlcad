@@ -86,7 +86,7 @@ brlcad_addexec(rt_view_legacy_bsg view_legacy_bsg.c "librt;libbsg;libbu;${M_LIBR
 brlcad_add_test(NAME rt_view_legacy_bsg COMMAND rt_view_legacy_bsg)
 
 # bv_polygon <-> sketch testing
-brlcad_addexec(rt_bv_poly_sketch bsg_poly_sketch.c "librt;libbsg;${M_LIBRARY}" TEST)
+brlcad_addexec(rt_bv_poly_sketch bsg_poly_sketch.c "librt;libbg;libbu;${M_LIBRARY}" TEST)
 
 # arb8 testing
 brlcad_addexec(rt_arb8 arb8_tests.c "librt;libwdb;libbg;libbu;${M_LIBRARY}" TEST)

@@ -36,7 +36,6 @@
 #include "bn.h"
 #include "wdb.h"
 #include "rt/geom.h"
-#include "bsg/node.h"
 #include "ged/view.h"
 
 #include "./sedit.h"

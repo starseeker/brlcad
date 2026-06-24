@@ -130,6 +130,52 @@ ged_draw_view_scene_root_ref(const struct bsg_view *v)
 }
 
 
+void *
+ged_draw_view_context_scene_root(void *view_ctx)
+{
+    if (!view_ctx)
+	return NULL;
+
+    bsg_scene_ref root_ref =
+	bsg_view_scene_ref((const struct bsg_view *)view_ctx);
+    if (bsg_scene_ref_is_null(root_ref))
+	return NULL;
+
+    return root_ref.opaque;
+}
+
+
+int
+ged_draw_view_context_scene_attached(void *view_ctx)
+{
+    if (!view_ctx)
+	return 0;
+
+    return bsg_scene_ref_is_null(
+	    bsg_view_scene_ref((const struct bsg_view *)view_ctx)) ? 0 : 1;
+}
+
+
+uint64_t
+ged_draw_view_context_frame_revision(void *view_ctx)
+{
+    const struct bsg_view *v = (const struct bsg_view *)view_ctx;
+    return v ? v->gv_frame_rev : 0;
+}
+
+
+uint64_t
+ged_draw_view_context_bump_frame_revision(void *view_ctx)
+{
+    struct bsg_view *v = (struct bsg_view *)view_ctx;
+    if (!v)
+	return 0;
+
+    v->gv_frame_rev++;
+    return v->gv_frame_rev;
+}
+
+
 int
 ged_draw_view_has_scene_root(const struct bsg_view *v)
 {

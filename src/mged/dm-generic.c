@@ -42,8 +42,8 @@
 #include "vmath.h"
 #include "raytrace.h"
 #include "ged.h"
+#include "ged/view.h"
 #include "rt/view.h"
-#include "rt/view_legacy_bsg.h"
 
 #include "./mged.h"
 #include "./sedit.h"
@@ -70,9 +70,9 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 
 	/* redraw after scaling */
 	struct rt_view_lod_policy lod_policy = RT_VIEW_LOD_POLICY_INIT;
-	struct bsg_view *active_view = s->gedp ? (struct bsg_view *)ged_view_active_ctx(s->gedp) : NULL;
-	if (active_view &&
-	    rt_view_lod_policy_from_bsg(&lod_policy, active_view) &&
+	void *active_view_ctx = s->gedp ? ged_view_active_ctx(s->gedp) : NULL;
+	if (active_view_ctx &&
+	    ged_view_context_lod_policy_get(&lod_policy, active_view_ctx) &&
 	    lod_policy.csg_enabled &&
 	    lod_policy.zoom_refresh &&
 	    (am_mode == AMM_SCALE ||
@@ -116,6 +116,7 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 	mat_t view_center;
 	mat_t model2view;
 	mat_t view2model;
+	void *view_ctx = view_state->vs_gvp;
 
 	if (argc < 3) {
 	    Tcl_AppendResult(s->interp, "dm m: need more parameters\n",
@@ -129,9 +130,9 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 	fy = dm_Xy2Normal(DMP, atoi(argv[2]), 0);
 	x = fx * RT_VIEW_MAX;
 	y = fy * RT_VIEW_MAX;
-	rt_view_center_from_bsg(view_center, view_state->vs_gvp);
-	rt_view_model2view_from_bsg(model2view, view_state->vs_gvp);
-	rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+	ged_view_context_center_get(view_center, view_ctx);
+	ged_view_context_model2view_get(model2view, view_ctx);
+	ged_view_context_view2model_get(view2model, view_ctx);
 
 	if (mged_variables->mv_faceplate &&
 	    mged_variables->mv_orig_gui) {
@@ -340,6 +341,7 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 	fastf_t td; /* tick distance */
 	fastf_t view_local_scale;
 	mat_t view2model;
+	void *view_ctx = view_state->vs_gvp;
 
 	if (argc < 4) {
 	    Tcl_AppendResult(s->interp, "dm adc: need more parameters\n",
@@ -349,8 +351,8 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 
 	dm_omx = atoi(argv[2]);
 	dm_omy = atoi(argv[3]);
-	view_local_scale = rt_view_scale_from_bsg(view_state->vs_gvp) * s->dbip->dbi_base2local;
-	rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+	view_local_scale = ged_view_context_scale_get(view_ctx) * s->dbip->dbi_base2local;
+	ged_view_context_view2model_get(view2model, view_ctx);
 
 	switch (*argv[1]) {
 	    case '1':
@@ -629,7 +631,7 @@ view_state_flag_hook(const struct bu_structparse *UNUSED(sdp),
 {
     struct mged_view_hook_state *hs = (struct mged_view_hook_state *)data;
     if (hs->vs)
-	rt_view_refresh_request_bsg(hs->vs->vs_gvp, RT_VIEW_REFRESH_VIEW_BSG);
+	ged_view_context_refresh_request(hs->vs->vs_gvp, RT_VIEW_REFRESH_VIEW_BSG);
 }
 
 void
@@ -651,7 +653,7 @@ zclip_hook(const struct bu_structparse *sdp,
 	void *data)
 {
     struct mged_view_hook_state *hs = (struct mged_view_hook_state *)data;
-    rt_view_zclip_set_bsg(hs->vs->vs_gvp, dm_get_zclip(hs->hs_dmp));
+    ged_view_context_zclip_set(hs->vs->vs_gvp, dm_get_zclip(hs->hs_dmp));
     dirty_hook(sdp, name, base, value, data);
 }
 
@@ -687,13 +689,13 @@ dm_commands(int argc, const char *argv[], void *data)
         BU_STR_EQUAL(argv[0], "list") || BU_STR_EQUAL(argv[0], "type") ||
         BU_STR_EQUAL(argv[0], "types") ||
         BU_STR_EQUAL(argv[0], "width")) {
-	struct bsg_view *active_view = (struct bsg_view *)ged_view_active_ctx(s->gedp);
-        if (!active_view) {
+	void *active_view_ctx = ged_view_active_ctx(s->gedp);
+        if (!active_view_ctx) {
             ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
-	    active_view = (struct bsg_view *)ged_view_active_ctx(s->gedp);
+	    active_view_ctx = ged_view_active_ctx(s->gedp);
 	}
-        if (active_view)
-            rt_view_display_manager_set_bsg(active_view,
+        if (active_view_ctx)
+            ged_view_context_display_manager_set(active_view_ctx,
 		    (void *)s->mged_curr_dm->dm_dmp);
 
         const char **av = (const char **)bu_calloc((size_t)argc + 2, sizeof(char *), "dm forward argv");

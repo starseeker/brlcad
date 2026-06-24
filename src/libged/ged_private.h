@@ -275,8 +275,8 @@ struct draw_data_t {
     struct ged *gedp;
     struct db_i *dbip;
     bsg_scene_ref g_ref;
-    struct bsg_view *v;
-    struct bsg_appearance_settings *vs;
+    void *view_ctx;
+    struct ged_draw_appearance_settings *vs;
     const struct bn_tol *tol;
     const struct bg_tess_tol *ttol;
     struct bu_color c;

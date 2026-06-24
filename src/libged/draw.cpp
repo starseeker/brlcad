@@ -39,9 +39,6 @@
 #include "bu/opt.h"
 #include "bu/sort.h"
 #include "bu/str.h"
-#include "bsg/appearance.h"
-#include "bsg/draw_intent.h"
-#include "bsg/view_state.h"
 #include "bg/sat.h"
 #include "nmg.h"
 #include "rt/view.h"
@@ -92,10 +89,20 @@ draw_rt_mesh_lod(bsg_scene_ref ref)
     return d ? d->rt_mesh_lod : NULL;
 }
 
+static const char *
+draw_view_name_bsg(const void *view_ctx)
+{
+    if (!view_ctx)
+	return "NULL";
+
+    const char *name = ged_draw_view_context_name_from_bsg(view_ctx);
+    return name ? name : "";
+}
+
 static void
 draw_set_transformed_bounds(bsg_scene_ref ref, const point_t src_bmin, const point_t src_bmax)
 {
-    if (bsg_scene_ref_is_null(ref))
+    if (ged_draw_scene_ref_is_null(ref))
 	return;
 
     mat_t sm;
@@ -123,7 +130,7 @@ draw_set_transformed_bounds(bsg_scene_ref ref, const point_t src_bmin, const poi
 	VMAX(bmax, tp);
     }
 
-    bsg_scene_set_bounds(ref, bmin, bmax, 1);
+    ged_draw_scene_ref_set_bounds(ref, bmin, bmax, 1);
 }
 
 static int
@@ -145,7 +152,7 @@ draw_mesh_lod_bounds_from_points(point_t bmin, point_t bmax, const point_t *poin
 static void
 draw_mesh_lod_bounds_restore(bsg_scene_ref ref, struct ged_draw_source_state *d)
 {
-    if (bsg_scene_ref_is_null(ref) || !d || !d->mesh_lod_bounds_valid)
+    if (ged_draw_scene_ref_is_null(ref) || !d || !d->mesh_lod_bounds_valid)
 	return;
 
     draw_set_transformed_bounds(ref, d->mesh_lod_bmin, d->mesh_lod_bmax);
@@ -193,7 +200,7 @@ static int
 draw_mesh_lod_publish(bsg_scene_ref ref, const struct rt_mesh_lod *lod)
 {
     struct rt_mesh_lod_data data;
-    if (bsg_scene_ref_is_null(ref) || !rt_mesh_lod_data_get(lod, &data))
+    if (ged_draw_scene_ref_is_null(ref) || !rt_mesh_lod_data_get(lod, &data))
 	return 0;
 
     const int *faces = data.faces;
@@ -266,18 +273,18 @@ draw_mesh_lod_publish(bsg_scene_ref ref, const struct rt_mesh_lod *lod)
 }
 
 static int
-csg_wireframe_update(bsg_scene_ref ref, struct bsg_view *v, int flag)
+csg_wireframe_update(bsg_scene_ref ref, void *view_ctx, int flag)
 {
     /* Validate */
-    if (bsg_scene_ref_is_null(ref) || !v)
+    if (ged_draw_scene_ref_is_null(ref) || !view_ctx)
 	return 0;
 
     ged_draw_view_lod_policy policy;
-    ged_draw_view_lod_policy_from_bsg(&policy, v);
+    ged_draw_view_context_lod_policy_from_bsg(&policy, view_ctx);
     if (!policy.csg_enabled)
 	return 0;
 
-    ged_draw_log(1, "csg_wireframe_update %s[%s]", ged_draw_scene_ref_name(ref), bu_vls_cstr(&v->gv_name));
+    ged_draw_log(1, "csg_wireframe_update %s[%s]", ged_draw_scene_ref_name(ref), draw_view_name_bsg(view_ctx));
 
     ged_draw_scene_ref_realization_set_roles(ref, 1, 0);
 
@@ -289,9 +296,19 @@ csg_wireframe_update(bsg_scene_ref ref, struct bsg_view *v, int flag)
     //bu_log("min: %f %f %f max: %f %f %f\n", V3ARGS(vo->bmin), V3ARGS(vo->bmax));
     point_t bmin = VINIT_ZERO;
     point_t bmax = VINIT_ZERO;
-    bsg_scene_bounds(ref, bmin, bmax);
-    if (!(ged_draw_view_perspective_from_bsg(v) > SMALL_FASTF) && !bg_sat_aabb_obb(bmin, bmax, v->obb_center, v->obb_extent1, v->obb_extent2, v->obb_extent3))
+    if (!ged_draw_scene_ref_bounds(ref, bmin, bmax))
 	return 0;
+    if (!(ged_draw_view_context_perspective_from_bsg(view_ctx) > SMALL_FASTF)) {
+	point_t obb_center = VINIT_ZERO;
+	vect_t obb_extent1 = VINIT_ZERO;
+	vect_t obb_extent2 = VINIT_ZERO;
+	vect_t obb_extent3 = VINIT_ZERO;
+	if (!ged_draw_view_context_obb_from_bsg(view_ctx, obb_center, obb_extent1,
+		obb_extent2, obb_extent3) ||
+		!bg_sat_aabb_obb(bmin, bmax, obb_center, obb_extent1,
+		    obb_extent2, obb_extent3))
+	    return 0;
+    }
 
     bool rework = (flag) ? true : false;
 
@@ -304,7 +321,7 @@ csg_wireframe_update(bsg_scene_ref ref, struct bsg_view *v, int flag)
     if (!rework) {
 	// Check view scale
 	fastf_t view_scale = ged_draw_scene_ref_realization_view_scale(ref);
-	fastf_t current_view_scale = ged_draw_view_scale_from_bsg(v);
+	fastf_t current_view_scale = ged_draw_view_context_scale_from_bsg(view_ctx);
 	fastf_t delta = view_scale * 0.1/view_scale;
 	if (!NEAR_EQUAL(view_scale, current_view_scale, delta))
 	    rework = true;
@@ -315,7 +332,7 @@ csg_wireframe_update(bsg_scene_ref ref, struct bsg_view *v, int flag)
     // We're going to redraw - sync with view
     struct ged_draw_source_state *d = ged_draw_scene_ref_source_data(ref);
     ged_draw_scene_ref_mark_view_inputs_changed(ref);
-    ged_draw_scene_ref_realization_set_bsg_view_policy(ref, v);
+    ged_draw_scene_ref_realization_set_view_context_policy(ref, view_ctx);
 
     struct directory *dp = ged_draw_scene_ref_leaf_dp(ref);
     if (!d)
@@ -332,10 +349,10 @@ csg_wireframe_update(bsg_scene_ref ref, struct bsg_view *v, int flag)
 	return 0;
 
     struct rt_view_info view_info;
-    ged_draw_view_info_from_bsg(&view_info, v);
+    ged_draw_view_context_info_from_bsg(&view_info, view_ctx);
     if (ged_draw_scene_ref_publish_primitive_wireframe(ref, ip, NULL, d->tol,
-	    v, &view_info, 1) >= 0) {
-	bsg_scene_update_bounds(ref, v);
+	    view_ctx, &view_info, 1) >= 0) {
+	ged_draw_scene_ref_update_bounds_context(ref, view_ctx);
 	ged_draw_scene_ref_mark_realized_current(ref);
 	ged_draw_scene_ref_invalidate(ref);
     }
@@ -346,14 +363,14 @@ csg_wireframe_update(bsg_scene_ref ref, struct bsg_view *v, int flag)
 }
 
 static void
-bot_lod_mesh_realize(bsg_scene_ref ref, struct bsg_view *v)
+bot_lod_mesh_realize(bsg_scene_ref ref, void *view_ctx)
 {
-    if (bsg_scene_ref_is_null(ref) || !v)
+    if (ged_draw_scene_ref_is_null(ref) || !view_ctx)
 	return;
 
     ged_draw_scene_ref_realization_set_roles(ref, 0, 1);
 
-    ged_draw_log(1, "bot_lod_mesh_realize %s[%s]", ged_draw_scene_ref_name(ref), (v) ? bu_vls_cstr(&v->gv_name) : "NULL");
+    ged_draw_log(1, "bot_lod_mesh_realize %s[%s]", ged_draw_scene_ref_name(ref), draw_view_name_bsg(view_ctx));
 
     struct ged_draw_source_state *d = ged_draw_scene_ref_source_data(ref);
     if (!d)
@@ -392,7 +409,7 @@ bot_lod_mesh_realize(bsg_scene_ref ref, struct bsg_view *v)
 	d->rt_mesh_lod = rt_lod;
 
 	// Initialize the LoD data to the current view
-	int level = ged_draw_mesh_lod_load_view_scene_ref(rt_lod, ref, v, 0);
+	int level = ged_draw_mesh_lod_load_view_scene_ref_context(rt_lod, ref, view_ctx, 0);
 	if (level < 0) {
 	    bu_log("Error loading info for initial LoD view\n");
 	}
@@ -412,7 +429,7 @@ bot_lod_mesh_realize(bsg_scene_ref ref, struct bsg_view *v)
 	draw_mesh_lod_bounds_restore(ref, d);
     }
 
-    ged_draw_mesh_lod_load_view_scene_ref(draw_rt_mesh_lod(ref), ref, v, 0);
+    ged_draw_mesh_lod_load_view_scene_ref_context(draw_rt_mesh_lod(ref), ref, view_ctx, 0);
     draw_mesh_lod_publish(ref, d->rt_mesh_lod);
     draw_mesh_lod_bounds_restore(ref, d);
     ged_draw_scene_ref_invalidate(ref);
@@ -421,14 +438,14 @@ bot_lod_mesh_realize(bsg_scene_ref ref, struct bsg_view *v)
 }
 
 static void
-brep_lod_mesh_realize(bsg_scene_ref ref, struct bsg_view *v)
+brep_lod_mesh_realize(bsg_scene_ref ref, void *view_ctx)
 {
-    if (bsg_scene_ref_is_null(ref) || !v)
+    if (ged_draw_scene_ref_is_null(ref) || !view_ctx)
 	return;
     struct ged_draw_source_state *d = ged_draw_scene_ref_source_data(ref);
     if (!d)
 	return;
-    ged_draw_log(1, "brep_lod_mesh_realize %s[%s]", ged_draw_scene_ref_name(ref), (v) ? bu_vls_cstr(&v->gv_name) : "NULL");
+    ged_draw_log(1, "brep_lod_mesh_realize %s[%s]", ged_draw_scene_ref_name(ref), draw_view_name_bsg(view_ctx));
 
     ged_draw_scene_ref_realization_set_roles(ref, 0, 1);
 
@@ -535,13 +552,13 @@ brep_lod_mesh_realize(bsg_scene_ref ref, struct bsg_view *v)
 	    return;
 
 	// Initialize the LoD data to the current view
-	int level = ged_draw_mesh_lod_load_view_scene_ref(rt_lod, ref, v, 0);
+	int level = ged_draw_mesh_lod_load_view_scene_ref_context(rt_lod, ref, view_ctx, 0);
 	if (level < 0) {
 	    bu_log("Error loading info for initial LoD view\n");
 	}
     }
 
-    ged_draw_mesh_lod_load_view_scene_ref(draw_rt_mesh_lod(ref), ref, v, 0);
+    ged_draw_mesh_lod_load_view_scene_ref_context(draw_rt_mesh_lod(ref), ref, view_ctx, 0);
     draw_mesh_lod_publish(ref, d->rt_mesh_lod);
     draw_mesh_lod_bounds_restore(ref, d);
     ged_draw_scene_ref_invalidate(ref);
@@ -551,22 +568,22 @@ brep_lod_mesh_realize(bsg_scene_ref ref, struct bsg_view *v)
 
 /* Wrapper to handle adaptive vs non-adaptive wireframes */
 static void
-wireframe_plot(bsg_scene_ref ref, struct bsg_view *v, struct rt_db_internal *ip)
+wireframe_plot(bsg_scene_ref ref, void *view_ctx, struct rt_db_internal *ip)
 {
-    ged_draw_log(1, "wireframe_plot %s[%s]", ged_draw_scene_ref_name(ref), (v) ? bu_vls_cstr(&v->gv_name) : "NULL");
+    ged_draw_log(1, "wireframe_plot %s[%s]", ged_draw_scene_ref_name(ref), draw_view_name_bsg(view_ctx));
     struct ged_draw_source_state *d = ged_draw_scene_ref_source_data(ref);
     const struct bn_tol *tol = d->tol;
     const struct bg_tess_tol *ttol = d->ttol;
     ged_draw_scene_ref_realization_set_roles(ref, 1, 0);
 
     ged_draw_view_lod_policy policy;
-    ged_draw_view_lod_policy_from_bsg(&policy, v);
+    ged_draw_view_context_lod_policy_from_bsg(&policy, view_ctx);
 
     // Standard (view independent) wireframe
-    if (!v || !policy.csg_enabled) {
+    if (!view_ctx || !policy.csg_enabled) {
 	ged_draw_scene_ref_geometry_clear(ref);
 	if (ged_draw_scene_ref_publish_primitive_wireframe(ref, ip, ttol, tol,
-		bsg_scene_view(ref), NULL, 0) >= 0) {
+		ged_draw_scene_ref_view_context(ref), NULL, 0) >= 0) {
 	    // Because this data is view independent, it only needs to be
 	    // generated once rather than per-view.
 	    ged_draw_scene_ref_realization_set_current(ref, 1);
@@ -576,7 +593,7 @@ wireframe_plot(bsg_scene_ref ref, struct bsg_view *v, struct rt_db_internal *ip)
 
     // If we're adaptive, call the primitive's adaptive plotting, if any.
     if (ged_draw_source_primitive_has_lod_realize(ip)) {
-	csg_wireframe_update(ref, v, 1);
+	csg_wireframe_update(ref, view_ctx, 1);
 	return;
     }
 
@@ -584,7 +601,7 @@ wireframe_plot(bsg_scene_ref ref, struct bsg_view *v, struct rt_db_internal *ip)
     // object.  Do the normal plot rather than show nothing.
     ged_draw_scene_ref_geometry_clear(ref);
     if (ged_draw_scene_ref_publish_primitive_wireframe(ref, ip, ttol, tol,
-	    bsg_scene_view(ref), NULL, 0) >= 0) {
+	    ged_draw_scene_ref_view_context(ref), NULL, 0) >= 0) {
 	// Because this data is view independent, it only needs to be
 	// generated once rather than per-view.
 	ged_draw_scene_ref_realization_set_current(ref, 1);
@@ -593,12 +610,12 @@ wireframe_plot(bsg_scene_ref ref, struct bsg_view *v, struct rt_db_internal *ip)
 
 static void
 draw_tessellation_failure_fallback(bsg_scene_ref ref,
-				   struct bsg_view *v,
+				   void *view_ctx,
 				   struct rt_db_internal *ip,
 				   const char *name,
 				   const char *mode_name)
 {
-    if (bsg_scene_strict_fallback(ref)) {
+    if (ged_draw_scene_ref_strict_fallback(ref)) {
 	bu_log("ERROR(%s): %s tessellation failed; geometry cleared\n",
 		name ? name : "<unknown>", mode_name ? mode_name : "draw");
 	ged_draw_scene_ref_geometry_clear(ref);
@@ -608,24 +625,24 @@ draw_tessellation_failure_fallback(bsg_scene_ref ref,
 
     bu_log("WARNING(%s): %s tessellation failed; falling back to wireframe\n",
 	    name ? name : "<unknown>", mode_name ? mode_name : "draw");
-    wireframe_plot(ref, v, ip);
+    wireframe_plot(ref, view_ctx, ip);
 }
 
 /* This function is the master controller that decides, based on available settings
  * and data, which specific drawing routines need to be triggered. */
 extern "C" void
-ged_draw_scene_ref_realize(bsg_scene_ref ref, struct bsg_view *v)
+ged_draw_scene_ref_realize(bsg_scene_ref ref, void *view_ctx)
 {
     // If the scene object indicates we're good, don't repeat.
-    if (ged_draw_scene_ref_realization_current(ref) && !v)
+    if (ged_draw_scene_ref_realization_current(ref) && !view_ctx)
 	return;
 
-    ged_draw_log(1, "draw_scene %s[%s]", ged_draw_scene_ref_name(ref), (v) ? bu_vls_cstr(&v->gv_name) : "NULL");
+    ged_draw_log(1, "draw_scene %s[%s]", ged_draw_scene_ref_name(ref), draw_view_name_bsg(view_ctx));
 
     // If we're not adaptive, trigger the view insensitive drawing routines
     ged_draw_view_lod_policy policy;
-    ged_draw_view_lod_policy_from_bsg(&policy, v);
-    if (v && !policy.csg_enabled && !policy.mesh_enabled) {
+    ged_draw_view_context_lod_policy_from_bsg(&policy, view_ctx);
+    if (view_ctx && !policy.csg_enabled && !policy.mesh_enabled) {
 	return ged_draw_scene_ref_realize(ref, NULL);
     }
 
@@ -634,9 +651,9 @@ ged_draw_scene_ref_realize(bsg_scene_ref ref, struct bsg_view *v)
     // any children and trigger their drawing operations.
     struct ged_draw_source_state *d = ged_draw_scene_ref_source_data(ref);
     if (!d) {
-	for (size_t i = 0; i < bsg_scene_child_count(ref); i++) {
-	    bsg_scene_ref child_ref = bsg_scene_child_at(ref, i);
-	    ged_draw_scene_ref_realize(child_ref, v);
+	for (size_t i = 0; i < ged_draw_scene_ref_child_count(ref); i++) {
+	    bsg_scene_ref child_ref = ged_draw_scene_ref_child_at(ref, i);
+	    ged_draw_scene_ref_realize(child_ref, view_ctx);
 	}
 	return;
     }
@@ -649,17 +666,25 @@ ged_draw_scene_ref_realize(bsg_scene_ref ref, struct bsg_view *v)
 
     /* Evaluated wireframe draws boolean-evaluated edges rather than the
      * individual solid wireframes. */
-    if (ged_draw_scene_ref_draw_mode(ref) == BSG_DRAW_MODE_EVAL_WIRE) {
-	ged_draw_scene_ref_eval_wireframe(ref);
-	bsg_scene_update_bounds(ref, v);
+    if (ged_draw_scene_ref_draw_mode(ref) == GED_DRAW_MODE_EVAL_WIRE) {
+	ged_draw_shape_state *shape_state = ged_draw_scene_ref_shape_state(ref);
+	struct ged *gedp = shape_state ? shape_state->gedp : NULL;
+	ged_draw_shape_ref shape_ref = gedp ?
+	    ged_draw_shape_ref_from_scene_ref(gedp, ref) : GED_DRAW_SHAPE_REF_NULL;
+	ged_draw_shape_ref_eval_wireframe(gedp, shape_ref);
+	ged_draw_scene_ref_update_bounds_context(ref, view_ctx);
 	ged_draw_scene_ref_realization_set_current(ref, 1);
 	return;
     }
 
     /* Sampled evaluated points draw triangle samples in lieu of wireframes. */
-    if (ged_draw_scene_ref_draw_mode(ref) == BSG_DRAW_MODE_EVAL_POINTS) {
-	ged_draw_scene_ref_eval_points(ref);
-	bsg_scene_update_bounds(ref, v);
+    if (ged_draw_scene_ref_draw_mode(ref) == GED_DRAW_MODE_EVAL_POINTS) {
+	ged_draw_shape_state *shape_state = ged_draw_scene_ref_shape_state(ref);
+	struct ged *gedp = shape_state ? shape_state->gedp : NULL;
+	ged_draw_shape_ref shape_ref = gedp ?
+	    ged_draw_shape_ref_from_scene_ref(gedp, ref) : GED_DRAW_SHAPE_REF_NULL;
+	ged_draw_shape_ref_eval_points(gedp, shape_ref);
+	ged_draw_scene_ref_update_bounds_context(ref, view_ctx);
 	ged_draw_scene_ref_realization_set_current(ref, 1);
 	return;
     }
@@ -679,17 +704,20 @@ ged_draw_scene_ref_realize(bsg_scene_ref ref, struct bsg_view *v)
 
     // Mesh LoD BoTs have specialized routines to help cope with very large
     // data sets, both for wireframe and shaded mode.
-    if (dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT && v && policy.mesh_enabled &&
-       (ged_draw_scene_ref_draw_mode(ref) == 0 || ged_draw_scene_ref_draw_mode(ref) == 1)) {
-	bot_lod_mesh_realize(ref, v);
+    if (dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT && view_ctx && policy.mesh_enabled &&
+       (ged_draw_scene_ref_draw_mode(ref) == GED_DRAW_MODE_WIRE ||
+	ged_draw_scene_ref_draw_mode(ref) == GED_DRAW_MODE_SHADED_BOTS)) {
+	bot_lod_mesh_realize(ref, view_ctx);
 	return;
     }
 
     // Mesh LoD BReps have specialized routines to manage shaded displays, which
     // can involve slow and large mesh generations.  BRep wireframes are based on the
     // NURBS data, so this is used only for shaded mode
-    if (dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP && v && policy.mesh_enabled && ged_draw_scene_ref_draw_mode(ref) == 1) {
-	brep_lod_mesh_realize(ref, v);
+    if (dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP && view_ctx &&
+	    policy.mesh_enabled &&
+	    ged_draw_scene_ref_draw_mode(ref) == GED_DRAW_MODE_SHADED_BOTS) {
+	brep_lod_mesh_realize(ref, view_ctx);
 	return;
     }
 
@@ -711,14 +739,14 @@ ged_draw_scene_ref_realize(bsg_scene_ref ref, struct bsg_view *v)
 
     // If we don't have a BRL-CAD type, see if we've got a plot routine
     if (ip->idb_major_type != DB5_MAJORTYPE_BRLCAD) {
-	wireframe_plot(ref, v, ip);
+	wireframe_plot(ref, view_ctx, ip);
 	goto geom_done;
     }
 
     // At least for the moment, we don't try anything fancy with pipes - they
     // get a wireframe, regardless of mode settings
     if (ip->idb_minor_type == DB5_MINORTYPE_BRLCAD_PIPE) {
-	wireframe_plot(ref, v, ip);
+	wireframe_plot(ref, view_ctx, ip);
 	goto geom_done;
     }
 
@@ -728,7 +756,7 @@ ged_draw_scene_ref_realize(bsg_scene_ref ref, struct bsg_view *v)
 	ged_draw_scene_ref_realization_set_roles(ref, 0, 0);
 	if (ip->idb_meth && ip->idb_meth->ft_indexed_face_set) {
 	    struct rt_view_info view_info;
-	    ged_draw_view_info_from_bsg(&view_info, v);
+	    ged_draw_view_context_info_from_bsg(&view_info, view_ctx);
 	    if (!ged_draw_scene_ref_publish_primitive_face_set(ref, ip, ttol,
 			tol, &view_info)) {
 		bu_log("ERROR(%s): %s shaded face-set publication failed\n",
@@ -740,56 +768,56 @@ ged_draw_scene_ref_realize(bsg_scene_ref ref, struct bsg_view *v)
 
     // Now the more general cases
     switch (ged_draw_scene_ref_draw_mode(ref)) {
-	case 0:
-	case 1:
+	case GED_DRAW_MODE_WIRE:
+	case GED_DRAW_MODE_SHADED_BOTS:
 	    // Get wireframe (for mode 1, all the non-wireframes are handled
 	    // by the above BOT/POLY/BREP cases
-	    wireframe_plot(ref, v, ip);
-	    ged_draw_scene_ref_set_draw_mode(ref, 0);
+	    wireframe_plot(ref, view_ctx, ip);
+	    ged_draw_scene_ref_set_draw_mode(ref, GED_DRAW_MODE_WIRE);
 	    break;
-	case 2:
+	case GED_DRAW_MODE_SHADED:
 	    // Shade everything except pipe, don't evaluate.  Preserve legacy
 	    // interactive fallback by default; --strict makes failures explicit.
 	    if (prim_tess(ref, ip) < 0) {
-		draw_tessellation_failure_fallback(ref, v, ip, dp->d_namep, "shaded");
+		draw_tessellation_failure_fallback(ref, view_ctx, ip, dp->d_namep, "shaded");
 	    } else {
 		ged_draw_scene_ref_realization_set_current(ref, 1);
 	    }
 	    break;
-	case BSG_DRAW_MODE_EVAL_WIRE:
+	case GED_DRAW_MODE_EVAL_WIRE:
 	    // Evaluated wireframes
 	    bu_log("Error - got too deep into _scene_obj_draw routine with evaluated wireframe mode\n");
 	    return;
 	    break;
-	case 4:
+	case GED_DRAW_MODE_HIDDEN_LINE:
 	    // Hidden line - generate polygonal forms.  Preserve legacy fallback
 	    // by default; --strict makes failures explicit.
 	    if (prim_tess(ref, ip) < 0) {
-		draw_tessellation_failure_fallback(ref, v, ip, dp->d_namep, "hidden-line");
+		draw_tessellation_failure_fallback(ref, view_ctx, ip, dp->d_namep, "hidden-line");
 	    } else {
 		ged_draw_scene_ref_realization_set_current(ref, 1);
 	    }
 	    break;
-	case BSG_DRAW_MODE_EVAL_POINTS:
+	case GED_DRAW_MODE_EVAL_POINTS:
 	    // Triangles at sampled points
 	    bu_log("Error - got too deep into _scene_obj_draw routine with evaluated sampled-points mode\n");
 	    return;
 	    break;
 	default:
 	    // Default to wireframe
-	    wireframe_plot(ref, v, ip);
+	    wireframe_plot(ref, view_ctx, ip);
 	    break;
     }
 
 geom_done:
 
     // Update s_size and s_center
-    bsg_scene_update_bounds(ref, v);
+    ged_draw_scene_ref_update_bounds_context(ref, view_ctx);
 
     // Store current view info, in case of adaptive plotting
-    struct bsg_view *sv = bsg_scene_view(ref);
-    if (sv)
-	ged_draw_scene_ref_realization_set_bsg_view_policy(ref, sv);
+    void *scene_view_ctx = ged_draw_scene_ref_view_context(ref);
+    if (scene_view_ctx)
+	ged_draw_scene_ref_realization_set_view_context_policy(ref, scene_view_ctx);
 
     rt_db_free_internal(&dbintern);
 }
@@ -1011,7 +1039,7 @@ draw_gather_paths(struct db_full_path *path, mat_t *curr_mat, void *client_data)
 	// will end up getting handled by the object update callbacks, and the
 	// job here will just be to set up the key data for later use...
 
-	ged_draw_shape_draft *draft = ged_draw_shape_draft_create(dd->gedp, dd->v, 0);
+	ged_draw_shape_draft *draft = ged_draw_shape_draft_create_context(dd->gedp, dd->view_ctx, 0);
 	if (!draft)
 	    return;
 
@@ -1021,7 +1049,7 @@ draw_gather_paths(struct db_full_path *path, mat_t *curr_mat, void *client_data)
 	ged_draw_shape_draft_set_fullpath(draft, path);
 	ged_draw_shape_draft_set_draw_mat(draft, *curr_mat);
 	if (dd->vs)
-	    ged_draw_shape_draft_apply_settings(draft, dd->vs);
+	    ged_draw_shape_draft_apply_appearance_settings(draft, dd->vs);
 	ged_draw_shape_draft_mark_db_object(draft);
 	ged_draw_shape_draft_bump_appearance_revision(draft);
 	if (!dd->vs || !dd->vs->draw_solid_lines_only)
@@ -1053,6 +1081,105 @@ draw_gather_paths(struct db_full_path *path, mat_t *curr_mat, void *client_data)
 	(void)ged_draw_shape_draft_commit_to_scene_ref(draft, dd->g_ref);
 
     }
+}
+
+
+extern "C" int
+ged_draw_view_context_gobject_create(struct ged *gedp,
+				     void *view_ctx,
+				     const char *db_path,
+				     const char *gobject_name,
+				     struct bu_vls *result)
+{
+    if (!gedp || !gedp->dbip || !view_ctx || !db_path || !db_path[0] ||
+	    !gobject_name || !gobject_name[0])
+	return 0;
+
+    if (ged_draw_view_context_feature_exists(view_ctx, gobject_name)) {
+	if (result)
+	    bu_vls_printf(result, "View feature %s already exists\n", gobject_name);
+	return 0;
+    }
+
+    struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
+    if (!wdbp)
+	return 0;
+
+    struct db_full_path *fp;
+    BU_GET(fp, struct db_full_path);
+    db_full_path_init(fp);
+    if (db_string_to_path(fp, gedp->dbip, db_path) < 0) {
+	db_free_full_path(fp);
+	BU_PUT(fp, struct db_full_path);
+	if (result)
+	    bu_vls_printf(result, "Invalid path: %s\n", db_path);
+	return 0;
+    }
+
+    mat_t mat;
+    MAT_IDN(mat);
+    if (!db_path_to_mat(gedp->dbip, fp, mat, fp->fp_len - 1)) {
+	db_free_full_path(fp);
+	BU_PUT(fp, struct db_full_path);
+	if (result)
+	    bu_vls_printf(result, "Invalid path matrix: %s\n", db_path);
+	return 0;
+    }
+
+    struct rt_db_internal *ip;
+    BU_GET(ip, struct rt_db_internal);
+    RT_DB_INTERNAL_INIT(ip);
+    if (rt_db_get_internal(ip, DB_FULL_PATH_CUR_DIR(fp), gedp->dbip, mat) < 0) {
+	db_free_full_path(fp);
+	BU_PUT(fp, struct db_full_path);
+	rt_db_free_internal(ip);
+	BU_PUT(ip, struct rt_db_internal);
+	return 0;
+    }
+
+    bsg_scene_ref g_ref = ged_draw_view_context_overlay_create(view_ctx, gobject_name);
+    if (ged_draw_scene_ref_is_null(g_ref)) {
+	db_free_full_path(fp);
+	BU_PUT(fp, struct db_full_path);
+	rt_db_free_internal(ip);
+	BU_PUT(ip, struct rt_db_internal);
+	return 0;
+    }
+
+    ged_draw_shape_state *state = ged_draw_shape_ref_set_fullpath(g_ref, gedp, fp);
+    if (!state) {
+	ged_draw_scene_ref_release(g_ref);
+	db_free_full_path(fp);
+	BU_PUT(fp, struct db_full_path);
+	rt_db_free_internal(ip);
+	BU_PUT(ip, struct rt_db_internal);
+	return 0;
+    }
+    state->u_data = (void *)ip;
+    state->u_data_kind = GED_DRAW_SHAPE_USER_DATA_RT_DB_INTERNAL;
+    ip = NULL;
+
+    unsigned char wcolor[3] = {255, 255, 255};
+    struct ged_draw_appearance_settings vs = GED_DRAW_APPEARANCE_SETTINGS_INIT;
+    std::map<struct directory *, fastf_t> s_size;
+    struct draw_data_t dd = {};
+    dd.gedp = gedp;
+    dd.dbip = gedp->dbip;
+    dd.view_ctx = view_ctx;
+    dd.tol = &wdbp->wdb_tol;
+    dd.ttol = &wdbp->wdb_ttol;
+    dd.color_inherit = 0;
+    dd.bound_only = 0;
+    dd.s_size = &s_size;
+    bu_color_from_rgb_chars(&dd.c, wcolor);
+    dd.vs = &vs;
+    dd.g_ref = g_ref;
+
+    draw_gather_paths(fp, &mat, (void *)&dd);
+
+    db_free_full_path(fp);
+    BU_PUT(fp, struct db_full_path);
+    return 1;
 }
 
 // Local Variables:

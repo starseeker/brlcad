@@ -38,24 +38,24 @@
 #include "raytrace.h"
 #include "analyze.h"
 
-#include "./ged_private.h"
+#include "ged/bsg_ged_draw.h"
 
 int
-ged_draw_scene_ref_eval_points(bsg_scene_ref ref)
+ged_draw_shape_ref_eval_points(struct ged *gedp, ged_draw_shape_ref ref)
 {
-    if (bsg_scene_ref_is_null(ref))
+    if (!gedp || ged_draw_shape_ref_is_null(ref))
 	return BRLCAD_OK; /* nothing to do is fine */
 
-    struct ged_draw_source_state *d = ged_draw_scene_ref_source_data(ref);
-    if (!d)
+    struct ged_draw_shape_source_snapshot source;
+    if (!ged_draw_shape_ref_source_snapshot(gedp, ref, &source))
 	return BRLCAD_OK; /* nothing to do is fine */
 
-    struct directory *dp = ged_draw_scene_ref_leaf_dp(ref);
+    struct directory *dp = source.leaf_dp;
     if (!dp)
 	return BRLCAD_OK; /* nothing to do is fine */
 
     struct rt_db_internal intern;
-    if (rt_db_get_internal(&intern, dp, d->dbip, NULL) < 0)
+    if (rt_db_get_internal(&intern, dp, source.dbip, NULL) < 0)
 	return BRLCAD_ERROR;
 
     struct rt_primitive_indexed_face_set face_set;
@@ -63,7 +63,7 @@ ged_draw_scene_ref_eval_points(bsg_scene_ref ref)
 
     int ret = rt_obj_sampled_face_set(&face_set, &intern);
     if (ret == BRLCAD_OK) {
-	if (!ged_draw_scene_ref_publish_indexed_face_set(ref,
+	if (!ged_draw_shape_ref_publish_indexed_face_set(gedp, ref,
 		(const point_t *)face_set.points, face_set.point_count,
 		(const vect_t *)face_set.normals, face_set.normal_count,
 		face_set.indices, face_set.index_count))

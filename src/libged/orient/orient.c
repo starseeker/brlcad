@@ -29,8 +29,6 @@
 #include <ctype.h>
 #include <string.h>
 
-#include "rt/view_legacy_bsg.h"
-
 #include "../ged_private.h"
 
 
@@ -80,9 +78,9 @@ ged_orient_core(struct ged *gedp, int argc, const char *argv[])
 
     mat_t rotation;
     quat_quat2mat(rotation, quat);
-    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
-    rt_view_rotation_set_bsg(v, rotation);
-    rt_view_update_bsg(v);
+    void *view_ctx = ged_view_active_ctx(gedp);
+    ged_view_context_rotation_set(view_ctx, rotation);
+    ged_view_context_update(view_ctx);
 
     return BRLCAD_OK;
 }

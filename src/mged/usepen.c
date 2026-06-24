@@ -31,7 +31,6 @@
 #include "bn.h"
 #include "ged/view.h"
 #include "rt/view.h"
-#include "rt/view_legacy_bsg.h"
 
 #include "./mged.h"
 #include "./mged_dm.h"
@@ -107,7 +106,8 @@ _highlight_pick_cb(const struct ged_draw_shape_record *rec, void *ud)
 static void
 highlight_from_y(struct mged_state *s, int y) {
     int count;
-    int drawn_count = rt_view_refresh_drawn_count_from_bsg(view_state->vs_gvp);
+    void *view_ctx = view_state->vs_gvp;
+    int drawn_count = ged_view_context_refresh_drawn_count_get(view_ctx);
 
     /*
      * Divide the mouse into one vertical zone per shape painted in the last
@@ -125,7 +125,7 @@ highlight_from_y(struct mged_state *s, int y) {
      * highlight rendering and resolved appearance see a typed record rather
      * than only the legacy global. */
     (void)ged_draw_view_selection_set_highlighted_shape_ref(s->gedp,
-	    view_state->vs_gvp, mged_highlight.shape);
+	    view_ctx, mged_highlight.shape);
 
     mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
@@ -144,6 +144,7 @@ f_aip(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 
     struct ged_draw_shape_record hrec;
     int have_highlight = mged_highlight_shape_record(s, &hrec);
+    void *view_ctx = view_state->vs_gvp;
 
     if (argc < 1 || 2 < argc) {
 	struct bu_vls vls = BU_VLS_INIT_ZERO;
@@ -154,7 +155,7 @@ f_aip(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	return TCL_ERROR;
     }
 
-    if (!rt_view_refresh_drawn_count_from_bsg(view_state->vs_gvp)) {
+    if (!ged_view_context_refresh_drawn_count_get(view_ctx)) {
 	return TCL_OK;
     } else if (s->global_editing_state != ST_S_PICK && s->global_editing_state != ST_O_PICK  && s->global_editing_state != ST_O_PATH) {
 	return TCL_OK;
@@ -197,7 +198,7 @@ f_aip(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
     /* Keep interaction selection in sync with the highlighted draw ref. */
     {
 	(void)ged_draw_view_selection_set_highlighted_shape_ref(s->gedp,
-		view_state->vs_gvp, mged_highlight.shape);
+		view_ctx, mged_highlight.shape);
     }
 
     mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
@@ -215,8 +216,9 @@ wrt_view(struct mged_state *s, mat_t out, const mat_t change, const mat_t in)
 {
     static mat_t t1, t2;
     mat_t view_center;
+    void *view_ctx = view_state->vs_gvp;
 
-    rt_view_center_from_bsg(view_center, view_state->vs_gvp);
+    ged_view_context_center_get(view_center, view_ctx);
     bn_mat_mul(t1, view_center, in);
     bn_mat_mul(t2, change, t1);
 

@@ -35,13 +35,16 @@
 #include "../view/view.h"
 
 void
-to_autoview_view(struct bsg_view *gdvp, const char *scale)
+to_autoview_view(void *view_ctx, const char *scale)
 {
     int ret;
     const char *av[3];
 
-    struct tclcad_view_data *tvd = (struct tclcad_view_data *)gdvp->u_data;
-    ged_view_active_ctx_set(tvd->gedp, gdvp);
+    struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(view_ctx);
+    if (!tvd)
+	return;
+
+    ged_view_active_ctx_set(tvd->gedp, view_ctx);
     av[0] = "autoview";
     av[1] = scale;
     av[2] = NULL;
@@ -56,7 +59,7 @@ to_autoview_view(struct bsg_view *gdvp, const char *scale)
 	    Tcl_Eval(current_top->to_interp, bu_vls_addr(&tvd->gdv_callback));
 	}
 
-	to_refresh_view(gdvp);
+	to_refresh_view(view_ctx);
     }
 }
 
@@ -68,7 +71,7 @@ to_autoview(struct ged *gedp,
 	    const char *usage,
 	    int UNUSED(maxargs))
 {
-    struct bsg_view *gdvp;
+    void *view_ctx;
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -78,16 +81,16 @@ to_autoview(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp = (struct bsg_view *)ged_view_find_ctx(gedp, argv[1]);
-    if (!gdvp) {
+    view_ctx = ged_view_find_ctx(gedp, argv[1]);
+    if (!view_ctx) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
     }
 
     if (argc > 2)
-	to_autoview_view(gdvp, argv[2]);
+	to_autoview_view(view_ctx, argv[2]);
     else
-	to_autoview_view(gdvp, NULL);
+	to_autoview_view(view_ctx, NULL);
 
     return BRLCAD_OK;
 }
@@ -96,12 +99,10 @@ to_autoview(struct ged *gedp,
 void
 to_autoview_all_views(struct tclcad_obj *top)
 {
-    struct bsg_view *gdvp;
-
     struct bu_ptbl *views = ged_view_set_views_ctx(top->to_gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	gdvp = (struct bsg_view *)BU_PTBL_GET(views, i);
-	to_autoview_view(gdvp, NULL);
+	void *view_ctx = BU_PTBL_GET(views, i);
+	to_autoview_view(view_ctx, NULL);
     }
 }
 

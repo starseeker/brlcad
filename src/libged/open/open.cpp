@@ -29,7 +29,6 @@
 
 #include "bu/cmd.h"
 #include "bu/opt.h"
-#include "rt/view_legacy_bsg.h"
 #include "../../librt/librt_private.h"
 
 #include "ged/event_txn.h"
@@ -137,9 +136,9 @@ ged_opendb_core(struct ged *gedp, int argc, const char *argv[])
     ged_event_librt_callbacks_enable(gedp);
 
     // Set the view units, if we have a view
-    struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
-    if (view) {
-	rt_view_unit_conversion_set_bsg(view,
+    void *view_ctx = ged_view_active_ctx(gedp);
+    if (view_ctx) {
+	ged_view_context_unit_conversion_set(view_ctx,
 	    gedp->dbip->dbi_local2base,
 	    gedp->dbip->dbi_base2local);
     }

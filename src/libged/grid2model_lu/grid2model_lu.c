@@ -29,8 +29,6 @@
 #include <ctype.h>
 #include <string.h>
 
-#include "rt/view_legacy_bsg.h"
-
 #include "../ged_private.h"
 
 
@@ -63,10 +61,10 @@ ged_grid2model_lu_core(struct ged *gedp, int argc, const char *argv[])
 	goto bad;
     scan[Z] = 0.0;
 
-    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
-    rt_view_model2view_from_bsg(model2view, v);
-    rt_view_view2model_from_bsg(view2model, v);
-    view_scale = rt_view_scale_from_bsg(v);
+    void *view_ctx = ged_view_active_ctx(gedp);
+    ged_view_context_model2view_get(model2view, view_ctx);
+    ged_view_context_view2model_get(view2model, view_ctx);
+    view_scale = ged_view_context_scale_get(view_ctx);
     f = 1.0 / (view_scale * gedp->dbip->dbi_base2local);
     VSCALE(diff, scan, f);
     MAT4X3PNT(mo_view_pt, model2view, model_pt);

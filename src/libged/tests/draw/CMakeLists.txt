@@ -321,7 +321,7 @@ distclean(${CMAKE_CURRENT_BINARY_DIR}/moss_lod_cr_tmp.g)
 distclean(${CMAKE_CURRENT_BINARY_DIR}/lod_crossrun_cache)
 
 # MGED BSG scene and render contract regression tests
-brlcad_addexec(ged_test_mged_bsg "mged_bsg.cpp;util.cpp" "libged;libdm;libbsg" TEST)
+brlcad_addexec(ged_test_mged_bsg "mged_bsg.cpp;util.cpp" "libged;libdm" TEST)
 if(TARGET ged_test_mged_bsg)
   foreach(tdp ${test_deps})
     if (TARGET ${tdp})
@@ -359,7 +359,7 @@ distclean(${CMAKE_CURRENT_BINARY_DIR}/rtw_bsg_t4.g)
 distclean(${CMAKE_CURRENT_BINARY_DIR}/rtw_bsg_t5.g)
 
 # GED draw-scene API regression.
-brlcad_addexec(ged_test_ged_draw_scene "ged_draw_scene.cpp" "libged;libbsg" TEST)
+brlcad_addexec(ged_test_ged_draw_scene "ged_draw_scene.cpp" "libged" TEST)
 if(TARGET ged_test_ged_draw_scene)
   foreach(tdp ${test_deps})
     if (TARGET ${tdp})
@@ -407,7 +407,7 @@ if(TARGET ged_test_view_independent)
 endif()
 
 # Phase V7: consolidated view command grammar and aliases
-brlcad_addexec(ged_test_view_command "view_command.cpp" "libged;libbsg" TEST)
+brlcad_addexec(ged_test_view_command "view_command.cpp" "libged;libbu" TEST)
 if(TARGET ged_test_view_command)
   foreach(tdp ${test_deps})
     if (TARGET ${tdp})

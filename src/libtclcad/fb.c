@@ -950,16 +950,17 @@ Fbo_Init(Tcl_Interp *interp)
 void
 to_fbs_callback(void *clientData)
 {
-    struct bsg_view *gdvp = (struct bsg_view *)clientData;
-
-    to_refresh_view(gdvp);
+    to_refresh_view(clientData);
 }
 
 
 int
-to_close_fbs(struct bsg_view *gdvp)
+to_close_fbs(void *view_ctx)
 {
-    struct tclcad_view_data *tvd = (struct tclcad_view_data *)gdvp->u_data;
+    struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(view_ctx);
+    if (!tvd)
+	return TCL_ERROR;
+
     if (tvd->gdv_fbs.fbs_fbp == FB_NULL)
 	return TCL_OK;
 
@@ -975,14 +976,17 @@ to_close_fbs(struct bsg_view *gdvp)
  * Open/activate the display managers framebuffer.
  */
 int
-to_open_fbs(struct bsg_view *gdvp, Tcl_Interp *interp)
+to_open_fbs(void *view_ctx, Tcl_Interp *interp)
 {
     /* already open */
-    struct tclcad_view_data *tvd = (struct tclcad_view_data *)gdvp->u_data;
+    struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(view_ctx);
+    if (!tvd)
+	return TCL_ERROR;
+
     if (tvd->gdv_fbs.fbs_fbp != FB_NULL)
 	return TCL_OK;
 
-    struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(gdvp);
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(view_ctx);
     tvd->gdv_fbs.fbs_fbp = dmp ? dm_get_fb(dmp) : FB_NULL;
 
     if (tvd->gdv_fbs.fbs_fbp == FB_NULL) {
@@ -1027,15 +1031,18 @@ to_set_fb_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = (struct bsg_view *)ged_view_find_ctx(gedp, argv[1]);
-    if (!gdvp) {
+    void *view_ctx = ged_view_find_ctx(gedp, argv[1]);
+    if (!view_ctx) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
     }
 
+    struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(view_ctx);
+    if (!tvd)
+	return BRLCAD_ERROR;
+
     /* Get fb mode */
     if (argc == 2) {
-	struct tclcad_view_data *tvd = (struct tclcad_view_data *)gdvp->u_data;
 	bu_vls_printf(gedp->ged_result_str, "%d", tvd->gdv_fbs.fbs_mode);
 	return BRLCAD_OK;
     }
@@ -1051,11 +1058,8 @@ to_set_fb_mode(struct ged *gedp,
     else if (TCLCAD_OBJ_FB_MODE_OVERLAY < mode)
 	mode = TCLCAD_OBJ_FB_MODE_OVERLAY;
 
-    {
-	struct tclcad_view_data *tvd = (struct tclcad_view_data *)gdvp->u_data;
-	tvd->gdv_fbs.fbs_mode = mode;
-    }
-    to_refresh_view(gdvp);
+    tvd->gdv_fbs.fbs_mode = mode;
+    to_refresh_view(view_ctx);
 
     return BRLCAD_OK;
 }
@@ -1083,13 +1087,16 @@ to_listen(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *gdvp = (struct bsg_view *)ged_view_find_ctx(gedp, argv[1]);
-    if (!gdvp) {
+    void *view_ctx = ged_view_find_ctx(gedp, argv[1]);
+    if (!view_ctx) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
     }
 
-    struct tclcad_view_data *tvd = (struct tclcad_view_data *)gdvp->u_data;
+    struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(view_ctx);
+    if (!tvd)
+	return BRLCAD_ERROR;
+
     if (tvd->gdv_fbs.fbs_fbp == FB_NULL) {
 	bu_vls_printf(gedp->ged_result_str, "%s listen: framebuffer not open!\n", argv[0]);
 	return BRLCAD_ERROR;

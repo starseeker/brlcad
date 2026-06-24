@@ -51,8 +51,8 @@ extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory
 static void
 refresh_view(struct ged *gedp, int vnum)
 {
-    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
-    struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, vnum);
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
+    void *v = BU_PTBL_GET(views, vnum);
     if (!v)
 	return;
 
@@ -61,7 +61,7 @@ refresh_view(struct ged *gedp, int vnum)
     txn.view = v;
     ged_draw_apply_transaction(gedp, &txn, NULL);
 
-    struct dm *dmp = (struct dm *)v->dmp;
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
     dm_make_current(dmp);
     unsigned char *bg1, *bg2;
     dm_get_bg(&bg1, &bg2, dmp);
@@ -75,11 +75,11 @@ refresh_view(struct ged *gedp, int vnum)
 static int
 grab_view(struct ged *gedp, int vnum, const char *fname)
 {
-    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
-    struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, vnum);
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
+    void *v = BU_PTBL_GET(views, vnum);
     if (!v)
 	return -1;
-    struct dm *dmp = (struct dm *)v->dmp;
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
     const char *s_av[4] = {"screengrab", "-D",
 	bu_vls_cstr(dm_get_pathname(dmp)), fname};
     return ged_exec_screengrab(gedp, 4, s_av);
@@ -151,47 +151,48 @@ main(int ac, char *av[])
     db_add_changed_clbk(gedp->dbip, &ged_changed_callback, (void *)gedp);
 
     /* Remove the default view; we'll add our own four */
-    rt_view_set_remove_view_bsg(&gedp->ged_views, NULL);
+    void *view_set_ctx = ged_view_set_ctx(gedp);
+    rt_view_set_context_remove_bsg(view_set_ctx, NULL);
 
     /* az/el per view matching the quad test reference */
     const double aet[4][3] = {{35,25,0},{90,0,0},{0,90,0},{0,0,90}};
 
     const char *s_av[8] = {NULL};
     for (int i = 0; i < 4; i++) {
-	struct bsg_view *v;
-	BU_GET(v, struct bsg_view);
+	void *v = rt_view_context_create_bsg();
 	if (!i)
-	    gedp->ged_gvp = v;
-	rt_view_init_bsg(v, &gedp->ged_views);
-	bu_vls_sprintf(&v->gv_name, "V%d", i);
-	rt_view_set_add_view_bsg(&gedp->ged_views, v);
+	    ged_view_active_ctx_set(gedp, v);
+	char view_name[16];
+	snprintf(view_name, sizeof(view_name), "V%d", i);
+	rt_view_context_name_set_bsg(v, view_name);
+	rt_view_set_context_add_bsg(view_set_ctx, v);
 	bu_ptbl_ins(&gedp->ged_free_views, (long *)v);
-	(void)rt_view_independent_scope_ref_bsg(v, 1 /*create*/);
+	(void)rt_view_context_independent_scope_is_null_bsg(v, 1 /*create*/);
 
 	/* Attach one swrast DM per view */
 	struct bu_vls dm_name = BU_VLS_INIT_ZERO;
 	bu_vls_sprintf(&dm_name, "SW%d", i);
-	s_av[0] = "dm"; s_av[1] = "attach"; s_av[2] = "-V"; s_av[3] = bu_vls_cstr(&v->gv_name);
+	s_av[0] = "dm"; s_av[1] = "attach"; s_av[2] = "-V"; s_av[3] = view_name;
 	s_av[4] = "swrast"; s_av[5] = bu_vls_cstr(&dm_name); s_av[6] = NULL;
 	ged_exec_dm(gedp, 6, s_av);
 	bu_vls_free(&dm_name);
 
-	struct dm *dmp = (struct dm *)v->dmp;
+	struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
 	dm_set_width(dmp, 512);
 	dm_set_height(dmp, 512);
 	dm_configure_win(dmp, 0);
 	dm_set_zbuffer(dmp, 1);
 	fastf_t wb[6] = {-1, 1, -1, 1, -100, 100};
 	dm_set_win_bounds(dmp, wb);
-	dm_set_vp(dmp, rt_view_scale_storage_from_bsg(v));
-	v->dmp           = dmp;
-	rt_view_dimensions_set_bsg(v, dm_get_width(dmp), dm_get_height(dmp));
-	rt_view_unit_conversion_set_bsg(v, gedp->dbip->dbi_local2base,
+	dm_set_vp(dmp, rt_view_context_scale_storage_from_bsg(v));
+	rt_view_context_display_manager_set_bsg(v, dmp);
+	rt_view_context_dimensions_set_bsg(v, dm_get_width(dmp), dm_get_height(dmp));
+	rt_view_context_unit_conversion_set_bsg(v, gedp->dbip->dbi_local2base,
 	    gedp->dbip->dbi_base2local);
 
 	/* BSG scene anchor must be created for each view. */
-	if (!rt_view_scene_attached_bsg(v))
-	    (void)rt_view_scene_anchor_ensure_bsg(v);
+	if (!rt_view_context_scene_attached_bsg(v))
+	    (void)rt_view_context_scene_anchor_ensure_bsg(v);
 
 	/* Set distinct az/el */
 	struct bu_vls vname = BU_VLS_INIT_ZERO;
@@ -213,10 +214,10 @@ main(int ac, char *av[])
     ged_exec_draw(gedp, 3, s_av);
 
     /* Force per-view autoview */
-    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     for (int i = 0; i < 4; i++) {
-	struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, i);
-	gedp->ged_gvp = v;
+	void *v = BU_PTBL_GET(views, i);
+	ged_view_active_ctx_set(gedp, v);
 	s_av[0] = "autoview"; s_av[1] = NULL;
 	ged_exec_autoview(gedp, 1, s_av);
     }

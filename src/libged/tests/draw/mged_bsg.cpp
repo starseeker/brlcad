@@ -51,9 +51,6 @@
 #include <dm.h>
 #include <ged.h>
 #include "ged/bsg_ged_draw.h"
-#include "bsg/defines.h"
-#include "bsg/render.h"
-#include "bsg/render_item.h"
 
 extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);
 
@@ -65,8 +62,8 @@ extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory
 static void
 do_refresh(struct ged *gedp)
 {
-    struct bsg_view *v = gedp->ged_gvp;
-    struct dm *dmp = (struct dm *)v->dmp;
+    void *v = ged_view_active_ctx(gedp);
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
     dm_draw_begin(dmp);
     dm_draw_objs(v);
     dm_draw_end(dmp);
@@ -77,13 +74,13 @@ do_refresh(struct ged *gedp)
 static void
 do_full_refresh(struct ged *gedp)
 {
-    struct bsg_view *v = gedp->ged_gvp;
+    void *v = ged_view_active_ctx(gedp);
     struct ged_draw_transaction txn =
 	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
     txn.view = v;
     ged_draw_apply_transaction(gedp, &txn, NULL);
 
-    struct dm *dmp = (struct dm *)v->dmp;
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
     unsigned char *bg1, *bg2;
     dm_get_bg(&bg1, &bg2, dmp);
     dm_set_bg(dmp, bg1[0], bg1[1], bg1[2], bg2[0], bg2[1], bg2[2]);
@@ -94,11 +91,11 @@ do_full_refresh(struct ged *gedp)
 }
 
 static int
-set_center_dot_state(struct bsg_view *v, int draw, int r, int g, int b)
+set_center_dot_state(void *v, int draw, int r, int g, int b)
 {
     struct rt_view_other_state center_dot = RT_VIEW_OTHER_STATE_INIT;
 
-    if (!rt_view_center_dot_state_from_bsg(&center_dot, v))
+    if (!rt_view_context_center_dot_state_from_bsg(&center_dot, v))
 	return 0;
 
     center_dot.gos_draw = draw;
@@ -106,7 +103,7 @@ set_center_dot_state(struct bsg_view *v, int draw, int r, int g, int b)
     center_dot.gos_line_color[1] = g;
     center_dot.gos_line_color[2] = b;
 
-    return rt_view_center_dot_state_set_bsg(v, &center_dot);
+    return rt_view_context_center_dot_state_set_bsg(v, &center_dot);
 }
 
 static int
@@ -184,18 +181,18 @@ open_gedp(const char *gfile, int width, int height)
     s_av[0] = "dm"; s_av[1] = "attach"; s_av[2] = "swrast"; s_av[3] = "SW"; s_av[4] = NULL;
     ged_exec_dm(gedp, 4, s_av);
 
-    struct bsg_view *v = gedp->ged_gvp;
-    struct dm *dmp  = (struct dm *)v->dmp;
+    void *v = ged_view_active_ctx(gedp);
+    struct dm *dmp  = (struct dm *)rt_view_context_display_manager_from_bsg(v);
     dm_set_width(dmp, width);
     dm_set_height(dmp, height);
     dm_configure_win(dmp, 0);
     dm_set_zbuffer(dmp, 1);
     fastf_t wb[6] = {-1, 1, -1, 1, -100, 100};
     dm_set_win_bounds(dmp, wb);
-    dm_set_vp(dmp, rt_view_scale_storage_from_bsg(v));
-    v->dmp = dmp;
-    rt_view_dimensions_set_bsg(v, dm_get_width(dmp), dm_get_height(dmp));
-    rt_view_unit_conversion_set_bsg(v,
+    dm_set_vp(dmp, rt_view_context_scale_storage_from_bsg(v));
+    rt_view_context_display_manager_set_bsg(v, dmp);
+    rt_view_context_dimensions_set_bsg(v, dm_get_width(dmp), dm_get_height(dmp));
+    rt_view_context_unit_conversion_set_bsg(v,
 	gedp->dbip->dbi_local2base,
 	gedp->dbip->dbi_base2local);
 
@@ -224,10 +221,10 @@ test_wireframe(const char *datadir)
     struct ged *gedp = open_gedp("mged_bsg_t1.g", 512, 512);
     if (!gedp) { bu_log("FAIL: ged_open failed\n"); return 1; }
 
-    struct bsg_view *v = gedp->ged_gvp;
+    void *v = ged_view_active_ctx(gedp);
 
     /* Ensure BSG root is present */
-    if (!rt_view_scene_attached_bsg(v)) {
+    if (!rt_view_context_scene_attached_bsg(v)) {
 	bu_log("FAIL: view scene ref is NULL after ged_open\n");
 	ged_close(gedp);
 	bu_file_delete("mged_bsg_t1.g");
@@ -347,7 +344,7 @@ test_edit_matrix(const char *datadir)
     s_av[0] = "autoview"; s_av[1] = NULL;
     ged_exec_autoview(gedp, 1, s_av);
 
-    struct bsg_view *v = gedp->ged_gvp;
+    void *v = ged_view_active_ctx(gedp);
     if (ged_draw_shape_ref_is_null(ged_draw_first_shape_ref(gedp))) {
 	bu_log("SKIP: no scene objects for edit-matrix test\n");
 	bu_file_delete("mged_bsg_t3.g");
@@ -358,7 +355,7 @@ test_edit_matrix(const char *datadir)
     ged_draw_set_highlight_state(gedp, 1);
 
     /* Render at normal position */
-    v->gv_edit_mat = NULL;
+    rt_view_context_edit_matrix_clear_bsg(v);
     do_full_refresh(gedp);
     capture(gedp, "mged_bsg_t3_normal.png");
 
@@ -368,30 +365,21 @@ test_edit_matrix(const char *datadir)
     /* Use a clear view-space override so highlighted objects move off-screen. */
     edit_mat[3] = 10.0;
 
-    v->gv_edit_mat = edit_mat;
-    struct bsg_render_request *req = bsg_render_request_create(v, NULL);
-    struct bsg_render_batch *batch = bsg_render_batch_create();
-    bsg_render_request_set_flags(req, BSG_RENDER_FLAG_VISIBLE_ONLY);
-    int nitems = bsg_render_request_collect(req, batch);
-
-    int highlighted_items = 0;
-    for (size_t i = 0; i < bsg_render_batch_count(batch); i++) {
-	const struct bsg_render_item *item = bsg_render_batch_get(batch, i);
-	if (item && item->appearance.highlighted)
-	    highlighted_items++;
-    }
+    int edit_matrix_ready = rt_view_context_edit_matrix_set_bsg(v, edit_mat);
+    struct rt_view_render_summary_bsg render_summary =
+	RT_VIEW_RENDER_SUMMARY_BSG_INIT;
+    int render_ready = rt_view_context_visible_render_summary_bsg(v, &render_summary);
 
     int fail = 0;
-    if (nitems <= 0 || highlighted_items <= 0 || !v->gv_edit_mat) {
+    if (!edit_matrix_ready || !render_ready || render_summary.item_count <= 0 ||
+	    render_summary.highlighted_count <= 0) {
 	bu_log("FAIL: highlighted render items were not available for gv_edit_mat\n");
 	fail = 1;
     } else {
 	bu_log("PASS: gv_edit_mat has highlighted render items to transform\n");
     }
 
-    bsg_render_batch_destroy(batch);
-    bsg_render_request_destroy(req);
-    v->gv_edit_mat = NULL;
+    rt_view_context_edit_matrix_clear_bsg(v);
 
     ged_draw_set_highlight_state(gedp, 0);
     bu_file_delete("mged_bsg_t3_normal.png");
@@ -425,7 +413,7 @@ test_faceplate(const char *datadir)
     s_av[0] = "autoview"; s_av[1] = NULL;
     ged_exec_autoview(gedp, 1, s_av);
 
-    struct bsg_view *v = gedp->ged_gvp;
+    void *v = ged_view_active_ctx(gedp);
 
     /* Render without center dot */
     if (!set_center_dot_state(v, 0, 0, 0, 0)) {

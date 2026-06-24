@@ -27,7 +27,6 @@
 #include "common.h"
 #include "bu/units.h"
 #include "ged.h"
-#include "rt/view_legacy_bsg.h"
 #include "tclcad.h"
 
 /* Private headers */
@@ -43,7 +42,6 @@ go_data_lines(Tcl_Interp *UNUSED(interp),
 	      const char *argv[],
 	      const char *usage)
 {
-    struct bsg_view *gdvp = (struct bsg_view *)draw_view_ctx;
     int ret;
 
     /* initialize result */
@@ -62,15 +60,15 @@ go_data_lines(Tcl_Interp *UNUSED(interp),
     to_refresh_suppress_all_begin(current_top);
 
 
-    struct bsg_view *btmp = (struct bsg_view *)ged_view_active_ctx(gedp);
-    ged_view_active_ctx_set(gedp, gdvp);
+    void *active_view_ctx = ged_view_active_ctx(gedp);
+    ged_view_active_ctx_set(gedp, draw_view_ctx);
 
     ret = ged_exec(gedp, argc, argv);
 
-    ged_view_active_ctx_set(gedp, btmp);
+    ged_view_active_ctx_set(gedp, active_view_ctx);
 
     to_refresh_suppress_all_end(current_top);
-    to_refresh_view(gdvp);
+    to_refresh_view(draw_view_ctx);
     if (ret & BRLCAD_ERROR)
 	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", argv[0], usage);
 
@@ -86,7 +84,7 @@ to_data_lines(struct ged *gedp,
 	      const char *usage,
 	      int UNUSED(maxargs))
 {
-    struct bsg_view *gdvp;
+    void *view_ctx;
     int ret;
 
     /* initialize result */
@@ -103,8 +101,8 @@ to_data_lines(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp = (struct bsg_view *)ged_view_find_ctx(gedp, argv[1]);
-    if (!gdvp) {
+    view_ctx = ged_view_find_ctx(gedp, argv[1]);
+    if (!view_ctx) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
     }
@@ -113,14 +111,14 @@ to_data_lines(struct ged *gedp,
     argv[1] = argv[0];
     argv[0] = "view";
 
-    struct bsg_view *btmp = (struct bsg_view *)ged_view_active_ctx(gedp);
-    ged_view_active_ctx_set(gedp, gdvp);
+    void *active_view_ctx = ged_view_active_ctx(gedp);
+    ged_view_active_ctx_set(gedp, view_ctx);
 
     ret = ged_exec_view(gedp, argc, argv);
 
-    ged_view_active_ctx_set(gedp, btmp);
+    ged_view_active_ctx_set(gedp, active_view_ctx);
 
-    to_refresh_view(gdvp);
+    to_refresh_view(view_ctx);
 
     if (ret == BRLCAD_ERROR)
 	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", argv[0], usage);

@@ -78,18 +78,18 @@ open_and_attach(const char *gfile)
     const char *s_av[6] = {"dm", "attach", "swrast", "SW", NULL};
     ged_exec_dm(gedp, 4, s_av);
 
-    struct bsg_view *v   = gedp->ged_gvp;
-    struct dm   *dmp  = (struct dm *)v->dmp;
+    void *v = ged_view_active_ctx(gedp);
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
     dm_set_width(dmp, 512);
     dm_set_height(dmp, 512);
     dm_configure_win(dmp, 0);
     dm_set_zbuffer(dmp, 1);
     fastf_t wb[6] = {-1, 1, -1, 1, -100, 100};
     dm_set_win_bounds(dmp, wb);
-    dm_set_vp(dmp, rt_view_scale_storage_from_bsg(v));
-    v->dmp          = dmp;
-    rt_view_dimensions_set_bsg(v, dm_get_width(dmp), dm_get_height(dmp));
-    rt_view_unit_conversion_set_bsg(v,
+    dm_set_vp(dmp, rt_view_context_scale_storage_from_bsg(v));
+    rt_view_context_display_manager_set_bsg(v, dmp);
+    rt_view_context_dimensions_set_bsg(v, dm_get_width(dmp), dm_get_height(dmp));
+    rt_view_context_unit_conversion_set_bsg(v,
 	gedp->dbip->dbi_local2base,
 	gedp->dbip->dbi_base2local);
 
@@ -106,14 +106,14 @@ open_and_attach(const char *gfile)
 static int
 render_to_file(struct ged *gedp, const char *outfile)
 {
-    struct bsg_view *v   = gedp->ged_gvp;
+    void *v = ged_view_active_ctx(gedp);
     ged_db_index_refresh(gedp);
     struct ged_draw_transaction txn =
 	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
     txn.view = v;
     ged_draw_apply_transaction(gedp, &txn, NULL);
 
-    struct dm *dmp = (struct dm *)v->dmp;
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
     unsigned char *bg1, *bg2;
     dm_get_bg(&bg1, &bg2, dmp);
     dm_set_bg(dmp, bg1[0], bg1[1], bg1[2], bg2[0], bg2[1], bg2[2]);

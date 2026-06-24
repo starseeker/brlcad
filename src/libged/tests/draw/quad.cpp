@@ -30,9 +30,6 @@
 #include <fstream>
 
 #include <bu.h>
-#include <bsg/feature.h>
-#include <bsg/render.h>
-#include <bsg/render_item.h>
 #include <icv.h>
 #include <rt/view.h>
 #include <rt/view_legacy_bsg.h>
@@ -45,34 +42,6 @@
 #define QDIFF_THRES 20
 
 static int keep_images = 0;
-
-static int
-render_line_item_count(struct bsg_view *v, const char *name)
-{
-    if (!v || !bsg_view_scene_attached(v) || !name)
-	return 0;
-
-    struct bsg_render_request *req = bsg_render_request_create(v, NULL);
-    struct bsg_render_batch *batch = bsg_render_batch_create();
-    if (!req || !batch) {
-	bsg_render_request_destroy(req);
-	bsg_render_batch_destroy(batch);
-	return 0;
-    }
-    bsg_render_request_set_flags(req, BSG_RENDER_FLAG_VISIBLE_ONLY | BSG_RENDER_FLAG_PAYLOAD_PREPARE);
-    (void)bsg_render_request_collect(req, batch);
-    bsg_render_request_destroy(req);
-
-    int count = 0;
-    for (size_t i = 0; i < bsg_render_batch_count(batch); i++) {
-	const struct bsg_render_item *item = bsg_render_batch_get(batch, i);
-	if (item && item->name && BU_STR_EQUAL(item->name, name) &&
-		item->geometry.kind == BSG_RENDER_GEOMETRY_LINE_SET)
-	    count++;
-    }
-    bsg_render_batch_destroy(batch);
-    return count;
-}
 
 // In order to handle changes to .g geometry contents, we need to defined
 // callbacks for the librt hooks that will update the working data structures.
@@ -106,8 +75,8 @@ ged_changed_callback(struct db_i *dbip, struct directory *dp, int mode, void *u_
 void
 dm_refresh(struct ged *gedp, int vnum)
 {
-    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
-    struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, vnum);
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
+    void *v = views ? BU_PTBL_GET(views, vnum) : NULL;
     if (!v)
 	return;
     struct ged_draw_transaction txn =
@@ -115,7 +84,7 @@ dm_refresh(struct ged *gedp, int vnum)
     txn.view = v;
     ged_draw_apply_transaction(gedp, &txn, NULL);
 
-    struct dm *dmp = (struct dm *)v->dmp;
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
     /* Ensure rendering goes to this view's DM context, not the last-active one.
      * With multiple DMs (e.g. quad views), each has its own OSMesa context.
      * Without making the correct context current here, dm_set_bg and
@@ -181,12 +150,12 @@ img_cmp(int vnum, int id, struct ged *gedp, const char *cdir, bool clear, int so
 
     dm_refresh(gedp, vnum);
 
-    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
-    struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, vnum);
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
+    void *v = views ? BU_PTBL_GET(views, vnum) : NULL;
     if (!v)
 	bu_exit(EXIT_FAILURE, "Invalid view specifier: %d\n", vnum);
-    struct dm *dmp = (struct dm *)v->dmp;
-    int cnum = rt_view_is_independent_bsg(v) ? vnum : -1;
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
+    int cnum = rt_view_context_is_independent_bsg(v) ? vnum : -1;
 
     const char *s_av[4] = {NULL};
     s_av[0] = "screengrab";
@@ -357,21 +326,20 @@ vline(struct ged *gedp, int l_id, int x0, int y0, int z0, int x1, int y1, int z1
     if (ged_exec_view(gedp, 9, s_av) & BRLCAD_ERROR)
 	bu_exit(EXIT_FAILURE, "failed to append shared line %s: %s\n", bu_vls_cstr(&lname), bu_vls_cstr(gedp->ged_result_str));
 
-    bsg_feature_ref ref = bsg_feature_find(gedp->ged_gvp, bu_vls_cstr(&lname));
-    if (bsg_feature_ref_is_null(ref))
+    struct rt_view_feature_geometry_summary_bsg geom_summary =
+	RT_VIEW_FEATURE_GEOMETRY_SUMMARY_BSG_INIT;
+    if (!rt_view_context_feature_geometry_summary_bsg(ged_view_active_ctx(gedp),
+	    bu_vls_cstr(&lname), &geom_summary) ||
+	    !geom_summary.exists)
 	bu_exit(EXIT_FAILURE, "shared line %s was not registered as a feature\n", bu_vls_cstr(&lname));
-    point_t *points = NULL;
-    int *cmds = NULL;
-    size_t point_count = 0;
-    if (!bsg_feature_points_copy(ref, &points, &cmds, &point_count) || point_count != 2)
+    if (geom_summary.point_count != 2 || geom_summary.command_count != 2)
 	bu_exit(EXIT_FAILURE, "shared line %s feature geometry is invalid\n", bu_vls_cstr(&lname));
-    bu_free(points, "feature points copy");
-    bu_free(cmds, "feature command copy");
     int render_count = 0;
-    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, i);
-	render_count += render_line_item_count(v, bu_vls_cstr(&lname));
+	void *v = BU_PTBL_GET(views, i);
+	render_count += rt_view_context_named_line_render_count_bsg(v,
+		bu_vls_cstr(&lname));
     }
     if (render_count < 1)
 	bu_exit(EXIT_FAILURE, "shared line %s was not collected as a line render item\n", bu_vls_cstr(&lname));
@@ -502,7 +470,8 @@ main(int ac, char *av[]) {
     bu_setenv("DM_SWRAST", "1", 1);
 
     // We don't want the default GED views for this test
-    rt_view_set_remove_view_bsg(&gedp->ged_views, NULL);
+    void *view_set_ctx = ged_view_set_ctx(gedp);
+    rt_view_set_context_remove_bsg(view_set_ctx, NULL);
 
     // Set callback so database changes notify public GED services.
     db_add_changed_clbk(gedp->dbip, &ged_changed_callback, (void *)gedp);
@@ -513,13 +482,13 @@ main(int ac, char *av[]) {
     // to mimic the most common multi-dm/view display - a Quad view widget.
     // Each view will get its own attached swrast DM.
     for (size_t i = 0; i < 4; i++) {
-	struct bsg_view *v;
-	BU_GET(v, struct bsg_view);
+	char view_name[16];
+	snprintf(view_name, sizeof(view_name), "V%zd", i);
+	void *v = rt_view_context_create_with_set_bsg(view_set_ctx);
 	if (!i)
-	    gedp->ged_gvp = v;
-	rt_view_init_bsg(v, &gedp->ged_views);
-	bu_vls_sprintf(&v->gv_name, "V%zd", i);
-	rt_view_set_add_view_bsg(&gedp->ged_views, v);
+	    ged_view_active_ctx_set(gedp, v);
+	rt_view_context_name_set_bsg(v, view_name);
+	rt_view_set_context_add_bsg(view_set_ctx, v);
 	bu_ptbl_ins(&gedp->ged_free_views, (long *)v);
 
 	/* To generate images that will allow us to check if the drawing
@@ -528,14 +497,14 @@ main(int ac, char *av[]) {
 	s_av[0] = "dm";
 	s_av[1] = "attach";
 	s_av[2] = "-V";
-	s_av[3] = bu_vls_cstr(&v->gv_name);
+	s_av[3] = view_name;
 	s_av[4] = "swrast";
 	bu_vls_sprintf(&dm_name, "SW%zd", i);
 	s_av[5] = bu_vls_cstr(&dm_name);
 	s_av[6] = NULL;
 	ged_exec_dm(gedp, 6, s_av);
 
-	struct dm *dmp = (struct dm *)v->dmp;
+	struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
 	dm_set_width(dmp, 512);
 	dm_set_height(dmp, 512);
 
@@ -546,10 +515,10 @@ main(int ac, char *av[]) {
 	fastf_t windowbounds[6] = { -1, 1, -1, 1, -100, 100 };
 	dm_set_win_bounds(dmp, windowbounds);
 
-	dm_set_vp(dmp, rt_view_scale_storage_from_bsg(v));
-	v->dmp = dmp;
-	rt_view_dimensions_set_bsg(v, dm_get_width(dmp), dm_get_height(dmp));
-	rt_view_unit_conversion_set_bsg(v, gedp->dbip->dbi_local2base,
+	dm_set_vp(dmp, rt_view_context_scale_storage_from_bsg(v));
+	rt_view_context_display_manager_set_bsg(v, dmp);
+	rt_view_context_dimensions_set_bsg(v, dm_get_width(dmp), dm_get_height(dmp));
+	rt_view_context_unit_conversion_set_bsg(v, gedp->dbip->dbi_local2base,
 	    gedp->dbip->dbi_base2local);
 
 	// The default (fast) wireframe has some differences from
@@ -649,7 +618,7 @@ main(int ac, char *av[]) {
     /* Check view independent behavior - basic drawing */
     bu_log("Basic independent views drawing test - V1 active\n");
 
-    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	set_independent(gedp, (int)i, 1);
     }

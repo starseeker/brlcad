@@ -30,11 +30,11 @@
 
 #include "bu/getopt.h"
 #include "ged/bsg_ged_draw.h"
-#include "rt/view_legacy_bsg.h"
+#include "rt/view.h"
 #include "../ged_private.h"
 
 static int
-_ged_select_botpts(struct ged *gedp, struct bsg_view *view, struct rt_bot_internal *botip, double vx, double vy, double vwidth, double vheight, double vminz, int rflag)
+_ged_select_botpts(struct ged *gedp, void *view_ctx, struct rt_bot_internal *botip, double vx, double vy, double vwidth, double vheight, double vminz, int rflag)
 {
     size_t i;
     fastf_t vr = 0.0;
@@ -47,7 +47,7 @@ _ged_select_botpts(struct ged *gedp, struct bsg_view *view, struct rt_bot_intern
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
 
     mat_t model2view;
-    rt_view_model2view_from_bsg(model2view, view);
+    ged_view_context_model2view_get(model2view, view_ctx);
 
     if (rflag) {
 	vr = vwidth;
@@ -289,7 +289,7 @@ dl_select_record(const struct ged_draw_view_db_object_record *rec, void *udata)
 }
 
 int
-dl_select(struct bsg_view *view, mat_t model2view, struct bu_vls *vls, double vx, double vy, double vwidth, double vheight, int rflag)
+dl_select(void *view_ctx, mat_t model2view, struct bu_vls *vls, double vx, double vy, double vwidth, double vheight, int rflag)
 {
     struct select_data data;
 
@@ -327,7 +327,7 @@ dl_select(struct bsg_view *view, mat_t model2view, struct bu_vls *vls, double vx
         }
     }
 
-    ged_draw_foreach_visible_view_db_object_record(view,
+    ged_draw_foreach_visible_view_db_object_record(view_ctx,
 	    dl_select_record, &data);
 
     return BRLCAD_OK;
@@ -356,7 +356,7 @@ dl_select_partial_record(const struct ged_draw_view_db_object_record *rec,
 }
 
 int
-dl_select_partial(struct bsg_view *view, mat_t model2view, struct bu_vls *vls, double vx, double vy, double vwidth, double vheight, int rflag)
+dl_select_partial(void *view_ctx, mat_t model2view, struct bu_vls *vls, double vx, double vy, double vwidth, double vheight, int rflag)
 {
     struct select_data data;
 
@@ -394,7 +394,7 @@ dl_select_partial(struct bsg_view *view, mat_t model2view, struct bu_vls *vls, d
         }
     }
 
-    ged_draw_foreach_visible_view_db_object_record(view,
+    ged_draw_foreach_visible_view_db_object_record(view_ctx,
 	    dl_select_partial_record, &data);
 
     return BRLCAD_OK;
@@ -456,7 +456,7 @@ ged_select_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_DRAWABLE(gedp, BRLCAD_ERROR);
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
-    struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
+    void *view_ctx = ged_view_active_ctx(gedp);
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -529,17 +529,17 @@ ged_select_core(struct ged *gedp, int argc, const char *argv[])
 	if (botip != (struct rt_bot_internal *)NULL) {
 	    int ret;
 
-	    ret = _ged_select_botpts(gedp, view, botip, vx, vy, vr, vr, vminz, 1);
+	    ret = _ged_select_botpts(gedp, view_ctx, botip, vx, vy, vr, vr, vminz, 1);
 	    rt_db_free_internal(&intern);
 
 	    return ret;
 	} else {
 	    mat_t model2view;
-	    rt_view_model2view_from_bsg(model2view, view);
+	    ged_view_context_model2view_get(model2view, view_ctx);
 	    if (pflag)
-		return dl_select_partial(view, model2view, gedp->ged_result_str, vx, vy, vr, vr, 1);
+		return dl_select_partial(view_ctx, model2view, gedp->ged_result_str, vx, vy, vr, vr, 1);
 	    else
-		return dl_select(view, model2view, gedp->ged_result_str, vx, vy, vr, vr, 1);
+		return dl_select(view_ctx, model2view, gedp->ged_result_str, vx, vy, vr, vr, 1);
 	}
     } else {
 	if (sscanf(argv[1], "%lf", &vx) != 1 ||
@@ -553,17 +553,17 @@ ged_select_core(struct ged *gedp, int argc, const char *argv[])
 	if (botip != (struct rt_bot_internal *)NULL) {
 	    int ret;
 
-	    ret = _ged_select_botpts(gedp, view, botip, vx, vy, vw, vh, vminz, 0);
+	    ret = _ged_select_botpts(gedp, view_ctx, botip, vx, vy, vw, vh, vminz, 0);
 	    rt_db_free_internal(&intern);
 
 	    return ret;
 	} else {
 	    mat_t model2view;
-	    rt_view_model2view_from_bsg(model2view, view);
+	    ged_view_context_model2view_get(model2view, view_ctx);
 	    if (pflag)
-		return dl_select_partial(view, model2view, gedp->ged_result_str, vx, vy, vw, vh, 0);
+		return dl_select_partial(view_ctx, model2view, gedp->ged_result_str, vx, vy, vw, vh, 0);
 	    else
-		return dl_select(view, model2view, gedp->ged_result_str, vx, vy, vw, vh, 0);
+		return dl_select(view_ctx, model2view, gedp->ged_result_str, vx, vy, vw, vh, 0);
 	}
     }
 }
@@ -652,15 +652,15 @@ ged_rselect_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
+    void *view_ctx = ged_view_active_ctx(gedp);
     struct rt_view_interactive_rect_state rect;
-    if (!rt_view_interactive_rect_state_from_bsg(&rect, view))
+    if (!ged_view_context_interactive_rect_state_get(&rect, view_ctx))
 	return BRLCAD_ERROR;
 
     if (botip != (struct rt_bot_internal *)NULL) {
 	int ret;
 
-	ret = _ged_select_botpts(gedp, view, botip,
+	ret = _ged_select_botpts(gedp, view_ctx, botip,
 				  rect.x,
 				  rect.y,
 				  rect.width,
@@ -672,16 +672,16 @@ ged_rselect_core(struct ged *gedp, int argc, const char *argv[])
 	return ret;
     } else {
 	mat_t model2view;
-	rt_view_model2view_from_bsg(model2view, view);
+	ged_view_context_model2view_get(model2view, view_ctx);
 	if (pflag)
-	    return dl_select_partial(view, model2view, gedp->ged_result_str,
+	    return dl_select_partial(view_ctx, model2view, gedp->ged_result_str,
 				     rect.x,
 				     rect.y,
 				     rect.width,
 				     rect.height,
 				     0);
 	else
-	    return dl_select(view, model2view, gedp->ged_result_str,
+	    return dl_select(view_ctx, model2view, gedp->ged_result_str,
 			     rect.x,
 			     rect.y,
 			     rect.width,

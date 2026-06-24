@@ -29,7 +29,7 @@
 
 #include "bu/opt.h"
 #include "dm.h"
-#include "rt/view_legacy_bsg.h"
+#include "rt/view.h"
 #include "../ged_private.h"
 
 /* Return 1 (and set *v) if the entire string parses as a number. */
@@ -84,7 +84,7 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
     int all_view_objs = 0;
     int print_help = 0;
     fastf_t scale = -1.0;
-    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+    void *view_ctx = ged_view_active_ctx(gedp);
 
     struct bu_opt_desc d[5];
     BU_OPT(d[0], "h", "help",      "",        NULL,     &print_help, "Print help and exit");
@@ -105,8 +105,8 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
     argc = opt_ret;
 
     if (bu_vls_strlen(&cvls)) {
-	v = (struct bsg_view *)ged_view_find_ctx(gedp, bu_vls_cstr(&cvls));
-	if (!v) {
+	view_ctx = ged_view_find_ctx(gedp, bu_vls_cstr(&cvls));
+	if (!view_ctx) {
 	    bu_vls_printf(gedp->ged_result_str, "Specified view %s not found\n", bu_vls_cstr(&cvls));
 	    bu_vls_free(&cvls);
 	    return BRLCAD_ERROR;
@@ -138,9 +138,9 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
 	point_t min, max;
 	if (rt_obj_bounds(gedp->ged_result_str, gedp->dbip, argc, argv, 0, min, max) != BRLCAD_OK)
 	    return BRLCAD_ERROR;
-	rt_view_autoview_bounds_bsg(v, factor, min, max);
+	ged_view_context_autoview_bounds(view_ctx, factor, min, max);
     } else {
-	rt_view_autoview_bsg(v, factor, all_view_objs);
+	ged_view_context_autoview(view_ctx, factor, all_view_objs);
     }
 
     return BRLCAD_OK;

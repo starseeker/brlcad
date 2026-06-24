@@ -54,10 +54,10 @@ who_record_cb(const struct ged_draw_group_record *rec, void *ud)
 
 
 static void
-who_append_real_paths(struct ged *gedp, struct bsg_view *view)
+who_append_real_paths(struct ged *gedp, void *view_ctx)
 {
     struct bu_vls paths = BU_VLS_INIT_ZERO;
-    ged_draw_list_paths(gedp, view, -1, 0, &paths);
+    ged_draw_list_paths(gedp, view_ctx, -1, 0, &paths);
 
     const char *start = bu_vls_cstr(&paths);
     while (start && *start) {
@@ -128,7 +128,7 @@ ged_who_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     if (list_real)
-	who_append_real_paths(gedp, (struct bsg_view *)ged_view_active_ctx(gedp));
+	who_append_real_paths(gedp, ged_view_active_ctx(gedp));
 
     if (list_overlays) {
 	struct who_record_ctx ctx = {gedp};

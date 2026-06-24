@@ -50,8 +50,8 @@
 #include "vmath.h"
 #include "raytrace.h"
 #include "ged.h"
+#include "ged/view.h"
 #include "rt/view.h"
-#include "rt/view_legacy_bsg.h"
 
 #include "./mged.h"
 #include "./mged_dm.h"
@@ -184,6 +184,7 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
     fastf_t view_local_scale;
     mat_t view_center;
     mat_t view2model;
+    void *view_ctx = view_state->vs_gvp;
     int em = ((s->global_editing_state == ST_S_EDIT || s->global_editing_state == ST_O_EDIT) && mged_variables->mv_transform == 'e') ? 1 : 0;
 
     if (s->dbip == DBI_NULL)
@@ -198,9 +199,9 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
     int my = xmotion->y;
     int dx = mx - dm_omx;
     int dy = my - dm_omy;
-    view_local_scale = rt_view_scale_from_bsg(view_state->vs_gvp) * s->dbip->dbi_base2local;
-    rt_view_center_from_bsg(view_center, view_state->vs_gvp);
-    rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+    view_local_scale = ged_view_context_scale_get(view_ctx) * s->dbip->dbi_base2local;
+    ged_view_context_center_get(view_center, view_ctx);
+    ged_view_context_view2model_get(view2model, view_ctx);
 
     switch (am_mode) {
 	case AMM_IDLE:

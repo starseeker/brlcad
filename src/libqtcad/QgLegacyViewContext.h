@@ -1,4 +1,4 @@
-/*              Q G L E G A C Y V I E W B S G . H
+/*              Q G L E G A C Y V I E W C O N T E X T . H
  * BRL-CAD
  *
  * Copyright (c) 2026 United States Government as represented by
@@ -17,45 +17,43 @@
  * License along with this file; see the file named COPYING for more
  * information.
  */
-/** @file QgLegacyViewBsg.h
+/** @file QgLegacyViewContext.h
  *
- * Private adapter between qtcad's opaque legacy view handle and the retained
- * staged BSG view pointer.  This is intentionally not an installed qtcad
- * header; public qtcad code should use QgLegacyView.h helpers instead.
+ * Private adapter between qtcad's opaque legacy view handle and opaque
+ * retained view-context pointers.  This is intentionally not an installed
+ * qtcad header; public qtcad code should use QgLegacyView.h helpers instead.
  */
 
-#ifndef QGLEGACYVIEWBSG_H
-#define QGLEGACYVIEWBSG_H
+#ifndef QGLEGACYVIEWCONTEXT_H
+#define QGLEGACYVIEWCONTEXT_H
 
 #include "qtcad/QgLegacyView.h"
 
-struct bsg_view;
-
 static inline qg_legacy_view *
-qg_legacy_view_from_bsg(struct bsg_view *view)
+qg_legacy_view_from_context(void *view_ctx)
 {
-    return reinterpret_cast<qg_legacy_view *>(view);
+    return reinterpret_cast<qg_legacy_view *>(view_ctx);
 }
 
 static inline const qg_legacy_view *
-qg_legacy_view_from_bsg(const struct bsg_view *view)
+qg_legacy_view_from_context(const void *view_ctx)
 {
-    return reinterpret_cast<const qg_legacy_view *>(view);
+    return reinterpret_cast<const qg_legacy_view *>(view_ctx);
 }
 
-static inline struct bsg_view *
-qg_legacy_view_to_bsg(qg_legacy_view *view)
+static inline void *
+qg_legacy_view_to_context(qg_legacy_view *view)
 {
-    return reinterpret_cast<struct bsg_view *>(view);
+    return reinterpret_cast<void *>(view);
 }
 
-static inline const struct bsg_view *
-qg_legacy_view_to_bsg(const qg_legacy_view *view)
+static inline const void *
+qg_legacy_view_to_context(const qg_legacy_view *view)
 {
-    return reinterpret_cast<const struct bsg_view *>(view);
+    return reinterpret_cast<const void *>(view);
 }
 
-#endif /* QGLEGACYVIEWBSG_H */
+#endif /* QGLEGACYVIEWCONTEXT_H */
 
 /*
  * Local Variables:

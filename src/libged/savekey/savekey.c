@@ -29,7 +29,7 @@
 #include <ctype.h>
 #include <string.h>
 
-#include "rt/view_legacy_bsg.h"
+#include "rt/view.h"
 
 #include "../ged_private.h"
 
@@ -69,7 +69,7 @@ ged_savekey_core(struct ged *gedp, int argc, const char *argv[])
     mat_t view2model;
     vect_t eye_model;
     vect_t temp;
-    struct bsg_view *v;
+    void *view_ctx;
     static const char *usage = "file [time]";
 
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
@@ -102,10 +102,10 @@ ged_savekey_core(struct ged *gedp, int argc, const char *argv[])
     /*
      * Eye is in conventional place.
      */
-    v = (struct bsg_view *)ged_view_active_ctx(gedp);
-    rt_view_info_from_bsg(&view_info, v);
-    rt_view_rotation_from_bsg(rotation, v);
-    rt_view_view2model_from_bsg(view2model, v);
+    view_ctx = ged_view_active_ctx(gedp);
+    ged_view_context_info_get(&view_info, view_ctx);
+    ged_view_context_rotation_get(rotation, view_ctx);
+    ged_view_context_view2model_get(view2model, view_ctx);
     VSET(temp, 0.0, 0.0, 1.0);
     MAT4X3PNT(eye_model, view2model, temp);
     savekey_rt_oldwrite(fp, view_info.size, rotation, eye_model);

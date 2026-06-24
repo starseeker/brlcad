@@ -34,8 +34,8 @@
 #include "bu/getopt.h"
 
 #include "raytrace.h"
+#include "ged/bsg_ged_draw.h"
 
-#include "../bsg_ged_draw_view_private.h"
 #include "./joint.h"
 #include "../ged_private.h"
 
@@ -325,15 +325,15 @@ joint_mesh(struct ged *gedp, int argc, const char *argv[])
     }
 
     {
-	struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
+	void *view_ctx = ged_view_active_ctx(gedp);
 	struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
 	style.color_valid = 1;
 	VSET(style.color, 0, 255, 255);
-	if (view && lines.count)
-	    (void)ged_draw_view_lines_replace(view, "joint", 0,
+	if (view_ctx && lines.count)
+	    (void)ged_draw_view_context_lines_replace(view_ctx, "joint", 0,
 		    (const point_t *)lines.points, NULL, lines.count, &style);
-	else if (view)
-	    (void)ged_draw_view_feature_remove(view, "joint");
+	else if (view_ctx)
+	    (void)ged_draw_view_context_feature_remove(view_ctx, "joint");
     }
 
     joint_lines_free(&lines);

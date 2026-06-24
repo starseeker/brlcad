@@ -30,7 +30,6 @@
 #include <string.h>
 
 #include "rt/view.h"
-#include "rt/view_legacy_bsg.h"
 
 #include "../ged_private.h"
 #include "./ged_view.h"
@@ -46,20 +45,19 @@ ged_size_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
-    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+    void *view_ctx = ged_view_active_ctx(gedp);
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     /* get view size */
     if (argc == 1) {
-	struct rt_view_info view_info;
-	rt_view_info_from_bsg(&view_info, v);
+	fastf_t view_size = ged_view_context_size_get(view_ctx);
 	if (gedp->dbip) {
 	    bu_vls_printf(gedp->ged_result_str, "%g",
-		    view_info.size * gedp->dbip->dbi_base2local);
+		    view_size * gedp->dbip->dbi_base2local);
 	} else {
-	    bu_vls_printf(gedp->ged_result_str, "%g", view_info.size);
+	    bu_vls_printf(gedp->ged_result_str, "%g", view_size);
 	}
 	return BRLCAD_OK;
     }
@@ -77,8 +75,8 @@ ged_size_core(struct ged *gedp, int argc, const char *argv[])
 	fastf_t view_size = (gedp->dbip) ? gedp->dbip->dbi_local2base * size : size;
 	if (view_size < RT_VIEW_MIN_SIZE)
 	    view_size = RT_VIEW_MIN_SIZE;
-	rt_view_size_set_bsg(v, view_size);
-	rt_view_update_bsg(v);
+	ged_view_context_size_set(view_ctx, view_size);
+	ged_view_context_update(view_ctx);
 
 	return BRLCAD_OK;
     }

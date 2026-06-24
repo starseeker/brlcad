@@ -28,14 +28,8 @@
 #include <string.h>
 
 #include "bu/app.h"
-#include "bu/malloc.h"
 #include "bu/log.h"
 #include "bu/vls.h"
-#include "bsg/geometry.h"
-#include "bsg/node.h"
-#include "bsg/render_item.h"
-#include "bsg/separator.h"
-#include "bsg/util.h"
 #include "dm.h"
 #include "rt/view_legacy_bsg.h"
 #include "../include/private.h"
@@ -134,11 +128,7 @@ open_null_dm(void)
 static int
 count_draw_item(struct dm *UNUSED(dmp), const void *render_item_ctx)
 {
-    const struct bsg_render_item *item =
-	(const struct bsg_render_item *)render_item_ctx;
-
-    if (!item || item->geometry.kind == BSG_RENDER_GEOMETRY_NONE ||
-	    !item->source.source_id)
+    if (!render_item_ctx)
 	return -1;
     g_draw_item_count++;
     return 0;
@@ -154,27 +144,21 @@ test_requires_draw_item(void)
     if (!dmp)
 	return;
 
-    struct bsg_view *v;
-    BU_ALLOC(v, struct bsg_view);
-    bsg_view_init(v, NULL);
-
-    bsg_shape_ref shape = bsg_shape_ref_create(v, "dm_backend_draw_item_shape");
-    bsg_node_ref shape_node = bsg_shape_ref_as_node(shape);
-    DMCHECK(!bsg_node_ref_is_null(shape_node), "created test shape");
-    if (bsg_node_ref_is_null(shape_node)) {
-	bsg_view_free(v);
-	bu_free(v, "test view");
+    void *v = rt_view_context_create_bsg();
+    DMCHECK(v != NULL, "created retained test view context");
+    if (!v) {
 	dm_close(dmp);
 	return;
     }
 
-    struct bsg_render_item *item = bsg_render_item_create();
-    item->view = v;
-    item->source.source_id = 42;
-    item->source.name = "node-free-item";
-    item->geometry.kind = BSG_RENDER_GEOMETRY_LINE_SET;
-    item->geometry.source_identity = 84;
-    item->geometry.revision = 1;
+    void *item = rt_view_line_render_item_create_bsg(v, 42, "node-free-item",
+	    84, 1);
+    DMCHECK(item != NULL, "created opaque retained render item");
+    if (!item) {
+	rt_view_context_free_bsg(v);
+	dm_close(dmp);
+	return;
+    }
 
     dm_set_backend_ops(dmp, NULL);
     int ret = dm_backend_draw_item(dmp, item);
@@ -195,10 +179,8 @@ test_requires_draw_item(void)
     DMCHECK(g_draw_item_count == 1, "draw_item count incremented once");
 
     dm_set_backend_ops(dmp, NULL);
-    bsg_render_item_free(item);
-    bsg_node_ref_destroy(shape_node);
-    bsg_view_free(v);
-    bu_free(v, "test view");
+    rt_view_render_item_free_bsg(item);
+    rt_view_context_free_bsg(v);
     dm_close(dmp);
 }
 
@@ -287,62 +269,28 @@ test_annotation_curve_dm_output(void)
     dm_set_height(dmp, 512);
     dmp->i->dm_aspect = 1.0;
 
-    struct bsg_view *v;
-    BU_ALLOC(v, struct bsg_view);
-    bsg_view_init(v, NULL);
-    v->dmp = dmp;
-    rt_view_dimensions_set_bsg(v, 512, 512);
-    MAT_IDN(v->gv_model2view);
-    MAT_IDN(v->gv_view2model);
+    void *v = rt_view_context_create_bsg();
+    DMCHECK(v != NULL, "created retained annotation view context");
+    if (!v) {
+	dmp->i->dm_drawLine2D = save_line2d;
+	dmp->i->dm_drawLine3D = save_line3d;
+	dmp->i->dm_drawString2D = save_string2d;
+	dm_close(dmp);
+	return;
+    }
 
-    bsg_separator_ref root = bsg_view_scene_separator_ref(v, 1);
-    bsg_annotation_ref annotation =
-	bsg_annotation_ref_create(v, "dm_annotation_curves");
-    DMCHECK(!bsg_node_ref_is_null(bsg_annotation_ref_as_node(annotation)),
-	    "created annotation geometry");
+    DMCHECK(rt_view_context_display_manager_set_bsg(v, dmp),
+	    "attached display manager to retained annotation view context");
+    DMCHECK(rt_view_context_dimensions_set_bsg(v, 512, 512),
+	    "set retained annotation view dimensions");
+    DMCHECK(rt_view_context_model_matrices_identity_bsg(v),
+	    "set retained annotation view matrices");
 
-    point_t pts[7] = {VINIT_ZERO, VINIT_ZERO, VINIT_ZERO, VINIT_ZERO,
-	VINIT_ZERO, VINIT_ZERO, VINIT_ZERO};
+    point_t pts[2] = {VINIT_ZERO, VINIT_ZERO};
     VSET(pts[0], 0.0, 0.0, 0.0);
     VSET(pts[1], 1.0, 0.0, 0.0);
-    VSET(pts[2], 0.0, 1.0, 0.0);
-    VSET(pts[3], 1.0, 1.0, 0.0);
-    VSET(pts[4], 2.0, 0.0, 0.0);
-    VSET(pts[5], 2.0, 1.0, 0.0);
-    VSET(pts[6], 3.0, 0.0, 0.0);
-
-    fastf_t knots[6] = {0.0, 0.0, 0.0, 1.0, 1.0, 1.0};
-    int nurb_controls[3] = {2, 3, 4};
-    int bezier_controls[4] = {3, 4, 5, 6};
-    struct bsg_annotation_segment segs[4];
-    memset(segs, 0, sizeof(segs));
-    segs[0].kind = BSG_ANNOTATION_SEGMENT_LINE;
-    segs[0].data.line.start = 0;
-    segs[0].data.line.end = 1;
-    segs[1].kind = BSG_ANNOTATION_SEGMENT_CARC;
-    segs[1].data.carc.start = 0;
-    segs[1].data.carc.end = 1;
-    segs[1].data.carc.radius = 1.0;
-    segs[1].data.carc.center_is_left = 1;
-    segs[2].kind = BSG_ANNOTATION_SEGMENT_NURB;
-    segs[2].data.nurb.order = 3;
-    segs[2].data.nurb.knot_count = 6;
-    segs[2].data.nurb.knots = knots;
-    segs[2].data.nurb.control_point_count = 3;
-    segs[2].data.nurb.control_points = nurb_controls;
-    segs[3].kind = BSG_ANNOTATION_SEGMENT_BEZIER;
-    segs[3].data.bezier.degree = 3;
-    segs[3].data.bezier.control_point_count = 4;
-    segs[3].data.bezier.control_points = bezier_controls;
-
-    mat_t model_mat, display_mat;
-    MAT_IDN(model_mat);
-    MAT_IDN(display_mat);
-    DMCHECK(bsg_annotation_ref_set_record(annotation, "curve annotation",
-		BSG_ANNOTATION_SPACE_MODEL, pts[0], model_mat, display_mat,
-		(const point_t *)pts, 7, segs, 4),
+    DMCHECK(rt_view_annotation_curves_add_bsg(v, "dm_annotation_curves"),
 	    "configured model-space annotation curves");
-    bsg_separator_ref_append_child(root, bsg_annotation_ref_as_node(annotation));
 
     memset(&g_capture, 0, sizeof(g_capture));
     dm_draw_objs(v);
@@ -353,9 +301,7 @@ test_annotation_curve_dm_output(void)
 	    VNEAR_EQUAL(g_capture.first_3d_b, pts[1], SMALL_FASTF),
 	    "annotation line segment preserved model-space endpoints");
 
-    bsg_node_ref_destroy(bsg_annotation_ref_as_node(annotation));
-    bsg_view_free(v);
-    bu_free(v, "test view");
+    rt_view_context_free_bsg(v);
     dmp->i->dm_drawLine2D = save_line2d;
     dmp->i->dm_drawLine3D = save_line3d;
     dmp->i->dm_drawString2D = save_string2d;
@@ -389,40 +335,26 @@ test_annotation_display_text_position(void)
     dm_set_height(dmp, 200);
     dmp->i->dm_aspect = 1.0;
 
-    struct bsg_view *v;
-    BU_ALLOC(v, struct bsg_view);
-    bsg_view_init(v, NULL);
-    v->dmp = dmp;
-    rt_view_dimensions_set_bsg(v, 200, 200);
-    MAT_IDN(v->gv_model2view);
-    MAT_IDN(v->gv_view2model);
+    void *v = rt_view_context_create_bsg();
+    DMCHECK(v != NULL, "created retained text annotation view context");
+    if (!v) {
+	dmp->i->dm_drawLine2D = save_line2d;
+	dmp->i->dm_drawLine3D = save_line3d;
+	dmp->i->dm_drawString2D = save_string2d;
+	dmp->i->dm_drawString2DRot = save_string2d_rot;
+	dm_close(dmp);
+	return;
+    }
 
-    bsg_separator_ref root = bsg_view_scene_separator_ref(v, 1);
-    bsg_annotation_ref annotation =
-	bsg_annotation_ref_create(v, "dm_annotation_text");
-    DMCHECK(!bsg_node_ref_is_null(bsg_annotation_ref_as_node(annotation)),
-	    "created text annotation geometry");
-
-    point_t pts[1] = {VINIT_ZERO};
-    VSET(pts[0], 0.0, 0.0, 0.0);
-
-    struct bsg_annotation_segment seg;
-    memset(&seg, 0, sizeof(seg));
-    seg.kind = BSG_ANNOTATION_SEGMENT_TEXT;
-    seg.data.text.ref_pt = 0;
-    seg.data.text.relative_position = BSG_ANNOTATION_TEXT_POS_TOP_RIGHT;
-    seg.data.text.text = (char *)"ABCD";
-    seg.data.text.size = 20.0;
-    seg.data.text.rotation = 45.0;
-
-    mat_t model_mat, display_mat;
-    MAT_IDN(model_mat);
-    MAT_IDN(display_mat);
-    DMCHECK(bsg_annotation_ref_set_record(annotation, "display text",
-		BSG_ANNOTATION_SPACE_DISPLAY, pts[0], model_mat, display_mat,
-		(const point_t *)pts, 1, &seg, 1),
+    DMCHECK(rt_view_context_display_manager_set_bsg(v, dmp),
+	    "attached display manager to retained text annotation view context");
+    DMCHECK(rt_view_context_dimensions_set_bsg(v, 200, 200),
+	    "set retained text annotation view dimensions");
+    DMCHECK(rt_view_context_model_matrices_identity_bsg(v),
+	    "set retained text annotation view matrices");
+    DMCHECK(rt_view_annotation_display_text_add_bsg(v, "dm_annotation_text",
+	    "ABCD", 20.0, 45.0),
 	    "configured display-space annotation text");
-    bsg_separator_ref_append_child(root, bsg_annotation_ref_as_node(annotation));
 
     memset(&g_capture, 0, sizeof(g_capture));
     dm_draw_objs(v);
@@ -445,9 +377,7 @@ test_annotation_display_text_position(void)
     DMCHECK(g_capture.line2d_count == 0 && g_capture.line3d_count == 0,
 	    "annotation text draw does not emit line fallback geometry");
 
-    bsg_node_ref_destroy(bsg_annotation_ref_as_node(annotation));
-    bsg_view_free(v);
-    bu_free(v, "test view");
+    rt_view_context_free_bsg(v);
     dmp->i->dm_drawLine2D = save_line2d;
     dmp->i->dm_drawLine3D = save_line3d;
     dmp->i->dm_drawString2D = save_string2d;

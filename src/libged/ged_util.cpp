@@ -58,13 +58,10 @@
 #include "bg/line_layer.h"
 #include "bsg/scene_builder.h"
 #include "bg/plot3.h"
-#include "bsg/view_state.h"
 #include "dm/fbserv.h"
 #include "ged.h"
 #include "ged/bsg_ged_draw.h"
 #include "ged/event_txn.h"
-#include "rt/view_legacy_bsg.h"
-#include "./bsg_ged_draw_view_private.h"
 #include "./ged_private.h"
 
 extern "C" bsg_scene_ref
@@ -816,10 +813,10 @@ ged_rot_args(struct ged *gedp, int argc, const char *argv[], char *coord, mat_t 
 	--argc;
 	++argv;
     } else {
-	struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
-	if (!view)
+	void *view_ctx = ged_view_active_ctx(gedp);
+	if (!view_ctx)
 	    return BRLCAD_ERROR;
-	*coord = rt_view_coord_from_bsg(view);
+	*coord = ged_view_context_coord_get(view_ctx);
     }
 
     if (argc != 2 && argc != 4) {
@@ -938,10 +935,10 @@ ged_tra_args(struct ged *gedp, int argc, const char *argv[], char *coord, vect_t
 	--argc;
 	++argv;
     } else {
-	struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gedp);
-	if (!view)
+	void *view_ctx = ged_view_active_ctx(gedp);
+	if (!view_ctx)
 	    return BRLCAD_ERROR;
-	*coord = rt_view_coord_from_bsg(view);
+	*coord = ged_view_context_coord_get(view_ctx);
     }
 
     if (argc != 2 && argc != 4) {
@@ -1655,8 +1652,8 @@ ged_uplot_parse_stream(struct ged_uplot_stream *ctx, FILE *fp)
 static int
 ged_uplot_publish_feature(struct ged *gedp, const char *name, struct ged_uplot_stream *ctx)
 {
-    struct bsg_view *view = gedp ? (struct bsg_view *)ged_view_active_ctx(gedp) : NULL;
-    if (!view || !name || !ctx)
+    void *view_ctx = gedp ? ged_view_active_ctx(gedp) : NULL;
+    if (!view_ctx || !name || !ctx)
 	return BRLCAD_ERROR;
 
     size_t live_layers = 0;
@@ -1698,7 +1695,7 @@ ged_uplot_publish_feature(struct ged *gedp, const char *name, struct ged_uplot_s
 	idx++;
     }
 
-    int ret = ged_draw_view_line_layers_replace(view, name, 0,
+    int ret = ged_draw_view_context_line_layers_replace(view_ctx, name, 0,
 	    layers, live_layers, NULL) ? BRLCAD_OK : BRLCAD_ERROR;
 
     for (size_t i = 0; i < live_layers; i++) {
@@ -2240,15 +2237,15 @@ void
 _ged_rt_set_eye_model(struct ged *gedp,
 		      vect_t eye_model)
 {
-    struct bsg_view *view = gedp ? (struct bsg_view *)ged_view_active_ctx(gedp) : NULL;
-    if (!view)
+    void *view_ctx = gedp ? ged_view_active_ctx(gedp) : NULL;
+    if (!view_ctx)
 	return;
-    if (rt_view_zclip_from_bsg(view) ||
-	    rt_view_perspective_from_bsg(view) > 0) {
+    if (ged_view_context_zclip_get(view_ctx) ||
+	    ged_view_context_perspective_get(view_ctx) > 0) {
 	mat_t view2model;
 	vect_t temp;
 
-	rt_view_view2model_from_bsg(view2model, view);
+	ged_view_context_view2model_get(view2model, view_ctx);
 	VSET(temp, 0.0, 0.0, 1.0);
 	MAT4X3PNT(eye_model, view2model, temp);
     } else {
@@ -2263,8 +2260,8 @@ _ged_rt_set_eye_model(struct ged *gedp,
 	vect_t diag2;
 	point_t ecenter;
 
-	rt_view_center_from_bsg(view_center, view);
-	rt_view_rotation_from_bsg(view_rotation, view);
+	ged_view_context_center_get(view_center, view_ctx);
+	ged_view_context_rotation_get(view_rotation, view_ctx);
 	MAT_DELTAS_GET_NEG(eye_model, view_center);
 
 	for (i = 0; i < 3; ++i) {
@@ -2528,8 +2525,8 @@ _ged_rt_write(struct ged *gedp,
 {
     struct rt_view_info view_info = RT_VIEW_INFO_INIT;
     quat_t quat;
-    struct bsg_view *view = gedp ? (struct bsg_view *)ged_view_active_ctx(gedp) : NULL;
-    if (!view)
+    void *view_ctx = gedp ? ged_view_active_ctx(gedp) : NULL;
+    if (!view_ctx)
 	return;
 
     /* Double-precision IEEE floating point only guarantees 15-17
@@ -2541,8 +2538,8 @@ _ged_rt_write(struct ged *gedp,
      * from 9->14 "should" be safe as it's above our calculation
      * tolerance and above single-precision capability.
      */
-    rt_view_info_from_bsg(&view_info, view);
-    rt_view_orientation_quat_from_bsg(quat, view);
+    ged_view_context_info_get(&view_info, view_ctx);
+    ged_view_context_orientation_quat_get(quat, view_ctx);
     fprintf(fp, "viewsize %.14e;\n", view_info.size);
     fprintf(fp, "orientation %.14e %.14e %.14e %.14e;\n", V4ARGS(quat));
     fprintf(fp, "eye_pt %.14e %.14e %.14e;\n",
@@ -2560,7 +2557,7 @@ _ged_rt_write(struct ged *gedp,
     if (argc >= 0) {
 	if (!argc) {
 	    struct bu_vls paths = BU_VLS_INIT_ZERO;
-	    ged_draw_list_paths(gedp, view, -1, 0, &paths);
+	    ged_draw_list_paths(gedp, view_ctx, -1, 0, &paths);
 	    const char *path = bu_vls_cstr(&paths);
 	    while (path && *path) {
 		const char *nl = strchr(path, '\n');

@@ -96,8 +96,8 @@ open_gedp_null(const char *gfile)
 
     db_add_changed_clbk(gedp->dbip, &ged_changed_callback, (void *)gedp);
 
-    struct bsg_view *v = gedp->ged_gvp;
-    rt_view_unit_conversion_set_bsg(v, gedp->dbip->dbi_local2base,
+    void *v = ged_view_active_ctx(gedp);
+    rt_view_context_unit_conversion_set_bsg(v, gedp->dbip->dbi_local2base,
 	gedp->dbip->dbi_base2local);
 
     return gedp;
@@ -108,23 +108,22 @@ open_gedp_null(const char *gfile)
  * Mirrors what libtclcad's to_new_view() does for "db new_view v1 nu".
  *
  * A null-DM view needs no real display-manager handle; its sole purpose is
- * to carry a camera matrix (gv_size, gv_center, gv_rotation) for computing
- * the eye model.  We leave v->dmp = NULL just as libtclcad does for "nu".
+ * to carry a camera matrix for computing the eye model.  Its display-manager
+ * context remains NULL just as libtclcad does for "nu".
  */
-static struct bsg_view *
+static void *
 make_null_view(struct ged *gedp, const char *vname)
 {
-    struct bsg_view *v;
-    BU_GET(v, struct bsg_view);
-    rt_view_init_bsg(v, &gedp->ged_views);
-    bu_vls_sprintf(&v->gv_name, "%s", vname);
-    rt_view_unit_conversion_set_bsg(v, gedp->dbip->dbi_local2base,
+    void *view_set_ctx = ged_view_set_ctx(gedp);
+    void *v = rt_view_context_create_with_set_bsg(view_set_ctx);
+    rt_view_context_name_set_bsg(v, vname);
+    rt_view_context_unit_conversion_set_bsg(v, gedp->dbip->dbi_local2base,
 	gedp->dbip->dbi_base2local);
 
     /* Every new libtclcad view gets a retained scene anchor. */
-    (void)rt_view_scene_anchor_ensure_bsg(v);
+    (void)rt_view_context_scene_anchor_ensure_bsg(v);
 
-    rt_view_set_add_view_bsg(&gedp->ged_views, v);
+    rt_view_set_context_add_bsg(view_set_ctx, v);
     bu_ptbl_ins(&gedp->ged_free_views, (long *)v);
 
     return v;
@@ -154,10 +153,10 @@ test_null_view_scene_ref(const char *datadir)
     }
 
     /* Create a secondary null-DM view, simulating "db new_view v1 nu" */
-    struct bsg_view *v1 = make_null_view(gedp, "v1");
+    void *v1 = make_null_view(gedp, "v1");
 
     int fail = 0;
-    if (!rt_view_scene_attached_bsg(v1)) {
+    if (!rt_view_context_scene_attached_bsg(v1)) {
 	bu_log("FAIL: secondary null-DM view has no BSG root\n");
 	fail = 1;
     } else {
@@ -165,7 +164,7 @@ test_null_view_scene_ref(const char *datadir)
     }
 
     /* Also verify the default GED view has a BSG root (set by ged_open). */
-    if (!rt_view_scene_attached_bsg(gedp->ged_gvp)) {
+    if (!rt_view_context_scene_attached_bsg(ged_view_active_ctx(gedp))) {
 	bu_log("FAIL: default GED view has no BSG root\n");
 	fail = 1;
     } else {
@@ -201,15 +200,15 @@ test_eyemodel_finite(const char *datadir)
     }
 
     /* Create secondary null-DM view (rtwizard "new_view v1 nu") */
-    struct bsg_view *v1 = make_null_view(gedp, "v1");
+    void *v1 = make_null_view(gedp, "v1");
 
     /* Draw objects (rtwizard "db draw $item" for each object in color_objlist) */
     const char *s_av[4] = {"draw", "all.g", NULL};
     ged_exec_draw(gedp, 2, s_av);
 
     /* Autoview on v1 (rtwizard "db autoview v1") */
-    struct bsg_view *prev = gedp->ged_gvp;
-    gedp->ged_gvp = v1;
+    void *prev = ged_view_active_ctx(gedp);
+    ged_view_active_ctx_set(gedp, v1);
     s_av[0] = "autoview"; s_av[1] = NULL;
     ged_exec_autoview(gedp, 1, s_av);
 
@@ -220,7 +219,7 @@ test_eyemodel_finite(const char *datadir)
     /* Extract eye model (rtwizard "db get_eyemodel v1") */
     s_av[0] = "get_eyemodel"; s_av[1] = NULL;
     ged_exec_get_eyemodel(gedp, 1, s_av);
-    gedp->ged_gvp = prev;
+    ged_view_active_ctx_set(gedp, prev);
 
     const char *result = bu_vls_cstr(gedp->ged_result_str);
     bu_log("get_eyemodel output:\n%s\n", result);
@@ -304,14 +303,14 @@ test_nodisplaylist_path(const char *datadir)
     ged_exec_draw(gedp, 2, s_av);
 
     /* Create four secondary views and verify root sharing with the active tree */
-    struct bsg_view *views[4];
+    void *views[4];
     char vname[4][8];
     int fail = 0;
     for (int i = 0; i < 4; i++) {
 	snprintf(vname[i], sizeof(vname[i]), "v%d", i + 1);
 	views[i] = make_null_view(gedp, vname[i]);
 
-	if (!rt_view_scene_attached_bsg(views[i])) {
+	if (!rt_view_context_scene_attached_bsg(views[i])) {
 	    bu_log("FAIL: view '%s' has no BSG root; go_draw_dlist fallback would be used\n", vname[i]);
 	    fail = 1;
 	}
@@ -325,7 +324,7 @@ test_nodisplaylist_path(const char *datadir)
     /* Phase F: the view scene ref is shared across views in the same GED draw set. */
     int shared = 1;
     for (int i = 0; i < 4; i++) {
-	if (!rt_view_scene_shared_bsg(views[i], gedp->ged_gvp)) {
+	if (!rt_view_context_scene_shared_bsg(views[i], ged_view_active_ctx(gedp))) {
 	    bu_log("FAIL: view '%s' scene ref is not shared with the active GED draw root\n", vname[i]);
 	    shared = 0;
 	    fail = 1;
@@ -357,18 +356,18 @@ open_gedp_swrast(const char *gfile, int width, int height)
     const char *s_av[6] = {"dm", "attach", "swrast", "RTW_SW", NULL};
     ged_exec_dm(gedp, 4, s_av);
 
-    struct bsg_view *v = gedp->ged_gvp;
-    struct dm *dmp  = (struct dm *)v->dmp;
+    void *v = ged_view_active_ctx(gedp);
+    struct dm *dmp  = (struct dm *)rt_view_context_display_manager_from_bsg(v);
     dm_set_width(dmp, width);
     dm_set_height(dmp, height);
     dm_configure_win(dmp, 0);
     dm_set_zbuffer(dmp, 1);
     fastf_t wb[6] = {-1, 1, -1, 1, -100, 100};
     dm_set_win_bounds(dmp, wb);
-    dm_set_vp(dmp, rt_view_scale_storage_from_bsg(v));
-    v->dmp           = dmp;
-    rt_view_dimensions_set_bsg(v, dm_get_width(dmp), dm_get_height(dmp));
-    rt_view_unit_conversion_set_bsg(v, gedp->dbip->dbi_local2base,
+    dm_set_vp(dmp, rt_view_context_scale_storage_from_bsg(v));
+    rt_view_context_display_manager_set_bsg(v, dmp);
+    rt_view_context_dimensions_set_bsg(v, dm_get_width(dmp), dm_get_height(dmp));
+    rt_view_context_unit_conversion_set_bsg(v, gedp->dbip->dbi_local2base,
 	gedp->dbip->dbi_base2local);
 
     return gedp;
@@ -378,8 +377,8 @@ open_gedp_swrast(const char *gfile, int width, int height)
 static void
 do_swrast_refresh(struct ged *gedp)
 {
-    struct bsg_view *v = gedp->ged_gvp;
-    struct dm *dmp  = (struct dm *)v->dmp;
+    void *v = ged_view_active_ctx(gedp);
+    struct dm *dmp  = (struct dm *)rt_view_context_display_manager_from_bsg(v);
     dm_draw_begin(dmp);
     dm_draw_objs(v);
     dm_draw_end(dmp);
@@ -448,7 +447,7 @@ test_gui_swrast_render(const char *datadir)
     int fail = 0;
 
     /* BSG root must be set on the swrast-DM view (same guarantee as null-DM) */
-    if (!rt_view_scene_attached_bsg(gedp->ged_gvp)) {
+    if (!rt_view_context_scene_attached_bsg(ged_view_active_ctx(gedp))) {
 	bu_log("FAIL: swrast-DM view has no BSG root\n");
 	fail = 1;
     } else {
@@ -541,9 +540,9 @@ test_gui_eyemodel_consistency(const char *datadir)
     ged_exec_ae(gedp, 4, s_av);
 
     /* Save the view matrix for comparison */
-    struct bsg_view *v = gedp->ged_gvp;
+    void *v = ged_view_active_ctx(gedp);
     mat_t saved_m2v;
-    rt_view_model2view_from_bsg(saved_m2v, v);
+    rt_view_context_model2view_from_bsg(saved_m2v, v);
 
     /* Render A */
     do_swrast_refresh(gedp);
@@ -586,7 +585,7 @@ test_gui_eyemodel_consistency(const char *datadir)
 
     /* Also confirm view matrices match within floating-point noise */
     mat_t new_m2v;
-    rt_view_model2view_from_bsg(new_m2v, v);
+    rt_view_context_model2view_from_bsg(new_m2v, v);
     fastf_t max_delta = 0.0;
     for (int i = 0; i < 16; i++) {
 	fastf_t d = fabs(saved_m2v[i] - new_m2v[i]);

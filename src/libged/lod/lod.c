@@ -30,14 +30,15 @@
 #include <string.h>
 
 #include "rt/geom.h"
+#include "rt/view.h"
 
-#include "../bsg_ged_draw_view_private.h"
+#include "ged/bsg_ged_draw.h"
 #include "../ged_private.h"
 
 int
 ged_lod_core(struct ged *gedp, int argc, const char *argv[])
 {
-    struct bsg_view *gvp;
+    void *view_ctx;
     int printUsage = 0;
     static const char *usage = "lod (on|off|enabled)\n"
 			       "lod scale (points|curves) <factor>\n";
@@ -54,12 +55,12 @@ ged_lod_core(struct ged *gedp, int argc, const char *argv[])
 	return GED_HELP;
     }
 
-    gvp = (struct bsg_view *)ged_view_active_ctx(gedp);
-    if (gvp == NULL) {
+    view_ctx = ged_view_active_ctx(gedp);
+    if (view_ctx == NULL) {
 	return BRLCAD_OK;
     }
     ged_draw_view_lod_policy lod_policy;
-    if (!ged_draw_view_lod_policy_from_bsg(&lod_policy, gvp))
+    if (!ged_draw_view_context_lod_policy_from_bsg(&lod_policy, view_ctx))
 	return BRLCAD_ERROR;
     /* Print current state if no args are supplied */
     if (argc == 1) {
@@ -82,13 +83,13 @@ ged_lod_core(struct ged *gedp, int argc, const char *argv[])
 	/* lod on */
 	lod_policy.csg_enabled = 1;
 	lod_policy.zoom_refresh = 1;
-	ged_draw_view_lod_policy_apply_bsg(gvp, &lod_policy);
+	ged_draw_view_context_lod_policy_apply_bsg(view_ctx, &lod_policy);
     } else if (argc == 1 && BU_STR_EQUAL(argv[0], "off")) {
 	/* lod off */
 	lod_policy.csg_enabled = 0;
 	if (!lod_policy.mesh_enabled)
 	    lod_policy.zoom_refresh = 0;
-	ged_draw_view_lod_policy_apply_bsg(gvp, &lod_policy);
+	ged_draw_view_context_lod_policy_apply_bsg(view_ctx, &lod_policy);
     } else if (argc == 1 && BU_STR_EQUAL(argv[0], "enabled")) {
 	/* lod enabled - return on state */
 	bu_vls_printf(gedp->ged_result_str, "%d", lod_policy.csg_enabled);
@@ -101,7 +102,7 @@ ged_lod_core(struct ged *gedp, int argc, const char *argv[])
 		} else {
 		    /* lod scale points f - set value */
 		    lod_policy.point_scale = atof(argv[2]);
-		    ged_draw_view_lod_policy_apply_bsg(gvp, &lod_policy);
+		    ged_draw_view_context_lod_policy_apply_bsg(view_ctx, &lod_policy);
 		}
 	    } else if (BU_STR_EQUAL(argv[1], "curves")) {
 		if (argc == 2) {
@@ -110,7 +111,7 @@ ged_lod_core(struct ged *gedp, int argc, const char *argv[])
 		} else {
 		    /* lod scale curves f - set value */
 		    lod_policy.curve_scale = atof(argv[2]);
-		    ged_draw_view_lod_policy_apply_bsg(gvp, &lod_policy);
+		    ged_draw_view_context_lod_policy_apply_bsg(view_ctx, &lod_policy);
 		}
 	    } else {
 		printUsage = 1;

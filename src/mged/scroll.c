@@ -31,8 +31,8 @@
 
 #include "vmath.h"
 #include "ged.h"
+#include "ged/view.h"
 #include "rt/view.h"
-#include "rt/view_legacy_bsg.h"
 #include "./mged.h"
 #include "./mged_dm.h"
 
@@ -200,7 +200,8 @@ sl_atol(struct scroll_item *mptr, double val)
 	val = 0.0;
     }
 
-    view_scale = rt_view_scale_from_bsg(view_state->vs_gvp);
+    void *view_ctx = view_state->vs_gvp;
+    view_scale = ged_view_context_scale_get(view_ctx);
     bu_vls_printf(&vls, "knob %s %f", mptr->scroll_cmd, val * view_scale * s->dbip->dbi_base2local);
     Tcl_Eval(s->interp, bu_vls_addr(&vls));
     bu_vls_free(&vls);

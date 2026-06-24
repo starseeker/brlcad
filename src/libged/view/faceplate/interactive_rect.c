@@ -33,7 +33,7 @@
 #include "bu/color.h"
 #include "bu/opt.h"
 #include "bu/vls.h"
-#include "rt/view_legacy_bsg.h"
+#include "rt/view.h"
 
 #include "../../ged_private.h"
 #include "../ged_view.h"
@@ -485,14 +485,14 @@ _fp_cmd_irect(void *bs, int argc, const char **argv)
     int help = 0;
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+    void *view_ctx = ged_view_active_ctx(gedp);
 
     const char *usage_string = "view faceplate irect subcmd [args]";
     const char *purpose_string = "manipulate faceplate interactive rectangle";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
 
-    if (!v) {
+    if (!view_ctx) {
 	bu_vls_printf(gedp->ged_result_str, ": no view current in GED");
 	return BRLCAD_ERROR;
     }
@@ -502,16 +502,16 @@ _fp_cmd_irect(void *bs, int argc, const char **argv)
 
     if (argc == 1) {
 	struct rt_view_interactive_rect_state rect;
-	if (!rt_view_interactive_rect_state_from_bsg(&rect, v))
+	if (!ged_view_context_interactive_rect_state_get(&rect, view_ctx))
 	    return BRLCAD_ERROR;
 	if (BU_STR_EQUAL("1", argv[0])) {
 	    rect.draw = 1;
-	    rt_view_interactive_rect_state_set_bsg(v, &rect);
+	    ged_view_context_interactive_rect_state_set(view_ctx, &rect);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("0", argv[0])) {
 	    rect.draw = 0;
-	    rt_view_interactive_rect_state_set_bsg(v, &rect);
+	    ged_view_context_interactive_rect_state_set(view_ctx, &rect);
 	    return BRLCAD_OK;
 	}
     }
@@ -536,7 +536,7 @@ _fp_cmd_irect(void *bs, int argc, const char **argv)
     (void)bu_opt_parse(NULL, acnt, argv, d);
 
     struct rt_view_interactive_rect_state rect;
-    if (!rt_view_interactive_rect_state_from_bsg(&rect, v))
+    if (!ged_view_context_interactive_rect_state_get(&rect, view_ctx))
 	return BRLCAD_ERROR;
 
     struct _ged_fp_irect_info rinfo;
@@ -545,7 +545,7 @@ _fp_cmd_irect(void *bs, int argc, const char **argv)
 
     int ret = _ged_subcmd_exec(gedp, d, _fp_irect_cmds, "view faceplate irect", "[options] subcommand [args]", (void *)&rinfo, argc, argv, help, cmd_pos);
     if (ret == BRLCAD_OK)
-	rt_view_interactive_rect_state_set_bsg(v, &rect);
+	ged_view_context_interactive_rect_state_set(view_ctx, &rect);
     return ret;
 }
 

@@ -71,12 +71,12 @@ ged_changed_callback(struct db_i *dbip, struct directory *dp, int mode, void *u_
 extern "C" void
 dm_refresh(struct ged *gedp)
 {
-    struct bu_ptbl *views = rt_view_set_views_bsg(&gedp->ged_views);
-    struct bsg_view *v = NULL;
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
+    void *v = NULL;
     if (views && BU_PTBL_LEN(views) > 0)
-	v = (struct bsg_view *)BU_PTBL_GET(views, 0);
+	v = BU_PTBL_GET(views, 0);
     if (!v)
-	v = gedp->ged_gvp;
+	v = ged_view_active_ctx(gedp);
     if (!v)
 	return;
     struct ged_draw_transaction txn =
@@ -84,7 +84,7 @@ dm_refresh(struct ged *gedp)
     txn.view = v;
     ged_draw_apply_transaction(gedp, &txn, NULL);
 
-    struct dm *dmp = (struct dm *)v->dmp;
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
     if (!dmp)
 	return;
     dm_make_current(dmp);

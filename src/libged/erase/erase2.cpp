@@ -33,7 +33,6 @@
 #include "ged/database.h"
 #include "ged/view.h"
 #include "rt/db_attr.h"
-#include "rt/view_legacy_bsg.h"
 
 #include "../ged_private.h"
 
@@ -49,7 +48,7 @@ ged_erase2_core(struct ged *gedp, int argc, const char *argv[])
 {
     static const char *usage = "[[-r] | [[-o] -A attribute value ...]] [object(s)]";
     const char *cmdName = argv[0];
-    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+    void *view_ctx = ged_view_active_ctx(gedp);
     int recursive = 0;
     int flag_A_attr = 0;
     int flag_o_nonunique = 0;
@@ -78,14 +77,14 @@ ged_erase2_core(struct ged *gedp, int argc, const char *argv[])
     int opt_ret = bu_opt_parse(NULL, argc, argv, vd);
     argc = opt_ret;
     if (bu_vls_strlen(&cvls)) {
-	v = (struct bsg_view *)ged_view_find_ctx(gedp, bu_vls_cstr(&cvls));
-	if (!v) {
+	view_ctx = ged_view_find_ctx(gedp, bu_vls_cstr(&cvls));
+	if (!view_ctx) {
 	    bu_vls_printf(gedp->ged_result_str, "Specified view %s not found\n", bu_vls_cstr(&cvls));
 	    bu_vls_free(&cvls);
 	    return BRLCAD_ERROR;
 	}
 
-	if (!rt_view_is_independent_bsg(v)) {
+	if (!ged_view_context_is_independent(view_ctx)) {
 	    bu_vls_printf(gedp->ged_result_str, "Specified view %s is not an independent view, and as such does not support specifying db objects for display in only this view.  To change the view's status, the command 'view independent %s 1' may be applied.\n", bu_vls_cstr(&cvls), bu_vls_cstr(&cvls));
 	    bu_vls_free(&cvls);
 	    return BRLCAD_ERROR;
@@ -95,7 +94,7 @@ ged_erase2_core(struct ged *gedp, int argc, const char *argv[])
 
 
     /* Check that we have a view */
-    if (!v) {
+    if (!view_ctx) {
 	bu_vls_printf(gedp->ged_result_str, "No view specified and no current view defined in GED, nothing to erase from");
 	return BRLCAD_ERROR;
     }
@@ -149,7 +148,7 @@ ged_erase2_core(struct ged *gedp, int argc, const char *argv[])
 
 	    struct ged_draw_transaction txn =
 		ged_draw_transaction_make(GED_DRAW_TXN_ERASE, dp->d_namep);
-	    txn.view = v;
+	    txn.view = view_ctx;
 	    txn.mode = mode;
 	    if (ged_draw_apply_transaction(gedp, &txn, NULL) < 0)
 		ret = BRLCAD_ERROR;
@@ -166,7 +165,7 @@ ged_erase2_core(struct ged *gedp, int argc, const char *argv[])
 	    ged_draw_transaction_make(
 		    recursive ? GED_DRAW_TXN_ERASE_PREFIX : GED_DRAW_TXN_ERASE,
 		    argv[i]);
-	txn.view = v;
+	txn.view = view_ctx;
 	txn.mode = mode;
 	if (ged_draw_apply_transaction(gedp, &txn, NULL) < 0)
 	    ret = BRLCAD_ERROR;

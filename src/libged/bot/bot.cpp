@@ -48,11 +48,11 @@
 #include "bg/line_layer.h"
 #include "bg/pca.h"
 #include "bg/trimesh.h"
+#include "ged/bsg_ged_draw.h"
 #include "ged/event_txn.h"
 #include "rt/geom.h"
 #include "wdb.h"
 
-#include "../bsg_ged_draw_view_private.h"
 #include "./ged_bot.h"
 #include "../ged_private.h"
 
@@ -719,16 +719,16 @@ _bot_cmd_plot(void *bs, int argc, const char **argv)
 	cmds[pi++] = BG_GEOMETRY_LINE_DRAW;
     }
 
-    struct bsg_view *view = (struct bsg_view *)ged_view_active_ctx(gb->gedp);
-    if (view) {
+    void *view_ctx = ged_view_active_ctx(gb->gedp);
+    if (view_ctx) {
 	struct bu_vls nroot = BU_VLS_INIT_ZERO;
 	bu_vls_sprintf(&nroot, "bot::%s", "_bot_face_plot");
-	(void)ged_draw_view_feature_remove(view, bu_vls_cstr(&nroot));
+	(void)ged_draw_view_context_feature_remove(view_ctx, bu_vls_cstr(&nroot));
 	if (point_count) {
 	    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
 	    style.color_valid = 1;
 	    VSET(style.color, rgb[0], rgb[1], rgb[2]);
-	    (void)ged_draw_view_lines_replace(view, bu_vls_cstr(&nroot), 0,
+	    (void)ged_draw_view_context_lines_replace(view_ctx, bu_vls_cstr(&nroot), 0,
 		    (const point_t *)points, cmds, point_count, &style);
 	}
 	bu_vls_free(&nroot);

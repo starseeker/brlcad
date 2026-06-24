@@ -164,6 +164,34 @@ struct ged_draw_observer_entry {
 };
 
 
+void
+ged_draw_bsg_appearance_from_neutral(struct bsg_appearance_settings *out,
+				     const struct ged_draw_appearance_settings *in)
+{
+    if (!out)
+	return;
+
+    struct bsg_appearance_settings settings = BSG_APPEARANCE_SETTINGS_INIT;
+    if (in) {
+	settings.draw_mode = in->draw_mode;
+	settings.mixed_modes = in->mixed_modes;
+	settings.transparency = in->transparency;
+	settings.color_override = in->color_override;
+	settings.color[0] = in->color[0];
+	settings.color[1] = in->color[1];
+	settings.color[2] = in->color[2];
+	settings.s_line_width = in->s_line_width;
+	settings.s_arrow_tip_length = in->s_arrow_tip_length;
+	settings.s_arrow_tip_width = in->s_arrow_tip_width;
+	settings.draw_solid_lines_only = in->draw_solid_lines_only;
+	settings.draw_non_subtract_only = in->draw_non_subtract_only;
+	settings.strict_fallback = in->strict_fallback;
+    }
+
+    *out = settings;
+}
+
+
 static struct ged_drawable *
 _ged_draw_gdp(struct ged *gedp)
 {
@@ -1539,9 +1567,14 @@ _ged_draw_apply_draw(struct ged *gedp,
 	bu_free((void *)draw_paths, "draw transaction paths");
 	return 0;
     }
-    struct bsg_appearance_settings settings = BSG_APPEARANCE_SETTINGS_INIT;
+    struct ged_draw_appearance_settings neutral_settings =
+	GED_DRAW_APPEARANCE_SETTINGS_INIT;
     if (txn->appearance)
-	settings = *(const struct bsg_appearance_settings *)txn->appearance;
+	neutral_settings =
+	    *(const struct ged_draw_appearance_settings *)txn->appearance;
+
+    struct bsg_appearance_settings settings = BSG_APPEARANCE_SETTINGS_INIT;
+    ged_draw_bsg_appearance_from_neutral(&settings, &neutral_settings);
 
     for (int i = 0; i < draw_count; i++) {
 	struct ged_draw_transaction erase_txn =
@@ -1559,10 +1592,10 @@ _ged_draw_apply_draw(struct ged *gedp,
     struct _ged_client_data dgcdp;
     memset(&dgcdp, 0, sizeof(dgcdp));
     dgcdp.gedp = gedp;
-    dgcdp.v = v;
+    dgcdp.view_ctx = v;
     dgcdp.autoview = txn->autoview ? 1 : 0;
     dgcdp.nmg_triangulate = 1;
-    dgcdp.vs = settings;
+    dgcdp.vs = neutral_settings;
 
     int ret = 0;
     if (settings.draw_mode == BSG_DRAW_MODE_EVAL_WIRE ||

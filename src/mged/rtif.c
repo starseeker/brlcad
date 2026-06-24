@@ -42,7 +42,6 @@
 #include "vmath.h"
 #include "raytrace.h"
 #include "ged/view.h"
-#include "rt/view_legacy_bsg.h"
 
 #include "./sedit.h"
 #include "./mged.h"
@@ -106,9 +105,9 @@ _rtif_use_current_view(struct mged_state *s)
 	return;
 
     ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
-    struct bsg_view *gvp = (struct bsg_view *)ged_view_active_ctx(s->gedp);
-    if (s->mged_curr_dm && gvp)
-	rt_view_display_manager_set_bsg(gvp,
+    void *view_ctx = ged_view_active_ctx(s->gedp);
+    if (s->mged_curr_dm && view_ctx)
+	ged_view_context_display_manager_set(view_ctx,
 		(void *)s->mged_curr_dm->dm_dmp);
 }
 
@@ -316,29 +315,30 @@ work:
     else
 	return TCL_OK;
 
+    void *view_ctx = view_state->vs_gvp;
     while (!feof(fp) &&
 	   rt_read(fp, &scale, eye_model, rot) >= 0) {
 	switch (mode) {
 	    case -1:
 		/* First step:  put eye in center */
-		rt_view_scale_set_bsg(view_state->vs_gvp, scale);
-		rt_view_rotation_set_bsg(view_state->vs_gvp, rot);
-		rt_view_center_vec_set_bsg(view_state->vs_gvp, eye_model);
+		ged_view_context_scale_set(view_ctx, scale);
+		ged_view_context_rotation_set(view_ctx, rot);
+		ged_view_context_center_vec_set(view_ctx, eye_model);
 		new_mats(s);
 		/* Second step:  put eye in front */
 		VSET(xlate, 0.0, 0.0, -1.0);	/* correction factor */
 		mat_t view2model;
-		rt_view_view2model_from_bsg(view2model, view_state->vs_gvp);
+		ged_view_context_view2model_get(view2model, view_ctx);
 		MAT4X3PNT(eye_model, view2model, xlate);
-		rt_view_center_vec_set_bsg(view_state->vs_gvp, eye_model);
+		ged_view_context_center_vec_set(view_ctx, eye_model);
 		new_mats(s);
 		break;
 	    case 0: {
 		mat_t top_view;
 		MAT_IDN(top_view);
-		rt_view_scale_set_bsg(view_state->vs_gvp, scale);
-		rt_view_rotation_set_bsg(view_state->vs_gvp, top_view);	/* top view */
-		rt_view_center_vec_set_bsg(view_state->vs_gvp, eye_model);
+		ged_view_context_scale_set(view_ctx, scale);
+		ged_view_context_rotation_set(view_ctx, top_view);	/* top view */
+		ged_view_context_center_vec_set(view_ctx, eye_model);
 		new_mats(s);
 		break;
 	    }

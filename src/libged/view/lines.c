@@ -35,7 +35,6 @@
 #include "bu/vls.h"
 
 #include "../ged_private.h"
-#include "../bsg_ged_draw_view_private.h"
 #include "./ged_view.h"
 
 int
@@ -53,7 +52,7 @@ _line_cmd_create(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    if (ged_draw_view_feature_exists(gd->cv, gd->vobj)) {
+    if (ged_draw_view_context_feature_exists(gd->cv, gd->vobj)) {
         bu_vls_printf(gedp->ged_result_str, "View feature named %s already exists\n", gd->vobj);
         return BRLCAD_ERROR;
     }
@@ -76,7 +75,7 @@ _line_cmd_create(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    if (!ged_draw_view_lines_create_model_annotation(gd->cv, gd->vobj,
+    if (!ged_draw_view_context_lines_create_model_annotation(gd->cv, gd->vobj,
 	    gd->local_obj, p)) {
 	bu_vls_printf(gedp->ged_result_str, "Failed to create %s\n", gd->vobj);
 	return BRLCAD_ERROR;
@@ -100,7 +99,7 @@ _line_cmd_append(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    if (!ged_draw_view_feature_exists(gd->cv, gd->vobj)) {
+    if (!ged_draw_view_context_feature_exists(gd->cv, gd->vobj)) {
         bu_vls_printf(gedp->ged_result_str, "no view feature named %s\n", gd->vobj);
         return BRLCAD_ERROR;
     }
@@ -124,7 +123,7 @@ _line_cmd_append(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    return ged_draw_view_lines_append_point(gd->cv, gd->vobj, p) ?
+    return ged_draw_view_context_lines_append_point(gd->cv, gd->vobj, p) ?
 	BRLCAD_OK : BRLCAD_ERROR;
 
 }

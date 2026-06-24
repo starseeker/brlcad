@@ -29,8 +29,6 @@
 #include <ctype.h>
 #include <string.h>
 
-#include "rt/view_legacy_bsg.h"
-
 #include "../ged_private.h"
 
 
@@ -40,7 +38,7 @@ ged_pmodel2view_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
-    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
+    void *view_ctx = ged_view_active_ctx(gedp);
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -48,7 +46,7 @@ ged_pmodel2view_core(struct ged *gedp, int argc, const char *argv[])
     /* get the pmodel2view matrix */
     if (argc == 1) {
 	mat_t pmodel2view;
-	rt_view_pmodel2view_from_bsg(pmodel2view, v);
+	ged_view_context_pmodel2view_get(pmodel2view, view_ctx);
 	bn_encode_mat(gedp->ged_result_str, pmodel2view, 1);
 	return BRLCAD_OK;
     }
