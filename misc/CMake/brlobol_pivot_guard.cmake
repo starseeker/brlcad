@@ -364,6 +364,67 @@ function(_brlobol_pivot_guard_check_libbsg_public_payload_hygiene)
 endfunction()
 
 function(_brlobol_pivot_guard_check_legacy_header_include_hygiene)
+  set(_direct_legacy_view_header_allowed
+      src/gtools/gsh/gsh.cpp
+      src/libdm/qtgl/dm-qtgl.cpp
+      src/libdm/swrast/dm-swrast.cpp
+      src/libdm/tkswrast/dm-tkswrast.cpp
+      src/libdm/view.c
+      src/libged/bsg_ged_draw_view.c
+      src/libged/ged.cpp
+      src/libqtcad/QgLegacyView.cpp
+      src/librt/edit_legacy_bsg.cpp
+      src/librt/view_legacy_bsg.c
+      src/libtclcad/commands.c
+      src/libtclcad/fb.c
+      src/libtclcad/mouse.c
+      src/libtclcad/polygons.c
+      src/libtclcad/view/arrows.c
+      src/libtclcad/view/autoview.c
+      src/libtclcad/view/axes.c
+      src/libtclcad/view/draw.c
+      src/libtclcad/view/faceplate.c
+      src/libtclcad/view/refresh.c
+      src/libtclcad/view/util.c
+      src/libtclcad/view_data.c
+      src/libtclcad/wrapper.c
+      src/mged/chgview.c
+      src/mged/cmd.cpp
+      src/mged/dozoom.c
+      src/mged/mged.c
+      src/mged/mged.h
+      src/mged/mged_dm.h)
+
+  _brlobol_pivot_guard_collect(_direct_legacy_view_header_scan_files
+    src/gtools
+    src/libdm
+    src/libged
+    src/libqtcad
+    src/librt
+    src/libtclcad
+    src/mged)
+  foreach(_file IN LISTS _direct_legacy_view_header_scan_files)
+    file(RELATIVE_PATH _rel "${BRLCAD_SOURCE_DIR}" "${_file}")
+    if(NOT "${_rel}" MATCHES [[\.(c|cc|cpp|cxx|h|hh|hpp)$]])
+      continue()
+    endif()
+    if("${_rel}" MATCHES [[(^|/)tests/]])
+      continue()
+    endif()
+    file(READ "${_file}" _legacy_header_scan_contents)
+    string(REGEX MATCH [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
+      _legacy_header_scan_hit "${_legacy_header_scan_contents}")
+    list(FIND _direct_legacy_view_header_allowed "${_rel}"
+      _legacy_header_allowed_idx)
+    if(_legacy_header_scan_hit AND _legacy_header_allowed_idx EQUAL -1)
+      _brlobol_pivot_guard_fail(
+	"${_rel} reintroduced direct rt/view_legacy_bsg.h outside the current production allowlist")
+    elseif(NOT _legacy_header_scan_hit AND NOT _legacy_header_allowed_idx EQUAL -1)
+      _brlobol_pivot_guard_fail(
+	"${_rel} is listed as a direct rt/view_legacy_bsg.h owner but no longer includes it; update the central allowlist")
+    endif()
+  endforeach()
+
   set(_ged_header "${BRLCAD_SOURCE_DIR}/include/ged.h")
   if(EXISTS "${_ged_header}")
     file(READ "${_ged_header}" _ged_header_contents)

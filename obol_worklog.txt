@@ -15,6 +15,28 @@ needs historical context or more detailed design rationale.
 Current Work Notes
 ------------------
 
+The active handoff documentation has been compacted.  `obol_activework.txt`
+now keeps only the current migration snapshot, remaining direct legacy-view
+counts, active queue, verification gates, and done criteria; detailed slice
+history remains here in `obol_worklog.txt`.  This restores activework to its
+intended role as a short first-read file instead of a growing historical
+archive.
+
+The pivot guard now has a central production allowlist for direct
+`rt/view_legacy_bsg.h` includes.  The detailed boundary-specific CMake checks
+remain in place, but the direct legacy-view owner count now has one obvious
+list to update as MGED/TclCAD/libdm/qtcad/librt files migrate.  A compiled
+O3 scanner remains a reasonable future optimization for repetitive
+file/token checks if the CMake guard becomes a bottleneck; it was not added
+in this pass because the guard still completes comfortably under the
+180-second cap and the current script contains many semantic checks that are
+not worth reimplementing prematurely.
+
+Current status reporting now calls out libbsg retirement readiness explicitly:
+the migration is not retire-ready while the 29 direct production
+`rt/view_legacy_bsg.h` owners remain, with Phase 4 focused on the 6 MGED and
+13 TclCAD owners before Phase 5 lower display/backend and bridge cleanup.
+
 The MGED setup/attach lifecycle boundary now uses public GED view-context
 facades instead of direct `rt/view_legacy_bsg.h` access.  `src/mged/setup.c`
 creates and registers the initial view with `ged_view_context_create_with_set`

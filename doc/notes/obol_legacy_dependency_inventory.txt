@@ -43,6 +43,27 @@ guarded separately so stale build-only direct libbsg links do not return:
 
 * selected converter and simulate build targets: no direct libbsg link
 
+Current Direct Legacy-View Header Owners
+----------------------------------------
+
+The pivot guard's central production allowlist currently permits 29 direct
+non-test `rt/view_legacy_bsg.h` includes.  These are retirement blockers, not
+target-state dependencies:
+
+* Phase 4 app front: 6 MGED files and 13 TclCAD files.
+* GED bridge boundary: 2 files, `src/libged/ged.cpp` and
+  `src/libged/bsg_ged_draw_view.c`.
+* Lower display/backend boundary: 4 libdm files.
+* RT legacy adapter boundary: 2 librt files.
+* qtcad retained bridge: 1 file, `src/libqtcad/QgLegacyView.cpp`.
+* GSH retained display-state bridge: 1 file, `src/gtools/gsh/gsh.cpp`.
+
+libbsg is not retire-ready while these direct owners and the guarded direct
+target dependency rows above remain.  The immediate Phase 4 target is driving
+MGED and TclCAD to zero direct legacy-view includes through public GED/RT
+facades; Phase 5 then owns lower display/backend and bridge cleanup before
+Phase 6 hard removal.
+
 The GSH geometry shell still exercises retained active-view display hashing,
 dirty-state, refresh, and display-manager close behavior while its backend
 migrates, but that source must not include direct BSG headers.  Its
