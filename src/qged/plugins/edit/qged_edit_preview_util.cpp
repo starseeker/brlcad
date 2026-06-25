@@ -20,58 +20,59 @@
 #include "common.h"
 
 #include "bu/malloc.h"
-#include "qtcad/QgLegacyView.h"
+#include "rt/view.h"
+#include "QgLegacyViewContext.h"
 #include "qtcad/QgPluginContext.h"
 
 #include "qged_edit_preview_util.h"
 
-static qg_legacy_view_feature_ref
-qged_edit_feature_ref_to_legacy(struct qged_edit_feature_ref ref)
+static rt_view_feature_ref
+qged_edit_feature_ref_to_rt(struct qged_edit_feature_ref ref)
 {
-    qg_legacy_view_feature_ref legacy_ref = { ref.token, ref.revision };
-    return legacy_ref;
+    rt_view_feature_ref rt_ref = { ref.token, ref.revision };
+    return rt_ref;
 }
 
 
 static struct qged_edit_feature_ref
-qged_edit_feature_ref_from_legacy(qg_legacy_view_feature_ref ref)
+qged_edit_feature_ref_from_rt(rt_view_feature_ref ref)
 {
     struct qged_edit_feature_ref qged_ref = { ref.token, ref.revision };
     return qged_ref;
 }
 
 
-static qg_legacy_view_feature_family
-qged_edit_feature_family_to_legacy(enum qged_edit_feature_family family)
+static enum rt_view_feature_family
+qged_edit_feature_family_to_rt(enum qged_edit_feature_family family)
 {
     switch (family) {
 	case QGED_EDIT_FEATURE_TRANSIENT_PREVIEW:
-	    return QG_LEGACY_VIEW_FEATURE_TRANSIENT_PREVIEW;
+	    return RT_VIEW_FEATURE_TRANSIENT_PREVIEW;
 	case QGED_EDIT_FEATURE_UNKNOWN:
 	default:
-	    return QG_LEGACY_VIEW_FEATURE_UNKNOWN;
+	    return RT_VIEW_FEATURE_UNKNOWN;
     }
 }
 
 
-static qg_legacy_view_edit_preview_event
-qged_edit_preview_event_to_legacy(enum qged_edit_preview_event event)
+static enum rt_view_edit_preview_event
+qged_edit_preview_event_to_rt(enum qged_edit_preview_event event)
 {
     switch (event) {
 	case QGED_EDIT_PREVIEW_BEGIN:
-	    return QG_LEGACY_VIEW_EDIT_PREVIEW_BEGIN;
+	    return RT_VIEW_EDIT_PREVIEW_BEGIN;
 	case QGED_EDIT_PREVIEW_UPDATE:
-	    return QG_LEGACY_VIEW_EDIT_PREVIEW_UPDATE;
+	    return RT_VIEW_EDIT_PREVIEW_UPDATE;
 	case QGED_EDIT_PREVIEW_COMMIT:
-	    return QG_LEGACY_VIEW_EDIT_PREVIEW_COMMIT;
+	    return RT_VIEW_EDIT_PREVIEW_COMMIT;
 	case QGED_EDIT_PREVIEW_CANCEL:
-	    return QG_LEGACY_VIEW_EDIT_PREVIEW_CANCEL;
+	    return RT_VIEW_EDIT_PREVIEW_CANCEL;
 	case QGED_EDIT_PREVIEW_REPLACE_SOURCE:
-	    return QG_LEGACY_VIEW_EDIT_PREVIEW_REPLACE_SOURCE;
+	    return RT_VIEW_EDIT_PREVIEW_REPLACE_SOURCE;
 	case QGED_EDIT_PREVIEW_DISCARD:
-	    return QG_LEGACY_VIEW_EDIT_PREVIEW_DISCARD;
+	    return RT_VIEW_EDIT_PREVIEW_DISCARD;
 	default:
-	    return QG_LEGACY_VIEW_EDIT_PREVIEW_UPDATE;
+	    return RT_VIEW_EDIT_PREVIEW_UPDATE;
     }
 }
 
@@ -83,16 +84,23 @@ qged_edit_view(const QgPluginContext *ctx)
 }
 
 
+static void *
+qged_edit_view_context(const QgPluginContext *ctx)
+{
+    return qg_legacy_view_to_context(qged_edit_view(ctx));
+}
+
+
 int
 qged_edit_feature_ref_is_null(struct qged_edit_feature_ref ref)
 {
-    return ref.token ? 0 : 1;
+    return rt_view_feature_ref_is_null(qged_edit_feature_ref_to_rt(ref));
 }
 
 
 static void
-qged_edit_preview_callbacks_to_legacy(
-	qg_legacy_view_edit_preview_callbacks *dst,
+qged_edit_preview_callbacks_to_rt(
+	struct rt_view_edit_preview_callbacks *dst,
 	const struct qged_edit_preview_callbacks *callbacks)
 {
     if (!dst || !callbacks)
@@ -110,9 +118,9 @@ qged_edit_preview_publish_event(const QgPluginContext *ctx,
 				enum qged_edit_preview_event event,
 				const char *source_path)
 {
-    return qg_legacy_view_edit_preview_publish_event(qged_edit_view(ctx),
-	    qged_edit_feature_ref_to_legacy(feature),
-	    qged_edit_preview_event_to_legacy(event), source_path);
+    return rt_view_context_edit_preview_publish_event(qged_edit_view_context(ctx),
+	    qged_edit_feature_ref_to_rt(feature),
+	    qged_edit_preview_event_to_rt(event), source_path);
 }
 
 
@@ -124,18 +132,18 @@ qged_edit_feature_overlay_ensure(const QgPluginContext *ctx,
 				 const struct qged_edit_preview_callbacks *callbacks,
 				 const char *source_path)
 {
-    qg_legacy_view_edit_preview_callbacks legacy_callbacks =
-	QG_LEGACY_VIEW_EDIT_PREVIEW_CALLBACKS_INIT;
-    const qg_legacy_view_edit_preview_callbacks *legacy_callbacks_ptr = NULL;
+    struct rt_view_edit_preview_callbacks rt_callbacks =
+	RT_VIEW_EDIT_PREVIEW_CALLBACKS_INIT;
+    const struct rt_view_edit_preview_callbacks *rt_callbacks_ptr = NULL;
 
     if (callbacks) {
-	qged_edit_preview_callbacks_to_legacy(&legacy_callbacks, callbacks);
-	legacy_callbacks_ptr = &legacy_callbacks;
+	qged_edit_preview_callbacks_to_rt(&rt_callbacks, callbacks);
+	rt_callbacks_ptr = &rt_callbacks;
     }
 
-    return qged_edit_feature_ref_from_legacy(
-	    qg_legacy_view_feature_overlay_ensure(qged_edit_view(ctx),
-		name, owner, preview_ctx, legacy_callbacks_ptr, source_path));
+    return qged_edit_feature_ref_from_rt(
+	    rt_view_context_feature_overlay_ensure(qged_edit_view_context(ctx),
+		name, owner, preview_ctx, rt_callbacks_ptr, source_path));
 }
 
 
@@ -144,8 +152,8 @@ qged_edit_feature_label_ensure(const QgPluginContext *ctx,
 			       const char *name,
 			       const void *owner)
 {
-    return qged_edit_feature_ref_from_legacy(
-	    qg_legacy_view_feature_label_ensure(qged_edit_view(ctx),
+    return qged_edit_feature_ref_from_rt(
+	    rt_view_context_feature_label_ensure(qged_edit_view_context(ctx),
 		name, owner));
 }
 
@@ -153,38 +161,36 @@ qged_edit_feature_label_ensure(const QgPluginContext *ctx,
 int
 qged_edit_feature_remove(const QgPluginContext *ctx, const char *name)
 {
-    return qg_legacy_view_feature_remove(qged_edit_view(ctx), name);
+    return rt_view_context_feature_remove(qged_edit_view_context(ctx), name);
 }
 
 
 void
 qged_edit_feature_set_view(struct qged_edit_feature_ref ref, const QgPluginContext *ctx)
 {
-    qg_legacy_view_feature_set_view(qged_edit_feature_ref_to_legacy(ref),
-	    qged_edit_view(ctx));
+    rt_view_feature_set_context(qged_edit_feature_ref_to_rt(ref),
+	    qged_edit_view_context(ctx));
 }
 
 
 void
 qged_edit_feature_set_visible(struct qged_edit_feature_ref ref, int visible)
 {
-    qg_legacy_view_feature_set_visible(qged_edit_feature_ref_to_legacy(ref),
-	    visible);
+    rt_view_feature_set_visible(qged_edit_feature_ref_to_rt(ref), visible);
 }
 
 
 void
 qged_edit_feature_set_color(struct qged_edit_feature_ref ref, int r, int g, int b)
 {
-    qg_legacy_view_feature_set_color(qged_edit_feature_ref_to_legacy(ref),
-	    r, g, b);
+    rt_view_feature_set_color(qged_edit_feature_ref_to_rt(ref), r, g, b);
 }
 
 
 int
 qged_edit_feature_touch(struct qged_edit_feature_ref ref)
 {
-    return qg_legacy_view_feature_touch(qged_edit_feature_ref_to_legacy(ref));
+    return rt_view_feature_touch(qged_edit_feature_ref_to_rt(ref));
 }
 
 
@@ -197,10 +203,10 @@ qged_edit_feature_labels_replace(struct qged_edit_feature_ref ref,
     if (qged_edit_feature_ref_is_null(ref))
 	return 0;
 
-    qg_legacy_view_feature_label *labels = NULL;
+    struct rt_view_feature_label *labels = NULL;
     if (label_count > 0) {
-	labels = (qg_legacy_view_feature_label *)bu_calloc((size_t)label_count,
-		sizeof(qg_legacy_view_feature_label), "qged edit labels");
+	labels = (struct rt_view_feature_label *)bu_calloc((size_t)label_count,
+		sizeof(struct rt_view_feature_label), "qged edit labels");
 	for (int i = 0; i < label_count; i++) {
 	    labels[i].text = point_labels[i].str;
 	    VMOVE(labels[i].point, point_labels[i].pt);
@@ -211,8 +217,8 @@ qged_edit_feature_labels_replace(struct qged_edit_feature_ref ref,
 	}
     }
 
-    int ret = qg_legacy_view_feature_labels_replace(
-	    qged_edit_feature_ref_to_legacy(ref),
+    int ret = rt_view_feature_labels_replace(
+	    qged_edit_feature_ref_to_rt(ref),
 	    labels, label_count > 0 ? (size_t)label_count : 0);
     if (labels)
 	bu_free(labels, "qged edit labels");
@@ -226,9 +232,9 @@ qged_edit_preview_lines_replace(struct qged_edit_feature_ref ref,
 				const struct qged_edit_preview_lines *lines)
 {
     size_t count = lines ? lines->count : 0;
-    return qg_legacy_view_feature_points_replace(
-	    qged_edit_feature_ref_to_legacy(ref),
-	    qged_edit_feature_family_to_legacy(family),
+    return rt_view_feature_points_replace(
+	    qged_edit_feature_ref_to_rt(ref),
+	    qged_edit_feature_family_to_rt(family),
 	    count ? (const point_t *)lines->points : NULL,
 	    count ? lines->cmds : NULL,
 	    count);
@@ -238,8 +244,7 @@ qged_edit_preview_lines_replace(struct qged_edit_feature_ref ref,
 int
 qged_edit_feature_clear_geometry(struct qged_edit_feature_ref ref)
 {
-    return qg_legacy_view_feature_clear_geometry(
-	    qged_edit_feature_ref_to_legacy(ref));
+    return rt_view_feature_clear_geometry(qged_edit_feature_ref_to_rt(ref));
 }
 
 

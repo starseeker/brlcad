@@ -32,7 +32,6 @@
 #include <bu.h>
 #include <icv.h>
 #include <rt/view.h>
-#include <rt/view_legacy_bsg.h>
 #define DM_WITH_RT
 #include <dm.h>
 #include <ged.h>
@@ -84,7 +83,7 @@ dm_refresh(struct ged *gedp)
     txn.view = v;
     ged_draw_apply_transaction(gedp, &txn, NULL);
 
-    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(v);
     if (!dmp)
 	return;
     dm_make_current(dmp);

@@ -8,7 +8,7 @@
 
 #include "common.h"
 
-#include "qtcad/QgObolSelectionSync.h"
+#include "QgObolSelectionSyncPrivate.h"
 
 #include "brlobol/database_source.h"
 #include "brlobol/mesh_shape.h"
@@ -16,7 +16,7 @@
 #include "brlobol/vlist_shape.h"
 #include "bu/vls.h"
 #include "ged/selection_state.h"
-#include "qtcad/QgObolViewSync.h"
+#include "QgObolViewSyncPrivate.h"
 #include "qtcad/QgView.h"
 
 #include <string>

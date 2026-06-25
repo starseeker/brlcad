@@ -32,6 +32,7 @@
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgView.h"
 #include "rt/view.h"
+#include "QgLegacyViewContext.h"
 #include "QPolySettings.h"
 
 static qg_legacy_view *
@@ -176,7 +177,8 @@ QPolySettings::uniq_obj_name(struct bu_vls *oname, const QgPluginContext *ctx)
     // See if the supplied name will collide.  If it will, then reject.  If we want
     // an output name, fail with a message box
     struct bu_vls ovname = BU_VLS_INIT_ZERO;
-    if (!qg_legacy_view_unique_object_name(&ovname, vname, v)) {
+    if (!rt_view_context_unique_object_name(&ovname, vname,
+	    qg_legacy_view_to_context(v))) {
 	if (vname)
 	    bu_free(vname, "vname");
 	return false;

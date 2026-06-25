@@ -28,6 +28,7 @@
 #define QGLEGACYVIEWDM_H
 
 #include "qtcad/QgLegacyView.h"
+#include "vmath.h"
 
 class QgGL;
 class QgSW;
@@ -42,14 +43,8 @@ public:
 	static QgSW *create_swrast(QWidget *parent, qg_legacy_fb *fbp);
 };
 
-QTCAD_EXPORT extern fastf_t *qg_legacy_view_scale_storage_get(
-	qg_legacy_view *view);
-
 QTCAD_EXPORT extern int qg_legacy_view_display_manager_set(qg_legacy_view *view,
 	qg_legacy_dm *dmp);
-
-QTCAD_EXPORT extern qg_legacy_dm *qg_legacy_view_display_manager_get(
-	qg_legacy_view *view);
 
 QTCAD_EXPORT extern int qg_legacy_view_dm_bind(qg_legacy_view *view,
 	qg_legacy_dm *dmp);
@@ -138,8 +133,6 @@ QTCAD_EXPORT extern int qg_legacy_view_framebuffer_standalone_get(
 QTCAD_EXPORT extern int qg_legacy_view_framebuffer_configure(qg_legacy_fb *ifp,
 	int width,
 	int height);
-
-QTCAD_EXPORT extern void *qg_legacy_view_dm_open_context(qg_legacy_view *view);
 
 QTCAD_EXPORT extern int qg_legacy_view_dm_draw(qg_legacy_view *view);
 

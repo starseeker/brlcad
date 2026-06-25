@@ -211,7 +211,7 @@ ged_init(struct ged *gedp)
     qray_init(gedp->i->ged_gdp);
 
     /* Eagerly create the draw root so GED_CHECK_DRAWABLE succeeds */
-    ged_draw_ensure_root(gedp);
+    ged_draw_ensure_root_attached(gedp);
 
     BU_GET(gedp->ged_log, struct bu_vls);
     bu_vls_init(gedp->ged_log);

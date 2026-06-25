@@ -34,7 +34,9 @@
 #include <QtGlobal>
 
 #include "QgCanvasState.h"   /* pimpl definition + shared helpers */
+#include "QgLegacyViewContext.h"
 #include "qtcad/QgGL.h"
+#include "rt/view.h"
 
 // FROM MGED
 #define XMIN            (-2048)
@@ -69,7 +71,7 @@ QgGL::QgGL(QWidget *parent)
     d = new QgCanvasState();
     qgcanvas_init_obol(*d, this);
     d->ifp = qggl_bridge_framebuffer;
-    d->lmouse_mode = QG_LEGACY_VIEW_ADJUST_SCALE;
+    d->lmouse_mode = RT_VIEW_ADJUST_SCALE;
 
     // Provide a view specific to this widget - set gedp->ged_gvp to v
     // if this is the current view
@@ -161,8 +163,8 @@ return;
 	initializeOpenGLFunctions();
 	if (qgcanvas_render_obol_pending(*d, TRUE, TRUE)) {
 	    if (d->v) {
-		(void)qg_legacy_view_refresh_consume(d->v);
-		qg_legacy_view_refresh_complete(d->v);
+		(void)rt_view_context_refresh_consume(qg_legacy_view_to_context(d->v));
+		rt_view_context_refresh_complete(qg_legacy_view_to_context(d->v));
 	    }
 	    if (d->dmp)
 		qg_legacy_view_dm_native_repaint_pending_set(d->dmp, 0);
@@ -224,11 +226,11 @@ if (d->ifp)
     // Go ahead and set the flag, but (unlike the rendering thread
     // implementation) we need to do the draw routine every time in paintGL, or
     // we end up with unrendered frames.
-    (void)qg_legacy_view_refresh_consume(d->v);
+    (void)rt_view_context_refresh_consume(qg_legacy_view_to_context(d->v));
     qg_legacy_view_dm_native_repaint_pending_set(d->dmp, 0);
     qg_legacy_view_dm_draw(d->v);
     qg_legacy_view_dm_draw_end(d->dmp);
-    qg_legacy_view_refresh_complete(d->v);
+    rt_view_context_refresh_complete(qg_legacy_view_to_context(d->v));
 }
 
 void QgGL::resizeGL(int, int)
@@ -240,11 +242,11 @@ return;
     qg_legacy_view_dm_sync_dimensions(d->v, d->dmp);
     if (d->ifp) {
 qg_legacy_view_framebuffer_configure(d->ifp,
-	qg_legacy_view_width_get(d->v),
-	qg_legacy_view_height_get(d->v));
+	rt_view_context_width_get(qg_legacy_view_to_context(d->v)),
+	rt_view_context_height_get(qg_legacy_view_to_context(d->v)));
     }
     if (d->dmp)
-qgcanvas_request_update(*d, QG_LEGACY_VIEW_REFRESH_VIEW);
+qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW);
     emit changed();
 }
 
@@ -260,17 +262,17 @@ return;
     qg_legacy_view_dm_configure_window(d->dmp, 0);
     if (d->ifp) {
 qg_legacy_view_framebuffer_configure(d->ifp,
-	qg_legacy_view_width_get(d->v),
-	qg_legacy_view_height_get(d->v));
+	rt_view_context_width_get(qg_legacy_view_to_context(d->v)),
+	rt_view_context_height_get(qg_legacy_view_to_context(d->v)));
     }
     if (d->dmp)
-qgcanvas_request_update(*d, QG_LEGACY_VIEW_REFRESH_VIEW);
+qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW);
     emit changed();
 }
 
 void QgGL::request_update(uint32_t refresh_flags)
 {
-    uint32_t requested = refresh_flags ? refresh_flags : QG_LEGACY_VIEW_REFRESH_ALL;
+    uint32_t requested = refresh_flags ? refresh_flags : RT_VIEW_REFRESH_ALL;
     qgcanvas_request_update(*d, requested);
     if (d->fb_update_queued)
 return;
@@ -281,7 +283,7 @@ return;
 void QgGL::need_update()
 {
     QTCAD_SLOT("QgGL::need_update", 1);
-    request_update(QG_LEGACY_VIEW_REFRESH_VIEW);
+    request_update(RT_VIEW_REFRESH_VIEW);
 }
 
 void QgGL::queued_update()
@@ -305,7 +307,7 @@ return;
 
     if (d->input.keyPressEvent(d->v, d->x_prev,
 	    d->y_prev, k)) {
-qgcanvas_request_update(*d, QG_LEGACY_VIEW_REFRESH_VIEW);
+qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW);
 update();
 emit changed();
     }
@@ -335,7 +337,7 @@ return;
 
     if (d->input.mousePressEvent(d->v, d->x_prev,
 	    d->y_prev, e)) {
-qgcanvas_request_update(*d, QG_LEGACY_VIEW_REFRESH_VIEW);
+qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW);
 update();
 emit changed();
     }
@@ -368,7 +370,7 @@ return;
     if (d->input.mouseReleaseEvent(d->v,
 	    d->x_press_pos, d->y_press_pos, d->x_prev, d->y_prev, e,
 	    d->lmouse_mode)) {
-qgcanvas_request_update(*d, QG_LEGACY_VIEW_REFRESH_VIEW);
+qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW);
 update();
 emit changed();
     }
@@ -391,7 +393,7 @@ return;
     int mret = d->input.mouseMoveEvent(d->v,
 	    d->x_prev, d->y_prev, e, d->lmouse_mode);
     if (mret > 0) {
-qgcanvas_request_update(*d, QG_LEGACY_VIEW_REFRESH_VIEW);
+qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW);
 update();
 emit changed();
     }
@@ -424,7 +426,7 @@ return;
     qg_legacy_view_dimensions_set(d->v, rsize.width(), rsize.height());
 
     if (d->input.wheelEvent(d->v, e)) {
-qgcanvas_request_update(*d, QG_LEGACY_VIEW_REFRESH_VIEW);
+qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW);
 update();
 emit changed();
     }

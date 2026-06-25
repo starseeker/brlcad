@@ -28,22 +28,22 @@
 bsg_scene_ref
 ged_draw_shape_source_ref(bsg_scene_ref ref)
 {
-    if (bsg_scene_ref_is_null(ref))
+    if (ged_draw_scene_ref_is_null(ref))
 	return bsg_scene_ref_null();
     if (bsg_database_source_ref_is_container(
 		bsg_database_source_ref_from_scene(ref)))
 	return ref;
 
     ged_draw_shape_state *shape_data = ged_draw_shape_state_get_scene_ref(ref);
-    if (shape_data && !bsg_scene_ref_is_null(shape_data->source_ref))
+    if (shape_data && !ged_draw_scene_ref_is_null(shape_data->source_ref))
 	return shape_data->source_ref;
 
-    bsg_scene_ref parent_ref = bsg_scene_parent(ref);
-    while (!bsg_scene_ref_is_null(parent_ref)) {
+    bsg_scene_ref parent_ref = ged_draw_scene_ref_parent(ref);
+    while (!ged_draw_scene_ref_is_null(parent_ref)) {
 	if (bsg_database_source_ref_is_container(
 		    bsg_database_source_ref_from_scene(parent_ref)))
 	    return parent_ref;
-	parent_ref = bsg_scene_parent(parent_ref);
+	parent_ref = ged_draw_scene_ref_parent(parent_ref);
     }
 
     return ref;
@@ -122,7 +122,7 @@ ged_draw_scene_ref_database_source_sync(bsg_scene_ref ref,
 					const struct ged_draw_source_state *source_data,
 					const ged_draw_shape_state *shape_data)
 {
-    if (bsg_scene_ref_is_null(ref))
+    if (ged_draw_scene_ref_is_null(ref))
 	return;
 
     const struct db_full_path *fp = NULL;
@@ -142,7 +142,7 @@ ged_draw_scene_ref_database_source_sync(bsg_scene_ref ref,
 	path = db_path_to_string(fp);
 
     record.database_path = path ? path : "";
-    int draw_mode = bsg_scene_dmode(ref);
+    int draw_mode = ged_draw_scene_ref_draw_mode(ref);
     record.draw_mode = (bsg_draw_mode)draw_mode;
     record.material_policy = fp ? BSG_DATABASE_SOURCE_MATERIAL_DATABASE :
 	BSG_DATABASE_SOURCE_MATERIAL_INHERIT;
@@ -166,7 +166,7 @@ ged_draw_scene_ref_database_source_sync(bsg_scene_ref ref,
 
     (void)bsg_database_source_record_apply(
 	    bsg_database_source_ref_from_scene(source_ref), &record);
-    if (!bsg_scene_ref_equal(source_ref, ref)) {
+    if (!ged_draw_scene_ref_equal(source_ref, ref)) {
 	(void)bsg_database_source_record_apply(
 		bsg_database_source_ref_from_scene(ref), &record);
     }
@@ -259,7 +259,7 @@ void
 ged_draw_scene_ref_source_data_set(bsg_scene_ref ref,
 				   struct ged_draw_source_state *data)
 {
-    if (bsg_scene_ref_is_null(ref) || !data)
+    if (ged_draw_scene_ref_is_null(ref) || !data)
 	return;
     ged_draw_shape_state *shape_data = ged_draw_shape_state_get_scene_ref(ref);
     if (!shape_data) {
@@ -283,7 +283,7 @@ ged_draw_scene_ref_source_ensure(bsg_scene_ref ref)
 int
 ged_draw_scene_ref_mark_view_inputs_changed(bsg_scene_ref ref)
 {
-    if (bsg_scene_ref_is_null(ref))
+    if (ged_draw_scene_ref_is_null(ref))
 	return 0;
 
     ged_draw_shape_state *state = ged_draw_shape_state_get_scene_ref(ref);
@@ -307,7 +307,7 @@ ged_draw_scene_ref_mark_view_inputs_changed(bsg_scene_ref ref)
 int
 ged_draw_scene_ref_mark_realized_current(bsg_scene_ref ref)
 {
-    if (bsg_scene_ref_is_null(ref))
+    if (ged_draw_scene_ref_is_null(ref))
 	return 0;
 
     ged_draw_shape_state *state = ged_draw_shape_state_get_scene_ref(ref);

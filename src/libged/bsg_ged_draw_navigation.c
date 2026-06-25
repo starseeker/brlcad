@@ -25,9 +25,6 @@
 #include "common.h"
 
 #include "bu/ptbl.h"
-#include "bsg/appearance.h"
-#include "bsg/draw_intent.h"
-#include "bsg/scene_builder.h"
 #include "ged/draw.h"
 #include "./ged_private.h"
 #include "./bsg_ged_draw_private.h"
@@ -47,17 +44,17 @@ _draw_shape_dfs(bsg_scene_ref ref,
 		int (*cb)(bsg_scene_ref, void *),
 		void *userdata)
 {
-    if (bsg_scene_ref_is_null(ref))
+    if (ged_draw_scene_ref_is_null(ref))
 	return 1;
 
-    if (bsg_scene_ref_type(ref) == BSG_SCENE_ELEMENT_SHAPE) {
+    if (ged_draw_scene_ref_is_shape(ref)) {
 	if (ged_draw_shape_state_get_scene_ref(ref))
 	    return (*cb)(ref, userdata);
 	return 1;
     }
 
-    for (size_t i = 0; i < bsg_scene_child_count(ref); i++) {
-	if (!_draw_shape_dfs(bsg_scene_child_at(ref, i), cb, userdata))
+    for (size_t i = 0; i < ged_draw_scene_ref_child_count(ref); i++) {
+	if (!_draw_shape_dfs(ged_draw_scene_ref_child_at(ref, i), cb, userdata))
 	    return 0;
     }
     return 1;
@@ -78,7 +75,7 @@ ged_draw_has_shapes(struct ged *gedp)
     if (!gedp)
 	return 0;
     int found = 0;
-    _draw_shape_dfs(ged_scene_root_ref(gedp), _any_shape_cb, &found);
+    ged_draw_scene_root_foreach_shape(gedp, 0, _any_shape_cb, &found);
     return found;
 }
 
@@ -113,16 +110,10 @@ ged_draw_first_shape_scene_ref(struct ged *gedp)
     if (!gedp)
 	return bsg_scene_ref_null();
 
-    bsg_scene_ref root_ref = ged_scene_root_ref(gedp);
-    for (size_t gi = 0; gi < bsg_scene_child_count(root_ref); gi++) {
-	bsg_scene_ref group_ref = bsg_scene_child_at(root_ref, gi);
-	if (ged_draw_group_scene_ref_is_overlay(group_ref))
-	    continue;
-	bsg_scene_ref shape_ref = _first_shape_in_group(group_ref);
-	if (!bsg_scene_ref_is_null(shape_ref))
-	    return shape_ref;
-    }
-    return bsg_scene_ref_null();
+    struct _first_shape_data d;
+    d.result = bsg_scene_ref_null();
+    ged_draw_scene_root_foreach_shape(gedp, 1, _first_shape_cb, &d);
+    return d.result;
 }
 
 
@@ -137,13 +128,7 @@ _snap_shape_cb(bsg_scene_ref ref, void *ud)
 static void
 _sg_build_shape_snapshot(struct ged *gedp, struct bu_ptbl *out)
 {
-    bsg_scene_ref root_ref = ged_scene_root_ref(gedp);
-    for (size_t gi = 0; gi < bsg_scene_child_count(root_ref); gi++) {
-	bsg_scene_ref group_ref = bsg_scene_child_at(root_ref, gi);
-	if (ged_draw_group_scene_ref_is_overlay(group_ref))
-	    continue;
-	_draw_shape_dfs(group_ref, _snap_shape_cb, (void *)out);
-    }
+    ged_draw_scene_root_foreach_shape(gedp, 1, _snap_shape_cb, (void *)out);
 }
 
 
@@ -200,14 +185,14 @@ ged_draw_shape_ref_index(struct ged *gedp, ged_draw_shape_ref ref)
     if (!gedp || ged_draw_shape_ref_is_null(ref))
 	return -1;
     bsg_scene_ref target = ged_draw_registry_shape_scene_ref(gedp, ref);
-    if (bsg_scene_ref_is_null(target))
+    if (ged_draw_scene_ref_is_null(target))
 	return -1;
 
     struct bu_ptbl snap = BU_PTBL_INIT_ZERO;
     _sg_build_shape_snapshot(gedp, &snap);
     int found = -1;
     for (int i = 0; i < (int)BU_PTBL_LEN(&snap); i++) {
-	if (bsg_scene_ref_equal(_scene_ref_from_ptr((void *)BU_PTBL_GET(&snap, i)),
+	if (ged_draw_scene_ref_equal(_scene_ref_from_ptr((void *)BU_PTBL_GET(&snap, i)),
 		target)) {
 	    found = i;
 	    break;
@@ -232,9 +217,9 @@ ged_draw_advance_shape_ref(struct ged *gedp, ged_draw_shape_ref ref, int delta)
     int n = (int)BU_PTBL_LEN(&snap);
     if (n > 0) {
 	int idx = 0;
-	if (!bsg_scene_ref_is_null(target)) {
+	if (!ged_draw_scene_ref_is_null(target)) {
 	    for (int i = 0; i < n; i++) {
-		if (bsg_scene_ref_equal(
+		if (ged_draw_scene_ref_equal(
 			_scene_ref_from_ptr((void *)BU_PTBL_GET(&snap, i)),
 			target)) {
 		    idx = i;
@@ -255,16 +240,16 @@ ged_draw_advance_shape_ref(struct ged *gedp, ged_draw_shape_ref ref, int delta)
 static bsg_scene_ref
 _group_scene_ref_of_shape(bsg_scene_ref shape_ref)
 {
-    if (bsg_scene_ref_is_null(shape_ref))
+    if (ged_draw_scene_ref_is_null(shape_ref))
 	return bsg_scene_ref_null();
 
-    bsg_scene_ref group_ref = bsg_scene_parent(shape_ref);
-    while (!bsg_scene_ref_is_null(group_ref)) {
-	bsg_scene_ref parent_ref = bsg_scene_parent(group_ref);
-	if (bsg_scene_ref_is_null(parent_ref))
+    bsg_scene_ref group_ref = ged_draw_scene_ref_parent(shape_ref);
+    while (!ged_draw_scene_ref_is_null(group_ref)) {
+	bsg_scene_ref parent_ref = ged_draw_scene_ref_parent(group_ref);
+	if (ged_draw_scene_ref_is_null(parent_ref))
 	    return group_ref;
-	bsg_scene_ref grandparent_ref = bsg_scene_parent(parent_ref);
-	if (bsg_scene_ref_is_null(grandparent_ref))
+	bsg_scene_ref grandparent_ref = ged_draw_scene_ref_parent(parent_ref);
+	if (ged_draw_scene_ref_is_null(grandparent_ref))
 	    return group_ref;
 	group_ref = parent_ref;
     }
@@ -283,38 +268,37 @@ ged_draw_group_ref_of_shape(struct ged *gedp, ged_draw_shape_ref ref)
 const char *
 ged_draw_group_scene_ref_path(bsg_scene_ref group_ref)
 {
-    const struct bsg_draw_intent *di = bsg_scene_draw_intent(group_ref);
-    return bsg_draw_intent_path(di);
+    return ged_draw_scene_ref_draw_intent_path(group_ref);
 }
 
 
-bsg_draw_mode
+int
 ged_draw_group_scene_ref_mode(bsg_scene_ref group_ref)
 {
-    const struct bsg_draw_intent *di = bsg_scene_draw_intent(group_ref);
-    if (di)
-	return bsg_draw_intent_mode(di);
+    int mode = -1;
+    if (ged_draw_scene_ref_draw_intent_mode(group_ref, &mode))
+	return mode;
 
     bsg_scene_ref shape_ref = _first_shape_in_group(group_ref);
-    if (!bsg_scene_ref_is_null(shape_ref)) {
-	switch (bsg_scene_dmode(shape_ref)) {
-	    case BSG_DRAW_MODE_WIRE:
-		return BSG_DRAW_MODE_WIRE;
-	    case BSG_DRAW_MODE_SHADED_BOTS:
-		return BSG_DRAW_MODE_SHADED_BOTS;
-	    case BSG_DRAW_MODE_SHADED:
-		return BSG_DRAW_MODE_SHADED;
-	    case BSG_DRAW_MODE_EVAL_WIRE:
-		return BSG_DRAW_MODE_EVAL_WIRE;
-	    case BSG_DRAW_MODE_HIDDEN_LINE:
-		return BSG_DRAW_MODE_HIDDEN_LINE;
-	    case BSG_DRAW_MODE_EVAL_POINTS:
-		return BSG_DRAW_MODE_EVAL_POINTS;
+    if (!ged_draw_scene_ref_is_null(shape_ref)) {
+	switch (ged_draw_scene_ref_draw_mode(shape_ref)) {
+	    case GED_DRAW_MODE_WIRE:
+		return GED_DRAW_MODE_WIRE;
+	    case GED_DRAW_MODE_SHADED_BOTS:
+		return GED_DRAW_MODE_SHADED_BOTS;
+	    case GED_DRAW_MODE_SHADED:
+		return GED_DRAW_MODE_SHADED;
+	    case GED_DRAW_MODE_EVAL_WIRE:
+		return GED_DRAW_MODE_EVAL_WIRE;
+	    case GED_DRAW_MODE_HIDDEN_LINE:
+		return GED_DRAW_MODE_HIDDEN_LINE;
+	    case GED_DRAW_MODE_EVAL_POINTS:
+		return GED_DRAW_MODE_EVAL_POINTS;
 	    default:
 		break;
 	}
     }
-    return BSG_DRAW_MODE_WIRE;
+    return GED_DRAW_MODE_WIRE;
 }
 
 

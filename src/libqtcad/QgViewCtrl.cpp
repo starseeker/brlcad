@@ -25,12 +25,14 @@
 
 #include "common.h"
 
+#include "QgLegacyViewContext.h"
 #include "bu/env.h"
 #include "ged.h"
 #include "qtcad/QgLegacyView.h"
 #include "qtcad/QgSession.h"
 #include "qtcad/QgViewCtrl.h"
 #include "qtcad/QgSignalFlags.h"
+#include "rt/view.h"
 
 static qg_legacy_view *
 qgviewctrl_active_view(const QgViewCtrl *ctrl)
@@ -93,28 +95,28 @@ void
 QgViewCtrl::sca_mode()
 {
 	QTCAD_SLOT("QgViewCtrl::sca_mode", 1);
-	emit lmouse_mode(QG_LEGACY_VIEW_ADJUST_SCALE);
+	emit lmouse_mode(RT_VIEW_ADJUST_SCALE);
 }
 
 void
 QgViewCtrl::rot_mode()
 {
 	QTCAD_SLOT("QgViewCtrl::rot_mode", 1);
-	emit lmouse_mode(QG_LEGACY_VIEW_ADJUST_ROT);
+	emit lmouse_mode(RT_VIEW_ADJUST_ROT);
 }
 
 void
 QgViewCtrl::tra_mode()
 {
 	QTCAD_SLOT("QgViewCtrl::tra_mode", 1);
-	emit lmouse_mode(QG_LEGACY_VIEW_ADJUST_TRANS);
+	emit lmouse_mode(RT_VIEW_ADJUST_TRANS);
 }
 
 void
 QgViewCtrl::center_mode()
 {
 	QTCAD_SLOT("QgViewCtrl::center_mode", 1);
-	emit lmouse_mode(QG_LEGACY_VIEW_ADJUST_CENTER);
+	emit lmouse_mode(RT_VIEW_ADJUST_CENTER);
 }
 
 
@@ -138,19 +140,20 @@ QgViewCtrl::fb_mode_cmd()
 	qg_legacy_view *v = qgviewctrl_active_view(this);
 	if (!v)
 		return;
-	switch (qg_legacy_view_framebuffer_mode_get(v)) {
+	void *view_ctx = qg_legacy_view_to_context(v);
+	switch (rt_view_context_framebuffer_mode_get(view_ctx)) {
 	case 0:
-		qg_legacy_view_framebuffer_mode_set(v, 2);
+		rt_view_context_framebuffer_mode_set(view_ctx, 2);
 		break;
 	case 2:
-		qg_legacy_view_framebuffer_mode_set(v, 1);
+		rt_view_context_framebuffer_mode_set(view_ctx, 1);
 		break;
 	case 1:
-		qg_legacy_view_framebuffer_mode_set(v, 0);
+		rt_view_context_framebuffer_mode_set(view_ctx, 0);
 		break;
 	default:
 		bu_log("Error - invalid fb mode: %d\n",
-			qg_legacy_view_framebuffer_mode_get(v));
+			rt_view_context_framebuffer_mode_get(view_ctx));
 	}
 	emit view_changed(QG_VIEW_REFRESH);
 }
@@ -162,7 +165,8 @@ QgViewCtrl::do_view_update(QgViewUpdateFlags flags)
 	qg_legacy_view *v = qgviewctrl_active_view(this);
 	if (!v || !flags)
 		return;
-	switch (qg_legacy_view_framebuffer_mode_get(v)) {
+	void *view_ctx = qg_legacy_view_to_context(v);
+	switch (rt_view_context_framebuffer_mode_get(view_ctx)) {
 	case 0:
 		fb_mode->setIcon(QIcon(QPixmap(":images/view/framebuffer_off.png")));
 		break;
@@ -174,7 +178,7 @@ QgViewCtrl::do_view_update(QgViewUpdateFlags flags)
 		break;
 	default:
 		bu_log("Error - invalid fb mode: %d\n",
-			qg_legacy_view_framebuffer_mode_get(v));
+			rt_view_context_framebuffer_mode_get(view_ctx));
 	}
 }
 

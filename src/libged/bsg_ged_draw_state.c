@@ -24,36 +24,15 @@
 
 #include "common.h"
 
-#include <stdlib.h>
 #include <string.h>
 
-#include "bu/ptbl.h"
 #include "bu/str.h"
-#include "bu/color.h"
 #include "bu/hash.h"
-#include "bsg/appearance.h"
-#include "bsg/defines.h"
-#include "bsg/database_source.h"
-#include "bsg/draw_ctx.h"
-#include "bsg/draw_intent.h"
-#include "bsg/draw_set.h"
-#include "bsg/draw_source.h"
-#include "bsg/field.h"
-#include "bsg/geometry.h"
-#include "bsg/material.h"
-#include "bsg/node.h"
-#include "bsg/payload.h"
-#include "bg/plot3.h"
-#include "bsg/scene_builder.h"
-#include "bsg/scene_object.h"
-#include "bsg/selection.h"
-#include "bsg/view_set.h"
-#include "bsg/view_state.h"
-#include "bg/clip.h"
 
 #include "ged.h"
 #include "ged/draw.h"
 #include "./ged_private.h"
+#include "./bsg_ged_draw_private.h"
 
 static unsigned long long
 _ged_draw_path_hash(const struct db_full_path *path)
@@ -119,7 +98,7 @@ ged_draw_scene_ref_set_fullpath(struct ged *gedp,
 				bsg_scene_ref ref,
 				const struct db_full_path *path)
 {
-    if (bsg_scene_ref_is_null(ref))
+    if (ged_draw_scene_ref_is_null(ref))
 	return 0;
 
     ged_draw_shape_state *data =
@@ -136,12 +115,8 @@ ged_draw_scene_ref_set_fullpath(struct ged *gedp,
 	    const char *semantic_path = path_name;
 	    while (*semantic_path == '/')
 		semantic_path++;
-	    struct bsg_draw_intent *di = bsg_scene_draw_intent(ref);
-	    if (di)
-		bsg_draw_intent_set_path(di, semantic_path);
-	    else
-		bsg_scene_set_draw_intent(ref,
-			bsg_draw_intent_create(semantic_path, BSG_DRAW_MODE_WIRE));
+	    (void)ged_draw_scene_ref_set_draw_intent_path(ref,
+		    semantic_path, GED_DRAW_MODE_WIRE);
 	    bu_free(path_name, "ged draw shape intent path string");
 	}
     }
@@ -153,7 +128,7 @@ ged_draw_scene_ref_set_fullpath(struct ged *gedp,
 int
 ged_draw_scene_ref_prepare(struct ged *gedp, bsg_scene_ref ref)
 {
-    if (bsg_scene_ref_is_null(ref))
+    if (ged_draw_scene_ref_is_null(ref))
 	return 0;
     if (!ged_draw_shape_state_ensure_scene_ref(gedp, ref))
 	return 0;

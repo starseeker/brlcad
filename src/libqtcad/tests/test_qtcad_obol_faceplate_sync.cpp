@@ -15,6 +15,7 @@
 #include "qtcad/QgSignalFlags.h"
 #include "qtcad/QgView.h"
 #include "vmath.h"
+#include "QgLegacyViewContext.h"
 
 #include <Inventor/nodes/SoGroup.h>
 
@@ -97,10 +98,11 @@ main(int argc, char **argv)
     struct rt_view_axes_state modelAxes = {};
     struct rt_view_axes_state viewAxes = {};
     struct rt_view_adc_state adc = {};
-    (void)qg_legacy_view_grid_state_get(view.view(), &grid);
-    (void)qg_legacy_view_model_axes_state_get(view.view(), &modelAxes);
-    (void)qg_legacy_view_view_axes_state_get(view.view(), &viewAxes);
-    (void)qg_legacy_view_adc_state_get(view.view(), &adc);
+    void *view_ctx = qg_legacy_view_to_context(view.view());
+    (void)rt_view_context_grid_state_get(&grid, view_ctx);
+    (void)rt_view_context_model_axes_state_get(&modelAxes, view_ctx);
+    (void)rt_view_context_view_axes_state_get(&viewAxes, view_ctx);
+    (void)rt_view_context_adc_state_get(&adc, view_ctx);
 
     grid.draw = 1;
     VSET(grid.anchor, 1.0, 2.0, 3.0);
@@ -108,23 +110,23 @@ main(int argc, char **argv)
     grid.res_v = 4.0;
     grid.res_major_h = 3;
     grid.res_major_v = 2;
-    qg_legacy_view_grid_state_set(view.view(), &grid);
+    rt_view_context_grid_state_set(view_ctx, &grid);
 
     modelAxes.draw = 1;
     VSET(modelAxes.axes_pos, 4.0, 5.0, 6.0);
     modelAxes.axes_size = 7.0;
-    qg_legacy_view_model_axes_state_set(view.view(), &modelAxes);
+    rt_view_context_model_axes_state_set(view_ctx, &modelAxes);
 
     viewAxes.draw = 1;
     VSET(viewAxes.axes_pos, -0.8, -0.7, 0.0);
     viewAxes.axes_size = 0.5;
-    qg_legacy_view_view_axes_state_set(view.view(), &viewAxes);
+    rt_view_context_view_axes_state_set(view_ctx, &viewAxes);
 
     adc.draw = 1;
     VSET(adc.pos_model, 8.0, 9.0, 0.0);
     adc.a1 = 30.0;
     adc.dst = 12.0;
-    qg_legacy_view_adc_state_set(view.view(), &adc);
+    rt_view_context_adc_state_set(view_ctx, &adc);
 
     controller->clearRenderRequest();
     view.need_update(QG_VIEW_DRAWN);
@@ -178,10 +180,10 @@ main(int argc, char **argv)
     modelAxes.draw = 0;
     viewAxes.draw = 0;
     adc.draw = 0;
-    qg_legacy_view_grid_state_set(view.view(), &grid);
-    qg_legacy_view_model_axes_state_set(view.view(), &modelAxes);
-    qg_legacy_view_view_axes_state_set(view.view(), &viewAxes);
-    qg_legacy_view_adc_state_set(view.view(), &adc);
+    rt_view_context_grid_state_set(view_ctx, &grid);
+    rt_view_context_model_axes_state_set(view_ctx, &modelAxes);
+    rt_view_context_view_axes_state_set(view_ctx, &viewAxes);
+    rt_view_context_adc_state_set(view_ctx, &adc);
     view.need_update(QG_VIEW_DRAWN);
 
     if (find_overlay(root, "faceplate::grid") ||

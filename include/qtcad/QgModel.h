@@ -247,6 +247,7 @@ class QTCAD_EXPORT QgModel : public QAbstractItemModel {
 	Q_OBJECT
 	Q_DISABLE_COPY_MOVE(QgModel)
 
+	friend struct QgModelDrawObserverAccess;
 
 public:
 	explicit QgModel(QObject *p = nullptr, const char *npath = nullptr);
@@ -476,22 +477,18 @@ private:
 	void notifyDrawnItemsChanged();
 	void notifyDrawnPathChanged(const char *path);
 	void notifyDrawnTransactionChanged(
-					   const qg_legacy_view_draw_transaction_result *result,
+					   const void *result_ctx,
 					   const char *fallback_path);
 	void flushPendingDrawNotifications();
 	void handleDrawTransactionEvent(
-					const qg_legacy_view_draw_transaction *txn,
-					const qg_legacy_view_draw_transaction_result *result);
+					const void *txn_ctx,
+					const void *result_ctx);
 	void recordPendingDatabaseEventPaths(const struct ged_event_txn_result *result);
 	void notifyPendingDatabaseEventItemsChanged(bool terminal_subtree);
 	void flushPendingDatabaseEventNotifications();
 	void handleDatabaseEventTxn(const struct ged_event *events,
 				    size_t event_count,
 				    const struct ged_event_txn_result *result);
-	static void drawObserverCallback(struct ged *gedp,
-					 const qg_legacy_view_draw_transaction *txn,
-					 const qg_legacy_view_draw_transaction_result *result,
-					 void *client_data);
 	static void eventObserverCallback(struct ged *gedp,
 					  const struct ged_event *events,
 					  size_t event_count,

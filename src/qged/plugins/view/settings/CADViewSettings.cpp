@@ -30,12 +30,12 @@
 #include "bu/opt.h"
 #include "bu/malloc.h"
 #include "bu/str.h"
-#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgSignalFlags.h"
 #include "rt/view.h"
 
 #include "CADViewSettings.h"
+#include "QgLegacyViewContext.h"
 
 static qg_legacy_view *
 qged_settings_view(const QgPluginContext *ctx)
@@ -191,9 +191,10 @@ CADViewSettings::checkbox_refresh(unsigned long long)
     qg_legacy_view *v = qged_settings_view(m_ctx);
     if (!v)
 	return;
+    void *view_ctx = qg_legacy_view_to_context(v);
 
     struct rt_view_lod_policy lod_policy = RT_VIEW_LOD_POLICY_INIT;
-    (void)qg_legacy_view_lod_policy_get(v, &lod_policy);
+    (void)rt_view_context_lod_policy_get(&lod_policy, view_ctx);
 
     /* Top-level faceplate elements */
     struct rt_view_adc_state adc = {};
@@ -203,13 +204,13 @@ CADViewSettings::checkbox_refresh(unsigned long long)
     struct rt_view_other_state scale_state = {};
     struct rt_view_axes_state view_axes = {};
     struct rt_view_params_state params = {};
-    (void)qg_legacy_view_adc_state_get(v, &adc);
-    (void)qg_legacy_view_center_dot_state_get(v, &center_dot);
-    (void)qg_legacy_view_grid_state_get(v, &grid);
-    (void)qg_legacy_view_model_axes_state_get(v, &model_axes);
-    (void)qg_legacy_view_scale_overlay_state_get(v, &scale_state);
-    (void)qg_legacy_view_view_axes_state_get(v, &view_axes);
-    (void)qg_legacy_view_params_state_get(v, &params);
+    (void)rt_view_context_adc_state_get(&adc, view_ctx);
+    (void)rt_view_context_center_dot_state_get(&center_dot, view_ctx);
+    (void)rt_view_context_grid_state_get(&grid, view_ctx);
+    (void)rt_view_context_model_axes_state_get(&model_axes, view_ctx);
+    (void)rt_view_context_scale_overlay_state_get(&scale_state, view_ctx);
+    (void)rt_view_context_view_axes_state_get(&view_axes, view_ctx);
+    (void)rt_view_context_params_state_get(&params, view_ctx);
 
     set_ckbx(acsg_ckbx,     lod_policy.csg_enabled);
     set_ckbx(amesh_ckbx,    lod_policy.mesh_enabled);
@@ -222,7 +223,7 @@ CADViewSettings::checkbox_refresh(unsigned long long)
 
     /* Framebuffer mode (0=off, 1=overlay, 2=underlay) maps directly to
      * combo index. Clamp to a valid range in case of unexpected values. */
-    int fb_mode = qg_legacy_view_framebuffer_mode_get(v);
+    int fb_mode = rt_view_context_framebuffer_mode_get(view_ctx);
     if (fb_mode < 0 || fb_mode > 2)
 	fb_mode = 0;
     fb_mode_combo->blockSignals(true);
@@ -247,17 +248,19 @@ CADViewSettings::view_refresh(unsigned long long)
     qg_legacy_view *v = qged_settings_view(m_ctx);
     if (!v)
 	return;
+    void *view_ctx = qg_legacy_view_to_context(v);
 
     /* Preserve non-widget LoD policy fields and update only the settings
      * owned by this widget. */
     struct rt_view_lod_policy lod_policy = RT_VIEW_LOD_POLICY_INIT;
-    (void)qg_legacy_view_lod_policy_get(v, &lod_policy);
+    (void)rt_view_context_lod_policy_get(&lod_policy, view_ctx);
     lod_policy.csg_enabled = ckbx_val(acsg_ckbx);
     lod_policy.mesh_enabled = ckbx_val(amesh_ckbx);
     lod_policy.zoom_refresh =
 	lod_policy.csg_enabled || lod_policy.mesh_enabled;
-    (void)qg_legacy_view_lod_policy_apply(v, &lod_policy);
-    (void)qg_legacy_view_framebuffer_mode_set(v, fb_mode_combo->currentIndex());
+    (void)rt_view_context_lod_policy_apply(view_ctx, &lod_policy);
+    (void)rt_view_context_framebuffer_mode_set(view_ctx,
+	    fb_mode_combo->currentIndex());
 
     struct rt_view_adc_state adc = {};
     struct rt_view_other_state center_dot = {};
@@ -266,13 +269,13 @@ CADViewSettings::view_refresh(unsigned long long)
     struct rt_view_other_state scale_state = {};
     struct rt_view_axes_state view_axes = {};
     struct rt_view_params_state params = {};
-    (void)qg_legacy_view_adc_state_get(v, &adc);
-    (void)qg_legacy_view_center_dot_state_get(v, &center_dot);
-    (void)qg_legacy_view_grid_state_get(v, &grid);
-    (void)qg_legacy_view_model_axes_state_get(v, &model_axes);
-    (void)qg_legacy_view_scale_overlay_state_get(v, &scale_state);
-    (void)qg_legacy_view_view_axes_state_get(v, &view_axes);
-    (void)qg_legacy_view_params_state_get(v, &params);
+    (void)rt_view_context_adc_state_get(&adc, view_ctx);
+    (void)rt_view_context_center_dot_state_get(&center_dot, view_ctx);
+    (void)rt_view_context_grid_state_get(&grid, view_ctx);
+    (void)rt_view_context_model_axes_state_get(&model_axes, view_ctx);
+    (void)rt_view_context_scale_overlay_state_get(&scale_state, view_ctx);
+    (void)rt_view_context_view_axes_state_get(&view_axes, view_ctx);
+    (void)rt_view_context_params_state_get(&params, view_ctx);
 
     adc.draw = ckbx_val(adc_ckbx);
     center_dot.gos_draw = ckbx_val(cdot_ckbx);
@@ -289,13 +292,13 @@ CADViewSettings::view_refresh(unsigned long long)
     params.draw_tw     = ckbx_val(params_tw_ckbx);
     params.draw_fps    = ckbx_val(params_fps_ckbx);
 
-    qg_legacy_view_adc_state_set(v, &adc);
-    qg_legacy_view_center_dot_state_set(v, &center_dot);
-    qg_legacy_view_grid_state_set(v, &grid);
-    qg_legacy_view_model_axes_state_set(v, &model_axes);
-    qg_legacy_view_scale_overlay_state_set(v, &scale_state);
-    qg_legacy_view_view_axes_state_set(v, &view_axes);
-    qg_legacy_view_params_state_set(v, &params);
+    rt_view_context_adc_state_set(view_ctx, &adc);
+    rt_view_context_center_dot_state_set(view_ctx, &center_dot);
+    rt_view_context_grid_state_set(view_ctx, &grid);
+    rt_view_context_model_axes_state_set(view_ctx, &model_axes);
+    rt_view_context_scale_overlay_state_set(view_ctx, &scale_state);
+    rt_view_context_view_axes_state_set(view_ctx, &view_axes);
+    rt_view_context_params_state_set(view_ctx, &params);
 
     emit settings_changed(QG_VIEW_DRAWN);
 }

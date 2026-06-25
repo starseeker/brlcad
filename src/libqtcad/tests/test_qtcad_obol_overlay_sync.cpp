@@ -17,7 +17,7 @@
 #include "bu/file.h"
 #include "bu/str.h"
 #include "ged.h"
-#include "qtcad/QgObolOverlaySync.h"
+#include "QgObolOverlaySyncPrivate.h"
 #include "qtcad/QgView.h"
 #include "wdb.h"
 

@@ -16,16 +16,10 @@ set(
   QgLegacyView.h
   QgMeasureFilter.h
   QgModel.h
-  QgObolDatabaseSync.h
-  QgObolDrawSync.h
-  QgObolEditPreview.h
   QgObolExport.h
   QgObolMeasure.h
-  QgObolOverlaySync.h
   QgObolPick.h
   QgObolSnap.h
-  QgObolSelectionSync.h
-  QgObolViewSync.h
   QgPaletteController.h
   QgPluginApi.h
   QgPluginCommands.h

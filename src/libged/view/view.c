@@ -369,7 +369,7 @@ _view_cmd_independent(void *bs, int argc, const char **argv)
 
 	void *cv = ged_view_active_ctx(gedp);
 	ged_view_active_ctx_set(gedp, view_ctx);
-	ged_draw_ensure_root(gedp);
+	ged_draw_ensure_root_attached(gedp);
 	ged_view_active_ctx_set(gedp, cv);
 
 	if (!ged_draw_view_context_scene_attached(view_ctx) ||

@@ -68,8 +68,10 @@ extern struct fb qtgl_interface;
 
 #include <QApplication>
 #include <QtGlobal>
+#include "QgLegacyViewContext.h"
 #include "QgLegacyViewDm.h"
 #include "qtcad/QgGL.h"
+#include "rt/view.h"
 #include "qtglwin.h"
 
 struct qtglinfo {
@@ -543,7 +545,7 @@ fb_qtgl_open(struct fb *ifp, const char *UNUSED(file), int width, int height)
 	ifp->i->pp = NULL;
 	return -1;
     }
-    qg_legacy_view_framebuffer_mode_set(canvas_view, 1);
+    rt_view_context_framebuffer_mode_set(qg_legacy_view_to_context(canvas_view), 1);
 
     struct fb_platform_specific fbps;
     fbps.magic = FB_QTGL_MAGIC;

@@ -8,11 +8,11 @@
 
 #include "common.h"
 
-#include "qtcad/QgObolOverlaySync.h"
+#include "QgObolOverlaySyncPrivate.h"
 
 #include "brlobol/view_controller.h"
 #include "ged.h"
-#include "qtcad/QgObolViewSync.h"
+#include "QgObolViewSyncPrivate.h"
 #include "qtcad/QgView.h"
 
 static int

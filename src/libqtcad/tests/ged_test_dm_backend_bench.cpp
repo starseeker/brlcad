@@ -59,8 +59,10 @@
 #include "bu/time.h"
 #include <ged.h>
 
+#include "QgLegacyViewContext.h"
 #include "QgLegacyViewDm.h"
 #include "qtcad/QgSW.h"
+#include "rt/view.h"
 #ifdef BRLCAD_OPENGL
 #  include "qtcad/QgGL.h"
 #endif
@@ -82,7 +84,8 @@ print_bench_result(const char *backend, int n, int64_t elapsed_us)
 static qg_legacy_dm *
 legacy_dm(qg_legacy_view *view)
 {
-    return qg_legacy_view_display_manager_get(view);
+    return reinterpret_cast<qg_legacy_dm *>(
+	    rt_view_context_display_manager_get(qg_legacy_view_to_context(view)));
 }
 
 /* ------------------------------------------------------------------ */

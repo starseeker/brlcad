@@ -45,7 +45,7 @@
 
 #include <bu.h>
 #include "bu/opt.h"
-#include "rt/view_legacy_bsg.h"
+#include "rt/view.h"
 #include <icv.h>
 #define DM_WITH_RT
 #include <dm.h>
@@ -63,7 +63,7 @@ static void
 do_refresh(struct ged *gedp)
 {
     void *v = ged_view_active_ctx(gedp);
-    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(v);
     dm_draw_begin(dmp);
     dm_draw_objs(v);
     dm_draw_end(dmp);
@@ -80,7 +80,7 @@ do_full_refresh(struct ged *gedp)
     txn.view = v;
     ged_draw_apply_transaction(gedp, &txn, NULL);
 
-    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(v);
     unsigned char *bg1, *bg2;
     dm_get_bg(&bg1, &bg2, dmp);
     dm_set_bg(dmp, bg1[0], bg1[1], bg1[2], bg2[0], bg2[1], bg2[2]);
@@ -95,7 +95,7 @@ set_center_dot_state(void *v, int draw, int r, int g, int b)
 {
     struct rt_view_other_state center_dot = RT_VIEW_OTHER_STATE_INIT;
 
-    if (!rt_view_context_center_dot_state_from_bsg(&center_dot, v))
+    if (!rt_view_context_center_dot_state_get(&center_dot, v))
 	return 0;
 
     center_dot.gos_draw = draw;
@@ -103,7 +103,7 @@ set_center_dot_state(void *v, int draw, int r, int g, int b)
     center_dot.gos_line_color[1] = g;
     center_dot.gos_line_color[2] = b;
 
-    return rt_view_context_center_dot_state_set_bsg(v, &center_dot);
+    return rt_view_context_center_dot_state_set(v, &center_dot);
 }
 
 static int
@@ -182,17 +182,17 @@ open_gedp(const char *gfile, int width, int height)
     ged_exec_dm(gedp, 4, s_av);
 
     void *v = ged_view_active_ctx(gedp);
-    struct dm *dmp  = (struct dm *)rt_view_context_display_manager_from_bsg(v);
+    struct dm *dmp  = (struct dm *)rt_view_context_display_manager_get(v);
     dm_set_width(dmp, width);
     dm_set_height(dmp, height);
     dm_configure_win(dmp, 0);
     dm_set_zbuffer(dmp, 1);
     fastf_t wb[6] = {-1, 1, -1, 1, -100, 100};
     dm_set_win_bounds(dmp, wb);
-    dm_set_vp(dmp, rt_view_context_scale_storage_from_bsg(v));
-    rt_view_context_display_manager_set_bsg(v, dmp);
-    rt_view_context_dimensions_set_bsg(v, dm_get_width(dmp), dm_get_height(dmp));
-    rt_view_context_unit_conversion_set_bsg(v,
+    dm_set_vp(dmp, rt_view_context_scale_storage_get(v));
+    rt_view_context_display_manager_set(v, dmp);
+    rt_view_context_dimensions_set(v, dm_get_width(dmp), dm_get_height(dmp));
+    rt_view_context_unit_conversion_set(v,
 	gedp->dbip->dbi_local2base,
 	gedp->dbip->dbi_base2local);
 
@@ -224,7 +224,7 @@ test_wireframe(const char *datadir)
     void *v = ged_view_active_ctx(gedp);
 
     /* Ensure BSG root is present */
-    if (!rt_view_context_scene_attached_bsg(v)) {
+    if (!rt_view_context_scene_attached(v)) {
 	bu_log("FAIL: view scene ref is NULL after ged_open\n");
 	ged_close(gedp);
 	bu_file_delete("mged_bsg_t1.g");
@@ -355,7 +355,7 @@ test_edit_matrix(const char *datadir)
     ged_draw_set_highlight_state(gedp, 1);
 
     /* Render at normal position */
-    rt_view_context_edit_matrix_clear_bsg(v);
+    rt_view_context_edit_matrix_clear(v);
     do_full_refresh(gedp);
     capture(gedp, "mged_bsg_t3_normal.png");
 
@@ -365,10 +365,10 @@ test_edit_matrix(const char *datadir)
     /* Use a clear view-space override so highlighted objects move off-screen. */
     edit_mat[3] = 10.0;
 
-    int edit_matrix_ready = rt_view_context_edit_matrix_set_bsg(v, edit_mat);
-    struct rt_view_render_summary_bsg render_summary =
-	RT_VIEW_RENDER_SUMMARY_BSG_INIT;
-    int render_ready = rt_view_context_visible_render_summary_bsg(v, &render_summary);
+    int edit_matrix_ready = rt_view_context_edit_matrix_set(v, edit_mat);
+    struct rt_view_render_summary render_summary =
+	RT_VIEW_RENDER_SUMMARY_INIT;
+    int render_ready = rt_view_context_visible_render_summary(v, &render_summary);
 
     int fail = 0;
     if (!edit_matrix_ready || !render_ready || render_summary.item_count <= 0 ||
@@ -379,7 +379,7 @@ test_edit_matrix(const char *datadir)
 	bu_log("PASS: gv_edit_mat has highlighted render items to transform\n");
     }
 
-    rt_view_context_edit_matrix_clear_bsg(v);
+    rt_view_context_edit_matrix_clear(v);
 
     ged_draw_set_highlight_state(gedp, 0);
     bu_file_delete("mged_bsg_t3_normal.png");

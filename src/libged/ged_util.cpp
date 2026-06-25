@@ -56,7 +56,6 @@
 #include "bu/units.h"
 #include "bu/vls.h"
 #include "bg/line_layer.h"
-#include "bsg/scene_builder.h"
 #include "bg/plot3.h"
 #include "dm/fbserv.h"
 #include "ged.h"
@@ -64,16 +63,16 @@
 #include "ged/event_txn.h"
 #include "./ged_private.h"
 
-extern "C" bsg_scene_ref
-ged_scene_root_ref(struct ged *gedp)
+extern "C" rt_view_scene_ref
+ged_scene_root_rt_ref(struct ged *gedp)
 {
     if (gedp && gedp->i && gedp->i->ged_gdp)
 	return gedp->i->ged_gdp->gd_scene_root;
-    return bsg_scene_ref_null();
+    return rt_view_scene_ref_null();
 }
 
 extern "C" void
-ged_scene_root_ref_set(struct ged *gedp, bsg_scene_ref root)
+ged_scene_root_rt_ref_set(struct ged *gedp, rt_view_scene_ref root)
 {
     if (gedp && gedp->i && gedp->i->ged_gdp)
 	gedp->i->ged_gdp->gd_scene_root = root;
@@ -82,7 +81,7 @@ ged_scene_root_ref_set(struct ged *gedp, bsg_scene_ref root)
 extern "C" void
 ged_scene_root_ref_clear(struct ged *gedp)
 {
-    ged_scene_root_ref_set(gedp, bsg_scene_ref_null());
+    ged_scene_root_rt_ref_set(gedp, rt_view_scene_ref_null());
 }
 
 int
@@ -3131,7 +3130,7 @@ _ged_characterize_pathspec(struct bu_vls *normalized, struct ged *gedp, const ch
 int
 ged_draw_scene_available(struct ged *gedp)
 {
-    return bsg_scene_ref_is_null(ged_scene_root_ref(gedp)) ? 0 : 1;
+    return rt_view_scene_ref_is_null(ged_scene_root_rt_ref(gedp)) ? 0 : 1;
 }
 
 void

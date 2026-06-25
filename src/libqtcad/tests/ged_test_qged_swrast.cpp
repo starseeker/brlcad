@@ -64,9 +64,11 @@
 #include <ged.h>
 
 /* Qt + libqtcad headers */
+#include "QgLegacyViewContext.h"
 #include "qtcad/QgLegacyView.h"
 #include "qtcad/QgModel.h"
 #include "qtcad/QgSW.h"
+#include "rt/view.h"
 
 /* ------------------------------------------------------------------ */
 static int g_fail = 0;
@@ -173,7 +175,7 @@ main(int ac, char *av[])
     const char *av_av[1] = {"autoview"};
     ged_exec_autoview(gedp, 1, av_av);
 
-    SWCHECK(qg_legacy_view_scene_attached(sw.view()),
+    SWCHECK(rt_view_context_scene_attached(qg_legacy_view_to_context(sw.view())),
             "after binding QgSW view to GED and drawing, view scene ref must be non-NULL");
 
     /* ---- Force paintEvent via QWidget::render() ---- */

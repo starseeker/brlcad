@@ -34,7 +34,7 @@
 #include <dm.h>
 #include <ged.h>
 #include <ged/draw.h>
-#include <rt/view_legacy_bsg.h>
+#include <rt/view.h>
 
 void
 dm_refresh(struct ged *gedp, int vnum)
@@ -48,7 +48,7 @@ dm_refresh(struct ged *gedp, int vnum)
     txn.view = v;
     ged_draw_apply_transaction(gedp, &txn, NULL);
 
-    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(v);
     /* Ensure rendering goes to this view's DM context, not the last-active one.
      * With multiple DMs each view has its own OSMesa context; without making the
      * correct context current here dm_set_bg and dm_draw_objs will operate on
@@ -83,7 +83,7 @@ img_cmp(int vnum, int id, struct ged *gedp, const char *cdir, int soft_fail)
     void *v = views ? BU_PTBL_GET(views, vnum) : NULL;
     if (!v)
 	bu_exit(EXIT_FAILURE, "Invalid view specifier: %d\n", vnum);
-    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(v);
 
     const char *s_av[4] = {NULL};
     s_av[0] = "screengrab";
@@ -202,7 +202,7 @@ main(int ac, char *av[]) {
 
     // We don't want the default GED views for this test
     void *view_set_ctx = ged_view_set_ctx(gedp);
-    rt_view_set_context_remove_bsg(view_set_ctx, NULL);
+    rt_view_set_context_remove(view_set_ctx, NULL);
 
     // Set up the views.  Unlike the other drawing tests, we are explicitly
     // out to test the behavior of multiple views and dms, so we need to
@@ -213,11 +213,11 @@ main(int ac, char *av[]) {
     for (size_t i = 0; i < 4; i++) {
 	char view_name[16];
 	snprintf(view_name, sizeof(view_name), "V%zd", i);
-	views[i] = rt_view_context_create_with_set_bsg(view_set_ctx);
+	views[i] = rt_view_context_create_with_set(view_set_ctx);
 	if (!i)
 	    ged_view_active_ctx_set(gedp, views[i]);
-	rt_view_context_name_set_bsg(views[i], view_name);
-	rt_view_set_context_add_bsg(view_set_ctx, views[i]);
+	rt_view_context_name_set(views[i], view_name);
+	rt_view_set_context_add(view_set_ctx, views[i]);
 	ged_view_context_owned_add(gedp, views[i]);
 
 	/* To generate images that will allow us to check if the drawing
@@ -234,7 +234,7 @@ main(int ac, char *av[]) {
 	ged_exec_dm(gedp, 6, s_av);
 	bu_vls_free(&dm_name);
 
-	struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(views[i]);
+	struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(views[i]);
 	dm_set_width(dmp, 512);
 	dm_set_height(dmp, 512);
 
@@ -245,10 +245,10 @@ main(int ac, char *av[]) {
 	fastf_t windowbounds[6] = { -1, 1, -1, 1, -100, 100 };
 	dm_set_win_bounds(dmp, windowbounds);
 
-	dm_set_vp(dmp, rt_view_context_scale_storage_from_bsg(views[i]));
-	rt_view_context_display_manager_set_bsg(views[i], dmp);
-	rt_view_context_dimensions_set_bsg(views[i], dm_get_width(dmp), dm_get_height(dmp));
-	rt_view_context_unit_conversion_set_bsg(views[i], gedp->dbip->dbi_local2base,
+	dm_set_vp(dmp, rt_view_context_scale_storage_get(views[i]));
+	rt_view_context_display_manager_set(views[i], dmp);
+	rt_view_context_dimensions_set(views[i], dm_get_width(dmp), dm_get_height(dmp));
+	rt_view_context_unit_conversion_set(views[i], gedp->dbip->dbi_local2base,
 	    gedp->dbip->dbi_base2local);
     }
 
@@ -258,20 +258,20 @@ main(int ac, char *av[]) {
      * multiples of 90 degrees and using non-zero twist components. */
     vect_t aet = VINIT_ZERO;
     VSET(aet, 0, 0, 90);
-    rt_view_context_aet_set_bsg(views[0], aet);
-    rt_view_context_update_bsg(views[0]);
+    rt_view_context_aet_set(views[0], aet);
+    rt_view_context_update(views[0]);
 
     VSET(aet, 90, 90, 180);
-    rt_view_context_aet_set_bsg(views[1], aet);
-    rt_view_context_update_bsg(views[1]);
+    rt_view_context_aet_set(views[1], aet);
+    rt_view_context_update(views[1]);
 
     VSET(aet, -90, 270, -90);
-    rt_view_context_aet_set_bsg(views[2], aet);
-    rt_view_context_update_bsg(views[2]);
+    rt_view_context_aet_set(views[2], aet);
+    rt_view_context_update(views[2]);
 
     VSET(aet, 270, -180, 90);
-    rt_view_context_aet_set_bsg(views[3], aet);
-    rt_view_context_update_bsg(views[3]);
+    rt_view_context_aet_set(views[3], aet);
+    rt_view_context_update(views[3]);
 
 
     /************************************************************************/
@@ -295,14 +295,14 @@ main(int ac, char *av[]) {
     bu_log("Resize to 600x600...\n");
     int len = 600;
     for (size_t i = 0; i < 4; i++) {
-	struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(views[i]);
+	struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(views[i]);
 	dm_set_width(dmp, len);
 	dm_set_height(dmp, len);
-	rt_view_context_dimensions_set_bsg(views[i], len, len);
+	rt_view_context_dimensions_set(views[i], len, len);
 	dm_configure_win(dmp, 0);
 	// NOTE:  deliberately not resetting aet here - we want to see if it is
 	// stable without adjustment.
-	rt_view_context_update_bsg(views[i]);
+	rt_view_context_update(views[i]);
     }
     ret += img_cmp(0, 2, gedp, av[1], soft_fail);
     ret += img_cmp(1, 2, gedp, av[1], soft_fail);
@@ -313,14 +313,14 @@ main(int ac, char *av[]) {
     bu_log("Shrink to 512x512...\n");
     len = 512;
     for (size_t i = 0; i < 4; i++) {
-	struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(views[i]);
+	struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(views[i]);
 	dm_set_width(dmp, len);
 	dm_set_height(dmp, len);
-	rt_view_context_dimensions_set_bsg(views[i], len, len);
+	rt_view_context_dimensions_set(views[i], len, len);
 	dm_configure_win(dmp, 0);
 	// NOTE:  deliberately not resetting aet here - we want to see if it is
 	// stable without adjustment.
-	rt_view_context_update_bsg(views[i]);
+	rt_view_context_update(views[i]);
     }
     ret += img_cmp(0, 1, gedp, av[1], soft_fail);
     ret += img_cmp(1, 1, gedp, av[1], soft_fail);
@@ -331,26 +331,26 @@ main(int ac, char *av[]) {
     bu_log("Cycle through multiple resizes...\n");
     for (int i = 513; i < 600; i++) {
 	for (size_t j = 0; j < 4; j++) {
-	    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(views[j]);
+	    struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(views[j]);
 	    dm_set_width(dmp, i);
 	    dm_set_height(dmp, i);
-	    rt_view_context_dimensions_set_bsg(views[j], i, i);
+	    rt_view_context_dimensions_set(views[j], i, i);
 	    dm_configure_win(dmp, 0);
 	    // NOTE:  deliberately not resetting aet here - we want to see if it is
 	    // stable without adjustment.
-	    rt_view_context_update_bsg(views[j]);
+	    rt_view_context_update(views[j]);
 	}
     }
     len = 512;
     for (size_t i = 0; i < 4; i++) {
-	struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(views[i]);
+	struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(views[i]);
 	dm_set_width(dmp, len);
 	dm_set_height(dmp, len);
-	rt_view_context_dimensions_set_bsg(views[i], len, len);
+	rt_view_context_dimensions_set(views[i], len, len);
 	dm_configure_win(dmp, 0);
 	// NOTE:  deliberately not resetting aet here - we want to see if it is
 	// stable without adjustment.
-	rt_view_context_update_bsg(views[i]);
+	rt_view_context_update(views[i]);
     }
     ret += img_cmp(0, 1, gedp, av[1], soft_fail);
     ret += img_cmp(1, 1, gedp, av[1], soft_fail);

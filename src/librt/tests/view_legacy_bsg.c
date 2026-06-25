@@ -819,6 +819,11 @@ test_bsg_view_runtime_adapter(void)
 	ret = 1;
 	goto cleanup;
     }
+    if (rt_view_context_frame_revision_bump(NULL)) {
+	printf("FAIL: null retained frame revision bump adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
 
     test_update_callback_count = 0;
     if (!rt_view_context_update_callback_set_bsg(v, test_update_callback, &token) ||
@@ -936,6 +941,12 @@ test_bsg_view_runtime_adapter(void)
     }
     if (rt_view_context_frame_revision_get(v) != 42) {
 	printf("FAIL: retained frame revision context adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+    if (rt_view_context_frame_revision_bump(v) != 43 ||
+	    rt_view_context_frame_revision_get(v) != 43) {
+	printf("FAIL: retained frame revision bump adapter\n");
 	ret = 1;
 	goto cleanup;
     }
@@ -2068,6 +2079,8 @@ test_bsg_feature_adapter(void)
 	RT_VIEW_FEATURE_SUMMARY_BSG_INIT;
     struct rt_view_feature_geometry_summary_bsg geom_summary =
 	RT_VIEW_FEATURE_GEOMETRY_SUMMARY_BSG_INIT;
+    struct rt_view_feature_geometry_summary neutral_geom_summary =
+	RT_VIEW_FEATURE_GEOMETRY_SUMMARY_INIT;
     struct bu_vls label_text = BU_VLS_INIT_ZERO;
     point_t label_point = VINIT_ZERO;
     unsigned char label_color[3] = {0, 0, 0};
@@ -2118,6 +2131,11 @@ test_bsg_feature_adapter(void)
 	    rt_view_context_feature_geometry_summary_bsg(v, NULL,
 		&geom_summary) ||
 	    rt_view_context_feature_geometry_summary_bsg(v, "bad", NULL) ||
+	    rt_view_context_feature_geometry_summary(NULL, "bad",
+		&neutral_geom_summary) ||
+	    rt_view_context_feature_geometry_summary(v, NULL,
+		&neutral_geom_summary) ||
+	    rt_view_context_feature_geometry_summary(v, "bad", NULL) ||
 	    rt_view_feature_labels_replace(null_ref, NULL, 0) ||
 	    rt_view_feature_labels_replace_bsg(null_ref, NULL, 0) ||
 	    rt_view_feature_points_replace(null_ref,
@@ -2138,6 +2156,15 @@ test_bsg_feature_adapter(void)
 	    geom_summary.point_count != 0 ||
 	    geom_summary.command_count != 0) {
 	printf("FAIL: BSG missing feature geometry adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+    if (!rt_view_context_feature_geometry_summary(v, "missing_feature",
+	    &neutral_geom_summary) ||
+	    neutral_geom_summary.exists ||
+	    neutral_geom_summary.point_count != 0 ||
+	    neutral_geom_summary.command_count != 0) {
+	printf("FAIL: neutral missing feature geometry adapter\n");
 	ret = 1;
 	goto cleanup;
     }
@@ -2263,6 +2290,11 @@ test_bsg_feature_adapter(void)
 	    !geom_summary.exists ||
 	    geom_summary.point_count != 2 ||
 	    geom_summary.command_count != 2 ||
+	    !rt_view_context_feature_geometry_summary(v,
+		"feature_preview", &neutral_geom_summary) ||
+	    !neutral_geom_summary.exists ||
+	    neutral_geom_summary.point_count != 2 ||
+	    neutral_geom_summary.command_count != 2 ||
 	    !rt_view_feature_clear_geometry(preview_ref)) {
 	printf("FAIL: BSG feature geometry adapter\n");
 	ret = 1;
@@ -2322,8 +2354,12 @@ test_bsg_view_scope_adapter(void)
     struct bu_vls rt_pick_path = BU_VLS_INIT_ZERO;
     struct test_selection_path_callback_state callback_state = {0, ""};
     struct rt_view_render_summary_bsg render_summary = RT_VIEW_RENDER_SUMMARY_BSG_INIT;
+    struct rt_view_render_summary neutral_render_summary =
+	RT_VIEW_RENDER_SUMMARY_INIT;
     struct rt_view_render_export_consistency_bsg consistency =
 	RT_VIEW_RENDER_EXPORT_CONSISTENCY_BSG_INIT;
+    struct rt_view_render_export_consistency neutral_consistency =
+	RT_VIEW_RENDER_EXPORT_CONSISTENCY_INIT;
     rt_view_scene_ref root_neutral = RT_VIEW_SCENE_REF_NULL_INIT;
     rt_view_scene_ref direct_root_neutral = RT_VIEW_SCENE_REF_NULL_INIT;
     rt_view_scene_ref scope_neutral = RT_VIEW_SCENE_REF_NULL_INIT;
@@ -2452,6 +2488,7 @@ test_bsg_view_scope_adapter(void)
 	    rt_view_context_lod_bounds_callback_set_bsg(NULL) ||
 	    rt_view_context_lod_bounds_callback_set(NULL) ||
 	    rt_view_context_lod_bounds_callback_is_bsg(NULL) ||
+	    rt_view_context_lod_bounds_callback_is(NULL) ||
 	    rt_view_context_is_independent_bsg(NULL) ||
 	    rt_view_context_is_independent(NULL) ||
 	    !rt_view_context_independent_scope_is_null_bsg(NULL, 1) ||
@@ -2510,7 +2547,8 @@ test_bsg_view_scope_adapter(void)
 	ret = 1;
 	goto cleanup;
     }
-    if (!rt_view_context_lod_bounds_callback_is_bsg(opaque_view)) {
+    if (!rt_view_context_lod_bounds_callback_is_bsg(opaque_view) ||
+	    !rt_view_context_lod_bounds_callback_is(opaque_view)) {
 	printf("FAIL: opaque BSG view-context LoD callback adapter\n");
 	ret = 1;
 	goto cleanup;
@@ -2672,20 +2710,26 @@ test_bsg_view_scope_adapter(void)
     neutral_release_storage_view = NULL;
 
     if (rt_view_selection_available_bsg(NULL) ||
-	    rt_view_selection_count_bsg(NULL) != 0) {
+	    rt_view_context_selection_available(NULL) ||
+	    rt_view_selection_count_bsg(NULL) != 0 ||
+	    rt_view_context_selection_count(NULL) != 0) {
 	printf("FAIL: null BSG selection count adapter\n");
 	ret = 1;
 	goto cleanup;
     }
 
     if (!rt_view_selection_available_bsg(v) ||
-	    rt_view_selection_count_bsg(v) != 0) {
+	    !rt_view_context_selection_available(v) ||
+	    rt_view_selection_count_bsg(v) != 0 ||
+	    rt_view_context_selection_count(v) != 0) {
 	printf("FAIL: BSG selection count adapter\n");
 	ret = 1;
 	goto cleanup;
     }
     if (!rt_view_context_selection_available_bsg(v) ||
-	    rt_view_context_selection_count_bsg(v) != 0) {
+	    rt_view_context_selection_count_bsg(v) != 0 ||
+	    !rt_view_context_selection_available(v) ||
+	    rt_view_context_selection_count(v) != 0) {
 	printf("FAIL: opaque BSG selection count context adapter\n");
 	ret = 1;
 	goto cleanup;
@@ -2704,14 +2748,16 @@ test_bsg_view_scope_adapter(void)
     }
 
     if (!rt_view_selection_set_pick_result_ref_bsg(v, NULL, NULL, NULL) ||
-	    rt_view_selection_count_bsg(v) != 0) {
+	    rt_view_selection_count_bsg(v) != 0 ||
+	    rt_view_context_selection_count(v) != 0) {
 	printf("FAIL: opaque selection null-pick clear adapter\n");
 	ret = 1;
 	goto cleanup;
     }
     if (!rt_view_context_selection_set_pick_result_ref_bsg(v, NULL, NULL,
 		NULL) ||
-	    rt_view_context_selection_count_bsg(v) != 0) {
+	    rt_view_context_selection_count_bsg(v) != 0 ||
+	    rt_view_context_selection_count(v) != 0) {
 	printf("FAIL: opaque selection null-pick context clear adapter\n");
 	ret = 1;
 	goto cleanup;
@@ -2738,6 +2784,7 @@ test_bsg_view_scope_adapter(void)
     if (!rt_view_selection_set_pick_result_ref_bsg(v, pick,
 		test_selection_path_callback, &callback_state) ||
 	    rt_view_selection_count_bsg(v) != 1 ||
+	    rt_view_context_selection_count(v) != 1 ||
 	    callback_state.count != 2 ||
 	    !BU_STR_EQUAL(callback_state.last_path, "/adapter/path")) {
 	printf("FAIL: opaque selection pick adapter apply\n");
@@ -2754,6 +2801,7 @@ test_bsg_view_scope_adapter(void)
     if (!rt_view_selection_set_pick_result_ref_bsg(v, empty_pick,
 		test_selection_path_callback, &callback_state) ||
 	    rt_view_selection_count_bsg(v) != 0 ||
+	    rt_view_context_selection_count(v) != 0 ||
 	    callback_state.count != 2) {
 	printf("FAIL: opaque selection empty-pick clear adapter\n");
 	ret = 1;
@@ -2762,7 +2810,8 @@ test_bsg_view_scope_adapter(void)
 
     if (!rt_view_selection_clear_bsg(v) ||
 	    rt_view_selection_clear_bsg(NULL) ||
-	    rt_view_selection_count_bsg(v) != 0) {
+	    rt_view_selection_count_bsg(v) != 0 ||
+	    rt_view_context_selection_count(v) != 0) {
 	printf("FAIL: BSG selection clear adapter\n");
 	ret = 1;
 	goto cleanup;
@@ -3080,21 +3129,33 @@ test_bsg_view_scope_adapter(void)
     render_summary.highlighted_count = -1;
     if (rt_view_visible_render_summary_bsg(NULL, &render_summary) ||
 	    rt_view_context_visible_render_summary_bsg(NULL, &render_summary) ||
+	    rt_view_context_visible_render_summary(NULL,
+		&neutral_render_summary) ||
 	    render_summary.item_count != 0 ||
 	    render_summary.highlighted_count != 0 ||
+	    neutral_render_summary.item_count != 0 ||
+	    neutral_render_summary.highlighted_count != 0 ||
 	    rt_view_visible_render_summary_bsg(v, NULL) ||
 	    rt_view_context_visible_render_summary_bsg(v, NULL) ||
+	    rt_view_context_visible_render_summary(v, NULL) ||
 	    rt_view_context_named_line_render_count_bsg(NULL, "missing") ||
-	    rt_view_context_named_line_render_count_bsg(v, NULL)) {
+	    rt_view_context_named_line_render_count_bsg(v, NULL) ||
+	    rt_view_context_named_line_render_count(NULL, "missing") ||
+	    rt_view_context_named_line_render_count(v, NULL)) {
 	printf("FAIL: null BSG visible-render summary adapter\n");
 	ret = 1;
 	goto cleanup;
     }
     if (!rt_view_visible_render_summary_bsg(v, &render_summary) ||
 	    !rt_view_context_visible_render_summary_bsg(v, &render_summary) ||
+	    !rt_view_context_visible_render_summary(v,
+		&neutral_render_summary) ||
 	    render_summary.item_count != 0 ||
 	    render_summary.highlighted_count != 0 ||
-	    rt_view_context_named_line_render_count_bsg(v, "missing")) {
+	    neutral_render_summary.item_count != 0 ||
+	    neutral_render_summary.highlighted_count != 0 ||
+	    rt_view_context_named_line_render_count_bsg(v, "missing") ||
+	    rt_view_context_named_line_render_count(v, "missing")) {
 	printf("FAIL: empty BSG visible-render summary adapter\n");
 	ret = 1;
 	goto cleanup;
@@ -3105,23 +3166,40 @@ test_bsg_view_scope_adapter(void)
     consistency.export_render_consistent = -1;
     consistency.export_backend_consistent = -1;
     if (rt_view_render_export_consistency_bsg(NULL, "all.g", &consistency) ||
+	    rt_view_context_render_export_consistency(NULL, "all.g",
+		&neutral_consistency) ||
 	    consistency.export_record_found != 0 ||
 	    consistency.render_item_found != 0 ||
 	    consistency.backend_node_found != 0 ||
 	    consistency.export_render_consistent != 0 ||
 	    consistency.export_backend_consistent != 0 ||
+	    neutral_consistency.export_record_found != 0 ||
+	    neutral_consistency.render_item_found != 0 ||
+	    neutral_consistency.backend_node_found != 0 ||
+	    neutral_consistency.export_render_consistent != 0 ||
+	    neutral_consistency.export_backend_consistent != 0 ||
 	    rt_view_render_export_consistency_bsg(v, NULL, &consistency) ||
-	    rt_view_render_export_consistency_bsg(v, "all.g", NULL)) {
+	    rt_view_render_export_consistency_bsg(v, "all.g", NULL) ||
+	    rt_view_context_render_export_consistency(v, NULL,
+		&neutral_consistency) ||
+	    rt_view_context_render_export_consistency(v, "all.g", NULL)) {
 	printf("FAIL: null BSG render/export consistency adapter\n");
 	ret = 1;
 	goto cleanup;
     }
     if (!rt_view_render_export_consistency_bsg(v, "all.g", &consistency) ||
+	    !rt_view_context_render_export_consistency(v, "all.g",
+		&neutral_consistency) ||
 	    consistency.export_record_found != 0 ||
 	    consistency.render_item_found != 0 ||
 	    consistency.backend_node_found != 0 ||
 	    consistency.export_render_consistent != 0 ||
-	    consistency.export_backend_consistent != 0) {
+	    consistency.export_backend_consistent != 0 ||
+	    neutral_consistency.export_record_found != 0 ||
+	    neutral_consistency.render_item_found != 0 ||
+	    neutral_consistency.backend_node_found != 0 ||
+	    neutral_consistency.export_render_consistent != 0 ||
+	    neutral_consistency.export_backend_consistent != 0) {
 	printf("FAIL: empty BSG render/export consistency adapter\n");
 	ret = 1;
 	goto cleanup;
@@ -3230,6 +3308,8 @@ test_bsg_view_scope_adapter(void)
 		    (const point_t *)line_pts, line_cmds, 2) ||
 		rt_view_context_named_line_render_count_bsg(v,
 		    "rt_view_line_set_context_adapter") != 1 ||
+		rt_view_context_named_line_render_count(v,
+		    "rt_view_line_set_context_adapter") != 1 ||
 		!rt_view_line_set_context_set_points_bsg(line_set_ctx,
 		    NULL, NULL, 0)) {
 	    printf("FAIL: BSG line-set context points adapter\n");
@@ -3252,6 +3332,8 @@ test_bsg_view_scope_adapter(void)
 	if (!rt_view_line_set_context_set_points(neutral_line_set_ctx,
 		    (const point_t *)line_pts, line_cmds, 2) ||
 		rt_view_context_named_line_render_count_bsg(v,
+		    "rt_view_line_set_context_adapter_neutral") != 1 ||
+		rt_view_context_named_line_render_count(v,
 		    "rt_view_line_set_context_adapter_neutral") != 1 ||
 		!rt_view_line_set_context_set_points(neutral_line_set_ctx,
 		    NULL, NULL, 0)) {
@@ -5374,7 +5456,8 @@ test_bsg_mesh_lod_adapter_boundary(void)
 	goto cleanup;
     }
 
-    if (rt_view_context_frametime_set_bsg(NULL, 1000000000)) {
+    if (rt_view_context_frametime_set_bsg(NULL, 1000000000) ||
+	    rt_view_context_frametime_set(NULL, 1000000000)) {
 	printf("FAIL: null BSG context frametime set adapter\n");
 	ret = 1;
 	goto cleanup;
@@ -5382,6 +5465,12 @@ test_bsg_mesh_lod_adapter_boundary(void)
     if (!rt_view_context_frametime_set_bsg(v, 1000000000) ||
 	    bsg_view_frametime(v) != 1000000000) {
 	printf("FAIL: BSG context frametime set adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+    if (!rt_view_context_frametime_set(v, 2000000000) ||
+	    bsg_view_frametime(v) != 2000000000) {
+	printf("FAIL: retained context frametime set adapter\n");
 	ret = 1;
 	goto cleanup;
     }
@@ -6740,7 +6829,9 @@ test_bsg_mesh_lod_adapter_boundary(void)
     }
 
     if (rt_view_lod_bounds_callback_is_bsg(NULL) ||
-	    rt_view_lod_bounds_callback_is_bsg(v)) {
+	    rt_view_context_lod_bounds_callback_is(NULL) ||
+	    rt_view_lod_bounds_callback_is_bsg(v) ||
+	    rt_view_context_lod_bounds_callback_is(v)) {
 	printf("FAIL: BSG bounds callback initial adapter state\n");
 	ret = 1;
 	goto cleanup;
@@ -6748,7 +6839,8 @@ test_bsg_mesh_lod_adapter_boundary(void)
 
     rt_view_lod_bounds_callback_set_bsg(NULL);
     rt_view_lod_bounds_callback_set_bsg(v);
-    if (!rt_view_lod_bounds_callback_is_bsg(v)) {
+    if (!rt_view_lod_bounds_callback_is_bsg(v) ||
+	    !rt_view_context_lod_bounds_callback_is(v)) {
 	printf("FAIL: BSG bounds callback set adapter\n");
 	ret = 1;
 	goto cleanup;

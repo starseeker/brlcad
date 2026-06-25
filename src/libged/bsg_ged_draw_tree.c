@@ -34,8 +34,8 @@
 #include "bu/str.h"
 #include "bsg/appearance.h"
 #include "bsg/database_source.h"
+#include "bsg/defines.h"
 #include "bsg/draw_ctx.h"
-#include "bsg/draw_intent.h"
 #include "bsg/draw_set.h"
 #include "bsg/draw_source.h"
 #include "bsg/field.h"
@@ -61,18 +61,10 @@ struct _sg_ref_snapshot {
     size_t cap;
 };
 
-static bsg_scene_ref
-_sg_independent_scope_ref(void *view_ctx, int create)
-{
-    return ged_draw_scene_ref_from_rt_view_ref(
-	    rt_view_context_independent_scope_ref(view_ctx, create));
-}
-
-
 static void
 _sg_ref_snapshot_append(struct _sg_ref_snapshot *snap, bsg_scene_ref ref)
 {
-    if (!snap || bsg_scene_ref_is_null(ref))
+    if (!snap || ged_draw_scene_ref_is_null(ref))
 	return;
 
     if (snap->len == snap->cap) {
@@ -103,16 +95,15 @@ static void
 _sg_snapshot_children(struct _sg_ref_snapshot *snap, bsg_scene_ref parent,
 		      int groups_only, int skip_overlays)
 {
-    if (!snap || bsg_scene_ref_is_null(parent))
+    if (!snap || ged_draw_scene_ref_is_null(parent))
 	return;
 
-    size_t child_count = bsg_scene_child_count(parent);
+    size_t child_count = ged_draw_scene_ref_child_count(parent);
     for (size_t i = 0; i < child_count; i++) {
-	bsg_scene_ref child = bsg_scene_child_at(parent, i);
-	if (bsg_scene_ref_is_null(child))
+	bsg_scene_ref child = ged_draw_scene_ref_child_at(parent, i);
+	if (ged_draw_scene_ref_is_null(child))
 	    continue;
-	if (groups_only &&
-		bsg_scene_ref_type(child) != BSG_SCENE_ELEMENT_GROUP)
+	if (groups_only && !ged_draw_scene_ref_is_group(child))
 	    continue;
 	if (skip_overlays && ged_draw_group_scene_ref_is_overlay(child))
 	    continue;
@@ -125,67 +116,47 @@ static bsg_scene_ref _sg_add_path(struct ged *gedp, const char *name);
 static void _sg_erase_path(struct ged *gedp, const char *path);
 static void _sg_erase_all_paths(struct ged *gedp, const char *path);
 static void _sg_erase_path_scoped(struct ged *gedp, const char *path,
-				  struct bsg_view *v, int mode);
+				  void *view_ctx, int mode);
 static void _sg_erase_all_paths_scoped(struct ged *gedp, const char *path,
-				       struct bsg_view *v, int mode);
+				       void *view_ctx, int mode);
 static int _sg_erase_nonroot_component_scoped(struct ged *gedp,
 					      const char *name,
-					      struct bsg_view *v,
+					      void *view_ctx,
 					      int mode);
 static int _sg_erase_component_scoped(struct ged *gedp,
 				      const char *name,
-				      struct bsg_view *v,
+				      void *view_ctx,
 				      int mode);
 static int _sg_prune_empty_groups_from_parent(struct ged *gedp,
 					      bsg_scene_ref parent_ref,
-					      struct bsg_view *v,
+					      void *view_ctx,
 					      int mode);
 static int _sg_erase_shapes_by_path(struct ged *gedp,
 				    const struct db_full_path *subpath,
 				    bsg_scene_ref prune_base_ref,
-				    struct bsg_view *v,
+				    void *view_ctx,
 				    int mode);
 static int _sg_erase_by_path_prefix_string(struct ged *gedp,
 					   const char *path,
 					   bsg_scene_ref base_ref,
-					   struct bsg_view *v,
+					   void *view_ctx,
 					   int mode);
 static void _draw_append_scene_ref_to_group(struct ged *gedp, bsg_scene_ref group_ref, bsg_scene_ref shape_ref);
-
-
-static struct bsg_view *
-_sg_tree_active_view(struct ged *gedp)
-{
-    return (struct bsg_view *)ged_view_active_ctx(gedp);
-}
 
 
 static bsg_scene_ref
 _sg_find_or_create_child_group(struct ged *gedp, bsg_scene_ref parent_ref,
 			       const char *comp_name)
 {
-    if (!gedp || bsg_scene_ref_is_null(parent_ref) || !comp_name)
-	return bsg_scene_ref_null();
-
-    bsg_scene_ref existing = bsg_scene_group_find_child(parent_ref, comp_name);
-    if (!bsg_scene_ref_is_null(existing))
-	return existing;
-
-    struct bsg_view *v = _sg_tree_active_view(gedp);
-    if (!v)
+    if (!gedp || ged_draw_scene_ref_is_null(parent_ref) || !comp_name)
 	return bsg_scene_ref_null();
 
     struct directory *dp = RT_DIR_NULL;
     if (gedp->dbip)
 	dp = db_lookup(gedp->dbip, comp_name, LOOKUP_QUIET);
 
-    bsg_scene_ref child_ref =
-	bsg_scene_group_ensure_child(parent_ref, v, comp_name, (void *)dp);
-    if (bsg_scene_ref_is_null(child_ref))
-	return bsg_scene_ref_null();
-
-    bsg_scene_bump_rev(parent_ref);
-    return child_ref;
+    return ged_draw_view_context_group_child_ensure(ged_draw_active_view_ctx(gedp),
+	    parent_ref, comp_name, (void *)dp);
 }
 
 
@@ -195,17 +166,11 @@ _sg_add_path(struct ged *gedp, const char *name)
     if (!gedp || !name || !gedp->dbip)
 	return bsg_scene_ref_null();
 
-    bsg_scene_ref root_ref = ged_draw_ensure_root(gedp);
-    if (bsg_scene_ref_is_null(root_ref))
+    void *view_ctx = ged_draw_active_view_ctx(gedp);
+    bsg_scene_ref base_ref = ged_draw_scene_ref_active_scope(gedp, view_ctx,
+	    1, 1);
+    if (ged_draw_scene_ref_is_null(base_ref))
 	return bsg_scene_ref_null();
-
-    bsg_scene_ref base_ref = root_ref;
-    void *view_ctx = ged_view_active_ctx(gedp);
-    if (view_ctx && rt_view_context_is_independent(view_ctx)) {
-	bsg_scene_ref scope_ref = _sg_independent_scope_ref(view_ctx, 1);
-	if (!bsg_scene_ref_is_null(scope_ref))
-	    base_ref = scope_ref;
-    }
 
     struct db_full_path pathcomp;
     if (db_string_to_path(&pathcomp, gedp->dbip, name) != 0) {
@@ -227,7 +192,7 @@ _sg_add_path(struct ged *gedp, const char *name)
 	const char *comp = pathcomp.fp_names[i]->d_namep;
 	bsg_scene_ref child_ref =
 	    _sg_find_or_create_child_group(gedp, cur_ref, comp);
-	if (bsg_scene_ref_is_null(child_ref)) {
+	if (ged_draw_scene_ref_is_null(child_ref)) {
 	    db_free_full_path(&pathcomp);
 	    return bsg_scene_ref_null();
 	}
@@ -242,7 +207,7 @@ _sg_add_path(struct ged *gedp, const char *name)
 static int
 _sg_path_match_cb(bsg_scene_ref shape_ref, void *match_ctx)
 {
-    if (bsg_scene_ref_is_null(shape_ref) || !match_ctx)
+    if (ged_draw_scene_ref_is_null(shape_ref) || !match_ctx)
 	return 0;
 
     ged_draw_shape_state *bd = ged_draw_shape_state_get_scene_ref(shape_ref);
@@ -258,7 +223,7 @@ static void
 _sg_erase_nested_subpath(bsg_scene_ref parent_ref,
 			 struct db_full_path *subpath, size_t depth_start)
 {
-    if (bsg_scene_ref_is_null(parent_ref) || !subpath ||
+    if (ged_draw_scene_ref_is_null(parent_ref) || !subpath ||
 	    subpath->fp_len == 0 || depth_start >= subpath->fp_len)
 	return;
 
@@ -267,20 +232,25 @@ _sg_erase_nested_subpath(bsg_scene_ref parent_ref,
     for (size_t i = 0; i < subpath->fp_len; i++)
 	names[i] = subpath->fp_names[i]->d_namep;
 
-    bsg_scene_erase_nested_subpath(parent_ref, names, subpath->fp_len,
+    ged_draw_scene_ref_erase_nested_subpath(parent_ref, names, subpath->fp_len,
 	    depth_start, _sg_path_match_cb, (void *)subpath);
 
     bu_free(names, "subpath names");
 }
 
 
-static void
-_sg_erase_path(struct ged *gedp, const char *path)
-{
-    bsg_scene_ref root_ref = ged_scene_root_ref(gedp);
-    if (bsg_scene_ref_is_null(root_ref))
-	return;
+struct _sg_erase_path_ctx {
+    struct ged *gedp;
+    const char *path;
+};
 
+
+static int
+_sg_erase_path_root_cb(bsg_scene_ref root_ref, void *ud)
+{
+    struct _sg_erase_path_ctx *ctx = (struct _sg_erase_path_ctx *)ud;
+    struct ged *gedp = ctx->gedp;
+    const char *path = ctx->path;
     struct db_i *dbip = gedp->dbip;
     struct db_full_path subpath;
     int found_subpath = (db_string_to_path(&subpath, dbip, path) == 0);
@@ -296,7 +266,7 @@ _sg_erase_path(struct ged *gedp, const char *path)
 	    continue;
 
 	if (BU_STR_EQUAL(path, gpath)) {
-	    bsg_scene_free_group(group_ref);
+	    ged_draw_scene_ref_free_group(group_ref);
 	    break;
 	}
 
@@ -313,8 +283,8 @@ _sg_erase_path(struct ged *gedp, const char *path)
 
 	if (is_ancestor && ancestor_depth < subpath.fp_len) {
 	    _sg_erase_nested_subpath(group_ref, &subpath, ancestor_depth);
-	    if (bsg_scene_child_count(group_ref) == 0)
-		bsg_scene_free_group(group_ref);
+	    if (ged_draw_scene_ref_child_count(group_ref) == 0)
+		ged_draw_scene_ref_free_group(group_ref);
 	    break;
 	}
     }
@@ -325,29 +295,34 @@ _sg_erase_path(struct ged *gedp, const char *path)
 	    (void)_sg_erase_shapes_by_path(gedp, &subpath, root_ref, NULL, -1);
 	db_free_full_path(&subpath);
     }
+    return 1;
+}
+
+
+static void
+_sg_erase_path(struct ged *gedp, const char *path)
+{
+    struct _sg_erase_path_ctx ctx;
+    ctx.gedp = gedp;
+    ctx.path = path;
+    (void)ged_draw_scene_root_mutate(gedp, _sg_erase_path_root_cb, &ctx);
 }
 
 
 static bsg_scene_ref
 _sg_scoped_erase_base_ref(struct ged *gedp, void *view_ctx)
 {
-    if (!gedp)
-	return bsg_scene_ref_null();
-
-    if (view_ctx && rt_view_context_is_independent(view_ctx))
-	return _sg_independent_scope_ref(view_ctx, 0);
-
-    return ged_scene_root_ref(gedp);
+    return ged_draw_scene_ref_active_scope(gedp, view_ctx, 0, 0);
 }
 
 
 static int
 _sg_group_matches_erase_scope(struct ged *gedp,
 			      bsg_scene_ref group_ref,
-			      struct bsg_view *v,
+			      void *view_ctx,
 			      int mode)
 {
-    if (!gedp || bsg_scene_ref_is_null(group_ref))
+    if (!gedp || ged_draw_scene_ref_is_null(group_ref))
 	return 0;
 
     struct ged_draw_group_record rec;
@@ -356,7 +331,7 @@ _sg_group_matches_erase_scope(struct ged *gedp,
 	return 0;
     if (rec.is_overlay)
 	return 0;
-    if (!ged_draw_group_record_in_view(&rec, v))
+    if (!ged_draw_group_record_in_view(&rec, view_ctx))
 	return 0;
     if (mode >= 0 && (int)rec.draw_mode != mode)
 	return 0;
@@ -366,10 +341,10 @@ _sg_group_matches_erase_scope(struct ged *gedp,
 
 static void
 _sg_erase_path_scoped(struct ged *gedp, const char *path,
-		      struct bsg_view *v, int mode)
+		      void *view_ctx, int mode)
 {
-    bsg_scene_ref base_ref = _sg_scoped_erase_base_ref(gedp, v);
-    if (bsg_scene_ref_is_null(base_ref))
+    bsg_scene_ref base_ref = _sg_scoped_erase_base_ref(gedp, view_ctx);
+    if (ged_draw_scene_ref_is_null(base_ref))
 	return;
 
     struct db_i *dbip = gedp->dbip;
@@ -382,7 +357,7 @@ _sg_erase_path_scoped(struct ged *gedp, const char *path,
 
     for (size_t gi = 0; gi < snap.len; gi++) {
 	bsg_scene_ref group_ref = snap.refs[gi];
-	if (!_sg_group_matches_erase_scope(gedp, group_ref, v, mode))
+	if (!_sg_group_matches_erase_scope(gedp, group_ref, view_ctx, mode))
 	    continue;
 
 	const char *gpath = ged_draw_group_scene_ref_path(group_ref);
@@ -390,7 +365,7 @@ _sg_erase_path_scoped(struct ged *gedp, const char *path,
 	    continue;
 
 	if (BU_STR_EQUAL(path, gpath)) {
-	    bsg_scene_free_group(group_ref);
+	    ged_draw_scene_ref_free_group(group_ref);
 	    break;
 	}
 
@@ -407,8 +382,8 @@ _sg_erase_path_scoped(struct ged *gedp, const char *path,
 
 	if (is_ancestor && ancestor_depth < subpath.fp_len) {
 	    _sg_erase_nested_subpath(group_ref, &subpath, ancestor_depth);
-	    if (bsg_scene_child_count(group_ref) == 0)
-		bsg_scene_free_group(group_ref);
+	    if (ged_draw_scene_ref_child_count(group_ref) == 0)
+		ged_draw_scene_ref_free_group(group_ref);
 	    break;
 	}
     }
@@ -416,7 +391,8 @@ _sg_erase_path_scoped(struct ged *gedp, const char *path,
     _sg_ref_snapshot_free(&snap);
     if (found_subpath) {
 	if (gedp->i->ged_gdp->gd_draw_rev == erase_rev0)
-	    (void)_sg_erase_shapes_by_path(gedp, &subpath, base_ref, v, mode);
+	    (void)_sg_erase_shapes_by_path(gedp, &subpath, base_ref,
+		    view_ctx, mode);
 	db_free_full_path(&subpath);
     }
 }
@@ -425,7 +401,7 @@ _sg_erase_path_scoped(struct ged *gedp, const char *path,
 static void
 _sg_erase_subgroups_by_name(bsg_scene_ref parent_ref, const char *name)
 {
-    if (bsg_scene_ref_is_null(parent_ref) || !name)
+    if (ged_draw_scene_ref_is_null(parent_ref) || !name)
 	return;
 
     struct _sg_ref_snapshot snap = {NULL, 0, 0};
@@ -433,8 +409,8 @@ _sg_erase_subgroups_by_name(bsg_scene_ref parent_ref, const char *name)
 
     for (size_t i = 0; i < snap.len; i++) {
 	bsg_scene_ref child_ref = snap.refs[i];
-	if (BU_STR_EQUAL(bsg_scene_name(child_ref), name)) {
-	    bsg_scene_free_group(child_ref);
+	if (BU_STR_EQUAL(ged_draw_scene_ref_name(child_ref), name)) {
+	    ged_draw_scene_ref_free_group(child_ref);
 	} else {
 	    _sg_erase_subgroups_by_name(child_ref, name);
 	}
@@ -444,14 +420,19 @@ _sg_erase_subgroups_by_name(bsg_scene_ref parent_ref, const char *name)
 }
 
 
-static void
-_sg_erase_all_names(struct ged *gedp, const char *name)
-{
-    bsg_scene_ref root_ref = ged_scene_root_ref(gedp);
-    if (bsg_scene_ref_is_null(root_ref))
-	return;
+struct _sg_erase_all_names_ctx {
+    struct ged *gedp;
+    const char *name;
+};
 
-    ged_draw_overlay_erase_name(gedp, name);
+
+static int
+_sg_erase_all_names_root_cb(bsg_scene_ref root_ref, void *ud)
+{
+    struct _sg_erase_all_names_ctx *ctx = (struct _sg_erase_all_names_ctx *)ud;
+    const char *name = ctx->name;
+
+    ged_draw_overlay_erase_name(ctx->gedp, name);
 
     struct _sg_ref_snapshot snap = {NULL, 0, 0};
     _sg_snapshot_children(&snap, root_ref, 1, 1);
@@ -467,7 +448,7 @@ _sg_erase_all_names(struct ged *gedp, const char *name)
 	int found = 0;
 	while (tok) {
 	    if (BU_STR_EQUAL(tok, name)) {
-		bsg_scene_free_group(group_ref);
+		ged_draw_scene_ref_free_group(group_ref);
 		found = 1;
 		break;
 	    }
@@ -480,27 +461,44 @@ _sg_erase_all_names(struct ged *gedp, const char *name)
     }
 
     _sg_ref_snapshot_free(&snap);
+    return 1;
 }
 
 
 static void
-_sg_erase_all_paths(struct ged *gedp, const char *path)
+_sg_erase_all_names(struct ged *gedp, const char *name)
 {
-    bsg_scene_ref root_ref = ged_scene_root_ref(gedp);
-    if (bsg_scene_ref_is_null(root_ref))
-	return;
+    struct _sg_erase_all_names_ctx ctx;
+    ctx.gedp = gedp;
+    ctx.name = name;
+    (void)ged_draw_scene_root_mutate(gedp, _sg_erase_all_names_root_cb, &ctx);
+}
+
+
+struct _sg_erase_all_paths_ctx {
+    struct ged *gedp;
+    const char *path;
+};
+
+
+static int
+_sg_erase_all_paths_root_cb(bsg_scene_ref root_ref, void *ud)
+{
+    struct _sg_erase_all_paths_ctx *ctx = (struct _sg_erase_all_paths_ctx *)ud;
+    struct ged *gedp = ctx->gedp;
+    const char *path = ctx->path;
 
     if (_sg_erase_by_path_prefix_string(gedp, path, root_ref, NULL, -1))
-	return;
+	return 1;
 
     if (ged_db_index_available(gedp) &&
 	    !ged_db_index_path_resolve(gedp, path, NULL, 0))
-	return;
+	return 1;
 
     struct db_i *dbip = gedp->dbip;
     struct db_full_path subpath;
     if (db_string_to_path(&subpath, dbip, path) != 0)
-	return;
+	return 1;
     uint64_t erase_rev0 = gedp->i->ged_gdp->gd_draw_rev;
 
     int restart;
@@ -521,7 +519,7 @@ _sg_erase_all_paths(struct ged *gedp, const char *path)
 
 	    if (db_full_path_subset(&fullpath, &subpath, 0)) {
 		db_free_full_path(&fullpath);
-		bsg_scene_free_group(group_ref);
+		ged_draw_scene_ref_free_group(group_ref);
 		restart = 1;
 		break;
 	    }
@@ -532,8 +530,8 @@ _sg_erase_all_paths(struct ged *gedp, const char *path)
 		uint64_t rev0 = gedp->i->ged_gdp->gd_draw_rev;
 		db_free_full_path(&fullpath);
 		_sg_erase_nested_subpath(group_ref, &subpath, depth);
-		if (bsg_scene_child_count(group_ref) == 0) {
-		    bsg_scene_free_group(group_ref);
+		if (ged_draw_scene_ref_child_count(group_ref) == 0) {
+		    ged_draw_scene_ref_free_group(group_ref);
 		    restart = 1;
 		    break;
 		}
@@ -554,18 +552,29 @@ _sg_erase_all_paths(struct ged *gedp, const char *path)
 	(void)_sg_erase_shapes_by_path(gedp, &subpath, root_ref, NULL, -1);
 
     db_free_full_path(&subpath);
+    return 1;
+}
+
+
+static void
+_sg_erase_all_paths(struct ged *gedp, const char *path)
+{
+    struct _sg_erase_all_paths_ctx ctx;
+    ctx.gedp = gedp;
+    ctx.path = path;
+    (void)ged_draw_scene_root_mutate(gedp, _sg_erase_all_paths_root_cb, &ctx);
 }
 
 
 static void
 _sg_erase_all_paths_scoped(struct ged *gedp, const char *path,
-			   struct bsg_view *v, int mode)
+			   void *view_ctx, int mode)
 {
-    bsg_scene_ref base_ref = _sg_scoped_erase_base_ref(gedp, v);
-    if (bsg_scene_ref_is_null(base_ref))
+    bsg_scene_ref base_ref = _sg_scoped_erase_base_ref(gedp, view_ctx);
+    if (ged_draw_scene_ref_is_null(base_ref))
 	return;
 
-    if (_sg_erase_by_path_prefix_string(gedp, path, base_ref, v, mode))
+    if (_sg_erase_by_path_prefix_string(gedp, path, base_ref, view_ctx, mode))
 	return;
 
     if (ged_db_index_available(gedp) &&
@@ -586,7 +595,7 @@ _sg_erase_all_paths_scoped(struct ged *gedp, const char *path,
 
 	for (size_t i = 0; i < snap.len; i++) {
 	    bsg_scene_ref group_ref = snap.refs[i];
-	    if (!_sg_group_matches_erase_scope(gedp, group_ref, v, mode))
+	    if (!_sg_group_matches_erase_scope(gedp, group_ref, view_ctx, mode))
 		continue;
 
 	    const char *gpath = ged_draw_group_scene_ref_path(group_ref);
@@ -599,7 +608,7 @@ _sg_erase_all_paths_scoped(struct ged *gedp, const char *path,
 
 	    if (db_full_path_subset(&fullpath, &subpath, 0)) {
 		db_free_full_path(&fullpath);
-		bsg_scene_free_group(group_ref);
+		ged_draw_scene_ref_free_group(group_ref);
 		restart = 1;
 		break;
 	    }
@@ -610,8 +619,8 @@ _sg_erase_all_paths_scoped(struct ged *gedp, const char *path,
 		uint64_t rev0 = gedp->i->ged_gdp->gd_draw_rev;
 		db_free_full_path(&fullpath);
 		_sg_erase_nested_subpath(group_ref, &subpath, depth);
-		if (bsg_scene_child_count(group_ref) == 0) {
-		    bsg_scene_free_group(group_ref);
+		if (ged_draw_scene_ref_child_count(group_ref) == 0) {
+		    ged_draw_scene_ref_free_group(group_ref);
 		    restart = 1;
 		    break;
 		}
@@ -629,7 +638,8 @@ _sg_erase_all_paths_scoped(struct ged *gedp, const char *path,
     } while (restart);
 
     if (gedp->i->ged_gdp->gd_draw_rev == erase_rev0)
-	(void)_sg_erase_shapes_by_path(gedp, &subpath, base_ref, v, mode);
+	(void)_sg_erase_shapes_by_path(gedp, &subpath, base_ref, view_ctx,
+		mode);
 
     db_free_full_path(&subpath);
 }
@@ -638,10 +648,10 @@ _sg_erase_all_paths_scoped(struct ged *gedp, const char *path,
 static int
 _sg_group_matches_optional_scope(struct ged *gedp,
 				 bsg_scene_ref group_ref,
-				 struct bsg_view *v,
+				 void *view_ctx,
 				 int mode)
 {
-    if (!gedp || bsg_scene_ref_is_null(group_ref))
+    if (!gedp || ged_draw_scene_ref_is_null(group_ref))
 	return 0;
 
     struct ged_draw_group_record rec;
@@ -650,7 +660,7 @@ _sg_group_matches_optional_scope(struct ged *gedp,
 	return 0;
     if (rec.is_overlay)
 	return 0;
-    if (v && !ged_draw_group_record_in_view(&rec, v))
+    if (view_ctx && !ged_draw_group_record_in_view(&rec, view_ctx))
 	return 0;
     if (mode >= 0 && (int)rec.draw_mode != mode)
 	return 0;
@@ -746,7 +756,7 @@ _sg_path_string_is_prefix(const char *prefix, const char *path)
 struct _sg_erase_nonroot_component_ctx {
     struct ged *gedp;
     const char *name;
-    struct bsg_view *view;
+    void *view_ctx;
     int mode;
     int nonroot_only;
     struct bu_ptbl shape_refs;
@@ -756,7 +766,7 @@ struct _sg_erase_nonroot_component_ctx {
 struct _sg_erase_path_record_ctx {
     struct ged *gedp;
     const struct db_full_path *subpath;
-    struct bsg_view *view;
+    void *view_ctx;
     int mode;
     struct bu_ptbl shape_refs;
 };
@@ -765,7 +775,7 @@ struct _sg_erase_path_record_ctx {
 struct _sg_erase_path_string_record_ctx {
     struct ged *gedp;
     const char *path;
-    struct bsg_view *view;
+    void *view_ctx;
     int mode;
     struct bu_ptbl shape_refs;
 };
@@ -789,7 +799,8 @@ _sg_erase_path_shape_cb(const struct ged_draw_shape_record *rec,
 	return 1;
     if (grec.is_overlay)
 	return 1;
-    if (ctx->view && !ged_draw_group_record_in_view(&grec, ctx->view))
+    if (ctx->view_ctx &&
+	    !ged_draw_group_record_in_view(&grec, ctx->view_ctx))
 	return 1;
 
     ged_draw_shape_ref *ref = (ged_draw_shape_ref *)bu_malloc(
@@ -824,7 +835,8 @@ _sg_erase_path_string_shape_cb(const struct ged_draw_shape_record *rec,
 	return 1;
     if (grec.is_overlay)
 	return 1;
-    if (ctx->view && !ged_draw_group_record_in_view(&grec, ctx->view))
+    if (ctx->view_ctx &&
+	    !ged_draw_group_record_in_view(&grec, ctx->view_ctx))
 	return 1;
 
     ged_draw_shape_ref *ref = (ged_draw_shape_ref *)bu_malloc(
@@ -839,7 +851,7 @@ static int
 _sg_erase_shapes_by_path(struct ged *gedp,
 			 const struct db_full_path *subpath,
 			 bsg_scene_ref prune_base_ref,
-			 struct bsg_view *v,
+			 void *view_ctx,
 			 int mode)
 {
     if (!gedp || !subpath)
@@ -848,7 +860,7 @@ _sg_erase_shapes_by_path(struct ged *gedp,
     struct _sg_erase_path_record_ctx ctx;
     ctx.gedp = gedp;
     ctx.subpath = subpath;
-    ctx.view = v;
+    ctx.view_ctx = view_ctx;
     ctx.mode = mode;
     bu_ptbl_init(&ctx.shape_refs, 8, "path erase shape refs");
 
@@ -868,7 +880,8 @@ _sg_erase_shapes_by_path(struct ged *gedp,
     bu_ptbl_free(&ctx.shape_refs);
 
     if (released)
-	(void)_sg_prune_empty_groups_from_parent(gedp, prune_base_ref, v, mode);
+	(void)_sg_prune_empty_groups_from_parent(gedp, prune_base_ref,
+		view_ctx, mode);
 
     return released;
 }
@@ -878,7 +891,7 @@ static int
 _sg_erase_shapes_by_path_prefix_string(struct ged *gedp,
 				       const char *path,
 				       bsg_scene_ref prune_base_ref,
-				       struct bsg_view *v,
+				       void *view_ctx,
 				       int mode)
 {
     if (!gedp || !path)
@@ -887,7 +900,7 @@ _sg_erase_shapes_by_path_prefix_string(struct ged *gedp,
     struct _sg_erase_path_string_record_ctx ctx;
     ctx.gedp = gedp;
     ctx.path = ged_draw_dbpath_skip_lead_slash(path);
-    ctx.view = v;
+    ctx.view_ctx = view_ctx;
     ctx.mode = mode;
     bu_ptbl_init(&ctx.shape_refs, 8, "path string erase shape refs");
 
@@ -908,7 +921,8 @@ _sg_erase_shapes_by_path_prefix_string(struct ged *gedp,
     bu_ptbl_free(&ctx.shape_refs);
 
     if (released)
-	(void)_sg_prune_empty_groups_from_parent(gedp, prune_base_ref, v, mode);
+	(void)_sg_prune_empty_groups_from_parent(gedp, prune_base_ref,
+		view_ctx, mode);
 
     return released;
 }
@@ -930,7 +944,8 @@ _sg_erase_nonroot_component_shape_cb(const struct ged_draw_shape_record *rec,
 	return 1;
     if (grec.is_overlay)
 	return 1;
-    if (ctx->view && !ged_draw_group_record_in_view(&grec, ctx->view))
+    if (ctx->view_ctx &&
+	    !ged_draw_group_record_in_view(&grec, ctx->view_ctx))
 	return 1;
     size_t first_idx = ctx->nonroot_only ? 1 : 0;
     if (rec->display_name &&
@@ -951,10 +966,10 @@ _sg_erase_nonroot_component_shape_cb(const struct ged_draw_shape_record *rec,
 static int
 _sg_prune_empty_groups_from_parent(struct ged *gedp,
 				   bsg_scene_ref parent_ref,
-				   struct bsg_view *v,
+				   void *view_ctx,
 				   int mode)
 {
-    if (!gedp || bsg_scene_ref_is_null(parent_ref))
+    if (!gedp || ged_draw_scene_ref_is_null(parent_ref))
 	return 0;
 
     int pruned = 0;
@@ -963,10 +978,12 @@ _sg_prune_empty_groups_from_parent(struct ged *gedp,
 
     for (size_t i = 0; i < snap.len; i++) {
 	bsg_scene_ref group_ref = snap.refs[i];
-	pruned += _sg_prune_empty_groups_from_parent(gedp, group_ref, v, mode);
-	if (bsg_scene_child_count(group_ref) == 0 &&
-		_sg_group_matches_optional_scope(gedp, group_ref, v, mode)) {
-	    bsg_scene_free_group(group_ref);
+	pruned += _sg_prune_empty_groups_from_parent(gedp, group_ref,
+		view_ctx, mode);
+	if (ged_draw_scene_ref_child_count(group_ref) == 0 &&
+		_sg_group_matches_optional_scope(gedp, group_ref, view_ctx,
+		    mode)) {
+	    ged_draw_scene_ref_free_group(group_ref);
 	    pruned++;
 	}
     }
@@ -980,10 +997,10 @@ static int
 _sg_erase_groups_by_path_prefix_string(struct ged *gedp,
 				       const char *path,
 				       bsg_scene_ref base_ref,
-				       struct bsg_view *v,
+				       void *view_ctx,
 				       int mode)
 {
-    if (!gedp || !path || bsg_scene_ref_is_null(base_ref))
+    if (!gedp || !path || ged_draw_scene_ref_is_null(base_ref))
 	return 0;
 
     int erased = 0;
@@ -995,7 +1012,8 @@ _sg_erase_groups_by_path_prefix_string(struct ged *gedp,
 
 	for (size_t i = 0; i < snap.len; i++) {
 	    bsg_scene_ref group_ref = snap.refs[i];
-	    if (!_sg_group_matches_optional_scope(gedp, group_ref, v, mode))
+	    if (!_sg_group_matches_optional_scope(gedp, group_ref, view_ctx,
+		    mode))
 		continue;
 
 	    const char *gpath = ged_draw_group_scene_ref_path(group_ref);
@@ -1003,7 +1021,7 @@ _sg_erase_groups_by_path_prefix_string(struct ged *gedp,
 		continue;
 
 	    if (_sg_path_string_is_prefix(path, gpath)) {
-		bsg_scene_free_group(group_ref);
+		ged_draw_scene_ref_free_group(group_ref);
 		erased++;
 		restart = 1;
 		break;
@@ -1021,16 +1039,16 @@ static int
 _sg_erase_by_path_prefix_string(struct ged *gedp,
 				const char *path,
 				bsg_scene_ref base_ref,
-				struct bsg_view *v,
+				void *view_ctx,
 				int mode)
 {
-    if (!gedp || !path || bsg_scene_ref_is_null(base_ref))
+    if (!gedp || !path || ged_draw_scene_ref_is_null(base_ref))
 	return 0;
 
     int ret = _sg_erase_groups_by_path_prefix_string(gedp, path, base_ref,
-	    v, mode);
+	    view_ctx, mode);
     ret += _sg_erase_shapes_by_path_prefix_string(gedp, path, base_ref,
-	    v, mode);
+	    view_ctx, mode);
     return ret;
 }
 
@@ -1038,12 +1056,12 @@ _sg_erase_by_path_prefix_string(struct ged *gedp,
 static int
 _sg_erase_component_scoped_impl(struct ged *gedp,
 				const char *name,
-				struct bsg_view *v,
+				void *view_ctx,
 				int mode,
 				int nonroot_only)
 {
-    bsg_scene_ref base_ref = _sg_scoped_erase_base_ref(gedp, v);
-    if (bsg_scene_ref_is_null(base_ref))
+    bsg_scene_ref base_ref = _sg_scoped_erase_base_ref(gedp, view_ctx);
+    if (ged_draw_scene_ref_is_null(base_ref))
 	return 0;
 
     if (!nonroot_only)
@@ -1052,7 +1070,7 @@ _sg_erase_component_scoped_impl(struct ged *gedp,
     struct _sg_erase_nonroot_component_ctx ctx;
     ctx.gedp = gedp;
     ctx.name = ged_draw_dbpath_skip_lead_slash(name);
-    ctx.view = v;
+    ctx.view_ctx = view_ctx;
     ctx.mode = mode;
     ctx.nonroot_only = nonroot_only ? 1 : 0;
     bu_ptbl_init(&ctx.shape_refs, 8, "nonroot component shape refs");
@@ -1074,7 +1092,8 @@ _sg_erase_component_scoped_impl(struct ged *gedp,
     bu_ptbl_free(&ctx.shape_refs);
 
     if (released)
-	(void)_sg_prune_empty_groups_from_parent(gedp, base_ref, v, mode);
+	(void)_sg_prune_empty_groups_from_parent(gedp, base_ref, view_ctx,
+		mode);
 
     return released;
 }
@@ -1083,31 +1102,27 @@ _sg_erase_component_scoped_impl(struct ged *gedp,
 static int
 _sg_erase_nonroot_component_scoped(struct ged *gedp,
 				   const char *name,
-				   struct bsg_view *v,
+				   void *view_ctx,
 				   int mode)
 {
-    return _sg_erase_component_scoped_impl(gedp, name, v, mode, 1);
+    return _sg_erase_component_scoped_impl(gedp, name, view_ctx, mode, 1);
 }
 
 
 static int
 _sg_erase_component_scoped(struct ged *gedp,
 			   const char *name,
-			   struct bsg_view *v,
+			   void *view_ctx,
 			   int mode)
 {
-    return _sg_erase_component_scoped_impl(gedp, name, v, mode, 0);
+    return _sg_erase_component_scoped_impl(gedp, name, view_ctx, mode, 0);
 }
 
 
 static int
 _sg_bounding_sph(struct ged *gedp, vect_t *min, vect_t *max, int pflag)
 {
-    bsg_scene_ref root_ref = ged_scene_root_ref(gedp);
-    if (bsg_scene_ref_is_null(root_ref))
-	return 1;
-
-    return bsg_scene_subtree_bbox(root_ref, min, max, pflag);
+    return ged_draw_scene_root_subtree_bounds(gedp, min, max, pflag);
 }
 
 
@@ -1145,14 +1160,14 @@ ged_draw_erase_path_prefix_string(struct ged *gedp, const char *path)
 int
 ged_draw_erase_path_string_scoped(struct ged *gedp,
 				  const char *path,
-				  struct bsg_view *view,
+				  void *view_ctx,
 				  int mode)
 {
     if (!gedp || !path)
 	return 0;
     uint64_t rev0 = gedp->i->ged_gdp->gd_draw_rev;
-    _sg_erase_path_scoped(gedp, ged_draw_dbpath_skip_lead_slash(path), view,
-	    mode);
+    _sg_erase_path_scoped(gedp, ged_draw_dbpath_skip_lead_slash(path),
+	    view_ctx, mode);
     return (gedp->i->ged_gdp->gd_draw_rev != rev0) ? 1 : 0;
 }
 
@@ -1160,14 +1175,14 @@ ged_draw_erase_path_string_scoped(struct ged *gedp,
 int
 ged_draw_erase_path_prefix_string_scoped(struct ged *gedp,
 					 const char *path,
-					 struct bsg_view *view,
+					 void *view_ctx,
 					 int mode)
 {
     if (!gedp || !path)
 	return 0;
     uint64_t rev0 = gedp->i->ged_gdp->gd_draw_rev;
     _sg_erase_all_paths_scoped(gedp, ged_draw_dbpath_skip_lead_slash(path),
-	    view, mode);
+	    view_ctx, mode);
     return (gedp->i->ged_gdp->gd_draw_rev != rev0) ? 1 : 0;
 }
 
@@ -1175,24 +1190,24 @@ ged_draw_erase_path_prefix_string_scoped(struct ged *gedp,
 int
 ged_draw_erase_nonroot_component_string_scoped(struct ged *gedp,
 					       const char *name,
-					       struct bsg_view *view,
+					       void *view_ctx,
 					       int mode)
 {
     if (!gedp || !name)
 	return 0;
-    return _sg_erase_nonroot_component_scoped(gedp, name, view, mode);
+    return _sg_erase_nonroot_component_scoped(gedp, name, view_ctx, mode);
 }
 
 
 int
 ged_draw_erase_component_string_scoped(struct ged *gedp,
 				       const char *name,
-				       struct bsg_view *view,
+				       void *view_ctx,
 				       int mode)
 {
     if (!gedp || !name)
 	return 0;
-    return _sg_erase_component_scoped(gedp, name, view, mode);
+    return _sg_erase_component_scoped(gedp, name, view_ctx, mode);
 }
 
 
@@ -1249,13 +1264,12 @@ _draw_group_lookup_or_create_ref(struct ged *gedp,
 
     const char *path = ged_draw_dbpath_skip_lead_slash(s);
     bsg_scene_ref group_ref = _sg_add_path(gedp, path);
-    if (!bsg_scene_ref_is_null(group_ref) &&
-	    !bsg_scene_draw_intent(group_ref)) {
-	bsg_scene_set_draw_intent(group_ref,
-		bsg_draw_intent_create(path, BSG_DRAW_MODE_WIRE));
+    if (!ged_draw_scene_ref_is_null(group_ref)) {
+	(void)ged_draw_scene_ref_ensure_draw_intent(group_ref, path,
+		GED_DRAW_MODE_WIRE);
     }
 
-    if (!bsg_scene_ref_is_null(group_ref))
+    if (!ged_draw_scene_ref_is_null(group_ref))
 	(void)ged_draw_scene_ref_set_fullpath(gedp, group_ref, dfp);
 
     bu_free(s, "draw group path string");
@@ -1268,7 +1282,7 @@ ged_draw_group_ref_lookup_or_create(struct ged *gedp,
 				    const struct db_full_path *dfp)
 {
     bsg_scene_ref group_ref = _draw_group_lookup_or_create_ref(gedp, dfp);
-    if (bsg_scene_ref_is_null(group_ref))
+    if (ged_draw_scene_ref_is_null(group_ref))
 	return GED_DRAW_GROUP_REF_NULL;
 
     return ged_draw_group_ref_from_scene_ref(gedp, group_ref);
@@ -1325,18 +1339,10 @@ ged_draw_bounds(struct ged *gedp, vect_t *min, vect_t *max, int pflag)
 void
 ged_draw_append_scene_ref_to_last_group(struct ged *gedp, bsg_scene_ref shape_ref)
 {
-    if (!gedp || bsg_scene_ref_is_null(shape_ref))
+    if (!gedp || ged_draw_scene_ref_is_null(shape_ref))
 	return;
 
-    bsg_scene_ref root_ref = ged_scene_root_ref(gedp);
-    if (bsg_scene_ref_is_null(root_ref))
-	return;
-
-    size_t child_count = bsg_scene_child_count(root_ref);
-    if (child_count == 0)
-	return;
-
-    bsg_scene_ref group_ref = bsg_scene_child_at(root_ref, child_count - 1);
+    bsg_scene_ref group_ref = ged_draw_scene_root_last_group_ref(gedp);
     _draw_append_scene_ref_to_group(gedp, group_ref, shape_ref);
 }
 
@@ -1346,7 +1352,7 @@ _ged_draw_group_scene_ref_set_dbpath(struct ged *gedp,
 				     bsg_scene_ref group_ref,
 				     const struct db_full_path *new_dfp)
 {
-    if (!gedp || bsg_scene_ref_is_null(group_ref) || !new_dfp)
+    if (!gedp || ged_draw_scene_ref_is_null(group_ref) || !new_dfp)
 	return 0;
 
     char *s = db_path_to_string(new_dfp);
@@ -1354,16 +1360,10 @@ _ged_draw_group_scene_ref_set_dbpath(struct ged *gedp,
 	return 0;
 
     const char *path = ged_draw_dbpath_skip_lead_slash(s);
-    bsg_scene_set_name(group_ref, path);
+    ged_draw_scene_ref_set_name(group_ref, path);
 
-    struct bsg_draw_intent *di = bsg_scene_draw_intent(group_ref);
-    if (di) {
-	bsg_draw_intent_set_path(di, path);
-    } else {
-	bsg_draw_mode mode = ged_draw_group_scene_ref_mode(group_ref);
-	bsg_scene_set_draw_intent(group_ref,
-		bsg_draw_intent_create(path, mode));
-    }
+    int mode = ged_draw_group_scene_ref_mode(group_ref);
+    (void)ged_draw_scene_ref_set_draw_intent_path(group_ref, path, mode);
 
     (void)ged_draw_scene_ref_set_fullpath(gedp, group_ref, new_dfp);
     bu_free(s, "ged_draw_group_scene_ref_set_dbpath: path string");
@@ -1387,20 +1387,13 @@ ged_draw_group_ref_set_mode(struct ged *gedp,
 			    int mode)
 {
     bsg_scene_ref group_ref = ged_draw_registry_group_scene_ref(gedp, ref);
-    if (bsg_scene_ref_is_null(group_ref))
+    if (ged_draw_scene_ref_is_null(group_ref))
 	return 0;
-
-    struct bsg_draw_intent *di = bsg_scene_draw_intent(group_ref);
-    if (di) {
-	bsg_draw_intent_set_mode(di, (bsg_draw_mode)mode);
-	return 1;
-    }
 
     const char *path = ged_draw_group_scene_ref_path(group_ref);
     if (!path)
-	path = bsg_scene_name(group_ref);
-    bsg_scene_set_draw_intent(group_ref,
-	    bsg_draw_intent_create(path, (bsg_draw_mode)mode));
+	path = ged_draw_scene_ref_name(group_ref);
+    (void)ged_draw_scene_ref_set_draw_intent_mode(group_ref, mode, path);
     return 1;
 }
 
@@ -1414,23 +1407,12 @@ ged_draw_group_ref_set_appearance(struct ged *gedp,
 	return 0;
 
     bsg_scene_ref group_ref = ged_draw_registry_group_scene_ref(gedp, ref);
-    if (bsg_scene_ref_is_null(group_ref))
+    if (ged_draw_scene_ref_is_null(group_ref))
 	return 0;
 
-    struct bsg_draw_intent *di = bsg_scene_draw_intent(group_ref);
-    if (!di) {
-	const char *path = bsg_scene_name(group_ref);
-	bsg_scene_set_draw_intent(group_ref,
-		bsg_draw_intent_create(path,
-		    (bsg_draw_mode)settings->draw_mode));
-	di = bsg_scene_draw_intent(group_ref);
-    }
-
-    if (!di)
-	return 0;
-
-    bsg_draw_intent_set_appearance(di, settings);
-    return 1;
+    const char *path = ged_draw_scene_ref_name(group_ref);
+    return ged_draw_scene_ref_set_draw_intent_appearance(group_ref, settings,
+	    path);
 }
 
 
@@ -1453,7 +1435,7 @@ ged_draw_group_scene_ref_dbpath(struct ged *gedp,
 				bsg_scene_ref group_ref,
 				struct db_full_path *out)
 {
-    if (!gedp || bsg_scene_ref_is_null(group_ref) || !out || !gedp->dbip)
+    if (!gedp || ged_draw_scene_ref_is_null(group_ref) || !out || !gedp->dbip)
 	return -1;
     if (ged_draw_group_scene_ref_is_overlay(group_ref))
 	return -1;
@@ -1468,16 +1450,15 @@ ged_draw_group_scene_ref_dbpath(struct ged *gedp,
 int
 ged_draw_group_scene_ref_is_overlay(bsg_scene_ref group_ref)
 {
-    const struct bsg_draw_intent *di = bsg_scene_draw_intent(group_ref);
-    return bsg_draw_intent_is_overlay(di);
+    return ged_draw_scene_ref_draw_intent_is_overlay(group_ref);
 }
 
 
 static int
-_sg_clear_db_groups_in_scope(struct ged *gedp, struct bsg_view *v)
+_sg_clear_db_groups_in_scope(struct ged *gedp, void *view_ctx)
 {
-    bsg_scene_ref base_ref = _sg_scoped_erase_base_ref(gedp, v);
-    if (bsg_scene_ref_is_null(base_ref))
+    bsg_scene_ref base_ref = _sg_scoped_erase_base_ref(gedp, view_ctx);
+    if (ged_draw_scene_ref_is_null(base_ref))
 	return 0;
 
     struct _sg_ref_snapshot snap = {NULL, 0, 0};
@@ -1486,9 +1467,9 @@ _sg_clear_db_groups_in_scope(struct ged *gedp, struct bsg_view *v)
     int cleared = 0;
     for (size_t gi = 0; gi < snap.len; gi++) {
 	bsg_scene_ref group_ref = snap.refs[gi];
-	if (!_sg_group_matches_erase_scope(gedp, group_ref, v, -1))
+	if (!_sg_group_matches_erase_scope(gedp, group_ref, view_ctx, -1))
 	    continue;
-	bsg_scene_free_group(group_ref);
+	ged_draw_scene_ref_free_group(group_ref);
 	cleared++;
     }
 
@@ -1500,7 +1481,7 @@ _sg_clear_db_groups_in_scope(struct ged *gedp, struct bsg_view *v)
 static int
 _sg_clear_all_groups_under(bsg_scene_ref base_ref)
 {
-    if (bsg_scene_ref_is_null(base_ref))
+    if (ged_draw_scene_ref_is_null(base_ref))
 	return 0;
 
     struct _sg_ref_snapshot snap = {NULL, 0, 0};
@@ -1509,14 +1490,22 @@ _sg_clear_all_groups_under(bsg_scene_ref base_ref)
     int cleared = 0;
     for (size_t gi = 0; gi < snap.len; gi++) {
 	bsg_scene_ref group_ref = snap.refs[gi];
-	bsg_scene_free_group_contents(group_ref);
-	bsg_scene_remove_child(base_ref, group_ref);
+	ged_draw_scene_ref_free_group_contents(group_ref);
+	(void)ged_draw_scene_ref_detach(group_ref);
 	ged_draw_scene_ref_release(group_ref);
 	cleared++;
     }
 
     _sg_ref_snapshot_free(&snap);
     return cleared;
+}
+
+
+static int
+_sg_clear_all_groups_root_cb(bsg_scene_ref root_ref, void *UNUSED(userdata))
+{
+    (void)_sg_clear_all_groups_under(root_ref);
+    return 1;
 }
 
 
@@ -1532,13 +1521,13 @@ ged_draw_clear(struct ged *gedp)
 	    void *view_ctx = (void *)BU_PTBL_GET(views, i);
 	    if (!view_ctx || !rt_view_context_is_independent(view_ctx))
 		continue;
-	    bsg_scene_ref scope_ref = _sg_independent_scope_ref(view_ctx, 0);
+	    bsg_scene_ref scope_ref = ged_draw_scene_ref_active_scope(gedp,
+		    view_ctx, 0, 0);
 	    (void)_sg_clear_all_groups_under(scope_ref);
 	}
     }
 
-    bsg_scene_ref root_ref = ged_scene_root_ref(gedp);
-    (void)_sg_clear_all_groups_under(root_ref);
+    (void)ged_draw_scene_root_mutate(gedp, _sg_clear_all_groups_root_cb, NULL);
     ged_draw_registry_free(gedp);
 
     gedp->i->ged_gdp->gd_draw_rev = 0;
@@ -1553,12 +1542,10 @@ ged_draw_clear(struct ged *gedp)
 int
 ged_draw_clear_view(struct ged *gedp, void *view_ctx)
 {
-    struct bsg_view *v = (struct bsg_view *)view_ctx;
-
     if (!gedp)
 	return 0;
 
-    return _sg_clear_db_groups_in_scope(gedp, v);
+    return _sg_clear_db_groups_in_scope(gedp, view_ctx);
 }
 
 
@@ -1567,10 +1554,7 @@ ged_draw_has_groups(struct ged *gedp)
 {
     if (!gedp || !gedp->i || !gedp->i->ged_gdp)
 	return 0;
-    bsg_scene_ref root_ref = ged_scene_root_ref(gedp);
-    if (bsg_scene_ref_is_null(root_ref))
-	return 0;
-    return (bsg_scene_child_count(root_ref) > 0) ? 1 : 0;
+    return ged_draw_scene_root_has_groups(gedp);
 }
 
 
@@ -1579,35 +1563,33 @@ _draw_append_scene_ref_to_group(struct ged *gedp,
 				bsg_scene_ref group_ref,
 				bsg_scene_ref shape_ref)
 {
-    if (bsg_scene_ref_is_null(group_ref) || bsg_scene_ref_is_null(shape_ref))
+    if (ged_draw_scene_ref_is_null(group_ref) || ged_draw_scene_ref_is_null(shape_ref))
 	return;
 
     ged_draw_shape_state *bdata = ged_draw_shape_state_get_scene_ref(shape_ref);
     int fp_len = bdata ? (int)bdata->s_fullpath.fp_len : 0;
 
     bsg_scene_ref attach_ref = ged_draw_shape_source_ref(shape_ref);
-    if (bsg_scene_ref_is_null(attach_ref))
+    if (ged_draw_scene_ref_is_null(attach_ref))
 	attach_ref = shape_ref;
 
     if (!gedp || fp_len == 0) {
-	bsg_scene_append_child(group_ref, attach_ref);
-	bsg_scene_bbox_invalidate(group_ref);
+	(void)ged_draw_scene_ref_append_child(group_ref, attach_ref);
 	return;
     }
 
-    int group_depth = bsg_scene_draw_tree_depth(group_ref);
+    int group_depth = ged_draw_scene_ref_draw_tree_depth(group_ref);
     bsg_scene_ref cur_ref = group_ref;
     for (int d = group_depth; d < fp_len - 1; d++) {
 	const char *comp = bdata->s_fullpath.fp_names[d]->d_namep;
 	bsg_scene_ref child_ref =
 	    _sg_find_or_create_child_group(gedp, cur_ref, comp);
-	if (bsg_scene_ref_is_null(child_ref))
+	if (ged_draw_scene_ref_is_null(child_ref))
 	    break;
 	cur_ref = child_ref;
     }
 
-    bsg_scene_append_child(cur_ref, attach_ref);
-    bsg_scene_bbox_invalidate(cur_ref);
+    (void)ged_draw_scene_ref_append_child(cur_ref, attach_ref);
 }
 
 
@@ -1622,7 +1604,7 @@ ged_draw_group_ref_append_scene_ref(struct ged *gedp,
      * use revision-stamped refs and reject stale handles. */
     ref.scene_revision = 0;
     bsg_scene_ref group_ref = ged_draw_registry_group_scene_ref(gedp, ref);
-    if (bsg_scene_ref_is_null(group_ref) || bsg_scene_ref_is_null(shape_ref))
+    if (ged_draw_scene_ref_is_null(group_ref) || ged_draw_scene_ref_is_null(shape_ref))
 	return 0;
 
     _draw_append_scene_ref_to_group(gedp, group_ref, shape_ref);

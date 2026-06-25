@@ -144,7 +144,12 @@ set(
   QgCanvasState.h
   QgLegacyViewContext.h
   QgLegacyViewDm.h
-  QgLegacyViewSketch.h
+  QgObolDatabaseSyncPrivate.h
+  QgObolDrawSyncPrivate.h
+  QgObolEditPreviewPrivate.h
+  QgObolOverlaySyncPrivate.h
+  QgObolSelectionSyncPrivate.h
+  QgObolViewSyncPrivate.h
   qtcad_resources.qrc
   QgGL.cpp
 )

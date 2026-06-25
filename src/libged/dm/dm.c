@@ -718,7 +718,7 @@ _dm_cmd_attach(void *ds, int argc, const char **argv)
     // We have the display manager - let the view know
     ged_view_context_display_manager_set(target_view, dmp);
     if (target_view == ged_view_active_ctx(gedp))
-	ged_draw_ensure_root(gedp);
+	ged_draw_ensure_root_attached(gedp);
 
     /* Record the framebuffer device corresponding to this active DM type so
      * libged rt can launch a matching standalone fb window without querying

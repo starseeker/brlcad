@@ -659,7 +659,7 @@ _view_cmd_objs(void *bs, int argc, const char **argv)
     if (!ged_draw_view_context_scene_attached(gd->cv)) {
 	void *cv = ged_view_active_ctx(gedp);
 	ged_view_active_ctx_set(gedp, gd->cv);
-	ged_draw_ensure_root(gedp);
+	ged_draw_ensure_root_attached(gedp);
 	ged_view_active_ctx_set(gedp, cv);
     }
 

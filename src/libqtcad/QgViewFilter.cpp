@@ -28,19 +28,21 @@
 #include "qtcad/QgLegacyView.h"
 #include "qtcad/QgView.h"
 #include "qtcad/QgViewFilter.h"
+#include "rt/view.h"
+#include "QgLegacyViewContext.h"
 
 static uint32_t
-qg_obol_snap_kinds_from_legacy_mask(unsigned kinds)
+qg_obol_snap_kinds_from_rt_mask(unsigned kinds)
 {
 	uint32_t obol_kinds = 0;
 
-	if (kinds & QG_LEGACY_VIEW_SNAP_KIND_ENDPOINT)
+	if (kinds & RT_VIEW_SNAP_KIND_ENDPOINT)
 		obol_kinds |= QgObolSnapRecord::ENDPOINT |
 			QgObolSnapRecord::MIDPOINT |
 			QgObolSnapRecord::LINE_NEAREST;
-	if (kinds & QG_LEGACY_VIEW_SNAP_KIND_MIDPOINT)
+	if (kinds & RT_VIEW_SNAP_KIND_MIDPOINT)
 		obol_kinds |= QgObolSnapRecord::MIDPOINT;
-	if (kinds & QG_LEGACY_VIEW_SNAP_KIND_OVERLAY_HANDLE)
+	if (kinds & RT_VIEW_SNAP_KIND_OVERLAY_HANDLE)
 		obol_kinds |= QgObolSnapRecord::CENTER;
 
 	return obol_kinds;
@@ -49,7 +51,15 @@ qg_obol_snap_kinds_from_legacy_mask(unsigned kinds)
 static int
 qg_obol_db_snap_enabled(const qg_legacy_view *v)
 {
-	return qg_legacy_view_db_snap_enabled(v);
+	const void *view_ctx = qg_legacy_view_to_context(v);
+	if (!view_ctx || !rt_view_context_snap_lines_get(view_ctx))
+		return 0;
+
+	int flags = rt_view_context_snap_source_flags_get(view_ctx);
+	if (flags == RT_VIEW_SNAP_TCL)
+		return 0;
+
+	return !flags || (flags & RT_VIEW_SNAP_DB);
 }
 
 static float
@@ -58,15 +68,16 @@ qg_obol_snap_tolerance(const qg_legacy_view *v)
 	if (!v)
 		return 0.0f;
 
-	int width = qg_legacy_view_width_get(v);
-	int height = qg_legacy_view_height_get(v);
+	const void *view_ctx = qg_legacy_view_to_context(v);
+	int width = rt_view_context_width_get(view_ctx);
+	int height = rt_view_context_height_get(view_ctx);
 	if (width <= 0 || height <= 0)
 		return 0.0f;
 
 	double lavg = ((double)width + (double)height) * 0.5;
 	double lratio = 1.0 / lavg;
-	double tol = qg_legacy_view_size_get(v) * lratio *
-		qg_legacy_view_snap_tolerance_factor_get(v);
+	double tol = rt_view_context_size_get(view_ctx) * lratio *
+		rt_view_context_snap_tolerance_factor_get(view_ctx);
 
 	return tol > 0.0 ? (float)tol : 0.0f;
 }
@@ -77,15 +88,17 @@ qg_obol_refine_db_snap(QgView *display, qg_legacy_view *v)
 	if (!display || !qg_obol_db_snap_enabled(v))
 		return;
 
-	uint32_t obol_kinds = qg_obol_snap_kinds_from_legacy_mask(
-		qg_legacy_view_snap_kind_mask_get(v));
+	void *view_ctx = qg_legacy_view_to_context(v);
+	uint32_t obol_kinds = qg_obol_snap_kinds_from_rt_mask(
+		(unsigned)rt_view_context_snap_kind_mask_get(
+			view_ctx));
 	float tolerance = qg_obol_snap_tolerance(v);
 	if (!obol_kinds || tolerance <= 0.0f)
 		return;
 
 	QgObolSnapRecord record;
 	point_t query_point = VINIT_ZERO;
-	if (!qg_legacy_view_current_point_get(v, query_point))
+	if (!rt_view_context_current_point_get(query_point, view_ctx))
 		return;
 
 	SbVec3f query((float)query_point[X],
@@ -97,7 +110,7 @@ qg_obol_refine_db_snap(QgView *display, qg_legacy_view *v)
 	point_t snapped_point = VINIT_ZERO;
 	VSET(snapped_point, (fastf_t)record.point[0],
 		(fastf_t)record.point[1], (fastf_t)record.point[2]);
-	(void)qg_legacy_view_current_point_set(v, snapped_point);
+	(void)rt_view_context_current_point_set(view_ctx, snapped_point);
 }
 
 class QgViewFilter::QgViewFilterPrivate {
@@ -152,7 +165,7 @@ QgViewFilter::view_sync(QEvent *e)
 #endif
 
 	/* Keep retained legacy view state synchronized with the event stream. */
-	qg_legacy_view_mouse_state_set(lv, e_x, e_y);
+	rt_view_context_mouse_state_set(qg_legacy_view_to_context(lv), e_x, e_y);
 	qg_obol_refine_db_snap(m->display, lv);
 
 	/* Modifier keys are typically view-nav gestures, not edit operations. */

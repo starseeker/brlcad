@@ -49,7 +49,7 @@
 #include <bu.h>
 #include "bg/line_layer.h"
 #include "ged/draw.h"
-#include "rt/view_legacy_bsg.h"
+#include "rt/view.h"
 #include <dm.h>
 #include <ged.h>
 
@@ -425,10 +425,10 @@ main(int ac, char *av[])
      * ------------------------------------------------------------------ */
     bu_log("[10] dm_draw_objs headless (NULL dmp)...\n");
     {
-	void *saved_dmp = rt_view_context_display_manager_from_bsg(v);
-	rt_view_context_display_manager_set_bsg(v, NULL);
+	void *saved_dmp = rt_view_context_display_manager_get(v);
+	rt_view_context_display_manager_set(v, NULL);
 	dm_draw_objs(v);   /* must be a no-op, not a crash */
-	rt_view_context_display_manager_set_bsg(v, saved_dmp);
+	rt_view_context_display_manager_set(v, saved_dmp);
     }
 
     /* ------------------------------------------------------------------ *

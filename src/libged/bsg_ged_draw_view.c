@@ -247,28 +247,20 @@ ged_draw_view_context_selection_set_path(
 }
 
 void
-ged_draw_scene_ref_realization_set_bsg_view_policy(bsg_scene_ref ref,
-						   const struct bsg_view *view)
-{
-    if (!view)
-	return;
-
-    ged_draw_view_lod_policy policy;
-    rt_view_context_lod_policy_get(&policy, view);
-    ged_draw_scene_ref_realization_set_view_policy(ref,
-	    policy.csg_enabled,
-	    rt_view_context_scale_get(view),
-	    policy.bot_threshold,
-	    policy.curve_scale,
-	    policy.point_scale);
-}
-
-void
 ged_draw_scene_ref_realization_set_view_context_policy(bsg_scene_ref ref,
 						       const void *view_ctx)
 {
-    ged_draw_scene_ref_realization_set_bsg_view_policy(ref,
-	    (const struct bsg_view *)view_ctx);
+    if (!view_ctx)
+	return;
+
+    ged_draw_view_lod_policy policy;
+    rt_view_context_lod_policy_get(&policy, view_ctx);
+    ged_draw_scene_ref_realization_set_view_policy(ref,
+	    policy.csg_enabled,
+	    rt_view_context_scale_get(view_ctx),
+	    policy.bot_threshold,
+	    policy.curve_scale,
+	    policy.point_scale);
 }
 
 int
@@ -438,7 +430,7 @@ ged_draw_view_context_overlay_name_erase(void *view_ctx, const char *name)
 int
 ged_draw_view_context_overlay_scene_append(void *view_ctx, bsg_scene_ref scene)
 {
-    if (!view_ctx || bsg_scene_ref_is_null(scene))
+    if (!view_ctx || ged_draw_scene_ref_is_null(scene))
 	return 0;
 
     return bsg_overlay_append_scene((struct bsg_view *)view_ctx, scene);
@@ -449,7 +441,7 @@ ged_draw_view_overlay_command_result_owner_set(bsg_scene_ref scene,
 					       const void *owner,
 					       const char *source_path)
 {
-    if (bsg_scene_ref_is_null(scene))
+    if (ged_draw_scene_ref_is_null(scene))
 	return 0;
 
     return bsg_overlay_register_scene_owner(scene, owner,
@@ -458,6 +450,32 @@ ged_draw_view_overlay_command_result_owner_set(bsg_scene_ref scene,
 	    BSG_OVERLAY_LC_PERSISTENT,
 	    BSG_OVERLAY_ORDER_MODEL,
 	    source_path, 0);
+}
+
+bsg_scene_ref
+ged_draw_view_context_overlay_geometry_create(
+	void *view_ctx,
+	const char *name,
+	enum ged_draw_overlay_geometry_kind kind)
+{
+    struct bsg_view *view = (struct bsg_view *)view_ctx;
+    if (!view || !name)
+	return bsg_scene_ref_null();
+
+    switch (kind) {
+	case GED_DRAW_OVERLAY_GEOMETRY_LINE_SET:
+	    return bsg_geometry_ref_as_scene(
+		    bsg_line_set_ref_as_geometry(bsg_line_set_ref_create(view, name)));
+	case GED_DRAW_OVERLAY_GEOMETRY_POINT_SET:
+	    return bsg_geometry_ref_as_scene(
+		    bsg_point_set_ref_as_geometry(bsg_point_set_ref_create(view, name)));
+	case GED_DRAW_OVERLAY_GEOMETRY_INDEXED_FACE_SET:
+	    return bsg_geometry_ref_as_scene(
+		    bsg_indexed_face_set_ref_as_geometry(
+			bsg_indexed_face_set_ref_create(view, name)));
+	default:
+	    return bsg_scene_ref_null();
+    }
 }
 
 bsg_scene_ref

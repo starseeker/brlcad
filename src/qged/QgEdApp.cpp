@@ -37,13 +37,10 @@
 #include "bu/log.h"
 #include "bu/vls.h"
 #include "ged/db_index.h"
+#include "ged/draw.h"
 #include "ged/selection_state.h"
 #include "qtcad/QgGeomImport.h"
 #include "qtcad/QgLegacyView.h"
-#include "qtcad/QgObolDrawSync.h"
-#include "qtcad/QgObolOverlaySync.h"
-#include "qtcad/QgObolSelectionSync.h"
-#include "qtcad/QgObolViewSync.h"
 #include "qtcad/QgPluginCommands.h"
 #include "qtcad/QgPluginInterfaces.h"
 #include "qtcad/QgPluginManager.h"
@@ -52,6 +49,10 @@
 #include "fbserv.h"
 #include "QgEdCategories.h"
 #include "QgEdFilter.h"
+#include "QgObolDrawSyncPrivate.h"
+#include "QgObolOverlaySyncPrivate.h"
+#include "QgObolSelectionSyncPrivate.h"
+#include "QgObolViewSyncPrivate.h"
 
 static int
 qged_line_layer_overlay_handler(struct ged *gedp,
@@ -94,8 +95,8 @@ qged_hud_label_overlay_handler(struct ged *gedp,
 
 static void
 qged_obol_draw_observer(struct ged *gedp,
-	const qg_legacy_view_draw_transaction *txn,
-	const qg_legacy_view_draw_transaction_result *result,
+	const struct ged_draw_transaction *txn,
+	const struct ged_draw_transaction_result *result,
 	void *client_data)
 {
     QgEdApp *a = static_cast<QgEdApp *>(client_data);
@@ -105,13 +106,25 @@ qged_obol_draw_observer(struct ged *gedp,
     QgView *display = a->w->CurrentDisplay();
     if (!display)
 	return;
-    if (!qg_obol_display_accepts_draw_transaction_view(txn, display))
+    if (!qg_obol_display_accepts_ged_draw_transaction_view(txn, display))
 	return;
-    if (!qg_legacy_view_draw_transaction_has_view(txn) &&
+    if (!qg_obol_ged_draw_transaction_has_view(txn) &&
 	    !qg_obol_display_accepts_ged_active_view(gedp, display))
 	return;
 
-    (void)qg_obol_sync_draw_transaction(gedp, txn, result, display);
+    (void)qg_obol_sync_ged_draw_transaction(gedp, txn, result, display);
+}
+
+static int
+qged_apply_redraw_transaction(struct ged *gedp)
+{
+    struct ged_draw_transaction txn =
+	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
+    struct ged_draw_transaction_result result;
+    ged_draw_transaction_result_init(&result);
+    int ret = ged_draw_apply_transaction(gedp, &txn, &result);
+    ged_draw_transaction_result_free(&result);
+    return ret;
 }
 
 static qg_legacy_view *
@@ -358,7 +371,7 @@ QgEdApp::QgEdApp(int &argc, char *argv[], int swrast_mode, int quad_mode) :QAppl
 	    &qged_line_layer_overlay_handler, (void *)this);
     ged_diagnostic_hud_label_handler_set(gedp,
 	    &qged_hud_label_overlay_handler, (void *)this);
-    m_obol_draw_observer_token = qg_legacy_view_draw_observer_add(gedp,
+    m_obol_draw_observer_token = ged_draw_observer_add(gedp,
 	    &qged_obol_draw_observer, (void *)this);
 
     // Unfortunately, there are technical differences involved with
@@ -469,8 +482,7 @@ QgEdApp::QgEdApp(int &argc, char *argv[], int swrast_mode, int quad_mode) :QAppl
 QgEdApp::~QgEdApp() {
     if (mdl && mdl->ged()) {
 	if (m_obol_draw_observer_token) {
-	    qg_legacy_view_draw_observer_remove(mdl->ged(),
-		    m_obol_draw_observer_token);
+	    ged_draw_observer_remove(mdl->ged(), m_obol_draw_observer_token);
 	    m_obol_draw_observer_token = 0;
 	}
 	ged_diagnostic_line_layer_handler_set(mdl->ged(), NULL, NULL);
@@ -499,7 +511,7 @@ QgEdApp::do_view_changed(QgViewUpdateFlags flags)
     QTCAD_SLOT("QgEdApp::do_view_changed", 1);
 
     if (flags & QG_VIEW_DRAWN) {
-	qg_legacy_view_draw_redraw(mdl->ged());
+	qged_apply_redraw_transaction(mdl->ged());
     }
 
     if ((flags & QG_VIEW_SELECT) || (flags & QG_VIEW_DRAWN)) {

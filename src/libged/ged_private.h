@@ -36,12 +36,12 @@
 #include "bg/spsr.h"
 #include "bg/trimesh.h"
 #include "rt/db4.h"
+#include "rt/view.h"
 #include "raytrace.h"
 #include "rt/geom.h"
 #include "bsg/defines.h"
 #include "bsg/scene_object.h"
 #include "bsg/draw_ctx.h"
-#include "bsg/scene_builder.h"
 #include "ged.h"
 #include "include/plugin.h"
 #include "./bsg_ged_draw_private.h"
@@ -85,7 +85,7 @@ struct vd_curve {
 #define VD_CURVE_NULL   ((struct vd_curve *)NULL)
 
 struct ged_drawable {
-    bsg_scene_ref                gd_scene_root;         /**< @brief retained draw-scene root of the drawn-set tree */
+    rt_view_scene_ref            gd_scene_root;         /**< @brief neutral handle for the retained draw-scene root of the drawn-set tree */
     uint64_t                     gd_draw_rev;           /**< @brief  monotonic revision counter; bumped on every structural mutation of the draw tree; reset to 0 by ged_draw_clear */
     struct bsg_draw_ctx          bsg_ctx;               /**< @brief  draw-tree context attached to gd_scene_root; draw_rev points at gd_draw_rev so freeing helpers can bump without gedp */
     struct bu_ptbl               gd_draw_registry;      /**< @brief GED-owned draw record registry; refs store registry ids, not BSG node addresses */
@@ -136,8 +136,8 @@ struct ged_drawable {
 };
 
 __BEGIN_DECLS
-bsg_scene_ref ged_scene_root_ref(struct ged *gedp);
-void ged_scene_root_ref_set(struct ged *gedp, bsg_scene_ref root);
+rt_view_scene_ref ged_scene_root_rt_ref(struct ged *gedp);
+void ged_scene_root_rt_ref_set(struct ged *gedp, rt_view_scene_ref root);
 void ged_scene_root_ref_clear(struct ged *gedp);
 void ged_view_legacy_state_init(struct ged *gedp);
 void ged_view_legacy_state_free(struct ged *gedp);

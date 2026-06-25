@@ -33,8 +33,6 @@
 
 #include "bg/polygon_types.h"
 #include "bu/color.h"
-#include "bsg/scene_builder.h"
-#include "bsg/scene_object.h"
 #include "ged/draw.h"
 #include "ged/defines.h"
 #include "rt/view.h"
@@ -80,7 +78,6 @@ GED_EXPORT extern int ged_draw_view_context_snap_first_candidate(void *view_ctx,
 								 enum ged_draw_view_snap_kind kind,
 								 point_t candidate);
 GED_EXPORT extern void ged_draw_view_context_lod_bounds_callback_set(void *view_ctx);
-GED_EXPORT extern rt_view_scene_ref ged_draw_scene_ref_to_rt_view_ref(bsg_scene_ref ref);
 GED_EXPORT extern rt_view_scene_ref ged_draw_view_context_scene_root_rt_ref(void *view_ctx);
 GED_EXPORT extern int ged_draw_view_context_feature_exists(void *view_ctx,
 							   const char *name);
@@ -93,17 +90,6 @@ GED_EXPORT extern int ged_draw_view_context_feature_visible(void *view_ctx,
 GED_EXPORT extern int ged_draw_view_context_feature_visible_set(void *view_ctx,
 								const char *name,
 								int visible);
-GED_EXPORT extern bsg_scene_ref ged_draw_view_context_overlay_scene_find(void *view_ctx,
-									 const char *name);
-GED_EXPORT extern void ged_draw_view_context_overlay_name_erase(void *view_ctx,
-								const char *name);
-GED_EXPORT extern int ged_draw_view_context_overlay_scene_append(void *view_ctx,
-								 bsg_scene_ref scene);
-GED_EXPORT extern int ged_draw_view_overlay_command_result_owner_set(bsg_scene_ref scene,
-								     const void *owner,
-								     const char *source_path);
-GED_EXPORT extern bsg_scene_ref ged_draw_view_context_overlay_create(void *view_ctx,
-								     const char *name);
 GED_EXPORT extern int ged_draw_view_context_feature_depth(void *view_ctx,
 							  const char *name,
 							  int mode,

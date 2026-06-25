@@ -8,7 +8,7 @@
 
 #include "common.h"
 
-#include "qtcad/QgObolDatabaseSync.h"
+#include "QgObolDatabaseSyncPrivate.h"
 
 #include "brlobol/database_source.h"
 #include "brlobol/view_controller.h"

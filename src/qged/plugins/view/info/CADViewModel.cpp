@@ -32,6 +32,7 @@
 #include "qtcad/QgSignalFlags.h"
 #include "rt/view.h"
 #include "CADViewModel.h"
+#include "QgLegacyViewContext.h"
 
 static qg_legacy_view *
 qged_view_model_view(const QgPluginContext *ctx)
@@ -76,11 +77,12 @@ CADViewModel::refresh(unsigned long long)
     m_root = new QgKeyValNode();
     beginResetModel();
 
-    qg_legacy_view_info_get(v, &view_info);
-    qg_legacy_view_aet_get(v, aet);
-    qg_legacy_view_center_get(v, view_center);
+    const void *view_ctx = qg_legacy_view_to_context(v);
+    rt_view_context_info_get(&view_info, view_ctx);
+    rt_view_context_aet_get(aet, view_ctx);
+    rt_view_context_center_get(view_center, view_ctx);
 
-    const char *view_name = qg_legacy_view_name_get(v);
+    const char *view_name = rt_view_context_name_get(view_ctx);
     standard_nodes.insert("Name", add_pair("Name", view_name ? view_name : "", m_root, i));
     bu_vls_sprintf(&val, "%g", view_info.size);
     standard_nodes.insert("Size", add_pair("Size", bu_vls_cstr(&val), m_root, i));

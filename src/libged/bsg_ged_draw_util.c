@@ -26,33 +26,9 @@
 
 #include <stdarg.h>
 #include <stdlib.h>
-#include <string.h>
 
 #include "bu/vls.h"
 #include "bu/log.h"
-#include "bu/ptbl.h"
-#include "bu/str.h"
-#include "bu/color.h"
-#include "bu/hash.h"
-#include "bsg/appearance.h"
-#include "bsg/defines.h"
-#include "bsg/database_source.h"
-#include "bsg/draw_ctx.h"
-#include "bsg/draw_intent.h"
-#include "bsg/draw_set.h"
-#include "bsg/draw_source.h"
-#include "bsg/field.h"
-#include "bsg/geometry.h"
-#include "bsg/material.h"
-#include "bsg/node.h"
-#include "bsg/payload.h"
-#include "bg/plot3.h"
-#include "bsg/scene_builder.h"
-#include "bsg/scene_object.h"
-#include "bsg/selection.h"
-#include "bsg/view_set.h"
-#include "bsg/view_state.h"
-#include "bg/clip.h"
 
 #include "ged.h"
 #include "ged/draw.h"
@@ -120,7 +96,7 @@ int
 ged_draw_default_mode(const struct ged *gedp)
 {
     if (!gedp || !gedp->i || !gedp->i->ged_gdp)
-	return BSG_DRAW_MODE_WIRE;
+	return GED_DRAW_MODE_WIRE;
     return gedp->i->ged_gdp->gd_shaded_mode;
 }
 

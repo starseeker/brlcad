@@ -15,10 +15,12 @@
 #include "bu/env.h"
 #include "bu/file.h"
 #include "ged.h"
+#include "ged/draw.h"
 #include "ged/selection_state.h"
+#include "QgLegacyViewContext.h"
+#include "QgObolDrawSyncPrivate.h"
+#include "QgObolSelectionSyncPrivate.h"
 #include "qtcad/QgLegacyView.h"
-#include "qtcad/QgObolDrawSync.h"
-#include "qtcad/QgObolSelectionSync.h"
 #include "qtcad/QgView.h"
 #include "raytrace.h"
 #include "wdb.h"
@@ -54,13 +56,13 @@ make_selection_sync_db(const char *dbpath)
 static int
 apply_and_sync(struct ged *gedp,
 	QgView *view,
-	qg_legacy_view_draw_transaction *txn)
+	struct ged_draw_transaction *txn)
 {
-    qg_legacy_view_draw_transaction_result result;
-    qg_legacy_view_draw_result_init(&result);
-    int draw_ret = qg_legacy_view_draw_transaction_apply(gedp, txn, &result);
-    int changed = qg_obol_sync_draw_transaction(gedp, txn, &result, view);
-    qg_legacy_view_draw_result_free(&result);
+    struct ged_draw_transaction_result result;
+    ged_draw_transaction_result_init(&result);
+    int draw_ret = ged_draw_apply_transaction(gedp, txn, &result);
+    int changed = qg_obol_sync_ged_draw_transaction(gedp, txn, &result, view);
+    ged_draw_transaction_result_free(&result);
 
     return draw_ret >= 0 && changed != 0;
 }
@@ -123,23 +125,20 @@ main(int argc, char **argv)
 	FAIL("QgView should expose an Obol controller");
     controller->clearDatabaseSources();
 
-    qg_legacy_view_draw_transaction draw_box;
-    qg_legacy_view_draw_transaction_init(&draw_box,
-	    QG_LEGACY_VIEW_DRAW_TXN_DRAW, "box.s");
-    qg_legacy_view_draw_transaction_view_set(&draw_box, view.view());
+    struct ged_draw_transaction draw_box =
+	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "box.s");
+    draw_box.view = qg_legacy_view_to_context(view.view());
     if (!apply_and_sync(gedp, &view, &draw_box))
 	FAIL("GED wire draw should sync box source into Obol");
 
-    qg_legacy_view_draw_appearance *shaded_appearance =
-	qg_legacy_view_draw_appearance_create(QG_LEGACY_VIEW_DRAW_MODE_SHADED);
-    qg_legacy_view_draw_transaction draw_ball;
-    qg_legacy_view_draw_transaction_init(&draw_ball,
-	    QG_LEGACY_VIEW_DRAW_TXN_DRAW, "ball.s");
-    qg_legacy_view_draw_transaction_view_set(&draw_ball, view.view());
-    qg_legacy_view_draw_transaction_appearance_set(&draw_ball,
-	    shaded_appearance);
+    struct ged_draw_appearance_settings shaded_appearance =
+	GED_DRAW_APPEARANCE_SETTINGS_INIT;
+    shaded_appearance.draw_mode = GED_DRAW_MODE_SHADED;
+    struct ged_draw_transaction draw_ball =
+	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "ball.s");
+    draw_ball.view = qg_legacy_view_to_context(view.view());
+    draw_ball.appearance = &shaded_appearance;
     int drew_ball = apply_and_sync(gedp, &view, &draw_ball);
-    qg_legacy_view_draw_appearance_destroy(shaded_appearance);
     if (!drew_ball)
 	FAIL("GED shaded draw should sync ball source into Obol");
 

@@ -24,36 +24,12 @@
 
 #include "common.h"
 
-#include <stdlib.h>
-#include <string.h>
-
-#include "bu/ptbl.h"
 #include "bu/str.h"
-#include "bu/color.h"
-#include "bu/hash.h"
-#include "bsg/appearance.h"
-#include "bsg/defines.h"
-#include "bsg/database_source.h"
-#include "bsg/draw_ctx.h"
-#include "bsg/draw_intent.h"
-#include "bsg/draw_set.h"
-#include "bsg/draw_source.h"
-#include "bsg/field.h"
-#include "bsg/geometry.h"
-#include "bsg/material.h"
-#include "bsg/node.h"
-#include "bsg/payload.h"
-#include "bg/plot3.h"
-#include "bsg/scene_builder.h"
-#include "bsg/scene_object.h"
-#include "bsg/selection.h"
-#include "bsg/view_set.h"
-#include "bsg/view_state.h"
-#include "bg/clip.h"
 
 #include "ged.h"
 #include "ged/draw.h"
 #include "./ged_private.h"
+#include "./bsg_ged_draw_private.h"
 
 struct ged_draw_highlight_path_prefix_ctx {
     struct ged *gedp;
@@ -73,7 +49,7 @@ struct _highlight_by_name_ctx {
 
 struct _iflag_shape_ctx {
     struct ged *gedp;
-    int iflag;
+    int highlighted;
 };
 
 
@@ -84,18 +60,18 @@ _iflag_shape_record_cb(const struct ged_draw_shape_record *rec, void *ud)
     bsg_scene_ref shape_ref = ctx ?
 	ged_draw_registry_shape_scene_ref(ctx->gedp, rec->ref) :
 	bsg_scene_ref_null();
-    if (!bsg_scene_ref_is_null(shape_ref))
-	bsg_scene_set_highlighted(shape_ref, (ctx->iflag == UP) ? 1 : 0);
+    (void)ged_draw_scene_ref_set_highlighted(shape_ref,
+	    ctx ? ctx->highlighted : 0);
     return 1;
 }
 
 
 static void
-_sg_set_iflag(struct ged *gedp, int iflag)
+_sg_set_highlight_all(struct ged *gedp, int highlighted)
 {
     struct _iflag_shape_ctx ctx;
     ctx.gedp = gedp;
-    ctx.iflag = iflag;
+    ctx.highlighted = highlighted ? 1 : 0;
     ged_draw_foreach_shape_record(gedp, _iflag_shape_record_cb, &ctx);
 }
 
@@ -164,14 +140,13 @@ _sg_set_highlighted_shape_ref(struct ged *gedp, ged_draw_shape_ref ref)
 	return;
     }
 
-    if (!bsg_scene_ref_is_null(old))
-        bsg_scene_set_highlighted(old, 0);
-    if (!bsg_scene_ref_is_null(shape_ref))
-        bsg_scene_set_highlighted(shape_ref, 1);
+    (void)ged_draw_scene_ref_set_highlighted(old, 0);
+    (void)ged_draw_scene_ref_set_highlighted(shape_ref, 1);
 
-    gdp->gd_highlight_token = bsg_scene_ref_is_null(shape_ref) ? 0 : ref.token;
+    gdp->gd_highlight_token =
+	ged_draw_scene_ref_is_null(shape_ref) ? 0 : ref.token;
     gdp->gd_highlight_scene_rev =
-	bsg_scene_ref_is_null(shape_ref) ? 0 : ref.scene_revision;
+	ged_draw_scene_ref_is_null(shape_ref) ? 0 : ref.scene_revision;
 
     /* Every transition is itself a highlight-state change. */
     gdp->gd_highlight_rev++;
@@ -182,19 +157,18 @@ void
 ged_draw_set_highlight_state(struct ged *gedp, int highlighted)
 {
     if (!gedp)
-        return;
-    int iflag = highlighted ? UP : DOWN;
-    if (iflag == DOWN) {
-        /* Fast path: when exactly one shape is highlighted and tracked,
-         * clear only that shape in O(1) rather than sweeping the whole tree. */
-        bsg_scene_ref illum = _sg_highlighted_shape_scene_ref(gedp);
-        if (!bsg_scene_ref_is_null(illum)) {
-            bsg_scene_set_highlighted(illum, 0);
+	return;
+    if (!highlighted) {
+	/* Fast path: when exactly one shape is highlighted and tracked,
+	 * clear only that shape in O(1) rather than sweeping the whole tree. */
+	bsg_scene_ref illum = _sg_highlighted_shape_scene_ref(gedp);
+	if (!ged_draw_scene_ref_is_null(illum)) {
+	    (void)ged_draw_scene_ref_set_highlighted(illum, 0);
 	    _sg_set_highlighted_shape_ref(gedp, GED_DRAW_SHAPE_REF_NULL);
-            return;
-        }
+	    return;
+	}
     }
-    _sg_set_iflag(gedp, iflag);
+    _sg_set_highlight_all(gedp, highlighted);
 }
 
 
@@ -216,8 +190,7 @@ _ged_draw_highlight_path_prefix_cb(const struct ged_draw_shape_record *rec,
 
     bsg_scene_ref shape_ref =
 	ged_draw_registry_shape_scene_ref(ctx->gedp, rec->ref);
-    if (!bsg_scene_ref_is_null(shape_ref)) {
-	bsg_scene_set_highlighted(shape_ref, ctx->highlighted ? 1 : 0);
+    if (ged_draw_scene_ref_set_highlighted(shape_ref, ctx->highlighted)) {
 	ctx->matched++;
     }
     return 1;
@@ -264,10 +237,10 @@ ged_draw_shape_set_highlighted(struct ged *gedp, ged_draw_shape_ref ref, int hig
 	return 0;
 
     bsg_scene_ref shape_ref = ged_draw_registry_shape_scene_ref(gedp, ref);
-    if (bsg_scene_ref_is_null(shape_ref))
+    if (ged_draw_scene_ref_is_null(shape_ref))
 	return 0;
 
-    bsg_scene_set_highlighted(shape_ref, highlighted ? 1 : 0);
+    (void)ged_draw_scene_ref_set_highlighted(shape_ref, highlighted);
     if (!highlighted) {
 	struct ged_drawable *gdp = gedp->i ? gedp->i->ged_gdp : NULL;
 	if (gdp && _sg_highlighted_shape_ref(gdp).token == ref.token)

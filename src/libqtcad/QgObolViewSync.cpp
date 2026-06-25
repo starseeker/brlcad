@@ -8,7 +8,7 @@
 
 #include "common.h"
 
-#include "qtcad/QgObolViewSync.h"
+#include "QgObolViewSyncPrivate.h"
 
 #include "qtcad/QgLegacyView.h"
 #include "qtcad/QgView.h"
@@ -24,20 +24,6 @@ qg_obol_display_accepts_ged_active_view(struct ged *gedp, QgView *display)
 	return 1;
 
     return display->view() == active_view;
-}
-
-int
-qg_obol_display_accepts_draw_transaction_view(
-	const qg_legacy_view_draw_transaction *txn, QgView *display)
-{
-    if (!display)
-	return 0;
-
-    qg_legacy_view *txn_view = qg_legacy_view_draw_transaction_view_get(txn);
-    if (!txn_view)
-	return 1;
-
-    return display->view() == txn_view;
 }
 
 // Local Variables:

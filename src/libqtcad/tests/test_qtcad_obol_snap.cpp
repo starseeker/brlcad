@@ -17,11 +17,14 @@
 #include "bu/env.h"
 #include "bu/file.h"
 #include "ged.h"
+#include "ged/draw.h"
+#include "QgLegacyViewContext.h"
+#include "QgObolDrawSyncPrivate.h"
 #include "qtcad/QgLegacyView.h"
-#include "qtcad/QgObolDrawSync.h"
 #include "qtcad/QgObolSnap.h"
 #include "qtcad/QgView.h"
 #include "qtcad/QgViewFilter.h"
+#include "rt/view.h"
 #include "raytrace.h"
 #include "wdb.h"
 
@@ -97,13 +100,13 @@ make_snap_db(const char *dbpath)
 static int
 apply_and_sync(struct ged *gedp,
 	QgView *view,
-	qg_legacy_view_draw_transaction *txn)
+	struct ged_draw_transaction *txn)
 {
-    qg_legacy_view_draw_transaction_result result;
-    qg_legacy_view_draw_result_init(&result);
-    int draw_ret = qg_legacy_view_draw_transaction_apply(gedp, txn, &result);
-    int changed = qg_obol_sync_draw_transaction(gedp, txn, &result, view);
-    qg_legacy_view_draw_result_free(&result);
+    struct ged_draw_transaction_result result;
+    ged_draw_transaction_result_init(&result);
+    int draw_ret = ged_draw_apply_transaction(gedp, txn, &result);
+    int changed = qg_obol_sync_ged_draw_transaction(gedp, txn, &result, view);
+    ged_draw_transaction_result_free(&result);
 
     return draw_ret >= 0 && changed != 0;
 }
@@ -219,11 +222,12 @@ static void
 set_center_query(qg_legacy_view *view, fastf_t x, fastf_t y, fastf_t z)
 {
     mat_t view2model;
+    void *view_ctx = qg_legacy_view_to_context(view);
     qg_legacy_view_dimensions_set(view, 200, 200);
-    qg_legacy_view_size_set(view, 2.0);
+    rt_view_context_size_set(view_ctx, 2.0);
     MAT_IDN(view2model);
     MAT_DELTAS(view2model, x, y, z);
-    qg_legacy_view_view2model_set(view, view2model);
+    rt_view_context_view2model_set(view_ctx, view2model);
 }
 
 int
@@ -252,10 +256,9 @@ main(int argc, char **argv)
     controller->clearDatabaseSources();
     controller->setViewportSize(200, 200);
 
-    qg_legacy_view_draw_transaction draw_box;
-    qg_legacy_view_draw_transaction_init(&draw_box,
-	    QG_LEGACY_VIEW_DRAW_TXN_DRAW, "box.s");
-    qg_legacy_view_draw_transaction_view_set(&draw_box, view.view());
+    struct ged_draw_transaction draw_box =
+	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "box.s");
+    draw_box.view = qg_legacy_view_to_context(view.view());
     if (!apply_and_sync(gedp, &view, &draw_box))
 	FAIL("GED wire draw should sync box source into Obol");
 
@@ -279,8 +282,9 @@ main(int argc, char **argv)
 	FAIL("qtcad Obol snap setup should not initialize the legacy display manager");
 
     set_center_query(view.view(), 11.02, 11.02, 11.02);
-    qg_legacy_view_snap_source_db_set(view.view());
-    qg_legacy_view_snap_lines_set(view.view(), 1);
+    rt_view_context_snap_source_flags_set(qg_legacy_view_to_context(view.view()),
+	    RT_VIEW_SNAP_DB);
+    rt_view_context_snap_lines_set(qg_legacy_view_to_context(view.view()), 1);
 
     SnapProbeFilter filter;
     filter.set_view_widget(&view);
@@ -288,7 +292,8 @@ main(int argc, char **argv)
     if (!filter.sync(&move))
 	FAIL("qtcad view filter should accept a snap probe mouse event");
     point_t snapped_point = VINIT_ZERO;
-    qg_legacy_view_current_point_get(view.view(), snapped_point);
+    rt_view_context_current_point_get(snapped_point,
+	    qg_legacy_view_to_context(view.view()));
     if (!nearly_equal((float)snapped_point[X], 11.0f) ||
 	    !nearly_equal((float)snapped_point[Y], 11.0f) ||
 	    !nearly_equal((float)snapped_point[Z], 11.0f))
@@ -297,11 +302,13 @@ main(int argc, char **argv)
 	FAIL("qtcad Obol snap refinement should not initialize the legacy display manager");
 
     set_center_query(view.view(), 11.02, 11.02, 11.02);
-    qg_legacy_view_snap_source_view_only_set(view.view());
+    rt_view_context_snap_source_flags_set(qg_legacy_view_to_context(view.view()),
+	    RT_VIEW_SNAP_VIEW);
     QMouseEvent viewScopedMove = left_move_at(100, 100);
     if (!filter.sync(&viewScopedMove))
 	FAIL("qtcad view filter should accept a view-scoped snap probe event");
-    qg_legacy_view_current_point_get(view.view(), snapped_point);
+    rt_view_context_current_point_get(snapped_point,
+	    qg_legacy_view_to_context(view.view()));
     if (nearly_equal((float)snapped_point[X], 11.0f) &&
 	    nearly_equal((float)snapped_point[Y], 11.0f) &&
 	    nearly_equal((float)snapped_point[Z], 11.0f))

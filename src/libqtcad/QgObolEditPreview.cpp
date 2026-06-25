@@ -8,7 +8,7 @@
 
 #include "common.h"
 
-#include "qtcad/QgObolEditPreview.h"
+#include "QgObolEditPreviewPrivate.h"
 
 #include "brlobol/view_controller.h"
 #include "qtcad/QgSignalFlags.h"

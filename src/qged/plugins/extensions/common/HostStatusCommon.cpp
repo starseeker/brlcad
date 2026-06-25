@@ -30,7 +30,9 @@
 #include "qtcad/QgLegacyView.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgSignalFlags.h"
+#include "rt/view.h"
 #include "HostStatusCommon.h"
+#include "QgLegacyViewContext.h"
 
 static qg_legacy_view *
 qged_host_view(const QgPluginContext *ctx)
@@ -57,7 +59,8 @@ qged_host_view_name(QgPluginContext *ctx)
     qg_legacy_view *view = qged_host_view(ctx);
     if (!view)
 	return QStringLiteral("No active view");
-    const char *view_name = qg_legacy_view_name_get(view);
+    const char *view_name = rt_view_context_name_get(
+	    qg_legacy_view_to_context(view));
     if (!view_name)
 	return QStringLiteral("Active view");
     return QString::fromLocal8Bit(view_name);

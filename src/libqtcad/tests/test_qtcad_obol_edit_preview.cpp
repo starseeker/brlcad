@@ -13,7 +13,7 @@
 #include "brlobol/snap_action.h"
 #include "brlobol/view_controller.h"
 #include "brlobol/vlist_shape.h"
-#include "qtcad/QgObolEditPreview.h"
+#include "QgObolEditPreviewPrivate.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgView.h"
 

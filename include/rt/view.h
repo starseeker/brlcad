@@ -69,6 +69,13 @@ typedef struct rt_view_scene_ref {
 #define RT_VIEW_ADJUST_CON_Z  0x040ULL
 #define RT_VIEW_ADJUST_CON_GRID 0x080ULL
 #define RT_VIEW_ADJUST_CON_LINES 0x100ULL
+#define RT_VIEW_REFRESH_VIEW        0x00000001u
+#define RT_VIEW_REFRESH_DRAW        0x00000002u
+#define RT_VIEW_REFRESH_EDIT        0x00000004u
+#define RT_VIEW_REFRESH_FRAMEBUFFER 0x00000008u
+#define RT_VIEW_REFRESH_OVERLAY     0x00000010u
+#define RT_VIEW_REFRESH_FORCE       0x80000000u
+#define RT_VIEW_REFRESH_ALL         0xffffffffu
 #define RT_VIEW_CLEAR_DB    0x01
 #define RT_VIEW_CLEAR_VIEW  0x02
 #define RT_VIEW_CLEAR_LOCAL 0x04
@@ -593,6 +600,25 @@ struct rt_mesh_lod_cache_status {
     unsigned long long cleared_cache_key;
 };
 
+struct rt_view_render_summary {
+    int item_count;
+    int highlighted_count;
+};
+
+struct rt_view_render_export_consistency {
+    int export_record_found;
+    int render_item_found;
+    int backend_node_found;
+    int export_render_consistent;
+    int export_backend_consistent;
+};
+
+struct rt_view_feature_geometry_summary {
+    int exists;
+    size_t point_count;
+    size_t command_count;
+};
+
 #define RT_VIEW_LOD_SETTINGS_INIT { 1.0, 1.0, 1.0, 0 }
 #define RT_VIEW_LOD_POLICY_INIT { RT_VIEW_LOD_AUTO, 0, 0, 0, 0, 0, 1.0, 1.0, 1.0 }
 #define RT_VIEW_INFO_INIT { 1, 1, 1.0, RT_VIEW_LOD_SETTINGS_INIT }
@@ -605,6 +631,9 @@ struct rt_mesh_lod_cache_status {
 #define RT_VIEW_PARAMS_STATE_INIT { 0, 0, 0, 0, 0, 0, 0, {0, 0, 0}, 0 }
 #define RT_MESH_LOD_INFO_INIT { -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, VINIT_ZERO, VINIT_ZERO }
 #define RT_MESH_LOD_CACHE_STATUS_INIT { 0, 0, 0, 0, 0, 0, 0, 0, 0 }
+#define RT_VIEW_RENDER_SUMMARY_INIT { 0, 0 }
+#define RT_VIEW_RENDER_EXPORT_CONSISTENCY_INIT { 0, 0, 0, 0, 0 }
+#define RT_VIEW_FEATURE_GEOMETRY_SUMMARY_INIT { 0, 0, 0 }
 
 RT_EXPORT extern void rt_view_info_init(struct rt_view_info *info);
 RT_EXPORT extern void rt_view_info_sanitize(struct rt_view_info *info);
@@ -621,6 +650,7 @@ RT_EXPORT extern int rt_view_context_width_get(const void *ctx);
 RT_EXPORT extern int rt_view_context_height_get(const void *ctx);
 RT_EXPORT extern int rt_view_context_dimensions_set(void *ctx, int width, int height);
 RT_EXPORT extern int rt_view_context_unit_conversion_set(void *ctx, fastf_t local2base, fastf_t base2local);
+RT_EXPORT extern int rt_view_context_frametime_set(void *ctx, uint64_t frametime);
 RT_EXPORT extern fastf_t rt_view_context_local2base_get(const void *ctx);
 RT_EXPORT extern fastf_t rt_view_context_base2local_get(const void *ctx);
 RT_EXPORT extern fastf_t rt_view_context_scale_get(const void *ctx);
@@ -706,6 +736,7 @@ RT_EXPORT extern int rt_view_context_unique_object_name(struct bu_vls *oname, co
 RT_EXPORT extern int rt_view_context_edit_matrix_set(void *ctx, matp_t edit_mat);
 RT_EXPORT extern int rt_view_context_edit_matrix_clear(void *ctx);
 RT_EXPORT extern uint64_t rt_view_context_frame_revision_get(const void *ctx);
+RT_EXPORT extern uint64_t rt_view_context_frame_revision_bump(void *ctx);
 RT_EXPORT extern int rt_view_context_knobs_state_get(struct rt_view_knobs *knobs, const void *ctx);
 RT_EXPORT extern int rt_view_context_knobs_state_set(void *ctx, const struct rt_view_knobs *knobs);
 RT_EXPORT extern unsigned long long rt_view_context_knobs_hash(void *ctx, struct bu_data_hash_state *state);
@@ -729,6 +760,7 @@ RT_EXPORT extern int rt_view_context_interactive_rect_state_set(void *ctx, const
 RT_EXPORT extern void *rt_view_context_pick_point(void *ctx, int x, int y, int first_only);
 RT_EXPORT extern void *rt_view_context_pick_nearest(void *ctx, int x, int y);
 RT_EXPORT extern void *rt_view_context_pick_rect(void *ctx, int x0, int y0, int x1, int y1);
+RT_EXPORT extern void *rt_view_context_pick_semantic_path(void *ctx, const char *path_pattern);
 RT_EXPORT extern void *rt_view_pick_result_context_create(void);
 RT_EXPORT extern void rt_view_pick_result_context_free(void *result_ctx);
 RT_EXPORT extern size_t rt_view_pick_result_context_count(const void *result_ctx);
@@ -736,6 +768,8 @@ RT_EXPORT extern int rt_view_pick_result_context_path(const void *result_ctx, si
 RT_EXPORT extern fastf_t rt_view_pick_result_context_hit_dist(const void *result_ctx, size_t index);
 RT_EXPORT extern int rt_view_pick_result_context_append_copy(void *dest_ctx, const void *src_ctx, size_t index, fastf_t hit_dist);
 RT_EXPORT extern void *rt_view_pick_result_context_filter_first(const void *src_ctx);
+RT_EXPORT extern int rt_view_context_selection_available(void *ctx);
+RT_EXPORT extern size_t rt_view_context_selection_count(void *ctx);
 RT_EXPORT extern int rt_view_context_selection_set_pick_result_context(void *ctx, const void *result_ctx, rt_view_selection_path_callback_t callback, void *data);
 RT_EXPORT extern int rt_view_context_selection_clear(void *ctx);
 RT_EXPORT extern int rt_view_context_adc_state_get(struct rt_view_adc_state *record, const void *ctx);
@@ -752,6 +786,10 @@ RT_EXPORT extern int rt_view_context_scale_overlay_state_get(struct rt_view_othe
 RT_EXPORT extern int rt_view_context_scale_overlay_state_set(void *ctx, const struct rt_view_other_state *record);
 RT_EXPORT extern int rt_view_context_params_state_get(struct rt_view_params_state *record, const void *ctx);
 RT_EXPORT extern int rt_view_context_params_state_set(void *ctx, const struct rt_view_params_state *record);
+RT_EXPORT extern int rt_view_context_visible_render_summary(void *ctx, struct rt_view_render_summary *summary);
+RT_EXPORT extern int rt_view_context_named_line_render_count(void *ctx, const char *name);
+RT_EXPORT extern int rt_view_context_render_export_consistency(void *ctx, const char *drawn_prefix, struct rt_view_render_export_consistency *summary);
+RT_EXPORT extern int rt_view_context_feature_geometry_summary(void *ctx, const char *name, struct rt_view_feature_geometry_summary *summary);
 RT_EXPORT extern void rt_view_set_context_init(void *view_set_ctx);
 RT_EXPORT extern void rt_view_set_context_free(void *view_set_ctx);
 RT_EXPORT extern struct bu_ptbl *rt_view_set_context_views(void *view_set_ctx);
@@ -761,6 +799,15 @@ RT_EXPORT extern int rt_view_set_context_add(void *view_set_ctx, void *view_ctx)
 RT_EXPORT extern int rt_view_set_context_remove(void *view_set_ctx, void *view_ctx);
 RT_EXPORT extern int rt_view_context_snap_grid_2d(void *ctx, fastf_t *vx, fastf_t *vy);
 RT_EXPORT extern unsigned long long rt_view_context_prepare_tcl_snap(void *ctx);
+RT_EXPORT extern int rt_view_context_measure_candidates(void *ctx, point_t a, point_t b, struct rt_view_measure_result *out);
+RT_EXPORT extern void *rt_view_snap_result_context_create(void);
+RT_EXPORT extern void rt_view_snap_result_context_free(void *result_ctx);
+RT_EXPORT extern size_t rt_view_snap_result_context_count(const void *result_ctx);
+RT_EXPORT extern int rt_view_snap_result_context_point(const void *result_ctx, size_t index, point_t point_out);
+RT_EXPORT extern fastf_t rt_view_snap_result_context_distance(const void *result_ctx, size_t index);
+RT_EXPORT extern unsigned long long rt_view_snap_result_context_kind(const void *result_ctx, size_t index);
+RT_EXPORT extern int rt_view_snap_result_context_source_path(const void *result_ctx, size_t index, struct bu_vls *path_out);
+RT_EXPORT extern int rt_view_context_snap_candidates_result(void *ctx, point_t sample, double tol, unsigned long long kinds, void *out_ctx);
 RT_EXPORT extern int rt_view_context_snap_point_2d(void *ctx, fastf_t *vx, fastf_t *vy, unsigned long long kinds);
 RT_EXPORT extern int rt_view_context_snap_first_candidate(void *ctx, const point_t sample, unsigned long long kinds, point_t candidate);
 RT_EXPORT extern int rt_view_context_snap_lines_get(const void *ctx);
@@ -777,6 +824,7 @@ RT_EXPORT extern int rt_view_context_lod_policy_apply(void *ctx, const struct rt
 RT_EXPORT extern int rt_view_context_lod_policy_copy(void *dst_ctx, const void *src_ctx);
 RT_EXPORT extern int rt_view_context_lod_bounds_update(void *ctx);
 RT_EXPORT extern int rt_view_context_lod_bounds_callback_set(void *ctx);
+RT_EXPORT extern int rt_view_context_lod_bounds_callback_is(const void *ctx);
 RT_EXPORT extern void *rt_view_context_bounds_update_suspend(void *ctx);
 RT_EXPORT extern int rt_view_context_bounds_update_restore(void *ctx, void *state_ctx, int refresh_bounds);
 RT_EXPORT extern rt_view_scene_ref rt_view_scene_ref_null(void);

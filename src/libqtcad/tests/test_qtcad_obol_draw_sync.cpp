@@ -12,9 +12,11 @@
 #include "bu/env.h"
 #include "bu/file.h"
 #include "ged.h"
+#include "ged/draw.h"
+#include "QgLegacyViewContext.h"
+#include "QgObolDatabaseSyncPrivate.h"
+#include "QgObolDrawSyncPrivate.h"
 #include "qtcad/QgLegacyView.h"
-#include "qtcad/QgObolDatabaseSync.h"
-#include "qtcad/QgObolDrawSync.h"
 #include "qtcad/QgView.h"
 #include "raytrace.h"
 #include "wdb.h"
@@ -97,8 +99,8 @@ struct draw_observer_sync_context {
 
 static void
 test_draw_observer(struct ged *gedp,
-	const qg_legacy_view_draw_transaction *txn,
-	const qg_legacy_view_draw_transaction_result *result,
+	const struct ged_draw_transaction *txn,
+	const struct ged_draw_transaction_result *result,
 	void *client_data)
 {
     struct draw_observer_sync_context *ctx =
@@ -106,21 +108,21 @@ test_draw_observer(struct ged *gedp,
     if (!ctx || !ctx->view)
 	return;
     ctx->calls++;
-    ctx->changed += qg_obol_sync_draw_transaction(gedp, txn, result,
+    ctx->changed += qg_obol_sync_ged_draw_transaction(gedp, txn, result,
 	    ctx->view);
 }
 
 static int
 apply_and_sync(struct ged *gedp,
 	QgView *view,
-	qg_legacy_view_draw_transaction *txn,
+	struct ged_draw_transaction *txn,
 	int expect_changed)
 {
-    qg_legacy_view_draw_transaction_result result;
-    qg_legacy_view_draw_result_init(&result);
-    int draw_ret = qg_legacy_view_draw_transaction_apply(gedp, txn, &result);
-    int changed = qg_obol_sync_draw_transaction(gedp, txn, &result, view);
-    qg_legacy_view_draw_result_free(&result);
+    struct ged_draw_transaction_result result;
+    ged_draw_transaction_result_init(&result);
+    int draw_ret = ged_draw_apply_transaction(gedp, txn, &result);
+    int changed = qg_obol_sync_ged_draw_transaction(gedp, txn, &result, view);
+    ged_draw_transaction_result_free(&result);
 
     if (draw_ret < 0)
 	return 0;
@@ -153,8 +155,8 @@ main(int argc, char **argv)
     controller->clearDatabaseSources();
 
     struct draw_observer_sync_context obs = {&view, 0, 0};
-    uintptr_t observerToken =
-	qg_legacy_view_draw_observer_add(gedp, test_draw_observer, &obs);
+    ged_draw_observer_token observerToken =
+	ged_draw_observer_add(gedp, test_draw_observer, &obs);
     if (!observerToken)
 	FAIL("GED draw observer should register for qtcad Obol draw sync");
 
@@ -182,8 +184,9 @@ main(int argc, char **argv)
     if (!camera)
 	FAIL("qtcad Obol controller should expose a camera for view sync");
     point_t offcenter = {100.0, 0.0, 0.0};
-    qg_legacy_view_center_vec_set(view.view(), offcenter);
-    qg_legacy_view_scale_set(view.view(), 250.0);
+    void *view_ctx = qg_legacy_view_to_context(view.view());
+    rt_view_context_center_set(view_ctx, offcenter);
+    rt_view_context_scale_set(view_ctx, 250.0);
     view.need_update(QG_VIEW_REFRESH);
     SbVec3f offTargetCamera = camera->position.getValue();
     if (offTargetCamera[0] < 50.0f)
@@ -213,14 +216,13 @@ main(int argc, char **argv)
 	FAIL("real GED erase command should notify and sync qtcad Obol");
     if (controller->getDatabaseSourceCount() != 0)
 	FAIL("observer-synced GED erase should remove Obol database sources");
-    if (qg_legacy_view_draw_observer_remove(gedp, observerToken) != 1)
+    if (ged_draw_observer_remove(gedp, observerToken) != 1)
 	FAIL("GED draw observer should unregister after qtcad Obol sync test");
     controller->clearDatabaseSources();
 
-    qg_legacy_view_draw_transaction draw_box;
-    qg_legacy_view_draw_transaction_init(&draw_box,
-	    QG_LEGACY_VIEW_DRAW_TXN_DRAW, "box.s");
-    qg_legacy_view_draw_transaction_view_set(&draw_box, view.view());
+    struct ged_draw_transaction draw_box =
+	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "box.s");
+    draw_box.view = qg_legacy_view_to_context(view.view());
     if (!apply_and_sync(gedp, &view, &draw_box, 1))
 	FAIL("GED draw should sync a wire Obol database source");
     if (controller->getDatabaseSourceCount() != 1)
@@ -240,25 +242,22 @@ main(int argc, char **argv)
     if (visibleImage.isNull() || lit_pixel_count(visibleImage) < 10)
 	FAIL("Obol-synced GED draw should be visible through qtcad capture");
 
-    qg_legacy_view_draw_transaction erase_box;
-    qg_legacy_view_draw_transaction_init(&erase_box,
-	    QG_LEGACY_VIEW_DRAW_TXN_ERASE, "box.s");
-    qg_legacy_view_draw_transaction_view_set(&erase_box, view.view());
+    struct ged_draw_transaction erase_box =
+	ged_draw_transaction_make(GED_DRAW_TXN_ERASE, "box.s");
+    erase_box.view = qg_legacy_view_to_context(view.view());
     if (!apply_and_sync(gedp, &view, &erase_box, 1))
 	FAIL("GED erase should remove an Obol database source");
     if (controller->getDatabaseSourceCount() != 0)
 	FAIL("Obol draw sync should remove erased database sources");
 
-    qg_legacy_view_draw_appearance *shaded_appearance =
-	qg_legacy_view_draw_appearance_create(QG_LEGACY_VIEW_DRAW_MODE_SHADED);
-    qg_legacy_view_draw_transaction draw_ball;
-    qg_legacy_view_draw_transaction_init(&draw_ball,
-	    QG_LEGACY_VIEW_DRAW_TXN_DRAW, "ball.s");
-    qg_legacy_view_draw_transaction_view_set(&draw_ball, view.view());
-    qg_legacy_view_draw_transaction_appearance_set(&draw_ball,
-	    shaded_appearance);
+    struct ged_draw_appearance_settings shaded_appearance =
+	GED_DRAW_APPEARANCE_SETTINGS_INIT;
+    shaded_appearance.draw_mode = GED_DRAW_MODE_SHADED;
+    struct ged_draw_transaction draw_ball =
+	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "ball.s");
+    draw_ball.view = qg_legacy_view_to_context(view.view());
+    draw_ball.appearance = &shaded_appearance;
     int drew_ball = apply_and_sync(gedp, &view, &draw_ball, 1);
-    qg_legacy_view_draw_appearance_destroy(shaded_appearance);
     if (!drew_ball)
 	FAIL("GED shaded draw should sync a shaded Obol database source");
     source = controller->getDatabaseSource(0);
@@ -270,17 +269,16 @@ main(int argc, char **argv)
 	FAIL("shaded Obol database source should preserve draw mode and mesh geometry");
 
     const char *paths[2] = {"box.s", "ball.s"};
-    qg_legacy_view_draw_appearance *wire_appearance =
-	qg_legacy_view_draw_appearance_create(QG_LEGACY_VIEW_DRAW_MODE_WIRE);
-    qg_legacy_view_draw_transaction draw_both;
-    qg_legacy_view_draw_transaction_init(&draw_both,
-	    QG_LEGACY_VIEW_DRAW_TXN_DRAW, NULL);
-    qg_legacy_view_draw_transaction_view_set(&draw_both, view.view());
-    qg_legacy_view_draw_transaction_paths_set(&draw_both, paths, 2);
-    qg_legacy_view_draw_transaction_appearance_set(&draw_both,
-	    wire_appearance);
+    struct ged_draw_appearance_settings wire_appearance =
+	GED_DRAW_APPEARANCE_SETTINGS_INIT;
+    wire_appearance.draw_mode = GED_DRAW_MODE_WIRE;
+    struct ged_draw_transaction draw_both =
+	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, NULL);
+    draw_both.view = qg_legacy_view_to_context(view.view());
+    draw_both.paths = paths;
+    draw_both.path_count = 2;
+    draw_both.appearance = &wire_appearance;
     int drew_both = apply_and_sync(gedp, &view, &draw_both, 1);
-    qg_legacy_view_draw_appearance_destroy(wire_appearance);
     if (!drew_both)
 	FAIL("multi-path GED draw should sync multiple Obol database sources");
     if (controller->getDatabaseSourceCount() != 2)
@@ -306,19 +304,17 @@ main(int argc, char **argv)
     controller->clearDatabaseSources();
     if (controller->getDatabaseSourceCount() != 0)
 	FAIL("test setup should clear Obol sources before full redraw sync");
-    qg_legacy_view_draw_transaction redraw_all;
-    qg_legacy_view_draw_transaction_init(&redraw_all,
-	    QG_LEGACY_VIEW_DRAW_TXN_REDRAW, NULL);
-    qg_legacy_view_draw_transaction_view_set(&redraw_all, view.view());
+    struct ged_draw_transaction redraw_all =
+	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
+    redraw_all.view = qg_legacy_view_to_context(view.view());
     if (!apply_and_sync(gedp, &view, &redraw_all, 1))
 	FAIL("GED redraw should rebuild Obol sources from retained draw state");
     if (controller->getDatabaseSourceCount() != 2)
 	FAIL("Obol full redraw sync should rebuild retained GED draw paths");
 
-    qg_legacy_view_draw_transaction clear_all;
-    qg_legacy_view_draw_transaction_init(&clear_all,
-	    QG_LEGACY_VIEW_DRAW_TXN_CLEAR, NULL);
-    qg_legacy_view_draw_transaction_view_set(&clear_all, view.view());
+    struct ged_draw_transaction clear_all =
+	ged_draw_transaction_make(GED_DRAW_TXN_CLEAR, NULL);
+    clear_all.view = qg_legacy_view_to_context(view.view());
     if (!apply_and_sync(gedp, &view, &clear_all, 1))
 	FAIL("GED clear should clear Obol database sources");
     if (controller->getDatabaseSourceCount() != 0)

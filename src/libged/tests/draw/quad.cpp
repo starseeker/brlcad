@@ -32,7 +32,6 @@
 #include <bu.h>
 #include <icv.h>
 #include <rt/view.h>
-#include <rt/view_legacy_bsg.h>
 #define DM_WITH_RT
 #include <dm.h>
 #include <ged.h>
@@ -84,7 +83,7 @@ dm_refresh(struct ged *gedp, int vnum)
     txn.view = v;
     ged_draw_apply_transaction(gedp, &txn, NULL);
 
-    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(v);
     /* Ensure rendering goes to this view's DM context, not the last-active one.
      * With multiple DMs (e.g. quad views), each has its own OSMesa context.
      * Without making the correct context current here, dm_set_bg and
@@ -154,8 +153,8 @@ img_cmp(int vnum, int id, struct ged *gedp, const char *cdir, bool clear, int so
     void *v = views ? BU_PTBL_GET(views, vnum) : NULL;
     if (!v)
 	bu_exit(EXIT_FAILURE, "Invalid view specifier: %d\n", vnum);
-    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
-    int cnum = rt_view_context_is_independent_bsg(v) ? vnum : -1;
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(v);
+    int cnum = rt_view_context_is_independent(v) ? vnum : -1;
 
     const char *s_av[4] = {NULL};
     s_av[0] = "screengrab";
@@ -326,9 +325,9 @@ vline(struct ged *gedp, int l_id, int x0, int y0, int z0, int x1, int y1, int z1
     if (ged_exec_view(gedp, 9, s_av) & BRLCAD_ERROR)
 	bu_exit(EXIT_FAILURE, "failed to append shared line %s: %s\n", bu_vls_cstr(&lname), bu_vls_cstr(gedp->ged_result_str));
 
-    struct rt_view_feature_geometry_summary_bsg geom_summary =
-	RT_VIEW_FEATURE_GEOMETRY_SUMMARY_BSG_INIT;
-    if (!rt_view_context_feature_geometry_summary_bsg(ged_view_active_ctx(gedp),
+    struct rt_view_feature_geometry_summary geom_summary =
+	RT_VIEW_FEATURE_GEOMETRY_SUMMARY_INIT;
+    if (!rt_view_context_feature_geometry_summary(ged_view_active_ctx(gedp),
 	    bu_vls_cstr(&lname), &geom_summary) ||
 	    !geom_summary.exists)
 	bu_exit(EXIT_FAILURE, "shared line %s was not registered as a feature\n", bu_vls_cstr(&lname));
@@ -338,7 +337,7 @@ vline(struct ged *gedp, int l_id, int x0, int y0, int z0, int x1, int y1, int z1
     struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	void *v = BU_PTBL_GET(views, i);
-	render_count += rt_view_context_named_line_render_count_bsg(v,
+	render_count += rt_view_context_named_line_render_count(v,
 		bu_vls_cstr(&lname));
     }
     if (render_count < 1)
@@ -471,7 +470,7 @@ main(int ac, char *av[]) {
 
     // We don't want the default GED views for this test
     void *view_set_ctx = ged_view_set_ctx(gedp);
-    rt_view_set_context_remove_bsg(view_set_ctx, NULL);
+    rt_view_set_context_remove(view_set_ctx, NULL);
 
     // Set callback so database changes notify public GED services.
     db_add_changed_clbk(gedp->dbip, &ged_changed_callback, (void *)gedp);
@@ -484,11 +483,11 @@ main(int ac, char *av[]) {
     for (size_t i = 0; i < 4; i++) {
 	char view_name[16];
 	snprintf(view_name, sizeof(view_name), "V%zd", i);
-	void *v = rt_view_context_create_with_set_bsg(view_set_ctx);
+	void *v = rt_view_context_create_with_set(view_set_ctx);
 	if (!i)
 	    ged_view_active_ctx_set(gedp, v);
-	rt_view_context_name_set_bsg(v, view_name);
-	rt_view_set_context_add_bsg(view_set_ctx, v);
+	rt_view_context_name_set(v, view_name);
+	rt_view_set_context_add(view_set_ctx, v);
 	ged_view_context_owned_add(gedp, v);
 
 	/* To generate images that will allow us to check if the drawing
@@ -504,7 +503,7 @@ main(int ac, char *av[]) {
 	s_av[6] = NULL;
 	ged_exec_dm(gedp, 6, s_av);
 
-	struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
+	struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(v);
 	dm_set_width(dmp, 512);
 	dm_set_height(dmp, 512);
 
@@ -515,10 +514,10 @@ main(int ac, char *av[]) {
 	fastf_t windowbounds[6] = { -1, 1, -1, 1, -100, 100 };
 	dm_set_win_bounds(dmp, windowbounds);
 
-	dm_set_vp(dmp, rt_view_context_scale_storage_from_bsg(v));
-	rt_view_context_display_manager_set_bsg(v, dmp);
-	rt_view_context_dimensions_set_bsg(v, dm_get_width(dmp), dm_get_height(dmp));
-	rt_view_context_unit_conversion_set_bsg(v, gedp->dbip->dbi_local2base,
+	dm_set_vp(dmp, rt_view_context_scale_storage_get(v));
+	rt_view_context_display_manager_set(v, dmp);
+	rt_view_context_dimensions_set(v, dm_get_width(dmp), dm_get_height(dmp));
+	rt_view_context_unit_conversion_set(v, gedp->dbip->dbi_local2base,
 	    gedp->dbip->dbi_base2local);
 
 	// The default (fast) wireframe has some differences from

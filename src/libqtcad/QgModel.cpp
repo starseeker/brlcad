@@ -53,7 +53,9 @@
 #include "bu/hash.h"
 #include "bu/sort.h"
 #include "bu/time.h"
+#include "bu/vls.h"
 #include "ged/db_index.h"
+#include "ged/draw.h"
 #include "ged/event_txn.h"
 #include "ged/selection_state.h"
 #include "raytrace.h"
@@ -65,9 +67,17 @@
 #include "qtcad/QgSession.h"
 #include "qtcad/QgUtil.h"
 #include "qtcad/QgSignalFlags.h"
+#include "QgLegacyViewContext.h"
 
 /* Validate the character constant stored in QgItem::op matches the enum. */
 static_assert(DB_OP_UNION == 'u', "DB_OP_UNION enum value changed; update QgItem::op default in QgModel.h");
+
+struct QgModelDrawObserverAccess {
+	static void callback(struct ged *gedp,
+			     const struct ged_draw_transaction *txn,
+			     const struct ged_draw_transaction_result *result,
+			     void *client_data);
+};
 
 static void
 qgmodel_append_unique_path(std::vector<std::string> &paths, const char *path)
@@ -147,6 +157,23 @@ qgmodel_active_view(const QgModel *model)
 {
 	QgSession *session = model ? model->session() : nullptr;
 	return session ? session->activeView() : nullptr;
+}
+
+static void *
+qgmodel_active_view_context(const QgModel *model)
+{
+	return qg_legacy_view_to_context(qgmodel_active_view(model));
+}
+
+static int
+qgmodel_apply_draw_transaction(struct ged *gedp,
+			       struct ged_draw_transaction *txn)
+{
+	struct ged_draw_transaction_result result;
+	ged_draw_transaction_result_init(&result);
+	int ret = ged_draw_apply_transaction(gedp, txn, &result);
+	ged_draw_transaction_result_free(&result);
+	return ret;
 }
 
 static bool
@@ -410,8 +437,8 @@ QgModel::QgModel(QObject *p, const char *npath)
 	items->clear();
 	itemIndexClear();
 
-	draw_observer_token = qg_legacy_view_draw_observer_add(gedp,
-		&QgModel::drawObserverCallback, this);
+	draw_observer_token = ged_draw_observer_add(gedp,
+		&QgModelDrawObserverAccess::callback, this);
 	event_observer_token = ged_event_observer_add(gedp,
 		GED_EVENT_OBSERVER_POST_RECONCILE,
 		&QgModel::eventObserverCallback, this);
@@ -438,7 +465,7 @@ QgModel::~QgModel()
 	qgmodel_draw_timing_stats.erase(this);
 
 	if (m_session && m_session->ged() && draw_observer_token) {
-		qg_legacy_view_draw_observer_remove(m_session->ged(),
+		ged_draw_observer_remove(m_session->ged(),
 			draw_observer_token);
 		draw_observer_token = 0;
 	}
@@ -2117,10 +2144,13 @@ QgModel::notifyDrawnPathChanged(const char *path)
 
 void
 QgModel::notifyDrawnTransactionChanged(
-	const qg_legacy_view_draw_transaction_result *result,
+	const void *result_ctx,
 	const char *fallback_path)
 {
-	const char *names = qg_legacy_view_draw_result_names(result);
+	const struct ged_draw_transaction_result *result =
+		static_cast<const struct ged_draw_transaction_result *>(result_ctx);
+	const char *names = (result && BU_VLS_IS_INITIALIZED(&result->names)) ?
+		bu_vls_cstr(&result->names) : nullptr;
 	if (names && names[0]) {
 		std::vector<std::string> paths;
 		qgmodel_append_unique_paths_from_words(paths, names);
@@ -2155,19 +2185,26 @@ QgModel::flushPendingDrawNotifications()
 
 void
 QgModel::handleDrawTransactionEvent(
-	const qg_legacy_view_draw_transaction *txn,
-	const qg_legacy_view_draw_transaction_result *result)
+	const void *txn_ctx,
+	const void *result_ctx)
 {
+	const struct ged_draw_transaction *txn =
+		static_cast<const struct ged_draw_transaction *>(txn_ctx);
+	const struct ged_draw_transaction_result *result =
+		static_cast<const struct ged_draw_transaction_result *>(result_ctx);
 	draw_observer_event_count++;
 
-	if (qg_legacy_view_draw_transaction_is_view_only(txn)) {
+	if (txn && (txn->kind == GED_DRAW_TXN_MATERIAL_CHANGED ||
+		txn->kind == GED_DRAW_TXN_REFRESH_MATERIAL_COLORS)) {
 		pending_draw_event_view_only = 1;
 		return;
 	}
 
 	if (draw_observer_defer_depth > 0) {
 		int recorded = 0;
-		const char *names = qg_legacy_view_draw_result_names(result);
+		const char *names =
+			(result && BU_VLS_IS_INITIALIZED(&result->names)) ?
+			bu_vls_cstr(&result->names) : nullptr;
 		if (names && names[0]) {
 			size_t before = pending_draw_event_paths.size();
 			qgmodel_append_unique_paths_from_words(pending_draw_event_paths,
@@ -2175,16 +2212,16 @@ QgModel::handleDrawTransactionEvent(
 			if (pending_draw_event_paths.size() > before)
 				recorded = 1;
 		}
-		const char *path = qg_legacy_view_draw_transaction_path(txn);
+		const char *path = txn ? txn->path : nullptr;
 		if (!recorded && path && path[0]) {
 			qgmodel_append_unique_path(pending_draw_event_paths, path);
 			recorded = 1;
 		}
-		int path_count = qg_legacy_view_draw_transaction_path_count(txn);
+		int path_count = (txn && txn->paths && txn->path_count > 0) ?
+			txn->path_count : 0;
 		if (!recorded && path_count > 0) {
 			for (int i = 0; i < path_count; i++) {
-				const char *mpath =
-					qg_legacy_view_draw_transaction_path_at(txn, i);
+				const char *mpath = txn->paths[i];
 				if (mpath && mpath[0]) {
 					qgmodel_append_unique_path(pending_draw_event_paths, mpath);
 					recorded = 1;
@@ -2197,7 +2234,7 @@ QgModel::handleDrawTransactionEvent(
 	}
 
 	notifyDrawnTransactionChanged(result,
-		qg_legacy_view_draw_transaction_path(txn));
+		txn ? txn->path : nullptr);
 }
 
 
@@ -2362,10 +2399,10 @@ QgModel::handleDatabaseEventTxn(const struct ged_event *events,
 
 
 void
-QgModel::drawObserverCallback(struct ged *gedp,
-			      const qg_legacy_view_draw_transaction *txn,
-			      const qg_legacy_view_draw_transaction_result *result,
-			      void *client_data)
+QgModelDrawObserverAccess::callback(struct ged *gedp,
+				    const struct ged_draw_transaction *txn,
+				    const struct ged_draw_transaction_result *result,
+				    void *client_data)
 {
 	(void)gedp;
 
@@ -2438,7 +2475,7 @@ QgModel::run_cmd(struct bu_vls *msg, int argc, const char **argv)
 {
 	struct ged *gedp = m_session->ged();
 	model_dbip = gedp->dbip;
-	uint64_t draw_rev_before = qg_legacy_view_draw_scene_revision(gedp);
+	uint64_t draw_rev_before = ged_draw_scene_revision(gedp);
 	uint64_t draw_event_count_before = draw_observer_event_count;
 	uint64_t db_event_count_before = event_observer_event_count;
 
@@ -2513,7 +2550,7 @@ QgModel::run_cmd(struct bu_vls *msg, int argc, const char **argv)
 		g_update(gedp->dbip);
 	}
 
-	uint64_t draw_rev_after = qg_legacy_view_draw_scene_revision(gedp);
+	uint64_t draw_rev_after = ged_draw_scene_revision(gedp);
 	if (draw_rev_after != draw_rev_before ||
 		draw_observer_event_count != draw_event_count_before) {
 		if (draw_observer_event_count != draw_event_count_before)
@@ -2543,9 +2580,9 @@ QgModel::drawnPathState(const char *path) const
 		return 0;
 
 	struct ged *gedp = m_session ? m_session->ged() : NULL;
-	qg_legacy_view *view = qgmodel_active_view(this);
-	return (gedp && view) ? qg_legacy_view_draw_path_state(gedp, view,
-		path, -1) : 0;
+	void *view_ctx = qgmodel_active_view_context(this);
+	return (gedp && view_ctx) ? ged_draw_path_state(gedp, view_ctx, path,
+		-1) : 0;
 }
 
 int
@@ -2570,8 +2607,8 @@ QgModel::drawPaths(const std::vector<std::string> &paths)
 {
 	QTCAD_SLOT("QgModel::drawPaths", 1);
 	struct ged *gedp = m_session ? m_session->ged() : NULL;
-	qg_legacy_view *view = qgmodel_active_view(this);
-	if (!gedp || !view || paths.empty())
+	void *view_ctx = qgmodel_active_view_context(this);
+	if (!gedp || !view_ctx || paths.empty())
 		return BRLCAD_ERROR;
 
 	std::vector<const char *> draw_paths;
@@ -2588,12 +2625,12 @@ QgModel::drawPaths(const std::vector<std::string> &paths)
 		qgmodel_draw_timing_stats_for(this).draw_calls++;
 	int64_t blank_slate_start_us = timing_enabled ?
 		bu_gettime() : 0;
-	int blank_slate = !qg_legacy_view_draw_has_paths(gedp, view, -1);
+	int blank_slate = !ged_draw_has_paths(gedp, view_ctx, -1);
 	if (timing_enabled)
 		qgmodel_draw_timing_stats_for(this).blank_slate_check_us +=
 			(uint64_t)(bu_gettime() - blank_slate_start_us);
 
-	uint64_t draw_rev_before = qg_legacy_view_draw_scene_revision(gedp);
+	uint64_t draw_rev_before = ged_draw_scene_revision(gedp);
 	uint64_t draw_event_count_before = draw_observer_event_count;
 	int manage_draw_notifications = (draw_observer_defer_depth == 0);
 	if (manage_draw_notifications) {
@@ -2604,14 +2641,19 @@ QgModel::drawPaths(const std::vector<std::string> &paths)
 	draw_observer_defer_depth++;
 	int64_t transaction_start_us = timing_enabled ?
 		bu_gettime() : 0;
-	int ret = qg_legacy_view_draw_paths_apply(gedp, view,
-		draw_paths.data(), (int)draw_paths.size(), blank_slate);
+	struct ged_draw_transaction txn =
+		ged_draw_transaction_make(GED_DRAW_TXN_DRAW, NULL);
+	txn.view = view_ctx;
+	txn.paths = draw_paths.data();
+	txn.path_count = (int)draw_paths.size();
+	txn.autoview = blank_slate ? 1 : 0;
+	int ret = qgmodel_apply_draw_transaction(gedp, &txn);
 	if (timing_enabled)
 		qgmodel_draw_timing_stats_for(this).transaction_us +=
 			(uint64_t)(bu_gettime() - transaction_start_us);
 	draw_observer_defer_depth--;
 
-	uint64_t draw_rev_after = qg_legacy_view_draw_scene_revision(gedp);
+	uint64_t draw_rev_after = ged_draw_scene_revision(gedp);
 	int draw_events_seen = (draw_observer_event_count !=
 		draw_event_count_before);
 	int draw_changed = (ret > 0 || draw_events_seen ||
@@ -2669,11 +2711,14 @@ QgModel::erase(const char *inst_path)
 {
 	QTCAD_SLOT("QgModel::erase", 1);
 	struct ged *gedp = m_session ? m_session->ged() : NULL;
-	qg_legacy_view *view = qgmodel_active_view(this);
-	if (!gedp || !view || !inst_path || !inst_path[0])
+	void *view_ctx = qgmodel_active_view_context(this);
+	if (!gedp || !view_ctx || !inst_path || !inst_path[0])
 		return BRLCAD_ERROR;
 
-	int ret = qg_legacy_view_draw_erase_path_apply(gedp, view, inst_path);
+	struct ged_draw_transaction txn =
+		ged_draw_transaction_make(GED_DRAW_TXN_ERASE, inst_path);
+	txn.view = view_ctx;
+	int ret = qgmodel_apply_draw_transaction(gedp, &txn);
 	if (ret < 0)
 		return BRLCAD_ERROR;
 

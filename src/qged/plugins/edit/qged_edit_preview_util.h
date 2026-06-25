@@ -29,7 +29,7 @@
 
 #include "bg/defines.h"
 #include "bu/malloc.h"
-#include "qtcad/QgObolEditPreview.h"
+#include "QgObolEditPreviewPrivate.h"
 #include "vmath.h"
 #include "rt/db_internal.h"
 #include "rt/geom.h"

@@ -26,12 +26,14 @@
 
 #include "common.h"
 
+#include "QgLegacyViewContext.h"
 #include "qtcad/QgCanvasBase.h"
 #include "qtcad/QgGL.h"
 #include "qtcad/QgSW.h"
 #include "qtcad/QgView.h"
 #include "qtcad/QgViewFilter.h"
 #include "qtcad/QgSignalFlags.h"
+#include "rt/view.h"
 
 extern "C" {
 #include "bu/malloc.h"
@@ -45,19 +47,19 @@ qg_refresh_flags(QgViewUpdateFlags flags)
     uint32_t refresh_flags = 0;
 
     if (!flags)
-	return QG_LEGACY_VIEW_REFRESH_ALL;
+	return RT_VIEW_REFRESH_ALL;
     if (flags & QG_VIEW_REFRESH)
-	refresh_flags |= QG_LEGACY_VIEW_REFRESH_VIEW;
+	refresh_flags |= RT_VIEW_REFRESH_VIEW;
     if (flags & QG_VIEW_DRAWN)
-	refresh_flags |= QG_LEGACY_VIEW_REFRESH_DRAW;
+	refresh_flags |= RT_VIEW_REFRESH_DRAW;
     if (flags & QG_VIEW_SELECT)
-	refresh_flags |= QG_LEGACY_VIEW_REFRESH_OVERLAY;
+	refresh_flags |= RT_VIEW_REFRESH_OVERLAY;
     if (flags & QG_VIEW_MODE)
-	refresh_flags |= QG_LEGACY_VIEW_REFRESH_EDIT;
+	refresh_flags |= RT_VIEW_REFRESH_EDIT;
     if (flags & QG_VIEW_DB)
-	refresh_flags |= QG_LEGACY_VIEW_REFRESH_DRAW;
+	refresh_flags |= RT_VIEW_REFRESH_DRAW;
 
-    return refresh_flags ? refresh_flags : QG_LEGACY_VIEW_REFRESH_ALL;
+    return refresh_flags ? refresh_flags : RT_VIEW_REFRESH_ALL;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -181,7 +183,7 @@ QgView::need_update(QgViewUpdateFlags flags)
     QTCAD_SLOT("QgView::need_update", 1);
     uint32_t refresh_flags = qg_refresh_flags(flags);
     if (qg_legacy_view *lv = view())
-	qg_legacy_view_refresh_request(lv, refresh_flags);
+	rt_view_context_refresh_request(qg_legacy_view_to_context(lv), refresh_flags);
     if (canvas)
 canvas->request_update(refresh_flags);
 }

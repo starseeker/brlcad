@@ -32,6 +32,8 @@
 #include "bu/malloc.h"
 #include "bsg/appearance.h"
 #include "bsg/database_source.h"
+#include "bsg/draw_ctx.h"
+#include "bsg/draw_set.h"
 #include "bsg/draw_source.h"
 #include "bsg/draw_intent.h"
 #include "bsg/field.h"
@@ -150,6 +152,37 @@ ged_draw_scene_ref_is_null(bsg_scene_ref ref)
 }
 
 
+int
+ged_draw_scene_ref_equal(bsg_scene_ref a, bsg_scene_ref b)
+{
+    return bsg_scene_ref_equal(a, b);
+}
+
+
+int
+ged_draw_scene_ref_is_group(bsg_scene_ref ref)
+{
+    return !bsg_scene_ref_is_null(ref) &&
+	bsg_scene_ref_type(ref) == BSG_SCENE_ELEMENT_GROUP;
+}
+
+
+int
+ged_draw_scene_ref_is_shape(bsg_scene_ref ref)
+{
+    return !bsg_scene_ref_is_null(ref) &&
+	bsg_scene_ref_type(ref) == BSG_SCENE_ELEMENT_SHAPE;
+}
+
+
+bsg_scene_ref
+ged_draw_scene_ref_parent(bsg_scene_ref ref)
+{
+    return bsg_scene_ref_is_null(ref) ? bsg_scene_ref_null() :
+	bsg_scene_parent(ref);
+}
+
+
 size_t
 ged_draw_scene_ref_child_count(bsg_scene_ref ref)
 {
@@ -162,6 +195,278 @@ ged_draw_scene_ref_child_at(bsg_scene_ref ref, size_t idx)
 {
     return bsg_scene_ref_is_null(ref) ? bsg_scene_ref_null() :
 	bsg_scene_child_at(ref, idx);
+}
+
+
+int
+ged_draw_scene_ref_visible(bsg_scene_ref ref)
+{
+    return !bsg_scene_ref_is_null(ref) && bsg_scene_visible(ref);
+}
+
+
+int
+ged_draw_scene_ref_highlighted(bsg_scene_ref ref)
+{
+    return !bsg_scene_ref_is_null(ref) && bsg_scene_highlighted(ref);
+}
+
+
+int
+ged_draw_scene_ref_legacy_eval_flag(bsg_scene_ref ref)
+{
+    return bsg_scene_ref_is_null(ref) ? 0 : bsg_scene_legacy_eval_flag(ref);
+}
+
+
+int
+ged_draw_scene_ref_legacy_region_id(bsg_scene_ref ref)
+{
+    return bsg_scene_ref_is_null(ref) ? 0 : bsg_scene_legacy_region_id(ref);
+}
+
+
+int
+ged_draw_scene_ref_legacy_basecolor(bsg_scene_ref ref, unsigned char rgb[3])
+{
+    if (!rgb)
+	return 0;
+    rgb[0] = 0;
+    rgb[1] = 0;
+    rgb[2] = 0;
+    if (bsg_scene_ref_is_null(ref))
+	return 0;
+    bsg_scene_legacy_basecolor(ref, rgb);
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_legacy_user_color(bsg_scene_ref ref)
+{
+    return bsg_scene_ref_is_null(ref) ? 0 : bsg_scene_legacy_user_color(ref);
+}
+
+
+int
+ged_draw_scene_ref_legacy_default_color(bsg_scene_ref ref)
+{
+    return bsg_scene_ref_is_null(ref) ? 0 :
+	bsg_scene_legacy_default_color(ref);
+}
+
+
+uint64_t
+ged_draw_scene_ref_drawn_revision(bsg_scene_ref ref)
+{
+    return bsg_scene_ref_is_null(ref) ? 0 : bsg_scene_drawn_rev(ref);
+}
+
+
+fastf_t
+ged_draw_scene_ref_transparency(bsg_scene_ref ref)
+{
+    return bsg_scene_ref_is_null(ref) ? 0.0 : bsg_scene_transparency(ref);
+}
+
+
+int
+ged_draw_scene_ref_line_width(bsg_scene_ref ref)
+{
+    return bsg_scene_ref_is_null(ref) ? 0 : bsg_scene_line_width(ref);
+}
+
+
+void
+ged_draw_scene_ref_draw_center(bsg_scene_ref ref, point_t center)
+{
+    if (bsg_scene_ref_is_null(ref) || !center)
+	return;
+
+    bsg_scene_draw_center(ref, center);
+}
+
+
+int
+ged_draw_scene_ref_color(bsg_scene_ref ref, unsigned char rgb[3])
+{
+    if (bsg_scene_ref_is_null(ref) || !rgb)
+	return 0;
+
+    bsg_scene_color(ref, &rgb[0], &rgb[1], &rgb[2]);
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_is_view_scope(bsg_scene_ref ref)
+{
+    return !bsg_scene_ref_is_null(ref) && bsg_scene_is_view_scope(ref);
+}
+
+
+int
+ged_draw_scene_ref_is_view_source(bsg_scene_ref ref)
+{
+    return !bsg_scene_ref_is_null(ref) && bsg_scene_is_view_source(ref);
+}
+
+
+int
+ged_draw_scene_ref_is_local_source(bsg_scene_ref ref)
+{
+    return !bsg_scene_ref_is_null(ref) && bsg_scene_is_local_source(ref);
+}
+
+
+void *
+ged_draw_scene_ref_draw_context_owner(bsg_scene_ref ref)
+{
+    if (bsg_scene_ref_is_null(ref))
+	return NULL;
+
+    bsg_scene_ref root_ref = ref;
+    bsg_scene_ref parent_ref = bsg_scene_parent(ref);
+    while (!bsg_scene_ref_is_null(parent_ref)) {
+	root_ref = parent_ref;
+	parent_ref = bsg_scene_parent(root_ref);
+    }
+
+    struct bsg_draw_ctx *ctx = bsg_scene_draw_ctx(root_ref);
+    return ctx ? ctx->owner_data : NULL;
+}
+
+
+int
+ged_draw_scene_ref_display_summary(
+	bsg_scene_ref ref,
+	struct ged_draw_scene_display_summary *out)
+{
+    if (!out)
+	return 0;
+
+    memset(out, 0, sizeof(*out));
+    if (bsg_scene_ref_is_null(ref))
+	return 0;
+
+    const struct bsg_draw_intent *intent = bsg_scene_draw_intent(ref);
+    bsg_database_source_ref source_ref =
+	bsg_database_source_ref_from_scene(ref);
+
+    out->valid = 1;
+    out->is_database_source =
+	bsg_scene_is_database_source(ref) ||
+	bsg_database_source_ref_is_container(source_ref);
+    out->has_draw_intent = intent ? 1 : 0;
+    out->intent_path = intent ? bsg_draw_intent_path(intent) : NULL;
+    out->intent_draw_mode = intent ? bsg_draw_intent_mode(intent) : -1;
+    out->visible = ged_draw_scene_ref_visible(ref);
+    out->highlighted = ged_draw_scene_ref_highlighted(ref);
+    out->line_style = ged_draw_scene_ref_line_style(ref);
+    out->line_width = ged_draw_scene_ref_line_width(ref);
+    out->transparency = ged_draw_scene_ref_transparency(ref);
+    out->draw_mode = ged_draw_scene_ref_draw_mode(ref);
+    bsg_scene_material_get_rgb(ref,
+	    &out->material_color[0],
+	    &out->material_color[1],
+	    &out->material_color[2]);
+    out->material_valid = 1;
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_source_summary(
+	bsg_scene_ref ref,
+	struct ged_draw_database_source_summary *out)
+{
+    if (!out)
+	return 0;
+
+    memset(out, 0, sizeof(*out));
+    if (bsg_scene_ref_is_null(ref))
+	return 0;
+
+    bsg_database_source_ref source_ref =
+	bsg_database_source_ref_from_scene(ref);
+    if (bsg_database_source_ref_is_null(source_ref))
+	return 0;
+
+    struct bsg_database_source_record record;
+    memset(&record, 0, sizeof(record));
+    if (!bsg_database_source_record_get(source_ref, &record))
+	return 0;
+
+    out->valid = 1;
+    out->is_database_source =
+	bsg_scene_is_database_source(ref) ||
+	bsg_database_source_ref_is_container(source_ref);
+    out->has_state = ged_draw_database_source_record_has_state(&record);
+    out->stale = bsg_database_source_ref_is_stale(source_ref);
+    out->database_path = record.database_path;
+    out->source_revision = record.source_revision;
+    out->inputs_revision = record.inputs_revision;
+    out->realized_source_revision = record.realized_source_revision;
+    out->realized_inputs_revision = record.realized_inputs_revision;
+    out->realization_identity = record.realization_identity;
+    if (record.stale_reason != BSG_DATABASE_SOURCE_STALE_NONE)
+	out->stale_reason =
+	    ged_draw_database_source_stale_reason_name(record.stale_reason);
+    else if (record.source_revision != record.realized_source_revision)
+	out->stale_reason =
+	    ged_draw_stale_reason_name(GED_DRAW_STALE_SOURCE_CHANGED);
+    else if (record.inputs_revision != record.realized_inputs_revision)
+	out->stale_reason =
+	    ged_draw_stale_reason_name(GED_DRAW_STALE_VIEW_INPUT_CHANGED);
+    else
+	out->stale_reason = ged_draw_stale_reason_name(GED_DRAW_STALE_NONE);
+
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_tree_summary(
+	bsg_scene_ref ref,
+	struct ged_draw_scene_tree_summary *out)
+{
+    if (!out)
+	return 0;
+
+    memset(out, 0, sizeof(*out));
+    if (bsg_scene_ref_is_null(ref))
+	return 0;
+
+    out->valid = 1;
+    out->is_group = ged_draw_scene_ref_is_group(ref);
+    out->is_shape = ged_draw_scene_ref_is_shape(ref);
+    out->has_parent =
+	ged_draw_scene_ref_is_null(ged_draw_scene_ref_parent(ref)) ? 0 : 1;
+    out->draw_tree_depth = ged_draw_scene_ref_draw_tree_depth(ref);
+    out->child_count = ged_draw_scene_ref_child_count(ref);
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_material_summary(
+	bsg_scene_ref ref,
+	struct ged_draw_shape_material_summary *out)
+{
+    if (!out)
+	return 0;
+
+    memset(out, 0, sizeof(*out));
+    if (bsg_scene_ref_is_null(ref))
+	return 0;
+
+    out->valid = 1;
+    out->material_revision = (uint64_t)bsg_scene_material_revision(ref);
+    bsg_scene_material_get_rgb(ref,
+	    &out->material_color[0],
+	    &out->material_color[1],
+	    &out->material_color[2]);
+    return 1;
 }
 
 
@@ -414,6 +719,27 @@ ged_draw_scene_ref_set_bounds_from_minmax(bsg_scene_ref ref,
     return 1;
 }
 
+
+int
+ged_draw_scene_ref_subtree_bounds(bsg_scene_ref ref,
+				  vect_t *min,
+				  vect_t *max,
+				  int include_overlays)
+{
+    if (bsg_scene_ref_is_null(ref) || !min || !max)
+	return 1;
+
+    return bsg_scene_subtree_bbox(ref, min, max, include_overlays);
+}
+
+
+int
+ged_draw_scene_ref_draw_tree_depth(bsg_scene_ref ref)
+{
+    return bsg_scene_ref_is_null(ref) ? 0 : bsg_scene_draw_tree_depth(ref);
+}
+
+
 int
 ged_draw_scene_ref_update_bounds_context(bsg_scene_ref ref, void *view_ctx)
 {
@@ -424,6 +750,235 @@ void *
 ged_draw_scene_ref_view_context(bsg_scene_ref ref)
 {
     return (void *)bsg_scene_view(ref);
+}
+
+
+static void
+_ged_draw_scene_ref_destroy_pair(bsg_scene_ref source_ref, bsg_scene_ref shape_ref)
+{
+    if (!bsg_scene_ref_is_null(source_ref) &&
+	    !bsg_scene_ref_is_null(shape_ref))
+	(void)ged_draw_scene_ref_detach(shape_ref);
+    if (!bsg_scene_ref_is_null(shape_ref))
+	ged_draw_scene_ref_release(shape_ref);
+    if (!bsg_scene_ref_is_null(source_ref))
+	ged_draw_scene_ref_release(source_ref);
+}
+
+
+int
+ged_draw_scene_ref_create_draft_pair(struct ged *gedp,
+				     void *view_ctx,
+				     bsg_scene_ref *source_out,
+				     bsg_scene_ref *shape_out)
+{
+    if (source_out)
+	*source_out = bsg_scene_ref_null();
+    if (shape_out)
+	*shape_out = bsg_scene_ref_null();
+
+    if (!gedp || !view_ctx || !source_out || !shape_out)
+	return 0;
+    if (!ged_draw_ensure_root_attached(gedp))
+	return 0;
+
+    struct bsg_view *v = (struct bsg_view *)view_ctx;
+    bsg_database_source_ref source_ref =
+	bsg_database_source_ref_create(v, "_db_source");
+    bsg_scene_ref source_scene = bsg_database_source_ref_as_scene(source_ref);
+    if (bsg_scene_ref_is_null(source_scene))
+	return 0;
+
+    bsg_geometry_ref geometry_ref = bsg_geometry_ref_create(v, "geometry");
+    bsg_scene_ref shape_scene = bsg_geometry_ref_as_scene(geometry_ref);
+    if (bsg_scene_ref_is_null(shape_scene)) {
+	_ged_draw_scene_ref_destroy_pair(source_scene, shape_scene);
+	return 0;
+    }
+
+    if (!ged_draw_scene_ref_append_child(source_scene, shape_scene)) {
+	_ged_draw_scene_ref_destroy_pair(source_scene, shape_scene);
+	return 0;
+    }
+
+    if (!ged_draw_scene_ref_prepare(gedp, shape_scene)) {
+	_ged_draw_scene_ref_destroy_pair(source_scene, shape_scene);
+	return 0;
+    }
+    ged_draw_scene_ref_set_source_ref(shape_scene, source_scene);
+    ged_draw_scene_ref_geometry_clear(shape_scene);
+
+    *source_out = source_scene;
+    *shape_out = shape_scene;
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_copy_aux_display_state(bsg_scene_ref dst, bsg_scene_ref src)
+{
+    unsigned char r = 0;
+    unsigned char g = 0;
+    unsigned char b = 0;
+    unsigned char basecolor[3] = {0, 0, 0};
+    mat_t mat;
+
+    if (bsg_scene_ref_is_null(dst) || bsg_scene_ref_is_null(src))
+	return 0;
+
+    bsg_scene_set_visible(dst, bsg_scene_visible(src));
+
+    bsg_scene_color(src, &r, &g, &b);
+    bsg_scene_set_color(dst, r, g, b);
+
+    bsg_scene_material_get_rgb(src, &r, &g, &b);
+    bsg_scene_material_set_rgb(dst, r, g, b);
+    bsg_scene_material_set_revision(dst, bsg_scene_material_revision(src));
+
+    MAT_IDN(mat);
+    bsg_scene_transform(src, mat);
+    bsg_scene_set_transform(dst, mat);
+    MAT_IDN(mat);
+    bsg_scene_draw_mat(src, mat);
+    bsg_scene_set_draw_mat(dst, mat);
+
+    bsg_scene_set_line_style(dst, bsg_scene_line_style(src));
+    bsg_scene_set_line_width(dst, bsg_scene_line_width(src));
+    bsg_scene_legacy_basecolor(src, basecolor);
+    bsg_scene_set_legacy_color_info(dst, basecolor,
+	    bsg_scene_legacy_user_color(src),
+	    bsg_scene_legacy_default_color(src));
+    bsg_scene_set_legacy_eval_flag(dst, bsg_scene_legacy_eval_flag(src));
+    bsg_scene_set_legacy_region_id(dst, bsg_scene_legacy_region_id(src));
+    bsg_scene_set_highlighted(dst, bsg_scene_highlighted(src));
+    bsg_scene_set_dmode(dst, bsg_scene_dmode(src));
+    bsg_scene_set_transparency(dst, bsg_scene_transparency(src));
+    bsg_scene_set_changed(dst, bsg_scene_changed(src));
+
+    (void)ged_draw_scene_ref_copy_draw_intent(dst, src);
+    bsg_scene_set_non_database_source(dst, 0);
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_set_name(bsg_scene_ref ref, const char *name)
+{
+    if (bsg_scene_ref_is_null(ref) || !name)
+	return 0;
+
+    bsg_scene_set_name(ref, name);
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_set_visible(bsg_scene_ref ref, int visible)
+{
+    if (bsg_scene_ref_is_null(ref))
+	return 0;
+
+    bsg_scene_set_visible(ref, visible ? 1 : 0);
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_set_draw_context(bsg_scene_ref ref, void *draw_ctx)
+{
+    if (bsg_scene_ref_is_null(ref) || !draw_ctx)
+	return 0;
+
+    bsg_scene_set_draw_ctx(ref, (struct bsg_draw_ctx *)draw_ctx);
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_set_transparency(bsg_scene_ref ref, fastf_t transparency)
+{
+    if (bsg_scene_ref_is_null(ref))
+	return 0;
+
+    bsg_scene_set_transparency(ref, transparency);
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_set_color(bsg_scene_ref ref, const unsigned char rgb[3])
+{
+    if (bsg_scene_ref_is_null(ref) || !rgb)
+	return 0;
+
+    bsg_scene_set_color(ref, rgb[0], rgb[1], rgb[2]);
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_set_highlighted(bsg_scene_ref ref, int highlighted)
+{
+    if (bsg_scene_ref_is_null(ref))
+	return 0;
+
+    bsg_scene_set_highlighted(ref, highlighted ? 1 : 0);
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_set_transform(bsg_scene_ref ref, const mat_t mat)
+{
+    if (bsg_scene_ref_is_null(ref) || !mat)
+	return 0;
+
+    bsg_scene_set_transform(ref, mat);
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_set_draw_mat(bsg_scene_ref ref, const mat_t mat)
+{
+    if (bsg_scene_ref_is_null(ref) || !mat)
+	return 0;
+
+    bsg_scene_set_draw_mat(ref, mat);
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_set_draw_size(bsg_scene_ref ref, fastf_t size)
+{
+    if (bsg_scene_ref_is_null(ref))
+	return 0;
+
+    bsg_scene_set_draw_size(ref, size);
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_set_line_style(bsg_scene_ref ref, int dashed)
+{
+    if (bsg_scene_ref_is_null(ref))
+	return 0;
+
+    bsg_scene_set_line_style(ref, dashed);
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_set_line_width(bsg_scene_ref ref, int line_width)
+{
+    if (bsg_scene_ref_is_null(ref))
+	return 0;
+
+    bsg_scene_set_line_width(ref, line_width);
+    return 1;
 }
 
 
@@ -455,6 +1010,176 @@ ged_draw_scene_ref_set_draw_mode(bsg_scene_ref ref, int draw_mode)
 
 
 int
+ged_draw_scene_ref_ensure_draw_intent(bsg_scene_ref ref,
+				      const char *path,
+				      int draw_mode)
+{
+    if (bsg_scene_ref_is_null(ref))
+	return 0;
+
+    if (bsg_scene_draw_intent(ref))
+	return 1;
+
+    struct bsg_draw_intent *di =
+	bsg_draw_intent_create(path, (bsg_draw_mode)draw_mode);
+    if (!di)
+	return 0;
+
+    bsg_scene_set_draw_intent(ref, di);
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_set_draw_intent_path(bsg_scene_ref ref,
+					const char *path,
+					int fallback_draw_mode)
+{
+    if (bsg_scene_ref_is_null(ref) || !path)
+	return 0;
+
+    struct bsg_draw_intent *di = bsg_scene_draw_intent(ref);
+    if (di) {
+	bsg_draw_intent_set_path(di, path);
+	return 1;
+    }
+
+    return ged_draw_scene_ref_ensure_draw_intent(ref, path, fallback_draw_mode);
+}
+
+
+int
+ged_draw_scene_ref_set_draw_intent_mode(bsg_scene_ref ref,
+					int draw_mode,
+					const char *fallback_path)
+{
+    if (bsg_scene_ref_is_null(ref))
+	return 0;
+
+    struct bsg_draw_intent *di = bsg_scene_draw_intent(ref);
+    if (di) {
+	bsg_draw_intent_set_mode(di, (bsg_draw_mode)draw_mode);
+	return 1;
+    }
+
+    return ged_draw_scene_ref_ensure_draw_intent(ref, fallback_path, draw_mode);
+}
+
+
+int
+ged_draw_scene_ref_set_draw_intent_appearance(
+	bsg_scene_ref ref,
+	const struct bsg_appearance_settings *settings,
+	const char *fallback_path)
+{
+    if (bsg_scene_ref_is_null(ref) || !settings)
+	return 0;
+
+    struct bsg_draw_intent *di = bsg_scene_draw_intent(ref);
+    if (!di) {
+	if (!ged_draw_scene_ref_ensure_draw_intent(ref, fallback_path,
+		settings->draw_mode))
+	    return 0;
+	di = bsg_scene_draw_intent(ref);
+    }
+
+    if (!di)
+	return 0;
+
+    bsg_draw_intent_set_appearance(di, settings);
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_draw_intent_is_overlay(bsg_scene_ref ref)
+{
+    if (bsg_scene_ref_is_null(ref))
+	return 0;
+
+    const struct bsg_draw_intent *di = bsg_scene_draw_intent(ref);
+    return bsg_draw_intent_is_overlay(di);
+}
+
+
+int
+ged_draw_scene_ref_revalidate_draw_intent(bsg_scene_ref ref,
+					  const struct bsg_db_event *event)
+{
+    if (bsg_scene_ref_is_null(ref) || !event)
+	return 0;
+
+    return bsg_scene_draw_intent_revalidate(ref, event);
+}
+
+
+int
+ged_draw_scene_ref_draw_intent_appearance(bsg_scene_ref ref,
+					  struct bsg_appearance_settings *settings)
+{
+    if (bsg_scene_ref_is_null(ref) || !settings)
+	return 0;
+
+    const struct bsg_draw_intent *di = bsg_scene_draw_intent(ref);
+    return bsg_draw_intent_appearance(di, settings);
+}
+
+
+const char *
+ged_draw_scene_ref_draw_intent_path(bsg_scene_ref ref)
+{
+    if (bsg_scene_ref_is_null(ref))
+	return NULL;
+
+    const struct bsg_draw_intent *di = bsg_scene_draw_intent(ref);
+    return bsg_draw_intent_path(di);
+}
+
+
+int
+ged_draw_scene_ref_draw_intent_mode(bsg_scene_ref ref, int *draw_mode)
+{
+    if (draw_mode)
+	*draw_mode = -1;
+    if (bsg_scene_ref_is_null(ref) || !draw_mode)
+	return 0;
+
+    const struct bsg_draw_intent *di = bsg_scene_draw_intent(ref);
+    if (!di)
+	return 0;
+
+    *draw_mode = bsg_draw_intent_mode(di);
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_copy_draw_intent(bsg_scene_ref dst, bsg_scene_ref src)
+{
+    if (bsg_scene_ref_is_null(dst) || bsg_scene_ref_is_null(src))
+	return 0;
+
+    const struct bsg_draw_intent *di = bsg_scene_draw_intent(src);
+    const char *path = bsg_draw_intent_path(di);
+    if (!path || !path[0])
+	return 0;
+
+    struct bsg_draw_intent *copy =
+	bsg_draw_intent_create(path, bsg_draw_intent_mode(di));
+    if (!copy)
+	return 0;
+
+    struct bsg_appearance_settings appearance;
+    copy->di_lod = bsg_draw_intent_lod(di);
+    copy->di_mixed = di->di_mixed;
+    if (bsg_draw_intent_appearance(di, &appearance))
+	bsg_draw_intent_set_appearance(copy, &appearance);
+    bsg_scene_set_draw_intent(dst, copy);
+    return 1;
+}
+
+
+int
 ged_draw_scene_ref_line_style(bsg_scene_ref ref)
 {
     return bsg_scene_line_style(ref);
@@ -476,8 +1201,101 @@ ged_draw_scene_ref_set_work_flag(bsg_scene_ref ref, int wflag)
 
 
 int
+ged_draw_scene_ref_set_legacy_color_info(bsg_scene_ref ref,
+					 const unsigned char basecolor[3],
+					 int user_color,
+					 int default_color)
+{
+    if (bsg_scene_ref_is_null(ref) || !basecolor)
+	return 0;
+
+    bsg_scene_set_legacy_color_info(ref, basecolor, user_color, default_color);
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_set_legacy_eval_flag(bsg_scene_ref ref,
+					int evaluated_region)
+{
+    if (bsg_scene_ref_is_null(ref))
+	return 0;
+
+    bsg_scene_set_legacy_eval_flag(ref, evaluated_region ? 1 : 0);
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_set_legacy_uses_default_color(bsg_scene_ref ref,
+						 int default_color)
+{
+    if (bsg_scene_ref_is_null(ref))
+	return 0;
+
+    bsg_scene_set_legacy_uses_default_color(ref, default_color ? 1 : 0);
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_set_legacy_region_id(bsg_scene_ref ref, int region_id)
+{
+    if (bsg_scene_ref_is_null(ref))
+	return 0;
+
+    bsg_scene_set_legacy_region_id(ref, region_id);
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_mark_db_object(bsg_scene_ref ref)
+{
+    if (bsg_scene_ref_is_null(ref))
+	return 0;
+
+    bsg_scene_mark_db_object(ref);
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_bump_changed(bsg_scene_ref ref)
+{
+    if (bsg_scene_ref_is_null(ref))
+	return 0;
+
+    bsg_scene_set_changed(ref, bsg_scene_changed(ref) + 1);
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_apply_overlay_geometry_attributes(bsg_scene_ref ref,
+						     const unsigned char rgb[3],
+						     fastf_t transparency,
+						     int draw_mode)
+{
+    if (bsg_scene_ref_is_null(ref) || !rgb)
+	return 0;
+
+    bsg_scene_set_highlighted(ref, 0);
+    bsg_scene_set_line_style(ref, 0);
+    bsg_scene_set_legacy_eval_flag(ref, 1);
+    bsg_scene_set_legacy_color_info(ref, rgb, 0, 0);
+    bsg_scene_set_color(ref, rgb[0], rgb[1], rgb[2]);
+    bsg_scene_set_legacy_region_id(ref, 0);
+    bsg_scene_set_work_flag(ref, 0);
+    bsg_scene_set_transparency(ref, transparency);
+    bsg_scene_set_dmode(ref, draw_mode);
+    return 1;
+}
+
+
+int
 ged_draw_scene_ref_apply_settings(bsg_scene_ref ref,
-				  struct bsg_appearance_settings *settings)
+				  const struct bsg_appearance_settings *settings)
 {
     return bsg_scene_apply_appearance_settings(ref, settings);
 }
@@ -487,9 +1305,29 @@ void
 ged_draw_scene_ref_set_material_rgb(bsg_scene_ref ref,
 				    const unsigned char rgb[3])
 {
-    if (!rgb)
+    if (bsg_scene_ref_is_null(ref) || !rgb)
 	return;
     bsg_scene_material_set_rgb(ref, rgb[0], rgb[1], rgb[2]);
+}
+
+
+uint64_t
+ged_draw_scene_ref_material_revision(bsg_scene_ref ref)
+{
+    return bsg_scene_ref_is_null(ref) ? 0 :
+	(uint64_t)bsg_scene_material_revision(ref);
+}
+
+
+int
+ged_draw_scene_ref_set_material_revision(bsg_scene_ref ref,
+					 uint64_t mater_rev)
+{
+    if (bsg_scene_ref_is_null(ref))
+	return 0;
+
+    bsg_scene_material_set_revision(ref, (uint32_t)mater_rev);
+    return 1;
 }
 
 
@@ -2341,6 +3179,28 @@ ged_draw_scene_ref_publish_line_set(bsg_scene_ref ref,
 
 
 int
+ged_draw_scene_ref_publish_point_set(bsg_scene_ref ref,
+				     const point_t *points,
+				     size_t point_count)
+{
+    ged_draw_shape_state *shape_data = ged_draw_shape_state_get_scene_ref(ref);
+
+    if (!shape_data)
+	return 0;
+    if (point_count && !points)
+	return 0;
+    if (!bsg_geometry_ref_set_point_set(bsg_scene_ref_as_geometry(ref),
+	    points, point_count))
+	return 0;
+
+    shape_data->geometry_command_count = point_count;
+    shape_data->geometry_revision++;
+    bsg_scene_invalidate(ref);
+    return 1;
+}
+
+
+int
 ged_draw_scene_ref_publish_indexed_face_set(bsg_scene_ref ref,
 					    const point_t *points,
 					    size_t point_count,
@@ -3450,20 +4310,7 @@ _ged_draw_scene_ref_copy_display_state(bsg_scene_ref dst, bsg_scene_ref src)
     bsg_scene_set_transparency(dst, bsg_scene_transparency(src));
     bsg_scene_set_changed(dst, bsg_scene_changed(src));
 
-    const struct bsg_draw_intent *di = bsg_scene_draw_intent(src);
-    const char *path = bsg_draw_intent_path(di);
-    if (path && path[0]) {
-	struct bsg_draw_intent *copy =
-	    bsg_draw_intent_create(path, bsg_draw_intent_mode(di));
-	if (copy) {
-	    struct bsg_appearance_settings appearance;
-	    copy->di_lod = bsg_draw_intent_lod(di);
-	    copy->di_mixed = di->di_mixed;
-	    if (bsg_draw_intent_appearance(di, &appearance))
-		bsg_draw_intent_set_appearance(copy, &appearance);
-	    bsg_scene_set_draw_intent(dst, copy);
-	}
-    }
+    (void)ged_draw_scene_ref_copy_draw_intent(dst, src);
 }
 
 
@@ -3480,7 +4327,7 @@ _ged_draw_scene_ref_set_semantic_path(bsg_scene_ref ref, const char *path)
 	semantic_path = path;
 
     struct bsg_draw_intent *di =
-	bsg_draw_intent_create(semantic_path, BSG_DRAW_MODE_WIRE);
+	bsg_draw_intent_create(semantic_path, (bsg_draw_mode)GED_DRAW_MODE_WIRE);
     if (di)
 	bsg_scene_set_draw_intent(ref, di);
 }

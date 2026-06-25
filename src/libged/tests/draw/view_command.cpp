@@ -18,7 +18,7 @@
 #include <bu.h>
 #include <ged.h>
 #include <ged/draw.h>
-#include <rt/view_legacy_bsg.h>
+#include <rt/view.h>
 
 #define ASSERT(cond) do { \
     nchecks++; \
@@ -87,9 +87,9 @@ test_command_report_record_consistency(struct ged *gedp, void *v)
     ASSERT(solids.find("all.g") != std::string::npos);
     ASSERT(solids.find("cent=") != std::string::npos);
 
-    struct rt_view_render_export_consistency_bsg consistency =
-	RT_VIEW_RENDER_EXPORT_CONSISTENCY_BSG_INIT;
-    ASSERT(rt_view_context_render_export_consistency_bsg(v, "all.g",
+    struct rt_view_render_export_consistency consistency =
+	RT_VIEW_RENDER_EXPORT_CONSISTENCY_INIT;
+    ASSERT(rt_view_context_render_export_consistency(v, "all.g",
 	    &consistency));
     ASSERT(consistency.export_record_found);
     ASSERT(consistency.render_item_found);
@@ -97,25 +97,24 @@ test_command_report_record_consistency(struct ged *gedp, void *v)
     ASSERT(consistency.backend_node_found);
     ASSERT(consistency.export_backend_consistent);
 
-    struct rt_view_pick_result_bsg *pick =
-	rt_view_context_pick_semantic_path_bsg(v, "all.g");
+    void *pick = rt_view_context_pick_semantic_path(v, "all.g");
     struct bu_vls pick_path = BU_VLS_INIT_ZERO;
     ASSERT(pick != NULL);
-    ASSERT(rt_view_pick_result_count_bsg(pick) > 0);
-    if (pick && rt_view_pick_result_count_bsg(pick) > 0) {
-	ASSERT(rt_view_pick_result_path_bsg(pick, 0, &pick_path));
+    ASSERT(rt_view_pick_result_context_count(pick) > 0);
+    if (pick && rt_view_pick_result_context_count(pick) > 0) {
+	ASSERT(rt_view_pick_result_context_path(pick, 0, &pick_path));
 	ASSERT(BU_STR_EQUAL(bu_vls_cstr(&pick_path), "all.g"));
     }
 
     point_t sample = VINIT_ZERO;
-    struct rt_view_snap_result_bsg *snap = rt_view_snap_result_create_bsg();
+    void *snap = rt_view_snap_result_context_create();
     ASSERT(snap != NULL);
-    int snap_count = snap ? rt_view_context_snap_candidates_result_bsg(v,
-	    sample, 1.0, RT_VIEW_SNAP_KIND_ENDPOINT_BSG, snap) : 0;
+    int snap_count = snap ? rt_view_context_snap_candidates_result(v,
+	    sample, 1.0, RT_VIEW_SNAP_KIND_ENDPOINT, snap) : 0;
     ASSERT(snap_count >= 0);
-    if (snap_count > 0 && rt_view_snap_result_count_bsg(snap) > 0) {
+    if (snap_count > 0 && rt_view_snap_result_context_count(snap) > 0) {
 	struct bu_vls snap_path = BU_VLS_INIT_ZERO;
-	ASSERT(rt_view_snap_result_source_path_bsg(snap, 0, &snap_path));
+	ASSERT(rt_view_snap_result_context_source_path(snap, 0, &snap_path));
 	ASSERT(bu_vls_strlen(&snap_path) > 0);
 	bu_vls_free(&snap_path);
     }
@@ -123,13 +122,13 @@ test_command_report_record_consistency(struct ged *gedp, void *v)
     point_t a = VINIT_ZERO;
     point_t b = {1.0, 0.0, 0.0};
     struct rt_view_measure_result measure = RT_VIEW_MEASURE_RESULT_INIT;
-    ASSERT(rt_view_context_measure_candidates_bsg(v, a, b, &measure) == 1);
+    ASSERT(rt_view_context_measure_candidates(v, a, b, &measure) == 1);
     ASSERT(measure.valid);
     ASSERT(fabs(measure.distance - 1.0) < 1.0e-9);
 
-    rt_view_snap_result_free_bsg(snap);
+    rt_view_snap_result_context_free(snap);
     bu_vls_free(&pick_path);
-    rt_view_pick_result_free_bsg(pick);
+    rt_view_pick_result_context_free(pick);
 }
 
 int
@@ -148,16 +147,16 @@ main(int argc, const char **argv)
 	return EXIT_FAILURE;
 
     void *view_set_ctx = ged_view_set_ctx(gedp);
-    ASSERT(rt_view_set_context_remove_bsg(view_set_ctx, NULL));
+    ASSERT(rt_view_set_context_remove(view_set_ctx, NULL));
     void *views[2] = {NULL, NULL};
     for (int i = 0; i < 2; i++) {
 	char view_name[16];
 	snprintf(view_name, sizeof(view_name), "V%d", i);
-	views[i] = rt_view_context_create_bsg();
+	views[i] = rt_view_context_create();
 	ASSERT(views[i] != NULL);
-	ASSERT(rt_view_context_name_set_bsg(views[i], view_name));
-	ASSERT(rt_view_context_dimensions_set_bsg(views[i], 640, 480));
-	ASSERT(rt_view_set_context_add_bsg(view_set_ctx, views[i]));
+	ASSERT(rt_view_context_name_set(views[i], view_name));
+	ASSERT(rt_view_context_dimensions_set(views[i], 640, 480));
+	ASSERT(rt_view_set_context_add(view_set_ctx, views[i]));
 	ged_view_context_owned_add(gedp, views[i]);
 	if (!i)
 	    ged_view_active_ctx_set(gedp, views[i]);
@@ -241,10 +240,10 @@ main(int argc, const char **argv)
     ASSERT_VIEW_OK(gedp, 6, p7);
     ASSERT(!result_str(gedp).empty());
     rt_view_polygon_ref poly_ref =
-	rt_view_context_polygon_find_bsg(views[0], "u_poly");
-    ASSERT(!rt_view_polygon_ref_is_null_bsg(poly_ref));
+	rt_view_context_polygon_find(views[0], "u_poly");
+    ASSERT(!rt_view_polygon_ref_is_null(poly_ref));
     struct rt_view_polygon_record poly_rec = {};
-    ASSERT(rt_view_polygon_record_get_bsg(poly_ref, &poly_rec));
+    ASSERT(rt_view_polygon_record_get(poly_ref, &poly_rec));
     ASSERT(poly_rec.type == RT_VIEW_POLYGON_GENERAL);
     ASSERT(poly_rec.contour_count == 1);
     ASSERT(poly_rec.point_count == 4);

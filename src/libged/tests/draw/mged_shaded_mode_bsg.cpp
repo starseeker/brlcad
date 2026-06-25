@@ -63,7 +63,7 @@
 
 #include <bu.h>
 #include "bu/opt.h"
-#include "rt/view_legacy_bsg.h"
+#include "rt/view.h"
 #include <icv.h>
 #define DM_WITH_RT
 #include <dm.h>
@@ -78,7 +78,7 @@ static void
 do_refresh(struct ged *gedp)
 {
     void *v = ged_view_active_ctx(gedp);
-    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(v);
     dm_draw_begin(dmp);
     dm_draw_objs(v);
     dm_draw_end(dmp);
@@ -138,17 +138,17 @@ open_gedp(const char *gfile, int width, int height)
     ged_exec_dm(gedp, 4, s_av);
 
     void *v = ged_view_active_ctx(gedp);
-    struct dm *dmp  = (struct dm *)rt_view_context_display_manager_from_bsg(v);
+    struct dm *dmp  = (struct dm *)rt_view_context_display_manager_get(v);
     dm_set_width(dmp, width);
     dm_set_height(dmp, height);
     dm_configure_win(dmp, 0);
     dm_set_zbuffer(dmp, 1);
     fastf_t wb[6] = {-1, 1, -1, 1, -100, 100};
     dm_set_win_bounds(dmp, wb);
-    dm_set_vp(dmp, rt_view_context_scale_storage_from_bsg(v));
-    rt_view_context_display_manager_set_bsg(v, dmp);
-    rt_view_context_dimensions_set_bsg(v, dm_get_width(dmp), dm_get_height(dmp));
-    rt_view_context_unit_conversion_set_bsg(v,
+    dm_set_vp(dmp, rt_view_context_scale_storage_get(v));
+    rt_view_context_display_manager_set(v, dmp);
+    rt_view_context_dimensions_set(v, dm_get_width(dmp), dm_get_height(dmp));
+    rt_view_context_unit_conversion_set(v,
 	gedp->dbip->dbi_local2base,
 	gedp->dbip->dbi_base2local);
 
@@ -181,7 +181,7 @@ test_dm_lighting_flags(const char *datadir)
     if (!gedp) { bu_log("FAIL: ged_open failed\n"); bu_file_delete("smb_t1.g"); return 1; }
 
     void *v = ged_view_active_ctx(gedp);
-    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(v);
     int fail = 0;
 
     /* --- turn everything ON (val=1) --------------------------------------- */
@@ -364,7 +364,7 @@ test_geometry_default_color(const char *datadir)
     if (!gedp) { bu_file_delete("smb_t3.g"); return 1; }
 
     void *v = ged_view_active_ctx(gedp);
-    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(v);
     int fail = 0;
 
     /* Set a recognisable test colour */

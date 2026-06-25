@@ -36,7 +36,9 @@
 #include <QWheelEvent>
 
 #include "QgCanvasState.h"   /* pimpl definition + shared helpers */
+#include "QgLegacyViewContext.h"
 #include "qtcad/QgSW.h"
+#include "rt/view.h"
 
 // Using the full BSG_VIEW_MIN/BSG_VIEW_MAX was causing drawing artifacts with moss I
 // in shaded mode (I think I was seeing the "Z-fighting" problem:
@@ -74,7 +76,7 @@ QgSW::QgSW(QWidget *parent)
     d = new QgCanvasState();
     qgcanvas_init_obol(*d, this);
     d->ifp = qgsw_bridge_framebuffer;
-    d->lmouse_mode = QG_LEGACY_VIEW_ADJUST_SCALE;
+    d->lmouse_mode = RT_VIEW_ADJUST_SCALE;
 
     // Provide a view specific to this widget - set gedp->ged_gvp to v
     // if this is the current view
@@ -153,8 +155,8 @@ QgSW::set_view(qg_legacy_view *nv)
 
 void QgSW::request_update(uint32_t refresh_flags)
 {
-    uint32_t requested = refresh_flags ? refresh_flags : QG_LEGACY_VIEW_REFRESH_ALL;
-    qgcanvas_request_update(*d, requested | QG_LEGACY_VIEW_REFRESH_FRAMEBUFFER | QG_LEGACY_VIEW_REFRESH_FORCE);
+    uint32_t requested = refresh_flags ? refresh_flags : RT_VIEW_REFRESH_ALL;
+    qgcanvas_request_update(*d, requested | RT_VIEW_REFRESH_FRAMEBUFFER | RT_VIEW_REFRESH_FORCE);
     if (d->fb_update_queued)
 return;
     d->fb_update_queued = true;
@@ -164,7 +166,7 @@ return;
 void QgSW::need_update()
 {
     QTCAD_SLOT("QgSW::need_update", 1);
-    request_update(QG_LEGACY_VIEW_REFRESH_FRAMEBUFFER | QG_LEGACY_VIEW_REFRESH_FORCE);
+    request_update(RT_VIEW_REFRESH_FRAMEBUFFER | RT_VIEW_REFRESH_FORCE);
 }
 
 void QgSW::queued_update()
@@ -237,11 +239,11 @@ if (d->ifp)
 
     qg_legacy_view_dm_background_restore(d->dmp);
 
-    (void)qg_legacy_view_refresh_consume(d->v);
+    (void)rt_view_context_refresh_consume(qg_legacy_view_to_context(d->v));
     qg_legacy_view_dm_draw_begin(d->dmp);
     qg_legacy_view_dm_draw(d->v);
     qg_legacy_view_dm_draw_end(d->dmp);
-    qg_legacy_view_refresh_complete(d->v);
+    rt_view_context_refresh_complete(qg_legacy_view_to_context(d->v));
 
     // Set up a QImage with the rendered output..
     unsigned char *dm_image;
@@ -277,10 +279,10 @@ void QgSW::resizeEvent(QResizeEvent *e)
 	qg_legacy_view_dm_configure_window(d->dmp, 0);
 	if (d->ifp) {
 	    qg_legacy_view_framebuffer_configure(d->ifp,
-		    qg_legacy_view_width_get(d->v),
-		    qg_legacy_view_height_get(d->v));
+		    rt_view_context_width_get(qg_legacy_view_to_context(d->v)),
+		    rt_view_context_height_get(qg_legacy_view_to_context(d->v)));
 	}
-	qgcanvas_request_update(*d, QG_LEGACY_VIEW_REFRESH_VIEW | QG_LEGACY_VIEW_REFRESH_FRAMEBUFFER);
+	qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW | RT_VIEW_REFRESH_FRAMEBUFFER);
 	emit changed();
     }
 }
@@ -300,7 +302,7 @@ return;
 
     if (d->input.keyPressEvent(d->v, d->x_prev,
 	    d->y_prev, k)) {
-qgcanvas_request_update(*d, QG_LEGACY_VIEW_REFRESH_VIEW);
+qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW);
 update();
 emit changed();
     }
@@ -330,7 +332,7 @@ return;
 
     if (d->input.mousePressEvent(d->v, d->x_prev,
 	    d->y_prev, e)) {
-qgcanvas_request_update(*d, QG_LEGACY_VIEW_REFRESH_VIEW);
+qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW);
 update();
 emit changed();
     }
@@ -362,7 +364,7 @@ return;
     if (d->input.mouseReleaseEvent(d->v,
 	    d->x_press_pos, d->y_press_pos, d->x_prev, d->y_prev, e,
 	    d->lmouse_mode)) {
-qgcanvas_request_update(*d, QG_LEGACY_VIEW_REFRESH_VIEW);
+qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW);
 update();
 emit changed();
     }
@@ -386,7 +388,7 @@ return;
     int mret = d->input.mouseMoveEvent(d->v,
 	    d->x_prev, d->y_prev, e, d->lmouse_mode);
     if (mret > 0) {
-qgcanvas_request_update(*d, QG_LEGACY_VIEW_REFRESH_VIEW);
+qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW);
 update();
 emit changed();
     }
@@ -419,7 +421,7 @@ return;
     qg_legacy_view_dimensions_set(d->v, rsize.width(), rsize.height());
 
     if (d->input.wheelEvent(d->v, e)) {
-qgcanvas_request_update(*d, QG_LEGACY_VIEW_REFRESH_VIEW);
+qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW);
 update();
 emit changed();
     }
@@ -511,11 +513,11 @@ bg2[0] = bg2[1] = bg2[2] = QTSW_SCREENSHOT_BG_GREY;
     }
     qg_legacy_view_dm_background_set(d->dmp, bg1, bg2);
     qg_legacy_view_dm_load_current_model2view(d->dmp, d->v, 0);
-    (void)qg_legacy_view_refresh_consume(d->v);
+    (void)rt_view_context_refresh_consume(qg_legacy_view_to_context(d->v));
     qg_legacy_view_dm_draw_begin(d->dmp);
     qg_legacy_view_dm_draw(d->v);
     qg_legacy_view_dm_draw_end(d->dmp);
-    qg_legacy_view_refresh_complete(d->v);
+    rt_view_context_refresh_complete(qg_legacy_view_to_context(d->v));
 
     unsigned char *vp_image = nullptr;
     if (qg_legacy_view_dm_display_image_get(d->dmp, &vp_image, 1, 1) ||

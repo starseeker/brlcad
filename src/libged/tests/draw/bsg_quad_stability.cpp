@@ -43,7 +43,7 @@
 #include <dm.h>
 #include <ged.h>
 #include <ged/draw.h>
-#include <rt/view_legacy_bsg.h>
+#include <rt/view.h>
 
 extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);
 
@@ -61,7 +61,7 @@ refresh_view(struct ged *gedp, int vnum)
     txn.view = v;
     ged_draw_apply_transaction(gedp, &txn, NULL);
 
-    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(v);
     dm_make_current(dmp);
     unsigned char *bg1, *bg2;
     dm_get_bg(&bg1, &bg2, dmp);
@@ -79,7 +79,7 @@ grab_view(struct ged *gedp, int vnum, const char *fname)
     void *v = BU_PTBL_GET(views, vnum);
     if (!v)
 	return -1;
-    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(v);
     const char *s_av[4] = {"screengrab", "-D",
 	bu_vls_cstr(dm_get_pathname(dmp)), fname};
     return ged_exec_screengrab(gedp, 4, s_av);
@@ -152,22 +152,22 @@ main(int ac, char *av[])
 
     /* Remove the default view; we'll add our own four */
     void *view_set_ctx = ged_view_set_ctx(gedp);
-    rt_view_set_context_remove_bsg(view_set_ctx, NULL);
+    rt_view_set_context_remove(view_set_ctx, NULL);
 
     /* az/el per view matching the quad test reference */
     const double aet[4][3] = {{35,25,0},{90,0,0},{0,90,0},{0,0,90}};
 
     const char *s_av[8] = {NULL};
     for (int i = 0; i < 4; i++) {
-	void *v = rt_view_context_create_bsg();
+	void *v = rt_view_context_create();
 	if (!i)
 	    ged_view_active_ctx_set(gedp, v);
 	char view_name[16];
 	snprintf(view_name, sizeof(view_name), "V%d", i);
-	rt_view_context_name_set_bsg(v, view_name);
-	rt_view_set_context_add_bsg(view_set_ctx, v);
+	rt_view_context_name_set(v, view_name);
+	rt_view_set_context_add(view_set_ctx, v);
 	ged_view_context_owned_add(gedp, v);
-	(void)rt_view_context_independent_scope_is_null_bsg(v, 1 /*create*/);
+	(void)rt_view_context_independent_scope_is_null(v, 1 /*create*/);
 
 	/* Attach one swrast DM per view */
 	struct bu_vls dm_name = BU_VLS_INIT_ZERO;
@@ -177,22 +177,22 @@ main(int ac, char *av[])
 	ged_exec_dm(gedp, 6, s_av);
 	bu_vls_free(&dm_name);
 
-	struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(v);
+	struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(v);
 	dm_set_width(dmp, 512);
 	dm_set_height(dmp, 512);
 	dm_configure_win(dmp, 0);
 	dm_set_zbuffer(dmp, 1);
 	fastf_t wb[6] = {-1, 1, -1, 1, -100, 100};
 	dm_set_win_bounds(dmp, wb);
-	dm_set_vp(dmp, rt_view_context_scale_storage_from_bsg(v));
-	rt_view_context_display_manager_set_bsg(v, dmp);
-	rt_view_context_dimensions_set_bsg(v, dm_get_width(dmp), dm_get_height(dmp));
-	rt_view_context_unit_conversion_set_bsg(v, gedp->dbip->dbi_local2base,
+	dm_set_vp(dmp, rt_view_context_scale_storage_get(v));
+	rt_view_context_display_manager_set(v, dmp);
+	rt_view_context_dimensions_set(v, dm_get_width(dmp), dm_get_height(dmp));
+	rt_view_context_unit_conversion_set(v, gedp->dbip->dbi_local2base,
 	    gedp->dbip->dbi_base2local);
 
 	/* BSG scene anchor must be created for each view. */
-	if (!rt_view_context_scene_attached_bsg(v))
-	    (void)rt_view_context_scene_anchor_ensure_bsg(v);
+	if (!rt_view_context_scene_attached(v))
+	    (void)rt_view_context_scene_anchor_ensure(v);
 
 	/* Set distinct az/el */
 	struct bu_vls vname = BU_VLS_INIT_ZERO;
