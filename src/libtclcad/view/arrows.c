@@ -27,11 +27,11 @@
 #include "common.h"
 #include "bu/units.h"
 #include "ged.h"
-#include "rt/view_legacy_bsg.h"
+#include "ged/view.h"
 #include "tclcad.h"
 
 /* Private headers */
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "../tclcad_private.h"
 #include "../view/view.h"
 

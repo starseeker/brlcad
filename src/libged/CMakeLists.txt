@@ -321,6 +321,7 @@ set(
   db_index.cpp
   draw.cpp
   ged.cpp
+  ged_view_legacy.cpp
   ged_inside.c
   ged_track.c
   ged_util.cpp

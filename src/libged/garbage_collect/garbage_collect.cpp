@@ -37,7 +37,7 @@
 #include "bu/path.h"
 #include "raytrace.h"
 #include "ged.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 
 void print_help_msg(struct bu_vls *str)
 {

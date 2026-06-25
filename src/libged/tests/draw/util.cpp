@@ -36,7 +36,7 @@
 #define DM_WITH_RT
 #include <dm.h>
 #include <ged.h>
-#include <ged/bsg_ged_draw.h>
+#include <ged/draw.h>
 #include <ged/event_txn.h>
 
 // In order to handle changes to .g geometry contents, we need to defined

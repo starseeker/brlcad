@@ -28,7 +28,7 @@
 #include <string.h>
 
 #include "bu/cmd.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "ged/event_txn.h"
 
 #include "../ged_private.h"

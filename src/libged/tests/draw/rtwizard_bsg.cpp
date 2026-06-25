@@ -124,7 +124,7 @@ make_null_view(struct ged *gedp, const char *vname)
     (void)rt_view_context_scene_anchor_ensure_bsg(v);
 
     rt_view_set_context_add_bsg(view_set_ctx, v);
-    bu_ptbl_ins(&gedp->ged_free_views, (long *)v);
+    ged_view_context_owned_add(gedp, v);
 
     return v;
 }

@@ -43,8 +43,38 @@
 #include "bsg/scene_object.h"
 #include "bsg/view_scope.h"
 #include "bsg/view_state.h"
-#include "rt/view_legacy_bsg.h"
+#include "rt/view.h"
 #include "dm.h"
+
+int
+dm_view_context_is_retained_legacy(const void *view_ctx)
+{
+    return rt_view_context_is_retained(view_ctx);
+}
+
+int
+dm_view_context_width_get(const void *view_ctx)
+{
+    return rt_view_context_width_get(view_ctx);
+}
+
+int
+dm_view_context_height_get(const void *view_ctx)
+{
+    return rt_view_context_height_get(view_ctx);
+}
+
+int
+dm_view_context_dimensions_set(void *view_ctx, int width, int height)
+{
+    return rt_view_context_dimensions_set(view_ctx, width, height);
+}
+
+int
+dm_view_context_refresh_request(void *view_ctx, uint32_t flags)
+{
+    return rt_view_context_refresh_request(view_ctx, flags);
+}
 
 void
 dm_draw_arrow(struct dm *dmp, point_t A, point_t B, fastf_t tip_length, fastf_t tip_width, fastf_t sf)
@@ -879,7 +909,7 @@ _dm_framebuffer_draw_item(void *dmp_ptr, const struct bsg_render_item *item)
 static int
 _dm_hud_render_request(struct bsg_view *v, struct bsg_backend_adapter *adapter)
 {
-    struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(v);
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(v);
     if (!dmp)
 	return 0;
     if (bsg_hud_sync(v) != 0)
@@ -1084,7 +1114,7 @@ _dm_draw_label_resolved(struct dm *dmp, const struct bsg_render_item *item)
 	    for (int i = 0; i < 3; i++) {
 		for (int j = 0; j < 3; j++) {
 		    point_t t3d, tpt;
-		    if (!rt_view_screen_to_view_from_bsg(&t3d[0], &t3d[1], v, xvals[i], yvals[j])) {
+		    if (!rt_view_context_screen_to_view(&t3d[0], &t3d[1], v, xvals[i], yvals[j])) {
 			return;
 		    }
 		    t3d[2] = 0;
@@ -1130,7 +1160,7 @@ _dm_draw_label_resolved(struct dm *dmp, const struct bsg_render_item *item)
 		    return;
 	    }
 	}
-	(void)rt_view_screen_to_view_from_bsg(&l3d[0], &l3d[1], v, anchor[0], anchor[1]);
+	(void)rt_view_context_screen_to_view(&l3d[0], &l3d[1], v, anchor[0], anchor[1]);
 	MAT4X3PNT(mpt, v->gv_view2model, l3d);
     } else {
 	VMOVE(mpt, item->geometry.text.position);
@@ -1151,7 +1181,7 @@ void
 dm_draw_objs(void *view_ctx)
 {
     struct bsg_view *v = (struct bsg_view *)view_ctx;
-    struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(v);
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(v);
     if (!dmp) {
 	bu_log("Warning - dm_draw_objs called when view has no associated display manager\n");
 	return;
@@ -1172,7 +1202,7 @@ dm_draw_objs(void *view_ctx)
     // The rest of the drawing layers manipulate the OpenGL view and projection
     // matrices, but the framebuffer is always aligned to the view.  We also
     // can't have the zbuffer enabled or the fb image won't draw correctly.
-    int fb_mode = rt_view_framebuffer_mode_from_bsg(v);
+    int fb_mode = rt_view_context_framebuffer_mode_get(v);
     if (fb_mode && dm_get_fb(dmp)) {
 	static struct bsg_backend_adapter framebuffer_adapter = {NULL, NULL, _dm_framebuffer_draw_item, NULL, NULL, NULL, NULL};
 	(void)_dm_hud_render_request(v, &framebuffer_adapter);

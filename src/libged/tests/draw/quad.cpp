@@ -36,7 +36,7 @@
 #define DM_WITH_RT
 #include <dm.h>
 #include <ged.h>
-#include <ged/bsg_ged_draw.h>
+#include <ged/draw.h>
 #include <ged/event_txn.h>
 
 #define QDIFF_THRES 20
@@ -489,7 +489,7 @@ main(int ac, char *av[]) {
 	    ged_view_active_ctx_set(gedp, v);
 	rt_view_context_name_set_bsg(v, view_name);
 	rt_view_set_context_add_bsg(view_set_ctx, v);
-	bu_ptbl_ins(&gedp->ged_free_views, (long *)v);
+	ged_view_context_owned_add(gedp, v);
 
 	/* To generate images that will allow us to check if the drawing
 	 * is proceeding as expected, we use the swrast off-screen dm. */

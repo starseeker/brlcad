@@ -55,7 +55,7 @@
 #include "bg/clip.h"
 
 #include "ged.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "./ged_private.h"
 
 const char *

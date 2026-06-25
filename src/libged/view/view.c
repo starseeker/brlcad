@@ -33,7 +33,7 @@
 #include "bu/malloc.h"
 #include "bu/vls.h"
 
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "../ged_private.h"
 #include "./ged_view.h"
 

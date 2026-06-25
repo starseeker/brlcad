@@ -401,15 +401,6 @@ rt_view_previous_mouse_set_bsg(struct bsg_view *v, fastf_t x, fastf_t y);
 RT_EXPORT extern int
 rt_view_context_previous_mouse_set_bsg(void *ctx, fastf_t x, fastf_t y);
 
-struct rt_view_mouse_delta_settings {
-    fastf_t min_delta;
-    fastf_t max_delta;
-    fastf_t rotate_scale;
-    fastf_t scale_scale;
-};
-
-#define RT_VIEW_MOUSE_DELTA_SETTINGS_INIT { 0.0, 0.0, 0.0, 0.0 }
-
 RT_EXPORT extern int
 rt_view_mouse_delta_settings_from_bsg(struct rt_view_mouse_delta_settings *settings,
 				      const struct bsg_view *v);
@@ -651,16 +642,36 @@ rt_view_context_autoview_bounds_bsg(void *ctx,
 				    const point_t min,
 				    const point_t max);
 
-#define RT_VIEW_ADJUST_IDLE   0x000ULL
-#define RT_VIEW_ADJUST_ROT    0x001ULL
-#define RT_VIEW_ADJUST_TRANS  0x002ULL
-#define RT_VIEW_ADJUST_SCALE  0x004ULL
-#define RT_VIEW_ADJUST_CENTER 0x008ULL
-#define RT_VIEW_ADJUST_CON_X  0x010ULL
-#define RT_VIEW_ADJUST_CON_Y  0x020ULL
-#define RT_VIEW_ADJUST_CON_Z  0x040ULL
-#define RT_VIEW_ADJUST_CON_GRID 0x080ULL
-#define RT_VIEW_ADJUST_CON_LINES 0x100ULL
+#ifndef RT_VIEW_ADJUST_IDLE
+#  define RT_VIEW_ADJUST_IDLE   0x000ULL
+#endif
+#ifndef RT_VIEW_ADJUST_ROT
+#  define RT_VIEW_ADJUST_ROT    0x001ULL
+#endif
+#ifndef RT_VIEW_ADJUST_TRANS
+#  define RT_VIEW_ADJUST_TRANS  0x002ULL
+#endif
+#ifndef RT_VIEW_ADJUST_SCALE
+#  define RT_VIEW_ADJUST_SCALE  0x004ULL
+#endif
+#ifndef RT_VIEW_ADJUST_CENTER
+#  define RT_VIEW_ADJUST_CENTER 0x008ULL
+#endif
+#ifndef RT_VIEW_ADJUST_CON_X
+#  define RT_VIEW_ADJUST_CON_X  0x010ULL
+#endif
+#ifndef RT_VIEW_ADJUST_CON_Y
+#  define RT_VIEW_ADJUST_CON_Y  0x020ULL
+#endif
+#ifndef RT_VIEW_ADJUST_CON_Z
+#  define RT_VIEW_ADJUST_CON_Z  0x040ULL
+#endif
+#ifndef RT_VIEW_ADJUST_CON_GRID
+#  define RT_VIEW_ADJUST_CON_GRID 0x080ULL
+#endif
+#ifndef RT_VIEW_ADJUST_CON_LINES
+#  define RT_VIEW_ADJUST_CON_LINES 0x100ULL
+#endif
 
 RT_EXPORT extern int
 rt_view_adjust_bsg(struct bsg_view *v,
@@ -895,6 +906,9 @@ rt_view_context_selection_clear_bsg(void *ctx);
 
 RT_EXPORT extern struct bu_ptbl *
 rt_view_set_views_bsg(struct bsg_view_set *s);
+
+RT_EXPORT extern void *
+rt_view_set_recycle_pool_bsg(struct bsg_view_set *s);
 
 RT_EXPORT extern struct bsg_view *
 rt_view_set_find_view_bsg(struct bsg_view_set *s, const char *name);
@@ -1230,6 +1244,9 @@ rt_view_context_lod_bounds_update_bsg(void *ctx);
 
 RT_EXPORT extern void
 rt_view_lod_bounds_callback_set_bsg(struct bsg_view *v);
+
+RT_EXPORT extern int
+rt_view_context_lod_bounds_callback_set_bsg(void *ctx);
 
 RT_EXPORT extern int
 rt_view_lod_bounds_callback_is_bsg(const struct bsg_view *v);

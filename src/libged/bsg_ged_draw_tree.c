@@ -48,8 +48,9 @@
 #include "bg/clip.h"
 
 #include "ged.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "ged/db_index.h"
+#include "rt/view.h"
 #include "./bsg_ged_draw_private.h"
 #include "./ged_private.h"
 
@@ -59,6 +60,13 @@ struct _sg_ref_snapshot {
     size_t len;
     size_t cap;
 };
+
+static bsg_scene_ref
+_sg_independent_scope_ref(void *view_ctx, int create)
+{
+    return ged_draw_scene_ref_from_rt_view_ref(
+	    rt_view_context_independent_scope_ref(view_ctx, create));
+}
 
 
 static void
@@ -145,6 +153,13 @@ static int _sg_erase_by_path_prefix_string(struct ged *gedp,
 static void _draw_append_scene_ref_to_group(struct ged *gedp, bsg_scene_ref group_ref, bsg_scene_ref shape_ref);
 
 
+static struct bsg_view *
+_sg_tree_active_view(struct ged *gedp)
+{
+    return (struct bsg_view *)ged_view_active_ctx(gedp);
+}
+
+
 static bsg_scene_ref
 _sg_find_or_create_child_group(struct ged *gedp, bsg_scene_ref parent_ref,
 			       const char *comp_name)
@@ -156,7 +171,7 @@ _sg_find_or_create_child_group(struct ged *gedp, bsg_scene_ref parent_ref,
     if (!bsg_scene_ref_is_null(existing))
 	return existing;
 
-    struct bsg_view *v = gedp->ged_gvp;
+    struct bsg_view *v = _sg_tree_active_view(gedp);
     if (!v)
 	return bsg_scene_ref_null();
 
@@ -185,8 +200,9 @@ _sg_add_path(struct ged *gedp, const char *name)
 	return bsg_scene_ref_null();
 
     bsg_scene_ref base_ref = root_ref;
-    if (gedp->ged_gvp && ged_draw_view_is_independent_bsg(gedp->ged_gvp)) {
-	bsg_scene_ref scope_ref = ged_draw_view_independent_scope_ref_bsg(gedp->ged_gvp, 1);
+    void *view_ctx = ged_view_active_ctx(gedp);
+    if (view_ctx && rt_view_context_is_independent(view_ctx)) {
+	bsg_scene_ref scope_ref = _sg_independent_scope_ref(view_ctx, 1);
 	if (!bsg_scene_ref_is_null(scope_ref))
 	    base_ref = scope_ref;
     }
@@ -313,13 +329,13 @@ _sg_erase_path(struct ged *gedp, const char *path)
 
 
 static bsg_scene_ref
-_sg_scoped_erase_base_ref(struct ged *gedp, struct bsg_view *v)
+_sg_scoped_erase_base_ref(struct ged *gedp, void *view_ctx)
 {
     if (!gedp)
 	return bsg_scene_ref_null();
 
-    if (v && ged_draw_view_is_independent_bsg(v))
-	return ged_draw_view_independent_scope_ref_bsg(v, 0);
+    if (view_ctx && rt_view_context_is_independent(view_ctx))
+	return _sg_independent_scope_ref(view_ctx, 0);
 
     return ged_scene_root_ref(gedp);
 }
@@ -1510,13 +1526,13 @@ ged_draw_clear(struct ged *gedp)
     if (!gedp)
 	return;
 
-    struct bu_ptbl *views = ged_draw_view_set_views_bsg(&gedp->ged_views);
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     if (views) {
 	for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	    struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, i);
-	    if (!v || !ged_draw_view_is_independent_bsg(v))
+	    void *view_ctx = (void *)BU_PTBL_GET(views, i);
+	    if (!view_ctx || !rt_view_context_is_independent(view_ctx))
 		continue;
-	    bsg_scene_ref scope_ref = ged_draw_view_independent_scope_ref_bsg(v, 0);
+	    bsg_scene_ref scope_ref = _sg_independent_scope_ref(view_ctx, 0);
 	    (void)_sg_clear_all_groups_under(scope_ref);
 	}
     }

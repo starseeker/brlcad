@@ -55,7 +55,7 @@
 #define DM_WITH_RT
 #include <dm.h>
 #include <ged.h>
-#include <ged/bsg_ged_draw.h>
+#include <ged/draw.h>
 #include <ged/db_index.h>
 #include <ged/event_txn.h>
 #include <icv.h>

@@ -1,24 +1,15 @@
 BRL-CAD Obol Active Work Guide
 ==============================
 
+Last refreshed: 2026-06-25
+
 Purpose
 -------
 
 This is the first file a new or resumed AI session should read before working
-on the Obol migration.  It is intentionally current, action-oriented, and
-short enough to keep in context.
-
-Use obol_worklog.txt for the longer rationale, historical notes, and detailed
-design records consolidated from the former root guidance files:
-
-  fb_plan.txt
-  lod_pipeline.txt
-  lod_result_wakeup.txt
-  modern_drawing.txt
-  obol_migration.txt
-  obol_prototype.txt
-  pop_lod.txt
-  review.txt
+on the Obol migration.  It is intentionally current and action-oriented.  Use
+`obol_worklog.txt` for detailed history, rationale, and older verification
+records consolidated from the former root guidance files.
 
 
 Working Rules
@@ -26,15 +17,19 @@ Working Rules
 
 * Work on the oboltest branch unless the user redirects.
 * Do not rebase oboltest again unless the user explicitly asks.
-* Primary BRL-CAD build directory is build/ and uses Ninja.
-* If modifying embedded Obol sources, build in obol/build and run install so
+* Primary BRL-CAD build directory is `build/` and uses Ninja.
+* If modifying embedded Obol sources, build in `obol/build` and run install so
   BRL-CAD CMake can detect the staged update.
 * The compile/test cycle is slow.  Batch low-risk related changes when root
   causing failures will still be straightforward.
-* Keep all Obol-canonical code free of new public BSG/libdm dependencies.
+* Keep Obol-canonical code free of new public BSG/libdm dependencies.
 * Preserve user and existing worktree changes.  Do not revert unrelated edits.
-* Update this file when the active work queue, percentages, or next-step
-  priorities materially change.  Put longer rationale in obol_worklog.txt.
+* Keep `/tmp` clean.  This is a shared machine.
+* Single tests over 180 seconds are a problem to investigate or split.
+* Avoid premature profiling work during migration unless a change introduces a
+  catastrophic slowdown.
+* Update this file when active priorities, percentages, remaining blockers, or
+  verification baselines materially change.
 
 
 Migration Intent
@@ -54,288 +49,2164 @@ BRL-CAD Obol nodes, actions, details, and narrow application services.  It
 must not become a generic replacement for BSG's render-item/backend-scene
 model.
 
-The first production target is qged/qtcad.  After qged is usable on Obol,
-migrate GED/TclCAD/mged, then remove lower-level BSG/DM utility dependencies.
-
 
 Current Completion Estimates
 ----------------------------
 
 These percentages measure exit-criteria completion, not effort spent.
 
-Next Push:
+Active workstreams:
 
 * Obol realization coverage matrix: 98 percent.
 * libbrlobol database realization: 98 percent.
 * Obol diagnostic overlays: 45 percent.
-* qtcad visible Obol rendering: 71 percent.
+* qtcad visible Obol rendering: 77 percent.
 * Guardrails and inventory: 99 percent.
 * Low-level cleanup: 99 percent.
 * libimgstream migration batch: 57 percent.
 * Framebuffer display ownership: 58 percent.
 
-Migration Phases:
+Migration phases:
 
 * Phase 1, architecture freeze and guardrails: 80 percent.
 * Phase 2, productionize libbrlobol: 97 percent.
-* Phase 3, migrate qged/qtcad: 71 percent.
-* Phase 4, migrate libged, libtclcad, and mged: 96 percent.
-* Phase 5, remove lower-level BSG/DM dependencies: 71 percent.
-* Phase 6, hard removal: 5 percent.
+* Phase 3, migrate qged/qtcad: 77 percent.
+* Phase 4, migrate libged, libtclcad, and mged: 99 percent.
+* Phase 5, remove lower-level BSG/DM dependencies: 97 percent.
+* Phase 6, hard removal: 6 percent.
 
-
-Decisions That Should Guide New Work
-------------------------------------
-
-* Obol cameras, transforms, SoViewport, SoRenderManager, actions, nodes,
-  fields, and details are authoritative for scene, view, render, and
-  interaction state.
-* New drawing code should use Obol directly or use BRL-CAD Obol extensions.
-  Do not add new BSG/DM dependencies outside explicit legacy allowlists.
-* C and Tcl callers may use opaque bridges backed by Obol; C++ is acceptable
-  for code directly interacting with the drawing API.
-* bg_vlist and bg_line_layer are low-level geometry/debug containers, not
-  scene APIs.  Application-visible drawing state should be Obol nodes.
-* libbg should gain normal implementation units for neutral plot/debug
-  helpers.  plot3.h is unlikely to be retired.
-* Keep the bg_line_layer-to-plot3 diagnostic path.  It is useful for simple
-  debugging output and should not require Obol execution.
-* Scene text, labels, HUD text, and annotations should use Obol 2D/3D text.
-  Flattened text geometry should be generated from an Obol-backed path when
-  export requires it.
-* MGED should target a proper Tcl/Tk Obol widget for performant native
-  rendering when system OpenGL/Vulkan/etc. are available.  OSMesa/offscreen
-  rendering plus image presentation is a slower fallback, not the target.
-* Obol owns image display, placement, layering, texture upload, readback, and
-  rendering backend selection.
-* libimgstream owns live mutable image streams, async image producers,
-  dirty-update notification, transport, fan-out, fbserv compatibility, and
-  fb_* wrappers during migration.
-* libicv owns static image containers, codecs, image file I/O, image
-  transforms, and neutral colormap/lookup-table operations.
+The latest GED shape-ref context cleanup retires the typed private
+`ged_draw_shape_ref_realize` and `ged_draw_shape_ref_view` helpers.
+Transaction realization now calls `ged_draw_shape_ref_realize_context`
+directly, and `ged_draw_shape_ref_realize_context` plus
+`ged_draw_shape_ref_view_context` now implement the retained scene lookup
+without bouncing through typed `struct bsg_view *` helper APIs.
+Exit-criteria percentages do not change: retained active-view
+group/overlay/redraw use, scene-root creation and scene-ref handoffs, public
+BSG-shaped draw scene-ref/snap handoff surfaces, libdm/libged direct
+dependency rows, retained qtcad draw/DM ownership, and lower backend
+ownership still determine libbsg retirement readiness.
 
 
 Current Migration Snapshot
 --------------------------
 
-The active Phase 4 front is app-side retirement of direct
-`rt/view_legacy_bsg.h` reach-throughs.  The current direct non-test production
-legacy-view include count is:
+Retirement readiness: not yet.  The app/shell direct-include milestone is
+complete, but bridge-owned BSG wrappers and direct target dependency rows still
+block libbsg retirement.
 
-* `src/mged`: 6 files, currently `chgview.c`, `cmd.cpp`, `dozoom.c`,
-  `mged.c`, `mged.h`, and `mged_dm.h`.
-* `src/libtclcad`: 13 files, mostly Tcl view command, refresh, faceplate,
-  mouse, polygon, framebuffer, and wrapper boundaries.
-* Broad production scan: 29 files across MGED, TclCAD, the bridge-owned GED
-  adapter files, libdm backends/view support, RT legacy adapters, qtcad's
-  retained legacy-view bridge, and `gsh`.
+Current direct non-test production `rt/view_legacy_bsg.h` owners:
 
-Retirement readiness is not yet reached.  The current 29 direct production
-legacy-view owners split into these remaining buckets:
+* `src/mged`: 0 files.
+* `src/libtclcad`: 0 files.
+* `src/gtools/gsh`: 0 files.
+* Broad production scan: 2 files.
+* Remaining production owners:
+  * `src/libged/ged_view_legacy.cpp`
+  * `src/librt/view_legacy_bsg.c`
 
-* Phase 4 app front: 6 MGED files and 13 TclCAD files.
-* GED bridge boundary: 2 files, `src/libged/ged.cpp` and
-  `src/libged/bsg_ged_draw_view.c`.
-* Lower display/backend boundary: 4 libdm files.
-* RT legacy adapter boundary: 2 librt files.
-* qtcad retained bridge: 1 file, `src/libqtcad/QgLegacyView.cpp`.
-* GSH retained display-state bridge: 1 file, `src/gtools/gsh/gsh.cpp`.
+Direct build dependency rows still guarded in
+`doc/notes/obol_legacy_dependency_inventory.txt`:
 
-The next retirement threshold is app-side direct reach-through removal:
-MGED and TclCAD should reach zero direct `rt/view_legacy_bsg.h` includes while
-bridge-owned implementation files keep behavior stable.  After that, Phase 5
-owns the lower libdm, librt adapter, qtcad bridge, GED bridge, and GSH
-dependencies.  Phase 6 hard removal starts only after the build, install, and
-linked target graphs no longer need public libbsg, libdm, or dm_plugins.
+* `libdm` still directly depends on `libbsg`.
+* `libged` still directly depends on `libdm` and `libbsg`.
+* `libqtcad` still directly depends on `libdm`, but no longer directly
+  depends on `libbsg`.
+* `libtclcad` still directly depends on `libdm`, but no longer directly
+  depends on `libbsg`.
+* `qged` still has a direct `dm_plugins` dependency.
+* `mged` still depends on `libtclcad`.
 
-The latest completed MGED cleanup moved `setup.c` and `attach.c` from direct
-legacy-view includes to public GED view-context facades for view creation,
-copied-view creation, update callbacks, ADC writes, scale-storage handoff,
-initial center reads, and copied-display LoD policy adjustment.  The detailed
-history for that and earlier batches is in `obol_worklog.txt`.
+Current residual draw-bridge scan shape:
 
-Current guard strategy:
+* The private `ged_draw_view_active_bsg` helper is now retired.  Retained
+  active-view use still appears inside `src/libged/bsg_ged_draw_scene_root.c`,
+  `src/libged/bsg_ged_draw_tree.c`, `src/libged/bsg_ged_draw_transactions.c`,
+  and `src/libged/bsg_ged_draw_overlay.c`, but those files now read the active
+  view through neutral `ged_view_active_ctx` and keep the `struct bsg_view *`
+  cast local to the BSG-backed implementation boundary.  These are still real
+  transitional bridge seams because the surrounding code consumes retained
+  `struct bsg_view *` handles for group creation, overlay creation, redraw
+  fallbacks, or scene-root plumbing.
+* `src/libged/bsg_ged_draw_overlay.c` now routes overlay scene find, erase,
+  and append operations through context-shaped private helpers.  The old typed
+  private `ged_draw_view_overlay_scene_find`,
+  `ged_draw_view_overlay_name_erase`, `ged_draw_view_overlay_scene_append`,
+  and `ged_draw_view_overlay_create` wrappers are retired from the private
+  header and BSG-backed draw-view implementation.  Overlay geometry creation
+  and bounds update still keep a local retained `struct bsg_view *` because
+  those calls are still BSG-owned.
+* `src/libged/bsg_ged_draw_view.c` now owns the generic feature existence,
+  removal, prefix removal, visibility, depth, style, realize, points-copy,
+  axes-centers-copy, and feature creation/replacement operations directly in
+  the public/private context-shaped functions.  The old typed private
+  `ged_draw_view_feature_*`, `ged_draw_view_features_remove_prefix`,
+  indexed-face-set replacement, line/line-layer replacement, annotation-line
+  creation/append, label create/replace, Tcl feature publication, axes create,
+  and polygon create/import trampolines are retired from the private header
+  and implementation.  The context functions still use the retained BSG
+  feature backend until the wider draw-view feature API boundary moves.
+* `src/libged/bsg_ged_draw_view.c` also owns line style/color/width,
+  line-points-copy, and arrow-tip get/set operations directly in the
+  context-shaped functions.  The old typed private
+  `ged_draw_view_line_style_get`, `ged_draw_view_line_color_set`,
+  `ged_draw_view_line_width_set`, `ged_draw_view_lines_points_copy`,
+  `ged_draw_view_arrow_tip_get`, and `ged_draw_view_arrow_tip_set`
+  trampolines are retired from the private header and implementation.  The
+  corresponding line, arrow, label, axes, polygon, and shape
+  creation/replacement context functions still remain BSG-backed until the
+  wider draw-view feature API boundary moves.
+* `src/libged/bsg_ged_draw_view.c` now owns label count, label copy, and
+  label point-set operations directly in the context-shaped functions.  The
+  old typed private `ged_draw_view_label_count`, `ged_draw_view_label_copy`,
+  and `ged_draw_view_label_point_set` trampolines are retired from the private
+  header and implementation.  Label creation/replacement, line/arrow creation,
+  axes, polygon, and shape creation/replacement context functions still remain
+  BSG-backed until the wider draw-view feature API boundary moves.
+* `src/libged/bsg_ged_draw_view.c` now owns axes state get and replace
+  operations directly in the context-shaped functions.  The old typed private
+  `ged_draw_view_axes_state_get` and `ged_draw_view_axes_state_replace`
+  trampolines are retired from the private header and implementation.  Axes
+  creation, remaining polygon export/record/current/open/fill helpers, and
+  shape creation/replacement context functions still remain BSG-backed until
+  the wider draw-view feature API boundary moves.
+* `src/libged/bsg_ged_draw_view.c` now owns polygon find, scoped find, update,
+  screen-point update, area, overlap, and CSG operations directly in the
+  context-shaped functions.  The old typed private
+  `ged_draw_view_polygon_find`, `ged_draw_view_polygon_find_scoped`,
+  `ged_draw_view_polygon_update`,
+  `ged_draw_view_polygon_update_screen_pt`, `ged_draw_view_polygon_area`,
+  `ged_draw_view_polygon_overlap`, and `ged_draw_view_polygon_csg`
+  trampolines are retired from the private header and implementation.  Polygon
+  create/import now also route directly through context functions; polygon
+  export/record/current/open/fill/color helpers still remain BSG-backed until
+  the wider polygon backend boundary moves.
+* The old GED-owned view-set/recycle-pool private helpers are now retired.
+  Scene-root, tree, and transaction view loops use `ged_view_set_views_ctx`,
+  and scene-root draw-context recycling uses
+  `rt_view_set_context_recycle_pool(ged_view_set_ctx(...))`.
+  `src/libged/bsg_ged_draw_transactions.c` also saves/restores the active
+  view through `ged_view_active_ctx_set` instead of the retired private BSG
+  active-set wrapper.
+* `src/libged/bsg_ged_draw_tree.c` now gets independent-scope scene refs
+  through neutral `rt_view_context_independent_scope_ref`, wraps the remaining
+  retained scene-ref conversion in local `_sg_independent_scope_ref`, and
+  keeps the raw neutral-to-BSG field conversion centralized in
+  `ged_draw_scene_ref_from_rt_view_ref` inside
+  `src/libged/bsg_ged_draw_refs.c`.  The tree no longer touches scene-ref
+  `.opaque` storage directly.  The old private
+  `ged_draw_view_context_independent_scope_ref` adapter and older
+  `ged_draw_view_independent_scope_ref_bsg` wrapper are retired from the tree,
+  private header, and central GED legacy-view adapter.
+* `src/libged/bsg_ged_draw_transactions.c` now gets GED view tables through
+  `ged_view_set_views_ctx` for DB-event revalidation and transaction
+  view-array loops, and uses `ged_view_active_ctx_set` for active-view
+  save/restore around transaction apply.  The old
+  `ged_draw_view_active_set_bsg` wrapper is retired from the private header
+  and central GED legacy-view adapter, and transactions no longer call
+  `ged_draw_view_set_views_for_ged_bsg`.  DB-event view-root revalidation
+  now uses neutral `ged_draw_view_context_scene_root_rt_ref`, compares
+  `rt_view_scene_ref` values, and converts to retained BSG scene refs only
+  for the final draw-intent revalidation call.  The old typed
+  `ged_draw_view_scene_root_ref` wrapper and the BSG-returning
+  `ged_draw_view_context_scene_root_ref` helper are retired.  Redraw and transaction
+  fallbacks now read the active view through
+  `ged_view_active_ctx` instead of the retired private
+  `ged_draw_view_active_bsg` trampoline.  Transaction shape realization now
+  calls `ged_draw_shape_ref_realize_context` directly; the old typed private
+  `ged_draw_shape_ref_realize` helper is retired.
+* `src/libged/bsg_ged_draw_scene_root.c` now gets GED view tables through
+  `ged_view_set_views_ctx` and draw-context recycle storage through
+  `rt_view_set_context_recycle_pool(ged_view_set_ctx(...))`.  The old
+  `ged_draw_view_set_views_for_ged_bsg` and
+  `ged_draw_view_set_recycle_pool_for_ged_bsg` wrappers are retired from the
+  private header and central GED legacy-view adapter.  The public
+  `ged_draw_view_context_scene_root` helper now queries neutral
+  `ged_draw_view_context_scene_root_rt_ref` and converts through the GED
+  draw-ref bridge only to expose the retained context pointer; the unused
+  typed `ged_draw_view_has_scene_root` helper is retired.  Scene-root root
+  attachment now crosses `rt_view_context_scene_root_ref_attach`, but retained
+  scene-root group creation and the RT adapter's backend attach storage are
+  still BSG-backed until that ownership boundary moves.
+* `src/libged/bsg_ged_draw_records.c` now consumes active-view and selection
+  state through opaque GED view contexts and private
+  `ged_draw_view_context_selection_*` helpers.  The private typed
+  `ged_draw_view_selection_path_cb` callback layer is retired; selection path
+  iteration now invokes the public opaque
+  `ged_draw_view_context_selection_path_cb` directly.  The BSG selection
+  mechanics remain file-local inside `src/libged/bsg_ged_draw_view.c` until
+  the retained draw-view feature/selection backend migrates.
+* `src/libged/bsg_ged_draw_refs.c` now owns shape-ref realization and
+  owning-view lookup directly in the context-shaped
+  `ged_draw_shape_ref_realize_context` and
+  `ged_draw_shape_ref_view_context` functions.  The typed private
+  `ged_draw_shape_ref_realize` and `ged_draw_shape_ref_view` helpers are
+  retired from the private header and implementation.
+* The retained mesh-LoD scene-ref load pass-through is retired.
+  `src/libged/draw.cpp` still owns retained `bsg_scene_ref` values during
+  draw realization, but it converts them through the central
+  `ged_draw_scene_ref_to_rt_view_ref` helper and calls neutral
+  `rt_mesh_lod_load_view_scene_ref` directly.  The old
+  `ged_draw_mesh_lod_load_view_scene_ref_context` private helper and the older
+  typed `ged_draw_mesh_lod_load_view_scene_ref` wrapper are retired from the
+  private header and GED legacy-view adapter.  The reset/free path in
+  `src/libged/bsg_ged_draw_refs.c` converts the retained scene ref to
+  `rt_view_scene_ref` locally and calls `rt_mesh_lod_free_scene_ref` directly;
+  the old private GED free wrapper is retired.
+* `src/libged/bsg_ged_draw_view_private.h` and
+  `src/libged/ged_view_legacy.cpp` intentionally remain the central private
+  compatibility declaration and implementation owners for context-shaped
+  scene-root scene refs, LoD bounds callback opaque
+  install, neutral view-set lifecycle/find helpers, snap, overlay context,
+  feature context accessors, and retained draw shape/selection helper
+  surfaces.  The GED legacy-view adapter now calls the neutral
+  `rt_view_context_lod_bounds_callback_set` helper and neutral
+  `rt_view_set_context_init/free/find_view` helpers, and stores the active
+  view as an opaque `void *` rather than `struct bsg_view *`; the retained
+  `rt_view_lod_bounds_callback_set_bsg` and `rt_view_set_*_bsg`
+  implementations are confined to the RT legacy adapter.
+  `src/libged/bsg_ged_draw_refs.c` owns the
+  remaining neutral `rt_view_scene_ref` and retained `bsg_scene_ref`
+  conversions needed by draw-tree scope handling, scene-root attach, and
+  mesh-LoD free handoffs until that boundary becomes neutral.  The GED
+  legacy-view adapter no longer performs retained-to-neutral mesh-LoD scene-ref
+  conversion; `draw.cpp` converts through the central helper before calling the
+  neutral-ref load context helper.  The old private
+  BSG-suffixed view snapshot, LoD, autoview, generic view-set passthrough,
+  GED-owned view-set/recycle-pool, view-set lifecycle/find, typed active-view
+  storage/casts, typed
+  scene-root-ref, typed mesh-LoD load, typed LoD bounds callback helpers, typed overlay
+  registry/create, typed generic feature accessors, typed
+  feature creation/replacement helpers, typed line/arrow accessors,
+  typed label accessors, typed axes-state accessors, typed view-dependent
+  polygon helpers, typed HUD sync, typed snap first-candidate, typed
+  selection path callback plumbing, independent-scope scene-ref, and
+  independent-check wrappers are retired.
+* `src/libged/bsg_ged_draw_view.c` still contains BSG-internal selection,
+  feature, overlay, feature creation/replacement, axes creation, line/label
+  creation and replacement, and remaining polygon export/record/current/open/
+  fill helpers.  Do not count those BSG-backed context implementations as
+  retired-wrapper regressions until the public draw-view feature API boundary
+  itself is migrated.
+* `src/libged/draw.cpp` still owns retained `bsg_scene_ref` values during
+  mesh-LoD realization, but the load path now converts through the central
+  draw-ref helper and calls the neutral RT mesh-LoD loader directly.  The
+  remaining blocker is the public BSG-shaped scene-ref handoff surface, not a
+  private GED mesh-LoD load wrapper.
 
-* Keep `brlobol_pivot_guard` aligned with every migrated boundary.
-* Keep the central direct `rt/view_legacy_bsg.h` production allowlist current;
-  any file removed from direct legacy ownership should come out of that list.
-* Prefer narrow public GED/RT facades for app-side C callers while retained
-  legacy allocation and typed BSG details stay in bridge-owned implementation
-  files.
-* Do not broaden optimization/profiling work unless a migration change creates
-  a catastrophic slowdown or a single test exceeds the 180 second cap.
+Latest code-state change: GED draw scene-root context lookup now uses a
+neutral RT scene-ref context helper.  `include/rt/view.h` declares
+`rt_view_scene_ref_context`, `src/librt/view_legacy_bsg.c` implements it for
+neutral scene refs, and `src/librt/tests/view_legacy_bsg.c` covers null and
+non-null scene-ref context extraction.  `src/libged/bsg_ged_draw_scene_root.c`
+now calls that helper from `ged_draw_view_context_scene_root` instead of
+converting through `ged_draw_scene_ref_from_rt_view_ref` and
+`ged_draw_scene_ref_context`.  The pivot guard now requires the neutral
+helper in the RT/GED route and rejects the old GED scene-root conversion path
+from returning.  Exit-criteria percentages do not change because retained
+scene-root group creation, retained scene-ref handoffs, retained BSG
+feature/polygon backend, overlay geometry, retained group/overlay/redraw BSG
+view use, retained qtcad draw-observer/transaction ownership, and lower
+libged/libdm dependency rows still block libbsg retirement.
 
-Recent verification baseline:
+Verification for this GED scene-root context cleanup passed on FreeBSD/clang.
+The affected build passed with
+`ninja -C build libged.so librt.so rt_view_legacy_bsg`.  The focused
+`brlobol_pivot_guard` plus `rt_view_legacy_bsg` gate completed 2/2 passing in
+21.14 seconds.  The standard broad focused wrapper gate completed 13/13
+passing in 82.57 seconds; longest members were `libbsg_api_hygiene` at 40.99
+seconds, `brlobol_pivot_guard` at 17.75 seconds, `ged_test_drawing_quad` at
+12.69 seconds, and `ged_test_drawing_basic` at 7.54 seconds.
 
-* `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
-  passed.
-* `ninja -C build bin/mged` passed.
-* Focused guard/hygiene/MGED-view/drawing verification passed 28/28 in
-  186.65 seconds; longest single test was `ged_test_state_services` at
-  93.48 seconds.
-* `regress-mged_arb` passed separately in 0.41 seconds.
+The previous code-state change: GED draw mesh-LoD load no longer crosses a
+private GED pass-through helper.  `src/libged/draw.cpp` now calls
+`rt_mesh_lod_load_view_scene_ref` directly after converting retained
+`bsg_scene_ref` values through `ged_draw_scene_ref_to_rt_view_ref`, and
+`src/libged/ged_view_legacy.cpp` no longer implements
+`ged_draw_mesh_lod_load_view_scene_ref_context`.  The private header no
+longer declares that helper, and the pivot guard now rejects the retired
+pass-through from returning while requiring the direct neutral RT loader in
+`draw.cpp`.
 
-Active Work Queue
------------------
+An older code-state change: GED private active-view storage no longer
+names the retained BSG view type.  `src/libged/ged_private.h` now stores
+`ged_impl::ged_gvp` as `void *`, and `src/libged/ged_view_legacy.cpp` assigns
+and returns that opaque context directly for default-view install,
+active-view lookup, and active-view replacement.  The pivot guard now requires
+the opaque private storage token and rejects typed `struct bsg_view *ged_gvp`
+storage or typed active-view casts from returning there.
 
-1. Finish app-side direct legacy-view retirement.
+An older code-state change: GED retained view-set lifecycle and name lookup
+now use neutral RT context helpers.  `include/rt/view.h` declares
+`rt_view_set_context_init`, `rt_view_set_context_free`, and
+`rt_view_set_context_find_view`; `src/librt/view_legacy_bsg.c` implements
+them by delegating to the retained BSG view-set implementation; and
+`src/libged/ged_view_legacy.cpp` now calls those helpers instead of
+`rt_view_set_init_bsg`, `rt_view_set_free_bsg`, and
+`rt_view_set_find_view_bsg`.  The pivot guard requires the neutral view-set
+helpers in the GED legacy-view adapter and rejects those direct BSG view-set
+calls from returning there.
 
-   Continue removing direct `rt/view_legacy_bsg.h` use from MGED and TclCAD by
-   routing callers through public GED/RT facades.  The next likely MGED targets
-   are the remaining lifecycle/view-state files: `mged_dm.h`, `mged.h`,
-   `mged.c`, `dozoom.c`, `cmd.cpp`, and `chgview.c`.  Avoid broad behavior
-   rewrites inside those files; keep each batch tied to one view-state family
-   or lifecycle boundary.
+An older code-state change: the GED LoD bounds callback install path now
+uses a neutral RT context helper.  `include/rt/view.h` declares
+`rt_view_context_lod_bounds_callback_set`, `src/librt/view_legacy_bsg.c`
+implements it by delegating to the retained BSG callback setter, and
+`src/libged/ged_view_legacy.cpp` now calls that neutral helper instead of
+`rt_view_lod_bounds_callback_set_bsg(static_cast<struct bsg_view *>(...))`.
+The pivot guard now requires the neutral helper in the GED legacy-view adapter
+and rejects the direct BSG callback setter from returning there.
 
-   After each migration batch, update `brlobol_pivot_guard.cmake`, the central
-   direct legacy-view include allowlist, this file's count snapshot, and the
-   dependency inventory.
+The previous code-state change: the private GED mesh-LoD load helper now takes
+a neutral RT scene ref.  `ged_draw_mesh_lod_load_view_scene_ref_context` in
+`src/libged/bsg_ged_draw_view_private.h` and
+`src/libged/ged_view_legacy.cpp` now accepts `rt_view_scene_ref` and passes it
+directly to `rt_mesh_lod_load_view_scene_ref`; `src/libged/draw.cpp` converts
+retained `bsg_scene_ref` values through `ged_draw_scene_ref_to_rt_view_ref`
+before calling that helper.  The pivot guard now rejects a
+`bsg_scene_ref visibility_ref` mesh-LoD load signature and rejects
+`ged_draw_scene_ref_to_rt_view_ref` from returning to
+`ged_view_legacy.cpp`.
 
-2. Continue TclCAD view-command migration.
+The previous code-state change: the private GED scene-root-ref query helper
+now returns a neutral RT scene ref.  `src/libged/bsg_ged_draw_scene_root.c`
+exposes `ged_draw_view_context_scene_root_rt_ref` as the retained bridge
+helper for `rt_view_context_scene_root_ref`, and
+`src/libged/bsg_ged_draw_transactions.c` now compares
+`rt_view_scene_ref` values during DB-event view-root revalidation before
+converting only the non-shared root to retained `bsg_scene_ref` for
+`bsg_scene_draw_intent_revalidate`.  The old BSG-returning
+`ged_draw_view_context_scene_root_ref` helper is retired from the private
+header, scene-root bridge, and transaction path.
 
-   TclCAD still has 13 direct legacy-view include owners.  Prefer moving
-   related command/view helpers in batches where callback ownership and data
-   lifetime are obvious.  Keep retained Tcl data and polygon/label storage
-   behind opaque helper surfaces until those structures move fully to Obol.
+An earlier code-state change: the installed GED BSG draw compatibility
+header is retired.  `include/ged/bsg_ged_draw.h` was removed from source and
+from `include/ged/CMakeLists.txt`; `include/ged/draw.h` remains the neutral
+installed GED draw declaration owner.  CMake regeneration removed the stale
+build-tree `build/include/brlcad/ged/bsg_ged_draw.h` symlink.  The pivot
+guard now rejects the retired wrapper file itself, install-list reentry, and
+source or libged-test includes of `ged/bsg_ged_draw.h`.  Phase 6 hard-removal
+readiness moved from 5 to 6 percent for retiring this public BSG-named
+installed surface.
 
-3. Productionize source-backed LoD for large BoTs.
+An earlier code-state change: libged draw tests now use the neutral public
+`ged/draw.h` facade instead of the retired BSG-named compatibility header.
+`src/libged/tests/test_state_services.cpp`, `src/libged/tests/test_gqa.c`,
+and the libged draw fixtures now include `ged/draw.h`; the
+`ged_draw_scene.cpp` file comment was updated to name the neutral declaration
+owner.  The targeted guard/test suite for that batch completed 14/14 passing
+in 172.88 seconds, with `ged_test_state_services` the longest functional test
+at 95.33 seconds, below the 180-second investigation threshold.
 
-   The target design is source identity plus bounded resident display payload,
-   not mandatory full-detail residency.  Remaining work is provider-owned POP
-   payload lifetime, chunked or bbox/intersection-targeted BoT detail reads,
-   stronger provider/policy scheduling, and caller integration for exact
-   export/measure/snap/pick helpers.
+The earlier code-state change: GED retained mesh-LoD load scene-ref conversion
+now uses the centralized draw-ref bridge.  `src/libged/ged_view_legacy.cpp`
+removed its local raw `bsg_scene_ref` to `rt_view_scene_ref` copy helper, keeps
+the narrow `bsg_ged_draw_view_private.h` include boundary, and calls
+`ged_draw_scene_ref_to_rt_view_ref` before invoking neutral
+`rt_mesh_lod_load_view_scene_ref`.  The conversion helper declaration now
+lives in `src/libged/bsg_ged_draw_view_private.h` so the GED legacy-view
+adapter does not include the full private draw bridge, and
+`src/libged/bsg_ged_draw_private.h` relies on that narrow header instead of
+duplicating the declaration.  The pivot guard now requires this central
+conversion route in `ged_view_legacy.cpp`, rejects local `.opaque`
+reach-through there, and rejects the old local helper spelling.  Exit-criteria
+percentages do not change because the public BSG-shaped scene-ref handoff
+surface, retained scene-root group creation, retained scene-ref handoffs,
+retained BSG feature/polygon backend, overlay geometry, retained
+group/overlay/redraw BSG view use, retained qtcad draw-observer/transaction
+ownership, and lower libged/libdm dependency rows still determine retirement
+readiness.
 
-4. Add and generalize exact picking providers.
+Verification for this GED retained mesh-LoD scene-ref conversion cleanup
+passed on FreeBSD/clang with
+`ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+The final rebuild after the header-boundary fix rebuilt the affected libged
+slice and relinked libqtcad/test targets cleanly.  Standalone
+`libbsg_api_hygiene` passed in 40.98 seconds after an initial broad-gate run
+caught the too-broad full private draw bridge include in `ged_view_legacy.cpp`.
+The focused migration gate completed 4/4 passing in 18.17 seconds:
+`brlobol_pivot_guard` 17.88 seconds, `rt_view_legacy_bsg` 0.02 seconds,
+`test_qtcad_obol_draw_sync` 0.11 seconds, and `ged_test_qged_swrast` 0.11
+seconds.  The broad focused wrapper gate completed 13/13 passing in 82.80
+seconds; longest members were `libbsg_api_hygiene` at 41.12 seconds,
+`brlobol_pivot_guard` at 17.85 seconds, `ged_test_drawing_quad` at 12.71
+seconds, and `ged_test_drawing_basic` at 7.51 seconds.  A standalone
+`brlobol_pivot_guard` rerun after the status and inventory updates passed in
+17.64 seconds.
 
-   qtcad has the first source-backed mesh and database-source RT exact pick
-   paths.  Remaining work is wiring non-qtcad callers to the shared helpers
-   and carrying the same display/source/RT duplicate-suppression policy into
-   those tools.
+The previous code-state change: GED draw scene-root query refs and root attachment
+now route through neutral RT view-context scene refs.  `include/rt/view.h`
+exposes `rt_view_context_scene_root_ref` and
+`rt_view_context_scene_root_ref_attach`, `src/librt/view_legacy_bsg.c`
+implements both against the retained adapter, and `rt_view_legacy_bsg` covers
+null, attached, detached, and attach round-trip root-ref behavior.  The GED
+scene-root query helper in `src/libged/bsg_ged_draw_scene_root.c` calls the
+neutral RT query helper and converts through
+`ged_draw_scene_ref_from_rt_view_ref`; the public context pointer helper now
+uses `ged_draw_scene_ref_context` so raw scene-ref field access stays
+centralized in `src/libged/bsg_ged_draw_refs.c`.  The GED scene-root attach
+path now converts retained `bsg_scene_ref` through
+`ged_draw_scene_ref_to_rt_view_ref` and calls
+`rt_view_context_scene_root_ref_attach` instead of direct
+`bsg_view_scene_ref_attach`.  `ged_draw_view_context_scene_attached` also
+delegates to neutral `rt_view_context_scene_attached`.  The pivot guard now
+requires the neutral scene-root query/attach route in RT and GED.
+Exit-criteria percentages do not change because retained scene-root group
+creation, retained scene-ref handoffs, retained BSG feature/polygon backend,
+overlay geometry, retained group/overlay/redraw BSG view use, public
+BSG-shaped draw snap/scene-ref API surface, retained qtcad
+draw-observer/transaction ownership, and lower libged/libdm dependency rows still
+determine retirement readiness.
 
-5. Make qtcad visibly render through Obol by default.
+Verification for this GED draw scene-root query/attach neutral-ref cleanup
+passed on FreeBSD/clang with
+`ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+The `rt/view.h` change rebuilt the affected RT/GED/qtcad slice cleanly.  A
+standalone `brlobol_pivot_guard` passed in 17.63 seconds, and standalone
+`rt_view_legacy_bsg` passed in 0.02 seconds.  The focused migration gate
+completed 4/4 passing in 17.99 seconds: `brlobol_pivot_guard` 17.70 seconds,
+`rt_view_legacy_bsg` 0.02 seconds, `test_qtcad_obol_draw_sync` 0.11 seconds,
+and `ged_test_qged_swrast` 0.11 seconds.  The broad focused wrapper gate
+completed 13/13 passing in 82.63 seconds; longest members were
+`libbsg_api_hygiene` at 40.98 seconds, `brlobol_pivot_guard` at 17.84
+seconds, `ged_test_drawing_quad` at 12.69 seconds, and
+`ged_test_drawing_basic` at 7.52 seconds.  A standalone
+`brlobol_pivot_guard` rerun after the status and inventory updates passed in
+17.64 seconds.
 
-   qtcad needs Obol visible paint, navigation, autoview, selection, picking,
-   snapping, measuring, overlays, edit preview, and screenshot/readback to work
-   for real .g workflows without requiring libdm for migrated content.
+The previous code-state change: GED draw tree independent-scope refs now route
+through the neutral RT view-context scene-ref API without reintroducing raw
+draw-tree scene-ref storage access.  `src/libged/bsg_ged_draw_tree.c` calls
+`rt_view_context_independent_scope_ref` and converts the returned
+`rt_view_scene_ref` through `ged_draw_scene_ref_from_rt_view_ref`, whose raw
+field copy is centralized in `src/libged/bsg_ged_draw_refs.c`.  The pivot
+guard now requires that bridge-owner helper in the draw-tree route, and
+`libbsg_api_hygiene` continues to reject direct `.opaque` access in the
+Stage 14C draw-tree bridge.  The old private
+`ged_draw_view_context_independent_scope_ref` adapter and older
+`ged_draw_view_independent_scope_ref_bsg` wrapper are gone from
+`src/libged/bsg_ged_draw_view_private.h`,
+`src/libged/ged_view_legacy.cpp`, and the tree.  Exit-criteria percentages do
+not change because retained scene-ref/root/scope handoffs, retained BSG
+feature/polygon backend, overlay geometry, retained group/overlay/redraw BSG
+view use, public BSG-shaped draw snap/scene-ref API surface, retained qtcad
+draw-observer/transaction ownership, and lower libged/libdm dependency rows
+still determine retirement readiness.
 
-6. Replace diagnostic publication with Obol overlays.
+Verification for this GED draw tree independent-scope neutral-ref cleanup
+passed on FreeBSD/clang with
+`ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+The `libged.so` rebuild after the code edit passed cleanly, the relinked
+wrapper target set passed, and standalone `libbsg_api_hygiene` passed in
+50.09 seconds after it had caught the first bad raw `.opaque` placement.
+The focused migration gate completed 4/4 passing in 18.26 seconds:
+`brlobol_pivot_guard` 17.97 seconds, `rt_view_legacy_bsg` 0.02 seconds,
+`test_qtcad_obol_draw_sync` 0.11 seconds, and `ged_test_qged_swrast` 0.11
+seconds.  The broad focused wrapper gate completed 13/13 passing in 82.52
+seconds; longest members were `libbsg_api_hygiene` at 41.05 seconds,
+`brlobol_pivot_guard` at 17.63 seconds, `ged_test_drawing_quad` at 12.71
+seconds, and `ged_test_drawing_basic` at 7.53 seconds.  A standalone
+`brlobol_pivot_guard` rerun after the status and inventory updates passed in
+17.65 seconds.
 
-   Define Obol-side lines, points, labels, axes, grids, faceplate/HUD, edit
-   previews, and selectable diagnostics.  Keep bg_line_layer as a neutral
-   producer/container and keep plot3 export as a simple diagnostic output path.
+The previous code-state change: GED draw transaction LoD bounds callback
+preparation now uses an opaque context helper.  `src/libged/ged_view_legacy.cpp`
+implements `ged_draw_view_context_lod_bounds_callback_set(void *view_ctx)` as
+the central bridge to the retained RT/BSG callback install, and
+`src/libged/bsg_ged_draw_transactions.c` calls that context helper when
+preparing transaction views.  The old typed private
+`ged_draw_view_set_lod_bounds_update` helper and unused
+`ged_draw_view_has_lod_bounds_update` helper are gone from the private header
+and GED legacy-view implementation, and `bsg_ged_draw_view_private.h` no
+longer needs `struct bsg_view` or `struct bsg_view_set` declarations.
+Exit-criteria percentages do not change because retained scene-ref/root/scope
+handoffs, retained BSG feature/polygon backend, overlay geometry, retained
+group/overlay/redraw BSG view use, public BSG-shaped draw snap/scene-ref API
+surface, retained qtcad draw-observer/transaction ownership, and lower
+libged/libdm dependency rows still determine retirement readiness.
 
-7. Continue libimgstream/fb display ownership migration.
+Verification for this GED draw LoD bounds callback cleanup passed on
+FreeBSD/clang with
+`ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+The `libged.so` rebuild after the code edit passed cleanly, and an initial
+standalone `brlobol_pivot_guard` run passed in 17.62 seconds.  The focused
+migration gate completed 4/4 passing in 18.23 seconds:
+`brlobol_pivot_guard` 17.94 seconds, `rt_view_legacy_bsg` 0.02 seconds,
+`test_qtcad_obol_draw_sync` 0.11 seconds, and `ged_test_qged_swrast` 0.11
+seconds.  The broad focused wrapper gate completed 13/13 passing in 82.65
+seconds; longest members were `libbsg_api_hygiene` at 41.02 seconds,
+`brlobol_pivot_guard` at 17.89 seconds, `ged_test_drawing_quad` at 12.66
+seconds, and `ged_test_drawing_basic` at 7.50 seconds.  A standalone
+`brlobol_pivot_guard` rerun after the status and inventory updates passed in
+17.78 seconds.
 
-   Route display-capable framebuffer requests through registered Obol
-   display/window hosts.  Add dirty-region texture uploads, broader dm_open
-   routing, hardware-preferred Qt host selection, and Tk/MGED adapters.
+The previous code-state change: GED draw selection path iteration now uses
+the public opaque context callback directly.  `src/libged/bsg_ged_draw_view.c`
+implements `ged_draw_view_context_selection_path_foreach` by iterating the
+retained BSG selection internally and invoking
+`ged_draw_view_context_selection_path_cb` with the original opaque
+`view_ctx`.  The old private typed `ged_draw_view_selection_path_cb`,
+`_ged_draw_view_selection_path_foreach`, and
+`_ged_draw_view_context_selection_path_thunk` plumbing is gone from the
+private header and implementation, and the pivot guard now rejects those
+retired typed callback names.  Exit-criteria percentages do not change
+because retained scene-ref/root/scope handoffs, retained BSG feature/polygon
+backend, overlay geometry, retained group/overlay/redraw BSG view use, public
+BSG-shaped draw snap/scene-ref API surface, retained qtcad
+draw-observer/transaction ownership, and lower libged/libdm dependency rows
+still determine retirement readiness.
 
-8. Harden guardrails and dependency inventory.
+Verification for this GED draw selection callback cleanup passed on
+FreeBSD/clang with
+`ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+The `libged.so` rebuild after the code edit passed cleanly, and an initial
+standalone `brlobol_pivot_guard` run passed in 17.75 seconds.  The focused
+migration gate completed 4/4 passing in 17.93 seconds:
+`brlobol_pivot_guard` 17.64 seconds, `rt_view_legacy_bsg` 0.02 seconds,
+`test_qtcad_obol_draw_sync` 0.11 seconds, and `ged_test_qged_swrast` 0.11
+seconds.  The broad focused wrapper gate completed 13/13 passing in 82.27
+seconds; longest members were `libbsg_api_hygiene` at 40.92 seconds,
+`brlobol_pivot_guard` at 17.61 seconds, `ged_test_drawing_quad` at 12.65
+seconds, and `ged_test_drawing_basic` at 7.51 seconds.  A standalone
+`brlobol_pivot_guard` rerun after the status and inventory updates passed in
+17.93 seconds.
 
-   Keep the pivot guard and inventory current as each boundary migrates.  Do
-   not weaken the existing behavior-specific checks; consolidate repetitive
-   text scans only when the replacement preserves the same regression signal.
-   A compiled scanner is acceptable for repetitive file/token checks if CMake
-   scan time becomes the bottleneck, but avoid reimplementing complex semantic
-   guard logic prematurely.
+The previous code-state change before that: GED draw HUD sync and snap first-candidate
+helpers now use context-shaped implementation entry points without private typed
+`struct bsg_view *` trampolines.  `src/libged/bsg_ged_draw_view.c` implements
+`ged_draw_view_context_hud_sync` directly against the retained HUD backend,
+and `src/libged/ged_view_legacy.cpp` implements
+`ged_draw_view_context_snap_first_candidate` directly against the neutral
+`rt_view_context_snap_first_candidate` helper.  The typed private
+`ged_draw_view_hud_sync` and `ged_draw_view_snap_first_candidate` wrappers are
+gone from the private header and implementations, and the pivot guard now
+requires the context route while rejecting the retired typed helper names.
+Exit-criteria percentages do not change because retained scene-ref/root/scope
+handoffs, retained BSG feature/polygon backend, overlay geometry, retained
+group/overlay/redraw BSG view use, public BSG-shaped draw snap/scene-ref API
+surface, retained qtcad draw-observer/transaction ownership, and lower
+libged/libdm dependency rows still determine retirement readiness.
 
-Large-Geometry LoD Policy
--------------------------
+Verification for this GED draw HUD/snap helper cleanup passed on
+FreeBSD/clang with
+`ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+The `libged.so` rebuild after the code edit passed cleanly, and an initial
+standalone `brlobol_pivot_guard` run passed in 17.59 seconds.  The focused
+migration gate completed 4/4 passing in 17.96 seconds:
+`brlobol_pivot_guard` 17.67 seconds, `rt_view_legacy_bsg` 0.02 seconds,
+`test_qtcad_obol_draw_sync` 0.11 seconds, and `ged_test_qged_swrast` 0.11
+seconds.  The broad focused wrapper gate completed 13/13 passing in 82.38
+seconds; longest members were `libbsg_api_hygiene` at 40.94 seconds,
+`brlobol_pivot_guard` at 17.65 seconds, `ged_test_drawing_quad` at 12.67
+seconds, and `ged_test_drawing_basic` at 7.53 seconds.  A standalone
+`brlobol_pivot_guard` rerun after the status and inventory updates passed in
+18.00 seconds.
 
-Do not design large BoT LoD around "preserve full detail in memory plus LoD".
-That works only as an interim correctness bridge for already-resident meshes.
+The previous code-state change: GED draw feature creation/replacement helpers now use
+context-shaped implementation entry points without private typed
+`struct bsg_view *` trampolines.  `src/libged/bsg_ged_draw_view.c` implements
+indexed-face-set replacement, line replacement, Tcl polygon publication,
+line-layer builder replacement, line-layer replacement, model annotation line
+creation, line-point append, label create/replace, Tcl label/line/arrow/axes
+publication, axes creation, polygon creation, and polygon sketch import
+directly in the `ged_draw_view_context_*` functions.  The typed private
+`ged_draw_view_indexed_face_set_replace`, `ged_draw_view_lines_replace`,
+`ged_draw_view_tcl_polygons_replace`,
+`ged_draw_view_line_layer_builder_replace`,
+`ged_draw_view_line_layers_replace`,
+`ged_draw_view_lines_create_model_annotation`,
+`ged_draw_view_lines_append_point`, `ged_draw_view_label_create`,
+`ged_draw_view_labels_replace`, `ged_draw_view_tcl_labels_replace`,
+`ged_draw_view_tcl_lines_replace`, `ged_draw_view_tcl_arrows_replace`,
+`ged_draw_view_tcl_axes_replace`, `ged_draw_view_axes_create`,
+`ged_draw_view_polygon_create`, and
+`ged_draw_view_polygon_import_sketch` wrappers are gone from the private header
+and implementation, and the pivot guard now requires the context route while
+rejecting the retired typed helper names.  Exit-criteria percentages do not
+change because the retained BSG feature backend, polygon
+export/record/current/open/fill helpers, overlay geometry, retained
+group/overlay/redraw BSG view use, scene-root handoffs, public BSG-shaped draw
+snap/scene-ref API surface, retained qtcad draw-observer/transaction
+ownership, and lower libged/libdm dependency rows still determine retirement
+readiness.
 
-For very large geometry, including pathological cases like many Lucy-size mesh
-primitives, the intended behavior is:
+Verification for this GED draw feature creation/replacement helper cleanup
+passed on FreeBSD/clang with
+`ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+The `libged.so` rebuild after the code edit passed cleanly, and an initial
+standalone `brlobol_pivot_guard` run passed in 17.57 seconds.  The focused
+migration gate completed 4/4 passing in 18.20 seconds:
+`brlobol_pivot_guard` 17.91 seconds, `rt_view_legacy_bsg` 0.02 seconds,
+`test_qtcad_obol_draw_sync` 0.11 seconds, and `ged_test_qged_swrast` 0.11
+seconds.  The broad focused wrapper gate completed 13/13 passing in 82.37
+seconds; longest members were `libbsg_api_hygiene` at 40.92 seconds,
+`brlobol_pivot_guard` at 17.57 seconds, `ged_test_drawing_quad` at 12.76
+seconds, and `ged_test_drawing_basic` at 7.51 seconds.  A standalone
+`brlobol_pivot_guard` rerun after the status and inventory updates passed in
+17.72 seconds.
 
-* Scene nodes keep source identity, display policy, bounds, counts, and the
-  current display payload.
-* Full-detail arrays are not required to remain resident.
-* Exact operations fetch data from the authoritative .g/librt source when
-  needed.
-* If whole-object detail reload is too large, use chunks, bbox-targeted reads,
-  or intersection-targeted reads behind the provider contract.
-* A cached coarse sidecar can help exact pick/snap by mapping spatial leaves
-  to source face ids or ranges, but it only pays off when librt can actually
-  provide partial BoT reads or cached full-detail chunks.
+The previous code-state change: GED draw polygon view-dependent helpers now use
+context-shaped implementation entry points without private typed
+`struct bsg_view *` trampolines.  `src/libged/bsg_ged_draw_view.c` implements
+`ged_draw_view_context_polygon_find`,
+`ged_draw_view_context_polygon_find_scoped`,
+`ged_draw_view_context_polygon_update`,
+`ged_draw_view_context_polygon_update_screen_pt`,
+`ged_draw_view_context_polygon_area`,
+`ged_draw_view_context_polygon_overlap`, and
+`ged_draw_view_context_polygon_csg` directly against the retained BSG polygon
+implementation.  The typed private `ged_draw_view_polygon_find`,
+`ged_draw_view_polygon_find_scoped`, `ged_draw_view_polygon_update`,
+`ged_draw_view_polygon_update_screen_pt`, `ged_draw_view_polygon_area`,
+`ged_draw_view_polygon_overlap`, and `ged_draw_view_polygon_csg` wrappers are
+gone from the private header and implementation, and the pivot guard now
+requires the context route while rejecting the retired typed polygon helpers.
+Exit-criteria percentages do not change because polygon
+create/import/export/record/current/open/fill helpers, axes creation, shape
+creation/replacement helpers, overlay geometry, retained group/overlay/redraw
+BSG view use, scene-root handoffs, public BSG-shaped draw snap/scene-ref API
+surface, retained qtcad draw-observer/transaction ownership, and lower
+libged/libdm dependency rows still determine retirement readiness.
 
-The POP build pass is a plausible place to emit that sidecar because it already
-walks source triangles, normalizes bounds, assigns active levels, and tracks
-source face ids.  Keep the sidecar optional and coarse; it should not slow the
-display POP path enough to hurt the main LoD benefit.
+Verification for this GED draw polygon view-dependent helper cleanup passed on
+FreeBSD/clang with
+`ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+The `libged.so` rebuild after the code edit passed cleanly, and an initial
+standalone `brlobol_pivot_guard` run passed in 17.78 seconds.  The focused
+migration gate completed 4/4 passing in 18.17 seconds:
+`brlobol_pivot_guard` 17.88 seconds, `rt_view_legacy_bsg` 0.02 seconds,
+`test_qtcad_obol_draw_sync` 0.11 seconds, and `ged_test_qged_swrast` 0.11
+seconds.  The broad focused wrapper gate completed 13/13 passing in 82.55
+seconds; longest members were `libbsg_api_hygiene` at 40.94 seconds,
+`brlobol_pivot_guard` at 17.72 seconds, `ged_test_drawing_quad` at 12.78
+seconds, and `ged_test_drawing_basic` at 7.51 seconds.  A standalone
+`brlobol_pivot_guard` rerun after the status and inventory updates passed in
+17.72 seconds.
+
+The previous code-state change: GED draw axes-state accessors now use
+context-shaped implementation entry points without private typed
+`struct bsg_view *` trampolines.  `src/libged/bsg_ged_draw_view.c` implements
+`ged_draw_view_context_axes_state_get` and
+`ged_draw_view_context_axes_state_replace` directly against the retained BSG
+axes feature implementation.  The typed private
+`ged_draw_view_axes_state_get` and `ged_draw_view_axes_state_replace` wrappers
+are gone from the private header and implementation, and the pivot guard now
+requires the context route while rejecting the retired typed axes-state
+accessors.  Exit-criteria percentages do not change because axes creation,
+polygon, and shape creation/replacement helpers, overlay geometry, retained
+group/overlay/redraw BSG view use, scene-root handoffs, public BSG-shaped draw
+snap/scene-ref API surface, retained qtcad draw-observer/transaction
+ownership, and lower libged/libdm dependency rows still determine retirement
+readiness.
+
+Verification for this GED draw axes-state accessor cleanup passed on
+FreeBSD/clang with
+`ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+The `libged.so` rebuild after the code edit passed cleanly, and an initial
+standalone `brlobol_pivot_guard` run passed in 17.65 seconds.  The focused
+migration gate completed 4/4 passing in 17.98 seconds:
+`brlobol_pivot_guard` 17.69 seconds, `rt_view_legacy_bsg` 0.02 seconds,
+`test_qtcad_obol_draw_sync` 0.11 seconds, and `ged_test_qged_swrast` 0.11
+seconds.  The broad focused wrapper gate completed 13/13 passing in 82.59
+seconds; longest members were `libbsg_api_hygiene` at 41.03 seconds,
+`brlobol_pivot_guard` at 17.76 seconds, `ged_test_drawing_quad` at 12.67
+seconds, and `ged_test_drawing_basic` at 7.53 seconds.  A standalone
+`brlobol_pivot_guard` rerun after the status and inventory updates passed in
+17.67 seconds.
+
+The previous code-state change before that: GED draw label accessors now use
+context-shaped implementation entry points without private typed
+`struct bsg_view *` trampolines.  `src/libged/bsg_ged_draw_view.c` implements
+`ged_draw_view_context_label_count`,
+`ged_draw_view_context_label_copy`, and
+`ged_draw_view_context_label_point_set` directly against the retained BSG
+feature implementation.  The typed private `ged_draw_view_label_count`,
+`ged_draw_view_label_copy`, and `ged_draw_view_label_point_set` wrappers are
+gone from the private header and implementation, and the pivot guard now
+requires the context route while rejecting the retired typed label accessors.
+Exit-criteria percentages do not change because label creation/replacement,
+line/arrow creation, axes, polygon, and shape creation/replacement helpers,
+overlay geometry, retained group/overlay/redraw BSG view use, scene-root
+handoffs, public BSG-shaped draw snap/scene-ref API surface, retained qtcad
+draw-observer/transaction ownership, and lower libged/libdm dependency rows
+still determine retirement readiness.
+
+Verification for this GED draw label accessor cleanup passed on FreeBSD/clang
+with
+`ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+The `libged.so` rebuild after the code edit passed cleanly, and an initial
+standalone `brlobol_pivot_guard` run passed in 17.89 seconds.  The focused
+migration gate completed 4/4 passing in 17.89 seconds:
+`brlobol_pivot_guard` 17.60 seconds, `rt_view_legacy_bsg` 0.02 seconds,
+`test_qtcad_obol_draw_sync` 0.11 seconds, and `ged_test_qged_swrast` 0.11
+seconds.  The broad focused wrapper gate completed 13/13 passing in 82.32
+seconds; longest members were `libbsg_api_hygiene` at 40.92 seconds,
+`brlobol_pivot_guard` at 17.61 seconds, `ged_test_drawing_quad` at 12.66
+seconds, and `ged_test_drawing_basic` at 7.55 seconds.  A standalone
+`brlobol_pivot_guard` rerun after the status and inventory updates passed in
+17.66 seconds.
+
+The previous code-state change before that: GED draw line/arrow accessors now use
+context-shaped implementation entry points without private typed
+`struct bsg_view *` trampolines.  `src/libged/bsg_ged_draw_view.c` implements
+`ged_draw_view_context_line_style_get`,
+`ged_draw_view_context_line_color_set`,
+`ged_draw_view_context_line_width_set`,
+`ged_draw_view_context_lines_points_copy`,
+`ged_draw_view_context_arrow_tip_get`, and
+`ged_draw_view_context_arrow_tip_set` directly against the retained BSG
+feature implementation.  The typed private
+`ged_draw_view_line_style_get`, `ged_draw_view_line_color_set`,
+`ged_draw_view_line_width_set`, `ged_draw_view_lines_points_copy`,
+`ged_draw_view_arrow_tip_get`, and `ged_draw_view_arrow_tip_set` wrappers are
+gone from the private header and implementation, and the pivot guard now
+requires the context route while rejecting the retired typed line/arrow
+accessors.  Exit-criteria percentages do not change because line, arrow,
+label, axes, polygon, and shape creation/replacement helpers, overlay
+geometry, retained group/overlay/redraw BSG view use, scene-root handoffs,
+public BSG-shaped draw snap/scene-ref API surface, retained qtcad
+draw-observer/transaction ownership, and lower libged/libdm dependency rows
+still determine retirement readiness.
+
+Verification for this GED draw line/arrow accessor cleanup passed on
+FreeBSD/clang with
+`ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+The `libged.so` rebuild after the code edit passed cleanly, and an initial
+standalone `brlobol_pivot_guard` run passed in 17.94 seconds.  The focused
+migration gate completed 4/4 passing in 18.28 seconds:
+`brlobol_pivot_guard` 17.99 seconds, `rt_view_legacy_bsg` 0.02 seconds,
+`test_qtcad_obol_draw_sync` 0.11 seconds, and `ged_test_qged_swrast` 0.11
+seconds.  The broad focused wrapper gate completed 13/13 passing in 82.58
+seconds; longest members were `libbsg_api_hygiene` at 40.90 seconds,
+`brlobol_pivot_guard` at 17.75 seconds, `ged_test_drawing_quad` at 12.78
+seconds, and `ged_test_drawing_basic` at 7.56 seconds.  A standalone
+`brlobol_pivot_guard` rerun after the status and inventory updates passed in
+17.78 seconds.
+
+The previous code-state change before that: GED draw generic feature accessors now use
+context-shaped implementation entry points without private typed
+`struct bsg_view *` trampolines.  `src/libged/bsg_ged_draw_view.c` implements
+`ged_draw_view_context_feature_exists`,
+`ged_draw_view_context_feature_remove`,
+`ged_draw_view_context_features_remove_prefix`,
+`ged_draw_view_context_feature_visible`,
+`ged_draw_view_context_feature_visible_set`,
+`ged_draw_view_context_feature_depth`,
+`ged_draw_view_context_feature_depth_foreach`,
+`ged_draw_view_context_feature_style_get`,
+`ged_draw_view_context_feature_style_apply`,
+`ged_draw_view_context_feature_realize`,
+`ged_draw_view_context_feature_points_copy`, and
+`ged_draw_view_context_feature_axes_centers_copy` directly against the retained
+BSG feature implementation.  The typed private
+`ged_draw_view_feature_exists`, `ged_draw_view_feature_remove`,
+`ged_draw_view_features_remove_prefix`, `ged_draw_view_feature_visible`,
+`ged_draw_view_feature_visible_set`, `ged_draw_view_feature_depth`,
+`ged_draw_view_feature_depth_foreach`, `ged_draw_view_feature_style_get`,
+`ged_draw_view_feature_style_apply`, `ged_draw_view_feature_realize`,
+`ged_draw_view_feature_points_copy`, and
+`ged_draw_view_feature_axes_centers_copy` wrappers are gone from the private
+header and implementation, and the pivot guard now requires the context route
+while rejecting the retired typed feature-accessor helpers.  Exit-criteria
+percentages do not change because shape creation/replacement, line/label/axes,
+polygon, overlay geometry, retained group/overlay/redraw BSG view use,
+scene-root handoffs, public BSG-shaped draw snap/scene-ref API surface,
+retained qtcad draw-observer/transaction ownership, and lower libged/libdm
+dependency rows still determine retirement readiness.
+
+Verification for this GED draw feature-accessor cleanup passed on
+FreeBSD/clang with
+`ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+The `libged.so` rebuild after the code edit passed cleanly, and an initial
+standalone `brlobol_pivot_guard` run passed in 17.63 seconds.  The focused
+migration gate completed 4/4 passing in 17.93 seconds:
+`brlobol_pivot_guard` 17.64 seconds, `rt_view_legacy_bsg` 0.02 seconds,
+`test_qtcad_obol_draw_sync` 0.11 seconds, and `ged_test_qged_swrast` 0.11
+seconds.  The broad focused wrapper gate completed 13/13 passing in 82.73
+seconds; longest members were `libbsg_api_hygiene` at 41.08 seconds,
+`brlobol_pivot_guard` at 17.83 seconds, `ged_test_drawing_quad` at 12.69
+seconds, and `ged_test_drawing_basic` at 7.54 seconds.  A standalone
+`brlobol_pivot_guard` rerun after the status and inventory updates passed in
+17.72 seconds.
+
+The previous code-state change before that: GED draw overlay registry access now uses
+context-shaped private helpers.  `src/libged/bsg_ged_draw_overlay.c` calls
+`ged_draw_view_context_overlay_scene_find`,
+`ged_draw_view_context_overlay_name_erase`, and
+`ged_draw_view_context_overlay_scene_append`, and
+`src/libged/bsg_ged_draw_view.c` owns those context helpers directly against
+the retained BSG overlay implementation.  The typed private
+`ged_draw_view_overlay_scene_find`, `ged_draw_view_overlay_name_erase`,
+`ged_draw_view_overlay_scene_append`, and `ged_draw_view_overlay_create`
+wrappers are gone from the private header and implementation, and the pivot
+guard now requires the context route while rejecting the retired typed overlay
+helpers.  Exit-criteria percentages do not change because overlay geometry
+creation, retained group/overlay/redraw BSG view use, scene-root handoffs,
+public BSG-shaped draw snap/scene-ref API surface, retained qtcad
+draw-observer/transaction ownership, and lower libged/libdm dependency rows
+still determine retirement readiness.
+
+Verification for this GED draw overlay-context cleanup passed on FreeBSD/clang
+with
+`ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+An initial standalone `brlobol_pivot_guard` run after the code edit passed in
+21.85 seconds.  The focused migration gate completed 4/4 passing in 17.89
+seconds: `brlobol_pivot_guard` 17.60 seconds, `rt_view_legacy_bsg` 0.02
+seconds, `test_qtcad_obol_draw_sync` 0.11 seconds, and
+`ged_test_qged_swrast` 0.11 seconds.  The broad focused wrapper gate
+completed 13/13 passing in 82.77 seconds; longest members were
+`libbsg_api_hygiene` at 40.94 seconds, `brlobol_pivot_guard` at 17.83
+seconds, `ged_test_drawing_quad` at 12.92 seconds, and
+`ged_test_drawing_basic` at 7.50 seconds.  A standalone
+`brlobol_pivot_guard` rerun after the status and inventory updates passed in
+17.69 seconds.
+
+The previous code-state change: GED draw active-view reads no longer route through
+the private `ged_draw_view_active_bsg` trampoline.  Scene-root root
+attachment/creation, draw-tree group creation, transaction redraw/finalize
+fallbacks, and overlay insertion now read the active view through neutral
+`ged_view_active_ctx`, with retained `struct bsg_view *` casts kept
+file-local inside the BSG-backed implementation files that still call retained
+BSG group/overlay/redraw APIs.  The private declaration and central adapter
+implementation of `ged_draw_view_active_bsg` are gone, and the pivot guard now
+requires `ged_view_active_ctx` in those retained draw files while rejecting the
+retired active-view trampoline from returning.  Exit-criteria percentages do
+not change because retained group/overlay/redraw BSG view use, scene-root
+handoffs, public BSG-shaped draw snap/scene-ref API surface, retained qtcad
+draw-observer/transaction ownership, and lower libged/libdm dependency rows
+still determine retirement readiness.
+
+Verification for this GED draw active-view cleanup passed on FreeBSD/clang
+with
+`ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+The first `libged.so` rebuild exposed a unity-build static helper name
+collision between the scene-root and tree edits; after giving the helpers
+file-specific names, the rebuild passed.  The focused migration gate completed
+4/4 passing in 17.83 seconds: `brlobol_pivot_guard` 17.54 seconds,
+`rt_view_legacy_bsg` 0.02 seconds, `test_qtcad_obol_draw_sync` 0.11 seconds,
+and `ged_test_qged_swrast` 0.11 seconds.  The broad focused wrapper gate
+completed 13/13 passing in 82.60 seconds; longest members were
+`libbsg_api_hygiene` at 41.16 seconds, `brlobol_pivot_guard` at 17.63
+seconds, `ged_test_drawing_quad` at 12.69 seconds, and
+`ged_test_drawing_basic` at 7.53 seconds.  A standalone
+`brlobol_pivot_guard` rerun after the status and inventory updates passed in
+17.75 seconds.
+
+The previous code-state change: GED draw mesh-LoD context loading no longer routes
+through a typed private `struct bsg_view *` trampoline.  `src/libged/draw.cpp`
+continues to call `ged_draw_mesh_lod_load_view_scene_ref_context`, and that
+context helper in `src/libged/ged_view_legacy.cpp` now converts the retained
+scene ref to `rt_view_scene_ref` and calls neutral
+`rt_mesh_lod_load_view_scene_ref` directly with the opaque view context.  The
+private declaration and implementation of
+`ged_draw_mesh_lod_load_view_scene_ref` are gone, and the pivot guard now
+requires the context helper while rejecting the retired typed loader from
+the private header and GED legacy-view adapter.  Exit-criteria percentages do
+not change because active-view group creation, retained scene-root handoffs,
+public BSG-shaped draw snap/scene-ref API surface, retained qtcad
+draw-observer/transaction ownership, and lower libged/libdm dependency rows
+still determine retirement readiness.
+
+Verification for this GED draw mesh-LoD context-load cleanup passed on
+FreeBSD/clang with
+`ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+An initial standalone `brlobol_pivot_guard` run after the code edit passed in
+22.60 seconds.  The focused migration gate completed 4/4 passing in 17.86
+seconds: `brlobol_pivot_guard` 17.58 seconds, `rt_view_legacy_bsg` 0.02
+seconds, `test_qtcad_obol_draw_sync` 0.11 seconds, and
+`ged_test_qged_swrast` 0.11 seconds.  The broad focused wrapper gate
+completed 13/13 passing in 82.40 seconds; longest members were
+`libbsg_api_hygiene` at 40.92 seconds, `brlobol_pivot_guard` at 17.60
+seconds, `ged_test_drawing_quad` at 12.73 seconds, and
+`ged_test_drawing_basic` at 7.54 seconds.  A standalone
+`brlobol_pivot_guard` rerun after the status and inventory updates passed in
+17.7 seconds.
+
+The previous code-state change: GED draw transaction DB-event revalidation
+now uses a context-shaped scene-root-ref helper.
+`src/libged/bsg_ged_draw_transactions.c` calls
+`ged_draw_view_context_scene_root_ref` for view root revalidation instead of
+the typed `ged_draw_view_scene_root_ref` helper.  The private
+`ged_draw_view_scene_root_ref` declaration and implementation are gone, the
+unused typed `ged_draw_view_has_scene_root` helper is retired, and
+`ged_draw_view_context_scene_root` now shares the context-shaped helper.  The
+pivot guard now requires the context-shaped transaction/scene-root route and
+rejects the retired typed scene-root helpers from returning.  Exit-criteria
+percentages do not change because active-view group creation, retained
+scene-root handoffs, mesh-LoD load, public BSG-shaped draw snap/scene-ref API
+surface, retained qtcad draw-observer/transaction ownership, and lower
+libged/libdm dependency rows still determine retirement readiness.
+
+Verification for this GED draw transaction scene-root-ref cleanup passed on
+FreeBSD/clang with
+`ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+The first `libged.so` rebuild exposed a FreeBSD/clang
+`-Wmisleading-indentation` failure in the edited DB-event revalidation block;
+after fixing that indentation, the rebuild passed.  The focused migration gate
+completed 4/4 passing in 17.87 seconds: `brlobol_pivot_guard` 17.58 seconds,
+`rt_view_legacy_bsg` 0.02 seconds, `test_qtcad_obol_draw_sync` 0.11 seconds,
+and `ged_test_qged_swrast` 0.11 seconds.  The broad focused wrapper gate
+completed 13/13 passing in 82.43 seconds; longest members were
+`libbsg_api_hygiene` at 41.01 seconds, `brlobol_pivot_guard` at 17.67
+seconds, `ged_test_drawing_quad` at 12.64 seconds, and
+`ged_test_drawing_basic` at 7.54 seconds.  A final standalone
+`brlobol_pivot_guard` rerun after the status and inventory updates passed in
+17.88 seconds.
+
+The previous code-state change: GED draw scene-root view-set and recycle-pool
+lookups now use neutral GED/RT context helpers.  `src/libged/bsg_ged_draw_scene_root.c`
+calls `ged_view_set_views_ctx` when attaching the retained root to GED views
+and uses `rt_view_set_context_recycle_pool(ged_view_set_ctx(...))` when
+seeding the retained draw context.  The private
+`ged_draw_view_set_views_for_ged_bsg` and
+`ged_draw_view_set_recycle_pool_for_ged_bsg` declarations and central adapter
+implementations are gone.  The pivot guard now requires the neutral
+scene-root route and rejects the retired private BSG view-set/recycle-pool
+wrappers from returning to scene-root, the private header, or the central
+GED legacy-view adapter.  Exit-criteria percentages do not change because
+active-view group creation, scene-root/ref handoffs, mesh-LoD load, public
+BSG-shaped draw snap/scene-ref API surface, retained qtcad
+draw-observer/transaction ownership, and lower libged/libdm dependency rows
+still determine retirement readiness.
+
+Verification for this GED draw scene-root view-set/recycle-pool cleanup
+passed on FreeBSD/clang with
+`ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+The focused migration gate completed 4/4 passing in 18.02 seconds:
+`brlobol_pivot_guard` 17.73 seconds, `rt_view_legacy_bsg` 0.02 seconds,
+`test_qtcad_obol_draw_sync` 0.11 seconds, and `ged_test_qged_swrast` 0.11
+seconds.  The broad focused wrapper gate completed 13/13 passing in 82.59
+seconds; longest members were `libbsg_api_hygiene` at 41.02 seconds,
+`brlobol_pivot_guard` at 17.76 seconds, `ged_test_drawing_quad` at 12.70
+seconds, and `ged_test_drawing_basic` at 7.50 seconds.  A final standalone
+`brlobol_pivot_guard` rerun after the status and inventory updates passed in
+17.77 seconds.
+
+The code-state change before that: GED draw transactions now use neutral GED
+view-context helpers for active-view save/restore and GED-owned view-set
+iteration.  `src/libged/bsg_ged_draw_transactions.c` calls
+`ged_view_active_ctx_set` around transaction apply and
+`ged_view_set_views_ctx` in DB-event revalidation and transaction view-array
+loops.  The private `ged_draw_view_active_set_bsg` declaration and central
+adapter implementation are gone, and transaction code no longer calls
+`ged_draw_view_set_views_for_ged_bsg`.  The pivot guard now requires the
+context-shaped transaction route and rejects the retired active-set/view-set
+wrappers from returning there.  Exit-criteria percentages do not change
+because transaction active-view fallbacks, scene-root/ref handoffs,
+mesh-LoD load, public BSG-shaped draw snap/scene-ref API surface, retained
+qtcad draw-observer/transaction ownership, and lower libged/libdm dependency
+rows still determine retirement readiness.
+
+Verification for this GED draw transaction active-set/view-set cleanup passed
+on FreeBSD/clang with
+`ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+The focused migration gate completed 4/4 passing in 18.07 seconds:
+`brlobol_pivot_guard` 17.78 seconds, `rt_view_legacy_bsg` 0.02 seconds,
+`test_qtcad_obol_draw_sync` 0.12 seconds, and `ged_test_qged_swrast` 0.11
+seconds.  The broad focused wrapper gate completed 13/13 passing in 82.35
+seconds; longest members were `libbsg_api_hygiene` at 40.98 seconds,
+`brlobol_pivot_guard` at 17.59 seconds, `ged_test_drawing_quad` at 12.69
+seconds, and `ged_test_drawing_basic` at 7.50 seconds.  A final standalone
+`brlobol_pivot_guard` rerun after the status and inventory updates passed in
+17.66 seconds.
+
+The code-state change before that: GED draw tree independent-scope paths now use an
+opaque view-context helper instead of the private BSG-view independent-scope
+wrapper.  `src/libged/bsg_ged_draw_tree.c` calls
+`ged_draw_view_context_independent_scope_ref` for active-view scope selection,
+scoped erase-base lookup, and independent-view clear handling, and the clear
+loop now iterates views through `ged_view_set_views_ctx` rather than
+`ged_draw_view_set_views_for_ged_bsg`.  The old
+`ged_draw_view_independent_scope_ref_bsg` declaration and implementation are
+gone from `src/libged/bsg_ged_draw_view_private.h` and
+`src/libged/ged_view_legacy.cpp`.  The pivot guard now requires the
+context-shaped scope-ref path and rejects the retired BSG-view scope wrapper
+from returning.  Exit-criteria percentages do not change because retained
+active-view group creation, transaction active-view fallbacks,
+scene-root/ref handoffs, mesh-LoD load, public BSG-shaped draw snap/scene-ref
+API surface, retained qtcad draw-observer/transaction ownership, and lower
+libged/libdm dependency rows still determine retirement readiness.
+
+Verification for this GED draw tree independent-scope cleanup passed on
+FreeBSD/clang with
+`ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+The focused migration gate completed 4/4 passing in 17.91 seconds:
+`brlobol_pivot_guard` 17.62 seconds, `rt_view_legacy_bsg` 0.02 seconds,
+`test_qtcad_obol_draw_sync` 0.12 seconds, and `ged_test_qged_swrast` 0.11
+seconds.  The broad focused wrapper gate completed 13/13 passing in 82.46
+seconds; longest members were `libbsg_api_hygiene` at 41.03 seconds,
+`brlobol_pivot_guard` at 17.59 seconds, `ged_test_drawing_quad` at 12.75
+seconds, and `ged_test_drawing_basic` at 7.52 seconds.  A final standalone
+`brlobol_pivot_guard` rerun after the status and inventory updates passed in
+17.63 seconds.
+
+The code-state change before that: GED draw record selected/highlighted shape-ref
+selection paths now use opaque view-context helpers instead of private
+BSG-view selection helpers.  `src/libged/bsg_ged_draw_records.c` calls
+`ged_view_active_ctx` plus `ged_draw_view_context_selection_available`,
+`ged_draw_view_context_selection_contains_path`,
+`ged_draw_view_context_selection_add_path`, and
+`ged_draw_view_context_selection_set_path`; the old private
+`ged_draw_view_selection_available`, `ged_draw_view_selection_contains_path`,
+`ged_draw_view_selection_add_path`, `ged_draw_view_selection_set_path`, and
+`ged_draw_view_selection_add_shape_ref` entry points are gone from the record
+file and private headers.  `src/libged/bsg_ged_draw_view.c` still owns the
+retained BSG selection mechanics, but only as file-local helpers behind the
+context boundary.  The pivot guard now requires the neutral record path and
+rejects the retired private BSG-view selection calls from returning to the
+record implementation or private headers.  Exit-criteria percentages do not
+change because scene-root/independent-scope refs, mesh-LoD load, public
+BSG-shaped draw snap/scene-ref API surface, retained qtcad
+draw-observer/transaction ownership, and lower libged/libdm dependency rows
+still determine retirement readiness.
+
+Verification for this GED draw-record selection-boundary cleanup passed on
+FreeBSD/clang with
+`ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+The focused migration gate completed 4/4 passing in 17.79 seconds:
+`brlobol_pivot_guard` 17.50 seconds, `rt_view_legacy_bsg` 0.02 seconds,
+`test_qtcad_obol_draw_sync` 0.11 seconds, and `ged_test_qged_swrast` 0.11
+seconds.  The broad focused wrapper gate completed 13/13 passing in 82.68
+seconds; longest members were `libbsg_api_hygiene` at 41.15 seconds,
+`brlobol_pivot_guard` at 17.72 seconds, `ged_test_drawing_quad` at 12.68
+seconds, and `ged_test_drawing_basic` at 7.54 seconds.  A final standalone
+`brlobol_pivot_guard` rerun after the status and inventory updates passed in
+17.64 seconds.
+
+The previous code-state change: the unused private GED draw-view BSG-suffixed
+wrappers for view info/name/perspective/scale/OBB snapshots, LoD policy
+get/apply, default autoview, generic view-set passthroughs, and
+independent-view boolean checks were removed from
+`src/libged/bsg_ged_draw_view_private.h` and
+`src/libged/ged_view_legacy.cpp`.  The pivot guard now rejects these retired
+private wrappers from returning to the private header or central adapter, and
+the current residual scan no longer reports them.  This is a dead compatibility
+surface cleanup: former call sites already use neutral public GED/RT context
+helpers, so behavior is unchanged.  Exit-criteria percentages do not change
+because active-view/view-set-for-GED, retained scene-root/scope handoffs,
+mesh-LoD load, public BSG-shaped draw snap/scene-ref API surface, retained qtcad
+draw-observer/transaction ownership, and lower libged/libdm dependency rows
+still determine retirement readiness.
+
+Verification for this dead-wrapper cleanup passed on FreeBSD/clang with
+`ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+The first short gate caught stale pivot-guard requirements for the retired
+`ged_draw_view_is_independent_bsg`, `ged_draw_view_set_views_bsg`,
+`ged_draw_view_set_recycle_pool_bsg`, and `rt_view_is_independent_bsg`
+tokens; after correcting the guard to reject those wrappers, the short
+migration gate completed 4/4 passing in 17.94 seconds:
+`brlobol_pivot_guard` 17.65 seconds, `rt_view_legacy_bsg` 0.02 seconds,
+`test_qtcad_obol_draw_sync` 0.11 seconds, and `ged_test_qged_swrast` 0.11
+seconds.  The broad focused wrapper gate completed 13/13 passing in 82.36
+seconds; longest members were `libbsg_api_hygiene` at 40.96 seconds,
+`brlobol_pivot_guard` at 17.58 seconds, `ged_test_drawing_quad` at 12.69
+seconds, and `ged_test_drawing_basic` at 7.55 seconds.
+
+The previous code-state change: `src/libged/bsg_ged_draw_refs.c` now frees retained
+mesh-LoD scene-ref state in `ged_draw_shape_ref_reset_node` through neutral
+`rt_mesh_lod_free_scene_ref` after a local `bsg_scene_ref` to
+`rt_view_scene_ref` conversion.  The private
+`ged_draw_mesh_lod_free_scene_ref` declaration and implementation were
+removed from `src/libged/bsg_ged_draw_view_private.h` and
+`src/libged/ged_view_legacy.cpp`.  The pivot guard now requires the neutral
+free helper in the refs implementation, rejects the retired private GED free
+wrapper from returning in refs/private-header/central-adapter code, and no
+longer requires `ged_view_legacy.cpp` to own that free path.  This does not
+change exit-criteria percentages because the retained mesh-LoD load handoff,
+public BSG-shaped draw snap/scene-ref API surface, retained qtcad
+draw-observer/transaction ownership, and lower libged/libdm dependency rows
+still determine retirement readiness.
+
+Verification for this mesh-LoD free-path cleanup passed on FreeBSD/clang with
+`ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+The first short gate caught one stale pivot-guard requirement that still
+expected `rt_mesh_lod_free_scene_ref` in `src/libged/ged_view_legacy.cpp`;
+after moving that requirement to the refs implementation, the short migration
+gate completed 4/4 passing in 17.74 seconds: `brlobol_pivot_guard` 17.45
+seconds, `rt_view_legacy_bsg` 0.02 seconds,
+`test_qtcad_obol_draw_sync` 0.11 seconds, and `ged_test_qged_swrast` 0.11
+seconds.  The broad focused wrapper gate completed 13/13 passing in 82.51
+seconds; longest members were `libbsg_api_hygiene` at 41.01 seconds,
+`brlobol_pivot_guard` at 17.59 seconds, `ged_test_drawing_quad` at 12.77
+seconds, and `ged_test_drawing_basic` at 7.53 seconds.
+
+The previous code-state change: `src/libged/bsg_ged_draw_tree.c`,
+`src/libged/bsg_ged_draw_transactions.c`, and
+`src/libged/bsg_ged_draw_records.c` now route retained draw independent-view
+boolean checks through neutral `rt_view_context_is_independent` instead of
+the private `ged_draw_view_is_independent_bsg` wrapper.  Tree paths still use
+the private independent-scope scene-ref bridge where they need retained BSG
+scene refs.  The pivot guard now requires the neutral RT context check in the
+tree/transaction/record sources and rejects the old private BSG-suffixed
+independent-check wrapper from returning there.  This is wrapper cleanup
+inside the retained BSG-backed draw bridge; it does not move the exit-criteria
+percentages because public BSG-shaped draw API shims, retained qtcad
+draw-observer/transaction ownership, and the lower libged/libdm dependency
+rows still determine retirement readiness.
+
+Verification for this tree/transaction/record independent-check cleanup
+passed on FreeBSD/clang with
+`ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+The short migration gate completed 4/4 passing in 17.98 seconds:
+`brlobol_pivot_guard` 17.69 seconds, `rt_view_legacy_bsg` 0.02 seconds,
+`test_qtcad_obol_draw_sync` 0.11 seconds, and `ged_test_qged_swrast` 0.11
+seconds.  The broad focused wrapper gate completed 13/13 passing in 82.53
+seconds; longest members were `libbsg_api_hygiene` at 41.08 seconds,
+`brlobol_pivot_guard` at 17.64 seconds, `ged_test_drawing_quad` at 12.72
+seconds, and `ged_test_drawing_basic` at 7.50 seconds.
+
+The previous code-state change moved retained primitive-wireframe view-info
+snapshots, shape-ref LoD policy, realization-policy view scale, and polygon
+area/overlap view scale in `src/libged/bsg_ged_draw_draft.c`,
+`src/libged/bsg_ged_draw_refs.c`, and `src/libged/bsg_ged_draw_view.c` through
+neutral `rt_view_context_info_get`, `rt_view_context_lod_policy_get`, and
+`rt_view_context_scale_get`.  Those bridge sources no longer call the private
+BSG-suffixed GED draw-view info, LoD, or scale wrappers.  The pivot guard now
+requires the neutral RT context tokens in these retained bridge files and
+rejects the old private helper calls from returning there.  This is wrapper
+cleanup inside the retained BSG-backed draw bridge; it does not move the
+exit-criteria percentages because public BSG-shaped draw API shims, retained
+qtcad draw-observer/transaction ownership, and the lower libged/libdm
+dependency rows still determine retirement readiness.
+
+Verification for this draft/refs/view cleanup passed on FreeBSD/clang with
+`ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+The short migration gate completed 4/4 passing in 17.83 seconds:
+`brlobol_pivot_guard` 17.55 seconds, `rt_view_legacy_bsg` 0.02 seconds,
+`test_qtcad_obol_draw_sync` 0.11 seconds, and `ged_test_qged_swrast` 0.11
+seconds.  The broad focused wrapper gate completed 13/13 passing in 82.44
+seconds; longest members were `libbsg_api_hygiene` at 41.05 seconds,
+`brlobol_pivot_guard` at 17.52 seconds, `ged_test_drawing_quad` at 12.72
+seconds, and `ged_test_drawing_basic` at 7.53 seconds.
+
+The previous code-state change moved `src/libged/bsg_ged_draw_transactions.c`
+retained transaction redraw LoD policy and view-info snapshots through
+neutral `rt_view_context_lod_policy_get` and `rt_view_context_info_get`, and
+runs transaction autoview through `rt_view_context_autoview` with
+`RT_VIEW_AUTOVIEW_SCALE_DEFAULT`.  The transaction source no longer calls the
+private BSG-suffixed GED draw-view info, LoD, or default-autoview wrappers.
+The pivot guard now requires these neutral RT context tokens in the
+transaction implementation and rejects the old private BSG-suffixed
+transaction helper calls from returning there.  This is wrapper cleanup inside
+the retained BSG-backed transaction bridge; it does not move the exit-criteria
+percentages because public BSG-shaped draw API shims, retained qtcad
+draw-observer/transaction ownership, and the lower libged/libdm dependency
+rows still determine retirement readiness.
+
+Verification for the transaction cleanup passed on FreeBSD/clang with
+`ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+The first short gate caught one stale pivot-guard requirement that still
+expected `ged_draw_view_info_from_bsg` in the transaction file; after
+splitting that mixed draft/refs/transactions guard requirement, the short
+migration gate completed 4/4 passing in 17.90 seconds:
+`brlobol_pivot_guard` 17.62 seconds, `rt_view_legacy_bsg` 0.02 seconds,
+`test_qtcad_obol_draw_sync` 0.11 seconds, and `ged_test_qged_swrast` 0.11
+seconds.  The broad focused wrapper gate completed 13/13 passing in 82.21
+seconds; longest members were `libbsg_api_hygiene` at 40.93 seconds,
+`brlobol_pivot_guard` at 17.52 seconds, `ged_test_drawing_quad` at 12.64
+seconds, and `ged_test_drawing_basic` at 7.52 seconds.
+
+The previous code-state change moved `src/libged/draw.cpp` retained draw
+view-context name, perspective, OBB, and scale through neutral
+`ged_view_context_name_get`, `ged_view_context_perspective_get`,
+`rt_view_context_obb_get`, and `ged_view_context_scale_get` instead of the
+private BSG-suffixed GED draw-view wrappers.  The local debug helper was
+renamed to `draw_view_context_name` to avoid a FreeBSD/clang unity-build name
+collision.  The pivot guard now requires the neutral draw.cpp tokens and
+rejects the old BSG-suffixed private view-snapshot helper calls from returning
+to that file.
+
+Verification for this cleanup passed on FreeBSD/clang with
+`ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+The first build caught the unity-build helper-name collision described above;
+after renaming the helper, the rebuild completed cleanly.  The short migration
+gate completed 4/4 passing in 17.78 seconds:
+`brlobol_pivot_guard` 17.50 seconds, `rt_view_legacy_bsg` 0.02 seconds,
+`test_qtcad_obol_draw_sync` 0.11 seconds, and `ged_test_qged_swrast` 0.11
+seconds.  The broad focused wrapper gate completed 13/13 passing in 82.19
+seconds; longest members were `libbsg_api_hygiene` at 40.97 seconds,
+`brlobol_pivot_guard` at 17.42 seconds, `ged_test_drawing_quad` at 12.67
+seconds, and `ged_test_drawing_basic` at 7.55 seconds.  The standalone
+`brlobol_pivot_guard` rerun after status updates passed in 17.44 seconds.
+
+The previous code-state change moved the public GED draw-view context info and
+LoD policy helpers to neutral names in `include/ged/draw.h`.
+`ged_draw_view_context_info_get`,
+`ged_draw_view_context_lod_policy_get`,
+`ged_draw_view_context_lod_policy_apply`, and
+`ged_draw_view_context_lod_policy_apply_bot_threshold` are the public facade
+entry points used by production draw, LoD, and view command paths.  The old
+BSG-suffixed names remain only as internal compatibility declarations in the
+private GED draw-view bridge and as delegating implementations in
+`src/libged/ged_view_legacy.cpp`; the pivot guard rejects those old names
+from returning to the public header or migrated production callers.
+
+Verification for that cleanup passed on FreeBSD/clang with
+`ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+The build rebuilt the touched libged/qtcad slice cleanly.  The short
+migration gate completed 4/4 passing in 17.72 seconds:
+`brlobol_pivot_guard` 17.39 seconds, `rt_view_legacy_bsg` 0.02 seconds,
+`test_qtcad_obol_draw_sync` 0.11 seconds, and `ged_test_qged_swrast` 0.15
+seconds.  The broad focused wrapper gate completed 13/13 passing in 82.33
+seconds; longest members were `libbsg_api_hygiene` at 41.12 seconds,
+`brlobol_pivot_guard` at 17.44 seconds, `ged_test_drawing_quad` at 12.66
+seconds, and `ged_test_drawing_basic` at 7.52 seconds.  Static scans confirmed
+the old BSG-suffixed GED context helper names are absent from `include/ged`
+and the migrated production draw/LoD callers, the compatibility names remain
+only in the private bridge/central implementation/guard patterns,
+`git diff --check` passed for the touched code/guard/status files, and the
+project-pattern `/tmp` scan was empty.  The standalone `brlobol_pivot_guard`
+rerun after status updates passed in 17.37 seconds.
+
+The previous code-state change removed `libtclcad`'s direct `libbsg`
+dependency row.  `src/source_dirs.cmake`,
+`doc/notes/obol_legacy_dependency_inventory.txt`, and the pivot guard now
+record `libtclcad` as depending directly on `libged`, `libdm`, `libbn`, and
+`libbu`.  A direct TclCAD source scan finds no BSG API calls or direct
+legacy-view/edit includes; the only retained direct BSG header include is
+`src/libtclcad/view_data.c`'s guarded `bsg/tcl_data.h` layout compatibility
+check, which does not require a direct `libbsg` link.  TclCAD still directly
+depends on `libdm`, and mged still depends on TclCAD while the display
+workflow remains transitional.  Verification for that cleanup passed with
+the broad focused wrapper gate completing 13/13 in 82.29 seconds and the
+final standalone `brlobol_pivot_guard` rerun passing in 17.38 seconds.
+
+The earlier code-state change removed `libqtcad`'s direct `libbsg`
+dependency row.  `src/source_dirs.cmake`,
+`doc/notes/obol_legacy_dependency_inventory.txt`, and the pivot guard now
+record `libqtcad` as depending directly on `libbrlobol`, `libged`, `libdm`,
+`libbg`, `libbn`, and `libbu`.  A direct qtcad source scan remains empty for
+BSG API/header usage, so this cleanup removes a stale build-graph edge rather
+than changing qtcad behavior.  qtcad still directly depends on `libdm` and
+still owns retained draw transaction/observer and display/backend bridge
+behavior that must migrate before qtcad/qged are libdm/libbsg-free in the
+target state.
+
+Verification for the previous qtcad cleanup passed on FreeBSD/clang with
+`ninja -C build rt_view_legacy_bsg libged.so libtclcad.so libqtcad.so mged gsh qged test_qtcad_obol_draw_sync qsketch`.
+The short migration gate completed 4/4 passing in 17.72 seconds, and the
+broad focused wrapper gate completed 13/13 passing in 82.66 seconds.  Static
+qtcad BSG-token and direct dependency-row scans were clean, `git diff --check`
+passed for the touched status/guard/dependency files, and the project-pattern
+`/tmp` scan was empty.
+
+The previous code-state change made `include/ged/draw.h` the public GED
+draw-scene declaration owner, reduced `include/ged/bsg_ged_draw.h` to a
+compatibility wrapper, and moved the BSG-backed
+`src/libged/bsg_ged_draw*` implementation/private files onto the neutral
+public header directly.  No non-test production code under `include` or `src`
+directly includes `ged/bsg_ged_draw.h`.
+
+The previous public-header ownership cleanup made `ged/draw.h` the public GED
+draw declaration owner and made `ged/bsg_ged_draw.h` a compatibility wrapper.
+
+The previous GED retained update-callback cleanup added
+neutral `rt_view_context_update_callback_t` and
+`rt_view_context_update_callback_set` helpers in `rt/view.h`.  The current
+BSG-backed implementation installs a correctly typed BSG trampoline plus
+RT-owned callback state, clears that state when overwritten or when RT frees
+or releases retained BSG view storage, and preserves the raw BSG callback
+setter for compatibility.  `src/libged/ged_view_legacy.cpp` now uses the
+neutral RT callback setter directly, so the targeted GED/qtcad BSG-named RT
+wrapper scan is empty.  The pivot guard requires the neutral declaration,
+implementation, adapter-test coverage, and GED bridge use, and rejects
+`rt_view_context_update_callback_set_bsg` from returning to
+`ged_view_legacy.cpp`.
+
+The previous GED retained scene-ref/mesh-LoD cleanup added
+neutral `rt_view_scene_ref`, `RT_VIEW_SCENE_REF_NULL_INIT`,
+`rt_view_scene_ref_null`, `rt_view_scene_ref_is_null`,
+`rt_view_scene_ref_equal`, `rt_view_context_independent_scope_ref`,
+`rt_mesh_lod_load_view_scene_ref`, and `rt_mesh_lod_free_scene_ref` helpers
+in `rt/view.h`.  The current BSG-backed implementation remains inside the
+central RT legacy adapter, and `rt_view_legacy_bsg` covers the new neutral
+null/ref and null mesh-LoD paths alongside BSG compatibility calls.
+`src/libged/ged_view_legacy.cpp` now converts the public BSG-shaped GED draw
+scene references to neutral RT scene refs internally.  The pivot guard
+requires the neutral declarations, implementation, adapter-test coverage, GED
+bridge use, and rejects the retired
+`rt_view_independent_scope_ref_bsg`,
+`rt_mesh_lod_load_view_scene_ref_bsg`, and
+`rt_mesh_lod_free_scene_ref_bsg` calls from returning to
+`ged_view_legacy.cpp`.
+
+The previous qtcad sketch edit-create cleanup added neutral
+`rt_edit_view_from_context`, `rt_edit_create_context`,
+`rt_edit_reinit_context`, and `rt_edit_knob_cmd_process_context` helpers in
+`rt/edit.h`.  The current BSG-backed implementation delegates through the
+central RT legacy adapter, and `rt_view_legacy_bsg` covers the new neutral
+context helpers.  qtcad now creates sketch edit state with
+`rt_edit_create_context` and no longer includes `rt/edit_legacy_bsg.h` or
+calls `rt_edit_create_bsg`.  The pivot guard requires the neutral edit
+context declarations, implementation, qtcad use, and adapter-test coverage,
+and rejects the legacy edit header/call from returning to qtcad.
+
+The previous qtcad retained polygon cleanup added neutral
+`rt_view_polygon_record_callback_t`,
+`rt_view_context_polygon_*`, and `rt_view_polygon_*` helpers for the full
+qtcad retained polygon bridge surface.  qtcad now routes polygon ref and
+record access, create/select/find/dup, record visitation, snap counts,
+point-selection clear, updates, screen-point updates, move/name/context/
+visual/open/close/selected-point/remove, user data, CSG, sketch import/export,
+and snap-exclude set through neutral RT names.  `src/libqtcad/QgLegacyView.cpp`
+no longer includes `rt/view_legacy_bsg.h`; the central production direct
+legacy-view include allowlist is down to the GED retained bridge and the RT
+legacy adapter.  The pivot guard requires the neutral polygon helpers in the
+RT header, RT legacy adapter, adapter test, and qtcad bridge, preserves BSG
+compatibility coverage in the adapter test, rejects the old BSG-named polygon
+helpers from returning to GED/qtcad bridge files, and rejects qtcad from
+returning to direct `rt/view_legacy_bsg.h` ownership.
+
+The previous qtcad retained feature/edit-preview cleanup
+added neutral `rt_view_feature_ref_is_null`,
+`rt_view_context_edit_preview_publish_event`,
+`rt_view_context_feature_overlay_ensure`,
+`rt_view_context_feature_label_ensure`, `rt_view_context_feature_remove`,
+and `rt_view_feature_*` geometry/style helpers.  qtcad now routes retained
+edit-preview event publication, overlay/label ensure, feature removal,
+feature view rebinding, visibility/color/touch updates, label replacement,
+point replacement, and geometry clear through those neutral RT names.  The
+pivot guard requires the neutral helpers in the RT header, RT legacy adapter,
+adapter test, and qtcad bridge, preserves BSG compatibility coverage in the
+adapter test, and rejects the old BSG-named feature/edit-preview helpers from
+returning to GED/qtcad bridge files.
+
+The previous qtcad retained bounds-update cleanup added neutral
+`rt_view_context_bounds_update_suspend` and
+`rt_view_context_bounds_update_restore` helpers.  RT now owns the opaque
+callback-state lifetime inside the legacy adapter boundary, and qtcad no
+longer stores or restores the BSG-shaped bounds callback directly.  The pivot
+guard requires the neutral suspend/restore helpers in the RT header, RT
+legacy adapter, adapter test, and qtcad bridge, and rejects the old
+BSG-named qtcad context bounds callback accessors from returning to GED/qtcad
+bridge files.
+
+The previous qtcad retained pick/result/selection cleanup
+added neutral `rt_view_context_pick_point`,
+`rt_view_context_pick_nearest`, `rt_view_context_pick_rect`,
+`rt_view_pick_result_context_*`, and
+`rt_view_context_selection_*` helpers for the qtcad-used opaque surface,
+covered them in `rt_view_legacy_bsg`, and moved qtcad pick, pick-result
+object, and selection set/clear calls off the BSG-named RT helper calls.  The
+pivot guard now requires the neutral helpers in the RT header, RT legacy
+adapter, adapter test, and qtcad bridge where migrated, and rejects the old
+BSG-named qtcad pick/result/selection helper calls from returning to GED/qtcad
+bridge files.
+
+The previous qtcad retained view-set attach cleanup added neutral
+`rt_view_context_view_set_attach`, covered attach/detach behavior in
+`rt_view_legacy_bsg`, and moved qtcad GED view-set attach off the BSG-named
+RT helper call.
+
+The previous qtcad release-storage and sketch line-set cleanup added neutral
+`rt_view_context_release_storage`, `rt_view_context_line_set_create`,
+`rt_view_line_set_context_is_null`, `rt_view_line_set_context_set_points`,
+and `rt_view_line_set_context_destroy` helpers, covered them in
+`rt_view_legacy_bsg`, and moved qtcad retained local-view shallow free plus
+sketch preview line-set operations off BSG-named RT helper calls.
+
+The previous retained lifecycle create/free cleanup added neutral
+`rt_view_context_create`, `rt_view_context_create_with_set`,
+`rt_view_context_create_copy_with_set`, and `rt_view_context_free` helpers,
+covered them in `rt_view_legacy_bsg`, and moved GED/qtcad retained
+owned-context creation and destruction off BSG-named RT lifecycle calls.
+
+The previous retained view-set passthrough cleanup added neutral
+`rt_view_set_context_views`, `rt_view_set_context_recycle_pool`,
+`rt_view_set_context_add`, and `rt_view_set_context_remove` helpers, covered
+them in `rt_view_legacy_bsg`, and moved GED/qtcad retained view-set
+passthroughs off the BSG-named RT view-set calls.
+
+The previous retained snap first-candidate cleanup added the neutral
+`rt_view_context_snap_first_candidate` helper, covered it in
+`rt_view_legacy_bsg`, and moved the GED retained draw bridge off direct
+`bsg_snap_result` and `rt_view_snap_candidates_bsg` handling.
+
+The previous retained OBB/snap-kind cleanup added the neutral
+`rt_view_context_obb_get` helper, covered it in `rt_view_legacy_bsg`, moved
+the GED retained draw bridge off direct `rt_view_context_obb_from_bsg` calls,
+and made the GED snap helper map public GED snap kinds to neutral
+`RT_VIEW_SNAP_KIND_*` constants instead of `RT_VIEW_SNAP_KIND_*_BSG`
+constants.
+
+The previous independent/scene context cleanup added neutral RT context
+helpers for retained independent-view checks, independent-scope null/destroy,
+scene-attached checks, scene-anchor ensure, and scene-shared checks.  GED uses
+the neutral independent-scope helpers, and qtcad uses the neutral
+scene-attached helper.
+
+The previous neutral wrapper batches moved these retained view operations from
+BSG-named RT helpers to neutral `rt_view_context_*` helpers:
+
+* GED and qtcad dimensions, width/height, display-manager, framebuffer,
+  refresh, name, unit, scalar view state, transform state, orientation/info,
+  AET, plane, pointer/interaction, faceplate/overlay state, snap/LoD, runtime,
+  state/control, lifecycle create/free, view-set passthrough, and
+  settings-shared paths; qtcad release-storage and sketch line-set helpers
+  plus view-set attach, pick/result, selection set/clear, bounds-update
+  suspend/restore, feature/edit-preview, and polygon operations now use
+  neutral RT helpers as well.  GED retained OBB reads and snap first-candidate
+  queries now use neutral helpers.
+* GED knob state, knob-value snapshots, reset/calibrate, command processing,
+  translate, rotate, and rate-flag paths.
+* libdm, GSH, TclCAD, MGED, and many libged command/test call sites now route
+  through public GED/RT/DM facades instead of direct RT legacy-view includes.
 
 
-Test Candidates and Gates
--------------------------
-
-Required/current model gates:
-
-* share/db/pinewood.g
-* share/db/havoc.g
-* share/db/m35.g
-
-Large maturity candidate:
-
-* share/db/faa/Generic_Twin.g
-
-Generic_Twin.g is the largest in-tree example, includes valid and invalid BoTs,
-and mixes implicit solids.  Use it once the staged large-model LoD path is
-ready for routine gating.  The qtcad real-model test already exposes it as an
-opt-in BRLOBOL_QTCAD_GENERIC_TWIN=1 draw/readback check.
-
-Short baseline after doc-only or small migration changes:
-
-* git diff --check
-* rg -n '^<<<<<<< |^=======$|^>>>>>>> |bsg/tig\.h|bsg/vectfont\.h' include src obol_activework.txt obol_worklog.txt CMakeLists.txt misc/CMake
-* ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure
-
-Focused build/test baseline after RT-view or Obol migration code changes:
-
-* ninja -C build lib/libged.so lib/libtclcad.so bin/mged
-* ctest --test-dir build -R '^(brlobol_pivot_guard|libbsg_api_hygiene|rt_view_legacy_bsg|ged_test_(view_command|state_services|drawing_basic|drawing_quad|mged_bsg|ged_draw_scene|qged_swrast|view_independent)|test_qtcad_obol_draw_sync|regress-(mged_(adc|overlay|view|draw|refresh|draw_e_erase_d_who|setview|rot_view|sca_view|tra_view|size|zoom|knob)|nirt|gchecker|gdiff))$' -E '^slow-' --timeout 180 --output-on-failure
-* ctest --test-dir build -R '^regress-mged_arb$' --timeout 180 --output-on-failure
-
-Treat any single focused test exceeding 180 seconds as a test or performance
-problem to investigate before continuing routine migration work.
-
-Broader gate before removing a legacy path:
-
-* ninja -C build
-* ctest --test-dir build --output-on-failure
-* qged/qtcad workflow tests against pinewood.g, havoc.g, m35.g, and later
-  share/db/faa/Generic_Twin.g.
-* Obol backend tests for Qt GL, offscreen/OSMesa, and NanoRT/software paths as
-  applicable.
-* libimgstream lifecycle, dirty-region, producer/subscriber, snapshot,
-  transport, and framebuffer compatibility tests as applicable.
-
-
-Open Questions
+Remaining Work
 --------------
 
-* Which Obol upstream APIs need to be added or improved once qtcad uses Obol
-  as the visible renderer?  This needs more implementation evidence.
-* Which residual libdm behaviors survive only as compatibility spelling, and
-  which should be deleted after libimgstream/display-host replacement?  The
-  main ownership split is recorded, but final behavior needs review as callers
-  migrate.
-* How much BoT subset-read/index-sidecar complexity is justified for exact
-  queries?  Evaluate after the first source-backed full-detail provider path
-  exists.
+The near-term work is still Phase 5 wrapper retirement, not profiling.  Batch
+only related wrappers where ownership and tests are straightforward.
+
+Current immediate draw-bridge blockers are retained scene-ref/root/scope
+handoffs, retained BSG-backed feature/polygon internals behind context
+helpers, public BSG-shaped snap/scene-ref bridge signatures, qtcad draw
+transaction/observer ownership, and the guarded direct `libbsg` dependency
+rows in `libdm` and `libged`.  Do not treat retired private wrapper names as
+remaining work when the corresponding context helper is still intentionally
+BSG-backed.
+
+GED retained bridge:
+
+* Keep the public BSG-typed GED draw snap and scene-ref entry points only as
+  bridge shims.  Their first-candidate, update-callback, LoD bounds callback
+  install, context info/LoD, scale, autoview, and independent-view boolean
+  internals are now neutral, but the public BSG-shaped signatures and retained
+  `bsg_scene_ref` handoffs cannot retire until the wider draw-view API
+  boundary is replaced.
+* Treat the remaining production helper calls as three concrete groups:
+  retained active-view group/overlay/redraw BSG view use, retained scene-root
+  group-creation plus scene-ref handoff helpers, and public BSG-shaped
+  scene-ref realization handoffs.  Transaction active save/restore,
+  transaction/tree/scene-root view-set iteration, transaction DB-event
+  scene-root-ref reads, scene-root draw-context recycling, scene-root query
+  refs, scene-root attach, scene-attached checks, and BSG-backed active-view
+  lookups now use neutral or context-shaped helpers.  The private mesh-LoD
+  load pass-through is gone; retained draw realization now converts through
+  the central draw-ref helper before calling neutral
+  `rt_mesh_lod_load_view_scene_ref` directly.  The reset/free path now uses
+  neutral `rt_mesh_lod_free_scene_ref`; do not flatten the remaining
+  root/scope paths by local casts.  Migrate them only with a neutral API
+  boundary that preserves retained-scene correctness.
+* `ged/draw.h` now owns the public declarations and the public context info/LoD
+  helpers use neutral `ged_draw_view_context_*_get/apply` names.  No production
+  code directly includes `ged/bsg_ged_draw.h`, bridge-owned transaction redraw
+  info/LoD and autoview paths plus draft/refs/view primitive-wireframe,
+  realization-policy, polygon scale reads, and tree/transaction/record
+  independent-view boolean checks now use neutral RT context helpers.  GED
+  draw-record selected/highlighted shape-ref selection paths now use opaque
+  context helpers, with retained BSG selection mechanics contained inside the
+  draw-view bridge implementation.  GED draw-tree independent-scope refs now
+  use neutral `rt_view_context_independent_scope_ref`; remaining tree
+  active-view use reads through `ged_view_active_ctx` but is still tied to
+  retained BSG group creation.  GED draw transactions now use neutral context
+  helpers for active-view save/restore, active-view fallback reads, and GED
+  view-set iteration, and the DB-event view-root revalidation path now queries
+  neutral `rt_view_scene_ref` roots through
+  `ged_draw_view_context_scene_root_rt_ref` before converting only the
+  retained draw-intent revalidation target, but still has retained BSG view
+  handoffs for redraw and finalization.
+  GED draw scene-root view-set iteration and recycle-pool lookup now use
+  neutral context helpers, scene-root ref/attached queries and root attach use
+  neutral RT helpers, and active-view reads go through `ged_view_active_ctx`,
+  but active-view group creation and the retained scene-root backend still
+  require the wider scene-root API migration.
+
+qtcad retained bridge:
+
+* Keep qtcad on the neutral `ged/draw.h` include while migrating retained
+  draw transactions/observers to Obol/libbrlobol ownership.
+* Keep retained DM and framebuffer host bridge operations guarded until they
+  have direct Obol/libbrlobol ownership.
+
+Lower backend and link graph:
+
+* Move retained libdm draw/backend behavior off BSG ownership.
+* Remove remaining direct `libbsg` dependency rows from `libdm` and `libged`
+  only after their guarded API surfaces no longer require it; keep `libqtcad`
+  and `libtclcad` retired direct `libbsg` rows guarded so they do not return.
+* Remove `qged`'s direct `dm_plugins` dependency when the Obol/qtcad display
+  path can own backend selection.
+* Start Phase 6 hard removal only after public headers, source includes,
+  target dependencies, installed artifacts, and tests no longer need libbsg,
+  libdm, or dm_plugins as compatibility surfaces.
+
+Obol/libbrlobol parity work still open:
+
+* qtcad visible Obol rendering and draw synchronization are not yet complete.
+* Diagnostic overlays are mid-migration.
+* libimgstream/framebuffer ownership remains incomplete.
+* Performance optimization is deferred unless migration work introduces a
+  single-test runtime above 180 seconds or an obvious catastrophic slowdown.
 
 
-Final Done Criteria
--------------------
+Guard And Scan Strategy
+-----------------------
 
-The migration is complete when:
+Keep `brlobol_pivot_guard` aligned with every migrated boundary.  Do not
+remove guard coverage just to speed the test up.  Scan optimizations are fine
+when they preserve the same assertions; the latest guard cleanup moved the
+GED Tcl overlay fixture check out of the generic per-file loop so it runs once
+per guard execution instead of once per scanned file.
 
-* Obol is the only scene/rendering API used by BRL-CAD interactive
-  applications.
-* qged/qtcad and mged pass their Obol display workflows.
-* libbsg, libdm, and dm_plugins are absent from build, install, public
-  headers, pkg-config files, and linked target graphs.
-* libbrlobol remains BRL-specific and does not contain a generic BSG
-  replacement.
-* Documentation names Obol as the canonical scene API and explains where
-  BRL-CAD Obol extensions live.
+Useful local scans:
+
+* Direct production legacy-view include owners:
+  `rg -l '#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h' include src -g '!src/**/tests/**' -g '!**/CMakeFiles/**'`
+* Current residual GED draw bridge BSG-shaped helper scan:
+  `rg -n 'ged_draw_view_[A-Za-z0-9_]*_from_bsg|ged_draw_view_[A-Za-z0-9_]*_bsg|ged_draw_mesh_lod_.*scene_ref|ged_draw_view_context_independent_scope_ref|ged_draw_view_independent_scope_ref_bsg|ged_draw_view_scene_root_ref|rt_view_context_[A-Za-z0-9_]*_bsg|rt_view_[A-Za-z0-9_]*_from_bsg|rt_mesh_lod_[A-Za-z0-9_]*_bsg' src/libged/ged_view_legacy.cpp src/libged/draw.cpp src/libged/bsg_ged_draw_transactions.c src/libged/bsg_ged_draw_tree.c src/libged/bsg_ged_draw_refs.c src/libged/bsg_ged_draw_scene_root.c src/libged/bsg_ged_draw_view.c src/libged/bsg_ged_draw_records.c src/libged/bsg_ged_draw_view_private.h src/libqtcad/QgLegacyView.cpp -g '!**/CMakeFiles/**'`
+* Remaining GED/qtcad BSG wrapper calls:
+  `rg -n 'rt_view_context_[A-Za-z0-9_]*_bsg|rt_view_set_context_[A-Za-z0-9_]*_bsg|rt_view_line_set_context_[A-Za-z0-9_]*_bsg|rt_view_feature_[A-Za-z0-9_]*_bsg|rt_view_pick_result_context_[A-Za-z0-9_]*_bsg|rt_view_polygon_[A-Za-z0-9_]*_bsg|RT_VIEW_[A-Z0-9_]*_BSG|rt_mesh_lod_[A-Za-z0-9_]*_bsg' src/libged/ged_view_legacy.cpp src/libqtcad/QgLegacyView.cpp`
+* Recently retired independent/scene helper regression scan:
+  `rg -n 'rt_view_context_(is_independent|independent_scope_(is_null|destroy)|scene_attached|scene_anchor_ensure|scene_shared)_bsg' src/libged/ged_view_legacy.cpp src/libqtcad/QgLegacyView.cpp`
+* Recently retired lifecycle helper regression scan:
+  `rg -n 'rt_view_context_(create|create_with_set|create_copy_with_set|free)_bsg' src/libged/ged_view_legacy.cpp src/libqtcad/QgLegacyView.cpp`
+* Recently retired qtcad release-storage/line-set helper regression scan:
+  `rg -n 'rt_view_context_release_storage_bsg|rt_view_context_line_set_create_bsg|rt_view_line_set_context_(is_null|set_points|destroy)_bsg' src/libged/ged_view_legacy.cpp src/libqtcad/QgLegacyView.cpp`
+* Recently retired qtcad view-set attach helper regression scan:
+  `rg -n 'rt_view_context_view_set_attach_bsg' src/libged/ged_view_legacy.cpp src/libqtcad/QgLegacyView.cpp`
+* Recently retired qtcad pick/result/selection helper regression scan:
+  `rg -n 'rt_view_context_pick_(point|nearest|rect)_bsg|rt_view_pick_result_context_(create|free|count|path|hit_dist|append_copy|filter_first)_bsg|rt_view_context_selection_set_pick_result_context_bsg|rt_view_context_selection_clear_bsg' src/libged/ged_view_legacy.cpp src/libqtcad/QgLegacyView.cpp`
+* Recently retired qtcad bounds-update helper regression scan:
+  `rg -n 'rt_view_context_bounds_update_callback_(from|set|call)_bsg' src/libged/ged_view_legacy.cpp src/libqtcad/QgLegacyView.cpp`
+* Recently retired qtcad feature/edit-preview helper regression scan:
+  `rg -n 'rt_view_feature_ref_is_null_bsg|rt_view_context_edit_preview_publish_event_bsg|rt_view_context_feature_(overlay_ensure|label_ensure|remove)_bsg|rt_view_feature_(set_context|set_visible|set_color|touch|labels_replace|points_replace|clear_geometry)_bsg' src/libged/ged_view_legacy.cpp src/libqtcad/QgLegacyView.cpp`
+* Recently retired qtcad polygon helper regression scan:
+  `rg -n 'rt_view_context_polygon_(create|select|find|dup|visit_records|snap_count|clear_point_selection|snap_exclude_set)_bsg|rt_view_polygon_(ref_is_null|record_get|update_context|update_screen_pt_context|move|set_name|set_context|set_visual|set_open|close|clear_selected_point|remove|user_data|user_data_set|csg|import_sketch_context|export_sketch)_bsg' src/libged/ged_view_legacy.cpp src/libqtcad/QgLegacyView.cpp`
+* Recently retired qtcad sketch edit-create regression scan:
+  `rg -n '#[ \t]*include[ \t]*[<"]rt/edit_legacy_bsg\.h|rt_edit_create_bsg[ \t\r\n]*\(' src/libqtcad/QgLegacyView.cpp`
+* Recently retired GED scene-ref/mesh-LoD regression scan:
+  `rg -n 'rt_view_independent_scope_ref_bsg|rt_mesh_lod_load_view_scene_ref_bsg|rt_mesh_lod_free_scene_ref_bsg' src/libged/ged_view_legacy.cpp`
+* Recently retired GED update-callback regression scan:
+  `rg -n 'rt_view_context_update_callback_set_bsg|rt_view_update_callback_set_bsg' src/libged/ged_view_legacy.cpp src/libqtcad/QgLegacyView.cpp`
+* Recently retired GED draw LoD bounds typed helper regression scan:
+  `rg -n 'ged_draw_view_(set|has)_lod_bounds_update' src/libged/bsg_ged_draw_view_private.h src/libged/ged_view_legacy.cpp src/libged/bsg_ged_draw_transactions.c`
+* Recently retired GED legacy-view LoD bounds BSG setter regression scan:
+  `rg -n 'rt_view_lod_bounds_callback_set_bsg[ \t\r\n]*\(' src/libged/ged_view_legacy.cpp`
+* Current GED/RT LoD bounds opaque setter token scan:
+  `rg -n 'rt_view_context_lod_bounds_callback_set|rt_view_lod_bounds_callback_set_bsg' include/rt/view.h include/rt/view_legacy_bsg.h src/librt/view_legacy_bsg.c src/librt/tests/view_legacy_bsg.c src/libged/ged_view_legacy.cpp misc/CMake/brlobol_pivot_guard.cmake`
+* Recently retired GED legacy-view direct BSG view-set lifecycle/find scan:
+  `rg -n 'rt_view_set_(init|free|find_view)_bsg[ \t\r\n]*\(' src/libged/ged_view_legacy.cpp`
+* Current GED/RT view-set neutral lifecycle/find token scan:
+  `rg -n 'rt_view_set_context_(init|free|find_view)|rt_view_set_(init|free|find_view)_bsg' include/rt/view.h src/librt/view_legacy_bsg.c src/librt/tests/view_legacy_bsg.c src/libged/ged_view_legacy.cpp misc/CMake/brlobol_pivot_guard.cmake`
+* Recently retired GED private active-view typed storage/cast regression scan:
+  `rg -n 'static_cast<struct bsg_view \*>|struct[ \t\r\n]+bsg_view[ \t\r\n]*[*][ \t\r\n]*ged_gvp|\(void \*\)impl->ged_gvp' src/libged/ged_private.h src/libged/ged_view_legacy.cpp`
+* Current GED private active-view opaque storage token scan:
+  `rg -n 'void[ \t\r\n]*[*][ \t\r\n]*ged_gvp|impl->ged_gvp' src/libged/ged_private.h src/libged/ged_view_legacy.cpp misc/CMake/brlobol_pivot_guard.cmake`
+* Recently retired GED shape-ref typed view helper regression scan:
+  `rg -n 'ged_draw_shape_ref_realize[ \t\r\n]*\(|ged_draw_shape_ref_view[ \t\r\n]*\(' src/libged/bsg_ged_draw_transactions.c src/libged/bsg_ged_draw_refs.c src/libged/bsg_ged_draw_private.h misc/CMake/brlobol_pivot_guard.cmake`
+* Recently retired GED draw-view private-header typed view declaration scan:
+  `rg -n 'struct[ \t\r\n]+bsg_view(_set)?' src/libged/bsg_ged_draw_view_private.h`
+* Recently retired public GED draw-view context helper regression scan:
+  `rg -n 'ged_draw_view_context_(info_from_bsg|lod_policy_from_bsg|lod_policy_apply_bsg|lod_policy_apply_bsg_bot_threshold)' include/ged src/libged/draw.cpp src/libged/draw/draw.c src/libged/lod/lod.c src/libged/view/lod.cpp -g '!**/CMakeFiles/**'`
+* Recently retired draw.cpp private view-snapshot helper regression scan:
+  `rg -n 'draw_view_name_bsg|ged_draw_view_context_(name_from_bsg|perspective_from_bsg|scale_from_bsg|obb_from_bsg)' src/libged/draw.cpp`
+* Recently retired transaction view-info/LoD/autoview wrapper regression scan:
+  `rg -n 'ged_draw_view_(info_from_bsg|lod_policy_from_bsg|autoview_default_bsg)' src/libged/bsg_ged_draw_transactions.c`
+* Recently retired draft/refs/view info/LoD/scale wrapper regression scan:
+  `rg -n 'ged_draw_view_(info_from_bsg|lod_policy_from_bsg|scale_from_bsg)' src/libged/bsg_ged_draw_draft.c src/libged/bsg_ged_draw_refs.c src/libged/bsg_ged_draw_view.c`
+* Recently retired tree/transaction/record independent-check wrapper regression scan:
+  `rg -n 'ged_draw_view_is_independent_bsg' src/libged/bsg_ged_draw_tree.c src/libged/bsg_ged_draw_transactions.c src/libged/bsg_ged_draw_records.c`
+* Recently retired GED private mesh-LoD free wrapper regression scan:
+  `rg -n 'ged_draw_mesh_lod_free_scene_ref' src/libged/bsg_ged_draw_refs.c src/libged/bsg_ged_draw_view_private.h src/libged/ged_view_legacy.cpp`
+* Recently retired GED private mesh-LoD typed load wrapper regression scan:
+  `rg -n 'ged_draw_mesh_lod_load_view_scene_ref[ \t\r\n]*\(' src/libged/bsg_ged_draw_view_private.h src/libged/ged_view_legacy.cpp`
+* Recently retired dead private GED draw-view BSG wrapper regression scan:
+  `rg -n 'ged_draw_view_(info_from_bsg|context_info_from_bsg|context_name_from_bsg|perspective_from_bsg|context_perspective_from_bsg|scale_from_bsg|context_scale_from_bsg|context_obb_from_bsg|lod_policy_from_bsg|context_lod_policy_from_bsg|lod_policy_apply_bsg|context_lod_policy_apply_bsg|lod_policy_apply_bsg_bot_threshold|context_lod_policy_apply_bsg_bot_threshold|autoview_default_bsg|set_views_bsg|set_recycle_pool_bsg|is_independent_bsg)' src/libged/bsg_ged_draw_view_private.h src/libged/ged_view_legacy.cpp`
+* Recently retired GED draw-record private selection wrapper regression scan:
+  `rg -n '(^|[^A-Za-z0-9_])ged_draw_view_selection_(available|count|path_foreach|clear|contains_path|add_path|set_path|add_shape_ref)[ \t\r\n]*\(' src/libged/bsg_ged_draw_records.c src/libged/bsg_ged_draw_view_private.h src/libged/bsg_ged_draw_private.h`
+* Recently retired GED draw selection callback plumbing regression scan:
+  `rg -n '\bged_draw_view_selection_path_cb\b|\b_ged_draw_view_selection_path_foreach[ \t\r\n]*\(|\b_ged_draw_view_context_selection_path_thunk[ \t\r\n]*\(' src/libged/bsg_ged_draw_view.c src/libged/bsg_ged_draw_view_private.h`
+* Recently retired GED draw-tree independent-scope wrapper regression scan:
+  `rg -n 'ged_draw_view_context_independent_scope_ref|ged_draw_view_independent_scope_ref_bsg' src/libged/bsg_ged_draw_tree.c src/libged/bsg_ged_draw_view_private.h src/libged/ged_view_legacy.cpp`
+* Recently retired GED draw-tree view-set helper regression scan:
+  `rg -n 'ged_draw_view_set_views_for_ged_bsg' src/libged/bsg_ged_draw_tree.c`
+* Recently retired GED draw-transaction active-set/view-set helper regression scan:
+  `rg -n 'ged_draw_view_active_set_bsg|ged_draw_view_set_views_for_ged_bsg' src/libged/bsg_ged_draw_transactions.c src/libged/bsg_ged_draw_view_private.h src/libged/ged_view_legacy.cpp`
+* Recently retired GED draw active-view helper regression scan:
+  `rg -n 'ged_draw_view_active_bsg' src/libged/bsg_ged_draw_scene_root.c src/libged/bsg_ged_draw_tree.c src/libged/bsg_ged_draw_transactions.c src/libged/bsg_ged_draw_overlay.c src/libged/bsg_ged_draw_view_private.h src/libged/ged_view_legacy.cpp`
+* Recently retired GED draw overlay private typed helper regression scan:
+  `rg -n 'ged_draw_view_overlay_(scene_find|name_erase|scene_append|create)\b' src/libged/bsg_ged_draw_overlay.c src/libged/bsg_ged_draw_view.c src/libged/bsg_ged_draw_view_private.h`
+* Recently retired GED draw generic feature-accessor helper regression scan:
+  `rg -n '\bged_draw_view_feature_(exists|remove|visible|visible_set|depth|depth_foreach|style_get|style_apply|realize|points_copy|axes_centers_copy)[ \t\r\n]*\(|\bged_draw_view_features_remove_prefix[ \t\r\n]*\(' src/libged/bsg_ged_draw_view.c src/libged/bsg_ged_draw_view_private.h`
+* Recently retired GED draw line/arrow accessor helper regression scan:
+  `rg -n '\bged_draw_view_(line_style_get|line_color_set|line_width_set|lines_points_copy|arrow_tip_get|arrow_tip_set)[ \t\r\n]*\(' src/libged/bsg_ged_draw_view.c src/libged/bsg_ged_draw_view_private.h`
+* Recently retired GED draw label accessor helper regression scan:
+  `rg -n '\bged_draw_view_label_(count|copy|point_set)[ \t\r\n]*\(' src/libged/bsg_ged_draw_view.c src/libged/bsg_ged_draw_view_private.h`
+* Recently retired GED draw axes-state accessor helper regression scan:
+  `rg -n '\bged_draw_view_axes_state_(get|replace)[ \t\r\n]*\(' src/libged/bsg_ged_draw_view.c src/libged/bsg_ged_draw_view_private.h`
+* Recently retired GED draw feature creation/replacement helper regression
+  scan:
+  `rg -n '\bged_draw_view_(indexed_face_set_replace|lines_replace|tcl_polygons_replace|line_layer_builder_replace|line_layers_replace|lines_create_model_annotation|lines_append_point|label_create|labels_replace|tcl_labels_replace|tcl_lines_replace|tcl_arrows_replace|tcl_axes_replace|axes_create|polygon_create|polygon_import_sketch)[ \t\r\n]*\(' src/libged/bsg_ged_draw_view.c src/libged/bsg_ged_draw_view_private.h`
+* Recently retired GED draw HUD/snap private typed helper regression scan:
+  `rg -n '\bged_draw_view_(hud_sync|snap_first_candidate)[ \t\r\n]*\(' src/libged/bsg_ged_draw_view.c src/libged/bsg_ged_draw_view_private.h src/libged/ged_view_legacy.cpp`
+* Recently retired GED draw scene-root view-set/recycle-pool helper regression scan:
+  `rg -n 'ged_draw_view_set_views_for_ged_bsg|ged_draw_view_set_recycle_pool_for_ged_bsg' src/libged/bsg_ged_draw_scene_root.c src/libged/bsg_ged_draw_view_private.h src/libged/ged_view_legacy.cpp`
+* Recently retired GED draw transaction scene-root-ref helper regression scan:
+  `rg -n 'ged_draw_view_context_scene_root_ref|ged_draw_view_scene_root_ref|ged_draw_view_has_scene_root' src/libged/bsg_ged_draw_transactions.c src/libged/bsg_ged_draw_scene_root.c src/libged/bsg_ged_draw_view_private.h`
+* Recently retired GED draw scene-root direct attach/raw-ref regression scan:
+  `rg -n 'bsg_view_scene_ref_attach|\.opaque' src/libged/bsg_ged_draw_scene_root.c src/libged/bsg_ged_draw_private.h`
+* Recently retired GED scene-root context conversion regression scan:
+  `rg -n 'ged_draw_scene_ref_from_rt_view_ref[ \t\r\n]*\(|ged_draw_scene_ref_context[ \t\r\n]*\(' src/libged/bsg_ged_draw_scene_root.c`
+* Current GED draw scene-root neutral query/attach/context token scan:
+  `rg -n 'ged_draw_view_context_scene_root_rt_ref|rt_view_context_scene_root_ref_attach|rt_view_scene_ref_context|ged_draw_scene_ref_to_rt_view_ref|rt_view_context_scene_root_ref|ged_draw_scene_ref_from_rt_view_ref|rt_view_scene_ref_equal|rt_view_scene_ref_is_null' include/rt/view.h src/librt/view_legacy_bsg.c src/librt/tests/view_legacy_bsg.c src/libged/bsg_ged_draw_scene_root.c src/libged/bsg_ged_draw_transactions.c src/libged/bsg_ged_draw_refs.c src/libged/bsg_ged_draw_private.h misc/CMake/brlobol_pivot_guard.cmake`
+* Recently retired GED legacy-view raw mesh-LoD scene-ref conversion scan:
+  `rg -n '#[ \t]*include[ \t]*[<"].*bsg_ged_draw_private\.h|\.opaque|ged_draw_scene_ref_to_rt_view_ref|ged_draw_scene_ref_to_rt[ \t\r\n]*\(' src/libged/ged_view_legacy.cpp`
+* Recently retired GED mesh-LoD load pass-through regression scan:
+  `rg -n 'ged_draw_mesh_lod_load_view_scene_ref_context|bsg_scene_ref[ \t\r\n]+visibility_ref|rt_view_scene_ref[ \t\r\n]+visibility_ref' src/libged/ged_view_legacy.cpp src/libged/draw.cpp src/libged/bsg_ged_draw_view_private.h`
+* Current GED mesh-LoD direct neutral load token scan:
+  `rg -n 'rt_mesh_lod_load_view_scene_ref|ged_draw_scene_ref_to_rt_view_ref|bsg_mesh_lod_load_view_scene_ref|ged_draw_mesh_lod_load_view_scene_ref_context' src/libged/draw.cpp src/libged/ged_view_legacy.cpp src/libged/bsg_ged_draw_view_private.h misc/CMake/brlobol_pivot_guard.cmake`
+* Recently retired libged test BSG-named GED draw header regression scan:
+  `rg -n '#[ \t]*include[ \t]*[<"]ged/bsg_ged_draw\.h|bsg_ged_draw\.h' src/libged/tests`
+* Current libged test neutral GED draw header token scan:
+  `rg -n '#[ \t]*include[ \t]*[<"]ged/draw\.h' src/libged/tests/test_state_services.cpp src/libged/tests/test_gqa.c src/libged/tests/draw/view_independent.cpp src/libged/tests/draw/view_command.cpp src/libged/tests/draw/tcl_overlay_bsg.cpp src/libged/tests/draw/mged_shaded_mode_bsg.cpp src/libged/tests/draw/mged_bsg.cpp src/libged/tests/draw/lod_crossrun.cpp src/libged/tests/draw/ged_draw_scene.cpp src/libged/tests/draw/bsg_render_stability.cpp src/libged/tests/draw/bsg_quad_stability.cpp src/libged/tests/draw/util.cpp src/libged/tests/draw/quad.cpp src/libged/tests/draw/aet.cpp`
+* Shared-machine tmp hygiene:
+  `find /tmp -maxdepth 1 \( -name '*brlcad*' -o -name '*obol*' -o -name '*libbsg*' -o -name '*brlobol*' \) -print`
+
+
+Current Test Gates
+------------------
+
+Use targeted build coverage for code changes touching wrappers:
+
+* `ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`
+
+Focused migration gate:
+
+* `ctest --test-dir build -R '^(brlobol_pivot_guard|rt_view_legacy_bsg|test_qtcad_obol_draw_sync|ged_test_qged_swrast)$' --timeout 180 --output-on-failure`
+
+Broad focused gate used for recent wrapper batches:
+
+* `ctest --test-dir build -R '^(brlobol_pivot_guard|libbsg_api_hygiene|rt_view_legacy_bsg|dm_backend_draw_item|ged_test_(qged_swrast|drawing_basic|drawing_quad|mged_bsg|ged_draw_scene)|test_qtcad_obol_draw_sync|regress-mged_(draw|refresh|view))$' -E '^slow-' --timeout 180 --output-on-failure`
+
+Latest verified baseline:
+
+The current verified baseline is the GED scene-root context cleanup.
+Older bullets below this block are retained as historical batch records; their
+local "latest" wording was true when each batch was recorded.
+
+* The affected GED scene-root context cleanup build target set passed:
+  `ninja -C build libged.so librt.so rt_view_legacy_bsg`.
+* The focused `brlobol_pivot_guard` plus `rt_view_legacy_bsg` gate completed
+  2/2 passing in 21.14 seconds.
+* The standard broad focused wrapper gate completed 13/13 passing in 82.57
+  seconds.  Longest single test was `libbsg_api_hygiene` at 40.99 seconds;
+  `brlobol_pivot_guard` completed in 17.75 seconds, `ged_test_drawing_quad`
+  in 12.69 seconds, and `ged_test_drawing_basic` in 7.54 seconds.
+
+An older verified baseline was the GED mesh-LoD pass-through cleanup.
+
+* The affected GED mesh-LoD pass-through cleanup build target set passed:
+  `ninja -C build libged.so`.
+* The focused `brlobol_pivot_guard` gate passed in 21.46 seconds before the
+  status updates.
+* The standard broad focused wrapper gate completed 13/13 passing in 82.84
+  seconds.  Longest single test was `libbsg_api_hygiene` at 40.95 seconds;
+  `brlobol_pivot_guard` completed in 18.11 seconds, `ged_test_drawing_quad`
+  in 12.68 seconds, and `ged_test_drawing_basic` in 7.51 seconds.
+
+An older verified baseline was the GED active-view storage cleanup.
+
+* The affected GED active-view storage cleanup build target set passed:
+  `ninja -C build libged.so`.
+* The focused `brlobol_pivot_guard` gate passed in 17.70 seconds before the
+  status updates.
+* The standard broad focused wrapper gate completed 13/13 passing in 82.79
+  seconds.  Longest single test was `libbsg_api_hygiene` at 41.15 seconds;
+  `brlobol_pivot_guard` completed in 17.77 seconds, `ged_test_drawing_quad`
+  in 12.73 seconds, and `ged_test_drawing_basic` in 7.55 seconds.
+
+An older verified baseline was the GED retained view-set neutral-helper
+cleanup.
+
+* The affected GED retained view-set neutral-helper cleanup build target set
+  passed:
+  `ninja -C build libged.so librt.so rt_view_legacy_bsg`.
+* The focused `brlobol_pivot_guard` plus `rt_view_legacy_bsg` gate completed
+  2/2 passing in 18.03 seconds.
+* The standard broad focused wrapper gate completed 13/13 passing in 83.02
+  seconds.  Longest single test was `libbsg_api_hygiene` at 41.54 seconds;
+  `brlobol_pivot_guard` completed in 17.65 seconds, `ged_test_drawing_quad`
+  in 12.71 seconds, and `ged_test_drawing_basic` in 7.52 seconds.
+
+An older verified baseline was the GED retained mesh-LoD scene-ref
+conversion cleanup.
+
+* The affected GED retained mesh-LoD scene-ref conversion cleanup build target
+  set passed:
+  `ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+  The final rebuild after the header-boundary fix rebuilt the affected libged
+  slice and relinked libqtcad/test targets cleanly.
+* Standalone `libbsg_api_hygiene` passed in 40.98 seconds after an initial
+  broad-gate run caught the too-broad full private draw bridge include in
+  `src/libged/ged_view_legacy.cpp`.
+* The focused GED retained mesh-LoD scene-ref conversion gate passed 4/4 in
+  18.17 seconds.  `brlobol_pivot_guard` completed in 17.88 seconds,
+  `rt_view_legacy_bsg` in 0.02 seconds, `test_qtcad_obol_draw_sync` in 0.11
+  seconds, and `ged_test_qged_swrast` in 0.11 seconds.
+* The latest broad focused wrapper gate passed 13/13 in 82.80 seconds after
+  the GED retained mesh-LoD scene-ref conversion cleanup.  Longest single test
+  was `libbsg_api_hygiene` at 41.12 seconds; `brlobol_pivot_guard` completed
+  in 17.85 seconds inside that run, `ged_test_drawing_quad` completed in 12.71
+  seconds, and `ged_test_drawing_basic` completed in 7.51 seconds.
+* The standalone `brlobol_pivot_guard` rerun after the GED retained mesh-LoD
+  scene-ref conversion status and inventory updates passed in 17.64 seconds.
+
+The previous verified baseline was the GED draw scene-root query/attach
+neutral-ref cleanup.
+
+* The affected GED draw scene-root query/attach neutral-ref cleanup build
+  target set passed:
+  `ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+  The `rt/view.h` change rebuilt the affected RT/GED/qtcad slice cleanly.
+* Standalone `brlobol_pivot_guard` passed in 17.63 seconds, and standalone
+  `rt_view_legacy_bsg` passed in 0.02 seconds after the RT adapter test
+  gained scene-root ref and attach coverage.
+* The focused GED draw scene-root query/attach neutral-ref gate passed 4/4 in
+  17.99 seconds.  `brlobol_pivot_guard` completed in 17.70 seconds,
+  `rt_view_legacy_bsg` in 0.02 seconds, `test_qtcad_obol_draw_sync` in 0.11
+  seconds, and `ged_test_qged_swrast` in 0.11 seconds.
+* The latest broad focused wrapper gate passed 13/13 in 82.63 seconds after
+  the scene-root query/attach neutral-ref cleanup.  Longest single test was
+  `libbsg_api_hygiene` at 40.98 seconds; `brlobol_pivot_guard` completed in
+  17.84 seconds inside that run, `ged_test_drawing_quad` completed in 12.69
+  seconds, and `ged_test_drawing_basic` completed in 7.52 seconds.
+* The standalone `brlobol_pivot_guard` rerun after the scene-root query/attach
+  neutral-ref status and inventory updates passed in 17.64 seconds.
+
+The previous verified baseline was the GED draw tree independent-scope
+neutral-ref cleanup.
+
+* The affected GED draw tree independent-scope neutral-ref cleanup build
+  target set passed:
+  `ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+  The `libged.so` rebuild after the code edit passed cleanly, and the
+  wrapper target set relinked cleanly after the bridge-owner conversion
+  change.
+* Standalone `libbsg_api_hygiene` passed in 50.09 seconds after catching the
+  first bad draw-tree raw `.opaque` conversion placement.
+* The focused GED draw tree independent-scope neutral-ref gate passed 4/4 in
+  18.26 seconds.  `brlobol_pivot_guard` completed in 17.97 seconds,
+  `rt_view_legacy_bsg` in 0.02 seconds, `test_qtcad_obol_draw_sync` in 0.11
+  seconds, and `ged_test_qged_swrast` in 0.11 seconds.
+* The latest broad focused wrapper gate passed 13/13 in 82.52 seconds after
+  the independent-scope neutral-ref cleanup.  Longest single test was
+  `libbsg_api_hygiene` at 41.05 seconds; `brlobol_pivot_guard` completed in
+  17.63 seconds inside that run, `ged_test_drawing_quad` completed in 12.71
+  seconds, and `ged_test_drawing_basic` completed in 7.53 seconds.
+* The standalone `brlobol_pivot_guard` rerun after the independent-scope
+  status and inventory updates passed in 17.65 seconds.
+
+The previous verified baseline was the GED draw LoD bounds callback cleanup.
+
+* The affected GED draw LoD bounds callback cleanup build target set passed:
+  `ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+  The `libged.so` rebuild after the code edit passed cleanly, and the
+  touched libged/qtcad slice relinked cleanly after the LoD callback helper
+  change.
+* An initial standalone `brlobol_pivot_guard` run after the GED draw LoD
+  callback code edit passed in 17.62 seconds.
+* The focused GED draw LoD callback cleanup gate passed 4/4 in 18.23
+  seconds.  `brlobol_pivot_guard` completed in 17.94 seconds,
+  `rt_view_legacy_bsg` in 0.02 seconds, `test_qtcad_obol_draw_sync` in 0.11
+  seconds, and `ged_test_qged_swrast` in 0.11 seconds.
+* The latest broad focused wrapper gate passed 13/13 in 82.65 seconds after
+  the GED draw LoD callback cleanup.  Longest single test was
+  `libbsg_api_hygiene` at 41.02 seconds; `brlobol_pivot_guard` completed in
+  17.89 seconds inside that run, `ged_test_drawing_quad` completed in 12.66
+  seconds, and `ged_test_drawing_basic` completed in 7.50 seconds.
+* The standalone `brlobol_pivot_guard` rerun after the LoD callback status
+  and inventory updates passed in 17.78 seconds.
+* The affected GED draw active-view cleanup build target set passed:
+  `ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+  The first `libged.so` rebuild exposed a FreeBSD/clang unity-build static
+  helper name collision between the scene-root and tree edits; after giving
+  the helpers file-specific names, the rebuild passed.
+* The focused GED draw active-view cleanup gate passed 4/4 in 17.83 seconds.
+  `brlobol_pivot_guard` completed in 17.54 seconds, `rt_view_legacy_bsg` in
+  0.02 seconds, `test_qtcad_obol_draw_sync` in 0.11 seconds, and
+  `ged_test_qged_swrast` in 0.11 seconds.
+* The latest broad focused wrapper gate passed 13/13 in 82.60 seconds after
+  the GED draw active-view cleanup.  Longest single test was
+  `libbsg_api_hygiene` at 41.16 seconds; `brlobol_pivot_guard` completed in
+  17.63 seconds inside that run, `ged_test_drawing_quad` completed in 12.69
+  seconds, and `ged_test_drawing_basic` completed in 7.53 seconds.
+* The standalone `brlobol_pivot_guard` rerun after the active-view status and
+  inventory updates passed in 17.75 seconds.
+* The affected GED draw mesh-LoD context-load cleanup build target set
+  passed:
+  `ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+  The touched libged/qtcad slice rebuilt cleanly after the context-helper
+  change.
+* An initial standalone `brlobol_pivot_guard` run after the GED draw mesh-LoD
+  context-load code edit passed in 22.60 seconds.
+* The focused GED draw mesh-LoD context-load cleanup gate passed 4/4 in
+  17.86 seconds.  `brlobol_pivot_guard` completed in 17.58 seconds,
+  `rt_view_legacy_bsg` in 0.02 seconds, `test_qtcad_obol_draw_sync` in 0.11
+  seconds, and `ged_test_qged_swrast` in 0.11 seconds.
+* The latest broad focused wrapper gate passed 13/13 in 82.40 seconds after
+  the GED draw mesh-LoD context-load cleanup.  Longest single test was
+  `libbsg_api_hygiene` at 40.92 seconds; `brlobol_pivot_guard` completed in
+  17.60 seconds inside that run, `ged_test_drawing_quad` completed in 12.73
+  seconds, and `ged_test_drawing_basic` completed in 7.54 seconds.
+* The standalone `brlobol_pivot_guard` rerun after the mesh-LoD context-load
+  status and inventory updates passed in 17.7 seconds.
+* The standalone `brlobol_pivot_guard` rerun after the transaction
+  scene-root-ref status and inventory updates passed in 17.88 seconds.
+* The affected GED draw transaction scene-root-ref cleanup build target set
+  passed:
+  `ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+  The first `libged.so` rebuild exposed a FreeBSD/clang
+  `-Wmisleading-indentation` failure in the edited DB-event revalidation
+  block; after fixing that indentation, the rebuild passed.
+* The focused GED draw transaction scene-root-ref cleanup gate passed 4/4 in
+  17.87 seconds.  `brlobol_pivot_guard` completed in 17.58 seconds,
+  `rt_view_legacy_bsg` in 0.02 seconds, `test_qtcad_obol_draw_sync` in 0.11
+  seconds, and `ged_test_qged_swrast` in 0.11 seconds.
+* The broad focused wrapper gate passed 13/13 in 82.43 seconds after
+  the GED draw transaction scene-root-ref cleanup.  Longest single test was
+  `libbsg_api_hygiene` at 41.01 seconds; `brlobol_pivot_guard` completed in
+  17.67 seconds inside that run, `ged_test_drawing_quad` completed in 12.64
+  seconds, and `ged_test_drawing_basic` completed in 7.54 seconds.
+* The affected GED draw scene-root view-set/recycle-pool cleanup build target
+  set passed:
+  `ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+  This rebuilt the touched libged/qtcad slice cleanly after the scene-root
+  context-helper change.
+* The focused GED draw scene-root view-set/recycle-pool cleanup gate passed
+  4/4 in 18.02 seconds.  `brlobol_pivot_guard` completed in 17.73 seconds,
+  `rt_view_legacy_bsg` in 0.02 seconds, `test_qtcad_obol_draw_sync` in 0.11
+  seconds, and `ged_test_qged_swrast` in 0.11 seconds.
+* The latest broad focused wrapper gate passed 13/13 in 82.59 seconds after
+  the GED draw scene-root view-set/recycle-pool cleanup.  Longest single test
+  was `libbsg_api_hygiene` at 41.02 seconds; `brlobol_pivot_guard` completed
+  in 17.76 seconds inside that run, `ged_test_drawing_quad` completed in
+  12.70 seconds, and `ged_test_drawing_basic` completed in 7.50 seconds.
+* The standalone `brlobol_pivot_guard` rerun after the scene-root
+  view-set/recycle-pool status and inventory updates passed in 17.77 seconds.
+* The affected GED draw transaction active-set/view-set cleanup build target
+  set passed:
+  `ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+  This rebuilt the touched libged/qtcad slice cleanly after the transaction
+  context-helper change.
+* The focused GED draw transaction active-set/view-set cleanup gate passed
+  4/4 in 18.07 seconds.  `brlobol_pivot_guard` completed in 17.78 seconds,
+  `rt_view_legacy_bsg` in 0.02 seconds, `test_qtcad_obol_draw_sync` in 0.12
+  seconds, and `ged_test_qged_swrast` in 0.11 seconds.
+* The latest broad focused wrapper gate passed 13/13 in 82.35 seconds after
+  the GED draw transaction active-set/view-set cleanup.  Longest single test
+  was `libbsg_api_hygiene` at 40.98 seconds; `brlobol_pivot_guard` completed
+  in 17.59 seconds inside that run, `ged_test_drawing_quad` completed in
+  12.69 seconds, and `ged_test_drawing_basic` completed in 7.50 seconds.
+* The standalone `brlobol_pivot_guard` rerun after the transaction
+  active-set/view-set status and inventory updates passed in 17.66 seconds.
+* The affected GED draw tree independent-scope cleanup build target set
+  passed:
+  `ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+  This rebuilt the touched libged/qtcad slice cleanly.
+* The focused GED draw tree independent-scope cleanup gate passed 4/4 in
+  17.91 seconds.  `brlobol_pivot_guard` completed in 17.62 seconds,
+  `rt_view_legacy_bsg` in 0.02 seconds, `test_qtcad_obol_draw_sync` in 0.12
+  seconds, and `ged_test_qged_swrast` in 0.11 seconds.
+* The latest broad focused wrapper gate passed 13/13 in 82.46 seconds after
+  the GED draw tree independent-scope cleanup.  Longest single test was
+  `libbsg_api_hygiene` at 41.03 seconds; `brlobol_pivot_guard` completed in
+  17.59 seconds inside that run, `ged_test_drawing_quad` completed in 12.75
+  seconds, and `ged_test_drawing_basic` completed in 7.52 seconds.
+* The standalone `brlobol_pivot_guard` rerun after the tree-scope status and
+  inventory updates passed in 17.63 seconds.
+* The affected GED draw-record selection-boundary cleanup build target set
+  passed:
+  `ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+  This rebuilt the touched libged/qtcad slice cleanly.
+* The focused GED draw-record selection-boundary cleanup gate passed 4/4 in
+  17.79 seconds.  `brlobol_pivot_guard` completed in 17.50 seconds,
+  `rt_view_legacy_bsg` in 0.02 seconds, `test_qtcad_obol_draw_sync` in 0.11
+  seconds, and `ged_test_qged_swrast` in 0.11 seconds.
+* The latest broad focused wrapper gate passed 13/13 in 82.68 seconds after
+  the GED draw-record selection-boundary cleanup.  Longest single test was
+  `libbsg_api_hygiene` at 41.15 seconds; `brlobol_pivot_guard` completed in
+  17.72 seconds inside that run, `ged_test_drawing_quad` completed in 12.68
+  seconds, and `ged_test_drawing_basic` completed in 7.54 seconds.
+* The standalone `brlobol_pivot_guard` rerun after the selection-boundary
+  status and inventory updates passed in 17.64 seconds.
+* The affected dead private GED draw-view wrapper cleanup build target set
+  passed:
+  `ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+  This rebuilt the touched libged/qtcad slice cleanly.
+* The focused dead-wrapper cleanup gate passed 4/4 in 17.94 seconds after one
+  stale pivot-guard view-scope requirement list was corrected.
+  `brlobol_pivot_guard` completed in 17.65 seconds, `rt_view_legacy_bsg` in
+  0.02 seconds, `test_qtcad_obol_draw_sync` in 0.11 seconds, and
+  `ged_test_qged_swrast` in 0.11 seconds.
+* The latest broad focused wrapper gate passed 13/13 in 82.36 seconds after
+  the dead private GED draw-view wrapper cleanup.  Longest single test was
+  `libbsg_api_hygiene` at 40.96 seconds; `brlobol_pivot_guard` completed in
+  17.58 seconds inside that run, `ged_test_drawing_quad` completed in 12.69
+  seconds, and `ged_test_drawing_basic` completed in 7.55 seconds.
+* The affected GED draw refs mesh-LoD free-path cleanup build target set passed:
+  `ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+  This rebuilt the touched libged/qtcad slice cleanly.
+* The focused GED draw refs mesh-LoD free-path gate passed 4/4 in 17.74
+  seconds after one stale pivot-guard requirement was corrected.
+  `brlobol_pivot_guard` completed in 17.45 seconds, `rt_view_legacy_bsg` in
+  0.02 seconds, `test_qtcad_obol_draw_sync` in 0.11 seconds, and
+  `ged_test_qged_swrast` in 0.11 seconds.
+* The latest broad focused wrapper gate passed 13/13 in 82.51 seconds after
+  the GED draw refs mesh-LoD free-path cleanup.  Longest single test was
+  `libbsg_api_hygiene` at 41.01 seconds; `brlobol_pivot_guard` completed in
+  17.59 seconds inside that run, `ged_test_drawing_quad` completed in 12.77
+  seconds, and `ged_test_drawing_basic` completed in 7.53 seconds.
+* The affected GED draw tree/transaction/record independent-check cleanup build
+  target set passed:
+  `ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+  This rebuilt the touched libged/qtcad slice cleanly.
+* The focused GED draw tree/transaction/record independent-check gate passed
+  4/4 in 17.98 seconds.  `brlobol_pivot_guard` completed in 17.69 seconds,
+  `rt_view_legacy_bsg` in 0.02 seconds, `test_qtcad_obol_draw_sync` in 0.11
+  seconds, and `ged_test_qged_swrast` in 0.11 seconds.
+* The latest broad focused wrapper gate passed 13/13 in 82.53 seconds after
+  the GED draw tree/transaction/record independent-check cleanup.  Longest
+  single test was `libbsg_api_hygiene` at 41.08 seconds;
+  `brlobol_pivot_guard` completed in 17.64 seconds inside that run,
+  `ged_test_drawing_quad` completed in 12.72 seconds, and
+  `ged_test_drawing_basic` completed in 7.50 seconds.
+* The standalone `brlobol_pivot_guard` rerun after the independent-check
+  status and inventory updates passed in 17.52 seconds; a final post-edit
+  guard rerun passed in 17.54 seconds.
+* The affected GED draw draft/refs/view snapshot cleanup build target set
+  passed:
+  `ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+  This rebuilt the touched libged/qtcad slice cleanly.
+* The focused GED draw draft/refs/view snapshot gate passed 4/4 in 17.83
+  seconds.  `brlobol_pivot_guard` completed in 17.55 seconds,
+  `rt_view_legacy_bsg` in 0.02 seconds, `test_qtcad_obol_draw_sync` in 0.11
+  seconds, and `ged_test_qged_swrast` in 0.11 seconds.
+* The latest broad focused wrapper gate passed 13/13 in 82.44 seconds after
+  the GED draw draft/refs/view snapshot cleanup.  Longest single test was
+  `libbsg_api_hygiene` at 41.05 seconds; `brlobol_pivot_guard` completed in
+  17.52 seconds inside that run, `ged_test_drawing_quad` completed in 12.72
+  seconds, and `ged_test_drawing_basic` completed in 7.53 seconds.
+* The standalone `brlobol_pivot_guard` rerun after the draft/refs/view
+  snapshot status and inventory updates passed in 17.60 seconds; a final
+  post-edit guard rerun passed in 17.88 seconds.
+* The affected GED draw transaction view-info/LoD/autoview cleanup build
+  target set passed:
+  `ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+  This rebuilt the touched libged/qtcad slice cleanly.
+* The focused GED draw transaction view-info/LoD/autoview gate passed 4/4 in
+  17.90 seconds.  `brlobol_pivot_guard` completed in 17.62 seconds,
+  `rt_view_legacy_bsg` in 0.02 seconds, `test_qtcad_obol_draw_sync` in 0.11
+  seconds, and `ged_test_qged_swrast` in 0.11 seconds.  An initial run exposed
+  a stale mixed-file pivot-guard requirement for the old transaction
+  view-info wrapper; the guard was corrected before the passing rerun.
+* The latest broad focused wrapper gate passed 13/13 in 82.21 seconds after
+  the GED draw transaction view-info/LoD/autoview cleanup.  Longest single
+  test was `libbsg_api_hygiene` at 40.93 seconds; `brlobol_pivot_guard`
+  completed in 17.52 seconds inside that run, `ged_test_drawing_quad`
+  completed in 12.64 seconds, and `ged_test_drawing_basic` completed in 7.52
+  seconds.
+* The standalone `brlobol_pivot_guard` rerun after the transaction cleanup
+  status and inventory updates passed in 17.44 seconds.
+* The affected GED draw.cpp view-snapshot cleanup build target set passed:
+  `ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+  The first build exposed a FreeBSD/clang unity-build helper-name collision;
+  after renaming the helper to `draw_view_context_name`, the rebuild passed.
+* The focused GED draw.cpp view-snapshot cleanup gate passed 4/4 in 17.78
+  seconds.  `brlobol_pivot_guard` completed in 17.50 seconds,
+  `rt_view_legacy_bsg` in 0.02 seconds, `test_qtcad_obol_draw_sync` in 0.11
+  seconds, and `ged_test_qged_swrast` in 0.11 seconds.
+* The latest broad focused wrapper gate passed 13/13 in 82.19 seconds after
+  the GED draw.cpp view-snapshot cleanup.  Longest single test was
+  `libbsg_api_hygiene` at 40.97 seconds; `brlobol_pivot_guard` completed in
+  17.42 seconds inside that run, `ged_test_drawing_quad` completed in 12.67
+  seconds, and `ged_test_drawing_basic` completed in 7.55 seconds.
+* The standalone `brlobol_pivot_guard` rerun after the GED draw.cpp
+  view-snapshot status updates passed in 17.44 seconds.
+* The affected GED draw-view context facade cleanup build target set passed:
+  `ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+  This rebuilt the touched libged/qtcad slice cleanly.
+* The focused GED draw-view context facade gate passed 4/4 in 17.72 seconds.
+  `brlobol_pivot_guard` completed in 17.39 seconds,
+  `rt_view_legacy_bsg` in 0.02 seconds, `test_qtcad_obol_draw_sync` in 0.11
+  seconds, and `ged_test_qged_swrast` in 0.15 seconds.
+* The latest broad focused wrapper gate passed 13/13 in 82.33 seconds after
+  the GED draw-view context facade cleanup.  Longest single test was
+  `libbsg_api_hygiene` at 41.12 seconds; `brlobol_pivot_guard` completed in
+  17.44 seconds inside that run, `ged_test_drawing_quad` completed in 12.66
+  seconds, and `ged_test_drawing_basic` completed in 7.52 seconds.
+* The standalone `brlobol_pivot_guard` rerun after the GED draw-view context
+  facade status updates passed in 17.37 seconds.
+* The affected TclCAD direct dependency row cleanup build target set passed:
+  `ninja -C build rt_view_legacy_bsg libged.so libtclcad.so libqtcad.so mged gsh qged test_qtcad_obol_draw_sync qsketch`.
+  This regenerated CMake for the dependency-row change and rebuilt the touched
+  libged/libtclcad/MGED/GSH/qged/qtcad slice cleanly.
+* The focused TclCAD dependency-row cleanup gate passed 4/4 in 17.66 seconds.
+  `brlobol_pivot_guard` completed in 17.37 seconds,
+  `rt_view_legacy_bsg` in 0.02 seconds, `test_qtcad_obol_draw_sync` in 0.11
+  seconds, and `ged_test_qged_swrast` in 0.11 seconds.
+* The latest broad focused wrapper gate passed 13/13 in 82.29 seconds after
+  the TclCAD dependency-row cleanup.  Longest single test was
+  `libbsg_api_hygiene` at 40.96 seconds; `brlobol_pivot_guard` completed in
+  17.50 seconds inside that run, `ged_test_drawing_basic` completed in 7.50
+  seconds, and `ged_test_drawing_quad` completed in 12.73 seconds.
+* The standalone `brlobol_pivot_guard` rerun after the TclCAD dependency-row
+  cleanup status updates passed in 17.38 seconds.
+* The affected internal GED draw include cleanup build target set passed:
+  `ninja -C build rt_view_legacy_bsg libged.so libtclcad.so libqtcad.so mged gsh qged test_qtcad_obol_draw_sync qsketch`.
+  This rebuilt the touched libged/libtclcad/MGED/GSH/qged/qtcad slice cleanly.
+* The focused internal GED draw include cleanup gate passed 4/4 in 17.65
+  seconds.  `brlobol_pivot_guard` completed in 17.36 seconds,
+  `rt_view_legacy_bsg` in 0.02 seconds, `test_qtcad_obol_draw_sync` in 0.11
+  seconds, and `ged_test_qged_swrast` in 0.11 seconds.
+* The latest broad focused wrapper gate passed 13/13 in 82.20 seconds after
+  the internal GED draw include cleanup.  Longest single test was
+  `libbsg_api_hygiene` at 41.08 seconds; `brlobol_pivot_guard` completed in
+  17.34 seconds inside that run, `ged_test_drawing_basic` completed in 7.51
+  seconds, and `ged_test_drawing_quad` completed in 12.68 seconds.
+* The standalone `brlobol_pivot_guard` rerun after the internal GED draw
+  include cleanup status updates passed in 17.48 seconds.
+* The affected GED draw public-header ownership build target set passed:
+  `ninja -C build rt_view_legacy_bsg libged.so libtclcad.so libqtcad.so mged gsh qged test_qtcad_obol_draw_sync qsketch`.
+  This rebuilt the touched libged/libtclcad/MGED/GSH/qged/qtcad slice cleanly.
+* The focused GED draw public-header ownership gate passed 4/4 in 17.00
+  seconds.  `brlobol_pivot_guard` completed in 16.72 seconds,
+  `rt_view_legacy_bsg` in 0.02 seconds, `test_qtcad_obol_draw_sync` in 0.11
+  seconds, and `ged_test_qged_swrast` in 0.11 seconds.
+* The latest broad focused wrapper gate passed 13/13 in 81.87 seconds after
+  the GED draw public-header ownership cleanup.  Longest single test was
+  `libbsg_api_hygiene` at 41.23 seconds; `brlobol_pivot_guard` completed in
+  16.77 seconds inside that run, `ged_test_drawing_basic` completed in 7.55
+  seconds, and `ged_test_drawing_quad` completed in 12.72 seconds.
+* The standalone `brlobol_pivot_guard` rerun after the GED draw public-header
+  ownership status updates passed in 16.87 seconds.
+* The affected production draw-facade consumer build target set passed:
+  `ninja -C build rt_view_legacy_bsg libged.so libtclcad.so libqtcad.so mged gsh qged test_qtcad_obol_draw_sync qsketch`.
+  This rebuilt the touched libged/libtclcad/MGED/GSH/qged/qtcad slice cleanly.
+* The focused production draw-facade consumer gate passed 4/4 in 17.06
+  seconds.  `brlobol_pivot_guard` completed in 16.77 seconds,
+  `rt_view_legacy_bsg` in 0.02 seconds, `test_qtcad_obol_draw_sync` in 0.11
+  seconds, and `ged_test_qged_swrast` in 0.11 seconds.
+* The latest broad focused wrapper gate passed 13/13 in 81.67 seconds after
+  the production draw-facade consumer cleanup.  Longest single test was
+  `libbsg_api_hygiene` at 41.06 seconds; `brlobol_pivot_guard` completed in
+  16.76 seconds inside that run, `ged_test_drawing_basic` completed in 7.58
+  seconds, and `ged_test_drawing_quad` completed in 12.67 seconds.
+* The standalone `brlobol_pivot_guard` rerun after the production
+  draw-facade consumer status updates passed in 16.76 seconds.
+* The wrapper build target set passed for the qtcad retained draw facade
+  cleanup:
+  `ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+  The installed GED header change regenerated CMake and rebuilt a broad
+  RT/GED/qtcad dependent slice cleanly.
+* The focused qtcad retained draw facade gate passed 4/4 in 17.00 seconds.
+  `brlobol_pivot_guard` completed in 16.71 seconds, `rt_view_legacy_bsg` in
+  0.02 seconds, `test_qtcad_obol_draw_sync` in 0.12 seconds, and
+  `ged_test_qged_swrast` in 0.11 seconds.  An initial run exposed an overly
+  strict new guard install check; that guard bug was fixed before the passing
+  rerun.
+* The latest broad focused wrapper gate passed 13/13 in 81.59 seconds after
+  the qtcad retained draw facade cleanup.  Longest single test was
+  `libbsg_api_hygiene` at 40.99 seconds; `brlobol_pivot_guard` completed in
+  16.74 seconds inside that run, `ged_test_drawing_basic` completed in 7.54
+  seconds, and `ged_test_drawing_quad` completed in 12.71 seconds.
+* The final standalone `brlobol_pivot_guard` rerun after the qtcad retained
+  draw facade status updates passed in 16.69 seconds.
+* The wrapper build target set passed for the GED update-callback cleanup:
+  `ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+  The `rt/view.h` change rebuilt a broad RT/GED/qtcad dependent slice and
+  passed.
+* The focused GED update-callback gate passed 4/4 in 16.92 seconds.
+  `brlobol_pivot_guard` completed in 16.63 seconds, `rt_view_legacy_bsg` in
+  0.02 seconds, `test_qtcad_obol_draw_sync` in 0.11 seconds, and
+  `ged_test_qged_swrast` in 0.11 seconds.
+* The latest broad focused wrapper gate passed 13/13 in 81.98 seconds after
+  the GED update-callback cleanup.  Longest single test was
+  `libbsg_api_hygiene` at 41.08 seconds; `brlobol_pivot_guard` completed in
+  16.96 seconds inside that run, `ged_test_drawing_basic` completed in 7.63
+  seconds, and `ged_test_drawing_quad` completed in 12.71 seconds.
+* The standalone `brlobol_pivot_guard` rerun after the update-callback status
+  updates passed in 16.65 seconds.
+* The wrapper build target set passed for the GED scene-ref/mesh-LoD cleanup:
+  `ninja -C build rt_view_legacy_bsg libged.so libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+  The `rt/view.h` change rebuilt a broad RT/GED/qtcad dependent slice and
+  passed.
+* The focused GED scene-ref/mesh-LoD gate passed 4/4 in 16.90 seconds.
+  `brlobol_pivot_guard` completed in 16.58 seconds, `rt_view_legacy_bsg` in
+  0.02 seconds, `test_qtcad_obol_draw_sync` in 0.11 seconds, and
+  `ged_test_qged_swrast` in 0.13 seconds.
+* The previous broad focused wrapper gate passed 13/13 in 81.83 seconds after
+  the GED scene-ref/mesh-LoD cleanup.  Longest single test was
+  `libbsg_api_hygiene` at 41.06 seconds; `brlobol_pivot_guard` completed in
+  16.96 seconds inside that run, `ged_test_drawing_basic` completed in 7.49
+  seconds, and `ged_test_drawing_quad` completed in 12.72 seconds.
+* The standalone `brlobol_pivot_guard` rerun after the scene-ref/mesh-LoD
+  status updates passed in 16.80 seconds.
+* The wrapper build target set passed for the qtcad sketch edit-create cleanup:
+  `ninja -C build rt_view_legacy_bsg libqtcad.so test_qtcad_obol_draw_sync qsketch`.
+  The first rebuild after the `rt/edit.h` change rebuilt RT/GED/qtcad
+  dependents and passed.
+* The focused qtcad sketch edit-create gate passed 4/4 in 16.94 seconds.
+  `brlobol_pivot_guard` completed in 16.65 seconds, `rt_view_legacy_bsg` in
+  0.02 seconds, `test_qtcad_obol_draw_sync` in 0.11 seconds, and
+  `ged_test_qged_swrast` in 0.11 seconds.
+* The focused snap first-candidate gate passed 3/3 in 15.89 seconds.
+  `brlobol_pivot_guard` completed in 15.72 seconds, `rt_view_legacy_bsg` in
+  0.02 seconds, and `ged_test_qged_swrast` in 0.11 seconds.
+* The focused view-set passthrough gate passed 4/4 in 16.22 seconds.
+  `brlobol_pivot_guard` completed in 15.94 seconds, `rt_view_legacy_bsg` in
+  0.02 seconds, `test_qtcad_obol_draw_sync` in 0.11 seconds, and
+  `ged_test_qged_swrast` in 0.11 seconds.
+* The focused lifecycle create/free gate passed 4/4 in 16.29 seconds.
+  `brlobol_pivot_guard` completed in 16.00 seconds, `rt_view_legacy_bsg` in
+  0.02 seconds, `test_qtcad_obol_draw_sync` in 0.12 seconds, and
+  `ged_test_qged_swrast` in 0.11 seconds.
+* The focused qtcad release-storage/line-set gate passed 4/4 in 16.32
+  seconds.  `brlobol_pivot_guard` completed in 16.03 seconds,
+  `rt_view_legacy_bsg` in 0.02 seconds, `test_qtcad_obol_draw_sync` in 0.11
+  seconds, and `ged_test_qged_swrast` in 0.11 seconds.
+* The focused qtcad view-set attach gate passed 4/4 in 16.40 seconds.
+  `brlobol_pivot_guard` completed in 16.11 seconds, `rt_view_legacy_bsg` in
+  0.02 seconds, `test_qtcad_obol_draw_sync` in 0.11 seconds, and
+  `ged_test_qged_swrast` in 0.11 seconds.
+* The focused qtcad pick/result/selection gate passed 4/4 in 16.38 seconds.
+  `brlobol_pivot_guard` completed in 16.10 seconds, `rt_view_legacy_bsg` in
+  0.02 seconds, `test_qtcad_obol_draw_sync` in 0.11 seconds, and
+  `ged_test_qged_swrast` in 0.11 seconds.
+* The focused qtcad bounds-update gate passed 4/4 in 16.35 seconds.
+  `brlobol_pivot_guard` completed in 16.07 seconds, `rt_view_legacy_bsg` in
+  0.02 seconds, `test_qtcad_obol_draw_sync` in 0.11 seconds, and
+  `ged_test_qged_swrast` in 0.11 seconds.
+* The previous broad focused wrapper gate passed 13/13 in 81.28 seconds after
+  the qtcad sketch edit-create cleanup.  Longest single test was
+  `libbsg_api_hygiene` at 41.00 seconds; `brlobol_pivot_guard` completed in
+  16.51 seconds inside that run, `ged_test_drawing_basic` completed in 7.54
+  seconds, and `ged_test_drawing_quad` completed in 12.64 seconds.
+* The standalone `brlobol_pivot_guard` rerun after the qtcad sketch
+  edit-create status and inventory updates passed in 16.62 seconds; a final
+  post-edit guard rerun passed in 16.73 seconds.
+
+
+Next Recommended Batch
+----------------------
+
+Prefer another small neutral-wrapper or facade batch over performance work
+only if its ownership and tests are straightforward.  The targeted BSG-named
+RT wrapper scan for `ged_view_legacy.cpp` and qtcad is now empty.  Production
+draw consumers no longer include the BSG-named GED draw header directly, the
+public draw-view context info/LoD helpers and draw.cpp realization
+view-snapshot reads use neutral names, and transaction redraw info/LoD plus
+autoview plus draft/refs/view primitive-wireframe info, LoD, and scale reads
+now route through neutral RT context helpers.  The tree/transaction/record
+independent-view boolean checks now use the same neutral RT context helper.
+
+Do not chase every remaining `_bsg` token in the retained draw implementation
+as a local rename.  The next useful GED batch should either prove that one of
+the remaining active-view, scene-root/scope scene-ref, or mesh-LoD load
+handoff helpers can move to an existing neutral call without weakening
+ownership, or start replacing the public BSG-typed draw
+snap/scene-ref API surface.  Remaining qtcad work is retained draw
+transaction/observer behavior behind `ged/draw.h` plus retained DM/framebuffer
+host ownership.  Remaining lower-level work is the direct `libbsg` rows in
+`libdm` and `libged`, qged's direct `dm_plugins` edge, and the lower
+backend/display ownership that still depends on those rows.

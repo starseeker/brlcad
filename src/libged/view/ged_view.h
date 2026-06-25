@@ -29,7 +29,7 @@
 #include "common.h"
 
 #include "ged.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 
 __BEGIN_DECLS
 

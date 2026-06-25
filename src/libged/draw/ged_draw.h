@@ -30,7 +30,7 @@
 
 #include <time.h>
 
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "ged.h"
 
 __BEGIN_DECLS

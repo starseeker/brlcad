@@ -48,7 +48,7 @@
 
 #include <bu.h>
 #include "bg/line_layer.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "rt/view_legacy_bsg.h"
 #include <dm.h>
 #include <ged.h>

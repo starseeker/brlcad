@@ -21,11 +21,12 @@
 #include "common.h"
 
 #include "bu/path.h"
-#include "rt/view_legacy_bsg.h"
+#include "ged/view.h"
+#include "rt/view.h"
 #include "tclcad.h"
 
 /* Private headers */
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "./tclcad_private.h"
 #include "./view/view.h"
 #include "./draw_view_move_helpers.h"
@@ -33,13 +34,13 @@
 static struct dm *
 tclcad_mouse_display_manager(const void *view_ctx)
 {
-    return (struct dm *)rt_view_context_display_manager_from_bsg(view_ctx);
+    return (struct dm *)ged_view_context_display_manager_get(view_ctx);
 }
 
 static const char *
 tclcad_mouse_view_name(const void *view_ctx)
 {
-    const char *name = rt_view_context_name_from_bsg(view_ctx);
+    const char *name = ged_view_context_name_get(view_ctx);
     return name ? name : "";
 }
 
@@ -47,14 +48,14 @@ static int
 tclcad_mouse_display_width(const void *view_ctx)
 {
     struct dm *dmp = tclcad_mouse_display_manager(view_ctx);
-    return dmp ? dm_get_width(dmp) : rt_view_context_width_from_bsg(view_ctx);
+    return dmp ? dm_get_width(dmp) : ged_view_context_width_get(view_ctx);
 }
 
 static int
 tclcad_mouse_display_height(const void *view_ctx)
 {
     struct dm *dmp = tclcad_mouse_display_manager(view_ctx);
-    return dmp ? dm_get_height(dmp) : rt_view_context_height_from_bsg(view_ctx);
+    return dmp ? dm_get_height(dmp) : ged_view_context_height_get(view_ctx);
 }
 
 static struct bu_vls *
@@ -69,15 +70,15 @@ tclcad_mouse_sync_dm_dimensions(void *view_ctx)
 {
     struct dm *dmp = tclcad_mouse_display_manager(view_ctx);
     if (dmp)
-	rt_view_context_dimensions_set_bsg(view_ctx, dm_get_width(dmp), dm_get_height(dmp));
+	ged_view_context_dimensions_set(view_ctx, dm_get_width(dmp), dm_get_height(dmp));
 }
 
 static void
-tclcad_mouse_view_inv_rotation_from_bsg(mat_t inv_rotation, const void *view_ctx)
+tclcad_mouse_view_inv_rotation(mat_t inv_rotation, const void *view_ctx)
 {
     mat_t view_rotation;
 
-    rt_view_context_rotation_from_bsg(view_rotation, view_ctx);
+    ged_view_context_rotation_get(view_rotation, view_ctx);
     bn_mat_inv(inv_rotation, view_rotation);
 }
 
@@ -89,8 +90,8 @@ tclcad_mouse_previous_get_set(fastf_t *prev_x, fastf_t *prev_y,
 	*prev_x = 0.0;
     if (prev_y)
 	*prev_y = 0.0;
-    (void)rt_view_context_previous_mouse_from_bsg(prev_x, prev_y, view_ctx);
-    (void)rt_view_context_previous_mouse_set_bsg(view_ctx, x, y);
+    (void)ged_view_context_previous_mouse_get(prev_x, prev_y, view_ctx);
+    (void)ged_view_context_previous_mouse_set(view_ctx, x, y);
 }
 
 static void
@@ -103,7 +104,7 @@ tclcad_mouse_delta_settings(struct rt_view_mouse_delta_settings *settings,
 	return;
 
     *settings = zero;
-    (void)rt_view_context_mouse_delta_settings_from_bsg(settings, view_ctx);
+    (void)ged_view_context_mouse_delta_settings_get(settings, view_ctx);
 }
 
 static void
@@ -174,7 +175,7 @@ to_get_prev_mouse(struct ged *gedp,
 
     fastf_t prev_x = 0.0;
     fastf_t prev_y = 0.0;
-    (void)rt_view_context_previous_mouse_from_bsg(&prev_x, &prev_y, gdvp);
+    (void)ged_view_context_previous_mouse_get(&prev_x, &prev_y, gdvp);
     bu_vls_printf(gedp->ged_result_str, "%d %d", (int)prev_x, (int)prev_y);
     return BRLCAD_OK;
 }
@@ -223,16 +224,16 @@ to_mouse_append_pnt_common(struct ged *gedp,
     }
 
     tclcad_mouse_sync_dm_dimensions(gdvp);
-    rt_view_context_screen_to_view_from_bsg(&x, &y, gdvp, x, y);
+    ged_view_context_screen_to_view(&x, &y, gdvp, x, y);
     VSET(view, x, y, 0.0);
 
     tclcad_mouse_sync_dm_dimensions(gdvp);
 
     ged_view_active_ctx_set(gedp, gdvp);
     {
-	unsigned long long snap_kinds = rt_view_context_prepare_tcl_snap_bsg(gdvp);
+	unsigned long long snap_kinds = ged_view_context_prepare_tcl_snap(gdvp);
 	if (snap_kinds)
-	    rt_view_context_snap_point_2d_bsg(gdvp, &view[X], &view[Y], snap_kinds);
+	    ged_view_context_snap_point_2d(gdvp, &view[X], &view[Y], snap_kinds);
     }
 
     bu_vls_printf(&pt_vls, "%lf %lf %lf", view[X], view[Y], view[Z]);
@@ -307,19 +308,19 @@ to_mouse_brep_selection_append(struct ged *gedp,
     }
 
     /* stash point coordinates for future drag handling */
-    rt_view_context_previous_mouse_set_bsg(gdvp, screen_pt[X], screen_pt[Y]);
+    ged_view_context_previous_mouse_set(gdvp, screen_pt[X], screen_pt[Y]);
 
     /* convert screen point to model-space start point and direction */
     tclcad_mouse_sync_dm_dimensions(gdvp);
-    rt_view_context_screen_to_view_from_bsg(&view_pt[X], &view_pt[Y], gdvp,
+    ged_view_context_screen_to_view(&view_pt[X], &view_pt[Y], gdvp,
 	    screen_pt[X], screen_pt[Y]);
     view_pt[Z] = 1.0;
 
-    rt_view_context_view2model_from_bsg(view2model, gdvp);
+    ged_view_context_view2model_get(view2model, gdvp);
     MAT4X3PNT(model_pt, view2model, view_pt);
 
     VSET(view_dir, 0.0, 0.0, -1.0);
-    rt_view_context_rotation_from_bsg(view_rotation, gdvp);
+    ged_view_context_rotation_get(view_rotation, gdvp);
     bn_mat_inv(invRot, view_rotation);
     MAT4X3PNT(model_dir, invRot, view_dir);
 
@@ -422,16 +423,16 @@ to_mouse_brep_selection_translate(struct ged *gedp,
     /* convert screen-space delta to model-space delta */
     fastf_t prev_x = 0.0;
     fastf_t prev_y = 0.0;
-    (void)rt_view_context_previous_mouse_from_bsg(&prev_x, &prev_y, gdvp);
+    (void)ged_view_context_previous_mouse_get(&prev_x, &prev_y, gdvp);
     tclcad_mouse_sync_dm_dimensions(gdvp);
-    rt_view_context_screen_to_view_from_bsg(&view_start[X], &view_start[Y], gdvp,
+    ged_view_context_screen_to_view(&view_start[X], &view_start[Y], gdvp,
 	    prev_x, prev_y);
     view_start[Z] = 1;
-    rt_view_context_view2model_from_bsg(view2model, gdvp);
+    ged_view_context_view2model_get(view2model, gdvp);
     MAT4X3PNT(model_start, view2model, view_start);
 
     tclcad_mouse_sync_dm_dimensions(gdvp);
-    rt_view_context_screen_to_view_from_bsg(&view_end[X], &view_end[Y], gdvp,
+    ged_view_context_screen_to_view(&view_end[X], &view_end[Y], gdvp,
 	    screen_end[X], screen_end[Y]);
     view_end[Z] = 1;
     MAT4X3PNT(model_end, view2model, view_end);
@@ -461,7 +462,7 @@ to_mouse_brep_selection_translate(struct ged *gedp,
     /* need to tell front-end that we've modified the db */
     tclcad_eval_noresult(current_top->to_interp, "$::ArcherCore::application setSave", 0, NULL);
 
-    rt_view_context_previous_mouse_set_bsg(gdvp, screen_end[X], screen_end[Y]);
+    ged_view_context_previous_mouse_set(gdvp, screen_end[X], screen_end[Y]);
 
     cmd_argc = 2;
     cmd_argv[0] = "draw";
@@ -634,8 +635,8 @@ to_mouse_constrain_trans(struct ged *gedp,
 
     width = tclcad_mouse_display_width(gdvp);
     inv_width = 1.0 / (fastf_t)width;
-    dx *= inv_width * rt_view_context_size_from_bsg(gdvp) * gedp->dbip->dbi_local2base;
-    dy *= inv_width * rt_view_context_size_from_bsg(gdvp) * gedp->dbip->dbi_local2base;
+    dx *= inv_width * ged_view_context_size_get(gdvp) * gedp->dbip->dbi_local2base;
+    dy *= inv_width * ged_view_context_size_get(gdvp) * gedp->dbip->dbi_local2base;
 
     if (fabs(dx) > fabs(dy))
 	sf = dx;
@@ -718,7 +719,7 @@ to_mouse_find_arb_edge(struct ged *gedp,
     }
 
     tclcad_mouse_sync_dm_dimensions(gdvp);
-    rt_view_context_screen_to_view_from_bsg(&x, &y, gdvp, x, y);
+    ged_view_context_screen_to_view(&x, &y, gdvp, x, y);
     VSET(view, x, y, 0.0);
 
     bu_vls_printf(&pt_vls, "%lf %lf %lf", view[X], view[Y], view[Z]);
@@ -780,7 +781,7 @@ to_mouse_find_bot_edge(struct ged *gedp,
     }
 
     tclcad_mouse_sync_dm_dimensions(gdvp);
-    rt_view_context_screen_to_view_from_bsg(&x, &y, gdvp, x, y);
+    ged_view_context_screen_to_view(&x, &y, gdvp, x, y);
     VSET(view, x, y, 0.0);
 
     bu_vls_printf(&pt_vls, "%lf %lf %lf", view[X], view[Y], view[Z]);
@@ -841,7 +842,7 @@ to_mouse_find_bot_pnt(struct ged *gedp,
     }
 
     tclcad_mouse_sync_dm_dimensions(gdvp);
-    rt_view_context_screen_to_view_from_bsg(&x, &y, gdvp, x, y);
+    ged_view_context_screen_to_view(&x, &y, gdvp, x, y);
     VSET(view, x, y, 0.0);
 
     bu_vls_printf(&pt_vls, "%lf %lf %lf", view[X], view[Y], view[Z]);
@@ -904,9 +905,9 @@ to_mouse_find_metaball_pnt(struct ged *gedp,
     }
 
     tclcad_mouse_sync_dm_dimensions(gdvp);
-    rt_view_context_screen_to_view_from_bsg(&x, &y, gdvp, x, y);
+    ged_view_context_screen_to_view(&x, &y, gdvp, x, y);
     VSET(view, x, y, 0.0);
-    rt_view_context_view2model_from_bsg(view2model, gdvp);
+    ged_view_context_view2model_get(view2model, gdvp);
     MAT4X3PNT(model, view2model, view);
 
     bu_vls_printf(&pt_vls, "%lf %lf %lf", model[X], model[Y], model[Z]);
@@ -969,9 +970,9 @@ to_mouse_find_pipe_pnt(struct ged *gedp,
     }
 
     tclcad_mouse_sync_dm_dimensions(gdvp);
-    rt_view_context_screen_to_view_from_bsg(&x, &y, gdvp, x, y);
+    ged_view_context_screen_to_view(&x, &y, gdvp, x, y);
     VSET(view, x, y, 0.0);
-    rt_view_context_view2model_from_bsg(view2model, gdvp);
+    ged_view_context_view2model_get(view2model, gdvp);
     MAT4X3PNT(model, view2model, view);
 
     bu_vls_printf(&pt_vls, "%lf %lf %lf", model[X], model[Y], model[Z]);
@@ -1040,19 +1041,19 @@ to_mouse_joint_select(
     }
 
     /* stash point coordinates for future drag handling */
-    rt_view_context_previous_mouse_set_bsg(gdvp, screen_pt[X], screen_pt[Y]);
+    ged_view_context_previous_mouse_set(gdvp, screen_pt[X], screen_pt[Y]);
 
     /* convert screen point to model-space start point and direction */
     tclcad_mouse_sync_dm_dimensions(gdvp);
-    rt_view_context_screen_to_view_from_bsg(&view_pt[X], &view_pt[Y], gdvp,
+    ged_view_context_screen_to_view(&view_pt[X], &view_pt[Y], gdvp,
 	    screen_pt[X], screen_pt[Y]);
     view_pt[Z] = 1.0;
 
-    rt_view_context_view2model_from_bsg(view2model, gdvp);
+    ged_view_context_view2model_get(view2model, gdvp);
     MAT4X3PNT(model_pt, view2model, view_pt);
 
     VSET(view_dir, 0.0, 0.0, -1.0);
-    rt_view_context_rotation_from_bsg(view_rotation, gdvp);
+    ged_view_context_rotation_get(view_rotation, gdvp);
     bn_mat_inv(invRot, view_rotation);
     MAT4X3PNT(model_dir, invRot, view_dir);
 
@@ -1153,16 +1154,16 @@ to_mouse_joint_selection_translate(
     /* convert screen-space delta to model-space delta */
     fastf_t prev_x = 0.0;
     fastf_t prev_y = 0.0;
-    (void)rt_view_context_previous_mouse_from_bsg(&prev_x, &prev_y, gdvp);
+    (void)ged_view_context_previous_mouse_get(&prev_x, &prev_y, gdvp);
     tclcad_mouse_sync_dm_dimensions(gdvp);
-    rt_view_context_screen_to_view_from_bsg(&view_start[X], &view_start[Y], gdvp,
+    ged_view_context_screen_to_view(&view_start[X], &view_start[Y], gdvp,
 	    prev_x, prev_y);
     view_start[Z] = 1;
-    rt_view_context_view2model_from_bsg(view2model, gdvp);
+    ged_view_context_view2model_get(view2model, gdvp);
     MAT4X3PNT(model_start, view2model, view_start);
 
     tclcad_mouse_sync_dm_dimensions(gdvp);
-    rt_view_context_screen_to_view_from_bsg(&view_end[X], &view_end[Y], gdvp,
+    ged_view_context_screen_to_view(&view_end[X], &view_end[Y], gdvp,
 	    screen_end[X], screen_end[Y]);
     view_end[Z] = 1;
     MAT4X3PNT(model_end, view2model, view_end);
@@ -1191,7 +1192,7 @@ to_mouse_joint_selection_translate(
     /* need to tell front-end that we've modified the db */
     Tcl_Eval(current_top->to_interp, "$::ArcherCore::application setSave");
 
-    rt_view_context_previous_mouse_set_bsg(gdvp, screen_end[X], screen_end[Y]);
+    ged_view_context_previous_mouse_set(gdvp, screen_end[X], screen_end[Y]);
 
     cmd_argc = 3;
     cmd_argv[0] = "get";
@@ -1311,10 +1312,10 @@ to_mouse_move_arb_edge(struct ged *gedp,
     width = tclcad_mouse_display_width(gdvp);
     inv_width = 1.0 / (fastf_t)width;
     /* ged_move_arb_edge expects things to be in local units */
-    dx *= inv_width * rt_view_context_size_from_bsg(gdvp) * gedp->dbip->dbi_base2local;
-    dy *= inv_width * rt_view_context_size_from_bsg(gdvp) * gedp->dbip->dbi_base2local;
+    dx *= inv_width * ged_view_context_size_get(gdvp) * gedp->dbip->dbi_base2local;
+    dy *= inv_width * ged_view_context_size_get(gdvp) * gedp->dbip->dbi_base2local;
     VSET(view, dx, dy, 0.0);
-    tclcad_mouse_view_inv_rotation_from_bsg(inv_rot, gdvp);
+    tclcad_mouse_view_inv_rotation(inv_rot, gdvp);
     MAT4X3PNT(model, inv_rot, view);
 
     bu_vls_printf(&pt_vls, "%lf %lf %lf", model[X], model[Y], model[Z]);
@@ -1399,10 +1400,10 @@ to_mouse_move_arb_face(struct ged *gedp,
     width = tclcad_mouse_display_width(gdvp);
     inv_width = 1.0 / (fastf_t)width;
     /* ged_move_arb_face expects things to be in local units */
-    dx *= inv_width * rt_view_context_size_from_bsg(gdvp) * gedp->dbip->dbi_base2local;
-    dy *= inv_width * rt_view_context_size_from_bsg(gdvp) * gedp->dbip->dbi_base2local;
+    dx *= inv_width * ged_view_context_size_get(gdvp) * gedp->dbip->dbi_base2local;
+    dy *= inv_width * ged_view_context_size_get(gdvp) * gedp->dbip->dbi_base2local;
     VSET(view, dx, dy, 0.0);
-    tclcad_mouse_view_inv_rotation_from_bsg(inv_rot, gdvp);
+    tclcad_mouse_view_inv_rotation(inv_rot, gdvp);
     MAT4X3PNT(model, inv_rot, view);
 
     bu_vls_printf(&pt_vls, "%lf %lf %lf", model[X], model[Y], model[Z]);
@@ -1506,10 +1507,10 @@ to_mouse_move_bot_pnt(struct ged *gedp,
 
 	tclcad_mouse_clamp_delta(&dx, &dy, gdvp);
 
-	tclcad_mouse_view_inv_rotation_from_bsg(v2m_mat, gdvp);
+	tclcad_mouse_view_inv_rotation(v2m_mat, gdvp);
 
-	dx *= inv_width * rt_view_context_size_from_bsg(gdvp);
-	dy *= inv_width * rt_view_context_size_from_bsg(gdvp);
+	dx *= inv_width * ged_view_context_size_get(gdvp);
+	dy *= inv_width * ged_view_context_size_get(gdvp);
     } else {
 	struct rt_db_internal intern;
 	struct rt_bot_internal *botip;
@@ -1554,12 +1555,12 @@ to_mouse_move_bot_pnt(struct ged *gedp,
 	    return BRLCAD_ERROR;
 	}
 
-	rt_view_context_model2view_from_bsg(model2view, gdvp);
-	rt_view_context_view2model_from_bsg(v2m_mat, gdvp);
+	ged_view_context_model2view_get(model2view, gdvp);
+	ged_view_context_view2model_get(v2m_mat, gdvp);
 	MAT4X3PNT(view, model2view, &botip->vertices[vertex_i*3]);
 
 	tclcad_mouse_sync_dm_dimensions(gdvp);
-	rt_view_context_screen_to_view_from_bsg(&dx, &dy, gdvp, x, y);
+	ged_view_context_screen_to_view(&dx, &dy, gdvp, x, y);
 	dz = view[Z];
 
 	rt_db_free_internal(&intern);
@@ -1665,10 +1666,10 @@ to_mouse_move_bot_pnts(struct ged *gedp,
 
     tclcad_mouse_clamp_delta(&dx, &dy, gdvp);
 
-    tclcad_mouse_view_inv_rotation_from_bsg(v2m_mat, gdvp);
+    tclcad_mouse_view_inv_rotation(v2m_mat, gdvp);
 
-    dx *= inv_width * rt_view_context_size_from_bsg(gdvp);
-    dy *= inv_width * rt_view_context_size_from_bsg(gdvp);
+    dx *= inv_width * ged_view_context_size_get(gdvp);
+    dy *= inv_width * ged_view_context_size_get(gdvp);
 
     VSET(view, dx, dy, dz);
     MAT4X3PNT(model, v2m_mat, view);
@@ -1767,10 +1768,10 @@ to_mouse_move_pnt_common(struct ged *gedp,
     width = tclcad_mouse_display_width(gdvp);
     inv_width = 1.0 / (fastf_t)width;
     /* ged_pipe_move_pnt expects things to be in local units */
-    dx *= inv_width * rt_view_context_size_from_bsg(gdvp) * gedp->dbip->dbi_base2local;
-    dy *= inv_width * rt_view_context_size_from_bsg(gdvp) * gedp->dbip->dbi_base2local;
+    dx *= inv_width * ged_view_context_size_get(gdvp) * gedp->dbip->dbi_base2local;
+    dy *= inv_width * ged_view_context_size_get(gdvp) * gedp->dbip->dbi_base2local;
     VSET(view, dx, dy, 0.0);
-    tclcad_mouse_view_inv_rotation_from_bsg(inv_rot, gdvp);
+    tclcad_mouse_view_inv_rotation(inv_rot, gdvp);
     MAT4X3PNT(model, inv_rot, view);
 
     bu_vls_printf(&pt_vls, "%lf %lf %lf", model[X], model[Y], model[Z]);
@@ -1854,7 +1855,7 @@ to_mouse_orotate(struct ged *gedp,
     dy *= tclcad_mouse_rotate_scale(gdvp);
 
     VSET(view, dx, dy, 0.0);
-    tclcad_mouse_view_inv_rotation_from_bsg(inv_rot, gdvp);
+    tclcad_mouse_view_inv_rotation(inv_rot, gdvp);
     MAT4X3PNT(model, inv_rot, view);
 
     bu_vls_printf(&rot_x_vls, "%lf", model[X]);
@@ -2051,8 +2052,8 @@ to_mouse_otranslate(struct ged *gedp,
     width = tclcad_mouse_display_width(gdvp);
     inv_width = 1.0 / (fastf_t)width;
     /* ged_otranslate expects things to be in local units */
-    dx *= inv_width * rt_view_context_size_from_bsg(gdvp) * gedp->dbip->dbi_base2local;
-    dy *= inv_width * rt_view_context_size_from_bsg(gdvp) * gedp->dbip->dbi_base2local;
+    dx *= inv_width * ged_view_context_size_get(gdvp) * gedp->dbip->dbi_base2local;
+    dy *= inv_width * ged_view_context_size_get(gdvp) * gedp->dbip->dbi_base2local;
 
     VSET(view, dx, dy, 0.0);
     bu_vls_printf(&tran_x_vls, "%lf", model[X]);
@@ -2082,7 +2083,7 @@ to_mouse_otranslate(struct ged *gedp,
 	params->dx += dx;
 	params->dy += dy;
 	VSET(view, params->dx, params->dy, 0.0);
-	tclcad_mouse_view_inv_rotation_from_bsg(inv_rot, gdvp);
+	tclcad_mouse_view_inv_rotation(inv_rot, gdvp);
 	MAT4X3PNT(model, inv_rot, view);
 
 	MAT_IDN(params->edit_mat);
@@ -2218,16 +2219,16 @@ to_mouse_poly_circ_func(Tcl_Interp *interp,
 	return BRLCAD_ERROR;
     }
 
-    rt_view_context_previous_mouse_set_bsg(view_ctx, x, y);
+    ged_view_context_previous_mouse_set(view_ctx, x, y);
 
     tclcad_mouse_sync_dm_dimensions(view_ctx);
-    rt_view_context_screen_to_view_from_bsg(&fx, &fy, view_ctx, x, y);
-    rt_view_context_view2model_from_bsg(view2model, view_ctx);
+    ged_view_context_screen_to_view(&fx, &fy, view_ctx, x, y);
+    ged_view_context_view2model_get(view2model, view_ctx);
 
     {
-	unsigned long long snap_kinds = rt_view_context_prepare_tcl_snap_bsg(view_ctx);
+	unsigned long long snap_kinds = ged_view_context_prepare_tcl_snap(view_ctx);
 	if (snap_kinds)
-	    rt_view_context_snap_point_2d_bsg(view_ctx, &fx, &fy, snap_kinds);
+	    ged_view_context_snap_point_2d(view_ctx, &fx, &fy, snap_kinds);
     }
 
     bu_vls_printf(&plist, "{0 ");
@@ -2250,7 +2251,7 @@ to_mouse_poly_circ_func(Tcl_Interp *interp,
 	 * circumference / 4 = PI * diameter / 4
 	 *
 	 */
-	nsegs = M_PI_2 * r * rt_view_context_scale_from_bsg(view_ctx);
+	nsegs = M_PI_2 * r * ged_view_context_scale_get(view_ctx);
 
 	if (nsegs < 32)
 	    nsegs = 32;
@@ -2385,13 +2386,13 @@ to_mouse_poly_cont_func(Tcl_Interp *interp,
 	return BRLCAD_ERROR;
     }
 
-    rt_view_context_previous_mouse_set_bsg(view_ctx, x, y);
+    ged_view_context_previous_mouse_set(view_ctx, x, y);
 
     tclcad_mouse_sync_dm_dimensions(view_ctx);
-    rt_view_context_screen_to_view_from_bsg(&fx, &fy, view_ctx, x, y);
+    ged_view_context_screen_to_view(&fx, &fy, view_ctx, x, y);
     VSET(v_pt, fx, fy, gdpsp->gdps_data_vZ);
 
-    rt_view_context_view2model_from_bsg(view2model, view_ctx);
+    ged_view_context_view2model_get(view2model, view_ctx);
     MAT4X3PNT(m_pt, view2model, v_pt);
     ged_view_active_ctx_set(gedp, view_ctx);
 
@@ -2524,17 +2525,17 @@ to_mouse_poly_ell_func(Tcl_Interp *interp,
 	return BRLCAD_ERROR;
     }
 
-    rt_view_context_previous_mouse_set_bsg(view_ctx, x, y);
+    ged_view_context_previous_mouse_set(view_ctx, x, y);
 
 
     tclcad_mouse_sync_dm_dimensions(view_ctx);
-    rt_view_context_screen_to_view_from_bsg(&fx, &fy, view_ctx, x, y);
-    rt_view_context_view2model_from_bsg(view2model, view_ctx);
+    ged_view_context_screen_to_view(&fx, &fy, view_ctx, x, y);
+    ged_view_context_view2model_get(view2model, view_ctx);
 
     {
-	unsigned long long snap_kinds = rt_view_context_prepare_tcl_snap_bsg(view_ctx);
+	unsigned long long snap_kinds = ged_view_context_prepare_tcl_snap(view_ctx);
 	if (snap_kinds)
-	    rt_view_context_snap_point_2d_bsg(view_ctx, &fx, &fy, snap_kinds);
+	    ged_view_context_snap_point_2d(view_ctx, &fx, &fy, snap_kinds);
     }
 
     bu_vls_printf(&plist, "{0 ");
@@ -2567,7 +2568,7 @@ to_mouse_poly_ell_func(Tcl_Interp *interp,
 	 * circumference / 4 = PI * diameter / 4
 	 *
 	 */
-	nsegs = M_PI_2 * FMAX(a, b) * rt_view_context_scale_from_bsg(view_ctx);
+	nsegs = M_PI_2 * FMAX(a, b) * ged_view_context_scale_get(view_ctx);
 
 	if (nsegs < 32)
 	    nsegs = 32;
@@ -2703,16 +2704,16 @@ to_mouse_poly_rect_func(Tcl_Interp *interp,
 	return BRLCAD_ERROR;
     }
 
-    rt_view_context_previous_mouse_set_bsg(view_ctx, x, y);
+    ged_view_context_previous_mouse_set(view_ctx, x, y);
 
     tclcad_mouse_sync_dm_dimensions(view_ctx);
-    rt_view_context_screen_to_view_from_bsg(&fx, &fy, view_ctx, x, y);
-    rt_view_context_view2model_from_bsg(view2model, view_ctx);
+    ged_view_context_screen_to_view(&fx, &fy, view_ctx, x, y);
+    ged_view_context_view2model_get(view2model, view_ctx);
 
     {
-	unsigned long long snap_kinds = rt_view_context_prepare_tcl_snap_bsg(view_ctx);
+	unsigned long long snap_kinds = ged_view_context_prepare_tcl_snap(view_ctx);
 	if (snap_kinds)
-	    rt_view_context_snap_point_2d_bsg(view_ctx, &fx, &fy, snap_kinds);
+	    ged_view_context_snap_point_2d(view_ctx, &fx, &fy, snap_kinds);
     }
 
 
@@ -2823,7 +2824,7 @@ to_mouse_rect(struct ged *gedp,
 
     fastf_t prev_x = 0.0;
     fastf_t prev_y = 0.0;
-    (void)rt_view_context_previous_mouse_from_bsg(&prev_x, &prev_y, gdvp);
+    (void)ged_view_context_previous_mouse_get(&prev_x, &prev_y, gdvp);
     dx = x - prev_x;
     dy = tclcad_mouse_display_height(gdvp) - y - prev_y;
 
@@ -2984,7 +2985,7 @@ to_mouse_rotate_arb_face(struct ged *gedp,
     dy *= tclcad_mouse_rotate_scale(gdvp);
 
     VSET(view, dx, dy, 0.0);
-    tclcad_mouse_view_inv_rotation_from_bsg(inv_rot, gdvp);
+    tclcad_mouse_view_inv_rotation(inv_rot, gdvp);
     MAT4X3PNT(model, inv_rot, view);
 
     bu_vls_printf(&pt_vls, "%lf %lf %lf", model[X], model[Y], model[Z]);
@@ -3047,11 +3048,11 @@ to_mouse_rotate_arb_face(struct ged *gedp,
 	    return BRLCAD_ERROR; \
 	} \
  \
-	(void)rt_view_context_previous_mouse_from_bsg(&_prev_x, &_prev_y, (_gdvp)); \
+	(void)ged_view_context_previous_mouse_get(&_prev_x, &_prev_y, (_gdvp)); \
 	_dx = _x - _prev_x; \
 	_dy = _prev_y - _y; \
  \
-	rt_view_context_previous_mouse_set_bsg((_gdvp), _x, _y); \
+	ged_view_context_previous_mouse_set((_gdvp), _x, _y); \
  \
 	tclcad_mouse_clamp_delta(&_dx, &_dy, (_gdvp)); \
  \
@@ -3108,8 +3109,8 @@ to_data_scale(struct ged *gedp,
 	bu_vls_printf(gedp->ged_result_str, "Invalid scale factor - %s", argv[2]);
 	return BRLCAD_ERROR;
     }
-    rt_view_context_model2view_from_bsg(model2view, gdvp);
-    rt_view_context_view2model_from_bsg(view2model, gdvp);
+    ged_view_context_model2view_get(model2view, gdvp);
+    ged_view_context_view2model_get(view2model, gdvp);
 
     /* scale data arrows - T3: read/write BSG vlist instead of gv_tcl */
     {
@@ -3293,7 +3294,7 @@ to_mouse_protate(struct ged *gedp,
     dy *= tclcad_mouse_rotate_scale(gdvp);
 
     VSET(view, dx, dy, 0.0);
-    tclcad_mouse_view_inv_rotation_from_bsg(inv_rot, gdvp);
+    tclcad_mouse_view_inv_rotation(inv_rot, gdvp);
     MAT4X3PNT(model, inv_rot, view);
 
     bu_vls_printf(&mrot_vls, "%lf %lf %lf", V3ARGS(model));
@@ -3462,10 +3463,10 @@ to_mouse_ptranslate(struct ged *gedp,
     width = tclcad_mouse_display_width(gdvp);
     inv_width = 1.0 / (fastf_t)width;
     /* ged_ptranslate expects things to be in local units */
-    dx *= inv_width * rt_view_context_size_from_bsg(gdvp) * gedp->dbip->dbi_base2local;
-    dy *= inv_width * rt_view_context_size_from_bsg(gdvp) * gedp->dbip->dbi_base2local;
+    dx *= inv_width * ged_view_context_size_get(gdvp) * gedp->dbip->dbi_base2local;
+    dy *= inv_width * ged_view_context_size_get(gdvp) * gedp->dbip->dbi_base2local;
     VSET(view, dx, dy, 0.0);
-    tclcad_mouse_view_inv_rotation_from_bsg(inv_rot, gdvp);
+    tclcad_mouse_view_inv_rotation(inv_rot, gdvp);
     MAT4X3PNT(model, inv_rot, view);
 
     bu_vls_printf(&tvec_vls, "%lf %lf %lf", V3ARGS(model));
@@ -3546,8 +3547,8 @@ to_mouse_trans(struct ged *gedp,
 
     width = tclcad_mouse_display_width(gdvp);
     inv_width = 1.0 / (fastf_t)width;
-    dx *= inv_width * rt_view_context_size_from_bsg(gdvp) * gedp->dbip->dbi_local2base;
-    dy *= inv_width * rt_view_context_size_from_bsg(gdvp) * gedp->dbip->dbi_local2base;
+    dx *= inv_width * ged_view_context_size_get(gdvp) * gedp->dbip->dbi_local2base;
+    dy *= inv_width * ged_view_context_size_get(gdvp) * gedp->dbip->dbi_local2base;
 
     bu_vls_printf(&trans_vls, "%lf %lf 0", dx, dy);
 

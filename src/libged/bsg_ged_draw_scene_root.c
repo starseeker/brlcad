@@ -50,14 +50,23 @@
 #include "bg/clip.h"
 
 #include "ged.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
+#include "rt/view.h"
 #include "./bsg_ged_draw_private.h"
 #include "./ged_private.h"
 
 static void
 _sg_view_scene_root_set(struct bsg_view *v, bsg_scene_ref root)
 {
-    (void)bsg_view_scene_ref_attach(v, root);
+    (void)rt_view_context_scene_root_ref_attach(v,
+	    ged_draw_scene_ref_to_rt_view_ref(root));
+}
+
+
+static struct bsg_view *
+_sg_scene_root_active_view(struct ged *gedp)
+{
+    return (struct bsg_view *)ged_view_active_ctx(gedp);
 }
 
 
@@ -70,11 +79,12 @@ _sg_view_scene_root_set(struct bsg_view *v, bsg_scene_ref root)
 static bsg_scene_ref
 _sg_root(struct ged *gedp)
 {
-    struct bu_ptbl *views = ged_draw_view_set_views_bsg(&gedp->ged_views);
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     bsg_scene_ref root_ref = ged_scene_root_ref(gedp);
     if (!bsg_scene_ref_is_null(root_ref)) {
-	if (gedp->ged_gvp)
-	    _sg_view_scene_root_set(gedp->ged_gvp, root_ref);
+	struct bsg_view *active_view = _sg_scene_root_active_view(gedp);
+	if (active_view)
+	    _sg_view_scene_root_set(active_view, root_ref);
 	if (views) {
 	    for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 		struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, i);
@@ -86,7 +96,7 @@ _sg_root(struct ged *gedp)
 	return root_ref;
     }
 
-    struct bsg_view *v = gedp->ged_gvp;
+    struct bsg_view *v = _sg_scene_root_active_view(gedp);
     if (!v)
         return bsg_scene_ref_null();
 
@@ -101,7 +111,8 @@ _sg_root(struct ged *gedp)
     /* Store draw-tree bookkeeping on the root so freeing helpers can bump
      * gd_draw_rev and recycle nodes without carrying a ged pointer. */
     gedp->i->ged_gdp->bsg_ctx.draw_rev = &gedp->i->ged_gdp->gd_draw_rev;
-    gedp->i->ged_gdp->bsg_ctx.fso = ged_draw_view_set_recycle_pool_bsg(&gedp->ged_views);
+    gedp->i->ged_gdp->bsg_ctx.fso =
+	rt_view_set_context_recycle_pool(ged_view_set_ctx(gedp));
     gedp->i->ged_gdp->bsg_ctx.owner_data = gedp->i->ged_gdp;
     bsg_scene_set_draw_ctx(root_ref, &gedp->i->ged_gdp->bsg_ctx);
 
@@ -123,36 +134,24 @@ _sg_root(struct ged *gedp)
 
 
 
-bsg_scene_ref
-ged_draw_view_scene_root_ref(const struct bsg_view *v)
+rt_view_scene_ref
+ged_draw_view_context_scene_root_rt_ref(void *view_ctx)
 {
-    return bsg_view_scene_ref(v);
+    return rt_view_context_scene_root_ref(view_ctx);
 }
 
 
 void *
 ged_draw_view_context_scene_root(void *view_ctx)
 {
-    if (!view_ctx)
-	return NULL;
-
-    bsg_scene_ref root_ref =
-	bsg_view_scene_ref((const struct bsg_view *)view_ctx);
-    if (bsg_scene_ref_is_null(root_ref))
-	return NULL;
-
-    return root_ref.opaque;
+    return rt_view_scene_ref_context(ged_draw_view_context_scene_root_rt_ref(view_ctx));
 }
 
 
 int
 ged_draw_view_context_scene_attached(void *view_ctx)
 {
-    if (!view_ctx)
-	return 0;
-
-    return bsg_scene_ref_is_null(
-	    bsg_view_scene_ref((const struct bsg_view *)view_ctx)) ? 0 : 1;
+    return rt_view_context_scene_attached(view_ctx);
 }
 
 
@@ -173,13 +172,6 @@ ged_draw_view_context_bump_frame_revision(void *view_ctx)
 
     v->gv_frame_rev++;
     return v->gv_frame_rev;
-}
-
-
-int
-ged_draw_view_has_scene_root(const struct bsg_view *v)
-{
-    return bsg_scene_ref_is_null(bsg_view_scene_ref(v)) ? 0 : 1;
 }
 
 

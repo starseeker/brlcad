@@ -31,7 +31,7 @@
 #include "bsg/scene_object.h"
 
 #include "ged.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "./ged_private.h"
 #include "./bsg_ged_draw_private.h"
 
@@ -39,11 +39,11 @@
 void
 ged_draw_overlay_erase_name(struct ged *gedp, const char *name)
 {
-    struct bsg_view *v = gedp ? gedp->ged_gvp : NULL;
-    bsg_scene_ref ref = ged_draw_view_overlay_scene_find(v, name);
+    void *view_ctx = ged_view_active_ctx(gedp);
+    bsg_scene_ref ref = ged_draw_view_context_overlay_scene_find(view_ctx, name);
     if (!bsg_scene_ref_is_null(ref))
 	ged_draw_scene_ref_highlight_free_cb(ref);
-    ged_draw_view_overlay_name_erase(v, name);
+    ged_draw_view_context_overlay_name_erase(view_ctx, name);
 }
 
 
@@ -125,7 +125,9 @@ ged_draw_overlay_geometry_insert(struct ged *gedp, const char *name,
 	*out = GED_DRAW_SHAPE_REF_NULL;
     if (!gedp || !name || !geometry)
 	return -1;
-    if (!gedp->ged_gvp)
+    void *view_ctx = ged_view_active_ctx(gedp);
+    struct bsg_view *v = (struct bsg_view *)view_ctx;
+    if (!v)
 	return 0;
 
     struct db_i *dbip = gedp->dbip;
@@ -140,8 +142,8 @@ ged_draw_overlay_geometry_insert(struct ged *gedp, const char *name,
 
     ged_draw_overlay_erase_name(gedp, name);
 
-    bsg_scene_ref overlay_scene = _ged_overlay_create_scene(gedp->ged_gvp,
-	    name, geometry->kind);
+    bsg_scene_ref overlay_scene = _ged_overlay_create_scene(v, name,
+	    geometry->kind);
     if (bsg_scene_ref_is_null(overlay_scene))
 	return -1;
     (void)ged_draw_view_overlay_command_result_owner_set(overlay_scene,
@@ -157,9 +159,9 @@ ged_draw_overlay_geometry_insert(struct ged *gedp, const char *name,
 	bsg_scene_ref_destroy(overlay_scene);
 	return -1;
     }
-    bsg_scene_update_bounds(overlay_scene, gedp->ged_gvp);
+    bsg_scene_update_bounds(overlay_scene, v);
 
-    if (!ged_draw_view_overlay_scene_append(gedp->ged_gvp, overlay_scene)) {
+    if (!ged_draw_view_context_overlay_scene_append(view_ctx, overlay_scene)) {
 	bsg_scene_ref_destroy(overlay_scene);
 	return -1;
     }

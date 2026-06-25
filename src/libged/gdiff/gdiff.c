@@ -32,7 +32,7 @@
 #include "rt/db_fullpath.h"
 #include "rt/db_diff.h"
 #include "analyze.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 
 #include "../ged_private.h"
 

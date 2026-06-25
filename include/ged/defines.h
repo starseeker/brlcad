@@ -33,7 +33,6 @@
 #include "bu/list.h"
 #include "bu/process.h"
 #include "bu/vls.h"
-#include "bsg/defines.h"
 #include "rt/search.h"
 #include "rt/wdb.h" // for struct rt_wdb
 
@@ -175,20 +174,6 @@ struct ged {
     struct bu_vls               go_name;
     struct db_i                 *dbip;
 
-    /*************************************************************/
-    /* Information pertaining to views and view-scoped drawing state. */
-    /*************************************************************/
-    /* The current view */
-    struct bsg_view		*ged_gvp;
-    /* The full set of views associated with this ged object */
-    struct bsg_view_set            ged_views;
-    /* Sometimes applications will supply GED views, and sometimes GED commands
-     * may create views.  In the latter case, ged_close will also need to free
-     * the views.  We define a container to hold those views that libged is
-     * managing, since ged_views views may belong to the application rather
-     * than GED. */
-    struct bu_ptbl              ged_free_views;
-
     void                        *u_data; /**< @brief User data associated with this ged instance */
 
     /** for catching log messages */
@@ -311,6 +296,7 @@ GED_EXPORT extern void ged_view_active_ctx_set(struct ged *gedp, void *view_ctx)
 GED_EXPORT extern void *ged_view_set_ctx(struct ged *gedp);
 GED_EXPORT extern struct bu_ptbl *ged_view_set_views_ctx(struct ged *gedp);
 GED_EXPORT extern void *ged_view_find_ctx(struct ged *gedp, const char *name);
+GED_EXPORT extern int ged_view_context_owned_add(struct ged *gedp, void *view_ctx);
 
 // Associate a callback function pointer for a command.  If mode is less than
 // zero, function will be registered to run BEFORE actual cmd logic is run, and

@@ -33,7 +33,7 @@
 #include <bu.h>
 #include <ged.h>
 #include <rt/view_legacy_bsg.h>
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 
 #define ASSERT(cond) do { \
     nchecks++; \
@@ -187,7 +187,7 @@ main(int argc, const char **argv)
 	ASSERT(views[i] != NULL);
 	ASSERT(rt_view_context_name_set_bsg(views[i], view_name));
 	ASSERT(rt_view_set_context_add_bsg(view_set_ctx, views[i]));
-	bu_ptbl_ins(&gedp->ged_free_views, (long *)views[i]);
+	ged_view_context_owned_add(gedp, views[i]);
 	if (!i)
 	    ged_view_active_ctx_set(gedp, views[i]);
     }

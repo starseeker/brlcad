@@ -43,7 +43,8 @@
 #include "bsg/export.h"
 #include "bsg/render.h"
 #include "bsg/scene_builder.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
+#include "rt/view.h"
 #include "./ged_private.h"
 #include "./bsg_ged_draw_private.h"
 
@@ -259,7 +260,7 @@ _draw_group_scene_ref_in_view(bsg_scene_ref group_ref, struct bsg_view *v)
     int in_view_scope = _draw_scene_ref_in_view_scope(group_ref);
     if (!v)
 	return !in_view_scope;
-    if (ged_draw_view_is_independent_bsg(v))
+    if (rt_view_context_is_independent(v))
 	return in_view_scope && bsg_scene_view(group_ref) == v;
     if (!in_view_scope)
 	return 1;
@@ -277,7 +278,7 @@ ged_draw_group_record_in_view(const struct ged_draw_group_record *rec,
 	return 0;
     if (!v)
 	return !rec->in_view_scope;
-    if (ged_draw_view_is_independent_bsg(v))
+    if (rt_view_context_is_independent(v))
 	return rec->in_view_scope && rec->view == v;
     if (!rec->in_view_scope)
 	return 1;
@@ -779,11 +780,12 @@ _ged_draw_fill_shape_record(struct ged *gedp,
     out->highlighted = bsg_scene_highlighted(shape_ref);
     out->selected = 0;
     out->evaluated_region = bsg_scene_legacy_eval_flag(shape_ref);
-    if (gedp && gedp->ged_gvp) {
+    void *active_view_ctx = ged_view_active_ctx(gedp);
+    if (active_view_ctx) {
 	struct bu_vls selected_path = BU_VLS_INIT_ZERO;
 	if (_ged_draw_shape_ref_selection_path(gedp, out->ref, &selected_path))
-	    out->selected = ged_draw_view_selection_contains_path(
-		    gedp->ged_gvp,
+	    out->selected = ged_draw_view_context_selection_contains_path(
+		    active_view_ctx,
 		    GED_DRAW_VIEW_SELECTION_SELECTED_PATH,
 		    bu_vls_cstr(&selected_path));
 	bu_vls_free(&selected_path);
@@ -868,12 +870,10 @@ ged_draw_view_selection_set_highlighted_shape_ref(struct ged *gedp,
 						  void *view_ctx,
 						  ged_draw_shape_ref ref)
 {
-    struct bsg_view *v = (struct bsg_view *)view_ctx;
-
-    if (!gedp || !v)
+    if (!gedp || !view_ctx)
 	return 0;
 
-    if (!ged_draw_view_selection_set_path(v,
+    if (!ged_draw_view_context_selection_set_path(view_ctx,
 	    GED_DRAW_VIEW_SELECTION_ALL, NULL))
 	return 0;
     if (ged_draw_shape_ref_is_null(ref))
@@ -885,50 +885,10 @@ ged_draw_view_selection_set_highlighted_shape_ref(struct ged *gedp,
 	return 0;
     }
 
-    int ret = ged_draw_view_selection_add_path(v,
+    int ret = ged_draw_view_context_selection_add_path(view_ctx,
 	    GED_DRAW_VIEW_SELECTION_HIGHLIGHTED_REF,
 	    bu_vls_cstr(&highlighted_path));
     bu_vls_free(&highlighted_path);
-    return ret;
-}
-
-int
-ged_draw_view_selection_add_shape_ref(struct ged *gedp,
-				      struct bsg_view *view,
-				      ged_draw_shape_ref ref,
-				      struct bsg_view **selection_view,
-				      struct bu_vls *path)
-{
-    if (selection_view)
-	*selection_view = NULL;
-    if (path)
-	bu_vls_trunc(path, 0);
-
-    if (!gedp || ged_draw_shape_ref_is_null(ref))
-	return 0;
-
-    struct bsg_view *target = view;
-    if (!ged_draw_view_selection_available(target))
-	target = gedp->ged_gvp;
-    if (!ged_draw_view_selection_available(target))
-	return 0;
-
-    struct bu_vls selected_path = BU_VLS_INIT_ZERO;
-    if (!_ged_draw_shape_ref_selection_path(gedp, ref, &selected_path)) {
-	bu_vls_free(&selected_path);
-	return 0;
-    }
-
-    if (path && bu_vls_strlen(&selected_path) > 0)
-	bu_vls_strcpy(path, bu_vls_cstr(&selected_path));
-
-    int ret = ged_draw_view_selection_add_path(target,
-	    GED_DRAW_VIEW_SELECTION_SELECTED_PATH,
-	    bu_vls_cstr(&selected_path));
-    bu_vls_free(&selected_path);
-
-    if (selection_view)
-	*selection_view = target;
     return ret;
 }
 
@@ -940,12 +900,36 @@ ged_draw_view_selection_add_shape_ref_context(
 	void **selection_view_ctx,
 	struct bu_vls *path)
 {
-    struct bsg_view *selection_view = NULL;
-    int ret = ged_draw_view_selection_add_shape_ref(gedp,
-	    (struct bsg_view *)view_ctx, ref,
-	    selection_view_ctx ? &selection_view : NULL, path);
     if (selection_view_ctx)
-	*selection_view_ctx = (void *)selection_view;
+	*selection_view_ctx = NULL;
+    if (path)
+	bu_vls_trunc(path, 0);
+
+    if (!gedp || ged_draw_shape_ref_is_null(ref))
+	return 0;
+
+    void *target = view_ctx;
+    if (!ged_draw_view_context_selection_available(target))
+	target = ged_view_active_ctx(gedp);
+    if (!ged_draw_view_context_selection_available(target))
+	return 0;
+
+    struct bu_vls selected_path = BU_VLS_INIT_ZERO;
+    if (!_ged_draw_shape_ref_selection_path(gedp, ref, &selected_path)) {
+	bu_vls_free(&selected_path);
+	return 0;
+    }
+
+    if (path && bu_vls_strlen(&selected_path) > 0)
+	bu_vls_strcpy(path, bu_vls_cstr(&selected_path));
+
+    int ret = ged_draw_view_context_selection_add_path(target,
+	    GED_DRAW_VIEW_SELECTION_SELECTED_PATH,
+	    bu_vls_cstr(&selected_path));
+    bu_vls_free(&selected_path);
+
+    if (selection_view_ctx)
+	*selection_view_ctx = target;
     return ret;
 }
 

@@ -630,7 +630,7 @@ be_o_scale(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), 
 
     edobj = BE_O_SCALE;
     movedir = SARROW;
-    mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
+    mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
     set_e_axes_pos(s, 1);
 
@@ -653,7 +653,7 @@ be_o_xscale(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc),
 
     edobj = BE_O_XSCALE;
     movedir = SARROW;
-    mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
+    mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
     set_e_axes_pos(s, 1);
 
@@ -676,7 +676,7 @@ be_o_yscale(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc),
 
     edobj = BE_O_YSCALE;
     movedir = SARROW;
-    mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
+    mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
     set_e_axes_pos(s, 1);
 
@@ -699,7 +699,7 @@ be_o_zscale(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc),
 
     edobj = BE_O_ZSCALE;
     movedir = SARROW;
-    mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
+    mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
     set_e_axes_pos(s, 1);
 
@@ -722,7 +722,7 @@ be_o_x(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), char
 
     edobj = BE_O_X;
     movedir = RARROW;
-    mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
+    mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
     set_e_axes_pos(s, 1);
     return TCL_OK;
@@ -741,7 +741,7 @@ be_o_y(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), char
 
     edobj = BE_O_Y;
     movedir = UARROW;
-    mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
+    mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
     set_e_axes_pos(s, 1);
     return TCL_OK;
@@ -760,7 +760,7 @@ be_o_xy(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), cha
 
     edobj = BE_O_XY;
     movedir = UARROW | RARROW;
-    mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
+    mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
     set_e_axes_pos(s, 1);
     return TCL_OK;
@@ -779,7 +779,7 @@ be_o_rotate(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc),
 
     edobj = BE_O_ROTATE;
     movedir = ROTARROW;
-    mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
+    mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
     set_e_axes_pos(s, 1);
     return TCL_OK;
@@ -849,7 +849,7 @@ be_reject(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), c
     MGED_CK_CMD(ctp);
     struct mged_state *s = ctp->s;
 
-    mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
+    mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
 
     /* Reject edit */
@@ -1035,7 +1035,7 @@ stateChange(struct mged_state *s, int UNUSED(oldstate), int newstate)
 	    break;
     }
 
-    mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
+    mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
 }
 
 

@@ -139,6 +139,8 @@ __BEGIN_DECLS
 bsg_scene_ref ged_scene_root_ref(struct ged *gedp);
 void ged_scene_root_ref_set(struct ged *gedp, bsg_scene_ref root);
 void ged_scene_root_ref_clear(struct ged *gedp);
+void ged_view_legacy_state_init(struct ged *gedp);
+void ged_view_legacy_state_free(struct ged *gedp);
 __END_DECLS
 
 
@@ -187,6 +189,12 @@ class Ged_Internal {
 struct ged_impl {
     uint32_t magic;
     Ged_Internal *i;
+
+    /* Transitional retained-view storage, hidden from public struct ged while
+     * the backing implementation migrates from BSG to Obol/libbrlobol. */
+    void *ged_gvp;
+    struct bsg_view_set ged_views;
+    struct bu_ptbl ged_free_views;
 
     struct ged_db_index *ged_db_indexp;
     struct ged_event_txn_state *ged_event_txnp;
@@ -504,7 +512,7 @@ GED_EXPORT extern void _ged_cmd_help(struct ged *gedp, const char *usage, struct
  */
 GED_EXPORT extern int _ged_read_densities(struct analyze_densities **dens, char **den_src, struct ged *gedp, const char *filename, int fault_tolerant);
 
-#define GED_DB_DENSITY_OBJECT "_DENSITIES" 
+#define GED_DB_DENSITY_OBJECT "_DENSITIES"
 
 /**
  * Routine for checking argc/argv list for existing objects and sorting anything

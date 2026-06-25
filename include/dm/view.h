@@ -29,6 +29,8 @@
 
 #include "common.h"
 
+#include <stdint.h>
+
 #include "vmath.h"
 
 #include "bu/hash.h"
@@ -53,6 +55,20 @@ struct dm_view_data {
     int                 prim_label_list_size;
     int                 cache_on;
 };
+
+#define DM_VIEW_REFRESH_VIEW        0x00000001u
+#define DM_VIEW_REFRESH_DRAW        0x00000002u
+#define DM_VIEW_REFRESH_EDIT        0x00000004u
+#define DM_VIEW_REFRESH_FRAMEBUFFER 0x00000008u
+#define DM_VIEW_REFRESH_OVERLAY     0x00000010u
+#define DM_VIEW_REFRESH_FORCE       0x80000000u
+#define DM_VIEW_REFRESH_ALL         0xffffffffu
+
+DM_EXPORT extern int dm_view_context_is_retained_legacy(const void *view_ctx);
+DM_EXPORT extern int dm_view_context_width_get(const void *view_ctx);
+DM_EXPORT extern int dm_view_context_height_get(const void *view_ctx);
+DM_EXPORT extern int dm_view_context_dimensions_set(void *view_ctx, int width, int height);
+DM_EXPORT extern int dm_view_context_refresh_request(void *view_ctx, uint32_t flags);
 
 DM_EXPORT extern void dm_draw_faceplate(void *view_ctx);
 

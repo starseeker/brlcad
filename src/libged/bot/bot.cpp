@@ -48,7 +48,7 @@
 #include "bg/line_layer.h"
 #include "bg/pca.h"
 #include "bg/trimesh.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "ged/event_txn.h"
 #include "rt/geom.h"
 #include "wdb.h"

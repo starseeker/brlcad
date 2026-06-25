@@ -34,7 +34,7 @@
 #include "bu/getopt.h"
 
 #include "raytrace.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 
 #include "./joint.h"
 #include "../ged_private.h"

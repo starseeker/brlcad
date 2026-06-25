@@ -33,7 +33,7 @@
 #define DM_WITH_RT
 #include <dm.h>
 #include <ged.h>
-#include <ged/bsg_ged_draw.h>
+#include <ged/draw.h>
 #include <rt/view_legacy_bsg.h>
 
 void
@@ -218,7 +218,7 @@ main(int ac, char *av[]) {
 	    ged_view_active_ctx_set(gedp, views[i]);
 	rt_view_context_name_set_bsg(views[i], view_name);
 	rt_view_set_context_add_bsg(view_set_ctx, views[i]);
-	bu_ptbl_ins(&gedp->ged_free_views, (long *)views[i]);
+	ged_view_context_owned_add(gedp, views[i]);
 
 	/* To generate images that will allow us to check if the drawing
 	 * is proceeding as expected, we use the swrast off-screen dm. */

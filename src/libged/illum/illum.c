@@ -29,7 +29,7 @@
 #include "dm.h" // For labelvert - see if we really need the dm_set_native_repaint_pending call there...
 
 #include "ged.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "ged/view.h"
 #include "../ged_private.h"
 

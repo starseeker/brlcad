@@ -30,7 +30,7 @@
 #include <bu.h>
 #include "bg/plot3.h"
 #include <ged.h>
-#include <ged/bsg_ged_draw.h>
+#include <ged/draw.h>
 
 struct gqa_segment_writer {
     FILE *fp;

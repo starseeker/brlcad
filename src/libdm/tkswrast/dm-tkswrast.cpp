@@ -39,7 +39,6 @@ extern "C" {
 #include "../dm-gl.h"
 #include "../include/private.h"
 #include "../swrast/dm-swrast.h"
-#include "rt/view_legacy_bsg.h"
 }
 
 struct tkswrast_vars {
@@ -101,8 +100,8 @@ tkswrast_request_repaint(struct dm *dmp, unsigned int flags)
 
     struct swrast_vars *sv = (struct swrast_vars *)dmp->i->dm_vars.priv_vars;
     if (sv && sv->view_ctx)
-	rt_view_context_refresh_request_bsg(sv->view_ctx,
-		flags ? flags : RT_VIEW_REFRESH_ALL_BSG);
+	dm_view_context_refresh_request(sv->view_ctx,
+		flags ? flags : DM_VIEW_REFRESH_ALL);
 }
 
 static unsigned long
@@ -229,7 +228,7 @@ tkswrast_configureWin(struct dm *dmp, int force)
     if (width < 2 || height < 2)
 	return BRLCAD_OK;
 
-    tkswrast_request_repaint(dmp, RT_VIEW_REFRESH_VIEW_BSG | RT_VIEW_REFRESH_FORCE_BSG);
+    tkswrast_request_repaint(dmp, DM_VIEW_REFRESH_VIEW | DM_VIEW_REFRESH_FORCE);
 
     if (!force && dmp->i->dm_width == width && dmp->i->dm_height == height)
 	return BRLCAD_OK;
@@ -238,7 +237,7 @@ tkswrast_configureWin(struct dm *dmp, int force)
     if (!Tk_IsMapped(tv->xtkwin) && width > 1 && height > 1)
 	Tk_MapWindow(tv->xtkwin);
 
-    rt_view_context_dimensions_set_bsg(sv->view_ctx, width, height);
+    dm_view_context_dimensions_set(sv->view_ctx, width, height);
 
     dmp->i->dm_width = width;
     dmp->i->dm_height = height;
@@ -246,7 +245,7 @@ tkswrast_configureWin(struct dm *dmp, int force)
 
     if (!tv->mapped_once && width > 1 && height > 1) {
 	tv->mapped_once = 1;
-	tkswrast_request_repaint(dmp, RT_VIEW_REFRESH_VIEW_BSG | RT_VIEW_REFRESH_FORCE_BSG);
+	tkswrast_request_repaint(dmp, DM_VIEW_REFRESH_VIEW | DM_VIEW_REFRESH_FORCE);
     }
 
     if (tkswrast_debug()) {
@@ -425,7 +424,7 @@ static int
 tkswrast_doevent(struct dm *dmp, void *UNUSED(vclientData), void *veventPtr)
 {
     if (veventPtr) {
-	tkswrast_request_repaint(dmp, RT_VIEW_REFRESH_VIEW_BSG | RT_VIEW_REFRESH_FORCE_BSG);
+	tkswrast_request_repaint(dmp, DM_VIEW_REFRESH_VIEW | DM_VIEW_REFRESH_FORCE);
     }
     return TCL_OK;
 }
@@ -527,7 +526,7 @@ tkswrast_open(void *ctx, void *vinterp, int argc, const char **argv)
 	    dmp->i->dm_height = ph;
 	    Tk_GeometryRequest(tv->xtkwin, pw, ph);
 	    if (sv && sv->view_ctx)
-		rt_view_context_dimensions_set_bsg(sv->view_ctx, pw, ph);
+		dm_view_context_dimensions_set(sv->view_ctx, pw, ph);
 	}
     }
     Tk_SetWindowBackground(tv->xtkwin, tkswrast_black_pixel(tv->xtkwin));
@@ -656,7 +655,7 @@ tkswrast_open(void *ctx, void *vinterp, int argc, const char **argv)
 	}
     }
 
-    tkswrast_request_repaint(dmp, RT_VIEW_REFRESH_VIEW_BSG | RT_VIEW_REFRESH_FORCE_BSG);
+    tkswrast_request_repaint(dmp, DM_VIEW_REFRESH_VIEW | DM_VIEW_REFRESH_FORCE);
 
     return dmp;
 }

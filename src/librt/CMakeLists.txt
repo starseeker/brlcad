@@ -144,7 +144,6 @@ set(
   dir.c
   dspline.c
   edit.cpp
-  edit_legacy_bsg.cpp
   fortray.c
   globals.c
   htbl.c

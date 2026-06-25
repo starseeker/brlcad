@@ -27,8 +27,8 @@
 #include "common.h"
 #include "dm/view.h"
 #include "ged.h"
-#include "ged/bsg_ged_draw.h"
-#include "rt/view_legacy_bsg.h"
+#include "ged/draw.h"
+#include "ged/view.h"
 #include "tclcad.h"
 
 /* Private headers */
@@ -41,16 +41,16 @@
 void
 go_draw(void *view_ctx)
 {
-    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(view_ctx);
+    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
     if (!dmp)
 	return;
 
     mat_t model2view;
     mat_t pmat;
-    fastf_t perspective = rt_view_context_perspective_from_bsg(view_ctx);
+    fastf_t perspective = ged_view_context_perspective_get(view_ctx);
 
-    rt_view_context_model2view_from_bsg(model2view, view_ctx);
-    rt_view_context_pmat_from_bsg(pmat, view_ctx);
+    ged_view_context_model2view_get(model2view, view_ctx);
+    ged_view_context_pmat_get(pmat, view_ctx);
     (void)dm_loadmatrix(dmp, model2view, 0);
 
     if (SMALL_FASTF < perspective)

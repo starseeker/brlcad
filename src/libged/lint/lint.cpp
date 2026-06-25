@@ -36,7 +36,7 @@ extern "C" {
 #include "wdb.h"
 }
 #include "bg/line_layer.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "ged/event_txn.h"
 #include "./ged_lint.h"
 

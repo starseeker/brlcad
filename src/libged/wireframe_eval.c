@@ -45,7 +45,7 @@
 #include "rt/func.h"
 
 #include "bg/line_layer.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 
 struct bigE_data {
     struct db_i *dbip;

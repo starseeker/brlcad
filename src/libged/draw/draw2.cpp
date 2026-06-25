@@ -42,7 +42,7 @@
 #include "rt/db_io.h"
 #include "rt/view.h"
 
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "ged/database.h"
 #include "ged/view.h"
 

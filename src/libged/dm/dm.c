@@ -669,7 +669,7 @@ _dm_cmd_attach(void *ds, int argc, const char **argv)
 	ged_view_set_context_add(view_set, target_view);
 	// This view is being created by GED, so it needs to be cleaned
 	// up by GED as well
-	bu_ptbl_ins(&gedp->ged_free_views, (long *)target_view);
+	ged_view_context_owned_add(gedp, target_view);
     }
 
     if (_dm_from_view(target_view)) {

@@ -38,7 +38,7 @@
 #include "raytrace.h"
 #include "analyze.h"
 
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 
 int
 ged_draw_shape_ref_eval_points(struct ged *gedp, ged_draw_shape_ref ref)

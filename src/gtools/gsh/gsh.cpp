@@ -38,7 +38,6 @@
 
 #include "brlcad_ident.h"
 #include "bu.h"
-#include "rt/view_legacy_bsg.h"
 
 #define USE_DM 1
 #ifdef USE_DM
@@ -47,8 +46,9 @@
 #endif
 
 #include "ged.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "ged/db_index.h"
+#include "ged/view.h"
 
 #define DEFAULT_GSH_PROMPT "g> "
 
@@ -164,24 +164,24 @@ bool
 DisplayHash::hash(struct ged *gedp, bool db_index_check, bool qged_display_mode)
 {
     d = 0; v = 0; l = 0; g = 0;
-    struct bsg_view *bv = (struct bsg_view *)ged_view_active_ctx(gedp);
-    if (!bv)
+    void *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx)
 	return false;
 
-    struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(bv);
+    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
     if (!dmp)
 	return false;
 
     d = dm_hash(dmp);
-    v = rt_view_hash_bsg(bv);
+    v = ged_view_context_hash(view_ctx);
 
     if (qged_display_mode) {
 	if (db_index_check) {
 	    unsigned long long updated = ged_db_index_refresh_flags(gedp);
 	    l = (updated) ? l + 1 : 0;
-	    if (rt_view_cleared_from_bsg(bv)) {
+	    if (ged_view_context_cleared_get(view_ctx)) {
 		l = 1;
-		rt_view_cleared_set_bsg(bv, 0);
+		ged_view_context_cleared_set(view_ctx, 0);
 	    }
 	} else {
 	    l = 0;
@@ -198,11 +198,11 @@ DisplayHash::hash(struct ged *gedp, bool db_index_check, bool qged_display_mode)
 void
 DisplayHash::dirty(struct ged *gedp, const DisplayHash &o)
 {
-    struct bsg_view *bv = (struct bsg_view *)ged_view_active_ctx(gedp);
-    if (!bv)
+    void *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx)
 	return;
 
-    struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(bv);
+    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
     if (!dmp)
 	return;
 
@@ -408,11 +408,11 @@ GshState::~GshState()
 #ifdef USE_DM
     struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, i);
-	struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(v);
+	void *view_ctx = (void *)BU_PTBL_GET(views, i);
+	struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
 	if (dmp) {
 	    dm_close(dmp);
-	    rt_view_display_manager_set_bsg(v, NULL);
+	    ged_view_context_display_manager_set(view_ctx, NULL);
 	}
     }
 #endif
@@ -579,8 +579,14 @@ GshState::view_update()
 
     hashes.dirty(gedp, prev_hash);
 
-    struct bsg_view *v = (struct bsg_view *)ged_view_active_ctx(gedp);
-    struct dm *dmp = (struct dm *)rt_view_display_manager_from_bsg(v);
+    void *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx)
+	return;
+
+    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
+    if (!dmp)
+	return;
+
     if (dm_get_native_repaint_pending(dmp)) {
 	if (qged_display_mode) {
 	    unsigned char *dm_bg1;
@@ -588,7 +594,7 @@ GshState::view_update()
 	    dm_get_bg(&dm_bg1, &dm_bg2, dmp);
 	    dm_set_bg(dmp, dm_bg1[0], dm_bg1[1], dm_bg1[2], dm_bg2[0], dm_bg2[1], dm_bg2[2]);
 	    dm_set_native_repaint_pending(dmp, 0);
-	    dm_draw_objs(v);
+	    dm_draw_objs(view_ctx);
 	    dm_draw_end(dmp);
 	}
     }

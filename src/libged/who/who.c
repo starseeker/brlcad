@@ -26,7 +26,7 @@
 #include <string.h>
 
 #include "ged.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "../ged_private.h"
 
 extern int ged_who2_core(struct ged *gedp, int argc, const char **argv);

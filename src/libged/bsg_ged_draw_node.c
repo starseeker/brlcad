@@ -16,7 +16,7 @@
 #include "common.h"
 
 #include "bsg/scene_builder.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "./ged_private.h"
 #include "./bsg_ged_draw_private.h"
 

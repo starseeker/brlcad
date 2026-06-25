@@ -36,7 +36,7 @@
 #include "dm.h"  // For labelface - see if the dm_set_native_repaint_pending is really needed
 
 #include "ged.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "../ged_private.h"
 
 

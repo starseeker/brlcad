@@ -38,7 +38,7 @@ extern "C" {
 #include "bu/path.h"
 #include "bu/vls.h"
 #include "raytrace.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 }
 #include "./ged_view.h"
 #include "../ged_private.h"

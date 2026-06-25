@@ -27,7 +27,7 @@
 #include "common.h"
 #include "bu/units.h"
 #include "ged.h"
-#include "rt/view_legacy_bsg.h"
+#include "ged/view.h"
 #include "tclcad.h"
 
 /* Private headers */

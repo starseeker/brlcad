@@ -37,7 +37,7 @@
 #include "bsg/geometry.h"
 #include "bsg/scene_builder.h"
 #include "./bsg_ged_draw_view_private.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "rt/db_fullpath.h"
 #include "rt/view.h"
 
@@ -469,6 +469,8 @@ GED_EXPORT extern ged_draw_shape_ref ged_draw_shape_ref_from_scene_ref(struct ge
 								       bsg_scene_ref ref);
 GED_EXPORT extern ged_draw_group_ref ged_draw_group_ref_from_scene_ref(struct ged *gedp,
 								       bsg_scene_ref ref);
+GED_EXPORT extern bsg_scene_ref ged_draw_scene_ref_from_rt_view_ref(rt_view_scene_ref ref);
+GED_EXPORT extern void *ged_draw_scene_ref_context(bsg_scene_ref ref);
 GED_EXPORT extern bsg_scene_ref ged_draw_registry_shape_scene_ref(struct ged *gedp,
 								  ged_draw_shape_ref ref);
 GED_EXPORT extern bsg_scene_ref ged_draw_registry_group_scene_ref(struct ged *gedp,
@@ -538,9 +540,6 @@ GED_EXPORT extern int ged_draw_shape_ref_line_style(struct ged *gedp,
 						    ged_draw_shape_ref ref);
 GED_EXPORT extern int ged_draw_shape_ref_release(struct ged *gedp,
 						 ged_draw_shape_ref ref);
-GED_EXPORT extern int ged_draw_shape_ref_realize(struct ged *gedp,
-						 ged_draw_shape_ref ref,
-						 struct bsg_view *v);
 GED_EXPORT extern int ged_draw_shape_ref_realize_context(struct ged *gedp,
 							 ged_draw_shape_ref ref,
 							 void *view_ctx);
@@ -578,15 +577,8 @@ GED_EXPORT extern int ged_draw_shape_ref_lod_ensure(struct ged *gedp,
 						    size_t view_count);
 GED_EXPORT extern int ged_draw_shape_ref_pipeline_candidate(struct ged *gedp,
 							    ged_draw_shape_ref ref);
-GED_EXPORT extern struct bsg_view *ged_draw_shape_ref_view(struct ged *gedp,
-							   ged_draw_shape_ref ref);
 GED_EXPORT extern void *ged_draw_shape_ref_view_context(struct ged *gedp,
 							ged_draw_shape_ref ref);
-GED_EXPORT extern int ged_draw_view_selection_add_shape_ref(struct ged *gedp,
-							    struct bsg_view *view,
-							    ged_draw_shape_ref ref,
-							    struct bsg_view **selection_view,
-							    struct bu_vls *path);
 GED_EXPORT extern int ged_draw_view_selection_add_shape_ref_context(
 	struct ged *gedp,
 	void *view_ctx,

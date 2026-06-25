@@ -1,4 +1,4 @@
-/*                B S G _ G E D _ D R A W . H
+/*                      D R A W . H
  * BRL-CAD
  *
  * Copyright (c) 2026 United States Government as represented by
@@ -20,7 +20,7 @@
 /** @addtogroup ged_view
  *
  * @brief
- * BSG-backed GED draw-scene API.
+ * GED draw-scene API.
  *
  * Modern callers should treat the draw set as semantic records:
  *   - ged_draw_shape_ref / ged_draw_group_ref are stable handles for the
@@ -38,10 +38,10 @@
  * structured path form.
  */
 /** @{ */
-/* @file ged/bsg_ged_draw.h */
+/* @file ged/draw.h */
 
-#ifndef GED_BSG_GED_DRAW_H
-#define GED_BSG_GED_DRAW_H
+#ifndef GED_DRAW_H
+#define GED_DRAW_H
 
 #include "common.h"
 
@@ -1067,21 +1067,21 @@ ged_draw_view_context_snap_first_candidate(void *view_ctx,
 					   point_t candidate);
 
 GED_EXPORT extern void
-ged_draw_view_context_info_from_bsg(struct rt_view_info *view_info,
-				    const void *view_ctx);
+ged_draw_view_context_info_get(struct rt_view_info *view_info,
+			       const void *view_ctx);
 
 GED_EXPORT extern int
-ged_draw_view_context_lod_policy_from_bsg(
+ged_draw_view_context_lod_policy_get(
 	ged_draw_view_lod_policy *policy,
 	const void *view_ctx);
 
 GED_EXPORT extern int
-ged_draw_view_context_lod_policy_apply_bsg(
+ged_draw_view_context_lod_policy_apply(
 	void *view_ctx,
 	const ged_draw_view_lod_policy *policy);
 
 GED_EXPORT extern int
-ged_draw_view_context_lod_policy_apply_bsg_bot_threshold(
+ged_draw_view_context_lod_policy_apply_bot_threshold(
 	void *view_ctx,
 	const ged_draw_view_lod_policy *policy,
 	size_t bot_threshold);
@@ -1594,7 +1594,7 @@ ged_draw_has_groups(struct ged *gedp);
 
 __END_DECLS
 
-#endif /* GED_BSG_GED_DRAW_H */
+#endif /* GED_DRAW_H */
 
 /** @} */
 /*

@@ -129,7 +129,7 @@ f_tedit(ClientData clientData, Tcl_Interp *interp, int argc, const char **UNUSED
 
 	/* Update the display */
 	replot_editing_solid(s);
-	mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
+	mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
 	Tcl_AppendResult(interp, "done\n", (char *)NULL);
     }
 

@@ -60,7 +60,7 @@
 #include "bg/plot3.h"
 #include "dm/fbserv.h"
 #include "ged.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "ged/event_txn.h"
 #include "./ged_private.h"
 

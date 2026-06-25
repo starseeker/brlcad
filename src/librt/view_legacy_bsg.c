@@ -52,6 +52,7 @@
 #include "bsg/util.h"
 #include "bsg/view_set.h"
 #include "bsg/view_state.h"
+#include "rt/edit_legacy_bsg.h"
 #include "rt/primitives/sketch_legacy_bsg.h"
 #include "rt/view_legacy_bsg.h"
 
@@ -62,6 +63,35 @@ struct rt_view_line_set_context_bsg {
     bsg_line_set_ref lines;
     bsg_node_ref node;
 };
+
+struct rt_view_update_callback_context_bsg {
+    rt_view_context_update_callback_t callback;
+    void *data;
+};
+
+static void
+rt_view_context_update_callback_bridge_bsg(struct bsg_view *v, void *data)
+{
+    struct rt_view_update_callback_context_bsg *state =
+	(struct rt_view_update_callback_context_bsg *)data;
+
+    if (state && state->callback)
+	state->callback((void *)v, state->data);
+}
+
+static void
+rt_view_update_callback_bridge_clear_bsg(struct bsg_view *v)
+{
+    if (!v || v->gv_callback != rt_view_context_update_callback_bridge_bsg)
+	return;
+
+    struct rt_view_update_callback_context_bsg *state =
+	(struct rt_view_update_callback_context_bsg *)v->gv_clientData;
+    if (state)
+	BU_PUT(state, struct rt_view_update_callback_context_bsg);
+    v->gv_callback = NULL;
+    v->gv_clientData = NULL;
+}
 
 static bsg_scene_ref
 rt_view_scene_ref_to_bsg(rt_view_scene_ref_bsg ref)
@@ -79,6 +109,22 @@ rt_view_scene_ref_from_bsg(bsg_scene_ref ref)
     return rt_ref;
 }
 
+static bsg_scene_ref
+rt_view_neutral_scene_ref_to_bsg(rt_view_scene_ref ref)
+{
+    bsg_scene_ref bsg_ref = BSG_SCENE_REF_NULL_INIT;
+    bsg_ref.opaque = ref.opaque;
+    return bsg_ref;
+}
+
+static rt_view_scene_ref
+rt_view_neutral_scene_ref_from_bsg(bsg_scene_ref ref)
+{
+    rt_view_scene_ref rt_ref = RT_VIEW_SCENE_REF_NULL_INIT;
+    rt_ref.opaque = ref.opaque;
+    return rt_ref;
+}
+
 int
 rt_view_context_is_bsg(const void *ctx)
 {
@@ -86,11 +132,23 @@ rt_view_context_is_bsg(const void *ctx)
     return (v && v->magic == BSG_VIEW_MAGIC) ? 1 : 0;
 }
 
+int
+rt_view_context_is_retained(const void *ctx)
+{
+    return rt_view_context_is_bsg(ctx);
+}
+
 void *
 rt_view_context_user_data_from_bsg(const void *ctx)
 {
     const struct bsg_view *v = (const struct bsg_view *)ctx;
     return (v && v->magic == BSG_VIEW_MAGIC) ? v->u_data : NULL;
+}
+
+void *
+rt_view_context_user_data_get(const void *ctx)
+{
+    return rt_view_context_user_data_from_bsg(ctx);
 }
 
 int
@@ -105,6 +163,12 @@ rt_view_context_user_data_set_bsg(void *ctx, void *user_data)
 }
 
 int
+rt_view_context_user_data_set(void *ctx, void *user_data)
+{
+    return rt_view_context_user_data_set_bsg(ctx, user_data);
+}
+
+int
 rt_view_context_tclcad_data_set_bsg(void *ctx, void *tcl_data)
 {
     struct bsg_view *v = (struct bsg_view *)ctx;
@@ -113,6 +177,111 @@ rt_view_context_tclcad_data_set_bsg(void *ctx, void *tcl_data)
 
     v->gv_tcl = (struct bsg_data_tclcad *)tcl_data;
     return 1;
+}
+
+int
+rt_view_context_tclcad_data_set(void *ctx, void *tcl_data)
+{
+    return rt_view_context_tclcad_data_set_bsg(ctx, tcl_data);
+}
+
+void
+rt_edit_view_from_bsg(struct rt_edit_view *ev, const void *view_ctx)
+{
+    const struct bsg_view *v = (const struct bsg_view *)view_ctx;
+
+    if (!ev)
+	return;
+
+    ev->gv_scale = rt_view_scale_from_bsg(v);
+    ev->gv_base2local = rt_view_base2local_from_bsg(v);
+    ev->gv_local2base = rt_view_local2base_from_bsg(v);
+    ev->gv_coord = rt_view_coord_from_bsg(v);
+    ev->gv_rotate_about = rt_view_rotate_about_from_bsg(v);
+    rt_view_rotation_from_bsg(ev->gv_rotation, v);
+    rt_view_center_from_bsg(ev->gv_center, v);
+    rt_view_model2view_from_bsg(ev->gv_model2view, v);
+    rt_view_view2model_from_bsg(ev->gv_view2model, v);
+}
+
+void
+rt_edit_view_from_context(struct rt_edit_view *ev, const void *view_ctx)
+{
+    rt_edit_view_from_bsg(ev, view_ctx);
+}
+
+struct rt_edit *
+rt_edit_create_bsg(struct db_full_path *dfp, struct db_i *dbip,
+		   struct bn_tol *tol, const void *view_ctx)
+{
+    const struct bsg_view *v = (const struct bsg_view *)view_ctx;
+    struct rt_edit_view ev;
+
+    if (!v)
+	return rt_edit_create(dfp, dbip, tol, NULL);
+
+    rt_edit_view_from_bsg(&ev, v);
+    return rt_edit_create(dfp, dbip, tol, &ev);
+}
+
+struct rt_edit *
+rt_edit_create_context(struct db_full_path *dfp, struct db_i *dbip,
+		       struct bn_tol *tol, const void *view_ctx)
+{
+    return rt_edit_create_bsg(dfp, dbip, tol, view_ctx);
+}
+
+int
+rt_edit_reinit_bsg(struct rt_edit *s, struct db_full_path *dfp,
+		   struct db_i *dbip, struct bn_tol *tol,
+		   const void *view_ctx)
+{
+    const struct bsg_view *v = (const struct bsg_view *)view_ctx;
+    struct rt_edit_view ev;
+
+    if (!v)
+	return rt_edit_reinit(s, dfp, dbip, tol, NULL);
+
+    rt_edit_view_from_bsg(&ev, v);
+    return rt_edit_reinit(s, dfp, dbip, tol, &ev);
+}
+
+int
+rt_edit_reinit_context(struct rt_edit *s, struct db_full_path *dfp,
+		       struct db_i *dbip, struct bn_tol *tol,
+		       const void *view_ctx)
+{
+    return rt_edit_reinit_bsg(s, dfp, dbip, tol, view_ctx);
+}
+
+int
+rt_edit_knob_cmd_process_bsg(
+	struct rt_edit *s,
+	vect_t *rvec, int *do_rot, vect_t *tvec, int *do_tran, int *do_sca,
+	const void *view_ctx, const char *cmd, fastf_t f,
+	char origin, int incr_flag, void *u_data)
+{
+    const struct bsg_view *v = (const struct bsg_view *)view_ctx;
+    struct rt_edit_view ev;
+
+    if (!v)
+	return rt_edit_knob_cmd_process(s, rvec, do_rot, tvec, do_tran,
+	    do_sca, NULL, cmd, f, origin, incr_flag, u_data);
+
+    rt_edit_view_from_bsg(&ev, v);
+    return rt_edit_knob_cmd_process(s, rvec, do_rot, tvec, do_tran,
+	do_sca, &ev, cmd, f, origin, incr_flag, u_data);
+}
+
+int
+rt_edit_knob_cmd_process_context(
+	struct rt_edit *s,
+	vect_t *rvec, int *do_rot, vect_t *tvec, int *do_tran, int *do_sca,
+	const void *view_ctx, const char *cmd, fastf_t f,
+	char origin, int incr_flag, void *u_data)
+{
+    return rt_edit_knob_cmd_process_bsg(s, rvec, do_rot, tvec, do_tran,
+	    do_sca, view_ctx, cmd, f, origin, incr_flag, u_data);
 }
 
 int
@@ -131,6 +300,12 @@ rt_view_context_callbacks_set_bsg(void *ctx, struct bu_ptbl *callbacks)
     return 1;
 }
 
+int
+rt_view_context_callbacks_set(void *ctx, struct bu_ptbl *callbacks)
+{
+    return rt_view_context_callbacks_set_bsg(ctx, callbacks);
+}
+
 void *
 rt_view_context_create_bsg(void)
 {
@@ -142,6 +317,12 @@ rt_view_context_create_bsg(void)
 }
 
 void *
+rt_view_context_create(void)
+{
+    return rt_view_context_create_bsg();
+}
+
+void *
 rt_view_context_create_with_set_bsg(void *view_set_ctx)
 {
     struct bsg_view *v = NULL;
@@ -149,6 +330,12 @@ rt_view_context_create_with_set_bsg(void *view_set_ctx)
     BU_ALLOC(v, struct bsg_view);
     bsg_view_init(v, (struct bsg_view_set *)view_set_ctx);
     return v;
+}
+
+void *
+rt_view_context_create_with_set(void *view_set_ctx)
+{
+    return rt_view_context_create_with_set_bsg(view_set_ctx);
 }
 
 void *
@@ -163,6 +350,12 @@ rt_view_context_create_copy_with_set_bsg(const void *src_ctx,
     return v;
 }
 
+void *
+rt_view_context_create_copy_with_set(const void *src_ctx, void *view_set_ctx)
+{
+    return rt_view_context_create_copy_with_set_bsg(src_ctx, view_set_ctx);
+}
+
 void
 rt_view_context_free_bsg(void *ctx)
 {
@@ -171,8 +364,14 @@ rt_view_context_free_bsg(void *ctx)
     if (!v)
 	return;
 
-    bsg_view_free(v);
+    rt_view_free_bsg(v);
     bu_free(v, "rt_view_context_create_bsg view");
+}
+
+void
+rt_view_context_free(void *ctx)
+{
+    rt_view_context_free_bsg(ctx);
 }
 
 int
@@ -183,8 +382,15 @@ rt_view_context_release_storage_bsg(void *ctx)
     if (!v)
 	return 0;
 
+    rt_view_update_callback_bridge_clear_bsg(v);
     BU_PUT(v, struct bsg_view);
     return 1;
+}
+
+int
+rt_view_context_release_storage(void *ctx)
+{
+    return rt_view_context_release_storage_bsg(ctx);
 }
 
 int
@@ -206,9 +412,27 @@ rt_view_context_name_from_bsg(const void *ctx)
 }
 
 int
+rt_view_context_name_set(void *ctx, const char *name)
+{
+    return rt_view_context_name_set_bsg(ctx, name);
+}
+
+const char *
+rt_view_context_name_get(const void *ctx)
+{
+    return rt_view_context_name_from_bsg(ctx);
+}
+
+int
 rt_view_context_width_from_bsg(const void *ctx)
 {
     return rt_view_width_from_bsg((const struct bsg_view *)ctx);
+}
+
+int
+rt_view_context_width_get(const void *ctx)
+{
+    return rt_view_context_width_from_bsg(ctx);
 }
 
 int
@@ -218,15 +442,33 @@ rt_view_context_height_from_bsg(const void *ctx)
 }
 
 int
+rt_view_context_height_get(const void *ctx)
+{
+    return rt_view_context_height_from_bsg(ctx);
+}
+
+int
 rt_view_context_dimensions_set_bsg(void *ctx, int width, int height)
 {
     return rt_view_dimensions_set_bsg((struct bsg_view *)ctx, width, height);
+}
+
+int
+rt_view_context_dimensions_set(void *ctx, int width, int height)
+{
+    return rt_view_context_dimensions_set_bsg(ctx, width, height);
 }
 
 void *
 rt_view_context_display_manager_from_bsg(const void *ctx)
 {
     return rt_view_display_manager_from_bsg((const struct bsg_view *)ctx);
+}
+
+void *
+rt_view_context_display_manager_get(const void *ctx)
+{
+    return rt_view_context_display_manager_from_bsg(ctx);
 }
 
 int
@@ -236,9 +478,21 @@ rt_view_context_display_manager_set_bsg(void *ctx, void *dmp)
 }
 
 int
+rt_view_context_display_manager_set(void *ctx, void *dmp)
+{
+    return rt_view_context_display_manager_set_bsg(ctx, dmp);
+}
+
+int
 rt_view_context_edit_matrix_set_bsg(void *ctx, matp_t edit_mat)
 {
     return rt_view_edit_matrix_set_bsg((struct bsg_view *)ctx, edit_mat);
+}
+
+int
+rt_view_context_edit_matrix_set(void *ctx, matp_t edit_mat)
+{
+    return rt_view_context_edit_matrix_set_bsg(ctx, edit_mat);
 }
 
 int
@@ -247,10 +501,22 @@ rt_view_context_edit_matrix_clear_bsg(void *ctx)
     return rt_view_edit_matrix_clear_bsg((struct bsg_view *)ctx);
 }
 
+int
+rt_view_context_edit_matrix_clear(void *ctx)
+{
+    return rt_view_context_edit_matrix_clear_bsg(ctx);
+}
+
 uint64_t
 rt_view_context_frame_revision_from_bsg(const void *ctx)
 {
     return rt_view_frame_revision_from_bsg((const struct bsg_view *)ctx);
+}
+
+uint64_t
+rt_view_context_frame_revision_get(const void *ctx)
+{
+    return rt_view_context_frame_revision_from_bsg(ctx);
 }
 
 int
@@ -278,15 +544,33 @@ rt_view_context_refresh_request_bsg(void *ctx, uint32_t flags)
 }
 
 int
+rt_view_context_refresh_request(void *ctx, uint32_t flags)
+{
+    return rt_view_context_refresh_request_bsg(ctx, flags);
+}
+
+int
 rt_view_context_refresh_dirty_from_bsg(const void *ctx)
 {
     return rt_view_refresh_dirty_from_bsg((const struct bsg_view *)ctx);
+}
+
+int
+rt_view_context_refresh_dirty_get(const void *ctx)
+{
+    return rt_view_context_refresh_dirty_from_bsg(ctx);
 }
 
 uint32_t
 rt_view_context_refresh_consume_bsg(void *ctx)
 {
     return rt_view_refresh_consume_bsg((struct bsg_view *)ctx);
+}
+
+uint32_t
+rt_view_context_refresh_consume(void *ctx)
+{
+    return rt_view_context_refresh_consume_bsg(ctx);
 }
 
 int
@@ -296,9 +580,21 @@ rt_view_context_refresh_complete_bsg(void *ctx)
 }
 
 int
+rt_view_context_refresh_complete(void *ctx)
+{
+    return rt_view_context_refresh_complete_bsg(ctx);
+}
+
+int
 rt_view_context_refresh_enabled_from_bsg(const void *ctx)
 {
     return rt_view_refresh_enabled_from_bsg((const struct bsg_view *)ctx);
+}
+
+int
+rt_view_context_refresh_enabled_get(const void *ctx)
+{
+    return rt_view_context_refresh_enabled_from_bsg(ctx);
 }
 
 int
@@ -308,9 +604,21 @@ rt_view_context_refresh_enabled_set_bsg(void *ctx, int enabled)
 }
 
 int
+rt_view_context_refresh_enabled_set(void *ctx, int enabled)
+{
+    return rt_view_context_refresh_enabled_set_bsg(ctx, enabled);
+}
+
+int
 rt_view_context_refresh_suppressed_from_bsg(const void *ctx)
 {
     return rt_view_refresh_suppressed_from_bsg((const struct bsg_view *)ctx);
+}
+
+int
+rt_view_context_refresh_suppressed_get(const void *ctx)
+{
+    return rt_view_context_refresh_suppressed_from_bsg(ctx);
 }
 
 int
@@ -320,9 +628,21 @@ rt_view_context_refresh_suppress_begin_bsg(void *ctx)
 }
 
 int
+rt_view_context_refresh_suppress_begin(void *ctx)
+{
+    return rt_view_context_refresh_suppress_begin_bsg(ctx);
+}
+
+int
 rt_view_context_refresh_suppress_end_bsg(void *ctx)
 {
     return rt_view_refresh_suppress_end_bsg((struct bsg_view *)ctx);
+}
+
+int
+rt_view_context_refresh_suppress_end(void *ctx)
+{
+    return rt_view_context_refresh_suppress_end_bsg(ctx);
 }
 
 int
@@ -332,9 +652,21 @@ rt_view_context_refresh_drawn_count_from_bsg(const void *ctx)
 }
 
 int
+rt_view_context_refresh_drawn_count_get(const void *ctx)
+{
+    return rt_view_context_refresh_drawn_count_from_bsg(ctx);
+}
+
+int
 rt_view_context_refresh_drawn_count_set_bsg(void *ctx, int count)
 {
     return rt_view_refresh_drawn_count_set_bsg((struct bsg_view *)ctx, count);
+}
+
+int
+rt_view_context_refresh_drawn_count_set(void *ctx, int count)
+{
+    return rt_view_context_refresh_drawn_count_set_bsg(ctx, count);
 }
 
 fastf_t
@@ -343,10 +675,22 @@ rt_view_context_scale_from_bsg(const void *ctx)
     return rt_view_scale_from_bsg((const struct bsg_view *)ctx);
 }
 
+fastf_t
+rt_view_context_scale_get(const void *ctx)
+{
+    return rt_view_context_scale_from_bsg(ctx);
+}
+
 fastf_t *
 rt_view_context_scale_storage_from_bsg(void *ctx)
 {
     return rt_view_scale_storage_from_bsg((struct bsg_view *)ctx);
+}
+
+fastf_t *
+rt_view_context_scale_storage_get(void *ctx)
+{
+    return rt_view_context_scale_storage_from_bsg(ctx);
 }
 
 fastf_t
@@ -354,6 +698,12 @@ rt_view_context_size_from_bsg(const void *ctx)
 {
     const struct bsg_view *v = (const struct bsg_view *)ctx;
     return v ? v->gv_size : 0.0;
+}
+
+fastf_t
+rt_view_context_size_get(const void *ctx)
+{
+    return rt_view_context_size_from_bsg(ctx);
 }
 
 int
@@ -368,10 +718,28 @@ rt_view_context_scale_state_set_bsg(void *ctx,
 	    initial_scale, absolute_scale, size, inverse_size);
 }
 
+int
+rt_view_context_scale_state_set(void *ctx,
+				fastf_t scale,
+				fastf_t initial_scale,
+				fastf_t absolute_scale,
+				fastf_t size,
+				fastf_t inverse_size)
+{
+    return rt_view_context_scale_state_set_bsg(ctx, scale, initial_scale,
+	    absolute_scale, size, inverse_size);
+}
+
 fastf_t
 rt_view_context_initial_scale_from_bsg(const void *ctx)
 {
     return rt_view_initial_scale_from_bsg((const struct bsg_view *)ctx);
+}
+
+fastf_t
+rt_view_context_initial_scale_get(const void *ctx)
+{
+    return rt_view_context_initial_scale_from_bsg(ctx);
 }
 
 int
@@ -380,16 +748,34 @@ rt_view_context_initial_scale_set_bsg(void *ctx, fastf_t scale)
     return rt_view_initial_scale_set_bsg((struct bsg_view *)ctx, scale);
 }
 
+int
+rt_view_context_initial_scale_set(void *ctx, fastf_t scale)
+{
+    return rt_view_context_initial_scale_set_bsg(ctx, scale);
+}
+
 fastf_t
 rt_view_context_absolute_scale_from_bsg(const void *ctx)
 {
     return rt_view_absolute_scale_from_bsg((const struct bsg_view *)ctx);
 }
 
+fastf_t
+rt_view_context_absolute_scale_get(const void *ctx)
+{
+    return rt_view_context_absolute_scale_from_bsg(ctx);
+}
+
 int
 rt_view_context_absolute_scale_set_bsg(void *ctx, fastf_t scale)
 {
     return rt_view_absolute_scale_set_bsg((struct bsg_view *)ctx, scale);
+}
+
+int
+rt_view_context_absolute_scale_set(void *ctx, fastf_t scale)
+{
+    return rt_view_context_absolute_scale_set_bsg(ctx, scale);
 }
 
 int
@@ -401,6 +787,15 @@ rt_view_context_unit_conversion_set_bsg(void *ctx,
 	    local2base, base2local);
 }
 
+int
+rt_view_context_unit_conversion_set(void *ctx,
+				    fastf_t local2base,
+				    fastf_t base2local)
+{
+    return rt_view_context_unit_conversion_set_bsg(ctx, local2base,
+	    base2local);
+}
+
 fastf_t
 rt_view_context_local2base_from_bsg(const void *ctx)
 {
@@ -408,9 +803,21 @@ rt_view_context_local2base_from_bsg(const void *ctx)
 }
 
 fastf_t
+rt_view_context_local2base_get(const void *ctx)
+{
+    return rt_view_context_local2base_from_bsg(ctx);
+}
+
+fastf_t
 rt_view_context_base2local_from_bsg(const void *ctx)
 {
     return rt_view_base2local_from_bsg((const struct bsg_view *)ctx);
+}
+
+fastf_t
+rt_view_context_base2local_get(const void *ctx)
+{
+    return rt_view_context_base2local_from_bsg(ctx);
 }
 
 int
@@ -438,16 +845,34 @@ rt_view_context_is_independent_bsg(const void *ctx)
 }
 
 int
+rt_view_context_is_independent(const void *ctx)
+{
+    return rt_view_context_is_independent_bsg(ctx);
+}
+
+int
 rt_view_context_independent_scope_is_null_bsg(void *ctx, int create)
 {
     return rt_view_independent_scope_is_null_bsg((struct bsg_view *)ctx,
 	    create);
 }
 
+int
+rt_view_context_independent_scope_is_null(void *ctx, int create)
+{
+    return rt_view_context_independent_scope_is_null_bsg(ctx, create);
+}
+
 void
 rt_view_context_independent_scope_destroy_bsg(void *ctx)
 {
     rt_view_independent_scope_destroy_bsg((struct bsg_view *)ctx);
+}
+
+void
+rt_view_context_independent_scope_destroy(void *ctx)
+{
+    rt_view_context_independent_scope_destroy_bsg(ctx);
 }
 
 int
@@ -462,6 +887,12 @@ rt_view_set_context_add_bsg(void *view_set_ctx, void *view_ctx)
 }
 
 int
+rt_view_set_context_add(void *view_set_ctx, void *view_ctx)
+{
+    return rt_view_set_context_add_bsg(view_set_ctx, view_ctx);
+}
+
+int
 rt_view_set_context_remove_bsg(void *view_set_ctx, void *view_ctx)
 {
     if (!view_set_ctx)
@@ -470,6 +901,12 @@ rt_view_set_context_remove_bsg(void *view_set_ctx, void *view_ctx)
     rt_view_set_remove_view_bsg((struct bsg_view_set *)view_set_ctx,
 	    (struct bsg_view *)view_ctx);
     return 1;
+}
+
+int
+rt_view_set_context_remove(void *view_set_ctx, void *view_ctx)
+{
+    return rt_view_set_context_remove_bsg(view_set_ctx, view_ctx);
 }
 
 void *
@@ -631,6 +1068,16 @@ rt_view_context_line_set_create_bsg(void *ctx,
     return line_set;
 }
 
+void *
+rt_view_context_line_set_create(void *ctx,
+				const char *name,
+				unsigned char r,
+				unsigned char g,
+				unsigned char b)
+{
+    return rt_view_context_line_set_create_bsg(ctx, name, r, g, b);
+}
+
 int
 rt_view_line_set_context_is_null_bsg(const void *line_set_ctx)
 {
@@ -638,6 +1085,12 @@ rt_view_line_set_context_is_null_bsg(const void *line_set_ctx)
 	(const struct rt_view_line_set_context_bsg *)line_set_ctx;
 
     return (!line_set || bsg_node_ref_is_null(line_set->node));
+}
+
+int
+rt_view_line_set_context_is_null(const void *line_set_ctx)
+{
+    return rt_view_line_set_context_is_null_bsg(line_set_ctx);
 }
 
 int
@@ -656,6 +1109,16 @@ rt_view_line_set_context_set_points_bsg(void *line_set_ctx,
 	    point_count);
 }
 
+int
+rt_view_line_set_context_set_points(void *line_set_ctx,
+				    const point_t *points,
+				    const int *commands,
+				    size_t point_count)
+{
+    return rt_view_line_set_context_set_points_bsg(line_set_ctx, points,
+	    commands, point_count);
+}
+
 void
 rt_view_line_set_context_destroy_bsg(void *line_set_ctx)
 {
@@ -668,6 +1131,12 @@ rt_view_line_set_context_destroy_bsg(void *line_set_ctx)
     if (!bsg_node_ref_is_null(line_set->node))
 	bsg_node_ref_destroy(line_set->node);
     bu_free(line_set, "RT view BSG line-set context");
+}
+
+void
+rt_view_line_set_context_destroy(void *line_set_ctx)
+{
+    rt_view_line_set_context_destroy_bsg(line_set_ctx);
 }
 
 void *
@@ -694,6 +1163,8 @@ rt_view_update_callback_set_bsg(struct bsg_view *v,
     if (!v)
 	return 0;
 
+    rt_view_update_callback_bridge_clear_bsg(v);
+
     if (callback && !v->callbacks) {
 	BU_GET(v->callbacks, struct bu_ptbl);
 	bu_ptbl_init(v->callbacks, 8, "rt view BSG callbacks");
@@ -711,6 +1182,32 @@ rt_view_context_update_callback_set_bsg(void *ctx,
 {
     return rt_view_update_callback_set_bsg((struct bsg_view *)ctx,
 	    callback, data);
+}
+
+int
+rt_view_context_update_callback_set(void *ctx,
+				    rt_view_context_update_callback_t callback,
+				    void *data)
+{
+    struct bsg_view *v = (struct bsg_view *)ctx;
+
+    if (!v)
+	return 0;
+
+    if (!callback) {
+	rt_view_update_callback_bridge_clear_bsg(v);
+	v->gv_callback = NULL;
+	v->gv_clientData = NULL;
+	return 1;
+    }
+
+    struct rt_view_update_callback_context_bsg *state;
+    BU_GET(state, struct rt_view_update_callback_context_bsg);
+    state->callback = callback;
+    state->data = data;
+
+    return rt_view_update_callback_set_bsg(v,
+	    rt_view_context_update_callback_bridge_bsg, state);
 }
 
 int
@@ -765,6 +1262,12 @@ rt_view_context_info_from_bsg(struct rt_view_info *info, const void *ctx)
     rt_view_info_from_bsg(info, (const struct bsg_view *)ctx);
 }
 
+void
+rt_view_context_info_get(struct rt_view_info *info, const void *ctx)
+{
+    rt_view_context_info_from_bsg(info, ctx);
+}
+
 int
 rt_view_context_obb_from_bsg(const void *ctx,
 			     point_t center,
@@ -782,6 +1285,16 @@ rt_view_context_obb_from_bsg(const void *ctx,
     VMOVE(extent2, v->obb_extent2);
     VMOVE(extent3, v->obb_extent3);
     return 1;
+}
+
+int
+rt_view_context_obb_get(const void *ctx,
+			point_t center,
+			vect_t extent1,
+			vect_t extent2,
+			vect_t extent3)
+{
+    return rt_view_context_obb_from_bsg(ctx, center, extent1, extent2, extent3);
 }
 
 const char *
@@ -812,6 +1325,12 @@ fastf_t
 rt_view_context_radius_from_bsg(const void *ctx)
 {
     return rt_view_radius_from_bsg((const struct bsg_view *)ctx);
+}
+
+fastf_t
+rt_view_context_radius_get(const void *ctx)
+{
+    return rt_view_context_radius_from_bsg(ctx);
 }
 
 int
@@ -854,6 +1373,16 @@ rt_view_context_screen_to_view_from_bsg(fastf_t *fx,
 }
 
 int
+rt_view_context_screen_to_view(fastf_t *fx,
+			       fastf_t *fy,
+			       void *ctx,
+			       fastf_t x,
+			       fastf_t y)
+{
+    return rt_view_context_screen_to_view_from_bsg(fx, fy, ctx, x, y);
+}
+
+int
 rt_view_screen_point_from_bsg(point_t point,
 			      struct bsg_view *v,
 			      fastf_t x,
@@ -882,6 +1411,12 @@ rt_view_context_screen_point_from_bsg(point_t point,
 }
 
 int
+rt_view_context_screen_point_get(point_t point, void *ctx, fastf_t x, fastf_t y)
+{
+    return rt_view_context_screen_point_from_bsg(point, ctx, x, y);
+}
+
+int
 rt_view_current_point_from_bsg(point_t point, const struct bsg_view *v)
 {
     if (!point)
@@ -904,6 +1439,12 @@ rt_view_context_current_point_from_bsg(point_t point, const void *ctx)
 }
 
 int
+rt_view_context_current_point_get(point_t point, const void *ctx)
+{
+    return rt_view_context_current_point_from_bsg(point, ctx);
+}
+
+int
 rt_view_current_point_set_bsg(struct bsg_view *v, const point_t point)
 {
     if (!v || !point)
@@ -917,6 +1458,12 @@ int
 rt_view_context_current_point_set_bsg(void *ctx, const point_t point)
 {
     return rt_view_current_point_set_bsg((struct bsg_view *)ctx, point);
+}
+
+int
+rt_view_context_current_point_set(void *ctx, const point_t point)
+{
+    return rt_view_context_current_point_set_bsg(ctx, point);
 }
 
 int
@@ -941,6 +1488,12 @@ rt_view_context_previous_mouse_from_bsg(fastf_t *x, fastf_t *y, const void *ctx)
 }
 
 int
+rt_view_context_previous_mouse_get(fastf_t *x, fastf_t *y, const void *ctx)
+{
+    return rt_view_context_previous_mouse_from_bsg(x, y, ctx);
+}
+
+int
 rt_view_previous_mouse_set_bsg(struct bsg_view *v, fastf_t x, fastf_t y)
 {
     if (!v)
@@ -955,6 +1508,12 @@ int
 rt_view_context_previous_mouse_set_bsg(void *ctx, fastf_t x, fastf_t y)
 {
     return rt_view_previous_mouse_set_bsg((struct bsg_view *)ctx, x, y);
+}
+
+int
+rt_view_context_previous_mouse_set(void *ctx, fastf_t x, fastf_t y)
+{
+    return rt_view_context_previous_mouse_set_bsg(ctx, x, y);
 }
 
 int
@@ -986,6 +1545,13 @@ rt_view_context_mouse_delta_settings_from_bsg(struct rt_view_mouse_delta_setting
 }
 
 int
+rt_view_context_mouse_delta_settings_get(struct rt_view_mouse_delta_settings *settings,
+					 const void *ctx)
+{
+    return rt_view_context_mouse_delta_settings_from_bsg(settings, ctx);
+}
+
+int
 rt_view_mouse_state_set_bsg(struct bsg_view *v, int x, int y)
 {
     if (!v)
@@ -1010,6 +1576,12 @@ rt_view_context_mouse_state_set_bsg(void *ctx, int x, int y)
 }
 
 int
+rt_view_context_mouse_state_set(void *ctx, int x, int y)
+{
+    return rt_view_context_mouse_state_set_bsg(ctx, x, y);
+}
+
+int
 rt_view_unique_object_name_bsg(struct bu_vls *oname,
 			       const char *seed,
 			       struct bsg_view *v)
@@ -1028,6 +1600,14 @@ rt_view_context_unique_object_name_bsg(struct bu_vls *oname,
 {
     return rt_view_unique_object_name_bsg(oname, seed,
 	    (struct bsg_view *)ctx);
+}
+
+int
+rt_view_context_unique_object_name(struct bu_vls *oname,
+				   const char *seed,
+				   void *ctx)
+{
+    return rt_view_context_unique_object_name_bsg(oname, seed, ctx);
 }
 
 static void
@@ -1119,6 +1699,14 @@ rt_view_context_interactive_rect_state_from_bsg(
 }
 
 int
+rt_view_context_interactive_rect_state_get(
+	struct rt_view_interactive_rect_state *record,
+	const void *ctx)
+{
+    return rt_view_context_interactive_rect_state_from_bsg(record, ctx);
+}
+
+int
 rt_view_interactive_rect_state_set_bsg(struct bsg_view *v,
 				       const struct rt_view_interactive_rect_state *record)
 {
@@ -1138,6 +1726,14 @@ rt_view_context_interactive_rect_state_set_bsg(
 {
     return rt_view_interactive_rect_state_set_bsg((struct bsg_view *)ctx,
 	    record);
+}
+
+int
+rt_view_context_interactive_rect_state_set(
+	void *ctx,
+	const struct rt_view_interactive_rect_state *record)
+{
+    return rt_view_context_interactive_rect_state_set_bsg(ctx, record);
 }
 
 static void
@@ -1237,6 +1833,12 @@ rt_view_context_adc_state_from_bsg(struct rt_view_adc_state *record,
 }
 
 int
+rt_view_context_adc_state_get(struct rt_view_adc_state *record, const void *ctx)
+{
+    return rt_view_context_adc_state_from_bsg(record, ctx);
+}
+
+int
 rt_view_adc_state_set_bsg(struct bsg_view *v,
 			  const struct rt_view_adc_state *record)
 {
@@ -1254,6 +1856,12 @@ rt_view_context_adc_state_set_bsg(void *ctx,
 				  const struct rt_view_adc_state *record)
 {
     return rt_view_adc_state_set_bsg((struct bsg_view *)ctx, record);
+}
+
+int
+rt_view_context_adc_state_set(void *ctx, const struct rt_view_adc_state *record)
+{
+    return rt_view_context_adc_state_set_bsg(ctx, record);
 }
 
 static void
@@ -1325,6 +1933,12 @@ rt_view_context_grid_state_from_bsg(struct rt_view_grid_state *record,
 }
 
 int
+rt_view_context_grid_state_get(struct rt_view_grid_state *record, const void *ctx)
+{
+    return rt_view_context_grid_state_from_bsg(record, ctx);
+}
+
+int
 rt_view_grid_state_set_bsg(struct bsg_view *v,
 			   const struct rt_view_grid_state *record)
 {
@@ -1342,6 +1956,12 @@ rt_view_context_grid_state_set_bsg(void *ctx,
 				   const struct rt_view_grid_state *record)
 {
     return rt_view_grid_state_set_bsg((struct bsg_view *)ctx, record);
+}
+
+int
+rt_view_context_grid_state_set(void *ctx, const struct rt_view_grid_state *record)
+{
+    return rt_view_context_grid_state_set_bsg(ctx, record);
 }
 
 static void
@@ -1440,6 +2060,13 @@ rt_view_context_model_axes_state_from_bsg(struct rt_view_axes_state *record,
 }
 
 int
+rt_view_context_model_axes_state_get(struct rt_view_axes_state *record,
+				     const void *ctx)
+{
+    return rt_view_context_model_axes_state_from_bsg(record, ctx);
+}
+
+int
 rt_view_model_axes_state_set_bsg(struct bsg_view *v,
 				 const struct rt_view_axes_state *record)
 {
@@ -1457,6 +2084,13 @@ rt_view_context_model_axes_state_set_bsg(void *ctx,
 					 const struct rt_view_axes_state *record)
 {
     return rt_view_model_axes_state_set_bsg((struct bsg_view *)ctx, record);
+}
+
+int
+rt_view_context_model_axes_state_set(void *ctx,
+				     const struct rt_view_axes_state *record)
+{
+    return rt_view_context_model_axes_state_set_bsg(ctx, record);
 }
 
 int
@@ -1485,6 +2119,13 @@ rt_view_context_view_axes_state_from_bsg(struct rt_view_axes_state *record,
 }
 
 int
+rt_view_context_view_axes_state_get(struct rt_view_axes_state *record,
+				    const void *ctx)
+{
+    return rt_view_context_view_axes_state_from_bsg(record, ctx);
+}
+
+int
 rt_view_view_axes_state_set_bsg(struct bsg_view *v,
 				const struct rt_view_axes_state *record)
 {
@@ -1502,6 +2143,13 @@ rt_view_context_view_axes_state_set_bsg(void *ctx,
 					const struct rt_view_axes_state *record)
 {
     return rt_view_view_axes_state_set_bsg((struct bsg_view *)ctx, record);
+}
+
+int
+rt_view_context_view_axes_state_set(void *ctx,
+				    const struct rt_view_axes_state *record)
+{
+    return rt_view_context_view_axes_state_set_bsg(ctx, record);
 }
 
 static void
@@ -1565,6 +2213,13 @@ rt_view_context_center_dot_state_from_bsg(struct rt_view_other_state *record,
 }
 
 int
+rt_view_context_center_dot_state_get(struct rt_view_other_state *record,
+				     const void *ctx)
+{
+    return rt_view_context_center_dot_state_from_bsg(record, ctx);
+}
+
+int
 rt_view_center_dot_state_set_bsg(struct bsg_view *v,
 				 const struct rt_view_other_state *record)
 {
@@ -1582,6 +2237,13 @@ rt_view_context_center_dot_state_set_bsg(void *ctx,
 					 const struct rt_view_other_state *record)
 {
     return rt_view_center_dot_state_set_bsg((struct bsg_view *)ctx, record);
+}
+
+int
+rt_view_context_center_dot_state_set(void *ctx,
+				     const struct rt_view_other_state *record)
+{
+    return rt_view_context_center_dot_state_set_bsg(ctx, record);
 }
 
 int
@@ -1610,6 +2272,13 @@ rt_view_context_scale_overlay_state_from_bsg(struct rt_view_other_state *record,
 }
 
 int
+rt_view_context_scale_overlay_state_get(struct rt_view_other_state *record,
+					const void *ctx)
+{
+    return rt_view_context_scale_overlay_state_from_bsg(record, ctx);
+}
+
+int
 rt_view_scale_overlay_state_set_bsg(struct bsg_view *v,
 				    const struct rt_view_other_state *record)
 {
@@ -1628,6 +2297,13 @@ rt_view_context_scale_overlay_state_set_bsg(void *ctx,
 {
     return rt_view_scale_overlay_state_set_bsg((struct bsg_view *)ctx,
 	    record);
+}
+
+int
+rt_view_context_scale_overlay_state_set(void *ctx,
+					const struct rt_view_other_state *record)
+{
+    return rt_view_context_scale_overlay_state_set_bsg(ctx, record);
 }
 
 static void
@@ -1697,6 +2373,13 @@ rt_view_context_params_state_from_bsg(struct rt_view_params_state *record,
 }
 
 int
+rt_view_context_params_state_get(struct rt_view_params_state *record,
+				 const void *ctx)
+{
+    return rt_view_context_params_state_from_bsg(record, ctx);
+}
+
+int
 rt_view_params_state_set_bsg(struct bsg_view *v,
 			     const struct rt_view_params_state *record)
 {
@@ -1714,6 +2397,13 @@ rt_view_context_params_state_set_bsg(void *ctx,
 				     const struct rt_view_params_state *record)
 {
     return rt_view_params_state_set_bsg((struct bsg_view *)ctx, record);
+}
+
+int
+rt_view_context_params_state_set(void *ctx,
+				 const struct rt_view_params_state *record)
+{
+    return rt_view_context_params_state_set_bsg(ctx, record);
 }
 
 int
@@ -1832,6 +2522,12 @@ rt_view_context_orientation_quat_from_bsg(quat_t orientation, const void *ctx)
 }
 
 int
+rt_view_context_orientation_quat_get(quat_t orientation, const void *ctx)
+{
+    return rt_view_context_orientation_quat_from_bsg(orientation, ctx);
+}
+
+int
 rt_view_aet_from_bsg(vect_t aet, const struct bsg_view *v)
 {
     if (!aet)
@@ -1853,6 +2549,12 @@ rt_view_context_aet_from_bsg(vect_t aet, const void *ctx)
 }
 
 int
+rt_view_context_aet_get(vect_t aet, const void *ctx)
+{
+    return rt_view_context_aet_from_bsg(aet, ctx);
+}
+
+int
 rt_view_aet_set_bsg(struct bsg_view *v, const vect_t aet)
 {
     if (!v || !aet)
@@ -1866,6 +2568,12 @@ int
 rt_view_context_aet_set_bsg(void *ctx, const vect_t aet)
 {
     return rt_view_aet_set_bsg((struct bsg_view *)ctx, aet);
+}
+
+int
+rt_view_context_aet_set(void *ctx, const vect_t aet)
+{
+    return rt_view_context_aet_set_bsg(ctx, aet);
 }
 
 int
@@ -1885,6 +2593,12 @@ rt_view_context_aet_state_set_bsg(void *ctx, const vect_t aet)
 }
 
 int
+rt_view_context_aet_state_set(void *ctx, const vect_t aet)
+{
+    return rt_view_context_aet_state_set_bsg(ctx, aet);
+}
+
+int
 rt_view_update_bsg(struct bsg_view *v)
 {
     if (!v)
@@ -1898,6 +2612,12 @@ int
 rt_view_context_update_bsg(void *ctx)
 {
     return rt_view_update_bsg((struct bsg_view *)ctx);
+}
+
+int
+rt_view_context_update(void *ctx)
+{
+    return rt_view_context_update_bsg(ctx);
 }
 
 int
@@ -1915,6 +2635,12 @@ rt_view_context_autoview_bsg(void *ctx, fastf_t scale, int all_view_objs)
 {
     return rt_view_autoview_bsg((struct bsg_view *)ctx, scale,
 	    all_view_objs);
+}
+
+int
+rt_view_context_autoview(void *ctx, fastf_t scale, int all_view_objs)
+{
+    return rt_view_context_autoview_bsg(ctx, scale, all_view_objs);
 }
 
 int
@@ -1937,6 +2663,15 @@ rt_view_context_autoview_bounds_bsg(void *ctx,
 				    const point_t max)
 {
     return rt_view_autoview_bounds_bsg((struct bsg_view *)ctx, scale, min, max);
+}
+
+int
+rt_view_context_autoview_bounds(void *ctx,
+				fastf_t scale,
+				const point_t min,
+				const point_t max)
+{
+    return rt_view_context_autoview_bounds_bsg(ctx, scale, min, max);
 }
 
 int
@@ -1986,6 +2721,17 @@ rt_view_context_adjust_bsg(void *ctx,
 	    flags);
 }
 
+int
+rt_view_context_adjust(void *ctx,
+		       int dx,
+		       int dy,
+		       point_t keypoint,
+		       int mode,
+		       unsigned long long flags)
+{
+    return rt_view_context_adjust_bsg(ctx, dx, dy, keypoint, mode, flags);
+}
+
 unsigned long long
 rt_view_hash_bsg(const struct bsg_view *v)
 {
@@ -1996,6 +2742,12 @@ unsigned long long
 rt_view_context_hash_bsg(const void *ctx)
 {
     return rt_view_hash_bsg((const struct bsg_view *)ctx);
+}
+
+unsigned long long
+rt_view_context_hash(const void *ctx)
+{
+    return rt_view_context_hash_bsg(ctx);
 }
 
 int
@@ -2136,6 +2888,35 @@ rt_view_context_snap_candidates_result_bsg(void *ctx,
 }
 
 int
+rt_view_context_snap_first_candidate(void *ctx,
+				     const point_t sample,
+				     unsigned long long kinds,
+				     point_t candidate)
+{
+    struct bsg_snap_result sres;
+    point_t bsg_sample = VINIT_ZERO;
+    int ret = 0;
+
+    if (!candidate)
+	return 0;
+
+    VSET(candidate, 0.0, 0.0, 0.0);
+
+    if (!ctx || !sample || !kinds)
+	return 0;
+
+    VMOVE(bsg_sample, sample);
+    bsg_snap_result_init(&sres);
+    if (rt_view_snap_candidates_bsg((struct bsg_view *)ctx, bsg_sample, 0.0,
+		kinds, &sres) > 0) {
+	VMOVE(candidate, sres.sr_candidates[0].sc_point);
+	ret = 1;
+    }
+    bsg_snap_result_free(&sres);
+    return ret;
+}
+
+int
 rt_view_snap_point_2d_bsg(struct bsg_view *v,
 			  fastf_t *vx,
 			  fastf_t *vy,
@@ -2154,6 +2935,15 @@ rt_view_context_snap_point_2d_bsg(void *ctx,
 }
 
 int
+rt_view_context_snap_point_2d(void *ctx,
+			      fastf_t *vx,
+			      fastf_t *vy,
+			      unsigned long long kinds)
+{
+    return rt_view_context_snap_point_2d_bsg(ctx, vx, vy, kinds);
+}
+
+int
 rt_view_snap_grid_2d_bsg(struct bsg_view *v, fastf_t *vx, fastf_t *vy)
 {
     if (!v || !vx || !vy)
@@ -2166,6 +2956,12 @@ int
 rt_view_context_snap_grid_2d_bsg(void *ctx, fastf_t *vx, fastf_t *vy)
 {
     return rt_view_snap_grid_2d_bsg((struct bsg_view *)ctx, vx, vy);
+}
+
+int
+rt_view_context_snap_grid_2d(void *ctx, fastf_t *vx, fastf_t *vy)
+{
+    return rt_view_context_snap_grid_2d_bsg(ctx, vx, vy);
 }
 
 static void
@@ -2254,6 +3050,12 @@ rt_view_context_pick_point_bsg(void *ctx, int x, int y, int first_only)
     return rt_view_pick_point_bsg((struct bsg_view *)ctx, x, y, first_only);
 }
 
+void *
+rt_view_context_pick_point(void *ctx, int x, int y, int first_only)
+{
+    return (void *)rt_view_context_pick_point_bsg(ctx, x, y, first_only);
+}
+
 struct rt_view_pick_result_bsg *
 rt_view_pick_nearest_bsg(struct bsg_view *v, int x, int y)
 {
@@ -2266,6 +3068,12 @@ rt_view_context_pick_nearest_bsg(void *ctx, int x, int y)
     return rt_view_pick_nearest_bsg((struct bsg_view *)ctx, x, y);
 }
 
+void *
+rt_view_context_pick_nearest(void *ctx, int x, int y)
+{
+    return (void *)rt_view_context_pick_nearest_bsg(ctx, x, y);
+}
+
 struct rt_view_pick_result_bsg *
 rt_view_pick_rect_bsg(struct bsg_view *v, int x0, int y0, int x1, int y1)
 {
@@ -2276,6 +3084,12 @@ struct rt_view_pick_result_bsg *
 rt_view_context_pick_rect_bsg(void *ctx, int x0, int y0, int x1, int y1)
 {
     return rt_view_pick_rect_bsg((struct bsg_view *)ctx, x0, y0, x1, y1);
+}
+
+void *
+rt_view_context_pick_rect(void *ctx, int x0, int y0, int x1, int y1)
+{
+    return (void *)rt_view_context_pick_rect_bsg(ctx, x0, y0, x1, y1);
 }
 
 struct rt_view_pick_result_bsg *
@@ -2303,6 +3117,12 @@ rt_view_pick_result_context_create_bsg(void)
     return (void *)rt_view_pick_result_create_bsg();
 }
 
+void *
+rt_view_pick_result_context_create(void)
+{
+    return rt_view_pick_result_context_create_bsg();
+}
+
 void
 rt_view_pick_result_free_bsg(struct rt_view_pick_result_bsg *result)
 {
@@ -2313,6 +3133,12 @@ void
 rt_view_pick_result_context_free_bsg(void *result_ctx)
 {
     rt_view_pick_result_free_bsg((struct rt_view_pick_result_bsg *)result_ctx);
+}
+
+void
+rt_view_pick_result_context_free(void *result_ctx)
+{
+    rt_view_pick_result_context_free_bsg(result_ctx);
 }
 
 size_t
@@ -2326,6 +3152,12 @@ rt_view_pick_result_context_count_bsg(const void *result_ctx)
 {
     return rt_view_pick_result_count_bsg(
 	    (const struct rt_view_pick_result_bsg *)result_ctx);
+}
+
+size_t
+rt_view_pick_result_context_count(const void *result_ctx)
+{
+    return rt_view_pick_result_context_count_bsg(result_ctx);
 }
 
 int
@@ -2359,6 +3191,14 @@ rt_view_pick_result_context_path_bsg(const void *result_ctx,
 	    path_out);
 }
 
+int
+rt_view_pick_result_context_path(const void *result_ctx,
+				 size_t index,
+				 struct bu_vls *path_out)
+{
+    return rt_view_pick_result_context_path_bsg(result_ctx, index, path_out);
+}
+
 fastf_t
 rt_view_pick_result_hit_dist_bsg(const struct rt_view_pick_result_bsg *result,
 				 size_t index)
@@ -2375,6 +3215,12 @@ rt_view_pick_result_context_hit_dist_bsg(const void *result_ctx, size_t index)
 {
     return rt_view_pick_result_hit_dist_bsg(
 	    (const struct rt_view_pick_result_bsg *)result_ctx, index);
+}
+
+fastf_t
+rt_view_pick_result_context_hit_dist(const void *result_ctx, size_t index)
+{
+    return rt_view_pick_result_context_hit_dist_bsg(result_ctx, index);
 }
 
 int
@@ -2471,6 +3317,16 @@ rt_view_pick_result_context_append_copy_bsg(void *dest_ctx,
 	    (const struct rt_view_pick_result_bsg *)src_ctx, index, hit_dist);
 }
 
+int
+rt_view_pick_result_context_append_copy(void *dest_ctx,
+					const void *src_ctx,
+					size_t index,
+					fastf_t hit_dist)
+{
+    return rt_view_pick_result_context_append_copy_bsg(dest_ctx, src_ctx, index,
+	    hit_dist);
+}
+
 struct rt_view_pick_result_bsg *
 rt_view_pick_result_filter_first_bsg(const struct rt_view_pick_result_bsg *src)
 {
@@ -2488,6 +3344,12 @@ rt_view_pick_result_context_filter_first_bsg(const void *src_ctx)
 {
     return (void *)rt_view_pick_result_filter_first_bsg(
 	    (const struct rt_view_pick_result_bsg *)src_ctx);
+}
+
+void *
+rt_view_pick_result_context_filter_first(const void *src_ctx)
+{
+    return rt_view_pick_result_context_filter_first_bsg(src_ctx);
 }
 
 static struct bsg_selection *
@@ -2588,6 +3450,17 @@ rt_view_context_selection_set_pick_result_context_bsg(
 }
 
 int
+rt_view_context_selection_set_pick_result_context(
+	void *ctx,
+	const void *result_ctx,
+	rt_view_selection_path_callback_t callback,
+	void *data)
+{
+    return rt_view_context_selection_set_pick_result_context_bsg(ctx,
+	    result_ctx, (rt_view_selection_path_callback_bsg_t)callback, data);
+}
+
+int
 rt_view_selection_clear_bsg(struct bsg_view *v)
 {
     struct bsg_selection *selection = rt_view_selection_get_bsg(v);
@@ -2604,10 +3477,34 @@ rt_view_context_selection_clear_bsg(void *ctx)
     return rt_view_selection_clear_bsg((struct bsg_view *)ctx);
 }
 
+int
+rt_view_context_selection_clear(void *ctx)
+{
+    return rt_view_context_selection_clear_bsg(ctx);
+}
+
 struct bu_ptbl *
 rt_view_set_views_bsg(struct bsg_view_set *s)
 {
     return bsg_set_views(s);
+}
+
+struct bu_ptbl *
+rt_view_set_context_views(void *view_set_ctx)
+{
+    return rt_view_set_views_bsg((struct bsg_view_set *)view_set_ctx);
+}
+
+void *
+rt_view_set_recycle_pool_bsg(struct bsg_view_set *s)
+{
+    return bsg_set_fsos(s);
+}
+
+void *
+rt_view_set_context_recycle_pool(void *view_set_ctx)
+{
+    return rt_view_set_recycle_pool_bsg((struct bsg_view_set *)view_set_ctx);
 }
 
 struct bsg_view *
@@ -2617,6 +3514,13 @@ rt_view_set_find_view_bsg(struct bsg_view_set *s, const char *name)
 	return NULL;
 
     return bsg_set_find_view(s, name);
+}
+
+void *
+rt_view_set_context_find_view(void *view_set_ctx, const char *name)
+{
+    return (void *)rt_view_set_find_view_bsg(
+	    (struct bsg_view_set *)view_set_ctx, name);
 }
 
 void
@@ -2629,12 +3533,24 @@ rt_view_set_init_bsg(struct bsg_view_set *s)
 }
 
 void
+rt_view_set_context_init(void *view_set_ctx)
+{
+    rt_view_set_init_bsg((struct bsg_view_set *)view_set_ctx);
+}
+
+void
 rt_view_set_free_bsg(struct bsg_view_set *s)
 {
     if (!s)
 	return;
 
     bsg_set_free(s);
+}
+
+void
+rt_view_set_context_free(void *view_set_ctx)
+{
+    rt_view_set_free_bsg((struct bsg_view_set *)view_set_ctx);
 }
 
 int
@@ -2670,6 +3586,12 @@ rt_view_context_view_set_attach_bsg(void *ctx, void *view_set_ctx)
     return 1;
 }
 
+int
+rt_view_context_view_set_attach(void *ctx, void *view_set_ctx)
+{
+    return rt_view_context_view_set_attach_bsg(ctx, view_set_ctx);
+}
+
 void
 rt_view_init_bsg(struct bsg_view *v, struct bsg_view_set *s)
 {
@@ -2679,6 +3601,7 @@ rt_view_init_bsg(struct bsg_view *v, struct bsg_view_set *s)
 void
 rt_view_free_bsg(struct bsg_view *v)
 {
+    rt_view_update_callback_bridge_clear_bsg(v);
     bsg_free(v);
 }
 
@@ -2708,6 +3631,12 @@ int
 rt_view_context_knobs_reset_bsg(void *ctx, int category)
 {
     return rt_view_knobs_reset_bsg((struct bsg_view *)ctx, category);
+}
+
+int
+rt_view_context_knobs_reset(void *ctx, int category)
+{
+    return rt_view_context_knobs_reset_bsg(ctx, category);
 }
 
 static void
@@ -2820,6 +3749,13 @@ rt_view_context_knobs_state_from_bsg(struct rt_view_knobs *knobs,
 }
 
 int
+rt_view_context_knobs_state_get(struct rt_view_knobs *knobs,
+				const void *ctx)
+{
+    return rt_view_context_knobs_state_from_bsg(knobs, ctx);
+}
+
+int
 rt_view_context_knobs_state_set_bsg(void *ctx,
 				    const struct rt_view_knobs *knobs)
 {
@@ -2830,6 +3766,13 @@ rt_view_context_knobs_state_set_bsg(void *ctx,
 
     rt_view_knobs_to_bsg(&v->k, knobs);
     return 1;
+}
+
+int
+rt_view_context_knobs_state_set(void *ctx,
+				const struct rt_view_knobs *knobs)
+{
+    return rt_view_context_knobs_state_set_bsg(ctx, knobs);
 }
 
 int
@@ -2854,6 +3797,13 @@ rt_view_context_knobs_hash_bsg(void *ctx,
 			       struct bu_data_hash_state *state)
 {
     return rt_view_knobs_hash_bsg((struct bsg_view *)ctx, state);
+}
+
+unsigned long long
+rt_view_context_knobs_hash(void *ctx,
+			   struct bu_data_hash_state *state)
+{
+    return rt_view_context_knobs_hash_bsg(ctx, state);
 }
 
 int
@@ -2889,6 +3839,22 @@ rt_view_context_knobs_cmd_process_bsg(vect_t *rvec,
 }
 
 int
+rt_view_context_knobs_cmd_process(vect_t *rvec,
+				  int *do_rot,
+				  vect_t *tvec,
+				  int *do_tran,
+				  void *ctx,
+				  const char *cmd,
+				  fastf_t factor,
+				  char origin,
+				  int model_flag,
+				  int incr_flag)
+{
+    return rt_view_context_knobs_cmd_process_bsg(rvec, do_rot, tvec, do_tran,
+	    ctx, cmd, factor, origin, model_flag, incr_flag);
+}
+
+int
 rt_view_knobs_translate_bsg(struct bsg_view *v,
 			    const vect_t tvec,
 			    int model_flag)
@@ -2907,6 +3873,14 @@ rt_view_context_knobs_translate_bsg(void *ctx,
 {
     return rt_view_knobs_translate_bsg((struct bsg_view *)ctx, tvec,
 	    model_flag);
+}
+
+int
+rt_view_context_knobs_translate(void *ctx,
+				const vect_t tvec,
+				int model_flag)
+{
+    return rt_view_context_knobs_translate_bsg(ctx, tvec, model_flag);
 }
 
 int
@@ -2937,6 +3911,18 @@ rt_view_context_knobs_rotate_bsg(void *ctx,
 }
 
 int
+rt_view_context_knobs_rotate(void *ctx,
+			     const vect_t rvec,
+			     char origin,
+			     char coords,
+			     const matp_t obj_rot,
+			     const pointp_t pvt_pt)
+{
+    return rt_view_context_knobs_rotate_bsg(ctx, rvec, origin, coords,
+	    obj_rot, pvt_pt);
+}
+
+int
 rt_view_knobs_update_rate_flags_bsg(struct bsg_view *v)
 {
     if (!v)
@@ -2950,6 +3936,12 @@ int
 rt_view_context_knobs_update_rate_flags_bsg(void *ctx)
 {
     return rt_view_knobs_update_rate_flags_bsg((struct bsg_view *)ctx);
+}
+
+int
+rt_view_context_knobs_update_rate_flags(void *ctx)
+{
+    return rt_view_context_knobs_update_rate_flags_bsg(ctx);
 }
 
 int
@@ -2975,6 +3967,13 @@ rt_view_context_knob_values_from_bsg(struct rt_view_knob_values *values,
 }
 
 int
+rt_view_context_knob_values_get(struct rt_view_knob_values *values,
+				const void *ctx)
+{
+    return rt_view_context_knob_values_from_bsg(values, ctx);
+}
+
+int
 rt_view_context_knobs_calibrate_bsg(void *ctx)
 {
     struct bsg_view *v = (struct bsg_view *)ctx;
@@ -2990,9 +3989,40 @@ rt_view_context_knobs_calibrate_bsg(void *ctx)
 }
 
 int
+rt_view_context_knobs_calibrate(void *ctx)
+{
+    return rt_view_context_knobs_calibrate_bsg(ctx);
+}
+
+int
 rt_view_is_independent_bsg(const struct bsg_view *v)
 {
     return bsg_view_is_independent(v);
+}
+
+rt_view_scene_ref
+rt_view_scene_ref_null(void)
+{
+    return rt_view_neutral_scene_ref_from_bsg(bsg_scene_ref_null());
+}
+
+int
+rt_view_scene_ref_is_null(rt_view_scene_ref ref)
+{
+    return bsg_scene_ref_is_null(rt_view_neutral_scene_ref_to_bsg(ref));
+}
+
+int
+rt_view_scene_ref_equal(rt_view_scene_ref a, rt_view_scene_ref b)
+{
+    return bsg_scene_ref_equal(rt_view_neutral_scene_ref_to_bsg(a),
+	    rt_view_neutral_scene_ref_to_bsg(b));
+}
+
+void *
+rt_view_scene_ref_context(rt_view_scene_ref ref)
+{
+    return rt_view_scene_ref_is_null(ref) ? NULL : ref.opaque;
 }
 
 rt_view_scene_ref_bsg
@@ -3019,6 +4049,30 @@ rt_view_independent_scope_ref_bsg(struct bsg_view *v, int create)
 {
     return rt_view_scene_ref_from_bsg(bsg_view_independent_scope_ref(v, create));
 }
+
+rt_view_scene_ref
+rt_view_context_independent_scope_ref(void *ctx, int create)
+{
+    return rt_view_neutral_scene_ref_from_bsg(
+	    bsg_view_independent_scope_ref((struct bsg_view *)ctx, create));
+}
+
+
+rt_view_scene_ref
+rt_view_context_scene_root_ref(const void *ctx)
+{
+    return rt_view_neutral_scene_ref_from_bsg(
+	    bsg_view_scene_ref((const struct bsg_view *)ctx));
+}
+
+
+int
+rt_view_context_scene_root_ref_attach(void *ctx, rt_view_scene_ref root_ref)
+{
+    return bsg_view_scene_ref_attach((struct bsg_view *)ctx,
+	    rt_view_neutral_scene_ref_to_bsg(root_ref));
+}
+
 
 int
 rt_view_independent_scope_is_null_bsg(struct bsg_view *v, int create)
@@ -3049,6 +4103,12 @@ rt_view_context_scene_attached_bsg(const void *ctx)
 }
 
 int
+rt_view_context_scene_attached(const void *ctx)
+{
+    return rt_view_context_scene_attached_bsg(ctx);
+}
+
+int
 rt_view_scene_anchor_ensure_bsg(struct bsg_view *v)
 {
     bsg_separator_ref root;
@@ -3067,6 +4127,12 @@ rt_view_context_scene_anchor_ensure_bsg(void *ctx)
 }
 
 int
+rt_view_context_scene_anchor_ensure(void *ctx)
+{
+    return rt_view_context_scene_anchor_ensure_bsg(ctx);
+}
+
+int
 rt_view_scene_shared_bsg(const struct bsg_view *a, const struct bsg_view *b)
 {
     if (!a || !b)
@@ -3080,6 +4146,12 @@ rt_view_context_scene_shared_bsg(const void *a_ctx, const void *b_ctx)
 {
     return rt_view_scene_shared_bsg((const struct bsg_view *)a_ctx,
 	    (const struct bsg_view *)b_ctx);
+}
+
+int
+rt_view_context_scene_shared(const void *a_ctx, const void *b_ctx)
+{
+    return rt_view_context_scene_shared_bsg(a_ctx, b_ctx);
 }
 
 int
@@ -3346,6 +4418,27 @@ rt_view_context_clear_bsg(void *ctx, int flags)
     return rt_view_clear_bsg((struct bsg_view *)ctx, flags);
 }
 
+static int
+rt_view_clear_flags_to_bsg(int flags)
+{
+    int bsg_flags = 0;
+
+    if (flags & RT_VIEW_CLEAR_DB)
+	bsg_flags |= RT_VIEW_CLEAR_DB_BSG;
+    if (flags & RT_VIEW_CLEAR_VIEW)
+	bsg_flags |= RT_VIEW_CLEAR_VIEW_BSG;
+    if (flags & RT_VIEW_CLEAR_LOCAL)
+	bsg_flags |= RT_VIEW_CLEAR_LOCAL_BSG;
+
+    return bsg_flags;
+}
+
+size_t
+rt_view_context_clear(void *ctx, int flags)
+{
+    return rt_view_context_clear_bsg(ctx, rt_view_clear_flags_to_bsg(flags));
+}
+
 fastf_t
 rt_view_perspective_from_bsg(const struct bsg_view *v)
 {
@@ -3356,6 +4449,12 @@ fastf_t
 rt_view_context_perspective_from_bsg(const void *ctx)
 {
     return rt_view_perspective_from_bsg((const struct bsg_view *)ctx);
+}
+
+fastf_t
+rt_view_context_perspective_get(const void *ctx)
+{
+    return rt_view_context_perspective_from_bsg(ctx);
 }
 
 int
@@ -3372,6 +4471,12 @@ int
 rt_view_context_perspective_set_bsg(void *ctx, fastf_t perspective)
 {
     return rt_view_perspective_set_bsg((struct bsg_view *)ctx, perspective);
+}
+
+int
+rt_view_context_perspective_set(void *ctx, fastf_t perspective)
+{
+    return rt_view_context_perspective_set_bsg(ctx, perspective);
 }
 
 int
@@ -3396,6 +4501,12 @@ rt_view_context_model2view_from_bsg(mat_t model2view, const void *ctx)
 }
 
 int
+rt_view_context_model2view_get(mat_t model2view, const void *ctx)
+{
+    return rt_view_context_model2view_from_bsg(model2view, ctx);
+}
+
+int
 rt_view_model2view_set_bsg(struct bsg_view *v, const mat_t model2view)
 {
     if (!v || !model2view)
@@ -3409,6 +4520,12 @@ int
 rt_view_context_model2view_set_bsg(void *ctx, const mat_t model2view)
 {
     return rt_view_model2view_set_bsg((struct bsg_view *)ctx, model2view);
+}
+
+int
+rt_view_context_model2view_set(void *ctx, const mat_t model2view)
+{
+    return rt_view_context_model2view_set_bsg(ctx, model2view);
 }
 
 int
@@ -3434,6 +4551,12 @@ rt_view_context_view2model_from_bsg(mat_t view2model, const void *ctx)
 }
 
 int
+rt_view_context_view2model_get(mat_t view2model, const void *ctx)
+{
+    return rt_view_context_view2model_from_bsg(view2model, ctx);
+}
+
+int
 rt_view_view2model_set_bsg(struct bsg_view *v, const mat_t view2model)
 {
     if (!v || !view2model)
@@ -3447,6 +4570,12 @@ int
 rt_view_context_view2model_set_bsg(void *ctx, const mat_t view2model)
 {
     return rt_view_view2model_set_bsg((struct bsg_view *)ctx, view2model);
+}
+
+int
+rt_view_context_view2model_set(void *ctx, const mat_t view2model)
+{
+    return rt_view_context_view2model_set_bsg(ctx, view2model);
 }
 
 int
@@ -3472,6 +4601,12 @@ rt_view_context_pmodel2view_from_bsg(mat_t pmodel2view, const void *ctx)
 }
 
 int
+rt_view_context_pmodel2view_get(mat_t pmodel2view, const void *ctx)
+{
+    return rt_view_context_pmodel2view_from_bsg(pmodel2view, ctx);
+}
+
+int
 rt_view_pmodel2view_set_bsg(struct bsg_view *v, const mat_t pmodel2view)
 {
     if (!v || !pmodel2view)
@@ -3485,6 +4620,12 @@ int
 rt_view_context_pmodel2view_set_bsg(void *ctx, const mat_t pmodel2view)
 {
     return rt_view_pmodel2view_set_bsg((struct bsg_view *)ctx, pmodel2view);
+}
+
+int
+rt_view_context_pmodel2view_set(void *ctx, const mat_t pmodel2view)
+{
+    return rt_view_context_pmodel2view_set_bsg(ctx, pmodel2view);
 }
 
 int
@@ -3509,6 +4650,12 @@ rt_view_context_pmat_from_bsg(mat_t pmat, const void *ctx)
 }
 
 int
+rt_view_context_pmat_get(mat_t pmat, const void *ctx)
+{
+    return rt_view_context_pmat_from_bsg(pmat, ctx);
+}
+
+int
 rt_view_pmat_set_bsg(struct bsg_view *v, const mat_t pmat)
 {
     if (!v || !pmat)
@@ -3522,6 +4669,12 @@ int
 rt_view_context_pmat_set_bsg(void *ctx, const mat_t pmat)
 {
     return rt_view_pmat_set_bsg((struct bsg_view *)ctx, pmat);
+}
+
+int
+rt_view_context_pmat_set(void *ctx, const mat_t pmat)
+{
+    return rt_view_context_pmat_set_bsg(ctx, pmat);
 }
 
 int
@@ -3546,6 +4699,12 @@ rt_view_context_rotation_from_bsg(mat_t rotation, const void *ctx)
 }
 
 int
+rt_view_context_rotation_get(mat_t rotation, const void *ctx)
+{
+    return rt_view_context_rotation_from_bsg(rotation, ctx);
+}
+
+int
 rt_view_rotation_set_bsg(struct bsg_view *v, const mat_t rotation)
 {
     if (!v || !rotation)
@@ -3559,6 +4718,12 @@ int
 rt_view_context_rotation_set_bsg(void *ctx, const mat_t rotation)
 {
     return rt_view_rotation_set_bsg((struct bsg_view *)ctx, rotation);
+}
+
+int
+rt_view_context_rotation_set(void *ctx, const mat_t rotation)
+{
+    return rt_view_context_rotation_set_bsg(ctx, rotation);
 }
 
 int
@@ -3583,6 +4748,12 @@ rt_view_context_center_from_bsg(mat_t center, const void *ctx)
 }
 
 int
+rt_view_context_center_get(mat_t center, const void *ctx)
+{
+    return rt_view_context_center_from_bsg(center, ctx);
+}
+
+int
 rt_view_center_vec_set_bsg(struct bsg_view *v, const point_t center)
 {
     if (!v || !center)
@@ -3596,6 +4767,12 @@ int
 rt_view_context_center_vec_set_bsg(void *ctx, const point_t center)
 {
     return rt_view_center_vec_set_bsg((struct bsg_view *)ctx, center);
+}
+
+int
+rt_view_context_center_set(void *ctx, const point_t center)
+{
+    return rt_view_context_center_vec_set_bsg(ctx, center);
 }
 
 int
@@ -3619,6 +4796,12 @@ int
 rt_view_context_plane_from_bsg(plane_t *plane, const void *ctx)
 {
     return rt_view_plane_from_bsg(plane, (const struct bsg_view *)ctx);
+}
+
+int
+rt_view_context_plane_get(plane_t *plane, const void *ctx)
+{
+    return rt_view_context_plane_from_bsg(plane, ctx);
 }
 
 int
@@ -3662,6 +4845,13 @@ rt_view_context_lod_policy_from_bsg(struct rt_view_lod_policy *policy,
 }
 
 int
+rt_view_context_lod_policy_get(struct rt_view_lod_policy *policy,
+			       const void *ctx)
+{
+    return rt_view_context_lod_policy_from_bsg(policy, ctx);
+}
+
+int
 rt_view_lod_policy_apply_bsg(struct bsg_view *v,
 			     const struct rt_view_lod_policy *policy)
 {
@@ -3694,6 +4884,13 @@ rt_view_context_lod_policy_apply_bsg(void *ctx,
 }
 
 int
+rt_view_context_lod_policy_apply(void *ctx,
+				 const struct rt_view_lod_policy *policy)
+{
+    return rt_view_context_lod_policy_apply_bsg(ctx, policy);
+}
+
+int
 rt_view_lod_policy_copy_bsg(struct bsg_view *dst, const struct bsg_view *src)
 {
     struct rt_view_lod_policy policy = RT_VIEW_LOD_POLICY_INIT;
@@ -3707,6 +4904,12 @@ rt_view_context_lod_policy_copy_bsg(void *dst_ctx, const void *src_ctx)
 {
     return rt_view_lod_policy_copy_bsg((struct bsg_view *)dst_ctx,
 	    (const struct bsg_view *)src_ctx);
+}
+
+int
+rt_view_context_lod_policy_copy(void *dst_ctx, const void *src_ctx)
+{
+    return rt_view_context_lod_policy_copy_bsg(dst_ctx, src_ctx);
 }
 
 void
@@ -3726,11 +4929,33 @@ rt_view_context_lod_bounds_update_bsg(void *ctx)
     return 1;
 }
 
+int
+rt_view_context_lod_bounds_update(void *ctx)
+{
+    return rt_view_context_lod_bounds_update_bsg(ctx);
+}
+
 void
 rt_view_lod_bounds_callback_set_bsg(struct bsg_view *v)
 {
     if (v)
 	v->gv_bounds_update = &bsg_view_bounds;
+}
+
+int
+rt_view_context_lod_bounds_callback_set_bsg(void *ctx)
+{
+    if (!ctx)
+	return 0;
+
+    rt_view_lod_bounds_callback_set_bsg((struct bsg_view *)ctx);
+    return 1;
+}
+
+int
+rt_view_context_lod_bounds_callback_set(void *ctx)
+{
+    return rt_view_context_lod_bounds_callback_set_bsg(ctx);
 }
 
 int
@@ -3791,6 +5016,46 @@ rt_view_context_bounds_update_callback_call_bsg(void *ctx)
     return rt_view_bounds_update_callback_call_bsg((struct bsg_view *)ctx);
 }
 
+struct rt_view_bounds_update_state {
+    rt_view_bounds_update_callback_bsg_t callback;
+};
+
+void *
+rt_view_context_bounds_update_suspend(void *ctx)
+{
+    rt_view_bounds_update_callback_bsg_t callback =
+	rt_view_context_bounds_update_callback_from_bsg(ctx);
+    if (!callback)
+	return NULL;
+
+    struct rt_view_bounds_update_state *state;
+    BU_GET(state, struct rt_view_bounds_update_state);
+    state->callback = callback;
+    rt_view_context_bounds_update_callback_set_bsg(ctx, NULL);
+    return (void *)state;
+}
+
+int
+rt_view_context_bounds_update_restore(void *ctx, void *state_ctx,
+				      int refresh_bounds)
+{
+    struct rt_view_bounds_update_state *state =
+	(struct rt_view_bounds_update_state *)state_ctx;
+    if (!state)
+	return 0;
+
+    int restored = 0;
+    if (ctx) {
+	restored = rt_view_context_bounds_update_callback_set_bsg(ctx,
+		state->callback);
+	if (restored && refresh_bounds)
+	    rt_view_context_bounds_update_callback_call_bsg(ctx);
+    }
+
+    BU_PUT(state, struct rt_view_bounds_update_state);
+    return restored;
+}
+
 fastf_t
 rt_view_scale_from_bsg(const struct bsg_view *v)
 {
@@ -3811,6 +5076,12 @@ int
 rt_view_context_scale_set_bsg(void *ctx, fastf_t scale)
 {
     return rt_view_scale_set_bsg((struct bsg_view *)ctx, scale);
+}
+
+int
+rt_view_context_scale_set(void *ctx, fastf_t scale)
+{
+    return rt_view_context_scale_set_bsg(ctx, scale);
 }
 
 fastf_t *
@@ -3917,6 +5188,12 @@ rt_view_context_size_set_bsg(void *ctx, fastf_t size)
     return rt_view_size_set_bsg((struct bsg_view *)ctx, size);
 }
 
+int
+rt_view_context_size_set(void *ctx, fastf_t size)
+{
+    return rt_view_context_size_set_bsg(ctx, size);
+}
+
 fastf_t
 rt_view_inverse_size_from_bsg(const struct bsg_view *v)
 {
@@ -3927,6 +5204,12 @@ fastf_t
 rt_view_context_inverse_size_from_bsg(const void *ctx)
 {
     return rt_view_inverse_size_from_bsg((const struct bsg_view *)ctx);
+}
+
+fastf_t
+rt_view_context_inverse_size_get(const void *ctx)
+{
+    return rt_view_context_inverse_size_from_bsg(ctx);
 }
 
 int
@@ -3951,6 +5234,12 @@ rt_view_context_eye_pos_from_bsg(point_t eye_pos, const void *ctx)
 }
 
 int
+rt_view_context_eye_pos_get(point_t eye_pos, const void *ctx)
+{
+    return rt_view_context_eye_pos_from_bsg(eye_pos, ctx);
+}
+
+int
 rt_view_eye_pos_set_bsg(struct bsg_view *v, const point_t eye_pos)
 {
     if (!v || !eye_pos)
@@ -3964,6 +5253,12 @@ int
 rt_view_context_eye_pos_set_bsg(void *ctx, const point_t eye_pos)
 {
     return rt_view_eye_pos_set_bsg((struct bsg_view *)ctx, eye_pos);
+}
+
+int
+rt_view_context_eye_pos_set(void *ctx, const point_t eye_pos)
+{
+    return rt_view_context_eye_pos_set_bsg(ctx, eye_pos);
 }
 
 int
@@ -3988,6 +5283,12 @@ rt_view_context_keypoint_from_bsg(point_t keypoint, const void *ctx)
 }
 
 int
+rt_view_context_keypoint_get(point_t keypoint, const void *ctx)
+{
+    return rt_view_context_keypoint_from_bsg(keypoint, ctx);
+}
+
+int
 rt_view_keypoint_set_bsg(struct bsg_view *v, const point_t keypoint)
 {
     if (!v || !keypoint)
@@ -4003,6 +5304,12 @@ rt_view_context_keypoint_set_bsg(void *ctx, const point_t keypoint)
     return rt_view_keypoint_set_bsg((struct bsg_view *)ctx, keypoint);
 }
 
+int
+rt_view_context_keypoint_set(void *ctx, const point_t keypoint)
+{
+    return rt_view_context_keypoint_set_bsg(ctx, keypoint);
+}
+
 char
 rt_view_rotate_about_from_bsg(const struct bsg_view *v)
 {
@@ -4013,6 +5320,12 @@ char
 rt_view_context_rotate_about_from_bsg(const void *ctx)
 {
     return rt_view_rotate_about_from_bsg((const struct bsg_view *)ctx);
+}
+
+char
+rt_view_context_rotate_about_get(const void *ctx)
+{
+    return rt_view_context_rotate_about_from_bsg(ctx);
 }
 
 int
@@ -4031,6 +5344,12 @@ rt_view_context_rotate_about_set_bsg(void *ctx, char rotate_about)
     return rt_view_rotate_about_set_bsg((struct bsg_view *)ctx, rotate_about);
 }
 
+int
+rt_view_context_rotate_about_set(void *ctx, char rotate_about)
+{
+    return rt_view_context_rotate_about_set_bsg(ctx, rotate_about);
+}
+
 char
 rt_view_coord_from_bsg(const struct bsg_view *v)
 {
@@ -4041,6 +5360,12 @@ char
 rt_view_context_coord_from_bsg(const void *ctx)
 {
     return rt_view_coord_from_bsg((const struct bsg_view *)ctx);
+}
+
+char
+rt_view_context_coord_get(const void *ctx)
+{
+    return rt_view_context_coord_from_bsg(ctx);
 }
 
 int
@@ -4060,6 +5385,12 @@ rt_view_context_coord_set_bsg(void *ctx, char coord)
 }
 
 int
+rt_view_context_coord_set(void *ctx, char coord)
+{
+    return rt_view_context_coord_set_bsg(ctx, coord);
+}
+
+int
 rt_view_snap_lines_from_bsg(const struct bsg_view *v)
 {
     return bsg_view_snap_lines(v);
@@ -4069,6 +5400,12 @@ int
 rt_view_context_snap_lines_from_bsg(const void *ctx)
 {
     return rt_view_snap_lines_from_bsg((const struct bsg_view *)ctx);
+}
+
+int
+rt_view_context_snap_lines_get(const void *ctx)
+{
+    return rt_view_context_snap_lines_from_bsg(ctx);
 }
 
 int
@@ -4085,6 +5422,12 @@ int
 rt_view_context_snap_lines_set_bsg(void *ctx, int enabled)
 {
     return rt_view_snap_lines_set_bsg((struct bsg_view *)ctx, enabled);
+}
+
+int
+rt_view_context_snap_lines_set(void *ctx, int enabled)
+{
+    return rt_view_context_snap_lines_set_bsg(ctx, enabled);
 }
 
 static bsg_feature_ref
@@ -4524,6 +5867,99 @@ rt_view_feature_clear_geometry_bsg(rt_view_feature_ref ref)
 	    BSG_FEATURE_UNKNOWN, NULL, NULL, 0);
 }
 
+int
+rt_view_feature_ref_is_null(rt_view_feature_ref ref)
+{
+    return rt_view_feature_ref_is_null_bsg(ref);
+}
+
+int
+rt_view_context_edit_preview_publish_event(
+	void *ctx,
+	rt_view_feature_ref feature,
+	enum rt_view_edit_preview_event event,
+	const char *source_path)
+{
+    return rt_view_context_edit_preview_publish_event_bsg(ctx, feature, event,
+	    source_path);
+}
+
+rt_view_feature_ref
+rt_view_context_feature_overlay_ensure(
+	void *ctx,
+	const char *name,
+	const void *owner,
+	void *preview_ctx,
+	const struct rt_view_edit_preview_callbacks *callbacks,
+	const char *source_path)
+{
+    return rt_view_context_feature_overlay_ensure_bsg(ctx, name, owner,
+	    preview_ctx, callbacks, source_path);
+}
+
+rt_view_feature_ref
+rt_view_context_feature_label_ensure(void *ctx,
+				     const char *name,
+				     const void *owner)
+{
+    return rt_view_context_feature_label_ensure_bsg(ctx, name, owner);
+}
+
+int
+rt_view_context_feature_remove(void *ctx, const char *name)
+{
+    return rt_view_context_feature_remove_bsg(ctx, name);
+}
+
+void
+rt_view_feature_set_context(rt_view_feature_ref ref, void *ctx)
+{
+    rt_view_feature_set_context_bsg(ref, ctx);
+}
+
+void
+rt_view_feature_set_visible(rt_view_feature_ref ref, int visible)
+{
+    rt_view_feature_set_visible_bsg(ref, visible);
+}
+
+void
+rt_view_feature_set_color(rt_view_feature_ref ref, int r, int g, int b)
+{
+    rt_view_feature_set_color_bsg(ref, r, g, b);
+}
+
+int
+rt_view_feature_touch(rt_view_feature_ref ref)
+{
+    return rt_view_feature_touch_bsg(ref);
+}
+
+int
+rt_view_feature_labels_replace(rt_view_feature_ref ref,
+			       const struct rt_view_feature_label *labels,
+			       size_t label_count)
+{
+    return rt_view_feature_labels_replace_bsg(ref, labels, label_count);
+}
+
+int
+rt_view_feature_points_replace(rt_view_feature_ref ref,
+			       enum rt_view_feature_family family,
+			       const point_t *points,
+			       const int *cmds,
+			       size_t point_count)
+{
+    return rt_view_feature_points_replace_bsg(ref, family, points, cmds,
+	    point_count);
+}
+
+int
+rt_view_feature_clear_geometry(rt_view_feature_ref ref)
+{
+    return rt_view_feature_clear_geometry_bsg(ref);
+}
+
 static bsg_feature_ref
 rt_view_polygon_ref_to_bsg(rt_view_polygon_ref ref)
 {
@@ -4881,6 +6317,183 @@ rt_view_context_polygon_snap_exclude_set_bsg(void *ctx, rt_view_polygon_ref ref)
 }
 
 int
+rt_view_polygon_ref_is_null(rt_view_polygon_ref ref)
+{
+    return rt_view_polygon_ref_is_null_bsg(ref);
+}
+
+int
+rt_view_polygon_record_get(rt_view_polygon_ref ref,
+			   struct rt_view_polygon_record *record)
+{
+    return rt_view_polygon_record_get_bsg(ref, record);
+}
+
+rt_view_polygon_ref
+rt_view_context_polygon_create(void *ctx, int type, point_t *fp)
+{
+    return rt_view_context_polygon_create_bsg(ctx, type, fp);
+}
+
+rt_view_polygon_ref
+rt_view_context_polygon_select(void *ctx, point_t *cp)
+{
+    return rt_view_context_polygon_select_bsg(ctx, cp);
+}
+
+rt_view_polygon_ref
+rt_view_context_polygon_find(void *ctx, const char *name)
+{
+    return rt_view_context_polygon_find_bsg(ctx, name);
+}
+
+rt_view_polygon_ref
+rt_view_context_polygon_dup(void *ctx,
+			    const char *name,
+			    const char *new_name)
+{
+    return rt_view_context_polygon_dup_bsg(ctx, name, new_name);
+}
+
+void
+rt_view_context_polygon_visit_records(
+	void *ctx,
+	rt_view_polygon_record_callback_t callback,
+	void *data)
+{
+    rt_view_context_polygon_visit_records_bsg(ctx, callback, data);
+}
+
+size_t
+rt_view_context_polygon_snap_count(void *ctx, rt_view_polygon_ref exclude)
+{
+    return rt_view_context_polygon_snap_count_bsg(ctx, exclude);
+}
+
+int
+rt_view_context_polygon_clear_point_selection(void *ctx)
+{
+    return rt_view_context_polygon_clear_point_selection_bsg(ctx);
+}
+
+int
+rt_view_polygon_update_context(rt_view_polygon_ref ref, void *ctx, int utype)
+{
+    return rt_view_polygon_update_context_bsg(ref, ctx, utype);
+}
+
+int
+rt_view_polygon_update_screen_pt_context(rt_view_polygon_ref ref,
+					 void *ctx,
+					 int x,
+					 int y,
+					 int utype)
+{
+    return rt_view_polygon_update_screen_pt_context_bsg(ref, ctx, x, y, utype);
+}
+
+int
+rt_view_polygon_move(rt_view_polygon_ref ref,
+		     point_t *current_point,
+		     point_t *previous_point)
+{
+    return rt_view_polygon_move_bsg(ref, current_point, previous_point);
+}
+
+int
+rt_view_polygon_set_name(rt_view_polygon_ref ref, const char *name)
+{
+    return rt_view_polygon_set_name_bsg(ref, name);
+}
+
+int
+rt_view_polygon_set_context(rt_view_polygon_ref ref, void *ctx)
+{
+    return rt_view_polygon_set_context_bsg(ref, ctx);
+}
+
+int
+rt_view_polygon_set_visual(rt_view_polygon_ref ref,
+			   const struct bu_color *edge_color,
+			   const struct bu_color *fill_color,
+			   fastf_t fill_slope_x,
+			   fastf_t fill_slope_y,
+			   fastf_t fill_density,
+			   fastf_t vZ,
+			   int fill_flag)
+{
+    return rt_view_polygon_set_visual_bsg(ref, edge_color, fill_color,
+	    fill_slope_x, fill_slope_y, fill_density, vZ, fill_flag);
+}
+
+int
+rt_view_polygon_set_open(rt_view_polygon_ref ref, int open)
+{
+    return rt_view_polygon_set_open_bsg(ref, open);
+}
+
+int
+rt_view_polygon_close(rt_view_polygon_ref ref)
+{
+    return rt_view_polygon_close_bsg(ref);
+}
+
+int
+rt_view_polygon_clear_selected_point(rt_view_polygon_ref ref)
+{
+    return rt_view_polygon_clear_selected_point_bsg(ref);
+}
+
+int
+rt_view_polygon_remove(rt_view_polygon_ref ref)
+{
+    return rt_view_polygon_remove_bsg(ref);
+}
+
+void *
+rt_view_polygon_user_data(rt_view_polygon_ref ref)
+{
+    return rt_view_polygon_user_data_bsg(ref);
+}
+
+int
+rt_view_polygon_user_data_set(rt_view_polygon_ref ref, void *user_data)
+{
+    return rt_view_polygon_user_data_set_bsg(ref, user_data);
+}
+
+int
+rt_view_polygon_csg(rt_view_polygon_ref target,
+		    rt_view_polygon_ref stencil,
+		    bg_clip_t op)
+{
+    return rt_view_polygon_csg_bsg(target, stencil, op);
+}
+
+rt_view_polygon_ref
+rt_view_polygon_import_sketch_context(const char *name,
+				      struct db_i *dbip,
+				      struct directory *dp,
+				      void *ctx)
+{
+    return rt_view_polygon_import_sketch_context_bsg(name, dbip, dp, ctx);
+}
+
+struct directory *
+rt_view_polygon_export_sketch(struct db_i *dbip,
+			      const char *name,
+			      rt_view_polygon_ref ref)
+{
+    return rt_view_polygon_export_sketch_bsg(dbip, name, ref);
+}
+
+int
+rt_view_context_polygon_snap_exclude_set(void *ctx, rt_view_polygon_ref ref)
+{
+    return rt_view_context_polygon_snap_exclude_set_bsg(ctx, ref);
+}
+
+int
 rt_view_snap_source_flags_from_bsg(const struct bsg_view *v)
 {
     return bsg_view_snap_source_flags(v);
@@ -4890,6 +6503,12 @@ int
 rt_view_context_snap_source_flags_from_bsg(const void *ctx)
 {
     return rt_view_snap_source_flags_from_bsg((const struct bsg_view *)ctx);
+}
+
+int
+rt_view_context_snap_source_flags_get(const void *ctx)
+{
+    return rt_view_context_snap_source_flags_from_bsg(ctx);
 }
 
 int
@@ -4908,6 +6527,12 @@ rt_view_context_snap_source_flags_set_bsg(void *ctx, int flags)
     return rt_view_snap_source_flags_set_bsg((struct bsg_view *)ctx, flags);
 }
 
+int
+rt_view_context_snap_source_flags_set(void *ctx, int flags)
+{
+    return rt_view_context_snap_source_flags_set_bsg(ctx, flags);
+}
+
 unsigned long long
 rt_view_snap_kind_mask_from_bsg(const struct bsg_view *v)
 {
@@ -4918,6 +6543,12 @@ unsigned long long
 rt_view_context_snap_kind_mask_from_bsg(const void *ctx)
 {
     return rt_view_snap_kind_mask_from_bsg((const struct bsg_view *)ctx);
+}
+
+unsigned long long
+rt_view_context_snap_kind_mask_get(const void *ctx)
+{
+    return rt_view_context_snap_kind_mask_from_bsg(ctx);
 }
 
 int
@@ -4947,6 +6578,12 @@ rt_view_context_snap_exclude_feature_clear_bsg(void *ctx)
     return rt_view_snap_exclude_feature_clear_bsg((struct bsg_view *)ctx);
 }
 
+int
+rt_view_context_snap_exclude_feature_clear(void *ctx)
+{
+    return rt_view_context_snap_exclude_feature_clear_bsg(ctx);
+}
+
 unsigned long long
 rt_view_prepare_tcl_snap_bsg(struct bsg_view *v)
 {
@@ -4957,6 +6594,12 @@ unsigned long long
 rt_view_context_prepare_tcl_snap_bsg(void *ctx)
 {
     return rt_view_prepare_tcl_snap_bsg((struct bsg_view *)ctx);
+}
+
+unsigned long long
+rt_view_context_prepare_tcl_snap(void *ctx)
+{
+    return rt_view_context_prepare_tcl_snap_bsg(ctx);
 }
 
 int
@@ -4976,6 +6619,12 @@ rt_view_context_center_linesnap_bsg(void *ctx)
 }
 
 int
+rt_view_context_center_linesnap(void *ctx)
+{
+    return rt_view_context_center_linesnap_bsg(ctx);
+}
+
+int
 rt_view_zclip_from_bsg(const struct bsg_view *v)
 {
     return bsg_view_zclip(v);
@@ -4985,6 +6634,12 @@ int
 rt_view_context_zclip_from_bsg(const void *ctx)
 {
     return rt_view_zclip_from_bsg((const struct bsg_view *)ctx);
+}
+
+int
+rt_view_context_zclip_get(const void *ctx)
+{
+    return rt_view_context_zclip_from_bsg(ctx);
 }
 
 int
@@ -5004,6 +6659,12 @@ rt_view_context_zclip_set_bsg(void *ctx, int zclip)
 }
 
 int
+rt_view_context_zclip_set(void *ctx, int zclip)
+{
+    return rt_view_context_zclip_set_bsg(ctx, zclip);
+}
+
+int
 rt_view_framebuffer_mode_from_bsg(const struct bsg_view *v)
 {
     return bsg_view_framebuffer_mode(v);
@@ -5013,6 +6674,12 @@ int
 rt_view_context_framebuffer_mode_from_bsg(const void *ctx)
 {
     return rt_view_framebuffer_mode_from_bsg((const struct bsg_view *)ctx);
+}
+
+int
+rt_view_context_framebuffer_mode_get(const void *ctx)
+{
+    return rt_view_context_framebuffer_mode_from_bsg(ctx);
 }
 
 int
@@ -5032,6 +6699,12 @@ rt_view_context_framebuffer_mode_set_bsg(void *ctx, int mode)
 }
 
 int
+rt_view_context_framebuffer_mode_set(void *ctx, int mode)
+{
+    return rt_view_context_framebuffer_mode_set_bsg(ctx, mode);
+}
+
+int
 rt_view_cleared_from_bsg(const struct bsg_view *v)
 {
     return bsg_view_cleared(v);
@@ -5041,6 +6714,12 @@ int
 rt_view_context_cleared_from_bsg(const void *ctx)
 {
     return rt_view_cleared_from_bsg((const struct bsg_view *)ctx);
+}
+
+int
+rt_view_context_cleared_get(const void *ctx)
+{
+    return rt_view_context_cleared_from_bsg(ctx);
 }
 
 int
@@ -5060,6 +6739,12 @@ rt_view_context_cleared_set_bsg(void *ctx, int cleared)
 }
 
 int
+rt_view_context_cleared_set(void *ctx, int cleared)
+{
+    return rt_view_context_cleared_set_bsg(ctx, cleared);
+}
+
+int
 rt_view_settings_shared_bsg(const struct bsg_view *a, const struct bsg_view *b)
 {
     return bsg_view_settings_shared(a, b);
@@ -5070,6 +6755,12 @@ rt_view_context_settings_shared_bsg(const void *a, const void *b)
 {
     return rt_view_settings_shared_bsg((const struct bsg_view *)a,
 	    (const struct bsg_view *)b);
+}
+
+int
+rt_view_context_settings_shared(const void *a, const void *b)
+{
+    return rt_view_context_settings_shared_bsg(a, b);
 }
 
 double
@@ -5083,6 +6774,12 @@ rt_view_context_snap_tolerance_factor_from_bsg(const void *ctx)
 {
     return rt_view_snap_tolerance_factor_from_bsg(
 	    (const struct bsg_view *)ctx);
+}
+
+double
+rt_view_context_snap_tolerance_factor_get(const void *ctx)
+{
+    return rt_view_context_snap_tolerance_factor_from_bsg(ctx);
 }
 
 int
@@ -5103,6 +6800,12 @@ rt_view_context_snap_tolerance_factor_set_bsg(void *ctx, double factor)
 }
 
 int
+rt_view_context_snap_tolerance_factor_set(void *ctx, double factor)
+{
+    return rt_view_context_snap_tolerance_factor_set_bsg(ctx, factor);
+}
+
+int
 rt_mesh_lod_load_view_scene_ref_bsg(struct rt_mesh_lod *lod,
 				    rt_view_scene_ref_bsg visibility_ref,
 				    struct bsg_view *v,
@@ -5116,10 +6819,31 @@ rt_mesh_lod_load_view_scene_ref_bsg(struct rt_mesh_lod *lod,
 	    rt_view_scene_ref_to_bsg(visibility_ref), v, reset);
 }
 
+int
+rt_mesh_lod_load_view_scene_ref(struct rt_mesh_lod *lod,
+				rt_view_scene_ref visibility_ref,
+				void *view_ctx,
+				int reset)
+{
+    struct bsg_mesh_lod *bsg_lod = _rt_mesh_lod_bsg(lod);
+    if (!bsg_lod)
+	return -1;
+
+    return bsg_mesh_lod_load_view_scene_ref(bsg_lod,
+	    rt_view_neutral_scene_ref_to_bsg(visibility_ref),
+	    (struct bsg_view *)view_ctx, reset);
+}
+
 void
 rt_mesh_lod_free_scene_ref_bsg(rt_view_scene_ref_bsg ref)
 {
     bsg_mesh_lod_free_scene_ref(rt_view_scene_ref_to_bsg(ref));
+}
+
+void
+rt_mesh_lod_free_scene_ref(rt_view_scene_ref ref)
+{
+    bsg_mesh_lod_free_scene_ref(rt_view_neutral_scene_ref_to_bsg(ref));
 }
 
 /*

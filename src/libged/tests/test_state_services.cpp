@@ -46,7 +46,7 @@
 #include "bu/str.h"
 #include "bu/vls.h"
 #include "ged.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "ged/db_index.h"
 #include "ged/event_txn.h"
 #include "ged/selection_state.h"

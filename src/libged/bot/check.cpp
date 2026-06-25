@@ -37,7 +37,7 @@
 #include "bu/sort.h"
 #include "bg/chull.h"
 #include "bg/trimesh.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "rt/geom.h"
 #include "wdb.h"
 #include "../ged_private.h"

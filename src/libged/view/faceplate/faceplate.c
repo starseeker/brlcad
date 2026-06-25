@@ -34,7 +34,7 @@
 #include "bu/color.h"
 #include "bu/opt.h"
 #include "bu/vls.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "rt/view.h"
 
 #include "../../ged_private.h"

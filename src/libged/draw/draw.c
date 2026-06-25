@@ -35,7 +35,7 @@
 #include "raytrace.h"
 
 #include "bg/line_layer.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "nmg/display.h"
 #include "rt/view.h"
 #include "../bsg_ged_draw_private.h"
@@ -228,7 +228,7 @@ dl_add_primitive_face_set(int dashflag, const struct rt_db_internal *ip, const s
     if (!ged_draw_test_force_face_set_failure &&
 	    ip->idb_meth && ip->idb_meth->ft_indexed_face_set) {
 	struct rt_view_info view_info;
-	ged_draw_view_context_info_from_bsg(&view_info, dgcdp->view_ctx);
+	ged_draw_view_context_info_get(&view_info, dgcdp->view_ctx);
 	ok = ged_draw_shape_draft_publish_primitive_face_set(draft,
 		(struct rt_db_internal *)ip, tsp ? tsp->ts_ttol : NULL,
 		tsp ? tsp->ts_tol : NULL, &view_info);
@@ -1060,7 +1060,7 @@ _ged_drawtrees(struct ged *gedp, int argc, const char *argv[], int kind, struct 
 	dgcdp.view_ctx = view_ctx;
 
 	if (view_ctx)
-	    lod_policy_cached_valid = ged_draw_view_context_lod_policy_from_bsg(&lod_policy_cached, view_ctx);
+	    lod_policy_cached_valid = ged_draw_view_context_lod_policy_get(&lod_policy_cached, view_ctx);
 
 	if (lod_policy_cached_valid && lod_policy_cached.csg_enabled)
 	    dgcdp.autoview = 1;
@@ -1436,7 +1436,7 @@ _ged_drawtrees(struct ged *gedp, int argc, const char *argv[], int kind, struct 
 
 			/* Set the view threshold */
 			if (dgcdp.view_ctx && lod_policy_cached_valid)
-			    (void)ged_draw_view_context_lod_policy_apply_bsg_bot_threshold(
+			    (void)ged_draw_view_context_lod_policy_apply_bot_threshold(
 				    dgcdp.view_ctx, &lod_policy_cached, (size_t)bot_threshold);
 
 		/* calculate plot vlists for shapes of each draw path */
@@ -1452,7 +1452,7 @@ _ged_drawtrees(struct ged *gedp, int argc, const char *argv[], int kind, struct 
 			    if (ret < 0) {
 				/* restore view bot threshold */
 				if (dgcdp.view_ctx && lod_policy_cached_valid)
-				    (void)ged_draw_view_context_lod_policy_apply_bsg(
+				    (void)ged_draw_view_context_lod_policy_apply(
 					    dgcdp.view_ctx, &lod_policy_cached);
 
 			bu_vls_printf(gedp->ged_result_str, "%s: %s redraw failure\n", argv[0], argv[i]);
@@ -1464,7 +1464,7 @@ _ged_drawtrees(struct ged *gedp, int argc, const char *argv[], int kind, struct 
 
 			/* restore view bot threshold */
 			if (dgcdp.view_ctx && lod_policy_cached_valid)
-			    (void)ged_draw_view_context_lod_policy_apply_bsg(
+			    (void)ged_draw_view_context_lod_policy_apply(
 				    dgcdp.view_ctx, &lod_policy_cached);
 
 		bu_free(paths_to_draw, "draw paths");

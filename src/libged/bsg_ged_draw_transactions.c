@@ -51,7 +51,7 @@
 #include "bg/clip.h"
 
 #include "ged.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "rt/view.h"
 #include "ged/selection_state.h"
 #include "./ged_private.h"
@@ -162,6 +162,13 @@ struct ged_draw_observer_entry {
     void *client_data;
     int active;
 };
+
+
+static struct bsg_view *
+ged_draw_active_view(struct ged *gedp)
+{
+    return (struct bsg_view *)ged_view_active_ctx(gedp);
+}
 
 
 void
@@ -839,10 +846,10 @@ _ged_draw_wireframe_shape(bsg_scene_ref shape_ref, struct bsg_view *gvp,
 	return -1;
 
     ged_draw_view_lod_policy lod_policy;
-    ged_draw_view_lod_policy_from_bsg(&lod_policy, gvp);
+    rt_view_context_lod_policy_get(&lod_policy, gvp);
     if (gvp && lod_policy.csg_enabled) {
 	struct rt_view_info view_info;
-	ged_draw_view_info_from_bsg(&view_info, gvp);
+	rt_view_context_info_get(&view_info, gvp);
 	ret = ged_draw_scene_ref_publish_primitive_wireframe(shape_ref, ip,
 		ttol, tol, gvp, &view_info, 1);
     }
@@ -943,7 +950,7 @@ _ged_draw_redraw_group_scene_ref(struct ged *gedp, bsg_scene_ref group_ref,
     struct ged_draw_redraw_ctx ctx;
     ctx.dbip = gedp->dbip;
     ctx.tsp = &wdbp->wdb_initial_tree_state;
-    ctx.gvp = view ? view : gedp->ged_gvp;
+    ctx.gvp = view ? view : ged_draw_active_view(gedp);
     ctx.skip_subtractions = skip_subtractions;
     ctx.ret = 0;
 
@@ -973,15 +980,19 @@ ged_draw_revalidate_db_event(struct ged *gedp, const struct bsg_db_event *ev)
     if (!bsg_scene_ref_is_null(root_ref))
 	bsg_scene_draw_intent_revalidate(root_ref, ev);
 
-    struct bu_ptbl *views = ged_draw_view_set_views_bsg(&gedp->ged_views);
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     if (views) {
+	rt_view_scene_ref root_rt_ref = ged_draw_scene_ref_to_rt_view_ref(root_ref);
 	for (size_t vi = 0; vi < BU_PTBL_LEN(views); vi++) {
-	    struct bsg_view *v = (struct bsg_view *)BU_PTBL_GET(views, vi);
-	    bsg_scene_ref view_root = v ? ged_draw_view_scene_root_ref(v) :
-		bsg_scene_ref_null();
-	    if (!bsg_scene_ref_is_null(view_root) &&
-		    !bsg_scene_ref_equal(view_root, root_ref))
+	    void *view_ctx = (void *)BU_PTBL_GET(views, vi);
+	    rt_view_scene_ref view_root_rt =
+		ged_draw_view_context_scene_root_rt_ref(view_ctx);
+	    if (!rt_view_scene_ref_is_null(view_root_rt) &&
+		    !rt_view_scene_ref_equal(view_root_rt, root_rt_ref)) {
+		bsg_scene_ref view_root =
+		    ged_draw_scene_ref_from_rt_view_ref(view_root_rt);
 		bsg_scene_draw_intent_revalidate(view_root, ev);
+	    }
 	}
     }
 }
@@ -997,7 +1008,8 @@ _ged_draw_redraw_all_cb(const struct ged_draw_group_record *rec, void *ud)
     if (ctx->view && !ged_draw_group_record_in_view(rec, ctx->view))
 	return 1;
     struct bsg_view *rv = ctx->view ? ctx->view :
-	((rec->in_view_scope && rec->view) ? rec->view : ctx->gedp->ged_gvp);
+	((rec->in_view_scope && rec->view) ? rec->view :
+	 ged_draw_active_view(ctx->gedp));
     int ret = _ged_draw_redraw_group_scene_ref(ctx->gedp,
 	    ged_draw_registry_group_scene_ref(ctx->gedp, rec->ref), 0, rv);
     if (ret < 0) {
@@ -1033,7 +1045,8 @@ _ged_draw_redraw_path_cb(const struct ged_draw_group_record *rec, void *ud)
 	ctx->found = 1;
 	db_free_full_path(&draw_path);
 	struct bsg_view *rv = ctx->view ? ctx->view :
-	    ((rec->in_view_scope && rec->view) ? rec->view : ctx->gedp->ged_gvp);
+	    ((rec->in_view_scope && rec->view) ? rec->view :
+	     ged_draw_active_view(ctx->gedp));
 	ctx->ret = _ged_draw_redraw_group_scene_ref(ctx->gedp, group_ref, 0, rv);
 	return 0;
     }
@@ -1105,7 +1118,8 @@ _ged_draw_redraw_source_add_shape(struct ged_draw_redraw_source_ctx *ctx,
 		"redraw source shape entry");
     entry->ref = ref;
     entry->view = ctx->view ? ctx->view :
-	((grec.in_view_scope && grec.view) ? grec.view : ctx->gedp->ged_gvp);
+	((grec.in_view_scope && grec.view) ? grec.view :
+	 ged_draw_active_view(ctx->gedp));
     bu_ptbl_ins(&ctx->shape_refs, (long *)entry);
     return 1;
 }
@@ -1180,7 +1194,7 @@ _ged_draw_redraw_source(struct ged *gedp, const char *path,
 	if (!bsg_scene_ref_is_null(shape_ref)) {
 	    int ret = _ged_draw_redraw_shape(shape_ref, gedp->dbip,
 		    &wdbp->wdb_initial_tree_state,
-		    entry->view ? entry->view : gedp->ged_gvp);
+		    entry->view ? entry->view : ged_draw_active_view(gedp));
 	    if (ret < 0)
 		failed = 1;
 	    else
@@ -1205,13 +1219,13 @@ ged_draw_txn_view_array(struct ged *gedp,
 	return 0;
 
     size_t count = 0;
-    if (ged_draw_view_is_independent_bsg(v)) {
+    if (rt_view_context_is_independent(v)) {
 	count = 1;
     } else {
-	struct bu_ptbl *views = ged_draw_view_set_views_bsg(&gedp->ged_views);
+	struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
 	for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	    struct bsg_view *lv = (struct bsg_view *)BU_PTBL_GET(views, i);
-	    if (lv && !ged_draw_view_is_independent_bsg(lv))
+	    if (lv && !rt_view_context_is_independent(lv))
 		count++;
 	}
 	if (!count)
@@ -1220,14 +1234,14 @@ ged_draw_txn_view_array(struct ged *gedp,
 
     struct bsg_view **out = (struct bsg_view **)bu_calloc(count,
 	    sizeof(struct bsg_view *), "draw transaction view array");
-    if (ged_draw_view_is_independent_bsg(v)) {
+    if (rt_view_context_is_independent(v)) {
 	out[0] = v;
     } else {
 	size_t idx = 0;
-	struct bu_ptbl *views = ged_draw_view_set_views_bsg(&gedp->ged_views);
+	struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
 	for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	    struct bsg_view *lv = (struct bsg_view *)BU_PTBL_GET(views, i);
-	    if (lv && !ged_draw_view_is_independent_bsg(lv))
+	    if (lv && !rt_view_context_is_independent(lv))
 		out[idx++] = lv;
 	}
 	if (!idx)
@@ -1251,7 +1265,7 @@ ged_draw_prepare_views_for_transaction(struct ged *gedp,
 
     for (size_t i = 0; i < view_count; i++) {
 	if (views[i])
-	    ged_draw_view_set_lod_bounds_update(views[i]);
+	    ged_draw_view_context_lod_bounds_callback_set(views[i]);
     }
 
     bu_free(views, "draw transaction view array");
@@ -1272,7 +1286,7 @@ ged_draw_autoview_for_transaction(struct ged *gedp,
     for (size_t i = 0; i < view_count; i++) {
 	if (!views[i])
 	    continue;
-	if (ged_draw_view_autoview_default_bsg(views[i], 0))
+	if (rt_view_context_autoview(views[i], RT_VIEW_AUTOVIEW_SCALE_DEFAULT, 0))
 	    adjusted++;
     }
 
@@ -1472,7 +1486,7 @@ ged_draw_realize_shape_refs_for_transaction(struct ged *gedp,
 	for (int ri = 0; ri < ref_count; ri++) {
 	    if (ged_draw_shape_ref_is_null(refs[ri]))
 		continue;
-	    if (ged_draw_shape_ref_realize(gedp, refs[ri], views[vi]))
+	    if (ged_draw_shape_ref_realize_context(gedp, refs[ri], views[vi]))
 		realized++;
 	}
     }
@@ -1541,7 +1555,7 @@ _ged_draw_apply_draw(struct ged *gedp,
     if (!gedp || !txn)
 	return -1;
 
-    struct bsg_view *v = txn->view ? txn->view : gedp->ged_gvp;
+    struct bsg_view *v = txn->view ? txn->view : ged_draw_active_view(gedp);
     if (!v)
 	return -1;
 
@@ -1585,8 +1599,8 @@ _ged_draw_apply_draw(struct ged *gedp,
 	ged_draw_apply_transaction(gedp, &erase_txn, NULL);
     }
 
-    struct bsg_view *saved_view = gedp->ged_gvp;
-    gedp->ged_gvp = v;
+    void *saved_view = ged_view_active_ctx(gedp);
+    ged_view_active_ctx_set(gedp, v);
     (void)ged_draw_prepare_views_for_transaction(gedp, v);
 
     struct _ged_client_data dgcdp;
@@ -1610,7 +1624,7 @@ _ged_draw_apply_draw(struct ged *gedp,
 	ret = _ged_drawtrees(gedp, draw_count, draw_paths, _GED_DRAW_WIREFRAME,
 		&dgcdp);
     }
-    gedp->ged_gvp = saved_view;
+    ged_view_active_ctx_set(gedp, saved_view);
 
     if (ret != 0) {
 	/* Legacy draw walking may report failure for multi-path instance
@@ -1695,7 +1709,8 @@ _ged_draw_reexpand_group_add(struct ged_draw_reexpand_source_ctx *ctx,
     entry->ref = rec->ref;
     entry->path = bu_strdup(rec->path);
     entry->view = ctx->view ? ctx->view :
-	((rec->in_view_scope && rec->view) ? rec->view : ctx->gedp->ged_gvp);
+	((rec->in_view_scope && rec->view) ? rec->view :
+	 ged_draw_active_view(ctx->gedp));
     struct bsg_appearance_settings appearance = BSG_APPEARANCE_SETTINGS_INIT;
     bsg_scene_ref group_ref =
 	ged_draw_registry_group_scene_ref(ctx->gedp, rec->ref);
@@ -2059,7 +2074,7 @@ _ged_draw_apply_transaction_inner(struct ged *gedp,
 	    ret = _ged_draw_redraw(gedp, path, txn->view);
 	    if (ret >= 0)
 		(void)ged_draw_finalize_lod_for_transaction(gedp,
-			txn->view ? txn->view : gedp->ged_gvp);
+			txn->view ? txn->view : ged_draw_active_view(gedp));
 	    if (result)
 		result->redrawn_count = (ret > 0) ? ret : 0;
 	    break;

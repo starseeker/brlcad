@@ -134,7 +134,7 @@ f_extrude(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[
 
     /* draw the updated solid */
     replot_editing_solid(s);
-    mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
+    mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
 
     return TCL_OK;
@@ -183,7 +183,7 @@ f_mirface(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[
 
     /* draw the updated solid */
     replot_editing_solid(s);
-    mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
+    mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
 
     return TCL_OK;
 }
@@ -313,7 +313,7 @@ f_permute(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[
 
     /* draw the updated solid */
     replot_editing_solid(s);
-    mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
+    mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
 
     return TCL_OK;
 }

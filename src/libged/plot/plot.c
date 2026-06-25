@@ -35,7 +35,7 @@
 #include "bg/clip.h"
 #include "rt/view.h"
 
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "../ged_private.h"
 
 #if defined(HAVE_POPEN) && !defined(HAVE_DECL_POPEN) && !defined(popen)

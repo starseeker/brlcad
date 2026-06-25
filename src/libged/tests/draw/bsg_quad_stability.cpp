@@ -42,7 +42,7 @@
 #define DM_WITH_RT
 #include <dm.h>
 #include <ged.h>
-#include <ged/bsg_ged_draw.h>
+#include <ged/draw.h>
 #include <rt/view_legacy_bsg.h>
 
 extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);
@@ -166,7 +166,7 @@ main(int ac, char *av[])
 	snprintf(view_name, sizeof(view_name), "V%d", i);
 	rt_view_context_name_set_bsg(v, view_name);
 	rt_view_set_context_add_bsg(view_set_ctx, v);
-	bu_ptbl_ins(&gedp->ged_free_views, (long *)v);
+	ged_view_context_owned_add(gedp, v);
 	(void)rt_view_context_independent_scope_is_null_bsg(v, 1 /*create*/);
 
 	/* Attach one swrast DM per view */

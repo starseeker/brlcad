@@ -52,7 +52,7 @@
 #include "bg/clip.h"
 
 #include "ged.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "rt/view.h"
 #include "./ged_private.h"
 #include "./bsg_ged_draw_private.h"
@@ -391,7 +391,7 @@ ged_draw_shape_draft_publish_primitive_wireframe(ged_draw_shape_draft *draft,
 	return -1;
     struct rt_view_info view_info;
     if (adaptive)
-	ged_draw_view_info_from_bsg(&view_info, v);
+	rt_view_context_info_get(&view_info, v);
     return ged_draw_scene_ref_publish_primitive_wireframe(draft->shape_ref, ip,
 	    ttol, tol, v, adaptive ? &view_info : NULL, adaptive);
 }

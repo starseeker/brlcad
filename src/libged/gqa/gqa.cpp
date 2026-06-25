@@ -47,7 +47,7 @@
 #include "raytrace.h"
 #include "bg/line_layer.h"
 #include "bg/plot3.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "analyze.h"
 
 #include "../ged_private.h"

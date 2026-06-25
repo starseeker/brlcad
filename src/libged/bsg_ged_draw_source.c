@@ -38,7 +38,7 @@
 #include "bsg/geometry.h"
 #include "bsg/material.h"
 #include "bsg/scene_builder.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "nmg.h"
 #include "rt/db_instance.h"
 #include "rt/db_io.h"

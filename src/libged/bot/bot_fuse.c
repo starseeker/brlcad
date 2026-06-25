@@ -31,7 +31,7 @@
 
 #include "bu/getopt.h"
 #include "bu/parallel.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "rt/geom.h"
 #include "bg/plot3.h"
 

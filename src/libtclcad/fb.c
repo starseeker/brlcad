@@ -44,7 +44,7 @@
 #include "bu/str.h"
 #include "../libdm/include/private.h"
 #include "dm.h"
-#include "rt/view_legacy_bsg.h"
+#include "ged/view.h"
 #include "tclcad.h"
 #include "./tclcad_private.h"
 #include "./view/view.h"
@@ -986,7 +986,7 @@ to_open_fbs(void *view_ctx, Tcl_Interp *interp)
     if (tvd->gdv_fbs.fbs_fbp != FB_NULL)
 	return TCL_OK;
 
-    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(view_ctx);
+    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
     tvd->gdv_fbs.fbs_fbp = dmp ? dm_get_fb(dmp) : FB_NULL;
 
     if (tvd->gdv_fbs.fbs_fbp == FB_NULL) {

@@ -51,7 +51,7 @@
 #include "bg/clip.h"
 
 #include "ged.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "rt/view.h"
 #include "./ged_private.h"
 #include "./bsg_ged_draw_private.h"
@@ -65,10 +65,42 @@ _ged_draw_scene_ref_from_context(void *scene_ctx)
 }
 
 
+static rt_view_scene_ref
+_ged_draw_scene_ref_to_rt(bsg_scene_ref ref)
+{
+    rt_view_scene_ref rt_ref = RT_VIEW_SCENE_REF_NULL_INIT;
+    rt_ref.opaque = ref.opaque;
+    return rt_ref;
+}
+
+
+rt_view_scene_ref
+ged_draw_scene_ref_to_rt_view_ref(bsg_scene_ref ref)
+{
+    return _ged_draw_scene_ref_to_rt(ref);
+}
+
+
+bsg_scene_ref
+ged_draw_scene_ref_from_rt_view_ref(rt_view_scene_ref ref)
+{
+    bsg_scene_ref bsg_ref = BSG_SCENE_REF_NULL_INIT;
+    bsg_ref.opaque = ref.opaque;
+    return bsg_ref;
+}
+
+
 static void *
 _ged_draw_context_from_scene_ref(bsg_scene_ref ref)
 {
     return bsg_scene_ref_is_null(ref) ? NULL : ref.opaque;
+}
+
+
+void *
+ged_draw_scene_ref_context(bsg_scene_ref ref)
+{
+    return _ged_draw_context_from_scene_ref(ref);
 }
 
 
@@ -971,7 +1003,7 @@ ged_draw_shape_ref_publish_primitive_wireframe(struct ged *gedp,
 	return -1;
     struct rt_view_info view_info;
     if (adaptive)
-	ged_draw_view_info_from_bsg(&view_info, v);
+	rt_view_context_info_get(&view_info, v);
     return ged_draw_scene_ref_publish_primitive_wireframe(shape_ref, ip, ttol,
 	    tol, v, adaptive ? &view_info : NULL, adaptive);
 }
@@ -996,22 +1028,14 @@ ged_draw_shape_ref_release(struct ged *gedp, ged_draw_shape_ref ref)
 
 
 int
-ged_draw_shape_ref_realize(struct ged *gedp, ged_draw_shape_ref ref,
-			   struct bsg_view *v)
+ged_draw_shape_ref_realize_context(struct ged *gedp, ged_draw_shape_ref ref,
+				   void *view_ctx)
 {
     bsg_scene_ref shape_ref = ged_draw_registry_shape_scene_ref(gedp, ref);
     if (bsg_scene_ref_is_null(shape_ref))
 	return 0;
-    ged_draw_scene_ref_realize(shape_ref, v);
+    ged_draw_scene_ref_realize(shape_ref, view_ctx);
     return 1;
-}
-
-
-int
-ged_draw_shape_ref_realize_context(struct ged *gedp, ged_draw_shape_ref ref,
-				   void *view_ctx)
-{
-    return ged_draw_shape_ref_realize(gedp, ref, (struct bsg_view *)view_ctx);
 }
 
 
@@ -1034,7 +1058,7 @@ ged_draw_shape_ref_reset_node(struct ged *gedp, ged_draw_shape_ref ref)
     if (bsg_scene_ref_is_null(shape_ref))
 	return 0;
     ged_draw_scene_ref_geometry_clear(shape_ref);
-    ged_draw_mesh_lod_free_scene_ref(shape_ref);
+    rt_mesh_lod_free_scene_ref(_ged_draw_scene_ref_to_rt(shape_ref));
     ged_draw_scene_ref_realization_reset(shape_ref);
     bsg_scene_invalidate(shape_ref);
     return 1;
@@ -1212,7 +1236,7 @@ ged_draw_shape_ref_lod_ensure(struct ged *gedp, ged_draw_shape_ref ref,
 	return 0;
 
     ged_draw_view_lod_policy policy;
-    ged_draw_view_lod_policy_from_bsg(&policy, first_view);
+    rt_view_context_lod_policy_get(&policy, first_view);
     int candidate = ged_draw_scene_ref_realization_pipeline_candidate(shape_ref);
     int source_backed = ged_draw_scene_ref_source_data(shape_ref) ? 1 : 0;
     if (!candidate && !source_backed)
@@ -1256,17 +1280,11 @@ ged_draw_shape_ref_pipeline_candidate(struct ged *gedp, ged_draw_shape_ref ref)
 }
 
 
-struct bsg_view *
-ged_draw_shape_ref_view(struct ged *gedp, ged_draw_shape_ref ref)
-{
-    bsg_scene_ref shape_ref = ged_draw_registry_shape_scene_ref(gedp, ref);
-    return bsg_scene_ref_is_null(shape_ref) ? NULL : bsg_scene_view(shape_ref);
-}
-
 void *
 ged_draw_shape_ref_view_context(struct ged *gedp, ged_draw_shape_ref ref)
 {
-    return (void *)ged_draw_shape_ref_view(gedp, ref);
+    bsg_scene_ref shape_ref = ged_draw_registry_shape_scene_ref(gedp, ref);
+    return bsg_scene_ref_is_null(shape_ref) ? NULL : bsg_scene_view(shape_ref);
 }
 
 

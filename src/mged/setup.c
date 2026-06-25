@@ -481,7 +481,7 @@ mged_refresh_handler(void *clientdata)
     struct mged_state *s = (struct mged_state *)clientdata;
     MGED_CK_STATE(s);
 
-    mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
+    mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
     refresh(s);
 }
 
@@ -574,7 +574,7 @@ mged_setup(struct mged_state *s)
     MAT_DELTAS_GET_NEG(view_state->vs_orig_pos, view_center);
 
     ged_view_set_context_add(view_set_ctx, view_ctx);
-    bu_ptbl_ins(&s->gedp->ged_free_views, (long *)view_state->vs_gvp);
+    ged_view_context_owned_add(s->gedp, view_state->vs_gvp);
     ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 
     /* register commands */

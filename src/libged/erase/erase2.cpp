@@ -29,7 +29,7 @@
 #include <string.h>
 
 #include "bu/opt.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "ged/database.h"
 #include "ged/view.h"
 #include "rt/db_attr.h"

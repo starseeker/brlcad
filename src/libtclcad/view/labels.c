@@ -30,7 +30,7 @@
 #include "tclcad.h"
 
 /* Private headers */
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "../tclcad_private.h"
 #include "../view/view.h"
 

@@ -2066,7 +2066,7 @@ main(int argc, char **argv)
 	{
 	    "include",
 	    "bsg_ged_draw_private.h",
-	    "installed headers must use ged/bsg_ged_draw.h, not the private GED draw bridge",
+	    "installed headers must use ged/draw.h, not the private GED draw bridge",
 	    NULL,
 	    NULL,
 	    NULL

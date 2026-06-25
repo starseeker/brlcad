@@ -19,7 +19,7 @@
  */
 /** @file ged_draw_scene.cpp
  *
- * Exercises the ged_draw_* scene API declared in include/ged/bsg_ged_draw.h.
+ * Exercises the ged_draw_* scene API declared in include/ged/draw.h.
  * The API is backed by the GED BSG draw tree and must remain usable without
  * an attached display manager.
  *
@@ -36,7 +36,7 @@
 #include <bu.h>
 #include "dm.h"
 #include <ged.h>
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "ged/db_index.h"
 #include "ged/selection_state.h"
 #include "bg/plot3.h"

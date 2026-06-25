@@ -37,7 +37,7 @@
 #include "vmath.h"
 #include "raytrace.h"
 #include "bg/plot3.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "ged/view.h"
 
 #include "./mged.h"

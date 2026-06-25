@@ -402,7 +402,7 @@ nmg_ed(struct mged_state *s, int arg, int UNUSED(a), int UNUSED(b))
 	    if (*es_eu->up.magic_p == NMG_LOOPUSE_MAGIC)
 		nmg_veu(&es_eu->up.lu_p->down_hd, es_eu->up.magic_p);
 	    /* no change of state or MEDIT(s)->edit_flag */
-	    mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
+	    mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
 	    return;
 	case ECMD_NMG_FORW:
 	    if (!es_eu) {

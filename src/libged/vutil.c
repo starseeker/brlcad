@@ -31,7 +31,7 @@
 #include "nmg/display.h"
 #include "./ged_private.h"
 #include "ged/view.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 
 int
 _ged_do_rot(struct ged *gedp,

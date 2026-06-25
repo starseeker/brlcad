@@ -63,7 +63,7 @@ cmd_overlay(ClientData clientData, Tcl_Interp *interp, int argc, const char *arg
     if (ret != BRLCAD_OK)
 	return TCL_ERROR;
 
-    mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
+    mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
 
     return ret;

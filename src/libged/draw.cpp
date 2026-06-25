@@ -90,12 +90,12 @@ draw_rt_mesh_lod(bsg_scene_ref ref)
 }
 
 static const char *
-draw_view_name_bsg(const void *view_ctx)
+draw_view_context_name(const void *view_ctx)
 {
     if (!view_ctx)
 	return "NULL";
 
-    const char *name = ged_draw_view_context_name_from_bsg(view_ctx);
+    const char *name = ged_view_context_name_get(view_ctx);
     return name ? name : "";
 }
 
@@ -280,11 +280,11 @@ csg_wireframe_update(bsg_scene_ref ref, void *view_ctx, int flag)
 	return 0;
 
     ged_draw_view_lod_policy policy;
-    ged_draw_view_context_lod_policy_from_bsg(&policy, view_ctx);
+    ged_draw_view_context_lod_policy_get(&policy, view_ctx);
     if (!policy.csg_enabled)
 	return 0;
 
-    ged_draw_log(1, "csg_wireframe_update %s[%s]", ged_draw_scene_ref_name(ref), draw_view_name_bsg(view_ctx));
+    ged_draw_log(1, "csg_wireframe_update %s[%s]", ged_draw_scene_ref_name(ref), draw_view_context_name(view_ctx));
 
     ged_draw_scene_ref_realization_set_roles(ref, 1, 0);
 
@@ -298,12 +298,12 @@ csg_wireframe_update(bsg_scene_ref ref, void *view_ctx, int flag)
     point_t bmax = VINIT_ZERO;
     if (!ged_draw_scene_ref_bounds(ref, bmin, bmax))
 	return 0;
-    if (!(ged_draw_view_context_perspective_from_bsg(view_ctx) > SMALL_FASTF)) {
+    if (!(ged_view_context_perspective_get(view_ctx) > SMALL_FASTF)) {
 	point_t obb_center = VINIT_ZERO;
 	vect_t obb_extent1 = VINIT_ZERO;
 	vect_t obb_extent2 = VINIT_ZERO;
 	vect_t obb_extent3 = VINIT_ZERO;
-	if (!ged_draw_view_context_obb_from_bsg(view_ctx, obb_center, obb_extent1,
+	if (!rt_view_context_obb_get(view_ctx, obb_center, obb_extent1,
 		obb_extent2, obb_extent3) ||
 		!bg_sat_aabb_obb(bmin, bmax, obb_center, obb_extent1,
 		    obb_extent2, obb_extent3))
@@ -321,7 +321,7 @@ csg_wireframe_update(bsg_scene_ref ref, void *view_ctx, int flag)
     if (!rework) {
 	// Check view scale
 	fastf_t view_scale = ged_draw_scene_ref_realization_view_scale(ref);
-	fastf_t current_view_scale = ged_draw_view_context_scale_from_bsg(view_ctx);
+	fastf_t current_view_scale = ged_view_context_scale_get(view_ctx);
 	fastf_t delta = view_scale * 0.1/view_scale;
 	if (!NEAR_EQUAL(view_scale, current_view_scale, delta))
 	    rework = true;
@@ -349,7 +349,7 @@ csg_wireframe_update(bsg_scene_ref ref, void *view_ctx, int flag)
 	return 0;
 
     struct rt_view_info view_info;
-    ged_draw_view_context_info_from_bsg(&view_info, view_ctx);
+    ged_draw_view_context_info_get(&view_info, view_ctx);
     if (ged_draw_scene_ref_publish_primitive_wireframe(ref, ip, NULL, d->tol,
 	    view_ctx, &view_info, 1) >= 0) {
 	ged_draw_scene_ref_update_bounds_context(ref, view_ctx);
@@ -370,7 +370,7 @@ bot_lod_mesh_realize(bsg_scene_ref ref, void *view_ctx)
 
     ged_draw_scene_ref_realization_set_roles(ref, 0, 1);
 
-    ged_draw_log(1, "bot_lod_mesh_realize %s[%s]", ged_draw_scene_ref_name(ref), draw_view_name_bsg(view_ctx));
+    ged_draw_log(1, "bot_lod_mesh_realize %s[%s]", ged_draw_scene_ref_name(ref), draw_view_context_name(view_ctx));
 
     struct ged_draw_source_state *d = ged_draw_scene_ref_source_data(ref);
     if (!d)
@@ -409,7 +409,8 @@ bot_lod_mesh_realize(bsg_scene_ref ref, void *view_ctx)
 	d->rt_mesh_lod = rt_lod;
 
 	// Initialize the LoD data to the current view
-	int level = ged_draw_mesh_lod_load_view_scene_ref_context(rt_lod, ref, view_ctx, 0);
+	int level = rt_mesh_lod_load_view_scene_ref(rt_lod,
+		ged_draw_scene_ref_to_rt_view_ref(ref), view_ctx, 0);
 	if (level < 0) {
 	    bu_log("Error loading info for initial LoD view\n");
 	}
@@ -429,7 +430,8 @@ bot_lod_mesh_realize(bsg_scene_ref ref, void *view_ctx)
 	draw_mesh_lod_bounds_restore(ref, d);
     }
 
-    ged_draw_mesh_lod_load_view_scene_ref_context(draw_rt_mesh_lod(ref), ref, view_ctx, 0);
+    rt_mesh_lod_load_view_scene_ref(draw_rt_mesh_lod(ref),
+	    ged_draw_scene_ref_to_rt_view_ref(ref), view_ctx, 0);
     draw_mesh_lod_publish(ref, d->rt_mesh_lod);
     draw_mesh_lod_bounds_restore(ref, d);
     ged_draw_scene_ref_invalidate(ref);
@@ -445,7 +447,7 @@ brep_lod_mesh_realize(bsg_scene_ref ref, void *view_ctx)
     struct ged_draw_source_state *d = ged_draw_scene_ref_source_data(ref);
     if (!d)
 	return;
-    ged_draw_log(1, "brep_lod_mesh_realize %s[%s]", ged_draw_scene_ref_name(ref), draw_view_name_bsg(view_ctx));
+    ged_draw_log(1, "brep_lod_mesh_realize %s[%s]", ged_draw_scene_ref_name(ref), draw_view_context_name(view_ctx));
 
     ged_draw_scene_ref_realization_set_roles(ref, 0, 1);
 
@@ -552,13 +554,15 @@ brep_lod_mesh_realize(bsg_scene_ref ref, void *view_ctx)
 	    return;
 
 	// Initialize the LoD data to the current view
-	int level = ged_draw_mesh_lod_load_view_scene_ref_context(rt_lod, ref, view_ctx, 0);
+	int level = rt_mesh_lod_load_view_scene_ref(rt_lod,
+		ged_draw_scene_ref_to_rt_view_ref(ref), view_ctx, 0);
 	if (level < 0) {
 	    bu_log("Error loading info for initial LoD view\n");
 	}
     }
 
-    ged_draw_mesh_lod_load_view_scene_ref_context(draw_rt_mesh_lod(ref), ref, view_ctx, 0);
+    rt_mesh_lod_load_view_scene_ref(draw_rt_mesh_lod(ref),
+	    ged_draw_scene_ref_to_rt_view_ref(ref), view_ctx, 0);
     draw_mesh_lod_publish(ref, d->rt_mesh_lod);
     draw_mesh_lod_bounds_restore(ref, d);
     ged_draw_scene_ref_invalidate(ref);
@@ -570,14 +574,14 @@ brep_lod_mesh_realize(bsg_scene_ref ref, void *view_ctx)
 static void
 wireframe_plot(bsg_scene_ref ref, void *view_ctx, struct rt_db_internal *ip)
 {
-    ged_draw_log(1, "wireframe_plot %s[%s]", ged_draw_scene_ref_name(ref), draw_view_name_bsg(view_ctx));
+    ged_draw_log(1, "wireframe_plot %s[%s]", ged_draw_scene_ref_name(ref), draw_view_context_name(view_ctx));
     struct ged_draw_source_state *d = ged_draw_scene_ref_source_data(ref);
     const struct bn_tol *tol = d->tol;
     const struct bg_tess_tol *ttol = d->ttol;
     ged_draw_scene_ref_realization_set_roles(ref, 1, 0);
 
     ged_draw_view_lod_policy policy;
-    ged_draw_view_context_lod_policy_from_bsg(&policy, view_ctx);
+    ged_draw_view_context_lod_policy_get(&policy, view_ctx);
 
     // Standard (view independent) wireframe
     if (!view_ctx || !policy.csg_enabled) {
@@ -637,11 +641,11 @@ ged_draw_scene_ref_realize(bsg_scene_ref ref, void *view_ctx)
     if (ged_draw_scene_ref_realization_current(ref) && !view_ctx)
 	return;
 
-    ged_draw_log(1, "draw_scene %s[%s]", ged_draw_scene_ref_name(ref), draw_view_name_bsg(view_ctx));
+    ged_draw_log(1, "draw_scene %s[%s]", ged_draw_scene_ref_name(ref), draw_view_context_name(view_ctx));
 
     // If we're not adaptive, trigger the view insensitive drawing routines
     ged_draw_view_lod_policy policy;
-    ged_draw_view_context_lod_policy_from_bsg(&policy, view_ctx);
+    ged_draw_view_context_lod_policy_get(&policy, view_ctx);
     if (view_ctx && !policy.csg_enabled && !policy.mesh_enabled) {
 	return ged_draw_scene_ref_realize(ref, NULL);
     }
@@ -756,7 +760,7 @@ ged_draw_scene_ref_realize(bsg_scene_ref ref, void *view_ctx)
 	ged_draw_scene_ref_realization_set_roles(ref, 0, 0);
 	if (ip->idb_meth && ip->idb_meth->ft_indexed_face_set) {
 	    struct rt_view_info view_info;
-	    ged_draw_view_context_info_from_bsg(&view_info, view_ctx);
+	    ged_draw_view_context_info_get(&view_info, view_ctx);
 	    if (!ged_draw_scene_ref_publish_primitive_face_set(ref, ip, ttol,
 			tol, &view_info)) {
 		bu_log("ERROR(%s): %s shaded face-set publication failed\n",

@@ -42,7 +42,6 @@ extern "C" {
 #include "bn.h"
 #include "dm.h"
 #include "rt/view.h"
-#include "rt/view_legacy_bsg.h"
 #include "../null/dm-Null.h"
 #include "../dm-gl.h"
 }
@@ -204,7 +203,7 @@ qtgl_open(void *ctx, void *UNUSED(interp), int argc, const char **argv)
 
     /* Make sure we have a Qt widget context.  A retained BSG view can still
      * arrive as a default context when no application widget is available. */
-    if (!ctx || rt_view_context_is_bsg(ctx))
+    if (!ctx || dm_view_context_is_retained_legacy(ctx))
 	return NULL;
 
     BU_GET(dmp, struct dm);

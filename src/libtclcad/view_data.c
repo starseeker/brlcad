@@ -27,7 +27,7 @@
 #include <string.h>
 
 #include "bsg/tcl_data.h"
-#include "rt/view_legacy_bsg.h"
+#include "ged/view.h"
 #include "./tclcad_private.h"
 
 #define TCLCAD_LAYOUT_ASSERT(_expr, _name) \
@@ -105,7 +105,7 @@ tclcad_view_data_init(struct tclcad_view_data *tvd, struct ged *gedp)
 struct tclcad_view_data *
 tclcad_view_data_from_view_ctx(void *view_ctx)
 {
-    return (struct tclcad_view_data *)rt_view_context_user_data_from_bsg(view_ctx);
+    return (struct tclcad_view_data *)ged_view_context_user_data_get(view_ctx);
 }
 
 tclcad_view_state *
@@ -233,11 +233,11 @@ tclcad_view_prim_labels_state_set(void *view_ctx, const struct rt_view_other_sta
 int
 tclcad_view_data_bind_view_ctx(void *view_ctx, struct tclcad_view_data *tvd)
 {
-    if (!rt_view_context_user_data_set_bsg(view_ctx, (void *)tvd))
+    if (!ged_view_context_user_data_set(view_ctx, (void *)tvd))
 	return 0;
 
-    if (!rt_view_context_tclcad_data_set_bsg(view_ctx, tvd ? &tvd->tcl_data : NULL)) {
-	(void)rt_view_context_user_data_set_bsg(view_ctx, NULL);
+    if (!ged_view_context_tclcad_data_set(view_ctx, tvd ? &tvd->tcl_data : NULL)) {
+	(void)ged_view_context_user_data_set(view_ctx, NULL);
 	return 0;
     }
 
@@ -247,8 +247,8 @@ tclcad_view_data_bind_view_ctx(void *view_ctx, struct tclcad_view_data *tvd)
 void
 tclcad_view_data_unbind_view_ctx(void *view_ctx)
 {
-    (void)rt_view_context_tclcad_data_set_bsg(view_ctx, NULL);
-    (void)rt_view_context_user_data_set_bsg(view_ctx, NULL);
+    (void)ged_view_context_tclcad_data_set(view_ctx, NULL);
+    (void)ged_view_context_user_data_set(view_ctx, NULL);
 }
 
 /*

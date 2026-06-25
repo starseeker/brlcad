@@ -27,7 +27,8 @@
 #include "common.h"
 #include "bu/units.h"
 #include "ged.h"
-#include "rt/view_legacy_bsg.h"
+#include "ged/view.h"
+#include "rt/view.h"
 #include "tclcad.h"
 
 /* Private headers */
@@ -41,12 +42,12 @@ go_refresh_draw(struct ged *gedp, void *draw_view_ctx, int restore_zbuffer)
     if (!tvd)
 	return;
 
-    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(draw_view_ctx);
+    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(draw_view_ctx);
     if (!dmp)
 	return;
 
     struct rt_view_interactive_rect_state rect = RT_VIEW_INTERACTIVE_RECT_STATE_INIT;
-    (void)rt_view_context_interactive_rect_state_from_bsg(&rect, draw_view_ctx);
+    (void)ged_view_context_interactive_rect_state_get(&rect, draw_view_ctx);
     if (tvd->gdv_fbs.fbs_mode == TCLCAD_OBJ_FB_MODE_OVERLAY) {
 	if (rect.draw) {
 	    go_draw(draw_view_ctx);
@@ -54,13 +55,13 @@ go_refresh_draw(struct ged *gedp, void *draw_view_ctx, int restore_zbuffer)
 	    /* Phase T2-final: replaced dm_draw_viewobjs with dm_draw_objs.
 	     * Stash/restore gv_local2base|base2local to keep faceplate unit
 	     * display consistent with the database unit factors. */
-	    fastf_t l2b = rt_view_context_local2base_from_bsg(draw_view_ctx);
-	    fastf_t b2l = rt_view_context_base2local_from_bsg(draw_view_ctx);
-	    rt_view_context_unit_conversion_set_bsg(draw_view_ctx,
+	    fastf_t l2b = ged_view_context_local2base_get(draw_view_ctx);
+	    fastf_t b2l = ged_view_context_base2local_get(draw_view_ctx);
+	    ged_view_context_unit_conversion_set(draw_view_ctx,
 		    gedp->dbip->dbi_local2base,
 		    gedp->dbip->dbi_base2local);
 	    dm_draw_objs(draw_view_ctx);
-	    rt_view_context_unit_conversion_set_bsg(draw_view_ctx, l2b, b2l);
+	    ged_view_context_unit_conversion_set(draw_view_ctx, l2b, b2l);
 
 	    /* disable write to depth buffer */
 	    (void)dm_set_depth_mask(dmp, 0);
@@ -138,20 +139,20 @@ go_refresh_draw(struct ged *gedp, void *draw_view_ctx, int restore_zbuffer)
      * full BSG view-scope object set (including T1-migrated overlays) and
      * faceplate are rendered through the modern path.  Stash/restore the
      * unit-conversion factors as before. */
-    fastf_t l2b = rt_view_context_local2base_from_bsg(draw_view_ctx);
-    fastf_t b2l = rt_view_context_base2local_from_bsg(draw_view_ctx);
-    rt_view_context_unit_conversion_set_bsg(draw_view_ctx,
+    fastf_t l2b = ged_view_context_local2base_get(draw_view_ctx);
+    fastf_t b2l = ged_view_context_base2local_get(draw_view_ctx);
+    ged_view_context_unit_conversion_set(draw_view_ctx,
 	    gedp->dbip->dbi_local2base,
 	    gedp->dbip->dbi_base2local);
     dm_draw_objs(draw_view_ctx);
-    rt_view_context_unit_conversion_set_bsg(draw_view_ctx, l2b, b2l);
+    ged_view_context_unit_conversion_set(draw_view_ctx, l2b, b2l);
 }
 
 void
 go_refresh(struct ged *gedp, void *draw_view_ctx)
 {
     int restore_zbuffer = 0;
-    struct dm *dmp = (struct dm *)rt_view_context_display_manager_from_bsg(draw_view_ctx);
+    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(draw_view_ctx);
     if (!dmp)
 	return;
 
@@ -177,15 +178,15 @@ to_refresh_view(void *view_ctx)
     if (current_top == NULL || view_ctx == NULL)
 	return;
 
-    if (!rt_view_context_refresh_enabled_from_bsg(view_ctx) ||
-	    rt_view_context_refresh_suppressed_from_bsg(view_ctx))
+    if (!ged_view_context_refresh_enabled_get(view_ctx) ||
+	    ged_view_context_refresh_suppressed_get(view_ctx))
 	return;
 
-    rt_view_context_refresh_request_bsg(view_ctx, RT_VIEW_REFRESH_ALL_BSG);
+    ged_view_context_refresh_request(view_ctx, GED_VIEW_REFRESH_ALL);
     if (to_is_viewable(view_ctx)) {
-	(void)rt_view_context_refresh_consume_bsg(view_ctx);
+	(void)ged_view_context_refresh_consume(view_ctx);
 	go_refresh(current_top->to_gedp, view_ctx);
-	rt_view_context_refresh_complete_bsg(view_ctx);
+	ged_view_context_refresh_complete(view_ctx);
     }
 }
 
@@ -212,7 +213,7 @@ to_refresh_all_enabled(struct tclcad_obj *top)
     struct bu_ptbl *views = ged_view_set_views_ctx(top->to_gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	view_ctx = BU_PTBL_GET(views, i);
-	if (!rt_view_context_refresh_enabled_from_bsg(view_ctx))
+	if (!ged_view_context_refresh_enabled_get(view_ctx))
 	    return 0;
     }
 
@@ -230,7 +231,7 @@ to_refresh_all_set_enabled(struct tclcad_obj *top, int enabled)
     struct bu_ptbl *views = ged_view_set_views_ctx(top->to_gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	view_ctx = BU_PTBL_GET(views, i);
-	rt_view_context_refresh_enabled_set_bsg(view_ctx, enabled);
+	ged_view_context_refresh_enabled_set(view_ctx, enabled);
     }
 }
 
@@ -245,7 +246,7 @@ to_refresh_suppress_all_begin(struct tclcad_obj *top)
     struct bu_ptbl *views = ged_view_set_views_ctx(top->to_gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	view_ctx = BU_PTBL_GET(views, i);
-	rt_view_context_refresh_suppress_begin_bsg(view_ctx);
+	ged_view_context_refresh_suppress_begin(view_ctx);
     }
 }
 
@@ -260,7 +261,7 @@ to_refresh_suppress_all_end(struct tclcad_obj *top)
     struct bu_ptbl *views = ged_view_set_views_ctx(top->to_gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	view_ctx = BU_PTBL_GET(views, i);
-	rt_view_context_refresh_suppress_end_bsg(view_ctx);
+	ged_view_context_refresh_suppress_end(view_ctx);
     }
 }
 

@@ -30,7 +30,7 @@ Relevant C/C++ already present:
 * src/librt/edit.cpp
 * src/librt/primitives/sketch/edsketch.c
 * include/rt/edit_legacy_bsg.h
-* src/librt/edit_legacy_bsg.cpp
+* src/librt/view_legacy_bsg.c
 * include/qtcad/QgSketchFilter.h
 * src/libqtcad/QgSketchFilter.cpp
 * src/libqtcad/tests/qsketch.cpp
@@ -544,4 +544,3 @@ Lower priority or dependent:
 * conversion schemas, pending libgcv design;
 * generic dialog/layout Tcl code where the underlying command already exists;
 * HTML viewing widgets, which should be replaced by toolkit-native facilities.
-

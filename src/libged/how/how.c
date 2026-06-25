@@ -31,7 +31,7 @@
 #include "bu/cmd.h"
 #include "bu/str.h"
 #include "dm.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "../ged_private.h"
 
 struct how_find_ctx {

@@ -70,7 +70,6 @@
 #define LIBTERMIO_IMPLEMENTATION
 #include "libtermio.h"
 #include "ged.h"
-#include "rt/view_legacy_bsg.h"
 #include "tclcad.h"
 
 /* private */
@@ -414,14 +413,14 @@ new_edit_mats(struct mged_state *s)
 	set_curr_dm(s, p);
 	mat_t model2view;
 	void *view_ctx = view_state->vs_gvp;
-	rt_view_context_model2view_from_bsg(model2view, view_ctx);
+	ged_view_context_model2view_get(model2view, view_ctx);
 	bn_mat_mul(view_state->vs_model2objview, model2view, MEDIT(s)->model_changes);
 	bn_mat_inv(view_state->vs_objview2model, view_state->vs_model2objview);
 
 	/* Keep rt_edit’s own cached matrix in sync for external users */
 	MAT_COPY(MEDIT(s)->model2objview, view_state->vs_model2objview);
 
-	mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
+	mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
     }
 
     set_curr_dm(s, save_dm_list);
@@ -440,11 +439,11 @@ mged_view_callback(void *view_ctx,
 
     if (s->global_editing_state != ST_VIEW) {
 	mat_t model2view;
-	rt_view_context_model2view_from_bsg(model2view, view_ctx);
+	ged_view_context_model2view_get(model2view, view_ctx);
 	bn_mat_mul(vsp->vs_model2objview, model2view, MEDIT(s)->model_changes);
 	bn_mat_inv(vsp->vs_objview2model, vsp->vs_model2objview);
     }
-    mged_refresh_request_view(s, vsp, RT_VIEW_REFRESH_VIEW_BSG);
+    mged_refresh_request_view(s, vsp, GED_VIEW_REFRESH_VIEW);
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_VIEW_RECORD);
 }
 
@@ -456,7 +455,7 @@ mged_view_callback(void *view_ctx,
 void
 new_mats(struct mged_state *s)
 {
-    rt_view_context_update_bsg(view_state->vs_gvp);
+    ged_view_context_update(view_state->vs_gvp);
 }
 
 static int
@@ -476,17 +475,17 @@ mged_dm_during_clbk(int ac, const char **av, void *UNUSED(u1), void *u2)
 
     if (BU_STR_EQUAL(av[1], "set")) {
         if (ac > 2 && BU_STR_EQUAL(av[2], "zclip") && DMP && view_state && view_state->vs_gvp) {
-            rt_view_context_zclip_set_bsg(view_state->vs_gvp, dm_get_zclip(DMP));
+            ged_view_context_zclip_set(view_state->vs_gvp, dm_get_zclip(DMP));
         }
         if (view_state)
-            mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
+            mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
         mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_DEVICE_SETTING);
         return BRLCAD_OK;
     }
 
     if (BU_STR_EQUAL(av[1], "bg") || BU_STR_EQUAL(av[1], "attach")) {
         if (view_state)
-            mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
+            mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
         mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_DEVICE_SETTING);
     }
 
@@ -1493,7 +1492,7 @@ event_check(struct mged_state *s, int non_blocking)
 	}
 
 	non_blocking++;
-	fastf_t view_local_scale = rt_view_context_scale_from_bsg(view_state->vs_gvp) * s->dbip->dbi_base2local;
+	fastf_t view_local_scale = ged_view_context_scale_get(view_state->vs_gvp) * s->dbip->dbi_base2local;
 	bu_vls_printf(&vls, "knob -i -e aX %f aY %f aZ %f\n",
 		      MEDIT(s)->k.tra_m[X] * 0.05 * view_local_scale,
 		      MEDIT(s)->k.tra_m[Y] * 0.05 * view_local_scale,
@@ -1527,7 +1526,7 @@ event_check(struct mged_state *s, int non_blocking)
 	}
 
 	non_blocking++;
-	fastf_t view_local_scale = rt_view_context_scale_from_bsg(view_state->vs_gvp) * s->dbip->dbi_base2local;
+	fastf_t view_local_scale = ged_view_context_scale_get(view_state->vs_gvp) * s->dbip->dbi_base2local;
 	bu_vls_printf(&vls, "knob -i -e aX %f aY %f aZ %f\n",
 		      MEDIT(s)->k.tra_v[X] * 0.05 * view_local_scale,
 		      MEDIT(s)->k.tra_v[Y] * 0.05 * view_local_scale,
@@ -1574,7 +1573,7 @@ event_check(struct mged_state *s, int non_blocking)
 	    continue;
 
 	set_curr_dm(s, p);
-	fastf_t view_local_scale = rt_view_context_scale_from_bsg(view_state->vs_gvp) * s->dbip->dbi_base2local;
+	fastf_t view_local_scale = ged_view_context_scale_get(view_state->vs_gvp) * s->dbip->dbi_base2local;
 
 	if (view_state->k.rot_m_flag) {
 	    struct bu_vls vls = BU_VLS_INIT_ZERO;
@@ -1885,7 +1884,7 @@ mged_refresh_request_view(struct mged_state *UNUSED(s), struct _view_state *vsp,
     if (!vsp || !vsp->vs_gvp)
 	return;
 
-    rt_view_context_refresh_request_bsg(vsp->vs_gvp, flags ? flags : RT_VIEW_REFRESH_ALL_BSG);
+    ged_view_context_refresh_request(vsp->vs_gvp, flags ? flags : GED_VIEW_REFRESH_ALL);
 }
 
 void
@@ -1927,12 +1926,12 @@ mged_refresh_pending(struct mged_state *s)
 	struct mged_dm *p = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
 	if (!p || !p->dm_view_state || !p->dm_view_state->vs_gvp)
 	    continue;
-	if (rt_view_context_refresh_dirty_from_bsg(p->dm_view_state->vs_gvp))
+	if (ged_view_context_refresh_dirty_get(p->dm_view_state->vs_gvp))
 	    return 1;
     }
 
     return (view_state && view_state->vs_gvp) ?
-	rt_view_context_refresh_dirty_from_bsg(view_state->vs_gvp) : 0;
+	ged_view_context_refresh_dirty_get(view_state->vs_gvp) : 0;
 }
 
 
@@ -1971,7 +1970,7 @@ refresh(struct mged_state *s)
 	struct mged_dm *p = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
 	if (!p->dm_view_state || !p->dm_view_state->vs_gvp)
 	    continue;
-	if (rt_view_context_refresh_dirty_from_bsg(p->dm_view_state->vs_gvp))
+	if (ged_view_context_refresh_dirty_get(p->dm_view_state->vs_gvp))
 	    mged_dm_repaint_request(p, MGED_REPAINT_VIEW_RECORD);
     }
 
@@ -1987,7 +1986,7 @@ refresh(struct mged_state *s)
 	if (mapped && mged_dm_repaint_pending(p)) {
 	    int restore_zbuffer = 0;
 	    if (p->dm_view_state && p->dm_view_state->vs_gvp)
-		(void)rt_view_context_refresh_consume_bsg(p->dm_view_state->vs_gvp);
+		(void)ged_view_context_refresh_consume(p->dm_view_state->vs_gvp);
 
 	    if (mged_variables->mv_fb &&
 		dm_get_zbuffer(DMP)) {
@@ -2116,7 +2115,7 @@ refresh(struct mged_state *s)
 		dm_draw_end(DMP);
 		dm_set_native_repaint_pending(DMP, 0);
 		if (p->dm_view_state && p->dm_view_state->vs_gvp)
-		    rt_view_context_refresh_complete_bsg(p->dm_view_state->vs_gvp);
+		    ged_view_context_refresh_complete(p->dm_view_state->vs_gvp);
 
 	    }
 	}
@@ -2906,16 +2905,16 @@ main(int argc, char *argv[])
     MAT_IDN(view_state->vs_ModelDelta);
     if (view_state->vs_gvp) {
 	struct rt_view_adc_state adc;
-	rt_view_context_grid_state_set_bsg(view_state->vs_gvp, &default_grid_state);
-	if (rt_view_context_adc_state_from_bsg(&adc, view_state->vs_gvp)) {
+	ged_view_context_grid_state_set(view_state->vs_gvp, &default_grid_state);
+	if (ged_view_context_adc_state_get(&adc, view_state->vs_gvp)) {
 	    adc.a1 = 45.0;
 	    adc.a2 = 45.0;
-	    rt_view_context_adc_state_set_bsg(view_state->vs_gvp, &adc);
+	    ged_view_context_adc_state_set(view_state->vs_gvp, &adc);
 	}
     }
 
     am_mode = AMM_IDLE;
-    owner = 1;
+    s->mged_curr_dm->dm_owner = 1;
     frametime = 1;
 
     MAT_IDN(MEDIT(s)->model_changes);

@@ -44,8 +44,8 @@
 #include "vmath.h"
 #include "bn.h"
 #include "dm/view.h"
-#include "ged/bsg_ged_draw.h"
-#include "rt/view_legacy_bsg.h"
+#include "ged/draw.h"
+#include "ged/view.h"
 
 #include "./mged.h"
 #include "./sedit.h"
@@ -100,7 +100,7 @@ _mged_count_drawn_cb(const struct ged_draw_shape_record *rec, void *userdata)
 void
 dozoom(struct mged_state *s, int which_eye)
 {
-    struct bsg_view *v = view_state->vs_gvp;
+    void *view_ctx = view_state->vs_gvp;
     fastf_t view_perspective;
     mat_t model2view;
     point_t view_eye_pos;
@@ -111,22 +111,22 @@ dozoom(struct mged_state *s, int which_eye)
      */
     struct mged_dm *save_dm_list = s->mged_curr_dm;
 
-    rt_view_context_refresh_drawn_count_set_bsg(v, 0);
+    ged_view_context_refresh_drawn_count_set(view_ctx, 0);
 
     /* Keep the retained view's display manager in sync so that
      * dm_draw_objs() can find the DM.  This must be done every frame
      * because set_curr_dm() (called from refresh()) updates
      * s->mged_curr_dm without updating the view's display pointer. */
-    rt_view_context_display_manager_set_bsg(v, (void *)DMP);
+    ged_view_context_display_manager_set(view_ctx, (void *)DMP);
 
     /* gv_pmat may be replaced for the stereo path; remember the original
      * so we can restore it before returning. */
     mat_t saved_pmat;
-    rt_view_context_pmat_from_bsg(saved_pmat, v);
+    ged_view_context_pmat_get(saved_pmat, view_ctx);
 
-    view_perspective = rt_view_context_perspective_from_bsg(v);
-    rt_view_context_eye_pos_from_bsg(view_eye_pos, v);
-    rt_view_context_model2view_from_bsg(model2view, v);
+    view_perspective = ged_view_context_perspective_get(view_ctx);
+    ged_view_context_eye_pos_get(view_eye_pos, view_ctx);
+    ged_view_context_model2view_get(model2view, view_ctx);
 
     if (which_eye == 0) {
 	/* ----- Non-stereo: keep gv_pmat in sync with the perspective state.
@@ -139,12 +139,12 @@ dozoom(struct mged_state *s, int which_eye)
 		VSET(l, -1.0, -1.0, -1.0);
 		VSET(h,  1.0,  1.0, 200.0);
 		deering_persp_mat(perspective_mat, l, h, view_eye_pos);
-		rt_view_context_pmat_set_bsg(v, perspective_mat);
+		ged_view_context_pmat_set(view_ctx, perspective_mat);
 	    } else {
 		persp_mat(perspective_mat, view_perspective,
 			  (fastf_t)1.0f, (fastf_t)0.01f,
 			  (fastf_t)1.0e10f, (fastf_t)1.0f);
-		rt_view_context_pmat_set_bsg(v, perspective_mat);
+		ged_view_context_pmat_set(view_ctx, perspective_mat);
 	    }
 	}
     } else {
@@ -174,13 +174,13 @@ dozoom(struct mged_state *s, int which_eye)
 	    eye[X] = -eye_delta_scr;
 	}
 	deering_persp_mat(perspective_mat, l, h, eye);
-	rt_view_context_pmat_set_bsg(v, perspective_mat);
+	ged_view_context_pmat_set(view_ctx, perspective_mat);
 
 	/* Force dm_draw_objs() to apply the perspective matrix even when the
 	 * retained view perspective was 0; dm_draw_objs() gates the projection
 	 * load on a non-zero perspective angle. */
 	if (view_perspective < SMALL_FASTF)
-	    rt_view_context_perspective_set_bsg(v, persp);
+	    ged_view_context_perspective_set(view_ctx, persp);
 
 	/* Stereo viewport / scissor selection.  gl_loadMatrix() inspects
 	 * which_eye (1 = right, 2 = left) and adjusts glViewport+glScissor
@@ -192,9 +192,9 @@ dozoom(struct mged_state *s, int which_eye)
     /* Expose the edit-mode matrix on the view so render-item drawing can use
      * it for highlighted edit objects without a second pass. */
     if (s->global_editing_state != ST_VIEW)
-	rt_view_context_edit_matrix_set_bsg(v, view_state->vs_model2objview);
+	ged_view_context_edit_matrix_set(view_ctx, view_state->vs_model2objview);
     else
-	rt_view_context_edit_matrix_clear_bsg(v);
+	ged_view_context_edit_matrix_clear(view_ctx);
 
     /* dm_draw_objs() handles:
      *   - framebuffer overlay/underlay
@@ -204,13 +204,13 @@ dozoom(struct mged_state *s, int which_eye)
      *     view's scene attachment
      *   - per-object edit matrix swap for highlighted edit objects
     */
-    dm_draw_objs(v);
+    dm_draw_objs(view_ctx);
 
     /* Clear edit-mat pointer now that the frame is done. */
-    rt_view_context_edit_matrix_clear_bsg(v);
+    ged_view_context_edit_matrix_clear(view_ctx);
 
     /* Restore gv_pmat (no-op for which_eye == 0). */
-    rt_view_context_pmat_set_bsg(v, saved_pmat);
+    ged_view_context_pmat_set(view_ctx, saved_pmat);
 
     /* Count drawn objects for usepen.c zone-based picking.  Each rendered
      * shape records the bsg_view frame revision when painted; comparing the
@@ -221,9 +221,9 @@ dozoom(struct mged_state *s, int which_eye)
 	int ndrawn = 0;
 	struct _mged_count_drawn_ctx ctx;
 	ctx.np = &ndrawn;
-	ctx.frame_rev = rt_view_context_frame_revision_from_bsg(v);
+	ctx.frame_rev = ged_view_context_frame_revision_get(view_ctx);
 	ged_draw_foreach_shape_record(s->gedp, _mged_count_drawn_cb, &ctx);
-	rt_view_context_refresh_drawn_count_set_bsg(v, ndrawn);
+	ged_view_context_refresh_drawn_count_set(view_ctx, ndrawn);
     }
 
     if (s->mged_curr_dm != save_dm_list) set_curr_dm(s, save_dm_list);

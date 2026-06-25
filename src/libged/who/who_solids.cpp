@@ -34,7 +34,7 @@
 extern "C" {
 #include "bu/opt.h"
 #include "ged.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "rt/db_fullpath.h"
 #include "rt/directory.h"
 #include "rt/tree.h"

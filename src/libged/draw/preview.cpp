@@ -35,7 +35,7 @@
 #include "bu/getopt.h"
 
 #include "bg/line_layer.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 
 #include "../ged_private.h"
 extern "C" {

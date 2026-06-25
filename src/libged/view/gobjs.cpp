@@ -34,7 +34,7 @@
 #include "bu/str.h"
 #include "bu/vls.h"
 
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "ged/view.h"
 #include "./ged_view.h"
 

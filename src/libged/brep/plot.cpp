@@ -31,7 +31,7 @@
 #include "bu/cmd.h"
 #include "bg/line_layer.h"
 #include "brep/defines.h"
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "../ged_private.h"
 #include "./ged_brep.h"
 

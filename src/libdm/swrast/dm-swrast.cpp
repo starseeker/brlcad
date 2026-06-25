@@ -42,7 +42,6 @@ extern "C" {
 #include "dm.h"
 #include "dm/util.h"
 #include "rt/view.h"
-#include "rt/view_legacy_bsg.h"
 #include "../null/dm-Null.h"
 #include "../dm-gl.h"
 }
@@ -89,13 +88,13 @@ swrast_makeCurrent(struct dm *dmp)
     if (dmp->i->dm_debugLevel)
 	fprintf(stderr, "swrast_makeCurrent()\n");
 
-    int view_width = rt_view_context_width_from_bsg(pv->view_ctx);
-    int view_height = rt_view_context_height_from_bsg(pv->view_ctx);
+    int view_width = dm_view_context_width_get(pv->view_ctx);
+    int view_height = dm_view_context_height_get(pv->view_ctx);
     width = (dmp->i->dm_width > 0) ? dmp->i->dm_width : ((view_width > 0) ? view_width : 512);
     height = (dmp->i->dm_height > 0) ? dmp->i->dm_height : ((view_height > 0) ? view_height : 512);
     dmp->i->dm_width = width;
     dmp->i->dm_height = height;
-    rt_view_context_dimensions_set_bsg(pv->view_ctx, width, height);
+    dm_view_context_dimensions_set(pv->view_ctx, width, height);
 
     if (!OSMesaMakeCurrent(pv->ctx, pv->os_b, GL_UNSIGNED_BYTE, width, height)) {
 	fprintf(stderr, "OSMesaMakeCurrent failed!\n");
@@ -122,13 +121,13 @@ swrast_configureWin(struct dm *dmp, int UNUSED(force))
 	return BRLCAD_ERROR;
     }
 
-    int view_width = rt_view_context_width_from_bsg(pv->view_ctx);
-    int view_height = rt_view_context_height_from_bsg(pv->view_ctx);
+    int view_width = dm_view_context_width_get(pv->view_ctx);
+    int view_height = dm_view_context_height_get(pv->view_ctx);
     int width = (dmp->i->dm_width > 0) ? dmp->i->dm_width : ((view_width > 0) ? view_width : 512);
     int height = (dmp->i->dm_height > 0) ? dmp->i->dm_height : ((view_height > 0) ? view_height : 512);
     dmp->i->dm_width = width;
     dmp->i->dm_height = height;
-    rt_view_context_dimensions_set_bsg(pv->view_ctx, width, height);
+    dm_view_context_dimensions_set(pv->view_ctx, width, height);
 
     if (!width || !height) {
 	fprintf(stderr, "swrast_configureWin: Zero sized window\n");
@@ -231,13 +230,13 @@ swrast_open(void *ctx, void *UNUSED(interp), int argc, const char **argv)
     // Note - for Qt, dealing with GL_RGB data display was something of a pain.  This backend
     // was switched to RGBA to make it easier to display the output
     privars->ctx = OSMesaCreateContextExt(OSMESA_RGBA, 16, 0, 0, NULL);
-    int view_width = rt_view_context_width_from_bsg(privars->view_ctx);
-    int view_height = rt_view_context_height_from_bsg(privars->view_ctx);
+    int view_width = dm_view_context_width_get(privars->view_ctx);
+    int view_height = dm_view_context_height_get(privars->view_ctx);
     int width = (view_width <= 0) ? 512 : view_width;
     int height = (view_height <= 0) ? 512 : view_height;
     dmp->i->dm_width = width;
     dmp->i->dm_height = height;
-    rt_view_context_dimensions_set_bsg(privars->view_ctx, width, height);
+    dm_view_context_dimensions_set(privars->view_ctx, width, height);
     privars->os_b = bu_realloc(privars->os_b, width * height * sizeof(GLubyte)*4, "OSMesa rendering buffer");
     if (!OSMesaMakeCurrent(privars->ctx, privars->os_b, GL_UNSIGNED_BYTE, width, height)) {
 	fprintf(stderr, "OSMesaMakeCurrent failed!\n");
@@ -619,8 +618,8 @@ swrast_getDisplayImage(struct dm *dmp, unsigned char **image, int flip, int alph
     if (cbwidth != width || cbheight != height) {
 	fprintf(stderr, "swrast_getDisplayImage: DIM MISMATCH: dm=(%d,%d) OSMesa_buf=(%d,%d) gv=(%d,%d)\n",
 	       width, height, (int)cbwidth, (int)cbheight,
-	       pv->view_ctx ? rt_view_context_width_from_bsg(pv->view_ctx) : -1,
-	       pv->view_ctx ? rt_view_context_height_from_bsg(pv->view_ctx) : -1);
+	       pv->view_ctx ? dm_view_context_width_get(pv->view_ctx) : -1,
+	       pv->view_ctx ? dm_view_context_height_get(pv->view_ctx) : -1);
     } else {
 	fprintf(stderr, "swrast_getDisplayImage: dm=(%d,%d) OSMesa_buf=(%d,%d) [OK]\n",
 	       width, height, (int)cbwidth, (int)cbheight);

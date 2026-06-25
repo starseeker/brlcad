@@ -52,7 +52,7 @@
 
 #include "dm.h"
 
-#include "ged/bsg_ged_draw.h"
+#include "ged/draw.h"
 #include "../../ged_private.h"
 #include "../ged_bot.h"
 #include "./ged_bot_dump.h"

@@ -127,7 +127,7 @@ highlight_from_y(struct mged_state *s, int y) {
     (void)ged_draw_view_selection_set_highlighted_shape_ref(s->gedp,
 	    view_ctx, mged_highlight.shape);
 
-    mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
+    mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
 }
 
@@ -201,7 +201,7 @@ f_aip(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 		view_ctx, mged_highlight.shape);
     }
 
-    mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
+    mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
     return TCL_OK;
 }
@@ -338,7 +338,7 @@ f_matpick(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[
 	init_oedit(s);
     }
 
-    mged_refresh_request_all(s, RT_VIEW_REFRESH_ALL_BSG);
+    mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
     mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
     return TCL_OK;
 }
@@ -492,7 +492,7 @@ f_mouse(
 		highlight_path_pos = hrec.fullpath->fp_len-1 - (
 			(ypos+(int)RT_VIEW_MAX) * (hrec.fullpath->fp_len) / (int)RT_VIEW_RANGE);
 	    if (highlight_path_pos != isave)
-		mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
+		mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
 	    return TCL_OK;
 
     } else switch (s->global_editing_state) {
@@ -508,13 +508,13 @@ f_mouse(
 	case ST_O_PICK:
 	    highlight_path_pos = 0;
 	    (void)chg_state(s, ST_O_PICK, ST_O_PATH, "mouse press");
-	    mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
+	    mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
 	    return TCL_OK;
 
 	case ST_S_PICK:
 	    /* Check details, Init menu, set state */
 	    init_sedit(s);		/* does chg_state */
-	    mged_refresh_request_view(s, view_state, RT_VIEW_REFRESH_VIEW_BSG);
+	    mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
 	    return TCL_OK;
 
 	case ST_S_EDIT:

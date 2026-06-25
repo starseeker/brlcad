@@ -631,7 +631,7 @@ view_state_flag_hook(const struct bu_structparse *UNUSED(sdp),
 {
     struct mged_view_hook_state *hs = (struct mged_view_hook_state *)data;
     if (hs->vs)
-	ged_view_context_refresh_request(hs->vs->vs_gvp, RT_VIEW_REFRESH_VIEW_BSG);
+	ged_view_context_refresh_request(hs->vs->vs_gvp, GED_VIEW_REFRESH_VIEW);
 }
 
 void
