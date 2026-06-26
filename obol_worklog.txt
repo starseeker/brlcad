@@ -16,7 +16,26 @@ Current Work Notes
 ------------------
 
 As of 2026-06-25, `obol_activework.txt` is the authoritative current handoff.
-The latest completed code-state batch retires installed
+The latest completed code-state batch moves GED shape-record database-source
+readback behind the scene-ref owner boundary.  `src/libged/bsg_ged_draw_records.c`
+now fills retained source revision/stale fields through
+`ged_draw_scene_ref_source_summary(ged_draw_shape_source_ref(shape_ref), ...)`
+and no longer includes `bsg/database_source.h` or calls
+`bsg_database_source_record_get` / `bsg_database_source_ref_is_stale`
+directly.  The pivot guard now requires that records-side source-summary
+facade token and rejects direct `bsg/database_source.h`,
+`bsg_database_source_*`, and `BSG_DATABASE_SOURCE_*` use in records.  This
+does not change exit-criteria percentages because the retained export/render
+record implementation and the lower `libbsg` dependency rows still determine
+retirement readiness.
+
+Verification on FreeBSD/clang passed: `ninja -C build libged.so`, then the
+targeted guard/runtime verification completed 4/4 passing in 19.67 seconds:
+`brlobol_pivot_guard` at 17.93 seconds, `ged_test_ged_draw_scene` at
+1.43 seconds, `ged_test_view_command` at 0.15 seconds, and
+`ged_test_qged_swrast` at 0.11 seconds.
+
+The preceding completed code-state batch retires installed
 `include/qtcad/QgObolEditPreview.h` and removes it from
 `include/qtcad/CMakeLists.txt`.  The qged edit-preview utility and qtcad
 edit-preview test now use private

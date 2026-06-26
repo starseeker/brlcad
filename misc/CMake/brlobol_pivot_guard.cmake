@@ -10547,6 +10547,12 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	_brlobol_pivot_guard_fail(
 	  "src/libged/bsg_ged_draw_records.c must preserve export selected state in neutral GED view records")
       endif()
+      string(REGEX MATCH [[ged_draw_scene_ref_source_summary]]
+	_draw_record_source_summary_hit "${_contents}")
+      if(NOT _draw_record_source_summary_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/bsg_ged_draw_records.c must read database-source state through the scene-ref source-summary facade")
+      endif()
       foreach(_token
 	  [[rec[.]geometry_name[ \t\r\n]*=]]
 	  [["indexed-face-set"]]
@@ -10580,16 +10586,19 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       endforeach()
       foreach(_pat
 	  [[#[ \t]*include[ \t]*[<"]bsg/interaction\.h]]
+	  [[#[ \t]*include[ \t]*[<"]bsg/database_source\.h]]
 	  [[(^|[^A-Za-z0-9_])struct[ \t]+bsg_interaction_record([^A-Za-z0-9_]|$)]]
 	  [[(^|[^A-Za-z0-9_])bsg_interaction_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	  [[(^|[^A-Za-z0-9_])bsg_database_source_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	  [[(^|[^A-Za-z0-9_])BSG_INTERACTION_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	  [[(^|[^A-Za-z0-9_])BSG_DATABASE_SOURCE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	  [[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
 	  [[(^|[^A-Za-z0-9_])BSG_FEATURE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	  [[(^|[^A-Za-z0-9_])ged_draw_shape_ref_selection_record([^A-Za-z0-9_]|$)]])
 	string(REGEX MATCH "${_pat}" _draw_record_direct_selection_hit "${_contents}")
 	if(_draw_record_direct_selection_hit)
 	  _brlobol_pivot_guard_fail(
-	    "src/libged/bsg_ged_draw_records.c reintroduced direct BSG selection interaction access: ${_draw_record_direct_selection_hit}")
+	    "src/libged/bsg_ged_draw_records.c reintroduced direct BSG selection/database-source interaction access: ${_draw_record_direct_selection_hit}")
 		endif()
 	      endforeach()
 	    endif()

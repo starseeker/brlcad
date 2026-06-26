@@ -37,7 +37,6 @@
 #include "bu/vls.h"
 #include "bsg/appearance.h"
 #include "bsg/backend_scene.h"
-#include "bsg/database_source.h"
 #include "bsg/draw_intent.h"
 #include "bsg/draw_source.h"
 #include "bsg/export.h"
@@ -809,34 +808,17 @@ _ged_draw_fill_shape_record(struct ged *gedp,
     } else if (!shape_data) {
 	out->stale_reason = ged_draw_stale_reason_name(GED_DRAW_STALE_NONE);
     }
-    struct bsg_database_source_record source_record;
-    bsg_database_source_ref source_ref =
-	bsg_database_source_ref_from_scene(ged_draw_shape_source_ref(shape_ref));
-    if (bsg_database_source_record_get(source_ref,
-	    &source_record) &&
-	    ged_draw_database_source_record_has_state(&source_record)) {
-	out->source_revision = source_record.source_revision;
-	out->inputs_revision = source_record.inputs_revision;
-	out->realized_source_revision = source_record.realized_source_revision;
-	out->realized_inputs_revision = source_record.realized_inputs_revision;
-	out->stale =
-	    bsg_database_source_ref_is_stale(source_ref);
-	if (source_record.stale_reason != BSG_DATABASE_SOURCE_STALE_NONE)
-	    out->stale_reason =
-		ged_draw_database_source_stale_reason_name(source_record.stale_reason);
-	else if (source_record.source_revision !=
-		source_record.realized_source_revision)
-	    out->stale_reason =
-		ged_draw_stale_reason_name(GED_DRAW_STALE_SOURCE_CHANGED);
-	else if (source_record.inputs_revision !=
-		source_record.realized_inputs_revision)
-	    out->stale_reason =
-		ged_draw_stale_reason_name(GED_DRAW_STALE_VIEW_INPUT_CHANGED);
-	else
-	    out->stale_reason =
-		ged_draw_stale_reason_name(GED_DRAW_STALE_NONE);
-	if (!out->draw_mode)
-	    out->draw_mode = source_record.draw_mode;
+    struct ged_draw_database_source_summary source_summary;
+    if (ged_draw_scene_ref_source_summary(ged_draw_shape_source_ref(shape_ref),
+	    &source_summary) && source_summary.has_state) {
+	out->source_revision = source_summary.source_revision;
+	out->inputs_revision = source_summary.inputs_revision;
+	out->realized_source_revision =
+	    source_summary.realized_source_revision;
+	out->realized_inputs_revision =
+	    source_summary.realized_inputs_revision;
+	out->stale = source_summary.stale;
+	out->stale_reason = source_summary.stale_reason;
     }
     out->drawn_revision = ged_draw_scene_ref_drawn_revision(shape_ref);
     out->transparency = ged_draw_scene_ref_transparency(shape_ref);

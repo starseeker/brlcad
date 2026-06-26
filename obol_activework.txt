@@ -83,7 +83,19 @@ paths needs a new neutral contract before it can be moved safely.  The likely
 remaining cycles are qtcad retained backend/display ownership and the direct
 lower `libbsg` dependency rows.
 
-The latest qtcad/qged Obol edit-preview private-header cleanup retires
+The latest GED records database-source summary facade cleanup removes direct
+`bsg/database_source.h` use from `src/libged/bsg_ged_draw_records.c`.
+Shape-record fill now asks `ged_draw_scene_ref_source_summary` for retained
+database-source state after resolving the shape source ref, instead of calling
+`bsg_database_source_record_get` and `bsg_database_source_ref_is_stale`
+directly.  The pivot guard requires that records-side source-summary facade
+token and rejects direct `bsg/database_source.h`, `bsg_database_source_*`, and
+`BSG_DATABASE_SOURCE_*` use from returning to records.  This keeps database
+source readback in the scene-ref owner boundary; exit-criteria percentages do
+not change because retained export/render record implementation and the lower
+`libbsg` dependency rows still remain.
+
+The preceding qtcad/qged Obol edit-preview private-header cleanup retires
 installed `include/qtcad/QgObolEditPreview.h` and removes it from the
 installed qtcad header list.  `src/libqtcad/QgObolEditPreviewPrivate.h` now
 owns the private edit-preview publication declarations used by qged edit
@@ -1014,7 +1026,8 @@ Current residual draw-bridge shape:
   draw, draw realization, and source reexpand replay helpers carry opaque view
   contexts.  The draw-intent helper implementation still remains BSG-backed.
 * Record path-state, draw-path listing, has-paths filtering, group/shape
-  traversal, public view export queries, visible record iteration, and
+  traversal, shape-record database-source state, public view export queries,
+  visible record iteration, and
   rendered-object summary entry points now route through opaque view contexts
   or scene-ref read facades.  The retained export request and backend-scene
   render-summary implementations in `src/libged/bsg_ged_draw_records.c` still
@@ -1252,6 +1265,8 @@ Useful local scans:
   `rg -n '(^|[^A-Za-z0-9_])ged_draw_scene_root_ref[ \t\r\n]*\(' src/libged/bsg_ged_draw_tree.c src/libged/bsg_ged_draw_records.c src/libged/bsg_ged_draw_navigation.c src/libged/bsg_ged_draw_transactions.c src/libged/bsg_ged_draw_scene_root.c src/libged/bsg_ged_draw_refs.c`
 * Current GED draw scene-root traversal facade scan:
   `rg -n 'ged_draw_scene_root_(foreach_shape|foreach_group|subtree_bounds|last_group_ref|has_groups)' src/libged/bsg_ged_draw_scene_root.c src/libged/bsg_ged_draw_tree.c src/libged/bsg_ged_draw_navigation.c src/libged/bsg_ged_draw_records.c src/libged/bsg_ged_draw_private.h misc/CMake/brlobol_pivot_guard.cmake`
+* Recently retired GED records direct database-source access scan:
+  `rg -n 'bsg/database_source|bsg_database_source_|BSG_DATABASE_SOURCE_' src/libged/bsg_ged_draw_records.c`
 * Current GED draw scene-root mutation facade scan:
   `rg -n 'ged_draw_scene_root_mutate|_sg_erase_(path|all_names|all_paths)_root_cb|_sg_clear_all_groups_root_cb' src/libged/bsg_ged_draw_tree.c src/libged/bsg_ged_draw_scene_root.c src/libged/bsg_ged_draw_private.h misc/CMake/brlobol_pivot_guard.cmake`
 * Recently retired GED drawable retained root-storage scan:
@@ -1449,6 +1464,16 @@ Broad focused gate used for recent wrapper batches:
 
 Latest verified baseline:
 
+* GED records database-source summary facade cleanup passed:
+  `ninja -C build libged.so`.
+* Targeted guard/runtime verification for that cleanup passed:
+  `ctest --test-dir build -R
+  '^(brlobol_pivot_guard|ged_test_ged_draw_scene|ged_test_view_command|ged_test_qged_swrast)$'
+  --timeout 180 --output-on-failure` completed 4/4 passing in 19.67 seconds.
+  `brlobol_pivot_guard` completed in 17.93 seconds,
+  `ged_test_ged_draw_scene` in 1.43 seconds,
+  `ged_test_view_command` in 0.15 seconds, and
+  `ged_test_qged_swrast` in 0.11 seconds.
 * qtcad/qged Obol edit-preview private-header cleanup passed:
   `ninja -C build libqtcad.so qged_ell qged_revolve
   test_qtcad_obol_edit_preview` after the CMake regenerate removed stale
