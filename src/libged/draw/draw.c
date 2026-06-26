@@ -52,116 +52,6 @@ ged_draw_test_force_primitive_face_set_failure(int enable)
     ged_draw_test_force_face_set_failure = enable ? 1 : 0;
 }
 
-/* Set solid's basecolor, color, and color flags based on client data and tree
- * state. If user color isn't set in client data, the solid's region id must be
- * set for proper material lookup.
- */
-static void
-solid_set_color_info(
-    ged_draw_shape_draft *draft,
-    unsigned char *wireframe_color_override,
-    struct db_tree_state *tsp)
-{
-    unsigned char bcolor[3] = {255, 0, 0}; /* default */
-
-    int user_color = 0;
-    int default_color = 0;
-    if (wireframe_color_override) {
-	user_color = 1;
-
-	bcolor[RED] = wireframe_color_override[RED];
-	bcolor[GRN] = wireframe_color_override[GRN];
-	bcolor[BLU] = wireframe_color_override[BLU];
-    } else if (tsp) {
-	if (tsp->ts_mater.ma_color_valid) {
-	    bcolor[RED] = tsp->ts_mater.ma_color[RED] * 255.0;
-	    bcolor[GRN] = tsp->ts_mater.ma_color[GRN] * 255.0;
-	    bcolor[BLU] = tsp->ts_mater.ma_color[BLU] * 255.0;
-	} else {
-	    default_color = 1;
-	}
-    }
-
-    ged_draw_shape_draft_set_legacy_color_info(draft, bcolor, user_color, default_color);
-
-    ged_draw_shape_draft_color_soltab(draft, tsp ? tsp->ts_dbip : NULL);
-}
-
-
-static struct ged_draw_source_state *
-draw_source_state_create(struct ged *gedp,
-			 const struct db_full_path *pathp,
-			 struct db_tree_state *tsp)
-{
-    if (!gedp || !gedp->dbip || !pathp || pathp->fp_len <= 0)
-	return NULL;
-
-    struct ged_draw_source_state *ud;
-    BU_GET(ud, struct ged_draw_source_state);
-    memset(ud, 0, sizeof(*ud));
-
-    BU_GET(ud->fp, struct db_full_path);
-    db_full_path_init(ud->fp);
-    db_dup_full_path(ud->fp, pathp);
-
-    ud->dbip = (tsp && tsp->ts_dbip) ? tsp->ts_dbip : gedp->dbip;
-    ud->tol = tsp ? tsp->ts_tol : NULL;
-    ud->ttol = tsp ? tsp->ts_ttol : NULL;
-    if (!ud->tol || !ud->ttol) {
-	struct rt_wdb *wdbp = wdb_dbopen(ud->dbip, RT_WDB_TYPE_DB_DEFAULT);
-	if (wdbp) {
-	    if (!ud->tol)
-		ud->tol = &wdbp->wdb_tol;
-	    if (!ud->ttol)
-		ud->ttol = &wdbp->wdb_ttol;
-	}
-    }
-    ud->stale_reason = GED_DRAW_STALE_NONE;
-    return ud;
-}
-
-
-static int
-dl_commit_published_draft(ged_draw_shape_draft *draft,
-			  int dashflag,
-			  const struct db_full_path *pathp,
-			  struct db_tree_state *tsp,
-			  unsigned char *wireframe_color_override,
-			  struct _ged_client_data *dgcdp)
-{
-    if (!draft || !dgcdp)
-	return 0;
-
-    ged_draw_shape_draft_update_scene_bounds(draft);
-    ged_draw_shape_draft_set_fullpath(draft, pathp);
-    ged_draw_shape_draft_set_source_state(draft,
-	    draw_source_state_create(dgcdp->gedp, pathp, tsp));
-    if (tsp)
-	ged_draw_shape_draft_set_draw_mat(draft, tsp->ts_mat);
-    ged_draw_shape_draft_set_highlighted(draft, 0);
-    ged_draw_shape_draft_set_line_style(draft, dashflag);
-    ged_draw_shape_draft_set_legacy_eval_flag(draft, 0);
-
-    if (tsp) {
-	ged_draw_shape_draft_set_legacy_region_id(draft, tsp->ts_regionid);
-	ged_draw_shape_draft_set_region(draft, tsp->ts_regionid,
-		tsp->ts_aircode, tsp->ts_los, tsp->ts_gmater);
-    }
-
-    solid_set_color_info(draft, wireframe_color_override, tsp);
-
-    ged_draw_shape_draft_set_transparency(draft, dgcdp->vs.transparency);
-    ged_draw_shape_draft_set_draw_mode(draft, dgcdp->vs.draw_mode);
-    ged_draw_shape_draft_apply_appearance_settings(draft, &dgcdp->vs);
-
-    bu_semaphore_acquire(RT_SEM_MODEL);
-    ged_draw_shape_draft_commit_to_group(draft, dgcdp->draw_group_ref);
-    bu_semaphore_release(RT_SEM_MODEL);
-
-    return 1;
-}
-
-
 static int
 dl_add_line_set(int dashflag, const point_t *points, const int *commands,
 		size_t point_count, const struct db_full_path *pathp,
@@ -172,20 +62,9 @@ dl_add_line_set(int dashflag, const point_t *points, const int *commands,
     if (!dgcdp || !dgcdp->view_ctx)
 	return 0;
 
-    ged_draw_shape_draft *draft = ged_draw_shape_draft_create_context(dgcdp->gedp, dgcdp->view_ctx, 1);
-    if (!draft)
-	return 0;
-
-    ged_draw_shape_draft_mark_db_object(draft);
-
-    if (!ged_draw_shape_draft_publish_line_set(draft, points, commands,
-	    point_count)) {
-	ged_draw_shape_draft_destroy(draft);
-	return 0;
-    }
-
-    return dl_commit_published_draft(draft, dashflag, pathp, tsp,
-	    wireframe_color_override, dgcdp);
+    return ged_draw_add_tree_line_set_to_group(dgcdp->gedp, dgcdp->view_ctx,
+	    dgcdp->draw_group_ref, &dgcdp->vs, dashflag, pathp, tsp,
+	    wireframe_color_override, points, commands, point_count);
 }
 
 
@@ -195,103 +74,34 @@ dl_add_nmg_region(int dashflag, const struct nmgregion *r, int style, const stru
     if (!dgcdp || !dgcdp->view_ctx || !r)
 	return 0;
 
-    ged_draw_shape_draft *draft = ged_draw_shape_draft_create_context(dgcdp->gedp, dgcdp->view_ctx, 1);
-    if (!draft)
-	return 0;
-
-    ged_draw_shape_draft_mark_db_object(draft);
-
-    if (!ged_draw_shape_draft_publish_nmg_region(draft, r, style)) {
-	ged_draw_shape_draft_destroy(draft);
-	return 0;
-    }
-
-    return dl_commit_published_draft(draft, dashflag, pathp, tsp,
-	    wireframe_color_override, dgcdp);
+    return ged_draw_add_tree_nmg_region_to_group(dgcdp->gedp,
+	    dgcdp->view_ctx, dgcdp->draw_group_ref, &dgcdp->vs, dashflag,
+	    pathp, tsp, wireframe_color_override, r, style);
 }
 
 
 static int
 dl_add_primitive_face_set(int dashflag, const struct rt_db_internal *ip, const struct db_full_path *pathp, struct db_tree_state *tsp, unsigned char *wireframe_color_override, struct _ged_client_data *dgcdp)
 {
-    int ok = 0;
-
     if (!dgcdp || !dgcdp->view_ctx || !ip)
 	return 0;
 
-    ged_draw_shape_draft *draft = ged_draw_shape_draft_create_context(dgcdp->gedp, dgcdp->view_ctx, 1);
-    if (!draft)
-	return 0;
-
-    ged_draw_shape_draft_mark_db_object(draft);
-
-    if (!ged_draw_test_force_face_set_failure &&
-	    ip->idb_meth && ip->idb_meth->ft_indexed_face_set) {
-	struct rt_view_info view_info;
-	ged_draw_view_context_info_get(&view_info, dgcdp->view_ctx);
-	ok = ged_draw_shape_draft_publish_primitive_face_set(draft,
-		(struct rt_db_internal *)ip, tsp ? tsp->ts_ttol : NULL,
-		tsp ? tsp->ts_tol : NULL, &view_info);
-    }
-
-    if (!ok) {
-	ged_draw_shape_draft_destroy(draft);
-	return 0;
-    }
-
-    return dl_commit_published_draft(draft, dashflag, pathp, tsp,
-	    wireframe_color_override, dgcdp);
+    return ged_draw_add_tree_primitive_face_set_to_group(dgcdp->gedp,
+	    dgcdp->view_ctx, dgcdp->draw_group_ref, &dgcdp->vs, dashflag,
+	    pathp, tsp, wireframe_color_override, ip,
+	    ged_draw_test_force_face_set_failure);
 }
 
 
 static int
 dl_add_primitive_wireframe_line_set(int dashflag, const struct rt_db_internal *ip, const struct db_full_path *pathp, struct db_tree_state *tsp, unsigned char *wireframe_color_override, struct _ged_client_data *dgcdp)
 {
-    int ok = 0;
-
     if (!dgcdp || !dgcdp->view_ctx || !ip)
 	return 0;
 
-    ged_draw_shape_draft *draft = ged_draw_shape_draft_create_context(dgcdp->gedp, dgcdp->view_ctx, 1);
-    if (!draft)
-	return 0;
-
-    ged_draw_shape_draft_mark_db_object(draft);
-
-    switch (ip->idb_type) {
-	case ID_BOT:
-	    {
-		const struct rt_bot_internal *bot = (const struct rt_bot_internal *)ip->idb_ptr;
-		RT_BOT_CK_MAGIC(bot);
-		ok = ged_draw_shape_draft_publish_bot_wireframe_line_set(draft, bot);
-	    }
-	    break;
-	case ID_POLY:
-	    {
-		const struct rt_pg_internal *pg = (const struct rt_pg_internal *)ip->idb_ptr;
-		RT_PG_CK_MAGIC(pg);
-		ok = ged_draw_shape_draft_publish_poly_wireframe_line_set(draft, pg);
-	    }
-	    break;
-	case ID_BREP:
-	    {
-		const struct rt_brep_internal *bi = (const struct rt_brep_internal *)ip->idb_ptr;
-		RT_BREP_CK_MAGIC(bi);
-		ok = ged_draw_shape_draft_publish_brep_wireframe_line_set(draft,
-			bi, tsp ? tsp->ts_tol : NULL);
-	    }
-	    break;
-	default:
-	    break;
-    }
-
-    if (!ok) {
-	ged_draw_shape_draft_destroy(draft);
-	return 0;
-    }
-
-    return dl_commit_published_draft(draft, dashflag, pathp, tsp,
-	    wireframe_color_override, dgcdp);
+    return ged_draw_add_tree_primitive_wireframe_to_group(dgcdp->gedp,
+	    dgcdp->view_ctx, dgcdp->draw_group_ref, &dgcdp->vs, dashflag,
+	    pathp, tsp, wireframe_color_override, ip);
 }
 
 
@@ -324,16 +134,12 @@ append_shape_to_draw_group(
     struct rt_db_internal *ip,
     void *client_data)
 {
-    point_t min, max;
     union tree *curtree;
     struct ged_shape_data *bsg_data = (struct ged_shape_data *)client_data;
 
     RT_CK_DB_INTERNAL(ip);
     BG_CK_TESS_TOL(tsp->ts_ttol);
     BN_CK_TOL(tsp->ts_tol);
-
-    VSETALL(min, INFINITY);
-    VSETALL(max, -INFINITY);
 
     if (!bsg_data) {
         return TREE_NULL;
@@ -347,130 +153,10 @@ append_shape_to_draw_group(
         bu_free((void *)sofar, "path string");
     }
 
-    /* create shape */
-    ged_draw_shape_draft *draft = ged_draw_shape_draft_create_context(bsg_data->gedp, bsg_data->view_ctx, 1);
-    if (!draft)
+    if (!ged_draw_append_tree_shape_to_group(bsg_data->gedp,
+	    bsg_data->view_ctx, bsg_data->draw_group_ref, &bsg_data->vs,
+	    pathp, tsp, ip))
 	return TREE_NULL;
-    ged_draw_shape_draft_mark_db_object(draft);
-    ged_draw_shape_draft_set_fullpath(draft, pathp);
-    ged_draw_shape_draft_set_source_state(draft,
-	    draw_source_state_create(bsg_data->gedp, pathp, tsp));
-    ged_draw_shape_draft_set_draw_mat(draft, tsp->ts_mat);
-    if (tsp)
-	ged_draw_shape_draft_set_region(draft, tsp->ts_regionid, tsp->ts_aircode, tsp->ts_los, tsp->ts_gmater);
-
-    { vect_t _zero = VINIT_ZERO; ged_draw_shape_draft_set_center_size(draft, _zero, 0); }
-
-    if (ip->idb_meth->ft_bbox) {
-        if (ip->idb_meth->ft_bbox(ip, &min, &max, tsp->ts_tol) < 0) {
-            if (pathp && DB_FULL_PATH_CUR_DIR(pathp)) {
-		bu_log("%s: plot failure\n", DB_FULL_PATH_CUR_DIR(pathp)->d_namep);
-	    } else {
-		bu_log("plot failure - invalid path\n");
-	    }
-
-	    ged_draw_shape_draft_destroy(draft);
-            return TREE_NULL;
-        }
-
-	ged_draw_shape_draft_set_bounds_from_minmax(draft, min, max, 1);
-    } else {
-        /* As a fallback for primitives that don't have a bbox function, use
-         * the old bounding method of calculating a plot for the primitive and
-         * using the extent of the plotted segments as the bounds.
-         */
-        int plot_status;
-	plot_status = ged_draw_shape_draft_publish_primitive_wireframe(draft, ip,
-		tsp->ts_ttol, tsp->ts_tol, NULL, 0);
-
-        if (plot_status < 0) {
-            if (pathp && DB_FULL_PATH_CUR_DIR(pathp)) {
-		bu_log("%s: plot failure\n", DB_FULL_PATH_CUR_DIR(pathp)->d_namep);
-	    } else {
-		bu_log("plot failure - invalid path\n");
-	    }
-
-	    ged_draw_shape_draft_destroy(draft);
-            return TREE_NULL;
-        }
-
-	(void)ged_draw_shape_draft_update_bounds_from_geometry(draft, NULL);
-    }
-
-    ged_draw_shape_draft_set_highlighted(draft, 0);
-
-    if (bsg_data->draw_solid_lines_only) {
-	ged_draw_shape_draft_set_line_style(draft, 0);
-    } else {
-	ged_draw_shape_draft_set_line_style(draft, (tsp->ts_sofar & (TS_SOFAR_MINUS|TS_SOFAR_INTER)) ? 1 : 0);
-    }
-
-    ged_draw_shape_draft_set_legacy_eval_flag(draft, 0);
-    ged_draw_shape_draft_set_legacy_region_id(draft, tsp->ts_regionid);
-
-    if (ip->idb_type == ID_GRIP) {
-        float mater_color[3];
-
-        /* Temporarily change mater color for pseudo solid to get the desired
-         * default color.
-         */
-        mater_color[RED] = tsp->ts_mater.ma_color[RED];
-        mater_color[GRN] = tsp->ts_mater.ma_color[GRN];
-        mater_color[BLU] = tsp->ts_mater.ma_color[BLU];
-
-        tsp->ts_mater.ma_color[RED] = 0;
-        tsp->ts_mater.ma_color[GRN] = 128;
-        tsp->ts_mater.ma_color[BLU] = 128;
-
-        if (bsg_data->wireframe_color_override) {
-            solid_set_color_info(draft, (unsigned char *)&(bsg_data->wireframe_color), tsp);
-        } else {
-            solid_set_color_info(draft, NULL, tsp);
-        }
-
-        tsp->ts_mater.ma_color[RED] = mater_color[RED];
-        tsp->ts_mater.ma_color[GRN] = mater_color[GRN];
-        tsp->ts_mater.ma_color[BLU] = mater_color[BLU];
-
-    } else {
-        if (bsg_data->wireframe_color_override) {
-	    unsigned char wire_color[3];
-	    wire_color[RED] = (unsigned char)bsg_data->wireframe_color[RED];
-	    wire_color[GRN] = (unsigned char)bsg_data->wireframe_color[GRN];
-	    wire_color[BLU] = (unsigned char)bsg_data->wireframe_color[BLU];
-            solid_set_color_info(draft, wire_color, tsp);
-        } else {
-	    const char *attr_color = bu_avs_get(&ip->idb_avs, db5_standard_attribute(ATTR_COLOR));
-	    if (attr_color) {
-		int i;
-		unsigned char obj_color[3];
-		int color[3];
-		int color_cnt = sscanf(attr_color, "%3i%*c%3i%*c%3i", color+0, color+1, color+2);
-		if (color_cnt == 3 && color[0] >= 0 && color[1] >= 0 && color[2] >= 0) {
-		    for (i = 0; i < 3; i++) {
-			if (color[i] > 255) color[i] = 255;
-		    }
-		    obj_color[RED] = (unsigned char)color[RED];
-		    obj_color[GRN] = (unsigned char)color[GRN];
-		    obj_color[BLU] = (unsigned char)color[BLU];
-		    solid_set_color_info(draft, obj_color, tsp);
-		} else {
-		    solid_set_color_info(draft, NULL, tsp);
-		}
-	    } else {
-		solid_set_color_info(draft, NULL, tsp);
-	    }
-	}
-    }
-
-    ged_draw_shape_draft_set_transparency(draft, bsg_data->transparency);
-    ged_draw_shape_draft_set_draw_mode(draft, bsg_data->draw_mode);
-    ged_draw_shape_draft_apply_appearance_settings(draft, &bsg_data->vs);
-
-    /* append shape to draw group */
-    bu_semaphore_acquire(RT_SEM_MODEL);
-    ged_draw_shape_draft_commit_to_group(draft, bsg_data->draw_group_ref);
-    bu_semaphore_release(RT_SEM_MODEL);
 
     /* indicate success by returning something other than TREE_NULL */
     BU_GET(curtree, union tree);

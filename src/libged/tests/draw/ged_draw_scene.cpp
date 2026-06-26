@@ -1121,14 +1121,13 @@ publish_nmg_test_shape_with_late_state(struct ged *gedp,
     }
 
     draft = ged_draw_shape_draft_create_context(gedp,
-	    test_active_view_ctx(gedp), 0);
+	    test_active_view_ctx(gedp), 1);
     ASSERT(draft != NULL);
     if (!draft) {
 	db_free_full_path(&dfp);
 	return shape_ref;
     }
 
-    ged_draw_shape_draft_mark_db_object(draft);
     {
 	int published = ged_draw_shape_draft_publish_nmg_region(draft, r, style);
 	ASSERT(published == 1);
@@ -1139,15 +1138,13 @@ publish_nmg_test_shape_with_late_state(struct ged *gedp,
 	}
     }
 
-    ASSERT(ged_draw_shape_draft_update_scene_bounds(draft) == 1);
-    ASSERT(ged_draw_shape_draft_set_fullpath(draft, &dfp) == 1);
-    ASSERT(ged_draw_shape_draft_set_line_style(draft, line_style) == 1);
-    ASSERT(ged_draw_shape_draft_set_line_width(draft, line_width) == 1);
-    ASSERT(ged_draw_shape_draft_set_transparency(draft, transparency) == 1);
-    ASSERT(ged_draw_shape_draft_set_draw_mode(draft, draw_mode) == 1);
-    ASSERT(ged_draw_shape_draft_set_material_rgb(draft,
-		material_rgb[0], material_rgb[1], material_rgb[2]) == 1);
-    ASSERT(ged_draw_shape_draft_set_highlighted(draft, 1) == 1);
+    struct ged_draw_appearance_settings appearance =
+	GED_DRAW_APPEARANCE_SETTINGS_INIT;
+    appearance.transparency = transparency;
+    appearance.draw_mode = draw_mode;
+    appearance.s_line_width = line_width;
+    ASSERT(ged_draw_shape_draft_apply_late_display_state(draft, &dfp,
+	    line_style, &appearance, material_rgb, 1) == 1);
 
     shape_ref = ged_draw_shape_draft_commit_to_group(draft, group_ref);
     db_free_full_path(&dfp);
@@ -3987,6 +3984,9 @@ main(int ac, char *av[])
 	memset(&grec, 0, sizeof(grec));
 	ASSERT(ged_draw_group_record_get(gedp, g, &grec) == 1);
 	ASSERT(BU_STR_EQUAL(grec.path, "all.g"));
+	ASSERT(grec.fullpath && grec.fullpath->fp_len == dfp.fp_len &&
+		db_full_path_match_top(grec.fullpath, &dfp) &&
+		db_full_path_match_top(&dfp, grec.fullpath));
 	ASSERT(grec.draw_mode == GED_DRAW_MODE_WIRE);
 
 	/* Draw-intent metadata is the canonical path/mode source. */
@@ -4001,6 +4001,9 @@ main(int ac, char *av[])
 	memset(&grec, 0, sizeof(grec));
 	ASSERT(ged_draw_group_record_get(gedp, g, &grec) == 1);
 	ASSERT(BU_STR_EQUAL(grec.path, "all.g"));
+	ASSERT(grec.fullpath && grec.fullpath->fp_len == dfp.fp_len &&
+		db_full_path_match_top(grec.fullpath, &dfp) &&
+		db_full_path_match_top(&dfp, grec.fullpath));
 
 	/* erase_by_dbpath removes it. */
 	ged_draw_erase_path(gedp, &dfp);

@@ -350,7 +350,6 @@ set(
   bsg_ged_draw_tree.c
   bsg_ged_draw_util.c
   bsg_ged_draw_view.c
-  bsg_ged_draw_node.c
   bsg_ged_draw_overlay.c
   bsg_ged_draw_registry.c
   bsg_ged_draw_records.c

@@ -1,0 +1,218 @@
+Obol/libbrlobol Backend Worklog
+===============================
+
+Purpose
+-------
+
+This file is the append/update log for the Obol/libbrlobol migration.  Keep
+`backend_capabilities.txt` focused on current status and remaining work.  Use
+this file for detailed completed-work notes, bridge retirements, test evidence,
+and guard updates.
+
+
+Update Rules
+------------
+
+* Keep entries structured and easy to append automatically.
+* Add new entries under "Log Entries" using the template at the end of this
+  file.
+* Use UTC dates in `YYYY-MM-DD` form.
+* Keep `id` stable, lowercase, and hyphenated.
+* Keep `capability` as one of:
+  `scene-source`, `feature-polygon`, `render-export`, `display-stream`,
+  `qtcad-ownership`, `docs`, or `guard`.
+* Prefer concise bullets over long prose.
+* Put detailed file/test evidence in the entry where the work happened.
+* Update `backend_capabilities.txt` only when current status or remaining work
+  changes.
+
+
+Current Baseline Snapshot
+-------------------------
+
+date: 2026-06-26
+status: active
+active_capability: scene-source
+
+Capability 1 baseline:
+
+* Obol/qtcad has staged scene, group, source, placement, display-state,
+  revision, summary, and draw-sync coverage.
+* GED public records and transaction paths increasingly use neutral summaries,
+  source-state records, draw-state summaries, source snapshots, child
+  iterators, and facade operations instead of direct BSG field access.
+* The BSG-backed source adapter still owns the transitional retained scene
+  implementation, geometry publication, source realization, LoD realization,
+  child/source attachment, and remaining scene-ref mutation.
+* `src/libged/bsg_ged_draw_private.h` still exposes transitional
+  `bsg_scene_ref` handles while live GED internals need retained scene tokens.
+* `misc/CMake/brlobol_pivot_guard.cmake` is the authoritative staged-boundary
+  guard for this migration phase.
+
+Capability 2 baseline:
+
+* Feature and polygon behavior still needs a full Obol/libbrlobol-backed store
+  behind neutral `rt_view_*` and `ged_draw_view_*` APIs.
+* `src/librt/view_legacy_bsg.c` and `src/libged/bsg_ged_draw_view.c` remain
+  transition points for feature/polygon behavior.
+
+Capability 3 baseline:
+
+* Obol export action has staged object-record support with stable ordering,
+  identity fields, filters, geometry details, and full-detail request metadata.
+* GED view-record wrappers route through a neutral backend-adapter producer.
+* The temporary BSG export producer remains in the BSG-backed source adapter
+  pending Obol query hookup.
+
+Capability 4 baseline:
+
+* The permanent Obol/libbrlobol display draw stream still needs implementation
+  sufficient to feed qtcad directly and temporarily validate libdm consumers.
+* `src/libdm/view.c` still must lose direct BSG render API dependency before
+  the libdm/libbsg dependency row can retire.
+
+Capability 5 baseline:
+
+* qtcad Obol sync/export/pick/snap/measure/window-host work is staged, but
+  normal qtcad/qged visible rendering is not yet fully Obol/libbrlobol-owned.
+* `qged` direct `dm_plugins` dependency must remain until qtcad/Obol owns the
+  normal display backend path.
+
+
+Log Entries
+-----------
+
+entry:
+  date: 2026-06-26
+  id: backend-doc-split
+  capability: docs
+  summary: Split the backend capability guide from the detailed migration log.
+  changed:
+    - Rewrote `backend_capabilities.txt` as a focused current-status and
+      remaining-work guide.
+    - Replaced the copied historical `backend_worklog.txt` with this structured
+      append/update log.
+    - Preserved the current migration baseline in a compact form instead of a
+      long staged-coverage narrative.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+  tests:
+    - not run; documentation-only change
+  notes:
+    - Future detailed bridge-retirement notes should be appended here.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-rt-child-count-bridge-retired
+  capability: scene-source
+  summary: Removed private RT scene-ref child-count bridge from transaction
+    clear/teardown accounting.
+  changed:
+    - Retired `ged_draw_scene_ref_child_count_rt`.
+    - Transaction clear/teardown accounting now reads root child count through
+      `ged_draw_scene_context_tree_summary`.
+    - Pivot guard now expects the neutral scene-context summary path instead of
+      the retired helper.
+  files:
+    - `src/libged/bsg_ged_draw_transactions.c`
+    - `src/libged/bsg_ged_draw_refs.c`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `git diff --check`
+  notes:
+    - This was aligned because transaction code only needed a neutral root tree
+      summary, not an RT-to-BSG child-count bridge.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-child-context-bridge-retired
+  capability: scene-source
+  summary: Removed private direct child-index-to-context bridge.
+  changed:
+    - Retired `ged_draw_scene_ref_child_context_at`.
+    - Public scene-context child lookup now uses `ged_draw_scene_ref_foreach_child`.
+    - Pivot guard no longer requires the retired private helper.
+  files:
+    - `src/libged/bsg_ged_draw_refs.c`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `git diff --check`
+  notes:
+    - Attempting the same style of retirement for the parent-context helper was
+      rejected by the pivot guard because it moved retained parent traversal
+      into the refs layer.  The parent-context adapter boundary was restored.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-record-boundary-fix
+  capability: scene-source
+  summary: Repaired shape/source traversal boundaries after source-container
+    state made scene traversal ambiguous.
+  changed:
+    - `ged_draw_scene_ref_shape_record_summary` now requires an actual
+      shape/geometry scene ref, so database source containers with registry
+      state do not masquerade as public shape records.
+    - Scene-root shape traversal now visits composite records and continues
+      into path-bearing child records while filtering descendant null-path
+      implementation payload nodes.
+    - Geometry read queries no longer lazily create publication payload nodes.
+    - Geometry publication still creates payload targets where required.
+  files:
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/bsg_ged_draw_scene_root.c`
+    - `src/libged/bsg_ged_draw_transactions.c`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+  notes:
+    - This restored `ged_test_ged_draw_scene` after traversal began counting
+      containers and helper payloads as records.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-redraw-freebsd-fixes
+  capability: scene-source
+  summary: Fixed focused redraw failures seen in the FreeBSD/clang environment.
+  changed:
+    - Initialized `rt_db_internal` before redraw wireframe use.
+    - Skipped primitive wireframe redraw for combination/container records so
+      leaf traversal owns primitive publication.
+    - Treated unchanged appearance application as success instead of failure.
+  files:
+    - `src/libged/bsg_ged_draw_transactions.c`
+    - `src/libged/bsg_ged_draw_source.c`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+  notes:
+    - These were correctness fixes, not performance optimizations.
+
+
+Entry Template
+--------------
+
+entry:
+  date: YYYY-MM-DD
+  id: short-stable-id
+  capability: scene-source|feature-polygon|render-export|display-stream|qtcad-ownership|docs|guard
+  summary: One concise sentence.
+  changed:
+    - Concrete completed change.
+  files:
+    - `path/to/file`
+  tests:
+    - command or `not run; reason`
+  notes:
+    - Optional context, guard implication, or follow-up.

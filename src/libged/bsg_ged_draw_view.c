@@ -247,23 +247,6 @@ ged_draw_view_context_selection_set_path(
 	    kind, path);
 }
 
-void
-ged_draw_scene_ref_realization_set_view_context_policy(bsg_scene_ref ref,
-						       const void *view_ctx)
-{
-    if (!view_ctx)
-	return;
-
-    ged_draw_view_lod_policy policy;
-    rt_view_context_lod_policy_get(&policy, view_ctx);
-    ged_draw_scene_ref_realization_set_view_policy(ref,
-	    policy.csg_enabled,
-	    rt_view_context_scale_get(view_ctx),
-	    policy.bot_threshold,
-	    policy.curve_scale,
-	    policy.point_scale);
-}
-
 int
 ged_draw_view_context_feature_exists(void *view_ctx, const char *name)
 {

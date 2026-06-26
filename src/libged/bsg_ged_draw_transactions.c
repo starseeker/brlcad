@@ -497,22 +497,19 @@ _ged_draw_mark_db_change_scene_ref(struct ged_draw_db_update_ctx *ctx,
     if (!ctx || ged_draw_scene_ref_is_null(shape_ref))
 	return 1;
 
-    ged_draw_shape_state *shape_data = ged_draw_scene_ref_shape_state(shape_ref);
-    if (!shape_data)
-	return 1;
-    shape_data->source_revision++;
-    shape_data->stale_reason = ctx->reason ? ctx->reason : GED_DRAW_STALE_SOURCE_CHANGED;
-    struct ged_draw_source_state *d =
-	ged_draw_scene_ref_source_data(shape_ref);
-    if (d) {
-	d->source_revision = shape_data->source_revision;
-	d->stale_reason = shape_data->stale_reason;
-    }
-    ged_draw_scene_ref_mark_realization_stale(shape_ref,
-	    shape_data->source_revision,
-	    shape_data->inputs_revision,
-	    shape_data->stale_reason);
-    ged_draw_scene_ref_database_source_sync(shape_ref, d, shape_data);
+    bsg_scene_ref source_ref = ged_draw_scene_ref_source_owner(shape_ref);
+    struct ged_draw_database_source_record record = {0};
+    (void)ged_draw_scene_ref_database_source_record_get(source_ref, &record);
+    record.source_revision++;
+    if (record.source_revision == 0)
+	record.source_revision = 1;
+    record.stale_reason = ctx->reason ? ctx->reason :
+	GED_DRAW_STALE_SOURCE_CHANGED;
+    (void)ged_draw_scene_ref_database_source_record_apply(source_ref,
+	    &record);
+    if (!ged_draw_scene_ref_equal(source_ref, shape_ref))
+	(void)ged_draw_scene_ref_database_source_record_apply(shape_ref,
+		&record);
     ctx->changed++;
     return 1;
 }
@@ -778,17 +775,21 @@ _ged_draw_wireframe_shape(bsg_scene_ref shape_ref, void *view_ctx,
     struct rt_db_internal dbintern;
     struct rt_db_internal *ip = &dbintern;
     int ret = -1;
+    RT_DB_INTERNAL_INIT(ip);
 
-    ged_draw_shape_state *shape_data = ged_draw_scene_ref_shape_state(shape_ref);
-    if (!shape_data)
+    struct ged_draw_shape_record_summary shape_summary;
+    if (!ged_draw_scene_ref_shape_record_summary(shape_ref, &shape_summary))
 	return 0;
-    if (shape_data->s_fullpath.fp_len <= 0)
+    const struct db_full_path *fp = shape_summary.fullpath;
+    if (!fp || fp->fp_len <= 0)
 	return 0;
 
-    mat_t draw_mat;
-    ged_draw_scene_ref_draw_mat(shape_ref, draw_mat);
-    int get_ret = rt_db_get_internal(ip, DB_FULL_PATH_CUR_DIR(&shape_data->s_fullpath),
-			     dbip, draw_mat);
+    struct ged_draw_scene_draw_state_summary draw_state = {0};
+    if (!ged_draw_scene_ref_draw_state_summary(shape_ref, &draw_state) ||
+	    !draw_state.draw_mat_valid)
+	return -1;
+    int get_ret = rt_db_get_internal(ip, DB_FULL_PATH_CUR_DIR(fp),
+	    dbip, draw_state.draw_mat);
     if (get_ret < 0)
 	return -1;
 
@@ -807,9 +808,10 @@ _ged_draw_wireframe_shape(bsg_scene_ref shape_ref, void *view_ctx,
     rt_db_free_internal(ip);
 
     if (ret < 0) {
-	if (DB_FULL_PATH_CUR_DIR(&shape_data->s_fullpath))
+	if (DB_FULL_PATH_CUR_DIR(fp)) {
 	    bu_log("%s: plot failure\n",
-		   DB_FULL_PATH_CUR_DIR(&shape_data->s_fullpath)->d_namep);
+		   DB_FULL_PATH_CUR_DIR(fp)->d_namep);
+	}
 	return -1;
     }
 
@@ -817,71 +819,70 @@ _ged_draw_wireframe_shape(bsg_scene_ref shape_ref, void *view_ctx,
 }
 
 
+static void
+_ged_draw_scene_ref_mark_redraw_result(bsg_scene_ref shape_ref, int failed)
+{
+    bsg_scene_ref source_ref = ged_draw_scene_ref_source_owner(shape_ref);
+    struct ged_draw_database_source_record record = {0};
+    if (!ged_draw_scene_ref_database_source_record_get(source_ref, &record))
+	return;
+
+    record.stale_reason = failed ? GED_DRAW_STALE_UPDATE_FAILED :
+	GED_DRAW_STALE_NONE;
+    if (!failed) {
+	record.realized_source_revision = record.source_revision;
+	record.realized_inputs_revision = record.inputs_revision;
+    }
+
+    (void)ged_draw_scene_ref_database_source_record_apply(source_ref,
+	    &record);
+    if (!ged_draw_scene_ref_equal(source_ref, shape_ref))
+	(void)ged_draw_scene_ref_database_source_record_apply(shape_ref,
+		&record);
+}
+
+
 static int
 _ged_draw_redraw_shape(bsg_scene_ref shape_ref, struct db_i *dbip,
 		       struct db_tree_state *tsp, void *view_ctx)
 {
-    if (ged_draw_scene_ref_draw_mode(shape_ref) != _GED_WIREFRAME)
+    struct ged_draw_scene_draw_state_summary draw_state = {0};
+    if (!ged_draw_scene_ref_draw_state_summary(shape_ref, &draw_state) ||
+	    draw_state.draw_mode != _GED_WIREFRAME)
 	return 0;
 
-    ged_draw_shape_state *shape_data = ged_draw_scene_ref_shape_state(shape_ref);
-    if (!shape_data || shape_data->s_fullpath.fp_len <= 0)
+    struct ged_draw_shape_record_summary shape_summary;
+    if (!ged_draw_scene_ref_shape_record_summary(shape_ref, &shape_summary))
+	return 0;
+    const struct db_full_path *fp = shape_summary.fullpath;
+    if (!fp || fp->fp_len <= 0)
+	return 0;
+
+    struct directory *dp = DB_FULL_PATH_CUR_DIR(fp);
+    if (dp && (dp->d_flags & RT_DIR_COMB))
 	return 0;
 
     ged_draw_scene_ref_geometry_clear(shape_ref);
     int ret = _ged_draw_wireframe_shape(shape_ref, view_ctx, dbip, tsp->ts_tol, tsp->ts_ttol);
-    struct ged_draw_source_state *d =
-	ged_draw_scene_ref_source_data(shape_ref);
-    if (d) {
-	if (ret < 0) {
-	    d->stale_reason = GED_DRAW_STALE_UPDATE_FAILED;
-	} else {
-	    d->realized_source_revision = d->source_revision;
-	    d->realized_inputs_revision = d->inputs_revision;
-	    d->stale_reason = GED_DRAW_STALE_NONE;
-	}
-    }
-    if (shape_data) {
-	if (ret < 0) {
-	    shape_data->stale_reason = GED_DRAW_STALE_UPDATE_FAILED;
-	} else {
-	    shape_data->realized_source_revision = shape_data->source_revision;
-	    shape_data->realized_inputs_revision = shape_data->inputs_revision;
-	    shape_data->stale_reason = GED_DRAW_STALE_NONE;
-	    if (d) {
-		d->realized_source_revision = shape_data->realized_source_revision;
-		d->realized_inputs_revision = shape_data->realized_inputs_revision;
-	    }
-	}
-	ged_draw_scene_ref_mark_realization_result(shape_ref,
-		shape_data->source_revision,
-		shape_data->inputs_revision,
-		ret < 0);
-    } else if (d) {
-	ged_draw_scene_ref_mark_realization_result(shape_ref,
-		d->source_revision,
-		d->inputs_revision,
-		ret < 0);
-    }
-    ged_draw_scene_ref_database_source_sync(shape_ref, d, shape_data);
+    _ged_draw_scene_ref_mark_redraw_result(shape_ref, ret < 0);
     return ret;
 }
 
 
-static void
-_ged_draw_redraw_scene_ref(bsg_scene_ref ref, struct ged_draw_redraw_ctx *ctx)
+static int
+_ged_draw_redraw_shape_scene_ref_cb(bsg_scene_ref ref, void *userdata)
 {
+    struct ged_draw_redraw_ctx *ctx = (struct ged_draw_redraw_ctx *)userdata;
     if (!ctx || ged_draw_scene_ref_is_null(ref))
-	return;
+	return 1;
 
-    if (ged_draw_scene_ref_is_shape(ref)) {
-	if (!ctx->skip_subtractions || !ged_draw_scene_ref_line_style(ref))
-	    ctx->ret += _ged_draw_redraw_shape(ref, ctx->dbip, ctx->tsp, ctx->view_ctx);
-    }
+    struct ged_draw_scene_draw_state_summary draw_state = {0};
+    if (!ctx->skip_subtractions ||
+	    (ged_draw_scene_ref_draw_state_summary(ref, &draw_state) &&
+	     !draw_state.line_style))
+	ctx->ret += _ged_draw_redraw_shape(ref, ctx->dbip, ctx->tsp, ctx->view_ctx);
 
-    size_t child_count = ged_draw_scene_ref_child_count(ref);
-    for (size_t i = 0; i < child_count; i++)
-	_ged_draw_redraw_scene_ref(ged_draw_scene_ref_child_at(ref, i), ctx);
+    return 1;
 }
 
 
@@ -901,7 +902,8 @@ _ged_draw_redraw_group_scene_ref(struct ged *gedp, bsg_scene_ref group_ref,
     ctx.skip_subtractions = skip_subtractions;
     ctx.ret = 0;
 
-    _ged_draw_redraw_scene_ref(group_ref, &ctx);
+    ged_draw_scene_ref_foreach_shape(group_ref, _ged_draw_redraw_shape_scene_ref_cb,
+	    &ctx);
 
     return ctx.ret;
 }
@@ -914,33 +916,6 @@ ged_draw_redraw_group_ref(struct ged *gedp, ged_draw_group_ref ref,
     return _ged_draw_redraw_group_scene_ref(gedp,
 	    ged_draw_registry_group_scene_ref(gedp, ref), skip_subtractions,
 	    NULL);
-}
-
-
-void
-ged_draw_revalidate_db_event(
-	struct ged *gedp,
-	const struct ged_draw_database_event_record *ev)
-{
-    if (!gedp || !ev || !ev->path || !strlen(ev->path))
-	return;
-
-    rt_view_scene_ref root_rt_ref = ged_scene_root_rt_ref(gedp);
-    (void)ged_draw_scene_ref_revalidate_draw_intent_rt(root_rt_ref, ev);
-
-    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
-    if (views) {
-	for (size_t vi = 0; vi < BU_PTBL_LEN(views); vi++) {
-	    void *view_ctx = (void *)BU_PTBL_GET(views, vi);
-	    rt_view_scene_ref view_root_rt =
-		ged_draw_view_context_scene_root_rt_ref(view_ctx);
-	    if (!rt_view_scene_ref_is_null(view_root_rt) &&
-		    !rt_view_scene_ref_equal(view_root_rt, root_rt_ref)) {
-		(void)ged_draw_scene_ref_revalidate_draw_intent_rt(
-			view_root_rt, ev);
-	    }
-	}
-    }
 }
 
 
@@ -977,20 +952,15 @@ _ged_draw_redraw_path_cb(const struct ged_draw_group_record *rec, void *ud)
 	return 1;
     if (ctx->view_ctx && !ged_draw_group_record_in_view(rec, ctx->view_ctx))
 	return 1;
-    struct db_full_path draw_path;
-    db_full_path_init(&draw_path);
-
     bsg_scene_ref group_ref =
 	ged_draw_registry_group_scene_ref(ctx->gedp, rec->ref);
-    int ret = ged_draw_group_scene_ref_dbpath(ctx->gedp, group_ref, &draw_path);
-    if (ret < 0) {
+    if (!rec->fullpath || rec->fullpath->fp_len <= 0) {
 	ctx->ret = -1;
 	return 0;
     }
 
-    if (db_full_path_match_top(&draw_path, ctx->obj_path)) {
+    if (db_full_path_match_top(rec->fullpath, ctx->obj_path)) {
 	ctx->found = 1;
-	db_free_full_path(&draw_path);
 	void *redraw_view_ctx = ctx->view_ctx ? ctx->view_ctx :
 	    ((rec->in_view_scope && rec->view) ? rec->view :
 	     ged_draw_active_view_ctx(ctx->gedp));
@@ -999,7 +969,6 @@ _ged_draw_redraw_path_cb(const struct ged_draw_group_record *rec, void *ud)
 	return 0;
     }
 
-    db_free_full_path(&draw_path);
     return 1;
 }
 
@@ -1285,133 +1254,14 @@ ged_draw_finalize_lod_for_transaction(struct ged *gedp,
 }
 
 
-static struct ged_draw_source_state *
-ged_draw_txn_source_state_create(struct ged *gedp,
-				 const struct db_full_path *path)
-{
-    if (!gedp || !gedp->dbip || !path || path->fp_len <= 0)
-	return NULL;
-
-    struct ged_draw_source_state *ud;
-    BU_GET(ud, struct ged_draw_source_state);
-    memset(ud, 0, sizeof(*ud));
-
-    BU_GET(ud->fp, struct db_full_path);
-    db_full_path_init(ud->fp);
-    db_dup_full_path(ud->fp, path);
-
-    struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
-    ud->dbip = gedp->dbip;
-    ud->tol = wdbp ? &wdbp->wdb_tol : NULL;
-    ud->ttol = wdbp ? &wdbp->wdb_ttol : NULL;
-    ud->stale_reason = GED_DRAW_STALE_NONE;
-    return ud;
-}
-
-
-static int
-ged_draw_path_is_subtraction(struct ged *gedp,
-			     const struct db_full_path *path)
-{
-    if (!gedp || !gedp->dbip || !path)
-	return 0;
-
-    int op = db_fp_op(path, gedp->dbip, 0);
-    return (op == DB_OP_SUBTRACT || op == OP_SUBTRACT) ? 1 : 0;
-}
-
-
 static ged_draw_shape_ref
 ged_draw_create_evaluated_shape_ref(struct ged *gedp,
 				    void *view_ctx,
 				    const char *path,
 				    const struct ged_draw_appearance_settings *settings)
 {
-    if (!gedp || !gedp->dbip || !view_ctx || !path || !path[0] || !settings)
-	return GED_DRAW_SHAPE_REF_NULL;
-
-    struct db_full_path dfp;
-    db_full_path_init(&dfp);
-    if (db_string_to_path(&dfp, gedp->dbip, path) != 0)
-	return GED_DRAW_SHAPE_REF_NULL;
-
-    ged_draw_group_ref group_ref =
-	ged_draw_group_ref_lookup_or_create(gedp, &dfp);
-    if (ged_draw_group_ref_is_null(group_ref)) {
-	db_free_full_path(&dfp);
-	return GED_DRAW_SHAPE_REF_NULL;
-    }
-    ged_draw_group_ref_set_appearance_settings(gedp, group_ref, settings);
-
-    ged_draw_shape_draft *draft = ged_draw_shape_draft_create_context(gedp,
-	    view_ctx, 0);
-    if (!draft) {
-	db_free_full_path(&dfp);
-	return GED_DRAW_SHAPE_REF_NULL;
-    }
-
-    char *name = db_path_to_string(&dfp);
-    if (name) {
-	ged_draw_shape_draft_set_name(draft,
-		ged_draw_dbpath_skip_lead_slash(name));
-    }
-    ged_draw_shape_draft_set_fullpath(draft, &dfp);
-    ged_draw_shape_draft_set_source_state(draft,
-	    ged_draw_txn_source_state_create(gedp, &dfp));
-    ged_draw_shape_draft_mark_db_object(draft);
-
-    struct bu_color c;
-    unsigned char color[3] = {255, 0, 0};
-    db_full_path_color(&c, &dfp, gedp->dbip);
-    bu_color_to_rgb_chars(&c, color);
-    if (settings->color_override) {
-	color[0] = settings->color[0];
-	color[1] = settings->color[1];
-	color[2] = settings->color[2];
-    }
-    ged_draw_shape_draft_set_material_rgb(draft, color[0], color[1], color[2]);
-    ged_draw_shape_draft_set_draw_mode(draft, settings->draw_mode);
-
-    mat_t node_mat;
-    MAT_IDN(node_mat);
-    if (db_path_to_mat(gedp->dbip, &dfp, node_mat, 0))
-	ged_draw_shape_draft_set_transform(draft, node_mat);
-
-    point_t bmin, bmax;
-    VSETALL(bmin, INFINITY);
-    VSETALL(bmax, -INFINITY);
-    const char *bounds_path = name ? ged_draw_dbpath_skip_lead_slash(name) : path;
-    const char *bounds_argv[1] = {bounds_path};
-    if (rt_obj_bounds(gedp->ged_result_str, gedp->dbip, 1, bounds_argv, 0,
-	    bmin, bmax) != BRLCAD_ERROR) {
-	ged_draw_shape_draft_set_bounds(draft, bmin, bmax);
-	vect_t center;
-	VSET(center,
-	    (bmin[X] + bmax[X]) * 0.5,
-	    (bmin[Y] + bmax[Y]) * 0.5,
-	    (bmin[Z] + bmax[Z]) * 0.5);
-	fastf_t size = bmax[X] - bmin[X];
-	V_MAX(size, bmax[Y] - bmin[Y]);
-	V_MAX(size, bmax[Z] - bmin[Z]);
-	ged_draw_shape_draft_set_center_size(draft, center, size);
-    }
-
-    int is_subtraction = ged_draw_path_is_subtraction(gedp, &dfp);
-    if (!settings->draw_solid_lines_only)
-	ged_draw_shape_draft_set_line_style(draft, is_subtraction ? 1 : 0);
-    if (settings->draw_non_subtract_only && is_subtraction)
-	ged_draw_shape_draft_set_visible(draft, 0);
-    if (settings->s_line_width)
-	ged_draw_shape_draft_set_line_width(draft, settings->s_line_width);
-    ged_draw_shape_draft_set_transparency(draft, settings->transparency);
-    ged_draw_shape_draft_apply_appearance_settings(draft, settings);
-
-    ged_draw_shape_ref ref =
-	ged_draw_shape_draft_commit_to_group(draft, group_ref);
-    if (name)
-	bu_free(name, "draw evaluated path name");
-    db_free_full_path(&dfp);
-    return ref;
+    return ged_draw_create_evaluated_path_shape_ref(gedp, view_ctx, path,
+	    settings);
 }
 
 
@@ -1923,6 +1773,20 @@ _ged_draw_txn_note_name(struct ged_draw_transaction_result *result,
 }
 
 
+static size_t
+_ged_draw_root_child_count(struct ged *gedp)
+{
+    if (!gedp)
+	return 0;
+
+    rt_view_scene_ref root_ref = ged_scene_root_rt_ref(gedp);
+    struct ged_draw_scene_tree_summary summary;
+    if (!ged_draw_scene_context_tree_summary(root_ref.opaque, &summary))
+	return 0;
+    return summary.child_count;
+}
+
+
 static int
 _ged_draw_apply_transaction_inner(struct ged *gedp,
 				  const struct ged_draw_transaction *txn,
@@ -1933,8 +1797,7 @@ _ged_draw_apply_transaction_inner(struct ged *gedp,
 	return 0;
 
     uint64_t rev0 = gedp->i->ged_gdp->gd_draw_rev;
-    size_t child_count0 = ged_draw_scene_ref_child_count_rt(
-	    ged_scene_root_rt_ref(gedp));
+    size_t child_count0 = _ged_draw_root_child_count(gedp);
     int ret = 0;
 
     switch (txn->kind) {

@@ -104,7 +104,7 @@ ged_draw_overlay_geometry_insert(struct ged *gedp, const char *name,
 	    gedp, name);
     (void)ged_draw_scene_ref_set_name(overlay_scene, name);
 
-    if (!ged_draw_scene_ref_prepare(gedp, overlay_scene)) {
+    if (!ged_draw_scene_ref_ensure_registry_entry(gedp, overlay_scene)) {
 	ged_draw_scene_ref_release(overlay_scene);
 	return -1;
     }

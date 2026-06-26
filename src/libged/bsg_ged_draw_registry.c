@@ -57,6 +57,7 @@ static void _ged_draw_registry_entry_index(struct ged_drawable *gdp,
 static void _ged_draw_registry_entry_unindex(struct ged_drawable *gdp,
 					     struct ged_draw_registry_entry *entry);
 static void _ged_draw_registry_index_tables_free(struct ged_drawable *gdp);
+static void ged_draw_shape_state_release_scene_ref(bsg_scene_ref ref);
 
 
 static void
@@ -217,7 +218,7 @@ _ged_draw_registry_init_if_needed(struct ged_drawable *gdp)
 static struct ged_drawable *
 _ged_drawable_for_scene_ref(bsg_scene_ref ref)
 {
-    return (struct ged_drawable *)ged_draw_scene_ref_draw_context_owner(ref);
+    return (struct ged_drawable *)ged_draw_scene_ref_registry_owner(ref);
 }
 
 
@@ -249,6 +250,74 @@ static unsigned long long
 _ged_draw_index_name_hash(const char *name)
 {
     return name ? bu_data_hash(name, strlen(name) * sizeof(char)) : 0;
+}
+
+
+static unsigned long long
+_ged_draw_path_hash(const struct db_full_path *path)
+{
+    if (!path || path->fp_len <= 0)
+	return 0;
+
+    unsigned long long *components = (unsigned long long *)bu_calloc(
+	    path->fp_len, sizeof(unsigned long long),
+	    "ged draw path hash components");
+    for (size_t i = 0; i < path->fp_len; i++) {
+	const struct directory *dp = path->fp_names[i];
+	const char *name = (dp && dp->d_namep) ? dp->d_namep : "";
+	components[i] = _ged_draw_index_name_hash(name);
+    }
+    unsigned long long hash = bu_data_hash(components,
+	    path->fp_len * sizeof(unsigned long long));
+    bu_free(components, "ged draw path hash components");
+    return hash;
+}
+
+
+static void
+_ged_draw_shape_state_set_fullpath(ged_draw_shape_state *data,
+				   const struct db_full_path *path)
+{
+    if (!data)
+	return;
+
+    db_free_full_path(&data->s_fullpath);
+    db_full_path_init(&data->s_fullpath);
+    data->leaf_dp = RT_DIR_NULL;
+    data->path_hash = 0;
+    if (data->display_name) {
+	bu_free(data->display_name, "ged draw shape display name");
+	data->display_name = NULL;
+    }
+    if (!path || path->fp_len <= 0)
+	return;
+
+    db_dup_full_path(&data->s_fullpath, path);
+    data->leaf_dp = DB_FULL_PATH_CUR_DIR(&data->s_fullpath);
+    data->path_hash = _ged_draw_path_hash(&data->s_fullpath);
+    char *path_name = db_path_to_string(&data->s_fullpath);
+    if (path_name) {
+	data->display_name = bu_strdup(path_name);
+	bu_free(path_name, "ged draw shape path string");
+    } else if (data->leaf_dp && data->leaf_dp->d_namep) {
+	data->display_name = bu_strdup(data->leaf_dp->d_namep);
+    }
+}
+
+
+static void
+_ged_draw_shape_state_set_region(ged_draw_shape_state *data,
+				 int region_id,
+				 int aircode,
+				 int los,
+				 int material_id)
+{
+    if (!data)
+	return;
+    data->region_id = region_id;
+    data->aircode = aircode;
+    data->los = los;
+    data->material_id = material_id;
 }
 
 
@@ -501,27 +570,39 @@ _ged_draw_registry_entry_for_scene_ref(struct ged *gedp, bsg_scene_ref ref)
 }
 
 
-void
-ged_draw_scene_ref_index_remove(struct ged *gedp, bsg_scene_ref ref)
+int
+ged_draw_scene_ref_set_indexed_fullpath(struct ged *gedp,
+					bsg_scene_ref ref,
+					const struct db_full_path *path)
 {
     struct ged_draw_registry_entry *entry =
 	_ged_draw_registry_entry_for_scene_ref(gedp, ref);
     if (!entry)
-	return;
-    _ged_draw_registry_entry_unindex(_ged_draw_registry_entry_gdp(entry),
+	return 0;
+    struct ged_drawable *gdp = _ged_draw_registry_entry_gdp(entry);
+    _ged_draw_registry_entry_unindex(gdp, entry);
+    _ged_draw_shape_state_set_fullpath(&entry->data, path);
+    _ged_draw_registry_entry_index(_ged_draw_registry_entry_gdp(entry),
 	    entry);
+    return 1;
 }
 
 
-void
-ged_draw_scene_ref_index_add(struct ged *gedp, bsg_scene_ref ref)
+int
+ged_draw_shape_draft_apply_registry_region(struct ged *gedp,
+					   bsg_scene_ref ref,
+					   int region_id,
+					   int aircode,
+					   int los,
+					   int material_id)
 {
-    struct ged_draw_registry_entry *entry =
-	_ged_draw_registry_entry_for_scene_ref(gedp, ref);
-    if (!entry)
-	return;
-    _ged_draw_registry_entry_index(_ged_draw_registry_entry_gdp(entry),
-	    entry);
+    ged_draw_shape_state *data =
+	ged_draw_shape_state_ensure_scene_ref(gedp, ref);
+    if (!data)
+	return 0;
+    _ged_draw_shape_state_set_region(data, region_id, aircode, los,
+	    material_id);
+    return 1;
 }
 
 
@@ -727,16 +808,6 @@ ged_draw_shape_ref_index_for_path_hash(struct ged *gedp,
 }
 
 
-int
-ged_draw_group_index_for_path_hash(struct ged *gedp,
-				   unsigned long long path_hash,
-				   ged_draw_scene_ref_index_cb cb,
-				   void *userdata)
-{
-    return _ged_draw_index_for_path_hash(gedp, path_hash, 1, cb, userdata);
-}
-
-
 void
 ged_draw_index_stats_get(struct ged *gedp, struct ged_draw_index_stats *stats)
 {
@@ -875,7 +946,9 @@ ged_draw_shape_state_ensure_scene_ref(struct ged *gedp, bsg_scene_ref ref)
 {
     if (ged_draw_scene_ref_is_null(ref))
 	return NULL;
-    int is_group = ged_draw_scene_ref_is_group(ref);
+    struct ged_draw_scene_tree_summary summary;
+    int is_group = ged_draw_scene_ref_tree_summary(ref, &summary) ?
+	summary.is_group : 0;
     struct ged_draw_registry_entry *entry =
 	_ged_draw_registry_entry_ensure(gedp, ref, is_group);
     if (!entry)
@@ -884,7 +957,16 @@ ged_draw_shape_state_ensure_scene_ref(struct ged *gedp, bsg_scene_ref ref)
 }
 
 
-void
+int
+ged_draw_scene_ref_ensure_registry_entry(struct ged *gedp, bsg_scene_ref ref)
+{
+    if (ged_draw_scene_ref_is_null(ref))
+	return 0;
+    return ged_draw_shape_state_ensure_scene_ref(gedp, ref) ? 1 : 0;
+}
+
+
+static void
 ged_draw_shape_state_release_scene_ref(bsg_scene_ref ref)
 {
     if (ged_draw_scene_ref_is_null(ref))

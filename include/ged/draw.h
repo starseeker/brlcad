@@ -326,6 +326,7 @@ struct ged_draw_shape_source_snapshot {
 struct ged_draw_group_record {
     ged_draw_group_ref ref;
     const char *path;                    /**< borrowed */
+    const struct db_full_path *fullpath; /**< borrowed; valid while draw scene is unchanged */
     void *view;                          /**< borrowed view context; NULL for view-independent groups */
     int draw_mode;
     fastf_t transparency;
@@ -443,6 +444,8 @@ struct ged_draw_scene_tree_summary {
     int is_group;
     int is_shape;
     int has_parent;
+    const char *name;                    /**< borrowed; valid while scene is unchanged */
+    const struct db_full_path *fullpath; /**< borrowed; valid while scene is unchanged */
     int draw_tree_depth;
     size_t child_count;
 };

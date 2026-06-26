@@ -27,6 +27,7 @@
 
 #include "brep/cdt.h"
 #include "bn/tol.h"
+#include "bu/hash.h"
 #include "bu/malloc.h"
 #include "raytrace.h"
 #include "rt/functab.h"
@@ -34,6 +35,7 @@
 #include "rt/primitives/brep.h"
 #include "rt/primitives/bspline.h"
 #include "rt/view.h"
+#include "../librt/librt_private.h"
 #include "./ged_private.h"
 #include "./bsg_ged_draw_private.h"
 
@@ -50,6 +52,173 @@ struct ged_brep_lod_detail_clbk_data {
     point_t *pnts;
     int pnt_cnt;
 };
+
+
+static int
+_ged_draw_mesh_lod_bounds_from_points(point_t bmin,
+				      point_t bmax,
+				      const point_t *points,
+				      int point_count)
+{
+    if (!points || point_count <= 0)
+	return 0;
+
+    VMOVE(bmin, points[0]);
+    VMOVE(bmax, points[0]);
+    for (int i = 1; i < point_count; i++) {
+	VMIN(bmin, points[i]);
+	VMAX(bmax, points[i]);
+    }
+
+    return 1;
+}
+
+
+static int
+_ged_draw_brep_lod_bounds_prepare(point_t bmin,
+				  point_t bmax,
+				  struct db_i *dbip,
+				  struct directory *dp,
+				  const struct bg_tess_tol *ttol,
+				  const struct bn_tol *tol)
+{
+    if (!dbip || !dp)
+	return 0;
+
+    struct rt_db_internal dbintern;
+    RT_DB_INTERNAL_INIT(&dbintern);
+    if (rt_db_get_internal(&dbintern, dp, dbip, NULL) < 0)
+	return 0;
+    if (dbintern.idb_minor_type != DB5_MINORTYPE_BRLCAD_BREP) {
+	rt_db_free_internal(&dbintern);
+	return 0;
+    }
+
+    struct rt_brep_internal *bi = (struct rt_brep_internal *)dbintern.idb_ptr;
+    RT_BREP_CK_MAGIC(bi);
+
+    int *faces = NULL;
+    int face_cnt = 0;
+    vect_t *normals = NULL;
+    point_t *points = NULL;
+    int point_count = 0;
+    int ret = brep_cdt_fast(&faces, &face_cnt, &normals, &points, &point_count,
+	    bi->brep, -1, ttol, tol);
+    int ok = 0;
+    if (ret == BRLCAD_OK)
+	ok = _ged_draw_mesh_lod_bounds_from_points(bmin, bmax,
+		(const point_t *)points, point_count);
+
+    bu_free(faces, "faces");
+    bu_free(normals, "normals");
+    bu_free(points, "pnts");
+    rt_db_free_internal(&dbintern);
+
+    return ok;
+}
+
+
+extern "C" int
+ged_draw_brep_mesh_lod_cache_prepare(struct rt_mesh_lod **lod,
+				     point_t bmin,
+				     point_t bmax,
+				     int *bounds_valid,
+				     struct db_i *dbip,
+				     struct directory *dp,
+				     const struct bg_tess_tol *ttol,
+				     const struct bn_tol *tol)
+{
+    if (lod)
+	*lod = NULL;
+    if (bounds_valid)
+	*bounds_valid = 0;
+    if (!lod || !bounds_valid || !dbip || !dp)
+	return 0;
+
+    struct rt_mesh_lod *rt_lod = NULL;
+    struct rt_mesh_lod_cache_status status = RT_MESH_LOD_CACHE_STATUS_INIT;
+
+    if (db_mesh_lod_status(dbip, dp->d_namep, &status) != BRLCAD_OK)
+	return 0;
+    if (status.has_cache_key && status.has_cached_payload &&
+	    !status.stale_cache_entry)
+	rt_lod = db_mesh_lod_get(dbip, dp->d_namep);
+
+    if (!rt_lod) {
+	struct bu_external ext = BU_EXTERNAL_INIT_ZERO;
+	if (db_get_external(&ext, dp, dbip))
+	    return 0;
+	unsigned long long key = bu_data_hash((void *)ext.ext_buf,
+		ext.ext_nbytes);
+	bu_free_external(&ext);
+	if (!key)
+	    return 0;
+
+	struct rt_db_internal dbintern;
+	RT_DB_INTERNAL_INIT(&dbintern);
+	struct rt_db_internal *ip = &dbintern;
+	int ret = rt_db_get_internal(ip, dp, dbip, NULL);
+	if (ret < 0)
+	    return 0;
+	if (ip->idb_minor_type != DB5_MINORTYPE_BRLCAD_BREP) {
+	    rt_db_free_internal(&dbintern);
+	    return 0;
+	}
+	struct rt_brep_internal *bi = (struct rt_brep_internal *)ip->idb_ptr;
+	RT_BREP_CK_MAGIC(bi);
+
+	int *faces = NULL;
+	int face_cnt = 0;
+	vect_t *normals = NULL;
+	point_t *pnts = NULL;
+	int pnt_cnt = 0;
+
+	ret = brep_cdt_fast(&faces, &face_cnt, &normals, &pnts, &pnt_cnt,
+		bi->brep, -1, ttol, tol);
+	if (ret != BRLCAD_OK) {
+	    bu_free(faces, "faces");
+	    bu_free(normals, "normals");
+	    bu_free(pnts, "pnts");
+	    rt_db_free_internal(&dbintern);
+	    return 0;
+	}
+
+	if (_ged_draw_mesh_lod_bounds_from_points(bmin, bmax,
+		(const point_t *)pnts, pnt_cnt))
+	    *bounds_valid = 1;
+
+	ret = db_mesh_lod_store_mesh(dbip, dp->d_namep, (const point_t *)pnts,
+		(size_t)pnt_cnt, normals, faces, (size_t)face_cnt, key, 1.0,
+		&status);
+
+	rt_db_free_internal(&dbintern);
+	bu_free(faces, "faces");
+	bu_free(normals, "normals");
+	bu_free(pnts, "pnts");
+	if (ret != BRLCAD_OK)
+	    return 0;
+
+	rt_lod = db_mesh_lod_get(dbip, dp->d_namep);
+    }
+    if (!rt_lod)
+	return 0;
+
+    if (!*bounds_valid) {
+	if (_ged_draw_brep_lod_bounds_prepare(bmin, bmax, dbip, dp, ttol, tol)) {
+	    *bounds_valid = 1;
+	} else {
+	    struct rt_mesh_lod_info info = RT_MESH_LOD_INFO_INIT;
+	    if (rt_mesh_lod_info_get(rt_lod, &info)) {
+		VMOVE(bmin, info.bmin);
+		VMOVE(bmax, info.bmax);
+		*bounds_valid = 1;
+	    }
+	}
+    }
+
+    *lod = rt_lod;
+    return 1;
+}
 
 
 static int

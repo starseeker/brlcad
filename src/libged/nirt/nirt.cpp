@@ -69,7 +69,8 @@ set_wflag_cb(const struct ged_draw_shape_record *rec, void *userdata)
 {
     struct dl_wflag_ctx *ctx = (struct dl_wflag_ctx *)userdata;
     if (rec)
-	ged_draw_shape_ref_set_work_flag(ctx->gedp, rec->ref, ctx->wflag);
+	ged_draw_shape_ref_apply_qray_work_flag(ctx->gedp, rec->ref,
+		ctx->wflag);
     return 1;
 }
 

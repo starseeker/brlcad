@@ -31,11 +31,14 @@
 #include "bu/str.h"
 #include "bu/color.h"
 #include "bu/hash.h"
+#include "bu/parallel.h"
 #include "bg/plot3.h"
 #include "bg/clip.h"
 
 #include "ged.h"
 #include "ged/draw.h"
+#include "rt/resource.h"
+#include "rt/tree.h"
 #include "rt/view.h"
 #include "./ged_private.h"
 #include "./bsg_ged_draw_private.h"
@@ -69,22 +72,14 @@ _ged_draw_shape_draft_sync_aux_geometry(ged_draw_shape_draft *draft)
 	    ged_draw_scene_ref_is_null(draft->shape_ref))
 	return;
 
-    size_t child_count = ged_draw_scene_ref_child_count(draft->source_ref);
-    for (size_t i = 0; i < child_count; i++) {
-	bsg_scene_ref child_ref = ged_draw_scene_ref_child_at(draft->source_ref, i);
-	if (ged_draw_scene_ref_equal(child_ref, draft->shape_ref))
-	    continue;
-	ged_draw_scene_ref_copy_aux_display_state(child_ref,
-		draft->shape_ref);
-    }
+    (void)ged_draw_scene_ref_sync_aux_display_state(draft->source_ref,
+	    draft->shape_ref);
 }
 
 
 ged_draw_shape_draft *
 ged_draw_shape_draft_create_context(struct ged *gedp, void *view_ctx, int registered)
 {
-    (void)registered;
-
     bsg_scene_ref source_ref = ged_draw_scene_ref_null();
     bsg_scene_ref shape_ref = ged_draw_scene_ref_null();
     if (!ged_draw_scene_ref_create_draft_pair(gedp, view_ctx, &source_ref,
@@ -98,6 +93,10 @@ ged_draw_shape_draft_create_context(struct ged *gedp, void *view_ctx, int regist
     draft->source_ref = source_ref;
     draft->shape_ref = shape_ref;
     draft->committed = 0;
+    if (registered && !ged_draw_shape_draft_apply_db_object_marker(shape_ref)) {
+	ged_draw_shape_draft_destroy(draft);
+	return NULL;
+    }
     return draft;
 }
 
@@ -115,27 +114,14 @@ ged_draw_shape_draft_destroy(ged_draw_shape_draft *draft)
 }
 
 
-int
-ged_draw_shape_draft_set_fullpath(ged_draw_shape_draft *draft,
-				  const struct db_full_path *path)
+static int
+_ged_draw_shape_draft_apply_path_state(ged_draw_shape_draft *draft,
+				       const struct db_full_path *path)
 {
     if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref))
 	return 0;
-    return ged_draw_scene_ref_set_fullpath(draft->gedp, draft->shape_ref, path);
-}
-
-
-int
-ged_draw_shape_draft_set_region(ged_draw_shape_draft *draft,
-				int region_id,
-				int aircode,
-				int los,
-				int material_id)
-{
-    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref))
-	return 0;
-    return ged_draw_scene_ref_set_region(draft->gedp, draft->shape_ref,
-	    region_id, aircode, los, material_id);
+    return ged_draw_scene_ref_apply_path_state(draft->gedp, draft->shape_ref,
+	    path);
 }
 
 
@@ -211,17 +197,8 @@ ged_draw_shape_draft_publish_nmg_region(ged_draw_shape_draft *draft,
 }
 
 
-int
-ged_draw_shape_draft_clear_geometry(ged_draw_shape_draft *draft)
-{
-    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref))
-	return 0;
-    return ged_draw_scene_ref_geometry_clear(draft->shape_ref);
-}
-
-
-int
-ged_draw_shape_draft_update_scene_bounds(ged_draw_shape_draft *draft)
+static int
+_ged_draw_shape_draft_refresh_scene_bounds(ged_draw_shape_draft *draft)
 {
     if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref))
 	return 0;
@@ -231,37 +208,28 @@ ged_draw_shape_draft_update_scene_bounds(ged_draw_shape_draft *draft)
 
 
 int
-ged_draw_shape_draft_update_bounds_from_geometry(ged_draw_shape_draft *draft,
-						 int *bad_cmd)
+ged_draw_shape_draft_apply_known_bounds(ged_draw_shape_draft *draft,
+					const point_t min,
+					const point_t max)
 {
     if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref))
 	return 0;
-    return ged_draw_scene_ref_update_bounds_from_geometry(draft->shape_ref, bad_cmd);
-}
-
-
-int
-ged_draw_shape_draft_set_bounds_from_minmax(ged_draw_shape_draft *draft,
-					    const point_t min,
-					    const point_t max,
-					    int set_node_bounds)
-{
-    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref))
+    if (!min || !max)
 	return 0;
-    return ged_draw_scene_ref_set_bounds_from_minmax(draft->shape_ref, min, max,
-	    set_node_bounds);
-}
 
-
-int
-ged_draw_shape_draft_set_center_size(ged_draw_shape_draft *draft,
-				     const point_t center,
-				     fastf_t size)
-{
-    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref) || !center)
-	return 0;
+    vect_t center;
+    center[X] = (min[X] + max[X]) * 0.5;
+    center[Y] = (min[Y] + max[Y]) * 0.5;
+    center[Z] = (min[Z] + max[Z]) * 0.5;
     ged_draw_scene_ref_set_draw_center(draft->shape_ref, center);
-    return ged_draw_scene_ref_set_draw_size(draft->shape_ref, size);
+
+    fastf_t size = max[X] - min[X];
+    V_MAX(size, max[Y] - min[Y]);
+    V_MAX(size, max[Z] - min[Z]);
+    if (!ged_draw_scene_ref_set_draw_size(draft->shape_ref, size))
+	return 0;
+
+    return ged_draw_scene_ref_set_bounds(draft->shape_ref, min, max, 1);
 }
 
 
@@ -281,96 +249,50 @@ ged_draw_shape_draft_publish_primitive_wireframe(ged_draw_shape_draft *draft,
 	rt_view_context_info_get(&view_info, view_ctx);
 	view_infop = &view_info;
     }
-    return ged_draw_scene_ref_publish_primitive_wireframe(draft->shape_ref, ip,
+    int status = ged_draw_scene_ref_publish_primitive_wireframe(draft->shape_ref, ip,
 	    ttol, tol, view_ctx, view_infop, adaptive);
+    if (status >= 0 && !adaptive)
+	(void)ged_draw_scene_ref_update_bounds_from_geometry(draft->shape_ref,
+		NULL);
+    return status;
 }
 
 
 int
-ged_draw_shape_draft_set_highlighted(ged_draw_shape_draft *draft,
-				     int highlighted)
+ged_draw_shape_draft_apply_tree_result_state(ged_draw_shape_draft *draft,
+					     int dashed,
+					     int has_region,
+					     int region_id,
+					     int aircode,
+					     int los,
+					     int material_id,
+					     const struct ged_draw_appearance_settings *settings)
 {
-    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref))
+    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref) || !settings)
 	return 0;
-    return ged_draw_scene_ref_set_highlighted(draft->shape_ref, highlighted);
+    (void)_ged_draw_shape_draft_refresh_scene_bounds(draft);
+    if (!ged_draw_scene_ref_set_highlighted(draft->shape_ref, 0))
+	return 0;
+    if (!ged_draw_scene_ref_set_line_style(draft->shape_ref, dashed))
+	return 0;
+    if (!ged_draw_scene_ref_set_legacy_eval_flag(draft->shape_ref, 0))
+	return 0;
+    if (!has_region)
+	return ged_draw_scene_ref_apply_display_settings(draft->shape_ref,
+		settings);
+    if (!ged_draw_scene_ref_set_legacy_region_id(draft->shape_ref,
+	    region_id))
+	return 0;
+    if (!ged_draw_shape_draft_apply_registry_region(draft->gedp,
+	    draft->shape_ref, region_id, aircode, los, material_id))
+	return 0;
+    return ged_draw_scene_ref_apply_display_settings(draft->shape_ref,
+	    settings);
 }
 
 
-int
-ged_draw_shape_draft_set_line_style(ged_draw_shape_draft *draft, int dashed)
-{
-    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref))
-	return 0;
-    return ged_draw_scene_ref_set_line_style(draft->shape_ref, dashed);
-}
-
-
-int
-ged_draw_shape_draft_set_line_width(ged_draw_shape_draft *draft, int line_width)
-{
-    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref))
-	return 0;
-    return ged_draw_scene_ref_set_line_width(draft->shape_ref, line_width);
-}
-
-
-int
-ged_draw_shape_draft_set_legacy_color_info(ged_draw_shape_draft *draft,
-					   const unsigned char basecolor[3],
-					   int user_color,
-					   int default_color)
-{
-    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref) || !basecolor)
-	return 0;
-    return ged_draw_scene_ref_set_legacy_color_info(draft->shape_ref,
-	    basecolor, user_color, default_color);
-}
-
-
-int
-ged_draw_shape_draft_set_legacy_uses_default_color(ged_draw_shape_draft *draft,
-						   int default_color)
-{
-    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref))
-	return 0;
-    return ged_draw_scene_ref_set_legacy_uses_default_color(draft->shape_ref,
-	    default_color);
-}
-
-
-int
-ged_draw_shape_draft_set_legacy_eval_flag(ged_draw_shape_draft *draft,
-					  int eflag)
-{
-    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref))
-	return 0;
-    return ged_draw_scene_ref_set_legacy_eval_flag(draft->shape_ref, eflag);
-}
-
-
-int
-ged_draw_shape_draft_set_legacy_region_id(ged_draw_shape_draft *draft,
-					  int region_id)
-{
-    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref))
-	return 0;
-    return ged_draw_scene_ref_set_legacy_region_id(draft->shape_ref,
-	    region_id);
-}
-
-
-int
-ged_draw_shape_draft_color_soltab(ged_draw_shape_draft *draft, struct db_i *dbip)
-{
-    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref))
-	return 0;
-    color_soltab_scene_ref(dbip, draft->shape_ref);
-    return 1;
-}
-
-
-int
-ged_draw_shape_draft_set_name(ged_draw_shape_draft *draft, const char *name)
+static int
+_ged_draw_shape_draft_apply_name(ged_draw_shape_draft *draft, const char *name)
 {
     if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref) || !name)
 	return 0;
@@ -388,55 +310,98 @@ ged_draw_shape_draft_set_name(ged_draw_shape_draft *draft, const char *name)
 
 
 int
-ged_draw_shape_draft_set_source_state(ged_draw_shape_draft *draft,
-				      struct ged_draw_source_state *data)
+ged_draw_shape_draft_apply_tree_legacy_color(
+	ged_draw_shape_draft *draft,
+	const unsigned char wireframe_color_override[3],
+	const struct db_tree_state *tsp)
 {
     if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref))
 	return 0;
-    ged_draw_scene_ref_source_data_set(draft->shape_ref, data);
+
+    unsigned char bcolor[3] = {255, 0, 0};
+    int user_color = 0;
+    int default_color = 0;
+
+    if (wireframe_color_override) {
+	user_color = 1;
+	bcolor[RED] = wireframe_color_override[RED];
+	bcolor[GRN] = wireframe_color_override[GRN];
+	bcolor[BLU] = wireframe_color_override[BLU];
+    } else if (tsp) {
+	if (tsp->ts_mater.ma_color_valid) {
+	    bcolor[RED] = tsp->ts_mater.ma_color[RED] * 255.0;
+	    bcolor[GRN] = tsp->ts_mater.ma_color[GRN] * 255.0;
+	    bcolor[BLU] = tsp->ts_mater.ma_color[BLU] * 255.0;
+	} else {
+	    default_color = 1;
+	}
+    }
+
+    if (!ged_draw_scene_ref_set_legacy_color_info(draft->shape_ref,
+	    bcolor, user_color, default_color))
+	return 0;
+    color_soltab_scene_ref(tsp ? tsp->ts_dbip : NULL, draft->shape_ref);
     return 1;
 }
 
 
-int
-ged_draw_shape_draft_mark_db_object(ged_draw_shape_draft *draft)
+static int
+_ged_draw_shape_draft_attach_source_inputs(
+	ged_draw_shape_draft *draft,
+	struct db_i *dbip,
+	const struct db_full_path *pathp,
+	const struct bn_tol *tol,
+	const struct bg_tess_tol *ttol)
 {
     if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref))
 	return 0;
-    return ged_draw_scene_ref_mark_db_object(draft->shape_ref);
+
+    struct ged_draw_source_state_record record;
+    memset(&record, 0, sizeof(record));
+    record.dbip = dbip;
+    record.fullpath = pathp;
+    record.tol = tol;
+    record.ttol = ttol;
+    record.stale_reason = GED_DRAW_STALE_NONE;
+    return ged_draw_scene_ref_attach_source_state_record(draft->shape_ref,
+	    &record);
 }
 
 
 int
-ged_draw_shape_draft_apply_appearance_settings(ged_draw_shape_draft *draft,
-					       const struct ged_draw_appearance_settings *settings)
+ged_draw_shape_draft_apply_path_source_state(
+	ged_draw_shape_draft *draft,
+	struct db_i *dbip,
+	const struct db_full_path *pathp,
+	const struct bn_tol *tol,
+	const struct bg_tess_tol *ttol,
+	int has_draw_mat,
+	const mat_t draw_mat,
+	const char *display_name)
 {
-    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref) || !settings)
+    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref) || !pathp)
 	return 0;
-
-    return ged_draw_scene_ref_apply_appearance_settings(draft->shape_ref,
-	    settings);
+    if (display_name && !_ged_draw_shape_draft_apply_name(draft, display_name))
+	return 0;
+    if (!_ged_draw_shape_draft_apply_path_state(draft, pathp))
+	return 0;
+    if (!_ged_draw_shape_draft_attach_source_inputs(draft, dbip, pathp, tol,
+	    ttol))
+	return 0;
+    if (has_draw_mat &&
+	    (!draw_mat || !ged_draw_scene_ref_set_draw_mat(draft->shape_ref,
+		draw_mat)))
+	return 0;
+    return 1;
 }
 
 
-int
-ged_draw_shape_draft_bump_appearance_revision(ged_draw_shape_draft *draft)
+static int
+_ged_draw_shape_draft_apply_material_rgb(ged_draw_shape_draft *draft,
+					 const unsigned char rgb[3])
 {
-    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref))
+    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref) || !rgb)
 	return 0;
-    return ged_draw_scene_ref_bump_changed(draft->shape_ref);
-}
-
-
-int
-ged_draw_shape_draft_set_material_rgb(ged_draw_shape_draft *draft,
-				      unsigned char r,
-				      unsigned char g,
-				      unsigned char b)
-{
-    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref))
-	return 0;
-    const unsigned char rgb[3] = {r, g, b};
     if (!ged_draw_scene_ref_set_color(draft->shape_ref, rgb))
 	return 0;
     ged_draw_scene_ref_set_material_rgb(draft->shape_ref, rgb);
@@ -444,71 +409,102 @@ ged_draw_shape_draft_set_material_rgb(ged_draw_shape_draft *draft,
 }
 
 
-int
-ged_draw_shape_draft_set_transform(ged_draw_shape_draft *draft, const mat_t mat)
+static int
+_ged_draw_shape_draft_apply_material_rgb_revision(ged_draw_shape_draft *draft,
+						  const unsigned char rgb[3])
 {
-    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref) || !mat)
+    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref) || !rgb)
 	return 0;
-    return ged_draw_scene_ref_set_transform(draft->shape_ref, mat);
+    if (!_ged_draw_shape_draft_apply_material_rgb(draft, rgb))
+	return 0;
+    return ged_draw_scene_ref_bump_appearance_revision(draft->shape_ref);
 }
 
 
 int
-ged_draw_shape_draft_set_bounds(ged_draw_shape_draft *draft,
-				const point_t min,
-				const point_t max)
+ged_draw_shape_draft_apply_late_display_state(
+	ged_draw_shape_draft *draft,
+	const struct db_full_path *path,
+	int line_style,
+	const struct ged_draw_appearance_settings *settings,
+	const unsigned char material_rgb[3],
+	int highlighted)
 {
-    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref) || !min || !max)
+    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref) ||
+	    !path || !settings || !material_rgb)
 	return 0;
-    return ged_draw_scene_ref_set_bounds(draft->shape_ref, min, max, 1);
+    if (!_ged_draw_shape_draft_refresh_scene_bounds(draft))
+	return 0;
+    if (!_ged_draw_shape_draft_apply_path_state(draft, path))
+	return 0;
+    if (!ged_draw_scene_ref_set_line_style(draft->shape_ref, line_style))
+	return 0;
+    if (!ged_draw_scene_ref_apply_display_settings(draft->shape_ref,
+	    settings))
+	return 0;
+    if (!_ged_draw_shape_draft_apply_material_rgb(draft, material_rgb))
+	return 0;
+    return ged_draw_scene_ref_set_highlighted(draft->shape_ref, highlighted);
 }
 
 
 int
-ged_draw_shape_draft_set_draw_size(ged_draw_shape_draft *draft, fastf_t size)
+ged_draw_shape_draft_apply_evaluated_path_display(
+	ged_draw_shape_draft *draft,
+	const struct ged_draw_appearance_settings *settings,
+	const unsigned char material_rgb[3],
+	int has_transform,
+	const mat_t transform,
+	int is_subtraction)
 {
-    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref))
+    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref) ||
+	    !settings || !material_rgb)
 	return 0;
-    return ged_draw_scene_ref_set_draw_size(draft->shape_ref, size);
+
+    if (!_ged_draw_shape_draft_apply_material_rgb(draft, material_rgb))
+	return 0;
+    if (has_transform && transform &&
+	    !ged_draw_scene_ref_set_transform(draft->shape_ref, transform))
+	return 0;
+    if (!settings->draw_solid_lines_only &&
+	    !ged_draw_scene_ref_set_line_style(draft->shape_ref,
+		is_subtraction ? 1 : 0))
+	return 0;
+    if (settings->draw_non_subtract_only && is_subtraction &&
+	    !ged_draw_scene_ref_set_visible(draft->shape_ref, 0))
+	return 0;
+    return ged_draw_scene_ref_apply_display_settings(draft->shape_ref,
+	    settings);
 }
 
 
 int
-ged_draw_shape_draft_set_visible(ged_draw_shape_draft *draft, int visible)
+ged_draw_shape_draft_apply_database_leaf_display(
+	ged_draw_shape_draft *draft,
+	const struct ged_draw_appearance_settings *settings,
+	int bool_op,
+	const unsigned char material_rgb[3],
+	int has_draw_size,
+	fastf_t draw_size)
 {
-    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref))
+    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref) ||
+	    !material_rgb)
 	return 0;
-    return ged_draw_scene_ref_set_visible(draft->shape_ref, visible);
-}
-
-
-int
-ged_draw_shape_draft_set_transparency(ged_draw_shape_draft *draft,
-				      fastf_t transparency)
-{
-    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref))
+    if (settings &&
+	    !ged_draw_scene_ref_apply_display_settings(draft->shape_ref,
+		settings))
 	return 0;
-    return ged_draw_scene_ref_set_transparency(draft->shape_ref,
-	    transparency);
-}
-
-
-int
-ged_draw_shape_draft_set_draw_mode(ged_draw_shape_draft *draft, int draw_mode)
-{
-    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref))
+    if ((!settings || !settings->draw_solid_lines_only) &&
+	    !ged_draw_scene_ref_set_line_style(draft->shape_ref,
+		(bool_op == 4) ? 1 : 0))
 	return 0;
-    ged_draw_scene_ref_set_draw_mode(draft->shape_ref, draw_mode);
+    if (!_ged_draw_shape_draft_apply_material_rgb_revision(draft,
+	    material_rgb))
+	return 0;
+    if (has_draw_size &&
+	    !ged_draw_scene_ref_set_draw_size(draft->shape_ref, draw_size))
+	return 0;
     return 1;
-}
-
-
-int
-ged_draw_shape_draft_set_draw_mat(ged_draw_shape_draft *draft, const mat_t mat)
-{
-    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref) || !mat)
-	return 0;
-    return ged_draw_scene_ref_set_draw_mat(draft->shape_ref, mat);
 }
 
 
@@ -539,47 +535,24 @@ ged_draw_shape_draft_commit_to_group(ged_draw_shape_draft *draft,
 }
 
 
-bsg_scene_ref
-ged_draw_shape_draft_commit_to_scene_ref(ged_draw_shape_draft *draft,
-					 bsg_scene_ref parent_ref)
+int
+ged_draw_shape_draft_commit_database_leaf_to_scene_ref(
+	ged_draw_shape_draft *draft,
+	bsg_scene_ref parent_ref)
 {
     if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref) ||
 	    ged_draw_scene_ref_is_null(parent_ref))
-	return ged_draw_scene_ref_null();
+	return 0;
 
     _ged_draw_shape_draft_sync_aux_geometry(draft);
 
-    bsg_scene_ref shape_ref = draft->shape_ref;
     if (!ged_draw_scene_ref_append_child(parent_ref, draft->source_ref)) {
 	ged_draw_shape_draft_destroy(draft);
-	return ged_draw_scene_ref_null();
+	return 0;
     }
     draft->committed = 1;
     ged_draw_shape_draft_destroy(draft);
-    return shape_ref;
-}
-
-
-ged_draw_shape_ref
-ged_draw_shape_draft_commit_to_last_group(ged_draw_shape_draft *draft)
-{
-    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref))
-	return GED_DRAW_SHAPE_REF_NULL;
-
-    _ged_draw_shape_draft_sync_aux_geometry(draft);
-
-    ged_draw_append_scene_ref_to_last_group(draft->gedp, draft->shape_ref);
-    ged_draw_shape_ref ref =
-	ged_draw_shape_ref_from_scene_ref(draft->gedp, draft->shape_ref);
-    if (ged_draw_shape_ref_is_null(ref)) {
-	ged_draw_shape_draft_destroy(draft);
-	return GED_DRAW_SHAPE_REF_NULL;
-    }
-    ref.scene_revision = 0;
-
-    draft->committed = 1;
-    ged_draw_shape_draft_destroy(draft);
-    return ref;
+    return 1;
 }
 
 

@@ -24,90 +24,23 @@
 
 #include "common.h"
 
-#include <string.h>
-
-#include "bu/str.h"
-#include "bu/hash.h"
-
 #include "ged.h"
 #include "ged/draw.h"
 #include "./ged_private.h"
 #include "./bsg_ged_draw_private.h"
 
-static unsigned long long
-_ged_draw_path_hash(const struct db_full_path *path)
-{
-    if (!path || path->fp_len <= 0)
-	return 0;
-    unsigned long long *components = (unsigned long long *)bu_calloc(
-	path->fp_len, sizeof(unsigned long long), "ged draw path hash components");
-    for (size_t i = 0; i < path->fp_len; i++) {
-	const struct directory *dp = path->fp_names[i];
-	const char *name = (dp && dp->d_namep) ? dp->d_namep : "";
-	components[i] = bu_data_hash(name, strlen(name) * sizeof(char));
-    }
-    unsigned long long hash = bu_data_hash(components,
-	path->fp_len * sizeof(unsigned long long));
-    bu_free(components, "ged draw path hash components");
-    return hash;
-}
-
-
-void
-ged_draw_shape_state_set_fullpath(ged_draw_shape_state *data,
-				 const struct db_full_path *path)
-{
-    if (!data)
-	return;
-    db_free_full_path(&data->s_fullpath);
-    db_full_path_init(&data->s_fullpath);
-    data->leaf_dp = RT_DIR_NULL;
-    data->path_hash = 0;
-    if (data->display_name) {
-	bu_free(data->display_name, "ged draw shape display name");
-	data->display_name = NULL;
-    }
-    if (!path || path->fp_len <= 0)
-	return;
-    db_dup_full_path(&data->s_fullpath, path);
-    data->leaf_dp = DB_FULL_PATH_CUR_DIR(&data->s_fullpath);
-    data->path_hash = _ged_draw_path_hash(&data->s_fullpath);
-    char *path_name = db_path_to_string(&data->s_fullpath);
-    if (path_name) {
-	data->display_name = bu_strdup(path_name);
-	bu_free(path_name, "ged draw shape path string");
-    } else if (data->leaf_dp && data->leaf_dp->d_namep) {
-	data->display_name = bu_strdup(data->leaf_dp->d_namep);
-    }
-}
-
-
-ged_draw_shape_state *
-ged_draw_shape_ref_set_fullpath(bsg_scene_ref ref,
-				struct ged *gedp,
-				const struct db_full_path *path)
-{
-    if (!ged_draw_scene_ref_set_fullpath(gedp, ref, path))
-	return NULL;
-    return ged_draw_shape_state_get_scene_ref(ref);
-}
-
-
 int
-ged_draw_scene_ref_set_fullpath(struct ged *gedp,
-				bsg_scene_ref ref,
-				const struct db_full_path *path)
+ged_draw_scene_ref_apply_path_state(struct ged *gedp,
+				    bsg_scene_ref ref,
+				    const struct db_full_path *path)
 {
     if (ged_draw_scene_ref_is_null(ref))
 	return 0;
 
-    ged_draw_shape_state *data =
-	ged_draw_shape_state_ensure_scene_ref(gedp, ref);
-    if (!data)
+    if (!ged_draw_shape_state_ensure_scene_ref(gedp, ref))
 	return 0;
-    ged_draw_scene_ref_index_remove(gedp, ref);
-    ged_draw_shape_state_set_fullpath(data, path);
-    ged_draw_scene_ref_index_add(gedp, ref);
+    if (!ged_draw_scene_ref_set_indexed_fullpath(gedp, ref, path))
+	return 0;
 
     if (path && path->fp_len > 0) {
 	char *path_name = db_path_to_string(path);
@@ -121,50 +54,6 @@ ged_draw_scene_ref_set_fullpath(struct ged *gedp,
 	}
     }
 
-    return 1;
-}
-
-
-int
-ged_draw_scene_ref_prepare(struct ged *gedp, bsg_scene_ref ref)
-{
-    if (ged_draw_scene_ref_is_null(ref))
-	return 0;
-    if (!ged_draw_shape_state_ensure_scene_ref(gedp, ref))
-	return 0;
-    return ged_draw_scene_ref_source_ensure(ref);
-}
-
-
-void
-ged_draw_shape_state_set_region(ged_draw_shape_state *data,
-			       int region_id,
-			       int aircode,
-			       int los,
-			       int material_id)
-{
-    if (!data)
-	return;
-    data->region_id = region_id;
-    data->aircode = aircode;
-    data->los = los;
-    data->material_id = material_id;
-}
-
-
-int
-ged_draw_scene_ref_set_region(struct ged *gedp,
-			      bsg_scene_ref ref,
-			      int region_id,
-			      int aircode,
-			      int los,
-			      int material_id)
-{
-    ged_draw_shape_state *data =
-	ged_draw_shape_state_ensure_scene_ref(gedp, ref);
-    if (!data)
-	return 0;
-    ged_draw_shape_state_set_region(data, region_id, aircode, los, material_id);
     return 1;
 }
 
