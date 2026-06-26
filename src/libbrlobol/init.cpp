@@ -28,6 +28,7 @@
 #include "brlobol/mesh_shape.h"
 #include "brlobol/pick_detail.h"
 #include "brlobol/realize_action.h"
+#include "brlobol/scene_group.h"
 #include "brlobol/snap_action.h"
 #include "brlobol/viewport_image.h"
 #include "brlobol/vlist_shape.h"
@@ -95,6 +96,7 @@ brlobol_init(SoDB::ContextManager *contextManager)
     SoBRLSnapAction::initClass();
     SoBRLMeasureAction::initClass();
     SoBRLExportAction::initClass();
+    SoBRLSceneGroup::initClass();
 
     initialized = true;
 }

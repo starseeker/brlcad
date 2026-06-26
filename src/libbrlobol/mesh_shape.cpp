@@ -55,6 +55,32 @@ SoBRLMeshShape::SoBRLMeshShape(void)
     SO_NODE_ADD_FIELD(sourceName, (""));
     SO_NODE_ADD_FIELD(sourceType, (""));
     SO_NODE_ADD_FIELD(sourceId, (0));
+    SO_NODE_ADD_FIELD(displayName, (""));
+    SO_NODE_ADD_FIELD(geometryName, (""));
+    SO_NODE_ADD_FIELD(cacheIdentity, (""));
+    SO_NODE_ADD_FIELD(sourceIdentity, (""));
+    SO_NODE_ADD_FIELD(ownerSourcePath, (""));
+    SO_NODE_ADD_FIELD(ownerSourceRevision, (0));
+    SO_NODE_ADD_FIELD(ownerInputsRevision, (0));
+    SO_NODE_ADD_FIELD(ownerViewRevision, (0));
+    SO_NODE_ADD_FIELD(ownerRealizedRevision, (0));
+    SO_NODE_ADD_FIELD(ownerRealizedSourceRevision, (0));
+    SO_NODE_ADD_FIELD(ownerRealizedInputsRevision, (0));
+    SO_NODE_ADD_FIELD(ownerRealizedViewRevision, (0));
+    SO_NODE_ADD_FIELD(ownerRealizationStatus, (0));
+    SO_NODE_ADD_FIELD(ownerRealizationDiagnostic, (""));
+    SO_NODE_ADD_FIELD(ownerRealizationIdentity, (""));
+    SO_NODE_ADD_FIELD(ownerSourceStale, (FALSE));
+    SO_NODE_ADD_FIELD(ownerStaleReason, (0));
+    SO_NODE_ADD_FIELD(databaseIntent, (FALSE));
+    SO_NODE_ADD_FIELD(overlayIntent, (FALSE));
+    SO_NODE_ADD_FIELD(hudIntent, (FALSE));
+    SO_NODE_ADD_FIELD(localSource, (FALSE));
+    SO_NODE_ADD_FIELD(sharedSource, (FALSE));
+    SO_NODE_ADD_FIELD(nonDatabaseSource, (FALSE));
+    SO_NODE_ADD_FIELD(drawMode, (0));
+    SO_NODE_ADD_FIELD(recordRole, (""));
+    SO_NODE_ADD_FIELD(geometryKind, (""));
     SO_NODE_ADD_FIELD(regionId, (0));
     SO_NODE_ADD_FIELD(airCode, (0));
     SO_NODE_ADD_FIELD(materialId, (0));
@@ -62,6 +88,13 @@ SoBRLMeshShape::SoBRLMeshShape(void)
     SO_NODE_ADD_FIELD(materialColorValid, (FALSE));
     SO_NODE_ADD_FIELD(materialColor, (SbColor(1.0f, 1.0f, 1.0f)));
     SO_NODE_ADD_FIELD(materialShader, (""));
+    SO_NODE_ADD_FIELD(materialRevision, (0));
+    SO_NODE_ADD_FIELD(drawMatrixValid, (FALSE));
+    SO_NODE_ADD_FIELD(drawMatrix, (SbMatrix::identity()));
+    SO_NODE_ADD_FIELD(drawCenterValid, (FALSE));
+    SO_NODE_ADD_FIELD(drawCenter, (SbVec3f(0.0f, 0.0f, 0.0f)));
+    SO_NODE_ADD_FIELD(drawSizeValid, (FALSE));
+    SO_NODE_ADD_FIELD(drawSize, (0.0f));
     SO_NODE_ADD_FIELD(colorOverride, (FALSE));
     SO_NODE_ADD_FIELD(color, (SbColor(1.0f, 1.0f, 1.0f)));
     SO_NODE_ADD_FIELD(selectedColor, (SbColor(0.0f, 0.75f, 1.0f)));
@@ -72,6 +105,9 @@ SoBRLMeshShape::SoBRLMeshShape(void)
     SO_NODE_ADD_FIELD(selected, (FALSE));
     SO_NODE_ADD_FIELD(highlighted, (FALSE));
     SO_NODE_ADD_FIELD(ghosted, (FALSE));
+    SO_NODE_ADD_FIELD(lineStyle, (0));
+    SO_NODE_ADD_FIELD(lineWidth, (0));
+    SO_NODE_ADD_FIELD(transparency, (0.0f));
     SO_NODE_ADD_FIELD(hiddenLine, (FALSE));
     SO_NODE_ADD_FIELD(editEmphasis, (FALSE));
     SO_NODE_ADD_FIELD(editIntentId, (""));
@@ -272,6 +308,19 @@ SoBRLMeshShape::makeSourceMeshRequest(BRLObolSourceMeshRequest &request) const
     request.sourceName = this->sourceName.getValue();
     request.sourceType = this->sourceType.getValue();
     request.sourceId = this->sourceId.getValue();
+    request.displayName = this->displayName.getValue();
+    request.geometryName = this->geometryName.getValue();
+    request.cacheIdentity = this->cacheIdentity.getValue();
+    request.sourceIdentity = this->sourceIdentity.getValue();
+    request.databaseIntent = this->databaseIntent.getValue();
+    request.overlayIntent = this->overlayIntent.getValue();
+    request.hudIntent = this->hudIntent.getValue();
+    request.localSource = this->localSource.getValue();
+    request.sharedSource = this->sharedSource.getValue();
+    request.nonDatabaseSource = this->nonDatabaseSource.getValue();
+    request.drawMode = this->drawMode.getValue();
+    request.recordRole = this->recordRole.getValue();
+    request.geometryKind = this->geometryKind.getValue();
     request.regionId = this->regionId.getValue();
     request.airCode = this->airCode.getValue();
     request.materialId = this->materialId.getValue();
@@ -515,7 +564,7 @@ SoBRLMeshShape::makeLodRequest(BRLObolLodRequest &request,
 	uint64_t databaseRevision,
 	uint64_t viewRevision,
 	uint64_t policyRevision,
-	int drawMode,
+	int requestDrawMode,
 	const char *providerId,
 	const char *providerVersion,
 	int qualityTier) const
@@ -529,7 +578,7 @@ SoBRLMeshShape::makeLodRequest(BRLObolLodRequest &request,
     request.objectName = this->sourceName.getValue();
     request.viewRevision = viewRevision;
     request.policyRevision = policyRevision;
-    request.drawMode = drawMode;
+    request.drawMode = requestDrawMode;
     request.lodPolicy = this->lodPolicy.getValue();
     request.providerId = providerId ? providerId : "";
     request.providerVersion = providerVersion ? providerVersion : "";

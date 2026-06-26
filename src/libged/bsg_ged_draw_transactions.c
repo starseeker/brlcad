@@ -31,23 +31,6 @@
 #include "bu/str.h"
 #include "bu/color.h"
 #include "bu/hash.h"
-#include "bsg/appearance.h"
-#include "bsg/defines.h"
-#include "bsg/database_source.h"
-#include "bsg/draw_ctx.h"
-#include "bsg/draw_intent.h"
-#include "bsg/draw_set.h"
-#include "bsg/draw_source.h"
-#include "bsg/field.h"
-#include "bsg/geometry.h"
-#include "bsg/material.h"
-#include "bsg/node.h"
-#include "bsg/payload.h"
-#include "bg/plot3.h"
-#include "bsg/scene_builder.h"
-#include "bsg/scene_object.h"
-#include "bsg/selection.h"
-#include "bsg/view_state.h"
 #include "bg/clip.h"
 
 #include "ged.h"
@@ -127,7 +110,7 @@ struct ged_draw_reexpand_group_entry {
     ged_draw_group_ref ref;
     char *path;
     void *view_ctx;
-    struct bsg_appearance_settings appearance;
+    struct ged_draw_appearance_settings appearance;
 };
 
 
@@ -162,34 +145,6 @@ struct ged_draw_observer_entry {
     void *client_data;
     int active;
 };
-
-
-void
-ged_draw_bsg_appearance_from_neutral(struct bsg_appearance_settings *out,
-				     const struct ged_draw_appearance_settings *in)
-{
-    if (!out)
-	return;
-
-    struct bsg_appearance_settings settings = BSG_APPEARANCE_SETTINGS_INIT;
-    if (in) {
-	settings.draw_mode = in->draw_mode;
-	settings.mixed_modes = in->mixed_modes;
-	settings.transparency = in->transparency;
-	settings.color_override = in->color_override;
-	settings.color[0] = in->color[0];
-	settings.color[1] = in->color[1];
-	settings.color[2] = in->color[2];
-	settings.s_line_width = in->s_line_width;
-	settings.s_arrow_tip_length = in->s_arrow_tip_length;
-	settings.s_arrow_tip_width = in->s_arrow_tip_width;
-	settings.draw_solid_lines_only = in->draw_solid_lines_only;
-	settings.draw_non_subtract_only = in->draw_non_subtract_only;
-	settings.strict_fallback = in->strict_fallback;
-    }
-
-    *out = settings;
-}
 
 
 static struct ged_drawable *
@@ -963,9 +918,11 @@ ged_draw_redraw_group_ref(struct ged *gedp, ged_draw_group_ref ref,
 
 
 void
-ged_draw_revalidate_db_event(struct ged *gedp, const struct bsg_db_event *ev)
+ged_draw_revalidate_db_event(
+	struct ged *gedp,
+	const struct ged_draw_database_event_record *ev)
 {
-    if (!gedp || !ev || !ev->dbe_path || !strlen(ev->dbe_path))
+    if (!gedp || !ev || !ev->path || !strlen(ev->path))
 	return;
 
     rt_view_scene_ref root_rt_ref = ged_scene_root_rt_ref(gedp);
@@ -1368,7 +1325,7 @@ static ged_draw_shape_ref
 ged_draw_create_evaluated_shape_ref(struct ged *gedp,
 				    void *view_ctx,
 				    const char *path,
-				    const struct bsg_appearance_settings *settings)
+				    const struct ged_draw_appearance_settings *settings)
 {
     if (!gedp || !gedp->dbip || !view_ctx || !path || !path[0] || !settings)
 	return GED_DRAW_SHAPE_REF_NULL;
@@ -1384,7 +1341,7 @@ ged_draw_create_evaluated_shape_ref(struct ged *gedp,
 	db_free_full_path(&dfp);
 	return GED_DRAW_SHAPE_REF_NULL;
     }
-    ged_draw_group_ref_set_appearance(gedp, group_ref, settings);
+    ged_draw_group_ref_set_appearance_settings(gedp, group_ref, settings);
 
     ged_draw_shape_draft *draft = ged_draw_shape_draft_create_context(gedp,
 	    view_ctx, 0);
@@ -1447,7 +1404,7 @@ ged_draw_create_evaluated_shape_ref(struct ged *gedp,
     if (settings->s_line_width)
 	ged_draw_shape_draft_set_line_width(draft, settings->s_line_width);
     ged_draw_shape_draft_set_transparency(draft, settings->transparency);
-    ged_draw_shape_draft_apply_settings(draft, settings);
+    ged_draw_shape_draft_apply_appearance_settings(draft, settings);
 
     ged_draw_shape_ref ref =
 	ged_draw_shape_draft_commit_to_group(draft, group_ref);
@@ -1494,7 +1451,7 @@ ged_draw_apply_evaluated_paths(struct ged *gedp,
 			       void *view_ctx,
 			       const char **paths,
 			       int path_count,
-			       const struct bsg_appearance_settings *settings)
+			       const struct ged_draw_appearance_settings *settings)
 {
     if (!gedp || !view_ctx || !paths || path_count <= 0 || !settings)
 	return -1;
@@ -1580,15 +1537,12 @@ _ged_draw_apply_draw(struct ged *gedp,
 	neutral_settings =
 	    *(const struct ged_draw_appearance_settings *)txn->appearance;
 
-    struct bsg_appearance_settings settings = BSG_APPEARANCE_SETTINGS_INIT;
-    ged_draw_bsg_appearance_from_neutral(&settings, &neutral_settings);
-
     for (int i = 0; i < draw_count; i++) {
 	struct ged_draw_transaction erase_txn =
 	    ged_draw_transaction_make(GED_DRAW_TXN_ERASE, draw_paths[i]);
 	erase_txn.view = view_ctx;
 	erase_txn.mode = (txn->mode >= 0) ? txn->mode :
-	    (settings.mixed_modes ? (int)settings.draw_mode : -1);
+	    (neutral_settings.mixed_modes ? (int)neutral_settings.draw_mode : -1);
 	ged_draw_apply_transaction(gedp, &erase_txn, NULL);
     }
 
@@ -1605,10 +1559,10 @@ _ged_draw_apply_draw(struct ged *gedp,
     dgcdp.vs = neutral_settings;
 
     int ret = 0;
-    if (settings.draw_mode == GED_DRAW_MODE_EVAL_WIRE ||
-	    settings.draw_mode == GED_DRAW_MODE_EVAL_POINTS) {
+    if (neutral_settings.draw_mode == GED_DRAW_MODE_EVAL_WIRE ||
+	    neutral_settings.draw_mode == GED_DRAW_MODE_EVAL_POINTS) {
 	ret = ged_draw_apply_evaluated_paths(gedp, view_ctx, draw_paths, draw_count,
-		&settings);
+		&neutral_settings);
 	if (ret < 0)
 	    ret = -1;
 	else
@@ -1704,10 +1658,12 @@ _ged_draw_reexpand_group_add(struct ged_draw_reexpand_source_ctx *ctx,
     entry->view_ctx = ctx->view_ctx ? ctx->view_ctx :
 	((rec->in_view_scope && rec->view) ? rec->view :
 	 ged_draw_active_view_ctx(ctx->gedp));
-    struct bsg_appearance_settings appearance = BSG_APPEARANCE_SETTINGS_INIT;
+    struct ged_draw_appearance_settings appearance =
+	GED_DRAW_APPEARANCE_SETTINGS_INIT;
     bsg_scene_ref group_ref =
 	ged_draw_registry_group_scene_ref(ctx->gedp, rec->ref);
-    if (!ged_draw_scene_ref_draw_intent_appearance(group_ref, &appearance)) {
+    if (!ged_draw_scene_ref_draw_intent_appearance_settings(group_ref,
+	    &appearance)) {
 	appearance.draw_mode = rec->draw_mode;
 	appearance.transparency = rec->transparency;
     }
@@ -1837,7 +1793,7 @@ _ged_draw_reexpand_source_groups(struct ged *gedp, const char *path,
 	if (!entry)
 	    continue;
 
-	struct bsg_appearance_settings settings = entry->appearance;
+	struct ged_draw_appearance_settings settings = entry->appearance;
 
 	struct ged_draw_transaction txn =
 	    ged_draw_transaction_make(GED_DRAW_TXN_DRAW, entry->path);

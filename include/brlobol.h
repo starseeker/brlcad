@@ -33,6 +33,7 @@
 #include "brlobol/pick_detail.h"
 #include "brlobol/realize_action.h"
 #include "brlobol/scene_controller.h"
+#include "brlobol/scene_group.h"
 #include "brlobol/snap_action.h"
 #include "brlobol/source_mesh_request.h"
 #include "brlobol/view_controller.h"

@@ -25,6 +25,7 @@ set(
   pick_detail.cpp
   realize_action.cpp
   scene_controller.cpp
+  scene_group.cpp
   snap_action.cpp
   view_controller.cpp
   viewport_image.cpp
@@ -99,6 +100,7 @@ cmakefiles(
   pick_detail.cpp
   realize_action.cpp
   scene_controller.cpp
+  scene_group.cpp
   snap_action.cpp
   view_controller.cpp
   viewport_image.cpp

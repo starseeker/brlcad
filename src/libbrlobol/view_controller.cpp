@@ -1660,43 +1660,6 @@ find_line_layer_overlay_child(SoGroup *group, const char *overlayId)
     return -1;
 }
 
-static const char *
-skip_leading_slash(const char *path)
-{
-    if (!path)
-	return "";
-    while (*path == '/')
-	path++;
-    return path;
-}
-
-static int
-database_source_path_equal(const SoBRLDatabaseSource *source, const char *path)
-{
-    if (!source || !path)
-	return 0;
-    const char *sourcePath = source->path.getValue().getString();
-    if (strcmp(sourcePath, path) == 0)
-	return 1;
-    return strcmp(skip_leading_slash(sourcePath), skip_leading_slash(path)) == 0;
-}
-
-static int
-find_database_source_child(SoGroup *group, const char *sourcePath)
-{
-    if (!group || !sourcePath)
-	return -1;
-    for (int i = 0; i < group->getNumChildren(); i++) {
-	SoNode *node = group->getChild(i);
-	if (!node || !node->isOfType(SoBRLDatabaseSource::getClassTypeId()))
-	    continue;
-	SoBRLDatabaseSource *source = static_cast<SoBRLDatabaseSource *>(node);
-	if (database_source_path_equal(source, sourcePath))
-	    return i;
-    }
-    return -1;
-}
-
 int
 BRLObolViewController::replaceEditPreview(const char *previewId,
 	const char *identity,
@@ -1876,83 +1839,312 @@ BRLObolViewController::removeHUDLabelOverlay(const char *labelId)
     return 1;
 }
 
+SoGroup *
+BRLObolViewController::findGroup(const char *groupPath) const
+{
+    return this->sceneController.findGroup(groupPath);
+}
+
+SoGroup *
+BRLObolViewController::ensureGroup(const char *groupPath)
+{
+    const uint64_t revision = this->sceneController.getStructuralRevision();
+    SoGroup *group = this->sceneController.ensureGroup(groupPath);
+    if (group && this->sceneController.getStructuralRevision() != revision)
+	this->requestRender("scene-group");
+    return group;
+}
+
+int
+BRLObolViewController::setGroupDrawIntent(const char *groupPath,
+	const char *intentPath,
+	int drawMode,
+	int fallbackDrawMode,
+	SbBool overlayIntent,
+	uint32_t revalidationRevision)
+{
+    const int changed = this->sceneController.setGroupDrawIntent(groupPath,
+	    intentPath, drawMode, fallbackDrawMode, overlayIntent,
+	    revalidationRevision);
+    if (changed > 0)
+	this->requestRender("scene-group");
+    return changed;
+}
+
+int
+BRLObolViewController::setGroupDisplayState(const char *groupPath,
+	SbBool visible,
+	SbBool selected,
+	SbBool highlighted,
+	int lineStyle,
+	int lineWidth,
+	float transparency,
+	SbBool colorOverride,
+	const SbColor &color,
+	SbBool materialColorValid,
+	const SbColor &materialColor,
+	uint32_t materialRevision)
+{
+    const int changed = this->sceneController.setGroupDisplayState(
+	    groupPath, visible, selected, highlighted, lineStyle,
+	    lineWidth, transparency, colorOverride, color,
+	    materialColorValid, materialColor, materialRevision);
+    if (changed > 0)
+	this->requestRender("scene-group");
+    return changed;
+}
+
+int
+BRLObolViewController::renameGroup(const char *groupPath,
+	const char *newLeafName)
+{
+    const int changed =
+	this->sceneController.renameGroup(groupPath, newLeafName);
+    if (changed > 0)
+	this->requestRender("scene-group");
+    return changed;
+}
+
+int
+BRLObolViewController::appendChildToGroup(const char *groupPath,
+	SoNode *child)
+{
+    const int changed =
+	this->sceneController.appendChildToGroup(groupPath, child);
+    if (changed > 0)
+	this->requestRender("scene-group");
+    return changed;
+}
+
+int
+BRLObolViewController::removeChildFromGroup(const char *groupPath,
+	SoNode *child)
+{
+    const int changed =
+	this->sceneController.removeChildFromGroup(groupPath, child);
+    if (changed > 0)
+	this->requestRender("scene-group");
+    return changed;
+}
+
+int
+BRLObolViewController::eraseGroupSubpath(const char *parentGroupPath,
+	const char *subpath)
+{
+    const int changed =
+	this->sceneController.eraseGroupSubpath(parentGroupPath, subpath);
+    if (changed > 0)
+	this->requestRender("scene-group");
+    return changed;
+}
+
+int
+BRLObolViewController::removeGroup(const char *groupPath)
+{
+    const int removed = this->sceneController.removeGroup(groupPath);
+    if (removed > 0)
+	this->requestRender("scene-group");
+    return removed;
+}
+
+int
+BRLObolViewController::clearGroup(const char *groupPath)
+{
+    const int removed = this->sceneController.clearGroup(groupPath);
+    if (removed > 0)
+	this->requestRender("scene-group");
+    return removed;
+}
+
+int
+BRLObolViewController::getGroupChildCount(const char *groupPath) const
+{
+    return this->sceneController.getGroupChildCount(groupPath);
+}
+
+SoNode *
+BRLObolViewController::findShape(const char *shapePath) const
+{
+    return this->sceneController.findShape(shapePath);
+}
+
+SoGroup *
+BRLObolViewController::findShapeParent(const char *shapePath) const
+{
+    return this->sceneController.findShapeParent(shapePath);
+}
+
+int
+BRLObolViewController::moveShapeToGroup(const char *shapePath,
+	const char *groupPath)
+{
+    const int changed =
+	this->sceneController.moveShapeToGroup(shapePath, groupPath);
+    if (changed > 0)
+	this->requestRender("scene-shape");
+    return changed;
+}
+
+int
+BRLObolViewController::removeShape(const char *shapePath)
+{
+    const int removed = this->sceneController.removeShape(shapePath);
+    if (removed > 0)
+	this->requestRender("scene-shape");
+    return removed;
+}
+
+int
+BRLObolViewController::setShapeDrawState(const char *shapePath,
+	int drawMode,
+	SbBool databaseIntent,
+	SbBool overlayIntent,
+	SbBool hudIntent)
+{
+    const int changed = this->sceneController.setShapeDrawState(shapePath,
+	    drawMode, databaseIntent, overlayIntent, hudIntent);
+    if (changed > 0)
+	this->requestRender("scene-shape");
+    return changed;
+}
+
+int
+BRLObolViewController::setShapeDisplayState(const char *shapePath,
+	SbBool visible,
+	SbBool selected,
+	SbBool highlighted,
+	int lineStyle,
+	int lineWidth,
+	float transparency,
+	SbBool colorOverride,
+	const SbColor &color,
+	SbBool materialColorValid,
+	const SbColor &materialColor,
+	uint32_t materialRevision)
+{
+    const int changed = this->sceneController.setShapeDisplayState(
+	    shapePath, visible, selected, highlighted, lineStyle, lineWidth,
+	    transparency, colorOverride, color, materialColorValid,
+	    materialColor, materialRevision);
+    if (changed > 0)
+	this->requestRender("scene-shape");
+    return changed;
+}
+
+int
+BRLObolViewController::setShapePlacementState(const char *shapePath,
+	SbBool drawMatrixValid,
+	const SbMatrix &drawMatrix,
+	SbBool drawCenterValid,
+	const SbVec3f &drawCenter,
+	SbBool drawSizeValid,
+	float drawSize)
+{
+    const int changed = this->sceneController.setShapePlacementState(
+	    shapePath, drawMatrixValid, drawMatrix, drawCenterValid,
+	    drawCenter, drawSizeValid, drawSize);
+    if (changed > 0)
+	this->requestRender("scene-shape");
+    return changed;
+}
+
+int
+BRLObolViewController::setShapeSourceState(const char *shapePath,
+	const char *ownerSourcePath,
+	uint32_t ownerSourceRevision,
+	uint32_t ownerInputsRevision,
+	uint32_t ownerViewRevision,
+	uint32_t ownerRealizedRevision,
+	uint32_t ownerRealizedSourceRevision,
+	uint32_t ownerRealizedInputsRevision,
+	uint32_t ownerRealizedViewRevision,
+	int ownerRealizationStatus,
+	const char *ownerRealizationDiagnostic,
+	const char *ownerRealizationIdentity,
+	SbBool ownerSourceStale,
+	uint32_t ownerStaleReason)
+{
+    const int changed = this->sceneController.setShapeSourceState(
+	    shapePath, ownerSourcePath, ownerSourceRevision,
+	    ownerInputsRevision, ownerViewRevision, ownerRealizedRevision,
+	    ownerRealizedSourceRevision, ownerRealizedInputsRevision,
+	    ownerRealizedViewRevision, ownerRealizationStatus,
+	    ownerRealizationDiagnostic, ownerRealizationIdentity,
+	    ownerSourceStale, ownerStaleReason);
+    if (changed > 0)
+	this->requestRender("scene-shape");
+    return changed;
+}
+
 int
 BRLObolViewController::replaceDatabaseSource(const char *sourcePath,
 	struct db_i *dbip,
 	int drawMode,
 	uint32_t sourceRevision)
 {
-    if (!sourcePath || !sourcePath[0])
-	return -1;
-    if (!dbip)
-	return this->removeDatabaseSource(sourcePath);
+    int changed = this->sceneController.replaceDatabaseSource(sourcePath,
+	    dbip, drawMode, sourceRevision);
+    if (changed > 0) {
+	this->clearRtPickCaches();
+	this->requestRender("database-source");
+    }
+    return changed;
+}
 
-    SoNode *root = this->getSceneRoot();
-    if (!root || !root->isOfType(SoGroup::getClassTypeId()))
-	return -1;
-
-    SoGroup *group = static_cast<SoGroup *>(root);
-    const int childIndex = find_database_source_child(group, sourcePath);
-    SoBRLDatabaseSource *source = NULL;
-    if (childIndex >= 0)
-	source = static_cast<SoBRLDatabaseSource *>(group->getChild(childIndex));
-    else
-	source = new SoBRLDatabaseSource;
-
-    if (drawMode != SoBRLDatabaseSource::SHADED)
-	drawMode = SoBRLDatabaseSource::WIREFRAME;
-
-    if (sourceRevision == 0)
-	sourceRevision = source->sourceRevision.getValue() + 1;
-
-    source->configureDatabaseSource(sourcePath, dbip, drawMode, sourceRevision);
-
-    if (childIndex < 0)
-	group->addChild(source);
-
-    this->clearRtPickCaches();
-    this->requestRender("database-source");
-    return 1;
+int
+BRLObolViewController::setDatabaseSourceState(const char *sourcePath,
+	SbBool sourceRevisionValid,
+	uint32_t sourceRevision,
+	uint32_t inputsRevision,
+	SbBool visible,
+	SbBool highlighted,
+	int lineStyle,
+	int lineWidth,
+	float transparency,
+	SbBool materialColorValid,
+	const SbColor &materialColor,
+	uint32_t materialRevision)
+{
+    const int changed = this->sceneController.setDatabaseSourceState(
+	    sourcePath, sourceRevisionValid, sourceRevision, inputsRevision,
+	    visible, highlighted, lineStyle, lineWidth, transparency,
+	    materialColorValid, materialColor, materialRevision);
+    if (changed > 0) {
+	this->clearRtPickCaches();
+	this->requestRender("database-source");
+    }
+    return changed;
 }
 
 int
 BRLObolViewController::removeDatabaseSource(const char *sourcePath)
 {
-    if (!sourcePath || !sourcePath[0])
-	return 0;
+    int removed = this->sceneController.removeDatabaseSource(sourcePath);
+    if (removed > 0) {
+	this->clearRtPickCaches();
+	this->requestRender("database-source");
+    }
+    return removed;
+}
 
-    SoNode *root = this->getSceneRoot();
-    if (!root || !root->isOfType(SoGroup::getClassTypeId()))
-	return -1;
-
-    SoGroup *group = static_cast<SoGroup *>(root);
-    const int childIndex = find_database_source_child(group, sourcePath);
-    if (childIndex < 0)
-	return 0;
-
-    group->removeChild(childIndex);
-    this->clearRtPickCaches();
-    this->requestRender("database-source");
-    return 1;
+int
+BRLObolViewController::moveDatabaseSourceToGroup(const char *sourcePath,
+	const char *groupPath)
+{
+    int moved = this->sceneController.moveDatabaseSourceToGroup(sourcePath,
+	    groupPath);
+    if (moved > 0) {
+	this->clearRtPickCaches();
+	this->requestRender("database-source");
+    }
+    return moved;
 }
 
 int
 BRLObolViewController::clearDatabaseSources(void)
 {
-    SoNode *root = this->getSceneRoot();
-    if (!root || !root->isOfType(SoGroup::getClassTypeId()))
-	return -1;
-
-    SoGroup *group = static_cast<SoGroup *>(root);
-    int removed = 0;
-    for (int i = group->getNumChildren() - 1; i >= 0; i--) {
-	SoNode *node = group->getChild(i);
-	if (!node || !node->isOfType(SoBRLDatabaseSource::getClassTypeId()))
-	    continue;
-	group->removeChild(i);
-	removed++;
-    }
-    if (removed) {
+    int removed = this->sceneController.clearDatabaseSources();
+    if (removed > 0) {
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
     }
@@ -1962,41 +2154,20 @@ BRLObolViewController::clearDatabaseSources(void)
 SoBRLDatabaseSource *
 BRLObolViewController::getDatabaseSource(int index) const
 {
-    if (index < 0)
-	return NULL;
-
-    SoNode *root = this->getSceneRoot();
-    if (!root || !root->isOfType(SoGroup::getClassTypeId()))
-	return NULL;
-
-    SoGroup *group = static_cast<SoGroup *>(root);
-    int seen = 0;
-    for (int i = 0; i < group->getNumChildren(); i++) {
-	SoNode *node = group->getChild(i);
-	if (!node || !node->isOfType(SoBRLDatabaseSource::getClassTypeId()))
-	    continue;
-	if (seen == index)
-	    return static_cast<SoBRLDatabaseSource *>(node);
-	seen++;
-    }
-    return NULL;
+    return this->sceneController.getDatabaseSource(index);
 }
 
 int
 BRLObolViewController::getDatabaseSourceCount(void) const
 {
-    int ret = 0;
-    SoNode *root = this->getSceneRoot();
-    if (!root || !root->isOfType(SoGroup::getClassTypeId()))
-	return 0;
+    return this->sceneController.getDatabaseSourceCount();
+}
 
-    SoGroup *group = static_cast<SoGroup *>(root);
-    for (int i = 0; i < group->getNumChildren(); i++) {
-	SoNode *node = group->getChild(i);
-	if (node && node->isOfType(SoBRLDatabaseSource::getClassTypeId()))
-	    ret++;
-    }
-    return ret;
+SbBool
+BRLObolViewController::getDatabaseSourceSummary(int index,
+	BRLObolDatabaseSourceSummary &summary) const
+{
+    return this->sceneController.getDatabaseSourceSummary(index, summary);
 }
 
 void

@@ -18,9 +18,12 @@
 #include <Inventor/fields/SoMFInt32.h>
 #include <Inventor/fields/SoSFBool.h>
 #include <Inventor/fields/SoSFColor.h>
+#include <Inventor/fields/SoSFFloat.h>
 #include <Inventor/fields/SoSFInt32.h>
+#include <Inventor/fields/SoSFMatrix.h>
 #include <Inventor/fields/SoSFString.h>
 #include <Inventor/fields/SoSFUInt32.h>
+#include <Inventor/fields/SoSFVec3f.h>
 #include <Inventor/nodes/SoShape.h>
 
 class SoPickedPoint;
@@ -51,6 +54,32 @@ public:
     SoSFString sourceName;
     SoSFString sourceType;
     SoSFUInt32 sourceId;
+    SoSFString displayName;
+    SoSFString geometryName;
+    SoSFString cacheIdentity;
+    SoSFString sourceIdentity;
+    SoSFString ownerSourcePath;
+    SoSFUInt32 ownerSourceRevision;
+    SoSFUInt32 ownerInputsRevision;
+    SoSFUInt32 ownerViewRevision;
+    SoSFUInt32 ownerRealizedRevision;
+    SoSFUInt32 ownerRealizedSourceRevision;
+    SoSFUInt32 ownerRealizedInputsRevision;
+    SoSFUInt32 ownerRealizedViewRevision;
+    SoSFInt32 ownerRealizationStatus;
+    SoSFString ownerRealizationDiagnostic;
+    SoSFString ownerRealizationIdentity;
+    SoSFBool ownerSourceStale;
+    SoSFUInt32 ownerStaleReason;
+    SoSFBool databaseIntent;
+    SoSFBool overlayIntent;
+    SoSFBool hudIntent;
+    SoSFBool localSource;
+    SoSFBool sharedSource;
+    SoSFBool nonDatabaseSource;
+    SoSFInt32 drawMode;
+    SoSFString recordRole;
+    SoSFString geometryKind;
     SoSFInt32 regionId;
     SoSFInt32 airCode;
     SoSFInt32 materialId;
@@ -58,6 +87,13 @@ public:
     SoSFBool materialColorValid;
     SoSFColor materialColor;
     SoSFString materialShader;
+    SoSFUInt32 materialRevision;
+    SoSFBool drawMatrixValid;
+    SoSFMatrix drawMatrix;
+    SoSFBool drawCenterValid;
+    SoSFVec3f drawCenter;
+    SoSFBool drawSizeValid;
+    SoSFFloat drawSize;
     SoSFBool colorOverride;
     SoSFColor color;
     SoSFColor selectedColor;
@@ -68,6 +104,9 @@ public:
     SoSFBool selected;
     SoSFBool highlighted;
     SoSFBool ghosted;
+    SoSFInt32 lineStyle;
+    SoSFInt32 lineWidth;
+    SoSFFloat transparency;
     SoSFBool hiddenLine;
     SoSFBool editEmphasis;
     SoSFString editIntentId;

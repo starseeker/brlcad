@@ -7,10 +7,14 @@
 
 #include "common.h"
 
+#include "brlobol/database_source.h"
+#include "brlobol/lod_realization.h"
 #include "brlobol/view_controller.h"
 #include "bu/app.h"
 #include "bu/env.h"
 #include "bu/file.h"
+#include "bu/malloc.h"
+#include "bu/str.h"
 #include "ged.h"
 #include "ged/draw.h"
 #include "QgLegacyViewContext.h"
@@ -19,6 +23,7 @@
 #include "qtcad/QgLegacyView.h"
 #include "qtcad/QgView.h"
 #include "raytrace.h"
+#include "rt/db_fullpath.h"
 #include "wdb.h"
 
 #include <Inventor/SoViewport.h>
@@ -29,6 +34,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
 
 #define FAIL(_msg) \
@@ -74,8 +80,103 @@ make_draw_sync_db(const char *dbpath)
 
     int ret = mk_rpp(wdbp, "box.s", bmin, bmax) == 0 &&
 	mk_sph(wdbp, "ball.s", center, 1.0) == 0;
+    struct wmember pair;
+    BU_LIST_INIT(&pair.l);
+    ret = ret &&
+	mk_addmember("box.s", &pair.l, NULL, WMOP_UNION) != NULL &&
+	mk_lcomb(wdbp, "pair.c", &pair, 0, NULL, NULL, NULL, 0) == 0;
     wdb_close(wdbp);
     return ret;
+}
+
+static uint32_t
+test_fold_revision(uint64_t revision)
+{
+    if (!revision)
+	return 0;
+
+    uint32_t folded = (uint32_t)(revision ^ (revision >> 32));
+    return folded ? folded : 1;
+}
+
+static const char *
+test_skip_leading_slash(const char *path)
+{
+    if (!path)
+	return "";
+    while (*path == '/')
+	path++;
+    return path;
+}
+
+static int
+test_path_equal(const char *a, const char *b)
+{
+    if (!a || !b)
+	return 0;
+    if (BU_STR_EQUAL(a, b))
+	return 1;
+    return BU_STR_EQUAL(test_skip_leading_slash(a),
+	    test_skip_leading_slash(b));
+}
+
+static int
+test_shape_record_matches_path(const struct ged_draw_shape_record *record,
+	const char *path)
+{
+    if (!record || !path || !path[0])
+	return 0;
+    if (test_path_equal(record->display_name, path) ||
+	    test_path_equal(record->leaf_name, path))
+	return 1;
+
+    if (!record->fullpath || record->fullpath->fp_len <= 0)
+	return 0;
+
+    char *recordPath = db_path_to_string(record->fullpath);
+    if (!recordPath)
+	return 0;
+    int matched = test_path_equal(recordPath, path);
+    bu_free(recordPath, "qtcad Obol draw-sync test record path");
+    return matched;
+}
+
+struct test_shape_record_path_context {
+    const char *path;
+    struct ged_draw_shape_record *out;
+    int found;
+};
+
+static int
+test_shape_record_by_path_cb(const struct ged_draw_shape_record *record,
+	void *userdata)
+{
+    struct test_shape_record_path_context *ctx =
+	(struct test_shape_record_path_context *)userdata;
+    if (!ctx || !record || !test_shape_record_matches_path(record,
+	    ctx->path))
+	return 1;
+
+    if (ctx->out)
+	*ctx->out = *record;
+    ctx->found = 1;
+    return 0;
+}
+
+static int
+test_shape_record_by_path(struct ged *gedp,
+	const char *path,
+	struct ged_draw_shape_record *out)
+{
+    if (!gedp || !path || !path[0])
+	return 0;
+
+    struct test_shape_record_path_context ctx;
+    ctx.path = path;
+    ctx.out = out;
+    ctx.found = 0;
+    ged_draw_foreach_shape_record(gedp, test_shape_record_by_path_cb, &ctx);
+    return ctx.found;
 }
 
 static SoBRLDatabaseSource *
@@ -85,10 +186,35 @@ source_for_path(BRLObolViewController *controller, const char *path)
 	return NULL;
     for (int i = 0; i < controller->getDatabaseSourceCount(); i++) {
 	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
-	if (source && BU_STR_EQUAL(source->path.getValue().getString(), path))
+	if (source && test_path_equal(source->path.getValue().getString(),
+		path))
 	    return source;
     }
     return NULL;
+}
+
+static int
+scene_display_summary_by_path(BRLObolViewController *controller,
+	const char *path,
+	int nodeKind,
+	BRLObolSceneDisplaySummary *out)
+{
+    if (!controller || !controller->getSceneController() || !path)
+	return 0;
+
+    const SoBRLSceneController *scene = controller->getSceneController();
+    for (int i = 0; i < scene->getSceneDisplaySummaryCount(); i++) {
+	BRLObolSceneDisplaySummary summary;
+	if (!scene->getSceneDisplaySummary(i, summary) || !summary.valid)
+	    continue;
+	if (summary.nodeKind == nodeKind &&
+		test_path_equal(summary.path.getString(), path)) {
+	    if (out)
+		*out = summary;
+	    return 1;
+	}
+    }
+    return 0;
 }
 
 struct draw_observer_sync_context {
@@ -220,9 +346,17 @@ main(int argc, char **argv)
 	FAIL("GED draw observer should unregister after qtcad Obol sync test");
     controller->clearDatabaseSources();
 
+    struct ged_draw_appearance_settings box_appearance =
+	GED_DRAW_APPEARANCE_SETTINGS_INIT;
+    box_appearance.color_override = 1;
+    box_appearance.color[0] = 10;
+    box_appearance.color[1] = 20;
+    box_appearance.color[2] = 30;
+    box_appearance.s_line_width = 5;
     struct ged_draw_transaction draw_box =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "box.s");
     draw_box.view = qg_legacy_view_to_context(view.view());
+    draw_box.appearance = &box_appearance;
     if (!apply_and_sync(gedp, &view, &draw_box, 1))
 	FAIL("GED draw should sync a wire Obol database source");
     if (controller->getDatabaseSourceCount() != 1)
@@ -234,6 +368,56 @@ main(int argc, char **argv)
 	    source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED ||
 	    source->getRealizedShapeCount() <= 0)
 	FAIL("wire Obol database source should preserve path and realized geometry");
+    struct ged_draw_shape_record box_record;
+    if (!test_shape_record_by_path(gedp, "box.s", &box_record))
+	FAIL("GED draw should expose neutral source state for box.s");
+    if (box_record.source_revision &&
+	    source->sourceRevision.getValue() !=
+	    test_fold_revision(box_record.source_revision))
+	FAIL("Obol draw sync should copy nonzero GED source revision");
+    if (source->inputsRevision.getValue() !=
+	    test_fold_revision(box_record.inputs_revision) ||
+	    (source->visible.getValue() ? 1 : 0) != box_record.visible ||
+	    (source->highlighted.getValue() ? 1 : 0) != box_record.highlighted ||
+	    source->lineWidth.getValue() != box_record.line_width ||
+	    fabs(source->transparency.getValue() - box_record.transparency) >
+	    1.0e-6)
+	FAIL("Obol draw sync should seed source display state from GED records");
+    void *box_scene_ctx = ged_draw_shape_ref_context(gedp, box_record.ref);
+    struct ged_draw_scene_display_summary box_display;
+    if (!box_scene_ctx ||
+	    !ged_draw_scene_context_display_summary(box_scene_ctx,
+		&box_display) ||
+	    !box_display.valid ||
+	    !box_display.material_valid)
+	FAIL("GED draw should expose neutral display/material state for box.s");
+    if (source->lineStyle.getValue() != box_display.line_style ||
+	    (source->materialColorValid.getValue() ? 1 : 0) !=
+	    box_display.material_valid)
+	FAIL("Obol draw sync should copy GED display line/material validity");
+    SbColor sourceMaterial = source->materialColor.getValue();
+    if (fabsf(sourceMaterial[0] -
+		(float)box_display.material_color[0] / 255.0f) > 1.0e-6f ||
+	    fabsf(sourceMaterial[1] -
+		(float)box_display.material_color[1] / 255.0f) > 1.0e-6f ||
+	    fabsf(sourceMaterial[2] -
+		(float)box_display.material_color[2] / 255.0f) > 1.0e-6f)
+	FAIL("Obol draw sync should copy GED material color");
+    struct ged_draw_shape_material_summary box_material;
+    if (ged_draw_shape_ref_material_summary(gedp, box_record.ref,
+	    &box_material) && box_material.valid &&
+	    source->materialRevision.getValue() !=
+	    test_fold_revision(box_material.material_revision))
+	FAIL("Obol draw sync should copy GED material revision");
+    BRLObolSceneDisplaySummary box_group_display;
+    if (!scene_display_summary_by_path(controller, "box.s",
+	    BRLObolSceneTreeSummary::NODE_GROUP, &box_group_display) ||
+	    !box_group_display.hasDrawIntent ||
+	    box_group_display.intentDrawMode != BRLOBOL_LOD_DRAW_WIRE ||
+	    !box_group_display.visible ||
+	    box_group_display.lineWidth != box_record.line_width ||
+	    controller->getSceneController()->getGroupChildCount("box.s") != 1)
+	FAIL("Obol draw sync should retain the GED draw group around the source");
 
     controller->getViewport()->viewAll();
     controller->requestRender("draw-sync-visible");
@@ -242,6 +426,37 @@ main(int argc, char **argv)
     if (visibleImage.isNull() || lit_pixel_count(visibleImage) < 10)
 	FAIL("Obol-synced GED draw should be visible through qtcad capture");
 
+    struct ged_draw_transaction stale_box =
+	ged_draw_transaction_make(GED_DRAW_TXN_STALE_SOURCE, "box.s");
+    stale_box.view = qg_legacy_view_to_context(view.view());
+    if (!apply_and_sync(gedp, &view, &stale_box, 1))
+	FAIL("GED stale-source event should refresh Obol source state");
+    struct ged_draw_shape_record stale_record;
+    if (!test_shape_record_by_path(gedp, "box.s", &stale_record) ||
+	    !stale_record.source_revision)
+	FAIL("GED stale-source event should expose a nonzero source revision");
+    source = source_for_path(controller, "box.s");
+    if (!source)
+	FAIL("Obol stale-source sync should retain the box source");
+    uint32_t expectedSourceRevision =
+	test_fold_revision(stale_record.source_revision);
+    uint32_t expectedInputsRevision =
+	test_fold_revision(stale_record.inputs_revision);
+    if (source->sourceRevision.getValue() != expectedSourceRevision ||
+	    source->inputsRevision.getValue() != expectedInputsRevision ||
+	    source->realizedSourceRevision.getValue() != expectedSourceRevision ||
+	    source->realizedInputsRevision.getValue() != expectedInputsRevision ||
+	    source->stale.getValue() ||
+	    source->staleReason.getValue() != SoBRLDatabaseSource::STALE_NONE)
+	FAIL("Obol stale-source sync should realize current GED source revisions");
+    BRLObolRealizedShapeSummary shape_summary;
+    if (source->getRealizedShapeSummaryCount() <= 0 ||
+	    !source->getRealizedShapeSummary(0, shape_summary) ||
+	    shape_summary.ownerSourceRevision != expectedSourceRevision ||
+	    shape_summary.ownerInputsRevision != expectedInputsRevision ||
+	    shape_summary.ownerSourceStale)
+	FAIL("Obol realized summary should carry current GED source lineage");
+
     struct ged_draw_transaction erase_box =
 	ged_draw_transaction_make(GED_DRAW_TXN_ERASE, "box.s");
     erase_box.view = qg_legacy_view_to_context(view.view());
@@ -249,6 +464,9 @@ main(int argc, char **argv)
 	FAIL("GED erase should remove an Obol database source");
     if (controller->getDatabaseSourceCount() != 0)
 	FAIL("Obol draw sync should remove erased database sources");
+    if (scene_display_summary_by_path(controller, "box.s",
+	    BRLObolSceneTreeSummary::NODE_GROUP, NULL))
+	FAIL("Obol draw sync should prune empty GED draw groups after erase");
 
     struct ged_draw_appearance_settings shaded_appearance =
 	GED_DRAW_APPEARANCE_SETTINGS_INIT;
@@ -319,6 +537,32 @@ main(int argc, char **argv)
 	FAIL("GED clear should clear Obol database sources");
     if (controller->getDatabaseSourceCount() != 0)
 	FAIL("Obol draw sync should clear all database sources");
+
+    struct ged_draw_transaction draw_nested =
+	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "pair.c/box.s");
+    draw_nested.view = qg_legacy_view_to_context(view.view());
+    if (!apply_and_sync(gedp, &view, &draw_nested, 1))
+	FAIL("nested GED draw should sync an Obol database source");
+    if (controller->getDatabaseSourceCount() != 1 ||
+	    !source_for_path(controller, "pair.c/box.s"))
+	FAIL("nested Obol draw sync should retain one full-path database source");
+    if (scene_display_summary_by_path(controller, "pair.c",
+	    BRLObolSceneTreeSummary::NODE_GROUP, NULL) ||
+	    scene_display_summary_by_path(controller, "pair.c/box.s",
+		BRLObolSceneTreeSummary::NODE_GROUP, NULL))
+	FAIL("full-path Obol draw sync should not synthesize GED groups without neutral group records");
+
+    struct ged_draw_transaction erase_nested =
+	ged_draw_transaction_make(GED_DRAW_TXN_ERASE, "pair.c/box.s");
+    erase_nested.view = qg_legacy_view_to_context(view.view());
+    if (!apply_and_sync(gedp, &view, &erase_nested, 1))
+	FAIL("nested GED erase should remove an Obol database source");
+    if (controller->getDatabaseSourceCount() != 0 ||
+	    scene_display_summary_by_path(controller, "pair.c/box.s",
+		BRLObolSceneTreeSummary::NODE_GROUP, NULL) ||
+	    scene_display_summary_by_path(controller, "pair.c",
+		BRLObolSceneTreeSummary::NODE_GROUP, NULL))
+	FAIL("nested Obol erase should leave no synthetic GED group ancestors");
 
     ged_close(gedp);
     bu_file_delete(dbpath);

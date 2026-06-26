@@ -11,6 +11,7 @@
 #include "brlobol/export_action.h"
 #include "brlobol/lod_mesh_shape.h"
 #include "brlobol/lod_service.h"
+#include "brlobol/vlist_shape.h"
 #include "brlobol/view_controller.h"
 #include "bu/app.h"
 #include "bu/env.h"
@@ -168,9 +169,45 @@ main(int argc, char **argv)
     lodMesh->sourceName = "lod-export.bot";
     lodMesh->sourceType = "bot";
     lodMesh->sourceId = 9301;
+    lodMesh->displayName = "LoD Export Display";
+    lodMesh->geometryName = "lod export geometry";
+    lodMesh->cacheIdentity = "cache://qtcad/lod-export";
+    lodMesh->sourceIdentity = "db://qtcad/lod-export.bot";
+    lodMesh->databaseIntent = TRUE;
+    lodMesh->sharedSource = FALSE;
+    lodMesh->drawMode = BRLOBOL_LOD_DRAW_SHADED;
+    lodMesh->recordRole = "database";
+    lodMesh->geometryKind = "surface";
     lodMesh->editIntentId = "edit::lod-export/face";
     lodMesh->editIntentRole = "exact-export";
     lodMesh->setIndexedTriangles(lodPoints, 3, lodIndices, 3);
+
+    SoBRLVListShape *viewOverlay = new SoBRLVListShape;
+    SbVec3f overlayPoints[3] = {
+	SbVec3f(0.0f, 0.0f, 0.0f),
+	SbVec3f(1.0f, 0.0f, 0.0f),
+	SbVec3f(2.0f, 0.0f, 0.0f)
+    };
+    int32_t overlayCommands[3] = {
+	SoBRLVListShape::MOVE,
+	SoBRLVListShape::DRAW,
+	SoBRLVListShape::POINT
+    };
+    viewOverlay->sourcePath = "overlay::qtcad-line-query";
+    viewOverlay->sourceName = "qtcad-line-query";
+    viewOverlay->sourceType = "overlay";
+    viewOverlay->sourceId = 9302;
+    viewOverlay->displayName = "Line Query Overlay";
+    viewOverlay->geometryName = "line query geometry";
+    viewOverlay->cacheIdentity = "cache://qtcad/line-query";
+    viewOverlay->sourceIdentity = "view://qtcad/line-query";
+    viewOverlay->overlayIntent = TRUE;
+    viewOverlay->localSource = TRUE;
+    viewOverlay->nonDatabaseSource = TRUE;
+    viewOverlay->drawMode = BRLOBOL_LOD_DRAW_WIRE;
+    viewOverlay->recordRole = "overlay";
+    viewOverlay->visible = FALSE;
+    viewOverlay->setLineSet(overlayPoints, overlayCommands, 3);
 
     BRLObolLodRequest displayRequest;
     lodMesh->makeLodRequest(displayRequest,
@@ -192,6 +229,7 @@ main(int argc, char **argv)
 
     lodRoot->addChild(lodDatabase);
     lodRoot->addChild(lodMesh);
+    lodRoot->addChild(viewOverlay);
     controller->setSceneRoot(lodRoot);
     lodRoot->unref();
 
@@ -245,12 +283,31 @@ main(int argc, char **argv)
 	FAIL("qtcad exact Obol export should preserve source-backed bounds");
     }
     const QgObolExportTriangleRecord &triangle = exactExport.triangles[0];
+    const uint64_t cacheIdentity =
+	SoBRLExportAction::identityValue("cache://qtcad/lod-export");
+    const uint64_t sourceIdentity =
+	SoBRLExportAction::identityValue("db://qtcad/lod-export.bot");
     if (triangle.path != "/lod-export.bot" ||
 	    triangle.sourceName != "lod-export.bot" ||
 	    triangle.sourceType != "bot" ||
+	    triangle.displayName != "LoD Export Display" ||
+	    triangle.geometryName != "lod export geometry" ||
+	    triangle.cacheIdentity != "cache://qtcad/lod-export" ||
+	    triangle.sourceIdentity != "db://qtcad/lod-export.bot" ||
+	    triangle.cacheIdentityValue != cacheIdentity ||
+	    triangle.sourceIdentityValue != sourceIdentity ||
 	    triangle.editIntentId != "edit::lod-export/face" ||
 	    triangle.editIntentRole != "exact-export" ||
 	    triangle.sourceId != 9301 ||
+	    !triangle.databaseIntent ||
+	    triangle.overlayIntent ||
+	    triangle.hudIntent ||
+	    triangle.localSource ||
+	    triangle.sharedSource ||
+	    triangle.nonDatabaseSource ||
+	    triangle.drawMode != BRLOBOL_LOD_DRAW_SHADED ||
+	    triangle.recordRole != "database" ||
+	    triangle.geometryKind != "surface" ||
 	    triangle.primitiveIndex != 42 ||
 	    triangle.vertexIndexA != 10 ||
 	    triangle.vertexIndexB != 11 ||
@@ -273,6 +330,142 @@ main(int argc, char **argv)
 	sourceService.stop();
 	FAIL("qtcad exact Obol export should not report pending source detail after consuming a ready result");
     }
+
+    QgObolExportObjectQuery objectQuery;
+    objectQuery.flags = QG_OBOL_EXPORT_QUERY_VISIBLE_ONLY |
+	QG_OBOL_EXPORT_QUERY_DATABASE_OBJECTS;
+    objectQuery.glob = "*lod-export.bot";
+    objectQuery.drawMode = BRLOBOL_LOD_DRAW_SHADED;
+    objectQuery.geometryPolicy = QG_OBOL_EXPORT_DISPLAY_LEVEL;
+    QgObolExportObjectQueryResult objectExport;
+    if (!qg_obol_export_object_records(&view, objectQuery, objectExport) ||
+	    objectExport.objects.size() != 1 ||
+	    objectExport.lineCount != 0 ||
+	    objectExport.pointCount != 0 ||
+	    objectExport.triangleCount != 1 ||
+	    objectExport.sourceFullDetailPending ||
+	    objectExport.submittedSourceRequestCount != 0) {
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad Obol object query should report display-level database object records");
+    }
+    const QgObolExportObjectRecord &object = objectExport.objects[0];
+    if (object.path != "/lod-export.bot" ||
+	    object.displayName != "LoD Export Display" ||
+	    object.geometryName != "lod export geometry" ||
+	    object.cacheIdentity != "cache://qtcad/lod-export" ||
+	    object.sourceIdentity != "db://qtcad/lod-export.bot" ||
+	    object.cacheIdentityValue != cacheIdentity ||
+	    object.sourceIdentityValue != sourceIdentity ||
+	    !object.databaseIntent ||
+	    object.overlayIntent ||
+	    object.localSource ||
+	    object.sharedSource ||
+	    object.nonDatabaseSource ||
+	    object.drawMode != BRLOBOL_LOD_DRAW_SHADED ||
+	    object.recordRole != "database" ||
+	    object.geometryKind != "surface" ||
+	    object.lineCount != 0 ||
+	    object.pointPrimitiveCount != 0 ||
+	    object.triangleCount != 1 ||
+	    !object.boundsValid ||
+	    !object.surfaceSummary.valid ||
+	    object.surfaceSummary.pointCount != 3 ||
+	    object.surfaceSummary.indexCount != 3 ||
+	    object.surfaceSummary.faceCount != 1 ||
+	    object.surfaceSummary.cacheIdentityValue != cacheIdentity ||
+	    object.surfaceSummary.sourceIdentityValue != sourceIdentity ||
+	    object.surfacePoints.size() != 3 ||
+	    object.surfaceIndices.size() != 3 ||
+	    object.surfaceIndices[0] != 0 ||
+	    object.surfaceIndices[1] != 1 ||
+	    object.surfaceIndices[2] != 2 ||
+	    !near_point(object.surfacePoints[0], -1.0f, -1.0f, 0.0f) ||
+	    !near_point(object.surfacePoints[1], 1.0f, -1.0f, 0.0f) ||
+	    !near_point(object.surfacePoints[2], -1.0f, 1.0f, 0.0f)) {
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad Obol object query should preserve neutral object metadata and compact surface detail");
+    }
+    QgObolExportObjectQuery localOnlyQuery;
+    localOnlyQuery.flags = QG_OBOL_EXPORT_QUERY_LOCAL_ONLY;
+    localOnlyQuery.geometryPolicy = QG_OBOL_EXPORT_DISPLAY_LEVEL;
+    QgObolExportObjectQueryResult localOnlyExport;
+    if (qg_obol_export_object_records(&view, localOnlyQuery,
+	    localOnlyExport) ||
+	    !localOnlyExport.objects.empty()) {
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad Obol object query should honor local-only filtering");
+    }
+
+    viewOverlay->visible = TRUE;
+    QgObolExportObjectQuery viewObjectQuery;
+    viewObjectQuery.flags = QG_OBOL_EXPORT_QUERY_VISIBLE_ONLY |
+	QG_OBOL_EXPORT_QUERY_VIEW_OBJECTS |
+	QG_OBOL_EXPORT_QUERY_LOCAL_ONLY;
+    viewObjectQuery.glob = "overlay::*";
+    viewObjectQuery.drawMode = BRLOBOL_LOD_DRAW_WIRE;
+    viewObjectQuery.geometryPolicy = QG_OBOL_EXPORT_DISPLAY_LEVEL;
+    QgObolExportObjectQueryResult viewObjectExport;
+    const uint64_t overlayCacheIdentity =
+	SoBRLExportAction::identityValue("cache://qtcad/line-query");
+    const uint64_t overlaySourceIdentity =
+	SoBRLExportAction::identityValue("view://qtcad/line-query");
+    if (!qg_obol_export_object_records(&view, viewObjectQuery,
+	    viewObjectExport) ||
+	    viewObjectExport.objects.size() != 1 ||
+	    viewObjectExport.lineCount != 1 ||
+	    viewObjectExport.pointCount != 1 ||
+	    viewObjectExport.triangleCount != 1) {
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad Obol object query should report view-local line and point records");
+    }
+    const QgObolExportObjectRecord &viewObject = viewObjectExport.objects[0];
+    if (viewObject.path != "overlay::qtcad-line-query" ||
+	    viewObject.displayName != "Line Query Overlay" ||
+	    viewObject.geometryName != "line query geometry" ||
+	    viewObject.cacheIdentity != "cache://qtcad/line-query" ||
+	    viewObject.sourceIdentity != "view://qtcad/line-query" ||
+	    viewObject.cacheIdentityValue != overlayCacheIdentity ||
+	    viewObject.sourceIdentityValue != overlaySourceIdentity ||
+	    viewObject.databaseIntent ||
+	    !viewObject.overlayIntent ||
+	    !viewObject.localSource ||
+	    viewObject.sharedSource ||
+	    !viewObject.nonDatabaseSource ||
+	    viewObject.drawMode != BRLOBOL_LOD_DRAW_WIRE ||
+	    viewObject.recordRole != "overlay" ||
+	    viewObject.geometryKind != "mixed" ||
+	    viewObject.lineCount != 1 ||
+	    viewObject.pointPrimitiveCount != 1 ||
+	    viewObject.triangleCount != 0 ||
+	    !viewObject.lineSummary.valid ||
+	    viewObject.lineSummary.pointCount != 2 ||
+	    viewObject.lineSummary.segmentCount != 1 ||
+	    viewObject.lineSummary.cacheIdentityValue != overlayCacheIdentity ||
+	    viewObject.lineSummary.sourceIdentityValue != overlaySourceIdentity ||
+	    viewObject.linePoints.size() != 2 ||
+	    viewObject.lineCommands.size() != 2 ||
+	    viewObject.lineCommands[0] != SoBRLExportAction::LINE_MOVE ||
+	    viewObject.lineCommands[1] != SoBRLExportAction::LINE_DRAW ||
+	    !near_point(viewObject.linePoints[0], 0.0f, 0.0f, 0.0f) ||
+	    !near_point(viewObject.linePoints[1], 1.0f, 0.0f, 0.0f) ||
+	    !viewObject.pointSummary.valid ||
+	    viewObject.pointSummary.pointCount != 1 ||
+	    viewObject.pointSummary.cacheIdentityValue != overlayCacheIdentity ||
+	    viewObject.pointSummary.sourceIdentityValue != overlaySourceIdentity ||
+	    viewObject.points.size() != 1 ||
+	    !near_point(viewObject.points[0], 2.0f, 0.0f, 0.0f) ||
+	    viewObject.surfaceSummary.valid ||
+	    !viewObject.surfacePoints.empty() ||
+	    !viewObject.surfaceIndices.empty()) {
+	controller->setLodService(NULL);
+	sourceService.stop();
+	FAIL("qtcad Obol object query should preserve view-local line and point detail");
+    }
+    viewOverlay->visible = FALSE;
 
     controller->setExactFullDetailBudget(0, 2);
     QgObolExportGeometryRecord overBudgetExport;

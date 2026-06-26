@@ -78,7 +78,7 @@ _color_shape_record_cb(const struct ged_draw_shape_record *rec, void *ud)
 {
     struct _color_ctx *ctx = (struct _color_ctx *)ud;
     bsg_scene_ref shape_ref = ctx ? ged_draw_registry_shape_scene_ref(ctx->gedp, rec->ref) :
-	bsg_scene_ref_null();
+	ged_draw_scene_ref_null();
     if (ged_draw_scene_ref_is_null(shape_ref))
 	return 1;
 

@@ -8,6 +8,7 @@
 #include "common.h"
 
 #include "brlobol/grid.h"
+#include "brlobol/lod_realization.h"
 #include "brlobol/vlist_shape.h"
 
 #include <algorithm>
@@ -71,6 +72,19 @@ SoBRLGrid::rebuildGeometry(void)
 
     SoBRLVListShape *shape = new SoBRLVListShape;
     shape->sourcePath = this->overlayId.getValue();
+    shape->displayName = this->overlayId.getValue();
+    shape->geometryName = "grid";
+    shape->sourceIdentity = this->overlayId.getValue();
+    shape->cacheIdentity = this->overlayId.getValue();
+    shape->databaseIntent = FALSE;
+    shape->overlayIntent = TRUE;
+    shape->hudIntent = FALSE;
+    shape->localSource = TRUE;
+    shape->sharedSource = FALSE;
+    shape->nonDatabaseSource = TRUE;
+    shape->drawMode = BRLOBOL_LOD_DRAW_DIAGNOSTIC;
+    shape->recordRole = "overlay";
+    shape->geometryKind = "line";
     shape->sourceId = static_cast<uint32_t>(divs);
     shape->setLineSet(points.data(), commands.data(), static_cast<int>(points.size()));
     this->addChild(shape);

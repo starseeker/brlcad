@@ -37,6 +37,7 @@
 #include "bsg/polygon.h"
 #include "bsg/selection.h"
 #include "bsg/view_set.h"
+#include "bsg/view_state.h"
 #include "rt/view.h"
 #include "rt/primitives/sketch_legacy_bsg.h"
 #include "./bsg_ged_draw_private.h"

@@ -8,6 +8,7 @@
 #include "common.h"
 
 #include "brlobol/axes.h"
+#include "brlobol/lod_realization.h"
 #include "brlobol/vlist_shape.h"
 
 SO_NODE_SOURCE(SoBRLAxes);
@@ -57,6 +58,19 @@ SoBRLAxes::rebuildGeometry(void)
 
     SoBRLVListShape *shape = new SoBRLVListShape;
     shape->sourcePath = this->overlayId.getValue();
+    shape->displayName = this->overlayId.getValue();
+    shape->geometryName = "axes";
+    shape->sourceIdentity = this->overlayId.getValue();
+    shape->cacheIdentity = this->overlayId.getValue();
+    shape->databaseIntent = FALSE;
+    shape->overlayIntent = TRUE;
+    shape->hudIntent = FALSE;
+    shape->localSource = TRUE;
+    shape->sharedSource = FALSE;
+    shape->nonDatabaseSource = TRUE;
+    shape->drawMode = BRLOBOL_LOD_DRAW_DIAGNOSTIC;
+    shape->recordRole = "overlay";
+    shape->geometryKind = "line";
     shape->sourceId = static_cast<uint32_t>(s);
     shape->setLineSet(points, commands, 6);
     this->addChild(shape);

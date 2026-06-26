@@ -12,9 +12,15 @@
 #include "brlobol/mesh_shape.h"
 #include "brlobol/vlist_shape.h"
 
+#include "bu/path.h"
+
 #include <Inventor/elements/SoModelMatrixElement.h>
 #include <Inventor/nodes/SoNode.h>
 
+#include <algorithm>
+#include <cstring>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 SO_ACTION_SOURCE(SoBRLExportAction);
@@ -125,13 +131,420 @@ export_reserve_records(std::vector<Record> &records, size_t additionalCount)
     records.reserve(grown);
 }
 
+static SbString
+export_record_display_name(const SbString &path, const SbString &sourceName)
+{
+    if (sourceName.getLength() > 0)
+	return sourceName;
+    return path;
+}
+
+static uint64_t
+export_identity_value(const char *identity)
+{
+    if (!identity || !identity[0])
+	return 0;
+
+    uint64_t hash = 14695981039346656037ULL;
+    while (*identity) {
+	hash ^= static_cast<unsigned char>(*identity);
+	hash *= 1099511628211ULL;
+	identity++;
+    }
+
+    return hash ? hash : 1;
+}
+
+static SbString
+export_record_identity_fallback(const SbString &path,
+	const SbString &sourceName)
+{
+    return path.getLength() > 0 ? path : sourceName;
+}
+
+template <typename Record>
+static void
+export_update_record_identity_values(Record &record)
+{
+    const SbString cacheIdentity = record.cacheIdentity.getLength() > 0 ?
+	record.cacheIdentity : record.sourceIdentity;
+    record.cacheIdentityValue =
+	export_identity_value(cacheIdentity.getString());
+    record.sourceIdentityValue =
+	export_identity_value(record.sourceIdentity.getString());
+}
+
+template <typename Record>
+static void
+export_init_record_metadata(Record &record,
+	const SbString &path,
+	const SbString &sourceName,
+	const SbString &sourceType,
+	const char *fallbackGeometryKind)
+{
+    record.displayName = export_record_display_name(path, sourceName);
+    record.geometryName = sourceName.getLength() > 0 ? sourceName : sourceType;
+    record.cacheIdentity = "";
+    record.sourceIdentity = export_record_identity_fallback(path, sourceName);
+    export_update_record_identity_values(record);
+    record.databaseIntent = 0;
+    record.overlayIntent = 0;
+    record.hudIntent = 0;
+    record.localSource = 0;
+    record.sharedSource = 0;
+    record.nonDatabaseSource = 0;
+    record.drawMode = 0;
+    record.recordRole = "";
+    record.geometryKind = fallbackGeometryKind ? fallbackGeometryKind : "";
+}
+
+template <typename Record, typename Shape>
+static void
+export_apply_shape_metadata(Record &record,
+	const Shape *shape,
+	const char *fallbackGeometryKind)
+{
+    if (!shape)
+	return;
+
+    const SbString &displayName = shape->displayName.getValue();
+    const SbString &geometryName = shape->geometryName.getValue();
+    const SbString &sourceIdentity = shape->sourceIdentity.getValue();
+    const SbString &geometryKind = shape->geometryKind.getValue();
+
+    record.displayName = displayName.getLength() > 0 ?
+	displayName : export_record_display_name(shape->sourcePath.getValue(),
+		shape->sourceName.getValue());
+    record.geometryName = geometryName.getLength() > 0 ?
+	geometryName : shape->sourceName.getValue();
+    record.cacheIdentity = shape->cacheIdentity.getValue();
+    record.sourceIdentity = sourceIdentity.getLength() > 0 ?
+	sourceIdentity : export_record_identity_fallback(
+		shape->sourcePath.getValue(), shape->sourceName.getValue());
+    export_update_record_identity_values(record);
+    record.databaseIntent = shape->databaseIntent.getValue() ? 1 : 0;
+    record.overlayIntent = shape->overlayIntent.getValue() ? 1 : 0;
+    record.hudIntent = shape->hudIntent.getValue() ? 1 : 0;
+    record.localSource = shape->localSource.getValue() ? 1 : 0;
+    record.sharedSource = shape->sharedSource.getValue() ? 1 : 0;
+    record.nonDatabaseSource = shape->nonDatabaseSource.getValue() ? 1 : 0;
+    record.drawMode = shape->drawMode.getValue();
+    record.recordRole = shape->recordRole.getValue();
+    record.geometryKind = geometryKind.getLength() > 0 ?
+	geometryKind : SbString(fallbackGeometryKind ? fallbackGeometryKind : "");
+}
+
+template <typename Record>
+static void
+export_apply_source_request_metadata(Record &record,
+	const BRLObolSourceMeshRequest &request,
+	const char *fallbackGeometryKind)
+{
+    record.displayName = request.displayName.getLength() > 0 ?
+	request.displayName : export_record_display_name(request.path,
+		request.sourceName);
+    record.geometryName = request.geometryName.getLength() > 0 ?
+	request.geometryName : request.sourceName;
+    record.cacheIdentity = request.cacheIdentity;
+    record.sourceIdentity = request.sourceIdentity.getLength() > 0 ?
+	request.sourceIdentity : export_record_identity_fallback(
+		request.path, request.sourceName);
+    export_update_record_identity_values(record);
+    record.databaseIntent = request.databaseIntent ? 1 : 0;
+    record.overlayIntent = request.overlayIntent ? 1 : 0;
+    record.hudIntent = request.hudIntent ? 1 : 0;
+    record.localSource = request.localSource ? 1 : 0;
+    record.sharedSource = request.sharedSource ? 1 : 0;
+    record.nonDatabaseSource = request.nonDatabaseSource ? 1 : 0;
+    record.drawMode = request.drawMode;
+    record.recordRole = request.recordRole;
+    record.geometryKind = request.geometryKind.getLength() > 0 ?
+	request.geometryKind : SbString(fallbackGeometryKind ? fallbackGeometryKind : "");
+}
+
+static void
+export_object_key_append_string(std::string &key, const SbString &value)
+{
+    const char *s = value.getString();
+    size_t len = s ? strlen(s) : 0;
+    key += std::to_string(len);
+    key += ':';
+    if (s && len > 0)
+	key.append(s, len);
+    key += ';';
+}
+
+template <typename Record>
+static std::string
+export_object_key(const Record &record)
+{
+    std::string key;
+    export_object_key_append_string(key, record.path);
+    export_object_key_append_string(key, record.sourceName);
+    export_object_key_append_string(key, record.sourceType);
+    export_object_key_append_string(key, record.cacheIdentity);
+    export_object_key_append_string(key, record.sourceIdentity);
+    export_object_key_append_string(key, record.recordRole);
+    key += std::to_string(record.sourceId);
+    key += ';';
+    key += std::to_string(record.drawMode);
+    key += ';';
+    key += std::to_string(record.databaseIntent ? 1 : 0);
+    key += std::to_string(record.overlayIntent ? 1 : 0);
+    key += std::to_string(record.hudIntent ? 1 : 0);
+    key += std::to_string(record.localSource ? 1 : 0);
+    key += std::to_string(record.sharedSource ? 1 : 0);
+    key += std::to_string(record.nonDatabaseSource ? 1 : 0);
+    return key;
+}
+
+template <typename Record>
+static void
+export_object_init_common(SoBRLExportAction::ObjectRecord &object,
+	const Record &record)
+{
+    object.sequence = record.sequence;
+    object.path = record.path;
+    object.sourceName = record.sourceName;
+    object.sourceType = record.sourceType;
+    object.sourceId = record.sourceId;
+    object.displayName = record.displayName;
+    object.geometryName = record.geometryName;
+    object.cacheIdentity = record.cacheIdentity;
+    object.sourceIdentity = record.sourceIdentity;
+    object.cacheIdentityValue = record.cacheIdentityValue;
+    object.sourceIdentityValue = record.sourceIdentityValue;
+    object.databaseIntent = record.databaseIntent;
+    object.overlayIntent = record.overlayIntent;
+    object.hudIntent = record.hudIntent;
+    object.localSource = record.localSource;
+    object.sharedSource = record.sharedSource;
+    object.nonDatabaseSource = record.nonDatabaseSource;
+    object.drawMode = record.drawMode;
+    object.recordRole = record.recordRole;
+    object.geometryKind = record.geometryKind;
+    object.selected = record.selected ? 1 : 0;
+    object.highlighted = record.highlighted ? 1 : 0;
+    object.visible = 1;
+    object.colorOverride = record.colorOverride ? 1 : 0;
+    object.color = record.color;
+    object.bounds.makeEmpty();
+    object.lineIndices.clear();
+    object.pointIndices.clear();
+    object.triangleIndices.clear();
+}
+
+template <typename Record>
+static void
+export_object_update_common(SoBRLExportAction::ObjectRecord &object,
+	const Record &record)
+{
+    if (record.sequence < object.sequence)
+	object.sequence = record.sequence;
+    object.selected = object.selected || record.selected;
+    object.highlighted = object.highlighted || record.highlighted;
+    object.visible = 1;
+    if (!object.colorOverride && record.colorOverride) {
+	object.colorOverride = 1;
+	object.color = record.color;
+    }
+    if (object.geometryKind.getLength() == 0) {
+	object.geometryKind = record.geometryKind;
+    } else if (record.geometryKind.getLength() > 0 &&
+	    strcmp(object.geometryKind.getString(),
+		record.geometryKind.getString()) != 0) {
+	object.geometryKind = "mixed";
+    }
+}
+
+static void
+export_object_add_line(SoBRLExportAction::ObjectRecord &object,
+	const SoBRLExportAction::LineRecord &record,
+	int index)
+{
+    export_object_update_common(object, record);
+    object.lineIndices.push_back(index);
+    object.bounds.extendBy(record.a);
+    object.bounds.extendBy(record.b);
+}
+
+static void
+export_object_add_point(SoBRLExportAction::ObjectRecord &object,
+	const SoBRLExportAction::PointRecord &record,
+	int index)
+{
+    export_object_update_common(object, record);
+    object.pointIndices.push_back(index);
+    object.bounds.extendBy(record.point);
+    if (record.pointScaleValid && record.pointScale > 0.0f) {
+	const SbVec3f radius(record.pointScale, record.pointScale,
+		record.pointScale);
+	object.bounds.extendBy(record.point - radius);
+	object.bounds.extendBy(record.point + radius);
+    }
+}
+
+static void
+export_object_add_triangle(SoBRLExportAction::ObjectRecord &object,
+	const SoBRLExportAction::TriangleRecord &record,
+	int index)
+{
+    export_object_update_common(object, record);
+    object.triangleIndices.push_back(index);
+    object.bounds.extendBy(record.a);
+    object.bounds.extendBy(record.b);
+    object.bounds.extendBy(record.c);
+}
+
+static int
+export_object_record_matches_glob(
+	const SoBRLExportAction::ObjectRecord &record,
+	const char *glob)
+{
+    if (!glob || !glob[0])
+	return 1;
+
+    return bu_path_match(glob, record.path.getString(), 0) == 0 ||
+	bu_path_match(glob, record.displayName.getString(), 0) == 0 ||
+	bu_path_match(glob, record.sourceName.getString(), 0) == 0;
+}
+
+static int
+export_object_record_matches_query(
+	const SoBRLExportAction::ObjectRecord &record,
+	unsigned int queryFlags,
+	const char *glob,
+	int drawMode)
+{
+    if ((queryFlags & SoBRLExportAction::QUERY_VISIBLE_ONLY) &&
+	    !record.visible)
+	return 0;
+    if ((queryFlags & SoBRLExportAction::QUERY_LOCAL_ONLY) &&
+	    !record.localSource)
+	return 0;
+    if (drawMode >= 0 && record.drawMode != drawMode)
+	return 0;
+    if (!export_object_record_matches_glob(record, glob))
+	return 0;
+
+    const int wantsDatabase =
+	(queryFlags & SoBRLExportAction::QUERY_DATABASE_OBJECTS) ? 1 : 0;
+    const int wantsView =
+	(queryFlags & SoBRLExportAction::QUERY_VIEW_OBJECTS) ? 1 : 0;
+    if (wantsDatabase || wantsView) {
+	const int isDatabase = record.databaseIntent &&
+	    !record.nonDatabaseSource;
+	const int isView = record.overlayIntent || record.hudIntent ||
+	    record.localSource || record.sharedSource ||
+	    record.nonDatabaseSource;
+	if (wantsDatabase && isDatabase)
+	    return 1;
+	if (wantsView && isView)
+	    return 1;
+	return 0;
+    }
+
+    return 1;
+}
+
+static const SoBRLExportAction::TriangleRecord *
+export_object_first_triangle(
+	const std::vector<SoBRLExportAction::TriangleRecord> &triangles,
+	const SoBRLExportAction::ObjectRecord &record)
+{
+    for (size_t i = 0; i < record.triangleIndices.size(); i++) {
+	int triangleIndex = record.triangleIndices[i];
+	if (triangleIndex < 0 ||
+		static_cast<size_t>(triangleIndex) >= triangles.size())
+	    continue;
+	return &triangles[static_cast<size_t>(triangleIndex)];
+    }
+
+    return NULL;
+}
+
+static int
+export_triangle_vertex_id(const SoBRLExportAction::TriangleRecord &triangle,
+	size_t vertexSlot)
+{
+    if (vertexSlot == 0)
+	return triangle.vertexIndexA;
+    if (vertexSlot == 1)
+	return triangle.vertexIndexB;
+    return triangle.vertexIndexC;
+}
+
+static SbVec3f
+export_triangle_vertex_point(
+	const SoBRLExportAction::TriangleRecord &triangle,
+	size_t vertexSlot)
+{
+    if (vertexSlot == 0)
+	return triangle.a;
+    if (vertexSlot == 1)
+	return triangle.b;
+    return triangle.c;
+}
+
+static int
+export_surface_compact_vertex_slot(std::vector<int> &vertexIds,
+	std::vector<SbVec3f> &points, int vertexId, const SbVec3f &point)
+{
+    if (vertexId >= 0) {
+	for (size_t i = 0; i < vertexIds.size(); i++) {
+	    if (vertexIds[i] == vertexId)
+		return static_cast<int>(i);
+	}
+    }
+
+    vertexIds.push_back(vertexId);
+    points.push_back(point);
+    return static_cast<int>(points.size() - 1);
+}
+
+static void
+export_object_surface_compact_detail(
+	const std::vector<SoBRLExportAction::TriangleRecord> &triangles,
+	const SoBRLExportAction::ObjectRecord &record,
+	std::vector<SbVec3f> *pointsOut,
+	std::vector<int> *indicesOut)
+{
+    std::vector<int> vertexIds;
+    std::vector<SbVec3f> points;
+    std::vector<int> indices;
+
+    points.reserve(record.triangleIndices.size() * 3);
+    indices.reserve(record.triangleIndices.size() * 3);
+    for (size_t i = 0; i < record.triangleIndices.size(); i++) {
+	int triangleIndex = record.triangleIndices[i];
+	if (triangleIndex < 0 ||
+		static_cast<size_t>(triangleIndex) >= triangles.size())
+	    continue;
+	const SoBRLExportAction::TriangleRecord &triangle =
+	    triangles[static_cast<size_t>(triangleIndex)];
+	for (size_t vertexSlot = 0; vertexSlot < 3; vertexSlot++) {
+	    indices.push_back(export_surface_compact_vertex_slot(vertexIds,
+		    points,
+		    export_triangle_vertex_id(triangle, vertexSlot),
+		    export_triangle_vertex_point(triangle, vertexSlot)));
+	}
+    }
+
+    if (pointsOut)
+	pointsOut->swap(points);
+    if (indicesOut)
+	indicesOut->swap(indices);
+}
+
 SoBRLExportAction::SoBRLExportAction(void) :
     lineCount(0),
     pointCount(0),
     triangleCount(0),
     geometryPolicy(FULL_DETAIL),
     recordStorageEnabled(TRUE),
-    skippedLodDisplayMeshCount(0)
+    skippedLodDisplayMeshCount(0),
+    recordSequence(0),
+    objectRecordsDirty(TRUE)
 {
     SO_ACTION_CONSTRUCTOR(SoBRLExportAction);
     this->bounds.makeEmpty();
@@ -149,6 +562,18 @@ SoBRLExportAction::initClass(void)
     SO_ACTION_ADD_METHOD(SoNode, SoBRLExportAction::nodeAction);
     SO_ACTION_ADD_METHOD(SoBRLVListShape, SoBRLExportAction::vlistShapeAction);
     SO_ACTION_ADD_METHOD(SoBRLMeshShape, SoBRLExportAction::meshShapeAction);
+}
+
+uint64_t
+SoBRLExportAction::identityValue(const char *identity)
+{
+    return export_identity_value(identity);
+}
+
+uint64_t
+SoBRLExportAction::identityValue(const SbString &identity)
+{
+    return export_identity_value(identity.getString());
 }
 
 int
@@ -185,6 +610,229 @@ const SoBRLExportAction::TriangleRecord &
 SoBRLExportAction::getTriangle(int index) const
 {
     return this->triangles.at(static_cast<size_t>(index));
+}
+
+int
+SoBRLExportAction::getObjectRecordCount(void) const
+{
+    this->rebuildObjectRecords();
+    return static_cast<int>(this->objects.size());
+}
+
+const SoBRLExportAction::ObjectRecord &
+SoBRLExportAction::getObjectRecord(int index) const
+{
+    this->rebuildObjectRecords();
+    return this->objects.at(static_cast<size_t>(index));
+}
+
+int
+SoBRLExportAction::collectObjectRecords(std::vector<ObjectRecord> &records,
+	unsigned int queryFlags,
+	const char *glob,
+	int drawMode) const
+{
+    this->rebuildObjectRecords();
+    records.clear();
+    for (size_t i = 0; i < this->objects.size(); i++) {
+	if (!export_object_record_matches_query(this->objects[i],
+		queryFlags, glob, drawMode))
+	    continue;
+	records.push_back(this->objects[i]);
+    }
+    return static_cast<int>(records.size());
+}
+
+SbBool
+SoBRLExportAction::getObjectRecordLineSummary(const ObjectRecord &record,
+	ObjectLineSummary &summary) const
+{
+    summary.valid = 0;
+    summary.pointCount = 0;
+    summary.segmentCount = 0;
+    summary.cacheIdentity = "";
+    summary.sourceIdentity = "";
+    summary.cacheIdentityValue = 0;
+    summary.sourceIdentityValue = 0;
+    if (record.lineIndices.empty())
+	return FALSE;
+
+    summary.valid = 1;
+    summary.segmentCount = record.lineIndices.size();
+    summary.pointCount = summary.segmentCount * 2;
+    summary.cacheIdentity = record.cacheIdentity;
+    summary.sourceIdentity = record.sourceIdentity;
+    summary.cacheIdentityValue = record.cacheIdentityValue;
+    summary.sourceIdentityValue = record.sourceIdentityValue;
+    return TRUE;
+}
+
+SbBool
+SoBRLExportAction::getObjectRecordLinePoint(const ObjectRecord &record,
+	size_t index,
+	SbVec3f &point) const
+{
+    point = SbVec3f(0.0f, 0.0f, 0.0f);
+    size_t segmentIndex = index / 2;
+    if (segmentIndex >= record.lineIndices.size())
+	return FALSE;
+    int lineIndex = record.lineIndices[segmentIndex];
+    if (lineIndex < 0 ||
+	    static_cast<size_t>(lineIndex) >= this->lines.size())
+	return FALSE;
+
+    const LineRecord &line = this->lines[static_cast<size_t>(lineIndex)];
+    point = (index % 2) ? line.b : line.a;
+    return TRUE;
+}
+
+SbBool
+SoBRLExportAction::getObjectRecordLineCommand(const ObjectRecord &record,
+	size_t index,
+	int &command) const
+{
+    size_t segmentIndex = index / 2;
+    if (segmentIndex >= record.lineIndices.size())
+	return FALSE;
+    int lineIndex = record.lineIndices[segmentIndex];
+    if (lineIndex < 0 ||
+	    static_cast<size_t>(lineIndex) >= this->lines.size())
+	return FALSE;
+    command = (index % 2) ? LINE_DRAW : LINE_MOVE;
+    return TRUE;
+}
+
+SbBool
+SoBRLExportAction::getObjectRecordPointSummary(const ObjectRecord &record,
+	ObjectPointSummary &summary) const
+{
+    summary.valid = 0;
+    summary.pointCount = 0;
+    summary.cacheIdentity = "";
+    summary.sourceIdentity = "";
+    summary.cacheIdentityValue = 0;
+    summary.sourceIdentityValue = 0;
+    if (record.pointIndices.empty())
+	return FALSE;
+
+    summary.valid = 1;
+    summary.pointCount = record.pointIndices.size();
+    summary.cacheIdentity = record.cacheIdentity;
+    summary.sourceIdentity = record.sourceIdentity;
+    summary.cacheIdentityValue = record.cacheIdentityValue;
+    summary.sourceIdentityValue = record.sourceIdentityValue;
+    return TRUE;
+}
+
+SbBool
+SoBRLExportAction::getObjectRecordPoint(const ObjectRecord &record,
+	size_t index,
+	SbVec3f &point) const
+{
+    point = SbVec3f(0.0f, 0.0f, 0.0f);
+    if (index >= record.pointIndices.size())
+	return FALSE;
+    int pointIndex = record.pointIndices[index];
+    if (pointIndex < 0 ||
+	    static_cast<size_t>(pointIndex) >= this->points.size())
+	return FALSE;
+
+    point = this->points[static_cast<size_t>(pointIndex)].point;
+    return TRUE;
+}
+
+SbBool
+SoBRLExportAction::getObjectRecordSurfaceSummary(const ObjectRecord &record,
+	ObjectSurfaceSummary &summary) const
+{
+    summary.valid = 0;
+    summary.pointCount = 0;
+    summary.normalCount = 0;
+    summary.indexCount = 0;
+    summary.faceCount = 0;
+    summary.normalsPerIndex = 0;
+    summary.materialColorValid = 0;
+    summary.materialColor = SbColor(0.0f, 0.0f, 0.0f);
+    summary.materialDrawMode = record.drawMode;
+    summary.materialHighlighted = record.highlighted;
+    summary.cacheIdentity = "";
+    summary.sourceIdentity = "";
+    summary.cacheIdentityValue = 0;
+    summary.sourceIdentityValue = 0;
+    std::vector<SbVec3f> surfacePoints;
+    std::vector<int> surfaceIndices;
+    export_object_surface_compact_detail(this->triangles, record,
+	    &surfacePoints, &surfaceIndices);
+    const TriangleRecord *firstTriangle =
+	export_object_first_triangle(this->triangles, record);
+    if (!firstTriangle)
+	return FALSE;
+
+    summary.valid = 1;
+    summary.faceCount = surfaceIndices.size() / 3;
+    summary.indexCount = surfaceIndices.size();
+    summary.pointCount = surfacePoints.size();
+    summary.normalCount = firstTriangle->lodNormalCount;
+    summary.normalsPerIndex = firstTriangle->lodHasNormals ? 1 : 0;
+    summary.materialColorValid = firstTriangle->materialColorValid;
+    summary.materialColor = firstTriangle->materialColor;
+    summary.materialDrawMode = firstTriangle->drawMode;
+    summary.materialHighlighted = record.highlighted;
+    summary.cacheIdentity = record.cacheIdentity;
+    summary.sourceIdentity = record.sourceIdentity;
+    summary.cacheIdentityValue = record.cacheIdentityValue;
+    summary.sourceIdentityValue = record.sourceIdentityValue;
+    return TRUE;
+}
+
+SbBool
+SoBRLExportAction::getObjectRecordSurfacePoint(const ObjectRecord &record,
+	size_t index,
+	SbVec3f &point) const
+{
+    point = SbVec3f(0.0f, 0.0f, 0.0f);
+
+    std::vector<SbVec3f> surfacePoints;
+    export_object_surface_compact_detail(this->triangles, record,
+	    &surfacePoints, NULL);
+    if (index >= surfacePoints.size())
+	return FALSE;
+
+    point = surfacePoints[index];
+    return TRUE;
+}
+
+SbBool
+SoBRLExportAction::getObjectRecordSurfaceDetail(const ObjectRecord &record,
+	std::vector<SbVec3f> *surfacePoints,
+	std::vector<int> *surfaceIndices) const
+{
+    if (record.triangleIndices.empty()) {
+	if (surfacePoints)
+	    surfacePoints->clear();
+	if (surfaceIndices)
+	    surfaceIndices->clear();
+	return FALSE;
+    }
+
+    export_object_surface_compact_detail(this->triangles, record,
+	    surfacePoints, surfaceIndices);
+    return TRUE;
+}
+
+SbBool
+SoBRLExportAction::getObjectRecordSurfaceIndex(const ObjectRecord &record,
+	size_t index,
+	int &out) const
+{
+    std::vector<int> surfaceIndices;
+    export_object_surface_compact_detail(this->triangles, record, NULL,
+	    &surfaceIndices);
+    if (index >= surfaceIndices.size())
+	return FALSE;
+
+    out = surfaceIndices[index];
+    return TRUE;
 }
 
 const SbBox3f &
@@ -318,6 +966,8 @@ SoBRLExportAction::appendSourceBackedFullDetailResult(
 		    result.bounds.getMax(),
 		sourceRequest.colorOverride, sourceRequest.color,
 		worldA, worldB, worldC);
+	export_apply_source_request_metadata(this->triangles.back(),
+		sourceRequest, "surface");
     }
 
     return TRUE;
@@ -442,6 +1092,8 @@ SoBRLExportAction::vlistShapeAction(SoAction *action, SoNode *node)
 			    shape->lodPolicy.getValue(),
 			    shape->colorOverride.getValue(),
 			    shape->color.getValue(), worldA, worldB);
+		    export_apply_shape_metadata(exportAction->lines.back(),
+			    shape, "line");
 		}
 		segmentIndex++;
 	    }
@@ -498,6 +1150,8 @@ SoBRLExportAction::vlistShapeAction(SoAction *action, SoNode *node)
 		    pointScaleValid, pointScale,
 		    pointNormalValid, pointNormal,
 		    worldPoint);
+	    export_apply_shape_metadata(exportAction->points.back(),
+		    shape, "point");
 	}
     }
 }
@@ -588,6 +1242,8 @@ SoBRLExportAction::meshShapeAction(SoAction *action, SoNode *node)
 		shape->lodBoundsMax.getValue(),
 		shape->colorOverride.getValue(),
 		shape->color.getValue(), worldA, worldB, worldC);
+	export_apply_shape_metadata(exportAction->triangles.back(),
+		shape, "surface");
     }
 }
 
@@ -603,6 +1259,103 @@ SoBRLExportAction::resetResults(void)
     this->triangleCount = 0;
     this->bounds.makeEmpty();
     this->skippedLodDisplayMeshCount = 0;
+    this->recordSequence = 0;
+    this->objects.clear();
+    this->objectRecordsDirty = TRUE;
+}
+
+void
+SoBRLExportAction::invalidateObjectRecords(void)
+{
+    this->objectRecordsDirty = TRUE;
+}
+
+struct ExportPrimitiveRef {
+    size_t sequence;
+    int kind;
+    int index;
+};
+
+void
+SoBRLExportAction::rebuildObjectRecords(void) const
+{
+    if (!this->objectRecordsDirty)
+	return;
+
+    this->objects.clear();
+    std::vector<ExportPrimitiveRef> refs;
+    refs.reserve(this->lines.size() + this->points.size() +
+	    this->triangles.size());
+    for (size_t i = 0; i < this->lines.size(); i++) {
+	ExportPrimitiveRef ref = {this->lines[i].sequence, 0,
+	    static_cast<int>(i)};
+	refs.push_back(ref);
+    }
+    for (size_t i = 0; i < this->points.size(); i++) {
+	ExportPrimitiveRef ref = {this->points[i].sequence, 1,
+	    static_cast<int>(i)};
+	refs.push_back(ref);
+    }
+    for (size_t i = 0; i < this->triangles.size(); i++) {
+	ExportPrimitiveRef ref = {this->triangles[i].sequence, 2,
+	    static_cast<int>(i)};
+	refs.push_back(ref);
+    }
+    std::sort(refs.begin(), refs.end(),
+	    [](const ExportPrimitiveRef &a, const ExportPrimitiveRef &b) {
+		return a.sequence < b.sequence;
+	    });
+
+    std::unordered_map<std::string, size_t> objectIndexByKey;
+    objectIndexByKey.reserve(refs.size());
+    for (size_t i = 0; i < refs.size(); i++) {
+	const ExportPrimitiveRef &ref = refs[i];
+	std::string key;
+	if (ref.kind == 0)
+	    key = export_object_key(this->lines[static_cast<size_t>(ref.index)]);
+	else if (ref.kind == 1)
+	    key = export_object_key(this->points[static_cast<size_t>(ref.index)]);
+	else
+	    key = export_object_key(this->triangles[static_cast<size_t>(ref.index)]);
+
+	size_t objectIndex = 0;
+	std::unordered_map<std::string, size_t>::const_iterator found =
+	    objectIndexByKey.find(key);
+	if (found == objectIndexByKey.end()) {
+	    ObjectRecord object;
+	    if (ref.kind == 0)
+		export_object_init_common(object,
+			this->lines[static_cast<size_t>(ref.index)]);
+	    else if (ref.kind == 1)
+		export_object_init_common(object,
+			this->points[static_cast<size_t>(ref.index)]);
+	    else
+		export_object_init_common(object,
+			this->triangles[static_cast<size_t>(ref.index)]);
+	    this->objects.push_back(object);
+	    objectIndex = this->objects.size() - 1;
+	    objectIndexByKey[key] = objectIndex;
+	} else {
+	    objectIndex = found->second;
+	}
+
+	ObjectRecord &object = this->objects[objectIndex];
+	if (ref.kind == 0)
+	    export_object_add_line(object,
+		    this->lines[static_cast<size_t>(ref.index)], ref.index);
+	else if (ref.kind == 1)
+	    export_object_add_point(object,
+		    this->points[static_cast<size_t>(ref.index)], ref.index);
+	else
+	    export_object_add_triangle(object,
+		    this->triangles[static_cast<size_t>(ref.index)], ref.index);
+    }
+
+    std::sort(this->objects.begin(), this->objects.end(),
+	    [](const ObjectRecord &a, const ObjectRecord &b) {
+		return a.sequence < b.sequence;
+	    });
+    this->objectRecordsDirty = FALSE;
 }
 
 void
@@ -671,10 +1424,12 @@ SoBRLExportAction::appendLine(const SbString &path, const SbString &sourceName,
 
     this->lineCount++;
     LineRecord record;
+    record.sequence = this->recordSequence++;
     record.path = path;
     record.sourceName = sourceName;
     record.sourceType = sourceType;
     record.sourceId = sourceId;
+    export_init_record_metadata(record, path, sourceName, sourceType, "line");
     record.regionId = regionId;
     record.airCode = airCode;
     record.materialId = materialId;
@@ -696,6 +1451,7 @@ SoBRLExportAction::appendLine(const SbString &path, const SbString &sourceName,
     record.a = a;
     record.b = b;
     this->lines.push_back(record);
+    this->invalidateObjectRecords();
     this->bounds.extendBy(a);
     this->bounds.extendBy(b);
 }
@@ -724,10 +1480,12 @@ SoBRLExportAction::appendPoint(const SbString &path, const SbString &sourceName,
 
     this->pointCount++;
     PointRecord record;
+    record.sequence = this->recordSequence++;
     record.path = path;
     record.sourceName = sourceName;
     record.sourceType = sourceType;
     record.sourceId = sourceId;
+    export_init_record_metadata(record, path, sourceName, sourceType, "point");
     record.regionId = regionId;
     record.airCode = airCode;
     record.materialId = materialId;
@@ -754,6 +1512,7 @@ SoBRLExportAction::appendPoint(const SbString &path, const SbString &sourceName,
     record.pointNormal = pointNormal;
     record.point = point;
     this->points.push_back(record);
+    this->invalidateObjectRecords();
     this->bounds.extendBy(point);
     if (record.pointScaleValid && record.pointScale > 0.0f) {
 	const SbVec3f radius(record.pointScale, record.pointScale,
@@ -790,10 +1549,12 @@ SoBRLExportAction::appendTriangle(const SbString &path,
 
     this->triangleCount++;
     TriangleRecord record;
+    record.sequence = this->recordSequence++;
     record.path = path;
     record.sourceName = sourceName;
     record.sourceType = sourceType;
     record.sourceId = sourceId;
+    export_init_record_metadata(record, path, sourceName, sourceType, "surface");
     record.regionId = regionId;
     record.airCode = airCode;
     record.materialId = materialId;
@@ -829,6 +1590,7 @@ SoBRLExportAction::appendTriangle(const SbString &path,
     record.b = b;
     record.c = c;
     this->triangles.push_back(record);
+    this->invalidateObjectRecords();
     this->bounds.extendBy(a);
     this->bounds.extendBy(b);
     this->bounds.extendBy(c);

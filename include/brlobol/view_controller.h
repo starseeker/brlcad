@@ -16,6 +16,7 @@
 
 #include <Inventor/SbBasic.h>
 #include <Inventor/SbColor.h>
+#include <Inventor/SbMatrix.h>
 #include <Inventor/SbString.h>
 #include <Inventor/SbVec2f.h>
 #include <Inventor/SbVec3f.h>
@@ -30,6 +31,7 @@ class SoBRLExportAction;
 class SoBRLMeasureAction;
 class SoBRLSnapAction;
 class SoCamera;
+class SoGroup;
 class SoNode;
 class SoRenderManager;
 class SoViewport;
@@ -189,14 +191,102 @@ public:
 	uint32_t inputsRevision = 0);
     int removeEditPreview(const char *previewId);
 
+    SoGroup *findGroup(const char *groupPath) const;
+    SoGroup *ensureGroup(const char *groupPath);
+    int setGroupDrawIntent(const char *groupPath,
+	const char *intentPath,
+	int drawMode,
+	int fallbackDrawMode,
+	SbBool overlayIntent,
+	uint32_t revalidationRevision);
+    int setGroupDisplayState(const char *groupPath,
+	SbBool visible,
+	SbBool selected,
+	SbBool highlighted,
+	int lineStyle,
+	int lineWidth,
+	float transparency,
+	SbBool colorOverride,
+	const SbColor &color,
+	SbBool materialColorValid,
+	const SbColor &materialColor,
+	uint32_t materialRevision);
+    int renameGroup(const char *groupPath, const char *newLeafName);
+    int appendChildToGroup(const char *groupPath, SoNode *child);
+    int removeChildFromGroup(const char *groupPath, SoNode *child);
+    int eraseGroupSubpath(const char *parentGroupPath,
+	const char *subpath);
+    int removeGroup(const char *groupPath);
+    int clearGroup(const char *groupPath);
+    int getGroupChildCount(const char *groupPath) const;
+
+    SoNode *findShape(const char *shapePath) const;
+    SoGroup *findShapeParent(const char *shapePath) const;
+    int moveShapeToGroup(const char *shapePath, const char *groupPath);
+    int removeShape(const char *shapePath);
+    int setShapeDrawState(const char *shapePath,
+	int drawMode,
+	SbBool databaseIntent,
+	SbBool overlayIntent,
+	SbBool hudIntent);
+    int setShapeDisplayState(const char *shapePath,
+	SbBool visible,
+	SbBool selected,
+	SbBool highlighted,
+	int lineStyle,
+	int lineWidth,
+	float transparency,
+	SbBool colorOverride,
+	const SbColor &color,
+	SbBool materialColorValid,
+	const SbColor &materialColor,
+	uint32_t materialRevision);
+    int setShapeSourceState(const char *shapePath,
+	const char *ownerSourcePath,
+	uint32_t ownerSourceRevision,
+	uint32_t ownerInputsRevision,
+	uint32_t ownerViewRevision,
+	uint32_t ownerRealizedRevision,
+	uint32_t ownerRealizedSourceRevision,
+	uint32_t ownerRealizedInputsRevision,
+	uint32_t ownerRealizedViewRevision,
+	int ownerRealizationStatus,
+	const char *ownerRealizationDiagnostic,
+	const char *ownerRealizationIdentity,
+	SbBool ownerSourceStale,
+	uint32_t ownerStaleReason);
+    int setShapePlacementState(const char *shapePath,
+	SbBool drawMatrixValid,
+	const SbMatrix &drawMatrix,
+	SbBool drawCenterValid,
+	const SbVec3f &drawCenter,
+	SbBool drawSizeValid,
+	float drawSize);
+
     int replaceDatabaseSource(const char *sourcePath,
 	struct db_i *dbip,
 	int drawMode = SoBRLDatabaseSource::WIREFRAME,
 	uint32_t sourceRevision = 0);
+    int setDatabaseSourceState(const char *sourcePath,
+	SbBool sourceRevisionValid,
+	uint32_t sourceRevision,
+	uint32_t inputsRevision,
+	SbBool visible,
+	SbBool highlighted,
+	int lineStyle,
+	int lineWidth,
+	float transparency,
+	SbBool materialColorValid,
+	const SbColor &materialColor,
+	uint32_t materialRevision);
+    int moveDatabaseSourceToGroup(const char *sourcePath,
+	const char *groupPath);
     int removeDatabaseSource(const char *sourcePath);
     int clearDatabaseSources(void);
     SoBRLDatabaseSource *getDatabaseSource(int index) const;
     int getDatabaseSourceCount(void) const;
+    SbBool getDatabaseSourceSummary(int index,
+	BRLObolDatabaseSourceSummary &summary) const;
 
 private:
     void syncRenderManager(void);

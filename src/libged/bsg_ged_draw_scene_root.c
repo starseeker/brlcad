@@ -31,20 +31,7 @@
 #include "bu/str.h"
 #include "bu/color.h"
 #include "bu/hash.h"
-#include "bsg/appearance.h"
-#include "bsg/defines.h"
-#include "bsg/database_source.h"
-#include "bsg/draw_intent.h"
-#include "bsg/draw_set.h"
-#include "bsg/draw_source.h"
-#include "bsg/field.h"
-#include "bsg/geometry.h"
-#include "bsg/material.h"
-#include "bsg/payload.h"
 #include "bg/plot3.h"
-#include "bsg/scene_object.h"
-#include "bsg/selection.h"
-#include "bsg/view_state.h"
 #include "bg/clip.h"
 
 #include "ged.h"
@@ -185,15 +172,15 @@ bsg_scene_ref
 ged_draw_scene_root_last_group_ref(struct ged *gedp)
 {
     if (!gedp)
-	return bsg_scene_ref_null();
+	return ged_draw_scene_ref_null();
 
     bsg_scene_ref root_ref = ged_draw_scene_root_ref(gedp);
     if (ged_draw_scene_ref_is_null(root_ref))
-	return bsg_scene_ref_null();
+	return ged_draw_scene_ref_null();
 
     size_t child_count = ged_draw_scene_ref_child_count(root_ref);
     if (child_count == 0)
-	return bsg_scene_ref_null();
+	return ged_draw_scene_ref_null();
 
     return ged_draw_scene_ref_child_at(root_ref, child_count - 1);
 }
@@ -257,11 +244,11 @@ _sg_root(struct ged *gedp)
 
     void *view_ctx = ged_draw_active_view_ctx(gedp);
     if (!view_ctx)
-        return bsg_scene_ref_null();
+        return ged_draw_scene_ref_null();
 
     bsg_scene_ref root_ref = ged_draw_view_context_group_create(view_ctx, "_draw_root");
     if (ged_draw_scene_ref_is_null(root_ref))
-        return bsg_scene_ref_null();
+        return ged_draw_scene_ref_null();
 
     ged_draw_scene_ref_set_visible(root_ref, 1);
 
@@ -333,7 +320,7 @@ bsg_scene_ref
 ged_draw_ensure_root(struct ged *gedp)
 {
     if (!gedp)
-        return bsg_scene_ref_null();
+        return ged_draw_scene_ref_null();
     return _sg_root(gedp);
 }
 

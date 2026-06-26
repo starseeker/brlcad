@@ -8,6 +8,7 @@
 #include "common.h"
 
 #include "brlobol/edit_preview.h"
+#include "brlobol/lod_realization.h"
 #include "brlobol/vlist_shape.h"
 
 #include <Inventor/nodes/SoMatrixTransform.h>
@@ -165,6 +166,19 @@ SoBRLEditPreview::appendLineSet(const SbString &identity,
     shape->sourceName = this->previewId.getValue();
     shape->sourceType = "edit-preview";
     shape->sourceId = this->sourceRevision.getValue();
+    shape->displayName = this->previewId.getValue();
+    shape->geometryName = this->previewId.getValue();
+    shape->sourceIdentity = shape->sourcePath.getValue();
+    shape->cacheIdentity = shape->sourcePath.getValue();
+    shape->databaseIntent = FALSE;
+    shape->overlayIntent = FALSE;
+    shape->hudIntent = FALSE;
+    shape->localSource = TRUE;
+    shape->sharedSource = FALSE;
+    shape->nonDatabaseSource = TRUE;
+    shape->drawMode = BRLOBOL_LOD_DRAW_DIAGNOSTIC;
+    shape->recordRole = "edit-preview";
+    shape->geometryKind = "line";
     shape->editEmphasis = TRUE;
     const SbString &intentId = this->editIntentId.getValue();
     const SbString &intentRole = this->editIntentRole.getValue();

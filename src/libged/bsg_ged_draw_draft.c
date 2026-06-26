@@ -31,7 +31,6 @@
 #include "bu/str.h"
 #include "bu/color.h"
 #include "bu/hash.h"
-#include "bsg/appearance.h"
 #include "bg/plot3.h"
 #include "bg/clip.h"
 
@@ -86,8 +85,8 @@ ged_draw_shape_draft_create_context(struct ged *gedp, void *view_ctx, int regist
 {
     (void)registered;
 
-    bsg_scene_ref source_ref = bsg_scene_ref_null();
-    bsg_scene_ref shape_ref = bsg_scene_ref_null();
+    bsg_scene_ref source_ref = ged_draw_scene_ref_null();
+    bsg_scene_ref shape_ref = ged_draw_scene_ref_null();
     if (!ged_draw_scene_ref_create_draft_pair(gedp, view_ctx, &source_ref,
 	    &shape_ref))
 	return NULL;
@@ -110,8 +109,8 @@ ged_draw_shape_draft_destroy(ged_draw_shape_draft *draft)
 	return;
     if (!draft->committed)
 	_ged_draw_shape_draft_destroy_refs(draft->source_ref, draft->shape_ref);
-    draft->source_ref = bsg_scene_ref_null();
-    draft->shape_ref = bsg_scene_ref_null();
+    draft->source_ref = ged_draw_scene_ref_null();
+    draft->shape_ref = ged_draw_scene_ref_null();
     BU_PUT(draft, ged_draw_shape_draft);
 }
 
@@ -409,25 +408,14 @@ ged_draw_shape_draft_mark_db_object(ged_draw_shape_draft *draft)
 
 
 int
-ged_draw_shape_draft_apply_settings(ged_draw_shape_draft *draft,
-				    const struct bsg_appearance_settings *settings)
-{
-    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref) || !settings)
-	return 0;
-    return ged_draw_scene_ref_apply_settings(draft->shape_ref, settings);
-}
-
-
-int
 ged_draw_shape_draft_apply_appearance_settings(ged_draw_shape_draft *draft,
 					       const struct ged_draw_appearance_settings *settings)
 {
-    if (!settings)
+    if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref) || !settings)
 	return 0;
 
-    struct bsg_appearance_settings bsg_settings = BSG_APPEARANCE_SETTINGS_INIT;
-    ged_draw_bsg_appearance_from_neutral(&bsg_settings, settings);
-    return ged_draw_shape_draft_apply_settings(draft, &bsg_settings);
+    return ged_draw_scene_ref_apply_appearance_settings(draft->shape_ref,
+	    settings);
 }
 
 
@@ -557,14 +545,14 @@ ged_draw_shape_draft_commit_to_scene_ref(ged_draw_shape_draft *draft,
 {
     if (!draft || ged_draw_scene_ref_is_null(draft->shape_ref) ||
 	    ged_draw_scene_ref_is_null(parent_ref))
-	return bsg_scene_ref_null();
+	return ged_draw_scene_ref_null();
 
     _ged_draw_shape_draft_sync_aux_geometry(draft);
 
     bsg_scene_ref shape_ref = draft->shape_ref;
     if (!ged_draw_scene_ref_append_child(parent_ref, draft->source_ref)) {
 	ged_draw_shape_draft_destroy(draft);
-	return bsg_scene_ref_null();
+	return ged_draw_scene_ref_null();
     }
     draft->committed = 1;
     ged_draw_shape_draft_destroy(draft);

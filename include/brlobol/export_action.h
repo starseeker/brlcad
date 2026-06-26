@@ -21,6 +21,7 @@
 #include <Inventor/actions/SoAction.h>
 #include <Inventor/actions/SoSubAction.h>
 
+#include <stddef.h>
 #include <stdint.h>
 #include <vector>
 
@@ -39,11 +40,34 @@ public:
 	DISPLAY_LEVEL = 1
     };
 
+    enum ObjectQueryFlag {
+	QUERY_VISIBLE_ONLY = 0x01u,
+	QUERY_DATABASE_OBJECTS = 0x02u,
+	QUERY_VIEW_OBJECTS = 0x04u,
+	QUERY_LOCAL_ONLY = 0x08u
+    };
+
     struct LineRecord {
+	size_t sequence;
 	SbString path;
 	SbString sourceName;
 	SbString sourceType;
 	uint32_t sourceId;
+	SbString displayName;
+	SbString geometryName;
+	SbString cacheIdentity;
+	SbString sourceIdentity;
+	uint64_t cacheIdentityValue;
+	uint64_t sourceIdentityValue;
+	int databaseIntent;
+	int overlayIntent;
+	int hudIntent;
+	int localSource;
+	int sharedSource;
+	int nonDatabaseSource;
+	int drawMode;
+	SbString recordRole;
+	SbString geometryKind;
 	int regionId;
 	int airCode;
 	int materialId;
@@ -67,10 +91,26 @@ public:
     };
 
     struct PointRecord {
+	size_t sequence;
 	SbString path;
 	SbString sourceName;
 	SbString sourceType;
 	uint32_t sourceId;
+	SbString displayName;
+	SbString geometryName;
+	SbString cacheIdentity;
+	SbString sourceIdentity;
+	uint64_t cacheIdentityValue;
+	uint64_t sourceIdentityValue;
+	int databaseIntent;
+	int overlayIntent;
+	int hudIntent;
+	int localSource;
+	int sharedSource;
+	int nonDatabaseSource;
+	int drawMode;
+	SbString recordRole;
+	SbString geometryKind;
 	int regionId;
 	int airCode;
 	int materialId;
@@ -99,10 +139,26 @@ public:
     };
 
     struct TriangleRecord {
+	size_t sequence;
 	SbString path;
 	SbString sourceName;
 	SbString sourceType;
 	uint32_t sourceId;
+	SbString displayName;
+	SbString geometryName;
+	SbString cacheIdentity;
+	SbString sourceIdentity;
+	uint64_t cacheIdentityValue;
+	uint64_t sourceIdentityValue;
+	int databaseIntent;
+	int overlayIntent;
+	int hudIntent;
+	int localSource;
+	int sharedSource;
+	int nonDatabaseSource;
+	int drawMode;
+	SbString recordRole;
+	SbString geometryKind;
 	int regionId;
 	int airCode;
 	int materialId;
@@ -139,9 +195,84 @@ public:
 	SbVec3f c;
     };
 
+    struct ObjectRecord {
+	size_t sequence;
+	SbString path;
+	SbString sourceName;
+	SbString sourceType;
+	uint32_t sourceId;
+	SbString displayName;
+	SbString geometryName;
+	SbString cacheIdentity;
+	SbString sourceIdentity;
+	uint64_t cacheIdentityValue;
+	uint64_t sourceIdentityValue;
+	int databaseIntent;
+	int overlayIntent;
+	int hudIntent;
+	int localSource;
+	int sharedSource;
+	int nonDatabaseSource;
+	int drawMode;
+	SbString recordRole;
+	SbString geometryKind;
+	int selected;
+	int highlighted;
+	int visible;
+	int colorOverride;
+	SbColor color;
+	SbBox3f bounds;
+	std::vector<int> lineIndices;
+	std::vector<int> pointIndices;
+	std::vector<int> triangleIndices;
+    };
+
+    enum ObjectLineCommand {
+	LINE_MOVE = 0,
+	LINE_DRAW = 1
+    };
+
+    struct ObjectLineSummary {
+	int valid;
+	size_t pointCount;
+	size_t segmentCount;
+	SbString cacheIdentity;
+	SbString sourceIdentity;
+	uint64_t cacheIdentityValue;
+	uint64_t sourceIdentityValue;
+    };
+
+    struct ObjectPointSummary {
+	int valid;
+	size_t pointCount;
+	SbString cacheIdentity;
+	SbString sourceIdentity;
+	uint64_t cacheIdentityValue;
+	uint64_t sourceIdentityValue;
+    };
+
+    struct ObjectSurfaceSummary {
+	int valid;
+	size_t pointCount;
+	size_t normalCount;
+	size_t indexCount;
+	size_t faceCount;
+	int normalsPerIndex;
+	int materialColorValid;
+	SbColor materialColor;
+	int materialDrawMode;
+	int materialHighlighted;
+	SbString cacheIdentity;
+	SbString sourceIdentity;
+	uint64_t cacheIdentityValue;
+	uint64_t sourceIdentityValue;
+    };
+
     SoBRLExportAction(void);
     virtual ~SoBRLExportAction(void);
     static void initClass(void);
+    static uint64_t identityValue(const char *identity);
+    static uint64_t identityValue(const SbString &identity);
 
     int getLineCount(void) const;
     const LineRecord &getLine(int index) const;
@@ -149,6 +280,31 @@ public:
     const PointRecord &getPoint(int index) const;
     int getTriangleCount(void) const;
     const TriangleRecord &getTriangle(int index) const;
+    int getObjectRecordCount(void) const;
+    const ObjectRecord &getObjectRecord(int index) const;
+    int collectObjectRecords(std::vector<ObjectRecord> &records,
+	    unsigned int queryFlags = 0,
+	    const char *glob = 0,
+	    int drawMode = -1) const;
+    SbBool getObjectRecordLineSummary(const ObjectRecord &record,
+	    ObjectLineSummary &summary) const;
+    SbBool getObjectRecordLinePoint(const ObjectRecord &record,
+	    size_t index, SbVec3f &point) const;
+    SbBool getObjectRecordLineCommand(const ObjectRecord &record,
+	    size_t index, int &command) const;
+    SbBool getObjectRecordPointSummary(const ObjectRecord &record,
+	    ObjectPointSummary &summary) const;
+    SbBool getObjectRecordPoint(const ObjectRecord &record,
+	    size_t index, SbVec3f &point) const;
+    SbBool getObjectRecordSurfaceSummary(const ObjectRecord &record,
+	    ObjectSurfaceSummary &summary) const;
+    SbBool getObjectRecordSurfaceDetail(const ObjectRecord &record,
+	    std::vector<SbVec3f> *surfacePoints,
+	    std::vector<int> *surfaceIndices) const;
+    SbBool getObjectRecordSurfacePoint(const ObjectRecord &record,
+	    size_t index, SbVec3f &point) const;
+    SbBool getObjectRecordSurfaceIndex(const ObjectRecord &record,
+	    size_t index, int &out) const;
     const SbBox3f &getBounds(void) const;
     void setRecordStorageEnabled(SbBool enabled);
     SbBool isRecordStorageEnabled(void) const;
@@ -181,6 +337,8 @@ private:
     static void meshShapeAction(SoAction *action, SoNode *node);
 
     void resetResults(void);
+    void invalidateObjectRecords(void);
+    void rebuildObjectRecords(void) const;
     void appendSourceBackedFullDetailRequest(const SoBRLMeshShape *shape,
 	    const SbMatrix &localToWorld);
     void appendLineSummary(const SbVec3f &a, const SbVec3f &b);
@@ -237,6 +395,7 @@ private:
     std::vector<LineRecord> lines;
     std::vector<PointRecord> points;
     std::vector<TriangleRecord> triangles;
+    mutable std::vector<ObjectRecord> objects;
     std::vector<BRLObolSourceMeshRequest> sourceBackedFullDetailRequests;
     SbBox3f bounds;
     int lineCount;
@@ -245,6 +404,8 @@ private:
     GeometryPolicy geometryPolicy;
     SbBool recordStorageEnabled;
     unsigned int skippedLodDisplayMeshCount;
+    size_t recordSequence;
+    mutable SbBool objectRecordsDirty;
 };
 
 #endif /* BRLOBOL_EXPORT_ACTION_H */

@@ -127,7 +127,7 @@ _ged_draw_shape_state_init(ged_draw_shape_state *data, struct ged *gedp)
     data->gedp = gedp;
     data->u_data = NULL;
     data->u_data_kind = GED_DRAW_SHAPE_USER_DATA_NONE;
-    data->source_ref = bsg_scene_ref_null();
+    data->source_ref = ged_draw_scene_ref_null();
     data->source_data = NULL;
     data->geometry_command_count = 0;
     data->geometry_revision = 0;
@@ -165,7 +165,7 @@ _ged_draw_shape_state_free_contents(ged_draw_shape_state *data)
 	data->u_data = NULL;
     }
     data->u_data_kind = GED_DRAW_SHAPE_USER_DATA_NONE;
-    data->source_ref = bsg_scene_ref_null();
+    data->source_ref = ged_draw_scene_ref_null();
 }
 
 
@@ -897,7 +897,7 @@ ged_draw_shape_state_release_scene_ref(bsg_scene_ref ref)
 	    entry);
     _ged_draw_shape_state_free_contents(&entry->data);
     if (entry)
-	entry->scene_ref = bsg_scene_ref_null();
+	entry->scene_ref = ged_draw_scene_ref_null();
 }
 
 
@@ -937,12 +937,12 @@ bsg_scene_ref
 ged_draw_registry_shape_scene_ref(struct ged *gedp, ged_draw_shape_ref ref)
 {
     if (!gedp || ged_draw_shape_ref_is_null(ref))
-	return bsg_scene_ref_null();
+	return ged_draw_scene_ref_null();
     if (ref.scene_revision && ref.scene_revision != ged_draw_scene_revision(gedp))
-	return bsg_scene_ref_null();
+	return ged_draw_scene_ref_null();
     struct ged_draw_registry_entry *entry =
 	_ged_draw_registry_entry_for_token(gedp, ref.token, 0);
-    return entry ? entry->scene_ref : bsg_scene_ref_null();
+    return entry ? entry->scene_ref : ged_draw_scene_ref_null();
 }
 
 
@@ -950,10 +950,10 @@ bsg_scene_ref
 ged_draw_shape_scene_ref_from_cache_ref(struct ged *gedp, ged_draw_shape_ref ref)
 {
     if (!gedp || ged_draw_shape_ref_is_null(ref))
-	return bsg_scene_ref_null();
+	return ged_draw_scene_ref_null();
     struct ged_draw_registry_entry *entry =
 	_ged_draw_registry_entry_for_token(gedp, ref.token, 0);
-    return entry ? entry->scene_ref : bsg_scene_ref_null();
+    return entry ? entry->scene_ref : ged_draw_scene_ref_null();
 }
 
 
@@ -961,12 +961,12 @@ bsg_scene_ref
 ged_draw_registry_group_scene_ref(struct ged *gedp, ged_draw_group_ref ref)
 {
     if (!gedp || ged_draw_group_ref_is_null(ref))
-	return bsg_scene_ref_null();
+	return ged_draw_scene_ref_null();
     if (ref.scene_revision && ref.scene_revision != ged_draw_scene_revision(gedp))
-	return bsg_scene_ref_null();
+	return ged_draw_scene_ref_null();
     struct ged_draw_registry_entry *entry =
 	_ged_draw_registry_entry_for_token(gedp, ref.token, 1);
-    return entry ? entry->scene_ref : bsg_scene_ref_null();
+    return entry ? entry->scene_ref : ged_draw_scene_ref_null();
 }
 
 

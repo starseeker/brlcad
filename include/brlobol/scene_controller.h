@@ -12,9 +12,41 @@
 #include "brlobol/defines.h"
 
 #include <Inventor/SbBasic.h>
+#include <Inventor/SbColor.h>
+#include <Inventor/SbMatrix.h>
 #include <Inventor/SbString.h>
+#include <Inventor/SbVec3f.h>
+
+#include <stdint.h>
 
 class SoNode;
+class SoGroup;
+class SoBRLDatabaseSource;
+struct db_i;
+struct BRLObolDatabaseSourceSummary;
+struct BRLObolRealizedMaterialSummary;
+struct BRLObolRealizedShapeSummary;
+struct BRLObolSceneBoundsSummary;
+struct BRLObolSceneDisplaySummary;
+struct BRLObolSceneMaterialSummary;
+struct BRLObolSceneTreeSummary;
+
+struct BRLOBOL_EXPORT BRLObolSceneSummary {
+    BRLObolSceneSummary(void);
+
+    SbBool valid;
+    SbBool hasRoot;
+    SbBool rootIsGroup;
+    int rootChildCount;
+    int databaseSourceCount;
+    int nonDatabaseRootChildCount;
+    uint64_t structuralRevision;
+    uint64_t frameRevision;
+    unsigned int lastVisitedSourceCount;
+    unsigned int lastRealizedSourceCount;
+    unsigned int lastFailedSourceCount;
+    SbString lastDiagnostics;
+};
 
 class BRLOBOL_EXPORT SoBRLSceneController {
 public:
@@ -33,8 +65,129 @@ public:
      */
     void setSceneRoot(SoNode *root);
     SoNode *getSceneRoot(void) const;
+    uint64_t getStructuralRevision(void) const;
+    uint64_t getFrameRevision(void) const;
+    SbBool getSceneSummary(BRLObolSceneSummary &summary) const;
 
     SbBool realizePending(void);
+
+    SoGroup *findGroup(const char *groupPath) const;
+    SoGroup *ensureGroup(const char *groupPath);
+    int setGroupDrawIntent(const char *groupPath,
+	const char *intentPath,
+	int drawMode,
+	int fallbackDrawMode,
+	SbBool overlayIntent,
+	uint32_t revalidationRevision);
+    int setGroupDisplayState(const char *groupPath,
+	SbBool visible,
+	SbBool selected,
+	SbBool highlighted,
+	int lineStyle,
+	int lineWidth,
+	float transparency,
+	SbBool colorOverride,
+	const SbColor &color,
+	SbBool materialColorValid,
+	const SbColor &materialColor,
+	uint32_t materialRevision);
+    int renameGroup(const char *groupPath, const char *newLeafName);
+    int appendChildToGroup(const char *groupPath, SoNode *child);
+    int removeChildFromGroup(const char *groupPath, SoNode *child);
+    int eraseGroupSubpath(const char *parentGroupPath,
+	const char *subpath);
+    int removeGroup(const char *groupPath);
+    int clearGroup(const char *groupPath);
+    int getGroupChildCount(const char *groupPath) const;
+
+    SoNode *findShape(const char *shapePath) const;
+    SoGroup *findShapeParent(const char *shapePath) const;
+    int moveShapeToGroup(const char *shapePath, const char *groupPath);
+    int removeShape(const char *shapePath);
+    int setShapeDrawState(const char *shapePath,
+	int drawMode,
+	SbBool databaseIntent,
+	SbBool overlayIntent,
+	SbBool hudIntent);
+    int setShapeDisplayState(const char *shapePath,
+	SbBool visible,
+	SbBool selected,
+	SbBool highlighted,
+	int lineStyle,
+	int lineWidth,
+	float transparency,
+	SbBool colorOverride,
+	const SbColor &color,
+	SbBool materialColorValid,
+	const SbColor &materialColor,
+	uint32_t materialRevision);
+    int setShapeSourceState(const char *shapePath,
+	const char *ownerSourcePath,
+	uint32_t ownerSourceRevision,
+	uint32_t ownerInputsRevision,
+	uint32_t ownerViewRevision,
+	uint32_t ownerRealizedRevision,
+	uint32_t ownerRealizedSourceRevision,
+	uint32_t ownerRealizedInputsRevision,
+	uint32_t ownerRealizedViewRevision,
+	int ownerRealizationStatus,
+	const char *ownerRealizationDiagnostic,
+	const char *ownerRealizationIdentity,
+	SbBool ownerSourceStale,
+	uint32_t ownerStaleReason);
+    int setShapePlacementState(const char *shapePath,
+	SbBool drawMatrixValid,
+	const SbMatrix &drawMatrix,
+	SbBool drawCenterValid,
+	const SbVec3f &drawCenter,
+	SbBool drawSizeValid,
+	float drawSize);
+
+    SoBRLDatabaseSource *getDatabaseSource(int index) const;
+    int getDatabaseSourceCount(void) const;
+    SoBRLDatabaseSource *findDatabaseSource(const char *sourcePath) const;
+    int replaceDatabaseSource(const char *sourcePath,
+	struct db_i *database,
+	int drawMode,
+	uint32_t sourceRevision);
+    int setDatabaseSourceState(const char *sourcePath,
+	SbBool sourceRevisionValid,
+	uint32_t sourceRevision,
+	uint32_t inputsRevision,
+	SbBool visible,
+	SbBool highlighted,
+	int lineStyle,
+	int lineWidth,
+	float transparency,
+	SbBool materialColorValid,
+	const SbColor &materialColor,
+	uint32_t materialRevision);
+    int moveDatabaseSourceToGroup(const char *sourcePath,
+	const char *groupPath);
+    int removeDatabaseSource(const char *sourcePath);
+    int clearDatabaseSources(void);
+    SbBool getDatabaseSourceSummary(int index,
+	BRLObolDatabaseSourceSummary &summary) const;
+    int getRealizedShapeSummaryCount(void) const;
+    SbBool getRealizedShapeSummary(int index,
+	BRLObolRealizedShapeSummary &summary) const;
+    int getRealizedMaterialSummaryCount(void) const;
+    SbBool getRealizedMaterialSummary(int index,
+	BRLObolRealizedMaterialSummary &summary) const;
+    SbBool getRealizedMaterialProperty(int materialIndex, int propertyIndex,
+	SbString &groupOut, SbString &nameOut, SbString &valueOut) const;
+    int getSceneTreeSummaryCount(void) const;
+    SbBool getSceneTreeSummary(int index,
+	BRLObolSceneTreeSummary &summary) const;
+    int getSceneDisplaySummaryCount(void) const;
+    SbBool getSceneDisplaySummary(int index,
+	BRLObolSceneDisplaySummary &summary) const;
+    int getSceneMaterialSummaryCount(void) const;
+    SbBool getSceneMaterialSummary(int index,
+	BRLObolSceneMaterialSummary &summary) const;
+    int getSceneBoundsSummaryCount(void) const;
+    SbBool getSceneBoundsSummary(int index,
+	BRLObolSceneBoundsSummary &summary) const;
 
     unsigned int getLastVisitedSourceCount(void) const;
     unsigned int getLastRealizedSourceCount(void) const;
@@ -42,7 +195,12 @@ public:
     const SbString &getLastDiagnostics(void) const;
 
 private:
+    void advanceFrameRevision(void);
+    void advanceStructuralRevision(void);
+
     SoNode *root;
+    uint64_t structuralRevision;
+    uint64_t frameRevision;
     unsigned int lastVisitedSourceCount;
     unsigned int lastRealizedSourceCount;
     unsigned int lastFailedSourceCount;

@@ -39,6 +39,207 @@
 
 SO_NODE_SOURCE(SoBRLDatabaseSource);
 
+BRLObolDatabaseSourceSummary::BRLObolDatabaseSourceSummary(void) :
+    valid(FALSE),
+    path(""),
+    hasParent(FALSE),
+    drawTreeDepth(0),
+    parentGroupPath(""),
+    drawMode(SoBRLDatabaseSource::WIREFRAME),
+    sourceRevision(0),
+    inputsRevision(0),
+    viewRevision(0),
+    realizedRevision(0),
+    realizedSourceRevision(0),
+    realizedInputsRevision(0),
+    realizedViewRevision(0),
+    realizationStatus(SoBRLDatabaseSource::UNREALIZED),
+    realizationDiagnostic(""),
+    realizationIdentity(""),
+    visible(TRUE),
+    highlighted(FALSE),
+    lineStyle(0),
+    lineWidth(0),
+    transparency(0.0f),
+    materialColorValid(FALSE),
+    materialColor(1.0f, 1.0f, 1.0f),
+    materialRevision(0),
+    colorOverride(FALSE),
+    color(1.0f, 1.0f, 1.0f),
+    stale(TRUE),
+    staleReason(SoBRLDatabaseSource::STALE_SOURCE),
+    realizedShapeCount(0),
+    realizedMeshCount(0),
+    realizedMaterialObjectCount(0)
+{
+}
+
+BRLObolRealizedShapeSummary::BRLObolRealizedShapeSummary(void) :
+    valid(FALSE),
+    shapeKind(SHAPE_UNKNOWN),
+    path(""),
+    sourceName(""),
+    sourceType(""),
+    sourceId(0),
+    ownerSourceIndex(-1),
+    ownerSourcePath(""),
+    ownerDrawMode(0),
+    ownerSourceRevision(0),
+    ownerInputsRevision(0),
+    ownerViewRevision(0),
+    ownerRealizedRevision(0),
+    ownerRealizedSourceRevision(0),
+    ownerRealizedInputsRevision(0),
+    ownerRealizedViewRevision(0),
+    ownerRealizationStatus(SoBRLDatabaseSource::UNREALIZED),
+    ownerRealizationDiagnostic(""),
+    ownerRealizationIdentity(""),
+    ownerSourceStale(FALSE),
+    ownerStaleReason(SoBRLDatabaseSource::STALE_NONE),
+    displayName(""),
+    geometryName(""),
+    cacheIdentity(""),
+    sourceIdentity(""),
+    databaseIntent(FALSE),
+    overlayIntent(FALSE),
+    hudIntent(FALSE),
+    localSource(FALSE),
+    sharedSource(FALSE),
+    nonDatabaseSource(FALSE),
+    drawMode(0),
+    recordRole(""),
+    geometryKind(""),
+    regionId(0),
+    airCode(0),
+    materialId(0),
+    los(0),
+    materialColorValid(FALSE),
+    materialColor(1.0f, 1.0f, 1.0f),
+    materialShader(""),
+    materialRevision(0),
+    visible(FALSE),
+    selectable(FALSE),
+    selected(FALSE),
+    highlighted(FALSE),
+    ghosted(FALSE),
+    hiddenLine(FALSE),
+    editEmphasis(FALSE),
+    editIntentId(""),
+    editIntentRole(""),
+    lodPolicy(0),
+    pointCount(0),
+    commandCount(0),
+    segmentCount(0),
+    pointPrimitiveCount(0),
+    triangleCount(0),
+    indexCount(0),
+    boundsValid(FALSE),
+    bounds()
+{
+    this->bounds.makeEmpty();
+}
+
+BRLObolRealizedMaterialSummary::BRLObolRealizedMaterialSummary(void) :
+    valid(FALSE),
+    sourcePath(""),
+    sourceName(""),
+    sourceType(""),
+    sourceId(0),
+    ownerSourceIndex(-1),
+    ownerSourcePath(""),
+    ownerDrawMode(0),
+    ownerSourceRevision(0),
+    ownerInputsRevision(0),
+    ownerViewRevision(0),
+    ownerRealizedRevision(0),
+    ownerRealizedSourceRevision(0),
+    ownerRealizedInputsRevision(0),
+    ownerRealizedViewRevision(0),
+    ownerRealizationStatus(SoBRLDatabaseSource::UNREALIZED),
+    ownerRealizationDiagnostic(""),
+    ownerRealizationIdentity(""),
+    ownerSourceStale(FALSE),
+    ownerStaleReason(SoBRLDatabaseSource::STALE_NONE),
+    materialName(""),
+    parentName(""),
+    materialSource(""),
+    propertyCount(0)
+{
+}
+
+BRLObolSceneTreeSummary::BRLObolSceneTreeSummary(void) :
+    valid(FALSE),
+    nodeKind(NODE_UNKNOWN),
+    isGroup(FALSE),
+    isShape(FALSE),
+    isDatabaseSource(FALSE),
+    isMaterialObject(FALSE),
+    hasParent(FALSE),
+    drawTreeDepth(0),
+    childCount(0),
+    ownerSourceIndex(-1),
+    ownerSourcePath(""),
+    path(""),
+    sourceName(""),
+    sourceType(""),
+    sourceId(0),
+    displayName(""),
+    geometryName("")
+{
+}
+
+BRLObolSceneDisplaySummary::BRLObolSceneDisplaySummary(void) :
+    valid(FALSE),
+    nodeKind(BRLObolSceneTreeSummary::NODE_UNKNOWN),
+    isDatabaseSource(FALSE),
+    hasDrawIntent(FALSE),
+    intentPath(""),
+    intentDrawMode(-1),
+    visible(TRUE),
+    highlighted(FALSE),
+    lineStyle(0),
+    lineWidth(0),
+    transparency(0.0),
+    drawMode(0),
+    materialValid(FALSE),
+    materialColor(1.0f, 1.0f, 1.0f),
+    materialRevision(0),
+    drawMatrixValid(FALSE),
+    drawMatrix(SbMatrix::identity()),
+    drawCenterValid(FALSE),
+    drawCenter(0.0f, 0.0f, 0.0f),
+    drawSizeValid(FALSE),
+    drawSize(0.0f),
+    ownerSourceIndex(-1),
+    ownerSourcePath(""),
+    path("")
+{
+}
+
+BRLObolSceneMaterialSummary::BRLObolSceneMaterialSummary(void) :
+    valid(FALSE),
+    nodeKind(BRLObolSceneTreeSummary::NODE_UNKNOWN),
+    materialValid(FALSE),
+    materialRevision(0),
+    materialColor(1.0f, 1.0f, 1.0f),
+    ownerSourceIndex(-1),
+    ownerSourcePath(""),
+    path("")
+{
+}
+
+BRLObolSceneBoundsSummary::BRLObolSceneBoundsSummary(void) :
+    valid(FALSE),
+    nodeKind(BRLObolSceneTreeSummary::NODE_UNKNOWN),
+    boundsValid(FALSE),
+    bounds(),
+    ownerSourceIndex(-1),
+    ownerSourcePath(""),
+    path("")
+{
+    this->bounds.makeEmpty();
+}
+
 static const char *
 lookup_name_from_path(const SbString &path)
 {
@@ -48,6 +249,44 @@ lookup_name_from_path(const SbString &path)
     if (!name[0])
 	return NULL;
     return name;
+}
+
+static SbString
+record_identity_with_revision(const char *identity, uint32_t revision)
+{
+    SbString ret = identity ? identity : "";
+    char revisionString[64] = {0};
+    snprintf(revisionString, sizeof(revisionString), "#%u", revision);
+    ret += revisionString;
+    return ret;
+}
+
+static int
+source_record_draw_mode(const SoBRLDatabaseSource *source)
+{
+    if (source && source->drawMode.getValue() == SoBRLDatabaseSource::SHADED)
+	return BRLOBOL_LOD_DRAW_SHADED;
+    return BRLOBOL_LOD_DRAW_WIRE;
+}
+
+static SbString
+source_realization_identity(const SoBRLDatabaseSource *source)
+{
+    if (!source)
+	return "";
+
+    SbString identity;
+    identity.sprintf("dbsource:%s#mode=%d;source=%u;inputs=%u;view=%u;lod=%u;abs=%.9g;rel=%.9g;norm=%.9g",
+	    source->path.getValue().getString(),
+	    source->drawMode.getValue(),
+	    source->sourceRevision.getValue(),
+	    source->inputsRevision.getValue(),
+	    source->viewRevision.getValue(),
+	    source->lodBotThreshold.getValue(),
+	    static_cast<double>(source->tessellationAbsTol.getValue()),
+	    static_cast<double>(source->tessellationRelTol.getValue()),
+	    static_cast<double>(source->tessellationNormTol.getValue()));
+    return identity;
 }
 
 static void
@@ -156,7 +395,8 @@ assign_realized_identity(ShapeT *shape,
 	const char *path,
 	const char *sourceName,
 	const char *sourceType,
-	uint32_t sourceId)
+	uint32_t sourceId,
+	const SoBRLDatabaseSource *source)
 {
     if (!shape)
 	return;
@@ -165,6 +405,20 @@ assign_realized_identity(ShapeT *shape,
     shape->sourceName = sourceName ? sourceName : "";
     shape->sourceType = sourceType ? sourceType : "";
     shape->sourceId = sourceId;
+    shape->displayName = sourceName ? sourceName : (path ? path : "");
+    shape->geometryName = sourceName ? sourceName : "";
+    shape->sourceIdentity = path ? path : "";
+    shape->cacheIdentity = record_identity_with_revision(
+	    path ? path : (sourceName ? sourceName : ""), sourceId);
+    shape->databaseIntent = TRUE;
+    shape->overlayIntent = FALSE;
+    shape->hudIntent = FALSE;
+    shape->localSource = FALSE;
+    shape->sharedSource = FALSE;
+    shape->nonDatabaseSource = FALSE;
+    shape->drawMode = source_record_draw_mode(source);
+    shape->recordRole = "database";
+    shape->geometryKind = "";
 
     if (!tsp) {
 	shape->regionId = 0;
@@ -187,6 +441,53 @@ assign_realized_identity(ShapeT *shape,
 	    static_cast<float>(tsp->ts_mater.ma_color[1]),
 	    static_cast<float>(tsp->ts_mater.ma_color[2]));
     shape->materialShader = tsp->ts_mater.ma_shader ? tsp->ts_mater.ma_shader : "";
+}
+
+template <typename ShapeT>
+static void
+sync_shape_owner_state(ShapeT *shape, const SoBRLDatabaseSource *source)
+{
+    if (!shape || !source)
+	return;
+
+    shape->ownerSourcePath = source->path.getValue();
+    shape->ownerSourceRevision = source->sourceRevision.getValue();
+    shape->ownerInputsRevision = source->inputsRevision.getValue();
+    shape->ownerViewRevision = source->viewRevision.getValue();
+    shape->ownerRealizedRevision = source->realizedRevision.getValue();
+    shape->ownerRealizedSourceRevision =
+	source->realizedSourceRevision.getValue();
+    shape->ownerRealizedInputsRevision =
+	source->realizedInputsRevision.getValue();
+    shape->ownerRealizedViewRevision = source->realizedViewRevision.getValue();
+    shape->ownerRealizationStatus = source->realizationStatus.getValue();
+    shape->ownerRealizationDiagnostic =
+	source->realizationDiagnostic.getValue();
+    shape->ownerRealizationIdentity = source->realizationIdentity.getValue();
+    shape->ownerSourceStale = source->stale.getValue();
+    shape->ownerStaleReason = source->staleReason.getValue();
+}
+
+static void
+sync_realized_shape_owner_state_in_node(SoNode *node,
+	const SoBRLDatabaseSource *source)
+{
+    if (!node || !source)
+	return;
+
+    if (node->isOfType(SoBRLVListShape::getClassTypeId())) {
+	sync_shape_owner_state(static_cast<SoBRLVListShape *>(node), source);
+	return;
+    }
+    if (node->isOfType(SoBRLMeshShape::getClassTypeId())) {
+	sync_shape_owner_state(static_cast<SoBRLMeshShape *>(node), source);
+	return;
+    }
+    if (node->isOfType(SoGroup::getClassTypeId())) {
+	SoGroup *group = static_cast<SoGroup *>(node);
+	for (int i = 0; i < group->getNumChildren(); i++)
+	    sync_realized_shape_owner_state_in_node(group->getChild(i), source);
+    }
 }
 
 static union tree *
@@ -370,7 +671,7 @@ realize_leaf(struct db_tree_state *tsp,
     SoBRLVListShape *shape = new SoBRLVListShape;
     transform->matrix = mat_to_sbmatrix(tsp->ts_mat);
     assign_realized_identity(shape, tsp, path, dp->d_namep, typeLabel,
-	    data->revision);
+	    data->revision, data->source);
     shape->setLineSet(points.data(), commands.data(), static_cast<int>(points.size()));
     leaf->addChild(transform);
     leaf->addChild(shape);
@@ -838,10 +1139,10 @@ realize_mesh_leaf(struct db_tree_state *tsp,
     transform->matrix = mat_to_sbmatrix(tsp->ts_mat);
     if (vlistShape) {
 	assign_realized_identity(vlistShape, tsp, path, dp->d_namep, typeLabel,
-		data->revision);
+		data->revision, data->source);
     } else {
 	assign_realized_identity(shape, tsp, path, dp->d_namep, typeLabel,
-		data->revision);
+		data->revision, data->source);
 	if (internalType == ID_BOT)
 	    publish_lod_metadata_if_cached(shape, tsp->ts_dbip, dp->d_namep);
     }
@@ -878,6 +1179,16 @@ SoBRLDatabaseSource::SoBRLDatabaseSource(void) :
     SO_NODE_ADD_FIELD(path, (""));
     SO_NODE_ADD_FIELD(drawMode, (WIREFRAME));
     SO_NODE_SET_SF_ENUM_TYPE(drawMode, DrawMode);
+    SO_NODE_ADD_FIELD(visible, (TRUE));
+    SO_NODE_ADD_FIELD(highlighted, (FALSE));
+    SO_NODE_ADD_FIELD(lineStyle, (0));
+    SO_NODE_ADD_FIELD(lineWidth, (0));
+    SO_NODE_ADD_FIELD(transparency, (0.0f));
+    SO_NODE_ADD_FIELD(materialColorValid, (FALSE));
+    SO_NODE_ADD_FIELD(materialColor, (SbColor(1.0f, 1.0f, 1.0f)));
+    SO_NODE_ADD_FIELD(materialRevision, (0));
+    SO_NODE_ADD_FIELD(colorOverride, (FALSE));
+    SO_NODE_ADD_FIELD(color, (SbColor(1.0f, 1.0f, 1.0f)));
     SO_NODE_ADD_FIELD(tessellationAbsTol, (0.0f));
     SO_NODE_ADD_FIELD(tessellationRelTol, (0.01f));
     SO_NODE_ADD_FIELD(tessellationNormTol, (0.0f));
@@ -892,6 +1203,7 @@ SoBRLDatabaseSource::SoBRLDatabaseSource(void) :
     SO_NODE_ADD_FIELD(realizationStatus, (UNREALIZED));
     SO_NODE_SET_SF_ENUM_TYPE(realizationStatus, RealizationStatus);
     SO_NODE_ADD_FIELD(realizationDiagnostic, (""));
+    SO_NODE_ADD_FIELD(realizationIdentity, (""));
     SO_NODE_ADD_FIELD(stale, (TRUE));
     SO_NODE_ADD_FIELD(staleReason, (STALE_SOURCE));
 
@@ -1025,6 +1337,7 @@ SoBRLDatabaseSource::markStale(uint32_t reason)
     this->staleReason = this->staleReason.getValue() | reason;
     this->realizationStatus = UNREALIZED;
     this->realizationDiagnostic = "";
+    this->syncRealizedShapeOwnerState();
 }
 
 void
@@ -1107,6 +1420,7 @@ SoBRLDatabaseSource::realizeDatabaseWireframe(void)
 
     if (ret < 0 || data.realized_shapes <= 0 || data.failed_shapes > 0) {
 	this->removeAllChildren();
+	this->realizationIdentity = "";
 	if (data.diagnostic.getLength() > 0) {
 	    this->realizationDiagnostic = data.diagnostic;
 	} else if (data.realized_shapes <= 0) {
@@ -1127,8 +1441,10 @@ SoBRLDatabaseSource::realizeDatabaseWireframe(void)
     this->realizedViewRevision = this->viewRevision.getValue();
     this->realizationStatus = REALIZED;
     this->realizationDiagnostic = "";
+    this->realizationIdentity = source_realization_identity(this);
     this->stale = FALSE;
     this->staleReason = STALE_NONE;
+    this->syncRealizedShapeOwnerState();
     return TRUE;
 }
 
@@ -1166,6 +1482,7 @@ SoBRLDatabaseSource::realizeDatabaseMesh(void)
 
     if (ret < 0 || data.realized_shapes <= 0 || data.failed_shapes > 0) {
 	this->removeAllChildren();
+	this->realizationIdentity = "";
 	if (data.diagnostic.getLength() > 0) {
 	    this->realizationDiagnostic = data.diagnostic;
 	} else if (data.realized_shapes <= 0) {
@@ -1186,8 +1503,10 @@ SoBRLDatabaseSource::realizeDatabaseMesh(void)
     this->realizedViewRevision = this->viewRevision.getValue();
     this->realizationStatus = REALIZED;
     this->realizationDiagnostic = "";
+    this->realizationIdentity = source_realization_identity(this);
     this->stale = FALSE;
     this->staleReason = STALE_NONE;
+    this->syncRealizedShapeOwnerState();
     return TRUE;
 }
 
@@ -1222,6 +1541,21 @@ SoBRLDatabaseSource::realizePrototypeWireframe(void)
 	lookup_name_from_path(this->path.getValue()) : this->path.getValue().getString();
     shape->sourceType = "prototype";
     shape->sourceId = this->sourceRevision.getValue();
+    shape->displayName = shape->sourceName.getValue();
+    shape->geometryName = shape->sourceName.getValue();
+    shape->sourceIdentity = shape->sourcePath.getValue();
+    shape->cacheIdentity = record_identity_with_revision(
+	    shape->sourcePath.getValue().getString(),
+	    shape->sourceId.getValue());
+    shape->databaseIntent = FALSE;
+    shape->overlayIntent = FALSE;
+    shape->hudIntent = FALSE;
+    shape->localSource = TRUE;
+    shape->sharedSource = FALSE;
+    shape->nonDatabaseSource = TRUE;
+    shape->drawMode = BRLOBOL_LOD_DRAW_DIAGNOSTIC;
+    shape->recordRole = "prototype";
+    shape->geometryKind = "";
     shape->regionId = 0;
     shape->airCode = 0;
     shape->materialId = 0;
@@ -1237,9 +1571,17 @@ SoBRLDatabaseSource::realizePrototypeWireframe(void)
     this->realizedViewRevision = this->viewRevision.getValue();
     this->realizationStatus = REALIZED;
     this->realizationDiagnostic = "";
+    this->realizationIdentity = source_realization_identity(this);
     this->stale = FALSE;
     this->staleReason = STALE_NONE;
+    this->syncRealizedShapeOwnerState();
     return TRUE;
+}
+
+void
+SoBRLDatabaseSource::syncRealizedShapeOwnerState(void)
+{
+    sync_realized_shape_owner_state_in_node(this, this);
 }
 
 SoBRLVListShape *
@@ -1452,4 +1794,804 @@ SoBRLDatabaseSource::getRealizedMaterialObjectCount(void) const
     for (int i = 0; i < this->getNumChildren(); i++)
 	ret += count_material_objects_in_node(this->getChild(i));
     return ret;
+}
+
+static void
+realized_material_summary_owner(const SoBRLDatabaseSource *source,
+	int sourceIndex, BRLObolRealizedMaterialSummary &summary);
+
+static void
+realized_material_summary(const SoBRLMaterialObject *object,
+	BRLObolRealizedMaterialSummary &summary)
+{
+    summary = BRLObolRealizedMaterialSummary();
+    if (!object)
+	return;
+
+    summary.valid = TRUE;
+    summary.sourcePath = object->sourcePath.getValue();
+    summary.sourceName = object->sourceName.getValue();
+    summary.sourceType = object->sourceType.getValue();
+    summary.sourceId = object->sourceId.getValue();
+    summary.materialName = object->materialName.getValue();
+    summary.parentName = object->parentName.getValue();
+    summary.materialSource = object->materialSource.getValue();
+    summary.propertyCount = object->getPropertyCount();
+}
+
+int
+SoBRLDatabaseSource::getRealizedMaterialSummaryCount(void) const
+{
+    return this->getRealizedMaterialObjectCount();
+}
+
+SbBool
+SoBRLDatabaseSource::getRealizedMaterialSummary(int index,
+	BRLObolRealizedMaterialSummary &summary) const
+{
+    summary = BRLObolRealizedMaterialSummary();
+    if (index < 0)
+	return FALSE;
+
+    SoBRLMaterialObject *object = this->getRealizedMaterialObject(index);
+    if (!object)
+	return FALSE;
+
+    realized_material_summary(object, summary);
+    realized_material_summary_owner(this, -1, summary);
+    return TRUE;
+}
+
+SbBool
+SoBRLDatabaseSource::getRealizedMaterialProperty(int materialIndex,
+	int propertyIndex, SbString &groupOut, SbString &nameOut,
+	SbString &valueOut) const
+{
+    if (materialIndex < 0 || propertyIndex < 0)
+	return FALSE;
+
+    SoBRLMaterialObject *object =
+	this->getRealizedMaterialObject(materialIndex);
+    if (!object)
+	return FALSE;
+
+    return object->getProperty(propertyIndex, groupOut, nameOut, valueOut);
+}
+
+static void
+realized_tree_summary_fill(const SoNode *node, int depth, SbBool hasParent,
+	int ownerSourceIndex, const SbString &ownerSourcePath,
+	BRLObolSceneTreeSummary &summary)
+{
+    summary = BRLObolSceneTreeSummary();
+    if (!node)
+	return;
+
+    summary.valid = TRUE;
+    summary.hasParent = hasParent;
+    summary.drawTreeDepth = depth;
+    summary.ownerSourceIndex = ownerSourceIndex;
+    summary.ownerSourcePath = ownerSourcePath;
+    summary.isGroup =
+	node->isOfType(SoGroup::getClassTypeId()) ? TRUE : FALSE;
+    summary.isDatabaseSource =
+	node->isOfType(SoBRLDatabaseSource::getClassTypeId()) ? TRUE : FALSE;
+    summary.isMaterialObject =
+	node->isOfType(SoBRLMaterialObject::getClassTypeId()) ? TRUE : FALSE;
+    summary.isShape =
+	(node->isOfType(SoBRLVListShape::getClassTypeId()) ||
+	 node->isOfType(SoBRLMeshShape::getClassTypeId())) ? TRUE : FALSE;
+
+    if (summary.isGroup)
+	summary.childCount = static_cast<const SoGroup *>(node)->getNumChildren();
+
+    if (summary.isDatabaseSource) {
+	const SoBRLDatabaseSource *sourceNode =
+	    static_cast<const SoBRLDatabaseSource *>(node);
+	summary.nodeKind = BRLObolSceneTreeSummary::NODE_DATABASE_SOURCE;
+	summary.path = sourceNode->path.getValue();
+	if (summary.ownerSourcePath.getLength() == 0)
+	    summary.ownerSourcePath = sourceNode->path.getValue();
+	return;
+    }
+
+    if (node->isOfType(SoBRLVListShape::getClassTypeId())) {
+	const SoBRLVListShape *shape =
+	    static_cast<const SoBRLVListShape *>(node);
+	summary.nodeKind = BRLObolSceneTreeSummary::NODE_VLIST_SHAPE;
+	summary.path = shape->sourcePath.getValue();
+	summary.sourceName = shape->sourceName.getValue();
+	summary.sourceType = shape->sourceType.getValue();
+	summary.sourceId = shape->sourceId.getValue();
+	summary.displayName = shape->displayName.getValue();
+	summary.geometryName = shape->geometryName.getValue();
+	return;
+    }
+
+    if (node->isOfType(SoBRLMeshShape::getClassTypeId())) {
+	const SoBRLMeshShape *shape =
+	    static_cast<const SoBRLMeshShape *>(node);
+	summary.nodeKind = BRLObolSceneTreeSummary::NODE_MESH_SHAPE;
+	summary.path = shape->sourcePath.getValue();
+	summary.sourceName = shape->sourceName.getValue();
+	summary.sourceType = shape->sourceType.getValue();
+	summary.sourceId = shape->sourceId.getValue();
+	summary.displayName = shape->displayName.getValue();
+	summary.geometryName = shape->geometryName.getValue();
+	return;
+    }
+
+    if (summary.isMaterialObject) {
+	const SoBRLMaterialObject *object =
+	    static_cast<const SoBRLMaterialObject *>(node);
+	summary.nodeKind = BRLObolSceneTreeSummary::NODE_MATERIAL_OBJECT;
+	summary.path = object->sourcePath.getValue();
+	summary.sourceName = object->sourceName.getValue();
+	summary.sourceType = object->sourceType.getValue();
+	summary.sourceId = object->sourceId.getValue();
+	summary.displayName = object->materialName.getValue();
+	return;
+    }
+
+    summary.nodeKind = summary.isGroup ?
+	BRLObolSceneTreeSummary::NODE_GROUP :
+	BRLObolSceneTreeSummary::NODE_OTHER;
+}
+
+static int
+realized_tree_summary_node_count(const SoNode *node)
+{
+    if (!node)
+	return 0;
+
+    int count = 1;
+    if (node->isOfType(SoGroup::getClassTypeId())) {
+	const SoGroup *group = static_cast<const SoGroup *>(node);
+	for (int i = 0; i < group->getNumChildren(); i++)
+	    count += realized_tree_summary_node_count(group->getChild(i));
+    }
+    return count;
+}
+
+static SbBool
+find_realized_tree_summary_in_node(const SoNode *node, int &index, int depth,
+	SbBool hasParent, int ownerSourceIndex,
+	const SbString &ownerSourcePath, BRLObolSceneTreeSummary &summary)
+{
+    if (!node)
+	return FALSE;
+
+    if (index == 0) {
+	realized_tree_summary_fill(node, depth, hasParent, ownerSourceIndex,
+		ownerSourcePath, summary);
+	return TRUE;
+    }
+    index--;
+
+    if (node->isOfType(SoGroup::getClassTypeId())) {
+	const SoGroup *group = static_cast<const SoGroup *>(node);
+	for (int i = 0; i < group->getNumChildren(); i++) {
+	    if (find_realized_tree_summary_in_node(group->getChild(i),
+		    index, depth + 1, TRUE, ownerSourceIndex,
+		    ownerSourcePath, summary))
+		return TRUE;
+	}
+    }
+
+    return FALSE;
+}
+
+int
+SoBRLDatabaseSource::getRealizedTreeSummaryCount(void) const
+{
+    return realized_tree_summary_node_count(this);
+}
+
+SbBool
+SoBRLDatabaseSource::getRealizedTreeSummary(int index,
+	BRLObolSceneTreeSummary &summary) const
+{
+    summary = BRLObolSceneTreeSummary();
+    if (index < 0)
+	return FALSE;
+
+    const SbString ownerPath = this->path.getValue();
+    return find_realized_tree_summary_in_node(this, index, 0, FALSE, -1,
+	    ownerPath, summary);
+}
+
+static void
+realized_display_summary_fill_common(BRLObolSceneDisplaySummary &summary,
+	int nodeKind, int ownerSourceIndex, const SbString &ownerSourcePath,
+	const SbString &nodePath)
+{
+    summary = BRLObolSceneDisplaySummary();
+    summary.valid = TRUE;
+    summary.nodeKind = nodeKind;
+    summary.ownerSourceIndex = ownerSourceIndex;
+    summary.ownerSourcePath = ownerSourcePath;
+    summary.path = nodePath;
+}
+
+template <typename ShapeT>
+static void
+realized_display_summary_fill_shape(const ShapeT *shape,
+	int nodeKind, int ownerSourceIndex, const SbString &ownerSourcePath,
+	BRLObolSceneDisplaySummary &summary)
+{
+    realized_display_summary_fill_common(summary, nodeKind, ownerSourceIndex,
+	    ownerSourcePath, shape ? shape->sourcePath.getValue() : SbString(""));
+    if (!shape)
+	return;
+
+    summary.hasDrawIntent = shape->sourcePath.getValue().getLength() > 0;
+    summary.intentPath = shape->sourcePath.getValue();
+    summary.intentDrawMode = shape->drawMode.getValue();
+    summary.visible = shape->visible.getValue();
+    summary.highlighted = shape->highlighted.getValue();
+    summary.lineStyle = shape->lineStyle.getValue();
+    summary.lineWidth = shape->lineWidth.getValue();
+    summary.transparency = shape->transparency.getValue();
+    summary.drawMode = shape->drawMode.getValue();
+    summary.materialValid = TRUE;
+    summary.materialRevision = shape->materialRevision.getValue();
+    if (shape->materialColorValid.getValue())
+	summary.materialColor = shape->materialColor.getValue();
+    else if (shape->colorOverride.getValue())
+	summary.materialColor = shape->color.getValue();
+    summary.drawMatrixValid = shape->drawMatrixValid.getValue();
+    summary.drawMatrix = shape->drawMatrix.getValue();
+    summary.drawCenterValid = shape->drawCenterValid.getValue();
+    summary.drawCenter = shape->drawCenter.getValue();
+    summary.drawSizeValid = shape->drawSizeValid.getValue();
+    summary.drawSize = shape->drawSize.getValue();
+}
+
+static void
+realized_display_summary_fill(const SoNode *node, int ownerSourceIndex,
+	const SbString &ownerSourcePath, BRLObolSceneDisplaySummary &summary)
+{
+    summary = BRLObolSceneDisplaySummary();
+    if (!node)
+	return;
+
+    if (node->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
+	const SoBRLDatabaseSource *source =
+	    static_cast<const SoBRLDatabaseSource *>(node);
+	realized_display_summary_fill_common(summary,
+		BRLObolSceneTreeSummary::NODE_DATABASE_SOURCE,
+		ownerSourceIndex, ownerSourcePath, source->path.getValue());
+	summary.isDatabaseSource = TRUE;
+	summary.hasDrawIntent = source->path.getValue().getLength() > 0;
+	summary.intentPath = source->path.getValue();
+	summary.intentDrawMode = source->drawMode.getValue();
+	summary.visible = source->visible.getValue();
+	summary.highlighted = source->highlighted.getValue();
+	summary.lineStyle = source->lineStyle.getValue();
+	summary.lineWidth = source->lineWidth.getValue();
+	summary.transparency = source->transparency.getValue();
+	summary.drawMode = source->drawMode.getValue();
+	summary.materialValid = TRUE;
+	summary.materialRevision = source->materialRevision.getValue();
+	if (source->materialColorValid.getValue())
+	    summary.materialColor = source->materialColor.getValue();
+	else if (source->colorOverride.getValue())
+	    summary.materialColor = source->color.getValue();
+	return;
+    }
+
+    if (node->isOfType(SoBRLVListShape::getClassTypeId())) {
+	realized_display_summary_fill_shape(
+		static_cast<const SoBRLVListShape *>(node),
+		BRLObolSceneTreeSummary::NODE_VLIST_SHAPE,
+		ownerSourceIndex, ownerSourcePath, summary);
+	return;
+    }
+
+    if (node->isOfType(SoBRLMeshShape::getClassTypeId())) {
+	realized_display_summary_fill_shape(
+		static_cast<const SoBRLMeshShape *>(node),
+		BRLObolSceneTreeSummary::NODE_MESH_SHAPE,
+		ownerSourceIndex, ownerSourcePath, summary);
+	return;
+    }
+
+    if (node->isOfType(SoBRLMaterialObject::getClassTypeId())) {
+	const SoBRLMaterialObject *object =
+	    static_cast<const SoBRLMaterialObject *>(node);
+	realized_display_summary_fill_common(summary,
+		BRLObolSceneTreeSummary::NODE_MATERIAL_OBJECT,
+		ownerSourceIndex, ownerSourcePath,
+		object->sourcePath.getValue());
+	return;
+    }
+
+    const int nodeKind = node->isOfType(SoGroup::getClassTypeId()) ?
+	BRLObolSceneTreeSummary::NODE_GROUP :
+	BRLObolSceneTreeSummary::NODE_OTHER;
+    realized_display_summary_fill_common(summary, nodeKind, ownerSourceIndex,
+	    ownerSourcePath, "");
+}
+
+static SbBool
+find_realized_display_summary_in_node(const SoNode *node, int &index,
+	int ownerSourceIndex, const SbString &ownerSourcePath,
+	BRLObolSceneDisplaySummary &summary)
+{
+    if (!node)
+	return FALSE;
+
+    if (index == 0) {
+	realized_display_summary_fill(node, ownerSourceIndex,
+		ownerSourcePath, summary);
+	return TRUE;
+    }
+    index--;
+
+    if (node->isOfType(SoGroup::getClassTypeId())) {
+	const SoGroup *group = static_cast<const SoGroup *>(node);
+	for (int i = 0; i < group->getNumChildren(); i++) {
+	    if (find_realized_display_summary_in_node(group->getChild(i),
+		    index, ownerSourceIndex, ownerSourcePath, summary))
+		return TRUE;
+	}
+    }
+
+    return FALSE;
+}
+
+int
+SoBRLDatabaseSource::getRealizedDisplaySummaryCount(void) const
+{
+    return this->getRealizedTreeSummaryCount();
+}
+
+SbBool
+SoBRLDatabaseSource::getRealizedDisplaySummary(int index,
+	BRLObolSceneDisplaySummary &summary) const
+{
+    summary = BRLObolSceneDisplaySummary();
+    if (index < 0)
+	return FALSE;
+
+    const SbString ownerPath = this->path.getValue();
+    return find_realized_display_summary_in_node(this, index, -1,
+	    ownerPath, summary);
+}
+
+static void
+scene_material_summary_from_display(const BRLObolSceneDisplaySummary &display,
+	BRLObolSceneMaterialSummary &summary)
+{
+    summary = BRLObolSceneMaterialSummary();
+    if (!display.valid)
+	return;
+
+    summary.valid = TRUE;
+    summary.nodeKind = display.nodeKind;
+    summary.materialValid =
+	(display.nodeKind == BRLObolSceneTreeSummary::NODE_VLIST_SHAPE ||
+	 display.nodeKind == BRLObolSceneTreeSummary::NODE_MESH_SHAPE) ?
+	display.materialValid : FALSE;
+    summary.materialRevision = display.materialRevision;
+    summary.materialColor = display.materialColor;
+    summary.ownerSourceIndex = display.ownerSourceIndex;
+    summary.ownerSourcePath = display.ownerSourcePath;
+    summary.path = display.path;
+}
+
+int
+SoBRLDatabaseSource::getRealizedSceneMaterialSummaryCount(void) const
+{
+    return this->getRealizedDisplaySummaryCount();
+}
+
+SbBool
+SoBRLDatabaseSource::getRealizedSceneMaterialSummary(int index,
+	BRLObolSceneMaterialSummary &summary) const
+{
+    summary = BRLObolSceneMaterialSummary();
+    BRLObolSceneDisplaySummary display;
+    if (!this->getRealizedDisplaySummary(index, display))
+	return FALSE;
+
+    scene_material_summary_from_display(display, summary);
+    return TRUE;
+}
+
+static int
+realized_bounds_node_kind(const SoNode *node)
+{
+    if (!node)
+	return BRLObolSceneTreeSummary::NODE_UNKNOWN;
+    if (node->isOfType(SoBRLDatabaseSource::getClassTypeId()))
+	return BRLObolSceneTreeSummary::NODE_DATABASE_SOURCE;
+    if (node->isOfType(SoBRLVListShape::getClassTypeId()))
+	return BRLObolSceneTreeSummary::NODE_VLIST_SHAPE;
+    if (node->isOfType(SoBRLMeshShape::getClassTypeId()))
+	return BRLObolSceneTreeSummary::NODE_MESH_SHAPE;
+    if (node->isOfType(SoBRLMaterialObject::getClassTypeId()))
+	return BRLObolSceneTreeSummary::NODE_MATERIAL_OBJECT;
+    if (node->isOfType(SoGroup::getClassTypeId()))
+	return BRLObolSceneTreeSummary::NODE_GROUP;
+    return BRLObolSceneTreeSummary::NODE_OTHER;
+}
+
+static SbString
+realized_bounds_node_path(const SoNode *node)
+{
+    if (!node)
+	return "";
+    if (node->isOfType(SoBRLDatabaseSource::getClassTypeId()))
+	return static_cast<const SoBRLDatabaseSource *>(node)->path.getValue();
+    if (node->isOfType(SoBRLVListShape::getClassTypeId()))
+	return static_cast<const SoBRLVListShape *>(node)->sourcePath.getValue();
+    if (node->isOfType(SoBRLMeshShape::getClassTypeId()))
+	return static_cast<const SoBRLMeshShape *>(node)->sourcePath.getValue();
+    if (node->isOfType(SoBRLMaterialObject::getClassTypeId()))
+	return static_cast<const SoBRLMaterialObject *>(node)->sourcePath.getValue();
+    return "";
+}
+
+static SbBool
+realized_bounds_for_vlist_shape(const SoBRLVListShape *shape, SbBox3f &bounds)
+{
+    bounds.makeEmpty();
+    if (!shape)
+	return FALSE;
+    for (int i = 0; i < shape->point.getNum(); i++)
+	bounds.extendBy(shape->point[i]);
+    return shape->point.getNum() > 0;
+}
+
+static SbBool
+realized_bounds_for_mesh_shape(const SoBRLMeshShape *shape, SbBox3f &bounds)
+{
+    bounds.makeEmpty();
+    if (!shape)
+	return FALSE;
+    for (int i = 0; i < shape->point.getNum(); i++)
+	bounds.extendBy(shape->point[i]);
+    return shape->point.getNum() > 0;
+}
+
+static SbBool
+realized_bounds_for_node(const SoNode *node, SbBox3f &bounds)
+{
+    bounds.makeEmpty();
+    if (!node)
+	return FALSE;
+
+    if (node->isOfType(SoBRLVListShape::getClassTypeId()))
+	return realized_bounds_for_vlist_shape(
+		static_cast<const SoBRLVListShape *>(node), bounds);
+
+    if (node->isOfType(SoBRLMeshShape::getClassTypeId()))
+	return realized_bounds_for_mesh_shape(
+		static_cast<const SoBRLMeshShape *>(node), bounds);
+
+    SbBool valid = FALSE;
+    if (node->isOfType(SoGroup::getClassTypeId())) {
+	const SoGroup *group = static_cast<const SoGroup *>(node);
+	for (int i = 0; i < group->getNumChildren(); i++) {
+	    SbBox3f childBounds;
+	    if (realized_bounds_for_node(group->getChild(i),
+		    childBounds)) {
+		bounds.extendBy(childBounds);
+		valid = TRUE;
+	    }
+	}
+    }
+
+    return valid;
+}
+
+static void
+realized_bounds_summary_fill(const SoNode *node, int ownerSourceIndex,
+	const SbString &ownerSourcePath, BRLObolSceneBoundsSummary &summary)
+{
+    summary = BRLObolSceneBoundsSummary();
+    if (!node)
+	return;
+
+    summary.valid = TRUE;
+    summary.nodeKind = realized_bounds_node_kind(node);
+    summary.ownerSourceIndex = ownerSourceIndex;
+    summary.ownerSourcePath = ownerSourcePath;
+    summary.path = realized_bounds_node_path(node);
+    summary.boundsValid = realized_bounds_for_node(node, summary.bounds);
+}
+
+static SbBool
+find_realized_bounds_summary_in_node(const SoNode *node, int &index,
+	int ownerSourceIndex, const SbString &ownerSourcePath,
+	BRLObolSceneBoundsSummary &summary)
+{
+    if (!node)
+	return FALSE;
+
+    if (index == 0) {
+	realized_bounds_summary_fill(node, ownerSourceIndex, ownerSourcePath,
+		summary);
+	return TRUE;
+    }
+    index--;
+
+    if (node->isOfType(SoGroup::getClassTypeId())) {
+	const SoGroup *group = static_cast<const SoGroup *>(node);
+	for (int i = 0; i < group->getNumChildren(); i++) {
+	    if (find_realized_bounds_summary_in_node(group->getChild(i),
+		    index, ownerSourceIndex, ownerSourcePath, summary))
+		return TRUE;
+	}
+    }
+
+    return FALSE;
+}
+
+int
+SoBRLDatabaseSource::getRealizedBoundsSummaryCount(void) const
+{
+    return this->getRealizedTreeSummaryCount();
+}
+
+SbBool
+SoBRLDatabaseSource::getRealizedBoundsSummary(int index,
+	BRLObolSceneBoundsSummary &summary) const
+{
+    summary = BRLObolSceneBoundsSummary();
+    if (index < 0)
+	return FALSE;
+
+    const SbString ownerPath = this->path.getValue();
+    return find_realized_bounds_summary_in_node(this, index, -1,
+	    ownerPath, summary);
+}
+
+template <typename ShapeT>
+static void
+realized_shape_summary_common(const ShapeT *shape,
+	BRLObolRealizedShapeSummary &summary)
+{
+    summary.path = shape->sourcePath.getValue();
+    summary.sourceName = shape->sourceName.getValue();
+    summary.sourceType = shape->sourceType.getValue();
+    summary.sourceId = shape->sourceId.getValue();
+    summary.displayName = shape->displayName.getValue();
+    summary.geometryName = shape->geometryName.getValue();
+    summary.cacheIdentity = shape->cacheIdentity.getValue();
+    summary.sourceIdentity = shape->sourceIdentity.getValue();
+    summary.databaseIntent = shape->databaseIntent.getValue();
+    summary.overlayIntent = shape->overlayIntent.getValue();
+    summary.hudIntent = shape->hudIntent.getValue();
+    summary.localSource = shape->localSource.getValue();
+    summary.sharedSource = shape->sharedSource.getValue();
+    summary.nonDatabaseSource = shape->nonDatabaseSource.getValue();
+    summary.drawMode = shape->drawMode.getValue();
+    summary.recordRole = shape->recordRole.getValue();
+    summary.geometryKind = shape->geometryKind.getValue();
+    summary.regionId = shape->regionId.getValue();
+    summary.airCode = shape->airCode.getValue();
+    summary.materialId = shape->materialId.getValue();
+    summary.los = shape->los.getValue();
+    summary.materialColorValid = shape->materialColorValid.getValue();
+    summary.materialColor = shape->materialColor.getValue();
+    summary.materialShader = shape->materialShader.getValue();
+    summary.materialRevision = shape->materialRevision.getValue();
+    summary.visible = shape->visible.getValue();
+    summary.selectable = shape->selectable.getValue();
+    summary.selected = shape->selected.getValue();
+    summary.highlighted = shape->highlighted.getValue();
+    summary.ghosted = shape->ghosted.getValue();
+    summary.hiddenLine = shape->hiddenLine.getValue();
+    summary.editEmphasis = shape->editEmphasis.getValue();
+    summary.editIntentId = shape->editIntentId.getValue();
+    summary.editIntentRole = shape->editIntentRole.getValue();
+    summary.lodPolicy = shape->lodPolicy.getValue();
+}
+
+static void
+realized_shape_summary_owner(const SoBRLDatabaseSource *source,
+	int sourceIndex, BRLObolRealizedShapeSummary &summary)
+{
+    if (!source)
+	return;
+
+    summary.ownerSourceIndex = sourceIndex;
+    summary.ownerSourcePath = source->path.getValue();
+    summary.ownerDrawMode = source->drawMode.getValue();
+    summary.ownerSourceRevision = source->sourceRevision.getValue();
+    summary.ownerInputsRevision = source->inputsRevision.getValue();
+    summary.ownerViewRevision = source->viewRevision.getValue();
+    summary.ownerRealizedRevision = source->realizedRevision.getValue();
+    summary.ownerRealizedSourceRevision =
+	source->realizedSourceRevision.getValue();
+    summary.ownerRealizedInputsRevision =
+	source->realizedInputsRevision.getValue();
+    summary.ownerRealizedViewRevision =
+	source->realizedViewRevision.getValue();
+    summary.ownerRealizationStatus = source->realizationStatus.getValue();
+    summary.ownerRealizationDiagnostic =
+	source->realizationDiagnostic.getValue();
+    summary.ownerRealizationIdentity =
+	source->realizationIdentity.getValue();
+    summary.ownerSourceStale = source->stale.getValue();
+    summary.ownerStaleReason = source->staleReason.getValue();
+}
+
+static void
+realized_material_summary_owner(const SoBRLDatabaseSource *source,
+	int sourceIndex, BRLObolRealizedMaterialSummary &summary)
+{
+    if (!source)
+	return;
+
+    summary.ownerSourceIndex = sourceIndex;
+    summary.ownerSourcePath = source->path.getValue();
+    summary.ownerDrawMode = source->drawMode.getValue();
+    summary.ownerSourceRevision = source->sourceRevision.getValue();
+    summary.ownerInputsRevision = source->inputsRevision.getValue();
+    summary.ownerViewRevision = source->viewRevision.getValue();
+    summary.ownerRealizedRevision = source->realizedRevision.getValue();
+    summary.ownerRealizedSourceRevision =
+	source->realizedSourceRevision.getValue();
+    summary.ownerRealizedInputsRevision =
+	source->realizedInputsRevision.getValue();
+    summary.ownerRealizedViewRevision =
+	source->realizedViewRevision.getValue();
+    summary.ownerRealizationStatus = source->realizationStatus.getValue();
+    summary.ownerRealizationDiagnostic =
+	source->realizationDiagnostic.getValue();
+    summary.ownerRealizationIdentity =
+	source->realizationIdentity.getValue();
+    summary.ownerSourceStale = source->stale.getValue();
+    summary.ownerStaleReason = source->staleReason.getValue();
+}
+
+static void
+realized_shape_summary_bounds(const SoMFVec3f &points,
+	BRLObolRealizedShapeSummary &summary)
+{
+    summary.bounds.makeEmpty();
+    summary.boundsValid = FALSE;
+    for (int i = 0; i < points.getNum(); i++) {
+	summary.bounds.extendBy(points[i]);
+	summary.boundsValid = TRUE;
+    }
+}
+
+static void
+realized_vlist_shape_summary(const SoBRLVListShape *shape,
+	BRLObolRealizedShapeSummary &summary)
+{
+    summary = BRLObolRealizedShapeSummary();
+    if (!shape)
+	return;
+
+    summary.valid = TRUE;
+    summary.shapeKind = BRLObolRealizedShapeSummary::SHAPE_VLIST;
+    realized_shape_summary_common(shape, summary);
+    summary.pointCount = shape->point.getNum();
+    summary.commandCount = shape->command.getNum();
+    summary.segmentCount = shape->getSegmentCount();
+    summary.pointPrimitiveCount = shape->getPointPrimitiveCount();
+    realized_shape_summary_bounds(shape->point, summary);
+}
+
+static void
+realized_mesh_shape_summary(const SoBRLMeshShape *shape,
+	BRLObolRealizedShapeSummary &summary)
+{
+    summary = BRLObolRealizedShapeSummary();
+    if (!shape)
+	return;
+
+    summary.valid = TRUE;
+    summary.shapeKind = BRLObolRealizedShapeSummary::SHAPE_MESH;
+    realized_shape_summary_common(shape, summary);
+    summary.pointCount = shape->point.getNum();
+    summary.indexCount = shape->coordIndex.getNum();
+    summary.triangleCount = shape->getTriangleCount();
+    realized_shape_summary_bounds(shape->point, summary);
+}
+
+static SbBool
+find_realized_shape_summary_in_node(SoNode *node, int &index,
+	BRLObolRealizedShapeSummary &summary)
+{
+    if (!node)
+	return FALSE;
+
+    if (node->isOfType(SoBRLVListShape::getClassTypeId())) {
+	if (index == 0) {
+	    realized_vlist_shape_summary(
+		    static_cast<SoBRLVListShape *>(node), summary);
+	    return TRUE;
+	}
+	index--;
+	return FALSE;
+    }
+
+    if (node->isOfType(SoBRLMeshShape::getClassTypeId())) {
+	if (index == 0) {
+	    realized_mesh_shape_summary(
+		    static_cast<SoBRLMeshShape *>(node), summary);
+	    return TRUE;
+	}
+	index--;
+	return FALSE;
+    }
+
+    if (node->isOfType(SoGroup::getClassTypeId())) {
+	SoGroup *group = static_cast<SoGroup *>(node);
+	for (int i = 0; i < group->getNumChildren(); i++) {
+	    if (find_realized_shape_summary_in_node(group->getChild(i),
+		    index, summary))
+		return TRUE;
+	}
+    }
+
+    return FALSE;
+}
+
+int
+SoBRLDatabaseSource::getRealizedShapeSummaryCount(void) const
+{
+    return this->getRealizedShapeCount() + this->getRealizedMeshCount();
+}
+
+SbBool
+SoBRLDatabaseSource::getRealizedShapeSummary(int index,
+	BRLObolRealizedShapeSummary &summary) const
+{
+    summary = BRLObolRealizedShapeSummary();
+    if (index < 0)
+	return FALSE;
+
+    int remaining = index;
+    for (int i = 0; i < this->getNumChildren(); i++) {
+	if (find_realized_shape_summary_in_node(this->getChild(i),
+		remaining, summary)) {
+	    realized_shape_summary_owner(this, -1, summary);
+	    return TRUE;
+	}
+    }
+
+    return FALSE;
+}
+
+SbBool
+SoBRLDatabaseSource::getSummary(BRLObolDatabaseSourceSummary &summary) const
+{
+    summary = BRLObolDatabaseSourceSummary();
+    summary.valid = TRUE;
+    summary.path = this->path.getValue();
+    summary.drawMode = this->drawMode.getValue();
+    summary.sourceRevision = this->sourceRevision.getValue();
+    summary.inputsRevision = this->inputsRevision.getValue();
+    summary.viewRevision = this->viewRevision.getValue();
+    summary.realizedRevision = this->realizedRevision.getValue();
+    summary.realizedSourceRevision = this->realizedSourceRevision.getValue();
+    summary.realizedInputsRevision = this->realizedInputsRevision.getValue();
+    summary.realizedViewRevision = this->realizedViewRevision.getValue();
+    summary.realizationStatus = this->realizationStatus.getValue();
+    summary.realizationDiagnostic = this->realizationDiagnostic.getValue();
+    summary.realizationIdentity = this->realizationIdentity.getValue();
+    summary.visible = this->visible.getValue();
+    summary.highlighted = this->highlighted.getValue();
+    summary.lineStyle = this->lineStyle.getValue();
+    summary.lineWidth = this->lineWidth.getValue();
+    summary.transparency = this->transparency.getValue();
+    summary.materialColorValid = this->materialColorValid.getValue();
+    summary.materialColor = this->materialColor.getValue();
+    summary.materialRevision = this->materialRevision.getValue();
+    summary.colorOverride = this->colorOverride.getValue();
+    summary.color = this->color.getValue();
+    summary.stale = this->stale.getValue();
+    summary.staleReason = this->staleReason.getValue();
+    summary.realizedShapeCount = this->getRealizedShapeCount();
+    summary.realizedMeshCount = this->getRealizedMeshCount();
+    summary.realizedMaterialObjectCount =
+	this->getRealizedMaterialObjectCount();
+    return TRUE;
 }

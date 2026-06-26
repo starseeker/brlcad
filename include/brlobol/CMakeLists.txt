@@ -25,6 +25,7 @@ set(
   pick_detail.h
   realize_action.h
   scene_controller.h
+  scene_group.h
   snap_action.h
   source_mesh_request.h
   view_controller.h

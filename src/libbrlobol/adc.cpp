@@ -8,6 +8,7 @@
 #include "common.h"
 
 #include "brlobol/adc.h"
+#include "brlobol/lod_realization.h"
 #include "brlobol/vlist_shape.h"
 
 #include <cmath>
@@ -82,6 +83,19 @@ SoBRLADC::rebuildGeometry(void)
 
     SoBRLVListShape *shape = new SoBRLVListShape;
     shape->sourcePath = this->overlayId.getValue();
+    shape->displayName = this->overlayId.getValue();
+    shape->geometryName = "adc";
+    shape->sourceIdentity = this->overlayId.getValue();
+    shape->cacheIdentity = this->overlayId.getValue();
+    shape->databaseIntent = FALSE;
+    shape->overlayIntent = TRUE;
+    shape->hudIntent = FALSE;
+    shape->localSource = TRUE;
+    shape->sharedSource = FALSE;
+    shape->nonDatabaseSource = TRUE;
+    shape->drawMode = BRLOBOL_LOD_DRAW_DIAGNOSTIC;
+    shape->recordRole = "overlay";
+    shape->geometryKind = "line";
     shape->sourceId = static_cast<uint32_t>(d);
     shape->setLineSet(points, commands, 8);
     this->addChild(shape);

@@ -14,12 +14,14 @@
 #include "wdb.h"
 
 #include <Inventor/SbBox.h>
+#include <Inventor/SbMatrix.h>
 #include <Inventor/SbViewportRegion.h>
 #include <Inventor/SbVec3f.h>
 #include <Inventor/SoPickedPoint.h>
 #include <Inventor/actions/SoGetBoundingBoxAction.h>
 #include <Inventor/actions/SoRayPickAction.h>
 #include <Inventor/nodes/SoOrthographicCamera.h>
+#include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoSeparator.h>
 
 #include <chrono>
@@ -83,6 +85,12 @@ make_lod_mesh(const char *path, const char *name)
     mesh->sourceName = name;
     mesh->setIndexedTriangles(points, 3, indices, 3);
     return mesh;
+}
+
+static int
+matrix_nearly_equal(const SbMatrix &a, const SbMatrix &b)
+{
+    return a.equals(b, 0.000001f);
 }
 
 static int
@@ -776,6 +784,1580 @@ test_update_action_direct(void)
 }
 
 static int
+test_scene_database_source_summary(void)
+{
+    SoSeparator *root = new SoSeparator;
+    root->ref();
+
+    SoSeparator *nonSourceChild = new SoSeparator;
+    root->addChild(nonSourceChild);
+
+    SoBRLDatabaseSource *source = new SoBRLDatabaseSource;
+    source->path = "/summary/source";
+    source->sourceRevision = 11;
+    source->inputsRevision = 2;
+    source->viewRevision = 3;
+    source->highlighted = TRUE;
+    source->lineStyle = 2;
+    source->lineWidth = 3;
+    source->transparency = 0.2f;
+    source->materialColorValid = TRUE;
+    source->materialColor = SbColor(0.1f, 0.2f, 0.3f);
+    source->materialRevision = 55;
+    root->addChild(source);
+
+    SoBRLSceneController scene(root);
+    const uint64_t initialStructuralRevision = scene.getStructuralRevision();
+    const uint64_t initialFrameRevision = scene.getFrameRevision();
+    BRLObolSceneSummary sceneSummary;
+    BRLObolDatabaseSourceSummary summary;
+    if (scene.getDatabaseSourceCount() != 1 ||
+	    initialStructuralRevision == 0 ||
+	    initialFrameRevision == 0 ||
+	    !scene.getSceneSummary(sceneSummary) ||
+	    !sceneSummary.valid ||
+	    !sceneSummary.hasRoot ||
+	    !sceneSummary.rootIsGroup ||
+	    sceneSummary.rootChildCount != 2 ||
+	    sceneSummary.databaseSourceCount != 1 ||
+	    sceneSummary.nonDatabaseRootChildCount != 1 ||
+	    sceneSummary.structuralRevision != initialStructuralRevision ||
+	    sceneSummary.frameRevision != initialFrameRevision ||
+	    scene.getDatabaseSource(0) != source ||
+	    scene.getDatabaseSource(1) != NULL ||
+	    !scene.getDatabaseSourceSummary(0, summary) ||
+	    !summary.valid ||
+	    strcmp(summary.path.getString(), "/summary/source") != 0 ||
+	    !summary.hasParent ||
+	    summary.drawTreeDepth != 1 ||
+	    strcmp(summary.parentGroupPath.getString(), "/") != 0 ||
+	    summary.sourceRevision != 11 ||
+	    summary.inputsRevision != 2 ||
+	    summary.viewRevision != 3 ||
+	    !summary.stale ||
+	    !(summary.staleReason & SoBRLDatabaseSource::STALE_SOURCE) ||
+	    summary.realizationStatus != SoBRLDatabaseSource::UNREALIZED ||
+	    summary.realizationIdentity.getLength() != 0 ||
+	    summary.realizedShapeCount != 0 ||
+	    summary.realizedMeshCount != 0) {
+	printf("FAIL: scene controller should summarize initial database source state\n");
+	root->unref();
+	return 1;
+    }
+
+    {
+	BRLObolViewController view(root, NULL);
+	BRLObolDatabaseSourceSummary viewSummary;
+	if (view.getDatabaseSourceCount() != 1 ||
+		view.getDatabaseSource(0) != source ||
+		!view.getDatabaseSourceSummary(0, viewSummary) ||
+		!viewSummary.hasParent ||
+		strcmp(viewSummary.parentGroupPath.getString(), "/") != 0) {
+	    printf("FAIL: view controller should delegate database source lookup to scene controller\n");
+	    root->unref();
+	    return 1;
+	}
+    }
+
+    if (!scene.realizePending() ||
+	    scene.getStructuralRevision() != initialStructuralRevision ||
+	    scene.getFrameRevision() == initialFrameRevision ||
+	    !scene.getSceneSummary(sceneSummary) ||
+	    sceneSummary.rootChildCount != 2 ||
+	    sceneSummary.databaseSourceCount != 1 ||
+	    sceneSummary.nonDatabaseRootChildCount != 1 ||
+	    sceneSummary.structuralRevision != scene.getStructuralRevision() ||
+	    sceneSummary.frameRevision != scene.getFrameRevision() ||
+	    sceneSummary.lastVisitedSourceCount != 1 ||
+	    sceneSummary.lastRealizedSourceCount != 1 ||
+	    sceneSummary.lastFailedSourceCount != 0 ||
+	    !scene.getDatabaseSourceSummary(0, summary) ||
+	    summary.stale ||
+	    summary.staleReason != SoBRLDatabaseSource::STALE_NONE ||
+	    summary.realizationStatus != SoBRLDatabaseSource::REALIZED ||
+	    summary.realizedSourceRevision != 11 ||
+	    summary.realizedInputsRevision != 2 ||
+	    summary.realizedViewRevision != 3 ||
+	    summary.realizedShapeCount != 1 ||
+	    summary.realizedMeshCount != 0 ||
+	    summary.realizationIdentity.getLength() == 0 ||
+	    !strstr(summary.realizationIdentity.getString(),
+		"source=11;inputs=2;view=3")) {
+	printf("FAIL: scene controller should summarize realized database source state\n");
+	root->unref();
+	return 1;
+    }
+    SbString firstIdentity = summary.realizationIdentity;
+    const uint64_t realizedFrameRevision = scene.getFrameRevision();
+    SoBRLVListShape *realizedShape = source->getRealizedShape();
+    if (!realizedShape ||
+	    strcmp(realizedShape->ownerSourcePath.getValue().getString(),
+		"/summary/source") != 0 ||
+	    realizedShape->ownerSourceRevision.getValue() != 11 ||
+	    realizedShape->ownerInputsRevision.getValue() != 2 ||
+	    realizedShape->ownerViewRevision.getValue() != 3 ||
+	    realizedShape->ownerRealizedSourceRevision.getValue() != 11 ||
+	    realizedShape->ownerRealizedInputsRevision.getValue() != 2 ||
+	    realizedShape->ownerRealizedViewRevision.getValue() != 3 ||
+	    realizedShape->ownerRealizationStatus.getValue() !=
+		SoBRLDatabaseSource::REALIZED ||
+	    strcmp(realizedShape->ownerRealizationIdentity.getValue().getString(),
+		firstIdentity.getString()) != 0 ||
+	    realizedShape->ownerSourceStale.getValue() ||
+	    realizedShape->ownerStaleReason.getValue() !=
+		SoBRLDatabaseSource::STALE_NONE) {
+	printf("FAIL: realized shape node should mirror source owner state after realization\n");
+	root->unref();
+	return 1;
+    }
+
+    source->inputsRevision = 4;
+    if (!scene.getDatabaseSourceSummary(0, summary) ||
+	    scene.getFrameRevision() != realizedFrameRevision ||
+	    !summary.stale ||
+	    !(summary.staleReason & SoBRLDatabaseSource::STALE_INPUTS) ||
+	    summary.realizationStatus != SoBRLDatabaseSource::UNREALIZED ||
+	    strcmp(summary.realizationIdentity.getString(),
+		firstIdentity.getString()) != 0 ||
+	    !realizedShape->ownerSourceStale.getValue() ||
+	    !(realizedShape->ownerStaleReason.getValue() &
+		SoBRLDatabaseSource::STALE_INPUTS) ||
+	    realizedShape->ownerRealizationStatus.getValue() !=
+		SoBRLDatabaseSource::UNREALIZED ||
+	    strcmp(realizedShape->ownerRealizationIdentity.getValue().getString(),
+		firstIdentity.getString()) != 0) {
+	printf("FAIL: scene controller source summary should expose stale source state before refresh\n");
+	root->unref();
+	return 1;
+    }
+
+    if (!scene.realizePending() ||
+	    scene.getStructuralRevision() != initialStructuralRevision ||
+	    scene.getFrameRevision() == realizedFrameRevision ||
+	    !scene.getSceneSummary(sceneSummary) ||
+	    sceneSummary.rootChildCount != 2 ||
+	    sceneSummary.databaseSourceCount != 1 ||
+	    sceneSummary.structuralRevision != scene.getStructuralRevision() ||
+	    sceneSummary.frameRevision != scene.getFrameRevision() ||
+	    sceneSummary.lastVisitedSourceCount != 1 ||
+	    sceneSummary.lastRealizedSourceCount != 1 ||
+	    sceneSummary.lastFailedSourceCount != 0 ||
+	    !scene.getDatabaseSourceSummary(0, summary) ||
+	    summary.stale ||
+	    summary.realizedInputsRevision != 4 ||
+	    summary.realizationIdentity.getLength() == 0 ||
+	    strcmp(summary.realizationIdentity.getString(),
+		firstIdentity.getString()) == 0 ||
+	    !strstr(summary.realizationIdentity.getString(),
+		"source=11;inputs=4;view=3")) {
+	printf("FAIL: scene controller source summary should update realization identity after refresh\n");
+	root->unref();
+	return 1;
+    }
+    realizedShape = source->getRealizedShape();
+    if (!realizedShape ||
+	    realizedShape->ownerInputsRevision.getValue() != 4 ||
+	    realizedShape->ownerRealizedInputsRevision.getValue() != 4 ||
+	    realizedShape->ownerRealizationStatus.getValue() !=
+		SoBRLDatabaseSource::REALIZED ||
+	    strcmp(realizedShape->ownerRealizationIdentity.getValue().getString(),
+		summary.realizationIdentity.getString()) != 0 ||
+	    realizedShape->ownerSourceStale.getValue() ||
+	    realizedShape->ownerStaleReason.getValue() !=
+		SoBRLDatabaseSource::STALE_NONE) {
+	printf("FAIL: realized shape node should refresh mirrored source owner state\n");
+	root->unref();
+	return 1;
+    }
+
+    BRLObolRealizedShapeSummary shapeSummary;
+    if (source->getRealizedShapeSummaryCount() != 1 ||
+	    scene.getRealizedShapeSummaryCount() != 1 ||
+	    !source->getRealizedShapeSummary(0, shapeSummary) ||
+	    !shapeSummary.valid ||
+	    shapeSummary.shapeKind != BRLObolRealizedShapeSummary::SHAPE_VLIST ||
+	    strcmp(shapeSummary.path.getString(), "/summary/source") != 0 ||
+	    shapeSummary.ownerSourceIndex != -1 ||
+	    strcmp(shapeSummary.ownerSourcePath.getString(),
+		"/summary/source") != 0 ||
+	    shapeSummary.ownerDrawMode != source->drawMode.getValue() ||
+	    shapeSummary.ownerSourceRevision != 11 ||
+	    shapeSummary.ownerInputsRevision != 4 ||
+	    shapeSummary.ownerViewRevision != 3 ||
+	    shapeSummary.ownerRealizedRevision != summary.realizedRevision ||
+	    shapeSummary.ownerRealizedSourceRevision != 11 ||
+	    shapeSummary.ownerRealizedInputsRevision != 4 ||
+	    shapeSummary.ownerRealizedViewRevision != 3 ||
+	    shapeSummary.ownerRealizationStatus !=
+		SoBRLDatabaseSource::REALIZED ||
+	    shapeSummary.ownerRealizationDiagnostic.getLength() != 0 ||
+	    strcmp(shapeSummary.ownerRealizationIdentity.getString(),
+		summary.realizationIdentity.getString()) != 0 ||
+	    shapeSummary.ownerSourceStale ||
+	    shapeSummary.ownerStaleReason != SoBRLDatabaseSource::STALE_NONE ||
+	    strcmp(shapeSummary.sourceName.getString(), "summary/source") != 0 ||
+	    strcmp(shapeSummary.sourceType.getString(), "prototype") != 0 ||
+	    strcmp(shapeSummary.displayName.getString(), "summary/source") != 0 ||
+	    !shapeSummary.localSource ||
+	    !shapeSummary.nonDatabaseSource ||
+	    shapeSummary.databaseIntent ||
+	    shapeSummary.drawMode != BRLOBOL_LOD_DRAW_DIAGNOSTIC ||
+	    strcmp(shapeSummary.recordRole.getString(), "prototype") != 0 ||
+	    !shapeSummary.visible ||
+	    !shapeSummary.selectable ||
+	    shapeSummary.pointCount != 5 ||
+	    shapeSummary.commandCount != 5 ||
+	    shapeSummary.segmentCount != 4 ||
+	    shapeSummary.pointPrimitiveCount != 0 ||
+	    !shapeSummary.boundsValid) {
+	printf("FAIL: database source should summarize realized vlist shape metadata\n");
+	root->unref();
+	return 1;
+    }
+    BRLObolRealizedShapeSummary sceneShapeSummary;
+    if (!scene.getRealizedShapeSummary(0, sceneShapeSummary) ||
+	    !sceneShapeSummary.valid ||
+	    sceneShapeSummary.shapeKind !=
+		BRLObolRealizedShapeSummary::SHAPE_VLIST ||
+	    strcmp(sceneShapeSummary.path.getString(),
+		shapeSummary.path.getString()) != 0 ||
+	    sceneShapeSummary.ownerSourceIndex != 0 ||
+	    strcmp(sceneShapeSummary.ownerSourcePath.getString(),
+		"/summary/source") != 0 ||
+	    strcmp(sceneShapeSummary.ownerRealizationIdentity.getString(),
+		summary.realizationIdentity.getString()) != 0 ||
+	    scene.getRealizedShapeSummary(1, sceneShapeSummary)) {
+	printf("FAIL: scene controller should forward realized vlist shape summaries\n");
+	root->unref();
+	return 1;
+    }
+
+    SoBRLMeshShape *summaryMesh = make_mesh("/summary/mesh", "mesh");
+    summaryMesh->sourceType = "bot";
+    summaryMesh->sourceId = 44;
+    summaryMesh->displayName = "Summary Mesh";
+    summaryMesh->geometryName = "summary mesh geometry";
+    summaryMesh->cacheIdentity = "cache://summary/mesh#44";
+    summaryMesh->sourceIdentity = "db://summary/mesh";
+    summaryMesh->databaseIntent = TRUE;
+    summaryMesh->localSource = FALSE;
+    summaryMesh->nonDatabaseSource = FALSE;
+    summaryMesh->drawMode = BRLOBOL_LOD_DRAW_SHADED;
+    summaryMesh->recordRole = "database";
+    summaryMesh->geometryKind = "surface";
+    summaryMesh->highlighted = TRUE;
+    summaryMesh->lineStyle = 1;
+    summaryMesh->lineWidth = 5;
+    summaryMesh->transparency = 0.35f;
+    summaryMesh->materialColorValid = TRUE;
+    summaryMesh->materialColor = SbColor(0.25f, 0.5f, 0.75f);
+    summaryMesh->materialRevision = 77;
+    source->addChild(summaryMesh);
+    if (source->getRealizedShapeSummaryCount() != 2 ||
+	    scene.getRealizedShapeSummaryCount() != 2 ||
+	    !source->getRealizedShapeSummary(1, shapeSummary) ||
+	    !shapeSummary.valid ||
+	    shapeSummary.shapeKind != BRLObolRealizedShapeSummary::SHAPE_MESH ||
+	    strcmp(shapeSummary.path.getString(), "/summary/mesh") != 0 ||
+	    shapeSummary.ownerSourceIndex != -1 ||
+	    strcmp(shapeSummary.ownerSourcePath.getString(),
+		"/summary/source") != 0 ||
+	    shapeSummary.ownerInputsRevision != 4 ||
+	    shapeSummary.ownerRealizationStatus !=
+		SoBRLDatabaseSource::REALIZED ||
+	    strcmp(shapeSummary.sourceName.getString(), "mesh") != 0 ||
+	    strcmp(shapeSummary.sourceType.getString(), "bot") != 0 ||
+	    strcmp(shapeSummary.displayName.getString(), "Summary Mesh") != 0 ||
+	    strcmp(shapeSummary.cacheIdentity.getString(),
+		"cache://summary/mesh#44") != 0 ||
+	    strcmp(shapeSummary.sourceIdentity.getString(),
+		"db://summary/mesh") != 0 ||
+	    !shapeSummary.databaseIntent ||
+	    shapeSummary.localSource ||
+	    shapeSummary.nonDatabaseSource ||
+	    shapeSummary.drawMode != BRLOBOL_LOD_DRAW_SHADED ||
+	    strcmp(shapeSummary.recordRole.getString(), "database") != 0 ||
+	    strcmp(shapeSummary.geometryKind.getString(), "surface") != 0 ||
+	    shapeSummary.materialRevision != 77 ||
+	    shapeSummary.pointCount != 3 ||
+	    shapeSummary.indexCount != 3 ||
+	    shapeSummary.triangleCount != 1 ||
+	    !shapeSummary.boundsValid ||
+	    source->getRealizedShapeSummary(2, shapeSummary)) {
+	printf("FAIL: database source should summarize realized mesh shape metadata\n");
+	root->unref();
+	return 1;
+    }
+    if (!scene.getRealizedShapeSummary(1, sceneShapeSummary) ||
+	    !sceneShapeSummary.valid ||
+	    sceneShapeSummary.shapeKind !=
+		BRLObolRealizedShapeSummary::SHAPE_MESH ||
+	    strcmp(sceneShapeSummary.path.getString(), "/summary/mesh") != 0 ||
+	    sceneShapeSummary.ownerSourceIndex != 0 ||
+	    strcmp(sceneShapeSummary.ownerSourcePath.getString(),
+		"/summary/source") != 0 ||
+	    scene.getRealizedShapeSummary(2, sceneShapeSummary)) {
+	printf("FAIL: scene controller should forward realized mesh shape summaries\n");
+	root->unref();
+	return 1;
+    }
+
+    SoBRLMaterialObject *summaryMaterial = new SoBRLMaterialObject;
+    summaryMaterial->sourcePath = "/summary/material";
+    summaryMaterial->sourceName = "mat";
+    summaryMaterial->sourceType = "material";
+    summaryMaterial->sourceId = 77;
+    summaryMaterial->materialName = "matte";
+    summaryMaterial->parentName = "base";
+    summaryMaterial->materialSource = "database";
+    summaryMaterial->addProperty("physical", "density", "7.8");
+    summaryMaterial->addProperty("optical", "finish", "matte");
+    source->addChild(summaryMaterial);
+
+    BRLObolRealizedMaterialSummary materialSummary;
+    SbString propertyGroup;
+    SbString propertyName;
+    SbString propertyValue;
+    if (source->getRealizedMaterialSummaryCount() != 1 ||
+	    scene.getRealizedMaterialSummaryCount() != 1 ||
+	    !source->getRealizedMaterialSummary(0, materialSummary) ||
+	    !materialSummary.valid ||
+	    strcmp(materialSummary.sourcePath.getString(),
+		"/summary/material") != 0 ||
+	    strcmp(materialSummary.sourceName.getString(), "mat") != 0 ||
+	    strcmp(materialSummary.sourceType.getString(), "material") != 0 ||
+	    materialSummary.sourceId != 77 ||
+	    materialSummary.ownerSourceIndex != -1 ||
+	    strcmp(materialSummary.ownerSourcePath.getString(),
+		"/summary/source") != 0 ||
+	    materialSummary.ownerInputsRevision != 4 ||
+	    materialSummary.ownerRealizationStatus !=
+		SoBRLDatabaseSource::REALIZED ||
+	    strcmp(materialSummary.ownerRealizationIdentity.getString(),
+		summary.realizationIdentity.getString()) != 0 ||
+	    strcmp(materialSummary.materialName.getString(), "matte") != 0 ||
+	    strcmp(materialSummary.parentName.getString(), "base") != 0 ||
+	    strcmp(materialSummary.materialSource.getString(), "database") != 0 ||
+	    materialSummary.propertyCount != 2 ||
+	    !source->getRealizedMaterialProperty(0, 0, propertyGroup,
+		propertyName, propertyValue) ||
+	    strcmp(propertyGroup.getString(), "physical") != 0 ||
+	    strcmp(propertyName.getString(), "density") != 0 ||
+	    strcmp(propertyValue.getString(), "7.8") != 0 ||
+	    source->getRealizedMaterialProperty(0, 2, propertyGroup,
+		propertyName, propertyValue) ||
+	    source->getRealizedMaterialSummary(1, materialSummary)) {
+	printf("FAIL: database source should summarize realized material objects\n");
+	root->unref();
+	return 1;
+    }
+
+    BRLObolRealizedMaterialSummary sceneMaterialSummary;
+    if (!scene.getRealizedMaterialSummary(0, sceneMaterialSummary) ||
+	    !sceneMaterialSummary.valid ||
+	    sceneMaterialSummary.ownerSourceIndex != 0 ||
+	    strcmp(sceneMaterialSummary.ownerSourcePath.getString(),
+		"/summary/source") != 0 ||
+	    strcmp(sceneMaterialSummary.sourcePath.getString(),
+		"/summary/material") != 0 ||
+	    !scene.getRealizedMaterialProperty(0, 1, propertyGroup,
+		propertyName, propertyValue) ||
+	    strcmp(propertyGroup.getString(), "optical") != 0 ||
+	    strcmp(propertyName.getString(), "finish") != 0 ||
+	    strcmp(propertyValue.getString(), "matte") != 0 ||
+	    scene.getRealizedMaterialProperty(1, 0, propertyGroup,
+		propertyName, propertyValue) ||
+	    scene.getRealizedMaterialSummary(1, sceneMaterialSummary)) {
+	printf("FAIL: scene controller should forward realized material object summaries\n");
+	root->unref();
+	return 1;
+    }
+
+    BRLObolSceneTreeSummary treeSummary;
+    if (source->getRealizedTreeSummaryCount() != 4 ||
+	    !source->getRealizedTreeSummary(0, treeSummary) ||
+	    !treeSummary.valid ||
+	    treeSummary.nodeKind !=
+		BRLObolSceneTreeSummary::NODE_DATABASE_SOURCE ||
+	    !treeSummary.isGroup ||
+	    treeSummary.isShape ||
+	    treeSummary.hasParent ||
+	    treeSummary.drawTreeDepth != 0 ||
+	    treeSummary.childCount != 3 ||
+	    treeSummary.ownerSourceIndex != -1 ||
+	    strcmp(treeSummary.ownerSourcePath.getString(),
+		"/summary/source") != 0 ||
+	    strcmp(treeSummary.path.getString(), "/summary/source") != 0 ||
+	    !source->getRealizedTreeSummary(1, treeSummary) ||
+	    !treeSummary.valid ||
+	    treeSummary.nodeKind != BRLObolSceneTreeSummary::NODE_VLIST_SHAPE ||
+	    !treeSummary.isShape ||
+	    !treeSummary.hasParent ||
+	    treeSummary.drawTreeDepth != 1 ||
+	    treeSummary.childCount != 0 ||
+	    strcmp(treeSummary.path.getString(), "/summary/source") != 0 ||
+	    !source->getRealizedTreeSummary(2, treeSummary) ||
+	    treeSummary.nodeKind != BRLObolSceneTreeSummary::NODE_MESH_SHAPE ||
+	    strcmp(treeSummary.path.getString(), "/summary/mesh") != 0 ||
+	    !source->getRealizedTreeSummary(3, treeSummary) ||
+	    treeSummary.nodeKind !=
+		BRLObolSceneTreeSummary::NODE_MATERIAL_OBJECT ||
+	    !treeSummary.isMaterialObject ||
+	    strcmp(treeSummary.path.getString(), "/summary/material") != 0 ||
+	    strcmp(treeSummary.displayName.getString(), "matte") != 0 ||
+	    source->getRealizedTreeSummary(4, treeSummary)) {
+	printf("FAIL: database source should summarize realized source tree nodes\n");
+	root->unref();
+	return 1;
+    }
+
+    if (scene.getSceneTreeSummaryCount() != 6 ||
+	    !scene.getSceneTreeSummary(0, treeSummary) ||
+	    !treeSummary.valid ||
+	    treeSummary.nodeKind != BRLObolSceneTreeSummary::NODE_GROUP ||
+	    !treeSummary.isGroup ||
+	    treeSummary.hasParent ||
+	    treeSummary.drawTreeDepth != 0 ||
+	    treeSummary.childCount != 2 ||
+	    !scene.getSceneTreeSummary(1, treeSummary) ||
+	    treeSummary.nodeKind != BRLObolSceneTreeSummary::NODE_GROUP ||
+	    !treeSummary.hasParent ||
+	    treeSummary.ownerSourceIndex != -1 ||
+	    treeSummary.drawTreeDepth != 1 ||
+	    !scene.getSceneTreeSummary(2, treeSummary) ||
+	    treeSummary.nodeKind !=
+		BRLObolSceneTreeSummary::NODE_DATABASE_SOURCE ||
+	    treeSummary.ownerSourceIndex != 0 ||
+	    strcmp(treeSummary.ownerSourcePath.getString(),
+		"/summary/source") != 0 ||
+	    treeSummary.drawTreeDepth != 1 ||
+	    !treeSummary.hasParent ||
+	    !scene.getSceneTreeSummary(3, treeSummary) ||
+	    treeSummary.nodeKind != BRLObolSceneTreeSummary::NODE_VLIST_SHAPE ||
+	    treeSummary.ownerSourceIndex != 0 ||
+	    treeSummary.drawTreeDepth != 2 ||
+	    !scene.getSceneTreeSummary(4, treeSummary) ||
+	    treeSummary.nodeKind != BRLObolSceneTreeSummary::NODE_MESH_SHAPE ||
+	    strcmp(treeSummary.path.getString(), "/summary/mesh") != 0 ||
+	    !scene.getSceneTreeSummary(5, treeSummary) ||
+	    treeSummary.nodeKind !=
+		BRLObolSceneTreeSummary::NODE_MATERIAL_OBJECT ||
+	    strcmp(treeSummary.path.getString(), "/summary/material") != 0 ||
+	    scene.getSceneTreeSummary(6, treeSummary)) {
+	printf("FAIL: scene controller should summarize Obol scene tree nodes\n");
+	root->unref();
+	return 1;
+    }
+
+    BRLObolSceneDisplaySummary displaySummary;
+    if (source->getRealizedDisplaySummaryCount() !=
+		source->getRealizedTreeSummaryCount() ||
+	    !source->getRealizedDisplaySummary(0, displaySummary) ||
+	    !displaySummary.valid ||
+	    !displaySummary.isDatabaseSource ||
+	    !displaySummary.hasDrawIntent ||
+	    strcmp(displaySummary.intentPath.getString(),
+		"/summary/source") != 0 ||
+	    displaySummary.intentDrawMode != source->drawMode.getValue() ||
+	    displaySummary.drawMode != source->drawMode.getValue() ||
+	    !displaySummary.visible ||
+	    !displaySummary.highlighted ||
+	    displaySummary.lineStyle != 2 ||
+	    displaySummary.lineWidth != 3 ||
+	    displaySummary.transparency < 0.19 ||
+	    displaySummary.transparency > 0.21 ||
+	    !displaySummary.materialValid ||
+	    displaySummary.materialRevision != 55 ||
+	    displaySummary.materialColor[0] < 0.09f ||
+	    displaySummary.materialColor[0] > 0.11f ||
+	    displaySummary.materialColor[1] < 0.19f ||
+	    displaySummary.materialColor[1] > 0.21f ||
+	    displaySummary.materialColor[2] < 0.29f ||
+	    displaySummary.materialColor[2] > 0.31f ||
+	    displaySummary.ownerSourceIndex != -1 ||
+	    strcmp(displaySummary.ownerSourcePath.getString(),
+		"/summary/source") != 0 ||
+	    !source->getRealizedDisplaySummary(1, displaySummary) ||
+	    displaySummary.nodeKind != BRLObolSceneTreeSummary::NODE_VLIST_SHAPE ||
+	    !displaySummary.hasDrawIntent ||
+	    strcmp(displaySummary.intentPath.getString(),
+		"/summary/source") != 0 ||
+	    displaySummary.intentDrawMode != BRLOBOL_LOD_DRAW_DIAGNOSTIC ||
+	    !displaySummary.visible ||
+	    displaySummary.highlighted ||
+	    displaySummary.materialColor[0] < 0.99f ||
+	    !source->getRealizedDisplaySummary(2, displaySummary) ||
+	    displaySummary.nodeKind != BRLObolSceneTreeSummary::NODE_MESH_SHAPE ||
+	    strcmp(displaySummary.intentPath.getString(), "/summary/mesh") != 0 ||
+	    !displaySummary.highlighted ||
+	    displaySummary.lineStyle != 1 ||
+	    displaySummary.lineWidth != 5 ||
+	    displaySummary.transparency < 0.34 ||
+	    displaySummary.transparency > 0.36 ||
+	    displaySummary.materialRevision != 77 ||
+	    !displaySummary.materialValid ||
+	    displaySummary.materialColor[0] < 0.24f ||
+	    displaySummary.materialColor[0] > 0.26f ||
+	    displaySummary.materialColor[1] < 0.49f ||
+	    displaySummary.materialColor[1] > 0.51f ||
+	    displaySummary.materialColor[2] < 0.74f ||
+	    displaySummary.materialColor[2] > 0.76f ||
+	    !source->getRealizedDisplaySummary(3, displaySummary) ||
+	    displaySummary.nodeKind !=
+		BRLObolSceneTreeSummary::NODE_MATERIAL_OBJECT ||
+	    displaySummary.hasDrawIntent ||
+	    strcmp(displaySummary.path.getString(), "/summary/material") != 0 ||
+	    source->getRealizedDisplaySummary(4, displaySummary)) {
+	printf("FAIL: database source should summarize realized display state\n");
+	root->unref();
+	return 1;
+    }
+
+    if (scene.getSceneDisplaySummaryCount() !=
+		scene.getSceneTreeSummaryCount() ||
+	    !scene.getSceneDisplaySummary(0, displaySummary) ||
+	    !displaySummary.valid ||
+	    displaySummary.nodeKind != BRLObolSceneTreeSummary::NODE_GROUP ||
+	    displaySummary.hasDrawIntent ||
+	    displaySummary.ownerSourceIndex != -1 ||
+	    !scene.getSceneDisplaySummary(1, displaySummary) ||
+	    displaySummary.nodeKind != BRLObolSceneTreeSummary::NODE_GROUP ||
+	    displaySummary.hasDrawIntent ||
+	    displaySummary.ownerSourceIndex != -1 ||
+	    !scene.getSceneDisplaySummary(2, displaySummary) ||
+	    !displaySummary.isDatabaseSource ||
+	    displaySummary.ownerSourceIndex != 0 ||
+	    strcmp(displaySummary.ownerSourcePath.getString(),
+		"/summary/source") != 0 ||
+	    strcmp(displaySummary.intentPath.getString(),
+		"/summary/source") != 0 ||
+	    !displaySummary.visible ||
+	    !displaySummary.highlighted ||
+	    displaySummary.lineStyle != 2 ||
+	    displaySummary.lineWidth != 3 ||
+	    displaySummary.transparency < 0.19 ||
+	    displaySummary.transparency > 0.21 ||
+	    !displaySummary.materialValid ||
+	    displaySummary.materialRevision != 55 ||
+	    displaySummary.materialColor[0] < 0.09f ||
+	    displaySummary.materialColor[0] > 0.11f ||
+	    displaySummary.materialColor[2] < 0.29f ||
+	    displaySummary.materialColor[2] > 0.31f ||
+	    !scene.getSceneDisplaySummary(4, displaySummary) ||
+	    displaySummary.nodeKind != BRLObolSceneTreeSummary::NODE_MESH_SHAPE ||
+	    displaySummary.ownerSourceIndex != 0 ||
+	    !displaySummary.highlighted ||
+	    displaySummary.lineStyle != 1 ||
+	    displaySummary.lineWidth != 5 ||
+	    displaySummary.transparency < 0.34 ||
+	    displaySummary.transparency > 0.36 ||
+	    displaySummary.materialRevision != 77 ||
+	    displaySummary.materialColor[2] < 0.74f ||
+	    displaySummary.materialColor[2] > 0.76f ||
+	    !scene.getSceneDisplaySummary(5, displaySummary) ||
+	    displaySummary.nodeKind !=
+		BRLObolSceneTreeSummary::NODE_MATERIAL_OBJECT ||
+	    strcmp(displaySummary.path.getString(), "/summary/material") != 0 ||
+	    scene.getSceneDisplaySummary(6, displaySummary)) {
+	printf("FAIL: scene controller should summarize Obol scene display state\n");
+	root->unref();
+	return 1;
+    }
+
+    BRLObolSceneMaterialSummary materialStateSummary;
+    if (source->getRealizedSceneMaterialSummaryCount() !=
+		source->getRealizedTreeSummaryCount() ||
+	    !source->getRealizedSceneMaterialSummary(0,
+		materialStateSummary) ||
+	    !materialStateSummary.valid ||
+	    materialStateSummary.materialValid ||
+	    materialStateSummary.ownerSourceIndex != -1 ||
+	    !source->getRealizedSceneMaterialSummary(1,
+		materialStateSummary) ||
+	    !materialStateSummary.valid ||
+	    materialStateSummary.nodeKind !=
+		BRLObolSceneTreeSummary::NODE_VLIST_SHAPE ||
+	    !materialStateSummary.materialValid ||
+	    materialStateSummary.materialRevision != 0 ||
+	    materialStateSummary.materialColor[0] < 0.99f ||
+	    !source->getRealizedSceneMaterialSummary(2,
+		materialStateSummary) ||
+	    materialStateSummary.nodeKind !=
+		BRLObolSceneTreeSummary::NODE_MESH_SHAPE ||
+	    !materialStateSummary.materialValid ||
+	    materialStateSummary.materialRevision != 77 ||
+	    materialStateSummary.materialColor[0] < 0.24f ||
+	    materialStateSummary.materialColor[0] > 0.26f ||
+	    materialStateSummary.materialColor[2] < 0.74f ||
+	    materialStateSummary.materialColor[2] > 0.76f ||
+	    !source->getRealizedSceneMaterialSummary(3,
+		materialStateSummary) ||
+	    materialStateSummary.nodeKind !=
+		BRLObolSceneTreeSummary::NODE_MATERIAL_OBJECT ||
+	    materialStateSummary.materialValid ||
+	    source->getRealizedSceneMaterialSummary(4,
+		materialStateSummary)) {
+	printf("FAIL: database source should summarize realized shape material state\n");
+	root->unref();
+	return 1;
+    }
+
+    if (scene.getSceneMaterialSummaryCount() !=
+		scene.getSceneTreeSummaryCount() ||
+	    !scene.getSceneMaterialSummary(0, materialStateSummary) ||
+	    !materialStateSummary.valid ||
+	    materialStateSummary.materialValid ||
+	    !scene.getSceneMaterialSummary(4, materialStateSummary) ||
+	    materialStateSummary.nodeKind !=
+		BRLObolSceneTreeSummary::NODE_MESH_SHAPE ||
+	    materialStateSummary.ownerSourceIndex != 0 ||
+	    strcmp(materialStateSummary.ownerSourcePath.getString(),
+		"/summary/source") != 0 ||
+	    !materialStateSummary.materialValid ||
+	    materialStateSummary.materialRevision != 77 ||
+	    materialStateSummary.materialColor[1] < 0.49f ||
+	    materialStateSummary.materialColor[1] > 0.51f ||
+	    !scene.getSceneMaterialSummary(5, materialStateSummary) ||
+	    materialStateSummary.nodeKind !=
+		BRLObolSceneTreeSummary::NODE_MATERIAL_OBJECT ||
+	    materialStateSummary.materialValid ||
+	    scene.getSceneMaterialSummary(6, materialStateSummary)) {
+	printf("FAIL: scene controller should summarize Obol shape material state\n");
+	root->unref();
+	return 1;
+    }
+
+    BRLObolSceneBoundsSummary boundsSummary;
+    if (source->getRealizedBoundsSummaryCount() !=
+		source->getRealizedTreeSummaryCount() ||
+	    !source->getRealizedBoundsSummary(0, boundsSummary) ||
+	    !boundsSummary.valid ||
+	    boundsSummary.nodeKind !=
+		BRLObolSceneTreeSummary::NODE_DATABASE_SOURCE ||
+	    !boundsSummary.boundsValid ||
+	    boundsSummary.ownerSourceIndex != -1 ||
+	    strcmp(boundsSummary.ownerSourcePath.getString(),
+		"/summary/source") != 0 ||
+	    boundsSummary.bounds.getMin()[0] > -1.74f ||
+	    boundsSummary.bounds.getMax()[0] < 1.74f ||
+	    boundsSummary.bounds.getMin()[1] > -1.74f ||
+	    boundsSummary.bounds.getMax()[1] < 1.74f ||
+	    !source->getRealizedBoundsSummary(1, boundsSummary) ||
+	    boundsSummary.nodeKind != BRLObolSceneTreeSummary::NODE_VLIST_SHAPE ||
+	    !boundsSummary.boundsValid ||
+	    boundsSummary.bounds.getMin()[0] > -1.74f ||
+	    boundsSummary.bounds.getMax()[1] < 1.74f ||
+	    !source->getRealizedBoundsSummary(2, boundsSummary) ||
+	    boundsSummary.nodeKind != BRLObolSceneTreeSummary::NODE_MESH_SHAPE ||
+	    !boundsSummary.boundsValid ||
+	    boundsSummary.bounds.getMin()[0] < -0.01f ||
+	    boundsSummary.bounds.getMin()[0] > 0.01f ||
+	    boundsSummary.bounds.getMax()[0] < 0.99f ||
+	    boundsSummary.bounds.getMax()[1] < 0.99f ||
+	    !source->getRealizedBoundsSummary(3, boundsSummary) ||
+	    boundsSummary.nodeKind !=
+		BRLObolSceneTreeSummary::NODE_MATERIAL_OBJECT ||
+	    boundsSummary.boundsValid ||
+	    source->getRealizedBoundsSummary(4, boundsSummary)) {
+	printf("FAIL: database source should summarize realized subtree bounds\n");
+	root->unref();
+	return 1;
+    }
+
+    if (scene.getSceneBoundsSummaryCount() !=
+		scene.getSceneTreeSummaryCount() ||
+	    !scene.getSceneBoundsSummary(0, boundsSummary) ||
+	    !boundsSummary.valid ||
+	    boundsSummary.nodeKind != BRLObolSceneTreeSummary::NODE_GROUP ||
+	    !boundsSummary.boundsValid ||
+	    boundsSummary.ownerSourceIndex != -1 ||
+	    boundsSummary.bounds.getMin()[0] > -1.74f ||
+	    boundsSummary.bounds.getMax()[0] < 1.74f ||
+	    !scene.getSceneBoundsSummary(1, boundsSummary) ||
+	    boundsSummary.nodeKind != BRLObolSceneTreeSummary::NODE_GROUP ||
+	    boundsSummary.boundsValid ||
+	    !scene.getSceneBoundsSummary(2, boundsSummary) ||
+	    boundsSummary.nodeKind !=
+		BRLObolSceneTreeSummary::NODE_DATABASE_SOURCE ||
+	    boundsSummary.ownerSourceIndex != 0 ||
+	    strcmp(boundsSummary.ownerSourcePath.getString(),
+		"/summary/source") != 0 ||
+	    !boundsSummary.boundsValid ||
+	    !scene.getSceneBoundsSummary(4, boundsSummary) ||
+	    boundsSummary.nodeKind != BRLObolSceneTreeSummary::NODE_MESH_SHAPE ||
+	    boundsSummary.ownerSourceIndex != 0 ||
+	    boundsSummary.bounds.getMax()[0] < 0.99f ||
+	    boundsSummary.bounds.getMax()[1] < 0.99f ||
+	    !scene.getSceneBoundsSummary(5, boundsSummary) ||
+	    boundsSummary.nodeKind !=
+		BRLObolSceneTreeSummary::NODE_MATERIAL_OBJECT ||
+	    boundsSummary.boundsValid ||
+	    scene.getSceneBoundsSummary(6, boundsSummary)) {
+	printf("FAIL: scene controller should summarize Obol subtree bounds\n");
+	root->unref();
+	return 1;
+    }
+
+    root->unref();
+
+    SoSeparator *groupRoot = new SoSeparator;
+    groupRoot->ref();
+    SoBRLSceneController groupScene(groupRoot);
+    const uint64_t groupInitialStructuralRevision =
+	groupScene.getStructuralRevision();
+    const uint64_t groupInitialFrameRevision = groupScene.getFrameRevision();
+    SoGroup *createdLeaf = groupScene.ensureGroup("assembly/leaf");
+    const uint64_t afterGroupCreateStructuralRevision =
+	groupScene.getStructuralRevision();
+    const uint64_t afterGroupCreateFrameRevision =
+	groupScene.getFrameRevision();
+    SoBRLSceneGroup *retainedLeaf = NULL;
+    if (createdLeaf &&
+	    createdLeaf->isOfType(SoBRLSceneGroup::getClassTypeId()))
+	retainedLeaf = static_cast<SoBRLSceneGroup *>(createdLeaf);
+    if (groupScene.findGroup("/") != groupRoot ||
+	    groupScene.findGroup(NULL) != NULL ||
+	    !createdLeaf ||
+	    !retainedLeaf ||
+	    strcmp(retainedLeaf->groupPath.getValue().getString(),
+		"assembly/leaf") != 0 ||
+	    groupScene.findGroup("assembly/leaf") != createdLeaf ||
+	    groupScene.ensureGroup("/assembly/leaf") != createdLeaf ||
+	    groupScene.getStructuralRevision() !=
+		afterGroupCreateStructuralRevision ||
+	    groupScene.getFrameRevision() != afterGroupCreateFrameRevision ||
+	    groupScene.getGroupChildCount("/") != 1 ||
+	    groupScene.getGroupChildCount("assembly") != 1 ||
+	    groupScene.getGroupChildCount("missing") != -1 ||
+	    groupScene.getStructuralRevision() <=
+		groupInitialStructuralRevision ||
+	    groupScene.getFrameRevision() <= groupInitialFrameRevision) {
+	printf("FAIL: scene controller should own slash-path group creation and lookup\n");
+	groupRoot->unref();
+	return 1;
+    }
+
+    if (groupScene.getSceneTreeSummaryCount() != 3 ||
+	    !groupScene.getSceneTreeSummary(0, treeSummary) ||
+	    treeSummary.nodeKind != BRLObolSceneTreeSummary::NODE_GROUP ||
+	    strcmp(treeSummary.path.getString(), "/") != 0 ||
+	    treeSummary.childCount != 1 ||
+	    treeSummary.drawTreeDepth != 0 ||
+	    !groupScene.getSceneTreeSummary(1, treeSummary) ||
+	    treeSummary.nodeKind != BRLObolSceneTreeSummary::NODE_GROUP ||
+	    strcmp(treeSummary.path.getString(), "assembly") != 0 ||
+	    treeSummary.childCount != 1 ||
+	    treeSummary.drawTreeDepth != 1 ||
+	    !groupScene.getSceneTreeSummary(2, treeSummary) ||
+	    treeSummary.nodeKind != BRLObolSceneTreeSummary::NODE_GROUP ||
+	    strcmp(treeSummary.path.getString(), "assembly/leaf") != 0 ||
+	    treeSummary.childCount != 0 ||
+	    treeSummary.drawTreeDepth != 2 ||
+	    groupScene.getSceneTreeSummary(3, treeSummary)) {
+	printf("FAIL: scene controller should summarize retained named group paths\n");
+	groupRoot->unref();
+	return 1;
+    }
+
+    if (!groupScene.getSceneDisplaySummary(2, displaySummary) ||
+	    displaySummary.nodeKind != BRLObolSceneTreeSummary::NODE_GROUP ||
+	    strcmp(displaySummary.path.getString(), "assembly/leaf") != 0 ||
+	    !groupScene.getSceneBoundsSummary(2, boundsSummary) ||
+	    boundsSummary.nodeKind != BRLObolSceneTreeSummary::NODE_GROUP ||
+	    strcmp(boundsSummary.path.getString(), "assembly/leaf") != 0) {
+	printf("FAIL: scene controller display and bounds summaries should retain group paths\n");
+	groupRoot->unref();
+	return 1;
+    }
+
+    const uint64_t beforeGroupStateStructuralRevision =
+	groupScene.getStructuralRevision();
+    const uint64_t beforeGroupStateFrameRevision =
+	groupScene.getFrameRevision();
+    if (groupScene.setGroupDrawIntent("assembly/leaf",
+		"draw://assembly/leaf", BRLOBOL_LOD_DRAW_SHADED,
+		BRLOBOL_LOD_DRAW_WIRE, TRUE, 42) != 1 ||
+	    groupScene.setGroupDisplayState("assembly/leaf", FALSE, TRUE,
+		TRUE, 6, 7, 0.45f, TRUE,
+		SbColor(0.8f, 0.2f, 0.1f), TRUE,
+		SbColor(0.3f, 0.4f, 0.5f), 123) != 1 ||
+	    groupScene.getStructuralRevision() !=
+		beforeGroupStateStructuralRevision ||
+	    groupScene.getFrameRevision() <= beforeGroupStateFrameRevision ||
+	    !retainedLeaf->selected.getValue() ||
+	    !retainedLeaf->overlayIntent.getValue() ||
+	    retainedLeaf->fallbackDrawMode.getValue() !=
+		BRLOBOL_LOD_DRAW_WIRE ||
+	    retainedLeaf->revalidationRevision.getValue() != 42) {
+	printf("FAIL: scene controller should retain group draw and display state in Obol\n");
+	groupRoot->unref();
+	return 1;
+    }
+    const uint64_t afterGroupStateFrameRevision =
+	groupScene.getFrameRevision();
+    if (groupScene.setGroupDrawIntent("assembly/leaf",
+		"draw://assembly/leaf", BRLOBOL_LOD_DRAW_SHADED,
+		BRLOBOL_LOD_DRAW_WIRE, TRUE, 42) != 0 ||
+	    groupScene.setGroupDisplayState("assembly/leaf", FALSE, TRUE,
+		TRUE, 6, 7, 0.45f, TRUE,
+		SbColor(0.8f, 0.2f, 0.1f), TRUE,
+		SbColor(0.3f, 0.4f, 0.5f), 123) != 0 ||
+	    groupScene.getFrameRevision() != afterGroupStateFrameRevision ||
+	    groupScene.setGroupDrawIntent("missing", "missing",
+		BRLOBOL_LOD_DRAW_WIRE, BRLOBOL_LOD_DRAW_WIRE,
+		FALSE, 0) != -1) {
+	printf("FAIL: scene controller should treat retained group state reapplication as a no-op\n");
+	groupRoot->unref();
+	return 1;
+    }
+
+    if (!groupScene.getSceneDisplaySummary(2, displaySummary) ||
+	    displaySummary.nodeKind != BRLObolSceneTreeSummary::NODE_GROUP ||
+	    strcmp(displaySummary.path.getString(), "assembly/leaf") != 0 ||
+	    !displaySummary.hasDrawIntent ||
+	    strcmp(displaySummary.intentPath.getString(),
+		"draw://assembly/leaf") != 0 ||
+	    displaySummary.intentDrawMode != BRLOBOL_LOD_DRAW_SHADED ||
+	    displaySummary.visible ||
+	    !displaySummary.highlighted ||
+	    displaySummary.lineStyle != 6 ||
+	    displaySummary.lineWidth != 7 ||
+	    fabs(displaySummary.transparency - 0.45) > 0.001 ||
+	    displaySummary.drawMode != BRLOBOL_LOD_DRAW_SHADED ||
+	    !displaySummary.materialValid ||
+	    displaySummary.materialRevision != 123 ||
+	    displaySummary.materialColor[0] < 0.29f ||
+	    displaySummary.materialColor[1] < 0.39f ||
+	    displaySummary.materialColor[2] < 0.49f ||
+	    !groupScene.getSceneMaterialSummary(2, materialStateSummary) ||
+	    materialStateSummary.materialValid) {
+	printf("FAIL: scene controller summaries should expose retained group display state without making groups shape materials\n");
+	groupRoot->unref();
+	return 1;
+    }
+
+    SoBRLMeshShape *groupMesh = make_mesh("assembly/leaf/mesh", "mesh");
+    const uint64_t beforeGroupAppendStructuralRevision =
+	groupScene.getStructuralRevision();
+    if (groupScene.appendChildToGroup("assembly/leaf", groupMesh) != 1 ||
+	    groupScene.appendChildToGroup("assembly/leaf", groupMesh) != 0 ||
+	    groupScene.getGroupChildCount("assembly/leaf") != 1 ||
+	    groupScene.getStructuralRevision() <=
+		beforeGroupAppendStructuralRevision ||
+	    groupScene.appendChildToGroup("missing", groupMesh) != -1 ||
+	    groupScene.removeChildFromGroup("missing", groupMesh) != -1) {
+	printf("FAIL: scene controller should append retained children to named groups\n");
+	groupRoot->unref();
+	return 1;
+    }
+    const uint64_t afterGroupAppendStructuralRevision =
+	groupScene.getStructuralRevision();
+    if (groupScene.getSceneTreeSummaryCount() != 4 ||
+	    !groupScene.getSceneTreeSummary(3, treeSummary) ||
+	    treeSummary.nodeKind != BRLObolSceneTreeSummary::NODE_MESH_SHAPE ||
+	    strcmp(treeSummary.path.getString(), "assembly/leaf/mesh") != 0 ||
+	    treeSummary.drawTreeDepth != 3 ||
+	    !groupScene.getSceneBoundsSummary(2, boundsSummary) ||
+	    !boundsSummary.boundsValid ||
+	    boundsSummary.bounds.getMax()[0] < 0.99f ||
+	    boundsSummary.bounds.getMax()[1] < 0.99f ||
+	    !groupScene.getSceneBoundsSummary(3, boundsSummary) ||
+	    boundsSummary.nodeKind != BRLObolSceneTreeSummary::NODE_MESH_SHAPE ||
+	    !boundsSummary.boundsValid) {
+	printf("FAIL: scene controller retained group children should affect summaries and bounds\n");
+	groupRoot->unref();
+	return 1;
+    }
+    const uint64_t beforeShapeStateStructuralRevision =
+	groupScene.getStructuralRevision();
+    const uint64_t beforeShapeStateFrameRevision =
+	groupScene.getFrameRevision();
+    if (groupScene.findShape("assembly/leaf/mesh") != groupMesh ||
+	    groupScene.findShape("/assembly/leaf/mesh") != groupMesh ||
+	    groupScene.findShapeParent("assembly/leaf/mesh") != createdLeaf ||
+	    groupScene.findShape("missing") != NULL ||
+	    groupScene.setShapeDrawState("assembly/leaf/mesh",
+		BRLOBOL_LOD_DRAW_POINTS, TRUE, FALSE, FALSE) != 1 ||
+	    groupScene.setShapeDisplayState("assembly/leaf/mesh",
+		FALSE, TRUE, TRUE, 8, 9, 0.55f, TRUE,
+		SbColor(0.2f, 0.3f, 0.4f), TRUE,
+		SbColor(0.5f, 0.6f, 0.7f), 222) != 1 ||
+	    groupScene.getStructuralRevision() !=
+		beforeShapeStateStructuralRevision ||
+	    groupScene.getFrameRevision() <= beforeShapeStateFrameRevision) {
+	printf("FAIL: scene controller should find and update retained shape state by path\n");
+	groupRoot->unref();
+	return 1;
+    }
+    const uint64_t afterShapeStateFrameRevision =
+	groupScene.getFrameRevision();
+    if (groupScene.setShapeDrawState("assembly/leaf/mesh",
+		BRLOBOL_LOD_DRAW_POINTS, TRUE, FALSE, FALSE) != 0 ||
+	    groupScene.setShapeDisplayState("assembly/leaf/mesh",
+		FALSE, TRUE, TRUE, 8, 9, 0.55f, TRUE,
+		SbColor(0.2f, 0.3f, 0.4f), TRUE,
+		SbColor(0.5f, 0.6f, 0.7f), 222) != 0 ||
+	    groupScene.getFrameRevision() != afterShapeStateFrameRevision ||
+	    groupScene.setShapeDisplayState("missing", TRUE, FALSE,
+		FALSE, 0, 0, 0.0f, FALSE,
+		SbColor(1.0f, 1.0f, 1.0f), FALSE,
+		SbColor(1.0f, 1.0f, 1.0f), 0) != -1) {
+	printf("FAIL: scene controller should treat retained shape state reapplication as a no-op\n");
+	groupRoot->unref();
+	return 1;
+    }
+    if (!groupScene.getSceneDisplaySummary(3, displaySummary) ||
+	    displaySummary.nodeKind != BRLObolSceneTreeSummary::NODE_MESH_SHAPE ||
+	    strcmp(displaySummary.path.getString(), "assembly/leaf/mesh") != 0 ||
+	    displaySummary.visible ||
+	    !displaySummary.highlighted ||
+	    displaySummary.lineStyle != 8 ||
+	    displaySummary.lineWidth != 9 ||
+	    fabs(displaySummary.transparency - 0.55) > 0.001 ||
+	    displaySummary.drawMode != BRLOBOL_LOD_DRAW_POINTS ||
+	    !displaySummary.materialValid ||
+	    displaySummary.materialRevision != 222 ||
+	    displaySummary.materialColor[0] < 0.49f ||
+	    displaySummary.materialColor[1] < 0.59f ||
+	    displaySummary.materialColor[2] < 0.69f ||
+	    !groupScene.getSceneMaterialSummary(3, materialStateSummary) ||
+	    !materialStateSummary.materialValid ||
+	    materialStateSummary.materialRevision != 222) {
+	    printf("FAIL: scene controller summaries should expose retained shape state\n");
+	    groupRoot->unref();
+	    return 1;
+	}
+	const uint64_t beforeShapeSourceFrameRevision =
+	    groupScene.getFrameRevision();
+	SbMatrix shapePlacementMatrix;
+	shapePlacementMatrix.setTranslate(SbVec3f(2.0f, 3.0f, 4.0f));
+	if (groupScene.setShapeSourceState("assembly/leaf/mesh",
+		    "/owner/source", 10, 11, 12, 13, 14, 15, 16, 17,
+		    "stale source", "realized::shape", TRUE, 18) != 1 ||
+		groupScene.getFrameRevision() <= beforeShapeSourceFrameRevision ||
+		strcmp(groupMesh->ownerSourcePath.getValue().getString(),
+		    "/owner/source") != 0 ||
+		groupMesh->ownerSourceRevision.getValue() != 10 ||
+		groupMesh->ownerInputsRevision.getValue() != 11 ||
+		groupMesh->ownerViewRevision.getValue() != 12 ||
+		groupMesh->ownerRealizedRevision.getValue() != 13 ||
+		groupMesh->ownerRealizedSourceRevision.getValue() != 14 ||
+		groupMesh->ownerRealizedInputsRevision.getValue() != 15 ||
+		groupMesh->ownerRealizedViewRevision.getValue() != 16 ||
+		groupMesh->ownerRealizationStatus.getValue() != 17 ||
+		strcmp(groupMesh->ownerRealizationDiagnostic.getValue().getString(),
+		    "stale source") != 0 ||
+		strcmp(groupMesh->ownerRealizationIdentity.getValue().getString(),
+		    "realized::shape") != 0 ||
+		!groupMesh->ownerSourceStale.getValue() ||
+		groupMesh->ownerStaleReason.getValue() != 18) {
+	    printf("FAIL: scene controller should retain shape source revision state\n");
+	    groupRoot->unref();
+	    return 1;
+	}
+	const uint64_t beforeShapePlacementFrameRevision =
+	    groupScene.getFrameRevision();
+	if (groupScene.setShapePlacementState("assembly/leaf/mesh",
+		    TRUE, shapePlacementMatrix, TRUE,
+		    SbVec3f(5.0f, 6.0f, 7.0f), TRUE, 12.5f) != 1 ||
+		groupScene.getFrameRevision() <=
+		    beforeShapePlacementFrameRevision ||
+		!groupMesh->drawMatrixValid.getValue() ||
+		!matrix_nearly_equal(groupMesh->drawMatrix.getValue(),
+		    shapePlacementMatrix) ||
+		!groupMesh->drawCenterValid.getValue() ||
+		groupMesh->drawCenter.getValue()[0] < 4.99f ||
+		groupMesh->drawCenter.getValue()[1] < 5.99f ||
+		groupMesh->drawCenter.getValue()[2] < 6.99f ||
+		!groupMesh->drawSizeValid.getValue() ||
+		fabs(groupMesh->drawSize.getValue() - 12.5f) > 0.001f) {
+	    printf("FAIL: scene controller should retain shape placement state\n");
+	    groupRoot->unref();
+	    return 1;
+	}
+	const uint64_t afterShapePlacementFrameRevision =
+	    groupScene.getFrameRevision();
+	if (groupScene.setShapePlacementState("assembly/leaf/mesh",
+		    TRUE, shapePlacementMatrix, TRUE,
+		    SbVec3f(5.0f, 6.0f, 7.0f), TRUE, 12.5f) != 0 ||
+		groupScene.getFrameRevision() !=
+		    afterShapePlacementFrameRevision ||
+		groupScene.setShapePlacementState("missing", TRUE,
+		    shapePlacementMatrix, TRUE, SbVec3f(5.0f, 6.0f, 7.0f),
+		    TRUE, 12.5f) != -1 ||
+		!groupScene.getSceneDisplaySummary(3, displaySummary) ||
+		!displaySummary.drawMatrixValid ||
+		!matrix_nearly_equal(displaySummary.drawMatrix,
+		    shapePlacementMatrix) ||
+		!displaySummary.drawCenterValid ||
+		displaySummary.drawCenter[0] < 4.99f ||
+		displaySummary.drawCenter[1] < 5.99f ||
+		displaySummary.drawCenter[2] < 6.99f ||
+		!displaySummary.drawSizeValid ||
+		fabs(displaySummary.drawSize - 12.5f) > 0.001f) {
+	    printf("FAIL: scene controller should summarize retained shape placement state\n");
+	    groupRoot->unref();
+	    return 1;
+	}
+	if (groupScene.setShapeSourceState("assembly/leaf/mesh",
+		    "/owner/source", 10, 11, 12, 13, 14, 15, 16, 17,
+		    "stale source", "realized::shape", TRUE, 18) != 0 ||
+		groupScene.getFrameRevision() != afterShapePlacementFrameRevision ||
+		groupScene.setShapeSourceState("missing", "/owner/source",
+		    10, 11, 12, 13, 14, 15, 16, 17, "stale source",
+		    "realized::shape", TRUE, 18) != -1 ||
+		!groupScene.getSceneTreeSummary(3, treeSummary) ||
+		strcmp(treeSummary.ownerSourcePath.getString(),
+		    "/owner/source") != 0 ||
+		!groupScene.getSceneDisplaySummary(3, displaySummary) ||
+		strcmp(displaySummary.ownerSourcePath.getString(),
+		    "/owner/source") != 0 ||
+		!groupScene.getSceneBoundsSummary(3, boundsSummary) ||
+		strcmp(boundsSummary.ownerSourcePath.getString(),
+		    "/owner/source") != 0) {
+	    printf("FAIL: scene controller should summarize retained shape owner source state\n");
+	    groupRoot->unref();
+	    return 1;
+	}
+	SoGroup *assemblyGroup = groupScene.findGroup("assembly");
+	const uint64_t beforeShapeMoveStructuralRevision =
+	    groupScene.getStructuralRevision();
+	if (!assemblyGroup ||
+		groupScene.moveShapeToGroup("assembly/leaf/mesh",
+		"assembly/leaf") != 0 ||
+		groupScene.moveShapeToGroup("assembly/leaf/mesh", "assembly") != 1 ||
+		groupScene.findShapeParent("assembly/leaf/mesh") !=
+		assemblyGroup ||
+		groupScene.getGroupChildCount("assembly/leaf") != 0 ||
+		groupScene.getGroupChildCount("assembly") != 2 ||
+		groupScene.getStructuralRevision() <=
+		beforeShapeMoveStructuralRevision ||
+		groupScene.moveShapeToGroup("assembly/leaf/mesh",
+		"assembly/leaf") != 1 ||
+		groupScene.findShapeParent("assembly/leaf/mesh") != createdLeaf ||
+		groupScene.getGroupChildCount("assembly/leaf") != 1 ||
+		groupScene.getGroupChildCount("assembly") != 1 ||
+		groupScene.moveShapeToGroup("missing", "assembly") != 0 ||
+		groupScene.moveShapeToGroup("assembly/leaf/mesh",
+		"missing") != -1) {
+	    printf("FAIL: scene controller should move retained shape ownership between groups\n");
+	    groupRoot->unref();
+	    return 1;
+	}
+    if (groupScene.removeChildFromGroup("assembly/leaf", groupMesh) != 1 ||
+	    groupScene.getGroupChildCount("assembly/leaf") != 0 ||
+	    groupScene.getStructuralRevision() <=
+		afterGroupAppendStructuralRevision ||
+	    groupScene.getSceneTreeSummaryCount() != 3) {
+	printf("FAIL: scene controller should remove retained children from named groups\n");
+	groupRoot->unref();
+	return 1;
+    }
+    SoBRLMeshShape *removeMesh = make_mesh("assembly/leaf/remove", "remove");
+    const uint64_t beforeShapeRemoveStructuralRevision =
+	groupScene.getStructuralRevision();
+    if (groupScene.appendChildToGroup("assembly/leaf", removeMesh) != 1 ||
+	    groupScene.removeShape("/assembly/leaf/remove") != 1 ||
+	    groupScene.findShape("assembly/leaf/remove") != NULL ||
+	    groupScene.getGroupChildCount("assembly/leaf") != 0 ||
+	    groupScene.getStructuralRevision() <=
+		beforeShapeRemoveStructuralRevision ||
+	    groupScene.removeShape("assembly/leaf/remove") != 0) {
+	printf("FAIL: scene controller should remove retained shapes by path\n");
+	groupRoot->unref();
+	return 1;
+    }
+
+    SoGroup *createdChild = groupScene.ensureGroup("assembly/leaf/child");
+    SoBRLSceneGroup *retainedChild = NULL;
+    if (createdChild &&
+	    createdChild->isOfType(SoBRLSceneGroup::getClassTypeId()))
+	retainedChild = static_cast<SoBRLSceneGroup *>(createdChild);
+    const uint64_t afterGroupChildStructuralRevision =
+	groupScene.getStructuralRevision();
+    if (!createdChild ||
+	    !retainedChild ||
+	    groupScene.getGroupChildCount("assembly/leaf") != 1 ||
+	    groupScene.renameGroup("assembly/leaf", "renamed") != 1 ||
+	    groupScene.findGroup("assembly/leaf") != NULL ||
+	    groupScene.findGroup("assembly/renamed") != createdLeaf ||
+	    groupScene.findGroup("assembly/renamed/child") != createdChild ||
+	    strcmp(retainedLeaf->groupPath.getValue().getString(),
+		"assembly/renamed") != 0 ||
+	    strcmp(retainedChild->groupPath.getValue().getString(),
+		"assembly/renamed/child") != 0 ||
+	    groupScene.getStructuralRevision() <=
+		afterGroupChildStructuralRevision ||
+	    !groupScene.getSceneTreeSummary(2, treeSummary) ||
+	    strcmp(treeSummary.path.getString(), "assembly/renamed") != 0 ||
+	    groupScene.renameGroup("assembly/renamed", "renamed") != 0 ||
+	    groupScene.renameGroup("assembly/renamed", "bad/name") != 0) {
+	printf("FAIL: scene controller should rename retained group leaf paths in place\n");
+	groupRoot->unref();
+	return 1;
+    }
+
+    const uint64_t afterGroupRenameStructuralRevision =
+	groupScene.getStructuralRevision();
+    if (groupScene.eraseGroupSubpath("assembly", "renamed/child") != 1 ||
+	    groupScene.findGroup("assembly/renamed/child") != NULL ||
+	    groupScene.getGroupChildCount("assembly/renamed") != 0 ||
+	    groupScene.getStructuralRevision() <=
+		afterGroupRenameStructuralRevision ||
+	    groupScene.eraseGroupSubpath("assembly", "renamed/child") != 0 ||
+	    groupScene.eraseGroupSubpath("missing", "renamed") != -1) {
+	printf("FAIL: scene controller should erase nested retained group subpaths\n");
+	groupRoot->unref();
+	return 1;
+    }
+    createdChild = groupScene.ensureGroup("assembly/renamed/child");
+    if (!createdChild) {
+	printf("FAIL: scene controller should recreate nested retained group subpaths\n");
+	groupRoot->unref();
+	return 1;
+    }
+    if (groupScene.clearGroup("assembly/renamed") != 1 ||
+	    groupScene.getGroupChildCount("assembly/renamed") != 0 ||
+	    groupScene.clearGroup("assembly/renamed") != 0 ||
+	    groupScene.removeGroup("assembly/renamed") != 1 ||
+	    groupScene.findGroup("assembly/renamed") != NULL ||
+	    groupScene.getGroupChildCount("assembly") != 0 ||
+	    groupScene.removeGroup("assembly/renamed") != 0 ||
+	    groupScene.removeGroup("assembly") != 1 ||
+	    groupScene.getGroupChildCount("/") != 0 ||
+	    groupScene.clearGroup("/") != 0) {
+	printf("FAIL: scene controller should clear and remove retained groups with revision accounting\n");
+	groupRoot->unref();
+	return 1;
+    }
+    {
+	BRLObolViewController groupView(groupRoot);
+	SbString renderReason;
+	groupView.clearRenderRequest();
+	SoGroup *viewLeaf = groupView.ensureGroup("view/leaf");
+	if (!viewLeaf ||
+		groupView.findGroup("view/leaf") != viewLeaf ||
+		groupView.getGroupChildCount("view") != 1 ||
+		!groupView.consumeRenderRequest(&renderReason) ||
+		strcmp(renderReason.getString(), "scene-group") != 0) {
+	    printf("FAIL: view controller should expose retained group creation and render invalidation\n");
+	    groupRoot->unref();
+	    return 1;
+	}
+	groupView.clearRenderRequest();
+	if (groupView.ensureGroup("view/leaf") != viewLeaf ||
+		groupView.consumeRenderRequest(&renderReason)) {
+	    printf("FAIL: view controller should not request render for no-op group ensure\n");
+	    groupRoot->unref();
+	    return 1;
+	}
+	if (viewLeaf->isOfType(SoBRLSceneGroup::getClassTypeId()) != TRUE ||
+		groupView.setGroupDrawIntent("view/leaf",
+		    "draw://view/leaf", BRLOBOL_LOD_DRAW_POINTS,
+		    BRLOBOL_LOD_DRAW_WIRE, FALSE, 5) != 1 ||
+		!groupView.consumeRenderRequest(&renderReason) ||
+		strcmp(renderReason.getString(), "scene-group") != 0) {
+	    printf("FAIL: view controller should expose retained group draw intent state\n");
+	    groupRoot->unref();
+	    return 1;
+	}
+	groupView.clearRenderRequest();
+	if (groupView.setGroupDrawIntent("view/leaf",
+		    "draw://view/leaf", BRLOBOL_LOD_DRAW_POINTS,
+		    BRLOBOL_LOD_DRAW_WIRE, FALSE, 5) != 0 ||
+		groupView.consumeRenderRequest(&renderReason)) {
+	    printf("FAIL: view controller should not render for no-op retained group draw intent state\n");
+	    groupRoot->unref();
+	    return 1;
+	}
+	if (groupView.setGroupDisplayState("view/leaf", TRUE, TRUE,
+		    FALSE, 1, 2, 0.25f, TRUE,
+		    SbColor(0.1f, 0.2f, 0.3f), FALSE,
+		    SbColor(1.0f, 1.0f, 1.0f), 77) != 1 ||
+		!groupView.consumeRenderRequest(&renderReason) ||
+		strcmp(renderReason.getString(), "scene-group") != 0 ||
+		groupView.setGroupDisplayState("missing", TRUE, FALSE,
+		    FALSE, 0, 0, 0.0f, FALSE,
+		    SbColor(1.0f, 1.0f, 1.0f), FALSE,
+		    SbColor(1.0f, 1.0f, 1.0f), 0) != -1) {
+	    printf("FAIL: view controller should expose retained group display state\n");
+	    groupRoot->unref();
+	    return 1;
+	}
+	groupView.clearRenderRequest();
+
+	SoBRLMeshShape *viewMesh = make_mesh("view/leaf/mesh", "mesh");
+	if (groupView.appendChildToGroup("view/leaf", viewMesh) != 1 ||
+		groupView.appendChildToGroup("view/leaf", viewMesh) != 0 ||
+		groupView.getGroupChildCount("view/leaf") != 1 ||
+		!groupView.consumeRenderRequest(&renderReason) ||
+		strcmp(renderReason.getString(), "scene-group") != 0) {
+	    printf("FAIL: view controller should expose retained group child ownership\n");
+	    groupRoot->unref();
+	    return 1;
+	}
+	groupView.clearRenderRequest();
+	if (groupView.findShape("view/leaf/mesh") != viewMesh ||
+		groupView.findShapeParent("view/leaf/mesh") != viewLeaf ||
+		groupView.setShapeDrawState("view/leaf/mesh",
+		    BRLOBOL_LOD_DRAW_DIAGNOSTIC, FALSE, TRUE, FALSE) != 1 ||
+		!groupView.consumeRenderRequest(&renderReason) ||
+		strcmp(renderReason.getString(), "scene-shape") != 0 ||
+		groupView.setShapeDrawState("view/leaf/mesh",
+		    BRLOBOL_LOD_DRAW_DIAGNOSTIC, FALSE, TRUE, FALSE) != 0) {
+	    printf("FAIL: view controller should expose retained shape draw state\n");
+	    groupRoot->unref();
+	    return 1;
+		}
+		groupView.clearRenderRequest();
+		if (groupView.setShapeDisplayState("view/leaf/mesh", TRUE, TRUE,
+			    TRUE, 3, 4, 0.15f, TRUE,
+			    SbColor(0.3f, 0.2f, 0.1f), TRUE,
+			    SbColor(0.6f, 0.5f, 0.4f), 88) != 1 ||
+			!groupView.consumeRenderRequest(&renderReason) ||
+			strcmp(renderReason.getString(), "scene-shape") != 0 ||
+			groupView.setShapeDisplayState("missing", TRUE, FALSE,
+			    FALSE, 0, 0, 0.0f, FALSE,
+			    SbColor(1.0f, 1.0f, 1.0f), FALSE,
+			    SbColor(1.0f, 1.0f, 1.0f), 0) != -1) {
+		    printf("FAIL: view controller should expose retained shape display state\n");
+		    groupRoot->unref();
+		    return 1;
+		}
+		groupView.clearRenderRequest();
+		SbMatrix viewPlacementMatrix;
+		viewPlacementMatrix.setTranslate(SbVec3f(8.0f, 9.0f, 10.0f));
+		if (groupView.setShapePlacementState("view/leaf/mesh",
+			    TRUE, viewPlacementMatrix, TRUE,
+			    SbVec3f(11.0f, 12.0f, 13.0f), TRUE, 14.5f) != 1 ||
+			!groupView.consumeRenderRequest(&renderReason) ||
+			strcmp(renderReason.getString(), "scene-shape") != 0 ||
+			groupView.setShapePlacementState("view/leaf/mesh",
+			    TRUE, viewPlacementMatrix, TRUE,
+			    SbVec3f(11.0f, 12.0f, 13.0f), TRUE, 14.5f) != 0 ||
+			groupView.setShapePlacementState("missing", TRUE,
+			    viewPlacementMatrix, TRUE,
+			    SbVec3f(11.0f, 12.0f, 13.0f), TRUE, 14.5f) != -1) {
+		    printf("FAIL: view controller should expose retained shape placement state\n");
+		    groupRoot->unref();
+		    return 1;
+		}
+		groupView.clearRenderRequest();
+		if (groupView.setShapeSourceState("view/leaf/mesh",
+			    "view/source", 21, 22, 23, 24, 25, 26, 27, 28,
+			    "view diagnostic", "view identity", TRUE, 29) != 1 ||
+			!groupView.consumeRenderRequest(&renderReason) ||
+			strcmp(renderReason.getString(), "scene-shape") != 0 ||
+			groupView.setShapeSourceState("view/leaf/mesh",
+			    "view/source", 21, 22, 23, 24, 25, 26, 27, 28,
+			    "view diagnostic", "view identity", TRUE, 29) != 0 ||
+			groupView.setShapeSourceState("missing", "view/source",
+			    21, 22, 23, 24, 25, 26, 27, 28,
+			    "view diagnostic", "view identity", TRUE, 29) != -1) {
+	    printf("FAIL: view controller should expose retained shape source state\n");
+	    groupRoot->unref();
+	    return 1;
+	}
+	SoGroup *viewRootGroup = groupView.findGroup("view");
+	groupView.clearRenderRequest();
+	if (!viewRootGroup ||
+		groupView.moveShapeToGroup("view/leaf/mesh", "view") != 1 ||
+		groupView.findShapeParent("view/leaf/mesh") != viewRootGroup ||
+		!groupView.consumeRenderRequest(&renderReason) ||
+		strcmp(renderReason.getString(), "scene-shape") != 0 ||
+		groupView.moveShapeToGroup("view/leaf/mesh", "view/leaf") != 1 ||
+		groupView.findShapeParent("view/leaf/mesh") != viewLeaf ||
+		groupView.removeShape("view/leaf/mesh") != 1 ||
+		groupView.findShape("view/leaf/mesh") != NULL ||
+		groupView.getGroupChildCount("view/leaf") != 0) {
+	    printf("FAIL: view controller should expose retained shape ownership changes\n");
+	    groupRoot->unref();
+	    return 1;
+	}
+	groupView.clearRenderRequest();
+	if (groupView.ensureGroup("view/leaf/child") == NULL ||
+		groupView.renameGroup("view/leaf", "renamed") != 1 ||
+		groupView.findGroup("view/renamed/child") == NULL ||
+		groupView.eraseGroupSubpath("view", "renamed/child") != 1 ||
+		groupView.findGroup("view/renamed/child") != NULL ||
+		groupView.clearGroup("view/renamed") != 0 ||
+		groupView.removeGroup("view/renamed") != 1 ||
+		groupView.removeGroup("view") != 1 ||
+		groupView.getGroupChildCount("/") != 0 ||
+		!groupView.consumeRenderRequest(&renderReason) ||
+		strcmp(renderReason.getString(), "scene-group") != 0) {
+	    printf("FAIL: view controller should expose retained group rename, nested erase, clear, and remove\n");
+	    groupRoot->unref();
+	    return 1;
+	}
+    }
+    groupRoot->unref();
+
+    char dbpath[MAXPATHLEN] = {0};
+    struct db_i *dbip = NULL;
+    if (make_submit_test_db(dbpath, sizeof(dbpath), &dbip))
+	return 1;
+
+    SoSeparator *ownedRoot = new SoSeparator;
+    ownedRoot->ref();
+    SoSeparator *ownedNonSourceChild = new SoSeparator;
+    ownedRoot->addChild(ownedNonSourceChild);
+    SoBRLSceneController ownedScene(ownedRoot);
+    const uint64_t ownedInitialStructuralRevision =
+	ownedScene.getStructuralRevision();
+    const uint64_t ownedInitialFrameRevision = ownedScene.getFrameRevision();
+
+    if (ownedScene.replaceDatabaseSource("lod-submit.bot", dbip,
+	    SoBRLDatabaseSource::WIREFRAME, 21) != 1 ||
+	    ownedScene.getDatabaseSourceCount() != 1 ||
+	    ownedRoot->getNumChildren() != 2 ||
+	    ownedScene.getStructuralRevision() <= ownedInitialStructuralRevision ||
+	    ownedScene.getFrameRevision() <= ownedInitialFrameRevision ||
+	    !ownedScene.getSceneSummary(sceneSummary) ||
+	    sceneSummary.rootChildCount != 2 ||
+	    sceneSummary.databaseSourceCount != 1 ||
+	    sceneSummary.nonDatabaseRootChildCount != 1 ||
+	    sceneSummary.structuralRevision != ownedScene.getStructuralRevision() ||
+	    sceneSummary.frameRevision != ownedScene.getFrameRevision() ||
+	    !ownedScene.findDatabaseSource("/lod-submit.bot")) {
+	printf("FAIL: scene controller should own database source replacement\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+    const uint64_t afterAddStructuralRevision =
+	ownedScene.getStructuralRevision();
+    const uint64_t afterAddFrameRevision = ownedScene.getFrameRevision();
+
+    SoBRLDatabaseSource *ownedSource =
+	ownedScene.findDatabaseSource("lod-submit.bot");
+    if (!ownedSource ||
+	    ownedSource->getDatabase() != dbip ||
+	    ownedSource->drawMode.getValue() != SoBRLDatabaseSource::WIREFRAME ||
+	    ownedSource->sourceRevision.getValue() != 21 ||
+	    !ownedScene.getDatabaseSourceSummary(0, summary) ||
+	    strcmp(summary.path.getString(), "lod-submit.bot") != 0 ||
+	    !summary.hasParent ||
+	    summary.drawTreeDepth != 1 ||
+	    strcmp(summary.parentGroupPath.getString(), "/") != 0 ||
+	    summary.drawMode != SoBRLDatabaseSource::WIREFRAME ||
+	    summary.sourceRevision != 21) {
+	printf("FAIL: scene controller replacement should preserve source configuration\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
+    if (ownedScene.replaceDatabaseSource("/lod-submit.bot", dbip,
+	    SoBRLDatabaseSource::SHADED, 22) != 1 ||
+	    ownedScene.getDatabaseSourceCount() != 1 ||
+	    ownedRoot->getNumChildren() != 2 ||
+	    ownedScene.getStructuralRevision() != afterAddStructuralRevision ||
+	    ownedScene.getFrameRevision() <= afterAddFrameRevision ||
+	    !ownedScene.getSceneSummary(sceneSummary) ||
+	    sceneSummary.rootChildCount != 2 ||
+	    sceneSummary.databaseSourceCount != 1 ||
+	    sceneSummary.nonDatabaseRootChildCount != 1 ||
+	    sceneSummary.structuralRevision != ownedScene.getStructuralRevision() ||
+	    sceneSummary.frameRevision != ownedScene.getFrameRevision() ||
+	    ownedScene.findDatabaseSource("lod-submit.bot") != ownedSource ||
+	    ownedSource->drawMode.getValue() != SoBRLDatabaseSource::SHADED ||
+	    ownedSource->sourceRevision.getValue() != 22) {
+	printf("FAIL: scene controller should replace slash-equivalent database sources in place\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
+    if (ownedScene.moveDatabaseSourceToGroup("lod-submit.bot",
+		"draw/group") != 1 ||
+	    ownedScene.getDatabaseSourceCount() != 1 ||
+	    ownedScene.getDatabaseSource(0) != ownedSource ||
+	    ownedScene.findDatabaseSource("/lod-submit.bot") != ownedSource ||
+	    ownedRoot->getNumChildren() != 2 ||
+	    ownedScene.getGroupChildCount("draw/group") != 1 ||
+	    !ownedScene.getDatabaseSourceSummary(0, summary) ||
+	    !summary.hasParent ||
+	    summary.drawTreeDepth != 3 ||
+	    strcmp(summary.parentGroupPath.getString(), "draw/group") != 0 ||
+	    !ownedScene.getSceneSummary(sceneSummary) ||
+	    sceneSummary.databaseSourceCount != 1 ||
+	    sceneSummary.nonDatabaseRootChildCount != 2) {
+	printf("FAIL: scene controller source summaries should expose retained group ownership\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
+    const uint64_t afterMoveStructuralRevision =
+	ownedScene.getStructuralRevision();
+    const uint64_t afterMoveFrameRevision = ownedScene.getFrameRevision();
+    const SbColor sourceMaterial(0.25f, 0.5f, 0.75f);
+    if (ownedScene.setDatabaseSourceState("lod-submit.bot", TRUE, 24, 44,
+		FALSE, TRUE, 2, 6, 0.35f, TRUE, sourceMaterial, 77) != 1 ||
+	    ownedScene.getStructuralRevision() != afterMoveStructuralRevision ||
+	    ownedScene.getFrameRevision() <= afterMoveFrameRevision ||
+	    !ownedScene.getDatabaseSourceSummary(0, summary) ||
+	    summary.sourceRevision != 24 ||
+	    summary.inputsRevision != 44 ||
+	    summary.visible ||
+	    !summary.highlighted ||
+	    summary.lineStyle != 2 ||
+	    summary.lineWidth != 6 ||
+	    fabsf(summary.transparency - 0.35f) > 1.0e-6f ||
+	    !summary.materialColorValid ||
+	    fabsf(summary.materialColor[0] - sourceMaterial[0]) > 1.0e-6f ||
+	    fabsf(summary.materialColor[1] - sourceMaterial[1]) > 1.0e-6f ||
+	    fabsf(summary.materialColor[2] - sourceMaterial[2]) > 1.0e-6f ||
+	    summary.materialRevision != 77) {
+	printf("FAIL: scene controller should own database source display/material state updates\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+    const uint64_t afterSourceStateFrameRevision =
+	ownedScene.getFrameRevision();
+    if (ownedScene.setDatabaseSourceState("lod-submit.bot", FALSE, 99, 45,
+		FALSE, TRUE, 2, 6, 0.35f, TRUE, sourceMaterial, 77) != 1 ||
+	    ownedScene.getStructuralRevision() != afterMoveStructuralRevision ||
+	    ownedScene.getFrameRevision() <= afterSourceStateFrameRevision ||
+	    !ownedScene.getDatabaseSourceSummary(0, summary) ||
+	    summary.sourceRevision != 24 ||
+	    summary.inputsRevision != 45) {
+	printf("FAIL: scene controller source state should preserve source revision unless explicitly valid\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+    const uint64_t afterRevisionPreserveFrameRevision =
+	ownedScene.getFrameRevision();
+    if (ownedScene.setDatabaseSourceState("lod-submit.bot", TRUE, 24, 45,
+		FALSE, TRUE, 2, 6, 0.35f, TRUE, sourceMaterial, 77) != 0 ||
+	    ownedScene.getFrameRevision() != afterRevisionPreserveFrameRevision ||
+	    ownedScene.setDatabaseSourceState("missing.bot", TRUE, 1, 1,
+		TRUE, FALSE, 0, 0, 0.0f, FALSE,
+		SbColor(1.0f, 1.0f, 1.0f), 0) != -1) {
+	printf("FAIL: scene controller source state should report no-op and missing updates\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
+    if (ownedScene.replaceDatabaseSource("lod-submit.bot", dbip,
+	    SoBRLDatabaseSource::WIREFRAME, 25) != 1 ||
+	    ownedScene.getDatabaseSourceCount() != 1 ||
+	    ownedScene.getDatabaseSource(0) != ownedSource ||
+	    ownedScene.findDatabaseSource("lod-submit.bot") != ownedSource ||
+	    ownedSource->drawMode.getValue() != SoBRLDatabaseSource::WIREFRAME ||
+	    ownedSource->sourceRevision.getValue() != 25 ||
+	    !ownedScene.getDatabaseSourceSummary(0, summary) ||
+	    summary.drawTreeDepth != 3 ||
+	    strcmp(summary.parentGroupPath.getString(), "draw/group") != 0 ||
+	    ownedScene.getGroupChildCount("draw/group") != 1) {
+	printf("FAIL: scene controller should replace nested database sources in place\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
+    if (ownedScene.moveDatabaseSourceToGroup("lod-submit.bot", "/") != 1 ||
+	    ownedScene.getDatabaseSourceCount() != 1 ||
+	    ownedScene.getDatabaseSource(0) != ownedSource ||
+	    ownedScene.getGroupChildCount("draw/group") != 0 ||
+	    !ownedScene.getDatabaseSourceSummary(0, summary) ||
+	    !summary.hasParent ||
+	    summary.drawTreeDepth != 1 ||
+	    strcmp(summary.parentGroupPath.getString(), "/") != 0 ||
+	    ownedScene.removeGroup("draw") != 1 ||
+	    ownedRoot->getNumChildren() != 2) {
+	printf("FAIL: scene controller should move nested database sources back to the scene root\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+    const uint64_t afterReplaceStructuralRevision =
+	ownedScene.getStructuralRevision();
+    const uint64_t afterReplaceFrameRevision = ownedScene.getFrameRevision();
+
+    if (ownedScene.removeDatabaseSource("lod-submit.bot") != 1 ||
+	    ownedScene.getDatabaseSourceCount() != 0 ||
+	    ownedRoot->getNumChildren() != 1 ||
+	    ownedScene.getStructuralRevision() <= afterReplaceStructuralRevision ||
+	    ownedScene.getFrameRevision() <= afterReplaceFrameRevision ||
+	    !ownedScene.getSceneSummary(sceneSummary) ||
+	    sceneSummary.rootChildCount != 1 ||
+	    sceneSummary.databaseSourceCount != 0 ||
+	    sceneSummary.nonDatabaseRootChildCount != 1 ||
+	    ownedScene.removeDatabaseSource("lod-submit.bot") != 0) {
+	printf("FAIL: scene controller should remove database sources while preserving non-source children\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+    const uint64_t afterRemoveStructuralRevision =
+	ownedScene.getStructuralRevision();
+    const uint64_t afterRemoveFrameRevision = ownedScene.getFrameRevision();
+
+    if (ownedScene.replaceDatabaseSource("lod-submit.bot", dbip,
+	    SoBRLDatabaseSource::WIREFRAME, 23) != 1 ||
+	    ownedScene.replaceDatabaseSource("other-submit.bot", dbip,
+		SoBRLDatabaseSource::SHADED, 24) != 1 ||
+	    ownedScene.moveDatabaseSourceToGroup("other-submit.bot",
+		"draw/group") != 1 ||
+	    ownedScene.getDatabaseSourceCount() != 2 ||
+	    ownedScene.clearDatabaseSources() != 2 ||
+	    ownedScene.getDatabaseSourceCount() != 0 ||
+	    ownedScene.getGroupChildCount("draw/group") != 0 ||
+	    ownedScene.removeGroup("draw") != 1 ||
+	    ownedRoot->getNumChildren() != 1 ||
+	    ownedScene.getStructuralRevision() <= afterRemoveStructuralRevision ||
+	    ownedScene.getFrameRevision() <= afterRemoveFrameRevision ||
+	    !ownedScene.getSceneSummary(sceneSummary) ||
+	    sceneSummary.rootChildCount != 1 ||
+	    sceneSummary.databaseSourceCount != 0 ||
+	    sceneSummary.nonDatabaseRootChildCount != 1) {
+	printf("FAIL: scene controller should clear only database source children\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+    const uint64_t afterClearStructuralRevision =
+	ownedScene.getStructuralRevision();
+    const uint64_t afterClearFrameRevision = ownedScene.getFrameRevision();
+    if (ownedScene.clearDatabaseSources() != 0 ||
+	    ownedScene.getStructuralRevision() != afterClearStructuralRevision ||
+	    ownedScene.getFrameRevision() != afterClearFrameRevision ||
+	    !ownedScene.getSceneSummary(sceneSummary) ||
+	    sceneSummary.rootChildCount != 1 ||
+	    sceneSummary.databaseSourceCount != 0 ||
+	    sceneSummary.nonDatabaseRootChildCount != 1 ||
+	    sceneSummary.structuralRevision != afterClearStructuralRevision ||
+	    sceneSummary.frameRevision != afterClearFrameRevision) {
+	printf("FAIL: scene controller no-op clear should not advance scene revisions\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
+    ownedRoot->unref();
+    db_close(dbip);
+    bu_file_delete(dbpath);
+    return 0;
+}
+
+static int
 test_update_action_service_drain(void)
 {
     SoSeparator *root = new SoSeparator;
@@ -942,6 +2524,454 @@ test_mesh_lod_request_and_view_info(void)
 
     root->unref();
     mesh->unref();
+    return 0;
+}
+
+static int
+test_export_record_metadata(void)
+{
+    SoSeparator *root = new SoSeparator;
+    root->ref();
+
+    SoBRLMeshShape *mesh = make_mesh("/metadata/mesh.bot", "mesh.bot");
+    mesh->sourceType = "bot";
+    mesh->sourceId = 501;
+    mesh->displayName = "Mesh Display";
+    mesh->geometryName = "mesh geometry";
+    mesh->cacheIdentity = "cache://metadata/mesh";
+    mesh->sourceIdentity = "db://metadata/mesh.bot";
+    mesh->databaseIntent = TRUE;
+    mesh->sharedSource = FALSE;
+    mesh->drawMode = BRLOBOL_LOD_DRAW_SHADED;
+    mesh->recordRole = "database";
+    mesh->geometryKind = "surface";
+    root->addChild(mesh);
+
+    SoBRLVListShape *vlist = new SoBRLVListShape;
+    SbVec3f points[3] = {
+	SbVec3f(0.0f, 0.0f, 0.0f),
+	SbVec3f(1.0f, 0.0f, 0.0f),
+	SbVec3f(2.0f, 0.0f, 0.0f)
+    };
+    int32_t commands[3] = {
+	SoBRLVListShape::MOVE,
+	SoBRLVListShape::DRAW,
+	SoBRLVListShape::POINT
+    };
+    vlist->sourcePath = "/metadata/curve.sketch";
+    vlist->sourceName = "curve.sketch";
+    vlist->sourceType = "sketch";
+    vlist->sourceId = 502;
+    vlist->displayName = "Curve Display";
+    vlist->geometryName = "curve geometry";
+    vlist->cacheIdentity = "cache://metadata/curve";
+    vlist->sourceIdentity = "db://metadata/curve.sketch";
+    vlist->databaseIntent = TRUE;
+    vlist->sharedSource = FALSE;
+    vlist->drawMode = BRLOBOL_LOD_DRAW_WIRE;
+    vlist->recordRole = "database";
+    vlist->setLineSet(points, commands, 3);
+    root->addChild(vlist);
+
+    SoBRLVListShape *vlistShaded = new SoBRLVListShape;
+    vlistShaded->sourcePath = "/metadata/curve.sketch";
+    vlistShaded->sourceName = "curve.sketch";
+    vlistShaded->sourceType = "sketch";
+    vlistShaded->sourceId = 502;
+    vlistShaded->displayName = "Curve Display";
+    vlistShaded->geometryName = "curve geometry";
+    vlistShaded->cacheIdentity = "cache://metadata/curve";
+    vlistShaded->sourceIdentity = "db://metadata/curve.sketch";
+    vlistShaded->databaseIntent = TRUE;
+    vlistShaded->sharedSource = FALSE;
+    vlistShaded->drawMode = BRLOBOL_LOD_DRAW_SHADED;
+    vlistShaded->recordRole = "database";
+    vlistShaded->setLineSet(points, commands, 2);
+    root->addChild(vlistShaded);
+
+    SoBRLGrid *grid = new SoBRLGrid;
+    grid->overlayId = "overlay::metadata-grid";
+    grid->divisions = 1;
+    grid->rebuildGeometry();
+    root->addChild(grid);
+
+    SoBRLLodMeshShape *sourceBacked =
+	make_lod_mesh("/metadata/source.bot", "source.bot");
+    sourceBacked->sourceType = "bot";
+    sourceBacked->sourceId = 503;
+    sourceBacked->displayName = "Source Mesh Display";
+    sourceBacked->geometryName = "source mesh geometry";
+    sourceBacked->cacheIdentity = "cache://metadata/source";
+    sourceBacked->sourceIdentity = "db://metadata/source.bot";
+    sourceBacked->databaseIntent = TRUE;
+    sourceBacked->sharedSource = FALSE;
+    sourceBacked->drawMode = BRLOBOL_LOD_DRAW_SHADED;
+    sourceBacked->recordRole = "database";
+    sourceBacked->geometryKind = "surface";
+    root->addChild(sourceBacked);
+
+    SoBRLExportAction exportAction;
+    exportAction.apply(root);
+    if (exportAction.getTriangleCount() != 1 ||
+	    exportAction.getPointCount() != 1 ||
+	    exportAction.getLineCount() != 8 ||
+	    exportAction.getSourceBackedFullDetailRequestCount() != 1) {
+	printf("FAIL: export metadata test did not collect expected records\n");
+	root->unref();
+	return 1;
+    }
+
+    const uint64_t meshCacheIdentity =
+	SoBRLExportAction::identityValue("cache://metadata/mesh");
+    const uint64_t meshSourceIdentity =
+	SoBRLExportAction::identityValue(SbString("db://metadata/mesh.bot"));
+    const uint64_t curveCacheIdentity =
+	SoBRLExportAction::identityValue("cache://metadata/curve");
+    const uint64_t curveSourceIdentity =
+	SoBRLExportAction::identityValue("db://metadata/curve.sketch");
+    const uint64_t sourceCacheIdentity =
+	SoBRLExportAction::identityValue("cache://metadata/source");
+    const uint64_t sourceSourceIdentity =
+	SoBRLExportAction::identityValue("db://metadata/source.bot");
+    if (SoBRLExportAction::identityValue("") != 0 ||
+	    meshCacheIdentity == 0 ||
+	    meshSourceIdentity == 0 ||
+	    meshCacheIdentity !=
+		SoBRLExportAction::identityValue("cache://metadata/mesh") ||
+	    meshCacheIdentity == curveCacheIdentity ||
+	    meshSourceIdentity == curveSourceIdentity) {
+	printf("FAIL: export identity helper did not produce stable numeric identities\n");
+	root->unref();
+	return 1;
+    }
+
+    const SoBRLExportAction::TriangleRecord &meshRecord =
+	exportAction.getTriangle(0);
+    if (strcmp(meshRecord.displayName.getString(), "Mesh Display") != 0 ||
+	    strcmp(meshRecord.geometryName.getString(), "mesh geometry") != 0 ||
+	    strcmp(meshRecord.cacheIdentity.getString(),
+		"cache://metadata/mesh") != 0 ||
+	    strcmp(meshRecord.sourceIdentity.getString(),
+		"db://metadata/mesh.bot") != 0 ||
+	    meshRecord.cacheIdentityValue != meshCacheIdentity ||
+	    meshRecord.sourceIdentityValue != meshSourceIdentity ||
+	    !meshRecord.databaseIntent ||
+	    meshRecord.overlayIntent ||
+	    meshRecord.localSource ||
+	    meshRecord.sharedSource ||
+	    meshRecord.nonDatabaseSource ||
+	    meshRecord.drawMode != BRLOBOL_LOD_DRAW_SHADED ||
+	    strcmp(meshRecord.recordRole.getString(), "database") != 0 ||
+	    strcmp(meshRecord.geometryKind.getString(), "surface") != 0) {
+	printf("FAIL: mesh export record did not preserve neutral metadata\n");
+	root->unref();
+	return 1;
+    }
+
+    const SoBRLExportAction::LineRecord &lineRecord = exportAction.getLine(0);
+    const SoBRLExportAction::PointRecord &pointRecord =
+	exportAction.getPoint(0);
+    if (strcmp(lineRecord.displayName.getString(), "Curve Display") != 0 ||
+	    strcmp(lineRecord.geometryName.getString(), "curve geometry") != 0 ||
+	    strcmp(lineRecord.geometryKind.getString(), "line") != 0 ||
+	    lineRecord.cacheIdentityValue != curveCacheIdentity ||
+	    lineRecord.sourceIdentityValue != curveSourceIdentity ||
+	    strcmp(pointRecord.displayName.getString(), "Curve Display") != 0 ||
+	    strcmp(pointRecord.geometryKind.getString(), "point") != 0 ||
+	    pointRecord.cacheIdentityValue != curveCacheIdentity ||
+	    pointRecord.sourceIdentityValue != curveSourceIdentity ||
+	    pointRecord.drawMode != BRLOBOL_LOD_DRAW_WIRE ||
+	    !pointRecord.databaseIntent ||
+	    pointRecord.sharedSource) {
+	printf("FAIL: vlist export records did not preserve neutral metadata\n");
+	root->unref();
+	return 1;
+    }
+
+    const SoBRLExportAction::LineRecord *overlayRecord = NULL;
+    for (int i = 0; i < exportAction.getLineCount(); i++) {
+	const SoBRLExportAction::LineRecord &line = exportAction.getLine(i);
+	if (strcmp(line.path.getString(), "overlay::metadata-grid") == 0) {
+	    overlayRecord = &line;
+	    break;
+	}
+    }
+    uint64_t overlayCacheIdentity = 0;
+    uint64_t overlaySourceIdentity = 0;
+    if (overlayRecord) {
+	const SbString overlayCacheString =
+	    overlayRecord->cacheIdentity.getLength() > 0 ?
+	    overlayRecord->cacheIdentity : overlayRecord->sourceIdentity;
+	overlayCacheIdentity =
+	    SoBRLExportAction::identityValue(overlayCacheString);
+	overlaySourceIdentity =
+	    SoBRLExportAction::identityValue(overlayRecord->sourceIdentity);
+    }
+    if (!overlayRecord ||
+	    !overlayRecord->overlayIntent ||
+	    !overlayRecord->localSource ||
+	    !overlayRecord->nonDatabaseSource ||
+	    overlayRecord->databaseIntent ||
+	    overlayRecord->sharedSource ||
+	    overlayRecord->cacheIdentityValue == 0 ||
+	    overlayRecord->sourceIdentityValue == 0 ||
+	    overlayRecord->cacheIdentityValue != overlayCacheIdentity ||
+	    overlayRecord->sourceIdentityValue != overlaySourceIdentity ||
+	    strcmp(overlayRecord->recordRole.getString(), "overlay") != 0 ||
+	    strcmp(overlayRecord->geometryName.getString(), "grid") != 0) {
+	printf("FAIL: overlay export record did not preserve overlay metadata\n");
+	root->unref();
+	return 1;
+    }
+
+    if (exportAction.getObjectRecordCount() != 4) {
+	printf("FAIL: export object records did not group initial objects\n");
+	root->unref();
+	return 1;
+    }
+    const SoBRLExportAction::ObjectRecord &meshObject =
+	exportAction.getObjectRecord(0);
+    const SoBRLExportAction::ObjectRecord &vlistObject =
+	exportAction.getObjectRecord(1);
+    const SoBRLExportAction::ObjectRecord &vlistShadedObject =
+	exportAction.getObjectRecord(2);
+    const SoBRLExportAction::ObjectRecord &overlayObject =
+	exportAction.getObjectRecord(3);
+    if (strcmp(meshObject.path.getString(), "/metadata/mesh.bot") != 0 ||
+	    meshObject.triangleIndices.size() != 1 ||
+	    !meshObject.lineIndices.empty() ||
+	    !meshObject.pointIndices.empty() ||
+	    !meshObject.databaseIntent ||
+	    meshObject.sharedSource ||
+	    meshObject.cacheIdentityValue != meshCacheIdentity ||
+	    meshObject.sourceIdentityValue != meshSourceIdentity ||
+	    strcmp(meshObject.geometryKind.getString(), "surface") != 0 ||
+	    meshObject.bounds.isEmpty()) {
+	printf("FAIL: mesh object export record did not summarize triangle metadata\n");
+	root->unref();
+	return 1;
+    }
+    if (strcmp(vlistObject.path.getString(), "/metadata/curve.sketch") != 0 ||
+	    vlistObject.lineIndices.size() != 1 ||
+	    vlistObject.pointIndices.size() != 1 ||
+	    !vlistObject.triangleIndices.empty() ||
+	    strcmp(vlistObject.geometryKind.getString(), "mixed") != 0 ||
+	    vlistObject.cacheIdentityValue != curveCacheIdentity ||
+	    vlistObject.sourceIdentityValue != curveSourceIdentity ||
+	    vlistObject.drawMode != BRLOBOL_LOD_DRAW_WIRE) {
+	printf("FAIL: vlist object export record did not group line and point records\n");
+	root->unref();
+	return 1;
+    }
+    if (strcmp(vlistShadedObject.path.getString(),
+		"/metadata/curve.sketch") != 0 ||
+	    vlistShadedObject.lineIndices.size() != 1 ||
+	    !vlistShadedObject.pointIndices.empty() ||
+	    !vlistShadedObject.triangleIndices.empty() ||
+	    vlistShadedObject.drawMode != BRLOBOL_LOD_DRAW_SHADED ||
+	    vlistShadedObject.cacheIdentityValue != curveCacheIdentity ||
+	    vlistShadedObject.sourceIdentityValue != curveSourceIdentity) {
+	printf("FAIL: object export records should not merge different draw modes\n");
+	root->unref();
+	return 1;
+    }
+    if (strcmp(overlayObject.path.getString(), "overlay::metadata-grid") != 0 ||
+	    overlayObject.lineIndices.size() != 6 ||
+	    !overlayObject.pointIndices.empty() ||
+	    !overlayObject.triangleIndices.empty() ||
+	    !overlayObject.overlayIntent ||
+	    !overlayObject.localSource ||
+	    !overlayObject.nonDatabaseSource ||
+	    overlayObject.cacheIdentityValue != overlayCacheIdentity ||
+	    overlayObject.sourceIdentityValue != overlaySourceIdentity ||
+	    strcmp(overlayObject.recordRole.getString(), "overlay") != 0) {
+	printf("FAIL: overlay object export record did not summarize overlay lines\n");
+	root->unref();
+	return 1;
+    }
+
+    SoBRLExportAction::ObjectSurfaceSummary surfaceSummary;
+    int surfaceIndex = -1;
+    if (!exportAction.getObjectRecordSurfaceSummary(meshObject,
+	    surfaceSummary) ||
+	    !surfaceSummary.valid ||
+	    surfaceSummary.pointCount != 3 ||
+	    surfaceSummary.indexCount != 3 ||
+	    surfaceSummary.faceCount != 1 ||
+	    surfaceSummary.cacheIdentityValue != meshCacheIdentity ||
+	    surfaceSummary.sourceIdentityValue != meshSourceIdentity ||
+	    !exportAction.getObjectRecordSurfaceIndex(meshObject, 2,
+		surfaceIndex) ||
+	    surfaceIndex != 2) {
+	printf("FAIL: mesh object export record did not provide surface detail readback\n");
+	root->unref();
+	return 1;
+    }
+
+    SoBRLExportAction::ObjectLineSummary lineSummary;
+    SoBRLExportAction::ObjectPointSummary pointSummary;
+    SbVec3f detailPoint;
+    int lineCommand = -1;
+    if (!exportAction.getObjectRecordLineSummary(vlistObject,
+	    lineSummary) ||
+	    lineSummary.pointCount != 2 ||
+	    lineSummary.segmentCount != 1 ||
+	    !exportAction.getObjectRecordLinePoint(vlistObject, 0,
+		detailPoint) ||
+	    detailPoint[0] != 0.0f ||
+	    !exportAction.getObjectRecordLineCommand(vlistObject, 0,
+		lineCommand) ||
+	    lineCommand != SoBRLExportAction::LINE_MOVE ||
+	    !exportAction.getObjectRecordLineCommand(vlistObject, 1,
+		lineCommand) ||
+	    lineCommand != SoBRLExportAction::LINE_DRAW ||
+	    !exportAction.getObjectRecordPointSummary(vlistObject,
+		pointSummary) ||
+	    pointSummary.pointCount != 1 ||
+	    lineSummary.cacheIdentityValue != curveCacheIdentity ||
+	    lineSummary.sourceIdentityValue != curveSourceIdentity ||
+	    pointSummary.cacheIdentityValue != curveCacheIdentity ||
+	    pointSummary.sourceIdentityValue != curveSourceIdentity ||
+	    !exportAction.getObjectRecordPoint(vlistObject, 0,
+		detailPoint) ||
+	    detailPoint[0] != 2.0f) {
+	printf("FAIL: vlist object export record did not provide line/point detail readback\n");
+	root->unref();
+	return 1;
+    }
+    if (!exportAction.getObjectRecordLineSummary(overlayObject,
+	    lineSummary) ||
+	    lineSummary.pointCount != 12 ||
+	    lineSummary.segmentCount != 6) {
+	printf("FAIL: overlay object export record did not provide line detail readback\n");
+	root->unref();
+	return 1;
+    }
+
+    std::vector<SoBRLExportAction::ObjectRecord> queriedObjects;
+    if (exportAction.collectObjectRecords(queriedObjects,
+	    SoBRLExportAction::QUERY_VISIBLE_ONLY) != 4 ||
+	    exportAction.collectObjectRecords(queriedObjects,
+		SoBRLExportAction::QUERY_DATABASE_OBJECTS) != 3 ||
+	    exportAction.collectObjectRecords(queriedObjects,
+		SoBRLExportAction::QUERY_VIEW_OBJECTS) != 1 ||
+	    exportAction.collectObjectRecords(queriedObjects,
+		SoBRLExportAction::QUERY_LOCAL_ONLY) != 1 ||
+	    exportAction.collectObjectRecords(queriedObjects, 0,
+		"overlay::*") != 1 ||
+	    exportAction.collectObjectRecords(queriedObjects,
+		SoBRLExportAction::QUERY_DATABASE_OBJECTS, NULL,
+		BRLOBOL_LOD_DRAW_WIRE) != 1 ||
+	    exportAction.collectObjectRecords(queriedObjects,
+		SoBRLExportAction::QUERY_DATABASE_OBJECTS, NULL,
+		BRLOBOL_LOD_DRAW_SHADED) != 2) {
+	printf("FAIL: export object record filters did not match expected object sets\n");
+	root->unref();
+	return 1;
+    }
+
+    const BRLObolSourceMeshRequest &sourceRequest =
+	exportAction.getSourceBackedFullDetailRequest(0);
+    if (strcmp(sourceRequest.displayName.getString(),
+		"Source Mesh Display") != 0 ||
+	    strcmp(sourceRequest.geometryName.getString(),
+		"source mesh geometry") != 0 ||
+	    strcmp(sourceRequest.cacheIdentity.getString(),
+		"cache://metadata/source") != 0 ||
+	    strcmp(sourceRequest.sourceIdentity.getString(),
+		"db://metadata/source.bot") != 0 ||
+	    !sourceRequest.databaseIntent ||
+	    sourceRequest.sharedSource ||
+	    sourceRequest.drawMode != BRLOBOL_LOD_DRAW_SHADED ||
+	    strcmp(sourceRequest.recordRole.getString(), "database") != 0 ||
+	    strcmp(sourceRequest.geometryKind.getString(), "surface") != 0) {
+	printf("FAIL: source-backed request did not preserve neutral metadata\n");
+	root->unref();
+	return 1;
+    }
+
+    BRLObolLodRequest sourceLodRequest;
+    if (!exportAction.makeSourceBackedFullDetailLodRequest(0,
+	    sourceLodRequest)) {
+	printf("FAIL: export metadata test did not make source-backed LoD request\n");
+	root->unref();
+	return 1;
+    }
+    int beforeTriangleCount = exportAction.getTriangleCount();
+    if (!exportAction.appendSourceBackedFullDetailResult(sourceRequest,
+	    source_full_detail_result(sourceLodRequest)) ||
+	    exportAction.getTriangleCount() != beforeTriangleCount + 1) {
+	printf("FAIL: export metadata test did not append source-backed full-detail result\n");
+	root->unref();
+	return 1;
+    }
+    const SoBRLExportAction::TriangleRecord &sourceRecord =
+	exportAction.getTriangle(beforeTriangleCount);
+    if (strcmp(sourceRecord.displayName.getString(),
+		"Source Mesh Display") != 0 ||
+	    strcmp(sourceRecord.cacheIdentity.getString(),
+		"cache://metadata/source") != 0 ||
+	    strcmp(sourceRecord.sourceIdentity.getString(),
+		"db://metadata/source.bot") != 0 ||
+	    sourceRecord.cacheIdentityValue != sourceCacheIdentity ||
+	    sourceRecord.sourceIdentityValue != sourceSourceIdentity ||
+	    !sourceRecord.databaseIntent ||
+	    sourceRecord.sharedSource ||
+	    sourceRecord.nonDatabaseSource ||
+	    sourceRecord.drawMode != BRLOBOL_LOD_DRAW_SHADED ||
+	    strcmp(sourceRecord.recordRole.getString(), "database") != 0 ||
+	    strcmp(sourceRecord.geometryKind.getString(), "surface") != 0) {
+	printf("FAIL: source-backed full-detail export record did not preserve neutral metadata\n");
+	root->unref();
+	return 1;
+    }
+
+    if (exportAction.getObjectRecordCount() != 5) {
+	printf("FAIL: export object records did not rebuild after source-backed full-detail append\n");
+	root->unref();
+	return 1;
+    }
+    const SoBRLExportAction::ObjectRecord &sourceObject =
+	exportAction.getObjectRecord(4);
+    if (strcmp(sourceObject.path.getString(), "/metadata/source.bot") != 0 ||
+	    sourceObject.triangleIndices.size() != 1 ||
+	    !sourceObject.databaseIntent ||
+	    sourceObject.sharedSource ||
+	    sourceObject.nonDatabaseSource ||
+	    strcmp(sourceObject.displayName.getString(),
+		"Source Mesh Display") != 0 ||
+	    sourceObject.cacheIdentityValue != sourceCacheIdentity ||
+	    sourceObject.sourceIdentityValue != sourceSourceIdentity ||
+	    strcmp(sourceObject.cacheIdentity.getString(),
+		"cache://metadata/source") != 0) {
+	printf("FAIL: source-backed object export record did not preserve neutral metadata\n");
+	root->unref();
+	return 1;
+    }
+    if (!exportAction.getObjectRecordSurfaceSummary(sourceObject,
+	    surfaceSummary) ||
+	    surfaceSummary.pointCount != 3 ||
+	    surfaceSummary.indexCount != 3 ||
+	    surfaceSummary.faceCount != 1 ||
+	    surfaceSummary.cacheIdentityValue != sourceCacheIdentity ||
+	    surfaceSummary.sourceIdentityValue != sourceSourceIdentity ||
+	    !exportAction.getObjectRecordSurfaceIndex(sourceObject, 1,
+		surfaceIndex) ||
+	    surfaceIndex != 1) {
+	printf("FAIL: source-backed object export record did not provide surface detail readback\n");
+	root->unref();
+	return 1;
+    }
+    if (exportAction.collectObjectRecords(queriedObjects,
+	    SoBRLExportAction::QUERY_DATABASE_OBJECTS) != 4 ||
+	    exportAction.collectObjectRecords(queriedObjects, 0,
+		"*source.bot") != 1) {
+	printf("FAIL: export object record filters did not include source-backed full-detail object\n");
+	root->unref();
+	return 1;
+    }
+
+    root->unref();
     return 0;
 }
 
@@ -2907,9 +4937,13 @@ main(int argc, char **argv)
 
     if (test_update_action_direct())
 	return 1;
+    if (test_scene_database_source_summary())
+	return 1;
     if (test_update_action_service_drain())
 	return 1;
     if (test_mesh_lod_request_and_view_info())
+	return 1;
+    if (test_export_record_metadata())
 	return 1;
     if (test_rt_exact_pick_provider())
 	return 1;

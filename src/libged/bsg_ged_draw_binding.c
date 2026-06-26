@@ -60,8 +60,38 @@ ged_draw_scene_ref_set_source_ref(bsg_scene_ref ref, bsg_scene_ref source_ref)
 }
 
 
+bsg_scene_ref
+ged_draw_view_context_database_source_create(void *view_ctx, const char *name)
+{
+    struct bsg_view *v = (struct bsg_view *)view_ctx;
+    bsg_database_source_ref source =
+	bsg_database_source_ref_create(v, name ? name : "_db_source");
+    return bsg_database_source_ref_as_scene(source);
+}
+
+
+int
+ged_draw_scene_ref_has_database_source(bsg_scene_ref ref)
+{
+    return !bsg_database_source_ref_is_null(
+	    bsg_database_source_ref_from_scene(ref));
+}
+
+
+int
+ged_draw_scene_ref_is_database_source(bsg_scene_ref ref)
+{
+    bsg_database_source_ref source =
+	bsg_database_source_ref_from_scene(ref);
+    if (bsg_database_source_ref_is_null(source))
+	return 0;
+    return bsg_scene_is_database_source(ref) ||
+	bsg_database_source_ref_is_container(source);
+}
+
+
 static bsg_database_source_stale_reason
-_ged_database_source_stale_reason(ged_draw_stale_reason reason)
+ged_draw_source_stale_reason_to_bsg(ged_draw_stale_reason reason)
 {
     switch (reason) {
 	case GED_DRAW_STALE_SOURCE_CHANGED:
@@ -81,29 +111,110 @@ _ged_database_source_stale_reason(ged_draw_stale_reason reason)
 }
 
 
-const char *
-ged_draw_database_source_stale_reason_name(bsg_database_source_stale_reason reason)
+static ged_draw_stale_reason
+ged_draw_source_stale_reason_from_bsg(bsg_database_source_stale_reason reason)
 {
     switch (reason) {
 	case BSG_DATABASE_SOURCE_STALE_SOURCE_CHANGED:
-	    return ged_draw_stale_reason_name(GED_DRAW_STALE_SOURCE_CHANGED);
+	    return GED_DRAW_STALE_SOURCE_CHANGED;
 	case BSG_DATABASE_SOURCE_STALE_VIEW_INPUT_CHANGED:
-	    return ged_draw_stale_reason_name(GED_DRAW_STALE_VIEW_INPUT_CHANGED);
+	    return GED_DRAW_STALE_VIEW_INPUT_CHANGED;
 	case BSG_DATABASE_SOURCE_STALE_SETTINGS_CHANGED:
-	    return ged_draw_stale_reason_name(GED_DRAW_STALE_SETTINGS_CHANGED);
+	    return GED_DRAW_STALE_SETTINGS_CHANGED;
 	case BSG_DATABASE_SOURCE_STALE_FORCED:
-	    return ged_draw_stale_reason_name(GED_DRAW_STALE_FORCED);
+	    return GED_DRAW_STALE_FORCED;
 	case BSG_DATABASE_SOURCE_STALE_UPDATE_FAILED:
-	    return ged_draw_stale_reason_name(GED_DRAW_STALE_UPDATE_FAILED);
+	    return GED_DRAW_STALE_UPDATE_FAILED;
 	case BSG_DATABASE_SOURCE_STALE_NONE:
 	default:
-	    return ged_draw_stale_reason_name(GED_DRAW_STALE_NONE);
+	    return GED_DRAW_STALE_NONE;
     }
 }
 
 
+static bsg_database_source_material_policy
+ged_draw_source_material_policy_to_bsg(
+	ged_draw_database_source_material_policy policy)
+{
+    switch (policy) {
+	case GED_DRAW_DATABASE_SOURCE_MATERIAL_DATABASE:
+	    return BSG_DATABASE_SOURCE_MATERIAL_DATABASE;
+	case GED_DRAW_DATABASE_SOURCE_MATERIAL_INHERIT:
+	default:
+	    return BSG_DATABASE_SOURCE_MATERIAL_INHERIT;
+    }
+}
+
+
+static ged_draw_database_source_material_policy
+ged_draw_source_material_policy_from_bsg(
+	bsg_database_source_material_policy policy)
+{
+    switch (policy) {
+	case BSG_DATABASE_SOURCE_MATERIAL_DATABASE:
+	    return GED_DRAW_DATABASE_SOURCE_MATERIAL_DATABASE;
+	case BSG_DATABASE_SOURCE_MATERIAL_INHERIT:
+	default:
+	    return GED_DRAW_DATABASE_SOURCE_MATERIAL_INHERIT;
+    }
+}
+
+
+static bsg_database_source_realization_status
+ged_draw_source_realization_status_to_bsg(
+	ged_draw_database_source_realization_status status)
+{
+    switch (status) {
+	case GED_DRAW_DATABASE_SOURCE_REALIZATION_CURRENT:
+	    return BSG_DATABASE_SOURCE_REALIZATION_CURRENT;
+	case GED_DRAW_DATABASE_SOURCE_REALIZATION_STALE:
+	default:
+	    return BSG_DATABASE_SOURCE_REALIZATION_STALE;
+    }
+}
+
+
+static ged_draw_database_source_realization_status
+ged_draw_source_realization_status_from_bsg(
+	bsg_database_source_realization_status status)
+{
+    switch (status) {
+	case BSG_DATABASE_SOURCE_REALIZATION_CURRENT:
+	    return GED_DRAW_DATABASE_SOURCE_REALIZATION_CURRENT;
+	case BSG_DATABASE_SOURCE_REALIZATION_STALE:
+	default:
+	    return GED_DRAW_DATABASE_SOURCE_REALIZATION_STALE;
+    }
+}
+
+
+static int
+ged_draw_source_realization_roles_to_bsg(int roles)
+{
+    int out = BSG_DATABASE_SOURCE_REALIZATION_ROLE_NONE;
+    if (roles & GED_DRAW_DATABASE_SOURCE_REALIZATION_ROLE_CSG)
+	out |= BSG_DATABASE_SOURCE_REALIZATION_ROLE_CSG;
+    if (roles & GED_DRAW_DATABASE_SOURCE_REALIZATION_ROLE_MESH)
+	out |= BSG_DATABASE_SOURCE_REALIZATION_ROLE_MESH;
+    return out;
+}
+
+
+static int
+ged_draw_source_realization_roles_from_bsg(int roles)
+{
+    int out = GED_DRAW_DATABASE_SOURCE_REALIZATION_ROLE_NONE;
+    if (roles & BSG_DATABASE_SOURCE_REALIZATION_ROLE_CSG)
+	out |= GED_DRAW_DATABASE_SOURCE_REALIZATION_ROLE_CSG;
+    if (roles & BSG_DATABASE_SOURCE_REALIZATION_ROLE_MESH)
+	out |= GED_DRAW_DATABASE_SOURCE_REALIZATION_ROLE_MESH;
+    return out;
+}
+
+
 int
-ged_draw_database_source_record_has_state(const struct bsg_database_source_record *record)
+ged_draw_database_source_record_has_state(
+	const struct ged_draw_database_source_record *record)
 {
     if (!record)
 	return 0;
@@ -112,8 +223,122 @@ ged_draw_database_source_record_has_state(const struct bsg_database_source_recor
 	record->inputs_revision != 0 ||
 	record->realized_source_revision != 0 ||
 	record->realized_inputs_revision != 0 ||
-	record->stale_reason != BSG_DATABASE_SOURCE_STALE_NONE ||
+	record->stale_reason != GED_DRAW_STALE_NONE ||
 	record->realization_identity != 0;
+}
+
+
+int
+ged_draw_database_source_record_is_stale(
+	const struct ged_draw_database_source_record *record)
+{
+    if (!record)
+	return 0;
+    return record->stale_reason != GED_DRAW_STALE_NONE ||
+	record->source_revision != record->realized_source_revision ||
+	record->inputs_revision != record->realized_inputs_revision;
+}
+
+
+int
+ged_draw_scene_ref_database_source_record_get(
+	bsg_scene_ref ref,
+	struct ged_draw_database_source_record *record)
+{
+    if (!record)
+	return 0;
+
+    memset(record, 0, sizeof(*record));
+    bsg_database_source_ref source =
+	bsg_database_source_ref_from_scene(ref);
+    if (bsg_database_source_ref_is_null(source))
+	return 0;
+
+    struct bsg_database_source_record bsg_record;
+    memset(&bsg_record, 0, sizeof(bsg_record));
+    if (!bsg_database_source_record_get(source, &bsg_record))
+	return 0;
+
+    record->database_path = bsg_record.database_path;
+    record->draw_mode = (int)bsg_record.draw_mode;
+    record->material_policy =
+	ged_draw_source_material_policy_from_bsg(
+		bsg_record.material_policy);
+    record->source_revision = bsg_record.source_revision;
+    record->inputs_revision = bsg_record.inputs_revision;
+    record->realized_source_revision =
+	bsg_record.realized_source_revision;
+    record->realized_inputs_revision =
+	bsg_record.realized_inputs_revision;
+    record->stale_reason =
+	ged_draw_source_stale_reason_from_bsg(bsg_record.stale_reason);
+    record->realization_identity = bsg_record.realization_identity;
+    record->realization_status =
+	ged_draw_source_realization_status_from_bsg(
+		bsg_record.realization_status);
+    record->realization_role_flags =
+	ged_draw_source_realization_roles_from_bsg(
+		bsg_record.realization_role_flags);
+    record->realization_view_dependent =
+	bsg_record.realization_view_dependent;
+    record->realization_view_scale =
+	(fastf_t)bsg_record.realization_view_scale;
+    record->realization_bot_threshold =
+	bsg_record.realization_bot_threshold;
+    record->realization_curve_scale =
+	(fastf_t)bsg_record.realization_curve_scale;
+    record->realization_point_scale =
+	(fastf_t)bsg_record.realization_point_scale;
+    return 1;
+}
+
+
+int
+ged_draw_scene_ref_database_source_record_apply(
+	bsg_scene_ref ref,
+	const struct ged_draw_database_source_record *record)
+{
+    if (!record)
+	return 0;
+
+    bsg_database_source_ref source =
+	bsg_database_source_ref_from_scene(ref);
+    if (bsg_database_source_ref_is_null(source))
+	return 0;
+
+    struct bsg_database_source_record bsg_record;
+    memset(&bsg_record, 0, sizeof(bsg_record));
+    bsg_record.database_path = record->database_path;
+    bsg_record.draw_mode = (bsg_draw_mode)record->draw_mode;
+    bsg_record.material_policy =
+	ged_draw_source_material_policy_to_bsg(record->material_policy);
+    bsg_record.source_revision = record->source_revision;
+    bsg_record.inputs_revision = record->inputs_revision;
+    bsg_record.realized_source_revision =
+	record->realized_source_revision;
+    bsg_record.realized_inputs_revision =
+	record->realized_inputs_revision;
+    bsg_record.stale_reason =
+	ged_draw_source_stale_reason_to_bsg(record->stale_reason);
+    bsg_record.realization_identity = record->realization_identity;
+    bsg_record.realization_status =
+	ged_draw_source_realization_status_to_bsg(
+		record->realization_status);
+    bsg_record.realization_role_flags =
+	ged_draw_source_realization_roles_to_bsg(
+		record->realization_role_flags);
+    bsg_record.realization_view_dependent =
+	record->realization_view_dependent;
+    bsg_record.realization_view_scale =
+	(double)record->realization_view_scale;
+    bsg_record.realization_bot_threshold =
+	record->realization_bot_threshold;
+    bsg_record.realization_curve_scale =
+	(double)record->realization_curve_scale;
+    bsg_record.realization_point_scale =
+	(double)record->realization_point_scale;
+
+    return bsg_database_source_record_apply(source, &bsg_record);
 }
 
 
@@ -128,10 +353,9 @@ ged_draw_scene_ref_database_source_sync(bsg_scene_ref ref,
     const struct db_full_path *fp = NULL;
     char *path = NULL;
     bsg_scene_ref source_ref = ged_draw_shape_source_ref(ref);
-    struct bsg_database_source_record record = {0};
+    struct ged_draw_database_source_record record = {0};
 
-    (void)bsg_database_source_record_get(
-	    bsg_database_source_ref_from_scene(source_ref), &record);
+    (void)ged_draw_scene_ref_database_source_record_get(source_ref, &record);
 
     if (shape_data)
 	fp = &shape_data->s_fullpath;
@@ -143,33 +367,30 @@ ged_draw_scene_ref_database_source_sync(bsg_scene_ref ref,
 
     record.database_path = path ? path : "";
     int draw_mode = ged_draw_scene_ref_draw_mode(ref);
-    record.draw_mode = (bsg_draw_mode)draw_mode;
-    record.material_policy = fp ? BSG_DATABASE_SOURCE_MATERIAL_DATABASE :
-	BSG_DATABASE_SOURCE_MATERIAL_INHERIT;
+    record.draw_mode = draw_mode;
+    record.material_policy = fp ?
+	GED_DRAW_DATABASE_SOURCE_MATERIAL_DATABASE :
+	GED_DRAW_DATABASE_SOURCE_MATERIAL_INHERIT;
 
     if (shape_data) {
 	record.source_revision = shape_data->source_revision;
 	record.inputs_revision = shape_data->inputs_revision;
 	record.realized_source_revision = shape_data->realized_source_revision;
 	record.realized_inputs_revision = shape_data->realized_inputs_revision;
-	record.stale_reason =
-	    _ged_database_source_stale_reason(shape_data->stale_reason);
+	record.stale_reason = shape_data->stale_reason;
 	record.realization_identity = shape_data->path_hash;
     } else if (source_data) {
 	record.source_revision = source_data->source_revision;
 	record.inputs_revision = source_data->inputs_revision;
 	record.realized_source_revision = source_data->realized_source_revision;
 	record.realized_inputs_revision = source_data->realized_inputs_revision;
-	record.stale_reason =
-	    _ged_database_source_stale_reason(source_data->stale_reason);
+	record.stale_reason = source_data->stale_reason;
     }
 
-    (void)bsg_database_source_record_apply(
-	    bsg_database_source_ref_from_scene(source_ref), &record);
-    if (!ged_draw_scene_ref_equal(source_ref, ref)) {
-	(void)bsg_database_source_record_apply(
-		bsg_database_source_ref_from_scene(ref), &record);
-    }
+    (void)ged_draw_scene_ref_database_source_record_apply(source_ref,
+	    &record);
+    if (!ged_draw_scene_ref_equal(source_ref, ref))
+	(void)ged_draw_scene_ref_database_source_record_apply(ref, &record);
 
     if (path)
 	bu_free(path, "db_path_to_string");

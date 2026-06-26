@@ -30,15 +30,6 @@
 #include "./bsg_ged_draw_private.h"
 
 
-static bsg_scene_ref
-_scene_ref_from_ptr(void *ptr)
-{
-    bsg_scene_ref ref = BSG_SCENE_REF_NULL_INIT;
-    ref.opaque = ptr;
-    return ref;
-}
-
-
 static int
 _draw_shape_dfs(bsg_scene_ref ref,
 		int (*cb)(bsg_scene_ref, void *),
@@ -98,7 +89,7 @@ static bsg_scene_ref
 _first_shape_in_group(bsg_scene_ref group_ref)
 {
     struct _first_shape_data d;
-    d.result = bsg_scene_ref_null();
+    d.result = ged_draw_scene_ref_null();
     _draw_shape_dfs(group_ref, _first_shape_cb, &d);
     return d.result;
 }
@@ -108,10 +99,10 @@ bsg_scene_ref
 ged_draw_first_shape_scene_ref(struct ged *gedp)
 {
     if (!gedp)
-	return bsg_scene_ref_null();
+	return ged_draw_scene_ref_null();
 
     struct _first_shape_data d;
-    d.result = bsg_scene_ref_null();
+    d.result = ged_draw_scene_ref_null();
     ged_draw_scene_root_foreach_shape(gedp, 1, _first_shape_cb, &d);
     return d.result;
 }
@@ -120,7 +111,8 @@ ged_draw_first_shape_scene_ref(struct ged *gedp)
 static int
 _snap_shape_cb(bsg_scene_ref ref, void *ud)
 {
-    bu_ptbl_ins((struct bu_ptbl *)ud, (long *)ref.opaque);
+    bu_ptbl_ins((struct bu_ptbl *)ud,
+	    (long *)ged_draw_scene_ref_context(ref));
     return 1;
 }
 
@@ -149,14 +141,15 @@ static bsg_scene_ref
 _shape_scene_ref_at(struct ged *gedp, int idx)
 {
     if (!gedp)
-	return bsg_scene_ref_null();
+	return ged_draw_scene_ref_null();
     struct bu_ptbl snap = BU_PTBL_INIT_ZERO;
     _sg_build_shape_snapshot(gedp, &snap);
-    bsg_scene_ref shape_ref = bsg_scene_ref_null();
+    bsg_scene_ref shape_ref = ged_draw_scene_ref_null();
     int n = (int)BU_PTBL_LEN(&snap);
     if (n > 0) {
 	idx = ((idx % n) + n) % n;
-	shape_ref = _scene_ref_from_ptr((void *)BU_PTBL_GET(&snap, idx));
+	shape_ref = ged_draw_scene_ref_from_context(
+		(void *)BU_PTBL_GET(&snap, idx));
     }
     bu_ptbl_free(&snap);
     return shape_ref;
@@ -192,8 +185,8 @@ ged_draw_shape_ref_index(struct ged *gedp, ged_draw_shape_ref ref)
     _sg_build_shape_snapshot(gedp, &snap);
     int found = -1;
     for (int i = 0; i < (int)BU_PTBL_LEN(&snap); i++) {
-	if (ged_draw_scene_ref_equal(_scene_ref_from_ptr((void *)BU_PTBL_GET(&snap, i)),
-		target)) {
+	if (ged_draw_scene_ref_equal(ged_draw_scene_ref_from_context(
+		    (void *)BU_PTBL_GET(&snap, i)), target)) {
 	    found = i;
 	    break;
 	}
@@ -220,7 +213,8 @@ ged_draw_advance_shape_ref(struct ged *gedp, ged_draw_shape_ref ref, int delta)
 	if (!ged_draw_scene_ref_is_null(target)) {
 	    for (int i = 0; i < n; i++) {
 		if (ged_draw_scene_ref_equal(
-			_scene_ref_from_ptr((void *)BU_PTBL_GET(&snap, i)),
+			ged_draw_scene_ref_from_context(
+			    (void *)BU_PTBL_GET(&snap, i)),
 			target)) {
 		    idx = i;
 		    break;
@@ -229,7 +223,8 @@ ged_draw_advance_shape_ref(struct ged *gedp, ged_draw_shape_ref ref, int delta)
 	}
 	int new_idx = (((idx + delta) % n) + n) % n;
 	result = ged_draw_shape_ref_from_scene_ref(gedp,
-		_scene_ref_from_ptr((void *)BU_PTBL_GET(&snap, new_idx)));
+		ged_draw_scene_ref_from_context(
+		    (void *)BU_PTBL_GET(&snap, new_idx)));
     }
 
     bu_ptbl_free(&snap);
@@ -241,7 +236,7 @@ static bsg_scene_ref
 _group_scene_ref_of_shape(bsg_scene_ref shape_ref)
 {
     if (ged_draw_scene_ref_is_null(shape_ref))
-	return bsg_scene_ref_null();
+	return ged_draw_scene_ref_null();
 
     bsg_scene_ref group_ref = ged_draw_scene_ref_parent(shape_ref);
     while (!ged_draw_scene_ref_is_null(group_ref)) {
@@ -253,7 +248,7 @@ _group_scene_ref_of_shape(bsg_scene_ref shape_ref)
 	    return group_ref;
 	group_ref = parent_ref;
     }
-    return bsg_scene_ref_null();
+    return ged_draw_scene_ref_null();
 }
 
 

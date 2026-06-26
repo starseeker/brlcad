@@ -8,6 +8,7 @@
 #include "common.h"
 
 #include "brlobol/line_layer_overlay.h"
+#include "brlobol/lod_realization.h"
 #include "brlobol/vlist_shape.h"
 
 #include "bg/line_layer.h"
@@ -115,6 +116,21 @@ SoBRLLineLayerOverlay::rebuildGeometry(const struct bg_line_layer_builder *build
 	shape->sourceName = layerName ? layerName : "";
 	shape->sourceType = "line-layer";
 	shape->sourceId = this->sourceId.getValue();
+	shape->displayName = layerName ? SbString(layerName) :
+	    this->overlayId.getValue();
+	shape->geometryName = layerName ? SbString(layerName) :
+	    SbString("line-layer");
+	shape->sourceIdentity = shape->sourcePath.getValue();
+	shape->cacheIdentity = shape->sourcePath.getValue();
+	shape->databaseIntent = FALSE;
+	shape->overlayIntent = TRUE;
+	shape->hudIntent = FALSE;
+	shape->localSource = TRUE;
+	shape->sharedSource = FALSE;
+	shape->nonDatabaseSource = TRUE;
+	shape->drawMode = BRLOBOL_LOD_DRAW_DIAGNOSTIC;
+	shape->recordRole = "overlay";
+	shape->geometryKind = "line";
 	shape->visible = TRUE;
 	shape->selectable = this->selectable.getValue();
 	shape->colorOverride = TRUE;

@@ -1,0 +1,468 @@
+Obol/libbrlobol Backend Capabilities
+====================================
+
+Purpose
+-------
+
+This file records the backend capabilities needed to finish retiring both
+libbsg and libdm from the GED/qtcad drawing path.  It is a design guide for
+the next migration phase, not a request to clone BSG or libdm APIs in Obol.
+
+The intended shape is:
+
+* Public and cross-library contracts stay neutral: `ged/draw.h`, `rt/view.h`,
+  qtcad Obol public APIs, and libbrlobol public APIs.
+* Obol/libbrlobol owns the concrete scene, view, source, feature, polygon,
+  render/export, framebuffer, and display backend implementation.
+* libdm is a temporary compatibility and validation consumer while the
+  replacement path reaches parity.  New display capabilities should be useful
+  after libdm is gone.
+* Any libdm-facing adapter is disposable glue around a permanent
+  Obol/libbrlobol capability.  It should not own semantics, identity,
+  lifetime, ordering, or payload formats that qtcad/qged will need after
+  libdm retirement.
+* Temporary bridge shims may remain while replacing internals, but new public
+  BSG-shaped APIs should not be added.
+
+
+Guiding Constraints
+-------------------
+
+* Do not expose BSG types, BSG enum names, or BSG ownership rules from new
+  public APIs.
+* Do not expose Coin/Inventor implementation details through GED or RT public
+  APIs unless the API is explicitly libbrlobol-facing.
+* Preserve current GED/qtcad behavior first; optimize after the migration is
+  structurally complete unless a single test exceeds the 180 second limit or
+  an obvious catastrophic slowdown is introduced.
+* Keep new contracts narrow enough to replace the remaining bridge-owned
+  behavior, not broad enough to become a second generic scene graph.
+* Keep guard coverage aligned with each retired BSG boundary.
+
+
+Recommended Implementation Order
+--------------------------------
+
+1. Obol scene/source ownership.
+2. View feature and polygon store.
+3. Obol render/export record query.
+4. Obol display backend draw stream, with temporary libdm compatibility.
+5. qtcad/qged final display ownership and dependency-row removal.
+
+This order removes the high-level retained scene/feature semantics before
+trying to remove lower-level dependency rows.  Removing `libdm` or `libged`
+direct `libbsg` rows before these capabilities exist is likely to be unstable.
+The end state is still removal of both libbsg and libdm from the primary
+qged/qtcad drawing path.
+
+
+libdm Transition Principle
+--------------------------
+
+Preparing support that libdm can consume is still useful, but only when the
+support is really an Obol/libbrlobol backend capability with a life after libdm.
+The migration should not design new libdm-only abstractions.  Instead, any
+temporary libdm-facing work should validate the permanent Obol draw stream,
+framebuffer/image handling, HUD/overlay records, or display ownership model
+that qtcad/qged can later use directly.
+
+This means libdm remains a compatibility bridge and regression oracle during
+the transition, not a destination architecture.
+
+Decision rule:
+
+* Build it if it defines permanent Obol/libbrlobol data, ordering, lifetime,
+  identity, framebuffer, HUD/overlay, or draw-stream behavior.
+* Add a libdm consumer only when it lets the current tree validate or exercise
+  that permanent behavior before qtcad/qged are fully direct.
+* Do not build it if the only long-term consumer would be libdm.
+* Delete or isolate the libdm adapter once qtcad/qged use the corresponding
+  Obol/libbrlobol capability directly.
+
+
+Final Backend Target
+--------------------
+
+The final primary drawing path should be:
+
+* GED/RT neutral draw and view APIs describe scene, feature, polygon, query,
+  and transaction intent.
+* Obol/libbrlobol owns realization, retained scene data, view-local data,
+  render/export queries, draw batches, framebuffer/image handling, picking,
+  snapping, measuring, and qtcad/qged display integration.
+* qtcad/qged consume Obol/libbrlobol directly for normal rendering and user
+  interaction.
+* libbsg is gone from the primary drawing path.
+* libdm is gone from the primary qtcad/qged drawing path.  Any remaining libdm
+  use is an explicitly isolated legacy compatibility path, not a design input
+  for new backend capabilities.
+
+
+Capability 1: Scene And Source Ownership
+----------------------------------------
+
+Goal:
+
+Replace retained `bsg_scene_ref` ownership with an Obol/libbrlobol-owned
+scene/source model that can back the existing neutral GED draw APIs.
+
+Required behavior:
+
+* Scene root creation, attachment, reattachment, and lifecycle.
+* Active view scope and independent view scope ownership.
+* Group creation, lookup, rename, erase, clear, nested subpath erase, child
+  append/remove, traversal, and subtree bounds.
+* Shape references with stable identity, parent/group ownership, full path,
+  leaf directory, source state, source ref, shape state, and draw context.
+* Database source nodes with source revision, inputs revision, realized
+  revision, realization identity, stale flag, stale reason, and material
+  policy.
+* Draw intent ownership: semantic path, draw mode, fallback mode, overlay flag,
+  appearance, revalidation, and copy.
+* Display attributes: visible, highlighted, selected, transparency, color,
+  material revision/color, line style, line width, draw matrix, transform,
+  draw center, draw size, bounds, and draw tree depth.
+* Structural revision and frame revision accounting.
+* Neutral summary exports for existing GED records:
+  `ged_draw_scene_display_summary`,
+  `ged_draw_database_source_summary`,
+  `ged_draw_scene_tree_summary`, and
+  `ged_draw_shape_material_summary`.
+
+Acceptance criteria:
+
+* GED root, group, shape, source, and draw-intent code can operate without
+  calling BSG scene/source APIs outside the Obol/libbrlobol backend boundary.
+* Public GED records keep their current fields and semantics.
+* Existing draw transaction, redraw, material refresh, highlight, erase,
+  bounds, and database-update tests pass.
+
+Current staged coverage:
+
+* `SoBRLSceneController` and `BRLObolViewController` own slash-path group
+  create, lookup, rename, erase, clear, nested subpath erase, child
+  append/remove, summary traversal, and subtree bounds.
+* New groups created through the controller are retained `SoBRLSceneGroup`
+  nodes carrying canonical group path, draw intent, display state, material
+  color metadata, overlay flag, selected/highlighted state, and revalidation
+  revision.
+* Scene display/tree/bounds summaries preserve retained group paths and group
+  draw/display state without treating groups as shape material records.
+* Retained Obol vlist/mesh shape nodes can be found by semantic path, queried
+  for parent group ownership, moved between retained groups, removed by path,
+  and updated for draw/display state through scene and view controllers.
+* Retained Obol vlist/mesh shape nodes carry owner source path, source/input/
+  view revisions, realized revisions, realization status/identity/diagnostic,
+  stale flag, and stale reason.  Scene tree/display/bounds summaries preserve
+  the retained owner source path for direct shapes.
+* Retained Obol vlist/mesh shape nodes carry placement metadata: draw matrix,
+  draw center, and draw size, with scene/view controller mutation and scene
+  display summary export.
+* Realized database-source vlist/mesh shape nodes mirror their owning source
+  path, revision, realized revision, realization identity/status/diagnostic,
+  stale flag, and stale reason on stale transitions and after realization.
+* Database source nodes can now be moved under retained Obol groups while
+  source lookup, source counts, replacement, removal, recursive clearing, and
+  summaries continue to treat them as owned database sources.  Database source
+  summaries also report parent group path and draw tree depth without requiring
+  callers to inspect Coin node placement.
+* Database source revision, input revision, display, and material state can be
+  updated through scene/view controller APIs and read back through source
+  summaries, reducing direct caller mutation of source nodes.
+* Retained Obol group lookup resolves database-path leaves through stored
+  group paths, so paths such as `box.s` do not collide with Coin node-name
+  constraints or database-source internals.
+* qtcad Obol draw sync now seeds Obol database sources from neutral GED shape
+  records before realization, carrying source/input revisions, draw mode,
+  visibility/highlight state, line style, line width, transparency, material
+  color, and material revision into Obol source state and realized owner
+  summaries.
+* qtcad Obol draw sync now tags and retains GED draw groups as Obol groups,
+  moves matching database sources under those groups, and prunes empty
+  qtcad-owned draw groups after erase/clear/full-scene rebuild.
+* qtcad Obol draw sync preserves nested database source paths such as
+  `pair.c/box.s` without inventing Obol group ownership when GED has not
+  published a neutral group record for that path.
+* GED source summary and realization-state helpers now operate on a
+  GED-owned private database-source record, with the BSG implementation acting
+  as an adapter that fills/applies that neutral record.  This narrows the
+  remaining BSG source-record dependency before the broader scene/source
+  handoff.
+* GED database-source creation, existence checks, database-source
+  classification, and DB/non-DB scene flag updates now route through GED
+  scene-ref facades, leaving direct `bsg_database_source_*` API use isolated
+  in the BSG binding adapter and direct BSG scene-classification writes behind
+  the GED source facade implementation.
+* GED draft/submodel/auxiliary source helpers now create geometry and manage
+  child attachment, detachment, bounds refresh, invalidation, and semantic
+  draw-intent updates through GED scene-ref facades instead of direct BSG
+  scene/source calls in the higher-level helper paths.  Their display-state
+  copy helpers also route through GED scene-ref attribute facades, including
+  transform, draw size, material summary, and changed-state copying.
+* GED shape-ref and shape-context line/geometry query wrappers, last-point
+  lookup, and geometry translation now delegate to GED scene-ref geometry
+  facades.  Raw BSG geometry field access for those operations is isolated in
+  the current BSG-backed source adapter while the public wrapper layer stays
+  neutral.
+* GED draw transaction evaluated-shape and source reexpand paths now preserve
+  group/draft draw appearance through neutral `ged_draw_appearance_settings`
+  records.  BSG appearance conversion is isolated behind GED scene-ref adapter
+  helpers for draw-intent readback, draw-intent update, and scene attribute
+  application; the old BSG-typed appearance helper APIs have been retired from
+  the GED draw private header and higher-level draft/group/shape-ref wrappers.
+* GED database-event revalidation now uses a private neutral
+  `ged_draw_database_event_record` through the transaction and RT scene-ref
+  wrapper layers.  The current BSG-backed source adapter translates that record
+  to `bsg_db_event` only at the draw-intent revalidation boundary.
+* GED high-level scene/root/navigation/ref/registry helper code now obtains
+  empty retained scene refs and context-backed retained scene refs through GED
+  scene-ref facades.  Direct knowledge of BSG null-ref construction and BSG
+  scene-ref context layout is isolated behind the current source adapter and
+  RT scene-ref bridge instead of being spread through those wrappers.
+* GED tree, scene-root, and scene-ref wrapper files no longer include direct
+  BSG scene/draw/material/source headers after their direct scene/source calls
+  were moved behind GED facades.  They still carry transitional retained
+  scene-ref handles, but their direct header surface now comes from the GED
+  private bridge instead of broad BSG implementation headers.
+* GED view export record callbacks now hand callers GED-owned neutral detail
+  storage instead of passing through raw `bsg_export_record` pointers in
+  `detail_token`.  The current BSG export query remains a temporary producer,
+  but segment, point, geometry-report, annotation, line, and surface detail
+  helpers now read neutral copied record data that Obol/libbrlobol export
+  records can fill later.
+* Remaining Capability 1 work is the broader GED scene/source handoff:
+  source records, draw transactions, GED-owned source-record replacement,
+  and final BSG scene/source call retirement.
+
+
+Capability 2: View Feature And Polygon Store
+--------------------------------------------
+
+Goal:
+
+Replace the BSG-backed implementation behind neutral `rt_view_*` and
+`ged_draw_view_*` feature/polygon APIs.
+
+Required feature behavior:
+
+* Named feature lookup, creation, removal, visibility, color, line width, and
+  style.
+* Overlay feature ownership and command-result owner callbacks.
+* Line, indexed line, point, label, arrow, axes, line-layer, and edit-preview
+  feature publication.
+* Feature summaries: point/command counts, geometry kind, visible state,
+  realized state, local/shared scope, and owner metadata.
+* Selection store: selected path add/set/clear/contains/count and pick-result
+  application.
+* Edit-preview callbacks and pick/update lifecycle.
+
+Required polygon behavior:
+
+* Polygon create, select, find, duplicate, update, update screen point, move,
+  rename, remove, and user-data association.
+* Record visit and record readback in neutral `rt_view_polygon_record` /
+  `ged_draw_view_polygon_record` form.
+* Current/open/closed contour state, selected point state, visual style, edge
+  color, fill state, fill color, fill slope, CSG, sketch import/export, snap
+  count, snap exclusion, and point-selection clear.
+
+Acceptance criteria:
+
+* `src/librt/view_legacy_bsg.c` feature/polygon implementation can be replaced
+  or reduced to a compatibility adapter.
+* `src/libged/bsg_ged_draw_view.c` no longer owns the primary feature/polygon
+  backend.
+* qtcad and qged polygon/edit/selection paths continue using neutral RT/GED
+  APIs without reintroducing qtcad public legacy-view helpers.
+
+
+Capability 3: Render And Export Record Query
+--------------------------------------------
+
+Goal:
+
+Replace BSG export and backend-scene record queries with Obol/libbrlobol
+queries that emit the neutral records GED already exposes.
+
+Required behavior:
+
+* Visible DB-object record iteration.
+* View-object and view-local record iteration.
+* Query filters: visible-only, database objects, view objects, local-only,
+  draw mode, glob/path filters, and payload-prepare behavior.
+* Per-record fields: path, display name, geometry name, selected state,
+  database intent, overlay/HUD intent, local/shared source state, cache
+  identity, source identity, draw mode, role, kind, non-database source flag,
+  and full-detail source request metadata.
+* Segment, point, annotation, line, and surface iterators matching existing
+  `ged_draw_view_db_object_record_*` APIs.
+* Render/export consistency summaries currently covered by
+  `rt_view_context_render_export_consistency`.
+* Rendered object summaries currently implemented through backend-scene
+  lookups: geometry kind, point/index counts, normals-per-index, annotation
+  summary, and line/surface summaries.
+* LoD/full-detail request reporting compatible with existing libbrlobol
+  export, snap, measure, and pick actions.
+
+Acceptance criteria:
+
+* `src/libged/bsg_ged_draw_records.c` no longer needs BSG export or
+  backend-scene APIs.
+* GED draw-scene, view-command, qged swrast, export, pick, snap, measure, and
+  qtcad Obol workflow tests preserve current behavior.
+* The new query path is deterministic enough for guard and regression tests.
+
+Current staged coverage:
+
+* `SoBRLExportAction` can emit grouped object records with stable sequence
+  ordering, path/display/source identity, database/view/local intent, draw
+  mode, role, kind, selection/highlight state, bounds, and cache/source
+  identity values.
+* Object-record filters cover visible-only, database objects, view objects,
+  local-only, glob/path matching, and draw mode without merging records that
+  share a source identity but differ by draw mode.
+* Object records expose line, point, and compact surface detail summaries,
+  including point/index counts, line commands, material state, normals-per-index
+  state, and identity values.
+* Source-backed full-detail export requests preserve the same neutral record
+  metadata through request creation and result consumption.
+* `qg_obol_export_object_records` exposes the staged Obol object-query data to
+  qtcad as a qtcad-facing bridge for replacing BSG export/backend-scene queries.
+* Remaining Capability 3 work is connecting GED record APIs to this Obol query
+  path, adding any missing annotation/segment parity, and retiring the BSG
+  calls in `src/libged/bsg_ged_draw_records.c`.
+
+
+Capability 4: Obol Display Backend Draw Stream
+----------------------------------------------
+
+Goal:
+
+Implement the permanent Obol/libbrlobol display draw stream.  During migration,
+this stream should be able to feed the remaining libdm compatibility paths and
+tests so `libdm` can first drop its direct BSG dependency, then be removed from
+the primary qged/qtcad display path.
+
+Required behavior:
+
+* Ordered draw items for scene, HUD, overlay, annotation, framebuffer, and
+  geometry passes.
+* Geometry item kinds: lines, indexed lines, points, indexed face sets,
+  meshes, labels/text, annotations, images, overlays, HUD widgets, CSG/BREP
+  proxies, and edit previews where currently needed.
+* Per-item state: visibility, role, source scope, material/color, alpha,
+  line width/style, transform, model/view/display coordinates, draw center,
+  bounds, selected/highlighted state, and owner/cache identity.
+* Batch lifecycle: request creation, collect, dispatch, prepare payload,
+  free payload, invalidate item, begin request, end request, sorted-alpha pass,
+  visible-only pass, and HUD pass.
+* HUD/faceplate support for axes, grid, ADC, center dot, scale overlay,
+  params, labels, interactive rectangle, and other RT view records.
+* Framebuffer/image items with viewport, cursor, layer, and image-source
+  synchronization.
+
+Acceptance criteria:
+
+* `src/libdm/view.c` no longer includes BSG headers or calls BSG render APIs.
+* `libdm` can drop its direct `libbsg` dependency row.
+* The same draw stream is usable directly by Obol/qtcad without routing through
+  libdm.
+* qtcad/qged do not depend on libdm-only draw-item formats, payload ownership,
+  or plugin lifecycle for the primary Obol display path.
+* DM backend draw-item tests and qged swrast smoke tests continue to pass.
+
+
+Capability 5: qtcad And WindowHost Display Ownership
+----------------------------------------------------
+
+Goal:
+
+Make qtcad/qged display ownership primarily Obol/libbrlobol-owned instead of
+retained DM/BSG-owned.
+
+Required behavior:
+
+* `BRLObolViewController` owns the visible scene root, camera/view state,
+  viewport size, render requests, LoD service integration, and result
+  consumption.
+* `BRLObolWindowHost` owns framebuffer attachment, image source, viewport
+  image nodes, flush/reset/viewport/cursor operations, and render requests.
+* qtcad draw synchronization updates Obol scene/source state directly from
+  neutral GED draw notifications and transactions.
+* qtcad selection, overlay, database-source sync, edit-preview publication,
+  snap, pick, measure, export, and real-model workflows use Obol/libbrlobol
+  data as the primary display path.
+* qged can launch and render its normal Obol/qtcad display path without a
+  direct `dm_plugins` build dependency.
+
+Acceptance criteria:
+
+* qtcad visible Obol rendering reaches parity for the guarded real-model and
+  qged swrast workflows.
+* qtcad no longer needs retained DM/framebuffer ownership for its normal Obol
+  display path.
+* `qged` direct `dm_plugins` dependency can be retired safely.
+
+
+Dependency Retirement Gates
+---------------------------
+
+`libged` direct `libbsg` dependency can be removed after:
+
+* GED retained scene/source/root/scope operations are backed by Obol or a
+  neutral owner.
+* GED feature/polygon and export/render record queries no longer require BSG.
+* Public BSG-shaped GED snap/scene-ref shims are removed or reduced to
+  non-linking compatibility wrappers.
+
+`libdm` direct `libbsg` dependency can be removed after:
+
+* DM draw dispatch, while it still exists, uses the neutral Obol/libbrlobol
+  draw stream instead of BSG render-item APIs.
+* HUD, overlay, annotation, framebuffer, and scene draw tests pass without
+  BSG render-item APIs.
+
+`libdm` can be removed from the primary drawing path after:
+
+* qtcad/qged visible rendering uses Obol/libbrlobol directly.
+* Remaining applications that still need compatibility rendering have either
+  moved to Obol/libbrlobol or are explicitly isolated as legacy consumers.
+* No primary qged/qtcad runtime path depends on libdm backend plugins.
+
+`qged` direct `dm_plugins` dependency can be removed after:
+
+* qtcad/Obol owns normal display backend selection and runtime rendering.
+* qged no longer depends on build-time DM plugin availability for its primary
+  Obol display path.
+
+
+Non-Goals
+---------
+
+* Do not build a one-for-one public BSG compatibility layer in Obol.
+* Do not build new permanent libdm-only features.  Compatibility work in libdm
+  is useful only when it validates or temporarily consumes an Obol/libbrlobol
+  capability that remains after libdm retirement.
+* Do not make GED public APIs depend on Coin/Inventor node classes.
+* Do not retire dependency rows before the corresponding backend capability
+  exists and is tested.
+* Do not optimize broad performance behavior before the replacement path is
+  structurally complete, except for clear regressions or tests exceeding the
+  agreed 180 second limit.
+
+
+Suggested Test Coverage
+-----------------------
+
+Each capability should have a small targeted test before broad migration:
+
+* Scene/source: shape/group/source records, draw transactions, erase/redraw,
+  material refresh, stale state, and source summaries.
+* Feature/polygon: qged polygon create/modify, selection, edit-preview,
+  feature summaries, and snap exclusion.
+* Render/export records: GED draw-scene, view-command, visible DB-object
+  records, annotation/line/surface iterators, and qged swrast.
+* Display stream: DM backend draw-item tests, faceplate/HUD tests, qged
+  swrast, and selected real-model qtcad workflows.
+* qtcad ownership: qtcad Obol draw, pick, snap, measure, export,
+  real-model havoc/stress tests, and qged smoke tests.

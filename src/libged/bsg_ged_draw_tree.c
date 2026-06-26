@@ -32,19 +32,6 @@
 #include "bu/malloc.h"
 #include "bu/ptbl.h"
 #include "bu/str.h"
-#include "bsg/appearance.h"
-#include "bsg/database_source.h"
-#include "bsg/defines.h"
-#include "bsg/draw_ctx.h"
-#include "bsg/draw_set.h"
-#include "bsg/draw_source.h"
-#include "bsg/field.h"
-#include "bsg/geometry.h"
-#include "bsg/material.h"
-#include "bsg/scene_builder.h"
-#include "bsg/scene_object.h"
-#include "bsg/selection.h"
-#include "bsg/view_state.h"
 #include "bg/clip.h"
 
 #include "ged.h"
@@ -149,7 +136,7 @@ _sg_find_or_create_child_group(struct ged *gedp, bsg_scene_ref parent_ref,
 			       const char *comp_name)
 {
     if (!gedp || ged_draw_scene_ref_is_null(parent_ref) || !comp_name)
-	return bsg_scene_ref_null();
+	return ged_draw_scene_ref_null();
 
     struct directory *dp = RT_DIR_NULL;
     if (gedp->dbip)
@@ -164,13 +151,13 @@ static bsg_scene_ref
 _sg_add_path(struct ged *gedp, const char *name)
 {
     if (!gedp || !name || !gedp->dbip)
-	return bsg_scene_ref_null();
+	return ged_draw_scene_ref_null();
 
     void *view_ctx = ged_draw_active_view_ctx(gedp);
     bsg_scene_ref base_ref = ged_draw_scene_ref_active_scope(gedp, view_ctx,
 	    1, 1);
     if (ged_draw_scene_ref_is_null(base_ref))
-	return bsg_scene_ref_null();
+	return ged_draw_scene_ref_null();
 
     struct db_full_path pathcomp;
     if (db_string_to_path(&pathcomp, gedp->dbip, name) != 0) {
@@ -178,13 +165,13 @@ _sg_add_path(struct ged *gedp, const char *name)
 	cp = cp ? cp + 1 : name;
 	struct directory *dp = db_lookup(gedp->dbip, cp, LOOKUP_NOISY);
 	if (dp == RT_DIR_NULL)
-	    return bsg_scene_ref_null();
+	    return ged_draw_scene_ref_null();
 	return _sg_find_or_create_child_group(gedp, base_ref, cp);
     }
 
     if (pathcomp.fp_len == 0) {
 	db_free_full_path(&pathcomp);
-	return bsg_scene_ref_null();
+	return ged_draw_scene_ref_null();
     }
 
     bsg_scene_ref cur_ref = base_ref;
@@ -194,7 +181,7 @@ _sg_add_path(struct ged *gedp, const char *name)
 	    _sg_find_or_create_child_group(gedp, cur_ref, comp);
 	if (ged_draw_scene_ref_is_null(child_ref)) {
 	    db_free_full_path(&pathcomp);
-	    return bsg_scene_ref_null();
+	    return ged_draw_scene_ref_null();
 	}
 	cur_ref = child_ref;
     }
@@ -1256,11 +1243,11 @@ _draw_group_lookup_or_create_ref(struct ged *gedp,
 				 const struct db_full_path *dfp)
 {
     if (!gedp || !dfp)
-	return bsg_scene_ref_null();
+	return ged_draw_scene_ref_null();
 
     char *s = db_path_to_string(dfp);
     if (!s)
-	return bsg_scene_ref_null();
+	return ged_draw_scene_ref_null();
 
     const char *path = ged_draw_dbpath_skip_lead_slash(s);
     bsg_scene_ref group_ref = _sg_add_path(gedp, path);
@@ -1399,9 +1386,9 @@ ged_draw_group_ref_set_mode(struct ged *gedp,
 
 
 int
-ged_draw_group_ref_set_appearance(struct ged *gedp,
-				  ged_draw_group_ref ref,
-				  const struct bsg_appearance_settings *settings)
+ged_draw_group_ref_set_appearance_settings(struct ged *gedp,
+					   ged_draw_group_ref ref,
+					   const struct ged_draw_appearance_settings *settings)
 {
     if (!settings)
 	return 0;
@@ -1411,22 +1398,8 @@ ged_draw_group_ref_set_appearance(struct ged *gedp,
 	return 0;
 
     const char *path = ged_draw_scene_ref_name(group_ref);
-    return ged_draw_scene_ref_set_draw_intent_appearance(group_ref, settings,
-	    path);
-}
-
-
-int
-ged_draw_group_ref_set_appearance_settings(struct ged *gedp,
-					   ged_draw_group_ref ref,
-					   const struct ged_draw_appearance_settings *settings)
-{
-    if (!settings)
-	return 0;
-
-    struct bsg_appearance_settings bsg_settings = BSG_APPEARANCE_SETTINGS_INIT;
-    ged_draw_bsg_appearance_from_neutral(&bsg_settings, settings);
-    return ged_draw_group_ref_set_appearance(gedp, ref, &bsg_settings);
+    return ged_draw_scene_ref_set_draw_intent_appearance_settings(group_ref,
+	    settings, path);
 }
 
 

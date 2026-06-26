@@ -31,9 +31,10 @@
 
 #include "common.h"
 
+#include <stdint.h>
+
 #include "vmath.h"
 
-#include "bsg/database_source.h"
 #include "bsg/geometry.h"
 #include "bsg/scene_builder.h"
 #include "./bsg_ged_draw_view_private.h"
@@ -47,8 +48,6 @@ struct bsg_view;
 struct bsg_view_set;
 struct bu_ptbl;
 struct bu_vls;
-struct bsg_appearance_settings;
-struct bsg_db_event;
 struct bg_tess_tol;
 struct bn_tol;
 struct db_i;
@@ -62,9 +61,6 @@ struct db_tree_state;
 struct ged_draw_source_state;
 struct model;
 struct nmgregion;
-
-GED_EXPORT extern void ged_draw_bsg_appearance_from_neutral(struct bsg_appearance_settings *out,
-							    const struct ged_draw_appearance_settings *in);
 
 typedef enum {
     GED_DRAW_SHAPE_USER_DATA_NONE = 0,
@@ -149,6 +145,53 @@ struct ged_draw_source_state {
     ged_draw_stale_reason stale_reason;
 };
 
+typedef enum {
+    GED_DRAW_DATABASE_SOURCE_MATERIAL_INHERIT = 0,
+    GED_DRAW_DATABASE_SOURCE_MATERIAL_DATABASE = 1
+} ged_draw_database_source_material_policy;
+
+typedef enum {
+    GED_DRAW_DATABASE_SOURCE_REALIZATION_STALE = 0,
+    GED_DRAW_DATABASE_SOURCE_REALIZATION_CURRENT = 1
+} ged_draw_database_source_realization_status;
+
+typedef enum {
+    GED_DRAW_DATABASE_SOURCE_REALIZATION_ROLE_NONE = 0,
+    GED_DRAW_DATABASE_SOURCE_REALIZATION_ROLE_CSG = 1,
+    GED_DRAW_DATABASE_SOURCE_REALIZATION_ROLE_MESH = 2
+} ged_draw_database_source_realization_role;
+
+typedef enum {
+    GED_DRAW_DATABASE_EVENT_MODIFIED = 0,
+    GED_DRAW_DATABASE_EVENT_REMOVED = 1,
+    GED_DRAW_DATABASE_EVENT_RENAMED = 2
+} ged_draw_database_event_kind;
+
+struct ged_draw_database_event_record {
+    const char *path;
+    const char *old_path;
+    ged_draw_database_event_kind kind;
+};
+
+struct ged_draw_database_source_record {
+    const char *database_path;
+    int draw_mode;
+    ged_draw_database_source_material_policy material_policy;
+    uint64_t source_revision;
+    uint64_t inputs_revision;
+    uint64_t realized_source_revision;
+    uint64_t realized_inputs_revision;
+    ged_draw_stale_reason stale_reason;
+    uint64_t realization_identity;
+    ged_draw_database_source_realization_status realization_status;
+    int realization_role_flags;
+    int realization_view_dependent;
+    fastf_t realization_view_scale;
+    uint64_t realization_bot_threshold;
+    fastf_t realization_curve_scale;
+    fastf_t realization_point_scale;
+};
+
 GED_EXPORT extern void ged_draw_source_data_free(void *data);
 GED_EXPORT extern void ged_draw_scene_ref_realization_set_view_context_policy(bsg_scene_ref ref,
 									      const void *view_ctx);
@@ -171,6 +214,16 @@ GED_EXPORT extern bsg_scene_ref ged_draw_view_context_group_child_ensure(
 GED_EXPORT extern bsg_scene_ref ged_draw_view_context_group_create(
 	void *view_ctx,
 	const char *name);
+GED_EXPORT extern bsg_scene_ref ged_draw_view_context_database_source_create(
+	void *view_ctx,
+	const char *name);
+GED_EXPORT extern bsg_scene_ref ged_draw_view_context_geometry_create(
+	void *view_ctx,
+	const char *name);
+GED_EXPORT extern int ged_draw_scene_ref_has_database_source(
+	bsg_scene_ref ref);
+GED_EXPORT extern int ged_draw_scene_ref_is_database_source(
+	bsg_scene_ref ref);
 GED_EXPORT extern void ged_draw_scene_ref_erase_nested_subpath(
 	bsg_scene_ref parent_ref,
 	const char * const *comp_names,
@@ -186,9 +239,15 @@ GED_EXPORT extern void ged_draw_scene_ref_database_source_sync(
 	const struct ged_draw_source_state *source_data,
 	const ged_draw_shape_state *shape_data);
 GED_EXPORT extern int ged_draw_database_source_record_has_state(
-	const struct bsg_database_source_record *record);
-GED_EXPORT extern const char *ged_draw_database_source_stale_reason_name(
-	bsg_database_source_stale_reason reason);
+	const struct ged_draw_database_source_record *record);
+GED_EXPORT extern int ged_draw_database_source_record_is_stale(
+	const struct ged_draw_database_source_record *record);
+GED_EXPORT extern int ged_draw_scene_ref_database_source_record_get(
+	bsg_scene_ref ref,
+	struct ged_draw_database_source_record *record);
+GED_EXPORT extern int ged_draw_scene_ref_database_source_record_apply(
+	bsg_scene_ref ref,
+	const struct ged_draw_database_source_record *record);
 GED_EXPORT extern void ged_draw_log(int level, const char *fmt, ...) _BU_ATTR_PRINTF23;
 GED_EXPORT extern void ged_draw_scene_ref_mark_realization_stale(bsg_scene_ref ref,
 								 uint64_t source_revision,
@@ -287,8 +346,6 @@ GED_EXPORT extern int ged_draw_shape_draft_set_name(ged_draw_shape_draft *draft,
 GED_EXPORT extern int ged_draw_shape_draft_set_source_state(ged_draw_shape_draft *draft,
 							    struct ged_draw_source_state *data);
 GED_EXPORT extern int ged_draw_shape_draft_mark_db_object(ged_draw_shape_draft *draft);
-GED_EXPORT extern int ged_draw_shape_draft_apply_settings(ged_draw_shape_draft *draft,
-							  const struct bsg_appearance_settings *settings);
 GED_EXPORT extern int ged_draw_shape_draft_apply_appearance_settings(ged_draw_shape_draft *draft,
 								     const struct ged_draw_appearance_settings *settings);
 GED_EXPORT extern int ged_draw_shape_draft_bump_appearance_revision(ged_draw_shape_draft *draft);
@@ -325,6 +382,8 @@ GED_EXPORT extern struct ged_draw_source_state *ged_draw_scene_ref_source_data(b
 GED_EXPORT extern void ged_draw_scene_ref_source_data_set(bsg_scene_ref ref,
 							  struct ged_draw_source_state *data);
 GED_EXPORT extern struct bu_list *ged_draw_scene_ref_geometry_pool(bsg_scene_ref ref);
+GED_EXPORT extern bsg_scene_ref ged_draw_scene_ref_null(void);
+GED_EXPORT extern bsg_scene_ref ged_draw_scene_ref_from_context(void *scene_ctx);
 GED_EXPORT extern int ged_draw_scene_ref_is_null(bsg_scene_ref ref);
 GED_EXPORT extern int ged_draw_scene_ref_equal(bsg_scene_ref a, bsg_scene_ref b);
 GED_EXPORT extern int ged_draw_scene_ref_is_group(bsg_scene_ref ref);
@@ -342,12 +401,16 @@ GED_EXPORT extern int ged_draw_scene_ref_legacy_basecolor(bsg_scene_ref ref,
 GED_EXPORT extern int ged_draw_scene_ref_legacy_user_color(bsg_scene_ref ref);
 GED_EXPORT extern int ged_draw_scene_ref_legacy_default_color(bsg_scene_ref ref);
 GED_EXPORT extern uint64_t ged_draw_scene_ref_drawn_revision(bsg_scene_ref ref);
+GED_EXPORT extern int ged_draw_scene_ref_changed(bsg_scene_ref ref);
 GED_EXPORT extern fastf_t ged_draw_scene_ref_transparency(bsg_scene_ref ref);
 GED_EXPORT extern int ged_draw_scene_ref_line_width(bsg_scene_ref ref);
+GED_EXPORT extern fastf_t ged_draw_scene_ref_draw_size(bsg_scene_ref ref);
 GED_EXPORT extern void ged_draw_scene_ref_draw_center(bsg_scene_ref ref,
 						      point_t center);
 GED_EXPORT extern int ged_draw_scene_ref_color(bsg_scene_ref ref,
 					       unsigned char rgb[3]);
+GED_EXPORT extern int ged_draw_scene_ref_transform(bsg_scene_ref ref,
+						   mat_t mat);
 GED_EXPORT extern int ged_draw_scene_ref_is_view_scope(bsg_scene_ref ref);
 GED_EXPORT extern int ged_draw_scene_ref_is_view_source(bsg_scene_ref ref);
 GED_EXPORT extern int ged_draw_scene_ref_is_local_source(bsg_scene_ref ref);
@@ -364,6 +427,25 @@ GED_EXPORT extern int ged_draw_scene_ref_tree_summary(
 GED_EXPORT extern int ged_draw_scene_ref_material_summary(
 	bsg_scene_ref ref,
 	struct ged_draw_shape_material_summary *out);
+GED_EXPORT extern int ged_draw_scene_ref_geometry_summary(
+	bsg_scene_ref ref,
+	struct ged_draw_shape_geometry_summary *out);
+GED_EXPORT extern int ged_draw_scene_ref_last_point(bsg_scene_ref ref,
+						    point_t out);
+GED_EXPORT extern int ged_draw_scene_ref_line_summary(
+	bsg_scene_ref ref,
+	struct ged_draw_view_line_summary *out);
+GED_EXPORT extern int ged_draw_scene_ref_line_point_at(
+	bsg_scene_ref ref,
+	size_t index,
+	point_t out);
+GED_EXPORT extern int ged_draw_scene_ref_line_command_at(
+	bsg_scene_ref ref,
+	size_t index,
+	int *out);
+GED_EXPORT extern int ged_draw_scene_ref_translate_geometry(
+	bsg_scene_ref ref,
+	const vect_t xlate);
 GED_EXPORT extern int ged_draw_scene_ref_geometry_clear(bsg_scene_ref ref);
 GED_EXPORT extern int ged_draw_scene_ref_publish_bot_wireframe_line_set(bsg_scene_ref ref,
 									const struct rt_bot_internal *bot);
@@ -457,6 +539,8 @@ GED_EXPORT extern int ged_draw_scene_ref_set_line_width(bsg_scene_ref ref,
 GED_EXPORT extern int ged_draw_scene_ref_draw_mat(bsg_scene_ref ref, mat_t mat);
 GED_EXPORT extern int ged_draw_scene_ref_draw_mode(bsg_scene_ref ref);
 GED_EXPORT extern void ged_draw_scene_ref_set_draw_mode(bsg_scene_ref ref, int draw_mode);
+GED_EXPORT extern int ged_draw_scene_ref_set_changed(bsg_scene_ref ref,
+						     int changed);
 GED_EXPORT extern int ged_draw_scene_ref_ensure_draw_intent(bsg_scene_ref ref,
 							    const char *path,
 							    int draw_mode);
@@ -466,17 +550,17 @@ GED_EXPORT extern int ged_draw_scene_ref_set_draw_intent_path(bsg_scene_ref ref,
 GED_EXPORT extern int ged_draw_scene_ref_set_draw_intent_mode(bsg_scene_ref ref,
 							      int draw_mode,
 							      const char *fallback_path);
-GED_EXPORT extern int ged_draw_scene_ref_set_draw_intent_appearance(
+GED_EXPORT extern int ged_draw_scene_ref_set_draw_intent_appearance_settings(
 	bsg_scene_ref ref,
-	const struct bsg_appearance_settings *settings,
+	const struct ged_draw_appearance_settings *settings,
 	const char *fallback_path);
 GED_EXPORT extern int ged_draw_scene_ref_draw_intent_is_overlay(bsg_scene_ref ref);
 GED_EXPORT extern int ged_draw_scene_ref_revalidate_draw_intent(
 	bsg_scene_ref ref,
-	const struct bsg_db_event *event);
-GED_EXPORT extern int ged_draw_scene_ref_draw_intent_appearance(
+	const struct ged_draw_database_event_record *event);
+GED_EXPORT extern int ged_draw_scene_ref_draw_intent_appearance_settings(
 	bsg_scene_ref ref,
-	struct bsg_appearance_settings *settings);
+	struct ged_draw_appearance_settings *settings);
 GED_EXPORT extern const char *ged_draw_scene_ref_draw_intent_path(bsg_scene_ref ref);
 GED_EXPORT extern int ged_draw_scene_ref_draw_intent_mode(bsg_scene_ref ref,
 							 int *draw_mode);
@@ -497,14 +581,17 @@ GED_EXPORT extern int ged_draw_scene_ref_set_legacy_uses_default_color(bsg_scene
 GED_EXPORT extern int ged_draw_scene_ref_set_legacy_region_id(bsg_scene_ref ref,
 							      int region_id);
 GED_EXPORT extern int ged_draw_scene_ref_mark_db_object(bsg_scene_ref ref);
+GED_EXPORT extern int ged_draw_scene_ref_set_non_database_source(
+	bsg_scene_ref ref,
+	int non_database_source);
 GED_EXPORT extern int ged_draw_scene_ref_bump_changed(bsg_scene_ref ref);
 GED_EXPORT extern int ged_draw_scene_ref_apply_overlay_geometry_attributes(bsg_scene_ref ref,
 									   const unsigned char rgb[3],
 									   fastf_t transparency,
 									   int draw_mode);
-GED_EXPORT extern int ged_draw_scene_ref_apply_settings(
+GED_EXPORT extern int ged_draw_scene_ref_apply_appearance_settings(
 	bsg_scene_ref ref,
-	const struct bsg_appearance_settings *settings);
+	const struct ged_draw_appearance_settings *settings);
 GED_EXPORT extern void ged_draw_scene_ref_set_material_rgb(bsg_scene_ref ref,
 							   const unsigned char rgb[3]);
 GED_EXPORT extern uint64_t ged_draw_scene_ref_material_revision(bsg_scene_ref ref);
@@ -609,7 +696,7 @@ GED_EXPORT extern int ged_draw_redraw_group_ref(struct ged *gedp,
 						ged_draw_group_ref ref,
 						int skip_subtractions);
 GED_EXPORT extern void ged_draw_revalidate_db_event(struct ged *gedp,
-						    const struct bsg_db_event *ev);
+						    const struct ged_draw_database_event_record *ev);
 GED_EXPORT extern ged_draw_group_ref ged_draw_group_ref_lookup_or_create(struct ged *gedp,
 									 const struct db_full_path *dfp);
 
@@ -644,7 +731,7 @@ GED_EXPORT extern bsg_scene_ref ged_draw_scene_ref_from_rt_view_ref(rt_view_scen
 GED_EXPORT extern rt_view_scene_ref ged_draw_scene_ref_to_rt_view_ref(bsg_scene_ref ref);
 GED_EXPORT extern size_t ged_draw_scene_ref_child_count_rt(rt_view_scene_ref ref);
 GED_EXPORT extern int ged_draw_scene_ref_revalidate_draw_intent_rt(rt_view_scene_ref ref,
-								   const struct bsg_db_event *event);
+								   const struct ged_draw_database_event_record *event);
 GED_EXPORT extern bsg_scene_ref ged_draw_scene_ref_active_scope(struct ged *gedp,
 								void *view_ctx,
 								int create,
@@ -703,9 +790,6 @@ GED_EXPORT extern int ged_draw_group_ref_set_dbpath(struct ged *gedp,
 GED_EXPORT extern int ged_draw_group_ref_set_mode(struct ged *gedp,
 						  ged_draw_group_ref ref,
 						  int mode);
-GED_EXPORT extern int ged_draw_group_ref_set_appearance(struct ged *gedp,
-							ged_draw_group_ref ref,
-							const struct bsg_appearance_settings *settings);
 GED_EXPORT extern int ged_draw_group_ref_set_appearance_settings(struct ged *gedp,
 								ged_draw_group_ref ref,
 								const struct ged_draw_appearance_settings *settings);
@@ -733,11 +817,6 @@ GED_EXPORT extern int ged_draw_shape_ref_get_color(struct ged *gedp,
 GED_EXPORT extern int ged_draw_shape_ref_set_color(struct ged *gedp,
 					   ged_draw_shape_ref ref,
 					   const unsigned char rgb[3]);
-GED_EXPORT extern int ged_draw_shape_ref_sync_settings(struct ged *gedp,
-						       ged_draw_shape_ref ref,
-						       struct bsg_appearance_settings *settings,
-						       int current_mode,
-						       int *changed);
 GED_EXPORT extern int ged_draw_shape_ref_refresh_material(struct ged *gedp,
 							  ged_draw_shape_ref ref,
 							  unsigned char rgb[3]);

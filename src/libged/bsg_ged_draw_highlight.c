@@ -59,7 +59,7 @@ _iflag_shape_record_cb(const struct ged_draw_shape_record *rec, void *ud)
     struct _iflag_shape_ctx *ctx = (struct _iflag_shape_ctx *)ud;
     bsg_scene_ref shape_ref = ctx ?
 	ged_draw_registry_shape_scene_ref(ctx->gedp, rec->ref) :
-	bsg_scene_ref_null();
+	ged_draw_scene_ref_null();
     (void)ged_draw_scene_ref_set_highlighted(shape_ref,
 	    ctx ? ctx->highlighted : 0);
     return 1;
@@ -95,7 +95,7 @@ static bsg_scene_ref
 _sg_highlighted_shape_scene_ref(const struct ged *gedp)
 {
     if (!gedp || !gedp->i || !gedp->i->ged_gdp)
-	return bsg_scene_ref_null();
+	return ged_draw_scene_ref_null();
     return ged_draw_registry_shape_scene_ref((struct ged *)gedp,
 	    _sg_highlighted_shape_ref(gedp->i->ged_gdp));
 }

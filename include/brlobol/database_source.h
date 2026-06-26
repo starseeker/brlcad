@@ -13,9 +13,15 @@
 
 #include <stdint.h>
 
+#include <Inventor/SbBox.h>
+#include <Inventor/SbColor.h>
+#include <Inventor/SbMatrix.h>
+#include <Inventor/SbVec3f.h>
 #include <Inventor/fields/SoSFBool.h>
+#include <Inventor/fields/SoSFColor.h>
 #include <Inventor/fields/SoSFEnum.h>
 #include <Inventor/fields/SoSFFloat.h>
+#include <Inventor/fields/SoSFInt32.h>
 #include <Inventor/fields/SoSFString.h>
 #include <Inventor/fields/SoSFUInt32.h>
 #include <Inventor/nodes/SoSeparator.h>
@@ -26,6 +32,228 @@ class SoBRLMaterialObject;
 class SoFieldSensor;
 class SoSensor;
 struct db_i;
+
+struct BRLOBOL_EXPORT BRLObolDatabaseSourceSummary {
+    BRLObolDatabaseSourceSummary(void);
+
+    SbBool valid;
+    SbString path;
+    SbBool hasParent;
+    int drawTreeDepth;
+    SbString parentGroupPath;
+    int drawMode;
+    uint32_t sourceRevision;
+    uint32_t inputsRevision;
+    uint32_t viewRevision;
+    uint32_t realizedRevision;
+    uint32_t realizedSourceRevision;
+    uint32_t realizedInputsRevision;
+    uint32_t realizedViewRevision;
+    int realizationStatus;
+    SbString realizationDiagnostic;
+    SbString realizationIdentity;
+    SbBool visible;
+    SbBool highlighted;
+    int lineStyle;
+    int lineWidth;
+    float transparency;
+    SbBool materialColorValid;
+    SbColor materialColor;
+    uint32_t materialRevision;
+    SbBool colorOverride;
+    SbColor color;
+    SbBool stale;
+    uint32_t staleReason;
+    int realizedShapeCount;
+    int realizedMeshCount;
+    int realizedMaterialObjectCount;
+};
+
+struct BRLOBOL_EXPORT BRLObolRealizedShapeSummary {
+    enum ShapeKind {
+	SHAPE_UNKNOWN = 0,
+	SHAPE_VLIST = 1,
+	SHAPE_MESH = 2
+    };
+
+    BRLObolRealizedShapeSummary(void);
+
+    SbBool valid;
+    int shapeKind;
+    SbString path;
+    SbString sourceName;
+    SbString sourceType;
+    uint32_t sourceId;
+    int ownerSourceIndex;
+    SbString ownerSourcePath;
+    int ownerDrawMode;
+    uint32_t ownerSourceRevision;
+    uint32_t ownerInputsRevision;
+    uint32_t ownerViewRevision;
+    uint32_t ownerRealizedRevision;
+    uint32_t ownerRealizedSourceRevision;
+    uint32_t ownerRealizedInputsRevision;
+    uint32_t ownerRealizedViewRevision;
+    int ownerRealizationStatus;
+    SbString ownerRealizationDiagnostic;
+    SbString ownerRealizationIdentity;
+    SbBool ownerSourceStale;
+    uint32_t ownerStaleReason;
+    SbString displayName;
+    SbString geometryName;
+    SbString cacheIdentity;
+    SbString sourceIdentity;
+    SbBool databaseIntent;
+    SbBool overlayIntent;
+    SbBool hudIntent;
+    SbBool localSource;
+    SbBool sharedSource;
+    SbBool nonDatabaseSource;
+    int drawMode;
+    SbString recordRole;
+    SbString geometryKind;
+    int regionId;
+    int airCode;
+    int materialId;
+    int los;
+    SbBool materialColorValid;
+    SbColor materialColor;
+    SbString materialShader;
+    uint32_t materialRevision;
+    SbBool visible;
+    SbBool selectable;
+    SbBool selected;
+    SbBool highlighted;
+    SbBool ghosted;
+    SbBool hiddenLine;
+    SbBool editEmphasis;
+    SbString editIntentId;
+    SbString editIntentRole;
+    uint32_t lodPolicy;
+    int pointCount;
+    int commandCount;
+    int segmentCount;
+    int pointPrimitiveCount;
+    int triangleCount;
+    int indexCount;
+    SbBool boundsValid;
+    SbBox3f bounds;
+};
+
+struct BRLOBOL_EXPORT BRLObolRealizedMaterialSummary {
+    BRLObolRealizedMaterialSummary(void);
+
+    SbBool valid;
+    SbString sourcePath;
+    SbString sourceName;
+    SbString sourceType;
+    uint32_t sourceId;
+    int ownerSourceIndex;
+    SbString ownerSourcePath;
+    int ownerDrawMode;
+    uint32_t ownerSourceRevision;
+    uint32_t ownerInputsRevision;
+    uint32_t ownerViewRevision;
+    uint32_t ownerRealizedRevision;
+    uint32_t ownerRealizedSourceRevision;
+    uint32_t ownerRealizedInputsRevision;
+    uint32_t ownerRealizedViewRevision;
+    int ownerRealizationStatus;
+    SbString ownerRealizationDiagnostic;
+    SbString ownerRealizationIdentity;
+    SbBool ownerSourceStale;
+    uint32_t ownerStaleReason;
+    SbString materialName;
+    SbString parentName;
+    SbString materialSource;
+    int propertyCount;
+};
+
+struct BRLOBOL_EXPORT BRLObolSceneTreeSummary {
+    enum NodeKind {
+	NODE_UNKNOWN = 0,
+	NODE_GROUP = 1,
+	NODE_DATABASE_SOURCE = 2,
+	NODE_VLIST_SHAPE = 3,
+	NODE_MESH_SHAPE = 4,
+	NODE_MATERIAL_OBJECT = 5,
+	NODE_OTHER = 6
+    };
+
+    BRLObolSceneTreeSummary(void);
+
+    SbBool valid;
+    int nodeKind;
+    SbBool isGroup;
+    SbBool isShape;
+    SbBool isDatabaseSource;
+    SbBool isMaterialObject;
+    SbBool hasParent;
+    int drawTreeDepth;
+    int childCount;
+    int ownerSourceIndex;
+    SbString ownerSourcePath;
+    SbString path;
+    SbString sourceName;
+    SbString sourceType;
+    uint32_t sourceId;
+    SbString displayName;
+    SbString geometryName;
+};
+
+struct BRLOBOL_EXPORT BRLObolSceneDisplaySummary {
+    BRLObolSceneDisplaySummary(void);
+
+    SbBool valid;
+    int nodeKind;
+    SbBool isDatabaseSource;
+    SbBool hasDrawIntent;
+    SbString intentPath;
+    int intentDrawMode;
+    SbBool visible;
+    SbBool highlighted;
+    int lineStyle;
+    int lineWidth;
+    double transparency;
+    int drawMode;
+    SbBool materialValid;
+    SbColor materialColor;
+    uint32_t materialRevision;
+    SbBool drawMatrixValid;
+    SbMatrix drawMatrix;
+    SbBool drawCenterValid;
+    SbVec3f drawCenter;
+    SbBool drawSizeValid;
+    float drawSize;
+    int ownerSourceIndex;
+    SbString ownerSourcePath;
+    SbString path;
+};
+
+struct BRLOBOL_EXPORT BRLObolSceneMaterialSummary {
+    BRLObolSceneMaterialSummary(void);
+
+    SbBool valid;
+    int nodeKind;
+    SbBool materialValid;
+    uint32_t materialRevision;
+    SbColor materialColor;
+    int ownerSourceIndex;
+    SbString ownerSourcePath;
+    SbString path;
+};
+
+struct BRLOBOL_EXPORT BRLObolSceneBoundsSummary {
+    BRLObolSceneBoundsSummary(void);
+
+    SbBool valid;
+    int nodeKind;
+    SbBool boundsValid;
+    SbBox3f bounds;
+    int ownerSourceIndex;
+    SbString ownerSourcePath;
+    SbString path;
+};
 
 class BRLOBOL_EXPORT SoBRLDatabaseSource : public SoSeparator {
     typedef SoSeparator inherited;
@@ -56,6 +284,16 @@ public:
 
     SoSFString path;
     SoSFEnum drawMode;
+    SoSFBool visible;
+    SoSFBool highlighted;
+    SoSFInt32 lineStyle;
+    SoSFInt32 lineWidth;
+    SoSFFloat transparency;
+    SoSFBool materialColorValid;
+    SoSFColor materialColor;
+    SoSFUInt32 materialRevision;
+    SoSFBool colorOverride;
+    SoSFColor color;
     SoSFFloat tessellationAbsTol;
     SoSFFloat tessellationRelTol;
     SoSFFloat tessellationNormTol;
@@ -69,6 +307,7 @@ public:
     SoSFUInt32 realizedViewRevision;
     SoSFEnum realizationStatus;
     SoSFString realizationDiagnostic;
+    SoSFString realizationIdentity;
     SoSFBool stale;
     SoSFUInt32 staleReason;
 
@@ -104,6 +343,27 @@ public:
     SoBRLMaterialObject *getRealizedMaterialObject(void) const;
     SoBRLMaterialObject *getRealizedMaterialObject(int index) const;
     int getRealizedMaterialObjectCount(void) const;
+    SbBool getSummary(BRLObolDatabaseSourceSummary &summary) const;
+    int getRealizedShapeSummaryCount(void) const;
+    SbBool getRealizedShapeSummary(int index,
+	BRLObolRealizedShapeSummary &summary) const;
+    int getRealizedMaterialSummaryCount(void) const;
+    SbBool getRealizedMaterialSummary(int index,
+	BRLObolRealizedMaterialSummary &summary) const;
+    SbBool getRealizedMaterialProperty(int materialIndex, int propertyIndex,
+	SbString &groupOut, SbString &nameOut, SbString &valueOut) const;
+    int getRealizedTreeSummaryCount(void) const;
+    SbBool getRealizedTreeSummary(int index,
+	BRLObolSceneTreeSummary &summary) const;
+    int getRealizedDisplaySummaryCount(void) const;
+    SbBool getRealizedDisplaySummary(int index,
+	BRLObolSceneDisplaySummary &summary) const;
+    int getRealizedSceneMaterialSummaryCount(void) const;
+    SbBool getRealizedSceneMaterialSummary(int index,
+	BRLObolSceneMaterialSummary &summary) const;
+    int getRealizedBoundsSummaryCount(void) const;
+    SbBool getRealizedBoundsSummary(int index,
+	BRLObolSceneBoundsSummary &summary) const;
 
 protected:
     virtual ~SoBRLDatabaseSource(void);
@@ -112,6 +372,7 @@ private:
     static void fieldSensorCB(void *data, SoSensor *sensor);
     void attachFieldSensors(void);
     void detachFieldSensors(void);
+    void syncRealizedShapeOwnerState(void);
 
     struct db_i *dbip;
     SoFieldSensor *pathSensor;

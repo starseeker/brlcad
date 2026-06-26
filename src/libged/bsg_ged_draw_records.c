@@ -48,6 +48,153 @@
 #include "./bsg_ged_draw_private.h"
 
 
+enum ged_draw_view_export_geometry_kind {
+    GED_DRAW_VIEW_EXPORT_GEOMETRY_NONE = 0,
+    GED_DRAW_VIEW_EXPORT_GEOMETRY_MESH,
+    GED_DRAW_VIEW_EXPORT_GEOMETRY_LINE_SET,
+    GED_DRAW_VIEW_EXPORT_GEOMETRY_INDEXED_LINE_SET,
+    GED_DRAW_VIEW_EXPORT_GEOMETRY_POINT_SET,
+    GED_DRAW_VIEW_EXPORT_GEOMETRY_INDEXED_FACE_SET,
+    GED_DRAW_VIEW_EXPORT_GEOMETRY_TEXT,
+    GED_DRAW_VIEW_EXPORT_GEOMETRY_IMAGE,
+    GED_DRAW_VIEW_EXPORT_GEOMETRY_OVERLAY,
+    GED_DRAW_VIEW_EXPORT_GEOMETRY_HUD,
+    GED_DRAW_VIEW_EXPORT_GEOMETRY_ANNOTATION,
+    GED_DRAW_VIEW_EXPORT_GEOMETRY_CSG_PROXY,
+    GED_DRAW_VIEW_EXPORT_GEOMETRY_BREP_PROXY,
+    GED_DRAW_VIEW_EXPORT_GEOMETRY_EDIT_PREVIEW,
+    GED_DRAW_VIEW_EXPORT_GEOMETRY_EXTERNAL_PROXY
+};
+
+#define GED_DRAW_VIEW_LINE_POINT_DRAW 12
+
+struct ged_draw_view_export_detail {
+    struct bu_vls path;
+    struct ged_draw_view_db_object_record record;
+    enum ged_draw_view_export_geometry_kind geometry_kind;
+    struct {
+	point_t *points;
+	int *commands;
+	int *indices;
+	size_t point_count;
+	size_t command_count;
+	size_t index_count;
+    } arrays;
+    struct {
+	point_t *points;
+	int *indices;
+	size_t point_count;
+	size_t normal_count;
+	size_t index_count;
+	size_t face_count;
+	int normals_per_index;
+	int material_valid;
+	int material_draw_mode;
+	fastf_t material_transparency;
+	int material_highlighted;
+	unsigned char material_color[3];
+    } surface;
+    struct {
+	int display_space;
+	point_t *points;
+	size_t point_count;
+	size_t segment_count;
+	int line_segment_valid;
+	int line_start;
+	int line_end;
+	int text_segment_valid;
+	int text_ref_point;
+	char *text;
+    } annotation;
+};
+
+
+static void
+_ged_draw_view_export_detail_init(struct ged_draw_view_export_detail *detail)
+{
+    if (!detail)
+	return;
+    memset(detail, 0, sizeof(*detail));
+    BU_VLS_INIT(&detail->path);
+    MAT_IDN(detail->record.model_mat);
+}
+
+
+static void
+_ged_draw_view_export_detail_free(struct ged_draw_view_export_detail *detail)
+{
+    if (!detail)
+	return;
+    bu_vls_free(&detail->path);
+    if (detail->arrays.points)
+	bu_free(detail->arrays.points, "ged draw view export array points");
+    if (detail->arrays.commands)
+	bu_free(detail->arrays.commands, "ged draw view export array commands");
+    if (detail->arrays.indices)
+	bu_free(detail->arrays.indices, "ged draw view export array indices");
+    if (detail->surface.points)
+	bu_free(detail->surface.points, "ged draw view export surface points");
+    if (detail->surface.indices)
+	bu_free(detail->surface.indices, "ged draw view export surface indices");
+    if (detail->annotation.points)
+	bu_free(detail->annotation.points,
+		"ged draw view export annotation points");
+    if (detail->annotation.text)
+	bu_free(detail->annotation.text, "ged draw view export annotation text");
+}
+
+
+static const struct ged_draw_view_export_detail *
+_ged_draw_view_export_detail_from_record(
+	const struct ged_draw_view_db_object_record *rec)
+{
+    if (!rec || !rec->detail_token)
+	return NULL;
+    return (const struct ged_draw_view_export_detail *)rec->detail_token;
+}
+
+
+static int
+_ged_draw_view_export_points_copy(point_t **dst,
+				  const point_t *src,
+				  size_t count,
+				  const char *label)
+{
+    if (!dst)
+	return 0;
+    *dst = NULL;
+    if (!count)
+	return 1;
+    if (!src)
+	return 1;
+
+    *dst = (point_t *)bu_calloc(count, sizeof(point_t), label);
+    for (size_t i = 0; i < count; i++)
+	VMOVE((*dst)[i], src[i]);
+    return 1;
+}
+
+
+static int
+_ged_draw_view_export_ints_copy(int **dst,
+				const int *src,
+				size_t count,
+				const char *label)
+{
+    if (!dst)
+	return 0;
+    *dst = NULL;
+    if (!count)
+	return 1;
+    if (!src)
+	return 1;
+
+    *dst = (int *)bu_calloc(count, sizeof(int), label);
+    memcpy(*dst, src, count * sizeof(int));
+    return 1;
+}
+
+
 static bsg_scene_ref
 _draw_scene_for_shape_ref(struct ged *gedp, ged_draw_shape_ref ref)
 {
@@ -1040,6 +1187,341 @@ ged_draw_foreach_shape_record(struct ged *gedp,
 }
 
 
+static enum ged_draw_view_export_geometry_kind
+_ged_draw_view_export_geometry_kind_from_bsg(bsg_render_geometry_kind kind)
+{
+    switch (kind) {
+	case BSG_RENDER_GEOMETRY_MESH:
+	    return GED_DRAW_VIEW_EXPORT_GEOMETRY_MESH;
+	case BSG_RENDER_GEOMETRY_LINE_SET:
+	    return GED_DRAW_VIEW_EXPORT_GEOMETRY_LINE_SET;
+	case BSG_RENDER_GEOMETRY_INDEXED_LINE_SET:
+	    return GED_DRAW_VIEW_EXPORT_GEOMETRY_INDEXED_LINE_SET;
+	case BSG_RENDER_GEOMETRY_POINT_SET:
+	    return GED_DRAW_VIEW_EXPORT_GEOMETRY_POINT_SET;
+	case BSG_RENDER_GEOMETRY_INDEXED_FACE_SET:
+	    return GED_DRAW_VIEW_EXPORT_GEOMETRY_INDEXED_FACE_SET;
+	case BSG_RENDER_GEOMETRY_TEXT:
+	    return GED_DRAW_VIEW_EXPORT_GEOMETRY_TEXT;
+	case BSG_RENDER_GEOMETRY_IMAGE:
+	    return GED_DRAW_VIEW_EXPORT_GEOMETRY_IMAGE;
+	case BSG_RENDER_GEOMETRY_OVERLAY:
+	    return GED_DRAW_VIEW_EXPORT_GEOMETRY_OVERLAY;
+	case BSG_RENDER_GEOMETRY_HUD:
+	    return GED_DRAW_VIEW_EXPORT_GEOMETRY_HUD;
+	case BSG_RENDER_GEOMETRY_ANNOTATION:
+	    return GED_DRAW_VIEW_EXPORT_GEOMETRY_ANNOTATION;
+	case BSG_RENDER_GEOMETRY_CSG_PROXY:
+	    return GED_DRAW_VIEW_EXPORT_GEOMETRY_CSG_PROXY;
+	case BSG_RENDER_GEOMETRY_BREP_PROXY:
+	    return GED_DRAW_VIEW_EXPORT_GEOMETRY_BREP_PROXY;
+	case BSG_RENDER_GEOMETRY_EDIT_PREVIEW:
+	    return GED_DRAW_VIEW_EXPORT_GEOMETRY_EDIT_PREVIEW;
+	case BSG_RENDER_GEOMETRY_EXTERNAL_PROXY:
+	    return GED_DRAW_VIEW_EXPORT_GEOMETRY_EXTERNAL_PROXY;
+	case BSG_RENDER_GEOMETRY_NONE:
+	default:
+	    return GED_DRAW_VIEW_EXPORT_GEOMETRY_NONE;
+    }
+}
+
+
+static const char *
+_ged_draw_view_export_type_name_from_bsg(
+	bsg_render_geometry_role geometry_role)
+{
+    switch (geometry_role) {
+	case BSG_RENDER_GEOMETRY_ROLE_AXES_WIDGET:
+	    return "axes";
+	case BSG_RENDER_GEOMETRY_ROLE_LINE_SET:
+	    return "line";
+	case BSG_RENDER_GEOMETRY_ROLE_TEXT_LABEL:
+	    return "label";
+	case BSG_RENDER_GEOMETRY_ROLE_POLYGON_REGION:
+	    return "polygon";
+	case BSG_RENDER_GEOMETRY_ROLE_DATABASE_OBJECT:
+	    return "gobj";
+	default:
+	    return "object";
+    }
+}
+
+
+static const char *
+_ged_draw_view_export_geometry_name_from_bsg(
+	bsg_render_geometry_kind geometry_kind)
+{
+    switch (geometry_kind) {
+	case BSG_RENDER_GEOMETRY_MESH:
+	    return "mesh";
+	case BSG_RENDER_GEOMETRY_LINE_SET:
+	    return "line-set";
+	case BSG_RENDER_GEOMETRY_INDEXED_LINE_SET:
+	    return "indexed-line-set";
+	case BSG_RENDER_GEOMETRY_POINT_SET:
+	    return "point-set";
+	case BSG_RENDER_GEOMETRY_INDEXED_FACE_SET:
+	    return "indexed-face-set";
+	case BSG_RENDER_GEOMETRY_TEXT:
+	    return "text";
+	case BSG_RENDER_GEOMETRY_IMAGE:
+	    return "image";
+	case BSG_RENDER_GEOMETRY_OVERLAY:
+	    return "overlay";
+	case BSG_RENDER_GEOMETRY_HUD:
+	    return "hud";
+	case BSG_RENDER_GEOMETRY_ANNOTATION:
+	    return "annotation";
+	case BSG_RENDER_GEOMETRY_CSG_PROXY:
+	    return "csg-proxy";
+	case BSG_RENDER_GEOMETRY_BREP_PROXY:
+	    return "brep-proxy";
+	case BSG_RENDER_GEOMETRY_EDIT_PREVIEW:
+	    return "edit-preview";
+	case BSG_RENDER_GEOMETRY_EXTERNAL_PROXY:
+	    return "external-proxy";
+	case BSG_RENDER_GEOMETRY_NONE:
+	default:
+	    return "none";
+    }
+}
+
+
+static int
+_ged_draw_view_line_command_from_bsg(int command)
+{
+    switch (command) {
+	case BSG_GEOMETRY_LINE_MOVE:
+	    return GED_DRAW_VIEW_LINE_MOVE;
+	case BSG_GEOMETRY_LINE_DRAW:
+	    return GED_DRAW_VIEW_LINE_DRAW;
+	case BSG_GEOMETRY_POINT_DRAW:
+	    return GED_DRAW_VIEW_LINE_POINT_DRAW;
+	default:
+	    return command;
+    }
+}
+
+
+static int
+_ged_draw_view_line_command_from_detail(
+	const struct ged_draw_view_export_detail *detail,
+	size_t index)
+{
+    if (detail && index < detail->arrays.command_count &&
+	    detail->arrays.commands)
+	return detail->arrays.commands[index];
+    return (index % 2) ? GED_DRAW_VIEW_LINE_DRAW : GED_DRAW_VIEW_LINE_MOVE;
+}
+
+
+static int
+_ged_draw_view_export_detail_arrays_from_bsg(
+	struct ged_draw_view_export_detail *detail,
+	const struct bsg_render_geometry *geometry)
+{
+    if (!detail || !geometry)
+	return 0;
+
+    detail->arrays.point_count = geometry->arrays.point_count;
+    detail->arrays.command_count = geometry->arrays.command_count;
+    detail->arrays.index_count = geometry->arrays.index_count;
+    if (!_ged_draw_view_export_points_copy(&detail->arrays.points,
+	    (const point_t *)geometry->arrays.points,
+	    geometry->arrays.point_count,
+	    "ged draw view export array points"))
+	return 0;
+    if (!_ged_draw_view_export_ints_copy(&detail->arrays.commands,
+	    geometry->arrays.commands, geometry->arrays.command_count,
+	    "ged draw view export array commands"))
+	return 0;
+    for (size_t i = 0; i < detail->arrays.command_count; i++)
+	detail->arrays.commands[i] =
+	    _ged_draw_view_line_command_from_bsg(detail->arrays.commands[i]);
+    if (!_ged_draw_view_export_ints_copy(&detail->arrays.indices,
+	    geometry->arrays.indices, geometry->arrays.index_count,
+	    "ged draw view export array indices"))
+	return 0;
+
+    return 1;
+}
+
+
+static int
+_ged_draw_view_export_detail_surface_from_bsg(
+	struct ged_draw_view_export_detail *detail,
+	const struct bsg_render_geometry *geometry)
+{
+    if (!detail || !geometry)
+	return 0;
+
+    detail->surface.point_count = geometry->surface.point_count;
+    detail->surface.normal_count = geometry->surface.normal_count;
+    detail->surface.index_count = geometry->surface.index_count;
+    detail->surface.face_count = geometry->surface.face_count;
+    detail->surface.normals_per_index =
+	(geometry->surface.normal_kind == BSG_RENDER_SURFACE_NORMALS_PER_INDEX);
+    detail->surface.material_valid = geometry->surface.material_valid;
+    detail->surface.material_draw_mode =
+	geometry->surface.material.draw_mode;
+    detail->surface.material_transparency =
+	geometry->surface.material.transparency;
+    detail->surface.material_highlighted =
+	geometry->surface.material.highlighted;
+    detail->surface.material_color[0] =
+	geometry->surface.material.color[0];
+    detail->surface.material_color[1] =
+	geometry->surface.material.color[1];
+    detail->surface.material_color[2] =
+	geometry->surface.material.color[2];
+
+    if (!_ged_draw_view_export_points_copy(&detail->surface.points,
+	    (const point_t *)geometry->surface.points,
+	    geometry->surface.point_count,
+	    "ged draw view export surface points"))
+	return 0;
+    if (!_ged_draw_view_export_ints_copy(&detail->surface.indices,
+	    geometry->surface.indices, geometry->surface.index_count,
+	    "ged draw view export surface indices"))
+	return 0;
+
+    return 1;
+}
+
+
+static int
+_ged_draw_view_export_detail_annotation_from_bsg(
+	struct ged_draw_view_export_detail *detail,
+	const struct bsg_render_geometry *geometry)
+{
+    if (!detail || !geometry)
+	return 0;
+
+    detail->annotation.display_space =
+	(geometry->annotation.space == BSG_ANNOTATION_SPACE_DISPLAY);
+    detail->annotation.point_count = geometry->annotation.point_count;
+    detail->annotation.segment_count = geometry->annotation.segment_count;
+    if (!_ged_draw_view_export_points_copy(&detail->annotation.points,
+	    (const point_t *)geometry->annotation.points,
+	    geometry->annotation.point_count,
+	    "ged draw view export annotation points"))
+	return 0;
+
+    const struct bsg_annotation_segment *segments =
+	geometry->annotation.segments;
+    if (!segments)
+	return 1;
+
+    for (size_t i = 0; i < geometry->annotation.segment_count; i++) {
+	const struct bsg_annotation_segment *seg = &segments[i];
+	if (!detail->annotation.line_segment_valid &&
+		seg->kind == BSG_ANNOTATION_SEGMENT_LINE) {
+	    detail->annotation.line_segment_valid = 1;
+	    detail->annotation.line_start = seg->data.line.start;
+	    detail->annotation.line_end = seg->data.line.end;
+	}
+	if (!detail->annotation.text_segment_valid &&
+		seg->kind == BSG_ANNOTATION_SEGMENT_TEXT) {
+	    detail->annotation.text_segment_valid = 1;
+	    detail->annotation.text_ref_point = seg->data.text.ref_pt;
+	    if (seg->data.text.text)
+		detail->annotation.text = bu_strdup(seg->data.text.text);
+	}
+    }
+
+    return 1;
+}
+
+
+static int
+_ged_draw_view_export_detail_geometry_from_bsg(
+	struct ged_draw_view_export_detail *detail,
+	const struct bsg_export_record *export_rec)
+{
+    if (!detail || !export_rec)
+	return 0;
+
+    detail->geometry_kind =
+	_ged_draw_view_export_geometry_kind_from_bsg(
+	    export_rec->geometry.kind);
+    switch (detail->geometry_kind) {
+	case GED_DRAW_VIEW_EXPORT_GEOMETRY_LINE_SET:
+	case GED_DRAW_VIEW_EXPORT_GEOMETRY_INDEXED_LINE_SET:
+	case GED_DRAW_VIEW_EXPORT_GEOMETRY_POINT_SET:
+	    return _ged_draw_view_export_detail_arrays_from_bsg(detail,
+		    &export_rec->geometry);
+	case GED_DRAW_VIEW_EXPORT_GEOMETRY_INDEXED_FACE_SET:
+	    return _ged_draw_view_export_detail_surface_from_bsg(detail,
+		    &export_rec->geometry);
+	case GED_DRAW_VIEW_EXPORT_GEOMETRY_ANNOTATION:
+	    return _ged_draw_view_export_detail_annotation_from_bsg(detail,
+		    &export_rec->geometry);
+	default:
+	    return 1;
+    }
+}
+
+
+static int
+_ged_draw_view_export_detail_from_bsg(
+	struct ged_draw_view_export_detail *detail,
+	const struct bsg_export_record *export_rec)
+{
+    if (!detail || !export_rec)
+	return 0;
+
+    _ged_draw_view_export_detail_init(detail);
+    bu_vls_strcpy(&detail->path, bu_vls_cstr(&export_rec->path));
+
+    struct ged_draw_view_db_object_record *rec = &detail->record;
+    rec->path = bu_vls_cstr(&detail->path);
+    rec->type_name =
+	_ged_draw_view_export_type_name_from_bsg(
+	    export_rec->source.geometry_role);
+    rec->geometry_name =
+	_ged_draw_view_export_geometry_name_from_bsg(
+	    export_rec->geometry.kind);
+    rec->draw_mode = export_rec->draw_mode;
+    rec->transparency = export_rec->transparency;
+    rec->evaluated_region = export_rec->evaluated_region;
+    rec->is_database_source =
+	(export_rec->source.scope == BSG_RENDER_SOURCE_SCOPE_DATABASE);
+    rec->non_database_source = export_rec->non_database_source;
+    rec->is_database_intent =
+	(export_rec->source.draw_intent == BSG_RENDER_DRAW_INTENT_DATABASE);
+    rec->is_local_source =
+	(export_rec->source.scope == BSG_RENDER_SOURCE_SCOPE_VIEW_LOCAL);
+    rec->is_view_source =
+	(export_rec->source.scope == BSG_RENDER_SOURCE_SCOPE_VIEW_SHARED ||
+	 export_rec->source.scope == BSG_RENDER_SOURCE_SCOPE_VIEW_LOCAL ||
+	 export_rec->source.draw_intent == BSG_RENDER_DRAW_INTENT_OVERLAY ||
+	 export_rec->source.draw_intent == BSG_RENDER_DRAW_INTENT_HUD);
+    rec->highlighted = export_rec->highlighted;
+    rec->selected = export_rec->selected;
+    rec->visible = export_rec->visible;
+    rec->line_style = export_rec->line_style;
+    rec->color[0] = export_rec->color[0];
+    rec->color[1] = export_rec->color[1];
+    rec->color[2] = export_rec->color[2];
+    MAT_COPY(rec->model_mat, export_rec->model_mat);
+    VMOVE(rec->bounds_center, export_rec->bounds_center);
+    rec->bounds_radius = export_rec->bounds_radius;
+    rec->has_bounds = export_rec->has_bounds;
+    rec->vlist_structure_count = export_rec->vlist_structure_count;
+    rec->vlist_point_count = export_rec->vlist_point_count;
+    rec->cache_identity = export_rec->cache_identity;
+    rec->source_identity = export_rec->source.source_id;
+    rec->detail_token = (uintptr_t)detail;
+
+    if (!_ged_draw_view_export_detail_geometry_from_bsg(detail, export_rec)) {
+	_ged_draw_view_export_detail_free(detail);
+	return 0;
+    }
+
+    return 1;
+}
+
+
 static void
 _ged_draw_foreach_view_export_record(void *view_ctx,
 				     unsigned int query_flags,
@@ -1072,109 +1554,13 @@ _ged_draw_foreach_view_export_record(void *view_ctx,
 	if (!export_rec)
 	    continue;
 
-	struct ged_draw_view_db_object_record rec;
-	rec.path = bu_vls_cstr(&export_rec->path);
-	switch (export_rec->source.geometry_role) {
-	    case BSG_RENDER_GEOMETRY_ROLE_AXES_WIDGET:
-		rec.type_name = "axes";
-		break;
-	    case BSG_RENDER_GEOMETRY_ROLE_LINE_SET:
-		rec.type_name = "line";
-		break;
-	    case BSG_RENDER_GEOMETRY_ROLE_TEXT_LABEL:
-		rec.type_name = "label";
-		break;
-	    case BSG_RENDER_GEOMETRY_ROLE_POLYGON_REGION:
-		rec.type_name = "polygon";
-		break;
-	    case BSG_RENDER_GEOMETRY_ROLE_DATABASE_OBJECT:
-		rec.type_name = "gobj";
-		break;
-	    default:
-		rec.type_name = "object";
-		break;
-	}
-	switch (export_rec->geometry.kind) {
-	    case BSG_RENDER_GEOMETRY_MESH:
-		rec.geometry_name = "mesh";
-		break;
-	    case BSG_RENDER_GEOMETRY_LINE_SET:
-		rec.geometry_name = "line-set";
-		break;
-	    case BSG_RENDER_GEOMETRY_INDEXED_LINE_SET:
-		rec.geometry_name = "indexed-line-set";
-		break;
-	    case BSG_RENDER_GEOMETRY_POINT_SET:
-		rec.geometry_name = "point-set";
-		break;
-	    case BSG_RENDER_GEOMETRY_INDEXED_FACE_SET:
-		rec.geometry_name = "indexed-face-set";
-		break;
-	    case BSG_RENDER_GEOMETRY_TEXT:
-		rec.geometry_name = "text";
-		break;
-	    case BSG_RENDER_GEOMETRY_IMAGE:
-		rec.geometry_name = "image";
-		break;
-	    case BSG_RENDER_GEOMETRY_OVERLAY:
-		rec.geometry_name = "overlay";
-		break;
-	    case BSG_RENDER_GEOMETRY_HUD:
-		rec.geometry_name = "hud";
-		break;
-	    case BSG_RENDER_GEOMETRY_ANNOTATION:
-		rec.geometry_name = "annotation";
-		break;
-	    case BSG_RENDER_GEOMETRY_CSG_PROXY:
-		rec.geometry_name = "csg-proxy";
-		break;
-	    case BSG_RENDER_GEOMETRY_BREP_PROXY:
-		rec.geometry_name = "brep-proxy";
-		break;
-	    case BSG_RENDER_GEOMETRY_EDIT_PREVIEW:
-		rec.geometry_name = "edit-preview";
-		break;
-	    case BSG_RENDER_GEOMETRY_EXTERNAL_PROXY:
-		rec.geometry_name = "external-proxy";
-		break;
-	    case BSG_RENDER_GEOMETRY_NONE:
-	    default:
-		rec.geometry_name = "none";
-		break;
-	}
-	rec.draw_mode = export_rec->draw_mode;
-	rec.transparency = export_rec->transparency;
-	rec.evaluated_region = export_rec->evaluated_region;
-	rec.is_database_source =
-	    (export_rec->source.scope == BSG_RENDER_SOURCE_SCOPE_DATABASE);
-	rec.non_database_source = export_rec->non_database_source;
-	rec.is_database_intent =
-	    (export_rec->source.draw_intent == BSG_RENDER_DRAW_INTENT_DATABASE);
-	rec.is_local_source =
-	    (export_rec->source.scope == BSG_RENDER_SOURCE_SCOPE_VIEW_LOCAL);
-	rec.is_view_source =
-	    (export_rec->source.scope == BSG_RENDER_SOURCE_SCOPE_VIEW_SHARED ||
-	     export_rec->source.scope == BSG_RENDER_SOURCE_SCOPE_VIEW_LOCAL ||
-	     export_rec->source.draw_intent == BSG_RENDER_DRAW_INTENT_OVERLAY ||
-	     export_rec->source.draw_intent == BSG_RENDER_DRAW_INTENT_HUD);
-	rec.highlighted = export_rec->highlighted;
-	rec.selected = export_rec->selected;
-	rec.visible = export_rec->visible;
-	rec.line_style = export_rec->line_style;
-	rec.color[0] = export_rec->color[0];
-	rec.color[1] = export_rec->color[1];
-	rec.color[2] = export_rec->color[2];
-	MAT_COPY(rec.model_mat, export_rec->model_mat);
-	VMOVE(rec.bounds_center, export_rec->bounds_center);
-	rec.bounds_radius = export_rec->bounds_radius;
-	rec.has_bounds = export_rec->has_bounds;
-	rec.vlist_structure_count = export_rec->vlist_structure_count;
-	rec.vlist_point_count = export_rec->vlist_point_count;
-	rec.cache_identity = export_rec->cache_identity;
-	rec.source_identity = export_rec->source.source_id;
-	rec.detail_token = (uintptr_t)export_rec;
+	struct ged_draw_view_export_detail detail;
+	if (!_ged_draw_view_export_detail_from_bsg(&detail, export_rec))
+	    continue;
 
-	if (!cb(&rec, userdata))
+	int keep_going = cb(&detail.record, userdata);
+	_ged_draw_view_export_detail_free(&detail);
+	if (!keep_going)
 	    break;
     }
 
@@ -1261,12 +1647,116 @@ ged_draw_view_db_object_record_foreach_segment(
 	ged_draw_view_segment_cb cb,
 	void *userdata)
 {
-    if (!rec || !rec->detail_token || !cb)
+    const struct ged_draw_view_export_detail *detail =
+	_ged_draw_view_export_detail_from_record(rec);
+    size_t count = 0;
+
+    if (!detail || !cb ||
+	    detail->geometry_kind == GED_DRAW_VIEW_EXPORT_GEOMETRY_NONE)
 	return 0;
 
-    const struct bsg_export_record *export_rec =
-	(const struct bsg_export_record *)rec->detail_token;
-    return bsg_export_record_foreach_segment(export_rec, cb, userdata);
+    point_t last = VINIT_ZERO;
+    point_t fin = VINIT_ZERO;
+
+    if (detail->geometry_kind == GED_DRAW_VIEW_EXPORT_GEOMETRY_LINE_SET &&
+	    detail->arrays.point_count && detail->arrays.points) {
+	for (size_t i = 0; i < detail->arrays.point_count; i++) {
+	    int cmd = _ged_draw_view_line_command_from_detail(detail, i);
+	    if (cmd == GED_DRAW_VIEW_LINE_MOVE) {
+		VMOVE(last, detail->arrays.points[i]);
+		continue;
+	    }
+	    if (cmd == GED_DRAW_VIEW_LINE_DRAW) {
+		VMOVE(fin, detail->arrays.points[i]);
+	    } else {
+		continue;
+	    }
+	    if (!cb(last, fin, userdata))
+		return count;
+	    count++;
+	    VMOVE(last, fin);
+	}
+	return count;
+    }
+
+    if (detail->geometry_kind ==
+	    GED_DRAW_VIEW_EXPORT_GEOMETRY_INDEXED_LINE_SET &&
+	    detail->arrays.point_count && detail->arrays.points &&
+	    detail->arrays.index_count && detail->arrays.indices) {
+	int have_last = 0;
+	for (size_t i = 0; i < detail->arrays.index_count; i++) {
+	    int idx = detail->arrays.indices[i];
+	    if (idx < 0) {
+		have_last = 0;
+		continue;
+	    }
+	    if ((size_t)idx >= detail->arrays.point_count)
+		continue;
+	    if (!have_last) {
+		VMOVE(last, detail->arrays.points[idx]);
+		have_last = 1;
+		continue;
+	    }
+	    VMOVE(fin, detail->arrays.points[idx]);
+	    if (!cb(last, fin, userdata))
+		return count;
+	    count++;
+	    VMOVE(last, fin);
+	}
+	return count;
+    }
+
+    if (detail->geometry_kind ==
+	    GED_DRAW_VIEW_EXPORT_GEOMETRY_INDEXED_FACE_SET &&
+	    detail->surface.point_count && detail->surface.points &&
+	    detail->surface.index_count && detail->surface.indices) {
+	int first_idx = -1;
+	int prev_idx = -1;
+	size_t face_vertices = 0;
+
+	for (size_t i = 0; i < detail->surface.index_count; i++) {
+	    int idx = detail->surface.indices[i];
+	    if (idx < 0) {
+		if (face_vertices > 1 && first_idx >= 0 && prev_idx >= 0 &&
+			prev_idx != first_idx) {
+		    if (!cb(detail->surface.points[prev_idx],
+			    detail->surface.points[first_idx], userdata))
+			return count;
+		    count++;
+		}
+		first_idx = -1;
+		prev_idx = -1;
+		face_vertices = 0;
+		continue;
+	    }
+	    if ((size_t)idx >= detail->surface.point_count)
+		continue;
+	    if (!face_vertices) {
+		first_idx = idx;
+		prev_idx = idx;
+		face_vertices = 1;
+		continue;
+	    }
+	    if (prev_idx >= 0) {
+		if (!cb(detail->surface.points[prev_idx],
+			detail->surface.points[idx], userdata))
+		    return count;
+		count++;
+	    }
+	    prev_idx = idx;
+	    face_vertices++;
+	}
+
+	if (face_vertices > 1 && first_idx >= 0 && prev_idx >= 0 &&
+		prev_idx != first_idx) {
+	    if (!cb(detail->surface.points[prev_idx],
+		    detail->surface.points[first_idx], userdata))
+		return count;
+	    count++;
+	}
+    }
+
+    return count;
 }
 
 
@@ -1276,12 +1766,52 @@ ged_draw_view_db_object_record_foreach_point(
 	ged_draw_view_point_cb cb,
 	void *userdata)
 {
-    if (!rec || !rec->detail_token || !cb)
+    const struct ged_draw_view_export_detail *detail =
+	_ged_draw_view_export_detail_from_record(rec);
+    size_t count = 0;
+
+    if (!detail || !cb ||
+	    detail->geometry_kind == GED_DRAW_VIEW_EXPORT_GEOMETRY_NONE)
 	return 0;
 
-    const struct bsg_export_record *export_rec =
-	(const struct bsg_export_record *)rec->detail_token;
-    return bsg_export_record_foreach_point(export_rec, cb, userdata);
+    if (detail->geometry_kind ==
+	    GED_DRAW_VIEW_EXPORT_GEOMETRY_INDEXED_FACE_SET &&
+	    detail->surface.point_count && detail->surface.points) {
+	for (size_t i = 0; i < detail->surface.point_count; i++) {
+	    if (!cb(detail->surface.points[i], userdata))
+		return count;
+	    count++;
+	}
+	return count;
+    }
+
+    if ((detail->geometry_kind == GED_DRAW_VIEW_EXPORT_GEOMETRY_LINE_SET ||
+		detail->geometry_kind ==
+		GED_DRAW_VIEW_EXPORT_GEOMETRY_POINT_SET ||
+		detail->geometry_kind ==
+		GED_DRAW_VIEW_EXPORT_GEOMETRY_INDEXED_LINE_SET) &&
+	    detail->arrays.point_count && detail->arrays.points) {
+	for (size_t i = 0; i < detail->arrays.point_count; i++) {
+	    if (!cb(detail->arrays.points[i], userdata))
+		return count;
+	    count++;
+	}
+	return count;
+    }
+
+    return 0;
+}
+
+
+static int
+_ged_draw_view_record_has_segment_cb(const point_t UNUSED(a),
+				     const point_t UNUSED(b),
+				     void *data)
+{
+    int *seen = (int *)data;
+    if (seen)
+	*seen = 1;
+    return 0;
 }
 
 
@@ -1289,12 +1819,26 @@ int
 ged_draw_view_db_object_record_has_segments(
 	const struct ged_draw_view_db_object_record *rec)
 {
-    if (!rec || !rec->detail_token)
-	return 0;
+    int seen = 0;
+    (void)ged_draw_view_db_object_record_foreach_segment(rec,
+	    _ged_draw_view_record_has_segment_cb, &seen);
+    return seen;
+}
 
-    const struct bsg_export_record *export_rec =
-	(const struct bsg_export_record *)rec->detail_token;
-    return bsg_export_record_has_segments(export_rec);
+
+static const char *
+_ged_draw_view_geometry_command_description(int cmd)
+{
+    switch (cmd) {
+	case GED_DRAW_VIEW_LINE_MOVE:
+	    return "line move";
+	case GED_DRAW_VIEW_LINE_DRAW:
+	    return "line draw";
+	case GED_DRAW_VIEW_LINE_POINT_DRAW:
+	    return "point draw";
+	default:
+	    return "unknown";
+    }
 }
 
 
@@ -1303,12 +1847,71 @@ ged_draw_view_db_object_record_geometry_report(
 	const struct ged_draw_view_db_object_record *rec,
 	struct bu_vls *out)
 {
-    if (!rec || !rec->detail_token || !out)
+    const struct ged_draw_view_export_detail *detail =
+	_ged_draw_view_export_detail_from_record(rec);
+    if (!detail || !out)
 	return;
 
-    const struct bsg_export_record *export_rec =
-	(const struct bsg_export_record *)rec->detail_token;
-    bsg_export_record_geometry_report(export_rec, out);
+    if ((detail->geometry_kind == GED_DRAW_VIEW_EXPORT_GEOMETRY_LINE_SET ||
+		detail->geometry_kind ==
+		GED_DRAW_VIEW_EXPORT_GEOMETRY_POINT_SET) &&
+	    detail->arrays.point_count && detail->arrays.points) {
+	for (size_t i = 0; i < detail->arrays.point_count; i++) {
+	    int cmd = (detail->geometry_kind ==
+		    GED_DRAW_VIEW_EXPORT_GEOMETRY_POINT_SET) ?
+		GED_DRAW_VIEW_LINE_POINT_DRAW :
+		_ged_draw_view_line_command_from_detail(detail, i);
+	    const fastf_t *pt = detail->arrays.points[i];
+	    bu_vls_printf(out, "  %s (%g, %g, %g)\n",
+		    _ged_draw_view_geometry_command_description(cmd),
+		    V3ARGS(pt));
+	}
+	return;
+    }
+
+    if (detail->geometry_kind ==
+	    GED_DRAW_VIEW_EXPORT_GEOMETRY_INDEXED_LINE_SET &&
+	    detail->arrays.point_count && detail->arrays.points &&
+	    detail->arrays.index_count && detail->arrays.indices) {
+	int have_current = 0;
+	for (size_t i = 0; i < detail->arrays.index_count; i++) {
+	    int idx = detail->arrays.indices[i];
+	    if (idx < 0) {
+		have_current = 0;
+		continue;
+	    }
+	    if ((size_t)idx >= detail->arrays.point_count)
+		continue;
+	    int cmd = have_current ? GED_DRAW_VIEW_LINE_DRAW :
+		GED_DRAW_VIEW_LINE_MOVE;
+	    const fastf_t *pt = detail->arrays.points[idx];
+	    bu_vls_printf(out, "  %s (%g, %g, %g)\n",
+		    _ged_draw_view_geometry_command_description(cmd),
+		    V3ARGS(pt));
+	    have_current = 1;
+	}
+	return;
+    }
+
+    if (detail->geometry_kind ==
+	    GED_DRAW_VIEW_EXPORT_GEOMETRY_INDEXED_FACE_SET &&
+	    detail->surface.point_count && detail->surface.points &&
+	    detail->surface.index_count && detail->surface.indices) {
+	size_t face_vertex = 0;
+	for (size_t i = 0; i < detail->surface.index_count; i++) {
+	    int idx = detail->surface.indices[i];
+	    if (idx < 0) {
+		face_vertex = 0;
+		continue;
+	    }
+	    if ((size_t)idx >= detail->surface.point_count)
+		continue;
+	    const fastf_t *pt = detail->surface.points[idx];
+	    bu_vls_printf(out, "  indexed face %zu (%g, %g, %g)\n",
+		    face_vertex, V3ARGS(pt));
+	    face_vertex++;
+	}
+    }
 }
 
 
@@ -1322,63 +1925,31 @@ ged_draw_view_db_object_record_annotation_summary(
 	return 0;
 
     memset(out, 0, sizeof(*out));
-    if (!rec || !rec->detail_token)
-	return 0;
-
-    const struct bsg_export_record *export_rec =
-	(const struct bsg_export_record *)rec->detail_token;
-    if (export_rec->geometry.kind != BSG_RENDER_GEOMETRY_ANNOTATION)
+    const struct ged_draw_view_export_detail *detail =
+	_ged_draw_view_export_detail_from_record(rec);
+    if (!detail ||
+	    detail->geometry_kind != GED_DRAW_VIEW_EXPORT_GEOMETRY_ANNOTATION)
 	return 0;
 
     out->valid = 1;
-    out->display_space =
-	(export_rec->geometry.annotation.space == BSG_ANNOTATION_SPACE_DISPLAY);
-    out->point_count = export_rec->geometry.annotation.point_count;
-    out->segment_count = export_rec->geometry.annotation.segment_count;
-    out->cache_identity = export_rec->cache_identity;
-    out->source_identity = export_rec->source.source_id;
-    if (point_index < export_rec->geometry.annotation.point_count &&
-	    export_rec->geometry.annotation.points) {
+    out->display_space = detail->annotation.display_space;
+    out->point_count = detail->annotation.point_count;
+    out->segment_count = detail->annotation.segment_count;
+    out->cache_identity = rec->cache_identity;
+    out->source_identity = rec->source_identity;
+    if (point_index < detail->annotation.point_count &&
+	    detail->annotation.points) {
 	out->has_point = 1;
-	VMOVE(out->point, export_rec->geometry.annotation.points[point_index]);
+	VMOVE(out->point, detail->annotation.points[point_index]);
     }
-
-    const struct bsg_annotation_segment *segments =
-	export_rec->geometry.annotation.segments;
-    if (!segments)
-	return 1;
-
-    for (size_t i = 0; i < export_rec->geometry.annotation.segment_count; i++) {
-	const struct bsg_annotation_segment *seg = &segments[i];
-	if (!out->line_segment_valid &&
-		seg->kind == BSG_ANNOTATION_SEGMENT_LINE) {
-	    out->line_segment_valid = 1;
-	    out->line_start = seg->data.line.start;
-	    out->line_end = seg->data.line.end;
-	}
-	if (!out->text_segment_valid &&
-		seg->kind == BSG_ANNOTATION_SEGMENT_TEXT) {
-	    out->text_segment_valid = 1;
-	    out->text_ref_point = seg->data.text.ref_pt;
-	    out->text = seg->data.text.text;
-	}
-    }
+    out->line_segment_valid = detail->annotation.line_segment_valid;
+    out->line_start = detail->annotation.line_start;
+    out->line_end = detail->annotation.line_end;
+    out->text_segment_valid = detail->annotation.text_segment_valid;
+    out->text_ref_point = detail->annotation.text_ref_point;
+    out->text = detail->annotation.text;
 
     return 1;
-}
-
-
-static int
-_ged_draw_view_line_command_from_export(int command)
-{
-    switch (command) {
-	case BSG_GEOMETRY_LINE_MOVE:
-	    return GED_DRAW_VIEW_LINE_MOVE;
-	case BSG_GEOMETRY_LINE_DRAW:
-	    return GED_DRAW_VIEW_LINE_DRAW;
-	default:
-	    return command;
-    }
 }
 
 
@@ -1391,18 +1962,16 @@ ged_draw_view_db_object_record_line_summary(
 	return 0;
 
     memset(out, 0, sizeof(*out));
-    if (!rec || !rec->detail_token)
-	return 0;
-
-    const struct bsg_export_record *export_rec =
-	(const struct bsg_export_record *)rec->detail_token;
-    if (export_rec->geometry.kind != BSG_RENDER_GEOMETRY_LINE_SET)
+    const struct ged_draw_view_export_detail *detail =
+	_ged_draw_view_export_detail_from_record(rec);
+    if (!detail ||
+	    detail->geometry_kind != GED_DRAW_VIEW_EXPORT_GEOMETRY_LINE_SET)
 	return 0;
 
     out->valid = 1;
-    out->point_count = export_rec->geometry.arrays.point_count;
-    out->cache_identity = export_rec->cache_identity;
-    out->source_identity = export_rec->source.source_id;
+    out->point_count = detail->arrays.point_count;
+    out->cache_identity = rec->cache_identity;
+    out->source_identity = rec->source_identity;
 
     return 1;
 }
@@ -1414,17 +1983,14 @@ ged_draw_view_db_object_record_line_point_at(
 	size_t index,
 	point_t out)
 {
-    if (!out || !rec || !rec->detail_token)
+    const struct ged_draw_view_export_detail *detail =
+	_ged_draw_view_export_detail_from_record(rec);
+    if (!out || !detail ||
+	    detail->geometry_kind != GED_DRAW_VIEW_EXPORT_GEOMETRY_LINE_SET ||
+	    index >= detail->arrays.point_count || !detail->arrays.points)
 	return 0;
 
-    const struct bsg_export_record *export_rec =
-	(const struct bsg_export_record *)rec->detail_token;
-    if (export_rec->geometry.kind != BSG_RENDER_GEOMETRY_LINE_SET ||
-	    index >= export_rec->geometry.arrays.point_count ||
-	    !export_rec->geometry.arrays.points)
-	return 0;
-
-    VMOVE(out, export_rec->geometry.arrays.points[index]);
+    VMOVE(out, detail->arrays.points[index]);
     return 1;
 }
 
@@ -1435,20 +2001,14 @@ ged_draw_view_db_object_record_line_command_at(
 	size_t index,
 	int *out)
 {
-    if (!out || !rec || !rec->detail_token)
+    const struct ged_draw_view_export_detail *detail =
+	_ged_draw_view_export_detail_from_record(rec);
+    if (!out || !detail ||
+	    detail->geometry_kind != GED_DRAW_VIEW_EXPORT_GEOMETRY_LINE_SET ||
+	    index >= detail->arrays.point_count)
 	return 0;
 
-    const struct bsg_export_record *export_rec =
-	(const struct bsg_export_record *)rec->detail_token;
-    if (export_rec->geometry.kind != BSG_RENDER_GEOMETRY_LINE_SET ||
-	    index >= export_rec->geometry.arrays.point_count)
-	return 0;
-
-    int command = (index % 2) ? BSG_GEOMETRY_LINE_DRAW : BSG_GEOMETRY_LINE_MOVE;
-    if (index < export_rec->geometry.arrays.command_count &&
-	    export_rec->geometry.arrays.commands)
-	command = export_rec->geometry.arrays.commands[index];
-    *out = _ged_draw_view_line_command_from_export(command);
+    *out = _ged_draw_view_line_command_from_detail(detail, index);
     return 1;
 }
 
@@ -1462,37 +2022,28 @@ ged_draw_view_db_object_record_surface_summary(
 	return 0;
 
     memset(out, 0, sizeof(*out));
-    if (!rec || !rec->detail_token)
-	return 0;
-
-    const struct bsg_export_record *export_rec =
-	(const struct bsg_export_record *)rec->detail_token;
-    if (export_rec->geometry.kind != BSG_RENDER_GEOMETRY_INDEXED_FACE_SET)
+    const struct ged_draw_view_export_detail *detail =
+	_ged_draw_view_export_detail_from_record(rec);
+    if (!detail ||
+	    detail->geometry_kind !=
+	    GED_DRAW_VIEW_EXPORT_GEOMETRY_INDEXED_FACE_SET)
 	return 0;
 
     out->valid = 1;
-    out->point_count = export_rec->geometry.surface.point_count;
-    out->normal_count = export_rec->geometry.surface.normal_count;
-    out->index_count = export_rec->geometry.surface.index_count;
-    out->face_count = export_rec->geometry.surface.face_count;
-    out->normals_per_index =
-	(export_rec->geometry.surface.normal_kind ==
-	 BSG_RENDER_SURFACE_NORMALS_PER_INDEX);
-    out->material_valid = export_rec->geometry.surface.material_valid;
-    out->material_draw_mode =
-	export_rec->geometry.surface.material.draw_mode;
-    out->material_transparency =
-	export_rec->geometry.surface.material.transparency;
-    out->material_highlighted =
-	export_rec->geometry.surface.material.highlighted;
-    out->material_color[0] =
-	export_rec->geometry.surface.material.color[0];
-    out->material_color[1] =
-	export_rec->geometry.surface.material.color[1];
-    out->material_color[2] =
-	export_rec->geometry.surface.material.color[2];
-    out->cache_identity = export_rec->cache_identity;
-    out->source_identity = export_rec->source.source_id;
+    out->point_count = detail->surface.point_count;
+    out->normal_count = detail->surface.normal_count;
+    out->index_count = detail->surface.index_count;
+    out->face_count = detail->surface.face_count;
+    out->normals_per_index = detail->surface.normals_per_index;
+    out->material_valid = detail->surface.material_valid;
+    out->material_draw_mode = detail->surface.material_draw_mode;
+    out->material_transparency = detail->surface.material_transparency;
+    out->material_highlighted = detail->surface.material_highlighted;
+    out->material_color[0] = detail->surface.material_color[0];
+    out->material_color[1] = detail->surface.material_color[1];
+    out->material_color[2] = detail->surface.material_color[2];
+    out->cache_identity = rec->cache_identity;
+    out->source_identity = rec->source_identity;
 
     return 1;
 }
@@ -1504,17 +2055,16 @@ ged_draw_view_db_object_record_surface_index_at(
 	size_t index,
 	int *out)
 {
-    if (!out || !rec || !rec->detail_token)
+    const struct ged_draw_view_export_detail *detail =
+	_ged_draw_view_export_detail_from_record(rec);
+    if (!out || !detail ||
+	    detail->geometry_kind !=
+	    GED_DRAW_VIEW_EXPORT_GEOMETRY_INDEXED_FACE_SET ||
+	    index >= detail->surface.index_count ||
+	    !detail->surface.indices)
 	return 0;
 
-    const struct bsg_export_record *export_rec =
-	(const struct bsg_export_record *)rec->detail_token;
-    if (export_rec->geometry.kind != BSG_RENDER_GEOMETRY_INDEXED_FACE_SET ||
-	    index >= export_rec->geometry.surface.index_count ||
-	    !export_rec->geometry.surface.indices)
-	return 0;
-
-    *out = export_rec->geometry.surface.indices[index];
+    *out = detail->surface.indices[index];
     return 1;
 }
 
