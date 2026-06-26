@@ -19,6 +19,12 @@ The target architecture is:
   libdm use is isolated legacy compatibility, not a design input for new
   backend behavior.
 
+Working environment notes:  development frequently happens on FreeBSD - in
+those cases we're using clang and lldb.  If you need python on those systems
+its currently python3.11
+
+We usually build in a build/ direcotory in the source tree using the ninja
+build tool.
 
 Guiding Constraints
 -------------------
