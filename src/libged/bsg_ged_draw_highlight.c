@@ -57,11 +57,9 @@ static int
 _iflag_shape_record_cb(const struct ged_draw_shape_record *rec, void *ud)
 {
     struct _iflag_shape_ctx *ctx = (struct _iflag_shape_ctx *)ud;
-    bsg_scene_ref shape_ref = ctx ?
-	ged_draw_registry_shape_scene_ref(ctx->gedp, rec->ref) :
-	ged_draw_scene_ref_null();
-    (void)ged_draw_scene_ref_set_highlighted(shape_ref,
-	    ctx ? ctx->highlighted : 0);
+    if (ctx && rec)
+	(void)ged_draw_shape_ref_set_highlighted(ctx->gedp, rec->ref,
+		ctx->highlighted);
     return 1;
 }
 
@@ -91,16 +89,6 @@ _sg_highlighted_shape_ref(const struct ged_drawable *gdp)
 }
 
 
-static bsg_scene_ref
-_sg_highlighted_shape_scene_ref(const struct ged *gedp)
-{
-    if (!gedp || !gedp->i || !gedp->i->ged_gdp)
-	return ged_draw_scene_ref_null();
-    return ged_draw_registry_shape_scene_ref((struct ged *)gedp,
-	    _sg_highlighted_shape_ref(gedp->i->ged_gdp));
-}
-
-
 void
 ged_draw_highlighted_shape_ref_invalidate(struct ged *gedp)
 {
@@ -127,29 +115,30 @@ ged_draw_highlighted_shape_ref_invalidate(struct ged *gedp)
  * only as a derived compatibility surface for older callers that still ask
  * appearance directly.
  */
-static void
+static int
 _sg_set_highlighted_shape_ref(struct ged *gedp, ged_draw_shape_ref ref)
 {
+    if (!gedp || !gedp->i || !gedp->i->ged_gdp)
+	return 0;
+
     struct ged_drawable *gdp = gedp->i->ged_gdp;
     ged_draw_shape_ref old_ref = _sg_highlighted_shape_ref(gdp);
-    bsg_scene_ref old = ged_draw_registry_shape_scene_ref(gedp, old_ref);
-    bsg_scene_ref shape_ref = ged_draw_registry_shape_scene_ref(gedp, ref);
 
     if (old_ref.token == ref.token &&
 	    old_ref.scene_revision == ref.scene_revision) {
-	return;
+	return !ged_draw_shape_ref_is_null(ref);
     }
 
-    (void)ged_draw_scene_ref_set_highlighted(old, 0);
-    (void)ged_draw_scene_ref_set_highlighted(shape_ref, 1);
+    (void)ged_draw_shape_ref_set_highlighted(gedp, old_ref, 0);
+    int set = !ged_draw_shape_ref_is_null(ref) &&
+	ged_draw_shape_ref_set_highlighted(gedp, ref, 1);
 
-    gdp->gd_highlight_token =
-	ged_draw_scene_ref_is_null(shape_ref) ? 0 : ref.token;
-    gdp->gd_highlight_scene_rev =
-	ged_draw_scene_ref_is_null(shape_ref) ? 0 : ref.scene_revision;
+    gdp->gd_highlight_token = set ? ref.token : 0;
+    gdp->gd_highlight_scene_rev = set ? ref.scene_revision : 0;
 
     /* Every transition is itself a highlight-state change. */
     gdp->gd_highlight_rev++;
+    return set || ged_draw_shape_ref_is_null(ref);
 }
 
 
@@ -159,12 +148,13 @@ ged_draw_set_highlight_state(struct ged *gedp, int highlighted)
     if (!gedp)
 	return;
     if (!highlighted) {
+	struct ged_drawable *gdp = gedp->i ? gedp->i->ged_gdp : NULL;
 	/* Fast path: when exactly one shape is highlighted and tracked,
 	 * clear only that shape in O(1) rather than sweeping the whole tree. */
-	bsg_scene_ref illum = _sg_highlighted_shape_scene_ref(gedp);
-	if (!ged_draw_scene_ref_is_null(illum)) {
-	    (void)ged_draw_scene_ref_set_highlighted(illum, 0);
-	    _sg_set_highlighted_shape_ref(gedp, GED_DRAW_SHAPE_REF_NULL);
+	if (!ged_draw_shape_ref_is_null(
+		_sg_highlighted_shape_ref(gdp))) {
+	    (void)_sg_set_highlighted_shape_ref(gedp,
+		    GED_DRAW_SHAPE_REF_NULL);
 	    return;
 	}
     }
@@ -188,9 +178,8 @@ _ged_draw_highlight_path_prefix_cb(const struct ged_draw_shape_record *rec,
 	    return 1;
     }
 
-    bsg_scene_ref shape_ref =
-	ged_draw_registry_shape_scene_ref(ctx->gedp, rec->ref);
-    if (ged_draw_scene_ref_set_highlighted(shape_ref, ctx->highlighted)) {
+    if (ged_draw_shape_ref_set_highlighted(ctx->gedp, rec->ref,
+	    ctx->highlighted)) {
 	ctx->matched++;
     }
     return 1;
@@ -236,17 +225,16 @@ ged_draw_shape_set_highlighted(struct ged *gedp, ged_draw_shape_ref ref, int hig
     if (!gedp || ged_draw_shape_ref_is_null(ref))
 	return 0;
 
-    bsg_scene_ref shape_ref = ged_draw_registry_shape_scene_ref(gedp, ref);
-    if (ged_draw_scene_ref_is_null(shape_ref))
-	return 0;
-
-    (void)ged_draw_scene_ref_set_highlighted(shape_ref, highlighted);
     if (!highlighted) {
+	if (!ged_draw_shape_ref_set_highlighted(gedp, ref, 0))
+	    return 0;
 	struct ged_drawable *gdp = gedp->i ? gedp->i->ged_gdp : NULL;
 	if (gdp && _sg_highlighted_shape_ref(gdp).token == ref.token)
-	    _sg_set_highlighted_shape_ref(gedp, GED_DRAW_SHAPE_REF_NULL);
+	    (void)_sg_set_highlighted_shape_ref(gedp,
+		    GED_DRAW_SHAPE_REF_NULL);
     } else {
-	_sg_set_highlighted_shape_ref(gedp, ref);
+	if (!_sg_set_highlighted_shape_ref(gedp, ref))
+	    return 0;
     }
     return 1;
 }
@@ -255,7 +243,7 @@ ged_draw_shape_set_highlighted(struct ged *gedp, ged_draw_shape_ref ref, int hig
 ged_draw_shape_ref
 ged_draw_highlighted_shape_ref(const struct ged *gedp)
 {
-    if (!gedp)
+    if (!gedp || !gedp->i)
 	return GED_DRAW_SHAPE_REF_NULL;
     return _sg_highlighted_shape_ref(gedp->i->ged_gdp);
 }

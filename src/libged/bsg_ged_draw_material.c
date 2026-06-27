@@ -40,15 +40,13 @@ static int
 _color_shape_record_cb(const struct ged_draw_shape_record *rec, void *ud)
 {
     struct _color_ctx *ctx = (struct _color_ctx *)ud;
-    bsg_scene_ref shape_ref = ctx ? ged_draw_registry_shape_scene_ref(ctx->gedp, rec->ref) :
-	ged_draw_scene_ref_null();
-    if (ged_draw_scene_ref_is_null(shape_ref))
+    if (!ctx || !rec)
 	return 1;
 
     /* Lazy-color skip/stamp stays in the source adapter with the retained
      * material revision and legacy color fields. */
-    (void)ged_draw_scene_ref_refresh_material_color(ctx->dbip, shape_ref,
-	    ctx->mater_rev);
+    (void)ged_draw_shape_ref_refresh_material_color(ctx->gedp, rec->ref,
+	    ctx->dbip, ctx->mater_rev);
     return 1;
 }
 

@@ -51,20 +51,6 @@ _ged_draw_view_export_detail_from_record(
 }
 
 
-static bsg_scene_ref
-_draw_scene_for_shape_ref(struct ged *gedp, ged_draw_shape_ref ref)
-{
-    return ged_draw_registry_shape_scene_ref(gedp, ref);
-}
-
-
-static bsg_scene_ref
-_draw_scene_for_group_ref(struct ged *gedp, ged_draw_group_ref ref)
-{
-    return ged_draw_registry_group_scene_ref(gedp, ref);
-}
-
-
 static const char *
 _dbpath_skip_lead_slash(const char *s)
 {
@@ -84,15 +70,11 @@ _ged_draw_shape_ref_selection_path(struct ged *gedp,
     if (!gedp || ged_draw_shape_ref_is_null(ref) || !path_out)
 	return 0;
 
-    bsg_scene_ref shape_ref = _draw_scene_for_shape_ref(gedp, ref);
-    if (ged_draw_scene_ref_is_null(shape_ref))
-	return 0;
-
     char *path = NULL;
     const char *source_path = NULL;
     struct ged_draw_shape_record_summary shape_summary = {0};
     memset(&shape_summary, 0, sizeof(shape_summary));
-    if (ged_draw_scene_ref_shape_record_summary(shape_ref, &shape_summary) &&
+    if (ged_draw_shape_ref_record_summary(gedp, ref, &shape_summary) &&
 	    shape_summary.fullpath && shape_summary.fullpath->fp_len > 0) {
 	path = db_path_to_string(shape_summary.fullpath);
 	source_path = path;
@@ -253,23 +235,23 @@ struct _draw_path_state_ctx {
 
 
 static int
-_draw_path_state_shape_scene_cb(bsg_scene_ref shape_ref, void *ud)
+_draw_path_state_shape_ref_cb(ged_draw_shape_ref ref, void *ud)
 {
     struct _draw_path_state_ctx *ctx =
 	(struct _draw_path_state_ctx *)ud;
-    if (!ctx || ged_draw_scene_ref_is_null(shape_ref))
+    if (!ctx || ged_draw_shape_ref_is_null(ref))
 	return 1;
 
     struct ged_draw_shape_record_summary shape_summary = {0};
-    if (!ged_draw_scene_ref_shape_record_summary(shape_ref, &shape_summary) ||
+    if (!ged_draw_shape_ref_record_summary(ctx->gedp, ref, &shape_summary) ||
 	    !shape_summary.fullpath || !shape_summary.visible)
 	return 1;
     if (ctx->mode >= 0 && shape_summary.draw_mode != ctx->mode)
 	return 1;
 
     struct ged_draw_group_record_summary group_summary;
-    if (!ged_draw_scene_ref_group_record_summary(
-		shape_summary.owning_group_ref, &group_summary) ||
+    if (!ged_draw_shape_ref_owning_group_record_summary(
+		ctx->gedp, ref, &group_summary) ||
 	    group_summary.is_overlay || !group_summary.visible ||
 	    !_draw_group_record_summary_in_view(&group_summary, ctx->view_ctx))
 	return 1;
@@ -322,8 +304,8 @@ ged_draw_path_state(struct ged *gedp,
     ctx.mode = mode;
     ctx.drawn_leaf_paths = drawn;
 
-    ged_draw_scene_root_foreach_shape(gedp, 0,
-	    _draw_path_state_shape_scene_cb, &ctx);
+    ged_draw_scene_root_foreach_shape_ref(gedp, 0,
+	    _draw_path_state_shape_ref_cb, &ctx);
 
     if (ctx.exact_shape) {
 	bu_hash_destroy(drawn);
@@ -497,22 +479,22 @@ _draw_path_list_cached_state(struct _draw_path_list_ctx *ctx, const char *path)
 
 
 static int
-_draw_list_shape_scene_path_collapsed_cb(bsg_scene_ref shape_ref, void *ud)
+_draw_list_shape_ref_path_collapsed_cb(ged_draw_shape_ref ref, void *ud)
 {
     struct _draw_path_list_ctx *ctx = (struct _draw_path_list_ctx *)ud;
-    if (!ctx || ged_draw_scene_ref_is_null(shape_ref))
+    if (!ctx || ged_draw_shape_ref_is_null(ref))
 	return 1;
 
     struct ged_draw_shape_record_summary shape_summary;
-    if (!ged_draw_scene_ref_shape_record_summary(shape_ref, &shape_summary) ||
+    if (!ged_draw_shape_ref_record_summary(ctx->gedp, ref, &shape_summary) ||
 	    !shape_summary.fullpath || !shape_summary.visible)
 	return 1;
     if (ctx->mode >= 0 && shape_summary.draw_mode != ctx->mode)
 	return 1;
 
     struct ged_draw_group_record_summary group_summary;
-    if (!ged_draw_scene_ref_group_record_summary(
-		shape_summary.owning_group_ref, &group_summary) ||
+    if (!ged_draw_shape_ref_owning_group_record_summary(
+		ctx->gedp, ref, &group_summary) ||
 	    group_summary.is_overlay || !group_summary.visible ||
 	    !_draw_group_record_summary_in_view(&group_summary, ctx->view_ctx))
 	return 1;
@@ -548,22 +530,22 @@ _draw_list_shape_scene_path_collapsed_cb(bsg_scene_ref shape_ref, void *ud)
 
 
 static int
-_draw_list_shape_scene_path_cb(bsg_scene_ref shape_ref, void *ud)
+_draw_list_shape_ref_path_cb(ged_draw_shape_ref ref, void *ud)
 {
     struct _draw_path_list_ctx *ctx = (struct _draw_path_list_ctx *)ud;
-    if (!ctx || ged_draw_scene_ref_is_null(shape_ref))
+    if (!ctx || ged_draw_shape_ref_is_null(ref))
 	return 1;
 
     struct ged_draw_shape_record_summary shape_summary;
-    if (!ged_draw_scene_ref_shape_record_summary(shape_ref, &shape_summary) ||
+    if (!ged_draw_shape_ref_record_summary(ctx->gedp, ref, &shape_summary) ||
 	    !shape_summary.fullpath || !shape_summary.visible)
 	return 1;
     if (ctx->mode >= 0 && shape_summary.draw_mode != ctx->mode)
 	return 1;
 
     struct ged_draw_group_record_summary group_summary;
-    if (!ged_draw_scene_ref_group_record_summary(
-		shape_summary.owning_group_ref, &group_summary) ||
+    if (!ged_draw_shape_ref_owning_group_record_summary(
+		ctx->gedp, ref, &group_summary) ||
 	    group_summary.is_overlay || !group_summary.visible ||
 	    !_draw_group_record_summary_in_view(&group_summary, ctx->view_ctx))
 	return 1;
@@ -578,6 +560,7 @@ _draw_list_shape_scene_path_cb(bsg_scene_ref shape_ref, void *ud)
 
 
 struct _draw_has_paths_ctx {
+    struct ged *gedp;
     void *view_ctx;
     int mode;
     int found;
@@ -585,22 +568,22 @@ struct _draw_has_paths_ctx {
 
 
 static int
-_draw_has_paths_shape_scene_cb(bsg_scene_ref shape_ref, void *ud)
+_draw_has_paths_shape_ref_cb(ged_draw_shape_ref ref, void *ud)
 {
     struct _draw_has_paths_ctx *ctx = (struct _draw_has_paths_ctx *)ud;
-    if (!ctx || ged_draw_scene_ref_is_null(shape_ref))
+    if (!ctx || ged_draw_shape_ref_is_null(ref))
 	return 1;
 
     struct ged_draw_shape_record_summary shape_summary;
-    if (!ged_draw_scene_ref_shape_record_summary(shape_ref, &shape_summary) ||
+    if (!ged_draw_shape_ref_record_summary(ctx->gedp, ref, &shape_summary) ||
 	    !shape_summary.fullpath || !shape_summary.visible)
 	return 1;
     if (ctx->mode >= 0 && shape_summary.draw_mode != ctx->mode)
 	return 1;
 
     struct ged_draw_group_record_summary group_summary;
-    if (!ged_draw_scene_ref_group_record_summary(
-		shape_summary.owning_group_ref, &group_summary) ||
+    if (!ged_draw_shape_ref_owning_group_record_summary(
+		ctx->gedp, ref, &group_summary) ||
 	    group_summary.is_overlay || !group_summary.visible ||
 	    !_draw_group_record_summary_in_view(&group_summary, ctx->view_ctx))
 	return 1;
@@ -633,11 +616,11 @@ ged_draw_list_paths(struct ged *gedp,
     }
 
     if (expanded)
-	ged_draw_scene_root_foreach_shape(gedp, 0,
-		_draw_list_shape_scene_path_cb, &ctx);
+	ged_draw_scene_root_foreach_shape_ref(gedp, 0,
+		_draw_list_shape_ref_path_cb, &ctx);
     else
-	ged_draw_scene_root_foreach_shape(gedp, 0,
-		_draw_list_shape_scene_path_collapsed_cb, &ctx);
+	ged_draw_scene_root_foreach_shape_ref(gedp, 0,
+		_draw_list_shape_ref_path_collapsed_cb, &ctx);
 
     if (ctx.count > 1)
 	bu_sort(ctx.paths, ctx.count, sizeof(char *), _draw_path_strcmp, NULL);
@@ -661,25 +644,26 @@ ged_draw_has_paths(struct ged *gedp,
 
     struct _draw_has_paths_ctx ctx;
     memset(&ctx, 0, sizeof(ctx));
+    ctx.gedp = gedp;
     ctx.view_ctx = view_ctx;
     ctx.mode = mode;
 
-    ged_draw_scene_root_foreach_shape(gedp, 0,
-	    _draw_has_paths_shape_scene_cb, &ctx);
+    ged_draw_scene_root_foreach_shape_ref(gedp, 0,
+	    _draw_has_paths_shape_ref_cb, &ctx);
     return ctx.found;
 }
 
 
 static void
 _ged_draw_fill_shape_record(struct ged *gedp,
-			    bsg_scene_ref shape_ref,
+			    ged_draw_shape_ref ref,
 			    struct ged_draw_shape_record *out)
 {
     memset(out, 0, sizeof(*out));
-    out->ref = ged_draw_shape_ref_from_scene_ref(gedp, shape_ref);
+    out->ref = ref;
     out->group = ged_draw_group_ref_of_shape(gedp, out->ref);
     struct ged_draw_shape_record_summary shape_summary = {0};
-    if (ged_draw_scene_ref_shape_record_summary(shape_ref, &shape_summary)) {
+    if (ged_draw_shape_ref_record_summary(gedp, ref, &shape_summary)) {
 	out->fullpath = shape_summary.fullpath;
 	out->display_name = shape_summary.display_name;
 	out->leaf_name = shape_summary.leaf_name;
@@ -711,8 +695,8 @@ _ged_draw_fill_shape_record(struct ged *gedp,
 	out->stale_reason = ged_draw_stale_reason_name(GED_DRAW_STALE_NONE);
 
     struct ged_draw_database_source_summary source_summary;
-    if (ged_draw_scene_ref_source_summary(
-		ged_draw_scene_ref_source_owner(shape_ref), &source_summary) &&
+    if (ged_draw_shape_ref_database_source_summary(gedp, ref,
+	    &source_summary) &&
 	    source_summary.has_state) {
 	out->source_revision = source_summary.source_revision;
 	out->inputs_revision = source_summary.inputs_revision;
@@ -738,10 +722,12 @@ ged_draw_shape_record_get(struct ged *gedp,
 {
     if (!out)
 	return 0;
-    bsg_scene_ref shape_ref = _draw_scene_for_shape_ref(gedp, ref);
-    if (ged_draw_scene_ref_is_null(shape_ref))
+    if (ged_draw_shape_ref_is_null(ref))
 	return 0;
-    _ged_draw_fill_shape_record(gedp, shape_ref, out);
+    struct ged_draw_shape_record_summary summary;
+    if (!ged_draw_shape_ref_record_summary(gedp, ref, &summary))
+	return 0;
+    _ged_draw_fill_shape_record(gedp, ref, out);
     return 1;
 }
 
@@ -815,15 +801,6 @@ ged_draw_view_selection_add_shape_ref_context(
 }
 
 
-static int
-_ged_draw_count_shape_cb(bsg_scene_ref UNUSED(ref), void *ud)
-{
-    int *count = (int *)ud;
-    (*count)++;
-    return 1;
-}
-
-
 int
 ged_draw_group_record_get(struct ged *gedp,
 			  ged_draw_group_ref ref,
@@ -831,17 +808,16 @@ ged_draw_group_record_get(struct ged *gedp,
 {
     if (!out)
 	return 0;
-    bsg_scene_ref group_ref = _draw_scene_for_group_ref(gedp, ref);
-    if (ged_draw_scene_ref_is_null(group_ref))
+    if (ged_draw_group_ref_is_null(ref))
 	return 0;
     memset(out, 0, sizeof(*out));
     struct ged_draw_group_record_summary group_summary;
-    if (!ged_draw_scene_ref_group_record_summary(group_ref, &group_summary))
+    if (!ged_draw_group_ref_record_summary(gedp, ref, &group_summary))
 	return 0;
     out->ref = ref;
     out->path = group_summary.path;
     struct ged_draw_scene_tree_summary tree_summary;
-    if (ged_draw_scene_ref_tree_summary(group_ref, &tree_summary))
+    if (ged_draw_group_ref_tree_summary(gedp, ref, &tree_summary))
 	out->fullpath = tree_summary.fullpath;
     out->view = group_summary.view_ctx;
     out->draw_mode = group_summary.draw_mode;
@@ -852,8 +828,7 @@ ged_draw_group_record_get(struct ged *gedp,
     out->in_view_scope = group_summary.in_view_scope;
     out->is_view_source = group_summary.is_view_source;
     out->is_local_source = group_summary.is_local_source;
-    ged_draw_scene_ref_foreach_shape(group_ref, _ged_draw_count_shape_cb,
-	    &out->shape_count);
+    (void)ged_draw_group_ref_shape_count(gedp, ref, &out->shape_count);
     return 1;
 }
 
@@ -866,13 +841,12 @@ struct _foreach_group_record_ctx {
 
 
 static int
-_foreach_group_record_cb(bsg_scene_ref group_ref, void *ud)
+_foreach_group_record_cb(ged_draw_group_ref group_ref, void *ud)
 {
     struct _foreach_group_record_ctx *ctx =
 	(struct _foreach_group_record_ctx *)ud;
     struct ged_draw_group_record rec;
-    if (!ged_draw_group_record_get(ctx->gedp,
-	    ged_draw_group_ref_from_scene_ref(ctx->gedp, group_ref), &rec))
+    if (!ged_draw_group_record_get(ctx->gedp, group_ref, &rec))
 	return 1;
     return ctx->cb(&rec, ctx->userdata);
 }
@@ -890,7 +864,8 @@ ged_draw_foreach_group_record(struct ged *gedp,
     ctx.gedp = gedp;
     ctx.cb = cb;
     ctx.userdata = userdata;
-    (void)ged_draw_scene_root_foreach_group(gedp, _foreach_group_record_cb,
+    (void)ged_draw_scene_root_foreach_group_ref(gedp,
+	    _foreach_group_record_cb,
 	    &ctx);
 }
 
@@ -903,7 +878,7 @@ struct _foreach_shape_record_ctx {
 
 
 static int
-_foreach_shape_record_cb(bsg_scene_ref ref, void *ud)
+_foreach_shape_record_cb(ged_draw_shape_ref ref, void *ud)
 {
     struct _foreach_shape_record_ctx *ctx =
 	(struct _foreach_shape_record_ctx *)ud;
@@ -925,7 +900,7 @@ ged_draw_foreach_shape_record(struct ged *gedp,
     ctx.gedp = gedp;
     ctx.cb = cb;
     ctx.userdata = userdata;
-    (void)ged_draw_scene_root_foreach_shape(gedp, 0,
+    (void)ged_draw_scene_root_foreach_shape_ref(gedp, 0,
 	    _foreach_shape_record_cb, &ctx);
 }
 

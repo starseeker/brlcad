@@ -337,15 +337,11 @@ set(
   trace.c
   vers.c
   vutil.c
-  bsg_ged_draw_binding.c
   bsg_ged_draw_brep.cpp
-  bsg_ged_draw_draft.c
   bsg_ged_draw_highlight.c
   bsg_ged_draw_material.c
   bsg_ged_draw_navigation.c
-  bsg_ged_draw_refs.c
   bsg_ged_draw_scene_root.c
-  bsg_ged_draw_state.c
   bsg_ged_draw_transactions.c
   bsg_ged_draw_tree.c
   bsg_ged_draw_util.c

@@ -104,6 +104,726 @@ entry:
 
 entry:
   date: 2026-06-26
+  id: scene-source-transaction-redraw-shape-facade
+  capability: scene-source
+  summary: Moved transaction shape redraw publication and source-state updates
+    behind a shape-ref source-adapter facade.
+  changed:
+    - Added `ged_draw_shape_ref_redraw_wireframe` in the current BSG-backed
+      source adapter.
+    - Transaction redraw traversal now converts retained traversal callbacks
+      to neutral shape refs before asking the source adapter to redraw.
+    - Transaction code no longer owns direct redraw-time geometry clear,
+      primitive wireframe publication, draw-state filtering, or
+      database-source redraw-result mutation.
+  files:
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/bsg_ged_draw_transactions.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+  notes:
+    - Group traversal remains transaction-owned for now; this slice narrows
+      the per-shape source/geometry ownership boundary.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-transaction-redraw-group-facade
+  capability: scene-source
+  summary: Moved transaction group redraw retained traversal behind a
+    group-ref source-adapter facade.
+  changed:
+    - Added `ged_draw_group_ref_redraw_wireframe` in the current BSG-backed
+      source adapter.
+    - Transaction redraw now passes neutral group refs to the redraw helper
+      instead of resolving retained group scene refs.
+    - Transaction code no longer owns retained group lookup or direct
+      `ged_draw_scene_ref_foreach_shape` traversal for group redraw.
+    - Pivot guard now requires the group redraw facade and rejects the retired
+      transaction-side retained traversal calls from returning.
+  files:
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/bsg_ged_draw_transactions.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_view_command|ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Source redraw still has indexed retained scene-ref callbacks; those are
+      a separate source-index boundary and should move in a later slice.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-transaction-index-ref-callbacks
+  capability: scene-source
+  summary: Moved transaction source index hits from retained scene-ref callbacks
+    to shape/group-ref callbacks.
+  changed:
+    - Added private `ged_draw_group_ref_index_for_component` beside the existing
+      shape-ref index helper.
+    - Transaction database-change, source redraw, and source reexpand indexed
+      lookup paths now receive neutral shape/group refs directly.
+    - Removed the remaining transaction-side retained scene-ref index callback
+      conversions.
+    - Pivot guard now requires the shape/group-ref index helpers in
+      transaction code and rejects raw retained index helpers and scene-ref
+      conversion helpers there.
+  files:
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_registry.c`
+    - `src/libged/bsg_ged_draw_transactions.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - `bsg_ged_draw_transactions.c` no longer contains `bsg_scene_ref` tokens.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-material-refresh-shape-facade
+  capability: scene-source
+  summary: Moved material refresh retained shape lookup behind a shape-ref
+    source-adapter facade.
+  changed:
+    - Added `ged_draw_shape_ref_refresh_material_color` in the current
+      BSG-backed source adapter.
+    - `bsg_ged_draw_material.c` now refreshes material state using the public
+      shape refs from shape records instead of resolving retained scene refs.
+    - Pivot guard now requires the shape-ref material refresh facade in the
+      material walker and rejects retained scene-ref lookup/refresh calls from
+      returning there.
+  files:
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_material.c`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Lazy material revision stamping and legacy color reads remain owned by
+      the current source adapter.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-navigation-shape-ref-traversal
+  capability: scene-source
+  summary: Moved draw navigation shape ordering/count/index helpers onto
+    scene-root shape-ref traversal.
+  changed:
+    - Added `ged_draw_scene_root_foreach_shape_ref` as a scene-root facade
+      that converts retained traversal results to neutral shape refs at the
+      root ownership boundary.
+    - Navigation first/count/at/index/advance helpers now build shape-ref
+      snapshots and no longer use retained scene refs or `bu_ptbl`.
+    - Moved `ged_draw_group_ref_of_shape` to the current source adapter so
+      owning-group lookup stays with the scene/source owner.
+    - Pivot guard now requires the navigation shape-ref facade and rejects
+      retained scene-ref traversal/conversion helpers from returning to
+      navigation.
+  files:
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_scene_root.c`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/bsg_ged_draw_navigation.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Root and records code still use retained scene-root traversal where they
+      currently own retained summaries; this slice only retires navigation's
+      cross-file retained-ref dependency.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-records-shape-ref-summary-facades
+  capability: scene-source
+  summary: Moved records-side shape metadata reads behind shape-ref
+    source-adapter facades.
+  changed:
+    - Added `ged_draw_shape_ref_record_summary`,
+      `ged_draw_shape_ref_owning_group_record_summary`, and
+      `ged_draw_shape_ref_database_source_summary` in the current BSG-backed
+      source adapter.
+    - Records path-state, path-list, has-path, shape-record get, and
+      shape-record iteration now use scene-root shape-ref traversal and
+      shape-ref summary facades.
+    - Records no longer resolves retained shape scene refs or calls raw
+      retained shape/database-source summary helpers for public shape-record
+      metadata.
+    - Pivot guard now requires the shape-ref summary facades in records and
+      rejects records-side retained shape summary/database-source summary
+      calls from returning.
+  files:
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/bsg_ged_draw_records.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Group-record readback still uses retained group refs in records; that is
+      a separate group/tree ownership boundary.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-records-group-ref-summary-facades
+  capability: scene-source
+  summary: Moved records-side group-record readback behind group-ref facades.
+  changed:
+    - Added `ged_draw_scene_root_foreach_group_ref` in the scene-root owner.
+    - Added `ged_draw_group_ref_record_summary`,
+      `ged_draw_group_ref_tree_summary`, and
+      `ged_draw_group_ref_shape_count` in the current BSG-backed source
+      adapter.
+    - `src/libged/bsg_ged_draw_records.c` now fills public group records and
+      iterates group records through group refs instead of resolving retained
+      group scene refs.
+    - Pivot guard now requires the group-ref traversal/summary/count facades
+      and rejects records-side retained group-summary, tree-summary,
+      shape-traversal, registry group scene-ref, and scene-ref-to-group-ref
+      handoffs from returning.
+  files:
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_scene_root.c`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/bsg_ged_draw_records.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+  notes:
+    - The source adapter still resolves group refs to the retained BSG-backed
+      implementation; this slice removes that retained readback from records.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-group-ref-draw-intent-source-adapter
+  capability: scene-source
+  summary: Moved public group-ref path, draw-mode, and appearance updates into
+    the source adapter.
+  changed:
+    - Moved `ged_draw_group_ref_set_dbpath`, `ged_draw_group_ref_set_mode`,
+      `ged_draw_group_ref_set_appearance_settings`, and
+      `ged_draw_group_ref_appearance_settings` from the tree module to the
+      current BSG-backed source adapter.
+    - `src/libged/bsg_ged_draw_tree.c` no longer resolves retained group scene
+      refs solely to update public group-ref draw-intent path, mode, or
+      appearance settings.
+    - Pivot guard now requires the group-ref path/mode/appearance functions in
+      the source adapter and rejects tree-side public group-ref draw-intent
+      setters or retained draw-intent setter calls from returning.
+  files:
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/bsg_ged_draw_tree.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+    - `git diff --check`
+  notes:
+    - The source adapter still resolves group refs to the retained BSG-backed
+      implementation; this slice localizes public group-ref draw-intent state
+      mutation before the Obol scene/source owner replaces that storage.
+    - Structural group creation, append, erase, prune, and clear behavior
+      remains tree-owned and is the next large retained-ref boundary.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-clear-scope-child-facade
+  capability: scene-source
+  summary: Moved full draw-clear scope child teardown behind a source-adapter
+    facade.
+  changed:
+    - Added `ged_draw_scene_ref_clear_scope_children` in the current
+      BSG-backed source adapter.
+    - Root and independent-view full draw clear now ask the source adapter to
+      snapshot child refs and perform retained child free/detach/release
+      teardown.
+    - `src/libged/bsg_ged_draw_tree.c` no longer composes
+      `ged_draw_scene_ref_free_group_contents`,
+      `ged_draw_scene_ref_detach`, and `ged_draw_scene_ref_release` directly
+      for full scope clear.
+    - Pivot guard now requires the clear-scope facade in tree and rejects the
+      retired tree-side retained clear teardown calls from returning.
+  files:
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/bsg_ged_draw_tree.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Scoped DB-only clear, path erase, prune, and group free decisions remain
+      tree-owned because they still perform path/scope filtering before asking
+      the backend to mutate retained groups.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-group-append-source-adapter
+  capability: scene-source
+  summary: Moved shape-draft group append and source-owner attachment into the
+    source adapter.
+  changed:
+    - Moved `ged_draw_group_ref_append_scene_ref` from the tree module to the
+      current BSG-backed source adapter.
+    - Source adapter now resolves the retained group ref, creates intermediate
+      child groups when the shape full path requires them, and appends the
+      shape's source owner to the target group.
+    - `src/libged/bsg_ged_draw_tree.c` no longer resolves retained group scene
+      refs or calls `ged_draw_scene_ref_append_source_owner_to_group` for
+      shape-draft commits.
+    - Pivot guard now requires the append facade in the source adapter and
+      rejects tree-side retained group registry lookup or source-owner append
+      calls from returning.
+  files:
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/bsg_ged_draw_tree.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Explicit draw-group path creation moved behind the current source
+      adapter in `scene-source-group-lookup-create-source-adapter`.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-group-lookup-create-source-adapter
+  capability: scene-source
+  summary: Moved explicit draw group lookup/create into the source adapter.
+  changed:
+    - Moved `ged_draw_group_ref_lookup_or_create` and retained path construction
+      helpers from the tree module to the current BSG-backed source adapter.
+    - Source adapter now owns active-scope lookup/creation, retained child
+      group ensure, draw-intent initialization, and path-state application for
+      explicit draw group creation.
+    - `src/libged/bsg_ged_draw_tree.c` no longer calls
+      `ged_draw_view_context_group_child_ensure`,
+      `ged_draw_scene_ref_ensure_draw_intent`, or
+      `ged_draw_scene_ref_apply_path_state` for group creation.
+    - Pivot guard now requires source-side group lookup/create and rejects
+      tree-side group creation and draw-intent setup calls from returning.
+  files:
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/bsg_ged_draw_tree.c`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Scoped erase matching and direct path group-free decisions remain
+      tree-owned; this slice only moved explicit creation/lookup.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-empty-group-prune-source-adapter
+  capability: scene-source
+  summary: Moved post-shape-release empty-group pruning into the source adapter.
+  changed:
+    - Added private `ged_draw_scene_ref_prune_empty_groups` in the current
+      BSG-backed source adapter.
+    - Tree erase paths now ask the source adapter to prune empty retained
+      groups after shape releases instead of recursively traversing retained
+      children and freeing groups directly.
+    - Source adapter now owns the prune-time child traversal, overlay skip,
+      optional view/mode scope check, child-count readback, and retained group
+      free operation for this cleanup path.
+    - Pivot guard now requires the prune facade and rejects the retired
+      tree-local `_sg_prune_empty_groups_from_parent` helper from returning.
+  files:
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/bsg_ged_draw_tree.c`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Direct erase matching and immediate path/name group-free decisions remain
+      tree-owned and are the next nearby scene/source cleanup surface.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-nested-subpath-erase-source-adapter
+  capability: scene-source
+  summary: Moved nested DB subpath erase setup and shape matching into the
+    source adapter.
+  changed:
+    - Added private `ged_draw_scene_ref_erase_nested_db_subpath` in the current
+      BSG-backed source adapter.
+    - Tree erase paths now pass retained parent refs and `db_full_path`
+      subpaths to the source adapter instead of building component-name arrays
+      and retained shape-match callbacks directly.
+    - Source adapter now owns the post-nested-erase empty-parent check and
+      group free operation, and reports parent removal to the tree restart
+      loops.
+    - The lower retained `ged_draw_scene_ref_erase_nested_subpath` helper is
+      now file-local to the source adapter.
+    - Pivot guard now requires the DB-subpath facade and rejects tree-side
+      nested erase helpers, direct nested erase calls, retained shape-record
+      summary matching, and tree-local post-nested child-count checks from
+      returning.
+  files:
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/bsg_ged_draw_tree.c`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Direct erase matching and immediate path/name group-free decisions remain
+      tree-owned.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-subgroup-name-erase-source-adapter
+  capability: scene-source
+  summary: Moved recursive subgroup erase-by-name traversal and free decisions
+    into the source adapter.
+  changed:
+    - Added private `ged_draw_scene_ref_erase_subgroups_by_name` in the
+      current BSG-backed source adapter.
+    - Tree erase-by-name handling now asks the source adapter to recursively
+      erase matching child group names below each root group instead of owning
+      retained child traversal and group free recursion directly.
+    - Source adapter now owns group-child snapshotting, retained tree-summary
+      name matching, recursive descent, and retained group free for this
+      helper.
+    - Pivot guard now requires the subgroup erase facade and rejects the
+      retired tree-local `_sg_erase_subgroups_by_name` helper from returning.
+  files:
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/bsg_ged_draw_tree.c`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Top-level name/path matching and direct group-free decisions remain
+      tree-owned.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-group-prefix-erase-source-adapter
+  capability: scene-source
+  summary: Moved group path-prefix erase traversal and group free decisions
+    into the source adapter.
+  changed:
+    - Added private `ged_draw_scene_ref_erase_groups_by_path_prefix_string`
+      in the current BSG-backed source adapter.
+    - Tree path-prefix erase now asks the source adapter to erase matching
+      retained groups and keeps the separate neutral shape-record release path.
+    - Source adapter now owns group-child snapshotting, overlay skip,
+      optional view/mode scope filtering, group path-prefix matching, restart
+      after group free, and retained group free for this helper.
+    - Removed the now-unused tree-local `_sg_group_matches_optional_scope`
+      helper; that scope filtering now happens inside the source adapter.
+    - Pivot guard now requires the group-prefix erase facade and rejects the
+      retired tree-local `_sg_erase_groups_by_path_prefix_string` and
+      `_sg_group_matches_optional_scope` helpers from returning.
+  files:
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/bsg_ged_draw_tree.c`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Exact top-level path/name matching remains tree-owned.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-clear-view-groups-source-adapter
+  capability: scene-source
+  summary: Moved view-scoped clear group traversal and free decisions into the
+    source adapter.
+  changed:
+    - Added private `ged_draw_scene_ref_clear_db_groups_in_scope` in the
+      current BSG-backed source adapter.
+    - `ged_draw_clear_view` now asks the source adapter to clear DB groups for
+      the active scope instead of tree code snapshotting retained group
+      children and freeing matching groups directly.
+    - Source adapter now owns active-scope lookup, group-child snapshotting,
+      overlay skip, scope filtering, and retained group free for this helper.
+    - Pivot guard now requires the clear-view facade and rejects the retired
+      tree-local `_sg_clear_db_groups_in_scope` helper from returning.
+  files:
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/bsg_ged_draw_tree.c`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Exact top-level name matching and all-paths scoped erase matching remain
+      tree-owned.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-exact-path-erase-source-adapter
+  capability: scene-source
+  summary: Moved exact group path erase and scoped exact group path erase
+    matching into the source adapter.
+  changed:
+    - Added private `ged_draw_scene_ref_erase_matching_group_path_or_nested`
+      in the current BSG-backed source adapter.
+    - Unscoped and scoped exact-path erase now ask the source adapter to erase
+      exact group path matches or dispatch nested-subpath erase under ancestor
+      groups.
+    - Source adapter now owns group-child snapshotting, optional scope
+      filtering, group path comparison, ancestor-depth calculation, retained
+      group free, and nested-subpath erase dispatch for this helper.
+    - Tree exact-path erase keeps only DB path conversion, draw-revision
+      fallback accounting, and neutral shape-record release fallback.
+    - Pivot guard now requires the exact/nested group path erase facade.
+  files:
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/bsg_ged_draw_tree.c`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - All-paths DB-subpath group loops moved next in
+      `scene-source-all-paths-subpath-erase-source-adapter`.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-all-paths-subpath-erase-source-adapter
+  capability: scene-source
+  summary: Moved all-paths DB-subpath group erase loops into the source
+    adapter.
+  changed:
+    - Added private `ged_draw_scene_ref_erase_groups_by_db_subpath` in the
+      current BSG-backed source adapter.
+    - Unscoped and scoped all-paths erase now ask the source adapter to erase
+      matching retained groups under a resolved DB subpath instead of tree code
+      owning retained group traversal and restart loops.
+    - Source adapter now owns restartable group-child snapshotting, optional
+      scope filtering, group path to DB-full-path conversion, full-path subset
+      matching, ancestor-depth calculation, retained group free, and nested
+      DB-subpath erase dispatch for this helper.
+    - Tree all-paths erase keeps only DB path conversion, draw-revision
+      fallback accounting, and neutral shape-record release fallback.
+    - Removed the now-unused tree-local `_sg_group_matches_erase_scope`
+      helper; scoped matching now happens inside the source adapter.
+    - Pivot guard now requires the all-paths DB-subpath erase facade, rejects
+      lower nested DB-subpath dispatch from returning to tree, and rejects the
+      retired tree-local `_sg_group_matches_erase_scope` helper.
+  files:
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/bsg_ged_draw_tree.c`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Top-level name matching moved next in
+      `scene-source-name-erase-source-adapter`.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-name-erase-source-adapter
+  capability: scene-source
+  summary: Moved top-level erase-by-name group traversal into the source
+    adapter.
+  changed:
+    - Added private `ged_draw_scene_ref_erase_groups_by_name` in the current
+      BSG-backed source adapter.
+    - Root erase-by-name mutation now keeps overlay name erase in the tree and
+      asks the source adapter to erase retained groups by name.
+    - Source adapter now owns root group-child snapshotting with overlay skip,
+      group path component matching, recursive subgroup erase dispatch, and
+      retained group free.
+    - Removed tree-local retained snapshot helpers:
+      `_sg_ref_snapshot`, `_sg_snapshot_children*`, and `_sg_group_record_path`.
+    - Pivot guard now requires the erase-by-name facade and rejects the retired
+      snapshot helpers, direct retained group free, and recursive subgroup
+      erase from returning to tree.
+  files:
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/bsg_ged_draw_tree.c`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+    - `git diff --check`
+  notes:
+    - Remaining tree erase surface is DB path conversion, draw-revision
+      fallback accounting, neutral shape-record fallback, and component
+      matching.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-shape-record-erase-fallback-source-adapter
+  capability: scene-source
+  summary: Moved exact DB-subpath and path-prefix shape-record erase fallback
+    into the source adapter.
+  changed:
+    - Added private `ged_draw_scene_ref_erase_shapes_by_db_subpath` and
+      `ged_draw_scene_ref_erase_shapes_by_path_prefix_string` facades in the
+      current BSG-backed source adapter.
+    - Tree exact-path, scoped exact-path, all-paths DB-subpath, and path-prefix
+      erase now ask the source adapter to release matching shape records and
+      prune empty groups when group erasure does not advance the draw revision.
+    - Source adapter now owns shape-record iteration, overlay/view/mode
+      filtering, shape-ref release, and retained empty-group pruning for exact
+      DB-subpath and path-prefix fallback erase.
+    - Pivot guard now requires the new shape-erasure facades and rejects the
+      retired tree-local path/prefix shape-erasure helper family from returning.
+  files:
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/bsg_ged_draw_tree.c`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Component-name scoped shape-record fallback remains tree-owned for a
+      separate cleanup slice.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-component-shape-record-erase-source-adapter
+  capability: scene-source
+  summary: Moved component-name shape-record erase fallback into the source
+    adapter.
+  changed:
+    - Added private `ged_draw_scene_ref_erase_shapes_by_component_name` in the
+      current BSG-backed source adapter.
+    - Tree component-name erase now keeps overlay-name erasure and scope/base
+      selection locally, then asks the source adapter to release matching
+      shape records and prune empty groups.
+    - Source adapter now owns display-name/fullpath component matching,
+      nonroot-only filtering, overlay/view/mode filtering, shape-ref release,
+      and retained empty-group pruning for component fallback erase.
+    - Pivot guard now requires the component shape-erasure facade and rejects
+      the retired tree-local component shape-record helper family and direct
+      tree-side shape-record iteration from returning.
+  files:
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/bsg_ged_draw_tree.c`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Tree still owns erase command dispatch, overlay-name erasure, and
+      active-scope selection for this path.
+
+entry:
+  date: 2026-06-26
   id: scene-source-rt-child-count-bridge-retired
   capability: scene-source
   summary: Removed private RT scene-ref child-count bridge from transaction
@@ -198,6 +918,1402 @@ entry:
     - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
   notes:
     - These were correctness fixes, not performance optimizations.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-source-state-facades
+  capability: scene-source
+  summary: Localized database-source summary and source-state mutation behind
+    source-adapter facades.
+  changed:
+    - Added a scene-ref database-source summary facade so records and LoD
+      checks no longer fetch a source-owner `bsg_scene_ref` before reading
+      neutral source state.
+    - Added source-adapter facades for database-change revision bumps and
+      redraw-result realization updates.
+    - Updated transaction guards to reject reintroducing direct source-owner
+      and database-source record get/apply calls in transaction code.
+  files:
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/bsg_ged_draw_records.c`
+    - `src/libged/bsg_ged_draw_refs.c`
+    - `src/libged/bsg_ged_draw_transactions.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+    - `git diff --check`
+    - `git diff --check`
+  notes:
+    - Source ownership remains BSG-backed, but records, LoD checks, and
+      transaction source-state mutation now use a narrower adapter boundary.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-owner-lifecycle-facades
+  capability: scene-source
+  summary: Moved source-owner context, release, and group attachment decisions
+    behind source-adapter facades.
+  changed:
+    - Added source-adapter helpers for shape source-context lookup,
+      source-owner release, and source-owner append-to-group operations.
+    - Removed remaining direct `ged_draw_scene_ref_source_owner` calls from
+      refs/tree wrapper files.
+    - Updated the pivot guard so refs/tree require the new facades and reject
+      reintroduced cross-file source-owner calls.
+  files:
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_refs.c`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/bsg_ged_draw_tree.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - `ged_draw_scene_ref_source_owner` remains in the current BSG source
+      adapter and binding implementation; wrapper files now use narrower
+      source-ownership facades.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-context-summary-facade
+  capability: scene-source
+  summary: Routed public scene-context source summaries through the
+    source-owner resolving summary facade.
+  changed:
+    - `ged_draw_scene_context_source_summary` now asks the source adapter for
+      a database-source summary, resolving shape contexts to their owning
+      source instead of reading the context ref record directly.
+    - Pivot guard now requires the database-source summary facade in refs and
+      rejects direct raw source-summary calls there.
+  files:
+    - `src/libged/bsg_ged_draw_refs.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - This keeps public scene-context source state independent of mirrored
+      shape-side database-source records.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-raw-summary-helper-local
+  capability: scene-source
+  summary: Retired the shared private-header exposure for the raw source-summary
+    helper.
+  changed:
+    - `ged_draw_scene_ref_source_summary` is now file-local to the current
+      source adapter.
+    - Shared callers use `ged_draw_scene_ref_database_source_summary`, which
+      resolves the owning database source before returning neutral source
+      state.
+  files:
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_source.c`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+  notes:
+    - This reduces the cross-file scene/source bridge surface without changing
+      public GED records or context-summary semantics.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-display-summary-facade
+  capability: scene-source
+  summary: Moved public scene-context display summary behind the source-adapter
+    implementation and retired the raw retained-ref display-summary header
+    exposure.
+  changed:
+    - `ged_draw_scene_context_display_summary` now lives in the current source
+      adapter next to the retained display-summary implementation.
+    - `ged_draw_scene_ref_display_summary` is file-local and no longer exposed
+      through `bsg_ged_draw_private.h`.
+    - Pivot guard now rejects direct raw display-summary helper use in refs.
+  files:
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_refs.c`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - qtcad draw sync and scene tests still consume the same public neutral
+      context summary API.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-material-summary-facade
+  capability: scene-source
+  summary: Moved public shape material summaries behind the source-adapter
+    implementation and retired the raw retained-ref material-summary header
+    exposure.
+  changed:
+    - `ged_draw_shape_ref_material_summary` now lives next to the retained
+      material-summary implementation in the current source adapter.
+    - `ged_draw_scene_ref_material_summary` is file-local and no longer
+      exposed through `bsg_ged_draw_private.h`.
+    - Pivot guard now rejects direct raw material-summary helper use in refs.
+  files:
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_refs.c`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+    - `git diff --check`
+  notes:
+    - `ged_draw_shape_ref_get_color` still uses the public neutral
+      material-summary API from refs; only the retained-ref helper moved local
+      to the source adapter.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-geometry-line-accessor-facades
+  capability: scene-source
+  summary: Moved public shape geometry and line accessors behind the
+    source-adapter implementation and retired the raw retained-ref helper
+    header exposure.
+  changed:
+    - Shape-ref last-point, line-summary, line-point, line-command, and
+      translate-geometry wrappers now live in the current source adapter.
+    - Shape-context line and geometry-summary wrappers now live in the current
+      source adapter.
+    - Raw retained-ref geometry-summary, last-point, line-summary,
+      line-point, line-command, and translate-geometry helpers are file-local
+      to `bsg_ged_draw_source.c`.
+    - Pivot guard now rejects direct raw geometry/line helper use in refs and
+      no longer expects those helpers in `bsg_ged_draw_private.h`.
+  files:
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_refs.c`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+    - `git diff --check`
+  notes:
+    - This keeps retained geometry inspection and mutation inside the current
+      source adapter while preserving the public neutral GED draw APIs.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-context-wrapper-facades
+  capability: scene-source
+  summary: Moved public shape/group/scene context readback wrappers behind the
+    source-adapter implementation and localized raw parent/source-context
+    helpers.
+  changed:
+    - Shape-context state/source wrappers now live in the current source
+      adapter.
+    - Scene/group context fullpath, database-path, overlay, source-summary,
+      tree-summary, child, parent, name, and subtree-bounds wrappers now live
+      in the current source adapter.
+    - `ged_draw_scene_ref_parent_context` and
+      `ged_draw_scene_ref_source_context` are file-local and no longer exposed
+      through `bsg_ged_draw_private.h`.
+    - Pivot guard now rejects direct raw context-summary/traversal helpers in
+      refs and requires the public context wrappers in the source adapter.
+  files:
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_refs.c`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Shared raw tree, group, shape, source, and bounds summaries remain
+      exported where tree, records, transactions, and scene-root code still
+      consume them directly.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-shape-ref-mutation-facades
+  capability: scene-source
+  summary: Moved public shape-ref mutation, publication, source snapshot, and
+    LoD/context wrappers behind the source-adapter implementation.
+  changed:
+    - Shape-ref center, geometry-clear, bounds-update, source-snapshot,
+      line-set publication, indexed-face-set publication, primitive-wireframe
+      publication, release, realize-context, visibility, color, material,
+      evaluated-region, LoD, and view-context wrappers now live in the current
+      source adapter.
+    - `ged_draw_scene_ref_source_snapshot` and
+      `ged_draw_scene_ref_release_source_owner` are file-local and no longer
+      exposed through `bsg_ged_draw_private.h`.
+    - Pivot guard now rejects direct raw source/mutation/publication helper
+      use in refs and requires the moved wrapper family in the source adapter.
+  files:
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_refs.c`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Raw geometry publication and display mutation helpers remain exported
+      where draft, overlay, BREP, transaction, and scene-root code still use
+      them directly.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-ref-identity-facades
+  capability: scene-source
+  summary: Moved public shape/group context identity and qray work-flag
+    wrappers behind the source-adapter implementation.
+  changed:
+    - Shape/group context identity wrappers now live in the current source
+      adapter with the other public source-owner facades.
+    - The shape-ref qray work-flag wrapper now lives in the current source
+      adapter.
+    - `ged_draw_scene_ref_apply_qray_work_flag` is file-local and no longer
+      exposed through `bsg_ged_draw_private.h`.
+    - Pivot guard now requires the moved wrapper family in the source adapter
+      and guards refs against broad retained scene readback returning.
+  files:
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_refs.c`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+  notes:
+    - Root/scope conversion was the last remaining refs responsibility and is
+      tracked separately in the next entry.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-root-scope-bridge-retired
+  capability: scene-source
+  summary: Retired the standalone retained scene-ref/RT scope bridge file.
+  changed:
+    - Moved `ged_draw_scene_ref_to_rt_view_ref`,
+      `ged_draw_scene_ref_from_rt_view_ref`, and
+      `ged_draw_scene_ref_active_scope` into the scene-root bridge.
+    - Removed `src/libged/bsg_ged_draw_refs.c` from the libged source list and
+      deleted the retired file.
+    - Pivot guard now fails if the retired refs file returns and requires the
+      retained scene-ref/RT conversion and active-scope tokens in
+      `bsg_ged_draw_scene_root.c`.
+  files:
+    - `src/libged/CMakeLists.txt`
+    - `src/libged/bsg_ged_draw_refs.c`
+    - `src/libged/bsg_ged_draw_scene_root.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - This keeps retained root/scope conversion at the scene-root ownership
+      boundary instead of leaving it in a standalone refs compatibility file.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-highlight-shape-ref-facade
+  capability: scene-source
+  summary: Moved highlight-state mutation behind a shape-ref source-adapter
+    facade.
+  changed:
+    - Added private `ged_draw_shape_ref_set_highlighted` in the current
+      source adapter.
+    - `src/libged/bsg_ged_draw_highlight.c` now tracks highlight identity with
+      neutral draw refs and records without resolving retained scene refs or
+      registry scene refs directly.
+    - Pivot guard now requires the shape-ref highlight facade and rejects
+      retained scene-ref or registry highlight mutation from returning to the
+      highlight tracker.
+  files:
+    - `backend_capabilities.txt`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_highlight.c`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+  notes:
+    - Source ownership remains BSG-backed, but another cross-file retained
+      scene-ref mutation path is now localized to the source-adapter boundary.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-transaction-ref-mutation-facades
+  capability: scene-source
+  summary: Routed transaction record mutation paths through shape/group-ref
+    source-adapter facades.
+  changed:
+    - Added private `ged_draw_shape_ref_set_transparency`,
+      `ged_draw_shape_ref_mark_database_source_changed`, and
+      `ged_draw_group_ref_set_visible` source-adapter facades.
+    - Transaction database-change callbacks now mutate database-source state
+      through shape refs, including indexed shape callbacks after converting
+      the retained index callback token back to a neutral shape ref.
+    - Transaction visibility and transparency record callbacks now mutate
+      shape/group display state through draw refs instead of resolving retained
+      scene refs in the transaction owner.
+    - Pivot guard now requires the new ref-level transaction tokens and rejects
+      the retired direct transaction-side scene-ref mutation calls.
+  files:
+    - `backend_capabilities.txt`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/bsg_ged_draw_transactions.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+  notes:
+    - Redraw traversal still uses retained scene refs for geometry replacement;
+      this slice only localizes record-driven mutation paths that already
+      carried neutral draw refs.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-reexpand-group-appearance-facade
+  capability: scene-source
+  summary: Routed transaction reexpand appearance readback through a group-ref
+    tree facade.
+  changed:
+    - Added private `ged_draw_group_ref_appearance_settings` alongside the
+      existing group-ref tree mutation helpers.
+    - Transaction reexpand bookkeeping now reads group draw-intent appearance
+      through the group ref instead of resolving a retained group scene ref
+      directly.
+    - Pivot guard now requires the group-ref appearance facade in transactions
+      and rejects direct transaction-side scene-ref draw-intent appearance
+      reads from returning.
+  files:
+    - `backend_capabilities.txt`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_tree.c`
+    - `src/libged/bsg_ged_draw_transactions.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+  notes:
+    - Redraw group traversal still uses retained scene refs; this slice only
+      narrows reexpand record readback.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-root-clear-has-groups-facades
+  capability: scene-source
+  summary: Moved full draw-clear scope traversal and has-groups readback
+    behind scene-root facades.
+  changed:
+    - Added private `ged_draw_scene_root_clear_all_scope_children` and
+      `ged_draw_scene_root_has_groups` in the scene-root owner.
+    - Full draw clear now asks the scene-root owner to clear independent-scope
+      and root children instead of resolving retained scopes in tree code.
+    - `ged_draw_has_groups` now asks the scene-root owner for retained group
+      existence instead of running a tree-local retained group traversal
+      callback.
+    - Pivot guard now requires the new scene-root facades and rejects the
+      retired tree-local clear/has-groups helper callbacks and tree-side
+      view-table/scope-clear traversal from returning.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `src/libged/bsg_ged_draw_scene_root.c`
+    - `src/libged/bsg_ged_draw_tree.c`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+  notes:
+    - Tree still owns erase root-mutation callbacks and scoped erase base
+      selection for separate cleanup slices.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-scoped-erase-source-facades
+  capability: scene-source
+  summary: Moved scoped path/prefix/component erase active-scope resolution
+    and DB fallback orchestration behind source-adapter facades.
+  changed:
+    - Added private `ged_draw_scene_ref_erase_path_at_base`,
+      `ged_draw_scene_ref_erase_path_prefix_at_base`,
+      `ged_draw_scene_ref_erase_path_in_active_scope`,
+      `ged_draw_scene_ref_erase_path_prefix_in_active_scope`, and
+      `ged_draw_scene_ref_erase_component_name_in_active_scope`.
+    - Root exact-path and path-prefix erase callbacks now ask the source
+      adapter to handle DB path conversion, DB-index fallback, group erase,
+      shape-record fallback erase, and draw-revision fallback checks.
+    - Scoped exact-path, path-prefix, and component-name erases no longer
+      resolve retained active-scope scene refs in tree code.
+    - Pivot guard now requires the new source facades in tree/source/private
+      boundaries and rejects direct tree-side active-scope resolution and
+      lower path/prefix shape/group erase helper calls from returning.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/bsg_ged_draw_tree.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Tree still owns public erase wrapper entry points, root mutation callback
+      dispatch, and overlay-name erasure.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-root-erase-facades
+  capability: scene-source
+  summary: Moved root exact-path, path-prefix, and group-name erase dispatch
+    behind explicit scene-root facades.
+  changed:
+    - Added private `ged_draw_scene_root_erase_path`,
+      `ged_draw_scene_root_erase_path_prefix`, and
+      `ged_draw_scene_root_erase_groups_by_name`.
+    - Tree root erase wrappers now call explicit scene-root facades instead of
+      installing tree-local retained-root mutation callbacks.
+    - Retired the generic `ged_draw_scene_root_mutate` facade.
+    - Pivot guard now requires the new root erase facades and rejects
+      retained-root mutation callbacks, direct retained root erase helpers,
+      and `bsg_scene_ref` tokens from returning to tree.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_scene_root.c`
+    - `src/libged/bsg_ged_draw_tree.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - `src/libged/bsg_ged_draw_tree.c` no longer contains `bsg_scene_ref`
+      tokens after this slice.
+
+entry:
+  date: 2026-06-26
+  id: scene-source-overlay-insert-source-facades
+  capability: scene-source
+  summary: Moved overlay name erase and overlay geometry insertion retained
+    scene work behind source-adapter facades.
+  changed:
+    - Added private `ged_draw_overlay_erase_name_context` and
+      `ged_draw_overlay_geometry_insert_context`.
+    - Overlay code now keeps public validation, active-view lookup,
+      database-name clobber checks, and base-color decoding.
+    - Source adapter now owns retained overlay scene lookup, name erase,
+      geometry creation/publication, registry entry, append, bounds update,
+      appearance/default display policy, color-soltab application, release,
+      and shape-ref conversion.
+    - Pivot guard now requires the new overlay source-adapter facades in
+      `src/libged/bsg_ged_draw_overlay.c` and rejects direct retained overlay
+      scene-ref and geometry publication helpers from returning there.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_overlay.c`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Direct scan confirmed `src/libged/bsg_ged_draw_overlay.c` no longer
+      contains retained scene-ref, retained overlay registry, retained
+      geometry publication, color-soltab, or scene-ref-to-shape-ref tokens.
+
+entry:
+  date: 2026-06-27
+  id: scene-source-gobject-overlay-context-facades
+  capability: scene-source
+  summary: Moved gobject overlay draw-walk retained parent handles behind
+    opaque context source-adapter facades.
+  changed:
+    - `struct draw_data_t` now stores an opaque overlay scene context instead
+      of a `bsg_scene_ref` parent.
+    - `src/libged/draw.cpp` now creates gobject overlay parents with
+      `ged_draw_view_context_overlay_internal_create_context` and commits
+      database-leaf drafts with `ged_draw_scene_context_commit_database_leaf_draft`.
+    - Source adapter now owns conversion from opaque overlay context to retained
+      scene ref for database-leaf draft commit.
+    - Moved `ged_draw_scene_ref_realize` into the source adapter beside
+      `ged_draw_scene_ref_realize_dispatch`.
+    - Pivot guard now requires the opaque context facades in `draw.cpp` and
+      rejects direct `bsg_scene_ref`, retained overlay-create, retained
+      database-leaf draft commit, and direct realization-dispatch spellings
+      from returning there.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `src/libged/ged_private.h`
+    - `src/libged/draw.cpp`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_view_command|ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Direct scan confirmed `src/libged/draw.cpp` and
+      `src/libged/ged_private.h` no longer contain `bsg_scene_ref`.
+
+entry:
+  date: 2026-06-27
+  id: scene-source-path-state-source-adapter
+  capability: scene-source
+  summary: Retired the standalone retained path-state bridge file by moving
+    path-state mutation into the source adapter.
+  changed:
+    - Moved `ged_draw_scene_ref_apply_path_state` from
+      `src/libged/bsg_ged_draw_state.c` into
+      `src/libged/bsg_ged_draw_source.c`.
+    - Removed `src/libged/bsg_ged_draw_state.c` from the libged source list.
+    - Pivot guard now requires source-adapter ownership of the path-state
+      facade and fails if `bsg_ged_draw_state.c` is reintroduced.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `src/libged/CMakeLists.txt`
+    - `src/libged/bsg_ged_draw_state.c`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_view_command|ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - CMake regenerated during the build because the libged source list
+      changed; the regenerated build completed successfully.
+
+entry:
+  date: 2026-06-27
+  id: scene-source-binding-source-adapter
+  capability: scene-source
+  summary: Retired the standalone database-source/source-state binding file by
+    moving that retained logic into the source adapter.
+  changed:
+    - Moved source-owner lookup, database-source creation, database-source
+      record conversion/apply/get, source-state synchronization, source-data
+      free, and source-state attachment into
+      `src/libged/bsg_ged_draw_source.c`.
+    - Added `bsg/database_source.h` to the current source adapter because that
+      adapter is now the intended retained database-source owner.
+    - Removed `src/libged/bsg_ged_draw_binding.c` from the libged source list
+      and deleted the file.
+    - Pivot guard now fails if `bsg_ged_draw_binding.c` is reintroduced,
+      requires the moved database-source/source-state tokens in the source
+      adapter, and keeps draw-source mesh-LoD destruction tied to
+      `rt_mesh_lod_destroy`.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `src/libged/CMakeLists.txt`
+    - `src/libged/bsg_ged_draw_binding.c`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_view_command|ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+    - `git diff --check`
+  notes:
+    - This keeps the implementation BSG-backed for now, but removes another
+      standalone retained scene/source owner ahead of the Obol/libbrlobol
+      source-owner replacement.
+    - `/tmp` scan after verification showed only `/tmp/tmux-6578`.
+
+entry:
+  date: 2026-06-27
+  id: scene-source-draft-source-adapter
+  capability: scene-source
+  summary: Retired the standalone shape-draft bridge file by moving draft
+    lifecycle and publication into the source adapter.
+  changed:
+    - Moved the private `ged_draw_shape_draft` storage, lifecycle, geometry
+      publication, path/source-state setup, display-state application, and
+      commit helpers into `src/libged/bsg_ged_draw_source.c`.
+    - Removed `src/libged/bsg_ged_draw_draft.c` from the libged source list
+      and deleted the file.
+    - Pivot guard now fails if `bsg_ged_draw_draft.c` is reintroduced and
+      requires source-adapter ownership of the draft helper tokens.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `src/libged/CMakeLists.txt`
+    - `src/libged/bsg_ged_draw_draft.c`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_view_command|ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+    - `git diff --check`
+  notes:
+    - This does not replace the retained backend yet; it removes another
+      standalone retained scene/source bridge so draft behavior is localized at
+      the source-adapter boundary.
+    - `/tmp` scan after verification showed only `/tmp/tmux-6578`.
+
+entry:
+  date: 2026-06-27
+  id: scene-source-overlay-view-helper-source-adapter
+  capability: scene-source
+  summary: Moved retained overlay view-context scene helper implementations
+    from the view adapter into the source adapter.
+  changed:
+    - Moved retained overlay scene lookup, overlay name erase, overlay scene
+      append, command-result owner registration, overlay geometry creation,
+      and internal overlay feature creation into
+      `src/libged/bsg_ged_draw_source.c`.
+    - `src/libged/bsg_ged_draw_view.c` no longer owns the retained
+      `bsg_overlay_find_scene`, `bsg_overlay_erase_name`,
+      `bsg_overlay_append_scene`, `bsg_overlay_register_scene_owner`,
+      `bsg_feature_create_overlay`, or overlay geometry scene-creation calls.
+    - Pivot guard now requires the moved overlay helper implementation tokens
+      in the source adapter and rejects those retained overlay scene helper
+      calls from returning to the view adapter.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/bsg_ged_draw_view.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_view_command|ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+    - `git diff --check`
+  notes:
+    - Initial focused ctest exposed stale guard expectations for the moved
+      overlay geometry creator tokens; the guard was updated and the same
+      focused group then passed 6/6.
+    - Direct scan confirmed the moved overlay registry and command-result
+      helper calls are now in `src/libged/bsg_ged_draw_source.c`, not
+      `src/libged/bsg_ged_draw_view.c`.
+    - `src/libged/bsg_ged_draw_view.c` still uses BSG overlay classification
+      constants for feature/polygon behavior pending Capability 2.
+    - `/tmp` scan after verification showed only `/tmp/tmux-6578`.
+
+entry:
+  date: 2026-06-27
+  id: scene-source-brep-publication-source-adapter
+  capability: scene-source
+  summary: Moved BREP and BSPLINE retained line-set publication from the BREP
+    C++ helper into the source adapter.
+  changed:
+    - Moved BREP/BSPLINE wireframe line-set publication and realization
+      line-set dispatch into `src/libged/bsg_ged_draw_source.c`.
+    - Left `src/libged/bsg_ged_draw_brep.cpp` focused on BREP mesh-LoD
+      callback/detail setup.
+    - Pivot guard now requires the BREP/BSPLINE publication tokens in the
+      source adapter and rejects retained scene-ref publication helpers from
+      returning to the BREP C++ helper.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `src/libged/bsg_ged_draw_brep.cpp`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_view_command|ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+    - `git diff --check`
+  notes:
+    - This reduces one more non-source-adapter retained `bsg_scene_ref`
+      exposure without changing mesh-LoD callback ownership.
+    - Verification passed on FreeBSD/clang; the focused guard group completed
+      6/6 and the broader GED draw group completed 11/11.
+    - `/tmp` scan found no entries modified in the last 30 minutes after
+      verification.
+
+entry:
+  date: 2026-06-27
+  id: scene-source-geometry-publication-private-header-local
+  capability: scene-source
+  summary: Localized source-only retained geometry publication helpers to the
+    source adapter.
+  changed:
+    - Removed source-only retained geometry publication, primitive
+      wireframe/face-set publication, NMG-region publication, and geometry
+      bounds update prototypes from `src/libged/bsg_ged_draw_private.h`.
+    - Added source-local forward declarations and made the matching
+      implementations `static` in `src/libged/bsg_ged_draw_source.c`.
+    - Pivot guard now requires those helper tokens in the source adapter and
+      rejects the shared private header from re-exposing them.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_view_command|ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Direct scan reduced `bsg_scene_ref` matches in
+      `src/libged/bsg_ged_draw_private.h` from 135 to 122.
+    - Initial focused ctest exposed a stale pivot-guard requirement that the
+      shared private header expose `ged_draw_scene_ref_publish_point_set`; the
+      guard was updated to keep that helper source-local and the focused group
+      then passed 6/6.
+
+entry:
+  date: 2026-06-27
+  id: scene-source-construction-overlay-private-header-local
+  capability: scene-source
+  summary: Localized source-only retained overlay and scene construction
+    helpers to the source adapter.
+  changed:
+    - Removed source-only retained overlay scene creation/lookup/append,
+      command-result owner registration, low-level scene attach/detach,
+      draft-pair creation, source classification, scene release, and group-ref
+      append helper declarations from `src/libged/bsg_ged_draw_private.h`.
+    - Added source-local forward declarations and made the matching
+      implementations `static` in `src/libged/bsg_ged_draw_source.c`.
+    - Pivot guard now keeps those helper tokens in the source adapter and
+      rejects the shared private header from re-exposing them.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_view_command|ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Direct `rg --count` scan reduced `bsg_scene_ref` matching lines in
+      `src/libged/bsg_ged_draw_private.h` from 119 to 100.
+    - Focused guard group completed 6/6 passing in 21.23 seconds; the longest
+      test was `brlobol_pivot_guard` at 19.01 seconds.
+    - Broader GED draw group completed 11/11 passing in 53.78 seconds; the
+      longest tests were `ged_test_drawing_select` at 16.31 seconds,
+      `ged_test_drawing_quad` at 12.97 seconds, and
+      `ged_test_drawing_lod` at 11.06 seconds.
+
+entry:
+  date: 2026-06-27
+  id: scene-source-draw-state-private-header-local
+  capability: scene-source
+  summary: Localized source-only retained draw-state and draw-intent mutation
+    helpers to the source adapter.
+  changed:
+    - Removed source-only retained draw-state, draw-intent, display attribute,
+      material color, path-state, realization invalidation, and
+      overlay-attribute mutation helper declarations from
+      `src/libged/bsg_ged_draw_private.h`.
+    - Added source-local forward declarations and made the matching
+      implementations `static` in `src/libged/bsg_ged_draw_source.c`.
+    - Pivot guard now keeps those helper tokens in the source adapter and
+      rejects the shared private header from re-exposing them.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_view_command|ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Direct `rg --count` scan reduced `bsg_scene_ref` matching lines in
+      `src/libged/bsg_ged_draw_private.h` from 100 to 67.
+    - Focused guard group completed 6/6 passing in 21.13 seconds; the longest
+      test was `brlobol_pivot_guard` at 18.90 seconds.
+    - Broader GED draw group completed 11/11 passing in 53.21 seconds; the
+      longest tests were `ged_test_drawing_select` at 16.29 seconds,
+      `ged_test_drawing_quad` at 12.66 seconds, and
+      `ged_test_drawing_lod` at 10.91 seconds.
+
+entry:
+  date: 2026-06-27
+  id: scene-source-erase-source-record-private-header-local
+  capability: scene-source
+  summary: Localized source-only retained erase and database-source record
+    helpers to the source adapter.
+  changed:
+    - Removed source-only retained group/shape erase internals,
+      database-source record sync helpers, source-owner/parent readback,
+      source-summary/draw-state readback, material refresh, soltab coloring,
+      and realization dispatch declarations from
+      `src/libged/bsg_ged_draw_private.h`.
+    - Added source-local forward declarations and made the matching
+      implementations `static` in `src/libged/bsg_ged_draw_source.c`.
+    - Pivot guard now keeps those helper tokens in the source adapter and
+      rejects the shared private header from re-exposing them.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_view_command|ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Direct `rg --count` scan reduced `bsg_scene_ref` matching lines in
+      `src/libged/bsg_ged_draw_private.h` from 67 to 43.
+    - Initial focused ctest exposed stale pivot-guard requirements that the
+      shared private header expose the now-source-local helper tokens; the
+      guard was updated to require source-adapter ownership and the focused
+      group then passed 6/6 in 21.03 seconds.
+    - Broader GED draw group completed 11/11 passing in 53.40 seconds; the
+      longest tests were `ged_test_drawing_select` at 16.40 seconds,
+      `ged_test_drawing_quad` at 12.79 seconds, and
+      `ged_test_drawing_lod` at 10.89 seconds.
+
+entry:
+  date: 2026-06-27
+  id: scene-source-root-raw-traversal-private-header-local
+  capability: scene-source
+  summary: Localized raw retained scene-root traversal callbacks to the
+    scene-root bridge.
+  changed:
+    - Removed raw retained `ged_draw_scene_root_foreach_shape` and
+      `ged_draw_scene_root_foreach_group` declarations from
+      `src/libged/bsg_ged_draw_private.h`.
+    - Made the matching scene-root implementations file-local in
+      `src/libged/bsg_ged_draw_scene_root.c`.
+    - Pivot guard now keeps shared callers on the shape-ref/group-ref traversal
+      facades and rejects private-header re-exposure of the raw retained
+      root traversal callbacks.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_scene_root.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_view_command|ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Direct `rg --count` scan reduced `bsg_scene_ref` matching lines in
+      `src/libged/bsg_ged_draw_private.h` from 43 to 41.
+    - Focused guard group completed 6/6 passing in 21.21 seconds; the longest
+      test was `brlobol_pivot_guard` at 18.99 seconds.
+    - Broader GED draw group completed 11/11 passing in 53.37 seconds; the
+      longest tests were `ged_test_drawing_select` at 16.33 seconds,
+      `ged_test_drawing_quad` at 12.73 seconds, and
+      `ged_test_drawing_lod` at 11.00 seconds.
+
+entry:
+  date: 2026-06-27
+  id: scene-source-shape-traversal-private-header-local
+  capability: scene-source
+  summary: Localized raw retained scene-ref shape traversal used by source
+    group operations.
+  changed:
+    - Removed the raw retained `ged_draw_scene_ref_foreach_shape` declaration
+      from `src/libged/bsg_ged_draw_private.h`.
+    - Added a source-local retained shape iterator in
+      `src/libged/bsg_ged_draw_source.c` for group shape-count and redraw
+      traversal.
+    - Removed the now-unused scene-root wrapper after FreeBSD/clang reported
+      it as an unused static function under `-Werror`; scene-root traversal
+      still uses the lower file-local recursive helper behind the root
+      facades.
+    - Pivot guard now rejects shared private-header re-exposure of the raw
+      shape traversal entry point.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_scene_root.c`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_view_command|ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Direct `rg -n` scan reduced `bsg_scene_ref` matching lines in
+      `src/libged/bsg_ged_draw_private.h` from 41 to 39.
+    - Focused guard group completed 6/6 passing in 21.03 seconds; the longest
+      test was `brlobol_pivot_guard` at 18.81 seconds.
+    - Broader GED draw group completed 11/11 passing in 53.42 seconds; the
+      longest tests were `ged_test_drawing_select` at 16.43 seconds,
+      `ged_test_drawing_quad` at 12.80 seconds, and
+      `ged_test_drawing_lod` at 10.90 seconds.
+
+entry:
+  date: 2026-06-27
+  id: scene-source-clear-scope-context-facade
+  capability: scene-source
+  summary: Moved scene-root clear-scope child teardown onto an opaque
+    scene-context facade.
+  changed:
+    - Replaced the shared private raw
+      `ged_draw_scene_ref_clear_scope_children` declaration with
+      `ged_draw_scene_context_clear_scope_children`.
+    - Made the retained scope-child clear implementation source-local in
+      `src/libged/bsg_ged_draw_source.c`.
+    - Scene-root clear-all-scope now converts retained scope/root refs to
+      opaque scene contexts before calling the source-adapter facade.
+    - Pivot guard now requires the context facade in the shared private header
+      and rejects re-exposing the raw retained clear helper there.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_scene_root.c`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_view_command|ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Direct `rg -n` scan reduced `bsg_scene_ref` matching lines in
+      `src/libged/bsg_ged_draw_private.h` from 39 to 38.
+    - Focused guard group completed 6/6 passing in 21.02 seconds; the longest
+      test was `brlobol_pivot_guard` at 18.81 seconds.
+    - Broader GED draw group completed 11/11 passing in 53.28 seconds; the
+      longest tests were `ged_test_drawing_select` at 16.44 seconds,
+      `ged_test_drawing_quad` at 12.68 seconds, and
+      `ged_test_drawing_lod` at 10.88 seconds.
+
+entry:
+  date: 2026-06-27
+  id: scene-source-subtree-bounds-context-facade
+  capability: scene-source
+  summary: Moved scene-root subtree-bounds readback onto an opaque
+    scene-context facade.
+  changed:
+    - Replaced the shared private raw
+      `ged_draw_scene_ref_subtree_bounds` declaration with
+      `ged_draw_scene_context_subtree_bounds`.
+    - Made the retained subtree-bounds implementation source-local in
+      `src/libged/bsg_ged_draw_source.c`.
+    - Scene-root subtree-bounds now converts the retained root ref to an
+      opaque scene context before calling the source-adapter facade.
+    - Pivot guard now requires the context facade in the shared private header
+      and rejects re-exposing the raw retained subtree-bounds helper there.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_scene_root.c`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_view_command|ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Direct `rg --count` scan reduced `bsg_scene_ref` matching lines in
+      `src/libged/bsg_ged_draw_private.h` from 38 to 37.
+    - Focused guard group completed 6/6 passing in 21.04 seconds; the longest
+      test was `brlobol_pivot_guard` at 18.81 seconds.
+    - Broader GED draw group completed 11/11 passing in 53.72 seconds; the
+      longest tests were `ged_test_drawing_select` at 16.57 seconds,
+      `ged_test_drawing_quad` at 12.65 seconds, and
+      `ged_test_drawing_lod` at 11.07 seconds.
+
+entry:
+  date: 2026-06-27
+  id: scene-source-root-visibility-context-facade
+  capability: scene-source
+  summary: Moved scene-root initial visibility mutation onto an opaque
+    scene-context facade.
+  changed:
+    - Replaced the shared private raw `ged_draw_scene_ref_set_visible`
+      declaration with `ged_draw_scene_context_set_visible`.
+    - Made the retained visibility setter source-local in
+      `src/libged/bsg_ged_draw_source.c`.
+    - Scene-root creation now converts the retained root ref to an opaque
+      scene context before initializing visibility.
+    - Shape/group visibility mutation remains on the existing shape-ref and
+      group-ref source-adapter facades.
+    - Pivot guard now requires the context facade in the scene-root/private
+      boundary and rejects re-exposing the raw retained visibility setter in
+      the shared private header.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_scene_root.c`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_view_command|ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Direct `rg --count` scan reduced `bsg_scene_ref` matching lines in
+      `src/libged/bsg_ged_draw_private.h` from 37 to 36.
+    - Focused guard group completed 6/6 passing in 21.07 seconds; the longest
+      test was `brlobol_pivot_guard` at 18.81 seconds.
+    - Broader GED draw group completed 11/11 passing in 53.62 seconds; the
+      longest tests were `ged_test_drawing_select` at 16.39 seconds,
+      `ged_test_drawing_quad` at 12.81 seconds, and
+      `ged_test_drawing_lod` at 10.86 seconds.
+
+entry:
+  date: 2026-06-27
+  id: scene-source-root-bookkeeping-context-facade
+  capability: scene-source
+  summary: Moved scene-root draw bookkeeping attachment onto an opaque
+    scene-context facade.
+  changed:
+    - Replaced the shared private raw
+      `ged_draw_scene_root_attach_draw_bookkeeping` declaration with
+      `ged_draw_scene_context_attach_draw_bookkeeping`.
+    - Scene-root creation now converts the retained root ref to an opaque
+      scene context before asking the source adapter to attach draw
+      bookkeeping.
+    - The source adapter keeps retained conversion and `bsg_scene_set_draw_ctx`
+      ownership local to the current BSG-backed backend boundary.
+    - Pivot guard now requires the context facade in the scene-root/private
+      boundary and rejects re-exposing the raw retained bookkeeping helper in
+      the shared private header.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_scene_root.c`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_view_command|ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Direct `rg --count` scan reduced `bsg_scene_ref` matching lines in
+      `src/libged/bsg_ged_draw_private.h` from 36 to 35.
+    - Focused guard group completed 6/6 passing in 21.27 seconds; the longest
+      test was `brlobol_pivot_guard` at 19.06 seconds.
+    - Broader GED draw group completed 11/11 passing in 53.46 seconds; the
+      longest tests were `ged_test_drawing_select` at 16.40 seconds,
+      `ged_test_drawing_quad` at 12.66 seconds, and
+      `ged_test_drawing_lod` at 11.07 seconds.
+
+entry:
+  date: 2026-06-27
+  id: scene-source-shape-region-context-facade
+  capability: scene-source
+  summary: Moved shape-draft region registry mutation onto an opaque
+    shape-context facade.
+  changed:
+    - Replaced the shared private raw
+      `ged_draw_shape_draft_apply_registry_region` declaration with
+      `ged_draw_shape_context_apply_registry_region`.
+    - Shape-draft tree-result state now passes the retained shape as an opaque
+      scene context before asking the registry owner to apply region metadata.
+    - The registry owner keeps retained context conversion and
+      `ged_draw_shape_state_ensure_scene_ref` local to the current backend
+      boundary.
+    - Pivot guard now requires the context facade in the shared private header
+      and rejects re-exposing the raw retained draft registry-region helper
+      there.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_registry.c`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_view_command|ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Direct `rg --count` scan reduced `bsg_scene_ref` matching lines in
+      `src/libged/bsg_ged_draw_private.h` from 35 to 34.
+    - Focused guard group completed 6/6 passing in 21.01 seconds; the longest
+      test was `brlobol_pivot_guard` at 18.78 seconds.
+    - Broader GED draw group completed 11/11 passing in 53.47 seconds; the
+      longest tests were `ged_test_drawing_select` at 16.35 seconds,
+      `ged_test_drawing_quad` at 12.85 seconds, and
+      `ged_test_drawing_lod` at 10.89 seconds.
+
+entry:
+  date: 2026-06-27
+  id: scene-source-registry-entry-context-facade
+  capability: scene-source
+  summary: Moved source-adapter registry-entry creation onto an opaque
+    scene-context facade.
+  changed:
+    - Replaced the shared private raw
+      `ged_draw_scene_ref_ensure_registry_entry` declaration with
+      `ged_draw_scene_context_ensure_registry_entry`.
+    - Overlay insertion, draft-pair creation, and child-shape creation now pass
+      retained scenes as opaque contexts before asking the registry owner to
+      ensure entries.
+    - The registry owner keeps retained context conversion and
+      `ged_draw_shape_state_ensure_scene_ref` local to the current backend
+      boundary.
+    - Pivot guard now requires the context facade and rejects re-exposing the
+      raw retained registry-entry ensure helper in the shared private header.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_registry.c`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_view_command|ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Direct `rg --count` scan reduced `bsg_scene_ref` matching lines in
+      `src/libged/bsg_ged_draw_private.h` from 34 to 33.
+    - Focused guard group completed 6/6 passing in 21.28 seconds; the longest
+      test was `brlobol_pivot_guard` at 19.06 seconds.
+    - Broader GED draw group completed 11/11 passing in 53.44 seconds; the
+      longest tests were `ged_test_drawing_select` at 16.36 seconds,
+      `ged_test_drawing_quad` at 12.87 seconds, and
+      `ged_test_drawing_lod` at 10.88 seconds.
+
+entry:
+  date: 2026-06-27
+  id: scene-source-registry-owner-context-facade
+  capability: scene-source
+  summary: Moved registry-owner lookup onto an opaque scene-context facade.
+  changed:
+    - Replaced the shared private raw `ged_draw_scene_ref_registry_owner`
+      declaration with `ged_draw_scene_context_registry_owner`.
+    - Registry ownership lookup now passes an opaque scene context before
+      asking the source adapter for the owning GED drawable.
+    - The source adapter keeps retained parent traversal and draw-context
+      owner extraction local to the current BSG-backed backend boundary.
+    - Pivot guard now requires the context facade and rejects re-exposing the
+      raw retained registry-owner helper in the shared private header.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_registry.c`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_view_command|ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Direct `rg --count` scan reduced `bsg_scene_ref` matching lines in
+      `src/libged/bsg_ged_draw_private.h` from 33 to 32.
+    - Focused guard group completed 6/6 passing in 20.99 seconds; the longest
+      test was `brlobol_pivot_guard` at 18.77 seconds.
+    - Broader GED draw group completed 11/11 passing in 53.41 seconds; the
+      longest tests were `ged_test_drawing_select` at 16.32 seconds,
+      `ged_test_drawing_quad` at 12.77 seconds, and
+      `ged_test_drawing_lod` at 10.87 seconds.
+
+entry:
+  date: 2026-06-27
+  id: scene-source-highlight-free-context-facade
+  capability: scene-source
+  summary: Moved scene-release highlight cleanup onto an opaque scene-context
+    facade.
+  changed:
+    - Replaced the shared private raw `ged_draw_scene_ref_highlight_free_cb`
+      declaration with `ged_draw_scene_context_highlight_free_cb`.
+    - Source-adapter retained scene release paths now pass opaque scene
+      contexts before asking registry ownership to clear highlight and shape
+      state.
+    - The registry owner keeps retained context conversion, highlighted token
+      cleanup, and shape-state release local to the current backend boundary.
+    - Pivot guard now requires the context facade and rejects re-exposing the
+      raw retained highlight-free callback in the shared private header.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_registry.c`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_view_command|ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Direct `rg --count` scan reduced `bsg_scene_ref` matching lines in
+      `src/libged/bsg_ged_draw_private.h` from 32 to 31.
+    - Focused guard group completed 6/6 passing in 21.03 seconds; the longest
+      test was `brlobol_pivot_guard` at 18.82 seconds.
+    - Broader GED draw group completed 11/11 passing in 53.55 seconds; the
+      longest tests were `ged_test_drawing_select` at 16.45 seconds,
+      `ged_test_drawing_quad` at 12.89 seconds, and
+      `ged_test_drawing_lod` at 10.90 seconds.
+
+entry:
+  date: 2026-06-27
+  id: scene-source-summary-context-facades
+  capability: scene-source
+  summary: Moved scene-root and registry retained summary reads onto opaque
+    scene-context facades.
+  changed:
+    - Replaced the shared private raw `ged_draw_scene_ref_tree_summary`,
+      `ged_draw_scene_ref_shape_record_summary`, and
+      `ged_draw_scene_ref_group_record_summary` declarations with context-shaped
+      summary facades where needed.
+    - Scene-root traversal now reads shape, group, and tree summaries through
+      opaque scene contexts.
+    - Registry shape-state ensure now reads retained tree summary through the
+      public scene-context facade.
+    - Raw retained summary helpers are source-local to the current BSG-backed
+      source adapter.
+    - Pivot guard now requires the context summary facades and rejects
+      re-exposing raw retained summary helpers in the shared private header.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_scene_root.c`
+    - `src/libged/bsg_ged_draw_registry.c`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_view_command|ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Direct `rg --count` scan reduced `bsg_scene_ref` matching lines in
+      `src/libged/bsg_ged_draw_private.h` from 31 to 28.
+    - Focused guard group completed 6/6 passing in 21.10 seconds; the longest
+      test was `brlobol_pivot_guard` at 18.88 seconds.
+    - Broader GED draw group completed 11/11 passing in 53.22 seconds; the
+      longest tests were `ged_test_drawing_select` at 16.42 seconds,
+      `ged_test_drawing_quad` at 12.63 seconds, and
+      `ged_test_drawing_lod` at 10.89 seconds.
+
+entry:
+  date: 2026-06-27
+  id: scene-source-index-callbacks-registry-local
+  capability: scene-source
+  summary: Moved raw retained scene-ref index callbacks out of the shared
+    private draw header.
+  changed:
+    - Removed the shared private `ged_draw_scene_ref_index_cb` typedef and raw
+      `ged_draw_shape_index_for_component`,
+      `ged_draw_group_index_for_component`, and
+      `ged_draw_shape_index_for_path_hash` declarations.
+    - Made the raw retained index helpers source-local to the registry owner.
+    - Kept shared transaction and selection paths on shape-ref/group-ref index
+      facades.
+    - Pivot guard now requires the group-ref index facade and rejects
+      re-exposing raw retained index callbacks from the shared private header.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_registry.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_view_command|ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Direct `rg --count` scan reduced `bsg_scene_ref` matching lines in
+      `src/libged/bsg_ged_draw_private.h` from 28 to 27.
+    - Focused guard group completed 6/6 passing in 21.10 seconds; the longest
+      test was `brlobol_pivot_guard` at 18.87 seconds.
+    - Broader GED draw group completed 11/11 passing in 53.44 seconds; the
+      longest tests were `ged_test_drawing_select` at 16.40 seconds,
+      `ged_test_drawing_quad` at 12.69 seconds, and
+      `ged_test_drawing_lod` at 10.94 seconds.
+
+entry:
+  date: 2026-06-27
+  id: scene-source-indexed-fullpath-context-facade
+  capability: scene-source
+  summary: Moved retained indexed-fullpath registry setup behind an opaque
+    scene-context facade.
+  changed:
+    - Added `ged_draw_scene_context_set_indexed_fullpath` in the registry owner.
+    - Source path-state setup now passes a scene context to the registry facade
+      instead of calling raw retained shape-state ensure and indexed-fullpath
+      helpers.
+    - Made `ged_draw_shape_state_ensure_scene_ref` and
+      `ged_draw_scene_ref_set_indexed_fullpath` registry-local.
+    - Pivot guard now requires the context-shaped fullpath facade and rejects
+      re-exposing the raw retained registry helpers from the shared private
+      header or source adapter.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_registry.c`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+  tests:
+    - `ninja -C build libged ged_test_ged_draw_scene`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_view_command|ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --timeout 180 --output-on-failure`
+  notes:
+    - Direct `rg --count` scan reduced `bsg_scene_ref` matching lines in
+      `src/libged/bsg_ged_draw_private.h` from 27 to 25.
+    - Focused guard group completed 6/6 passing in 21.20 seconds; the longest
+      test was `brlobol_pivot_guard` at 18.98 seconds.
+    - Broader GED draw group completed 11/11 passing in 53.27 seconds; the
+      longest tests were `ged_test_drawing_select` at 16.44 seconds,
+      `ged_test_drawing_quad` at 12.64 seconds, and
+      `ged_test_drawing_lod` at 10.88 seconds.
 
 
 Entry Template

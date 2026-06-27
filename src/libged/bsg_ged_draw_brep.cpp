@@ -18,7 +18,7 @@
  */
 /** @file bsg_ged_draw_brep.cpp
  *
- * Private BREP/BSPLINE typed geometry publication for libged drawing paths.
+ * Private BREP mesh-LoD detail setup for libged drawing paths.
  */
 
 #include "common.h"
@@ -30,10 +30,8 @@
 #include "bu/hash.h"
 #include "bu/malloc.h"
 #include "raytrace.h"
-#include "rt/functab.h"
 #include "rt/geom.h"
 #include "rt/primitives/brep.h"
-#include "rt/primitives/bspline.h"
 #include "rt/view.h"
 #include "../librt/librt_private.h"
 #include "./ged_private.h"
@@ -343,95 +341,4 @@ ged_draw_brep_mesh_lod_detail_setup(struct rt_mesh_lod *lod,
     }
 
     return 1;
-}
-
-
-static void
-_ged_draw_realization_line_set_free(struct rt_primitive_lod_realization *realization)
-{
-    if (!realization)
-	return;
-
-    if (realization->line_points)
-	bu_free(realization->line_points, "primitive LoD line-set points");
-    if (realization->line_commands)
-	bu_free(realization->line_commands, "primitive LoD line-set commands");
-    realization->line_points = NULL;
-    realization->line_commands = NULL;
-    realization->line_count = 0;
-    realization->line_capacity = 0;
-    realization->has_line_set = 0;
-}
-
-
-static int
-_ged_draw_scene_ref_publish_realization_line_set(bsg_scene_ref ref,
-						 struct rt_primitive_lod_realization *realization)
-{
-    int ok = 0;
-
-    if (!realization || !realization->has_line_set)
-	return 0;
-
-    ok = realization->line_count ?
-	ged_draw_scene_ref_publish_line_set(ref,
-		(const point_t *)realization->line_points,
-		realization->line_commands, realization->line_count) :
-	ged_draw_scene_ref_geometry_clear(ref);
-
-    _ged_draw_realization_line_set_free(realization);
-    return ok;
-}
-
-
-extern "C" int
-ged_draw_scene_ref_publish_brep_wireframe_line_set(bsg_scene_ref ref,
-						   const struct rt_brep_internal *bi,
-						   const struct bn_tol *tol)
-{
-    struct rt_primitive_lod_realization realization = {};
-    struct rt_db_internal brep_ip;
-    int ret = 0;
-
-    if (!bi)
-	return 0;
-
-    RT_BREP_CK_MAGIC(bi);
-    if (!bi->brep)
-	return 0;
-
-    RT_DB_INTERNAL_INIT(&brep_ip);
-    brep_ip.idb_major_type = DB5_MAJORTYPE_BRLCAD;
-    brep_ip.idb_type = ID_BREP;
-    brep_ip.idb_meth = &OBJ[ID_BREP];
-    brep_ip.idb_ptr = (void *)bi;
-
-    ret = rt_brep_wireframe_line_set(&realization, &brep_ip, tol);
-    if (ret < 0) {
-	_ged_draw_realization_line_set_free(&realization);
-	return 0;
-    }
-
-    return _ged_draw_scene_ref_publish_realization_line_set(ref, &realization);
-}
-
-
-extern "C" int
-ged_draw_scene_ref_publish_bspline_wireframe_line_set(bsg_scene_ref ref,
-						      struct rt_db_internal *ip,
-						      const struct bn_tol *tol)
-{
-    struct rt_primitive_lod_realization realization = {};
-    int ret = 0;
-
-    if (!ip || ip->idb_type != ID_BSPLINE || !ip->idb_ptr)
-	return 0;
-
-    ret = rt_nurb_wireframe_line_set(&realization, ip, tol);
-    if (ret < 0) {
-	_ged_draw_realization_line_set_free(&realization);
-	return 0;
-    }
-
-    return _ged_draw_scene_ref_publish_realization_line_set(ref, &realization);
 }

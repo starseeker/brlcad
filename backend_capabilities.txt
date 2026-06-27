@@ -93,6 +93,171 @@ Recent cleanup state:
 * Scene-context parent lookup remains behind the source-adapter
   parent-context facade; moving raw parent traversal into the refs layer is
   intentionally guarded against.
+* The standalone retained scene-ref/RT scope bridge file is retired; retained
+  root/scope conversion now lives at the scene-root ownership boundary.
+* Highlight tracking now routes retained highlight-bit mutation through a
+  shape-ref source-adapter facade, leaving the highlight owner on neutral
+  draw refs and records instead of cross-file scene refs.
+* Transaction database-change, visibility, and transparency record callbacks
+  now use shape/group-ref source-adapter facades instead of resolving
+  retained scene refs solely for mutation.
+* Transaction reexpand bookkeeping now reads retained group appearance through
+  a group-ref tree facade instead of opening the group scene ref directly.
+* Transaction redraw now routes shape-level retained geometry clear,
+  wireframe publication, and database-source redraw-result state through a
+  shape-ref source-adapter facade.
+* Transaction group redraw now routes retained group lookup and shape
+  traversal through a group-ref source-adapter facade instead of opening the
+  group scene ref in transaction code.
+* Transaction source update/redraw/reexpand index hits now use shape/group-ref
+  index callbacks instead of retained scene-ref index callbacks.
+* Material refresh now routes lazy per-shape material color/revision updates
+  through a shape-ref source-adapter facade instead of resolving scene refs in
+  the material walker.
+* Navigation first/count/index/advance helpers now use scene-root shape-ref
+  traversal, and owning-group lookup lives in the source adapter instead of
+  the navigation module.
+* Records-side path state, path listing, has-path checks, and public
+  shape-record filling now read shape/source metadata through shape-ref
+  source-adapter facades instead of resolving retained shape scene refs in
+  the records module.
+* Records-side public group-record filling and group-record iteration now use
+  group-ref summary/count facades and scene-root group-ref traversal instead
+  of resolving retained group scene refs in the records module.
+* Public group-ref path, draw-mode, and appearance updates now live in the
+  source adapter beside group-ref readback, rather than reopening retained
+  group scene refs in the tree module.
+* Full draw-clear independent-scope/root child traversal and public
+  has-groups readback now route through scene-root facades instead of tree
+  code resolving retained scopes, composing retained child clear/release
+  operations, or running retained group traversal callbacks directly.
+* Shape-draft group append now lives in the source adapter, including retained
+  group lookup, intermediate child-group creation, and source-owner attachment,
+  instead of tree code appending retained shape/source refs directly.
+* Explicit group lookup/create now lives in the source adapter, including
+  active-scope selection, retained child-group creation, draw-intent
+  initialization, and path-state application, instead of tree code creating
+  retained groups directly.
+* Empty-group pruning after shape release now routes through a source-adapter
+  facade instead of tree code recursively traversing retained children and
+  freeing empty groups directly.
+* Nested DB subpath erase now routes through a source-adapter facade, including
+  subpath component extraction, retained shape path matching, and empty-parent
+  cleanup, instead of tree code building retained nested-erase callback inputs
+  or child-count/free checks directly.
+* Recursive subgroup erase-by-name now routes through a source-adapter facade
+  instead of tree code traversing retained child groups and freeing matching
+  subgroup names directly.
+* Group path-prefix erase now routes group-child snapshotting, path-prefix
+  matching, scope filtering, and retained group free through a source-adapter
+  facade.
+* View-scoped clear now routes active-scope lookup, group-child snapshotting,
+  scope filtering, and retained group free through a source-adapter facade
+  instead of a tree-local retained group clear helper.
+* Exact group path erase and scoped exact group path erase now route group-child
+  snapshotting, path comparison, nested-subpath ancestor matching, and retained
+  group/nested erase dispatch through a source-adapter facade.
+* All-paths DB-subpath group erase now routes restartable group-child
+  traversal, optional scope filtering, full-path subset matching,
+  nested-subpath ancestor matching, and retained group/nested erase dispatch
+  through a source-adapter facade.
+* Erase-by-name group traversal now routes top-level group path-component
+  matching, overlay-skipping child snapshotting, recursive subgroup erase
+  dispatch, and retained group free through a source-adapter facade; tree keeps
+  overlay name erase and root mutation orchestration.
+* Exact DB-subpath, path-prefix, and component-name shape-record fallback erase
+  now routes shape-record iteration, overlay/view/mode filtering, shape-ref
+  release, and empty-group pruning through source-adapter facades; tree keeps
+  DB path conversion, draw-revision fallback decisions, overlay-name erasure,
+  and scope/mode orchestration.
+* Root and scoped exact-path/path-prefix erase now route DB-path conversion,
+  DB-index fallback, retained group/shape erase dispatch, and active-scope
+  retained-ref resolution through source-adapter facades.
+* Root exact-path, path-prefix, and group-name erase now route root retained-ref
+  resolution through explicit scene-root facades instead of tree-local root
+  mutation callbacks; tree keeps public erase wrappers and overlay-name
+  erasure.
+* Overlay name erase and overlay geometry insertion now route retained overlay
+  scene lookup, geometry publication, registry entry, append, bounds,
+  appearance, color-soltab policy, and release through source-adapter facades;
+  overlay code keeps public validation and active-view dispatch.
+* Retained overlay scene lookup, overlay name erasure, overlay scene append,
+  command-result owner registration, overlay geometry creation, and internal
+  overlay feature creation now live in the source adapter instead of the view
+  adapter; the view adapter still owns the later feature/polygon overlay
+  behavior until Capability 2 replaces that backend.
+* Gobject overlay draw walking now carries an opaque overlay scene context
+  instead of a `bsg_scene_ref`; retained overlay creation, database-leaf draft
+  commit, and scene-ref realization dispatch live behind source-adapter
+  facades, leaving `draw.cpp` and `draw_data_t` without direct retained
+  scene-ref tokens.
+* The standalone retained path-state bridge file is retired; indexed fullpath
+  setup and semantic draw-intent path updates now live in the source adapter
+  beside the retained draw-intent setters.
+* The standalone retained database-source/source-state binding file is retired;
+  source-owner lookup, database-source record conversion/sync, source-state
+  attachment, and draw-source mesh-LoD cleanup now live in the source adapter.
+* The standalone retained shape-draft bridge file is retired; draft lifecycle,
+  geometry publication, display-state application, source-state setup, and
+  group/database-leaf commit now live in the source adapter.
+* BREP/BSPLINE retained line-set publication now lives in the source adapter;
+  the BREP C++ helper remains only for BREP mesh-LoD callback/detail setup.
+* Source-only retained geometry publication, primitive wireframe/face-set
+  publication, NMG-region publication, and geometry bounds update helpers are
+  now file-local in the source adapter instead of exposed through the shared
+  private draw header.
+* Source-only retained overlay scene helpers, low-level retained scene
+  creation/attachment helpers, draft-pair creation, source classification,
+  scene release, and group-ref append helpers are now file-local in the source
+  adapter instead of exposed through the shared private draw header.
+* Source-only retained draw-state, draw-intent, display attribute, material
+  color, path-state, realization invalidation, and overlay-attribute mutation
+  helpers are now file-local in the source adapter instead of exposed through
+  the shared private draw header.
+* Source-only retained group/shape erase internals, database-source record
+  sync helpers, source-owner/parent readback, source-summary/draw-state
+  readback, material refresh, soltab coloring, and realization dispatch helpers
+  are now file-local in the source adapter instead of exposed through the
+  shared private draw header.
+* Raw retained scene-root shape/group traversal callbacks are now file-local in
+  the scene-root bridge; shared callers use the shape-ref/group-ref traversal
+  facades instead of private `bsg_scene_ref` callback entry points.
+* Group shape-count/redraw traversal in the source adapter now uses a
+  source-local retained shape iterator, and the shared private draw header no
+  longer exposes the raw scene-ref shape traversal entry point.
+* Scene-root clear-all-scope now reaches retained child teardown through an
+  opaque scene-context facade; the raw retained scope-child clear helper is
+  source-local instead of shared through the private draw header.
+* Scene-root subtree-bounds readback now reaches retained bounds traversal
+  through an opaque scene-context facade; the raw retained subtree-bounds
+  helper is source-local instead of shared through the private draw header.
+* Scene-root creation now initializes retained root visibility through an
+  opaque scene-context facade; the raw retained visibility setter is
+  source-local instead of shared through the private draw header.
+* Scene-root creation now attaches retained draw bookkeeping through an opaque
+  scene-context facade; the root draw-context attachment helper no longer
+  exposes a retained scene ref through the shared private draw header.
+* Shape-draft region metadata now reaches registry state through an opaque
+  shape-context facade; the draft registry-region helper no longer exposes a
+  retained scene ref through the shared private draw header.
+* Source-adapter registry-entry creation now reaches registry ownership through
+  an opaque scene-context facade; the raw retained registry-entry ensure helper
+  no longer crosses the shared private draw header.
+* Registry-owner lookup now reaches the source adapter through an opaque
+  scene-context facade; the raw retained registry-owner helper no longer
+  crosses the shared private draw header.
+* Scene release highlight cleanup now reaches registry state through an opaque
+  scene-context facade; the raw retained highlight-free callback no longer
+  crosses the shared private draw header.
+* Scene-root and registry summary reads now use opaque scene-context summary
+  facades; raw retained tree/shape/group summary helpers no longer cross the
+  shared private draw header.
+* Registry raw scene-ref index callbacks are now registry-local; shared callers
+  use shape-ref/group-ref index facades instead of a private `bsg_scene_ref`
+  callback surface.
+* Registry path-state setup now uses an opaque scene-context fullpath facade;
+  raw retained shape-state ensure and indexed-fullpath helpers are registry-local
+  instead of exposed through the shared private draw header.
 
 
 Capability 1 Remaining Work: Scene And Source Ownership

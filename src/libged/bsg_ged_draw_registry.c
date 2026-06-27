@@ -50,6 +50,8 @@ struct ged_draw_registry_entry {
 
 static struct bu_ptbl ged_draw_registry_entries = BU_PTBL_INIT_ZERO;
 
+typedef int (*ged_draw_scene_ref_index_cb)(bsg_scene_ref ref, void *userdata);
+
 static struct ged_drawable *_ged_drawable_for_scene_ref(bsg_scene_ref ref);
 static struct ged_drawable *_ged_draw_registry_entry_gdp(struct ged_draw_registry_entry *entry);
 static void _ged_draw_registry_entry_index(struct ged_drawable *gdp,
@@ -57,6 +59,8 @@ static void _ged_draw_registry_entry_index(struct ged_drawable *gdp,
 static void _ged_draw_registry_entry_unindex(struct ged_drawable *gdp,
 					     struct ged_draw_registry_entry *entry);
 static void _ged_draw_registry_index_tables_free(struct ged_drawable *gdp);
+static ged_draw_shape_state *ged_draw_shape_state_ensure_scene_ref(struct ged *gedp,
+								   bsg_scene_ref ref);
 static void ged_draw_shape_state_release_scene_ref(bsg_scene_ref ref);
 
 
@@ -218,7 +222,8 @@ _ged_draw_registry_init_if_needed(struct ged_drawable *gdp)
 static struct ged_drawable *
 _ged_drawable_for_scene_ref(bsg_scene_ref ref)
 {
-    return (struct ged_drawable *)ged_draw_scene_ref_registry_owner(ref);
+    return (struct ged_drawable *)ged_draw_scene_context_registry_owner(
+	    ged_draw_scene_ref_context(ref));
 }
 
 
@@ -570,7 +575,7 @@ _ged_draw_registry_entry_for_scene_ref(struct ged *gedp, bsg_scene_ref ref)
 }
 
 
-int
+static int
 ged_draw_scene_ref_set_indexed_fullpath(struct ged *gedp,
 					bsg_scene_ref ref,
 					const struct db_full_path *path)
@@ -589,13 +594,26 @@ ged_draw_scene_ref_set_indexed_fullpath(struct ged *gedp,
 
 
 int
-ged_draw_shape_draft_apply_registry_region(struct ged *gedp,
-					   bsg_scene_ref ref,
-					   int region_id,
-					   int aircode,
-					   int los,
-					   int material_id)
+ged_draw_scene_context_set_indexed_fullpath(struct ged *gedp,
+					    void *shape_ctx,
+					    const struct db_full_path *path)
 {
+    bsg_scene_ref ref = ged_draw_scene_ref_from_context(shape_ctx);
+    if (!ged_draw_shape_state_ensure_scene_ref(gedp, ref))
+	return 0;
+    return ged_draw_scene_ref_set_indexed_fullpath(gedp, ref, path);
+}
+
+
+int
+ged_draw_shape_context_apply_registry_region(struct ged *gedp,
+					     void *shape_ctx,
+					     int region_id,
+					     int aircode,
+					     int los,
+					     int material_id)
+{
+    bsg_scene_ref ref = ged_draw_scene_ref_from_context(shape_ctx);
     ged_draw_shape_state *data =
 	ged_draw_shape_state_ensure_scene_ref(gedp, ref);
     if (!data)
@@ -680,7 +698,7 @@ _ged_draw_index_for_component(struct ged *gedp,
 }
 
 
-int
+static int
 ged_draw_shape_index_for_component(struct ged *gedp,
 				   const char *path,
 				   ged_draw_scene_ref_index_cb cb,
@@ -731,13 +749,54 @@ ged_draw_shape_ref_index_for_component(struct ged *gedp,
 }
 
 
-int
+static int
 ged_draw_group_index_for_component(struct ged *gedp,
 				   const char *path,
 				   ged_draw_scene_ref_index_cb cb,
 				   void *userdata)
 {
     return _ged_draw_index_for_component(gedp, path, 1, cb, userdata);
+}
+
+
+struct ged_draw_group_ref_index_ctx {
+    struct ged *gedp;
+    ged_draw_group_ref_index_cb cb;
+    void *userdata;
+};
+
+
+static int
+_ged_draw_group_ref_index_cb(bsg_scene_ref scene_ref, void *userdata)
+{
+    struct ged_draw_group_ref_index_ctx *ctx =
+	(struct ged_draw_group_ref_index_ctx *)userdata;
+    if (!ctx || !ctx->cb)
+	return 1;
+
+    ged_draw_group_ref ref =
+	ged_draw_group_ref_from_scene_ref(ctx->gedp, scene_ref);
+    if (ged_draw_group_ref_is_null(ref))
+	return 1;
+    return (*ctx->cb)(ref, ctx->userdata);
+}
+
+
+int
+ged_draw_group_ref_index_for_component(struct ged *gedp,
+				       const char *path,
+				       ged_draw_group_ref_index_cb cb,
+				       void *userdata)
+{
+    if (!cb)
+	return ged_draw_group_index_for_component(gedp, path, NULL, userdata);
+
+    struct ged_draw_group_ref_index_ctx ctx;
+    ctx.gedp = gedp;
+    ctx.cb = cb;
+    ctx.userdata = userdata;
+    return ged_draw_group_index_for_component(gedp, path,
+	    _ged_draw_group_ref_index_cb, &ctx);
 }
 
 
@@ -779,7 +838,7 @@ _ged_draw_index_for_path_hash(struct ged *gedp,
 }
 
 
-int
+static int
 ged_draw_shape_index_for_path_hash(struct ged *gedp,
 				   unsigned long long path_hash,
 				   ged_draw_scene_ref_index_cb cb,
@@ -912,8 +971,9 @@ _ged_draw_registry_entry_ensure(struct ged *gedp, bsg_scene_ref ref, int is_grou
 
 
 void
-ged_draw_scene_ref_highlight_free_cb(bsg_scene_ref ref)
+ged_draw_scene_context_highlight_free_cb(void *scene_ctx)
 {
+    bsg_scene_ref ref = ged_draw_scene_ref_from_context(scene_ctx);
     if (ged_draw_scene_ref_is_null(ref))
 	return;
     struct ged_drawable *gdp = _ged_drawable_for_scene_ref(ref);
@@ -941,13 +1001,14 @@ ged_draw_shape_state_get_scene_ref(bsg_scene_ref ref)
 }
 
 
-ged_draw_shape_state *
+static ged_draw_shape_state *
 ged_draw_shape_state_ensure_scene_ref(struct ged *gedp, bsg_scene_ref ref)
 {
     if (ged_draw_scene_ref_is_null(ref))
 	return NULL;
     struct ged_draw_scene_tree_summary summary;
-    int is_group = ged_draw_scene_ref_tree_summary(ref, &summary) ?
+    int is_group = ged_draw_scene_context_tree_summary(
+	    ged_draw_scene_ref_context(ref), &summary) ?
 	summary.is_group : 0;
     struct ged_draw_registry_entry *entry =
 	_ged_draw_registry_entry_ensure(gedp, ref, is_group);
@@ -958,8 +1019,9 @@ ged_draw_shape_state_ensure_scene_ref(struct ged *gedp, bsg_scene_ref ref)
 
 
 int
-ged_draw_scene_ref_ensure_registry_entry(struct ged *gedp, bsg_scene_ref ref)
+ged_draw_scene_context_ensure_registry_entry(struct ged *gedp, void *scene_ctx)
 {
+    bsg_scene_ref ref = ged_draw_scene_ref_from_context(scene_ctx);
     if (ged_draw_scene_ref_is_null(ref))
 	return 0;
     return ged_draw_shape_state_ensure_scene_ref(gedp, ref) ? 1 : 0;

@@ -42,14 +42,6 @@
 #include "../librt/librt_private.h"
 #include "./ged_private.h"
 
-/* This function is the master controller that decides, based on available settings
- * and data, which specific drawing routines need to be triggered. */
-extern "C" void
-ged_draw_scene_ref_realize(bsg_scene_ref ref, void *view_ctx)
-{
-    ged_draw_scene_ref_realize_dispatch(ref, view_ctx);
-}
-
 static void
 tree_color(struct directory *dp, struct draw_data_t *dd)
 {
@@ -277,7 +269,7 @@ draw_gather_paths(struct db_full_path *path, mat_t *curr_mat, void *client_data)
 
 	unsigned char rgb[3];
 	bu_color_to_rgb_chars(&dd->c, rgb);
-	(void)ged_draw_scene_ref_commit_database_leaf_draft(dd->g_ref, dd->gedp,
+	(void)ged_draw_scene_context_commit_database_leaf_draft(dd->g_ctx, dd->gedp,
 		dd->view_ctx, dd->dbip, path, *curr_mat, dd->tol, dd->ttol,
 		dd->vs, dd->bool_op, rgb, has_draw_size, draw_size);
 
@@ -338,9 +330,9 @@ ged_draw_view_context_gobject_create(struct ged *gedp,
 	return 0;
     }
 
-    bsg_scene_ref g_ref = ged_draw_scene_ref_null();
-    if (!ged_draw_view_context_overlay_internal_create(gedp, view_ctx,
-	    gobject_name, fp, &ip, &g_ref)) {
+    void *g_ctx = NULL;
+    if (!ged_draw_view_context_overlay_internal_create_context(gedp, view_ctx,
+	    gobject_name, fp, &ip, &g_ctx)) {
 	db_free_full_path(fp);
 	BU_PUT(fp, struct db_full_path);
 	rt_db_free_internal(ip);
@@ -362,7 +354,7 @@ ged_draw_view_context_gobject_create(struct ged *gedp,
     dd.s_size = &s_size;
     bu_color_from_rgb_chars(&dd.c, wcolor);
     dd.vs = &vs;
-    dd.g_ref = g_ref;
+    dd.g_ctx = g_ctx;
 
     draw_gather_paths(fp, &mat, (void *)&dd);
 
