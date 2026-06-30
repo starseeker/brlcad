@@ -16303,7 +16303,15 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	ged_draw_scene_context_registry_owner
 	ged_draw_scene_context_highlight_free_cb
 	color_soltab_scene_ref
-	ged_draw_shape_ref_from_scene_ref)
+	_ged_draw_shape_state_get_scene_ref
+	_ged_draw_shape_ref_from_scene_ref
+	_ged_draw_group_ref_from_scene_ref
+	_ged_draw_shape_ref_scene_ref
+	_ged_draw_group_ref_scene_ref
+	ged_draw_shape_state_get_scene_context
+	ged_draw_registry_shape_ref_context
+	ged_draw_registry_shape_ref_cache_context
+	ged_draw_registry_group_ref_context)
       string(FIND "${_ged_bsg_draw_source_contents}" "${_token}"
 	_ged_draw_scene_ref_attr_helper_idx)
       if(_ged_draw_scene_ref_attr_helper_idx EQUAL -1)
@@ -17053,6 +17061,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 		ged_draw_scene_context_shape_record_summary
 		ged_draw_scene_context_group_record_summary
 		ged_draw_scene_context_highlight_free_cb
+	ged_draw_shape_state_get_scene_context
 	ged_draw_shape_draft_apply_late_display_state
 	ged_draw_shape_draft_apply_evaluated_path_display
 	ged_draw_shape_draft_apply_database_leaf_display
@@ -17070,6 +17079,9 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	ged_draw_group_ref_redraw_wireframe
 	ged_draw_shape_ref_redraw_wireframe
 	ged_draw_create_evaluated_path_shape_ref
+	ged_draw_registry_shape_ref_context
+	ged_draw_registry_shape_ref_cache_context
+	ged_draw_registry_group_ref_context
 	ged_draw_append_tree_shape_to_group
 	ged_draw_add_tree_line_set_to_group
 	ged_draw_add_tree_nmg_region_to_group
@@ -17177,6 +17189,10 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 		[[(^|[^A-Za-z0-9_])ged_draw_(shape|group)_index_for_component[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_shape_index_for_path_hash[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_shape_draft_commit_database_leaf_to_scene_ref[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_shape_state_get_scene_ref[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_(shape|group)_ref_from_scene_ref[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_registry_(shape|group)_scene_ref[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_shape_scene_ref_from_cache_ref[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])color_soltab_scene_ref[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_scene_root_foreach_(shape|group)[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _ged_private_source_local_ref_hit

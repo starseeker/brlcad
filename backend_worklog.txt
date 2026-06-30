@@ -2357,6 +2357,40 @@ entry:
       test executable; after rebuilding that target, the isolated test and
       full six-test smoke group passed.
 
+entry:
+  date: 2026-06-30
+  id: scene-source-registry-context-boundary
+  capability: scene-source
+  summary: Localized raw registry scene-ref reconstruction behind opaque
+    context registry accessors.
+  changed:
+    - Replaced shared private header raw shape/group scene-ref registry lookups
+      with `ged_draw_registry_*_context` helpers.
+    - Made raw scene-ref-to-draw-ref and draw-ref-to-scene-ref registry helpers
+      static inside `bsg_ged_draw_registry.c`.
+    - Added source-local underscored adapters in `bsg_ged_draw_source.c` for the
+      current BSG source implementation paths that still need typed scene refs.
+    - Pivot guard now requires the new context accessors and rejects
+      re-exposing the retired raw registry helpers from the shared private
+      header.
+  files:
+    - `backend_worklog.txt`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_registry.c`
+    - `src/libged/bsg_ged_draw_source.c`
+  tests:
+    - `cmake --build build --target libged -j2`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_bsg_render_stability|ged_test_bsg_quad_stability|ged_test_ged_draw_scene|ged_test_view_independent|test_qtcad_obol_draw_sync)$' --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_view_command|ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --output-on-failure`
+  notes:
+    - Direct `rg` scan reduced `bsg_scene_ref` matching lines in
+      `src/libged/bsg_ged_draw_private.h` from 11 to 7.
+    - Old raw helper names outside `bsg_ged_draw_registry.c` are now limited to
+      underscored source-local wrappers in `bsg_ged_draw_source.c`.
+
 
 Entry Template
 --------------

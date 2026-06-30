@@ -594,7 +594,7 @@ GED_EXPORT extern int ged_draw_shape_context_apply_registry_region(struct ged *g
 								   int material_id);
 GED_EXPORT extern const char *ged_draw_dbpath_skip_lead_slash(const char *s);
 
-GED_EXPORT extern ged_draw_shape_state *ged_draw_shape_state_get_scene_ref(bsg_scene_ref ref);
+GED_EXPORT extern ged_draw_shape_state *ged_draw_shape_state_get_scene_context(void *scene_ctx);
 
 GED_EXPORT extern void *ged_draw_active_view_ctx(struct ged *gedp);
 GED_EXPORT extern void ged_draw_active_view_ctx_set(struct ged *gedp,
@@ -675,10 +675,6 @@ GED_EXPORT extern int ged_draw_erase_component_string_scoped(struct ged *gedp,
 
 GED_EXPORT extern void ged_draw_highlighted_shape_ref_invalidate(struct ged *gedp);
 
-GED_EXPORT extern ged_draw_shape_ref ged_draw_shape_ref_from_scene_ref(struct ged *gedp,
-								       bsg_scene_ref ref);
-GED_EXPORT extern ged_draw_group_ref ged_draw_group_ref_from_scene_ref(struct ged *gedp,
-								       bsg_scene_ref ref);
 GED_EXPORT extern ged_draw_shape_ref ged_draw_shape_ref_from_scene_context(
 	struct ged *gedp,
 	void *scene_ctx);
@@ -690,12 +686,13 @@ GED_EXPORT extern void *ged_draw_scene_context_active_scope(struct ged *gedp,
 							   int create,
 							   int fallback_root);
 GED_EXPORT extern void *ged_draw_scene_ref_context(bsg_scene_ref ref);
-GED_EXPORT extern bsg_scene_ref ged_draw_registry_shape_scene_ref(struct ged *gedp,
-								  ged_draw_shape_ref ref);
-GED_EXPORT extern bsg_scene_ref ged_draw_registry_group_scene_ref(struct ged *gedp,
-								  ged_draw_group_ref ref);
-GED_EXPORT extern bsg_scene_ref ged_draw_shape_scene_ref_from_cache_ref(struct ged *gedp,
-									ged_draw_shape_ref ref);
+GED_EXPORT extern void *ged_draw_registry_shape_ref_context(struct ged *gedp,
+							    ged_draw_shape_ref ref);
+GED_EXPORT extern void *ged_draw_registry_shape_ref_cache_context(
+	struct ged *gedp,
+	ged_draw_shape_ref ref);
+GED_EXPORT extern void *ged_draw_registry_group_ref_context(struct ged *gedp,
+							    ged_draw_group_ref ref);
 GED_EXPORT extern int ged_draw_shape_ref_record_summary(struct ged *gedp,
 							ged_draw_shape_ref ref,
 							struct ged_draw_shape_record_summary *out);
