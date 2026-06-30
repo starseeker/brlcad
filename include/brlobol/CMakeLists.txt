@@ -29,6 +29,7 @@ set(
   snap_action.h
   source_mesh_request.h
   view_controller.h
+  view_store.h
   viewport_image.h
   vlist_shape.h
   window_host.h

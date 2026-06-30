@@ -27,6 +27,9 @@
 #include <vector>
 
 class BRLObolLodService;
+class BRLObolFeatureStore;
+class BRLObolPolygonStore;
+class BRLObolSelectionStore;
 class SoBRLExportAction;
 class SoBRLMeasureAction;
 class SoBRLSnapAction;
@@ -157,6 +160,12 @@ public:
 
     SoBRLSceneController *getSceneController(void);
     const SoBRLSceneController *getSceneController(void) const;
+    BRLObolFeatureStore &features(void);
+    const BRLObolFeatureStore &features(void) const;
+    BRLObolPolygonStore &polygons(void);
+    const BRLObolPolygonStore &polygons(void) const;
+    BRLObolSelectionStore &selection(void);
+    const BRLObolSelectionStore &selection(void) const;
     SoViewport *getViewport(void);
     const SoViewport *getViewport(void) const;
     SoRenderManager *getRenderManager(void);
@@ -341,6 +350,9 @@ private:
     unsigned int lastLodRejectedResultCount;
     unsigned int lastLodUnmatchedResultCount;
     SbString lastLodDiagnostics;
+    BRLObolFeatureStore *featureStore;
+    BRLObolPolygonStore *polygonStore;
+    BRLObolSelectionStore *selectionStore;
 };
 
 #endif /* BRLOBOL_VIEW_CONTROLLER_H */

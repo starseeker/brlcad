@@ -19,6 +19,7 @@
 #include "brlobol/pick_detail.h"
 #include "brlobol/snap_action.h"
 #include "brlobol/view_controller.h"
+#include "brlobol/view_store.h"
 #include "raytrace.h"
 #include "rt/view.h"
 
@@ -397,7 +398,10 @@ BRLObolViewController::BRLObolViewController(void) :
     lastLodAppliedResultCount(0),
     lastLodRejectedResultCount(0),
     lastLodUnmatchedResultCount(0),
-    lastLodDiagnostics("")
+    lastLodDiagnostics(""),
+    featureStore(new BRLObolFeatureStore(this)),
+    polygonStore(new BRLObolPolygonStore(this)),
+    selectionStore(new BRLObolSelectionStore)
 {
 }
 
@@ -442,7 +446,10 @@ BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
     lastLodAppliedResultCount(0),
     lastLodRejectedResultCount(0),
     lastLodUnmatchedResultCount(0),
-    lastLodDiagnostics("")
+    lastLodDiagnostics(""),
+    featureStore(new BRLObolFeatureStore(this)),
+    polygonStore(new BRLObolPolygonStore(this)),
+    selectionStore(new BRLObolSelectionStore)
 {
     this->setSceneRoot(root);
     this->setCamera(camera);
@@ -452,6 +459,12 @@ BRLObolViewController::~BRLObolViewController(void)
 {
     this->setLodService(NULL);
     this->clearRtPickCaches();
+    delete this->featureStore;
+    this->featureStore = NULL;
+    delete this->polygonStore;
+    this->polygonStore = NULL;
+    delete this->selectionStore;
+    this->selectionStore = NULL;
     this->setCamera(NULL);
     this->setSceneRoot(NULL);
     this->renderManager->setSceneGraph(NULL);
@@ -1586,6 +1599,42 @@ const SoBRLSceneController *
 BRLObolViewController::getSceneController(void) const
 {
     return &this->sceneController;
+}
+
+BRLObolFeatureStore &
+BRLObolViewController::features(void)
+{
+    return *this->featureStore;
+}
+
+const BRLObolFeatureStore &
+BRLObolViewController::features(void) const
+{
+    return *this->featureStore;
+}
+
+BRLObolPolygonStore &
+BRLObolViewController::polygons(void)
+{
+    return *this->polygonStore;
+}
+
+const BRLObolPolygonStore &
+BRLObolViewController::polygons(void) const
+{
+    return *this->polygonStore;
+}
+
+BRLObolSelectionStore &
+BRLObolViewController::selection(void)
+{
+    return *this->selectionStore;
+}
+
+const BRLObolSelectionStore &
+BRLObolViewController::selection(void) const
+{
+    return *this->selectionStore;
 }
 
 SoViewport *
