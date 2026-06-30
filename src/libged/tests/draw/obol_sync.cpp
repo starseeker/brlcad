@@ -24,6 +24,7 @@
 #include "bu/file.h"
 #include "bu/str.h"
 #include "ged.h"
+#include "ged/commands.h"
 #include "ged/draw.h"
 #include "ged/draw_obol.h"
 #include "ged/view.h"
@@ -60,11 +61,60 @@ make_obol_sync_db(const char *dbpath)
     point_t center = {5.0, 0.0, 0.0};
     point_t group_center = {-5.0, 0.0, 0.0};
     point_t draft_center = {0.0, 5.0, 0.0};
+    point_t nested_leaf_center = {0.0, -5.0, 0.0};
+    point_t nested_sibling_center = {3.0, -5.0, 0.0};
+    point_t rename_center = {8.0, 3.0, 0.0};
 
     int ret = mk_rpp(wdbp, "box.s", bmin, bmax) == 0 &&
 	mk_sph(wdbp, "ball.s", center, 1.0) == 0 &&
 	mk_sph(wdbp, "group_only.s", group_center, 1.0) == 0 &&
-	mk_sph(wdbp, "draft_move.s", draft_center, 1.0) == 0;
+	mk_sph(wdbp, "draft_move.s", draft_center, 1.0) == 0 &&
+	mk_sph(wdbp, "nested_leaf.s", nested_leaf_center, 1.0) == 0 &&
+	mk_sph(wdbp, "nested_sibling.s", nested_sibling_center, 1.0) == 0 &&
+	mk_sph(wdbp, "rename_source.s", rename_center, 1.0) == 0;
+    if (ret) {
+	struct wmember child_wm;
+	struct wmember parent_wm;
+	BU_LIST_INIT(&child_wm.l);
+	BU_LIST_INIT(&parent_wm.l);
+	ret = mk_addmember("nested_leaf.s", &child_wm.l, NULL,
+		WMOP_UNION) != NULL &&
+	    mk_comb(wdbp, "nested_child.c", &child_wm.l, 0, NULL, NULL,
+		NULL, 0, 0, 0, 0, 0, 0, 0) == 0 &&
+	    mk_addmember("nested_child.c", &parent_wm.l, NULL,
+		WMOP_UNION) != NULL &&
+	    mk_addmember("nested_sibling.s", &parent_wm.l, NULL,
+		WMOP_UNION) != NULL &&
+	    mk_comb(wdbp, "nested_parent.c", &parent_wm.l, 0, NULL, NULL,
+		NULL, 0, 0, 0, 0, 0, 0, 0) == 0;
+    }
+    if (ret) {
+	struct rt_annot_internal ann;
+	memset(&ann, 0, sizeof(ann));
+	ann.magic = RT_ANNOT_INTERNAL_MAGIC;
+	VSET(ann.V, 50.0, 0.0, 0.0);
+	ann.vert_count = 2;
+	ann.verts = (point2d_t *)bu_calloc(2, sizeof(point2d_t),
+		"obol sync annot verts");
+	V2SET(ann.verts[0], 0.0, 0.0);
+	V2SET(ann.verts[1], 0.25, 0.5);
+	ann.ant.count = 1;
+	ann.ant.reverse = (int *)bu_calloc(1, sizeof(int),
+		"obol sync annot reverse");
+	ann.ant.segments = (void **)bu_calloc(1, sizeof(void *),
+		"obol sync annot segments");
+	struct line_seg *lsg;
+	BU_ALLOC(lsg, struct line_seg);
+	lsg->magic = CURVE_LSEG_MAGIC;
+	lsg->start = 0;
+	lsg->end = 1;
+	ann.ant.segments[0] = (void *)lsg;
+	ret = mk_annot(wdbp, "annot_line.s", &ann) == 0;
+	BU_PUT(lsg, struct line_seg);
+	bu_free(ann.ant.segments, "obol sync annot segments");
+	bu_free(ann.ant.reverse, "obol sync annot reverse");
+	bu_free(ann.verts, "obol sync annot verts");
+    }
     wdb_close(wdbp);
     return ret;
 }
@@ -227,6 +277,99 @@ main(int argc, char **argv)
 	    !source_for_path(owned_scene, "box.s") ||
 	    !source_for_path(owned_scene, "ball.s"))
 	FAIL("owned Obol scene controller should full-sync current GED draw state");
+    const char *draw_annot_line[2] = {"draw", "annot_line.s"};
+    if (ged_exec_draw(gedp, 2, draw_annot_line) != BRLCAD_OK)
+	FAIL("GED annotation draw should succeed for owned Obol publication");
+    record_source_state annot_record = {0, GED_DRAW_SHAPE_REF_NULL_INIT,
+	GED_DRAW_GROUP_REF_NULL_INIT, 0, 0, "annot_line.s", 0, 0, 0, 0, 0.0};
+    ged_draw_foreach_shape_record(gedp, record_source_state_cb,
+	    &annot_record);
+    if (!annot_record.found)
+	FAIL("GED annotation draw should create a shape record");
+    struct ged_draw_shape_geometry_summary annot_geometry;
+    memset(&annot_geometry, 0, sizeof(annot_geometry));
+    if (!ged_draw_shape_ref_geometry_summary(gedp, annot_record.ref,
+	    &annot_geometry) ||
+	    !annot_geometry.valid ||
+	    !annot_geometry.geometry_name ||
+	    !BU_STR_EQUAL(annot_geometry.geometry_name, "annotation") ||
+	    annot_geometry.point_count != 2 ||
+	    annot_geometry.index_count != 0)
+	FAIL("GED annotation geometry summary should read owned Obol annotation VLIST");
+    SoBRLDatabaseSource *annot_source =
+	source_for_path(owned_scene, "annot_line.s");
+    SoBRLVListShape *annot_shape = annot_source ?
+	annot_source->getRealizedShape() : NULL;
+    if (owned_scene->getDatabaseSourceCount() != 3 ||
+	    !annot_shape ||
+	    annot_shape->point.getNum() != 2 ||
+	    annot_shape->command.getNum() != 2 ||
+	    annot_shape->command[0] != SoBRLVListShape::MOVE ||
+	    annot_shape->command[1] != SoBRLVListShape::DRAW ||
+	    strcmp(annot_shape->sourceType.getValue().getString(),
+		"annotation") != 0 ||
+	    strcmp(annot_shape->geometryKind.getValue().getString(),
+		"annotation") != 0 ||
+	    fabs(annot_shape->point[1][0] - 50.25f) > 0.001f ||
+	    fabs(annot_shape->point[1][1] - 0.5f) > 0.001f ||
+	    fabs(annot_shape->point[1][2]) > 0.001f)
+	FAIL("GED annotation draw should publish line segments into the owned Obol source");
+    const char *erase_annot_line[2] = {"erase", "annot_line.s"};
+    if (ged_exec_erase(gedp, 2, erase_annot_line) != BRLCAD_OK ||
+	    owned_scene->getDatabaseSourceCount() != 2 ||
+	    source_for_path(owned_scene, "annot_line.s"))
+	FAIL("GED annotation erase should restore the owned Obol source baseline");
+    const char *draw_rename_source[2] = {"draw", "rename_source.s"};
+    if (ged_exec_draw(gedp, 2, draw_rename_source) != BRLCAD_OK)
+	FAIL("GED rename-source draw should succeed");
+    if (!owned_scene->findDatabaseSource("rename_source.s") ||
+	    owned_scene->getDatabaseSourceCount() != 3)
+	FAIL("GED rename-source draw should create an owned Obol source");
+    if (owned_scene->setDatabaseSourceState("rename_source.s",
+	    TRUE,
+	    9191,
+	    7,
+	    TRUE,
+	    FALSE,
+	    6,
+	    11,
+	    0.25f,
+	    FALSE,
+	    SbColor(1.0f, 1.0f, 1.0f),
+	    FALSE,
+	    SbColor(1.0f, 1.0f, 1.0f),
+	    0) <= 0)
+	FAIL("owned Obol rename-source state sentinel update should succeed");
+    const char *move_rename_source[3] = {
+	"move", "rename_source.s", "renamed_source.s"
+    };
+    if (ged_exec(gedp, 3, move_rename_source) != BRLCAD_OK)
+	FAIL("GED move command should rename the drawn source");
+    SoBRLDatabaseSource *renamed_source =
+	owned_scene->findDatabaseSource("renamed_source.s");
+    BRLObolDatabaseSourceSummary renamed_summary;
+    if (source_for_path(owned_scene, "rename_source.s") ||
+	    !renamed_source ||
+	    owned_scene->getDatabaseSourceCount() != 3 ||
+	    !renamed_source->getSummary(renamed_summary) ||
+	    strcmp(renamed_summary.path.getString(), "renamed_source.s") != 0 ||
+	    renamed_summary.lineWidth != 11 ||
+	    renamed_summary.inputsRevision != 7 ||
+	    renamed_summary.sourceRevision == 9191)
+	FAIL("GED rename transaction should rename the owned Obol source in place");
+    SoBRLVListShape *renamed_shape = renamed_source->getRealizedShape();
+    if (!renamed_shape ||
+	    !path_equal(renamed_shape->sourcePath.getValue().getString(),
+		"renamed_source.s") ||
+	    !path_equal(renamed_shape->ownerSourcePath.getValue().getString(),
+		"renamed_source.s") ||
+	    renamed_shape->lineWidth.getValue() != 11)
+	FAIL("GED rename transaction should retarget owned Obol realized shape metadata");
+    const char *erase_renamed_source[2] = {"erase", "renamed_source.s"};
+    if (ged_exec_erase(gedp, 2, erase_renamed_source) != BRLCAD_OK ||
+	    owned_scene->getDatabaseSourceCount() != 2 ||
+	    source_for_path(owned_scene, "renamed_source.s"))
+	FAIL("GED renamed source erase should restore the owned Obol source baseline");
     if (owned_scene->findGroup("group_only.s"))
 	FAIL("owned Obol group creation sentinel should not exist before lookup");
     struct db_full_path group_only_path;
@@ -596,6 +739,17 @@ main(int argc, char **argv)
 		    fabs(obol_center[1] - 31.0f) > 0.001f ||
 		    fabs(obol_center[2] - 32.0f) > 0.001f)
 		FAIL("GED shape center setter should mutate owned Obol VLIST center");
+	    BRLObolDatabaseSourceSummary box_placement_summary;
+	    if (!box_source->getSummary(box_placement_summary) ||
+		    !box_placement_summary.valid ||
+		    !box_placement_summary.drawCenterValid ||
+		    fabs(box_placement_summary.drawCenter[0] - 30.0f) >
+			0.001f ||
+		    fabs(box_placement_summary.drawCenter[1] - 31.0f) >
+			0.001f ||
+		    fabs(box_placement_summary.drawCenter[2] - 32.0f) >
+			0.001f)
+		FAIL("GED shape center setter should update owned Obol source placement");
 	    int bounds_bad_cmd = -1;
 	    if (!ged_draw_shape_ref_update_bounds_from_geometry(gedp,
 		    box_record.ref, &bounds_bad_cmd) ||
@@ -609,6 +763,17 @@ main(int argc, char **argv)
 		    !box_shape->drawSizeValid.getValue() ||
 		    fabs(box_shape->drawSize.getValue() - 2.0f) > 0.001f)
 		FAIL("GED shape bounds update should mutate owned Obol VLIST bounds metadata");
+	    if (!box_source->getSummary(box_placement_summary) ||
+		    !box_placement_summary.valid ||
+		    !box_placement_summary.drawCenterValid ||
+		    fabs(box_placement_summary.drawCenter[0] - 22.0f) >
+			0.001f ||
+		    fabs(box_placement_summary.drawCenter[1] - 0.5f) >
+			0.001f ||
+		    fabs(box_placement_summary.drawCenter[2]) > 0.001f ||
+		    !box_placement_summary.drawSizeValid ||
+		    fabs(box_placement_summary.drawSize - 2.0f) > 0.001f)
+		FAIL("GED shape bounds update should update owned Obol source placement");
 	    if (!ged_draw_shape_ref_geometry_clear(gedp, box_record.ref))
 		FAIL("GED shape geometry clear should succeed");
 	    if (!ged_draw_shape_ref_line_summary(gedp, box_record.ref,
@@ -621,12 +786,37 @@ main(int argc, char **argv)
 		    !box_geometry.valid ||
 		    box_geometry.point_count != 0)
 		FAIL("GED shape geometry clear should update owned Obol geometry summary");
-	    if (ged_draw_bounds(gedp, &draw_bounds_min, &draw_bounds_max, 0) ||
-		    draw_bounds_max[0] > 20.0)
-		FAIL("GED draw bounds should reflect cleared owned Obol VLIST points");
-	    point_t point_set_points[2] = {
-		{24.0, 0.0, 0.0},
-		{25.0, 1.0, 0.0}
+		    if (ged_draw_bounds(gedp, &draw_bounds_min, &draw_bounds_max, 0) ||
+			    draw_bounds_max[0] > 20.0)
+			FAIL("GED draw bounds should reflect cleared owned Obol VLIST points");
+		    point_t aux_points[2] = {
+			{26.0, 0.0, 0.0},
+			{27.0, 1.0, 0.0}
+		    };
+		    int aux_commands[2] = {
+			GED_DRAW_VIEW_LINE_MOVE,
+			GED_DRAW_VIEW_LINE_DRAW
+		    };
+		    if (!ged_draw_obol_database_source_publish_auxiliary_line_set_for_path(
+			    gedp, "box.s", "obol_aux_clear_sentinel",
+			    (const point_t *)aux_points, aux_commands, 2))
+			FAIL("GED Obol auxiliary line-set bridge should publish to owned source");
+		    SoBRLVListShape *aux_shape =
+			box_source->findAuxiliaryVListShape(
+				"obol_aux_clear_sentinel");
+		    if (!aux_shape ||
+			    aux_shape->point.getNum() != 2 ||
+			    aux_shape->command.getNum() != 2 ||
+			    strcmp(aux_shape->recordRole.getValue().getString(),
+				"auxiliary") != 0)
+			FAIL("GED Obol auxiliary line-set bridge should create an auxiliary VLIST");
+		    if (!ged_draw_shape_ref_geometry_clear(gedp, box_record.ref) ||
+			    box_source->findAuxiliaryVListShape(
+				"obol_aux_clear_sentinel"))
+			FAIL("GED shape geometry clear should clear owned Obol auxiliary VLISTs");
+		    point_t point_set_points[2] = {
+			{24.0, 0.0, 0.0},
+			{25.0, 1.0, 0.0}
 	    };
 	    if (!ged_draw_shape_ref_publish_point_set(gedp, box_record.ref,
 		    (const point_t *)point_set_points, 2))
@@ -775,10 +965,48 @@ main(int argc, char **argv)
 	    if (!ged_draw_group_ref_set_mode(gedp, box_record.group,
 		    GED_DRAW_MODE_WIRE))
 		FAIL("GED group wire mode restore should succeed after source realization test");
+	    mat_t source_placement_mat;
+	    MAT_IDN(source_placement_mat);
+	    source_placement_mat[MDX] = 24.0;
+	    source_placement_mat[MDY] = 1.0;
+	    source_placement_mat[MDZ] = 2.0;
+	    point_t source_placement_center = {3.0, 4.0, 5.0};
+	    SbMatrix source_placement_sb = SbMatrix::identity();
+	    source_placement_sb.setTranslate(SbVec3f(24.0f, 1.0f, 2.0f));
+	    if (!ged_draw_obol_database_source_set_placement_for_path(gedp,
+		    "box.s", 1, source_placement_mat, 1,
+		    source_placement_center, 1, 12.5))
+		FAIL("GED Obol source placement bridge should set owned source state");
+	    if (!box_source->getSummary(box_realized_summary) ||
+		    !box_realized_summary.drawMatrixValid ||
+		    !box_realized_summary.drawMatrix.equals(source_placement_sb,
+			0.0001f) ||
+		    !box_realized_summary.drawCenterValid ||
+		    fabs(box_realized_summary.drawCenter[0] - 3.0f) > 0.001f ||
+		    fabs(box_realized_summary.drawCenter[1] - 4.0f) > 0.001f ||
+		    fabs(box_realized_summary.drawCenter[2] - 5.0f) > 0.001f ||
+		    !box_realized_summary.drawSizeValid ||
+		    fabs(box_realized_summary.drawSize - 12.5f) > 0.001f)
+		FAIL("GED Obol source placement bridge should update source summary");
+	    box_mesh = box_source->getRealizedMesh();
+	    if (!box_mesh ||
+		    !box_mesh->drawMatrixValid.getValue() ||
+		    !box_mesh->drawMatrix.getValue().equals(
+			source_placement_sb, 0.0001f) ||
+		    !box_mesh->drawCenterValid.getValue() ||
+		    fabs(box_mesh->drawCenter.getValue()[0] - 3.0f) >
+			0.001f ||
+		    !box_mesh->drawSizeValid.getValue() ||
+		    fabs(box_mesh->drawSize.getValue() - 12.5f) > 0.001f)
+		FAIL("GED Obol source placement bridge should sync realized shape placement");
+	    std::string box_source_path =
+		box_source->path.getValue().getString();
+	    if (owned_scene->setDatabaseSourcePlacementState(
+		    box_source_path.c_str(), FALSE, SbMatrix::identity(),
+		    FALSE, SbVec3f(0.0f, 0.0f, 0.0f), FALSE, 0.0f) < 0)
+		FAIL("owned Obol source placement reset should succeed");
 	    SbMatrix obol_draw_matrix = SbMatrix::identity();
 	    obol_draw_matrix.setTranslate(SbVec3f(40.0f, 0.0f, 0.0f));
-	    box_mesh->drawMatrixValid = TRUE;
-	    box_mesh->drawMatrix = obol_draw_matrix;
 	    struct ged_draw_obol_database_source_record obol_draw_record;
 	    if (!ged_draw_obol_database_source_record_for_path(gedp, "box.s",
 		    &obol_draw_record))
@@ -787,6 +1015,12 @@ main(int argc, char **argv)
 	    if (!ged_draw_obol_database_source_apply_record_for_path(gedp,
 		    "box.s", &obol_draw_record))
 		FAIL("GED Obol draw-state bridge should set source wire mode before redraw");
+	    mat_t obol_draw_mat;
+	    MAT_IDN(obol_draw_mat);
+	    obol_draw_mat[MDX] = 40.0;
+	    if (!ged_draw_obol_database_source_set_placement_for_path(gedp,
+		    "box.s", 1, obol_draw_mat, 0, NULL, 0, 0.0))
+		FAIL("GED Obol draw-state bridge should set owned source draw matrix");
 	    box_source->lineStyle = 5;
 	    struct ged_draw_obol_draw_state_summary obol_draw_state;
 	    if (!ged_draw_obol_database_source_draw_state_for_path(gedp,
@@ -826,6 +1060,10 @@ main(int argc, char **argv)
 	    if (ged_draw_bounds(gedp, &draw_bounds_min, &draw_bounds_max, 0) ||
 		    draw_bounds_max[0] < 40.9)
 		FAIL("GED redraw should use owned Obol draw matrix");
+	    if (owned_scene->setDatabaseSourcePlacementState(
+		    box_source_path.c_str(), FALSE, SbMatrix::identity(),
+		    FALSE, SbVec3f(0.0f, 0.0f, 0.0f), FALSE, 0.0f) < 0)
+		FAIL("owned Obol source draw matrix reset should succeed");
 	    if (ged_exec_draw(gedp, 2, draw_box) != BRLCAD_OK)
 		FAIL("GED wire redraw should succeed for LoD policy test");
 	    box_record.found = 0;
@@ -905,6 +1143,31 @@ main(int argc, char **argv)
 	    fabsf(box_source_summary.color[2] -
 		(30.0f / 255.0f)) > 1.0e-6f)
 	FAIL("GED visible/highlight/color setters should mutate the owned Obol source");
+    int display_synced = 0;
+    SoBRLVListShape *display_vlist = box_source->getRealizedShape();
+    if (display_vlist) {
+	SbColor display_color = display_vlist->color.getValue();
+	display_synced =
+	    display_vlist->visible.getValue() &&
+	    !display_vlist->highlighted.getValue() &&
+	    display_vlist->colorOverride.getValue() &&
+	    fabsf(display_color[0] - (10.0f / 255.0f)) < 1.0e-6f &&
+	    fabsf(display_color[1] - (20.0f / 255.0f)) < 1.0e-6f &&
+	    fabsf(display_color[2] - (30.0f / 255.0f)) < 1.0e-6f;
+    }
+    SoBRLMeshShape *display_mesh = box_source->getRealizedMesh();
+    if (!display_synced && display_mesh) {
+	SbColor display_color = display_mesh->color.getValue();
+	display_synced =
+	    display_mesh->visible.getValue() &&
+	    !display_mesh->highlighted.getValue() &&
+	    display_mesh->colorOverride.getValue() &&
+	    fabsf(display_color[0] - (10.0f / 255.0f)) < 1.0e-6f &&
+	    fabsf(display_color[1] - (20.0f / 255.0f)) < 1.0e-6f &&
+	    fabsf(display_color[2] - (30.0f / 255.0f)) < 1.0e-6f;
+    }
+    if (!display_synced)
+	FAIL("GED visible/highlight/color setters should sync realized Obol shape display state");
     memset(&box_record, 0, sizeof(box_record));
     ged_draw_foreach_shape_record(gedp, record_source_state_cb,
 	    &box_record);
@@ -1218,6 +1481,122 @@ main(int argc, char **argv)
 	    !source_for_path(owned_scene, "box.s") ||
 	    !source_for_path(owned_scene, "ball.s"))
 	FAIL("owned Obol scene controller should mirror redraw transactions");
+    if (owned_scene->replaceDatabaseSource("draft_move.s", gedp->dbip,
+	    SoBRLDatabaseSource::WIREFRAME, 6060) <= 0 ||
+	    !source_for_path(owned_scene, "draft_move.s") ||
+	    owned_scene->getDatabaseSourceCount() != 3)
+	FAIL("owned Obol transaction canary source should be created");
+    struct ged_draw_transaction display_txn =
+	ged_draw_transaction_make_value(GED_DRAW_TXN_VISIBILITY,
+		"box.s", 0.0);
+    struct ged_draw_transaction_result display_result;
+    ged_draw_transaction_result_init(&display_result);
+    if (ged_draw_apply_transaction(gedp, &display_txn,
+	    &display_result) <= 0)
+	FAIL("GED visibility transaction should succeed");
+    ged_draw_transaction_result_free(&display_result);
+    box_source = source_for_path(owned_scene, "box.s");
+    if (!box_source ||
+	    !box_source->getSummary(box_source_summary) ||
+	    box_source_summary.visible ||
+	    !source_for_path(owned_scene, "draft_move.s"))
+	FAIL("GED visibility transaction should update owned Obol state without full-scene sync");
+    display_txn = ged_draw_transaction_make_value(GED_DRAW_TXN_VISIBILITY,
+	    "box.s", 1.0);
+    ged_draw_transaction_result_init(&display_result);
+    if (ged_draw_apply_transaction(gedp, &display_txn,
+	    &display_result) <= 0)
+	FAIL("GED visibility restore transaction should succeed");
+    ged_draw_transaction_result_free(&display_result);
+    display_txn = ged_draw_transaction_make_value(GED_DRAW_TXN_TRANSPARENCY,
+	    "box.s", 0.125);
+    ged_draw_transaction_result_init(&display_result);
+    if (ged_draw_apply_transaction(gedp, &display_txn,
+	    &display_result) <= 0)
+	FAIL("GED transparency transaction should succeed");
+    ged_draw_transaction_result_free(&display_result);
+    if (!box_source->getSummary(box_source_summary) ||
+	    fabs(box_source_summary.transparency - 0.125f) > 0.001f ||
+	    !source_for_path(owned_scene, "draft_move.s"))
+	FAIL("GED transparency transaction should preserve Obol-only sources");
+    display_txn = ged_draw_transaction_make_value(GED_DRAW_TXN_HIGHLIGHT,
+	    "box.s", 1.0);
+    ged_draw_transaction_result_init(&display_result);
+    if (ged_draw_apply_transaction(gedp, &display_txn,
+	    &display_result) <= 0)
+	FAIL("GED highlight transaction should succeed");
+    ged_draw_transaction_result_free(&display_result);
+    if (!box_source->getSummary(box_source_summary) ||
+	    !box_source_summary.highlighted ||
+	    !source_for_path(owned_scene, "draft_move.s"))
+	FAIL("GED highlight transaction should preserve Obol-only sources");
+    display_txn = ged_draw_transaction_make_value(GED_DRAW_TXN_HIGHLIGHT,
+	    "box.s", 0.0);
+    ged_draw_transaction_result_init(&display_result);
+    if (ged_draw_apply_transaction(gedp, &display_txn,
+	    &display_result) <= 0)
+	FAIL("GED highlight restore transaction should succeed");
+    ged_draw_transaction_result_free(&display_result);
+    display_txn = ged_draw_transaction_make(GED_DRAW_TXN_STALE_SOURCE,
+	    "box.s");
+    display_txn.stale_reason = GED_DRAW_STALE_SETTINGS_CHANGED;
+    ged_draw_transaction_result_init(&display_result);
+    if (ged_draw_apply_transaction(gedp, &display_txn,
+	    &display_result) <= 0)
+	FAIL("GED stale-source transaction should succeed");
+    ged_draw_transaction_result_free(&display_result);
+    if (!box_source->getSummary(box_source_summary) ||
+	    !box_source_summary.stale ||
+	    !(box_source_summary.staleReason &
+		SoBRLDatabaseSource::STALE_DRAW) ||
+	    !source_for_path(owned_scene, "draft_move.s"))
+	FAIL("GED stale-source transaction should target owned Obol state without full-scene sync");
+    display_txn = ged_draw_transaction_make(GED_DRAW_TXN_MATERIAL_CHANGED,
+	    NULL);
+    ged_draw_transaction_result_init(&display_result);
+    if (ged_draw_apply_transaction(gedp, &display_txn,
+	    &display_result) <= 0)
+	FAIL("GED material-changed transaction should succeed");
+    ged_draw_transaction_result_free(&display_result);
+    if (!source_for_path(owned_scene, "draft_move.s"))
+	FAIL("GED material-changed transaction should preserve Obol-only sources");
+    display_txn = ged_draw_transaction_make(GED_DRAW_TXN_REFRESH_MATERIAL_COLORS,
+	    NULL);
+    ged_draw_transaction_result_init(&display_result);
+    if (ged_draw_apply_transaction(gedp, &display_txn,
+	    &display_result) <= 0)
+	FAIL("GED material-refresh transaction should succeed");
+    ged_draw_transaction_result_free(&display_result);
+    if (!source_for_path(owned_scene, "draft_move.s"))
+	FAIL("GED material-refresh transaction should preserve Obol-only sources");
+    display_txn = ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
+    ged_draw_transaction_result_init(&display_result);
+    if (ged_draw_apply_transaction(gedp, &display_txn,
+	    &display_result) <= 0)
+	FAIL("GED redraw transaction should succeed");
+    ged_draw_transaction_result_free(&display_result);
+    if (!source_for_path(owned_scene, "box.s") ||
+	    !source_for_path(owned_scene, "ball.s") ||
+	    !source_for_path(owned_scene, "draft_move.s"))
+	FAIL("GED redraw transaction should refresh retained sources without clearing Obol-only sources");
+    display_txn = ged_draw_transaction_make(GED_DRAW_TXN_ERASE_PREFIX,
+	    "box.s");
+    ged_draw_transaction_result_init(&display_result);
+    if (ged_draw_apply_transaction(gedp, &display_txn,
+	    &display_result) <= 0)
+	FAIL("GED erase-prefix transaction should succeed");
+    ged_draw_transaction_result_free(&display_result);
+    if (source_for_path(owned_scene, "box.s") ||
+	    !source_for_path(owned_scene, "ball.s") ||
+	    !source_for_path(owned_scene, "draft_move.s"))
+	FAIL("GED erase-prefix transaction should remove only matching owned Obol sources");
+    if (ged_exec_draw(gedp, 2, draw_box) != BRLCAD_OK ||
+	    !source_for_path(owned_scene, "box.s"))
+	FAIL("GED erase-prefix canary redraw should restore box source");
+    if (!source_for_path(owned_scene, "draft_move.s") ||
+	    owned_scene->removeDatabaseSource("draft_move.s") <= 0 ||
+	    owned_scene->getDatabaseSourceCount() != 2)
+	FAIL("GED display/material transaction canary cleanup should restore baseline");
     record_source_state ball_record = {0, GED_DRAW_SHAPE_REF_NULL_INIT,
 	GED_DRAW_GROUP_REF_NULL_INIT, 0, 0, "ball.s", 0, 0, 0, 0, 0.0};
     ged_draw_foreach_shape_record(gedp, record_source_state_cb,
@@ -1273,9 +1652,174 @@ main(int argc, char **argv)
 	    !source_for_path(owned_scene, "box.s") ||
 	    !source_for_path(owned_scene, "ball.s"))
 	FAIL("owned Obol scene controller should mirror redraw after direct group-name erase");
+    const char *nested_leaf_source_path =
+	"nested_parent.c/nested_child.c/nested_leaf.s";
+    const char *nested_sibling_source_path =
+	"nested_parent.c/nested_sibling.s";
+    const char *draw_nested_leaf[2] = {"draw", nested_leaf_source_path};
+    const char *draw_nested_sibling[2] = {
+	"draw", nested_sibling_source_path
+    };
+    if (ged_exec_draw(gedp, 2, draw_nested_leaf) != BRLCAD_OK ||
+	    ged_exec_draw(gedp, 2, draw_nested_sibling) != BRLCAD_OK)
+	FAIL("GED nested path draws should succeed");
+    SoBRLDatabaseSource *nested_leaf_source =
+	source_for_path(owned_scene, nested_leaf_source_path);
+    SoBRLDatabaseSource *nested_sibling_source =
+	source_for_path(owned_scene, nested_sibling_source_path);
+    if (!nested_leaf_source || !nested_sibling_source ||
+	    owned_scene->getDatabaseSourceCount() != 4)
+	FAIL("GED nested path draws should create owned Obol child sources");
+    BRLObolDatabaseSourceSummary nested_sibling_initial_summary;
+    if (!nested_sibling_source->getSummary(nested_sibling_initial_summary))
+	FAIL("GED nested sibling source should expose a state summary");
+    if (owned_scene->setDatabaseSourceState(nested_sibling_source_path,
+	    TRUE,
+	    nested_sibling_initial_summary.sourceRevision,
+	    nested_sibling_initial_summary.inputsRevision,
+	    nested_sibling_initial_summary.visible,
+	    nested_sibling_initial_summary.highlighted,
+	    nested_sibling_initial_summary.lineStyle,
+	    23,
+	    nested_sibling_initial_summary.transparency,
+	    nested_sibling_initial_summary.colorOverride,
+	    nested_sibling_initial_summary.color,
+	    nested_sibling_initial_summary.materialColorValid,
+	    nested_sibling_initial_summary.materialColor,
+	    nested_sibling_initial_summary.materialRevision) <= 0)
+	FAIL("owned Obol nested sibling state sentinel update should succeed");
+    struct ged_draw_transaction stale_nested_leaf =
+	ged_draw_transaction_make(GED_DRAW_TXN_SOURCE_UPDATED,
+		"nested_leaf.s");
+    stale_nested_leaf.redraw = 0;
+    struct ged_draw_transaction_result nested_result;
+    ged_draw_transaction_result_init(&nested_result);
+    if (ged_draw_apply_transaction(gedp, &stale_nested_leaf,
+	    &nested_result) <= 0)
+	FAIL("GED nested leaf stale transaction should succeed");
+    ged_draw_transaction_result_free(&nested_result);
+    BRLObolDatabaseSourceSummary nested_leaf_summary;
+    BRLObolDatabaseSourceSummary nested_sibling_summary;
+    nested_leaf_source = source_for_path(owned_scene,
+	    nested_leaf_source_path);
+    nested_sibling_source = source_for_path(owned_scene,
+	    nested_sibling_source_path);
+    if (!nested_leaf_source ||
+	    !nested_leaf_source->getSummary(nested_leaf_summary))
+	FAIL("GED nested leaf stale transaction should preserve the owned Obol leaf source");
+    if (!nested_leaf_summary.stale)
+	FAIL("GED nested leaf stale transaction should mark the owned Obol leaf source stale");
+    if (!(nested_leaf_summary.staleReason &
+	    SoBRLDatabaseSource::STALE_SOURCE))
+	FAIL("GED nested leaf stale transaction should use source-stale metadata");
+    if (!nested_sibling_source ||
+	    !nested_sibling_source->getSummary(nested_sibling_summary))
+	FAIL("GED nested leaf stale transaction should preserve the sibling source");
+    if (nested_sibling_summary.stale)
+	FAIL("GED nested leaf stale transaction should not stale the sibling source");
+    if (nested_sibling_summary.lineWidth != 23)
+	FAIL("GED nested leaf stale transaction should preserve sibling source state");
+    struct ged_draw_transaction redraw_nested_leaf =
+	ged_draw_transaction_make(GED_DRAW_TXN_SOURCE_UPDATED,
+		"nested_leaf.s");
+    redraw_nested_leaf.redraw = 1;
+    ged_draw_transaction_result_init(&nested_result);
+    if (ged_draw_apply_transaction(gedp, &redraw_nested_leaf,
+	    &nested_result) <= 0)
+	FAIL("GED nested leaf redraw transaction should succeed");
+    ged_draw_transaction_result_free(&nested_result);
+    nested_leaf_source = source_for_path(owned_scene,
+	    nested_leaf_source_path);
+    nested_sibling_source = source_for_path(owned_scene,
+	    nested_sibling_source_path);
+    if (!nested_leaf_source ||
+	    !nested_leaf_source->getSummary(nested_leaf_summary) ||
+	    nested_leaf_summary.stale ||
+	    !nested_sibling_source ||
+	    !nested_sibling_source->getSummary(nested_sibling_summary) ||
+	    nested_sibling_summary.lineWidth != 23)
+	FAIL("GED nested leaf redraw transaction should preserve unrelated owned Obol source state");
+    if (!ged_draw_source_erase_component_name_in_active_scope(gedp,
+	    "nested_leaf.s", ged_draw_active_view_ctx(gedp), -1, 1))
+	FAIL("GED scoped component erase should succeed through active-scope source adapter");
+    nested_sibling_source = source_for_path(owned_scene,
+	    nested_sibling_source_path);
+    if (source_for_path(owned_scene, nested_leaf_source_path) ||
+	    !nested_sibling_source ||
+	    !nested_sibling_source->getSummary(nested_sibling_summary) ||
+	    nested_sibling_summary.lineWidth != 23)
+	FAIL("GED scoped component erase should remove matching owned Obol sources only");
+    if (ged_exec_draw(gedp, 2, draw_nested_leaf) != BRLCAD_OK)
+	FAIL("GED scoped component erase redraw restore should succeed");
+    nested_leaf_source = source_for_path(owned_scene,
+	    nested_leaf_source_path);
+    nested_sibling_source = source_for_path(owned_scene,
+	    nested_sibling_source_path);
+    if (!nested_leaf_source || !nested_sibling_source ||
+	    !nested_sibling_source->getSummary(nested_sibling_summary) ||
+	    nested_sibling_summary.lineWidth != 23)
+	FAIL("GED scoped component erase redraw restore should preserve sibling owned Obol source state");
+    struct ged_draw_transaction remove_nested_leaf_ref =
+	ged_draw_transaction_make(GED_DRAW_TXN_SOURCE_REFERENCES_REMOVED,
+		"nested_leaf.s");
+    ged_draw_transaction_result_init(&nested_result);
+    if (ged_draw_apply_transaction(gedp, &remove_nested_leaf_ref,
+	    &nested_result) <= 0)
+	FAIL("GED nested leaf reference removal transaction should succeed");
+    ged_draw_transaction_result_free(&nested_result);
+    nested_sibling_source = source_for_path(owned_scene,
+	    nested_sibling_source_path);
+    if (source_for_path(owned_scene, nested_leaf_source_path) ||
+	    !nested_sibling_source ||
+	    !nested_sibling_source->getSummary(nested_sibling_summary) ||
+	    nested_sibling_summary.lineWidth != 23)
+	FAIL("GED nested leaf reference removal should remove only non-root owned Obol sources");
+    struct ged_draw_transaction remove_nested_sibling =
+	ged_draw_transaction_make(GED_DRAW_TXN_SOURCE_UPDATED,
+		"nested_sibling.s");
+    remove_nested_sibling.removed = 1;
+    ged_draw_transaction_result_init(&nested_result);
+    if (ged_draw_apply_transaction(gedp, &remove_nested_sibling,
+	    &nested_result) <= 0)
+	FAIL("GED nested sibling source removal transaction should succeed");
+    ged_draw_transaction_result_free(&nested_result);
+    if (source_for_path(owned_scene, nested_leaf_source_path) ||
+	    source_for_path(owned_scene, nested_sibling_source_path) ||
+	    owned_scene->getDatabaseSourceCount() != 2)
+	FAIL("GED source removal transaction should remove matching owned Obol component sources");
+    struct db_full_path nested_child_path;
+    db_full_path_init(&nested_child_path);
+    if (db_string_to_path(&nested_child_path, gedp->dbip,
+	    "nested_parent.c/nested_child.c") != 0)
+	FAIL("GED nested erase sentinel path should resolve");
+    ged_draw_group_ref nested_child_group =
+	ged_draw_group_ref_lookup_or_create(gedp, &nested_child_path);
+    db_free_full_path(&nested_child_path);
+    if (ged_draw_group_ref_is_null(nested_child_group))
+	FAIL("GED nested erase sentinel group should be created");
+    if (!owned_scene->findGroup("nested_parent.c/nested_child.c"))
+	FAIL("owned Obol nested erase sentinel child group should exist after creation");
+    if (!ged_draw_source_erase_path_in_active_scope(gedp,
+	    "nested_parent.c/nested_child.c", ged_draw_active_view_ctx(gedp),
+	    -1))
+	FAIL("GED direct active-scope nested group path erase should succeed");
+    if (!owned_scene->findGroup("nested_parent.c") ||
+	    owned_scene->findGroup("nested_parent.c/nested_child.c"))
+	FAIL("GED direct active-scope nested group path erase should remove the owned Obol nested group");
+    if (!ged_draw_source_erase_path_in_active_scope(gedp, "nested_parent.c",
+	    ged_draw_active_view_ctx(gedp), -1) ||
+	    owned_scene->findGroup("nested_parent.c") ||
+	    owned_scene->getDatabaseSourceCount() != 2)
+	FAIL("GED direct active-scope nested group path cleanup should restore owned Obol baseline");
+    std::string clear_child_path = group_path + "/__obol_clear_child";
+    if (!owned_scene->ensureGroup(clear_child_path.c_str()) ||
+	    !owned_scene->findGroup(clear_child_path.c_str()))
+	FAIL("owned Obol direct clear sentinel child group should be created");
     ged_draw_clear(gedp);
-    if (owned_scene->getDatabaseSourceCount() != 0)
-	FAIL("GED direct draw clear should clear owned Obol database sources");
+    if (owned_scene->getDatabaseSourceCount() != 0 ||
+	    owned_scene->findGroup(clear_child_path.c_str()) ||
+	    owned_scene->findGroup(group_path.c_str()))
+	FAIL("GED direct draw clear should remove owned Obol group/source subtrees");
     if (ged_exec_draw(gedp, 2, draw_box) != BRLCAD_OK ||
 	    ged_exec_draw(gedp, 2, draw_ball) != BRLCAD_OK)
 	FAIL("owned-controller direct-clear redraw commands should succeed");

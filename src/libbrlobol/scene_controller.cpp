@@ -1551,6 +1551,48 @@ SoBRLSceneController::setShapePlacementState(const char *shapePath,
 }
 
 int
+SoBRLSceneController::publishDatabaseSourceAuxiliaryLineSet(
+	const char *sourcePath,
+	const char *name,
+	const SbVec3f *points,
+	const int32_t *commands,
+	int count)
+{
+    if (!sourcePath || !sourcePath[0] || !name || !name[0])
+	return -1;
+
+    SoBRLDatabaseSource *source = this->findDatabaseSource(sourcePath);
+    if (!source)
+	return -1;
+
+    const int changed = source->setAuxiliaryLineSet(name, points, commands,
+	    count);
+    if (changed > 0) {
+	if (count == 0)
+	    this->advanceStructuralRevision();
+	else
+	    this->advanceFrameRevision();
+    }
+    return changed;
+}
+
+int
+SoBRLSceneController::clearDatabaseSourceAuxiliaryShapes(const char *sourcePath)
+{
+    if (!sourcePath || !sourcePath[0])
+	return -1;
+
+    SoBRLDatabaseSource *source = this->findDatabaseSource(sourcePath);
+    if (!source)
+	return -1;
+
+    const int removed = source->clearAuxiliaryShapes();
+    if (removed > 0)
+	this->advanceStructuralRevision();
+    return removed;
+}
+
+int
 SoBRLSceneController::setShapeSourceState(const char *shapePath,
 	const char *ownerSourcePath,
 	uint32_t ownerSourceRevision,
@@ -1656,6 +1698,43 @@ SoBRLSceneController::replaceDatabaseSource(const char *sourcePath,
 }
 
 int
+SoBRLSceneController::renameDatabaseSource(const char *sourcePath,
+	const char *newSourcePath,
+	uint32_t sourceRevision)
+{
+    if (!sourcePath || !sourcePath[0] || !newSourcePath || !newSourcePath[0])
+	return -1;
+    if (strcmp(sourcePath, newSourcePath) == 0 ||
+	    strcmp(skip_leading_slash(sourcePath),
+		skip_leading_slash(newSourcePath)) == 0)
+	return 0;
+    if (!this->root || !this->root->isOfType(SoGroup::getClassTypeId()))
+	return -1;
+
+    SoGroup *rootGroup = static_cast<SoGroup *>(this->root);
+    SoGroup *sourceParent = NULL;
+    int sourceIndex = -1;
+    SoBRLDatabaseSource *source = find_database_source_recursive(rootGroup,
+	    sourcePath, &sourceParent, &sourceIndex);
+    if (!source || !sourceParent || sourceIndex < 0)
+	return 0;
+
+    SoGroup *conflictParent = NULL;
+    int conflictIndex = -1;
+    SoBRLDatabaseSource *conflict = find_database_source_recursive(rootGroup,
+	    newSourcePath, &conflictParent, &conflictIndex);
+    if (conflict && conflict != source && conflictParent &&
+	    conflictIndex >= 0)
+	conflictParent->removeChild(conflictIndex);
+
+    const int changed = source->retargetDatabaseSource(newSourcePath,
+	    sourceRevision);
+    if (changed > 0 || conflict)
+	this->advanceStructuralRevision();
+    return changed > 0 || conflict ? 1 : changed;
+}
+
+int
 SoBRLSceneController::setDatabaseSourceState(const char *sourcePath,
 	SbBool sourceRevisionValid,
 	uint32_t sourceRevision,
@@ -1675,61 +1754,10 @@ SoBRLSceneController::setDatabaseSourceState(const char *sourcePath,
     if (!source)
 	return -1;
 
-    int changed = 0;
-    if (sourceRevisionValid &&
-	    source->sourceRevision.getValue() != sourceRevision) {
-	source->sourceRevision = sourceRevision;
-	changed = 1;
-    }
-    if (source->inputsRevision.getValue() != inputsRevision) {
-	source->inputsRevision = inputsRevision;
-	changed = 1;
-    }
-    if (source->visible.getValue() != visible) {
-	source->visible = visible;
-	changed = 1;
-    }
-    if (source->highlighted.getValue() != highlighted) {
-	source->highlighted = highlighted;
-	changed = 1;
-    }
-    if (source->lineStyle.getValue() != lineStyle) {
-	source->lineStyle = lineStyle;
-	changed = 1;
-    }
-    if (source->lineWidth.getValue() != lineWidth) {
-	source->lineWidth = lineWidth;
-	changed = 1;
-    }
-    if (scene_group_float_different(source->transparency.getValue(),
-	    transparency)) {
-	source->transparency = transparency;
-	changed = 1;
-    }
-    if (source->colorOverride.getValue() != colorOverride) {
-	source->colorOverride = colorOverride;
-	changed = 1;
-    }
-    if (colorOverride &&
-	    !scene_group_color_equal(source->color.getValue(), color)) {
-	source->color = color;
-	changed = 1;
-    }
-    if (source->materialColorValid.getValue() != materialColorValid) {
-	source->materialColorValid = materialColorValid;
-	changed = 1;
-    }
-    if (materialColorValid &&
-	    !scene_group_color_equal(source->materialColor.getValue(),
-		materialColor)) {
-	source->materialColor = materialColor;
-	changed = 1;
-    }
-    if (source->materialRevision.getValue() != materialRevision) {
-	source->materialRevision = materialRevision;
-	changed = 1;
-    }
-
+    const int changed = source->setDisplayState(sourceRevisionValid,
+	    sourceRevision, inputsRevision, visible, highlighted, lineStyle,
+	    lineWidth, transparency, colorOverride, color, materialColorValid,
+	    materialColor, materialRevision);
     if (changed > 0)
 	this->advanceFrameRevision();
     return changed;
@@ -1743,14 +1771,10 @@ SoBRLSceneController::setDatabaseSourceDrawMode(const char *sourcePath,
     if (!source)
 	return -1;
 
-    if (drawMode != SoBRLDatabaseSource::SHADED)
-	drawMode = SoBRLDatabaseSource::WIREFRAME;
-    if (source->drawMode.getValue() == drawMode)
-	return 0;
-
-    source->drawMode = drawMode;
-    this->advanceFrameRevision();
-    return 1;
+    const int changed = source->setDrawModeState(drawMode);
+    if (changed > 0)
+	this->advanceFrameRevision();
+    return changed;
 }
 
 int
@@ -1761,14 +1785,30 @@ SoBRLSceneController::setDatabaseSourceMaterialPolicy(const char *sourcePath,
     if (!source)
 	return -1;
 
-    if (materialPolicy != SoBRLDatabaseSource::MATERIAL_DATABASE)
-	materialPolicy = SoBRLDatabaseSource::MATERIAL_INHERIT;
-    if (source->materialPolicy.getValue() == materialPolicy)
-	return 0;
+    const int changed = source->setMaterialPolicyState(materialPolicy);
+    if (changed > 0)
+	this->advanceFrameRevision();
+    return changed;
+}
 
-    source->materialPolicy = materialPolicy;
-    this->advanceFrameRevision();
-    return 1;
+int
+SoBRLSceneController::setDatabaseSourcePlacementState(const char *sourcePath,
+	SbBool drawMatrixValid,
+	const SbMatrix &drawMatrix,
+	SbBool drawCenterValid,
+	const SbVec3f &drawCenter,
+	SbBool drawSizeValid,
+	float drawSize)
+{
+    SoBRLDatabaseSource *source = this->findDatabaseSource(sourcePath);
+    if (!source)
+	return -1;
+
+    const int changed = source->setPlacementState(drawMatrixValid,
+	    drawMatrix, drawCenterValid, drawCenter, drawSizeValid, drawSize);
+    if (changed > 0)
+	this->advanceFrameRevision();
+    return changed;
 }
 
 int

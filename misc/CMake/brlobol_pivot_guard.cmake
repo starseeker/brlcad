@@ -2562,8 +2562,7 @@ function(_brlobol_pivot_guard_check_brlobol_window_host)
 	"summary.transparency = shape->transparency.getValue()"
 	"summary.lineStyle = source->lineStyle.getValue()"
 	"summary.materialRevision = source->materialRevision.getValue()"
-	"source->colorOverride = colorOverride"
-	"source->color = color"
+	"source->setDisplayState(sourceRevisionValid"
 	"summary.lineStyle = group->lineStyle.getValue()"
 	"summary.materialRevision = group->materialRevision.getValue()"
 	"source->materialColorValid.getValue()"
@@ -2580,21 +2579,32 @@ function(_brlobol_pivot_guard_check_brlobol_window_host)
 	"SoBRLSceneController::advanceStructuralRevision"
 	"SoBRLSceneController::advanceFrameRevision"
 	"SoBRLSceneController::replaceDatabaseSource"
+	"SoBRLSceneController::renameDatabaseSource"
 	"SoBRLSceneController::getDatabaseSourceSummary"
 	"SoBRLSceneController::setDatabaseSourceState"
 	"SoBRLSceneController::setDatabaseSourceDrawMode"
 	"SoBRLSceneController::setDatabaseSourceMaterialPolicy"
+	"SoBRLSceneController::setDatabaseSourcePlacementState"
 	"SoBRLSceneController::markDatabaseSourceStale"
-	"SoBRLSceneController::setDatabaseSourceRealizationState"
-	"SoBRLSceneController::setDatabaseSourceRealizationRoleFlags"
-	"SoBRLSceneController::setDatabaseSourceRealizationViewPolicy"
-	"source->markStale(staleReason)"
-	"source->setRealizationState(realizationStatus"
-	"source->setRealizationRoleFlags(roleFlags)"
-	"source->setRealizationViewPolicy(viewDependent"
-	"SoBRLSceneController::moveDatabaseSourceToGroup"
-	"find_database_source_recursive"
-	"count_database_sources_recursive"
+		"SoBRLSceneController::setDatabaseSourceRealizationState"
+		"SoBRLSceneController::setDatabaseSourceRealizationRoleFlags"
+		"SoBRLSceneController::setDatabaseSourceRealizationViewPolicy"
+		"SoBRLSceneController::publishDatabaseSourceAuxiliaryLineSet"
+		"SoBRLSceneController::clearDatabaseSourceAuxiliaryShapes"
+		"source->retargetDatabaseSource(newSourcePath"
+		"source->markStale(staleReason)"
+		"source->setDrawModeState(drawMode)"
+		"source->setMaterialPolicyState(materialPolicy)"
+		"source->setDisplayState(sourceRevisionValid"
+		"source->setRealizationState(realizationStatus"
+		"source->setRealizationRoleFlags(roleFlags)"
+		"source->setRealizationViewPolicy(viewDependent"
+		"source->setPlacementState(drawMatrixValid"
+		"source->setAuxiliaryLineSet(name"
+		"source->clearAuxiliaryShapes()"
+		"SoBRLSceneController::moveDatabaseSourceToGroup"
+		"find_database_source_recursive"
+		"count_database_sources_recursive"
 	"scene_group_find_path_const(this->root"
 	"clear_database_sources_recursive"
 	"source->configureDatabaseSource"
@@ -2611,10 +2621,19 @@ function(_brlobol_pivot_guard_check_brlobol_window_host)
     file(READ "${BRLCAD_SOURCE_DIR}/include/brlobol/database_source.h" _db_source_header)
     foreach(_token
 	"enum MaterialPolicy"
-	"MATERIAL_INHERIT = 0"
-	"MATERIAL_DATABASE = 1"
-	"SoSFEnum materialPolicy"
-	"int materialPolicy")
+		"MATERIAL_INHERIT = 0"
+		"MATERIAL_DATABASE = 1"
+		"SoSFEnum materialPolicy"
+		"int materialPolicy"
+		"setDrawModeState"
+		"setMaterialPolicyState"
+		"setDisplayState"
+		"SoSFBool drawMatrixValid"
+		"setPlacementState"
+		"findAuxiliaryVListShape"
+		"setAuxiliaryLineSet"
+		"clearAuxiliaryShapes"
+		"retargetDatabaseSource")
       string(FIND "${_db_source_header}" "${_token}" _idx)
       if(_idx EQUAL -1)
 	_brlobol_pivot_guard_fail("include/brlobol/database_source.h missing database source material-policy token ${_token}")
@@ -2627,10 +2646,19 @@ function(_brlobol_pivot_guard_check_brlobol_window_host)
     foreach(_token
 	"materialPolicy(SoBRLDatabaseSource::MATERIAL_INHERIT)"
 	"SO_NODE_DEFINE_ENUM_VALUE(MaterialPolicy, MATERIAL_INHERIT)"
-	"SO_NODE_DEFINE_ENUM_VALUE(MaterialPolicy, MATERIAL_DATABASE)"
-	"SO_NODE_ADD_FIELD(materialPolicy, (MATERIAL_INHERIT))"
-	"SO_NODE_SET_SF_ENUM_TYPE(materialPolicy, MaterialPolicy)"
-	"summary.materialPolicy = this->materialPolicy.getValue()")
+		"SO_NODE_DEFINE_ENUM_VALUE(MaterialPolicy, MATERIAL_DATABASE)"
+		"SO_NODE_ADD_FIELD(materialPolicy, (MATERIAL_INHERIT))"
+		"SO_NODE_SET_SF_ENUM_TYPE(materialPolicy, MaterialPolicy)"
+		"summary.materialPolicy = this->materialPolicy.getValue()"
+		"sync_shape_display_state"
+		"SoBRLDatabaseSource::setDrawModeState"
+		"SoBRLDatabaseSource::setMaterialPolicyState"
+		"SoBRLDatabaseSource::setDisplayState"
+		"summary.drawMatrixValid = this->drawMatrixValid.getValue()"
+		"sync_shape_placement_state"
+		"vlist_shape_is_auxiliary"
+		"recordRole = \"auxiliary\""
+		"sourceType = \"auxiliary-line-set\"")
       string(FIND "${_db_source_impl}" "${_token}" _idx)
       if(_idx EQUAL -1)
 	_brlobol_pivot_guard_fail("src/libbrlobol/database_source.cpp missing database source material-policy token ${_token}")
@@ -2652,6 +2680,7 @@ function(_brlobol_pivot_guard_check_brlobol_window_host)
 	[[setDatabaseSourceRealizationViewPolicy[ \t\r\n]*\(]]
 	[[setDatabaseSourceDrawMode[ \t\r\n]*\(]]
 	[[setDatabaseSourceMaterialPolicy[ \t\r\n]*\(]]
+	[[setDatabaseSourcePlacementState[ \t\r\n]*\(]]
 	[[getGroupDatabaseSourceCount[ \t\r\n]*\(]]
 	[[getSceneSubtreeBounds[ \t\r\n]*\(]]
 	[[getSceneTreeSummaryForPath[ \t\r\n]*\(]]
@@ -10505,6 +10534,13 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     if("${_rel}" STREQUAL "src/libged/bsg_ged_draw_records.c")
       list(APPEND _tokens [[rt/view.h]])
     endif()
+    if("${_rel}" STREQUAL "src/libged/bsg_ged_draw_source.c")
+      list(APPEND _tokens
+		_ged_draw_obol_sync_placement_cb
+		ged_draw_shape_ref_obol_sync_source_placement
+		ged_draw_scene_ref_obol_sync_source_placement
+		ged_draw_obol_database_source_set_placement_for_path)
+    endif()
 	    if("${_rel}" STREQUAL "src/libged/bsg_ged_draw_scene_root.c")
 	      list(APPEND _tokens ged_view_set_views_ctx
 			rt_view_scene_ref_context
@@ -16448,11 +16484,14 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	ged_draw_shape_ref_source_snapshot
 	ged_draw_shape_ref_publish_line_set
 	ged_draw_shape_ref_publish_point_set
-	ged_draw_shape_ref_publish_indexed_face_set
-	ged_draw_shape_ref_obol_clear_mesh
-	ged_draw_shape_ref_obol_publish_line_set
-	ged_draw_shape_ref_obol_publish_point_set
-	ged_draw_shape_ref_obol_publish_indexed_face_set
+		ged_draw_shape_ref_publish_indexed_face_set
+		ged_draw_shape_ref_obol_clear_mesh
+		ged_draw_shape_ref_obol_clear_auxiliary_shapes
+		ged_draw_shape_ref_obol_publish_line_set
+		ged_draw_scene_ref_obol_publish_annotation_line_set
+		ged_draw_scene_ref_obol_publish_auxiliary_line_set
+		ged_draw_shape_ref_obol_publish_point_set
+		ged_draw_shape_ref_obol_publish_indexed_face_set
 	_ged_draw_shape_ref_try_obol_paths
 	_ged_draw_group_ref_try_obol_paths
 	ged_draw_scene_ref_obol_group_path_apply
@@ -16462,6 +16501,8 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	ged_draw_registry_group_ref_semantic_path
 	ged_draw_scene_ref_obol_group_record_summary
 	ged_draw_scene_ref_obol_group_remove
+	ged_draw_scene_ref_obol_group_clear
+	ged_draw_scene_ref_obol_group_erase_subpath
 	ged_draw_scene_ref_obol_set_realization
 	ged_draw_scene_ref_obol_move_source_to_group
 	"ged_draw_scene_ref_obol_move_source_to_group(group_ref, ref)"
@@ -16485,9 +16526,10 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	ged_draw_scene_ref_geometry_clear
 	ged_draw_scene_ref_publish_bot_wireframe_line_set
 	ged_draw_scene_ref_publish_primitive_face_set
-		ged_draw_scene_ref_publish_primitive_wireframe
-		ged_draw_scene_ref_publish_submodel_wireframe_children
-		ged_draw_scene_ref_publish_poly_wireframe_line_set
+			ged_draw_scene_ref_publish_primitive_wireframe
+			ged_draw_scene_ref_publish_submodel_wireframe_children
+			_ged_draw_scene_ref_publish_obol_auxiliary_from_line_ref
+			ged_draw_scene_ref_publish_poly_wireframe_line_set
 	ged_draw_scene_ref_geometry_publish_nmg_region
 	"ged_draw_scene_ref_publish_indexed_face_set(ref"
 	"ged_draw_scene_ref_publish_line_set(ref"
@@ -20548,6 +20590,9 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 		[[ged_draw_obol_database_source_translate_vlist_for_path]]
 		[[ged_draw_obol_database_source_clear_vlist_for_path]]
 		[[ged_draw_obol_database_source_publish_line_set_for_path]]
+		[[ged_draw_obol_database_source_publish_annotation_line_set_for_path]]
+		[[ged_draw_obol_database_source_publish_auxiliary_line_set_for_path]]
+		[[ged_draw_obol_database_source_clear_auxiliary_shapes_for_path]]
 		[[ged_draw_obol_database_source_publish_point_set_for_path]]
 		[[ged_draw_obol_database_source_clear_mesh_for_path]]
 		[[ged_draw_obol_database_source_publish_indexed_face_set_for_path]]
@@ -20566,12 +20611,16 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 	[[ged_draw_obol_database_source_set_realization_roles_for_path]]
 	[[ged_draw_obol_database_source_set_realization_view_policy_for_path]]
 	[[ged_draw_obol_database_source_ensure_for_path]]
+	[[ged_draw_obol_database_source_rename_for_path]]
 	[[ged_draw_obol_database_source_move_to_group_for_path]]
 	[[ged_draw_obol_database_source_remove_for_path]]
 	[[ged_draw_obol_database_sources_remove_for_path_prefix]]
+	[[ged_draw_obol_database_sources_remove_for_component_name]]
 	[[ged_draw_obol_database_sources_clear]]
 	[[ged_draw_obol_groups_remove_for_component_name]]
 	[[ged_draw_obol_group_remove_for_path]]
+	[[ged_draw_obol_group_clear_for_path]]
+	[[ged_draw_obol_group_erase_subpath_for_path]]
 	[[ged_draw_obol_group_update_display_for_path]]
 	[[ged_draw_obol_group_ensure_for_path]]
 	[[ged_draw_obol_group_record_summary_for_path]]
@@ -20588,6 +20637,18 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 	[[ged_draw_obol_group_appearance_for_path]]
 	[[ged_draw_obol_group_update_draw_intent_for_path]]
 	[[setGroupDrawIntent]]
+	[[ged_obol_apply_source_update_transaction]]
+	[[ged_obol_apply_source_references_removed_transaction]]
+	[[ged_obol_apply_visibility_transaction]]
+	[[ged_obol_apply_stale_source_transaction]]
+	[[ged_obol_apply_erase_prefix_transaction]]
+	[[ged_obol_apply_redraw_transaction]]
+	[[ged_obol_remove_groups_by_path_prefix]]
+	[[ged_obol_collect_database_sources_matching]]
+	[[ged_obol_replace_matching_database_sources]]
+	[[ged_obol_mark_matching_database_sources_stale]]
+	[[ged_obol_set_database_source_visible]]
+	[[ged_obol_set_group_visible]]
 	[[setGroupDisplayState]]
 	[[markDatabaseSourceStale]]
 	[[ged_obol_source_summary_force_adapter]]
@@ -20597,20 +20658,29 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 	[[ged_obol_rgb_from_color]]
 	[[ged_obol_color_from_rgb]]
 	[[ged_obol_mat_from_sbmatrix]]
+	[[ged_obol_sbmatrix_from_mat]]
 	[[drawMatrixValid]]
+	[[shape->drawMatrixValid = source->drawMatrixValid.getValue()]]
+	[[shape->drawCenterValid = source->drawCenterValid.getValue()]]
+	[[shape->drawSizeValid = source->drawSizeValid.getValue()]]
 	[[replaceDatabaseSource]]
+	[[renameDatabaseSource]]
 	[[setDatabaseSourceState]]
 	[[setDatabaseSourceDrawMode]]
 	[[setDatabaseSourceMaterialPolicy]]
-	[[setDatabaseSourceRealizationState]]
-	[[setDatabaseSourceRealizationRoleFlags]]
-	[[setDatabaseSourceRealizationViewPolicy]]
-	[[getGroupDatabaseSourceCount]]
+	[[setDatabaseSourcePlacementState]]
+		[[setDatabaseSourceRealizationState]]
+		[[setDatabaseSourceRealizationRoleFlags]]
+		[[setDatabaseSourceRealizationViewPolicy]]
+		[[publishDatabaseSourceAuxiliaryLineSet]]
+		[[clearDatabaseSourceAuxiliaryShapes]]
+		[[getGroupDatabaseSourceCount]]
 	[[getGroupChildCount]]
 	[[getSceneSubtreeBounds]]
 	[[getSceneTreeSummaryForPath]]
 	[[getSceneChildTreeSummary]]
 	[[moveDatabaseSourceToGroup]]
+	[[ged_draw_obol_database_source_rename_for_path]]
 	[[clearDatabaseSources]]
 	[[realizePending]]
 	[[ged-draw-group:]]
@@ -20625,7 +20695,6 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 		[[translatePoints]]
 		[[getRealizedMesh]]
 		[[setIndexedTriangles]]
-		[[setDrawCenter]]
 		[[updateDrawBoundsFromPoints]]
 		[[BRLObolSceneBoundsSummary]]
 	[[getSceneBoundsSummary]]
@@ -20721,6 +20790,7 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 	[[ged_draw_scene_root_erase_groups_by_name]]
 	[[ged_draw_clear]]
 	[[ged_draw_source_erase_path_in_active_scope]]
+	[[ged_draw_source_erase_component_name_in_active_scope]]
 	[[setDatabaseSourceState]]
 	[[ged_draw_shape_ref_display_summary]]
 	[[ged_draw_shape_ref_material_summary]]
@@ -20729,9 +20799,9 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 	[[GED stale shape-ref view context should recover cached source state]]
 	[[GED stale shape-ref LoD ensure should recover cached Obol source runtime]]
 	[[GED stale shape-ref LoD ensure should update owned Obol source policy]]
-	[[GED shape-ref context should resolve to an owned Obol database-source context]]
-	[[GED Obol shape-ref context source should be the owned Obol database-source context]]
-	[[GED source scene-context traversal should create owned Obol realized child contexts]]
+		[[GED shape-ref context should resolve to an owned Obol database-source context]]
+		[[GED Obol shape-ref context source should be the owned Obol database-source context]]
+		[[GED source scene-context traversal should create owned Obol realized child contexts]]
 	[[GED source scene-context traversal should summarize owned Obol realized children]]
 	[[GED source scene-context traversal should classify owned Obol realized children as shapes]]
 	[[GED source scene-context traversal should return owned Obol realized children]]
@@ -20751,11 +20821,16 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 		[[ged_draw_shape_ref_translate_geometry]]
 		[[ged_draw_shape_ref_publish_line_set]]
 		[[ged_draw_shape_ref_publish_point_set]]
-		[[ged_draw_shape_ref_publish_indexed_face_set]]
-		[[ged_draw_shape_ref_publish_primitive_wireframe]]
-		[[ged_draw_shape_ref_redraw_wireframe]]
-		[[ged_draw_shape_ref_geometry_clear]]
-		[[ged_draw_shape_ref_set_center]]
+			[[ged_draw_shape_ref_publish_indexed_face_set]]
+			[[ged_draw_shape_ref_publish_primitive_wireframe]]
+			[[ged_draw_shape_ref_redraw_wireframe]]
+			[[ged_draw_shape_ref_geometry_clear]]
+			[[ged_draw_obol_database_source_publish_auxiliary_line_set_for_path]]
+			[[GED Obol auxiliary line-set bridge should create an auxiliary VLIST]]
+			[[GED shape geometry clear should clear owned Obol auxiliary VLISTs]]
+			[[GED annotation geometry summary should read owned Obol annotation VLIST]]
+			[[GED annotation draw should publish line segments into the owned Obol source]]
+			[[ged_draw_shape_ref_set_center]]
 		[[ged_draw_shape_ref_update_bounds_from_geometry]]
 		[[ged_draw_shape_ref_set_visible]]
 	[[ged_draw_shape_set_highlighted]]
@@ -20788,14 +20863,37 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 	[[ged_draw_obol_database_source_record_for_path]]
 	[[ged_draw_obol_database_source_apply_record_for_path]]
 	[[ged_draw_obol_database_source_draw_state_for_path]]
+	[[ged_draw_obol_database_source_set_placement_for_path]]
 	[[GED_DRAW_OBOL_DATABASE_SOURCE_REALIZATION_STALE]]
 	[[GED_DRAW_OBOL_DATABASE_SOURCE_MATERIAL_INHERIT]]
 	[[box_source_summary.materialPolicy]]
 	[[drawMatrixValid]]
 	[[GED Obol draw-state bridge should read owned line style and draw matrix]]
+	[[GED Obol source placement bridge should sync realized shape placement]]
+	[[GED Obol draw-state bridge should set owned source draw matrix]]
+	[[GED shape center setter should update owned Obol source placement]]
+	[[GED shape bounds update should update owned Obol source placement]]
+	[[GED rename transaction should rename the owned Obol source in place]]
+	[[GED rename transaction should retarget owned Obol realized shape metadata]]
+	[[GED visible/highlight/color setters should sync realized Obol shape display state]]
 	[[GED redraw should use owned Obol draw matrix]]
 	[[GED group-name erase should treat owned Obol overlay state as authoritative]]
 	[[GED direct active-scope group erase should remove the owned Obol group subtree]]
+	[[GED direct draw clear should remove owned Obol group/source subtrees]]
+	[[GED direct active-scope nested group path erase should remove the owned Obol nested group]]
+	[[GED nested leaf stale transaction should mark the owned Obol leaf source stale]]
+	[[GED nested leaf redraw transaction should preserve unrelated owned Obol source state]]
+	[[GED scoped component erase should remove matching owned Obol sources only]]
+	[[GED nested leaf reference removal should remove only non-root owned Obol sources]]
+	[[GED source removal transaction should remove matching owned Obol component sources]]
+	[[GED visibility transaction should update owned Obol state without full-scene sync]]
+	[[GED transparency transaction should preserve Obol-only sources]]
+	[[GED highlight transaction should preserve Obol-only sources]]
+	[[GED stale-source transaction should target owned Obol state without full-scene sync]]
+	[[GED material-changed transaction should preserve Obol-only sources]]
+	[[GED redraw transaction should refresh retained sources without clearing Obol-only sources]]
+	[[GED erase-prefix transaction should remove only matching owned Obol sources]]
+	[[GED display/material transaction canary cleanup should restore baseline]]
 	[[GED source-owner append should move the owned Obol source into the target group]]
 	[[group_only\.s]]
 	[[obol_child\.s]]
@@ -27086,6 +27184,11 @@ function(_brlobol_pivot_guard_check_brlobol_material_object)
       "scene controller should move nested database sources back to the scene root"
       "source->lineWidth = 3"
       "source->materialRevision = 55"
+      "scene controller should update source draw mode through the source owner"
+      "source draw-mode updates should sync database-intent realized shapes"
+      "summaryMesh->drawMode.getValue() != BRLOBOL_LOD_DRAW_WIRE"
+      "scene controller should update source material policy through the source owner"
+      "source material policy updates should sanitize and report no-op/missing sources"
       "displaySummary.lineWidth != 3"
       "displaySummary.materialRevision != 55"
       "summaryMesh->lineStyle = 1"

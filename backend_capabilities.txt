@@ -156,6 +156,17 @@ Recent cleanup state:
 * NMG-region realization output now routes its filled line-set and
   indexed-face geometry through the same Obol-first publication helpers before
   the retained BSG adapter is synchronized.
+* NMG auxiliary normal/remainder line output now has a named auxiliary VLIST
+  API on libbrlobol database sources and publishes those auxiliary line sets
+  into the owned Obol source, with geometry clear removing auxiliary realized
+  shapes before retained BSG fallback.  Submodel leaf wireframe publication also
+  mirrors its temporary retained leaf line sets into the owning Obol source as
+  named auxiliary VLISTs.
+* ANNOT line-segment realization now has Obol-owned source metadata and
+  model-space VLIST coordinates in libbrlobol database-source realization, and
+  GED geometry summaries report the owned Obol source as `annotation` before
+  retained BSG fallback.  The richer typed BSG annotation payload remains the
+  compatibility/export path for text and non-line annotation segments.
 * GED draw-state summaries now prefer libged-owned Obol database-source draw
   mode and realized-shape draw-matrix metadata when available, and retained
   redraw line-set publication can create/update the owned Obol VLIST through
@@ -164,20 +175,60 @@ Recent cleanup state:
   libged-owned Obol database source realization status, stale metadata, and
   realized revision fields through libbrlobol source/controller APIs before
   preserving BSG adapter status for transitional display compatibility.
+* GED source rename transactions now use a libbrlobol database-source retarget
+  API to rename the owned Obol source in place, preserve display/material
+  state, update realized child source/owner metadata, and refresh realization
+  against the renamed database object before falling back to full-scene sync.
+* GED source-update, source-removal, and non-root reference-removal
+  transactions now collect matching libged-owned Obol database sources by
+  path/component and apply targeted stale, redraw, or removal behavior before
+  falling back to full-scene sync.  Global component erasure in the current
+  source adapter removes matching owned Obol-only sources, and scoped/view-
+  specific component erasure removes matched owned Obol database sources
+  through the record-filtered shape-ref release path.
+* GED visibility, stale-source, material-change, material-refresh,
+  transparency, and highlight transactions no longer force a full Obol scene
+  rebuild after the lower-level owner-first source/group/display mutation has
+  run.  Visibility and stale-source transactions also have explicit targeted
+  Obol source/group handling in the transaction observer; view-scoped stale
+  sync refreshes and realizes matching current sources, while non-view stale
+  marks matching owned sources stale and preserves Obol-only sources that are
+  not present in the transitional retained draw list.
+* GED redraw and erase-prefix transactions now use targeted Obol
+  database-source/group replacement or removal.  Redraw refreshes current
+  retained draw paths without clearing unrelated Obol-only sources, and
+  erase-prefix removes only matching non-overlay owned Obol path subtrees.
 * GED source realization role flags and view-policy metadata now update the
   libged-owned Obol database source through libbrlobol source/controller APIs,
   and local LoD realization decisions prefer Obol policy state before falling
   back to the BSG adapter record.
 * GED shape-ref center and bounds-metadata mutation now update the
-  libged-owned Obol VLIST draw-center/draw-size fields when present, leaving
-  the BSG placement metadata path as a fallback for non-Obol callers.
+  libged-owned Obol database-source placement owner first and synchronize the
+  realized VLIST draw-center/draw-size fields from that source, leaving the
+  BSG placement metadata path as a fallback for non-Obol callers.
+* Obol database sources now own draw placement metadata
+  (draw matrix, draw center, and draw size).  libbrlobol exposes source-level
+  placement mutation through `SoBRLDatabaseSource` and `SoBRLSceneController`,
+  syncs that state onto realized VLIST/mesh shapes, and libged uses the new
+  bridge when applying database-leaf draw placement, source-adapter geometry
+  publication placement snapshots, and draw-state matrix tests.
 * Non-overlay GED draw-bounds readback now prefers the libged-owned Obol scene
   database-source bounds aggregate when present.  Overlay-inclusive bounds
   remain on the BSG adapter until Capability 2 owns overlay geometry.
 * Public GED shape display/material mutations now update the libged-owned
   Obol database source first for visibility, highlight, color override,
   transparency, and material color, then keep the BSG source adapter updated
-  for transitional display compatibility.
+  for transitional display compatibility.  libbrlobol database-source display
+  mutation now propagates that owner state onto database-intent realized
+  VLIST/mesh shapes so rendering/export actions consume the same visibility,
+  highlight, line, color, and material fields as GED summaries while
+  prototype/non-database diagnostic shapes keep their local presentation.
+  Database-source draw-mode mutation now also routes through
+  `SoBRLDatabaseSource`, immediately synchronizing database-intent realized
+  shape draw modes instead of relying on deferred field-sensor propagation.
+  Database-source material-policy mutation likewise routes through
+  `SoBRLDatabaseSource`, so sanitization/no-op behavior is owned by the source
+  API instead of direct controller field writes.
 * GED material color refresh now stamps the libged-owned Obol database source
   with the selected material color and explicit material revision before
   keeping the retained adapter material state synchronized.
@@ -248,6 +299,15 @@ Recent cleanup state:
   group subtree first, so active-scope erase, nested group erase, empty-group
   prune, and clear-in-scope paths no longer leave Obol group/source children
   behind when they free retained groups directly.
+* Source-adapter group-content clear and clear-scope teardown now route through
+  owned Obol group clear/remove bridges before retained child free,
+  detach, and release, so direct draw clear removes Obol-only group children
+  and matching owned group subtrees instead of relying only on database-source
+  pruning.
+* Exact and nested GED group path erase now tries owned Obol group subpath
+  removal before retained BSG fallback, so Obol-only nested groups created by
+  the source adapter are removed through the libbrlobol owner and count as real
+  erases for active-scope path erase.
 * Transaction clear/teardown accounting now uses tagged scene-ref tree summary
   data instead of a private child-count or context-shaped bridge.
 * Shape owning-group summaries now carry typed `ged_draw_group_ref` values
@@ -562,8 +622,8 @@ Near-term work:
 * Avoid moving raw retained parent/child traversal into higher-level wrappers;
   use source-adapter facades or neutral summaries instead.
 * Keep draw transactions, redraw, material refresh, highlight, erase, bounds,
-  source-update, and database-update behavior passing while the backend owner
-  is swapped.
+  scoped source-update, and database-update behavior passing while the backend
+  owner is swapped.
 * When a bridge is retired, update `misc/CMake/brlobol_pivot_guard.cmake` so
   the guard tracks the new intended boundary instead of stale transitional
   tokens.

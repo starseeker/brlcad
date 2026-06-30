@@ -16,6 +16,7 @@
 
 #include "bu/color.h"
 #include "bu/list.h"
+#include "bu/str.h"
 #include "nmg.h"
 #include "raytrace.h"
 #include "rt/func.h"
@@ -26,6 +27,7 @@
 #include "rt/vlist.h"
 #include "rt/view.h"
 
+#include <Inventor/SbName.h>
 #include <Inventor/nodes/SoMatrixTransform.h>
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoSeparator.h>
@@ -37,6 +39,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <string>
 
 SO_NODE_SOURCE(SoBRLDatabaseSource);
 
@@ -44,6 +47,14 @@ static int
 database_source_float_different(float a, float b)
 {
     return fabsf(a - b) > 1.0e-6f;
+}
+
+static int
+database_source_color_equal(const SbColor &a, const SbColor &b)
+{
+    return !database_source_float_different(a[0], b[0]) &&
+	!database_source_float_different(a[1], b[1]) &&
+	!database_source_float_different(a[2], b[2]);
 }
 
 BRLObolDatabaseSourceSummary::BRLObolDatabaseSourceSummary(void) :
@@ -80,6 +91,12 @@ BRLObolDatabaseSourceSummary::BRLObolDatabaseSourceSummary(void) :
     materialPolicy(SoBRLDatabaseSource::MATERIAL_INHERIT),
     colorOverride(FALSE),
     color(1.0f, 1.0f, 1.0f),
+    drawMatrixValid(FALSE),
+    drawMatrix(SbMatrix::identity()),
+    drawCenterValid(FALSE),
+    drawCenter(0.0f, 0.0f, 0.0f),
+    drawSizeValid(FALSE),
+    drawSize(0.0f),
     stale(TRUE),
     staleReason(SoBRLDatabaseSource::STALE_SOURCE),
     realizedShapeCount(0),
@@ -402,6 +419,15 @@ primitive_type_label(const struct rt_db_internal *intern)
     return intern->idb_meth->ft_label;
 }
 
+static bool
+primitive_is_annotation(int internalType, const char *typeLabel)
+{
+    if (internalType == ID_ANNOT)
+	return true;
+    return typeLabel && (BU_STR_EQUAL(typeLabel, "annot") ||
+	    BU_STR_EQUAL(typeLabel, "annotation"));
+}
+
 template <typename ShapeT>
 static void
 assign_realized_identity(ShapeT *shape,
@@ -430,17 +456,33 @@ assign_realized_identity(ShapeT *shape,
     shape->localSource = FALSE;
     shape->sharedSource = FALSE;
     shape->nonDatabaseSource = FALSE;
-    shape->drawMode = source_record_draw_mode(source);
+    if (shape->databaseIntent.getValue() ||
+	    !shape->nonDatabaseSource.getValue())
+	shape->drawMode = source_record_draw_mode(source);
     shape->recordRole = "database";
     shape->geometryKind = "";
+    if (source) {
+	shape->visible = source->visible.getValue();
+	shape->highlighted = source->highlighted.getValue();
+	shape->lineStyle = source->lineStyle.getValue();
+	shape->lineWidth = source->lineWidth.getValue();
+	shape->transparency = source->transparency.getValue();
+	shape->colorOverride = source->colorOverride.getValue();
+	shape->color = source->color.getValue();
+	shape->materialColorValid = source->materialColorValid.getValue();
+	shape->materialColor = source->materialColor.getValue();
+	shape->materialRevision = source->materialRevision.getValue();
+    }
 
     if (!tsp) {
 	shape->regionId = 0;
 	shape->airCode = 0;
 	shape->materialId = 0;
 	shape->los = 0;
-	shape->materialColorValid = FALSE;
-	shape->materialColor = SbColor(1.0f, 1.0f, 1.0f);
+	if (!source || !source->materialColorValid.getValue()) {
+	    shape->materialColorValid = FALSE;
+	    shape->materialColor = SbColor(1.0f, 1.0f, 1.0f);
+	}
 	shape->materialShader = "";
 	return;
     }
@@ -454,6 +496,10 @@ assign_realized_identity(ShapeT *shape,
 	    static_cast<float>(tsp->ts_mater.ma_color[0]),
 	    static_cast<float>(tsp->ts_mater.ma_color[1]),
 	    static_cast<float>(tsp->ts_mater.ma_color[2]));
+    if (source && source->materialColorValid.getValue()) {
+	shape->materialColorValid = TRUE;
+	shape->materialColor = source->materialColor.getValue();
+    }
     shape->materialShader = tsp->ts_mater.ma_shader ? tsp->ts_mater.ma_shader : "";
 }
 
@@ -482,6 +528,45 @@ sync_shape_owner_state(ShapeT *shape, const SoBRLDatabaseSource *source)
     shape->ownerStaleReason = source->staleReason.getValue();
 }
 
+template <typename ShapeT>
+static void
+sync_shape_placement_state(ShapeT *shape, const SoBRLDatabaseSource *source)
+{
+    if (!shape || !source)
+	return;
+
+    shape->drawMatrixValid = source->drawMatrixValid.getValue();
+    shape->drawMatrix = source->drawMatrix.getValue();
+    shape->drawCenterValid = source->drawCenterValid.getValue();
+    shape->drawCenter = source->drawCenter.getValue();
+    shape->drawSizeValid = source->drawSizeValid.getValue();
+    shape->drawSize = source->drawSize.getValue();
+}
+
+template <typename ShapeT>
+static void
+sync_shape_display_state(ShapeT *shape, const SoBRLDatabaseSource *source)
+{
+    if (!shape || !source)
+	return;
+
+    if (!shape->databaseIntent.getValue() &&
+	    shape->nonDatabaseSource.getValue())
+	return;
+
+    shape->drawMode = source_record_draw_mode(source);
+    shape->visible = source->visible.getValue();
+    shape->highlighted = source->highlighted.getValue();
+    shape->lineStyle = source->lineStyle.getValue();
+    shape->lineWidth = source->lineWidth.getValue();
+    shape->transparency = source->transparency.getValue();
+    shape->colorOverride = source->colorOverride.getValue();
+    shape->color = source->color.getValue();
+    shape->materialColorValid = source->materialColorValid.getValue();
+    shape->materialColor = source->materialColor.getValue();
+    shape->materialRevision = source->materialRevision.getValue();
+}
+
 static void
 sync_realized_shape_owner_state_in_node(SoNode *node,
 	const SoBRLDatabaseSource *source)
@@ -490,11 +575,17 @@ sync_realized_shape_owner_state_in_node(SoNode *node,
 	return;
 
     if (node->isOfType(SoBRLVListShape::getClassTypeId())) {
-	sync_shape_owner_state(static_cast<SoBRLVListShape *>(node), source);
+	SoBRLVListShape *shape = static_cast<SoBRLVListShape *>(node);
+	sync_shape_owner_state(shape, source);
+	sync_shape_placement_state(shape, source);
+	sync_shape_display_state(shape, source);
 	return;
     }
     if (node->isOfType(SoBRLMeshShape::getClassTypeId())) {
-	sync_shape_owner_state(static_cast<SoBRLMeshShape *>(node), source);
+	SoBRLMeshShape *shape = static_cast<SoBRLMeshShape *>(node);
+	sync_shape_owner_state(shape, source);
+	sync_shape_placement_state(shape, source);
+	sync_shape_display_state(shape, source);
 	return;
     }
     if (node->isOfType(SoGroup::getClassTypeId())) {
@@ -573,6 +664,17 @@ vlist_from_plot_internal(struct rt_db_internal *intern,
     if (!intern || !intern->idb_ptr)
 	return NULL;
 
+    point_t annotationBase = VINIT_ZERO;
+    const char *typeLabel = primitive_type_label(intern);
+    const bool addAnnotationBase = primitive_is_annotation(intern->idb_type,
+	    typeLabel);
+    if (addAnnotationBase) {
+	struct rt_annot_internal *annot =
+	    static_cast<struct rt_annot_internal *>(intern->idb_ptr);
+	RT_ANNOT_CK_MAGIC(annot);
+	VMOVE(annotationBase, annot->V);
+    }
+
     struct bu_list vhead;
     BU_LIST_INIT(&vhead);
     struct bg_tess_tol ttol = source_tess_tol(source);
@@ -587,6 +689,14 @@ vlist_from_plot_internal(struct rt_db_internal *intern,
     std::vector<int32_t> commands;
     convert_vlist(points, commands, &vhead);
     RT_FREE_VLIST(&rt_vlfree, &vhead);
+    if (addAnnotationBase) {
+	for (size_t i = 0; i < points.size(); i++) {
+	    points[i].setValue(points[i][0] +
+		    static_cast<float>(annotationBase[X]),
+		    points[i][1] + static_cast<float>(annotationBase[Y]),
+		    points[i][2] + static_cast<float>(annotationBase[Z]));
+	}
+    }
     if (points.empty() || points.size() != commands.size())
 	return NULL;
 
@@ -645,6 +755,15 @@ realize_leaf(struct db_tree_state *tsp,
     BU_LIST_INIT(&vhead);
     struct bg_tess_tol ttol = source_tess_tol(data->source);
     struct bn_tol tol = BN_TOL_INIT_TOL;
+    point_t annotationBase = VINIT_ZERO;
+    const bool addAnnotationBase = primitive_is_annotation(
+	    local_intern.idb_type, typeLabel);
+    if (addAnnotationBase) {
+	struct rt_annot_internal *annot =
+	    static_cast<struct rt_annot_internal *>(local_intern.idb_ptr);
+	RT_ANNOT_CK_MAGIC(annot);
+	VMOVE(annotationBase, annot->V);
+    }
 
     int ret = rt_obj_plot(&vhead, &local_intern, &ttol, &tol);
     if (ret < 0) {
@@ -668,6 +787,14 @@ realize_leaf(struct db_tree_state *tsp,
     std::vector<int32_t> commands;
     convert_vlist(points, commands, &vhead);
     RT_FREE_VLIST(&rt_vlfree, &vhead);
+    if (addAnnotationBase) {
+	for (size_t i = 0; i < points.size(); i++) {
+	    points[i].setValue(points[i][0] +
+		    static_cast<float>(annotationBase[X]),
+		    points[i][1] + static_cast<float>(annotationBase[Y]),
+		    points[i][2] + static_cast<float>(annotationBase[Z]));
+	}
+    }
 
     if (points.empty() || points.size() != commands.size()) {
 	char reason[256] = {0};
@@ -686,6 +813,10 @@ realize_leaf(struct db_tree_state *tsp,
     transform->matrix = mat_to_sbmatrix(tsp->ts_mat);
     assign_realized_identity(shape, tsp, path, dp->d_namep, typeLabel,
 	    data->revision, data->source);
+    if (primitive_is_annotation(local_intern.idb_type, typeLabel)) {
+	shape->sourceType = "annotation";
+	shape->geometryKind = "annotation";
+    }
     shape->setLineSet(points.data(), commands.data(), static_cast<int>(points.size()));
     leaf->addChild(transform);
     leaf->addChild(shape);
@@ -1154,6 +1285,10 @@ realize_mesh_leaf(struct db_tree_state *tsp,
     if (vlistShape) {
 	assign_realized_identity(vlistShape, tsp, path, dp->d_namep, typeLabel,
 		data->revision, data->source);
+	if (primitive_is_annotation(internalType, typeLabel)) {
+	    vlistShape->sourceType = "annotation";
+	    vlistShape->geometryKind = "annotation";
+	}
     } else {
 	assign_realized_identity(shape, tsp, path, dp->d_namep, typeLabel,
 		data->revision, data->source);
@@ -1207,6 +1342,12 @@ SoBRLDatabaseSource::SoBRLDatabaseSource(void) :
     SO_NODE_SET_SF_ENUM_TYPE(materialPolicy, MaterialPolicy);
     SO_NODE_ADD_FIELD(colorOverride, (FALSE));
     SO_NODE_ADD_FIELD(color, (SbColor(1.0f, 1.0f, 1.0f)));
+    SO_NODE_ADD_FIELD(drawMatrixValid, (FALSE));
+    SO_NODE_ADD_FIELD(drawMatrix, (SbMatrix::identity()));
+    SO_NODE_ADD_FIELD(drawCenterValid, (FALSE));
+    SO_NODE_ADD_FIELD(drawCenter, (SbVec3f(0.0f, 0.0f, 0.0f)));
+    SO_NODE_ADD_FIELD(drawSizeValid, (FALSE));
+    SO_NODE_ADD_FIELD(drawSize, (0.0f));
     SO_NODE_ADD_FIELD(tessellationAbsTol, (0.0f));
     SO_NODE_ADD_FIELD(tessellationRelTol, (0.01f));
     SO_NODE_ADD_FIELD(tessellationNormTol, (0.0f));
@@ -1365,6 +1506,32 @@ SoBRLDatabaseSource::markStale(uint32_t reason)
 }
 
 int
+SoBRLDatabaseSource::setDrawModeState(int nextDrawMode)
+{
+    if (nextDrawMode != SHADED)
+	nextDrawMode = WIREFRAME;
+    if (this->drawMode.getValue() == nextDrawMode)
+	return 0;
+
+    this->drawMode = nextDrawMode;
+    this->syncRealizedShapeOwnerState();
+    return 1;
+}
+
+int
+SoBRLDatabaseSource::setMaterialPolicyState(int nextMaterialPolicy)
+{
+    if (nextMaterialPolicy != MATERIAL_DATABASE)
+	nextMaterialPolicy = MATERIAL_INHERIT;
+    if (this->materialPolicy.getValue() == nextMaterialPolicy)
+	return 0;
+
+    this->materialPolicy = nextMaterialPolicy;
+    this->syncRealizedShapeOwnerState();
+    return 1;
+}
+
+int
 SoBRLDatabaseSource::setRealizationState(int nextStatus,
 	uint32_t nextRealizedSourceRevision,
 	uint32_t nextRealizedInputsRevision,
@@ -1484,6 +1651,125 @@ SoBRLDatabaseSource::setRealizationViewPolicy(SbBool viewDependent,
     return changed;
 }
 
+int
+SoBRLDatabaseSource::setDisplayState(SbBool sourceRevisionValid,
+	uint32_t nextSourceRevision,
+	uint32_t nextInputsRevision,
+	SbBool nextVisible,
+	SbBool nextHighlighted,
+	int nextLineStyle,
+	int nextLineWidth,
+	float nextTransparency,
+	SbBool nextColorOverride,
+	const SbColor &nextColor,
+	SbBool nextMaterialColorValid,
+	const SbColor &nextMaterialColor,
+	uint32_t nextMaterialRevision)
+{
+    int changed = 0;
+    if (sourceRevisionValid &&
+	    this->sourceRevision.getValue() != nextSourceRevision) {
+	this->sourceRevision = nextSourceRevision;
+	changed = 1;
+    }
+    if (this->inputsRevision.getValue() != nextInputsRevision) {
+	this->inputsRevision = nextInputsRevision;
+	changed = 1;
+    }
+    if (this->visible.getValue() != nextVisible) {
+	this->visible = nextVisible;
+	changed = 1;
+    }
+    if (this->highlighted.getValue() != nextHighlighted) {
+	this->highlighted = nextHighlighted;
+	changed = 1;
+    }
+    if (this->lineStyle.getValue() != nextLineStyle) {
+	this->lineStyle = nextLineStyle;
+	changed = 1;
+    }
+    if (this->lineWidth.getValue() != nextLineWidth) {
+	this->lineWidth = nextLineWidth;
+	changed = 1;
+    }
+    if (database_source_float_different(this->transparency.getValue(),
+	    nextTransparency)) {
+	this->transparency = nextTransparency;
+	changed = 1;
+    }
+    if (this->colorOverride.getValue() != nextColorOverride) {
+	this->colorOverride = nextColorOverride;
+	changed = 1;
+    }
+    if (nextColorOverride &&
+	    !database_source_color_equal(this->color.getValue(), nextColor)) {
+	this->color = nextColor;
+	changed = 1;
+    }
+    if (this->materialColorValid.getValue() != nextMaterialColorValid) {
+	this->materialColorValid = nextMaterialColorValid;
+	changed = 1;
+    }
+    if (nextMaterialColorValid &&
+	    !database_source_color_equal(this->materialColor.getValue(),
+		nextMaterialColor)) {
+	this->materialColor = nextMaterialColor;
+	changed = 1;
+    }
+    if (this->materialRevision.getValue() != nextMaterialRevision) {
+	this->materialRevision = nextMaterialRevision;
+	changed = 1;
+    }
+    if (changed)
+	this->syncRealizedShapeOwnerState();
+    return changed;
+}
+
+int
+SoBRLDatabaseSource::setPlacementState(SbBool nextDrawMatrixValid,
+	const SbMatrix &nextDrawMatrix,
+	SbBool nextDrawCenterValid,
+	const SbVec3f &nextDrawCenter,
+	SbBool nextDrawSizeValid,
+	float nextDrawSize)
+{
+    int changed = 0;
+    if (this->drawMatrixValid.getValue() != nextDrawMatrixValid) {
+	this->drawMatrixValid = nextDrawMatrixValid;
+	changed = 1;
+    }
+    if (!this->drawMatrix.getValue().equals(nextDrawMatrix, 0.000001f)) {
+	this->drawMatrix = nextDrawMatrix;
+	changed = 1;
+    }
+    if (this->drawCenterValid.getValue() != nextDrawCenterValid) {
+	this->drawCenterValid = nextDrawCenterValid;
+	changed = 1;
+    }
+    const SbVec3f currentCenter = this->drawCenter.getValue();
+    if (database_source_float_different(currentCenter[0],
+	    nextDrawCenter[0]) ||
+	    database_source_float_different(currentCenter[1],
+		nextDrawCenter[1]) ||
+	    database_source_float_different(currentCenter[2],
+		nextDrawCenter[2])) {
+	this->drawCenter = nextDrawCenter;
+	changed = 1;
+    }
+    if (this->drawSizeValid.getValue() != nextDrawSizeValid) {
+	this->drawSizeValid = nextDrawSizeValid;
+	changed = 1;
+    }
+    if (database_source_float_different(this->drawSize.getValue(),
+	    nextDrawSize)) {
+	this->drawSize = nextDrawSize;
+	changed = 1;
+    }
+    if (changed)
+	this->syncRealizedShapeOwnerState();
+    return changed;
+}
+
 void
 SoBRLDatabaseSource::setDatabase(struct db_i *database)
 {
@@ -1519,6 +1805,144 @@ SoBRLDatabaseSource::configureDatabaseSource(const char *sourcePath,
     this->sourceRevision = revision;
     this->markStale(reason);
     this->attachFieldSensors();
+}
+
+template <typename ShapeT>
+static void
+retarget_realized_shape_source(ShapeT *shape,
+	const char *oldSourcePath,
+	const char *newSourcePath,
+	uint32_t revision)
+{
+    if (!shape || !newSourcePath)
+	return;
+
+    const char *oldName = oldSourcePath ? lookup_name_from_path(oldSourcePath) :
+	NULL;
+    const char *newName = lookup_name_from_path(SbString(newSourcePath));
+    if (!newName)
+	newName = newSourcePath;
+
+    const char *recordRole = shape->recordRole.getValue().getString();
+    const int auxiliary = recordRole && BU_STR_EQUAL(recordRole, "auxiliary");
+    const char *shapeSourceName = shape->sourceName.getValue().getString();
+    const char *displayName = shape->displayName.getValue().getString();
+    const char *geometryName = shape->geometryName.getValue().getString();
+
+    shape->sourcePath = newSourcePath;
+    shape->sourceId = revision;
+    if (!auxiliary &&
+	    (!shapeSourceName || !shapeSourceName[0] ||
+	     (oldName && BU_STR_EQUAL(shapeSourceName, oldName)) ||
+	     (oldSourcePath && BU_STR_EQUAL(shapeSourceName, oldSourcePath))))
+	shape->sourceName = newName;
+    if (!auxiliary &&
+	    (!displayName || !displayName[0] ||
+	     (oldName && BU_STR_EQUAL(displayName, oldName)) ||
+	     (oldSourcePath && BU_STR_EQUAL(displayName, oldSourcePath))))
+	shape->displayName = newName;
+    if (!auxiliary &&
+	    (!geometryName || !geometryName[0] ||
+	     (oldName && BU_STR_EQUAL(geometryName, oldName)) ||
+	     (oldSourcePath && BU_STR_EQUAL(geometryName, oldSourcePath))))
+	shape->geometryName = newName;
+
+    std::string identity = newSourcePath;
+    if (auxiliary) {
+	const char *auxName = shape->geometryName.getValue().getString();
+	if (auxName && auxName[0]) {
+	    identity += "::";
+	    identity += auxName;
+	}
+    }
+    shape->sourceIdentity = identity.c_str();
+    shape->cacheIdentity = record_identity_with_revision(identity.c_str(),
+	    revision);
+}
+
+static void
+retarget_material_object_source(SoBRLMaterialObject *object,
+	const char *oldSourcePath,
+	const char *newSourcePath,
+	uint32_t revision)
+{
+    if (!object || !newSourcePath)
+	return;
+
+    const char *oldName = oldSourcePath ? lookup_name_from_path(oldSourcePath) :
+	NULL;
+    const char *newName = lookup_name_from_path(SbString(newSourcePath));
+    if (!newName)
+	newName = newSourcePath;
+
+    const char *sourceName = object->sourceName.getValue().getString();
+    object->sourcePath = newSourcePath;
+    object->sourceId = revision;
+    if (!sourceName || !sourceName[0] ||
+	    (oldName && BU_STR_EQUAL(sourceName, oldName)) ||
+	    (oldSourcePath && BU_STR_EQUAL(sourceName, oldSourcePath)))
+	object->sourceName = newName;
+}
+
+static void
+retarget_realized_node_source(SoNode *node,
+	const char *oldSourcePath,
+	const char *newSourcePath,
+	uint32_t revision)
+{
+    if (!node || !newSourcePath)
+	return;
+
+    if (node->isOfType(SoBRLVListShape::getClassTypeId())) {
+	retarget_realized_shape_source(static_cast<SoBRLVListShape *>(node),
+		oldSourcePath, newSourcePath, revision);
+	return;
+    }
+    if (node->isOfType(SoBRLMeshShape::getClassTypeId())) {
+	retarget_realized_shape_source(static_cast<SoBRLMeshShape *>(node),
+		oldSourcePath, newSourcePath, revision);
+	return;
+    }
+    if (node->isOfType(SoBRLMaterialObject::getClassTypeId())) {
+	retarget_material_object_source(
+		static_cast<SoBRLMaterialObject *>(node), oldSourcePath,
+		newSourcePath, revision);
+	return;
+    }
+    if (node->isOfType(SoGroup::getClassTypeId())) {
+	SoGroup *group = static_cast<SoGroup *>(node);
+	for (int i = 0; i < group->getNumChildren(); i++)
+	    retarget_realized_node_source(group->getChild(i), oldSourcePath,
+		    newSourcePath, revision);
+    }
+}
+
+int
+SoBRLDatabaseSource::retargetDatabaseSource(const char *sourcePath,
+	uint32_t revision)
+{
+    if (!sourcePath || !sourcePath[0])
+	return -1;
+
+    const char *oldPath = this->path.getValue().getString();
+    const int pathChanged = !oldPath || !BU_STR_EQUAL(oldPath, sourcePath);
+    if (revision == 0)
+	revision = this->sourceRevision.getValue() + (pathChanged ? 1 : 0);
+    const int revisionChanged = this->sourceRevision.getValue() != revision;
+    if (!pathChanged && !revisionChanged)
+	return 0;
+
+    std::string oldPathCopy = oldPath ? oldPath : "";
+
+    this->detachFieldSensors();
+    this->path = sourcePath;
+    this->sourceRevision = revision;
+    this->markStale(STALE_SOURCE);
+    for (int i = 0; i < this->getNumChildren(); i++)
+	retarget_realized_node_source(this->getChild(i), oldPathCopy.c_str(),
+		sourcePath, revision);
+    this->attachFieldSensors();
+    return 1;
 }
 
 SbBool
@@ -1769,6 +2193,134 @@ SoBRLDatabaseSource::getRealizedShape(int index) const
     }
     return NULL;
 }
+
+static SbBool
+vlist_shape_is_auxiliary(const SoBRLVListShape *shape)
+{
+    return shape &&
+	strcmp(shape->recordRole.getValue().getString(), "auxiliary") == 0 ?
+	TRUE : FALSE;
+}
+
+
+SoBRLVListShape *
+SoBRLDatabaseSource::findAuxiliaryVListShape(const char *name) const
+{
+    if (!name || !name[0])
+	return NULL;
+
+    for (int i = 0; i < this->getNumChildren(); i++) {
+	SoNode *node = this->getChild(i);
+	if (!node || !node->isOfType(SoBRLVListShape::getClassTypeId()))
+	    continue;
+
+	SoBRLVListShape *shape = static_cast<SoBRLVListShape *>(node);
+	if (vlist_shape_is_auxiliary(shape) &&
+		strcmp(shape->geometryName.getValue().getString(), name) == 0)
+	    return shape;
+    }
+
+    return NULL;
+}
+
+
+int
+SoBRLDatabaseSource::setAuxiliaryLineSet(const char *name,
+	const SbVec3f *points,
+	const int32_t *commands,
+	int count)
+{
+    if (!name || !name[0] || count < 0 || (count > 0 && !points))
+	return 0;
+
+    SoBRLVListShape *shape = this->findAuxiliaryVListShape(name);
+    if (count == 0) {
+	if (!shape)
+	    return 0;
+	for (int i = 0; i < this->getNumChildren(); i++) {
+	    if (this->getChild(i) == shape) {
+		this->removeChild(i);
+		return 1;
+	    }
+	}
+	return 0;
+    }
+
+    if (!shape) {
+	shape = new SoBRLVListShape;
+	shape->setName(SbName(name));
+	this->addChild(shape);
+    }
+
+    std::vector<int32_t> fallbackCommands;
+    if (!commands) {
+	fallbackCommands.reserve(count);
+	for (int i = 0; i < count; i++)
+	    fallbackCommands.push_back(i == 0 ? SoBRLVListShape::MOVE :
+		    SoBRLVListShape::DRAW);
+	commands = fallbackCommands.data();
+    }
+
+    const char *sourcePath = this->path.getValue().getString();
+    const uint32_t revision = this->sourceRevision.getValue();
+    std::string identity = sourcePath ? sourcePath : "";
+    if (!identity.empty())
+	identity += "::";
+    identity += name;
+
+    shape->sourcePath = sourcePath ? sourcePath : "";
+    shape->sourceName = name;
+    shape->sourceType = "auxiliary-line-set";
+    shape->sourceId = revision;
+    shape->displayName = name;
+    shape->geometryName = name;
+    shape->sourceIdentity = identity.c_str();
+    shape->cacheIdentity = record_identity_with_revision(identity.c_str(),
+	    revision);
+    shape->databaseIntent = TRUE;
+    shape->overlayIntent = FALSE;
+    shape->hudIntent = FALSE;
+    shape->localSource = FALSE;
+    shape->sharedSource = FALSE;
+    shape->nonDatabaseSource = FALSE;
+    shape->drawMode = source_record_draw_mode(this);
+    shape->recordRole = "auxiliary";
+    shape->geometryKind = "line";
+    shape->materialColorValid = this->materialColorValid.getValue();
+    shape->materialColor = this->materialColor.getValue();
+    shape->materialRevision = this->materialRevision.getValue();
+    shape->colorOverride = this->colorOverride.getValue();
+    shape->color = this->color.getValue();
+    shape->visible = this->visible.getValue();
+    shape->highlighted = this->highlighted.getValue();
+    shape->lineStyle = this->lineStyle.getValue();
+    shape->lineWidth = this->lineWidth.getValue();
+    shape->transparency = this->transparency.getValue();
+    shape->setLineSet(points, commands, count);
+    sync_shape_owner_state(shape, this);
+    return 1;
+}
+
+
+int
+SoBRLDatabaseSource::clearAuxiliaryShapes(void)
+{
+    int removed = 0;
+    for (int i = this->getNumChildren() - 1; i >= 0; i--) {
+	SoNode *node = this->getChild(i);
+	if (!node || !node->isOfType(SoBRLVListShape::getClassTypeId()))
+	    continue;
+
+	SoBRLVListShape *shape = static_cast<SoBRLVListShape *>(node);
+	if (!vlist_shape_is_auxiliary(shape))
+	    continue;
+
+	this->removeChild(i);
+	removed++;
+    }
+    return removed;
+}
+
 
 SoBRLMeshShape *
 SoBRLDatabaseSource::getRealizedMesh(void) const
@@ -2740,6 +3292,12 @@ SoBRLDatabaseSource::getSummary(BRLObolDatabaseSourceSummary &summary) const
     summary.materialPolicy = this->materialPolicy.getValue();
     summary.colorOverride = this->colorOverride.getValue();
     summary.color = this->color.getValue();
+    summary.drawMatrixValid = this->drawMatrixValid.getValue();
+    summary.drawMatrix = this->drawMatrix.getValue();
+    summary.drawCenterValid = this->drawCenterValid.getValue();
+    summary.drawCenter = this->drawCenter.getValue();
+    summary.drawSizeValid = this->drawSizeValid.getValue();
+    summary.drawSize = this->drawSize.getValue();
     summary.stale = this->stale.getValue();
     summary.staleReason = this->staleReason.getValue();
     summary.realizedShapeCount = this->getRealizedShapeCount();

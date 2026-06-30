@@ -4708,6 +4708,9 @@ entry:
   tests:
     - `cmake --build build --target libged ged_test_obol_draw_sync -j2`
     - `ctest --test-dir build -R '^ged_test_obol_draw_sync$' --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|rt_view_legacy_bsg|libbrlobol_scene_ref|libbrlobol_lod_update_action|ged_test_ged_draw_scene|ged_test_drawing_basic|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_obol_draw_sync|test_qtcad_obol_draw_sync|test_qtcad_obol_pick|test_qtcad_obol_snap|test_qtcad_obol_measure|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_obol_draw_sync|brlobol_pivot_guard)$' --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|rt_view_legacy_bsg|libbrlobol_scene_ref|libbrlobol_lod_update_action|ged_test_ged_draw_scene|ged_test_drawing_basic|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_obol_draw_sync|test_qtcad_obol_draw_sync|test_qtcad_obol_pick|test_qtcad_obol_snap|test_qtcad_obol_measure|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --output-on-failure`
     - `ctest --test-dir build -R '^brlobol_pivot_guard$' --output-on-failure`
     - `ctest --test-dir build -R '^(brlobol_pivot_guard|rt_view_legacy_bsg|libbrlobol_scene_ref|libbrlobol_lod_update_action|ged_test_ged_draw_scene|ged_test_drawing_basic|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_obol_draw_sync|test_qtcad_obol_draw_sync|test_qtcad_obol_pick|test_qtcad_obol_snap|test_qtcad_obol_measure|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --output-on-failure`
     - `git diff --check`
@@ -5927,6 +5930,8 @@ entry:
     - `cmake --build build --target libged ged_test_obol_draw_sync -j2`
     - `ctest --test-dir build -R '^(ged_test_obol_draw_sync|brlobol_pivot_guard)$' --output-on-failure`
     - `ctest --test-dir build -R '^(brlobol_pivot_guard|rt_view_legacy_bsg|libbrlobol_scene_ref|libbrlobol_lod_update_action|ged_test_ged_draw_scene|ged_test_drawing_basic|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_obol_draw_sync|test_qtcad_obol_draw_sync|test_qtcad_obol_pick|test_qtcad_obol_snap|test_qtcad_obol_measure|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --output-on-failure`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --output-on-failure`
+    - `git diff --check`
   notes:
     - Public shape-ref material summaries already preferred Obol; this moves
       the internal source-adapter summary used by copy/readback helpers to the
@@ -6057,11 +6062,567 @@ entry:
     - `src/libged/bsg_ged_draw_source.c`
     - `src/libged/tests/draw/obol_sync.cpp`
   tests:
-    - pending
+    - `cmake --build build --target libged ged_test_obol_draw_sync -j2`
+    - `ctest --test-dir build -R '^(ged_test_obol_draw_sync|brlobol_pivot_guard)$' --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|rt_view_legacy_bsg|libbrlobol_scene_ref|libbrlobol_lod_update_action|ged_test_ged_draw_scene|ged_test_drawing_basic|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_obol_draw_sync|test_qtcad_obol_draw_sync|test_qtcad_obol_pick|test_qtcad_obol_snap|test_qtcad_obol_measure|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --output-on-failure`
+    - `git diff --check`
   notes:
     - The database-leaf draft commit path already had a specific Obol move;
       this moves the ownership behavior to the shared source-owner append
       operation for other draft/group commit paths.
+
+
+entry:
+  date: 2026-06-30
+  id: source-adapter-obol-clear-scope-lifecycle
+  capability: scene-source
+  summary: Routed source-adapter group-content clear and clear-scope teardown
+    through owned Obol group lifecycle bridges.
+  changed:
+    - Added `ged_draw_obol_group_clear_for_path`, a private bridge that clears
+      an owned Obol group through the libged-owned scene controller.
+    - Added source-adapter Obol group-clear callbacks and made
+      `ged_draw_scene_ref_free_group_contents` clear matching owned Obol group
+      contents before freeing retained BSG children.
+    - Made `ged_draw_scene_ref_clear_scope_children` remove the matching owned
+      Obol group subtree before retained child group content free, detach, and
+      release.
+    - Extended `ged_test_obol_draw_sync` with an Obol-only child group sentinel
+      proving direct GED draw clear removes owned Obol group/source subtrees.
+    - Tightened the pivot guard with the new group-clear bridge and direct-clear
+      regression token.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/draw_obol.cpp`
+    - `src/libged/tests/draw/obol_sync.cpp`
+  tests:
+    - `cmake --build build --target libged ged_test_obol_draw_sync -j2`
+    - `ctest --test-dir build -R '^(ged_test_obol_draw_sync|brlobol_pivot_guard)$' --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|rt_view_legacy_bsg|libbrlobol_scene_ref|libbrlobol_lod_update_action|ged_test_ged_draw_scene|ged_test_drawing_basic|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_obol_draw_sync|test_qtcad_obol_draw_sync|test_qtcad_obol_pick|test_qtcad_obol_snap|test_qtcad_obol_measure|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --output-on-failure`
+    - `ctest --test-dir build -R '^brlobol_pivot_guard$' --output-on-failure`
+    - `git diff --check`
+  notes:
+    - The BSG adapter still supplies the scoped child snapshot and final
+      compatibility teardown, but owned Obol group contents/subtrees are now
+      mutated first for this lifecycle family.
+
+
+entry:
+  date: 2026-06-30
+  id: source-adapter-obol-nested-group-erase
+  capability: scene-source
+  summary: Routed exact and nested group path erase through owned Obol group
+    removal before retained fallback.
+  changed:
+    - Added `ged_draw_obol_group_erase_subpath_for_path`, a private bridge that
+      erases a relative group subpath through the libged-owned Obol scene
+      controller.
+    - Added source-adapter Obol group-subpath erase callbacks and made nested
+      DB subpath erase clear matching owned Obol group topology before retained
+      nested-subpath cleanup.
+    - Updated common exact path erase to treat owned Obol nested/exact group
+      removal as part of the public erase result, covering Obol-only nested
+      groups that do not have a retained BSG child match.
+    - Extended `ged_test_obol_draw_sync` with a DB-backed Obol-only nested
+      group sentinel proving active-scope path erase removes the owned Obol
+      nested group.
+    - Tightened the pivot guard with the subpath erase bridge, source-adapter
+      helper, and nested group erase regression token.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/draw_obol.cpp`
+    - `src/libged/tests/draw/obol_sync.cpp`
+  tests:
+    - `cmake --build build --target libged ged_test_obol_draw_sync -j2`
+    - `ctest --test-dir build -R '^(ged_test_obol_draw_sync|brlobol_pivot_guard)$' --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|rt_view_legacy_bsg|libbrlobol_scene_ref|libbrlobol_lod_update_action|ged_test_ged_draw_scene|ged_test_drawing_basic|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_obol_draw_sync|test_qtcad_obol_draw_sync|test_qtcad_obol_pick|test_qtcad_obol_snap|test_qtcad_obol_measure|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --output-on-failure`
+  notes:
+    - The retained adapter still supplies the temporary backing-store fallback
+      for callers without an owned Obol controller, but path erasure now treats
+      the Obol group tree as authoritative when it has the targeted group.
+
+
+entry:
+  date: 2026-06-30
+  id: source-adapter-obol-auxiliary-vlist-publication
+  capability: scene-source
+  summary: Added named auxiliary VLIST publication for database sources and
+    routed NMG/submodel auxiliary line output through owned Obol realized
+    shapes.
+  changed:
+    - Added libbrlobol database-source APIs for finding, publishing, and
+      clearing named auxiliary VLIST shapes, plus scene-controller source-path
+      wrappers for auxiliary line-set publication and clearing.
+    - Added GED private Obol bridges for source-path auxiliary line-set
+      publication and auxiliary realized-shape clearing.
+    - Added source-adapter callbacks so geometry clear removes owned Obol
+      auxiliary VLISTs and NMG normal/remainder line publication writes named
+      auxiliary line sets into the owned Obol source before retained BSG
+      compatibility publication.
+    - Mirrored submodel leaf wireframe publication from temporary retained leaf
+      geometry into the owning Obol source as named auxiliary VLISTs, avoiding a
+      source-under-source API for this realized-geometry case.
+    - Extended `test_brlobol_lod_update_action` to verify auxiliary source
+      summary metadata and clearing, and extended `ged_test_obol_draw_sync` to
+      verify the GED bridge and geometry-clear lifecycle.
+    - Tightened the pivot guard with the new libbrlobol APIs, GED bridges,
+      source-adapter helpers, and regression tokens.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `include/brlobol/database_source.h`
+    - `include/brlobol/scene_controller.h`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `src/libbrlobol/database_source.cpp`
+    - `src/libbrlobol/scene_controller.cpp`
+    - `src/libbrlobol/tests/test_lod_update_action.cpp`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/draw_obol.cpp`
+    - `src/libged/tests/draw/obol_sync.cpp`
+  tests:
+    - `cmake --build build --target libbrlobol libged test_brlobol_lod_update_action ged_test_obol_draw_sync -j2`
+    - `ctest --test-dir build -R '^(libbrlobol_lod_update_action|ged_test_obol_draw_sync)$' --output-on-failure`
+    - `ctest --test-dir build -R '^(libbrlobol_lod_update_action|ged_test_obol_draw_sync|brlobol_pivot_guard)$' --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|rt_view_legacy_bsg|libbrlobol_scene_ref|libbrlobol_lod_update_action|ged_test_ged_draw_scene|ged_test_drawing_basic|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_obol_draw_sync|test_qtcad_obol_draw_sync|test_qtcad_obol_pick|test_qtcad_obol_snap|test_qtcad_obol_measure|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --output-on-failure`
+    - `cmake --build build --target libged ged_test_obol_draw_sync -j2`
+    - `ctest --test-dir build -R '^(ged_test_obol_draw_sync|brlobol_pivot_guard)$' --output-on-failure`
+  notes:
+    - Submodel child-source topology still needs a separate source/topology API
+      decision.  This slice covers auxiliary realized geometry that naturally
+      belongs under an existing database source.
+
+
+entry:
+  date: 2026-06-30
+  id: source-adapter-obol-annotation-vlist-publication
+  capability: scene-source
+  summary: Made ANNOT line-segment drawable geometry owned and summarized as
+    Obol annotation VLIST data.
+  changed:
+    - Added a private GED Obol bridge for source-path annotation line-set
+      publication and source-adapter callbacks/helpers for ANNOT line segments.
+    - Updated ANNOT publication to derive model-space line-segment VLIST points
+      from `ann->V + vertex` while preserving the retained typed BSG annotation
+      record for text and richer segment compatibility.
+    - Stamped libbrlobol database-source ANNOT VLIST realization as
+      `annotation` and restored ANNOT base-point offsets after RT plot
+      conversion so Obol-owned source bounds and point readback are in model
+      coordinates.
+    - Updated GED Obol geometry summaries to report annotation VLIST summaries
+      as `annotation`.
+    - Extended `ged_test_obol_draw_sync` with a real ANNOT draw/summary/source
+      metadata regression and tightened the pivot guard for the new bridge and
+      coverage tokens.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `src/libbrlobol/database_source.cpp`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/draw_obol.cpp`
+    - `src/libged/tests/draw/obol_sync.cpp`
+  tests:
+    - `cmake --build build --target libbrlobol libged ged_test_obol_draw_sync -j2`
+    - `ctest --test-dir build -R '^(ged_test_obol_draw_sync|brlobol_pivot_guard)$' --output-on-failure`
+    - `cmake --build build --target test_brlobol_prototype -j2`
+    - `ctest --test-dir build -R '^(libbrlobol_prototype|ged_test_obol_draw_sync|brlobol_pivot_guard)$' --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|rt_view_legacy_bsg|libbrlobol_scene_ref|libbrlobol_lod_update_action|ged_test_ged_draw_scene|ged_test_drawing_basic|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_obol_draw_sync|test_qtcad_obol_draw_sync|test_qtcad_obol_pick|test_qtcad_obol_snap|test_qtcad_obol_measure|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --output-on-failure`
+  notes:
+    - `libbrlobol_prototype` still fails later because the local build tree is
+      missing `build/share/db/pinewood.g`; the staged broad Capability 1 suite
+      passes.
+    - Full typed annotation/text/curve export remains a later feature/export
+      behavior family; this slice covers source-owned drawable ANNOT line
+      geometry.
+
+
+entry:
+  date: 2026-06-30
+  id: source-adapter-obol-source-rename
+  capability: scene-source
+  summary: Routed GED database-source rename transactions through an in-place
+    libbrlobol source retarget API.
+  changed:
+    - Added `SoBRLDatabaseSource::retargetDatabaseSource` to update source
+      path/revision/stale state and recursively retarget realized VLIST, mesh,
+      and material-object source metadata.
+    - Added `SoBRLSceneController::renameDatabaseSource` to rename owned
+      database-source nodes without clearing the full scene, including conflict
+      cleanup and structural revision accounting.
+    - Added the GED private Obol bridge
+      `ged_draw_obol_database_source_rename_for_path` and routed
+      `GED_DRAW_TXN_SOURCE_RENAMED` through it before the full-scene sync
+      fallback.
+    - Made libbrlobol database-source realization copy source display/material
+      override state into fresh realized VLIST/mesh nodes, so rename-triggered
+      realization preserves line style, line width, visibility, transparency,
+      color, and material metadata.
+    - Extended `ged_test_obol_draw_sync` to draw a source, rename the database
+      object through GED `move`, verify the owned Obol source and realized
+      shape metadata retarget in place, and erase the renamed source back to
+      the baseline.
+    - Tightened the pivot guard with the source retarget API, scene-controller
+      rename API, GED bridge implementation, and rename regression strings.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `include/brlobol/database_source.h`
+    - `include/brlobol/scene_controller.h`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `src/libbrlobol/database_source.cpp`
+    - `src/libbrlobol/scene_controller.cpp`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/draw_obol.cpp`
+    - `src/libged/tests/draw/obol_sync.cpp`
+  tests:
+    - `cmake --build build --target libbrlobol libged ged_test_obol_draw_sync -j2`
+    - `ctest --test-dir build -R '^ged_test_obol_draw_sync$' --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_obol_draw_sync|brlobol_pivot_guard)$' --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|rt_view_legacy_bsg|libbrlobol_scene_ref|libbrlobol_lod_update_action|ged_test_ged_draw_scene|ged_test_drawing_basic|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_obol_draw_sync|test_qtcad_obol_draw_sync|test_qtcad_obol_pick|test_qtcad_obol_snap|test_qtcad_obol_measure|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --output-on-failure`
+  notes:
+    - Source update/reference-removal transactions still use the conservative
+      full-scene sync path; this slice moves the rename behavior family to an
+      owned-source mutation API.
+
+
+entry:
+  date: 2026-06-30
+  id: source-adapter-obol-source-update-family
+  capability: scene-source
+  summary: Routed source-update, source-removal, and non-root reference
+    removal transactions through targeted owned Obol database-source mutation.
+  changed:
+    - Added owned-source path/component collection helpers in `draw_obol.cpp`
+      and used them to target matching libged-owned Obol database sources for
+      stale marking, redraw/replacement, and removal.
+    - Routed `GED_DRAW_TXN_SOURCE_UPDATED` through targeted owned-source
+      stale, redraw, and removed-object handling before the full-scene sync
+      fallback.
+    - Routed `GED_DRAW_TXN_SOURCE_REFERENCES_REMOVED` through non-root
+      component matching so top-level owned sources are preserved while child
+      component sources are removed.
+    - Added
+      `ged_draw_obol_database_sources_remove_for_component_name` and used it
+      from the source adapter's global component-erasure path so direct global
+      retained component erases keep owned Obol sources synchronized.
+    - Extended `ged_test_obol_draw_sync` with nested-path regression coverage
+      for targeted stale, redraw, non-root reference removal, and removed-source
+      component cleanup while preserving unrelated owned-source display state.
+    - Updated the pivot guard with the new component-removal bridge, targeted
+      transaction helpers, and regression strings.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/draw_obol.cpp`
+    - `src/libged/tests/draw/obol_sync.cpp`
+  tests:
+    - `cmake --build build --target libged ged_test_obol_draw_sync -j2`
+    - `ctest --test-dir build -R '^ged_test_obol_draw_sync$' --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_obol_draw_sync|brlobol_pivot_guard)$' --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|rt_view_legacy_bsg|libbrlobol_scene_ref|libbrlobol_lod_update_action|ged_test_ged_draw_scene|ged_test_drawing_basic|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_obol_draw_sync|test_qtcad_obol_draw_sync|test_qtcad_obol_pick|test_qtcad_obol_snap|test_qtcad_obol_measure|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --output-on-failure`
+  notes:
+    - Scoped/view-filtered component erasure still remains retained-adapter
+      local; the new source-adapter bridge is intentionally limited to global
+      component erasure until Obol owns scoped database-source placement.
+
+
+entry:
+  date: 2026-06-30
+  id: source-adapter-obol-display-transaction-family
+  capability: scene-source
+  summary: Stopped display, material, and stale-source transactions from
+    rebuilding the owned Obol scene after owner-first mutation.
+  changed:
+    - Added targeted transaction-observer handling for `GED_DRAW_TXN_VISIBILITY`
+      that updates matching owned Obol database sources and draw groups by
+      path/component.
+    - Added targeted `GED_DRAW_TXN_STALE_SOURCE` handling: view-scoped stale
+      sync refreshes and realizes matching owned sources, while non-view stale
+      transactions mark matching owned Obol database sources stale without
+      falling back to a full-scene rebuild.
+    - Treated material-change and material-refresh transaction observer
+      results as already handled after the lower-level owner-first shape
+      material refresh path has run, preserving Obol-only sources.
+    - Left transparency and highlight transactions on their existing
+      owner-first shape-ref mutation path and added regression coverage proving
+      they do not trigger broad Obol scene sync.
+    - Extended `ged_test_obol_draw_sync` with an Obol-only database-source
+      canary that must survive visibility, transparency, highlight,
+      stale-source, material-change, and material-refresh transactions.
+    - Updated the pivot guard with the new transaction helper tokens and
+      canary regression strings.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `src/libged/draw_obol.cpp`
+    - `src/libged/tests/draw/obol_sync.cpp`
+  tests:
+    - `cmake --build build --target libged ged_test_obol_draw_sync -j2`
+    - `ctest --test-dir build -R '^ged_test_obol_draw_sync$' --output-on-failure`
+    - `cmake --build build --target libged ged_test_obol_draw_sync test_qtcad_obol_draw_sync -j2`
+    - `ctest --test-dir build -R '^(ged_test_obol_draw_sync|test_qtcad_obol_draw_sync)$' --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_obol_draw_sync|brlobol_pivot_guard)$' --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|rt_view_legacy_bsg|libbrlobol_scene_ref|libbrlobol_lod_update_action|ged_test_ged_draw_scene|ged_test_drawing_basic|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_obol_draw_sync|test_qtcad_obol_draw_sync|test_qtcad_obol_pick|test_qtcad_obol_snap|test_qtcad_obol_measure|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --output-on-failure`
+  notes:
+    - `GED_DRAW_TXN_ERASE_PREFIX` and `GED_DRAW_TXN_REDRAW` were handled in
+      the following slice.
+
+
+entry:
+  date: 2026-06-30
+  id: source-adapter-obol-redraw-erase-prefix-family
+  capability: scene-source
+  summary: Replaced redraw and erase-prefix transaction full-scene Obol sync
+    with targeted owned-source mutation.
+  changed:
+    - Added targeted erase-prefix sync that removes matching owned Obol
+      database sources and non-overlay draw groups by path prefix without
+      clearing unrelated sources.
+    - Added targeted redraw sync that refreshes matching/current retained draw
+      paths through `replaceDatabaseSource` without clearing Obol-only
+      database sources.
+    - Routed `GED_DRAW_TXN_ERASE_PREFIX` and `GED_DRAW_TXN_REDRAW` through the
+      targeted helpers in `ged_draw_obol_scene_sync_transaction`.
+    - Extended `ged_test_obol_draw_sync` canary coverage to prove redraw keeps
+      Obol-only sources and erase-prefix removes only matching owned Obol
+      sources.
+    - Updated the pivot guard with the targeted redraw/erase-prefix helpers
+      and regression strings.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `src/libged/draw_obol.cpp`
+    - `src/libged/tests/draw/obol_sync.cpp`
+  tests:
+    - `cmake --build build --target libged ged_test_obol_draw_sync test_qtcad_obol_draw_sync -j2`
+    - `ctest --test-dir build -R '^(ged_test_obol_draw_sync|test_qtcad_obol_draw_sync)$' --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_obol_draw_sync|brlobol_pivot_guard)$' --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|rt_view_legacy_bsg|libbrlobol_scene_ref|libbrlobol_lod_update_action|ged_test_ged_draw_scene|ged_test_drawing_basic|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_obol_draw_sync|test_qtcad_obol_draw_sync|test_qtcad_obol_pick|test_qtcad_obol_snap|test_qtcad_obol_measure|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --output-on-failure`
+  notes:
+    - Explicit full-scene sync remains available for initial attach/manual
+      full resync, but the named draw transaction observer cases no longer use
+      it as their normal mutation path.
+
+
+entry:
+  date: 2026-06-30
+  id: source-adapter-obol-scoped-component-erase-coverage
+  capability: scene-source
+  summary: Confirmed scoped component erasure removes matched owned Obol
+    database sources through the source-adapter record path.
+  changed:
+    - Added `ged_test_obol_draw_sync` coverage for active-view scoped
+      non-root component erase, proving the source adapter removes the matched
+      owned Obol database source without disturbing a sibling source canary.
+    - Updated the Capability 1 status notes to stop listing scoped component
+      erasure as retained-adapter-local remaining work.
+    - Updated the pivot guard to require the scoped component erase regression
+      string and private source-adapter entry point.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `src/libged/tests/draw/obol_sync.cpp`
+  tests:
+    - `cmake --build build --target libged ged_test_obol_draw_sync -j2`
+    - `ctest --test-dir build -R '^(ged_test_obol_draw_sync|brlobol_pivot_guard)$' --output-on-failure`
+  notes:
+    - No implementation change was needed in this slice:
+      `ged_draw_shape_ref_release` already removes the semantic owned Obol
+      source before releasing the retained source owner.
+
+
+entry:
+  date: 2026-06-30
+  id: source-adapter-obol-source-placement-family
+  capability: scene-source
+  summary: Added source-owned Obol draw placement metadata and routed GED
+    database-leaf placement through it.
+  changed:
+    - Added draw-matrix, draw-center, and draw-size fields plus
+      `setPlacementState` to `SoBRLDatabaseSource`.
+    - Added `SoBRLSceneController::setDatabaseSourcePlacementState` and made
+      database-source placement sync onto realized VLIST and mesh shapes.
+    - Added the private libged bridge
+      `ged_draw_obol_database_source_set_placement_for_path` and used it when
+      committing database-leaf drafts with draw matrices and draw-size state.
+    - Updated `ged_test_obol_draw_sync` to verify source placement summaries,
+      realized-shape placement sync, and draw-state matrix readback through
+      the source-owned bridge.
+    - Updated the pivot guard and Capability 1 status notes for the new
+      placement API.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `include/brlobol/database_source.h`
+    - `include/brlobol/scene_controller.h`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `src/libbrlobol/database_source.cpp`
+    - `src/libbrlobol/scene_controller.cpp`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/draw_obol.cpp`
+    - `src/libged/tests/draw/obol_sync.cpp`
+  tests:
+    - `cmake --build build --target libbrlobol libged ged_test_obol_draw_sync -j2`
+    - `cmake --build build --target ged_test_obol_draw_sync -j2`
+    - `ctest --test-dir build -R '^ged_test_obol_draw_sync$' --output-on-failure`
+  notes:
+    - Database path realization already has transform nodes for `ts_mat`; this
+      slice owns GED draw-state placement metadata on the Obol database source
+      and keeps realized-shape metadata synchronized from that owner.
+
+
+entry:
+  date: 2026-06-30
+  id: source-adapter-obol-source-display-propagation
+  capability: scene-source
+  summary: Made Obol database-source display mutation propagate to realized
+    VLIST and mesh shapes.
+  changed:
+    - Added `SoBRLDatabaseSource::setDisplayState` and moved controller
+      database-source display/source-revision mutation through that source
+      owner API.
+    - Extended database-source realized-shape sync so draw mode, visibility,
+      highlight, line style/width, transparency, color override/color, and
+      material color/revision flow from the source owner to database-intent
+      realized VLIST and mesh shapes.
+    - Extended `ged_test_obol_draw_sync` to verify GED visible/highlight/color
+      mutations update realized Obol shape display state as well as source
+      summaries.
+    - Updated the pivot guard and Capability 1 status notes for source display
+      propagation.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `include/brlobol/database_source.h`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `src/libbrlobol/database_source.cpp`
+    - `src/libbrlobol/scene_controller.cpp`
+    - `src/libged/tests/draw/obol_sync.cpp`
+  tests:
+    - `cmake --build build --target libbrlobol libged ged_test_obol_draw_sync -j2`
+    - `ctest --test-dir build -R '^ged_test_obol_draw_sync$' --output-on-failure`
+  notes:
+    - This closes a real owner-state gap exposed by the placement slice:
+      database-source fields are now the source of truth for database-intent
+      realized shape display metadata, while prototype/non-database diagnostic
+      shapes keep local draw-mode and presentation fields.
+
+
+entry:
+  date: 2026-06-30
+  id: source-adapter-obol-publication-placement-family
+  capability: scene-source
+  summary: Moved source-adapter geometry publication placement metadata through
+    the Obol database-source placement owner.
+  changed:
+    - Added a source-adapter-local placement sync helper that snapshots the
+      retained draw matrix and positive bounds metadata before publishing
+      VLIST, point-set, mesh, annotation, and auxiliary line geometry into an
+      owned Obol database source.
+    - Made bridge-created VLIST and mesh realized shapes inherit source-owned
+      draw matrix, center, and size placement state.
+    - Routed GED shape-ref center and VLIST bounds updates through the
+      source-level placement bridge so source summaries and realized-shape
+      placement metadata stay aligned.
+    - Extended `ged_test_obol_draw_sync` and the pivot guard to cover
+      source-owned center/bounds placement mutation.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/draw_obol.cpp`
+    - `src/libged/tests/draw/obol_sync.cpp`
+  tests:
+    - `cmake --build build --target libged ged_test_obol_draw_sync -j2`
+    - `ctest --test-dir build -R '^ged_test_obol_draw_sync$' --output-on-failure`
+  notes:
+    - BSG does not expose independent validity flags for draw matrix, center,
+      or size.  The sync helper always forwards the retained draw matrix and
+      forwards center/size only when the retained size is positive.
+
+
+entry:
+  date: 2026-06-30
+  id: libbrlobol-source-draw-mode-propagation
+  capability: scene-source
+  summary: Made database-source draw-mode mutation immediately synchronize
+    database-intent realized shapes.
+  changed:
+    - Added `SoBRLDatabaseSource::setDrawModeState` to sanitize source draw
+      mode changes and resync realized owner state deterministically.
+    - Routed `SoBRLSceneController::setDatabaseSourceDrawMode` through the new
+      source owner API instead of writing the field directly.
+    - Extended `test_brlobol_lod_update_action` to verify source draw-mode
+      changes update database-intent realized mesh draw mode and shape summary
+      readback immediately.
+    - Updated the pivot guard and Capability 1 notes for source-owned
+      draw-mode propagation.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `include/brlobol/database_source.h`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `src/libbrlobol/database_source.cpp`
+    - `src/libbrlobol/scene_controller.cpp`
+    - `src/libbrlobol/tests/test_lod_update_action.cpp`
+  tests:
+    - `cmake --build build --target libbrlobol test_brlobol_lod_update_action -j2`
+    - `ctest --test-dir build -R '^libbrlobol_lod_update_action$' --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|rt_view_legacy_bsg|libbrlobol_scene_ref|libbrlobol_lod_update_action|ged_test_ged_draw_scene|ged_test_drawing_basic|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_obol_draw_sync|test_qtcad_obol_draw_sync|test_qtcad_obol_pick|test_qtcad_obol_snap|test_qtcad_obol_measure|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --output-on-failure`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|rt_view_legacy_bsg|libbrlobol_scene_ref|libbrlobol_lod_update_action|ged_test_ged_draw_scene|ged_test_drawing_basic|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_obol_draw_sync|test_qtcad_obol_draw_sync|test_qtcad_obol_pick|test_qtcad_obol_snap|test_qtcad_obol_measure|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --output-on-failure`
+  notes:
+    - This keeps existing stale/realization semantics unchanged; it only makes
+      owner-state mirroring deterministic for database-intent realized shapes.
+
+
+entry:
+  date: 2026-06-30
+  id: libbrlobol-source-material-policy-owner
+  capability: scene-source
+  summary: Moved database-source material-policy mutation under the source
+    owner API.
+  changed:
+    - Added `SoBRLDatabaseSource::setMaterialPolicyState` to sanitize
+      material-policy changes and report no-op updates at the source owner.
+    - Routed `SoBRLSceneController::setDatabaseSourceMaterialPolicy` through
+      the source owner API instead of writing the field directly.
+    - Extended `test_brlobol_lod_update_action` to verify controller-driven
+      material-policy changes, invalid-policy sanitization, and missing-source
+      reporting through the source owner path.
+    - Updated the pivot guard and Capability 1 notes for source-owned
+      material-policy mutation.
+  files:
+    - `backend_capabilities.txt`
+    - `backend_worklog.txt`
+    - `include/brlobol/database_source.h`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `src/libbrlobol/database_source.cpp`
+    - `src/libbrlobol/scene_controller.cpp`
+    - `src/libbrlobol/tests/test_lod_update_action.cpp`
+  tests:
+    - `cmake --build build --target libbrlobol test_brlobol_lod_update_action -j2`
+    - `ctest --test-dir build -R '^libbrlobol_lod_update_action$' --output-on-failure`
+  notes:
+    - This slice preserves material resolution behavior; it removes the
+      remaining controller-side direct mutation for source material policy.
 
 
 Entry Template

@@ -155,6 +155,12 @@ public:
 	const SbVec3f &drawCenter,
 	SbBool drawSizeValid,
 	float drawSize);
+    int publishDatabaseSourceAuxiliaryLineSet(const char *sourcePath,
+	const char *name,
+	const SbVec3f *points,
+	const int32_t *commands,
+	int count);
+    int clearDatabaseSourceAuxiliaryShapes(const char *sourcePath);
 
     SoBRLDatabaseSource *getDatabaseSource(int index) const;
     int getDatabaseSourceCount(void) const;
@@ -162,6 +168,9 @@ public:
     int replaceDatabaseSource(const char *sourcePath,
 	struct db_i *database,
 	int drawMode,
+	uint32_t sourceRevision);
+    int renameDatabaseSource(const char *sourcePath,
+	const char *newSourcePath,
 	uint32_t sourceRevision);
     int setDatabaseSourceState(const char *sourcePath,
 	SbBool sourceRevisionValid,
@@ -181,6 +190,13 @@ public:
 	int drawMode);
     int setDatabaseSourceMaterialPolicy(const char *sourcePath,
 	int materialPolicy);
+    int setDatabaseSourcePlacementState(const char *sourcePath,
+	SbBool drawMatrixValid,
+	const SbMatrix &drawMatrix,
+	SbBool drawCenterValid,
+	const SbVec3f &drawCenter,
+	SbBool drawSizeValid,
+	float drawSize);
     int markDatabaseSourceStale(const char *sourcePath,
 	uint32_t staleReason);
     int setDatabaseSourceRealizationState(const char *sourcePath,

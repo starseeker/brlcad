@@ -22,8 +22,10 @@
 #include <Inventor/fields/SoSFEnum.h>
 #include <Inventor/fields/SoSFFloat.h>
 #include <Inventor/fields/SoSFInt32.h>
+#include <Inventor/fields/SoSFMatrix.h>
 #include <Inventor/fields/SoSFString.h>
 #include <Inventor/fields/SoSFUInt32.h>
+#include <Inventor/fields/SoSFVec3f.h>
 #include <Inventor/nodes/SoSeparator.h>
 
 class SoBRLVListShape;
@@ -69,6 +71,12 @@ struct BRLOBOL_EXPORT BRLObolDatabaseSourceSummary {
     int materialPolicy;
     SbBool colorOverride;
     SbColor color;
+    SbBool drawMatrixValid;
+    SbMatrix drawMatrix;
+    SbBool drawCenterValid;
+    SbVec3f drawCenter;
+    SbBool drawSizeValid;
+    float drawSize;
     SbBool stale;
     uint32_t staleReason;
     int realizedShapeCount;
@@ -313,6 +321,12 @@ public:
     SoSFEnum materialPolicy;
     SoSFBool colorOverride;
     SoSFColor color;
+    SoSFBool drawMatrixValid;
+    SoSFMatrix drawMatrix;
+    SoSFBool drawCenterValid;
+    SoSFVec3f drawCenter;
+    SoSFBool drawSizeValid;
+    SoSFFloat drawSize;
     SoSFFloat tessellationAbsTol;
     SoSFFloat tessellationRelTol;
     SoSFFloat tessellationNormTol;
@@ -352,9 +366,13 @@ public:
 	struct db_i *database,
 	int mode,
 	uint32_t revision);
+    int retargetDatabaseSource(const char *sourcePath,
+	uint32_t revision);
 
     void markStale(void);
     void markStale(uint32_t reason);
+    int setDrawModeState(int drawMode);
+    int setMaterialPolicyState(int materialPolicy);
     int setRealizationState(int realizationStatus,
 	uint32_t realizedSourceRevision,
 	uint32_t realizedInputsRevision,
@@ -366,6 +384,25 @@ public:
 	uint32_t botThreshold,
 	float curveScale,
 	float pointScale);
+    int setDisplayState(SbBool sourceRevisionValid,
+	uint32_t sourceRevision,
+	uint32_t inputsRevision,
+	SbBool visible,
+	SbBool highlighted,
+	int lineStyle,
+	int lineWidth,
+	float transparency,
+	SbBool colorOverride,
+	const SbColor &color,
+	SbBool materialColorValid,
+	const SbColor &materialColor,
+	uint32_t materialRevision);
+    int setPlacementState(SbBool drawMatrixValid,
+	const SbMatrix &drawMatrix,
+	SbBool drawCenterValid,
+	const SbVec3f &drawCenter,
+	SbBool drawSizeValid,
+	float drawSize);
     SbBool needsRealization(void) const;
     SbBool realizePrototypeWireframe(void);
     SbBool realizeDatabaseWireframe(void);
@@ -373,6 +410,12 @@ public:
     SoBRLVListShape *getRealizedShape(void) const;
     SoBRLVListShape *getRealizedShape(int index) const;
     int getRealizedShapeCount(void) const;
+    SoBRLVListShape *findAuxiliaryVListShape(const char *name) const;
+    int setAuxiliaryLineSet(const char *name,
+	const SbVec3f *points,
+	const int32_t *commands,
+	int count);
+    int clearAuxiliaryShapes(void);
     SoBRLMeshShape *getRealizedMesh(void) const;
     SoBRLMeshShape *getRealizedMesh(int index) const;
     int getRealizedMeshCount(void) const;

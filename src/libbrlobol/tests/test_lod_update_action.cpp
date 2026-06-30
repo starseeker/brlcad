@@ -1027,14 +1027,65 @@ test_scene_database_source_summary(void)
 	    strcmp(sceneShapeSummary.ownerRealizationIdentity.getString(),
 		summary.realizationIdentity.getString()) != 0 ||
 	    scene.getRealizedShapeSummary(1, sceneShapeSummary)) {
-	printf("FAIL: scene controller should forward realized vlist shape summaries\n");
-	root->unref();
-	return 1;
-    }
+	    printf("FAIL: scene controller should forward realized vlist shape summaries\n");
+	    root->unref();
+	    return 1;
+	}
 
-    SoBRLMeshShape *summaryMesh = make_mesh("/summary/mesh", "mesh");
-    summaryMesh->sourceType = "bot";
-    summaryMesh->sourceId = 44;
+	SbVec3f auxPoints[2] = {
+	    SbVec3f(1.0f, 2.0f, 3.0f),
+	    SbVec3f(4.0f, 5.0f, 6.0f)
+	};
+	int32_t auxCommands[2] = {
+	    SoBRLVListShape::MOVE,
+	    SoBRLVListShape::DRAW
+	};
+	if (scene.publishDatabaseSourceAuxiliaryLineSet("/summary/source",
+		"summary_aux", auxPoints, auxCommands, 2) != 1) {
+	    printf("FAIL: scene controller should publish auxiliary source line sets\n");
+	    root->unref();
+	    return 1;
+	}
+	SoBRLVListShape *auxShape =
+	    source->findAuxiliaryVListShape("summary_aux");
+	if (!auxShape ||
+		auxShape->point.getNum() != 2 ||
+		auxShape->command.getNum() != 2 ||
+		strcmp(auxShape->recordRole.getValue().getString(),
+		    "auxiliary") != 0 ||
+		source->getRealizedShapeSummaryCount() != 2 ||
+		scene.getRealizedShapeSummaryCount() != 2 ||
+		!source->getRealizedShapeSummary(1, shapeSummary) ||
+		!shapeSummary.valid ||
+		shapeSummary.shapeKind !=
+		    BRLObolRealizedShapeSummary::SHAPE_VLIST ||
+		strcmp(shapeSummary.sourceName.getString(), "summary_aux") != 0 ||
+		strcmp(shapeSummary.sourceType.getString(),
+		    "auxiliary-line-set") != 0 ||
+		strcmp(shapeSummary.geometryName.getString(), "summary_aux") != 0 ||
+		strcmp(shapeSummary.recordRole.getString(), "auxiliary") != 0 ||
+		!shapeSummary.databaseIntent ||
+		shapeSummary.nonDatabaseSource ||
+		shapeSummary.pointCount != 2 ||
+		shapeSummary.segmentCount != 1 ||
+		strcmp(shapeSummary.ownerSourcePath.getString(),
+		    "/summary/source") != 0) {
+	    printf("FAIL: database source should summarize auxiliary line-set metadata\n");
+	    root->unref();
+	    return 1;
+	}
+	if (scene.clearDatabaseSourceAuxiliaryShapes("/summary/source") != 1 ||
+		source->findAuxiliaryVListShape("summary_aux") ||
+		source->getRealizedShapeSummaryCount() != 1 ||
+		scene.getRealizedShapeSummaryCount() != 1) {
+	    printf("FAIL: scene controller should clear auxiliary source line sets\n");
+	    root->unref();
+	    return 1;
+	}
+
+	SoBRLMeshShape *summaryMesh = make_mesh("/summary/mesh", "mesh");
+	summaryMesh->sourceType = "bot";
+	summaryMesh->sourceId = 44;
     summaryMesh->displayName = "Summary Mesh";
     summaryMesh->geometryName = "summary mesh geometry";
     summaryMesh->cacheIdentity = "cache://summary/mesh#44";
@@ -1494,6 +1545,66 @@ test_scene_database_source_summary(void)
 	    boundsSummary.boundsValid ||
 	    scene.getSceneBoundsSummary(6, boundsSummary)) {
 	printf("FAIL: scene controller should summarize Obol subtree bounds\n");
+	root->unref();
+	return 1;
+    }
+
+    const uint64_t beforeSourceDrawModeFrameRevision =
+	scene.getFrameRevision();
+    if (scene.setDatabaseSourceDrawMode("/summary/source",
+		SoBRLDatabaseSource::SHADED) != 1 ||
+	    scene.getFrameRevision() <= beforeSourceDrawModeFrameRevision ||
+	    source->drawMode.getValue() != SoBRLDatabaseSource::SHADED ||
+	    summaryMesh->drawMode.getValue() != BRLOBOL_LOD_DRAW_SHADED) {
+	printf("FAIL: scene controller should update source draw mode through the source owner\n");
+	root->unref();
+	return 1;
+    }
+    const uint64_t afterSourceShadedFrameRevision = scene.getFrameRevision();
+    if (scene.setDatabaseSourceDrawMode("summary/source",
+		SoBRLDatabaseSource::WIREFRAME) != 1 ||
+	    scene.getFrameRevision() <= afterSourceShadedFrameRevision ||
+	    source->drawMode.getValue() != SoBRLDatabaseSource::WIREFRAME ||
+	    summaryMesh->drawMode.getValue() != BRLOBOL_LOD_DRAW_WIRE ||
+	    !source->getRealizedShapeSummary(1, shapeSummary) ||
+	    shapeSummary.drawMode != BRLOBOL_LOD_DRAW_WIRE ||
+	    scene.setDatabaseSourceDrawMode("summary/source",
+		SoBRLDatabaseSource::WIREFRAME) != 0 ||
+	    scene.setDatabaseSourceDrawMode("missing/source",
+		SoBRLDatabaseSource::SHADED) != -1) {
+	printf("FAIL: source draw-mode updates should sync database-intent realized shapes\n");
+	root->unref();
+	return 1;
+    }
+
+    const uint64_t beforeSourceMaterialPolicyFrameRevision =
+	scene.getFrameRevision();
+    if (scene.setDatabaseSourceMaterialPolicy("/summary/source",
+		SoBRLDatabaseSource::MATERIAL_DATABASE) != 1 ||
+	    scene.getFrameRevision() <= beforeSourceMaterialPolicyFrameRevision ||
+	    source->materialPolicy.getValue() !=
+		SoBRLDatabaseSource::MATERIAL_DATABASE ||
+	    !source->getSummary(summary) ||
+	    summary.materialPolicy !=
+		SoBRLDatabaseSource::MATERIAL_DATABASE) {
+	printf("FAIL: scene controller should update source material policy through the source owner\n");
+	root->unref();
+	return 1;
+    }
+    const uint64_t afterSourceMaterialDatabaseFrameRevision =
+	scene.getFrameRevision();
+    if (scene.setDatabaseSourceMaterialPolicy("summary/source", 9999) != 1 ||
+	    scene.getFrameRevision() <=
+		afterSourceMaterialDatabaseFrameRevision ||
+	    source->materialPolicy.getValue() !=
+		SoBRLDatabaseSource::MATERIAL_INHERIT ||
+	    !source->getSummary(summary) ||
+	    summary.materialPolicy !=
+		SoBRLDatabaseSource::MATERIAL_INHERIT ||
+	    scene.setDatabaseSourceMaterialPolicy("summary/source", -11) != 0 ||
+	    scene.setDatabaseSourceMaterialPolicy("missing/source",
+		SoBRLDatabaseSource::MATERIAL_DATABASE) != -1) {
+	printf("FAIL: source material policy updates should sanitize and report no-op/missing sources\n");
 	root->unref();
 	return 1;
     }
