@@ -1077,6 +1077,22 @@ ged_draw_group_ref_from_scene_ref(struct ged *gedp, bsg_scene_ref ref)
 }
 
 
+ged_draw_shape_ref
+ged_draw_shape_ref_from_scene_context(struct ged *gedp, void *scene_ctx)
+{
+    return ged_draw_shape_ref_from_scene_ref(gedp,
+	    ged_draw_scene_ref_from_context(scene_ctx));
+}
+
+
+ged_draw_group_ref
+ged_draw_group_ref_from_scene_context(struct ged *gedp, void *scene_ctx)
+{
+    return ged_draw_group_ref_from_scene_ref(gedp,
+	    ged_draw_scene_ref_from_context(scene_ctx));
+}
+
+
 bsg_scene_ref
 ged_draw_registry_shape_scene_ref(struct ged *gedp, ged_draw_shape_ref ref)
 {

@@ -198,7 +198,7 @@ struct ged_draw_shape_record_summary {
     const struct db_full_path *fullpath;
     const char *display_name;
     const char *leaf_name;
-    bsg_scene_ref owning_group_ref;
+    void *owning_group_ctx;
     unsigned long long path_hash;
     uint64_t source_revision;
     uint64_t inputs_revision;
@@ -343,44 +343,48 @@ GED_EXPORT extern int ged_draw_brep_mesh_lod_cache_prepare(struct rt_mesh_lod **
 							   struct directory *dp,
 							   const struct bg_tess_tol *ttol,
 							   const struct bn_tol *tol);
-GED_EXPORT extern bsg_scene_ref ged_draw_view_context_group_create(
+GED_EXPORT extern void *ged_draw_view_context_group_create_context(
 	void *view_ctx,
 	const char *name);
-GED_EXPORT extern int ged_draw_scene_ref_erase_groups_by_name(
-	bsg_scene_ref parent_ref,
+GED_EXPORT extern int ged_draw_scene_context_erase_groups_by_name(
+	void *parent_ctx,
 	const char *name);
-GED_EXPORT extern int ged_draw_scene_ref_erase_path_at_base(
+GED_EXPORT extern int ged_draw_scene_context_erase_path_at_base(
 	struct ged *gedp,
 	const char *path,
-	bsg_scene_ref base_ref,
+	void *base_ctx,
 	void *view_ctx,
 	int mode,
 	int apply_scope);
-GED_EXPORT extern int ged_draw_scene_ref_erase_path_prefix_at_base(
+GED_EXPORT extern int ged_draw_scene_context_erase_path_prefix_at_base(
 	struct ged *gedp,
 	const char *path,
-	bsg_scene_ref base_ref,
+	void *base_ctx,
 	void *view_ctx,
 	int mode,
 	int apply_scope);
-GED_EXPORT extern int ged_draw_scene_ref_erase_path_in_active_scope(
+GED_EXPORT extern int ged_draw_source_erase_path_in_active_scope(
 	struct ged *gedp,
 	const char *path,
 	void *view_ctx,
 	int mode);
-GED_EXPORT extern int ged_draw_scene_ref_erase_path_prefix_in_active_scope(
+GED_EXPORT extern int ged_draw_source_erase_path_prefix_in_active_scope(
 	struct ged *gedp,
 	const char *path,
 	void *view_ctx,
 	int mode);
-GED_EXPORT extern int ged_draw_scene_ref_erase_component_name_in_active_scope(
+GED_EXPORT extern int ged_draw_source_erase_component_name_in_active_scope(
 	struct ged *gedp,
 	const char *name,
 	void *view_ctx,
 	int mode,
 	int nonroot_only);
 GED_EXPORT extern int ged_draw_scene_context_clear_scope_children(void *scene_ctx);
-GED_EXPORT extern int ged_draw_scene_ref_clear_db_groups_in_scope(
+GED_EXPORT extern int ged_draw_scene_context_foreach_child(
+	void *scene_ctx,
+	int (*cb)(void *child_ctx, void *userdata),
+	void *userdata);
+GED_EXPORT extern int ged_draw_source_clear_db_groups_in_scope(
 	struct ged *gedp,
 	void *view_ctx);
 GED_EXPORT extern void ged_draw_log(int level, const char *fmt, ...) _BU_ATTR_PRINTF23;
@@ -548,10 +552,6 @@ GED_EXPORT extern bsg_scene_ref ged_draw_scene_ref_null(void);
 GED_EXPORT extern bsg_scene_ref ged_draw_scene_ref_from_context(void *scene_ctx);
 GED_EXPORT extern int ged_draw_scene_ref_is_null(bsg_scene_ref ref);
 GED_EXPORT extern int ged_draw_scene_ref_equal(bsg_scene_ref a, bsg_scene_ref b);
-GED_EXPORT extern int ged_draw_scene_ref_foreach_child(
-	bsg_scene_ref ref,
-	int (*cb)(bsg_scene_ref child_ref, void *userdata),
-	void *userdata);
 GED_EXPORT extern void *ged_draw_scene_context_registry_owner(void *scene_ctx);
 GED_EXPORT extern int ged_draw_scene_context_shape_record_summary(
 	void *shape_ctx,
@@ -602,8 +602,6 @@ GED_EXPORT extern void ged_draw_active_view_ctx_set(struct ged *gedp,
 typedef int (*ged_draw_group_ref_index_cb)(ged_draw_group_ref ref,
 					   void *userdata);
 GED_EXPORT extern int ged_draw_ensure_root_attached(struct ged *gedp);
-GED_EXPORT extern bsg_scene_ref ged_draw_ensure_root(struct ged *gedp);
-GED_EXPORT extern bsg_scene_ref ged_draw_scene_root_ref(struct ged *gedp);
 GED_EXPORT extern int ged_draw_scene_root_foreach_shape_ref(struct ged *gedp,
 							    int skip_overlay_groups,
 							    ged_draw_shape_ref_index_cb cb,
@@ -681,12 +679,16 @@ GED_EXPORT extern ged_draw_shape_ref ged_draw_shape_ref_from_scene_ref(struct ge
 								       bsg_scene_ref ref);
 GED_EXPORT extern ged_draw_group_ref ged_draw_group_ref_from_scene_ref(struct ged *gedp,
 								       bsg_scene_ref ref);
-GED_EXPORT extern bsg_scene_ref ged_draw_scene_ref_from_rt_view_ref(rt_view_scene_ref ref);
-GED_EXPORT extern rt_view_scene_ref ged_draw_scene_ref_to_rt_view_ref(bsg_scene_ref ref);
-GED_EXPORT extern bsg_scene_ref ged_draw_scene_ref_active_scope(struct ged *gedp,
-								void *view_ctx,
-								int create,
-								int fallback_root);
+GED_EXPORT extern ged_draw_shape_ref ged_draw_shape_ref_from_scene_context(
+	struct ged *gedp,
+	void *scene_ctx);
+GED_EXPORT extern ged_draw_group_ref ged_draw_group_ref_from_scene_context(
+	struct ged *gedp,
+	void *scene_ctx);
+GED_EXPORT extern void *ged_draw_scene_context_active_scope(struct ged *gedp,
+							   void *view_ctx,
+							   int create,
+							   int fallback_root);
 GED_EXPORT extern void *ged_draw_scene_ref_context(bsg_scene_ref ref);
 GED_EXPORT extern bsg_scene_ref ged_draw_registry_shape_scene_ref(struct ged *gedp,
 								  ged_draw_shape_ref ref);

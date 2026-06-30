@@ -2315,6 +2315,48 @@ entry:
       `ged_test_drawing_quad` at 12.64 seconds, and
       `ged_test_drawing_lod` at 10.88 seconds.
 
+entry:
+  date: 2026-06-30
+  id: scene-source-root-context-erase-boundary
+  capability: scene-source
+  summary: Moved root traversal, scoped erase, and RT-root handoff callers onto
+    opaque scene-context/source facades.
+  changed:
+    - Replaced shared private scoped erase helpers with source-shaped
+      `ged_draw_source_*` facades and scene-context base erase facades.
+    - Made scene-root RT conversion/root helpers local to the root bridge and
+      exposed active scope as `ged_draw_scene_context_active_scope`.
+    - Moved scene-root shape/group traversal through
+      `ged_draw_scene_context_foreach_child` and context-to-draw-ref registry
+      wrappers.
+    - Moved shape summary owning-group storage from `bsg_scene_ref` to an
+      opaque owning-group context.
+    - Fixed owning-group lookup for independent view scopes so scoped shape
+      summaries stop resolving to the view-scope node.
+    - Pivot guard now requires the new context/source facade tokens and rejects
+      re-exposing the retired retained erase, root, active-scope, and child
+      iterator helpers from the shared private header.
+  files:
+    - `backend_worklog.txt`
+    - `misc/CMake/brlobol_pivot_guard.cmake`
+    - `src/libged/bsg_ged_draw_private.h`
+    - `src/libged/bsg_ged_draw_registry.c`
+    - `src/libged/bsg_ged_draw_scene_root.c`
+    - `src/libged/bsg_ged_draw_source.c`
+    - `src/libged/bsg_ged_draw_tree.c`
+  tests:
+    - `cmake --build build --target libged -j2`
+    - `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_bsg_render_stability|ged_test_bsg_quad_stability|ged_test_ged_draw_scene|ged_test_view_independent|test_qtcad_obol_draw_sync)$' --output-on-failure`
+    - `ctest --test-dir build -R '^(ged_test_view_command|ged_test_drawing_basic|ged_test_drawing_faceplate|ged_test_drawing_lod|ged_test_drawing_select|ged_test_drawing_quad|ged_test_selection_semantics|ged_test_lod_crossrun|ged_test_mged_bsg|ged_test_rtwizard_bsg|ged_test_mged_shaded_mode_bsg)$' --output-on-failure`
+    - `cmake --build build --target test_brlobol_lod_update_action -j2`
+    - `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --output-on-failure`
+  notes:
+    - Direct `rg` scan reduced `bsg_scene_ref` matching lines in
+      `src/libged/bsg_ged_draw_private.h` from 25 to 11.
+    - The first `libbrlobol_lod_update_action` smoke run aborted with a stale
+      test executable; after rebuilding that target, the isolated test and
+      full six-test smoke group passed.
+
 
 Entry Template
 --------------

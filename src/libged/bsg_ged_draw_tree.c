@@ -66,7 +66,7 @@ static void
 _sg_erase_path_scoped(struct ged *gedp, const char *path,
 		      void *view_ctx, int mode)
 {
-    (void)ged_draw_scene_ref_erase_path_in_active_scope(gedp, path, view_ctx,
+    (void)ged_draw_source_erase_path_in_active_scope(gedp, path, view_ctx,
 	    mode);
 }
 
@@ -90,7 +90,7 @@ static void
 _sg_erase_all_paths_scoped(struct ged *gedp, const char *path,
 			   void *view_ctx, int mode)
 {
-    (void)ged_draw_scene_ref_erase_path_prefix_in_active_scope(gedp, path,
+    (void)ged_draw_source_erase_path_prefix_in_active_scope(gedp, path,
 	    view_ctx, mode);
 }
 
@@ -105,7 +105,7 @@ _sg_erase_component_scoped_impl(struct ged *gedp,
     if (!nonroot_only)
 	ged_draw_overlay_erase_name(gedp, name);
 
-    return ged_draw_scene_ref_erase_component_name_in_active_scope(gedp,
+    return ged_draw_source_erase_component_name_in_active_scope(gedp,
 	    name, view_ctx, mode, nonroot_only);
 }
 
@@ -333,7 +333,7 @@ ged_draw_clear_view(struct ged *gedp, void *view_ctx)
     if (!gedp)
 	return 0;
 
-    return ged_draw_scene_ref_clear_db_groups_in_scope(gedp, view_ctx);
+    return ged_draw_source_clear_db_groups_in_scope(gedp, view_ctx);
 }
 
 

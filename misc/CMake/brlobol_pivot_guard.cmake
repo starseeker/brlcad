@@ -10337,7 +10337,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 		ged_draw_scene_context_tree_summary
 		ged_draw_scene_context_shape_record_summary
 		ged_draw_scene_context_group_record_summary
-		ged_draw_scene_ref_foreach_child
+		ged_draw_scene_context_foreach_child
 		ged_draw_scene_root_foreach_shape_ref
 		ged_draw_scene_root_foreach_group_ref
 		ged_draw_scene_root_has_groups
@@ -10359,9 +10359,9 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	ged_draw_scene_root_erase_path
 	ged_draw_scene_root_erase_path_prefix
 	ged_draw_scene_root_erase_groups_by_name
-	ged_draw_scene_ref_erase_path_in_active_scope
-	ged_draw_scene_ref_erase_path_prefix_in_active_scope
-	ged_draw_scene_ref_erase_component_name_in_active_scope)
+	ged_draw_source_erase_path_in_active_scope
+	ged_draw_source_erase_path_prefix_in_active_scope
+	ged_draw_source_erase_component_name_in_active_scope)
     endif()
     if("${_rel}" STREQUAL "src/libged/bsg_ged_draw_transactions.c" OR
 	"${_rel}" STREQUAL "src/libged/bsg_ged_draw_overlay.c" OR
@@ -10386,6 +10386,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_view_context_scene_attached
 	ged_draw_scene_ref_from_rt_view_ref
 	ged_draw_scene_ref_to_rt_view_ref
+	ged_draw_scene_context_active_scope
 	ged_draw_view_context_scene_root
 	ged_draw_view_context_scene_root_rt_ref
 	ged_draw_view_context_scene_attached
@@ -10396,7 +10397,14 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	ged_draw_scene_ref_null
 	ged_draw_scene_ref_is_null
 	ged_draw_scene_context_set_visible
-	ged_draw_scene_context_attach_draw_bookkeeping)
+	ged_draw_scene_context_attach_draw_bookkeeping
+	ged_draw_view_context_group_create_context
+	ged_draw_scene_context_erase_path_at_base
+	ged_draw_scene_context_erase_path_prefix_at_base
+	ged_draw_scene_context_erase_groups_by_name
+	ged_draw_scene_context_foreach_child
+	ged_draw_shape_ref_from_scene_context
+	ged_draw_group_ref_from_scene_context)
     endif()
 	    if("${_rel}" STREQUAL "src/libged/bsg_ged_draw_records.c")
 	      list(APPEND _tokens
@@ -10607,10 +10615,10 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	    ged_draw_scene_root_erase_path
 	    ged_draw_scene_root_erase_path_prefix
 	    ged_draw_scene_root_erase_groups_by_name
-	    ged_draw_scene_ref_erase_path_in_active_scope
-	    ged_draw_scene_ref_erase_path_prefix_in_active_scope
-	    ged_draw_scene_ref_erase_component_name_in_active_scope
-	    ged_draw_scene_ref_clear_db_groups_in_scope)
+	    ged_draw_source_erase_path_in_active_scope
+	    ged_draw_source_erase_path_prefix_in_active_scope
+	    ged_draw_source_erase_component_name_in_active_scope
+	    ged_draw_source_clear_db_groups_in_scope)
 	  string(FIND "${_contents}" "${_token}"
 	    _draw_tree_group_facade_idx)
 	  if(_draw_tree_group_facade_idx EQUAL -1)
@@ -10752,7 +10760,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       endforeach()
     endif()
     if("${_rel}" STREQUAL "src/libged/bsg_ged_draw_scene_root.c")
-      string(FIND "${_contents}" "ged_draw_view_context_group_create"
+      string(FIND "${_contents}" "ged_draw_view_context_group_create_context"
 	_draw_scene_root_group_create_idx)
       if(_draw_scene_root_group_create_idx EQUAL -1)
 	_brlobol_pivot_guard_fail(
@@ -11058,6 +11066,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 		[[ged_draw_scene_ref_to_rt_view_ref]]
 		[[ged_draw_scene_ref_from_rt_view_ref]]
 		[[ged_draw_scene_ref_active_scope]]
+		[[ged_draw_scene_context_active_scope]]
 		[[rt_view_context_independent_scope_ref]]
 		[[ged_scene_root_rt_ref]])
 	      string(REGEX MATCH "${_token}" _draw_refs_line_accessor_hit
@@ -16173,20 +16182,21 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 			ged_draw_group_ref_append_scene_ref
 				ged_draw_group_ref_lookup_or_create
 						ged_draw_scene_ref_prune_empty_groups
-						ged_draw_scene_ref_erase_path_at_base
-						ged_draw_scene_ref_erase_path_prefix_at_base
-						ged_draw_scene_ref_erase_path_in_active_scope
-						ged_draw_scene_ref_erase_path_prefix_in_active_scope
-						ged_draw_scene_ref_erase_component_name_in_active_scope
+						ged_draw_scene_context_erase_path_at_base
+						ged_draw_scene_context_erase_path_prefix_at_base
+						ged_draw_source_erase_path_in_active_scope
+						ged_draw_source_erase_path_prefix_in_active_scope
+						ged_draw_source_erase_component_name_in_active_scope
+						ged_draw_scene_context_active_scope
 						ged_draw_scene_ref_erase_matching_group_path_or_nested
 						ged_draw_scene_ref_erase_groups_by_db_subpath
-				ged_draw_scene_ref_erase_groups_by_name
+				ged_draw_scene_context_erase_groups_by_name
 				ged_draw_scene_ref_erase_subgroups_by_name
 					ged_draw_scene_ref_erase_groups_by_path_prefix_string
 					ged_draw_scene_ref_erase_shapes_by_component_name
 					ged_draw_scene_ref_erase_shapes_by_db_subpath
 	ged_draw_scene_ref_erase_shapes_by_path_prefix_string
-	ged_draw_scene_ref_clear_db_groups_in_scope
+	ged_draw_source_clear_db_groups_in_scope
 	ged_draw_shape_ref_from_context
 	ged_draw_view_context_overlay_internal_create_context
 	ged_draw_scene_context_commit_database_leaf_draft
@@ -17006,7 +17016,6 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	ged_draw_active_view_ctx
 	ged_draw_active_view_ctx_set
 	ged_draw_ensure_root_attached
-	ged_draw_scene_root_ref
 		ged_draw_scene_root_foreach_shape_ref
 		ged_draw_scene_root_foreach_group_ref
 		ged_draw_scene_root_subtree_bounds
@@ -17017,22 +17026,24 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 		ged_draw_scene_root_erase_groups_by_name
 	ged_draw_scene_ref_null
 	ged_draw_scene_ref_from_context
-	ged_draw_scene_ref_active_scope
+	ged_draw_scene_context_active_scope
 	ged_draw_scene_ref_equal
 	ged_draw_view_context_overlay_internal_create_context
 	ged_draw_overlay_erase_name_context
 	ged_draw_overlay_geometry_insert_context
 	ged_draw_group_ref_lookup_or_create
-	ged_draw_view_context_group_create
-				ged_draw_scene_ref_erase_path_at_base
-				ged_draw_scene_ref_erase_path_prefix_at_base
-				ged_draw_scene_ref_erase_path_in_active_scope
-				ged_draw_scene_ref_erase_path_prefix_in_active_scope
-				ged_draw_scene_ref_erase_component_name_in_active_scope
-				ged_draw_scene_ref_erase_groups_by_name
-				ged_draw_scene_ref_clear_db_groups_in_scope
+	ged_draw_view_context_group_create_context
+				ged_draw_scene_context_erase_path_at_base
+				ged_draw_scene_context_erase_path_prefix_at_base
+				ged_draw_source_erase_path_in_active_scope
+				ged_draw_source_erase_path_prefix_in_active_scope
+				ged_draw_source_erase_component_name_in_active_scope
+				ged_draw_scene_context_erase_groups_by_name
+				ged_draw_source_clear_db_groups_in_scope
 	ged_draw_scene_context_clear_scope_children
-	ged_draw_scene_ref_foreach_child
+	ged_draw_scene_context_foreach_child
+	ged_draw_shape_ref_from_scene_context
+	ged_draw_group_ref_from_scene_context
 	ged_draw_scene_context_subtree_bounds
 	ged_draw_shape_ref_refresh_material_color
 	ged_draw_scene_context_set_visible
@@ -17065,7 +17076,6 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	ged_draw_add_tree_primitive_face_set_to_group
 	ged_draw_add_tree_primitive_wireframe_to_group
 	ged_draw_scene_context_commit_database_leaf_draft
-	ged_draw_scene_ref_to_rt_view_ref
 	ged_draw_scene_ref_context
 	ged_draw_brep_mesh_lod_detail_setup)
       string(FIND "${_ged_bsg_draw_private_contents}" "${_func}"
@@ -17145,12 +17155,20 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[(^|[^A-Za-z0-9_])ged_draw_scene_ref_(parent|source_owner|draw_state_summary|realize_dispatch|refresh_material_color)[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_scene_ref_(tree_summary|shape_record_summary|group_record_summary)[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_scene_ref_foreach_shape[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_scene_ref_foreach_child[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_scene_ref_clear_scope_children[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_scene_ref_erase_(path_at_base|path_prefix_at_base|path_in_active_scope|path_prefix_in_active_scope|component_name_in_active_scope|groups_by_name)[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_scene_ref_clear_db_groups_in_scope[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_scene_ref_(from_rt_view_ref|to_rt_view_ref|active_scope)[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_scene_ref_subtree_bounds[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_scene_ref_set_visible[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_scene_ref_registry_owner[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_scene_ref_highlight_free_cb[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_scene_root_attach_draw_bookkeeping[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_scene_root_ref[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_ensure_root[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_group_create[ \t\r\n]*\(]]
+	[[bsg_scene_ref[ \t\r\n]+owning_group_ref]]
 		[[(^|[^A-Za-z0-9_])ged_draw_shape_draft_apply_registry_region[ \t\r\n]*\(]]
 		[[(^|[^A-Za-z0-9_])ged_draw_scene_ref_ensure_registry_entry[ \t\r\n]*\(]]
 		[[(^|[^A-Za-z0-9_])ged_draw_shape_state_ensure_scene_ref[ \t\r\n]*\(]]
