@@ -28,17 +28,9 @@
 
 #include "common.h"
 
-#include "vmath.h"
-#include "bg/polygon_types.h"
-#include "bu/color.h"
+#include "rt/primitives/sketch.h"
 
 __BEGIN_DECLS
-
-#define RT_SKETCH_POLYGON_GENERAL   0
-#define RT_SKETCH_POLYGON_CIRCLE    1
-#define RT_SKETCH_POLYGON_ELLIPSE   2
-#define RT_SKETCH_POLYGON_RECTANGLE 3
-#define RT_SKETCH_POLYGON_SQUARE    4
 
 struct rt_sketch_polygon {
     int                 type;
@@ -61,4 +53,3 @@ struct rt_sketch_polygon {
 __END_DECLS
 
 #endif /* LIBRT_PRIMITIVES_SKETCH_POLYGONS_PRIVATE_H */
-

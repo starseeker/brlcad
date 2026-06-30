@@ -35,6 +35,7 @@
 #include "bu/opt.h"
 #include "bu/str.h"
 #include "bu/vls.h"
+#include "bg/plane.h"
 #include "bg/polygon.h"
 #include "rt/defines.h"
 #include "rt/directory.h"
@@ -60,6 +61,105 @@ struct contour_node {
     struct bu_list l;
     struct bu_list head;
 };
+
+static void
+rt_sketch_polygon_set_default_color(struct bu_color *color, double r, double g, double b)
+{
+    if (!color)
+	return;
+
+    color->buc_rgb[RED] = r;
+    color->buc_rgb[GRN] = g;
+    color->buc_rgb[BLU] = b;
+    color->buc_rgb[ALP] = 0.0;
+}
+
+void
+rt_sketch_polygon_data_init(struct rt_sketch_polygon_data *poly)
+{
+    if (!poly)
+	return;
+
+    memset(poly, 0, sizeof(*poly));
+    poly->type = RT_SKETCH_POLYGON_GENERAL;
+    V2SET(poly->fill_dir, 1.0, 0.0);
+    poly->fill_delta = 1.0;
+    rt_sketch_polygon_set_default_color(&poly->fill_color, 1.0, 1.0, 1.0);
+    rt_sketch_polygon_set_default_color(&poly->edge_color, 1.0, 1.0, 1.0);
+    HSET(poly->vp, 0.0, 0.0, 1.0, 0.0);
+    poly->polygon = (struct bg_polygon)BG_POLYGON_NULL;
+}
+
+void
+rt_sketch_polygon_data_free(struct rt_sketch_polygon_data *poly)
+{
+    if (!poly)
+	return;
+
+    bg_polygon_free(&poly->polygon);
+    rt_sketch_polygon_data_init(poly);
+}
+
+int
+rt_sketch_polygon_data_copy(struct rt_sketch_polygon_data *dest,
+	const struct rt_sketch_polygon_data *src)
+{
+    if (!dest || !src)
+	return -1;
+
+    if (dest == src)
+	return 0;
+
+    bg_polygon_free(&dest->polygon);
+    *dest = *src;
+    dest->polygon = (struct bg_polygon)BG_POLYGON_NULL;
+    bg_polygon_cpy(&dest->polygon, (struct bg_polygon *)&src->polygon);
+    return 0;
+}
+
+static void
+rt_sketch_polygon_to_data(struct rt_sketch_polygon_data *data,
+	const struct rt_sketch_polygon *poly)
+{
+    if (!data || !poly)
+	return;
+
+    rt_sketch_polygon_data_init(data);
+    data->type = poly->type;
+    data->fill_flag = poly->fill_flag;
+    V2MOVE(data->fill_dir, poly->fill_dir);
+    data->fill_delta = poly->fill_delta;
+    BU_COLOR_CPY(&data->fill_color, &poly->fill_color);
+    VMOVE(data->origin_point, poly->origin_point);
+    HMOVE(data->vp, poly->vp);
+    data->vZ = poly->vZ;
+    data->have_edge_color = poly->have_edge_color;
+    BU_COLOR_CPY(&data->edge_color, &poly->edge_color);
+    bg_polygon_cpy(&data->polygon, (struct bg_polygon *)&poly->polygon);
+}
+
+static void
+rt_sketch_polygon_from_data(struct rt_sketch_polygon *poly,
+	const struct rt_sketch_polygon_data *data)
+{
+    if (!poly || !data)
+	return;
+
+    memset(poly, 0, sizeof(*poly));
+    poly->type = data->type;
+    poly->fill_flag = data->fill_flag;
+    V2MOVE(poly->fill_dir, data->fill_dir);
+    poly->fill_delta = data->fill_delta;
+    BU_COLOR_CPY(&poly->fill_color, &data->fill_color);
+    poly->curr_contour_i = -1;
+    poly->curr_point_i = -1;
+    VMOVE(poly->origin_point, data->origin_point);
+    HMOVE(poly->vp, data->vp);
+    poly->vZ = data->vZ;
+    poly->polygon = data->polygon;
+    poly->have_edge_color = data->have_edge_color;
+    BU_COLOR_CPY(&poly->edge_color, &data->edge_color);
+}
 
 static struct rt_sketch_polygon *
 db_sketch_to_polygon_internal(const char *UNUSED(sname), struct db_i *dbip, struct directory *dp)
@@ -95,8 +195,13 @@ db_sketch_to_polygon_internal(const char *UNUSED(sname), struct db_i *dbip, stru
     BU_GET(poly, struct rt_sketch_polygon);
     memset(poly, 0, sizeof(*poly));
     poly->type = RT_SKETCH_POLYGON_GENERAL;
+    V2SET(poly->fill_dir, 1.0, 0.0);
+    poly->fill_delta = 1.0;
+    rt_sketch_polygon_set_default_color(&poly->fill_color, 1.0, 1.0, 1.0);
+    rt_sketch_polygon_set_default_color(&poly->edge_color, 1.0, 1.0, 1.0);
     poly->curr_contour_i = -1;
     poly->curr_point_i = -1;
+    VMOVE(poly->origin_point, sketch_ip->V);
 
     /* Start translating the sketch info into a polygon */
     all_segment_nodes = (struct segment_node *)bu_calloc(sketch_ip->curve.count, sizeof(struct segment_node), "all_segment_nodes");
@@ -272,6 +377,26 @@ db_sketch_to_polygon(const char *sname, struct db_i *dbip, struct directory *dp)
     return db_sketch_to_polygon_internal(sname, dbip, dp);
 }
 
+int
+db_sketch_to_polygon_data(struct rt_sketch_polygon_data *data,
+	const char *sname,
+	struct db_i *dbip,
+	struct directory *dp)
+{
+    if (!data)
+	return -1;
+
+    struct rt_sketch_polygon *poly = db_sketch_to_polygon_internal(sname,
+	    dbip, dp);
+    if (!poly)
+	return -1;
+
+    rt_sketch_polygon_data_free(data);
+    rt_sketch_polygon_to_data(data, poly);
+    rt_sketch_polygon_destroy(poly);
+    return 0;
+}
+
 const struct bg_polygon *
 rt_sketch_polygon_bg_polygon(const struct rt_sketch_polygon *poly)
 {
@@ -377,7 +502,15 @@ db_polygon_data_to_sketch(struct db_i *dbip, const char *sname, const struct rt_
     bu_avs_init_empty(&lavs);
     if (!db5_get_attributes(dbip, &lavs, dp)) {
 	struct bu_vls val = BU_VLS_INIT_ZERO;
-	bu_vls_sprintf(&val, "%d/%d/%d", edge_rgb ? edge_rgb[0] : 255, edge_rgb ? edge_rgb[1] : 255, edge_rgb ? edge_rgb[2] : 0);
+	unsigned char prgb[3] = {255, 255, 0};
+	if (edge_rgb) {
+	    prgb[0] = edge_rgb[0];
+	    prgb[1] = edge_rgb[1];
+	    prgb[2] = edge_rgb[2];
+	} else if (poly->have_edge_color) {
+	    bu_color_to_rgb_chars(&poly->edge_color, prgb);
+	}
+	bu_vls_sprintf(&val, "%d/%d/%d", prgb[0], prgb[1], prgb[2]);
 	bu_avs_add(&lavs, "POLYGON_EDGE_COLOR", bu_vls_cstr(&val));
 	unsigned char rgb[3];
 	bu_color_to_rgb_chars(&poly->fill_color, rgb);
@@ -420,6 +553,19 @@ struct directory *
 db_sketch_polygon_to_sketch(struct db_i *dbip, const char *sname, const struct rt_sketch_polygon *poly, const unsigned char edge_rgb[3])
 {
     return db_polygon_data_to_sketch(dbip, sname, poly, edge_rgb);
+}
+
+struct directory *
+db_sketch_polygon_data_to_sketch(struct db_i *dbip,
+	const char *sname,
+	const struct rt_sketch_polygon_data *data)
+{
+    if (!data)
+	return NULL;
+
+    struct rt_sketch_polygon poly;
+    rt_sketch_polygon_from_data(&poly, data);
+    return db_polygon_data_to_sketch(dbip, sname, &poly, NULL);
 }
 
 /*

@@ -27,6 +27,7 @@
 #include "common.h"
 #include "vmath.h"
 #include "bg/polygon_types.h"
+#include "bu/color.h"
 #include "bu/list.h"
 #include "bu/vls.h"
 #include "bn/tol.h"
@@ -40,6 +41,34 @@ struct bg_tess_tol;
 struct rt_db_internal;
 struct rt_primitive_lod_realization;
 struct rt_sketch_polygon;
+
+#define RT_SKETCH_POLYGON_GENERAL   0
+#define RT_SKETCH_POLYGON_CIRCLE    1
+#define RT_SKETCH_POLYGON_ELLIPSE   2
+#define RT_SKETCH_POLYGON_RECTANGLE 3
+#define RT_SKETCH_POLYGON_SQUARE    4
+
+/**
+ * Public value representation of view-polygon data stored in a SKETCH.
+ *
+ * The bg_polygon memory is caller-owned.  Initialize with
+ * rt_sketch_polygon_data_init, release with rt_sketch_polygon_data_free, and
+ * use rt_sketch_polygon_data_copy for deep copies.
+ */
+struct rt_sketch_polygon_data {
+    int type;
+    int fill_flag;
+    vect2d_t fill_dir;
+    fastf_t fill_delta;
+    struct bu_color fill_color;
+    point_t origin_point;
+    plane_t vp;
+    fastf_t vZ;
+    struct bg_polygon polygon;
+
+    int have_edge_color;
+    struct bu_color edge_color;
+};
 
 /* SKETCH specific editing info */
 struct rt_sketch_edit {
@@ -66,6 +95,24 @@ RT_EXPORT extern void rt_copy_curve(struct rt_curve *crv_out,
 RT_EXPORT extern struct rt_sketch_internal *rt_copy_sketch(const struct rt_sketch_internal *sketch_ip);
 
 RT_EXPORT extern int rt_sketch_wireframe_line_set(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bg_tess_tol *ttol);
+
+RT_EXPORT extern void rt_sketch_polygon_data_init(struct rt_sketch_polygon_data *poly);
+
+RT_EXPORT extern void rt_sketch_polygon_data_free(struct rt_sketch_polygon_data *poly);
+
+RT_EXPORT extern int rt_sketch_polygon_data_copy(struct rt_sketch_polygon_data *dest,
+						 const struct rt_sketch_polygon_data *src);
+
+RT_EXPORT extern int
+db_sketch_to_polygon_data(struct rt_sketch_polygon_data *poly,
+			  const char *sname,
+			  struct db_i *dbip,
+			  struct directory *dp);
+
+RT_EXPORT extern struct directory *
+db_sketch_polygon_data_to_sketch(struct db_i *dbip,
+				 const char *sname,
+				 const struct rt_sketch_polygon_data *poly);
 
 RT_EXPORT extern struct directory *
 db_sketch_polygon_to_sketch(struct db_i *dbip, const char *sname, const struct rt_sketch_polygon *poly, const unsigned char edge_rgb[3]);

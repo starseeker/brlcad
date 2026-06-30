@@ -22,6 +22,9 @@ brlcad_add_test(NAME libbrlobol_lod_service COMMAND test_brlobol_lod_service)
 brlcad_addexec(test_brlobol_lod_update_action test_lod_update_action.cpp "libbrlobol;libwdb;libbu;Obol::Obol;Threads::Threads" TEST ALL_CXX)
 brlcad_add_test(NAME libbrlobol_lod_update_action COMMAND test_brlobol_lod_update_action)
 
+brlcad_addexec(test_brlobol_view_store test_view_store.cpp "libbrlobol;libwdb;librt;libbu;Obol::Obol" TEST ALL_CXX)
+brlcad_add_test(NAME libbrlobol_view_store COMMAND test_brlobol_view_store)
+
 brlcad_addexec(test_brlobol_window_host test_window_host.cpp "libbrlobol;libimgstream;libbu;Obol::Obol" TEST ALL_CXX)
 brlcad_add_test(NAME libbrlobol_window_host COMMAND test_brlobol_window_host)
 
@@ -54,6 +57,7 @@ cmakefiles(
   test_nanort_render.cpp
   test_prototype.cpp
   test_render.cpp
+  test_view_store.cpp
   test_window_host.cpp
 )
 

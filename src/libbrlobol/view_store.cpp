@@ -12,16 +12,23 @@
 #include "brlobol/edit_preview.h"
 #include "brlobol/line_layer_overlay.h"
 #include "brlobol/lod_realization.h"
+#include "brlobol/mesh_shape.h"
 #include "brlobol/view_controller.h"
 #include "brlobol/view_store.h"
 #include "brlobol/vlist_shape.h"
 
 #include "bg/line_layer.h"
+#include "bg/plane.h"
 #include "bg/polygon.h"
+#include "rt/primitives/sketch.h"
 #include "bu/malloc.h"
 
+#include <Inventor/nodes/SoBaseColor.h>
+#include <Inventor/nodes/SoFont.h>
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoSeparator.h>
+#include <Inventor/nodes/SoText2.h>
+#include <Inventor/nodes/SoTranslation.h>
 
 #include <algorithm>
 #include <cmath>
@@ -116,6 +123,53 @@ store_apply_vlist_style(SoBRLVListShape *shape,
 	shape->lineWidth = style.lineWidth;
     if (style.hasLineStyle)
 	shape->lineStyle = style.lineStyle;
+}
+
+static void
+store_apply_mesh_style(SoBRLMeshShape *shape,
+	const BRLObolFeatureStyle &style)
+{
+    if (!shape)
+	return;
+    if (style.hasVisible)
+	shape->visible = style.visible;
+    if (style.hasColor) {
+	shape->colorOverride = TRUE;
+	shape->color = style.color;
+    }
+    if (style.hasLineWidth)
+	shape->lineWidth = style.lineWidth;
+    if (style.hasLineStyle)
+	shape->lineStyle = style.lineStyle;
+}
+
+static void
+store_apply_mesh_color(SoBRLMeshShape *shape, const SbColor &color)
+{
+    if (!shape)
+	return;
+    shape->colorOverride = TRUE;
+    shape->color = color;
+}
+
+static void
+store_sbcolor_to_bu(const SbColor &src, struct bu_color *dst)
+{
+    if (!dst)
+	return;
+
+    dst->buc_rgb[RED] = std::max(0.0f, std::min(1.0f, src[0]));
+    dst->buc_rgb[GRN] = std::max(0.0f, std::min(1.0f, src[1]));
+    dst->buc_rgb[BLU] = std::max(0.0f, std::min(1.0f, src[2]));
+    dst->buc_rgb[ALP] = 0.0;
+}
+
+static SbColor
+store_bu_to_sbcolor(const struct bu_color &src)
+{
+    return SbColor(static_cast<float>(src.buc_rgb[RED]),
+	    static_cast<float>(src.buc_rgb[GRN]),
+	    static_cast<float>(src.buc_rgb[BLU]));
 }
 
 static SoGroup *
@@ -591,6 +645,103 @@ store_vlist_node(const BRLObolFeatureStoreRecord &rec)
     return shape;
 }
 
+static void
+store_append_face_triangles(const std::vector<int32_t> &face,
+	size_t pointCount,
+	std::vector<int32_t> &triangles)
+{
+    if (face.size() < 3)
+	return;
+
+    std::vector<int32_t> cleanFace = face;
+    if (cleanFace.size() > 3 && cleanFace.front() == cleanFace.back())
+	cleanFace.pop_back();
+    if (cleanFace.size() < 3)
+	return;
+
+    for (size_t i = 0; i < cleanFace.size(); i++) {
+	if (cleanFace[i] < 0 ||
+		static_cast<size_t>(cleanFace[i]) >= pointCount)
+	    return;
+    }
+
+    for (size_t i = 1; i + 1 < cleanFace.size(); i++) {
+	triangles.push_back(cleanFace[0]);
+	triangles.push_back(cleanFace[i]);
+	triangles.push_back(cleanFace[i + 1]);
+    }
+}
+
+static std::vector<int32_t>
+store_indexed_faces_to_triangles(const std::vector<SbVec3f> &points,
+	const std::vector<int32_t> &indices)
+{
+    std::vector<int32_t> triangles;
+    if (points.empty() || indices.empty())
+	return triangles;
+
+    const SbBool hasSeparators =
+	std::find_if(indices.begin(), indices.end(),
+		[](int32_t idx) { return idx < 0; }) != indices.end() ?
+	TRUE : FALSE;
+
+    if (!hasSeparators && indices.size() % 3 == 0) {
+	for (size_t i = 0; i < indices.size(); i += 3) {
+	    std::vector<int32_t> face;
+	    face.push_back(indices[i]);
+	    face.push_back(indices[i + 1]);
+	    face.push_back(indices[i + 2]);
+	    store_append_face_triangles(face, points.size(), triangles);
+	}
+	return triangles;
+    }
+
+    std::vector<int32_t> face;
+    for (size_t i = 0; i < indices.size(); i++) {
+	if (indices[i] < 0) {
+	    store_append_face_triangles(face, points.size(), triangles);
+	    face.clear();
+	} else {
+	    face.push_back(indices[i]);
+	}
+    }
+    store_append_face_triangles(face, points.size(), triangles);
+    return triangles;
+}
+
+static SoNode *
+store_indexed_face_node(const BRLObolFeatureStoreRecord &rec)
+{
+    SoBRLMeshShape *shape = new SoBRLMeshShape;
+    shape->sourcePath = rec.identity.getLength() > 0 ? rec.identity : rec.name;
+    shape->sourceName = rec.name;
+    shape->sourceType = "indexed-face-set";
+    shape->displayName = rec.name;
+    shape->geometryName = rec.name;
+    shape->sourceIdentity = shape->sourcePath.getValue();
+    shape->cacheIdentity = shape->sourcePath.getValue();
+    shape->databaseIntent = FALSE;
+    shape->overlayIntent = TRUE;
+    shape->hudIntent = FALSE;
+    shape->localSource = rec.scope == BRLObolFeatureScope::Local ? TRUE : FALSE;
+    shape->sharedSource = rec.scope == BRLObolFeatureScope::Shared ? TRUE : FALSE;
+    shape->nonDatabaseSource = TRUE;
+    shape->drawMode = BRLOBOL_LOD_DRAW_SHADED;
+    shape->recordRole = "view-feature";
+    shape->geometryKind = "surface";
+    shape->sourceId = rec.sourceRevision;
+    store_apply_mesh_style(shape, rec.style);
+
+    std::vector<int32_t> triangles =
+	store_indexed_faces_to_triangles(rec.points, rec.indices);
+    if (!rec.points.empty() && !triangles.empty())
+	shape->setIndexedTriangles(&rec.points[0],
+		static_cast<int>(rec.points.size()),
+		&triangles[0],
+		static_cast<int>(triangles.size()));
+    return shape;
+}
+
 static SoNode *
 store_line_layers_node(const BRLObolFeatureStoreRecord &rec)
 {
@@ -633,11 +784,58 @@ store_axes_node(const BRLObolFeatureStoreRecord &rec)
 static SoNode *
 store_label_node(const BRLObolFeatureStoreRecord &rec)
 {
-    /* Model labels need a text-capable Obol node.  Until that node exists,
-     * retain a separator so the feature lifecycle, handle, and summaries are
-     * already backed by scene graph ownership. */
     SoSeparator *sep = new SoSeparator;
-    (void)rec;
+    const SbColor fallbackColor = rec.style.hasColor ?
+	rec.style.color : SbColor(1.0f, 1.0f, 1.0f);
+
+    for (size_t i = 0; i < rec.labels.size(); i++) {
+	const BRLObolLabel &label = rec.labels[i];
+	const SbColor color = label.hasColor ? label.color : fallbackColor;
+
+	if (label.hasLeader) {
+	    BRLObolFeatureStoreRecord leader = rec;
+	    leader.kind = BRLObolFeatureKind::Lines;
+	    leader.points.clear();
+	    leader.commands.clear();
+	    leader.points.push_back(label.target);
+	    leader.points.push_back(label.point);
+	    leader.commands.push_back(static_cast<int32_t>(
+		    BRLObolLineCommand::Move));
+	    leader.commands.push_back(static_cast<int32_t>(
+		    BRLObolLineCommand::Draw));
+	    leader.style.hasColor = TRUE;
+	    leader.style.color = color;
+	    SoBRLVListShape *shape = store_vlist_node(leader);
+	    shape->sourceType = "label-leader";
+	    shape->geometryKind = "line";
+	    sep->addChild(shape);
+	}
+
+	if (label.text.getLength() == 0)
+	    continue;
+
+	SoSeparator *textSep = new SoSeparator;
+	SoTranslation *translation = new SoTranslation;
+	translation->translation = label.point;
+	textSep->addChild(translation);
+
+	SoBaseColor *baseColor = new SoBaseColor;
+	baseColor->rgb = color;
+	textSep->addChild(baseColor);
+
+	SoFont *font = new SoFont;
+	font->size = 12.0f;
+	textSep->addChild(font);
+
+	SoText2 *text = new SoText2;
+	text->string.set1Value(0, label.text);
+	text->justification = label.anchor == 2 ? SoText2::RIGHT :
+	    label.anchor == 1 ? SoText2::CENTER : SoText2::LEFT;
+	text->depthTest = FALSE;
+	textSep->addChild(text);
+
+	sep->addChild(textSep);
+    }
     return sep;
 }
 
@@ -652,6 +850,8 @@ store_node_for_feature(const BRLObolFeatureStoreRecord &rec)
 	    return store_axes_node(rec);
 	case BRLObolFeatureKind::LineLayer:
 	    return store_line_layers_node(rec);
+	case BRLObolFeatureKind::IndexedFaceSet:
+	    return store_indexed_face_node(rec);
 	default:
 	    return store_vlist_node(rec);
     }
@@ -1468,6 +1668,161 @@ store_polygon_point_count(const struct bg_polygon &poly)
     return count;
 }
 
+static int
+store_polygon_type_to_rt(BRLObolPolygonType type)
+{
+    switch (type) {
+	case BRLObolPolygonType::Circle:
+	    return RT_SKETCH_POLYGON_CIRCLE;
+	case BRLObolPolygonType::Ellipse:
+	    return RT_SKETCH_POLYGON_ELLIPSE;
+	case BRLObolPolygonType::Rectangle:
+	    return RT_SKETCH_POLYGON_RECTANGLE;
+	case BRLObolPolygonType::Square:
+	    return RT_SKETCH_POLYGON_SQUARE;
+	default:
+	    return RT_SKETCH_POLYGON_GENERAL;
+    }
+}
+
+static BRLObolPolygonType
+store_polygon_type_from_rt(int type)
+{
+    switch (type) {
+	case RT_SKETCH_POLYGON_CIRCLE:
+	    return BRLObolPolygonType::Circle;
+	case RT_SKETCH_POLYGON_ELLIPSE:
+	    return BRLObolPolygonType::Ellipse;
+	case RT_SKETCH_POLYGON_RECTANGLE:
+	    return BRLObolPolygonType::Rectangle;
+	case RT_SKETCH_POLYGON_SQUARE:
+	    return BRLObolPolygonType::Square;
+	default:
+	    return BRLObolPolygonType::General;
+    }
+}
+
+static SbVec3f
+store_polygon_origin(const struct bg_polygon &poly, const point_t fallback)
+{
+    if (poly.num_contours > 0 && poly.contour && poly.contour[0].num_points > 0 &&
+	    poly.contour[0].point)
+	return store_vec3(poly.contour[0].point[0]);
+    return store_vec3(fallback);
+}
+
+static SoNode *
+store_polygon_fill_node(const BRLObolPolygonStoreRecord &rec)
+{
+    if (!rec.visual.fill || rec.polygon.num_contours == 0 ||
+	    !rec.polygon.contour || rec.polygon.contour[0].num_points < 3 ||
+	    rec.polygon.contour[0].open)
+	return NULL;
+
+    for (size_t i = 0; i < rec.polygon.num_contours; i++) {
+	if (rec.polygon.contour[i].open)
+	    return NULL;
+    }
+
+    std::vector<SbVec3f> points;
+    std::vector<int32_t> indices;
+
+    if (rec.polygon.num_contours == 1) {
+	const struct bg_poly_contour &contour = rec.polygon.contour[0];
+	points.reserve(contour.num_points);
+	for (size_t i = 0; i < contour.num_points; i++)
+	    points.push_back(store_vec3(contour.point[i]));
+
+	point_t center;
+	vect_t normal;
+	plane_t plane;
+	if (bg_fit_plane(&center, &normal, contour.num_points, contour.point) ||
+		bg_plane_pt_nrml(&plane, center, normal))
+	    return NULL;
+
+	point2d_t *projected = (point2d_t *)bu_calloc(contour.num_points,
+		sizeof(point2d_t), "BRLObol projected polygon fill points");
+	for (size_t i = 0; i < contour.num_points; i++)
+	    bg_plane_closest_pt(&projected[i][0], &projected[i][1],
+		    &plane, &contour.point[i]);
+
+	int *faces = NULL;
+	int numFaces = 0;
+	int ret = bg_poly_triangulate(&faces, &numFaces, NULL, NULL, NULL, 0,
+		projected, contour.num_points, TRI_EAR_CLIPPING);
+	bu_free(projected, "BRLObol projected polygon fill points");
+	if (ret || numFaces <= 0 || !faces) {
+	    if (faces)
+		bu_free(faces, "BRLObol polygon fill faces");
+	    return NULL;
+	}
+
+	indices.reserve(static_cast<size_t>(numFaces) * 3);
+	for (int i = 0; i < numFaces * 3; i++)
+	    indices.push_back(static_cast<int32_t>(faces[i]));
+	bu_free(faces, "BRLObol polygon fill faces");
+    } else {
+	struct bg_polygon poly = BG_POLYGON_NULL;
+	bg_polygon_cpy(&poly, const_cast<struct bg_polygon *>(&rec.polygon));
+
+	int *faces = NULL;
+	int numFaces = 0;
+	point_t *outPts = NULL;
+	int numOutPts = 0;
+	int ret = bg_polygon_triangulate(&faces, &numFaces, &outPts, &numOutPts,
+		&poly, TRI_EAR_CLIPPING);
+	bg_polygon_free(&poly);
+
+	if (ret || numFaces <= 0 || numOutPts <= 0 || !faces || !outPts) {
+	    if (faces)
+		bu_free(faces, "BRLObol polygon fill faces");
+	    if (outPts)
+		bu_free(outPts, "BRLObol polygon fill points");
+	    return NULL;
+	}
+
+	points.reserve(static_cast<size_t>(numOutPts));
+	for (int i = 0; i < numOutPts; i++)
+	    points.push_back(store_vec3(outPts[i]));
+
+	indices.reserve(static_cast<size_t>(numFaces) * 3);
+	for (int i = 0; i < numFaces * 3; i++)
+	    indices.push_back(static_cast<int32_t>(faces[i]));
+
+	bu_free(faces, "BRLObol polygon fill faces");
+	bu_free(outPts, "BRLObol polygon fill points");
+    }
+
+    if (points.empty() || indices.empty())
+	return NULL;
+
+    SoBRLMeshShape *shape = new SoBRLMeshShape;
+    shape->sourcePath = rec.name;
+    shape->sourceName = rec.name;
+    shape->sourceType = "view-polygon-fill";
+    shape->displayName = rec.name;
+    shape->geometryName = rec.name;
+    shape->sourceIdentity = rec.name;
+    shape->cacheIdentity = rec.name;
+    shape->databaseIntent = FALSE;
+    shape->overlayIntent = TRUE;
+    shape->hudIntent = FALSE;
+    shape->localSource = rec.scope == BRLObolFeatureScope::Local ? TRUE : FALSE;
+    shape->sharedSource = rec.scope == BRLObolFeatureScope::Shared ? TRUE : FALSE;
+    shape->nonDatabaseSource = TRUE;
+    shape->drawMode = BRLOBOL_LOD_DRAW_SHADED;
+    shape->recordRole = "view-polygon";
+    shape->geometryKind = "surface";
+    shape->sourceId = static_cast<uint32_t>(rec.revision);
+    shape->transparency = 0.55f;
+    store_apply_mesh_color(shape, rec.visual.fillColor);
+
+    if (!points.empty() && !indices.empty())
+	shape->setIndexedTriangles(&points[0], static_cast<int>(points.size()),
+		&indices[0], static_cast<int>(indices.size()));
+    return shape;
+}
+
 static SoNode *
 store_polygon_node(const BRLObolPolygonStoreRecord &rec)
 {
@@ -1502,9 +1857,15 @@ store_polygon_node(const BRLObolPolygonStoreRecord &rec)
     feature.style.hasLineWidth = TRUE;
     feature.style.lineWidth = 1;
     SoBRLVListShape *shape = store_vlist_node(feature);
-    shape->sourceType = "view-polygon";
-    shape->geometryKind = "polygon";
-    return shape;
+    shape->sourceType = "view-polygon-edge";
+    shape->geometryKind = "line";
+
+    SoSeparator *sep = new SoSeparator;
+    SoNode *fillNode = store_polygon_fill_node(rec);
+    if (fillNode)
+	sep->addChild(fillNode);
+    sep->addChild(shape);
+    return sep;
 }
 
 static void
@@ -2051,6 +2412,7 @@ BRLObolPolygonStore::setFill(BRLObolPolygonHandle handle,
     rec->visual.fillSlope = slope;
     rec->visual.fillSpacing = spacing;
     rec->revision++;
+    this->impl->realize(rec);
     return TRUE;
 }
 
@@ -2063,6 +2425,7 @@ BRLObolPolygonStore::setFillColor(BRLObolPolygonHandle handle,
 	return FALSE;
     rec->visual.fillColor = fillColor;
     rec->revision++;
+    this->impl->realize(rec);
     return TRUE;
 }
 
@@ -2176,20 +2539,85 @@ BRLObolPolygonStore::csg(BRLObolPolygonHandle target,
 }
 
 BRLObolPolygonHandle
-BRLObolPolygonStore::importSketch(const SbString &UNUSED(name),
-	BRLObolFeatureScope UNUSED(scope),
-	struct db_i *UNUSED(dbip),
-	struct directory *UNUSED(dp))
+BRLObolPolygonStore::importSketch(const SbString &name,
+	BRLObolFeatureScope scope,
+	struct db_i *dbip,
+	struct directory *dp)
 {
-    return BRLObolPolygonHandle();
+    if (store_string(name).empty() || !dbip || !dp)
+	return BRLObolPolygonHandle();
+
+    const std::string key = store_key(scope, name);
+    if (this->impl->names.find(key) != this->impl->names.end())
+	return BRLObolPolygonHandle();
+
+    struct rt_sketch_polygon_data data;
+    rt_sketch_polygon_data_init(&data);
+    if (db_sketch_to_polygon_data(&data, store_string(name).c_str(),
+		dbip, dp) != 0) {
+	rt_sketch_polygon_data_free(&data);
+	return BRLObolPolygonHandle();
+    }
+
+    if (data.polygon.num_contours == 0 ||
+	    store_polygon_point_count(data.polygon) == 0) {
+	rt_sketch_polygon_data_free(&data);
+	return BRLObolPolygonHandle();
+    }
+
+    BRLObolPolygonStoreRecord *rec = new BRLObolPolygonStoreRecord;
+    rec->id = this->impl->nextId++;
+    rec->revision = 1;
+    rec->name = name;
+    rec->scope = scope;
+    rec->type = store_polygon_type_from_rt(data.type);
+    rec->originPoint = store_polygon_origin(data.polygon, data.origin_point);
+    HMOVE(rec->viewPlane, data.vp);
+    rec->visual.fill = data.fill_flag ? TRUE : FALSE;
+    rec->visual.fillSlope = SbVec2f(static_cast<float>(data.fill_dir[0]),
+	    static_cast<float>(data.fill_dir[1]));
+    rec->visual.fillSpacing = static_cast<float>(data.fill_delta);
+    rec->visual.fillColor = store_bu_to_sbcolor(data.fill_color);
+    if (data.have_edge_color)
+	rec->visual.edgeColor = store_bu_to_sbcolor(data.edge_color);
+    rec->visual.viewZ = static_cast<float>(data.vZ);
+    bg_polygon_cpy(&rec->polygon, &data.polygon);
+
+    rt_sketch_polygon_data_free(&data);
+
+    this->impl->records[rec->id] = rec;
+    this->impl->names[key] = rec->id;
+    this->impl->realize(rec);
+    return this->impl->handle(rec);
 }
 
 SbBool
-BRLObolPolygonStore::exportSketch(BRLObolPolygonHandle UNUSED(handle),
-	struct db_i *UNUSED(dbip),
-	const SbString &UNUSED(name)) const
+BRLObolPolygonStore::exportSketch(BRLObolPolygonHandle handle,
+	struct db_i *dbip,
+	const SbString &name) const
 {
-    return FALSE;
+    BRLObolPolygonStoreRecord *rec = this->impl->record(handle);
+    if (!rec || !dbip || store_string(name).empty())
+	return FALSE;
+
+    struct rt_sketch_polygon_data data;
+    rt_sketch_polygon_data_init(&data);
+    data.type = store_polygon_type_to_rt(rec->type);
+    data.fill_flag = rec->visual.fill ? 1 : 0;
+    V2SET(data.fill_dir, rec->visual.fillSlope[0], rec->visual.fillSlope[1]);
+    data.fill_delta = rec->visual.fillSpacing;
+    store_sbcolor_to_bu(rec->visual.fillColor, &data.fill_color);
+    store_point(data.origin_point, rec->originPoint);
+    HMOVE(data.vp, rec->viewPlane);
+    data.vZ = rec->visual.viewZ;
+    data.have_edge_color = 1;
+    store_sbcolor_to_bu(rec->visual.edgeColor, &data.edge_color);
+    bg_polygon_cpy(&data.polygon, &rec->polygon);
+
+    struct directory *dp = db_sketch_polygon_data_to_sketch(dbip,
+	    store_string(name).c_str(), &data);
+    rt_sketch_polygon_data_free(&data);
+    return dp ? TRUE : FALSE;
 }
 
 size_t
