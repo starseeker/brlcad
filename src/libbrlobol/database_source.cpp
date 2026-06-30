@@ -33,11 +33,18 @@
 
 #include <vector>
 #include <limits.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
 SO_NODE_SOURCE(SoBRLDatabaseSource);
+
+static int
+database_source_float_different(float a, float b)
+{
+    return fabsf(a - b) > 1.0e-6f;
+}
 
 BRLObolDatabaseSourceSummary::BRLObolDatabaseSourceSummary(void) :
     valid(FALSE),
@@ -56,6 +63,12 @@ BRLObolDatabaseSourceSummary::BRLObolDatabaseSourceSummary(void) :
     realizationStatus(SoBRLDatabaseSource::UNREALIZED),
     realizationDiagnostic(""),
     realizationIdentity(""),
+    realizationRoleFlags(SoBRLDatabaseSource::REALIZATION_ROLE_NONE),
+    realizationViewDependent(FALSE),
+    realizationViewScale(0.0f),
+    realizationBotThreshold(0),
+    realizationCurveScale(0.0f),
+    realizationPointScale(0.0f),
     visible(TRUE),
     highlighted(FALSE),
     lineStyle(0),
@@ -64,6 +77,7 @@ BRLObolDatabaseSourceSummary::BRLObolDatabaseSourceSummary(void) :
     materialColorValid(FALSE),
     materialColor(1.0f, 1.0f, 1.0f),
     materialRevision(0),
+    materialPolicy(SoBRLDatabaseSource::MATERIAL_INHERIT),
     colorOverride(FALSE),
     color(1.0f, 1.0f, 1.0f),
     stale(TRUE),
@@ -1175,6 +1189,8 @@ SoBRLDatabaseSource::SoBRLDatabaseSource(void) :
     SO_NODE_DEFINE_ENUM_VALUE(RealizationStatus, UNREALIZED);
     SO_NODE_DEFINE_ENUM_VALUE(RealizationStatus, REALIZED);
     SO_NODE_DEFINE_ENUM_VALUE(RealizationStatus, FAILED);
+    SO_NODE_DEFINE_ENUM_VALUE(MaterialPolicy, MATERIAL_INHERIT);
+    SO_NODE_DEFINE_ENUM_VALUE(MaterialPolicy, MATERIAL_DATABASE);
 
     SO_NODE_ADD_FIELD(path, (""));
     SO_NODE_ADD_FIELD(drawMode, (WIREFRAME));
@@ -1187,6 +1203,8 @@ SoBRLDatabaseSource::SoBRLDatabaseSource(void) :
     SO_NODE_ADD_FIELD(materialColorValid, (FALSE));
     SO_NODE_ADD_FIELD(materialColor, (SbColor(1.0f, 1.0f, 1.0f)));
     SO_NODE_ADD_FIELD(materialRevision, (0));
+    SO_NODE_ADD_FIELD(materialPolicy, (MATERIAL_INHERIT));
+    SO_NODE_SET_SF_ENUM_TYPE(materialPolicy, MaterialPolicy);
     SO_NODE_ADD_FIELD(colorOverride, (FALSE));
     SO_NODE_ADD_FIELD(color, (SbColor(1.0f, 1.0f, 1.0f)));
     SO_NODE_ADD_FIELD(tessellationAbsTol, (0.0f));
@@ -1204,6 +1222,12 @@ SoBRLDatabaseSource::SoBRLDatabaseSource(void) :
     SO_NODE_SET_SF_ENUM_TYPE(realizationStatus, RealizationStatus);
     SO_NODE_ADD_FIELD(realizationDiagnostic, (""));
     SO_NODE_ADD_FIELD(realizationIdentity, (""));
+    SO_NODE_ADD_FIELD(realizationRoleFlags, (REALIZATION_ROLE_NONE));
+    SO_NODE_ADD_FIELD(realizationViewDependent, (FALSE));
+    SO_NODE_ADD_FIELD(realizationViewScale, (0.0f));
+    SO_NODE_ADD_FIELD(realizationBotThreshold, (0));
+    SO_NODE_ADD_FIELD(realizationCurveScale, (0.0f));
+    SO_NODE_ADD_FIELD(realizationPointScale, (0.0f));
     SO_NODE_ADD_FIELD(stale, (TRUE));
     SO_NODE_ADD_FIELD(staleReason, (STALE_SOURCE));
 
@@ -1338,6 +1362,126 @@ SoBRLDatabaseSource::markStale(uint32_t reason)
     this->realizationStatus = UNREALIZED;
     this->realizationDiagnostic = "";
     this->syncRealizedShapeOwnerState();
+}
+
+int
+SoBRLDatabaseSource::setRealizationState(int nextStatus,
+	uint32_t nextRealizedSourceRevision,
+	uint32_t nextRealizedInputsRevision,
+	uint32_t nextStaleReason,
+	const char *diagnostic)
+{
+    if (nextStatus != REALIZED && nextStatus != UNREALIZED &&
+	    nextStatus != FAILED)
+	nextStatus = UNREALIZED;
+
+    const SbBool realized = nextStatus == REALIZED ? TRUE : FALSE;
+    if (realized) {
+	nextRealizedSourceRevision = nextRealizedSourceRevision ?
+	    nextRealizedSourceRevision : this->sourceRevision.getValue();
+	nextRealizedInputsRevision = nextRealizedInputsRevision ?
+	    nextRealizedInputsRevision : this->inputsRevision.getValue();
+	nextStaleReason = STALE_NONE;
+    } else if (!nextStaleReason) {
+	nextStaleReason = STALE_SOURCE;
+    }
+
+    const SbBool nextStale = realized ? FALSE : TRUE;
+    SbString nextDiagnostic = diagnostic ? diagnostic : "";
+
+    int changed = 0;
+    if (this->realizationStatus.getValue() != nextStatus) {
+	this->realizationStatus = nextStatus;
+	changed = 1;
+    }
+    if (this->stale.getValue() != nextStale) {
+	this->stale = nextStale;
+	changed = 1;
+    }
+    if (this->staleReason.getValue() != nextStaleReason) {
+	this->staleReason = nextStaleReason;
+	changed = 1;
+    }
+    if (strcmp(this->realizationDiagnostic.getValue().getString(),
+	    nextDiagnostic.getString()) != 0) {
+	this->realizationDiagnostic = nextDiagnostic;
+	changed = 1;
+    }
+    if (realized &&
+	    this->realizedSourceRevision.getValue() !=
+	    nextRealizedSourceRevision) {
+	this->realizedSourceRevision = nextRealizedSourceRevision;
+	changed = 1;
+    }
+    if (realized &&
+	    this->realizedInputsRevision.getValue() !=
+	    nextRealizedInputsRevision) {
+	this->realizedInputsRevision = nextRealizedInputsRevision;
+	changed = 1;
+    }
+    if (realized &&
+	    this->realizedViewRevision.getValue() !=
+	    this->viewRevision.getValue()) {
+	this->realizedViewRevision = this->viewRevision.getValue();
+	changed = 1;
+    }
+    if (realized &&
+	    this->realizedRevision.getValue() != nextRealizedSourceRevision) {
+	this->realizedRevision = nextRealizedSourceRevision;
+	changed = 1;
+    }
+    if (changed)
+	this->syncRealizedShapeOwnerState();
+    return changed;
+}
+
+int
+SoBRLDatabaseSource::setRealizationRoleFlags(int roleFlags)
+{
+    const int validFlags = REALIZATION_ROLE_CSG | REALIZATION_ROLE_MESH;
+    roleFlags &= validFlags;
+    if (this->realizationRoleFlags.getValue() == roleFlags)
+	return 0;
+
+    this->realizationRoleFlags = roleFlags;
+    this->syncRealizedShapeOwnerState();
+    return 1;
+}
+
+int
+SoBRLDatabaseSource::setRealizationViewPolicy(SbBool viewDependent,
+	float viewScale,
+	uint32_t botThreshold,
+	float curveScale,
+	float pointScale)
+{
+    int changed = 0;
+    if (this->realizationViewDependent.getValue() != viewDependent) {
+	this->realizationViewDependent = viewDependent;
+	changed = 1;
+    }
+    if (database_source_float_different(
+	    this->realizationViewScale.getValue(), viewScale)) {
+	this->realizationViewScale = viewScale;
+	changed = 1;
+    }
+    if (this->realizationBotThreshold.getValue() != botThreshold) {
+	this->realizationBotThreshold = botThreshold;
+	changed = 1;
+    }
+    if (database_source_float_different(
+	    this->realizationCurveScale.getValue(), curveScale)) {
+	this->realizationCurveScale = curveScale;
+	changed = 1;
+    }
+    if (database_source_float_different(
+	    this->realizationPointScale.getValue(), pointScale)) {
+	this->realizationPointScale = pointScale;
+	changed = 1;
+    }
+    if (changed)
+	this->syncRealizedShapeOwnerState();
+    return changed;
 }
 
 void
@@ -2577,6 +2721,14 @@ SoBRLDatabaseSource::getSummary(BRLObolDatabaseSourceSummary &summary) const
     summary.realizationStatus = this->realizationStatus.getValue();
     summary.realizationDiagnostic = this->realizationDiagnostic.getValue();
     summary.realizationIdentity = this->realizationIdentity.getValue();
+    summary.realizationRoleFlags = this->realizationRoleFlags.getValue();
+    summary.realizationViewDependent =
+	this->realizationViewDependent.getValue();
+    summary.realizationViewScale = this->realizationViewScale.getValue();
+    summary.realizationBotThreshold =
+	this->realizationBotThreshold.getValue();
+    summary.realizationCurveScale = this->realizationCurveScale.getValue();
+    summary.realizationPointScale = this->realizationPointScale.getValue();
     summary.visible = this->visible.getValue();
     summary.highlighted = this->highlighted.getValue();
     summary.lineStyle = this->lineStyle.getValue();
@@ -2585,6 +2737,7 @@ SoBRLDatabaseSource::getSummary(BRLObolDatabaseSourceSummary &summary) const
     summary.materialColorValid = this->materialColorValid.getValue();
     summary.materialColor = this->materialColor.getValue();
     summary.materialRevision = this->materialRevision.getValue();
+    summary.materialPolicy = this->materialPolicy.getValue();
     summary.colorOverride = this->colorOverride.getValue();
     summary.color = this->color.getValue();
     summary.stale = this->stale.getValue();

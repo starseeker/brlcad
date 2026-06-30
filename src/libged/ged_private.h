@@ -39,9 +39,6 @@
 #include "rt/view.h"
 #include "raytrace.h"
 #include "rt/geom.h"
-#include "bsg/defines.h"
-#include "bsg/scene_object.h"
-#include "bsg/draw_ctx.h"
 #include "ged.h"
 #include "include/plugin.h"
 #include "./bsg_ged_draw_private.h"
@@ -85,9 +82,9 @@ struct vd_curve {
 #define VD_CURVE_NULL   ((struct vd_curve *)NULL)
 
 struct ged_drawable {
-    rt_view_scene_ref            gd_scene_root;         /**< @brief neutral handle for the retained draw-scene root of the drawn-set tree */
+    ged_draw_group_ref           gd_scene_root_group_ref; /**< @brief cache-style typed handle for the draw-scene root of the drawn-set tree */
     uint64_t                     gd_draw_rev;           /**< @brief  monotonic revision counter; bumped on every structural mutation of the draw tree; reset to 0 by ged_draw_clear */
-    struct bsg_draw_ctx          bsg_ctx;               /**< @brief  draw-tree context attached to gd_scene_root; draw_rev points at gd_draw_rev so freeing helpers can bump without gedp */
+    void                        *gd_draw_bookkeeping_ctx; /**< @brief backend-owned draw-tree bookkeeping attached to the draw-scene root */
     struct bu_ptbl               gd_draw_registry;      /**< @brief GED-owned draw record registry; refs store registry ids, not BSG node addresses */
     uint64_t                     gd_draw_next_token;    /**< @brief next non-zero registry token */
     int                          gd_draw_registry_init; /**< @brief non-zero once gd_draw_registry is initialized */
@@ -107,6 +104,13 @@ struct ged_drawable {
     uintptr_t                    gd_draw_next_observer_token;
     int                          gd_draw_observers_init;
     int                          gd_draw_observer_dispatch_depth;
+    void                        *gd_obol_scene_controller; /**< @brief active SoBRLSceneController mirrored from GED draw transactions */
+    void                        *gd_obol_controller;    /**< @brief optional borrowed BRLObolViewController wrapper for compatibility */
+    ged_draw_observer_token       gd_obol_observer_token;
+    int                          gd_obol_scene_controller_owned; /**< @brief non-zero when libged owns gd_obol_scene_controller */
+    struct bu_ptbl               gd_obol_context_tokens; /**< @brief GED-owned Obol scene-context tokens returned through legacy scene_ctx APIs */
+    int                          gd_obol_context_tokens_init;
+    uint64_t                     gd_obol_next_context_token;
     uintptr_t                    gd_highlight_token;     /**< @brief active highlighted draw-shape ref token, or 0 */
     uint64_t                     gd_highlight_scene_rev; /**< @brief draw-scene revision captured with gd_highlight_token */
     /* Monotonic highlight-state revision counter.  Bumped on highlight
@@ -136,8 +140,8 @@ struct ged_drawable {
 };
 
 __BEGIN_DECLS
-rt_view_scene_ref ged_scene_root_rt_ref(struct ged *gedp);
-void ged_scene_root_rt_ref_set(struct ged *gedp, rt_view_scene_ref root);
+ged_draw_group_ref ged_scene_root_group_ref(struct ged *gedp);
+void ged_scene_root_group_ref_set(struct ged *gedp, ged_draw_group_ref root);
 void ged_scene_root_ref_clear(struct ged *gedp);
 void ged_view_legacy_state_init(struct ged *gedp);
 void ged_view_legacy_state_free(struct ged *gedp);
@@ -190,11 +194,9 @@ struct ged_impl {
     uint32_t magic;
     Ged_Internal *i;
 
-    /* Transitional retained-view storage, hidden from public struct ged while
-     * the backing implementation migrates from BSG to Obol/libbrlobol. */
-    void *ged_gvp;
-    struct bsg_view_set ged_views;
-    struct bu_ptbl ged_free_views;
+    /* Transitional retained-view storage, hidden behind ged_view_legacy.cpp
+     * while the backing implementation migrates from BSG to Obol/libbrlobol. */
+    void *ged_view_state_ctx;
 
     struct ged_db_index *ged_db_indexp;
     struct ged_event_txn_state *ged_event_txnp;
@@ -282,7 +284,7 @@ GED_EXPORT extern void ged_draw_observers_free(struct ged *gedp);
 struct draw_data_t {
     struct ged *gedp;
     struct db_i *dbip;
-    void *g_ctx;
+    ged_draw_group_ref draw_parent_group_ref;
     void *view_ctx;
     struct ged_draw_appearance_settings *vs;
     const struct bn_tol *tol;

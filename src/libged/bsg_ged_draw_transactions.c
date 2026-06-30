@@ -39,6 +39,7 @@
 #include "ged/selection_state.h"
 #include "./ged_private.h"
 #include "./bsg_ged_draw_private.h"
+#include "./bsg_ged_draw_view_private.h"
 #include "./draw/ged_draw.h"
 
 struct ged_draw_db_update_ctx {
@@ -1613,14 +1614,7 @@ _ged_draw_txn_note_name(struct ged_draw_transaction_result *result,
 static size_t
 _ged_draw_root_child_count(struct ged *gedp)
 {
-    if (!gedp)
-	return 0;
-
-    rt_view_scene_ref root_ref = ged_scene_root_rt_ref(gedp);
-    struct ged_draw_scene_tree_summary summary;
-    if (!ged_draw_scene_context_tree_summary(root_ref.opaque, &summary))
-	return 0;
-    return summary.child_count;
+    return ged_draw_source_root_child_count(gedp);
 }
 
 

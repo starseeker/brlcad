@@ -269,9 +269,10 @@ draw_gather_paths(struct db_full_path *path, mat_t *curr_mat, void *client_data)
 
 	unsigned char rgb[3];
 	bu_color_to_rgb_chars(&dd->c, rgb);
-	(void)ged_draw_scene_context_commit_database_leaf_draft(dd->g_ctx, dd->gedp,
-		dd->view_ctx, dd->dbip, path, *curr_mat, dd->tol, dd->ttol,
-		dd->vs, dd->bool_op, rgb, has_draw_size, draw_size);
+	(void)ged_draw_source_group_ref_commit_database_leaf_draft(dd->gedp,
+		dd->draw_parent_group_ref, dd->view_ctx, dd->dbip, path,
+		*curr_mat, dd->tol, dd->ttol, dd->vs, dd->bool_op, rgb,
+		has_draw_size, draw_size);
 
     }
 }
@@ -330,9 +331,9 @@ ged_draw_view_context_gobject_create(struct ged *gedp,
 	return 0;
     }
 
-    void *g_ctx = NULL;
-    if (!ged_draw_view_context_overlay_internal_create_context(gedp, view_ctx,
-	    gobject_name, fp, &ip, &g_ctx)) {
+    ged_draw_group_ref draw_parent_group_ref = GED_DRAW_GROUP_REF_NULL;
+    if (!ged_draw_view_context_overlay_internal_create_group_ref(gedp, view_ctx,
+	    gobject_name, fp, &ip, &draw_parent_group_ref)) {
 	db_free_full_path(fp);
 	BU_PUT(fp, struct db_full_path);
 	rt_db_free_internal(ip);
@@ -354,7 +355,7 @@ ged_draw_view_context_gobject_create(struct ged *gedp,
     dd.s_size = &s_size;
     bu_color_from_rgb_chars(&dd.c, wcolor);
     dd.vs = &vs;
-    dd.g_ctx = g_ctx;
+    dd.draw_parent_group_ref = draw_parent_group_ref;
 
     draw_gather_paths(fp, &mat, (void *)&dd);
 

@@ -41,6 +41,7 @@
 #include "rt/view.h"
 #include "rt/primitives/sketch_legacy_bsg.h"
 #include "./bsg_ged_draw_private.h"
+#include "./bsg_ged_draw_view_private.h"
 
 int
 ged_draw_view_context_hud_sync(void *view_ctx)

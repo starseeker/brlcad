@@ -128,6 +128,70 @@ SoBRLVListShape::setLineSet(const SbVec3f *points, const int32_t *commands, int 
     this->command.setValues(0, count, commands);
 }
 
+SbBool
+SoBRLVListShape::translatePoints(const SbVec3f &offset)
+{
+    const int count = this->point.getNum();
+    if (count <= 0)
+	return FALSE;
+
+    for (int i = 0; i < count; i++) {
+	const SbVec3f pointValue = this->point[i];
+	this->point.set1Value(i, pointValue + offset);
+    }
+
+    if (this->drawCenterValid.getValue()) {
+	this->drawCenter = this->drawCenter.getValue() + offset;
+    }
+
+    return TRUE;
+}
+
+void
+SoBRLVListShape::setDrawCenter(const SbVec3f &center)
+{
+    this->drawCenterValid = TRUE;
+    this->drawCenter = center;
+}
+
+SbBool
+SoBRLVListShape::updateDrawBoundsFromPoints(void)
+{
+    const int count = this->point.getNum();
+    if (count <= 0) {
+	this->drawCenterValid = FALSE;
+	this->drawSizeValid = FALSE;
+	return FALSE;
+    }
+
+    SbVec3f bmin = this->point[0];
+    SbVec3f bmax = this->point[0];
+    for (int i = 1; i < count; i++) {
+	const SbVec3f pointValue = this->point[i];
+	for (int axis = 0; axis < 3; axis++) {
+	    if (pointValue[axis] < bmin[axis])
+		bmin[axis] = pointValue[axis];
+	    if (pointValue[axis] > bmax[axis])
+		bmax[axis] = pointValue[axis];
+	}
+    }
+
+    this->drawCenterValid = TRUE;
+    this->drawCenter = SbVec3f(
+	    (bmin[0] + bmax[0]) * 0.5f,
+	    (bmin[1] + bmax[1]) * 0.5f,
+	    (bmin[2] + bmax[2]) * 0.5f);
+
+    float size = bmax[0] - bmin[0];
+    if ((bmax[1] - bmin[1]) > size)
+	size = bmax[1] - bmin[1];
+    if ((bmax[2] - bmin[2]) > size)
+	size = bmax[2] - bmin[2];
+    this->drawSizeValid = TRUE;
+    this->drawSize = size;
+    return TRUE;
+}
+
 void
 SoBRLVListShape::setPointAttributes(const int *colorValid,
 	const SbColor *colors, const int *scaleValid, const float *scales,

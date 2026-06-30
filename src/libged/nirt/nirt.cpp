@@ -59,6 +59,8 @@
 #include "../qray.h"
 #include "../ged_private.h"
 
+#define GED_NIRT_DL_WFLAG_DOWN 1
+
 struct dl_wflag_ctx {
     struct ged *gedp;
     int wflag;
@@ -225,7 +227,7 @@ ged_nirt_core(struct ged *gedp, int argc, const char *argv[])
 	if (retcode != 0)
 	    _ged_wait_status(gedp->ged_result_str, retcode);
 
-	dl_set_wflag(gedp, DOWN);
+	dl_set_wflag(gedp, GED_NIRT_DL_WFLAG_DOWN);
 
 	return BRLCAD_OK;
     }
@@ -595,7 +597,7 @@ ged_nirt_core(struct ged *gedp, int argc, const char *argv[])
     if (retcode != 0)
 	_ged_wait_status(gedp->ged_result_str, retcode);
 
-    dl_set_wflag(gedp, DOWN);
+    dl_set_wflag(gedp, GED_NIRT_DL_WFLAG_DOWN);
 
     /* Whether or not we're doing graphics, if we took a shot we should clear any
      * old objects from prior shots. */

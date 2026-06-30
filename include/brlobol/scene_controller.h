@@ -12,12 +12,15 @@
 #include "brlobol/defines.h"
 
 #include <Inventor/SbBasic.h>
+#include <Inventor/SbBox.h>
 #include <Inventor/SbColor.h>
 #include <Inventor/SbMatrix.h>
 #include <Inventor/SbString.h>
 #include <Inventor/SbVec3f.h>
 
 #include <stdint.h>
+
+#include "rt/view.h"
 
 class SoNode;
 class SoGroup;
@@ -65,6 +68,12 @@ public:
      */
     void setSceneRoot(SoNode *root);
     SoNode *getSceneRoot(void) const;
+    rt_view_scene_ref getSceneRef(void);
+    rt_view_scene_ref getSceneRef(void) const;
+    static SoBRLSceneController *fromSceneRef(rt_view_scene_ref ref);
+    static const SoBRLSceneController *fromConstSceneRef(
+	rt_view_scene_ref ref);
+    static SbBool sceneRefIsObol(rt_view_scene_ref ref);
     uint64_t getStructuralRevision(void) const;
     uint64_t getFrameRevision(void) const;
     SbBool getSceneSummary(BRLObolSceneSummary &summary) const;
@@ -99,6 +108,10 @@ public:
     int removeGroup(const char *groupPath);
     int clearGroup(const char *groupPath);
     int getGroupChildCount(const char *groupPath) const;
+    int getGroupDatabaseSourceCount(const char *groupPath) const;
+    SbBool getSceneSubtreeBounds(const char *nodePath,
+	SbBool includeOverlays,
+	SbBox3f &bounds) const;
 
     SoNode *findShape(const char *shapePath) const;
     SoGroup *findShapeParent(const char *shapePath) const;
@@ -159,9 +172,31 @@ public:
 	int lineStyle,
 	int lineWidth,
 	float transparency,
+	SbBool colorOverride,
+	const SbColor &color,
 	SbBool materialColorValid,
 	const SbColor &materialColor,
 	uint32_t materialRevision);
+    int setDatabaseSourceDrawMode(const char *sourcePath,
+	int drawMode);
+    int setDatabaseSourceMaterialPolicy(const char *sourcePath,
+	int materialPolicy);
+    int markDatabaseSourceStale(const char *sourcePath,
+	uint32_t staleReason);
+    int setDatabaseSourceRealizationState(const char *sourcePath,
+	int realizationStatus,
+	uint32_t realizedSourceRevision,
+	uint32_t realizedInputsRevision,
+	uint32_t staleReason,
+	const char *diagnostic = NULL);
+    int setDatabaseSourceRealizationRoleFlags(const char *sourcePath,
+	int roleFlags);
+    int setDatabaseSourceRealizationViewPolicy(const char *sourcePath,
+	SbBool viewDependent,
+	float viewScale,
+	uint32_t botThreshold,
+	float curveScale,
+	float pointScale);
     int moveDatabaseSourceToGroup(const char *sourcePath,
 	const char *groupPath);
     int removeDatabaseSource(const char *sourcePath);
@@ -178,6 +213,11 @@ public:
 	SbString &groupOut, SbString &nameOut, SbString &valueOut) const;
     int getSceneTreeSummaryCount(void) const;
     SbBool getSceneTreeSummary(int index,
+	BRLObolSceneTreeSummary &summary) const;
+    SbBool getSceneTreeSummaryForPath(const char *nodePath,
+	BRLObolSceneTreeSummary &summary) const;
+    SbBool getSceneChildTreeSummary(const char *nodePath,
+	int childIndex,
 	BRLObolSceneTreeSummary &summary) const;
     int getSceneDisplaySummaryCount(void) const;
     SbBool getSceneDisplaySummary(int index,

@@ -374,6 +374,21 @@ endif()
 distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_draw_scene_tmp.g)
 distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_draw_scene_cache)
 
+# GED draw transaction to Obol controller bridge regression.
+brlcad_addexec(ged_test_obol_draw_sync "obol_sync.cpp" "libged;libbrlobol;libwdb" TEST)
+if(TARGET ged_test_obol_draw_sync)
+  foreach(tdp ${test_deps})
+    if (TARGET ${tdp})
+      add_dependencies(ged_test_obol_draw_sync ${tdp})
+    endif ()
+  endforeach()
+endif(TARGET ged_test_obol_draw_sync)
+brlcad_add_test(NAME ged_test_obol_draw_sync COMMAND ged_test_obol_draw_sync)
+if(TARGET ged_test_obol_draw_sync)
+  set_property(TEST ged_test_obol_draw_sync APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+endif()
+distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_obol_draw_sync_tmp.g)
+
 # Phase T1/T4 (drawing_stack_modernization): BSG overlay feature lifecycle
 # structural test — verifies create/find/visit/remove without a display manager.
 brlcad_addexec(ged_test_tcl_overlay_bsg "tcl_overlay_bsg.cpp" "libged;libdm" TEST)

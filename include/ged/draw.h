@@ -36,6 +36,9 @@
  * Drawn database objects are keyed by struct db_full_path.  String path
  * formatting is available for logging/UI, but graph mutation APIs use the
  * structured path form.
+ *
+ * C++ callers that need to mirror this semantic draw state into an
+ * Obol/libbrlobol view controller should use ged/draw_obol.h.
  */
 /** @{ */
 /* @file ged/draw.h */
@@ -908,6 +911,11 @@ ged_draw_shape_ref_set_visible(struct ged *gedp,
 			       int visible);
 
 GED_EXPORT extern int
+ged_draw_shape_ref_display_summary(struct ged *gedp,
+				   ged_draw_shape_ref ref,
+				   struct ged_draw_scene_display_summary *out);
+
+GED_EXPORT extern int
 ged_draw_shape_ref_material_summary(struct ged *gedp,
 				    ged_draw_shape_ref ref,
 				    struct ged_draw_shape_material_summary *out);
@@ -943,6 +951,11 @@ ged_draw_shape_ref_line_command_at(struct ged *gedp,
 				   ged_draw_shape_ref ref,
 				   size_t index,
 				   int *out);
+
+GED_EXPORT extern int
+ged_draw_shape_ref_geometry_summary(struct ged *gedp,
+				    ged_draw_shape_ref ref,
+				    struct ged_draw_shape_geometry_summary *out);
 
 GED_EXPORT extern int
 ged_draw_shape_context_line_summary(void *shape_ctx,
@@ -1459,6 +1472,12 @@ ged_draw_shape_ref_publish_line_set(struct ged *gedp,
 				    const point_t *points,
 				    const int *commands,
 				    size_t point_count);
+
+GED_EXPORT extern int
+ged_draw_shape_ref_publish_point_set(struct ged *gedp,
+				     ged_draw_shape_ref ref,
+				     const point_t *points,
+				     size_t point_count);
 
 GED_EXPORT extern int
 ged_draw_shape_ref_publish_indexed_face_set(struct ged *gedp,

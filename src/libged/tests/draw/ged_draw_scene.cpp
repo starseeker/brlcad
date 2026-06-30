@@ -3716,6 +3716,7 @@ main(int ac, char *av[])
 	/* Internal BSG traversal smoke test. */
 	test_scene_context *draw_root = test_scene_root(gedp);
 	ASSERT(draw_root != NULL);
+	ASSERT(ged_draw_view_context_scene_root(view_ctx) == draw_root);
 
 	/* The draw root must have at least one child group (from the draw) */
 	test_scene_context *dr = (test_scene_context *)draw_root;
@@ -3723,6 +3724,7 @@ main(int ac, char *av[])
 	ASSERT(ged_draw_scene_context_tree_summary(draw_root, &draw_root_tree));
 	ASSERT(draw_root_tree.valid);
 	ASSERT(draw_root_tree.child_count > 0);
+	ASSERT(test_scene_child_count(draw_root) == draw_root_tree.child_count);
 
 	/* The draw root should have depth 0 (no parent). */
 	ASSERT(draw_root_tree.draw_tree_depth == 0);
@@ -3731,6 +3733,8 @@ main(int ac, char *av[])
 	/* A child's depth should be 1. */
 	test_scene_context *first_child = test_scene_child_at(dr, 0);
 	ASSERT(first_child != NULL);
+	test_scene_context *first_child_parent = test_scene_parent(first_child);
+	ASSERT(first_child_parent == draw_root);
 	struct ged_draw_scene_tree_summary first_child_tree;
 	ASSERT(ged_draw_scene_context_tree_summary(first_child, &first_child_tree));
 	ASSERT(first_child_tree.valid);

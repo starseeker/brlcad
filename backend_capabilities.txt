@@ -77,17 +77,245 @@ Current state:
   scene implementation, geometry publication, source realization, LoD
   realization, child/source attachment, and remaining scene-ref mutation.
 * `src/libged/bsg_ged_draw_private.h` still exposes transitional
-  `bsg_scene_ref` handles because live GED internals still need a retained
-  scene token while the Obol scene/source owner is incomplete.
+  `rt_view_scene_ref` facades because live GED internals still need neutral
+  handles for retained scene tokens while the Obol scene/source owner is
+  incomplete.
 * The pivot guard is enforcing staged boundary movement and should be updated
   when a bridge is intentionally retired.
 * The focused scene regression and the Obol/qtcad guard group are the main
   fast checks for this phase.
 
+Capability 1 completion path:
+
+* Establish an owned libbrlobol scene-controller path inside libged, so Obol is
+  available as a GED-owned scene/source target instead of only as a qtcad-
+  supplied mirror.
+* Make GED draw transactions write through to the Obol owner first, preserving
+  the current BSG-backed source adapter as a temporary backing-store/display
+  adapter.
+* Switch GED neutral record/query APIs to prefer Obol/libbrlobol scene,
+  source, display, material, and bounds summaries, using BSG only for missing
+  compatibility paths.
+* Replace BSG-backed root/group/shape/source mutation calls in
+  `bsg_ged_draw_source.c` with operations on the libbrlobol owner; keep BSG
+  synchronized from Obol only while legacy display paths still require it.
+* Retire the draw registry's retained scene-ref ownership fields once typed
+  GED refs resolve to semantic Obol identities/paths and the BSG adapter no
+  longer owns source state.
+* Declare Capability 1 complete only when root/group/shape/source/draw-intent
+  operations and GED records work through the Obol owner, the pivot guard
+  rejects new BSG-owned scene/source mutations outside the adapter, and the
+  draw transaction/redraw/material/highlight/erase/bounds/source-summary
+  regression set passes.
+
 Recent cleanup state:
 
-* Transaction clear/teardown accounting now uses neutral scene-context tree
-  summary data instead of a private `rt_view_scene_ref` child-count bridge.
+* libged can now create and own an internal `SoBRLSceneController` through
+  `ged_draw_obol_scene_controller_ensure`; owned controllers full-sync the
+  current GED draw set, receive subsequent draw transactions, and are cleaned
+  up during GED teardown.
+* GED shape-record database-source summaries now prefer the libged-owned Obol
+  scene controller when present, so public GED records can report Obol source
+  revisions while the BSG source adapter remains the fallback/backing store.
+* GED shape-ref display and material summaries now also prefer the
+  libged-owned Obol database source when present, moving visible/highlight,
+  line-style, transparency, material color, and material revision readback to
+  Obol-owned state for that path.
+* Public GED shape records now reuse the Obol-first shape display-summary
+  facade for visible, highlighted, draw mode, line width, and transparency
+  fields instead of leaving those fields on retained BSG shape summaries.
+* GED shape-ref geometry summaries now prefer the libged-owned Obol realized
+  shape summary when present, moving realized VLIST/mesh geometry name and
+  point/index-count readback to Obol-owned state for that path.  Shape-context
+  line and geometry readbacks now recover semantic source paths and prefer the
+  same Obol-owned realized data before retained fallback.
+* GED shape-ref line summary, point, command, and last-point readback now
+  prefer the libged-owned Obol VLIST shape when present, moving another
+  evidence-producing geometry path to Obol-owned realized data.
+* GED shape-ref VLIST translation now mutates the libged-owned Obol VLIST shape
+  directly when present, leaving the BSG geometry mutation path as a fallback
+  for callers without an owned Obol source instead of treating the adapter as a
+  second authoritative store.
+* GED shape-ref VLIST publish and geometry-clear now also mutate the
+  libged-owned Obol VLIST when present, so public line-set replacement,
+  clearing, line readback, geometry summaries, and non-overlay draw bounds all
+  observe the Obol owner before BSG fallback.
+* GED shape-ref indexed-face publication now writes point/index geometry into
+  the libged-owned Obol mesh shape when present, including legacy face-stream
+  validation and fan triangulation into Obol triangle fields.  Geometry clear
+  now also clears owned Obol mesh fields before falling back to the BSG
+  adapter.
+* Static source-adapter line-set and indexed-face publication now also publish
+  to the libged-owned Obol VLIST/mesh owner when a database source is present,
+  keeping source realization and redraw paths from treating the BSG geometry
+  node as the only publication owner.
+* GED shape-ref and source-adapter point-set publication now writes Obol
+  VLIST `POINT` commands into the owned database source before retained
+  point-set adapter synchronization, so point geometry has the same owner-first
+  publication path as line and indexed-face geometry.
+* NMG-region realization output now routes its filled line-set and
+  indexed-face geometry through the same Obol-first publication helpers before
+  the retained BSG adapter is synchronized.
+* GED draw-state summaries now prefer libged-owned Obol database-source draw
+  mode and realized-shape draw-matrix metadata when available, and retained
+  redraw line-set publication can create/update the owned Obol VLIST through
+  semantic source paths before preserving the temporary BSG geometry update.
+* GED source realization current, stale, and failed transitions now update the
+  libged-owned Obol database source realization status, stale metadata, and
+  realized revision fields through libbrlobol source/controller APIs before
+  preserving BSG adapter status for transitional display compatibility.
+* GED source realization role flags and view-policy metadata now update the
+  libged-owned Obol database source through libbrlobol source/controller APIs,
+  and local LoD realization decisions prefer Obol policy state before falling
+  back to the BSG adapter record.
+* GED shape-ref center and bounds-metadata mutation now update the
+  libged-owned Obol VLIST draw-center/draw-size fields when present, leaving
+  the BSG placement metadata path as a fallback for non-Obol callers.
+* Non-overlay GED draw-bounds readback now prefers the libged-owned Obol scene
+  database-source bounds aggregate when present.  Overlay-inclusive bounds
+  remain on the BSG adapter until Capability 2 owns overlay geometry.
+* Public GED shape display/material mutations now update the libged-owned
+  Obol database source first for visibility, highlight, color override,
+  transparency, and material color, then keep the BSG source adapter updated
+  for transitional display compatibility.
+* GED material color refresh now stamps the libged-owned Obol database source
+  with the selected material color and explicit material revision before
+  keeping the retained adapter material state synchronized.
+* Source-adapter material summaries now prefer the libged-owned Obol database
+  source before retained material fields, so internal material-copy/readback
+  paths consume the same owner-first material state as public shape refs.
+* Source-adapter display summaries and draw-state line-style readback now also
+  prefer the libged-owned Obol database source before retained display fields,
+  keeping internal redraw/display decisions aligned with public owner-first
+  shape-ref readback.
+* GED shape source snapshots now prefer libged-owned Obol database-source
+  runtime state for the borrowed database pointer and tessellation tolerance,
+  caching converted tolerance values in GED shape state for the public
+  snapshot lifetime before falling back to retained source-state data.
+* GED source runtime summaries now consume those Obol-first source snapshots
+  for database, fullpath, name, and tolerance data before using the retained
+  source-state record only for temporary mesh-LoD cache fields.  Typed GED
+  shape-ref view-context, LoD ensure, and realize-context entry points now
+  recover cached source refs when strict scene-revision refs are stale.
+* Public GED database-change/stale marking now writes stale state into the
+  libged-owned Obol database source first, using libbrlobol source stale flags
+  before keeping the BSG source adapter synchronized.
+* GED group visibility mutation now writes through to the libged-owned Obol
+  retained group before updating the BSG adapter, extending owner-first
+  mutation beyond database-source nodes.
+* GED group draw-intent mutation now writes group draw-mode changes through
+  the libged-owned Obol retained group before updating the transitional BSG
+  adapter; the same bridge is in place for dbpath/draw-intent path updates.
+* GED group appearance mutation now writes the Obol-represented retained
+  appearance fields (line width, transparency, and color override/color) into
+  the libged-owned Obol group before preserving the full legacy appearance
+  record in the BSG adapter.
+* GED group lookup/create now ensures the corresponding libged-owned Obol
+  retained group immediately, including empty groups with draw intent and no
+  database sources.
+* GED database-leaf draft commit now ensures the corresponding owned Obol
+  database source at commit time and moves it into the owned Obol group tree,
+  before the BSG source adapter remains synchronized for temporary display.
+* Generic source-owner append now moves the corresponding owned Obol database
+  source into the target Obol group after a retained append succeeds, so
+  source-adapter draft/group commit paths no longer need a database-leaf-only
+  shortcut to keep Obol group membership authoritative.
+* GED group-record summaries now prefer the libged-owned Obol retained group
+  for the fields Obol owns (draw mode, visibility, overlay flag, and
+  transparency), while preserving BSG adapter path/view/source-scope metadata.
+  The source-adapter internal group summary now uses the same Obol-first
+  owner readback, so erase/scope/group helper paths no longer treat retained
+  BSG group display and draw-intent fields as authoritative when a semantic
+  Obol group exists.
+* GED group appearance-settings readback now prefers the libged-owned Obol
+  retained group for draw mode, line width, transparency, and color override
+  state, with BSG retained as the compatibility fallback.
+* GED group-record shape counts now prefer recursive database-source counts
+  from the libged-owned Obol group tree, leaving BSG traversal as the fallback
+  for callers without an owned Obol scene.
+* Direct GED shape-source release now removes the corresponding owned Obol
+  database source and prunes empty Obol draw groups before releasing the BSG
+  source owner, moving a non-transaction lifecycle path to owner-first
+  behavior.
+* Direct GED root path erase, path-prefix erase, and draw clear now remove or
+  clear owned Obol database sources and prune empty Obol draw groups before
+  mutating the BSG source adapter, extending owner-first lifecycle behavior to
+  root-level draw-scene operations.
+* Direct GED root group-name erase now removes matching non-overlay owned Obol
+  draw groups before mutating the BSG source adapter, covering another
+  retained group lifecycle path outside transaction observer cleanup.
+* Source-adapter retained group free now removes the corresponding owned Obol
+  group subtree first, so active-scope erase, nested group erase, empty-group
+  prune, and clear-in-scope paths no longer leave Obol group/source children
+  behind when they free retained groups directly.
+* Transaction clear/teardown accounting now uses tagged scene-ref tree summary
+  data instead of a private child-count or context-shaped bridge.
+* Shape owning-group summaries now carry typed `ged_draw_group_ref` values
+  instead of private scene context pointers or neutral scene-ref tokens.
+* Shape-state source ownership now stores a tagged `rt_view_scene_ref
+  source_ref` instead of an opaque `source_ctx` pointer.
+* Shape-draft temporary source/shape ownership is source-adapter-local again
+  and stores retained `bsg_scene_ref` handles directly; tagged source-ref
+  conversion happens only at the registry handoff points that still require it.
+* The libged Obol scene-sync bridge reads shape display state through the
+  shape-ref display-summary facade instead of reopening shape scene contexts.
+* Scene-root clear, erase, root creation/activation, and root attachment now
+  call explicit source-root facades; retained root-ref recovery and view-root
+  attachment live inside the source adapter.
+* Scene-root shape/group traversal, subtree bounds, and group-presence
+  readback now call source-root facades instead of walking generic retained
+  scene-ref children or converting scene refs in the scene-root bridge.
+* View-root context readback now uses `ged_draw_view_context_scene_root`; the
+  private `ged_draw_view_context_scene_root_rt_ref` export is retired from the
+  shared draw-private API.
+* Transaction root child-count accounting now calls a source-root child-count
+  facade which prefers the libged-owned Obol root group child count before
+  falling back to retained BSG tree summaries.
+* Typed GED shape and group refs now expose registry semantic paths for
+  Obol-first lookup.  Shape-ref display/source/material/geometry readbacks,
+  geometry publication/mutation, stale marking, and release now try the
+  semantic path before retained shape-summary fallback; group-ref
+  record/count/display/appearance/draw-intent paths do the same for group
+  semantics.
+* GED group tree-summary child counts now prefer the libged-owned Obol group
+  topology through `ged_draw_obol_group_child_count_for_path`, leaving retained
+  tree summaries as the compatibility fallback for callers without an owned
+  Obol scene.
+* Scene-context fullpath readback now prefers the registry's semantic
+  fullpath, scene-context source/display summaries use the registry semantic
+  path to query the libged-owned Obol source or group before retained fallback,
+  and scene-context tree summaries override group child counts from owned Obol
+  topology.
+* Scene-context overlay and subtree-bounds readbacks now use semantic
+  Obol lookup when the context has GED registry ownership: libbrlobol exposes
+  `SoBRLSceneController::getSceneSubtreeBounds`, and libged routes database
+  source/group context bounds through the Obol bridge before retained fallback.
+* Semantic scene-context child traversal can now return GED-owned Obol context
+  tokens instead of retained adapter children.  libbrlobol exposes
+  path-addressed tree-summary child queries, and libged uses those to make
+  `ged_draw_scene_context_child_at`/`parent` work for Obol-only group/source
+  children while preserving retained fallback for non-semantic contexts.
+* Typed shape-ref context creation now returns owned Obol database-source
+  context tokens when semantic source paths are available.  Source context
+  child traversal summarizes realized shape/material nodes under libbrlobol
+  source children instead of exposing anonymous realization wrappers.
+* Shape evaluated-region mutation and record readback now prefer owned Obol
+  realized-shape `regionId` metadata through semantic source paths, keeping the
+  retained legacy eval flag only as transitional synchronization/fallback.
+* GED-private source-record read/apply bridges now expose Obol-owned
+  database-source draw mode, revision, stale/current, role, and view-policy
+  metadata through semantic source paths.  The source adapter prefers those
+  records before applying the retained BSG source record for temporary display
+  compatibility.
+* Obol database-source material policy is now explicit libbrlobol source
+  state.  GED source-record read/apply bridges read and write it through
+  libbrlobol controller APIs instead of deriving it from retained adapter
+  database-source records.
+* Private source-adapter erase, visibility, child-iteration, and record-summary
+  context pass-through wrappers are retired where ref-shaped facades exist.
+* Active-scope lookup now resolves through the source-adapter-local
+  `_ged_draw_active_scope_group_ref`; independent-view scope refs no longer
+  cross the scene-root bridge or shared private draw header.
 * Scene-context child lookup uses the scene-ref child iterator facade instead
   of a private direct child-index-to-context bridge.
 * Scene-context parent lookup remains behind the source-adapter
@@ -186,11 +414,16 @@ Recent cleanup state:
   overlay feature creation now live in the source adapter instead of the view
   adapter; the view adapter still owns the later feature/polygon overlay
   behavior until Capability 2 replaces that backend.
-* Gobject overlay draw walking now carries an opaque overlay scene context
-  instead of a `bsg_scene_ref`; retained overlay creation, database-leaf draft
-  commit, and scene-ref realization dispatch live behind source-adapter
-  facades, leaving `draw.cpp` and `draw_data_t` without direct retained
-  scene-ref tokens.
+* Gobject overlay draw walking now carries a typed
+  `ged_draw_group_ref draw_parent_group_ref` overlay parent instead of a raw
+  BSG scene ref, opaque backend context, or neutral scene-ref token; retained
+  overlay creation, database-leaf draft commit, and scene-ref realization
+  dispatch live behind source-adapter facades, leaving `draw.cpp` and
+  `draw_data_t` without direct retained scene-ref tokens.
+* The gobject database-leaf draft commit facade is now source/group-ref
+  specific (`ged_draw_source_group_ref_commit_database_leaf_draft`), and
+  overlay parent creation returns `ged_draw_group_ref` through
+  `ged_draw_view_context_overlay_internal_create_group_ref`.
 * The standalone retained path-state bridge file is retired; indexed fullpath
   setup and semantic draw-intent path updates now live in the source adapter
   beside the retained draw-intent setters.
@@ -231,33 +464,56 @@ Recent cleanup state:
 * Scene-root subtree-bounds readback now reaches retained bounds traversal
   through an opaque scene-context facade; the raw retained subtree-bounds
   helper is source-local instead of shared through the private draw header.
-* Scene-root creation now initializes retained root visibility through an
-  opaque scene-context facade; the raw retained visibility setter is
-  source-local instead of shared through the private draw header.
-* Scene-root creation now attaches retained draw bookkeeping through an opaque
-  scene-context facade; the root draw-context attachment helper no longer
-  exposes a retained scene ref through the shared private draw header.
-* Shape-draft region metadata now reaches registry state through an opaque
-  shape-context facade; the draft registry-region helper no longer exposes a
-  retained scene ref through the shared private draw header.
-* Source-adapter registry-entry creation now reaches registry ownership through
-  an opaque scene-context facade; the raw retained registry-entry ensure helper
-  no longer crosses the shared private draw header.
-* Registry-owner lookup now reaches the source adapter through an opaque
-  scene-context facade; the raw retained registry-owner helper no longer
-  crosses the shared private draw header.
-* Scene release highlight cleanup now reaches registry state through an opaque
-  scene-context facade; the raw retained highlight-free callback no longer
-  crosses the shared private draw header.
+* Scene-root creation now creates the retained draw root through
+  `ged_draw_source_root_create_group_ref`; GED stores the root as a
+  cache-style typed `ged_draw_group_ref`, while retained root recovery remains
+  at the source-adapter/scene-root bridge edge.
+* Root visibility setup and retained draw bookkeeping attachment happen inside
+  the source adapter; the raw retained group creation, visibility setter,
+  draw-context attachment, and old `ged_scene_root_rt_ref` storage accessors
+  no longer cross the shared GED root-storage boundary.
+* Shape-draft region metadata now reaches registry state through typed
+  `ged_draw_registry_shape_ref_apply_region`; the draft registry-region helper
+  no longer exposes a source ref, retained scene ref, or raw backend context
+  through the shared private draw header.
+* Source-adapter registry-entry creation and indexed fullpath setup now go
+  through typed draw refs at source-local retained operation points
+  (`_ged_draw_shape_ref_from_scene_ref`,
+  `ged_draw_registry_shape_ref_set_indexed_fullpath`, and
+  `ged_draw_registry_group_ref_set_indexed_fullpath`).  Registry entry
+  classification is supplied by the call site instead of asking the source
+  adapter through a neutral source-ref callback.
+* Registry-owner lookup is now registry-local through the global source-ref
+  entry table; the source-adapter `ged_draw_source_ref_registry_owner`
+  callback and raw retained registry-owner helper are retired from the shared
+  private draw header.
+* Scene release highlight cleanup now reaches registry state through
+  `ged_draw_registry_source_ref_highlight_free`; the raw retained
+  highlight-free callback no longer crosses the shared private draw header.
 * Scene-root and registry summary reads now use opaque scene-context summary
   facades; raw retained tree/shape/group summary helpers no longer cross the
   shared private draw header.
 * Registry raw scene-ref index callbacks are now registry-local; shared callers
   use shape-ref/group-ref index facades instead of a private `bsg_scene_ref`
   callback surface.
-* Registry path-state setup now uses an opaque scene-context fullpath facade;
-  raw retained shape-state ensure and indexed-fullpath helpers are registry-local
-  instead of exposed through the shared private draw header.
+* Registry path-state setup and source-adapter shape/group ref recovery now use
+  tagged scene-ref facades; raw retained shape-state ensure, indexed-fullpath,
+  and registry context recovery helpers are registry-local or retired instead
+  of exposed through the shared private draw header.
+* Generic retained scene-ref child traversal, child/parent lookup,
+  name/fullpath readback, display/source/tree/group summary readback, subtree
+  bounds, and active-scope component erase helpers are source-local; the
+  shared private draw header now exposes context/public wrappers or
+  source/registry-specific facades instead of those `ged_draw_scene_rt_ref_*`
+  exports.
+* Scene-context to tagged-scene-ref conversion (`ged_draw_scene_context_rt_ref`)
+  is now source-local; draw-scene tests use context-level traversal and summary
+  checks instead of minting neutral scene refs from opaque scene contexts.
+* Shape/group draw-ref creation from source refs is now named as a registry
+  service (`ged_draw_registry_shape_ref_from_source_ref` and
+  `ged_draw_registry_group_ref_from_source_ref`); the old generic
+  `ged_draw_*_ref_from_scene_rt_ref` names are retired from the shared private
+  boundary.
 
 
 Capability 1 Remaining Work: Scene And Source Ownership
@@ -291,7 +547,8 @@ Required behavior:
   `ged_draw_scene_tree_summary`,
   `ged_draw_shape_record_summary`,
   `ged_draw_group_record_summary`,
-  `ged_draw_scene_draw_state_summary`, and
+  `ged_draw_scene_draw_state_summary`,
+  `ged_draw_shape_geometry_summary`, and
   `ged_draw_shape_material_summary`.
 
 Near-term work:

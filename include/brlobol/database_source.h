@@ -52,6 +52,12 @@ struct BRLOBOL_EXPORT BRLObolDatabaseSourceSummary {
     int realizationStatus;
     SbString realizationDiagnostic;
     SbString realizationIdentity;
+    int realizationRoleFlags;
+    SbBool realizationViewDependent;
+    float realizationViewScale;
+    uint32_t realizationBotThreshold;
+    float realizationCurveScale;
+    float realizationPointScale;
     SbBool visible;
     SbBool highlighted;
     int lineStyle;
@@ -60,6 +66,7 @@ struct BRLOBOL_EXPORT BRLObolDatabaseSourceSummary {
     SbBool materialColorValid;
     SbColor materialColor;
     uint32_t materialRevision;
+    int materialPolicy;
     SbBool colorOverride;
     SbColor color;
     SbBool stale;
@@ -282,6 +289,17 @@ public:
 	STALE_TESSELLATION = 32
     };
 
+    enum RealizationRoleFlag {
+	REALIZATION_ROLE_NONE = 0,
+	REALIZATION_ROLE_CSG = 1,
+	REALIZATION_ROLE_MESH = 2
+    };
+
+    enum MaterialPolicy {
+	MATERIAL_INHERIT = 0,
+	MATERIAL_DATABASE = 1
+    };
+
     SoSFString path;
     SoSFEnum drawMode;
     SoSFBool visible;
@@ -292,6 +310,7 @@ public:
     SoSFBool materialColorValid;
     SoSFColor materialColor;
     SoSFUInt32 materialRevision;
+    SoSFEnum materialPolicy;
     SoSFBool colorOverride;
     SoSFColor color;
     SoSFFloat tessellationAbsTol;
@@ -308,6 +327,12 @@ public:
     SoSFEnum realizationStatus;
     SoSFString realizationDiagnostic;
     SoSFString realizationIdentity;
+    SoSFInt32 realizationRoleFlags;
+    SoSFBool realizationViewDependent;
+    SoSFFloat realizationViewScale;
+    SoSFUInt32 realizationBotThreshold;
+    SoSFFloat realizationCurveScale;
+    SoSFFloat realizationPointScale;
     SoSFBool stale;
     SoSFUInt32 staleReason;
 
@@ -330,6 +355,17 @@ public:
 
     void markStale(void);
     void markStale(uint32_t reason);
+    int setRealizationState(int realizationStatus,
+	uint32_t realizedSourceRevision,
+	uint32_t realizedInputsRevision,
+	uint32_t staleReason,
+	const char *diagnostic = NULL);
+    int setRealizationRoleFlags(int roleFlags);
+    int setRealizationViewPolicy(SbBool viewDependent,
+	float viewScale,
+	uint32_t botThreshold,
+	float curveScale,
+	float pointScale);
     SbBool needsRealization(void) const;
     SbBool realizePrototypeWireframe(void);
     SbBool realizeDatabaseWireframe(void);

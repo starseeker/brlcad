@@ -88,14 +88,14 @@ find_database_source_recursive(SoGroup *group, const char *sourcePath,
 }
 
 static int
-count_database_sources_recursive(SoGroup *group)
+count_database_sources_recursive(const SoGroup *group)
 {
     if (!group)
 	return 0;
 
     int count = 0;
     for (int i = 0; i < group->getNumChildren(); i++) {
-	SoNode *node = group->getChild(i);
+	const SoNode *node = group->getChild(i);
 	if (!node)
 	    continue;
 	if (node->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
@@ -104,7 +104,7 @@ count_database_sources_recursive(SoGroup *group)
 	}
 	if (node->isOfType(SoGroup::getClassTypeId()))
 	    count += count_database_sources_recursive(
-		    static_cast<SoGroup *>(node));
+		    static_cast<const SoGroup *>(node));
     }
     return count;
 }
@@ -986,6 +986,42 @@ SoBRLSceneController::getSceneRoot(void) const
     return this->root;
 }
 
+rt_view_scene_ref
+SoBRLSceneController::getSceneRef(void)
+{
+    return rt_view_scene_ref_make(this, RT_VIEW_SCENE_BACKEND_OBOL);
+}
+
+rt_view_scene_ref
+SoBRLSceneController::getSceneRef(void) const
+{
+    return rt_view_scene_ref_make(const_cast<SoBRLSceneController *>(this),
+	    RT_VIEW_SCENE_BACKEND_OBOL);
+}
+
+SbBool
+SoBRLSceneController::sceneRefIsObol(rt_view_scene_ref ref)
+{
+    return (!rt_view_scene_ref_is_null(ref) &&
+	    rt_view_scene_ref_backend(ref) == RT_VIEW_SCENE_BACKEND_OBOL) ?
+	TRUE : FALSE;
+}
+
+SoBRLSceneController *
+SoBRLSceneController::fromSceneRef(rt_view_scene_ref ref)
+{
+    if (!SoBRLSceneController::sceneRefIsObol(ref))
+	return NULL;
+    return static_cast<SoBRLSceneController *>(
+	    rt_view_scene_ref_context(ref));
+}
+
+const SoBRLSceneController *
+SoBRLSceneController::fromConstSceneRef(rt_view_scene_ref ref)
+{
+    return SoBRLSceneController::fromSceneRef(ref);
+}
+
 uint64_t
 SoBRLSceneController::getStructuralRevision(void) const
 {
@@ -1375,6 +1411,17 @@ SoBRLSceneController::getGroupChildCount(const char *groupPath) const
     return group->getNumChildren();
 }
 
+int
+SoBRLSceneController::getGroupDatabaseSourceCount(
+	const char *groupPath) const
+{
+    const SoGroup *group = scene_group_find_path_const(this->root,
+	    groupPath);
+    if (!group)
+	return -1;
+    return count_database_sources_recursive(group);
+}
+
 SoNode *
 SoBRLSceneController::findShape(const char *shapePath) const
 {
@@ -1618,6 +1665,8 @@ SoBRLSceneController::setDatabaseSourceState(const char *sourcePath,
 	int lineStyle,
 	int lineWidth,
 	float transparency,
+	SbBool colorOverride,
+	const SbColor &color,
 	SbBool materialColorValid,
 	const SbColor &materialColor,
 	uint32_t materialRevision)
@@ -1657,6 +1706,15 @@ SoBRLSceneController::setDatabaseSourceState(const char *sourcePath,
 	source->transparency = transparency;
 	changed = 1;
     }
+    if (source->colorOverride.getValue() != colorOverride) {
+	source->colorOverride = colorOverride;
+	changed = 1;
+    }
+    if (colorOverride &&
+	    !scene_group_color_equal(source->color.getValue(), color)) {
+	source->color = color;
+	changed = 1;
+    }
     if (source->materialColorValid.getValue() != materialColorValid) {
 	source->materialColorValid = materialColorValid;
 	changed = 1;
@@ -1672,6 +1730,122 @@ SoBRLSceneController::setDatabaseSourceState(const char *sourcePath,
 	changed = 1;
     }
 
+    if (changed > 0)
+	this->advanceFrameRevision();
+    return changed;
+}
+
+int
+SoBRLSceneController::setDatabaseSourceDrawMode(const char *sourcePath,
+	int drawMode)
+{
+    SoBRLDatabaseSource *source = this->findDatabaseSource(sourcePath);
+    if (!source)
+	return -1;
+
+    if (drawMode != SoBRLDatabaseSource::SHADED)
+	drawMode = SoBRLDatabaseSource::WIREFRAME;
+    if (source->drawMode.getValue() == drawMode)
+	return 0;
+
+    source->drawMode = drawMode;
+    this->advanceFrameRevision();
+    return 1;
+}
+
+int
+SoBRLSceneController::setDatabaseSourceMaterialPolicy(const char *sourcePath,
+	int materialPolicy)
+{
+    SoBRLDatabaseSource *source = this->findDatabaseSource(sourcePath);
+    if (!source)
+	return -1;
+
+    if (materialPolicy != SoBRLDatabaseSource::MATERIAL_DATABASE)
+	materialPolicy = SoBRLDatabaseSource::MATERIAL_INHERIT;
+    if (source->materialPolicy.getValue() == materialPolicy)
+	return 0;
+
+    source->materialPolicy = materialPolicy;
+    this->advanceFrameRevision();
+    return 1;
+}
+
+int
+SoBRLSceneController::markDatabaseSourceStale(const char *sourcePath,
+	uint32_t staleReason)
+{
+    SoBRLDatabaseSource *source = this->findDatabaseSource(sourcePath);
+    if (!source)
+	return -1;
+
+    if (!staleReason)
+	staleReason = SoBRLDatabaseSource::STALE_SOURCE;
+
+    const uint32_t nextReason =
+	source->staleReason.getValue() | staleReason;
+    const int changed = !source->stale.getValue() ||
+	source->staleReason.getValue() != nextReason ||
+	source->realizationStatus.getValue() != SoBRLDatabaseSource::UNREALIZED ||
+	source->realizationDiagnostic.getValue().getLength() > 0;
+    if (!changed)
+	return 0;
+
+    source->markStale(staleReason);
+    this->advanceFrameRevision();
+    return 1;
+}
+
+int
+SoBRLSceneController::setDatabaseSourceRealizationState(const char *sourcePath,
+	int realizationStatus,
+	uint32_t realizedSourceRevision,
+	uint32_t realizedInputsRevision,
+	uint32_t staleReason,
+	const char *diagnostic)
+{
+    SoBRLDatabaseSource *source = this->findDatabaseSource(sourcePath);
+    if (!source)
+	return -1;
+
+    const int changed = source->setRealizationState(realizationStatus,
+	    realizedSourceRevision, realizedInputsRevision, staleReason,
+	    diagnostic);
+    if (changed > 0)
+	this->advanceFrameRevision();
+    return changed;
+}
+
+int
+SoBRLSceneController::setDatabaseSourceRealizationRoleFlags(
+	const char *sourcePath,
+	int roleFlags)
+{
+    SoBRLDatabaseSource *source = this->findDatabaseSource(sourcePath);
+    if (!source)
+	return -1;
+
+    const int changed = source->setRealizationRoleFlags(roleFlags);
+    if (changed > 0)
+	this->advanceFrameRevision();
+    return changed;
+}
+
+int
+SoBRLSceneController::setDatabaseSourceRealizationViewPolicy(
+	const char *sourcePath,
+	SbBool viewDependent,
+	float viewScale,
+	uint32_t botThreshold,
+	float curveScale,
+	float pointScale)
+{
+    SoBRLDatabaseSource *source = this->findDatabaseSource(sourcePath);
+    if (!source)
+	return -1;
+
+    const int changed = source->setRealizationViewPolicy(viewDependent,
+	    viewScale, botThreshold, curveScale, pointScale);
     if (changed > 0)
 	this->advanceFrameRevision();
     return changed;
@@ -1960,6 +2134,69 @@ scene_tree_summary_fill(const SoNode *node, int depth, SbBool hasParent,
     summary.path = scene_group_summary_path(node, nodePath);
 }
 
+
+static const SoNode *
+scene_public_realized_shape_node(const SoNode *node)
+{
+    if (!node)
+	return NULL;
+
+    if (node->isOfType(SoBRLVListShape::getClassTypeId()) ||
+	    node->isOfType(SoBRLMeshShape::getClassTypeId()))
+	return node;
+
+    if (node->isOfType(SoGroup::getClassTypeId())) {
+	const SoGroup *group = static_cast<const SoGroup *>(node);
+	for (int i = 0; i < group->getNumChildren(); i++) {
+	    const SoNode *found =
+		scene_public_realized_shape_node(group->getChild(i));
+	    if (found)
+		return found;
+	}
+    }
+
+    return NULL;
+}
+
+
+static const SoNode *
+scene_public_realized_material_node(const SoNode *node)
+{
+    if (!node)
+	return NULL;
+
+    if (node->isOfType(SoBRLMaterialObject::getClassTypeId()))
+	return node;
+
+    if (node->isOfType(SoGroup::getClassTypeId())) {
+	const SoGroup *group = static_cast<const SoGroup *>(node);
+	for (int i = 0; i < group->getNumChildren(); i++) {
+	    const SoNode *found =
+		scene_public_realized_material_node(group->getChild(i));
+	    if (found)
+		return found;
+	}
+    }
+
+    return NULL;
+}
+
+
+static const SoNode *
+scene_public_realized_child_node(const SoNode *node)
+{
+    const SoNode *shape = scene_public_realized_shape_node(node);
+    if (shape)
+	return shape;
+
+    const SoNode *material = scene_public_realized_material_node(node);
+    if (material)
+	return material;
+
+    return node;
+}
+
+
 static int
 scene_tree_summary_node_count(const SoNode *node)
 {
@@ -2075,6 +2312,103 @@ SoBRLSceneController::getSceneTreeSummary(int index,
 	if (find_scene_tree_summary_in_node(child, index, 1, TRUE,
 		childOwnerIndex, childOwnerPath, childPath, summary))
 	    return TRUE;
+    }
+
+    return FALSE;
+}
+
+static int
+scene_summary_path_equal(const SbString &summaryPath, const char *nodePath)
+{
+    if (!nodePath)
+	return 0;
+
+    const char *stored = summaryPath.getString();
+    if (strcmp(stored, nodePath) == 0)
+	return 1;
+    return strcmp(skip_leading_slash(stored),
+	    skip_leading_slash(nodePath)) == 0;
+}
+
+SbBool
+SoBRLSceneController::getSceneTreeSummaryForPath(const char *nodePath,
+	BRLObolSceneTreeSummary &summary) const
+{
+    summary = BRLObolSceneTreeSummary();
+    if (!this->root || !nodePath)
+	return FALSE;
+
+    BRLObolSceneTreeSummary candidate;
+    BRLObolSceneTreeSummary fallback;
+    const int count = this->getSceneTreeSummaryCount();
+    for (int i = 0; i < count; i++) {
+	if (!this->getSceneTreeSummary(i, candidate) ||
+		!candidate.valid ||
+		!scene_summary_path_equal(candidate.path, nodePath))
+	    continue;
+	if (candidate.nodeKind ==
+		BRLObolSceneTreeSummary::NODE_DATABASE_SOURCE) {
+	    summary = candidate;
+	    return TRUE;
+	}
+	if (!fallback.valid)
+	    fallback = candidate;
+    }
+
+    if (fallback.valid) {
+	summary = fallback;
+	return TRUE;
+    }
+
+    return FALSE;
+}
+
+SbBool
+SoBRLSceneController::getSceneChildTreeSummary(const char *nodePath,
+	int childIndex,
+	BRLObolSceneTreeSummary &summary) const
+{
+    summary = BRLObolSceneTreeSummary();
+    if (!this->root || !nodePath || childIndex < 0)
+	return FALSE;
+
+    BRLObolSceneTreeSummary parentSummary;
+    if (!this->getSceneTreeSummaryForPath(nodePath, parentSummary))
+	return FALSE;
+
+    SoBRLDatabaseSource *source = this->findDatabaseSource(nodePath);
+    if (source) {
+	if (childIndex >= source->getNumChildren())
+	    return FALSE;
+
+	const SoNode *child = source->getChild(childIndex);
+	const SoNode *publicChild = scene_public_realized_child_node(child);
+	const SbString childPath =
+	    scene_child_summary_path(parentSummary.path, child);
+	scene_tree_summary_fill(publicChild,
+		parentSummary.drawTreeDepth + 1, TRUE,
+		parentSummary.ownerSourceIndex,
+		source->path.getValue(), childPath, summary);
+	if (!summary.valid)
+	    return FALSE;
+	if (summary.ownerSourcePath.getLength() == 0)
+	    summary.ownerSourcePath = source->path.getValue();
+	if (summary.path.getLength() == 0)
+	    summary.path = source->path.getValue();
+	return TRUE;
+    }
+
+    const SoGroup *group = this->findGroup(nodePath);
+    if (group) {
+	if (childIndex >= group->getNumChildren())
+	    return FALSE;
+
+	const SoNode *child = group->getChild(childIndex);
+	const SbString childPath = scene_child_summary_path(
+		parentSummary.path, child);
+	scene_tree_summary_fill(child, parentSummary.drawTreeDepth + 1,
+		TRUE, -1, "", childPath, summary);
+	return summary.valid;
     }
 
     return FALSE;
@@ -2423,10 +2757,31 @@ scene_bounds_for_mesh_shape(const SoBRLMeshShape *shape, SbBox3f &bounds)
 }
 
 static SbBool
-scene_bounds_for_node(const SoNode *node, SbBox3f &bounds)
+scene_node_is_overlay_intent(const SoNode *node)
+{
+    if (!node)
+	return FALSE;
+    if (node->isOfType(SoBRLSceneGroup::getClassTypeId()))
+	return static_cast<const SoBRLSceneGroup *>(node)->
+	    overlayIntent.getValue();
+    if (node->isOfType(SoBRLVListShape::getClassTypeId()))
+	return static_cast<const SoBRLVListShape *>(node)->
+	    overlayIntent.getValue();
+    if (node->isOfType(SoBRLMeshShape::getClassTypeId()))
+	return static_cast<const SoBRLMeshShape *>(node)->
+	    overlayIntent.getValue();
+    return FALSE;
+}
+
+static SbBool
+scene_bounds_for_node(const SoNode *node, SbBox3f &bounds,
+	SbBool includeOverlays)
 {
     bounds.makeEmpty();
     if (!node)
+	return FALSE;
+
+    if (!includeOverlays && scene_node_is_overlay_intent(node))
 	return FALSE;
 
     if (node->isOfType(SoBRLVListShape::getClassTypeId()))
@@ -2454,7 +2809,8 @@ scene_bounds_for_node(const SoNode *node, SbBox3f &bounds)
 	const SoGroup *group = static_cast<const SoGroup *>(node);
 	for (int i = 0; i < group->getNumChildren(); i++) {
 	    SbBox3f childBounds;
-	    if (scene_bounds_for_node(group->getChild(i), childBounds)) {
+	    if (scene_bounds_for_node(group->getChild(i), childBounds,
+		    includeOverlays)) {
 		bounds.extendBy(childBounds);
 		valid = TRUE;
 	    }
@@ -2484,7 +2840,32 @@ scene_bounds_summary_fill(const SoNode *node, int ownerSourceIndex,
     }
     summary.path = summary.nodeKind == BRLObolSceneTreeSummary::NODE_GROUP ?
 	scene_group_summary_path(node, nodePath) : scene_bounds_node_path(node);
-    summary.boundsValid = scene_bounds_for_node(node, summary.bounds);
+    summary.boundsValid = scene_bounds_for_node(node, summary.bounds, TRUE);
+}
+
+SbBool
+SoBRLSceneController::getSceneSubtreeBounds(const char *nodePath,
+	SbBool includeOverlays,
+	SbBox3f &bounds) const
+{
+    bounds.makeEmpty();
+    if (!this->root)
+	return FALSE;
+
+    const char *path = nodePath ? nodePath : "/";
+    const char *normalizedPath = skip_leading_slash(path);
+    const SoNode *node = NULL;
+
+    if (!path[0] || !normalizedPath[0])
+	node = this->root;
+    if (!node)
+	node = this->findGroup(path);
+    if (!node)
+	node = this->findDatabaseSource(path);
+    if (!node)
+	node = this->findShape(path);
+
+    return scene_bounds_for_node(node, bounds, includeOverlays);
 }
 
 static SbBool

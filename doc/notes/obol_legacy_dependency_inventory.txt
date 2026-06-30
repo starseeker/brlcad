@@ -22,7 +22,7 @@ dependency graph relevant to the Obol pivot:
 * libanalyze: librt;libbg;libbn;libbu
 * libimgstream: libicv;libbn;libbu
 * libdm: libbsg;librt;libicv;libbn;libpkg;libbu
-* libged: libicv;libanalyze;libwdb;liboptical;libdm;libbsg;libbu
+* libged: libbrlobol;libicv;libanalyze;libwdb;liboptical;libdm;libbsg;libbu
 * libqtcad: libbrlobol;libged;libdm;libbg;libbn;libbu
 * libtclcad: libged;libdm;libbn;libbu
 * qged: libqtcad
@@ -54,9 +54,63 @@ target-state dependencies:
 * GED bridge boundary: 1 file, `src/libged/ged_view_legacy.cpp`.
 * RT legacy adapter boundary: 1 librt file, `src/librt/view_legacy_bsg.c`.
 
+The direct `libged` -> `libbrlobol` row is intentional: libged owns the
+neutral GED draw transaction to Obol scene-controller bridge in
+`src/libged/draw_obol.cpp`, with a public C++ attach/sync surface in
+`include/ged/draw_obol.h`.  The preferred boundary is `SoBRLSceneController`:
+callers may attach a borrowed controller, and libged can now create an owned
+controller with `ged_draw_obol_scene_controller_ensure` when no controller is
+attached.  `BRLObolViewController` attach/sync APIs are wrappers for callers
+that still arrive through a view.  That bridge may use libbrlobol
+scene/controller APIs, but it must not depend on qtcad/qged widget APIs or
+direct BSG/DM APIs.  When libged owns the controller, GED shape-record
+database-source summaries prefer Obol source summaries and fall back to the
+BSG-backed source adapter only when no owned Obol source answers the query.
+Shape-ref display and material summaries follow the same owned-Obol-first
+path for database sources.  Public GED shape display/material setters now
+write those database-source fields into the owned Obol controller first and
+then update the BSG source adapter as transitional display compatibility.
+GED database-change stale marking follows the same owner-first path through
+`SoBRLSceneController::markDatabaseSourceStale`, and group visibility now
+writes to owned Obol retained group state before the transitional BSG adapter.
+Group draw-intent updates now follow that owner-first path as well:
+`ged_draw_group_ref_set_mode` mutates `SoBRLSceneGroup` draw intent before the
+BSG adapter is synchronized, and the same private bridge is available for
+group dbpath/draw-intent path updates.  Group appearance updates now also
+write the Obol-represented retained fields (line width, transparency, and
+color override/color) to owned `SoBRLSceneGroup` state before storing the full
+legacy appearance record in the BSG adapter.  Public GED group-record
+summaries now prefer the owned Obol group for draw mode, visibility, overlay,
+and transparency readback while keeping the adapter-owned path/view/scope
+metadata.  Direct GED shape-source release now also removes the corresponding
+owned Obol database source and prunes empty Obol draw groups before releasing
+the BSG source owner.  Direct GED root path erase, path-prefix erase, and draw
+clear follow the same owner-first lifecycle pattern by removing or clearing
+owned Obol database sources before mutating the transitional BSG adapter.
+Direct GED root group-name erase now also removes matching non-overlay owned
+Obol draw groups before mutating the transitional BSG adapter.
+
+`SoBRLSceneController` now also exports an Obol-tagged neutral
+`rt_view_scene_ref` and validates the tag before recovering controller
+pointers.  This gives the neutral backing-store adapter path a libbrlobol
+producer/consumer for retained scene handles without routing those handles
+through BSG-only adapter conversions.
+
+The Capability 1 completion path is now explicit: libged establishes an owned
+Obol scene/source controller, routes draw transactions into that owner, moves
+neutral GED records/queries to Obol summaries, replaces BSG-backed
+root/group/shape/source mutation with Obol owner operations, and leaves BSG as
+a temporary backing-store/display adapter until the legacy display path is
+retired.
+
 libbsg is not retire-ready while these direct owners, the BSG-backed GED draw
-facade, retained qtcad draw transaction/observer behavior, and the remaining
-guarded direct libbsg target dependency rows above remain.  The app/shell,
+facade, qged/qtcad draw observer/display-selection behavior, and the remaining
+guarded direct libbsg target dependency rows above remain.  qtcad no longer
+owns GED draw transaction to Obol source/group/material mirroring; its private
+draw-sync adapter now delegates scene mutation to libged's scene-controller
+`ged/draw_obol.h` bridge and only supplies display view fallback plus widget
+refresh.  The
+app/shell,
 qtcad direct legacy-view, qtcad direct libbsg target-dependency, and TclCAD
 direct libbsg target-dependency thresholds are now met, and bridge-owned GED
 draw transaction redraw info/LoD/autoview paths now use neutral RT context
@@ -141,14 +195,13 @@ view-set calls.  Retained GED view-set initialization, teardown, and name
 lookup now also route through neutral `rt_view_set_context_init`,
 `rt_view_set_context_free`, and `rt_view_set_context_find_view` helpers, with
 the retained BSG implementation confined to the RT legacy adapter.  GED draw
-scene-root view iteration, scene-root query refs, root attach, scene-attached
-checks, and draw-context recycle-pool lookup now use `ged_view_set_views_ctx`,
-`rt_view_context_scene_root_ref`,
-`ged_draw_view_context_scene_root_rt_ref`,
-`rt_view_context_scene_root_ref_attach`,
+scene-root view iteration, scene-root context readback, root attach,
+scene-attached checks, and draw-context recycle-pool lookup now use
+`ged_view_set_views_ctx`, `ged_draw_view_context_scene_root`,
+`ged_draw_source_root_attach_view_contexts`,
 `rt_view_context_scene_attached`, `ged_view_set_ctx`, and
-`rt_view_set_context_recycle_pool` directly instead of private GED draw-view
-wrappers where applicable.  DB-event view-root revalidation now compares
+`rt_view_set_context_recycle_pool` instead of private GED draw-view wrappers
+where applicable.  DB-event view-root revalidation now compares
 neutral `rt_view_scene_ref` values before converting only the retained
 draw-intent revalidation target.  GED retained context create, create-with-set,
 create-copy-with-set, and free paths now route through neutral
@@ -160,10 +213,100 @@ mesh-LoD view-scene-ref load/free operations now route through neutral
 mesh-LoD calls; the private typed GED mesh-LoD load trampoline is retired,
 and the remaining context helper now accepts neutral `rt_view_scene_ref`
 input and calls the neutral RT load helper directly with an opaque view
-context.  Retained draw realization converts scene refs through the central
+context.  Neutral `rt_view_scene_ref` now carries an explicit backend tag with
+BSG and Obol backend values, so future Obol-backed scene refs can cross RT/GED
+interfaces without being implicitly converted through BSG-only adapter calls.
+The first libbrlobol producer is `SoBRLSceneController::getSceneRef`, and
+`SoBRLSceneController::fromSceneRef`/`fromConstSceneRef` reject null,
+BSG-tagged, and opaque legacy refs before exposing controller pointers.
+On the retained GED side, `ged_draw_scene_context_rt_ref` centralizes the
+current BSG-tagged scene-context conversion in the source adapter; the
+scene-root bridge no longer constructs BSG-tagged `rt_view_scene_ref` values
+locally, and draw transactions read root child accounting through the
+source-root child-count facade rather than converting the root ref back to an
+opaque context or using a generic tree-summary readback.  Scene-root creation
+now asks the source adapter for a typed `ged_draw_group_ref` through
+`ged_draw_source_root_create_group_ref`; GED root storage is a cache-style
+group ref, while retained root visibility/bookkeeping setup and source-ref
+recovery stay inside the source adapter or scene-root bridge edge.
+Active-scope lookup now resolves through the source-adapter-local
+`_ged_draw_active_scope_group_ref`; independent-view scope refs no longer
+cross the scene-root bridge or shared private draw header, and the old
+context-pointer `ged_draw_scene_context_active_scope` wrapper remains retired
+from the private scene-root bridge.  The BSG-backed source adapter now exposes ref-shaped
+traversal, parent/child/name, summary, visibility, registry owner, registry
+entry, and shape/group ref conversion helpers; the scene-root bridge recurses
+through those `rt_view_scene_ref` helpers, and the draw registry stores
+backend-aware `rt_view_scene_ref` values instead of raw scene contexts.
+Source-side shape-state lookup, draw-bookkeeping attachment, shape/group ref
+recovery, and registry handoff now use tagged `rt_view_scene_ref` values
+before local BSG conversion.  Registry entry creation and indexed fullpath
+setup go through typed draw refs at source-local retained operation points;
+shape-draft region updates and highlight cleanup cross the registry boundary
+through `ged_draw_registry_shape_ref_set_indexed_fullpath`,
+`ged_draw_registry_group_ref_set_indexed_fullpath`,
+`ged_draw_registry_shape_ref_apply_region`, and
+`ged_draw_registry_source_ref_highlight_free`; shape-vs-group registry
+classification is supplied by the source/registry call site rather than
+asking the source adapter through a neutral source-ref type callback.  The
+registry now recovers source-ref owners through its global entry table instead
+of asking the source adapter through `ged_draw_source_ref_registry_owner`.
+Generic `ged_draw_scene_rt_ref_*` child traversal, child/parent lookup,
+name/fullpath readback, display/source/tree/group summary readback, subtree
+bounds, and active-scope component erase helpers are source-local in the
+current BSG-backed source adapter.  The shared private GED draw header exposes
+context/public compatibility wrappers or source/registry-specific facades
+instead.  Scene-context to tagged-scene-ref conversion
+(`ged_draw_scene_context_rt_ref`) is also source-local; the draw-scene
+regression uses context-level traversal and summary checks instead of minting
+neutral scene refs from opaque scene contexts.
+Shape/group draw-ref creation from source refs now crosses the registry
+boundary as `ged_draw_registry_shape_ref_from_source_ref` and
+`ged_draw_registry_group_ref_from_source_ref`, with registry-local source-ref
+index callbacks.  The old generic `ged_draw_*_ref_from_scene_rt_ref` helper
+names are retired from the shared private boundary.  Gobject overlay draw
+walking now carries a typed `ged_draw_group_ref draw_parent_group_ref` parent
+instead of a neutral scene-ref token; overlay parent creation and database-leaf
+draft commits cross the source-adapter boundary through
+`ged_draw_view_context_overlay_internal_create_group_ref` and
+`ged_draw_source_group_ref_commit_database_leaf_draft`.
+Shape-state source ownership now stores a tagged `rt_view_scene_ref source_ref`;
+the old opaque `source_ctx` storage is retired from the registry/source
+shape-state layout.
+Shape-draft temporary source and shape ownership is source-adapter-local and
+stores retained `bsg_scene_ref` handles directly; tagged source-ref conversion
+is limited to registry handoff points that still require it.
+The libged Obol scene-sync bridge now also obtains retained display state
+through a shape-ref display-summary facade; `draw_obol.cpp` no longer reopens
+shape scene contexts to mirror line style, width, transparency, or material
+color into the Obol scene controller.
+Scene-root clear, erase, and root creation/activation now route through
+source-root facades; the shared private draw header no longer exports the
+generic retained root mutation helpers for group creation, root clear,
+root path/prefix/group erase, root visibility setup, or root bookkeeping
+attachment.
+Scene-root shape/group traversal, subtree bounds, and group-presence checks
+now also route through source-root facades.  The scene-root bridge no longer
+walks generic retained scene-ref children, reads retained shape/group/tree
+summaries, or converts retained scene refs to draw refs for root traversal.
+Transaction root child-count accounting now also routes through a source-root
+child-count facade, leaving transaction code without direct root scene-ref tree
+summary readback.
+Gobject overlay draw walking also carries its overlay parent as
+`ged_draw_group_ref draw_parent_group_ref`; `draw.cpp` uses group-ref overlay
+creation and database-leaf draft commit facades, while retained conversion
+remains local to the BSG-backed source adapter.
+That database-leaf draft commit facade is now source/group-ref specific
+(`ged_draw_source_group_ref_commit_database_leaf_draft`).
+Scene-root path/prefix/group erase and source active-scope path/prefix/component
+erase now also carry tagged `rt_view_scene_ref` base scopes into the source
+adapter before backend conversion; group path creation resolves its active scope
+the same way.
+Retained draw realization converts scene refs through the central
 `ged_draw_scene_ref_to_rt_view_ref` helper before crossing into the GED
-legacy-view adapter, while raw field conversion remains centralized in
-`src/libged/bsg_ged_draw_refs.c`.
+legacy-view adapter; raw retained conversion is now kept in the BSG-backed
+source adapter, and the standalone `src/libged/bsg_ged_draw_refs.c` bridge is
+retired.
 GED retained update-callback registration now routes through neutral
 `rt_view_context_update_callback_set`; the current BSG-backed implementation
 stores RT-owned callback state behind a
@@ -237,9 +380,8 @@ wrappers.  Retained tree/transaction independent-view boolean checks now use
 neutral `rt_view_context_is_independent`; retained draw-record in-view checks
 use the same neutral boolean helper; and scoped tree roots now get retained
 scope scene refs through neutral `rt_view_context_independent_scope_ref`, with
-the remaining neutral-to-BSG scene-ref conversion centralized in
-`ged_draw_scene_ref_from_rt_view_ref` inside
-`src/libged/bsg_ged_draw_refs.c`.  The old private
+the remaining neutral-to-BSG scene-ref conversion kept behind source-adapter
+and scene-root bridge helpers.  The old private
 `ged_draw_view_context_independent_scope_ref` adapter and older
 `ged_draw_view_independent_scope_ref_bsg` wrapper are retired from the tree,
 private header, and central adapter.
@@ -248,10 +390,10 @@ active-view save/restore around transaction apply and `ged_view_set_views_ctx`
 for DB-event revalidation and transaction view-array iteration; the old
 `ged_draw_view_active_set_bsg` wrapper is retired, and transactions no longer
 call `ged_draw_view_set_views_for_ged_bsg`.  DB-event view-root revalidation
-now reads scene roots through the neutral
-`ged_draw_view_context_scene_root_rt_ref` helper, compares
-`rt_view_scene_ref` values, and converts through the GED draw-ref bridge only
-for the retained BSG draw-intent revalidation call; the BSG-returning
+compares neutral `rt_view_scene_ref` values from RT view-context storage and
+converts through the GED draw-ref bridge only for the retained BSG draw-intent
+revalidation call; the private `ged_draw_view_context_scene_root_rt_ref`
+export, BSG-returning
 `ged_draw_view_context_scene_root_ref` helper, typed
 `ged_draw_view_scene_root_ref` wrapper, and unused
 `ged_draw_view_has_scene_root` helper are retired.  Transaction redraw and
@@ -264,12 +406,11 @@ uses `rt_view_set_context_recycle_pool(ged_view_set_ctx(...))`; the old
 `ged_draw_view_set_views_for_ged_bsg` and
 `ged_draw_view_set_recycle_pool_for_ged_bsg` wrappers are retired from the
 private header and central adapter.  Retained GED draw scene-root attachment
-now converts retained `bsg_scene_ref` roots through
-`ged_draw_scene_ref_to_rt_view_ref` and calls neutral
-`rt_view_context_scene_root_ref_attach`; direct
-`bsg_view_scene_ref_attach` calls are no longer allowed in the GED scene-root
-bridge, although the RT legacy adapter remains BSG-backed internally.  GED
-view-context scene-root context extraction now calls neutral
+now goes through `ged_draw_source_root_attach_view_contexts`; retained root
+ref recovery and neutral `rt_view_context_scene_root_ref_attach` calls live in
+the source adapter, and direct `bsg_view_scene_ref_attach` calls remain
+disallowed in the GED scene-root bridge.  GED view-context scene-root context
+extraction now calls neutral
 `rt_view_scene_ref_context` on the neutral root ref directly, so
 `src/libged/bsg_ged_draw_scene_root.c` no longer converts that ref back to
 `bsg_scene_ref` just to recover the opaque scene context pointer.
@@ -293,6 +434,12 @@ converting retained `bsg_scene_ref` values through
 `bsg_scene_ref visibility_ref` helper signature, the
 `ged_draw_mesh_lod_load_view_scene_ref_context` pass-through, and the GED
 legacy-view adapter's retained-to-neutral scene-ref conversion are retired.
+Shape-record owning-group summaries now carry typed `ged_draw_group_ref`
+values rather than private scene context pointers or neutral scene-ref tokens,
+and the private source-adapter context pass-throughs for erase, visibility,
+child iteration, and shape/group record summaries are retired in favor of
+their typed ref-shaped facades.  Installed GED context compatibility APIs
+remain as wrappers where callers still need them.
 The surrounding draw-realization scene-ref surface remains transitional bridge
 work, not a target-state libbsg dependency.
 
@@ -302,7 +449,7 @@ group/overlay/redraw/root operations, retained scene-root group creation and
 backend attach storage, neutral independent-scope and scene-root query/attach
 refs, context-shaped scene-root/overlay scene refs, and direct neutral
 mesh-LoD load calls in the BSG-backed draw implementation, plus centralized
-retained-to-neutral scene-ref conversion in `src/libged/bsg_ged_draw_refs.c`,
+retained-to-neutral scene-ref conversion in the BSG-backed source adapter,
 plus
 central private declarations in `bsg_ged_draw_view_private.h` and definitions
 in `src/libged/ged_view_legacy.cpp` for those still-live retained bridge

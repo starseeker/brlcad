@@ -113,6 +113,9 @@ static bsg_scene_ref
 rt_view_neutral_scene_ref_to_bsg(rt_view_scene_ref ref)
 {
     bsg_scene_ref bsg_ref = BSG_SCENE_REF_NULL_INIT;
+    if (ref.backend != RT_VIEW_SCENE_BACKEND_NONE &&
+	    ref.backend != RT_VIEW_SCENE_BACKEND_BSG)
+	return bsg_ref;
     bsg_ref.opaque = ref.opaque;
     return bsg_ref;
 }
@@ -122,6 +125,8 @@ rt_view_neutral_scene_ref_from_bsg(bsg_scene_ref ref)
 {
     rt_view_scene_ref rt_ref = RT_VIEW_SCENE_REF_NULL_INIT;
     rt_ref.opaque = ref.opaque;
+    rt_ref.backend = ref.opaque ? RT_VIEW_SCENE_BACKEND_BSG :
+	RT_VIEW_SCENE_BACKEND_NONE;
     return rt_ref;
 }
 
@@ -3637,6 +3642,26 @@ rt_view_set_context_find_view(void *view_set_ctx, const char *name)
 	    (struct bsg_view_set *)view_set_ctx, name);
 }
 
+void *
+rt_view_set_context_create(void)
+{
+    struct bsg_view_set *s;
+    BU_GET(s, struct bsg_view_set);
+    rt_view_set_context_init((void *)s);
+    return (void *)s;
+}
+
+void
+rt_view_set_context_destroy(void *view_set_ctx)
+{
+    if (!view_set_ctx)
+	return;
+
+    struct bsg_view_set *s = (struct bsg_view_set *)view_set_ctx;
+    rt_view_set_context_free(view_set_ctx);
+    BU_PUT(s, struct bsg_view_set);
+}
+
 void
 rt_view_set_init_bsg(struct bsg_view_set *s)
 {
@@ -4117,26 +4142,47 @@ rt_view_is_independent_bsg(const struct bsg_view *v)
 rt_view_scene_ref
 rt_view_scene_ref_null(void)
 {
-    return rt_view_neutral_scene_ref_from_bsg(bsg_scene_ref_null());
+    rt_view_scene_ref ref = RT_VIEW_SCENE_REF_NULL_INIT;
+    return ref;
+}
+
+rt_view_scene_ref
+rt_view_scene_ref_make(void *opaque, unsigned int backend)
+{
+    rt_view_scene_ref ref = RT_VIEW_SCENE_REF_NULL_INIT;
+    ref.opaque = opaque;
+    ref.backend = opaque ? backend : RT_VIEW_SCENE_BACKEND_NONE;
+    return ref;
 }
 
 int
 rt_view_scene_ref_is_null(rt_view_scene_ref ref)
 {
-    return bsg_scene_ref_is_null(rt_view_neutral_scene_ref_to_bsg(ref));
+    return ref.opaque ? 0 : 1;
 }
 
 int
 rt_view_scene_ref_equal(rt_view_scene_ref a, rt_view_scene_ref b)
 {
-    return bsg_scene_ref_equal(rt_view_neutral_scene_ref_to_bsg(a),
-	    rt_view_neutral_scene_ref_to_bsg(b));
+    if (rt_view_scene_ref_is_null(a) || rt_view_scene_ref_is_null(b))
+	return rt_view_scene_ref_is_null(a) && rt_view_scene_ref_is_null(b);
+    if (a.backend != RT_VIEW_SCENE_BACKEND_NONE &&
+	    b.backend != RT_VIEW_SCENE_BACKEND_NONE &&
+	    a.backend != b.backend)
+	return 0;
+    return a.opaque == b.opaque;
 }
 
 void *
 rt_view_scene_ref_context(rt_view_scene_ref ref)
 {
-    return rt_view_scene_ref_is_null(ref) ? NULL : ref.opaque;
+    return ref.opaque;
+}
+
+unsigned int
+rt_view_scene_ref_backend(rt_view_scene_ref ref)
+{
+    return ref.opaque ? ref.backend : RT_VIEW_SCENE_BACKEND_NONE;
 }
 
 rt_view_scene_ref_bsg
@@ -4183,6 +4229,10 @@ rt_view_context_scene_root_ref(const void *ctx)
 int
 rt_view_context_scene_root_ref_attach(void *ctx, rt_view_scene_ref root_ref)
 {
+    if (!rt_view_scene_ref_is_null(root_ref) &&
+	    rt_view_scene_ref_backend(root_ref) != RT_VIEW_SCENE_BACKEND_NONE &&
+	    rt_view_scene_ref_backend(root_ref) != RT_VIEW_SCENE_BACKEND_BSG)
+	return 0;
     return bsg_view_scene_ref_attach((struct bsg_view *)ctx,
 	    rt_view_neutral_scene_ref_to_bsg(root_ref));
 }
@@ -7025,6 +7075,12 @@ rt_mesh_lod_load_view_scene_ref(struct rt_mesh_lod *lod,
     struct bsg_mesh_lod *bsg_lod = _rt_mesh_lod_bsg(lod);
     if (!bsg_lod)
 	return -1;
+    if (!rt_view_scene_ref_is_null(visibility_ref) &&
+	    rt_view_scene_ref_backend(visibility_ref) !=
+		RT_VIEW_SCENE_BACKEND_NONE &&
+	    rt_view_scene_ref_backend(visibility_ref) !=
+		RT_VIEW_SCENE_BACKEND_BSG)
+	return -1;
 
     return bsg_mesh_lod_load_view_scene_ref(bsg_lod,
 	    rt_view_neutral_scene_ref_to_bsg(visibility_ref),
@@ -7040,6 +7096,10 @@ rt_mesh_lod_free_scene_ref_bsg(rt_view_scene_ref_bsg ref)
 void
 rt_mesh_lod_free_scene_ref(rt_view_scene_ref ref)
 {
+    if (!rt_view_scene_ref_is_null(ref) &&
+	    rt_view_scene_ref_backend(ref) != RT_VIEW_SCENE_BACKEND_NONE &&
+	    rt_view_scene_ref_backend(ref) != RT_VIEW_SCENE_BACKEND_BSG)
+	return;
     bsg_mesh_lod_free_scene_ref(rt_view_neutral_scene_ref_to_bsg(ref));
 }
 

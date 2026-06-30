@@ -26,11 +26,18 @@
 
 #include "common.h"
 
+#include "bu/malloc.h"
 #include "bu/ptbl.h"
 #include "ged/view.h"
 #include "rt/view_legacy_bsg.h"
 #include "./bsg_ged_draw_view_private.h"
 #include "./ged_private.h"
+
+struct ged_view_legacy_state {
+    void *active_view_ctx;
+    void *view_set_ctx;
+    struct bu_ptbl free_views;
+};
 
 static struct ged_impl *
 ged_view_impl(struct ged *gedp)
@@ -44,20 +51,49 @@ ged_view_impl_const(const struct ged *gedp)
     return gedp ? gedp->i : NULL;
 }
 
-extern "C" void
-ged_view_legacy_state_init(struct ged *gedp)
+static struct ged_view_legacy_state *
+ged_view_state(struct ged *gedp)
+{
+    struct ged_impl *impl = ged_view_impl(gedp);
+    return impl ? (struct ged_view_legacy_state *)impl->ged_view_state_ctx : NULL;
+}
+
+static const struct ged_view_legacy_state *
+ged_view_state_const(const struct ged *gedp)
+{
+    const struct ged_impl *impl = ged_view_impl_const(gedp);
+    return impl ? (const struct ged_view_legacy_state *)impl->ged_view_state_ctx : NULL;
+}
+
+static struct ged_view_legacy_state *
+ged_view_state_create(struct ged *gedp)
 {
     struct ged_impl *impl = ged_view_impl(gedp);
     if (!impl)
+	return NULL;
+    if (impl->ged_view_state_ctx)
+	return (struct ged_view_legacy_state *)impl->ged_view_state_ctx;
+
+    struct ged_view_legacy_state *state =
+	(struct ged_view_legacy_state *)bu_calloc(1, sizeof(*state),
+		"GED legacy view state");
+    state->view_set_ctx = rt_view_set_context_create();
+    BU_PTBL_INIT(&state->free_views);
+    impl->ged_view_state_ctx = (void *)state;
+    return state;
+}
+
+extern "C" void
+ged_view_legacy_state_init(struct ged *gedp)
+{
+    struct ged_view_legacy_state *state = ged_view_state_create(gedp);
+    if (!state || !state->view_set_ctx)
 	return;
 
-    rt_view_set_context_init(&impl->ged_views);
-    BU_PTBL_INIT(&impl->ged_free_views);
-
-    void *default_view = rt_view_context_create_with_set(&impl->ged_views);
-    impl->ged_gvp = default_view;
+    void *default_view = rt_view_context_create_with_set(state->view_set_ctx);
+    state->active_view_ctx = default_view;
     rt_view_context_name_set(default_view, "default");
-    rt_view_set_context_add(&impl->ged_views, default_view);
+    rt_view_set_context_add(state->view_set_ctx, default_view);
     ged_view_context_owned_add(gedp, default_view);
 }
 
@@ -65,67 +101,70 @@ extern "C" void
 ged_view_legacy_state_free(struct ged *gedp)
 {
     struct ged_impl *impl = ged_view_impl(gedp);
-    if (!impl)
+    struct ged_view_legacy_state *state = ged_view_state(gedp);
+    if (!impl || !state)
 	return;
 
-    impl->ged_gvp = NULL;
+    impl->ged_view_state_ctx = NULL;
+    state->active_view_ctx = NULL;
 
-    for (size_t i = 0; i < BU_PTBL_LEN(&impl->ged_free_views); i++) {
-	void *view_ctx = (void *)BU_PTBL_GET(&impl->ged_free_views, i);
+    for (size_t i = 0; i < BU_PTBL_LEN(&state->free_views); i++) {
+	void *view_ctx = (void *)BU_PTBL_GET(&state->free_views, i);
 	rt_view_context_free(view_ctx);
     }
-    bu_ptbl_free(&impl->ged_free_views);
-    rt_view_set_context_free(&impl->ged_views);
+    bu_ptbl_free(&state->free_views);
+    rt_view_set_context_destroy(state->view_set_ctx);
+    bu_free(state, "GED legacy view state");
 }
 
 extern "C" GED_EXPORT void *
 ged_view_active_ctx(const struct ged *gedp)
 {
-    const struct ged_impl *impl = ged_view_impl_const(gedp);
-    return impl ? impl->ged_gvp : NULL;
+    const struct ged_view_legacy_state *state = ged_view_state_const(gedp);
+    return state ? state->active_view_ctx : NULL;
 }
 
 extern "C" GED_EXPORT void
 ged_view_active_ctx_set(struct ged *gedp, void *view_ctx)
 {
-    struct ged_impl *impl = ged_view_impl(gedp);
-    if (impl)
-	impl->ged_gvp = view_ctx;
+    struct ged_view_legacy_state *state = ged_view_state(gedp);
+    if (state)
+	state->active_view_ctx = view_ctx;
 }
 
 extern "C" GED_EXPORT int
 ged_view_context_owned_add(struct ged *gedp, void *view_ctx)
 {
-    struct ged_impl *impl = ged_view_impl(gedp);
-    if (!impl || !view_ctx)
+    struct ged_view_legacy_state *state = ged_view_state(gedp);
+    if (!state || !view_ctx)
 	return 0;
 
-    bu_ptbl_ins(&impl->ged_free_views, (long *)view_ctx);
+    bu_ptbl_ins(&state->free_views, (long *)view_ctx);
     return 1;
 }
 
 extern "C" GED_EXPORT void *
 ged_view_set_ctx(struct ged *gedp)
 {
-    struct ged_impl *impl = ged_view_impl(gedp);
-    return impl ? (void *)&impl->ged_views : NULL;
+    struct ged_view_legacy_state *state = ged_view_state(gedp);
+    return state ? state->view_set_ctx : NULL;
 }
 
 extern "C" GED_EXPORT struct bu_ptbl *
 ged_view_set_views_ctx(struct ged *gedp)
 {
-    struct ged_impl *impl = ged_view_impl(gedp);
-    return impl ? rt_view_set_context_views(&impl->ged_views) : NULL;
+    struct ged_view_legacy_state *state = ged_view_state(gedp);
+    return state ? rt_view_set_context_views(state->view_set_ctx) : NULL;
 }
 
 extern "C" GED_EXPORT void *
 ged_view_find_ctx(struct ged *gedp, const char *name)
 {
-    struct ged_impl *impl = ged_view_impl(gedp);
-    if (!impl || !name)
+    struct ged_view_legacy_state *state = ged_view_state(gedp);
+    if (!state || !name)
 	return NULL;
 
-    return rt_view_set_context_find_view(&impl->ged_views, name);
+    return rt_view_set_context_find_view(state->view_set_ctx, name);
 }
 
 extern "C" GED_EXPORT void

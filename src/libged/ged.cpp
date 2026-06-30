@@ -50,6 +50,7 @@
 #include "dm.h"
 
 #include "ged/draw.h"
+#include "ged/draw_obol.h"
 #include "ged/event_txn.h"
 #include "./ged_private.h"
 #include "./include/plugin.h"
@@ -163,6 +164,7 @@ ged_init(struct ged *gedp)
     BU_GET(gedp->i, struct ged_impl);
     gedp->i->magic = GED_MAGIC;
     gedp->i->i = new Ged_Internal;
+    gedp->i->ged_view_state_ctx = NULL;
     gedp->i->ged_db_indexp = ged_db_index_create(gedp);
     gedp->i->ged_event_txnp = ged_event_txn_state_create(gedp);
     gedp->i->ged_selection_statep = ged_selection_state_create(gedp);
@@ -182,6 +184,7 @@ ged_init(struct ged *gedp)
 
     BU_GET(gedp->i->ged_gdp, struct ged_drawable);
     ged_scene_root_ref_clear(gedp);
+    gedp->i->ged_gdp->gd_draw_bookkeeping_ctx = NULL;
     BU_PTBL_INIT(&gedp->i->ged_gdp->gd_draw_registry);
     gedp->i->ged_gdp->gd_draw_registry_init = 1;
     gedp->i->ged_gdp->gd_draw_next_token = 1;
@@ -201,6 +204,13 @@ ged_init(struct ged *gedp)
     gedp->i->ged_gdp->gd_draw_observers_init = 1;
     gedp->i->ged_gdp->gd_draw_next_observer_token = 1;
     gedp->i->ged_gdp->gd_draw_observer_dispatch_depth = 0;
+    gedp->i->ged_gdp->gd_obol_scene_controller = NULL;
+    gedp->i->ged_gdp->gd_obol_controller = NULL;
+    gedp->i->ged_gdp->gd_obol_observer_token = 0;
+    gedp->i->ged_gdp->gd_obol_scene_controller_owned = 0;
+    BU_PTBL_INIT(&gedp->i->ged_gdp->gd_obol_context_tokens);
+    gedp->i->ged_gdp->gd_obol_context_tokens_init = 1;
+    gedp->i->ged_gdp->gd_obol_next_context_token = 1;
     /* Start at 1 so that freshly-drawn shapes (s_color_rev=0 from calloc)
      * are always stale on the first color_from_soltab call (B4). */
     gedp->i->ged_gdp->gd_mater_rev = 1;
@@ -333,9 +343,10 @@ ged_free(struct ged *gedp)
 
     ged_view_legacy_state_free(gedp);
 
-    if (gedp->i->ged_gdp != GED_DRAWABLE_NULL) {
+	if (gedp->i->ged_gdp != GED_DRAWABLE_NULL) {
 
 	ged_scene_root_ref_clear(gedp);  /* freed by zap */
+	ged_draw_scene_context_free_draw_bookkeeping(gedp);
 	if (gedp->i->ged_gdp->gd_headVDraw) {
 	    struct vd_curve *curve = NULL;
 	    while (BU_LIST_WHILE(curve, vd_curve, gedp->i->ged_gdp->gd_headVDraw)) {
@@ -349,6 +360,8 @@ ged_free(struct ged *gedp)
 	    BU_PUT(gedp->i->ged_gdp->gd_headVDraw, struct bu_list);
 	}
 		qray_free(gedp->i->ged_gdp);
+		ged_draw_obol_context_tokens_free(gedp);
+		ged_draw_obol_scene_controller_detach(gedp);
 		ged_draw_observers_free(gedp);
 		ged_draw_registry_free(gedp);
 		BU_PUT(gedp->i->ged_gdp, struct ged_drawable);

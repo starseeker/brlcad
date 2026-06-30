@@ -63,25 +63,25 @@
 #include "ged/event_txn.h"
 #include "./ged_private.h"
 
-extern "C" rt_view_scene_ref
-ged_scene_root_rt_ref(struct ged *gedp)
+extern "C" ged_draw_group_ref
+ged_scene_root_group_ref(struct ged *gedp)
 {
     if (gedp && gedp->i && gedp->i->ged_gdp)
-	return gedp->i->ged_gdp->gd_scene_root;
-    return rt_view_scene_ref_null();
+	return gedp->i->ged_gdp->gd_scene_root_group_ref;
+    return GED_DRAW_GROUP_REF_NULL;
 }
 
 extern "C" void
-ged_scene_root_rt_ref_set(struct ged *gedp, rt_view_scene_ref root)
+ged_scene_root_group_ref_set(struct ged *gedp, ged_draw_group_ref root)
 {
     if (gedp && gedp->i && gedp->i->ged_gdp)
-	gedp->i->ged_gdp->gd_scene_root = root;
+	gedp->i->ged_gdp->gd_scene_root_group_ref = root;
 }
 
 extern "C" void
 ged_scene_root_ref_clear(struct ged *gedp)
 {
-    ged_scene_root_rt_ref_set(gedp, rt_view_scene_ref_null());
+    ged_scene_root_group_ref_set(gedp, GED_DRAW_GROUP_REF_NULL);
 }
 
 int
@@ -3130,7 +3130,7 @@ _ged_characterize_pathspec(struct bu_vls *normalized, struct ged *gedp, const ch
 int
 ged_draw_scene_available(struct ged *gedp)
 {
-    return rt_view_scene_ref_is_null(ged_scene_root_rt_ref(gedp)) ? 0 : 1;
+    return ged_draw_group_ref_is_null(ged_scene_root_group_ref(gedp)) ? 0 : 1;
 }
 
 void

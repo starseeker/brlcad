@@ -228,6 +228,7 @@ public:
     int removeGroup(const char *groupPath);
     int clearGroup(const char *groupPath);
     int getGroupChildCount(const char *groupPath) const;
+    int getGroupDatabaseSourceCount(const char *groupPath) const;
 
     SoNode *findShape(const char *shapePath) const;
     SoGroup *findShapeParent(const char *shapePath) const;
@@ -285,9 +286,15 @@ public:
 	int lineStyle,
 	int lineWidth,
 	float transparency,
+	SbBool colorOverride,
+	const SbColor &color,
 	SbBool materialColorValid,
 	const SbColor &materialColor,
 	uint32_t materialRevision);
+    int setDatabaseSourceMaterialPolicy(const char *sourcePath,
+	int materialPolicy);
+    int markDatabaseSourceStale(const char *sourcePath,
+	uint32_t staleReason);
     int moveDatabaseSourceToGroup(const char *sourcePath,
 	const char *groupPath);
     int removeDatabaseSource(const char *sourcePath);

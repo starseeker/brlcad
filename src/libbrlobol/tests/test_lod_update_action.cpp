@@ -2196,9 +2196,11 @@ test_scene_database_source_summary(void)
     const uint64_t afterMoveStructuralRevision =
 	ownedScene.getStructuralRevision();
     const uint64_t afterMoveFrameRevision = ownedScene.getFrameRevision();
+    const SbColor sourceColor(0.5f, 0.25f, 0.125f);
     const SbColor sourceMaterial(0.25f, 0.5f, 0.75f);
     if (ownedScene.setDatabaseSourceState("lod-submit.bot", TRUE, 24, 44,
-		FALSE, TRUE, 2, 6, 0.35f, TRUE, sourceMaterial, 77) != 1 ||
+		FALSE, TRUE, 2, 6, 0.35f, TRUE, sourceColor, TRUE,
+		sourceMaterial, 77) != 1 ||
 	    ownedScene.getStructuralRevision() != afterMoveStructuralRevision ||
 	    ownedScene.getFrameRevision() <= afterMoveFrameRevision ||
 	    !ownedScene.getDatabaseSourceSummary(0, summary) ||
@@ -2209,6 +2211,10 @@ test_scene_database_source_summary(void)
 	    summary.lineStyle != 2 ||
 	    summary.lineWidth != 6 ||
 	    fabsf(summary.transparency - 0.35f) > 1.0e-6f ||
+	    !summary.colorOverride ||
+	    fabsf(summary.color[0] - sourceColor[0]) > 1.0e-6f ||
+	    fabsf(summary.color[1] - sourceColor[1]) > 1.0e-6f ||
+	    fabsf(summary.color[2] - sourceColor[2]) > 1.0e-6f ||
 	    !summary.materialColorValid ||
 	    fabsf(summary.materialColor[0] - sourceMaterial[0]) > 1.0e-6f ||
 	    fabsf(summary.materialColor[1] - sourceMaterial[1]) > 1.0e-6f ||
@@ -2223,7 +2229,8 @@ test_scene_database_source_summary(void)
     const uint64_t afterSourceStateFrameRevision =
 	ownedScene.getFrameRevision();
     if (ownedScene.setDatabaseSourceState("lod-submit.bot", FALSE, 99, 45,
-		FALSE, TRUE, 2, 6, 0.35f, TRUE, sourceMaterial, 77) != 1 ||
+		FALSE, TRUE, 2, 6, 0.35f, TRUE, sourceColor, TRUE,
+		sourceMaterial, 77) != 1 ||
 	    ownedScene.getStructuralRevision() != afterMoveStructuralRevision ||
 	    ownedScene.getFrameRevision() <= afterSourceStateFrameRevision ||
 	    !ownedScene.getDatabaseSourceSummary(0, summary) ||
@@ -2238,12 +2245,51 @@ test_scene_database_source_summary(void)
     const uint64_t afterRevisionPreserveFrameRevision =
 	ownedScene.getFrameRevision();
     if (ownedScene.setDatabaseSourceState("lod-submit.bot", TRUE, 24, 45,
-		FALSE, TRUE, 2, 6, 0.35f, TRUE, sourceMaterial, 77) != 0 ||
+		FALSE, TRUE, 2, 6, 0.35f, TRUE, sourceColor, TRUE,
+		sourceMaterial, 77) != 0 ||
 	    ownedScene.getFrameRevision() != afterRevisionPreserveFrameRevision ||
 	    ownedScene.setDatabaseSourceState("missing.bot", TRUE, 1, 1,
 		TRUE, FALSE, 0, 0, 0.0f, FALSE,
+		SbColor(1.0f, 1.0f, 1.0f), FALSE,
 		SbColor(1.0f, 1.0f, 1.0f), 0) != -1) {
 	printf("FAIL: scene controller source state should report no-op and missing updates\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+    const uint64_t afterMaterialPolicyFrameRevision =
+	ownedScene.getFrameRevision();
+    if (ownedScene.setDatabaseSourceMaterialPolicy("lod-submit.bot",
+		SoBRLDatabaseSource::MATERIAL_DATABASE) != 1 ||
+	    ownedScene.getStructuralRevision() != afterMoveStructuralRevision ||
+	    ownedScene.getFrameRevision() <= afterMaterialPolicyFrameRevision ||
+	    !ownedScene.getDatabaseSourceSummary(0, summary) ||
+	    summary.materialPolicy != SoBRLDatabaseSource::MATERIAL_DATABASE ||
+	    ownedScene.setDatabaseSourceMaterialPolicy("lod-submit.bot",
+		SoBRLDatabaseSource::MATERIAL_DATABASE) != 0 ||
+	    ownedScene.setDatabaseSourceMaterialPolicy("missing.bot",
+		SoBRLDatabaseSource::MATERIAL_DATABASE) != -1) {
+	printf("FAIL: scene controller should own database source material policy\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+    (void)ownedScene.realizePending();
+    const uint64_t beforeStaleFrameRevision = ownedScene.getFrameRevision();
+    if (ownedScene.markDatabaseSourceStale("lod-submit.bot",
+		SoBRLDatabaseSource::STALE_INPUTS) != 1 ||
+	    ownedScene.getFrameRevision() <= beforeStaleFrameRevision ||
+	    !ownedScene.getDatabaseSourceSummary(0, summary) ||
+	    !summary.stale ||
+	    !(summary.staleReason & SoBRLDatabaseSource::STALE_INPUTS) ||
+	    summary.realizationStatus != SoBRLDatabaseSource::UNREALIZED ||
+	    ownedScene.markDatabaseSourceStale("lod-submit.bot",
+		SoBRLDatabaseSource::STALE_INPUTS) != 0 ||
+	    ownedScene.markDatabaseSourceStale("missing.bot",
+		SoBRLDatabaseSource::STALE_INPUTS) != -1) {
+	printf("FAIL: scene controller should own database source stale marking\n");
 	ownedRoot->unref();
 	db_close(dbip);
 	bu_file_delete(dbpath);

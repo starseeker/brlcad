@@ -119,6 +119,9 @@ public:
     static void initClass(void);
 
     void setLineSet(const SbVec3f *points, const int32_t *commands, int count);
+    SbBool translatePoints(const SbVec3f &offset);
+    void setDrawCenter(const SbVec3f &center);
+    SbBool updateDrawBoundsFromPoints(void);
     void setPointAttributes(const int *colorValid, const SbColor *colors,
 	    const int *scaleValid, const float *scales,
 	    const int *normalValid, const SbVec3f *normals, int count);

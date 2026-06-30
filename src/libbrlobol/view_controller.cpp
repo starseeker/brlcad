@@ -2011,6 +2011,13 @@ BRLObolViewController::getGroupChildCount(const char *groupPath) const
     return this->sceneController.getGroupChildCount(groupPath);
 }
 
+int
+BRLObolViewController::getGroupDatabaseSourceCount(
+	const char *groupPath) const
+{
+    return this->sceneController.getGroupDatabaseSourceCount(groupPath);
+}
+
 SoNode *
 BRLObolViewController::findShape(const char *shapePath) const
 {
@@ -2150,6 +2157,8 @@ BRLObolViewController::setDatabaseSourceState(const char *sourcePath,
 	int lineStyle,
 	int lineWidth,
 	float transparency,
+	SbBool colorOverride,
+	const SbColor &color,
 	SbBool materialColorValid,
 	const SbColor &materialColor,
 	uint32_t materialRevision)
@@ -2157,7 +2166,35 @@ BRLObolViewController::setDatabaseSourceState(const char *sourcePath,
     const int changed = this->sceneController.setDatabaseSourceState(
 	    sourcePath, sourceRevisionValid, sourceRevision, inputsRevision,
 	    visible, highlighted, lineStyle, lineWidth, transparency,
-	    materialColorValid, materialColor, materialRevision);
+	    colorOverride, color, materialColorValid, materialColor,
+	    materialRevision);
+    if (changed > 0) {
+	this->clearRtPickCaches();
+	this->requestRender("database-source");
+    }
+    return changed;
+}
+
+int
+BRLObolViewController::setDatabaseSourceMaterialPolicy(
+	const char *sourcePath,
+	int materialPolicy)
+{
+    const int changed = this->sceneController.setDatabaseSourceMaterialPolicy(
+	    sourcePath, materialPolicy);
+    if (changed > 0) {
+	this->clearRtPickCaches();
+	this->requestRender("database-source");
+    }
+    return changed;
+}
+
+int
+BRLObolViewController::markDatabaseSourceStale(const char *sourcePath,
+	uint32_t staleReason)
+{
+    const int changed = this->sceneController.markDatabaseSourceStale(
+	    sourcePath, staleReason);
     if (changed > 0) {
 	this->clearRtPickCaches();
 	this->requestRender("database-source");

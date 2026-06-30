@@ -39,6 +39,7 @@
 #include "rt/view.h"
 #include "./ged_private.h"
 #include "./bsg_ged_draw_private.h"
+#include "./bsg_ged_draw_view_private.h"
 
 
 static const struct ged_draw_view_export_detail *
@@ -711,6 +712,15 @@ _ged_draw_fill_shape_record(struct ged *gedp,
     out->transparency = shape_summary.transparency;
     out->draw_mode = shape_summary.draw_mode;
     out->line_width = shape_summary.line_width;
+    struct ged_draw_scene_display_summary display_summary;
+    if (ged_draw_shape_ref_display_summary(gedp, ref, &display_summary) &&
+	    display_summary.valid) {
+	out->visible = display_summary.visible;
+	out->highlighted = display_summary.highlighted;
+	out->transparency = display_summary.transparency;
+	out->draw_mode = display_summary.draw_mode;
+	out->line_width = display_summary.line_width;
+    }
     VMOVE(out->center, shape_summary.center);
 }
 

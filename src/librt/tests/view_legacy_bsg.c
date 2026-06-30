@@ -3078,10 +3078,16 @@ test_bsg_view_scope_adapter(void)
 	goto cleanup;
     }
     root_neutral = rt_view_context_scene_root_ref(v);
-    direct_root_neutral.opaque = bsg_view_scene_ref(v).opaque;
+    direct_root_neutral = rt_view_scene_ref_make(
+	    bsg_view_scene_ref(v).opaque, RT_VIEW_SCENE_BACKEND_BSG);
     if (rt_view_scene_ref_is_null(root_neutral) ||
 	    !rt_view_scene_ref_equal(root_neutral, direct_root_neutral)) {
 	printf("FAIL: neutral scene-root ref adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+    if (rt_view_scene_ref_backend(root_neutral) != RT_VIEW_SCENE_BACKEND_BSG) {
+	printf("FAIL: neutral scene-root ref backend adapter\n");
 	ret = 1;
 	goto cleanup;
     }
@@ -3220,10 +3226,17 @@ test_bsg_view_scope_adapter(void)
 	goto cleanup;
     }
     scope_neutral = rt_view_context_independent_scope_ref(v, 1);
-    direct_scope_neutral.opaque = bsg_view_independent_scope_ref(v, 0).opaque;
+    direct_scope_neutral = rt_view_scene_ref_make(
+	    bsg_view_independent_scope_ref(v, 0).opaque,
+	    RT_VIEW_SCENE_BACKEND_BSG);
     if (rt_view_scene_ref_is_null(scope_neutral) ||
 	    !rt_view_scene_ref_equal(scope_neutral, direct_scope_neutral)) {
 	printf("FAIL: neutral independent-scope ref adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+    if (rt_view_scene_ref_backend(scope_neutral) != RT_VIEW_SCENE_BACKEND_BSG) {
+	printf("FAIL: neutral independent-scope ref backend adapter\n");
 	ret = 1;
 	goto cleanup;
     }
@@ -5158,6 +5171,9 @@ test_bsg_mesh_lod_adapter_boundary(void)
     struct bsg_view *shared = make_view("rt_view_shared_settings_adapter");
     rt_view_scene_ref neutral_null_ref = rt_view_scene_ref_null();
     rt_view_scene_ref neutral_static_null_ref = RT_VIEW_SCENE_REF_NULL_INIT;
+    rt_view_scene_ref neutral_obol_ref = RT_VIEW_SCENE_REF_NULL_INIT;
+    rt_view_scene_ref neutral_obol_ref_copy = RT_VIEW_SCENE_REF_NULL_INIT;
+    rt_view_scene_ref neutral_bsg_same_pointer = RT_VIEW_SCENE_REF_NULL_INIT;
     rt_view_scene_ref_bsg null_ref_bsg = rt_view_scene_ref_null_bsg();
     fastf_t *scale_storage = NULL;
     int ret = 0;
@@ -5166,6 +5182,37 @@ test_bsg_mesh_lod_adapter_boundary(void)
 	    !rt_view_scene_ref_equal(neutral_null_ref,
 		neutral_static_null_ref)) {
 	printf("FAIL: null neutral scene-ref adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+
+    if (rt_view_scene_ref_backend(neutral_null_ref) !=
+	    RT_VIEW_SCENE_BACKEND_NONE) {
+	printf("FAIL: null neutral scene-ref backend adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+
+    neutral_obol_ref = rt_view_scene_ref_make(v, RT_VIEW_SCENE_BACKEND_OBOL);
+    neutral_obol_ref_copy = rt_view_scene_ref_make(v,
+	    RT_VIEW_SCENE_BACKEND_OBOL);
+    neutral_bsg_same_pointer = rt_view_scene_ref_make(v,
+	    RT_VIEW_SCENE_BACKEND_BSG);
+    if (rt_view_scene_ref_is_null(neutral_obol_ref) ||
+	    rt_view_scene_ref_backend(neutral_obol_ref) !=
+		RT_VIEW_SCENE_BACKEND_OBOL ||
+	    rt_view_scene_ref_context(neutral_obol_ref) != v ||
+	    !rt_view_scene_ref_equal(neutral_obol_ref,
+		neutral_obol_ref_copy) ||
+	    rt_view_scene_ref_equal(neutral_obol_ref,
+		neutral_bsg_same_pointer)) {
+	printf("FAIL: tagged neutral scene-ref adapter\n");
+	ret = 1;
+	goto cleanup;
+    }
+
+    if (rt_view_context_scene_root_ref_attach(v, neutral_obol_ref) != 0) {
+	printf("FAIL: BSG scene-root attach accepted non-BSG neutral ref\n");
 	ret = 1;
 	goto cleanup;
     }

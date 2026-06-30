@@ -44,11 +44,18 @@ struct rt_mesh_lod;
 typedef void (*rt_view_context_update_callback_t)(void *view_ctx, void *data);
 typedef void (*rt_view_selection_path_callback_t)(const char *path, void *data);
 
+typedef enum rt_view_scene_backend {
+    RT_VIEW_SCENE_BACKEND_NONE = 0,
+    RT_VIEW_SCENE_BACKEND_BSG = 1,
+    RT_VIEW_SCENE_BACKEND_OBOL = 2
+} rt_view_scene_backend;
+
 typedef struct rt_view_scene_ref {
     void *opaque;
+    unsigned int backend;
 } rt_view_scene_ref;
 
-#define RT_VIEW_SCENE_REF_NULL_INIT { NULL }
+#define RT_VIEW_SCENE_REF_NULL_INIT { NULL, RT_VIEW_SCENE_BACKEND_NONE }
 
 /* Historical normalized view-coordinate range. */
 #define RT_VIEW_MAX 2047.0
@@ -790,6 +797,8 @@ RT_EXPORT extern int rt_view_context_visible_render_summary(void *ctx, struct rt
 RT_EXPORT extern int rt_view_context_named_line_render_count(void *ctx, const char *name);
 RT_EXPORT extern int rt_view_context_render_export_consistency(void *ctx, const char *drawn_prefix, struct rt_view_render_export_consistency *summary);
 RT_EXPORT extern int rt_view_context_feature_geometry_summary(void *ctx, const char *name, struct rt_view_feature_geometry_summary *summary);
+RT_EXPORT extern void *rt_view_set_context_create(void);
+RT_EXPORT extern void rt_view_set_context_destroy(void *view_set_ctx);
 RT_EXPORT extern void rt_view_set_context_init(void *view_set_ctx);
 RT_EXPORT extern void rt_view_set_context_free(void *view_set_ctx);
 RT_EXPORT extern struct bu_ptbl *rt_view_set_context_views(void *view_set_ctx);
@@ -828,9 +837,11 @@ RT_EXPORT extern int rt_view_context_lod_bounds_callback_is(const void *ctx);
 RT_EXPORT extern void *rt_view_context_bounds_update_suspend(void *ctx);
 RT_EXPORT extern int rt_view_context_bounds_update_restore(void *ctx, void *state_ctx, int refresh_bounds);
 RT_EXPORT extern rt_view_scene_ref rt_view_scene_ref_null(void);
+RT_EXPORT extern rt_view_scene_ref rt_view_scene_ref_make(void *opaque, unsigned int backend);
 RT_EXPORT extern int rt_view_scene_ref_is_null(rt_view_scene_ref ref);
 RT_EXPORT extern int rt_view_scene_ref_equal(rt_view_scene_ref a, rt_view_scene_ref b);
 RT_EXPORT extern void *rt_view_scene_ref_context(rt_view_scene_ref ref);
+RT_EXPORT extern unsigned int rt_view_scene_ref_backend(rt_view_scene_ref ref);
 RT_EXPORT extern rt_view_scene_ref rt_view_context_independent_scope_ref(void *ctx, int create);
 RT_EXPORT extern int rt_view_context_is_independent(const void *ctx);
 RT_EXPORT extern int rt_view_context_independent_scope_is_null(void *ctx, int create);

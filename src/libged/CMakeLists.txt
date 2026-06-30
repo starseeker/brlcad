@@ -319,6 +319,7 @@ set(
   ged_init.cpp
   columns.c
   db_index.cpp
+  draw_obol.cpp
   draw.cpp
   ged.cpp
   ged_view_legacy.cpp
