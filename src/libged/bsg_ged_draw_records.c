@@ -236,6 +236,52 @@ struct _draw_path_state_ctx {
 
 
 static int
+_draw_path_state_obol_source_cb(struct ged *gedp,
+				const char *source_path,
+				void *ud)
+{
+    struct _draw_path_state_ctx *ctx =
+	(struct _draw_path_state_ctx *)ud;
+    if (!ctx || !gedp || !source_path || !source_path[0])
+	return 1;
+
+    struct ged_draw_scene_display_summary shape_summary;
+    if (!ged_draw_obol_database_source_display_summary_for_path(gedp,
+	    source_path, &shape_summary) || !shape_summary.valid ||
+	    !shape_summary.visible)
+	return 1;
+    if (ctx->mode >= 0 && shape_summary.draw_mode != ctx->mode)
+	return 1;
+
+    struct bu_vls group_path = BU_VLS_INIT_ZERO;
+    if (ged_draw_obol_database_source_owner_group_path_for_path(gedp,
+	    source_path, &group_path)) {
+	struct ged_draw_group_record_summary group_summary = {0};
+	if (!ged_draw_obol_group_record_summary_for_path(gedp,
+		bu_vls_cstr(&group_path), &group_summary) ||
+		group_summary.is_overlay || !group_summary.visible ||
+		!_draw_group_record_summary_in_view(&group_summary,
+		    ctx->view_ctx)) {
+	    bu_vls_free(&group_path);
+	    return 1;
+	}
+    }
+    bu_vls_free(&group_path);
+
+    const char *key = ged_draw_dbpath_skip_lead_slash(source_path);
+    if (_draw_path_equal(ctx->path, key))
+	ctx->exact_shape = 1;
+    if (_draw_path_is_prefix(ctx->path, key))
+	ctx->descendant_shape = 1;
+    if (key && key[0])
+	(void)bu_hash_set(ctx->drawn_leaf_paths,
+		(const uint8_t *)key, strlen(key), (void *)1);
+
+    return 1;
+}
+
+
+static int
 _draw_path_state_shape_ref_cb(ged_draw_shape_ref ref, void *ud)
 {
     struct _draw_path_state_ctx *ctx =
@@ -275,6 +321,55 @@ _draw_path_state_shape_ref_cb(ged_draw_shape_ref ref, void *ud)
 }
 
 
+static int
+_draw_path_state_eval(struct ged *gedp,
+		      const char *path,
+		      struct _draw_path_state_ctx *ctx)
+{
+    if (!gedp || !path || !ctx || !ctx->drawn_leaf_paths)
+	return 0;
+
+    if (ctx->exact_shape)
+	return 1;
+
+    if (!ctx->descendant_shape)
+	return 0;
+
+    bu_hash_tbl *expected = bu_hash_create(0);
+    if (!expected)
+	return 0;
+
+    size_t expected_count =
+	_draw_path_expected_leaf_paths(gedp, path, expected);
+
+    int state = 0;
+    if (expected_count > 0) {
+	size_t matched = 0;
+	bu_hash_entry *e = NULL;
+	while ((e = bu_hash_next(expected, e)) != NULL) {
+	    uint8_t *key = NULL;
+	    size_t key_len = 0;
+	    if (bu_hash_key(e, &key, &key_len) == 0 &&
+		    bu_hash_get(ctx->drawn_leaf_paths, key, key_len))
+		matched++;
+	}
+
+	if (ctx->exact_shape || matched == expected_count)
+	    state = 1;
+	else if (matched > 0 || ctx->descendant_shape)
+	    state = 2;
+    } else {
+	if (ctx->exact_shape)
+	    state = 1;
+	else if (ctx->descendant_shape)
+	    state = 2;
+    }
+
+    bu_hash_destroy(expected);
+    return state;
+}
+
+
 int
 ged_draw_path_state(struct ged *gedp,
 		    void *view_ctx,
@@ -305,55 +400,22 @@ ged_draw_path_state(struct ged *gedp,
     ctx.mode = mode;
     ctx.drawn_leaf_paths = drawn;
 
+    if (ged_draw_obol_scene_controller_full_synced(gedp)) {
+	int obol_status = ged_draw_obol_database_source_paths_foreach(gedp, 1,
+		_draw_path_state_obol_source_cb, &ctx);
+	if (obol_status >= 0) {
+	    int state = _draw_path_state_eval(gedp, bu_vls_cstr(&norm),
+		    &ctx);
+	    bu_hash_destroy(drawn);
+	    bu_vls_free(&norm);
+	    return state;
+	}
+    }
+
     ged_draw_scene_root_foreach_shape_ref(gedp, 0,
 	    _draw_path_state_shape_ref_cb, &ctx);
 
-    if (ctx.exact_shape) {
-	bu_hash_destroy(drawn);
-	bu_vls_free(&norm);
-	return 1;
-    }
-
-    if (!ctx.descendant_shape) {
-	bu_hash_destroy(drawn);
-	bu_vls_free(&norm);
-	return 0;
-    }
-
-    bu_hash_tbl *expected = bu_hash_create(0);
-    if (!expected) {
-	bu_hash_destroy(drawn);
-	bu_vls_free(&norm);
-	return 0;
-    }
-
-    size_t expected_count =
-	_draw_path_expected_leaf_paths(gedp, bu_vls_cstr(&norm), expected);
-
-    int state = 0;
-    if (expected_count > 0) {
-	size_t matched = 0;
-	bu_hash_entry *e = NULL;
-	while ((e = bu_hash_next(expected, e)) != NULL) {
-	    uint8_t *key = NULL;
-	    size_t key_len = 0;
-	    if (bu_hash_key(e, &key, &key_len) == 0 &&
-		    bu_hash_get(drawn, key, key_len))
-		matched++;
-	}
-
-	if (ctx.exact_shape || matched == expected_count)
-	    state = 1;
-	else if (matched > 0 || ctx.descendant_shape)
-	    state = 2;
-    } else {
-	if (ctx.exact_shape)
-	    state = 1;
-	else if (ctx.descendant_shape)
-	    state = 2;
-    }
-
-    bu_hash_destroy(expected);
+    int state = _draw_path_state_eval(gedp, bu_vls_cstr(&norm), &ctx);
     bu_hash_destroy(drawn);
     bu_vls_free(&norm);
     return state;
@@ -569,6 +631,43 @@ struct _draw_has_paths_ctx {
 
 
 static int
+_draw_has_paths_obol_source_cb(struct ged *gedp,
+			       const char *source_path,
+			       void *ud)
+{
+    struct _draw_has_paths_ctx *ctx = (struct _draw_has_paths_ctx *)ud;
+    if (!ctx || !gedp || !source_path || !source_path[0])
+	return 1;
+
+    struct ged_draw_scene_display_summary shape_summary;
+    if (!ged_draw_obol_database_source_display_summary_for_path(gedp,
+	    source_path, &shape_summary) || !shape_summary.valid ||
+	    !shape_summary.visible)
+	return 1;
+    if (ctx->mode >= 0 && shape_summary.draw_mode != ctx->mode)
+	return 1;
+
+    struct bu_vls group_path = BU_VLS_INIT_ZERO;
+    if (ged_draw_obol_database_source_owner_group_path_for_path(gedp,
+	    source_path, &group_path)) {
+	struct ged_draw_group_record_summary group_summary = {0};
+	if (!ged_draw_obol_group_record_summary_for_path(gedp,
+		bu_vls_cstr(&group_path), &group_summary) ||
+		group_summary.is_overlay || !group_summary.visible ||
+		!_draw_group_record_summary_in_view(&group_summary,
+		    ctx->view_ctx)) {
+	    bu_vls_free(&group_path);
+	    return 1;
+	}
+    }
+    bu_vls_free(&group_path);
+
+    ctx->found = 1;
+    return 0;
+}
+
+
+static int
 _draw_has_paths_shape_ref_cb(ged_draw_shape_ref ref, void *ud)
 {
     struct _draw_has_paths_ctx *ctx = (struct _draw_has_paths_ctx *)ud;
@@ -648,6 +747,13 @@ ged_draw_has_paths(struct ged *gedp,
     ctx.gedp = gedp;
     ctx.view_ctx = view_ctx;
     ctx.mode = mode;
+
+    if (ged_draw_obol_scene_controller_full_synced(gedp)) {
+	int obol_status = ged_draw_obol_database_source_paths_foreach(gedp, 1,
+		_draw_has_paths_obol_source_cb, &ctx);
+	if (obol_status >= 0)
+	    return ctx.found;
+    }
 
     ged_draw_scene_root_foreach_shape_ref(gedp, 0,
 	    _draw_has_paths_shape_ref_cb, &ctx);

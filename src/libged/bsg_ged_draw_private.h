@@ -60,6 +60,14 @@ struct nmgregion;
 typedef struct ged_draw_shape_draft ged_draw_shape_draft;
 typedef int (*ged_draw_group_ref_index_cb)(ged_draw_group_ref ref,
 					   void *userdata);
+typedef int (*ged_draw_obol_group_path_cb)(
+	struct ged *gedp,
+	const char *path,
+	void *userdata);
+typedef int (*ged_draw_obol_database_source_path_cb)(
+	struct ged *gedp,
+	const char *path,
+	void *userdata);
 
 enum ged_draw_overlay_geometry_kind {
     GED_DRAW_OVERLAY_GEOMETRY_NONE = 0,
@@ -116,6 +124,12 @@ struct ged_draw_obol_database_source_runtime {
     fastf_t tessellation_rel_tol;
     fastf_t tessellation_norm_tol;
     uint64_t lod_bot_threshold;
+    int draw_size_valid;
+    fastf_t draw_size;
+    struct rt_mesh_lod *rt_mesh_lod;
+    int mesh_lod_bounds_valid;
+    point_t mesh_lod_bmin;
+    point_t mesh_lod_bmax;
 };
 
 struct ged_draw_obol_draw_state_summary {
@@ -240,6 +254,32 @@ enum ged_draw_view_export_geometry_kind {
 };
 
 #define GED_DRAW_VIEW_LINE_POINT_DRAW 12
+
+#define GED_DRAW_OBOL_ANNOTATION_SEGMENT_NONE 0
+#define GED_DRAW_OBOL_ANNOTATION_SEGMENT_LINE 1
+#define GED_DRAW_OBOL_ANNOTATION_SEGMENT_TEXT 2
+
+struct ged_draw_obol_annotation_segment {
+    int kind;
+    int line_start;
+    int line_end;
+    int text_ref_point;
+    const char *text;
+};
+
+struct ged_draw_obol_annotation_summary {
+    int valid;
+    size_t point_count;
+    size_t segment_count;
+    int line_segment_valid;
+    int line_start;
+    int line_end;
+    int text_segment_valid;
+    int text_ref_point;
+    const char *text;
+    uint64_t cache_identity;
+    uint64_t source_identity;
+};
 
 struct ged_draw_view_export_detail {
     struct bu_vls path;
@@ -649,11 +689,18 @@ GED_EXPORT extern int ged_draw_shape_ref_database_source_summary(
 	struct ged *gedp,
 	ged_draw_shape_ref ref,
 	struct ged_draw_database_source_summary *out);
+GED_EXPORT extern int ged_draw_obol_shape_ref_index_for_path_hash(
+	struct ged *gedp,
+	unsigned long long path_hash,
+	ged_draw_shape_ref_index_cb cb,
+	void *userdata);
 GED_EXPORT extern int ged_draw_obol_scene_database_bounds(
 	struct ged *gedp,
 	vect_t *min,
 	vect_t *max,
 	int *empty_out);
+GED_EXPORT extern void ged_draw_obol_preserved_sources_free(
+	struct ged *gedp);
 GED_EXPORT extern int ged_draw_obol_scene_root_child_count(
 	struct ged *gedp,
 	size_t *out);
@@ -673,6 +720,25 @@ GED_EXPORT extern int ged_draw_obol_database_source_summary_for_path(
 	struct ged *gedp,
 	const char *path,
 	struct ged_draw_database_source_summary *out);
+GED_EXPORT extern int ged_draw_obol_database_source_paths_foreach(
+	struct ged *gedp,
+	int skip_overlay_groups,
+	ged_draw_obol_database_source_path_cb cb,
+	void *userdata);
+GED_EXPORT extern int ged_draw_obol_shape_paths_foreach(
+	struct ged *gedp,
+	int skip_overlay_groups,
+	ged_draw_obol_database_source_path_cb cb,
+	void *userdata);
+GED_EXPORT extern int ged_draw_obol_group_database_source_paths_foreach(
+	struct ged *gedp,
+	const char *group_path,
+	ged_draw_obol_database_source_path_cb cb,
+	void *userdata);
+GED_EXPORT extern int ged_draw_obol_database_source_owner_group_path_for_path(
+	struct ged *gedp,
+	const char *path,
+	struct bu_vls *out);
 GED_EXPORT extern int ged_draw_obol_database_source_display_summary_for_path(
 	struct ged *gedp,
 	const char *path,
@@ -713,6 +779,56 @@ GED_EXPORT extern int ged_draw_obol_database_source_line_command_at_for_path(
 	const char *path,
 	size_t index,
 	int *out);
+GED_EXPORT extern int ged_draw_obol_database_source_surface_summary_for_path(
+	struct ged *gedp,
+	const char *path,
+	struct ged_draw_view_surface_summary *out);
+GED_EXPORT extern int ged_draw_obol_database_source_surface_point_at_for_path(
+	struct ged *gedp,
+	const char *path,
+	size_t index,
+	point_t out);
+GED_EXPORT extern int ged_draw_obol_database_source_surface_index_at_for_path(
+	struct ged *gedp,
+	const char *path,
+	size_t index,
+	int *out);
+GED_EXPORT extern int ged_draw_obol_shape_display_summary_for_path(
+	struct ged *gedp,
+	const char *path,
+	struct ged_draw_scene_display_summary *out);
+GED_EXPORT extern int ged_draw_obol_shape_geometry_summary_for_path(
+	struct ged *gedp,
+	const char *path,
+	struct ged_draw_shape_geometry_summary *out);
+GED_EXPORT extern int ged_draw_obol_shape_surface_summary_for_path(
+	struct ged *gedp,
+	const char *path,
+	struct ged_draw_view_surface_summary *out);
+GED_EXPORT extern int ged_draw_obol_shape_surface_point_at_for_path(
+	struct ged *gedp,
+	const char *path,
+	size_t index,
+	point_t out);
+GED_EXPORT extern int ged_draw_obol_shape_surface_index_at_for_path(
+	struct ged *gedp,
+	const char *path,
+	size_t index,
+	int *out);
+GED_EXPORT extern int ged_draw_obol_shape_line_summary_for_path(
+	struct ged *gedp,
+	const char *path,
+	struct ged_draw_view_line_summary *out);
+GED_EXPORT extern int ged_draw_obol_shape_line_point_at_for_path(
+	struct ged *gedp,
+	const char *path,
+	size_t index,
+	point_t out);
+GED_EXPORT extern int ged_draw_obol_shape_line_command_at_for_path(
+	struct ged *gedp,
+	const char *path,
+	size_t index,
+	int *out);
 GED_EXPORT extern int ged_draw_obol_database_source_translate_vlist_for_path(
 	struct ged *gedp,
 	const char *path,
@@ -734,13 +850,47 @@ ged_draw_obol_database_source_publish_annotation_line_set_for_path(
 	const int *commands,
 	size_t point_count);
 GED_EXPORT extern int
+ged_draw_obol_database_source_publish_annotation_record_for_path(
+	struct ged *gedp,
+	const char *path,
+	const point_t base_point,
+	const point_t *annotation_points,
+	size_t annotation_point_count,
+	const struct ged_draw_obol_annotation_segment *segments,
+	size_t segment_count,
+	const point_t *line_points,
+	const int *line_commands,
+	size_t line_point_count);
+GED_EXPORT extern int
+ged_draw_obol_database_source_annotation_summary_for_path(
+	struct ged *gedp,
+	const char *path,
+	struct ged_draw_obol_annotation_summary *out);
+GED_EXPORT extern int
+ged_draw_obol_database_source_annotation_point_at_for_path(
+	struct ged *gedp,
+	const char *path,
+	size_t index,
+	point_t out);
+GED_EXPORT extern int
 ged_draw_obol_database_source_publish_auxiliary_line_set_for_path(
 	struct ged *gedp,
 	const char *path,
 	const char *name,
 	const point_t *points,
 	const int *commands,
-	size_t point_count);
+	size_t point_count,
+	const struct ged_draw_scene_display_summary *display_state);
+GED_EXPORT extern int
+ged_draw_obol_database_source_publish_auxiliary_source_line_set_for_path(
+	struct ged *gedp,
+	const char *path,
+	const char *source_path,
+	const char *display_name,
+	const point_t *points,
+	const int *commands,
+	size_t point_count,
+	const struct ged_draw_scene_display_summary *display_state);
 GED_EXPORT extern int
 ged_draw_obol_database_source_clear_auxiliary_shapes_for_path(
 	struct ged *gedp,
@@ -763,6 +913,32 @@ ged_draw_obol_database_source_publish_indexed_face_set_for_path(
 	size_t normal_count,
 	const int *indices,
 	size_t index_count);
+GED_EXPORT extern int ged_draw_obol_local_shape_publish_line_set_for_path(
+	struct ged *gedp,
+	const char *group_path,
+	const char *shape_path,
+	const char *display_name,
+	const point_t *points,
+	const int *commands,
+	size_t point_count,
+	const struct ged_draw_scene_display_summary *display_state);
+GED_EXPORT extern int ged_draw_obol_local_shape_set_record_role_for_path(
+	struct ged *gedp,
+	const char *shape_path,
+	const char *record_role);
+GED_EXPORT extern int
+ged_draw_obol_local_shape_publish_indexed_face_set_for_path(
+	struct ged *gedp,
+	const char *group_path,
+	const char *shape_path,
+	const char *display_name,
+	const point_t *points,
+	size_t point_count,
+	const vect_t *normals,
+	size_t normal_count,
+	const int *indices,
+	size_t index_count,
+	const struct ged_draw_scene_display_summary *display_state);
 GED_EXPORT extern int ged_draw_obol_database_source_set_vlist_center_for_path(
 	struct ged *gedp,
 	const char *path,
@@ -780,6 +956,15 @@ GED_EXPORT extern int ged_draw_obol_database_source_set_placement_for_path(
 	const point_t draw_center,
 	int draw_size_valid,
 	fastf_t draw_size);
+GED_EXPORT extern int ged_draw_obol_database_source_set_bounds_for_path(
+	struct ged *gedp,
+	const char *path,
+	const point_t bmin,
+	const point_t bmax);
+GED_EXPORT extern int ged_draw_obol_database_source_set_display_name_for_path(
+	struct ged *gedp,
+	const char *path,
+	const char *display_name);
 GED_EXPORT extern int ged_draw_obol_database_source_geometry_summary_for_path(
 	struct ged *gedp,
 	const char *path,
@@ -796,6 +981,13 @@ GED_EXPORT extern int ged_draw_obol_database_source_set_evaluated_region_for_pat
 	struct ged *gedp,
 	const char *path,
 	int evaluated_region);
+GED_EXPORT extern int ged_draw_obol_database_source_set_region_metadata_for_path(
+	struct ged *gedp,
+	const char *path,
+	int region_id,
+	int aircode,
+	int los,
+	int material_id);
 GED_EXPORT extern int ged_draw_obol_database_source_update_display_for_path(
 	struct ged *gedp,
 	const char *path,
@@ -803,6 +995,12 @@ GED_EXPORT extern int ged_draw_obol_database_source_update_display_for_path(
 	int visible,
 	int highlighted_valid,
 	int highlighted,
+	int draw_mode_valid,
+	int ged_draw_mode,
+	int line_style_valid,
+	int line_style,
+	int line_width_valid,
+	int line_width,
 	int transparency_valid,
 	fastf_t transparency,
 	int color_valid,
@@ -811,6 +1009,17 @@ GED_EXPORT extern int ged_draw_obol_database_source_update_display_for_path(
 	const unsigned char material_color[3],
 	int material_revision_valid,
 	uint64_t material_revision);
+GED_EXPORT extern int ged_draw_obol_database_source_update_appearance_for_path(
+	struct ged *gedp,
+	const char *path,
+	int line_width_valid,
+	int line_width,
+	int transparency_valid,
+	fastf_t transparency,
+	int color_override_valid,
+	int color_override,
+	int color_valid,
+	const unsigned char color[3]);
 GED_EXPORT extern int ged_draw_obol_database_source_mark_stale_for_path(
 	struct ged *gedp,
 	const char *path,
@@ -823,6 +1032,15 @@ GED_EXPORT extern int ged_draw_obol_database_source_runtime_for_path(
 	struct ged *gedp,
 	const char *path,
 	struct ged_draw_obol_database_source_runtime *out);
+GED_EXPORT extern int ged_draw_obol_database_source_set_mesh_lod_for_path(
+	struct ged *gedp,
+	const char *path,
+	struct rt_mesh_lod *lod);
+GED_EXPORT extern int ged_draw_obol_database_source_set_mesh_lod_bounds_for_path(
+	struct ged *gedp,
+	const char *path,
+	const point_t bmin,
+	const point_t bmax);
 GED_EXPORT extern int ged_draw_obol_database_source_apply_record_for_path(
 	struct ged *gedp,
 	const char *path,
@@ -859,6 +1077,14 @@ ged_draw_obol_database_source_set_realization_view_policy_for_path(
 	uint64_t bot_threshold,
 	fastf_t curve_scale,
 	fastf_t point_scale);
+GED_EXPORT extern int
+ged_draw_obol_database_source_realize_for_path(struct ged *gedp,
+	const char *path);
+GED_EXPORT extern int ged_draw_obol_scene_controller_ensure_owned(
+	struct ged *gedp,
+	int sync_current_scene);
+GED_EXPORT extern int ged_draw_obol_scene_controller_full_synced(
+	struct ged *gedp);
 GED_EXPORT extern int ged_draw_obol_database_source_ensure_for_path(
 	struct ged *gedp,
 	const char *path,
@@ -882,20 +1108,42 @@ ged_draw_obol_database_sources_remove_for_path_prefix(
 	struct ged *gedp,
 	const char *path_prefix);
 GED_EXPORT extern int
+ged_draw_obol_database_sources_remove_for_path_prefix_in_scope(
+	struct ged *gedp,
+	const char *path_prefix,
+	void *view_ctx);
+GED_EXPORT extern int
+ged_draw_obol_active_database_sources_remove_for_path_prefix(
+	struct ged *gedp,
+	const char *path_prefix);
+GED_EXPORT extern int
 ged_draw_obol_database_sources_remove_for_component_name(
 	struct ged *gedp,
 	const char *name,
-	int nonroot_only);
+	int nonroot_only,
+	int mode);
 GED_EXPORT extern int ged_draw_obol_database_sources_clear(struct ged *gedp);
+GED_EXPORT extern int ged_draw_obol_database_sources_clear_in_scope(
+	struct ged *gedp,
+	void *view_ctx);
+GED_EXPORT extern int ged_draw_obol_scene_clear(struct ged *gedp);
+GED_EXPORT extern int ged_draw_obol_active_scene_clear(struct ged *gedp);
 GED_EXPORT extern int ged_draw_obol_groups_remove_for_component_name(
 	struct ged *gedp,
 	const char *name);
+GED_EXPORT extern int ged_draw_obol_groups_remove_for_path_prefix(
+	struct ged *gedp,
+	const char *path_prefix);
 GED_EXPORT extern int ged_draw_obol_group_remove_for_path(
 	struct ged *gedp,
 	const char *path);
 GED_EXPORT extern int ged_draw_obol_group_clear_for_path(
 	struct ged *gedp,
 	const char *path);
+GED_EXPORT extern int ged_draw_obol_group_rename_for_path(
+	struct ged *gedp,
+	const char *path,
+	const char *new_path);
 GED_EXPORT extern int ged_draw_obol_group_erase_subpath_for_path(
 	struct ged *gedp,
 	const char *parent_path,
@@ -915,10 +1163,19 @@ GED_EXPORT extern int ged_draw_obol_group_record_summary_for_path(
 	struct ged *gedp,
 	const char *path,
 	struct ged_draw_group_record_summary *out);
+GED_EXPORT extern int ged_draw_obol_group_paths_foreach(
+	struct ged *gedp,
+	int skip_overlay_groups,
+	ged_draw_obol_group_path_cb cb,
+	void *userdata);
 GED_EXPORT extern int ged_draw_obol_group_shape_count_for_path(
 	struct ged *gedp,
 	const char *path,
 	int *out);
+GED_EXPORT extern int ged_draw_obol_group_descendant_group_count_for_path(
+	struct ged *gedp,
+	const char *path,
+	size_t *out);
 GED_EXPORT extern int ged_draw_obol_group_child_count_for_path(
 	struct ged *gedp,
 	const char *path,
@@ -953,6 +1210,16 @@ GED_EXPORT extern int ged_draw_group_ref_index_for_component(struct ged *gedp,
 							    const char *path,
 							    ged_draw_group_ref_index_cb cb,
 							    void *userdata);
+GED_EXPORT extern int ged_draw_obol_shape_ref_index_for_component(
+	struct ged *gedp,
+	const char *path,
+	ged_draw_shape_ref_index_cb cb,
+	void *userdata);
+GED_EXPORT extern int ged_draw_obol_group_ref_index_for_component(
+	struct ged *gedp,
+	const char *path,
+	ged_draw_group_ref_index_cb cb,
+	void *userdata);
 struct ged_draw_index_stats {
     uint64_t shape_component_queries;
     uint64_t shape_component_candidates;
@@ -962,6 +1229,12 @@ struct ged_draw_index_stats {
     uint64_t path_candidates;
     uint64_t fallback_shape_scans;
     uint64_t fallback_group_scans;
+    uint64_t retained_child_source_creations;
+    uint64_t retained_primitive_wireframe_publications;
+    uint64_t retained_mesh_lod_runtime_updates;
+    uint64_t retained_source_owner_appends;
+    uint64_t retained_group_mutations;
+    uint64_t retained_shape_mutations;
 };
 
 GED_EXPORT extern void ged_draw_index_stats_get(struct ged *gedp,

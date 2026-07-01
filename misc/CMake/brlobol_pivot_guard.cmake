@@ -2539,6 +2539,7 @@ function(_brlobol_pivot_guard_check_brlobol_window_host)
 	"SoBRLSceneController::removeGroup"
 	"SoBRLSceneController::clearGroup"
 	"SoBRLSceneController::getGroupChildCount"
+	"SoBRLSceneController::getGroupDescendantGroupCount"
 	"SoBRLSceneController::getGroupDatabaseSourceCount"
 	"newGroup->setName"
 	"newGroup->groupPath"
@@ -2591,7 +2592,7 @@ function(_brlobol_pivot_guard_check_brlobol_window_host)
 		"SoBRLSceneController::setDatabaseSourceRealizationViewPolicy"
 		"SoBRLSceneController::publishDatabaseSourceAuxiliaryLineSet"
 		"SoBRLSceneController::clearDatabaseSourceAuxiliaryShapes"
-		"source->retargetDatabaseSource(newSourcePath"
+		"source->retargetDatabaseSourceInstance("
 		"source->markStale(staleReason)"
 		"source->setDrawModeState(drawMode)"
 		"source->setMaterialPolicyState(materialPolicy)"
@@ -2601,6 +2602,7 @@ function(_brlobol_pivot_guard_check_brlobol_window_host)
 		"source->setRealizationViewPolicy(viewDependent"
 		"source->setPlacementState(drawMatrixValid"
 		"source->setAuxiliaryLineSet(name"
+		"displayState"
 		"source->clearAuxiliaryShapes()"
 		"SoBRLSceneController::moveDatabaseSourceToGroup"
 		"find_database_source_recursive"
@@ -2630,6 +2632,12 @@ function(_brlobol_pivot_guard_check_brlobol_window_host)
 		"setDisplayState"
 		"SoSFBool drawMatrixValid"
 		"setPlacementState"
+		"setMeshLod"
+		"getMeshLod"
+		"setMeshLodBounds"
+		"getMeshLodBounds"
+		"BRLObolAuxiliaryLineSetDisplayState"
+		"const BRLObolAuxiliaryLineSetDisplayState *displayState = NULL"
 		"findAuxiliaryVListShape"
 		"setAuxiliaryLineSet"
 		"clearAuxiliaryShapes"
@@ -2654,9 +2662,17 @@ function(_brlobol_pivot_guard_check_brlobol_window_host)
 		"SoBRLDatabaseSource::setDrawModeState"
 		"SoBRLDatabaseSource::setMaterialPolicyState"
 		"SoBRLDatabaseSource::setDisplayState"
+		"SoBRLDatabaseSource::setMeshLod"
+		"SoBRLDatabaseSource::getMeshLod"
+		"SoBRLDatabaseSource::setMeshLodBounds"
+		"SoBRLDatabaseSource::getMeshLodBounds"
+		"rt_mesh_lod_destroy"
 		"summary.drawMatrixValid = this->drawMatrixValid.getValue()"
 		"sync_shape_placement_state"
 		"vlist_shape_is_auxiliary"
+		"BRLObolAuxiliaryLineSetDisplayState::BRLObolAuxiliaryLineSetDisplayState"
+		"displayState && displayState->valid"
+		"sync_shape_placement_state(shape, this)"
 		"recordRole = \"auxiliary\""
 		"sourceType = \"auxiliary-line-set\"")
       string(FIND "${_db_source_impl}" "${_token}" _idx)
@@ -2682,6 +2698,7 @@ function(_brlobol_pivot_guard_check_brlobol_window_host)
 	[[setDatabaseSourceMaterialPolicy[ \t\r\n]*\(]]
 	[[setDatabaseSourcePlacementState[ \t\r\n]*\(]]
 	[[getGroupDatabaseSourceCount[ \t\r\n]*\(]]
+	[[getGroupDescendantGroupCount[ \t\r\n]*\(]]
 	[[getSceneSubtreeBounds[ \t\r\n]*\(]]
 	[[getSceneTreeSummaryForPath[ \t\r\n]*\(]]
 	[[getSceneChildTreeSummary[ \t\r\n]*\(]])
@@ -16345,6 +16362,109 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	  "src/libged/bsg_ged_draw_source.c must own indexed-face update bridge token ${_token}")
       endif()
     endforeach()
+    foreach(_token
+	[[Obol owns source-adapter geometry clear; BSG is fallback.]]
+	[[Obol owns source-adapter line-set publication; BSG is fallback.]]
+	[[Obol owns source-adapter point-set publication; BSG is fallback.]]
+	[[_ged_draw_scene_ref_obol_source_snapshot_path_apply(ref]]
+	[[Obol owns source-adapter indexed-face publication; BSG is fallback.]]
+	[[Obol owns source-adapter indexed-face updates; BSG is fallback.]]
+		[[Obol owns public shape center mutation; retained fallback is retired.]]
+		[[Obol owns public shape visibility mutation; retained fallback is retired.]]
+		[[Obol owns public group visibility mutation; BSG is fallback.]]
+		[[Obol owns public group DB-path mutation; retained BSG is fallback.]]
+		[[Obol owns public shape color mutation; retained fallback is retired.]]
+		[[Obol owns public shape highlight mutation; retained fallback is retired.]]
+		[[Obol owns public shape transparency mutation; retained fallback is retired.]]
+		[[Obol owns public shape material-color mutation; retained fallback is retired.]]
+		[[_ged_draw_shape_ref_try_obol_paths_lazy]]
+		[[Obol owns public group draw-mode mutation; BSG is fallback.]]
+	[[Obol owns public evaluated-region mutation; retained fallback is retired.]]
+	[[Obol owns public database-source stale mutation; retained fallback is retired.]]
+	[[Obol owns public group appearance mutation; BSG is fallback.]]
+	[[Obol owns public shape release; retained source-owner release is fallback.]]
+	[[Obol owns database-source record mutation; BSG is fallback.]]
+	[[Obol owns source-root clear; retained clear is fallback.]]
+	[[Obol owns scoped database-group clear; retained clear is fallback.]]
+	[[Obol owns exact-path source/group erase; retained erase is fallback.]]
+	[[Obol owns path-prefix source/group erase; retained erase is fallback.]]
+	[[Obol owns shared-scope component erase; retained erase is fallback.]]
+		[[Obol owns group-name erase; retained group erase is fallback.]]
+		[[Obol owns source group membership; retained append is fallback.]]
+		[[ged_draw_obol_owner_structural_revision_bump]]
+		[[gd_draw_retained_source_owner_appends]]
+		[[gd_draw_retained_group_mutations]]
+			[[gd_draw_retained_shape_mutations]]
+			[[Obol owns public material-refresh mutation; retained fallback is retired.]]
+			[[Obol owns draft path/source-state attachment; BSG is fallback.]]
+			[[Obol owns draft display-name mutation; BSG is fallback.]]
+			[[ged_draw_shape_draft_obol_source_path_apply]]
+			[[ged_draw_shape_draft_apply_obol_placement]]
+			[[Obol owns draft known-bounds placement and explicit source bounds.]]
+			[[Obol owns draft evaluated-path transform placement; BSG is fallback.]]
+			[[Obol owns draft draw-matrix placement mutation; BSG is fallback.]]
+			[[Obol owns draft draw-size placement mutation; BSG is fallback.]]
+				[[Obol owns draft display/material mutation; BSG is fallback.]]
+			[[Obol owns draft tree material-color selection; BSG is fallback.]]
+			[[Obol owns draft tree evaluated-region clear; BSG is fallback.]]
+			[[Obol owns draft tree highlight/line-style mutation; BSG is fallback.]]
+			[[Obol owns draft tree region metadata mutation; retained registry region metadata is fallback.]]
+			[[Obol owns draft tree appearance mutation; BSG is fallback.]]
+			[[ged_draw_obol_group_paths_foreach]]
+				[[ged_draw_obol_group_database_source_paths_foreach]]
+				[[ged_draw_obol_shape_ref_index_for_component]]
+				[[ged_draw_obol_group_ref_index_for_component]]
+					[[ged_draw_obol_shape_ref_index_for_path_hash]]
+					[[ged_draw_obol_shape_component_index_path_cb]]
+					[[ged_draw_obol_group_component_index_path_cb]]
+					[[ged_draw_obol_shape_path_hash_index_path_cb]]
+					[[ged_draw_obol_database_source_path_hash]]
+					[[ged_draw_shape_ref_obol_publish_primitive_wireframe_plot]]
+					[[ged_draw_obol_database_source_publish_primitive_wireframe_for_path]]
+					[[ged_draw_scene_ref_publish_obol_primitive_wireframe]]
+					[[ged_draw_obol_database_source_publish_submodel_wireframe_for_path]]
+					[[ged_draw_obol_submodel_wireframe_leaf]]
+					[[ged_draw_rt_vlist_to_ged_line_command]]
+					[[ged_draw_rt_vlist_to_ged_line_arrays]]
+					[[ged_draw_group_ref_redraw_wireframe_obol_path_cb]])
+      string(FIND "${_ged_bsg_draw_source_contents}" "${_token}"
+	_ged_indexed_face_owner_token_idx)
+      if(_ged_indexed_face_owner_token_idx EQUAL -1)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/bsg_ged_draw_source.c must keep indexed-face source-adapter Obol ownership token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[if[ \t\r\n]*\([ \t\r\n]*!obol_cleared[ \t\r\n]*\)[ \t\r\n]*\{[^}]*bsg_geometry_ref_clear]]
+	[[if[ \t\r\n]*\([ \t\r\n]*!obol_published[ \t\r\n]*\)[ \t\r\n]*\{[^}]*bsg_geometry_ref_set_line_set]]
+	[[if[ \t\r\n]*\([ \t\r\n]*!obol_published[ \t\r\n]*\)[ \t\r\n]*\{[^}]*bsg_geometry_ref_set_point_set]]
+	[[if[ \t\r\n]*\([ \t\r\n]*!obol_published[ \t\r\n]*\)[ \t\r\n]*\{[^}]*bsg_geometry_ref_set_indexed_face_set]]
+	[[if[ \t\r\n]*\([ \t\r\n]*!obol_published[ \t\r\n]*\)[ \t\r\n]*\{[^}]*bsg_geometry_ref_update_indexed_face_set]])
+      string(REGEX MATCH "${_pat}" _ged_indexed_face_fallback_only_hit
+	"${_ged_bsg_draw_source_contents}")
+      if(NOT _ged_indexed_face_fallback_only_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/bsg_ged_draw_source.c must keep retained geometry writes inside Obol-miss fallback branches")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[if[^A-Za-z0-9_]*\([^)]*!obol_updated[^)]*\)[^A-Za-z0-9_]*bsg_updated[^A-Za-z0-9_]*=[^A-Za-z0-9_]*ged_draw_scene_ref_set_visible[^A-Za-z0-9_]*\([^A-Za-z0-9_]*group_ref]]
+	[[if[^A-Za-z0-9_]*\([^)]*!obol_updated[^)]*\)[^A-Za-z0-9_]*bsg_updated[^A-Za-z0-9_]*=[^A-Za-z0-9_]*ged_draw_scene_ref_set_draw_intent_mode[^A-Za-z0-9_]*\([^A-Za-z0-9_]*group_ref]]
+	[[if[^A-Za-z0-9_]*\([^)]*!obol_updated[^)]*\)[^A-Za-z0-9_]*bsg_updated[^A-Za-z0-9_]*=[^A-Za-z0-9_]*ged_draw_scene_ref_set_draw_intent_appearance_settings[^A-Za-z0-9_]*\([^A-Za-z0-9_]*group_ref]])
+      string(REGEX MATCH "${_pat}" _ged_display_mutation_fallback_only_hit
+	"${_ged_bsg_draw_source_contents}")
+      if(NOT _ged_display_mutation_fallback_only_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/bsg_ged_draw_source.c must keep retained public group display/draw-intent mutations inside Obol-miss fallback branches")
+      endif()
+    endforeach()
+    string(FIND "${_ged_bsg_draw_source_contents}"
+      "ged_draw_scene_ref_material_revision(shape_ref) == mater_rev"
+      _ged_material_refresh_retained_skip_idx)
+    if(NOT _ged_material_refresh_retained_skip_idx EQUAL -1)
+      _brlobol_pivot_guard_fail(
+	"src/libged/bsg_ged_draw_source.c must not use retained material revision as the public material-refresh skip authority")
+    endif()
 	    foreach(_token
 		"struct ged_draw_shape_draft"
 		"bsg_scene_ref source_ref"
@@ -16370,6 +16490,8 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	ged_draw_shape_draft_apply_database_leaf_display
 	ged_draw_shape_draft_commit_to_group
 	ged_draw_shape_draft_commit_database_leaf_to_scene_ref
+	ged_draw_source_database_leaf_draft_create
+	"Obol owns database-leaf source group membership"
 	ged_draw_scene_ref_create_draft_pair
 	ged_draw_ensure_root_attached
 	ged_draw_scene_ref_realization_set_view_context_policy
@@ -16416,7 +16538,10 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	ged_draw_scene_ref_line_point_at
 	ged_draw_scene_ref_line_command_at
 	ged_draw_scene_ref_translate_geometry
+	ged_draw_obol_context_db_path_components_exist
 	ged_draw_obol_context_token_for_path
+	ged_draw_obol_context_parent_path
+	ged_draw_obol_context_token_with_parent_for_path
 	ged_draw_shape_context_obol_path_apply
 	ged_draw_shape_ref_last_point
 	ged_draw_shape_ref_line_summary
@@ -16433,16 +16558,21 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	ged_draw_shape_ref_cache_context
 	_ged_draw_shape_ref_runtime_scene_ref
 		ged_draw_group_ref_context
+		ged_draw_group_ref_obol_context
 		ged_draw_group_ref_record_summary
-		ged_draw_group_ref_tree_summary
-		ged_draw_group_ref_shape_count
-		ged_draw_group_ref_set_dbpath
-		ged_draw_group_ref_set_mode
+			ged_draw_group_ref_tree_summary
+			ged_draw_obol_group_tree_summary_for_path
+			_ged_draw_obol_group_tree_summary_cb
+			ged_draw_group_ref_shape_count
+			ged_draw_group_ref_set_dbpath
+			ged_draw_obol_group_rename_for_path
+			ged_draw_group_ref_set_mode
 		ged_draw_group_ref_set_appearance_settings
 		ged_draw_group_ref_appearance_settings
 			ged_draw_group_ref_append_scene_ref
 				ged_draw_group_ref_lookup_or_create
 				ged_draw_obol_group_ensure_for_path
+				ged_draw_obol_group_ref_for_path
 						ged_draw_source_root_create_group_ref
 						ged_draw_source_root_foreach_shape_ref
 						ged_draw_source_root_foreach_group_ref
@@ -16490,6 +16620,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 		ged_draw_shape_ref_obol_publish_line_set
 		ged_draw_scene_ref_obol_publish_annotation_line_set
 		ged_draw_scene_ref_obol_publish_auxiliary_line_set
+		"retained aux geometry is fallback only"
 		ged_draw_shape_ref_obol_publish_point_set
 		ged_draw_shape_ref_obol_publish_indexed_face_set
 	_ged_draw_shape_ref_try_obol_paths
@@ -16539,6 +16670,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	ged_draw_shape_ref_redraw_wireframe
 	ged_draw_shape_ref_release
 	ged_draw_shape_ref_realize_context
+	"Obol owns public shape realization; retained realization syncs the temporary adapter."
 	ged_draw_shape_ref_set_visible
 	ged_draw_shape_ref_get_color
 	ged_draw_shape_ref_set_color
@@ -16559,8 +16691,10 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	ged_draw_group_context_is_overlay
 		ged_draw_scene_context_source_summary
 		"_ged_draw_obol_display_summary_cb, &ctx"
+		ged_draw_obol_context_token_tree_summary
 		ged_draw_scene_rt_ref_tree_summary
 			ged_draw_scene_context_child_at
+			ged_draw_obol_scene_context_parent
 		ged_draw_scene_context_parent
 		ged_draw_scene_context_name
 		ged_draw_scene_context_subtree_bounds
@@ -16612,6 +16746,8 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	BSG_OVERLAY_CLASS_COMMAND_RESULT
 	"rt/primitives/brep.h"
 	"rt/primitives/bspline.h"
+	ged_draw_obol_database_source_adaptive_wireframe_realize
+	ged_draw_scene_ref_obol_publish_realization_line_set
 	ged_draw_scene_ref_publish_realization_line_set
 		ged_draw_scene_ref_publish_brep_wireframe_line_set
 		ged_draw_scene_ref_publish_bspline_wireframe_line_set
@@ -17356,11 +17492,12 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	ged_draw_shape_draft_apply_tree_result_state
 	ged_draw_registry_shape_ref_apply_region
 		ged_draw_shape_draft_apply_path_source_state
-	ged_draw_group_ref_record_summary
-	ged_draw_group_ref_tree_summary
-	ged_draw_group_ref_shape_count
-	ged_draw_obol_group_display_summary_for_path
-	ged_draw_obol_database_source_bounds_for_path
+			ged_draw_group_ref_record_summary
+			ged_draw_group_ref_tree_summary
+			ged_draw_group_ref_shape_count
+			ged_draw_obol_group_display_summary_for_path
+			ged_draw_obol_shape_ref_index_for_path_hash
+			ged_draw_obol_database_source_bounds_for_path
 	ged_draw_obol_group_subtree_bounds_for_path
 	ged_draw_obol_context_tokens_free
 	ged_draw_obol_scene_context_info_for_path
@@ -17398,6 +17535,13 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	  "src/libged/bsg_ged_draw_private.h must expose ${_func} for BSG-owning wrapper files")
       endif()
     endforeach()
+    string(FIND "${_ged_bsg_draw_private_contents}"
+      "ged_draw_retained_shape_ref_index_for_path_hash"
+      _ged_private_retained_path_hash_idx)
+    if(NOT _ged_private_retained_path_hash_idx EQUAL -1)
+      _brlobol_pivot_guard_fail(
+	"src/libged/bsg_ged_draw_private.h reintroduced retained path-hash lookup export instead of owner-first Obol publication/indexing")
+    endif()
     foreach(_pat
 	[[(^|[^A-Za-z0-9_])ged_draw_view_context_group_create_ref[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_view_context_scene_root_rt_ref[ \t\r\n]*\(]]
@@ -18301,8 +18445,11 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 		ged_draw_registry_shape_ref_rt_ref
 		ged_draw_registry_shape_ref_cache_rt_ref
 		ged_draw_registry_group_ref_rt_ref
-			ged_draw_registry_source_ref_highlight_free
-			ged_draw_shape_state_get_scene_rt_ref)
+				ged_draw_registry_source_ref_highlight_free
+					ged_draw_obol_shape_ref_index_for_component
+					ged_draw_obol_group_ref_index_for_component
+					ged_draw_obol_shape_ref_index_for_path_hash
+					ged_draw_shape_state_get_scene_rt_ref)
 	      string(REGEX MATCH "${_token}" _ged_draw_registry_facade_regex_idx
 		"${_ged_draw_registry_contents}")
 	      if(NOT _ged_draw_registry_facade_regex_idx)
@@ -18312,8 +18459,15 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 		  _brlobol_pivot_guard_fail(
 		    "src/libged/bsg_ged_draw_registry.c must route registry access through neutral scene-ref facade token ${_token}")
 		endif()
-	      endif()
-	    endforeach()
+		      endif()
+		    endforeach()
+    string(FIND "${_ged_draw_registry_contents}"
+      "ged_draw_retained_shape_ref_index_for_path_hash"
+      _ged_registry_retained_path_hash_idx)
+    if(NOT _ged_registry_retained_path_hash_idx EQUAL -1)
+      _brlobol_pivot_guard_fail(
+	"src/libged/bsg_ged_draw_registry.c reintroduced retained path-hash lookup helper instead of keeping retained indexing as the public no-owner fallback")
+    endif()
     string(REGEX MATCHALL
       [[#[ \t]*include[ \t]*[<"]bsg/[A-Za-z0-9_./-]+\.h]]
       _ged_draw_registry_bsg_includes "${_ged_draw_registry_contents}")
@@ -18491,6 +18645,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 		    ged_draw_shape_ref_index_for_component
 	ged_draw_source_root_child_count
 	ged_draw_group_ref_appearance_settings
+	ged_draw_obol_database_source_rename_for_path
 	GED_DRAW_MODE_EVAL_WIRE
 	GED_DRAW_MODE_EVAL_POINTS
 	ged_draw_mode)
@@ -18537,9 +18692,16 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 		    "${_contents}")
 			  if(_ged_transactions_typed_redraw_view_hit)
 			    _brlobol_pivot_guard_fail(
-			      "src/libged/bsg_ged_draw_transactions.c reintroduced typed BSG redraw/reexpand/transaction view ownership: ${_ged_transactions_typed_redraw_view_hit}")
+		      "src/libged/bsg_ged_draw_transactions.c reintroduced typed BSG redraw/reexpand/transaction view ownership: ${_ged_transactions_typed_redraw_view_hit}")
 			  endif()
 			endforeach()
+			string(FIND "${_contents}"
+			  "groups_indexed < 0 || shapes_indexed < 0"
+			  _ged_transactions_combined_reexpand_fallback_idx)
+			if(NOT _ged_transactions_combined_reexpand_fallback_idx EQUAL -1)
+			  _brlobol_pivot_guard_fail(
+			    "src/libged/bsg_ged_draw_transactions.c must keep source reexpand group/shape retained fallback scans independent")
+			endif()
 			foreach(_pat
 			    [[(^|[^A-Za-z0-9_])ged_draw_scene_ref_source_data[ \t\r\n]*\(]]
 			    [[(^|[^A-Za-z0-9_])ged_draw_scene_ref_fullpath[ \t\r\n]*\(]]
@@ -19731,6 +19893,16 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       _brlobol_pivot_guard_fail(
 	"src/libged/bsg_ged_draw_source.c must destroy draw source mesh-LoD handles through rt_mesh_lod_destroy")
     endif()
+    foreach(_token
+	"ged_draw_obol_database_source_bot_mesh_lod_realize"
+	"ged_draw_obol_database_source_brep_mesh_lod_realize")
+      string(FIND "${_ged_bsg_draw_source_contents}" "${_token}"
+	_ged_source_obol_lod_owner_idx)
+      if(_ged_source_obol_lod_owner_idx EQUAL -1)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/bsg_ged_draw_source.c missing Obol mesh-LoD owner helper ${_token}")
+      endif()
+    endforeach()
     foreach(_pat
 	[[#[ \t]*include[ \t]*[<"]bsg/lod\.h]]
 	[[bsg_mesh_lod_destroy]])
@@ -20604,24 +20776,38 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 	[[ged_draw_obol_database_source_mark_stale_for_path]]
 	[[ged_draw_obol_database_source_record_for_path]]
 	[[ged_draw_obol_database_source_runtime_for_path]]
+	[[ged_draw_obol_database_source_set_mesh_lod_for_path]]
+	[[ged_draw_obol_database_source_set_mesh_lod_bounds_for_path]]
 	[[ged_draw_obol_database_source_apply_record_for_path]]
 	[[ged_draw_obol_database_source_draw_state_for_path]]
 	[[ged_draw_obol_database_source_set_realization_for_path]]
 	[[ged_draw_obol_database_source_realization_policy_for_path]]
 	[[ged_draw_obol_database_source_set_realization_roles_for_path]]
 	[[ged_draw_obol_database_source_set_realization_view_policy_for_path]]
+	[[ged_draw_obol_database_source_realize_for_path]]
 	[[ged_draw_obol_database_source_ensure_for_path]]
 	[[ged_draw_obol_database_source_rename_for_path]]
+	[[ged_obol_collect_preserved_sources]]
+	[[ged_obol_preserved_sources_store]]
+	[[ged_obol_preserved_sources_take]]
+	[[ged_obol_replay_preserved_sources]]
+	[[ged_draw_obol_preserved_sources_free]]
 	[[ged_draw_obol_database_source_move_to_group_for_path]]
 	[[ged_draw_obol_database_source_remove_for_path]]
 	[[ged_draw_obol_database_sources_remove_for_path_prefix]]
+	[[ged_draw_obol_active_database_sources_remove_for_path_prefix]]
 	[[ged_draw_obol_database_sources_remove_for_component_name]]
 	[[ged_draw_obol_database_sources_clear]]
+	[[ged_draw_obol_scene_clear]]
+	[[ged_draw_obol_active_scene_clear]]
 	[[ged_draw_obol_groups_remove_for_component_name]]
+	[[ged_draw_obol_groups_remove_for_path_prefix]]
 	[[ged_draw_obol_group_remove_for_path]]
 	[[ged_draw_obol_group_clear_for_path]]
+	[[ged_draw_obol_group_rename_for_path]]
 	[[ged_draw_obol_group_erase_subpath_for_path]]
 	[[ged_draw_obol_group_update_display_for_path]]
+	[[ged_obol_group_record_path]]
 	[[ged_draw_obol_group_ensure_for_path]]
 	[[ged_draw_obol_group_record_summary_for_path]]
 	[[ged_draw_obol_group_display_summary_for_path]]
@@ -20632,6 +20818,7 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 	[[ged_draw_obol_database_source_evaluated_region_for_path]]
 	[[ged_draw_obol_database_source_set_evaluated_region_for_path]]
 	[[ged_draw_obol_group_shape_count_for_path]]
+	[[ged_draw_obol_group_descendant_group_count_for_path]]
 	[[ged_draw_obol_group_child_count_for_path]]
 	[[ged_draw_obol_group_update_appearance_for_path]]
 	[[ged_draw_obol_group_appearance_for_path]]
@@ -20673,8 +20860,12 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 		[[setDatabaseSourceRealizationRoleFlags]]
 		[[setDatabaseSourceRealizationViewPolicy]]
 		[[publishDatabaseSourceAuxiliaryLineSet]]
+		[[BRLObolAuxiliaryLineSetDisplayState]]
+		[[display_state && display_state->valid]]
 		[[clearDatabaseSourceAuxiliaryShapes]]
 		[[getGroupDatabaseSourceCount]]
+	[[ged_draw_obol_group_paths_foreach]]
+	[[ged_draw_obol_group_database_source_paths_foreach]]
 	[[getGroupChildCount]]
 	[[getSceneSubtreeBounds]]
 	[[getSceneTreeSummaryForPath]]
@@ -20799,9 +20990,11 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 	[[GED stale shape-ref view context should recover cached source state]]
 	[[GED stale shape-ref LoD ensure should recover cached Obol source runtime]]
 	[[GED stale shape-ref LoD ensure should update owned Obol source policy]]
-		[[GED shape-ref context should resolve to an owned Obol database-source context]]
-		[[GED Obol shape-ref context source should be the owned Obol database-source context]]
-		[[GED source scene-context traversal should create owned Obol realized child contexts]]
+	[[GED shape realize-context should realize the owned Obol source]]
+	[[GED shape-ref context should resolve to an owned Obol database-source context]]
+	[[GED Obol shape-ref context source should be the owned Obol database-source context]]
+	[[GED retained semantic source parents should resolve to owned Obol parent contexts]]
+	[[GED source scene-context traversal should create owned Obol realized child contexts]]
 	[[GED source scene-context traversal should summarize owned Obol realized children]]
 	[[GED source scene-context traversal should classify owned Obol realized children as shapes]]
 	[[GED source scene-context traversal should return owned Obol realized children]]
@@ -20826,7 +21019,8 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 			[[ged_draw_shape_ref_redraw_wireframe]]
 			[[ged_draw_shape_ref_geometry_clear]]
 			[[ged_draw_obol_database_source_publish_auxiliary_line_set_for_path]]
-			[[GED Obol auxiliary line-set bridge should create an auxiliary VLIST]]
+			[[GED Obol auxiliary line-set bridge should create an auxiliary VLIST with display state]]
+			[[GED Obol auxiliary line-set bridge should inherit owned source placement]]
 			[[GED shape geometry clear should clear owned Obol auxiliary VLISTs]]
 			[[GED annotation geometry summary should read owned Obol annotation VLIST]]
 			[[GED annotation draw should publish line segments into the owned Obol source]]
@@ -20843,6 +21037,7 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 	[[ged_draw_group_ref_set_appearance_settings]]
 	[[ged_draw_group_ref_appearance_settings]]
 	[[ged_draw_group_ref_lookup_or_create]]
+	[[ged_draw_group_ref_context]]
 	[[ged_draw_group_ref_tree_summary]]
 	[[ged_draw_source_erase_groups_by_name_at_root]]
 	[[ged_draw_scene_context_tree_summary]]
@@ -20875,15 +21070,61 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 	[[GED shape bounds update should update owned Obol source placement]]
 	[[GED rename transaction should rename the owned Obol source in place]]
 	[[GED rename transaction should retarget owned Obol realized shape metadata]]
+	[[GED retained semantic scene-context tree summaries should prefer owned Obol source metadata]]
 	[[GED visible/highlight/color setters should sync realized Obol shape display state]]
 	[[GED redraw should use owned Obol draw matrix]]
+	[[GED group tree summaries should prefer owned Obol group tree metadata]]
+	[[GED group-ref context should resolve to an owned Obol group context]]
+	[[GED group-ref context should expose an owned Obol parent context]]
+	[[GED source-root group presence should prefer owned Obol scene groups]]
+	[[GED source-root group traversal should enumerate owned Obol groups]]
+	[[GED source-root group traversal ref should mutate the owned Obol group]]
+	[[GED source rename/erase should retarget and prune owned Obol source-owner groups]]
+	[[GED Obol group component index should enumerate owned Obol groups]]
+	[[GED Obol shape component index should enumerate owned Obol database sources]]
+	[[GED Obol shape path-hash index should enumerate owned Obol database sources]]
+	[[GED Obol shape path-hash index should avoid retained path tables]]
+	[[GED Obol primitive wireframe publication should avoid retained path tables]]
+	[[GED Obol wire redraw should avoid retained path tables]]
+	[[GED Obol component indexes should avoid retained fallback scans]]
+	[[GED Obol component-index transaction should mark the owned source stale]]
+	[[GED nested group-ref context should expose owned Obol DB path]]
+	[[GED nested group-ref context should preserve owned Obol DB path]]
+	[[GED nested group set-dbpath should rename through owned Obol]]
+	[[GED nested renamed group ref should resolve after owned Obol rename]]
+	[[GED nested group set-dbpath should rename the owned Obol group in place]]
+	[[GED nested group set-dbpath should expose the owned Obol renamed path]]
 	[[GED group-name erase should treat owned Obol overlay state as authoritative]]
+	[[GED group lookup/create should return an owned Obol group ref]]
+	[[GED group lookup/create should keep public records aligned with owned Obol empty groups]]
+	[[owned Obol group draw-intent sentinel update should succeed]]
+	[[GED group records should read owned Obol draw-intent state]]
 	[[GED direct active-scope group erase should remove the owned Obol group subtree]]
 	[[GED direct draw clear should remove owned Obol group/source subtrees]]
+	[[GED direct draw clear should not expose stale retained shape records]]
+	[[GED direct draw clear should not expose stale retained group records]]
+	[[GED scoped database-group clear should remove owned Obol group/source subtrees]]
+	[[GED scoped database-group clear should not expose stale retained shape records]]
+	[[GED scoped database-group clear should not expose stale retained group records]]
 	[[GED direct active-scope nested group path erase should remove the owned Obol nested group]]
 	[[GED nested leaf stale transaction should mark the owned Obol leaf source stale]]
+	[[GED nested child reexpand should avoid retained fallback scans]]
+	[[GED nested leaf redraw should avoid retained fallback scans]]
 	[[GED nested leaf redraw transaction should preserve unrelated owned Obol source state]]
+	[[GED root path-prefix group-only erase should remove owned Obol groups]]
+	[[GED root path-prefix group-only erase should not expose stale retained group records]]
+	[[GED active-scope path-prefix erase should remove matching owned Obol sources only]]
+	[[GED active-scope path-prefix erase should not expose stale retained shape records]]
+	[[GED active-scope path-prefix erase should not expose stale retained group records]]
+	[[GED root path-prefix erase should remove matching owned Obol sources only]]
+	[[GED root path-prefix erase should not expose stale retained shape records]]
+	[[GED root path-prefix erase should not expose stale retained group records]]
 	[[GED scoped component erase should remove matching owned Obol sources only]]
+	[[GED scoped component erase should not expose stale retained shape records]]
+	[[GED scoped component erase should not expose stale retained group records]]
+	[[GED scoped component mode-filter erase should remove only matching-mode owned Obol sources]]
+	[[GED scoped component mode-filter erase should preserve nonmatching owner draw mode]]
+	[[GED scoped component mode-filter erase should not expose stale retained shape records]]
 	[[GED nested leaf reference removal should remove only non-root owned Obol sources]]
 	[[GED source removal transaction should remove matching owned Obol component sources]]
 	[[GED visibility transaction should update owned Obol state without full-scene sync]]
@@ -20892,13 +21133,69 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 	[[GED stale-source transaction should target owned Obol state without full-scene sync]]
 	[[GED material-changed transaction should preserve Obol-only sources]]
 	[[GED redraw transaction should refresh retained sources without clearing Obol-only sources]]
+	[[GED erase-prefix transaction should succeed]]
 	[[GED erase-prefix transaction should remove only matching owned Obol sources]]
 	[[GED display/material transaction canary cleanup should restore baseline]]
+	[[GED submodel draw should publish leaf wireframes as owned Obol auxiliary VLISTs]]
+	[[GED Obol current wireframe draw should avoid retained primitive publication]]
+	[[GED Obol BREP wireframe draw should avoid retained primitive publication]]
+	[[GED BREP wireframe draw should publish owned Obol line geometry]]
+	[[GED Obol adaptive CSG LoD draw should avoid retained primitive publication]]
+	[[GED Obol adaptive CSG LoD draw should publish owned line geometry]]
+	[[GED Obol submodel draw should avoid retained child-source staging]]
+	[[GED Obol submodel temp-source draw should avoid retained child-source staging]]
+	[[GED submodel temp-source draw should not leak a temporary owned Obol leaf source]]
+	[[submodel_temp_owner\.s]]
+	[[GED BoT mesh LoD update should publish owned Obol mesh fields]]
+	[[GED Obol mesh LoD draw should avoid retained mesh LoD runtime state]]
+	[[GED Obol mesh LoD draw should store the runtime handle on the owned source]]
+	[[GED Obol mesh LoD draw should store runtime bounds on the owned source]]
+	[[GED BREP mesh LoD update should publish owned Obol mesh fields]]
+	[[GED Obol BREP mesh LoD draw should avoid retained mesh LoD runtime state]]
+	[[GED Obol BREP mesh LoD draw should store the runtime handle on the owned source]]
+	[[GED Obol BREP mesh LoD draw should store runtime bounds on the owned source]]
+	[[retained_source_owner_appends]]
+	[[GED source-owner append should not mirror owned Obol group membership into retained topology]]
 	[[GED source-owner append should move the owned Obol source into the target group]]
+	[[GED source-owner append should keep public group counts aligned with owned Obol membership]]
+		[[GED direct database-leaf commit should use the owned Obol group]]
+		[[GED direct database-leaf commit should not append retained source owners after an Obol group move]]
+		[[GED direct database-leaf commit should not mutate retained shape state]]
+		[[GED direct database-leaf commit should append through owned Obol membership]]
+		[[GED direct database-leaf commit should align public records with owned Obol membership]]
+		[[retained_group_mutations]]
+		[[GED source-root group mode should not mutate retained group state]]
+		[[GED group mutation family should not mutate retained group state]]
+		[[GED nested group set-dbpath should not mutate retained group state]]
+		[[retained_shape_mutations]]
+		[[GED evaluated-region setter should not mutate retained shape state]]
+		[[GED shape center setter should not mutate retained shape state]]
+		[[GED public shape display mutation family should not mutate retained shape state]]
+		[[GED shape direct release should not expose stale retained shape records]]
+	[[GED active-scope erase should not expose stale retained shape records]]
+	[[GED direct root erase should not expose stale retained shape records]]
+	[[GED direct root group-name erase should not expose stale retained shape records]]
+		[[GED draft source-state attach should ensure an owned Obol source]]
+		[[GED uncommitted draft destroy should remove source-state owned Obol source]]
+		[[GED draft display-name should update the owned Obol source]]
+	[[GED draft tracked-source mutation family should not mutate retained shape state]]
+	[[GED draft known-bounds should update owned Obol placement and source bounds]]
+	[[GED draft known-bounds should drive Obol scene source bounds]]
+				[[GED draft source-state attach should create the committed draft source owner]]
+			[[GED draft tree legacy color should update the owned Obol source material color]]
+			[[GED draft tree-result state should clear owned Obol evaluated-region metadata]]
+			[[GED draft tree-result state should update owned Obol appearance fields and draw mode]]
+			[[GED draft tree-result state should clear owned Obol appearance override and update draw mode]]
+			[[GED draft tree-result state should update owned Obol region metadata]]
+			[[GED draft database-leaf display should update the owned Obol source]]
+	[[GED draft display/material mutation should prefer the owned Obol source]]
+	[[mesh_owner\.bot]]
 	[[group_only\.s]]
 	[[obol_child\.s]]
+	[[__obol_root_group_presence\.s]]
 	[[__obol_root_count_only\.s]]
 	[[getGroupDatabaseSourceCount]]
+	[[getGroupDescendantGroupCount]]
 	[[getGroupChildCount]]
 	[[moveDatabaseSourceToGroup]]
 	[[group_appearance_readback]]
@@ -24109,12 +24406,17 @@ function(_brlobol_pivot_guard_check_qtcad_model_draw_view_boundary)
 	[[#[ \t]*include[ \t]*[<"]QgObolDatabaseSyncPrivate\.h]]
 	[[brlobol/database_source\.h]]
 	[[brlobol/view_controller\.h]]
+	[[QgLegacyViewContext\.h]]
+	[[rt/view\.h]]
 	[[qg_obol_sync_database_sources]]
 	[[qg_obol_remove_database_sources]]
 	[[qg_obol_clear_database_sources]]
-	[[replaceDatabaseSource]]
-	[[removeDatabaseSource]]
-	[[clearDatabaseSources]])
+	[[qg_legacy_view_to_context]]
+	[[rt_view_context_is_independent]]
+	[[replaceDatabaseSourceInstance]]
+	[[removeDatabaseSourceInstance]]
+	[[getDatabaseSourceSummary]]
+	[[ged-view:]])
       string(REGEX MATCH "${_token}" _qtcad_obol_database_sync_src_token_hit
 	"${_qtcad_obol_database_sync_src_contents}")
       if(NOT _qtcad_obol_database_sync_src_token_hit)
@@ -26911,6 +27213,7 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "hasPendingLodResults"
       "processPendingLodResults"
       "submitLodRequestsIfNeeded"
+      "database source realization should preserve auxiliary line-set ownership"
       "lod-result")
     string(FIND "${_lod_update_test}" "${_token}" _idx)
     if(_idx EQUAL -1)
@@ -27177,6 +27480,7 @@ function(_brlobol_pivot_guard_check_brlobol_material_object)
       "scene controller should own database source display/material state updates"
       "ownedScene.markDatabaseSourceStale(\"lod-submit.bot\""
       "scene controller should own database source stale marking"
+      "mesh realization role should realize database mesh even in wire draw mode"
       "scene controller source state should preserve source revision unless explicitly valid"
       "scene controller source state should report no-op and missing updates"
       "ownedScene.moveDatabaseSourceToGroup(\"other-submit.bot\""
@@ -27198,6 +27502,10 @@ function(_brlobol_pivot_guard_check_brlobol_material_object)
       "displaySummary.lineWidth != 5"
       "displaySummary.transparency < 0.34"
       "scene controller should summarize Obol scene display state"
+      "BRLObolAuxiliaryLineSetDisplayState auxDisplay"
+      "scene.publishDatabaseSourceAuxiliaryLineSet(\"/summary/source\""
+      "shapeSummary.drawMode != BRLOBOL_LOD_DRAW_SHADED"
+      "shapeSummary.materialRevision != 88"
       "BRLObolSceneMaterialSummary"
       "getRealizedSceneMaterialSummary"
       "getSceneMaterialSummary"

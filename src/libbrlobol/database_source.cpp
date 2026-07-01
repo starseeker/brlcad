@@ -57,9 +57,35 @@ database_source_color_equal(const SbColor &a, const SbColor &b)
 	!database_source_float_different(a[2], b[2]);
 }
 
+static int
+database_source_vec3f_equal(const SbVec3f &a, const SbVec3f &b)
+{
+    return !database_source_float_different(a[0], b[0]) &&
+	!database_source_float_different(a[1], b[1]) &&
+	!database_source_float_different(a[2], b[2]);
+}
+
+static int
+database_source_string_equal(const SbString &a, const char *b)
+{
+    return strcmp(a.getString(), b ? b : "") == 0;
+}
+
+static SbBox3f
+database_source_box_from_minmax(const SbVec3f &bmin, const SbVec3f &bmax)
+{
+    SbBox3f bounds;
+    bounds.makeEmpty();
+    bounds.extendBy(bmin);
+    bounds.extendBy(bmax);
+    return bounds;
+}
+
 BRLObolDatabaseSourceSummary::BRLObolDatabaseSourceSummary(void) :
     valid(FALSE),
     path(""),
+    instanceKey(""),
+    displayName(""),
     hasParent(FALSE),
     drawTreeDepth(0),
     parentGroupPath(""),
@@ -97,11 +123,46 @@ BRLObolDatabaseSourceSummary::BRLObolDatabaseSourceSummary(void) :
     drawCenter(0.0f, 0.0f, 0.0f),
     drawSizeValid(FALSE),
     drawSize(0.0f),
+    sourceBoundsValid(FALSE),
+    sourceBounds(),
     stale(TRUE),
     staleReason(SoBRLDatabaseSource::STALE_SOURCE),
     realizedShapeCount(0),
     realizedMeshCount(0),
     realizedMaterialObjectCount(0)
+{
+    this->sourceBounds.makeEmpty();
+}
+
+BRLObolAuxiliaryLineSetDisplayState::BRLObolAuxiliaryLineSetDisplayState(void) :
+    valid(FALSE),
+    drawMode(BRLOBOL_LOD_DRAW_WIRE),
+    visible(TRUE),
+    highlighted(FALSE),
+    lineStyle(0),
+    lineWidth(0),
+    transparency(0.0f),
+    materialColorValid(FALSE),
+    materialColor(1.0f, 1.0f, 1.0f),
+    materialRevision(0)
+{
+}
+
+BRLObolDatabaseSourceDisplayPatch::BRLObolDatabaseSourceDisplayPatch(void) :
+    visibleValid(FALSE),
+    visible(TRUE),
+    highlightedValid(FALSE),
+    highlighted(FALSE),
+    lineStyleValid(FALSE),
+    lineStyle(0),
+    lineWidthValid(FALSE),
+    lineWidth(0),
+    transparencyValid(FALSE),
+    transparency(0.0f),
+    colorOverrideValid(FALSE),
+    colorOverride(FALSE),
+    colorValid(FALSE),
+    color(1.0f, 1.0f, 1.0f)
 {
 }
 
@@ -114,6 +175,7 @@ BRLObolRealizedShapeSummary::BRLObolRealizedShapeSummary(void) :
     sourceId(0),
     ownerSourceIndex(-1),
     ownerSourcePath(""),
+    ownerSourceInstanceKey(""),
     ownerDrawMode(0),
     ownerSourceRevision(0),
     ownerInputsRevision(0),
@@ -178,6 +240,7 @@ BRLObolRealizedMaterialSummary::BRLObolRealizedMaterialSummary(void) :
     sourceId(0),
     ownerSourceIndex(-1),
     ownerSourcePath(""),
+    ownerSourceInstanceKey(""),
     ownerDrawMode(0),
     ownerSourceRevision(0),
     ownerInputsRevision(0),
@@ -210,6 +273,7 @@ BRLObolSceneTreeSummary::BRLObolSceneTreeSummary(void) :
     childCount(0),
     ownerSourceIndex(-1),
     ownerSourcePath(""),
+    ownerSourceInstanceKey(""),
     path(""),
     sourceName(""),
     sourceType(""),
@@ -243,6 +307,7 @@ BRLObolSceneDisplaySummary::BRLObolSceneDisplaySummary(void) :
     drawSize(0.0f),
     ownerSourceIndex(-1),
     ownerSourcePath(""),
+    ownerSourceInstanceKey(""),
     path("")
 {
 }
@@ -255,6 +320,7 @@ BRLObolSceneMaterialSummary::BRLObolSceneMaterialSummary(void) :
     materialColor(1.0f, 1.0f, 1.0f),
     ownerSourceIndex(-1),
     ownerSourcePath(""),
+    ownerSourceInstanceKey(""),
     path("")
 {
 }
@@ -266,6 +332,7 @@ BRLObolSceneBoundsSummary::BRLObolSceneBoundsSummary(void) :
     bounds(),
     ownerSourceIndex(-1),
     ownerSourcePath(""),
+    ownerSourceInstanceKey(""),
     path("")
 {
     this->bounds.makeEmpty();
@@ -280,6 +347,16 @@ lookup_name_from_path(const SbString &path)
     if (!name[0])
 	return NULL;
     return name;
+}
+
+static const char *
+database_source_skip_leading_slash(const char *path)
+{
+    if (!path)
+	return "";
+    while (*path == '/')
+	path++;
+    return path;
 }
 
 static SbString
@@ -301,13 +378,63 @@ source_record_draw_mode(const SoBRLDatabaseSource *source)
 }
 
 static SbString
+source_effective_instance_key(const SoBRLDatabaseSource *source)
+{
+    if (!source)
+	return "";
+    const SbString key = source->instanceKey.getValue();
+    if (key.getLength() > 0)
+	return key;
+    return source->path.getValue();
+}
+
+static int
+source_instance_matches_record_path(const SbString &instanceKey,
+	const char *recordPath)
+{
+    if (!recordPath || !recordPath[0])
+	return 0;
+    if (instanceKey.getLength() == 0)
+	return 0;
+
+    const char *key = instanceKey.getString();
+    if (strcmp(key, recordPath) == 0)
+	return 1;
+    return strcmp(key[0] == '/' ? key + 1 : key,
+	    recordPath[0] == '/' ? recordPath + 1 : recordPath) == 0;
+}
+
+static SbString
+source_record_identity(const SoBRLDatabaseSource *source,
+	const char *recordPath)
+{
+    const char *path = recordPath ? recordPath : "";
+    if (!source)
+	return path;
+
+    const SbString instanceKey = source_effective_instance_key(source);
+    if (source_instance_matches_record_path(instanceKey, path))
+	return path;
+    if (instanceKey.getLength() == 0)
+	return path;
+
+    SbString identity = instanceKey;
+    if (path[0]) {
+	identity += "::";
+	identity += path;
+    }
+    return identity;
+}
+
+static SbString
 source_realization_identity(const SoBRLDatabaseSource *source)
 {
     if (!source)
 	return "";
 
     SbString identity;
-    identity.sprintf("dbsource:%s#mode=%d;source=%u;inputs=%u;view=%u;lod=%u;abs=%.9g;rel=%.9g;norm=%.9g",
+    identity.sprintf("dbsource:%s@%s#mode=%d;source=%u;inputs=%u;view=%u;lod=%u;abs=%.9g;rel=%.9g;norm=%.9g",
+	    source_effective_instance_key(source).getString(),
 	    source->path.getValue().getString(),
 	    source->drawMode.getValue(),
 	    source->sourceRevision.getValue(),
@@ -387,6 +514,42 @@ source_tess_tol(const SoBRLDatabaseSource *source)
     return ttol;
 }
 
+static SbBool
+node_is_auxiliary_vlist(const SoNode *node)
+{
+    if (!node || !node->isOfType(SoBRLVListShape::getClassTypeId()))
+	return FALSE;
+
+    const SoBRLVListShape *shape = static_cast<const SoBRLVListShape *>(node);
+    return strcmp(shape->recordRole.getValue().getString(), "auxiliary") == 0 ?
+	TRUE : FALSE;
+}
+
+static SbBool
+node_is_auxiliary_source(const SoNode *node)
+{
+    if (!node || !node->isOfType(SoBRLDatabaseSource::getClassTypeId()))
+	return FALSE;
+
+    const SoBRLDatabaseSource *source =
+	static_cast<const SoBRLDatabaseSource *>(node);
+    return source->auxiliarySource.getValue();
+}
+
+static void
+remove_non_auxiliary_children(SoGroup *group)
+{
+    if (!group)
+	return;
+
+    for (int i = group->getNumChildren() - 1; i >= 0; i--) {
+	SoNode *child = group->getChild(i);
+	if (node_is_auxiliary_vlist(child) || node_is_auxiliary_source(child))
+	    continue;
+	group->removeChild(i);
+    }
+}
+
 struct realize_walk_data {
     SoBRLDatabaseSource *source;
     uint32_t revision;
@@ -445,11 +608,14 @@ assign_realized_identity(ShapeT *shape,
     shape->sourceName = sourceName ? sourceName : "";
     shape->sourceType = sourceType ? sourceType : "";
     shape->sourceId = sourceId;
-    shape->displayName = sourceName ? sourceName : (path ? path : "");
+    if (source && source->displayName.getValue().getLength() > 0)
+	shape->displayName = source->displayName.getValue();
+    else
+	shape->displayName = sourceName ? sourceName : (path ? path : "");
     shape->geometryName = sourceName ? sourceName : "";
-    shape->sourceIdentity = path ? path : "";
+    shape->sourceIdentity = source_record_identity(source, path);
     shape->cacheIdentity = record_identity_with_revision(
-	    path ? path : (sourceName ? sourceName : ""), sourceId);
+	    shape->sourceIdentity.getValue().getString(), sourceId);
     shape->databaseIntent = TRUE;
     shape->overlayIntent = FALSE;
     shape->hudIntent = FALSE;
@@ -511,6 +677,7 @@ sync_shape_owner_state(ShapeT *shape, const SoBRLDatabaseSource *source)
 	return;
 
     shape->ownerSourcePath = source->path.getValue();
+    shape->ownerSourceInstanceKey = source_effective_instance_key(source);
     shape->ownerSourceRevision = source->sourceRevision.getValue();
     shape->ownerInputsRevision = source->inputsRevision.getValue();
     shape->ownerViewRevision = source->viewRevision.getValue();
@@ -567,6 +734,28 @@ sync_shape_display_state(ShapeT *shape, const SoBRLDatabaseSource *source)
     shape->materialRevision = source->materialRevision.getValue();
 }
 
+template <typename ShapeT>
+static void
+sync_shape_display_name(ShapeT *shape, const SoBRLDatabaseSource *source)
+{
+    if (!shape || !source)
+	return;
+
+    if (!shape->databaseIntent.getValue() &&
+	    shape->nonDatabaseSource.getValue())
+	return;
+
+    if (source->displayName.getValue().getLength() > 0) {
+	shape->displayName = source->displayName.getValue();
+	return;
+    }
+
+    if (shape->sourceName.getValue().getLength() > 0)
+	shape->displayName = shape->sourceName.getValue();
+    else
+	shape->displayName = shape->sourcePath.getValue();
+}
+
 static void
 sync_realized_shape_owner_state_in_node(SoNode *node,
 	const SoBRLDatabaseSource *source)
@@ -579,6 +768,7 @@ sync_realized_shape_owner_state_in_node(SoNode *node,
 	sync_shape_owner_state(shape, source);
 	sync_shape_placement_state(shape, source);
 	sync_shape_display_state(shape, source);
+	sync_shape_display_name(shape, source);
 	return;
     }
     if (node->isOfType(SoBRLMeshShape::getClassTypeId())) {
@@ -586,6 +776,7 @@ sync_realized_shape_owner_state_in_node(SoNode *node,
 	sync_shape_owner_state(shape, source);
 	sync_shape_placement_state(shape, source);
 	sync_shape_display_state(shape, source);
+	sync_shape_display_name(shape, source);
 	return;
     }
     if (node->isOfType(SoGroup::getClassTypeId())) {
@@ -1023,6 +1214,150 @@ mesh_from_bot(const struct rt_bot_internal *bot,
 }
 
 static void
+primitive_indexed_face_set_free(struct rt_primitive_indexed_face_set *faceSet)
+{
+    if (!faceSet)
+	return;
+    if (faceSet->points)
+	bu_free(faceSet->points, "primitive indexed-face points");
+    if (faceSet->normals)
+	bu_free(faceSet->normals, "primitive indexed-face normals");
+    if (faceSet->indices)
+	bu_free(faceSet->indices, "primitive indexed-face indices");
+    memset(faceSet, 0, sizeof(*faceSet));
+}
+
+static int
+indexed_face_finish(std::vector<int32_t> &face,
+	size_t pointCount,
+	std::vector<int32_t> &triangles,
+	size_t *faceCount,
+	unsigned int *faceStamp,
+	std::vector<unsigned int> &seen)
+{
+    if (face.size() < 3)
+	return 0;
+
+    for (size_t i = 1; i + 1 < face.size(); i++) {
+	triangles.push_back(face[0]);
+	triangles.push_back(face[i]);
+	triangles.push_back(face[i + 1]);
+    }
+
+    face.clear();
+    if (faceCount)
+	(*faceCount)++;
+    if (faceStamp && seen.size() == pointCount) {
+	if (*faceStamp == UINT_MAX) {
+	    for (size_t i = 0; i < seen.size(); i++)
+		seen[i] = 0;
+	    *faceStamp = 1;
+	} else {
+	    (*faceStamp)++;
+	}
+    }
+    return 1;
+}
+
+static int
+indexed_faces_to_triangles(const int *indices,
+	size_t indexCount,
+	size_t pointCount,
+	std::vector<int32_t> &triangles)
+{
+    if (!indices || !indexCount || !pointCount ||
+	    pointCount > static_cast<size_t>(INT_MAX) ||
+	    indexCount > static_cast<size_t>(INT_MAX))
+	return 0;
+
+    size_t faceCount = 0;
+    unsigned int faceStamp = 1;
+    std::vector<unsigned int> seen(pointCount, 0);
+    std::vector<int32_t> face;
+
+    for (size_t i = 0; i < indexCount; i++) {
+	const int idx = indices[i];
+	if (idx < 0) {
+	    if (idx != -1 || !indexed_face_finish(face, pointCount,
+		    triangles, &faceCount, &faceStamp, seen))
+		return 0;
+	    continue;
+	}
+
+	if (static_cast<size_t>(idx) >= pointCount)
+	    return 0;
+	if (seen[static_cast<size_t>(idx)] == faceStamp)
+	    return 0;
+	seen[static_cast<size_t>(idx)] = faceStamp;
+	face.push_back(static_cast<int32_t>(idx));
+    }
+
+    if (!face.empty() && !indexed_face_finish(face, pointCount,
+	    triangles, &faceCount, &faceStamp, seen))
+	return 0;
+    return faceCount > 0 && !triangles.empty();
+}
+
+static SoBRLMeshShape *
+mesh_from_indexed_face_set(const struct rt_primitive_indexed_face_set *faceSet,
+	const SoBRLDatabaseSource *source)
+{
+    if (!faceSet || !faceSet->points || !faceSet->point_count ||
+	    !faceSet->indices || !faceSet->index_count ||
+	    faceSet->point_count > static_cast<size_t>(INT_MAX))
+	return NULL;
+
+    std::vector<int32_t> triangles;
+    if (!indexed_faces_to_triangles(faceSet->indices, faceSet->index_count,
+	    faceSet->point_count, triangles))
+	return NULL;
+    if (triangles.size() > static_cast<size_t>(INT_MAX))
+	return NULL;
+
+    std::vector<SbVec3f> points;
+    points.reserve(faceSet->point_count);
+    for (size_t i = 0; i < faceSet->point_count; i++) {
+	points.push_back(SbVec3f(
+		static_cast<float>(faceSet->points[i][X]),
+		static_cast<float>(faceSet->points[i][Y]),
+		static_cast<float>(faceSet->points[i][Z])));
+    }
+
+    uint32_t threshold = source ? source->lodBotThreshold.getValue() : 0;
+    SoBRLMeshShape *shape = (threshold > 0 &&
+	    triangles.size() / 3 >= static_cast<size_t>(threshold)) ?
+	new SoBRLLodMeshShape : new SoBRLMeshShape;
+    shape->setIndexedTriangles(points.data(), static_cast<int>(points.size()),
+	    triangles.data(), static_cast<int>(triangles.size()));
+    return shape;
+}
+
+static SoBRLMeshShape *
+mesh_from_primitive_face_set(struct rt_db_internal *intern,
+	const SoBRLDatabaseSource *source)
+{
+    if (!intern || !intern->idb_meth || !intern->idb_meth->ft_indexed_face_set)
+	return NULL;
+
+    struct rt_primitive_indexed_face_set faceSet;
+    struct rt_view_info viewInfo = RT_VIEW_INFO_INIT;
+    struct bg_tess_tol ttol = source_tess_tol(source);
+    struct bn_tol tol = BN_TOL_INIT_TOL;
+    memset(&faceSet, 0, sizeof(faceSet));
+
+    int ret = intern->idb_meth->ft_indexed_face_set(&faceSet, intern,
+	    &ttol, &tol, &viewInfo);
+    if (ret != BRLCAD_OK) {
+	primitive_indexed_face_set_free(&faceSet);
+	return NULL;
+    }
+
+    SoBRLMeshShape *shape = mesh_from_indexed_face_set(&faceSet, source);
+    primitive_indexed_face_set_free(&faceSet);
+    return shape;
+}
+
+static void
 publish_lod_result_metadata(SoBRLMeshShape *shape,
 	const BRLObolLodResult &result)
 {
@@ -1202,6 +1537,11 @@ mesh_from_internal(struct rt_db_internal *intern,
     if (!intern || !intern->idb_ptr)
 	return NULL;
 
+    SoBRLMeshShape *faceSetShape = mesh_from_primitive_face_set(intern,
+	    source);
+    if (faceSetShape)
+	return faceSetShape;
+
     switch (intern->idb_type) {
 	case ID_ARB8:
 	    return mesh_from_arb(static_cast<const struct rt_arb_internal *>(intern->idb_ptr));
@@ -1307,7 +1647,12 @@ realize_mesh_leaf(struct db_tree_state *tsp,
 
 SoBRLDatabaseSource::SoBRLDatabaseSource(void) :
     dbip(NULL),
+    meshLod(NULL),
+    meshLodBoundsValid(FALSE),
+    meshLodBoundsMin(0.0f, 0.0f, 0.0f),
+    meshLodBoundsMax(0.0f, 0.0f, 0.0f),
     pathSensor(NULL),
+    instanceKeySensor(NULL),
     drawModeSensor(NULL),
     tessellationAbsTolSensor(NULL),
     tessellationRelTolSensor(NULL),
@@ -1327,7 +1672,10 @@ SoBRLDatabaseSource::SoBRLDatabaseSource(void) :
     SO_NODE_DEFINE_ENUM_VALUE(MaterialPolicy, MATERIAL_INHERIT);
     SO_NODE_DEFINE_ENUM_VALUE(MaterialPolicy, MATERIAL_DATABASE);
 
+    SO_NODE_ADD_FIELD(instanceKey, (""));
     SO_NODE_ADD_FIELD(path, (""));
+    SO_NODE_ADD_FIELD(displayName, (""));
+    SO_NODE_ADD_FIELD(auxiliarySource, (FALSE));
     SO_NODE_ADD_FIELD(drawMode, (WIREFRAME));
     SO_NODE_SET_SF_ENUM_TYPE(drawMode, DrawMode);
     SO_NODE_ADD_FIELD(visible, (TRUE));
@@ -1348,6 +1696,9 @@ SoBRLDatabaseSource::SoBRLDatabaseSource(void) :
     SO_NODE_ADD_FIELD(drawCenter, (SbVec3f(0.0f, 0.0f, 0.0f)));
     SO_NODE_ADD_FIELD(drawSizeValid, (FALSE));
     SO_NODE_ADD_FIELD(drawSize, (0.0f));
+    SO_NODE_ADD_FIELD(sourceBoundsValid, (FALSE));
+    SO_NODE_ADD_FIELD(sourceBoundsMin, (SbVec3f(0.0f, 0.0f, 0.0f)));
+    SO_NODE_ADD_FIELD(sourceBoundsMax, (SbVec3f(0.0f, 0.0f, 0.0f)));
     SO_NODE_ADD_FIELD(tessellationAbsTol, (0.0f));
     SO_NODE_ADD_FIELD(tessellationRelTol, (0.01f));
     SO_NODE_ADD_FIELD(tessellationNormTol, (0.0f));
@@ -1378,6 +1729,7 @@ SoBRLDatabaseSource::SoBRLDatabaseSource(void) :
 SoBRLDatabaseSource::~SoBRLDatabaseSource(void)
 {
     this->detachFieldSensors();
+    this->clearMeshLod();
 }
 
 void
@@ -1414,6 +1766,10 @@ SoBRLDatabaseSource::attachFieldSensors(void)
     this->pathSensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
     this->pathSensor->setPriority(0);
     this->pathSensor->attach(&this->path);
+
+    this->instanceKeySensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
+    this->instanceKeySensor->setPriority(0);
+    this->instanceKeySensor->attach(&this->instanceKey);
 
     this->drawModeSensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
     this->drawModeSensor->setPriority(0);
@@ -1455,6 +1811,10 @@ SoBRLDatabaseSource::detachFieldSensors(void)
 	this->pathSensor->detach();
     delete this->pathSensor;
     this->pathSensor = NULL;
+    if (this->instanceKeySensor)
+	this->instanceKeySensor->detach();
+    delete this->instanceKeySensor;
+    this->instanceKeySensor = NULL;
     if (this->drawModeSensor)
 	this->drawModeSensor->detach();
     delete this->drawModeSensor;
@@ -1514,6 +1874,18 @@ SoBRLDatabaseSource::setDrawModeState(int nextDrawMode)
 	return 0;
 
     this->drawMode = nextDrawMode;
+    this->syncRealizedShapeOwnerState();
+    return 1;
+}
+
+int
+SoBRLDatabaseSource::setDisplayNameState(const char *name)
+{
+    const char *nextName = name ? name : "";
+    if (database_source_string_equal(this->displayName.getValue(), nextName))
+	return 0;
+
+    this->displayName = nextName;
     this->syncRealizedShapeOwnerState();
     return 1;
 }
@@ -1726,6 +2098,51 @@ SoBRLDatabaseSource::setDisplayState(SbBool sourceRevisionValid,
 }
 
 int
+SoBRLDatabaseSource::applyDisplayPatch(
+	const BRLObolDatabaseSourceDisplayPatch &patch)
+{
+    int changed = 0;
+    if (patch.visibleValid && this->visible.getValue() != patch.visible) {
+	this->visible = patch.visible;
+	changed = 1;
+    }
+    if (patch.highlightedValid &&
+	    this->highlighted.getValue() != patch.highlighted) {
+	this->highlighted = patch.highlighted;
+	changed = 1;
+    }
+    if (patch.lineStyleValid &&
+	    this->lineStyle.getValue() != patch.lineStyle) {
+	this->lineStyle = patch.lineStyle;
+	changed = 1;
+    }
+    if (patch.lineWidthValid &&
+	    this->lineWidth.getValue() != patch.lineWidth) {
+	this->lineWidth = patch.lineWidth;
+	changed = 1;
+    }
+    if (patch.transparencyValid &&
+	    database_source_float_different(this->transparency.getValue(),
+		patch.transparency)) {
+	this->transparency = patch.transparency;
+	changed = 1;
+    }
+    if (patch.colorOverrideValid &&
+	    this->colorOverride.getValue() != patch.colorOverride) {
+	this->colorOverride = patch.colorOverride;
+	changed = 1;
+    }
+    if (patch.colorValid &&
+	    !database_source_color_equal(this->color.getValue(), patch.color)) {
+	this->color = patch.color;
+	changed = 1;
+    }
+    if (changed)
+	this->syncRealizedShapeOwnerState();
+    return changed;
+}
+
+int
 SoBRLDatabaseSource::setPlacementState(SbBool nextDrawMatrixValid,
 	const SbMatrix &nextDrawMatrix,
 	SbBool nextDrawCenterValid,
@@ -1770,6 +2187,60 @@ SoBRLDatabaseSource::setPlacementState(SbBool nextDrawMatrixValid,
     return changed;
 }
 
+int
+SoBRLDatabaseSource::setSourceBoundsState(SbBool nextBoundsValid,
+	const SbVec3f &nextBoundsMin,
+	const SbVec3f &nextBoundsMax)
+{
+    SbVec3f sanitizedMin(0.0f, 0.0f, 0.0f);
+    SbVec3f sanitizedMax(0.0f, 0.0f, 0.0f);
+    if (nextBoundsValid) {
+	const SbBox3f bounds =
+	    database_source_box_from_minmax(nextBoundsMin, nextBoundsMax);
+	sanitizedMin = bounds.getMin();
+	sanitizedMax = bounds.getMax();
+    }
+
+    int changed = 0;
+    if (this->sourceBoundsValid.getValue() != nextBoundsValid) {
+	this->sourceBoundsValid = nextBoundsValid;
+	changed = 1;
+    }
+    if (!database_source_vec3f_equal(this->sourceBoundsMin.getValue(),
+	    sanitizedMin)) {
+	this->sourceBoundsMin = sanitizedMin;
+	changed = 1;
+    }
+    if (!database_source_vec3f_equal(this->sourceBoundsMax.getValue(),
+	    sanitizedMax)) {
+	this->sourceBoundsMax = sanitizedMax;
+	changed = 1;
+    }
+
+    return changed;
+}
+
+void
+SoBRLDatabaseSource::clearSourceBounds(void)
+{
+    (void)this->setSourceBoundsState(FALSE,
+	    SbVec3f(0.0f, 0.0f, 0.0f),
+	    SbVec3f(0.0f, 0.0f, 0.0f));
+}
+
+SbBool
+SoBRLDatabaseSource::getSourceBounds(SbBox3f &bounds) const
+{
+    bounds.makeEmpty();
+    if (!this->sourceBoundsValid.getValue())
+	return FALSE;
+
+    bounds = database_source_box_from_minmax(
+	    this->sourceBoundsMin.getValue(),
+	    this->sourceBoundsMax.getValue());
+    return bounds.isEmpty() ? FALSE : TRUE;
+}
+
 void
 SoBRLDatabaseSource::setDatabase(struct db_i *database)
 {
@@ -1786,7 +2257,83 @@ SoBRLDatabaseSource::getDatabase(void) const
 }
 
 void
+SoBRLDatabaseSource::setMeshLod(struct rt_mesh_lod *lod)
+{
+    if (this->meshLod == lod) {
+	if (!lod)
+	    this->clearMeshLodBounds();
+	return;
+    }
+
+    if (this->meshLod)
+	rt_mesh_lod_destroy(this->meshLod);
+
+    this->meshLod = lod;
+    this->clearMeshLodBounds();
+}
+
+struct rt_mesh_lod *
+SoBRLDatabaseSource::getMeshLod(void) const
+{
+    return this->meshLod;
+}
+
+void
+SoBRLDatabaseSource::clearMeshLod(void)
+{
+    if (this->meshLod)
+	rt_mesh_lod_destroy(this->meshLod);
+    this->meshLod = NULL;
+    this->clearMeshLodBounds();
+}
+
+int
+SoBRLDatabaseSource::setMeshLodBounds(const SbVec3f &bmin,
+	const SbVec3f &bmax)
+{
+    if (bmin[0] > bmax[0] || bmin[1] > bmax[1] || bmin[2] > bmax[2])
+	return 0;
+
+    this->meshLodBoundsMin = bmin;
+    this->meshLodBoundsMax = bmax;
+    this->meshLodBoundsValid = TRUE;
+    return 1;
+}
+
+SbBool
+SoBRLDatabaseSource::getMeshLodBounds(SbVec3f &bmin,
+	SbVec3f &bmax) const
+{
+    if (!this->meshLodBoundsValid)
+	return FALSE;
+
+    bmin = this->meshLodBoundsMin;
+    bmax = this->meshLodBoundsMax;
+    return TRUE;
+}
+
+void
+SoBRLDatabaseSource::clearMeshLodBounds(void)
+{
+    this->meshLodBoundsValid = FALSE;
+    this->meshLodBoundsMin.setValue(0.0f, 0.0f, 0.0f);
+    this->meshLodBoundsMax.setValue(0.0f, 0.0f, 0.0f);
+}
+
+void
 SoBRLDatabaseSource::configureDatabaseSource(const char *sourcePath,
+	struct db_i *database,
+	int mode,
+	uint32_t revision)
+{
+    this->configureDatabaseSourceInstance(sourcePath, sourcePath, database,
+	    mode, revision);
+}
+
+void
+SoBRLDatabaseSource::configureDatabaseSourceInstance(
+	const char *sourceInstanceKey,
+	const char *sourcePath,
 	struct db_i *database,
 	int mode,
 	uint32_t revision)
@@ -1797,10 +2344,18 @@ SoBRLDatabaseSource::configureDatabaseSource(const char *sourcePath,
 	reason |= STALE_DATABASE;
     if (this->drawMode.getValue() != sanitizedMode)
 	reason |= STALE_DRAW;
+    const char *effectiveInstanceKey =
+	(sourceInstanceKey && sourceInstanceKey[0]) ?
+	sourceInstanceKey : sourcePath;
+    if (strcmp(this->instanceKey.getValue().getString(),
+	    effectiveInstanceKey ? effectiveInstanceKey : "") != 0)
+	reason |= STALE_SOURCE;
 
     this->detachFieldSensors();
     this->dbip = database;
+    this->instanceKey = effectiveInstanceKey ? effectiveInstanceKey : "";
     this->path = sourcePath ? sourcePath : "";
+    this->auxiliarySource = FALSE;
     this->drawMode = sanitizedMode;
     this->sourceRevision = revision;
     this->markStale(reason);
@@ -1810,6 +2365,7 @@ SoBRLDatabaseSource::configureDatabaseSource(const char *sourcePath,
 template <typename ShapeT>
 static void
 retarget_realized_shape_source(ShapeT *shape,
+	const SoBRLDatabaseSource *source,
 	const char *oldSourcePath,
 	const char *newSourcePath,
 	uint32_t revision)
@@ -1828,6 +2384,8 @@ retarget_realized_shape_source(ShapeT *shape,
     const char *shapeSourceName = shape->sourceName.getValue().getString();
     const char *displayName = shape->displayName.getValue().getString();
     const char *geometryName = shape->geometryName.getValue().getString();
+    const char *sourceDisplayName = source ?
+	source->displayName.getValue().getString() : NULL;
 
     shape->sourcePath = newSourcePath;
     shape->sourceId = revision;
@@ -1836,7 +2394,9 @@ retarget_realized_shape_source(ShapeT *shape,
 	     (oldName && BU_STR_EQUAL(shapeSourceName, oldName)) ||
 	     (oldSourcePath && BU_STR_EQUAL(shapeSourceName, oldSourcePath))))
 	shape->sourceName = newName;
-    if (!auxiliary &&
+    if (!auxiliary && sourceDisplayName && sourceDisplayName[0])
+	shape->displayName = sourceDisplayName;
+    else if (!auxiliary &&
 	    (!displayName || !displayName[0] ||
 	     (oldName && BU_STR_EQUAL(displayName, oldName)) ||
 	     (oldSourcePath && BU_STR_EQUAL(displayName, oldSourcePath))))
@@ -1847,7 +2407,7 @@ retarget_realized_shape_source(ShapeT *shape,
 	     (oldSourcePath && BU_STR_EQUAL(geometryName, oldSourcePath))))
 	shape->geometryName = newName;
 
-    std::string identity = newSourcePath;
+    SbString identity = source_record_identity(source, newSourcePath);
     if (auxiliary) {
 	const char *auxName = shape->geometryName.getValue().getString();
 	if (auxName && auxName[0]) {
@@ -1855,9 +2415,10 @@ retarget_realized_shape_source(ShapeT *shape,
 	    identity += auxName;
 	}
     }
-    shape->sourceIdentity = identity.c_str();
-    shape->cacheIdentity = record_identity_with_revision(identity.c_str(),
+    shape->sourceIdentity = identity;
+    shape->cacheIdentity = record_identity_with_revision(identity.getString(),
 	    revision);
+    sync_shape_owner_state(shape, source);
 }
 
 static void
@@ -1886,6 +2447,7 @@ retarget_material_object_source(SoBRLMaterialObject *object,
 
 static void
 retarget_realized_node_source(SoNode *node,
+	const SoBRLDatabaseSource *source,
 	const char *oldSourcePath,
 	const char *newSourcePath,
 	uint32_t revision)
@@ -1895,12 +2457,12 @@ retarget_realized_node_source(SoNode *node,
 
     if (node->isOfType(SoBRLVListShape::getClassTypeId())) {
 	retarget_realized_shape_source(static_cast<SoBRLVListShape *>(node),
-		oldSourcePath, newSourcePath, revision);
+		source, oldSourcePath, newSourcePath, revision);
 	return;
     }
     if (node->isOfType(SoBRLMeshShape::getClassTypeId())) {
 	retarget_realized_shape_source(static_cast<SoBRLMeshShape *>(node),
-		oldSourcePath, newSourcePath, revision);
+		source, oldSourcePath, newSourcePath, revision);
 	return;
     }
     if (node->isOfType(SoBRLMaterialObject::getClassTypeId())) {
@@ -1912,8 +2474,8 @@ retarget_realized_node_source(SoNode *node,
     if (node->isOfType(SoGroup::getClassTypeId())) {
 	SoGroup *group = static_cast<SoGroup *>(node);
 	for (int i = 0; i < group->getNumChildren(); i++)
-	    retarget_realized_node_source(group->getChild(i), oldSourcePath,
-		    newSourcePath, revision);
+	    retarget_realized_node_source(group->getChild(i), source,
+		    oldSourcePath, newSourcePath, revision);
     }
 }
 
@@ -1921,26 +2483,44 @@ int
 SoBRLDatabaseSource::retargetDatabaseSource(const char *sourcePath,
 	uint32_t revision)
 {
+    return this->retargetDatabaseSourceInstance(sourcePath, sourcePath,
+	    revision);
+}
+
+int
+SoBRLDatabaseSource::retargetDatabaseSourceInstance(
+	const char *sourceInstanceKey,
+	const char *sourcePath,
+	uint32_t revision)
+{
     if (!sourcePath || !sourcePath[0])
 	return -1;
 
+    const char *effectiveInstanceKey =
+	(sourceInstanceKey && sourceInstanceKey[0]) ?
+	sourceInstanceKey : sourcePath;
     const char *oldPath = this->path.getValue().getString();
+    const char *oldInstanceKey = this->instanceKey.getValue().getString();
     const int pathChanged = !oldPath || !BU_STR_EQUAL(oldPath, sourcePath);
+    const int instanceChanged = !oldInstanceKey ||
+	!BU_STR_EQUAL(oldInstanceKey, effectiveInstanceKey);
     if (revision == 0)
-	revision = this->sourceRevision.getValue() + (pathChanged ? 1 : 0);
+	revision = this->sourceRevision.getValue() +
+	    ((pathChanged || instanceChanged) ? 1 : 0);
     const int revisionChanged = this->sourceRevision.getValue() != revision;
-    if (!pathChanged && !revisionChanged)
+    if (!pathChanged && !instanceChanged && !revisionChanged)
 	return 0;
 
     std::string oldPathCopy = oldPath ? oldPath : "";
 
     this->detachFieldSensors();
+    this->instanceKey = effectiveInstanceKey ? effectiveInstanceKey : "";
     this->path = sourcePath;
     this->sourceRevision = revision;
     this->markStale(STALE_SOURCE);
     for (int i = 0; i < this->getNumChildren(); i++)
-	retarget_realized_node_source(this->getChild(i), oldPathCopy.c_str(),
-		sourcePath, revision);
+	retarget_realized_node_source(this->getChild(i), this,
+		oldPathCopy.c_str(), sourcePath, revision);
     this->attachFieldSensors();
     return 1;
 }
@@ -1969,7 +2549,7 @@ SoBRLDatabaseSource::realizeDatabaseWireframe(void)
 	return FALSE;
     }
 
-    this->removeAllChildren();
+    remove_non_auxiliary_children(this);
 
     struct db_tree_state init_state;
     db_init_db_tree_state(&init_state, this->dbip);
@@ -1987,7 +2567,7 @@ SoBRLDatabaseSource::realizeDatabaseWireframe(void)
     db_free_db_tree_state(&init_state);
 
     if (ret < 0 || data.realized_shapes <= 0 || data.failed_shapes > 0) {
-	this->removeAllChildren();
+	remove_non_auxiliary_children(this);
 	this->realizationIdentity = "";
 	if (data.diagnostic.getLength() > 0) {
 	    this->realizationDiagnostic = data.diagnostic;
@@ -2031,7 +2611,7 @@ SoBRLDatabaseSource::realizeDatabaseMesh(void)
 	return FALSE;
     }
 
-    this->removeAllChildren();
+    remove_non_auxiliary_children(this);
 
     struct db_tree_state init_state;
     db_init_db_tree_state(&init_state, this->dbip);
@@ -2049,7 +2629,7 @@ SoBRLDatabaseSource::realizeDatabaseMesh(void)
     db_free_db_tree_state(&init_state);
 
     if (ret < 0 || data.realized_shapes <= 0 || data.failed_shapes > 0) {
-	this->removeAllChildren();
+	remove_non_auxiliary_children(this);
 	this->realizationIdentity = "";
 	if (data.diagnostic.getLength() > 0) {
 	    this->realizationDiagnostic = data.diagnostic;
@@ -2109,11 +2689,13 @@ SoBRLDatabaseSource::realizePrototypeWireframe(void)
 	lookup_name_from_path(this->path.getValue()) : this->path.getValue().getString();
     shape->sourceType = "prototype";
     shape->sourceId = this->sourceRevision.getValue();
-    shape->displayName = shape->sourceName.getValue();
+    shape->displayName = this->displayName.getValue().getLength() > 0 ?
+	this->displayName.getValue() : shape->sourceName.getValue();
     shape->geometryName = shape->sourceName.getValue();
-    shape->sourceIdentity = shape->sourcePath.getValue();
+    shape->sourceIdentity = source_record_identity(this,
+	    shape->sourcePath.getValue().getString());
     shape->cacheIdentity = record_identity_with_revision(
-	    shape->sourcePath.getValue().getString(),
+	    shape->sourceIdentity.getValue().getString(),
 	    shape->sourceId.getValue());
     shape->databaseIntent = FALSE;
     shape->overlayIntent = FALSE;
@@ -2171,7 +2753,8 @@ find_shape_in_node(SoNode *node, int &index)
 	return NULL;
     }
 
-    if (node->isOfType(SoGroup::getClassTypeId())) {
+    if (node->isOfType(SoGroup::getClassTypeId()) &&
+	    !node->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
 	SoGroup *group = static_cast<SoGroup *>(node);
 	for (int i = 0; i < group->getNumChildren(); i++) {
 	    SoBRLVListShape *shape = find_shape_in_node(group->getChild(i), index);
@@ -2223,12 +2806,38 @@ SoBRLDatabaseSource::findAuxiliaryVListShape(const char *name) const
     return NULL;
 }
 
+SoBRLDatabaseSource *
+SoBRLDatabaseSource::findAuxiliarySource(const char *sourcePath) const
+{
+    if (!sourcePath || !sourcePath[0])
+	return NULL;
+
+    for (int i = 0; i < this->getNumChildren(); i++) {
+	SoNode *node = this->getChild(i);
+	if (!node || !node->isOfType(SoBRLDatabaseSource::getClassTypeId()))
+	    continue;
+
+	SoBRLDatabaseSource *source = static_cast<SoBRLDatabaseSource *>(node);
+	if (!source->auxiliarySource.getValue())
+	    continue;
+
+	const char *candidate = source->path.getValue().getString();
+	if (strcmp(candidate, sourcePath) == 0 ||
+		strcmp(database_source_skip_leading_slash(candidate),
+		    database_source_skip_leading_slash(sourcePath)) == 0)
+	    return source;
+    }
+
+    return NULL;
+}
+
 
 int
 SoBRLDatabaseSource::setAuxiliaryLineSet(const char *name,
 	const SbVec3f *points,
 	const int32_t *commands,
-	int count)
+	int count,
+	const BRLObolAuxiliaryLineSetDisplayState *displayState)
 {
     if (!name || !name[0] || count < 0 || (count > 0 && !points))
 	return 0;
@@ -2263,8 +2872,8 @@ SoBRLDatabaseSource::setAuxiliaryLineSet(const char *name,
 
     const char *sourcePath = this->path.getValue().getString();
     const uint32_t revision = this->sourceRevision.getValue();
-    std::string identity = sourcePath ? sourcePath : "";
-    if (!identity.empty())
+    SbString identity = source_record_identity(this, sourcePath);
+    if (identity.getLength() > 0)
 	identity += "::";
     identity += name;
 
@@ -2274,8 +2883,8 @@ SoBRLDatabaseSource::setAuxiliaryLineSet(const char *name,
     shape->sourceId = revision;
     shape->displayName = name;
     shape->geometryName = name;
-    shape->sourceIdentity = identity.c_str();
-    shape->cacheIdentity = record_identity_with_revision(identity.c_str(),
+    shape->sourceIdentity = identity;
+    shape->cacheIdentity = record_identity_with_revision(identity.getString(),
 	    revision);
     shape->databaseIntent = TRUE;
     shape->overlayIntent = FALSE;
@@ -2286,19 +2895,99 @@ SoBRLDatabaseSource::setAuxiliaryLineSet(const char *name,
     shape->drawMode = source_record_draw_mode(this);
     shape->recordRole = "auxiliary";
     shape->geometryKind = "line";
-    shape->materialColorValid = this->materialColorValid.getValue();
-    shape->materialColor = this->materialColor.getValue();
-    shape->materialRevision = this->materialRevision.getValue();
-    shape->colorOverride = this->colorOverride.getValue();
-    shape->color = this->color.getValue();
-    shape->visible = this->visible.getValue();
-    shape->highlighted = this->highlighted.getValue();
-    shape->lineStyle = this->lineStyle.getValue();
-    shape->lineWidth = this->lineWidth.getValue();
-    shape->transparency = this->transparency.getValue();
+    if (displayState && displayState->valid) {
+	shape->drawMode = displayState->drawMode;
+	shape->visible = displayState->visible;
+	shape->highlighted = displayState->highlighted;
+	shape->lineStyle = displayState->lineStyle;
+	shape->lineWidth = displayState->lineWidth;
+	shape->transparency = displayState->transparency;
+	shape->materialColorValid = displayState->materialColorValid;
+	shape->materialColor = displayState->materialColor;
+	shape->materialRevision = displayState->materialRevision;
+	shape->colorOverride = FALSE;
+	shape->color = displayState->materialColor;
+    } else {
+	sync_shape_display_state(shape, this);
+    }
+    sync_shape_placement_state(shape, this);
     shape->setLineSet(points, commands, count);
     sync_shape_owner_state(shape, this);
     return 1;
+}
+
+
+int
+SoBRLDatabaseSource::setAuxiliarySourceLineSet(const char *sourcePath,
+	const char *auxDisplayName,
+	const SbVec3f *points,
+	const int32_t *commands,
+	int count,
+	const BRLObolAuxiliaryLineSetDisplayState *displayState)
+{
+    if (!sourcePath || !sourcePath[0] || count < 0 ||
+	    (count > 0 && !points))
+	return 0;
+
+    SoBRLDatabaseSource *source = this->findAuxiliarySource(sourcePath);
+    if (count == 0) {
+	if (!source)
+	    return 0;
+	for (int i = 0; i < this->getNumChildren(); i++) {
+	    if (this->getChild(i) == source) {
+		this->removeChild(i);
+		return 1;
+	    }
+	}
+	return 0;
+    }
+
+    if (!source) {
+	source = new SoBRLDatabaseSource;
+	source->setName(SbName(lookup_name_from_path(SbString(sourcePath))));
+	this->addChild(source);
+    }
+
+    const uint32_t revision = this->sourceRevision.getValue();
+    source->configureDatabaseSourceInstance(sourcePath, sourcePath,
+	    this->dbip, this->drawMode.getValue(), revision);
+    source->auxiliarySource = TRUE;
+    source->displayName = (auxDisplayName && auxDisplayName[0]) ?
+	auxDisplayName : lookup_name_from_path(SbString(sourcePath));
+    source->visible = this->visible.getValue();
+    source->highlighted = this->highlighted.getValue();
+    source->lineStyle = this->lineStyle.getValue();
+    source->lineWidth = this->lineWidth.getValue();
+    source->transparency = this->transparency.getValue();
+    source->materialColorValid = this->materialColorValid.getValue();
+    source->materialColor = this->materialColor.getValue();
+    source->materialRevision = this->materialRevision.getValue();
+    source->colorOverride = this->colorOverride.getValue();
+    source->color = this->color.getValue();
+    source->drawMatrixValid = this->drawMatrixValid.getValue();
+    source->drawMatrix = this->drawMatrix.getValue();
+    source->drawCenterValid = this->drawCenterValid.getValue();
+    source->drawCenter = this->drawCenter.getValue();
+    source->drawSizeValid = this->drawSizeValid.getValue();
+    source->drawSize = this->drawSize.getValue();
+
+    const char *shapeName = (auxDisplayName && auxDisplayName[0]) ?
+	auxDisplayName : lookup_name_from_path(SbString(sourcePath));
+    const int changed = source->setAuxiliaryLineSet(shapeName, points,
+	    commands, count, displayState);
+    if (changed > 0) {
+	source->realizedRevision = revision;
+	source->realizedSourceRevision = revision;
+	source->realizedInputsRevision = source->inputsRevision.getValue();
+	source->realizedViewRevision = source->viewRevision.getValue();
+	source->realizationStatus = REALIZED;
+	source->realizationDiagnostic = "";
+	source->realizationIdentity = source_realization_identity(source);
+	source->stale = FALSE;
+	source->staleReason = STALE_NONE;
+	source->syncRealizedShapeOwnerState();
+    }
+    return changed;
 }
 
 
@@ -2308,15 +2997,23 @@ SoBRLDatabaseSource::clearAuxiliaryShapes(void)
     int removed = 0;
     for (int i = this->getNumChildren() - 1; i >= 0; i--) {
 	SoNode *node = this->getChild(i);
-	if (!node || !node->isOfType(SoBRLVListShape::getClassTypeId()))
+	if (!node)
 	    continue;
 
-	SoBRLVListShape *shape = static_cast<SoBRLVListShape *>(node);
-	if (!vlist_shape_is_auxiliary(shape))
+	if (node_is_auxiliary_source(node)) {
+	    this->removeChild(i);
+	    removed++;
 	    continue;
+	}
 
-	this->removeChild(i);
-	removed++;
+	if (node->isOfType(SoBRLVListShape::getClassTypeId())) {
+	    SoBRLVListShape *shape = static_cast<SoBRLVListShape *>(node);
+	    if (!vlist_shape_is_auxiliary(shape))
+		continue;
+
+	    this->removeChild(i);
+	    removed++;
+	}
     }
     return removed;
 }
@@ -2341,7 +3038,8 @@ find_mesh_in_node(SoNode *node, int &index)
 	return NULL;
     }
 
-    if (node->isOfType(SoGroup::getClassTypeId())) {
+    if (node->isOfType(SoGroup::getClassTypeId()) &&
+	    !node->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
 	SoGroup *group = static_cast<SoGroup *>(node);
 	for (int i = 0; i < group->getNumChildren(); i++) {
 	    SoBRLMeshShape *shape = find_mesh_in_node(group->getChild(i), index);
@@ -2383,7 +3081,8 @@ find_material_object_in_node(SoNode *node, int &index)
 	return NULL;
     }
 
-    if (node->isOfType(SoGroup::getClassTypeId())) {
+    if (node->isOfType(SoGroup::getClassTypeId()) &&
+	    !node->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
 	SoGroup *group = static_cast<SoGroup *>(node);
 	for (int i = 0; i < group->getNumChildren(); i++) {
 	    SoBRLMaterialObject *object =
@@ -2555,6 +3254,32 @@ SoBRLDatabaseSource::getRealizedMaterialProperty(int materialIndex,
 }
 
 static void
+realized_summary_owner_instance_from_node(const SoNode *node,
+	SbString &ownerSourceInstanceKey)
+{
+    if (!node || ownerSourceInstanceKey.getLength() > 0)
+	return;
+    if (node->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
+	const SoBRLDatabaseSource *source =
+	    static_cast<const SoBRLDatabaseSource *>(node);
+	ownerSourceInstanceKey = source_effective_instance_key(source);
+	return;
+    }
+    if (node->isOfType(SoBRLVListShape::getClassTypeId())) {
+	ownerSourceInstanceKey =
+	    static_cast<const SoBRLVListShape *>(node)->
+	    ownerSourceInstanceKey.getValue();
+	return;
+    }
+    if (node->isOfType(SoBRLMeshShape::getClassTypeId())) {
+	ownerSourceInstanceKey =
+	    static_cast<const SoBRLMeshShape *>(node)->
+	    ownerSourceInstanceKey.getValue();
+	return;
+    }
+}
+
+static void
 realized_tree_summary_fill(const SoNode *node, int depth, SbBool hasParent,
 	int ownerSourceIndex, const SbString &ownerSourcePath,
 	BRLObolSceneTreeSummary &summary)
@@ -2568,6 +3293,8 @@ realized_tree_summary_fill(const SoNode *node, int depth, SbBool hasParent,
     summary.drawTreeDepth = depth;
     summary.ownerSourceIndex = ownerSourceIndex;
     summary.ownerSourcePath = ownerSourcePath;
+    realized_summary_owner_instance_from_node(node,
+	    summary.ownerSourceInstanceKey);
     summary.isGroup =
 	node->isOfType(SoGroup::getClassTypeId()) ? TRUE : FALSE;
     summary.isDatabaseSource =
@@ -2586,8 +3313,12 @@ realized_tree_summary_fill(const SoNode *node, int depth, SbBool hasParent,
 	    static_cast<const SoBRLDatabaseSource *>(node);
 	summary.nodeKind = BRLObolSceneTreeSummary::NODE_DATABASE_SOURCE;
 	summary.path = sourceNode->path.getValue();
+	summary.displayName = sourceNode->displayName.getValue();
 	if (summary.ownerSourcePath.getLength() == 0)
 	    summary.ownerSourcePath = sourceNode->path.getValue();
+	if (summary.ownerSourceInstanceKey.getLength() == 0)
+	    summary.ownerSourceInstanceKey =
+		source_effective_instance_key(sourceNode);
 	return;
     }
 
@@ -2692,8 +3423,11 @@ SoBRLDatabaseSource::getRealizedTreeSummary(int index,
 	return FALSE;
 
     const SbString ownerPath = this->path.getValue();
-    return find_realized_tree_summary_in_node(this, index, 0, FALSE, -1,
-	    ownerPath, summary);
+    const SbBool ret = find_realized_tree_summary_in_node(this, index, 0,
+	    FALSE, -1, ownerPath, summary);
+    if (ret && summary.ownerSourceInstanceKey.getLength() == 0)
+	summary.ownerSourceInstanceKey = source_effective_instance_key(this);
+    return ret;
 }
 
 static void
@@ -2720,6 +3454,7 @@ realized_display_summary_fill_shape(const ShapeT *shape,
     if (!shape)
 	return;
 
+    summary.ownerSourceInstanceKey = shape->ownerSourceInstanceKey.getValue();
     summary.hasDrawIntent = shape->sourcePath.getValue().getLength() > 0;
     summary.intentPath = shape->sourcePath.getValue();
     summary.intentDrawMode = shape->drawMode.getValue();
@@ -2757,6 +3492,7 @@ realized_display_summary_fill(const SoNode *node, int ownerSourceIndex,
 	realized_display_summary_fill_common(summary,
 		BRLObolSceneTreeSummary::NODE_DATABASE_SOURCE,
 		ownerSourceIndex, ownerSourcePath, source->path.getValue());
+	summary.ownerSourceInstanceKey = source_effective_instance_key(source);
 	summary.isDatabaseSource = TRUE;
 	summary.hasDrawIntent = source->path.getValue().getLength() > 0;
 	summary.intentPath = source->path.getValue();
@@ -2851,8 +3587,11 @@ SoBRLDatabaseSource::getRealizedDisplaySummary(int index,
 	return FALSE;
 
     const SbString ownerPath = this->path.getValue();
-    return find_realized_display_summary_in_node(this, index, -1,
-	    ownerPath, summary);
+    const SbBool ret = find_realized_display_summary_in_node(this, index,
+	    -1, ownerPath, summary);
+    if (ret && summary.ownerSourceInstanceKey.getLength() == 0)
+	summary.ownerSourceInstanceKey = source_effective_instance_key(this);
+    return ret;
 }
 
 static void
@@ -2873,6 +3612,7 @@ scene_material_summary_from_display(const BRLObolSceneDisplaySummary &display,
     summary.materialColor = display.materialColor;
     summary.ownerSourceIndex = display.ownerSourceIndex;
     summary.ownerSourcePath = display.ownerSourcePath;
+    summary.ownerSourceInstanceKey = display.ownerSourceInstanceKey;
     summary.path = display.path;
 }
 
@@ -2966,6 +3706,11 @@ realized_bounds_for_node(const SoNode *node, SbBox3f &bounds)
 	return realized_bounds_for_mesh_shape(
 		static_cast<const SoBRLMeshShape *>(node), bounds);
 
+    if (node->isOfType(SoBRLDatabaseSource::getClassTypeId()) &&
+	    static_cast<const SoBRLDatabaseSource *>(node)->getSourceBounds(
+		bounds))
+	return TRUE;
+
     SbBool valid = FALSE;
     if (node->isOfType(SoGroup::getClassTypeId())) {
 	const SoGroup *group = static_cast<const SoGroup *>(node);
@@ -2994,6 +3739,8 @@ realized_bounds_summary_fill(const SoNode *node, int ownerSourceIndex,
     summary.nodeKind = realized_bounds_node_kind(node);
     summary.ownerSourceIndex = ownerSourceIndex;
     summary.ownerSourcePath = ownerSourcePath;
+    realized_summary_owner_instance_from_node(node,
+	    summary.ownerSourceInstanceKey);
     summary.path = realized_bounds_node_path(node);
     summary.boundsValid = realized_bounds_for_node(node, summary.bounds);
 }
@@ -3040,8 +3787,11 @@ SoBRLDatabaseSource::getRealizedBoundsSummary(int index,
 	return FALSE;
 
     const SbString ownerPath = this->path.getValue();
-    return find_realized_bounds_summary_in_node(this, index, -1,
-	    ownerPath, summary);
+    const SbBool ret = find_realized_bounds_summary_in_node(this, index,
+	    -1, ownerPath, summary);
+    if (ret && summary.ownerSourceInstanceKey.getLength() == 0)
+	summary.ownerSourceInstanceKey = source_effective_instance_key(this);
+    return ret;
 }
 
 template <typename ShapeT>
@@ -3095,6 +3845,7 @@ realized_shape_summary_owner(const SoBRLDatabaseSource *source,
 
     summary.ownerSourceIndex = sourceIndex;
     summary.ownerSourcePath = source->path.getValue();
+    summary.ownerSourceInstanceKey = source_effective_instance_key(source);
     summary.ownerDrawMode = source->drawMode.getValue();
     summary.ownerSourceRevision = source->sourceRevision.getValue();
     summary.ownerInputsRevision = source->inputsRevision.getValue();
@@ -3124,6 +3875,7 @@ realized_material_summary_owner(const SoBRLDatabaseSource *source,
 
     summary.ownerSourceIndex = sourceIndex;
     summary.ownerSourcePath = source->path.getValue();
+    summary.ownerSourceInstanceKey = source_effective_instance_key(source);
     summary.ownerDrawMode = source->drawMode.getValue();
     summary.ownerSourceRevision = source->sourceRevision.getValue();
     summary.ownerInputsRevision = source->inputsRevision.getValue();
@@ -3262,6 +4014,8 @@ SoBRLDatabaseSource::getSummary(BRLObolDatabaseSourceSummary &summary) const
     summary = BRLObolDatabaseSourceSummary();
     summary.valid = TRUE;
     summary.path = this->path.getValue();
+    summary.instanceKey = source_effective_instance_key(this);
+    summary.displayName = this->displayName.getValue();
     summary.drawMode = this->drawMode.getValue();
     summary.sourceRevision = this->sourceRevision.getValue();
     summary.inputsRevision = this->inputsRevision.getValue();
@@ -3298,6 +4052,8 @@ SoBRLDatabaseSource::getSummary(BRLObolDatabaseSourceSummary &summary) const
     summary.drawCenter = this->drawCenter.getValue();
     summary.drawSizeValid = this->drawSizeValid.getValue();
     summary.drawSize = this->drawSize.getValue();
+    summary.sourceBoundsValid = this->getSourceBounds(
+	    summary.sourceBounds);
     summary.stale = this->stale.getValue();
     summary.staleReason = this->staleReason.getValue();
     summary.realizedShapeCount = this->getRealizedShapeCount();

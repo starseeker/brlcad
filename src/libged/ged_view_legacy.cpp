@@ -140,6 +140,8 @@ ged_view_context_owned_add(struct ged *gedp, void *view_ctx)
 	return 0;
 
     bu_ptbl_ins(&state->free_views, (long *)view_ctx);
+    if (!rt_view_context_user_data_get(view_ctx))
+	rt_view_context_user_data_set(view_ctx, gedp);
     return 1;
 }
 

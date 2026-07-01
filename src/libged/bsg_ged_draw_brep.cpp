@@ -42,6 +42,8 @@ struct ged_brep_lod_detail_clbk_data {
     struct db_i *dbip;
     struct directory *dp;
     struct rt_db_internal *intern;
+    struct bg_tess_tol ttol_storage;
+    struct bn_tol tol_storage;
     const struct bg_tess_tol *ttol;
     const struct bn_tol *tol;
     int *faces;
@@ -329,8 +331,14 @@ ged_draw_brep_mesh_lod_detail_setup(struct rt_mesh_lod *lod,
     memset(cbd, 0, sizeof(*cbd));
     cbd->dbip = dbip;
     cbd->dp = dp;
-    cbd->ttol = ttol;
-    cbd->tol = tol;
+    if (ttol) {
+	cbd->ttol_storage = *ttol;
+	cbd->ttol = &cbd->ttol_storage;
+    }
+    if (tol) {
+	cbd->tol_storage = *tol;
+	cbd->tol = &cbd->tol_storage;
+    }
     if (!rt_mesh_lod_detail_callbacks_set(lod,
 	    &_ged_draw_brep_mesh_info_clbk,
 	    &_ged_draw_brep_mesh_info_clear_clbk,

@@ -200,6 +200,12 @@ ged_init(struct ged *gedp)
     gedp->i->ged_gdp->gd_draw_index_path_candidates = 0;
     gedp->i->ged_gdp->gd_draw_index_fallback_shape_scans = 0;
     gedp->i->ged_gdp->gd_draw_index_fallback_group_scans = 0;
+    gedp->i->ged_gdp->gd_draw_retained_child_source_creations = 0;
+    gedp->i->ged_gdp->gd_draw_retained_primitive_wireframe_publications = 0;
+    gedp->i->ged_gdp->gd_draw_retained_mesh_lod_runtime_updates = 0;
+    gedp->i->ged_gdp->gd_draw_retained_source_owner_appends = 0;
+    gedp->i->ged_gdp->gd_draw_retained_group_mutations = 0;
+    gedp->i->ged_gdp->gd_draw_retained_shape_mutations = 0;
     BU_PTBL_INIT(&gedp->i->ged_gdp->gd_draw_observers);
     gedp->i->ged_gdp->gd_draw_observers_init = 1;
     gedp->i->ged_gdp->gd_draw_next_observer_token = 1;
@@ -208,6 +214,8 @@ ged_init(struct ged *gedp)
     gedp->i->ged_gdp->gd_obol_controller = NULL;
     gedp->i->ged_gdp->gd_obol_observer_token = 0;
     gedp->i->ged_gdp->gd_obol_scene_controller_owned = 0;
+    gedp->i->ged_gdp->gd_obol_scene_controller_full_sync = 0;
+    gedp->i->ged_gdp->gd_obol_preserved_sources = NULL;
     BU_PTBL_INIT(&gedp->i->ged_gdp->gd_obol_context_tokens);
     gedp->i->ged_gdp->gd_obol_context_tokens_init = 1;
     gedp->i->ged_gdp->gd_obol_next_context_token = 1;
@@ -362,6 +370,7 @@ ged_free(struct ged *gedp)
 		qray_free(gedp->i->ged_gdp);
 		ged_draw_obol_context_tokens_free(gedp);
 		ged_draw_obol_scene_controller_detach(gedp);
+		ged_draw_obol_preserved_sources_free(gedp);
 		ged_draw_observers_free(gedp);
 		ged_draw_registry_free(gedp);
 		BU_PUT(gedp->i->ged_gdp, struct ged_drawable);

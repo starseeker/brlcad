@@ -812,6 +812,11 @@ ged_draw_shape_ref_index_for_component(struct ged *gedp,
 				       ged_draw_shape_ref_index_cb cb,
 				       void *userdata)
 {
+    int obol_indexed = ged_draw_obol_shape_ref_index_for_component(gedp,
+	    path, cb, userdata);
+    if (obol_indexed >= 0)
+	return obol_indexed;
+
     if (!cb)
 	return ged_draw_shape_index_for_component(gedp, path, NULL, userdata);
 
@@ -864,6 +869,11 @@ ged_draw_group_ref_index_for_component(struct ged *gedp,
 				       ged_draw_group_ref_index_cb cb,
 				       void *userdata)
 {
+    int obol_indexed = ged_draw_obol_group_ref_index_for_component(gedp,
+	    path, cb, userdata);
+    if (obol_indexed >= 0)
+	return obol_indexed;
+
     if (!cb)
 	return ged_draw_group_index_for_component(gedp, path, NULL, userdata);
 
@@ -930,6 +940,11 @@ ged_draw_shape_ref_index_for_path_hash(struct ged *gedp,
 				       ged_draw_shape_ref_index_cb cb,
 				       void *userdata)
 {
+    int obol_indexed = ged_draw_obol_shape_ref_index_for_path_hash(gedp,
+	    path_hash, cb, userdata);
+    if (obol_indexed >= 0)
+	return obol_indexed;
+
     if (!cb)
 	return ged_draw_shape_index_for_path_hash(gedp, path_hash, NULL,
 		userdata);
@@ -967,6 +982,18 @@ ged_draw_index_stats_get(struct ged *gedp, struct ged_draw_index_stats *stats)
 	gdp->gd_draw_index_fallback_shape_scans;
     stats->fallback_group_scans =
 	gdp->gd_draw_index_fallback_group_scans;
+    stats->retained_child_source_creations =
+	gdp->gd_draw_retained_child_source_creations;
+    stats->retained_primitive_wireframe_publications =
+	gdp->gd_draw_retained_primitive_wireframe_publications;
+    stats->retained_mesh_lod_runtime_updates =
+	gdp->gd_draw_retained_mesh_lod_runtime_updates;
+    stats->retained_source_owner_appends =
+	gdp->gd_draw_retained_source_owner_appends;
+    stats->retained_group_mutations =
+	gdp->gd_draw_retained_group_mutations;
+    stats->retained_shape_mutations =
+	gdp->gd_draw_retained_shape_mutations;
 }
 
 
@@ -985,6 +1012,12 @@ ged_draw_index_stats_reset(struct ged *gedp)
     gdp->gd_draw_index_path_candidates = 0;
     gdp->gd_draw_index_fallback_shape_scans = 0;
     gdp->gd_draw_index_fallback_group_scans = 0;
+    gdp->gd_draw_retained_child_source_creations = 0;
+    gdp->gd_draw_retained_primitive_wireframe_publications = 0;
+    gdp->gd_draw_retained_mesh_lod_runtime_updates = 0;
+    gdp->gd_draw_retained_source_owner_appends = 0;
+    gdp->gd_draw_retained_group_mutations = 0;
+    gdp->gd_draw_retained_shape_mutations = 0;
 }
 
 

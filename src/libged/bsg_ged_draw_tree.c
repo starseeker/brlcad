@@ -39,12 +39,12 @@
 #include "./ged_private.h"
 
 
-static void _sg_erase_path(struct ged *gedp, const char *path);
-static void _sg_erase_all_paths(struct ged *gedp, const char *path);
-static void _sg_erase_path_scoped(struct ged *gedp, const char *path,
-				  void *view_ctx, int mode);
-static void _sg_erase_all_paths_scoped(struct ged *gedp, const char *path,
-				       void *view_ctx, int mode);
+static int _sg_erase_path(struct ged *gedp, const char *path);
+static int _sg_erase_all_paths(struct ged *gedp, const char *path);
+static int _sg_erase_path_scoped(struct ged *gedp, const char *path,
+				 void *view_ctx, int mode);
+static int _sg_erase_all_paths_scoped(struct ged *gedp, const char *path,
+				      void *view_ctx, int mode);
 static int _sg_erase_nonroot_component_scoped(struct ged *gedp,
 					      const char *name,
 					      void *view_ctx,
@@ -55,18 +55,18 @@ static int _sg_erase_component_scoped(struct ged *gedp,
 				      int mode);
 
 
-static void
+static int
 _sg_erase_path(struct ged *gedp, const char *path)
 {
-    (void)ged_draw_scene_root_erase_path(gedp, path);
+    return ged_draw_scene_root_erase_path(gedp, path);
 }
 
 
-static void
+static int
 _sg_erase_path_scoped(struct ged *gedp, const char *path,
 		      void *view_ctx, int mode)
 {
-    (void)ged_draw_source_erase_path_in_active_scope(gedp, path, view_ctx,
+    return ged_draw_source_erase_path_in_active_scope(gedp, path, view_ctx,
 	    mode);
 }
 
@@ -79,18 +79,18 @@ _sg_erase_all_names(struct ged *gedp, const char *name)
 }
 
 
-static void
+static int
 _sg_erase_all_paths(struct ged *gedp, const char *path)
 {
-    (void)ged_draw_scene_root_erase_path_prefix(gedp, path);
+    return ged_draw_scene_root_erase_path_prefix(gedp, path);
 }
 
 
-static void
+static int
 _sg_erase_all_paths_scoped(struct ged *gedp, const char *path,
 			   void *view_ctx, int mode)
 {
-    (void)ged_draw_source_erase_path_prefix_in_active_scope(gedp, path,
+    return ged_draw_source_erase_path_prefix_in_active_scope(gedp, path,
 	    view_ctx, mode);
 }
 
@@ -152,8 +152,9 @@ ged_draw_erase_path_string(struct ged *gedp, const char *path)
     if (!gedp || !path)
 	return 0;
     uint64_t rev0 = gedp->i->ged_gdp->gd_draw_rev;
-    _sg_erase_path(gedp, ged_draw_dbpath_skip_lead_slash(path));
-    return (gedp->i->ged_gdp->gd_draw_rev != rev0) ? 1 : 0;
+    int erased = _sg_erase_path(gedp, ged_draw_dbpath_skip_lead_slash(path));
+    return erased ? erased :
+	((gedp->i->ged_gdp->gd_draw_rev != rev0) ? 1 : 0);
 }
 
 
@@ -163,8 +164,10 @@ ged_draw_erase_path_prefix_string(struct ged *gedp, const char *path)
     if (!gedp || !path)
 	return 0;
     uint64_t rev0 = gedp->i->ged_gdp->gd_draw_rev;
-    _sg_erase_all_paths(gedp, ged_draw_dbpath_skip_lead_slash(path));
-    return (gedp->i->ged_gdp->gd_draw_rev != rev0) ? 1 : 0;
+    int erased = _sg_erase_all_paths(gedp,
+	    ged_draw_dbpath_skip_lead_slash(path));
+    return erased ? erased :
+	((gedp->i->ged_gdp->gd_draw_rev != rev0) ? 1 : 0);
 }
 
 
@@ -177,9 +180,11 @@ ged_draw_erase_path_string_scoped(struct ged *gedp,
     if (!gedp || !path)
 	return 0;
     uint64_t rev0 = gedp->i->ged_gdp->gd_draw_rev;
-    _sg_erase_path_scoped(gedp, ged_draw_dbpath_skip_lead_slash(path),
+    int erased = _sg_erase_path_scoped(gedp,
+	    ged_draw_dbpath_skip_lead_slash(path),
 	    view_ctx, mode);
-    return (gedp->i->ged_gdp->gd_draw_rev != rev0) ? 1 : 0;
+    return erased ? erased :
+	((gedp->i->ged_gdp->gd_draw_rev != rev0) ? 1 : 0);
 }
 
 
@@ -192,9 +197,11 @@ ged_draw_erase_path_prefix_string_scoped(struct ged *gedp,
     if (!gedp || !path)
 	return 0;
     uint64_t rev0 = gedp->i->ged_gdp->gd_draw_rev;
-    _sg_erase_all_paths_scoped(gedp, ged_draw_dbpath_skip_lead_slash(path),
+    int erased = _sg_erase_all_paths_scoped(gedp,
+	    ged_draw_dbpath_skip_lead_slash(path),
 	    view_ctx, mode);
-    return (gedp->i->ged_gdp->gd_draw_rev != rev0) ? 1 : 0;
+    return erased ? erased :
+	((gedp->i->ged_gdp->gd_draw_rev != rev0) ? 1 : 0);
 }
 
 

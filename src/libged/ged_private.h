@@ -100,6 +100,12 @@ struct ged_drawable {
     uint64_t                     gd_draw_index_path_candidates;
     uint64_t                     gd_draw_index_fallback_shape_scans;
     uint64_t                     gd_draw_index_fallback_group_scans;
+    uint64_t                     gd_draw_retained_child_source_creations;
+    uint64_t                     gd_draw_retained_primitive_wireframe_publications;
+    uint64_t                     gd_draw_retained_mesh_lod_runtime_updates;
+    uint64_t                     gd_draw_retained_source_owner_appends;
+    uint64_t                     gd_draw_retained_group_mutations;
+    uint64_t                     gd_draw_retained_shape_mutations;
     struct bu_ptbl               gd_draw_observers;     /**< @brief GED-owned post-transaction draw observer records */
     uintptr_t                    gd_draw_next_observer_token;
     int                          gd_draw_observers_init;
@@ -108,6 +114,8 @@ struct ged_drawable {
     void                        *gd_obol_controller;    /**< @brief optional borrowed BRLObolViewController wrapper for compatibility */
     ged_draw_observer_token       gd_obol_observer_token;
     int                          gd_obol_scene_controller_owned; /**< @brief non-zero when libged owns gd_obol_scene_controller */
+    int                          gd_obol_scene_controller_full_sync; /**< @brief non-zero when gd_obol_scene_controller has a full retained-scene mirror */
+    void                        *gd_obol_preserved_sources; /**< @brief libged-owned detached Obol source inventory pending controller handoff */
     struct bu_ptbl               gd_obol_context_tokens; /**< @brief GED-owned Obol scene-context tokens returned through legacy scene_ctx APIs */
     int                          gd_obol_context_tokens_init;
     uint64_t                     gd_obol_next_context_token;
@@ -140,6 +148,7 @@ struct ged_drawable {
 };
 
 __BEGIN_DECLS
+GED_EXPORT extern void ged_draw_obol_preserved_sources_free(struct ged *gedp);
 ged_draw_group_ref ged_scene_root_group_ref(struct ged *gedp);
 void ged_scene_root_group_ref_set(struct ged *gedp, ged_draw_group_ref root);
 void ged_scene_root_ref_clear(struct ged *gedp);

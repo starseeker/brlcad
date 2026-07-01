@@ -34,12 +34,15 @@ class SoBRLMaterialObject;
 class SoFieldSensor;
 class SoSensor;
 struct db_i;
+struct rt_mesh_lod;
 
 struct BRLOBOL_EXPORT BRLObolDatabaseSourceSummary {
     BRLObolDatabaseSourceSummary(void);
 
     SbBool valid;
     SbString path;
+    SbString instanceKey;
+    SbString displayName;
     SbBool hasParent;
     int drawTreeDepth;
     SbString parentGroupPath;
@@ -77,11 +80,47 @@ struct BRLOBOL_EXPORT BRLObolDatabaseSourceSummary {
     SbVec3f drawCenter;
     SbBool drawSizeValid;
     float drawSize;
+    SbBool sourceBoundsValid;
+    SbBox3f sourceBounds;
     SbBool stale;
     uint32_t staleReason;
     int realizedShapeCount;
     int realizedMeshCount;
     int realizedMaterialObjectCount;
+};
+
+struct BRLOBOL_EXPORT BRLObolAuxiliaryLineSetDisplayState {
+    BRLObolAuxiliaryLineSetDisplayState(void);
+
+    SbBool valid;
+    int drawMode;
+    SbBool visible;
+    SbBool highlighted;
+    int lineStyle;
+    int lineWidth;
+    float transparency;
+    SbBool materialColorValid;
+    SbColor materialColor;
+    uint32_t materialRevision;
+};
+
+struct BRLOBOL_EXPORT BRLObolDatabaseSourceDisplayPatch {
+    BRLObolDatabaseSourceDisplayPatch(void);
+
+    SbBool visibleValid;
+    SbBool visible;
+    SbBool highlightedValid;
+    SbBool highlighted;
+    SbBool lineStyleValid;
+    int lineStyle;
+    SbBool lineWidthValid;
+    int lineWidth;
+    SbBool transparencyValid;
+    float transparency;
+    SbBool colorOverrideValid;
+    SbBool colorOverride;
+    SbBool colorValid;
+    SbColor color;
 };
 
 struct BRLOBOL_EXPORT BRLObolRealizedShapeSummary {
@@ -101,6 +140,7 @@ struct BRLOBOL_EXPORT BRLObolRealizedShapeSummary {
     uint32_t sourceId;
     int ownerSourceIndex;
     SbString ownerSourcePath;
+    SbString ownerSourceInstanceKey;
     int ownerDrawMode;
     uint32_t ownerSourceRevision;
     uint32_t ownerInputsRevision;
@@ -165,6 +205,7 @@ struct BRLOBOL_EXPORT BRLObolRealizedMaterialSummary {
     uint32_t sourceId;
     int ownerSourceIndex;
     SbString ownerSourcePath;
+    SbString ownerSourceInstanceKey;
     int ownerDrawMode;
     uint32_t ownerSourceRevision;
     uint32_t ownerInputsRevision;
@@ -208,6 +249,7 @@ struct BRLOBOL_EXPORT BRLObolSceneTreeSummary {
     int childCount;
     int ownerSourceIndex;
     SbString ownerSourcePath;
+    SbString ownerSourceInstanceKey;
     SbString path;
     SbString sourceName;
     SbString sourceType;
@@ -242,6 +284,7 @@ struct BRLOBOL_EXPORT BRLObolSceneDisplaySummary {
     float drawSize;
     int ownerSourceIndex;
     SbString ownerSourcePath;
+    SbString ownerSourceInstanceKey;
     SbString path;
 };
 
@@ -255,6 +298,7 @@ struct BRLOBOL_EXPORT BRLObolSceneMaterialSummary {
     SbColor materialColor;
     int ownerSourceIndex;
     SbString ownerSourcePath;
+    SbString ownerSourceInstanceKey;
     SbString path;
 };
 
@@ -267,6 +311,7 @@ struct BRLOBOL_EXPORT BRLObolSceneBoundsSummary {
     SbBox3f bounds;
     int ownerSourceIndex;
     SbString ownerSourcePath;
+    SbString ownerSourceInstanceKey;
     SbString path;
 };
 
@@ -308,7 +353,10 @@ public:
 	MATERIAL_DATABASE = 1
     };
 
+    SoSFString instanceKey;
     SoSFString path;
+    SoSFString displayName;
+    SoSFBool auxiliarySource;
     SoSFEnum drawMode;
     SoSFBool visible;
     SoSFBool highlighted;
@@ -327,6 +375,9 @@ public:
     SoSFVec3f drawCenter;
     SoSFBool drawSizeValid;
     SoSFFloat drawSize;
+    SoSFBool sourceBoundsValid;
+    SoSFVec3f sourceBoundsMin;
+    SoSFVec3f sourceBoundsMax;
     SoSFFloat tessellationAbsTol;
     SoSFFloat tessellationRelTol;
     SoSFFloat tessellationNormTol;
@@ -362,16 +413,31 @@ public:
      */
     void setDatabase(struct db_i *dbip);
     struct db_i *getDatabase(void) const;
+    void setMeshLod(struct rt_mesh_lod *lod);
+    struct rt_mesh_lod *getMeshLod(void) const;
+    void clearMeshLod(void);
+    int setMeshLodBounds(const SbVec3f &bmin, const SbVec3f &bmax);
+    SbBool getMeshLodBounds(SbVec3f &bmin, SbVec3f &bmax) const;
+    void clearMeshLodBounds(void);
     void configureDatabaseSource(const char *sourcePath,
+	struct db_i *database,
+	int mode,
+	uint32_t revision);
+    void configureDatabaseSourceInstance(const char *sourceInstanceKey,
+	const char *sourcePath,
 	struct db_i *database,
 	int mode,
 	uint32_t revision);
     int retargetDatabaseSource(const char *sourcePath,
 	uint32_t revision);
+    int retargetDatabaseSourceInstance(const char *sourceInstanceKey,
+	const char *sourcePath,
+	uint32_t revision);
 
     void markStale(void);
     void markStale(uint32_t reason);
     int setDrawModeState(int drawMode);
+    int setDisplayNameState(const char *name);
     int setMaterialPolicyState(int materialPolicy);
     int setRealizationState(int realizationStatus,
 	uint32_t realizedSourceRevision,
@@ -397,12 +463,18 @@ public:
 	SbBool materialColorValid,
 	const SbColor &materialColor,
 	uint32_t materialRevision);
+    int applyDisplayPatch(const BRLObolDatabaseSourceDisplayPatch &patch);
     int setPlacementState(SbBool drawMatrixValid,
 	const SbMatrix &drawMatrix,
 	SbBool drawCenterValid,
 	const SbVec3f &drawCenter,
 	SbBool drawSizeValid,
 	float drawSize);
+    int setSourceBoundsState(SbBool boundsValid,
+	const SbVec3f &boundsMin,
+	const SbVec3f &boundsMax);
+    void clearSourceBounds(void);
+    SbBool getSourceBounds(SbBox3f &bounds) const;
     SbBool needsRealization(void) const;
     SbBool realizePrototypeWireframe(void);
     SbBool realizeDatabaseWireframe(void);
@@ -411,10 +483,18 @@ public:
     SoBRLVListShape *getRealizedShape(int index) const;
     int getRealizedShapeCount(void) const;
     SoBRLVListShape *findAuxiliaryVListShape(const char *name) const;
+    SoBRLDatabaseSource *findAuxiliarySource(const char *sourcePath) const;
     int setAuxiliaryLineSet(const char *name,
 	const SbVec3f *points,
 	const int32_t *commands,
-	int count);
+	int count,
+	const BRLObolAuxiliaryLineSetDisplayState *displayState = NULL);
+    int setAuxiliarySourceLineSet(const char *sourcePath,
+	const char *auxDisplayName,
+	const SbVec3f *points,
+	const int32_t *commands,
+	int count,
+	const BRLObolAuxiliaryLineSetDisplayState *displayState = NULL);
     int clearAuxiliaryShapes(void);
     SoBRLMeshShape *getRealizedMesh(void) const;
     SoBRLMeshShape *getRealizedMesh(int index) const;
@@ -454,7 +534,12 @@ private:
     void syncRealizedShapeOwnerState(void);
 
     struct db_i *dbip;
+    struct rt_mesh_lod *meshLod;
+    SbBool meshLodBoundsValid;
+    SbVec3f meshLodBoundsMin;
+    SbVec3f meshLodBoundsMax;
     SoFieldSensor *pathSensor;
+    SoFieldSensor *instanceKeySensor;
     SoFieldSensor *drawModeSensor;
     SoFieldSensor *tessellationAbsTolSensor;
     SoFieldSensor *tessellationRelTolSensor;

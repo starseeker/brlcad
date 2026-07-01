@@ -1015,6 +1015,8 @@ _ged_drawtrees(struct ged *gedp, int argc, const char *argv[], int kind, struct 
 
 		    ged_draw_group_ref_set_appearance_settings(gedp,
 			    dgcdp.draw_group_ref, &dgcdp.vs);
+		    (void)ged_draw_obol_group_update_appearance_for_path(gedp,
+			    argv[i], &dgcdp.vs);
 
 		    dgcdp_save = dgcdp;
 
@@ -1094,6 +1096,8 @@ _ged_drawtrees(struct ged *gedp, int argc, const char *argv[], int kind, struct 
 
 		    ged_draw_group_ref_set_appearance_settings(gedp,
 			    dgcdp.draw_group_ref, &dgcdp.vs);
+		    (void)ged_draw_obol_group_update_appearance_for_path(gedp,
+			    argv[i], &dgcdp.vs);
 
 		    av[0] = (char *)argv[i];
 		    ret = db_walk_tree(gedp->dbip,

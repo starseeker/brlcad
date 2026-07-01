@@ -228,6 +228,7 @@ public:
     int removeGroup(const char *groupPath);
     int clearGroup(const char *groupPath);
     int getGroupChildCount(const char *groupPath) const;
+    int getGroupDescendantGroupCount(const char *groupPath) const;
     int getGroupDatabaseSourceCount(const char *groupPath) const;
 
     SoNode *findShape(const char *shapePath) const;
@@ -277,6 +278,11 @@ public:
 	struct db_i *dbip,
 	int drawMode = SoBRLDatabaseSource::WIREFRAME,
 	uint32_t sourceRevision = 0);
+    int replaceDatabaseSourceInstance(const char *sourceInstanceKey,
+	const char *sourcePath,
+	struct db_i *dbip,
+	int drawMode = SoBRLDatabaseSource::WIREFRAME,
+	uint32_t sourceRevision = 0);
     int setDatabaseSourceState(const char *sourcePath,
 	SbBool sourceRevisionValid,
 	uint32_t sourceRevision,
@@ -291,16 +297,55 @@ public:
 	SbBool materialColorValid,
 	const SbColor &materialColor,
 	uint32_t materialRevision);
+    int setDatabaseSourceInstanceState(const char *sourceInstanceKey,
+	SbBool sourceRevisionValid,
+	uint32_t sourceRevision,
+	uint32_t inputsRevision,
+	SbBool visible,
+	SbBool highlighted,
+	int lineStyle,
+	int lineWidth,
+	float transparency,
+	SbBool colorOverride,
+	const SbColor &color,
+	SbBool materialColorValid,
+	const SbColor &materialColor,
+	uint32_t materialRevision);
+    int setDatabaseSourceDisplayPatch(const char *sourcePath,
+	const BRLObolDatabaseSourceDisplayPatch &patch);
+    int setDatabaseSourceInstanceDisplayPatch(const char *sourceInstanceKey,
+	const BRLObolDatabaseSourceDisplayPatch &patch);
+    int setDatabaseSourceDisplayName(const char *sourcePath,
+	const char *displayName);
+    int setDatabaseSourceInstanceDisplayName(const char *sourceInstanceKey,
+	const char *displayName);
+    int setDatabaseSourceBoundsState(const char *sourcePath,
+	SbBool boundsValid,
+	const SbVec3f &boundsMin,
+	const SbVec3f &boundsMax);
+    int setDatabaseSourceInstanceBoundsState(const char *sourceInstanceKey,
+	SbBool boundsValid,
+	const SbVec3f &boundsMin,
+	const SbVec3f &boundsMax);
     int setDatabaseSourceMaterialPolicy(const char *sourcePath,
+	int materialPolicy);
+    int setDatabaseSourceInstanceMaterialPolicy(const char *sourceInstanceKey,
 	int materialPolicy);
     int markDatabaseSourceStale(const char *sourcePath,
 	uint32_t staleReason);
+    int markDatabaseSourceInstanceStale(const char *sourceInstanceKey,
+	uint32_t staleReason);
     int moveDatabaseSourceToGroup(const char *sourcePath,
 	const char *groupPath);
+    int moveDatabaseSourceInstanceToGroup(const char *sourceInstanceKey,
+	const char *groupPath);
     int removeDatabaseSource(const char *sourcePath);
+    int removeDatabaseSourceInstance(const char *sourceInstanceKey);
     int clearDatabaseSources(void);
     SoBRLDatabaseSource *getDatabaseSource(int index) const;
     int getDatabaseSourceCount(void) const;
+    SoBRLDatabaseSource *findDatabaseSourceInstance(
+	const char *sourceInstanceKey) const;
     SbBool getDatabaseSourceSummary(int index,
 	BRLObolDatabaseSourceSummary &summary) const;
 

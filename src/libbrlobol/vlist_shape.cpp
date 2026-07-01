@@ -28,6 +28,14 @@ SoBRLVListShape::SoBRLVListShape(void)
 
     SO_NODE_ADD_EMPTY_MFIELD(point);
     SO_NODE_ADD_EMPTY_MFIELD(command);
+    SO_NODE_ADD_FIELD(annotationBasePoint, (SbVec3f(0.0f, 0.0f, 0.0f)));
+    SO_NODE_ADD_EMPTY_MFIELD(annotationPoint);
+    SO_NODE_ADD_EMPTY_MFIELD(annotationSegmentTextValid);
+    SO_NODE_ADD_EMPTY_MFIELD(annotationSegmentKind);
+    SO_NODE_ADD_EMPTY_MFIELD(annotationSegmentStart);
+    SO_NODE_ADD_EMPTY_MFIELD(annotationSegmentEnd);
+    SO_NODE_ADD_EMPTY_MFIELD(annotationTextRefPoint);
+    SO_NODE_ADD_EMPTY_MFIELD(annotationText);
     SO_NODE_ADD_EMPTY_MFIELD(pointColorValid);
     SO_NODE_ADD_EMPTY_MFIELD(pointColor);
     SO_NODE_ADD_EMPTY_MFIELD(pointScaleValid);
@@ -43,6 +51,7 @@ SoBRLVListShape::SoBRLVListShape(void)
     SO_NODE_ADD_FIELD(cacheIdentity, (""));
     SO_NODE_ADD_FIELD(sourceIdentity, (""));
     SO_NODE_ADD_FIELD(ownerSourcePath, (""));
+    SO_NODE_ADD_FIELD(ownerSourceInstanceKey, (""));
     SO_NODE_ADD_FIELD(ownerSourceRevision, (0));
     SO_NODE_ADD_FIELD(ownerInputsRevision, (0));
     SO_NODE_ADD_FIELD(ownerViewRevision, (0));
@@ -113,8 +122,16 @@ SoBRLVListShape::initClass(void)
 void
 SoBRLVListShape::setLineSet(const SbVec3f *points, const int32_t *commands, int count)
 {
+    this->precisePoints.clear();
     this->point.setNum(0);
     this->command.setNum(0);
+    this->annotationPoint.setNum(0);
+    this->annotationSegmentTextValid.setNum(0);
+    this->annotationSegmentKind.setNum(0);
+    this->annotationSegmentStart.setNum(0);
+    this->annotationSegmentEnd.setNum(0);
+    this->annotationTextRefPoint.setNum(0);
+    this->annotationText.setNum(0);
     this->pointColorValid.setNum(0);
     this->pointColor.setNum(0);
     this->pointScaleValid.setNum(0);
@@ -128,6 +145,40 @@ SoBRLVListShape::setLineSet(const SbVec3f *points, const int32_t *commands, int 
     this->command.setValues(0, count, commands);
 }
 
+void
+SoBRLVListShape::setPrecisePoints(const double *points, int count)
+{
+    this->precisePoints.clear();
+    if (!points || count <= 0)
+	return;
+
+    this->precisePoints.resize(static_cast<size_t>(count) * 3);
+    for (int i = 0; i < count; i++) {
+	this->precisePoints[static_cast<size_t>(i) * 3 + 0] =
+	    points[static_cast<size_t>(i) * 3 + 0];
+	this->precisePoints[static_cast<size_t>(i) * 3 + 1] =
+	    points[static_cast<size_t>(i) * 3 + 1];
+	this->precisePoints[static_cast<size_t>(i) * 3 + 2] =
+	    points[static_cast<size_t>(i) * 3 + 2];
+    }
+}
+
+SbBool
+SoBRLVListShape::getPrecisePoint(int index, double *pointOut) const
+{
+    if (!pointOut || index < 0)
+	return FALSE;
+
+    const size_t offset = static_cast<size_t>(index) * 3;
+    if (offset + 2 >= this->precisePoints.size())
+	return FALSE;
+
+    pointOut[0] = this->precisePoints[offset + 0];
+    pointOut[1] = this->precisePoints[offset + 1];
+    pointOut[2] = this->precisePoints[offset + 2];
+    return TRUE;
+}
+
 SbBool
 SoBRLVListShape::translatePoints(const SbVec3f &offset)
 {
@@ -138,6 +189,12 @@ SoBRLVListShape::translatePoints(const SbVec3f &offset)
     for (int i = 0; i < count; i++) {
 	const SbVec3f pointValue = this->point[i];
 	this->point.set1Value(i, pointValue + offset);
+	const size_t preciseOffset = static_cast<size_t>(i) * 3;
+	if (preciseOffset + 2 < this->precisePoints.size()) {
+	    this->precisePoints[preciseOffset + 0] += offset[0];
+	    this->precisePoints[preciseOffset + 1] += offset[1];
+	    this->precisePoints[preciseOffset + 2] += offset[2];
+	}
     }
 
     if (this->drawCenterValid.getValue()) {

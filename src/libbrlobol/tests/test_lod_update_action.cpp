@@ -88,6 +88,30 @@ make_lod_mesh(const char *path, const char *name)
 }
 
 static int
+find_database_source_summary_by_instance(SoBRLSceneController &scene,
+	const char *instanceKey,
+	BRLObolDatabaseSourceSummary &summary)
+{
+    summary = BRLObolDatabaseSourceSummary();
+    if (!instanceKey || !instanceKey[0])
+	return 0;
+
+    const int count = scene.getDatabaseSourceCount();
+    for (int i = 0; i < count; i++) {
+	BRLObolDatabaseSourceSummary candidate;
+	if (!scene.getDatabaseSourceSummary(i, candidate) ||
+		!candidate.valid)
+	    continue;
+	if (strcmp(candidate.instanceKey.getString(), instanceKey) == 0) {
+	    summary = candidate;
+	    return 1;
+	}
+    }
+
+    return 0;
+}
+
+static int
 matrix_nearly_equal(const SbMatrix &a, const SbMatrix &b)
 {
     return a.equals(b, 0.000001f);
@@ -1040,8 +1064,19 @@ test_scene_database_source_summary(void)
 	    SoBRLVListShape::MOVE,
 	    SoBRLVListShape::DRAW
 	};
+	BRLObolAuxiliaryLineSetDisplayState auxDisplay;
+	auxDisplay.valid = TRUE;
+	auxDisplay.drawMode = BRLOBOL_LOD_DRAW_SHADED;
+	auxDisplay.visible = FALSE;
+	auxDisplay.highlighted = TRUE;
+	auxDisplay.lineStyle = 7;
+	auxDisplay.lineWidth = 13;
+	auxDisplay.transparency = 0.625f;
+	auxDisplay.materialColorValid = TRUE;
+	auxDisplay.materialColor = SbColor(0.25f, 0.5f, 0.75f);
+	auxDisplay.materialRevision = 88;
 	if (scene.publishDatabaseSourceAuxiliaryLineSet("/summary/source",
-		"summary_aux", auxPoints, auxCommands, 2) != 1) {
+		"summary_aux", auxPoints, auxCommands, 2, &auxDisplay) != 1) {
 	    printf("FAIL: scene controller should publish auxiliary source line sets\n");
 	    root->unref();
 	    return 1;
@@ -1066,11 +1101,29 @@ test_scene_database_source_summary(void)
 		strcmp(shapeSummary.recordRole.getString(), "auxiliary") != 0 ||
 		!shapeSummary.databaseIntent ||
 		shapeSummary.nonDatabaseSource ||
+		shapeSummary.drawMode != BRLOBOL_LOD_DRAW_SHADED ||
+		shapeSummary.visible ||
+		!shapeSummary.highlighted ||
+		shapeSummary.materialRevision != 88 ||
+		!shapeSummary.materialColorValid ||
+		fabsf(shapeSummary.materialColor[0] - 0.25f) > 1.0e-6f ||
+		fabsf(shapeSummary.materialColor[1] - 0.5f) > 1.0e-6f ||
+		fabsf(shapeSummary.materialColor[2] - 0.75f) > 1.0e-6f ||
 		shapeSummary.pointCount != 2 ||
 		shapeSummary.segmentCount != 1 ||
 		strcmp(shapeSummary.ownerSourcePath.getString(),
 		    "/summary/source") != 0) {
 	    printf("FAIL: database source should summarize auxiliary line-set metadata\n");
+	    root->unref();
+	    return 1;
+	}
+	if (scene.markDatabaseSourceStale("/summary/source",
+		SoBRLDatabaseSource::STALE_DRAW) != 1 ||
+		!scene.realizePending() ||
+		!source->findAuxiliaryVListShape("summary_aux") ||
+		source->getRealizedShapeSummaryCount() != 2 ||
+		scene.getRealizedShapeSummaryCount() != 2) {
+	    printf("FAIL: database source realization should preserve auxiliary line-set ownership\n");
 	    root->unref();
 	    return 1;
 	}
@@ -1640,6 +1693,10 @@ test_scene_database_source_summary(void)
 	    groupScene.getGroupChildCount("/") != 1 ||
 	    groupScene.getGroupChildCount("assembly") != 1 ||
 	    groupScene.getGroupChildCount("missing") != -1 ||
+	    groupScene.getGroupDescendantGroupCount("/") != 2 ||
+	    groupScene.getGroupDescendantGroupCount("assembly") != 1 ||
+	    groupScene.getGroupDescendantGroupCount("assembly/leaf") != 0 ||
+	    groupScene.getGroupDescendantGroupCount("missing") != -1 ||
 	    groupScene.getStructuralRevision() <=
 		groupInitialStructuralRevision ||
 	    groupScene.getFrameRevision() <= groupInitialFrameRevision) {
@@ -2339,6 +2396,117 @@ test_scene_database_source_summary(void)
     }
     const uint64_t afterSourceStateFrameRevision =
 	ownedScene.getFrameRevision();
+    BRLObolDatabaseSourceDisplayPatch sourcePatch;
+    sourcePatch.lineWidthValid = TRUE;
+    sourcePatch.lineWidth = 9;
+    sourcePatch.transparencyValid = TRUE;
+    sourcePatch.transparency = 0.62f;
+    sourcePatch.colorOverrideValid = TRUE;
+    sourcePatch.colorOverride = FALSE;
+    sourcePatch.colorValid = TRUE;
+    sourcePatch.color = SbColor(0.9f, 0.8f, 0.7f);
+    if (ownedScene.setDatabaseSourceDisplayPatch("lod-submit.bot",
+	    sourcePatch) != 1 ||
+	    ownedScene.getStructuralRevision() != afterMoveStructuralRevision ||
+	    ownedScene.getFrameRevision() <= afterSourceStateFrameRevision ||
+	    !ownedScene.getDatabaseSourceSummary(0, summary) ||
+	    summary.sourceRevision != 24 ||
+	    summary.inputsRevision != 44 ||
+	    summary.lineWidth != 9 ||
+	    fabsf(summary.transparency - 0.62f) > 1.0e-6f ||
+	    summary.colorOverride) {
+	printf("FAIL: scene controller source display patch should update presentation without source revision changes\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+    const uint64_t afterSourcePatchFrameRevision =
+	ownedScene.getFrameRevision();
+    if (ownedScene.setDatabaseSourceDisplayPatch("lod-submit.bot",
+	    sourcePatch) != 0 ||
+	    ownedScene.getFrameRevision() != afterSourcePatchFrameRevision ||
+	    ownedScene.setDatabaseSourceDisplayPatch("missing.bot",
+		sourcePatch) != -1) {
+	printf("FAIL: scene controller source display patch should report no-op and missing updates\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+    const uint64_t afterSourceNameBaseFrameRevision =
+	ownedScene.getFrameRevision();
+    if (ownedScene.setDatabaseSourceDisplayName("lod-submit.bot",
+		"LoD Submit Display") != 1 ||
+	    ownedScene.getStructuralRevision() != afterMoveStructuralRevision ||
+	    ownedScene.getFrameRevision() <= afterSourceNameBaseFrameRevision ||
+	    !ownedScene.getDatabaseSourceSummary(0, summary) ||
+	    strcmp(summary.displayName.getString(),
+		"LoD Submit Display") != 0 ||
+	    !ownedScene.getSceneTreeSummaryForPath("lod-submit.bot",
+		treeSummary) ||
+	    strcmp(treeSummary.displayName.getString(),
+		"LoD Submit Display") != 0) {
+	printf("FAIL: scene controller should own database source display name\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+    const uint64_t afterSourceNameFrameRevision =
+	ownedScene.getFrameRevision();
+    if (ownedScene.setDatabaseSourceDisplayName("lod-submit.bot",
+		"LoD Submit Display") != 0 ||
+	    ownedScene.getFrameRevision() != afterSourceNameFrameRevision ||
+	    ownedScene.setDatabaseSourceDisplayName("missing.bot",
+		"Missing Display") != -1) {
+	printf("FAIL: scene controller source display name should report no-op and missing updates\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+    const uint64_t afterSourceBoundsBaseFrameRevision =
+	ownedScene.getFrameRevision();
+    const SbVec3f ownedBoundsMin(-2.0f, -3.0f, -4.0f);
+    const SbVec3f ownedBoundsMax(5.0f, 6.0f, 7.0f);
+    SbBox3f ownedSourceBounds;
+    if (ownedScene.setDatabaseSourceBoundsState("lod-submit.bot", TRUE,
+		ownedBoundsMin, ownedBoundsMax) != 1 ||
+	    ownedScene.getStructuralRevision() != afterMoveStructuralRevision ||
+	    ownedScene.getFrameRevision() <=
+		afterSourceBoundsBaseFrameRevision ||
+	    !ownedScene.getDatabaseSourceSummary(0, summary) ||
+	    !summary.sourceBoundsValid ||
+	    fabsf(summary.sourceBounds.getMin()[0] + 2.0f) > 1.0e-6f ||
+	    fabsf(summary.sourceBounds.getMin()[1] + 3.0f) > 1.0e-6f ||
+	    fabsf(summary.sourceBounds.getMin()[2] + 4.0f) > 1.0e-6f ||
+	    fabsf(summary.sourceBounds.getMax()[0] - 5.0f) > 1.0e-6f ||
+	    fabsf(summary.sourceBounds.getMax()[1] - 6.0f) > 1.0e-6f ||
+	    fabsf(summary.sourceBounds.getMax()[2] - 7.0f) > 1.0e-6f ||
+	    !ownedScene.getSceneSubtreeBounds("lod-submit.bot", TRUE,
+		ownedSourceBounds) ||
+	    fabsf(ownedSourceBounds.getMin()[0] + 2.0f) > 1.0e-6f ||
+	    fabsf(ownedSourceBounds.getMax()[2] - 7.0f) > 1.0e-6f) {
+	printf("FAIL: scene controller should own explicit database source bounds\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+    const uint64_t afterSourceBoundsFrameRevision =
+	ownedScene.getFrameRevision();
+    if (ownedScene.setDatabaseSourceBoundsState("lod-submit.bot", TRUE,
+		ownedBoundsMin, ownedBoundsMax) != 0 ||
+	    ownedScene.getFrameRevision() != afterSourceBoundsFrameRevision ||
+	    ownedScene.setDatabaseSourceBoundsState("missing.bot", TRUE,
+		ownedBoundsMin, ownedBoundsMax) != -1) {
+	printf("FAIL: scene controller source bounds should report no-op and missing updates\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
     if (ownedScene.setDatabaseSourceState("lod-submit.bot", FALSE, 99, 45,
 		FALSE, TRUE, 2, 6, 0.35f, TRUE, sourceColor, TRUE,
 		sourceMaterial, 77) != 1 ||
@@ -2401,6 +2569,25 @@ test_scene_database_source_summary(void)
 	    ownedScene.markDatabaseSourceStale("missing.bot",
 		SoBRLDatabaseSource::STALE_INPUTS) != -1) {
 	printf("FAIL: scene controller should own database source stale marking\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+    if (ownedScene.setDatabaseSourceDrawMode("lod-submit.bot",
+		SoBRLDatabaseSource::WIREFRAME) < 0 ||
+	    ownedScene.setDatabaseSourceRealizationRoleFlags("lod-submit.bot",
+		SoBRLDatabaseSource::REALIZATION_ROLE_MESH) < 0 ||
+	    !ownedScene.realizePending() ||
+	    !ownedScene.getDatabaseSourceSummary(0, summary) ||
+	    summary.stale ||
+	    summary.realizationStatus != SoBRLDatabaseSource::REALIZED ||
+	    summary.realizedMeshCount != 1 ||
+	    summary.realizedShapeCount != 0 ||
+	    !ownedSource->getRealizedMesh() ||
+	    ownedSource->getRealizedMesh()->point.getNum() == 0 ||
+	    ownedSource->getRealizedMesh()->coordIndex.getNum() == 0) {
+	printf("FAIL: mesh realization role should realize database mesh even in wire draw mode\n");
 	ownedRoot->unref();
 	db_close(dbip);
 	bu_file_delete(dbpath);
@@ -2502,6 +2689,130 @@ test_scene_database_source_summary(void)
 	    sceneSummary.structuralRevision != afterClearStructuralRevision ||
 	    sceneSummary.frameRevision != afterClearFrameRevision) {
 	printf("FAIL: scene controller no-op clear should not advance scene revisions\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
+    const char *sharedInstanceKey = "scope/shared/lod-submit.bot";
+    const char *viewInstanceKey = "scope/view/V0/lod-submit.bot";
+    if (ownedScene.replaceDatabaseSourceInstance(sharedInstanceKey,
+		"lod-submit.bot", dbip, SoBRLDatabaseSource::WIREFRAME,
+		31) != 1 ||
+	    ownedScene.replaceDatabaseSourceInstance(viewInstanceKey,
+		"lod-submit.bot", dbip, SoBRLDatabaseSource::SHADED,
+		32) != 1 ||
+	    ownedScene.getDatabaseSourceCount() != 2 ||
+	    !ownedScene.findDatabaseSourceInstance(sharedInstanceKey) ||
+	    !ownedScene.findDatabaseSourceInstance(viewInstanceKey)) {
+	printf("FAIL: scene controller should own duplicate database paths by source instance key\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
+    BRLObolDatabaseSourceSummary sharedSummary;
+    BRLObolDatabaseSourceSummary viewSummary;
+    if (!find_database_source_summary_by_instance(ownedScene,
+		sharedInstanceKey, sharedSummary) ||
+	    !find_database_source_summary_by_instance(ownedScene,
+		viewInstanceKey, viewSummary) ||
+	    strcmp(sharedSummary.path.getString(), "lod-submit.bot") != 0 ||
+	    strcmp(viewSummary.path.getString(), "lod-submit.bot") != 0 ||
+	    strcmp(sharedSummary.instanceKey.getString(),
+		sharedInstanceKey) != 0 ||
+	    strcmp(viewSummary.instanceKey.getString(), viewInstanceKey) != 0 ||
+	    sharedSummary.drawMode != SoBRLDatabaseSource::WIREFRAME ||
+	    viewSummary.drawMode != SoBRLDatabaseSource::SHADED) {
+	printf("FAIL: scene controller source summaries should separate instance key from database path\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
+    if (ownedScene.moveDatabaseSourceInstanceToGroup(viewInstanceKey,
+		"views/V0") != 1 ||
+	    ownedScene.setDatabaseSourceInstanceState(sharedInstanceKey, TRUE,
+		33, 44, FALSE, TRUE, 3, 11, 0.5f, TRUE,
+		SbColor(0.1f, 0.2f, 0.3f), FALSE,
+		SbColor(1.0f, 1.0f, 1.0f), 0) != 1 ||
+	    !find_database_source_summary_by_instance(ownedScene,
+		sharedInstanceKey, sharedSummary) ||
+	    !find_database_source_summary_by_instance(ownedScene,
+		viewInstanceKey, viewSummary) ||
+	    sharedSummary.visible ||
+	    !sharedSummary.highlighted ||
+	    sharedSummary.lineWidth != 11 ||
+	    viewSummary.visible != TRUE ||
+	    viewSummary.highlighted != FALSE ||
+	    strcmp(viewSummary.parentGroupPath.getString(), "views/V0") != 0) {
+	printf("FAIL: scene controller source instance state should mutate only the targeted owner\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
+    if (ownedScene.setDatabaseSourceInstanceRealizationRoleFlags(
+		sharedInstanceKey,
+		SoBRLDatabaseSource::REALIZATION_ROLE_MESH) < 0 ||
+	    ownedScene.setDatabaseSourceInstanceRealizationRoleFlags(
+		viewInstanceKey,
+		SoBRLDatabaseSource::REALIZATION_ROLE_MESH) < 0 ||
+	    !ownedScene.realizePending()) {
+	printf("FAIL: scene controller should realize duplicate source instances independently\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
+    int sharedRealized = 0;
+    int viewRealized = 0;
+    const int realizedCount = ownedScene.getRealizedShapeSummaryCount();
+    for (int i = 0; i < realizedCount; i++) {
+	BRLObolRealizedShapeSummary instanceShapeSummary;
+	if (!ownedScene.getRealizedShapeSummary(i, instanceShapeSummary) ||
+		!instanceShapeSummary.valid)
+	    continue;
+	const char *instanceShapePath =
+	    instanceShapeSummary.path.getString();
+	const int instancePathMatches =
+	    strcmp(instanceShapePath, "lod-submit.bot") == 0 ||
+	    strcmp(instanceShapePath, "/lod-submit.bot") == 0;
+	if (strcmp(instanceShapeSummary.ownerSourceInstanceKey.getString(),
+		sharedInstanceKey) == 0 &&
+		instancePathMatches &&
+		strstr(instanceShapeSummary.sourceIdentity.getString(),
+		    sharedInstanceKey))
+	    sharedRealized = 1;
+	if (strcmp(instanceShapeSummary.ownerSourceInstanceKey.getString(),
+		viewInstanceKey) == 0 &&
+		instancePathMatches &&
+		strstr(instanceShapeSummary.sourceIdentity.getString(),
+		    viewInstanceKey))
+	    viewRealized = 1;
+    }
+    if (!sharedRealized || !viewRealized) {
+	printf("FAIL: realized source summaries should preserve scoped owner instance identity\n");
+	ownedRoot->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
+    if (ownedScene.removeDatabaseSourceInstance(sharedInstanceKey) != 1 ||
+	    ownedScene.getDatabaseSourceCount() != 1 ||
+	    ownedScene.findDatabaseSourceInstance(sharedInstanceKey) ||
+	    !ownedScene.findDatabaseSourceInstance(viewInstanceKey) ||
+	    !find_database_source_summary_by_instance(ownedScene,
+		viewInstanceKey, viewSummary) ||
+	    strcmp(viewSummary.path.getString(), "lod-submit.bot") != 0 ||
+	    strcmp(viewSummary.parentGroupPath.getString(), "views/V0") != 0) {
+	printf("FAIL: scene controller should remove only the targeted source instance\n");
 	ownedRoot->unref();
 	db_close(dbip);
 	bu_file_delete(dbpath);

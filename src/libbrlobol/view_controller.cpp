@@ -2012,6 +2012,13 @@ BRLObolViewController::getGroupChildCount(const char *groupPath) const
 }
 
 int
+BRLObolViewController::getGroupDescendantGroupCount(
+	const char *groupPath) const
+{
+    return this->sceneController.getGroupDescendantGroupCount(groupPath);
+}
+
+int
 BRLObolViewController::getGroupDatabaseSourceCount(
 	const char *groupPath) const
 {
@@ -2148,6 +2155,23 @@ BRLObolViewController::replaceDatabaseSource(const char *sourcePath,
 }
 
 int
+BRLObolViewController::replaceDatabaseSourceInstance(
+	const char *sourceInstanceKey,
+	const char *sourcePath,
+	struct db_i *dbip,
+	int drawMode,
+	uint32_t sourceRevision)
+{
+    int changed = this->sceneController.replaceDatabaseSourceInstance(
+	    sourceInstanceKey, sourcePath, dbip, drawMode, sourceRevision);
+    if (changed > 0) {
+	this->clearRtPickCaches();
+	this->requestRender("database-source");
+    }
+    return changed;
+}
+
+int
 BRLObolViewController::setDatabaseSourceState(const char *sourcePath,
 	SbBool sourceRevisionValid,
 	uint32_t sourceRevision,
@@ -2176,12 +2200,144 @@ BRLObolViewController::setDatabaseSourceState(const char *sourcePath,
 }
 
 int
+BRLObolViewController::setDatabaseSourceInstanceState(
+	const char *sourceInstanceKey,
+	SbBool sourceRevisionValid,
+	uint32_t sourceRevision,
+	uint32_t inputsRevision,
+	SbBool visible,
+	SbBool highlighted,
+	int lineStyle,
+	int lineWidth,
+	float transparency,
+	SbBool colorOverride,
+	const SbColor &color,
+	SbBool materialColorValid,
+	const SbColor &materialColor,
+	uint32_t materialRevision)
+{
+    const int changed = this->sceneController.setDatabaseSourceInstanceState(
+	    sourceInstanceKey, sourceRevisionValid, sourceRevision,
+	    inputsRevision, visible, highlighted, lineStyle, lineWidth,
+	    transparency, colorOverride, color, materialColorValid,
+	    materialColor, materialRevision);
+    if (changed > 0) {
+	this->clearRtPickCaches();
+	this->requestRender("database-source");
+    }
+    return changed;
+}
+
+int
+BRLObolViewController::setDatabaseSourceDisplayPatch(const char *sourcePath,
+	const BRLObolDatabaseSourceDisplayPatch &patch)
+{
+    const int changed = this->sceneController.setDatabaseSourceDisplayPatch(
+	    sourcePath, patch);
+    if (changed > 0) {
+	this->clearRtPickCaches();
+	this->requestRender("database-source");
+    }
+    return changed;
+}
+
+int
+BRLObolViewController::setDatabaseSourceInstanceDisplayPatch(
+	const char *sourceInstanceKey,
+	const BRLObolDatabaseSourceDisplayPatch &patch)
+{
+    const int changed =
+	this->sceneController.setDatabaseSourceInstanceDisplayPatch(
+		sourceInstanceKey, patch);
+    if (changed > 0) {
+	this->clearRtPickCaches();
+	this->requestRender("database-source");
+    }
+    return changed;
+}
+
+int
+BRLObolViewController::setDatabaseSourceDisplayName(const char *sourcePath,
+	const char *displayName)
+{
+    const int changed = this->sceneController.setDatabaseSourceDisplayName(
+	    sourcePath, displayName);
+    if (changed > 0) {
+	this->clearRtPickCaches();
+	this->requestRender("database-source");
+    }
+    return changed;
+}
+
+int
+BRLObolViewController::setDatabaseSourceInstanceDisplayName(
+	const char *sourceInstanceKey,
+	const char *displayName)
+{
+    const int changed =
+	this->sceneController.setDatabaseSourceInstanceDisplayName(
+		sourceInstanceKey, displayName);
+    if (changed > 0) {
+	this->clearRtPickCaches();
+	this->requestRender("database-source");
+    }
+    return changed;
+}
+
+int
+BRLObolViewController::setDatabaseSourceBoundsState(const char *sourcePath,
+	SbBool boundsValid,
+	const SbVec3f &boundsMin,
+	const SbVec3f &boundsMax)
+{
+    const int changed = this->sceneController.setDatabaseSourceBoundsState(
+	    sourcePath, boundsValid, boundsMin, boundsMax);
+    if (changed > 0) {
+	this->clearRtPickCaches();
+	this->requestRender("database-source");
+    }
+    return changed;
+}
+
+int
+BRLObolViewController::setDatabaseSourceInstanceBoundsState(
+	const char *sourceInstanceKey,
+	SbBool boundsValid,
+	const SbVec3f &boundsMin,
+	const SbVec3f &boundsMax)
+{
+    const int changed =
+	this->sceneController.setDatabaseSourceInstanceBoundsState(
+		sourceInstanceKey, boundsValid, boundsMin, boundsMax);
+    if (changed > 0) {
+	this->clearRtPickCaches();
+	this->requestRender("database-source");
+    }
+    return changed;
+}
+
+int
 BRLObolViewController::setDatabaseSourceMaterialPolicy(
 	const char *sourcePath,
 	int materialPolicy)
 {
     const int changed = this->sceneController.setDatabaseSourceMaterialPolicy(
 	    sourcePath, materialPolicy);
+    if (changed > 0) {
+	this->clearRtPickCaches();
+	this->requestRender("database-source");
+    }
+    return changed;
+}
+
+int
+BRLObolViewController::setDatabaseSourceInstanceMaterialPolicy(
+	const char *sourceInstanceKey,
+	int materialPolicy)
+{
+    const int changed =
+	this->sceneController.setDatabaseSourceInstanceMaterialPolicy(
+		sourceInstanceKey, materialPolicy);
     if (changed > 0) {
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
@@ -2203,9 +2359,36 @@ BRLObolViewController::markDatabaseSourceStale(const char *sourcePath,
 }
 
 int
+BRLObolViewController::markDatabaseSourceInstanceStale(
+	const char *sourceInstanceKey,
+	uint32_t staleReason)
+{
+    const int changed = this->sceneController.markDatabaseSourceInstanceStale(
+	    sourceInstanceKey, staleReason);
+    if (changed > 0) {
+	this->clearRtPickCaches();
+	this->requestRender("database-source");
+    }
+    return changed;
+}
+
+int
 BRLObolViewController::removeDatabaseSource(const char *sourcePath)
 {
     int removed = this->sceneController.removeDatabaseSource(sourcePath);
+    if (removed > 0) {
+	this->clearRtPickCaches();
+	this->requestRender("database-source");
+    }
+    return removed;
+}
+
+int
+BRLObolViewController::removeDatabaseSourceInstance(
+	const char *sourceInstanceKey)
+{
+    int removed = this->sceneController.removeDatabaseSourceInstance(
+	    sourceInstanceKey);
     if (removed > 0) {
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
@@ -2219,6 +2402,20 @@ BRLObolViewController::moveDatabaseSourceToGroup(const char *sourcePath,
 {
     int moved = this->sceneController.moveDatabaseSourceToGroup(sourcePath,
 	    groupPath);
+    if (moved > 0) {
+	this->clearRtPickCaches();
+	this->requestRender("database-source");
+    }
+    return moved;
+}
+
+int
+BRLObolViewController::moveDatabaseSourceInstanceToGroup(
+	const char *sourceInstanceKey,
+	const char *groupPath)
+{
+    int moved = this->sceneController.moveDatabaseSourceInstanceToGroup(
+	    sourceInstanceKey, groupPath);
     if (moved > 0) {
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
@@ -2247,6 +2444,14 @@ int
 BRLObolViewController::getDatabaseSourceCount(void) const
 {
     return this->sceneController.getDatabaseSourceCount();
+}
+
+SoBRLDatabaseSource *
+BRLObolViewController::findDatabaseSourceInstance(
+	const char *sourceInstanceKey) const
+{
+    return this->sceneController.findDatabaseSourceInstance(
+	    sourceInstanceKey);
 }
 
 SbBool

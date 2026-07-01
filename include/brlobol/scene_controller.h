@@ -25,6 +25,8 @@
 class SoNode;
 class SoGroup;
 class SoBRLDatabaseSource;
+struct BRLObolAuxiliaryLineSetDisplayState;
+struct BRLObolDatabaseSourceDisplayPatch;
 struct db_i;
 struct BRLObolDatabaseSourceSummary;
 struct BRLObolRealizedMaterialSummary;
@@ -108,6 +110,7 @@ public:
     int removeGroup(const char *groupPath);
     int clearGroup(const char *groupPath);
     int getGroupChildCount(const char *groupPath) const;
+    int getGroupDescendantGroupCount(const char *groupPath) const;
     int getGroupDatabaseSourceCount(const char *groupPath) const;
     SbBool getSceneSubtreeBounds(const char *nodePath,
 	SbBool includeOverlays,
@@ -159,17 +162,54 @@ public:
 	const char *name,
 	const SbVec3f *points,
 	const int32_t *commands,
-	int count);
+	int count,
+	const BRLObolAuxiliaryLineSetDisplayState *displayState = NULL);
+    int publishDatabaseSourceAuxiliarySourceLineSet(
+	const char *sourcePath,
+	const char *auxiliarySourcePath,
+	const char *displayName,
+	const SbVec3f *points,
+	const int32_t *commands,
+	int count,
+	const BRLObolAuxiliaryLineSetDisplayState *displayState = NULL);
+    int publishDatabaseSourceInstanceAuxiliaryLineSet(
+	const char *sourceInstanceKey,
+	const char *name,
+	const SbVec3f *points,
+	const int32_t *commands,
+	int count,
+	const BRLObolAuxiliaryLineSetDisplayState *displayState = NULL);
+    int publishDatabaseSourceInstanceAuxiliarySourceLineSet(
+	const char *sourceInstanceKey,
+	const char *auxiliarySourcePath,
+	const char *displayName,
+	const SbVec3f *points,
+	const int32_t *commands,
+	int count,
+	const BRLObolAuxiliaryLineSetDisplayState *displayState = NULL);
     int clearDatabaseSourceAuxiliaryShapes(const char *sourcePath);
+    int clearDatabaseSourceInstanceAuxiliaryShapes(
+	const char *sourceInstanceKey);
 
     SoBRLDatabaseSource *getDatabaseSource(int index) const;
     int getDatabaseSourceCount(void) const;
     SoBRLDatabaseSource *findDatabaseSource(const char *sourcePath) const;
+    SoBRLDatabaseSource *findDatabaseSourceInstance(
+	const char *sourceInstanceKey) const;
     int replaceDatabaseSource(const char *sourcePath,
 	struct db_i *database,
 	int drawMode,
 	uint32_t sourceRevision);
+    int replaceDatabaseSourceInstance(const char *sourceInstanceKey,
+	const char *sourcePath,
+	struct db_i *database,
+	int drawMode,
+	uint32_t sourceRevision);
     int renameDatabaseSource(const char *sourcePath,
+	const char *newSourcePath,
+	uint32_t sourceRevision);
+    int renameDatabaseSourceInstance(const char *sourceInstanceKey,
+	const char *newSourceInstanceKey,
 	const char *newSourcePath,
 	uint32_t sourceRevision);
     int setDatabaseSourceState(const char *sourcePath,
@@ -186,9 +226,35 @@ public:
 	SbBool materialColorValid,
 	const SbColor &materialColor,
 	uint32_t materialRevision);
+    int setDatabaseSourceInstanceState(const char *sourceInstanceKey,
+	SbBool sourceRevisionValid,
+	uint32_t sourceRevision,
+	uint32_t inputsRevision,
+	SbBool visible,
+	SbBool highlighted,
+	int lineStyle,
+	int lineWidth,
+	float transparency,
+	SbBool colorOverride,
+	const SbColor &color,
+	SbBool materialColorValid,
+	const SbColor &materialColor,
+	uint32_t materialRevision);
+    int setDatabaseSourceDisplayPatch(const char *sourcePath,
+	const BRLObolDatabaseSourceDisplayPatch &patch);
+    int setDatabaseSourceInstanceDisplayPatch(const char *sourceInstanceKey,
+	const BRLObolDatabaseSourceDisplayPatch &patch);
+    int setDatabaseSourceDisplayName(const char *sourcePath,
+	const char *displayName);
+    int setDatabaseSourceInstanceDisplayName(const char *sourceInstanceKey,
+	const char *displayName);
     int setDatabaseSourceDrawMode(const char *sourcePath,
 	int drawMode);
+    int setDatabaseSourceInstanceDrawMode(const char *sourceInstanceKey,
+	int drawMode);
     int setDatabaseSourceMaterialPolicy(const char *sourcePath,
+	int materialPolicy);
+    int setDatabaseSourceInstanceMaterialPolicy(const char *sourceInstanceKey,
 	int materialPolicy);
     int setDatabaseSourcePlacementState(const char *sourcePath,
 	SbBool drawMatrixValid,
@@ -197,7 +263,24 @@ public:
 	const SbVec3f &drawCenter,
 	SbBool drawSizeValid,
 	float drawSize);
+    int setDatabaseSourceInstancePlacementState(const char *sourceInstanceKey,
+	SbBool drawMatrixValid,
+	const SbMatrix &drawMatrix,
+	SbBool drawCenterValid,
+	const SbVec3f &drawCenter,
+	SbBool drawSizeValid,
+	float drawSize);
+    int setDatabaseSourceBoundsState(const char *sourcePath,
+	SbBool boundsValid,
+	const SbVec3f &boundsMin,
+	const SbVec3f &boundsMax);
+    int setDatabaseSourceInstanceBoundsState(const char *sourceInstanceKey,
+	SbBool boundsValid,
+	const SbVec3f &boundsMin,
+	const SbVec3f &boundsMax);
     int markDatabaseSourceStale(const char *sourcePath,
+	uint32_t staleReason);
+    int markDatabaseSourceInstanceStale(const char *sourceInstanceKey,
 	uint32_t staleReason);
     int setDatabaseSourceRealizationState(const char *sourcePath,
 	int realizationStatus,
@@ -205,7 +288,17 @@ public:
 	uint32_t realizedInputsRevision,
 	uint32_t staleReason,
 	const char *diagnostic = NULL);
+    int setDatabaseSourceInstanceRealizationState(
+	const char *sourceInstanceKey,
+	int realizationStatus,
+	uint32_t realizedSourceRevision,
+	uint32_t realizedInputsRevision,
+	uint32_t staleReason,
+	const char *diagnostic = NULL);
     int setDatabaseSourceRealizationRoleFlags(const char *sourcePath,
+	int roleFlags);
+    int setDatabaseSourceInstanceRealizationRoleFlags(
+	const char *sourceInstanceKey,
 	int roleFlags);
     int setDatabaseSourceRealizationViewPolicy(const char *sourcePath,
 	SbBool viewDependent,
@@ -213,9 +306,19 @@ public:
 	uint32_t botThreshold,
 	float curveScale,
 	float pointScale);
+    int setDatabaseSourceInstanceRealizationViewPolicy(
+	const char *sourceInstanceKey,
+	SbBool viewDependent,
+	float viewScale,
+	uint32_t botThreshold,
+	float curveScale,
+	float pointScale);
     int moveDatabaseSourceToGroup(const char *sourcePath,
 	const char *groupPath);
+    int moveDatabaseSourceInstanceToGroup(const char *sourceInstanceKey,
+	const char *groupPath);
     int removeDatabaseSource(const char *sourcePath);
+    int removeDatabaseSourceInstance(const char *sourceInstanceKey);
     int clearDatabaseSources(void);
     SbBool getDatabaseSourceSummary(int index,
 	BRLObolDatabaseSourceSummary &summary) const;

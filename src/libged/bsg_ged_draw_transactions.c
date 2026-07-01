@@ -476,7 +476,8 @@ _ged_draw_apply_database_rename(struct ged *gedp,
     ctx.gedp = gedp;
     ctx.old_path = old_path;
     ctx.new_path = new_path;
-    ctx.changed = 0;
+    ctx.changed = ged_draw_obol_database_source_rename_for_path(gedp,
+	    old_path, new_path, ged_draw_scene_revision(gedp) + 1) ? 1 : 0;
     ged_draw_foreach_group_record(gedp, _ged_draw_rename_group_cb, &ctx);
     return ctx.changed;
 }
@@ -1461,14 +1462,17 @@ _ged_draw_reexpand_source_groups(struct ged *gedp, const char *path,
 	ged_draw_shape_ref_index_for_component(gedp, ctx.path,
 		_ged_draw_reexpand_source_shape_index_cb, &ctx) : -1;
 
-    if (groups_indexed < 0 || shapes_indexed < 0) {
+    if (groups_indexed < 0) {
 	struct ged_drawable *gdp = _ged_draw_gdp(gedp);
-	if (gdp) {
+	if (gdp)
 	    gdp->gd_draw_index_fallback_group_scans++;
-	    gdp->gd_draw_index_fallback_shape_scans++;
-	}
 	ged_draw_foreach_group_record(gedp,
 		_ged_draw_reexpand_source_group_cb, &ctx);
+    }
+    if (shapes_indexed < 0) {
+	struct ged_drawable *gdp = _ged_draw_gdp(gedp);
+	if (gdp)
+	    gdp->gd_draw_index_fallback_shape_scans++;
 	ged_draw_foreach_shape_record(gedp,
 		_ged_draw_reexpand_source_shape_cb, &ctx);
     }
@@ -1605,9 +1609,54 @@ _ged_draw_txn_note_name(struct ged_draw_transaction_result *result,
 {
     if (!result || !name || !*name)
 	return;
-    if (bu_vls_strlen(&result->names))
+    if (bu_vls_strlen(&result->names)) {
 	bu_vls_putc(&result->names, ' ');
+    }
     bu_vls_printf(&result->names, "%s", name);
+}
+
+
+static int
+_ged_draw_txn_kind_changes_scene(enum ged_draw_transaction_kind kind)
+{
+    switch (kind) {
+	case GED_DRAW_TXN_DRAW:
+	case GED_DRAW_TXN_ERASE:
+	case GED_DRAW_TXN_ERASE_PREFIX:
+	case GED_DRAW_TXN_TEARDOWN:
+	case GED_DRAW_TXN_CLEAR:
+	case GED_DRAW_TXN_CLEAR_SCOPE:
+	case GED_DRAW_TXN_TRANSPARENCY:
+	case GED_DRAW_TXN_VISIBILITY:
+	case GED_DRAW_TXN_HIGHLIGHT:
+	case GED_DRAW_TXN_REFRESH_MATERIAL_COLORS:
+	case GED_DRAW_TXN_REDRAW:
+	case GED_DRAW_TXN_STALE_SOURCE:
+	case GED_DRAW_TXN_SOURCE_UPDATED:
+	case GED_DRAW_TXN_SOURCE_RENAMED:
+	case GED_DRAW_TXN_SOURCE_REFERENCES_REMOVED:
+	    return 1;
+	case GED_DRAW_TXN_NONE:
+	case GED_DRAW_TXN_DEFAULT_DRAW_MODE:
+	case GED_DRAW_TXN_MATERIAL_CHANGED:
+	default:
+	    return 0;
+    }
+}
+
+
+static void
+_ged_draw_txn_bump_revision_if_needed(struct ged *gedp,
+				      const struct ged_draw_transaction *txn,
+				      int ret,
+				      uint64_t rev0)
+{
+    if (!gedp || !txn || ret <= 0 || !_ged_draw_txn_kind_changes_scene(txn->kind))
+	return;
+    if (ged_draw_scene_revision(gedp) != rev0)
+	return;
+    if (gedp->i && gedp->i->ged_gdp)
+	gedp->i->ged_gdp->gd_draw_rev++;
 }
 
 
@@ -1761,6 +1810,8 @@ _ged_draw_apply_transaction_inner(struct ged *gedp,
 	    break;
     }
 
+    _ged_draw_txn_bump_revision_if_needed(gedp, txn, ret, rev0);
+
     if (result && ret) {
 	if (path) {
 	    _ged_draw_txn_note_name(result, path);
@@ -1785,6 +1836,8 @@ ged_draw_apply_transaction(struct ged *gedp,
 	}
 	return 0;
     }
+
+    (void)ged_draw_obol_scene_controller_ensure_owned(gedp, 1);
 
     struct ged_draw_transaction_result local_result;
     int use_local_result = 0;

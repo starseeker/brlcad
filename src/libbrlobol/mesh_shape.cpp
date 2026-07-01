@@ -60,6 +60,7 @@ SoBRLMeshShape::SoBRLMeshShape(void)
     SO_NODE_ADD_FIELD(cacheIdentity, (""));
     SO_NODE_ADD_FIELD(sourceIdentity, (""));
     SO_NODE_ADD_FIELD(ownerSourcePath, (""));
+    SO_NODE_ADD_FIELD(ownerSourceInstanceKey, (""));
     SO_NODE_ADD_FIELD(ownerSourceRevision, (0));
     SO_NODE_ADD_FIELD(ownerInputsRevision, (0));
     SO_NODE_ADD_FIELD(ownerViewRevision, (0));

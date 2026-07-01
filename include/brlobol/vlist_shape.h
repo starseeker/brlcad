@@ -14,6 +14,7 @@
 #include <Inventor/fields/SoMFBool.h>
 #include <Inventor/fields/SoMFColor.h>
 #include <Inventor/fields/SoMFFloat.h>
+#include <Inventor/fields/SoMFString.h>
 #include <Inventor/fields/SoMFVec3f.h>
 #include <Inventor/fields/SoMFInt32.h>
 #include <Inventor/fields/SoSFBool.h>
@@ -25,6 +26,8 @@
 #include <Inventor/fields/SoSFUInt32.h>
 #include <Inventor/fields/SoSFVec3f.h>
 #include <Inventor/nodes/SoShape.h>
+
+#include <vector>
 
 class SoPickedPoint;
 class SoGLRenderAction;
@@ -44,6 +47,14 @@ public:
 
     SoMFVec3f point;
     SoMFInt32 command;
+    SoSFVec3f annotationBasePoint;
+    SoMFVec3f annotationPoint;
+    SoMFBool annotationSegmentTextValid;
+    SoMFInt32 annotationSegmentKind;
+    SoMFInt32 annotationSegmentStart;
+    SoMFInt32 annotationSegmentEnd;
+    SoMFInt32 annotationTextRefPoint;
+    SoMFString annotationText;
     SoMFBool pointColorValid;
     SoMFColor pointColor;
     SoMFBool pointScaleValid;
@@ -59,6 +70,7 @@ public:
     SoSFString cacheIdentity;
     SoSFString sourceIdentity;
     SoSFString ownerSourcePath;
+    SoSFString ownerSourceInstanceKey;
     SoSFUInt32 ownerSourceRevision;
     SoSFUInt32 ownerInputsRevision;
     SoSFUInt32 ownerViewRevision;
@@ -119,6 +131,8 @@ public:
     static void initClass(void);
 
     void setLineSet(const SbVec3f *points, const int32_t *commands, int count);
+    void setPrecisePoints(const double *points, int count);
+    SbBool getPrecisePoint(int index, double *pointOut) const;
     SbBool translatePoints(const SbVec3f &offset);
     void setDrawCenter(const SbVec3f &center);
     SbBool updateDrawBoundsFromPoints(void);
@@ -137,6 +151,9 @@ public:
 
     void GLRender(SoGLRenderAction *action) override;
     void computeBBox(SoAction *action, SbBox3f &box, SbVec3f &center) override;
+
+private:
+    std::vector<double> precisePoints;
 
 protected:
     virtual ~SoBRLVListShape(void);

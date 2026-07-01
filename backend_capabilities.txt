@@ -45,6 +45,14 @@ Guiding Constraints
   from changes that impact other categories solely to keep work "pure" to one
   category.  The priority is making good progress towards our desired final
   end state.
+* Capability boundaries are sequencing aids, not reasons to preserve
+  transitional ownership layers once a direct Obol/libbrlobol move is ready.
+* Prefer straight owner replacement with targeted parity tests over new
+  compatibility layers.  Add compatibility glue only when it directly keeps a
+  required behavior or test live during a larger owner move.
+* Retained BSG scene/source records are temporary backing-store state only.
+  They are not target architecture and should be removed as soon as the Obol
+  owner can carry the behavior.
 
 
 Implementation Order
@@ -57,8 +65,9 @@ Implementation Order
 5. qtcad/qged final display ownership and dependency-row removal.
 
 The process should not strictly block on category boundaries when a step
-naturally crosses them, but the high-level retained scene/source semantics
-need to be stable before removing lower-level dependency rows.
+naturally crosses them.  Large owner moves that retire retained BSG ownership
+are preferred over smaller compatibility-preserving slices when the affected
+behavior family can be covered with focused parity checks.
 
 
 Current Status
@@ -96,17 +105,24 @@ Capability 1 completion path:
 * Switch GED neutral record/query APIs to prefer Obol/libbrlobol scene,
   source, display, material, and bounds summaries, using BSG only for missing
   compatibility paths.
+* Take the remaining Capability 1 work in behavior-family owner moves with
+  targeted parity tests; do not add new compatibility-shim families where a
+  direct Obol/libbrlobol owner move can prove the behavior.
 * Replace BSG-backed root/group/shape/source mutation calls in
   `bsg_ged_draw_source.c` with operations on the libbrlobol owner; keep BSG
   synchronized from Obol only while legacy display paths still require it.
-* Retire the draw registry's retained scene-ref ownership fields once typed
-  GED refs resolve to semantic Obol identities/paths and the BSG adapter no
-  longer owns source state.
+* Retire the draw registry's retained scene-ref ownership fields and any
+  retained BSG record state once typed GED refs resolve to semantic Obol
+  identities/paths and the BSG adapter no longer owns source state.
+* Allow source-adapter-local mutation work to move together by behavior family
+  when that shortens the path to owner replacement; do not hold direct owner
+  moves back to preserve narrower local-mutation boundaries.
 * Declare Capability 1 complete only when root/group/shape/source/draw-intent
   operations and GED records work through the Obol owner, the pivot guard
   rejects new BSG-owned scene/source mutations outside the adapter, and the
   draw transaction/redraw/material/highlight/erase/bounds/source-summary
-  regression set passes.
+  regression set passes.  Retained BSG scene/source state may remain only as a
+  disposable display/backing-store adapter, not as an authoritative owner.
 
 Recent cleanup state:
 
@@ -145,23 +161,32 @@ Recent cleanup state:
   validation and fan triangulation into Obol triangle fields.  Geometry clear
   now also clears owned Obol mesh fields before falling back to the BSG
   adapter.
-* Static source-adapter line-set and indexed-face publication now also publish
-  to the libged-owned Obol VLIST/mesh owner when a database source is present,
-  keeping source realization and redraw paths from treating the BSG geometry
-  node as the only publication owner.
-* GED shape-ref and source-adapter point-set publication now writes Obol
-  VLIST `POINT` commands into the owned database source before retained
-  point-set adapter synchronization, so point geometry has the same owner-first
-  publication path as line and indexed-face geometry.
+* Static source-adapter geometry clear, line-set publication, and point-set
+  publication now ensure/use the owned Obol source first and leave retained BSG
+  VLIST/point geometry as fallback only.  Submodel auxiliary staging reads
+  temporary leaf wireframes from owned Obol VLISTs first and removes any
+  temporary leaf source created for the copy.  Static indexed-face publication
+  and mesh-LoD indexed-face updates do the same for owned Obol mesh sources,
+  so source realization and redraw paths no longer treat the BSG geometry node
+  as a parallel publication owner.
 * NMG-region realization output now routes its filled line-set and
-  indexed-face geometry through the same Obol-first publication helpers before
-  the retained BSG adapter is synchronized.
+  indexed-face geometry through the same Obol-first publication helpers, with
+  indexed-face retained BSG publication occurring only when the owned Obol
+  source path is unavailable.
 * NMG auxiliary normal/remainder line output now has a named auxiliary VLIST
   API on libbrlobol database sources and publishes those auxiliary line sets
   into the owned Obol source, with geometry clear removing auxiliary realized
-  shapes before retained BSG fallback.  Submodel leaf wireframe publication also
-  mirrors its temporary retained leaf line sets into the owning Obol source as
-  named auxiliary VLISTs.
+  shapes before retained BSG fallback.  NMG normal/remainder publication now
+  treats the owned Obol auxiliary VLIST as the publication owner and creates
+  retained BSG auxiliary geometry only when the Obol publish path is
+  unavailable.  Submodel leaf wireframe publication now treats the named
+  Obol auxiliary VLISTs as the surviving owner when available, releasing the
+  temporary retained child source/shape topology after the owned auxiliary
+  publish succeeds.  libbrlobol database-source realization now preserves
+  auxiliary VLIST children instead of treating primary realization rebuilds as
+  auxiliary clears.  Auxiliary line-set publication can now carry inherited
+  display/draw-intent metadata through an explicit libbrlobol display state and
+  syncs owner placement onto auxiliary VLIST shapes.
 * ANNOT line-segment realization now has Obol-owned source metadata and
   model-space VLIST coordinates in libbrlobol database-source realization, and
   GED geometry summaries report the owned Obol source as `annotation` before
@@ -179,6 +204,9 @@ Recent cleanup state:
   API to rename the owned Obol source in place, preserve display/material
   state, update realized child source/owner metadata, and refresh realization
   against the renamed database object before falling back to full-scene sync.
+  The C transaction path now invokes that owned-source rename directly, and
+  the Obol observer treats an already-renamed source at the new path as handled
+  instead of rebuilding it through full-scene sync.
 * GED source-update, source-removal, and non-root reference-removal
   transactions now collect matching libged-owned Obol database sources by
   path/component and apply targeted stale, redraw, or removal behavior before
@@ -198,6 +226,10 @@ Recent cleanup state:
   database-source/group replacement or removal.  Redraw refreshes current
   retained draw paths without clearing unrelated Obol-only sources, and
   erase-prefix removes only matching non-overlay owned Obol path subtrees.
+* Owned Obol controller detach now preserves the current libged-owned Obol
+  database-source inventory as semantic draw state for the next controller
+  attach; owned-to-borrowed attachment replays that inventory into the borrowed
+  scene before using retained full-sync fallback paths.
 * GED source realization role flags and view-policy metadata now update the
   libged-owned Obol database source through libbrlobol source/controller APIs,
   and local LoD realization decisions prefer Obol policy state before falling
@@ -216,22 +248,26 @@ Recent cleanup state:
   database-source bounds aggregate when present.  Overlay-inclusive bounds
   remain on the BSG adapter until Capability 2 owns overlay geometry.
 * Public GED shape display/material mutations now update the libged-owned
-  Obol database source first for visibility, highlight, color override,
-  transparency, and material color, then keep the BSG source adapter updated
-  for transitional display compatibility.  libbrlobol database-source display
-  mutation now propagates that owner state onto database-intent realized
-  VLIST/mesh shapes so rendering/export actions consume the same visibility,
-  highlight, line, color, and material fields as GED summaries while
-  prototype/non-database diagnostic shapes keep their local presentation.
-  Database-source draw-mode mutation now also routes through
+  Obol database source for visibility, highlight, color override,
+  transparency, and material color, and the retained shape mutation fallback
+  is retired for those public setters.
+  libbrlobol database-source display mutation now propagates that owner state
+  onto database-intent realized VLIST/mesh shapes so rendering/export actions
+  consume the same visibility, highlight, line, color, and material fields as
+  GED summaries while prototype/non-database diagnostic shapes keep their local
+  presentation.  Database-source draw-mode mutation now also routes through
   `SoBRLDatabaseSource`, immediately synchronizing database-intent realized
   shape draw modes instead of relying on deferred field-sensor propagation.
   Database-source material-policy mutation likewise routes through
   `SoBRLDatabaseSource`, so sanitization/no-op behavior is owned by the source
   API instead of direct controller field writes.
-* GED material color refresh now stamps the libged-owned Obol database source
-  with the selected material color and explicit material revision before
-  keeping the retained adapter material state synchronized.
+* Public GED evaluated-region mutation now updates the libged-owned Obol
+  realized shape metadata directly; the retained BSG legacy-eval fallback is
+  retired for the public setter.
+* GED material color refresh now uses Obol-first material summary readback as
+  the current-revision authority, stamps the libged-owned Obol database source
+  with the selected material color and explicit material revision, and no
+  longer falls back to retained adapter material RGB/revision mutation.
 * Source-adapter material summaries now prefer the libged-owned Obol database
   source before retained material fields, so internal material-copy/readback
   paths consume the same owner-first material state as public shape refs.
@@ -246,34 +282,84 @@ Recent cleanup state:
 * GED source runtime summaries now consume those Obol-first source snapshots
   for database, fullpath, name, and tolerance data before using the retained
   source-state record only for temporary mesh-LoD cache fields.  Typed GED
-  shape-ref view-context, LoD ensure, and realize-context entry points now
-  recover cached source refs when strict scene-revision refs are stale.
+  shape-ref view-context and LoD ensure entry points now recover cached source
+  refs when strict scene-revision refs are stale.  Public shape-ref
+  realize-context now realizes the owned Obol database source first; retained
+  scene realization is kept as temporary adapter synchronization when a
+  retained ref still exists.
+* Public GED shape display/metadata mutations now resolve semantic Obol
+  shape/source identities directly and no longer mutate retained shape state
+  as a fallback.  The Obol draw-sync parity test tracks retained shape
+  mutation fallback use for evaluated-region metadata, explicit center
+  placement, and visible/highlight/color/material display setters.
 * Public GED database-change/stale marking now writes stale state into the
-  libged-owned Obol database source first, using libbrlobol source stale flags
-  before keeping the BSG source adapter synchronized.
-* GED group visibility mutation now writes through to the libged-owned Obol
-  retained group before updating the BSG adapter, extending owner-first
-  mutation beyond database-source nodes.
-* GED group draw-intent mutation now writes group draw-mode changes through
-  the libged-owned Obol retained group before updating the transitional BSG
-  adapter; the same bridge is in place for dbpath/draw-intent path updates.
-* GED group appearance mutation now writes the Obol-represented retained
-  appearance fields (line width, transparency, and color override/color) into
-  the libged-owned Obol group before preserving the full legacy appearance
-  record in the BSG adapter.
-* GED group lookup/create now ensures the corresponding libged-owned Obol
-  retained group immediately, including empty groups with draw intent and no
-  database sources.
+  libged-owned Obol database source, using libbrlobol source stale flags; the
+  retained BSG source-adapter stale mutation fallback is retired for the
+  public setter.
+* GED group visibility, public draw-mode, DB-path, and appearance mutations now
+  write through to the libged-owned Obol group and leave retained BSG group
+  mutation as fallback only.  DB-path mutation uses an explicit owned Obol group
+  rename/update path and updates retained registry bookkeeping without
+  synchronizing retained group state when Obol owns the group.  The Obol
+  draw-sync parity test tracks retained group mutation fallback use and asserts
+  that owned source-root groups, normal groups, and nested group renames do not
+  mutate retained group state.
+* GED group lookup/create now returns a libged-owned Obol group ref directly
+  when an owned Obol scene is active, including empty groups with draw intent
+  and no database sources; retained path construction remains only the
+  no-owned-scene fallback.
 * GED database-leaf draft commit now ensures the corresponding owned Obol
-  database source at commit time and moves it into the owned Obol group tree,
-  before the BSG source adapter remains synchronized for temporary display.
+  database source at commit time and direct source/group-ref commits move it
+  into the owned Obol group tree before falling back to retained parent
+  append.  The retained scene-ref database-leaf path also tries the owned Obol
+  group move before using the BSG source adapter.
+  Generic draft path/source-state attachment now also ensures the owned Obol
+  database source immediately and removes that newly-created source if the
+  draft is destroyed before commit, so draft geometry/display follow-up work
+  no longer has to wait for retained append to establish an Obol owner.
+  Draft display/material application now updates that owned Obol source first
+  for draw mode, line style, line width, transparency, color override,
+  highlight/visibility, and material color, leaving retained draft display
+  fields as fallback when no owned source is available.  Draft tree legacy
+  material-color selection now also publishes the selected material color into
+  the owned Obol source before falling back to retained legacy color fields.
+  Draft tree-result evaluated-region clearing now updates the owned Obol
+  realized shape metadata before falling back to the retained legacy eval flag,
+  and draft tree-result highlight/line-style mutation now updates the owned
+  Obol source before retained fallback.  Draft tree-result region metadata now
+  writes region id, air code, LOS, and material id into owned Obol realized
+  shape fields before falling back to the retained legacy region id and
+  retained registry region bookkeeping only when no owned Obol source handles
+  the mutation.  Draft tree-result line width, transparency, and
+  color-override state now update the owned Obol source through a libbrlobol
+  display patch without rewriting source revisions or draw mode.  Draft
+  display/material/tree-result mutation now uses the tracked draft Obol source
+  path before retained draft scene refs, and parity coverage asserts the
+  tracked-source draft family and direct database-leaf commit do not mutate
+  retained shape state.  Libbrlobol database sources now own explicit display
+  names, scene summaries expose those names on database-source nodes, and GED
+  draft display-name mutation writes through the tracked Obol source before
+  retained draft naming fallback.  Draft draw-matrix and draw-size placement
+  mutation now also writes the tracked Obol source placement state before
+  retained draft shape fields.  Draft evaluated-path transform placement now
+  writes that draw matrix to the tracked Obol source before falling back to
+  retained draft transform fields.  Libbrlobol database sources now own explicit source
+  bounds alongside placement state, with source and scene summaries preferring
+  those bounds before realized geometry fallback.  Draft known-bounds mutation
+  writes center/size and explicit min/max bounds through the tracked Obol
+  source first and only uses retained bounds when no owned source handles the
+  update.
 * Generic source-owner append now moves the corresponding owned Obol database
-  source into the target Obol group after a retained append succeeds, so
-  source-adapter draft/group commit paths no longer need a database-leaf-only
-  shortcut to keep Obol group membership authoritative.
+  source into the target Obol group and returns without mirroring that
+  membership into retained topology.  Retained source-owner append is now the
+  no-Obol fallback only, and the draft/group commit parity test tracks that
+  owned Obol commits do not perform retained source-owner appends.
 * GED group-record summaries now prefer the libged-owned Obol retained group
-  for the fields Obol owns (draw mode, visibility, overlay flag, and
-  transparency), while preserving BSG adapter path/view/source-scope metadata.
+  for the fields Obol owns (semantic draw-intent path, draw mode, visibility,
+  overlay flag, and transparency), while preserving BSG adapter
+  view/source-scope metadata.  Topology-only Obol groups without draw intent do
+  not synthesize public group-record paths, preserving erase semantics for
+  intermediate group parents.
   The source-adapter internal group summary now uses the same Obol-first
   owner readback, so erase/scope/group helper paths no longer treat retained
   BSG group display and draw-intent fields as authoritative when a semantic
@@ -285,16 +371,62 @@ Recent cleanup state:
   from the libged-owned Obol group tree, leaving BSG traversal as the fallback
   for callers without an owned Obol scene.
 * Direct GED shape-source release now removes the corresponding owned Obol
-  database source and prunes empty Obol draw groups before releasing the BSG
-  source owner, moving a non-transaction lifecycle path to owner-first
-  behavior.
-* Direct GED root path erase, path-prefix erase, and draw clear now remove or
-  clear owned Obol database sources and prune empty Obol draw groups before
-  mutating the BSG source adapter, extending owner-first lifecycle behavior to
-  root-level draw-scene operations.
-* Direct GED root group-name erase now removes matching non-overlay owned Obol
-  draw groups before mutating the BSG source adapter, covering another
-  retained group lifecycle path outside transaction observer cleanup.
+  database source and treats retained source-owner release as the fallback
+  only when no owned Obol source path is available, moving a non-transaction
+  lifecycle path to direct Obol ownership while still bumping the GED draw
+  structural revision.
+* Direct GED root/active-scope exact path erase now removes matching owned
+  Obol database sources and exact/nested Obol groups first and treats retained
+  source-adapter erase as fallback only when no owned Obol path is handled.
+  Direct path-prefix erase now removes prefix-matching owned Obol database
+  sources and Obol groups first and treats retained source-adapter erase as
+  fallback only when no owned Obol prefix is handled.  Owned exact-path and
+  path-prefix erase bump the GED draw structural revision directly at the
+  Obol owner boundary.  Direct source-root and scoped database-group clear now
+  clear owned Obol database sources/groups first and treat retained clear as
+  fallback only when no active Obol scene clear is handled, extending owner
+  lifecycle behavior to root-level and scoped draw-scene operations.
+  Shared-root active-scope component erase now removes matching owned Obol
+  database sources directly with non-root and draw-mode filtering before
+  retained component scans are considered, leaving retained erase as fallback
+  for independent-view scoped cases or no-owner scenes.  Obol source removal
+  now prunes empty non-overlay topology ancestors as well as draw-intent groups
+  so owner-side component and source erase cleanup does not leave empty
+  intermediate groups behind.
+  Libbrlobol database source ownership now separates source instance identity
+  from BRL-CAD database path: source nodes expose `instanceKey`, summaries
+  report both `instanceKey` and `path`, and scene/view controllers provide
+  instance-key create, rename, move, remove, auxiliary, and state mutation
+  APIs.  This removes the path-key uniqueness blocker for independent-view
+  scope ownership while preserving existing path APIs as `instanceKey == path`
+  shorthand until higher library callers are migrated.
+  GED Obol transaction sync now assigns stable source instance keys for
+  independent-view database sources and routes scoped draw, erase, stale,
+  visibility, redraw, erase-prefix, and clear-scope work through libbrlobol
+  instance-key owners.  Direct active-scope exact/path-prefix erase and scoped
+  database-group clear now use scoped Obol source removal and avoid unscoped
+  group deletion for independent views, so shared and view-local owners for
+  the same database path can coexist.  qtcad private direct database-source
+  sync now uses the same stable independent-view source instance keys for
+  replace, remove, and scoped clear, so direct qtcad source updates can
+  coexist with shared GED/qtcad owners without a path-key compatibility shim.
+  Draw clear uses a dedicated Obol scene clear helper so explicit empty Obol
+  groups are removed even when no retained group children exist.
+  Public exact-path and path-prefix erase wrappers now return the source-
+  adapter erase result first, so Obol-owned deletion determines transaction
+  status without requiring a retained draw-revision delta.
+  Root and scoped exact-path/path-prefix erase now also remove matching
+  database sources from the active attached Obol scene, so borrowed controller
+  command paths do not require retained draw inventory to report or mirror
+  deletion.
+  Root and scoped clear likewise clear the active attached Obol scene directly,
+  so borrowed controller clear/zap paths do not depend on retained draw
+  inventory.
+* Direct GED root group-name erase now treats matching non-overlay owned Obol
+  draw-group removal as authoritative and leaves retained group-name erase as
+  the no-owned-group fallback, covering another retained group lifecycle path
+  outside transaction observer cleanup while preserving GED draw structural
+  revision accounting.
 * Source-adapter retained group free now removes the corresponding owned Obol
   group subtree first, so active-scope erase, nested group erase, empty-group
   prune, and clear-in-scope paths no longer leave Obol group/source children
@@ -331,21 +463,84 @@ Recent cleanup state:
 * Transaction root child-count accounting now calls a source-root child-count
   facade which prefers the libged-owned Obol root group child count before
   falling back to retained BSG tree summaries.
+* Source-root group-presence readback now uses a libbrlobol-owned recursive
+  scene-group count when an owned Obol scene is attached, leaving retained
+  root traversal only as the no-owner fallback.
+* Source-root shape traversal now enumerates libged-owned Obol database
+  sources before retained root traversal and returns typed shape refs whose
+  owner group refs mutate the corresponding owned Obol scene groups.
+* Source-root group traversal now enumerates libged-owned Obol draw groups
+  before retained root traversal and returns typed group refs whose public
+  record iteration and redraw behavior use owned Obol group/source membership.
+* Component shape/group indexes now ask the libged-owned Obol source/group
+  inventory first and only use retained registry index tables when no owned
+  Obol scene is available, so index-driven stale/redraw/reexpand transactions
+  can target Obol-only refs without retained fallback scans.  Source reexpand
+  transaction fallback is now split by group and shape inventory so a miss in
+  one retained adapter index no longer forces both retained scans when the
+  other owner index succeeded.
+* Shape path-hash indexes now ask the libged-owned Obol database-source
+  inventory first and only use retained path-index tables when no owned Obol
+  scene is available.
+* Public primitive wireframe publication for Obol shape refs now plots through
+  librt and publishes the resulting VLIST directly into the libged-owned Obol
+  database source, so Obol-owned primitive publication no longer recovers a
+  retained runtime scene ref through retained path-hash tables.
+  Generic current-wireframe primitive realization now uses the same source-path
+  direct Obol publisher for owned database sources before falling back to the
+  retained per-primitive line-set publishers for non-Obol refs.
+  Submodel primitive publication now has a direct Obol auxiliary path as well:
+  it walks the submodel tree, plots each leaf, and publishes named auxiliary
+  VLISTs under the owning Obol database source instead of staging retained
+  child source/shape nodes as the owner.
+  Generic current-wireframe submodel realization now resolves the source
+  snapshot's owned Obol path and uses the same auxiliary publisher before
+  falling back to retained child-source staging for non-Obol refs.
+* Obol shape-ref wire redraw now reuses that direct owner publication path
+  after applying the owned source draw matrix, instead of creating a retained
+  draft/source-state pair as the redraw publication sink.
+* Owned VLIST bounds updates now complete the source placement tuple with a
+  valid identity draw matrix when deriving draw center/size from geometry, so
+  auxiliary Obol VLISTs inherit complete source placement state.
+* Obol-only shape refs now support source snapshots, material refresh,
+  wireframe redraw, LoD ensure, public geometry publication/clear, and
+  record/context readback from database-source summaries and context tokens,
+  rather than recovering retained shape refs as the primary owner.
+  BoT and BREP mesh-LoD runtime state now follows the same owner direction:
+  `SoBRLDatabaseSource` owns the `rt_mesh_lod` handle and native bounds for
+  owned Obol database sources, Obol-only LoD ensure realizes cached BoT and
+  BREP LoD meshes directly into that source, and retained mesh-LoD runtime
+  state is only the no-Obol fallback.
+  Adaptive CSG wireframe LoD now follows that owner direction as well:
+  Obol-only LoD ensure realizes primitive line sets with `ft_lod_realize`,
+  publishes them into the owned source, and has a parity sentinel proving the
+  retained adaptive primitive publisher is not used for owned CSG sources.
+  Typed BREP/BSPLINE current-wireframe realization now uses the same owner
+  rule: their native line-set realization is published directly to the owned
+  Obol source before retained fallback, with a targeted BREP parity sentinel
+  proving owned wireframe draw avoids retained primitive publication.
+* Root-level database-source rename now retargets the matching owned Obol
+  source-owner group and erase prunes that group, so Obol group traversal does
+  not surface stale retained-style group records.
+* Draft group commit now moves the already-owned Obol database source into the
+  target Obol group and returns an Obol-backed shape ref, leaving the retained
+  draft topology as transient source-adapter-local generation state.
 * Typed GED shape and group refs now expose registry semantic paths for
   Obol-first lookup.  Shape-ref display/source/material/geometry readbacks,
   geometry publication/mutation, stale marking, and release now try the
   semantic path before retained shape-summary fallback; group-ref
   record/count/display/appearance/draw-intent paths do the same for group
   semantics.
-* GED group tree-summary child counts now prefer the libged-owned Obol group
-  topology through `ged_draw_obol_group_child_count_for_path`, leaving retained
-  tree summaries as the compatibility fallback for callers without an owned
-  Obol scene.
+* GED group tree summaries now prefer libged-owned Obol group tree metadata
+  through a persistent Obol context token, including group/shape kind, parent
+  state, name, DB fullpath when resolvable, draw-tree depth, and child count;
+  retained BSG summaries remain only as fallback and as a borrowed fullpath
+  fallback for virtual Obol group paths.
 * Scene-context fullpath readback now prefers the registry's semantic
   fullpath, scene-context source/display summaries use the registry semantic
   path to query the libged-owned Obol source or group before retained fallback,
-  and scene-context tree summaries override group child counts from owned Obol
-  topology.
+  and semantic scene-context tree summaries now use persistent Obol context
+  tokens as the primary metadata source before retained BSG fallback.
 * Scene-context overlay and subtree-bounds readbacks now use semantic
   Obol lookup when the context has GED registry ownership: libbrlobol exposes
   `SoBRLSceneController::getSceneSubtreeBounds`, and libged routes database
@@ -355,18 +550,25 @@ Recent cleanup state:
   path-addressed tree-summary child queries, and libged uses those to make
   `ged_draw_scene_context_child_at`/`parent` work for Obol-only group/source
   children while preserving retained fallback for non-semantic contexts.
+  Retained semantic database-source contexts now also return owned Obol parent
+  tokens before retained BSG parent fallback.
 * Typed shape-ref context creation now returns owned Obol database-source
   context tokens when semantic source paths are available.  Source context
   child traversal summarizes realized shape/material nodes under libbrlobol
   source children instead of exposing anonymous realization wrappers.
+* Typed group-ref context creation now returns owned Obol group context tokens
+  when semantic group paths are available.  libged builds the Obol parent-token
+  chain directly from path-addressed libbrlobol tree summaries and resolves
+  real nested DB fullpaths onto those Obol tokens, leaving retained group
+  contexts as fallback only when no owned Obol group resolves.
 * Shape evaluated-region mutation and record readback now prefer owned Obol
   realized-shape `regionId` metadata through semantic source paths, keeping the
   retained legacy eval flag only as transitional synchronization/fallback.
 * GED-private source-record read/apply bridges now expose Obol-owned
   database-source draw mode, revision, stale/current, role, and view-policy
-  metadata through semantic source paths.  The source adapter prefers those
-  records before applying the retained BSG source record for temporary display
-  compatibility.
+  metadata through semantic source paths.  Source-adapter database-source
+  record mutation now writes the owned Obol source first and applies the
+  retained BSG source record only as the no-owned-source fallback.
 * Obol database-source material policy is now explicit libbrlobol source
   state.  GED source-record read/apply bridges read and write it through
   libbrlobol controller APIs instead of deriving it from retained adapter
@@ -463,8 +665,8 @@ Recent cleanup state:
   retained-ref resolution through source-adapter facades.
 * Root exact-path, path-prefix, and group-name erase now route root retained-ref
   resolution through explicit scene-root facades instead of tree-local root
-  mutation callbacks; tree keeps public erase wrappers and overlay-name
-  erasure.
+  mutation callbacks; tree keeps public wrapper dispatch/status plumbing and
+  overlay-name erasure.
 * Overlay name erase and overlay geometry insertion now route retained overlay
   scene lookup, geometry publication, registry entry, append, bounds,
   appearance, color-soltab policy, and release through source-adapter facades;
@@ -588,6 +790,13 @@ Required behavior:
 
 * Scene root creation, attachment, reattachment, lifecycle, active view scope,
   and independent view scope ownership.
+  Libbrlobol now has the source instance identity API needed for independent
+  view scopes to own duplicate database paths without path-key collapse.  GED
+  transactions and qtcad private direct database-source sync now use those
+  instance owners for scoped database-source replacement, removal, stale,
+  visibility, redraw, erase-prefix, and clear work; remaining work in this
+  item is the root/group/shape ownership still mediated by the retained
+  adapter.
 * Group creation, lookup, rename, erase, clear, nested subpath erase,
   child append/remove, traversal, and subtree bounds.
 * Shape references with stable identity, parent/group ownership, full path,
@@ -613,17 +822,25 @@ Required behavior:
 
 Near-term work:
 
+* Prefer straight owner moves by behavior family, backed by targeted parity
+  tests, over adding new retained/Obol compatibility shims.
+* Be willing to take larger churn windows when they remove an ownership layer
+  outright.  Do not split a direct owner migration into extra bridge stages
+  only to preserve temporary compatibility structure.
 * Continue shrinking cross-file `bsg_scene_ref` bridge exposure where callers
   can use summaries, records, source snapshots, child iterators, or
   transaction/source-specific facade operations.
-* Keep source ownership, source-state mutation, database-source record
-  synchronization, and source realization transitions local to the current
-  source adapter until Obol/libbrlobol can own them directly.
+* Move source ownership, source-state mutation, database-source record
+  synchronization, source realization transitions, and related root/group/
+  shape work together by behavior family when that is the shortest path to
+  direct Obol/libbrlobol ownership.
 * Avoid moving raw retained parent/child traversal into higher-level wrappers;
   use source-adapter facades or neutral summaries instead.
 * Keep draw transactions, redraw, material refresh, highlight, erase, bounds,
   scoped source-update, and database-update behavior passing while the backend
   owner is swapped.
+* Remove retained BSG records instead of preserving dual authoritative state
+  once the corresponding Obol/libbrlobol owner path has parity coverage.
 * When a bridge is retired, update `misc/CMake/brlobol_pivot_guard.cmake` so
   the guard tracks the new intended boundary instead of stale transitional
   tokens.
@@ -632,6 +849,11 @@ Capability 1 acceptance criteria:
 
 * GED root, group, shape, source, and draw-intent code can operate without
   calling BSG scene/source APIs outside the backend adapter boundary.
+* Obol/libbrlobol is the authoritative owner for scene/source state used by
+  GED records and transactions; retained BSG state, if any, is adapter-only
+  and not required to describe or mutate semantic draw ownership.
+* Retained BSG record/state structures are removed or reduced to disposable
+  display compatibility glue with no independent ownership semantics.
 * Public GED records keep their current fields and semantics.
 * Existing draw transaction, redraw, material refresh, highlight, erase,
   bounds, source summary, and database-update tests pass.

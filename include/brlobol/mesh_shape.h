@@ -59,6 +59,7 @@ public:
     SoSFString cacheIdentity;
     SoSFString sourceIdentity;
     SoSFString ownerSourcePath;
+    SoSFString ownerSourceInstanceKey;
     SoSFUInt32 ownerSourceRevision;
     SoSFUInt32 ownerInputsRevision;
     SoSFUInt32 ownerViewRevision;
