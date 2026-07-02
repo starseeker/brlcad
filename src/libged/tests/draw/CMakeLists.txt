@@ -367,12 +367,42 @@ if(TARGET ged_test_ged_draw_scene)
     endif ()
   endforeach()
 endif(TARGET ged_test_ged_draw_scene)
-brlcad_add_test(NAME ged_test_ged_draw_scene COMMAND ged_test_ged_draw_scene "${CMAKE_CURRENT_SOURCE_DIR}")
-if(TARGET ged_test_ged_draw_scene)
-  set_property(TEST ged_test_ged_draw_scene APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
-endif()
+set(ged_draw_scene_shards
+  typed
+  core
+  index
+  tree
+  highlight_material
+  view_scene
+  bounds_frame
+  highlight_revision
+  path_api
+  rename
+  ref_remove
+  source_update
+  selection_fanout
+  comb_update
+  scale
+  backend
+)
+foreach(draw_scene_shard ${ged_draw_scene_shards})
+  brlcad_add_test(NAME ged_test_ged_draw_scene_${draw_scene_shard} COMMAND ged_test_ged_draw_scene "${CMAKE_CURRENT_SOURCE_DIR}" "${draw_scene_shard}")
+  if(TARGET ged_test_ged_draw_scene)
+    set_property(TEST ged_test_ged_draw_scene_${draw_scene_shard} APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+  endif()
+endforeach()
 distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_draw_scene_tmp.g)
 distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_draw_scene_cache)
+distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_draw_scene_all.g)
+distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_draw_scene_cache_all)
+distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_draw_scene_tree_view.g)
+distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_draw_scene_cache_tree_view)
+distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_draw_scene_retained.g)
+distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_draw_scene_cache_retained)
+foreach(draw_scene_shard ${ged_draw_scene_shards})
+  distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_draw_scene_${draw_scene_shard}.g)
+  distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_draw_scene_cache_${draw_scene_shard})
+endforeach()
 
 # GED draw transaction to Obol controller bridge regression.
 brlcad_addexec(ged_test_obol_draw_sync "obol_sync.cpp" "libged;libbrlobol;libwdb" TEST)

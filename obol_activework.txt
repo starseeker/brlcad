@@ -1,7 +1,7 @@
 BRL-CAD Obol Active Work Guide
 ==============================
 
-Last refreshed: 2026-06-25
+Last refreshed: 2026-07-02
 
 Purpose
 -------
@@ -39,11 +39,20 @@ Migration Intent
 BRL-CAD should use Obol as the canonical scene, view, interaction, and
 rendering API for interactive 3D applications.
 
-The migration is parallel-first: build the Obol path beside the current
-BSG/DM path until it reaches production parity, then remove public libbsg,
-libdm, dm_plugins, and BSG/DM-shaped application APIs.  Temporary internal
-bridges are acceptable while a phase is incomplete.  No long-lived public BSG
-or DM compatibility layer is part of the target design.
+The migration is now Obol-primary for database draw ownership.  The old
+parallel-first strategy produced too much sync/fallback ambiguity for
+scene/source migration.  Database draw, erase, redraw, visibility, material,
+path-state, bounds, and scene-record behavior should use Obol/libbrlobol as
+the active owner; missing behavior should be fixed in Obol or exposed by
+focused tests, not hidden behind retained BSG fallback.
+
+Retained BSG/DM code may remain compiled as legacy/reference code while the
+transition is underway.  The former temporary islands should be treated as
+Obol node/store families to stand up as scope allows: overlays, qray/NIRT
+uplot import, vdraw/local helper artifacts, annotations, feature/polygon/
+selection stores, and the display stream.  If one of those families still uses
+legacy code during the transition, that is scheduling only, not an active
+fallback design.
 
 libbrlobol is the BRL-CAD-specific Obol extension library.  It should define
 BRL-CAD Obol nodes, actions, details, and narrow application services.  It
@@ -58,10 +67,10 @@ These percentages measure exit-criteria completion, not effort spent.
 
 Active workstreams:
 
-* Obol realization coverage matrix: 98 percent.
-* libbrlobol database realization: 98 percent.
+* Obol realization coverage matrix: 99 percent.
+* libbrlobol database realization: 99 percent.
 * Obol diagnostic overlays: 45 percent.
-* qtcad visible Obol rendering: 84 percent.
+* qtcad visible Obol rendering: 91 percent.
 * Guardrails and inventory: 99 percent.
 * Low-level cleanup: 99 percent.
 * libimgstream migration batch: 57 percent.
@@ -70,18 +79,70 @@ Active workstreams:
 Migration phases:
 
 * Phase 1, architecture freeze and guardrails: 80 percent.
-* Phase 2, productionize libbrlobol: 97 percent.
-* Phase 3, migrate qged/qtcad: 92 percent.
+* Phase 2, productionize libbrlobol: 98 percent.
+* Phase 3, migrate qged/qtcad: 94 percent.
 * Phase 4, migrate libged, libtclcad, and mged: 99 percent.
 * Phase 5, remove lower-level BSG/DM dependencies: 98 percent.
 * Phase 6, hard removal: 6 percent.
 
 Current estimate before the Obol/libbrlobol feature implementation phase:
-expect about 1-2 more implementation cycles if the remaining ownership
-handoffs stay shallow, or about 2-3 cycles if one of the retained draw/backend
-paths needs a new neutral contract before it can be moved safely.  The likely
-remaining cycles are qtcad retained backend/display ownership and the direct
-lower `libbsg` dependency rows.
+the large Obol-primary Capability 1 push has landed for the GED draw-scene
+behavior family, and the pivot guard/dependency inventory now reflect that
+boundary.  The qtcad closeout signal now uses Qt+OSMesa swrast
+(`QTCAD_OBOL_FORCE_OSMESA=1`) and passes for draw sync, selection sync, pick,
+snap, measure, and the qged swrast smoke test.  System OpenGL should be
+spot-checked, but the next implementation work should be Capability 2
+Obol/libbrlobol view node/store capability, not more database fallback
+refactoring.  If remaining closeout becomes broad mechanical scan/guard
+editing with clear tests, it can be handed to a lower-powered model; if a new
+semantic boundary is needed, pause for a stronger model.
+
+The current highest-priority implementation direction is:
+
+* Close Capability 1 by auditing the Obol-primary database draw boundaries
+  that now pass the split draw-scene shard set and are pivot-guarded.
+* Keep auditing remaining database scene/source retained-BSG use and classify
+  each case as fixed Obol ownership, no-owned-scene legacy compatibility,
+  public bridge/API compatibility, or non-database Capability 2/3/4 work.
+* Keep the closeout gate passing: draw-scene shards,
+  `ged_test_state_services`, `ged_test_obol_draw_sync`,
+  `brlobol_pivot_guard`, and the focused Qt+OSMesa qtcad Obol swrast tests.
+* Spot-check the system OpenGL qtcad path, record the result, and then move on
+  unless it exposes a behavior difference from the passing swrast path.
+* Start Capability 2 after closeout by adding missing Obol/libbrlobol
+  capability for overlays, qray/NIRT, vdraw/local helper artifacts,
+  annotations, feature/polygon/selection stores, and the display stream when
+  that lets legacy fallback be bypassed directly.
+
+The latest GED database draw closeout slice split the monolithic
+`ged_test_ged_draw_scene` regression into 16 CTest shards and moved
+Obol-primary path-state, path-listing, has-path, component rename, and
+reference-removal behavior into libged/libbrlobol ownership.  Nested
+parent/child exposure is reconstructed from Obol source ownership plus GED
+database-index validation rather than retained BSG source records, and
+`prefix` now publishes object rename events before comb-tree redraw events so
+draw reconciliation can retarget the old source.  Verification passed:
+`ninja -C build ged_test_ged_draw_scene`,
+`ctest --test-dir build -R '^ged_test_ged_draw_scene_' -j 8 --timeout 60 --output-on-failure`,
+and `ctest --test-dir build -R '^ged_test_state_services$' --timeout 120 --output-on-failure`.
+The follow-up guard refresh also passed
+`ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`.
+The database-source API audit now finds direct `bsg_database_source_*` and
+`BSG_DATABASE_SOURCE_*` use only in `src/libged/bsg_ged_draw_source.c`, where it
+is classified as transitional source-adapter/no-owned-scene legacy
+compatibility.  Records, transactions, the libged Obol bridge, and
+`include/ged/draw.h` are clean for that BSG database-source API family.
+Closeout gate status: the draw-scene shard set, `ged_test_state_services`,
+`ged_test_obol_draw_sync`, `brlobol_pivot_guard`, and the focused Qt+OSMesa
+qtcad swrast tests pass in this build.  The qtcad swrast route forced
+libbrlobol's OSMesa context manager with `QTCAD_OBOL_FORCE_OSMESA=1`, fixed
+screen-center exact-pick projection, preserved Obol source display/revision
+state during qtcad sync, normalized leading slashes in qtcad path assertions,
+and routed command-level `autoview` through `ged_draw_bounds` so Obol-owned
+draw bounds drive the view fit.  `viewAll` itself was not the fix target; the
+failure came from hidden/default Obol records and an autoview bounds fallback.
+System OpenGL remains a follow-up check, not the blocker for entering
+Capability 2.
 
 The latest GED records database-source summary facade cleanup removes direct
 `bsg/database_source.h` use from `src/libged/bsg_ged_draw_records.c`.
@@ -1101,11 +1162,15 @@ Current residual draw-bridge shape:
 Remaining Work
 --------------
 
-Near-term work is still Phase 5 wrapper retirement, not profiling.  Batch only
-related wrappers where ownership and tests are straightforward.
+Near-term work is Capability 1 closeout, then Capability 2 view node/store
+ownership.  This is still migration structure work, not profiling.  Batch
+only related guard/audit or owner moves where ownership and tests are
+straightforward.
 
 Immediate blockers:
 
+* Capability 1 closeout: pivot guard refresh, dependency inventory update,
+  database scene/source BSG-use audit, and broad closeout gate.
 * Retained scene-ref/scope bridge shims and BSG-shaped public GED draw
   snap/scene-ref surfaces.
 * Retained BSG-backed feature/polygon internals behind neutral/context helpers.

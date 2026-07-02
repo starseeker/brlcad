@@ -89,6 +89,27 @@ clear follow the same owner-first lifecycle pattern by removing or clearing
 owned Obol database sources before mutating the transitional BSG adapter.
 Direct GED root group-name erase now also removes matching non-overlay owned
 Obol draw groups before mutating the transitional BSG adapter.
+The split GED draw-scene shard set now verifies Obol-primary database
+path-state, path listing, has-path, component source rename, reference
+removal, bounds, display/material, source-summary, and record-query behavior.
+Those paths reconstruct nested database exposure from Obol database-source
+ownership plus the GED database index instead of retained BSG source records.
+The `prefix` command publishes object rename events before comb-tree redraw
+events in its batch so draw reconciliation can retarget existing Obol sources
+before reference updates consume the old path.
+The database-source API audit now finds direct `bsg_database_source_*` and
+`BSG_DATABASE_SOURCE_*` use only in `src/libged/bsg_ged_draw_source.c`, where it
+is classified as transitional source-adapter/no-owned-scene legacy
+compatibility.  Records, transactions, the libged Obol bridge, and
+`include/ged/draw.h` are clean for direct BSG database-source API use.
+The core Capability 1 closeout gate passes in this build for draw-scene shards,
+`ged_test_state_services`, `ged_test_obol_draw_sync`, and
+`brlobol_pivot_guard`.  The qtcad closeout subset now has a guarded swrast
+path: qtcad Obol tests and `ged_test_qged_swrast` can force libbrlobol's
+OSMesa context manager with `QTCAD_OBOL_FORCE_OSMESA=1`, and the focused
+draw-sync, selection-sync, pick, snap, measure, and qged swrast tests pass
+under that route.  System OpenGL remains a follow-up platform check, but it is
+not the Capability 1 migration signal.
 
 `SoBRLSceneController` now also exports an Obol-tagged neutral
 `rt_view_scene_ref` and validates the tag before recovering controller
@@ -96,12 +117,16 @@ pointers.  This gives the neutral backing-store adapter path a libbrlobol
 producer/consumer for retained scene handles without routing those handles
 through BSG-only adapter conversions.
 
-The Capability 1 completion path is now explicit: libged establishes an owned
-Obol scene/source controller, routes draw transactions into that owner, moves
-neutral GED records/queries to Obol summaries, replaces BSG-backed
-root/group/shape/source mutation with Obol owner operations, and leaves BSG as
-a temporary backing-store/display adapter until the legacy display path is
-retired.
+The Capability 1 completion path is in closeout: libged has established an
+owned Obol scene/source controller, routed the guarded GED draw-scene database
+behavior family into that owner, moved neutral GED records/queries to Obol
+summaries for that family, and replaced the corresponding BSG-backed
+root/group/shape/source mutations with Obol owner operations.  Remaining
+Capability 1 work is dependency-inventory maintenance, follow-up audit
+classification of any newly surfaced database scene/source BSG use as fixed
+Obol ownership, no-owned-scene legacy compatibility, public bridge/API
+compatibility, or non-database Capability 2/3/4 work, plus a system-OpenGL
+qtcad spot check after the passing swrast gate.
 
 libbsg is not retire-ready while these direct owners, the BSG-backed GED draw
 facade, qged/qtcad draw observer/display-selection behavior, and the remaining

@@ -15,25 +15,31 @@ needs historical context or more detailed design rationale.
 Current Work Notes
 ------------------
 
-As of 2026-06-25, `obol_activework.txt` is the authoritative current handoff.
-The latest completed code-state batch moves GED shape-record database-source
-readback behind the scene-ref owner boundary.  `src/libged/bsg_ged_draw_records.c`
-now fills retained source revision/stale fields through
-`ged_draw_scene_ref_source_summary(ged_draw_shape_source_ref(shape_ref), ...)`
-and no longer includes `bsg/database_source.h` or calls
-`bsg_database_source_record_get` / `bsg_database_source_ref_is_stale`
-directly.  The pivot guard now requires that records-side source-summary
-facade token and rejects direct `bsg/database_source.h`,
-`bsg_database_source_*`, and `BSG_DATABASE_SOURCE_*` use in records.  This
-does not change exit-criteria percentages because the retained export/render
-record implementation and the lower `libbsg` dependency rows still determine
-retirement readiness.
+As of 2026-07-02, `obol_activework.txt` is the authoritative current handoff.
+The active direction remains an Obol-primary database draw pivot, and the
+large Capability 1 GED draw-scene behavior-family push has landed.  Retained
+BSG scene/source implementation code may remain compiled as reference,
+legacy, or no-owned-scene compatibility code, but database draw behavior
+should no longer use retained BSG fallback to mask missing Obol coverage.
 
-Verification on FreeBSD/clang passed: `ninja -C build libged.so`, then the
-targeted guard/runtime verification completed 4/4 passing in 19.67 seconds:
-`brlobol_pivot_guard` at 17.93 seconds, `ged_test_ged_draw_scene` at
-1.43 seconds, `ged_test_view_command` at 0.15 seconds, and
-`ged_test_qged_swrast` at 0.11 seconds.
+The immediate Capability 1 target is closeout: update the pivot guard and
+dependency inventory for the newly migrated Obol-primary boundaries, audit
+remaining database scene/source BSG use, and run the broad closeout gate.
+This is not expected to be another open-ended database fallback refactoring
+cycle.  After that gate, the next implementation phase is Capability 2:
+stand up Obol/libbrlobol view node/store ownership for feature, polygon,
+selection, overlay/diagnostic, annotation/auxiliary, qray/NIRT, vdraw/local
+helper, and related non-database families as scope allows.
+
+The latest completed slice split `ged_test_ged_draw_scene` into 16 CTest
+shards and made Obol/libbrlobol the path-state, path-listing, has-path,
+component source-rename, and reference-removal authority for the draw-scene
+database behavior family.  Nested parent/child exposure is reconstructed from
+Obol source ownership plus GED database-index validation instead of retained
+BSG source records, and `prefix` now publishes object rename events before
+comb-tree redraw events so draw reconciliation can retarget the old source.
+Verification passed with the full draw-scene shard set and
+`ged_test_state_services`.
 
 The preceding completed code-state batch retires installed
 `include/qtcad/QgObolEditPreview.h` and removes it from
@@ -17712,3 +17718,71 @@ expanded broad focused wrapper gate completed 28/28 passing in 116.32
 seconds; longest members were `libbsg_api_hygiene` at 40.94 seconds,
 `brlobol_pivot_guard` at 17.83 seconds, `ged_test_drawing_select` at 16.29
 seconds, and `ged_test_drawing_quad` at 12.73 seconds.
+
+The Capability 1 closeout guard refresh has been completed for the current
+Obol-primary GED draw-scene boundary.  The stale guard assumptions that still
+expected retained BSG group display/draw-intent fallback markers were removed,
+and the guard now checks the database path-state/listing, source-summary,
+component rename, prefix event ordering, and split draw-scene shard boundaries.
+The libged Obol draw bridge guard still rejects direct BSG/qtcad/DM ownership
+dependencies, but it allows the private transitional draw facade include while
+that neutral handle boundary exists.
+
+`backend_capabilities.txt`, `obol_activework.txt`, and
+`doc/notes/obol_legacy_dependency_inventory.txt` now describe Capability 1 as
+guarded closeout: the remaining work is a database scene/source BSG-use audit
+and the broad closeout gate, not another compatibility-shim pass.  Verification
+passed with:
+`ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 180 --output-on-failure`.
+
+The first database-source API audit pass found direct `bsg_database_source_*`
+and `BSG_DATABASE_SOURCE_*` use only in `src/libged/bsg_ged_draw_source.c`.
+That remaining use is classified as source-adapter/no-owned-scene legacy
+compatibility; records, transactions, the libged Obol bridge, and the public
+GED draw header are clean for that BSG API family.  The source adapter comment
+and pivot guard token now say retained BSG record apply is no-owned-scene
+legacy compatibility only, not active database fallback.
+
+The core Capability 1 closeout gate now passes in this build for the
+draw-scene shard set, `ged_test_state_services`, `ged_test_obol_draw_sync`, and
+`brlobol_pivot_guard`.  The corrected shard command is:
+`ctest --test-dir build -R '^ged_test_ged_draw_scene_.*$' -j 8 --timeout 60 --output-on-failure`,
+which completed 16/16 passing in 2.45 seconds.
+
+The qtcad closeout subset is not a valid signal in this headless setup.  The
+non-GL qtcad Obol tests in the broad command passed, but the draw-sync,
+selection, pick, snap, and measure tests failed immediately under CTest's
+`QT_QPA_PLATFORM=offscreen` environment because the Qt offscreen plugin cannot
+create an OpenGL context.  A verbose rerun confirmed the test environment and
+the standalone `test_qtcad_obol_draw_sync` failure.  Capability 1 should not be
+declared complete until that subset is rerun on a GL-capable Qt platform or an
+intentional non-GL qtcad verification path is added.  The following entry
+supersedes this blocker by adding that intentional non-GL path.
+
+The qtcad Obol closeout signal now has an intentional non-system-GL path.  The
+private qtcad Obol context manager recognizes `QTCAD_OBOL_FORCE_OSMESA=1` using
+`bu_str_true` and routes libbrlobol rendering through the OSMesa context
+manager.  qtcad Obol workflow tests and `ged_test_qged_swrast` set that
+environment in CTest, and the pivot guard requires the swrast test
+environment plus the context-manager tokens.
+
+The swrast failures were fixed in the scene/view plumbing rather than in
+`viewAll` itself.  Obol-backed neutral source records now default to visible
+wire state when no display summary is available, qtcad exact-pick fallback
+uses a center-correct normalized screen ray, qtcad draw sync preserves retained
+source display/revision state when replacing sources, and the command-level
+`autoview` path frames `ged_draw_bounds` before falling back to the retained
+view autoview implementation.  The qtcad path assertions now normalize leading
+slashes so GED and Obol path spellings do not produce false failures.
+
+Verification passed with:
+`cmake --build build --target test_qtcad_obol_draw_sync -j2`;
+`ctest --test-dir build -R '^test_qtcad_obol_draw_sync$' --timeout 180 --output-on-failure`;
+`ctest --test-dir build -R '^(test_qtcad_obol_draw_sync|test_qtcad_obol_selection_sync|test_qtcad_obol_pick|test_qtcad_obol_snap|test_qtcad_obol_measure|ged_test_qged_swrast)$' -j4 --timeout 180 --output-on-failure`,
+which passed 6/6; `ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout
+180 --output-on-failure`; and
+`ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_state_services|ged_test_obol_draw_sync|test_qtcad_obol_draw_sync|test_qtcad_obol_selection_sync|test_qtcad_obol_pick|test_qtcad_obol_snap|test_qtcad_obol_measure|ged_test_qged_swrast)$' -j4 --timeout 180 --output-on-failure`,
+which passed 9/9.  System OpenGL remains a follow-up spot check, but the
+deterministic Qt+OSMesa path is now the Capability 1 qtcad closeout gate, so
+the next implementation phase should move to Capability 2 Obol/libbrlobol
+node/store work.

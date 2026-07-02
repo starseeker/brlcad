@@ -45,6 +45,12 @@ public:
 	POINT = 2
     };
 
+    enum AnnotationSegmentKind {
+	ANNOTATION_SEGMENT_NONE = 0,
+	ANNOTATION_SEGMENT_LINE = 1,
+	ANNOTATION_SEGMENT_TEXT = 2
+    };
+
     SoMFVec3f point;
     SoMFInt32 command;
     SoSFVec3f annotationBasePoint;
@@ -133,6 +139,8 @@ public:
     void setLineSet(const SbVec3f *points, const int32_t *commands, int count);
     void setPrecisePoints(const double *points, int count);
     SbBool getPrecisePoint(int index, double *pointOut) const;
+    void setPreciseAnnotationPoints(const double *points, int count);
+    SbBool getPreciseAnnotationPoint(int index, double *pointOut) const;
     SbBool translatePoints(const SbVec3f &offset);
     void setDrawCenter(const SbVec3f &center);
     SbBool updateDrawBoundsFromPoints(void);
@@ -154,6 +162,7 @@ public:
 
 private:
     std::vector<double> precisePoints;
+    std::vector<double> preciseAnnotationPoints;
 
 protected:
     virtual ~SoBRLVListShape(void);

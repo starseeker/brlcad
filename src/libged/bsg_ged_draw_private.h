@@ -341,6 +341,43 @@ GED_EXPORT extern void *ged_draw_source_root_attach_view_contexts(
 	struct ged *gedp,
 	void *active_view_ctx,
 	struct bu_ptbl *views);
+GED_EXPORT extern int ged_draw_obol_view_context_feature_store_active(
+	void *view_ctx);
+GED_EXPORT extern int ged_draw_obol_view_context_feature_exists(
+	void *view_ctx,
+	const char *name);
+GED_EXPORT extern int ged_draw_obol_view_context_feature_remove(
+	void *view_ctx,
+	const char *name);
+GED_EXPORT extern int ged_draw_obol_view_context_feature_summary(
+	void *view_ctx,
+	const char *name,
+	struct ged_draw_view_feature_summary *summary);
+GED_EXPORT extern int ged_draw_obol_view_context_line_layer_builder_replace(
+	void *view_ctx,
+	const char *name,
+	int local,
+	const struct bg_line_layer_builder *builder);
+GED_EXPORT extern int ged_draw_obol_view_context_line_layers_replace(
+	void *view_ctx,
+	const char *name,
+	int local,
+	const struct ged_draw_view_line_layer_data *layers,
+	size_t layer_count,
+	const struct ged_draw_view_feature_style *style);
+GED_EXPORT extern int ged_draw_obol_overlay_erase_name_context(
+	struct ged *gedp,
+	void *view_ctx,
+	const char *name);
+GED_EXPORT extern int ged_draw_obol_overlay_geometry_insert_context(
+	struct ged *gedp,
+	void *view_ctx,
+	const char *name,
+	const struct ged_draw_overlay_geometry *geometry,
+	const unsigned char basecolor[3],
+	fastf_t transparency,
+	int ged_draw_mode,
+	char **shape_path_out);
 GED_EXPORT extern int ged_draw_source_root_foreach_shape_ref(
 	struct ged *gedp,
 	int skip_overlay_groups,
@@ -571,6 +608,12 @@ GED_EXPORT extern int ged_draw_registry_group_ref_set_indexed_fullpath(
 	ged_draw_group_ref group_ref,
 	const struct db_full_path *path);
 GED_EXPORT extern const char *ged_draw_registry_shape_ref_semantic_path(
+	struct ged *gedp,
+	ged_draw_shape_ref shape_ref);
+GED_EXPORT extern const char *ged_draw_registry_shape_ref_cached_semantic_path(
+	struct ged *gedp,
+	ged_draw_shape_ref shape_ref);
+GED_EXPORT extern char *ged_draw_registry_shape_ref_cached_fullpath_dup(
 	struct ged *gedp,
 	ged_draw_shape_ref shape_ref);
 GED_EXPORT extern const char *ged_draw_registry_group_ref_semantic_path(
@@ -1009,6 +1052,27 @@ GED_EXPORT extern int ged_draw_obol_database_source_update_display_for_path(
 	const unsigned char material_color[3],
 	int material_revision_valid,
 	uint64_t material_revision);
+GED_EXPORT extern int ged_draw_obol_shape_update_display_for_path(
+	struct ged *gedp,
+	const char *path,
+	int visible_valid,
+	int visible,
+	int highlighted_valid,
+	int highlighted,
+	int draw_mode_valid,
+	int ged_draw_mode,
+	int line_style_valid,
+	int line_style,
+	int line_width_valid,
+	int line_width,
+	int transparency_valid,
+	fastf_t transparency,
+	int color_valid,
+	const unsigned char color[3],
+	int material_color_valid,
+	const unsigned char material_color[3],
+	int material_revision_valid,
+	uint64_t material_revision);
 GED_EXPORT extern int ged_draw_obol_database_source_update_appearance_for_path(
 	struct ged *gedp,
 	const char *path,
@@ -1085,6 +1149,10 @@ GED_EXPORT extern int ged_draw_obol_scene_controller_ensure_owned(
 	int sync_current_scene);
 GED_EXPORT extern int ged_draw_obol_scene_controller_full_synced(
 	struct ged *gedp);
+GED_EXPORT extern int ged_draw_obol_scene_sync_attached_transaction(
+	struct ged *gedp,
+	const struct ged_draw_transaction *txn,
+	const struct ged_draw_transaction_result *result);
 GED_EXPORT extern int ged_draw_obol_database_source_ensure_for_path(
 	struct ged *gedp,
 	const char *path,

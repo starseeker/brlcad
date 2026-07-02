@@ -272,10 +272,12 @@ qg_obol_pick_camera_line(BRLObolViewController *controller,
     if (size[0] <= 0 || size[1] <= 0)
 	return FALSE;
 
-    const float nx = size[0] > 1 ?
-	static_cast<float>(vx) / static_cast<float>(size[0] - 1) : 0.5f;
-    const float ny = size[1] > 1 ?
-	static_cast<float>(vy) / static_cast<float>(size[1] - 1) : 0.5f;
+    const float nx = size[0] > 0 ?
+	std::max(0.0f, std::min(1.0f,
+	    static_cast<float>(vx) / static_cast<float>(size[0]))) : 0.5f;
+    const float ny = size[1] > 0 ?
+	std::max(0.0f, std::min(1.0f,
+	    static_cast<float>(vy + 1) / static_cast<float>(size[1]))) : 0.5f;
     const float aspect = static_cast<float>(size[0]) /
 	static_cast<float>(size[1]);
 

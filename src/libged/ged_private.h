@@ -111,9 +111,10 @@ struct ged_drawable {
     int                          gd_draw_observers_init;
     int                          gd_draw_observer_dispatch_depth;
     void                        *gd_obol_scene_controller; /**< @brief active SoBRLSceneController mirrored from GED draw transactions */
-    void                        *gd_obol_controller;    /**< @brief optional borrowed BRLObolViewController wrapper for compatibility */
+    void                        *gd_obol_controller;    /**< @brief optional BRLObolViewController wrapper for command/view feature state */
     ged_draw_observer_token       gd_obol_observer_token;
     int                          gd_obol_scene_controller_owned; /**< @brief non-zero when libged owns gd_obol_scene_controller */
+    int                          gd_obol_controller_owned; /**< @brief non-zero when libged owns gd_obol_controller */
     int                          gd_obol_scene_controller_full_sync; /**< @brief non-zero when gd_obol_scene_controller has a full retained-scene mirror */
     void                        *gd_obol_preserved_sources; /**< @brief libged-owned detached Obol source inventory pending controller handoff */
     struct bu_ptbl               gd_obol_context_tokens; /**< @brief GED-owned Obol scene-context tokens returned through legacy scene_ctx APIs */

@@ -661,6 +661,32 @@ ged_draw_registry_shape_ref_semantic_path(struct ged *gedp,
 
 
 const char *
+ged_draw_registry_shape_ref_cached_semantic_path(struct ged *gedp,
+						 ged_draw_shape_ref shape_ref)
+{
+    if (!gedp || ged_draw_shape_ref_is_null(shape_ref))
+	return NULL;
+    struct ged_draw_registry_entry *entry =
+	_ged_draw_registry_entry_for_token(gedp, shape_ref.token, 0);
+    return entry ? entry->data.display_name : NULL;
+}
+
+
+char *
+ged_draw_registry_shape_ref_cached_fullpath_dup(struct ged *gedp,
+						ged_draw_shape_ref shape_ref)
+{
+    if (!gedp || ged_draw_shape_ref_is_null(shape_ref))
+	return NULL;
+    struct ged_draw_registry_entry *entry =
+	_ged_draw_registry_entry_for_token(gedp, shape_ref.token, 0);
+    if (!entry || entry->data.s_fullpath.fp_len <= 0)
+	return NULL;
+    return db_path_to_string(&entry->data.s_fullpath);
+}
+
+
+const char *
 ged_draw_registry_group_ref_semantic_path(struct ged *gedp,
 					  ged_draw_group_ref group_ref)
 {

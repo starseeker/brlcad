@@ -29,6 +29,7 @@
 
 #include "bu/opt.h"
 #include "dm.h"
+#include "ged/draw.h"
 #include "rt/view.h"
 #include "../ged_private.h"
 
@@ -140,7 +141,11 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
 	    return BRLCAD_ERROR;
 	ged_view_context_autoview_bounds(view_ctx, factor, min, max);
     } else {
-	ged_view_context_autoview(view_ctx, factor, all_view_objs);
+	vect_t min, max;
+	if (!ged_draw_bounds(gedp, &min, &max, all_view_objs))
+	    ged_view_context_autoview_bounds(view_ctx, factor, min, max);
+	else
+	    ged_view_context_autoview(view_ctx, factor, all_view_objs);
     }
 
     return BRLCAD_OK;

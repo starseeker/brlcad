@@ -16,6 +16,8 @@
 #include <Inventor/details/SoPointDetail.h>
 #include <Inventor/gl.h>
 
+#include <vector>
+
 SO_NODE_SOURCE(SoBRLVListShape);
 
 SoBRLVListShape::SoBRLVListShape(void)
@@ -123,6 +125,7 @@ void
 SoBRLVListShape::setLineSet(const SbVec3f *points, const int32_t *commands, int count)
 {
     this->precisePoints.clear();
+    this->preciseAnnotationPoints.clear();
     this->point.setNum(0);
     this->command.setNum(0);
     this->annotationPoint.setNum(0);
@@ -176,6 +179,53 @@ SoBRLVListShape::getPrecisePoint(int index, double *pointOut) const
     pointOut[0] = this->precisePoints[offset + 0];
     pointOut[1] = this->precisePoints[offset + 1];
     pointOut[2] = this->precisePoints[offset + 2];
+    return TRUE;
+}
+
+void
+SoBRLVListShape::setPreciseAnnotationPoints(const double *points, int count)
+{
+    this->preciseAnnotationPoints.clear();
+    this->annotationPoint.setNum(0);
+    if (!points || count <= 0)
+	return;
+
+    this->preciseAnnotationPoints.resize(static_cast<size_t>(count) * 3);
+    std::vector<SbVec3f> floatPoints(static_cast<size_t>(count));
+    for (int i = 0; i < count; i++) {
+	const size_t offset = static_cast<size_t>(i) * 3;
+	this->preciseAnnotationPoints[offset + 0] = points[offset + 0];
+	this->preciseAnnotationPoints[offset + 1] = points[offset + 1];
+	this->preciseAnnotationPoints[offset + 2] = points[offset + 2];
+	floatPoints[static_cast<size_t>(i)] = SbVec3f(
+		static_cast<float>(points[offset + 0]),
+		static_cast<float>(points[offset + 1]),
+		static_cast<float>(points[offset + 2]));
+    }
+    this->annotationPoint.setValues(0, count, floatPoints.data());
+}
+
+SbBool
+SoBRLVListShape::getPreciseAnnotationPoint(int index, double *pointOut) const
+{
+    if (!pointOut || index < 0)
+	return FALSE;
+
+    const size_t offset = static_cast<size_t>(index) * 3;
+    if (offset + 2 < this->preciseAnnotationPoints.size()) {
+	pointOut[0] = this->preciseAnnotationPoints[offset + 0];
+	pointOut[1] = this->preciseAnnotationPoints[offset + 1];
+	pointOut[2] = this->preciseAnnotationPoints[offset + 2];
+	return TRUE;
+    }
+
+    if (index >= this->annotationPoint.getNum())
+	return FALSE;
+
+    const SbVec3f &pointValue = this->annotationPoint[index];
+    pointOut[0] = pointValue[0];
+    pointOut[1] = pointValue[1];
+    pointOut[2] = pointValue[2];
     return TRUE;
 }
 

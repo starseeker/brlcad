@@ -16371,19 +16371,20 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[Obol owns source-adapter indexed-face updates; BSG is fallback.]]
 		[[Obol owns public shape center mutation; retained fallback is retired.]]
 		[[Obol owns public shape visibility mutation; retained fallback is retired.]]
-		[[Obol owns public group visibility mutation; BSG is fallback.]]
-		[[Obol owns public group DB-path mutation; retained BSG is fallback.]]
+		[[Obol owns public group DB-path mutation; retained fallback is retired.]]
 		[[Obol owns public shape color mutation; retained fallback is retired.]]
 		[[Obol owns public shape highlight mutation; retained fallback is retired.]]
 		[[Obol owns public shape transparency mutation; retained fallback is retired.]]
 		[[Obol owns public shape material-color mutation; retained fallback is retired.]]
 		[[_ged_draw_shape_ref_try_obol_paths_lazy]]
-		[[Obol owns public group draw-mode mutation; BSG is fallback.]]
+		[[_ged_draw_group_ref_try_obol_paths_ensure]]
+		[[GED Obol group mode path]]
+		[[GED Obol group appearance path]]
 	[[Obol owns public evaluated-region mutation; retained fallback is retired.]]
 	[[Obol owns public database-source stale mutation; retained fallback is retired.]]
-	[[Obol owns public group appearance mutation; BSG is fallback.]]
 	[[Obol owns public shape release; retained source-owner release is fallback.]]
-	[[Obol owns database-source record mutation; BSG is fallback.]]
+		[[Obol owns database-source record mutation; retained BSG record apply is]]
+		[[no-owned-scene legacy adapter compatibility only.]]
 	[[Obol owns source-root clear; retained clear is fallback.]]
 	[[Obol owns scoped database-group clear; retained clear is fallback.]]
 	[[Obol owns exact-path source/group erase; retained erase is fallback.]]
@@ -16393,7 +16394,6 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 		[[Obol owns source group membership; retained append is fallback.]]
 		[[ged_draw_obol_owner_structural_revision_bump]]
 		[[gd_draw_retained_source_owner_appends]]
-		[[gd_draw_retained_group_mutations]]
 			[[gd_draw_retained_shape_mutations]]
 			[[Obol owns public material-refresh mutation; retained fallback is retired.]]
 			[[Obol owns draft path/source-state attachment; BSG is fallback.]]
@@ -16448,14 +16448,14 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       endif()
     endforeach()
     foreach(_pat
-	[[if[^A-Za-z0-9_]*\([^)]*!obol_updated[^)]*\)[^A-Za-z0-9_]*bsg_updated[^A-Za-z0-9_]*=[^A-Za-z0-9_]*ged_draw_scene_ref_set_visible[^A-Za-z0-9_]*\([^A-Za-z0-9_]*group_ref]]
-	[[if[^A-Za-z0-9_]*\([^)]*!obol_updated[^)]*\)[^A-Za-z0-9_]*bsg_updated[^A-Za-z0-9_]*=[^A-Za-z0-9_]*ged_draw_scene_ref_set_draw_intent_mode[^A-Za-z0-9_]*\([^A-Za-z0-9_]*group_ref]]
-	[[if[^A-Za-z0-9_]*\([^)]*!obol_updated[^)]*\)[^A-Za-z0-9_]*bsg_updated[^A-Za-z0-9_]*=[^A-Za-z0-9_]*ged_draw_scene_ref_set_draw_intent_appearance_settings[^A-Za-z0-9_]*\([^A-Za-z0-9_]*group_ref]])
-      string(REGEX MATCH "${_pat}" _ged_display_mutation_fallback_only_hit
+	[[bsg_updated[^;=]*=[^;]*ged_draw_scene_ref_set_visible[^;]*group_ref]]
+	[[bsg_updated[^;=]*=[^;]*ged_draw_scene_ref_set_draw_intent_mode[^;]*group_ref]]
+	[[bsg_updated[^;=]*=[^;]*ged_draw_scene_ref_set_draw_intent_appearance_settings[^;]*group_ref]])
+      string(REGEX MATCH "${_pat}" _ged_group_display_retained_mutation_hit
 	"${_ged_bsg_draw_source_contents}")
-      if(NOT _ged_display_mutation_fallback_only_hit)
+      if(_ged_group_display_retained_mutation_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/bsg_ged_draw_source.c must keep retained public group display/draw-intent mutations inside Obol-miss fallback branches")
+	  "src/libged/bsg_ged_draw_source.c reintroduced retained public group display/draw-intent mutation fallback: ${_ged_group_display_retained_mutation_hit}")
       endif()
     endforeach()
     string(FIND "${_ged_bsg_draw_source_contents}"
@@ -16516,7 +16516,6 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	ged_draw_scene_ref_apply_path_state
 	"ged_draw_scene_ref_set_draw_intent_path(ref, semantic_path"
 	"ged_draw_scene_ref_set_draw_intent_mode(ref"
-	ged_draw_scene_ref_set_draw_intent_appearance_settings
 	ged_draw_scene_ref_draw_intent_appearance_settings
 	ged_draw_scene_ref_apply_display_settings
 	ged_draw_scene_ref_set_name
@@ -20681,6 +20680,127 @@ function(_brlobol_pivot_guard_check_librt_sketch_polygon_neutralization)
   endforeach()
 endfunction()
 
+function(_brlobol_pivot_guard_check_capability1_scene_source_closeout)
+  set(_records_file "${BRLCAD_SOURCE_DIR}/src/libged/bsg_ged_draw_records.c")
+  if(EXISTS "${_records_file}")
+    file(READ "${_records_file}" _records_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]ged/db_index\.h]]
+	[[_draw_path_database_path_exists]]
+	[[ged_db_index_path_resolve]]
+	[[_draw_obol_source_visible_in_view]]
+	[[_draw_obol_source_record_path]]
+	[[_draw_list_obol_source_path_cb]]
+	[[_draw_list_obol_source_path_collapsed_cb]]
+	[[ged_draw_obol_scene_controller_full_synced]]
+	[[ged_draw_obol_database_source_paths_foreach]])
+      string(REGEX MATCH "${_token}" _records_token_hit "${_records_contents}")
+      if(NOT _records_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/bsg_ged_draw_records.c missing Obol-primary path-state/listing closeout token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]bsg/database_source\.h]]
+	[[(^|[^A-Za-z0-9_])bsg_database_source_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_DATABASE_SOURCE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _records_bsg_hit "${_records_contents}")
+      if(_records_bsg_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/bsg_ged_draw_records.c reintroduced retained BSG database-source records for path-state/listing: ${_records_bsg_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_transactions_file
+    "${BRLCAD_SOURCE_DIR}/src/libged/bsg_ged_draw_transactions.c")
+  if(EXISTS "${_transactions_file}")
+    file(READ "${_transactions_file}" _transactions_contents)
+    foreach(_token
+	[[_ged_draw_collect_obol_source_rename_cb]]
+	[[_ged_draw_apply_obol_component_source_renames]]
+	[[ged_draw_obol_database_source_paths_foreach]]
+	[[ged_draw_obol_database_source_rename_for_path]]
+	[[_ged_draw_path_replace_component]])
+      string(FIND "${_transactions_contents}" "${_token}" _transactions_idx)
+      if(_transactions_idx EQUAL -1)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/bsg_ged_draw_transactions.c missing Obol component source-rename token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_prefix_file "${BRLCAD_SOURCE_DIR}/src/libged/prefix/prefix.c")
+  if(EXISTS "${_prefix_file}")
+    file(READ "${_prefix_file}" _prefix_contents)
+    foreach(_token
+	prefix_notify_renames
+	ged_event_notify_object_renamed
+	ged_event_notify_comb_tree_changed)
+      string(FIND "${_prefix_contents}" "${_token}" _prefix_token_idx)
+      if(_prefix_token_idx EQUAL -1)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/prefix/prefix.c missing rename-before-comb event token ${_token}")
+      endif()
+    endforeach()
+    string(FIND "${_prefix_contents}" "prefix_notify_renames(gedp, argc, argv);"
+      _prefix_rename_idx)
+    string(FIND "${_prefix_contents}" "ged_event_notify_comb_tree_changed"
+      _prefix_comb_idx)
+    if(_prefix_rename_idx EQUAL -1 OR _prefix_comb_idx EQUAL -1 OR
+	_prefix_rename_idx GREATER _prefix_comb_idx)
+      _brlobol_pivot_guard_fail(
+	"src/libged/prefix/prefix.c must publish object rename events before comb-tree redraw events")
+    endif()
+  endif()
+
+  set(_draw_scene_test
+    "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/ged_draw_scene.cpp")
+  if(EXISTS "${_draw_scene_test}")
+    file(READ "${_draw_scene_test}" _draw_scene_contents)
+    foreach(_token
+	[[enum[ \t\r\n]+draw_scene_shard]]
+	[[DRAW_SCENE_SHARD_RENAME]]
+	[[DRAW_SCENE_SHARD_REF_REMOVE]]
+	[[draw_scene_shard_runs]]
+	[[ged_draw_scene_%s\.g]]
+	[[ged_draw_scene_cache_%s]])
+      string(REGEX MATCH "${_token}" _draw_scene_token_hit
+	"${_draw_scene_contents}")
+      if(NOT _draw_scene_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/tests/draw/ged_draw_scene.cpp missing split draw-scene shard token ${_token}")
+      endif()
+    endforeach()
+    string(FIND "${_draw_scene_contents}" "debug_obol_source" _debug_idx)
+    if(NOT _debug_idx EQUAL -1)
+      _brlobol_pivot_guard_fail(
+	"src/libged/tests/draw/ged_draw_scene.cpp must not retain temporary Obol source diagnostics")
+    endif()
+  endif()
+
+  set(_draw_scene_cmake
+    "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/CMakeLists.txt")
+  if(EXISTS "${_draw_scene_cmake}")
+    file(READ "${_draw_scene_cmake}" _draw_scene_cmake_contents)
+    foreach(_token
+	[[set\(ged_draw_scene_shards]]
+	[[rename]]
+	[[ref_remove]]
+	[[foreach\(draw_scene_shard \$\{ged_draw_scene_shards\}\)]]
+	[[ged_test_ged_draw_scene_\$\{draw_scene_shard\}]]
+	[[ged_draw_scene_\$\{draw_scene_shard\}\.g]]
+	[[ged_draw_scene_cache_\$\{draw_scene_shard\}]])
+      string(REGEX MATCH "${_token}" _draw_scene_cmake_token_hit
+	"${_draw_scene_cmake_contents}")
+      if(NOT _draw_scene_cmake_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/tests/draw/CMakeLists.txt missing split draw-scene CTest shard token ${_token}")
+      endif()
+    endforeach()
+  endif()
+endfunction()
+
 function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
   set(_ged_obol_header "${BRLCAD_SOURCE_DIR}/include/ged/draw_obol.h")
   if(NOT EXISTS "${_ged_obol_header}")
@@ -20909,7 +21029,6 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 	[[(^|[^A-Za-z0-9_])need_update[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_scene_context_display_summary[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])struct[ \t\r\n]+bsg_view([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])bsg_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]])
       string(REGEX MATCH "${_pat}" _ged_obol_src_direct_hit
 	"${_ged_obol_src_contents}")
@@ -21296,6 +21415,18 @@ function(_brlobol_pivot_guard_check_qtcad_obol_test_links)
       "qtcad QgSW swrast integration test: no direct libbsg link")
   endif()
 
+  foreach(_token
+      "_qtcad_obol_swrast_test"
+      "set_property(TEST \${_qtcad_obol_swrast_test}"
+      "set_property(TEST ged_test_qged_swrast"
+      "QTCAD_OBOL_FORCE_OSMESA=1")
+    string(FIND "${_qtcad_tests}" "${_token}" _qtcad_swrast_token_idx)
+    if(_qtcad_swrast_token_idx EQUAL -1)
+      _brlobol_pivot_guard_fail(
+	"src/libqtcad/tests/CMakeLists.txt must keep qtcad Obol swrast CTest environment token ${_token}")
+    endif()
+  endforeach()
+
   set(_obol_test_targets
     test_qtcad_obol_controller
     test_qtcad_obol_draw_sync
@@ -21357,6 +21488,31 @@ function(_brlobol_pivot_guard_check_qtcad_obol_test_links)
     _brlobol_pivot_guard_fail(
       "src/libqtcad/tests/CMakeLists.txt reintroduced a direct libbsg hint in the disabled DM backend benchmark link row")
   endif()
+endfunction()
+
+function(_brlobol_pivot_guard_check_qtcad_obol_swrast_context)
+  set(_qtcad_context_manager
+    "${BRLCAD_SOURCE_DIR}/src/libqtcad/QgObolContextManager.h")
+  if(NOT EXISTS "${_qtcad_context_manager}")
+    _brlobol_pivot_guard_fail(
+      "src/libqtcad/QgObolContextManager.h is required for qtcad Obol swrast context checks")
+    return()
+  endif()
+
+  file(READ "${_qtcad_context_manager}" _qtcad_context)
+  foreach(_token
+      [[#[ \t]*include[ \t]*[<"]bu/str\.h]]
+      [[QTCAD_OBOL_FORCE_OSMESA]]
+      [[bu_str_true]]
+      [[createFallbackContext\(ctx, width, height\)]]
+      [[SoDB::createOSMesaContextManager\(\)]])
+    string(REGEX MATCH "${_token}" _qtcad_context_token_hit
+      "${_qtcad_context}")
+    if(NOT _qtcad_context_token_hit)
+      _brlobol_pivot_guard_fail(
+	"src/libqtcad/QgObolContextManager.h missing swrast context token ${_token}")
+    endif()
+  endforeach()
 endfunction()
 
 function(_brlobol_pivot_guard_check_qtcad_obol_edit_preview_intent)
@@ -22727,7 +22883,7 @@ function(_brlobol_pivot_guard_check_qtcad_view_snapshot_adapters)
 	"getGroupChildCount"
 	"BRLOBOL_LOD_DRAW_WIRE"
 	"pair.c/box.s"
-	"full-path Obol draw sync should not synthesize GED groups without neutral group records"
+	"full-path Obol draw sync should retain the GED draw group around the source"
 	"GED_DRAW_APPEARANCE_SETTINGS_INIT"
 	"GED_DRAW_MODE_SHADED"
 	"GED_DRAW_MODE_WIRE"
@@ -27703,6 +27859,7 @@ _brlobol_pivot_guard_check_brlobol_point_identity()
 _brlobol_pivot_guard_check_brlobol_lod_metadata()
 _brlobol_pivot_guard_check_libbsg_public_payload_hygiene()
 _brlobol_pivot_guard_check_legacy_header_include_hygiene()
+_brlobol_pivot_guard_check_capability1_scene_source_closeout()
 _brlobol_pivot_guard_check_libged_obol_draw_bridge()
 _brlobol_pivot_guard_check_plot3_ownership()
 _brlobol_pivot_guard_check_low_level_libbsg_link_neutralization()
@@ -27718,6 +27875,7 @@ _brlobol_pivot_guard_check_librt_edit_knob_neutralization()
 _brlobol_pivot_guard_check_librt_view_info_neutralization()
 _brlobol_pivot_guard_check_librt_sketch_polygon_neutralization()
 _brlobol_pivot_guard_check_qtcad_obol_test_links()
+_brlobol_pivot_guard_check_qtcad_obol_swrast_context()
 _brlobol_pivot_guard_check_qtcad_obol_edit_preview_intent()
 _brlobol_pivot_guard_check_qged_edit_preview_boundary()
 _brlobol_pivot_guard_check_tclcad_snap_mask_boundary()

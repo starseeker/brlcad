@@ -255,6 +255,9 @@ ged_draw_view_context_feature_exists(void *view_ctx, const char *name)
     if (!view || !name)
 	return 0;
 
+    if (ged_draw_obol_view_context_feature_store_active(view_ctx))
+	return ged_draw_obol_view_context_feature_exists(view_ctx, name);
+
     bsg_feature_ref ref = bsg_feature_find(view, name);
     return !bsg_feature_ref_is_null(ref);
 }
@@ -265,6 +268,9 @@ ged_draw_view_context_feature_remove(void *view_ctx, const char *name)
     struct bsg_view *view = (struct bsg_view *)view_ctx;
     if (!view || !name)
 	return 0;
+
+    if (ged_draw_obol_view_context_feature_store_active(view_ctx))
+	return ged_draw_obol_view_context_feature_remove(view_ctx, name);
 
     return bsg_feature_remove(view, name) ? 1 : 0;
 }
@@ -281,6 +287,10 @@ ged_draw_view_context_feature_summary(
     memset(summary, 0, sizeof(*summary));
     if (!view_ctx || !name)
 	return 0;
+
+    if (ged_draw_obol_view_context_feature_store_active(view_ctx))
+	return ged_draw_obol_view_context_feature_summary(view_ctx, name,
+		summary);
 
     bsg_feature_ref ref = bsg_feature_find((struct bsg_view *)view_ctx, name);
     if (bsg_feature_ref_is_null(ref))
@@ -693,6 +703,10 @@ ged_draw_view_context_line_layer_builder_replace(
     if (!view || !name)
 	return 0;
 
+    if (ged_draw_obol_view_context_feature_store_active(view_ctx))
+	return ged_draw_obol_view_context_line_layer_builder_replace(
+		view_ctx, name, local, builder);
+
     if (!builder || !bg_line_layer_builder_point_count(builder)) {
 	bsg_feature_remove(view, name);
 	return 1;
@@ -730,6 +744,10 @@ ged_draw_view_context_line_layers_replace(void *view_ctx,
     struct bsg_view *view = (struct bsg_view *)view_ctx;
     if (!view || !name)
 	return 0;
+
+    if (ged_draw_obol_view_context_feature_store_active(view_ctx))
+	return ged_draw_obol_view_context_line_layers_replace(view_ctx, name,
+		local, layers, layer_count, style);
 
     size_t live_layers = 0;
     for (size_t i = 0; layers && i < layer_count; i++) {

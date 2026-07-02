@@ -13,6 +13,7 @@
 #include "brlobol/line_layer_overlay.h"
 #include "brlobol/lod_realization.h"
 #include "brlobol/mesh_shape.h"
+#include "brlobol/scene_group.h"
 #include "brlobol/view_controller.h"
 #include "brlobol/view_store.h"
 #include "brlobol/vlist_shape.h"
@@ -645,6 +646,31 @@ store_vlist_node(const BRLObolFeatureStoreRecord &rec)
     return shape;
 }
 
+static SoBRLSceneGroup *
+store_feature_group_node(const BRLObolFeatureStoreRecord &rec)
+{
+    SoBRLSceneGroup *group = new SoBRLSceneGroup;
+    const SbString path =
+	rec.identity.getLength() > 0 ? rec.identity : rec.name;
+    group->groupPath = path;
+    group->drawIntentValid = TRUE;
+    group->drawIntentPath = path;
+    group->drawMode = BRLOBOL_LOD_DRAW_DIAGNOSTIC;
+    group->fallbackDrawMode = BRLOBOL_LOD_DRAW_WIRE;
+    group->overlayIntent = TRUE;
+    if (rec.style.hasVisible)
+	group->visible = rec.style.visible;
+    if (rec.style.hasLineStyle)
+	group->lineStyle = rec.style.lineStyle;
+    if (rec.style.hasLineWidth)
+	group->lineWidth = rec.style.lineWidth;
+    if (rec.style.hasColor) {
+	group->colorOverride = TRUE;
+	group->color = rec.style.color;
+    }
+    return group;
+}
+
 static void
 store_append_face_triangles(const std::vector<int32_t> &face,
 	size_t pointCount,
@@ -745,11 +771,12 @@ store_indexed_face_node(const BRLObolFeatureStoreRecord &rec)
 static SoNode *
 store_line_layers_node(const BRLObolFeatureStoreRecord &rec)
 {
-    SoSeparator *sep = new SoSeparator;
+    SoBRLSceneGroup *sep = store_feature_group_node(rec);
     for (size_t i = 0; i < rec.layers.size(); i++) {
 	BRLObolFeatureStoreRecord layerRec = rec;
 	layerRec.name = rec.layers[i].name.getLength() > 0 ?
 	    rec.layers[i].name : rec.name;
+	layerRec.identity = layerRec.name;
 	layerRec.points = rec.layers[i].points;
 	layerRec.commands = rec.layers[i].commands;
 	layerRec.style = rec.layers[i].style;
@@ -764,7 +791,7 @@ store_line_layers_node(const BRLObolFeatureStoreRecord &rec)
 static SoNode *
 store_axes_node(const BRLObolFeatureStoreRecord &rec)
 {
-    SoSeparator *sep = new SoSeparator;
+    SoBRLSceneGroup *sep = store_feature_group_node(rec);
     const float size = rec.halfAxesSize > 0.0f ? rec.halfAxesSize : 1.0f;
 
     for (size_t i = 0; i < rec.axesCenters.size(); i++) {
@@ -784,7 +811,7 @@ store_axes_node(const BRLObolFeatureStoreRecord &rec)
 static SoNode *
 store_label_node(const BRLObolFeatureStoreRecord &rec)
 {
-    SoSeparator *sep = new SoSeparator;
+    SoBRLSceneGroup *sep = store_feature_group_node(rec);
     const SbColor fallbackColor = rec.style.hasColor ?
 	rec.style.color : SbColor(1.0f, 1.0f, 1.0f);
 

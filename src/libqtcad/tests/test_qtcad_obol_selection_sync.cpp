@@ -73,9 +73,17 @@ find_source(BRLObolViewController *controller, const char *path)
     if (!controller || !path)
 	return NULL;
 
+    const char *normalized_path = path;
+    while (*normalized_path == '/')
+	normalized_path++;
     for (int i = 0; i < controller->getDatabaseSourceCount(); i++) {
 	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
-	if (source && BU_STR_EQUAL(source->path.getValue().getString(), path))
+	const char *source_path = source ? source->path.getValue().getString() : NULL;
+	if (!source_path)
+	    continue;
+	while (*source_path == '/')
+	    source_path++;
+	if (BU_STR_EQUAL(source_path, normalized_path))
 	    return source;
     }
     return NULL;

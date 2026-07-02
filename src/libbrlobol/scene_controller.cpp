@@ -8,6 +8,7 @@
 #include "common.h"
 
 #include "brlobol/database_source.h"
+#include "brlobol/line_layer_overlay.h"
 #include "brlobol/material_object.h"
 #include "brlobol/mesh_shape.h"
 #include "brlobol/realize_action.h"
@@ -35,16 +36,23 @@ skip_leading_slash(const char *path)
 }
 
 static int
+scene_path_equal(const char *stored, const char *path)
+{
+    if (!stored || !path)
+	return 0;
+    if (strcmp(stored, path) == 0)
+	return 1;
+    return strcmp(skip_leading_slash(stored), skip_leading_slash(path)) == 0;
+}
+
+static int
 database_source_path_equal(const SoBRLDatabaseSource *source,
 	const char *path)
 {
     if (!source || !path)
 	return 0;
     const char *sourcePath = source->path.getValue().getString();
-    if (strcmp(sourcePath, path) == 0)
-	return 1;
-    return strcmp(skip_leading_slash(sourcePath),
-	    skip_leading_slash(path)) == 0;
+    return scene_path_equal(sourcePath, path);
 }
 
 static SbString
@@ -66,10 +74,7 @@ database_source_instance_key_equal(const SoBRLDatabaseSource *source,
 	return 0;
     const SbString key = database_source_effective_instance_key(source);
     const char *stored = key.getString();
-    if (strcmp(stored, instanceKey) == 0)
-	return 1;
-    return strcmp(skip_leading_slash(stored),
-	    skip_leading_slash(instanceKey)) == 0;
+    return scene_path_equal(stored, instanceKey);
 }
 
 static SoBRLDatabaseSource *
@@ -457,6 +462,13 @@ scene_group_summary_path(const SoNode *node, const SbString &fallbackPath)
 	    static_cast<const SoBRLSceneGroup *>(node);
 	if (group->groupPath.getValue().getLength() > 0)
 	    return group->groupPath.getValue();
+    }
+
+    if (node && node->isOfType(SoBRLLineLayerOverlay::getClassTypeId())) {
+	const SoBRLLineLayerOverlay *overlay =
+	    static_cast<const SoBRLLineLayerOverlay *>(node);
+	if (overlay->overlayId.getValue().getLength() > 0)
+	    return overlay->overlayId.getValue();
     }
 
     return fallbackPath;
@@ -2193,15 +2205,23 @@ SoBRLSceneController::markDatabaseSourceInstanceStale(
     if (!staleReason)
 	staleReason = SoBRLDatabaseSource::STALE_SOURCE;
 
+    uint32_t nextSourceRevision = source->sourceRevision.getValue();
+    if (staleReason & (SoBRLDatabaseSource::STALE_SOURCE |
+	    SoBRLDatabaseSource::STALE_DATABASE))
+	nextSourceRevision++;
+
     const uint32_t nextReason =
 	source->staleReason.getValue() | staleReason;
-    const int changed = !source->stale.getValue() ||
+    const int changed =
+	source->sourceRevision.getValue() != nextSourceRevision ||
+	!source->stale.getValue() ||
 	source->staleReason.getValue() != nextReason ||
 	source->realizationStatus.getValue() != SoBRLDatabaseSource::UNREALIZED ||
 	source->realizationDiagnostic.getValue().getLength() > 0;
     if (!changed)
 	return 0;
 
+    source->sourceRevision = nextSourceRevision;
     source->markStale(staleReason);
     this->advanceFrameRevision();
     return 1;
@@ -2800,14 +2820,34 @@ SoBRLSceneController::getSceneTreeSummary(int index,
 static int
 scene_summary_path_equal(const SbString &summaryPath, const char *nodePath)
 {
-    if (!nodePath)
-	return 0;
+    return scene_path_equal(summaryPath.getString(), nodePath);
+}
 
-    const char *stored = summaryPath.getString();
-    if (strcmp(stored, nodePath) == 0)
-	return 1;
-    return strcmp(skip_leading_slash(stored),
-	    skip_leading_slash(nodePath)) == 0;
+static const SoGroup *
+scene_tree_group_find_by_summary_path(const SoNode *node,
+	const char *nodePath,
+	const SbString &fallbackPath)
+{
+    if (!node || !nodePath || !node->isOfType(SoGroup::getClassTypeId()))
+	return NULL;
+
+    const SoGroup *group = static_cast<const SoGroup *>(node);
+    const SbString groupPath = scene_group_summary_path(node, fallbackPath);
+    if (scene_path_equal(groupPath.getString(), nodePath))
+	return group;
+
+    for (int i = 0; i < group->getNumChildren(); i++) {
+	const SoNode *child = group->getChild(i);
+	if (!child || !child->isOfType(SoGroup::getClassTypeId()))
+	    continue;
+	const SbString childPath = scene_child_summary_path(groupPath, child);
+	const SoGroup *found = scene_tree_group_find_by_summary_path(child,
+		nodePath, childPath);
+	if (found)
+	    return found;
+    }
+
+    return NULL;
 }
 
 SbBool
@@ -2884,6 +2924,9 @@ SoBRLSceneController::getSceneChildTreeSummary(const char *nodePath,
     }
 
     const SoGroup *group = this->findGroup(nodePath);
+    if (!group)
+	group = scene_tree_group_find_by_summary_path(this->root, nodePath,
+		SbString("/"));
     if (group) {
 	if (childIndex >= group->getNumChildren())
 	    return FALSE;

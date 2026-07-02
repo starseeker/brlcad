@@ -31,6 +31,7 @@
 #include "bu/str.h"
 #include "bu/color.h"
 #include "bu/hash.h"
+#include "bu/malloc.h"
 #include "bg/clip.h"
 
 #include "ged.h"
@@ -128,6 +129,19 @@ struct ged_draw_rename_ctx {
     const char *old_path;
     const char *new_path;
     int changed;
+};
+
+
+struct ged_draw_rename_source_entry {
+    char *old_path;
+    char *new_path;
+};
+
+
+struct ged_draw_rename_source_ctx {
+    const char *old_path;
+    const char *new_path;
+    struct bu_ptbl entries;
 };
 
 
@@ -464,6 +478,94 @@ _ged_draw_rename_group_cb(const struct ged_draw_group_record *rec, void *userdat
 }
 
 
+static void
+_ged_draw_rename_source_entry_free(struct ged_draw_rename_source_entry *entry)
+{
+    if (!entry)
+	return;
+    if (entry->old_path)
+	bu_free(entry->old_path, "draw rename old source path");
+    if (entry->new_path)
+	bu_free(entry->new_path, "draw rename new source path");
+    bu_free(entry, "draw rename source entry");
+}
+
+
+static int
+_ged_draw_collect_obol_source_rename_cb(struct ged *UNUSED(gedp),
+					const char *source_path,
+					void *userdata)
+{
+    struct ged_draw_rename_source_ctx *ctx =
+	(struct ged_draw_rename_source_ctx *)userdata;
+    if (!ctx || !source_path || !source_path[0] ||
+	    !ctx->old_path || !ctx->new_path)
+	return 1;
+
+    struct bu_vls updated = BU_VLS_INIT_ZERO;
+    if (!_ged_draw_path_replace_component(&updated, source_path,
+	    ctx->old_path, ctx->new_path)) {
+	bu_vls_free(&updated);
+	return 1;
+    }
+
+    const char *old_path = ged_draw_dbpath_skip_lead_slash(source_path);
+    const char *new_path = bu_vls_cstr(&updated);
+    if (!new_path || !new_path[0] || BU_STR_EQUAL(old_path, new_path)) {
+	bu_vls_free(&updated);
+	return 1;
+    }
+
+    struct ged_draw_rename_source_entry *entry =
+	(struct ged_draw_rename_source_entry *)bu_calloc(1, sizeof(*entry),
+		"draw rename source entry");
+    entry->old_path = bu_strdup(old_path);
+    entry->new_path = bu_strdup(new_path);
+    bu_ptbl_ins(&ctx->entries, (long *)entry);
+
+    bu_vls_free(&updated);
+    return 1;
+}
+
+
+static int
+_ged_draw_apply_obol_component_source_renames(struct ged *gedp,
+					     const char *old_path,
+					     const char *new_path)
+{
+    if (!gedp || !old_path || !new_path)
+	return 0;
+
+    struct ged_draw_rename_source_ctx ctx;
+    ctx.old_path = old_path;
+    ctx.new_path = new_path;
+    bu_ptbl_init(&ctx.entries, 8, "draw rename source entries");
+
+    int status = ged_draw_obol_database_source_paths_foreach(gedp, 1,
+	    _ged_draw_collect_obol_source_rename_cb, &ctx);
+    int changed = 0;
+    if (status >= 0) {
+	unsigned long long revision = ged_draw_scene_revision(gedp) + 1;
+	for (size_t i = 0; i < BU_PTBL_LEN(&ctx.entries); i++) {
+	    struct ged_draw_rename_source_entry *entry =
+		(struct ged_draw_rename_source_entry *)BU_PTBL_GET(&ctx.entries,
+			i);
+	    if (entry && ged_draw_obol_database_source_rename_for_path(gedp,
+		    entry->old_path, entry->new_path, revision))
+		changed++;
+	}
+    }
+
+    for (size_t i = 0; i < BU_PTBL_LEN(&ctx.entries); i++)
+	_ged_draw_rename_source_entry_free(
+		(struct ged_draw_rename_source_entry *)BU_PTBL_GET(&ctx.entries,
+		    i));
+    bu_ptbl_free(&ctx.entries);
+
+    return changed;
+}
+
+
 static int
 _ged_draw_apply_database_rename(struct ged *gedp,
 				const char *old_path,
@@ -478,6 +580,8 @@ _ged_draw_apply_database_rename(struct ged *gedp,
     ctx.new_path = new_path;
     ctx.changed = ged_draw_obol_database_source_rename_for_path(gedp,
 	    old_path, new_path, ged_draw_scene_revision(gedp) + 1) ? 1 : 0;
+    ctx.changed += _ged_draw_apply_obol_component_source_renames(gedp,
+	    old_path, new_path);
     ged_draw_foreach_group_record(gedp, _ged_draw_rename_group_cb, &ctx);
     return ctx.changed;
 }
@@ -1838,6 +1942,9 @@ ged_draw_apply_transaction(struct ged *gedp,
     }
 
     (void)ged_draw_obol_scene_controller_ensure_owned(gedp, 1);
+    if (ged_draw_obol_scene_controller_full_synced(gedp))
+	(void)ged_draw_source_root_attach_view_contexts(gedp,
+		ged_draw_active_view_ctx(gedp), ged_view_set_views_ctx(gedp));
 
     struct ged_draw_transaction_result local_result;
     int use_local_result = 0;
@@ -1861,6 +1968,17 @@ ged_draw_apply_transaction(struct ged *gedp,
 	    bu_vls_printf(&result->errors, "draw transaction failed");
 	    if (path)
 		bu_vls_printf(&result->errors, ": %s", path);
+	} else if (ret == 0 && _ged_draw_txn_kind_changes_scene(txn->kind)) {
+	    int obol_ret =
+		ged_draw_obol_scene_sync_attached_transaction(gedp, txn,
+			result);
+	    if (obol_ret > 0) {
+		ret = obol_ret;
+		result->status = ret;
+		_ged_draw_txn_bump_revision_if_needed(gedp, txn, ret,
+			result->scene_revision_before);
+		result->scene_revision_after = ged_draw_scene_revision(gedp);
+	    }
 	}
 	_ged_draw_observers_dispatch(gedp, txn, result);
     }

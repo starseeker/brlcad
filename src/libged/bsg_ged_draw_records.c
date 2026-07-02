@@ -35,6 +35,7 @@
 #include "bu/sort.h"
 #include "bu/str.h"
 #include "bu/vls.h"
+#include "ged/db_index.h"
 #include "ged/draw.h"
 #include "rt/view.h"
 #include "./ged_private.h"
@@ -136,6 +137,28 @@ _draw_path_is_prefix(const char *prefix, const char *path)
 }
 
 
+static const char *
+_draw_path_leaf_name(const char *path)
+{
+    if (!path)
+	return NULL;
+    path = ged_draw_dbpath_skip_lead_slash(path);
+    const char *slash = strrchr(path, '/');
+    return slash ? slash + 1 : path;
+}
+
+
+static int
+_draw_path_database_path_exists(struct ged *gedp, const char *path)
+{
+    if (!gedp || !path || !path[0])
+	return 0;
+    if (!ged_db_index_available(gedp))
+	return 0;
+    return ged_db_index_path_resolve(gedp, path, NULL, 0) > 0;
+}
+
+
 struct _draw_path_leaf_ctx {
     bu_hash_tbl *paths;
     size_t count;
@@ -232,7 +255,84 @@ struct _draw_path_state_ctx {
     bu_hash_tbl *drawn_leaf_paths;
     int exact_shape;
     int descendant_shape;
+    int ancestor_group;
+    int matching_leaf;
 };
+
+
+static int
+_draw_obol_source_visible_in_view(
+	struct ged *gedp,
+	const char *source_path,
+	void *view_ctx,
+	int mode,
+	struct ged_draw_group_record_summary *group_out)
+{
+    if (group_out)
+	memset(group_out, 0, sizeof(*group_out));
+    if (!gedp || !source_path || !source_path[0])
+	return 0;
+
+    struct ged_draw_scene_display_summary shape_summary;
+    if (!ged_draw_obol_database_source_display_summary_for_path(gedp,
+	    source_path, &shape_summary) || !shape_summary.valid ||
+	    !shape_summary.visible)
+	return 0;
+    if (mode >= 0 && shape_summary.draw_mode != mode)
+	return 0;
+
+    struct bu_vls group_path = BU_VLS_INIT_ZERO;
+    if (ged_draw_obol_database_source_owner_group_path_for_path(gedp,
+	    source_path, &group_path)) {
+	struct ged_draw_group_record_summary group_summary = {0};
+	if (!ged_draw_obol_group_record_summary_for_path(gedp,
+		bu_vls_cstr(&group_path), &group_summary) ||
+		group_summary.is_overlay || !group_summary.visible ||
+		!_draw_group_record_summary_in_view(&group_summary,
+		    view_ctx)) {
+	    bu_vls_free(&group_path);
+	    return 0;
+	}
+	if (group_out)
+	    *group_out = group_summary;
+    }
+    bu_vls_free(&group_path);
+
+    return 1;
+}
+
+
+static const char *
+_draw_obol_source_record_path(struct bu_vls *storage,
+			      const char *source_path,
+			      const struct ged_draw_group_record_summary *group_summary)
+{
+    if (storage)
+	bu_vls_trunc(storage, 0);
+    if (!source_path || !source_path[0])
+	return NULL;
+
+    source_path = ged_draw_dbpath_skip_lead_slash(source_path);
+    if (!group_summary || !group_summary->path || !group_summary->path[0])
+	return source_path;
+
+    const char *group_path = ged_draw_dbpath_skip_lead_slash(
+	    group_summary->path);
+    if (!group_path || !group_path[0] ||
+	    _draw_path_equal(group_path, source_path) ||
+	    _draw_path_is_prefix(group_path, source_path))
+	return source_path;
+
+    const char *source_leaf = strrchr(source_path, '/');
+    source_leaf = source_leaf ? source_leaf + 1 : source_path;
+    if (!source_leaf || !source_leaf[0])
+	return source_path;
+
+    if (!storage)
+	return source_path;
+    bu_vls_printf(storage, "%s/%s", group_path, source_leaf);
+    return bu_vls_cstr(storage);
+}
 
 
 static int
@@ -245,30 +345,21 @@ _draw_path_state_obol_source_cb(struct ged *gedp,
     if (!ctx || !gedp || !source_path || !source_path[0])
 	return 1;
 
-    struct ged_draw_scene_display_summary shape_summary;
-    if (!ged_draw_obol_database_source_display_summary_for_path(gedp,
-	    source_path, &shape_summary) || !shape_summary.valid ||
-	    !shape_summary.visible)
+    struct ged_draw_group_record_summary group_summary = {0};
+    if (!_draw_obol_source_visible_in_view(gedp, source_path, ctx->view_ctx,
+	    ctx->mode, &group_summary))
 	return 1;
-    if (ctx->mode >= 0 && shape_summary.draw_mode != ctx->mode)
-	return 1;
+    if (group_summary.path && !_draw_path_equal(ctx->path, group_summary.path) &&
+	    _draw_path_is_prefix(group_summary.path, ctx->path))
+	ctx->ancestor_group = 1;
 
-    struct bu_vls group_path = BU_VLS_INIT_ZERO;
-    if (ged_draw_obol_database_source_owner_group_path_for_path(gedp,
-	    source_path, &group_path)) {
-	struct ged_draw_group_record_summary group_summary = {0};
-	if (!ged_draw_obol_group_record_summary_for_path(gedp,
-		bu_vls_cstr(&group_path), &group_summary) ||
-		group_summary.is_overlay || !group_summary.visible ||
-		!_draw_group_record_summary_in_view(&group_summary,
-		    ctx->view_ctx)) {
-	    bu_vls_free(&group_path);
-	    return 1;
-	}
-    }
-    bu_vls_free(&group_path);
-
-    const char *key = ged_draw_dbpath_skip_lead_slash(source_path);
+    struct bu_vls record_path_storage = BU_VLS_INIT_ZERO;
+    const char *key = _draw_obol_source_record_path(&record_path_storage,
+	    source_path, &group_summary);
+    const char *query_leaf = _draw_path_leaf_name(ctx->path);
+    const char *source_leaf = _draw_path_leaf_name(key);
+    if (query_leaf && source_leaf && BU_STR_EQUAL(query_leaf, source_leaf))
+	ctx->matching_leaf = 1;
     if (_draw_path_equal(ctx->path, key))
 	ctx->exact_shape = 1;
     if (_draw_path_is_prefix(ctx->path, key))
@@ -276,6 +367,16 @@ _draw_path_state_obol_source_cb(struct ged *gedp,
     if (key && key[0])
 	(void)bu_hash_set(ctx->drawn_leaf_paths,
 		(const uint8_t *)key, strlen(key), (void *)1);
+    if (source_leaf && source_leaf[0] && ctx->path && ctx->path[0]) {
+	struct bu_vls synthesized = BU_VLS_INIT_ZERO;
+	bu_vls_printf(&synthesized, "%s/%s", ctx->path, source_leaf);
+	if (_draw_path_database_path_exists(gedp, bu_vls_cstr(&synthesized)))
+	    (void)bu_hash_set(ctx->drawn_leaf_paths,
+		    (const uint8_t *)bu_vls_cstr(&synthesized),
+		    bu_vls_strlen(&synthesized), (void *)1);
+	bu_vls_free(&synthesized);
+    }
+    bu_vls_free(&record_path_storage);
 
     return 1;
 }
@@ -330,6 +431,9 @@ _draw_path_state_eval(struct ged *gedp,
 	return 0;
 
     if (ctx->exact_shape)
+	return 1;
+    if (ctx->ancestor_group && ctx->matching_leaf &&
+	    _draw_path_database_path_exists(gedp, path))
 	return 1;
 
     if (!ctx->descendant_shape)
@@ -622,6 +726,69 @@ _draw_list_shape_ref_path_cb(ged_draw_shape_ref ref, void *ud)
 }
 
 
+static int
+_draw_list_obol_source_path_cb(struct ged *gedp,
+			       const char *source_path,
+			       void *ud)
+{
+    struct _draw_path_list_ctx *ctx = (struct _draw_path_list_ctx *)ud;
+    if (!ctx || !source_path || !source_path[0])
+	return 1;
+
+    struct ged_draw_group_record_summary group_summary = {0};
+    if (!_draw_obol_source_visible_in_view(gedp, source_path, ctx->view_ctx,
+	    ctx->mode, &group_summary))
+	return 1;
+
+    struct bu_vls record_path_storage = BU_VLS_INIT_ZERO;
+    const char *record_path = _draw_obol_source_record_path(
+	    &record_path_storage, source_path, &group_summary);
+    (void)_draw_path_list_add(ctx, record_path);
+    bu_vls_free(&record_path_storage);
+    return 1;
+}
+
+
+static int
+_draw_list_obol_source_path_collapsed_cb(struct ged *gedp,
+					 const char *source_path,
+					 void *ud)
+{
+    struct _draw_path_list_ctx *ctx = (struct _draw_path_list_ctx *)ud;
+    if (!ctx || !source_path || !source_path[0])
+	return 1;
+
+    struct ged_draw_group_record_summary group_summary = {0};
+    if (!_draw_obol_source_visible_in_view(gedp, source_path, ctx->view_ctx,
+	    ctx->mode, &group_summary))
+	return 1;
+
+    struct bu_vls record_path_storage = BU_VLS_INIT_ZERO;
+    struct bu_vls candidate = BU_VLS_INIT_ZERO;
+    const char *record_path = _draw_obol_source_record_path(
+	    &record_path_storage, source_path, &group_summary);
+    const char *best = record_path;
+    if (record_path && record_path[0]) {
+	size_t len = strlen(record_path);
+	for (size_t i = 0; i <= len; i++) {
+	    if (record_path[i] != '/' && record_path[i] != '\0')
+		continue;
+	    bu_vls_trunc(&candidate, 0);
+	    bu_vls_strncpy(&candidate, record_path, i);
+	    if (_draw_path_list_cached_state(ctx, bu_vls_cstr(&candidate)) == 1) {
+		best = bu_vls_cstr(&candidate);
+		break;
+	    }
+	}
+    }
+
+    (void)_draw_path_list_add_collapsed(ctx, best);
+    bu_vls_free(&candidate);
+    bu_vls_free(&record_path_storage);
+    return 1;
+}
+
+
 struct _draw_has_paths_ctx {
     struct ged *gedp;
     void *view_ctx;
@@ -639,28 +806,9 @@ _draw_has_paths_obol_source_cb(struct ged *gedp,
     if (!ctx || !gedp || !source_path || !source_path[0])
 	return 1;
 
-    struct ged_draw_scene_display_summary shape_summary;
-    if (!ged_draw_obol_database_source_display_summary_for_path(gedp,
-	    source_path, &shape_summary) || !shape_summary.valid ||
-	    !shape_summary.visible)
+    if (!_draw_obol_source_visible_in_view(gedp, source_path, ctx->view_ctx,
+	    ctx->mode, NULL))
 	return 1;
-    if (ctx->mode >= 0 && shape_summary.draw_mode != ctx->mode)
-	return 1;
-
-    struct bu_vls group_path = BU_VLS_INIT_ZERO;
-    if (ged_draw_obol_database_source_owner_group_path_for_path(gedp,
-	    source_path, &group_path)) {
-	struct ged_draw_group_record_summary group_summary = {0};
-	if (!ged_draw_obol_group_record_summary_for_path(gedp,
-		bu_vls_cstr(&group_path), &group_summary) ||
-		group_summary.is_overlay || !group_summary.visible ||
-		!_draw_group_record_summary_in_view(&group_summary,
-		    ctx->view_ctx)) {
-	    bu_vls_free(&group_path);
-	    return 1;
-	}
-    }
-    bu_vls_free(&group_path);
 
     ctx->found = 1;
     return 0;
@@ -715,12 +863,21 @@ ged_draw_list_paths(struct ged *gedp,
 	return 0;
     }
 
-    if (expanded)
-	ged_draw_scene_root_foreach_shape_ref(gedp, 0,
-		_draw_list_shape_ref_path_cb, &ctx);
-    else
-	ged_draw_scene_root_foreach_shape_ref(gedp, 0,
-		_draw_list_shape_ref_path_collapsed_cb, &ctx);
+    int obol_status = -1;
+    if (ged_draw_obol_scene_controller_full_synced(gedp)) {
+	obol_status = ged_draw_obol_database_source_paths_foreach(gedp, 1,
+		expanded ? _draw_list_obol_source_path_cb :
+		    _draw_list_obol_source_path_collapsed_cb, &ctx);
+    }
+
+    if (obol_status < 0) {
+	if (expanded)
+	    ged_draw_scene_root_foreach_shape_ref(gedp, 0,
+		    _draw_list_shape_ref_path_cb, &ctx);
+	else
+	    ged_draw_scene_root_foreach_shape_ref(gedp, 0,
+		    _draw_list_shape_ref_path_collapsed_cb, &ctx);
+    }
 
     if (ctx.count > 1)
 	bu_sort(ctx.paths, ctx.count, sizeof(char *), _draw_path_strcmp, NULL);

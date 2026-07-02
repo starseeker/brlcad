@@ -14,12 +14,23 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include <Inventor/SoDB.h>
+
+#include <cstdlib>
 
 #include <QOffscreenSurface>
 #include <QOpenGLContext>
 #include <QSurface>
 #include <QSurfaceFormat>
+
+static inline bool
+qg_obol_context_force_osmesa(void)
+{
+    const char *value = std::getenv("QTCAD_OBOL_FORCE_OSMESA");
+    return value ? bu_str_true(value) != 0 : false;
+}
 
 class QgObolContextManager : public SoDB::ContextManager {
 private:
@@ -52,6 +63,9 @@ public:
     virtual void *createOffscreenContext(unsigned int width, unsigned int height)
     {
 	QgObolContext *ctx = new QgObolContext;
+
+	if (qg_obol_context_force_osmesa())
+	    return this->createFallbackContext(ctx, width, height);
 
 	QSurfaceFormat format;
 	format.setDepthBufferSize(24);

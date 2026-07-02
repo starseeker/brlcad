@@ -396,10 +396,12 @@ main(int argc, char **argv)
 
     SoBRLSceneController *owned_scene =
 	ged_draw_obol_scene_controller_ensure(gedp, 1);
+    BRLObolViewController *owned_controller = ged_draw_obol_controller(gedp);
     if (!owned_scene || ged_draw_obol_scene_controller(gedp) != owned_scene ||
 	    !ged_draw_obol_scene_controller_owned(gedp) ||
-	    ged_draw_obol_controller(gedp))
-	FAIL("GED should create and report an owned Obol scene controller");
+	    !owned_controller ||
+	    owned_controller->getSceneController() != owned_scene)
+	FAIL("GED should create and report an owned Obol view scene");
     if (owned_scene->getDatabaseSourceCount() != 2 ||
 	    !source_for_path(owned_scene, "box.s") ||
 	    !source_for_path(owned_scene, "ball.s"))
@@ -3155,6 +3157,7 @@ main(int argc, char **argv)
 
     ged_draw_obol_scene_controller_detach(gedp);
     if (ged_draw_obol_scene_controller(gedp) ||
+	    ged_draw_obol_controller(gedp) ||
 	    ged_draw_obol_scene_controller_owned(gedp))
 	FAIL("owned Obol scene controller detach should clear ownership state");
 

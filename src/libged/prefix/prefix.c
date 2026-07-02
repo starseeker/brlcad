@@ -68,6 +68,23 @@ prefix_do(struct db_i *dbip, struct rt_comb_internal *UNUSED(comb), union tree *
 }
 
 
+static void
+prefix_notify_renames(struct ged *gedp, int argc, const char *argv[])
+{
+    struct bu_vls new_name = BU_VLS_INIT_ZERO;
+    for (int k = 2; k < argc; k++) {
+	if (!argv[k] || !argv[k][0])
+	    continue;
+	bu_vls_trunc(&new_name, 0);
+	bu_vls_strcpy(&new_name, argv[1]);
+	bu_vls_strcat(&new_name, argv[k]);
+	ged_event_notify_object_renamed(gedp, argv[k],
+		bu_vls_cstr(&new_name), NULL);
+    }
+    bu_vls_free(&new_name);
+}
+
+
 int
 ged_prefix_core(struct ged *gedp, int argc, const char *argv[])
 {
@@ -159,6 +176,7 @@ ged_prefix_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     bu_vls_free(&tempstring_v5);
+    prefix_notify_renames(gedp, argc, argv);
 
     /* Examine all COMB nodes */
     FOR_ALL_DIRECTORY_START(dp, gedp->dbip) {
@@ -188,20 +206,7 @@ ged_prefix_core(struct ged *gedp, int argc, const char *argv[])
 	(void)ged_event_notify_comb_tree_changed(gedp, dp->d_namep, 1, NULL);
 	} FOR_ALL_DIRECTORY_END;
 
-	{
-	    struct bu_vls new_name = BU_VLS_INIT_ZERO;
-	    for (k = 2; k < argc; k++) {
-		if (!argv[k] || !argv[k][0])
-		    continue;
-		bu_vls_trunc(&new_name, 0);
-		bu_vls_strcpy(&new_name, argv[1]);
-		bu_vls_strcat(&new_name, argv[k]);
-		ged_event_notify_object_renamed(gedp, argv[k],
-			bu_vls_cstr(&new_name), NULL);
-	    }
-	    ged_event_batch_end(gedp, NULL);
-	    bu_vls_free(&new_name);
-	}
+	ged_event_batch_end(gedp, NULL);
 
 	return BRLCAD_OK;
     }

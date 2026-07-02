@@ -385,7 +385,7 @@ main(int argc, char **argv)
 	FAIL("Obol draw sync should create one database source");
     SoBRLDatabaseSource *source = controller->getDatabaseSource(0);
     if (!source ||
-	    !BU_STR_EQUAL(source->path.getValue().getString(), "box.s") ||
+	    !test_path_equal(source->path.getValue().getString(), "box.s") ||
 	    source->drawMode.getValue() != SoBRLDatabaseSource::WIREFRAME ||
 	    source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED ||
 	    source->getRealizedShapeCount() <= 0)
@@ -502,7 +502,7 @@ main(int argc, char **argv)
 	FAIL("GED shaded draw should sync a shaded Obol database source");
     source = controller->getDatabaseSource(0);
     if (!source ||
-	    !BU_STR_EQUAL(source->path.getValue().getString(), "ball.s") ||
+	    !test_path_equal(source->path.getValue().getString(), "ball.s") ||
 	    source->drawMode.getValue() != SoBRLDatabaseSource::SHADED ||
 	    source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED ||
 	    source->getRealizedMeshCount() <= 0)
@@ -614,11 +614,14 @@ main(int argc, char **argv)
     if (controller->getDatabaseSourceCount() != 1 ||
 	    !source_for_path(controller, "pair.c/box.s"))
 	FAIL("nested Obol draw sync should retain one full-path database source");
-    if (scene_display_summary_by_path(controller, "pair.c",
-	    BRLObolSceneTreeSummary::NODE_GROUP, NULL) ||
-	    scene_display_summary_by_path(controller, "pair.c/box.s",
-		BRLObolSceneTreeSummary::NODE_GROUP, NULL))
-	FAIL("full-path Obol draw sync should not synthesize GED groups without neutral group records");
+    BRLObolSceneDisplaySummary nested_group_display;
+    if (!scene_display_summary_by_path(controller, "pair.c/box.s",
+	    BRLObolSceneTreeSummary::NODE_GROUP, &nested_group_display) ||
+	    !nested_group_display.hasDrawIntent ||
+	    nested_group_display.intentDrawMode != BRLOBOL_LOD_DRAW_WIRE ||
+	    controller->getSceneController()->getGroupChildCount(
+		"pair.c/box.s") != 1)
+	FAIL("full-path Obol draw sync should retain the GED draw group around the source");
 
     struct ged_draw_transaction erase_nested =
 	ged_draw_transaction_make(GED_DRAW_TXN_ERASE, "pair.c/box.s");

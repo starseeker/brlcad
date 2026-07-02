@@ -33,9 +33,10 @@ Guiding Constraints
   public APIs.
 * Do not expose Coin/Inventor implementation details through GED or RT public
   APIs unless the API is explicitly libbrlobol-facing.
-* Preserve current GED/qtcad behavior first.  Defer broad performance work
-  until the migration is structurally complete unless a test exceeds the
-  agreed 180 second limit or an obvious catastrophic slowdown is introduced.
+* Preserve current GED/qtcad user-visible behavior where it remains part of
+  the target architecture.  Tests that encode retained BSG scene/source
+  semantics should be updated or replaced when Obol/libbrlobol semantics are
+  the intended behavior.
 * Keep new contracts narrow enough to replace remaining bridge-owned behavior,
   not broad enough to become a second generic scene graph.
 * Keep guard coverage aligned with each retired BSG/libdm boundary.
@@ -50,9 +51,17 @@ Guiding Constraints
 * Prefer straight owner replacement with targeted parity tests over new
   compatibility layers.  Add compatibility glue only when it directly keeps a
   required behavior or test live during a larger owner move.
-* Retained BSG scene/source records are temporary backing-store state only.
-  They are not target architecture and should be removed as soon as the Obol
-  owner can carry the behavior.
+* Retained BSG scene/source records are not active fallback for database draw
+  ownership.  Keep the implementation compiled as reference/legacy code while
+  the transition is incomplete, but do not use it to mask missing Obol behavior
+  in database draw, erase, redraw, visibility, material, path-state, bounds, or
+  scene-record paths.
+* Non-database behavior families are not long-term fallback islands.  If scope
+  expands enough to stand up the missing Obol capability, treat overlays,
+  qray/NIRT uplot import, vdraw/local helper artifacts, annotations,
+  feature/polygon/selection stores, and the display stream as Obol node/store
+  families in the same active scene owner.  Any temporary separation is only
+  implementation sequencing, not an active fallback design.
 
 
 Implementation Order
@@ -73,56 +82,77 @@ behavior family can be covered with focused parity checks.
 Current Status
 --------------
 
-Capability 1, scene/source ownership, is the active migration phase.
+Capability 1, scene/source ownership, is in closeout rather than open-ended
+implementation.  The large Obol-primary database draw pivot has landed for
+the guarded GED draw-scene behavior family; remaining Capability 1 work should
+be guard/inventory/audit closure and targeted regressions, not more retained
+BSG compatibility shims.
 
 Current state:
 
-* Obol/qtcad has staged scene, group, source, placement, display-state,
-  revision, summary, and draw-sync coverage.
-* GED public records and transaction paths increasingly use neutral summaries,
-  source-state records, draw-state summaries, source snapshots, and facade
-  operations instead of direct BSG field access.
-* The current BSG-backed source adapter still owns the transitional retained
-  scene implementation, geometry publication, source realization, LoD
-  realization, child/source attachment, and remaining scene-ref mutation.
+* libged can own an internal Obol scene controller and uses Obol/libbrlobol as
+  the active database scene/source owner for the draw-scene shard suite's
+  draw, erase, redraw, rename, reference-removal, path-state, path-listing,
+  bounds, material/display, source-summary, and record-query coverage.
+* GED public records and transaction paths use neutral summaries,
+  source-state records, draw-state summaries, source snapshots, semantic
+  Obol refs/paths, and facade operations instead of direct BSG field access
+  for the migrated database draw behavior family.
+* The retained BSG source adapter still exists in the tree, but database draw
+  ownership is no longer expected to use retained BSG records as an active
+  fallback.  Any database scene/source behavior still requiring retained BSG
+  state is a closeout finding to fix or explicitly classify as legacy/no-owner
+  compatibility.
+* The current database-source BSG audit finds direct
+  `bsg_database_source_*`/`BSG_DATABASE_SOURCE_*` use only in
+  `src/libged/bsg_ged_draw_source.c`, the transitional source-adapter owner.
+  `src/libged/bsg_ged_draw_records.c`, `src/libged/bsg_ged_draw_transactions.c`,
+  `src/libged/draw_obol.cpp`, and `include/ged/draw.h` have no direct
+  `bsg/database_source.h` dependency or database-source API use.
+* The core closeout gate passes in this build for draw-scene shards,
+  `ged_test_state_services`, `ged_test_obol_draw_sync`, and
+  `brlobol_pivot_guard`.  The qtcad closeout subset now has a Qt+OSMesa
+  swrast verification path through `QTCAD_OBOL_FORCE_OSMESA=1`, and the
+  focused draw-sync, selection-sync, pick, snap, measure, and qged swrast
+  tests pass under that path.  System OpenGL should still be spot-checked, but
+  it is no longer the Capability 1 blocker.
 * `src/libged/bsg_ged_draw_private.h` still exposes transitional
   `rt_view_scene_ref` facades because live GED internals still need neutral
   handles for retained scene tokens while the Obol scene/source owner is
   incomplete.
-* The pivot guard is enforcing staged boundary movement and should be updated
-  when a bridge is intentionally retired.
-* The focused scene regression and the Obol/qtcad guard group are the main
-  fast checks for this phase.
+* The pivot guard now enforces the newly migrated Obol-primary
+  path-state/listing, source-rename, reference-removal, prefix-event, and
+  draw-scene shard boundaries.
+* `ged_test_ged_draw_scene` is now split into 16 shards.  The current fast
+  scene/source signal is the shard set, plus `ged_test_state_services` for
+  command event ordering around rename/prefix behavior.
 
-Capability 1 completion path:
+Capability 1 closeout path:
 
-* Establish an owned libbrlobol scene-controller path inside libged, so Obol is
-  available as a GED-owned scene/source target instead of only as a qtcad-
-  supplied mirror.
-* Make GED draw transactions write through to the Obol owner first, preserving
-  the current BSG-backed source adapter as a temporary backing-store/display
-  adapter.
-* Switch GED neutral record/query APIs to prefer Obol/libbrlobol scene,
-  source, display, material, and bounds summaries, using BSG only for missing
-  compatibility paths.
-* Take the remaining Capability 1 work in behavior-family owner moves with
-  targeted parity tests; do not add new compatibility-shim families where a
-  direct Obol/libbrlobol owner move can prove the behavior.
-* Replace BSG-backed root/group/shape/source mutation calls in
-  `bsg_ged_draw_source.c` with operations on the libbrlobol owner; keep BSG
-  synchronized from Obol only while legacy display paths still require it.
-* Retire the draw registry's retained scene-ref ownership fields and any
-  retained BSG record state once typed GED refs resolve to semantic Obol
-  identities/paths and the BSG adapter no longer owns source state.
-* Allow source-adapter-local mutation work to move together by behavior family
-  when that shortens the path to owner replacement; do not hold direct owner
-  moves back to preserve narrower local-mutation boundaries.
+* Maintain `misc/CMake/brlobol_pivot_guard.cmake` and dependency inventories so
+  the Obol-primary database path-state/listing/source-rename/ref-remove
+  boundary stays guarded and stale retained-BSG fallback assumptions cannot
+  return unnoticed.
+* Keep auditing any remaining database scene/source BSG use and classify each
+  finding as: fixed Obol owner path, no-owned-scene legacy compatibility,
+  public bridge/API compatibility, or non-database Capability 2/3/4 work.  Do
+  not add new compatibility shims to make database draw tests pass.
+* Run the closeout gate: draw-scene shards, `ged_test_state_services`,
+  `ged_test_obol_draw_sync`, `brlobol_pivot_guard`, and the focused qtcad
+  Obol Qt+OSMesa swrast tests that exercise attached scene sync and
+  visible/pick/snap/measure behavior.
 * Declare Capability 1 complete only when root/group/shape/source/draw-intent
-  operations and GED records work through the Obol owner, the pivot guard
-  rejects new BSG-owned scene/source mutations outside the adapter, and the
-  draw transaction/redraw/material/highlight/erase/bounds/source-summary
-  regression set passes.  Retained BSG scene/source state may remain only as a
-  disposable display/backing-store adapter, not as an authoritative owner.
+  operations and GED records work through the Obol owner, no active database
+  draw path depends on retained BSG scene/source state, the pivot guard rejects
+  new BSG-owned database scene/source mutations, and the draw transaction,
+  redraw, material, highlight, erase, path-state, bounds, and source-summary
+  regression set passes.  Retained BSG scene/source code may remain compiled
+  only as inactive legacy/reference/no-owned-scene compatibility code.
+* After that closeout gate, move to Capability 2 rather than continuing
+  database scene/source refactoring.  The next implementation work should be
+  Obol/libbrlobol node/store ownership for feature, polygon, selection,
+  overlay/diagnostic, annotation/auxiliary, qray/NIRT, and local-helper
+  families as needed.
 
 Recent cleanup state:
 
@@ -130,6 +160,15 @@ Recent cleanup state:
   `ged_draw_obol_scene_controller_ensure`; owned controllers full-sync the
   current GED draw set, receive subsequent draw transactions, and are cleaned
   up during GED teardown.
+* qtcad Obol tests can now force the libbrlobol OSMesa context manager with
+  `QTCAD_OBOL_FORCE_OSMESA=1`, parsed via `bu_str_true`, so the closeout gate
+  has a deterministic swrast-backed rendering path instead of relying on
+  system OpenGL availability in headless CTest.
+* The qtcad `viewAll` path did not need a direct fix for the observed
+  visibility failure.  The root issue was upstream data: Obol-backed neutral
+  records needed visible wire defaults when no display summary is available,
+  and command-level `autoview` needed to frame Obol-owned draw bounds through
+  `ged_draw_bounds` before falling back to the retained view autoview path.
 * GED shape-record database-source summaries now prefer the libged-owned Obol
   scene controller when present, so public GED records can report Obol source
   revisions while the BSG source adapter remains the fallback/backing store.
@@ -522,6 +561,19 @@ Recent cleanup state:
 * Root-level database-source rename now retargets the matching owned Obol
   source-owner group and erase prunes that group, so Obol group traversal does
   not surface stale retained-style group records.
+* GED path-state, draw-path listing, and has-path queries now use the
+  libged-owned Obol database-source inventory when the Obol scene is fully
+  synced.  Nested path exposure is reconstructed from Obol source ownership
+  plus GED database-index validation instead of retaining BSG source records
+  as a second authority.
+* GED source rename transactions now handle component-wise Obol database-source
+  retargeting for paths such as `all.g/platform.r`, and the `prefix` command
+  publishes object rename events before comb-tree redraw events in the same
+  batch so the draw reconciliation sees the old source before reference
+  updates consume it.
+* The monolithic GED draw-scene regression is split into 16 shards for faster
+  behavior-family iteration.  The current verified draw-scene gate is the
+  full shard set, not the former single `ged_test_ged_draw_scene` CTest name.
 * Draft group commit now moves the already-owned Obol database source into the
   target Obol group and returns an Obol-backed shape ref, leaving the retained
   draft topology as transient source-adapter-local generation state.
@@ -862,6 +914,13 @@ Capability 1 acceptance criteria:
 Capability 2 Remaining Work: View Feature And Polygon Store
 -----------------------------------------------------------
 
+Status:
+
+Capability 2 is the next implementation phase after Capability 1 closeout.
+Do not start it by preserving more retained BSG database scene/source
+fallback.  Start it by standing up the missing Obol/libbrlobol view
+node/store capability behind the already-neutral RT/GED APIs.
+
 Goal:
 
 Replace the BSG-backed implementation behind neutral `rt_view_*` and
@@ -1039,8 +1098,9 @@ Guard And Test Gates
 Fast guard set for current scene/source work:
 
 * `ninja -C build libged ged_test_ged_draw_scene`
-* `ctest --test-dir build -R '^ged_test_ged_draw_scene$' --timeout 180 --output-on-failure`
-* `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_ged_draw_scene|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync)$' --timeout 180 --output-on-failure`
+* `ctest --test-dir build -R '^ged_test_ged_draw_scene_' -j 8 --timeout 60 --output-on-failure`
+* `ctest --test-dir build -R '^ged_test_state_services$' --timeout 120 --output-on-failure`
+* `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_obol_draw_sync|test_qtcad_obol_draw_sync|libbrlobol_lod_update_action|test_qtcad_obol_export|test_qtcad_obol_overlay_sync|test_qtcad_obol_selection_sync)$' --timeout 180 --output-on-failure`
 
 Broader coverage should scale with the touched capability:
 

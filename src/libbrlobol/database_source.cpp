@@ -17,12 +17,14 @@
 #include "bu/color.h"
 #include "bu/list.h"
 #include "bu/str.h"
+#include "bu/vls.h"
 #include "nmg.h"
 #include "raytrace.h"
 #include "rt/func.h"
 #include "rt/global.h"
 #include "rt/nongeom.h"
 #include "rt/db_fullpath.h"
+#include "rt/primitives/annot.h"
 #include "rt/tree.h"
 #include "rt/vlist.h"
 #include "rt/view.h"
@@ -591,6 +593,104 @@ primitive_is_annotation(int internalType, const char *typeLabel)
 	    BU_STR_EQUAL(typeLabel, "annotation"));
 }
 
+static void
+assign_annotation_record(SoBRLVListShape *shape,
+	const struct rt_annot_internal *annot)
+{
+    if (!shape || !annot)
+	return;
+
+    RT_ANNOT_CK_MAGIC(annot);
+
+    shape->sourceType = "annotation";
+    shape->geometryKind = "annotation";
+    shape->annotationBasePoint = SbVec3f(
+	    static_cast<float>(annot->V[X]),
+	    static_cast<float>(annot->V[Y]),
+	    static_cast<float>(annot->V[Z]));
+
+    const int pointCount = (annot->vert_count > static_cast<size_t>(INT_MAX)) ?
+	INT_MAX : static_cast<int>(annot->vert_count);
+    if (pointCount > 0 && annot->verts) {
+	std::vector<double> points(static_cast<size_t>(pointCount) * 3);
+	for (int i = 0; i < pointCount; i++) {
+	    const size_t offset = static_cast<size_t>(i) * 3;
+	    points[offset + 0] = annot->verts[i][X];
+	    points[offset + 1] = annot->verts[i][Y];
+	    points[offset + 2] = 0.0;
+	}
+	shape->setPreciseAnnotationPoints(points.data(), pointCount);
+    } else {
+	shape->setPreciseAnnotationPoints(NULL, 0);
+    }
+
+    const int segmentCount = (annot->ant.count > static_cast<size_t>(INT_MAX)) ?
+	INT_MAX : static_cast<int>(annot->ant.count);
+    shape->annotationSegmentTextValid.setNum(segmentCount);
+    shape->annotationSegmentKind.setNum(segmentCount);
+    shape->annotationSegmentStart.setNum(segmentCount);
+    shape->annotationSegmentEnd.setNum(segmentCount);
+    shape->annotationTextRefPoint.setNum(segmentCount);
+    shape->annotationText.setNum(segmentCount);
+
+    for (int i = 0; i < segmentCount; i++) {
+	shape->annotationSegmentTextValid.set1Value(i, FALSE);
+	shape->annotationSegmentKind.set1Value(i,
+		SoBRLVListShape::ANNOTATION_SEGMENT_NONE);
+	shape->annotationSegmentStart.set1Value(i, 0);
+	shape->annotationSegmentEnd.set1Value(i, 0);
+	shape->annotationTextRefPoint.set1Value(i, 0);
+	shape->annotationText.set1Value(i, "");
+
+	const uint32_t *magic = annot->ant.segments ?
+	    static_cast<const uint32_t *>(annot->ant.segments[i]) : NULL;
+	if (!magic)
+	    continue;
+
+	switch (*magic) {
+	    case CURVE_LSEG_MAGIC: {
+		const struct line_seg *lsg =
+		    reinterpret_cast<const struct line_seg *>(magic);
+		shape->annotationSegmentKind.set1Value(i,
+			SoBRLVListShape::ANNOTATION_SEGMENT_LINE);
+		shape->annotationSegmentStart.set1Value(i, lsg->start);
+		shape->annotationSegmentEnd.set1Value(i, lsg->end);
+		break;
+	    }
+	    case ANN_TSEG_MAGIC: {
+		const struct txt_seg *tsg =
+		    reinterpret_cast<const struct txt_seg *>(magic);
+		const char *label = BU_VLS_IS_INITIALIZED(&tsg->label) ?
+		    bu_vls_cstr(&tsg->label) : "";
+		shape->annotationSegmentKind.set1Value(i,
+			SoBRLVListShape::ANNOTATION_SEGMENT_TEXT);
+		shape->annotationTextRefPoint.set1Value(i, tsg->ref_pt);
+		shape->annotationText.set1Value(i, label ? label : "");
+		shape->annotationSegmentTextValid.set1Value(i,
+			(label && label[0]) ? TRUE : FALSE);
+		break;
+	    }
+	    default:
+		break;
+	}
+    }
+}
+
+static void
+free_annotation_record_copy(struct rt_annot_internal *annot)
+{
+    if (!annot)
+	return;
+
+    struct rt_db_internal intern;
+    RT_DB_INTERNAL_INIT(&intern);
+    intern.idb_major_type = DB5_MAJORTYPE_BRLCAD;
+    intern.idb_type = ID_ANNOT;
+    intern.idb_meth = &OBJ[ID_ANNOT];
+    intern.idb_ptr = annot;
+    rt_db_free_internal(&intern);
+}
+
 template <typename ShapeT>
 static void
 assign_realized_identity(ShapeT *shape,
@@ -856,6 +956,7 @@ vlist_from_plot_internal(struct rt_db_internal *intern,
 	return NULL;
 
     point_t annotationBase = VINIT_ZERO;
+    struct rt_annot_internal *annotation = NULL;
     const char *typeLabel = primitive_type_label(intern);
     const bool addAnnotationBase = primitive_is_annotation(intern->idb_type,
 	    typeLabel);
@@ -863,6 +964,7 @@ vlist_from_plot_internal(struct rt_db_internal *intern,
 	struct rt_annot_internal *annot =
 	    static_cast<struct rt_annot_internal *>(intern->idb_ptr);
 	RT_ANNOT_CK_MAGIC(annot);
+	annotation = rt_copy_annot(annot);
 	VMOVE(annotationBase, annot->V);
     }
 
@@ -872,6 +974,7 @@ vlist_from_plot_internal(struct rt_db_internal *intern,
     struct bn_tol tol = BN_TOL_INIT_TOL;
     int ret = rt_obj_plot(&vhead, intern, &ttol, &tol);
     if (ret < 0) {
+	free_annotation_record_copy(annotation);
 	RT_FREE_VLIST(&rt_vlfree, &vhead);
 	return NULL;
     }
@@ -888,12 +991,16 @@ vlist_from_plot_internal(struct rt_db_internal *intern,
 		    points[i][2] + static_cast<float>(annotationBase[Z]));
 	}
     }
-    if (points.empty() || points.size() != commands.size())
+    if (points.empty() || points.size() != commands.size()) {
+	free_annotation_record_copy(annotation);
 	return NULL;
+    }
 
     SoBRLVListShape *shape = new SoBRLVListShape;
     shape->setLineSet(points.data(), commands.data(),
 	    static_cast<int>(points.size()));
+    assign_annotation_record(shape, annotation);
+    free_annotation_record_copy(annotation);
     return shape;
 }
 
@@ -947,12 +1054,14 @@ realize_leaf(struct db_tree_state *tsp,
     struct bg_tess_tol ttol = source_tess_tol(data->source);
     struct bn_tol tol = BN_TOL_INIT_TOL;
     point_t annotationBase = VINIT_ZERO;
+    struct rt_annot_internal *annotation = NULL;
     const bool addAnnotationBase = primitive_is_annotation(
 	    local_intern.idb_type, typeLabel);
     if (addAnnotationBase) {
 	struct rt_annot_internal *annot =
 	    static_cast<struct rt_annot_internal *>(local_intern.idb_ptr);
 	RT_ANNOT_CK_MAGIC(annot);
+	annotation = rt_copy_annot(annot);
 	VMOVE(annotationBase, annot->V);
     }
 
@@ -968,12 +1077,11 @@ realize_leaf(struct db_tree_state *tsp,
 		    "wireframe plot failed for primitive type '%s'", typeLabel);
 	}
 	set_walk_diagnostic(data, pathp, reason);
+	free_annotation_record_copy(annotation);
 	rt_db_free_internal(&local_intern);
 	RT_FREE_VLIST(&rt_vlfree, &vhead);
 	return TREE_NULL;
     }
-    rt_db_free_internal(&local_intern);
-
     std::vector<SbVec3f> points;
     std::vector<int32_t> commands;
     convert_vlist(points, commands, &vhead);
@@ -994,6 +1102,8 @@ realize_leaf(struct db_tree_state *tsp,
 		"wireframe plot produced no usable geometry for primitive type '%s'",
 		typeLabel);
 	set_walk_diagnostic(data, pathp, reason);
+	free_annotation_record_copy(annotation);
+	rt_db_free_internal(&local_intern);
 	return TREE_NULL;
     }
 
@@ -1004,17 +1114,16 @@ realize_leaf(struct db_tree_state *tsp,
     transform->matrix = mat_to_sbmatrix(tsp->ts_mat);
     assign_realized_identity(shape, tsp, path, dp->d_namep, typeLabel,
 	    data->revision, data->source);
-    if (primitive_is_annotation(local_intern.idb_type, typeLabel)) {
-	shape->sourceType = "annotation";
-	shape->geometryKind = "annotation";
-    }
     shape->setLineSet(points.data(), commands.data(), static_cast<int>(points.size()));
+    assign_annotation_record(shape, annotation);
+    free_annotation_record_copy(annotation);
     leaf->addChild(transform);
     leaf->addChild(shape);
     data->source->addChild(leaf);
     data->realized_shapes++;
     if (path)
 	bu_free(path, "db_path_to_string");
+    rt_db_free_internal(&local_intern);
 
     return make_nop_tree();
 }

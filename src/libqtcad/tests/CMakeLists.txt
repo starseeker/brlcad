@@ -557,6 +557,29 @@ if(TARGET test_qtcad_obol_real_models)
   endforeach()
 endif(TARGET test_qtcad_obol_real_models)
 
+foreach(_qtcad_obol_swrast_test
+    test_qtcad_obol_controller
+    test_qtcad_obol_window_host
+    test_qtcad_obol_draw_sync
+    test_qtcad_obol_edit_preview
+    test_qtcad_obol_faceplate_sync
+    test_qtcad_obol_selection_sync
+    test_qtcad_obol_pick
+    test_qtcad_obol_export
+    test_qtcad_obol_snap
+    test_qtcad_obol_measure
+    test_qtcad_obol_overlay_sync
+    test_qtcad_obol_real_models_pinewood_wire
+    test_qtcad_obol_real_models_pinewood_shaded
+    test_qtcad_obol_real_models_havoc_wire
+    test_qtcad_obol_real_models_m35_wire_interactions
+    test_qtcad_obol_real_models_m35_wire_pick_all_stress)
+  if(TEST ${_qtcad_obol_swrast_test})
+    set_property(TEST ${_qtcad_obol_swrast_test}
+      APPEND PROPERTY ENVIRONMENT QTCAD_OBOL_FORCE_OSMESA=1)
+  endif()
+endforeach()
+
 # Qt / QgSW headless integration test (Phase 4 BSG + dm-swrast via Qt widget path).
 # Uses Qt's built-in offscreen platform — no X11 display required.
 if(TARGET Qt6::Widgets)
@@ -598,6 +621,8 @@ if(TARGET Qt6::Widgets)
     APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
   set_property(TEST ged_test_qged_swrast
     APPEND PROPERTY ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+  set_property(TEST ged_test_qged_swrast
+    APPEND PROPERTY ENVIRONMENT QTCAD_OBOL_FORCE_OSMESA=1)
   set_property(TEST ged_test_qged_swrast
     APPEND PROPERTY LABELS drawing_baseline)
   distclean(${CMAKE_CURRENT_BINARY_DIR}/moss_qgswrast_tmp.g)
