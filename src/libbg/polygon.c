@@ -321,6 +321,11 @@ bg_polygon_cpy(struct bg_polygon *dest, struct bg_polygon *src)
 	return;
 
     dest->num_contours = src->num_contours;
+    dest->hole = NULL;
+    dest->contour = NULL;
+    if (!src->num_contours)
+	return;
+
     dest->hole = (int *)bu_calloc(src->num_contours, sizeof(int), "hole");
     dest->contour = (struct bg_poly_contour *)bu_calloc(src->num_contours, sizeof(struct bg_poly_contour), "contour");
     for (size_t i = 0; i < src->num_contours; i++) {
@@ -329,6 +334,8 @@ bg_polygon_cpy(struct bg_polygon *dest, struct bg_polygon *src)
     for (size_t i = 0; i < src->num_contours; i++) {
 	dest->contour[i].num_points = src->contour[i].num_points;
 	dest->contour[i].open = src->contour[i].open;
+	if (!src->contour[i].num_points)
+	    continue;
 	dest->contour[i].point = (point_t *)bu_calloc(src->contour[i].num_points, sizeof(point_t), "point");
 	for (size_t j = 0; j < src->contour[i].num_points; j++) {
 	    VMOVE(dest->contour[i].point[j], src->contour[i].point[j]);

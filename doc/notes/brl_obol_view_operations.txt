@@ -1,0 +1,50 @@
+BRL-CAD / Obol View Operation Semantics
+=======================================
+
+Purpose
+-------
+
+This note records BRL-CAD view-object behaviors that are command semantics,
+not generic Obol rendering preferences.  Obol may support nicer or broader
+visualization modes, but BRL-CAD commands and tests should route through
+explicit operation modes when historical behavior matters.
+
+
+Polygon Fill
+------------
+
+BRL-CAD's GED `view obj ... polygon fill` command means hatch fill: compute
+line segments clipped to the polygon interior, draw those segments using the
+polygon fill color, and keep the polygon edge as a separate outline.  It does
+not mean "draw a translucent triangulated surface" in the legacy command
+contract.
+
+Obol supports both fill interpretations:
+
+* `BRLOBOL_POLYGON_FILL_HATCH` preserves GED/BRL-CAD hatch semantics.
+* `BRLOBOL_POLYGON_FILL_MESH` draws a triangulated mesh fill.
+* Both flags may be enabled when a caller wants a shaded fill plus the
+  historical hatch overlay.
+
+The existing `BRLObolPolygonStore::setFill` method is intentionally kept as a
+legacy hatch-fill operation.  Obol-native callers that want surface fill should
+use `setFillFlags` or set `BRLObolPolygonVisual::fillFlags` explicitly.
+
+Sketch import/export maps the legacy sketch polygon `fill_flag` to hatch fill.
+Mesh fill is an Obol view visualization option and is not written as that
+legacy sketch fill flag.
+
+
+Hatch Slope Stability
+---------------------
+
+Hatch slopes define unoriented line families: `(dx, dy)` and `(-dx, -dy)` are
+the same hatch.  The Obol hatch path canonicalizes the normalized slope to a
+single half-plane before generating perpendicular offsets.  This avoids abrupt
+family-order flips when the slope passes through equivalent orientations.
+
+The hatch generator still works in the polygon's stored view plane.  Callers
+that need screen-locked hatching should update the polygon's view plane
+explicitly rather than relying on later camera rotations to reinterpret the
+same stored polygon geometry.
+

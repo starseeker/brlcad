@@ -19,6 +19,8 @@
 #include "brlobol/scene_group.h"
 #include "brlobol/vlist_shape.h"
 #include "brlobol/view_controller.h"
+#include "brlobol/view_store.h"
+#include "bg/line_layer.h"
 #include "bu/app.h"
 #include "bu/env.h"
 #include "bu/file.h"
@@ -172,6 +174,67 @@ path_equal(const char *a, const char *b)
     if (BU_STR_EQUAL(a, b))
 	return 1;
     return BU_STR_EQUAL(skip_leading_slash(a), skip_leading_slash(b));
+}
+
+struct rt_preview_callback_state {
+    uint64_t revision;
+    int update_count;
+    int pick_count;
+};
+
+static uint64_t
+rt_preview_revision_cb(void *data)
+{
+    struct rt_preview_callback_state *ctx =
+	(struct rt_preview_callback_state *)data;
+    return ctx ? ctx->revision : 0;
+}
+
+static int
+rt_preview_update_cb(void *data)
+{
+    struct rt_preview_callback_state *ctx =
+	(struct rt_preview_callback_state *)data;
+    if (!ctx)
+	return 0;
+    ctx->update_count++;
+    return 1;
+}
+
+static int
+rt_preview_pick_cb(void *data, int UNUSED(x), int UNUSED(y),
+	void *UNUSED(pick_out))
+{
+    struct rt_preview_callback_state *ctx =
+	(struct rt_preview_callback_state *)data;
+    if (!ctx)
+	return 0;
+    ctx->pick_count++;
+    return 1;
+}
+
+static int
+feature_overlay_matches(BRLObolViewController *controller,
+	const char *name,
+	BRLObolOverlayClass overlay_class,
+	BRLObolOverlayLifecycle lifecycle,
+	BRLObolOverlayOrder order)
+{
+    if (!controller || !name)
+	return 0;
+
+    BRLObolFeatureHandle handle = controller->features().find(name);
+    BRLObolOverlayInfo overlay;
+    if (!handle.isValid() ||
+	    !controller->features().overlayInfo(handle, overlay))
+	return 0;
+
+    return overlay.isOverlay &&
+	overlay.role == BRLObolOverlayRole::Model &&
+	overlay.overlayClass == overlay_class &&
+	overlay.lifecycle == lifecycle &&
+	overlay.order == order &&
+	BU_STR_EQUAL(overlay.sourcePath.getString(), name);
 }
 
 static SoBRLDatabaseSource *
@@ -406,6 +469,402 @@ main(int argc, char **argv)
 	    !source_for_path(owned_scene, "box.s") ||
 	    !source_for_path(owned_scene, "ball.s"))
 	FAIL("owned Obol scene controller should full-sync current GED draw state");
+
+    void *feature_view_ctx = ged_view_active_ctx(gedp);
+    if (!feature_view_ctx ||
+	    !ged_draw_obol_view_context_feature_store_active(feature_view_ctx))
+	FAIL("GED active view should expose the owned Obol feature store");
+    point_t feature_points[2] = {{0.0, 0.0, 0.0}, {2.0, 0.0, 0.0}};
+    int feature_cmds[2] = {
+	GED_DRAW_VIEW_LINE_MOVE,
+	GED_DRAW_VIEW_LINE_DRAW
+    };
+    struct ged_draw_view_feature_style feature_style =
+	GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+    feature_style.visible = 1;
+    feature_style.color_valid = 1;
+    feature_style.color[0] = 20;
+    feature_style.color[1] = 40;
+    feature_style.color[2] = 60;
+    feature_style.line_width = 3;
+    if (!ged_draw_view_context_lines_replace(feature_view_ctx, "cap2::line",
+	    0, feature_points, feature_cmds, 2, &feature_style) ||
+	    !owned_controller->features().exists("cap2::line"))
+	FAIL("GED feature line replacement should publish into the owned Obol feature store");
+    struct ged_draw_view_feature_summary feature_summary =
+	GED_DRAW_VIEW_FEATURE_SUMMARY_INIT;
+    if (!ged_draw_view_context_feature_summary(feature_view_ctx,
+	    "cap2::line", &feature_summary) ||
+	    !feature_summary.exists ||
+	    feature_summary.geometry_command_count != 2 ||
+	    feature_summary.color[0] != 20 ||
+	    feature_summary.color[1] != 40 ||
+	    feature_summary.color[2] != 60)
+	FAIL("GED feature summary should read the owned Obol feature store");
+    point_t *copied_points = NULL;
+    size_t copied_point_count = 0;
+    if (!ged_draw_view_context_feature_points_copy(feature_view_ctx,
+	    "cap2::line", &copied_points, &copied_point_count) ||
+	    copied_point_count != 2 ||
+	    copied_points[1][X] != 2.0)
+	FAIL("GED feature point readback should copy owned Obol line geometry");
+    bu_free(copied_points, "GED Obol feature test copied points");
+    int copied_cmd = 0;
+    if (!ged_draw_view_context_feature_line_command_at(feature_view_ctx,
+	    "cap2::line", 1, &copied_cmd) ||
+	    copied_cmd != GED_DRAW_VIEW_LINE_DRAW)
+	FAIL("GED feature command readback should copy owned Obol line commands");
+    point_t append_point = {3.0, 0.0, 0.0};
+    if (!ged_draw_view_context_lines_append_point(feature_view_ctx,
+	    "cap2::line", append_point) ||
+	    !ged_draw_view_context_feature_points_copy(feature_view_ctx,
+		"cap2::line", &copied_points, &copied_point_count) ||
+	    copied_point_count != 3)
+	FAIL("GED line append should mutate owned Obol line geometry");
+    bu_free(copied_points, "GED Obol feature test appended points");
+    if (!ged_draw_view_context_feature_visible_set(feature_view_ctx,
+	    "cap2::line", 0) ||
+	    ged_draw_view_context_feature_visible(feature_view_ctx,
+		"cap2::line") != 0)
+	FAIL("GED feature visibility should mutate owned Obol feature style");
+    if (!ged_draw_view_context_line_color_set(feature_view_ctx,
+	    "cap2::line", 90, 80, 70) ||
+	    !ged_draw_view_context_line_width_set(feature_view_ctx,
+		"cap2::line", 5))
+	FAIL("GED line style setters should mutate owned Obol feature style");
+    struct ged_draw_view_line_style line_style;
+    memset(&line_style, 0, sizeof(line_style));
+    if (!ged_draw_view_context_line_style_get(feature_view_ctx,
+	    "cap2::line", &line_style) ||
+	    line_style.color[0] != 90 ||
+	    line_style.color[1] != 80 ||
+	    line_style.color[2] != 70 ||
+	    line_style.line_width != 5)
+	FAIL("GED line style readback should read owned Obol feature style");
+
+    point_t tcl_line_points[2] = {{0.0, 0.0, 0.0}, {0.0, 2.0, 0.0}};
+    struct ged_draw_view_line_style tcl_line_style;
+    memset(&tcl_line_style, 0, sizeof(tcl_line_style));
+    tcl_line_style.color[0] = 101;
+    tcl_line_style.color[1] = 102;
+    tcl_line_style.color[2] = 103;
+    tcl_line_style.line_width = 4;
+    if (!ged_draw_view_context_tcl_lines_replace(feature_view_ctx,
+	    "cap2::tcl-line", tcl_line_points, 2, &tcl_line_style) ||
+	    !feature_overlay_matches(owned_controller, "cap2::tcl-line",
+		BRLObolOverlayClass::TclOverlay,
+		BRLObolOverlayLifecycle::PerCommand,
+		BRLObolOverlayOrder::PostTransparent))
+	FAIL("GED Tcl line replacement should publish typed Obol overlay metadata");
+    struct ged_draw_view_feature_summary tcl_line_summary =
+	GED_DRAW_VIEW_FEATURE_SUMMARY_INIT;
+    if (!ged_draw_view_context_feature_summary(feature_view_ctx,
+	    "cap2::tcl-line", &tcl_line_summary) ||
+	    !tcl_line_summary.exists ||
+	    !tcl_line_summary.is_overlay ||
+	    tcl_line_summary.geometry_command_count != 2)
+	FAIL("GED Tcl line summary should read typed Obol overlay feature state");
+
+    point_t annotation_point = {5.0, 5.0, 0.0};
+    if (!ged_draw_view_context_lines_create_model_annotation(
+	    feature_view_ctx, "cap2::annotation", 1, annotation_point) ||
+	    !feature_overlay_matches(owned_controller, "cap2::annotation",
+		BRLObolOverlayClass::UserAnnotation,
+		BRLObolOverlayLifecycle::Persistent,
+		BRLObolOverlayOrder::Model))
+	FAIL("GED model annotation creation should publish typed Obol overlay metadata");
+
+    point_t polygon_points[2] = {{1.0, 0.0, 0.0}, {1.0, 2.0, 0.0}};
+    int polygon_cmds[2] = {
+	GED_DRAW_VIEW_LINE_MOVE,
+	GED_DRAW_VIEW_LINE_DRAW
+    };
+    if (!ged_draw_view_context_tcl_polygons_replace(feature_view_ctx,
+	    "cap2::polygon-overlay", polygon_points, polygon_cmds, 2,
+	    &feature_style) ||
+	    !feature_overlay_matches(owned_controller,
+		"cap2::polygon-overlay",
+		BRLObolOverlayClass::PolygonEdit,
+		BRLObolOverlayLifecycle::PerTool,
+		BRLObolOverlayOrder::PostTransparent))
+	FAIL("GED Tcl polygon replacement should publish typed Obol overlay metadata");
+
+    struct ged_draw_view_label_data label = GED_DRAW_VIEW_LABEL_DATA_INIT;
+    label.text = "cap2 label";
+    VSET(label.point, 1.0, 2.0, 3.0);
+    label.color_valid = 1;
+    label.color[0] = 7;
+    label.color[1] = 8;
+    label.color[2] = 9;
+    if (!ged_draw_view_context_labels_replace(feature_view_ctx,
+	    "cap2::label", 0, &label, 1) ||
+	    !owned_controller->features().exists("cap2::label") ||
+	    ged_draw_view_context_label_count(feature_view_ctx,
+		"cap2::label") != 1)
+	FAIL("GED label replacement should publish into the owned Obol feature store");
+    struct bu_vls label_text = BU_VLS_INIT_ZERO;
+    point_t label_point = VINIT_ZERO;
+    unsigned char label_rgb[3] = {0, 0, 0};
+    if (!ged_draw_view_context_label_copy(feature_view_ctx, "cap2::label",
+	    0, &label_text, label_point, label_rgb) ||
+	    !BU_STR_EQUAL(bu_vls_cstr(&label_text), "cap2 label") ||
+	    label_point[X] != 1.0 ||
+	    label_rgb[0] != 7 ||
+	    label_rgb[1] != 8 ||
+	    label_rgb[2] != 9) {
+	bu_vls_free(&label_text);
+	FAIL("GED label copy should read owned Obol label data");
+    }
+    bu_vls_free(&label_text);
+    point_t moved_label_point = {4.0, 5.0, 6.0};
+    if (!ged_draw_view_context_label_point_set(feature_view_ctx,
+	    "cap2::label", 0, moved_label_point) ||
+	    !ged_draw_view_context_label_copy(feature_view_ctx, "cap2::label",
+		0, NULL, label_point, NULL) ||
+	    label_point[X] != 4.0 ||
+	    label_point[Y] != 5.0 ||
+	    label_point[Z] != 6.0)
+	FAIL("GED label point mutation should update owned Obol label data");
+
+    point_t created_label_point = {1.0, 1.0, 1.0};
+    point_t created_label_target = {0.0, 0.0, 0.0};
+    if (!ged_draw_view_context_label_create(feature_view_ctx,
+	    "cap2::created-label", 0, "created", created_label_point,
+	    created_label_target, 1) ||
+	    !ged_draw_view_context_label_copy(feature_view_ctx,
+		"cap2::created-label", 0, NULL, NULL, label_rgb) ||
+	    label_rgb[0] != 255 ||
+	    label_rgb[1] != 255 ||
+	    label_rgb[2] != 0)
+	FAIL("GED label create should preserve the legacy yellow feature color in Obol");
+
+    point_t arrow_points[2] = {{0.0, 0.0, 0.0}, {0.0, 3.0, 0.0}};
+    if (!ged_draw_view_context_tcl_arrows_replace(feature_view_ctx,
+	    "cap2::arrow", arrow_points, 2, &feature_style) ||
+	    !owned_controller->features().exists("cap2::arrow") ||
+	    !feature_overlay_matches(owned_controller, "cap2::arrow",
+		BRLObolOverlayClass::TclOverlay,
+		BRLObolOverlayLifecycle::PerCommand,
+		BRLObolOverlayOrder::PostTransparent) ||
+	    !ged_draw_view_context_arrow_tip_set(feature_view_ctx,
+		"cap2::arrow", 0.25, 0.5))
+	FAIL("GED arrow replacement should publish into the owned Obol feature store");
+    fastf_t tip_length = 0.0;
+    fastf_t tip_width = 0.0;
+    if (!ged_draw_view_context_arrow_tip_get(feature_view_ctx,
+	    "cap2::arrow", &tip_length, &tip_width) ||
+	    fabs(tip_length - 0.25) > 0.001 ||
+	    fabs(tip_width - 0.5) > 0.001)
+	FAIL("GED arrow tip readback should read owned Obol feature style");
+
+    struct ged_draw_view_axes_state axes_state;
+    memset(&axes_state, 0, sizeof(axes_state));
+    VSET(axes_state.position, 1.0, 1.0, 1.0);
+    axes_state.size = 4.0;
+    axes_state.line_width = 2;
+    axes_state.color[0] = 11;
+    axes_state.color[1] = 22;
+    axes_state.color[2] = 33;
+    if (!ged_draw_view_context_axes_create(feature_view_ctx, "cap2::axes",
+	    0, &axes_state) ||
+	    !owned_controller->features().exists("cap2::axes"))
+	FAIL("GED axes creation should publish into the owned Obol feature store");
+    struct ged_draw_view_axes_state axes_readback;
+    memset(&axes_readback, 0, sizeof(axes_readback));
+    if (!ged_draw_view_context_axes_state_get(feature_view_ctx,
+	    "cap2::axes", &axes_readback) ||
+	    axes_readback.position[X] != 1.0 ||
+	    axes_readback.size != 4.0 ||
+	    axes_readback.line_width != 2 ||
+	    axes_readback.color[0] != 11 ||
+	    axes_readback.color[1] != 22 ||
+	    axes_readback.color[2] != 33)
+	FAIL("GED axes readback should read owned Obol axes state");
+    point_t *axis_centers = NULL;
+    size_t axis_center_count = 0;
+    if (!ged_draw_view_context_feature_axes_centers_copy(feature_view_ctx,
+	    "cap2::axes", &axis_centers, &axis_center_count) ||
+	    axis_center_count != 1 ||
+	    axis_centers[0][X] != 1.0)
+	FAIL("GED axes center readback should copy owned Obol axes centers");
+    bu_free(axis_centers, "GED Obol feature test axes centers");
+
+    point_t tcl_axes_centers[1] = {{2.0, 2.0, 0.0}};
+    if (!ged_draw_view_context_tcl_axes_replace(feature_view_ctx,
+	    "cap2::tcl-axes", tcl_axes_centers, 1, 2.5, &feature_style) ||
+	    !feature_overlay_matches(owned_controller, "cap2::tcl-axes",
+		BRLObolOverlayClass::TclOverlay,
+		BRLObolOverlayLifecycle::PerCommand,
+		BRLObolOverlayOrder::PostTransparent))
+	FAIL("GED Tcl axes replacement should publish typed Obol overlay metadata");
+
+    point_t face_points[4] = {
+	{0.0, 0.0, 0.0},
+	{1.0, 0.0, 0.0},
+	{1.0, 1.0, 0.0},
+	{0.0, 1.0, 0.0}
+    };
+    int face_indices[6] = {0, 1, 2, 0, 2, 3};
+    if (!ged_draw_view_context_indexed_face_set_replace(feature_view_ctx,
+	    "cap2::mesh", 0, face_points, 4, NULL, 0, face_indices, 6,
+	    &feature_style) ||
+	    !owned_controller->features().exists("cap2::mesh"))
+	FAIL("GED indexed-face replacement should publish into the owned Obol feature store");
+
+    struct bg_line_layer_builder *diagnostic_builder =
+	bg_line_layer_builder_create();
+    if (!diagnostic_builder)
+	FAIL("diagnostic line-layer builder should allocate");
+    point_t diagnostic_a = {0.0, 0.0, 0.0};
+    point_t diagnostic_b = {0.5, 0.5, 0.0};
+    if (!bg_line_layer_builder_add(diagnostic_builder, 255, 0, 0,
+		diagnostic_a, BG_GEOMETRY_LINE_MOVE) ||
+	    !bg_line_layer_builder_add(diagnostic_builder, 255, 0, 0,
+		diagnostic_b, BG_GEOMETRY_LINE_DRAW)) {
+	bg_line_layer_builder_free(diagnostic_builder);
+	FAIL("diagnostic line-layer builder should accept test geometry");
+    }
+    if (!ged_draw_view_context_diagnostic_line_layer_builder_replace(
+		feature_view_ctx, "cap2::diagnostic", diagnostic_builder)) {
+	bg_line_layer_builder_free(diagnostic_builder);
+	FAIL("GED diagnostic line-layer replacement should publish into the owned Obol feature store");
+    }
+    bg_line_layer_builder_free(diagnostic_builder);
+    BRLObolFeatureRecord diagnostic_record;
+    BRLObolFeatureHandle diagnostic_handle =
+	owned_controller->features().find("cap2::diagnostic");
+    if (!diagnostic_handle.isValid() ||
+	    !owned_controller->features().record(diagnostic_handle,
+		diagnostic_record) ||
+	    diagnostic_record.kind != BRLObolFeatureKind::LineLayer ||
+	    !feature_overlay_matches(owned_controller, "cap2::diagnostic",
+		BRLObolOverlayClass::Diagnostic,
+		BRLObolOverlayLifecycle::PerCommand,
+		BRLObolOverlayOrder::PostTransparent))
+	FAIL("GED diagnostic line-layer replacement should stamp typed Obol diagnostic metadata");
+
+    struct rt_preview_callback_state rt_preview_state = {77, 0, 0};
+    struct rt_view_edit_preview_callbacks rt_preview_callbacks =
+	RT_VIEW_EDIT_PREVIEW_CALLBACKS_INIT;
+    rt_preview_callbacks.revision_cb = rt_preview_revision_cb;
+    rt_preview_callbacks.update_cb = rt_preview_update_cb;
+    rt_preview_callbacks.pick_cb = rt_preview_pick_cb;
+    int rt_preview_owner = 0;
+    rt_view_feature_ref rt_preview_ref =
+	rt_view_context_feature_overlay_ensure(feature_view_ctx,
+		"cap2::rt-preview", &rt_preview_owner, &rt_preview_state,
+		&rt_preview_callbacks, "cap2::rt-source.s");
+    if (rt_view_feature_ref_is_null(rt_preview_ref))
+	FAIL("RT feature overlay ensure should return an Obol feature ref");
+    BRLObolFeatureHandle rt_preview_handle =
+	owned_controller->features().find("cap2::rt-preview");
+    BRLObolFeatureSummary rt_preview_summary;
+    if (!rt_preview_handle.isValid() ||
+	    !owned_controller->features().summary("cap2::rt-preview",
+		rt_preview_summary) ||
+	    !rt_preview_summary.exists ||
+	    rt_preview_summary.kind != BRLObolFeatureKind::EditPreview ||
+	    !rt_preview_summary.overlay.isOverlay ||
+	    rt_preview_summary.overlay.overlayClass !=
+		BRLObolOverlayClass::EditHandle ||
+	    rt_preview_summary.overlay.lifecycle !=
+		BRLObolOverlayLifecycle::PerTool ||
+	    rt_preview_summary.overlay.order !=
+		BRLObolOverlayOrder::PostTransparent ||
+	    rt_preview_summary.overlay.ownerToken != &rt_preview_owner ||
+	    !BU_STR_EQUAL(rt_preview_summary.overlay.sourcePath.getString(),
+		"cap2::rt-source.s"))
+	FAIL("RT feature overlay adapter should publish typed Obol edit-preview metadata");
+    point_t rt_preview_points[3] = {
+	{0.0, 0.0, 0.0},
+	{1.0, 0.0, 0.0},
+	{1.0, 1.0, 0.0}
+    };
+    int rt_preview_cmds[3] = {
+	GED_DRAW_VIEW_LINE_MOVE,
+	GED_DRAW_VIEW_LINE_DRAW,
+	GED_DRAW_VIEW_LINE_DRAW
+    };
+    if (!rt_view_feature_points_replace(rt_preview_ref,
+		RT_VIEW_FEATURE_TRANSIENT_PREVIEW, rt_preview_points,
+		rt_preview_cmds, 3))
+	FAIL("RT feature points replacement should update Obol edit-preview geometry");
+    BRLObolFeatureRecord rt_preview_record;
+    if (!owned_controller->features().record(rt_preview_handle,
+		rt_preview_record) ||
+	    rt_preview_record.kind != BRLObolFeatureKind::EditPreview ||
+	    rt_preview_record.points.size() != 3 ||
+	    rt_preview_record.commands.size() != 3)
+	FAIL("RT feature points replacement should preserve Obol edit-preview records");
+    rt_view_feature_set_visible(rt_preview_ref, 0);
+    rt_view_feature_set_color(rt_preview_ref, 12, 34, 56);
+    BRLObolFeatureStyle rt_preview_style;
+    if (!owned_controller->features().style(rt_preview_handle,
+		rt_preview_style) ||
+	    !rt_preview_style.hasVisible ||
+	    rt_preview_style.visible ||
+	    !rt_preview_style.hasColor)
+	FAIL("RT feature style mutations should update Obol feature style");
+    if (!rt_view_feature_touch(rt_preview_ref) ||
+	    rt_preview_state.update_count != 1)
+	FAIL("RT feature touch should dispatch through Obol edit-preview callbacks");
+    if (!rt_view_context_edit_preview_publish_event(feature_view_ctx,
+		rt_preview_ref, RT_VIEW_EDIT_PREVIEW_UPDATE,
+		"cap2::rt-source.s"))
+	FAIL("RT feature preview events should route through the Obol feature adapter");
+    if (!rt_view_feature_clear_geometry(rt_preview_ref) ||
+	    !owned_controller->features().record(rt_preview_handle,
+		rt_preview_record) ||
+	    !rt_preview_record.points.empty())
+	FAIL("RT feature clear geometry should clear the Obol feature record");
+
+    int rt_label_owner = 0;
+    rt_view_feature_ref rt_label_ref =
+	rt_view_context_feature_label_ensure(feature_view_ctx,
+		"cap2::rt-label", &rt_label_owner);
+    struct rt_view_feature_label rt_label;
+    memset(&rt_label, 0, sizeof(rt_label));
+    rt_label.text = "rt label";
+    VSET(rt_label.point, 3.0, 4.0, 5.0);
+    rt_label.color_valid = 1;
+    rt_label.color[0] = 210;
+    rt_label.color[1] = 211;
+    rt_label.color[2] = 212;
+    if (rt_view_feature_ref_is_null(rt_label_ref) ||
+	    !rt_view_feature_labels_replace(rt_label_ref, &rt_label, 1))
+	FAIL("RT feature label replacement should route into Obol labels");
+    BRLObolFeatureHandle rt_label_handle =
+	owned_controller->features().find("cap2::rt-label");
+    BRLObolFeatureRecord rt_label_record;
+    if (!rt_label_handle.isValid() ||
+	    !owned_controller->features().record(rt_label_handle,
+		rt_label_record) ||
+	    rt_label_record.kind != BRLObolFeatureKind::Labels ||
+	    rt_label_record.labels.size() != 1 ||
+	    !BU_STR_EQUAL(rt_label_record.labels[0].text.getString(),
+		"rt label") ||
+	    !rt_label_record.overlay.isOverlay ||
+	    rt_label_record.overlay.ownerToken != &rt_label_owner)
+	FAIL("RT feature label adapter should publish typed Obol label records");
+    if (!rt_view_context_feature_remove(feature_view_ctx, "cap2::rt-label") ||
+	    owned_controller->features().exists("cap2::rt-label"))
+	FAIL("RT feature remove should delete Obol-backed feature records");
+
+    if (ged_draw_view_context_features_remove_prefix(feature_view_ctx,
+	    "cap2::") < 11 ||
+	    owned_controller->features().exists("cap2::line") ||
+	    owned_controller->features().exists("cap2::tcl-line") ||
+	    owned_controller->features().exists("cap2::annotation") ||
+	    owned_controller->features().exists("cap2::polygon-overlay") ||
+	    owned_controller->features().exists("cap2::label") ||
+	    owned_controller->features().exists("cap2::arrow") ||
+	    owned_controller->features().exists("cap2::axes") ||
+	    owned_controller->features().exists("cap2::tcl-axes") ||
+	    owned_controller->features().exists("cap2::mesh") ||
+	    owned_controller->features().exists("cap2::diagnostic") ||
+	    owned_controller->features().exists("cap2::rt-preview"))
+	FAIL("GED feature prefix removal should clear owned Obol feature store entries");
+
     size_t root_group_count = 77;
     if (!ged_draw_obol_group_descendant_group_count_for_path(gedp, "/",
 	    &root_group_count) ||
@@ -3250,11 +3709,26 @@ main(int argc, char **argv)
 	    !source_for_path(view_scene, "ball.s"))
 	FAIL("attached Obol scene controller should mirror GED erase command");
 
+    point_t zap_polygon_origin = {0.0, 0.0, 0.0};
+    void *zap_view_ctx = ged_view_active_ctx(gedp);
+    if (ged_draw_view_polygon_ref_is_null(
+		ged_draw_view_context_polygon_create(zap_view_ctx,
+		    "zap::polygon", 0, GED_DRAW_VIEW_POLYGON_SQUARE,
+		    zap_polygon_origin)) ||
+	    ged_draw_view_polygon_ref_is_null(
+		ged_draw_view_context_polygon_find(zap_view_ctx,
+		    "zap::polygon")))
+	FAIL("Obol polygon store should publish a test polygon before zap");
+
     const char *zap_cmd[1] = {"zap"};
     if (ged_exec_zap(gedp, 1, zap_cmd) != BRLCAD_OK)
 	FAIL("real GED zap command should succeed");
     if (view_scene->getDatabaseSourceCount() != 0)
 	FAIL("attached Obol scene controller should mirror GED clear command");
+    if (!ged_draw_view_polygon_ref_is_null(
+		ged_draw_view_context_polygon_find(zap_view_ctx,
+		    "zap::polygon")))
+	FAIL("GED zap should clear Obol polygon store view objects");
 
     ged_draw_obol_controller_detach(gedp);
     ged_close(gedp);

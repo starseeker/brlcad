@@ -117,6 +117,32 @@ pointers.  This gives the neutral backing-store adapter path a libbrlobol
 producer/consumer for retained scene handles without routing those handles
 through BSG-only adapter conversions.
 
+Capability 2 now has a neutral RT scene-adapter boundary.  `include/rt/view.h`
+declares `rt_view_context_scene_adapter`, adapter set/get helpers, and a
+neutral pick-result append helper.  The retained RT implementation dispatches
+render/export consistency and semantic-path pick through that adapter before
+falling back to BSG.  GED-owned views install an Obol-backed adapter that uses
+Obol/GED export records and database-source paths for the `rt_view_context_*`
+queries still required by existing callers.
+GED-owned polygon and selection traffic now also use narrow neutral RT
+adapters.  The polygon adapter resolves GED-owned polygon refs through
+libbrlobol's polygon store; the selection adapter resolves selection
+availability/count/clear and pick-result updates through an owner/kind-aware
+libbrlobol selection store.
+GED-owned feature/edit-preview traffic now uses the same narrow neutral RT
+adapter pattern.  The feature adapter resolves GED-owned
+`rt_view_feature_ref` tokens through `BRLObolFeatureStore` for edit-preview
+overlay ensure, label ensure, style/touch, geometry replacement, clear, remove,
+and lifecycle event publication, while retained BSG feature storage remains
+compatibility for unowned contexts.
+GED-owned feature-overlay classification now lives in
+`BRLObolFeatureStore` metadata.  Tcl line/arrow/axes overlays, Tcl polygon-edit
+helpers, and model annotations carry typed role/class/lifecycle/order/source
+metadata in Obol feature summaries and records.  Feature-store nodes remain
+`view-feature` scene records so generic Obol scene traversal cannot bypass the
+owner-scoped feature iterator; scene `recordRole=overlay` is still reserved
+for scene-overlay geometry owned by the overlay scene path.
+
 The Capability 1 completion path is in closeout: libged has established an
 owned Obol scene/source controller, routed the guarded GED draw-scene database
 behavior family into that owner, moved neutral GED records/queries to Obol
@@ -478,15 +504,18 @@ retained-to-neutral scene-ref conversion in the BSG-backed source adapter,
 plus
 central private declarations in `bsg_ged_draw_view_private.h` and definitions
 in `src/libged/ged_view_legacy.cpp` for those still-live retained bridge
-surfaces.  It is also expected to find BSG-internal selection, feature,
-overlay geometry/registration internals, feature creation/replacement
-context implementations, axes creation, line/label creation and replacement,
-and remaining polygon export/record/current/open/fill helpers in
-`src/libged/bsg_ged_draw_view.c` until the public draw-view feature and
-polygon backend API boundaries migrate.  Those residuals are still retirement
-blockers only where they expose or require the public BSG-shaped draw
-snap/scene-ref surface, retained qtcad transaction/observer behavior, or the
-guarded direct `libbsg` rows in `libdm` and `libged`.
+surfaces.  It is also expected to find BSG-internal feature, overlay
+geometry/registration internals, feature creation/replacement context
+implementations, axes creation, and line/label creation and replacement in
+`src/libged/bsg_ged_draw_view.c` until the public draw-view feature backend
+API boundaries migrate.  GED-owned polygon and selection traffic now route
+through libbrlobol stores via neutral RT adapters; any remaining BSG polygon
+or selection implementation is compatibility for unowned/legacy contexts and
+is no longer the primary GED-owned backend.  Those residuals are still
+retirement blockers only where they
+expose or require the public BSG-shaped draw snap/scene-ref surface, retained
+qtcad transaction/observer behavior, or the guarded direct `libbsg` rows in
+`libdm` and `libged`.
 
 The qtcad retained bridge now routes dimensions, width/height, refresh
 request, refresh consume/complete, view name get/set, unit-conversion set,
@@ -572,13 +601,15 @@ and typed RT pick/selection wrapper calls:
 
 * ged selection semantics test: no direct libbsg link
 
-Production libged native selection draw-sync still mirrors native selection
-sets into retained draw-view selection state while the backend migrates, but
-the service boundary must use public GED draw refs and opaque view contexts.
-`src/libged/selection_state.cpp` routes selected-path snapshots, selection
-clears, selected-shape publication, shape-ref view lookup, and indexed
-component/path-hash lookup through `ged/draw.h` public helpers.  The
-BSG scene-ref index callbacks remain private to the retained draw bridge:
+Production libged native selection draw-sync now writes GED-owned draw-view
+selection state through the Obol-backed context facade when the view has an
+owned Obol controller, with retained BSG selection storage kept for
+unowned/legacy contexts.  The service boundary must use public GED draw refs
+and opaque view contexts.  `src/libged/selection_state.cpp` routes
+selected-path snapshots, selection clears, selected-shape publication,
+shape-ref view lookup, and indexed component/path-hash lookup through
+`ged/draw.h` public helpers.  The BSG scene-ref index callbacks remain private
+to the retained draw bridge:
 
 * libged native selection draw-sync: no private draw-view header exposure, BSG scene-ref callbacks, or typed BSG selection/view access in the selection-state service
 
@@ -820,14 +851,15 @@ validation while the retained bridge remains:
   `struct bsg_view *` private autoview/draw/refresh/viewable helper
   signature
 
-Production libged diagnostic line-layer fallback producers still exercise the
-retained GED draw-view bridge when the neutral diagnostic line-layer handler
-does not handle a publish request, but fallback feature replacement must stay
-behind an opaque context helper.  The check-overlaps, gqa overlap overlay,
-draw edge-use, and vutil NMG edge-use fallback paths route through
-`ged_draw_view_context_line_layer_builder_replace` from the public
-`ged/draw.h` facade instead of the private draw-view header or typed
-`struct bsg_view` line-layer helper calls:
+Production libged diagnostic line-layer fallback producers publish through a
+typed GED diagnostic facade.  When the neutral diagnostic line-layer handler
+does not handle a publish request, the check-overlaps, gqa overlap overlay,
+draw edge-use, BREP plot, and vutil NMG edge-use fallback paths route through
+`ged_draw_view_context_diagnostic_line_layer_builder_replace` from the public
+`ged/draw.h` facade.  GED-owned views publish those records into
+`BRLObolFeatureStore` with `Diagnostic`/`PerCommand`/`PostTransparent`
+metadata; the retained GED draw-view bridge is compatibility-only for
+unowned contexts:
 
 * libged diagnostic line-layer fallback producers: no typed GED draw-view line-layer fallback calls
 
@@ -1146,10 +1178,16 @@ population stay in the draw bridge implementation instead of the command file:
 * libged deprecated gobject command paths: no private draw-view header, direct BSG headers, retained scene refs, BSG appearance settings, direct overlay-create calls, or BSG feature tokens
 
 Libged view-command selection, feature-depth, label, line, axes, LoD, and
-polygon operations still exercise retained draw-view feature and policy
-storage while the backend migrates, but their shared command state and
-command-side retained feature operations must use the public GED draw-view
-context facade.
+polygon operations use the public GED draw-view context facade.  Polygon
+commands now resolve GED-owned polygon storage through libbrlobol's polygon
+store and the neutral RT polygon adapter, and selection operations now resolve
+GED-owned selected/highlighted paths through libbrlobol's owner/kind-aware
+selection store and the neutral RT selection adapter.  Feature/edit-preview
+operations that enter through neutral `rt_view_feature_*` APIs now resolve
+GED-owned refs through the neutral RT feature adapter and
+`BRLObolFeatureStore`; retained draw-view backend compatibility remains for
+unowned legacy contexts and remaining producer families that have not yet
+published typed Obol records.
 `src/libged/view/ged_view.h` stores polygon command state as a neutral
 `ged_draw_view_polygon_ref` from
 `ged/draw.h` instead of including libged's private draw-view header.
@@ -1159,22 +1197,24 @@ axes creation/state replacement through public `ged_draw_view_context_*`
 helpers, `src/libged/view/lod.cpp` routes LoD policy reads and writes through
 the public `ged_draw_view_context_lod_policy_get` and
 `ged_draw_view_context_lod_policy_apply` helpers, and
-`src/libged/view/polygons.c` uses
-public neutral polygon handle, record, and context helper declarations.
+`src/libged/view/polygons.c` uses public neutral polygon handle, record, and
+context helper declarations; GED-owned create/find/import/export/update/fill,
+area/overlap, CSG, snap, and record readback dispatch to Obol/libbrlobol
+before retained compatibility.
 `src/libged/view/view.c` routes view selection counts and `view vZ`
 feature-depth lookups through public selection/feature-depth context helpers.
 Retained BSG casts remain inside the draw-view bridge:
 
 * libged view-command selection/feature-depth/label/line/axes/LoD/polygon operations: no private draw-view header exposure or typed BSG view/selection/feature/polygon/LoD access in migrated command headers
 
-The GED view-command test exercises retained BSG-backed backend-scene
-render/export coverage and snap, measure, and polygon semantic utilities
-through opaque `rt/view_legacy_bsg.h` view-context wrappers.  It must not
-directly link libbsg while its source avoids direct `struct bsg_view` setup,
-typed RT view-set setup wrappers, direct `gv_*`/`ged_gvp` reach-through,
-direct BSG backend-scene/export/render and semantic utility headers, records,
-calls, or the broad `bsg/util.h` include.  Generated link lines may still
-include libbsg through retained libged/librt transitives until those owner
+The GED view-command test exercises Obol-backed feature/polygon and
+render/export behavior plus retained snap/measure compatibility through
+opaque neutral RT/GED view-context wrappers.  It must not directly link libbsg
+while its source avoids direct `struct bsg_view` setup, typed RT view-set
+setup wrappers, direct `gv_*`/`ged_gvp` reach-through, direct BSG
+backend-scene/export/render and semantic utility headers, records, calls, or
+the broad `bsg/util.h` include.  Generated link lines may still include libbsg
+through retained libged/librt transitives until those owner
 libraries migrate:
 
 * ged view-command test: no direct libbsg link

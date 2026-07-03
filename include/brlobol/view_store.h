@@ -97,6 +97,10 @@ static const unsigned int BRLOBOL_FEATURE_SCOPE_LOCAL = 0x02u;
 static const unsigned int BRLOBOL_FEATURE_SCOPE_ALL =
     BRLOBOL_FEATURE_SCOPE_SHARED | BRLOBOL_FEATURE_SCOPE_LOCAL;
 
+static const int BRLOBOL_SELECTION_ALL = -1;
+static const int BRLOBOL_SELECTION_SELECTED_PATH = 0;
+static const int BRLOBOL_SELECTION_HIGHLIGHTED_REF = 1;
+
 enum class BRLObolLineCommand {
     Move = 0,
     Draw = 1,
@@ -126,6 +130,12 @@ enum class BRLObolPolygonUpdate {
     PointSelectClear = 3,
     PointMove = 4,
     PointAppend = 5
+};
+
+enum BRLObolPolygonFillFlag {
+    BRLOBOL_POLYGON_FILL_NONE = 0,
+    BRLOBOL_POLYGON_FILL_HATCH = 1,
+    BRLOBOL_POLYGON_FILL_MESH = 2
 };
 
 struct BRLOBOL_EXPORT BRLObolFeatureStyle {
@@ -170,6 +180,59 @@ struct BRLOBOL_EXPORT BRLObolFeatureOwner {
     BRLObolFeatureOwner(void);
 };
 
+enum class BRLObolOverlayRole {
+    None,
+    Model,
+    Screen,
+    XRay
+};
+
+enum class BRLObolOverlayClass {
+    None,
+    Faceplate,
+    EditHandle,
+    Measure,
+    SelectionRubberBand,
+    SnapGuide,
+    CommandResult,
+    Diagnostic,
+    TclOverlay,
+    PolygonEdit,
+    SketchEdit,
+    UserAnnotation
+};
+
+enum class BRLObolOverlayLifecycle {
+    None,
+    Persistent,
+    PerFrame,
+    PerCommand,
+    PerTool,
+    PerView,
+    SharedViewSet,
+    AutoRemoveOnSource
+};
+
+enum class BRLObolOverlayOrder {
+    Model,
+    Screen,
+    XRay,
+    PostTransparent
+};
+
+struct BRLOBOL_EXPORT BRLObolOverlayInfo {
+    SbBool isOverlay;
+    const void *ownerToken;
+    BRLObolOverlayRole role;
+    BRLObolOverlayClass overlayClass;
+    BRLObolOverlayLifecycle lifecycle;
+    BRLObolOverlayOrder order;
+    int sortOrder;
+    SbString sourcePath;
+
+    BRLObolOverlayInfo(void);
+};
+
 struct BRLOBOL_EXPORT BRLObolEditPreviewCallbacks {
     void *previewContext;
     uint64_t (*revisionCallback)(void *previewContext);
@@ -211,14 +274,41 @@ struct BRLOBOL_EXPORT BRLObolFeatureSummary {
     size_t commandCount;
     size_t childCount;
     BRLObolFeatureOwner owner;
+    BRLObolOverlayInfo overlay;
 
     BRLObolFeatureSummary(void);
 };
+
+struct BRLOBOL_EXPORT BRLObolFeatureRecord {
+    BRLObolFeatureHandle handle;
+    SbString name;
+    BRLObolFeatureKind kind;
+    BRLObolFeatureScope scope;
+    BRLObolFeatureStyle style;
+    BRLObolFeatureOwner owner;
+    BRLObolOverlayInfo overlay;
+    SbBool realized;
+    std::vector<SbVec3f> points;
+    std::vector<int32_t> commands;
+    std::vector<int32_t> indices;
+    std::vector<SbVec3f> normals;
+    std::vector<BRLObolLabel> labels;
+    std::vector<SbVec3f> axesCenters;
+    float halfAxesSize;
+    std::vector<BRLObolLineLayer> layers;
+
+    BRLObolFeatureRecord(void);
+};
+
+typedef int (*BRLObolFeatureRecordCallback)(
+	const BRLObolFeatureRecord &record,
+	void *userData);
 
 struct BRLOBOL_EXPORT BRLObolPolygonVisual {
     SbColor edgeColor;
     SbColor fillColor;
     SbBool fill;
+    unsigned int fillFlags;
     SbVec2f fillSlope;
     float fillSpacing;
     float viewZ;
@@ -232,6 +322,7 @@ struct BRLOBOL_EXPORT BRLObolPolygonRecord {
     BRLObolFeatureScope scope;
     BRLObolPolygonType type;
     SbBool fill;
+    unsigned int fillFlags;
     SbVec2f fillSlope;
     float fillSpacing;
     SbColor fillColor;
@@ -256,6 +347,8 @@ typedef int (*BRLObolPolygonRecordCallback)(
 struct BRLOBOL_EXPORT BRLObolSelectionRecord {
     SbString path;
     BRLObolFeatureHandle feature;
+    BRLObolFeatureOwner owner;
+    int kind;
     int primitiveIndex;
     double hitDistance;
 
@@ -274,10 +367,23 @@ public:
     void clear(void);
     BRLObolFeatureHandle find(const SbString &name,
 	unsigned int scopeMask = BRLOBOL_FEATURE_SCOPE_ALL) const;
+    BRLObolFeatureHandle findOwned(const SbString &name,
+	unsigned int scopeMask,
+	const BRLObolFeatureOwner *owner) const;
     SbBool exists(const SbString &name,
 	unsigned int scopeMask = BRLOBOL_FEATURE_SCOPE_ALL) const;
+    SbBool existsOwned(const SbString &name,
+	unsigned int scopeMask,
+	const BRLObolFeatureOwner *owner) const;
+    SbBool remove(BRLObolFeatureHandle handle);
     SbBool remove(const SbString &name);
+    SbBool removeOwned(const SbString &name,
+	unsigned int scopeMask,
+	const BRLObolFeatureOwner *owner);
     size_t removePrefix(const SbString &prefix);
+    size_t removePrefix(const SbString &prefix,
+	unsigned int scopeMask,
+	const BRLObolFeatureOwner *owner);
 
     BRLObolFeatureHandle publishLineSet(const SbString &name,
 	BRLObolFeatureScope scope,
@@ -339,6 +445,12 @@ public:
 	uint32_t inputsRevision = 0,
 	const BRLObolEditPreviewCallbacks *callbacks = NULL,
 	const BRLObolFeatureOwner *owner = NULL);
+    SbBool replaceEditPreviewGeometry(BRLObolFeatureHandle handle,
+	const SbString &identity,
+	const std::vector<SbVec3f> &points,
+	const std::vector<int32_t> &commands,
+	uint32_t sourceRevision = 0,
+	uint32_t inputsRevision = 0);
     uint64_t editPreviewRevision(BRLObolFeatureHandle handle) const;
     int updateEditPreview(BRLObolFeatureHandle handle);
     int pickEditPreview(BRLObolFeatureHandle handle,
@@ -362,6 +474,10 @@ public:
     SbBool axesCenters(BRLObolFeatureHandle handle,
 	std::vector<SbVec3f> &centersOut,
 	float *halfAxesSizeOut = NULL) const;
+    SbBool indices(BRLObolFeatureHandle handle,
+	std::vector<int32_t> &indicesOut) const;
+    SbBool normals(BRLObolFeatureHandle handle,
+	std::vector<SbVec3f> &normalsOut) const;
 
     SbBool applyStyle(BRLObolFeatureHandle handle,
 	const BRLObolFeatureStyle &style,
@@ -377,11 +493,26 @@ public:
     SbBool setArrowTip(BRLObolFeatureHandle handle,
 	float tipLength,
 	float tipWidth);
+    SbBool setOverlayInfo(BRLObolFeatureHandle handle,
+	const BRLObolOverlayInfo &overlay);
+    SbBool clearOverlayInfo(BRLObolFeatureHandle handle);
+    SbBool overlayInfo(BRLObolFeatureHandle handle,
+	BRLObolOverlayInfo &overlayOut) const;
 
     SbBool realize(BRLObolFeatureHandle handle, SbBool recursive = FALSE);
     SbBool summary(const SbString &name,
 	BRLObolFeatureSummary &summaryOut,
 	unsigned int scopeMask = BRLOBOL_FEATURE_SCOPE_ALL) const;
+    SbBool summaryOwned(const SbString &name,
+	BRLObolFeatureSummary &summaryOut,
+	unsigned int scopeMask,
+	const BRLObolFeatureOwner *owner) const;
+    SbBool record(BRLObolFeatureHandle handle,
+	BRLObolFeatureRecord &recordOut) const;
+    void visitRecords(BRLObolFeatureRecordCallback callback,
+	void *userData = NULL,
+	unsigned int scopeMask = BRLOBOL_FEATURE_SCOPE_ALL,
+	const BRLObolFeatureOwner *owner = NULL) const;
     SoNode *node(BRLObolFeatureHandle handle) const;
 
 private:
@@ -420,6 +551,9 @@ public:
 	int x,
 	int y,
 	BRLObolPolygonUpdate update);
+    SbBool updateModelPoint(BRLObolPolygonHandle handle,
+	const SbVec3f &point,
+	BRLObolPolygonUpdate update);
     SbBool move(BRLObolPolygonHandle handle,
 	const SbVec3f &currentPoint,
 	const SbVec3f &previousPoint);
@@ -454,6 +588,8 @@ public:
 	SbBool fill,
 	const SbVec2f &slope,
 	float spacing);
+    SbBool setFillFlags(BRLObolPolygonHandle handle,
+	unsigned int fillFlags);
     SbBool setFillColor(BRLObolPolygonHandle handle,
 	const SbColor &fillColor);
     SbBool fillColor(BRLObolPolygonHandle handle,
@@ -502,20 +638,33 @@ public:
     BRLObolSelectionStore(void);
     ~BRLObolSelectionStore(void);
 
-    void clear(void);
-    size_t count(void) const;
-    SbBool containsPath(const SbString &path) const;
-    SbBool addPath(const SbString &path);
-    SbBool setPath(const SbString &path);
-    SbBool removePath(const SbString &path);
+    void clear(const BRLObolFeatureOwner *owner = NULL,
+	int kind = BRLOBOL_SELECTION_ALL);
+    size_t count(const BRLObolFeatureOwner *owner = NULL,
+	int kind = BRLOBOL_SELECTION_ALL) const;
+    SbBool containsPath(const SbString &path,
+	int kind = BRLOBOL_SELECTION_SELECTED_PATH,
+	const BRLObolFeatureOwner *owner = NULL) const;
+    SbBool addPath(const SbString &path,
+	int kind = BRLOBOL_SELECTION_SELECTED_PATH,
+	const BRLObolFeatureOwner *owner = NULL);
+    SbBool setPath(const SbString &path,
+	int kind = BRLOBOL_SELECTION_SELECTED_PATH,
+	const BRLObolFeatureOwner *owner = NULL);
+    SbBool removePath(const SbString &path,
+	int kind = BRLOBOL_SELECTION_ALL,
+	const BRLObolFeatureOwner *owner = NULL);
     const BRLObolSelectionRecord *record(size_t index) const;
     SbBool addRecord(const BRLObolSelectionRecord &record);
     SbBool setRecords(const std::vector<BRLObolSelectionRecord> &records);
     void visitPaths(int (*callback)(const SbString &path, void *userData),
-	void *userData = NULL) const;
+	void *userData = NULL,
+	const BRLObolFeatureOwner *owner = NULL,
+	int kind = BRLOBOL_SELECTION_ALL) const;
     SbBool applyPickResults(const std::vector<BRLObolSelectionRecord> &records,
 	void (*selectedPathCallback)(const SbString &path, void *userData) = NULL,
-	void *userData = NULL);
+	void *userData = NULL,
+	const BRLObolFeatureOwner *owner = NULL);
 
 private:
     BRLObolSelectionStore(const BRLObolSelectionStore &);

@@ -614,17 +614,6 @@ swrast_getDisplayImage(struct dm *dmp, unsigned char **image, int flip, int alph
 	return BRLCAD_ERROR;
     }
 
-    /* DIM-DBG: log whenever the OSMesa buffer dimensions differ from what dm expects */
-    if (cbwidth != width || cbheight != height) {
-	fprintf(stderr, "swrast_getDisplayImage: DIM MISMATCH: dm=(%d,%d) OSMesa_buf=(%d,%d) gv=(%d,%d)\n",
-	       width, height, (int)cbwidth, (int)cbheight,
-	       pv->view_ctx ? dm_view_context_width_get(pv->view_ctx) : -1,
-	       pv->view_ctx ? dm_view_context_height_get(pv->view_ctx) : -1);
-    } else {
-	fprintf(stderr, "swrast_getDisplayImage: dm=(%d,%d) OSMesa_buf=(%d,%d) [OK]\n",
-	       width, height, (int)cbwidth, (int)cbheight);
-    }
-
     /* cbuf is RGBA unsigned byte, row-major from bottom-left */
     unsigned char *src = (unsigned char *)cbuf;
     unsigned char *idata = (unsigned char *)bu_calloc(height * width * bytes_per_pixel,

@@ -175,6 +175,43 @@ GED_EXPORT extern int ged_draw_view_context_overlay_internal_create_group_ref(
 GED_EXPORT extern void ged_draw_overlay_erase_name_context(struct ged *gedp,
 							   void *view_ctx,
 							   const char *name);
+GED_EXPORT extern int ged_draw_view_context_obol_scene_adapter_attach(
+	struct ged *gedp,
+	void *view_ctx);
+GED_EXPORT extern int ged_draw_view_context_obol_feature_adapter_attach(
+	struct ged *gedp,
+	void *view_ctx);
+GED_EXPORT extern int ged_draw_view_context_obol_polygon_adapter_attach(
+	struct ged *gedp,
+	void *view_ctx);
+GED_EXPORT extern int ged_draw_view_context_obol_selection_adapter_attach(
+	struct ged *gedp,
+	void *view_ctx);
+GED_EXPORT extern size_t ged_draw_obol_view_context_clear(
+	void *view_ctx,
+	int flags);
+GED_EXPORT extern int ged_draw_obol_view_context_selection_available(
+	void *view_ctx);
+GED_EXPORT extern size_t ged_draw_obol_view_context_selection_count(
+	void *view_ctx);
+GED_EXPORT extern int ged_draw_obol_view_context_selection_path_foreach(
+	void *view_ctx,
+	ged_draw_view_context_selection_path_cb cb,
+	void *data);
+GED_EXPORT extern int ged_draw_obol_view_context_selection_clear(
+	void *view_ctx);
+GED_EXPORT extern int ged_draw_obol_view_context_selection_contains_path(
+	void *view_ctx,
+	int kind,
+	const char *path);
+GED_EXPORT extern int ged_draw_obol_view_context_selection_add_path(
+	void *view_ctx,
+	int kind,
+	const char *path);
+GED_EXPORT extern int ged_draw_obol_view_context_selection_set_path(
+	void *view_ctx,
+	int kind,
+	const char *path);
 GED_EXPORT extern int ged_draw_overlay_geometry_insert_context(
 	struct ged *gedp,
 	void *view_ctx,
@@ -281,6 +318,43 @@ struct ged_draw_obol_annotation_summary {
     uint64_t source_identity;
 };
 
+enum ged_draw_obol_view_feature_kind {
+    GED_DRAW_OBOL_VIEW_FEATURE_KIND_UNKNOWN = 0,
+    GED_DRAW_OBOL_VIEW_FEATURE_KIND_LINES,
+    GED_DRAW_OBOL_VIEW_FEATURE_KIND_INDEXED_LINES,
+    GED_DRAW_OBOL_VIEW_FEATURE_KIND_POINTS,
+    GED_DRAW_OBOL_VIEW_FEATURE_KIND_LABELS,
+    GED_DRAW_OBOL_VIEW_FEATURE_KIND_ARROW,
+    GED_DRAW_OBOL_VIEW_FEATURE_KIND_AXES,
+    GED_DRAW_OBOL_VIEW_FEATURE_KIND_LINE_LAYER,
+    GED_DRAW_OBOL_VIEW_FEATURE_KIND_EDIT_PREVIEW,
+    GED_DRAW_OBOL_VIEW_FEATURE_KIND_INDEXED_FACE_SET,
+    GED_DRAW_OBOL_VIEW_FEATURE_KIND_POLYGON_OVERLAY,
+    GED_DRAW_OBOL_VIEW_FEATURE_KIND_HUD_LABEL
+};
+
+struct ged_draw_obol_view_feature_record {
+    const char *name;
+    enum ged_draw_obol_view_feature_kind kind;
+    int local;
+    int visible;
+    int realized;
+    unsigned char color[3];
+    int line_style;
+    int line_width;
+    size_t point_count;
+    size_t command_count;
+    size_t index_count;
+    size_t normal_count;
+    size_t label_count;
+    size_t axes_center_count;
+    size_t child_count;
+};
+
+typedef int (*ged_draw_obol_view_feature_record_cb)(
+	const struct ged_draw_obol_view_feature_record *rec,
+	void *userdata);
+
 struct ged_draw_view_export_detail {
     struct bu_vls path;
     struct ged_draw_view_db_object_record record;
@@ -349,14 +423,124 @@ GED_EXPORT extern int ged_draw_obol_view_context_feature_exists(
 GED_EXPORT extern int ged_draw_obol_view_context_feature_remove(
 	void *view_ctx,
 	const char *name);
+GED_EXPORT extern size_t ged_draw_obol_view_context_features_remove_prefix(
+	void *view_ctx,
+	const char *prefix);
 GED_EXPORT extern int ged_draw_obol_view_context_feature_summary(
 	void *view_ctx,
 	const char *name,
 	struct ged_draw_view_feature_summary *summary);
+GED_EXPORT extern int ged_draw_obol_view_context_feature_visible(
+	void *view_ctx,
+	const char *name);
+GED_EXPORT extern int ged_draw_obol_view_context_feature_visible_set(
+	void *view_ctx,
+	const char *name,
+	int visible);
+GED_EXPORT extern int ged_draw_obol_view_context_feature_style_get(
+	void *view_ctx,
+	const char *name,
+	struct ged_draw_view_feature_style *style);
+GED_EXPORT extern int ged_draw_obol_view_context_feature_style_apply(
+	void *view_ctx,
+	const char *name,
+	const struct ged_draw_view_feature_style *style,
+	int recursive);
+GED_EXPORT extern int ged_draw_obol_view_context_feature_realize(
+	void *view_ctx,
+	const char *name,
+	int recursive);
+GED_EXPORT extern int ged_draw_obol_view_context_feature_depth(
+	void *view_ctx,
+	const char *name,
+	int mode,
+	fastf_t *depth);
+GED_EXPORT extern int ged_draw_obol_view_context_feature_depth_foreach(
+	void *view_ctx,
+	int mode,
+	ged_draw_view_feature_depth_cb cb,
+	void *data);
+GED_EXPORT extern int ged_draw_obol_view_context_feature_records_foreach(
+	void *view_ctx,
+	unsigned int query_flags,
+	const char *glob,
+	ged_draw_obol_view_feature_record_cb cb,
+	void *userdata);
+GED_EXPORT extern int ged_draw_obol_view_context_indexed_face_set_replace(
+	void *view_ctx,
+	const char *name,
+	int local,
+	const point_t *points,
+	size_t point_count,
+	const vect_t *normals,
+	size_t normal_count,
+	const int *indices,
+	size_t index_count,
+	const struct ged_draw_view_feature_style *style);
+GED_EXPORT extern int ged_draw_obol_view_context_lines_replace(
+	void *view_ctx,
+	const char *name,
+	int local,
+	const point_t *points,
+	const int *cmds,
+	size_t point_count,
+	const struct ged_draw_view_feature_style *style);
+GED_EXPORT extern int ged_draw_obol_view_context_tcl_polygons_replace(
+	void *view_ctx,
+	const char *name,
+	const point_t *points,
+	const int *cmds,
+	size_t point_count,
+	const struct ged_draw_view_feature_style *style);
+GED_EXPORT extern ged_draw_view_polygon_ref
+ged_draw_obol_view_context_polygon_find(
+	void *view_ctx,
+	const char *name);
+GED_EXPORT extern ged_draw_view_polygon_ref
+ged_draw_obol_view_context_polygon_find_scoped(
+	void *view_ctx,
+	const char *name,
+	int local_only);
+GED_EXPORT extern ged_draw_view_polygon_ref
+ged_draw_obol_view_context_polygon_create(
+	void *view_ctx,
+	const char *name,
+	int local,
+	int type,
+	const point_t screen_point);
+GED_EXPORT extern ged_draw_view_polygon_ref
+ged_draw_obol_view_context_polygon_import_sketch(
+	const char *name,
+	struct db_i *dbip,
+	struct directory *dp,
+	void *view_ctx,
+	int local);
+GED_EXPORT extern int ged_draw_obol_view_context_polygon_set_current(
+	ged_draw_view_polygon_ref ref,
+	long contour_i,
+	long point_i);
+GED_EXPORT extern int ged_draw_obol_view_context_polygon_set_contour_open(
+	ged_draw_view_polygon_ref ref,
+	long contour_i,
+	int open);
+GED_EXPORT extern int ged_draw_obol_view_context_polygon_area(
+	ged_draw_view_polygon_ref ref,
+	void *view_ctx,
+	fastf_t *area);
+GED_EXPORT extern int ged_draw_obol_view_context_polygon_overlap(
+	ged_draw_view_polygon_ref ref,
+	void *view_ctx,
+	const char *other_name,
+	const struct bn_tol *tol,
+	int *overlap);
 GED_EXPORT extern int ged_draw_obol_view_context_line_layer_builder_replace(
 	void *view_ctx,
 	const char *name,
 	int local,
+	const struct bg_line_layer_builder *builder);
+GED_EXPORT extern int ged_draw_obol_view_context_diagnostic_line_layer_builder_replace(
+	void *view_ctx,
+	const char *name,
 	const struct bg_line_layer_builder *builder);
 GED_EXPORT extern int ged_draw_obol_view_context_line_layers_replace(
 	void *view_ctx,
@@ -365,6 +549,126 @@ GED_EXPORT extern int ged_draw_obol_view_context_line_layers_replace(
 	const struct ged_draw_view_line_layer_data *layers,
 	size_t layer_count,
 	const struct ged_draw_view_feature_style *style);
+GED_EXPORT extern int ged_draw_obol_view_context_lines_create_model_annotation(
+	void *view_ctx,
+	const char *name,
+	int local,
+	const point_t point);
+GED_EXPORT extern int ged_draw_obol_view_context_lines_append_point(
+	void *view_ctx,
+	const char *name,
+	const point_t point);
+GED_EXPORT extern int ged_draw_obol_view_context_label_create(
+	void *view_ctx,
+	const char *name,
+	int local,
+	const char *text,
+	const point_t point,
+	const point_t target,
+	int has_target);
+GED_EXPORT extern int ged_draw_obol_view_context_labels_replace(
+	void *view_ctx,
+	const char *name,
+	int local,
+	const struct ged_draw_view_label_data *labels,
+	size_t label_count);
+GED_EXPORT extern int ged_draw_obol_view_context_tcl_labels_replace(
+	void *view_ctx,
+	const char *name,
+	int draw,
+	const struct ged_draw_view_label_data *labels,
+	size_t label_count);
+GED_EXPORT extern size_t ged_draw_obol_view_context_label_count(
+	void *view_ctx,
+	const char *name);
+GED_EXPORT extern int ged_draw_obol_view_context_label_copy(
+	void *view_ctx,
+	const char *name,
+	size_t index,
+	struct bu_vls *text,
+	point_t point,
+	unsigned char rgb[3]);
+GED_EXPORT extern int ged_draw_obol_view_context_label_point_set(
+	void *view_ctx,
+	const char *name,
+	size_t index,
+	const point_t point);
+GED_EXPORT extern int ged_draw_obol_view_context_line_style_get(
+	void *view_ctx,
+	const char *name,
+	struct ged_draw_view_line_style *style);
+GED_EXPORT extern int ged_draw_obol_view_context_line_color_set(
+	void *view_ctx,
+	const char *name,
+	int r,
+	int g,
+	int b);
+GED_EXPORT extern int ged_draw_obol_view_context_line_width_set(
+	void *view_ctx,
+	const char *name,
+	int line_width);
+GED_EXPORT extern int ged_draw_obol_view_context_feature_points_copy(
+	void *view_ctx,
+	const char *name,
+	point_t **points,
+	size_t *point_count);
+GED_EXPORT extern int ged_draw_obol_view_context_feature_indices_copy(
+	void *view_ctx,
+	const char *name,
+	int **indices,
+	size_t *index_count);
+GED_EXPORT extern int ged_draw_obol_view_context_feature_line_command_at(
+	void *view_ctx,
+	const char *name,
+	size_t index,
+	int *out);
+GED_EXPORT extern int ged_draw_obol_view_context_tcl_lines_replace(
+	void *view_ctx,
+	const char *name,
+	const point_t *points,
+	size_t point_count,
+	const struct ged_draw_view_line_style *style);
+GED_EXPORT extern int ged_draw_obol_view_context_arrow_tip_get(
+	void *view_ctx,
+	const char *name,
+	fastf_t *tip_length,
+	fastf_t *tip_width);
+GED_EXPORT extern int ged_draw_obol_view_context_arrow_tip_set(
+	void *view_ctx,
+	const char *name,
+	fastf_t tip_length,
+	fastf_t tip_width);
+GED_EXPORT extern int ged_draw_obol_view_context_tcl_arrows_replace(
+	void *view_ctx,
+	const char *name,
+	const point_t *points,
+	size_t point_count,
+	const struct ged_draw_view_feature_style *style);
+GED_EXPORT extern int ged_draw_obol_view_context_feature_axes_centers_copy(
+	void *view_ctx,
+	const char *name,
+	point_t **centers,
+	size_t *center_count);
+GED_EXPORT extern int ged_draw_obol_view_context_tcl_axes_replace(
+	void *view_ctx,
+	const char *name,
+	const point_t *centers,
+	size_t center_count,
+	fastf_t half_axes_size,
+	const struct ged_draw_view_feature_style *style);
+GED_EXPORT extern int ged_draw_obol_view_context_axes_create(
+	void *view_ctx,
+	const char *name,
+	int local,
+	const struct ged_draw_view_axes_state *state);
+GED_EXPORT extern int ged_draw_obol_view_context_axes_state_get(
+	void *view_ctx,
+	const char *name,
+	struct ged_draw_view_axes_state *state);
+GED_EXPORT extern int ged_draw_obol_view_context_axes_state_replace(
+	void *view_ctx,
+	const char *name,
+	const struct ged_draw_view_axes_state *state);
 GED_EXPORT extern int ged_draw_obol_overlay_erase_name_context(
 	struct ged *gedp,
 	void *view_ctx,
@@ -742,6 +1046,11 @@ GED_EXPORT extern int ged_draw_obol_scene_database_bounds(
 	vect_t *min,
 	vect_t *max,
 	int *empty_out);
+GED_EXPORT extern int ged_draw_obol_scene_database_autoview_bounds(
+	struct ged *gedp,
+	vect_t *min,
+	vect_t *max,
+	int *empty_out);
 GED_EXPORT extern void ged_draw_obol_preserved_sources_free(
 	struct ged *gedp);
 GED_EXPORT extern int ged_draw_obol_scene_root_child_count(
@@ -763,6 +1072,12 @@ GED_EXPORT extern int ged_draw_obol_database_source_summary_for_path(
 	struct ged *gedp,
 	const char *path,
 	struct ged_draw_database_source_summary *out);
+GED_EXPORT extern int ged_draw_obol_database_source_publication_begin(
+	struct ged *gedp,
+	void *view_ctx,
+	int publication_draw_mode);
+GED_EXPORT extern void ged_draw_obol_database_source_publication_end(
+	struct ged *gedp);
 GED_EXPORT extern int ged_draw_obol_database_source_paths_foreach(
 	struct ged *gedp,
 	int skip_overlay_groups,
@@ -1181,9 +1496,20 @@ ged_draw_obol_database_sources_remove_for_path_prefix_in_scope(
 	const char *path_prefix,
 	void *view_ctx);
 GED_EXPORT extern int
+ged_draw_obol_database_sources_remove_for_path_prefix_in_scope_mode(
+	struct ged *gedp,
+	const char *path_prefix,
+	void *view_ctx,
+	int mode);
+GED_EXPORT extern int
 ged_draw_obol_active_database_sources_remove_for_path_prefix(
 	struct ged *gedp,
 	const char *path_prefix);
+GED_EXPORT extern int
+ged_draw_obol_active_database_sources_remove_for_path_prefix_mode(
+	struct ged *gedp,
+	const char *path_prefix,
+	int mode);
 GED_EXPORT extern int
 ged_draw_obol_database_sources_remove_for_component_name(
 	struct ged *gedp,

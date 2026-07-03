@@ -11,10 +11,12 @@
 #include "bu/app.h"
 #include "bu/env.h"
 #include "bu/file.h"
+#include "rt/view.h"
 #include "wdb.h"
 
 #include <Inventor/SbBox.h>
 #include <Inventor/SbMatrix.h>
+#include <Inventor/SbViewVolume.h>
 #include <Inventor/SbViewportRegion.h>
 #include <Inventor/SbVec3f.h>
 #include <Inventor/SoPickedPoint.h>
@@ -2964,7 +2966,7 @@ test_mesh_lod_request_and_view_info(void)
     SoSeparator *root = new SoSeparator;
     root->ref();
     SoOrthographicCamera *camera = new SoOrthographicCamera;
-    camera->height = 20.0f;
+    camera->height = 15.0f;
     BRLObolViewController controller(root, camera);
     controller.setViewportSize(320, 240);
 
@@ -2979,10 +2981,104 @@ test_mesh_lod_request_and_view_info(void)
 	return 1;
     }
 
+    void *viewCtx = rt_view_context_create();
+    if (!viewCtx ||
+	    !rt_view_context_dimensions_set(viewCtx, 400, 200) ||
+	    !rt_view_context_size_set(viewCtx, 80.0)) {
+	printf("FAIL: could not prepare RT view context for Obol camera sync\n");
+	if (viewCtx)
+	    rt_view_context_free(viewCtx);
+	root->unref();
+	mesh->unref();
+	return 1;
+    }
+    rt_view_context_update(viewCtx);
+    controller.setViewportSize(400, 200);
+    if (!controller.syncCameraFromRtViewContext(viewCtx) ||
+	    !controller.getCamera() ||
+	    !controller.getCamera()->isOfType(
+		SoOrthographicCamera::getClassTypeId())) {
+	printf("FAIL: view controller did not sync RT view camera\n");
+	rt_view_context_free(viewCtx);
+	root->unref();
+	mesh->unref();
+	return 1;
+    }
+    SoOrthographicCamera *syncedCamera =
+	static_cast<SoOrthographicCamera *>(controller.getCamera());
+    if (fabs(syncedCamera->height.getValue() - 40.0) > 1.0e-6 ||
+	    fabs(syncedCamera->aspectRatio.getValue() - 2.0) > 1.0e-6 ||
+	    !controller.getRtViewInfo(&info) ||
+	    info.width != 400 ||
+	    info.height != 200 ||
+	    fabs(info.size - 80.0) > 1.0e-6) {
+	printf("FAIL: direct Obol camera did not preserve horizontal RT view size\n");
+	rt_view_context_free(viewCtx);
+	root->unref();
+	mesh->unref();
+	return 1;
+    }
+
+    point_t center = {10.0, -5.0, 2.0};
+    vect_t aet = {35.0, 25.0, 0.0};
+    if (!rt_view_context_center_set(viewCtx, center) ||
+	    !rt_view_context_aet_set(viewCtx, aet) ||
+	    !rt_view_context_update(viewCtx) ||
+	    !controller.syncCameraFromRtViewContext(viewCtx)) {
+	printf("FAIL: could not prepare oriented RT view context for Obol camera sync\n");
+	rt_view_context_free(viewCtx);
+	root->unref();
+	mesh->unref();
+	return 1;
+    }
+
+    mat_t model2view;
+    MAT_IDN(model2view);
+    if (!rt_view_context_model2view_get(model2view, viewCtx)) {
+	printf("FAIL: could not query RT model2view matrix\n");
+	rt_view_context_free(viewCtx);
+	root->unref();
+	mesh->unref();
+	return 1;
+    }
+
+    const point_t samples[] = {
+	{10.0, -5.0, 2.0},
+	{20.0, -5.0, 2.0},
+	{10.0, 5.0, 2.0},
+	{10.0, -5.0, 12.0},
+	{0.0, -15.0, -8.0}
+    };
+    const SbViewVolume viewVolume = syncedCamera->getViewVolume(0.0f);
+    for (size_t i = 0; i < sizeof(samples) / sizeof(samples[0]); i++) {
+	point_t brlView;
+	MAT4X3PNT(brlView, model2view, samples[i]);
+	SbVec3f obolScreen;
+	viewVolume.projectToScreen(SbVec3f(
+		static_cast<float>(samples[i][X]),
+		static_cast<float>(samples[i][Y]),
+		static_cast<float>(samples[i][Z])), obolScreen);
+	const double expectedX = 0.5 * (brlView[X] + 1.0);
+	const double expectedY = 0.5 * (brlView[Y] * 2.0 + 1.0);
+	if (fabs(obolScreen[0] - expectedX) > 1.0e-5 ||
+		fabs(obolScreen[1] - expectedY) > 1.0e-5) {
+	    printf("FAIL: Obol camera projection mismatch for sample %zu: "
+		    "BRL=(%.9f, %.9f) Obol=(%.9f, %.9f)\n",
+		    i, expectedX, expectedY,
+		    static_cast<double>(obolScreen[0]),
+		    static_cast<double>(obolScreen[1]));
+	    rt_view_context_free(viewCtx);
+	    root->unref();
+	    mesh->unref();
+	    return 1;
+	}
+    }
+    rt_view_context_free(viewCtx);
+
     controller.setCamera(NULL);
     if (controller.getRtViewInfo(&info) ||
-	    info.width != 320 ||
-	    info.height != 240 ||
+	    info.width != 400 ||
+	    info.height != 200 ||
 	    info.size <= 0.0) {
 	printf("FAIL: view controller missing-camera RT view fallback failed\n");
 	root->unref();

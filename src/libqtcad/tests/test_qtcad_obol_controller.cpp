@@ -179,11 +179,11 @@ main(int argc, char **argv)
 	    fabsf(beforeAET[2] - afterAET[2]) < 0.001f)
 	FAIL("QgView AET updates should synchronize the Obol camera");
     if (!controller->isRenderRequested() ||
-	    strcmp(controller->getRenderReason().getString(), "bsg-camera") != 0)
+	    strcmp(controller->getRenderReason().getString(), "rt-view-camera") != 0)
 	FAIL("Obol camera synchronization should request a render");
     SbString renderReason;
     if (!controller->consumeRenderRequest(&renderReason) ||
-	    strcmp(renderReason.getString(), "bsg-camera") != 0 ||
+	    strcmp(renderReason.getString(), "rt-view-camera") != 0 ||
 	    controller->isRenderRequested())
 	FAIL("Obol render requests should be consumable by render managers");
     if (controller->consumeRenderRequest(NULL))

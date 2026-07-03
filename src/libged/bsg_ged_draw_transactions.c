@@ -1357,6 +1357,8 @@ _ged_draw_apply_draw(struct ged *gedp,
     dgcdp.vs = neutral_settings;
 
     int ret = 0;
+    int obol_publication = ged_draw_obol_database_source_publication_begin(
+	    gedp, view_ctx, neutral_settings.draw_mode);
     if (neutral_settings.draw_mode == GED_DRAW_MODE_EVAL_WIRE ||
 	    neutral_settings.draw_mode == GED_DRAW_MODE_EVAL_POINTS) {
 	ret = ged_draw_apply_evaluated_paths(gedp, view_ctx, draw_paths, draw_count,
@@ -1369,6 +1371,8 @@ _ged_draw_apply_draw(struct ged *gedp,
 	ret = _ged_drawtrees(gedp, draw_count, draw_paths, _GED_DRAW_WIREFRAME,
 		&dgcdp);
     }
+    if (obol_publication)
+	ged_draw_obol_database_source_publication_end(gedp);
     ged_draw_active_view_ctx_set(gedp, saved_view);
 
     if (ret != 0) {

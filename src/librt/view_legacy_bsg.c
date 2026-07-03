@@ -69,6 +69,459 @@ struct rt_view_update_callback_context_bsg {
     void *data;
 };
 
+struct rt_view_scene_adapter_binding {
+    void *ctx;
+    struct rt_view_context_scene_adapter adapter;
+};
+
+struct rt_view_feature_adapter_binding {
+    void *ctx;
+    struct rt_view_context_feature_adapter adapter;
+};
+
+struct rt_view_polygon_adapter_binding {
+    void *ctx;
+    struct rt_view_context_polygon_adapter adapter;
+};
+
+struct rt_view_selection_adapter_binding {
+    void *ctx;
+    struct rt_view_context_selection_adapter adapter;
+};
+
+static struct bu_ptbl rt_view_scene_adapter_bindings = BU_PTBL_INIT_ZERO;
+static int rt_view_scene_adapter_bindings_init = 0;
+static struct bu_ptbl rt_view_feature_adapter_bindings = BU_PTBL_INIT_ZERO;
+static int rt_view_feature_adapter_bindings_init = 0;
+static struct bu_ptbl rt_view_polygon_adapter_bindings = BU_PTBL_INIT_ZERO;
+static int rt_view_polygon_adapter_bindings_init = 0;
+static struct bu_ptbl rt_view_selection_adapter_bindings = BU_PTBL_INIT_ZERO;
+static int rt_view_selection_adapter_bindings_init = 0;
+
+static void
+rt_view_scene_adapter_bindings_ensure(void)
+{
+    if (!rt_view_scene_adapter_bindings_init) {
+	BU_PTBL_INIT(&rt_view_scene_adapter_bindings);
+	rt_view_scene_adapter_bindings_init = 1;
+    }
+}
+
+static struct rt_view_scene_adapter_binding *
+rt_view_scene_adapter_binding_find(const void *ctx)
+{
+    if (!ctx || !rt_view_scene_adapter_bindings_init)
+	return NULL;
+
+    for (size_t i = 0; i < BU_PTBL_LEN(&rt_view_scene_adapter_bindings); i++) {
+	struct rt_view_scene_adapter_binding *binding =
+	    (struct rt_view_scene_adapter_binding *)BU_PTBL_GET(
+		    &rt_view_scene_adapter_bindings, i);
+	if (binding && binding->ctx == ctx)
+	    return binding;
+    }
+
+    return NULL;
+}
+
+static void
+rt_view_context_scene_adapter_clear(void *ctx)
+{
+    struct rt_view_scene_adapter_binding *binding =
+	rt_view_scene_adapter_binding_find(ctx);
+    if (!binding)
+	return;
+
+    (void)bu_ptbl_rm(&rt_view_scene_adapter_bindings, (long *)binding);
+    BU_PUT(binding, struct rt_view_scene_adapter_binding);
+}
+
+int
+rt_view_context_scene_adapter_set(
+	void *ctx,
+	const struct rt_view_context_scene_adapter *adapter)
+{
+    if (!ctx)
+	return 0;
+
+    if (!adapter || (!adapter->pick_semantic_path &&
+		!adapter->render_export_consistency)) {
+	rt_view_context_scene_adapter_clear(ctx);
+	return 1;
+    }
+
+    rt_view_scene_adapter_bindings_ensure();
+    struct rt_view_scene_adapter_binding *binding =
+	rt_view_scene_adapter_binding_find(ctx);
+    if (!binding) {
+	BU_GET(binding, struct rt_view_scene_adapter_binding);
+	memset(binding, 0, sizeof(*binding));
+	binding->ctx = ctx;
+	bu_ptbl_ins(&rt_view_scene_adapter_bindings, (long *)binding);
+    }
+    binding->adapter = *adapter;
+    return 1;
+}
+
+int
+rt_view_context_scene_adapter_get(
+	void *ctx,
+	struct rt_view_context_scene_adapter *adapter)
+{
+    if (adapter)
+	memset(adapter, 0, sizeof(*adapter));
+    if (!ctx || !adapter)
+	return 0;
+
+    struct rt_view_scene_adapter_binding *binding =
+	rt_view_scene_adapter_binding_find(ctx);
+    if (!binding)
+	return 0;
+
+    *adapter = binding->adapter;
+    return 1;
+}
+
+static void
+rt_view_feature_adapter_bindings_ensure(void)
+{
+    if (!rt_view_feature_adapter_bindings_init) {
+	BU_PTBL_INIT(&rt_view_feature_adapter_bindings);
+	rt_view_feature_adapter_bindings_init = 1;
+    }
+}
+
+static struct rt_view_feature_adapter_binding *
+rt_view_feature_adapter_binding_find(const void *ctx)
+{
+    if (!ctx || !rt_view_feature_adapter_bindings_init)
+	return NULL;
+
+    for (size_t i = 0; i < BU_PTBL_LEN(&rt_view_feature_adapter_bindings);
+	    i++) {
+	struct rt_view_feature_adapter_binding *binding =
+	    (struct rt_view_feature_adapter_binding *)BU_PTBL_GET(
+		    &rt_view_feature_adapter_bindings, i);
+	if (binding && binding->ctx == ctx)
+	    return binding;
+    }
+
+    return NULL;
+}
+
+static int
+rt_view_feature_adapter_is_empty(
+	const struct rt_view_context_feature_adapter *adapter)
+{
+    return !adapter || (!adapter->owns_ref &&
+	    !adapter->edit_preview_publish_event &&
+	    !adapter->overlay_ensure && !adapter->label_ensure &&
+	    !adapter->remove && !adapter->set_context &&
+	    !adapter->set_visible && !adapter->set_color &&
+	    !adapter->touch && !adapter->labels_replace &&
+	    !adapter->points_replace && !adapter->clear_geometry);
+}
+
+static void
+rt_view_context_feature_adapter_clear(void *ctx)
+{
+    struct rt_view_feature_adapter_binding *binding =
+	rt_view_feature_adapter_binding_find(ctx);
+    if (!binding)
+	return;
+
+    (void)bu_ptbl_rm(&rt_view_feature_adapter_bindings, (long *)binding);
+    BU_PUT(binding, struct rt_view_feature_adapter_binding);
+}
+
+int
+rt_view_context_feature_adapter_set(
+	void *ctx,
+	const struct rt_view_context_feature_adapter *adapter)
+{
+    if (!ctx)
+	return 0;
+
+    if (rt_view_feature_adapter_is_empty(adapter)) {
+	rt_view_context_feature_adapter_clear(ctx);
+	return 1;
+    }
+
+    rt_view_feature_adapter_bindings_ensure();
+    struct rt_view_feature_adapter_binding *binding =
+	rt_view_feature_adapter_binding_find(ctx);
+    if (!binding) {
+	BU_GET(binding, struct rt_view_feature_adapter_binding);
+	memset(binding, 0, sizeof(*binding));
+	binding->ctx = ctx;
+	bu_ptbl_ins(&rt_view_feature_adapter_bindings, (long *)binding);
+    }
+    binding->adapter = *adapter;
+    return 1;
+}
+
+int
+rt_view_context_feature_adapter_get(
+	void *ctx,
+	struct rt_view_context_feature_adapter *adapter)
+{
+    if (adapter)
+	memset(adapter, 0, sizeof(*adapter));
+    if (!ctx || !adapter)
+	return 0;
+
+    struct rt_view_feature_adapter_binding *binding =
+	rt_view_feature_adapter_binding_find(ctx);
+    if (!binding)
+	return 0;
+
+    *adapter = binding->adapter;
+    return 1;
+}
+
+static int
+rt_view_feature_adapter_for_ref(
+	rt_view_feature_ref ref,
+	struct rt_view_context_feature_adapter *adapter)
+{
+    if (adapter)
+	memset(adapter, 0, sizeof(*adapter));
+    if (!ref.token || !adapter || !rt_view_feature_adapter_bindings_init)
+	return 0;
+
+    for (size_t i = 0; i < BU_PTBL_LEN(&rt_view_feature_adapter_bindings);
+	    i++) {
+	struct rt_view_feature_adapter_binding *binding =
+	    (struct rt_view_feature_adapter_binding *)BU_PTBL_GET(
+		    &rt_view_feature_adapter_bindings, i);
+	if (!binding || !binding->adapter.owns_ref)
+	    continue;
+	if (binding->adapter.owns_ref(ref, binding->adapter.data)) {
+	    *adapter = binding->adapter;
+	    return 1;
+	}
+    }
+
+    return 0;
+}
+
+static void
+rt_view_polygon_adapter_bindings_ensure(void)
+{
+    if (!rt_view_polygon_adapter_bindings_init) {
+	BU_PTBL_INIT(&rt_view_polygon_adapter_bindings);
+	rt_view_polygon_adapter_bindings_init = 1;
+    }
+}
+
+static struct rt_view_polygon_adapter_binding *
+rt_view_polygon_adapter_binding_find(const void *ctx)
+{
+    if (!ctx || !rt_view_polygon_adapter_bindings_init)
+	return NULL;
+
+    for (size_t i = 0; i < BU_PTBL_LEN(&rt_view_polygon_adapter_bindings); i++) {
+	struct rt_view_polygon_adapter_binding *binding =
+	    (struct rt_view_polygon_adapter_binding *)BU_PTBL_GET(
+		    &rt_view_polygon_adapter_bindings, i);
+	if (binding && binding->ctx == ctx)
+	    return binding;
+    }
+
+    return NULL;
+}
+
+static int
+rt_view_polygon_adapter_is_empty(
+	const struct rt_view_context_polygon_adapter *adapter)
+{
+    return !adapter || (!adapter->owns_ref && !adapter->record_get &&
+	    !adapter->create && !adapter->select && !adapter->find &&
+	    !adapter->dup && !adapter->visit_records &&
+	    !adapter->snap_count && !adapter->clear_point_selection &&
+	    !adapter->update && !adapter->update_screen_pt &&
+	    !adapter->move && !adapter->set_name && !adapter->set_context &&
+	    !adapter->set_visual && !adapter->set_open && !adapter->close &&
+	    !adapter->clear_selected_point && !adapter->remove &&
+	    !adapter->user_data && !adapter->user_data_set &&
+	    !adapter->csg && !adapter->import_sketch_context &&
+	    !adapter->export_sketch && !adapter->snap_exclude_set);
+}
+
+static void
+rt_view_context_polygon_adapter_clear(void *ctx)
+{
+    struct rt_view_polygon_adapter_binding *binding =
+	rt_view_polygon_adapter_binding_find(ctx);
+    if (!binding)
+	return;
+
+    (void)bu_ptbl_rm(&rt_view_polygon_adapter_bindings, (long *)binding);
+    BU_PUT(binding, struct rt_view_polygon_adapter_binding);
+}
+
+int
+rt_view_context_polygon_adapter_set(
+	void *ctx,
+	const struct rt_view_context_polygon_adapter *adapter)
+{
+    if (!ctx)
+	return 0;
+
+    if (rt_view_polygon_adapter_is_empty(adapter)) {
+	rt_view_context_polygon_adapter_clear(ctx);
+	return 1;
+    }
+
+    rt_view_polygon_adapter_bindings_ensure();
+    struct rt_view_polygon_adapter_binding *binding =
+	rt_view_polygon_adapter_binding_find(ctx);
+    if (!binding) {
+	BU_GET(binding, struct rt_view_polygon_adapter_binding);
+	memset(binding, 0, sizeof(*binding));
+	binding->ctx = ctx;
+	bu_ptbl_ins(&rt_view_polygon_adapter_bindings, (long *)binding);
+    }
+    binding->adapter = *adapter;
+    return 1;
+}
+
+int
+rt_view_context_polygon_adapter_get(
+	void *ctx,
+	struct rt_view_context_polygon_adapter *adapter)
+{
+    if (adapter)
+	memset(adapter, 0, sizeof(*adapter));
+    if (!ctx || !adapter)
+	return 0;
+
+    struct rt_view_polygon_adapter_binding *binding =
+	rt_view_polygon_adapter_binding_find(ctx);
+    if (!binding)
+	return 0;
+
+    *adapter = binding->adapter;
+    return 1;
+}
+
+static int
+rt_view_polygon_adapter_for_ref(
+	rt_view_polygon_ref ref,
+	struct rt_view_context_polygon_adapter *adapter)
+{
+    if (adapter)
+	memset(adapter, 0, sizeof(*adapter));
+    if (!ref.token || !adapter || !rt_view_polygon_adapter_bindings_init)
+	return 0;
+
+    for (size_t i = 0; i < BU_PTBL_LEN(&rt_view_polygon_adapter_bindings); i++) {
+	struct rt_view_polygon_adapter_binding *binding =
+	    (struct rt_view_polygon_adapter_binding *)BU_PTBL_GET(
+		    &rt_view_polygon_adapter_bindings, i);
+	if (!binding || !binding->adapter.owns_ref)
+	    continue;
+	if (binding->adapter.owns_ref(ref, binding->adapter.data)) {
+	    *adapter = binding->adapter;
+	    return 1;
+	}
+    }
+
+    return 0;
+}
+
+static void
+rt_view_selection_adapter_bindings_ensure(void)
+{
+    if (!rt_view_selection_adapter_bindings_init) {
+	BU_PTBL_INIT(&rt_view_selection_adapter_bindings);
+	rt_view_selection_adapter_bindings_init = 1;
+    }
+}
+
+static struct rt_view_selection_adapter_binding *
+rt_view_selection_adapter_binding_find(const void *ctx)
+{
+    if (!ctx || !rt_view_selection_adapter_bindings_init)
+	return NULL;
+
+    for (size_t i = 0; i < BU_PTBL_LEN(&rt_view_selection_adapter_bindings);
+	    i++) {
+	struct rt_view_selection_adapter_binding *binding =
+	    (struct rt_view_selection_adapter_binding *)BU_PTBL_GET(
+		    &rt_view_selection_adapter_bindings, i);
+	if (binding && binding->ctx == ctx)
+	    return binding;
+    }
+
+    return NULL;
+}
+
+static int
+rt_view_selection_adapter_is_empty(
+	const struct rt_view_context_selection_adapter *adapter)
+{
+    return !adapter || (!adapter->available && !adapter->count &&
+	    !adapter->set_pick_result_context && !adapter->clear);
+}
+
+static void
+rt_view_context_selection_adapter_clear(void *ctx)
+{
+    struct rt_view_selection_adapter_binding *binding =
+	rt_view_selection_adapter_binding_find(ctx);
+    if (!binding)
+	return;
+
+    (void)bu_ptbl_rm(&rt_view_selection_adapter_bindings, (long *)binding);
+    BU_PUT(binding, struct rt_view_selection_adapter_binding);
+}
+
+int
+rt_view_context_selection_adapter_set(
+	void *ctx,
+	const struct rt_view_context_selection_adapter *adapter)
+{
+    if (!ctx)
+	return 0;
+
+    if (rt_view_selection_adapter_is_empty(adapter)) {
+	rt_view_context_selection_adapter_clear(ctx);
+	return 1;
+    }
+
+    rt_view_selection_adapter_bindings_ensure();
+    struct rt_view_selection_adapter_binding *binding =
+	rt_view_selection_adapter_binding_find(ctx);
+    if (!binding) {
+	BU_GET(binding, struct rt_view_selection_adapter_binding);
+	memset(binding, 0, sizeof(*binding));
+	binding->ctx = ctx;
+	bu_ptbl_ins(&rt_view_selection_adapter_bindings, (long *)binding);
+    }
+    binding->adapter = *adapter;
+    return 1;
+}
+
+int
+rt_view_context_selection_adapter_get(
+	void *ctx,
+	struct rt_view_context_selection_adapter *adapter)
+{
+    if (adapter)
+	memset(adapter, 0, sizeof(*adapter));
+    if (!ctx || !adapter)
+	return 0;
+
+    struct rt_view_selection_adapter_binding *binding =
+	rt_view_selection_adapter_binding_find(ctx);
+    if (!binding)
+	return 0;
+
+    *adapter = binding->adapter;
+    return 1;
+}
+
 static void
 rt_view_context_update_callback_bridge_bsg(struct bsg_view *v, void *data)
 {
@@ -369,6 +822,10 @@ rt_view_context_free_bsg(void *ctx)
     if (!v)
 	return;
 
+    rt_view_context_scene_adapter_clear(ctx);
+    rt_view_context_feature_adapter_clear(ctx);
+    rt_view_context_polygon_adapter_clear(ctx);
+    rt_view_context_selection_adapter_clear(ctx);
     rt_view_free_bsg(v);
     bu_free(v, "rt_view_context_create_bsg view");
 }
@@ -387,6 +844,10 @@ rt_view_context_release_storage_bsg(void *ctx)
     if (!v)
 	return 0;
 
+    rt_view_context_scene_adapter_clear(ctx);
+    rt_view_context_feature_adapter_clear(ctx);
+    rt_view_context_polygon_adapter_clear(ctx);
+    rt_view_context_selection_adapter_clear(ctx);
     rt_view_update_callback_bridge_clear_bsg(v);
     BU_PUT(v, struct bsg_view);
     return 1;
@@ -3209,6 +3670,15 @@ rt_view_context_pick_semantic_path_bsg(void *ctx, const char *path_pattern)
 void *
 rt_view_context_pick_semantic_path(void *ctx, const char *path_pattern)
 {
+    struct rt_view_context_scene_adapter adapter;
+    if (rt_view_context_scene_adapter_get(ctx, &adapter) &&
+	    adapter.pick_semantic_path) {
+	void *result = adapter.pick_semantic_path(ctx, path_pattern,
+		adapter.data);
+	if (result)
+	    return result;
+    }
+
     return (void *)rt_view_context_pick_semantic_path_bsg(ctx, path_pattern);
 }
 
@@ -3376,6 +3846,18 @@ rt_view_pick_result_context_append_path_bsg(void *result_ctx,
 }
 
 int
+rt_view_pick_result_context_append_path(void *result_ctx,
+					void *view_ctx,
+					int screen_x,
+					int screen_y,
+					const char *source_path,
+					fastf_t hit_dist)
+{
+    return rt_view_pick_result_context_append_path_bsg(result_ctx, view_ctx,
+	    screen_x, screen_y, source_path, hit_dist);
+}
+
+int
 rt_view_pick_result_append_copy_bsg(struct rt_view_pick_result_bsg *dest,
 				    const struct rt_view_pick_result_bsg *src,
 				    size_t index,
@@ -3480,6 +3962,11 @@ rt_view_context_selection_available_bsg(void *ctx)
 int
 rt_view_context_selection_available(void *ctx)
 {
+    struct rt_view_context_selection_adapter adapter;
+    if (rt_view_context_selection_adapter_get(ctx, &adapter) &&
+	    adapter.available)
+	return adapter.available(ctx, adapter.data);
+
     return rt_view_context_selection_available_bsg(ctx);
 }
 
@@ -3499,6 +3986,11 @@ rt_view_context_selection_count_bsg(void *ctx)
 size_t
 rt_view_context_selection_count(void *ctx)
 {
+    struct rt_view_context_selection_adapter adapter;
+    if (rt_view_context_selection_adapter_get(ctx, &adapter) &&
+	    adapter.count)
+	return adapter.count(ctx, adapter.data);
+
     return rt_view_context_selection_count_bsg(ctx);
 }
 
@@ -3575,6 +4067,12 @@ rt_view_context_selection_set_pick_result_context(
 	rt_view_selection_path_callback_t callback,
 	void *data)
 {
+    struct rt_view_context_selection_adapter adapter;
+    if (rt_view_context_selection_adapter_get(ctx, &adapter) &&
+	    adapter.set_pick_result_context)
+	return adapter.set_pick_result_context(ctx, result_ctx, callback,
+		data, adapter.data);
+
     return rt_view_context_selection_set_pick_result_context_bsg(ctx,
 	    result_ctx, (rt_view_selection_path_callback_bsg_t)callback, data);
 }
@@ -3599,6 +4097,11 @@ rt_view_context_selection_clear_bsg(void *ctx)
 int
 rt_view_context_selection_clear(void *ctx)
 {
+    struct rt_view_context_selection_adapter adapter;
+    if (rt_view_context_selection_adapter_get(ctx, &adapter) &&
+	    adapter.clear)
+	return adapter.clear(ctx, adapter.data);
+
     return rt_view_context_selection_clear_bsg(ctx);
 }
 
@@ -4591,6 +5094,13 @@ rt_view_context_render_export_consistency(
 	summary->export_render_consistent = 0;
 	summary->export_backend_consistent = 0;
     }
+
+    struct rt_view_context_scene_adapter adapter;
+    if (rt_view_context_scene_adapter_get(ctx, &adapter) &&
+	    adapter.render_export_consistency &&
+	    adapter.render_export_consistency(ctx, drawn_prefix, summary,
+		adapter.data))
+	return 1;
 
     if (!summary ||
 	    !rt_view_context_render_export_consistency_bsg(ctx, drawn_prefix,
@@ -6117,7 +6627,7 @@ rt_view_feature_clear_geometry_bsg(rt_view_feature_ref ref)
 int
 rt_view_feature_ref_is_null(rt_view_feature_ref ref)
 {
-    return rt_view_feature_ref_is_null_bsg(ref);
+    return ref.token ? 0 : 1;
 }
 
 int
@@ -6127,6 +6637,15 @@ rt_view_context_edit_preview_publish_event(
 	enum rt_view_edit_preview_event event,
 	const char *source_path)
 {
+    struct rt_view_context_feature_adapter adapter;
+    if (rt_view_context_feature_adapter_get(ctx, &adapter) &&
+	    adapter.edit_preview_publish_event &&
+	    (!adapter.owns_ref ||
+		adapter.owns_ref(feature, adapter.data))) {
+	return adapter.edit_preview_publish_event(ctx, feature, event,
+		source_path, adapter.data);
+    }
+
     return rt_view_context_edit_preview_publish_event_bsg(ctx, feature, event,
 	    source_path);
 }
@@ -6140,6 +6659,12 @@ rt_view_context_feature_overlay_ensure(
 	const struct rt_view_edit_preview_callbacks *callbacks,
 	const char *source_path)
 {
+    struct rt_view_context_feature_adapter adapter;
+    if (rt_view_context_feature_adapter_get(ctx, &adapter) &&
+	    adapter.overlay_ensure)
+	return adapter.overlay_ensure(ctx, name, owner, preview_ctx,
+		callbacks, source_path, adapter.data);
+
     return rt_view_context_feature_overlay_ensure_bsg(ctx, name, owner,
 	    preview_ctx, callbacks, source_path);
 }
@@ -6149,36 +6674,71 @@ rt_view_context_feature_label_ensure(void *ctx,
 				     const char *name,
 				     const void *owner)
 {
+    struct rt_view_context_feature_adapter adapter;
+    if (rt_view_context_feature_adapter_get(ctx, &adapter) &&
+	    adapter.label_ensure)
+	return adapter.label_ensure(ctx, name, owner, adapter.data);
+
     return rt_view_context_feature_label_ensure_bsg(ctx, name, owner);
 }
 
 int
 rt_view_context_feature_remove(void *ctx, const char *name)
 {
+    struct rt_view_context_feature_adapter adapter;
+    if (rt_view_context_feature_adapter_get(ctx, &adapter) &&
+	    adapter.remove)
+	return adapter.remove(ctx, name, adapter.data);
+
     return rt_view_context_feature_remove_bsg(ctx, name);
 }
 
 void
 rt_view_feature_set_context(rt_view_feature_ref ref, void *ctx)
 {
+    struct rt_view_context_feature_adapter adapter;
+    if (rt_view_feature_adapter_for_ref(ref, &adapter)) {
+	if (adapter.set_context)
+	    (void)adapter.set_context(ref, ctx, adapter.data);
+	return;
+    }
+
     rt_view_feature_set_context_bsg(ref, ctx);
 }
 
 void
 rt_view_feature_set_visible(rt_view_feature_ref ref, int visible)
 {
+    struct rt_view_context_feature_adapter adapter;
+    if (rt_view_feature_adapter_for_ref(ref, &adapter)) {
+	if (adapter.set_visible)
+	    (void)adapter.set_visible(ref, visible, adapter.data);
+	return;
+    }
+
     rt_view_feature_set_visible_bsg(ref, visible);
 }
 
 void
 rt_view_feature_set_color(rt_view_feature_ref ref, int r, int g, int b)
 {
+    struct rt_view_context_feature_adapter adapter;
+    if (rt_view_feature_adapter_for_ref(ref, &adapter)) {
+	if (adapter.set_color)
+	    (void)adapter.set_color(ref, r, g, b, adapter.data);
+	return;
+    }
+
     rt_view_feature_set_color_bsg(ref, r, g, b);
 }
 
 int
 rt_view_feature_touch(rt_view_feature_ref ref)
 {
+    struct rt_view_context_feature_adapter adapter;
+    if (rt_view_feature_adapter_for_ref(ref, &adapter))
+	return adapter.touch ? adapter.touch(ref, adapter.data) : 0;
+
     return rt_view_feature_touch_bsg(ref);
 }
 
@@ -6187,6 +6747,12 @@ rt_view_feature_labels_replace(rt_view_feature_ref ref,
 			       const struct rt_view_feature_label *labels,
 			       size_t label_count)
 {
+    struct rt_view_context_feature_adapter adapter;
+    if (rt_view_feature_adapter_for_ref(ref, &adapter))
+	return adapter.labels_replace ?
+	    adapter.labels_replace(ref, labels, label_count,
+		    adapter.data) : 0;
+
     return rt_view_feature_labels_replace_bsg(ref, labels, label_count);
 }
 
@@ -6197,6 +6763,12 @@ rt_view_feature_points_replace(rt_view_feature_ref ref,
 			       const int *cmds,
 			       size_t point_count)
 {
+    struct rt_view_context_feature_adapter adapter;
+    if (rt_view_feature_adapter_for_ref(ref, &adapter))
+	return adapter.points_replace ?
+	    adapter.points_replace(ref, family, points, cmds, point_count,
+		    adapter.data) : 0;
+
     return rt_view_feature_points_replace_bsg(ref, family, points, cmds,
 	    point_count);
 }
@@ -6204,6 +6776,11 @@ rt_view_feature_points_replace(rt_view_feature_ref ref,
 int
 rt_view_feature_clear_geometry(rt_view_feature_ref ref)
 {
+    struct rt_view_context_feature_adapter adapter;
+    if (rt_view_feature_adapter_for_ref(ref, &adapter))
+	return adapter.clear_geometry ?
+	    adapter.clear_geometry(ref, adapter.data) : 0;
+
     return rt_view_feature_clear_geometry_bsg(ref);
 }
 
@@ -6566,31 +7143,61 @@ rt_view_context_polygon_snap_exclude_set_bsg(void *ctx, rt_view_polygon_ref ref)
 int
 rt_view_polygon_ref_is_null(rt_view_polygon_ref ref)
 {
-    return rt_view_polygon_ref_is_null_bsg(ref);
+    return ref.token ? 0 : 1;
 }
 
 int
 rt_view_polygon_record_get(rt_view_polygon_ref ref,
 			   struct rt_view_polygon_record *record)
 {
+    struct rt_view_context_polygon_adapter adapter;
+    if (rt_view_polygon_adapter_for_ref(ref, &adapter))
+	return adapter.record_get ?
+	    adapter.record_get(ref, record, adapter.data) : 0;
+
     return rt_view_polygon_record_get_bsg(ref, record);
 }
 
 rt_view_polygon_ref
 rt_view_context_polygon_create(void *ctx, int type, point_t *fp)
 {
+    struct rt_view_context_polygon_adapter adapter;
+    if (rt_view_context_polygon_adapter_get(ctx, &adapter) &&
+	    adapter.create) {
+	rt_view_polygon_ref ref = adapter.create(ctx, type, fp,
+		adapter.data);
+	if (!rt_view_polygon_ref_is_null(ref))
+	    return ref;
+    }
+
     return rt_view_context_polygon_create_bsg(ctx, type, fp);
 }
 
 rt_view_polygon_ref
 rt_view_context_polygon_select(void *ctx, point_t *cp)
 {
+    struct rt_view_context_polygon_adapter adapter;
+    if (rt_view_context_polygon_adapter_get(ctx, &adapter) &&
+	    adapter.select) {
+	rt_view_polygon_ref ref = adapter.select(ctx, cp, adapter.data);
+	if (!rt_view_polygon_ref_is_null(ref))
+	    return ref;
+    }
+
     return rt_view_context_polygon_select_bsg(ctx, cp);
 }
 
 rt_view_polygon_ref
 rt_view_context_polygon_find(void *ctx, const char *name)
 {
+    struct rt_view_context_polygon_adapter adapter;
+    if (rt_view_context_polygon_adapter_get(ctx, &adapter) &&
+	    adapter.find) {
+	rt_view_polygon_ref ref = adapter.find(ctx, name, adapter.data);
+	if (!rt_view_polygon_ref_is_null(ref))
+	    return ref;
+    }
+
     return rt_view_context_polygon_find_bsg(ctx, name);
 }
 
@@ -6599,6 +7206,15 @@ rt_view_context_polygon_dup(void *ctx,
 			    const char *name,
 			    const char *new_name)
 {
+    struct rt_view_context_polygon_adapter adapter;
+    if (rt_view_context_polygon_adapter_get(ctx, &adapter) &&
+	    adapter.dup) {
+	rt_view_polygon_ref ref = adapter.dup(ctx, name, new_name,
+		adapter.data);
+	if (!rt_view_polygon_ref_is_null(ref))
+	    return ref;
+    }
+
     return rt_view_context_polygon_dup_bsg(ctx, name, new_name);
 }
 
@@ -6608,24 +7224,46 @@ rt_view_context_polygon_visit_records(
 	rt_view_polygon_record_callback_t callback,
 	void *data)
 {
+    struct rt_view_context_polygon_adapter adapter;
+    if (rt_view_context_polygon_adapter_get(ctx, &adapter) &&
+	    adapter.visit_records) {
+	adapter.visit_records(ctx, callback, data, adapter.data);
+	return;
+    }
+
     rt_view_context_polygon_visit_records_bsg(ctx, callback, data);
 }
 
 size_t
 rt_view_context_polygon_snap_count(void *ctx, rt_view_polygon_ref exclude)
 {
+    struct rt_view_context_polygon_adapter adapter;
+    if (rt_view_context_polygon_adapter_get(ctx, &adapter) &&
+	    adapter.snap_count)
+	return adapter.snap_count(ctx, exclude, adapter.data);
+
     return rt_view_context_polygon_snap_count_bsg(ctx, exclude);
 }
 
 int
 rt_view_context_polygon_clear_point_selection(void *ctx)
 {
+    struct rt_view_context_polygon_adapter adapter;
+    if (rt_view_context_polygon_adapter_get(ctx, &adapter) &&
+	    adapter.clear_point_selection)
+	return adapter.clear_point_selection(ctx, adapter.data);
+
     return rt_view_context_polygon_clear_point_selection_bsg(ctx);
 }
 
 int
 rt_view_polygon_update_context(rt_view_polygon_ref ref, void *ctx, int utype)
 {
+    struct rt_view_context_polygon_adapter adapter;
+    if (rt_view_polygon_adapter_for_ref(ref, &adapter))
+	return adapter.update ?
+	    adapter.update(ref, ctx, utype, adapter.data) : 0;
+
     return rt_view_polygon_update_context_bsg(ref, ctx, utype);
 }
 
@@ -6636,6 +7274,12 @@ rt_view_polygon_update_screen_pt_context(rt_view_polygon_ref ref,
 					 int y,
 					 int utype)
 {
+    struct rt_view_context_polygon_adapter adapter;
+    if (rt_view_polygon_adapter_for_ref(ref, &adapter))
+	return adapter.update_screen_pt ?
+	    adapter.update_screen_pt(ref, ctx, x, y, utype, adapter.data) :
+	    0;
+
     return rt_view_polygon_update_screen_pt_context_bsg(ref, ctx, x, y, utype);
 }
 
@@ -6644,18 +7288,34 @@ rt_view_polygon_move(rt_view_polygon_ref ref,
 		     point_t *current_point,
 		     point_t *previous_point)
 {
+    struct rt_view_context_polygon_adapter adapter;
+    if (rt_view_polygon_adapter_for_ref(ref, &adapter))
+	return adapter.move ?
+	    adapter.move(ref, current_point, previous_point,
+		    adapter.data) : 0;
+
     return rt_view_polygon_move_bsg(ref, current_point, previous_point);
 }
 
 int
 rt_view_polygon_set_name(rt_view_polygon_ref ref, const char *name)
 {
+    struct rt_view_context_polygon_adapter adapter;
+    if (rt_view_polygon_adapter_for_ref(ref, &adapter))
+	return adapter.set_name ?
+	    adapter.set_name(ref, name, adapter.data) : 0;
+
     return rt_view_polygon_set_name_bsg(ref, name);
 }
 
 int
 rt_view_polygon_set_context(rt_view_polygon_ref ref, void *ctx)
 {
+    struct rt_view_context_polygon_adapter adapter;
+    if (rt_view_polygon_adapter_for_ref(ref, &adapter))
+	return adapter.set_context ?
+	    adapter.set_context(ref, ctx, adapter.data) : 0;
+
     return rt_view_polygon_set_context_bsg(ref, ctx);
 }
 
@@ -6669,6 +7329,13 @@ rt_view_polygon_set_visual(rt_view_polygon_ref ref,
 			   fastf_t vZ,
 			   int fill_flag)
 {
+    struct rt_view_context_polygon_adapter adapter;
+    if (rt_view_polygon_adapter_for_ref(ref, &adapter))
+	return adapter.set_visual ?
+	    adapter.set_visual(ref, edge_color, fill_color, fill_slope_x,
+		    fill_slope_y, fill_density, vZ, fill_flag,
+		    adapter.data) : 0;
+
     return rt_view_polygon_set_visual_bsg(ref, edge_color, fill_color,
 	    fill_slope_x, fill_slope_y, fill_density, vZ, fill_flag);
 }
@@ -6676,36 +7343,64 @@ rt_view_polygon_set_visual(rt_view_polygon_ref ref,
 int
 rt_view_polygon_set_open(rt_view_polygon_ref ref, int open)
 {
+    struct rt_view_context_polygon_adapter adapter;
+    if (rt_view_polygon_adapter_for_ref(ref, &adapter))
+	return adapter.set_open ?
+	    adapter.set_open(ref, open, adapter.data) : 0;
+
     return rt_view_polygon_set_open_bsg(ref, open);
 }
 
 int
 rt_view_polygon_close(rt_view_polygon_ref ref)
 {
+    struct rt_view_context_polygon_adapter adapter;
+    if (rt_view_polygon_adapter_for_ref(ref, &adapter))
+	return adapter.close ? adapter.close(ref, adapter.data) : 0;
+
     return rt_view_polygon_close_bsg(ref);
 }
 
 int
 rt_view_polygon_clear_selected_point(rt_view_polygon_ref ref)
 {
+    struct rt_view_context_polygon_adapter adapter;
+    if (rt_view_polygon_adapter_for_ref(ref, &adapter))
+	return adapter.clear_selected_point ?
+	    adapter.clear_selected_point(ref, adapter.data) : 0;
+
     return rt_view_polygon_clear_selected_point_bsg(ref);
 }
 
 int
 rt_view_polygon_remove(rt_view_polygon_ref ref)
 {
+    struct rt_view_context_polygon_adapter adapter;
+    if (rt_view_polygon_adapter_for_ref(ref, &adapter))
+	return adapter.remove ? adapter.remove(ref, adapter.data) : 0;
+
     return rt_view_polygon_remove_bsg(ref);
 }
 
 void *
 rt_view_polygon_user_data(rt_view_polygon_ref ref)
 {
+    struct rt_view_context_polygon_adapter adapter;
+    if (rt_view_polygon_adapter_for_ref(ref, &adapter))
+	return adapter.user_data ?
+	    adapter.user_data(ref, adapter.data) : NULL;
+
     return rt_view_polygon_user_data_bsg(ref);
 }
 
 int
 rt_view_polygon_user_data_set(rt_view_polygon_ref ref, void *user_data)
 {
+    struct rt_view_context_polygon_adapter adapter;
+    if (rt_view_polygon_adapter_for_ref(ref, &adapter))
+	return adapter.user_data_set ?
+	    adapter.user_data_set(ref, user_data, adapter.data) : 0;
+
     return rt_view_polygon_user_data_set_bsg(ref, user_data);
 }
 
@@ -6714,6 +7409,11 @@ rt_view_polygon_csg(rt_view_polygon_ref target,
 		    rt_view_polygon_ref stencil,
 		    bg_clip_t op)
 {
+    struct rt_view_context_polygon_adapter adapter;
+    if (rt_view_polygon_adapter_for_ref(target, &adapter))
+	return adapter.csg ?
+	    adapter.csg(target, stencil, op, adapter.data) : 0;
+
     return rt_view_polygon_csg_bsg(target, stencil, op);
 }
 
@@ -6723,6 +7423,15 @@ rt_view_polygon_import_sketch_context(const char *name,
 				      struct directory *dp,
 				      void *ctx)
 {
+    struct rt_view_context_polygon_adapter adapter;
+    if (rt_view_context_polygon_adapter_get(ctx, &adapter) &&
+	    adapter.import_sketch_context) {
+	rt_view_polygon_ref ref = adapter.import_sketch_context(name, dbip,
+		dp, ctx, adapter.data);
+	if (!rt_view_polygon_ref_is_null(ref))
+	    return ref;
+    }
+
     return rt_view_polygon_import_sketch_context_bsg(name, dbip, dp, ctx);
 }
 
@@ -6731,12 +7440,22 @@ rt_view_polygon_export_sketch(struct db_i *dbip,
 			      const char *name,
 			      rt_view_polygon_ref ref)
 {
+    struct rt_view_context_polygon_adapter adapter;
+    if (rt_view_polygon_adapter_for_ref(ref, &adapter))
+	return adapter.export_sketch ?
+	    adapter.export_sketch(dbip, name, ref, adapter.data) : NULL;
+
     return rt_view_polygon_export_sketch_bsg(dbip, name, ref);
 }
 
 int
 rt_view_context_polygon_snap_exclude_set(void *ctx, rt_view_polygon_ref ref)
 {
+    struct rt_view_context_polygon_adapter adapter;
+    if (rt_view_context_polygon_adapter_get(ctx, &adapter) &&
+	    adapter.snap_exclude_set)
+	return adapter.snap_exclude_set(ctx, ref, adapter.data);
+
     return rt_view_context_polygon_snap_exclude_set_bsg(ctx, ref);
 }
 

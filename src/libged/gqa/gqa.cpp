@@ -2783,8 +2783,8 @@ aborted:
 	    int handled = ged_diagnostic_line_layer_publish(gedp,
 		    "gqa::overlaps", ged_gqa_plot.builder);
 	    if (!handled && active_view) {
-		(void)ged_draw_view_context_line_layer_builder_replace(active_view,
-			"gqa::overlaps", 0, ged_gqa_plot.builder);
+		(void)ged_draw_view_context_diagnostic_line_layer_builder_replace(
+			active_view, "gqa::overlaps", ged_gqa_plot.builder);
 	    }
 	}
 	if (analysis_flags & ANALYSIS_PLOT_OVERLAPS)

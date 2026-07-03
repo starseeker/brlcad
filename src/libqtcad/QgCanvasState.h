@@ -50,15 +50,11 @@
 #include "qtcad/QgLegacyView.h"
 #include "rt/view.h"
 
-#include <Inventor/SbMatrix.h>
-#include <Inventor/SbRotation.h>
 #include <Inventor/SoOffscreenRenderer.h>
 #include <Inventor/SoViewport.h>
 #include <Inventor/SbColor.h>
-#include <Inventor/nodes/SoCamera.h>
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoOrthographicCamera.h>
-#include <Inventor/nodes/SoPerspectiveCamera.h>
 #include <Inventor/nodes/SoSeparator.h>
 
 #include "QgCanvasInput.h"
@@ -162,21 +158,6 @@ qgcanvas_obol_context_manager(void)
 	return &manager;
 }
 
-/** Convert a BRL-CAD row-major matrix to an Obol matrix. */
-static inline SbMatrix
-qgcanvas_obol_matrix(const mat_t m)
-{
-	return SbMatrix(
-	    static_cast<float>(m[0]),  static_cast<float>(m[1]),
-	    static_cast<float>(m[2]),  static_cast<float>(m[3]),
-	    static_cast<float>(m[4]),  static_cast<float>(m[5]),
-	    static_cast<float>(m[6]),  static_cast<float>(m[7]),
-	    static_cast<float>(m[8]),  static_cast<float>(m[9]),
-	    static_cast<float>(m[10]), static_cast<float>(m[11]),
-	    static_cast<float>(m[12]), static_cast<float>(m[13]),
-	    static_cast<float>(m[14]), static_cast<float>(m[15]));
-}
-
 static inline void
 qgcanvas_request_obol_render_if_idle(QgCanvasState &s, const char *reason)
 {
@@ -184,75 +165,15 @@ qgcanvas_request_obol_render_if_idle(QgCanvasState &s, const char *reason)
 		s.obol->requestRender(reason);
 }
 
-/** Mirror the transitional BSG camera state into the Obol camera. */
+/** Mirror the current RT view state into the Obol direct camera. */
 static inline void
 qgcanvas_sync_obol_camera(QgCanvasState &s)
 {
-	if (!s.obol || !s.v || !s.obol->getCamera())
+	if (!s.obol || !s.v)
 		return;
 
-	SoCamera *camera = s.obol->getCamera();
 	const void *view_ctx = qg_legacy_view_to_context(s.v);
-
-	mat_t orientation_mat;
-	MAT_IDN(orientation_mat);
-	mat_t view_rotation;
-	rt_view_context_rotation_get(view_rotation, view_ctx);
-	orientation_mat[0] = view_rotation[0];
-	orientation_mat[1] = view_rotation[4];
-	orientation_mat[2] = view_rotation[8];
-	orientation_mat[4] = view_rotation[1];
-	orientation_mat[5] = view_rotation[5];
-	orientation_mat[6] = view_rotation[9];
-	orientation_mat[8] = view_rotation[2];
-	orientation_mat[9] = view_rotation[6];
-	orientation_mat[10] = view_rotation[10];
-
-	vect_t center;
-	mat_t view_center;
-	rt_view_context_center_get(view_center, view_ctx);
-	MAT_DELTAS_GET_NEG(center, view_center);
-
-	vect_t view_z;
-	view_z[X] = orientation_mat[2];
-	view_z[Y] = orientation_mat[6];
-	view_z[Z] = orientation_mat[10];
-
-	double scale = rt_view_context_scale_get(view_ctx);
-	if (scale <= SMALL_FASTF)
-		scale = 1.0;
-
-	double height_angle = rt_view_context_perspective_get(view_ctx) * DEG2RAD;
-	if (height_angle <= SMALL_FASTF)
-		height_angle = 2.0 * std::atan(0.1);
-	if (height_angle < 0.001)
-		height_angle = 0.001;
-	if (height_angle > 3.0)
-		height_angle = 3.0;
-
-	const SbBool orthographic = camera->isOfType(SoOrthographicCamera::getClassTypeId());
-	double distance = orthographic ? scale * 10.0 : scale / std::tan(height_angle * 0.5);
-	if (distance <= scale)
-		distance = scale;
-
-	camera->position = SbVec3f(
-	    static_cast<float>(center[X] + view_z[X] * distance),
-	    static_cast<float>(center[Y] + view_z[Y] * distance),
-	    static_cast<float>(center[Z] + view_z[Z] * distance));
-	camera->orientation = SbRotation(qgcanvas_obol_matrix(orientation_mat));
-	camera->focalDistance = static_cast<float>(distance);
-	camera->nearDistance = static_cast<float>(distance * 0.001);
-	camera->farDistance = static_cast<float>(distance + scale * 100.0);
-
-	if (camera->isOfType(SoPerspectiveCamera::getClassTypeId())) {
-		SoPerspectiveCamera *perspectiveCamera = static_cast<SoPerspectiveCamera *>(camera);
-		perspectiveCamera->heightAngle = static_cast<float>(height_angle);
-	} else if (orthographic) {
-		SoOrthographicCamera *orthographicCamera = static_cast<SoOrthographicCamera *>(camera);
-		orthographicCamera->height = static_cast<float>(scale * 2.0);
-	}
-
-	qgcanvas_request_obol_render_if_idle(s, "bsg-camera");
+	(void)s.obol->syncCameraFromRtViewContext(view_ctx);
 }
 
 /** Render the Obol scene through SoOffscreenRenderer into a QImage. */

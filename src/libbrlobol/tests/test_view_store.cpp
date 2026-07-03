@@ -8,6 +8,7 @@
 #include "common.h"
 
 #include "brlobol.h"
+#include "brlobol/edit_preview.h"
 #include "bu/app.h"
 #include "bu/file.h"
 #include "raytrace.h"
@@ -20,6 +21,7 @@
 #include <Inventor/nodes/SoText2.h>
 
 #include <stdio.h>
+#include <string.h>
 #include <vector>
 
 #define FAIL(_msg) \
@@ -41,6 +43,61 @@ count_nodes_of_type(SoNode *node, SoType type)
 	    count += count_nodes_of_type(group->getChild(i), type);
     }
     return count;
+}
+
+struct feature_visit_count {
+    size_t count;
+};
+
+struct selection_visit_state {
+    size_t count;
+    const char *last;
+};
+
+struct edit_preview_callback_state {
+    uint64_t revision;
+    int updateCount;
+};
+
+static uint64_t
+edit_preview_revision_cb(void *data)
+{
+    struct edit_preview_callback_state *ctx =
+	(struct edit_preview_callback_state *)data;
+    return ctx ? ctx->revision : 0;
+}
+
+static int
+edit_preview_update_cb(void *data)
+{
+    struct edit_preview_callback_state *ctx =
+	(struct edit_preview_callback_state *)data;
+    if (!ctx)
+	return 0;
+    ctx->updateCount++;
+    return 1;
+}
+
+static int
+count_feature_visit_cb(const BRLObolFeatureRecord &record, void *userData)
+{
+    struct feature_visit_count *ctx = (struct feature_visit_count *)userData;
+    if (!ctx || record.name.getLength() == 0)
+	return 0;
+    ctx->count++;
+    return 1;
+}
+
+static int
+count_selection_path_cb(const SbString &path, void *userData)
+{
+    struct selection_visit_state *ctx =
+	(struct selection_visit_state *)userData;
+    if (!ctx || path.getLength() == 0)
+	return 0;
+    ctx->count++;
+    ctx->last = path.getString();
+    return 1;
 }
 
 static int
@@ -94,6 +151,226 @@ test_feature_nodes(BRLObolViewController &view)
     if (mesh->getTriangleCount() != 2)
 	FAIL("indexed face feature should triangulate to two triangles");
 
+    BRLObolFeatureOwner ownerA;
+    ownerA.ownerToken = (const void *)0x1;
+    ownerA.ownerId = "view-A";
+    ownerA.ownerRole = "view";
+    BRLObolFeatureOwner ownerB;
+    ownerB.ownerToken = (const void *)0x2;
+    ownerB.ownerId = "view-B";
+    ownerB.ownerRole = "view";
+
+    std::vector<int32_t> lineCommands;
+    lineCommands.push_back(static_cast<int32_t>(BRLObolLineCommand::Move));
+    lineCommands.push_back(static_cast<int32_t>(BRLObolLineCommand::Draw));
+    BRLObolFeatureHandle localA = view.features().publishLineSet(
+	    "local-line",
+	    BRLObolFeatureScope::Local,
+	    points,
+	    lineCommands,
+	    NULL,
+	    &ownerA);
+    BRLObolFeatureHandle localB = view.features().publishLineSet(
+	    "local-line",
+	    BRLObolFeatureScope::Local,
+	    points,
+	    lineCommands,
+	    NULL,
+	    &ownerB);
+    if (!localA.isValid() || !localB.isValid() || localA.id == localB.id)
+	FAIL("owner-scoped local feature names should not collide");
+    if (!view.features().existsOwned("local-line",
+		BRLOBOL_FEATURE_SCOPE_LOCAL, &ownerA))
+	FAIL("owner A should find its local feature");
+    if (!view.features().existsOwned("local-line",
+		BRLOBOL_FEATURE_SCOPE_LOCAL, &ownerB))
+	FAIL("owner B should find its local feature");
+
+    struct feature_visit_count visitA = {0};
+    view.features().visitRecords(count_feature_visit_cb, &visitA,
+	    BRLOBOL_FEATURE_SCOPE_LOCAL, &ownerA);
+    if (visitA.count != 1)
+	FAIL("owner-scoped feature visit should see only one local record");
+
+    BRLObolFeatureRecord localRecord;
+    if (!view.features().record(localA, localRecord) ||
+	    localRecord.points.size() != points.size() ||
+	    localRecord.commands.size() != lineCommands.size() ||
+	    localRecord.owner.ownerToken != ownerA.ownerToken)
+	FAIL("feature record snapshot should preserve geometry and owner");
+
+    BRLObolOverlayInfo overlay;
+    overlay.isOverlay = TRUE;
+    overlay.ownerToken = ownerA.ownerToken;
+    overlay.role = BRLObolOverlayRole::Model;
+    overlay.overlayClass = BRLObolOverlayClass::TclOverlay;
+    overlay.lifecycle = BRLObolOverlayLifecycle::PerCommand;
+    overlay.order = BRLObolOverlayOrder::PostTransparent;
+    overlay.sortOrder = 7;
+    overlay.sourcePath = "local-line";
+    if (!view.features().setOverlayInfo(localA, overlay))
+	FAIL("feature overlay metadata should be settable");
+
+    BRLObolOverlayInfo overlayRead;
+    if (!view.features().overlayInfo(localA, overlayRead) ||
+	    !overlayRead.isOverlay ||
+	    overlayRead.ownerToken != ownerA.ownerToken ||
+	    overlayRead.role != BRLObolOverlayRole::Model ||
+	    overlayRead.overlayClass != BRLObolOverlayClass::TclOverlay ||
+	    overlayRead.lifecycle != BRLObolOverlayLifecycle::PerCommand ||
+	    overlayRead.order != BRLObolOverlayOrder::PostTransparent ||
+	    overlayRead.sortOrder != 7 ||
+	    strcmp(overlayRead.sourcePath.getString(), "local-line") != 0)
+	FAIL("feature overlay metadata should round-trip through overlayInfo");
+
+    BRLObolFeatureSummary overlaySummary;
+    if (!view.features().summaryOwned("local-line", overlaySummary,
+		BRLOBOL_FEATURE_SCOPE_LOCAL, &ownerA) ||
+	    !overlaySummary.exists ||
+	    !overlaySummary.overlay.isOverlay ||
+	    overlaySummary.overlay.overlayClass !=
+		BRLObolOverlayClass::TclOverlay)
+	FAIL("feature summary should preserve overlay metadata");
+
+    BRLObolFeatureRecord overlayRecord;
+    if (!view.features().record(localA, overlayRecord) ||
+	    !overlayRecord.overlay.isOverlay ||
+	    overlayRecord.overlay.lifecycle !=
+		BRLObolOverlayLifecycle::PerCommand)
+	FAIL("feature record should preserve overlay metadata");
+
+    SoNode *localNode = view.features().node(localA);
+    if (!localNode ||
+	    !localNode->isOfType(SoBRLVListShape::getClassTypeId()) ||
+	    strcmp(static_cast<SoBRLVListShape *>(localNode)->
+		recordRole.getValue().getString(), "view-feature") != 0)
+	FAIL("feature overlay metadata should preserve feature-store node role");
+
+    if (!view.features().clearOverlayInfo(localA) ||
+	    !view.features().overlayInfo(localA, overlayRead) ||
+	    overlayRead.isOverlay)
+	FAIL("feature overlay metadata should be clearable");
+    localNode = view.features().node(localA);
+    if (!localNode ||
+	    !localNode->isOfType(SoBRLVListShape::getClassTypeId()) ||
+	    strcmp(static_cast<SoBRLVListShape *>(localNode)->
+		recordRole.getValue().getString(), "view-feature") != 0)
+	FAIL("cleared feature overlay metadata should restore view-feature node role");
+
+    struct edit_preview_callback_state previewState;
+    previewState.revision = 42;
+    previewState.updateCount = 0;
+    BRLObolEditPreviewCallbacks previewCallbacks;
+    previewCallbacks.previewContext = &previewState;
+    previewCallbacks.revisionCallback = edit_preview_revision_cb;
+    previewCallbacks.updateCallback = edit_preview_update_cb;
+
+    std::vector<SbVec3f> previewPoints;
+    previewPoints.push_back(SbVec3f(0.0f, 0.0f, 0.0f));
+    previewPoints.push_back(SbVec3f(2.0f, 0.0f, 0.0f));
+    BRLObolFeatureHandle previewHandle = view.features().publishEditPreview(
+	    "edit-preview",
+	    "edit-preview-source",
+	    "intent-id",
+	    "intent-role",
+	    previewPoints,
+	    lineCommands,
+	    0,
+	    0,
+	    &previewCallbacks,
+	    &ownerA);
+    SoNode *previewNode = view.features().node(previewHandle);
+    if (!previewHandle.isValid() || !previewNode ||
+	    !previewNode->isOfType(SoBRLEditPreview::getClassTypeId()))
+	FAIL("publishEditPreview should realize a SoBRLEditPreview node");
+    if (view.features().editPreviewRevision(previewHandle) != 42)
+	FAIL("edit preview revision callback should be preserved");
+
+    previewPoints.push_back(SbVec3f(2.0f, 2.0f, 0.0f));
+    lineCommands.push_back(static_cast<int32_t>(BRLObolLineCommand::Draw));
+    if (!view.features().replaceEditPreviewGeometry(previewHandle,
+		"edit-preview-replaced", previewPoints, lineCommands))
+	FAIL("replaceEditPreviewGeometry should update preview geometry");
+    BRLObolFeatureRecord previewRecord;
+    if (!view.features().record(previewHandle, previewRecord) ||
+	    previewRecord.points.size() != 3 ||
+	    previewRecord.commands.size() != 3 ||
+	    previewRecord.kind != BRLObolFeatureKind::EditPreview)
+	FAIL("replaceEditPreviewGeometry should preserve edit preview records");
+    previewNode = view.features().node(previewHandle);
+    if (!previewNode ||
+	    !previewNode->isOfType(SoBRLEditPreview::getClassTypeId()))
+	FAIL("replaceEditPreviewGeometry should preserve the edit preview node");
+    if (view.features().updateEditPreview(previewHandle) != 1 ||
+	    previewState.updateCount != 1)
+	FAIL("replaceEditPreviewGeometry should preserve edit preview callbacks");
+
+    return 0;
+}
+
+static int
+test_selection_store(BRLObolViewController &view)
+{
+    BRLObolFeatureOwner ownerA;
+    ownerA.ownerToken = (const void *)0x11;
+    ownerA.ownerId = "selection-view-A";
+    ownerA.ownerRole = "view";
+    BRLObolFeatureOwner ownerB;
+    ownerB.ownerToken = (const void *)0x22;
+    ownerB.ownerId = "selection-view-B";
+    ownerB.ownerRole = "view";
+
+    if (!view.selection().addPath("all.g/box.s",
+		BRLOBOL_SELECTION_SELECTED_PATH, &ownerA))
+	FAIL("selection addPath should accept owner A selected path");
+    if (!view.selection().addPath("all.g/box.s",
+		BRLOBOL_SELECTION_HIGHLIGHTED_REF, &ownerA))
+	FAIL("selection addPath should allow highlighted record with same path");
+    if (!view.selection().addPath("all.g/cone.s",
+		BRLOBOL_SELECTION_SELECTED_PATH, &ownerB))
+	FAIL("selection addPath should accept owner B selected path");
+
+    if (view.selection().count() != 3 ||
+	    view.selection().count(&ownerA) != 2 ||
+	    view.selection().count(&ownerA,
+		BRLOBOL_SELECTION_SELECTED_PATH) != 1 ||
+	    view.selection().count(&ownerA,
+		BRLOBOL_SELECTION_HIGHLIGHTED_REF) != 1)
+	FAIL("selection count should filter by owner and kind");
+    if (!view.selection().containsPath("all.g/box.s",
+		BRLOBOL_SELECTION_SELECTED_PATH, &ownerA))
+	FAIL("selection containsPath should find owner A selected path");
+    if (view.selection().containsPath("all.g/box.s",
+		BRLOBOL_SELECTION_SELECTED_PATH, &ownerB))
+	FAIL("selection containsPath should not cross owner scopes");
+
+    struct selection_visit_state visit = {0, NULL};
+    view.selection().visitPaths(count_selection_path_cb, &visit, &ownerA,
+	    BRLOBOL_SELECTION_SELECTED_PATH);
+    if (visit.count != 1 || !visit.last ||
+	    strcmp(visit.last, "all.g/box.s") != 0)
+	FAIL("selection visitPaths should filter to owner A selected path");
+
+    view.selection().clear(&ownerA, BRLOBOL_SELECTION_HIGHLIGHTED_REF);
+    if (view.selection().count(&ownerA) != 1 ||
+	    view.selection().containsPath("all.g/box.s",
+		BRLOBOL_SELECTION_HIGHLIGHTED_REF, &ownerA))
+	FAIL("selection clear should remove only matching highlighted records");
+
+    std::vector<BRLObolSelectionRecord> picks;
+    BRLObolSelectionRecord pick;
+    pick.path = "all.g/sphere.s";
+    pick.kind = BRLOBOL_SELECTION_SELECTED_PATH;
+    pick.hitDistance = 3.0;
+    picks.push_back(pick);
+    if (!view.selection().applyPickResults(picks, NULL, NULL, &ownerA))
+	FAIL("selection applyPickResults should succeed");
+    if (view.selection().count(&ownerA) != 1 ||
+	    !view.selection().containsPath("all.g/sphere.s",
+		BRLOBOL_SELECTION_SELECTED_PATH, &ownerA) ||
+	    view.selection().count(&ownerB) != 1)
+	FAIL("selection applyPickResults should replace only owner A records");
+
     return 0;
 }
 
@@ -125,10 +402,47 @@ test_polygon_nodes_and_sketch(BRLObolViewController &view)
     SoNode *node = view.polygons().node(handle);
     if (!node || !node->isOfType(SoGroup::getClassTypeId()))
 	FAIL("filled polygon should realize as a group");
+    if (count_nodes_of_type(node, SoBRLMeshShape::getClassTypeId()) != 0)
+	FAIL("legacy polygon setFill should not imply mesh fill");
+    if (count_nodes_of_type(node, SoBRLVListShape::getClassTypeId()) != 2)
+	FAIL("legacy polygon setFill should realize hatch and outline children");
+    if (!view.polygons().setFillFlags(handle,
+	    BRLOBOL_POLYGON_FILL_HATCH | BRLOBOL_POLYGON_FILL_MESH))
+	FAIL("polygon setFillFlags should succeed");
+    node = view.polygons().node(handle);
     if (count_nodes_of_type(node, SoBRLMeshShape::getClassTypeId()) != 1)
-	FAIL("filled polygon should have one mesh fill child");
-    if (count_nodes_of_type(node, SoBRLVListShape::getClassTypeId()) != 1)
-	FAIL("filled polygon should have one outline child");
+	FAIL("mesh fill flag should add one mesh fill child");
+    if (count_nodes_of_type(node, SoBRLVListShape::getClassTypeId()) != 2)
+	FAIL("hatch plus mesh fill should keep hatch and outline children");
+
+    BRLObolPolygonHandle csgA = view.polygons().create(
+	    "csg-a",
+	    BRLObolFeatureScope::Shared,
+	    BRLObolPolygonType::Circle,
+	    SbVec3f(0.0f, 0.0f, 0.0f),
+	    viewPlane,
+	    0.0f);
+    BRLObolPolygonHandle csgB = view.polygons().create(
+	    "csg-b",
+	    BRLObolFeatureScope::Shared,
+	    BRLObolPolygonType::Ellipse,
+	    SbVec3f(0.5f, 0.0f, 0.0f),
+	    viewPlane,
+	    0.0f);
+    if (!csgA.isValid() || !csgB.isValid() ||
+	    !view.polygons().updateModelPoint(csgA,
+		SbVec3f(1.0f, 0.0f, 0.0f),
+		BRLObolPolygonUpdate::Default) ||
+	    !view.polygons().updateModelPoint(csgB,
+		SbVec3f(1.5f, 0.75f, 0.0f),
+		BRLObolPolygonUpdate::Default) ||
+	    !view.polygons().csg(csgA, csgB, bg_Union))
+	FAIL("polygon CSG union should succeed for overlapping Obol polygons");
+    BRLObolPolygonRecord csgRecord;
+    if (!view.polygons().record(csgA, csgRecord) ||
+	    csgRecord.pointCount == 0 ||
+	    csgRecord.type != BRLObolPolygonType::General)
+	FAIL("polygon CSG union should preserve non-empty general geometry");
 
     char dbpath[MAXPATHLEN];
     bu_dir(dbpath, MAXPATHLEN, BU_DIR_CURR,
@@ -176,7 +490,9 @@ test_polygon_nodes_and_sketch(BRLObolViewController &view)
 	bu_file_delete(dbpath);
 	FAIL("imported polygon should preserve square contour geometry");
     }
-    if (!record.fill || record.fillSpacing != 2.0f ||
+    if (!record.fill ||
+	    record.fillFlags != BRLOBOL_POLYGON_FILL_HATCH ||
+	    record.fillSpacing != 2.0f ||
 	    record.type != BRLObolPolygonType::Square) {
 	wdb_close(wdbp);
 	bu_file_delete(dbpath);
@@ -202,6 +518,10 @@ main(int argc, char *argv[])
     {
 	BRLObolViewController view(root);
 	if (test_feature_nodes(view) != 0) {
+	    root->unref();
+	    return 1;
+	}
+	if (test_selection_store(view) != 0) {
 	    root->unref();
 	    return 1;
 	}

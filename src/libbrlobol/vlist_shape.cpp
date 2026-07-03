@@ -533,9 +533,18 @@ set_vlist_gl_state_color(SoBRLVListShape *shape, int primitiveIndex)
 }
 
 static void
+set_vlist_default_gl_color(SoBRLVListShape *shape)
+{
+    const SbColor &c = shape->materialColorValid.getValue() ?
+	shape->materialColor.getValue() : shape->color.getValue();
+    glColor3f(c[0], c[1], c[2]);
+}
+
+static void
 set_vlist_gl_color(SoBRLVListShape *shape, int primitiveIndex)
 {
-    (void)set_vlist_gl_state_color(shape, primitiveIndex);
+    if (!set_vlist_gl_state_color(shape, primitiveIndex))
+	set_vlist_default_gl_color(shape);
 }
 
 void
@@ -544,8 +553,11 @@ SoBRLVListShape::GLRender(SoGLRenderAction *action)
     if (!this->visible.getValue() || !this->shouldGLRender(action))
 	return;
 
-    glPushAttrib(GL_CURRENT_BIT);
+    glPushAttrib(GL_CURRENT_BIT | GL_ENABLE_BIT | GL_LINE_BIT | GL_POINT_BIT);
+    glDisable(GL_LIGHTING);
     set_vlist_gl_color(this, -1);
+    if (this->lineWidth.getValue() > 0)
+	glLineWidth(static_cast<GLfloat>(this->lineWidth.getValue()));
 
     SbVec3f last;
     SbBool haveLast = FALSE;
@@ -584,6 +596,8 @@ SoBRLVListShape::GLRender(SoGLRenderAction *action)
 		SbColor attrColor;
 		if (this->getPointColor(i, attrColor))
 		    glColor3f(attrColor[0], attrColor[1], attrColor[2]);
+		else
+		    set_vlist_default_gl_color(this);
 	    }
 	    glVertex3f(this->point[i][0], this->point[i][1], this->point[i][2]);
 	}

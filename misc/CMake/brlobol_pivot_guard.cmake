@@ -121,6 +121,521 @@ function(_brlobol_pivot_guard_check_ged_tcl_overlay_bsg_test)
   endif()
 endfunction()
 
+function(_brlobol_pivot_guard_check_capability2_rt_scene_adapter)
+  set(_rt_view_header "${BRLCAD_SOURCE_DIR}/include/rt/view.h")
+  set(_rt_view_adapter "${BRLCAD_SOURCE_DIR}/src/librt/view_legacy_bsg.c")
+  set(_ged_view_adapter "${BRLCAD_SOURCE_DIR}/src/libged/ged_view_legacy.cpp")
+  set(_ged_source_adapter "${BRLCAD_SOURCE_DIR}/src/libged/bsg_ged_draw_source.c")
+
+  foreach(_file
+      "${_rt_view_header}"
+      "${_rt_view_adapter}"
+      "${_ged_view_adapter}"
+      "${_ged_source_adapter}")
+    if(NOT EXISTS "${_file}")
+      _brlobol_pivot_guard_fail("${_file} is required for Capability 2 neutral RT scene-adapter boundary checks")
+    endif()
+  endforeach()
+
+  if(EXISTS "${_rt_view_header}")
+    file(READ "${_rt_view_header}" _rt_view_header_contents)
+    foreach(_token
+	rt_view_context_scene_adapter
+	rt_view_context_scene_adapter_set
+	rt_view_context_scene_adapter_get
+	rt_view_pick_result_context_append_path)
+      string(FIND "${_rt_view_header_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("include/rt/view.h missing Capability 2 neutral scene-adapter token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  if(EXISTS "${_rt_view_adapter}")
+    file(READ "${_rt_view_adapter}" _rt_view_adapter_contents)
+    foreach(_token
+	rt_view_context_scene_adapter_get
+	adapter.pick_semantic_path
+	adapter.render_export_consistency
+	rt_view_pick_result_context_append_path)
+      string(FIND "${_rt_view_adapter_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("src/librt/view_legacy_bsg.c missing Capability 2 neutral scene-adapter dispatch token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  if(EXISTS "${_ged_view_adapter}")
+    file(READ "${_ged_view_adapter}" _ged_view_adapter_contents)
+    string(FIND "${_ged_view_adapter_contents}"
+      "ged_draw_view_context_obol_scene_adapter_attach"
+      _ged_view_install_idx)
+    if(_ged_view_install_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("src/libged/ged_view_legacy.cpp must install the Obol RT scene adapter for GED-owned views")
+    endif()
+  endif()
+
+  if(EXISTS "${_ged_source_adapter}")
+    file(READ "${_ged_source_adapter}" _ged_source_adapter_contents)
+    foreach(_token
+	ged_draw_rt_obol_pick_semantic_path
+	ged_draw_rt_obol_render_export_consistency
+	ged_draw_view_context_obol_scene_adapter_attach
+	ged_draw_rt_path_matches_prefix)
+      string(FIND "${_ged_source_adapter_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("src/libged/bsg_ged_draw_source.c missing Capability 2 Obol RT scene-adapter token ${_token}")
+      endif()
+    endforeach()
+  endif()
+endfunction()
+
+function(_brlobol_pivot_guard_check_capability2_rt_polygon_adapter)
+  set(_rt_view_header "${BRLCAD_SOURCE_DIR}/include/rt/view.h")
+  set(_rt_view_adapter "${BRLCAD_SOURCE_DIR}/src/librt/view_legacy_bsg.c")
+  set(_ged_view_adapter "${BRLCAD_SOURCE_DIR}/src/libged/ged_view_legacy.cpp")
+  set(_ged_draw_adapter "${BRLCAD_SOURCE_DIR}/src/libged/draw_obol.cpp")
+  set(_ged_draw_view "${BRLCAD_SOURCE_DIR}/src/libged/bsg_ged_draw_view.c")
+
+  foreach(_file
+      "${_rt_view_header}"
+      "${_rt_view_adapter}"
+      "${_ged_view_adapter}"
+      "${_ged_draw_adapter}"
+      "${_ged_draw_view}")
+    if(NOT EXISTS "${_file}")
+      _brlobol_pivot_guard_fail("${_file} is required for Capability 2 neutral RT polygon-adapter boundary checks")
+    endif()
+  endforeach()
+
+  if(EXISTS "${_rt_view_header}")
+    file(READ "${_rt_view_header}" _rt_view_header_contents)
+    foreach(_token
+	rt_view_context_polygon_adapter
+	rt_view_context_polygon_adapter_set
+	rt_view_context_polygon_adapter_get
+	rt_view_context_polygon_owns_ref_callback_t)
+      string(FIND "${_rt_view_header_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("include/rt/view.h missing Capability 2 neutral polygon-adapter token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  if(EXISTS "${_rt_view_adapter}")
+    file(READ "${_rt_view_adapter}" _rt_view_adapter_contents)
+    foreach(_token
+	rt_view_context_polygon_adapter_get
+	rt_view_polygon_adapter_for_ref
+	adapter.create
+	adapter.record_get
+	adapter.set_visual
+	adapter.import_sketch_context)
+      string(FIND "${_rt_view_adapter_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("src/librt/view_legacy_bsg.c missing Capability 2 neutral polygon-adapter dispatch token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  if(EXISTS "${_ged_view_adapter}")
+    file(READ "${_ged_view_adapter}" _ged_view_adapter_contents)
+    string(FIND "${_ged_view_adapter_contents}"
+      "ged_draw_view_context_obol_polygon_adapter_attach"
+      _ged_view_polygon_install_idx)
+    if(_ged_view_polygon_install_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("src/libged/ged_view_legacy.cpp must install the Obol RT polygon adapter for GED-owned views")
+    endif()
+  endif()
+
+  if(EXISTS "${_ged_draw_adapter}")
+    file(READ "${_ged_draw_adapter}" _ged_draw_adapter_contents)
+    foreach(_token
+	ged_draw_view_context_obol_polygon_adapter_attach
+	ged_draw_rt_obol_polygon_owns_ref
+	ged_draw_rt_obol_polygon_record_get
+	ged_draw_rt_obol_polygon_update_screen_pt
+	ged_draw_rt_obol_polygon_export_sketch
+	updateModelPoint)
+      string(FIND "${_ged_draw_adapter_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("src/libged/draw_obol.cpp missing Capability 2 Obol polygon-adapter token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  if(EXISTS "${_ged_draw_view}")
+    file(READ "${_ged_draw_view}" _ged_draw_view_contents)
+    foreach(_token
+	ged_draw_obol_view_context_polygon_create
+	ged_draw_obol_view_context_polygon_import_sketch
+	ged_draw_obol_view_context_polygon_area
+	rt_view_polygon_record_get
+	rt_view_polygon_set_visual
+	rt_view_polygon_csg)
+      string(FIND "${_ged_draw_view_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("src/libged/bsg_ged_draw_view.c missing Capability 2 Obol polygon-facade token ${_token}")
+      endif()
+    endforeach()
+  endif()
+endfunction()
+
+function(_brlobol_pivot_guard_check_capability2_rt_selection_adapter)
+  set(_rt_view_header "${BRLCAD_SOURCE_DIR}/include/rt/view.h")
+  set(_rt_view_adapter "${BRLCAD_SOURCE_DIR}/src/librt/view_legacy_bsg.c")
+  set(_ged_view_adapter "${BRLCAD_SOURCE_DIR}/src/libged/ged_view_legacy.cpp")
+  set(_ged_draw_adapter "${BRLCAD_SOURCE_DIR}/src/libged/draw_obol.cpp")
+  set(_ged_draw_private "${BRLCAD_SOURCE_DIR}/src/libged/bsg_ged_draw_private.h")
+  set(_ged_draw_view "${BRLCAD_SOURCE_DIR}/src/libged/bsg_ged_draw_view.c")
+  set(_brlobol_view_store_h "${BRLCAD_SOURCE_DIR}/include/brlobol/view_store.h")
+  set(_brlobol_view_store_cpp "${BRLCAD_SOURCE_DIR}/src/libbrlobol/view_store.cpp")
+
+  foreach(_file
+      "${_rt_view_header}"
+      "${_rt_view_adapter}"
+      "${_ged_view_adapter}"
+      "${_ged_draw_adapter}"
+      "${_ged_draw_private}"
+      "${_ged_draw_view}"
+      "${_brlobol_view_store_h}"
+      "${_brlobol_view_store_cpp}")
+    if(NOT EXISTS "${_file}")
+      _brlobol_pivot_guard_fail("${_file} is required for Capability 2 neutral RT selection-adapter boundary checks")
+    endif()
+  endforeach()
+
+  if(EXISTS "${_rt_view_header}")
+    file(READ "${_rt_view_header}" _rt_view_header_contents)
+    foreach(_token
+	rt_view_context_selection_adapter
+	rt_view_context_selection_adapter_set
+	rt_view_context_selection_adapter_get
+	rt_view_context_selection_set_pick_result_context_callback_t
+	rt_view_context_selection_clear_callback_t)
+      string(FIND "${_rt_view_header_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("include/rt/view.h missing Capability 2 neutral selection-adapter token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  if(EXISTS "${_rt_view_adapter}")
+    file(READ "${_rt_view_adapter}" _rt_view_adapter_contents)
+    foreach(_token
+	rt_view_context_selection_adapter_get
+	rt_view_context_selection_adapter_clear
+	adapter.available
+	adapter.count
+	adapter.set_pick_result_context
+	adapter.clear)
+      string(FIND "${_rt_view_adapter_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("src/librt/view_legacy_bsg.c missing Capability 2 neutral selection-adapter dispatch token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  if(EXISTS "${_ged_view_adapter}")
+    file(READ "${_ged_view_adapter}" _ged_view_adapter_contents)
+    string(FIND "${_ged_view_adapter_contents}"
+      "ged_draw_view_context_obol_selection_adapter_attach"
+      _ged_view_selection_install_idx)
+    if(_ged_view_selection_install_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("src/libged/ged_view_legacy.cpp must install the Obol RT selection adapter for GED-owned views")
+    endif()
+  endif()
+
+  if(EXISTS "${_ged_draw_adapter}")
+    file(READ "${_ged_draw_adapter}" _ged_draw_adapter_contents)
+    foreach(_token
+	ged_draw_view_context_obol_selection_adapter_attach
+	ged_draw_rt_obol_selection_set_pick_result_context
+	ged_draw_obol_view_context_selection_path_foreach
+	ged_draw_obol_view_context_selection_contains_path
+	BRLOBOL_SELECTION_HIGHLIGHTED_REF
+	rt_view_pick_result_context_path)
+      string(FIND "${_ged_draw_adapter_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("src/libged/draw_obol.cpp missing Capability 2 Obol selection-adapter token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  if(EXISTS "${_ged_draw_private}")
+    file(READ "${_ged_draw_private}" _ged_draw_private_contents)
+    foreach(_token
+	ged_draw_view_context_obol_selection_adapter_attach
+	ged_draw_obol_view_context_selection_count
+	ged_draw_obol_view_context_selection_path_foreach
+	ged_draw_obol_view_context_selection_set_path)
+      string(FIND "${_ged_draw_private_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("src/libged/bsg_ged_draw_private.h missing Capability 2 Obol selection facade token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  if(EXISTS "${_ged_draw_view}")
+    file(READ "${_ged_draw_view}" _ged_draw_view_contents)
+    foreach(_token
+	ged_draw_obol_view_context_selection_available
+	ged_draw_obol_view_context_selection_count
+	ged_draw_obol_view_context_selection_path_foreach
+	ged_draw_obol_view_context_selection_clear
+	ged_draw_obol_view_context_selection_contains_path
+	ged_draw_obol_view_context_selection_add_path
+	ged_draw_obol_view_context_selection_set_path)
+      string(FIND "${_ged_draw_view_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("src/libged/bsg_ged_draw_view.c missing Capability 2 Obol selection-facade token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  if(EXISTS "${_brlobol_view_store_h}")
+    file(READ "${_brlobol_view_store_h}" _brlobol_view_store_h_contents)
+    foreach(_token
+	BRLOBOL_SELECTION_SELECTED_PATH
+	BRLOBOL_SELECTION_HIGHLIGHTED_REF
+	BRLObolSelectionRecord
+	BRLObolFeatureOwner
+	"count(const BRLObolFeatureOwner *owner"
+	"containsPath(const SbString &path")
+      string(FIND "${_brlobol_view_store_h_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("include/brlobol/view_store.h missing owner/kind-capable selection store token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  if(EXISTS "${_brlobol_view_store_cpp}")
+    file(READ "${_brlobol_view_store_cpp}" _brlobol_view_store_cpp_contents)
+    foreach(_token
+	store_selection_kind_matches
+	BRLObolSelectionStore::clear
+	BRLObolSelectionStore::containsPath
+	BRLObolSelectionStore::applyPickResults
+	store_owner_matches)
+      string(FIND "${_brlobol_view_store_cpp_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("src/libbrlobol/view_store.cpp missing owner/kind-capable selection store token ${_token}")
+      endif()
+    endforeach()
+  endif()
+endfunction()
+
+function(_brlobol_pivot_guard_check_capability2_rt_feature_adapter)
+  set(_rt_view_header "${BRLCAD_SOURCE_DIR}/include/rt/view.h")
+  set(_rt_view_adapter "${BRLCAD_SOURCE_DIR}/src/librt/view_legacy_bsg.c")
+  set(_ged_view_adapter "${BRLCAD_SOURCE_DIR}/src/libged/ged_view_legacy.cpp")
+  set(_ged_draw_adapter "${BRLCAD_SOURCE_DIR}/src/libged/draw_obol.cpp")
+  set(_ged_draw_private "${BRLCAD_SOURCE_DIR}/src/libged/bsg_ged_draw_private.h")
+  set(_brlobol_view_store_h "${BRLCAD_SOURCE_DIR}/include/brlobol/view_store.h")
+  set(_brlobol_view_store_cpp "${BRLCAD_SOURCE_DIR}/src/libbrlobol/view_store.cpp")
+  set(_ged_obol_sync_test "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/obol_sync.cpp")
+
+  foreach(_file
+      "${_rt_view_header}"
+      "${_rt_view_adapter}"
+      "${_ged_view_adapter}"
+      "${_ged_draw_adapter}"
+      "${_ged_draw_private}"
+      "${_brlobol_view_store_h}"
+      "${_brlobol_view_store_cpp}"
+      "${_ged_obol_sync_test}")
+    if(NOT EXISTS "${_file}")
+      _brlobol_pivot_guard_fail("${_file} is required for Capability 2 neutral RT feature-adapter boundary checks")
+    endif()
+  endforeach()
+
+  if(EXISTS "${_rt_view_header}")
+    file(READ "${_rt_view_header}" _rt_view_header_contents)
+    foreach(_token
+	rt_view_context_feature_adapter
+	rt_view_context_feature_adapter_set
+	rt_view_context_feature_adapter_get
+	rt_view_context_feature_overlay_ensure_callback_t
+	rt_view_feature_points_replace_callback_t)
+      string(FIND "${_rt_view_header_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("include/rt/view.h missing Capability 2 neutral feature-adapter token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  if(EXISTS "${_rt_view_adapter}")
+    file(READ "${_rt_view_adapter}" _rt_view_adapter_contents)
+    foreach(_token
+	rt_view_feature_adapter_for_ref
+	rt_view_context_feature_adapter_clear
+	adapter.overlay_ensure
+	adapter.label_ensure
+	adapter.points_replace
+	adapter.clear_geometry)
+      string(FIND "${_rt_view_adapter_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("src/librt/view_legacy_bsg.c missing Capability 2 neutral feature-adapter dispatch token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  if(EXISTS "${_ged_view_adapter}")
+    file(READ "${_ged_view_adapter}" _ged_view_adapter_contents)
+    string(FIND "${_ged_view_adapter_contents}"
+      "ged_draw_view_context_obol_feature_adapter_attach"
+      _ged_view_feature_install_idx)
+    if(_ged_view_feature_install_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("src/libged/ged_view_legacy.cpp must install the Obol RT feature adapter for GED-owned views")
+    endif()
+  endif()
+
+  if(EXISTS "${_ged_draw_adapter}")
+    file(READ "${_ged_draw_adapter}" _ged_draw_adapter_contents)
+    foreach(_token
+	ged_draw_view_context_obol_feature_adapter_attach
+	ged_draw_rt_obol_feature_overlay_ensure
+	ged_draw_rt_obol_feature_labels_replace
+	ged_draw_rt_obol_feature_points_replace
+	BRLObolOverlayClass::EditHandle
+	replaceEditPreviewGeometry)
+      string(FIND "${_ged_draw_adapter_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("src/libged/draw_obol.cpp missing Capability 2 Obol feature-adapter token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  if(EXISTS "${_ged_draw_private}")
+    file(READ "${_ged_draw_private}" _ged_draw_private_contents)
+    string(FIND "${_ged_draw_private_contents}"
+      "ged_draw_view_context_obol_feature_adapter_attach"
+      _ged_private_feature_idx)
+    if(_ged_private_feature_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("src/libged/bsg_ged_draw_private.h must declare the Obol RT feature adapter attach point")
+    endif()
+  endif()
+
+  if(EXISTS "${_brlobol_view_store_h}")
+    file(READ "${_brlobol_view_store_h}" _brlobol_view_store_h_contents)
+    string(FIND "${_brlobol_view_store_h_contents}"
+      "replaceEditPreviewGeometry"
+      _brlobol_replace_preview_h_idx)
+    if(_brlobol_replace_preview_h_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("include/brlobol/view_store.h must expose replaceEditPreviewGeometry for RT feature adapter geometry updates")
+    endif()
+  endif()
+
+  if(EXISTS "${_brlobol_view_store_cpp}")
+    file(READ "${_brlobol_view_store_cpp}" _brlobol_view_store_cpp_contents)
+    foreach(_token
+	store_edit_preview_node
+	replaceEditPreviewGeometry
+	BRLObolFeatureStore::replaceEditPreviewGeometry)
+      string(FIND "${_brlobol_view_store_cpp_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("src/libbrlobol/view_store.cpp missing edit-preview preservation token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  if(EXISTS "${_ged_obol_sync_test}")
+    file(READ "${_ged_obol_sync_test}" _ged_obol_sync_test_contents)
+    foreach(_token
+	cap2::rt-preview
+	rt_view_context_feature_overlay_ensure
+	rt_view_feature_points_replace
+	rt_view_context_feature_label_ensure
+	rt_view_context_feature_remove)
+      string(FIND "${_ged_obol_sync_test_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("src/libged/tests/draw/obol_sync.cpp missing Capability 2 RT feature adapter test token ${_token}")
+      endif()
+    endforeach()
+  endif()
+endfunction()
+
+function(_brlobol_pivot_guard_check_capability2_feature_overlay_metadata)
+  set(_brlobol_view_store_h "${BRLCAD_SOURCE_DIR}/include/brlobol/view_store.h")
+  set(_brlobol_view_store_cpp "${BRLCAD_SOURCE_DIR}/src/libbrlobol/view_store.cpp")
+  set(_ged_draw_adapter "${BRLCAD_SOURCE_DIR}/src/libged/draw_obol.cpp")
+  set(_ged_obol_sync_test "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/obol_sync.cpp")
+
+  foreach(_file
+      "${_brlobol_view_store_h}"
+      "${_brlobol_view_store_cpp}"
+      "${_ged_draw_adapter}"
+      "${_ged_obol_sync_test}")
+    if(NOT EXISTS "${_file}")
+      _brlobol_pivot_guard_fail("${_file} is required for Capability 2 Obol feature-overlay metadata checks")
+    endif()
+  endforeach()
+
+  if(EXISTS "${_brlobol_view_store_h}")
+    file(READ "${_brlobol_view_store_h}" _brlobol_view_store_h_contents)
+    foreach(_token
+	BRLObolOverlayInfo
+	BRLObolOverlayClass
+	BRLObolOverlayLifecycle
+	setOverlayInfo
+	overlayInfo)
+      string(FIND "${_brlobol_view_store_h_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("include/brlobol/view_store.h missing Capability 2 feature-overlay metadata token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  if(EXISTS "${_brlobol_view_store_cpp}")
+    file(READ "${_brlobol_view_store_cpp}" _brlobol_view_store_cpp_contents)
+    foreach(_token
+	BRLObolOverlayInfo::BRLObolOverlayInfo
+	BRLObolFeatureStore::setOverlayInfo
+	BRLObolFeatureStore::overlayInfo
+	rec->overlay
+	summaryOut.overlay
+	recordOut.overlay)
+      string(FIND "${_brlobol_view_store_cpp_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("src/libbrlobol/view_store.cpp missing Capability 2 feature-overlay metadata token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  if(EXISTS "${_ged_draw_adapter}")
+    file(READ "${_ged_draw_adapter}" _ged_draw_adapter_contents)
+    foreach(_token
+	ged_obol_model_overlay_info
+	ged_obol_feature_mark_overlay
+	BRLObolOverlayClass::TclOverlay
+	BRLObolOverlayClass::PolygonEdit
+	BRLObolOverlayClass::UserAnnotation
+	BRLObolOverlayClass::Diagnostic
+	ged_draw_obol_view_context_diagnostic_line_layer_builder_replace)
+      string(FIND "${_ged_draw_adapter_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("src/libged/draw_obol.cpp missing Capability 2 feature-overlay metadata token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  if(EXISTS "${_ged_obol_sync_test}")
+    file(READ "${_ged_obol_sync_test}" _ged_obol_sync_test_contents)
+    foreach(_token
+	feature_overlay_matches
+	"cap2::tcl-line"
+	"cap2::annotation"
+	"cap2::polygon-overlay"
+	"cap2::tcl-axes"
+	"cap2::diagnostic")
+      string(FIND "${_ged_obol_sync_test_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("src/libged/tests/draw/obol_sync.cpp missing Capability 2 feature-overlay metadata coverage token ${_token}")
+      endif()
+    endforeach()
+  endif()
+endfunction()
+
 function(_brlobol_pivot_guard_require_inventory_token _contents _token)
   string(FIND "${_contents}" "${_token}" _idx)
   if(_idx EQUAL -1)
@@ -12814,7 +13329,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	    foreach(_token
 		[[#[ \t]*include[ \t]*[<"]ged/draw\.h]]
 		[[ged_diagnostic_line_layer_publish]]
-		[[ged_draw_view_context_line_layer_builder_replace]])
+		[[ged_draw_view_context_diagnostic_line_layer_builder_replace]])
       string(REGEX MATCH "${_token}" _libged_line_layer_token_hit
 	"${_libged_line_layer_contents}")
       if(NOT _libged_line_layer_token_hit)
@@ -12845,7 +13360,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	    foreach(_token
 		[[#[ \t]*include[ \t]*[<"]ged/draw\.h]]
 		[[ged_diagnostic_line_layer_publish]]
-		[[ged_draw_view_context_line_layer_builder_replace]]
+		[[ged_draw_view_context_diagnostic_line_layer_builder_replace]]
 	[[GED_DRAW_VIEW_FEATURE_STYLE_INIT]]
 	[[ged_draw_view_context_indexed_face_set_replace]])
       string(REGEX MATCH "${_token}" _libged_brep_plot_token_hit
@@ -16852,6 +17367,18 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	ged_draw_view_context_feature_exists
 	ged_draw_view_context_feature_remove
 	ged_draw_view_context_feature_summary
+	ged_draw_obol_view_context_feature_exists
+	ged_draw_obol_view_context_feature_remove
+	ged_draw_obol_view_context_feature_summary
+	ged_draw_obol_view_context_features_remove_prefix
+	ged_draw_obol_view_context_feature_visible
+	ged_draw_obol_view_context_feature_style_get
+	ged_draw_obol_view_context_feature_style_apply
+	ged_draw_obol_view_context_indexed_face_set_replace
+	ged_draw_obol_view_context_lines_replace
+	ged_draw_obol_view_context_labels_replace
+	ged_draw_obol_view_context_tcl_arrows_replace
+	ged_draw_obol_view_context_tcl_axes_replace
 	ged_draw_view_context_lines_create_model_annotation
 	ged_draw_view_context_lines_append_point
 	    ged_draw_view_context_features_remove_prefix
@@ -18866,7 +19393,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[ged_draw_view_context_lod_policy_get]]
 	[[ged_draw_view_context_lod_policy_apply]]
 	[[ged_draw_view_context_lod_policy_apply_bot_threshold]]
-	[[ged_draw_view_context_line_layer_builder_replace]]
+	[[ged_draw_view_context_diagnostic_line_layer_builder_replace]]
 	[[ged_draw_append_tree_shape_to_group]]
 	[[ged_draw_add_tree_line_set_to_group]]
 	[[ged_draw_add_tree_nmg_region_to_group]]
@@ -20995,6 +21522,19 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 	[[clearDatabaseSources]]
 	[[realizePending]]
 	[[ged-draw-group:]]
+	[[controller->features\(\)]]
+	[[BRLObolFeatureStyle]]
+	[[ged_draw_obol_view_context_feature_store_active]]
+	[[ged_draw_obol_view_context_features_remove_prefix]]
+	[[ged_draw_obol_view_context_lines_replace]]
+	[[ged_draw_obol_view_context_labels_replace]]
+	[[ged_draw_obol_view_context_tcl_arrows_replace]]
+	[[ged_draw_obol_view_context_axes_create]]
+	[[publishLineSet]]
+	[[publishLabels]]
+	[[publishArrow]]
+	[[publishAxes]]
+	[[publishIndexedFaceSet]]
 	[[GED_DRAW_TXN_DRAW]]
 	[[GED_DRAW_TXN_ERASE]]
 	[[GED_DRAW_TXN_CLEAR]]
@@ -21082,6 +21622,7 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 	[[#[ \t]*include[ \t]*[<"]brlobol/scene_controller\.h]]
 	[[#[ \t]*include[ \t]*[<"]brlobol/scene_group\.h]]
 	[[#[ \t]*include[ \t]*[<"]brlobol/vlist_shape\.h]]
+	[[#[ \t]*include[ \t]*[<"]brlobol/view_store\.h]]
 	[[#[ \t]*include[ \t]*[<"]rt/view\.h]]
 	[[ged_draw_obol_scene_controller_attach]]
 	[[ged_draw_obol_scene_controller_detach]]
@@ -21117,6 +21658,14 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 	[[GED source scene-context traversal should summarize owned Obol realized children]]
 	[[GED source scene-context traversal should classify owned Obol realized children as shapes]]
 	[[GED source scene-context traversal should return owned Obol realized children]]
+	[[ged_draw_obol_view_context_feature_store_active]]
+	[[GED feature line replacement should publish into the owned Obol feature store]]
+	[[GED feature summary should read the owned Obol feature store]]
+	[[GED label replacement should publish into the owned Obol feature store]]
+	[[GED arrow replacement should publish into the owned Obol feature store]]
+	[[GED axes creation should publish into the owned Obol feature store]]
+	[[GED indexed-face replacement should publish into the owned Obol feature store]]
+	[[GED feature prefix removal should clear owned Obol feature store entries]]
 		[[ged_draw_shape_ref_line_summary]]
 		[[ged_draw_shape_ref_line_point_at]]
 		[[ged_draw_shape_ref_line_command_at]]
@@ -27847,6 +28396,11 @@ endfunction()
 
 _brlobol_pivot_guard_check_dependency_inventory()
 _brlobol_pivot_guard_check_obol_realization_coverage()
+_brlobol_pivot_guard_check_capability2_rt_scene_adapter()
+_brlobol_pivot_guard_check_capability2_rt_polygon_adapter()
+_brlobol_pivot_guard_check_capability2_rt_selection_adapter()
+_brlobol_pivot_guard_check_capability2_rt_feature_adapter()
+_brlobol_pivot_guard_check_capability2_feature_overlay_metadata()
 _brlobol_pivot_guard_check_libimgstream_boundary()
 _brlobol_pivot_guard_check_brlobol_image_source()
 _brlobol_pivot_guard_check_brlobol_image_display()

@@ -204,8 +204,8 @@ nmg_plot_eu(struct ged *gedp, struct edgeuse *es_eu, const struct bn_tol *tol)
     int handled = ged_diagnostic_line_layer_publish(gedp, "nmg::_EU_", plot);
     void *view_ctx = ged_view_active_ctx(gedp);
     if (!handled && view_ctx) {
-	(void)ged_draw_view_context_line_layer_builder_replace(view_ctx,
-		"nmg::_EU_", 0, plot);
+	(void)ged_draw_view_context_diagnostic_line_layer_builder_replace(
+		view_ctx, "nmg::_EU_", plot);
     }
 
     bg_line_layer_builder_free(plot);

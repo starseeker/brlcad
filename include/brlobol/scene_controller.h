@@ -205,6 +205,14 @@ public:
 	struct db_i *database,
 	int drawMode,
 	uint32_t sourceRevision);
+    int replaceDatabaseSourceInstanceRepresentation(
+	const char *sourceInstanceKey,
+	const char *sourcePath,
+	const char *sourceRepresentationKey,
+	int sourceRepresentationMode,
+	struct db_i *database,
+	int drawMode,
+	uint32_t sourceRevision);
     int renameDatabaseSource(const char *sourcePath,
 	const char *newSourcePath,
 	uint32_t sourceRevision);
@@ -252,6 +260,10 @@ public:
 	int drawMode);
     int setDatabaseSourceInstanceDrawMode(const char *sourceInstanceKey,
 	int drawMode);
+    int setDatabaseSourceInstanceRepresentation(
+	const char *sourceInstanceKey,
+	const char *sourceRepresentationKey,
+	int sourceRepresentationMode);
     int setDatabaseSourceMaterialPolicy(const char *sourcePath,
 	int materialPolicy);
     int setDatabaseSourceInstanceMaterialPolicy(const char *sourceInstanceKey,

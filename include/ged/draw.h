@@ -1145,6 +1145,12 @@ ged_draw_view_context_line_layer_builder_replace(
 	const struct bg_line_layer_builder *builder);
 
 GED_EXPORT extern int
+ged_draw_view_context_diagnostic_line_layer_builder_replace(
+	void *view_ctx,
+	const char *name,
+	const struct bg_line_layer_builder *builder);
+
+GED_EXPORT extern int
 ged_draw_view_context_line_layers_replace(
 	void *view_ctx,
 	const char *name,

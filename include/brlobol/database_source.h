@@ -46,6 +46,8 @@ struct BRLOBOL_EXPORT BRLObolDatabaseSourceSummary {
     SbBool hasParent;
     int drawTreeDepth;
     SbString parentGroupPath;
+    SbString representationKey;
+    int representationMode;
     int drawMode;
     uint32_t sourceRevision;
     uint32_t inputsRevision;
@@ -345,7 +347,8 @@ public:
     enum RealizationRoleFlag {
 	REALIZATION_ROLE_NONE = 0,
 	REALIZATION_ROLE_CSG = 1,
-	REALIZATION_ROLE_MESH = 2
+	REALIZATION_ROLE_MESH = 2,
+	REALIZATION_ROLE_EXTERNAL = 4
     };
 
     enum MaterialPolicy {
@@ -356,6 +359,8 @@ public:
     SoSFString instanceKey;
     SoSFString path;
     SoSFString displayName;
+    SoSFString representationKey;
+    SoSFInt32 representationMode;
     SoSFBool auxiliarySource;
     SoSFEnum drawMode;
     SoSFBool visible;
@@ -428,11 +433,21 @@ public:
 	struct db_i *database,
 	int mode,
 	uint32_t revision);
+    void configureDatabaseSourceInstanceRepresentation(
+	const char *sourceInstanceKey,
+	const char *sourcePath,
+	const char *sourceRepresentationKey,
+	int sourceRepresentationMode,
+	struct db_i *database,
+	int mode,
+	uint32_t revision);
     int retargetDatabaseSource(const char *sourcePath,
 	uint32_t revision);
     int retargetDatabaseSourceInstance(const char *sourceInstanceKey,
 	const char *sourcePath,
 	uint32_t revision);
+    int setRepresentationState(const char *sourceRepresentationKey,
+	int sourceRepresentationMode);
 
     void markStale(void);
     void markStale(uint32_t reason);
@@ -540,6 +555,8 @@ private:
     SbVec3f meshLodBoundsMax;
     SoFieldSensor *pathSensor;
     SoFieldSensor *instanceKeySensor;
+    SoFieldSensor *representationKeySensor;
+    SoFieldSensor *representationModeSensor;
     SoFieldSensor *drawModeSensor;
     SoFieldSensor *tessellationAbsTolSensor;
     SoFieldSensor *tessellationRelTolSensor;

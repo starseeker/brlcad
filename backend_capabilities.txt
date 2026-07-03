@@ -82,11 +82,11 @@ behavior family can be covered with focused parity checks.
 Current Status
 --------------
 
-Capability 1, scene/source ownership, is in closeout rather than open-ended
-implementation.  The large Obol-primary database draw pivot has landed for
-the guarded GED draw-scene behavior family; remaining Capability 1 work should
-be guard/inventory/audit closure and targeted regressions, not more retained
-BSG compatibility shims.
+Capability 2 has started.  Capability 1 is considered closed enough for the
+active implementation focus to move from database scene/source ownership to
+Obol/libbrlobol view node/store ownership.  Capability 1 maintenance remains
+guard/inventory/audit closure and targeted regressions, not retained BSG
+compatibility shims.
 
 Current state:
 
@@ -126,6 +126,51 @@ Current state:
 * `ged_test_ged_draw_scene` is now split into 16 shards.  The current fast
   scene/source signal is the shard set, plus `ged_test_state_services` for
   command event ordering around rename/prefix behavior.
+* The first Capability 2 slice moved view feature export/depth/readback onto
+  owner-aware libbrlobol feature records, made local features owner-scoped by
+  view, filtered Obol feature-store nodes out of generic scene export, created
+  `view obj -g` overlay parents as Obol overlay groups when GED owns the
+  scene, and installed a neutral RT scene adapter so render/export
+  consistency and semantic pick use Obol/GED records before the legacy BSG
+  path.
+* The second Capability 2 slice moved GED-owned view polygon storage and RT
+  neutral polygon facade traffic onto libbrlobol's polygon store.  `rt/view.h`
+  now has a narrow polygon adapter with explicit ref ownership, GED-owned
+  views install the Obol-backed adapter, and GED polygon commands use
+  Obol/libbrlobol for create/find/import/export/update/current/open/fill,
+  area/overlap, CSG, snap, and record readback.  qtcad still calls the neutral
+  RT polygon APIs directly, but GED-owned refs now resolve through Obol before
+  retained BSG compatibility.
+* The third Capability 2 slice moved GED-owned view selection storage and RT
+  neutral selection facade traffic onto libbrlobol's selection store.
+  `BRLObolSelectionStore` records are now owner- and kind-aware, `rt/view.h`
+  has a narrow selection adapter, GED-owned views install the Obol-backed
+  adapter, and GED/qtcad selection count, clear, path iteration,
+  selected-path/highlighted-ref mutation, and pick-result selection updates
+  route through Obol before retained BSG compatibility.
+* The fourth Capability 2 slice added typed Obol feature-overlay metadata.
+  `BRLObolFeatureStore` now records overlay role, class, lifecycle, ordering,
+  source path, and owner token in feature summaries and records.  GED-owned
+  Tcl line/arrow/axes overlays, Tcl polygon-edit overlays, and model
+  annotation features stamp that metadata in Obol.  Feature-store nodes keep
+  their `view-feature` scene role so generic scene traversal does not bypass
+  owner-scoped feature export.
+* The fifth Capability 2 slice moved GED-owned RT feature/edit-preview facade
+  traffic onto Obol feature records.  `rt/view.h` now has a neutral feature
+  adapter, `src/librt/view_legacy_bsg.c` dispatches adapter-owned
+  `rt_view_feature_ref` operations before retained BSG compatibility,
+  GED-owned views install the Obol-backed feature adapter, and qged/qtcad
+  edit-preview callers that already use neutral RT feature APIs now publish
+  edit-preview geometry, labels, visibility, color, clear/remove, and preview
+  lifecycle events into `BRLObolFeatureStore`.  libbrlobol also has
+  `replaceEditPreviewGeometry` so RT geometry updates preserve edit-preview
+  callbacks and `SoBRLEditPreview` node identity.
+* The sixth Capability 2 slice moved diagnostic line-layer fallback producers
+  onto a typed Obol path.  GED now exposes
+  `ged_draw_view_context_diagnostic_line_layer_builder_replace`; GED-owned
+  views publish those fallbacks through `BRLObolFeatureStore` and stamp
+  `Diagnostic`/`PerCommand`/`PostTransparent` overlay metadata, while retained
+  BSG line-layer replacement remains compatibility-only for unowned contexts.
 
 Capability 1 closeout path:
 
@@ -148,11 +193,13 @@ Capability 1 closeout path:
   redraw, material, highlight, erase, path-state, bounds, and source-summary
   regression set passes.  Retained BSG scene/source code may remain compiled
   only as inactive legacy/reference/no-owned-scene compatibility code.
-* After that closeout gate, move to Capability 2 rather than continuing
-  database scene/source refactoring.  The next implementation work should be
-  Obol/libbrlobol node/store ownership for feature, polygon, selection,
-  overlay/diagnostic, annotation/auxiliary, qray/NIRT, and local-helper
-  families as needed.
+* Continue Capability 2 by replacing remaining retained BSG
+  command-result owner callbacks, diagnostic overlay producers,
+  annotation/auxiliary records, qray/NIRT, local-helper, and display-stream
+  behavior with Obol/libbrlobol node/store ownership.  Feature, selection, and
+  polygon now have neutral RT adapter routes for GED-owned views; use that
+  adapter pattern only for view-context contracts that cannot depend on libged
+  or libbrlobol directly.
 
 Recent cleanup state:
 
@@ -916,10 +963,13 @@ Capability 2 Remaining Work: View Feature And Polygon Store
 
 Status:
 
-Capability 2 is the next implementation phase after Capability 1 closeout.
-Do not start it by preserving more retained BSG database scene/source
-fallback.  Start it by standing up the missing Obol/libbrlobol view
-node/store capability behind the already-neutral RT/GED APIs.
+Capability 2 is active.  The feature-record/export/depth slice, the
+polygon-owner slice, the selection-owner slice, the feature-overlay metadata
+slice, the RT feature-adapter slice, and the diagnostic line-layer producer
+slice are implemented behind neutral RT/GED APIs.  Do not add retained BSG
+database scene/source fallback while finishing this phase; stand up the
+remaining Obol/libbrlobol node/store capabilities behind neutral contracts and
+retire retained backend ownership by behavior family.
 
 Goal:
 
@@ -930,7 +980,8 @@ Required feature behavior:
 
 * Named feature lookup, creation, removal, visibility, color, line width, and
   style.
-* Overlay feature ownership and command-result owner callbacks.
+* Overlay feature ownership, typed role/class/lifecycle/order metadata, and
+  command-result owner callbacks.
 * Line, indexed line, point, label, arrow, axes, line-layer, and edit-preview
   feature publication.
 * Feature summaries: point/command counts, geometry kind, visible state,
@@ -938,6 +989,24 @@ Required feature behavior:
 * Selection store: selected path add/set/clear/contains/count and pick-result
   application.
 * Edit-preview callbacks and pick/update lifecycle.
+
+Feature status:
+
+* GED-owned local/shared feature records, feature depth, export/readback,
+  labels, lines, arrows, axes, line layers, indexed faces, and prefix removal
+  route through `BRLObolFeatureStore` for owned views.
+* Feature-store overlay semantics are now Obol metadata, not generic scene
+  traversal ownership.  Tcl line/arrow/axes overlays use
+  `TclOverlay`/`PerCommand`/`PostTransparent`, Tcl polygon helpers use
+  `PolygonEdit`/`PerTool`/`PostTransparent`, and model annotations use
+  `UserAnnotation`/`Persistent`/`Model`.
+* Diagnostic line-layer fallback producers now route through the typed
+  diagnostic GED facade and stamp Obol diagnostic metadata for GED-owned
+  views.
+* Remaining feature follow-up is to connect command-result owner callbacks
+  and migrate qray/NIRT/vdraw/local-helper producers and any remaining
+  diagnostic line/label producers onto the same typed Obol records instead of
+  retained BSG feature/overlay registries.
 
 Required polygon behavior:
 
@@ -948,12 +1017,27 @@ Required polygon behavior:
   color, fill state, fill color, fill slope, CSG, sketch import/export,
   snap count, snap exclusion, and point-selection clear.
 
+Polygon status:
+
+* GED-owned polygon storage now uses libbrlobol through
+  `BRLObolPolygonStore`, including create/find/import/export/update/current,
+  open/close, fill, area/overlap, CSG, snap, and record readback.
+* `include/rt/view.h` exposes `rt_view_context_polygon_adapter` for neutral
+  view-context polygon callers.  `src/librt/view_legacy_bsg.c` dispatches
+  adapter-owned refs to Obol and keeps retained BSG only as compatibility for
+  unowned contexts.
+* Remaining polygon follow-up is cleanup/hardening: add more qged polygon
+  create/modify parity coverage as needed, spot-check non-GED-owned qtcad
+  contexts, and then shrink retained BSG polygon code when no live caller
+  depends on it.
+
 Acceptance criteria:
 
-* `src/librt/view_legacy_bsg.c` feature/polygon implementation is replaced or
-  reduced to a compatibility adapter.
-* `src/libged/bsg_ged_draw_view.c` no longer owns the primary feature/polygon
-  backend.
+* `src/librt/view_legacy_bsg.c` feature/selection implementation is replaced
+  or reduced to a compatibility adapter; polygon is already adapter-dispatched
+  for GED-owned contexts.
+* `src/libged/bsg_ged_draw_view.c` no longer owns the primary feature,
+  polygon, or selection backend for GED-owned contexts.
 * qtcad and qged polygon/edit/selection paths continue using neutral RT/GED
   APIs without reintroducing qtcad public legacy-view helpers.
 

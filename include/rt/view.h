@@ -349,6 +349,91 @@ struct rt_view_feature_label {
     unsigned char color[3];
 };
 
+typedef int (*rt_view_context_feature_owns_ref_callback_t)(
+	rt_view_feature_ref ref,
+	void *data);
+typedef int (*rt_view_context_edit_preview_publish_event_callback_t)(
+	void *ctx,
+	rt_view_feature_ref feature,
+	enum rt_view_edit_preview_event event,
+	const char *source_path,
+	void *data);
+typedef rt_view_feature_ref (*rt_view_context_feature_overlay_ensure_callback_t)(
+	void *ctx,
+	const char *name,
+	const void *owner,
+	void *preview_ctx,
+	const struct rt_view_edit_preview_callbacks *callbacks,
+	const char *source_path,
+	void *data);
+typedef rt_view_feature_ref (*rt_view_context_feature_label_ensure_callback_t)(
+	void *ctx,
+	const char *name,
+	const void *owner,
+	void *data);
+typedef int (*rt_view_context_feature_remove_callback_t)(
+	void *ctx,
+	const char *name,
+	void *data);
+typedef int (*rt_view_feature_set_context_callback_t)(
+	rt_view_feature_ref ref,
+	void *ctx,
+	void *data);
+typedef int (*rt_view_feature_set_visible_callback_t)(
+	rt_view_feature_ref ref,
+	int visible,
+	void *data);
+typedef int (*rt_view_feature_set_color_callback_t)(
+	rt_view_feature_ref ref,
+	int r,
+	int g,
+	int b,
+	void *data);
+typedef int (*rt_view_feature_touch_callback_t)(
+	rt_view_feature_ref ref,
+	void *data);
+typedef int (*rt_view_feature_labels_replace_callback_t)(
+	rt_view_feature_ref ref,
+	const struct rt_view_feature_label *labels,
+	size_t label_count,
+	void *data);
+typedef int (*rt_view_feature_points_replace_callback_t)(
+	rt_view_feature_ref ref,
+	enum rt_view_feature_family family,
+	const point_t *points,
+	const int *cmds,
+	size_t point_count,
+	void *data);
+typedef int (*rt_view_feature_clear_geometry_callback_t)(
+	rt_view_feature_ref ref,
+	void *data);
+
+struct rt_view_context_feature_adapter {
+    rt_view_context_feature_owns_ref_callback_t owns_ref;
+    rt_view_context_edit_preview_publish_event_callback_t edit_preview_publish_event;
+    rt_view_context_feature_overlay_ensure_callback_t overlay_ensure;
+    rt_view_context_feature_label_ensure_callback_t label_ensure;
+    rt_view_context_feature_remove_callback_t remove;
+    rt_view_feature_set_context_callback_t set_context;
+    rt_view_feature_set_visible_callback_t set_visible;
+    rt_view_feature_set_color_callback_t set_color;
+    rt_view_feature_touch_callback_t touch;
+    rt_view_feature_labels_replace_callback_t labels_replace;
+    rt_view_feature_points_replace_callback_t points_replace;
+    rt_view_feature_clear_geometry_callback_t clear_geometry;
+    void *data;
+};
+
+RT_EXPORT extern int
+rt_view_context_feature_adapter_set(
+	void *ctx,
+	const struct rt_view_context_feature_adapter *adapter);
+
+RT_EXPORT extern int
+rt_view_context_feature_adapter_get(
+	void *ctx,
+	struct rt_view_context_feature_adapter *adapter);
+
 RT_EXPORT extern int
 rt_view_feature_ref_is_null(rt_view_feature_ref ref);
 
@@ -440,6 +525,158 @@ struct rt_view_polygon_record {
 typedef int (*rt_view_polygon_record_callback_t)(rt_view_polygon_ref ref,
 						 const struct rt_view_polygon_record *record,
 						 void *data);
+
+typedef int (*rt_view_context_polygon_owns_ref_callback_t)(
+	rt_view_polygon_ref ref,
+	void *data);
+typedef int (*rt_view_context_polygon_record_get_callback_t)(
+	rt_view_polygon_ref ref,
+	struct rt_view_polygon_record *record,
+	void *data);
+typedef rt_view_polygon_ref (*rt_view_context_polygon_create_callback_t)(
+	void *ctx,
+	int type,
+	point_t *fp,
+	void *data);
+typedef rt_view_polygon_ref (*rt_view_context_polygon_select_callback_t)(
+	void *ctx,
+	point_t *cp,
+	void *data);
+typedef rt_view_polygon_ref (*rt_view_context_polygon_find_callback_t)(
+	void *ctx,
+	const char *name,
+	void *data);
+typedef rt_view_polygon_ref (*rt_view_context_polygon_dup_callback_t)(
+	void *ctx,
+	const char *name,
+	const char *new_name,
+	void *data);
+typedef void (*rt_view_context_polygon_visit_records_callback_t)(
+	void *ctx,
+	rt_view_polygon_record_callback_t callback,
+	void *callback_data,
+	void *data);
+typedef size_t (*rt_view_context_polygon_snap_count_callback_t)(
+	void *ctx,
+	rt_view_polygon_ref exclude,
+	void *data);
+typedef int (*rt_view_context_polygon_clear_point_selection_callback_t)(
+	void *ctx,
+	void *data);
+typedef int (*rt_view_context_polygon_update_callback_t)(
+	rt_view_polygon_ref ref,
+	void *ctx,
+	int utype,
+	void *data);
+typedef int (*rt_view_context_polygon_update_screen_pt_callback_t)(
+	rt_view_polygon_ref ref,
+	void *ctx,
+	int x,
+	int y,
+	int utype,
+	void *data);
+typedef int (*rt_view_polygon_move_callback_t)(
+	rt_view_polygon_ref ref,
+	point_t *current_point,
+	point_t *previous_point,
+	void *data);
+typedef int (*rt_view_polygon_set_name_callback_t)(
+	rt_view_polygon_ref ref,
+	const char *name,
+	void *data);
+typedef int (*rt_view_polygon_set_context_callback_t)(
+	rt_view_polygon_ref ref,
+	void *ctx,
+	void *data);
+typedef int (*rt_view_polygon_set_visual_callback_t)(
+	rt_view_polygon_ref ref,
+	const struct bu_color *edge_color,
+	const struct bu_color *fill_color,
+	fastf_t fill_slope_x,
+	fastf_t fill_slope_y,
+	fastf_t fill_density,
+	fastf_t vZ,
+	int fill_flag,
+	void *data);
+typedef int (*rt_view_polygon_set_open_callback_t)(
+	rt_view_polygon_ref ref,
+	int open,
+	void *data);
+typedef int (*rt_view_polygon_close_callback_t)(
+	rt_view_polygon_ref ref,
+	void *data);
+typedef int (*rt_view_polygon_clear_selected_point_callback_t)(
+	rt_view_polygon_ref ref,
+	void *data);
+typedef int (*rt_view_polygon_remove_callback_t)(
+	rt_view_polygon_ref ref,
+	void *data);
+typedef void *(*rt_view_polygon_user_data_callback_t)(
+	rt_view_polygon_ref ref,
+	void *data);
+typedef int (*rt_view_polygon_user_data_set_callback_t)(
+	rt_view_polygon_ref ref,
+	void *user_data,
+	void *data);
+typedef int (*rt_view_polygon_csg_callback_t)(
+	rt_view_polygon_ref target,
+	rt_view_polygon_ref stencil,
+	bg_clip_t op,
+	void *data);
+typedef rt_view_polygon_ref (*rt_view_polygon_import_sketch_context_callback_t)(
+	const char *name,
+	struct db_i *dbip,
+	struct directory *dp,
+	void *ctx,
+	void *data);
+typedef struct directory *(*rt_view_polygon_export_sketch_callback_t)(
+	struct db_i *dbip,
+	const char *name,
+	rt_view_polygon_ref ref,
+	void *data);
+typedef int (*rt_view_context_polygon_snap_exclude_set_callback_t)(
+	void *ctx,
+	rt_view_polygon_ref ref,
+	void *data);
+
+struct rt_view_context_polygon_adapter {
+    rt_view_context_polygon_owns_ref_callback_t owns_ref;
+    rt_view_context_polygon_record_get_callback_t record_get;
+    rt_view_context_polygon_create_callback_t create;
+    rt_view_context_polygon_select_callback_t select;
+    rt_view_context_polygon_find_callback_t find;
+    rt_view_context_polygon_dup_callback_t dup;
+    rt_view_context_polygon_visit_records_callback_t visit_records;
+    rt_view_context_polygon_snap_count_callback_t snap_count;
+    rt_view_context_polygon_clear_point_selection_callback_t clear_point_selection;
+    rt_view_context_polygon_update_callback_t update;
+    rt_view_context_polygon_update_screen_pt_callback_t update_screen_pt;
+    rt_view_polygon_move_callback_t move;
+    rt_view_polygon_set_name_callback_t set_name;
+    rt_view_polygon_set_context_callback_t set_context;
+    rt_view_polygon_set_visual_callback_t set_visual;
+    rt_view_polygon_set_open_callback_t set_open;
+    rt_view_polygon_close_callback_t close;
+    rt_view_polygon_clear_selected_point_callback_t clear_selected_point;
+    rt_view_polygon_remove_callback_t remove;
+    rt_view_polygon_user_data_callback_t user_data;
+    rt_view_polygon_user_data_set_callback_t user_data_set;
+    rt_view_polygon_csg_callback_t csg;
+    rt_view_polygon_import_sketch_context_callback_t import_sketch_context;
+    rt_view_polygon_export_sketch_callback_t export_sketch;
+    rt_view_context_polygon_snap_exclude_set_callback_t snap_exclude_set;
+    void *data;
+};
+
+RT_EXPORT extern int
+rt_view_context_polygon_adapter_set(
+	void *ctx,
+	const struct rt_view_context_polygon_adapter *adapter);
+
+RT_EXPORT extern int
+rt_view_context_polygon_adapter_get(
+	void *ctx,
+	struct rt_view_context_polygon_adapter *adapter);
 
 RT_EXPORT extern int
 rt_view_polygon_ref_is_null(rt_view_polygon_ref ref);
@@ -620,6 +857,47 @@ struct rt_view_render_export_consistency {
     int export_backend_consistent;
 };
 
+typedef void *(*rt_view_context_pick_semantic_path_callback_t)(
+	void *ctx,
+	const char *path_pattern,
+	void *data);
+
+typedef int (*rt_view_context_render_export_consistency_callback_t)(
+	void *ctx,
+	const char *drawn_prefix,
+	struct rt_view_render_export_consistency *summary,
+	void *data);
+
+struct rt_view_context_scene_adapter {
+    rt_view_context_pick_semantic_path_callback_t pick_semantic_path;
+    rt_view_context_render_export_consistency_callback_t render_export_consistency;
+    void *data;
+};
+
+typedef int (*rt_view_context_selection_available_callback_t)(
+	void *ctx,
+	void *data);
+typedef size_t (*rt_view_context_selection_count_callback_t)(
+	void *ctx,
+	void *data);
+typedef int (*rt_view_context_selection_set_pick_result_context_callback_t)(
+	void *ctx,
+	const void *result_ctx,
+	rt_view_selection_path_callback_t callback,
+	void *callback_data,
+	void *data);
+typedef int (*rt_view_context_selection_clear_callback_t)(
+	void *ctx,
+	void *data);
+
+struct rt_view_context_selection_adapter {
+    rt_view_context_selection_available_callback_t available;
+    rt_view_context_selection_count_callback_t count;
+    rt_view_context_selection_set_pick_result_context_callback_t set_pick_result_context;
+    rt_view_context_selection_clear_callback_t clear;
+    void *data;
+};
+
 struct rt_view_feature_geometry_summary {
     int exists;
     size_t point_count;
@@ -773,8 +1051,13 @@ RT_EXPORT extern void rt_view_pick_result_context_free(void *result_ctx);
 RT_EXPORT extern size_t rt_view_pick_result_context_count(const void *result_ctx);
 RT_EXPORT extern int rt_view_pick_result_context_path(const void *result_ctx, size_t index, struct bu_vls *path_out);
 RT_EXPORT extern fastf_t rt_view_pick_result_context_hit_dist(const void *result_ctx, size_t index);
+RT_EXPORT extern int rt_view_pick_result_context_append_path(void *result_ctx, void *view_ctx, int screen_x, int screen_y, const char *source_path, fastf_t hit_dist);
 RT_EXPORT extern int rt_view_pick_result_context_append_copy(void *dest_ctx, const void *src_ctx, size_t index, fastf_t hit_dist);
 RT_EXPORT extern void *rt_view_pick_result_context_filter_first(const void *src_ctx);
+RT_EXPORT extern int rt_view_context_scene_adapter_set(void *ctx, const struct rt_view_context_scene_adapter *adapter);
+RT_EXPORT extern int rt_view_context_scene_adapter_get(void *ctx, struct rt_view_context_scene_adapter *adapter);
+RT_EXPORT extern int rt_view_context_selection_adapter_set(void *ctx, const struct rt_view_context_selection_adapter *adapter);
+RT_EXPORT extern int rt_view_context_selection_adapter_get(void *ctx, struct rt_view_context_selection_adapter *adapter);
 RT_EXPORT extern int rt_view_context_selection_available(void *ctx);
 RT_EXPORT extern size_t rt_view_context_selection_count(void *ctx);
 RT_EXPORT extern int rt_view_context_selection_set_pick_result_context(void *ctx, const void *result_ctx, rt_view_selection_path_callback_t callback, void *data);

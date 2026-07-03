@@ -30,6 +30,7 @@
 #include "bu/ptbl.h"
 #include "ged/view.h"
 #include "rt/view_legacy_bsg.h"
+#include "./bsg_ged_draw_private.h"
 #include "./bsg_ged_draw_view_private.h"
 #include "./ged_private.h"
 
@@ -142,6 +143,10 @@ ged_view_context_owned_add(struct ged *gedp, void *view_ctx)
     bu_ptbl_ins(&state->free_views, (long *)view_ctx);
     if (!rt_view_context_user_data_get(view_ctx))
 	rt_view_context_user_data_set(view_ctx, gedp);
+    (void)ged_draw_view_context_obol_scene_adapter_attach(gedp, view_ctx);
+    (void)ged_draw_view_context_obol_feature_adapter_attach(gedp, view_ctx);
+    (void)ged_draw_view_context_obol_polygon_adapter_attach(gedp, view_ctx);
+    (void)ged_draw_view_context_obol_selection_adapter_attach(gedp, view_ctx);
     return 1;
 }
 
@@ -332,7 +337,9 @@ ged_view_clear_flags_to_rt(int flags)
 extern "C" GED_EXPORT size_t
 ged_view_context_clear(void *view_ctx, int flags)
 {
-    return rt_view_context_clear(view_ctx, ged_view_clear_flags_to_rt(flags));
+    size_t cleared = ged_draw_obol_view_context_clear(view_ctx, flags);
+    cleared += rt_view_context_clear(view_ctx, ged_view_clear_flags_to_rt(flags));
+    return cleared;
 }
 
 extern "C" GED_EXPORT int

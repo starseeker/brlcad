@@ -41,6 +41,7 @@ extern "C" {
 #include "ged/draw.h"
 }
 #include "./ged_view.h"
+#include "../bsg_ged_draw_private.h"
 #include "../ged_private.h"
 
 static struct ged_draw_view_record_query
@@ -372,6 +373,9 @@ _objs_cmd_delete(void *bs, int argc, const char **argv)
     }
 
     if (ged_draw_shape_ref_is_null(gd->shape_ref)) {
+	if (ged_draw_obol_overlay_erase_name_context(gedp, gd->cv, gd->vobj) ||
+		ged_draw_source_erase_groups_by_name_at_root(gedp, gd->vobj))
+	    return BRLCAD_OK;
 	bu_vls_printf(gedp->ged_result_str, "No view feature named %s\n", gd->vobj);
 	return BRLCAD_ERROR;
     }
@@ -593,8 +597,10 @@ _objs_cmd_update(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
+    int have_xy = 0;
+    int x = 0;
+    int y = 0;
     if (argc) {
-	int x, y;
 	if (bu_opt_int(NULL, 1, (const char **)&argv[0], (void *)&x) != 1 || x < 0) {
 	    bu_vls_printf(gedp->ged_result_str, "Invalid argument %s\n", argv[0]);
 	    return BRLCAD_ERROR;
@@ -603,7 +609,23 @@ _objs_cmd_update(void *bs, int argc, const char **argv)
 	    bu_vls_printf(gedp->ged_result_str, "Invalid argument %s\n", argv[1]);
 	    return BRLCAD_ERROR;
 	}
+	have_xy = 1;
 	ged_view_context_mouse_state_set(gd->cv, x, y);
+    }
+
+    ged_draw_view_polygon_ref poly_ref =
+	ged_draw_view_context_polygon_find_scoped(gd->cv, gd->vobj,
+		gd->local_obj);
+    if (!ged_draw_view_polygon_ref_is_null(poly_ref)) {
+	if (have_xy) {
+	    if (!ged_draw_view_context_polygon_update_screen_pt(poly_ref,
+		    gd->cv, x, y, GED_DRAW_VIEW_POLYGON_UPDATE_DEFAULT))
+		return BRLCAD_ERROR;
+	} else if (!ged_draw_view_context_polygon_update(poly_ref, gd->cv,
+		GED_DRAW_VIEW_POLYGON_UPDATE_DEFAULT)) {
+	    return BRLCAD_ERROR;
+	}
+	return BRLCAD_OK;
     }
 
     if (ged_draw_view_context_feature_exists(gd->cv, gd->vobj)) {

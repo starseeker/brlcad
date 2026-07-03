@@ -17,6 +17,7 @@
 #include <Inventor/SbBasic.h>
 #include <Inventor/SbColor.h>
 #include <Inventor/SbMatrix.h>
+#include <Inventor/SbRotation.h>
 #include <Inventor/SbString.h>
 #include <Inventor/SbVec2f.h>
 #include <Inventor/SbVec3f.h>
@@ -25,6 +26,8 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <vector>
+
+#include "vmath.h"
 
 class BRLObolLodService;
 class BRLObolFeatureStore;
@@ -41,6 +44,10 @@ class SoViewport;
 struct bg_line_layer_builder;
 struct db_i;
 struct rt_view_info;
+
+BRLOBOL_EXPORT SbMatrix brlobol_sbmatrix_from_brl_mat(const mat_t mat);
+BRLOBOL_EXPORT SbRotation brlobol_camera_orientation_from_brl_rotation(
+    const mat_t rotation);
 
 /**
  * Narrow application-facing controller for an Obol-backed BRL-CAD view.
@@ -66,6 +73,8 @@ public:
     void setViewportRegion(const SbViewportRegion &region);
     const SbViewportRegion &getViewportRegion(void) const;
     void setViewportSize(unsigned int width, unsigned int height);
+    SbBool syncCameraFromRtViewContext(const void *viewCtx,
+	SbBool createCamera = TRUE);
     SbBool getRtViewInfo(struct rt_view_info *info) const;
 
     SbBool realizePending(void);

@@ -1885,6 +1885,21 @@ SoBRLSceneController::replaceDatabaseSourceInstance(
 	int drawMode,
 	uint32_t sourceRevision)
 {
+    return this->replaceDatabaseSourceInstanceRepresentation(
+	    sourceInstanceKey, sourcePath, NULL, -1, database, drawMode,
+	    sourceRevision);
+}
+
+int
+SoBRLSceneController::replaceDatabaseSourceInstanceRepresentation(
+	const char *sourceInstanceKey,
+	const char *sourcePath,
+	const char *sourceRepresentationKey,
+	int sourceRepresentationMode,
+	struct db_i *database,
+	int drawMode,
+	uint32_t sourceRevision)
+{
     if (!sourceInstanceKey || !sourceInstanceKey[0] ||
 	    !sourcePath || !sourcePath[0])
 	return -1;
@@ -1907,7 +1922,8 @@ SoBRLSceneController::replaceDatabaseSourceInstance(
     if (sourceRevision == 0)
 	sourceRevision = source->sourceRevision.getValue() + 1;
 
-    source->configureDatabaseSourceInstance(sourceInstanceKey, sourcePath,
+    source->configureDatabaseSourceInstanceRepresentation(sourceInstanceKey,
+	    sourcePath, sourceRepresentationKey, sourceRepresentationMode,
 	    database, drawMode, sourceRevision);
 
     if (childIndex < 0)
@@ -2091,6 +2107,24 @@ SoBRLSceneController::setDatabaseSourceInstanceDrawMode(
 	return -1;
 
     const int changed = source->setDrawModeState(drawMode);
+    if (changed > 0)
+	this->advanceFrameRevision();
+    return changed;
+}
+
+int
+SoBRLSceneController::setDatabaseSourceInstanceRepresentation(
+	const char *sourceInstanceKey,
+	const char *sourceRepresentationKey,
+	int sourceRepresentationMode)
+{
+    SoBRLDatabaseSource *source =
+	this->findDatabaseSourceInstance(sourceInstanceKey);
+    if (!source)
+	return -1;
+
+    const int changed = source->setRepresentationState(
+	    sourceRepresentationKey, sourceRepresentationMode);
     if (changed > 0)
 	this->advanceFrameRevision();
     return changed;

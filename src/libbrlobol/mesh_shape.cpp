@@ -836,22 +836,66 @@ SoBRLMeshShape::clearFullDetailMesh(void)
     std::vector<int32_t>().swap(this->fullDetailCoordIndex);
 }
 
-static void
-set_mesh_gl_color(SoBRLMeshShape *shape, int primitiveIndex)
+static SbBool
+mesh_shape_gl_color(SoBRLMeshShape *shape, int primitiveIndex,
+	SbColor &color, float &alpha)
 {
     if (shape->isPrimitiveHighlighted(primitiveIndex)) {
-	const SbColor &c = shape->highlightedColor.getValue();
-	glColor3f(c[0], c[1], c[2]);
+	color = shape->highlightedColor.getValue();
+	alpha = 1.0f;
+	return TRUE;
     } else if (shape->isPrimitiveSelected(primitiveIndex)) {
-	const SbColor &c = shape->selectedColor.getValue();
-	glColor3f(c[0], c[1], c[2]);
+	color = shape->selectedColor.getValue();
+	alpha = 1.0f;
+	return TRUE;
     } else if (shape->ghosted.getValue()) {
-	const SbColor &c = shape->ghostedColor.getValue();
-	glColor4f(c[0], c[1], c[2], 0.35f);
+	color = shape->ghostedColor.getValue();
+	alpha = 0.35f;
+	return TRUE;
     } else if (shape->colorOverride.getValue()) {
-	const SbColor &c = shape->color.getValue();
-	glColor3f(c[0], c[1], c[2]);
+	color = shape->color.getValue();
+	alpha = 1.0f;
+	return TRUE;
     }
+
+    color = shape->materialColorValid.getValue() ?
+	shape->materialColor.getValue() : shape->color.getValue();
+    alpha = 1.0f;
+    return FALSE;
+}
+
+static void
+set_mesh_gl_material(SoBRLMeshShape *shape, int primitiveIndex)
+{
+    SbColor color;
+    float alpha = 1.0f;
+    (void)mesh_shape_gl_color(shape, primitiveIndex, color, alpha);
+
+    const GLfloat ambient[4] = {
+	color[0] * 0.2f,
+	color[1] * 0.2f,
+	color[2] * 0.2f,
+	alpha
+    };
+    const GLfloat diffuse[4] = {
+	color[0] * 0.6f,
+	color[1] * 0.6f,
+	color[2] * 0.6f,
+	alpha
+    };
+    const GLfloat specular[4] = {
+	color[0] * 0.2f,
+	color[1] * 0.2f,
+	color[2] * 0.2f,
+	alpha
+    };
+    const GLfloat emission[4] = {0.0f, 0.0f, 0.0f, alpha};
+
+    glColor4f(color[0], color[1], color[2], alpha);
+    glMaterialfv(GL_FRONT_AND_BACK, GL_EMISSION, emission);
+    glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT, ambient);
+    glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, specular);
+    glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE, diffuse);
 }
 
 void
@@ -860,8 +904,12 @@ SoBRLMeshShape::GLRender(SoGLRenderAction *action)
     if (!this->visible.getValue() || !this->shouldGLRender(action))
 	return;
 
-    glPushAttrib(GL_CURRENT_BIT);
-    set_mesh_gl_color(this, -1);
+    glPushAttrib(GL_CURRENT_BIT | GL_ENABLE_BIT | GL_LIGHTING_BIT);
+    glEnable(GL_LIGHTING);
+    glDisable(GL_COLOR_MATERIAL);
+    glLightModeli(GL_LIGHT_MODEL_TWO_SIDE,
+	    this->isLodBackedMesh() ? GL_TRUE : GL_FALSE);
+    set_mesh_gl_material(this, -1);
 
     glBegin(GL_TRIANGLES);
     for (int i = 0; i < this->getTriangleCount(); i++) {
@@ -877,7 +925,7 @@ SoBRLMeshShape::GLRender(SoGLRenderAction *action)
 	else
 	    normal = SbVec3f(0.0f, 0.0f, 1.0f);
 
-	set_mesh_gl_color(this, i);
+	set_mesh_gl_material(this, i);
 	glNormal3f(normal[0], normal[1], normal[2]);
 	glVertex3f(a[0], a[1], a[2]);
 	glVertex3f(b[0], b[1], b[2]);

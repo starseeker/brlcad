@@ -23,6 +23,7 @@
 #include "raytrace.h"
 #include "rt/view.h"
 
+#include <algorithm>
 #include <cmath>
 #include <iomanip>
 #include <limits>
@@ -30,14 +31,129 @@
 #include <string.h>
 #include <vector>
 
+#include <Inventor/SbName.h>
 #include <Inventor/SoRenderManager.h>
 #include <Inventor/SoViewport.h>
 #include <Inventor/nodes/SoCamera.h>
+#include <Inventor/nodes/SoDirectionalLight.h>
+#include <Inventor/nodes/SoEnvironment.h>
 #include <Inventor/nodes/SoGroup.h>
+#include <Inventor/nodes/SoLightModel.h>
 #include <Inventor/nodes/SoOrthographicCamera.h>
 #include <Inventor/nodes/SoPerspectiveCamera.h>
+#include <Inventor/nodes/SoSeparator.h>
 
 static const char *controller_database_id(const struct db_i *dbip);
+
+SbMatrix
+brlobol_sbmatrix_from_brl_mat(const mat_t mat)
+{
+    if (!mat)
+	return SbMatrix::identity();
+
+    return SbMatrix(
+	static_cast<float>(mat[0]),  static_cast<float>(mat[4]),
+	static_cast<float>(mat[8]),  static_cast<float>(mat[12]),
+	static_cast<float>(mat[1]),  static_cast<float>(mat[5]),
+	static_cast<float>(mat[9]),  static_cast<float>(mat[13]),
+	static_cast<float>(mat[2]),  static_cast<float>(mat[6]),
+	static_cast<float>(mat[10]), static_cast<float>(mat[14]),
+	static_cast<float>(mat[3]),  static_cast<float>(mat[7]),
+	static_cast<float>(mat[11]), static_cast<float>(mat[15]));
+}
+
+SbRotation
+brlobol_camera_orientation_from_brl_rotation(const mat_t rotation)
+{
+    if (!rotation)
+	return SbRotation::identity();
+
+    SbMatrix cameraAxes = SbMatrix::identity();
+    cameraAxes[0][0] = static_cast<float>(rotation[0]);
+    cameraAxes[0][1] = static_cast<float>(rotation[1]);
+    cameraAxes[0][2] = static_cast<float>(rotation[2]);
+    cameraAxes[1][0] = static_cast<float>(rotation[4]);
+    cameraAxes[1][1] = static_cast<float>(rotation[5]);
+    cameraAxes[1][2] = static_cast<float>(rotation[6]);
+    cameraAxes[2][0] = static_cast<float>(rotation[8]);
+    cameraAxes[2][1] = static_cast<float>(rotation[9]);
+    cameraAxes[2][2] = static_cast<float>(rotation[10]);
+    return SbRotation(cameraAxes);
+}
+
+static double
+controller_aspect_from_region(const SbViewportRegion &region)
+{
+    SbVec2s window = region.getWindowSize();
+    if (window[0] <= 0 || window[1] <= 0)
+	return 0.0;
+
+    return static_cast<double>(window[0]) / static_cast<double>(window[1]);
+}
+
+static const char *
+controller_render_environment_name(void)
+{
+    return "BRLObolRenderEnvironment";
+}
+
+static SoGroup *
+controller_find_render_environment(SoSeparator *root)
+{
+    if (!root)
+	return NULL;
+
+    const char *name = controller_render_environment_name();
+    for (int i = 0; i < root->getNumChildren(); i++) {
+	SoNode *child = root->getChild(i);
+	if (child &&
+		child->isOfType(SoGroup::getClassTypeId()) &&
+		strcmp(child->getName().getString(), name) == 0)
+	    return static_cast<SoGroup *>(child);
+    }
+
+    return NULL;
+}
+
+static void
+controller_configure_render_environment(SoViewport *viewport)
+{
+    if (!viewport || !viewport->getRoot())
+	return;
+
+    SoSeparator *root = viewport->getRoot();
+    SoGroup *renderEnvironment = controller_find_render_environment(root);
+    if (renderEnvironment) {
+	const int index = root->findChild(renderEnvironment);
+	if (index > 0) {
+	    renderEnvironment->ref();
+	    root->removeChild(renderEnvironment);
+	    root->insertChild(renderEnvironment, 0);
+	    renderEnvironment->unref();
+	}
+	return;
+    }
+
+    renderEnvironment = new SoGroup;
+    renderEnvironment->setName(SbName(controller_render_environment_name()));
+
+    SoEnvironment *environment = new SoEnvironment;
+    environment->ambientIntensity = 0.3f;
+    environment->ambientColor = SbColor(1.0f, 1.0f, 1.0f);
+    renderEnvironment->addChild(environment);
+
+    SoLightModel *lightModel = new SoLightModel;
+    lightModel->model = SoLightModel::PHONG;
+    renderEnvironment->addChild(lightModel);
+
+    SoDirectionalLight *headlight = new SoDirectionalLight;
+    headlight->color = SbColor(1.0f, 1.0f, 1.0f);
+    headlight->intensity = 1.0f;
+    headlight->direction = SbVec3f(0.0f, 0.0f, -1.0f);
+    renderEnvironment->addChild(headlight);
+
+    root->insertChild(renderEnvironment, 0);
+}
 
 static SbString
 rt_pick_result_path(const BRLObolRtPickResult &pick)
@@ -399,10 +515,11 @@ BRLObolViewController::BRLObolViewController(void) :
     lastLodRejectedResultCount(0),
     lastLodUnmatchedResultCount(0),
     lastLodDiagnostics(""),
-    featureStore(new BRLObolFeatureStore(this)),
-    polygonStore(new BRLObolPolygonStore(this)),
-    selectionStore(new BRLObolSelectionStore)
+	featureStore(new BRLObolFeatureStore(this)),
+	polygonStore(new BRLObolPolygonStore(this)),
+	selectionStore(new BRLObolSelectionStore)
 {
+    controller_configure_render_environment(this->viewport);
 }
 
 BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
@@ -447,10 +564,11 @@ BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
     lastLodRejectedResultCount(0),
     lastLodUnmatchedResultCount(0),
     lastLodDiagnostics(""),
-    featureStore(new BRLObolFeatureStore(this)),
-    polygonStore(new BRLObolPolygonStore(this)),
-    selectionStore(new BRLObolSelectionStore)
+	featureStore(new BRLObolFeatureStore(this)),
+	polygonStore(new BRLObolPolygonStore(this)),
+	selectionStore(new BRLObolSelectionStore)
 {
+    controller_configure_render_environment(this->viewport);
     this->setSceneRoot(root);
     this->setCamera(camera);
 }
@@ -505,6 +623,7 @@ BRLObolViewController::setCamera(SoCamera *camera)
 	this->activeCamera->unref();
     this->activeCamera = camera;
     this->viewport->setCamera(camera);
+    controller_configure_render_environment(this->viewport);
     this->syncRenderManager();
     this->syncLodViewSignature(TRUE);
     this->requestRender("camera");
@@ -551,6 +670,122 @@ BRLObolViewController::setViewportSize(unsigned int width, unsigned int height)
 }
 
 SbBool
+BRLObolViewController::syncCameraFromRtViewContext(const void *viewCtx,
+	SbBool createCamera)
+{
+    if (!viewCtx)
+	return FALSE;
+
+    const double perspectiveDegrees =
+	rt_view_context_perspective_get(viewCtx);
+    const SbBool wantPerspective = perspectiveDegrees > SMALL_FASTF ?
+	TRUE : FALSE;
+
+    SoCamera *camera = this->activeCamera;
+    if (!camera ||
+	    (wantPerspective &&
+	     !camera->isOfType(SoPerspectiveCamera::getClassTypeId())) ||
+	    (!wantPerspective &&
+	     !camera->isOfType(SoOrthographicCamera::getClassTypeId()))) {
+	if (!createCamera)
+	    return FALSE;
+
+	camera = wantPerspective ?
+	    static_cast<SoCamera *>(new SoPerspectiveCamera) :
+	    static_cast<SoCamera *>(new SoOrthographicCamera);
+	this->setCamera(camera);
+    }
+
+    int viewWidth = rt_view_context_width_get(viewCtx);
+    int viewHeight = rt_view_context_height_get(viewCtx);
+    SbVec2s window = this->viewportRegion.getWindowSize();
+    if (window[0] <= 1 && window[1] <= 1 &&
+	    viewWidth > 0 && viewHeight > 0) {
+	this->setViewportSize(static_cast<unsigned int>(viewWidth),
+	    static_cast<unsigned int>(viewHeight));
+	window = this->viewportRegion.getWindowSize();
+    }
+
+    double aspect = controller_aspect_from_region(this->viewportRegion);
+    if (aspect <= SMALL_FASTF && viewWidth > 0 && viewHeight > 0)
+	aspect = static_cast<double>(viewWidth) /
+	    static_cast<double>(viewHeight);
+    if (aspect <= SMALL_FASTF)
+	aspect = 1.0;
+
+    mat_t viewRotation;
+    MAT_IDN(viewRotation);
+    (void)rt_view_context_rotation_get(viewRotation, viewCtx);
+
+    mat_t viewCenter;
+    MAT_IDN(viewCenter);
+    (void)rt_view_context_center_get(viewCenter, viewCtx);
+
+    vect_t center;
+    MAT_DELTAS_GET_NEG(center, viewCenter);
+
+    const double horizontalSizeRaw = rt_view_context_size_get(viewCtx);
+    double horizontalSize = horizontalSizeRaw;
+    if (horizontalSize <= SMALL_FASTF) {
+	const double scale = rt_view_context_scale_get(viewCtx);
+	horizontalSize = scale > SMALL_FASTF ? scale * 2.0 : 2.0;
+    }
+    const double verticalSize = horizontalSize / aspect;
+
+    double heightAngle = perspectiveDegrees * DEG2RAD;
+    if (heightAngle <= SMALL_FASTF)
+	heightAngle = 2.0 * std::atan(0.1);
+    if (heightAngle < 0.001)
+	heightAngle = 0.001;
+    if (heightAngle > 3.0)
+	heightAngle = 3.0;
+
+    const SbBool orthographic =
+	camera->isOfType(SoOrthographicCamera::getClassTypeId());
+    double distance = orthographic ?
+	horizontalSize * 5.0 :
+	(verticalSize * 0.5) / std::tan(heightAngle * 0.5);
+    if (distance <= horizontalSize * 0.5)
+	distance = horizontalSize * 0.5;
+    if (distance <= SMALL_FASTF)
+	distance = 1.0;
+
+    const SbRotation orientation =
+	brlobol_camera_orientation_from_brl_rotation(viewRotation);
+    const double viewZ[3] = {
+	viewRotation[8], viewRotation[9], viewRotation[10]
+    };
+
+    camera->viewportMapping = SoCamera::LEAVE_ALONE;
+    camera->aspectRatio = static_cast<float>(aspect);
+    camera->position = SbVec3f(
+	static_cast<float>(center[X] + viewZ[X] * distance),
+	static_cast<float>(center[Y] + viewZ[Y] * distance),
+	static_cast<float>(center[Z] + viewZ[Z] * distance));
+    camera->orientation = orientation;
+    camera->focalDistance = static_cast<float>(distance);
+    camera->nearDistance = static_cast<float>(
+	std::max(distance * 0.001, 1.0e-6));
+    camera->farDistance = static_cast<float>(
+	std::max(distance + horizontalSize * 100.0,
+	    distance + 1.0));
+
+    if (camera->isOfType(SoPerspectiveCamera::getClassTypeId())) {
+	SoPerspectiveCamera *perspectiveCamera =
+	    static_cast<SoPerspectiveCamera *>(camera);
+	perspectiveCamera->heightAngle = static_cast<float>(heightAngle);
+    } else if (orthographic) {
+	SoOrthographicCamera *orthographicCamera =
+	    static_cast<SoOrthographicCamera *>(camera);
+	orthographicCamera->height = static_cast<float>(verticalSize);
+    }
+
+    this->syncLodViewSignature(TRUE);
+    this->requestRender("rt-view-camera");
+    return TRUE;
+}
+
+SbBool
 BRLObolViewController::getRtViewInfo(struct rt_view_info *info) const
 {
     if (!info)
@@ -570,17 +805,27 @@ BRLObolViewController::getRtViewInfo(struct rt_view_info *info) const
     if (this->activeCamera->isOfType(SoOrthographicCamera::getClassTypeId())) {
 	SoOrthographicCamera *camera =
 	    static_cast<SoOrthographicCamera *>(this->activeCamera);
-	info->size = camera->height.getValue();
+	double aspect = controller_aspect_from_region(this->viewportRegion);
+	if (aspect <= SMALL_FASTF)
+	    aspect = camera->aspectRatio.getValue();
+	if (aspect <= SMALL_FASTF)
+	    aspect = 1.0;
+	info->size = camera->height.getValue() * aspect;
     } else if (this->activeCamera->isOfType(SoPerspectiveCamera::getClassTypeId())) {
 	SoPerspectiveCamera *camera =
 	    static_cast<SoPerspectiveCamera *>(this->activeCamera);
 	double focal = this->activeCamera->focalDistance.getValue();
 	double angle = camera->heightAngle.getValue();
+	double aspect = controller_aspect_from_region(this->viewportRegion);
+	if (aspect <= SMALL_FASTF)
+	    aspect = this->activeCamera->aspectRatio.getValue();
+	if (aspect <= SMALL_FASTF)
+	    aspect = 1.0;
 	if (focal <= 0.0)
 	    focal = 1.0;
 	if (angle <= 0.0)
 	    angle = 2.0 * std::atan(0.1);
-	info->size = 2.0 * focal * std::tan(angle * 0.5);
+	info->size = 2.0 * focal * std::tan(angle * 0.5) * aspect;
     } else {
 	info->size = this->activeCamera->focalDistance.getValue();
     }

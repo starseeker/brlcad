@@ -100,10 +100,11 @@ SoBRLRealizeAction::databaseSourceAction(SoAction *action, SoNode *node)
     SoBRLDatabaseSource *source = static_cast<SoBRLDatabaseSource *>(node);
 
     realizeAction->visitedSourceCount++;
-    if (source->needsRealization()) {
+    const int roleFlags = source->realizationRoleFlags.getValue();
+    if (source->needsRealization() &&
+	    !(roleFlags & SoBRLDatabaseSource::REALIZATION_ROLE_EXTERNAL)) {
 	if (source->getDatabase()) {
 	    SbBool realized = FALSE;
-	    const int roleFlags = source->realizationRoleFlags.getValue();
 	    if ((roleFlags & SoBRLDatabaseSource::REALIZATION_ROLE_MESH) ||
 		    source->drawMode.getValue() == SoBRLDatabaseSource::SHADED)
 		realized = source->realizeDatabaseMesh();

@@ -91,6 +91,8 @@ BRLObolDatabaseSourceSummary::BRLObolDatabaseSourceSummary(void) :
     hasParent(FALSE),
     drawTreeDepth(0),
     parentGroupPath(""),
+    representationKey(""),
+    representationMode(-1),
     drawMode(SoBRLDatabaseSource::WIREFRAME),
     sourceRevision(0),
     inputsRevision(0),
@@ -390,6 +392,17 @@ source_effective_instance_key(const SoBRLDatabaseSource *source)
     return source->path.getValue();
 }
 
+static SbString
+source_effective_representation_key(const SoBRLDatabaseSource *source)
+{
+    if (!source)
+	return "";
+    const SbString key = source->representationKey.getValue();
+    if (key.getLength() > 0)
+	return key;
+    return source_effective_instance_key(source);
+}
+
 static int
 source_instance_matches_record_path(const SbString &instanceKey,
 	const char *recordPath)
@@ -415,12 +428,24 @@ source_record_identity(const SoBRLDatabaseSource *source,
 	return path;
 
     const SbString instanceKey = source_effective_instance_key(source);
-    if (source_instance_matches_record_path(instanceKey, path))
-	return path;
-    if (instanceKey.getLength() == 0)
+    const SbString representationKey =
+	source_effective_representation_key(source);
+    if (source_instance_matches_record_path(instanceKey, path)) {
+	if (representationKey.getLength() == 0 ||
+		source_instance_matches_record_path(representationKey, path))
+	    return path;
+	SbString identity = representationKey;
+	if (path[0]) {
+	    identity += "::";
+	    identity += path;
+	}
+	return identity;
+    }
+    if (instanceKey.getLength() == 0 && representationKey.getLength() == 0)
 	return path;
 
-    SbString identity = instanceKey;
+    SbString identity = representationKey.getLength() > 0 ?
+	representationKey : instanceKey;
     if (path[0]) {
 	identity += "::";
 	identity += path;
@@ -435,9 +460,11 @@ source_realization_identity(const SoBRLDatabaseSource *source)
 	return "";
 
     SbString identity;
-    identity.sprintf("dbsource:%s@%s#mode=%d;source=%u;inputs=%u;view=%u;lod=%u;abs=%.9g;rel=%.9g;norm=%.9g",
+    identity.sprintf("dbsource:%s@%s#repr=%s;repr_mode=%d;mode=%d;source=%u;inputs=%u;view=%u;lod=%u;abs=%.9g;rel=%.9g;norm=%.9g",
 	    source_effective_instance_key(source).getString(),
 	    source->path.getValue().getString(),
+	    source_effective_representation_key(source).getString(),
+	    source->representationMode.getValue(),
 	    source->drawMode.getValue(),
 	    source->sourceRevision.getValue(),
 	    source->inputsRevision.getValue(),
@@ -769,6 +796,13 @@ assign_realized_identity(ShapeT *shape,
     shape->materialShader = tsp->ts_mater.ma_shader ? tsp->ts_mater.ma_shader : "";
 }
 
+static void
+retarget_realized_node_source(SoNode *node,
+	const SoBRLDatabaseSource *source,
+	const char *oldSourcePath,
+	const char *newSourcePath,
+	uint32_t revision);
+
 template <typename ShapeT>
 static void
 sync_shape_owner_state(ShapeT *shape, const SoBRLDatabaseSource *source)
@@ -829,9 +863,11 @@ sync_shape_display_state(ShapeT *shape, const SoBRLDatabaseSource *source)
     shape->transparency = source->transparency.getValue();
     shape->colorOverride = source->colorOverride.getValue();
     shape->color = source->color.getValue();
-    shape->materialColorValid = source->materialColorValid.getValue();
-    shape->materialColor = source->materialColor.getValue();
-    shape->materialRevision = source->materialRevision.getValue();
+    if (source->materialColorValid.getValue()) {
+	shape->materialColorValid = TRUE;
+	shape->materialColor = source->materialColor.getValue();
+	shape->materialRevision = source->materialRevision.getValue();
+    }
 }
 
 template <typename ShapeT>
@@ -1762,6 +1798,8 @@ SoBRLDatabaseSource::SoBRLDatabaseSource(void) :
     meshLodBoundsMax(0.0f, 0.0f, 0.0f),
     pathSensor(NULL),
     instanceKeySensor(NULL),
+    representationKeySensor(NULL),
+    representationModeSensor(NULL),
     drawModeSensor(NULL),
     tessellationAbsTolSensor(NULL),
     tessellationRelTolSensor(NULL),
@@ -1784,6 +1822,8 @@ SoBRLDatabaseSource::SoBRLDatabaseSource(void) :
     SO_NODE_ADD_FIELD(instanceKey, (""));
     SO_NODE_ADD_FIELD(path, (""));
     SO_NODE_ADD_FIELD(displayName, (""));
+    SO_NODE_ADD_FIELD(representationKey, (""));
+    SO_NODE_ADD_FIELD(representationMode, (-1));
     SO_NODE_ADD_FIELD(auxiliarySource, (FALSE));
     SO_NODE_ADD_FIELD(drawMode, (WIREFRAME));
     SO_NODE_SET_SF_ENUM_TYPE(drawMode, DrawMode);
@@ -1859,7 +1899,8 @@ SoBRLDatabaseSource::fieldSensorCB(void *data, SoSensor *sensor)
     else if (sensor == source->viewRevisionSensor ||
 	    sensor == source->lodBotThresholdSensor)
 	source->markStale(STALE_VIEW);
-    else if (sensor == source->drawModeSensor)
+    else if (sensor == source->drawModeSensor ||
+	    sensor == source->representationModeSensor)
 	source->markStale(STALE_DRAW);
     else if (sensor == source->tessellationAbsTolSensor ||
 	    sensor == source->tessellationRelTolSensor ||
@@ -1879,6 +1920,14 @@ SoBRLDatabaseSource::attachFieldSensors(void)
     this->instanceKeySensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
     this->instanceKeySensor->setPriority(0);
     this->instanceKeySensor->attach(&this->instanceKey);
+
+    this->representationKeySensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
+    this->representationKeySensor->setPriority(0);
+    this->representationKeySensor->attach(&this->representationKey);
+
+    this->representationModeSensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
+    this->representationModeSensor->setPriority(0);
+    this->representationModeSensor->attach(&this->representationMode);
 
     this->drawModeSensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
     this->drawModeSensor->setPriority(0);
@@ -1924,6 +1973,14 @@ SoBRLDatabaseSource::detachFieldSensors(void)
 	this->instanceKeySensor->detach();
     delete this->instanceKeySensor;
     this->instanceKeySensor = NULL;
+    if (this->representationKeySensor)
+	this->representationKeySensor->detach();
+    delete this->representationKeySensor;
+    this->representationKeySensor = NULL;
+    if (this->representationModeSensor)
+	this->representationModeSensor->detach();
+    delete this->representationModeSensor;
+    this->representationModeSensor = NULL;
     if (this->drawModeSensor)
 	this->drawModeSensor->detach();
     delete this->drawModeSensor;
@@ -1967,6 +2024,8 @@ SoBRLDatabaseSource::markStale(void)
 void
 SoBRLDatabaseSource::markStale(uint32_t reason)
 {
+    if (!reason)
+	return;
     this->stale = TRUE;
     this->staleReason = this->staleReason.getValue() | reason;
     this->realizationStatus = UNREALIZED;
@@ -1982,7 +2041,20 @@ SoBRLDatabaseSource::setDrawModeState(int nextDrawMode)
     if (this->drawMode.getValue() == nextDrawMode)
 	return 0;
 
+    const SbBool preserveExternalRealization =
+	(this->realizationRoleFlags.getValue() & REALIZATION_ROLE_EXTERNAL) &&
+	this->realizationStatus.getValue() == REALIZED &&
+	!this->stale.getValue() &&
+	((nextDrawMode == SHADED && this->getRealizedMeshCount() > 0) ||
+	 (nextDrawMode == WIREFRAME && this->getRealizedShapeCount() > 0));
+
+    if (this->drawModeSensor)
+	this->drawModeSensor->detach();
     this->drawMode = nextDrawMode;
+    if (this->drawModeSensor)
+	this->drawModeSensor->attach(&this->drawMode);
+    if (!preserveExternalRealization)
+	this->markStale(STALE_DRAW);
     this->syncRealizedShapeOwnerState();
     return 1;
 }
@@ -1996,6 +2068,38 @@ SoBRLDatabaseSource::setDisplayNameState(const char *name)
 
     this->displayName = nextName;
     this->syncRealizedShapeOwnerState();
+    return 1;
+}
+
+int
+SoBRLDatabaseSource::setRepresentationState(
+	const char *sourceRepresentationKey,
+	int sourceRepresentationMode)
+{
+    const char *nextKey = sourceRepresentationKey ?
+	sourceRepresentationKey : "";
+    const int nextMode = sourceRepresentationMode;
+    if (database_source_string_equal(this->representationKey.getValue(),
+	    nextKey) && this->representationMode.getValue() == nextMode)
+	return 0;
+
+    if (this->representationKeySensor)
+	this->representationKeySensor->detach();
+    if (this->representationModeSensor)
+	this->representationModeSensor->detach();
+    this->representationKey = nextKey;
+    this->representationMode = nextMode;
+    if (this->representationKeySensor)
+	this->representationKeySensor->attach(&this->representationKey);
+    if (this->representationModeSensor)
+	this->representationModeSensor->attach(&this->representationMode);
+
+    const char *sourcePath = this->path.getValue().getString();
+    for (int i = 0; i < this->getNumChildren(); i++)
+	retarget_realized_node_source(this->getChild(i), this,
+		sourcePath, sourcePath,
+		this->sourceRevision.getValue());
+    this->realizationIdentity = source_realization_identity(this);
     return 1;
 }
 
@@ -2086,7 +2190,8 @@ SoBRLDatabaseSource::setRealizationState(int nextStatus,
 int
 SoBRLDatabaseSource::setRealizationRoleFlags(int roleFlags)
 {
-    const int validFlags = REALIZATION_ROLE_CSG | REALIZATION_ROLE_MESH;
+    const int validFlags = REALIZATION_ROLE_CSG | REALIZATION_ROLE_MESH |
+	REALIZATION_ROLE_EXTERNAL;
     roleFlags &= validFlags;
     if (this->realizationRoleFlags.getValue() == roleFlags)
 	return 0;
@@ -2148,6 +2253,7 @@ SoBRLDatabaseSource::setDisplayState(SbBool sourceRevisionValid,
 	uint32_t nextMaterialRevision)
 {
     int changed = 0;
+    const SbBool hadMaterialOverride = this->materialColorValid.getValue();
     if (sourceRevisionValid &&
 	    this->sourceRevision.getValue() != nextSourceRevision) {
 	this->sourceRevision = nextSourceRevision;
@@ -2201,6 +2307,8 @@ SoBRLDatabaseSource::setDisplayState(SbBool sourceRevisionValid,
 	this->materialRevision = nextMaterialRevision;
 	changed = 1;
     }
+    if (hadMaterialOverride && !nextMaterialColorValid)
+	this->markStale(STALE_SOURCE);
     if (changed)
 	this->syncRealizedShapeOwnerState();
     return changed;
@@ -2447,8 +2555,22 @@ SoBRLDatabaseSource::configureDatabaseSourceInstance(
 	int mode,
 	uint32_t revision)
 {
+    this->configureDatabaseSourceInstanceRepresentation(sourceInstanceKey,
+	    sourcePath, NULL, -1, database, mode, revision);
+}
+
+void
+SoBRLDatabaseSource::configureDatabaseSourceInstanceRepresentation(
+	const char *sourceInstanceKey,
+	const char *sourcePath,
+	const char *sourceRepresentationKey,
+	int sourceRepresentationMode,
+	struct db_i *database,
+	int mode,
+	uint32_t revision)
+{
     int sanitizedMode = mode == SHADED ? SHADED : WIREFRAME;
-    uint32_t reason = STALE_SOURCE;
+    uint32_t reason = STALE_NONE;
     if (this->dbip != database)
 	reason |= STALE_DATABASE;
     if (this->drawMode.getValue() != sanitizedMode)
@@ -2459,11 +2581,27 @@ SoBRLDatabaseSource::configureDatabaseSourceInstance(
     if (strcmp(this->instanceKey.getValue().getString(),
 	    effectiveInstanceKey ? effectiveInstanceKey : "") != 0)
 	reason |= STALE_SOURCE;
+    const char *effectiveRepresentationKey =
+	(sourceRepresentationKey && sourceRepresentationKey[0]) ?
+	sourceRepresentationKey : effectiveInstanceKey;
+    if (strcmp(this->representationKey.getValue().getString(),
+	    effectiveRepresentationKey ? effectiveRepresentationKey : "") != 0)
+	reason |= STALE_SOURCE;
+    if (this->representationMode.getValue() != sourceRepresentationMode)
+	reason |= STALE_DRAW;
+    if (strcmp(this->path.getValue().getString(),
+	    sourcePath ? sourcePath : "") != 0)
+	reason |= STALE_SOURCE;
+    if (this->sourceRevision.getValue() != revision)
+	reason |= STALE_SOURCE;
 
     this->detachFieldSensors();
     this->dbip = database;
     this->instanceKey = effectiveInstanceKey ? effectiveInstanceKey : "";
     this->path = sourcePath ? sourcePath : "";
+    this->representationKey = effectiveRepresentationKey ?
+	effectiveRepresentationKey : "";
+    this->representationMode = sourceRepresentationMode;
     this->auxiliarySource = FALSE;
     this->drawMode = sanitizedMode;
     this->sourceRevision = revision;
@@ -2619,6 +2757,7 @@ SoBRLDatabaseSource::retargetDatabaseSourceInstance(
     const int revisionChanged = this->sourceRevision.getValue() != revision;
     if (!pathChanged && !instanceChanged && !revisionChanged)
 	return 0;
+    const int sourceChanged = pathChanged || revisionChanged;
 
     std::string oldPathCopy = oldPath ? oldPath : "";
 
@@ -2626,10 +2765,12 @@ SoBRLDatabaseSource::retargetDatabaseSourceInstance(
     this->instanceKey = effectiveInstanceKey ? effectiveInstanceKey : "";
     this->path = sourcePath;
     this->sourceRevision = revision;
-    this->markStale(STALE_SOURCE);
+    if (sourceChanged)
+	this->markStale(STALE_SOURCE);
     for (int i = 0; i < this->getNumChildren(); i++)
 	retarget_realized_node_source(this->getChild(i), this,
 		oldPathCopy.c_str(), sourcePath, revision);
+    this->realizationIdentity = source_realization_identity(this);
     this->attachFieldSensors();
     return 1;
 }
@@ -4125,6 +4266,9 @@ SoBRLDatabaseSource::getSummary(BRLObolDatabaseSourceSummary &summary) const
     summary.path = this->path.getValue();
     summary.instanceKey = source_effective_instance_key(this);
     summary.displayName = this->displayName.getValue();
+    summary.representationKey =
+	source_effective_representation_key(this);
+    summary.representationMode = this->representationMode.getValue();
     summary.drawMode = this->drawMode.getValue();
     summary.sourceRevision = this->sourceRevision.getValue();
     summary.inputsRevision = this->inputsRevision.getValue();

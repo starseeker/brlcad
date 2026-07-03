@@ -17786,3 +17786,197 @@ which passed 9/9.  System OpenGL remains a follow-up spot check, but the
 deterministic Qt+OSMesa path is now the Capability 1 qtcad closeout gate, so
 the next implementation phase should move to Capability 2 Obol/libbrlobol
 node/store work.
+
+Capability 2 has started with an aggressive Obol-first owner slice.  The
+libbrlobol view store now exposes owner-aware feature records, owned lookup,
+owned removal, index/normal snapshots, and record iteration.  Local feature
+keys include the owning view token/id, so two views can own local features
+with the same user-facing name without collision.  GED's Obol bridge now uses
+those owned handles for feature publish/remove/readback, computes feature
+depth directly from Obol feature records, exports feature records through the
+owner-aware iterator, and filters `view-feature`/`view-polygon` scene nodes out
+of generic scene traversal so local feature records no longer leak between
+views.
+
+The grouped view-object path also moved toward Obol ownership.  When GED owns
+the Obol scene, `view obj -g <dbpath> create <name>` creates an Obol overlay
+group parent under `_overlays/<name>` and moves database leaves into that
+group, rather than preserving a retained BSG overlay parent as the active
+owner.  `view obj remove <name>` can now delete that Obol overlay group
+directly; the `g2` regression in `ged_test_view_command` is green.
+
+The RT view implementation boundary now has a neutral scene-adapter hook.
+`include/rt/view.h` declares `rt_view_context_scene_adapter`, adapter set/get
+helpers, and a neutral pick-result append helper.  `src/librt/view_legacy_bsg.c`
+dispatches semantic-path pick and render/export consistency through the
+adapter before falling back to BSG.  GED-owned views install an Obol-backed
+adapter that answers those RT view-context calls from Obol/GED export records
+and Obol database-source paths.  This closes the previous
+`ged_test_view_command` RT consistency and semantic-pick failures without
+adding a libged dependency to librt.
+
+Verification passed with:
+`cmake --build build --target libged libqtcad ged_test_view_command
+ged_test_obol_draw_sync test_brlobol_view_store -j2`;
+`ctest --test-dir build -R '^(libbrlobol_view_store|ged_test_obol_draw_sync|ged_test_view_command)$' -j3 --timeout 180 --output-on-failure`;
+and `git diff --check`.  The focused Capability 2 gate passed 3/3.  The next
+Capability 2 work should continue direct Obol owner moves for polygon and
+selection stores, annotations/auxiliary records, qray/NIRT and vdraw/local
+helper artifacts, and display-stream paths, while keeping the Capability 1
+closeout gate and qtcad Qt+OSMesa swrast signal passing.
+
+The next Capability 2 slice moved GED-owned view polygon storage to
+libbrlobol.  `BRLObolPolygonStore` now has a model-point update API so callers
+can convert screen input once and mutate Obol polygon geometry directly.
+`include/rt/view.h` now declares a neutral `rt_view_context_polygon_adapter`
+with explicit ref ownership; `src/librt/view_legacy_bsg.c` dispatches
+adapter-owned polygon refs through that contract and keeps retained BSG only
+as compatibility for unowned contexts.  GED-owned views install an
+Obol-backed polygon adapter, so qtcad/qged callers using neutral
+`rt_view_polygon_*` and `rt_view_context_polygon_*` APIs can read and mutate
+GED-owned polygons from libbrlobol rather than retained BSG nodes.
+
+The GED polygon facade now routes create/find/import/export/update/current,
+open/close, fill/fill-color, area/overlap, CSG, snap, user-data, and record
+readback through Obol/libbrlobol for owned views.  The retained BSG polygon
+implementation remains compiled for no-owned-context compatibility, but it is
+not the primary GED-owned polygon backend.
+
+Verification passed with:
+`cmake --build build --target libbrlobol librt libged ged_test_view_command test_brlobol_view_store -j2`;
+`ctest --test-dir build -R '^(libbrlobol_view_store|ged_test_view_command|brlobol_pivot_guard)$' -j3 --timeout 180 --output-on-failure`;
+and
+`ctest --test-dir build -R '^(ged_test_obol_draw_sync|test_qtcad_obol_(pick|snap|selection_sync|overlay_sync))$' -j4 --timeout 180 --output-on-failure`.
+`git diff --check` was clean, and the final combined focused run
+`ctest --test-dir build -R '^(libbrlobol_view_store|ged_test_view_command|ged_test_obol_draw_sync|test_qtcad_obol_(pick|snap|selection_sync|overlay_sync)|brlobol_pivot_guard)$' -j4 --timeout 180 --output-on-failure`
+passed 8/8.
+That left selection stores, annotations/auxiliary records, qray/NIRT and
+vdraw/local-helper artifacts, overlay/diagnostic geometry, and display-stream
+paths as the next Capability 2 families.
+
+The next Capability 2 slice moved GED-owned view selection storage to
+libbrlobol.  `BRLObolSelectionStore` now records a selection kind and
+`BRLObolFeatureOwner`, so selected paths and highlighted refs can be isolated
+per view owner while preserving the existing path-only convenience helpers for
+default selected-path use.  `include/rt/view.h` now declares a neutral
+`rt_view_context_selection_adapter`; `src/librt/view_legacy_bsg.c` dispatches
+selection availability, count, clear, and pick-result selection updates through
+that adapter before falling back to retained BSG storage.
+
+GED-owned views install an Obol-backed selection adapter.  GED draw selection
+facades now route selection count/path iteration/clear/add/set/contains
+through Obol for owned views, and qtcad selection updates that already call
+neutral `rt_view_context_selection_*` APIs now update the Obol selection store
+for GED-owned view contexts.  The retained BSG selection implementation
+remains compiled for unowned/legacy contexts, but it is no longer the primary
+GED-owned selection backend.
+
+Verification passed with:
+`cmake --build build --target libbrlobol librt libged ged_test_selection_semantics ged_test_state_services test_brlobol_view_store test_qtcad_obol_selection_sync -j2`;
+and
+`ctest --test-dir build -R '^(libbrlobol_view_store|ged_test_selection_semantics|ged_test_state_services|test_qtcad_obol_selection_sync|ged_test_obol_draw_sync|test_qtcad_obol_pick|brlobol_pivot_guard)$' -j4 --timeout 180 --output-on-failure`,
+which passed 7/7.  The pivot guard now also requires the selection adapter and
+owner/kind selection store tokens.  The next Capability 2 work should move to
+overlay/diagnostic geometry, annotation/auxiliary records, qray/NIRT and
+vdraw/local-helper artifacts, and display-stream paths.
+
+The next Capability 2 slice added typed Obol feature-overlay metadata without
+adding another compatibility shim.  `BRLObolOverlayInfo` now records whether a
+feature is an overlay plus role, class, lifecycle, ordering, source path, sort
+order, and owner token.  `BRLObolFeatureStore` persists that metadata, exposes
+it through summaries/records/readback, and keeps overlay classification
+separate from generic scene traversal.
+
+GED-owned feature publishers now stamp the Obol feature store where the old
+BSG path registered overlay ownership: Tcl line/arrow/axes features use
+`TclOverlay` with per-command post-transparent ordering, Tcl polygon helper
+features use `PolygonEdit` with per-tool post-transparent ordering, and model
+annotation line features use `UserAnnotation` with persistent model ordering.
+Feature-store nodes intentionally keep the `view-feature` scene `recordRole`;
+this preserves the owner-scoped feature export path and prevents local view
+features from leaking through the generic Obol scene walk.
+
+Verification passed with:
+`cmake --build build --target libbrlobol libged ged_test_obol_draw_sync ged_test_view_command test_brlobol_view_store -j2`;
+and
+`ctest --test-dir build -R '^(libbrlobol_view_store|ged_test_obol_draw_sync|test_qtcad_obol_overlay_sync|ged_test_tcl_overlay_bsg|ged_test_view_command|brlobol_pivot_guard)$' -j4 --timeout 180 --output-on-failure`,
+which passed 6/6.  `ged_test_view_command` caught an initial node-role leak
+when model-annotation features were marked as scene overlays; the final
+boundary keeps overlay semantics in feature metadata instead.
+
+The next Capability 2 slice moved GED-owned RT feature/edit-preview facade
+traffic to Obol feature records.  `include/rt/view.h` now declares a neutral
+`rt_view_context_feature_adapter`; `src/librt/view_legacy_bsg.c` stores
+per-context feature adapter bindings and dispatches adapter-owned
+`rt_view_feature_ref` operations before retained BSG compatibility.  GED-owned
+views install the Obol-backed adapter from `src/libged/draw_obol.cpp`, so
+qged/qtcad edit-preview callers that already use neutral `rt_view_*` feature
+APIs now publish edit-preview overlays, labels, style changes, touch/update,
+geometry replacement, clear, remove, and lifecycle events into
+`BRLObolFeatureStore`.
+
+libbrlobol now exposes `BRLObolFeatureStore::replaceEditPreviewGeometry`.
+That lets the RT feature adapter update preview points/commands without
+losing edit-preview callbacks, and edit-preview realization now preserves
+`SoBRLEditPreview` node identity through geometry/style mutations instead of
+falling back to a generic VLIST node.  The GED Obol sync test now exercises
+the public RT feature API on a GED-owned active view and checks typed Obol
+overlay metadata, preview geometry records, callback dispatch, label records,
+clear/remove, and prefix cleanup.
+
+Verification passed with:
+`cmake --build build --target libbrlobol librt libged test_brlobol_view_store ged_test_obol_draw_sync -j2`;
+`cmake --build build --target qged_ell qged_revolve qged_extrude qged_bot -j2`;
+`ctest --test-dir build -R '^(libbrlobol_view_store|ged_test_obol_draw_sync|brlobol_pivot_guard)$' -j3 --timeout 240 --output-on-failure`;
+and
+`ctest --test-dir build -R '^(test_qtcad_obol_edit_preview|test_qtcad_obol_overlay_sync|test_qtcad_obol_draw_sync|ged_test_view_command|ged_test_tcl_overlay_bsg)$' -j3 --timeout 240 --output-on-failure`.
+The focused Capability 2 feature-adapter gate passed 8/8.  Remaining
+Capability 2 work should move command-result owner callbacks, diagnostic
+overlay producers, annotation/auxiliary records, qray/NIRT and
+vdraw/local-helper artifacts, and display-stream paths onto typed Obol records
+instead of retained BSG registries.
+
+The next Capability 2 slice moved diagnostic line-layer fallback producers
+onto a typed GED/Obol path.  `include/ged/draw.h` now exposes
+`ged_draw_view_context_diagnostic_line_layer_builder_replace`, with an
+Obol-backed attach point in `src/libged/draw_obol.cpp` for GED-owned views.
+Successful diagnostic line-layer publishes now stamp
+`Diagnostic`/`PerCommand`/`PostTransparent` overlay metadata in
+`BRLObolFeatureStore`; the existing retained line-layer replacement remains
+only as compatibility for unowned contexts.
+
+The diagnostic fallback call sites in check-overlaps, gqa overlap overlays,
+BREP plot, draw edge-use, and vutil NMG edge-use now use the typed diagnostic
+facade instead of anonymous generic line-layer replacement.  The GED Obol sync
+test adds a `cap2::diagnostic` publish/readback check, and the pivot guard now
+requires the diagnostic overlay token path.
+
+Verification passed for the focused slice with:
+`cmake --build build --target libged ged_test_obol_draw_sync -j2`;
+`ctest --test-dir build -R '^(ged_test_obol_draw_sync|brlobol_pivot_guard)$' -j2 --timeout 240 --output-on-failure`;
+`ctest --test-dir build -R '^(test_qtcad_obol_overlay_sync|ged_test_tcl_overlay_bsg|ged_test_view_command)$' -j3 --timeout 240 --output-on-failure`;
+and `git diff --check`.
+`ged_test_gqa` also passed when run with producer-adjacent tests.
+`ged_test_drawing_basic` failed in existing swrast polygon/baseline
+comparisons and a polygon boolean `bu_malloc(0)` path; that should be triaged
+separately because it does not exercise the diagnostic line-layer producers
+changed in this slice.
+
+The `ged_test_drawing_basic` triage fixed the hard polygon CSG failure and
+confirmed the remaining failure is the legacy swrast renderer boundary.  The
+libbg polygon copier now accepts valid empty polygons, the Obol polygon store
+guards empty/no-overlap CSG cases and union into an empty target, GED `zap`
+clears Obol-owned view feature/polygon/selection stores, and Obol polygon
+records are exported through the neutral draw-record list path.  The test now
+completes polygon CSG union/subtraction/intersection command phases; retained
+output images are still blank because `dm_draw_objs` renders retained BSG
+scene children while source-owner membership has intentionally moved to Obol.
+
+Verification for the triage passed:
+`cmake --build build --target libged ged_test_draw ged_test_obol_draw_sync -j2`;
+`ctest --test-dir build -R '^(libbrlobol_view_store|ged_test_obol_draw_sync|brlobol_pivot_guard)$' -j3 --timeout 240 --output-on-failure`;
+and `git diff --check`.  A current-tree
+`ctest --test-dir build -R '^ged_test_drawing_basic$' --timeout 240 --output-on-failure`
+still fails only on image comparisons.  The next renderer slice should give
+GED/swrast verification an explicit Obol/libbrlobol offscreen or backing-store
+render path instead of restoring retained BSG source-owner duplication.

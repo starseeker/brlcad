@@ -1202,8 +1202,9 @@ _ged_drawtrees(struct ged *gedp, int argc, const char *argv[], int kind, struct 
 		    int handled = ged_diagnostic_line_layer_publish(gedp,
 			    "nmg::_EDGEUSES_", dgcdp.draw_edge_uses_plot);
 		    if (!handled && dgcdp.view_ctx) {
-			(void)ged_draw_view_context_line_layer_builder_replace(dgcdp.view_ctx,
-				"nmg::_EDGEUSES_", 0, dgcdp.draw_edge_uses_plot);
+			(void)ged_draw_view_context_diagnostic_line_layer_builder_replace(
+				dgcdp.view_ctx, "nmg::_EDGEUSES_",
+				dgcdp.draw_edge_uses_plot);
 		    }
 		    bg_line_layer_builder_free(dgcdp.draw_edge_uses_plot);
 		    dgcdp.draw_edge_uses_plot = NULL;

@@ -43,7 +43,7 @@ set(
   v025_ctrl.png
   v026_ctrl.png
 )
-brlcad_addexec(ged_test_draw "basic.cpp;util.cpp" "libged;libdm" TEST)
+brlcad_addexec(ged_test_draw "basic.cpp;util.cpp" "libged;libdm;libbrlobol" TEST)
 if(TARGET ged_test_draw)
   foreach(tdp ${test_deps})
     if (TARGET ${tdp})
@@ -52,6 +52,9 @@ if(TARGET ged_test_draw)
   endforeach()
 endif(TARGET ged_test_draw)
 brlcad_add_test(NAME ged_test_drawing_basic COMMAND ged_test_draw -c "${CMAKE_CURRENT_SOURCE_DIR}")
+if(TARGET ged_test_draw)
+  set_property(TEST ged_test_drawing_basic APPEND PROPERTY ENVIRONMENT GED_TEST_DRAW_OBOL_CAPTURE=1)
+endif(TARGET ged_test_draw)
 
 set(
   faceplate_test_ctrls
@@ -65,7 +68,7 @@ set(
   fp008_ctrl.png
   fp009_ctrl.png
 )
-brlcad_addexec(ged_test_faceplate "faceplate.cpp;util.cpp" "libged;libdm" TEST)
+brlcad_addexec(ged_test_faceplate "faceplate.cpp;util.cpp" "libged;libdm;libbrlobol" TEST)
 if(TARGET ged_test_faceplate)
   foreach(tdp ${test_deps})
     if (TARGET ${tdp})
@@ -84,7 +87,7 @@ set(
   lod005_ctrl.png
   lod006_ctrl.png
 )
-brlcad_addexec(ged_test_lod "lod.cpp;util.cpp" "libged;libdm" TEST)
+brlcad_addexec(ged_test_lod "lod.cpp;util.cpp" "libged;libdm;libbrlobol" TEST)
 if(TARGET ged_test_lod)
   foreach(tdp ${test_deps})
     if (TARGET ${tdp})
@@ -144,7 +147,7 @@ set(
   select023_ctrl.png
   select024_ctrl.png
 )
-brlcad_addexec(ged_test_select_draw "select.cpp;util.cpp" "libged;libdm" TEST)
+brlcad_addexec(ged_test_select_draw "select.cpp;util.cpp" "libged;libdm;libbrlobol" TEST)
 if(TARGET ged_test_select_draw)
   foreach(tdp ${test_deps})
     if (TARGET ${tdp})
@@ -213,7 +216,7 @@ set(
   aet_03_001_ctrl.png
   aet_03_002_ctrl.png
 )
-brlcad_addexec(ged_test_aet "aet.cpp;util.cpp" "libged;libdm" TEST)
+brlcad_addexec(ged_test_aet "aet.cpp;util.cpp" "libged;libdm;libbrlobol" TEST)
 if(TARGET ged_test_aet)
   foreach(tdp ${test_deps})
     if (TARGET ${tdp})
@@ -223,7 +226,7 @@ if(TARGET ged_test_aet)
 endif(TARGET ged_test_aet)
 
 # BSG render stability across repeated swrast draws
-brlcad_addexec(ged_test_bsg_render_stability "bsg_render_stability.cpp;util.cpp" "libged;libdm" TEST)
+brlcad_addexec(ged_test_bsg_render_stability "bsg_render_stability.cpp;util.cpp" "libged;libdm;libbrlobol" TEST)
 if(TARGET ged_test_bsg_render_stability)
   foreach(tdp ${test_deps})
     if (TARGET ${tdp})
@@ -239,7 +242,7 @@ distclean(${CMAKE_CURRENT_BINARY_DIR}/moss_bsg_render_stability_tmp.g)
 distclean(${CMAKE_CURRENT_BINARY_DIR}/bsg_render_stability_cache)
 
 # Multi-view BSG render stability and per-view root independence
-brlcad_addexec(ged_test_bsg_quad_stability "bsg_quad_stability.cpp;util.cpp" "libged;libdm" TEST)
+brlcad_addexec(ged_test_bsg_quad_stability "bsg_quad_stability.cpp;util.cpp" "libged;libdm;libbrlobol" TEST)
 if(TARGET ged_test_bsg_quad_stability)
   foreach(tdp ${test_deps})
     if (TARGET ${tdp})
@@ -303,7 +306,7 @@ if(TARGET ged_test_measure_semantics)
 endif()
 
 # LoD cross-run cache stability (populate cache → close → reopen → same pixels)
-brlcad_addexec(ged_test_lod_crossrun "lod_crossrun.cpp;util.cpp" "libged;libdm" TEST)
+brlcad_addexec(ged_test_lod_crossrun "lod_crossrun.cpp;util.cpp" "libged;libdm;libbrlobol" TEST)
 if(TARGET ged_test_lod_crossrun)
   foreach(tdp ${test_deps})
     if (TARGET ${tdp})
@@ -321,7 +324,7 @@ distclean(${CMAKE_CURRENT_BINARY_DIR}/moss_lod_cr_tmp.g)
 distclean(${CMAKE_CURRENT_BINARY_DIR}/lod_crossrun_cache)
 
 # MGED BSG scene and render contract regression tests
-brlcad_addexec(ged_test_mged_bsg "mged_bsg.cpp;util.cpp" "libged;libdm" TEST)
+brlcad_addexec(ged_test_mged_bsg "mged_bsg.cpp;util.cpp" "libged;libdm;libbrlobol" TEST)
 if(TARGET ged_test_mged_bsg)
   foreach(tdp ${test_deps})
     if (TARGET ${tdp})
@@ -340,7 +343,7 @@ distclean(${CMAKE_CURRENT_BINARY_DIR}/mged_bsg_t4.g)
 distclean(${CMAKE_CURRENT_BINARY_DIR}/mged_bsg_t5.g)
 
 # rtwizard BSG scene-root and render contract regression tests
-brlcad_addexec(ged_test_rtwizard_bsg "rtwizard_bsg.cpp;util.cpp" "libged;libdm;libicv" TEST)
+brlcad_addexec(ged_test_rtwizard_bsg "rtwizard_bsg.cpp;util.cpp" "libged;libdm;libbrlobol;libicv" TEST)
 if(TARGET ged_test_rtwizard_bsg)
   foreach(tdp ${test_deps})
     if (TARGET ${tdp})
@@ -467,7 +470,7 @@ if(TARGET ged_test_view_command)
 endif()
 
 # Lighting/zbuffer/zclip regression test (mged_shaded_mode_helper path)
-brlcad_addexec(ged_test_mged_shaded_mode_bsg "mged_shaded_mode_bsg.cpp;util.cpp" "libged;libdm;libicv" TEST)
+brlcad_addexec(ged_test_mged_shaded_mode_bsg "mged_shaded_mode_bsg.cpp;util.cpp" "libged;libdm;libbrlobol;libicv" TEST)
 if(TARGET ged_test_mged_shaded_mode_bsg)
   foreach(tdp ${test_deps})
     if (TARGET ${tdp})

@@ -401,8 +401,8 @@ int check_overlaps(struct ged *gedp, struct current_state *state,
 	int handled = ged_diagnostic_line_layer_publish(gedp,
 		"check::overlaps", check_plot.builder);
 	if (!handled && view_ctx) {
-	    (void)ged_draw_view_context_line_layer_builder_replace(view_ctx,
-		    "check::overlaps", 0, check_plot.builder);
+	    (void)ged_draw_view_context_diagnostic_line_layer_builder_replace(
+		    view_ctx, "check::overlaps", check_plot.builder);
 	}
 	ged_check_plot_free(&check_plot);
     }

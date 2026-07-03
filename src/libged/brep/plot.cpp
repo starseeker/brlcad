@@ -1043,8 +1043,8 @@ _brep_plot_publish(struct ged *gedp, struct bg_line_layer_builder *plot, const c
     int handled = ged_diagnostic_line_layer_publish(gedp, bu_vls_cstr(&nroot), plot);
     void *view_ctx = ged_view_active_ctx(gedp);
     if (!handled && view_ctx) {
-	(void)ged_draw_view_context_line_layer_builder_replace(view_ctx,
-		bu_vls_cstr(&nroot), 0, plot);
+	(void)ged_draw_view_context_diagnostic_line_layer_builder_replace(
+		view_ctx, bu_vls_cstr(&nroot), plot);
     }
     bu_vls_free(&nroot);
 }

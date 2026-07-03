@@ -31,6 +31,7 @@
 #include "dm.h"
 #include "ged/draw.h"
 #include "rt/view.h"
+#include "../bsg_ged_draw_private.h"
 #include "../ged_private.h"
 
 /* Return 1 (and set *v) if the entire string parses as a number. */
@@ -49,6 +50,26 @@ _autoview_arg_is_num(const char *s, double *v)
 
     if (v)
 	*v = d;
+    return 1;
+}
+
+static int
+_autoview_obol_database_scene(
+	struct ged *gedp,
+	void *view_ctx,
+	fastf_t factor,
+	int all_view_objs)
+{
+    if (all_view_objs)
+	return 0;
+
+    vect_t min, max;
+    int empty = 1;
+    if (!ged_draw_obol_scene_database_autoview_bounds(gedp, &min, &max,
+	    &empty) || empty)
+	return 0;
+
+    ged_view_context_autoview_bounds(view_ctx, factor, min, max);
     return 1;
 }
 
@@ -142,10 +163,12 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
 	ged_view_context_autoview_bounds(view_ctx, factor, min, max);
     } else {
 	vect_t min, max;
-	if (!ged_draw_bounds(gedp, &min, &max, all_view_objs))
-	    ged_view_context_autoview_bounds(view_ctx, factor, min, max);
-	else
-	    ged_view_context_autoview(view_ctx, factor, all_view_objs);
+	if (!_autoview_obol_database_scene(gedp, view_ctx, factor, all_view_objs)) {
+	    if (!ged_draw_bounds(gedp, &min, &max, all_view_objs))
+		ged_view_context_autoview_bounds(view_ctx, factor, min, max);
+	    else
+		ged_view_context_autoview(view_ctx, factor, all_view_objs);
+	}
     }
 
     return BRLCAD_OK;

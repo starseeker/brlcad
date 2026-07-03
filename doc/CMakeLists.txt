@@ -30,6 +30,8 @@ set(
   notes/hypot.txt
   notes/mater.txt
   notes/matrix.txt
+  notes/brl_obol_matrices.txt
+  notes/brl_obol_view_operations.txt
   notes/obol_legacy_dependency_inventory.txt
   notes/obol_overlay_coverage.txt
   notes/obol_realization_coverage.txt
