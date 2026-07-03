@@ -199,9 +199,10 @@ struct ged_draw_view_label_data {
     point_t target;
     int anchor;
     int arrow;
+    fastf_t font_size;
 };
 
-#define GED_DRAW_VIEW_LABEL_DATA_INIT { NULL, VINIT_ZERO, 0, {0, 0, 0}, 0, VINIT_ZERO, 0, 0 }
+#define GED_DRAW_VIEW_LABEL_DATA_INIT { NULL, VINIT_ZERO, 0, {0, 0, 0}, 0, VINIT_ZERO, 0, 0, 0.0 }
 
 struct ged_draw_view_axes_state {
     point_t position;

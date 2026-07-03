@@ -269,6 +269,230 @@ source_for_instance(SoBRLSceneController *controller,
     return controller->findDatabaseSourceInstance(instance_key);
 }
 
+static SoBRLDatabaseSource *
+source_for_representation(SoBRLSceneController *controller,
+	const char *path,
+	int representation_mode)
+{
+    if (!controller || !path)
+	return NULL;
+
+    for (int i = 0; i < controller->getDatabaseSourceCount(); i++) {
+	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
+	if (!source)
+	    continue;
+	BRLObolDatabaseSourceSummary summary;
+	if (!source->getSummary(summary) || !summary.valid)
+	    continue;
+	if (path_equal(summary.path.getString(), path) &&
+		summary.representationMode == representation_mode)
+	    return source;
+    }
+
+    return NULL;
+}
+
+static int
+source_representation_count(SoBRLSceneController *controller,
+	const char *path,
+	int representation_mode)
+{
+    if (!controller || !path)
+	return 0;
+
+    int count = 0;
+    for (int i = 0; i < controller->getDatabaseSourceCount(); i++) {
+	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
+	if (!source)
+	    continue;
+	BRLObolDatabaseSourceSummary summary;
+	if (!source->getSummary(summary) || !summary.valid)
+	    continue;
+	if (path_equal(summary.path.getString(), path) &&
+		summary.representationMode == representation_mode)
+	    count++;
+    }
+
+    return count;
+}
+
+static int
+source_path_count(SoBRLSceneController *controller,
+	const char *path)
+{
+    if (!controller || !path)
+	return 0;
+
+    int count = 0;
+    for (int i = 0; i < controller->getDatabaseSourceCount(); i++) {
+	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
+	if (source && path_equal(source->path.getValue().getString(), path))
+	    count++;
+    }
+
+    return count;
+}
+
+static int
+verify_mode_source(SoBRLSceneController *controller,
+	const char *path,
+	int representation_mode,
+	int expect_vlist,
+	int expect_mesh,
+	int expect_visible,
+	int expect_stale,
+	const char *label)
+{
+    SoBRLDatabaseSource *source =
+	source_for_representation(controller, path, representation_mode);
+    if (!source)
+	FAIL("mode-specific source should exist");
+
+    BRLObolDatabaseSourceSummary summary;
+    if (!source->getSummary(summary) || !summary.valid)
+	FAIL("mode-specific source summary should be readable");
+
+    if (summary.representationMode != representation_mode)
+	FAIL("mode-specific source should preserve exact representation mode");
+    if ((summary.visible ? 1 : 0) != expect_visible)
+	FAIL("mode-specific source visibility should match expected state");
+    if ((summary.stale ? 1 : 0) != expect_stale)
+	FAIL("mode-specific source stale state should match expected state");
+    if (!expect_stale &&
+	    summary.realizationStatus != SoBRLDatabaseSource::REALIZED)
+	FAIL("mode-specific source should be realized when expected current");
+    if (expect_vlist && summary.realizedShapeCount <= 0)
+	FAIL("mode-specific source should carry realized VLIST geometry");
+    if (expect_mesh && summary.realizedMeshCount <= 0)
+	FAIL("mode-specific source should carry realized mesh geometry");
+    if (!summary.sourceBoundsValid || summary.sourceBounds.isEmpty())
+	FAIL("mode-specific source should retain valid bounds");
+
+    (void)label;
+    return 0;
+}
+
+static int
+apply_mode_value_transaction(struct ged *gedp,
+	ged_draw_transaction_kind kind,
+	const char *path,
+	int mode,
+	fastf_t value,
+	const char *label)
+{
+    struct ged_draw_transaction txn =
+	ged_draw_transaction_make_value(kind, path, value);
+    txn.mode = mode;
+    struct ged_draw_transaction_result result;
+    ged_draw_transaction_result_init(&result);
+    int ret = ged_draw_apply_transaction(gedp, &txn, &result);
+    ged_draw_transaction_result_free(&result);
+    if (ret <= 0)
+	FAIL("mode-specific value transaction should succeed");
+
+    (void)label;
+    return 0;
+}
+
+static int
+apply_mode_path_transaction(struct ged *gedp,
+	ged_draw_transaction_kind kind,
+	const char *path,
+	int mode,
+	const char *label)
+{
+    struct ged_draw_transaction txn = ged_draw_transaction_make(kind, path);
+    txn.mode = mode;
+    if (kind == GED_DRAW_TXN_STALE_SOURCE)
+	txn.stale_reason = GED_DRAW_STALE_SETTINGS_CHANGED;
+    struct ged_draw_transaction_result result;
+    ged_draw_transaction_result_init(&result);
+    int ret = ged_draw_apply_transaction(gedp, &txn, &result);
+    ged_draw_transaction_result_free(&result);
+    if (ret <= 0)
+	FAIL("mode-specific path transaction should succeed");
+
+    (void)label;
+    return 0;
+}
+
+static int
+exercise_mode_specific_source_lifecycle(struct ged *gedp,
+	SoBRLSceneController *controller,
+	const char *path,
+	int mode,
+	int representation_mode,
+	int expect_vlist,
+	int expect_mesh,
+	const char *label)
+{
+    if (!gedp || !controller || !path)
+	FAIL("mode-specific lifecycle test needs GED and Obol scene state");
+
+    (void)ged_draw_source_erase_path_in_active_scope(gedp, path,
+	    ged_draw_active_view_ctx(gedp), mode);
+    if (source_representation_count(controller, path, representation_mode))
+	FAIL("mode-specific lifecycle setup should start without target representation");
+
+    char mode_arg[16] = {0};
+    snprintf(mode_arg, sizeof(mode_arg), "-m%d", mode);
+    const char *draw_mode_cmd[4] = {"draw", mode_arg, path, NULL};
+    if (ged_exec_draw(gedp, 3, draw_mode_cmd) != BRLCAD_OK)
+	FAIL("mode-specific draw command should succeed");
+    if (source_representation_count(controller, path, representation_mode) != 1)
+	FAIL("mode-specific draw should create exactly one target representation source");
+    if (verify_mode_source(controller, path, representation_mode,
+	    expect_vlist, expect_mesh, 1, 0, label))
+	return 1;
+
+    if (apply_mode_value_transaction(gedp, GED_DRAW_TXN_VISIBILITY,
+	    path, mode, 0.0, label))
+	return 1;
+    if (verify_mode_source(controller, path, representation_mode,
+	    expect_vlist, expect_mesh, 0, 0, label))
+	return 1;
+
+    if (apply_mode_value_transaction(gedp, GED_DRAW_TXN_VISIBILITY,
+	    path, mode, 1.0, label))
+	return 1;
+    if (apply_mode_path_transaction(gedp, GED_DRAW_TXN_STALE_SOURCE,
+	    path, mode, label))
+	return 1;
+    if (verify_mode_source(controller, path, representation_mode,
+	    expect_vlist, expect_mesh, 1, 1, label))
+	return 1;
+
+    if (apply_mode_path_transaction(gedp, GED_DRAW_TXN_REDRAW,
+	    path, mode, label))
+	return 1;
+    if (verify_mode_source(controller, path, representation_mode,
+	    expect_vlist, expect_mesh, 1, 0, label))
+	return 1;
+
+    const char *autoview_cmd[2] = {"autoview", NULL};
+    if (ged_exec_autoview(gedp, 1, autoview_cmd) != BRLCAD_OK)
+	FAIL("mode-specific autoview should succeed");
+    if (verify_mode_source(controller, path, representation_mode,
+	    expect_vlist, expect_mesh, 1, 0, label))
+	return 1;
+
+    if (!ged_draw_obol_database_source_ensure_for_path(gedp, path,
+	    gedp->dbip, GED_DRAW_MODE_WIRE, 0))
+	FAIL("mode-specific lifecycle should be able to ensure a shared wire source");
+    if (source_path_count(controller, path) < 2)
+	FAIL("mode-specific lifecycle should have shared and mode sources before scoped erase");
+
+    if (!ged_draw_source_erase_path_in_active_scope(gedp, path,
+	    ged_draw_active_view_ctx(gedp), mode))
+	FAIL("mode-specific erase should remove the target representation source");
+    if (source_representation_count(controller, path, representation_mode))
+	FAIL("mode-specific erase should not leave target representation sources");
+    if (!source_for_path(controller, path))
+	FAIL("mode-specific erase should preserve the shared wire source");
+
+    return 0;
+}
+
 static SoBRLVListShape *
 auxiliary_for_path_variant(SoBRLDatabaseSource *source, const char *path)
 {
@@ -596,12 +820,22 @@ main(int argc, char **argv)
     label.color[0] = 7;
     label.color[1] = 8;
     label.color[2] = 9;
+    label.font_size = 18.0;
     if (!ged_draw_view_context_labels_replace(feature_view_ctx,
 	    "cap2::label", 0, &label, 1) ||
 	    !owned_controller->features().exists("cap2::label") ||
 	    ged_draw_view_context_label_count(feature_view_ctx,
 		"cap2::label") != 1)
 	FAIL("GED label replacement should publish into the owned Obol feature store");
+    BRLObolFeatureHandle label_handle =
+	owned_controller->features().find("cap2::label");
+    BRLObolFeatureRecord label_record;
+    if (!label_handle.isValid() ||
+	    !owned_controller->features().record(label_handle,
+		label_record) ||
+	    label_record.labels.size() != 1 ||
+	    fabs(label_record.labels[0].fontSize - 18.0f) > 0.001f)
+	FAIL("GED label replacement should preserve explicit Obol font size");
     struct bu_vls label_text = BU_VLS_INIT_ZERO;
     point_t label_point = VINIT_ZERO;
     unsigned char label_rgb[3] = {0, 0, 0};
@@ -830,6 +1064,7 @@ main(int argc, char **argv)
     rt_label.color[0] = 210;
     rt_label.color[1] = 211;
     rt_label.color[2] = 212;
+    rt_label.font_size = 16.0;
     if (rt_view_feature_ref_is_null(rt_label_ref) ||
 	    !rt_view_feature_labels_replace(rt_label_ref, &rt_label, 1))
 	FAIL("RT feature label replacement should route into Obol labels");
@@ -843,6 +1078,7 @@ main(int argc, char **argv)
 	    rt_label_record.labels.size() != 1 ||
 	    !BU_STR_EQUAL(rt_label_record.labels[0].text.getString(),
 		"rt label") ||
+	    fabs(rt_label_record.labels[0].fontSize - 16.0f) > 0.001f ||
 	    !rt_label_record.overlay.isOverlay ||
 	    rt_label_record.overlay.ownerToken != &rt_label_owner)
 	FAIL("RT feature label adapter should publish typed Obol label records");
@@ -983,6 +1219,23 @@ main(int argc, char **argv)
 	FAIL("GED Obol root shape iterator sentinel should be removable");
     if (owned_scene->removeGroup("group_only.s") <= 0)
 	FAIL("GED Obol root shape iterator sentinel group should be removable");
+
+    if (exercise_mode_specific_source_lifecycle(gedp, owned_scene,
+	    "box.s", GED_DRAW_MODE_EVAL_WIRE,
+	    SoBRLDatabaseSource::REPRESENTATION_EVAL_WIRE, 1, 0,
+	    "evaluated-wire"))
+	return 1;
+    if (exercise_mode_specific_source_lifecycle(gedp, owned_scene,
+	    "box.s", GED_DRAW_MODE_HIDDEN_LINE,
+	    SoBRLDatabaseSource::REPRESENTATION_HIDDEN_LINE, 0, 1,
+	    "hidden-line"))
+	return 1;
+    if (exercise_mode_specific_source_lifecycle(gedp, owned_scene,
+	    "box.s", GED_DRAW_MODE_EVAL_POINTS,
+	    SoBRLDatabaseSource::REPRESENTATION_EVAL_POINTS, 0, 1,
+	    "evaluated-points"))
+	return 1;
+
     const char *draw_annot_line[2] = {"draw", "annot_line.s"};
     if (ged_exec_draw(gedp, 2, draw_annot_line) != BRLCAD_OK)
 	FAIL("GED annotation draw should succeed for owned Obol publication");

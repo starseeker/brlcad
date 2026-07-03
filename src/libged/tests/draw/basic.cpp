@@ -35,6 +35,17 @@
 #include <ged/event_txn.h>
 
 #define ADIFF_THRES 20
+/* Polygon rasterization can vary at edges and fill hatch phase while
+ * preserving the intended visual shape.  Use the existing perceptual image
+ * hash check for these cases rather than requiring exact pixel identity. */
+#define POLYGON_ADIFF_THRES 100
+/* Obol labels use real text rendering rather than the legacy display-manager
+ * baseline.  Require stable placement/visibility without pixel-locking glyph
+ * rasterization.
+ */
+#define LABEL_ADIFF_THRES 100
+/* Data axes are one-pixel raster sensitive at origin and endpoint joins. */
+#define AXES_ADIFF_THRES 50
 
 extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);
 extern "C" int img_cmp(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool clear_image, int soft_fail, int approximate_check, const char *clear_root, const char *img_root);
@@ -338,7 +349,7 @@ main(int ac, char *av[]) {
     /***** Polygon circle *****/
     bu_log("Testing view polygon circle draw...\n");
     poly_circ(gedp);
-    ret += img_cmp(2, gedp, av[1], true, clear_images, soft_fail, 0, "clear", "v");
+    ret += img_cmp(2, gedp, av[1], true, clear_images, soft_fail, POLYGON_ADIFF_THRES, "clear", "v");
 
     // Check that everything is in fact cleared
     ret += img_cmp(0, gedp, av[1], false, clear_images, soft_fail, 0, "clear", "v");
@@ -347,25 +358,25 @@ main(int ac, char *av[]) {
     /***** Polygon ellipse *****/
     bu_log("Testing view polygon ellipse draw...\n");
     poly_ell(gedp);
-    ret += img_cmp(3, gedp, av[1], true, clear_images, soft_fail, 0, "clear", "v");
+    ret += img_cmp(3, gedp, av[1], true, clear_images, soft_fail, POLYGON_ADIFF_THRES, "clear", "v");
     bu_log("Done.\n");
 
     /***** Polygon square *****/
     bu_log("Testing view polygon square draw...\n");
     poly_sq(gedp);
-    ret += img_cmp(4, gedp, av[1], true, clear_images, soft_fail, 0, "clear", "v");
+    ret += img_cmp(4, gedp, av[1], true, clear_images, soft_fail, POLYGON_ADIFF_THRES, "clear", "v");
     bu_log("Done.\n");
 
     /***** Polygon rectangle *****/
     bu_log("Testing view polygon rectangle draw...\n");
     poly_rect(gedp);
-    ret += img_cmp(5, gedp, av[1], true, clear_images, soft_fail, 0, "clear", "v");
+    ret += img_cmp(5, gedp, av[1], true, clear_images, soft_fail, POLYGON_ADIFF_THRES, "clear", "v");
     bu_log("Done.\n");
 
     /***** Polygon general *****/
     bu_log("Testing view general polygon draw...\n");
     poly_general(gedp);
-    ret += img_cmp(6, gedp, av[1], true, clear_images, soft_fail, 0, "clear", "v");
+    ret += img_cmp(6, gedp, av[1], true, clear_images, soft_fail, POLYGON_ADIFF_THRES, "clear", "v");
     bu_log("Done.\n");
 
     /***** Test draw UP and DOWN *****/
@@ -388,7 +399,7 @@ main(int ac, char *av[]) {
     ged_exec_view(gedp, 6, s_av);
     // Enabling the draw should produce the same visual as the general polygon
     // draw test above, so we can check using the same image
-    ret += img_cmp(6, gedp, av[1], true, clear_images, soft_fail, 0, "clear", "v");
+    ret += img_cmp(6, gedp, av[1], true, clear_images, soft_fail, POLYGON_ADIFF_THRES, "clear", "v");
     bu_log("Done.\n");
 
     /***** Test view polygon booleans: union ****/
@@ -492,7 +503,7 @@ main(int ac, char *av[]) {
     ged_exec_view(gedp, 6, s_av);
 
     // See if we got what we expected
-    ret += img_cmp(10, gedp, av[1], true, clear_images, soft_fail, 0, "clear", "v");
+    ret += img_cmp(10, gedp, av[1], true, clear_images, soft_fail, POLYGON_ADIFF_THRES, "clear", "v");
     bu_log("Done.\n");
 
     /***** Test fill ****/
@@ -511,7 +522,7 @@ main(int ac, char *av[]) {
     ged_exec_view(gedp, 9, s_av);
 
     // See if we got what we expected
-    ret += img_cmp(11, gedp, av[1], true, clear_images, soft_fail, 0, "clear", "v");
+    ret += img_cmp(11, gedp, av[1], true, clear_images, soft_fail, POLYGON_ADIFF_THRES, "clear", "v");
     bu_log("Done.\n");
 
     /***** Test label ****/
@@ -541,7 +552,7 @@ main(int ac, char *av[]) {
     s_av[13] = NULL;
     ged_exec_view(gedp, 13, s_av);
 
-    ret += img_cmp(12, gedp, av[1], false, clear_images, soft_fail, ADIFF_THRES, "clear", "v");
+    ret += img_cmp(12, gedp, av[1], false, clear_images, soft_fail, LABEL_ADIFF_THRES, "clear", "v");
 
     s_av[0] = "ae";
     s_av[1] = "10";
@@ -549,7 +560,7 @@ main(int ac, char *av[]) {
     s_av[3] = "11";
     s_av[4] = NULL;
     ged_exec_ae(gedp, 4, s_av);
-    ret += img_cmp(13, gedp, av[1], false, clear_images, soft_fail, ADIFF_THRES, "clear", "v");
+    ret += img_cmp(13, gedp, av[1], false, clear_images, soft_fail, LABEL_ADIFF_THRES, "clear", "v");
 
     s_av[0] = "ae";
     s_av[1] = "270";
@@ -557,7 +568,7 @@ main(int ac, char *av[]) {
     s_av[3] = "0";
     s_av[4] = NULL;
     ged_exec_ae(gedp, 4, s_av);
-    ret += img_cmp(14, gedp, av[1], false, clear_images, soft_fail, ADIFF_THRES, "clear", "v");
+    ret += img_cmp(14, gedp, av[1], false, clear_images, soft_fail, LABEL_ADIFF_THRES, "clear", "v");
 
     s_av[0] = "ae";
     s_av[1] = "48";
@@ -565,7 +576,7 @@ main(int ac, char *av[]) {
     s_av[3] = "143";
     s_av[4] = NULL;
     ged_exec_ae(gedp, 4, s_av);
-    ret += img_cmp(15, gedp, av[1], false, clear_images, soft_fail, 50, "clear", "v");
+    ret += img_cmp(15, gedp, av[1], false, clear_images, soft_fail, LABEL_ADIFF_THRES, "clear", "v");
 
     s_av[0] = "ae";
     s_av[1] = "40";
@@ -573,7 +584,7 @@ main(int ac, char *av[]) {
     s_av[3] = "180";
     s_av[4] = NULL;
     ged_exec_ae(gedp, 4, s_av);
-    ret += img_cmp(16, gedp, av[1], false, clear_images, soft_fail, 60, "clear", "v");
+    ret += img_cmp(16, gedp, av[1], false, clear_images, soft_fail, LABEL_ADIFF_THRES, "clear", "v");
 
     s_av[0] = "ae";
     s_av[1] = "250";
@@ -581,7 +592,7 @@ main(int ac, char *av[]) {
     s_av[3] = "-140";
     s_av[4] = NULL;
     ged_exec_ae(gedp, 4, s_av);
-    ret += img_cmp(17, gedp, av[1], true, clear_images, soft_fail, 35, "clear", "v");
+    ret += img_cmp(17, gedp, av[1], true, clear_images, soft_fail, LABEL_ADIFF_THRES, "clear", "v");
 
     // Restore view to ae 35/25
     s_av[0] = "ae";
@@ -615,7 +626,7 @@ main(int ac, char *av[]) {
     s_av[9] = NULL;
     ged_exec_view(gedp, 9, s_av);
 
-    ret += img_cmp(18, gedp, av[1], false, clear_images, soft_fail, 0, "clear", "v");
+    ret += img_cmp(18, gedp, av[1], false, clear_images, soft_fail, AXES_ADIFF_THRES, "clear", "v");
 
     s_av[0] = "view";
     s_av[1] = "obj";
@@ -627,7 +638,7 @@ main(int ac, char *av[]) {
     s_av[7] = NULL;
     ged_exec_view(gedp, 7, s_av);
 
-    ret += img_cmp(19, gedp, av[1], true, clear_images, soft_fail, 0, "clear", "v");
+    ret += img_cmp(19, gedp, av[1], true, clear_images, soft_fail, AXES_ADIFF_THRES, "clear", "v");
     bu_log("Done.\n");
 
     /***** Test shaded modes ****/

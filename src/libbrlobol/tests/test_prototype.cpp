@@ -2752,6 +2752,52 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("measure action should allow count-only callers to skip connected-angle search");
 
     {
+	SoBRLDatabaseSource *clearSource = new SoBRLDatabaseSource;
+	clearSource->ref();
+	clearSource->path = "/prototype/clear-primary";
+	SoBRLVListShape *primaryLine = new SoBRLVListShape;
+	SbVec3f clearLinePoints[2] = {
+	    SbVec3f(0.0f, 0.0f, 0.0f),
+	    SbVec3f(1.0f, 0.0f, 0.0f)
+	};
+	int32_t clearLineCommands[2] = {
+	    SoBRLVListShape::MOVE,
+	    SoBRLVListShape::DRAW
+	};
+	primaryLine->recordRole = "database";
+	primaryLine->setLineSet(clearLinePoints, clearLineCommands, 2);
+	SoBRLMeshShape *primaryMesh = new SoBRLMeshShape;
+	SbVec3f clearMeshPoints[3] = {
+	    SbVec3f(0.0f, 0.0f, 0.0f),
+	    SbVec3f(1.0f, 0.0f, 0.0f),
+	    SbVec3f(0.0f, 1.0f, 0.0f)
+	};
+	int32_t clearMeshTriangles[3] = {0, 1, 2};
+	primaryMesh->setIndexedTriangles(clearMeshPoints, 3,
+		clearMeshTriangles, 3);
+	SoBRLVListShape *auxLine = new SoBRLVListShape;
+	auxLine->recordRole = "auxiliary";
+	auxLine->geometryName = "clear-aux";
+	auxLine->setLineSet(clearLinePoints, clearLineCommands, 2);
+	clearSource->addChild(primaryLine);
+	clearSource->addChild(primaryMesh);
+	clearSource->addChild(auxLine);
+
+	if (clearSource->getRealizedShapeCount() != 2 ||
+		clearSource->getRealizedMeshCount() != 1)
+	    FAIL("clear-geometry setup should have primary and auxiliary realized children");
+	if (!clearSource->clearRealizedGeometry(TRUE) ||
+		clearSource->getRealizedShapeCount() != 1 ||
+		clearSource->getRealizedMeshCount() != 0 ||
+		!clearSource->findAuxiliaryVListShape("clear-aux"))
+	    FAIL("clearRealizedGeometry should remove primary geometry and preserve auxiliary VLISTs");
+	if (!clearSource->clearRealizedGeometry(FALSE) ||
+		clearSource->getNumChildren() != 0)
+	    FAIL("clearRealizedGeometry should optionally remove auxiliary children");
+	clearSource->unref();
+    }
+
+    {
 	SoSeparator *sparseAngleRoot = new SoSeparator;
 	sparseAngleRoot->ref();
 	SoBRLVListShape *sparseAngleShape = new SoBRLVListShape;

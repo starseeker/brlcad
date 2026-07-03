@@ -142,6 +142,43 @@ camera->aspectRatio = aspect
 not `gv_size`, `2 * gv_size`, or `4 * gv_scale`.
 
 
+Raster Boundary Case: Polygon Rectangle
+---------------------------------------
+
+The `ged_test_drawing_basic` rectangle polygon case is a useful guard against
+ad hoc camera fixes.  The test creates a view-space rectangle from screen
+points `(190, 190)` and `(380, 290)` in a 512x512 viewport.  The legacy
+screen-to-view math maps those points back to OpenGL window-space y values of
+`322.0` and `222.0`, which correspond to top-origin rows 189 and 289.
+
+The direct Obol camera projection reproduced the top edge exactly, but
+projected the lower point to:
+
+```
+screen = (0.74218755960464478, 0.43359372019767761, ...)
+window = (380.00003051757812, 221.99998474121094)
+```
+
+That tiny negative epsilon relative to the integer y boundary moves the
+rasterized lower line from row 289 to row 290.  Pixel analysis showed the
+current rendering's only meaningful rectangle difference was that one bottom
+edge row; the top, left, and right edges aligned.  Switching the shape renderer
+from independent line segments to `GL_LINE_STRIP`, and submitting polygon
+contour points through double-precision VLIST storage, did not change the
+result.  This rules out independent segment topology and simple float vertex
+truncation as the cause.
+
+The mismatch is a camera/projection viewport-boundary tie-break produced by
+floating-point realization of mathematically equivalent view coordinates.  For
+polygon image tests, Hamming/perceptual thresholds are appropriate for
+raster-sensitive edge and fill cases, while raw pixel diffs remain useful
+diagnostics.  Do not rebaseline polygon images solely for this class of
+boundary shift.  If exact pixel parity is ever required, the fix should be a
+documented libbrlobol camera/view projection policy, such as exact
+viewport-centered mapping or a deliberate snap rule, not a measured per-shape
+offset.
+
+
 Autoview Bounds
 ---------------
 

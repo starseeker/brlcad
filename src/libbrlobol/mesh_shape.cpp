@@ -898,25 +898,15 @@ set_mesh_gl_material(SoBRLMeshShape *shape, int primitiveIndex)
     glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE, diffuse);
 }
 
-void
-SoBRLMeshShape::GLRender(SoGLRenderAction *action)
+static void
+mesh_shape_emit_triangles(SoBRLMeshShape *shape, SbBool setMaterial)
 {
-    if (!this->visible.getValue() || !this->shouldGLRender(action))
-	return;
-
-    glPushAttrib(GL_CURRENT_BIT | GL_ENABLE_BIT | GL_LIGHTING_BIT);
-    glEnable(GL_LIGHTING);
-    glDisable(GL_COLOR_MATERIAL);
-    glLightModeli(GL_LIGHT_MODEL_TWO_SIDE,
-	    this->isLodBackedMesh() ? GL_TRUE : GL_FALSE);
-    set_mesh_gl_material(this, -1);
-
     glBegin(GL_TRIANGLES);
-    for (int i = 0; i < this->getTriangleCount(); i++) {
+    for (int i = 0; i < shape->getTriangleCount(); i++) {
 	SbVec3f a;
 	SbVec3f b;
 	SbVec3f c;
-	if (!this->getTriangle(i, a, b, c))
+	if (!shape->getTriangle(i, a, b, c))
 	    continue;
 
 	SbVec3f normal = (b - a).cross(c - a);
@@ -925,13 +915,62 @@ SoBRLMeshShape::GLRender(SoGLRenderAction *action)
 	else
 	    normal = SbVec3f(0.0f, 0.0f, 1.0f);
 
-	set_mesh_gl_material(this, i);
+	if (setMaterial)
+	    set_mesh_gl_material(shape, i);
 	glNormal3f(normal[0], normal[1], normal[2]);
 	glVertex3f(a[0], a[1], a[2]);
 	glVertex3f(b[0], b[1], b[2]);
 	glVertex3f(c[0], c[1], c[2]);
     }
     glEnd();
+}
+
+static void
+mesh_shape_render_hidden_line(SoBRLMeshShape *shape)
+{
+    glPushAttrib(GL_CURRENT_BIT | GL_ENABLE_BIT | GL_LIGHTING_BIT |
+	    GL_POLYGON_BIT | GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT |
+	    GL_LINE_BIT);
+    glDisable(GL_LIGHTING);
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+    glDepthFunc(GL_LESS);
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(1.0f, 1.0f);
+    mesh_shape_emit_triangles(shape, FALSE);
+
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    glDepthFunc(GL_LEQUAL);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+    if (shape->lineWidth.getValue() > 0)
+	glLineWidth(static_cast<GLfloat>(shape->lineWidth.getValue()));
+    set_mesh_gl_material(shape, -1);
+    mesh_shape_emit_triangles(shape, TRUE);
+    glPopAttrib();
+}
+
+void
+SoBRLMeshShape::GLRender(SoGLRenderAction *action)
+{
+    if (!this->visible.getValue() || !this->shouldGLRender(action))
+	return;
+
+    if (this->hiddenLine.getValue() ||
+	    this->drawMode.getValue() == BRLOBOL_LOD_DRAW_HIDDEN_LINE) {
+	mesh_shape_render_hidden_line(this);
+	return;
+    }
+
+    glPushAttrib(GL_CURRENT_BIT | GL_ENABLE_BIT | GL_LIGHTING_BIT);
+    glEnable(GL_LIGHTING);
+    glDisable(GL_COLOR_MATERIAL);
+    glLightModeli(GL_LIGHT_MODEL_TWO_SIDE,
+	    this->isLodBackedMesh() ? GL_TRUE : GL_FALSE);
+    set_mesh_gl_material(this, -1);
+    mesh_shape_emit_triangles(this, TRUE);
     glPopAttrib();
 }
 

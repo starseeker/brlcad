@@ -328,6 +328,16 @@ public:
 	SHADED = 1
     };
 
+    enum RepresentationMode {
+	REPRESENTATION_DEFAULT = -1,
+	REPRESENTATION_WIRE = 0,
+	REPRESENTATION_SHADED_BOTS = 1,
+	REPRESENTATION_SHADED = 2,
+	REPRESENTATION_EVAL_WIRE = 3,
+	REPRESENTATION_HIDDEN_LINE = 4,
+	REPRESENTATION_EVAL_POINTS = 5
+    };
+
     enum RealizationStatus {
 	UNREALIZED = 0,
 	REALIZED = 1,
@@ -494,6 +504,7 @@ public:
     SbBool realizePrototypeWireframe(void);
     SbBool realizeDatabaseWireframe(void);
     SbBool realizeDatabaseMesh(void);
+    int clearRealizedGeometry(SbBool preserveAuxiliary = TRUE);
     SoBRLVListShape *getRealizedShape(void) const;
     SoBRLVListShape *getRealizedShape(int index) const;
     int getRealizedShapeCount(void) const;

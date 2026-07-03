@@ -347,6 +347,7 @@ struct rt_view_feature_label {
     point_t point;
     int color_valid;
     unsigned char color[3];
+    fastf_t font_size;
 };
 
 typedef int (*rt_view_context_feature_owns_ref_callback_t)(

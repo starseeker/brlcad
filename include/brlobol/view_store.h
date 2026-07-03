@@ -251,6 +251,7 @@ struct BRLOBOL_EXPORT BRLObolLabel {
     SbVec3f target;
     int anchor;
     SbBool arrow;
+    float fontSize;
 
     BRLObolLabel(void);
 };

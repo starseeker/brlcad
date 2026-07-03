@@ -1003,6 +1003,7 @@ _ged_draw_view_label_data_to_bsg(struct bsg_feature_label_data *dst,
     VMOVE(dst->target, src->target);
     dst->anchor = src->anchor;
     dst->arrow = src->arrow;
+    dst->font_size = src->font_size;
 }
 
 int

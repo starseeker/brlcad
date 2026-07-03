@@ -1749,6 +1749,8 @@ bsg_feature_labels_replace(bsg_feature_ref ref,
 	VMOVE(label->target, labels[i].target);
 	label->anchor = labels[i].anchor;
 	label->arrow = labels[i].arrow;
+	label->size = labels[i].font_size > 0.0 ?
+	    (int)(labels[i].font_size + 0.5) : 0;
 	(void)bsg_geometry_node_set_text_label(child, label);
 	if (BU_VLS_IS_INITIALIZED(&label->label))
 	    bu_vls_free(&label->label);
@@ -1908,6 +1910,7 @@ bsg_feature_labels_sync(struct bsg_view *v, struct bsg_data_label_state *gdlsp, 
 	labels[i].color_valid = 1;
 	VSET(labels[i].color, gdlsp->gdls_color[0], gdlsp->gdls_color[1], gdlsp->gdls_color[2]);
 	labels[i].anchor = BSG_ANCHOR_AUTO;
+	labels[i].font_size = gdlsp->gdls_size;
     }
     bsg_feature_labels_replace(parent_ref, labels, (size_t)gdlsp->gdls_num_labels);
     bu_free(labels, "bsg feature label sync");

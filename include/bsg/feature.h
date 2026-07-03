@@ -194,9 +194,10 @@ struct bsg_feature_label_data {
     point_t target;
     int anchor;
     int arrow;
+    fastf_t font_size;
 };
 
-#define BSG_FEATURE_LABEL_DATA_INIT { NULL, VINIT_ZERO, 0, {0, 0, 0}, 0, VINIT_ZERO, BSG_ANCHOR_AUTO, 0 }
+#define BSG_FEATURE_LABEL_DATA_INIT { NULL, VINIT_ZERO, 0, {0, 0, 0}, 0, VINIT_ZERO, BSG_ANCHOR_AUTO, 0, 0.0 }
 
 typedef int (*bsg_feature_visit_cb)(bsg_feature_ref ref, const struct bsg_feature_record *record, void *data);
 

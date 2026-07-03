@@ -5626,6 +5626,9 @@ ged_draw_shape_draft_commit_to_obol_group(ged_draw_shape_draft *draft,
     if (!ged_draw_shape_draft_set_visible_owner(draft, 1))
 	return GED_DRAW_SHAPE_REF_NULL;
 
+    (void)ged_draw_obol_database_source_realize_for_path(draft->gedp,
+	    draft->obol_source_path);
+
     void *scene_ctx = ged_draw_obol_context_token_with_parent_for_path(
 	    draft->gedp, draft->obol_source_path);
     struct ged_draw_obol_context_token *source_token =
@@ -13103,14 +13106,7 @@ ged_draw_group_ref_redraw_wireframe_obol_path_cb(struct ged *gedp,
     if (!ctx || !path || !path[0])
 	return 1;
 
-    ged_draw_shape_ref ref =
-	ged_draw_obol_shape_ref_for_database_source_path(gedp, path);
-    if (ged_draw_shape_ref_is_null(ref))
-	return 1;
-
-    ctx->ret += ged_draw_shape_ref_redraw_wireframe(gedp, ref,
-	    ctx->dbip, ctx->tol, ctx->ttol, ctx->view_ctx,
-	    ctx->skip_subtractions);
+    ctx->ret += ged_draw_obol_database_source_realize_for_path(gedp, path);
     return 1;
 }
 
@@ -13181,6 +13177,18 @@ ged_draw_shape_ref_realize_context(struct ged *gedp, ged_draw_shape_ref ref,
 	ged_draw_shape_ref_obol_token(gedp, ref);
     if (token && token->is_database_source && token->path &&
 	    token->path[0]) {
+	struct ged_draw_obol_draw_state_summary draw_state;
+	memset(&draw_state, 0, sizeof(draw_state));
+	if (ged_draw_obol_database_source_draw_state_for_path(gedp,
+		token->path, &draw_state) && draw_state.valid &&
+		draw_state.draw_mode_valid &&
+		(draw_state.draw_mode == GED_DRAW_MODE_EVAL_WIRE ||
+		 draw_state.draw_mode == GED_DRAW_MODE_EVAL_POINTS)) {
+	    int eval_ret = (draw_state.draw_mode == GED_DRAW_MODE_EVAL_WIRE) ?
+		ged_draw_shape_ref_eval_wireframe(gedp, ref) :
+		ged_draw_shape_ref_eval_points(gedp, ref);
+	    return eval_ret == BRLCAD_OK ? 1 : 0;
+	}
 	(void)ged_draw_shape_ref_lod_ensure_obol(gedp, ref, view_ctx);
 	obol_realized = ged_draw_obol_database_source_realize_for_path(gedp,
 		token->path);

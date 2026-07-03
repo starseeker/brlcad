@@ -16,6 +16,7 @@
 
 #include <Inventor/SoType.h>
 #include <Inventor/nodes/SoGroup.h>
+#include <Inventor/nodes/SoFont.h>
 #include <Inventor/nodes/SoNode.h>
 #include <Inventor/nodes/SoSeparator.h>
 #include <Inventor/nodes/SoText2.h>
@@ -43,6 +44,24 @@ count_nodes_of_type(SoNode *node, SoType type)
 	    count += count_nodes_of_type(group->getChild(i), type);
     }
     return count;
+}
+
+static SoNode *
+first_node_of_type(SoNode *node, SoType type)
+{
+    if (!node)
+	return NULL;
+    if (node->isOfType(type))
+	return node;
+    if (node->isOfType(SoGroup::getClassTypeId())) {
+	SoGroup *group = static_cast<SoGroup *>(node);
+	for (int i = 0; i < group->getNumChildren(); i++) {
+	    SoNode *found = first_node_of_type(group->getChild(i), type);
+	    if (found)
+		return found;
+	}
+    }
+    return NULL;
 }
 
 struct feature_visit_count {
@@ -109,6 +128,7 @@ test_feature_nodes(BRLObolViewController &view)
     label.point = SbVec3f(1.0f, 2.0f, 0.0f);
     label.hasLeader = TRUE;
     label.target = SbVec3f(0.0f, 0.0f, 0.0f);
+    label.fontSize = 17.0f;
     labels.push_back(label);
 
     BRLObolFeatureHandle labelHandle = view.features().publishLabels(
@@ -120,6 +140,10 @@ test_feature_nodes(BRLObolViewController &view)
     if (count_nodes_of_type(view.features().node(labelHandle),
 		SoText2::getClassTypeId()) != 1)
 	FAIL("label feature should realize a SoText2 node");
+    SoFont *font = static_cast<SoFont *>(first_node_of_type(
+	    view.features().node(labelHandle), SoFont::getClassTypeId()));
+    if (!font || font->size.getValue() != 17.0f)
+	FAIL("label feature should preserve explicit font size");
 
     std::vector<SbVec3f> points;
     points.push_back(SbVec3f(0.0f, 0.0f, 0.0f));

@@ -418,7 +418,8 @@ BRLObolLabel::BRLObolLabel(void) :
     hasLeader(FALSE),
     target(0.0f, 0.0f, 0.0f),
     anchor(0),
-    arrow(FALSE)
+    arrow(FALSE),
+    fontSize(20.0f)
 {
 }
 
@@ -930,7 +931,8 @@ store_axes_node(const BRLObolFeatureStoreRecord &rec)
 	axes->size = size;
 	if (rec.style.hasVisible)
 	    axes->visible = rec.style.visible;
-	axes->rebuildGeometry();
+	SoBRLVListShape *shape = axes->rebuildGeometry();
+	store_apply_vlist_style(shape, rec.style);
 	sep->addChild(axes);
     }
 
@@ -980,7 +982,7 @@ store_label_node(const BRLObolFeatureStoreRecord &rec)
 	textSep->addChild(baseColor);
 
 	SoFont *font = new SoFont;
-	font->size = 12.0f;
+	font->size = label.fontSize > 0.0f ? label.fontSize : 20.0f;
 	textSep->addChild(font);
 
 	SoText2 *text = new SoText2;
@@ -2499,6 +2501,7 @@ static SoNode *
 store_polygon_node(const BRLObolPolygonStoreRecord &rec)
 {
     std::vector<SbVec3f> points;
+    std::vector<double> precisePoints;
     std::vector<int32_t> commands;
     for (size_t i = 0; i < rec.polygon.num_contours; i++) {
 	const struct bg_poly_contour &contour = rec.polygon.contour[i];
@@ -2506,12 +2509,18 @@ store_polygon_node(const BRLObolPolygonStoreRecord &rec)
 	    continue;
 	for (size_t j = 0; j < contour.num_points; j++) {
 	    points.push_back(store_vec3(contour.point[j]));
+	    precisePoints.push_back(contour.point[j][X]);
+	    precisePoints.push_back(contour.point[j][Y]);
+	    precisePoints.push_back(contour.point[j][Z]);
 	    commands.push_back(j == 0 ?
 		    static_cast<int32_t>(BRLObolLineCommand::Move) :
 		    static_cast<int32_t>(BRLObolLineCommand::Draw));
 	}
 	if (!contour.open && contour.num_points > 1) {
 	    points.push_back(store_vec3(contour.point[0]));
+	    precisePoints.push_back(contour.point[0][X]);
+	    precisePoints.push_back(contour.point[0][Y]);
+	    precisePoints.push_back(contour.point[0][Z]);
 	    commands.push_back(static_cast<int32_t>(BRLObolLineCommand::Draw));
 	}
     }
@@ -2529,6 +2538,8 @@ store_polygon_node(const BRLObolPolygonStoreRecord &rec)
     feature.style.hasLineWidth = TRUE;
     feature.style.lineWidth = 1;
     SoBRLVListShape *shape = store_vlist_node(feature);
+    shape->setPrecisePoints(precisePoints.empty() ? NULL :
+	    precisePoints.data(), static_cast<int>(points.size()));
     shape->sourceType = "view-polygon-edge";
     shape->geometryKind = "line";
 

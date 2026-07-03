@@ -6587,6 +6587,7 @@ rt_view_feature_labels_replace_bsg(rt_view_feature_ref ref,
 	    bsg_labels[i].color[1] = labels[i].color[1];
 	    bsg_labels[i].color[2] = labels[i].color[2];
 	    bsg_labels[i].anchor = BSG_ANCHOR_AUTO;
+	    bsg_labels[i].font_size = labels[i].font_size;
 	}
     }
 

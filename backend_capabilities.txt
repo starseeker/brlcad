@@ -672,6 +672,11 @@ Recent cleanup state:
   state.  GED source-record read/apply bridges read and write it through
   libbrlobol controller APIs instead of deriving it from retained adapter
   database-source records.
+* Libbrlobol database sources now expose `clearRealizedGeometry`, allowing GED
+  external primary geometry publication to replace stale internal realization
+  children while preserving auxiliary source/VLIST children.  Evaluated wire
+  and sampled/evaluated mesh publication use this contract, keeping generic
+  database-realization output from leaking into mode-specific Obol sources.
 * Private source-adapter erase, visibility, child-iteration, and record-summary
   context pass-through wrappers are retired where ref-shaped facades exist.
 * Active-scope lookup now resolves through the source-adapter-local

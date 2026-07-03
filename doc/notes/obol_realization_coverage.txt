@@ -188,18 +188,71 @@ Coverage Table
 | material | material metadata | SoBRLMaterialObject metadata node, not standalone geometry | Covered by generated wire/shaded material-object metadata tests plus no-draw bbox/pick/snap/export/measure checks |
 | script | script metadata/action object | No drawable scene node until a script-backed scene policy exists | Covered by generated wire/shaded no-draw diagnostic tests |
 
+Draw-Test Realization Findings
+------------------------------
+
+After separating polygon, text, and axes raster tolerances, the draw-mode
+realization failures in `ged_test_drawing_basic` have been brought onto
+first-class Obol/libbrlobol paths:
+
+* v022, `draw -m3 all.g`: passes through direct evaluated-wire publication.
+  GED draw mode 3 is represented as a mode-specific Obol database source
+  (`REPRESENTATION_EVAL_WIRE`) and realizes via `draw_m3`/bigE output instead
+  of falling back to ordinary primitive wireframe.
+* v023, `draw -m4 all.bot`: passes through hidden-line mesh rendering.
+  GED draw mode 4 is represented as `REPRESENTATION_HIDDEN_LINE`; libbrlobol
+  realizes the database source as mesh and renders an invisible depth-fill pass
+  followed by a polygon-offset line overlay so coplanar mesh edges survive
+  without exposing occluded back edges.
+* v024, `draw -m5 all.g`: passes through sampled-face-set publication.
+  GED draw mode 5 is represented as `REPRESENTATION_EVAL_POINTS`; the Obol
+  source receives the sampled indexed-face-set mesh and uses the published
+  geometry bounds for autoview.  External mesh publication replaces any
+  generic database-realization primary children so stale unevaluated mesh
+  geometry cannot leak into the sampled/evaluated source.
+* v026, `draw -m3 scene.g` on rook.g: passes after evaluated-wire external
+  publication updates source bounds from the realized geometry and replaces
+  generic primary VLIST children.  This avoids autoview framing against stale
+  pre-evaluation database bounds and prevents Boolean tool-solid wireframes
+  from rendering beside the evaluated result.
+
+Mode 1 shaded BoT/polysolid, mode 2 unevaluated shaded, mixed
+shaded/wireframe cases v020, v021, and v025, and the mode-specific v022-v024
+and v026 cases now pass the current OSMesa-backed Obol image gate.  Future
+changes should preserve the representation-mode split rather than collapsing
+non-shaded database sources back to generic wireframe realization.
+The evaluated-mode regression case to guard against is applying generic
+display settings after creating a mode-specific source: the underlying
+libbrlobol draw mode is still wireframe for evaluated wire and point modes,
+but the exact `REPRESENTATION_EVAL_WIRE` or `REPRESENTATION_EVAL_POINTS`
+state must remain authoritative.  GED display mutations that know an exact
+GED draw mode must update the source representation explicitly, and
+libbrlobol draw-mode-only mutations must not demote existing non-simple
+representations.  Summary reads also need to use the selected database source
+instance, not the first source sharing the same logical database path, because
+wire/shaded/evaluated mode sources can coexist during a transaction.
+External GED primary geometry publication has an additional hardening contract:
+line, annotation, point, and indexed-face publishers clear existing primary
+realized children on the target `SoBRLDatabaseSource` before installing the new
+external payload, while preserving auxiliary VLIST/source children.  This is
+covered by `SoBRLDatabaseSource::clearRealizedGeometry` in libbrlobol and by the
+current `ged_test_draw` Obol image gate.
+
 Near-Term Gates
 ---------------
 
-1. Promote BREP and BSpline/NURB shaded rows from diagnostics to stable native
+1. Preserve the `GED_DRAW_MODE_EVAL_WIRE`, `GED_DRAW_MODE_HIDDEN_LINE`, and
+   `GED_DRAW_MODE_EVAL_POINTS` representation paths in qged/qtcad integration
+   work, including source bounds updates from external geometry publication.
+2. Promote BREP and BSpline/NURB shaded rows from diagnostics to stable native
    or tessellated representation when the underlying converters are reliable.
-2. Promote diagnostic/fallback rows such as BREP, legacy HF, annotation, and
+3. Promote diagnostic/fallback rows such as BREP, legacy HF, annotation, and
    point-clouds to native Obol representations where that adds stable user
    value.
-3. Complete broader live edit-tool lifecycle/state semantics and extend stable
+4. Complete broader live edit-tool lifecycle/state semantics and extend stable
    edge/vertex identity beyond the current indexed-mesh action coverage where
    native or tessellated curved nodes need to report those sub-entities.
-4. Promote the controlled Generic_Twin.g opt-in workflow gate to a default
+5. Promote the controlled Generic_Twin.g opt-in workflow gate to a default
    gate after large-BoT staged LoD realization can publish diagnostics for
    invalid BoTs, preserve mixed implicit/mesh identity, and avoid blocking
    routine qtcad developer tests.

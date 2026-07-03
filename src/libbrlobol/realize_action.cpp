@@ -106,6 +106,10 @@ SoBRLRealizeAction::databaseSourceAction(SoAction *action, SoNode *node)
 	if (source->getDatabase()) {
 	    SbBool realized = FALSE;
 	    if ((roleFlags & SoBRLDatabaseSource::REALIZATION_ROLE_MESH) ||
+		    source->representationMode.getValue() ==
+		    SoBRLDatabaseSource::REPRESENTATION_HIDDEN_LINE ||
+		    source->representationMode.getValue() ==
+		    SoBRLDatabaseSource::REPRESENTATION_EVAL_POINTS ||
 		    source->drawMode.getValue() == SoBRLDatabaseSource::SHADED)
 		realized = source->realizeDatabaseMesh();
 	    else

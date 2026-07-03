@@ -376,7 +376,26 @@ record_identity_with_revision(const char *identity, uint32_t revision)
 static int
 source_record_draw_mode(const SoBRLDatabaseSource *source)
 {
-    if (source && source->drawMode.getValue() == SoBRLDatabaseSource::SHADED)
+    if (!source)
+	return BRLOBOL_LOD_DRAW_WIRE;
+
+    switch (source->representationMode.getValue()) {
+	case SoBRLDatabaseSource::REPRESENTATION_SHADED_BOTS:
+	    return BRLOBOL_LOD_DRAW_SHADED_BOTS;
+	case SoBRLDatabaseSource::REPRESENTATION_SHADED:
+	    return BRLOBOL_LOD_DRAW_SHADED;
+	case SoBRLDatabaseSource::REPRESENTATION_HIDDEN_LINE:
+	    return BRLOBOL_LOD_DRAW_HIDDEN_LINE;
+	case SoBRLDatabaseSource::REPRESENTATION_EVAL_POINTS:
+	    return BRLOBOL_LOD_DRAW_POINTS;
+	case SoBRLDatabaseSource::REPRESENTATION_EVAL_WIRE:
+	case SoBRLDatabaseSource::REPRESENTATION_WIRE:
+	    return BRLOBOL_LOD_DRAW_WIRE;
+	default:
+	    break;
+    }
+
+    if (source->drawMode.getValue() == SoBRLDatabaseSource::SHADED)
 	return BRLOBOL_LOD_DRAW_SHADED;
     return BRLOBOL_LOD_DRAW_WIRE;
 }
@@ -752,6 +771,8 @@ assign_realized_identity(ShapeT *shape,
     if (shape->databaseIntent.getValue() ||
 	    !shape->nonDatabaseSource.getValue())
 	shape->drawMode = source_record_draw_mode(source);
+    shape->hiddenLine = (source_record_draw_mode(source) ==
+	    BRLOBOL_LOD_DRAW_HIDDEN_LINE) ? TRUE : FALSE;
     shape->recordRole = "database";
     shape->geometryKind = "";
     if (source) {
@@ -856,6 +877,8 @@ sync_shape_display_state(ShapeT *shape, const SoBRLDatabaseSource *source)
 	return;
 
     shape->drawMode = source_record_draw_mode(source);
+    shape->hiddenLine = (shape->drawMode.getValue() ==
+	    BRLOBOL_LOD_DRAW_HIDDEN_LINE) ? TRUE : FALSE;
     shape->visible = source->visible.getValue();
     shape->highlighted = source->highlighted.getValue();
     shape->lineStyle = source->lineStyle.getValue();
@@ -2094,6 +2117,7 @@ SoBRLDatabaseSource::setRepresentationState(
     if (this->representationModeSensor)
 	this->representationModeSensor->attach(&this->representationMode);
 
+    this->markStale(STALE_DRAW);
     const char *sourcePath = this->path.getValue().getString();
     for (int i = 0; i < this->getNumChildren(); i++)
 	retarget_realized_node_source(this->getChild(i), this,
@@ -2976,6 +3000,20 @@ SoBRLDatabaseSource::realizePrototypeWireframe(void)
     this->staleReason = STALE_NONE;
     this->syncRealizedShapeOwnerState();
     return TRUE;
+}
+
+int
+SoBRLDatabaseSource::clearRealizedGeometry(SbBool preserveAuxiliary)
+{
+    const int before = this->getNumChildren();
+    if (preserveAuxiliary) {
+	remove_non_auxiliary_children(this);
+    } else {
+	for (int i = this->getNumChildren() - 1; i >= 0; i--)
+	    this->removeChild(i);
+    }
+
+    return before != this->getNumChildren() ? 1 : 0;
 }
 
 void
@@ -3956,11 +3994,6 @@ realized_bounds_for_node(const SoNode *node, SbBox3f &bounds)
 	return realized_bounds_for_mesh_shape(
 		static_cast<const SoBRLMeshShape *>(node), bounds);
 
-    if (node->isOfType(SoBRLDatabaseSource::getClassTypeId()) &&
-	    static_cast<const SoBRLDatabaseSource *>(node)->getSourceBounds(
-		bounds))
-	return TRUE;
-
     SbBool valid = FALSE;
     if (node->isOfType(SoGroup::getClassTypeId())) {
 	const SoGroup *group = static_cast<const SoGroup *>(node);
@@ -3973,6 +4006,14 @@ realized_bounds_for_node(const SoNode *node, SbBox3f &bounds)
 	    }
 	}
     }
+
+    if (valid)
+	return TRUE;
+
+    if (node->isOfType(SoBRLDatabaseSource::getClassTypeId()) &&
+	    static_cast<const SoBRLDatabaseSource *>(node)->getSourceBounds(
+		bounds))
+	return TRUE;
 
     return valid;
 }

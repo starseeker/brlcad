@@ -73,6 +73,7 @@ _tclcad_data_labels_sync_draw_view(void *view_ctx,
 	labels[i].color[0] = (unsigned char)gdlsp->gdls_color[0];
 	labels[i].color[1] = (unsigned char)gdlsp->gdls_color[1];
 	labels[i].color[2] = (unsigned char)gdlsp->gdls_color[2];
+	labels[i].font_size = gdlsp->gdls_size;
     }
 
     int ret = ged_draw_view_context_tcl_labels_replace(view_ctx, name, 1,

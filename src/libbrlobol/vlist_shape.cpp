@@ -547,6 +547,93 @@ set_vlist_gl_color(SoBRLVListShape *shape, int primitiveIndex)
 	set_vlist_default_gl_color(shape);
 }
 
+static SbBool
+vlist_needs_independent_segment_rendering(const SoBRLVListShape *shape)
+{
+    return shape &&
+	(shape->selectedPrimitive.getNum() > 0 ||
+	 shape->highlightedPrimitive.getNum() > 0);
+}
+
+static void
+vlist_gl_vertex_at(const SoBRLVListShape *shape, int index)
+{
+    double precisePoint[3] = {0.0, 0.0, 0.0};
+    if (shape && shape->getPrecisePoint(index, precisePoint)) {
+	glVertex3dv(precisePoint);
+	return;
+    }
+
+    const SbVec3f &point = shape->point[index];
+    glVertex3f(point[0], point[1], point[2]);
+}
+
+static void
+vlist_render_independent_segments(SoBRLVListShape *shape, int n)
+{
+    SbBool haveLast = FALSE;
+    int lastIndex = -1;
+    int segmentIndex = 0;
+
+    glBegin(GL_LINES);
+    for (int i = 0; i < n; i++) {
+	switch (shape->command[i]) {
+	    case SoBRLVListShape::MOVE:
+		lastIndex = i;
+		haveLast = TRUE;
+		break;
+	    case SoBRLVListShape::DRAW:
+		if (haveLast) {
+		    set_vlist_gl_color(shape, segmentIndex);
+		    vlist_gl_vertex_at(shape, lastIndex);
+		    vlist_gl_vertex_at(shape, i);
+		    segmentIndex++;
+		}
+		lastIndex = i;
+		haveLast = TRUE;
+		break;
+	    default:
+		break;
+	}
+    }
+    glEnd();
+}
+
+static void
+vlist_render_line_strips(SoBRLVListShape *shape, int n)
+{
+    SbBool stripOpen = FALSE;
+
+    set_vlist_gl_color(shape, -1);
+    for (int i = 0; i < n; i++) {
+	switch (shape->command[i]) {
+	    case SoBRLVListShape::MOVE:
+		if (stripOpen)
+		    glEnd();
+		glBegin(GL_LINE_STRIP);
+		vlist_gl_vertex_at(shape, i);
+		stripOpen = TRUE;
+		break;
+	    case SoBRLVListShape::DRAW:
+		if (!stripOpen) {
+		    glBegin(GL_LINE_STRIP);
+		    stripOpen = TRUE;
+		}
+		vlist_gl_vertex_at(shape, i);
+		break;
+	    default:
+		if (stripOpen) {
+		    glEnd();
+		    stripOpen = FALSE;
+		}
+		break;
+	}
+    }
+
+    if (stripOpen)
+	glEnd();
+}
+
 void
 SoBRLVListShape::GLRender(SoGLRenderAction *action)
 {
@@ -559,35 +646,14 @@ SoBRLVListShape::GLRender(SoGLRenderAction *action)
     if (this->lineWidth.getValue() > 0)
 	glLineWidth(static_cast<GLfloat>(this->lineWidth.getValue()));
 
-    SbVec3f last;
-    SbBool haveLast = FALSE;
-    int segmentIndex = 0;
     int n = this->point.getNum();
     if (this->command.getNum() < n)
 	n = this->command.getNum();
 
-    glBegin(GL_LINES);
-    for (int i = 0; i < n; i++) {
-	switch (this->command[i]) {
-	    case MOVE:
-		last = this->point[i];
-		haveLast = TRUE;
-		break;
-	    case DRAW:
-		if (haveLast) {
-		    set_vlist_gl_color(this, segmentIndex);
-		    glVertex3f(last[0], last[1], last[2]);
-		    glVertex3f(this->point[i][0], this->point[i][1], this->point[i][2]);
-		    segmentIndex++;
-		}
-		last = this->point[i];
-		haveLast = TRUE;
-		break;
-	    default:
-		break;
-	}
-    }
-    glEnd();
+    if (vlist_needs_independent_segment_rendering(this))
+	vlist_render_independent_segments(this, n);
+    else
+	vlist_render_line_strips(this, n);
 
     glBegin(GL_POINTS);
     for (int i = 0; i < n; i++) {
@@ -599,7 +665,7 @@ SoBRLVListShape::GLRender(SoGLRenderAction *action)
 		else
 		    set_vlist_default_gl_color(this);
 	    }
-	    glVertex3f(this->point[i][0], this->point[i][1], this->point[i][2]);
+	    vlist_gl_vertex_at(this, i);
 	}
     }
     glEnd();
