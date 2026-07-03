@@ -2585,15 +2585,26 @@ test_scene_database_source_summary(void)
 	    summary.stale ||
 	    summary.realizationStatus != SoBRLDatabaseSource::REALIZED ||
 	    summary.realizedMeshCount != 1 ||
-	    summary.realizedShapeCount != 0 ||
-	    !ownedSource->getRealizedMesh() ||
-	    ownedSource->getRealizedMesh()->point.getNum() == 0 ||
-	    ownedSource->getRealizedMesh()->coordIndex.getNum() == 0) {
+	    summary.realizedShapeCount != 0) {
 	printf("FAIL: mesh realization role should realize database mesh even in wire draw mode\n");
 	ownedRoot->unref();
 	db_close(dbip);
 	bu_file_delete(dbpath);
 	return 1;
+    }
+    {
+	SoBRLMeshShape *realizedMesh = ownedSource->getRealizedMesh();
+	const SoBRLMeshShape *realizedMeshGeom = realizedMesh ?
+	    realizedMesh->getGeometrySource() : NULL;
+	if (!realizedMesh || !realizedMeshGeom ||
+		realizedMeshGeom->point.getNum() == 0 ||
+		realizedMeshGeom->coordIndex.getNum() == 0) {
+	    printf("FAIL: mesh realization role should expose database mesh geometry\n");
+	    ownedRoot->unref();
+	    db_close(dbip);
+	    bu_file_delete(dbpath);
+	    return 1;
+	}
     }
 
     if (ownedScene.replaceDatabaseSource("lod-submit.bot", dbip,
@@ -4114,15 +4125,17 @@ test_mesh_lod_submit_action(void)
 	if (exactMeasure.getGeometryPolicy() != SoBRLMeasureAction::FULL_DETAIL ||
 		exactMeasure.getTriangleCount() != 1 ||
 		exactMeasure.getSkippedLodDisplayMeshCount() != 1 ||
-		exactMeasure.getSourceBackedFullDetailRequestCount() != 1 ||
-		check_source_mesh_request(
-		    exactMeasure.getSourceBackedFullDetailRequest(0),
-		    "/lod-submit.bot", "lod-submit.bot", 101)) {
+		exactMeasure.getSourceBackedFullDetailRequestCount() != 1) {
 	    printf("FAIL: exact measure did not request source-backed full-detail LoD mesh\n");
 	    ret = 1;
 	} else {
 	    const BRLObolSourceMeshRequest &measureSourceRequest =
 		exactMeasure.getSourceBackedFullDetailRequest(0);
+	    if (check_source_mesh_request(measureSourceRequest,
+		    "/lod-submit.bot", "lod-submit.bot", 101)) {
+		printf("FAIL: exact measure did not request source-backed full-detail LoD mesh\n");
+		ret = 1;
+	    }
 	    if (!measureSourceRequest.queryBoundsValid ||
 		    measureSourceRequest.queryBounds.isEmpty() ||
 		    measureSourceRequest.queryToleranceValid) {

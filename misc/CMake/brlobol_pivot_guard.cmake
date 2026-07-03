@@ -819,8 +819,8 @@ function(_brlobol_pivot_guard_check_obol_realization_coverage)
 	"measure_source_local_query_distance_limit"
 	"setQueryDistanceLimit"
 	"queryDistanceAllows"
-	"shape->point.getNum()"
-	"shape->command[i] != SoBRLVListShape::DRAW"
+	"geom->point.getNum()"
+	"geom->command[i] != SoBRLVListShape::DRAW"
 	"const int currentSegment = segmentIndex++"
 	"connectedPairs")
       string(FIND "${_measure_action_contents}" "${_token}" _idx)
@@ -841,8 +841,8 @@ function(_brlobol_pivot_guard_check_obol_realization_coverage)
   if(EXISTS "${_snap_action}")
     file(READ "${_snap_action}" _snap_action_contents)
     foreach(_token
-	"shape->point.getNum()"
-	"shape->command[i] == SoBRLVListShape::DRAW"
+	"geom->point.getNum()"
+	"geom->command[i] == SoBRLVListShape::DRAW"
 	"const int currentSegment = segmentIndex++")
       string(FIND "${_snap_action_contents}" "${_token}" _idx)
       if(_idx EQUAL -1)
@@ -21484,7 +21484,7 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 	[[ged_obol_set_database_source_visible]]
 	[[ged_obol_set_group_visible]]
 	[[setGroupDisplayState]]
-	[[markDatabaseSourceStale]]
+	[[markDatabaseSourceInstanceStale]]
 	[[ged_obol_source_summary_force_adapter]]
 	[[findDatabaseSource]]
 	[[BRLObolDatabaseSourceSummary]]
@@ -21500,16 +21500,16 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 	[[replaceDatabaseSource]]
 	[[renameDatabaseSource]]
 	[[setDatabaseSourceState]]
-	[[setDatabaseSourceDrawMode]]
-	[[setDatabaseSourceMaterialPolicy]]
-	[[setDatabaseSourcePlacementState]]
-		[[setDatabaseSourceRealizationState]]
-		[[setDatabaseSourceRealizationRoleFlags]]
-		[[setDatabaseSourceRealizationViewPolicy]]
-		[[publishDatabaseSourceAuxiliaryLineSet]]
+	[[setDatabaseSourceInstanceDrawMode]]
+	[[setDatabaseSourceInstanceMaterialPolicy]]
+	[[setDatabaseSourceInstancePlacementState]]
+		[[setDatabaseSourceInstanceRealizationState]]
+		[[setDatabaseSourceInstanceRealizationRoleFlags]]
+		[[setDatabaseSourceInstanceRealizationViewPolicy]]
+		[[publishDatabaseSourceInstanceAuxiliaryLineSet]]
 		[[BRLObolAuxiliaryLineSetDisplayState]]
 		[[display_state && display_state->valid]]
-		[[clearDatabaseSourceAuxiliaryShapes]]
+		[[clearDatabaseSourceInstanceAuxiliaryShapes]]
 		[[getGroupDatabaseSourceCount]]
 	[[ged_draw_obol_group_paths_foreach]]
 	[[ged_draw_obol_group_database_source_paths_foreach]]
@@ -23262,10 +23262,8 @@ function(_brlobol_pivot_guard_check_qtcad_view_snapshot_adapters)
 	"QgLegacyViewContext.h"
 	"rt/view.h"
 	"qg_legacy_view_to_context"
-	"rt_view_context_rotation_get"
-	"rt_view_context_center_get"
-	"rt_view_context_scale_get"
-	"rt_view_context_perspective_get"
+	"qgcanvas_sync_obol_camera"
+	"syncCameraFromRtViewContext"
 	"rt_view_context_aet_set"
 	"rt_view_context_update"
 	"rt_view_context_adc_state_get"
@@ -27526,8 +27524,10 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
 	      "realized_display_summary_fill"
 	      "syncRealizedShapeOwnerState"
 	      "sync_shape_owner_state"
-	      "shape->ownerSourcePath = source->path.getValue()"
-	      "shape->ownerRealizationIdentity = source->realizationIdentity.getValue()"
+	      "database_source_assign_string(shape->ownerSourcePath"
+	      "source->path.getValue()"
+	      "database_source_assign_string(shape->ownerRealizationIdentity"
+	      "source->realizationIdentity.getValue()"
 	      "summary.materialRevision = shape->materialRevision.getValue()"
 	      "summary.drawMatrixValid = shape->drawMatrixValid.getValue()"
 	      "summary.drawCenterValid = shape->drawCenterValid.getValue()"
@@ -28353,7 +28353,7 @@ function(_brlobol_pivot_guard_check_brlobol_point_identity)
 
   file(READ "${BRLCAD_SOURCE_DIR}/src/libbrlobol/snap_action.cpp" _snap_impl)
   foreach(_token
-      "shape->command[i] != SoBRLVListShape::POINT"
+      "geom->command[i] != SoBRLVListShape::POINT"
       "snapAction->consider(ENDPOINT"
       "editIntentRole, i, query, worldPoint")
     string(FIND "${_snap_impl}" "${_token}" _idx)

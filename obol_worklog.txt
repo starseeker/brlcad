@@ -15,6 +15,66 @@ needs historical context or more detailed design rationale.
 Current Work Notes
 ------------------
 
+2026-07-03 local-space shared database geometry:
+libbrlobol database realization now separates BRL-CAD leaf instances from
+primitive geometry.  `db_walk_tree` still supplies full paths, inherited
+region/material state, and accumulated member transforms, but the drawable
+geometry is built from identity-matrix `rt_db_get_internal` refetches and
+cached once per primitive per realization.  Each visible database leaf owns a
+metadata/draw-intent shape under an OpenInventor transform node and references
+the shared local geometry through `sharedGeometry`.
+
+The action stack was updated so export, measure, snap, summaries, and GED
+readback use the active/shared geometry source while preserving all reported
+identity and draw state from the visible instance.  Explicit shape geometry
+setters detach from the shared source, preserving GED/direct mutation
+semantics.  LoD-backed mesh instances keep an `SoBRLLodMeshShape` wrapper so
+per-view staged/display LoD state does not mutate shared full-detail source
+geometry.
+
+The cache is realization-local by design: source refresh/removal drops the
+realized children and releases the shared geometry targets together.  The
+remaining long-term cleanup is to replace `db_walk_tree`'s unavoidable
+per-instance primitive imports with a librt pre-import instance traversal API;
+the Obol scene graph boundary is now ready for that swap.
+
+Verification passed:
+`ninja -C build test_brlobol_prototype ged_test_obol_draw_sync`,
+`BRLCAD_ROOT=build ./build/src/libbrlobol/tests/test_brlobol_prototype`, and
+`./build/src/libged/tests/draw/ged_test_obol_draw_sync`.
+
+2026-07-03 libbrlobol realization hardening and librt poison findings:
+`SoBRLDatabaseSource::clearExternalPrimaryGeometry` now preserves direct
+primary Obol VLIST/mesh nodes and empties their geometry arrays instead of
+removing the only display-state target.  This keeps GED shape refs and
+display mutations valid after geometry clear without retaining large
+point/index buffers.  Database-source string sync now uses stable copies and
+no-op checks before writing OpenInventor string fields, fixing a libc++
+hardened `std::string` overlap trap triggered by nested-source
+`setDatabaseSourceDrawMode` display sync.  The database realization path now
+validates callback `rt_db_internal` payload magic before primitive method
+calls.  The subsequent local-space shared-geometry work now builds drawable
+geometry from identity-matrix refetches rather than transformed callback
+internals.
+
+The librt poison remains a real lower-level issue, not a libbrlobol stale
+callback retention bug.  In the passing guarded `ged_test_obol_draw_sync`,
+an lldb conditional breakpoint at `src/librt/db5_io.c:1002` hit with
+`ext.ext_buf == ip->idb_ptr` for `box.s` before `bu_free_external(&ext)`.
+The stack was the normal `db_walk_tree` leaf import feeding
+`SoBRLDatabaseSource::realizeDatabaseWireframe`.  Source inspection shows
+`db_get_external` allocates the external object buffer and `rt_arb_import5`
+allocates a distinct `struct rt_arb_internal`, so that alias is not an
+expected ARB import ownership contract.  Next root-cause work should trace
+allocator ownership/free history for the aliased external allocation.  The
+guard is intentionally cheap in steady state and protects libbrlobol from
+calling bomb-prone librt primitive methods on poisoned payloads.
+
+Verification passed:
+`ninja -C build test_brlobol_prototype ged_test_obol_draw_sync`,
+`./src/libbrlobol/tests/test_brlobol_prototype`, and
+`./src/libged/tests/draw/ged_test_obol_draw_sync`.
+
 As of 2026-07-02, `obol_activework.txt` is the authoritative current handoff.
 The active direction remains an Obol-primary database draw pivot, and the
 large Capability 1 GED draw-scene behavior-family push has landed.  Retained
@@ -17980,3 +18040,28 @@ and `git diff --check`.  A current-tree
 still fails only on image comparisons.  The next renderer slice should give
 GED/swrast verification an explicit Obol/libbrlobol offscreen or backing-store
 render path instead of restoring retained BSG source-owner duplication.
+
+After the interrupted libbrlobol hardening batch was resumed on 2026-07-03, the
+focused LoD update crash was reproduced as a custom-action traversal problem:
+`SoBRLSourceMeshPickAction` reached `SoLightModel::doAction` even though the
+action only enabled the elements required for focused geometry traversal.
+Export, measure, snap, and source-mesh pick actions now skip arbitrary
+scene-state nodes in their generic node handlers and delegate only to group and
+transformation nodes, preserving traversal and model-matrix updates without
+invoking unrelated state elements.
+
+The qtcad draw-sync expectation was also updated for representation-specific
+database-source instances.  A shaded `ball.s` source and a shared wire `ball.s`
+source intentionally coexist, so direct and scoped qtcad source-owner tests now
+assert both owners remain while wire `box.s` add/remove/clear operations target
+their own owner scope.  The pivot guard now checks shared-geometry `geom`
+command-stream traversal, hardened owner string assignment, instance-scoped GED
+draw-source controller calls, and qtcad camera sync through the Obol controller
+rather than low-level RT view-context getters in `QgCanvasState.h`.
+
+Verification passed with:
+`ninja -C build libbrlobol test_brlobol_lod_update_action test_brlobol_prototype ged_test_obol_draw_sync test_qtcad_obol_draw_sync`;
+`ctest --test-dir build -R
+'^(brlobol_pivot_guard|libbrlobol_prototype|libbrlobol_lod_update_action|ged_test_obol_draw_sync|test_qtcad_obol_draw_sync)$'
+-j3 --timeout 240 --output-on-failure`;
+and `git diff --check`.

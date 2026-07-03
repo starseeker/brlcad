@@ -14,7 +14,9 @@
 
 #include <Inventor/SbBox.h>
 #include <Inventor/elements/SoModelMatrixElement.h>
+#include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoNode.h>
+#include <Inventor/nodes/SoTransformation.h>
 
 #include <float.h>
 #include <math.h>
@@ -625,7 +627,9 @@ SoBRLSnapAction::beginTraversal(SoNode *node)
 void
 SoBRLSnapAction::nodeAction(SoAction *action, SoNode *node)
 {
-    node->doAction(action);
+    if (node->isOfType(SoGroup::getClassTypeId()) ||
+	    node->isOfType(SoTransformation::getClassTypeId()))
+	node->doAction(action);
 }
 
 void
@@ -647,32 +651,33 @@ SoBRLSnapAction::vlistShapeAction(SoAction *action, SoNode *node)
     SbVec3f last;
     SbBool haveLast = FALSE;
     int segmentIndex = 0;
-    int n = shape->point.getNum();
-    if (shape->command.getNum() < n)
-	n = shape->command.getNum();
+    const SoBRLVListShape *geom = shape->getGeometrySource();
+    int n = geom->point.getNum();
+    if (geom->command.getNum() < n)
+	n = geom->command.getNum();
 
     for (int i = 0; i < n; i++) {
-	if (shape->command[i] == SoBRLVListShape::MOVE) {
-	    last = shape->point[i];
+	if (geom->command[i] == SoBRLVListShape::MOVE) {
+	    last = geom->point[i];
 	    haveLast = TRUE;
 	    continue;
 	}
 
-	if (shape->command[i] == SoBRLVListShape::DRAW) {
+	if (geom->command[i] == SoBRLVListShape::DRAW) {
 	    if (!haveLast) {
-		last = shape->point[i];
+		last = geom->point[i];
 		haveLast = TRUE;
 		continue;
 	    }
 
 	    const int currentSegment = segmentIndex++;
 	    if (!snapAction->selectionAllows(shape->isPrimitiveSelected(currentSegment))) {
-		last = shape->point[i];
+		last = geom->point[i];
 		continue;
 	    }
 
 	    SbVec3f pointA = snapAction->pointForCoordinateSpace(localToWorld, last);
-	    SbVec3f pointB = snapAction->pointForCoordinateSpace(localToWorld, shape->point[i]);
+	    SbVec3f pointB = snapAction->pointForCoordinateSpace(localToWorld, geom->point[i]);
 	    centerBox.extendBy(pointA);
 	    centerBox.extendBy(pointB);
 
@@ -686,17 +691,17 @@ SoBRLSnapAction::vlistShapeAction(SoAction *action, SoNode *node)
 	    snapAction->consider(MIDPOINT, sourcePath, editIntentId,
 		    editIntentRole, currentSegment, query,
 		    (pointA + pointB) * 0.5f);
-	    last = shape->point[i];
+	    last = geom->point[i];
 	    continue;
 	}
 
-	if (shape->command[i] != SoBRLVListShape::POINT)
+	if (geom->command[i] != SoBRLVListShape::POINT)
 	    continue;
 
 	if (!snapAction->selectionAllows(shape->isPrimitiveSelected(i)))
 	    continue;
 
-	SbVec3f worldPoint = snapAction->pointForCoordinateSpace(localToWorld, shape->point[i]);
+	SbVec3f worldPoint = snapAction->pointForCoordinateSpace(localToWorld, geom->point[i]);
 	centerBox.extendBy(worldPoint);
 	snapAction->consider(ENDPOINT, sourcePath, editIntentId,
 		editIntentRole, i, query, worldPoint);

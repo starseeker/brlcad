@@ -13,7 +13,9 @@
 #include "brlobol/vlist_shape.h"
 
 #include <Inventor/elements/SoModelMatrixElement.h>
+#include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoNode.h>
+#include <Inventor/nodes/SoTransformation.h>
 
 #include <algorithm>
 #include <float.h>
@@ -886,7 +888,9 @@ SoBRLMeasureAction::beginTraversal(SoNode *node)
 void
 SoBRLMeasureAction::nodeAction(SoAction *action, SoNode *node)
 {
-    node->doAction(action);
+    if (node->isOfType(SoGroup::getClassTypeId()) ||
+	    node->isOfType(SoTransformation::getClassTypeId()))
+	node->doAction(action);
 }
 
 void
@@ -905,23 +909,24 @@ SoBRLMeasureAction::vlistShapeAction(SoAction *action, SoNode *node)
     SbVec3f last;
     SbBool haveLast = FALSE;
     int segmentIndex = 0;
-    int n = shape->point.getNum();
-    if (shape->command.getNum() < n)
-	n = shape->command.getNum();
+    const SoBRLVListShape *geom = shape->getGeometrySource();
+    int n = geom->point.getNum();
+    if (geom->command.getNum() < n)
+	n = geom->command.getNum();
 
     std::vector<measure_segment_record> measuredSegments;
     for (int i = 0; i < n; i++) {
-	if (shape->command[i] == SoBRLVListShape::MOVE) {
-	    last = shape->point[i];
+	if (geom->command[i] == SoBRLVListShape::MOVE) {
+	    last = geom->point[i];
 	    haveLast = TRUE;
 	    continue;
 	}
 
-	if (shape->command[i] != SoBRLVListShape::DRAW)
+	if (geom->command[i] != SoBRLVListShape::DRAW)
 	    continue;
 
 	if (!haveLast) {
-	    last = shape->point[i];
+	    last = geom->point[i];
 	    haveLast = TRUE;
 	    continue;
 	}
@@ -929,12 +934,12 @@ SoBRLMeasureAction::vlistShapeAction(SoAction *action, SoNode *node)
 	const int currentSegment = segmentIndex++;
 	if (!measureAction->selectionAllows(shape->isPrimitiveSelected(currentSegment)) ||
 		!measureAction->highlightAllows(shape->isPrimitiveHighlighted(currentSegment))) {
-	    last = shape->point[i];
+	    last = geom->point[i];
 	    continue;
 	}
 
 	SbVec3f pointA = measureAction->pointForCoordinateSpace(localToWorld, last);
-	SbVec3f pointB = measureAction->pointForCoordinateSpace(localToWorld, shape->point[i]);
+	SbVec3f pointB = measureAction->pointForCoordinateSpace(localToWorld, geom->point[i]);
 
 	measuredShape = TRUE;
 	measureAction->measureSegment(sourcePath, editIntentId,
@@ -949,7 +954,7 @@ SoBRLMeasureAction::vlistShapeAction(SoAction *action, SoNode *node)
 	    record.b = pointB;
 	    measuredSegments.push_back(record);
 	}
-	last = shape->point[i];
+	last = geom->point[i];
     }
 
     if (measureAction->angleComputationEnabled) {

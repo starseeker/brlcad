@@ -109,6 +109,7 @@ SoBRLVListShape::SoBRLVListShape(void)
     SO_NODE_ADD_FIELD(lodPolicy, (0));
     SO_NODE_ADD_EMPTY_MFIELD(selectedPrimitive);
     SO_NODE_ADD_EMPTY_MFIELD(highlightedPrimitive);
+    SO_NODE_ADD_FIELD(sharedGeometry, (NULL));
 }
 
 SoBRLVListShape::~SoBRLVListShape(void)
@@ -122,8 +123,47 @@ SoBRLVListShape::initClass(void)
 }
 
 void
+SoBRLVListShape::setSharedGeometry(SoBRLVListShape *shape)
+{
+    this->sharedGeometry = shape;
+}
+
+SoBRLVListShape *
+SoBRLVListShape::getSharedGeometrySource(void)
+{
+    SoNode *node = this->sharedGeometry.getValue();
+    if (node && node != this &&
+	    node->isOfType(SoBRLVListShape::getClassTypeId()))
+	return static_cast<SoBRLVListShape *>(node);
+    return this;
+}
+
+const SoBRLVListShape *
+SoBRLVListShape::getSharedGeometrySource(void) const
+{
+    const SoNode *node = this->sharedGeometry.getValue();
+    if (node && node != this &&
+	    node->isOfType(SoBRLVListShape::getClassTypeId()))
+	return static_cast<const SoBRLVListShape *>(node);
+    return this;
+}
+
+SoBRLVListShape *
+SoBRLVListShape::getGeometrySource(void)
+{
+    return this->getSharedGeometrySource();
+}
+
+const SoBRLVListShape *
+SoBRLVListShape::getGeometrySource(void) const
+{
+    return this->getSharedGeometrySource();
+}
+
+void
 SoBRLVListShape::setLineSet(const SbVec3f *points, const int32_t *commands, int count)
 {
+    this->sharedGeometry = NULL;
     this->precisePoints.clear();
     this->preciseAnnotationPoints.clear();
     this->point.setNum(0);
@@ -172,13 +212,14 @@ SoBRLVListShape::getPrecisePoint(int index, double *pointOut) const
     if (!pointOut || index < 0)
 	return FALSE;
 
+    const SoBRLVListShape *geom = this->getGeometrySource();
     const size_t offset = static_cast<size_t>(index) * 3;
-    if (offset + 2 >= this->precisePoints.size())
+    if (offset + 2 >= geom->precisePoints.size())
 	return FALSE;
 
-    pointOut[0] = this->precisePoints[offset + 0];
-    pointOut[1] = this->precisePoints[offset + 1];
-    pointOut[2] = this->precisePoints[offset + 2];
+    pointOut[0] = geom->precisePoints[offset + 0];
+    pointOut[1] = geom->precisePoints[offset + 1];
+    pointOut[2] = geom->precisePoints[offset + 2];
     return TRUE;
 }
 
@@ -211,18 +252,19 @@ SoBRLVListShape::getPreciseAnnotationPoint(int index, double *pointOut) const
     if (!pointOut || index < 0)
 	return FALSE;
 
+    const SoBRLVListShape *geom = this->getGeometrySource();
     const size_t offset = static_cast<size_t>(index) * 3;
-    if (offset + 2 < this->preciseAnnotationPoints.size()) {
-	pointOut[0] = this->preciseAnnotationPoints[offset + 0];
-	pointOut[1] = this->preciseAnnotationPoints[offset + 1];
-	pointOut[2] = this->preciseAnnotationPoints[offset + 2];
+    if (offset + 2 < geom->preciseAnnotationPoints.size()) {
+	pointOut[0] = geom->preciseAnnotationPoints[offset + 0];
+	pointOut[1] = geom->preciseAnnotationPoints[offset + 1];
+	pointOut[2] = geom->preciseAnnotationPoints[offset + 2];
 	return TRUE;
     }
 
-    if (index >= this->annotationPoint.getNum())
+    if (index >= geom->annotationPoint.getNum())
 	return FALSE;
 
-    const SbVec3f &pointValue = this->annotationPoint[index];
+    const SbVec3f &pointValue = geom->annotationPoint[index];
     pointOut[0] = pointValue[0];
     pointOut[1] = pointValue[1];
     pointOut[2] = pointValue[2];
@@ -339,20 +381,21 @@ SoBRLVListShape::getSegmentCount(void) const
     int ret = 0;
     SbVec3f last;
     SbBool haveLast = FALSE;
-    int n = this->point.getNum();
-    if (this->command.getNum() < n)
-	n = this->command.getNum();
+    const SoBRLVListShape *geom = this->getGeometrySource();
+    int n = geom->point.getNum();
+    if (geom->command.getNum() < n)
+	n = geom->command.getNum();
 
     for (int i = 0; i < n; i++) {
-	switch (this->command[i]) {
+	switch (geom->command[i]) {
 	    case MOVE:
-		last = this->point[i];
+		last = geom->point[i];
 		haveLast = TRUE;
 		break;
 	    case DRAW:
 		if (haveLast)
 		    ret++;
-		last = this->point[i];
+		last = geom->point[i];
 		haveLast = TRUE;
 		break;
 	    default:
@@ -372,26 +415,27 @@ SoBRLVListShape::getSegment(int segmentIndex, SbVec3f &a, SbVec3f &b) const
     int currentSegment = 0;
     SbVec3f last;
     SbBool haveLast = FALSE;
-    int n = this->point.getNum();
-    if (this->command.getNum() < n)
-	n = this->command.getNum();
+    const SoBRLVListShape *geom = this->getGeometrySource();
+    int n = geom->point.getNum();
+    if (geom->command.getNum() < n)
+	n = geom->command.getNum();
 
     for (int i = 0; i < n; i++) {
-	switch (this->command[i]) {
+	switch (geom->command[i]) {
 	    case MOVE:
-		last = this->point[i];
+		last = geom->point[i];
 		haveLast = TRUE;
 		break;
 	    case DRAW:
 		if (haveLast) {
 		    if (currentSegment == segmentIndex) {
 			a = last;
-			b = this->point[i];
+			b = geom->point[i];
 			return TRUE;
 		    }
 		    currentSegment++;
 		}
-		last = this->point[i];
+		last = geom->point[i];
 		haveLast = TRUE;
 		break;
 	    default:
@@ -406,12 +450,13 @@ int
 SoBRLVListShape::getPointPrimitiveCount(void) const
 {
     int ret = 0;
-    int n = this->point.getNum();
-    if (this->command.getNum() < n)
-	n = this->command.getNum();
+    const SoBRLVListShape *geom = this->getGeometrySource();
+    int n = geom->point.getNum();
+    if (geom->command.getNum() < n)
+	n = geom->command.getNum();
 
     for (int i = 0; i < n; i++) {
-	if (this->command[i] == POINT)
+	if (geom->command[i] == POINT)
 	    ret++;
     }
 
@@ -427,16 +472,17 @@ SoBRLVListShape::getPointPrimitive(int pointIndex, int &primitiveIndex, SbVec3f 
 	return FALSE;
 
     int currentPoint = 0;
-    int n = this->point.getNum();
-    if (this->command.getNum() < n)
-	n = this->command.getNum();
+    const SoBRLVListShape *geom = this->getGeometrySource();
+    int n = geom->point.getNum();
+    if (geom->command.getNum() < n)
+	n = geom->command.getNum();
 
     for (int i = 0; i < n; i++) {
-	if (this->command[i] != POINT)
+	if (geom->command[i] != POINT)
 	    continue;
 	if (currentPoint == pointIndex) {
 	    primitiveIndex = i;
-	    pointOut = this->point[i];
+	    pointOut = geom->point[i];
 	    return TRUE;
 	}
 	currentPoint++;
@@ -449,13 +495,14 @@ SbBool
 SoBRLVListShape::getPointColor(int primitiveIndex, SbColor &colorOut) const
 {
     colorOut = SbColor(1.0f, 1.0f, 1.0f);
+    const SoBRLVListShape *geom = this->getGeometrySource();
     if (primitiveIndex < 0 ||
-	    primitiveIndex >= this->pointColorValid.getNum() ||
-	    primitiveIndex >= this->pointColor.getNum() ||
-	    !this->pointColorValid[primitiveIndex])
+	    primitiveIndex >= geom->pointColorValid.getNum() ||
+	    primitiveIndex >= geom->pointColor.getNum() ||
+	    !geom->pointColorValid[primitiveIndex])
 	return FALSE;
 
-    colorOut = this->pointColor[primitiveIndex];
+    colorOut = geom->pointColor[primitiveIndex];
     return TRUE;
 }
 
@@ -463,13 +510,14 @@ SbBool
 SoBRLVListShape::getPointScale(int primitiveIndex, float &scaleOut) const
 {
     scaleOut = 0.0f;
+    const SoBRLVListShape *geom = this->getGeometrySource();
     if (primitiveIndex < 0 ||
-	    primitiveIndex >= this->pointScaleValid.getNum() ||
-	    primitiveIndex >= this->pointScale.getNum() ||
-	    !this->pointScaleValid[primitiveIndex])
+	    primitiveIndex >= geom->pointScaleValid.getNum() ||
+	    primitiveIndex >= geom->pointScale.getNum() ||
+	    !geom->pointScaleValid[primitiveIndex])
 	return FALSE;
 
-    scaleOut = this->pointScale[primitiveIndex];
+    scaleOut = geom->pointScale[primitiveIndex];
     return TRUE;
 }
 
@@ -477,13 +525,14 @@ SbBool
 SoBRLVListShape::getPointNormal(int primitiveIndex, SbVec3f &normalOut) const
 {
     normalOut = SbVec3f(0.0f, 0.0f, 1.0f);
+    const SoBRLVListShape *geom = this->getGeometrySource();
     if (primitiveIndex < 0 ||
-	    primitiveIndex >= this->pointNormalValid.getNum() ||
-	    primitiveIndex >= this->pointNormal.getNum() ||
-	    !this->pointNormalValid[primitiveIndex])
+	    primitiveIndex >= geom->pointNormalValid.getNum() ||
+	    primitiveIndex >= geom->pointNormal.getNum() ||
+	    !geom->pointNormalValid[primitiveIndex])
 	return FALSE;
 
-    normalOut = this->pointNormal[primitiveIndex];
+    normalOut = geom->pointNormal[primitiveIndex];
     return TRUE;
 }
 
@@ -556,7 +605,9 @@ vlist_needs_independent_segment_rendering(const SoBRLVListShape *shape)
 }
 
 static void
-vlist_gl_vertex_at(const SoBRLVListShape *shape, int index)
+vlist_gl_vertex_at(const SoBRLVListShape *shape,
+	const SoBRLVListShape *geom,
+	int index)
 {
     double precisePoint[3] = {0.0, 0.0, 0.0};
     if (shape && shape->getPrecisePoint(index, precisePoint)) {
@@ -564,12 +615,14 @@ vlist_gl_vertex_at(const SoBRLVListShape *shape, int index)
 	return;
     }
 
-    const SbVec3f &point = shape->point[index];
+    const SbVec3f &point = geom->point[index];
     glVertex3f(point[0], point[1], point[2]);
 }
 
 static void
-vlist_render_independent_segments(SoBRLVListShape *shape, int n)
+vlist_render_independent_segments(SoBRLVListShape *shape,
+	const SoBRLVListShape *geom,
+	int n)
 {
     SbBool haveLast = FALSE;
     int lastIndex = -1;
@@ -577,7 +630,7 @@ vlist_render_independent_segments(SoBRLVListShape *shape, int n)
 
     glBegin(GL_LINES);
     for (int i = 0; i < n; i++) {
-	switch (shape->command[i]) {
+	switch (geom->command[i]) {
 	    case SoBRLVListShape::MOVE:
 		lastIndex = i;
 		haveLast = TRUE;
@@ -585,8 +638,8 @@ vlist_render_independent_segments(SoBRLVListShape *shape, int n)
 	    case SoBRLVListShape::DRAW:
 		if (haveLast) {
 		    set_vlist_gl_color(shape, segmentIndex);
-		    vlist_gl_vertex_at(shape, lastIndex);
-		    vlist_gl_vertex_at(shape, i);
+		    vlist_gl_vertex_at(shape, geom, lastIndex);
+		    vlist_gl_vertex_at(shape, geom, i);
 		    segmentIndex++;
 		}
 		lastIndex = i;
@@ -600,18 +653,20 @@ vlist_render_independent_segments(SoBRLVListShape *shape, int n)
 }
 
 static void
-vlist_render_line_strips(SoBRLVListShape *shape, int n)
+vlist_render_line_strips(SoBRLVListShape *shape,
+	const SoBRLVListShape *geom,
+	int n)
 {
     SbBool stripOpen = FALSE;
 
     set_vlist_gl_color(shape, -1);
     for (int i = 0; i < n; i++) {
-	switch (shape->command[i]) {
+	switch (geom->command[i]) {
 	    case SoBRLVListShape::MOVE:
 		if (stripOpen)
 		    glEnd();
 		glBegin(GL_LINE_STRIP);
-		vlist_gl_vertex_at(shape, i);
+		vlist_gl_vertex_at(shape, geom, i);
 		stripOpen = TRUE;
 		break;
 	    case SoBRLVListShape::DRAW:
@@ -619,7 +674,7 @@ vlist_render_line_strips(SoBRLVListShape *shape, int n)
 		    glBegin(GL_LINE_STRIP);
 		    stripOpen = TRUE;
 		}
-		vlist_gl_vertex_at(shape, i);
+		vlist_gl_vertex_at(shape, geom, i);
 		break;
 	    default:
 		if (stripOpen) {
@@ -646,18 +701,19 @@ SoBRLVListShape::GLRender(SoGLRenderAction *action)
     if (this->lineWidth.getValue() > 0)
 	glLineWidth(static_cast<GLfloat>(this->lineWidth.getValue()));
 
-    int n = this->point.getNum();
-    if (this->command.getNum() < n)
-	n = this->command.getNum();
+    const SoBRLVListShape *geom = this->getGeometrySource();
+    int n = geom->point.getNum();
+    if (geom->command.getNum() < n)
+	n = geom->command.getNum();
 
     if (vlist_needs_independent_segment_rendering(this))
-	vlist_render_independent_segments(this, n);
+	vlist_render_independent_segments(this, geom, n);
     else
-	vlist_render_line_strips(this, n);
+	vlist_render_line_strips(this, geom, n);
 
     glBegin(GL_POINTS);
     for (int i = 0; i < n; i++) {
-	if (this->command[i] == POINT) {
+	if (geom->command[i] == POINT) {
 	    if (!set_vlist_gl_state_color(this, i)) {
 		SbColor attrColor;
 		if (this->getPointColor(i, attrColor))
@@ -665,7 +721,7 @@ SoBRLVListShape::GLRender(SoGLRenderAction *action)
 		else
 		    set_vlist_default_gl_color(this);
 	    }
-	    vlist_gl_vertex_at(this, i);
+	    vlist_gl_vertex_at(this, geom, i);
 	}
     }
     glEnd();
@@ -681,13 +737,14 @@ SoBRLVListShape::computeBBox(SoAction *UNUSED(action), SbBox3f &box, SbVec3f &ce
 	return;
     }
 
-    for (int i = 0; i < this->point.getNum(); i++) {
-	box.extendBy(this->point[i]);
+    const SoBRLVListShape *geom = this->getGeometrySource();
+    for (int i = 0; i < geom->point.getNum(); i++) {
+	box.extendBy(geom->point[i]);
 	float scale = 0.0f;
 	if (this->getPointScale(i, scale) && scale > 0.0f) {
 	    const SbVec3f radius(scale, scale, scale);
-	    box.extendBy(this->point[i] - radius);
-	    box.extendBy(this->point[i] + radius);
+	    box.extendBy(geom->point[i] - radius);
+	    box.extendBy(geom->point[i] + radius);
 	}
     }
 
@@ -706,9 +763,10 @@ SoBRLVListShape::generatePrimitives(SoAction *action)
     SbVec3f last;
     SbBool haveLast = FALSE;
     int segmentIndex = 0;
-    int n = this->point.getNum();
-    if (this->command.getNum() < n)
-	n = this->command.getNum();
+    const SoBRLVListShape *geom = this->getGeometrySource();
+    int n = geom->point.getNum();
+    if (geom->command.getNum() < n)
+	n = geom->command.getNum();
 
     v0.setNormal(0.0f, 0.0f, 1.0f);
     v1.setNormal(0.0f, 0.0f, 1.0f);
@@ -716,25 +774,25 @@ SoBRLVListShape::generatePrimitives(SoAction *action)
     v1.setDetail(&pointDetail);
 
     for (int i = 0; i < n; i++) {
-	switch (this->command[i]) {
+	switch (geom->command[i]) {
 	    case MOVE:
-		last = this->point[i];
+		last = geom->point[i];
 		haveLast = TRUE;
 		break;
 	    case DRAW:
 		if (haveLast) {
 		    pointDetail.setCoordinateIndex(segmentIndex);
 		    v0.setPoint(last);
-		    v1.setPoint(this->point[i]);
+		    v1.setPoint(geom->point[i]);
 		    this->invokeLineSegmentCallbacks(action, &v0, &v1);
 		    segmentIndex++;
 		}
-		last = this->point[i];
+		last = geom->point[i];
 		haveLast = TRUE;
 		break;
 	    case POINT:
 		pointDetail.setCoordinateIndex(i);
-		v0.setPoint(this->point[i]);
+		v0.setPoint(geom->point[i]);
 		{
 		    SbVec3f normal;
 		    if (this->getPointNormal(i, normal))

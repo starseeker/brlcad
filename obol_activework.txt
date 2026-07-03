@@ -1,7 +1,7 @@
 BRL-CAD Obol Active Work Guide
 ==============================
 
-Last refreshed: 2026-07-02
+Last refreshed: 2026-07-03
 
 Purpose
 -------
@@ -136,6 +136,70 @@ The current highest-priority implementation direction is:
   `BRLObolFeatureStore`/scene controller records before adding any new neutral
   adapter; use adapters only when a view-context contract cannot depend on
   libged or libbrlobol directly.
+
+Latest libbrlobol hardening/status, 2026-07-03:
+
+* Database realization now uses local-space shared geometry for drawable
+  leaves.  The `db_walk_tree` callback remains the instance traversal source
+  for full paths, inherited material/region state, and member matrices, but
+  libbrlobol no longer builds drawable point/index arrays from transformed
+  callback internals.  On each per-realization geometry-cache miss it refetches
+  the primitive with an identity matrix, builds one canonical local
+  `SoBRLVListShape` or `SoBRLMeshShape`, and gives each visible database leaf a
+  per-instance shape plus an OpenInventor `SoMatrixTransform`.
+* The shared-geometry cache is deliberately realization-local.  A database
+  source refresh removes the realized children and releases every shared target
+  as a unit, avoiding stale cross-revision geometry.  Persistent cross-refresh
+  reuse should wait for explicit content hashes/revision keys.
+* Per-instance draw state, path identity, region/material fields, selection,
+  visibility, highlight, edit intent, and export metadata remain on the visible
+  instance shape.  The shared node is geometry only.  Explicit geometry setters
+  on a visible shape detach it from the shared source, so GED/direct mutation
+  paths still own the edited node.
+* LoD-capable mesh instances keep an `SoBRLLodMeshShape` instance even when
+  their full-detail source geometry is shared.  This preserves a per-view place
+  for staged/display LoD state while source mesh metrics and source-backed
+  exact requests refer back to the shared local full-detail geometry.
+* Follow-up architecture work should replace the remaining `db_walk_tree`
+  per-instance primitive import overhead with a librt traversal API that
+  exposes pre-import leaf instance records.  The Obol scene structure should
+  not need to change for that swap.
+
+* External primary geometry clear now preserves and empties existing primary
+  Obol VLIST/mesh nodes instead of dropping the display-state target.  This
+  keeps GED shape refs, display mutation, and geometry summaries stable after
+  clearing geometry while releasing the large point/index arrays.
+* Database-source string synchronization now uses stable string copies and
+  no-op checks before writing OpenInventor string fields.  This fixed a
+  libc++ hardened `std::string` overlap trap seen when nested-source
+  display-state sync assigned field-backed strings back into related fields.
+* The libbrlobol database realization path validates refetched primitive
+  payload magic before calling librt primitive methods.  Drawable geometry is
+  now built from identity-matrix refetches, not transformed callback internals,
+  so the known callback import poison does not feed Obol geometry generation.
+* Verification passed:
+  `ninja -C build test_brlobol_prototype ged_test_obol_draw_sync`,
+  `BRLCAD_ROOT=build ./build/src/libbrlobol/tests/test_brlobol_prototype`,
+  and `./build/src/libged/tests/draw/ged_test_obol_draw_sync`.
+
+Open librt investigation note:
+
+* The `box.s` poison is not a libbrlobol retention-of-callback-internal
+  problem.  A conditional lldb break in the passing guarded test hit
+  `rt_db_get_internal5` at `src/librt/db5_io.c:1002` with
+  `ext.ext_buf == ip->idb_ptr` before `bu_free_external(&ext)`.
+  `dp->d_namep` was `box.s`; the stack was
+  `db_walk_tree -> db_recurse2 -> rt_db_get_internal -> rt_db_get_internal5`
+  feeding `SoBRLDatabaseSource::realizeDatabaseWireframe`.
+* Source inspection shows `db_get_external` allocates `ext.ext_buf`, and
+  `rt_arb_import5` should allocate a distinct `rt_arb_internal` with
+  `BU_ALLOC` before copying from the raw body.  There is no normal ARB import
+  ownership path where the internal payload should alias the full external
+  object buffer.
+* The guard is therefore a protective boundary around an unresolved librt or
+  allocator-lifetime issue.  The next diagnostic should instrument allocator
+  ownership/free history for the aliased `ext.ext_buf` allocation, not add
+  more Obol/BSG sync compatibility.
 
 The latest GED database draw closeout slice split the monolithic
 `ged_test_ged_draw_scene` regression into 16 CTest shards and moved
@@ -2067,6 +2131,32 @@ Latest verified baseline:
   -j4 --timeout 180 --output-on-failure` completed 7/7 passing in
   109.51 seconds.  The pivot guard now requires the neutral RT selection
   adapter and owner/kind-capable libbrlobol selection store.
+
+
+2026-07-03 Resume Status
+------------------------
+
+The interrupted libbrlobol hardening batch is back to a green focused state.
+`test_brlobol_lod_update_action` was crashing because the focused Obol
+geometry actions called `doAction` on arbitrary scene-state nodes such as
+`SoLightModel` while only enabling the narrow element set they use.  Export,
+measure, snap, and source-mesh pick actions now only delegate generic traversal
+to group and transformation nodes; shape handlers still do the geometry work,
+and `SoMatrixTransform` continues to maintain model matrices.
+
+The qtcad draw-sync test was updated for the current representation-specific
+source-owner model: a shaded draw of `ball.s` and a later shared wire draw of
+`ball.s` intentionally coexist as separate database-source instances, while
+wire `box.s` uses the base key.  The pivot guard was updated to enforce the
+current shared-geometry command-stream tokens, hardened string assignment for
+owner metadata, instance-scoped GED draw-source updates, and controller-mediated
+qtcad camera sync.
+
+Focused verification passed with:
+`ctest --test-dir build -R
+'^(brlobol_pivot_guard|libbrlobol_prototype|libbrlobol_lod_update_action|ged_test_obol_draw_sync|test_qtcad_obol_draw_sync)$'
+-j3 --timeout 240 --output-on-failure`, which completed 5/5 passing.
+`git diff --check` is clean.
 
 
 Next Recommended Batch

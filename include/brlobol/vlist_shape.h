@@ -22,6 +22,7 @@
 #include <Inventor/fields/SoSFFloat.h>
 #include <Inventor/fields/SoSFInt32.h>
 #include <Inventor/fields/SoSFMatrix.h>
+#include <Inventor/fields/SoSFNode.h>
 #include <Inventor/fields/SoSFString.h>
 #include <Inventor/fields/SoSFUInt32.h>
 #include <Inventor/fields/SoSFVec3f.h>
@@ -132,10 +133,16 @@ public:
     SoSFUInt32 lodPolicy;
     SoMFInt32 selectedPrimitive;
     SoMFInt32 highlightedPrimitive;
+    SoSFNode sharedGeometry;
 
     SoBRLVListShape(void);
     static void initClass(void);
 
+    void setSharedGeometry(SoBRLVListShape *shape);
+    SoBRLVListShape *getSharedGeometrySource(void);
+    const SoBRLVListShape *getSharedGeometrySource(void) const;
+    SoBRLVListShape *getGeometrySource(void);
+    const SoBRLVListShape *getGeometrySource(void) const;
     void setLineSet(const SbVec3f *points, const int32_t *commands, int count);
     void setPrecisePoints(const double *points, int count);
     SbBool getPrecisePoint(int index, double *pointOut) const;

@@ -237,9 +237,11 @@ plot_shaded(
 	if (pathp && DB_FULL_PATH_CUR_DIR(pathp))
 	    bu_log("%s: shaded face-set publication failed\n",
 		    DB_FULL_PATH_CUR_DIR(pathp)->d_namep);
-	if (dgcdp->vs.strict_fallback)
-	    return;
+	return;
     }
+
+    if (dgcdp->vs.strict_fallback)
+	return;
 
     int ac = 1;
     const char *av[2];

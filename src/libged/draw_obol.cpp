@@ -5623,6 +5623,84 @@ ged_obol_database_source_instance_key_for_source(
 }
 
 static int
+ged_obol_database_source_scene_instance_for_path(
+	struct ged *gedp,
+	const char *path,
+	SoBRLSceneController **scene_out,
+	std::string &source_instance_key)
+{
+    source_instance_key.clear();
+    if (scene_out)
+	*scene_out = NULL;
+
+    SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
+    if (!scene)
+	return 0;
+
+    SoBRLDatabaseSource *source =
+	ged_obol_owned_database_source_for_path(gedp, path);
+    if (!ged_obol_database_source_instance_key_for_source(source,
+	    source_instance_key))
+	return 0;
+
+    if (scene_out)
+	*scene_out = scene;
+    return 1;
+}
+
+static SbBool
+ged_obol_database_source_world_to_local_matrix(
+	SoBRLDatabaseSource *source,
+	SbMatrix &worldToLocal)
+{
+    worldToLocal = SbMatrix::identity();
+    if (!source)
+	return FALSE;
+
+    BRLObolDatabaseSourceSummary summary;
+    if (!source->getSummary(summary) || !summary.valid ||
+	    !summary.drawMatrixValid)
+	return FALSE;
+
+    SbMatrix localToWorld = summary.drawMatrix;
+    if (localToWorld.equals(SbMatrix::identity(), 0.000001f))
+	return FALSE;
+    if (fabs(localToWorld.det4()) <= FLT_EPSILON)
+	return FALSE;
+
+    worldToLocal = localToWorld.inverse();
+    return TRUE;
+}
+
+static SbBool
+ged_obol_database_source_indexed_face_points_are_world(void)
+{
+    /* Legacy evaluated BoT paths publish instance-space mesh vertices.
+     * Normalize them before handing geometry to the Obol source-local API. */
+    if (ged_obol_database_source_publication_depth <= 0)
+	return FALSE;
+
+    return (ged_obol_database_source_publication_mode ==
+	    GED_DRAW_MODE_SHADED_BOTS ||
+	    ged_obol_database_source_publication_mode ==
+	    GED_DRAW_MODE_HIDDEN_LINE) ? TRUE : FALSE;
+}
+
+static SbVec3f
+ged_obol_database_source_local_point(
+	const point_t point,
+	const SbMatrix *worldToLocal)
+{
+    SbVec3f localPoint(
+	    static_cast<float>(point[0]),
+	    static_cast<float>(point[1]),
+	    static_cast<float>(point[2]));
+    if (worldToLocal)
+	worldToLocal->multVecMatrix(localPoint, localPoint);
+    return localPoint;
+}
+
+static int
 ged_obol_database_source_mark_published_current(SoBRLSceneController *scene,
 	SoBRLDatabaseSource *source)
 {
@@ -8472,7 +8550,8 @@ ged_obol_owned_vlist_shape_for_source(SoBRLDatabaseSource *source,
 	    continue;
 	if (!fallback)
 	    fallback = shape;
-	if (shape->point.getNum() > 0 || shape->command.getNum() > 0)
+	const SoBRLVListShape *geom = shape->getGeometrySource();
+	if (geom->point.getNum() > 0 || geom->command.getNum() > 0)
 	    return shape;
     }
 
@@ -8550,8 +8629,11 @@ ged_obol_vlist_shape_is_annotation(SoBRLVListShape *shape)
 static int
 ged_obol_vlist_shape_has_annotation_record(SoBRLVListShape *shape)
 {
-    return (shape && (shape->annotationPoint.getNum() > 0 ||
-	    shape->annotationSegmentKind.getNum() > 0)) ? 1 : 0;
+    if (!shape)
+	return 0;
+    const SoBRLVListShape *geom = shape->getGeometrySource();
+    return (geom->annotationPoint.getNum() > 0 ||
+	    geom->annotationSegmentKind.getNum() > 0) ? 1 : 0;
 }
 
 
@@ -9032,17 +9114,19 @@ ged_draw_obol_shape_geometry_summary_for_path(
     out->valid = 1;
     if (node->isOfType(SoBRLVListShape::getClassTypeId())) {
 	SoBRLVListShape *shape = static_cast<SoBRLVListShape *>(node);
+	const SoBRLVListShape *geom = shape->getGeometrySource();
 	const char *kind = shape->geometryKind.getValue().getString();
 	out->geometry_name = (kind && BU_STR_EQUAL(kind, "annotation")) ?
 	    "annotation" : "line-set";
-	out->point_count = static_cast<size_t>(shape->point.getNum());
+	out->point_count = static_cast<size_t>(geom->point.getNum());
 	out->index_count = 0;
 	return 1;
     }
     if (node->isOfType(SoBRLMeshShape::getClassTypeId())) {
 	SoBRLMeshShape *shape = static_cast<SoBRLMeshShape *>(node);
+	const SoBRLMeshShape *geom = shape->getGeometrySource();
 	out->geometry_name = "indexed-face-set";
-	out->point_count = static_cast<size_t>(shape->point.getNum());
+	out->point_count = static_cast<size_t>(geom->point.getNum());
 	out->index_count =
 	    static_cast<size_t>(shape->getTriangleCount()) * 4;
 	return 1;
@@ -9073,9 +9157,10 @@ ged_draw_obol_shape_surface_summary_for_path(
     SoBRLMeshShape *shape = static_cast<SoBRLMeshShape *>(node);
     const size_t triangle_count =
 	static_cast<size_t>(shape->getTriangleCount());
+    const SoBRLMeshShape *geom = shape->getGeometrySource();
 
     out->valid = 1;
-    out->point_count = static_cast<size_t>(shape->point.getNum());
+    out->point_count = static_cast<size_t>(geom->point.getNum());
     out->normal_count = triangle_count * 3;
     out->index_count = triangle_count * 4;
     out->face_count = triangle_count;
@@ -9117,10 +9202,11 @@ ged_draw_obol_shape_surface_point_at_for_path(
 	return 0;
 
     SoBRLMeshShape *shape = static_cast<SoBRLMeshShape *>(node);
-    if (index >= static_cast<size_t>(shape->point.getNum()))
+    const SoBRLMeshShape *geom = shape->getGeometrySource();
+    if (index >= static_cast<size_t>(geom->point.getNum()))
 	return 0;
 
-    const SbVec3f &point = shape->point[static_cast<int>(index)];
+    const SbVec3f &point = geom->point[static_cast<int>(index)];
     out[0] = point[0];
     out[1] = point[1];
     out[2] = point[2];
@@ -9146,6 +9232,7 @@ ged_draw_obol_shape_surface_index_at_for_path(
 	return 0;
 
     SoBRLMeshShape *shape = static_cast<SoBRLMeshShape *>(node);
+    const SoBRLMeshShape *geom = shape->getGeometrySource();
     const size_t triangle_count =
 	static_cast<size_t>(shape->getTriangleCount());
     if (index >= triangle_count * 4)
@@ -9158,9 +9245,9 @@ ged_draw_obol_shape_surface_index_at_for_path(
     }
 
     const size_t coord_index = (index / 4) * 3 + face_offset;
-    if (coord_index >= static_cast<size_t>(shape->coordIndex.getNum()))
+    if (coord_index >= static_cast<size_t>(geom->coordIndex.getNum()))
 	return 0;
-    *out = shape->coordIndex[static_cast<int>(coord_index)];
+    *out = geom->coordIndex[static_cast<int>(coord_index)];
     return 1;
 }
 
@@ -9183,8 +9270,9 @@ ged_draw_obol_shape_line_summary_for_path(
 	return 0;
 
     SoBRLVListShape *shape = static_cast<SoBRLVListShape *>(node);
+    const SoBRLVListShape *geom = shape->getGeometrySource();
     out->valid = 1;
-    out->point_count = static_cast<size_t>(shape->point.getNum());
+    out->point_count = static_cast<size_t>(geom->point.getNum());
     return 1;
 }
 
@@ -9207,7 +9295,8 @@ ged_draw_obol_shape_line_point_at_for_path(
 	return 0;
 
     SoBRLVListShape *shape = static_cast<SoBRLVListShape *>(node);
-    if (index >= static_cast<size_t>(shape->point.getNum()))
+    const SoBRLVListShape *geom = shape->getGeometrySource();
+    if (index >= static_cast<size_t>(geom->point.getNum()))
 	return 0;
 
     double precise[3];
@@ -9218,7 +9307,7 @@ ged_draw_obol_shape_line_point_at_for_path(
 	return 1;
     }
 
-    const SbVec3f &point = shape->point[static_cast<int>(index)];
+    const SbVec3f &point = geom->point[static_cast<int>(index)];
     out[0] = point[0];
     out[1] = point[1];
     out[2] = point[2];
@@ -9244,11 +9333,12 @@ ged_draw_obol_shape_line_command_at_for_path(
 	return 0;
 
     SoBRLVListShape *shape = static_cast<SoBRLVListShape *>(node);
-    if (index >= static_cast<size_t>(shape->command.getNum()))
+    const SoBRLVListShape *geom = shape->getGeometrySource();
+    if (index >= static_cast<size_t>(geom->command.getNum()))
 	return 0;
 
     *out = ged_obol_vlist_command_to_ged(
-	    shape->command[static_cast<int>(index)]);
+	    geom->command[static_cast<int>(index)]);
     return 1;
 }
 
@@ -9263,10 +9353,11 @@ ged_draw_obol_database_source_last_point_for_path(
 
     SoBRLVListShape *shape =
 	ged_obol_owned_annotation_vlist_shape_for_path(gedp, path);
-    if (!shape || shape->point.getNum() <= 0)
+    const SoBRLVListShape *geom = shape ? shape->getGeometrySource() : NULL;
+    if (!geom || geom->point.getNum() <= 0)
 	return 0;
 
-    const SbVec3f &point = shape->point[shape->point.getNum() - 1];
+    const SbVec3f &point = geom->point[geom->point.getNum() - 1];
     out[0] = point[0];
     out[1] = point[1];
     out[2] = point[2];
@@ -9283,13 +9374,20 @@ ged_draw_obol_database_source_line_summary_for_path(
 	return 0;
 
     memset(out, 0, sizeof(*out));
-    SoBRLVListShape *shape =
-	ged_obol_owned_annotation_vlist_shape_for_path(gedp, path);
-    if (!shape)
+    SoBRLDatabaseSource *source =
+	ged_obol_owned_database_source_for_path(gedp, path);
+    if (!source)
 	return 0;
 
+    SoBRLVListShape *shape =
+	ged_obol_owned_annotation_vlist_shape_for_source(source, path);
+
     out->valid = 1;
-    out->point_count = static_cast<size_t>(shape->point.getNum());
+    if (!shape)
+	return 1;
+
+    const SoBRLVListShape *geom = shape->getGeometrySource();
+    out->point_count = static_cast<size_t>(geom->point.getNum());
     out->cache_identity =
 	ged_obol_hash_sb_string(shape->cacheIdentity.getValue());
     out->source_identity =
@@ -9309,7 +9407,8 @@ ged_draw_obol_database_source_line_point_at_for_path(
 
     SoBRLVListShape *shape =
 	ged_obol_owned_annotation_vlist_shape_for_path(gedp, path);
-    if (!shape || index >= static_cast<size_t>(shape->point.getNum()))
+    const SoBRLVListShape *geom = shape ? shape->getGeometrySource() : NULL;
+    if (!geom || index >= static_cast<size_t>(geom->point.getNum()))
 	return 0;
 
     double precise[3];
@@ -9320,7 +9419,7 @@ ged_draw_obol_database_source_line_point_at_for_path(
 	return 1;
     }
 
-    const SbVec3f &point = shape->point[static_cast<int>(index)];
+    const SbVec3f &point = geom->point[static_cast<int>(index)];
     out[0] = point[0];
     out[1] = point[1];
     out[2] = point[2];
@@ -9338,11 +9437,12 @@ ged_draw_obol_database_source_line_command_at_for_path(
 	return 0;
 
     SoBRLVListShape *shape = ged_obol_owned_vlist_shape_for_path(gedp, path);
-    if (!shape || index >= static_cast<size_t>(shape->command.getNum()))
+    const SoBRLVListShape *geom = shape ? shape->getGeometrySource() : NULL;
+    if (!geom || index >= static_cast<size_t>(geom->command.getNum()))
 	return 0;
 
     *out = ged_obol_vlist_command_to_ged(
-	    shape->command[static_cast<int>(index)]);
+	    geom->command[static_cast<int>(index)]);
     return 1;
 }
 
@@ -9363,8 +9463,10 @@ ged_draw_obol_database_source_surface_summary_for_path(
 
     SoBRLMeshShape *shape = ged_obol_owned_mesh_shape_for_source(source,
 	    path, 0);
-    if (!shape)
-	return 0;
+    if (!shape) {
+	out->valid = 1;
+	return 1;
+    }
 
     int material_draw_mode =
 	ged_obol_lod_draw_mode_to_ged(shape->drawMode.getValue());
@@ -9378,8 +9480,9 @@ ged_draw_obol_database_source_surface_summary_for_path(
 
     const size_t triangle_count =
 	static_cast<size_t>(shape->getTriangleCount());
+    const SoBRLMeshShape *geom = shape->getGeometrySource();
     out->valid = 1;
-    out->point_count = static_cast<size_t>(shape->point.getNum());
+    out->point_count = static_cast<size_t>(geom->point.getNum());
     out->normal_count = triangle_count * 3;
     out->index_count = triangle_count * 4;
     out->face_count = triangle_count;
@@ -9409,10 +9512,11 @@ ged_draw_obol_database_source_surface_point_at_for_path(
 	return 0;
 
     SoBRLMeshShape *shape = ged_obol_owned_mesh_shape_for_path(gedp, path, 0);
-    if (!shape || index >= static_cast<size_t>(shape->point.getNum()))
+    const SoBRLMeshShape *geom = shape ? shape->getGeometrySource() : NULL;
+    if (!geom || index >= static_cast<size_t>(geom->point.getNum()))
 	return 0;
 
-    const SbVec3f &point = shape->point[static_cast<int>(index)];
+    const SbVec3f &point = geom->point[static_cast<int>(index)];
     out[0] = point[0];
     out[1] = point[1];
     out[2] = point[2];
@@ -9433,6 +9537,7 @@ ged_draw_obol_database_source_surface_index_at_for_path(
     if (!shape)
 	return 0;
 
+    const SoBRLMeshShape *geom = shape->getGeometrySource();
     const size_t triangle_count =
 	static_cast<size_t>(shape->getTriangleCount());
     if (index >= triangle_count * 4)
@@ -9445,9 +9550,9 @@ ged_draw_obol_database_source_surface_index_at_for_path(
     }
 
     const size_t coord_index = (index / 4) * 3 + face_offset;
-    if (coord_index >= static_cast<size_t>(shape->coordIndex.getNum()))
+    if (coord_index >= static_cast<size_t>(geom->coordIndex.getNum()))
 	return 0;
-    *out = shape->coordIndex[static_cast<int>(coord_index)];
+    *out = geom->coordIndex[static_cast<int>(coord_index)];
     return 1;
 }
 
@@ -9471,53 +9576,21 @@ ged_draw_obol_database_source_translate_vlist_for_path(
 	    static_cast<float>(xlate[2]))) ? 1 : 0;
 }
 
-static int
-ged_obol_database_source_set_bounds_state(
-	struct ged *gedp,
-	SoBRLDatabaseSource *source,
-	SbBool bounds_valid,
-	const SbVec3f &bounds_min,
-	const SbVec3f &bounds_max)
-{
-    std::string source_instance_key;
-    if (!ged_obol_database_source_instance_key_for_source(source,
-	    source_instance_key))
-	return 0;
-
-    SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
-    if (!scene)
-	return 0;
-
-    const int changed = scene->setDatabaseSourceInstanceBoundsState(
-	    source_instance_key.c_str(), bounds_valid, bounds_min, bounds_max);
-    return changed >= 0 ? 1 : 0;
-}
-
-static int
-ged_obol_database_source_clear_bounds_for_source(
-	struct ged *gedp,
-	SoBRLDatabaseSource *source)
-{
-    return ged_obol_database_source_set_bounds_state(gedp, source, FALSE,
-	    SbVec3f(0.0f, 0.0f, 0.0f),
-	    SbVec3f(0.0f, 0.0f, 0.0f));
-}
-
 extern "C" int
 ged_draw_obol_database_source_clear_vlist_for_path(
 	struct ged *gedp,
 	const char *path)
 {
-    SoBRLDatabaseSource *source =
-	ged_obol_owned_database_source_for_path(gedp, path);
-    SoBRLVListShape *shape =
-	ged_obol_owned_vlist_shape_for_source(source, path, 0);
-    if (!shape)
+    SoBRLSceneController *scene = NULL;
+    std::string source_instance_key;
+    if (!ged_obol_database_source_scene_instance_for_path(gedp, path, &scene,
+	    source_instance_key))
 	return 0;
 
-    shape->setLineSet(NULL, NULL, 0);
-    (void)ged_obol_database_source_clear_bounds_for_source(gedp, source);
-    return 1;
+    const int cleared =
+	scene->clearDatabaseSourceInstanceExternalPrimaryGeometry(
+		source_instance_key.c_str());
+    return cleared >= 0 ? 1 : 0;
 }
 
 extern "C" int
@@ -9533,22 +9606,18 @@ ged_draw_obol_database_source_publish_line_set_for_path(
     if (point_count && !points)
 	return 0;
 
-    SoBRLDatabaseSource *source =
-	ged_obol_owned_database_source_for_path(gedp, path);
-    if (!source)
+    SoBRLSceneController *scene = NULL;
+    std::string source_instance_key;
+    if (!ged_obol_database_source_scene_instance_for_path(gedp, path, &scene,
+	    source_instance_key))
 	return 0;
-
-    if (point_count == 0) {
-	source->clearRealizedGeometry(TRUE);
-	(void)ged_obol_database_source_clear_bounds_for_source(gedp, source);
-	SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
-	return ged_obol_database_source_mark_published_current(scene, source);
-    }
 
     std::vector<SbVec3f> obol_points;
     std::vector<int32_t> obol_commands;
+    std::vector<double> precise_points;
     obol_points.reserve(point_count);
     obol_commands.reserve(point_count);
+    precise_points.reserve(point_count * 3);
     for (size_t i = 0; i < point_count; i++) {
 	const int command = commands ? commands[i] : -1;
 	const int32_t obol_command =
@@ -9561,30 +9630,21 @@ ged_draw_obol_database_source_publish_line_set_for_path(
 		static_cast<float>(points[i][1]),
 		static_cast<float>(points[i][2])));
 	obol_commands.push_back(obol_command);
+	precise_points.push_back(points[i][0]);
+	precise_points.push_back(points[i][1]);
+	precise_points.push_back(points[i][2]);
     }
 
-    source->clearRealizedGeometry(TRUE);
-    SoBRLVListShape *shape =
-	ged_obol_owned_vlist_shape_for_source(source, path, 1);
-    if (!shape)
-	return 0;
-
-    shape->sourceType = "line-set";
-    shape->geometryKind = "line";
-    shape->setLineSet(obol_points.data(), obol_commands.data(),
-	    static_cast<int>(point_count));
-    ged_obol_vlist_shape_set_precise_points(shape, points, point_count);
-    point_t bmin;
-    point_t bmax;
-    VSETALL(bmin, INFINITY);
-    VSETALL(bmax, -INFINITY);
-    for (size_t i = 0; i < point_count; i++)
-	VMINMAX(bmin, bmax, points[i]);
-    (void)ged_draw_obol_database_source_set_bounds_for_path(gedp, path,
-	    bmin, bmax);
-
-    SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
-    return ged_obol_database_source_mark_published_current(scene, source);
+    BRLObolExternalLineSet line_set;
+    line_set.points = obol_points.empty() ? NULL : obol_points.data();
+    line_set.commands = obol_commands.empty() ? NULL : obol_commands.data();
+    line_set.precisePoints = precise_points.empty() ? NULL :
+	precise_points.data();
+    line_set.count = static_cast<int>(point_count);
+    const int published =
+	scene->publishDatabaseSourceInstanceExternalLineSet(
+		source_instance_key.c_str(), line_set);
+    return published > 0 ? 1 : 0;
 }
 
 extern "C" int
@@ -9600,22 +9660,18 @@ ged_draw_obol_database_source_publish_annotation_line_set_for_path(
     if (point_count && !points)
 	return 0;
 
-    SoBRLDatabaseSource *source =
-	ged_obol_owned_database_source_for_path(gedp, path);
-    if (!source)
+    SoBRLSceneController *scene = NULL;
+    std::string source_instance_key;
+    if (!ged_obol_database_source_scene_instance_for_path(gedp, path, &scene,
+	    source_instance_key))
 	return 0;
-
-    if (point_count == 0) {
-	source->clearRealizedGeometry(TRUE);
-	(void)ged_obol_database_source_clear_bounds_for_source(gedp, source);
-	SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
-	return ged_obol_database_source_mark_published_current(scene, source);
-    }
 
     std::vector<SbVec3f> obol_points;
     std::vector<int32_t> obol_commands;
+    std::vector<double> precise_points;
     obol_points.reserve(point_count);
     obol_commands.reserve(point_count);
+    precise_points.reserve(point_count * 3);
     for (size_t i = 0; i < point_count; i++) {
 	const int command = commands ? commands[i] : -1;
 	const int32_t obol_command =
@@ -9628,30 +9684,23 @@ ged_draw_obol_database_source_publish_annotation_line_set_for_path(
 		static_cast<float>(points[i][1]),
 		static_cast<float>(points[i][2])));
 	obol_commands.push_back(obol_command);
+	precise_points.push_back(points[i][0]);
+	precise_points.push_back(points[i][1]);
+	precise_points.push_back(points[i][2]);
     }
 
-    source->clearRealizedGeometry(TRUE);
-    SoBRLVListShape *shape =
-	ged_obol_owned_vlist_shape_for_source(source, path, 1);
-    if (!shape)
-	return 0;
-
-    shape->sourceType = "annotation";
-    shape->geometryKind = "annotation";
-    shape->setLineSet(obol_points.data(), obol_commands.data(),
-	    static_cast<int>(point_count));
-    ged_obol_vlist_shape_set_precise_points(shape, points, point_count);
-    point_t bmin;
-    point_t bmax;
-    VSETALL(bmin, INFINITY);
-    VSETALL(bmax, -INFINITY);
-    for (size_t i = 0; i < point_count; i++)
-	VMINMAX(bmin, bmax, points[i]);
-    (void)ged_draw_obol_database_source_set_bounds_for_path(gedp, path,
-	    bmin, bmax);
-
-    SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
-    return ged_obol_database_source_mark_published_current(scene, source);
+    BRLObolExternalLineSet line_set;
+    line_set.points = obol_points.empty() ? NULL : obol_points.data();
+    line_set.commands = obol_commands.empty() ? NULL : obol_commands.data();
+    line_set.precisePoints = precise_points.empty() ? NULL :
+	precise_points.data();
+    line_set.count = static_cast<int>(point_count);
+    line_set.sourceType = "annotation";
+    line_set.geometryKind = "annotation";
+    const int published =
+	scene->publishDatabaseSourceInstanceExternalLineSet(
+		source_instance_key.c_str(), line_set);
+    return published > 0 ? 1 : 0;
 }
 
 extern "C" int
@@ -9670,60 +9719,100 @@ ged_draw_obol_database_source_publish_annotation_record_for_path(
     if ((annotation_point_count && !annotation_points) ||
 	    (segment_count && !segments) ||
 	    segment_count > static_cast<size_t>(INT_MAX) ||
-	    annotation_point_count > static_cast<size_t>(INT_MAX))
+	    annotation_point_count > static_cast<size_t>(INT_MAX) ||
+	    line_point_count > static_cast<size_t>(INT_MAX) ||
+	    (line_point_count && !line_points))
 	return 0;
 
-    if (!ged_draw_obol_database_source_publish_annotation_line_set_for_path(
-	    gedp, path, line_points, line_commands, line_point_count))
+    SoBRLSceneController *scene = NULL;
+    std::string source_instance_key;
+    if (!ged_obol_database_source_scene_instance_for_path(gedp, path, &scene,
+	    source_instance_key))
 	return 0;
 
-    SoBRLVListShape *shape = ged_obol_owned_vlist_shape_for_path(gedp, path);
-    if (!shape)
-	return 0;
+    std::vector<SbVec3f> obol_line_points;
+    std::vector<int32_t> obol_line_commands;
+    std::vector<double> precise_line_points;
+    obol_line_points.reserve(line_point_count);
+    obol_line_commands.reserve(line_point_count);
+    precise_line_points.reserve(line_point_count * 3);
+    for (size_t i = 0; i < line_point_count; i++) {
+	const int command = line_commands ? line_commands[i] : -1;
+	const int32_t obol_command =
+	    ged_obol_vlist_command_from_ged(command, i);
+	if (obol_command < 0)
+	    return 0;
 
-    shape->sourceType = "annotation";
-    shape->geometryKind = "annotation";
-    shape->annotationBasePoint = base_point ? SbVec3f(
+	obol_line_points.push_back(SbVec3f(
+		static_cast<float>(line_points[i][0]),
+		static_cast<float>(line_points[i][1]),
+		static_cast<float>(line_points[i][2])));
+	obol_line_commands.push_back(obol_command);
+	precise_line_points.push_back(line_points[i][0]);
+	precise_line_points.push_back(line_points[i][1]);
+	precise_line_points.push_back(line_points[i][2]);
+    }
+
+    std::vector<SbVec3f> obol_annotation_points;
+    std::vector<double> precise_annotation_points;
+    obol_annotation_points.reserve(annotation_point_count);
+    precise_annotation_points.reserve(annotation_point_count * 3);
+    if (annotation_point_count && annotation_points) {
+	for (size_t i = 0; i < annotation_point_count; i++) {
+	    obol_annotation_points.push_back(SbVec3f(
+		    static_cast<float>(annotation_points[i][0]),
+		    static_cast<float>(annotation_points[i][1]),
+		    static_cast<float>(annotation_points[i][2])));
+	    precise_annotation_points.push_back(annotation_points[i][0]);
+	    precise_annotation_points.push_back(annotation_points[i][1]);
+	    precise_annotation_points.push_back(annotation_points[i][2]);
+	}
+    }
+
+    std::vector<BRLObolExternalAnnotationSegment> obol_segments;
+    obol_segments.reserve(segment_count);
+    for (size_t i = 0; i < segment_count; i++) {
+	const struct ged_draw_obol_annotation_segment *seg = &segments[i];
+	BRLObolExternalAnnotationSegment obol_seg;
+	if (seg->kind == GED_DRAW_OBOL_ANNOTATION_SEGMENT_LINE)
+	    obol_seg.kind = BRLObolExternalAnnotationSegment::SEGMENT_LINE;
+	else if (seg->kind == GED_DRAW_OBOL_ANNOTATION_SEGMENT_TEXT)
+	    obol_seg.kind = BRLObolExternalAnnotationSegment::SEGMENT_TEXT;
+	else
+	    obol_seg.kind = BRLObolExternalAnnotationSegment::SEGMENT_NONE;
+	obol_seg.lineStart = seg->line_start;
+	obol_seg.lineEnd = seg->line_end;
+	obol_seg.textRefPoint = seg->text_ref_point;
+	obol_seg.text = seg->text;
+	obol_segments.push_back(obol_seg);
+    }
+
+    BRLObolExternalAnnotation annotation;
+    annotation.basePoint = base_point ? SbVec3f(
 	    static_cast<float>(base_point[0]),
 	    static_cast<float>(base_point[1]),
 	    static_cast<float>(base_point[2])) :
 	SbVec3f(0.0f, 0.0f, 0.0f);
-
-    if (annotation_point_count && annotation_points) {
-	std::vector<double> precise_points(annotation_point_count * 3);
-	for (size_t i = 0; i < annotation_point_count; i++) {
-	    const size_t offset = i * 3;
-	    precise_points[offset + 0] = annotation_points[i][0];
-	    precise_points[offset + 1] = annotation_points[i][1];
-	    precise_points[offset + 2] = annotation_points[i][2];
-	}
-	shape->setPreciseAnnotationPoints(precise_points.data(),
-		static_cast<int>(annotation_point_count));
-    } else {
-	shape->setPreciseAnnotationPoints(NULL, 0);
-    }
-
-    shape->annotationSegmentKind.setNum(static_cast<int>(segment_count));
-    shape->annotationSegmentStart.setNum(static_cast<int>(segment_count));
-    shape->annotationSegmentEnd.setNum(static_cast<int>(segment_count));
-    shape->annotationTextRefPoint.setNum(static_cast<int>(segment_count));
-    shape->annotationText.setNum(static_cast<int>(segment_count));
-    shape->annotationSegmentTextValid.setNum(static_cast<int>(segment_count));
-    for (size_t i = 0; i < segment_count; i++) {
-	const struct ged_draw_obol_annotation_segment *seg = &segments[i];
-	const int idx = static_cast<int>(i);
-	shape->annotationSegmentKind.set1Value(idx, seg->kind);
-	shape->annotationSegmentStart.set1Value(idx, seg->line_start);
-	shape->annotationSegmentEnd.set1Value(idx, seg->line_end);
-	shape->annotationTextRefPoint.set1Value(idx, seg->text_ref_point);
-	shape->annotationText.set1Value(idx,
-		(seg->text && seg->text[0]) ? seg->text : "");
-	shape->annotationSegmentTextValid.set1Value(idx,
-		(seg->kind == GED_DRAW_OBOL_ANNOTATION_SEGMENT_TEXT &&
-		 seg->text && seg->text[0]) ? TRUE : FALSE);
-    }
-
-    return 1;
+    annotation.linePoints = obol_line_points.empty() ? NULL :
+	obol_line_points.data();
+    annotation.lineCommands = obol_line_commands.empty() ? NULL :
+	obol_line_commands.data();
+    annotation.preciseLinePoints = precise_line_points.empty() ? NULL :
+	precise_line_points.data();
+    annotation.linePointCount = static_cast<int>(line_point_count);
+    annotation.annotationPoints = obol_annotation_points.empty() ? NULL :
+	obol_annotation_points.data();
+    annotation.preciseAnnotationPoints =
+	precise_annotation_points.empty() ? NULL :
+	precise_annotation_points.data();
+    annotation.annotationPointCount =
+	static_cast<int>(annotation_point_count);
+    annotation.segments = obol_segments.empty() ? NULL : obol_segments.data();
+    annotation.segmentCount = static_cast<int>(segment_count);
+    const int published =
+	scene->publishDatabaseSourceInstanceExternalAnnotation(
+		source_instance_key.c_str(), annotation);
+    return published > 0 ? 1 : 0;
 }
 
 extern "C" int
@@ -9745,32 +9834,33 @@ ged_draw_obol_database_source_annotation_summary_for_path(
     if (!kind || !BU_STR_EQUAL(kind, "annotation"))
 	return 0;
 
+    const SoBRLVListShape *geom = shape->getGeometrySource();
     out->valid = 1;
-    out->point_count = static_cast<size_t>(shape->annotationPoint.getNum());
+    out->point_count = static_cast<size_t>(geom->annotationPoint.getNum());
     out->segment_count =
-	static_cast<size_t>(shape->annotationSegmentKind.getNum());
+	static_cast<size_t>(geom->annotationSegmentKind.getNum());
     out->cache_identity =
 	ged_obol_hash_sb_string(shape->cacheIdentity.getValue());
     out->source_identity =
 	ged_obol_hash_sb_string(shape->sourceIdentity.getValue());
 
-    for (int i = 0; i < shape->annotationSegmentKind.getNum(); i++) {
-	const int kind_value = shape->annotationSegmentKind[i];
+    for (int i = 0; i < geom->annotationSegmentKind.getNum(); i++) {
+	const int kind_value = geom->annotationSegmentKind[i];
 	if (!out->line_segment_valid &&
 		kind_value == GED_DRAW_OBOL_ANNOTATION_SEGMENT_LINE) {
 	    out->line_segment_valid = 1;
-	    out->line_start = (i < shape->annotationSegmentStart.getNum()) ?
-		shape->annotationSegmentStart[i] : 0;
-	    out->line_end = (i < shape->annotationSegmentEnd.getNum()) ?
-		shape->annotationSegmentEnd[i] : 0;
+	    out->line_start = (i < geom->annotationSegmentStart.getNum()) ?
+		geom->annotationSegmentStart[i] : 0;
+	    out->line_end = (i < geom->annotationSegmentEnd.getNum()) ?
+		geom->annotationSegmentEnd[i] : 0;
 	}
 	if (!out->text_segment_valid &&
 		kind_value == GED_DRAW_OBOL_ANNOTATION_SEGMENT_TEXT) {
 	    out->text_segment_valid = 1;
-	    out->text_ref_point = (i < shape->annotationTextRefPoint.getNum()) ?
-		shape->annotationTextRefPoint[i] : 0;
-	    out->text = (i < shape->annotationText.getNum()) ?
-		shape->annotationText[i].getString() : "";
+	    out->text_ref_point = (i < geom->annotationTextRefPoint.getNum()) ?
+		geom->annotationTextRefPoint[i] : 0;
+	    out->text = (i < geom->annotationText.getNum()) ?
+		geom->annotationText[i].getString() : "";
 	}
     }
 
@@ -9789,7 +9879,8 @@ ged_draw_obol_database_source_annotation_point_at_for_path(
 
     SoBRLVListShape *shape =
 	ged_obol_owned_annotation_vlist_shape_for_path(gedp, path);
-    if (!shape || index >= static_cast<size_t>(shape->annotationPoint.getNum()))
+    const SoBRLVListShape *geom = shape ? shape->getGeometrySource() : NULL;
+    if (!geom || index >= static_cast<size_t>(geom->annotationPoint.getNum()))
 	return 0;
 
     double precise[3];
@@ -9800,7 +9891,7 @@ ged_draw_obol_database_source_annotation_point_at_for_path(
 	return 1;
     }
 
-    const SbVec3f &point = shape->annotationPoint[static_cast<int>(index)];
+    const SbVec3f &point = geom->annotationPoint[static_cast<int>(index)];
     out[0] = point[0];
     out[1] = point[1];
     out[2] = point[2];
@@ -10001,52 +10092,35 @@ ged_draw_obol_database_source_publish_point_set_for_path(
     if (point_count && !points)
 	return 0;
 
-    SoBRLDatabaseSource *source =
-	ged_obol_owned_database_source_for_path(gedp, path);
-    if (!source)
+    SoBRLSceneController *scene = NULL;
+    std::string source_instance_key;
+    if (!ged_obol_database_source_scene_instance_for_path(gedp, path, &scene,
+	    source_instance_key))
 	return 0;
 
-    if (point_count == 0) {
-	source->clearRealizedGeometry(TRUE);
-	(void)ged_obol_database_source_clear_bounds_for_source(gedp, source);
-	SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
-	return ged_obol_database_source_mark_published_current(scene, source);
-    }
-
     std::vector<SbVec3f> obol_points;
-    std::vector<int32_t> obol_commands;
+    std::vector<double> precise_points;
     obol_points.reserve(point_count);
-    obol_commands.reserve(point_count);
+    precise_points.reserve(point_count * 3);
     for (size_t i = 0; i < point_count; i++) {
 	obol_points.push_back(SbVec3f(
 		static_cast<float>(points[i][0]),
 		static_cast<float>(points[i][1]),
 		static_cast<float>(points[i][2])));
-	obol_commands.push_back(SoBRLVListShape::POINT);
+	precise_points.push_back(points[i][0]);
+	precise_points.push_back(points[i][1]);
+	precise_points.push_back(points[i][2]);
     }
 
-    source->clearRealizedGeometry(TRUE);
-    SoBRLVListShape *shape =
-	ged_obol_owned_vlist_shape_for_source(source, path, 1);
-    if (!shape)
-	return 0;
-
-    shape->sourceType = "point-set";
-    shape->geometryKind = "point";
-    shape->setLineSet(obol_points.data(), obol_commands.data(),
-	    static_cast<int>(point_count));
-    ged_obol_vlist_shape_set_precise_points(shape, points, point_count);
-    point_t bmin;
-    point_t bmax;
-    VSETALL(bmin, INFINITY);
-    VSETALL(bmax, -INFINITY);
-    for (size_t i = 0; i < point_count; i++)
-	VMINMAX(bmin, bmax, points[i]);
-    (void)ged_draw_obol_database_source_set_bounds_for_path(gedp, path,
-	    bmin, bmax);
-
-    SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
-    return ged_obol_database_source_mark_published_current(scene, source);
+    BRLObolExternalPointSet point_set;
+    point_set.points = obol_points.empty() ? NULL : obol_points.data();
+    point_set.precisePoints = precise_points.empty() ? NULL :
+	precise_points.data();
+    point_set.count = static_cast<int>(point_count);
+    const int published =
+	scene->publishDatabaseSourceInstanceExternalPointSet(
+		source_instance_key.c_str(), point_set);
+    return published > 0 ? 1 : 0;
 }
 
 static int
@@ -10196,16 +10270,16 @@ ged_draw_obol_database_source_clear_mesh_for_path(
 	struct ged *gedp,
 	const char *path)
 {
-    SoBRLDatabaseSource *source =
-	ged_obol_owned_database_source_for_path(gedp, path);
-    SoBRLMeshShape *shape = ged_obol_owned_mesh_shape_for_source(source,
-	    path, 0);
-    if (!shape)
+    SoBRLSceneController *scene = NULL;
+    std::string source_instance_key;
+    if (!ged_obol_database_source_scene_instance_for_path(gedp, path, &scene,
+	    source_instance_key))
 	return 0;
 
-    shape->setIndexedTriangles(NULL, 0, NULL, 0);
-    (void)ged_obol_database_source_clear_bounds_for_source(gedp, source);
-    return 1;
+    const int cleared =
+	scene->clearDatabaseSourceInstanceExternalPrimaryGeometry(
+		source_instance_key.c_str());
+    return cleared >= 0 ? 1 : 0;
 }
 
 extern "C" int
@@ -10219,16 +10293,28 @@ ged_draw_obol_database_source_publish_indexed_face_set_for_path(
 	const int *indices,
 	size_t index_count)
 {
-    SoBRLDatabaseSource *source =
-	ged_obol_owned_database_source_for_path(gedp, path);
-    if (!source)
+    SoBRLSceneController *scene = NULL;
+    std::string source_instance_key;
+    if (!ged_obol_database_source_scene_instance_for_path(gedp, path, &scene,
+	    source_instance_key))
 	return 0;
 
+    SbMatrix worldToLocal;
+    const SbMatrix *worldToLocalPtr = NULL;
+    if (ged_obol_database_source_indexed_face_points_are_world()) {
+	SoBRLDatabaseSource *source =
+	    scene->findDatabaseSourceInstance(source_instance_key.c_str());
+	if (ged_obol_database_source_world_to_local_matrix(source,
+		worldToLocal))
+	    worldToLocalPtr = &worldToLocal;
+    }
+
     if (!point_count || !index_count) {
-	source->clearRealizedGeometry(TRUE);
-	(void)ged_obol_database_source_clear_bounds_for_source(gedp, source);
-	SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
-	return ged_obol_database_source_mark_published_current(scene, source);
+	BRLObolExternalTriangleMesh empty_mesh;
+	const int published =
+	    scene->publishDatabaseSourceInstanceExternalTriangleMesh(
+		    source_instance_key.c_str(), empty_mesh);
+	return published > 0 ? 1 : 0;
     }
 
     if (!points || !indices || (normal_count && !normals) ||
@@ -10250,33 +10336,19 @@ ged_draw_obol_database_source_publish_indexed_face_set_for_path(
     std::vector<SbVec3f> obol_points;
     obol_points.reserve(point_count);
     for (size_t i = 0; i < point_count; i++) {
-	obol_points.push_back(SbVec3f(
-		static_cast<float>(points[i][0]),
-		static_cast<float>(points[i][1]),
-		static_cast<float>(points[i][2])));
+	obol_points.push_back(ged_obol_database_source_local_point(points[i],
+		worldToLocalPtr));
     }
 
-    source->clearRealizedGeometry(TRUE);
-    SoBRLMeshShape *shape =
-	ged_obol_owned_mesh_shape_for_source(source, path, 1);
-    if (!shape)
-	return 0;
-
-    shape->setIndexedTriangles(obol_points.data(),
-	    static_cast<int>(obol_points.size()),
-	    triangles.data(),
-	    static_cast<int>(triangles.size()));
-    point_t bmin;
-    point_t bmax;
-    VSETALL(bmin, INFINITY);
-    VSETALL(bmax, -INFINITY);
-    for (size_t i = 0; i < point_count; i++)
-	VMINMAX(bmin, bmax, points[i]);
-    (void)ged_draw_obol_database_source_set_bounds_for_path(gedp, path,
-	    bmin, bmax);
-
-    SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
-    return ged_obol_database_source_mark_published_current(scene, source);
+    BRLObolExternalTriangleMesh triangle_mesh;
+    triangle_mesh.points = obol_points.empty() ? NULL : obol_points.data();
+    triangle_mesh.pointCount = static_cast<int>(obol_points.size());
+    triangle_mesh.indices = triangles.empty() ? NULL : triangles.data();
+    triangle_mesh.indexCount = static_cast<int>(triangles.size());
+    const int published =
+	scene->publishDatabaseSourceInstanceExternalTriangleMesh(
+		source_instance_key.c_str(), triangle_mesh);
+    return published > 0 ? 1 : 0;
 }
 
 extern "C" int
@@ -10514,13 +10586,15 @@ ged_draw_obol_database_source_geometry_summary_for_path(
 
     SoBRLVListShape *annotation_shape =
 	ged_obol_owned_annotation_vlist_shape_for_source(source, path);
+    const SoBRLVListShape *annotation_geom = annotation_shape ?
+	annotation_shape->getGeometrySource() : NULL;
     if (ged_obol_vlist_shape_is_annotation(annotation_shape) &&
-	    (annotation_shape->point.getNum() > 0 ||
+	    (annotation_geom->point.getNum() > 0 ||
 	     ged_obol_vlist_shape_has_annotation_record(annotation_shape))) {
 	out->valid = 1;
 	out->geometry_name = "annotation";
 	out->point_count =
-	    static_cast<size_t>(annotation_shape->point.getNum());
+	    static_cast<size_t>(annotation_geom->point.getNum());
 	out->index_count = 0;
 	return 1;
     }
@@ -10561,7 +10635,9 @@ ged_draw_obol_database_source_geometry_summary_for_path(
 	return 1;
     }
 
-    return 0;
+    out->valid = 1;
+    out->geometry_name = "empty";
+    return 1;
 }
 
 extern "C" int

@@ -15,7 +15,9 @@
 #include "bu/path.h"
 
 #include <Inventor/elements/SoModelMatrixElement.h>
+#include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoNode.h>
+#include <Inventor/nodes/SoTransformation.h>
 
 #include <algorithm>
 #include <cstring>
@@ -1032,7 +1034,9 @@ SoBRLExportAction::beginTraversal(SoNode *node)
 void
 SoBRLExportAction::nodeAction(SoAction *action, SoNode *node)
 {
-    node->doAction(action);
+    if (node->isOfType(SoGroup::getClassTypeId()) ||
+	    node->isOfType(SoTransformation::getClassTypeId()))
+	node->doAction(action);
 }
 
 void
@@ -1044,9 +1048,10 @@ SoBRLExportAction::vlistShapeAction(SoAction *action, SoNode *node)
 	return;
 
     const SbMatrix &localToWorld = SoModelMatrixElement::get(action->getState());
+    const SoBRLVListShape *geom = shape->getGeometrySource();
     if (exportAction->recordStorageEnabled) {
 	export_reserve_records(exportAction->lines,
-		static_cast<size_t>(shape->getSegmentCount()));
+	    static_cast<size_t>(shape->getSegmentCount()));
 	export_reserve_records(exportAction->points,
 		static_cast<size_t>(shape->getPointPrimitiveCount()));
     }
@@ -1054,23 +1059,23 @@ SoBRLExportAction::vlistShapeAction(SoAction *action, SoNode *node)
     SbVec3f last;
     SbBool haveLast = FALSE;
     int segmentIndex = 0;
-    int n = shape->point.getNum();
-    if (shape->command.getNum() < n)
-	n = shape->command.getNum();
+    int n = geom->point.getNum();
+    if (geom->command.getNum() < n)
+	n = geom->command.getNum();
 
     for (int i = 0; i < n; i++) {
-	if (shape->command[i] == SoBRLVListShape::MOVE) {
-	    last = shape->point[i];
+	if (geom->command[i] == SoBRLVListShape::MOVE) {
+	    last = geom->point[i];
 	    haveLast = TRUE;
 	    continue;
 	}
 
-	if (shape->command[i] == SoBRLVListShape::DRAW) {
+	if (geom->command[i] == SoBRLVListShape::DRAW) {
 	    if (haveLast) {
 		SbVec3f worldA;
 		SbVec3f worldB;
 		localToWorld.multVecMatrix(last, worldA);
-		localToWorld.multVecMatrix(shape->point[i], worldB);
+		localToWorld.multVecMatrix(geom->point[i], worldB);
 
 		if (!exportAction->recordStorageEnabled) {
 		    exportAction->appendLineSummary(worldA, worldB);
@@ -1097,21 +1102,21 @@ SoBRLExportAction::vlistShapeAction(SoAction *action, SoNode *node)
 		}
 		segmentIndex++;
 	    }
-	    last = shape->point[i];
+	    last = geom->point[i];
 	    haveLast = TRUE;
 	    continue;
 	}
 
-	if (shape->command[i] == SoBRLVListShape::POINT) {
+	if (geom->command[i] == SoBRLVListShape::POINT) {
 	    SbVec3f worldPoint;
-	    localToWorld.multVecMatrix(shape->point[i], worldPoint);
+	    localToWorld.multVecMatrix(geom->point[i], worldPoint);
 
 	    float pointScale = 0.0f;
 	    const int pointScaleValid =
 		shape->getPointScale(i, pointScale) ? 1 : 0;
 	    if (pointScaleValid)
 		pointScale = export_transform_point_scale(localToWorld,
-			shape->point[i], worldPoint, pointScale);
+		    geom->point[i], worldPoint, pointScale);
 
 	    if (!exportAction->recordStorageEnabled) {
 		exportAction->appendPointSummary(pointScaleValid, pointScale,

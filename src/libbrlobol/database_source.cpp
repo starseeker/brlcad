@@ -30,18 +30,21 @@
 #include "rt/view.h"
 
 #include <Inventor/SbName.h>
-#include <Inventor/nodes/SoMatrixTransform.h>
+#include <Inventor/SbViewportRegion.h>
+#include <Inventor/actions/SoGetBoundingBoxAction.h>
 #include <Inventor/nodes/SoGroup.h>
+#include <Inventor/nodes/SoMatrixTransform.h>
 #include <Inventor/nodes/SoSeparator.h>
 #include <Inventor/sensors/SoFieldSensor.h>
 
-#include <vector>
 #include <limits.h>
+#include <map>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <string>
+#include <vector>
 
 SO_NODE_SOURCE(SoBRLDatabaseSource);
 
@@ -73,6 +76,25 @@ database_source_string_equal(const SbString &a, const char *b)
     return strcmp(a.getString(), b ? b : "") == 0;
 }
 
+template <typename FieldT>
+static void
+database_source_assign_string(FieldT &field, const char *value)
+{
+    const char *nextValue = value ? value : "";
+    if (database_source_string_equal(field.getValue(), nextValue))
+	return;
+
+    const std::string stableValue(nextValue);
+    field = stableValue.c_str();
+}
+
+template <typename FieldT>
+static void
+database_source_assign_string(FieldT &field, const SbString &value)
+{
+    database_source_assign_string(field, value.getString());
+}
+
 static SbBox3f
 database_source_box_from_minmax(const SbVec3f &bmin, const SbVec3f &bmax)
 {
@@ -81,6 +103,34 @@ database_source_box_from_minmax(const SbVec3f &bmin, const SbVec3f &bmax)
     bounds.extendBy(bmin);
     bounds.extendBy(bmax);
     return bounds;
+}
+
+static SbBox3f
+database_source_transform_bounds(const SbBox3f &bounds,
+	const SbMatrix &matrix)
+{
+    SbBox3f transformed;
+    transformed.makeEmpty();
+    if (bounds.isEmpty())
+	return transformed;
+
+    const SbVec3f bmin = bounds.getMin();
+    const SbVec3f bmax = bounds.getMax();
+    for (int xi = 0; xi < 2; xi++) {
+	for (int yi = 0; yi < 2; yi++) {
+	    for (int zi = 0; zi < 2; zi++) {
+		const SbVec3f corner(
+			xi ? bmax[0] : bmin[0],
+			yi ? bmax[1] : bmin[1],
+			zi ? bmax[2] : bmin[2]);
+		SbVec3f transformedCorner;
+		matrix.multVecMatrix(corner, transformedCorner);
+		transformed.extendBy(transformedCorner);
+	    }
+	}
+    }
+
+    return transformed;
 }
 
 BRLObolDatabaseSourceSummary::BRLObolDatabaseSourceSummary(void) :
@@ -149,6 +199,60 @@ BRLObolAuxiliaryLineSetDisplayState::BRLObolAuxiliaryLineSetDisplayState(void) :
     materialColorValid(FALSE),
     materialColor(1.0f, 1.0f, 1.0f),
     materialRevision(0)
+{
+}
+
+BRLObolExternalLineSet::BRLObolExternalLineSet(void) :
+    points(NULL),
+    commands(NULL),
+    precisePoints(NULL),
+    count(0),
+    sourceType("line-set"),
+    geometryKind("line")
+{
+}
+
+BRLObolExternalPointSet::BRLObolExternalPointSet(void) :
+    points(NULL),
+    precisePoints(NULL),
+    count(0),
+    sourceType("point-set"),
+    geometryKind("point")
+{
+}
+
+BRLObolExternalTriangleMesh::BRLObolExternalTriangleMesh(void) :
+    points(NULL),
+    pointCount(0),
+    indices(NULL),
+    indexCount(0),
+    sourceType("indexed-face-set"),
+    geometryKind("surface")
+{
+}
+
+BRLObolExternalAnnotationSegment::BRLObolExternalAnnotationSegment(void) :
+    kind(SEGMENT_NONE),
+    lineStart(0),
+    lineEnd(0),
+    textRefPoint(0),
+    text(NULL)
+{
+}
+
+BRLObolExternalAnnotation::BRLObolExternalAnnotation(void) :
+    basePoint(0.0f, 0.0f, 0.0f),
+    linePoints(NULL),
+    lineCommands(NULL),
+    preciseLinePoints(NULL),
+    linePointCount(0),
+    annotationPoints(NULL),
+    preciseAnnotationPoints(NULL),
+    annotationPointCount(0),
+    segments(NULL),
+    segmentCount(0),
+    sourceType("annotation"),
+    geometryKind("annotation")
 {
 }
 
@@ -532,16 +636,6 @@ convert_vlist(std::vector<SbVec3f> &points, std::vector<int32_t> &commands, cons
     }
 }
 
-static SbMatrix
-mat_to_sbmatrix(const mat_t mat)
-{
-    return SbMatrix(
-	    static_cast<float>(mat[0]), static_cast<float>(mat[4]), static_cast<float>(mat[8]),  static_cast<float>(mat[12]),
-	    static_cast<float>(mat[1]), static_cast<float>(mat[5]), static_cast<float>(mat[9]),  static_cast<float>(mat[13]),
-	    static_cast<float>(mat[2]), static_cast<float>(mat[6]), static_cast<float>(mat[10]), static_cast<float>(mat[14]),
-	    static_cast<float>(mat[3]), static_cast<float>(mat[7]), static_cast<float>(mat[11]), static_cast<float>(mat[15]));
-}
-
 static double
 nonnegative_or_default(float value, double defaultValue)
 {
@@ -584,6 +678,124 @@ node_is_auxiliary_source(const SoNode *node)
     return source->auxiliarySource.getValue();
 }
 
+static const char *
+database_source_placement_transform_name(void)
+{
+    return "__brlobol_source_placement";
+}
+
+static SbBool
+node_is_source_placement_transform(const SoNode *node)
+{
+    return node &&
+	node->isOfType(SoMatrixTransform::getClassTypeId()) &&
+	node->getName() == SbName(database_source_placement_transform_name()) ?
+	TRUE : FALSE;
+}
+
+static SoMatrixTransform *
+source_placement_transform(SoBRLDatabaseSource *source)
+{
+    if (!source)
+	return NULL;
+
+    for (int i = 0; i < source->getNumChildren(); i++) {
+	SoNode *child = source->getChild(i);
+	if (node_is_source_placement_transform(child))
+	    return static_cast<SoMatrixTransform *>(child);
+    }
+
+    return NULL;
+}
+
+static const SoMatrixTransform *
+source_placement_transform(const SoBRLDatabaseSource *source)
+{
+    return source_placement_transform(const_cast<SoBRLDatabaseSource *>(source));
+}
+
+static SoMatrixTransform *
+ensure_source_placement_transform(SoBRLDatabaseSource *source)
+{
+    if (!source)
+	return NULL;
+
+    SoMatrixTransform *transform = source_placement_transform(source);
+    if (!transform) {
+	transform = new SoMatrixTransform;
+	transform->setName(SbName(database_source_placement_transform_name()));
+	source->insertChild(transform, 0);
+	return transform;
+    }
+
+    int transformIndex = -1;
+    for (int i = 0; i < source->getNumChildren(); i++) {
+	if (source->getChild(i) == transform) {
+	    transformIndex = i;
+	    break;
+	}
+    }
+    if (transformIndex > 0) {
+	transform->ref();
+	source->removeChild(transformIndex);
+	source->insertChild(transform, 0);
+	transform->unref();
+    }
+
+    return transform;
+}
+
+static int
+remove_source_placement_transform(SoBRLDatabaseSource *source)
+{
+    if (!source)
+	return 0;
+
+    int removed = 0;
+    for (int i = source->getNumChildren() - 1; i >= 0; i--) {
+	if (node_is_source_placement_transform(source->getChild(i))) {
+	    source->removeChild(i);
+	    removed = 1;
+	}
+    }
+    return removed;
+}
+
+static int
+sync_source_placement_transform(SoBRLDatabaseSource *source)
+{
+    if (!source)
+	return 0;
+
+    if (!source->drawMatrixValid.getValue()) {
+	return remove_source_placement_transform(source);
+    }
+
+    const int hadTransform = source_placement_transform(source) ? 1 : 0;
+    SoMatrixTransform *transform = ensure_source_placement_transform(source);
+    if (!transform)
+	return 0;
+
+    int changed = hadTransform ? 0 : 1;
+    const SbMatrix matrix = source->drawMatrix.getValue();
+    if (!transform->matrix.getValue().equals(matrix, 0.000001f)) {
+	transform->matrix = matrix;
+	changed = 1;
+    }
+    return changed;
+}
+
+static void
+database_source_add_realized_child(SoBRLDatabaseSource *source,
+	SoNode *child)
+{
+    if (!source || !child)
+	return;
+
+    (void)sync_source_placement_transform(source);
+    source->addChild(child);
+}
+
 static void
 remove_non_auxiliary_children(SoGroup *group)
 {
@@ -592,7 +804,9 @@ remove_non_auxiliary_children(SoGroup *group)
 
     for (int i = group->getNumChildren() - 1; i >= 0; i--) {
 	SoNode *child = group->getChild(i);
-	if (node_is_auxiliary_vlist(child) || node_is_auxiliary_source(child))
+	if (node_is_source_placement_transform(child) ||
+		node_is_auxiliary_vlist(child) ||
+		node_is_auxiliary_source(child))
 	    continue;
 	group->removeChild(i);
     }
@@ -604,7 +818,43 @@ struct realize_walk_data {
     int realized_shapes;
     int failed_shapes;
     SbString diagnostic;
+    std::map<std::string, SoBRLVListShape *> sharedWireGeometry;
+    std::map<std::string, SoBRLVListShape *> sharedMeshVListGeometry;
+    std::map<std::string, SoBRLMeshShape *> sharedMeshGeometry;
 };
+
+static SbMatrix
+mat_to_sbmatrix(const mat_t mat)
+{
+    return SbMatrix(
+	    static_cast<float>(mat[0]), static_cast<float>(mat[4]),
+	    static_cast<float>(mat[8]), static_cast<float>(mat[12]),
+	    static_cast<float>(mat[1]), static_cast<float>(mat[5]),
+	    static_cast<float>(mat[9]), static_cast<float>(mat[13]),
+	    static_cast<float>(mat[2]), static_cast<float>(mat[6]),
+	    static_cast<float>(mat[10]), static_cast<float>(mat[14]),
+	    static_cast<float>(mat[3]), static_cast<float>(mat[7]),
+	    static_cast<float>(mat[11]), static_cast<float>(mat[15]));
+}
+
+static SoSeparator *
+realize_instance_leaf_separator(const struct db_tree_state *tsp)
+{
+    SoSeparator *leaf = new SoSeparator;
+    if (!tsp || bn_mat_is_identity(tsp->ts_mat))
+	return leaf;
+
+    SoMatrixTransform *transform = new SoMatrixTransform;
+    transform->matrix = mat_to_sbmatrix(tsp->ts_mat);
+    leaf->addChild(transform);
+    return leaf;
+}
+
+static std::string
+realize_geometry_cache_key(const struct directory *dp)
+{
+    return (dp && dp->d_namep) ? std::string(dp->d_namep) : std::string();
+}
 
 static void
 set_walk_diagnostic(struct realize_walk_data *data,
@@ -637,6 +887,98 @@ primitive_is_annotation(int internalType, const char *typeLabel)
 	return true;
     return typeLabel && (BU_STR_EQUAL(typeLabel, "annot") ||
 	    BU_STR_EQUAL(typeLabel, "annotation"));
+}
+
+static uint32_t
+internal_payload_magic(const struct rt_db_internal *intern)
+{
+    if (!intern || !intern->idb_ptr)
+	return 0;
+    return *((const uint32_t *)intern->idb_ptr);
+}
+
+static bool
+internal_payload_magic_valid(const struct rt_db_internal *intern)
+{
+    if (!intern || !intern->idb_ptr || !intern->idb_meth)
+	return false;
+    if (intern->idb_meth->magic != RT_FUNCTAB_MAGIC)
+	return false;
+
+    const uint32_t expected = intern->idb_meth->ft_internal_magic;
+    if (!expected)
+	return true;
+
+    return internal_payload_magic(intern) == expected;
+}
+
+struct valid_walk_internal {
+    struct rt_db_internal local;
+    struct rt_db_internal *intern;
+    bool ownsLocal;
+    bool refetched;
+
+    valid_walk_internal(void) : intern(NULL), ownsLocal(false), refetched(false)
+    {
+	RT_DB_INTERNAL_INIT(&local);
+    }
+
+    ~valid_walk_internal(void)
+    {
+	if (ownsLocal)
+	    rt_db_free_internal(&local);
+    }
+};
+
+static struct rt_db_internal *
+fetch_local_walk_internal(struct db_tree_state *tsp,
+	const struct db_full_path *pathp,
+	struct valid_walk_internal *handle)
+{
+    if (!handle || !tsp || !tsp->ts_dbip || !pathp)
+	return NULL;
+
+    struct directory *dp = DB_FULL_PATH_CUR_DIR(pathp);
+    if (!dp)
+	return NULL;
+
+    handle->refetched = true;
+    if (rt_db_get_internal(&handle->local, dp, tsp->ts_dbip, NULL) >= 0 &&
+	    internal_payload_magic_valid(&handle->local)) {
+	handle->intern = &handle->local;
+	handle->ownsLocal = true;
+	return handle->intern;
+    }
+
+    return NULL;
+}
+
+static void
+set_invalid_internal_diagnostic(struct realize_walk_data *data,
+	const struct db_full_path *pathp,
+	const struct rt_db_internal *intern,
+	bool refetched)
+{
+    if (!data)
+	return;
+
+    const char *typeLabel = primitive_type_label(intern);
+    char reason[256] = {0};
+    if (intern && intern->idb_ptr && intern->idb_meth &&
+	    intern->idb_meth->ft_internal_magic) {
+	snprintf(reason, sizeof(reason),
+		"invalid primitive payload for type '%s' (magic 0x%08x, expected 0x%08x)%s",
+		typeLabel,
+		(unsigned int)internal_payload_magic(intern),
+		(unsigned int)intern->idb_meth->ft_internal_magic,
+		refetched ? "; refetch failed validation" : "");
+    } else {
+	snprintf(reason, sizeof(reason),
+		"invalid primitive payload for type '%s'%s",
+		typeLabel,
+		refetched ? "; refetch failed validation" : "");
+    }
+    set_walk_diagnostic(data, pathp, reason);
 }
 
 static void
@@ -817,6 +1159,37 @@ assign_realized_identity(ShapeT *shape,
     shape->materialShader = tsp->ts_mater.ma_shader ? tsp->ts_mater.ma_shader : "";
 }
 
+template <typename ShapeT>
+static void
+assign_shared_geometry_identity(ShapeT *shape,
+	const char *sourceName,
+	const char *sourceType,
+	uint32_t sourceId,
+	const char *geometryKind)
+{
+    if (!shape)
+	return;
+
+    const char *name = sourceName ? sourceName : "";
+    shape->sourcePath = name;
+    shape->sourceName = name;
+    shape->sourceType = sourceType ? sourceType : "";
+    shape->sourceId = sourceId;
+    shape->displayName = name;
+    shape->geometryName = name;
+    shape->sourceIdentity = name;
+    shape->cacheIdentity = record_identity_with_revision(name, sourceId);
+    shape->databaseIntent = TRUE;
+    shape->overlayIntent = FALSE;
+    shape->hudIntent = FALSE;
+    shape->localSource = FALSE;
+    shape->sharedSource = TRUE;
+    shape->nonDatabaseSource = FALSE;
+    shape->recordRole = "shared-geometry";
+    if (geometryKind && geometryKind[0])
+	shape->geometryKind = geometryKind;
+}
+
 static void
 retarget_realized_node_source(SoNode *node,
 	const SoBRLDatabaseSource *source,
@@ -831,8 +1204,10 @@ sync_shape_owner_state(ShapeT *shape, const SoBRLDatabaseSource *source)
     if (!shape || !source)
 	return;
 
-    shape->ownerSourcePath = source->path.getValue();
-    shape->ownerSourceInstanceKey = source_effective_instance_key(source);
+    database_source_assign_string(shape->ownerSourcePath,
+	    source->path.getValue());
+    database_source_assign_string(shape->ownerSourceInstanceKey,
+	    source_effective_instance_key(source));
     shape->ownerSourceRevision = source->sourceRevision.getValue();
     shape->ownerInputsRevision = source->inputsRevision.getValue();
     shape->ownerViewRevision = source->viewRevision.getValue();
@@ -843,9 +1218,10 @@ sync_shape_owner_state(ShapeT *shape, const SoBRLDatabaseSource *source)
 	source->realizedInputsRevision.getValue();
     shape->ownerRealizedViewRevision = source->realizedViewRevision.getValue();
     shape->ownerRealizationStatus = source->realizationStatus.getValue();
-    shape->ownerRealizationDiagnostic =
-	source->realizationDiagnostic.getValue();
-    shape->ownerRealizationIdentity = source->realizationIdentity.getValue();
+    database_source_assign_string(shape->ownerRealizationDiagnostic,
+	    source->realizationDiagnostic.getValue());
+    database_source_assign_string(shape->ownerRealizationIdentity,
+	    source->realizationIdentity.getValue());
     shape->ownerSourceStale = source->stale.getValue();
     shape->ownerStaleReason = source->staleReason.getValue();
 }
@@ -904,15 +1280,16 @@ sync_shape_display_name(ShapeT *shape, const SoBRLDatabaseSource *source)
 	    shape->nonDatabaseSource.getValue())
 	return;
 
+    std::string nextDisplayName;
     if (source->displayName.getValue().getLength() > 0) {
-	shape->displayName = source->displayName.getValue();
-	return;
+	nextDisplayName = source->displayName.getValue().getString();
+    } else if (shape->sourceName.getValue().getLength() > 0) {
+	nextDisplayName = shape->sourceName.getValue().getString();
+    } else {
+	nextDisplayName = shape->sourcePath.getValue().getString();
     }
-
-    if (shape->sourceName.getValue().getLength() > 0)
-	shape->displayName = shape->sourceName.getValue();
-    else
-	shape->displayName = shape->sourcePath.getValue();
+    database_source_assign_string(shape->displayName,
+	    nextDisplayName.c_str());
 }
 
 static void
@@ -1011,7 +1388,7 @@ static SoBRLVListShape *
 vlist_from_plot_internal(struct rt_db_internal *intern,
 	const SoBRLDatabaseSource *source)
 {
-    if (!intern || !intern->idb_ptr)
+    if (!internal_payload_magic_valid(intern))
 	return NULL;
 
     point_t annotationBase = VINIT_ZERO;
@@ -1066,123 +1443,92 @@ vlist_from_plot_internal(struct rt_db_internal *intern,
 static union tree *
 realize_leaf(struct db_tree_state *tsp,
 	const struct db_full_path *pathp,
-	struct rt_db_internal *UNUSED(intern),
+	struct directory *dp,
 	void *client_data)
 {
     struct realize_walk_data *data = static_cast<struct realize_walk_data *>(client_data);
-    if (!data || !data->source || !pathp || !tsp || !tsp->ts_dbip)
+    if (!data || !data->source || !pathp || !tsp || !tsp->ts_dbip ||
+	    !dp)
 	return TREE_NULL;
 
-    struct directory *dp = DB_FULL_PATH_CUR_DIR(pathp);
-    if (!dp)
-	return TREE_NULL;
+    SoBRLVListShape *sharedShape = NULL;
+    const std::string cacheKey = realize_geometry_cache_key(dp);
+    std::map<std::string, SoBRLVListShape *>::iterator found =
+	data->sharedWireGeometry.find(cacheKey);
+    if (found != data->sharedWireGeometry.end())
+	sharedShape = found->second;
 
-    struct rt_db_internal local_intern;
-    RT_DB_INTERNAL_INIT(&local_intern);
-    if (rt_db_get_internal(&local_intern, dp, tsp->ts_dbip, NULL) < 0) {
-	data->failed_shapes++;
-	set_walk_diagnostic(data, pathp, "rt_db_get_internal failed");
-	return TREE_NULL;
-    }
-
-    const char *typeLabel = primitive_type_label(&local_intern);
-    if (local_intern.idb_type == ID_MATERIAL) {
-	SoBRLMaterialObject *materialObject =
-	    material_object_from_internal(static_cast<struct rt_material_internal *>(local_intern.idb_ptr));
-	rt_db_free_internal(&local_intern);
-	if (!materialObject) {
+    const char *typeLabel = sharedShape ?
+	sharedShape->sourceType.getValue().getString() : NULL;
+    if (!sharedShape) {
+	valid_walk_internal validInternal;
+	struct rt_db_internal *localIntern =
+	    fetch_local_walk_internal(tsp, pathp, &validInternal);
+	if (!localIntern) {
 	    data->failed_shapes++;
-	    set_walk_diagnostic(data, pathp,
-		    "material object realization failed");
+	    set_invalid_internal_diagnostic(data, pathp, NULL,
+		    validInternal.refetched);
 	    return TREE_NULL;
 	}
-	char *path = db_path_to_string(pathp);
-	SoSeparator *leaf = new SoSeparator;
-	assign_material_identity(materialObject, path, dp->d_namep, typeLabel,
-		data->revision);
-	leaf->addChild(materialObject);
-	data->source->addChild(leaf);
-	data->realized_shapes++;
-	if (path)
-	    bu_free(path, "db_path_to_string");
-	return make_nop_tree();
-    }
 
-    struct bu_list vhead;
-    BU_LIST_INIT(&vhead);
-    struct bg_tess_tol ttol = source_tess_tol(data->source);
-    struct bn_tol tol = BN_TOL_INIT_TOL;
-    point_t annotationBase = VINIT_ZERO;
-    struct rt_annot_internal *annotation = NULL;
-    const bool addAnnotationBase = primitive_is_annotation(
-	    local_intern.idb_type, typeLabel);
-    if (addAnnotationBase) {
-	struct rt_annot_internal *annot =
-	    static_cast<struct rt_annot_internal *>(local_intern.idb_ptr);
-	RT_ANNOT_CK_MAGIC(annot);
-	annotation = rt_copy_annot(annot);
-	VMOVE(annotationBase, annot->V);
-    }
-
-    int ret = rt_obj_plot(&vhead, &local_intern, &ttol, &tol);
-    if (ret < 0) {
-	char reason[256] = {0};
-	data->failed_shapes++;
-	if (ret == -4) {
-	    snprintf(reason, sizeof(reason),
-		    "unsupported wireframe primitive type '%s'", typeLabel);
-	} else {
-	    snprintf(reason, sizeof(reason),
-		    "wireframe plot failed for primitive type '%s'", typeLabel);
+	typeLabel = primitive_type_label(localIntern);
+	if (localIntern->idb_type == ID_MATERIAL) {
+	    SoBRLMaterialObject *materialObject =
+		material_object_from_internal(static_cast<struct rt_material_internal *>(localIntern->idb_ptr));
+	    if (!materialObject) {
+		data->failed_shapes++;
+		set_walk_diagnostic(data, pathp,
+			"material object realization failed");
+		return TREE_NULL;
+	    }
+	    char *path = db_path_to_string(pathp);
+	    SoSeparator *leaf = new SoSeparator;
+	    assign_material_identity(materialObject, path, dp->d_namep,
+		    typeLabel, data->revision);
+	    leaf->addChild(materialObject);
+	    data->source->addChild(leaf);
+	    data->realized_shapes++;
+	    if (path)
+		bu_free(path, "db_path_to_string");
+	    return make_nop_tree();
 	}
-	set_walk_diagnostic(data, pathp, reason);
-	free_annotation_record_copy(annotation);
-	rt_db_free_internal(&local_intern);
-	RT_FREE_VLIST(&rt_vlfree, &vhead);
-	return TREE_NULL;
-    }
-    std::vector<SbVec3f> points;
-    std::vector<int32_t> commands;
-    convert_vlist(points, commands, &vhead);
-    RT_FREE_VLIST(&rt_vlfree, &vhead);
-    if (addAnnotationBase) {
-	for (size_t i = 0; i < points.size(); i++) {
-	    points[i].setValue(points[i][0] +
-		    static_cast<float>(annotationBase[X]),
-		    points[i][1] + static_cast<float>(annotationBase[Y]),
-		    points[i][2] + static_cast<float>(annotationBase[Z]));
-	}
-    }
 
-    if (points.empty() || points.size() != commands.size()) {
-	char reason[256] = {0};
-	data->failed_shapes++;
-	snprintf(reason, sizeof(reason),
-		"wireframe plot produced no usable geometry for primitive type '%s'",
-		typeLabel);
-	set_walk_diagnostic(data, pathp, reason);
-	free_annotation_record_copy(annotation);
-	rt_db_free_internal(&local_intern);
-	return TREE_NULL;
+	sharedShape = vlist_from_plot_internal(localIntern, data->source);
+	if (!sharedShape) {
+	    char reason[256] = {0};
+	    data->failed_shapes++;
+	    snprintf(reason, sizeof(reason),
+		    "wireframe plot produced no usable geometry for primitive type '%s'",
+		    typeLabel);
+	    set_walk_diagnostic(data, pathp, reason);
+	    return TREE_NULL;
+	}
+	assign_shared_geometry_identity(sharedShape, dp->d_namep, typeLabel,
+		data->revision, "line");
+	if (primitive_is_annotation(localIntern->idb_type, typeLabel)) {
+	    sharedShape->sourceType = "annotation";
+	    sharedShape->geometryKind = "annotation";
+	}
+	data->sharedWireGeometry[cacheKey] = sharedShape;
+	typeLabel = sharedShape->sourceType.getValue().getString();
     }
 
     char *path = db_path_to_string(pathp);
-    SoSeparator *leaf = new SoSeparator;
-    SoMatrixTransform *transform = new SoMatrixTransform;
+    SoSeparator *leaf = realize_instance_leaf_separator(tsp);
     SoBRLVListShape *shape = new SoBRLVListShape;
-    transform->matrix = mat_to_sbmatrix(tsp->ts_mat);
     assign_realized_identity(shape, tsp, path, dp->d_namep, typeLabel,
 	    data->revision, data->source);
-    shape->setLineSet(points.data(), commands.data(), static_cast<int>(points.size()));
-    assign_annotation_record(shape, annotation);
-    free_annotation_record_copy(annotation);
-    leaf->addChild(transform);
+    shape->setSharedGeometry(sharedShape);
+    const char *geometryKind = sharedShape->geometryKind.getValue().getString();
+    shape->geometryKind = (geometryKind && geometryKind[0]) ?
+	geometryKind : "line";
+    if (geometryKind && BU_STR_EQUAL(geometryKind, "annotation"))
+	shape->sourceType = "annotation";
     leaf->addChild(shape);
     data->source->addChild(leaf);
     data->realized_shapes++;
     if (path)
 	bu_free(path, "db_path_to_string");
-    rt_db_free_internal(&local_intern);
 
     return make_nop_tree();
 }
@@ -1504,7 +1850,7 @@ static SoBRLMeshShape *
 mesh_from_primitive_face_set(struct rt_db_internal *intern,
 	const SoBRLDatabaseSource *source)
 {
-    if (!intern || !intern->idb_meth || !intern->idb_meth->ft_indexed_face_set)
+    if (!internal_payload_magic_valid(intern) || !intern->idb_meth->ft_indexed_face_set)
 	return NULL;
 
     struct rt_primitive_indexed_face_set faceSet;
@@ -1665,7 +2011,7 @@ static SoBRLMeshShape *
 mesh_from_tessellated_internal(struct rt_db_internal *intern,
 	const SoBRLDatabaseSource *source)
 {
-    if (!intern || !intern->idb_ptr)
+    if (!internal_payload_magic_valid(intern))
 	return NULL;
 
     struct bg_tess_tol ttol = source_tess_tol(source);
@@ -1702,7 +2048,7 @@ static SoBRLMeshShape *
 mesh_from_internal(struct rt_db_internal *intern,
 	const SoBRLDatabaseSource *source)
 {
-    if (!intern || !intern->idb_ptr)
+    if (!internal_payload_magic_valid(intern))
 	return NULL;
 
     SoBRLMeshShape *faceSetShape = mesh_from_primitive_face_set(intern,
@@ -1722,89 +2068,147 @@ mesh_from_internal(struct rt_db_internal *intern,
     return mesh_from_tessellated_internal(intern, source);
 }
 
+static SoBRLMeshShape *
+mesh_instance_for_shared_geometry(const SoBRLMeshShape *sharedShape)
+{
+    if (sharedShape &&
+	    sharedShape->isOfType(SoBRLLodMeshShape::getClassTypeId()))
+	return new SoBRLLodMeshShape;
+    return new SoBRLMeshShape;
+}
+
 static union tree *
 realize_mesh_leaf(struct db_tree_state *tsp,
 	const struct db_full_path *pathp,
-	struct rt_db_internal *UNUSED(intern),
+	struct directory *dp,
 	void *client_data)
 {
     struct realize_walk_data *data = static_cast<struct realize_walk_data *>(client_data);
-    if (!data || !data->source || !pathp || !tsp || !tsp->ts_dbip)
+    if (!data || !data->source || !pathp || !tsp || !tsp->ts_dbip ||
+	    !dp)
 	return TREE_NULL;
 
-    struct directory *dp = DB_FULL_PATH_CUR_DIR(pathp);
-    if (!dp)
-	return TREE_NULL;
-
-    struct rt_db_internal local_intern;
-    RT_DB_INTERNAL_INIT(&local_intern);
-    if (rt_db_get_internal(&local_intern, dp, tsp->ts_dbip, NULL) < 0) {
-	data->failed_shapes++;
-	set_walk_diagnostic(data, pathp, "rt_db_get_internal failed");
-	return TREE_NULL;
+    SoBRLVListShape *sharedVListShape = NULL;
+    SoBRLMeshShape *sharedMeshShape = NULL;
+    const std::string cacheKey = realize_geometry_cache_key(dp);
+    std::map<std::string, SoBRLVListShape *>::iterator foundVList =
+	data->sharedMeshVListGeometry.find(cacheKey);
+    if (foundVList != data->sharedMeshVListGeometry.end()) {
+	sharedVListShape = foundVList->second;
+    } else {
+	std::map<std::string, SoBRLMeshShape *>::iterator foundMesh =
+	    data->sharedMeshGeometry.find(cacheKey);
+	if (foundMesh != data->sharedMeshGeometry.end())
+	    sharedMeshShape = foundMesh->second;
     }
 
-    const char *typeLabel = primitive_type_label(&local_intern);
-    const int internalType = local_intern.idb_type;
-    if (internalType == ID_MATERIAL) {
-	SoBRLMaterialObject *materialObject =
-	    material_object_from_internal(static_cast<struct rt_material_internal *>(local_intern.idb_ptr));
-	rt_db_free_internal(&local_intern);
-	if (!materialObject) {
+    const char *typeLabel = sharedVListShape ?
+	sharedVListShape->sourceType.getValue().getString() :
+	(sharedMeshShape ? sharedMeshShape->sourceType.getValue().getString() : NULL);
+    if (!sharedVListShape && !sharedMeshShape) {
+	valid_walk_internal validInternal;
+	struct rt_db_internal *localIntern =
+	    fetch_local_walk_internal(tsp, pathp, &validInternal);
+	if (!localIntern) {
 	    data->failed_shapes++;
-	    set_walk_diagnostic(data, pathp,
-		    "material object realization failed");
+	    set_invalid_internal_diagnostic(data, pathp, NULL,
+		    validInternal.refetched);
 	    return TREE_NULL;
 	}
-	char *path = db_path_to_string(pathp);
-	SoSeparator *leaf = new SoSeparator;
-	assign_material_identity(materialObject, path, dp->d_namep, typeLabel,
-		data->revision);
-	leaf->addChild(materialObject);
-	data->source->addChild(leaf);
-	data->realized_shapes++;
-	if (path)
-	    bu_free(path, "db_path_to_string");
-	return make_nop_tree();
-    }
-    SoBRLVListShape *vlistShape = NULL;
-    SoBRLMeshShape *shape = NULL;
-    if (internalType == ID_PNTS)
-	vlistShape = vlist_from_pnts(static_cast<const struct rt_pnts_internal *>(local_intern.idb_ptr));
-    else if (internalType == ID_SKETCH || internalType == ID_ANNOT)
-	vlistShape = vlist_from_plot_internal(&local_intern, data->source);
-    else
-	shape = mesh_from_internal(&local_intern, data->source);
-    rt_db_free_internal(&local_intern);
-    if (!vlistShape && !shape) {
-	char reason[256] = {0};
-	data->failed_shapes++;
-	snprintf(reason, sizeof(reason),
-		"unsupported or failed mesh conversion/tessellation for primitive type '%s'",
-		typeLabel);
-	set_walk_diagnostic(data, pathp, reason);
-	return TREE_NULL;
+
+	typeLabel = primitive_type_label(localIntern);
+	const int internalType = localIntern->idb_type;
+	if (internalType == ID_MATERIAL) {
+	    SoBRLMaterialObject *materialObject =
+		material_object_from_internal(static_cast<struct rt_material_internal *>(localIntern->idb_ptr));
+	    if (!materialObject) {
+		data->failed_shapes++;
+		set_walk_diagnostic(data, pathp,
+			"material object realization failed");
+		return TREE_NULL;
+	    }
+	    char *path = db_path_to_string(pathp);
+	    SoSeparator *leaf = new SoSeparator;
+	    assign_material_identity(materialObject, path, dp->d_namep,
+		    typeLabel, data->revision);
+	    leaf->addChild(materialObject);
+	    data->source->addChild(leaf);
+	    data->realized_shapes++;
+	    if (path)
+		bu_free(path, "db_path_to_string");
+	    return make_nop_tree();
+	}
+
+	if (internalType == ID_PNTS) {
+	    sharedVListShape = vlist_from_pnts(
+		    static_cast<const struct rt_pnts_internal *>(localIntern->idb_ptr));
+	    if (sharedVListShape)
+		assign_shared_geometry_identity(sharedVListShape,
+			dp->d_namep, typeLabel, data->revision, "point");
+	} else if (internalType == ID_SKETCH || internalType == ID_ANNOT) {
+	    sharedVListShape = vlist_from_plot_internal(localIntern,
+		    data->source);
+	    if (sharedVListShape) {
+		assign_shared_geometry_identity(sharedVListShape,
+			dp->d_namep, typeLabel, data->revision, "line");
+		if (primitive_is_annotation(internalType, typeLabel)) {
+		    sharedVListShape->sourceType = "annotation";
+		    sharedVListShape->geometryKind = "annotation";
+		}
+	    }
+	} else {
+	    sharedMeshShape = mesh_from_internal(localIntern, data->source);
+	    if (sharedMeshShape)
+		assign_shared_geometry_identity(sharedMeshShape,
+			dp->d_namep, typeLabel, data->revision, "surface");
+	}
+
+	if (!sharedVListShape && !sharedMeshShape) {
+	    char reason[256] = {0};
+	    data->failed_shapes++;
+	    snprintf(reason, sizeof(reason),
+		    "unsupported or failed mesh conversion/tessellation for primitive type '%s'",
+		    typeLabel);
+	    set_walk_diagnostic(data, pathp, reason);
+	    return TREE_NULL;
+	}
+
+	if (sharedVListShape) {
+	    data->sharedMeshVListGeometry[cacheKey] = sharedVListShape;
+	    typeLabel = sharedVListShape->sourceType.getValue().getString();
+	} else {
+	    data->sharedMeshGeometry[cacheKey] = sharedMeshShape;
+	    typeLabel = sharedMeshShape->sourceType.getValue().getString();
+	}
     }
 
     char *path = db_path_to_string(pathp);
-    SoSeparator *leaf = new SoSeparator;
-    SoMatrixTransform *transform = new SoMatrixTransform;
-    transform->matrix = mat_to_sbmatrix(tsp->ts_mat);
-    if (vlistShape) {
+    SoSeparator *leaf = realize_instance_leaf_separator(tsp);
+    if (sharedVListShape) {
+	SoBRLVListShape *vlistShape = new SoBRLVListShape;
 	assign_realized_identity(vlistShape, tsp, path, dp->d_namep, typeLabel,
 		data->revision, data->source);
-	if (primitive_is_annotation(internalType, typeLabel)) {
+	vlistShape->setSharedGeometry(sharedVListShape);
+	const char *geometryKind =
+	    sharedVListShape->geometryKind.getValue().getString();
+	vlistShape->geometryKind = (geometryKind && geometryKind[0]) ?
+	    geometryKind : "line";
+	if (geometryKind && BU_STR_EQUAL(geometryKind, "annotation"))
 	    vlistShape->sourceType = "annotation";
-	    vlistShape->geometryKind = "annotation";
-	}
+	leaf->addChild(vlistShape);
     } else {
+	SoBRLMeshShape *shape = mesh_instance_for_shared_geometry(sharedMeshShape);
 	assign_realized_identity(shape, tsp, path, dp->d_namep, typeLabel,
 		data->revision, data->source);
-	if (internalType == ID_BOT)
+	shape->setSharedGeometry(sharedMeshShape);
+	const char *geometryKind =
+	    sharedMeshShape->geometryKind.getValue().getString();
+	shape->geometryKind = (geometryKind && geometryKind[0]) ?
+	    geometryKind : "surface";
+	if (typeLabel && BU_STR_EQUAL(typeLabel, "bot"))
 	    publish_lod_metadata_if_cached(shape, tsp->ts_dbip, dp->d_namep);
+	leaf->addChild(shape);
     }
-    leaf->addChild(transform);
-    leaf->addChild(vlistShape ? static_cast<SoNode *>(vlistShape) : static_cast<SoNode *>(shape));
     data->source->addChild(leaf);
     data->realized_shapes++;
     if (path)
@@ -2423,6 +2827,8 @@ SoBRLDatabaseSource::setPlacementState(SbBool nextDrawMatrixValid,
 	this->drawSize = nextDrawSize;
 	changed = 1;
     }
+    if (sync_source_placement_transform(this))
+	changed = 1;
     if (changed)
 	this->syncRealizedShapeOwnerState();
     return changed;
@@ -2479,6 +2885,24 @@ SoBRLDatabaseSource::getSourceBounds(SbBox3f &bounds) const
     bounds = database_source_box_from_minmax(
 	    this->sourceBoundsMin.getValue(),
 	    this->sourceBoundsMax.getValue());
+    return bounds.isEmpty() ? FALSE : TRUE;
+}
+
+SbBool
+SoBRLDatabaseSource::getEffectiveSourceBounds(SbBox3f &bounds) const
+{
+    if (!this->getSourceBounds(bounds))
+	return FALSE;
+
+    const SoMatrixTransform *transform = source_placement_transform(this);
+    if (transform) {
+	bounds = database_source_transform_bounds(bounds,
+		transform->matrix.getValue());
+    } else if (this->drawMatrixValid.getValue()) {
+	bounds = database_source_transform_bounds(bounds,
+		this->drawMatrix.getValue());
+    }
+
     return bounds.isEmpty() ? FALSE : TRUE;
 }
 
@@ -2599,32 +3023,34 @@ SoBRLDatabaseSource::configureDatabaseSourceInstanceRepresentation(
 	reason |= STALE_DATABASE;
     if (this->drawMode.getValue() != sanitizedMode)
 	reason |= STALE_DRAW;
-    const char *effectiveInstanceKey =
+    const std::string stableSourcePath = sourcePath ? sourcePath : "";
+    const std::string stableInstanceKey =
 	(sourceInstanceKey && sourceInstanceKey[0]) ?
-	sourceInstanceKey : sourcePath;
+	sourceInstanceKey : stableSourcePath.c_str();
+    const char *effectiveInstanceKey = stableInstanceKey.c_str();
     if (strcmp(this->instanceKey.getValue().getString(),
-	    effectiveInstanceKey ? effectiveInstanceKey : "") != 0)
+	    effectiveInstanceKey) != 0)
 	reason |= STALE_SOURCE;
-    const char *effectiveRepresentationKey =
+    const std::string stableRepresentationKey =
 	(sourceRepresentationKey && sourceRepresentationKey[0]) ?
-	sourceRepresentationKey : effectiveInstanceKey;
+	sourceRepresentationKey : stableInstanceKey.c_str();
+    const char *effectiveRepresentationKey = stableRepresentationKey.c_str();
     if (strcmp(this->representationKey.getValue().getString(),
-	    effectiveRepresentationKey ? effectiveRepresentationKey : "") != 0)
+	    effectiveRepresentationKey) != 0)
 	reason |= STALE_SOURCE;
     if (this->representationMode.getValue() != sourceRepresentationMode)
 	reason |= STALE_DRAW;
     if (strcmp(this->path.getValue().getString(),
-	    sourcePath ? sourcePath : "") != 0)
+	    stableSourcePath.c_str()) != 0)
 	reason |= STALE_SOURCE;
     if (this->sourceRevision.getValue() != revision)
 	reason |= STALE_SOURCE;
 
     this->detachFieldSensors();
     this->dbip = database;
-    this->instanceKey = effectiveInstanceKey ? effectiveInstanceKey : "";
-    this->path = sourcePath ? sourcePath : "";
-    this->representationKey = effectiveRepresentationKey ?
-	effectiveRepresentationKey : "";
+    this->instanceKey = effectiveInstanceKey;
+    this->path = stableSourcePath.c_str();
+    this->representationKey = effectiveRepresentationKey;
     this->representationMode = sourceRepresentationMode;
     this->auxiliarySource = FALSE;
     this->drawMode = sanitizedMode;
@@ -2650,33 +3076,36 @@ retarget_realized_shape_source(ShapeT *shape,
     if (!newName)
 	newName = newSourcePath;
 
-    const char *recordRole = shape->recordRole.getValue().getString();
-    const int auxiliary = recordRole && BU_STR_EQUAL(recordRole, "auxiliary");
-    const char *shapeSourceName = shape->sourceName.getValue().getString();
-    const char *displayName = shape->displayName.getValue().getString();
-    const char *geometryName = shape->geometryName.getValue().getString();
-    const char *sourceDisplayName = source ?
-	source->displayName.getValue().getString() : NULL;
+    const std::string recordRole = shape->recordRole.getValue().getString();
+    const int auxiliary = BU_STR_EQUAL(recordRole.c_str(), "auxiliary");
+    const std::string shapeSourceName =
+	shape->sourceName.getValue().getString();
+    const std::string displayName = shape->displayName.getValue().getString();
+    const std::string geometryName =
+	shape->geometryName.getValue().getString();
+    const std::string sourceDisplayName = source ?
+	source->displayName.getValue().getString() : "";
 
-    shape->sourcePath = newSourcePath;
+    database_source_assign_string(shape->sourcePath, newSourcePath);
     shape->sourceId = revision;
     if (!auxiliary &&
-	    (!shapeSourceName || !shapeSourceName[0] ||
-	     (oldName && BU_STR_EQUAL(shapeSourceName, oldName)) ||
-	     (oldSourcePath && BU_STR_EQUAL(shapeSourceName, oldSourcePath))))
-	shape->sourceName = newName;
-    if (!auxiliary && sourceDisplayName && sourceDisplayName[0])
-	shape->displayName = sourceDisplayName;
+	    (shapeSourceName.empty() ||
+	     (oldName && BU_STR_EQUAL(shapeSourceName.c_str(), oldName)) ||
+	     (oldSourcePath && BU_STR_EQUAL(shapeSourceName.c_str(), oldSourcePath))))
+	database_source_assign_string(shape->sourceName, newName);
+    if (!auxiliary && !sourceDisplayName.empty())
+	database_source_assign_string(shape->displayName,
+		sourceDisplayName.c_str());
     else if (!auxiliary &&
-	    (!displayName || !displayName[0] ||
-	     (oldName && BU_STR_EQUAL(displayName, oldName)) ||
-	     (oldSourcePath && BU_STR_EQUAL(displayName, oldSourcePath))))
-	shape->displayName = newName;
+	    (displayName.empty() ||
+	     (oldName && BU_STR_EQUAL(displayName.c_str(), oldName)) ||
+	     (oldSourcePath && BU_STR_EQUAL(displayName.c_str(), oldSourcePath))))
+	database_source_assign_string(shape->displayName, newName);
     if (!auxiliary &&
-	    (!geometryName || !geometryName[0] ||
-	     (oldName && BU_STR_EQUAL(geometryName, oldName)) ||
-	     (oldSourcePath && BU_STR_EQUAL(geometryName, oldSourcePath))))
-	shape->geometryName = newName;
+	    (geometryName.empty() ||
+	     (oldName && BU_STR_EQUAL(geometryName.c_str(), oldName)) ||
+	     (oldSourcePath && BU_STR_EQUAL(geometryName.c_str(), oldSourcePath))))
+	database_source_assign_string(shape->geometryName, newName);
 
     SbString identity = source_record_identity(source, newSourcePath);
     if (auxiliary) {
@@ -2686,9 +3115,9 @@ retarget_realized_shape_source(ShapeT *shape,
 	    identity += auxName;
 	}
     }
-    shape->sourceIdentity = identity;
-    shape->cacheIdentity = record_identity_with_revision(identity.getString(),
-	    revision);
+    database_source_assign_string(shape->sourceIdentity, identity);
+    database_source_assign_string(shape->cacheIdentity,
+	    record_identity_with_revision(identity.getString(), revision));
     sync_shape_owner_state(shape, source);
 }
 
@@ -2767,12 +3196,15 @@ SoBRLDatabaseSource::retargetDatabaseSourceInstance(
     if (!sourcePath || !sourcePath[0])
 	return -1;
 
-    const char *effectiveInstanceKey =
+    const std::string stableSourcePath = sourcePath;
+    const std::string stableInstanceKey =
 	(sourceInstanceKey && sourceInstanceKey[0]) ?
-	sourceInstanceKey : sourcePath;
+	sourceInstanceKey : stableSourcePath.c_str();
+    const char *effectiveInstanceKey = stableInstanceKey.c_str();
     const char *oldPath = this->path.getValue().getString();
     const char *oldInstanceKey = this->instanceKey.getValue().getString();
-    const int pathChanged = !oldPath || !BU_STR_EQUAL(oldPath, sourcePath);
+    const int pathChanged = !oldPath ||
+	!BU_STR_EQUAL(oldPath, stableSourcePath.c_str());
     const int instanceChanged = !oldInstanceKey ||
 	!BU_STR_EQUAL(oldInstanceKey, effectiveInstanceKey);
     if (revision == 0)
@@ -2786,14 +3218,14 @@ SoBRLDatabaseSource::retargetDatabaseSourceInstance(
     std::string oldPathCopy = oldPath ? oldPath : "";
 
     this->detachFieldSensors();
-    this->instanceKey = effectiveInstanceKey ? effectiveInstanceKey : "";
-    this->path = sourcePath;
+    this->instanceKey = effectiveInstanceKey;
+    this->path = stableSourcePath.c_str();
     this->sourceRevision = revision;
     if (sourceChanged)
 	this->markStale(STALE_SOURCE);
     for (int i = 0; i < this->getNumChildren(); i++)
 	retarget_realized_node_source(this->getChild(i), this,
-		oldPathCopy.c_str(), sourcePath, revision);
+		oldPathCopy.c_str(), stableSourcePath.c_str(), revision);
     this->realizationIdentity = source_realization_identity(this);
     this->attachFieldSensors();
     return 1;
@@ -2824,6 +3256,7 @@ SoBRLDatabaseSource::realizeDatabaseWireframe(void)
     }
 
     remove_non_auxiliary_children(this);
+    (void)remove_source_placement_transform(this);
 
     struct db_tree_state init_state;
     db_init_db_tree_state(&init_state, this->dbip);
@@ -2836,7 +3269,7 @@ SoBRLDatabaseSource::realizeDatabaseWireframe(void)
     data.failed_shapes = 0;
 
     const char *av[1] = { treeName };
-    int ret = db_walk_tree(this->dbip, 1, av, 1, &init_state,
+    int ret = db_walk_tree_leaf_instances(this->dbip, 1, av, 1, &init_state,
 	    NULL, NULL, realize_leaf, &data);
     db_free_db_tree_state(&init_state);
 
@@ -2886,6 +3319,7 @@ SoBRLDatabaseSource::realizeDatabaseMesh(void)
     }
 
     remove_non_auxiliary_children(this);
+    (void)remove_source_placement_transform(this);
 
     struct db_tree_state init_state;
     db_init_db_tree_state(&init_state, this->dbip);
@@ -2898,7 +3332,7 @@ SoBRLDatabaseSource::realizeDatabaseMesh(void)
     data.failed_shapes = 0;
 
     const char *av[1] = { treeName };
-    int ret = db_walk_tree(this->dbip, 1, av, 1, &init_state,
+    int ret = db_walk_tree_leaf_instances(this->dbip, 1, av, 1, &init_state,
 	    NULL, NULL, realize_mesh_leaf, &data);
     db_free_db_tree_state(&init_state);
 
@@ -2939,7 +3373,7 @@ SoBRLDatabaseSource::realizePrototypeWireframe(void)
     SoBRLVListShape *shape = this->getRealizedShape();
     if (!shape) {
 	shape = new SoBRLVListShape;
-	this->addChild(shape);
+	database_source_add_realized_child(this, shape);
     }
 
     const float halfExtent = 1.0f + 0.25f * static_cast<float>(this->sourceRevision.getValue() % 4);
@@ -3002,6 +3436,195 @@ SoBRLDatabaseSource::realizePrototypeWireframe(void)
     return TRUE;
 }
 
+static const char *
+external_string_or_default(const char *value, const char *fallback)
+{
+    return value && value[0] ? value : fallback;
+}
+
+static const char *
+external_source_leaf_name(const SoBRLDatabaseSource *source)
+{
+    if (!source)
+	return "";
+
+    const char *sourcePath = source->path.getValue().getString();
+    const char *leaf = lookup_name_from_path(source->path.getValue());
+    if (leaf && leaf[0])
+	return leaf;
+    return sourcePath ? sourcePath : "";
+}
+
+template <typename ShapeT>
+static void
+assign_external_primary_identity(ShapeT *shape,
+	const SoBRLDatabaseSource *source,
+	const char *sourceType,
+	const char *geometryKind)
+{
+    if (!shape || !source)
+	return;
+
+    const char *sourcePath = source->path.getValue().getString();
+    const char *sourceName = external_source_leaf_name(source);
+    assign_realized_identity(shape, NULL, sourcePath, sourceName, sourceType,
+	    source->sourceRevision.getValue(), source);
+    shape->geometryKind = geometryKind ? geometryKind : "";
+    sync_shape_placement_state(shape, source);
+}
+
+static int
+external_vlist_command_valid(int32_t command)
+{
+    return command == SoBRLVListShape::MOVE ||
+	command == SoBRLVListShape::DRAW ||
+	command == SoBRLVListShape::POINT;
+}
+
+static SbBool
+external_bounds_from_points(const SbVec3f *points,
+	int count,
+	SbVec3f &boundsMin,
+	SbVec3f &boundsMax)
+{
+    if (!points || count <= 0)
+	return FALSE;
+
+    boundsMin = points[0];
+    boundsMax = points[0];
+    for (int i = 1; i < count; i++) {
+	for (int axis = 0; axis < 3; axis++) {
+	    if (points[i][axis] < boundsMin[axis])
+		boundsMin[axis] = points[i][axis];
+	    if (points[i][axis] > boundsMax[axis])
+		boundsMax[axis] = points[i][axis];
+	}
+    }
+
+    return TRUE;
+}
+
+static void
+set_external_bounds_from_points(SoBRLDatabaseSource *source,
+	const SbVec3f *points,
+	int count)
+{
+    if (!source)
+	return;
+
+    SbVec3f boundsMin;
+    SbVec3f boundsMax;
+    if (external_bounds_from_points(points, count, boundsMin, boundsMax))
+	(void)source->setSourceBoundsState(TRUE, boundsMin, boundsMax);
+    else
+	source->clearSourceBounds();
+}
+
+static void
+mark_external_primary_published_current(SoBRLDatabaseSource *source)
+{
+    if (!source)
+	return;
+
+    const uint32_t sourceRevision = source->sourceRevision.getValue();
+    source->realizedRevision = sourceRevision;
+    source->realizedSourceRevision = sourceRevision;
+    source->realizedInputsRevision = source->inputsRevision.getValue();
+    source->realizedViewRevision = source->viewRevision.getValue();
+    source->realizationStatus = SoBRLDatabaseSource::REALIZED;
+    source->realizationDiagnostic = "";
+    source->realizationIdentity = source_realization_identity(source);
+    source->realizationRoleFlags = SoBRLDatabaseSource::REALIZATION_ROLE_EXTERNAL;
+    source->stale = FALSE;
+    source->staleReason = SoBRLDatabaseSource::STALE_NONE;
+}
+
+static SoBRLVListShape *
+first_direct_primary_vlist_child(SoBRLDatabaseSource *source)
+{
+    if (!source)
+	return NULL;
+
+    for (int i = 0; i < source->getNumChildren(); i++) {
+	SoNode *child = source->getChild(i);
+	if (!child || !child->isOfType(SoBRLVListShape::getClassTypeId()))
+	    continue;
+	if (node_is_auxiliary_vlist(child))
+	    continue;
+	return static_cast<SoBRLVListShape *>(child);
+    }
+
+    return NULL;
+}
+
+static SoBRLMeshShape *
+first_direct_primary_mesh_child(SoBRLDatabaseSource *source)
+{
+    if (!source)
+	return NULL;
+
+    for (int i = 0; i < source->getNumChildren(); i++) {
+	SoNode *child = source->getChild(i);
+	if (child && child->isOfType(SoBRLMeshShape::getClassTypeId()))
+	    return static_cast<SoBRLMeshShape *>(child);
+    }
+
+    return NULL;
+}
+
+static int
+remove_external_primary_children_except(SoBRLDatabaseSource *source,
+	SoNode *keepVList,
+	SoNode *keepMesh)
+{
+    if (!source)
+	return 0;
+
+    int removed = 0;
+    for (int i = source->getNumChildren() - 1; i >= 0; i--) {
+	SoNode *child = source->getChild(i);
+	if (child == keepVList || child == keepMesh ||
+		node_is_source_placement_transform(child) ||
+		node_is_auxiliary_vlist(child) ||
+		node_is_auxiliary_source(child))
+	    continue;
+	source->removeChild(i);
+	removed++;
+    }
+    return removed;
+}
+
+static void
+clear_external_primary_vlist(SoBRLDatabaseSource *source,
+	SoBRLVListShape *shape)
+{
+    if (!source || !shape)
+	return;
+
+    const SbString sourceType = shape->sourceType.getValue();
+    const SbString geometryKind = shape->geometryKind.getValue();
+    assign_external_primary_identity(shape, source,
+	    external_string_or_default(sourceType.getString(), "line-set"),
+	    external_string_or_default(geometryKind.getString(), "line"));
+    shape->setLineSet(NULL, NULL, 0);
+    shape->setPrecisePoints(NULL, 0);
+}
+
+static void
+clear_external_primary_mesh(SoBRLDatabaseSource *source,
+	SoBRLMeshShape *shape)
+{
+    if (!source || !shape)
+	return;
+
+    const SbString sourceType = shape->sourceType.getValue();
+    const SbString geometryKind = shape->geometryKind.getValue();
+    assign_external_primary_identity(shape, source,
+	    external_string_or_default(sourceType.getString(), "indexed-face-set"),
+	    external_string_or_default(geometryKind.getString(), "surface"));
+    shape->setIndexedTriangles(NULL, 0, NULL, 0);
+}
+
 int
 SoBRLDatabaseSource::clearRealizedGeometry(SbBool preserveAuxiliary)
 {
@@ -3009,11 +3632,225 @@ SoBRLDatabaseSource::clearRealizedGeometry(SbBool preserveAuxiliary)
     if (preserveAuxiliary) {
 	remove_non_auxiliary_children(this);
     } else {
-	for (int i = this->getNumChildren() - 1; i >= 0; i--)
+	for (int i = this->getNumChildren() - 1; i >= 0; i--) {
+	    if (node_is_source_placement_transform(this->getChild(i)))
+		continue;
 	    this->removeChild(i);
+	}
     }
 
     return before != this->getNumChildren() ? 1 : 0;
+}
+
+int
+SoBRLDatabaseSource::clearExternalPrimaryGeometry(void)
+{
+    SoBRLVListShape *primaryVList = first_direct_primary_vlist_child(this);
+    SoBRLMeshShape *primaryMesh = first_direct_primary_mesh_child(this);
+
+    (void)remove_external_primary_children_except(this, primaryVList,
+	    primaryMesh);
+
+    if (!primaryVList && !primaryMesh) {
+	primaryVList = new SoBRLVListShape;
+	database_source_add_realized_child(this, primaryVList);
+    }
+
+    clear_external_primary_vlist(this, primaryVList);
+    clear_external_primary_mesh(this, primaryMesh);
+    this->clearSourceBounds();
+    mark_external_primary_published_current(this);
+    this->syncRealizedShapeOwnerState();
+    return 1;
+}
+
+int
+SoBRLDatabaseSource::publishExternalLineSet(
+	const BRLObolExternalLineSet &lineSet)
+{
+    if (lineSet.count < 0 || (lineSet.count > 0 && !lineSet.points))
+	return 0;
+
+    std::vector<int32_t> fallbackCommands;
+    const int32_t *commands = lineSet.commands;
+    if (lineSet.count > 0) {
+	if (!commands) {
+	    fallbackCommands.reserve(lineSet.count);
+	    for (int i = 0; i < lineSet.count; i++)
+		fallbackCommands.push_back(i == 0 ? SoBRLVListShape::MOVE :
+			SoBRLVListShape::DRAW);
+	    commands = fallbackCommands.data();
+	}
+	for (int i = 0; i < lineSet.count; i++) {
+	    if (!external_vlist_command_valid(commands[i]))
+		return 0;
+	}
+    }
+
+    if (lineSet.count == 0)
+	return this->clearExternalPrimaryGeometry();
+
+    (void)this->clearRealizedGeometry(TRUE);
+    SoBRLVListShape *shape = new SoBRLVListShape;
+    database_source_add_realized_child(this, shape);
+
+    assign_external_primary_identity(shape, this,
+	    external_string_or_default(lineSet.sourceType, "line-set"),
+	    external_string_or_default(lineSet.geometryKind, "line"));
+    shape->setLineSet(lineSet.points, commands, lineSet.count);
+    shape->setPrecisePoints(lineSet.precisePoints, lineSet.count);
+    set_external_bounds_from_points(this, lineSet.points, lineSet.count);
+    mark_external_primary_published_current(this);
+    this->syncRealizedShapeOwnerState();
+    return 1;
+}
+
+int
+SoBRLDatabaseSource::publishExternalPointSet(
+	const BRLObolExternalPointSet &pointSet)
+{
+    if (pointSet.count < 0 || (pointSet.count > 0 && !pointSet.points))
+	return 0;
+
+    if (pointSet.count == 0)
+	return this->clearExternalPrimaryGeometry();
+
+    std::vector<int32_t> commands;
+    commands.reserve(pointSet.count);
+    for (int i = 0; i < pointSet.count; i++)
+	commands.push_back(SoBRLVListShape::POINT);
+
+    BRLObolExternalLineSet lineSet;
+    lineSet.points = pointSet.points;
+    lineSet.commands = commands.data();
+    lineSet.precisePoints = pointSet.precisePoints;
+    lineSet.count = pointSet.count;
+    lineSet.sourceType =
+	external_string_or_default(pointSet.sourceType, "point-set");
+    lineSet.geometryKind =
+	external_string_or_default(pointSet.geometryKind, "point");
+    return this->publishExternalLineSet(lineSet);
+}
+
+int
+SoBRLDatabaseSource::publishExternalTriangleMesh(
+	const BRLObolExternalTriangleMesh &triangleMesh)
+{
+    if (triangleMesh.pointCount < 0 || triangleMesh.indexCount < 0 ||
+	    (triangleMesh.pointCount > 0 && !triangleMesh.points) ||
+	    (triangleMesh.indexCount > 0 && !triangleMesh.indices) ||
+	    (triangleMesh.indexCount % 3) != 0)
+	return 0;
+
+    if (triangleMesh.pointCount == 0 || triangleMesh.indexCount == 0)
+	return this->clearExternalPrimaryGeometry();
+
+    for (int i = 0; i < triangleMesh.indexCount; i++) {
+	const int32_t index = triangleMesh.indices[i];
+	if (index < 0 || index >= triangleMesh.pointCount)
+	    return 0;
+    }
+
+    (void)this->clearRealizedGeometry(TRUE);
+    SoBRLMeshShape *shape = new SoBRLMeshShape;
+    database_source_add_realized_child(this, shape);
+
+    assign_external_primary_identity(shape, this,
+	    external_string_or_default(triangleMesh.sourceType,
+		"indexed-face-set"),
+	    external_string_or_default(triangleMesh.geometryKind, "surface"));
+    shape->setIndexedTriangles(triangleMesh.points, triangleMesh.pointCount,
+	    triangleMesh.indices, triangleMesh.indexCount);
+    set_external_bounds_from_points(this, triangleMesh.points,
+	    triangleMesh.pointCount);
+    mark_external_primary_published_current(this);
+    this->syncRealizedShapeOwnerState();
+    return 1;
+}
+
+int
+SoBRLDatabaseSource::publishExternalAnnotation(
+	const BRLObolExternalAnnotation &annotation)
+{
+    if (annotation.linePointCount < 0 || annotation.annotationPointCount < 0 ||
+	    annotation.segmentCount < 0 ||
+	    (annotation.linePointCount > 0 && !annotation.linePoints) ||
+	    (annotation.annotationPointCount > 0 &&
+	     !annotation.annotationPoints) ||
+	    (annotation.segmentCount > 0 && !annotation.segments))
+	return 0;
+
+    if (annotation.lineCommands) {
+	for (int i = 0; i < annotation.linePointCount; i++) {
+	    if (!external_vlist_command_valid(annotation.lineCommands[i]))
+		return 0;
+	}
+    }
+
+    std::vector<int32_t> fallbackCommands;
+    const int32_t *lineCommands = annotation.lineCommands;
+    if (annotation.linePointCount > 0 && !lineCommands) {
+	fallbackCommands.reserve(annotation.linePointCount);
+	for (int i = 0; i < annotation.linePointCount; i++)
+	    fallbackCommands.push_back(i == 0 ? SoBRLVListShape::MOVE :
+		    SoBRLVListShape::DRAW);
+	lineCommands = fallbackCommands.data();
+    }
+
+    (void)this->clearRealizedGeometry(TRUE);
+    SoBRLVListShape *shape = new SoBRLVListShape;
+    database_source_add_realized_child(this, shape);
+
+    assign_external_primary_identity(shape, this,
+	    external_string_or_default(annotation.sourceType, "annotation"),
+	    external_string_or_default(annotation.geometryKind, "annotation"));
+    shape->setLineSet(annotation.linePoints, lineCommands,
+	    annotation.linePointCount);
+    shape->setPrecisePoints(annotation.preciseLinePoints,
+	    annotation.linePointCount);
+    shape->annotationBasePoint = annotation.basePoint;
+    if (annotation.annotationPointCount > 0)
+	shape->annotationPoint.setValues(0, annotation.annotationPointCount,
+		annotation.annotationPoints);
+    else
+	shape->annotationPoint.setNum(0);
+    shape->setPreciseAnnotationPoints(annotation.preciseAnnotationPoints,
+	    annotation.annotationPointCount);
+
+    shape->annotationSegmentKind.setNum(annotation.segmentCount);
+    shape->annotationSegmentStart.setNum(annotation.segmentCount);
+    shape->annotationSegmentEnd.setNum(annotation.segmentCount);
+    shape->annotationTextRefPoint.setNum(annotation.segmentCount);
+    shape->annotationText.setNum(annotation.segmentCount);
+    shape->annotationSegmentTextValid.setNum(annotation.segmentCount);
+    for (int i = 0; i < annotation.segmentCount; i++) {
+	const BRLObolExternalAnnotationSegment &segment =
+	    annotation.segments[i];
+	int kind = SoBRLVListShape::ANNOTATION_SEGMENT_NONE;
+	if (segment.kind == BRLObolExternalAnnotationSegment::SEGMENT_LINE)
+	    kind = SoBRLVListShape::ANNOTATION_SEGMENT_LINE;
+	else if (segment.kind == BRLObolExternalAnnotationSegment::SEGMENT_TEXT)
+	    kind = SoBRLVListShape::ANNOTATION_SEGMENT_TEXT;
+	shape->annotationSegmentKind.set1Value(i, kind);
+	shape->annotationSegmentStart.set1Value(i, segment.lineStart);
+	shape->annotationSegmentEnd.set1Value(i, segment.lineEnd);
+	shape->annotationTextRefPoint.set1Value(i, segment.textRefPoint);
+	shape->annotationText.set1Value(i,
+		(segment.text && segment.text[0]) ? segment.text : "");
+	shape->annotationSegmentTextValid.set1Value(i,
+		(kind == SoBRLVListShape::ANNOTATION_SEGMENT_TEXT &&
+		 segment.text && segment.text[0]) ? TRUE : FALSE);
+    }
+
+    if (annotation.linePointCount > 0) {
+	set_external_bounds_from_points(this, annotation.linePoints,
+		annotation.linePointCount);
+    } else {
+	this->clearSourceBounds();
+    }
+    mark_external_primary_published_current(this);
+    this->syncRealizedShapeOwnerState();
+    return 1;
 }
 
 void
@@ -3146,7 +3983,7 @@ SoBRLDatabaseSource::setAuxiliaryLineSet(const char *name,
     if (!shape) {
 	shape = new SoBRLVListShape;
 	shape->setName(SbName(name));
-	this->addChild(shape);
+	database_source_add_realized_child(this, shape);
     }
 
     std::vector<int32_t> fallbackCommands;
@@ -3233,7 +4070,7 @@ SoBRLDatabaseSource::setAuxiliarySourceLineSet(const char *sourcePath,
     if (!source) {
 	source = new SoBRLDatabaseSource;
 	source->setName(SbName(lookup_name_from_path(SbString(sourcePath))));
-	this->addChild(source);
+	database_source_add_realized_child(this, source);
     }
 
     const uint32_t revision = this->sourceRevision.getValue();
@@ -3258,6 +4095,7 @@ SoBRLDatabaseSource::setAuxiliarySourceLineSet(const char *sourcePath,
     source->drawCenter = this->drawCenter.getValue();
     source->drawSizeValid = this->drawSizeValid.getValue();
     source->drawSize = this->drawSize.getValue();
+    (void)remove_source_placement_transform(source);
 
     const char *shapeName = (auxDisplayName && auxDisplayName[0]) ?
 	auxDisplayName : lookup_name_from_path(SbString(sourcePath));
@@ -3658,6 +4496,8 @@ realized_tree_summary_node_count(const SoNode *node)
 {
     if (!node)
 	return 0;
+    if (node_is_source_placement_transform(node))
+	return 0;
 
     int count = 1;
     if (node->isOfType(SoGroup::getClassTypeId())) {
@@ -3674,6 +4514,8 @@ find_realized_tree_summary_in_node(const SoNode *node, int &index, int depth,
 	const SbString &ownerSourcePath, BRLObolSceneTreeSummary &summary)
 {
     if (!node)
+	return FALSE;
+    if (node_is_source_placement_transform(node))
 	return FALSE;
 
     if (index == 0) {
@@ -3840,6 +4682,8 @@ find_realized_display_summary_in_node(const SoNode *node, int &index,
 {
     if (!node)
 	return FALSE;
+    if (node_is_source_placement_transform(node))
+	return FALSE;
 
     if (index == 0) {
 	realized_display_summary_fill(node, ownerSourceIndex,
@@ -3963,9 +4807,10 @@ realized_bounds_for_vlist_shape(const SoBRLVListShape *shape, SbBox3f &bounds)
     bounds.makeEmpty();
     if (!shape)
 	return FALSE;
-    for (int i = 0; i < shape->point.getNum(); i++)
-	bounds.extendBy(shape->point[i]);
-    return shape->point.getNum() > 0;
+    const SoBRLVListShape *geom = shape->getGeometrySource();
+    for (int i = 0; i < geom->point.getNum(); i++)
+	bounds.extendBy(geom->point[i]);
+    return geom->point.getNum() > 0;
 }
 
 static SbBool
@@ -3974,9 +4819,10 @@ realized_bounds_for_mesh_shape(const SoBRLMeshShape *shape, SbBox3f &bounds)
     bounds.makeEmpty();
     if (!shape)
 	return FALSE;
-    for (int i = 0; i < shape->point.getNum(); i++)
-	bounds.extendBy(shape->point[i]);
-    return shape->point.getNum() > 0;
+    const SoBRLMeshShape *geom = shape->getGeometrySource();
+    for (int i = 0; i < geom->point.getNum(); i++)
+	bounds.extendBy(geom->point[i]);
+    return geom->point.getNum() > 0;
 }
 
 static SbBool
@@ -3985,6 +4831,12 @@ realized_bounds_for_node(const SoNode *node, SbBox3f &bounds)
     bounds.makeEmpty();
     if (!node)
 	return FALSE;
+
+    SoGetBoundingBoxAction bboxAction(SbViewportRegion(1, 1));
+    bboxAction.apply(const_cast<SoNode *>(node));
+    bounds = bboxAction.getBoundingBox();
+    if (!bounds.isEmpty())
+	return TRUE;
 
     if (node->isOfType(SoBRLVListShape::getClassTypeId()))
 	return realized_bounds_for_vlist_shape(
@@ -4011,8 +4863,8 @@ realized_bounds_for_node(const SoNode *node, SbBox3f &bounds)
 	return TRUE;
 
     if (node->isOfType(SoBRLDatabaseSource::getClassTypeId()) &&
-	    static_cast<const SoBRLDatabaseSource *>(node)->getSourceBounds(
-		bounds))
+	    static_cast<const SoBRLDatabaseSource *>(node)->
+	    getEffectiveSourceBounds(bounds))
 	return TRUE;
 
     return valid;
@@ -4042,6 +4894,8 @@ find_realized_bounds_summary_in_node(const SoNode *node, int &index,
 	BRLObolSceneBoundsSummary &summary)
 {
     if (!node)
+	return FALSE;
+    if (node_is_source_placement_transform(node))
 	return FALSE;
 
     if (index == 0) {
@@ -4210,11 +5064,12 @@ realized_vlist_shape_summary(const SoBRLVListShape *shape,
     summary.valid = TRUE;
     summary.shapeKind = BRLObolRealizedShapeSummary::SHAPE_VLIST;
     realized_shape_summary_common(shape, summary);
-    summary.pointCount = shape->point.getNum();
-    summary.commandCount = shape->command.getNum();
+    const SoBRLVListShape *geom = shape->getGeometrySource();
+    summary.pointCount = geom->point.getNum();
+    summary.commandCount = geom->command.getNum();
     summary.segmentCount = shape->getSegmentCount();
     summary.pointPrimitiveCount = shape->getPointPrimitiveCount();
-    realized_shape_summary_bounds(shape->point, summary);
+    realized_shape_summary_bounds(geom->point, summary);
 }
 
 static void
@@ -4228,10 +5083,11 @@ realized_mesh_shape_summary(const SoBRLMeshShape *shape,
     summary.valid = TRUE;
     summary.shapeKind = BRLObolRealizedShapeSummary::SHAPE_MESH;
     realized_shape_summary_common(shape, summary);
-    summary.pointCount = shape->point.getNum();
-    summary.indexCount = shape->coordIndex.getNum();
+    const SoBRLMeshShape *geom = shape->getGeometrySource();
+    summary.pointCount = geom->point.getNum();
+    summary.indexCount = geom->coordIndex.getNum();
     summary.triangleCount = shape->getTriangleCount();
-    realized_shape_summary_bounds(shape->point, summary);
+    realized_shape_summary_bounds(geom->point, summary);
 }
 
 static SbBool

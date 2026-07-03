@@ -153,6 +153,7 @@ SoBRLMeshShape::SoBRLMeshShape(void)
     SO_NODE_ADD_FIELD(pickGeometryPolicy, (PICK_DISPLAY_LEVEL));
     SO_NODE_ADD_EMPTY_MFIELD(selectedPrimitive);
     SO_NODE_ADD_EMPTY_MFIELD(highlightedPrimitive);
+    SO_NODE_ADD_FIELD(sharedGeometry, (NULL));
 }
 
 SoBRLMeshShape::~SoBRLMeshShape(void)
@@ -166,9 +167,60 @@ SoBRLMeshShape::initClass(void)
 }
 
 void
+SoBRLMeshShape::setSharedGeometry(SoBRLMeshShape *shape)
+{
+    this->sharedGeometry = shape;
+}
+
+SoBRLMeshShape *
+SoBRLMeshShape::getSharedGeometrySource(void)
+{
+    SoNode *node = this->sharedGeometry.getValue();
+    if (node && node != this &&
+	    node->isOfType(SoBRLMeshShape::getClassTypeId()))
+	return static_cast<SoBRLMeshShape *>(node);
+    return this;
+}
+
+const SoBRLMeshShape *
+SoBRLMeshShape::getSharedGeometrySource(void) const
+{
+    const SoNode *node = this->sharedGeometry.getValue();
+    if (node && node != this &&
+	    node->isOfType(SoBRLMeshShape::getClassTypeId()))
+	return static_cast<const SoBRLMeshShape *>(node);
+    return this;
+}
+
+SoBRLMeshShape *
+SoBRLMeshShape::getGeometrySource(void)
+{
+    if (this->getSharedGeometrySource() != this &&
+	    this->lodDisplayActive.getValue() &&
+	    this->point.getNum() > 0 &&
+	    this->coordIndex.getNum() > 0)
+	return this;
+
+    return this->getSharedGeometrySource();
+}
+
+const SoBRLMeshShape *
+SoBRLMeshShape::getGeometrySource(void) const
+{
+    if (this->getSharedGeometrySource() != this &&
+	    this->lodDisplayActive.getValue() &&
+	    this->point.getNum() > 0 &&
+	    this->coordIndex.getNum() > 0)
+	return this;
+
+    return this->getSharedGeometrySource();
+}
+
+void
 SoBRLMeshShape::setIndexedTriangles(const SbVec3f *points, int pointCount,
 	const int32_t *indices, int indexCount)
 {
+    this->sharedGeometry = NULL;
     this->clearFullDetailMesh();
     this->lodDisplayActive = FALSE;
     this->setIndexedTriangleFields(points, pointCount, indices, indexCount);
@@ -191,7 +243,8 @@ SoBRLMeshShape::setIndexedTriangleFields(const SbVec3f *points, int pointCount,
 int
 SoBRLMeshShape::getTriangleCount(void) const
 {
-    return this->coordIndex.getNum() / 3;
+    const SoBRLMeshShape *geom = this->getGeometrySource();
+    return geom->coordIndex.getNum() / 3;
 }
 
 SbBool
@@ -203,9 +256,10 @@ SoBRLMeshShape::getTriangle(int triangleIndex, SbVec3f &a, SbVec3f &b, SbVec3f &
     if (!this->getTriangleVertexIndices(triangleIndex, ia, ib, ic))
 	return FALSE;
 
-    a = this->point[ia];
-    b = this->point[ib];
-    c = this->point[ic];
+    const SoBRLMeshShape *geom = this->getGeometrySource();
+    a = geom->point[ia];
+    b = geom->point[ib];
+    c = geom->point[ic];
     return TRUE;
 }
 
@@ -218,17 +272,18 @@ SoBRLMeshShape::getTriangleVertexIndices(int triangleIndex, int &indexA, int &in
     if (triangleIndex < 0)
 	return FALSE;
 
+    const SoBRLMeshShape *geom = this->getGeometrySource();
     int base = triangleIndex * 3;
-    if (base + 2 >= this->coordIndex.getNum())
+    if (base + 2 >= geom->coordIndex.getNum())
 	return FALSE;
 
-    indexA = this->coordIndex[base];
-    indexB = this->coordIndex[base + 1];
-    indexC = this->coordIndex[base + 2];
+    indexA = geom->coordIndex[base];
+    indexB = geom->coordIndex[base + 1];
+    indexC = geom->coordIndex[base + 2];
     if (indexA < 0 || indexB < 0 || indexC < 0 ||
-	    indexA >= this->point.getNum() ||
-	    indexB >= this->point.getNum() ||
-	    indexC >= this->point.getNum()) {
+	    indexA >= geom->point.getNum() ||
+	    indexB >= geom->point.getNum() ||
+	    indexC >= geom->point.getNum()) {
 	indexA = -1;
 	indexB = -1;
 	indexC = -1;
@@ -241,14 +296,16 @@ SoBRLMeshShape::getTriangleVertexIndices(int triangleIndex, int &indexA, int &in
 SbBool
 SoBRLMeshShape::hasFullDetailMesh(void) const
 {
-    return (!this->fullDetailPoint.empty() &&
-	    !this->fullDetailCoordIndex.empty()) ? TRUE : FALSE;
+    const SoBRLMeshShape *geom = this->getGeometrySource();
+    return (!geom->fullDetailPoint.empty() &&
+	    !geom->fullDetailCoordIndex.empty()) ? TRUE : FALSE;
 }
 
 int
 SoBRLMeshShape::getFullDetailTriangleCount(void) const
 {
-    return static_cast<int>(this->fullDetailCoordIndex.size() / 3);
+    const SoBRLMeshShape *geom = this->getGeometrySource();
+    return static_cast<int>(geom->fullDetailCoordIndex.size() / 3);
 }
 
 SbBool
@@ -263,9 +320,10 @@ SoBRLMeshShape::getFullDetailTriangle(int triangleIndex,
     if (!this->getFullDetailTriangleVertexIndices(triangleIndex, ia, ib, ic))
 	return FALSE;
 
-    a = this->fullDetailPoint[static_cast<size_t>(ia)];
-    b = this->fullDetailPoint[static_cast<size_t>(ib)];
-    c = this->fullDetailPoint[static_cast<size_t>(ic)];
+    const SoBRLMeshShape *geom = this->getGeometrySource();
+    a = geom->fullDetailPoint[static_cast<size_t>(ia)];
+    b = geom->fullDetailPoint[static_cast<size_t>(ib)];
+    c = geom->fullDetailPoint[static_cast<size_t>(ic)];
     return TRUE;
 }
 
@@ -281,17 +339,18 @@ SoBRLMeshShape::getFullDetailTriangleVertexIndices(int triangleIndex,
     if (triangleIndex < 0)
 	return FALSE;
 
+    const SoBRLMeshShape *geom = this->getGeometrySource();
     size_t base = static_cast<size_t>(triangleIndex) * 3;
-    if (base + 2 >= this->fullDetailCoordIndex.size())
+    if (base + 2 >= geom->fullDetailCoordIndex.size())
 	return FALSE;
 
-    indexA = this->fullDetailCoordIndex[base];
-    indexB = this->fullDetailCoordIndex[base + 1];
-    indexC = this->fullDetailCoordIndex[base + 2];
+    indexA = geom->fullDetailCoordIndex[base];
+    indexB = geom->fullDetailCoordIndex[base + 1];
+    indexC = geom->fullDetailCoordIndex[base + 2];
     if (indexA < 0 || indexB < 0 || indexC < 0 ||
-	    static_cast<size_t>(indexA) >= this->fullDetailPoint.size() ||
-	    static_cast<size_t>(indexB) >= this->fullDetailPoint.size() ||
-	    static_cast<size_t>(indexC) >= this->fullDetailPoint.size()) {
+	    static_cast<size_t>(indexA) >= geom->fullDetailPoint.size() ||
+	    static_cast<size_t>(indexB) >= geom->fullDetailPoint.size() ||
+	    static_cast<size_t>(indexC) >= geom->fullDetailPoint.size()) {
 	indexA = -1;
 	indexB = -1;
 	indexC = -1;
@@ -350,20 +409,23 @@ SoBRLMeshShape::makeSourceMeshRequest(BRLObolSourceMeshRequest &request) const
     request.colorOverride = this->colorOverride.getValue();
     request.color = this->color.getValue();
 
-    if (this->hasFullDetailMesh()) {
-	request.faceCount = static_cast<uint64_t>(this->getFullDetailTriangleCount());
-	request.pointCount = static_cast<uint64_t>(this->fullDetailPoint.size());
-	for (size_t i = 0; i < this->fullDetailPoint.size(); i++)
-	    request.bounds.extendBy(this->fullDetailPoint[i]);
-    } else if (this->sourceMeshMetricsValid) {
-	request.faceCount = this->sourceMeshFaceCount;
-	request.pointCount = this->sourceMeshPointCount;
-	request.bounds = this->sourceMeshBounds;
+    const SoBRLMeshShape *geom = this->getSharedGeometrySource();
+    if (!geom->fullDetailPoint.empty() &&
+	    !geom->fullDetailCoordIndex.empty()) {
+	request.faceCount =
+	    static_cast<uint64_t>(geom->fullDetailCoordIndex.size() / 3);
+	request.pointCount = static_cast<uint64_t>(geom->fullDetailPoint.size());
+	for (size_t i = 0; i < geom->fullDetailPoint.size(); i++)
+	    request.bounds.extendBy(geom->fullDetailPoint[i]);
+    } else if (geom->sourceMeshMetricsValid) {
+	request.faceCount = geom->sourceMeshFaceCount;
+	request.pointCount = geom->sourceMeshPointCount;
+	request.bounds = geom->sourceMeshBounds;
     } else {
-	request.faceCount = static_cast<uint64_t>(this->getTriangleCount());
-	request.pointCount = static_cast<uint64_t>(this->point.getNum());
-	for (int i = 0; i < this->point.getNum(); i++)
-	    request.bounds.extendBy(this->point[i]);
+	request.faceCount = static_cast<uint64_t>(geom->getTriangleCount());
+	request.pointCount = static_cast<uint64_t>(geom->point.getNum());
+	for (int i = 0; i < geom->point.getNum(); i++)
+	    request.bounds.extendBy(geom->point[i]);
     }
 
     return (request.faceCount > 0 &&
@@ -390,16 +452,18 @@ SoBRLMeshShape::needsSourceBackedFullDetail(void) const
 size_t
 SoBRLMeshShape::estimateDisplayMeshBytes(void) const
 {
-    size_t bytes = static_cast<size_t>(this->point.getNum()) * sizeof(SbVec3f);
-    bytes += static_cast<size_t>(this->coordIndex.getNum()) * sizeof(int32_t);
+    const SoBRLMeshShape *geom = this->getGeometrySource();
+    size_t bytes = static_cast<size_t>(geom->point.getNum()) * sizeof(SbVec3f);
+    bytes += static_cast<size_t>(geom->coordIndex.getNum()) * sizeof(int32_t);
     return bytes;
 }
 
 size_t
 SoBRLMeshShape::estimateFullDetailMeshBytes(void) const
 {
-    size_t bytes = this->fullDetailPoint.capacity() * sizeof(SbVec3f);
-    bytes += this->fullDetailCoordIndex.capacity() * sizeof(int32_t);
+    const SoBRLMeshShape *geom = this->getGeometrySource();
+    size_t bytes = geom->fullDetailPoint.capacity() * sizeof(SbVec3f);
+    bytes += geom->fullDetailCoordIndex.capacity() * sizeof(int32_t);
     return bytes;
 }
 
@@ -413,6 +477,9 @@ SoBRLMeshShape::estimateResidentMeshBytes(void) const
 size_t
 SoBRLMeshShape::evictFullDetailMesh(void)
 {
+    if (this->getGeometrySource() != this)
+	return 0;
+
     size_t freedBytes = this->estimateFullDetailMeshBytes();
     if (freedBytes == 0)
 	return 0;
@@ -426,6 +493,9 @@ SoBRLMeshShape::evictFullDetailMesh(void)
 size_t
 SoBRLMeshShape::evictActiveDisplayMesh(void)
 {
+    if (this->getGeometrySource() != this)
+	return 0;
+
     if (!this->lodDisplayActive.getValue())
 	return 0;
 
@@ -584,28 +654,31 @@ SoBRLMeshShape::makeLodRequest(BRLObolLodRequest &request,
     request.providerId = providerId ? providerId : "";
     request.providerVersion = providerVersion ? providerVersion : "";
     request.qualityTier = qualityTier;
-    const SbBool useFullDetail = this->hasFullDetailMesh();
+    const SoBRLMeshShape *geom = this->getSharedGeometrySource();
+    const SbBool useFullDetail =
+	(!geom->fullDetailPoint.empty() &&
+	 !geom->fullDetailCoordIndex.empty()) ? TRUE : FALSE;
     const SbBool useSourceMetrics =
-	(!useFullDetail && this->sourceMeshMetricsValid) ? TRUE : FALSE;
+	(!useFullDetail && geom->sourceMeshMetricsValid) ? TRUE : FALSE;
     request.sourceCounts.faceCount = useFullDetail ?
-	static_cast<uint64_t>(this->getFullDetailTriangleCount()) :
-	(useSourceMetrics ? this->sourceMeshFaceCount :
-	    static_cast<uint64_t>(this->getTriangleCount()));
+	static_cast<uint64_t>(geom->fullDetailCoordIndex.size() / 3) :
+	(useSourceMetrics ? geom->sourceMeshFaceCount :
+	    static_cast<uint64_t>(geom->getTriangleCount()));
     request.sourceCounts.pointCount = useFullDetail ?
-	static_cast<uint64_t>(this->fullDetailPoint.size()) :
-	(useSourceMetrics ? this->sourceMeshPointCount :
-	    static_cast<uint64_t>(this->point.getNum()));
+	static_cast<uint64_t>(geom->fullDetailPoint.size()) :
+	(useSourceMetrics ? geom->sourceMeshPointCount :
+	    static_cast<uint64_t>(geom->point.getNum()));
 
     SbBox3f bounds;
     bounds.makeEmpty();
     if (useFullDetail) {
-	for (size_t i = 0; i < this->fullDetailPoint.size(); i++)
-	    bounds.extendBy(this->fullDetailPoint[i]);
+	for (size_t i = 0; i < geom->fullDetailPoint.size(); i++)
+	    bounds.extendBy(geom->fullDetailPoint[i]);
     } else if (useSourceMetrics) {
-	bounds = this->sourceMeshBounds;
+	bounds = geom->sourceMeshBounds;
     } else {
-	for (int i = 0; i < this->point.getNum(); i++)
-	    bounds.extendBy(this->point[i]);
+	for (int i = 0; i < geom->point.getNum(); i++)
+	    bounds.extendBy(geom->point[i]);
     }
     request.bounds = bounds;
 }
@@ -767,11 +840,12 @@ SoBRLMeshShape::applyStagedLodResult(const BRLObolLodResult &result,
 void
 SoBRLMeshShape::updateSourceMeshMetricsFromFields(void)
 {
-    this->sourceMeshFaceCount = static_cast<uint64_t>(this->getTriangleCount());
-    this->sourceMeshPointCount = static_cast<uint64_t>(this->point.getNum());
+    const SoBRLMeshShape *geom = this->getSharedGeometrySource();
+    this->sourceMeshFaceCount = static_cast<uint64_t>(geom->getTriangleCount());
+    this->sourceMeshPointCount = static_cast<uint64_t>(geom->point.getNum());
     this->sourceMeshBounds.makeEmpty();
-    for (int i = 0; i < this->point.getNum(); i++)
-	this->sourceMeshBounds.extendBy(this->point[i]);
+    for (int i = 0; i < geom->point.getNum(); i++)
+	this->sourceMeshBounds.extendBy(geom->point[i]);
     this->sourceMeshMetricsValid =
 	(!this->sourceMeshBounds.isEmpty() &&
 	 this->sourceMeshFaceCount > 0 &&
@@ -800,19 +874,20 @@ SoBRLMeshShape::captureFullDetailMesh(void)
     if (this->hasFullDetailMesh() || this->lodDisplayActive.getValue())
 	return;
 
+    const SoBRLMeshShape *geom = this->getSharedGeometrySource();
     this->fullDetailPoint.clear();
     this->fullDetailCoordIndex.clear();
-    if (this->point.getNum() <= 0 || this->coordIndex.getNum() <= 0)
+    if (geom->point.getNum() <= 0 || geom->coordIndex.getNum() <= 0)
 	return;
 
-    this->fullDetailPoint.reserve(static_cast<size_t>(this->point.getNum()));
-    for (int i = 0; i < this->point.getNum(); i++)
-	this->fullDetailPoint.push_back(this->point[i]);
+    this->fullDetailPoint.reserve(static_cast<size_t>(geom->point.getNum()));
+    for (int i = 0; i < geom->point.getNum(); i++)
+	this->fullDetailPoint.push_back(geom->point[i]);
 
     this->fullDetailCoordIndex.reserve(
-	    static_cast<size_t>(this->coordIndex.getNum()));
-    for (int i = 0; i < this->coordIndex.getNum(); i++)
-	this->fullDetailCoordIndex.push_back(this->coordIndex[i]);
+	    static_cast<size_t>(geom->coordIndex.getNum()));
+    for (int i = 0; i < geom->coordIndex.getNum(); i++)
+	this->fullDetailCoordIndex.push_back(geom->coordIndex[i]);
 }
 
 void
@@ -983,11 +1058,12 @@ SoBRLMeshShape::computeBBox(SoAction *UNUSED(action), SbBox3f &box, SbVec3f &cen
 	return;
     }
 
-    if (this->point.getNum() > 0) {
-	for (int i = 0; i < this->point.getNum(); i++)
-	    box.extendBy(this->point[i]);
-    } else if (this->sourceMeshMetricsValid) {
-	box = this->sourceMeshBounds;
+    const SoBRLMeshShape *geom = this->getGeometrySource();
+    if (geom->point.getNum() > 0) {
+	for (int i = 0; i < geom->point.getNum(); i++)
+	    box.extendBy(geom->point[i]);
+    } else if (geom->sourceMeshMetricsValid) {
+	box = geom->sourceMeshBounds;
     }
 
     center = box.isEmpty() ? SbVec3f(0.0f, 0.0f, 0.0f) : box.getCenter();
@@ -1007,6 +1083,7 @@ SoBRLMeshShape::generatePrimitives(SoAction *action)
 
     const int triangleCount = pickFullDetail ?
 	this->getFullDetailTriangleCount() : this->getTriangleCount();
+    const SoBRLMeshShape *geom = this->getGeometrySource();
 
     SoPrimitiveVertex v0;
     SoPrimitiveVertex v1;
@@ -1032,15 +1109,15 @@ SoBRLMeshShape::generatePrimitives(SoAction *action)
 	if (pickFullDetail) {
 	    if (!this->getFullDetailTriangleVertexIndices(i, ia, ib, ic))
 		continue;
-	    a = this->fullDetailPoint[static_cast<size_t>(ia)];
-	    b = this->fullDetailPoint[static_cast<size_t>(ib)];
-	    c = this->fullDetailPoint[static_cast<size_t>(ic)];
+	    a = geom->fullDetailPoint[static_cast<size_t>(ia)];
+	    b = geom->fullDetailPoint[static_cast<size_t>(ib)];
+	    c = geom->fullDetailPoint[static_cast<size_t>(ic)];
 	} else {
 	    if (!this->getTriangleVertexIndices(i, ia, ib, ic))
 		continue;
-	    a = this->point[ia];
-	    b = this->point[ib];
-	    c = this->point[ic];
+	    a = geom->point[ia];
+	    b = geom->point[ib];
+	    c = geom->point[ic];
 	}
 	if (ia < 0 || ib < 0 || ic < 0)
 	    continue;

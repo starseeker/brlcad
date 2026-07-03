@@ -556,6 +556,7 @@ static int ged_draw_scene_ref_update_indexed_face_set(bsg_scene_ref ref,
 						      size_t normal_count,
 						      const int *indices,
 						      size_t index_count);
+static int ged_draw_rt_internal_payload_valid(const struct rt_db_internal *ip);
 static int ged_draw_scene_ref_publish_current_face_set(bsg_scene_ref ref,
 						       struct rt_db_internal *ip,
 						       const struct bg_tess_tol *ttol,
@@ -2292,28 +2293,45 @@ ged_draw_append_tree_shape_to_group(
     point_t min, max;
     VSETALL(min, INFINITY);
     VSETALL(max, -INFINITY);
+    struct rt_db_internal local_ip;
+    struct rt_db_internal *publish_ip = ip;
+    int have_local_ip = 0;
+    RT_DB_INTERNAL_INIT(&local_ip);
+
+    if (pathp && DB_FULL_PATH_CUR_DIR(pathp) && tsp->ts_dbip &&
+	    rt_db_get_internal(&local_ip, DB_FULL_PATH_CUR_DIR(pathp),
+		tsp->ts_dbip, NULL) >= 0) {
+	publish_ip = &local_ip;
+	have_local_ip = 1;
+    }
 
     ged_draw_shape_draft *draft = ged_draw_shape_draft_create_context(gedp,
 	    view_ctx, 1);
-    if (!draft)
+    if (!draft) {
+	if (have_local_ip)
+	    rt_db_free_internal(&local_ip);
 	return 0;
+    }
 
     if (!ged_draw_shape_draft_prepare_tree_source_state(draft, gedp, pathp,
 	    tsp)) {
 	ged_draw_shape_draft_destroy(draft);
+	if (have_local_ip)
+	    rt_db_free_internal(&local_ip);
 	return 0;
     }
 
     int have_bounds = 0;
-    if (ip->idb_meth->ft_bbox &&
-	    ip->idb_meth->ft_bbox(ip, &min, &max, tsp->ts_tol) >= 0) {
+    if (publish_ip->idb_meth->ft_bbox &&
+	    publish_ip->idb_meth->ft_bbox(publish_ip, &min, &max,
+		tsp->ts_tol) >= 0) {
 	ged_draw_shape_draft_apply_known_bounds(draft, min, max);
 	have_bounds = 1;
     }
 
     if (!have_bounds) {
 	int plot_status = ged_draw_shape_draft_publish_primitive_wireframe(draft,
-		ip, tsp->ts_ttol, tsp->ts_tol, NULL, 0);
+		publish_ip, tsp->ts_ttol, tsp->ts_tol, NULL, 0);
 	if (plot_status < 0) {
 	    if (pathp && DB_FULL_PATH_CUR_DIR(pathp)) {
 		bu_log("%s: plot failure\n",
@@ -2322,6 +2340,8 @@ ged_draw_append_tree_shape_to_group(
 		bu_log("plot failure - invalid path\n");
 	    }
 	    ged_draw_shape_draft_destroy(draft);
+	    if (have_local_ip)
+		rt_db_free_internal(&local_ip);
 	    return 0;
 	}
     }
@@ -2333,7 +2353,7 @@ ged_draw_append_tree_shape_to_group(
     struct db_tree_state color_state;
     const struct db_tree_state *commit_tsp = tsp;
 
-    if (ip->idb_type == ID_GRIP) {
+    if (publish_ip->idb_type == ID_GRIP) {
 	if (settings->color_override) {
 	    tree_color_override = settings->color;
 	} else {
@@ -2346,7 +2366,7 @@ ged_draw_append_tree_shape_to_group(
     } else if (settings->color_override) {
 	tree_color_override = settings->color;
     } else {
-	const char *attr_color = bu_avs_get(&ip->idb_avs,
+	const char *attr_color = bu_avs_get(&publish_ip->idb_avs,
 		db5_standard_attribute(ATTR_COLOR));
 	if (attr_color) {
 	    int i;
@@ -2367,9 +2387,12 @@ ged_draw_append_tree_shape_to_group(
 	}
     }
 
-    return ged_draw_shape_draft_commit_tree_result(draft, gedp, group_ref,
+    int ret = ged_draw_shape_draft_commit_tree_result(draft, gedp, group_ref,
 	    settings, dashed, pathp, (struct db_tree_state *)commit_tsp,
 	    tree_color_override);
+    if (have_local_ip)
+	rt_db_free_internal(&local_ip);
+    return ret;
 }
 
 
@@ -12416,7 +12439,7 @@ struct ged_draw_obol_submodel_publish_ctx {
 static union tree *
 ged_draw_obol_submodel_wireframe_leaf(struct db_tree_state *tsp,
 				      const struct db_full_path *pathp,
-				      struct rt_db_internal *ip,
+				      struct directory *dp,
 				      void *client_data)
 {
     struct ged_draw_obol_submodel_publish_ctx *ctx =
@@ -12428,26 +12451,50 @@ ged_draw_obol_submodel_wireframe_leaf(struct db_tree_state *tsp,
     int *commands = NULL;
     size_t point_count = 0;
     union tree *curtree = TREE_NULL;
+    struct rt_db_internal local_ip;
+    int have_local_ip = 0;
 
-    if (!ctx || ctx->failed || !tsp || !ip)
+    if (!ctx || ctx->failed || !tsp || !dp)
 	return TREE_NULL;
+    RT_DB_INTERNAL_INIT(&local_ip);
 
     if (pathp && pathp->fp_len > 0) {
 	path_name = db_path_to_string(pathp);
 	if (path_name && path_name[0])
 	    name = path_name;
-    } else if (ip->idb_meth) {
-	name = ip->idb_meth->ft_name;
+    } else if (dp->d_namep) {
+	name = dp->d_namep;
     }
 
+    if (!tsp->ts_dbip ||
+	    rt_db_get_internal(&local_ip, dp, tsp->ts_dbip, NULL) < 0) {
+	ctx->failed = 1;
+	goto cleanup;
+    }
+    have_local_ip = 1;
+
     BU_LIST_INIT(&vhead);
-    if (rt_obj_plot(&vhead, ip, tsp->ts_ttol, tsp->ts_tol) < 0 ||
+    if (!ged_draw_rt_internal_payload_valid(&local_ip)) {
+	ctx->failed = 1;
+	goto cleanup;
+    }
+    if (rt_obj_plot(&vhead, &local_ip, tsp->ts_ttol, tsp->ts_tol) < 0 ||
 	    !ged_draw_rt_vlist_to_ged_line_arrays(&vhead, &points,
-		&commands, &point_count) ||
-	    !ged_draw_obol_database_source_publish_auxiliary_line_set_for_path(
-		ctx->gedp, ctx->source_path, name,
-		(const point_t *)points, commands, point_count,
-		ctx->display_state)) {
+		&commands, &point_count)) {
+	ctx->failed = 1;
+	goto cleanup;
+    }
+
+    for (size_t i = 0; i < point_count; i++) {
+	point_t transformed;
+	MAT4X3PNT(transformed, tsp->ts_mat, points[i]);
+	VMOVE(points[i], transformed);
+    }
+
+    if (!ged_draw_obol_database_source_publish_auxiliary_line_set_for_path(
+	    ctx->gedp, ctx->source_path, name,
+	    (const point_t *)points, commands, point_count,
+	    ctx->display_state)) {
 	ctx->failed = 1;
 	goto cleanup;
     }
@@ -12463,6 +12510,8 @@ cleanup:
     if (commands)
 	bu_free(commands, "GED Obol RT VLIST line commands");
     RT_FREE_VLIST(&rt_vlfree, &vhead);
+    if (have_local_ip)
+	rt_db_free_internal(&local_ip);
     if (path_name)
 	bu_free(path_name, "GED Obol submodel leaf path string");
     return curtree;
@@ -12549,7 +12598,7 @@ ged_draw_obol_database_source_publish_submodel_wireframe_for_path(
     const char *argv[2];
     argv[0] = bu_vls_addr(&sip->treetop);
     argv[1] = NULL;
-    int ret = db_walk_tree(dbip, 1, argv, 1, &state, 0, NULL,
+    int ret = db_walk_tree_leaf_instances(dbip, 1, argv, 1, &state, 0, NULL,
 	    ged_draw_obol_submodel_wireframe_leaf, (void *)&ctx);
 
     if (close_db)
@@ -12671,7 +12720,6 @@ ged_draw_obol_database_source_publish_primitive_wireframe_for_path(
 {
     if (!gedp || !source_path || !source_path[0] || !ip)
 	return 0;
-
     struct ged_draw_database_source_summary source_summary;
     memset(&source_summary, 0, sizeof(source_summary));
     if (!ged_draw_obol_database_source_summary_for_path(gedp, source_path,
@@ -12710,6 +12758,8 @@ ged_draw_obol_database_source_publish_primitive_wireframe_for_path(
 
     struct bu_list vhead;
     BU_LIST_INIT(&vhead);
+    if (!ged_draw_rt_internal_payload_valid(ip))
+	return -1;
     int plot_status = rt_obj_plot(&vhead, ip, ttol, tol);
     if (plot_status < 0) {
 	RT_FREE_VLIST(&rt_vlfree, &vhead);
@@ -12743,6 +12793,27 @@ ged_draw_obol_database_source_publish_primitive_wireframe_for_path(
     if (commands)
 	bu_free(commands, "GED Obol RT VLIST line commands");
     return published ? 1 : -1;
+}
+
+
+static int
+ged_draw_rt_internal_payload_valid(const struct rt_db_internal *ip)
+{
+    if (!ip || !ip->idb_ptr || !ip->idb_meth)
+	return 0;
+    if (ip->idb_meth->magic != RT_FUNCTAB_MAGIC)
+	return 0;
+    if (!ip->idb_meth->ft_internal_magic)
+	return 1;
+    uint32_t actual = *((const uint32_t *)ip->idb_ptr);
+    if (actual != ip->idb_meth->ft_internal_magic) {
+	bu_log("ged draw invalid internal payload for %s: actual=0x%08x expected=0x%08x\n",
+		ip->idb_meth->ft_name[0] ? ip->idb_meth->ft_name : "unknown",
+		(unsigned int)actual,
+		(unsigned int)ip->idb_meth->ft_internal_magic);
+	return 0;
+    }
+    return 1;
 }
 
 
@@ -12823,12 +12894,40 @@ ged_draw_shape_ref_obol_publish_primitive_wireframe_plot(
     struct ged_draw_obol_context_token *token =
 	ged_draw_shape_ref_obol_token(gedp, ref);
     if (!token || !token->is_database_source || !token->path ||
-	    !token->path[0] || !ip)
+	    !token->path[0])
 	return 0;
 
-    bsg_scene_ref shape_ref = _ged_draw_shape_ref_scene_ref(gedp, ref);
-    return ged_draw_obol_database_source_publish_primitive_wireframe_for_path(
-	    gedp, token->path, shape_ref, ip, ttol, tol);
+    if (!gedp || !gedp->dbip)
+	return -1;
+
+    struct db_full_path path;
+    db_full_path_init(&path);
+    if (db_string_to_path(&path, gedp->dbip, token->path) != 0 ||
+	    path.fp_len <= 0) {
+	db_free_full_path(&path);
+	return -1;
+    }
+
+    struct directory *dp = DB_FULL_PATH_CUR_DIR(&path);
+    if (!dp || !(dp->d_flags & RT_DIR_SOLID)) {
+	db_free_full_path(&path);
+	return -1;
+    }
+
+    struct rt_db_internal local_ip;
+    RT_DB_INTERNAL_INIT(&local_ip);
+    if (rt_db_get_internal(&local_ip, dp, gedp->dbip, NULL) < 0) {
+	db_free_full_path(&path);
+	return -1;
+    }
+
+    bsg_scene_ref shape_ref = ip ? _ged_draw_shape_ref_scene_ref(gedp, ref) :
+	ged_draw_scene_ref_null();
+    int ret = ged_draw_obol_database_source_publish_primitive_wireframe_for_path(
+	    gedp, token->path, shape_ref, &local_ip, ttol, tol);
+    rt_db_free_internal(&local_ip);
+    db_free_full_path(&path);
+    return ret;
 }
 
 
@@ -12842,11 +12941,17 @@ ged_draw_shape_ref_publish_primitive_wireframe(struct ged *gedp,
 					       int adaptive)
 {
     bsg_scene_ref shape_ref = _ged_draw_shape_ref_scene_ref(gedp, ref);
+    struct ged_draw_obol_context_token *token =
+	ged_draw_shape_ref_obol_token(gedp, ref);
+    const int obol_database_source =
+	token && token->is_database_source && token->path && token->path[0];
     int obol_published =
 	ged_draw_shape_ref_obol_publish_primitive_wireframe_plot(gedp, ref,
 		ip, ttol, tol);
     if (obol_published > 0)
 	return 0;
+    if (obol_database_source)
+	return -1;
     if (ged_draw_scene_ref_is_null(shape_ref))
 	return -1;
 
@@ -12938,17 +13043,14 @@ ged_draw_shape_ref_redraw_wireframe_obol(struct ged *gedp,
 	use_ttol = &local_ttol;
     }
 
-    struct rt_db_internal intern;
-    RT_DB_INTERNAL_INIT(&intern);
     int ret = -1;
-    if (rt_db_get_internal(&intern, DB_FULL_PATH_CUR_DIR(fullpath),
-	    runtime.dbip, draw_state.draw_mat) < 0)
+    if (!ged_draw_obol_database_source_set_placement_for_path(gedp,
+	    token->path, 1, draw_state.draw_mat, 0, NULL, 0, 0.0))
 	goto cleanup_fullpath;
 
     ret = ged_draw_shape_ref_obol_publish_primitive_wireframe_plot(gedp, ref,
-	    &intern, use_ttol, use_tol) > 0 ? 0 : -1;
+	    NULL, use_ttol, use_tol) > 0 ? 0 : -1;
 
-    rt_db_free_internal(&intern);
 cleanup_fullpath:
     if (free_local_fullpath)
 	db_free_full_path(&local_fullpath);
@@ -19676,6 +19778,8 @@ _ged_draw_scene_ref_publish_direct_primitive_wireframe(bsg_scene_ref ref,
 
     if (!ip)
 	return 0;
+    if (!ged_draw_rt_internal_payload_valid(ip))
+	return -1;
 
     switch (ip->idb_type) {
 	case ID_BOT:

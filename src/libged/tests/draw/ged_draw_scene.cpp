@@ -2564,18 +2564,17 @@ main(int ac, char *av[])
     }
 
     /* ---------------------------------------------------------------- *
-     * 2h2. Direct face-set failure falls back unless strict is set.     *
+     * 2h2. Direct face-set failure does not use legacy fallback.        *
      * ---------------------------------------------------------------- */
-    bu_log("[2h2] shaded direct face-set failure fallback...\n");
+    bu_log("[2h2] shaded direct face-set failure without fallback...\n");
     {
 	const char *fallback_av[4] = {"draw", "-m1", "all.bot", NULL};
 	const char *strict_av[5] = {"draw", "-m1", "--strict", "all.bot", NULL};
 
 	ged_draw_test_force_primitive_face_set_failure(1);
 	ASSERT(ged_exec(gedp, 3, fallback_av) == BRLCAD_OK);
-	ASSERT(scene_group_count(gedp) > 0);
-	assert_shaded_surface_payload_for_source_prefix(gedp, "all.bot",
-		GED_DRAW_MODE_SHADED_BOTS);
+	ASSERT(test_visible_db_view_record_geometry_count(gedp, "all.bot",
+		"indexed-face-set") == 0);
 	ged_draw_clear(gedp);
 	ASSERT(scene_group_count(gedp) == 0);
 

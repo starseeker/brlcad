@@ -106,6 +106,71 @@ struct BRLOBOL_EXPORT BRLObolAuxiliaryLineSetDisplayState {
     uint32_t materialRevision;
 };
 
+struct BRLOBOL_EXPORT BRLObolExternalLineSet {
+    BRLObolExternalLineSet(void);
+
+    const SbVec3f *points;
+    const int32_t *commands;
+    const double *precisePoints;
+    int count;
+    const char *sourceType;
+    const char *geometryKind;
+};
+
+struct BRLOBOL_EXPORT BRLObolExternalPointSet {
+    BRLObolExternalPointSet(void);
+
+    const SbVec3f *points;
+    const double *precisePoints;
+    int count;
+    const char *sourceType;
+    const char *geometryKind;
+};
+
+struct BRLOBOL_EXPORT BRLObolExternalTriangleMesh {
+    BRLObolExternalTriangleMesh(void);
+
+    const SbVec3f *points;
+    int pointCount;
+    const int32_t *indices;
+    int indexCount;
+    const char *sourceType;
+    const char *geometryKind;
+};
+
+struct BRLOBOL_EXPORT BRLObolExternalAnnotationSegment {
+    enum SegmentKind {
+	SEGMENT_NONE = 0,
+	SEGMENT_LINE = 1,
+	SEGMENT_TEXT = 2
+    };
+
+    BRLObolExternalAnnotationSegment(void);
+
+    int kind;
+    int lineStart;
+    int lineEnd;
+    int textRefPoint;
+    const char *text;
+};
+
+struct BRLOBOL_EXPORT BRLObolExternalAnnotation {
+    BRLObolExternalAnnotation(void);
+
+    SbVec3f basePoint;
+    const SbVec3f *linePoints;
+    const int32_t *lineCommands;
+    const double *preciseLinePoints;
+    int linePointCount;
+    const SbVec3f *annotationPoints;
+    const double *preciseAnnotationPoints;
+    int annotationPointCount;
+    const BRLObolExternalAnnotationSegment *segments;
+    int segmentCount;
+    const char *sourceType;
+    const char *geometryKind;
+};
+
 struct BRLOBOL_EXPORT BRLObolDatabaseSourceDisplayPatch {
     BRLObolDatabaseSourceDisplayPatch(void);
 
@@ -500,11 +565,19 @@ public:
 	const SbVec3f &boundsMax);
     void clearSourceBounds(void);
     SbBool getSourceBounds(SbBox3f &bounds) const;
+    SbBool getEffectiveSourceBounds(SbBox3f &bounds) const;
     SbBool needsRealization(void) const;
     SbBool realizePrototypeWireframe(void);
     SbBool realizeDatabaseWireframe(void);
     SbBool realizeDatabaseMesh(void);
     int clearRealizedGeometry(SbBool preserveAuxiliary = TRUE);
+    int clearExternalPrimaryGeometry(void);
+    int publishExternalLineSet(const BRLObolExternalLineSet &lineSet);
+    int publishExternalPointSet(const BRLObolExternalPointSet &pointSet);
+    int publishExternalTriangleMesh(
+	const BRLObolExternalTriangleMesh &triangleMesh);
+    int publishExternalAnnotation(
+	const BRLObolExternalAnnotation &annotation);
     SoBRLVListShape *getRealizedShape(void) const;
     SoBRLVListShape *getRealizedShape(int index) const;
     int getRealizedShapeCount(void) const;

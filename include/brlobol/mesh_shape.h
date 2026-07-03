@@ -21,6 +21,7 @@
 #include <Inventor/fields/SoSFFloat.h>
 #include <Inventor/fields/SoSFInt32.h>
 #include <Inventor/fields/SoSFMatrix.h>
+#include <Inventor/fields/SoSFNode.h>
 #include <Inventor/fields/SoSFString.h>
 #include <Inventor/fields/SoSFUInt32.h>
 #include <Inventor/fields/SoSFVec3f.h>
@@ -152,10 +153,16 @@ public:
     SoSFInt32 pickGeometryPolicy;
     SoMFInt32 selectedPrimitive;
     SoMFInt32 highlightedPrimitive;
+    SoSFNode sharedGeometry;
 
     SoBRLMeshShape(void);
     static void initClass(void);
 
+    void setSharedGeometry(SoBRLMeshShape *shape);
+    SoBRLMeshShape *getSharedGeometrySource(void);
+    const SoBRLMeshShape *getSharedGeometrySource(void) const;
+    SoBRLMeshShape *getGeometrySource(void);
+    const SoBRLMeshShape *getGeometrySource(void) const;
     void setIndexedTriangles(const SbVec3f *points, int pointCount,
 	    const int32_t *indices, int indexCount);
     int getTriangleCount(void) const;

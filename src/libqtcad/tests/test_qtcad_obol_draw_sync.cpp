@@ -207,6 +207,18 @@ source_instance_key_for_view(const char *view_name, const char *path)
     return key;
 }
 
+static std::string
+source_mode_instance_key(const char *path, int mode)
+{
+    std::string key(test_skip_leading_slash(path));
+    if (mode != GED_DRAW_MODE_WIRE) {
+	char mode_buf[64] = {0};
+	snprintf(mode_buf, sizeof(mode_buf), ":ged-draw-mode:%d", mode);
+	key += mode_buf;
+    }
+    return key;
+}
+
 static SoBRLDatabaseSource *
 source_for_instance(BRLObolViewController *controller, const char *instanceKey)
 {
@@ -521,8 +533,13 @@ main(int argc, char **argv)
     int drew_both = apply_and_sync(gedp, &view, &draw_both, 1);
     if (!drew_both)
 	FAIL("multi-path GED draw should sync multiple Obol database sources");
-    if (controller->getDatabaseSourceCount() != 2)
-	FAIL("multi-path Obol draw sync should retain two database sources");
+    const std::string shaded_ball_instance =
+	source_mode_instance_key("ball.s", GED_DRAW_MODE_SHADED);
+    if (controller->getDatabaseSourceCount() != 3 ||
+	    !source_for_instance(controller, "box.s") ||
+	    !source_for_instance(controller, "ball.s") ||
+	    !source_for_instance(controller, shaded_ball_instance.c_str()))
+	FAIL("multi-path Obol draw sync should retain shared and representation-specific database sources");
 
     const char *direct_path = "box.s";
     if (!qg_obol_sync_database_sources(gedp->dbip, &direct_path, 1,
@@ -537,12 +554,13 @@ main(int argc, char **argv)
 	FAIL("direct Obol database sync should preserve draw mode, revision, and mesh geometry");
     if (!qg_obol_remove_database_sources(&direct_path, 1, &view))
 	FAIL("direct Obol database remove should remove one source without BSG transaction input");
-    if (controller->getDatabaseSourceCount() != 1 ||
+    if (controller->getDatabaseSourceCount() != 2 ||
 	    source_for_path(controller, "box.s"))
-	FAIL("direct Obol database remove should leave only unrelated sources");
+	FAIL("direct Obol database remove should leave only unrelated ball sources");
 
-    if (!source_for_instance(controller, "ball.s"))
-	FAIL("direct Obol database remove should retain the shared ball source owner");
+    if (!source_for_instance(controller, "ball.s") ||
+	    !source_for_instance(controller, shaded_ball_instance.c_str()))
+	FAIL("direct Obol database remove should retain shared and representation-specific ball source owners");
     if (!rt_view_context_name_set(view_ctx, "QV0") ||
 	    rt_view_context_independent_scope_is_null(view_ctx, 1) ||
 	    !rt_view_context_is_independent(view_ctx))
@@ -560,29 +578,33 @@ main(int argc, char **argv)
 	    !BU_STR_EQUAL(scopedBoxSource->path.getValue().getString(),
 		"box.s") ||
 	    !source_for_instance(controller, "ball.s") ||
-	    controller->getDatabaseSourceCount() != 2)
-	FAIL("scoped direct Obol sync should coexist with shared source owners");
+	    !source_for_instance(controller, shaded_ball_instance.c_str()) ||
+	    controller->getDatabaseSourceCount() != 3)
+	FAIL("scoped direct Obol sync should coexist with shared source owners and mode-specific representations");
     if (!qg_obol_remove_database_sources(&direct_path, 1, &view))
 	FAIL("direct Obol database remove should target scoped independent-view owners");
     if (source_for_instance(controller, scoped_box.c_str()) ||
 	    !source_for_instance(controller, "ball.s") ||
-	    controller->getDatabaseSourceCount() != 1)
-	FAIL("scoped direct Obol remove should leave shared source owners intact");
+	    !source_for_instance(controller, shaded_ball_instance.c_str()) ||
+	    controller->getDatabaseSourceCount() != 2)
+	FAIL("scoped direct Obol remove should leave shared source owners and mode-specific representations intact");
     if (!qg_obol_sync_database_sources(gedp->dbip, paths, 2,
 	    QG_OBOL_DATABASE_WIREFRAME, 654, &view))
 	FAIL("direct Obol database sync should create multiple scoped owners");
     if (!source_for_instance(controller, scoped_box.c_str()) ||
 	    !source_for_instance(controller, scoped_ball.c_str()) ||
 	    !source_for_instance(controller, "ball.s") ||
-	    controller->getDatabaseSourceCount() != 3)
-	FAIL("scoped direct Obol sync should retain shared and scoped owners separately");
+	    !source_for_instance(controller, shaded_ball_instance.c_str()) ||
+	    controller->getDatabaseSourceCount() != 4)
+	FAIL("scoped direct Obol sync should retain shared, scoped, and mode-specific owners separately");
     if (!qg_obol_clear_database_sources(&view))
 	FAIL("direct Obol database clear should target the active source owner scope");
     if (source_for_instance(controller, scoped_box.c_str()) ||
 	    source_for_instance(controller, scoped_ball.c_str()) ||
 	    !source_for_instance(controller, "ball.s") ||
-	    controller->getDatabaseSourceCount() != 1)
-	FAIL("scoped direct Obol clear should leave shared source owners intact");
+	    !source_for_instance(controller, shaded_ball_instance.c_str()) ||
+	    controller->getDatabaseSourceCount() != 2)
+	FAIL("scoped direct Obol clear should leave shared source owners and mode-specific representations intact");
     rt_view_context_independent_scope_destroy(view_ctx);
     if (rt_view_context_is_independent(view_ctx))
 	FAIL("qtcad direct source-owner parity test should restore shared view scope");

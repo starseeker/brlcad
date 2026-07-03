@@ -127,6 +127,42 @@ draw_test_sync_obol_camera(BRLObolViewController *controller, void *view_ctx)
     return controller->syncCameraFromRtViewContext(view_ctx) ? 1 : 0;
 }
 
+static void
+draw_test_obol_debug_dump_node(int id, int source_index, SoNode *node,
+	int depth, int child_index)
+{
+    if (!node || depth > 3)
+	return;
+
+    const char *type_name = node->getTypeId().getName().getString();
+    bu_log("draw-obol-debug[%03d]: source[%d] node depth=%d child=%d ptr=%p type=%s isGroup=%d isMatrix=%d\n",
+	    id, source_index, depth, child_index, (void *)node, type_name,
+	    node->isOfType(SoGroup::getClassTypeId()) ? 1 : 0,
+	    node->isOfType(SoMatrixTransform::getClassTypeId()) ? 1 : 0);
+
+    if (node->isOfType(SoMatrixTransform::getClassTypeId())) {
+	SoMatrixTransform *transform = static_cast<SoMatrixTransform *>(node);
+	SbMatrix matrix = transform->matrix.getValue();
+	const SbMat &m = matrix;
+	bu_log("draw-obol-debug[%03d]: source[%d] node depth=%d matrix rows=[%.9g %.9g %.9g %.9g] [%.9g %.9g %.9g %.9g] [%.9g %.9g %.9g %.9g] [%.9g %.9g %.9g %.9g]\n",
+		id, source_index, depth,
+		m[0][0], m[0][1], m[0][2], m[0][3],
+		m[1][0], m[1][1], m[1][2], m[1][3],
+		m[2][0], m[2][1], m[2][2], m[2][3],
+		m[3][0], m[3][1], m[3][2], m[3][3]);
+    }
+
+    if (!node->isOfType(SoGroup::getClassTypeId()))
+	return;
+
+    SoGroup *group = static_cast<SoGroup *>(node);
+    const int limit = group->getNumChildren() < 4 ?
+	group->getNumChildren() : 4;
+    for (int i = 0; i < limit; i++)
+	draw_test_obol_debug_dump_node(id, source_index, group->getChild(i),
+		depth + 1, i);
+}
+
 static int
 draw_test_write_rgb_png(const char *filename, const unsigned char *buffer,
 	int width, int height)
@@ -278,6 +314,7 @@ draw_test_obol_debug_dump(struct ged *gedp, int id,
 			id, i, child_index, (void *)child, type_name,
 			child && child->isOfType(SoGroup::getClassTypeId()) ? 1 : 0,
 			child && child->isOfType(SoMatrixTransform::getClassTypeId()) ? 1 : 0);
+		draw_test_obol_debug_dump_node(id, i, child, 1, child_index);
 	    }
 	}
 	if (source.drawMatrixValid) {

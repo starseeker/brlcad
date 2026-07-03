@@ -27,6 +27,10 @@ class SoGroup;
 class SoBRLDatabaseSource;
 struct BRLObolAuxiliaryLineSetDisplayState;
 struct BRLObolDatabaseSourceDisplayPatch;
+struct BRLObolExternalAnnotation;
+struct BRLObolExternalLineSet;
+struct BRLObolExternalPointSet;
+struct BRLObolExternalTriangleMesh;
 struct db_i;
 struct BRLObolDatabaseSourceSummary;
 struct BRLObolRealizedMaterialSummary;
@@ -187,6 +191,29 @@ public:
 	const int32_t *commands,
 	int count,
 	const BRLObolAuxiliaryLineSetDisplayState *displayState = NULL);
+    int publishDatabaseSourceExternalLineSet(const char *sourcePath,
+	const BRLObolExternalLineSet &lineSet);
+    int publishDatabaseSourceInstanceExternalLineSet(
+	const char *sourceInstanceKey,
+	const BRLObolExternalLineSet &lineSet);
+    int publishDatabaseSourceExternalPointSet(const char *sourcePath,
+	const BRLObolExternalPointSet &pointSet);
+    int publishDatabaseSourceInstanceExternalPointSet(
+	const char *sourceInstanceKey,
+	const BRLObolExternalPointSet &pointSet);
+    int publishDatabaseSourceExternalTriangleMesh(const char *sourcePath,
+	const BRLObolExternalTriangleMesh &triangleMesh);
+    int publishDatabaseSourceInstanceExternalTriangleMesh(
+	const char *sourceInstanceKey,
+	const BRLObolExternalTriangleMesh &triangleMesh);
+    int publishDatabaseSourceExternalAnnotation(const char *sourcePath,
+	const BRLObolExternalAnnotation &annotation);
+    int publishDatabaseSourceInstanceExternalAnnotation(
+	const char *sourceInstanceKey,
+	const BRLObolExternalAnnotation &annotation);
+    int clearDatabaseSourceExternalPrimaryGeometry(const char *sourcePath);
+    int clearDatabaseSourceInstanceExternalPrimaryGeometry(
+	const char *sourceInstanceKey);
     int clearDatabaseSourceAuxiliaryShapes(const char *sourcePath);
     int clearDatabaseSourceInstanceAuxiliaryShapes(
 	const char *sourceInstanceKey);

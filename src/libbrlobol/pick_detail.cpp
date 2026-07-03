@@ -15,7 +15,9 @@
 #include "raytrace.h"
 
 #include <Inventor/elements/SoModelMatrixElement.h>
+#include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoNode.h>
+#include <Inventor/nodes/SoTransformation.h>
 
 #include <float.h>
 #include <math.h>
@@ -742,7 +744,9 @@ SoBRLSourceMeshPickAction::beginTraversal(SoNode *node)
 void
 SoBRLSourceMeshPickAction::nodeAction(SoAction *action, SoNode *node)
 {
-    node->doAction(action);
+    if (node->isOfType(SoGroup::getClassTypeId()) ||
+	    node->isOfType(SoTransformation::getClassTypeId()))
+	node->doAction(action);
 }
 
 void

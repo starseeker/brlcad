@@ -7,10 +7,15 @@ Scope
 This table tracks the production database object coverage expected from the
 Obol realization path.  The current libbrlobol path realizes BRL-CAD .g
 hierarchies through SoBRLDatabaseSource and SoBRLSceneController, preserving
-database path identity on Obol shape nodes.  Wire output is converted from
-rt_obj_plot bg/rt_vlist data into SoBRLVListShape only at the realization
-boundary.  Shaded output is represented by SoBRLMeshShape using direct mesh
-importers where available and rt_obj_tess fallback otherwise.
+database path identity on Obol shape nodes.  Realized database leaf instances
+are local-space Obol geometry plus OpenInventor transforms: libbrlobol uses
+`db_walk_tree` for path/material/transform state, refetches each unique
+primitive with an identity matrix on geometry-cache misses, builds one shared
+local `SoBRLVListShape` or `SoBRLMeshShape`, and gives each visible leaf a
+per-instance metadata/draw-state shape referencing that shared geometry.  Wire
+output is converted from rt_obj_plot bg/rt_vlist data into SoBRLVListShape only
+at the realization boundary.  Shaded output is represented by SoBRLMeshShape
+using direct mesh importers where available and rt_obj_tess fallback otherwise.
 
 The required hierarchy smoke models are:
 
@@ -138,6 +143,13 @@ Every realized drawable Obol node must preserve:
 * visibility, selectability, selection, highlight, ghost, hidden-line, edit
   emphasis, LoD policy, and color override fields
 
+The visible instance shape owns the identity and draw-intent fields above even
+when its drawable arrays come from a shared local geometry node.  Explicit
+geometry setters on a visible shape detach it from the shared source,
+preserving direct GED/edit mutation semantics.  LoD-backed mesh instances keep
+a per-instance `SoBRLLodMeshShape` wrapper so view-specific display LoD state
+can change independently of shared full-detail source geometry.
+
 Standalone material-object identity, first mesh edge/vertex action identity,
 and typed edit-preview intent identity across pick/snap/measure/export are now
 covered.  SoBRLEditPreview can publish explicit edit-intent id/role metadata
@@ -145,6 +157,47 @@ separate from preview-node identity, while preserving the old preview-id
 fallback.  Broader live edit-tool lifecycle/state semantics and stable
 face/edge/vertex IDs for tessellated curved primitives are still migration
 work.
+
+Librt Import Lifetime Guard
+---------------------------
+
+As of 2026-07-03, libbrlobol no longer builds drawable geometry from
+transformed `db_walk_tree` callback internals.  The callback remains the source
+of instance path, inherited material/region state, and accumulated member
+matrix, but geometry-cache misses call `rt_db_get_internal` with an identity
+matrix and validate the refetched primitive payload magic before calling librt
+primitive plot/tessellation/indexed-face-set methods.  If the refetch fails
+validation, the source records an explicit invalid-payload diagnostic and skips
+the leaf.
+
+This guard was added for a real `box.s` failure observed while running
+`ged_test_obol_draw_sync`.  The direct failure was an ARB internal whose first
+payload word had been overwritten with the allocator free pattern after
+`rt_db_get_internal5` freed its external object buffer.  A non-invasive lldb
+conditional breakpoint in the passing guarded test confirmed the underlying
+alias still occurs: at `src/librt/db5_io.c:1002`,
+`ext.ext_buf == ip->idb_ptr` for `dp->d_namep == "box.s"` before
+`bu_free_external(&ext)`.  The stack was
+`db_walk_tree -> db_recurse2 -> rt_db_get_internal -> rt_db_get_internal5`,
+with the leaf callback target being
+`SoBRLDatabaseSource::realizeDatabaseWireframe`.
+
+The inspected librt source does not make that alias a valid ARB import
+contract.  `db_get_external` allocates the external object buffer, and
+`rt_arb_import5` allocates a separate `struct rt_arb_internal` with
+`BU_ALLOC` before copying network doubles from the raw body.  The observed
+alias is with the full external object allocation, not merely with the
+`raw.body.ext_buf` view into that external record.  If the alias is
+reproducible outside Obol, the next root-cause pass should trace allocator
+ownership/free history for that external allocation and should not assume the
+libbrlobol callback held an internal past its valid lifetime.  Vanilla draw
+does not expose the same crash pattern because it consumes callback internals
+immediately into legacy bv objects instead of repeatedly synchronizing
+database-source Obol nodes, but the low-level import alias would still be
+invalid if reached.  The Obol local-geometry boundary sidesteps that poison for
+drawable geometry, but `db_walk_tree` still imports each instance before
+invoking the callback.  A future librt pre-import instance traversal API would
+remove that remaining overhead without changing the Obol scene graph shape.
 
 Coverage Table
 --------------

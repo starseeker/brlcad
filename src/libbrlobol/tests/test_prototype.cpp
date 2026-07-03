@@ -116,8 +116,23 @@ nearly_equal(float a, float b)
 static SoBRLVListShape *
 shape_with_path(SoBRLDatabaseSource *source, const char *path)
 {
+    if (!source || !path)
+	return NULL;
     for (int i = 0; i < source->getRealizedShapeCount(); i++) {
 	SoBRLVListShape *shape = source->getRealizedShape(i);
+	if (shape && BU_STR_EQUAL(shape->sourcePath.getValue().getString(), path))
+	    return shape;
+    }
+    return NULL;
+}
+
+static SoBRLMeshShape *
+mesh_with_path(SoBRLDatabaseSource *source, const char *path)
+{
+    if (!source || !path)
+	return NULL;
+    for (int i = 0; i < source->getRealizedMeshCount(); i++) {
+	SoBRLMeshShape *shape = source->getRealizedMesh(i);
 	if (shape && BU_STR_EQUAL(shape->sourcePath.getValue().getString(), path))
 	    return shape;
     }
@@ -132,6 +147,18 @@ total_segment_count(SoBRLDatabaseSource *source)
 	SoBRLVListShape *shape = source->getRealizedShape(i);
 	if (shape)
 	    ret += shape->getSegmentCount();
+    }
+    return ret;
+}
+
+static int
+small_source_triangle_count(SoBRLDatabaseSource *source)
+{
+    int ret = 0;
+    for (int i = 0; i < source->getRealizedMeshCount(); i++) {
+	SoBRLMeshShape *shape = source->getRealizedMesh(i);
+	if (shape)
+	    ret += shape->getTriangleCount();
     }
     return ret;
 }
@@ -228,13 +255,40 @@ shape_extents_match(SoBRLVListShape *shape,
 	float ymin, float ymax,
 	float zmin, float zmax)
 {
-    if (!shape || shape->point.getNum() <= 0)
+    const SoBRLVListShape *geom = shape ? shape->getGeometrySource() : NULL;
+    if (!geom || geom->point.getNum() <= 0)
 	return 0;
 
     SbBox3f box;
     box.makeEmpty();
-    for (int i = 0; i < shape->point.getNum(); i++)
-	box.extendBy(shape->point[i]);
+    for (int i = 0; i < geom->point.getNum(); i++)
+	box.extendBy(geom->point[i]);
+
+    if (box.isEmpty())
+	return 0;
+
+    return nearly_equal(box.getMin()[0], xmin) &&
+	nearly_equal(box.getMax()[0], xmax) &&
+	nearly_equal(box.getMin()[1], ymin) &&
+	nearly_equal(box.getMax()[1], ymax) &&
+	nearly_equal(box.getMin()[2], zmin) &&
+	nearly_equal(box.getMax()[2], zmax);
+}
+
+static int
+mesh_extents_match(SoBRLMeshShape *shape,
+	float xmin, float xmax,
+	float ymin, float ymax,
+	float zmin, float zmax)
+{
+    const SoBRLMeshShape *geom = shape ? shape->getGeometrySource() : NULL;
+    if (!geom || geom->point.getNum() <= 0)
+	return 0;
+
+    SbBox3f box;
+    box.makeEmpty();
+    for (int i = 0; i < geom->point.getNum(); i++)
+	box.extendBy(geom->point[i]);
 
     if (box.isEmpty())
 	return 0;
@@ -2791,15 +2845,147 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 		clearSource->getRealizedMeshCount() != 0 ||
 		!clearSource->findAuxiliaryVListShape("clear-aux"))
 	    FAIL("clearRealizedGeometry should remove primary geometry and preserve auxiliary VLISTs");
-	if (!clearSource->clearRealizedGeometry(FALSE) ||
-		clearSource->getNumChildren() != 0)
-	    FAIL("clearRealizedGeometry should optionally remove auxiliary children");
-	clearSource->unref();
-    }
+	    if (!clearSource->clearRealizedGeometry(FALSE) ||
+		    clearSource->getNumChildren() != 0)
+		FAIL("clearRealizedGeometry should optionally remove auxiliary children");
+	    clearSource->unref();
+	}
 
-    {
-	SoSeparator *sparseAngleRoot = new SoSeparator;
-	sparseAngleRoot->ref();
+	{
+	    SoSeparator *publicationRoot = new SoSeparator;
+	    publicationRoot->ref();
+	    SoBRLSceneController publicationScene(publicationRoot);
+	    SoBRLDatabaseSource *publicationSource = new SoBRLDatabaseSource;
+	    publicationSource->configureDatabaseSourceInstance(
+		    "external-primary-key", "/prototype/external-primary",
+		    NULL, SoBRLDatabaseSource::WIREFRAME, 7);
+	    publicationRoot->addChild(publicationSource);
+
+	    SbVec3f auxPoints[2] = {
+		SbVec3f(10.0f, 0.0f, 0.0f),
+		SbVec3f(11.0f, 0.0f, 0.0f)
+	    };
+	    int32_t auxCommands[2] = {
+		SoBRLVListShape::MOVE,
+		SoBRLVListShape::DRAW
+	    };
+	    if (!publicationSource->setAuxiliaryLineSet("external-aux",
+		    auxPoints, auxCommands, 2, NULL))
+		FAIL("external publication setup should install auxiliary geometry");
+
+	    SbVec3f linePoints[2] = {
+		SbVec3f(-1.0f, -2.0f, 0.0f),
+		SbVec3f(3.0f, 4.0f, 0.0f)
+	    };
+	    int32_t lineCommands[2] = {
+		SoBRLVListShape::MOVE,
+		SoBRLVListShape::DRAW
+	    };
+	    double preciseLinePoints[6] = {
+		-1.0, -2.0, 0.0,
+		3.0, 4.0, 0.0
+	    };
+	    BRLObolExternalLineSet lineSet;
+	    lineSet.points = linePoints;
+	    lineSet.commands = lineCommands;
+	    lineSet.precisePoints = preciseLinePoints;
+	    lineSet.count = 2;
+	    const uint64_t lineStructuralRevision =
+		publicationScene.getStructuralRevision();
+	    if (publicationScene.publishDatabaseSourceInstanceExternalLineSet(
+		    "external-primary-key", lineSet) <= 0)
+		FAIL("controller should publish external primary line sets");
+	    if (publicationScene.getStructuralRevision() <= lineStructuralRevision)
+		FAIL("external primary line publication should advance structural revision");
+	    if (!publicationSource->findAuxiliaryVListShape("external-aux") ||
+		    publicationSource->getRealizedShapeCount() != 2 ||
+		    publicationSource->getRealizedMeshCount() != 0)
+		FAIL("external line publication should preserve auxiliary lines and replace primary geometry");
+
+	    SoBRLVListShape *primaryLine = NULL;
+	    for (int i = 0; i < publicationSource->getRealizedShapeCount(); i++) {
+		SoBRLVListShape *candidateShape =
+		    publicationSource->getRealizedShape(i);
+		if (candidateShape && BU_STR_EQUAL(
+			candidateShape->recordRole.getValue().getString(),
+			"database"))
+		    primaryLine = candidateShape;
+	    }
+	    if (!primaryLine ||
+		    !BU_STR_EQUAL(primaryLine->sourceType.getValue().getString(),
+			"line-set") ||
+		    !BU_STR_EQUAL(primaryLine->geometryKind.getValue().getString(),
+			"line") ||
+		    primaryLine->point.getNum() != 2)
+		FAIL("external line publication should configure primary VLIST metadata");
+
+	    BRLObolDatabaseSourceSummary publicationSummary;
+	    if (!publicationSource->getSummary(publicationSummary) ||
+		    !publicationSummary.valid ||
+		    publicationSummary.realizationStatus !=
+		    SoBRLDatabaseSource::REALIZED ||
+		    publicationSummary.stale ||
+		    publicationSummary.realizationRoleFlags !=
+		    SoBRLDatabaseSource::REALIZATION_ROLE_EXTERNAL ||
+		    !publicationSummary.sourceBoundsValid ||
+		    !nearly_equal(publicationSummary.sourceBounds.getMin()[0],
+			-1.0f) ||
+		    !nearly_equal(publicationSummary.sourceBounds.getMax()[1],
+			4.0f))
+		FAIL("external line publication should own source bounds and realization state");
+
+	    SbVec3f meshPoints[3] = {
+		SbVec3f(0.0f, 0.0f, 1.0f),
+		SbVec3f(2.0f, 0.0f, 1.0f),
+		SbVec3f(0.0f, 2.0f, 1.0f)
+	    };
+	    int32_t meshIndices[3] = {0, 1, 2};
+	    BRLObolExternalTriangleMesh triangleMesh;
+	    triangleMesh.points = meshPoints;
+	    triangleMesh.pointCount = 3;
+	    triangleMesh.indices = meshIndices;
+	    triangleMesh.indexCount = 3;
+	    if (publicationScene.publishDatabaseSourceInstanceExternalTriangleMesh(
+		    "external-primary-key", triangleMesh) <= 0)
+		FAIL("controller should publish external primary triangle meshes");
+	    if (!publicationSource->findAuxiliaryVListShape("external-aux") ||
+		    publicationSource->getRealizedShapeCount() != 1 ||
+		    publicationSource->getRealizedMeshCount() != 1)
+		FAIL("external mesh publication should replace primary VLISTs and preserve auxiliary lines");
+
+	    SoBRLMeshShape *primaryMesh = publicationSource->getRealizedMesh();
+	    if (!primaryMesh ||
+		    !BU_STR_EQUAL(primaryMesh->sourceType.getValue().getString(),
+			"indexed-face-set") ||
+		    !BU_STR_EQUAL(primaryMesh->geometryKind.getValue().getString(),
+			"surface") ||
+		    primaryMesh->getTriangleCount() != 1)
+		FAIL("external mesh publication should configure primary mesh metadata");
+
+	    if (publicationScene.clearDatabaseSourceInstanceExternalPrimaryGeometry(
+		    "external-primary-key") <= 0)
+		FAIL("controller should clear external primary geometry");
+	    if (!publicationSource->findAuxiliaryVListShape("external-aux") ||
+		    publicationSource->getRealizedShapeCount() != 1 ||
+		    publicationSource->getRealizedMeshCount() != 1)
+		FAIL("external primary clear should preserve auxiliary geometry");
+	    if (publicationSource->getRealizedMesh() != primaryMesh ||
+		    primaryMesh->point.getNum() != 0 ||
+		    primaryMesh->coordIndex.getNum() != 0)
+		FAIL("external primary clear should retain and empty primary mesh geometry");
+	    if (!publicationSource->getSummary(publicationSummary) ||
+		    publicationSummary.sourceBoundsValid ||
+		    publicationSummary.realizationStatus !=
+		    SoBRLDatabaseSource::REALIZED ||
+		    publicationSummary.realizationRoleFlags !=
+		    SoBRLDatabaseSource::REALIZATION_ROLE_EXTERNAL)
+		FAIL("external primary clear should clear bounds and keep source current");
+	    publicationRoot->unref();
+	}
+
+	{
+	    SoSeparator *sparseAngleRoot = new SoSeparator;
+	    sparseAngleRoot->ref();
 	SoBRLVListShape *sparseAngleShape = new SoBRLVListShape;
 	sparseAngleShape->sourcePath = "/prototype/sparse-angle-bucket";
 
@@ -5015,9 +5201,12 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     SoBRLVListShape *right_shape = shape_with_path(source, "/assembly.c/right.c/box.s");
     if (!left_shape || !right_shape)
 	FAIL("assembly leaf shapes should preserve full BRL-CAD instance paths");
+    if (left_shape->getGeometrySource() == left_shape ||
+	    left_shape->getGeometrySource() != right_shape->getGeometrySource())
+	FAIL("assembly leaf shapes should share one local Obol geometry source");
     if (!shape_extents_match(left_shape, -2.0f, 3.0f, -3.0f, 4.0f, -4.0f, 5.0f) ||
 	    !shape_extents_match(right_shape, -2.0f, 3.0f, -3.0f, 4.0f, -4.0f, 5.0f))
-	FAIL("assembly leaf shapes should keep local primitive coordinates under Obol transform nodes");
+	FAIL("assembly leaf shapes should keep local shared geometry coordinates");
     if (strcmp(left_shape->sourceName.getValue().getString(), "box.s") != 0 ||
 	    strcmp(left_shape->sourceType.getValue().getString(), "arb8") != 0 ||
 	    strcmp(right_shape->sourceName.getValue().getString(), "box.s") != 0 ||
@@ -5304,6 +5493,27 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	if (strcmp(rebuiltController.getRenderReason().getString(), "realize-failed") == 0)
 	    FAIL("rebuilt view controller should not report failed realization for current scene");
 
+	SoBRLVListShape *oldAssemblyShared = rebuiltLeft->getGeometrySource();
+	if (!oldAssemblyShared || oldAssemblyShared == rebuiltLeft ||
+		oldAssemblyShared != rebuiltRight->getGeometrySource())
+	    FAIL("rebuilt assembly instances should still reference shared local geometry");
+	oldAssemblyShared->ref();
+
+	SbVec3f editedLinePoints[2] = {
+	    SbVec3f(11.0f, 0.0f, 0.0f),
+	    SbVec3f(12.0f, 0.0f, 0.0f)
+	};
+	int32_t editedLineCommands[2] = {
+	    SoBRLVListShape::MOVE,
+	    SoBRLVListShape::DRAW
+	};
+	rebuiltLeft->setLineSet(editedLinePoints, editedLineCommands, 2);
+	if (rebuiltLeft->getGeometrySource() != rebuiltLeft ||
+		rebuiltRight->getGeometrySource() != oldAssemblyShared ||
+		!shape_extents_match(rebuiltLeft, 11.0f, 12.0f,
+		    0.0f, 0.0f, 0.0f, 0.0f))
+	    FAIL("direct VLIST geometry edits should detach only the edited instance from shared geometry");
+
 	if (rebuiltController.replaceDatabaseSource("/assembly.c", dbip,
 		    SoBRLDatabaseSource::WIREFRAME, 10) != 1 ||
 		rebuiltController.getDatabaseSourceCount() != 1 ||
@@ -5320,7 +5530,106 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 		!shape_with_path(rebuiltSource, "/assembly.c/left.c/box.s") ||
 		!shape_with_path(rebuiltSource, "/assembly.c/right.c/box.s"))
 	    FAIL("rebuilt view controller should re-realize partial refresh from existing scene");
+	SoBRLVListShape *refreshedLeft = shape_with_path(rebuiltSource,
+		"/assembly.c/left.c/box.s");
+	SoBRLVListShape *refreshedRight = shape_with_path(rebuiltSource,
+		"/assembly.c/right.c/box.s");
+	if (!refreshedLeft || !refreshedRight ||
+		refreshedLeft->getGeometrySource() == refreshedLeft ||
+		refreshedLeft->getGeometrySource() != refreshedRight->getGeometrySource() ||
+		refreshedLeft->getGeometrySource() == oldAssemblyShared ||
+		!shape_extents_match(refreshedLeft, -2.0f, 3.0f,
+		    -3.0f, 4.0f, -4.0f, 5.0f))
+	    FAIL("database source refresh should rebuild shared local geometry and discard edited instance geometry");
+	oldAssemblyShared->unref();
     }
+
+    root->unref();
+
+    root = new SoSeparator;
+    root->ref();
+
+    source = new SoBRLDatabaseSource;
+    source->setDatabase(dbip);
+    source->path = "assembly.c";
+    source->sourceRevision = 11;
+    source->drawMode = SoBRLDatabaseSource::SHADED;
+    root->addChild(source);
+
+    SoBRLRealizeAction assemblyMeshRealize;
+    assemblyMeshRealize.apply(root);
+    if (assemblyMeshRealize.getRealizedSourceCount() != 1 ||
+	    source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED)
+	FAIL("shaded assembly realization should realize one source");
+    if (source->getRealizedMeshCount() != 2)
+	FAIL("shaded assembly realization should preserve one mesh instance per database leaf");
+
+    SoBRLMeshShape *left_mesh = mesh_with_path(source,
+	    "/assembly.c/left.c/box.s");
+    SoBRLMeshShape *right_mesh = mesh_with_path(source,
+	    "/assembly.c/right.c/box.s");
+    if (!left_mesh || !right_mesh)
+	FAIL("shaded assembly leaf meshes should preserve full BRL-CAD instance paths");
+    if (left_mesh->getGeometrySource() == left_mesh ||
+	    left_mesh->getGeometrySource() != right_mesh->getGeometrySource())
+	FAIL("shaded assembly leaf meshes should share one local Obol geometry source");
+    if (!mesh_extents_match(left_mesh, -2.0f, 3.0f, -3.0f, 4.0f, -4.0f, 5.0f) ||
+	    !mesh_extents_match(right_mesh, -2.0f, 3.0f, -3.0f, 4.0f, -4.0f, 5.0f))
+	FAIL("shaded assembly meshes should keep local shared geometry coordinates");
+    if (!left_mesh->materialColorValid.getValue() ||
+	    left_mesh->regionId.getValue() != 101 ||
+	    !right_mesh->materialColorValid.getValue() ||
+	    right_mesh->regionId.getValue() != 102)
+	FAIL("shaded assembly mesh instances should keep independent inherited material identity");
+
+    SoGetBoundingBoxAction assemblyMeshBBoxAction(viewport);
+    assemblyMeshBBoxAction.apply(root);
+    bbox = assemblyMeshBBoxAction.getBoundingBox();
+    if (bbox.isEmpty() ||
+	    !nearly_equal(bbox.getMin()[0], 8.0f) ||
+	    !nearly_equal(bbox.getMax()[0], 33.0f) ||
+	    !nearly_equal(bbox.getMin()[1], -3.0f) ||
+	    !nearly_equal(bbox.getMax()[1], 4.0f) ||
+	    !nearly_equal(bbox.getMin()[2], -4.0f) ||
+	    !nearly_equal(bbox.getMax()[2], 5.0f))
+	FAIL("shaded assembly bounding box should reflect per-instance member matrices");
+
+    SoBRLExportAction assemblyMeshExport;
+    assemblyMeshExport.apply(root);
+    if (assemblyMeshExport.getTriangleCount() != small_source_triangle_count(source) ||
+	    export_triangle_path_count(assemblyMeshExport,
+		"/assembly.c/left.c/box.s") <= 0 ||
+	    export_triangle_path_count(assemblyMeshExport,
+		"/assembly.c/right.c/box.s") <= 0)
+	FAIL("shaded assembly export should preserve transformed mesh instance identity");
+
+    right_mesh->visible = FALSE;
+    SoGetBoundingBoxAction assemblyMeshVisibleBBoxAction(viewport);
+    assemblyMeshVisibleBBoxAction.apply(root);
+    bbox = assemblyMeshVisibleBBoxAction.getBoundingBox();
+    if (bbox.isEmpty() ||
+	    !nearly_equal(bbox.getMin()[0], 8.0f) ||
+	    !nearly_equal(bbox.getMax()[0], 13.0f))
+	FAIL("shaded assembly mesh visibility should remain per-instance");
+
+    SoBRLMeshShape *oldMeshShared = left_mesh->getGeometrySource();
+    if (!oldMeshShared || oldMeshShared == left_mesh ||
+	    oldMeshShared != right_mesh->getGeometrySource())
+	FAIL("shaded assembly mesh instances should still share local geometry before edit");
+    oldMeshShared->ref();
+    SbVec3f editedMeshPoints[3] = {
+	SbVec3f(0.0f, 0.0f, 0.0f),
+	SbVec3f(1.0f, 0.0f, 0.0f),
+	SbVec3f(0.0f, 1.0f, 0.0f)
+    };
+    int32_t editedMeshIndices[3] = {0, 1, 2};
+    left_mesh->setIndexedTriangles(editedMeshPoints, 3, editedMeshIndices, 3);
+    if (left_mesh->getGeometrySource() != left_mesh ||
+	    right_mesh->getGeometrySource() != oldMeshShared ||
+	    left_mesh->getTriangleCount() != 1 ||
+	    right_mesh->getTriangleCount() != 12)
+	FAIL("direct mesh geometry edits should detach only the edited instance from shared geometry");
+    oldMeshShared->unref();
 
     root->unref();
     db_close(dbip);

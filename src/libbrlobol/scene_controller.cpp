@@ -17,7 +17,10 @@
 #include "brlobol/vlist_shape.h"
 
 #include <Inventor/SbName.h>
+#include <Inventor/SbViewportRegion.h>
+#include <Inventor/actions/SoGetBoundingBoxAction.h>
 #include <Inventor/nodes/SoGroup.h>
+#include <Inventor/nodes/SoMatrixTransform.h>
 #include <Inventor/nodes/SoNode.h>
 #include <Inventor/nodes/SoSeparator.h>
 
@@ -1784,6 +1787,184 @@ SoBRLSceneController::publishDatabaseSourceInstanceAuxiliarySourceLineSet(
 }
 
 int
+SoBRLSceneController::publishDatabaseSourceExternalLineSet(
+	const char *sourcePath,
+	const BRLObolExternalLineSet &lineSet)
+{
+    if (!this->root || !this->root->isOfType(SoGroup::getClassTypeId()))
+	return -1;
+
+    SbString sourceInstanceKey = database_source_instance_key_for_path(
+	    static_cast<SoGroup *>(this->root), sourcePath);
+    if (sourceInstanceKey.getLength() == 0)
+	return -1;
+
+    return this->publishDatabaseSourceInstanceExternalLineSet(
+	    sourceInstanceKey.getString(), lineSet);
+}
+
+int
+SoBRLSceneController::publishDatabaseSourceInstanceExternalLineSet(
+	const char *sourceInstanceKey,
+	const BRLObolExternalLineSet &lineSet)
+{
+    if (!sourceInstanceKey || !sourceInstanceKey[0])
+	return -1;
+
+    SoBRLDatabaseSource *source =
+	this->findDatabaseSourceInstance(sourceInstanceKey);
+    if (!source)
+	return -1;
+
+    const int published = source->publishExternalLineSet(lineSet);
+    if (published > 0)
+	this->advanceStructuralRevision();
+    return published;
+}
+
+int
+SoBRLSceneController::publishDatabaseSourceExternalPointSet(
+	const char *sourcePath,
+	const BRLObolExternalPointSet &pointSet)
+{
+    if (!this->root || !this->root->isOfType(SoGroup::getClassTypeId()))
+	return -1;
+
+    SbString sourceInstanceKey = database_source_instance_key_for_path(
+	    static_cast<SoGroup *>(this->root), sourcePath);
+    if (sourceInstanceKey.getLength() == 0)
+	return -1;
+
+    return this->publishDatabaseSourceInstanceExternalPointSet(
+	    sourceInstanceKey.getString(), pointSet);
+}
+
+int
+SoBRLSceneController::publishDatabaseSourceInstanceExternalPointSet(
+	const char *sourceInstanceKey,
+	const BRLObolExternalPointSet &pointSet)
+{
+    if (!sourceInstanceKey || !sourceInstanceKey[0])
+	return -1;
+
+    SoBRLDatabaseSource *source =
+	this->findDatabaseSourceInstance(sourceInstanceKey);
+    if (!source)
+	return -1;
+
+    const int published = source->publishExternalPointSet(pointSet);
+    if (published > 0)
+	this->advanceStructuralRevision();
+    return published;
+}
+
+int
+SoBRLSceneController::publishDatabaseSourceExternalTriangleMesh(
+	const char *sourcePath,
+	const BRLObolExternalTriangleMesh &triangleMesh)
+{
+    if (!this->root || !this->root->isOfType(SoGroup::getClassTypeId()))
+	return -1;
+
+    SbString sourceInstanceKey = database_source_instance_key_for_path(
+	    static_cast<SoGroup *>(this->root), sourcePath);
+    if (sourceInstanceKey.getLength() == 0)
+	return -1;
+
+    return this->publishDatabaseSourceInstanceExternalTriangleMesh(
+	    sourceInstanceKey.getString(), triangleMesh);
+}
+
+int
+SoBRLSceneController::publishDatabaseSourceInstanceExternalTriangleMesh(
+	const char *sourceInstanceKey,
+	const BRLObolExternalTriangleMesh &triangleMesh)
+{
+    if (!sourceInstanceKey || !sourceInstanceKey[0])
+	return -1;
+
+    SoBRLDatabaseSource *source =
+	this->findDatabaseSourceInstance(sourceInstanceKey);
+    if (!source)
+	return -1;
+
+    const int published = source->publishExternalTriangleMesh(triangleMesh);
+    if (published > 0)
+	this->advanceStructuralRevision();
+    return published;
+}
+
+int
+SoBRLSceneController::publishDatabaseSourceExternalAnnotation(
+	const char *sourcePath,
+	const BRLObolExternalAnnotation &annotation)
+{
+    if (!this->root || !this->root->isOfType(SoGroup::getClassTypeId()))
+	return -1;
+
+    SbString sourceInstanceKey = database_source_instance_key_for_path(
+	    static_cast<SoGroup *>(this->root), sourcePath);
+    if (sourceInstanceKey.getLength() == 0)
+	return -1;
+
+    return this->publishDatabaseSourceInstanceExternalAnnotation(
+	    sourceInstanceKey.getString(), annotation);
+}
+
+int
+SoBRLSceneController::publishDatabaseSourceInstanceExternalAnnotation(
+	const char *sourceInstanceKey,
+	const BRLObolExternalAnnotation &annotation)
+{
+    if (!sourceInstanceKey || !sourceInstanceKey[0])
+	return -1;
+
+    SoBRLDatabaseSource *source =
+	this->findDatabaseSourceInstance(sourceInstanceKey);
+    if (!source)
+	return -1;
+
+    const int published = source->publishExternalAnnotation(annotation);
+    if (published > 0)
+	this->advanceStructuralRevision();
+    return published;
+}
+
+int
+SoBRLSceneController::clearDatabaseSourceExternalPrimaryGeometry(
+	const char *sourcePath)
+{
+    if (!this->root || !this->root->isOfType(SoGroup::getClassTypeId()))
+	return -1;
+
+    SbString sourceInstanceKey = database_source_instance_key_for_path(
+	    static_cast<SoGroup *>(this->root), sourcePath);
+    if (sourceInstanceKey.getLength() == 0)
+	return -1;
+
+    return this->clearDatabaseSourceInstanceExternalPrimaryGeometry(
+	    sourceInstanceKey.getString());
+}
+
+int
+SoBRLSceneController::clearDatabaseSourceInstanceExternalPrimaryGeometry(
+	const char *sourceInstanceKey)
+{
+    if (!sourceInstanceKey || !sourceInstanceKey[0])
+	return -1;
+
+    SoBRLDatabaseSource *source =
+	this->findDatabaseSourceInstance(sourceInstanceKey);
+    if (!source)
+	return -1;
+
+    const int cleared = source->clearExternalPrimaryGeometry();
+    if (cleared > 0)
+	this->advanceStructuralRevision();
+    return cleared;
+}
+
+int
 SoBRLSceneController::clearDatabaseSourceAuxiliaryShapes(const char *sourcePath)
 {
     if (!this->root || !this->root->isOfType(SoGroup::getClassTypeId()))
@@ -3498,6 +3679,33 @@ scene_bounds_for_mesh_shape(const SoBRLMeshShape *shape, SbBox3f &bounds)
     return shape->point.getNum() > 0;
 }
 
+static SbBox3f
+scene_bounds_transform_box(const SbBox3f &bounds, const SbMatrix &matrix)
+{
+    SbBox3f transformed;
+    transformed.makeEmpty();
+    if (bounds.isEmpty())
+	return transformed;
+
+    const SbVec3f bmin = bounds.getMin();
+    const SbVec3f bmax = bounds.getMax();
+    for (int xi = 0; xi < 2; xi++) {
+	for (int yi = 0; yi < 2; yi++) {
+	    for (int zi = 0; zi < 2; zi++) {
+		const SbVec3f corner(
+			xi ? bmax[0] : bmin[0],
+			yi ? bmax[1] : bmin[1],
+			zi ? bmax[2] : bmin[2]);
+		SbVec3f transformedCorner;
+		matrix.multVecMatrix(corner, transformedCorner);
+		transformed.extendBy(transformedCorner);
+	    }
+	}
+    }
+
+    return transformed;
+}
+
 static SbBool
 scene_node_is_overlay_intent(const SoNode *node)
 {
@@ -3516,8 +3724,24 @@ scene_node_is_overlay_intent(const SoNode *node)
 }
 
 static SbBool
-scene_bounds_for_node(const SoNode *node, SbBox3f &bounds,
-	SbBool includeOverlays)
+scene_database_source_uses_realized_placement(
+	const SoBRLDatabaseSource *source)
+{
+    if (!source ||
+	    source->realizationStatus.getValue() !=
+	    SoBRLDatabaseSource::REALIZED ||
+	    (source->realizationRoleFlags.getValue() &
+	     SoBRLDatabaseSource::REALIZATION_ROLE_EXTERNAL))
+	return FALSE;
+
+    return (source->getRealizedShapeCount() > 0 ||
+	    source->getRealizedMeshCount() > 0 ||
+	    source->getRealizedMaterialObjectCount() > 0) ? TRUE : FALSE;
+}
+
+static SbBool
+scene_bounds_for_node_transformed(const SoNode *node, const SbMatrix &matrix,
+	SbBox3f &bounds, SbBool includeOverlays)
 {
     bounds.makeEmpty();
     if (!node)
@@ -3526,21 +3750,57 @@ scene_bounds_for_node(const SoNode *node, SbBox3f &bounds,
     if (!includeOverlays && scene_node_is_overlay_intent(node))
 	return FALSE;
 
-    if (node->isOfType(SoBRLVListShape::getClassTypeId()))
-	return scene_bounds_for_vlist_shape(
-		static_cast<const SoBRLVListShape *>(node), bounds);
+    if (node->isOfType(SoBRLVListShape::getClassTypeId())) {
+	SbBox3f localBounds;
+	if (!scene_bounds_for_vlist_shape(
+		static_cast<const SoBRLVListShape *>(node), localBounds))
+	    return FALSE;
+	bounds = scene_bounds_transform_box(localBounds, matrix);
+	return bounds.isEmpty() ? FALSE : TRUE;
+    }
 
-    if (node->isOfType(SoBRLMeshShape::getClassTypeId()))
-	return scene_bounds_for_mesh_shape(
-		static_cast<const SoBRLMeshShape *>(node), bounds);
+    if (node->isOfType(SoBRLMeshShape::getClassTypeId())) {
+	SbBox3f localBounds;
+	if (!scene_bounds_for_mesh_shape(
+		static_cast<const SoBRLMeshShape *>(node), localBounds))
+	    return FALSE;
+	bounds = scene_bounds_transform_box(localBounds, matrix);
+	return bounds.isEmpty() ? FALSE : TRUE;
+    }
 
     SbBool valid = FALSE;
     if (node->isOfType(SoGroup::getClassTypeId())) {
 	const SoGroup *group = static_cast<const SoGroup *>(node);
+	SbMatrix childMatrix = matrix;
+	if (node->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
+	    const SoBRLDatabaseSource *source =
+		static_cast<const SoBRLDatabaseSource *>(node);
+	    SbBool hasSourceTransform = FALSE;
+	    for (int i = 0; i < group->getNumChildren(); i++) {
+		const SoNode *child = group->getChild(i);
+		if (child && child->isOfType(
+			SoMatrixTransform::getClassTypeId())) {
+		    hasSourceTransform = TRUE;
+		    break;
+		}
+	    }
+	    if (!hasSourceTransform &&
+		    !scene_database_source_uses_realized_placement(source) &&
+		    source->drawMatrixValid.getValue())
+		childMatrix.multRight(source->drawMatrix.getValue());
+	}
 	for (int i = 0; i < group->getNumChildren(); i++) {
+	    const SoNode *child = group->getChild(i);
+	    if (child &&
+		    child->isOfType(SoMatrixTransform::getClassTypeId())) {
+		const SoMatrixTransform *transform =
+		    static_cast<const SoMatrixTransform *>(child);
+		childMatrix.multRight(transform->matrix.getValue());
+		continue;
+	    }
 	    SbBox3f childBounds;
-	    if (scene_bounds_for_node(group->getChild(i), childBounds,
-		    includeOverlays)) {
+	    if (scene_bounds_for_node_transformed(child, childMatrix,
+		    childBounds, includeOverlays)) {
 		bounds.extendBy(childBounds);
 		valid = TRUE;
 	    }
@@ -3553,12 +3813,26 @@ scene_bounds_for_node(const SoNode *node, SbBox3f &bounds,
     if (node->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
 	const SoBRLDatabaseSource *source =
 	    static_cast<const SoBRLDatabaseSource *>(node);
-	if (source->getSourceBounds(bounds))
-	    return TRUE;
-	return FALSE;
+	SbBox3f localBounds;
+	if (!source->getSourceBounds(localBounds))
+	    return FALSE;
+
+	SbMatrix sourceMatrix = matrix;
+	if (source->drawMatrixValid.getValue())
+	    sourceMatrix.multRight(source->drawMatrix.getValue());
+	bounds = scene_bounds_transform_box(localBounds, sourceMatrix);
+	return bounds.isEmpty() ? FALSE : TRUE;
     }
 
     return valid;
+}
+
+static SbBool
+scene_bounds_for_node(const SoNode *node, SbBox3f &bounds,
+	SbBool includeOverlays)
+{
+    return scene_bounds_for_node_transformed(node, SbMatrix::identity(),
+	    bounds, includeOverlays);
 }
 
 static void
