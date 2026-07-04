@@ -10,10 +10,110 @@ visualization modes, but BRL-CAD commands and tests should route through
 explicit operation modes when historical behavior matters.
 
 
+Obol View Object Command Design
+-------------------------------
+
+The retired GED `view obj` grammar mixed several concepts behind one name
+resolver:
+
+* user-authored view annotations such as lines, arrows, labels, axes, and
+  polygons
+* database object display instances and transient edit proxies
+* command-result scene objects such as nirt, rtcheck, check, gqa, overlay, and
+  vdraw outputs
+* type-specific editors whose verbs were nested under `view obj create`
+* style mutation that still branches between feature records and database
+  shape refs
+
+Obol treats these as scene objects with explicit type, capability, scope,
+owner, and lifecycle metadata.  New implementation work should target the
+typed Obol command surface rather than preserving the retired `view obj` and
+`view gobjs` spellings.
+
+The core object record should identify:
+
+* stable object id/name and optional display label
+* class: annotation, database-instance, command-result, edit-proxy, tool, or
+  custom-node
+* scope: shared scene by default, view-local only when explicitly requested
+* owner id/role/generation for command-owned or plugin-owned objects
+* database path and draw mode for database-backed objects
+* capabilities: visible, selectable, pickable, style, arrow, label, axes,
+  polygon, database-instance, command-result, manipulator, editable, exportable
+* geometry or provider kind, plus typed result metadata and per-primitive
+  metadata when available
+* lifecycle policy: persistent user object, command-result replacement group,
+  edit-preview proxy, or view-local tool state
+
+Command code should resolve one typed object handle first, then dispatch
+through object/capability APIs.  It should not independently test "feature
+exists" versus "shape ref exists" and then perform separate mutations.  This
+keeps color, visibility, selection, update/realize, delete, pick metadata, and
+interactive behavior centralized in the Obol/GED draw bridge.
+
+User-facing command shape:
+
+* `view object list [--all|--annotations|--database] [-L] [glob]`
+* `view object info <id> [field]`
+* `view object show <id>`
+* `view object hide <id>`
+* `view object delete <id>`
+* `view object realize <id>`
+* `view object style get <id> <field>`
+* `view object style set <id> <field> <value> ...`
+* `view annotation line create <id> x y z [x y z ...]`
+* `view annotation line append <id> x y z [x y z ...]`
+* `view annotation line remove <id> <zero-based-index> [count]`
+* `view annotation line clear <id>`
+* `view annotation arrow create <id> x y z`
+* `view annotation label create <id> text x y [z] [px py pz]`
+* `view annotation axes create <id> x y z`
+* `view annotation axes pos|size|line_width|axes_color <id> ...`
+* `view polygon create <id> x y [rect|circle|ellipse|square]`
+* `view polygon append|select|move|update|close|open|fill|fill_color|csg|import|export ...`
+* `view db add <path> [--as <id>]`
+* `view db delete <id|path>`
+* future result/tool management should use similarly explicit `view result`
+  and `view tool` command families instead of generic object subverbs
+
+The exact spelling can change during implementation, but the separation of
+responsibilities should not.  Lifecycle verbs operate on objects.  Annotation
+verbs create and edit user geometry.  Database verbs manage database display
+instances.  Result verbs inspect command-owned scene results.  Tool verbs
+manage interactive Coin manipulators or other live behaviors.
+
+Style should be a typed property set, not a collection of ad hoc setters.
+Common fields include visibility, color, line width, point size, opacity,
+selectable, pickable, arrow enabled, arrow width, arrow length, label text,
+polygon fill mode, and command-result highlight policy.  Unsupported fields
+should fail through capability checks with an object type in the diagnostic.
+
+Structured output should be available from the start.  UI callers need a
+stable way to query object class, scope, owner, capabilities, draw mode, style,
+metadata counts, primitive counts, and database target without parsing
+human-oriented strings.  `--json` is the preferred compatibility-neutral
+answer for new consumers.
+
+Migration policy:
+
+* do not keep `view obj`, `view objs`, or `view gobjs` as compatibility
+  aliases
+* keep lifecycle and style operations under `view object`
+* keep user-authored line, arrow, label, and axes operations under
+  `view annotation`
+* keep polygon-specific editing under `view polygon`
+* keep database display/edit-proxy insertion under `view db`
+* retire direct feature/shape-ref branching from command files once the typed
+  object APIs cover the remaining style and info paths
+
+This design is intentionally Obol-only.  BSG support should remain at most a
+legacy fallback for unowned views, not a parallel object-management model.
+
+
 Polygon Fill
 ------------
 
-BRL-CAD's GED `view obj ... polygon fill` command means hatch fill: compute
+BRL-CAD's GED `view polygon fill ...` command means hatch fill: compute
 line segments clipped to the polygon interior, draw those segments using the
 polygon fill color, and keep the polygon edge as a separate outline.  It does
 not mean "draw a translucent triangulated surface" in the legacy command
@@ -47,4 +147,3 @@ The hatch generator still works in the polygon's stored view plane.  Callers
 that need screen-locked hatching should update the polygon's view plane
 explicitly rather than relying on later camera rotations to reinterpret the
 same stored polygon geometry.
-

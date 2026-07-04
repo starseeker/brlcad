@@ -209,13 +209,22 @@ Known risks
   `bsg_ged_draw_source.c` before calling the Obol database-source publisher.
   Keep that boundary visible until those producers can generate source-local
   geometry without legacy transformed intermediates.
-* Legacy `draw.c`, broader view-object style helpers, and lower-level
-  display-stream compatibility helpers still have retained, file/plot, or
-  DM-facing concepts.  View-object deletion now routes through a neutral
+* Legacy `draw.c` and lower-level display-stream compatibility helpers still
+  have retained, file/plot, or DM-facing concepts.  View-object deletion now
+  routes through a neutral
   `ged_draw_view_context_object_remove` facade that centralizes feature,
   overlay, source-group, and transient shape-ref cleanup.  View-object draw
   visibility and update/realize now route through neutral object-level
-  facades that centralize feature-vs-shape-ref dispatch.  rtcheck, NIRT/qray, check overlap,
+  facades that centralize feature-vs-shape-ref dispatch.  The public GED view
+  object command surface has moved off `view obj`, `view objs`, and
+  `view gobjs`; the new Obol-oriented split is `view object` for lifecycle,
+  info, visibility, style, and realization, `view annotation` for line, arrow,
+  label, and axes objects, `view polygon` for polygon editing, and `view db`
+  for database display/edit-proxy insertion.  Line annotations support
+  multi-point `create`/`append`, zero-based point-range `remove`, and `clear`
+  removal.  The remaining view-object work should continue consolidating
+  internals behind typed object/capability APIs, not reintroduce compatibility
+  aliases.  rtcheck, NIRT/qray, check overlap,
   BREP/NMG line diagnostics, GQA line/HUD diagnostics, `vdraw send`, preview
   eye-path output, and the simple line-set command visualizations from
   `gdiff`, `lint`, `joint`, and BOT helper commands are on the command-scene
@@ -301,23 +310,26 @@ Run these after source-local/matrix or database-source changes:
 Next implementation steps
 -------------------------
 
-1. Convert lower-level display-stream compatibility helpers where they are
+1. Finish hardening typed Obol view-object management behind the new command
+   surface.  The old `view obj`, `view objs`, and `view gobjs` public syntax
+   is retired rather than aliased.  Continue moving implementation internals
+   toward one resolver/registry that returns a typed object handle with class,
+   scope, owner, database target, draw mode, lifecycle, and capability
+   metadata, then route style, info, selection, and pick metadata through
+   object-level APIs.  Preserve shared-scene behavior by default unless a
+   command explicitly requests view-local scope.
+2. Convert lower-level display-stream compatibility helpers where they are
    still used as primary command behavior, and legacy direct draw/preview
    callers to command-owned interactive Obol feature providers.  Preview
    eye-path output now uses the shared command-scene line-set helper, and
    NIRT/qray stale result cleanup is centralized under the command-scene prefix
-   cleanup helper, and view-object deletion plus draw/update dispatch use
-   neutral object-level facades.  The next direct-view targets are broader
-   view-object color/arrow style retained-facade work and any remaining command
-   behavior still driven by display-stream compatibility helpers.  Continue rtcheck, NIRT/qray, check overlap,
-   BREP/NMG, and GQA command-scene diagnostics from line-layer/HUD
-   publication to richer command-specific metadata schemas, detail-panel consumption, and
-   richer Coin interaction.  qtcad point/box/ray picks now route
-   command-result line-layer child hits through the primitive resolver; keep
-   extending that resolved pick data into command-specific UI panels and
-   tools.  Preserve current shared-scene behavior unless a command explicitly
-   requests view-local scope.
-2. Extend the GED/libbrlobol command-scene context beyond initial typed
+   cleanup helper.  Continue rtcheck, NIRT/qray, check overlap, BREP/NMG, and
+   GQA command-scene diagnostics from line-layer/HUD publication to richer
+   command-specific metadata schemas, detail-panel consumption, and richer
+   Coin interaction.  qtcad point/box/ray picks now route command-result
+   line-layer child hits through the primitive resolver; keep extending that
+   resolved pick data into command-specific UI panels and tools.
+3. Extend the GED/libbrlobol command-scene context beyond initial typed
    line/HUD/custom-node publication and primitive metadata storage:
    pick-result integration, detail-panel consumption, and richer custom Coin
    scene-object provider contracts.  Typed neutral records should cover common
@@ -326,21 +338,21 @@ Next implementation steps
    metadata, primitive state, transaction callbacks, generation fencing for
    asynchronous results, teardown, selection, and database-edit invalidation
    semantics.
-3. Continue modernizing the libbrlobol evaluated-wire provider internals behind
+4. Continue modernizing the libbrlobol evaluated-wire provider internals behind
    the new `brlobol_evaluated_wire_*` API.  Preserve the direct, mode-aware
    Obol source publication contract, remove remaining old Big-E assumptions
    where possible, and consider internal parallel region/job evaluation with
    per-worker librt resources and deterministic output merging.
-4. Extend the new multi-instance transform coverage into draw-mode state,
+5. Extend the new multi-instance transform coverage into draw-mode state,
    selection, edit, and explicit database-change behavior for direct providers
    without retained mirror state.  The current gate already covers wire and
    shaded repeated-instance geometry reuse, logical visibility/highlight,
    direct source-key stale/redraw, logical redraw fallback avoidance, bounds,
    autoview, and erase cleanup.
-5. Add LoD variants of the repeated-instance regression so mesh LoD staging
+6. Add LoD variants of the repeated-instance regression so mesh LoD staging
    remains view-aware while selection/edit identity stays scene-stable.
-6. Define the persistent geometry cache strategy: key material, database
+7. Define the persistent geometry cache strategy: key material, database
    revision inputs, usage counts, invalidation, and edit/update behavior.
-7. Revisit PCA/canonical mesh matching only after the legacy-driver removal and
+8. Revisit PCA/canonical mesh matching only after the legacy-driver removal and
    deterministic cache policy are stable; treat it as optional duplicate
    detection, not a dependency of core scene correctness.

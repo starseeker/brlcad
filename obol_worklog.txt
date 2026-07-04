@@ -11,6 +11,33 @@ turn-by-turn detail was intentionally collapsed because the root text files had
 grown too large to be useful as handoff documents.  Use git history for exact
 diffs and use `doc/notes/` for durable design contracts.
 
+2026-07-04: Obol view-object command surface replaced
+-----------------------------------------------------
+
+The `view obj`, `view objs`, and `view gobjs` public command spellings were
+retired instead of kept as compatibility aliases.  The replacement surface is
+split by responsibility: `view object` handles lifecycle, info, visibility,
+style, and realization; `view annotation` handles user-authored line, arrow,
+label, and axes objects; `view polygon` handles polygon editing; and `view db`
+handles database display/edit-proxy insertion.
+
+Line annotations now accept one or more point triples in `create` and
+`append`, so callers can create an actual line without a separate append
+round-trip.  `view annotation line remove` removes a zero-based point range,
+and `view annotation line clear` removes the line feature.
+
+The old command surface was a design problem, not just a missing color/arrow
+style facade.  It mixed annotations, database shape refs, transient edit
+proxies, command-result visuals, and type-specific editors behind one resolver
+and then branched on feature-vs-shape-ref state inside the command
+implementation.
+
+`doc/notes/brl_obol_view_operations.txt` now records the Obol-only command
+model.  The next implementation hardening step is to keep consolidating the
+internals behind a typed object resolver/registry with explicit class, scope,
+owner, database target, lifecycle, draw mode, capabilities, style, metadata,
+and pick state, without reintroducing old spelling aliases.
+
 2026-07-04: multi-instance transform reuse hardened
 ---------------------------------------------------
 
@@ -802,10 +829,9 @@ and the pivot guard rejects reintroducing that direct fallback there.
 View-object deletion now routes through
 `ged_draw_view_context_object_remove`.  The facade owns feature removal,
 Obol overlay deletion, source-group cleanup, database-object protection, and
-transient shape-ref release; `view obj remove` calls it directly, and the
-deprecated `view gobjs del` path delegates to `view obj remove` instead of
-performing direct feature removal.  The pivot guard now rejects reintroducing
-those direct cleanup calls in the command files.
+transient shape-ref release; the public command surface now reaches it through
+`view object delete` and `view db delete`.  The pivot guard rejects
+reintroducing direct cleanup calls in the command files.
 
 View-object draw visibility and update now route through
 `ged_draw_view_context_object_visible_get`,

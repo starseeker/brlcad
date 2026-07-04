@@ -79,7 +79,7 @@ _poly_cmd_create(void *bs, int argc, const char **argv)
 {
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    const char *usage_string = "view obj create <objname> polygon create x y [circ|ell|rect|sq]";
+    const char *usage_string = "view polygon create <name> x y [circ|ell|rect|sq]";
     const char *purpose_string = "create polygon";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
@@ -144,7 +144,7 @@ _poly_cmd_select(void *bs, int argc, const char **argv)
 {
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    const char *usage_string = "view obj create <objname> polygon select [contour] x y";
+    const char *usage_string = "view polygon select <name> [contour] x y";
     const char *purpose_string = "select polygon point closest to point x,y";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
@@ -208,7 +208,7 @@ _poly_cmd_append(void *bs, int argc, const char **argv)
 {
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    const char *usage_string = "view obj create <objname> polygon append [contour] x y";
+    const char *usage_string = "view polygon append <name> [contour] x y";
     const char *purpose_string = "append point to polygon";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
@@ -271,7 +271,7 @@ _poly_cmd_move(void *bs, int argc, const char **argv)
 {
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    const char *usage_string = "view obj create <objname> polygon move x y";
+    const char *usage_string = "view polygon move <name> x y";
     const char *purpose_string = "move selected polygon point to x,y";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
@@ -321,7 +321,7 @@ _poly_cmd_clear(void *bs, int argc, const char **argv)
 {
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    const char *usage_string = "view obj create <objname> polygon clear";
+    const char *usage_string = "view polygon clear <name>";
     const char *purpose_string = "clear all modification flags";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
@@ -350,7 +350,7 @@ _poly_cmd_close(void *bs, int argc, const char **argv)
 {
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    const char *usage_string = "view obj create <objname> polygon close [ind]";
+    const char *usage_string = "view polygon close <name> [ind]";
     const char *purpose_string = "contour -> polygon";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
@@ -404,7 +404,7 @@ _poly_cmd_open(void *bs, int argc, const char **argv)
 {
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    const char *usage_string = "view obj create <objname> polygon open [ind]";
+    const char *usage_string = "view polygon open <name> [ind]";
     const char *purpose_string = "polygon -> contour";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
@@ -459,7 +459,7 @@ _poly_cmd_area(void *bs, int argc, const char **argv)
 {
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    const char *usage_string = "view obj create <objname> polygon area";
+    const char *usage_string = "view polygon area <name>";
     const char *purpose_string = "report polygon area";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
@@ -493,7 +493,7 @@ _poly_cmd_overlap(void *bs, int argc, const char **argv)
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
     struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
-    const char *usage_string = "view obj create <obj1> polygon overlap <obj2>";
+    const char *usage_string = "view polygon overlap <obj1> <obj2>";
     const char *purpose_string = "report if two polygons overlap";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
@@ -537,7 +537,7 @@ _poly_cmd_import(void *bs, int argc, const char **argv)
 {
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    const char *usage_string = "view obj create <objname> polygon import <sketchname>";
+    const char *usage_string = "view polygon import <name> <sketchname>";
     const char *purpose_string = "import polygon from sketch";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
@@ -582,7 +582,7 @@ _poly_cmd_export(void *bs, int argc, const char **argv)
 {
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    const char *usage_string = "view obj create <objname> polygon export <sketchname>";
+    const char *usage_string = "view polygon export <name> <sketchname>";
     const char *purpose_string = "export polygon to sketch";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
@@ -626,7 +626,7 @@ _poly_cmd_fill(void *bs, int argc, const char **argv)
 {
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    const char *usage_string = "view obj create <obj1> polygon fill [dx dy spacing]";
+    const char *usage_string = "view polygon fill <name> [dx dy spacing]";
     const char *purpose_string = "use lines to visualize polygon interior";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
@@ -682,7 +682,7 @@ _poly_cmd_fill_color(void *bs, int argc, const char **argv)
 {
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    const char *usage_string = "view obj create <obj1> polygon fill_color [r/g/b]";
+    const char *usage_string = "view polygon fill_color <name> [r/g/b]";
     const char *purpose_string = "customize fill lines color (if fill is enabled)";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
@@ -730,7 +730,7 @@ _poly_cmd_csg(void *bs, int argc, const char **argv)
 {
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    const char *usage_string = "view obj create <obj1> polygon csg <u|-|+> <obj2>";
+    const char *usage_string = "view polygon csg <obj1> <u|-|+> <obj2>";
     const char *purpose_string = "replace obj1's polygon with the result of obj2 u/-/+ obj1";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
@@ -812,7 +812,7 @@ _view_cmd_polygons(void *bs, int argc, const char **argv)
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
 
-    const char *usage_string = "view obj create <objname> polygon [options] [args]";
+    const char *usage_string = "view polygon <verb> <name> [options] [args]";
     const char *purpose_string = "manipulate view polygons";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
@@ -851,7 +851,7 @@ _view_cmd_polygons(void *bs, int argc, const char **argv)
 	return GED_HELP;
     }
 
-    return _ged_subcmd_exec(gedp, d, _poly_cmds, "view obj <objname>", "[options] subcommand [args]", gd, argc, argv, help, cmd_pos);
+    return _ged_subcmd_exec(gedp, d, _poly_cmds, "view polygon <name>", "[options] subcommand [args]", gd, argc, argv, help, cmd_pos);
 }
 
 /*

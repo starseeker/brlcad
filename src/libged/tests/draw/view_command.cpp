@@ -62,6 +62,25 @@ assert_view_ok(struct ged *gedp, int argc, const char **argv, int line)
 #define ASSERT_VIEW_OK(gedp, argc, argv) assert_view_ok((gedp), (argc), (argv), __LINE__)
 
 static void
+assert_feature_point_count(void *view, const char *name, size_t expected, int line)
+{
+    nchecks++;
+    point_t *points = NULL;
+    size_t point_count = 0;
+    int copied = ged_draw_view_context_feature_points_copy(view, name,
+	    &points, &point_count);
+    if (!copied || point_count != expected) {
+	bu_log("FAIL [%s:%d] %s point count expected %zu, got %zu\n",
+		__FILE__, line, name, expected, point_count);
+	nfails++;
+    }
+    if (points)
+	bu_free(points, "view command test copied feature points");
+}
+
+#define ASSERT_FEATURE_POINT_COUNT(view, name, expected) assert_feature_point_count((view), (name), (expected), __LINE__)
+
+static void
 refresh_scene_records(struct ged *gedp, void *v)
 {
     struct ged_draw_transaction txn =
@@ -164,80 +183,94 @@ main(int argc, const char **argv)
 
     test_command_report_record_consistency(gedp, views[0]);
 
-    const char *c0[] = {"view", "obj", "create", "u_line", "line", "create", "0", "0", "0", NULL};
-    ASSERT(run_view(gedp, 9, c0) == BRLCAD_OK);
+    const char *c0[] = {"view", "annotation", "line", "create", "u_line", "0", "0", "0", "1", "0", "0", NULL};
+    ASSERT(run_view(gedp, 11, c0) == BRLCAD_OK);
+    ASSERT_FEATURE_POINT_COUNT(views[0], "u_line", 2);
 
-    const char *c1[] = {"view", "obj", "info", "u_line", "type", NULL};
+    const char *lc0[] = {"view", "annotation", "line", "create", "u_line_edit", "0", "0", "0", "1", "0", "0", NULL};
+    ASSERT_VIEW_OK(gedp, 11, lc0);
+    ASSERT_FEATURE_POINT_COUNT(views[0], "u_line_edit", 2);
+    const char *lc1[] = {"view", "annotation", "line", "append", "u_line_edit", "2", "0", "0", "3", "0", "0", NULL};
+    ASSERT_VIEW_OK(gedp, 11, lc1);
+    ASSERT_FEATURE_POINT_COUNT(views[0], "u_line_edit", 4);
+    const char *lc2[] = {"view", "annotation", "line", "remove", "u_line_edit", "1", "2", NULL};
+    ASSERT_VIEW_OK(gedp, 7, lc2);
+    ASSERT_FEATURE_POINT_COUNT(views[0], "u_line_edit", 2);
+    const char *lc3[] = {"view", "annotation", "line", "clear", "u_line_edit", NULL};
+    ASSERT_VIEW_OK(gedp, 5, lc3);
+    ASSERT(ged_draw_view_context_feature_exists(views[0], "u_line_edit") == 0);
+
+    const char *c1[] = {"view", "object", "info", "u_line", "type", NULL};
     ASSERT(run_view(gedp, 5, c1) == BRLCAD_OK);
 
-    const char *c2[] = {"view", "obj", "set", "u_line", "draw", "0", NULL};
-    ASSERT(run_view(gedp, 6, c2) == BRLCAD_OK);
-    const char *c3[] = {"view", "obj", "info", "u_line", "draw", NULL};
+    const char *c2[] = {"view", "object", "hide", "u_line", NULL};
+    ASSERT(run_view(gedp, 4, c2) == BRLCAD_OK);
+    const char *c3[] = {"view", "object", "info", "u_line", "visible", NULL};
     ASSERT(run_view(gedp, 5, c3) == BRLCAD_OK);
     ASSERT(result_str(gedp).find("DOWN") != std::string::npos);
-    const char *c3a[] = {"view", "obj", "set", "u_line", "draw", "1", NULL};
-    ASSERT(run_view(gedp, 6, c3a) == BRLCAD_OK);
-    const char *c3b[] = {"view", "obj", "info", "u_line", "draw", NULL};
+    const char *c3a[] = {"view", "object", "show", "u_line", NULL};
+    ASSERT(run_view(gedp, 4, c3a) == BRLCAD_OK);
+    const char *c3b[] = {"view", "object", "info", "u_line", "visible", NULL};
     ASSERT(run_view(gedp, 5, c3b) == BRLCAD_OK);
     ASSERT(result_str(gedp).find("UP") != std::string::npos);
 
-    const char *c3c[] = {"view", "obj", "set", "u_line", "color", "10/20/30", NULL};
-    ASSERT(run_view(gedp, 6, c3c) == BRLCAD_OK);
-    const char *c3d[] = {"view", "obj", "info", "u_line", "color", NULL};
+    const char *c3c[] = {"view", "object", "style", "set", "u_line", "color", "10/20/30", NULL};
+    ASSERT(run_view(gedp, 7, c3c) == BRLCAD_OK);
+    const char *c3d[] = {"view", "object", "info", "u_line", "color", NULL};
     ASSERT(run_view(gedp, 5, c3d) == BRLCAD_OK);
     ASSERT(result_str(gedp).find("10/20/30") != std::string::npos);
 
-    const char *c4[] = {"view", "obj", "list", "u_*", NULL};
+    const char *c4[] = {"view", "object", "list", "u_*", NULL};
     ASSERT(run_view(gedp, 4, c4) == BRLCAD_OK);
     ASSERT(result_str(gedp).find("u_line") != std::string::npos);
 
-    const char *c5[] = {"view", "obj", "set", "u_line", "arrow", "1", NULL};
-    ASSERT(run_view(gedp, 6, c5) == BRLCAD_OK);
-    const char *c5a[] = {"view", "obj", "set", "u_line", "update", "12", "34", NULL};
-    ASSERT(run_view(gedp, 7, c5a) == BRLCAD_OK);
+    const char *c5[] = {"view", "object", "style", "set", "u_line", "arrow", "1", NULL};
+    ASSERT(run_view(gedp, 7, c5) == BRLCAD_OK);
+    const char *c5a[] = {"view", "object", "realize", "u_line", "12", "34", NULL};
+    ASSERT(run_view(gedp, 6, c5a) == BRLCAD_OK);
     const char *c5b[] = {"view", "vZ", "-N", "u_line", NULL};
     ASSERT(run_view(gedp, 4, c5b) == BRLCAD_OK);
     ASSERT(!result_str(gedp).empty());
 
-    const char *a0[] = {"view", "obj", "create", "u_axes", "axes", "create", "1", "2", "3", NULL};
-    ASSERT_VIEW_OK(gedp, 9, a0);
-    const char *a1[] = {"view", "obj", "create", "u_axes", "axes", "pos", NULL};
-    ASSERT_VIEW_OK(gedp, 6, a1);
+    const char *a0[] = {"view", "annotation", "axes", "create", "u_axes", "1", "2", "3", NULL};
+    ASSERT_VIEW_OK(gedp, 8, a0);
+    const char *a1[] = {"view", "annotation", "axes", "pos", "u_axes", NULL};
+    ASSERT_VIEW_OK(gedp, 5, a1);
     ASSERT(result_str(gedp).find("1.000000 2.000000 3.000000") != std::string::npos);
-    const char *a2[] = {"view", "obj", "create", "u_axes", "axes", "pos", "4", "5", "6", NULL};
-    ASSERT_VIEW_OK(gedp, 9, a2);
-    const char *a3[] = {"view", "obj", "create", "u_axes", "axes", "size", "12.5", NULL};
-    ASSERT_VIEW_OK(gedp, 7, a3);
-    const char *a4[] = {"view", "obj", "create", "u_axes", "axes", "size", NULL};
-    ASSERT_VIEW_OK(gedp, 6, a4);
+    const char *a2[] = {"view", "annotation", "axes", "pos", "u_axes", "4", "5", "6", NULL};
+    ASSERT_VIEW_OK(gedp, 8, a2);
+    const char *a3[] = {"view", "annotation", "axes", "size", "u_axes", "12.5", NULL};
+    ASSERT_VIEW_OK(gedp, 6, a3);
+    const char *a4[] = {"view", "annotation", "axes", "size", "u_axes", NULL};
+    ASSERT_VIEW_OK(gedp, 5, a4);
     ASSERT(result_str(gedp).find("12.500000") != std::string::npos);
-    const char *a5[] = {"view", "obj", "create", "u_axes", "axes", "line_width", "3", NULL};
-    ASSERT_VIEW_OK(gedp, 7, a5);
-    const char *a6[] = {"view", "obj", "create", "u_axes", "axes", "line_width", NULL};
-    ASSERT_VIEW_OK(gedp, 6, a6);
+    const char *a5[] = {"view", "annotation", "axes", "line_width", "u_axes", "3", NULL};
+    ASSERT_VIEW_OK(gedp, 6, a5);
+    const char *a6[] = {"view", "annotation", "axes", "line_width", "u_axes", NULL};
+    ASSERT_VIEW_OK(gedp, 5, a6);
     ASSERT(result_str(gedp).find("3") != std::string::npos);
-    const char *a7[] = {"view", "obj", "create", "u_axes", "axes", "axes_color", "10", "20", "30", NULL};
-    ASSERT_VIEW_OK(gedp, 9, a7);
-    const char *a8[] = {"view", "obj", "create", "u_axes", "axes", "axes_color", NULL};
-    ASSERT_VIEW_OK(gedp, 6, a8);
+    const char *a7[] = {"view", "annotation", "axes", "axes_color", "u_axes", "10", "20", "30", NULL};
+    ASSERT_VIEW_OK(gedp, 8, a7);
+    const char *a8[] = {"view", "annotation", "axes", "axes_color", "u_axes", NULL};
+    ASSERT_VIEW_OK(gedp, 5, a8);
     ASSERT(result_str(gedp).find("10 20 30") != std::string::npos);
 
-    const char *p0[] = {"view", "obj", "create", "u_poly", "polygon", "create", "10", "10", NULL};
-    ASSERT_VIEW_OK(gedp, 8, p0);
-    const char *p1[] = {"view", "obj", "create", "u_poly", "polygon", "append", "30", "10", NULL};
-    ASSERT_VIEW_OK(gedp, 8, p1);
-    const char *p2[] = {"view", "obj", "create", "u_poly", "polygon", "append", "30", "30", NULL};
-    ASSERT_VIEW_OK(gedp, 8, p2);
-    const char *p3[] = {"view", "obj", "create", "u_poly", "polygon", "append", "10", "30", NULL};
-    ASSERT_VIEW_OK(gedp, 8, p3);
-    const char *p4[] = {"view", "obj", "create", "u_poly", "polygon", "close", NULL};
-    ASSERT_VIEW_OK(gedp, 6, p4);
-    const char *p5[] = {"view", "obj", "create", "u_poly", "polygon", "fill", "1", "0", "0.1", NULL};
-    ASSERT_VIEW_OK(gedp, 9, p5);
-    const char *p6[] = {"view", "obj", "create", "u_poly", "polygon", "fill_color", "10/20/30", NULL};
-    ASSERT_VIEW_OK(gedp, 7, p6);
-    const char *p7[] = {"view", "obj", "create", "u_poly", "polygon", "area", NULL};
-    ASSERT_VIEW_OK(gedp, 6, p7);
+    const char *p0[] = {"view", "polygon", "create", "u_poly", "10", "10", NULL};
+    ASSERT_VIEW_OK(gedp, 6, p0);
+    const char *p1[] = {"view", "polygon", "append", "u_poly", "30", "10", NULL};
+    ASSERT_VIEW_OK(gedp, 6, p1);
+    const char *p2[] = {"view", "polygon", "append", "u_poly", "30", "30", NULL};
+    ASSERT_VIEW_OK(gedp, 6, p2);
+    const char *p3[] = {"view", "polygon", "append", "u_poly", "10", "30", NULL};
+    ASSERT_VIEW_OK(gedp, 6, p3);
+    const char *p4[] = {"view", "polygon", "close", "u_poly", NULL};
+    ASSERT_VIEW_OK(gedp, 4, p4);
+    const char *p5[] = {"view", "polygon", "fill", "u_poly", "1", "0", "0.1", NULL};
+    ASSERT_VIEW_OK(gedp, 7, p5);
+    const char *p6[] = {"view", "polygon", "fill_color", "u_poly", "10/20/30", NULL};
+    ASSERT_VIEW_OK(gedp, 5, p6);
+    const char *p7[] = {"view", "polygon", "area", "u_poly", NULL};
+    ASSERT_VIEW_OK(gedp, 4, p7);
     ASSERT(!result_str(gedp).empty());
     rt_view_polygon_ref poly_ref =
 	rt_view_context_polygon_find(views[0], "u_poly");
@@ -250,18 +283,18 @@ main(int argc, const char **argv)
     ASSERT(poly_rec.first_contour_open == 0);
     ASSERT(poly_rec.fill_flag == 1);
 
-    const char *c6[] = {"view", "-V", "V0", "obj", "-L", "create", "l_line", "line", "create", "0", "0", "0", NULL};
-    ASSERT(run_view(gedp, 12, c6) == BRLCAD_OK);
-    const char *c7[] = {"view", "-V", "V0", "obj", "list", NULL};
+    const char *c6[] = {"view", "-V", "V0", "annotation", "-L", "line", "create", "l_line", "0", "0", "0", NULL};
+    ASSERT(run_view(gedp, 11, c6) == BRLCAD_OK);
+    const char *c7[] = {"view", "-V", "V0", "object", "list", NULL};
     ASSERT(run_view(gedp, 5, c7) == BRLCAD_OK);
     ASSERT(result_str(gedp).find("l_line") != std::string::npos);
-    const char *c8[] = {"view", "-V", "V1", "obj", "list", NULL};
+    const char *c8[] = {"view", "-V", "V1", "object", "list", NULL};
     ASSERT(run_view(gedp, 5, c8) == BRLCAD_OK);
     ASSERT(result_str(gedp).find("l_line") == std::string::npos);
 
-    const char *c11[] = {"view", "obj", "-g", "all.g", "create", "g2", NULL};
+    const char *c11[] = {"view", "db", "add", "all.g", "--as", "g2", NULL};
     ASSERT(run_view(gedp, 6, c11) == BRLCAD_OK);
-    const char *c12[] = {"view", "obj", "remove", "g2", NULL};
+    const char *c12[] = {"view", "db", "delete", "g2", NULL};
     ASSERT(run_view(gedp, 4, c12) == BRLCAD_OK);
 
     bu_vls_free(&gpath);

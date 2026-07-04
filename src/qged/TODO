@@ -126,7 +126,7 @@ X 21.  Figure out how to do a button bar in Qt
     that's what the app wants to do) edit operations being applied to the view feature, and
     then apply writing the altered db internal from the view feature back to the .g file.  (If
     the app suppressed the old wireframe, it will also need to restore the new version since
-    applying the view obj changes and removing the view obj won't automatically draw the final
+    applying polygon view-object changes and removing the editor state won't automatically draw the final
     database object.  The "reject" operation would just be removing the view feature on which
     editing is being performed.
 

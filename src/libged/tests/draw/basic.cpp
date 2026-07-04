@@ -54,7 +54,7 @@ extern "C" void scene_clear(struct ged *gedp);
 static int
 view_polygon_csg_semantic_check(struct ged *gedp, const char *name)
 {
-    const char *s_av[7] = {"view", "obj", "list", name, NULL};
+    const char *s_av[7] = {"view", "object", "list", name, NULL};
     bu_vls_trunc(gedp->ged_result_str, 0);
     if (ged_exec_view(gedp, 4, s_av) != BRLCAD_OK) {
 	bu_log("view polygon semantic check failed: list command error for %s: %s\n",
@@ -79,24 +79,21 @@ poly_circ(struct ged *gedp)
 {
     const char *s_av[15] = {NULL};
     s_av[0] = "view";
-    s_av[1] = "obj";
+    s_av[1] = "polygon";
     s_av[2] = "create";
     s_av[3] = "c1";
-    s_av[4] = "polygon";
-    s_av[5] = "create";
-    s_av[6] = "256";
-    s_av[7] = "256";
-    s_av[8] = "circle";
-    s_av[9] = NULL;
-    ged_exec_view(gedp, 9, s_av);
-
-    s_av[2] = "set";
-    s_av[3] = "c1";
-    s_av[4] = "update";
-    s_av[5] = "300";
-    s_av[6] = "300";
+    s_av[4] = "256";
+    s_av[5] = "256";
+    s_av[6] = "circle";
     s_av[7] = NULL;
     ged_exec_view(gedp, 7, s_av);
+
+    s_av[2] = "update";
+    s_av[3] = "c1";
+    s_av[4] = "300";
+    s_av[5] = "300";
+    s_av[6] = NULL;
+    ged_exec_view(gedp, 6, s_av);
 }
 
 /* Creates a view ellipse "e1" */
@@ -105,24 +102,21 @@ poly_ell(struct ged *gedp)
 {
     const char *s_av[15] = {NULL};
     s_av[0] = "view";
-    s_av[1] = "obj";
+    s_av[1] = "polygon";
     s_av[2] = "create";
     s_av[3] = "e1";
-    s_av[4] = "polygon";
-    s_av[5] = "create";
-    s_av[6] = "300";
-    s_av[7] = "256";
-    s_av[8] = "ellipse";
-    s_av[9] = NULL;
-    ged_exec_view(gedp, 9, s_av);
-
-    s_av[2] = "set";
-    s_av[3] = "e1";
-    s_av[4] = "update";
-    s_av[5] = "400";
-    s_av[6] = "300";
+    s_av[4] = "300";
+    s_av[5] = "256";
+    s_av[6] = "ellipse";
     s_av[7] = NULL;
     ged_exec_view(gedp, 7, s_av);
+
+    s_av[2] = "update";
+    s_av[3] = "e1";
+    s_av[4] = "400";
+    s_av[5] = "300";
+    s_av[6] = NULL;
+    ged_exec_view(gedp, 6, s_av);
 }
 
 /* Creates a view square "s1" */
@@ -131,24 +125,21 @@ poly_sq(struct ged *gedp)
 {
     const char *s_av[15] = {NULL};
     s_av[0] = "view";
-    s_av[1] = "obj";
+    s_av[1] = "polygon";
     s_av[2] = "create";
     s_av[3] = "s1";
-    s_av[4] = "polygon";
-    s_av[5] = "create";
-    s_av[6] = "200";
-    s_av[7] = "200";
-    s_av[8] = "square";
-    s_av[9] = NULL;
-    ged_exec_view(gedp, 9, s_av);
-
-    s_av[2] = "set";
-    s_av[3] = "s1";
-    s_av[4] = "update";
-    s_av[5] = "310";
-    s_av[6] = "310";
+    s_av[4] = "200";
+    s_av[5] = "200";
+    s_av[6] = "square";
     s_av[7] = NULL;
     ged_exec_view(gedp, 7, s_av);
+
+    s_av[2] = "update";
+    s_av[3] = "s1";
+    s_av[4] = "310";
+    s_av[5] = "310";
+    s_av[6] = NULL;
+    ged_exec_view(gedp, 6, s_av);
 }
 
 /* Creates a view rectangle "r1" */
@@ -157,24 +148,21 @@ poly_rect(struct ged *gedp)
 {
     const char *s_av[15] = {NULL};
     s_av[0] = "view";
-    s_av[1] = "obj";
+    s_av[1] = "polygon";
     s_av[2] = "create";
     s_av[3] = "r1";
-    s_av[4] = "polygon";
-    s_av[5] = "create";
-    s_av[6] = "190";
-    s_av[7] = "190";
-    s_av[8] = "rectangle";
-    s_av[9] = NULL;
-    ged_exec_view(gedp, 9, s_av);
-
-    s_av[2] = "set";
-    s_av[3] = "r1";
-    s_av[4] = "update";
-    s_av[5] = "380";
-    s_av[6] = "290";
+    s_av[4] = "190";
+    s_av[5] = "190";
+    s_av[6] = "rectangle";
     s_av[7] = NULL;
     ged_exec_view(gedp, 7, s_av);
+
+    s_av[2] = "update";
+    s_av[3] = "r1";
+    s_av[4] = "380";
+    s_av[5] = "290";
+    s_av[6] = NULL;
+    ged_exec_view(gedp, 6, s_av);
 }
 
 
@@ -184,40 +172,40 @@ poly_general(struct ged *gedp)
 {
     const char *s_av[15] = {NULL};
     s_av[0] = "view";
-    s_av[1] = "obj";
+    s_av[1] = "polygon";
     s_av[2] = "create";
     s_av[3] = "g1";
-    s_av[4] = "polygon";
-    s_av[5] = "create";
-    s_av[6] = "190";
-    s_av[7] = "350";
-    s_av[8] = NULL;
-    ged_exec_view(gedp, 8, s_av);
-
-    s_av[5] = "append";
-    s_av[6] = "400";
-    s_av[7] = "300";
-    ged_exec_view(gedp, 8, s_av);
-
-    s_av[6] = "380";
-    s_av[7] = "300";
-    ged_exec_view(gedp, 8, s_av);
-
-    s_av[6] = "230";
-    s_av[7] = "245";
-    ged_exec_view(gedp, 8, s_av);
-
-    s_av[6] = "180";
-    s_av[7] = "150";
-    ged_exec_view(gedp, 8, s_av);
-
-    s_av[6] = "210";
-    s_av[7] = "300";
-    ged_exec_view(gedp, 8, s_av);
-
-    s_av[5] = "close";
+    s_av[4] = "190";
+    s_av[5] = "350";
     s_av[6] = NULL;
     ged_exec_view(gedp, 6, s_av);
+
+    s_av[2] = "append";
+    s_av[3] = "g1";
+    s_av[4] = "400";
+    s_av[5] = "300";
+    ged_exec_view(gedp, 6, s_av);
+
+    s_av[4] = "380";
+    s_av[5] = "300";
+    ged_exec_view(gedp, 6, s_av);
+
+    s_av[4] = "230";
+    s_av[5] = "245";
+    ged_exec_view(gedp, 6, s_av);
+
+    s_av[4] = "180";
+    s_av[5] = "150";
+    ged_exec_view(gedp, 6, s_av);
+
+    s_av[4] = "210";
+    s_av[5] = "300";
+    ged_exec_view(gedp, 6, s_av);
+
+    s_av[2] = "close";
+    s_av[3] = "g1";
+    s_av[4] = NULL;
+    ged_exec_view(gedp, 4, s_av);
 }
 
 int
@@ -383,20 +371,19 @@ main(int ac, char *av[]) {
     bu_log("Testing UP and DOWN visibility control of drawn objects...\n");
     poly_general(gedp);
     s_av[0] = "view";
-    s_av[1] = "obj";
-    s_av[2] = "set";
+    s_av[1] = "object";
+    s_av[2] = "hide";
     s_av[3] = "g1";
-    s_av[4] = "draw";
-    s_av[5] = "DOWN";
-    s_av[6] = NULL;
-    ged_exec_view(gedp, 6, s_av);
+    s_av[4] = NULL;
+    ged_exec_view(gedp, 4, s_av);
     // Should be an empty scene - make sure we don't clear after this
     // comparison, as we want to re-enable the drawing of this object.
     ret += img_cmp(0, gedp, av[1], false, clear_images, soft_fail, 0, "clear", "v");
 
-    s_av[5] = "UP";
-    s_av[6] = NULL;
-    ged_exec_view(gedp, 6, s_av);
+    s_av[2] = "show";
+    s_av[3] = "g1";
+    s_av[4] = NULL;
+    ged_exec_view(gedp, 4, s_av);
     // Enabling the draw should produce the same visual as the general polygon
     // draw test above, so we can check using the same image
     ret += img_cmp(6, gedp, av[1], true, clear_images, soft_fail, POLYGON_ADIFF_THRES, "clear", "v");
@@ -407,25 +394,21 @@ main(int ac, char *av[]) {
     poly_circ(gedp);
     poly_ell(gedp);
     s_av[0] = "view";
-    s_av[1] = "obj";
-    s_av[2] = "create";
+    s_av[1] = "polygon";
+    s_av[2] = "csg";
     s_av[3] = "c1";
-    s_av[4] = "polygon";
-    s_av[5] = "csg";
-    s_av[6] = "u";
-    s_av[7] = "e1";
-    s_av[8] = NULL;
-    ged_exec_view(gedp, 8, s_av);
+    s_av[4] = "u";
+    s_av[5] = "e1";
+    s_av[6] = NULL;
+    ged_exec_view(gedp, 6, s_av);
 
     // Result is stored in c1 - turn off e1
     s_av[0] = "view";
-    s_av[1] = "obj";
-    s_av[2] = "set";
+    s_av[1] = "object";
+    s_av[2] = "hide";
     s_av[3] = "e1";
-    s_av[4] = "draw";
-    s_av[5] = "DOWN";
-    s_av[6] = NULL;
-    ged_exec_view(gedp, 6, s_av);
+    s_av[4] = NULL;
+    ged_exec_view(gedp, 4, s_av);
 
     ret += view_polygon_csg_semantic_check(gedp, "c1");
     scene_clear(gedp);
@@ -436,25 +419,21 @@ main(int ac, char *av[]) {
     poly_circ(gedp);
     poly_ell(gedp);
     s_av[0] = "view";
-    s_av[1] = "obj";
-    s_av[2] = "create";
+    s_av[1] = "polygon";
+    s_av[2] = "csg";
     s_av[3] = "c1";
-    s_av[4] = "polygon";
-    s_av[5] = "csg";
-    s_av[6] = "-";
-    s_av[7] = "e1";
-    s_av[8] = NULL;
-    ged_exec_view(gedp, 8, s_av);
+    s_av[4] = "-";
+    s_av[5] = "e1";
+    s_av[6] = NULL;
+    ged_exec_view(gedp, 6, s_av);
 
     // Result is stored in c1 - turn off e1
     s_av[0] = "view";
-    s_av[1] = "obj";
-    s_av[2] = "set";
+    s_av[1] = "object";
+    s_av[2] = "hide";
     s_av[3] = "e1";
-    s_av[4] = "draw";
-    s_av[5] = "DOWN";
-    s_av[6] = NULL;
-    ged_exec_view(gedp, 6, s_av);
+    s_av[4] = NULL;
+    ged_exec_view(gedp, 4, s_av);
 
     ret += view_polygon_csg_semantic_check(gedp, "c1");
     scene_clear(gedp);
@@ -465,25 +444,21 @@ main(int ac, char *av[]) {
     poly_circ(gedp);
     poly_ell(gedp);
     s_av[0] = "view";
-    s_av[1] = "obj";
-    s_av[2] = "create";
+    s_av[1] = "polygon";
+    s_av[2] = "csg";
     s_av[3] = "c1";
-    s_av[4] = "polygon";
-    s_av[5] = "csg";
-    s_av[6] = "+";
-    s_av[7] = "e1";
-    s_av[8] = NULL;
-    ged_exec_view(gedp, 8, s_av);
+    s_av[4] = "+";
+    s_av[5] = "e1";
+    s_av[6] = NULL;
+    ged_exec_view(gedp, 6, s_av);
 
     // Result is stored in c1 - turn off e1
     s_av[0] = "view";
-    s_av[1] = "obj";
-    s_av[2] = "set";
+    s_av[1] = "object";
+    s_av[2] = "hide";
     s_av[3] = "e1";
-    s_av[4] = "draw";
-    s_av[5] = "DOWN";
-    s_av[6] = NULL;
-    ged_exec_view(gedp, 6, s_av);
+    s_av[4] = NULL;
+    ged_exec_view(gedp, 4, s_av);
 
     ret += view_polygon_csg_semantic_check(gedp, "c1");
     scene_clear(gedp);
@@ -494,13 +469,14 @@ main(int ac, char *av[]) {
     bu_log("Testing setting view feature color...\n");
     poly_general(gedp);
     s_av[0] = "view";
-    s_av[1] = "obj";
-    s_av[2] = "set";
-    s_av[3] = "g1";
-    s_av[4] = "color";
-    s_av[5] = "0/255/0";
-    s_av[6] = NULL;
-    ged_exec_view(gedp, 6, s_av);
+    s_av[1] = "object";
+    s_av[2] = "style";
+    s_av[3] = "set";
+    s_av[4] = "g1";
+    s_av[5] = "color";
+    s_av[6] = "0/255/0";
+    s_av[7] = NULL;
+    ged_exec_view(gedp, 7, s_av);
 
     // See if we got what we expected
     ret += img_cmp(10, gedp, av[1], true, clear_images, soft_fail, POLYGON_ADIFF_THRES, "clear", "v");
@@ -510,16 +486,14 @@ main(int ac, char *av[]) {
     bu_log("Testing enabling polygon fill...\n");
     poly_general(gedp);
     s_av[0] = "view";
-    s_av[1] = "obj";
-    s_av[2] = "create";
+    s_av[1] = "polygon";
+    s_av[2] = "fill";
     s_av[3] = "g1";
-    s_av[4] = "polygon";
-    s_av[5] = "fill";
-    s_av[6] = "1";
-    s_av[7] = "10";
-    s_av[8] = "3";
-    s_av[9] = NULL;
-    ged_exec_view(gedp, 9, s_av);
+    s_av[4] = "1";
+    s_av[5] = "10";
+    s_av[6] = "3";
+    s_av[7] = NULL;
+    ged_exec_view(gedp, 7, s_av);
 
     // See if we got what we expected
     ret += img_cmp(11, gedp, av[1], true, clear_images, soft_fail, POLYGON_ADIFF_THRES, "clear", "v");
@@ -537,20 +511,19 @@ main(int ac, char *av[]) {
     ged_exec_autoview(gedp, 1, s_av);
 
     s_av[0] = "view";
-    s_av[1] = "obj";
-    s_av[2] = "create";
-    s_av[3] = "lbl1";
-    s_av[4] = "label";
-    s_av[5] = "create";
-    s_av[6] = "LIGHT";
-    s_av[7] = "110.41";
-    s_av[8] = "-32.2352";
-    s_av[9] = "90.4497";
-    s_av[10] = "20.1576";
-    s_av[11] = "-13.526";
-    s_av[12] = "8";
-    s_av[13] = NULL;
-    ged_exec_view(gedp, 13, s_av);
+    s_av[1] = "annotation";
+    s_av[2] = "label";
+    s_av[3] = "create";
+    s_av[4] = "lbl1";
+    s_av[5] = "LIGHT";
+    s_av[6] = "110.41";
+    s_av[7] = "-32.2352";
+    s_av[8] = "90.4497";
+    s_av[9] = "20.1576";
+    s_av[10] = "-13.526";
+    s_av[11] = "8";
+    s_av[12] = NULL;
+    ged_exec_view(gedp, 12, s_av);
 
     ret += img_cmp(12, gedp, av[1], false, clear_images, soft_fail, LABEL_ADIFF_THRES, "clear", "v");
 
@@ -615,28 +588,26 @@ main(int ac, char *av[]) {
     ged_exec_autoview(gedp, 1, s_av);
 
     s_av[0] = "view";
-    s_av[1] = "obj";
-    s_av[2] = "create";
-    s_av[3] = "a1";
-    s_av[4] = "axes";
-    s_av[5] = "create";
+    s_av[1] = "annotation";
+    s_av[2] = "axes";
+    s_av[3] = "create";
+    s_av[4] = "a1";
+    s_av[5] = "1";
     s_av[6] = "1";
     s_av[7] = "1";
-    s_av[8] = "1";
-    s_av[9] = NULL;
-    ged_exec_view(gedp, 9, s_av);
+    s_av[8] = NULL;
+    ged_exec_view(gedp, 8, s_av);
 
     ret += img_cmp(18, gedp, av[1], false, clear_images, soft_fail, AXES_ADIFF_THRES, "clear", "v");
 
     s_av[0] = "view";
-    s_av[1] = "obj";
-    s_av[2] = "create";
-    s_av[3] = "a1";
-    s_av[4] = "axes";
-    s_av[5] = "axes_color";
-    s_av[6] = "0/0/255";
-    s_av[7] = NULL;
-    ged_exec_view(gedp, 7, s_av);
+    s_av[1] = "annotation";
+    s_av[2] = "axes";
+    s_av[3] = "axes_color";
+    s_av[4] = "a1";
+    s_av[5] = "0/0/255";
+    s_av[6] = NULL;
+    ged_exec_view(gedp, 6, s_av);
 
     ret += img_cmp(19, gedp, av[1], true, clear_images, soft_fail, AXES_ADIFF_THRES, "clear", "v");
     bu_log("Done.\n");

@@ -2241,7 +2241,6 @@ function(_brlobol_pivot_guard_check_legacy_header_include_hygiene)
   foreach(_rel
       src/libged/grid/grid.c
       src/libged/view/axes.c
-      src/libged/view/gobjs.cpp
       src/libged/view/labels.c
       src/libged/view/lines.c
       src/libged/view/objs.cpp
@@ -9801,41 +9800,6 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endforeach()
   endif()
 
-  set(_libged_view_gobjs_cmd "${BRLCAD_SOURCE_DIR}/src/libged/view/gobjs.cpp")
-  if(EXISTS "${_libged_view_gobjs_cmd}")
-    file(READ "${_libged_view_gobjs_cmd}" _libged_view_gobjs_cmd_contents)
-    foreach(_token
-	[[#[ \t]*include[ \t]*[<"]ged/draw\.h]]
-	[[ged_draw_view_context_gobject_create]]
-	[[_view_cmd_objs]])
-      string(REGEX MATCH "${_token}" _libged_view_gobjs_cmd_token_hit
-	"${_libged_view_gobjs_cmd_contents}")
-      if(NOT _libged_view_gobjs_cmd_token_hit)
-	_brlobol_pivot_guard_fail(
-	  "src/libged/view/gobjs.cpp must route gobject overlay feature creation/removal through the public GED draw-view facade")
-      endif()
-    endforeach()
-    foreach(_pat
-	[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
-	[[#[ \t]*include[ \t]*[<"]bsg/]]
-	[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
-	[[(^|[^A-Za-z0-9_])bsg_scene_ref([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])bsg_appearance_settings([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])ged_draw_view_context_overlay_create([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])ged_draw_view_context_feature_remove[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])BSG_APPEARANCE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])BSG_FEATURE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]])
-      string(REGEX MATCH "${_pat}" _libged_view_gobjs_cmd_direct_hit
-	"${_libged_view_gobjs_cmd_contents}")
-      if(_libged_view_gobjs_cmd_direct_hit)
-	_brlobol_pivot_guard_fail(
-	  "src/libged/view/gobjs.cpp reintroduced direct BSG gobject overlay feature access: ${_libged_view_gobjs_cmd_direct_hit}")
-      endif()
-    endforeach()
-  endif()
-
   set(_libged_view_objs_cmd "${BRLCAD_SOURCE_DIR}/src/libged/view/objs.cpp")
   if(EXISTS "${_libged_view_objs_cmd}")
     file(READ "${_libged_view_objs_cmd}" _libged_view_objs_cmd_contents)
@@ -9847,6 +9811,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[ged_draw_view_context_object_visible_get]]
 	[[ged_draw_view_context_object_visible_set]]
 	[[ged_draw_view_context_object_realize]]
+	[[ged_draw_view_context_gobject_create]]
 	[[struct[ \t]+ged_draw_view_feature_style]]
 	[[ged_draw_view_context_feature_style_get]]
 	[[ged_draw_view_context_feature_style_apply]])
@@ -9868,6 +9833,8 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[(^|[^A-Za-z0-9_])ged_draw_view_context_feature_realize[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_shape_ref_set_visible[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_shape_ref_realize_context[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])_view_cmd_objs([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])_view_cmd_gobjs([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])struct[ \t]+bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
@@ -12183,7 +12150,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	      "src/libged/tests/draw/measure_semantics.cpp|rt/view.h|rt_view_context_create|rt_view_context_dimensions_set|rt_view_context_measure_candidates|rt_view_context_free"
 	      "src/libged/tests/draw/mged_bsg.cpp|rt/view.h|ged_view_active_ctx|rt_view_context_display_manager_get|rt_view_context_display_manager_set|rt_view_context_dimensions_set|rt_view_context_unit_conversion_set|rt_view_context_scale_storage_get|rt_view_context_scene_attached|RT_VIEW_OTHER_STATE_INIT|rt_view_context_center_dot_state_get|rt_view_context_center_dot_state_set|rt_view_context_edit_matrix_clear|rt_view_context_edit_matrix_set|RT_VIEW_RENDER_SUMMARY_INIT|rt_view_context_visible_render_summary(v,"
 	      "src/libged/tests/draw/mged_shaded_mode_bsg.cpp|rt/view.h|ged_view_active_ctx|rt_view_context_display_manager_get|rt_view_context_display_manager_set|rt_view_context_dimensions_set|rt_view_context_unit_conversion_set|rt_view_context_scale_storage_get"
-	      "src/libged/tests/draw/quad.cpp|rt/view.h|ged_view_set_ctx|ged_view_set_views_ctx|ged_view_active_ctx_set|ged_view_context_owned_add|rt_view_context_create_with_set|rt_view_set_context_remove|rt_view_set_context_add|rt_view_context_name_set|rt_view_context_display_manager_get|rt_view_context_display_manager_set|rt_view_context_dimensions_set|rt_view_context_unit_conversion_set|rt_view_context_scale_storage_get|rt_view_context_is_independent|RT_VIEW_FEATURE_GEOMETRY_SUMMARY_INIT|rt_view_context_feature_geometry_summary(ged_view_active_ctx|rt_view_context_named_line_render_count(v,"
+	      "src/libged/tests/draw/quad.cpp|rt/view.h|ged_view_set_ctx|ged_view_set_views_ctx|ged_view_active_ctx_set|ged_view_context_owned_add|rt_view_context_create_with_set|rt_view_set_context_remove|rt_view_set_context_add|rt_view_context_name_set|rt_view_context_display_manager_get|rt_view_context_display_manager_set|rt_view_context_dimensions_set|rt_view_context_unit_conversion_set|rt_view_context_scale_storage_get|rt_view_context_is_independent|GED_DRAW_VIEW_FEATURE_SUMMARY_INIT|ged_draw_view_context_feature_summary(ged_view_active_ctx|ged_draw_view_context_feature_summary(v,"
 	      "src/libged/tests/draw/rtwizard_bsg.cpp|rt/view.h|ged_view_active_ctx|ged_view_active_ctx_set|ged_view_set_ctx|ged_view_context_owned_add|rt_view_context_create_with_set|rt_view_context_name_set|rt_view_set_context_add|rt_view_context_display_manager_get|rt_view_context_display_manager_set|rt_view_context_dimensions_set|rt_view_context_unit_conversion_set|rt_view_context_scale_storage_get|rt_view_context_scene_anchor_ensure|rt_view_context_scene_attached|rt_view_context_scene_shared|rt_view_context_model2view_get"
 	      "src/libged/tests/draw/select.cpp|rt/view.h|ged_view_active_ctx|rt_view_context_display_manager_get|rt_view_context_display_manager_set|rt_view_context_dimensions_set|rt_view_context_unit_conversion_set|rt_view_context_scale_storage_get"
       "src/libged/tests/draw/snap_semantics.cpp|rt/view.h|rt_view_context_create|rt_view_context_dimensions_set|rt_view_context_grid_state_get|rt_view_context_grid_state_set|rt_view_context_snap_source_flags_set|rt_view_snap_result_context_create|rt_view_context_snap_candidates_result|rt_view_snap_result_context_point|rt_view_context_snap_point_2d|rt_view_context_free"
@@ -18303,7 +18270,6 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       src/libged/unhide/unhide.c
       src/libged/view/faceplate/faceplate.c
       src/libged/view/ged_view.h
-      src/libged/view/gobjs.cpp
       src/libged/view/lod.cpp
       src/libged/view/objs.cpp
       src/libged/view/saveview.c
@@ -20169,8 +20135,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   foreach(_rel
       src/libged/bsg_ged_draw_transactions.c
       src/libged/draw.cpp
-      src/libged/draw/draw.c
-      src/libged/view/gobjs.cpp)
+      src/libged/draw/draw.c)
     set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
     if(NOT EXISTS "${_file}")
       continue()

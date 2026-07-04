@@ -30,6 +30,7 @@
 #include <cstring>
 #include <set>
 #include <string>
+#include <vector>
 
 extern "C" {
 #include "bu/cmd.h"
@@ -205,7 +206,7 @@ _view_obj_name_matches_record(const struct ged_draw_shape_record *rec,
 	if (path) {
 	    int match = BU_STR_EQUAL(path, name) ||
 		BU_STR_EQUAL(ged_draw_dbpath_skip_lead_slash(path), name);
-	    bu_free(path, "view obj fullpath string");
+	    bu_free(path, "view object fullpath string");
 	    if (match)
 		return 1;
 	}
@@ -287,8 +288,8 @@ _objs_cmd_draw(void *bs, int argc, const char **argv)
 {
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    const char *usage_string = "view obj set <name> draw [0|1|UP|DOWN]";
-    const char *purpose_string = "toggle view polygons";
+    const char *usage_string = "view object style set <name> visible [0|1|UP|DOWN]";
+    const char *purpose_string = "toggle view object visibility";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
 
@@ -326,8 +327,8 @@ _objs_cmd_delete(void *bs, int argc, const char **argv)
 {
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    const char *usage_string = "view obj remove <name>";
-    const char *purpose_string = "delete view feature";
+    const char *usage_string = "view object delete <name>";
+    const char *purpose_string = "delete view object";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
 
@@ -345,8 +346,8 @@ _objs_cmd_color(void *bs, int argc, const char **argv)
 {
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    const char *usage_string = "view obj set <name> color [r/g/b]";
-    const char *purpose_string = "show/set obj color";
+    const char *usage_string = "view object style <get|set> <name> color [r/g/b]";
+    const char *purpose_string = "show/set object color";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
 
@@ -438,7 +439,7 @@ _objs_cmd_arrow(void *bs, int argc, const char **argv)
 {
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    const char *usage_string = "view obj set <name> arrow [0|1] [width [#]] [length [#]]";
+    const char *usage_string = "view object style <get|set> <name> arrow [0|1] [width [#]] [length [#]]";
     const char *purpose_string = "toggle arrow drawing, for those objects that support it";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
@@ -505,7 +506,7 @@ _objs_cmd_lcnt(void *bs, int argc, const char **argv)
 {
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    const char *usage_string = "view obj info <name> lcnt";
+    const char *usage_string = "view object info <name> lcnt";
     const char *purpose_string = "print the number of vlist entities";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
@@ -529,7 +530,7 @@ _objs_cmd_update(void *bs, int argc, const char **argv)
 {
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    const char *usage_string = "view obj set <name> update [x y]";
+    const char *usage_string = "view object realize <name> [x y]";
     const char *purpose_string = "update object";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
@@ -579,40 +580,15 @@ _objs_cmd_update(void *bs, int argc, const char **argv)
 	    gd->shape_ref, gedp->ged_result_str) ? BRLCAD_OK : BRLCAD_ERROR;
 }
 
-const struct bu_cmdtab _obj_cmds[] = {
-    { "draw",       _objs_cmd_draw},
-    { "del",        _objs_cmd_delete},
-    //{ "info",       _objs_cmd_info},
-    { "update",     _objs_cmd_update},
-    { "color",      _objs_cmd_color},
-    { "axes",       _view_cmd_axes},
-    { "arrow",      _objs_cmd_arrow},
-    { "label",      _view_cmd_labels},
-    { "lcnt",       _objs_cmd_lcnt},
-    { "line",       _view_cmd_lines},
-    { "polygon",    _view_cmd_polygons},
-    { (char *)NULL,      NULL}
-};
-
-extern "C" int
-_view_cmd_objs(void *bs, int argc, const char **argv)
+static int
+_view_object_scene_ready(struct _ged_view_info *gd)
 {
-    int help = 0;
-    int list_view = 0;
-    int list_db = 0;
-    int not_shared = 0;
-    struct bu_vls gobj_path = BU_VLS_INIT_ZERO;
-    struct _ged_view_info *gd = (struct _ged_view_info *)bs;
+    if (!gd || !gd->gedp)
+	return 0;
     struct ged *gedp = gd->gedp;
-
-    const char *usage_string = "view [options] obj [options] [args]";
-    const char *purpose_string = "manipulate view features";
-    if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
-	return BRLCAD_OK;
-
     if (!gd->cv) {
 	bu_vls_printf(gedp->ged_result_str, ": no view current in GED");
-	return BRLCAD_ERROR;
+	return 0;
     }
     if (!ged_draw_view_context_scene_attached(gd->cv)) {
 	void *cv = ged_view_active_ctx(gedp);
@@ -620,255 +596,521 @@ _view_cmd_objs(void *bs, int argc, const char **argv)
 	ged_draw_ensure_root_attached(gedp);
 	ged_view_active_ctx_set(gedp, cv);
     }
+    return 1;
+}
 
-    // See if we have any high level options set
-    struct bu_opt_desc d[6];
-    BU_OPT(d[0], "h", "help",        "",  NULL,  &help,       "Print help");
-    BU_OPT(d[1], "L", "local",       "",  NULL,  &not_shared, "Object is scoped only to current/specified view");
-    BU_OPT(d[2], "G", "geom_only",   "",  NULL,  &list_db,    "List view scene objects representing .g database objs");
-    BU_OPT(d[3],  "", "view_only",   "",  NULL,  &list_view,  "List view-scoped features (default)");
-    BU_OPT(d[4], "g", "gobj",        "dbpath",  &bu_opt_vls, &gobj_path, "Use geometry path for gobj create");
-    BU_OPT_NULL(d[5]);
-
-    gd->gopts = d;
-
-    // We know we're the obj command - start processing args
-    argc--; argv++;
-
-    std::set<std::string> unified_cmds = {"create", "remove", "list", "info", "set"};
-
-    // High level options are only defined prior to the subcommand.  Find
-    // the first non-option argument to check against the unified subcommand set.
-    int first_pos = -1;
-    int arg_idx = 0;
-    while (arg_idx < argc) {
-	if (argv[arg_idx][0] == '-') {
-	    if ((BU_STR_EQUAL(argv[arg_idx], "-g") || BU_STR_EQUAL(argv[arg_idx], "--gobj")) && arg_idx + 1 < argc) {
-		arg_idx += 2;
-		continue;
-	    }
-	    arg_idx++;
+static int
+_view_object_first_pos(int argc, const char **argv)
+{
+    for (int i = 0; i < argc; i++) {
+	if (!argv[i])
+	    return -1;
+	if (argv[i][0] == '-')
 	    continue;
-	}
-	first_pos = arg_idx;
-	break;
+	return i;
     }
+    return -1;
+}
 
-    int cmd_pos = -1;
-    if (first_pos >= 0 && unified_cmds.find(std::string(argv[first_pos])) != unified_cmds.end())
-	cmd_pos = first_pos;
-
-    int acnt = (first_pos >= 0) ? first_pos : argc;
-    (void)bu_opt_parse(NULL, acnt, argv, d);
-
-    if (!list_db && !list_view)
-	list_view = 1;
-
-    gd->local_obj = not_shared;
-    gd->gobj_dbpath = bu_vls_strlen(&gobj_path) ? bu_vls_cstr(&gobj_path) : NULL;
-
-    void *view_ctx = gd->cv;
-    if (help) {
-	int hargc = (cmd_pos >= 0) ? argc - cmd_pos : 0;
-	const char **hargv = (cmd_pos >= 0) ? &argv[cmd_pos] : NULL;
-	_ged_subcmd_help(gedp, (struct bu_opt_desc *)d, (const struct bu_cmdtab *)_obj_cmds, "view obj", "[options] subcommand [args]", gd, hargc, hargv);
-	bu_vls_free(&gobj_path);
-	return BRLCAD_OK;
+static void
+_view_object_list_defaults(int annotations_requested, int db_requested,
+	int all_requested, int *list_view, int *list_db)
+{
+    if (all_requested || (!annotations_requested && !db_requested)) {
+	*list_view = 1;
+	*list_db = 1;
+	return;
     }
+    *list_view = annotations_requested ? 1 : 0;
+    *list_db = db_requested ? 1 : 0;
+}
 
-    // No subcommand: default list (only when there are no positional args at all)
-    if (cmd_pos < 0) {
-	if (first_pos >= 0) {
-	    bu_vls_free(&gobj_path);
-	    bu_vls_printf(gd->gedp->ged_result_str,
-		    "Unsupported subcommand '%s' (valid: create, remove, list, info, set)",
-		    argv[first_pos]);
-	    return BRLCAD_ERROR;
-	}
-	_view_obj_list(gd->gedp->ged_result_str, view_ctx, list_view, list_db, gd->local_obj, NULL);
-	bu_vls_free(&gobj_path);
-	return BRLCAD_OK;
-    }
-
-    if (cmd_pos >= argc || cmd_pos < 0) {
-	bu_vls_free(&gobj_path);
-	bu_vls_printf(gd->gedp->ged_result_str, "need subcommand");
+static int
+_view_object_info(struct _ged_view_info *gd,
+	const char *name,
+	const char *field,
+	int list_view,
+	int list_db)
+{
+    struct ged *gedp = gd->gedp;
+    struct view_obj_record rec;
+    if (!_view_obj_record_find(gd->cv, name, list_view, list_db, gd->local_obj, &rec)) {
+	bu_vls_printf(gedp->ged_result_str, "No view object named %s\n", name);
 	return BRLCAD_ERROR;
     }
 
-    int subcmd_argc = argc - cmd_pos;
-    const char **subcmd_argv = argv + cmd_pos;
-
-    // Unified grammar
-    if (unified_cmds.find(std::string(subcmd_argv[0])) != unified_cmds.end()) {
-	const char *ucmd = subcmd_argv[0];
-	if (BU_STR_EQUAL(ucmd, "list")) {
-	    const char *glob = (subcmd_argc > 1) ? subcmd_argv[1] : NULL;
-	    if (subcmd_argc > 2) {
-		bu_vls_free(&gobj_path);
-		bu_vls_printf(gd->gedp->ged_result_str, "Usage: view obj [-V view] [-L] list [glob_pattern]");
-		return BRLCAD_ERROR;
-	    }
-	    _view_obj_list(gd->gedp->ged_result_str, view_ctx, list_view, list_db, gd->local_obj, glob);
-	    bu_vls_free(&gobj_path);
-	    return BRLCAD_OK;
-	}
-
-	if (BU_STR_EQUAL(ucmd, "create")) {
-	    if (gd->gobj_dbpath) {
-		if (subcmd_argc != 2) {
-		    bu_vls_free(&gobj_path);
-		    bu_vls_printf(gd->gedp->ged_result_str, "Usage: view obj [-V view] [-L] -g <dbpath> create <name>");
-		    return BRLCAD_ERROR;
-		}
-		const char *gargv[4] = {"create", gd->gobj_dbpath, subcmd_argv[1], NULL};
-		int ret = _gobjs_cmd_create(bs, 3, gargv);
-		bu_vls_free(&gobj_path);
-		return ret;
-	    }
-	    if (subcmd_argc < 3) {
-		bu_vls_free(&gobj_path);
-		bu_vls_printf(gd->gedp->ged_result_str, "Usage: view obj [-V view] [-L] create <name> <type> <args...>");
-		return BRLCAD_ERROR;
-	    }
-	    gd->vobj = subcmd_argv[1];
-	    const int find_view_objs = 1;
-	    const int find_db_objs = 1;
-	    gd->shape_ref = _view_obj_shape_ref_find(gedp, view_ctx, gd->vobj, find_view_objs, find_db_objs, gd->local_obj);
-	    const char *otype = subcmd_argv[2];
-	    const char **cargv = subcmd_argv + 2;
-	    int cargc = subcmd_argc - 2;
-	    int ret = BRLCAD_ERROR;
-	    if (BU_STR_EQUAL(otype, "line")) {
-		ret = _view_cmd_lines(bs, cargc, cargv);
-	    } else if (BU_STR_EQUAL(otype, "axes")) {
-		ret = _view_cmd_axes(bs, cargc, cargv);
-	    } else if (BU_STR_EQUAL(otype, "label")) {
-		ret = _view_cmd_labels(bs, cargc, cargv);
-	    } else if (BU_STR_EQUAL(otype, "polygon")) {
-		ret = _view_cmd_polygons(bs, cargc, cargv);
-	    } else if (BU_STR_EQUAL(otype, "arrow")) {
-		if (cargc < 5) {
-		    bu_vls_printf(gd->gedp->ged_result_str, "Usage: view obj [-V view] [-L] create <name> arrow x y z");
-		    bu_vls_free(&gobj_path);
-		    return BRLCAD_ERROR;
-		}
-		ret = _view_cmd_lines(bs, cargc, cargv);
-		if (ret == BRLCAD_OK) {
-		    gd->shape_ref = _view_obj_shape_ref_find(gedp, view_ctx, gd->vobj, 1, 1, gd->local_obj);
-		    const char *aargv[3] = {"arrow", "1", NULL};
-		    ret = _objs_cmd_arrow(bs, 2, aargv);
-		}
-	    } else {
-		bu_vls_printf(gd->gedp->ged_result_str, "Unsupported view feature type %s", otype);
-		bu_vls_free(&gobj_path);
-		return BRLCAD_ERROR;
-	    }
-	    bu_vls_free(&gobj_path);
-	    return ret;
-	}
-
-	if (subcmd_argc < 2) {
-	    bu_vls_free(&gobj_path);
-	    bu_vls_printf(gd->gedp->ged_result_str, "Usage: view obj [-V view] [-L] %s <name>", ucmd);
-	    return BRLCAD_ERROR;
-	}
-	gd->vobj = subcmd_argv[1];
-	gd->shape_ref = _view_obj_shape_ref_find(gedp, view_ctx, gd->vobj, list_view, list_db, gd->local_obj);
-
-	if (BU_STR_EQUAL(ucmd, "remove")) {
-	    const char *rargv[2] = {"del", NULL};
-	    int ret = _objs_cmd_delete(bs, 1, rargv);
-	    bu_vls_free(&gobj_path);
-	    return ret;
-	}
-
-	if (BU_STR_EQUAL(ucmd, "info")) {
-	    struct view_obj_record rec;
-	    if (!_view_obj_record_find(view_ctx, gd->vobj, list_view, list_db, gd->local_obj, &rec)) {
-		bu_vls_free(&gobj_path);
-		bu_vls_printf(gd->gedp->ged_result_str, "No view feature named %s\n", gd->vobj);
-		return BRLCAD_ERROR;
-	    }
-	    if (subcmd_argc == 2) {
-		bu_vls_printf(gedp->ged_result_str, "%s %s\n", gd->vobj, rec.type_name.c_str());
-		bu_vls_free(&gobj_path);
-		return BRLCAD_OK;
-	    }
-	    if (BU_STR_EQUAL(subcmd_argv[2], "mode")) {
-		_view_obj_mode_value_string(gedp->ged_result_str, rec.draw_mode);
-		bu_vls_free(&gobj_path);
-		return BRLCAD_OK;
-	    }
-	    if (BU_STR_EQUAL(subcmd_argv[2], "color")) {
-		bu_vls_printf(gedp->ged_result_str, "%d/%d/%d\n",
-			rec.color[0], rec.color[1], rec.color[2]);
-		bu_vls_free(&gobj_path);
-		return BRLCAD_OK;
-	    }
-	    if (BU_STR_EQUAL(subcmd_argv[2], "draw")) {
-		bu_vls_printf(gedp->ged_result_str, "%s\n", rec.visible ? "UP" : "DOWN");
-		bu_vls_free(&gobj_path);
-		return BRLCAD_OK;
-	    }
-	    if (BU_STR_EQUAL(subcmd_argv[2], "lcnt")) {
-		bu_vls_printf(gedp->ged_result_str, "%zu\n", rec.vlist_structure_count);
-		bu_vls_free(&gobj_path);
-		return BRLCAD_OK;
-	    }
-	    if (BU_STR_EQUAL(subcmd_argv[2], "type")) {
-		bu_vls_printf(gedp->ged_result_str, "%s\n", rec.type_name.c_str());
-		bu_vls_free(&gobj_path);
-		return BRLCAD_OK;
-	    }
-	    bu_vls_free(&gobj_path);
-	    bu_vls_printf(gd->gedp->ged_result_str, "Unsupported info field %s", subcmd_argv[2]);
-	    return BRLCAD_ERROR;
-	}
-
-	if (BU_STR_EQUAL(ucmd, "set")) {
-	    if ((!ged_draw_view_context_feature_exists(view_ctx, gd->vobj) && ged_draw_shape_ref_is_null(gd->shape_ref)) || subcmd_argc < 4) {
-		bu_vls_free(&gobj_path);
-		bu_vls_printf(gd->gedp->ged_result_str, "Usage: view obj [-V view] [-L] set <name> <field> <value>");
-		return BRLCAD_ERROR;
-	    }
-	    if (BU_STR_EQUAL(subcmd_argv[2], "draw")) {
-		if (subcmd_argc == 4 && (BU_STR_EQUAL(subcmd_argv[3], "0") || BU_STR_EQUAL(subcmd_argv[3], "1"))) {
-		    const char *dargv[3] = {"draw", BU_STR_EQUAL(subcmd_argv[3], "1") ? "UP" : "DOWN", NULL};
-		    int ret = _objs_cmd_draw(bs, 2, dargv);
-		    bu_vls_free(&gobj_path);
-		    return ret;
-		}
-		int ret = _objs_cmd_draw(bs, subcmd_argc - 2, subcmd_argv + 2);
-		bu_vls_free(&gobj_path);
-		return ret;
-	    }
-	    if (BU_STR_EQUAL(subcmd_argv[2], "color")) {
-		int ret = _objs_cmd_color(bs, subcmd_argc - 2, subcmd_argv + 2);
-		bu_vls_free(&gobj_path);
-		return ret;
-	    }
-	    if (BU_STR_EQUAL(subcmd_argv[2], "arrow")) {
-		int ret = _objs_cmd_arrow(bs, subcmd_argc - 2, subcmd_argv + 2);
-		bu_vls_free(&gobj_path);
-		return ret;
-	    }
-	    if (BU_STR_EQUAL(subcmd_argv[2], "update")) {
-		int ret = _objs_cmd_update(bs, subcmd_argc - 2, subcmd_argv + 2);
-		bu_vls_free(&gobj_path);
-		return ret;
-	    }
-	    bu_vls_free(&gobj_path);
-	    bu_vls_printf(gd->gedp->ged_result_str, "Unsupported set field %s", subcmd_argv[2]);
-	    return BRLCAD_ERROR;
-	}
+    if (!field) {
+	bu_vls_printf(gedp->ged_result_str, "%s %s\n", name, rec.type_name.c_str());
+	return BRLCAD_OK;
+    }
+    if (BU_STR_EQUAL(field, "mode")) {
+	_view_obj_mode_value_string(gedp->ged_result_str, rec.draw_mode);
+	return BRLCAD_OK;
+    }
+    if (BU_STR_EQUAL(field, "color")) {
+	bu_vls_printf(gedp->ged_result_str, "%d/%d/%d\n",
+		rec.color[0], rec.color[1], rec.color[2]);
+	return BRLCAD_OK;
+    }
+    if (BU_STR_EQUAL(field, "visible") || BU_STR_EQUAL(field, "draw")) {
+	bu_vls_printf(gedp->ged_result_str, "%s\n", rec.visible ? "UP" : "DOWN");
+	return BRLCAD_OK;
+    }
+    if (BU_STR_EQUAL(field, "lcnt")) {
+	bu_vls_printf(gedp->ged_result_str, "%zu\n", rec.vlist_structure_count);
+	return BRLCAD_OK;
+    }
+    if (BU_STR_EQUAL(field, "type") || BU_STR_EQUAL(field, "class")) {
+	bu_vls_printf(gedp->ged_result_str, "%s\n", rec.type_name.c_str());
+	return BRLCAD_OK;
     }
 
-    bu_vls_free(&gobj_path);
-    const char *bad_subcmd = (cmd_pos >= 0 && cmd_pos < argc) ? argv[cmd_pos] : "(none)";
-    bu_vls_printf(gd->gedp->ged_result_str,
-	    "Unsupported subcommand %s (valid: create, remove, list, info, set)",
-	    bad_subcmd);
+    bu_vls_printf(gedp->ged_result_str, "Unsupported object info field %s", field);
+    return BRLCAD_ERROR;
+}
+
+static int
+_view_object_style_get(struct _ged_view_info *gd, const char *field)
+{
+    if (!field) {
+	bu_vls_printf(gd->gedp->ged_result_str,
+		"Usage: view object style get <name> <color|visible|arrow|arrow_width|arrow_length>");
+	return BRLCAD_ERROR;
+    }
+    if (BU_STR_EQUAL(field, "color")) {
+	const char *cargv[2] = {"color", NULL};
+	return _objs_cmd_color(gd, 1, cargv);
+    }
+    if (BU_STR_EQUAL(field, "visible") || BU_STR_EQUAL(field, "draw")) {
+	const char *dargv[2] = {"visible", NULL};
+	return _objs_cmd_draw(gd, 1, dargv);
+    }
+    if (BU_STR_EQUAL(field, "arrow")) {
+	const char *aargv[2] = {"arrow", NULL};
+	return _objs_cmd_arrow(gd, 1, aargv);
+    }
+    if (BU_STR_EQUAL(field, "arrow_width")) {
+	const char *aargv[3] = {"arrow", "width", NULL};
+	return _objs_cmd_arrow(gd, 2, aargv);
+    }
+    if (BU_STR_EQUAL(field, "arrow_length")) {
+	const char *aargv[3] = {"arrow", "length", NULL};
+	return _objs_cmd_arrow(gd, 2, aargv);
+    }
+    bu_vls_printf(gd->gedp->ged_result_str, "Unsupported style field %s", field);
+    return BRLCAD_ERROR;
+}
+
+static int
+_view_object_style_set(struct _ged_view_info *gd, int argc, const char **argv)
+{
+    if (argc < 1) {
+	bu_vls_printf(gd->gedp->ged_result_str,
+		"Usage: view object style set <name> <field> <value>");
+	return BRLCAD_ERROR;
+    }
+    if (BU_STR_EQUAL(argv[0], "color")) {
+	return _objs_cmd_color(gd, argc, argv);
+    }
+    if (BU_STR_EQUAL(argv[0], "visible") || BU_STR_EQUAL(argv[0], "draw")) {
+	if (argc != 2) {
+	    bu_vls_printf(gd->gedp->ged_result_str,
+		    "Usage: view object style set <name> visible <0|1|UP|DOWN>");
+	    return BRLCAD_ERROR;
+	}
+	const char *state = argv[1];
+	if (BU_STR_EQUAL(state, "1"))
+	    state = "UP";
+	else if (BU_STR_EQUAL(state, "0"))
+	    state = "DOWN";
+	const char *dargv[3] = {"visible", state, NULL};
+	return _objs_cmd_draw(gd, 2, dargv);
+    }
+    if (BU_STR_EQUAL(argv[0], "arrow")) {
+	return _objs_cmd_arrow(gd, argc, argv);
+    }
+    if (BU_STR_EQUAL(argv[0], "arrow_width")) {
+	if (argc != 2) {
+	    bu_vls_printf(gd->gedp->ged_result_str,
+		    "Usage: view object style set <name> arrow_width <value>");
+	    return BRLCAD_ERROR;
+	}
+	const char *aargv[4] = {"arrow", "width", argv[1], NULL};
+	return _objs_cmd_arrow(gd, 3, aargv);
+    }
+    if (BU_STR_EQUAL(argv[0], "arrow_length")) {
+	if (argc != 2) {
+	    bu_vls_printf(gd->gedp->ged_result_str,
+		    "Usage: view object style set <name> arrow_length <value>");
+	    return BRLCAD_ERROR;
+	}
+	const char *aargv[4] = {"arrow", "length", argv[1], NULL};
+	return _objs_cmd_arrow(gd, 3, aargv);
+    }
+    bu_vls_printf(gd->gedp->ged_result_str, "Unsupported style field %s", argv[0]);
+    return BRLCAD_ERROR;
+}
+
+extern "C" int
+_view_cmd_object(void *bs, int argc, const char **argv)
+{
+    int help = 0;
+    int local_only = 0;
+    int annotations_requested = 0;
+    int db_requested = 0;
+    int all_requested = 0;
+    struct _ged_view_info *gd = (struct _ged_view_info *)bs;
+    struct ged *gedp = gd->gedp;
+
+    const char *usage_string = "view [options] object [options] <list|info|show|hide|delete|style|realize> ...";
+    const char *purpose_string = "manage typed Obol view objects";
+    if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
+	return BRLCAD_OK;
+    if (!_view_object_scene_ready(gd))
+	return BRLCAD_ERROR;
+
+    argc--; argv++;
+
+    struct bu_opt_desc d[6];
+    BU_OPT(d[0], "h", "help",        "",  NULL,  &help,                  "Print help");
+    BU_OPT(d[1], "L", "local",       "",  NULL,  &local_only,            "Restrict object lookup to current/specified view");
+    BU_OPT(d[2], "A", "annotations", "",  NULL,  &annotations_requested, "List or query annotation objects");
+    BU_OPT(d[3], "D", "database",    "",  NULL,  &db_requested,          "List or query database display objects");
+    BU_OPT(d[4], "a", "all",         "",  NULL,  &all_requested,         "List or query all object classes");
+    BU_OPT_NULL(d[5]);
+    gd->gopts = d;
+
+    int first_pos = _view_object_first_pos(argc, argv);
+    int acnt = (first_pos >= 0) ? first_pos : argc;
+    (void)bu_opt_parse(NULL, acnt, argv, d);
+    gd->local_obj = local_only;
+
+    int list_view = 0;
+    int list_db = 0;
+    _view_object_list_defaults(annotations_requested, db_requested, all_requested, &list_view, &list_db);
+
+    if (help) {
+	_ged_cmd_help(gedp, usage_string, d);
+	return GED_HELP;
+    }
+
+    if (first_pos < 0) {
+	_view_obj_list(gedp->ged_result_str, gd->cv, list_view, list_db, gd->local_obj, NULL);
+	return BRLCAD_OK;
+    }
+
+    const char *cmd = argv[first_pos];
+    int sub_argc = argc - first_pos;
+    const char **sub_argv = argv + first_pos;
+
+    if (BU_STR_EQUAL(cmd, "list")) {
+	if (sub_argc > 2) {
+	    bu_vls_printf(gedp->ged_result_str,
+		    "Usage: view object [--all|--annotations|--database] [-L] list [glob_pattern]");
+	    return BRLCAD_ERROR;
+	}
+	const char *glob = (sub_argc > 1) ? sub_argv[1] : NULL;
+	_view_obj_list(gedp->ged_result_str, gd->cv, list_view, list_db, gd->local_obj, glob);
+	return BRLCAD_OK;
+    }
+
+    if (BU_STR_EQUAL(cmd, "info")) {
+	if (sub_argc < 2 || sub_argc > 3) {
+	    bu_vls_printf(gedp->ged_result_str, "Usage: view object info <name> [field]");
+	    return BRLCAD_ERROR;
+	}
+	return _view_object_info(gd, sub_argv[1], (sub_argc == 3) ? sub_argv[2] : NULL,
+		list_view, list_db);
+    }
+
+    if (BU_STR_EQUAL(cmd, "show") || BU_STR_EQUAL(cmd, "hide") ||
+	    BU_STR_EQUAL(cmd, "delete") || BU_STR_EQUAL(cmd, "realize")) {
+	if (sub_argc < 2) {
+	    bu_vls_printf(gedp->ged_result_str, "Usage: view object %s <name>", cmd);
+	    return BRLCAD_ERROR;
+	}
+	gd->vobj = sub_argv[1];
+	gd->shape_ref = _view_obj_shape_ref_find(gedp, gd->cv, gd->vobj, list_view, list_db, gd->local_obj);
+	if (BU_STR_EQUAL(cmd, "show")) {
+	    const char *dargv[3] = {"visible", "UP", NULL};
+	    return _objs_cmd_draw(gd, 2, dargv);
+	}
+	if (BU_STR_EQUAL(cmd, "hide")) {
+	    const char *dargv[3] = {"visible", "DOWN", NULL};
+	    return _objs_cmd_draw(gd, 2, dargv);
+	}
+	if (BU_STR_EQUAL(cmd, "delete")) {
+	    if (sub_argc != 2) {
+		bu_vls_printf(gedp->ged_result_str, "Usage: view object delete <name>");
+		return BRLCAD_ERROR;
+	    }
+	    const char *rargv[2] = {"delete", NULL};
+	    return _objs_cmd_delete(gd, 1, rargv);
+	}
+	std::vector<const char *> uargv;
+	uargv.push_back("realize");
+	for (int i = 2; i < sub_argc; i++)
+	    uargv.push_back(sub_argv[i]);
+	uargv.push_back(NULL);
+	return _objs_cmd_update(gd, (int)uargv.size() - 1, uargv.data());
+    }
+
+    if (BU_STR_EQUAL(cmd, "style")) {
+	if (sub_argc < 4) {
+	    bu_vls_printf(gedp->ged_result_str,
+		    "Usage: view object style <get|set> <name> <field> [value...]");
+	    return BRLCAD_ERROR;
+	}
+	const char *style_cmd = sub_argv[1];
+	gd->vobj = sub_argv[2];
+	gd->shape_ref = _view_obj_shape_ref_find(gedp, gd->cv, gd->vobj, list_view, list_db, gd->local_obj);
+	if ((!ged_draw_view_context_feature_exists(gd->cv, gd->vobj) &&
+		ged_draw_shape_ref_is_null(gd->shape_ref))) {
+	    bu_vls_printf(gedp->ged_result_str, "No view object named %s\n", gd->vobj);
+	    return BRLCAD_ERROR;
+	}
+	if (BU_STR_EQUAL(style_cmd, "get")) {
+	    if (sub_argc != 4) {
+		bu_vls_printf(gedp->ged_result_str,
+			"Usage: view object style get <name> <field>");
+		return BRLCAD_ERROR;
+	    }
+	    return _view_object_style_get(gd, sub_argv[3]);
+	}
+	if (BU_STR_EQUAL(style_cmd, "set")) {
+	    return _view_object_style_set(gd, sub_argc - 3, sub_argv + 3);
+	}
+	bu_vls_printf(gedp->ged_result_str, "Unsupported style operation %s", style_cmd);
+	return BRLCAD_ERROR;
+    }
+
+    bu_vls_printf(gedp->ged_result_str,
+	    "Unsupported object subcommand %s (valid: list, info, show, hide, delete, style, realize)",
+	    cmd);
+    return BRLCAD_ERROR;
+}
+
+extern "C" int
+_view_cmd_annotation(void *bs, int argc, const char **argv)
+{
+    int help = 0;
+    int local_only = 0;
+    struct _ged_view_info *gd = (struct _ged_view_info *)bs;
+    struct ged *gedp = gd->gedp;
+
+    const char *usage_string = "view [options] annotation [-L] <line|arrow|label|axes> <verb> <name> [args]";
+    const char *purpose_string = "create and edit user annotation objects";
+    if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
+	return BRLCAD_OK;
+    if (!_view_object_scene_ready(gd))
+	return BRLCAD_ERROR;
+
+    argc--; argv++;
+
+    struct bu_opt_desc d[3];
+    BU_OPT(d[0], "h", "help",  "",  NULL,  &help,       "Print help");
+    BU_OPT(d[1], "L", "local", "",  NULL,  &local_only, "Object is scoped only to current/specified view");
+    BU_OPT_NULL(d[2]);
+    gd->gopts = d;
+
+    int first_pos = _view_object_first_pos(argc, argv);
+    int acnt = (first_pos >= 0) ? first_pos : argc;
+    (void)bu_opt_parse(NULL, acnt, argv, d);
+    gd->local_obj = local_only;
+
+    if (help) {
+	_ged_cmd_help(gedp, usage_string, d);
+	return GED_HELP;
+    }
+    if (first_pos < 0 || argc - first_pos < 3) {
+	bu_vls_printf(gedp->ged_result_str, "Usage: %s\n", usage_string);
+	return BRLCAD_ERROR;
+    }
+
+    const char **sub_argv = argv + first_pos;
+    int sub_argc = argc - first_pos;
+    const char *type = sub_argv[0];
+    const char *verb = sub_argv[1];
+    gd->vobj = sub_argv[2];
+    gd->shape_ref = _view_obj_shape_ref_find(gedp, gd->cv, gd->vobj, 1, 1, gd->local_obj);
+
+    std::vector<const char *> cargv;
+    if (BU_STR_EQUAL(type, "arrow")) {
+	if (!BU_STR_EQUAL(verb, "create")) {
+	    bu_vls_printf(gedp->ged_result_str,
+		    "Unsupported arrow annotation operation %s", verb);
+	    return BRLCAD_ERROR;
+	}
+	cargv.push_back("line");
+	cargv.push_back("create");
+	for (int i = 3; i < sub_argc; i++)
+	    cargv.push_back(sub_argv[i]);
+	cargv.push_back(NULL);
+	int ret = _view_cmd_lines(gd, (int)cargv.size() - 1, cargv.data());
+	if (ret != BRLCAD_OK)
+	    return ret;
+	gd->shape_ref = _view_obj_shape_ref_find(gedp, gd->cv, gd->vobj, 1, 1, gd->local_obj);
+	const char *aargv[3] = {"arrow", "1", NULL};
+	return _objs_cmd_arrow(gd, 2, aargv);
+    }
+
+    cargv.push_back(type);
+    cargv.push_back(verb);
+    for (int i = 3; i < sub_argc; i++)
+	cargv.push_back(sub_argv[i]);
+    cargv.push_back(NULL);
+
+    if (BU_STR_EQUAL(type, "line"))
+	return _view_cmd_lines(gd, (int)cargv.size() - 1, cargv.data());
+    if (BU_STR_EQUAL(type, "label"))
+	return _view_cmd_labels(gd, (int)cargv.size() - 1, cargv.data());
+    if (BU_STR_EQUAL(type, "axes"))
+	return _view_cmd_axes(gd, (int)cargv.size() - 1, cargv.data());
+
+    bu_vls_printf(gedp->ged_result_str,
+	    "Unsupported annotation type %s (valid: line, arrow, label, axes)",
+	    type);
+    return BRLCAD_ERROR;
+}
+
+extern "C" int
+_view_cmd_polygon(void *bs, int argc, const char **argv)
+{
+    int help = 0;
+    int local_only = 0;
+    struct _ged_view_info *gd = (struct _ged_view_info *)bs;
+    struct ged *gedp = gd->gedp;
+
+    const char *usage_string = "view [options] polygon [-L] <verb> <name> [args]";
+    const char *purpose_string = "create and edit polygon annotation objects";
+    if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
+	return BRLCAD_OK;
+    if (!_view_object_scene_ready(gd))
+	return BRLCAD_ERROR;
+
+    argc--; argv++;
+
+    struct bu_opt_desc d[3];
+    BU_OPT(d[0], "h", "help",  "",  NULL,  &help,       "Print help");
+    BU_OPT(d[1], "L", "local", "",  NULL,  &local_only, "Object is scoped only to current/specified view");
+    BU_OPT_NULL(d[2]);
+    gd->gopts = d;
+
+    int first_pos = _view_object_first_pos(argc, argv);
+    int acnt = (first_pos >= 0) ? first_pos : argc;
+    (void)bu_opt_parse(NULL, acnt, argv, d);
+    gd->local_obj = local_only;
+
+    if (help) {
+	_ged_cmd_help(gedp, usage_string, d);
+	return GED_HELP;
+    }
+    if (first_pos < 0 || argc - first_pos < 2) {
+	bu_vls_printf(gedp->ged_result_str, "Usage: %s\n", usage_string);
+	return BRLCAD_ERROR;
+    }
+
+    const char **sub_argv = argv + first_pos;
+    int sub_argc = argc - first_pos;
+    const char *verb = sub_argv[0];
+    gd->vobj = sub_argv[1];
+    gd->polygon_ref = ged_draw_view_context_polygon_find_scoped(gd->cv,
+	    gd->vobj, gd->local_obj);
+    gd->shape_ref = _view_obj_shape_ref_find(gedp, gd->cv, gd->vobj, 1, 1, gd->local_obj);
+
+    if (BU_STR_EQUAL(verb, "update")) {
+	std::vector<const char *> uargv;
+	uargv.push_back("update");
+	for (int i = 2; i < sub_argc; i++)
+	    uargv.push_back(sub_argv[i]);
+	uargv.push_back(NULL);
+	return _objs_cmd_update(gd, (int)uargv.size() - 1, uargv.data());
+    }
+
+    std::vector<const char *> cargv;
+    cargv.push_back("polygon");
+    cargv.push_back(verb);
+    for (int i = 2; i < sub_argc; i++)
+	cargv.push_back(sub_argv[i]);
+    cargv.push_back(NULL);
+    return _view_cmd_polygons(gd, (int)cargv.size() - 1, cargv.data());
+}
+
+extern "C" int
+_view_cmd_db_objects(void *bs, int argc, const char **argv)
+{
+    int help = 0;
+    struct bu_vls as_name = BU_VLS_INIT_ZERO;
+    struct _ged_view_info *gd = (struct _ged_view_info *)bs;
+    struct ged *gedp = gd->gedp;
+
+    const char *usage_string = "view [options] db <add|delete|list> ...";
+    const char *purpose_string = "manage Obol database display objects";
+    if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
+	return BRLCAD_OK;
+    if (!_view_object_scene_ready(gd))
+	return BRLCAD_ERROR;
+
+    argc--; argv++;
+
+    if (argc <= 0) {
+	_view_obj_list(gedp->ged_result_str, gd->cv, 0, 1, 0, NULL);
+	return BRLCAD_OK;
+    }
+
+    if (BU_STR_EQUAL(argv[0], "list")) {
+	const char *glob = (argc > 1) ? argv[1] : NULL;
+	if (argc > 2) {
+	    bu_vls_printf(gedp->ged_result_str, "Usage: view db list [glob_pattern]");
+	    return BRLCAD_ERROR;
+	}
+	_view_obj_list(gedp->ged_result_str, gd->cv, 0, 1, 0, glob);
+	return BRLCAD_OK;
+    }
+
+    if (BU_STR_EQUAL(argv[0], "add")) {
+	if (argc < 2) {
+	    bu_vls_printf(gedp->ged_result_str, "Usage: view db add <dbpath> [--as <name>]");
+	    return BRLCAD_ERROR;
+	}
+	struct bu_opt_desc d[3];
+	BU_OPT(d[0], "h", "help",  "",      NULL,        &help,       "Print help");
+	BU_OPT(d[1], "",  "as",    "name",  &bu_opt_vls, &as_name,    "View object name");
+	BU_OPT_NULL(d[2]);
+	gd->gopts = d;
+	const char **add_argv = argv + 1;
+	int acnt = bu_opt_parse(NULL, argc - 1, add_argv, d);
+	if (help) {
+	    _ged_cmd_help(gedp, "view db add <dbpath> [--as <name>]", d);
+	    bu_vls_free(&as_name);
+	    return GED_HELP;
+	}
+	if (acnt < 1) {
+	    bu_vls_free(&as_name);
+	    bu_vls_printf(gedp->ged_result_str, "Usage: view db add <dbpath> [--as <name>]");
+	    return BRLCAD_ERROR;
+	}
+	const char *dbpath = add_argv[0];
+	const char *name = bu_vls_strlen(&as_name) ? bu_vls_cstr(&as_name) : dbpath;
+	int ret = ged_draw_view_context_gobject_create(gedp, gd->cv, dbpath,
+		name, gedp->ged_result_str) ? BRLCAD_OK : BRLCAD_ERROR;
+	bu_vls_free(&as_name);
+	return ret;
+    }
+
+    if (BU_STR_EQUAL(argv[0], "delete")) {
+	if (argc != 2) {
+	    bu_vls_printf(gedp->ged_result_str, "Usage: view db delete <name>");
+	    return BRLCAD_ERROR;
+	}
+	gd->vobj = argv[1];
+	gd->shape_ref = _view_obj_shape_ref_find(gedp, gd->cv, gd->vobj, 0, 1, 0);
+	const char *rargv[2] = {"delete", NULL};
+	return _objs_cmd_delete(gd, 1, rargv);
+    }
+
+    bu_vls_printf(gedp->ged_result_str,
+	    "Unsupported db subcommand %s (valid: add, delete, list)", argv[0]);
     return BRLCAD_ERROR;
 }
 

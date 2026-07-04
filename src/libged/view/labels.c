@@ -42,7 +42,7 @@ _label_cmd_create(void *bs, int argc, const char **argv)
 {
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    const char *usage_string = "view obj create <objname> label create text x y [z] [px py pz]";
+    const char *usage_string = "view annotation label create <name> text x y [z] [px py pz]";
     const char *purpose_string = "start a label at point x,y,[z], possibly targeting point px,py,pz";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
@@ -144,7 +144,7 @@ _view_cmd_labels(void *bs, int argc, const char **argv)
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
 
-    const char *usage_string = "view obj [options] label [options] [args]";
+    const char *usage_string = "view annotation label [options] [args]";
     const char *purpose_string = "create/manipulate view labels";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
@@ -178,7 +178,7 @@ _view_cmd_labels(void *bs, int argc, const char **argv)
     int acnt = (cmd_pos >= 0) ? cmd_pos : argc;
     (void)bu_opt_parse(NULL, acnt, argv, d);
 
-    return _ged_subcmd_exec(gedp, d, _label_cmds, "view obj label", "[options] subcommand [args]", gd, argc, argv, help, cmd_pos);
+    return _ged_subcmd_exec(gedp, d, _label_cmds, "view annotation label", "[options] subcommand [args]", gd, argc, argv, help, cmd_pos);
 }
 
 /*

@@ -1169,19 +1169,19 @@ draw-view context facade.  Deletion routes through
 source-group, and transient shape-ref cleanup behind one neutral facade.
 Draw visibility and update/realize route through object-level visible/get/set
 and realize facades that centralize feature-vs-shape-ref dispatch.  The
-remaining color/arrow style paths use context-form feature-style apply, route
+remaining style paths are reached through `view object style`, route
 mouse-state updates through a GED facade, and report draw modes with
 `GED_DRAW_MODE_*` names instead of including direct BSG headers,
 `rt/view_legacy_bsg.h`, or libged's private draw-view header.
-Deprecated gobject create/delete command handling in
-`src/libged/view/gobjs.cpp` now uses `ged_draw_view_context_gobject_create`
-for creation and delegates deletion to the canonical `view obj remove` path;
+Database display/edit-proxy command handling now reaches
+`ged_draw_view_context_gobject_create` through `view db add` and deletion
+through `view db delete`/`view object delete`;
 retained scene-ref allocation, appearance setup, shape user-data ownership, and `draw_gather_paths`
 population stay in the draw bridge implementation instead of the command file:
 
 * libged view-object screen/model/info snapshots: no typed RT view snapshot calls
-* libged generic view-object command paths: no private draw-view header, direct BSG headers, BSG feature tokens, or BSG draw-mode constants
-* libged deprecated gobject command paths: no private draw-view header, direct BSG headers, retained scene refs, BSG appearance settings, direct overlay-create calls, or BSG feature tokens
+* libged generic view-object command paths: no private draw-view header, direct BSG headers, BSG feature tokens, BSG draw-mode constants, or retired `view obj`/`view gobjs` public syntax
+* libged database view-object command paths: no private draw-view header, direct BSG headers, retained scene refs, BSG appearance settings, direct overlay-create calls, or BSG feature tokens
 
 Libged view-command selection, feature-depth, label, line, axes, LoD, and
 polygon operations use the public GED draw-view context facade.  Polygon

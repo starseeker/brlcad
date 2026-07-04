@@ -767,7 +767,7 @@ bsg_autoview(struct bsg_view *v, fastf_t factor, int all_view_objs)
     // that are db object based, polygons or labels, unless the flag to
     // consider all objects is set.   However, there is an exception - if there
     // are NO such objects in the scene (have_geom_objs == 0) and we do have
-    // view objs (for example, when overlaying a plot file on an empty view)
+    // view objects (for example, when overlaying a plot file on an empty view)
     // then basing autoview on the view-scoped features is more intuitive than just
     // using the default view settings.
 

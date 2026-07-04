@@ -56,7 +56,7 @@ _axes_cmd_create(void *bs, int argc, const char **argv)
 {
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    const char *usage_string = "view obj create <objname> axes create x y z";
+    const char *usage_string = "view annotation axes create <name> x y z";
     const char *purpose_string = "define data axes at point x,y,z";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
@@ -102,7 +102,7 @@ _axes_cmd_pos(void *bs, int argc, const char **argv)
 {
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    const char *usage_string = "view obj create <objname> axes pos [x y z]";
+    const char *usage_string = "view annotation axes pos <name> [x y z]";
     const char *purpose_string = "adjust axes position";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
@@ -149,7 +149,7 @@ _axes_cmd_size(void *bs, int argc, const char **argv)
 {
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    const char *usage_string = "view obj create <objname> axes size [#]";
+    const char *usage_string = "view annotation axes size <name> [#]";
     const char *purpose_string = "adjust axes size";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
@@ -195,7 +195,7 @@ _axes_cmd_linewidth(void *bs, int argc, const char **argv)
 {
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    const char *usage_string = "view obj create <objname> axes linewidth [#]";
+    const char *usage_string = "view annotation axes line_width <name> [#]";
     const char *purpose_string = "adjust axes line width";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
@@ -246,7 +246,7 @@ _axes_cmd_axes_color(void *bs, int argc, const char **argv)
 {
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    const char *usage_string = "view obj create <objname> axes color [r/g/b]";
+    const char *usage_string = "view annotation axes axes_color <name> [r/g/b]";
     const char *purpose_string = "get/set color of axes";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
@@ -308,7 +308,7 @@ _view_cmd_axes(void *bs, int argc, const char **argv)
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
 
-    const char *usage_string = "view obj [options] axes [options] [args]";
+    const char *usage_string = "view annotation axes [options] [args]";
     const char *purpose_string = "create/manipulate view axes";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
@@ -342,7 +342,7 @@ _view_cmd_axes(void *bs, int argc, const char **argv)
     int acnt = (cmd_pos >= 0) ? cmd_pos : argc;
     (void)bu_opt_parse(NULL, acnt, argv, d);
 
-    return _ged_subcmd_exec(gedp, d, _axes_cmds, "view obj axes", "[options] subcommand [args]", gd, argc, argv, help, cmd_pos);
+    return _ged_subcmd_exec(gedp, d, _axes_cmds, "view annotation axes", "[options] subcommand [args]", gd, argc, argv, help, cmd_pos);
 }
 
 /*

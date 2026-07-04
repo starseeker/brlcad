@@ -91,7 +91,7 @@ QPolyMod::QPolyMod()
     defaultBox->setLayout(default_gl);
     l->addWidget(defaultBox);
     QObject::connect(ps, &QPolySettings::settings_changed, this, &QPolyMod::polygon_update_props);
-    // We'll need to be aware if we specify a colliding view obj name
+    // We'll need to be aware if we specify a colliding polygon object name
     QObject::connect(ps->view_name, &QLineEdit::textEdited, this, &QPolyMod::view_name_edit_str);
     QObject::connect(ps->view_name, &QLineEdit::editingFinished, this, &QPolyMod::view_name_update);
     // The sketch name gets enabled/disabled and in some modes syncs with the

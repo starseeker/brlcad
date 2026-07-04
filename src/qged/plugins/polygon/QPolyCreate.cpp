@@ -136,7 +136,7 @@ QPolyCreate::QPolyCreate()
     ps->view_name->setPlaceholderText(QString(bu_vls_cstr(&pname)));
     bu_vls_free(&pname);
 
-    // We'll need to be aware if we specify a colliding view obj name
+    // We'll need to be aware if we specify a colliding polygon object name
     QObject::connect(ps->view_name, &QLineEdit::textEdited, this, &QPolyCreate::view_sync_str);
 
     // The sketch name gets enabled/disabled and in some modes syncs with the

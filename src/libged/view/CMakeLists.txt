@@ -13,7 +13,6 @@ set(
   faceplate/faceplate_axes.c
   faceplate/faceplate_grid.c
   faceplate/interactive_rect.c
-  gobjs.cpp
   knob.c
   labels.c
   lines.c

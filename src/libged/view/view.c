@@ -543,8 +543,8 @@ _view_cmd_vZ(void *bs, int argc, const char **argv)
     struct vZ_opt calc_far = { 0, BU_VLS_INIT_ZERO };
     struct bu_opt_desc d[4];
     BU_OPT(d[0], "h", "help", "",       NULL,  &print_help, "Print help");
-    BU_OPT(d[1], "N", "near", "[obj]",  &vZ_opt_read,  &calc_near,  "Find vZ value of closest view obj vertex");
-    BU_OPT(d[2], "F", "far",  "[obj]",  &vZ_opt_read,  &calc_far,   "Find vZ value of furthest view obj vertex");
+    BU_OPT(d[1], "N", "near", "[obj]",  &vZ_opt_read,  &calc_near,  "Find vZ value of closest view object vertex");
+    BU_OPT(d[2], "F", "far",  "[obj]",  &vZ_opt_read,  &calc_far,   "Find vZ value of furthest view object vertex");
     BU_OPT_NULL(d[3]);
 
     // We know we're the vZ command - start processing args
@@ -703,14 +703,16 @@ const struct bu_cmdtab _view_cmds[] = {
     { "aet",        _view_cmd_aet},
     { "center",     _view_cmd_center},
     { "eye",        _view_cmd_eye},
+    { "annotation", _view_cmd_annotation},
+    { "db",         _view_cmd_db_objects},
     { "faceplate",  _view_cmd_faceplate},
     { "height",     _view_cmd_height},
     { "independent",_view_cmd_independent},
     { "knob",       _view_cmd_knob},
     { "list",       _view_cmd_list},
     { "lod",        _view_cmd_lod},
-    { "obj",        _view_cmd_objs},
-    { "objs",       _view_cmd_objs},
+    { "object",     _view_cmd_object},
+    { "polygon",    _view_cmd_polygon},
     { "quat",       _view_cmd_quat},
     { "selections", _view_cmd_selections},
     { "size",       _view_cmd_size},

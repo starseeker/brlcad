@@ -49,7 +49,7 @@ QPolySettings::QPolySettings()
     l->setSpacing(1);
     l->setContentsMargins(1,1,1,1);
 
-    QLabel *vn_label = new QLabel("Polygon view obj name:");
+    QLabel *vn_label = new QLabel("Polygon object name:");
     view_name = new QLineEdit();
     l->addWidget(vn_label);
     l->addWidget(view_name);
