@@ -4487,6 +4487,94 @@ ged_draw_obol_context_from_rt_ref(rt_view_scene_ref scene_ref)
 }
 
 
+static ged_draw_group_ref ged_draw_obol_group_ref_for_path(struct ged *gedp,
+							   const char *path);
+
+
+static ged_draw_group_ref
+ged_draw_obol_context_group_ref(struct ged *gedp,
+				struct ged_draw_obol_context_token *token)
+{
+    if (!gedp || !token || !token->is_group || token->is_database_source)
+	return GED_DRAW_GROUP_REF_NULL;
+
+    rt_view_scene_ref group_scene_ref =
+	rt_view_scene_ref_make((void *)token, RT_VIEW_SCENE_BACKEND_OBOL);
+    ged_draw_group_ref ref =
+	ged_draw_registry_group_ref_from_source_ref(gedp, group_scene_ref);
+    ref.scene_revision = 0;
+    if (!ged_draw_group_ref_is_null(ref) && token->fullpath_valid)
+	(void)ged_draw_registry_group_ref_set_indexed_fullpath(gedp, ref,
+		&token->fullpath);
+    return ref;
+}
+
+
+static ged_draw_group_ref
+ged_draw_obol_top_group_ref_for_path(struct ged *gedp, const char *path)
+{
+    if (!gedp || !path || !path[0])
+	return GED_DRAW_GROUP_REF_NULL;
+
+    const char *start = ged_draw_dbpath_skip_lead_slash(path);
+    if (!start || !start[0])
+	return GED_DRAW_GROUP_REF_NULL;
+
+    const char *slash = strchr(start, '/');
+    if (!slash)
+	return ged_draw_obol_group_ref_for_path(gedp, start);
+
+    struct bu_vls top = BU_VLS_INIT_ZERO;
+    bu_vls_strncpy(&top, start, (size_t)(slash - start));
+    ged_draw_group_ref ref = ged_draw_obol_group_ref_for_path(gedp,
+	    bu_vls_cstr(&top));
+    bu_vls_free(&top);
+    return ref;
+}
+
+
+static ged_draw_group_ref
+ged_draw_obol_top_group_ref_for_fullpath(struct ged *gedp,
+					 const struct db_full_path *fullpath)
+{
+    if (!gedp || !fullpath || fullpath->fp_len <= 0 ||
+	    !fullpath->fp_names[0] || !fullpath->fp_names[0]->d_namep)
+	return GED_DRAW_GROUP_REF_NULL;
+    return ged_draw_obol_group_ref_for_path(gedp,
+	    fullpath->fp_names[0]->d_namep);
+}
+
+
+static ged_draw_group_ref
+ged_draw_obol_shape_owner_group_ref(struct ged *gedp,
+				    struct ged_draw_obol_context_token *token)
+{
+    if (!gedp || !token)
+	return GED_DRAW_GROUP_REF_NULL;
+
+    struct ged_draw_obol_context_token *top_group = NULL;
+    for (struct ged_draw_obol_context_token *ancestor =
+	    ged_draw_obol_context_from_scene_ctx(token->parent_ctx);
+	    ancestor;
+	    ancestor = ged_draw_obol_context_from_scene_ctx(
+		    ancestor->parent_ctx)) {
+	if (ancestor->is_database_source && ancestor->path) {
+	    ged_draw_group_ref ref = ancestor->fullpath_valid ?
+		ged_draw_obol_top_group_ref_for_fullpath(gedp,
+			&ancestor->fullpath) :
+		ged_draw_obol_top_group_ref_for_path(gedp, ancestor->path);
+	    if (!ged_draw_group_ref_is_null(ref))
+		return ref;
+	}
+	if (ancestor->is_group && !ancestor->is_database_source &&
+		ancestor->path && !BU_STR_EQUAL(ancestor->path, "/"))
+	    top_group = ancestor;
+    }
+
+    return ged_draw_obol_context_group_ref(gedp, top_group);
+}
+
+
 static void
 ged_draw_obol_context_token_free(struct ged_draw_obol_context_token *token)
 {
@@ -5971,6 +6059,11 @@ static void *
 _ged_draw_shape_ref_obol_context(struct ged *gedp,
 				 ged_draw_shape_ref ref)
 {
+    struct ged_draw_obol_context_token *token =
+	ged_draw_shape_ref_obol_token(gedp, ref);
+    if (token)
+	return (void *)token;
+
     struct ged_draw_shape_ref_obol_context_ctx ctx;
     ctx.context = NULL;
 
@@ -10736,13 +10829,18 @@ ged_draw_shape_ref_record_summary(struct ged *gedp,
 	    bu_free(components, "GED Obol shape record path hash components");
 	}
 
-	struct bu_vls owner_group_path = BU_VLS_INIT_ZERO;
-	if (ged_draw_obol_database_source_owner_group_path_for_path(gedp,
-		token->path, &owner_group_path)) {
-	    out->owning_group_ref = ged_draw_obol_group_ref_for_path(gedp,
-		    bu_vls_cstr(&owner_group_path));
+	out->owning_group_ref = token->fullpath_valid ?
+	    ged_draw_obol_top_group_ref_for_fullpath(gedp, &token->fullpath) :
+	    ged_draw_obol_top_group_ref_for_path(gedp, token->path);
+	if (ged_draw_group_ref_is_null(out->owning_group_ref)) {
+	    struct bu_vls owner_group_path = BU_VLS_INIT_ZERO;
+	    if (ged_draw_obol_database_source_owner_group_path_for_path(gedp,
+		    token->path, &owner_group_path)) {
+		out->owning_group_ref = ged_draw_obol_group_ref_for_path(gedp,
+			bu_vls_cstr(&owner_group_path));
+	    }
+	    bu_vls_free(&owner_group_path);
 	}
-	bu_vls_free(&owner_group_path);
 
 	struct ged_draw_database_source_summary source_summary;
 	if (ged_draw_obol_database_source_summary_for_path(gedp,
@@ -10799,25 +10897,8 @@ ged_draw_shape_ref_record_summary(struct ged *gedp,
 	out->path_hash = bu_data_hash(token->path,
 		strlen(token->path) * sizeof(char));
 
-	struct ged_draw_obol_context_token *parent =
-	    ged_draw_obol_context_from_scene_ctx(token->parent_ctx);
-	if (parent && parent->is_group && !parent->is_database_source) {
-	    rt_view_scene_ref group_scene_ref =
-		rt_view_scene_ref_make(token->parent_ctx,
-			RT_VIEW_SCENE_BACKEND_OBOL);
-	    out->owning_group_ref =
-		ged_draw_registry_group_ref_from_source_ref(gedp,
-			group_scene_ref);
-	    out->owning_group_ref.scene_revision = 0;
-	} else if (parent && parent->is_database_source && parent->path) {
-	    struct bu_vls owner_group_path = BU_VLS_INIT_ZERO;
-	    if (ged_draw_obol_database_source_owner_group_path_for_path(gedp,
-		    parent->path, &owner_group_path)) {
-		out->owning_group_ref = ged_draw_obol_group_ref_for_path(gedp,
-			bu_vls_cstr(&owner_group_path));
-	    }
-	    bu_vls_free(&owner_group_path);
-	}
+	out->owning_group_ref =
+	    ged_draw_obol_shape_owner_group_ref(gedp, token);
 
 	if (!out->stale_reason)
 	    out->stale_reason = ged_draw_stale_reason_name(

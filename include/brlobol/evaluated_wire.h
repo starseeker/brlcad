@@ -6,11 +6,12 @@
  */
 /** @file brlobol/evaluated_wire.h
  *
- * libbrlobol evaluated-wire provider boundary.
+ * libbrlobol compatibility adapter for librt evaluated-wire output.
  *
- * This API returns source-local neutral BG line-command arrays.  Callers own
- * successful output arrays and must release them with
- * brlobol_evaluated_wire_line_set_free.
+ * New evaluated-wire correctness work belongs in rt_eval_wireframe().  This
+ * API keeps existing Obol/GED publication code on source-local neutral BG
+ * line-command arrays.  Callers own successful output arrays and must release
+ * them with brlobol_evaluated_wire_line_set_free.
  */
 
 #ifndef BRLOBOL_EVALUATED_WIRE_H

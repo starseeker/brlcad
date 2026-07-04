@@ -144,6 +144,7 @@ set(
   dir.c
   dspline.c
   edit.cpp
+  eval_wireframe.cpp
   fortray.c
   globals.c
   htbl.c

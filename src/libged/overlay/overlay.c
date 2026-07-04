@@ -110,13 +110,6 @@ ged_overlay_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
-    if (!dmp) {
-	bu_vls_printf(gedp->ged_result_str, ": no display manager currently active");
-	bu_vls_free(&vname);
-	return BRLCAD_ERROR;
-    }
-
     /* must be wanting help */
     if (argc == 1) {
 	_ged_cmd_help(gedp, usage, d);
@@ -146,6 +139,12 @@ ged_overlay_core(struct ged *gedp, int argc, const char *argv[])
     argc = opt_ret;
 
     if (write_fb) {
+	dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
+	if (!dmp) {
+	    bu_vls_printf(gedp->ged_result_str, ": no display manager currently active");
+	    bu_vls_free(&vname);
+	    return BRLCAD_ERROR;
+	}
 	fbp = dm_get_fb(dmp);
 	if (!fbp) {
 	    bu_vls_printf(gedp->ged_result_str, ": display manager does not have a framebuffer");

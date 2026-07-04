@@ -36,49 +36,12 @@
 #include "../view/view.h"
 
 /* Phase T3 (drawing_stack_modernization): the "view get" introspection path
- * (getters in to_data_arrows_func) now recovers values by reading the BSG
- * object fields rather than gv_tcl directly, making BSG the canonical read
+ * (getters in to_data_arrows_func) now recovers values through typed GED
+ * draw-view data-arrow facades, making the draw view the canonical read
  * source for Tcl introspection.
  *
- * Setters no longer write gv_tcl at all; they mutate the BSG object in-place
- * (color, line_width, tip_length, tip_width, draw) or rebuild it from scratch
- * preserving current style (points).  gv_tcl is no longer mirrored. */
-
-static void
-_tclcad_data_arrow_rebuild_style(void *view_ctx,
-				 const char *name,
-				 struct ged_draw_view_feature_style *style)
-{
-    if (!style)
-	return;
-
-    struct ged_draw_view_feature_style saved = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
-    saved.visible = 1;
-    saved.color_valid = 1;
-    saved.color[0] = 255;
-    saved.color[1] = 255;
-    saved.color[2] = 0;
-    saved.line_width = 0;
-    saved.arrow = 1;
-    saved.arrow_tip_length = 0.0;
-    saved.arrow_tip_width = 0.0;
-
-    struct ged_draw_view_feature_style current = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
-    if (ged_draw_view_context_feature_style_get(view_ctx, name, &current)) {
-	saved.visible = current.visible;
-	if (current.color_valid) {
-	    saved.color_valid = 1;
-	    saved.color[0] = current.color[0];
-	    saved.color[1] = current.color[1];
-	    saved.color[2] = current.color[2];
-	}
-	saved.line_width = current.line_width;
-	saved.arrow_tip_length = current.arrow_tip_length;
-	saved.arrow_tip_width = current.arrow_tip_width;
-    }
-
-    *style = saved;
-}
+ * Setters no longer write gv_tcl at all; they request typed data-arrow facade
+ * operations for color, line_width, tip_length, tip_width, draw, and points. */
 
 int
 go_data_arrows(Tcl_Interp *interp,
@@ -168,7 +131,7 @@ to_data_arrows_func(Tcl_Interp *interp,
     if (BU_STR_EQUAL(argv[1], "draw")) {
 	if (argc == 2) {
 	    bu_vls_printf(gedp->ged_result_str, "%d",
-			  ged_draw_view_context_feature_exists(view_ctx, bsg_name) ? 1 : 0);
+			  ged_draw_view_context_data_arrows_draw_get(view_ctx, bsg_name) ? 1 : 0);
 	    return BRLCAD_OK;
 	}
 
@@ -178,7 +141,7 @@ to_data_arrows_func(Tcl_Interp *interp,
 	    if (bu_sscanf(argv[2], "%d", &i) != 1)
 		goto bad;
 
-	    ged_draw_view_context_feature_visible_set(view_ctx, bsg_name, i ? 1 : 0);
+	    ged_draw_view_context_data_arrows_draw_set(view_ctx, bsg_name, i ? 1 : 0);
 	    /* If no BSG object exists and draw=1 is requested, nothing to show
 	     * yet (no points have been set); silently no-op. */
 
@@ -192,7 +155,7 @@ to_data_arrows_func(Tcl_Interp *interp,
     if (BU_STR_EQUAL(argv[1], "color")) {
 	if (argc == 2) {
 	    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
-	    if (ged_draw_view_context_feature_style_get(view_ctx, bsg_name, &style) && style.color_valid) {
+	    if (ged_draw_view_context_data_arrows_style_get(view_ctx, bsg_name, &style) && style.color_valid) {
 		bu_vls_printf(gedp->ged_result_str, "%d %d %d",
 			      (int)style.color[0], (int)style.color[1], (int)style.color[2]);
 	    } else {
@@ -216,7 +179,7 @@ to_data_arrows_func(Tcl_Interp *interp,
 		b < 0 || 255 < b)
 		goto bad;
 
-	    ged_draw_view_context_line_color_set(view_ctx, bsg_name, r, g, b);
+	    ged_draw_view_context_data_arrows_color_set(view_ctx, bsg_name, r, g, b);
 
 	    to_refresh_view(view_ctx);
 	    return BRLCAD_OK;
@@ -228,7 +191,7 @@ to_data_arrows_func(Tcl_Interp *interp,
     if (BU_STR_EQUAL(argv[1], "line_width")) {
 	if (argc == 2) {
 	    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
-	    if (ged_draw_view_context_feature_style_get(view_ctx, bsg_name, &style))
+	    if (ged_draw_view_context_data_arrows_style_get(view_ctx, bsg_name, &style))
 		bu_vls_printf(gedp->ged_result_str, "%d", style.line_width);
 	    else
 		bu_vls_printf(gedp->ged_result_str, "0");
@@ -241,7 +204,7 @@ to_data_arrows_func(Tcl_Interp *interp,
 	    if (bu_sscanf(argv[2], "%d", &line_width) != 1)
 		goto bad;
 
-	    ged_draw_view_context_line_width_set(view_ctx, bsg_name, line_width);
+	    ged_draw_view_context_data_arrows_line_width_set(view_ctx, bsg_name, line_width);
 
 	    to_refresh_view(view_ctx);
 	    return BRLCAD_OK;
@@ -256,7 +219,7 @@ to_data_arrows_func(Tcl_Interp *interp,
 	if (argc == 2) {
 	    point_t *pts = NULL;
 	    size_t npts = 0;
-	    if (ged_draw_view_context_feature_points_copy(view_ctx, bsg_name, &pts, &npts)) {
+	    if (ged_draw_view_context_data_arrows_points_copy(view_ctx, bsg_name, &pts, &npts)) {
 		for (size_t _j = 0; _j < npts; _j++)
 		    bu_vls_printf(gedp->ged_result_str, " {%lf %lf %lf} ", V3ARGS(pts[_j]));
 		bu_free(pts, "GED draw view feature points copy");
@@ -279,13 +242,14 @@ to_data_arrows_func(Tcl_Interp *interp,
 		return BRLCAD_ERROR;
 	    }
 
-	    /* T3: save style from existing BSG object before replacing it. */
+	    /* Save style from existing object before replacing it. */
 	    struct ged_draw_view_feature_style saved_style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
-	    _tclcad_data_arrow_rebuild_style(view_ctx, bsg_name, &saved_style);
+	    ged_draw_view_context_data_arrows_style_get(view_ctx, bsg_name, &saved_style);
 
-	    /* Clear out: remove old BSG object. */
+	    /* Clear out: remove old draw-view object. */
 	    if (ac < 2) {
-		ged_draw_view_context_feature_remove(view_ctx, bsg_name);
+		ged_draw_view_context_data_arrows_points_replace(view_ctx,
+			bsg_name, NULL, 0, &saved_style);
 		Tcl_Free((char *)av);
 		to_refresh_view(view_ctx);
 		return BRLCAD_OK;
@@ -305,8 +269,8 @@ to_data_arrows_func(Tcl_Interp *interp,
 		VMOVE(pts[i], scan);
 	    }
 
-	    /* T3: rebuild BSG from new points, preserving style (no gv_tcl write). */
-	    (void)ged_draw_view_context_tcl_arrows_replace(view_ctx, bsg_name, pts, (size_t)ac,
+	    /* Rebuild draw-view data arrows from new points, preserving style. */
+	    (void)ged_draw_view_context_data_arrows_points_replace(view_ctx, bsg_name, pts, (size_t)ac,
 		    &saved_style);
 	    bu_free(pts, "arrow points");
 	    Tcl_Free((char *)av);
@@ -318,7 +282,7 @@ to_data_arrows_func(Tcl_Interp *interp,
     if (BU_STR_EQUAL(argv[1], "tip_length")) {
 	if (argc == 2) {
 	    fastf_t tip_length = 0.0;
-	    if (ged_draw_view_context_arrow_tip_get(view_ctx, bsg_name, &tip_length, NULL)) {
+	    if (ged_draw_view_context_data_arrows_tip_get(view_ctx, bsg_name, &tip_length, NULL)) {
 		bu_vls_printf(gedp->ged_result_str, "%d", (int)tip_length);
 	    } else {
 		bu_vls_printf(gedp->ged_result_str, "0");
@@ -333,8 +297,8 @@ to_data_arrows_func(Tcl_Interp *interp,
 		goto bad;
 
 	    fastf_t tip_width = 0.0;
-	    if (ged_draw_view_context_arrow_tip_get(view_ctx, bsg_name, NULL, &tip_width))
-		ged_draw_view_context_arrow_tip_set(view_ctx, bsg_name, (fastf_t)tip_length, tip_width);
+	    if (ged_draw_view_context_data_arrows_tip_get(view_ctx, bsg_name, NULL, &tip_width))
+		ged_draw_view_context_data_arrows_tip_set(view_ctx, bsg_name, (fastf_t)tip_length, tip_width);
 
 	    to_refresh_view(view_ctx);
 	    return BRLCAD_OK;
@@ -346,7 +310,7 @@ to_data_arrows_func(Tcl_Interp *interp,
     if (BU_STR_EQUAL(argv[1], "tip_width")) {
 	if (argc == 2) {
 	    fastf_t tip_width = 0.0;
-	    if (ged_draw_view_context_arrow_tip_get(view_ctx, bsg_name, NULL, &tip_width)) {
+	    if (ged_draw_view_context_data_arrows_tip_get(view_ctx, bsg_name, NULL, &tip_width)) {
 		bu_vls_printf(gedp->ged_result_str, "%d", (int)tip_width);
 	    } else {
 		bu_vls_printf(gedp->ged_result_str, "0");
@@ -361,8 +325,8 @@ to_data_arrows_func(Tcl_Interp *interp,
 		goto bad;
 
 	    fastf_t tip_length = 0.0;
-	    if (ged_draw_view_context_arrow_tip_get(view_ctx, bsg_name, &tip_length, NULL))
-		ged_draw_view_context_arrow_tip_set(view_ctx, bsg_name, tip_length, (fastf_t)tip_width);
+	    if (ged_draw_view_context_data_arrows_tip_get(view_ctx, bsg_name, &tip_length, NULL))
+		ged_draw_view_context_data_arrows_tip_set(view_ctx, bsg_name, tip_length, (fastf_t)tip_width);
 
 	    to_refresh_view(view_ctx);
 	    return BRLCAD_OK;

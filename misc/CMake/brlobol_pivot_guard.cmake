@@ -84,7 +84,7 @@ function(_brlobol_pivot_guard_check_ged_tcl_overlay_bsg_test)
 	ged_draw_view_context_feature_style_get
 	ged_draw_view_context_tcl_arrows_replace
 	ged_draw_view_context_tcl_axes_replace
-	ged_draw_view_context_tcl_polygons_replace
+	ged_draw_view_context_data_polygons_replace
 	ged_draw_view_context_tcl_labels_replace
 	rt_view_context_display_manager_get
 	rt_view_context_display_manager_set)
@@ -9513,6 +9513,9 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	      endif()
 	    endforeach()
     foreach(_pat
+	[[_ged_draw_uplot_to_feature]]
+	[[_ged_draw_uplot_files_to_feature]]
+	[[_ged_uplot_stream_publish_feature]]
 	[[#[ \t]*include[ \t]*[<"]bsg/(feature|geometry)\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/view_state\.h]]
 	[[(^|[^A-Za-z0-9_])struct[ \t]+bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
@@ -9529,6 +9532,22 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       if(_libged_uplot_util_direct_hit)
 	_brlobol_pivot_guard_fail(
 	  "src/libged/ged_util.cpp reintroduced direct BSG uplot feature or geometry access: ${_libged_uplot_util_direct_hit}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_private_uplot_header "${BRLCAD_SOURCE_DIR}/src/libged/ged_private.h")
+  if(EXISTS "${_libged_private_uplot_header}")
+    file(READ "${_libged_private_uplot_header}" _libged_private_uplot_header_contents)
+    foreach(_pat
+	[[_ged_draw_uplot_to_feature]]
+	[[_ged_draw_uplot_files_to_feature]]
+	[[_ged_uplot_stream_publish_feature]])
+      string(REGEX MATCH "${_pat}" _libged_private_direct_uplot_hit
+	"${_libged_private_uplot_header_contents}")
+      if(_libged_private_direct_uplot_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/ged_private.h reintroduced retired direct uplot feature helper exposure: ${_libged_private_direct_uplot_hit}")
       endif()
     endforeach()
   endif()
@@ -9690,18 +9709,18 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 		[[ged_view_context_snap_lines_get]]
 		[[ged_view_context_snap_lines_set]]
 		[[#[ \t]*include[ \t]*[<"]\./ged_view\.h]]
-		[[ged_draw_view_context_feature_visible]]
-	[[ged_draw_view_context_feature_remove]]
-	[[ged_draw_view_context_line_style_get]]
-	[[ged_draw_view_context_line_color_set]]
-	[[ged_draw_view_context_line_width_set]]
-	[[ged_draw_view_context_lines_points_copy]]
-	[[ged_draw_view_context_tcl_lines_replace]])
+		[[ged_draw_view_context_data_lines_draw_get]]
+		[[ged_draw_view_context_data_lines_draw_set]]
+		[[ged_draw_view_context_data_lines_style_get]]
+		[[ged_draw_view_context_data_lines_color_set]]
+		[[ged_draw_view_context_data_lines_line_width_set]]
+		[[ged_draw_view_context_data_lines_points_copy]]
+		[[ged_draw_view_context_data_lines_points_replace]])
       string(REGEX MATCH "${_token}" _libged_view_data_lines_cmd_token_hit
 	"${_libged_view_data_lines_cmd_contents}")
       if(NOT _libged_view_data_lines_cmd_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/data_lines.c must route snap-line view-state and feature overlay edits through GED facades")
+	  "src/libged/view/data_lines.c must route snap-line view-state through view helpers and data-line edits through typed GED draw-view facades")
       endif()
 	    endforeach()
 	    foreach(_pat
@@ -9714,6 +9733,13 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[(^|[^A-Za-z0-9_])rt_view_snap_lines_set_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])rt_view_context_snap_lines_from_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])rt_view_context_snap_lines_set_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_feature_visible[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_feature_remove[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_line_style_get[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_line_color_set[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_line_width_set[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_lines_points_copy[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_tcl_lines_replace[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_view_feature_visible[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_view_feature_remove[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_view_line_style_get[ \t\r\n]*\(]]
@@ -9742,19 +9768,27 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	    file(READ "${_libged_view_lines_cmd}" _libged_view_lines_cmd_contents)
 	    foreach(_token
 		[[#[ \t]*include[ \t]*[<"]\./ged_view\.h]]
-		[[ged_draw_view_context_feature_exists]]
-		[[ged_draw_view_context_lines_create_model_annotation]]
-		[[ged_draw_view_context_lines_append_point]])
+		[[ged_draw_view_context_annotation_line_create]]
+		[[ged_draw_view_context_annotation_line_append]]
+		[[ged_draw_view_context_annotation_line_remove_points]]
+		[[ged_draw_view_context_annotation_line_clear]])
       string(REGEX MATCH "${_token}" _libged_view_lines_cmd_token_hit
 	"${_libged_view_lines_cmd_contents}")
 	      if(NOT _libged_view_lines_cmd_token_hit)
 		_brlobol_pivot_guard_fail(
-		  "src/libged/view/lines.c must route view line feature edits through public GED draw-view context helpers")
+		  "src/libged/view/lines.c must route view line edits through annotation-level GED draw-view helpers")
 	      endif()
 	    endforeach()
 	    foreach(_pat
 		[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
 		[[#[ \t]*include[ \t]*[<"]bsg/(feature|geometry|hud|overlay)\.h]]
+		[[(^|[^A-Za-z0-9_])ged_draw_view_context_feature_exists[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])ged_draw_view_context_feature_remove[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])ged_draw_view_context_feature_points_copy[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])ged_draw_view_context_feature_style_get[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])ged_draw_view_context_lines_replace[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])ged_draw_view_context_lines_create_model_annotation[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])ged_draw_view_context_lines_append_point[ \t\r\n]*\(]]
 		[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_FEATURE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
@@ -9764,7 +9798,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	"${_libged_view_lines_cmd_contents}")
       if(_libged_view_lines_cmd_direct_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/lines.c reintroduced direct BSG feature-overlay access: ${_libged_view_lines_cmd_direct_hit}")
+	  "src/libged/view/lines.c reintroduced direct feature-store or BSG feature-overlay access: ${_libged_view_lines_cmd_direct_hit}")
       endif()
     endforeach()
   endif()
@@ -9775,20 +9809,23 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	    foreach(_token
 		[[#[ \t]*include[ \t]*[<"]\./ged_view\.h]]
 		[[struct ged_draw_view_axes_state]]
-		[[ged_draw_view_context_feature_exists]]
-	[[ged_draw_view_context_axes_create]]
-	[[ged_draw_view_context_axes_state_get]]
-	[[ged_draw_view_context_axes_state_replace]])
+		[[ged_draw_view_context_annotation_axes_create]]
+		[[ged_draw_view_context_annotation_axes_state_get]]
+		[[ged_draw_view_context_annotation_axes_state_replace]])
       string(REGEX MATCH "${_token}" _libged_view_axes_cmd_token_hit
 	"${_libged_view_axes_cmd_contents}")
 	      if(NOT _libged_view_axes_cmd_token_hit)
 		_brlobol_pivot_guard_fail(
-		  "src/libged/view/axes.c must route data-axes feature edits through public GED draw-view context helpers")
+		  "src/libged/view/axes.c must route data-axes edits through annotation-level GED draw-view helpers")
 	      endif()
 	    endforeach()
 	    foreach(_pat
 		[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
 		[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
+		[[(^|[^A-Za-z0-9_])ged_draw_view_context_feature_exists[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])ged_draw_view_context_axes_create[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])ged_draw_view_context_axes_state_get[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])ged_draw_view_context_axes_state_replace[ \t\r\n]*\(]]
 		[[(^|[^A-Za-z0-9_])struct[ \t]+bsg_axes([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
@@ -9797,7 +9834,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	"${_libged_view_axes_cmd_contents}")
       if(_libged_view_axes_cmd_direct_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/axes.c reintroduced direct BSG data-axes feature access: ${_libged_view_axes_cmd_direct_hit}")
+	  "src/libged/view/axes.c reintroduced direct data-axes feature-store or BSG feature access: ${_libged_view_axes_cmd_direct_hit}")
       endif()
     endforeach()
   endif()
@@ -12411,10 +12448,11 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 		[[tclcad_view_label_state_from_view_ctx]]
 		[[#[ \t]*include[ \t]*[<"]ged/draw\.h]]
 	[[_tclcad_data_labels_sync_draw_view]]
-	[[ged_draw_view_context_feature_exists]]
-	[[ged_draw_view_context_tcl_labels_replace]]
-	[[ged_draw_view_context_label_count]]
-	[[ged_draw_view_context_label_copy]])
+	[[ged_draw_view_context_data_labels_draw_get]]
+	[[ged_draw_view_context_data_labels_replace]]
+	[[ged_draw_view_context_data_labels_color_get]]
+	[[ged_draw_view_context_data_labels_count]]
+	[[ged_draw_view_context_data_labels_copy]])
       string(REGEX MATCH "${_token}" _libtclcad_view_labels_token_hit
 	"${_libtclcad_view_labels_cmd_contents}")
       if(NOT _libtclcad_view_labels_token_hit)
@@ -12431,6 +12469,9 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[->[ \t\r\n]*gv_tcl]]
 	[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
 	[[#[ \t]*include[ \t]*[<"]\.\./\.\./libged/bsg_ged_draw_view_private\.h]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_feature_exists[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_tcl_labels_replace[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_label_(count|copy|point_set)[ \t\r\n]*\(]]
 	[[ged_draw_view_feature_exists[ \t\r\n]*\(]]
 	[[ged_draw_view_tcl_labels_replace[ \t\r\n]*\(]]
 	[[ged_draw_view_label_(count|copy|point_set)[ \t\r\n]*\(]]
@@ -12446,24 +12487,23 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endforeach()
   endif()
 
-  set(_libtclcad_view_arrows_cmd "${BRLCAD_SOURCE_DIR}/src/libtclcad/view/arrows.c")
-  if(EXISTS "${_libtclcad_view_arrows_cmd}")
+	  set(_libtclcad_view_arrows_cmd "${BRLCAD_SOURCE_DIR}/src/libtclcad/view/arrows.c")
+	  if(EXISTS "${_libtclcad_view_arrows_cmd}")
 	    file(READ "${_libtclcad_view_arrows_cmd}" _libtclcad_view_arrows_cmd_contents)
 	    foreach(_token
 		[[to_data_arrows_func[ \t\r\n]*\(]]
 		[[void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
 		[[#[ \t]*include[ \t]*[<"]ged/view\.h]]
 		[[#[ \t]*include[ \t]*[<"]ged/draw\.h]]
-		[[ged_draw_view_context_feature_exists]]
-	[[ged_draw_view_context_feature_visible_set]]
-	[[ged_draw_view_context_feature_style_get]]
-	[[ged_draw_view_context_line_color_set]]
-	[[ged_draw_view_context_line_width_set]]
-	[[ged_draw_view_context_feature_points_copy]]
-	[[ged_draw_view_context_feature_remove]]
-	[[ged_draw_view_context_tcl_arrows_replace]]
-	[[ged_draw_view_context_arrow_tip_get]]
-	[[ged_draw_view_context_arrow_tip_set]])
+		[[ged_draw_view_context_data_arrows_draw_get]]
+	[[ged_draw_view_context_data_arrows_draw_set]]
+	[[ged_draw_view_context_data_arrows_style_get]]
+	[[ged_draw_view_context_data_arrows_color_set]]
+	[[ged_draw_view_context_data_arrows_line_width_set]]
+	[[ged_draw_view_context_data_arrows_points_copy]]
+	[[ged_draw_view_context_data_arrows_points_replace]]
+	[[ged_draw_view_context_data_arrows_tip_get]]
+	[[ged_draw_view_context_data_arrows_tip_set]])
       string(REGEX MATCH "${_token}" _libtclcad_view_arrows_token_hit
 	"${_libtclcad_view_arrows_cmd_contents}")
       if(NOT _libtclcad_view_arrows_token_hit)
@@ -12480,6 +12520,10 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 		[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
 		[[#[ \t]*include[ \t]*[<"]\.\./bsg_move_helpers\.h]]
 		[[#[ \t]*include[ \t]*[<"]\.\./\.\./libged/bsg_ged_draw_view_private\.h]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_feature_(exists|visible_set|style_get|points_copy|remove)[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_line_(color|width)_set[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_tcl_arrows_replace[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_arrow_tip_(get|set)[ \t\r\n]*\(]]
 	[[ged_draw_view_feature_(exists|visible_set|style_get|points_copy|remove)[ \t\r\n]*\(]]
 	[[ged_draw_view_line_(color|width)_set[ \t\r\n]*\(]]
 	[[ged_draw_view_tcl_arrows_replace[ \t\r\n]*\(]]
@@ -12493,12 +12537,43 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	_brlobol_pivot_guard_fail(
 	  "src/libtclcad/view/arrows.c reintroduced direct BSG data-arrow feature access: ${_libtclcad_view_arrows_direct_hit}")
       endif()
-    endforeach()
-  endif()
+	    endforeach()
+	  endif()
 
-  foreach(_rel_token
-      "src/libtclcad/commands.c|ged/draw.h|ged_draw_view_context_label_count|ged_draw_view_context_label_copy|ged_draw_view_context_label_point_set"
-      "src/libtclcad/mouse.c|ged/draw.h|ged_draw_view_context_label_count|ged_draw_view_context_label_copy|ged_draw_view_context_label_point_set")
+	  set(_libtclcad_polygons_cmd "${BRLCAD_SOURCE_DIR}/src/libtclcad/polygons.c")
+	  if(EXISTS "${_libtclcad_polygons_cmd}")
+	    file(READ "${_libtclcad_polygons_cmd}" _libtclcad_polygons_cmd_contents)
+	    foreach(_token
+		[[_sync_tcl_polygons_to_draw_view]]
+		[[#[ \t]*include[ \t]*[<"]ged/draw\.h]]
+		[[ged_draw_view_context_data_polygons_replace]])
+	      string(REGEX MATCH "${_token}" _libtclcad_polygons_token_hit
+		"${_libtclcad_polygons_cmd_contents}")
+	      if(NOT _libtclcad_polygons_token_hit)
+		_brlobol_pivot_guard_fail(
+		  "src/libtclcad/polygons.c must route data-polygon feature replacement through the typed GED draw-view data-polygon facade")
+	      endif()
+	    endforeach()
+	    foreach(_pat
+		[[(^|[^A-Za-z0-9_])ged_draw_view_context_feature_remove[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])ged_draw_view_context_tcl_polygons_replace[ \t\r\n]*\(]]
+		[[ged_draw_view_feature_remove[ \t\r\n]*\(]]
+		[[ged_draw_view_tcl_polygons_replace[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
+		[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+		[[(^|[^A-Za-z0-9_])BSG_FEATURE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]])
+	      string(REGEX MATCH "${_pat}" _libtclcad_polygons_direct_hit
+		"${_libtclcad_polygons_cmd_contents}")
+	      if(_libtclcad_polygons_direct_hit)
+		_brlobol_pivot_guard_fail(
+		  "src/libtclcad/polygons.c reintroduced direct data-polygon feature-store or BSG feature access: ${_libtclcad_polygons_direct_hit}")
+	      endif()
+	    endforeach()
+	  endif()
+
+	  foreach(_rel_token
+	      "src/libtclcad/commands.c|./draw_view_move_helpers.h|_tclcad_draw_view_data_labels_count|_tclcad_draw_view_data_label_copy|_tclcad_draw_view_data_label_point_set"
+      "src/libtclcad/mouse.c|./draw_view_move_helpers.h|_tclcad_draw_view_data_labels_count|_tclcad_draw_view_data_label_copy|_tclcad_draw_view_data_label_point_set")
     string(REGEX REPLACE "^([^|]+)\\|.*$" "\\1" _rel "${_rel_token}")
     string(REGEX REPLACE "^[^|]+\\|" "" _tokens "${_rel_token}")
     set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
@@ -12511,12 +12586,13 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       string(FIND "${_contents}" "${_token}" _idx)
       if(_idx EQUAL -1)
 	_brlobol_pivot_guard_fail(
-	  "${_rel} must route Tcl data-label movement and readback through GED draw-view label helpers")
+		  "${_rel} must route Tcl data-label movement and readback through typed data-label helpers")
       endif()
     endforeach()
-    foreach(_pat
-	[[ged_draw_view_feature_exists[ \t\r\n]*\(]]
-	[[ged_draw_view_label_(count|copy|point_set)[ \t\r\n]*\(]]
+	    foreach(_pat
+		[[ged_draw_view_context_label_(count|copy|point_set)[ \t\r\n]*\(]]
+		[[ged_draw_view_feature_exists[ \t\r\n]*\(]]
+		[[ged_draw_view_label_(count|copy|point_set)[ \t\r\n]*\(]]
 	[[#[ \t]*include[ \t]*[<"]\.\./libged/bsg_ged_draw_view_private\.h]]
 	[[bsg_feature_label_(count|copy|point_set)[ \t\r\n]*\(]]
 	[[bsg_feature_find[ \t\r\n]*\([^;\n]*_tcl_s?data_labels]])
@@ -12535,22 +12611,33 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     _brlobol_pivot_guard_fail(
       "src/libtclcad/draw_view_move_helpers.h must own TclCAD retained draw-view move helpers")
   else()
-    file(READ "${_libtclcad_draw_view_move_helpers}" _libtclcad_draw_view_move_helpers_contents)
-    foreach(_token
-	[[#[ \t]*include[ \t]*[<"]ged/draw\.h]]
-	[[ged_draw_view_context_feature_points_copy]]
-	[[ged_draw_view_context_feature_axes_centers_copy]]
-	[[ged_draw_view_context_feature_style_get]]
-	[[ged_draw_view_context_tcl_arrows_replace]]
-	[[ged_draw_view_context_tcl_lines_replace]]
-	[[ged_draw_view_context_feature_visible_set]]
-	[[ged_draw_view_context_tcl_axes_replace]]
-	[[_tclcad_draw_view_points_copy]]
-	[[_tclcad_draw_view_axes_centers_copy]]
-	[[_tclcad_draw_view_style_read]]
-	[[_tclcad_draw_view_arrows_replace]]
-	[[_tclcad_draw_view_lines_replace]]
-	[[_tclcad_draw_view_axes_replace]])
+	    file(READ "${_libtclcad_draw_view_move_helpers}" _libtclcad_draw_view_move_helpers_contents)
+	    foreach(_token
+		[[#[ \t]*include[ \t]*[<"]ged/draw\.h]]
+		[[ged_draw_view_context_data_lines_points_copy]]
+		[[ged_draw_view_context_data_lines_style_get]]
+		[[ged_draw_view_context_data_lines_points_replace]]
+		[[ged_draw_view_context_data_arrows_points_copy]]
+		[[ged_draw_view_context_data_arrows_style_get]]
+		[[ged_draw_view_context_data_arrows_points_replace]]
+		[[ged_draw_view_context_data_axes_centers_copy]]
+		[[ged_draw_view_context_data_axes_style_get]]
+		[[ged_draw_view_context_data_axes_centers_replace]]
+		[[ged_draw_view_context_data_labels_count]]
+		[[ged_draw_view_context_data_labels_copy]]
+		[[ged_draw_view_context_data_labels_point_set]]
+		[[_tclcad_draw_view_data_lines_points_copy]]
+		[[_tclcad_draw_view_data_arrows_points_copy]]
+		[[_tclcad_draw_view_data_axes_centers_copy]]
+		[[_tclcad_draw_view_data_lines_style_read]]
+		[[_tclcad_draw_view_data_arrows_style_read]]
+		[[_tclcad_draw_view_data_axes_style_read]]
+		[[_tclcad_draw_view_data_lines_replace]]
+		[[_tclcad_draw_view_data_arrows_replace]]
+		[[_tclcad_draw_view_data_axes_replace]]
+		[[_tclcad_draw_view_data_labels_count]]
+		[[_tclcad_draw_view_data_label_copy]]
+		[[_tclcad_draw_view_data_label_point_set]])
       string(REGEX MATCH "${_token}" _libtclcad_draw_view_move_helpers_token_hit
 	"${_libtclcad_draw_view_move_helpers_contents}")
       if(NOT _libtclcad_draw_view_move_helpers_token_hit)
@@ -12559,11 +12646,14 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       endif()
     endforeach()
     foreach(_pat
-	[[#[ \t]*include[ \t]*[<"]bsg/(feature|overlay)\.h]]
-	[[#[ \t]*include[ \t]*[<"]\.\./libged/bsg_ged_draw_view_private\.h]]
-	[[struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*view]]
-	[[ged_draw_view_feature_(points_copy|axes_centers_copy|style_get|visible_set)[ \t\r\n]*\(]]
-	[[ged_draw_view_tcl_(arrows|lines|axes)_replace[ \t\r\n]*\(]]
+		[[#[ \t]*include[ \t]*[<"]bsg/(feature|overlay)\.h]]
+		[[#[ \t]*include[ \t]*[<"]\.\./libged/bsg_ged_draw_view_private\.h]]
+		[[struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*view]]
+		[[ged_draw_view_context_feature_(points_copy|axes_centers_copy|style_get|visible_set)[ \t\r\n]*\(]]
+		[[ged_draw_view_context_tcl_(arrows|lines|axes)_replace[ \t\r\n]*\(]]
+		[[ged_draw_view_context_label_(count|copy|point_set)[ \t\r\n]*\(]]
+		[[ged_draw_view_feature_(points_copy|axes_centers_copy|style_get|visible_set)[ \t\r\n]*\(]]
+		[[ged_draw_view_tcl_(arrows|lines|axes)_replace[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_FEATURE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
@@ -12585,9 +12675,9 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       "src/libtclcad/bsg_move_helpers.h must stay retired; TclCAD move helpers belong in draw_view_move_helpers.h")
   endif()
 
-  foreach(_rel_token
-      "src/libtclcad/commands.c|./draw_view_move_helpers.h|_tclcad_draw_view_points_copy|_tclcad_draw_view_axes_centers_copy|_tclcad_draw_view_style_read|_tclcad_draw_view_arrows_replace|_tclcad_draw_view_lines_replace|_tclcad_draw_view_axes_replace"
-      "src/libtclcad/mouse.c|./draw_view_move_helpers.h|_tclcad_draw_view_points_copy|_tclcad_draw_view_style_read|_tclcad_draw_view_arrows_replace")
+	  foreach(_rel_token
+	      "src/libtclcad/commands.c|./draw_view_move_helpers.h|_tclcad_draw_view_data_lines_points_copy|_tclcad_draw_view_data_arrows_points_copy|_tclcad_draw_view_data_axes_centers_copy|_tclcad_draw_view_data_lines_style_read|_tclcad_draw_view_data_arrows_style_read|_tclcad_draw_view_data_axes_style_read|_tclcad_draw_view_data_lines_replace|_tclcad_draw_view_data_arrows_replace|_tclcad_draw_view_data_axes_replace|_tclcad_draw_view_data_labels_count|_tclcad_draw_view_data_label_copy|_tclcad_draw_view_data_label_point_set"
+	      "src/libtclcad/mouse.c|./draw_view_move_helpers.h|_tclcad_draw_view_data_arrows_points_copy|_tclcad_draw_view_data_arrows_style_read|_tclcad_draw_view_data_arrows_replace|_tclcad_draw_view_data_labels_count|_tclcad_draw_view_data_label_copy|_tclcad_draw_view_data_label_point_set")
     string(REGEX REPLACE "^([^|]+)\\|.*$" "\\1" _rel "${_rel_token}")
     string(REGEX REPLACE "^[^|]+\\|" "" _tokens "${_rel_token}")
     set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
@@ -12600,7 +12690,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       string(FIND "${_contents}" "${_token}" _idx)
       if(_idx EQUAL -1)
 	_brlobol_pivot_guard_fail(
-	  "${_rel} must route TclCAD data arrow/axes/line move helpers through draw_view_move_helpers.h token ${_token}")
+		  "${_rel} must route TclCAD data-overlay move/readback helpers through draw_view_move_helpers.h token ${_token}")
       endif()
     endforeach()
   endforeach()
@@ -13764,6 +13854,20 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	  "src/libged/ged_util.cpp must keep command-scene line-layer builder helper token ${_token}")
       endif()
     endforeach()
+    foreach(_token
+	[[_ged_indexed_face_set_publish_command_scene_feature]]
+	[[ged_draw_command_scene_indexed_face_set_replace]]
+	[["indexed-face-set"]]
+	[[result.index_count]]
+	[[result.normal_count]]
+	[[ged_draw_view_context_indexed_face_set_replace]])
+      string(REGEX MATCH "${_token}" _libged_indexed_face_helper_token_hit
+	"${_libged_builder_helper_contents}")
+      if(NOT _libged_indexed_face_helper_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/ged_util.cpp must keep command-scene indexed-face-set helper token ${_token}")
+      endif()
+    endforeach()
   endif()
 
   set(_libged_brep_plot_cmd "${BRLCAD_SOURCE_DIR}/src/libged/brep/plot.cpp")
@@ -13772,16 +13876,18 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	    foreach(_token
 		[[#[ \t]*include[ \t]*[<"]ged/draw\.h]]
 		[[_ged_line_layer_builder_publish_command_scene_feature]]
+		[[_ged_indexed_face_set_publish_command_scene_feature]]
 		[["brep"]]
 		[["command-result"]]
 		[["brep-debug-plot"]]
+		[["brep-debug-indexed-face-set"]]
 	[[GED_DRAW_VIEW_FEATURE_STYLE_INIT]]
-	[[ged_draw_view_context_indexed_face_set_replace]])
+	[[indexed-face-set]])
       string(REGEX MATCH "${_token}" _libged_brep_plot_token_hit
 	"${_libged_brep_plot_contents}")
 	      if(NOT _libged_brep_plot_token_hit)
 		_brlobol_pivot_guard_fail(
-		  "src/libged/brep/plot.cpp must route diagnostic line-layer fallback and indexed face-set replacement through the public GED draw-view context facade")
+		  "src/libged/brep/plot.cpp must route diagnostic line-layer and indexed face-set publication through command-scene helpers")
 	      endif()
 	    endforeach()
     foreach(_pat
@@ -13795,6 +13901,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[struct[ \t\r\n]+bsg_view]]
 	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
 	[[(^|[^A-Za-z0-9_])ged_draw_view_line_layer_builder_replace[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_indexed_face_set_replace[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_view_indexed_face_set_replace[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_brep_plot_direct_line_layer_hit
 	"${_libged_brep_plot_contents}")
@@ -14025,13 +14132,12 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 		[[ged_view_context_screen_to_view]]
 		[[ged_view_context_view2model_get]]
 		[[#[ \t]*include[ \t]*[<"]\./ged_view\.h]]
-		[[ged_draw_view_context_feature_exists]]
-		[[ged_draw_view_context_label_create]])
+		[[ged_draw_view_context_annotation_label_create]])
       string(REGEX MATCH "${_token}" _libged_view_labels_cmd_token_hit
 	"${_libged_view_labels_cmd_contents}")
       if(NOT _libged_view_labels_cmd_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/labels.c must route label screen/model reads and label feature creation through context/adapter helpers")
+	  "src/libged/view/labels.c must route label screen/model reads and annotation creation through context/adapter helpers")
       endif()
 	    endforeach()
 	    foreach(_pat
@@ -14043,6 +14149,8 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 		[[(^|[^A-Za-z0-9_])rt_view_context_view2model_from_bsg[ \t\r\n]*\(]]
 		[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
 		[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
+		[[(^|[^A-Za-z0-9_])ged_draw_view_context_feature_exists[ \t\r\n]*\(]]
+		[[(^|[^A-Za-z0-9_])ged_draw_view_context_label_create[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_FEATURE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]])
@@ -14050,7 +14158,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	"${_libged_view_labels_cmd_contents}")
       if(_libged_view_labels_cmd_direct_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/labels.c reintroduced direct BSG label view-to-model or feature access: ${_libged_view_labels_cmd_direct_hit}")
+	  "src/libged/view/labels.c reintroduced direct label feature-store, BSG label view-to-model, or feature access: ${_libged_view_labels_cmd_direct_hit}")
       endif()
     endforeach()
   endif()
@@ -16051,6 +16159,9 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[ged_view_context_center_vec_set]]
 	[[ged_view_context_update]]
 	[[ged_view_context_view2model_get]]
+	[[ged_draw_apply_transaction]]
+	[[GED_DRAW_TXN_DRAW]]
+	[[GED_DRAW_MODE_EVAL_WIRE]]
 	[[_ged_line_set_publish_command_scene_feature]]
 	[["preview::eye_path"]]
 	[["eye-path"]])
@@ -16079,6 +16190,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[(^|[^A-Za-z0-9_])rt_view_context_rotation_set_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])rt_view_context_center_vec_set_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])rt_view_context_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])_ged_drawtrees[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_view_context_feature_remove[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_view_context_lines_replace[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_view_feature_remove[ \t\r\n]*\(]]
@@ -16533,15 +16645,15 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[view_ctx[ \t\r\n]*=[ \t\r\n]*ged_view_find_ctx]]
 	[[ged_view_context_display_manager_get]]
 	[[ged_view_context_info_get]]
-	[[ged_draw_view_context_feature_exists]]
-	[[ged_draw_view_context_feature_visible_set]]
-	[[ged_draw_view_context_feature_style_get]]
-	[[ged_draw_view_context_line_color_set]]
-	[[ged_draw_view_context_line_width_set]]
-	[[ged_draw_view_context_feature_points_copy]]
-	[[ged_draw_view_context_feature_axes_centers_copy]]
-	[[ged_draw_view_context_tcl_axes_replace]]
-	[[ged_draw_view_context_feature_remove]]
+	[[ged_draw_view_context_data_axes_draw_get]]
+	[[ged_draw_view_context_data_axes_draw_set]]
+	[[ged_draw_view_context_data_axes_style_get]]
+	[[ged_draw_view_context_data_axes_color_set]]
+	[[ged_draw_view_context_data_axes_line_width_set]]
+	[[ged_draw_view_context_data_axes_size_get]]
+	[[ged_draw_view_context_data_axes_half_size_get]]
+	[[ged_draw_view_context_data_axes_centers_copy]]
+	[[ged_draw_view_context_data_axes_centers_replace]]
 	[[struct[ \t\r\n]+rt_view_axes_state]]
 	[[ged_view_context_model_axes_state_get]]
 	[[ged_view_context_model_axes_state_set]]
@@ -16583,6 +16695,9 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
 	[[#[ \t]*include[ \t]*[<"]\.\./bsg_move_helpers\.h]]
 	[[#[ \t]*include[ \t]*[<"]\.\./\.\./libged/bsg_ged_draw_view_private\.h]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_feature_(exists|visible_set|style_get|points_copy|axes_centers_copy|remove)[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_line_(color|width)_set[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_tcl_axes_replace[ \t\r\n]*\(]]
 	[[ged_draw_view_feature_(exists|visible_set|style_get|points_copy|axes_centers_copy|remove)[ \t\r\n]*\(]]
 	[[ged_draw_view_line_(color|width)_set[ \t\r\n]*\(]]
 	[[ged_draw_view_tcl_axes_replace[ \t\r\n]*\(]]
@@ -17110,8 +17225,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 		[[void[ \t\r\n]*[*][ \t\r\n]*gdvp]]
 		[[#[ \t]*include[ \t]*[<"]ged/draw\.h]]
 	[[#[ \t]*include[ \t]*[<"]bg/line_layer\.h]]
-	[[ged_draw_view_context_feature_remove]]
-	[[ged_draw_view_context_tcl_polygons_replace]]
+		[[ged_draw_view_context_data_polygons_replace]]
 	[[GED_DRAW_VIEW_FEATURE_STYLE_INIT]]
 	[[BG_GEOMETRY_LINE_MOVE]]
 	[[BG_GEOMETRY_LINE_DRAW]])
@@ -20264,6 +20378,11 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[test_visible_annotation_view_record]]
 	[[test_visible_surface_view_record]]
 	[[test_visible_line_view_record]]
+	[[_ged_uplot_stream_publish_command_scene_feature]]
+	[["query-ray"]]
+	[["uplot-line-layers"]]
+	[[test_view_line_feature_records]]
+	[[preview tree redraw transaction publication]]
 	[[ged_draw_view_context_feature_summary]]
 	[[ged_draw_view_context_feature_remove]]
 	[[GED_DRAW_VIEW_FEATURE_SUMMARY_INIT]]
@@ -20396,6 +20515,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[(^|[^A-Za-z0-9_])item->[ \t\r\n]*selected]]
 	[[(^|[^A-Za-z0-9_])qray_render_items([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])qray_render_segments([^A-Za-z0-9_]|$)]]
+	[[_ged_uplot_stream_publish_feature]]
 	[[(^|[^A-Za-z0-9_])redraw_req([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])redraw_batch([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])find_export_record_by_source_prefix_and_kind([^A-Za-z0-9_]|$)]]

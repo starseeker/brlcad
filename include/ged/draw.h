@@ -1325,6 +1325,38 @@ ged_draw_view_context_lines_append_point(void *view_ctx,
 					 const point_t point);
 
 GED_EXPORT extern int
+ged_draw_view_context_annotation_line_create(
+	void *view_ctx,
+	const char *name,
+	int local,
+	const point_t *points,
+	size_t point_count,
+	const struct ged_draw_view_feature_style *style,
+	struct bu_vls *result);
+
+GED_EXPORT extern int
+ged_draw_view_context_annotation_line_append(
+	void *view_ctx,
+	const char *name,
+	const point_t *points,
+	size_t point_count,
+	struct bu_vls *result);
+
+GED_EXPORT extern int
+ged_draw_view_context_annotation_line_remove_points(
+	void *view_ctx,
+	const char *name,
+	size_t start,
+	size_t count,
+	struct bu_vls *result);
+
+GED_EXPORT extern int
+ged_draw_view_context_annotation_line_clear(
+	void *view_ctx,
+	const char *name,
+	struct bu_vls *result);
+
+GED_EXPORT extern int
 ged_draw_view_context_line_layer_builder_replace(
 	void *view_ctx,
 	const char *name,
@@ -1445,6 +1477,16 @@ ged_draw_view_context_tcl_polygons_replace(
 	const struct ged_draw_view_feature_style *style);
 
 GED_EXPORT extern int
+ged_draw_view_context_data_polygons_replace(
+	void *view_ctx,
+	const char *name,
+	int draw,
+	const point_t *points,
+	const int *cmds,
+	size_t point_count,
+	const struct ged_draw_view_feature_style *style);
+
+GED_EXPORT extern int
 ged_draw_view_context_tcl_labels_replace(
 	void *view_ctx,
 	const char *name,
@@ -1468,6 +1510,17 @@ ged_draw_view_context_label_create(void *view_ctx,
 				   const point_t point,
 				   const point_t target,
 				   int has_target);
+
+GED_EXPORT extern int
+ged_draw_view_context_annotation_label_create(
+	void *view_ctx,
+	const char *name,
+	int local,
+	const char *text,
+	const point_t point,
+	const point_t target,
+	int has_target,
+	struct bu_vls *result);
 
 GED_EXPORT extern size_t
 ged_draw_view_context_label_count(void *view_ctx,
@@ -1534,6 +1587,152 @@ ged_draw_view_context_tcl_lines_replace(
 	const struct ged_draw_view_line_style *style);
 
 GED_EXPORT extern int
+ged_draw_view_context_data_lines_draw_get(
+	void *view_ctx,
+	const char *name);
+
+GED_EXPORT extern int
+ged_draw_view_context_data_lines_draw_set(
+	void *view_ctx,
+	const char *name,
+	int draw);
+
+GED_EXPORT extern int
+ged_draw_view_context_data_lines_style_get(
+	void *view_ctx,
+	const char *name,
+	struct ged_draw_view_line_style *style);
+
+GED_EXPORT extern int
+ged_draw_view_context_data_lines_color_set(
+	void *view_ctx,
+	const char *name,
+	int r,
+	int g,
+	int b);
+
+GED_EXPORT extern int
+ged_draw_view_context_data_lines_line_width_set(
+	void *view_ctx,
+	const char *name,
+	int line_width);
+
+GED_EXPORT extern int
+ged_draw_view_context_data_lines_points_copy(
+	void *view_ctx,
+	const char *name,
+	point_t **points,
+	size_t *point_count);
+
+GED_EXPORT extern int
+ged_draw_view_context_data_lines_points_replace(
+	void *view_ctx,
+	const char *name,
+	const point_t *points,
+	size_t point_count,
+	const struct ged_draw_view_line_style *style);
+
+GED_EXPORT extern int
+ged_draw_view_context_data_labels_draw_get(
+	void *view_ctx,
+	const char *name);
+
+GED_EXPORT extern int
+ged_draw_view_context_data_labels_replace(
+	void *view_ctx,
+	const char *name,
+	int draw,
+	const struct ged_draw_view_label_data *labels,
+	size_t label_count);
+
+GED_EXPORT extern int
+ged_draw_view_context_data_labels_color_get(
+	void *view_ctx,
+	const char *name,
+	unsigned char rgb[3]);
+
+GED_EXPORT extern size_t
+ged_draw_view_context_data_labels_count(
+	void *view_ctx,
+	const char *name);
+
+GED_EXPORT extern int
+ged_draw_view_context_data_labels_copy(
+	void *view_ctx,
+	const char *name,
+	size_t index,
+	struct bu_vls *text,
+	point_t point,
+	unsigned char rgb[3]);
+
+GED_EXPORT extern int
+ged_draw_view_context_data_labels_point_set(
+	void *view_ctx,
+	const char *name,
+	size_t index,
+	const point_t point);
+
+GED_EXPORT extern int
+ged_draw_view_context_data_arrows_draw_get(
+	void *view_ctx,
+	const char *name);
+
+GED_EXPORT extern int
+ged_draw_view_context_data_arrows_draw_set(
+	void *view_ctx,
+	const char *name,
+	int draw);
+
+GED_EXPORT extern int
+ged_draw_view_context_data_arrows_style_get(
+	void *view_ctx,
+	const char *name,
+	struct ged_draw_view_feature_style *style);
+
+GED_EXPORT extern int
+ged_draw_view_context_data_arrows_color_set(
+	void *view_ctx,
+	const char *name,
+	int r,
+	int g,
+	int b);
+
+GED_EXPORT extern int
+ged_draw_view_context_data_arrows_line_width_set(
+	void *view_ctx,
+	const char *name,
+	int line_width);
+
+GED_EXPORT extern int
+ged_draw_view_context_data_arrows_points_copy(
+	void *view_ctx,
+	const char *name,
+	point_t **points,
+	size_t *point_count);
+
+GED_EXPORT extern int
+ged_draw_view_context_data_arrows_points_replace(
+	void *view_ctx,
+	const char *name,
+	const point_t *points,
+	size_t point_count,
+	const struct ged_draw_view_feature_style *style);
+
+GED_EXPORT extern int
+ged_draw_view_context_data_arrows_tip_get(
+	void *view_ctx,
+	const char *name,
+	fastf_t *tip_length,
+	fastf_t *tip_width);
+
+GED_EXPORT extern int
+ged_draw_view_context_data_arrows_tip_set(
+	void *view_ctx,
+	const char *name,
+	fastf_t tip_length,
+	fastf_t tip_width);
+
+GED_EXPORT extern int
 ged_draw_view_context_arrow_tip_get(void *view_ctx,
 				    const char *name,
 				    fastf_t *tip_length,
@@ -1570,6 +1769,66 @@ ged_draw_view_context_tcl_axes_replace(
 	const struct ged_draw_view_feature_style *style);
 
 GED_EXPORT extern int
+ged_draw_view_context_data_axes_draw_get(
+	void *view_ctx,
+	const char *name);
+
+GED_EXPORT extern int
+ged_draw_view_context_data_axes_draw_set(
+	void *view_ctx,
+	const char *name,
+	int draw);
+
+GED_EXPORT extern int
+ged_draw_view_context_data_axes_style_get(
+	void *view_ctx,
+	const char *name,
+	struct ged_draw_view_feature_style *style);
+
+GED_EXPORT extern int
+ged_draw_view_context_data_axes_color_set(
+	void *view_ctx,
+	const char *name,
+	int r,
+	int g,
+	int b);
+
+GED_EXPORT extern int
+ged_draw_view_context_data_axes_line_width_set(
+	void *view_ctx,
+	const char *name,
+	int line_width);
+
+GED_EXPORT extern int
+ged_draw_view_context_data_axes_half_size_get(
+	void *view_ctx,
+	const char *name,
+	fastf_t *half_axes_size);
+
+GED_EXPORT extern int
+ged_draw_view_context_data_axes_size_get(
+	void *view_ctx,
+	const char *name,
+	fastf_t display_scale,
+	fastf_t *size);
+
+GED_EXPORT extern int
+ged_draw_view_context_data_axes_centers_copy(
+	void *view_ctx,
+	const char *name,
+	point_t **centers,
+	size_t *center_count);
+
+GED_EXPORT extern int
+ged_draw_view_context_data_axes_centers_replace(
+	void *view_ctx,
+	const char *name,
+	const point_t *centers,
+	size_t center_count,
+	fastf_t half_axes_size,
+	const struct ged_draw_view_feature_style *style);
+
+GED_EXPORT extern int
 ged_draw_view_context_axes_create(
 	void *view_ctx,
 	const char *name,
@@ -1587,6 +1846,28 @@ ged_draw_view_context_axes_state_replace(
 	void *view_ctx,
 	const char *name,
 	const struct ged_draw_view_axes_state *state);
+
+GED_EXPORT extern int
+ged_draw_view_context_annotation_axes_create(
+	void *view_ctx,
+	const char *name,
+	int local,
+	const struct ged_draw_view_axes_state *state,
+	struct bu_vls *result);
+
+GED_EXPORT extern int
+ged_draw_view_context_annotation_axes_state_get(
+	void *view_ctx,
+	const char *name,
+	struct ged_draw_view_axes_state *state,
+	struct bu_vls *result);
+
+GED_EXPORT extern int
+ged_draw_view_context_annotation_axes_state_replace(
+	void *view_ctx,
+	const char *name,
+	const struct ged_draw_view_axes_state *state,
+	struct bu_vls *result);
 
 GED_EXPORT extern int
 ged_draw_view_polygon_ref_is_null(ged_draw_view_polygon_ref ref);

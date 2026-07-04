@@ -77,11 +77,23 @@ Current migrated boundaries include:
 * Owned Obol scene/source/group operations in the GED draw bridge.
 * Direct Obol database draw providers for wire, shaded-BoT, shaded, and
   hidden-line draw modes.
+* Preview script tree redraws through GED draw transactions instead of direct
+  `_ged_drawtrees` calls.
 * Object-level GED draw facades for view-object lifecycle, visibility, style,
   and realization.
+* Annotation-level GED draw facades for user-authored line, label, and axes
+  creation and editing, keeping feature-store lifecycle out of command
+  parsers.
+* Typed GED data-overlay facades for legacy TclCAD data lines, arrows, axes,
+  labels, and polygons, keeping draw/style/points/label/polygon-outline
+  mutation, movement, scaling, and pick/readback out of command parsers.
 * Command-scene feature publication for rtcheck, NIRT/qray, check, GQA, BREP,
-  NMG, overlay-command uplot import, `vdraw send`, preview eye paths, and
-  simple command line-set visualizations.
+  BREP indexed-face diagnostics, NMG, overlay-command uplot import,
+  `vdraw send`, preview eye paths, and simple command line-set visualizations.
+  BREP owns diagnostic extraction; GED owns the reusable command-scene
+  indexed-face publication boundary.
+* qray/uplot private direct-feature helper exposure has been retired; command
+  visualizations should use command-scene publication helpers.
 * Neutral RT adapters for scene, polygon, selection, feature/edit-preview, and
   retained view-context operations.
 * qtcad Obol workflow tests that avoid direct libdm/libbsg/dm_plugins links

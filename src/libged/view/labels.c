@@ -52,11 +52,6 @@ _label_cmd_create(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    if (ged_draw_view_context_feature_exists(gd->cv, gd->vobj)) {
-        bu_vls_printf(gedp->ged_result_str, "View object named %s already exists\n", gd->vobj);
-        return BRLCAD_ERROR;
-    }
-
     if (argc != 3 && argc != 4 && argc != 6 && argc != 7) {
 	bu_vls_printf(gedp->ged_result_str, "Usage: %s\n", usage_string);
 	return BRLCAD_ERROR;
@@ -122,13 +117,9 @@ _label_cmd_create(void *bs, int argc, const char **argv)
 	}
     }
 
-    if (!ged_draw_view_context_label_create(gd->cv, gd->vobj, gd->local_obj,
-	    argv[0], p, target, (argc == 6 || argc == 7))) {
-	bu_vls_printf(gedp->ged_result_str, "Failed to create %s\n", gd->vobj);
-	return BRLCAD_ERROR;
-    }
-
-    return BRLCAD_OK;
+    return ged_draw_view_context_annotation_label_create(gd->cv, gd->vobj,
+	    gd->local_obj, argv[0], p, target, (argc == 6 || argc == 7),
+	    gedp->ged_result_str) ? BRLCAD_OK : BRLCAD_ERROR;
 }
 
 const struct bu_cmdtab _label_cmds[] = {

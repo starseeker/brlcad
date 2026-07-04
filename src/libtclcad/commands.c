@@ -1963,21 +1963,20 @@ to_data_move_func(struct ged *gedp,
 	return BRLCAD_OK;
     }
 
-    if (BU_STR_EQUAL(argv[1], "data_arrows")) {
-	/* T3: operate on retained draw-view points instead of gv_tcl. */
-	const char *feature_name = "_tcl_data_arrows";
-	if (!ged_draw_view_context_feature_exists(gdvp, feature_name)) return BRLCAD_OK;
+	if (BU_STR_EQUAL(argv[1], "data_arrows")) {
+	    /* Operate on typed draw-view data-arrow state instead of gv_tcl. */
+	    const char *feature_name = "_tcl_data_arrows";
 
-	point_t *_pts = NULL;
-	int _npts = _tclcad_draw_view_points_copy(gdvp, feature_name, &_pts);
+	    point_t *_pts = NULL;
+	    int _npts = _tclcad_draw_view_data_arrows_points_copy(gdvp, feature_name, &_pts);
 
-	if (dindex >= _npts) { bu_free(_pts, "TclCAD draw-view points"); return BRLCAD_OK; }
+	    if (!_npts || dindex >= _npts) { if (_pts) bu_free(_pts, "TclCAD draw-view points"); return BRLCAD_OK; }
 
 	if (tclcad_view_polygon_mode_from_view_ctx(gdvp) == TCLCAD_DATA_MOVE_OBJECT_MODE) {
 	    int dindexA = dindex;
 	    int dindexB = (dindex % 2) ? dindex - 1 : dindex + 1;
 
-	    if (dindexB < 0 || dindexB >= _npts) { bu_free(_pts, "TclCAD draw-view points"); return BRLCAD_OK; }
+		    if (dindexB < 0 || dindexB >= _npts) { if (_pts) bu_free(_pts, "TclCAD draw-view points"); return BRLCAD_OK; }
 
 	    point_t old_mpoint, new_mpoint;
 	    vect_t diff;
@@ -1993,31 +1992,30 @@ to_data_move_func(struct ged *gedp,
 	    vpoint[X] = vx; vpoint[Y] = vy;
 	    MAT4X3PNT(mpoint, view2model, vpoint);
 	    VMOVE(_pts[dindex], mpoint);
+	    }
+
+	    int _color[3]; int _lw, _tl, _tw, _vis;
+	    _tclcad_draw_view_data_arrows_style_read(gdvp, feature_name, _color, &_lw, &_tl, &_tw, &_vis);
+	    _tclcad_draw_view_data_arrows_replace(gdvp, feature_name, _pts, _npts, _color, _lw, _tl, _tw, _vis);
+	    bu_free(_pts, "TclCAD draw-view points");
+	    to_refresh_view(gdvp);
+	    return BRLCAD_OK;
 	}
 
-	int _color[3]; int _lw, _tl, _tw, _vis;
-	_tclcad_draw_view_style_read(gdvp, feature_name, _color, &_lw, &_tl, &_tw, &_vis);
-	_tclcad_draw_view_arrows_replace(gdvp, feature_name, _pts, _npts, _color, _lw, _tl, _tw, _vis);
-	bu_free(_pts, "TclCAD draw-view points");
-	to_refresh_view(gdvp);
-	return BRLCAD_OK;
-    }
+	if (BU_STR_EQUAL(argv[1], "sdata_arrows")) {
+	    /* Operate on typed draw-view data-arrow state instead of gv_tcl. */
+	    const char *feature_name = "_tcl_sdata_arrows";
 
-    if (BU_STR_EQUAL(argv[1], "sdata_arrows")) {
-	/* T3: operate on retained draw-view points instead of gv_tcl. */
-	const char *feature_name = "_tcl_sdata_arrows";
-	if (!ged_draw_view_context_feature_exists(gdvp, feature_name)) return BRLCAD_OK;
+	    point_t *_pts = NULL;
+	    int _npts = _tclcad_draw_view_data_arrows_points_copy(gdvp, feature_name, &_pts);
 
-	point_t *_pts = NULL;
-	int _npts = _tclcad_draw_view_points_copy(gdvp, feature_name, &_pts);
-
-	if (dindex >= _npts) { bu_free(_pts, "TclCAD draw-view points"); return BRLCAD_OK; }
+	    if (!_npts || dindex >= _npts) { if (_pts) bu_free(_pts, "TclCAD draw-view points"); return BRLCAD_OK; }
 
 	if (tclcad_view_polygon_mode_from_view_ctx(gdvp) == TCLCAD_DATA_MOVE_OBJECT_MODE) {
 	    int dindexA = dindex;
 	    int dindexB = (dindex % 2) ? dindex - 1 : dindex + 1;
 
-	    if (dindexB < 0 || dindexB >= _npts) { bu_free(_pts, "TclCAD draw-view points"); return BRLCAD_OK; }
+		    if (dindexB < 0 || dindexB >= _npts) { if (_pts) bu_free(_pts, "TclCAD draw-view points"); return BRLCAD_OK; }
 
 	    point_t old_mpoint, new_mpoint;
 	    vect_t diff;
@@ -2033,125 +2031,115 @@ to_data_move_func(struct ged *gedp,
 	    vpoint[X] = vx; vpoint[Y] = vy;
 	    MAT4X3PNT(mpoint, view2model, vpoint);
 	    VMOVE(_pts[dindex], mpoint);
+	    }
+
+	    int _color[3]; int _lw, _tl, _tw, _vis;
+	    _tclcad_draw_view_data_arrows_style_read(gdvp, feature_name, _color, &_lw, &_tl, &_tw, &_vis);
+	    _tclcad_draw_view_data_arrows_replace(gdvp, feature_name, _pts, _npts, _color, _lw, _tl, _tw, _vis);
+	    bu_free(_pts, "TclCAD draw-view points");
+	    to_refresh_view(gdvp);
+	    return BRLCAD_OK;
 	}
 
-	int _color[3]; int _lw, _tl, _tw, _vis;
-	_tclcad_draw_view_style_read(gdvp, feature_name, _color, &_lw, &_tl, &_tw, &_vis);
-	_tclcad_draw_view_arrows_replace(gdvp, feature_name, _pts, _npts, _color, _lw, _tl, _tw, _vis);
-	bu_free(_pts, "TclCAD draw-view points");
-	to_refresh_view(gdvp);
-	return BRLCAD_OK;
-    }
+	if (BU_STR_EQUAL(argv[1], "data_axes")) {
+	    /* Extract typed draw-view center points, move one, rebuild. */
+	    const char *feature_name = "_tcl_data_axes";
 
-    if (BU_STR_EQUAL(argv[1], "data_axes")) {
-	/* T3: extract retained draw-view center points, move one, rebuild. */
-	const char *feature_name = "_tcl_data_axes";
-	if (!ged_draw_view_context_feature_exists(gdvp, feature_name)) return BRLCAD_OK;
+	    point_t *_cpts = NULL;
+	    int _ncpts = _tclcad_draw_view_data_axes_centers_copy(gdvp, feature_name, &_cpts);
 
-	point_t *_cpts = NULL;
-	int _ncpts = _tclcad_draw_view_axes_centers_copy(gdvp, feature_name, &_cpts);
-
-	if (dindex >= _ncpts) { bu_free(_cpts, "TclCAD draw-view axes points"); return BRLCAD_OK; }
+	    if (!_ncpts || dindex >= _ncpts) { if (_cpts) bu_free(_cpts, "TclCAD draw-view axes points"); return BRLCAD_OK; }
 
 	MAT4X3PNT(vpoint, model2view, _cpts[dindex]);
 	vpoint[X] = vx; vpoint[Y] = vy;
 	MAT4X3PNT(mpoint, view2model, vpoint);
 	VMOVE(_cpts[dindex], mpoint);
 
-	/* Recover halfAxesSize from X-axis endpoints of first center group */
-	point_t *_all = NULL;
-	int _ntotal = _tclcad_draw_view_points_copy(gdvp, feature_name, &_all);
-	fastf_t _half = (_ntotal >= 2) ? (_all[1][X] - _all[0][X]) * 0.5 : 1.0;
-	bu_free(_all, "TclCAD draw-view points");
+	    fastf_t _half = 1.0;
+	    ged_draw_view_context_data_axes_half_size_get(gdvp, feature_name, &_half);
 
-	int _color[3]; int _lw, _vis;
-	_tclcad_draw_view_style_read(gdvp, feature_name, _color, &_lw, NULL, NULL, &_vis);
-	_tclcad_draw_view_axes_replace(gdvp, feature_name, _cpts, _ncpts, _half, _color, _lw, _vis);
-	bu_free(_cpts, "TclCAD draw-view axes points");
-	to_refresh_view(gdvp);
-	return BRLCAD_OK;
-    }
+	    int _color[3]; int _lw, _vis;
+	    _tclcad_draw_view_data_axes_style_read(gdvp, feature_name, _color, &_lw, &_vis);
+	    _tclcad_draw_view_data_axes_replace(gdvp, feature_name, _cpts, _ncpts, _half, _color, _lw, _vis);
+	    bu_free(_cpts, "TclCAD draw-view axes points");
+	    to_refresh_view(gdvp);
+	    return BRLCAD_OK;
+	}
 
-    if (BU_STR_EQUAL(argv[1], "sdata_axes")) {
-	/* T3: extract retained draw-view center points, move one, rebuild. */
-	const char *feature_name = "_tcl_sdata_axes";
-	if (!ged_draw_view_context_feature_exists(gdvp, feature_name)) return BRLCAD_OK;
+	if (BU_STR_EQUAL(argv[1], "sdata_axes")) {
+	    /* Extract typed draw-view center points, move one, rebuild. */
+	    const char *feature_name = "_tcl_sdata_axes";
 
-	point_t *_cpts = NULL;
-	int _ncpts = _tclcad_draw_view_axes_centers_copy(gdvp, feature_name, &_cpts);
+	    point_t *_cpts = NULL;
+	    int _ncpts = _tclcad_draw_view_data_axes_centers_copy(gdvp, feature_name, &_cpts);
 
-	if (dindex >= _ncpts) { bu_free(_cpts, "TclCAD draw-view axes points"); return BRLCAD_OK; }
+	    if (!_ncpts || dindex >= _ncpts) { if (_cpts) bu_free(_cpts, "TclCAD draw-view axes points"); return BRLCAD_OK; }
 
 	MAT4X3PNT(vpoint, model2view, _cpts[dindex]);
 	vpoint[X] = vx; vpoint[Y] = vy;
 	MAT4X3PNT(mpoint, view2model, vpoint);
 	VMOVE(_cpts[dindex], mpoint);
 
-	point_t *_all = NULL;
-	int _ntotal = _tclcad_draw_view_points_copy(gdvp, feature_name, &_all);
-	fastf_t _half = (_ntotal >= 2) ? (_all[1][X] - _all[0][X]) * 0.5 : 1.0;
-	bu_free(_all, "TclCAD draw-view points");
+	    fastf_t _half = 1.0;
+	    ged_draw_view_context_data_axes_half_size_get(gdvp, feature_name, &_half);
 
-	int _color[3]; int _lw, _vis;
-	_tclcad_draw_view_style_read(gdvp, feature_name, _color, &_lw, NULL, NULL, &_vis);
-	_tclcad_draw_view_axes_replace(gdvp, feature_name, _cpts, _ncpts, _half, _color, _lw, _vis);
-	bu_free(_cpts, "TclCAD draw-view axes points");
-	to_refresh_view(gdvp);
-	return BRLCAD_OK;
-    }
-
-
-    if (BU_STR_EQUAL(argv[1], "data_labels")) {
-	/* T3: modify retained label payloads through the GED draw-view adapter. */
-	const char *label_name = "_tcl_data_labels";
-	if (!ged_draw_view_context_feature_exists(gdvp, label_name)) return BRLCAD_OK;
-	if ((size_t)dindex >= ged_draw_view_context_label_count(gdvp, label_name)) return BRLCAD_OK;
-
-	point_t _label_pt;
-	if (!ged_draw_view_context_label_copy(gdvp, label_name, (size_t)dindex, NULL, _label_pt, NULL))
+	    int _color[3]; int _lw, _vis;
+	    _tclcad_draw_view_data_axes_style_read(gdvp, feature_name, _color, &_lw, &_vis);
+	    _tclcad_draw_view_data_axes_replace(gdvp, feature_name, _cpts, _ncpts, _half, _color, _lw, _vis);
+	    bu_free(_cpts, "TclCAD draw-view axes points");
+	    to_refresh_view(gdvp);
 	    return BRLCAD_OK;
-	MAT4X3PNT(vpoint, model2view, _label_pt);
-	vpoint[X] = vx; vpoint[Y] = vy;
-	MAT4X3PNT(mpoint, view2model, vpoint);
-	(void)ged_draw_view_context_label_point_set(gdvp, label_name, (size_t)dindex, mpoint);
+    }
+
+
+	if (BU_STR_EQUAL(argv[1], "data_labels")) {
+	    /* Modify typed draw-view label payloads through the data-label facade. */
+	    const char *label_name = "_tcl_data_labels";
+	    if ((size_t)dindex >= _tclcad_draw_view_data_labels_count(gdvp, label_name)) return BRLCAD_OK;
+
+	    point_t _label_pt;
+	    if (!_tclcad_draw_view_data_label_copy(gdvp, label_name, (size_t)dindex, NULL, _label_pt, NULL))
+		return BRLCAD_OK;
+	    MAT4X3PNT(vpoint, model2view, _label_pt);
+	    vpoint[X] = vx; vpoint[Y] = vy;
+	    MAT4X3PNT(mpoint, view2model, vpoint);
+	    (void)_tclcad_draw_view_data_label_point_set(gdvp, label_name, (size_t)dindex, mpoint);
 
 	to_refresh_view(gdvp);
 	return BRLCAD_OK;
     }
 
-    if (BU_STR_EQUAL(argv[1], "sdata_labels")) {
-	/* T3: modify retained label payloads through the GED draw-view adapter. */
-	const char *label_name = "_tcl_sdata_labels";
-	if (!ged_draw_view_context_feature_exists(gdvp, label_name)) return BRLCAD_OK;
-	if ((size_t)dindex >= ged_draw_view_context_label_count(gdvp, label_name)) return BRLCAD_OK;
+	if (BU_STR_EQUAL(argv[1], "sdata_labels")) {
+	    /* Modify typed draw-view label payloads through the data-label facade. */
+	    const char *label_name = "_tcl_sdata_labels";
+	    if ((size_t)dindex >= _tclcad_draw_view_data_labels_count(gdvp, label_name)) return BRLCAD_OK;
 
-	point_t _label_pt;
-	if (!ged_draw_view_context_label_copy(gdvp, label_name, (size_t)dindex, NULL, _label_pt, NULL))
-	    return BRLCAD_OK;
-	MAT4X3PNT(vpoint, model2view, _label_pt);
-	vpoint[X] = vx; vpoint[Y] = vy;
-	MAT4X3PNT(mpoint, view2model, vpoint);
-	(void)ged_draw_view_context_label_point_set(gdvp, label_name, (size_t)dindex, mpoint);
+	    point_t _label_pt;
+	    if (!_tclcad_draw_view_data_label_copy(gdvp, label_name, (size_t)dindex, NULL, _label_pt, NULL))
+		return BRLCAD_OK;
+	    MAT4X3PNT(vpoint, model2view, _label_pt);
+	    vpoint[X] = vx; vpoint[Y] = vy;
+	    MAT4X3PNT(mpoint, view2model, vpoint);
+	    (void)_tclcad_draw_view_data_label_point_set(gdvp, label_name, (size_t)dindex, mpoint);
 
 	to_refresh_view(gdvp);
 	return BRLCAD_OK;
     }
 
-    if (BU_STR_EQUAL(argv[1], "data_lines")) {
-	/* T3: operate on retained draw-view points instead of gv_tcl. */
-	const char *feature_name = "_tcl_data_lines";
-	if (!ged_draw_view_context_feature_exists(gdvp, feature_name)) return BRLCAD_OK;
+	if (BU_STR_EQUAL(argv[1], "data_lines")) {
+	    /* Operate on typed draw-view data-line points instead of gv_tcl. */
+	    const char *feature_name = "_tcl_data_lines";
 
-	point_t *_pts = NULL;
-	int _npts = _tclcad_draw_view_points_copy(gdvp, feature_name, &_pts);
+	    point_t *_pts = NULL;
+	    int _npts = _tclcad_draw_view_data_lines_points_copy(gdvp, feature_name, &_pts);
 
-	if (dindex >= _npts) { bu_free(_pts, "TclCAD draw-view points"); return BRLCAD_OK; }
+	    if (!_npts || dindex >= _npts) { if (_pts) bu_free(_pts, "TclCAD draw-view points"); return BRLCAD_OK; }
 
 	if (tclcad_view_polygon_mode_from_view_ctx(gdvp) == TCLCAD_DATA_MOVE_OBJECT_MODE) {
 	    int dindexA = dindex;
 	    int dindexB = (dindex % 2) ? dindex - 1 : dindex + 1;
 
-	    if (dindexB < 0 || dindexB >= _npts) { bu_free(_pts, "TclCAD draw-view points"); return BRLCAD_OK; }
+		    if (dindexB < 0 || dindexB >= _npts) { if (_pts) bu_free(_pts, "TclCAD draw-view points"); return BRLCAD_OK; }
 
 	    point_t old_mpoint, new_mpoint;
 	    vect_t diff;
@@ -2167,31 +2155,30 @@ to_data_move_func(struct ged *gedp,
 	    vpoint[X] = vx; vpoint[Y] = vy;
 	    MAT4X3PNT(mpoint, view2model, vpoint);
 	    VMOVE(_pts[dindex], mpoint);
+	    }
+
+	    int _color[3]; int _lw, _vis;
+	    _tclcad_draw_view_data_lines_style_read(gdvp, feature_name, _color, &_lw, &_vis);
+	    _tclcad_draw_view_data_lines_replace(gdvp, feature_name, _pts, _npts, _color, _lw, _vis);
+	    bu_free(_pts, "TclCAD draw-view points");
+	    to_refresh_view(gdvp);
+	    return BRLCAD_OK;
 	}
 
-	int _color[3]; int _lw, _vis;
-	_tclcad_draw_view_style_read(gdvp, feature_name, _color, &_lw, NULL, NULL, &_vis);
-	_tclcad_draw_view_lines_replace(gdvp, feature_name, _pts, _npts, _color, _lw, _vis);
-	bu_free(_pts, "TclCAD draw-view points");
-	to_refresh_view(gdvp);
-	return BRLCAD_OK;
-    }
+	if (BU_STR_EQUAL(argv[1], "sdata_lines")) {
+	    /* Operate on typed draw-view data-line points instead of gv_tcl. */
+	    const char *feature_name = "_tcl_sdata_lines";
 
-    if (BU_STR_EQUAL(argv[1], "sdata_lines")) {
-	/* T3: operate on retained draw-view points instead of gv_tcl. */
-	const char *feature_name = "_tcl_sdata_lines";
-	if (!ged_draw_view_context_feature_exists(gdvp, feature_name)) return BRLCAD_OK;
+	    point_t *_pts = NULL;
+	    int _npts = _tclcad_draw_view_data_lines_points_copy(gdvp, feature_name, &_pts);
 
-	point_t *_pts = NULL;
-	int _npts = _tclcad_draw_view_points_copy(gdvp, feature_name, &_pts);
-
-	if (dindex >= _npts) { bu_free(_pts, "TclCAD draw-view points"); return BRLCAD_OK; }
+	    if (!_npts || dindex >= _npts) { if (_pts) bu_free(_pts, "TclCAD draw-view points"); return BRLCAD_OK; }
 
 	if (tclcad_view_polygon_mode_from_view_ctx(gdvp) == TCLCAD_DATA_MOVE_OBJECT_MODE) {
 	    int dindexA = dindex;
 	    int dindexB = (dindex % 2) ? dindex - 1 : dindex + 1;
 
-	    if (dindexB < 0 || dindexB >= _npts) { bu_free(_pts, "TclCAD draw-view points"); return BRLCAD_OK; }
+		    if (dindexB < 0 || dindexB >= _npts) { if (_pts) bu_free(_pts, "TclCAD draw-view points"); return BRLCAD_OK; }
 
 	    point_t old_mpoint, new_mpoint;
 	    vect_t diff;
@@ -2207,14 +2194,14 @@ to_data_move_func(struct ged *gedp,
 	    vpoint[X] = vx; vpoint[Y] = vy;
 	    MAT4X3PNT(mpoint, view2model, vpoint);
 	    VMOVE(_pts[dindex], mpoint);
-	}
+	    }
 
-	int _color[3]; int _lw, _vis;
-	_tclcad_draw_view_style_read(gdvp, feature_name, _color, &_lw, NULL, NULL, &_vis);
-	_tclcad_draw_view_lines_replace(gdvp, feature_name, _pts, _npts, _color, _lw, _vis);
-	bu_free(_pts, "TclCAD draw-view points");
-	to_refresh_view(gdvp);
-	return BRLCAD_OK;
+	    int _color[3]; int _lw, _vis;
+	    _tclcad_draw_view_data_lines_style_read(gdvp, feature_name, _color, &_lw, &_vis);
+	    _tclcad_draw_view_data_lines_replace(gdvp, feature_name, _pts, _npts, _color, _lw, _vis);
+	    bu_free(_pts, "TclCAD draw-view points");
+	    to_refresh_view(gdvp);
+	    return BRLCAD_OK;
     }
 
 bad:
@@ -2559,17 +2546,17 @@ to_data_pick_func(struct ged *gedp,
 	return BRLCAD_OK;
     }
 
-    /* check for label points - T3: read from BSG child payloads instead of gv_tcl */
+    /* check for label points */
     {
 	const char *label_name = "_tcl_data_labels";
-	size_t _child_cnt = ged_draw_view_context_label_count(gdvp, label_name);
+	size_t _child_cnt = _tclcad_draw_view_data_labels_count(gdvp, label_name);
 	if (_child_cnt > 0) {
 	    for (size_t _k = 0; _k < _child_cnt; _k++) {
 		fastf_t minX, maxX;
 		fastf_t minY, maxY;
 
 		struct bu_vls label = BU_VLS_INIT_ZERO;
-		if (!ged_draw_view_context_label_copy(gdvp, label_name, _k, &label, dpoint, NULL)) {
+		if (!_tclcad_draw_view_data_label_copy(gdvp, label_name, _k, &label, dpoint, NULL)) {
 		    bu_vls_free(&label);
 		    continue;
 		}
@@ -2598,17 +2585,17 @@ to_data_pick_func(struct ged *gedp,
 	}
     }
 
-    /* check for selected label points - T3: read from BSG child payloads */
+    /* check for selected label points */
     {
 	const char *label_name = "_tcl_sdata_labels";
-	size_t _child_cnt = ged_draw_view_context_label_count(gdvp, label_name);
+	size_t _child_cnt = _tclcad_draw_view_data_labels_count(gdvp, label_name);
 	if (_child_cnt > 0) {
 	    for (size_t _k = 0; _k < _child_cnt; _k++) {
 		fastf_t minX, maxX;
 		fastf_t minY, maxY;
 
 		struct bu_vls label = BU_VLS_INIT_ZERO;
-		if (!ged_draw_view_context_label_copy(gdvp, label_name, _k, &label, dpoint, NULL)) {
+		if (!_tclcad_draw_view_data_label_copy(gdvp, label_name, _k, &label, dpoint, NULL)) {
 		    bu_vls_free(&label);
 		    continue;
 		}
@@ -2644,55 +2631,53 @@ to_data_pick_func(struct ged *gedp,
 	return BRLCAD_OK;
     }
 
-    /* check for line points - T3: read from BSG vlist instead of gv_tcl */
+    /* check for line points */
     {
 	const char *feature_name = "_tcl_data_lines";
-	if (ged_draw_view_context_feature_exists(gdvp, feature_name)) {
-	    point_t *_lpts = NULL;
-	    int _lnpts = _tclcad_draw_view_points_copy(gdvp, feature_name, &_lpts);
-	    for (i = 0; i < _lnpts; ++i) {
-		fastf_t minX, maxX;
-		fastf_t minY, maxY;
-		VMOVE(dpoint, _lpts[i]);
-		MAT4X3PNT(vpoint, model2view, dpoint);
-		minX = vpoint[X] - tol; maxX = vpoint[X] + tol;
-		minY = vpoint[Y] - tol; maxY = vpoint[Y] + tol;
-		if (minX < vx && vx < maxX && minY < vy && vy < maxY) {
-		    bu_vls_printf(gedp->ged_result_str, "data_lines %d {%lf %lf %lf}", i, V3ARGS(dpoint));
-		    bu_free(_lpts, "TclCAD draw-view points");
-		    bu_vls_free(&top_label_vls);
-		    return BRLCAD_OK;
-		}
+	point_t *_lpts = NULL;
+	int _lnpts = _tclcad_draw_view_data_lines_points_copy(gdvp, feature_name, &_lpts);
+	for (i = 0; i < _lnpts; ++i) {
+	    fastf_t minX, maxX;
+	    fastf_t minY, maxY;
+	    VMOVE(dpoint, _lpts[i]);
+	    MAT4X3PNT(vpoint, model2view, dpoint);
+	    minX = vpoint[X] - tol; maxX = vpoint[X] + tol;
+	    minY = vpoint[Y] - tol; maxY = vpoint[Y] + tol;
+	    if (minX < vx && vx < maxX && minY < vy && vy < maxY) {
+		bu_vls_printf(gedp->ged_result_str, "data_lines %d {%lf %lf %lf}", i, V3ARGS(dpoint));
+		bu_free(_lpts, "TclCAD draw-view points");
+		bu_vls_free(&top_label_vls);
+		return BRLCAD_OK;
 	    }
-	    bu_free(_lpts, "TclCAD draw-view points");
 	}
+	if (_lpts)
+	    bu_free(_lpts, "TclCAD draw-view points");
     }
 
-    /* check for selected line points - T3: read from BSG vlist */
+    /* check for selected line points */
     {
 	const char *feature_name = "_tcl_sdata_lines";
-	if (ged_draw_view_context_feature_exists(gdvp, feature_name)) {
-	    point_t *_lpts = NULL;
-	    int _lnpts = _tclcad_draw_view_points_copy(gdvp, feature_name, &_lpts);
-	    for (i = 0; i < _lnpts; ++i) {
-		fastf_t minX, maxX;
-		fastf_t minY, maxY;
-		VMOVE(dpoint, _lpts[i]);
-		MAT4X3PNT(vpoint, model2view, dpoint);
-		minX = vpoint[X] - tol; maxX = vpoint[X] + tol;
-		minY = vpoint[Y] - tol; maxY = vpoint[Y] + tol;
-		if (minX < vx && vx < maxX && minY < vy && vy < maxY) {
-		    if (!found_top || top_z < vpoint[Z]) {
-			top_z = vpoint[Z];
-			top_data_str = sdata_lines_str;
-			top_i = (size_t)i;
-			VMOVE(top_point, dpoint);
-			found_top = 1;
-		    }
+	point_t *_lpts = NULL;
+	int _lnpts = _tclcad_draw_view_data_lines_points_copy(gdvp, feature_name, &_lpts);
+	for (i = 0; i < _lnpts; ++i) {
+	    fastf_t minX, maxX;
+	    fastf_t minY, maxY;
+	    VMOVE(dpoint, _lpts[i]);
+	    MAT4X3PNT(vpoint, model2view, dpoint);
+	    minX = vpoint[X] - tol; maxX = vpoint[X] + tol;
+	    minY = vpoint[Y] - tol; maxY = vpoint[Y] + tol;
+	    if (minX < vx && vx < maxX && minY < vy && vy < maxY) {
+		if (!found_top || top_z < vpoint[Z]) {
+		    top_z = vpoint[Z];
+		    top_data_str = sdata_lines_str;
+		    top_i = (size_t)i;
+		    VMOVE(top_point, dpoint);
+		    found_top = 1;
 		}
 	    }
-	    bu_free(_lpts, "TclCAD draw-view points");
 	}
+	if (_lpts)
+	    bu_free(_lpts, "TclCAD draw-view points");
     }
 
     if (found_top) {
@@ -2702,56 +2687,54 @@ to_data_pick_func(struct ged *gedp,
 	return BRLCAD_OK;
     }
 
-    /* check for arrow points - T3: read from BSG vlist instead of gv_tcl */
+    /* check for arrow points */
     {
 	const char *feature_name = "_tcl_data_arrows";
-	if (ged_draw_view_context_feature_exists(gdvp, feature_name)) {
-	    point_t *_apts = NULL;
-	    int _anpts = _tclcad_draw_view_points_copy(gdvp, feature_name, &_apts);
-	    for (i = 0; i < _anpts; ++i) {
-		fastf_t minX, maxX, minY, maxY;
-		VMOVE(dpoint, _apts[i]);
-		MAT4X3PNT(vpoint, model2view, dpoint);
-		minX = vpoint[X] - tol; maxX = vpoint[X] + tol;
-		minY = vpoint[Y] - tol; maxY = vpoint[Y] + tol;
-		if (minX < vx && vx < maxX && minY < vy && vy < maxY) {
-		    if (!found_top || top_z < vpoint[Z]) {
-			top_z = vpoint[Z];
-			top_data_str = data_arrows_str;
-			top_i = (size_t)i;
-			VMOVE(top_point, dpoint);
-			found_top = 1;
-		    }
+	point_t *_apts = NULL;
+	int _anpts = _tclcad_draw_view_data_arrows_points_copy(gdvp, feature_name, &_apts);
+	for (i = 0; i < _anpts; ++i) {
+	    fastf_t minX, maxX, minY, maxY;
+	    VMOVE(dpoint, _apts[i]);
+	    MAT4X3PNT(vpoint, model2view, dpoint);
+	    minX = vpoint[X] - tol; maxX = vpoint[X] + tol;
+	    minY = vpoint[Y] - tol; maxY = vpoint[Y] + tol;
+	    if (minX < vx && vx < maxX && minY < vy && vy < maxY) {
+		if (!found_top || top_z < vpoint[Z]) {
+		    top_z = vpoint[Z];
+		    top_data_str = data_arrows_str;
+		    top_i = (size_t)i;
+		    VMOVE(top_point, dpoint);
+		    found_top = 1;
 		}
 	    }
-	    bu_free(_apts, "TclCAD draw-view points");
 	}
+	if (_apts)
+	    bu_free(_apts, "TclCAD draw-view points");
     }
 
-    /* check for selected arrow points - T3: read from BSG vlist */
+    /* check for selected arrow points */
     {
 	const char *feature_name = "_tcl_sdata_arrows";
-	if (ged_draw_view_context_feature_exists(gdvp, feature_name)) {
-	    point_t *_apts = NULL;
-	    int _anpts = _tclcad_draw_view_points_copy(gdvp, feature_name, &_apts);
-	    for (i = 0; i < _anpts; ++i) {
-		fastf_t minX, maxX, minY, maxY;
-		VMOVE(dpoint, _apts[i]);
-		MAT4X3PNT(vpoint, model2view, dpoint);
-		minX = vpoint[X] - tol; maxX = vpoint[X] + tol;
-		minY = vpoint[Y] - tol; maxY = vpoint[Y] + tol;
-		if (minX < vx && vx < maxX && minY < vy && vy < maxY) {
-		    if (!found_top || top_z < vpoint[Z]) {
-			top_z = vpoint[Z];
-			top_data_str = sdata_arrows_str;
-			top_i = (size_t)i;
-			VMOVE(top_point, dpoint);
-			found_top = 1;
-		    }
+	point_t *_apts = NULL;
+	int _anpts = _tclcad_draw_view_data_arrows_points_copy(gdvp, feature_name, &_apts);
+	for (i = 0; i < _anpts; ++i) {
+	    fastf_t minX, maxX, minY, maxY;
+	    VMOVE(dpoint, _apts[i]);
+	    MAT4X3PNT(vpoint, model2view, dpoint);
+	    minX = vpoint[X] - tol; maxX = vpoint[X] + tol;
+	    minY = vpoint[Y] - tol; maxY = vpoint[Y] + tol;
+	    if (minX < vx && vx < maxX && minY < vy && vy < maxY) {
+		if (!found_top || top_z < vpoint[Z]) {
+		    top_z = vpoint[Z];
+		    top_data_str = sdata_arrows_str;
+		    top_i = (size_t)i;
+		    VMOVE(top_point, dpoint);
+		    found_top = 1;
 		}
 	    }
-	    bu_free(_apts, "TclCAD draw-view points");
 	}
+	if (_apts)
+	    bu_free(_apts, "TclCAD draw-view points");
     }
 
     if (found_top) {
@@ -2761,56 +2744,54 @@ to_data_pick_func(struct ged *gedp,
 	return BRLCAD_OK;
     }
 
-    /* check for axes points - T3: recover center points from BSG vlist */
+    /* check for axes points */
     {
 	const char *feature_name = "_tcl_data_axes";
-	if (ged_draw_view_context_feature_exists(gdvp, feature_name)) {
-	    point_t *_cpts = NULL;
-	    int _ncpts = _tclcad_draw_view_axes_centers_copy(gdvp, feature_name, &_cpts);
-	    for (i = 0; i < _ncpts; ++i) {
-		fastf_t minX, maxX, minY, maxY;
-		VMOVE(dpoint, _cpts[i]);
-		MAT4X3PNT(vpoint, model2view, dpoint);
-		minX = vpoint[X] - tol; maxX = vpoint[X] + tol;
-		minY = vpoint[Y] - tol; maxY = vpoint[Y] + tol;
-		if (minX < vx && vx < maxX && minY < vy && vy < maxY) {
-		    if (!found_top || top_z < vpoint[Z]) {
-			top_z = vpoint[Z];
-			top_i = (size_t)i;
-			top_data_str = data_axes_str;
-			VMOVE(top_point, dpoint);
-			found_top = 1;
-		    }
+	point_t *_cpts = NULL;
+	int _ncpts = _tclcad_draw_view_data_axes_centers_copy(gdvp, feature_name, &_cpts);
+	for (i = 0; i < _ncpts; ++i) {
+	    fastf_t minX, maxX, minY, maxY;
+	    VMOVE(dpoint, _cpts[i]);
+	    MAT4X3PNT(vpoint, model2view, dpoint);
+	    minX = vpoint[X] - tol; maxX = vpoint[X] + tol;
+	    minY = vpoint[Y] - tol; maxY = vpoint[Y] + tol;
+	    if (minX < vx && vx < maxX && minY < vy && vy < maxY) {
+		if (!found_top || top_z < vpoint[Z]) {
+		    top_z = vpoint[Z];
+		    top_i = (size_t)i;
+		    top_data_str = data_axes_str;
+		    VMOVE(top_point, dpoint);
+		    found_top = 1;
 		}
 	    }
-	    bu_free(_cpts, "TclCAD draw-view axes points");
 	}
+	if (_cpts)
+	    bu_free(_cpts, "TclCAD draw-view axes points");
     }
 
-    /* check for selected axes points - T3: recover center points from BSG vlist */
+    /* check for selected axes points */
     {
 	const char *feature_name = "_tcl_sdata_axes";
-	if (ged_draw_view_context_feature_exists(gdvp, feature_name)) {
-	    point_t *_cpts = NULL;
-	    int _ncpts = _tclcad_draw_view_axes_centers_copy(gdvp, feature_name, &_cpts);
-	    for (i = 0; i < _ncpts; ++i) {
-		fastf_t minX, maxX, minY, maxY;
-		VMOVE(dpoint, _cpts[i]);
-		MAT4X3PNT(vpoint, model2view, dpoint);
-		minX = vpoint[X] - tol; maxX = vpoint[X] + tol;
-		minY = vpoint[Y] - tol; maxY = vpoint[Y] + tol;
-		if (minX < vx && vx < maxX && minY < vy && vy < maxY) {
-		    if (!found_top || top_z < vpoint[Z]) {
-			top_z = vpoint[Z];
-			top_i = (size_t)i;
-			top_data_str = sdata_axes_str;
-			VMOVE(top_point, dpoint);
-			found_top = 1;
-		    }
+	point_t *_cpts = NULL;
+	int _ncpts = _tclcad_draw_view_data_axes_centers_copy(gdvp, feature_name, &_cpts);
+	for (i = 0; i < _ncpts; ++i) {
+	    fastf_t minX, maxX, minY, maxY;
+	    VMOVE(dpoint, _cpts[i]);
+	    MAT4X3PNT(vpoint, model2view, dpoint);
+	    minX = vpoint[X] - tol; maxX = vpoint[X] + tol;
+	    minY = vpoint[Y] - tol; maxY = vpoint[Y] + tol;
+	    if (minX < vx && vx < maxX && minY < vy && vy < maxY) {
+		if (!found_top || top_z < vpoint[Z]) {
+		    top_z = vpoint[Z];
+		    top_i = (size_t)i;
+		    top_data_str = sdata_axes_str;
+		    VMOVE(top_point, dpoint);
+		    found_top = 1;
 		}
 	    }
-	    bu_free(_cpts, "TclCAD draw-view axes points");
 	}
+	if (_cpts)
+	    bu_free(_cpts, "TclCAD draw-view axes points");
     }
 
     if (found_top)

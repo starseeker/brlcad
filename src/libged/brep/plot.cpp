@@ -1071,14 +1071,15 @@ brep_plot_publish_indexed_face_set(struct ged *gedp,
 
     struct bu_vls nroot = BU_VLS_INIT_ZERO;
     bu_vls_sprintf(&nroot, "brep::%s", sname);
-    int ret = ged_draw_view_context_indexed_face_set_replace(view_ctx,
-	    bu_vls_cstr(&nroot), 0,
+    int ret = _ged_indexed_face_set_publish_command_scene_feature(gedp,
+	    bu_vls_cstr(&nroot),
 	    points, point_count,
 	    normals, normal_count,
 	    indices, index_count,
-	    &style);
+	    &style, "brep", "command-result", bu_vls_cstr(&nroot),
+	    "brep-debug-indexed-face-set", 0);
     bu_vls_free(&nroot);
-    return ret ? BRLCAD_OK : BRLCAD_ERROR;
+    return ret;
 }
 
 static int

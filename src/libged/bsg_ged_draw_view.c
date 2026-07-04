@@ -968,6 +968,28 @@ ged_draw_view_context_tcl_polygons_replace(
 }
 
 int
+ged_draw_view_context_data_polygons_replace(
+	void *view_ctx,
+	const char *name,
+	int draw,
+	const point_t *points,
+	const int *cmds,
+	size_t point_count,
+	const struct ged_draw_view_feature_style *style)
+{
+    if (!view_ctx || !name)
+	return 0;
+
+    if (!draw || !points || !cmds || !point_count) {
+	(void)ged_draw_view_context_feature_remove(view_ctx, name);
+	return 1;
+    }
+
+    return ged_draw_view_context_tcl_polygons_replace(view_ctx, name, points,
+	    cmds, point_count, style);
+}
+
+int
 ged_draw_view_context_line_layer_builder_replace(
 	void *view_ctx,
 	const char *name,
@@ -1155,6 +1177,196 @@ ged_draw_view_context_lines_append_point(void *view_ctx,
     return ret ? 1 : 0;
 }
 
+static int
+ged_draw_view_context_annotation_line_replace(
+	void *view_ctx,
+	const char *name,
+	int local,
+	const point_t *points,
+	size_t point_count,
+	const struct ged_draw_view_feature_style *style)
+{
+    if (!view_ctx || !name)
+	return 0;
+
+    (void)ged_draw_view_context_feature_remove(view_ctx, name);
+    if (!points || !point_count)
+	return 1;
+
+    if (!ged_draw_view_context_lines_create_model_annotation(view_ctx, name,
+	    local, points[0]))
+	return 0;
+
+    for (size_t i = 1; i < point_count; i++) {
+	if (!ged_draw_view_context_lines_append_point(view_ctx, name,
+		points[i])) {
+	    (void)ged_draw_view_context_feature_remove(view_ctx, name);
+	    return 0;
+	}
+    }
+
+    if (style && !ged_draw_view_context_feature_style_apply(view_ctx, name,
+	    style, 0)) {
+	(void)ged_draw_view_context_feature_remove(view_ctx, name);
+	return 0;
+    }
+
+    return 1;
+}
+
+int
+ged_draw_view_context_annotation_line_create(
+	void *view_ctx,
+	const char *name,
+	int local,
+	const point_t *points,
+	size_t point_count,
+	const struct ged_draw_view_feature_style *style,
+	struct bu_vls *result)
+{
+    if (!view_ctx || !name || !points || !point_count)
+	return 0;
+
+    if (ged_draw_view_context_feature_exists(view_ctx, name)) {
+	if (result)
+	    bu_vls_printf(result, "View feature named %s already exists\n",
+		    name);
+	return 0;
+    }
+
+    if (!ged_draw_view_context_annotation_line_replace(view_ctx, name,
+	    local, points, point_count, style)) {
+	if (result)
+	    bu_vls_printf(result, "Failed to create %s\n", name);
+	return 0;
+    }
+
+    return 1;
+}
+
+int
+ged_draw_view_context_annotation_line_append(
+	void *view_ctx,
+	const char *name,
+	const point_t *points,
+	size_t point_count,
+	struct bu_vls *result)
+{
+    if (!view_ctx || !name || !points || !point_count)
+	return 0;
+
+    if (!ged_draw_view_context_feature_exists(view_ctx, name)) {
+	if (result)
+	    bu_vls_printf(result, "no view feature named %s\n", name);
+	return 0;
+    }
+
+    for (size_t i = 0; i < point_count; i++) {
+	if (!ged_draw_view_context_lines_append_point(view_ctx, name,
+		points[i])) {
+	    if (result)
+		bu_vls_printf(result,
+			"Failed to append point %zu to %s\n", i, name);
+	    return 0;
+	}
+    }
+
+    return 1;
+}
+
+int
+ged_draw_view_context_annotation_line_remove_points(
+	void *view_ctx,
+	const char *name,
+	size_t start,
+	size_t count,
+	struct bu_vls *result)
+{
+    point_t *points = NULL;
+    size_t point_count = 0;
+
+    if (!view_ctx || !name || !count)
+	return 0;
+
+    if (!ged_draw_view_context_feature_exists(view_ctx, name)) {
+	if (result)
+	    bu_vls_printf(result, "no view feature named %s\n", name);
+	return 0;
+    }
+
+    if (!ged_draw_view_context_feature_points_copy(view_ctx, name, &points,
+	    &point_count)) {
+	if (result)
+	    bu_vls_printf(result, "Failed to read points for %s\n", name);
+	return 0;
+    }
+
+    if (start >= point_count || count > point_count - start) {
+	if (result)
+	    bu_vls_printf(result,
+		    "Point range [%zu, %zu) is outside %s point count %zu\n",
+		    start, start + count, name, point_count);
+	if (points)
+	    bu_free(points, "GED draw view annotation line copied points");
+	return 0;
+    }
+
+    struct ged_draw_view_feature_style style =
+	GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+    int have_style = ged_draw_view_context_feature_style_get(view_ctx, name,
+	    &style);
+    size_t new_count = point_count - count;
+    point_t *new_points = NULL;
+    if (new_count) {
+	new_points = (point_t *)bu_calloc(new_count, sizeof(point_t),
+		"GED draw view annotation line rebuilt points");
+	size_t out = 0;
+	for (size_t i = 0; i < point_count; i++) {
+	    if (i >= start && i < start + count)
+		continue;
+	    VMOVE(new_points[out], points[i]);
+	    out++;
+	}
+    }
+
+    int ret = ged_draw_view_context_annotation_line_replace(view_ctx, name,
+	    1, (const point_t *)new_points, new_count,
+	    have_style ? &style : NULL);
+
+    if (new_points)
+	bu_free(new_points, "GED draw view annotation line rebuilt points");
+    if (points)
+	bu_free(points, "GED draw view annotation line copied points");
+
+    if (!ret && result)
+	bu_vls_printf(result, "Failed to update %s\n", name);
+    return ret ? 1 : 0;
+}
+
+int
+ged_draw_view_context_annotation_line_clear(
+	void *view_ctx,
+	const char *name,
+	struct bu_vls *result)
+{
+    if (!view_ctx || !name)
+	return 0;
+
+    if (!ged_draw_view_context_feature_exists(view_ctx, name)) {
+	if (result)
+	    bu_vls_printf(result, "no view feature named %s\n", name);
+	return 0;
+    }
+
+    if (!ged_draw_view_context_feature_remove(view_ctx, name)) {
+	if (result)
+	    bu_vls_printf(result, "Failed to clear %s\n", name);
+	return 0;
+    }
+
+    return 1;
+}
+
 int
 ged_draw_view_context_label_create(void *view_ctx,
 				   const char *name,
@@ -1187,6 +1399,37 @@ ged_draw_view_context_label_create(void *view_ctx,
     }
 
     return bsg_feature_labels_replace(ref, &label, 1) ? 1 : 0;
+}
+
+int
+ged_draw_view_context_annotation_label_create(
+	void *view_ctx,
+	const char *name,
+	int local,
+	const char *text,
+	const point_t point,
+	const point_t target,
+	int has_target,
+	struct bu_vls *result)
+{
+    if (!view_ctx || !name || !text || !point || (has_target && !target))
+	return 0;
+
+    if (ged_draw_view_context_feature_exists(view_ctx, name)) {
+	if (result)
+	    bu_vls_printf(result, "View object named %s already exists\n",
+		    name);
+	return 0;
+    }
+
+    if (!ged_draw_view_context_label_create(view_ctx, name, local, text,
+	    point, target, has_target)) {
+	if (result)
+	    bu_vls_printf(result, "Failed to create %s\n", name);
+	return 0;
+    }
+
+    return 1;
 }
 
 static void
@@ -1552,6 +1795,326 @@ ged_draw_view_context_tcl_lines_replace(
 }
 
 int
+ged_draw_view_context_data_lines_draw_get(
+	void *view_ctx,
+	const char *name)
+{
+    if (!view_ctx || !name)
+	return 0;
+    return ged_draw_view_context_feature_visible(view_ctx, name);
+}
+
+int
+ged_draw_view_context_data_lines_draw_set(
+	void *view_ctx,
+	const char *name,
+	int draw)
+{
+    if (!view_ctx || !name)
+	return 0;
+
+    if (!draw)
+	(void)ged_draw_view_context_feature_remove(view_ctx, name);
+
+    return 1;
+}
+
+int
+ged_draw_view_context_data_lines_style_get(
+	void *view_ctx,
+	const char *name,
+	struct ged_draw_view_line_style *style)
+{
+    if (!view_ctx || !name || !style)
+	return 0;
+    return ged_draw_view_context_line_style_get(view_ctx, name, style);
+}
+
+int
+ged_draw_view_context_data_lines_color_set(
+	void *view_ctx,
+	const char *name,
+	int r,
+	int g,
+	int b)
+{
+    if (!view_ctx || !name)
+	return 0;
+    return ged_draw_view_context_line_color_set(view_ctx, name, r, g, b);
+}
+
+int
+ged_draw_view_context_data_lines_line_width_set(
+	void *view_ctx,
+	const char *name,
+	int line_width)
+{
+    if (!view_ctx || !name)
+	return 0;
+    return ged_draw_view_context_line_width_set(view_ctx, name, line_width);
+}
+
+int
+ged_draw_view_context_data_lines_points_copy(
+	void *view_ctx,
+	const char *name,
+	point_t **points,
+	size_t *point_count)
+{
+    if (!view_ctx || !name || !points || !point_count)
+	return 0;
+    return ged_draw_view_context_lines_points_copy(view_ctx, name, points,
+	    point_count);
+}
+
+int
+ged_draw_view_context_data_lines_points_replace(
+	void *view_ctx,
+	const char *name,
+	const point_t *points,
+	size_t point_count,
+	const struct ged_draw_view_line_style *style)
+{
+    if (!view_ctx || !name)
+	return 0;
+    return ged_draw_view_context_tcl_lines_replace(view_ctx, name, points,
+	    point_count, style);
+}
+
+int
+ged_draw_view_context_data_labels_draw_get(
+	void *view_ctx,
+	const char *name)
+{
+    if (!view_ctx || !name)
+	return 0;
+    return ged_draw_view_context_feature_exists(view_ctx, name);
+}
+
+int
+ged_draw_view_context_data_labels_replace(
+	void *view_ctx,
+	const char *name,
+	int draw,
+	const struct ged_draw_view_label_data *labels,
+	size_t label_count)
+{
+    if (!view_ctx || !name)
+	return 0;
+    return ged_draw_view_context_tcl_labels_replace(view_ctx, name, draw,
+	    labels, label_count);
+}
+
+int
+ged_draw_view_context_data_labels_color_get(
+	void *view_ctx,
+	const char *name,
+	unsigned char rgb[3])
+{
+    if (rgb) {
+	rgb[0] = 0;
+	rgb[1] = 0;
+	rgb[2] = 0;
+    }
+    if (!view_ctx || !name || !rgb)
+	return 0;
+    return ged_draw_view_context_label_copy(view_ctx, name, 0, NULL, NULL,
+	    rgb);
+}
+
+size_t
+ged_draw_view_context_data_labels_count(
+	void *view_ctx,
+	const char *name)
+{
+    if (!view_ctx || !name)
+	return 0;
+    return ged_draw_view_context_label_count(view_ctx, name);
+}
+
+int
+ged_draw_view_context_data_labels_copy(
+	void *view_ctx,
+	const char *name,
+	size_t index,
+	struct bu_vls *text,
+	point_t point,
+	unsigned char rgb[3])
+{
+    if (!view_ctx || !name)
+	return 0;
+    return ged_draw_view_context_label_copy(view_ctx, name, index, text,
+	    point, rgb);
+}
+
+int
+ged_draw_view_context_data_labels_point_set(
+	void *view_ctx,
+	const char *name,
+	size_t index,
+	const point_t point)
+{
+    if (!view_ctx || !name)
+	return 0;
+    return ged_draw_view_context_label_point_set(view_ctx, name, index, point);
+}
+
+static void
+ged_draw_data_arrow_style_default(struct ged_draw_view_feature_style *style)
+{
+    if (!style)
+	return;
+    struct ged_draw_view_feature_style init =
+	GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+    *style = init;
+    style->visible = 1;
+    style->color_valid = 1;
+    style->color[0] = 255;
+    style->color[1] = 255;
+    style->color[2] = 0;
+    style->line_width = 0;
+    style->arrow = 1;
+    style->arrow_tip_length = 0.0;
+    style->arrow_tip_width = 0.0;
+}
+
+int
+ged_draw_view_context_data_arrows_draw_get(
+	void *view_ctx,
+	const char *name)
+{
+    if (!view_ctx || !name)
+	return 0;
+    return ged_draw_view_context_feature_exists(view_ctx, name);
+}
+
+int
+ged_draw_view_context_data_arrows_draw_set(
+	void *view_ctx,
+	const char *name,
+	int draw)
+{
+    if (!view_ctx || !name)
+	return 0;
+    (void)ged_draw_view_context_feature_visible_set(view_ctx, name,
+	    draw ? 1 : 0);
+    return 1;
+}
+
+int
+ged_draw_view_context_data_arrows_style_get(
+	void *view_ctx,
+	const char *name,
+	struct ged_draw_view_feature_style *style)
+{
+    if (!style)
+	return 0;
+    ged_draw_data_arrow_style_default(style);
+    if (!view_ctx || !name)
+	return 0;
+
+    struct ged_draw_view_feature_style current =
+	GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+    if (!ged_draw_view_context_feature_style_get(view_ctx, name, &current))
+	return 1;
+
+    style->visible = current.visible;
+    if (current.color_valid) {
+	style->color_valid = 1;
+	style->color[0] = current.color[0];
+	style->color[1] = current.color[1];
+	style->color[2] = current.color[2];
+    }
+    style->line_width = current.line_width;
+    style->arrow_tip_length = current.arrow_tip_length;
+    style->arrow_tip_width = current.arrow_tip_width;
+    return 1;
+}
+
+int
+ged_draw_view_context_data_arrows_color_set(
+	void *view_ctx,
+	const char *name,
+	int r,
+	int g,
+	int b)
+{
+    if (!view_ctx || !name)
+	return 0;
+    return ged_draw_view_context_line_color_set(view_ctx, name, r, g, b);
+}
+
+int
+ged_draw_view_context_data_arrows_line_width_set(
+	void *view_ctx,
+	const char *name,
+	int line_width)
+{
+    if (!view_ctx || !name)
+	return 0;
+    return ged_draw_view_context_line_width_set(view_ctx, name, line_width);
+}
+
+int
+ged_draw_view_context_data_arrows_points_copy(
+	void *view_ctx,
+	const char *name,
+	point_t **points,
+	size_t *point_count)
+{
+    if (!view_ctx || !name || !points || !point_count)
+	return 0;
+    return ged_draw_view_context_feature_points_copy(view_ctx, name, points,
+	    point_count);
+}
+
+int
+ged_draw_view_context_data_arrows_points_replace(
+	void *view_ctx,
+	const char *name,
+	const point_t *points,
+	size_t point_count,
+	const struct ged_draw_view_feature_style *style)
+{
+    if (!view_ctx || !name)
+	return 0;
+    if (point_count < 2) {
+	(void)ged_draw_view_context_feature_remove(view_ctx, name);
+	return 1;
+    }
+    return ged_draw_view_context_tcl_arrows_replace(view_ctx, name, points,
+	    point_count, style);
+}
+
+int
+ged_draw_view_context_data_arrows_tip_get(
+	void *view_ctx,
+	const char *name,
+	fastf_t *tip_length,
+	fastf_t *tip_width)
+{
+    if (!view_ctx || !name)
+	return 0;
+    return ged_draw_view_context_arrow_tip_get(view_ctx, name, tip_length,
+	    tip_width);
+}
+
+int
+ged_draw_view_context_data_arrows_tip_set(
+	void *view_ctx,
+	const char *name,
+	fastf_t tip_length,
+	fastf_t tip_width)
+{
+    if (!view_ctx || !name)
+	return 0;
+    if (!ged_draw_view_context_arrow_tip_get(view_ctx, name, NULL, NULL))
+	return 1;
+    return ged_draw_view_context_arrow_tip_set(view_ctx, name, tip_length,
+	    tip_width);
+}
+
+int
 ged_draw_view_context_arrow_tip_get(void *view_ctx,
 				    const char *name,
 				    fastf_t *tip_length,
@@ -1711,6 +2274,176 @@ ged_draw_view_context_tcl_axes_replace(
 }
 
 static void
+ged_draw_data_axes_style_default(struct ged_draw_view_feature_style *style)
+{
+    if (!style)
+	return;
+    struct ged_draw_view_feature_style init =
+	GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+    *style = init;
+    style->visible = 1;
+    style->color_valid = 1;
+    style->color[0] = 255;
+    style->color[1] = 255;
+    style->color[2] = 0;
+    style->line_width = 0;
+}
+
+int
+ged_draw_view_context_data_axes_draw_get(
+	void *view_ctx,
+	const char *name)
+{
+    if (!view_ctx || !name)
+	return 0;
+    return ged_draw_view_context_feature_exists(view_ctx, name);
+}
+
+int
+ged_draw_view_context_data_axes_draw_set(
+	void *view_ctx,
+	const char *name,
+	int draw)
+{
+    if (!view_ctx || !name)
+	return 0;
+    (void)ged_draw_view_context_feature_visible_set(view_ctx, name,
+	    draw ? 1 : 0);
+    return 1;
+}
+
+int
+ged_draw_view_context_data_axes_style_get(
+	void *view_ctx,
+	const char *name,
+	struct ged_draw_view_feature_style *style)
+{
+    if (!style)
+	return 0;
+    ged_draw_data_axes_style_default(style);
+    if (!view_ctx || !name)
+	return 0;
+
+    struct ged_draw_view_feature_style current =
+	GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+    if (!ged_draw_view_context_feature_style_get(view_ctx, name, &current))
+	return 1;
+
+    style->visible = current.visible;
+    if (current.color_valid) {
+	style->color_valid = 1;
+	style->color[0] = current.color[0];
+	style->color[1] = current.color[1];
+	style->color[2] = current.color[2];
+    }
+    style->line_width = current.line_width;
+    return 1;
+}
+
+int
+ged_draw_view_context_data_axes_color_set(
+	void *view_ctx,
+	const char *name,
+	int r,
+	int g,
+	int b)
+{
+    if (!view_ctx || !name)
+	return 0;
+    return ged_draw_view_context_line_color_set(view_ctx, name, r, g, b);
+}
+
+int
+ged_draw_view_context_data_axes_line_width_set(
+	void *view_ctx,
+	const char *name,
+	int line_width)
+{
+    if (!view_ctx || !name)
+	return 0;
+    return ged_draw_view_context_line_width_set(view_ctx, name, line_width);
+}
+
+int
+ged_draw_view_context_data_axes_half_size_get(
+	void *view_ctx,
+	const char *name,
+	fastf_t *half_axes_size)
+{
+    if (half_axes_size)
+	*half_axes_size = 1.0;
+    if (!view_ctx || !name || !half_axes_size)
+	return 0;
+
+    point_t *points = NULL;
+    size_t point_count = 0;
+    int copied = ged_draw_view_context_feature_points_copy(view_ctx, name,
+	    &points, &point_count);
+    if (copied && point_count >= 2)
+	*half_axes_size = (points[1][X] - points[0][X]) * 0.5;
+    if (points)
+	bu_free(points, "GED draw view data axes points copy");
+    return 1;
+}
+
+int
+ged_draw_view_context_data_axes_size_get(
+	void *view_ctx,
+	const char *name,
+	fastf_t display_scale,
+	fastf_t *size)
+{
+    if (size)
+	*size = 0.0;
+    if (!view_ctx || !name || !size)
+	return 0;
+
+    point_t *points = NULL;
+    size_t point_count = 0;
+    int copied = ged_draw_view_context_feature_points_copy(view_ctx, name,
+	    &points, &point_count);
+    if (copied && point_count >= 2) {
+	fastf_t half = (points[1][X] - points[0][X]) * 0.5;
+	*size = (display_scale > 0.0) ? (half * 2.0 / display_scale) : 0.0;
+    }
+    if (points)
+	bu_free(points, "GED draw view data axes points copy");
+    return 1;
+}
+
+int
+ged_draw_view_context_data_axes_centers_copy(
+	void *view_ctx,
+	const char *name,
+	point_t **centers,
+	size_t *center_count)
+{
+    if (!view_ctx || !name || !centers || !center_count)
+	return 0;
+    return ged_draw_view_context_feature_axes_centers_copy(view_ctx, name,
+	    centers, center_count);
+}
+
+int
+ged_draw_view_context_data_axes_centers_replace(
+	void *view_ctx,
+	const char *name,
+	const point_t *centers,
+	size_t center_count,
+	fastf_t half_axes_size,
+	const struct ged_draw_view_feature_style *style)
+{
+    if (!view_ctx || !name)
+	return 0;
+    if (!centers || !center_count) {
+	(void)ged_draw_view_context_feature_remove(view_ctx, name);
+	return 1;
+    }
+    return ged_draw_view_context_tcl_axes_replace(view_ctx, name, centers,
+	    center_count, half_axes_size, style);
+}
+
+static void
 _ged_draw_view_axes_to_bsg(struct bsg_axes *dst,
 			   const struct ged_draw_view_axes_state *src)
 {
@@ -1818,6 +2551,88 @@ ged_draw_view_context_axes_state_replace(
     struct bsg_axes axes;
     _ged_draw_view_axes_to_bsg(&axes, state);
     return bsg_feature_axes_state_replace(ref, &axes) ? 1 : 0;
+}
+
+int
+ged_draw_view_context_annotation_axes_create(
+	void *view_ctx,
+	const char *name,
+	int local,
+	const struct ged_draw_view_axes_state *state,
+	struct bu_vls *result)
+{
+    if (!view_ctx || !name || !state)
+	return 0;
+
+    if (ged_draw_view_context_feature_exists(view_ctx, name)) {
+	if (result)
+	    bu_vls_printf(result, "View object named %s already exists\n",
+		    name);
+	return 0;
+    }
+
+    if (!ged_draw_view_context_axes_create(view_ctx, name, local, state)) {
+	if (result)
+	    bu_vls_printf(result, "Failed to set axes state for %s\n",
+		    name);
+	return 0;
+    }
+
+    return 1;
+}
+
+int
+ged_draw_view_context_annotation_axes_state_get(
+	void *view_ctx,
+	const char *name,
+	struct ged_draw_view_axes_state *state,
+	struct bu_vls *result)
+{
+    if (!view_ctx || !name || !state)
+	return 0;
+
+    if (!ged_draw_view_context_feature_exists(view_ctx, name)) {
+	if (result)
+	    bu_vls_printf(result, "View object named %s does not exist\n",
+		    name);
+	return 0;
+    }
+
+    if (!ged_draw_view_context_axes_state_get(view_ctx, name, state)) {
+	if (result)
+	    bu_vls_printf(result, "View object %s has no axes state\n",
+		    name);
+	return 0;
+    }
+
+    return 1;
+}
+
+int
+ged_draw_view_context_annotation_axes_state_replace(
+	void *view_ctx,
+	const char *name,
+	const struct ged_draw_view_axes_state *state,
+	struct bu_vls *result)
+{
+    if (!view_ctx || !name || !state)
+	return 0;
+
+    if (!ged_draw_view_context_feature_exists(view_ctx, name)) {
+	if (result)
+	    bu_vls_printf(result, "View object named %s does not exist\n",
+		    name);
+	return 0;
+    }
+
+    if (!ged_draw_view_context_axes_state_replace(view_ctx, name, state)) {
+	if (result)
+	    bu_vls_printf(result, "Failed to set axes state for %s\n",
+		    name);
+	return 0;
+    }
+
+    return 1;
 }
 
 static bsg_polygon_ref

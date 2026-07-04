@@ -228,9 +228,11 @@ main(int ac, char *av[]) {
     /* Done with program name */
     int uac = bu_opt_parse(NULL, ac, (const char **)av, d);
     if (uac == -1 || need_help)
+	bu_exit(EXIT_FAILURE, "%s [-h] [-c] [-k] <directory>", av[0]);
+    ac = uac;
 
     if (ac != 2)
-	bu_exit(EXIT_FAILURE, "%s [-h] [-U] <directory>", av[0]);
+	bu_exit(EXIT_FAILURE, "%s [-h] [-c] [-k] <directory>", av[0]);
 
     if (!bu_file_directory(av[1])) {
 	printf("ERROR: [%s] is not a directory.  Expecting control image directory\n", av[1]);

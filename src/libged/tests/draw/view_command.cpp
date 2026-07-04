@@ -81,6 +81,23 @@ assert_feature_point_count(void *view, const char *name, size_t expected, int li
 #define ASSERT_FEATURE_POINT_COUNT(view, name, expected) assert_feature_point_count((view), (name), (expected), __LINE__)
 
 static void
+assert_feature_overlay(void *view, const char *name, int expected, int line)
+{
+    nchecks++;
+    struct ged_draw_view_feature_summary summary =
+	GED_DRAW_VIEW_FEATURE_SUMMARY_INIT;
+    int copied = ged_draw_view_context_feature_summary(view, name, &summary);
+    if (!copied || !summary.exists || summary.is_overlay != expected) {
+	bu_log("FAIL [%s:%d] %s overlay expected %d, got exists=%d overlay=%d\n",
+		__FILE__, line, name, expected, summary.exists,
+		summary.is_overlay);
+	nfails++;
+    }
+}
+
+#define ASSERT_FEATURE_OVERLAY(view, name, expected) assert_feature_overlay((view), (name), (expected), __LINE__)
+
+static void
 refresh_scene_records(struct ged *gedp, void *v)
 {
     struct ged_draw_transaction txn =
@@ -190,12 +207,14 @@ main(int argc, const char **argv)
     const char *lc0[] = {"view", "annotation", "line", "create", "u_line_edit", "0", "0", "0", "1", "0", "0", NULL};
     ASSERT_VIEW_OK(gedp, 11, lc0);
     ASSERT_FEATURE_POINT_COUNT(views[0], "u_line_edit", 2);
+    ASSERT_FEATURE_OVERLAY(views[0], "u_line_edit", 1);
     const char *lc1[] = {"view", "annotation", "line", "append", "u_line_edit", "2", "0", "0", "3", "0", "0", NULL};
     ASSERT_VIEW_OK(gedp, 11, lc1);
     ASSERT_FEATURE_POINT_COUNT(views[0], "u_line_edit", 4);
     const char *lc2[] = {"view", "annotation", "line", "remove", "u_line_edit", "1", "2", NULL};
     ASSERT_VIEW_OK(gedp, 7, lc2);
     ASSERT_FEATURE_POINT_COUNT(views[0], "u_line_edit", 2);
+    ASSERT_FEATURE_OVERLAY(views[0], "u_line_edit", 1);
     const char *lc3[] = {"view", "annotation", "line", "clear", "u_line_edit", NULL};
     ASSERT_VIEW_OK(gedp, 5, lc3);
     ASSERT(ged_draw_view_context_feature_exists(views[0], "u_line_edit") == 0);
@@ -231,6 +250,33 @@ main(int argc, const char **argv)
     const char *c5b[] = {"view", "vZ", "-N", "u_line", NULL};
     ASSERT(run_view(gedp, 4, c5b) == BRLCAD_OK);
     ASSERT(!result_str(gedp).empty());
+
+    const char *l0[] = {"view", "annotation", "label", "create", "u_label", "note", "1", "2", "3", NULL};
+    ASSERT_VIEW_OK(gedp, 9, l0);
+    ASSERT(ged_draw_view_context_label_count(views[0], "u_label") == 1);
+    const char *l1[] = {"view", "object", "info", "u_label", "type", NULL};
+    ASSERT_VIEW_OK(gedp, 5, l1);
+    ASSERT(!result_str(gedp).empty());
+
+    const char *dl0[] = {"data_lines", "points", "{0 0 0} {1 0 0}", NULL};
+    ASSERT_VIEW_OK(gedp, 3, dl0);
+    ASSERT_FEATURE_POINT_COUNT(views[0], "_tcl_data_lines", 2);
+    const char *dl1[] = {"data_lines", "draw", NULL};
+    ASSERT_VIEW_OK(gedp, 2, dl1);
+    ASSERT(result_str(gedp).find("1") != std::string::npos);
+    const char *dl2[] = {"data_lines", "color", "11", "22", "33", NULL};
+    ASSERT_VIEW_OK(gedp, 5, dl2);
+    const char *dl3[] = {"data_lines", "color", NULL};
+    ASSERT_VIEW_OK(gedp, 2, dl3);
+    ASSERT(result_str(gedp).find("11 22 33") != std::string::npos);
+    const char *dl4[] = {"data_lines", "line_width", "4", NULL};
+    ASSERT_VIEW_OK(gedp, 3, dl4);
+    const char *dl5[] = {"data_lines", "line_width", NULL};
+    ASSERT_VIEW_OK(gedp, 2, dl5);
+    ASSERT(result_str(gedp).find("4") != std::string::npos);
+    const char *dl6[] = {"data_lines", "draw", "0", NULL};
+    ASSERT_VIEW_OK(gedp, 3, dl6);
+    ASSERT(ged_draw_view_context_feature_exists(views[0], "_tcl_data_lines") == 0);
 
     const char *a0[] = {"view", "annotation", "axes", "create", "u_axes", "1", "2", "3", NULL};
     ASSERT_VIEW_OK(gedp, 8, a0);

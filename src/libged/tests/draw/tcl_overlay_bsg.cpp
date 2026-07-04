@@ -301,9 +301,9 @@ main(int ac, char *av[])
     }
 
     /* ------------------------------------------------------------------ *
-     * [7] GED Tcl polygon facade: typed outline replacement.             *
+     * [7] GED data-polygon facade: typed outline replacement.            *
      * ------------------------------------------------------------------ */
-    bu_log("[7] GED Tcl polygon facade...\n");
+    bu_log("[7] GED data-polygon facade...\n");
     {
 	const char *pname = "_tcl_test_polygon_adapter";
 	point_t polygon_points[4] = {{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 0, 0}};
@@ -322,8 +322,8 @@ main(int ac, char *av[])
 	polygon_style.line_width = 2;
 	polygon_style.line_style = 1;
 
-	ASSERT(ged_draw_view_context_tcl_polygons_replace(v, pname, polygon_points,
-		polygon_cmds, 4, &polygon_style) == 1);
+	ASSERT(ged_draw_view_context_data_polygons_replace(v, pname, 1,
+		polygon_points, polygon_cmds, 4, &polygon_style) == 1);
 	ASSERT(ged_draw_view_context_feature_exists(v, pname) == 1);
 
 	point_t *copied_points = NULL;
@@ -355,7 +355,8 @@ main(int ac, char *av[])
 	ASSERT(current.line_width == 2);
 	ASSERT(current.line_style == 1);
 
-	ASSERT(ged_draw_view_context_feature_remove(v, pname) == 1);
+	ASSERT(ged_draw_view_context_data_polygons_replace(v, pname, 0, NULL,
+		NULL, 0, NULL) == 1);
 	ASSERT(ged_draw_view_context_feature_exists(v, pname) == 0);
     }
 

@@ -70,31 +70,6 @@ _line_parse_points(struct ged *gedp, int argc, const char **argv, point_t **poin
     return BRLCAD_OK;
 }
 
-static int *
-_line_commands(size_t point_count)
-{
-    if (!point_count)
-	return NULL;
-
-    int *cmds = (int *)bu_calloc(point_count, sizeof(int),
-	    "view annotation line commands");
-    cmds[0] = GED_DRAW_VIEW_LINE_MOVE;
-    for (size_t i = 1; i < point_count; i++)
-	cmds[i] = GED_DRAW_VIEW_LINE_DRAW;
-    return cmds;
-}
-
-static int
-_line_replace_points(struct _ged_view_info *gd, const point_t *points, size_t point_count, const struct ged_draw_view_feature_style *style)
-{
-    int *cmds = _line_commands(point_count);
-    int ret = ged_draw_view_context_lines_replace(gd->cv, gd->vobj,
-	    gd->local_obj, points, cmds, point_count, style);
-    if (cmds)
-	bu_free(cmds, "view annotation line commands");
-    return ret;
-}
-
 int
 _line_cmd_create(void *bs, int argc, const char **argv)
 {
@@ -110,37 +85,17 @@ _line_cmd_create(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    if (ged_draw_view_context_feature_exists(gd->cv, gd->vobj)) {
-        bu_vls_printf(gedp->ged_result_str, "View feature named %s already exists\n", gd->vobj);
-        return BRLCAD_ERROR;
-    }
-
     point_t *points = NULL;
     size_t point_count = 0;
     if (_line_parse_points(gedp, argc, argv, &points, &point_count,
 	    usage_string) != BRLCAD_OK)
 	return BRLCAD_ERROR;
 
-    if (!ged_draw_view_context_lines_create_model_annotation(gd->cv, gd->vobj,
-	    gd->local_obj, points[0])) {
-	bu_vls_printf(gedp->ged_result_str, "Failed to create %s\n", gd->vobj);
-	bu_free(points, "view annotation line points");
-	return BRLCAD_ERROR;
-    }
-
-    for (size_t i = 1; i < point_count; i++) {
-	if (!ged_draw_view_context_lines_append_point(gd->cv, gd->vobj,
-		points[i])) {
-	    (void)_line_replace_points(gd, NULL, 0, NULL);
-	    bu_vls_printf(gedp->ged_result_str,
-		    "Failed to append point %zu to %s\n", i, gd->vobj);
-	    bu_free(points, "view annotation line points");
-	    return BRLCAD_ERROR;
-	}
-    }
-
+    int ret = ged_draw_view_context_annotation_line_create(gd->cv, gd->vobj,
+	    gd->local_obj, (const point_t *)points, point_count, NULL,
+	    gedp->ged_result_str);
     bu_free(points, "view annotation line points");
-    return BRLCAD_OK;
+    return ret ? BRLCAD_OK : BRLCAD_ERROR;
 }
 
 int
@@ -158,29 +113,16 @@ _line_cmd_append(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    if (!ged_draw_view_context_feature_exists(gd->cv, gd->vobj)) {
-        bu_vls_printf(gedp->ged_result_str, "no view feature named %s\n", gd->vobj);
-        return BRLCAD_ERROR;
-    }
-
     point_t *points = NULL;
     size_t point_count = 0;
     if (_line_parse_points(gedp, argc, argv, &points, &point_count,
 	    usage_string) != BRLCAD_OK)
 	return BRLCAD_ERROR;
 
-    for (size_t i = 0; i < point_count; i++) {
-	if (!ged_draw_view_context_lines_append_point(gd->cv, gd->vobj,
-		points[i])) {
-	    bu_vls_printf(gedp->ged_result_str,
-		    "Failed to append point %zu to %s\n", i, gd->vobj);
-	    bu_free(points, "view annotation line points");
-	    return BRLCAD_ERROR;
-	}
-    }
-
+    int ret = ged_draw_view_context_annotation_line_append(gd->cv, gd->vobj,
+	    (const point_t *)points, point_count, gedp->ged_result_str);
     bu_free(points, "view annotation line points");
-    return BRLCAD_OK;
+    return ret ? BRLCAD_OK : BRLCAD_ERROR;
 }
 
 int
@@ -197,11 +139,6 @@ _line_cmd_remove(void *bs, int argc, const char **argv)
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
-
-    if (!ged_draw_view_context_feature_exists(gd->cv, gd->vobj)) {
-        bu_vls_printf(gedp->ged_result_str, "no view feature named %s\n", gd->vobj);
-        return BRLCAD_ERROR;
-    }
 
     if (argc < 1 || argc > 2) {
 	bu_vls_printf(gedp->ged_result_str, "Usage: %s\n", usage_string);
@@ -222,56 +159,9 @@ _line_cmd_remove(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    point_t *points = NULL;
-    size_t point_count = 0;
-    if (!ged_draw_view_context_feature_points_copy(gd->cv, gd->vobj,
-	    &points, &point_count)) {
-	bu_vls_printf(gedp->ged_result_str, "Failed to read points for %s\n", gd->vobj);
-	return BRLCAD_ERROR;
-    }
-
-    size_t remove_start = (size_t)start;
-    size_t remove_count = (size_t)remove_count_arg;
-    if (remove_start >= point_count || remove_count > point_count - remove_start) {
-	bu_vls_printf(gedp->ged_result_str,
-		"Point range [%zu, %zu) is outside %s point count %zu\n",
-		remove_start, remove_start + remove_count, gd->vobj, point_count);
-	if (points)
-	    bu_free(points, "view annotation line copied points");
-	return BRLCAD_ERROR;
-    }
-
-    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
-    int have_style = ged_draw_view_context_feature_style_get(gd->cv, gd->vobj,
-	    &style);
-    size_t new_count = point_count - remove_count;
-    point_t *new_points = NULL;
-    if (new_count) {
-	new_points = (point_t *)bu_calloc(new_count, sizeof(point_t),
-		"view annotation line rebuilt points");
-	size_t out = 0;
-	for (size_t i = 0; i < point_count; i++) {
-	    if (i >= remove_start && i < remove_start + remove_count)
-		continue;
-	    VMOVE(new_points[out], points[i]);
-	    out++;
-	}
-    }
-
-    int ret = _line_replace_points(gd, (const point_t *)new_points,
-	    new_count, have_style ? &style : NULL);
-
-    if (new_points)
-	bu_free(new_points, "view annotation line rebuilt points");
-    if (points)
-	bu_free(points, "view annotation line copied points");
-
-    if (!ret) {
-	bu_vls_printf(gedp->ged_result_str, "Failed to update %s\n", gd->vobj);
-	return BRLCAD_ERROR;
-    }
-
-    return BRLCAD_OK;
+    return ged_draw_view_context_annotation_line_remove_points(gd->cv,
+	    gd->vobj, (size_t)start, (size_t)remove_count_arg,
+	    gedp->ged_result_str) ? BRLCAD_OK : BRLCAD_ERROR;
 }
 
 int
@@ -294,17 +184,8 @@ _line_cmd_clear(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    if (!ged_draw_view_context_feature_exists(gd->cv, gd->vobj)) {
-        bu_vls_printf(gedp->ged_result_str, "no view feature named %s\n", gd->vobj);
-        return BRLCAD_ERROR;
-    }
-
-    if (!_line_replace_points(gd, NULL, 0, NULL)) {
-	bu_vls_printf(gedp->ged_result_str, "Failed to clear %s\n", gd->vobj);
-	return BRLCAD_ERROR;
-    }
-
-    return BRLCAD_OK;
+    return ged_draw_view_context_annotation_line_clear(gd->cv, gd->vobj,
+	    gedp->ged_result_str) ? BRLCAD_OK : BRLCAD_ERROR;
 }
 
 const struct bu_cmdtab _line_cmds[] = {

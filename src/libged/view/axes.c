@@ -39,18 +39,6 @@
 #include "../ged_private.h"
 #include "./ged_view.h"
 
-static int
-_view_axes_state(struct ged *gedp,
-		 void *view_ctx,
-		 const char *name,
-		 struct ged_draw_view_axes_state *a)
-{
-    if (ged_draw_view_context_axes_state_get(view_ctx, name, a))
-	return 1;
-    bu_vls_printf(gedp->ged_result_str, "View object %s has no axes state\n", name);
-    return 0;
-}
-
 int
 _axes_cmd_create(void *bs, int argc, const char **argv)
 {
@@ -65,11 +53,6 @@ _axes_cmd_create(void *bs, int argc, const char **argv)
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
-
-    if (ged_draw_view_context_feature_exists(gd->cv, gd->vobj)) {
-	bu_vls_printf(gedp->ged_result_str, "View object named %s already exists\n", gd->vobj);
-	return BRLCAD_ERROR;
-    }
 
     if (argc != 3) {
 	bu_vls_printf(gedp->ged_result_str, "Usage: %s\n", usage_string);
@@ -89,12 +72,9 @@ _axes_cmd_create(void *bs, int argc, const char **argv)
     l.line_width = 1;
     l.size = 10;
     VSET(l.color, 255, 255, 0);
-    if (!ged_draw_view_context_axes_create(gd->cv, gd->vobj, gd->local_obj, &l)) {
-	bu_vls_printf(gedp->ged_result_str, "Failed to set axes state for %s\n", gd->vobj);
-	return BRLCAD_ERROR;
-    }
-
-    return BRLCAD_OK;
+    return ged_draw_view_context_annotation_axes_create(gd->cv, gd->vobj,
+	    gd->local_obj, &l, gedp->ged_result_str) ?
+	BRLCAD_OK : BRLCAD_ERROR;
 }
 
 int
@@ -112,12 +92,9 @@ _axes_cmd_pos(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    if (!ged_draw_view_context_feature_exists(gd->cv, gd->vobj)) {
-	bu_vls_printf(gedp->ged_result_str, "View object named %s does not exist\n", gd->vobj);
-	return BRLCAD_ERROR;
-    }
     struct ged_draw_view_axes_state a;
-    if (!_view_axes_state(gedp, gd->cv, gd->vobj, &a))
+    if (!ged_draw_view_context_annotation_axes_state_get(gd->cv, gd->vobj,
+	    &a, gedp->ged_result_str))
 	return BRLCAD_ERROR;
     if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%f %f %f\n", V3ARGS(a.position));
@@ -136,12 +113,9 @@ _axes_cmd_pos(void *bs, int argc, const char **argv)
     }
 
     VMOVE(a.position, p);
-    if (!ged_draw_view_context_axes_state_replace(gd->cv, gd->vobj, &a)) {
-	bu_vls_printf(gedp->ged_result_str, "Failed to set axes state for %s\n", gd->vobj);
-	return BRLCAD_ERROR;
-    }
-
-    return BRLCAD_OK;
+    return ged_draw_view_context_annotation_axes_state_replace(gd->cv,
+	    gd->vobj, &a, gedp->ged_result_str) ?
+	BRLCAD_OK : BRLCAD_ERROR;
 }
 
 int
@@ -159,12 +133,9 @@ _axes_cmd_size(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    if (!ged_draw_view_context_feature_exists(gd->cv, gd->vobj)) {
-	bu_vls_printf(gedp->ged_result_str, "View object named %s does not exist\n", gd->vobj);
-	return BRLCAD_ERROR;
-    }
     struct ged_draw_view_axes_state a;
-    if (!_view_axes_state(gedp, gd->cv, gd->vobj, &a))
+    if (!ged_draw_view_context_annotation_axes_state_get(gd->cv, gd->vobj,
+	    &a, gedp->ged_result_str))
 	return BRLCAD_ERROR;
      if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%f\n", a.size);
@@ -182,12 +153,9 @@ _axes_cmd_size(void *bs, int argc, const char **argv)
     }
 
     a.size = val;
-    if (!ged_draw_view_context_axes_state_replace(gd->cv, gd->vobj, &a)) {
-	bu_vls_printf(gedp->ged_result_str, "Failed to set axes state for %s\n", gd->vobj);
-	return BRLCAD_ERROR;
-    }
-
-    return BRLCAD_OK;
+    return ged_draw_view_context_annotation_axes_state_replace(gd->cv,
+	    gd->vobj, &a, gedp->ged_result_str) ?
+	BRLCAD_OK : BRLCAD_ERROR;
 }
 
 int
@@ -205,12 +173,9 @@ _axes_cmd_linewidth(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    if (!ged_draw_view_context_feature_exists(gd->cv, gd->vobj)) {
-	bu_vls_printf(gedp->ged_result_str, "View object named %s does not exist\n", gd->vobj);
-	return BRLCAD_ERROR;
-    }
     struct ged_draw_view_axes_state a;
-    if (!_view_axes_state(gedp, gd->cv, gd->vobj, &a))
+    if (!ged_draw_view_context_annotation_axes_state_get(gd->cv, gd->vobj,
+	    &a, gedp->ged_result_str))
 	return BRLCAD_ERROR;
      if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%d\n", a.line_width);
@@ -233,12 +198,9 @@ _axes_cmd_linewidth(void *bs, int argc, const char **argv)
     }
 
     a.line_width = val;
-    if (!ged_draw_view_context_axes_state_replace(gd->cv, gd->vobj, &a)) {
-	bu_vls_printf(gedp->ged_result_str, "Failed to set axes state for %s\n", gd->vobj);
-	return BRLCAD_ERROR;
-    }
-
-    return BRLCAD_OK;
+    return ged_draw_view_context_annotation_axes_state_replace(gd->cv,
+	    gd->vobj, &a, gedp->ged_result_str) ?
+	BRLCAD_OK : BRLCAD_ERROR;
 }
 
 int
@@ -256,12 +218,9 @@ _axes_cmd_axes_color(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    if (!ged_draw_view_context_feature_exists(gd->cv, gd->vobj)) {
-	bu_vls_printf(gedp->ged_result_str, "View object named %s does not exist\n", gd->vobj);
-	return BRLCAD_ERROR;
-    }
     struct ged_draw_view_axes_state a;
-    if (!_view_axes_state(gedp, gd->cv, gd->vobj, &a))
+    if (!ged_draw_view_context_annotation_axes_state_get(gd->cv, gd->vobj,
+	    &a, gedp->ged_result_str))
 	return BRLCAD_ERROR;
      if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%d %d %d\n", a.color[0], a.color[1], a.color[2]);
@@ -282,12 +241,9 @@ _axes_cmd_axes_color(void *bs, int argc, const char **argv)
     }
 
     bu_color_to_rgb_ints(&c, &a.color[0], &a.color[1], &a.color[2]);
-    if (!ged_draw_view_context_axes_state_replace(gd->cv, gd->vobj, &a)) {
-	bu_vls_printf(gedp->ged_result_str, "Failed to set axes state for %s\n", gd->vobj);
-	return BRLCAD_ERROR;
-    }
-
-    return BRLCAD_OK;
+    return ged_draw_view_context_annotation_axes_state_replace(gd->cv,
+	    gd->vobj, &a, gedp->ged_result_str) ?
+	BRLCAD_OK : BRLCAD_ERROR;
 }
 
 

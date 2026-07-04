@@ -71,13 +71,13 @@ tclcad_polygon_export_state_from_tcl(struct ged_polygon_export_state *export_sta
     export_state->data_vZ = gdpsp->gdps_data_vZ;
 }
 
-/* Phase T1 (drawing_stack_modernization): keep a retained draw-view feature in
- * sync with the TclCAD data-polygons state so the modern renderer picks up
- * polygon outlines without the legacy dm_draw_polys path.
+/* Phase T1 (drawing_stack_modernization): keep a draw-view feature in sync
+ * with the TclCAD data-polygons state so the modern renderer picks up polygon
+ * outlines without the legacy dm_draw_polys path.
  *
  * One scene feature per polygon-group (data or sdata) is created under the
  * local view scope.  All polygon contours are packed into a single typed line
- * set through the private GED draw-view adapter.
+ * set through the typed GED data-polygon facade.
  *
  * Per-contour dash style is not preserved here (s_soldash is a per-object
  * flag); hole contours are rendered with the same style as regular ones.
@@ -89,10 +89,11 @@ _sync_tcl_polygons_to_draw_view(void *view_ctx, tclcad_polygon_state *gdpsp, con
     if (!view_ctx || !gdpsp || !bsg_name)
 	return;
 
-    ged_draw_view_context_feature_remove(view_ctx, bsg_name);
-
-    if (!gdpsp->gdps_draw || gdpsp->gdps_polygons.num_polygons < 1)
+    if (!gdpsp->gdps_draw || gdpsp->gdps_polygons.num_polygons < 1) {
+	(void)ged_draw_view_context_data_polygons_replace(view_ctx, bsg_name,
+		0, NULL, NULL, 0, NULL);
 	return;
+    }
 
     size_t point_count = 0;
     for (size_t i = 0; i < gdpsp->gdps_polygons.num_polygons; i++) {
@@ -109,8 +110,11 @@ _sync_tcl_polygons_to_draw_view(void *view_ctx, tclcad_polygon_state *gdpsp, con
 		point_count++;
 	}
     }
-    if (!point_count)
+    if (!point_count) {
+	(void)ged_draw_view_context_data_polygons_replace(view_ctx, bsg_name,
+		0, NULL, NULL, 0, NULL);
 	return;
+    }
 
     point_t *points = (point_t *)bu_calloc(point_count, sizeof(point_t), "tcl polygon feature points");
     int *cmds = (int *)bu_calloc(point_count, sizeof(int), "tcl polygon feature cmds");
@@ -147,8 +151,8 @@ _sync_tcl_polygons_to_draw_view(void *view_ctx, tclcad_polygon_state *gdpsp, con
     style.line_width = gdpsp->gdps_line_width;
     style.line_style = gdpsp->gdps_line_style;
 
-    (void)ged_draw_view_context_tcl_polygons_replace(view_ctx, bsg_name,
-	    (const point_t *)points, cmds, point_count, &style);
+    (void)ged_draw_view_context_data_polygons_replace(view_ctx, bsg_name,
+	    1, (const point_t *)points, cmds, point_count, &style);
     bu_free(points, "tcl polygon feature points");
     bu_free(cmds, "tcl polygon feature cmds");
 }

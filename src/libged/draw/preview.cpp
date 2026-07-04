@@ -95,6 +95,38 @@ preview_lines_free(struct preview_line_data *lines)
     lines->capacity = 0;
 }
 
+
+static int
+preview_draw_mode_to_ged_mode(int mode)
+{
+    return (mode == _GED_DRAW_NMG_POLY) ? GED_DRAW_MODE_EVAL_WIRE :
+	GED_DRAW_MODE_WIRE;
+}
+
+
+static int
+preview_draw_paths(struct ged *gedp, void *view_ctx, int path_count,
+		   const char **paths)
+{
+    if (!gedp || !view_ctx || path_count <= 0 || !paths)
+	return BRLCAD_OK;
+
+    struct ged_draw_appearance_settings settings =
+	GED_DRAW_APPEARANCE_SETTINGS_INIT;
+    settings.draw_mode = preview_draw_mode_to_ged_mode(preview_mode);
+
+    struct ged_draw_transaction txn =
+	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, NULL);
+    txn.view = view_ctx;
+    txn.paths = paths;
+    txn.path_count = path_count;
+    txn.appearance = &settings;
+
+    return (ged_draw_apply_transaction(gedp, &txn, NULL) < 0) ?
+	BRLCAD_ERROR : BRLCAD_OK;
+}
+
+
 /* FIXME: this shouldn't exist as a static array and doesn't even seem
  * to be necessary.  gd_rt_cmd points into it as an argv, but the
  * elements can probably be dup'd strings and released by the caller.
@@ -195,7 +227,9 @@ ged_cm_end(struct ged *gedp, vect_t *v, mat_t *m, const int UNUSED(argc), const 
 
 	int *gd_rt_cmd_len = (int *)BU_PTBL_GET(&gedp->ged_uptrs, 0);
 	char ***gd_rt_cmd = (char ***)BU_PTBL_GET(&gedp->ged_uptrs, 1);
-	_ged_drawtrees(gedp, *gd_rt_cmd_len, (const char **)&((*gd_rt_cmd)[1]), preview_mode, (struct _ged_client_data *)0);
+	if (preview_draw_paths(gedp, view_ctx, *gd_rt_cmd_len,
+		(const char **)&((*gd_rt_cmd)[1])) != BRLCAD_OK)
+	    return -1;
     }
 
     ged_refresh_cb(gedp);

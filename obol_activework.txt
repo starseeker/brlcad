@@ -78,12 +78,25 @@ Current Baseline
   geometry during realization while retaining per-instance transforms and
   identity.
 * Evaluated wire and evaluated sampled-points are Obol database-source
-  provider outputs for the requested path.  Evaluated wire now crosses a
-  libbrlobol provider boundary and owns per-call librt resource state instead
-  of using `rt_uniresource`.
+  provider outputs for the requested path.  Evaluated wire now has a librt
+  core entry point, `rt_eval_wireframe(vhead, vlfree, dbip, path, tol, ttol,
+  opts)`, which accepts full path/name style input and emits an RT vlist.
+  The default method is the symbolic boolweave-backed evaluator; callers can
+  still force `RT_EVAL_WIREFRAME_F_BIGE` for comparison/debugging.  libbrlobol
+  is now only a compatibility adapter from vlist output to the BG line-command
+  arrays consumed by current Obol/GED publication.  The librt core owns
+  per-call resource/vlist state, deterministic per-region aggregation, active
+  region CSG state, and an RTree-backed tolerant face-pair enumerator.  Current
+  profiling shows `Generic_Twin.g all` is practical, while `havoc.g havoc`
+  remains a pathological thin-shell candidate-volume case; future work should
+  redesign candidate generation/evaluation rather than revert the boolweave
+  default.
 * Successful direct Obol draw providers do not invoke `_ged_drawtrees`.
   `_ged_drawtrees` remains only for no-owned-scene fallback, unsupported legacy
   callers, and exceptional direct-provider failures.
+* Preview script tree redraws route through GED draw transactions, so preview
+  uses the same Obol draw providers and mode-aware draw state as normal draw
+  commands.  Preview eye paths remain command-scene result overlays.
 * The view-object command surface is migrated: retired public spellings
   `view obj`, `view objs`, and `view gobjs` are not aliases.  `view object`
   owns lifecycle/info/visibility/style/realize; `view annotation` owns line,
@@ -92,14 +105,31 @@ Current Baseline
 * View-object lifecycle, visibility, style, and realization route through
   object-level GED draw facades.  The command layer no longer branches directly
   between feature style and shape-ref color handling.
+* User-authored line, label, and axes annotation commands route creation and
+  editing through annotation-level GED draw facades.  Command code parses
+  syntax only; feature-store lifecycle and retained fallback stay inside the
+  draw bridge.
+* Legacy TclCAD data-overlay syntax is still accepted for lines, arrows, axes,
+  labels, and polygons, but draw/style/points/label/polygon-outline operations,
+  movement, scaling, and pick/readback now route through typed GED data-overlay
+  facades rather than command-local feature-store calls.
 * Command-scene publication exists for shared line/HUD/point/face/custom-node
   features.  It supports owner-scoped replacement/removal, generation fencing,
   feature metadata, per-primitive metadata, primitive selected/highlighted
   state, child-line-layer pick resolution, qtcad resolved feature picks, and
   transaction callbacks.
 * rtcheck, NIRT/qray, check overlap, GQA diagnostics, BREP/NMG debug lines,
-  overlay-command uplot import, `vdraw send`, preview eye paths, and several
-  simple line-set command visualizations are on the command-scene path.
+  BREP debug indexed-face output, overlay-command uplot import, `vdraw send`,
+  preview eye paths, and several simple line-set command visualizations are on
+  the command-scene path.  BREP extraction remains in the BREP command; generic
+  indexed-face publication is isolated in the GED command-scene bridge.
+* Legacy private direct-uplot feature wrappers were removed.  qray/uplot
+  diagnostics now expose stream parsing plus command-scene publication; direct
+  retained line-layer replacement is only an internal no-owned-scene fallback.
+* Obol draw-tree navigation is explicitly non-leaf aware: shapes may have
+  child/source nodes, shape-ref context round trips preserve the exact Obol
+  token including draw mode, and `group_ref_of_shape` reports the top drawn
+  GED group while the explicit tree keeps nested subgroups.
 
 Known Risks
 -----------
@@ -114,10 +144,19 @@ Known Risks
 * Lower display-stream compatibility helpers, no-owned-scene retained adapters,
   and application display-manager paths remain legacy dependencies.  Migrate
   features away from those paths before adding richer behavior on top.
-* Evaluated wire still uses the old Big-E algorithm internally.  The public
-  provider boundary is the contract to keep; the implementation should be
-  modernized inside libbrlobol, optionally with deterministic internal
-  parallelism and per-worker librt resources.
+* Evaluated wire now defaults to the boolweave-backed evaluator, with explicit
+  `RT_EVAL_WIREFRAME_F_BIGE` fallback available for comparison/debugging.  The
+  public `rt_eval_wireframe` vlist/options API, requested-path identity, and
+  per-region result identity are the contracts to keep.  The first dynamic
+  per-region worker attempt perturbed the image baseline.  Follow-up testing
+  showed multiple prepared contexts are image-equivalent when consumed in serial
+  region order, so the seam is serial for now.  The opt-in boolweave
+  diagnostic remains a proof harness.  The boolweave evaluator matches the
+  simple evaluated-wire baseline exactly and changes rook in
+  subtraction-heavy bands that appear to be improvements over historical
+  Big-E output.  Avoid global "bumped" databases as the primary correctness
+  strategy; keep source-boundary facts explicit and use boolweave for
+  deterministic interval splitting.
 * Persistent cross-refresh geometry reuse is not yet designed.  PCA/canonical
   mesh matching may help later, but it should wait until legacy draw drivers
   and cache invalidation policy are stable.
@@ -129,9 +168,14 @@ Recent focused gates from the 2026-07-04 work window:
 
 * `ninja -C build ged_test_draw ged_test_view_command ged_test_obol_draw_sync`
 * `ninja -C build ged_test_gqa test_brlobol_prototype test_brlobol_lod_update_action test_qtcad_obol_draw_sync`
+* `ninja -C build ged_test_tcl_overlay_bsg ged_test_view_command ged_test_ged_draw_scene`
 * `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_drawing_basic|ged_test_view_command)$' -j2 --timeout 240 --output-on-failure`
 * `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_obol_draw_sync|ged_test_gqa)$' -j2 --timeout 240 --output-on-failure`
 * `ctest --test-dir build -R '^(brlobol_pivot_guard|libbrlobol_prototype|libbrlobol_lod_update_action|test_qtcad_obol_draw_sync)$' -j3 --timeout 240 --output-on-failure`
+* `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_ged_draw_scene_core|ged_test_view_command|ged_test_tcl_overlay_bsg)$' --timeout 240 --output-on-failure`
+* `ninja -C build libbrlobol libged ged_test_draw ged_test_ged_draw_scene`
+* `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_ged_draw_scene_core)$' --timeout 240 --output-on-failure`
+* `GED_TEST_DRAW_OBOL_CAPTURE=1 BRLCAD_ROOT=$PWD/build build/src/libged/tests/draw/ged_test_draw -c -k src/libged/tests/draw`
 * `git diff --check`
 
 Run the draw/basic/view-command subset after view command or draw facade work.
@@ -154,9 +198,16 @@ Next Implementation Steps
    output, pick identity, primitive metadata, custom Coin provider lifetime,
    teardown, selection/highlight synchronization, and database-edit
    invalidation.
-4. Modernize the libbrlobol evaluated-wire internals behind the existing
-   `brlobol_evaluated_wire_*` API.  Preserve requested-path identity,
-   source-local output, mode-aware publication, and deterministic result order.
+4. Continue evaluated-wire modernization behind `rt_eval_wireframe`: keep the
+   RTree-backed face-pair enumerator, but redesign the Eplot face-geometry
+   stage so thin-shell models such as havoc do not require millions of
+   repeated face-pair evaluations per region.  Likely next steps are
+   region-local candidate queues, stronger geometric rejection before edge
+   line/plane work, candidate-result reuse for repeated leaf-pair patterns
+   where transforms permit it, and then parallel queued candidate/ray jobs
+   with per-thread resources and deterministic merge.  Do not spend further
+   time on PCA/canonical matching until legacy drawing paths and evaluated-wire
+   candidate generation are structurally under control.
 5. Extend repeated-instance regression coverage into LoD, selection, edit, and
    explicit database-change behavior without retained mirror state.
 6. Design persistent geometry caching only after the legacy-driver cleanup is

@@ -122,6 +122,8 @@ __BEGIN_DECLS
 
 #include "./rt/func.h"
 
+#include "./rt/eval_wireframe.h"
+
 #include "./rt/functab.h"
 
 #include "./rt/private.h"

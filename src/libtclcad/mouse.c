@@ -3112,41 +3112,40 @@ to_data_scale(struct ged *gedp,
     ged_view_context_model2view_get(model2view, gdvp);
     ged_view_context_view2model_get(view2model, gdvp);
 
-    /* scale data arrows - T3: read/write BSG vlist instead of gv_tcl */
+    /* scale data arrows through typed data-arrow facades */
     {
 	const char *feature_name = "_tcl_data_arrows";
-	if (ged_draw_view_context_feature_exists(gdvp, feature_name)) {
-	    point_t vcenter = {0, 0, 0};
-	    point_t *_pts = NULL;
-	    int _npts = _tclcad_draw_view_points_copy(gdvp, feature_name, &_pts);
+	point_t vcenter = {0, 0, 0};
+	point_t *_pts = NULL;
+	int _npts = _tclcad_draw_view_data_arrows_points_copy(gdvp, feature_name, &_pts);
 
-	    /* Arrows are stored as MOVE/DRAW pairs; need even count. */
-	    if (_npts >= 2 && (_npts % 2) == 0) {
-		/* Scale the length of each arrow (even-indexed endpoints = shaft starts) */
-		for (i = 0; i < _npts; i += 2) {
-		    vect_t diff;
-		    point_t vpoint;
-		    MAT4X3PNT(vpoint, model2view, _pts[i]);
-		    vcenter[Z] = vpoint[Z];
-		    VSUB2(diff, vpoint, vcenter);
-		    VSCALE(diff, diff, sf);
-		    VADD2(vpoint, vcenter, diff);
-		    MAT4X3PNT(_pts[i], view2model, vpoint);
-		}
-
-		int _color[3]; int _lw, _tl, _tw, _vis;
-		_tclcad_draw_view_style_read(gdvp, feature_name, _color, &_lw, &_tl, &_tw, &_vis);
-		_tclcad_draw_view_arrows_replace(gdvp, feature_name, _pts, _npts,
-				   _color, _lw, _tl, _tw, _vis);
+	/* Arrows are stored as MOVE/DRAW pairs; need even count. */
+	if (_npts >= 2 && (_npts % 2) == 0) {
+	    /* Scale the length of each arrow (even-indexed endpoints = shaft starts) */
+	    for (i = 0; i < _npts; i += 2) {
+		vect_t diff;
+		point_t vpoint;
+		MAT4X3PNT(vpoint, model2view, _pts[i]);
+		vcenter[Z] = vpoint[Z];
+		VSUB2(diff, vpoint, vcenter);
+		VSCALE(diff, diff, sf);
+		VADD2(vpoint, vcenter, diff);
+		MAT4X3PNT(_pts[i], view2model, vpoint);
 	    }
-	    bu_free(_pts, "TclCAD draw-view points");
+
+	    int _color[3]; int _lw, _tl, _tw, _vis;
+	    _tclcad_draw_view_data_arrows_style_read(gdvp, feature_name, _color, &_lw, &_tl, &_tw, &_vis);
+	    _tclcad_draw_view_data_arrows_replace(gdvp, feature_name, _pts, _npts,
+			_color, _lw, _tl, _tw, _vis);
 	}
+	if (_pts)
+	    bu_free(_pts, "TclCAD draw-view points");
     }
 
-    /* scale data labels - T3: modify BSG child payloads instead of gv_tcl */
+    /* scale data labels through typed data-label facades */
     {
 	const char *label_name = "_tcl_data_labels";
-	size_t _child_cnt = ged_draw_view_context_label_count(gdvp, label_name);
+	size_t _child_cnt = _tclcad_draw_view_data_labels_count(gdvp, label_name);
 	if (_child_cnt > 0) {
 	    point_t vcenter = {0, 0, 0};
 	    point_t vpoint;
@@ -3155,7 +3154,7 @@ to_data_scale(struct ged *gedp,
 		vect_t diff;
 		point_t label_pt;
 
-		if (!ged_draw_view_context_label_copy(gdvp, label_name, _k, NULL, label_pt, NULL))
+		if (!_tclcad_draw_view_data_label_copy(gdvp, label_name, _k, NULL, label_pt, NULL))
 		    continue;
 		MAT4X3PNT(vpoint, model2view, label_pt);
 		vcenter[Z] = vpoint[Z];
@@ -3163,7 +3162,7 @@ to_data_scale(struct ged *gedp,
 		VSCALE(diff, diff, sf);
 		VADD2(vpoint, vcenter, diff);
 		MAT4X3PNT(label_pt, view2model, vpoint);
-		(void)ged_draw_view_context_label_point_set(gdvp, label_name, _k, label_pt);
+		(void)_tclcad_draw_view_data_label_point_set(gdvp, label_name, _k, label_pt);
 	    }
 	}
     }

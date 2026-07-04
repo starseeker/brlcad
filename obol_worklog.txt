@@ -21,6 +21,110 @@ Coin work on a stable path.  `obol_legacy_dependency_inventory.txt` was reduced
 to guard-visible dependency rows, active owners, removal conditions, and
 current blockers instead of historical prose.
 
+2026-07-04: Evaluated-wire default and havoc diagnosis
+------------------------------------------------------
+
+`rt_eval_wireframe` now defaults to the symbolic boolweave-backed evaluator.
+The historical Big-E evaluator remains available with
+`RT_EVAL_WIREFRAME_F_BIGE` for comparison and fallback.  The old
+`BRLOBOL_EVAL_WIRE_BOOLWEAVE_USE` opt-in is no longer the method selector;
+profiling and diagnostic toggles remain opt-in.  The GED basic drawing
+evaluated-wire rook baseline (`v026_ctrl.png`) was updated to the boolweave
+output.
+
+`src/libbg/RTree.h` gained a vector-backed tolerant `Overlaps` overload, and
+the librt evaluated-wire candidate stage uses it to enumerate overlapping NMG
+face pairs.  The implementation profile now reports face-index, face-pair
+collection, face-pair evaluation, and boolweave candidate-evaluation timings;
+`RT_EVAL_WIREFRAME_PROFILE_PROGRESS=1` emits leaf-pair progress records for
+large-case diagnosis.
+
+The current debug-build profile for `Generic_Twin.g all` with boolweave is
+practical: about 14s wall time with profiling enabled and about 585k output
+segments.  `havoc.g havoc` remains impractical for this candidate model.  The
+bounded run completed `r.nos1`, then spent the remaining time in the next
+nose-skin region processing thousands of thin-shell leaf-pair overlaps; RTree
+collection was cheap, while Eplot-style face geometry evaluation dominated.
+Treat havoc as a pathological thin-surface stress case for the current
+evaluated-wire candidate model, not as evidence that RTree traversal failed.
+The focused post-baseline gate passed:
+`ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_ged_draw_scene_core)$' --timeout 240 --output-on-failure`.
+
+2026-07-04: Evaluated-wire internals hardened
+---------------------------------------------
+
+The evaluated-wire core moved from libbrlobol to librt as
+`rt_eval_wireframe(vhead, vlfree, dbip, path, tol, ttol, opts)`.  The API uses
+full path/name style input, emits RT vlist line commands, and deliberately does
+not add a `dp` wrapper or a new segment container.  The options flags can force
+the historical `RT_EVAL_WIREFRAME_F_BIGE` method or explicitly select the
+symbolic `RT_EVAL_WIREFRAME_F_BOOLWEAVE` default without losing A/B comparison
+or fallback.  libbrlobol now keeps only a
+compatibility adapter that converts the librt vlist to the existing
+source-local BG line-command arrays used by Obol/GED publication.
+
+The libbrlobol evaluated-wire implementation now owns its call context with
+C++ cleanup, local librt resource/vlist state, vector-backed typed line records,
+centralized segment allocation/free helpers, and explicit ray-data seghead
+cleanup.  Region evaluation now has an ordinal result seam with optional debug
+region names and deterministic aggregation order.
+
+The first dynamic per-region worker version was left gated off because it
+changed the evaluated-wire image baseline.  Follow-up diagnostics forced two
+worker contexts, serialized full region evaluation, and then evaluated regions
+serially while alternating contexts.  Alternating contexts in region order
+passed, while dynamic worker execution still failed, so the immediate hazard is
+out-of-order/order-sensitive region evaluation rather than second `rt_i`
+contexts being intrinsically different.  The next parallelization step should
+follow bot exterior/libanalyze structure at a lower level: preserve region
+order, use per-thread librt resources, feed isolated queued ray/classification
+jobs, and merge outputs deterministically.
+
+An opt-in candidate diagnostic now compares Big-E evaluated segments with
+librt boolweave partitions built from the real prepared soltabs on the active
+region.  `BRLOBOL_EVAL_WIRE_BOOLWEAVE_DIAG=1` enables the probe and
+`BRLOBOL_EVAL_WIRE_BOOLWEAVE_DIAG_LIMIT` caps detailed output while summary
+counters still cover the full run.  The probe now injects known source
+surface intervals rather than asking librt to rediscover them with grazing
+shots.  With that hybrid input, the simple evaluated-wire case matches Big-E
+exactly: 1,568/1,568 candidates.  The rook case remains divergent:
+5,900/13,301 candidates matched in the current run, with differences
+concentrated in the subtraction-heavy CSG tree and surface candidates where
+volume partitions alone cannot prove boundary status.
+
+Timing from the same diagnostic is encouraging but not final.  The rook run
+reported Big-E candidate work at about 0.128s and the unoptimized boolweave
+probe at about 0.212s, but the actual boolweave shot/finalization sub-total
+was about 0.074s.  The extra cost is mostly diagnostic overhead such as
+per-candidate soltab collection and region-table save/restore, so an optimized
+region-local implementation may be competitive or faster.  The best long-term
+direction is not a globally scaled/bumped in-memory database; that changes CSG
+semantics.  Use original candidate geometry, inject known source-boundary
+facts, use boolweave for interval/CSG partitioning, and add local two-sided
+boundary classification to decide whether candidate curve intervals are true
+evaluated CSG boundaries.
+
+Focused verification passed:
+`ninja -C build libbrlobol libged ged_test_draw ged_test_ged_draw_scene` and
+`ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_ged_draw_scene_core)$' --timeout 240 --output-on-failure`.
+The boolweave probe was run with
+`GED_TEST_DRAW_OBOL_CAPTURE=1 BRLCAD_ROOT=$PWD/build BRLOBOL_EVAL_WIRE_BOOLWEAVE_DIAG=1 BRLOBOL_EVAL_WIRE_BOOLWEAVE_DIAG_LIMIT=20 build/src/libged/tests/draw/ged_test_draw -c src/libged/tests/draw`.
+Summary-only timing/correctness mode was run with the same command and
+`BRLOBOL_EVAL_WIRE_BOOLWEAVE_DIAG_LIMIT=0`.
+
+2026-07-04: Preview tree redraw moved to transactions
+-----------------------------------------------------
+
+The `preview` command no longer redraws script-requested tree tops by calling
+`_ged_drawtrees` directly.  Its frame-end redraw now builds a GED draw
+transaction with explicit appearance settings, using normal wire mode by
+default and evaluated-wire mode for `preview -v`.
+
+Draw-scene core coverage now runs a semicolon-terminated RT preview script and
+asserts that both preview modes publish database draw state through the Obol
+draw transaction path.  The pivot guard rejects direct `_ged_drawtrees` calls in
+`src/libged/draw/preview.cpp`.
+
 2026-07-04: View object command surface replaced
 ------------------------------------------------
 
@@ -40,6 +144,21 @@ object-level GED draw facades.  Feature, database shape-ref, and Obol overlay
 group style dispatch lives in the draw bridge, including color support for
 `view db add --as` aliases and capability rejection for unsupported arrow
 settings.
+
+Line, label, and axes annotation command edits now route through
+annotation-level GED draw facades.  The command files no longer rebuild those
+objects with direct feature-store calls, so line point removal preserves
+annotation overlay lifecycle metadata while retained fallback remains isolated
+in the draw-view bridge.
+
+Legacy TclCAD data-overlay syntax remains available for old callers, but
+`data_lines` / `sdata_lines`, `data_arrows` / `sdata_arrows`,
+`data_axes` / `sdata_axes`, `data_labels` / `sdata_labels`, and
+`data_polygons` / `sdata_polygons` now route draw/style/points/label,
+polygon-outline, movement, scaling, and pick/readback operations through typed
+GED data-overlay facades.  The command parsers no longer call feature
+visibility, style, point, label, arrow, axes, or polygon replacement helpers
+directly.
 
 2026-07-04: Multi-instance transform reuse hardened
 ---------------------------------------------------
@@ -94,9 +213,25 @@ C++ Obol adapter, while preserving the same owner, scope, metadata, primitive
 state, generation, replacement, and removal rules as typed features.
 
 rtcheck, NIRT/qray, check overlap, GQA diagnostics, BREP/NMG debug lines,
-overlay-command uplot import, `vdraw send`, preview eye paths, and several
-simple command line-set visualizations now publish through command-scene
-helpers instead of anonymous direct view-line mutation.
+BREP debug indexed-face output, overlay-command uplot import, `vdraw send`,
+preview eye paths, and several simple command line-set visualizations now
+publish through command-scene helpers instead of anonymous direct view-line
+mutation.  BREP-specific extraction stays with the BREP command; the shared
+indexed-face publication helper is part of the GED command-scene bridge.
+
+The remaining private direct-uplot feature wrappers were retired.  Draw-scene
+core coverage now verifies NIRT/qray command-scene uplot publication and
+cleanup, overlay-command uplot import without framebuffer/display-manager
+dependency, `vdraw send` line/point/face command results, and shared
+line/indexed-face helper publication in one passing core shard.
+
+Draw-tree/navigation semantics were tightened for explicit Obol trees.  Shape
+contexts are no longer assumed to be leaf nodes, shape-ref-to-context
+round-trips preserve the exact Obol token and draw mode, `group_ref_of_shape`
+returns the top GED draw group while nested Obol subgroups remain explicit,
+missing-target erase/highlight/visibility transactions stay no-ops, and source
+rename reconciliation updates top owner groups.  The full
+`ged_test_ged_draw_scene_*` shard family passes sequentially.
 
 2026-07-04: qtcad command-result picks integrated
 -------------------------------------------------

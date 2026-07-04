@@ -347,11 +347,6 @@ GED_EXPORT extern int _ged_combadd2(struct ged *gedp,
 
 /* defined in bsg_ged_draw_material.c */
 
-GED_EXPORT extern int _ged_draw_uplot_to_feature(struct ged *gedp,
-				       FILE *fp,
-				       const char *name,
-				       double char_size,
-				       int mode);
 GED_EXPORT extern int _ged_draw_uplot_to_command_scene_feature(struct ged *gedp,
 				       FILE *fp,
 				       const char *name,
@@ -362,12 +357,6 @@ GED_EXPORT extern int _ged_draw_uplot_to_command_scene_feature(struct ged *gedp,
 				       const char *remove_prefix,
 				       const char *result_kind,
 				       uint64_t generation);
-GED_EXPORT extern int _ged_draw_uplot_files_to_feature(struct ged *gedp,
-				       const char * const *files,
-				       size_t file_count,
-				       const char *name,
-				       double char_size,
-				       int mode);
 GED_EXPORT extern int _ged_draw_uplot_files_to_command_scene_feature(
 				       struct ged *gedp,
 				       const char * const *files,
@@ -386,9 +375,6 @@ GED_EXPORT extern struct ged_uplot_stream *_ged_uplot_stream_create(double char_
 GED_EXPORT extern int _ged_uplot_stream_process(struct ged_uplot_stream *stream,
 				       FILE *fp,
 				       int command);
-GED_EXPORT extern int _ged_uplot_stream_publish_feature(struct ged *gedp,
-				       struct ged_uplot_stream *stream,
-				       const char *name);
 GED_EXPORT extern int _ged_uplot_stream_publish_command_scene_feature(struct ged *gedp,
 				       struct ged_uplot_stream *stream,
 				       const char *name,
@@ -413,6 +399,21 @@ GED_EXPORT extern int _ged_line_set_publish_command_scene_feature(
 				       const point_t *points,
 				       const int *cmds,
 				       size_t point_count,
+				       const struct ged_draw_view_feature_style *style,
+				       const char *owner_id,
+				       const char *owner_role,
+				       const char *remove_prefix,
+				       const char *result_kind,
+				       uint64_t generation);
+GED_EXPORT extern int _ged_indexed_face_set_publish_command_scene_feature(
+				       struct ged *gedp,
+				       const char *name,
+				       const point_t *points,
+				       size_t point_count,
+				       const vect_t *normals,
+				       size_t normal_count,
+				       const int *indices,
+				       size_t index_count,
 				       const struct ged_draw_view_feature_style *style,
 				       const char *owner_id,
 				       const char *owner_role,

@@ -21,17 +21,16 @@
  *
  * Logic for drawing arbitrary lines not associated with geometry.
  *
- * The retained view feature (_tcl_data_lines / _tcl_sdata_lines) is the sole
- * persistent store for both Tcl and non-Tcl views.  The command keeps the
- * active view opaque and routes retained feature access through public GED
- * draw-view context helpers.
+ * The data-line feature (_tcl_data_lines / _tcl_sdata_lines) is managed by
+ * GED draw-view data-line facades.  The command keeps the active view opaque
+ * and does not manipulate feature-store internals directly.
  *
  * Usage example (Archer / QGED):
  *
- * Archer> view sdata_lines points {{0 -1000 0} {0 1000 0} {100 -1000 0} {100 1000 0} {-1000 10 0} {1000 10 0}}
- * Archer> view sdata_lines draw 1
- * Archer> view sdata_lines line_width 100
- * Archer> view sdata_lines color 255 0 0
+ * Archer> sdata_lines points {{0 -1000 0} {0 1000 0} {100 -1000 0} {100 1000 0} {-1000 10 0} {1000 10 0}}
+ * Archer> sdata_lines draw 1
+ * Archer> sdata_lines line_width 100
+ * Archer> sdata_lines color 255 0 0
  *
  * Note that the active GED view must be set to the correct display manager
  * before calling this command to put the output in the correct display
@@ -67,7 +66,8 @@ _view_dlines_cmd_draw(void *bs, int argc, const char **argv)
 
     if (argc == 1) {
 	bu_vls_printf(gedp->ged_result_str, "%d",
-		ged_draw_view_context_feature_visible(view_ctx, vs->feature_name));
+		ged_draw_view_context_data_lines_draw_get(view_ctx,
+		    vs->feature_name));
 	return BRLCAD_OK;
     }
 
@@ -76,9 +76,8 @@ _view_dlines_cmd_draw(void *bs, int argc, const char **argv)
 
 	if (bu_sscanf(argv[1], "%d", &i) != 1) return BRLCAD_ERROR;
 
-	/* The retained view owns the feature; just remove or hide it. */
-	if (!i)
-	    ged_draw_view_context_feature_remove(view_ctx, vs->feature_name);
+	(void)ged_draw_view_context_data_lines_draw_set(view_ctx,
+		vs->feature_name, i);
 	/* draw=1 is a no-op here; use "points" to create/re-enable. */
 
 	ged_refresh_cb(gedp);
@@ -122,7 +121,8 @@ _view_dlines_cmd_color(void *bs, int argc, const char **argv)
 
     if (argc == 1) {
 	struct ged_draw_view_line_style style = {{0, 0, 0}, 0};
-	if (ged_draw_view_context_line_style_get(view_ctx, vs->feature_name, &style)) {
+	if (ged_draw_view_context_data_lines_style_get(view_ctx,
+		vs->feature_name, &style)) {
 	    bu_vls_printf(gedp->ged_result_str, "%d %d %d",
 			  style.color[0], style.color[1], style.color[2]);
 	} else
@@ -145,7 +145,8 @@ _view_dlines_cmd_color(void *bs, int argc, const char **argv)
 		b < 0 || 255 < b)
 	    return BRLCAD_ERROR;
 
-	ged_draw_view_context_line_color_set(view_ctx, vs->feature_name, r, g, b);
+	(void)ged_draw_view_context_data_lines_color_set(view_ctx,
+		vs->feature_name, r, g, b);
 
 	ged_refresh_cb(gedp);
 
@@ -164,7 +165,8 @@ _view_dlines_cmd_line_width(void *bs, int argc, const char **argv)
 
     if (argc == 1) {
 	struct ged_draw_view_line_style style = {{0, 0, 0}, 0};
-	if (ged_draw_view_context_line_style_get(view_ctx, vs->feature_name, &style))
+	if (ged_draw_view_context_data_lines_style_get(view_ctx,
+		vs->feature_name, &style))
 	    bu_vls_printf(gedp->ged_result_str, "%d", style.line_width);
 	else
 	    bu_vls_printf(gedp->ged_result_str, "0");
@@ -177,7 +179,8 @@ _view_dlines_cmd_line_width(void *bs, int argc, const char **argv)
 	if (bu_sscanf(argv[1], "%d", &line_width) != 1)
 	    return BRLCAD_ERROR;
 
-	ged_draw_view_context_line_width_set(view_ctx, vs->feature_name, line_width);
+	(void)ged_draw_view_context_data_lines_line_width_set(view_ctx,
+		vs->feature_name, line_width);
 
 	ged_refresh_cb(gedp);
 
@@ -198,8 +201,8 @@ _view_dlines_cmd_points(void *bs, int argc, const char **argv)
     if (argc == 1) {
 	point_t *points = NULL;
 	size_t point_count = 0;
-	if (ged_draw_view_context_lines_points_copy(view_ctx, vs->feature_name, &points,
-		&point_count)) {
+	if (ged_draw_view_context_data_lines_points_copy(view_ctx,
+		vs->feature_name, &points, &point_count)) {
 	    for (size_t j = 0; j < point_count; j++)
 		bu_vls_printf(gedp->ged_result_str, " {%lf %lf %lf} ", V3ARGS(points[j]));
 	    if (points)
@@ -223,12 +226,14 @@ _view_dlines_cmd_points(void *bs, int argc, const char **argv)
 	    return BRLCAD_ERROR;
 	}
 
-	/* The retained view is the sole persistent store; preserve existing style. */
+	/* Preserve existing style when replacing the points payload. */
 	struct ged_draw_view_line_style saved_style = {{255, 255, 0}, 0};
-	(void)ged_draw_view_context_line_style_get(view_ctx, vs->feature_name, &saved_style);
+	(void)ged_draw_view_context_data_lines_style_get(view_ctx,
+		vs->feature_name, &saved_style);
 
 	if (ac < 2) {
-	    ged_draw_view_context_feature_remove(view_ctx, vs->feature_name);
+	    (void)ged_draw_view_context_data_lines_points_replace(view_ctx,
+		    vs->feature_name, NULL, 0, NULL);
 	    ged_refresh_cb(gedp);
 	    bu_free((char *)av, "av");
 	    return BRLCAD_OK;
@@ -248,7 +253,7 @@ _view_dlines_cmd_points(void *bs, int argc, const char **argv)
 	    VMOVE(pts[i], scan);
 	}
 
-	if (!ged_draw_view_context_tcl_lines_replace(view_ctx, vs->feature_name,
+	if (!ged_draw_view_context_data_lines_points_replace(view_ctx, vs->feature_name,
 		(const point_t *)pts, (size_t)ac, &saved_style)) {
 	    bu_free((void *)pts, "data points");
 	    ged_refresh_cb(gedp);
@@ -278,7 +283,7 @@ int
 ged_view_data_lines(struct ged *gedp, int argc, const char *argv[])
 {
     struct view_dlines_state vs;
-    const char *usage = "view [s]data_lines [subcommand]";
+    const char *usage = "[s]data_lines [subcommand]";
 
     vs.gedp = gedp;
 

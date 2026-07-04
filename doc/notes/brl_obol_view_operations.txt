@@ -33,6 +33,19 @@ exists" versus "shape ref exists" and then perform separate mutations.
 Lifecycle, visibility, style, and realization dispatch belongs in object-level
 GED draw facades and the Obol draw bridge.
 
+`view annotation` command code should follow the same rule at the annotation
+class level.  Syntax parsing stays in the command file, but line, label, and
+axes creation/editing should dispatch through annotation-level GED draw
+facades so feature-store lifecycle, overlay classification, and retained
+fallback remain inside the draw bridge.
+
+Legacy TclCAD `data_*` / `sdata_*` overlay syntax remains a compatibility
+surface for old callers.  Lines, arrows, axes, labels, and polygons should
+route creation, style, movement, scaling, and pick/readback through typed
+data-overlay facades, not direct feature-store helpers; new workflows should
+prefer `view annotation` or `view polygon` for user-authored geometry and
+command-result publication for command-owned visualizations.
+
 Current user-facing shape:
 
 * `view object list [--all|--annotations|--database] [-L] [glob]`

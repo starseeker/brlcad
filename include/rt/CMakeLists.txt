@@ -25,6 +25,7 @@ set(
   dspline.h
   edit.h
   edit_legacy_bsg.h
+  eval_wireframe.h
   func.h
   functab.h
   geom.h

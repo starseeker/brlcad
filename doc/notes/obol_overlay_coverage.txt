@@ -18,6 +18,14 @@ Current Obol Representations
 | command point output | typed command-scene point-set feature | Used by compatible `vdraw send` point payloads |
 | command indexed-face output | typed command-scene indexed-face-set feature | Used by compatible `vdraw send` face payloads |
 | diagnostic and HUD labels | `SoBRLHUDLabelOverlay` / direct HUD nodes | Used by GQA and check summaries |
+| user-authored line annotations | persistent model overlay line-set feature | Managed by annotation-level GED draw facades |
+| user-authored label annotations | persistent label feature | Managed by annotation-level GED draw facades |
+| user-authored axes annotations | `SoBRLAxes` model overlay feature | Managed by annotation-level GED draw facades |
+| legacy TclCAD data lines | `_tcl_data_lines` / `_tcl_sdata_lines` line-set feature | Managed by typed GED data-line facades, including movement and pick/readback |
+| legacy TclCAD data arrows | `_tcl_data_arrows` / `_tcl_sdata_arrows` arrow line feature | Managed by typed GED data-arrow facades, including movement, scaling, and pick/readback |
+| legacy TclCAD data axes | `_tcl_data_axes` / `_tcl_sdata_axes` axes feature | Managed by typed GED data-axes facades, including movement and pick/readback |
+| legacy TclCAD data labels | `_tcl_data_labels` / `_tcl_sdata_labels` label feature | Managed by typed GED data-label facades, including movement, scaling, and pick/readback |
+| legacy TclCAD data polygons | `_tcl_data_polygons` / `_tcl_sdata_polygons` polygon outline feature | Managed by typed GED data-polygon facades |
 | model axes | `SoBRLAxes` | Covered by libbrlobol overlay tests |
 | work grid | `SoBRLGrid` | Covered by libbrlobol overlay tests |
 | ADC | `SoBRLADC` | Covered by libbrlobol overlay tests |
@@ -40,6 +48,13 @@ view exists:
 * `gdiff`, `lint`, `joint`, `bot plot`, `bot_fuse`, `bot check`, and preview
   eye-path line visualizations.
 * BREP debug line plots and NMG edge-use debug overlays.
+* BREP debug indexed-face output, published as command-result indexed-face-set
+  features.
+
+The old private direct-uplot feature publishing wrappers are retired.  Uplot
+producers should parse/build streams and publish through command-scene helpers;
+direct retained line-layer replacement is reserved for helper-internal
+no-owned-scene fallback.
 
 Fallback direct diagnostic callbacks remain only for non-command-scene
 consumers and unowned views.

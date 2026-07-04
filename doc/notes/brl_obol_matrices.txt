@@ -85,9 +85,26 @@ transform semantics explicitly.
 Evaluated wire and evaluated sampled-points are requested-path providers rather
 than leaf-instance expansion.  They publish source-local provider output to the
 Obol database source for the requested path, preserving draw matrix placement
-as source metadata.  The current evaluated-wire provider still uses the old
-Big-E algorithm internally; a future libbrlobol implementation must keep the
-same source-local output and deterministic requested-path identity contract.
+as source metadata.  Evaluated wire now has a librt core API,
+`rt_eval_wireframe(vhead, vlfree, dbip, path, tol, ttol, opts)`, which accepts
+full path/name style input and emits an RT vlist.  The options flags can force
+the historical Big-E path or the symbolic boolweave path for comparison and
+fallback if the default changes.  libbrlobol adapts that vlist
+to the BG line-command arrays currently used by Obol/GED publication.  The
+default evaluator still uses the old Big-E algorithm internally, but it owns
+local librt resource/vlist state, records typed output internally, and
+aggregates explicit per-region results in deterministic ordinal order.
+Multiple prepared evaluator contexts are image-equivalent when consumed in
+serial region order, but dynamic out-of-order region execution is not;
+parallel work should therefore move isolated ray/classification jobs behind
+per-thread resources rather than reorder region evaluation.  The opt-in
+boolweave diagnostic uses the active region's real prepared soltabs to compare
+candidate-level Big-E output against librt partitions without changing default
+output.  The current opt-in symbolic evaluator injects known source-boundary
+intervals, uses boolweave for interval/CSG ordering, and emits candidate
+intervals whose ternary CSG state is `ON`; rook differences still need CSG
+inspection before replacing the default baseline.  Avoid globally
+scaling/bumping an alternate database as the primary correctness strategy.
 
 External primary geometry publication also follows this rule.  Producers must
 emit source-local geometry before calling the libbrlobol publish APIs.  Legacy

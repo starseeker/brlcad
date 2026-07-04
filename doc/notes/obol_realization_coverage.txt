@@ -200,15 +200,32 @@ lighting.
 
 Evaluated draw modes are provider-owned Obol database-source outputs for the
 requested path.  Evaluated sampled-points publishes the sampled indexed-face
-payload directly to the Obol source.  Evaluated wire now has a libbrlobol
-provider boundary: GED resolves runtime/source state, calls
-`brlobol_evaluated_wire_*`, and publishes the resulting source-local line set
-through neutral database-source or shape-ref facades.  The implementation
-behind that boundary is still the legacy Big-E algorithm, but it now owns a
-per-call librt `struct resource` rather than using `rt_uniresource`.  The next
-cleanup is libbrlobol-internal modernization of the algorithm itself and
-optional deterministic per-region/job parallelization with per-worker
-resources.
+payload directly to the Obol source.  Evaluated wire now has a librt core
+entry point, `rt_eval_wireframe(vhead, vlfree, dbip, path, tol, ttol, opts)`,
+which accepts full path/name style input and emits RT vlist line commands.
+Options flags can force the historical Big-E path for comparison/fallback or
+explicitly select the symbolic boolweave default.
+GED still calls the libbrlobol compatibility adapter today because existing
+Obol/GED publication consumes source-local BG line-command arrays, but
+correctness work belongs behind the librt vlist API.  The default evaluator is
+now the symbolic boolweave path.  It owns per-call librt resource/vlist state
+rather than using `rt_uniresource`, exports typed line records only at the API
+boundary, and aggregates per-region results in deterministic ordinal order
+with debug names retained for diagnostics.  Dynamic per-region worker
+evaluation is intentionally gated off after changing the image baseline; two
+prepared contexts are image-equivalent when evaluated in serial region order,
+so the next cleanup should preserve region-order semantics while isolating
+candidate generation from ray/classification work and parallelizing queued ray
+jobs with per-thread resources and deterministic merge.  The current proof
+harness can be enabled with `BRLOBOL_EVAL_WIRE_BOOLWEAVE_DIAG=1`.  The
+boolweave evaluator injects known source-surface intervals, uses boolweave
+interval splitting plus ternary CSG state, matches the simple evaluated-wire
+baseline, and changes rook in subtraction-heavy bands that appear to be better
+than the historical Big-E result.  The current candidate pipeline uses a
+tolerant RTree face-pair enumerator; `Generic_Twin.g all` is practical, but
+thin-shell models such as `havoc.g havoc` need a redesigned candidate
+generation/evaluation stage rather than a return to the historical Big-E
+default.
 
 Standalone material-object identity, first mesh edge/vertex action identity,
 and typed edit-preview intent identity across pick/snap/measure/export are now

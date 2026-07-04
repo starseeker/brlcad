@@ -723,6 +723,17 @@ ged_obol_group_path_from_record_path(const char *path)
     return std::string(ged_obol_skip_leading_slash(path));
 }
 
+
+static std::string
+ged_obol_top_group_path_from_record_path(const char *path)
+{
+    std::string group_path = ged_obol_group_path_from_record_path(path);
+    const size_t slash = group_path.find('/');
+    if (slash == std::string::npos)
+	return group_path;
+    return group_path.substr(0, slash);
+}
+
 static const char *
 ged_obol_group_record_path(const SoBRLSceneGroup *scene_group)
 {
@@ -1686,7 +1697,7 @@ ged_obol_apply_highlight_transaction(
     std::vector<std::string> targets =
 	ged_obol_transaction_paths(txn, result);
     if (targets.empty())
-	return (result && result->status >= 0) ? 1 : 0;
+	return 0;
 
     const int highlighted = ZERO(txn->value) ? 0 : 1;
     int handled = 0;
@@ -1722,8 +1733,6 @@ ged_obol_apply_highlight_transaction(
 	}
     }
 
-    if (!handled && result && result->status >= 0)
-	return 1;
     return handled;
 }
 
@@ -1739,7 +1748,7 @@ ged_obol_apply_visibility_transaction(
     std::vector<std::string> targets =
 	ged_obol_transaction_paths(txn, result);
     if (targets.empty())
-	return (result && result->status >= 0) ? 1 : 0;
+	return 0;
 
     const int visible = ZERO(txn->value) ? 0 : 1;
     int handled = 0;
@@ -1774,8 +1783,6 @@ ged_obol_apply_visibility_transaction(
 	}
     }
 
-    if (!handled && result && result->status >= 0)
-	return 1;
     return handled;
 }
 
@@ -1827,7 +1834,7 @@ ged_obol_remove_paths(const std::vector<std::string> &paths,
 	    changed = 1;
     }
 
-    if (ged_obol_prune_empty_groups(scene))
+    if (changed && ged_obol_prune_empty_groups(scene))
 	changed = 1;
 
     return changed;
@@ -1867,7 +1874,7 @@ ged_obol_remove_instance_keys(const std::vector<std::string> &instance_keys,
 	    changed = 1;
     }
 
-    if (ged_obol_prune_empty_groups(scene))
+    if (changed && ged_obol_prune_empty_groups(scene))
 	changed = 1;
 
     return changed;
@@ -8483,7 +8490,8 @@ ged_draw_obol_database_source_rename_for_path(
 	return 0;
 
     BRLObolDatabaseSourceSummary source_summary;
-    std::string old_owner_group_path;
+    std::string old_owner_group_path =
+	ged_obol_top_group_path_from_record_path(path);
     int have_source_summary = 0;
     if (ged_obol_database_source_controller_summary_for_path(scene, path,
 	    source_summary)) {
@@ -8491,7 +8499,8 @@ ged_draw_obol_database_source_rename_for_path(
 	const std::string candidate_owner =
 	    ged_obol_database_source_owner_group_path_from_summary(
 		    source_summary);
-	if (ged_obol_path_equal(candidate_owner.c_str(), path))
+	if (old_owner_group_path.empty() &&
+		ged_obol_path_equal(candidate_owner.c_str(), path))
 	    old_owner_group_path = candidate_owner;
     }
 
@@ -8564,7 +8573,7 @@ ged_draw_obol_database_source_rename_for_path(
     }
 
     const std::string new_owner_group_path =
-	ged_obol_group_path_from_record_path(new_path);
+	ged_obol_top_group_path_from_record_path(new_path);
     if (!old_owner_group_path.empty() && !new_owner_group_path.empty()) {
 	std::string old_parent, old_leaf, new_parent, new_leaf;
 	if (ged_obol_group_parent_leaf(old_owner_group_path, old_parent,
