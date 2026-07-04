@@ -1207,13 +1207,10 @@ _ged_drawtrees(struct ged *gedp, int argc, const char *argv[], int kind, struct 
 		}
 
 		if (dgcdp.draw_edge_uses) {
-		    int handled = ged_diagnostic_line_layer_publish(gedp,
-			    "nmg::_EDGEUSES_", dgcdp.draw_edge_uses_plot);
-		    if (!handled && dgcdp.view_ctx) {
-			(void)ged_draw_view_context_diagnostic_line_layer_builder_replace(
-				dgcdp.view_ctx, "nmg::_EDGEUSES_",
-				dgcdp.draw_edge_uses_plot);
-		    }
+		    (void)_ged_line_layer_builder_publish_command_scene_feature(
+			    gedp, "nmg::_EDGEUSES_", dgcdp.draw_edge_uses_plot,
+			    "nmg", "command-result", "nmg::_EDGEUSES_",
+			    "nmg-edgeuses", 0);
 		    bg_line_layer_builder_free(dgcdp.draw_edge_uses_plot);
 		    dgcdp.draw_edge_uses_plot = NULL;
 		}

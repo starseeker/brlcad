@@ -359,13 +359,27 @@ GED_EXPORT extern int _ged_draw_uplot_to_command_scene_feature(struct ged *gedp,
 				       int mode,
 				       const char *owner_id,
 				       const char *owner_role,
-				       const char *remove_prefix);
+				       const char *remove_prefix,
+				       const char *result_kind,
+				       uint64_t generation);
 GED_EXPORT extern int _ged_draw_uplot_files_to_feature(struct ged *gedp,
 				       const char * const *files,
 				       size_t file_count,
 				       const char *name,
 				       double char_size,
 				       int mode);
+GED_EXPORT extern int _ged_draw_uplot_files_to_command_scene_feature(
+				       struct ged *gedp,
+				       const char * const *files,
+				       size_t file_count,
+				       const char *name,
+				       double char_size,
+				       int mode,
+				       const char *owner_id,
+				       const char *owner_role,
+				       const char *remove_prefix,
+				       const char *result_kind,
+				       uint64_t generation);
 struct ged_uplot_stream;
 GED_EXPORT extern struct ged_uplot_stream *_ged_uplot_stream_create(double char_size,
 				       int mode);
@@ -380,8 +394,37 @@ GED_EXPORT extern int _ged_uplot_stream_publish_command_scene_feature(struct ged
 				       const char *name,
 				       const char *owner_id,
 				       const char *owner_role,
-				       const char *remove_prefix);
+				       const char *remove_prefix,
+				       const char *result_kind,
+				       uint64_t generation);
 GED_EXPORT extern void _ged_uplot_stream_free(struct ged_uplot_stream *stream);
+GED_EXPORT extern int _ged_line_layer_builder_publish_command_scene_feature(
+				       struct ged *gedp,
+				       const char *name,
+				       const struct bg_line_layer_builder *builder,
+				       const char *owner_id,
+				       const char *owner_role,
+				       const char *remove_prefix,
+				       const char *result_kind,
+				       uint64_t generation);
+GED_EXPORT extern int _ged_line_set_publish_command_scene_feature(
+				       struct ged *gedp,
+				       const char *name,
+				       const point_t *points,
+				       const int *cmds,
+				       size_t point_count,
+				       const struct ged_draw_view_feature_style *style,
+				       const char *owner_id,
+				       const char *owner_role,
+				       const char *remove_prefix,
+				       const char *result_kind,
+				       uint64_t generation);
+GED_EXPORT extern int _ged_command_scene_features_remove_prefix(
+				       struct ged *gedp,
+				       const char *prefix,
+				       const char *owner_id,
+				       const char *owner_role,
+				       uint64_t generation);
 
 /* defined in editit.c */
 GED_EXPORT extern int _ged_editit(struct ged *gedp,

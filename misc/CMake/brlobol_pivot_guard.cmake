@@ -497,6 +497,13 @@ function(_brlobol_pivot_guard_check_capability2_rt_feature_adapter)
 	ged_draw_rt_obol_feature_overlay_ensure
 	ged_draw_rt_obol_feature_labels_replace
 	ged_draw_rt_obol_feature_points_replace
+	ged_draw_view_context_object_remove
+	ged_draw_view_context_object_visible_get
+	ged_draw_view_context_object_visible_set
+	ged_draw_view_context_object_realize
+	ged_draw_obol_overlay_erase_name_context
+	ged_draw_source_erase_groups_by_name_at_root
+	ged_draw_shape_ref_release
 	BRLObolOverlayClass::EditHandle
 	replaceEditPreviewGeometry)
       string(FIND "${_ged_draw_adapter_contents}" "${_token}" _idx)
@@ -577,6 +584,24 @@ function(_brlobol_pivot_guard_check_capability2_feature_overlay_metadata)
 	BRLObolOverlayInfo
 	BRLObolOverlayClass
 	BRLObolOverlayLifecycle
+	BRLObolFeatureMetadata
+	BRLObolFeaturePrimitiveMetadata
+	BRLObolFeaturePrimitivePick
+	CustomNode
+	publishCustomNode
+	metadataCount
+	primitiveMetadataCount
+	selectedPrimitiveCount
+	highlightedPrimitiveCount
+	replacePrimitiveMetadata
+	primitiveMetadata
+	resolvePrimitivePick
+	replaceSelectedPrimitives
+	replaceHighlightedPrimitives
+	replaceMetadata
+	generation
+	markCommandOwnerGeneration
+	commandOwnerGenerationCurrent
 	setOverlayInfo
 	overlayInfo)
       string(FIND "${_brlobol_view_store_h_contents}" "${_token}" _idx)
@@ -590,8 +615,31 @@ function(_brlobol_pivot_guard_check_capability2_feature_overlay_metadata)
     file(READ "${_brlobol_view_store_cpp}" _brlobol_view_store_cpp_contents)
     foreach(_token
 	BRLObolOverlayInfo::BRLObolOverlayInfo
+	store_owner_generation_key
+	ownerGenerations
+	BRLObolFeatureStore::markCommandOwnerGeneration
+	BRLObolFeatureStore::commandOwnerGenerationCurrent
+	[[owner.generation == 0]]
 	BRLObolFeatureStore::setOverlayInfo
 	BRLObolFeatureStore::overlayInfo
+	BRLObolFeatureStore::replaceMetadata
+	BRLObolFeatureStore::metadata
+	BRLObolFeatureStore::replacePrimitiveMetadata
+	BRLObolFeatureStore::primitiveMetadata
+	BRLObolFeatureStore::resolvePrimitivePick
+	store_line_segment_primitive_count
+	BRLObolFeatureStore::publishCustomNode
+	store_rebuild_node_for_feature
+	BRLObolFeatureKind::CustomNode
+	primitiveMetadata
+	BRLObolFeatureStore::replaceSelectedPrimitives
+	BRLObolFeatureStore::replaceHighlightedPrimitives
+	selectedPrimitives
+	highlightedPrimitives
+	selectedPrimitive
+	highlightedPrimitive
+	recordOut.metadata
+	summaryOut.metadataCount
 	rec->overlay
 	summaryOut.overlay
 	recordOut.overlay)
@@ -607,6 +655,42 @@ function(_brlobol_pivot_guard_check_capability2_feature_overlay_metadata)
     foreach(_token
 	ged_obol_model_overlay_info
 	ged_obol_feature_mark_overlay
+	ged_obol_command_scene_notify
+	ged_obol_command_scene_writable
+	ged_draw_command_scene_custom_node_replace
+	ged_draw_command_scene_line_set_replace
+	ged_draw_command_scene_point_set_replace
+	ged_draw_command_scene_indexed_face_set_replace
+	ged_draw_command_scene_feature_metadata_replace
+	ged_draw_command_scene_feature_primitive_metadata_replace
+	customNodeReplace
+	lineSetReplace
+	pointSetReplace
+	indexedFaceSetReplace
+	primitiveMetadataReplace
+	publishCustomNode
+	publishLineSet
+	publishPointSet
+	publishIndexedFaceSet
+	BRLObolFeatureKind::CustomNode
+	GED_DRAW_OBOL_VIEW_FEATURE_KIND_CUSTOM_NODE
+	GED_DRAW_COMMAND_RESULT_UPDATED
+	GED_DRAW_COMMAND_RESULT_FAILED
+	ged_draw_obol_view_context_feature_metadata_count
+	ged_draw_obol_view_context_feature_metadata_copy
+	ged_draw_obol_view_context_feature_primitive_metadata_count
+	ged_draw_obol_view_context_feature_primitive_metadata_copy
+	ged_draw_obol_view_context_feature_pick_primitive_resolve
+	resolvePrimitivePick
+	ged_draw_obol_view_context_feature_selected_primitives_replace
+	ged_draw_obol_view_context_feature_highlighted_primitives_replace
+	selected_primitive_count
+	highlighted_primitive_count
+	BRLObolFeatureMetadata
+	replaceMetadata
+	markCommandOwnerGeneration
+	commandOwnerGenerationCurrent
+	[[owner.generation = desc ? desc->generation : 0]]
 	BRLObolOverlayClass::TclOverlay
 	BRLObolOverlayClass::PolygonEdit
 	BRLObolOverlayClass::UserAnnotation
@@ -627,7 +711,34 @@ function(_brlobol_pivot_guard_check_capability2_feature_overlay_metadata)
 	"cap2::annotation"
 	"cap2::polygon-overlay"
 	"cap2::tcl-axes"
-	"cap2::diagnostic")
+	"cap2::diagnostic"
+	"result.kind"
+	"result.format"
+	"overlap.objects"
+	primitive_metadata_count
+	ged_draw_view_context_feature_primitive_metadata_count
+	ged_draw_command_scene_feature_primitive_metadata_replace
+	ged_draw_view_context_feature_pick_primitive_resolve
+	"rtcheck::overlaps/yellow"
+	command_result_cb
+	custom_node_provider_cb
+	"custom::node"
+	"custom-node"
+	saw_line_layers_update
+	saw_stale_failure
+	ged_draw_command_result
+	GED_DRAW_COMMAND_RESULT_UPDATED
+	selected_primitive_count
+	highlighted_primitive_count
+	ged_draw_view_context_feature_selected_primitives_replace
+	ged_draw_view_context_feature_highlighted_primitives_replace
+	ged_draw_command_scene_feature_metadata_replace
+	"rtcheck::generation"
+	"nmg::_helper_generation"
+	[[command_scene_desc.generation = 10]]
+	[[command_record.owner.generation != 11]]
+	[[stale generation should be rejected]]
+	[[without fallback]])
       string(FIND "${_ged_obol_sync_test_contents}" "${_token}" _idx)
       if(_idx EQUAL -1)
 	_brlobol_pivot_guard_fail("src/libged/tests/draw/obol_sync.cpp missing Capability 2 feature-overlay metadata coverage token ${_token}")
@@ -2199,18 +2310,50 @@ function(_brlobol_pivot_guard_check_legacy_header_include_hygiene)
 	[[ged_draw_command_scene_begin]]
 	[[ged_draw_command_scene_features_remove_prefix]]
 	[[ged_draw_command_scene_line_layer_builder_replace]]
+	[[ged_draw_command_scene_hud_label_replace]]
+	[[ged_draw_command_scene_feature_metadata_replace]]
 	[[ged_draw_command_scene_commit]]
+	[[ged_gqa_result_kind]]
+	[["result.kind"]]
 	[[owner_id[ \t\r\n]*=[ \t\r\n]*"gqa"]]
 	[[owner_role[ \t\r\n]*=[ \t\r\n]*"command-result"]]
 	[["gqa::overlaps"]]
-	[["gqa::gaps"]]
-	[["gqa::adjacent-air"]]
-	[["gqa::exposed-air"]])
+	    [["gqa::overlaps::summary"]]
+	    [["gqa::gaps"]]
+	    [["gqa::adjacent-air"]]
+	    [["gqa::exposed-air"]]
+	    [["gqa::volume-samples"]]
+	    [["volume-sample"]]
+	    [[GQA_RESULT_VOLUME]])
       string(REGEX MATCH "${_token}" _libged_gqa_cmd_token_hit
 	"${_libged_gqa_cmd_contents}")
       if(NOT _libged_gqa_cmd_token_hit)
 	_brlobol_pivot_guard_fail(
 	  "src/libged/gqa/gqa.cpp must publish GQA line-result diagnostics through the GED command-scene API token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  set(_libged_check_cmd "${BRLCAD_SOURCE_DIR}/src/libged/check/check_overlaps.c")
+  if(EXISTS "${_libged_check_cmd}")
+    file(READ "${_libged_check_cmd}" _libged_check_cmd_contents)
+    foreach(_token
+	[[ged_draw_command_scene_begin]]
+	[[ged_draw_command_scene_features_remove_prefix]]
+	[[ged_draw_command_scene_line_layer_builder_replace]]
+	[[ged_draw_command_scene_hud_label_replace]]
+	[[ged_draw_command_scene_feature_metadata_replace]]
+	[[ged_draw_command_scene_commit]]
+	[["result.kind"]]
+	[[owner_id[ \t\r\n]*=[ \t\r\n]*"check"]]
+	[[owner_role[ \t\r\n]*=[ \t\r\n]*"command-result"]]
+	[["check::overlaps"]]
+	[["check::overlaps::summary"]])
+      string(REGEX MATCH "${_token}" _libged_check_cmd_token_hit
+	"${_libged_check_cmd_contents}")
+      if(NOT _libged_check_cmd_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/check/check_overlaps.c must publish check overlap diagnostics through the GED command-scene API token ${_token}")
       endif()
     endforeach()
   endif()
@@ -2221,6 +2364,14 @@ function(_brlobol_pivot_guard_check_legacy_header_include_hygiene)
     foreach(_token
 	[[ged_view_active_ctx]]
 	[[ged_draw_view_context_feature_summary]]
+	[[ged_draw_view_context_label_count]]
+	[[ged_draw_view_context_label_copy]]
+	[[ged_draw_view_context_feature_metadata_count]]
+	[[ged_draw_view_context_feature_metadata_copy]]
+	[[require_command_result_metadata]]
+	[["result.kind"]]
+	[[require_command_result_label]]
+	[[is_label]]
 	[[is_command_result]]
 	[[struct[ \t\r\n]+ged_draw_view_record_query]]
 	[[GED_DRAW_VIEW_RECORD_QUERY_VIEW_OBJECTS]]
@@ -2229,12 +2380,20 @@ function(_brlobol_pivot_guard_check_legacy_header_include_hygiene)
 	[[ged_draw_view_db_object_record_foreach_segment]]
 	[[rec->[ \t\r\n]*path]]
 	[[rec->[ \t\r\n]*vlist_point_count]]
-	[[open_gqa_result_fixture]]
-	[[run_gqa_result_case]]
-	[["gqa::overlaps"]]
-	[["gqa::gaps"]]
-	[["gqa::adjacent-air"]]
-	[["gqa::exposed-air"]])
+	    [[open_gqa_result_fixture]]
+	    [[run_gqa_result_case]]
+	    [[run_gqa_volume_result_case]]
+	    [["gqa::overlaps"]]
+	    [["gqa::overlaps::summary"]]
+	    [["gqa overlaps:"]]
+	[["check::overlaps"]]
+	[["check::overlaps::summary"]]
+	    [["check overlaps:"]]
+	    [["gqa::gaps"]]
+	    [["gqa::adjacent-air"]]
+	    [["gqa::exposed-air"]]
+	    [["gqa::volume-samples"]]
+	    [["volume-sample"]])
       string(REGEX MATCH "${_token}" _libged_gqa_test_token_hit
 	"${_libged_gqa_test_contents}")
       if(NOT _libged_gqa_test_token_hit)
@@ -3219,6 +3378,13 @@ function(_brlobol_pivot_guard_check_brlobol_window_host)
 		"BRLObolAuxiliaryLineSetDisplayState::BRLObolAuxiliaryLineSetDisplayState"
 		"displayState && displayState->valid"
 		"sync_shape_placement_state(shape, this)"
+		"BRLObolDatabaseSourceRealizationCache::storeWireGeometry"
+		"BRLObolDatabaseSourceRealizationCache::storeMeshGeometry"
+		"cacheable_shared_geometry_key"
+		"seed_realization_cache_from_node"
+		"brlobol_database_source_seed_realization_cache"
+		"source_uses_mesh_realization"
+		"getSharedGeometrySource"
 		"recordRole = \"auxiliary\""
 		"sourceType = \"auxiliary-line-set\"")
       string(FIND "${_db_source_impl}" "${_token}" _idx)
@@ -3226,6 +3392,50 @@ function(_brlobol_pivot_guard_check_brlobol_window_host)
 	_brlobol_pivot_guard_fail("src/libbrlobol/database_source.cpp missing database source material-policy token ${_token}")
       endif()
     endforeach()
+  endif()
+
+  set(_db_source_realization_header "${BRLCAD_SOURCE_DIR}/src/libbrlobol/database_source_realization.h")
+  if(EXISTS "${_db_source_realization_header}")
+    file(READ "${_db_source_realization_header}" _db_source_realization_header_contents)
+    foreach(_token
+	"BRLObolDatabaseSourceRealizationCache"
+	"storeWireGeometry"
+	"storeMeshVListGeometry"
+	"storeMeshGeometry"
+	"brlobol_database_source_realize_wireframe_with_cache"
+	"brlobol_database_source_realize_mesh_with_cache"
+	"brlobol_database_source_seed_realization_cache")
+      string(FIND "${_db_source_realization_header_contents}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("src/libbrlobol/database_source_realization.h missing realization-cache token ${_token}")
+      endif()
+    endforeach()
+  else()
+    _brlobol_pivot_guard_fail("src/libbrlobol/database_source_realization.h is required for database source realization-cache sharing")
+  endif()
+
+  if(EXISTS "${BRLCAD_SOURCE_DIR}/src/libbrlobol/realize_action.cpp")
+    file(READ "${BRLCAD_SOURCE_DIR}/src/libbrlobol/realize_action.cpp" _realize_action_impl)
+    foreach(_token
+	"database_source_realization.h"
+	"realizationCache->clear()"
+	"seedingCache = TRUE"
+	"brlobol_database_source_seed_realization_cache"
+	"brlobol_database_source_realize_wireframe_with_cache"
+	"brlobol_database_source_realize_mesh_with_cache")
+      string(FIND "${_realize_action_impl}" "${_token}" _idx)
+      if(_idx EQUAL -1)
+	_brlobol_pivot_guard_fail("src/libbrlobol/realize_action.cpp missing two-phase realization-cache token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  if(EXISTS "${BRLCAD_SOURCE_DIR}/src/libbrlobol/CMakeLists.txt")
+    file(READ "${BRLCAD_SOURCE_DIR}/src/libbrlobol/CMakeLists.txt" _brlobol_cmake)
+    string(FIND "${_brlobol_cmake}" "database_source_realization.h" _idx)
+    if(_idx EQUAL -1)
+      _brlobol_pivot_guard_fail("src/libbrlobol/CMakeLists.txt must list database_source_realization.h")
+    endif()
   endif()
 
   set(_scene_controller_header "${BRLCAD_SOURCE_DIR}/include/brlobol/scene_controller.h")
@@ -7839,7 +8049,8 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endforeach()
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]ged/draw\.h]]
-	[[ged_draw_command_scene_features_remove_prefix]]
+	[[_ged_command_scene_features_remove_prefix]]
+	[["query-ray"]]
 	[[_ged_draw_uplot_to_command_scene_feature]])
       string(REGEX MATCH "${_token}" _libged_nirt_qray_token_hit
 	"${_libged_nirt_contents}")
@@ -7853,6 +8064,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[#[ \t]*include[ \t]*[<"]bsg/(appearance|node)\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
 	[[ged_draw_view_context_feature_remove]]
+	[[ged_draw_view_context_features_remove_prefix]]
 	[[_ged_draw_uplot_to_feature]]
 	[[(^|[^A-Za-z0-9_])bsg_(appearance|node)[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_(APPEARANCE|NODE)_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
@@ -8847,7 +9059,11 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	    endforeach()
 	    foreach(_token
 		[[#[ \t]*include[ \t]*[<"]ged/view\.h]]
-		[[_ged_uplot_stream_publish_command_scene_feature]])
+		[[_ged_uplot_stream_publish_command_scene_feature]]
+		[["overlap"]]
+		[[rtcheck_command_generation]]
+		[[rtcp->generation]]
+		[[generation]])
       string(REGEX MATCH "${_token}" _libged_rtcheck2_feature_token_hit
 	"${_libged_rtcheck2_contents}")
 	      if(NOT _libged_rtcheck2_feature_token_hit)
@@ -9277,10 +9493,17 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	    foreach(_token
 		[[#[ \t]*include[ \t]*[<"]bg/line_layer\.h]]
 		[[#[ \t]*include[ \t]*[<"]ged/draw\.h]]
-		[[BG_GEOMETRY_LINE_MOVE]]
-		[[GED_DRAW_VIEW_LINE_LAYER_DATA_INIT]]
+	[[BG_GEOMETRY_LINE_MOVE]]
+	[[GED_DRAW_VIEW_LINE_LAYER_DATA_INIT]]
 	[[ged_draw_view_context_line_layers_replace]]
-	[[ged_draw_command_scene_line_layers_replace]])
+	[[ged_draw_command_scene_begin]]
+		[[ged_draw_command_scene_line_layers_replace]]
+		[[ged_draw_command_scene_feature_metadata_replace]]
+		[[_ged_draw_uplot_files_to_command_scene_feature]]
+		[[result_kind]]
+		[["uplot-line-layers"]]
+		[[ged_draw_command_scene_commit]]
+	[[desc.generation = generation]])
       string(REGEX MATCH "${_token}" _libged_uplot_util_token_hit
 	"${_libged_uplot_util_contents}")
 	      if(NOT _libged_uplot_util_token_hit)
@@ -9583,9 +9806,8 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_libged_view_gobjs_cmd}" _libged_view_gobjs_cmd_contents)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]ged/draw\.h]]
-	[[ged_draw_view_context_feature_exists]]
-	[[ged_draw_view_context_feature_remove]]
-	[[ged_draw_view_context_gobject_create]])
+	[[ged_draw_view_context_gobject_create]]
+	[[_view_cmd_objs]])
       string(REGEX MATCH "${_token}" _libged_view_gobjs_cmd_token_hit
 	"${_libged_view_gobjs_cmd_contents}")
       if(NOT _libged_view_gobjs_cmd_token_hit)
@@ -9600,6 +9822,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[(^|[^A-Za-z0-9_])bsg_scene_ref([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_appearance_settings([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])ged_draw_view_context_overlay_create([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_feature_remove[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_APPEARANCE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
@@ -9620,12 +9843,13 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[#[ \t]*include[ \t]*[<"]ged/draw\.h]]
 	[[GED_DRAW_MODE_WIRE]]
 	[[ged_draw_view_context_feature_exists]]
-	[[ged_draw_view_context_feature_remove]]
+	[[ged_draw_view_context_object_remove]]
+	[[ged_draw_view_context_object_visible_get]]
+	[[ged_draw_view_context_object_visible_set]]
+	[[ged_draw_view_context_object_realize]]
 	[[struct[ \t]+ged_draw_view_feature_style]]
 	[[ged_draw_view_context_feature_style_get]]
-	[[ged_draw_view_context_feature_style_apply]]
-	[[ged_draw_view_context_feature_realize]]
-	[[ged_draw_shape_ref_realize_context]])
+	[[ged_draw_view_context_feature_style_apply]])
       string(REGEX MATCH "${_token}" _libged_view_objs_cmd_token_hit
 	"${_libged_view_objs_cmd_contents}")
       if(NOT _libged_view_objs_cmd_token_hit)
@@ -9637,6 +9861,13 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/]]
 	[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_feature_remove[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_obol_overlay_erase_name_context[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_source_erase_groups_by_name_at_root[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_shape_ref_release[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_feature_realize[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_shape_ref_set_visible[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_shape_ref_realize_context[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])struct[ \t]+bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
@@ -10307,6 +10538,24 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	      if(_libdm_tkswrast_refresh_direct_hit)
 		_brlobol_pivot_guard_fail(
 		  "src/libdm/tkswrast/dm-tkswrast.cpp reintroduced direct RT/BSG refresh or dimension access: ${_libdm_tkswrast_refresh_direct_hit}")
+	      endif()
+	    endforeach()
+	  endif()
+
+	  set(_libged_overlay_cmd "${BRLCAD_SOURCE_DIR}/src/libged/overlay/overlay.c")
+	  if(EXISTS "${_libged_overlay_cmd}")
+	    file(READ "${_libged_overlay_cmd}" _libged_overlay_cmd_contents)
+	    foreach(_token
+		[[_ged_draw_uplot_to_command_scene_feature]]
+		[[_ged_draw_uplot_files_to_command_scene_feature]]
+		[["overlay"]]
+		[["command-result"]]
+		[["uplot-overlay"]])
+	      string(REGEX MATCH "${_token}" _libged_overlay_cmd_token_hit
+		"${_libged_overlay_cmd_contents}")
+	      if(NOT _libged_overlay_cmd_token_hit)
+		_brlobol_pivot_guard_fail(
+		  "src/libged/overlay/overlay.c must publish uplot overlays through GED command-scene ownership token ${_token}")
 	      endif()
 	    endforeach()
 	  endif()
@@ -12105,12 +12354,10 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       "src/libged/adc/adc.c|ged_view_active_ctx"
       "src/libged/rot/rotate_about.c|ged_view_active_ctx"
       "src/libged/lod/lod.c|ged_view_active_ctx"
-      "src/libged/lint/lint.cpp|ged_view_active_ctx"
       "src/libged/view/faceplate/faceplate.c|ged_view_active_ctx"
       "src/libged/view/faceplate/faceplate_grid.c|ged_view_active_ctx"
       "src/libged/view/faceplate/faceplate_axes.c|ged_view_active_ctx"
       "src/libged/view/faceplate/interactive_rect.c|ged_view_active_ctx"
-      "src/libged/gdiff/gdiff.c|ged_view_active_ctx"
       "src/libged/gqa/gqa.cpp|ged_view_active_ctx"
       "src/libged/check/check_overlaps.c|ged_view_active_ctx"
       "src/libged/brep/plot.cpp|ged_view_active_ctx"
@@ -12124,9 +12371,6 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       "src/libged/bot/edbot.c|ged_view_active_ctx"
       "src/libged/vutil.c|ged_view_active_ctx"
       "src/libged/select/select.c|ged_view_active_ctx"
-      "src/libged/bot/bot.cpp|ged_view_active_ctx"
-      "src/libged/bot/check.cpp|ged_view_active_ctx"
-      "src/libged/bot/bot_fuse.c|ged_view_active_ctx"
       "src/libged/bot/dump/bot_dump.cpp|ged_view_active_ctx"
       "src/libged/illum/illum.c|ged_view_active_ctx"
       "src/libged/nmg/nmg.c|ged_view_active_ctx"
@@ -12137,7 +12381,6 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       "src/libged/check/check.c|ged_view_active_ctx"
       "src/libged/open/open.cpp|ged_view_active_ctx"
       "src/libged/mirror/mirror.c|ged_view_active_ctx"
-      "src/libged/joint/joint.c|ged_view_active_ctx"
       "src/libged/rtcheck/rtcheck2.cpp|ged_view_active_ctx"
       "src/libged/nirt/nirt.cpp|ged_view_active_ctx"
       "src/libged/draw/loadview.cpp|ged_view_active_ctx"
@@ -13153,88 +13396,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   endif()
 
   foreach(_rel
-      src/libged/joint/joint.c
-      src/libged/bot/bot_fuse.c
-      src/libged/bot/check.cpp
-      src/libged/lint/lint.cpp
-      src/libged/gdiff/gdiff.c
-      src/libged/bot/bot.cpp
-      src/libged/draw/preview.cpp)
-    set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
-    if(NOT EXISTS "${_file}")
-      continue()
-    endif()
-	    file(READ "${_file}" _libged_line_overlay_contents)
-	    foreach(_token
-		[[#[ \t]*include[ \t]*[<"]ged/draw\.h]]
-		[[GED_DRAW_VIEW_FEATURE_STYLE_INIT]]
-		[[ged_draw_view(_context)?_lines_replace]]
-	[[ged_draw_view(_context)?_feature_remove]])
-      string(REGEX MATCH "${_token}" _libged_line_overlay_token_hit
-	"${_libged_line_overlay_contents}")
-	      if(NOT _libged_line_overlay_token_hit)
-		_brlobol_pivot_guard_fail(
-		  "${_rel} must route diagnostic line-overlay feature replacement/removal through the public GED draw-view context facade")
-	      endif()
-	    endforeach()
-    foreach(_pat
-	[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
-	[[#[ \t]*include[ \t]*[<"]bsg/geometry\.h]]
-	[[(^|[^A-Za-z0-9_])struct[ \t]+bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])BSG_FEATURE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])BSG_GEOMETRY_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]])
-      string(REGEX MATCH "${_pat}" _libged_line_overlay_direct_hit
-	"${_libged_line_overlay_contents}")
-      if(_libged_line_overlay_direct_hit)
-	_brlobol_pivot_guard_fail(
-	  "${_rel} reintroduced direct BSG diagnostic line-overlay feature access: ${_libged_line_overlay_direct_hit}")
-      endif()
-    endforeach()
-  endforeach()
-
-  foreach(_rel
-      src/libged/joint/joint.c
-      src/libged/bot/bot_fuse.c
-      src/libged/bot/check.cpp
-      src/libged/lint/lint.cpp
-      src/libged/gdiff/gdiff.c
-      src/libged/bot/bot.cpp
-      src/libged/draw/preview.cpp)
-    set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
-    if(NOT EXISTS "${_file}")
-      continue()
-    endif()
-    file(READ "${_file}" _libged_context_line_overlay_contents)
-    foreach(_token
-	[[ged_view_active_ctx]]
-	[[ged_draw_view_context_lines_replace]]
-	[[ged_draw_view_context_feature_remove]])
-      string(REGEX MATCH "${_token}" _libged_context_line_overlay_token_hit
-	"${_libged_context_line_overlay_contents}")
-      if(NOT _libged_context_line_overlay_token_hit)
-	_brlobol_pivot_guard_fail(
-	  "${_rel} must publish/remove diagnostic line-overlay features through opaque GED draw view context helpers")
-      endif()
-    endforeach()
-    foreach(_pat
-	[[struct[ \t\r\n]+bsg_view]]
-	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
-	[[(^|[^A-Za-z0-9_])ged_draw_view_lines_replace[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])ged_draw_view_feature_remove[ \t\r\n]*\(]])
-      string(REGEX MATCH "${_pat}" _libged_context_line_overlay_direct_hit
-	"${_libged_context_line_overlay_contents}")
-      if(_libged_context_line_overlay_direct_hit)
-	_brlobol_pivot_guard_fail(
-	  "${_rel} reintroduced typed BSG diagnostic line-overlay feature publication: ${_libged_context_line_overlay_direct_hit}")
-      endif()
-    endforeach()
-  endforeach()
-
-  foreach(_rel
-      src/libged/draw/bigE.c
-      src/libged/wireframe_eval.c)
+      src/libged/draw/bigE.c)
     set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
     if(NOT EXISTS "${_file}")
       continue()
@@ -13271,26 +13433,114 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_wireframe_eval}")
     file(READ "${_libged_wireframe_eval}" _libged_wireframe_eval_contents)
     foreach(_token
+	[[#[ \t]*include[ \t]*[<"]brlobol/evaluated_wire\.h]]
 	[[#[ \t]*include[ \t]*[<"]ged/draw\.h]]
 	[[ged_draw_shape_ref_eval_wireframe]]
 	[[ged_draw_shape_ref_source_snapshot]]
-	[[ged_draw_shape_ref_publish_line_set]])
+	[[ged_draw_shape_ref_publish_line_set]]
+	[[ged_draw_obol_database_source_eval_wireframe_for_path]]
+	[[ged_draw_obol_database_source_publish_line_set_for_path]]
+	[[brlobol_evaluated_wire_evaluate_path_line_set]]
+	[[brlobol_evaluated_wire_line_set_free]])
       string(REGEX MATCH "${_token}" _libged_wireframe_eval_token_hit
 	"${_libged_wireframe_eval_contents}")
       if(NOT _libged_wireframe_eval_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/wireframe_eval.c must route evaluated-wireframe source and line-set publication through GED draw shape-ref facade helpers")
+	  "src/libged/wireframe_eval.c must remain a thin adapter from GED source state to the libbrlobol evaluated-wire provider and neutral GED publication facades")
       endif()
     endforeach()
     foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]bg/line_layer\.h]]
+	[[struct[ \t]+bigE_data]]
+	[[(^|[^A-Za-z0-9_])build_etree[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])Eplot[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])BG_GEOMETRY_LINE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])ged_draw_scene_ref_(source_data|fullpath|geometry_pool|name|publish_line_set|eval_wireframe)[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_wireframe_eval_direct_hit
 	"${_libged_wireframe_eval_contents}")
       if(_libged_wireframe_eval_direct_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/wireframe_eval.c reintroduced direct BSG scene-ref evaluated-wireframe access: ${_libged_wireframe_eval_direct_hit}")
+	  "src/libged/wireframe_eval.c reintroduced evaluated-wire implementation details or direct BSG scene-ref access: ${_libged_wireframe_eval_direct_hit}")
       endif()
     endforeach()
+  endif()
+
+  set(_brlobol_evaluated_wire_header "${BRLCAD_SOURCE_DIR}/include/brlobol/evaluated_wire.h")
+  if(EXISTS "${_brlobol_evaluated_wire_header}")
+    file(READ "${_brlobol_evaluated_wire_header}" _brlobol_evaluated_wire_header_contents)
+    foreach(_token
+	[[__BEGIN_DECLS]]
+	[[brlobol_evaluated_wire_evaluate_path_line_set]]
+	[[brlobol_evaluated_wire_line_set_free]])
+      string(REGEX MATCH "${_token}" _brlobol_evaluated_wire_header_token_hit
+	"${_brlobol_evaluated_wire_header_contents}")
+      if(NOT _brlobol_evaluated_wire_header_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "include/brlobol/evaluated_wire.h missing public evaluated-wire provider token ${_token}")
+      endif()
+    endforeach()
+  else()
+    _brlobol_pivot_guard_fail("include/brlobol/evaluated_wire.h must expose the evaluated-wire provider boundary")
+  endif()
+
+  foreach(_rel
+      include/brlobol.h
+      include/brlobol/CMakeLists.txt
+      src/libbrlobol/CMakeLists.txt)
+    set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
+    if(NOT EXISTS "${_file}")
+      continue()
+    endif()
+    file(READ "${_file}" _brlobol_evaluated_wire_cmake_contents)
+    if(_rel STREQUAL "src/libbrlobol/CMakeLists.txt")
+      set(_token [[evaluated_wire\.cpp]])
+    else()
+      set(_token [[evaluated_wire\.h]])
+    endif()
+    string(REGEX MATCH "${_token}" _brlobol_evaluated_wire_cmake_token_hit
+      "${_brlobol_evaluated_wire_cmake_contents}")
+    if(NOT _brlobol_evaluated_wire_cmake_token_hit)
+      _brlobol_pivot_guard_fail("${_rel} missing evaluated-wire provider token ${_token}")
+    endif()
+  endforeach()
+
+  set(_brlobol_evaluated_wire_impl "${BRLCAD_SOURCE_DIR}/src/libbrlobol/evaluated_wire.cpp")
+  if(EXISTS "${_brlobol_evaluated_wire_impl}")
+    file(READ "${_brlobol_evaluated_wire_impl}" _brlobol_evaluated_wire_impl_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]brlobol/evaluated_wire\.h]]
+	[[#[ \t]*include[ \t]*[<"]bg/line_layer\.h]]
+	[[BG_GEOMETRY_LINE_MOVE]]
+	[[BG_GEOMETRY_LINE_DRAW]]
+	[[struct[ \t]+resource[ \t]+resource]]
+	[[rt_init_resource]]
+	[[rt_clean_resource]]
+	[[brlobol_evaluated_wire_evaluate_path_line_set]]
+	[[brlobol_evaluated_wire_line_set_free]])
+      string(REGEX MATCH "${_token}" _brlobol_evaluated_wire_impl_token_hit
+	"${_brlobol_evaluated_wire_impl_contents}")
+      if(NOT _brlobol_evaluated_wire_impl_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libbrlobol/evaluated_wire.cpp must own evaluated-wire line-set production token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]ged/draw\.h]]
+	[[#[ \t]*include[ \t]*[<"]\./bsg_ged_draw_private\.h]]
+	[[#[ \t]*include[ \t]*[<"]bsg/]]
+	[[(^|[^A-Za-z0-9_])ged_draw_shape_ref_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])ged_draw_obol_database_source_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_scene_ref([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])rt_uniresource([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _brlobol_evaluated_wire_impl_direct_hit
+	"${_brlobol_evaluated_wire_impl_contents}")
+      if(_brlobol_evaluated_wire_impl_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libbrlobol/evaluated_wire.cpp reintroduced GED/BSG evaluated-wire dependencies: ${_brlobol_evaluated_wire_impl_direct_hit}")
+      endif()
+    endforeach()
+  else()
+    _brlobol_pivot_guard_fail("src/libbrlobol/evaluated_wire.cpp must own evaluated-wire implementation")
   endif()
 
   set(_libged_points_eval "${BRLCAD_SOURCE_DIR}/src/libged/points_eval.c")
@@ -13331,12 +13581,24 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[GED_DRAW_OVERLAY_GEOMETRY_LINE_SET]]
 	[[GED_DRAW_OVERLAY_GEOMETRY_POINT_SET]]
 	[[GED_DRAW_OVERLAY_GEOMETRY_INDEXED_FACE_SET]]
+	[[vdraw_command_scene_geometry_publish]]
+	[[ged_draw_command_scene_begin]]
+	[[ged_draw_command_scene_line_layers_replace]]
+	[[ged_draw_command_scene_point_set_replace]]
+	[[ged_draw_command_scene_indexed_face_set_replace]]
+	[[ged_draw_command_scene_feature_metadata_replace]]
+	[[ged_draw_command_scene_commit]]
+	[[command_scene_status[ \t\r\n]*<[ \t\r\n]*0]]
+	[["vdraw-line"]]
+	[["vdraw-line-layer"]]
+	[["vdraw-point-set"]]
+	[["vdraw-indexed-face-set"]]
 	[[ged_draw_overlay_geometry_insert]])
       string(REGEX MATCH "${_token}" _libged_vdraw_cmd_token_hit
 	"${_libged_vdraw_cmd_contents}")
       if(NOT _libged_vdraw_cmd_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/vdraw/vdraw.c must use neutral BG line commands and GED overlay geometry kinds")
+	  "src/libged/vdraw/vdraw.c must use neutral BG line commands, GED overlay geometry kinds, and command-scene publication for vdraw send geometry")
       endif()
     endforeach()
     foreach(_pat
@@ -13352,11 +13614,88 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endforeach()
   endif()
 
+  set(_libged_line_set_util "${BRLCAD_SOURCE_DIR}/src/libged/ged_util.cpp")
+  if(EXISTS "${_libged_line_set_util}")
+    file(READ "${_libged_line_set_util}" _libged_line_set_util_contents)
+    foreach(_token
+	[[_ged_line_set_publish_command_scene_feature]]
+	[[ged_draw_command_scene_begin]]
+	[[ged_draw_command_scene_line_set_replace]]
+	[[ged_draw_command_scene_feature_metadata_replace]]
+	[[ged_draw_command_scene_commit]]
+	[["result.format"]]
+	[["line-set"]])
+      string(REGEX MATCH "${_token}" _libged_line_set_util_token_hit
+	"${_libged_line_set_util_contents}")
+      if(NOT _libged_line_set_util_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/ged_util.cpp must retain shared command-scene line-set helper token ${_token}")
+      endif()
+    endforeach()
+    foreach(_token
+	[[_ged_command_scene_features_remove_prefix]]
+	[[ged_draw_command_scene_begin]]
+	[[ged_draw_command_scene_features_remove_prefix]]
+	[[ged_draw_command_scene_commit]]
+	[[ged_draw_view_context_features_remove_prefix]])
+      string(REGEX MATCH "${_token}" _libged_command_scene_remove_prefix_token_hit
+	"${_libged_line_set_util_contents}")
+      if(NOT _libged_command_scene_remove_prefix_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/ged_util.cpp must retain centralized command-scene prefix cleanup helper token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
+  foreach(_rel
+      src/libged/gdiff/gdiff.c
+      src/libged/lint/lint.cpp
+      src/libged/joint/joint.c
+      src/libged/bot/bot.cpp
+      src/libged/bot/bot_fuse.c
+      src/libged/bot/check.cpp
+      src/libged/draw/preview.cpp)
+    set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
+    if(NOT EXISTS "${_file}")
+      continue()
+    endif()
+    file(READ "${_file}" _libged_line_set_caller_contents)
+    foreach(_token
+	[[_ged_line_set_publish_command_scene_feature]]
+	[["command-result"]])
+      string(REGEX MATCH "${_token}" _libged_line_set_caller_token_hit
+	"${_libged_line_set_caller_contents}")
+      if(NOT _libged_line_set_caller_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} must publish simple command line-set output through the shared command-scene helper token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_lines_replace[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_feature_remove[ \t\r\n]*\(]]
+	[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
+	[[#[ \t]*include[ \t]*[<"]bsg/geometry\.h]]
+	[[(^|[^A-Za-z0-9_])struct[ \t]+bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_FEATURE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_GEOMETRY_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[struct[ \t\r\n]+bsg_view]]
+	[[\([ \t\r\n]*struct[ \t\r\n]+bsg_view[ \t\r\n]*\*[ \t\r\n]*\)[ \t\r\n]*ged_view_active_ctx]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_lines_replace[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_feature_remove[ \t\r\n]*\(]])
+      string(REGEX MATCH "${_pat}" _libged_line_set_caller_direct_hit
+	"${_libged_line_set_caller_contents}")
+      if(_libged_line_set_caller_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} reintroduced direct view line-set feature replacement/removal instead of command-scene helper: ${_libged_line_set_caller_direct_hit}")
+      endif()
+    endforeach()
+  endforeach()
+
   foreach(_rel
       src/libged/check/check_overlaps.c
-      src/libged/gqa/gqa.cpp
-      src/libged/draw/draw.c
-      src/libged/vutil.c)
+      src/libged/gqa/gqa.cpp)
     set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
     if(NOT EXISTS "${_file}")
       continue()
@@ -13370,7 +13709,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	"${_libged_line_layer_contents}")
       if(NOT _libged_line_layer_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "${_rel} must route diagnostic line-layer fallback feature replacement through the private GED draw view context adapter")
+	  "${_rel} must retain diagnostic line-layer fallback while preferring command-scene publication")
       endif()
     endforeach()
     foreach(_pat
@@ -13390,13 +13729,80 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endforeach()
   endforeach()
 
+  foreach(_rel
+      src/libged/draw/draw.c
+      src/libged/vutil.c)
+    set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
+    if(NOT EXISTS "${_file}")
+      continue()
+    endif()
+	    file(READ "${_file}" _libged_line_layer_contents)
+	    foreach(_token
+		[[_ged_line_layer_builder_publish_command_scene_feature]]
+		[["nmg"]]
+		[["command-result"]]
+		[["nmg-edgeuse]])
+      string(REGEX MATCH "${_token}" _libged_line_layer_token_hit
+	"${_libged_line_layer_contents}")
+      if(NOT _libged_line_layer_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} must publish NMG diagnostics through the command-scene line-layer helper token ${_token}")
+      endif()
+    endforeach()
+    foreach(_pat
+	[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_line_layer_builder_replace[ \t]*\(]]
+	[[(^|[^A-Za-z0-9_])struct[ \t]+bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])BSG_FEATURE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
+	[[(^|[^A-Za-z0-9_])bsg_line_layer_builder([^A-Za-z0-9_]|$)]])
+      string(REGEX MATCH "${_pat}" _libged_line_layer_direct_hit
+	"${_libged_line_layer_contents}")
+      if(_libged_line_layer_direct_hit)
+	_brlobol_pivot_guard_fail(
+	  "${_rel} reintroduced direct BSG diagnostic line-layer feature access: ${_libged_line_layer_direct_hit}")
+      endif()
+    endforeach()
+  endforeach()
+
+  set(_libged_builder_helper "${BRLCAD_SOURCE_DIR}/src/libged/ged_util.cpp")
+  if(EXISTS "${_libged_builder_helper}")
+    file(READ "${_libged_builder_helper}" _libged_builder_helper_contents)
+    foreach(_token
+	[[_ged_line_layer_builder_publish_command_scene_feature]]
+	[[ged_draw_command_scene_begin]]
+	[[ged_draw_command_scene_features_remove_prefix]]
+	[[ged_draw_command_scene_line_layer_builder_replace]]
+	[[ged_draw_command_scene_feature_metadata_replace]]
+	[[ged_draw_command_scene_commit]]
+	[[result_kind]]
+	[["line-layer-builder"]]
+	[[desc.generation = generation]]
+	[[uint64_t generation]]
+	[[return BRLCAD_ERROR]]
+	[[ged_diagnostic_line_layer_publish]]
+	[[ged_draw_view_context_diagnostic_line_layer_builder_replace]]
+	[[GED_DRAW_VIEW_FEATURE_STYLE_INIT]]
+	[[selectable[ \t\r\n]*=[ \t\r\n]*1]])
+      string(REGEX MATCH "${_token}" _libged_builder_helper_token_hit
+	"${_libged_builder_helper_contents}")
+      if(NOT _libged_builder_helper_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/ged_util.cpp must keep command-scene line-layer builder helper token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
   set(_libged_brep_plot_cmd "${BRLCAD_SOURCE_DIR}/src/libged/brep/plot.cpp")
   if(EXISTS "${_libged_brep_plot_cmd}")
 	    file(READ "${_libged_brep_plot_cmd}" _libged_brep_plot_contents)
 	    foreach(_token
 		[[#[ \t]*include[ \t]*[<"]ged/draw\.h]]
-		[[ged_diagnostic_line_layer_publish]]
-		[[ged_draw_view_context_diagnostic_line_layer_builder_replace]]
+		[[_ged_line_layer_builder_publish_command_scene_feature]]
+		[["brep"]]
+		[["command-result"]]
+		[["brep-debug-plot"]]
 	[[GED_DRAW_VIEW_FEATURE_STYLE_INIT]]
 	[[ged_draw_view_context_indexed_face_set_replace]])
       string(REGEX MATCH "${_token}" _libged_brep_plot_token_hit
@@ -15673,13 +16079,14 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[ged_view_context_center_vec_set]]
 	[[ged_view_context_update]]
 	[[ged_view_context_view2model_get]]
-	[[ged_draw_view_context_feature_remove]]
-	[[ged_draw_view_context_lines_replace]])
+	[[_ged_line_set_publish_command_scene_feature]]
+	[["preview::eye_path"]]
+	[["eye-path"]])
       string(REGEX MATCH "${_token}" _libged_preview_view_reads_adapter_hit
 	"${_libged_preview_view_reads_contents}")
       if(NOT _libged_preview_view_reads_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/draw/preview.cpp must route preview camera view access through GED view-context facade ${_token}")
+	  "src/libged/draw/preview.cpp must route preview camera and eye-path access through GED view-context/command-scene facade ${_token}")
       endif()
     endforeach()
     foreach(_pat
@@ -15700,6 +16107,8 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[(^|[^A-Za-z0-9_])rt_view_context_rotation_set_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])rt_view_context_center_vec_set_bsg[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])rt_view_context_view2model_from_bsg[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_feature_remove[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_lines_replace[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_view_feature_remove[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_view_lines_replace[ \t\r\n]*\(]])
       string(REGEX MATCH "${_pat}" _libged_preview_view_reads_direct_hit
@@ -16966,10 +17375,12 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 				[[ged_draw_obol_shape_ref_index_for_component]]
 				[[ged_draw_obol_group_ref_index_for_component]]
 					[[ged_draw_obol_shape_ref_index_for_path_hash]]
-					[[ged_draw_obol_shape_component_index_path_cb]]
+					[[ged_draw_obol_shape_component_index_record_cb]]
 					[[ged_draw_obol_group_component_index_path_cb]]
-					[[ged_draw_obol_shape_path_hash_index_path_cb]]
+					[[ged_draw_obol_shape_path_hash_index_record_cb]]
+					[[ged_draw_obol_shape_ref_for_database_source_record]]
 					[[ged_draw_obol_database_source_path_hash]]
+					[[ged_draw_obol_database_source_records_foreach]]
 					[[ged_draw_shape_ref_obol_publish_primitive_wireframe_plot]]
 					[[ged_draw_obol_database_source_publish_primitive_wireframe_for_path]]
 					[[ged_draw_scene_ref_publish_obol_primitive_wireframe]]
@@ -16977,6 +17388,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 					[[ged_draw_obol_submodel_wireframe_leaf]]
 					[[ged_draw_rt_vlist_to_ged_line_command]]
 					[[ged_draw_rt_vlist_to_ged_line_arrays]]
+					[[ged_draw_obol_database_source_eval_mode_for_path]]
 					[[ged_draw_group_ref_redraw_wireframe_obol_path_cb]])
       string(FIND "${_ged_bsg_draw_source_contents}" "${_token}"
 	_ged_indexed_face_owner_token_idx)
@@ -17401,9 +17813,13 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	ged_draw_view_context_feature_exists
 	ged_draw_view_context_feature_remove
 	ged_draw_view_context_feature_summary
+	ged_draw_view_context_feature_selected_primitives_replace
+	ged_draw_view_context_feature_highlighted_primitives_replace
 	ged_draw_obol_view_context_feature_exists
 	ged_draw_obol_view_context_feature_remove
 	ged_draw_obol_view_context_feature_summary
+	ged_draw_obol_view_context_feature_selected_primitives_replace
+	ged_draw_obol_view_context_feature_highlighted_primitives_replace
 	ged_draw_obol_view_context_features_remove_prefix
 	ged_draw_obol_view_context_feature_visible
 	ged_draw_obol_view_context_feature_style_get
@@ -17731,6 +18147,21 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[ged_draw_view_context_lines_append_point]]
 	[[ged_draw_view_context_line_layer_builder_replace]]
 	[[ged_draw_view_context_line_layers_replace]]
+	[[enum[ \t]+ged_draw_command_result_status]]
+	[[struct[ \t]+ged_draw_command_result]]
+	[[ged_draw_command_result_cb]]
+	[[struct[ \t]+ged_draw_command_scene_custom_node_request]]
+	[[ged_draw_command_scene_custom_node_cb]]
+	[[ged_draw_command_scene_custom_node_replace]]
+	[[ged_draw_command_scene_line_set_replace]]
+	[[ged_draw_command_scene_point_set_replace]]
+	[[ged_draw_command_scene_indexed_face_set_replace]]
+	[[ged_draw_view_context_feature_primitive_metadata_count]]
+	[[ged_draw_view_context_feature_primitive_metadata_copy]]
+	[[ged_draw_view_context_feature_pick_primitive_resolve]]
+	[[ged_draw_command_scene_feature_primitive_metadata_replace]]
+	[[GED_DRAW_COMMAND_SCENE_DESC_INIT]]
+	[[result_cb]]
 	[[ged_draw_view_context_line_style_get]]
 	[[ged_draw_view_context_lines_points_copy]]
 	[[ged_draw_view_context_labels_replace]]
@@ -17739,6 +18170,10 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[ged_draw_view_context_axes_state_get]]
 	[[ged_draw_view_context_axes_state_replace]]
 	[[ged_draw_view_context_gobject_create]]
+	[[ged_draw_view_context_object_remove]]
+	[[ged_draw_view_context_object_visible_get]]
+	[[ged_draw_view_context_object_visible_set]]
+	[[ged_draw_view_context_object_realize]]
 	[[ged_draw_view_polygon_ref_is_null]]
 	[[ged_draw_view_context_polygon_create]]
 	[[ged_draw_view_context_polygon_update_screen_pt]]
@@ -19426,7 +19861,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[ged_draw_view_context_lod_policy_get]]
 	[[ged_draw_view_context_lod_policy_apply]]
 	[[ged_draw_view_context_lod_policy_apply_bot_threshold]]
-	[[ged_draw_view_context_diagnostic_line_layer_builder_replace]]
+	[[_ged_line_layer_builder_publish_command_scene_feature]]
 	[[ged_draw_append_tree_shape_to_group]]
 	[[ged_draw_add_tree_line_set_to_group]]
 	[[ged_draw_add_tree_nmg_region_to_group]]
@@ -19915,6 +20350,19 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[annot_geometry.geometry_name]]
 	[[face_geometry.index_count]]
 	[[face_display.intent_path]]
+	[[vdraw line command-scene publication]]
+	[[vdraw point/face command-scene publication]]
+	[[_VDRWline_test]]
+	[[_VDRWpoint_test]]
+	[[_VDRWface_test]]
+	[[vdraw-line-layer]]
+	[[vdraw-point-set]]
+	[[vdraw-indexed-face-set]]
+	[[command-scene line-set helper publication]]
+	[[line_helper::result]]
+	[[_ged_line_set_publish_command_scene_feature]]
+	[["line-helper"]]
+	[["line-set"]]
 	[[source_display.is_database_source]]
 	[[normal_display.material_color]]
 	[[wire_display.line_width]]
@@ -21507,6 +21955,7 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 	[[ged_obol_apply_source_update_transaction]]
 	[[ged_obol_apply_source_references_removed_transaction]]
 	[[ged_obol_apply_visibility_transaction]]
+	[[ged_obol_apply_highlight_transaction]]
 	[[ged_obol_apply_stale_source_transaction]]
 	[[ged_obol_apply_erase_prefix_transaction]]
 	[[ged_obol_apply_redraw_transaction]]
@@ -21516,6 +21965,8 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 	[[ged_obol_mark_matching_database_sources_stale]]
 	[[ged_obol_set_database_source_visible]]
 	[[ged_obol_set_group_visible]]
+	[[ged_obol_set_database_source_highlighted]]
+	[[ged_obol_set_group_highlighted]]
 	[[setGroupDisplayState]]
 	[[markDatabaseSourceInstanceStale]]
 	[[ged_obol_source_summary_force_adapter]]
@@ -21543,9 +21994,12 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 		[[BRLObolAuxiliaryLineSetDisplayState]]
 		[[display_state && display_state->valid]]
 		[[clearDatabaseSourceInstanceAuxiliaryShapes]]
-		[[getGroupDatabaseSourceCount]]
+	[[getGroupDatabaseSourceCount]]
 	[[ged_draw_obol_group_paths_foreach]]
 	[[ged_draw_obol_group_database_source_paths_foreach]]
+	[[ged_draw_obol_database_source_records_foreach]]
+	[[ged_draw_obol_group_database_source_records_foreach]]
+	[[ged_obol_database_source_record_from_summary]]
 	[[getGroupChildCount]]
 	[[getSceneSubtreeBounds]]
 	[[getSceneTreeSummaryForPath]]
@@ -21831,6 +22285,12 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 	[[GED nested leaf reference removal should remove only non-root owned Obol sources]]
 	[[GED source removal transaction should remove matching owned Obol component sources]]
 	[[GED visibility transaction should update owned Obol state without full-scene sync]]
+	[[GED multi-instance visibility should update repeated logical instances consistently]]
+	[[GED multi-instance highlight should update repeated logical instances consistently]]
+	[[GED multi-instance direct source stale should target one transformed source]]
+	[[GED multi-instance direct source redraw should reuse seeded sibling geometry]]
+	[[GED multi-instance logical redraw should avoid retained fallback state]]
+	[[GED multi-instance logical redraw should preserve shared local geometry]]
 	[[GED transparency transaction should preserve Obol-only sources]]
 	[[GED highlight transaction should preserve Obol-only sources]]
 	[[GED stale-source transaction should target owned Obol state without full-scene sync]]
@@ -21936,8 +22396,22 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 		[[ged_view_context_lod_policy_apply]]
 		[[GED_DRAW_VIEW_LINE_DRAW]]
 		[[GED_DRAW_VIEW_LINE_POINT_DRAW]]
-		[[GED shape point-set publish should mutate owned Obol point commands]]
-		[[GED shape point-set geometry summary should read owned Obol point-set publication]]
+	[[GED shape point-set publish should mutate owned Obol point commands]]
+	[[GED shape point-set geometry summary should read owned Obol point-set publication]]
+	[[exercise_multi_instance_transform_reuse]]
+	[[reuse_root\.c]]
+	[[reuse_shared\.c@1]]
+	[[GED multi-instance transformed sources should reuse one local geometry node]]
+	[[GED multi-instance shared geometry should remain source-local]]
+	[[GED multi-instance source bounds should include explicit tree-walk transforms]]
+	[[GED multi-instance scene bounds should apply explicit transforms]]
+	[[GED multi-instance shaded sources should reuse one local mesh node]]
+	[[GED multi-instance shaded shared mesh should remain source-local]]
+	[[GED multi-instance shaded source bounds should apply transforms]]
+	[[GED multi-instance autoview should use transformed scene bounds]]
+	[[getGeometrySource]]
+	[[getSceneSubtreeBounds]]
+	[[ged_view_context_size_get]]
 	[[source_for_path]])
       string(REGEX MATCH "${_token}" _ged_obol_test_token_hit
 	"${_ged_obol_test_contents}")
@@ -22709,9 +23183,15 @@ function(_brlobol_pivot_guard_check_qtcad_obol_pick_source_exact)
 	"nearestFaceEdgeSlot"
 	"nearestFaceEdgeVertexIndexA"
 	"nearestFaceVertexSlot"
+	"featureName"
+	"featurePrimitiveIndex"
+	"featurePrimitiveMetadata"
+	"featurePickResolved"
 	"float distance"
 	"submittedSourceRequestCount"
-	"qg_obol_pick_ray")
+	"qg_obol_pick_ray"
+	"qg_obol_pick_apply_feature_state"
+	"qg_obol_pick_apply_feature_states")
       string(FIND "${_qtcad_pick_header_contents}" "${_token}" _idx)
       if(_idx EQUAL -1)
 	_brlobol_pivot_guard_fail("include/qtcad/QgObolPick.h missing source-backed exact pick token ${_token}")
@@ -22731,6 +23211,14 @@ function(_brlobol_pivot_guard_check_qtcad_obol_pick_source_exact)
 	"qg_obol_pick_rt_exact"
 	"qg_obol_pick_point_internal"
 	"qg_obol_pick_ray"
+	"qg_obol_feature_pick_from_record"
+	"qg_obol_resolve_feature_pick"
+	"resolvePrimitivePick"
+	"featurePickResolved"
+	"featurePrimitiveMetadata"
+	"qg_obol_apply_feature_states"
+	"replaceSelectedPrimitives"
+	"replaceHighlightedPrimitives"
 	"submittedSourceRequestCount"
 	"pickAction.setRay(rayOrigin, rayDirection)"
 	"qg_obol_insert_pick_record"
@@ -22768,6 +23256,9 @@ function(_brlobol_pivot_guard_check_qtcad_obol_pick_source_exact)
 	"qg_obol_pick_point(view_widget()"
 	"qg_obol_pick_rect(view_widget()"
 	"qg_obol_pick_ray(view_widget()"
+	"_qg_apply_obol_pick_selection"
+	"qg_obol_pick_apply_feature_states"
+	"featurePickResolved"
 	"submittedSourceRequests"
 	"submittedSourceRequests > 0"
 	"set_selected_paths(paths);")
@@ -22793,6 +23284,12 @@ function(_brlobol_pivot_guard_check_qtcad_obol_pick_source_exact)
 	"qtcad Obol point pick should consume ready source-backed full detail"
 	"qtcad Obol source-backed pick should preserve exact mesh, sub-entity identity, and edit intent"
 	"nearestFaceEdgeVertexIndexA"
+	"rtcheck::overlaps/yellow"
+	"featurePickResolved"
+	"featurePrimitiveMetadata"
+	"qtcad command-result pick should resolve child layer hits to parent primitive metadata"
+	"qtcad command-result selection should not publish database paths"
+	"qtcad select point filter should apply command-result primitive state"
 	"qtcad source-backed exact Obol pick should pass controller full-detail budget to source provider"
 	"qtcad source-backed exact Obol pick should report pending submitted source detail"
 	"qtcad point select filter should consume pending source-backed exact pick"

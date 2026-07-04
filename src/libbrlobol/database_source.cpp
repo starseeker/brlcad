@@ -13,6 +13,7 @@
 #include "brlobol/material_object.h"
 #include "brlobol/mesh_shape.h"
 #include "brlobol/vlist_shape.h"
+#include "database_source_realization.h"
 
 #include "bu/color.h"
 #include "bu/list.h"
@@ -457,6 +458,25 @@ lookup_name_from_path(const SbString &path)
     return name;
 }
 
+static std::string
+database_lookup_path_from_source_path(const SbString &path)
+{
+    const char *name = lookup_name_from_path(path);
+    if (!name)
+	return std::string();
+
+    std::string lookup;
+    for (const char *cp = name; *cp; cp++) {
+	if (*cp == '@') {
+	    while (cp[1] && cp[1] != '/')
+		cp++;
+	    continue;
+	}
+	lookup.push_back(*cp);
+    }
+    return lookup;
+}
+
 static const char *
 database_source_skip_leading_slash(const char *path)
 {
@@ -502,6 +522,24 @@ source_record_draw_mode(const SoBRLDatabaseSource *source)
     if (source->drawMode.getValue() == SoBRLDatabaseSource::SHADED)
 	return BRLOBOL_LOD_DRAW_SHADED;
     return BRLOBOL_LOD_DRAW_WIRE;
+}
+
+static int
+source_uses_mesh_realization(const SoBRLDatabaseSource *source)
+{
+    if (!source)
+	return 0;
+
+    const int roleFlags = source->realizationRoleFlags.getValue();
+    if (roleFlags & SoBRLDatabaseSource::REALIZATION_ROLE_MESH)
+	return 1;
+
+    const int representation = source->representationMode.getValue();
+    if (representation == SoBRLDatabaseSource::REPRESENTATION_HIDDEN_LINE ||
+	    representation == SoBRLDatabaseSource::REPRESENTATION_EVAL_POINTS)
+	return 1;
+
+    return source->drawMode.getValue() == SoBRLDatabaseSource::SHADED;
 }
 
 static SbString
@@ -812,15 +850,165 @@ remove_non_auxiliary_children(SoGroup *group)
     }
 }
 
+template <typename ShapeT>
+static void
+unref_cached_geometry_map(std::map<std::string, ShapeT *> &cached)
+{
+    for (typename std::map<std::string, ShapeT *>::iterator it = cached.begin();
+	    it != cached.end(); ++it) {
+	if (it->second)
+	    it->second->unref();
+    }
+    cached.clear();
+}
+
+template <typename ShapeT>
+static void
+store_cached_geometry_map(std::map<std::string, ShapeT *> &cached,
+	const std::string &key,
+	ShapeT *shape)
+{
+    if (!shape)
+	return;
+
+    typename std::map<std::string, ShapeT *>::iterator found =
+	cached.find(key);
+    if (found != cached.end()) {
+	if (found->second == shape)
+	    return;
+	if (found->second)
+	    found->second->unref();
+    }
+
+    shape->ref();
+    cached[key] = shape;
+}
+
+BRLObolDatabaseSourceRealizationCache::BRLObolDatabaseSourceRealizationCache(void)
+{
+}
+
+BRLObolDatabaseSourceRealizationCache::~BRLObolDatabaseSourceRealizationCache(void)
+{
+    this->clear();
+}
+
+void
+BRLObolDatabaseSourceRealizationCache::clear(void)
+{
+    unref_cached_geometry_map(this->sharedWireGeometry);
+    unref_cached_geometry_map(this->sharedMeshVListGeometry);
+    unref_cached_geometry_map(this->sharedMeshGeometry);
+}
+
+void
+BRLObolDatabaseSourceRealizationCache::storeWireGeometry(
+	const std::string &key,
+	SoBRLVListShape *shape)
+{
+    store_cached_geometry_map(this->sharedWireGeometry, key, shape);
+}
+
+void
+BRLObolDatabaseSourceRealizationCache::storeMeshVListGeometry(
+	const std::string &key,
+	SoBRLVListShape *shape)
+{
+    store_cached_geometry_map(this->sharedMeshVListGeometry, key, shape);
+}
+
+void
+BRLObolDatabaseSourceRealizationCache::storeMeshGeometry(
+	const std::string &key,
+	SoBRLMeshShape *shape)
+{
+    store_cached_geometry_map(this->sharedMeshGeometry, key, shape);
+}
+
+template <typename ShapeT>
+static int
+cacheable_shared_geometry_key(ShapeT *shape,
+	ShapeT *geometry,
+	std::string &key)
+{
+    if (!shape || !geometry || geometry == shape)
+	return 0;
+    if (!geometry->sharedSource.getValue())
+	return 0;
+
+    const char *name = geometry->geometryName.getValue().getString();
+    if (!name || !name[0])
+	return 0;
+
+    key = name;
+    return 1;
+}
+
+static void
+seed_realization_cache_from_node(SoNode *node,
+	BRLObolDatabaseSourceRealizationCache *cache,
+	int meshRealization)
+{
+    if (!node || !cache)
+	return;
+
+    if (node->isOfType(SoBRLVListShape::getClassTypeId())) {
+	SoBRLVListShape *shape = static_cast<SoBRLVListShape *>(node);
+	SoBRLVListShape *geometry = shape->getSharedGeometrySource();
+	std::string key;
+	if (cacheable_shared_geometry_key(shape, geometry, key)) {
+	    if (meshRealization)
+		cache->storeMeshVListGeometry(key, geometry);
+	    else
+		cache->storeWireGeometry(key, geometry);
+	}
+	return;
+    }
+
+    if (node->isOfType(SoBRLMeshShape::getClassTypeId())) {
+	SoBRLMeshShape *shape = static_cast<SoBRLMeshShape *>(node);
+	SoBRLMeshShape *geometry = shape->getSharedGeometrySource();
+	std::string key;
+	if (meshRealization && cacheable_shared_geometry_key(shape,
+		geometry, key))
+	    cache->storeMeshGeometry(key, geometry);
+	return;
+    }
+
+    if (node->isOfType(SoGroup::getClassTypeId())) {
+	SoGroup *group = static_cast<SoGroup *>(node);
+	for (int i = 0; i < group->getNumChildren(); i++)
+	    seed_realization_cache_from_node(group->getChild(i), cache,
+		    meshRealization);
+    }
+}
+
+void
+brlobol_database_source_seed_realization_cache(
+	SoBRLDatabaseSource *source,
+	BRLObolDatabaseSourceRealizationCache *cache)
+{
+    if (!source || !cache ||
+	    source->realizationStatus.getValue() !=
+	    SoBRLDatabaseSource::REALIZED ||
+	    source->needsRealization())
+	return;
+
+    const int roleFlags = source->realizationRoleFlags.getValue();
+    if (roleFlags & SoBRLDatabaseSource::REALIZATION_ROLE_EXTERNAL)
+	return;
+
+    seed_realization_cache_from_node(source, cache,
+	    source_uses_mesh_realization(source));
+}
+
 struct realize_walk_data {
     SoBRLDatabaseSource *source;
+    BRLObolDatabaseSourceRealizationCache *cache;
     uint32_t revision;
     int realized_shapes;
     int failed_shapes;
     SbString diagnostic;
-    std::map<std::string, SoBRLVListShape *> sharedWireGeometry;
-    std::map<std::string, SoBRLVListShape *> sharedMeshVListGeometry;
-    std::map<std::string, SoBRLMeshShape *> sharedMeshGeometry;
 };
 
 static SbMatrix
@@ -1458,8 +1646,8 @@ realize_leaf(struct db_tree_state *tsp,
     SoBRLVListShape *sharedShape = NULL;
     const std::string cacheKey = realize_geometry_cache_key(dp);
     std::map<std::string, SoBRLVListShape *>::iterator found =
-	data->sharedWireGeometry.find(cacheKey);
-    if (found != data->sharedWireGeometry.end())
+	data->cache->sharedWireGeometry.find(cacheKey);
+    if (found != data->cache->sharedWireGeometry.end())
 	sharedShape = found->second;
 
     const char *typeLabel = sharedShape ?
@@ -1513,7 +1701,7 @@ realize_leaf(struct db_tree_state *tsp,
 	    sharedShape->sourceType = "annotation";
 	    sharedShape->geometryKind = "annotation";
 	}
-	data->sharedWireGeometry[cacheKey] = sharedShape;
+	data->cache->storeWireGeometry(cacheKey, sharedShape);
 	typeLabel = sharedShape->sourceType.getValue().getString();
     }
 
@@ -2066,13 +2254,13 @@ realize_mesh_leaf(struct db_tree_state *tsp,
     SoBRLMeshShape *sharedMeshShape = NULL;
     const std::string cacheKey = realize_geometry_cache_key(dp);
     std::map<std::string, SoBRLVListShape *>::iterator foundVList =
-	data->sharedMeshVListGeometry.find(cacheKey);
-    if (foundVList != data->sharedMeshVListGeometry.end()) {
+	data->cache->sharedMeshVListGeometry.find(cacheKey);
+    if (foundVList != data->cache->sharedMeshVListGeometry.end()) {
 	sharedVListShape = foundVList->second;
     } else {
 	std::map<std::string, SoBRLMeshShape *>::iterator foundMesh =
-	    data->sharedMeshGeometry.find(cacheKey);
-	if (foundMesh != data->sharedMeshGeometry.end())
+	    data->cache->sharedMeshGeometry.find(cacheKey);
+	if (foundMesh != data->cache->sharedMeshGeometry.end())
 	    sharedMeshShape = foundMesh->second;
     }
 
@@ -2148,10 +2336,10 @@ realize_mesh_leaf(struct db_tree_state *tsp,
 	}
 
 	if (sharedVListShape) {
-	    data->sharedMeshVListGeometry[cacheKey] = sharedVListShape;
+	    data->cache->storeMeshVListGeometry(cacheKey, sharedVListShape);
 	    typeLabel = sharedVListShape->sourceType.getValue().getString();
 	} else {
-	    data->sharedMeshGeometry[cacheKey] = sharedMeshShape;
+	    data->cache->storeMeshGeometry(cacheKey, sharedMeshShape);
 	    typeLabel = sharedMeshShape->sourceType.getValue().getString();
 	}
     }
@@ -3318,128 +3506,166 @@ SoBRLDatabaseSource::needsRealization(void) const
 SbBool
 SoBRLDatabaseSource::realizeDatabaseWireframe(void)
 {
-    this->realizationDiagnostic = "";
-    if (!this->dbip) {
-	this->realizationDiagnostic = "database source has no database";
+    BRLObolDatabaseSourceRealizationCache cache;
+    return brlobol_database_source_realize_wireframe_with_cache(this, &cache);
+}
+
+SbBool
+brlobol_database_source_realize_wireframe_with_cache(
+	SoBRLDatabaseSource *source,
+	BRLObolDatabaseSourceRealizationCache *cache)
+{
+    BRLObolDatabaseSourceRealizationCache localCache;
+    if (!cache)
+	cache = &localCache;
+
+    if (!source)
+	return FALSE;
+
+    source->realizationDiagnostic = "";
+    if (!source->dbip) {
+	source->realizationDiagnostic = "database source has no database";
 	return FALSE;
     }
 
-    const char *treeName = lookup_name_from_path(this->path.getValue());
-    if (!treeName) {
-	this->realizationDiagnostic = "database source path is empty";
+    std::string treeNameStorage =
+	database_lookup_path_from_source_path(source->path.getValue());
+    const char *treeName = treeNameStorage.c_str();
+    if (!treeName[0]) {
+	source->realizationDiagnostic = "database source path is empty";
 	return FALSE;
     }
 
-    remove_non_auxiliary_children(this);
-    (void)remove_source_placement_transform(this);
+    remove_non_auxiliary_children(source);
+    (void)remove_source_placement_transform(source);
 
     struct db_tree_state init_state;
-    db_init_db_tree_state(&init_state, this->dbip);
+    db_init_db_tree_state(&init_state, source->dbip);
     init_state.ts_stop_at_regions = 0;
 
     struct realize_walk_data data;
-    data.source = this;
-    data.revision = this->sourceRevision.getValue();
+    data.source = source;
+    data.cache = cache;
+    data.revision = source->sourceRevision.getValue();
     data.realized_shapes = 0;
     data.failed_shapes = 0;
 
     const char *av[1] = { treeName };
-    int ret = db_walk_tree_leaf_instances(this->dbip, 1, av, 1, &init_state,
+    int ret = db_walk_tree_leaf_instances(source->dbip, 1, av, 1, &init_state,
 	    NULL, NULL, realize_leaf, &data);
     db_free_db_tree_state(&init_state);
 
     if (ret < 0 || data.realized_shapes <= 0 || data.failed_shapes > 0) {
-	remove_non_auxiliary_children(this);
-	this->realizationIdentity = "";
+	remove_non_auxiliary_children(source);
+	source->realizationIdentity = "";
 	if (data.diagnostic.getLength() > 0) {
-	    this->realizationDiagnostic = data.diagnostic;
+	    source->realizationDiagnostic = data.diagnostic;
 	} else if (data.realized_shapes <= 0) {
 	    SbString msg;
 	    msg.sprintf("%s: no drawable wireframe geometry realized", treeName);
-	    this->realizationDiagnostic = msg;
+	    source->realizationDiagnostic = msg;
 	} else {
 	    SbString msg;
 	    msg.sprintf("%s: wireframe realization failed", treeName);
-	    this->realizationDiagnostic = msg;
+	    source->realizationDiagnostic = msg;
 	}
 	return FALSE;
     }
 
-    this->realizedRevision = this->sourceRevision.getValue();
-    this->realizedSourceRevision = this->sourceRevision.getValue();
-    this->realizedInputsRevision = this->inputsRevision.getValue();
-    this->realizedViewRevision = this->viewRevision.getValue();
-    this->realizationStatus = REALIZED;
-    this->realizationDiagnostic = "";
-    this->realizationIdentity = source_realization_identity(this);
-    this->stale = FALSE;
-    this->staleReason = STALE_NONE;
-    update_source_bounds_from_realized_geometry(this);
-    this->syncRealizedShapeOwnerState();
+    source->realizedRevision = source->sourceRevision.getValue();
+    source->realizedSourceRevision = source->sourceRevision.getValue();
+    source->realizedInputsRevision = source->inputsRevision.getValue();
+    source->realizedViewRevision = source->viewRevision.getValue();
+    source->realizationStatus = SoBRLDatabaseSource::REALIZED;
+    source->realizationDiagnostic = "";
+    source->realizationIdentity = source_realization_identity(source);
+    source->stale = FALSE;
+    source->staleReason = SoBRLDatabaseSource::STALE_NONE;
+    update_source_bounds_from_realized_geometry(source);
+    source->syncRealizedShapeOwnerState();
     return TRUE;
 }
 
 SbBool
 SoBRLDatabaseSource::realizeDatabaseMesh(void)
 {
-    this->realizationDiagnostic = "";
-    if (!this->dbip) {
-	this->realizationDiagnostic = "database source has no database";
+    BRLObolDatabaseSourceRealizationCache cache;
+    return brlobol_database_source_realize_mesh_with_cache(this, &cache);
+}
+
+SbBool
+brlobol_database_source_realize_mesh_with_cache(
+	SoBRLDatabaseSource *source,
+	BRLObolDatabaseSourceRealizationCache *cache)
+{
+    BRLObolDatabaseSourceRealizationCache localCache;
+    if (!cache)
+	cache = &localCache;
+
+    if (!source)
+	return FALSE;
+
+    source->realizationDiagnostic = "";
+    if (!source->dbip) {
+	source->realizationDiagnostic = "database source has no database";
 	return FALSE;
     }
 
-    const char *treeName = lookup_name_from_path(this->path.getValue());
-    if (!treeName) {
-	this->realizationDiagnostic = "database source path is empty";
+    std::string treeNameStorage =
+	database_lookup_path_from_source_path(source->path.getValue());
+    const char *treeName = treeNameStorage.c_str();
+    if (!treeName[0]) {
+	source->realizationDiagnostic = "database source path is empty";
 	return FALSE;
     }
 
-    remove_non_auxiliary_children(this);
-    (void)remove_source_placement_transform(this);
+    remove_non_auxiliary_children(source);
+    (void)remove_source_placement_transform(source);
 
     struct db_tree_state init_state;
-    db_init_db_tree_state(&init_state, this->dbip);
+    db_init_db_tree_state(&init_state, source->dbip);
     init_state.ts_stop_at_regions = 0;
 
     struct realize_walk_data data;
-    data.source = this;
-    data.revision = this->sourceRevision.getValue();
+    data.source = source;
+    data.cache = cache;
+    data.revision = source->sourceRevision.getValue();
     data.realized_shapes = 0;
     data.failed_shapes = 0;
 
     const char *av[1] = { treeName };
-    int ret = db_walk_tree_leaf_instances(this->dbip, 1, av, 1, &init_state,
+    int ret = db_walk_tree_leaf_instances(source->dbip, 1, av, 1, &init_state,
 	    NULL, NULL, realize_mesh_leaf, &data);
     db_free_db_tree_state(&init_state);
 
     if (ret < 0 || data.realized_shapes <= 0 || data.failed_shapes > 0) {
-	remove_non_auxiliary_children(this);
-	this->realizationIdentity = "";
+	remove_non_auxiliary_children(source);
+	source->realizationIdentity = "";
 	if (data.diagnostic.getLength() > 0) {
-	    this->realizationDiagnostic = data.diagnostic;
+	    source->realizationDiagnostic = data.diagnostic;
 	} else if (data.realized_shapes <= 0) {
 	    SbString msg;
 	    msg.sprintf("%s: no drawable mesh geometry realized", treeName);
-	    this->realizationDiagnostic = msg;
+	    source->realizationDiagnostic = msg;
 	} else {
 	    SbString msg;
 	    msg.sprintf("%s: mesh realization failed", treeName);
-	    this->realizationDiagnostic = msg;
+	    source->realizationDiagnostic = msg;
 	}
 	return FALSE;
     }
 
-    this->realizedRevision = this->sourceRevision.getValue();
-    this->realizedSourceRevision = this->sourceRevision.getValue();
-    this->realizedInputsRevision = this->inputsRevision.getValue();
-    this->realizedViewRevision = this->viewRevision.getValue();
-    this->realizationStatus = REALIZED;
-    this->realizationDiagnostic = "";
-    this->realizationIdentity = source_realization_identity(this);
-    this->stale = FALSE;
-    this->staleReason = STALE_NONE;
-    update_source_bounds_from_realized_geometry(this);
-    this->syncRealizedShapeOwnerState();
+    source->realizedRevision = source->sourceRevision.getValue();
+    source->realizedSourceRevision = source->sourceRevision.getValue();
+    source->realizedInputsRevision = source->inputsRevision.getValue();
+    source->realizedViewRevision = source->viewRevision.getValue();
+    source->realizationStatus = SoBRLDatabaseSource::REALIZED;
+    source->realizationDiagnostic = "";
+    source->realizationIdentity = source_realization_identity(source);
+    source->stale = FALSE;
+    source->staleReason = SoBRLDatabaseSource::STALE_NONE;
+    update_source_bounds_from_realized_geometry(source);
+    source->syncRealizedShapeOwnerState();
     return TRUE;
 }
 

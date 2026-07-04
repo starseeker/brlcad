@@ -297,52 +297,24 @@ _objs_cmd_draw(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    if (ged_draw_view_context_feature_exists(gd->cv, gd->vobj)) {
-	struct ged_draw_view_feature_style style;
-	if (!ged_draw_view_context_feature_style_get(gd->cv, gd->vobj, &style)) {
-	    bu_vls_printf(gedp->ged_result_str, "No view feature named %s\n", gd->vobj);
-	    return BRLCAD_ERROR;
-	}
-	if (argc == 0) {
-	    bu_vls_printf(gedp->ged_result_str, "%s\n", style.visible ? "UP" : "DOWN");
-	    return BRLCAD_OK;
-	}
-	if (BU_STR_EQUAL(argv[0], "DOWN")) {
-	    style.visible = 0;
-	    ged_draw_view_context_feature_style_apply(gd->cv, gd->vobj, &style, 0);
-	    return BRLCAD_OK;
-	}
-	if (BU_STR_EQUAL(argv[0], "UP")) {
-	    style.visible = 1;
-	    ged_draw_view_context_feature_style_apply(gd->cv, gd->vobj, &style, 0);
-	    return BRLCAD_OK;
-	}
-	bu_vls_printf(gedp->ged_result_str, "Invalid argument %s\n", argv[0]);
-	return BRLCAD_ERROR;
-    }
-
-    if (ged_draw_shape_ref_is_null(gd->shape_ref)) {
-	bu_vls_printf(gedp->ged_result_str, "No view feature named %s\n", gd->vobj);
-	return BRLCAD_ERROR;
-    }
-
     if (argc == 0) {
-	struct ged_draw_shape_record rec;
-	if (!ged_draw_shape_record_get(gedp, gd->shape_ref, &rec)) {
-	    bu_vls_printf(gedp->ged_result_str, "No view feature named %s\n", gd->vobj);
+	int visible = 0;
+	if (!ged_draw_view_context_object_visible_get(gedp, gd->cv,
+		gd->vobj, gd->shape_ref, &visible, gedp->ged_result_str))
 	    return BRLCAD_ERROR;
-	}
-	bu_vls_printf(gedp->ged_result_str, "%s\n", rec.visible ? "UP" : "DOWN");
+	bu_vls_printf(gedp->ged_result_str, "%s\n", visible ? "UP" : "DOWN");
 	return BRLCAD_OK;
     }
 
     if (BU_STR_EQUAL(argv[0], "DOWN")) {
-	ged_draw_shape_ref_set_visible(gedp, gd->shape_ref, 0);
-	return BRLCAD_OK;
+	return ged_draw_view_context_object_visible_set(gedp, gd->cv,
+		gd->vobj, gd->shape_ref, 0, gedp->ged_result_str) ?
+	    BRLCAD_OK : BRLCAD_ERROR;
     }
     if (BU_STR_EQUAL(argv[0], "UP")) {
-	ged_draw_shape_ref_set_visible(gedp, gd->shape_ref, 1);
-	return BRLCAD_OK;
+	return ged_draw_view_context_object_visible_set(gedp, gd->cv,
+		gd->vobj, gd->shape_ref, 1, gedp->ged_result_str) ?
+	    BRLCAD_OK : BRLCAD_ERROR;
     }
 
     bu_vls_printf(gedp->ged_result_str, "Invalid argument %s\n", argv[0]);
@@ -364,33 +336,8 @@ _objs_cmd_delete(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    if (ged_draw_view_context_feature_exists(gd->cv, gd->vobj)) {
-	if (!ged_draw_view_context_feature_remove(gd->cv, gd->vobj)) {
-	    bu_vls_printf(gedp->ged_result_str, "No view feature named %s\n", gd->vobj);
-	    return BRLCAD_ERROR;
-	}
-	return BRLCAD_OK;
-    }
-
-    if (ged_draw_shape_ref_is_null(gd->shape_ref)) {
-	if (ged_draw_obol_overlay_erase_name_context(gedp, gd->cv, gd->vobj) ||
-		ged_draw_source_erase_groups_by_name_at_root(gedp, gd->vobj))
-	    return BRLCAD_OK;
-	bu_vls_printf(gedp->ged_result_str, "No view feature named %s\n", gd->vobj);
-	return BRLCAD_ERROR;
-    }
-    struct ged_draw_shape_record rec;
-    if (!ged_draw_shape_record_get(gedp, gd->shape_ref, &rec)) {
-	bu_vls_printf(gedp->ged_result_str, "No view feature named %s\n", gd->vobj);
-	return BRLCAD_ERROR;
-    }
-    if (rec.fullpath) {
-	bu_vls_printf(gedp->ged_result_str, "View feature %s is associated with a database object - use 'erase' cmd to clear\n", gd->vobj);
-	return BRLCAD_ERROR;
-    }
-    ged_draw_shape_ref_release(gedp, gd->shape_ref);
-
-    return BRLCAD_OK;
+    return ged_draw_view_context_object_remove(gedp, gd->cv, gd->vobj,
+	    gd->shape_ref, gedp->ged_result_str) ? BRLCAD_OK : BRLCAD_ERROR;
 }
 
 int
@@ -628,19 +575,8 @@ _objs_cmd_update(void *bs, int argc, const char **argv)
 	return BRLCAD_OK;
     }
 
-    if (ged_draw_view_context_feature_exists(gd->cv, gd->vobj)) {
-	(void)ged_draw_view_context_feature_realize(gd->cv, gd->vobj, 1);
-	return BRLCAD_OK;
-    }
-
-    if (ged_draw_shape_ref_is_null(gd->shape_ref)) {
-	bu_vls_printf(gedp->ged_result_str, "No view feature named %s\n", gd->vobj);
-	return BRLCAD_ERROR;
-    }
-
-    ged_draw_shape_ref_realize_context(gedp, gd->shape_ref, gd->cv);
-
-    return BRLCAD_OK;
+    return ged_draw_view_context_object_realize(gedp, gd->cv, gd->vobj,
+	    gd->shape_ref, gedp->ged_result_str) ? BRLCAD_OK : BRLCAD_ERROR;
 }
 
 const struct bu_cmdtab _obj_cmds[] = {

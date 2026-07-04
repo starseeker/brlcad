@@ -84,7 +84,8 @@ enum class BRLObolFeatureKind {
     EditPreview,
     IndexedFaceSet,
     PolygonOverlay,
-    HudLabel
+    HudLabel,
+    CustomNode
 };
 
 enum class BRLObolFeatureScope {
@@ -176,6 +177,7 @@ struct BRLOBOL_EXPORT BRLObolFeatureOwner {
     const void *ownerToken;
     SbString ownerId;
     SbString ownerRole;
+    uint64_t generation;
     BRLObolCommandResultCallback resultCallback;
     void *callbackUserData;
 
@@ -254,6 +256,7 @@ struct BRLOBOL_EXPORT BRLObolLabel {
     int anchor;
     SbBool arrow;
     float fontSize;
+    uint32_t sourceId;
 
     BRLObolLabel(void);
 };
@@ -267,6 +270,29 @@ struct BRLOBOL_EXPORT BRLObolLineLayer {
     BRLObolLineLayer(void);
 };
 
+struct BRLOBOL_EXPORT BRLObolFeatureMetadata {
+    SbString key;
+    SbString value;
+
+    BRLObolFeatureMetadata(void);
+};
+
+struct BRLOBOL_EXPORT BRLObolFeaturePrimitiveMetadata {
+    int32_t primitiveIndex;
+    std::vector<BRLObolFeatureMetadata> metadata;
+
+    BRLObolFeaturePrimitiveMetadata(void);
+};
+
+struct BRLOBOL_EXPORT BRLObolFeaturePrimitivePick {
+    BRLObolFeatureHandle handle;
+    SbString featureName;
+    int32_t primitiveIndex;
+    std::vector<BRLObolFeatureMetadata> metadata;
+
+    BRLObolFeaturePrimitivePick(void);
+};
+
 struct BRLOBOL_EXPORT BRLObolFeatureSummary {
     SbBool exists;
     SbBool visible;
@@ -276,6 +302,10 @@ struct BRLOBOL_EXPORT BRLObolFeatureSummary {
     size_t pointCount;
     size_t commandCount;
     size_t childCount;
+    size_t metadataCount;
+    size_t primitiveMetadataCount;
+    size_t selectedPrimitiveCount;
+    size_t highlightedPrimitiveCount;
     BRLObolFeatureOwner owner;
     BRLObolOverlayInfo overlay;
 
@@ -299,6 +329,10 @@ struct BRLOBOL_EXPORT BRLObolFeatureRecord {
     std::vector<SbVec3f> axesCenters;
     float halfAxesSize;
     std::vector<BRLObolLineLayer> layers;
+    std::vector<BRLObolFeatureMetadata> metadata;
+    std::vector<BRLObolFeaturePrimitiveMetadata> primitiveMetadata;
+    std::vector<int32_t> selectedPrimitives;
+    std::vector<int32_t> highlightedPrimitives;
 
     BRLObolFeatureRecord(void);
 };
@@ -387,6 +421,9 @@ public:
     size_t removePrefix(const SbString &prefix,
 	unsigned int scopeMask,
 	const BRLObolFeatureOwner *owner);
+    void markCommandOwnerGeneration(const BRLObolFeatureOwner &owner);
+    SbBool commandOwnerGenerationCurrent(
+	const BRLObolFeatureOwner &owner) const;
 
     BRLObolFeatureHandle publishLineSet(const SbString &name,
 	BRLObolFeatureScope scope,
@@ -406,6 +443,11 @@ public:
 	const BRLObolFeatureStyle *style = NULL,
 	const BRLObolFeatureOwner *owner = NULL);
     BRLObolFeatureHandle publishLabels(const SbString &name,
+	BRLObolFeatureScope scope,
+	const std::vector<BRLObolLabel> &labels,
+	const BRLObolFeatureStyle *style = NULL,
+	const BRLObolFeatureOwner *owner = NULL);
+    BRLObolFeatureHandle publishHudLabels(const SbString &name,
 	BRLObolFeatureScope scope,
 	const std::vector<BRLObolLabel> &labels,
 	const BRLObolFeatureStyle *style = NULL,
@@ -436,6 +478,11 @@ public:
 	const std::vector<SbVec3f> &points,
 	const std::vector<SbVec3f> &normals,
 	const std::vector<int32_t> &indices,
+	const BRLObolFeatureStyle *style = NULL,
+	const BRLObolFeatureOwner *owner = NULL);
+    BRLObolFeatureHandle publishCustomNode(const SbString &name,
+	BRLObolFeatureScope scope,
+	SoNode *node,
 	const BRLObolFeatureStyle *style = NULL,
 	const BRLObolFeatureOwner *owner = NULL);
     BRLObolFeatureHandle publishEditPreview(const SbString &name,
@@ -501,6 +548,29 @@ public:
     SbBool clearOverlayInfo(BRLObolFeatureHandle handle);
     SbBool overlayInfo(BRLObolFeatureHandle handle,
 	BRLObolOverlayInfo &overlayOut) const;
+    SbBool replaceMetadata(BRLObolFeatureHandle handle,
+	const std::vector<BRLObolFeatureMetadata> &metadata);
+    SbBool metadata(BRLObolFeatureHandle handle,
+	std::vector<BRLObolFeatureMetadata> &metadataOut) const;
+    SbBool replacePrimitiveMetadata(BRLObolFeatureHandle handle,
+	int32_t primitiveIndex,
+	const std::vector<BRLObolFeatureMetadata> &metadata);
+    SbBool primitiveMetadata(BRLObolFeatureHandle handle,
+	int32_t primitiveIndex,
+	std::vector<BRLObolFeatureMetadata> &metadataOut) const;
+    SbBool resolvePrimitivePick(const SbString &name,
+	int32_t primitiveIndex,
+	BRLObolFeaturePrimitivePick &pickOut,
+	unsigned int scopeMask = BRLOBOL_FEATURE_SCOPE_ALL,
+	const BRLObolFeatureOwner *owner = NULL) const;
+    SbBool replaceSelectedPrimitives(BRLObolFeatureHandle handle,
+	const std::vector<int32_t> &primitives);
+    SbBool replaceHighlightedPrimitives(BRLObolFeatureHandle handle,
+	const std::vector<int32_t> &primitives);
+    SbBool selectedPrimitives(BRLObolFeatureHandle handle,
+	std::vector<int32_t> &primitivesOut) const;
+    SbBool highlightedPrimitives(BRLObolFeatureHandle handle,
+	std::vector<int32_t> &primitivesOut) const;
 
     SbBool realize(BRLObolFeatureHandle handle, SbBool recursive = FALSE);
     SbBool summary(const SbString &name,

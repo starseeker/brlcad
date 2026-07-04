@@ -733,6 +733,144 @@ vdraw_overlay_geometry_from_curve(const struct vd_curve *curve,
 }
 
 
+static const char *
+vdraw_command_scene_result_format(
+	const struct vdraw_overlay_publish_geometry *pg)
+{
+    if (!pg)
+	return NULL;
+
+    switch (pg->geometry.kind) {
+	case GED_DRAW_OVERLAY_GEOMETRY_LINE_SET:
+	    return "vdraw-line-layer";
+	case GED_DRAW_OVERLAY_GEOMETRY_POINT_SET:
+	    return "vdraw-point-set";
+	case GED_DRAW_OVERLAY_GEOMETRY_INDEXED_FACE_SET:
+	    return "vdraw-indexed-face-set";
+	default:
+	    return NULL;
+    }
+}
+
+
+static const char *
+vdraw_command_scene_result_kind(
+	const struct vdraw_overlay_publish_geometry *pg)
+{
+    if (!pg)
+	return NULL;
+
+    switch (pg->geometry.kind) {
+	case GED_DRAW_OVERLAY_GEOMETRY_LINE_SET:
+	    return "vdraw-line";
+	case GED_DRAW_OVERLAY_GEOMETRY_POINT_SET:
+	    return "vdraw-point";
+	case GED_DRAW_OVERLAY_GEOMETRY_INDEXED_FACE_SET:
+	    return "vdraw-indexed-face";
+	default:
+	    return NULL;
+    }
+}
+
+
+static int
+vdraw_command_scene_geometry_publish(struct ged *gedp,
+	const char *name,
+	const struct vdraw_overlay_publish_geometry *pg,
+	unsigned long rgb)
+{
+    /* Return 0 only when fallback publication is allowed. */
+    const char *result_format = vdraw_command_scene_result_format(pg);
+    const char *result_kind = vdraw_command_scene_result_kind(pg);
+    if (!gedp || !name || !pg || !result_format || !result_kind ||
+	    !pg->points || !pg->geometry.point_count)
+	return 0;
+
+    void *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx)
+	return 0;
+
+    struct ged_draw_command_scene_desc desc =
+	GED_DRAW_COMMAND_SCENE_DESC_INIT;
+    desc.owner_id = "vdraw";
+    desc.owner_role = "command-result";
+    struct ged_draw_command_scene *scene =
+	ged_draw_command_scene_begin(view_ctx, &desc);
+    if (!scene)
+	return 0;
+
+    (void)ged_draw_command_scene_features_remove_prefix(scene, name);
+
+    struct ged_draw_view_feature_style style =
+	GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+    style.visible = 1;
+    style.selectable = 1;
+    style.color_valid = 1;
+    style.color[0] = (unsigned char)((rgb >> 16) & 0xff);
+    style.color[1] = (unsigned char)((rgb >> 8) & 0xff);
+    style.color[2] = (unsigned char)(rgb & 0xff);
+
+    char point_count[64] = {0};
+    char index_count[64] = {0};
+    snprintf(point_count, sizeof(point_count), "%zu",
+	    pg->geometry.point_count);
+    snprintf(index_count, sizeof(index_count), "%zu",
+	    pg->geometry.index_count);
+    struct ged_draw_command_scene_metadata metadata[6] = {
+	{"result.feature", name},
+	{"result.format", result_format},
+	{"result.point_count", point_count},
+	{"result.owner", "vdraw"},
+	{"result.kind", result_kind},
+	{"result.index_count", index_count}
+    };
+
+    int published = 0;
+    switch (pg->geometry.kind) {
+	case GED_DRAW_OVERLAY_GEOMETRY_LINE_SET: {
+	    if (!pg->commands ||
+		    pg->geometry.command_count != pg->geometry.point_count) {
+		ged_draw_command_scene_abort(scene);
+		return -1;
+	    }
+	    struct ged_draw_view_line_layer_data layer =
+		GED_DRAW_VIEW_LINE_LAYER_DATA_INIT;
+	    layer.name = name;
+	    layer.points = (const point_t *)pg->points;
+	    layer.commands = pg->commands;
+	    layer.point_count = pg->geometry.point_count;
+	    layer.style = style;
+	    published = ged_draw_command_scene_line_layers_replace(scene,
+		    name, &layer, 1, NULL);
+	    break;
+	}
+	case GED_DRAW_OVERLAY_GEOMETRY_POINT_SET:
+	    published = ged_draw_command_scene_point_set_replace(scene, name,
+		    (const point_t *)pg->points, pg->geometry.point_count,
+		    &style);
+	    break;
+	case GED_DRAW_OVERLAY_GEOMETRY_INDEXED_FACE_SET:
+	    published = ged_draw_command_scene_indexed_face_set_replace(scene,
+		    name, (const point_t *)pg->points,
+		    pg->geometry.point_count, (const vect_t *)pg->normals,
+		    pg->geometry.normal_count, pg->indices,
+		    pg->geometry.index_count, &style);
+	    break;
+	default:
+	    break;
+    }
+
+    if (!published ||
+	    !ged_draw_command_scene_feature_metadata_replace(scene, name,
+		metadata, 6)) {
+	ged_draw_command_scene_abort(scene);
+	return -1;
+    }
+
+    return ged_draw_command_scene_commit(scene) ? 1 : -1;
+}
+
+
 /*
  * Usage:
  *        vdraw send
@@ -772,8 +910,16 @@ vdraw_send(void *data, int argc, const char *argv[])
 	bu_vls_printf(gedp->ged_result_str, "-1");
 	return BRLCAD_OK;
     }
-    idx = ged_draw_overlay_geometry_insert(gedp, solid_name, &pg.geometry,
-	    gedp->i->ged_gdp->gd_currVHead->vdc_rgb, 1.0, 0, 0, &ref);
+    int command_scene_status = vdraw_command_scene_geometry_publish(gedp,
+	    solid_name, &pg, gedp->i->ged_gdp->gd_currVHead->vdc_rgb);
+    if (command_scene_status > 0) {
+	idx = 0;
+    } else if (command_scene_status < 0) {
+	idx = -1;
+    } else {
+	idx = ged_draw_overlay_geometry_insert(gedp, solid_name, &pg.geometry,
+		gedp->i->ged_gdp->gd_currVHead->vdc_rgb, 1.0, 0, 0, &ref);
+    }
     vdraw_overlay_publish_geometry_free(&pg);
 
     bu_vls_printf(gedp->ged_result_str, "%d", idx);

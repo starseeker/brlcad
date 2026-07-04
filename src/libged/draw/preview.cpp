@@ -493,15 +493,21 @@ ged_preview_core(struct ged *gedp, int argc, const char *argv[])
     fp = NULL;
 
     if (draw_eye_path) {
-	(void)ged_draw_view_context_feature_remove(view_ctx, "preview::eye_path");
-	if (preview_eye_path.count) {
-	    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
-	    style.color_valid = 1;
-	    VSET(style.color, 255, 255, 0);
-	    (void)ged_draw_view_context_lines_replace(view_ctx, "preview::eye_path", 0,
-		    (const point_t *)preview_eye_path.points,
-		    preview_eye_path.cmds, preview_eye_path.count, &style);
-	}
+	struct ged_draw_view_feature_style style =
+	    GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+	style.color_valid = 1;
+	VSET(style.color, 255, 255, 0);
+	(void)_ged_line_set_publish_command_scene_feature(gedp,
+		"preview::eye_path",
+		(const point_t *)preview_eye_path.points,
+		preview_eye_path.cmds,
+		preview_eye_path.count,
+		&style,
+		"preview",
+		"command-result",
+		"preview::eye_path",
+		"eye-path",
+		0);
     }
 
     preview_lines_free(&preview_eye_path);

@@ -41,6 +41,7 @@
 
 #include <Inventor/SbMatrix.h>
 #include <Inventor/SbVec3f.h>
+#include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoSeparator.h>
 
 #include <math.h>
@@ -79,6 +80,8 @@ make_obol_sync_db(const char *dbpath)
     point_t nested_leaf_center = {0.0, -5.0, 0.0};
     point_t nested_sibling_center = {3.0, -5.0, 0.0};
     point_t rename_center = {8.0, 3.0, 0.0};
+    point_t reuse_min = {-1.0, -1.0, -1.0};
+    point_t reuse_max = { 1.0,  1.0,  1.0};
     fastf_t mesh_owner_vertices[12] = {
 	0.0, 0.0, 0.0,
 	2.0, 0.0, 0.0,
@@ -97,6 +100,7 @@ make_obol_sync_db(const char *dbpath)
 	mk_sph(wdbp, "nested_leaf.s", nested_leaf_center, 1.0) == 0 &&
 	mk_sph(wdbp, "nested_sibling.s", nested_sibling_center, 1.0) == 0 &&
 	mk_sph(wdbp, "rename_source.s", rename_center, 1.0) == 0 &&
+	mk_rpp(wdbp, "reuse_leaf.s", reuse_min, reuse_max) == 0 &&
 	mk_bot(wdbp, "mesh_owner.bot", RT_BOT_SURFACE, RT_BOT_CCW, 0,
 		4, 2, mesh_owner_vertices, mesh_owner_faces, NULL, NULL) == 0 &&
 	make_obol_sync_brep_sphere(wdbp, "brep_owner.brep") &&
@@ -125,6 +129,43 @@ make_obol_sync_db(const char *dbpath)
 	    mk_addmember("nested_sibling.s", &parent_wm.l, NULL,
 		WMOP_UNION) != NULL &&
 	    mk_comb(wdbp, "nested_parent.c", &parent_wm.l, 0, NULL, NULL,
+		NULL, 0, 0, 0, 0, 0, 0, 0) == 0;
+    }
+    if (ret) {
+	struct wmember shared_wm;
+	struct wmember inst_a_wm;
+	struct wmember inst_b_wm;
+	struct wmember root_wm;
+	mat_t shared_leaf_mat;
+	mat_t inst_a_mat;
+	mat_t inst_b_mat;
+	MAT_IDN(shared_leaf_mat);
+	MAT_IDN(inst_a_mat);
+	MAT_IDN(inst_b_mat);
+	shared_leaf_mat[MDY] = 3.0;
+	inst_a_mat[MDX] = -12.0;
+	inst_b_mat[MDX] = 18.0;
+	BU_LIST_INIT(&shared_wm.l);
+	BU_LIST_INIT(&inst_a_wm.l);
+	BU_LIST_INIT(&inst_b_wm.l);
+	BU_LIST_INIT(&root_wm.l);
+	ret = mk_addmember("reuse_leaf.s", &shared_wm.l, shared_leaf_mat,
+		WMOP_UNION) != NULL &&
+	    mk_comb(wdbp, "reuse_shared.c", &shared_wm.l, 0, NULL, NULL,
+		NULL, 0, 0, 0, 0, 0, 0, 0) == 0 &&
+	    mk_addmember("reuse_shared.c", &inst_a_wm.l, inst_a_mat,
+		WMOP_UNION) != NULL &&
+	    mk_comb(wdbp, "reuse_inst_a.c", &inst_a_wm.l, 0, NULL, NULL,
+		NULL, 0, 0, 0, 0, 0, 0, 0) == 0 &&
+	    mk_addmember("reuse_shared.c", &inst_b_wm.l, inst_b_mat,
+		WMOP_UNION) != NULL &&
+	    mk_comb(wdbp, "reuse_inst_b.c", &inst_b_wm.l, 0, NULL, NULL,
+		NULL, 0, 0, 0, 0, 0, 0, 0) == 0 &&
+	    mk_addmember("reuse_inst_a.c", &root_wm.l, NULL,
+		WMOP_UNION) != NULL &&
+	    mk_addmember("reuse_inst_b.c", &root_wm.l, NULL,
+		WMOP_UNION) != NULL &&
+	    mk_comb(wdbp, "reuse_root.c", &root_wm.l, 0, NULL, NULL,
 		NULL, 0, 0, 0, 0, 0, 0, 0) == 0;
     }
     if (ret) {
@@ -215,6 +256,119 @@ rt_preview_pick_cb(void *data, int UNUSED(x), int UNUSED(y),
     return 1;
 }
 
+struct command_result_callback_state {
+    int callback_count;
+    int accepted_count;
+    int updated_count;
+    int removed_count;
+    int failed_count;
+    int saw_line_layers_update;
+    int saw_metadata_update;
+    int saw_primitive_metadata_update;
+    int saw_remove_prefix;
+    int saw_stale_failure;
+    int saw_commit_failure;
+    int saw_custom_update;
+    uint64_t line_layers_feature_id;
+    uint64_t metadata_feature_id;
+    uint64_t primitive_metadata_feature_id;
+    uint64_t custom_feature_id;
+};
+
+struct custom_node_provider_state {
+    int call_count;
+    int saw_request;
+    uint64_t generation;
+    int local;
+    SoNode *node;
+};
+
+static void
+command_result_cb(const struct ged_draw_command_result *result, void *data)
+{
+    struct command_result_callback_state *ctx =
+	(struct command_result_callback_state *)data;
+    if (!ctx || !result)
+	return;
+
+    ctx->callback_count++;
+    switch (result->status) {
+	case GED_DRAW_COMMAND_RESULT_ACCEPTED:
+	    ctx->accepted_count++;
+	    break;
+	case GED_DRAW_COMMAND_RESULT_UPDATED:
+	    ctx->updated_count++;
+	    break;
+	case GED_DRAW_COMMAND_RESULT_REMOVED:
+	    ctx->removed_count++;
+	    break;
+	case GED_DRAW_COMMAND_RESULT_FAILED:
+	    ctx->failed_count++;
+	    break;
+	default:
+	    break;
+    }
+
+    const char *name = result->feature_name ? result->feature_name : "";
+    const char *command = result->command ? result->command : "";
+    if (result->status == GED_DRAW_COMMAND_RESULT_UPDATED &&
+	    BU_STR_EQUAL(name, "rtcheck::overlaps") &&
+	    BU_STR_EQUAL(command, "lineLayersReplace")) {
+	ctx->saw_line_layers_update = 1;
+	ctx->line_layers_feature_id = result->feature_id;
+    }
+    if (result->status == GED_DRAW_COMMAND_RESULT_UPDATED &&
+	    BU_STR_EQUAL(name, "rtcheck::overlaps") &&
+	    BU_STR_EQUAL(command, "metadataReplace")) {
+	ctx->saw_metadata_update = 1;
+	ctx->metadata_feature_id = result->feature_id;
+    }
+    if (result->status == GED_DRAW_COMMAND_RESULT_UPDATED &&
+	    BU_STR_EQUAL(name, "rtcheck::overlaps") &&
+	    BU_STR_EQUAL(command, "primitiveMetadataReplace")) {
+	ctx->saw_primitive_metadata_update = 1;
+	ctx->primitive_metadata_feature_id = result->feature_id;
+    }
+    if (result->status == GED_DRAW_COMMAND_RESULT_REMOVED &&
+	    BU_STR_EQUAL(command, "removePrefix") &&
+	    strncmp(name, "rtcheck::", strlen("rtcheck::")) == 0)
+	ctx->saw_remove_prefix = 1;
+    if (result->status == GED_DRAW_COMMAND_RESULT_FAILED &&
+	    BU_STR_EQUAL(name, "rtcheck::generation") &&
+	    BU_STR_EQUAL(command, "lineLayersReplace"))
+	ctx->saw_stale_failure = 1;
+    if (result->status == GED_DRAW_COMMAND_RESULT_FAILED &&
+	    BU_STR_EQUAL(command, "commit"))
+	ctx->saw_commit_failure = 1;
+    if (result->status == GED_DRAW_COMMAND_RESULT_UPDATED &&
+	    BU_STR_EQUAL(name, "custom::node") &&
+	    BU_STR_EQUAL(command, "customNodeReplace")) {
+	ctx->saw_custom_update = 1;
+	ctx->custom_feature_id = result->feature_id;
+    }
+}
+
+static void *
+custom_node_provider_cb(
+	const struct ged_draw_command_scene_custom_node_request *request,
+	void *data)
+{
+    struct custom_node_provider_state *ctx =
+	(struct custom_node_provider_state *)data;
+    if (!ctx || !request)
+	return NULL;
+
+    ctx->call_count++;
+    ctx->saw_request =
+	BU_STR_EQUAL(request->feature_name, "custom::node") &&
+	BU_STR_EQUAL(request->owner_id, "custom") &&
+	BU_STR_EQUAL(request->owner_role, "command-result");
+    ctx->generation = request->generation;
+    ctx->local = request->local;
+    ctx->node = new SoSeparator;
+    return ctx->node;
+}
+
 static int
 feature_overlay_matches(BRLObolViewController *controller,
 	const char *name,
@@ -237,6 +391,25 @@ feature_overlay_matches(BRLObolViewController *controller,
 	overlay.lifecycle == lifecycle &&
 	overlay.order == order &&
 	BU_STR_EQUAL(overlay.sourcePath.getString(), name);
+}
+
+static SoBRLVListShape *
+first_feature_vlist(SoNode *node)
+{
+    if (!node)
+	return NULL;
+    if (node->isOfType(SoBRLVListShape::getClassTypeId()))
+	return static_cast<SoBRLVListShape *>(node);
+    if (!node->isOfType(SoGroup::getClassTypeId()))
+	return NULL;
+
+    SoGroup *group = static_cast<SoGroup *>(node);
+    for (int i = 0; i < group->getNumChildren(); i++) {
+	SoBRLVListShape *found = first_feature_vlist(group->getChild(i));
+	if (found)
+	    return found;
+    }
+    return NULL;
 }
 
 static SoBRLDatabaseSource *
@@ -591,6 +764,302 @@ exercise_mesh_source_local_publication(struct ged *gedp,
     return 0;
 }
 
+static int
+box3f_near(const SbBox3f &box,
+	float min_x,
+	float min_y,
+	float min_z,
+	float max_x,
+	float max_y,
+	float max_z)
+{
+    const SbVec3f bmin = box.getMin();
+    const SbVec3f bmax = box.getMax();
+    return fabsf(bmin[0] - min_x) <= 0.001f &&
+	fabsf(bmin[1] - min_y) <= 0.001f &&
+	fabsf(bmin[2] - min_z) <= 0.001f &&
+	fabsf(bmax[0] - max_x) <= 0.001f &&
+	fabsf(bmax[1] - max_y) <= 0.001f &&
+	fabsf(bmax[2] - max_z) <= 0.001f;
+}
+
+static int
+vlist_geometry_bounds(const SoBRLVListShape *shape, SbBox3f &bounds)
+{
+    bounds.makeEmpty();
+    if (!shape)
+	return 0;
+
+    const SoBRLVListShape *geometry = shape->getGeometrySource();
+    if (!geometry || geometry->point.getNum() <= 0)
+	return 0;
+
+    for (int i = 0; i < geometry->point.getNum(); i++)
+	bounds.extendBy(geometry->point[i]);
+    return bounds.isEmpty() ? 0 : 1;
+}
+
+static int
+mesh_geometry_bounds(const SoBRLMeshShape *shape, SbBox3f &bounds)
+{
+    bounds.makeEmpty();
+    if (!shape)
+	return 0;
+
+    const SoBRLMeshShape *geometry = shape->getGeometrySource();
+    if (!geometry || geometry->point.getNum() <= 0)
+	return 0;
+
+    for (int i = 0; i < geometry->point.getNum(); i++)
+	bounds.extendBy(geometry->point[i]);
+    return bounds.isEmpty() ? 0 : 1;
+}
+
+static int
+exercise_multi_instance_transform_reuse(struct ged *gedp,
+	SoBRLSceneController *controller)
+{
+    if (!gedp || !controller)
+	FAIL("multi-instance transform test needs GED and Obol scene state");
+
+    const int initial_source_count = controller->getDatabaseSourceCount();
+    const char *path_a =
+	"reuse_root.c/reuse_inst_a.c/reuse_shared.c/reuse_leaf.s";
+    const char *path_b =
+	"reuse_root.c/reuse_inst_b.c/reuse_shared.c@1/reuse_leaf.s@1";
+    const char *draw_reuse_root[2] = {"draw", "reuse_root.c"};
+    if (ged_exec_draw(gedp, 2, draw_reuse_root) != BRLCAD_OK)
+	FAIL("GED multi-instance transform root draw should succeed");
+
+    SoBRLDatabaseSource *source_a = source_for_representation(controller,
+	    path_a, SoBRLDatabaseSource::REPRESENTATION_WIRE);
+    SoBRLDatabaseSource *source_b = source_for_representation(controller,
+	    path_b, SoBRLDatabaseSource::REPRESENTATION_WIRE);
+    if (!source_a || !source_b)
+	FAIL("GED multi-instance root draw should create both transformed leaf sources");
+
+    BRLObolDatabaseSourceSummary summary_a;
+    BRLObolDatabaseSourceSummary summary_b;
+    if (!source_a->getSummary(summary_a) || !summary_a.valid ||
+	    !source_b->getSummary(summary_b) || !summary_b.valid)
+	FAIL("GED multi-instance transformed sources should report summaries");
+
+    SoBRLVListShape *shape_a = source_a->getRealizedShape();
+    SoBRLVListShape *shape_b = source_b->getRealizedShape();
+    const SoBRLVListShape *geometry_a =
+	shape_a ? shape_a->getGeometrySource() : NULL;
+    const SoBRLVListShape *geometry_b =
+	shape_b ? shape_b->getGeometrySource() : NULL;
+    if (!shape_a || !shape_b || !geometry_a || !geometry_b ||
+	    geometry_a == shape_a || geometry_b == shape_b ||
+	    geometry_a != geometry_b)
+	FAIL("GED multi-instance transformed sources should reuse one local geometry node");
+
+    SbBox3f local_bounds;
+    if (!vlist_geometry_bounds(shape_a, local_bounds) ||
+	    !box3f_near(local_bounds, -1.0f, -1.0f, -1.0f,
+		1.0f, 1.0f, 1.0f))
+	FAIL("GED multi-instance shared geometry should remain source-local");
+
+    if (!summary_a.sourceBoundsValid ||
+	    !box3f_near(summary_a.sourceBounds, -13.0f, 2.0f, -1.0f,
+		-11.0f, 4.0f, 1.0f) ||
+	    !summary_b.sourceBoundsValid ||
+	    !box3f_near(summary_b.sourceBounds, 17.0f, 2.0f, -1.0f,
+		19.0f, 4.0f, 1.0f))
+	FAIL("GED multi-instance source bounds should include explicit tree-walk transforms");
+
+    SbBox3f scene_bounds_a;
+    SbBox3f scene_bounds_b;
+    SbBox3f scene_bounds_root;
+    if (!controller->getSceneSubtreeBounds(path_a, TRUE, scene_bounds_a) ||
+	    !box3f_near(scene_bounds_a, -13.0f, 2.0f, -1.0f,
+		-11.0f, 4.0f, 1.0f) ||
+	    !controller->getSceneSubtreeBounds(path_b, TRUE, scene_bounds_b) ||
+	    !box3f_near(scene_bounds_b, 17.0f, 2.0f, -1.0f,
+		19.0f, 4.0f, 1.0f) ||
+	    !controller->getSceneSubtreeBounds("reuse_root.c", TRUE,
+		scene_bounds_root) ||
+	    !box3f_near(scene_bounds_root, -13.0f, 2.0f, -1.0f,
+		19.0f, 4.0f, 1.0f))
+	FAIL("GED multi-instance scene bounds should apply explicit transforms");
+
+    if (apply_mode_value_transaction(gedp, GED_DRAW_TXN_VISIBILITY,
+	    path_a, GED_DRAW_MODE_WIRE, 0.0, "multi-instance visibility"))
+	return 1;
+    if (!source_a->getSummary(summary_a) || !summary_a.valid ||
+	    !source_b->getSummary(summary_b) || !summary_b.valid ||
+	    summary_a.visible ||
+	    summary_b.visible ||
+	    shape_a->visible.getValue() ||
+	    shape_b->visible.getValue())
+	FAIL("GED multi-instance visibility should update repeated logical instances consistently");
+    if (apply_mode_value_transaction(gedp, GED_DRAW_TXN_VISIBILITY,
+	    path_a, GED_DRAW_MODE_WIRE, 1.0, "multi-instance visibility restore"))
+	return 1;
+    if (!source_a->getSummary(summary_a) || !summary_a.valid ||
+	    !source_b->getSummary(summary_b) || !summary_b.valid ||
+	    !summary_a.visible ||
+	    !summary_b.visible ||
+	    !shape_a->visible.getValue() ||
+	    !shape_b->visible.getValue())
+	FAIL("GED multi-instance visibility restore should update repeated logical instances consistently");
+
+    if (apply_mode_value_transaction(gedp, GED_DRAW_TXN_HIGHLIGHT,
+	    "reuse_root.c", GED_DRAW_MODE_WIRE, 1.0,
+	    "multi-instance highlight"))
+	return 1;
+    if (!source_a->getSummary(summary_a) || !summary_a.valid ||
+	    !source_b->getSummary(summary_b) || !summary_b.valid ||
+	    !summary_a.highlighted ||
+	    !summary_b.highlighted ||
+	    !shape_a->highlighted.getValue() ||
+	    !shape_b->highlighted.getValue())
+	FAIL("GED multi-instance highlight should update repeated logical instances consistently");
+    if (apply_mode_value_transaction(gedp, GED_DRAW_TXN_HIGHLIGHT,
+	    "reuse_root.c", GED_DRAW_MODE_WIRE, 0.0,
+	    "multi-instance highlight restore"))
+	return 1;
+    if (!source_a->getSummary(summary_a) || !summary_a.valid ||
+	    !source_b->getSummary(summary_b) || !summary_b.valid ||
+	    summary_a.highlighted ||
+	    summary_b.highlighted ||
+	    shape_a->highlighted.getValue() ||
+	    shape_b->highlighted.getValue())
+	FAIL("GED multi-instance highlight restore should update repeated logical instances consistently");
+
+    const SoBRLVListShape *seed_geometry = geometry_b;
+    if (summary_a.instanceKey.getLength() <= 0 ||
+	    controller->markDatabaseSourceInstanceStale(
+		summary_a.instanceKey.getString(),
+		SoBRLDatabaseSource::STALE_DRAW) <= 0)
+	FAIL("GED multi-instance direct source stale should target one transformed source");
+    if (!source_a->getSummary(summary_a) || !summary_a.valid ||
+	    !source_b->getSummary(summary_b) || !summary_b.valid ||
+	    !summary_a.stale ||
+	    !(summary_a.staleReason & SoBRLDatabaseSource::STALE_DRAW) ||
+	    summary_b.stale)
+	FAIL("GED multi-instance direct source stale should preserve sibling current state");
+    if (!controller->realizePending())
+	FAIL("GED multi-instance direct source redraw should realize pending source");
+    source_a = source_for_representation(controller, path_a,
+	    SoBRLDatabaseSource::REPRESENTATION_WIRE);
+    source_b = source_for_representation(controller, path_b,
+	    SoBRLDatabaseSource::REPRESENTATION_WIRE);
+    shape_a = source_a ? source_a->getRealizedShape() : NULL;
+    shape_b = source_b ? source_b->getRealizedShape() : NULL;
+    geometry_a = shape_a ? shape_a->getGeometrySource() : NULL;
+    geometry_b = shape_b ? shape_b->getGeometrySource() : NULL;
+    if (!source_a || !source_b ||
+	    !source_a->getSummary(summary_a) || !summary_a.valid ||
+	    !source_b->getSummary(summary_b) || !summary_b.valid ||
+	    summary_a.stale ||
+	    summary_b.stale ||
+	    !shape_a || !shape_b || !geometry_a || !geometry_b ||
+	    geometry_a != seed_geometry ||
+	    geometry_b != seed_geometry)
+	FAIL("GED multi-instance direct source redraw should reuse seeded sibling geometry");
+
+    ged_draw_index_stats_reset(gedp);
+    if (apply_mode_path_transaction(gedp, GED_DRAW_TXN_REDRAW,
+	    path_a, GED_DRAW_MODE_WIRE, "multi-instance redraw"))
+	return 1;
+    struct ged_draw_index_stats redraw_stats;
+    memset(&redraw_stats, 0, sizeof(redraw_stats));
+    ged_draw_index_stats_get(gedp, &redraw_stats);
+    if (redraw_stats.retained_drawtree_invocations ||
+	    redraw_stats.retained_shape_mutations ||
+	    redraw_stats.fallback_shape_scans ||
+	    redraw_stats.fallback_group_scans)
+	FAIL("GED multi-instance logical redraw should avoid retained fallback state");
+    source_a = source_for_representation(controller, path_a,
+	    SoBRLDatabaseSource::REPRESENTATION_WIRE);
+    source_b = source_for_representation(controller, path_b,
+	    SoBRLDatabaseSource::REPRESENTATION_WIRE);
+    shape_a = source_a ? source_a->getRealizedShape() : NULL;
+    shape_b = source_b ? source_b->getRealizedShape() : NULL;
+    geometry_a = shape_a ? shape_a->getGeometrySource() : NULL;
+    geometry_b = shape_b ? shape_b->getGeometrySource() : NULL;
+    if (!source_a || !source_b ||
+	    !source_a->getSummary(summary_a) || !summary_a.valid ||
+	    !source_b->getSummary(summary_b) || !summary_b.valid ||
+	    summary_a.stale ||
+	    summary_b.stale ||
+	    !shape_a || !shape_b || !geometry_a || !geometry_b ||
+	    geometry_a == shape_a || geometry_b == shape_b ||
+	    geometry_a != geometry_b)
+	FAIL("GED multi-instance logical redraw should preserve shared local geometry");
+
+    const char *draw_reuse_root_shaded[3] = {
+	"draw", "-m2", "reuse_root.c"
+    };
+    if (ged_exec_draw(gedp, 3, draw_reuse_root_shaded) != BRLCAD_OK)
+	FAIL("GED multi-instance shaded root draw should succeed");
+    SoBRLDatabaseSource *mesh_source_a =
+	source_for_representation(controller, path_a,
+		SoBRLDatabaseSource::REPRESENTATION_SHADED);
+    SoBRLDatabaseSource *mesh_source_b =
+	source_for_representation(controller, path_b,
+		SoBRLDatabaseSource::REPRESENTATION_SHADED);
+    BRLObolDatabaseSourceSummary mesh_summary_a;
+    BRLObolDatabaseSourceSummary mesh_summary_b;
+    if (!mesh_source_a || !mesh_source_b ||
+	    !mesh_source_a->getSummary(mesh_summary_a) ||
+	    !mesh_summary_a.valid ||
+	    !mesh_source_b->getSummary(mesh_summary_b) ||
+	    !mesh_summary_b.valid ||
+	    mesh_summary_a.realizedMeshCount <= 0 ||
+	    mesh_summary_b.realizedMeshCount <= 0)
+	FAIL("GED multi-instance shaded draw should create transformed mesh sources");
+    SoBRLMeshShape *mesh_a = mesh_source_a->getRealizedMesh();
+    SoBRLMeshShape *mesh_b = mesh_source_b->getRealizedMesh();
+    const SoBRLMeshShape *mesh_geometry_a =
+	mesh_a ? mesh_a->getGeometrySource() : NULL;
+    const SoBRLMeshShape *mesh_geometry_b =
+	mesh_b ? mesh_b->getGeometrySource() : NULL;
+    if (!mesh_a || !mesh_b || !mesh_geometry_a || !mesh_geometry_b ||
+	    mesh_geometry_a == mesh_a || mesh_geometry_b == mesh_b ||
+	    mesh_geometry_a != mesh_geometry_b)
+	FAIL("GED multi-instance shaded sources should reuse one local mesh node");
+    SbBox3f mesh_local_bounds;
+    if (!mesh_geometry_bounds(mesh_a, mesh_local_bounds) ||
+	    !box3f_near(mesh_local_bounds, -1.0f, -1.0f, -1.0f,
+		1.0f, 1.0f, 1.0f))
+	FAIL("GED multi-instance shaded shared mesh should remain source-local");
+    if (!mesh_summary_a.sourceBoundsValid ||
+	    !box3f_near(mesh_summary_a.sourceBounds, -13.0f, 2.0f, -1.0f,
+		-11.0f, 4.0f, 1.0f) ||
+	    !mesh_summary_b.sourceBoundsValid ||
+	    !box3f_near(mesh_summary_b.sourceBounds, 17.0f, 2.0f, -1.0f,
+		19.0f, 4.0f, 1.0f))
+	FAIL("GED multi-instance shaded source bounds should apply transforms");
+
+    const char *autoview_cmd[2] = {"autoview", NULL};
+    if (ged_exec_autoview(gedp, 1, autoview_cmd) != BRLCAD_OK)
+	FAIL("GED multi-instance autoview should succeed");
+    mat_t view_center_mat;
+    point_t view_center;
+    ged_view_context_center_get(view_center_mat, ged_draw_active_view_ctx(gedp));
+    MAT_DELTAS_GET_NEG(view_center, view_center_mat);
+    if (ged_view_context_size_get(ged_draw_active_view_ctx(gedp)) < 31.9 ||
+	    fabs(view_center[X] - 3.0) > 0.1)
+	FAIL("GED multi-instance autoview should use transformed scene bounds");
+
+    const char *erase_reuse_root[2] = {"erase", "reuse_root.c"};
+    if (ged_exec_erase(gedp, 2, erase_reuse_root) != BRLCAD_OK)
+	FAIL("GED multi-instance transform root erase should succeed");
+    if (source_for_path(controller, path_a) ||
+	    source_for_path(controller, path_b) ||
+	    source_for_representation(controller, path_a,
+		SoBRLDatabaseSource::REPRESENTATION_SHADED) ||
+	    source_for_representation(controller, path_b,
+		SoBRLDatabaseSource::REPRESENTATION_SHADED) ||
+	    controller->getDatabaseSourceCount() != initial_source_count)
+	FAIL("GED multi-instance transform cleanup should restore prior source state");
+
+    return 0;
+}
+
 static SoBRLVListShape *
 auxiliary_for_path_variant(SoBRLDatabaseSource *source, const char *path)
 {
@@ -665,6 +1134,92 @@ record_source_state_cb(const struct ged_draw_shape_record *record,
     state->lineWidth = record->line_width;
     state->transparency = record->transparency;
     state->pathHash = record->path_hash;
+    return 0;
+}
+
+struct record_source_mode_state {
+    record_source_state recordState;
+    int matchDrawMode;
+};
+
+static int
+record_source_mode_state_cb(const struct ged_draw_shape_record *record,
+	void *userdata)
+{
+    record_source_mode_state *state =
+	static_cast<record_source_mode_state *>(userdata);
+    if (!state || !record)
+	return 1;
+    if (record->draw_mode != state->matchDrawMode)
+	return 1;
+    return record_source_state_cb(record, &state->recordState);
+}
+
+static int
+exercise_evaluated_wire_shape_ref_realize_context(struct ged *gedp,
+	SoBRLSceneController *controller,
+	const char *path)
+{
+    if (!gedp || !controller || !path)
+	FAIL("evaluated-wire realize-context test needs GED and Obol scene state");
+
+    const int mode = GED_DRAW_MODE_EVAL_WIRE;
+    const int representation = SoBRLDatabaseSource::REPRESENTATION_EVAL_WIRE;
+    (void)ged_draw_source_erase_path_in_active_scope(gedp, path,
+	    ged_draw_active_view_ctx(gedp), mode);
+
+    char mode_arg[16] = {0};
+    snprintf(mode_arg, sizeof(mode_arg), "-m%d", mode);
+    const char *draw_mode_cmd[4] = {"draw", mode_arg, path, NULL};
+    if (ged_exec_draw(gedp, 3, draw_mode_cmd) != BRLCAD_OK)
+	FAIL("evaluated-wire realize-context setup draw should succeed");
+
+    SoBRLDatabaseSource *source =
+	source_for_representation(controller, path, representation);
+    BRLObolDatabaseSourceSummary summary;
+    if (!source || !source->getSummary(summary) || !summary.valid ||
+	    summary.realizationStatus != SoBRLDatabaseSource::REALIZED ||
+	    summary.realizedShapeCount <= 0 ||
+	    summary.instanceKey.getLength() == 0)
+	FAIL("evaluated-wire realize-context setup should create a realized mode source");
+
+    const std::string instance_key(summary.instanceKey.getString());
+    if (controller->markDatabaseSourceInstanceStale(instance_key.c_str(),
+	    SoBRLDatabaseSource::STALE_SOURCE) < 0)
+	FAIL("evaluated-wire realize-context setup should mark the mode source stale");
+    if (!source->getSummary(summary) || !summary.valid ||
+	    !summary.stale ||
+	    summary.realizationStatus != SoBRLDatabaseSource::UNREALIZED)
+	FAIL("evaluated-wire source should be stale before realize-context");
+
+    record_source_mode_state eval_state = {};
+    eval_state.recordState.ref = GED_DRAW_SHAPE_REF_NULL;
+    eval_state.recordState.group = GED_DRAW_GROUP_REF_NULL;
+    eval_state.recordState.matchPath = path;
+    eval_state.matchDrawMode = mode;
+    ged_draw_foreach_shape_record(gedp, record_source_mode_state_cb,
+	    &eval_state);
+    if (!eval_state.recordState.found ||
+	    ged_draw_shape_ref_is_null(eval_state.recordState.ref))
+	FAIL("evaluated-wire shape record should produce a mode-specific ref");
+
+    struct ged_draw_shape_record record;
+    memset(&record, 0, sizeof(record));
+    if (!ged_draw_shape_record_get(gedp, eval_state.recordState.ref,
+	    &record) || record.draw_mode != mode)
+	FAIL("evaluated-wire shape ref should retain its mode identity");
+
+    if (!ged_draw_shape_ref_realize_context(gedp, eval_state.recordState.ref,
+	    ged_draw_active_view_ctx(gedp)))
+	FAIL("evaluated-wire shape-ref realize-context should succeed");
+    if (!source->getSummary(summary) || !summary.valid ||
+	    summary.stale ||
+	    summary.realizationStatus != SoBRLDatabaseSource::REALIZED ||
+	    summary.realizedShapeCount <= 0)
+	FAIL("evaluated-wire shape-ref realize-context should refresh the mode source");
+
+    (void)ged_draw_source_erase_path_in_active_scope(gedp, path,
+	    ged_draw_active_view_ctx(gedp), mode);
     return 0;
 }
 
@@ -1075,10 +1630,13 @@ main(int argc, char **argv)
 		BRLObolOverlayOrder::PostTransparent))
 	FAIL("GED diagnostic line-layer replacement should stamp typed Obol diagnostic metadata");
 
+    struct command_result_callback_state command_callback_state = {};
     struct ged_draw_command_scene_desc command_scene_desc =
 	GED_DRAW_COMMAND_SCENE_DESC_INIT;
     command_scene_desc.owner_id = "rtcheck";
     command_scene_desc.owner_role = "command-result";
+    command_scene_desc.result_cb = command_result_cb;
+    command_scene_desc.result_cb_data = &command_callback_state;
     struct ged_draw_command_scene *command_scene =
 	ged_draw_command_scene_begin(feature_view_ctx, &command_scene_desc);
     if (!command_scene)
@@ -1093,8 +1651,21 @@ main(int argc, char **argv)
     command_layer.points = feature_points;
     command_layer.commands = feature_cmds;
     command_layer.point_count = 2;
+    struct ged_draw_command_scene_metadata command_metadata[2] = {
+	{"result.kind", "overlap"},
+	{"result.count", "1"}
+    };
+    struct ged_draw_command_scene_metadata command_primitive_metadata[2] = {
+	{"overlap.objects", "box.s cone.s"},
+	{"overlap.depth", "0.25"}
+    };
     if (!ged_draw_command_scene_line_layers_replace(command_scene,
 	    "rtcheck::overlaps", &command_layer, 1, &command_style) ||
+	    !ged_draw_command_scene_feature_metadata_replace(command_scene,
+		"rtcheck::overlaps", command_metadata, 2) ||
+	    !ged_draw_command_scene_feature_primitive_metadata_replace(
+		command_scene, "rtcheck::overlaps", 0,
+		command_primitive_metadata, 2) ||
 	    !ged_draw_command_scene_commit(command_scene))
 	FAIL("GED command-scene line-layer replacement should commit");
     BRLObolFeatureHandle command_handle =
@@ -1111,11 +1682,96 @@ main(int argc, char **argv)
 		"command-result") ||
 	    !command_record.style.hasSelectable ||
 	    command_record.style.selectable ||
+	    command_record.metadata.size() != 2 ||
+	    command_record.primitiveMetadata.size() != 1 ||
+	    command_record.primitiveMetadata[0].primitiveIndex != 0 ||
+	    command_record.primitiveMetadata[0].metadata.size() != 2 ||
+	    !BU_STR_EQUAL(command_record.metadata[0].key.getString(),
+		"result.kind") ||
+	    !BU_STR_EQUAL(command_record.metadata[0].value.getString(),
+		"overlap") ||
+	    !BU_STR_EQUAL(command_record.metadata[1].key.getString(),
+		"result.count") ||
+	    !BU_STR_EQUAL(command_record.metadata[1].value.getString(), "1") ||
 	    !feature_overlay_matches(owned_controller, "rtcheck::overlaps",
 		BRLObolOverlayClass::CommandResult,
 		BRLObolOverlayLifecycle::PerCommand,
 		BRLObolOverlayOrder::PostTransparent))
 	FAIL("GED command-scene result should be shared, owned, selectable-aware command content");
+    if (command_callback_state.accepted_count < 2 ||
+	    command_callback_state.updated_count < 2 ||
+	    !command_callback_state.saw_line_layers_update ||
+	    !command_callback_state.saw_metadata_update ||
+	    !command_callback_state.saw_primitive_metadata_update ||
+	    command_callback_state.line_layers_feature_id != command_handle.id ||
+	    command_callback_state.metadata_feature_id != command_handle.id ||
+	    command_callback_state.primitive_metadata_feature_id !=
+		command_handle.id)
+	FAIL("GED command-scene result callback should report line-layer and metadata updates with feature handles");
+    struct bu_vls primitive_key = BU_VLS_INIT_ZERO;
+    struct bu_vls primitive_value = BU_VLS_INIT_ZERO;
+    if (ged_draw_view_context_feature_primitive_metadata_count(
+		feature_view_ctx, "rtcheck::overlaps", 0) != 2 ||
+	    !ged_draw_view_context_feature_primitive_metadata_copy(
+		feature_view_ctx, "rtcheck::overlaps", 0, 0,
+		&primitive_key, &primitive_value) ||
+	    !BU_STR_EQUAL(bu_vls_cstr(&primitive_key), "overlap.objects") ||
+	    !BU_STR_EQUAL(bu_vls_cstr(&primitive_value), "box.s cone.s")) {
+	bu_vls_free(&primitive_key);
+	bu_vls_free(&primitive_value);
+	FAIL("GED command-scene primitive metadata should read back through neutral view APIs");
+    }
+    bu_vls_free(&primitive_key);
+    bu_vls_free(&primitive_value);
+
+    struct bu_vls resolved_feature = BU_VLS_INIT_ZERO;
+    int resolved_primitive = -1;
+    int primitive_index = -1;
+    if (!ged_draw_view_context_feature_pick_primitive_resolve(
+		feature_view_ctx, "rtcheck::overlaps/yellow", 0, 1, 1,
+		&resolved_feature, &resolved_primitive) ||
+	    !BU_STR_EQUAL(bu_vls_cstr(&resolved_feature),
+		"rtcheck::overlaps") ||
+	    resolved_primitive != 0 ||
+	    ged_draw_view_context_feature_selected_primitive_count(
+		feature_view_ctx, "rtcheck::overlaps") != 1 ||
+	    ged_draw_view_context_feature_highlighted_primitive_count(
+		feature_view_ctx, "rtcheck::overlaps") != 1 ||
+	    !ged_draw_view_context_feature_selected_primitive_at(
+		feature_view_ctx, "rtcheck::overlaps", 0, &primitive_index) ||
+	    primitive_index != 0 ||
+	    !ged_draw_view_context_feature_highlighted_primitive_at(
+		feature_view_ctx, "rtcheck::overlaps", 0, &primitive_index) ||
+	    primitive_index != 0) {
+	bu_vls_free(&resolved_feature);
+	FAIL("GED command-scene child primitive picks should resolve and set parent primitive state");
+    }
+    bu_vls_free(&resolved_feature);
+    if (ged_draw_view_context_feature_pick_primitive_resolve(
+	    feature_view_ctx, "rtcheck::overlaps/yellow", 1, 0, 0, NULL,
+	    &resolved_primitive))
+	FAIL("GED command-scene child primitive resolver should reject out-of-range picks");
+    struct ged_draw_view_feature_summary command_summary =
+	GED_DRAW_VIEW_FEATURE_SUMMARY_INIT;
+    if (!ged_draw_view_context_feature_summary(feature_view_ctx,
+	    "rtcheck::overlaps", &command_summary) ||
+	    command_summary.primitive_metadata_count != 1 ||
+	    command_summary.selected_primitive_count != 1 ||
+	    command_summary.highlighted_primitive_count != 1)
+	FAIL("GED command-scene result summary should report primitive state");
+    if (!owned_controller->features().record(command_handle,
+		command_record) ||
+	    command_record.selectedPrimitives.size() != 1 ||
+	    command_record.highlightedPrimitives.size() != 1)
+	FAIL("GED command-scene result record should preserve primitive state");
+    SoBRLVListShape *command_vlist = first_feature_vlist(
+	    owned_controller->features().node(command_handle));
+    if (!command_vlist ||
+	    command_vlist->selectedPrimitive.getNum() != 1 ||
+	    command_vlist->selectedPrimitive[0] != 0 ||
+	    command_vlist->highlightedPrimitive.getNum() != 1 ||
+	    command_vlist->highlightedPrimitive[0] != 0)
+	FAIL("GED command-scene result primitive state should reach realized Coin VLIST");
 
     command_scene = ged_draw_command_scene_begin(feature_view_ctx,
 	    &command_scene_desc);
@@ -1125,6 +1781,147 @@ main(int argc, char **argv)
 	    !ged_draw_command_scene_commit(command_scene) ||
 	    owned_controller->features().exists("rtcheck::overlaps"))
 	FAIL("GED command-scene remove-prefix should remove owned shared command results");
+    if (command_callback_state.removed_count < 1 ||
+	    !command_callback_state.saw_remove_prefix)
+	FAIL("GED command-scene result callback should report owner-scoped feature removal");
+
+    command_scene_desc.generation = 10;
+    struct ged_draw_command_scene *stale_scene =
+	ged_draw_command_scene_begin(feature_view_ctx, &command_scene_desc);
+    if (!stale_scene)
+	FAIL("GED command-scene stale generation test should create old scene");
+
+    point_t latest_points[2] = {
+	{0.0, 0.0, 0.0},
+	{0.0, 2.0, 0.0}
+    };
+    struct ged_draw_view_line_layer_data latest_layer =
+	GED_DRAW_VIEW_LINE_LAYER_DATA_INIT;
+    latest_layer.name = "rtcheck::generation/latest";
+    latest_layer.points = latest_points;
+    latest_layer.commands = feature_cmds;
+    latest_layer.point_count = 2;
+    command_scene_desc.generation = 11;
+    command_scene = ged_draw_command_scene_begin(feature_view_ctx,
+	    &command_scene_desc);
+    if (!command_scene ||
+	    !ged_draw_command_scene_line_layers_replace(command_scene,
+		"rtcheck::generation", &latest_layer, 1, &command_style) ||
+	    !ged_draw_command_scene_commit(command_scene))
+	FAIL("GED command-scene latest generation should publish");
+
+    point_t stale_points[2] = {
+	{0.0, 0.0, 0.0},
+	{0.0, 3.0, 0.0}
+    };
+    struct ged_draw_view_line_layer_data stale_layer =
+	GED_DRAW_VIEW_LINE_LAYER_DATA_INIT;
+    stale_layer.name = "rtcheck::generation/stale";
+    stale_layer.points = stale_points;
+    stale_layer.commands = feature_cmds;
+    stale_layer.point_count = 2;
+    if (ged_draw_command_scene_line_layers_replace(stale_scene,
+	    "rtcheck::generation", &stale_layer, 1, &command_style) ||
+	    ged_draw_command_scene_commit(stale_scene))
+	FAIL("GED command-scene stale generation should be rejected");
+    if (command_callback_state.failed_count < 2 ||
+	    !command_callback_state.saw_stale_failure ||
+	    !command_callback_state.saw_commit_failure)
+	FAIL("GED command-scene result callback should report stale generation rejection");
+
+    command_handle = owned_controller->features().find("rtcheck::generation",
+	    BRLOBOL_FEATURE_SCOPE_SHARED);
+    if (!command_handle.isValid() ||
+	    !owned_controller->features().record(command_handle,
+		command_record) ||
+	    command_record.owner.generation != 11 ||
+	    command_record.points.size() != 2 ||
+	    command_record.points[1][1] != 2.0f)
+	FAIL("GED command-scene stale generation should not replace latest result");
+    command_scene = ged_draw_command_scene_begin(feature_view_ctx,
+	    &command_scene_desc);
+    if (!command_scene ||
+	    ged_draw_command_scene_features_remove_prefix(command_scene,
+		"rtcheck::generation") != 1 ||
+	    !ged_draw_command_scene_commit(command_scene) ||
+	    owned_controller->features().exists("rtcheck::generation"))
+	FAIL("GED command-scene generation cleanup should remove latest result");
+
+    struct custom_node_provider_state custom_provider_state = {};
+    struct ged_draw_view_feature_style custom_style =
+	GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+    custom_style.visible = 1;
+    custom_style.selectable = 1;
+    struct ged_draw_command_scene_metadata custom_metadata[1] = {
+	{"result.kind", "custom-node"}
+    };
+    command_scene_desc.owner_id = "custom";
+    command_scene_desc.owner_role = "command-result";
+    command_scene_desc.generation = 33;
+    command_scene = ged_draw_command_scene_begin(feature_view_ctx,
+	    &command_scene_desc);
+    if (!command_scene ||
+	    !ged_draw_command_scene_custom_node_replace(command_scene,
+		"custom::node", custom_node_provider_cb,
+		&custom_provider_state, &custom_style) ||
+	    !ged_draw_command_scene_feature_metadata_replace(command_scene,
+		"custom::node", custom_metadata, 1) ||
+	    !ged_draw_command_scene_commit(command_scene))
+	FAIL("GED command-scene custom Coin node provider should commit");
+    if (custom_provider_state.call_count != 1 ||
+	    !custom_provider_state.saw_request ||
+	    custom_provider_state.generation != 33 ||
+	    custom_provider_state.local)
+	FAIL("GED command-scene custom Coin provider should receive owner/scope request metadata");
+    BRLObolFeatureHandle custom_handle =
+	owned_controller->features().find("custom::node",
+		BRLOBOL_FEATURE_SCOPE_SHARED);
+    BRLObolFeatureRecord custom_record;
+    if (!custom_handle.isValid() ||
+	    !owned_controller->features().record(custom_handle,
+		custom_record) ||
+	    custom_record.kind != BRLObolFeatureKind::CustomNode ||
+	    custom_record.scope != BRLObolFeatureScope::Shared ||
+	    custom_record.owner.generation != 33 ||
+	    custom_record.metadata.size() != 1 ||
+	    !BU_STR_EQUAL(custom_record.metadata[0].value.getString(),
+		"custom-node") ||
+	    owned_controller->features().node(custom_handle) !=
+		custom_provider_state.node ||
+	    !feature_overlay_matches(owned_controller, "custom::node",
+		BRLObolOverlayClass::CommandResult,
+		BRLObolOverlayLifecycle::PerCommand,
+		BRLObolOverlayOrder::PostTransparent))
+	FAIL("GED command-scene custom Coin node should be an owned shared command-result feature");
+    int custom_primitive = 7;
+    if (!ged_draw_view_context_feature_selected_primitives_replace(
+		feature_view_ctx, "custom::node", &custom_primitive, 1) ||
+	    !ged_draw_view_context_feature_highlighted_primitives_replace(
+		feature_view_ctx, "custom::node", &custom_primitive, 1) ||
+	    !owned_controller->features().record(custom_handle,
+		custom_record) ||
+	    custom_record.selectedPrimitives.size() != 1 ||
+	    custom_record.selectedPrimitives[0] != 7 ||
+	    custom_record.highlightedPrimitives.size() != 1 ||
+	    custom_record.highlightedPrimitives[0] != 7 ||
+	    owned_controller->features().node(custom_handle) !=
+		custom_provider_state.node)
+	FAIL("GED command-scene custom Coin node should preserve primitive state without replacing the provider node");
+    if (!command_callback_state.saw_custom_update ||
+	    command_callback_state.custom_feature_id != custom_handle.id)
+	FAIL("GED command-scene custom Coin node should report result callbacks");
+    command_scene = ged_draw_command_scene_begin(feature_view_ctx,
+	    &command_scene_desc);
+    if (!command_scene ||
+	    ged_draw_command_scene_features_remove_prefix(command_scene,
+		"custom::") != 1 ||
+	    !ged_draw_command_scene_commit(command_scene) ||
+	    owned_controller->features().exists("custom::node"))
+	FAIL("GED command-scene custom Coin node cleanup should use owner-scoped removal");
+
+    command_scene_desc.generation = 0;
+    command_scene_desc.result_cb = NULL;
+    command_scene_desc.result_cb_data = NULL;
 
     FILE *nirt_plot = tmpfile();
     if (!nirt_plot)
@@ -1139,7 +1936,7 @@ main(int argc, char **argv)
     rewind(nirt_plot);
     if (_ged_draw_uplot_to_command_scene_feature(gedp, nirt_plot,
 	    "query_ray", 1.0, PL_OUTPUT_MODE_BINARY, "nirt",
-	    "command-result", "query_ray") != BRLCAD_OK) {
+	    "command-result", "query_ray", "query-ray", 0) != BRLCAD_OK) {
 	fclose(nirt_plot);
 	FAIL("NIRT/qray uplot import should publish through command-scene ownership");
     }
@@ -1157,6 +1954,19 @@ main(int argc, char **argv)
 		"command-result") ||
 	    nirt_record.layers.size() != 1 ||
 	    nirt_record.points.size() != 2 ||
+	    nirt_record.metadata.size() < 6 ||
+	    !BU_STR_EQUAL(nirt_record.metadata[0].key.getString(),
+		"result.feature") ||
+	    !BU_STR_EQUAL(nirt_record.metadata[0].value.getString(),
+		"query_ray") ||
+	    !BU_STR_EQUAL(nirt_record.metadata[1].key.getString(),
+		"result.format") ||
+	    !BU_STR_EQUAL(nirt_record.metadata[1].value.getString(),
+		"uplot-line-layers") ||
+	    !BU_STR_EQUAL(nirt_record.metadata[5].key.getString(),
+		"result.kind") ||
+	    !BU_STR_EQUAL(nirt_record.metadata[5].value.getString(),
+		"query-ray") ||
 	    !feature_overlay_matches(owned_controller, "query_ray",
 		BRLObolOverlayClass::CommandResult,
 		BRLObolOverlayLifecycle::PerCommand,
@@ -1171,6 +1981,131 @@ main(int argc, char **argv)
 	    !ged_draw_command_scene_commit(command_scene) ||
 	    owned_controller->features().exists("query_ray"))
 	FAIL("NIRT/qray command-scene cleanup should remove owned shared command results");
+
+    struct bg_line_layer_builder *builder_publish =
+	bg_line_layer_builder_create();
+    if (!builder_publish)
+	FAIL("command-scene builder publish test should allocate a builder");
+    point_t builder_a = {0.0, 0.0, 0.0};
+    point_t builder_b = {0.0, 1.0, 0.0};
+    if (!bg_line_layer_builder_add(builder_publish, 255, 255, 0,
+		builder_a, BG_GEOMETRY_LINE_MOVE) ||
+	    !bg_line_layer_builder_add(builder_publish, 255, 255, 0,
+		builder_b, BG_GEOMETRY_LINE_DRAW)) {
+	bg_line_layer_builder_free(builder_publish);
+	FAIL("command-scene builder publish test should accept line geometry");
+    }
+    if (_ged_line_layer_builder_publish_command_scene_feature(gedp,
+	    "nmg::_helper_test", builder_publish, "nmg",
+	    "command-result", "nmg::_helper_test", "nmg-test", 0) != BRLCAD_OK) {
+	bg_line_layer_builder_free(builder_publish);
+	FAIL("line-layer builder helper should publish through command-scene ownership");
+    }
+    bg_line_layer_builder_free(builder_publish);
+    BRLObolFeatureHandle builder_handle =
+	owned_controller->features().find("nmg::_helper_test",
+		BRLOBOL_FEATURE_SCOPE_SHARED);
+    BRLObolFeatureRecord builder_record;
+    if (!builder_handle.isValid() ||
+	    !owned_controller->features().record(builder_handle,
+		builder_record) ||
+	    builder_record.kind != BRLObolFeatureKind::LineLayer ||
+	    builder_record.scope != BRLObolFeatureScope::Shared ||
+	    !BU_STR_EQUAL(builder_record.owner.ownerId.getString(), "nmg") ||
+	    !BU_STR_EQUAL(builder_record.owner.ownerRole.getString(),
+		"command-result") ||
+	    builder_record.points.size() != 2 ||
+	    builder_record.metadata.size() < 6 ||
+	    !BU_STR_EQUAL(builder_record.metadata[1].key.getString(),
+		"result.format") ||
+	    !BU_STR_EQUAL(builder_record.metadata[1].value.getString(),
+		"line-layer-builder") ||
+	    !BU_STR_EQUAL(builder_record.metadata[5].key.getString(),
+		"result.kind") ||
+	    !BU_STR_EQUAL(builder_record.metadata[5].value.getString(),
+		"nmg-test") ||
+	    !feature_overlay_matches(owned_controller, "nmg::_helper_test",
+		BRLObolOverlayClass::CommandResult,
+		BRLObolOverlayLifecycle::PerCommand,
+		BRLObolOverlayOrder::PostTransparent))
+	FAIL("line-layer builder helper should preserve shared owned command-result metadata");
+    command_scene_desc.owner_id = "nmg";
+    command_scene = ged_draw_command_scene_begin(feature_view_ctx,
+	    &command_scene_desc);
+    if (!command_scene ||
+	    ged_draw_command_scene_features_remove_prefix(command_scene,
+		"nmg::_helper_test") != 1 ||
+	    !ged_draw_command_scene_commit(command_scene) ||
+	    owned_controller->features().exists("nmg::_helper_test"))
+	FAIL("line-layer builder helper result should clean up by owner-scoped prefix");
+
+    struct bg_line_layer_builder *builder_generation =
+	bg_line_layer_builder_create();
+    if (!builder_generation)
+	FAIL("command-scene builder generation test should create builder");
+    point_t builder_latest_b = {0.0, 2.0, 0.0};
+    if (!bg_line_layer_builder_add(builder_generation, 255, 255, 0,
+		builder_a, BG_GEOMETRY_LINE_MOVE) ||
+	    !bg_line_layer_builder_add(builder_generation, 255, 255, 0,
+		builder_latest_b, BG_GEOMETRY_LINE_DRAW)) {
+	bg_line_layer_builder_free(builder_generation);
+	FAIL("command-scene builder generation test should accept latest geometry");
+    }
+    if (_ged_line_layer_builder_publish_command_scene_feature(gedp,
+	    "nmg::_helper_generation", builder_generation, "nmg",
+	    "command-result", "nmg::_helper_generation", "nmg-generation",
+	    22) != BRLCAD_OK) {
+	bg_line_layer_builder_free(builder_generation);
+	FAIL("line-layer builder helper should publish latest generation");
+    }
+    bg_line_layer_builder_free(builder_generation);
+
+    builder_generation = bg_line_layer_builder_create();
+    if (!builder_generation)
+	FAIL("command-scene builder stale generation test should create builder");
+    point_t builder_stale_b = {0.0, 3.0, 0.0};
+    if (!bg_line_layer_builder_add(builder_generation, 255, 255, 0,
+		builder_a, BG_GEOMETRY_LINE_MOVE) ||
+	    !bg_line_layer_builder_add(builder_generation, 255, 255, 0,
+		builder_stale_b, BG_GEOMETRY_LINE_DRAW)) {
+	bg_line_layer_builder_free(builder_generation);
+	FAIL("command-scene builder stale generation test should accept stale geometry");
+    }
+    if (_ged_line_layer_builder_publish_command_scene_feature(gedp,
+	    "nmg::_helper_generation", builder_generation, "nmg",
+	    "command-result", "nmg::_helper_generation", "nmg-generation",
+	    21) == BRLCAD_OK) {
+	bg_line_layer_builder_free(builder_generation);
+	FAIL("line-layer builder helper should reject stale generation without fallback");
+    }
+    bg_line_layer_builder_free(builder_generation);
+
+    builder_handle = owned_controller->features().find(
+	    "nmg::_helper_generation", BRLOBOL_FEATURE_SCOPE_SHARED);
+    if (!builder_handle.isValid() ||
+	    !owned_controller->features().record(builder_handle,
+		builder_record) ||
+	    builder_record.owner.generation != 22 ||
+	    builder_record.points.size() != 2 ||
+	    builder_record.points[1][1] != 2.0f ||
+	    builder_record.metadata.size() < 7 ||
+	    !BU_STR_EQUAL(builder_record.metadata[5].value.getString(),
+		"nmg-generation") ||
+	    !BU_STR_EQUAL(builder_record.metadata[6].key.getString(),
+		"result.generation") ||
+	    !BU_STR_EQUAL(builder_record.metadata[6].value.getString(), "22"))
+	FAIL("line-layer builder helper stale generation should not replace latest result");
+    command_scene_desc.owner_id = "nmg";
+    command_scene_desc.generation = 22;
+    command_scene = ged_draw_command_scene_begin(feature_view_ctx,
+	    &command_scene_desc);
+    if (!command_scene ||
+	    ged_draw_command_scene_features_remove_prefix(command_scene,
+		"nmg::_helper_generation") != 1 ||
+	    !ged_draw_command_scene_commit(command_scene) ||
+	    owned_controller->features().exists("nmg::_helper_generation"))
+	FAIL("line-layer builder helper generation result should clean up by owner-scoped prefix");
+    command_scene_desc.generation = 0;
 
     struct rt_preview_callback_state rt_preview_state = {77, 0, 0};
     struct rt_view_edit_preview_callbacks rt_preview_callbacks =
@@ -1419,6 +2354,9 @@ main(int argc, char **argv)
 	    "box.s", GED_DRAW_MODE_EVAL_WIRE,
 	    SoBRLDatabaseSource::REPRESENTATION_EVAL_WIRE, 1, 0, 1,
 	    "evaluated-wire"))
+	return 1;
+    if (exercise_evaluated_wire_shape_ref_realize_context(gedp, owned_scene,
+	    "box.s"))
 	return 1;
     if (exercise_mode_specific_source_lifecycle(gedp, owned_scene,
 	    "box.s", GED_DRAW_MODE_HIDDEN_LINE,
@@ -4084,6 +5022,8 @@ main(int argc, char **argv)
 
     if (exercise_mesh_source_local_publication(gedp, owned_scene,
 	    "box.s"))
+	return 1;
+    if (exercise_multi_instance_transform_reuse(gedp, owned_scene))
 	return 1;
 
     ged_draw_obol_scene_controller_detach(gedp);

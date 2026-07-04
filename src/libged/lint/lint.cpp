@@ -39,6 +39,7 @@ extern "C" {
 #include "ged/draw.h"
 #include "ged/event_txn.h"
 #include "./ged_lint.h"
+#include "../ged_private.h"
 
 lint_data::lint_data()
 {
@@ -93,21 +94,15 @@ lint_data::plot_publish(const char *name)
     if (!do_plot || !gedp || !name)
 	return;
 
-    void *view_ctx = ged_view_active_ctx(gedp);
-    if (!view_ctx)
-	return;
-
     struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
     unsigned char rgb[3] = {255, 255, 0};
     if (color)
 	bu_color_to_rgb_chars(color, rgb);
     style.color_valid = 1;
     VSET(style.color, rgb[0], rgb[1], rgb[2]);
-    if (plot_point_count)
-	(void)ged_draw_view_context_lines_replace(view_ctx, name, 0,
-		(const point_t *)plot_points, plot_cmds, plot_point_count, &style);
-    else
-	(void)ged_draw_view_context_feature_remove(view_ctx, name);
+    (void)_ged_line_set_publish_command_scene_feature(gedp, name,
+	    (const point_t *)plot_points, plot_cmds, plot_point_count, &style,
+	    "lint", "command-result", NULL, "lint-visual", 0);
 }
 
 std::string

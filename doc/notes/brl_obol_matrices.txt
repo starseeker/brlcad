@@ -56,6 +56,24 @@ local geometry, and gives each visible leaf an explicit instance transform.
 The visible leaf shape keeps path identity and draw/edit state, while the
 shared node is geometry only.
 
+Repeated instances of the same primitive or comb tree must reuse that local
+geometry when they can.  The current realization action seeds its temporary
+geometry cache from already-current realized sources before realizing stale
+ones, so separate GED draw transactions can still share local geometry for
+later transformed instances.  This is not a persistent cross-refresh cache:
+database edits, direct geometry edits, or stale sources must still rebuild
+through the normal realization path until an explicit persistent key and
+invalidation policy exists.
+
+User-level GED display transactions operate on logical displayed database
+paths, not internal suffixed Obol instance paths.  Visibility and highlight
+updates therefore apply consistently to all matching repeated leaf instances
+for the requested object family.  Narrow refresh of one realized source uses
+the explicit `SoBRLDatabaseSource::instanceKey` path through
+`SoBRLSceneController::markDatabaseSourceInstanceStale`; realization then
+keeps geometry source-local and can seed rebuilt instances from current
+siblings.
+
 GED draw transactions follow the same leaf-instance boundary for normal
 database draw modes.  Obol-owned wire, shaded-BoT, shaded, and hidden-line
 draw requests are expanded with `db_walk_tree_leaf_instances`; each resulting

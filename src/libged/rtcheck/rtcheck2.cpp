@@ -46,10 +46,13 @@ struct ged_rtcheck {
     FILE *fp;
     struct ged_uplot_stream *uplot;
     double csize;
+    uint64_t generation;
     void *chan;
     int read_failed;
     int draw_read_failed;
 };
+
+static uint64_t rtcheck_command_generation = 0;
 
 /* Finalize an rtcheck subprocess: wait, free the uplot stream, free the
  * ged_subprocess and ged_rtcheck.  This MUST be called on the GUI
@@ -141,7 +144,8 @@ rtcheck_vector_handler(void *clientData, int type)
 	// scoped cleanup.
 	const char *sname = "rtcheck::";
 	(void)_ged_uplot_stream_publish_command_scene_feature(gedp,
-		rtcp->uplot, sname, "rtcheck", "command-result", sname);
+		rtcp->uplot, sname, "rtcheck", "command-result", sname,
+		"overlap", rtcp->generation);
     }
 
     if (rtcp->read_failed && rtcp->draw_read_failed) {
@@ -287,6 +291,9 @@ ged_rtcheck2_core(struct ged *gedp, int argc, const char *argv[])
     setmode(fileno(rtcp->fp), O_BINARY);
     rtcp->csize = ged_view_context_scale_get(view_ctx) * 0.01;
     rtcp->uplot = _ged_uplot_stream_create(rtcp->csize, gedp->i->ged_gdp->gd_uplotOutputMode);
+    rtcp->generation = ++rtcheck_command_generation;
+    if (rtcp->generation == 0)
+	rtcp->generation = ++rtcheck_command_generation;
     rtcp->read_failed = 0;
     rtcp->draw_read_failed = 0;
 

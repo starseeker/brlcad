@@ -224,15 +224,61 @@ struct ged_draw_view_line_layer_data {
 
 struct ged_draw_command_scene;
 
+enum ged_draw_command_result_status {
+    GED_DRAW_COMMAND_RESULT_NONE = 0,
+    GED_DRAW_COMMAND_RESULT_ACCEPTED,
+    GED_DRAW_COMMAND_RESULT_UPDATED,
+    GED_DRAW_COMMAND_RESULT_REMOVED,
+    GED_DRAW_COMMAND_RESULT_FAILED
+};
+
+struct ged_draw_command_result {
+    int status;
+    const char *feature_name;
+    const char *command;
+    const char *diagnostic;
+    uint64_t feature_id;
+    uint64_t feature_revision;
+};
+
+#define GED_DRAW_COMMAND_RESULT_INIT { GED_DRAW_COMMAND_RESULT_NONE, NULL, NULL, NULL, 0, 0 }
+
+typedef void (*ged_draw_command_result_cb)(
+	const struct ged_draw_command_result *result,
+	void *data);
+
+struct ged_draw_command_scene_custom_node_request {
+    const char *feature_name;
+    const char *owner_id;
+    const char *owner_role;
+    uint64_t generation;
+    int local;
+};
+
+#define GED_DRAW_COMMAND_SCENE_CUSTOM_NODE_REQUEST_INIT { NULL, NULL, NULL, 0, 0 }
+
+typedef void *(*ged_draw_command_scene_custom_node_cb)(
+	const struct ged_draw_command_scene_custom_node_request *request,
+	void *data);
+
 struct ged_draw_command_scene_desc {
     const char *owner_id;
     const char *owner_role;
     const char *run_id;
     uint64_t generation;
     int local;
+    ged_draw_command_result_cb result_cb;
+    void *result_cb_data;
 };
 
-#define GED_DRAW_COMMAND_SCENE_DESC_INIT { NULL, NULL, NULL, 0, 0 }
+#define GED_DRAW_COMMAND_SCENE_DESC_INIT { NULL, NULL, NULL, 0, 0, NULL, NULL }
+
+struct ged_draw_command_scene_metadata {
+    const char *key;
+    const char *value;
+};
+
+#define GED_DRAW_COMMAND_SCENE_METADATA_INIT { NULL, NULL }
 
 enum ged_draw_view_snap_kind {
     GED_DRAW_VIEW_SNAP_GRID = 1,
@@ -511,9 +557,13 @@ struct ged_draw_view_feature_summary {
     unsigned char color[3];
     size_t child_count;
     size_t geometry_command_count;
+    size_t metadata_count;
+    size_t primitive_metadata_count;
+    size_t selected_primitive_count;
+    size_t highlighted_primitive_count;
 };
 
-#define GED_DRAW_VIEW_FEATURE_SUMMARY_INIT { 0, 0, 0, 0, 0, 0, {0, 0, 0}, 0, 0 }
+#define GED_DRAW_VIEW_FEATURE_SUMMARY_INIT { 0, 0, 0, 0, 0, 0, {0, 0, 0}, 0, 0, 0, 0, 0, 0 }
 
 typedef int (*ged_draw_view_db_object_record_cb)(
 	const struct ged_draw_view_db_object_record *rec,
@@ -1070,12 +1120,115 @@ ged_draw_view_context_feature_realize(void *view_ctx,
 				      const char *name,
 				      int recursive);
 
+GED_EXPORT extern size_t
+ged_draw_view_context_feature_metadata_count(void *view_ctx,
+					     const char *name);
+
+GED_EXPORT extern int
+ged_draw_view_context_feature_metadata_copy(void *view_ctx,
+					    const char *name,
+					    size_t index,
+					    struct bu_vls *key,
+					    struct bu_vls *value);
+
+GED_EXPORT extern size_t
+ged_draw_view_context_feature_primitive_metadata_count(void *view_ctx,
+						      const char *name,
+						      int primitive);
+
+GED_EXPORT extern int
+ged_draw_view_context_feature_primitive_metadata_copy(
+	void *view_ctx,
+	const char *name,
+	int primitive,
+	size_t index,
+	struct bu_vls *key,
+	struct bu_vls *value);
+
+GED_EXPORT extern int
+ged_draw_view_context_feature_pick_primitive_resolve(
+	void *view_ctx,
+	const char *picked_feature_name,
+	int picked_primitive,
+	int select,
+	int highlight,
+	struct bu_vls *feature_name,
+	int *feature_primitive);
+
+GED_EXPORT extern int
+ged_draw_view_context_feature_selected_primitives_replace(
+	void *view_ctx,
+	const char *name,
+	const int *primitives,
+	size_t primitive_count);
+
+GED_EXPORT extern int
+ged_draw_view_context_feature_highlighted_primitives_replace(
+	void *view_ctx,
+	const char *name,
+	const int *primitives,
+	size_t primitive_count);
+
+GED_EXPORT extern size_t
+ged_draw_view_context_feature_selected_primitive_count(void *view_ctx,
+						      const char *name);
+
+GED_EXPORT extern size_t
+ged_draw_view_context_feature_highlighted_primitive_count(void *view_ctx,
+							 const char *name);
+
+GED_EXPORT extern int
+ged_draw_view_context_feature_selected_primitive_at(void *view_ctx,
+						    const char *name,
+						    size_t index,
+						    int *primitive);
+
+GED_EXPORT extern int
+ged_draw_view_context_feature_highlighted_primitive_at(void *view_ctx,
+						       const char *name,
+						       size_t index,
+						       int *primitive);
+
 GED_EXPORT extern int
 ged_draw_view_context_gobject_create(
 	struct ged *gedp,
 	void *view_ctx,
 	const char *db_path,
 	const char *gobject_name,
+	struct bu_vls *result);
+
+GED_EXPORT extern int
+ged_draw_view_context_object_remove(
+	struct ged *gedp,
+	void *view_ctx,
+	const char *name,
+	ged_draw_shape_ref shape_ref,
+	struct bu_vls *result);
+
+GED_EXPORT extern int
+ged_draw_view_context_object_visible_get(
+	struct ged *gedp,
+	void *view_ctx,
+	const char *name,
+	ged_draw_shape_ref shape_ref,
+	int *visible,
+	struct bu_vls *result);
+
+GED_EXPORT extern int
+ged_draw_view_context_object_visible_set(
+	struct ged *gedp,
+	void *view_ctx,
+	const char *name,
+	ged_draw_shape_ref shape_ref,
+	int visible,
+	struct bu_vls *result);
+
+GED_EXPORT extern int
+ged_draw_view_context_object_realize(
+	struct ged *gedp,
+	void *view_ctx,
+	const char *name,
+	ged_draw_shape_ref shape_ref,
 	struct bu_vls *result);
 
 GED_EXPORT extern int
@@ -1198,6 +1351,64 @@ ged_draw_command_scene_line_layers_replace(
 	const struct ged_draw_view_line_layer_data *layers,
 	size_t layer_count,
 	const struct ged_draw_view_feature_style *style);
+
+GED_EXPORT extern int
+ged_draw_command_scene_line_set_replace(
+	struct ged_draw_command_scene *scene,
+	const char *name,
+	const point_t *points,
+	const int *cmds,
+	size_t point_count,
+	const struct ged_draw_view_feature_style *style);
+
+GED_EXPORT extern int
+ged_draw_command_scene_point_set_replace(
+	struct ged_draw_command_scene *scene,
+	const char *name,
+	const point_t *points,
+	size_t point_count,
+	const struct ged_draw_view_feature_style *style);
+
+GED_EXPORT extern int
+ged_draw_command_scene_indexed_face_set_replace(
+	struct ged_draw_command_scene *scene,
+	const char *name,
+	const point_t *points,
+	size_t point_count,
+	const vect_t *normals,
+	size_t normal_count,
+	const int *indices,
+	size_t index_count,
+	const struct ged_draw_view_feature_style *style);
+
+GED_EXPORT extern int
+ged_draw_command_scene_hud_label_replace(
+	struct ged_draw_command_scene *scene,
+	const char *name,
+	const struct ged_diagnostic_hud_label *label);
+
+GED_EXPORT extern int
+ged_draw_command_scene_custom_node_replace(
+	struct ged_draw_command_scene *scene,
+	const char *name,
+	ged_draw_command_scene_custom_node_cb node_cb,
+	void *node_cb_data,
+	const struct ged_draw_view_feature_style *style);
+
+GED_EXPORT extern int
+ged_draw_command_scene_feature_metadata_replace(
+	struct ged_draw_command_scene *scene,
+	const char *name,
+	const struct ged_draw_command_scene_metadata *metadata,
+	size_t metadata_count);
+
+GED_EXPORT extern int
+ged_draw_command_scene_feature_primitive_metadata_replace(
+	struct ged_draw_command_scene *scene,
+	const char *name,
+	int primitive,
+	const struct ged_draw_command_scene_metadata *metadata,
+	size_t metadata_count);
 
 GED_EXPORT extern int
 ged_draw_command_scene_commit(struct ged_draw_command_scene *scene);

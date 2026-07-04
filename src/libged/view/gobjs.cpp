@@ -82,18 +82,14 @@ _gobjs_cmd_delete(void *bs, int argc, const char **argv)
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
 
-    argc--; argv++;
-
-    /* initialize result */
-    bu_vls_trunc(gedp->ged_result_str, 0);
-
-    if (!gd->vobj || !ged_draw_view_context_feature_exists(gd->cv, gd->vobj) ||
-	    !ged_draw_view_context_feature_remove(gd->cv, gd->vobj)) {
-	bu_vls_printf(gedp->ged_result_str, "No view feature named %s\n", gd->vobj ? gd->vobj : "");
+    if (!gd->vobj) {
+	bu_vls_trunc(gedp->ged_result_str, 0);
+	bu_vls_printf(gedp->ged_result_str, "No view feature named \n");
 	return BRLCAD_ERROR;
     }
 
-    return BRLCAD_OK;
+    const char *nargv[5] = {"view", "obj", "remove", gd->vobj, NULL};
+    return _view_cmd_objs(bs, 4, nargv);
 }
 
 extern "C" int

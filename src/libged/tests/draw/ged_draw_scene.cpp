@@ -81,6 +81,61 @@ test_uplot_stream_process_args(struct ged_uplot_stream *stream, int command,
     return ret;
 }
 
+static int
+test_feature_metadata_equals(void *view_ctx,
+	const char *feature_name,
+	const char *key,
+	const char *value)
+{
+    size_t count = ged_draw_view_context_feature_metadata_count(view_ctx,
+	    feature_name);
+    for (size_t i = 0; i < count; i++) {
+	struct bu_vls found_key = BU_VLS_INIT_ZERO;
+	struct bu_vls found_value = BU_VLS_INIT_ZERO;
+	int copied = ged_draw_view_context_feature_metadata_copy(view_ctx,
+		feature_name, i, &found_key, &found_value);
+	int matched = copied &&
+	    BU_STR_EQUAL(bu_vls_cstr(&found_key), key) &&
+	    BU_STR_EQUAL(bu_vls_cstr(&found_value), value);
+	bu_vls_free(&found_key);
+	bu_vls_free(&found_value);
+	if (matched)
+	    return 1;
+    }
+    return 0;
+}
+
+static int
+test_feature_point_count(void *view_ctx,
+	const char *feature_name,
+	size_t expected_count)
+{
+    point_t *points = NULL;
+    size_t point_count = 0;
+    int copied = ged_draw_view_context_feature_points_copy(view_ctx,
+	    feature_name, &points, &point_count);
+    if (points)
+	bu_free(points, "GED test feature points");
+    return copied && point_count == expected_count;
+}
+
+static int
+test_obol_feature_index_count(void *view_ctx,
+	const char *feature_name,
+	size_t expected_count,
+	int expected_last)
+{
+    int *indices = NULL;
+    size_t index_count = 0;
+    int copied = ged_draw_obol_view_context_feature_indices_copy(view_ctx,
+	    feature_name, &indices, &index_count);
+    int matched = copied && index_count == expected_count &&
+	(!expected_count || indices[index_count - 1] == expected_last);
+    if (indices)
+	bu_free(indices, "GED test feature indices");
+    return matched;
+}
+
 static int nfails  = 0;
 
 #define TEST_LINE_VIEW_MAX_SAMPLES 8
@@ -2863,6 +2918,242 @@ main(int ac, char *av[])
 	    ASSERT(!test_qray_view_records(gedp, qray_name));
 	    _ged_uplot_stream_free(stream);
 	}
+    }
+
+    /* ---------------------------------------------------------------- *
+     * 4c. The overlay command publishes uplot as command-owned content. *
+     * ---------------------------------------------------------------- */
+    bu_log("[4c] overlay command uplot command-scene import...\n");
+    {
+	char plot_path[MAXPATHLEN] = {0};
+	FILE *plot_file = bu_temp_file(plot_path, MAXPATHLEN);
+	ASSERT(plot_file != NULL);
+	if (plot_file) {
+	    point_t a = {0.0, 0.0, 0.0};
+	    point_t b = {100.0, 0.0, 0.0};
+	    pl_color(plot_file, 255, 0, 0);
+	    pdv_3line(plot_file, a, b);
+	    fclose(plot_file);
+
+	    int old_uplot_mode = gedp->i->ged_gdp->gd_uplotOutputMode;
+	    gedp->i->ged_gdp->gd_uplotOutputMode = PL_OUTPUT_MODE_BINARY;
+	    const char *overlay_cmd[4] = {
+		"overlay", plot_path, "uplot_overlay", NULL
+	    };
+	    ASSERT(ged_exec(gedp, 3, overlay_cmd) == BRLCAD_OK);
+	    gedp->i->ged_gdp->gd_uplotOutputMode = old_uplot_mode;
+
+	    const char *overlay_feature = "overlay::uplot_overlay";
+	    struct ged_draw_view_feature_summary overlay_summary =
+		GED_DRAW_VIEW_FEATURE_SUMMARY_INIT;
+	    ASSERT(ged_draw_view_context_feature_summary(
+		    test_active_view_ctx(gedp), overlay_feature,
+		    &overlay_summary));
+	    ASSERT(overlay_summary.exists);
+	    ASSERT(overlay_summary.is_overlay);
+	    ASSERT(overlay_summary.is_command_result);
+	    ASSERT(overlay_summary.child_count == 1);
+	    ASSERT(overlay_summary.geometry_command_count == 2);
+	    ASSERT(test_feature_metadata_equals(test_active_view_ctx(gedp),
+		    overlay_feature, "result.owner", "overlay"));
+	    ASSERT(test_feature_metadata_equals(test_active_view_ctx(gedp),
+		    overlay_feature, "result.kind", "uplot-overlay"));
+	    ASSERT(test_feature_metadata_equals(test_active_view_ctx(gedp),
+		    overlay_feature, "result.format", "uplot-line-layers"));
+	    ASSERT(db_lookup(gedp->dbip, overlay_feature, LOOKUP_QUIET) ==
+		    RT_DIR_NULL);
+	    ASSERT(test_qray_view_records(gedp, overlay_feature));
+	    ASSERT(ged_draw_view_context_feature_remove(
+		    test_active_view_ctx(gedp), overlay_feature) == 1);
+	    bu_file_delete(plot_path);
+	}
+    }
+
+    /* ---------------------------------------------------------------- *
+     * 4d. vdraw line streams publish as command-owned line layers.      *
+     * ---------------------------------------------------------------- */
+    bu_log("[4d] vdraw line command-scene publication...\n");
+    {
+	const char *vdraw_open[4] = {"vdraw", "open", "line_test", NULL};
+	const char *vdraw_move[8] = {
+	    "vdraw", "write", "next", "0", "0", "0", "0", NULL
+	};
+	const char *vdraw_draw[8] = {
+	    "vdraw", "write", "next", "1", "100", "0", "0", NULL
+	};
+	const char *vdraw_send_cmd[3] = {"vdraw", "send", NULL};
+	ASSERT(ged_exec(gedp, 3, vdraw_open) == BRLCAD_OK);
+	ASSERT(ged_exec(gedp, 7, vdraw_move) == BRLCAD_OK);
+	ASSERT(ged_exec(gedp, 7, vdraw_draw) == BRLCAD_OK);
+	ASSERT(ged_exec(gedp, 2, vdraw_send_cmd) == BRLCAD_OK);
+	ASSERT(bu_vls_strcmp(gedp->ged_result_str, "0") == 0);
+
+	const char *vdraw_feature = "_VDRWline_test";
+	struct ged_draw_view_feature_summary vdraw_summary =
+	    GED_DRAW_VIEW_FEATURE_SUMMARY_INIT;
+	ASSERT(ged_draw_view_context_feature_summary(
+		test_active_view_ctx(gedp), vdraw_feature, &vdraw_summary));
+	ASSERT(vdraw_summary.exists);
+	ASSERT(vdraw_summary.is_overlay);
+	ASSERT(vdraw_summary.is_command_result);
+	ASSERT(vdraw_summary.child_count == 1);
+	ASSERT(vdraw_summary.geometry_command_count == 2);
+	ASSERT(test_feature_metadata_equals(test_active_view_ctx(gedp),
+		vdraw_feature, "result.owner", "vdraw"));
+	ASSERT(test_feature_metadata_equals(test_active_view_ctx(gedp),
+		vdraw_feature, "result.kind", "vdraw-line"));
+	ASSERT(test_feature_metadata_equals(test_active_view_ctx(gedp),
+		vdraw_feature, "result.format", "vdraw-line-layer"));
+	ASSERT(db_lookup(gedp->dbip, vdraw_feature, LOOKUP_QUIET) ==
+		RT_DIR_NULL);
+	ASSERT(test_qray_view_records(gedp, vdraw_feature));
+	ASSERT(ged_draw_view_context_feature_remove(test_active_view_ctx(gedp),
+		vdraw_feature) == 1);
+    }
+
+    /* ---------------------------------------------------------------- *
+     * 4e. vdraw point/face streams publish as command-owned geometry.   *
+     * ---------------------------------------------------------------- */
+    bu_log("[4e] vdraw point/face command-scene publication...\n");
+    {
+	const char *vdraw_open[4] = {"vdraw", "open", "point_test", NULL};
+	const char *vdraw_point_a[8] = {
+	    "vdraw", "write", "next", "12", "1", "2", "3", NULL
+	};
+	const char *vdraw_point_b[8] = {
+	    "vdraw", "write", "next", "12", "4", "5", "6", NULL
+	};
+	const char *vdraw_send_cmd[3] = {"vdraw", "send", NULL};
+	ASSERT(ged_exec(gedp, 3, vdraw_open) == BRLCAD_OK);
+	ASSERT(ged_exec(gedp, 7, vdraw_point_a) == BRLCAD_OK);
+	ASSERT(ged_exec(gedp, 7, vdraw_point_b) == BRLCAD_OK);
+	ASSERT(ged_exec(gedp, 2, vdraw_send_cmd) == BRLCAD_OK);
+	ASSERT(bu_vls_strcmp(gedp->ged_result_str, "0") == 0);
+
+	const char *point_feature = "_VDRWpoint_test";
+	struct ged_draw_view_feature_summary point_summary =
+	    GED_DRAW_VIEW_FEATURE_SUMMARY_INIT;
+	ASSERT(ged_draw_view_context_feature_summary(
+		test_active_view_ctx(gedp), point_feature, &point_summary));
+	ASSERT(point_summary.exists);
+	ASSERT(point_summary.is_overlay);
+	ASSERT(point_summary.is_command_result);
+	ASSERT(point_summary.child_count == 1);
+	ASSERT(point_summary.geometry_command_count == 2);
+	ASSERT(test_feature_metadata_equals(test_active_view_ctx(gedp),
+		point_feature, "result.owner", "vdraw"));
+	ASSERT(test_feature_metadata_equals(test_active_view_ctx(gedp),
+		point_feature, "result.kind", "vdraw-point"));
+	ASSERT(test_feature_metadata_equals(test_active_view_ctx(gedp),
+		point_feature, "result.format", "vdraw-point-set"));
+	ASSERT(test_feature_point_count(test_active_view_ctx(gedp),
+		point_feature, 2));
+	ASSERT(db_lookup(gedp->dbip, point_feature, LOOKUP_QUIET) ==
+		RT_DIR_NULL);
+	ASSERT(ged_draw_view_context_feature_remove(test_active_view_ctx(gedp),
+		point_feature) == 1);
+    }
+    {
+	const char *vdraw_open[4] = {"vdraw", "open", "face_test", NULL};
+	const char *vdraw_tri_start[8] = {
+	    "vdraw", "write", "next", "7", "0", "0", "1", NULL
+	};
+	const char *vdraw_tri_move[8] = {
+	    "vdraw", "write", "next", "8", "0", "0", "0", NULL
+	};
+	const char *vdraw_tri_draw_a[8] = {
+	    "vdraw", "write", "next", "9", "100", "0", "0", NULL
+	};
+	const char *vdraw_tri_draw_b[8] = {
+	    "vdraw", "write", "next", "9", "0", "100", "0", NULL
+	};
+	const char *vdraw_tri_end[8] = {
+	    "vdraw", "write", "next", "10", "0", "0", "0", NULL
+	};
+	const char *vdraw_send_cmd[3] = {"vdraw", "send", NULL};
+	ASSERT(ged_exec(gedp, 3, vdraw_open) == BRLCAD_OK);
+	ASSERT(ged_exec(gedp, 7, vdraw_tri_start) == BRLCAD_OK);
+	ASSERT(ged_exec(gedp, 7, vdraw_tri_move) == BRLCAD_OK);
+	ASSERT(ged_exec(gedp, 7, vdraw_tri_draw_a) == BRLCAD_OK);
+	ASSERT(ged_exec(gedp, 7, vdraw_tri_draw_b) == BRLCAD_OK);
+	ASSERT(ged_exec(gedp, 7, vdraw_tri_end) == BRLCAD_OK);
+	ASSERT(ged_exec(gedp, 2, vdraw_send_cmd) == BRLCAD_OK);
+	ASSERT(bu_vls_strcmp(gedp->ged_result_str, "0") == 0);
+
+	const char *face_feature = "_VDRWface_test";
+	struct ged_draw_view_feature_summary face_summary =
+	    GED_DRAW_VIEW_FEATURE_SUMMARY_INIT;
+	ASSERT(ged_draw_view_context_feature_summary(
+		test_active_view_ctx(gedp), face_feature, &face_summary));
+	ASSERT(face_summary.exists);
+	ASSERT(face_summary.is_overlay);
+	ASSERT(face_summary.is_command_result);
+	ASSERT(face_summary.child_count == 1);
+	ASSERT(face_summary.geometry_command_count == 0);
+	ASSERT(test_feature_metadata_equals(test_active_view_ctx(gedp),
+		face_feature, "result.owner", "vdraw"));
+	ASSERT(test_feature_metadata_equals(test_active_view_ctx(gedp),
+		face_feature, "result.kind", "vdraw-indexed-face"));
+	ASSERT(test_feature_metadata_equals(test_active_view_ctx(gedp),
+		face_feature, "result.format", "vdraw-indexed-face-set"));
+	ASSERT(test_feature_point_count(test_active_view_ctx(gedp),
+		face_feature, 3));
+	ASSERT(test_obol_feature_index_count(test_active_view_ctx(gedp),
+		face_feature, 4, -1));
+	ASSERT(db_lookup(gedp->dbip, face_feature, LOOKUP_QUIET) ==
+		RT_DIR_NULL);
+	ASSERT(ged_draw_view_context_feature_remove(test_active_view_ctx(gedp),
+		face_feature) == 1);
+    }
+
+    /* ---------------------------------------------------------------- *
+     * 4f. Shared line-set helper publishes command-owned line geometry. *
+     * ---------------------------------------------------------------- */
+    bu_log("[4f] command-scene line-set helper publication...\n");
+    {
+	const char *line_feature = "line_helper::result";
+	point_t line_points[2] = {
+	    {0.0, 0.0, 0.0},
+	    {100.0, 100.0, 0.0}
+	};
+	int line_cmds[2] = {
+	    BG_GEOMETRY_LINE_MOVE,
+	    BG_GEOMETRY_LINE_DRAW
+	};
+	struct ged_draw_view_feature_style line_style =
+	    GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+	line_style.color_valid = 1;
+	VSET(line_style.color, 20, 200, 40);
+	ASSERT(_ged_line_set_publish_command_scene_feature(gedp,
+		line_feature, (const point_t *)line_points, line_cmds, 2,
+		&line_style, "line_helper", "command-result", NULL,
+		"line-helper", 0) == BRLCAD_OK);
+
+	struct ged_draw_view_feature_summary line_summary =
+	    GED_DRAW_VIEW_FEATURE_SUMMARY_INIT;
+	ASSERT(ged_draw_view_context_feature_summary(
+		test_active_view_ctx(gedp), line_feature, &line_summary));
+	ASSERT(line_summary.exists);
+	ASSERT(line_summary.is_overlay);
+	ASSERT(line_summary.is_command_result);
+	ASSERT(line_summary.child_count == 1);
+	ASSERT(line_summary.geometry_command_count == 2);
+	ASSERT(test_feature_metadata_equals(test_active_view_ctx(gedp),
+		line_feature, "result.owner", "line_helper"));
+	ASSERT(test_feature_metadata_equals(test_active_view_ctx(gedp),
+		line_feature, "result.kind", "line-helper"));
+	ASSERT(test_feature_metadata_equals(test_active_view_ctx(gedp),
+		line_feature, "result.format", "line-set"));
+	ASSERT(test_feature_metadata_equals(test_active_view_ctx(gedp),
+		line_feature, "result.point_count", "2"));
+	ASSERT(test_feature_point_count(test_active_view_ctx(gedp),
+		line_feature, 2));
+	ASSERT(_ged_line_set_publish_command_scene_feature(gedp,
+		line_feature, NULL, NULL, 0, &line_style, "line_helper",
+		"command-result", NULL, "line-helper", 0) == BRLCAD_OK);
+	ASSERT(ged_draw_view_context_feature_summary(
+		test_active_view_ctx(gedp), line_feature, &line_summary));
+	ASSERT(!line_summary.exists);
     }
 
     /* ---------------------------------------------------------------- *

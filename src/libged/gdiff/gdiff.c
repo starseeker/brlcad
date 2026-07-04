@@ -65,25 +65,23 @@ gdiff_segment_points(const struct bu_ptbl *segments, size_t *point_count)
 }
 
 static void
-gdiff_replace_line_feature(void *view_ctx, const char *name,
-	const struct bu_ptbl *segments, int r, int g, int b)
+gdiff_replace_line_feature(struct ged *gedp, const char *name,
+	const struct bu_ptbl *segments, int r, int g, int b,
+	const char *result_kind)
 {
-    if (!view_ctx || !name)
+    if (!gedp || !name)
 	return;
 
     size_t point_count = 0;
     point_t *points = gdiff_segment_points(segments, &point_count);
-    if (!point_count || !points) {
-	(void)ged_draw_view_context_feature_remove(view_ctx, name);
-	return;
-    }
-
     struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
     style.color_valid = 1;
     VSET(style.color, r, g, b);
-    (void)ged_draw_view_context_lines_replace(view_ctx, name, 0, (const point_t *)points,
-	    NULL, point_count, &style);
-    bu_free(points, "gdiff segment points");
+    (void)_ged_line_set_publish_command_scene_feature(gedp, name,
+	    (const point_t *)points, NULL, point_count, &style,
+	    "gdiff", "command-result", NULL, result_kind, 0);
+    if (points)
+	bu_free(points, "gdiff segment points");
 }
 
 static void
@@ -407,19 +405,16 @@ ged_gdiff_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     if (view_left || view_overlap || view_right) {
-	void *view_ctx = ged_view_active_ctx(gedp);
-	if (view_ctx) {
-	    (void)ged_draw_view_context_feature_remove(view_ctx, "gdiff");
-	    (void)ged_draw_view_context_feature_remove(view_ctx, "gdiff::left");
-	    (void)ged_draw_view_context_feature_remove(view_ctx, "gdiff::overlap");
-	    (void)ged_draw_view_context_feature_remove(view_ctx, "gdiff::right");
-	    if (view_left)
-		gdiff_replace_line_feature(view_ctx, "gdiff::left", results->left, 255, 0, 0);
-	    if (view_overlap)
-		gdiff_replace_line_feature(view_ctx, "gdiff::overlap", results->both, 255, 255, 255);
-	    if (view_right)
-		gdiff_replace_line_feature(view_ctx, "gdiff::right", results->right, 0, 0, 255);
-	}
+	gdiff_replace_line_feature(gedp, "gdiff", NULL, 255, 255, 255,
+		"gdiff-summary");
+	gdiff_replace_line_feature(gedp, "gdiff::left",
+		view_left ? results->left : NULL, 255, 0, 0, "left-only");
+	gdiff_replace_line_feature(gedp, "gdiff::overlap",
+		view_overlap ? results->both : NULL, 255, 255, 255,
+		"overlap");
+	gdiff_replace_line_feature(gedp, "gdiff::right",
+		view_right ? results->right : NULL, 0, 0, 255,
+		"right-only");
     }
     analyze_raydiff_results_free(results);
 

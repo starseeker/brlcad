@@ -111,6 +111,24 @@ _qg_append_unique_path_cb(const char *path, void *data)
 	_qg_append_unique_path(*paths, path);
 }
 
+static int
+_qg_apply_obol_pick_selection(QgView *display,
+	const std::vector<QgObolPickRecord> &picks,
+	std::vector<std::string> &database_paths)
+{
+    std::vector<QgObolPickRecord> feature_picks;
+    for (const QgObolPickRecord &pick : picks) {
+	if (pick.featurePickResolved) {
+	    feature_picks.push_back(pick);
+	    continue;
+	}
+	_qg_append_unique_path(database_paths, pick.path.c_str());
+    }
+
+    return qg_obol_pick_apply_feature_states(display, feature_picks, true,
+	    true);
+}
+
 QgSelectFilter::QgSelectFilter() :
     m(new QgSelectFilterPrivate)
 {
@@ -198,10 +216,12 @@ QgSelectPntFilter::eventFilter(QObject *, QEvent *e)
 	    6.0f, !first_only, obolPicks,
 	    &submittedSourceRequests) > 0) {
 	std::vector<std::string> paths;
-	for (const QgObolPickRecord &pick : obolPicks)
-	    _qg_append_unique_path(paths, pick.path.c_str());
-	set_selected_paths(paths);
-	return true;
+	int feature_count = _qg_apply_obol_pick_selection(view_widget(),
+		obolPicks, paths);
+	if (!paths.empty() || feature_count > 0) {
+	    set_selected_paths(paths);
+	    return true;
+	}
     }
     if (submittedSourceRequests > 0) {
 	std::vector<std::string> paths;
@@ -286,9 +306,9 @@ QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
 		sx, sy, 6.0f, first_only,
 		obolPicks, &submittedSourceRequests) > 0) {
 	    std::vector<std::string> paths;
-	    for (const QgObolPickRecord &pick : obolPicks)
-		_qg_append_unique_path(paths, pick.path.c_str());
-	    if (!paths.empty()) {
+	    int feature_count = _qg_apply_obol_pick_selection(view_widget(),
+		    obolPicks, paths);
+	    if (!paths.empty() || feature_count > 0) {
 		set_selected_paths(paths);
 
 		struct rt_view_interactive_rect_state rect;
@@ -504,9 +524,9 @@ QgSelectRayFilter::eventFilter(QObject *, QEvent *e)
 		!first_only, obolRayPicks,
 		&submittedSourceRequests) > 0) {
 	    std::vector<std::string> paths;
-	    for (const QgObolPickRecord &pick : obolRayPicks)
-		_qg_append_unique_path(paths, pick.path.c_str());
-	    if (!paths.empty()) {
+	    int feature_count = _qg_apply_obol_pick_selection(view_widget(),
+		    obolRayPicks, paths);
+	    if (!paths.empty() || feature_count > 0) {
 		set_selected_paths(paths);
 		return true;
 	    }
@@ -524,9 +544,9 @@ QgSelectRayFilter::eventFilter(QObject *, QEvent *e)
 	    6.0f, !first_only, obolPicks,
 	    &submittedSourceRequests) > 0) {
 	std::vector<std::string> paths;
-	for (const QgObolPickRecord &pick : obolPicks)
-	    _qg_append_unique_path(paths, pick.path.c_str());
-	if (!paths.empty()) {
+	int feature_count = _qg_apply_obol_pick_selection(view_widget(),
+		obolPicks, paths);
+	if (!paths.empty() || feature_count > 0) {
 	    set_selected_paths(paths);
 	    return true;
 	}

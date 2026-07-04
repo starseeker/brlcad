@@ -5,6 +5,7 @@ set(
   database_source.h
   defines.h
   edit_preview.h
+  evaluated_wire.h
   export_action.h
   grid.h
   headless_window_host.h

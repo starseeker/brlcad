@@ -56,6 +56,7 @@ struct rt_pg_internal;
 struct db_tree_state;
 struct model;
 struct nmgregion;
+struct ged_draw_obol_database_source_record;
 
 typedef struct ged_draw_shape_draft ged_draw_shape_draft;
 typedef int (*ged_draw_group_ref_index_cb)(ged_draw_group_ref ref,
@@ -67,6 +68,10 @@ typedef int (*ged_draw_obol_group_path_cb)(
 typedef int (*ged_draw_obol_database_source_path_cb)(
 	struct ged *gedp,
 	const char *path,
+	void *userdata);
+typedef int (*ged_draw_obol_database_source_record_cb)(
+	struct ged *gedp,
+	const struct ged_draw_obol_database_source_record *record,
 	void *userdata);
 
 enum ged_draw_overlay_geometry_kind {
@@ -151,6 +156,8 @@ struct ged_draw_obol_scene_context_info {
     int has_parent;
     int draw_tree_depth;
     size_t child_count;
+    int draw_mode_valid;
+    int draw_mode;
 };
 
 struct ged_draw_overlay_geometry {
@@ -330,7 +337,8 @@ enum ged_draw_obol_view_feature_kind {
     GED_DRAW_OBOL_VIEW_FEATURE_KIND_EDIT_PREVIEW,
     GED_DRAW_OBOL_VIEW_FEATURE_KIND_INDEXED_FACE_SET,
     GED_DRAW_OBOL_VIEW_FEATURE_KIND_POLYGON_OVERLAY,
-    GED_DRAW_OBOL_VIEW_FEATURE_KIND_HUD_LABEL
+    GED_DRAW_OBOL_VIEW_FEATURE_KIND_HUD_LABEL,
+    GED_DRAW_OBOL_VIEW_FEATURE_KIND_CUSTOM_NODE
 };
 
 struct ged_draw_obol_view_feature_record {
@@ -432,6 +440,69 @@ GED_EXPORT extern int ged_draw_obol_view_context_feature_summary(
 	void *view_ctx,
 	const char *name,
 	struct ged_draw_view_feature_summary *summary);
+GED_EXPORT extern size_t ged_draw_obol_view_context_feature_metadata_count(
+	void *view_ctx,
+	const char *name);
+GED_EXPORT extern int ged_draw_obol_view_context_feature_metadata_copy(
+	void *view_ctx,
+	const char *name,
+	size_t index,
+	struct bu_vls *key,
+	struct bu_vls *value);
+GED_EXPORT extern size_t
+ged_draw_obol_view_context_feature_primitive_metadata_count(
+	void *view_ctx,
+	const char *name,
+	int primitive);
+GED_EXPORT extern int
+ged_draw_obol_view_context_feature_primitive_metadata_copy(
+	void *view_ctx,
+	const char *name,
+	int primitive,
+	size_t index,
+	struct bu_vls *key,
+	struct bu_vls *value);
+GED_EXPORT extern int
+ged_draw_obol_view_context_feature_pick_primitive_resolve(
+	void *view_ctx,
+	const char *picked_feature_name,
+	int picked_primitive,
+	int select,
+	int highlight,
+	struct bu_vls *feature_name,
+	int *feature_primitive);
+GED_EXPORT extern int
+ged_draw_obol_view_context_feature_selected_primitives_replace(
+	void *view_ctx,
+	const char *name,
+	const int *primitives,
+	size_t primitive_count);
+GED_EXPORT extern int
+ged_draw_obol_view_context_feature_highlighted_primitives_replace(
+	void *view_ctx,
+	const char *name,
+	const int *primitives,
+	size_t primitive_count);
+GED_EXPORT extern size_t
+ged_draw_obol_view_context_feature_selected_primitive_count(
+	void *view_ctx,
+	const char *name);
+GED_EXPORT extern size_t
+ged_draw_obol_view_context_feature_highlighted_primitive_count(
+	void *view_ctx,
+	const char *name);
+GED_EXPORT extern int
+ged_draw_obol_view_context_feature_selected_primitive_at(
+	void *view_ctx,
+	const char *name,
+	size_t index,
+	int *primitive);
+GED_EXPORT extern int
+ged_draw_obol_view_context_feature_highlighted_primitive_at(
+	void *view_ctx,
+	const char *name,
+	size_t index,
+	int *primitive);
 GED_EXPORT extern int ged_draw_obol_view_context_feature_visible(
 	void *view_ctx,
 	const char *name);
@@ -1098,6 +1169,11 @@ GED_EXPORT extern int ged_draw_obol_database_source_paths_foreach(
 	int skip_overlay_groups,
 	ged_draw_obol_database_source_path_cb cb,
 	void *userdata);
+GED_EXPORT extern int ged_draw_obol_database_source_records_foreach(
+	struct ged *gedp,
+	int skip_overlay_groups,
+	ged_draw_obol_database_source_record_cb cb,
+	void *userdata);
 GED_EXPORT extern int ged_draw_obol_shape_paths_foreach(
 	struct ged *gedp,
 	int skip_overlay_groups,
@@ -1107,6 +1183,11 @@ GED_EXPORT extern int ged_draw_obol_group_database_source_paths_foreach(
 	struct ged *gedp,
 	const char *group_path,
 	ged_draw_obol_database_source_path_cb cb,
+	void *userdata);
+GED_EXPORT extern int ged_draw_obol_group_database_source_records_foreach(
+	struct ged *gedp,
+	const char *group_path,
+	ged_draw_obol_database_source_record_cb cb,
 	void *userdata);
 GED_EXPORT extern int ged_draw_obol_database_source_owner_group_path_for_path(
 	struct ged *gedp,

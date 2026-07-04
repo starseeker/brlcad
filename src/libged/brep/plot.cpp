@@ -1040,12 +1040,9 @@ _brep_plot_publish(struct ged *gedp, struct bg_line_layer_builder *plot, const c
 
     struct bu_vls nroot = BU_VLS_INIT_ZERO;
     bu_vls_sprintf(&nroot, "brep::%s", sname);
-    int handled = ged_diagnostic_line_layer_publish(gedp, bu_vls_cstr(&nroot), plot);
-    void *view_ctx = ged_view_active_ctx(gedp);
-    if (!handled && view_ctx) {
-	(void)ged_draw_view_context_diagnostic_line_layer_builder_replace(
-		view_ctx, bu_vls_cstr(&nroot), plot);
-    }
+    (void)_ged_line_layer_builder_publish_command_scene_feature(gedp,
+	    bu_vls_cstr(&nroot), plot, "brep", "command-result",
+	    bu_vls_cstr(&nroot), "brep-debug-plot", 0);
     bu_vls_free(&nroot);
 }
 

@@ -9,6 +9,7 @@
 
 #include "brlobol/database_source.h"
 #include "brlobol/realize_action.h"
+#include "database_source_realization.h"
 
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoNode.h>
@@ -19,13 +20,16 @@ SoBRLRealizeAction::SoBRLRealizeAction(void) :
     visitedSourceCount(0),
     realizedSourceCount(0),
     failedSourceCount(0),
-    diagnostics("")
+    diagnostics(""),
+    realizationCache(new BRLObolDatabaseSourceRealizationCache),
+    seedingCache(FALSE)
 {
     SO_ACTION_CONSTRUCTOR(SoBRLRealizeAction);
 }
 
 SoBRLRealizeAction::~SoBRLRealizeAction(void)
 {
+    delete this->realizationCache;
 }
 
 void
@@ -68,6 +72,11 @@ SoBRLRealizeAction::beginTraversal(SoNode *node)
     this->realizedSourceCount = 0;
     this->failedSourceCount = 0;
     this->diagnostics = "";
+    if (this->realizationCache)
+	this->realizationCache->clear();
+    this->seedingCache = TRUE;
+    this->traverse(node);
+    this->seedingCache = FALSE;
     this->traverse(node);
 }
 
@@ -99,6 +108,13 @@ SoBRLRealizeAction::databaseSourceAction(SoAction *action, SoNode *node)
     SoBRLRealizeAction *realizeAction = static_cast<SoBRLRealizeAction *>(action);
     SoBRLDatabaseSource *source = static_cast<SoBRLDatabaseSource *>(node);
 
+    if (realizeAction->seedingCache) {
+	brlobol_database_source_seed_realization_cache(
+		source, realizeAction->realizationCache);
+	source->doAction(action);
+	return;
+    }
+
     realizeAction->visitedSourceCount++;
     const int roleFlags = source->realizationRoleFlags.getValue();
     if (source->needsRealization() &&
@@ -111,9 +127,11 @@ SoBRLRealizeAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    source->representationMode.getValue() ==
 		    SoBRLDatabaseSource::REPRESENTATION_EVAL_POINTS ||
 		    source->drawMode.getValue() == SoBRLDatabaseSource::SHADED)
-		realized = source->realizeDatabaseMesh();
+		realized = brlobol_database_source_realize_mesh_with_cache(
+			source, realizeAction->realizationCache);
 	    else
-		realized = source->realizeDatabaseWireframe();
+		realized = brlobol_database_source_realize_wireframe_with_cache(
+			source, realizeAction->realizationCache);
 
 	    if (realized)
 		realizeAction->realizedSourceCount++;

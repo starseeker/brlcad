@@ -1613,6 +1613,121 @@ ged_obol_set_group_visible(SoBRLSceneController *scene,
 }
 
 static int
+ged_obol_set_database_source_highlighted(SoBRLSceneController *scene,
+	const char *source_instance_key,
+	int highlighted)
+{
+    if (!scene || !source_instance_key || !source_instance_key[0])
+	return 0;
+
+    SoBRLDatabaseSource *source =
+	scene->findDatabaseSourceInstance(source_instance_key);
+    if (!source)
+	return 0;
+
+    BRLObolDatabaseSourceSummary summary;
+    if (!source->getSummary(summary) || !summary.valid)
+	return 0;
+
+    (void)scene->setDatabaseSourceInstanceState(source_instance_key,
+	    TRUE,
+	    summary.sourceRevision,
+	    summary.inputsRevision,
+	    summary.visible,
+	    highlighted ? TRUE : FALSE,
+	    summary.lineStyle,
+	    summary.lineWidth,
+	    summary.transparency,
+	    summary.colorOverride,
+	    summary.color,
+	    summary.materialColorValid,
+	    summary.materialColor,
+	    summary.materialRevision);
+    return 1;
+}
+
+static int
+ged_obol_set_group_highlighted(SoBRLSceneController *scene,
+	const char *group_path,
+	int highlighted)
+{
+    if (!scene || !group_path || !group_path[0])
+	return 0;
+
+    SoGroup *group = scene->findGroup(group_path);
+    if (!group || !group->isOfType(SoBRLSceneGroup::getClassTypeId()))
+	return 0;
+
+    SoBRLSceneGroup *scene_group = static_cast<SoBRLSceneGroup *>(group);
+    (void)scene->setGroupDisplayState(group_path,
+	    scene_group->visible.getValue(),
+	    scene_group->selected.getValue(),
+	    highlighted ? TRUE : FALSE,
+	    scene_group->lineStyle.getValue(),
+	    scene_group->lineWidth.getValue(),
+	    scene_group->transparency.getValue(),
+	    scene_group->colorOverride.getValue(),
+	    scene_group->color.getValue(),
+	    scene_group->materialColorValid.getValue(),
+	    scene_group->materialColor.getValue(),
+	    scene_group->materialRevision.getValue());
+    return 1;
+}
+
+static int
+ged_obol_apply_highlight_transaction(
+	const struct ged_draw_transaction *txn,
+	const struct ged_draw_transaction_result *result,
+	SoBRLSceneController *scene)
+{
+    if (!txn || !scene)
+	return 0;
+
+    std::vector<std::string> targets =
+	ged_obol_transaction_paths(txn, result);
+    if (targets.empty())
+	return (result && result->status >= 0) ? 1 : 0;
+
+    const int highlighted = ZERO(txn->value) ? 0 : 1;
+    int handled = 0;
+    for (const std::string &target : targets) {
+	std::vector<std::string> instance_keys;
+	ged_obol_collect_database_source_instance_keys_matching(
+		instance_keys, scene, txn->view, target.c_str(), 0, 1,
+		txn->mode);
+	for (const std::string &instance_key : instance_keys) {
+	    if (ged_obol_set_database_source_highlighted(scene,
+		    instance_key.c_str(), highlighted))
+		handled = 1;
+	}
+
+	const int summary_count = scene->getSceneTreeSummaryCount();
+	for (int i = 0; i < summary_count; i++) {
+	    BRLObolSceneTreeSummary tree_summary;
+	    if (!scene->getSceneTreeSummary(i, tree_summary) ||
+		    !tree_summary.valid ||
+		    tree_summary.nodeKind !=
+			BRLObolSceneTreeSummary::NODE_GROUP ||
+		    tree_summary.path.getLength() == 0 ||
+		    BU_STR_EQUAL(tree_summary.path.getString(), "/"))
+		continue;
+	    const char *group_path = tree_summary.path.getString();
+	    if (!ged_obol_path_has_prefix(group_path, target.c_str()) &&
+		    !ged_obol_path_has_component_name(group_path,
+			target.c_str(), 0))
+		continue;
+	    if (ged_obol_set_group_highlighted(scene, group_path,
+		    highlighted))
+		handled = 1;
+	}
+    }
+
+    if (!handled && result && result->status >= 0)
+	return 1;
+    return handled;
+}
+
+static int
 ged_obol_apply_visibility_transaction(
 	const struct ged_draw_transaction *txn,
 	const struct ged_draw_transaction_result *result,
@@ -2149,6 +2264,8 @@ struct ged_draw_command_scene {
     BRLObolViewController *controller;
     BRLObolFeatureOwner owner;
     BRLObolFeatureScope scope;
+    ged_draw_command_result_cb result_cb;
+    void *result_cb_data;
     int changed;
     int failed;
 };
@@ -2158,6 +2275,52 @@ ged_obol_command_scene_valid(const struct ged_draw_command_scene *scene)
 {
     return scene && scene->magic == GED_DRAW_COMMAND_SCENE_MAGIC &&
 	scene->controller;
+}
+
+static void
+ged_obol_command_scene_notify(
+	struct ged_draw_command_scene *scene,
+	int status,
+	const char *name,
+	const char *command,
+	const char *diagnostic,
+	BRLObolFeatureHandle handle = BRLObolFeatureHandle())
+{
+    if (!ged_obol_command_scene_valid(scene) || !scene->result_cb)
+	return;
+
+    struct ged_draw_command_result result =
+	GED_DRAW_COMMAND_RESULT_INIT;
+    result.status = status;
+    result.feature_name = name;
+    result.command = command;
+    result.diagnostic = diagnostic;
+    if (handle.isValid()) {
+	result.feature_id = handle.id;
+	result.feature_revision = handle.revision;
+    }
+    scene->result_cb(&result, scene->result_cb_data);
+}
+
+static int
+ged_obol_command_scene_writable(
+	struct ged_draw_command_scene *scene,
+	const char *name,
+	const char *command)
+{
+    if (!ged_obol_command_scene_valid(scene))
+	return 0;
+
+    if (!scene->controller->features().commandOwnerGenerationCurrent(
+	    scene->owner)) {
+	scene->failed = 1;
+	ged_obol_command_scene_notify(scene,
+		GED_DRAW_COMMAND_RESULT_FAILED, name, command,
+		"stale command-scene generation");
+	return 0;
+    }
+
+    return 1;
 }
 
 static BRLObolFeatureOwner
@@ -2182,6 +2345,7 @@ ged_obol_command_scene_owner(
     owner.ownerToken = NULL;
     owner.ownerId = id.c_str();
     owner.ownerRole = owner_role;
+    owner.generation = desc ? desc->generation : 0;
     if (owner.ownerId.getLength() == 0)
 	owner.ownerId = ged_obol_view_scope_name(view_ctx).c_str();
     return owner;
@@ -2204,15 +2368,25 @@ ged_obol_command_scene_overlay_info(
 static int
 ged_obol_command_scene_remove_feature(
 	struct ged_draw_command_scene *scene,
-	const char *name)
+	const char *name,
+	const char *command)
 {
-    if (!ged_obol_command_scene_valid(scene) || !name)
+    if (!ged_obol_command_scene_writable(scene, name, command) || !name)
 	return 0;
 
-    return scene->controller->features().removeOwned(name,
-	    scene->scope == BRLObolFeatureScope::Local ?
-	    BRLOBOL_FEATURE_SCOPE_LOCAL : BRLOBOL_FEATURE_SCOPE_SHARED,
-	    &scene->owner) ? 1 : 0;
+    const unsigned int scope_mask =
+	scene->scope == BRLObolFeatureScope::Local ?
+	BRLOBOL_FEATURE_SCOPE_LOCAL : BRLOBOL_FEATURE_SCOPE_SHARED;
+    BRLObolFeatureHandle handle =
+	scene->controller->features().findOwned(name, scope_mask,
+		&scene->owner);
+    const int removed = scene->controller->features().removeOwned(name,
+	    scope_mask, &scene->owner) ? 1 : 0;
+    if (removed)
+	ged_obol_command_scene_notify(scene,
+		GED_DRAW_COMMAND_RESULT_REMOVED, name,
+		command ? command : "remove", NULL, handle);
+    return removed;
 }
 
 static BRLObolFeatureHandle
@@ -2346,6 +2520,31 @@ ged_obol_label_from_ged(const struct ged_draw_view_label_data &label)
     return out;
 }
 
+static BRLObolLabel
+ged_obol_label_from_hud(const struct ged_diagnostic_hud_label &label)
+{
+    BRLObolLabel out;
+    out.text = label.text ? label.text : "";
+    out.point = SbVec3f(
+	    static_cast<float>(label.position[0]),
+	    static_cast<float>(label.position[1]),
+	    0.0f);
+    unsigned char rgb[3] = {
+	static_cast<unsigned char>(label.color[0] < 0 ? 0 :
+		(label.color[0] > 255 ? 255 : label.color[0])),
+	static_cast<unsigned char>(label.color[1] < 0 ? 0 :
+		(label.color[1] > 255 ? 255 : label.color[1])),
+	static_cast<unsigned char>(label.color[2] < 0 ? 0 :
+		(label.color[2] > 255 ? 255 : label.color[2]))
+    };
+    out.hasColor = TRUE;
+    out.color = ged_obol_color_from_rgb(rgb);
+    out.fontSize = label.font_size > 0.0 ?
+	static_cast<float>(label.font_size) : 12.0f;
+    out.sourceId = label.source_id;
+    return out;
+}
+
 static std::vector<BRLObolLabel>
 ged_obol_labels_from_ged(const struct ged_draw_view_label_data *labels,
 	size_t label_count)
@@ -2454,6 +2653,12 @@ ged_draw_obol_view_context_feature_summary(
     summary->visible = obol_summary.visible ? 1 : 0;
     summary->child_count = obol_summary.childCount;
     summary->geometry_command_count = obol_summary.commandCount;
+    summary->metadata_count = obol_summary.metadataCount;
+    summary->primitive_metadata_count = obol_summary.primitiveMetadataCount;
+    summary->selected_primitive_count =
+	obol_summary.selectedPrimitiveCount;
+    summary->highlighted_primitive_count =
+	obol_summary.highlightedPrimitiveCount;
     summary->is_label =
 	(obol_summary.kind == BRLObolFeatureKind::Labels ||
 	 obol_summary.kind == BRLObolFeatureKind::HudLabel) ? 1 : 0;
@@ -2473,6 +2678,285 @@ ged_draw_obol_view_context_feature_summary(
 	    style.hasColor)
 	ged_obol_rgb_from_color(style.color, summary->color);
 
+    return 1;
+}
+
+static std::vector<int32_t>
+ged_obol_primitives_from_ged(const int *primitives, size_t primitive_count)
+{
+    std::vector<int32_t> out;
+    if (!primitives || !primitive_count)
+	return out;
+
+    out.reserve(primitive_count);
+    for (size_t i = 0; i < primitive_count; i++)
+	if (primitives[i] >= 0)
+	    out.push_back(static_cast<int32_t>(primitives[i]));
+    return out;
+}
+
+extern "C" int
+ged_draw_obol_view_context_feature_selected_primitives_replace(
+	void *view_ctx,
+	const char *name,
+	const int *primitives,
+	size_t primitive_count)
+{
+    BRLObolViewController *controller =
+	ged_obol_view_controller_for_context(view_ctx);
+    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
+	    view_ctx, name);
+    if (!handle.isValid())
+	return 0;
+
+    std::vector<int32_t> obol_primitives =
+	ged_obol_primitives_from_ged(primitives, primitive_count);
+    return controller->features().replaceSelectedPrimitives(handle,
+	    obol_primitives) ? 1 : 0;
+}
+
+extern "C" int
+ged_draw_obol_view_context_feature_highlighted_primitives_replace(
+	void *view_ctx,
+	const char *name,
+	const int *primitives,
+	size_t primitive_count)
+{
+    BRLObolViewController *controller =
+	ged_obol_view_controller_for_context(view_ctx);
+    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
+	    view_ctx, name);
+    if (!handle.isValid())
+	return 0;
+
+    std::vector<int32_t> obol_primitives =
+	ged_obol_primitives_from_ged(primitives, primitive_count);
+    return controller->features().replaceHighlightedPrimitives(handle,
+	    obol_primitives) ? 1 : 0;
+}
+
+extern "C" size_t
+ged_draw_obol_view_context_feature_selected_primitive_count(
+	void *view_ctx,
+	const char *name)
+{
+    BRLObolViewController *controller =
+	ged_obol_view_controller_for_context(view_ctx);
+    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
+	    view_ctx, name);
+    std::vector<int32_t> primitives;
+    if (!handle.isValid() ||
+	    !controller->features().selectedPrimitives(handle, primitives))
+	return 0;
+    return primitives.size();
+}
+
+extern "C" size_t
+ged_draw_obol_view_context_feature_highlighted_primitive_count(
+	void *view_ctx,
+	const char *name)
+{
+    BRLObolViewController *controller =
+	ged_obol_view_controller_for_context(view_ctx);
+    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
+	    view_ctx, name);
+    std::vector<int32_t> primitives;
+    if (!handle.isValid() ||
+	    !controller->features().highlightedPrimitives(handle, primitives))
+	return 0;
+    return primitives.size();
+}
+
+extern "C" int
+ged_draw_obol_view_context_feature_selected_primitive_at(
+	void *view_ctx,
+	const char *name,
+	size_t index,
+	int *primitive)
+{
+    if (primitive)
+	*primitive = -1;
+    BRLObolViewController *controller =
+	ged_obol_view_controller_for_context(view_ctx);
+    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
+	    view_ctx, name);
+    std::vector<int32_t> primitives;
+    if (!primitive || !handle.isValid() ||
+	    !controller->features().selectedPrimitives(handle, primitives) ||
+	    index >= primitives.size())
+	return 0;
+    *primitive = static_cast<int>(primitives[index]);
+    return 1;
+}
+
+extern "C" int
+ged_draw_obol_view_context_feature_highlighted_primitive_at(
+	void *view_ctx,
+	const char *name,
+	size_t index,
+	int *primitive)
+{
+    if (primitive)
+	*primitive = -1;
+    BRLObolViewController *controller =
+	ged_obol_view_controller_for_context(view_ctx);
+    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
+	    view_ctx, name);
+    std::vector<int32_t> primitives;
+    if (!primitive || !handle.isValid() ||
+	    !controller->features().highlightedPrimitives(handle,
+		primitives) ||
+	    index >= primitives.size())
+	return 0;
+    *primitive = static_cast<int>(primitives[index]);
+    return 1;
+}
+
+extern "C" size_t
+ged_draw_obol_view_context_feature_metadata_count(void *view_ctx,
+	const char *name)
+{
+    BRLObolViewController *controller =
+	ged_obol_view_controller_for_context(view_ctx);
+    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
+	    view_ctx, name);
+    std::vector<BRLObolFeatureMetadata> metadata;
+    if (!handle.isValid() ||
+	    !controller->features().metadata(handle, metadata))
+	return 0;
+    return metadata.size();
+}
+
+extern "C" int
+ged_draw_obol_view_context_feature_metadata_copy(
+	void *view_ctx,
+	const char *name,
+	size_t index,
+	struct bu_vls *key,
+	struct bu_vls *value)
+{
+    if (key)
+	bu_vls_trunc(key, 0);
+    if (value)
+	bu_vls_trunc(value, 0);
+
+    BRLObolViewController *controller =
+	ged_obol_view_controller_for_context(view_ctx);
+    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
+	    view_ctx, name);
+    std::vector<BRLObolFeatureMetadata> metadata;
+    if (!handle.isValid() ||
+	    !controller->features().metadata(handle, metadata) ||
+	    index >= metadata.size())
+	return 0;
+
+    if (key)
+	bu_vls_strcat(key, metadata[index].key.getString());
+    if (value)
+	bu_vls_strcat(value, metadata[index].value.getString());
+    return 1;
+}
+
+extern "C" size_t
+ged_draw_obol_view_context_feature_primitive_metadata_count(
+	void *view_ctx,
+	const char *name,
+	int primitive)
+{
+    if (primitive < 0)
+	return 0;
+
+    BRLObolViewController *controller =
+	ged_obol_view_controller_for_context(view_ctx);
+    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
+	    view_ctx, name);
+    std::vector<BRLObolFeatureMetadata> metadata;
+    if (!handle.isValid() ||
+	    !controller->features().primitiveMetadata(handle,
+		static_cast<int32_t>(primitive), metadata))
+	return 0;
+    return metadata.size();
+}
+
+extern "C" int
+ged_draw_obol_view_context_feature_primitive_metadata_copy(
+	void *view_ctx,
+	const char *name,
+	int primitive,
+	size_t index,
+	struct bu_vls *key,
+	struct bu_vls *value)
+{
+    if (key)
+	bu_vls_trunc(key, 0);
+    if (value)
+	bu_vls_trunc(value, 0);
+    if (primitive < 0)
+	return 0;
+
+    BRLObolViewController *controller =
+	ged_obol_view_controller_for_context(view_ctx);
+    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
+	    view_ctx, name);
+    std::vector<BRLObolFeatureMetadata> metadata;
+    if (!handle.isValid() ||
+	    !controller->features().primitiveMetadata(handle,
+		static_cast<int32_t>(primitive), metadata) ||
+	    index >= metadata.size())
+	return 0;
+
+    if (key)
+	bu_vls_strcat(key, metadata[index].key.getString());
+    if (value)
+	bu_vls_strcat(value, metadata[index].value.getString());
+    return 1;
+}
+
+extern "C" int
+ged_draw_obol_view_context_feature_pick_primitive_resolve(
+	void *view_ctx,
+	const char *picked_feature_name,
+	int picked_primitive,
+	int select,
+	int highlight,
+	struct bu_vls *feature_name,
+	int *feature_primitive)
+{
+    if (feature_name)
+	bu_vls_trunc(feature_name, 0);
+    if (feature_primitive)
+	*feature_primitive = -1;
+    if (!picked_feature_name || picked_primitive < 0 ||
+	    !feature_primitive)
+	return 0;
+
+    BRLObolViewController *controller =
+	ged_obol_view_controller_for_context(view_ctx);
+    if (!controller)
+	return 0;
+
+    BRLObolFeaturePrimitivePick pick;
+    BRLObolFeatureOwner owner = ged_obol_feature_owner(view_ctx, 1);
+    if (!controller->features().resolvePrimitivePick(picked_feature_name,
+	    static_cast<int32_t>(picked_primitive), pick,
+	    BRLOBOL_FEATURE_SCOPE_LOCAL, &owner) &&
+	    !controller->features().resolvePrimitivePick(picked_feature_name,
+		static_cast<int32_t>(picked_primitive), pick,
+		BRLOBOL_FEATURE_SCOPE_SHARED, NULL))
+	return 0;
+
+    std::vector<int32_t> primitives;
+    primitives.push_back(pick.primitiveIndex);
+    if (select && !controller->features().replaceSelectedPrimitives(
+	    pick.handle, primitives))
+	return 0;
+    if (highlight && !controller->features().replaceHighlightedPrimitives(
+	    pick.handle, primitives))
+	return 0;
+
+    if (feature_name)
+	bu_vls_strcat(feature_name, pick.featureName.getString());
+    *feature_primitive = static_cast<int>(pick.primitiveIndex);
     return 1;
 }
 
@@ -2587,6 +3071,8 @@ ged_obol_view_feature_kind(BRLObolFeatureKind kind)
 	    return GED_DRAW_OBOL_VIEW_FEATURE_KIND_POLYGON_OVERLAY;
 	case BRLObolFeatureKind::HudLabel:
 	    return GED_DRAW_OBOL_VIEW_FEATURE_KIND_HUD_LABEL;
+	case BRLObolFeatureKind::CustomNode:
+	    return GED_DRAW_OBOL_VIEW_FEATURE_KIND_CUSTOM_NODE;
 	case BRLObolFeatureKind::Unknown:
 	default:
 	    return GED_DRAW_OBOL_VIEW_FEATURE_KIND_UNKNOWN;
@@ -2889,6 +3375,9 @@ ged_obol_feature_record_visit_cb(const BRLObolFeatureRecord &record,
     else if (!record.axesCenters.empty())
 	child_count = record.axesCenters.size();
     else if (!record.points.empty())
+	child_count = 1;
+    else if (record.kind == BRLObolFeatureKind::CustomNode &&
+	    record.realized)
 	child_count = 1;
 
     return ged_obol_feature_record_emit(ctx, record, record.name,
@@ -4644,10 +5133,15 @@ ged_draw_command_scene_begin(
     scene->view_ctx = view_ctx;
     scene->controller = controller;
     scene->owner = ged_obol_command_scene_owner(view_ctx, desc);
+    scene->controller->features().markCommandOwnerGeneration(scene->owner);
     scene->scope = (desc && desc->local) ?
 	BRLObolFeatureScope::Local : BRLObolFeatureScope::Shared;
+    scene->result_cb = desc ? desc->result_cb : NULL;
+    scene->result_cb_data = desc ? desc->result_cb_data : NULL;
     scene->changed = 0;
     scene->failed = 0;
+    ged_obol_command_scene_notify(scene, GED_DRAW_COMMAND_RESULT_ACCEPTED,
+	    NULL, "begin", NULL);
     return scene;
 }
 
@@ -4656,7 +5150,17 @@ ged_draw_command_scene_features_remove_prefix(
 	struct ged_draw_command_scene *scene,
 	const char *prefix)
 {
-    if (!ged_obol_command_scene_valid(scene) || !prefix)
+    if (!prefix) {
+	if (ged_obol_command_scene_valid(scene)) {
+	    scene->failed = 1;
+	    ged_obol_command_scene_notify(scene,
+		    GED_DRAW_COMMAND_RESULT_FAILED, NULL, "removePrefix",
+		    "missing feature prefix");
+	}
+	return 0;
+    }
+
+    if (!ged_obol_command_scene_writable(scene, prefix, "removePrefix"))
 	return 0;
 
     size_t removed = 0;
@@ -4668,6 +5172,14 @@ ged_draw_command_scene_features_remove_prefix(
 		BRLOBOL_FEATURE_SCOPE_SHARED, &scene->owner);
     }
     scene->changed += static_cast<int>(removed);
+    if (removed) {
+	char diagnostic[64];
+	snprintf(diagnostic, sizeof(diagnostic), "%zu feature(s) removed",
+		removed);
+	ged_obol_command_scene_notify(scene,
+		GED_DRAW_COMMAND_RESULT_REMOVED, prefix, "removePrefix",
+		diagnostic);
+    }
     return removed;
 }
 
@@ -4678,11 +5190,25 @@ ged_draw_command_scene_line_layer_builder_replace(
 	const struct bg_line_layer_builder *builder,
 	const struct ged_draw_view_feature_style *style)
 {
-    if (!ged_obol_command_scene_valid(scene) || !name)
+    if (!name) {
+	if (ged_obol_command_scene_valid(scene)) {
+	    scene->failed = 1;
+	    ged_obol_command_scene_notify(scene,
+		    GED_DRAW_COMMAND_RESULT_FAILED, NULL,
+		    "lineLayerBuilderReplace", "missing feature name");
+	}
+	return 0;
+    }
+
+    if (!ged_obol_command_scene_writable(scene, name,
+	    "lineLayerBuilderReplace"))
 	return 0;
 
     if (!builder || !bg_line_layer_builder_point_count(builder)) {
-	(void)ged_obol_command_scene_remove_feature(scene, name);
+	(void)ged_obol_command_scene_remove_feature(scene, name,
+		"lineLayerBuilderReplace");
+	if (scene->failed)
+	    return 0;
 	scene->changed++;
 	return 1;
     }
@@ -4695,12 +5221,18 @@ ged_draw_command_scene_line_layer_builder_replace(
 		&scene->owner);
     if (!handle.isValid()) {
 	scene->failed = 1;
+	ged_obol_command_scene_notify(scene,
+		GED_DRAW_COMMAND_RESULT_FAILED, name,
+		"lineLayerBuilderReplace", "feature publish failed");
 	return 0;
     }
 
     (void)ged_obol_feature_mark_overlay(scene->controller, handle,
 	    ged_obol_command_scene_overlay_info(scene, name));
     scene->changed++;
+    ged_obol_command_scene_notify(scene,
+	    GED_DRAW_COMMAND_RESULT_UPDATED, name,
+	    "lineLayerBuilderReplace", NULL, handle);
     return 1;
 }
 
@@ -4712,7 +5244,18 @@ ged_draw_command_scene_line_layers_replace(
 	size_t layer_count,
 	const struct ged_draw_view_feature_style *style)
 {
-    if (!ged_obol_command_scene_valid(scene) || !name)
+    if (!name) {
+	if (ged_obol_command_scene_valid(scene)) {
+	    scene->failed = 1;
+	    ged_obol_command_scene_notify(scene,
+		    GED_DRAW_COMMAND_RESULT_FAILED, NULL,
+		    "lineLayersReplace", "missing feature name");
+	}
+	return 0;
+    }
+
+    if (!ged_obol_command_scene_writable(scene, name,
+	    "lineLayersReplace"))
 	return 0;
 
     size_t live_layers = 0;
@@ -4721,7 +5264,10 @@ ged_draw_command_scene_line_layers_replace(
 	    live_layers++;
     }
     if (!layers || !live_layers) {
-	(void)ged_obol_command_scene_remove_feature(scene, name);
+	(void)ged_obol_command_scene_remove_feature(scene, name,
+		"lineLayersReplace");
+	if (scene->failed)
+	    return 0;
 	scene->changed++;
 	return 1;
     }
@@ -4758,12 +5304,472 @@ ged_draw_command_scene_line_layers_replace(
 		&scene->owner);
     if (!handle.isValid()) {
 	scene->failed = 1;
+	ged_obol_command_scene_notify(scene,
+		GED_DRAW_COMMAND_RESULT_FAILED, name,
+		"lineLayersReplace", "feature publish failed");
 	return 0;
     }
 
     (void)ged_obol_feature_mark_overlay(scene->controller, handle,
 	    ged_obol_command_scene_overlay_info(scene, name));
     scene->changed++;
+    ged_obol_command_scene_notify(scene,
+	    GED_DRAW_COMMAND_RESULT_UPDATED, name, "lineLayersReplace",
+	    NULL, handle);
+    return 1;
+}
+
+extern "C" int
+ged_draw_command_scene_line_set_replace(
+	struct ged_draw_command_scene *scene,
+	const char *name,
+	const point_t *points,
+	const int *cmds,
+	size_t point_count,
+	const struct ged_draw_view_feature_style *style)
+{
+    if (!name) {
+	if (ged_obol_command_scene_valid(scene)) {
+	    scene->failed = 1;
+	    ged_obol_command_scene_notify(scene,
+		    GED_DRAW_COMMAND_RESULT_FAILED, NULL,
+		    "lineSetReplace", "missing feature name");
+	}
+	return 0;
+    }
+
+    if (!ged_obol_command_scene_writable(scene, name, "lineSetReplace"))
+	return 0;
+
+    if (point_count && !points) {
+	scene->failed = 1;
+	ged_obol_command_scene_notify(scene,
+		GED_DRAW_COMMAND_RESULT_FAILED, name, "lineSetReplace",
+		"missing line payload");
+	return 0;
+    }
+
+    if (!points || !point_count) {
+	(void)ged_obol_command_scene_remove_feature(scene, name,
+		"lineSetReplace");
+	if (scene->failed)
+	    return 0;
+	scene->changed++;
+	return 1;
+    }
+
+    BRLObolFeatureStyle obol_style =
+	ged_obol_feature_style_from_ged(style);
+    BRLObolFeatureHandle handle =
+	scene->controller->features().publishLineSet(name, scene->scope,
+		ged_obol_points_from_ged(points, point_count),
+		ged_obol_commands_from_ged(cmds, point_count),
+		style ? &obol_style : NULL, &scene->owner);
+    if (!handle.isValid()) {
+	scene->failed = 1;
+	ged_obol_command_scene_notify(scene,
+		GED_DRAW_COMMAND_RESULT_FAILED, name, "lineSetReplace",
+		"feature publish failed");
+	return 0;
+    }
+
+    (void)ged_obol_feature_mark_overlay(scene->controller, handle,
+	    ged_obol_command_scene_overlay_info(scene, name));
+    scene->changed++;
+    ged_obol_command_scene_notify(scene,
+	    GED_DRAW_COMMAND_RESULT_UPDATED, name, "lineSetReplace",
+	    NULL, handle);
+    return 1;
+}
+
+extern "C" int
+ged_draw_command_scene_point_set_replace(
+	struct ged_draw_command_scene *scene,
+	const char *name,
+	const point_t *points,
+	size_t point_count,
+	const struct ged_draw_view_feature_style *style)
+{
+    if (!name) {
+	if (ged_obol_command_scene_valid(scene)) {
+	    scene->failed = 1;
+	    ged_obol_command_scene_notify(scene,
+		    GED_DRAW_COMMAND_RESULT_FAILED, NULL,
+		    "pointSetReplace", "missing feature name");
+	}
+	return 0;
+    }
+
+    if (!ged_obol_command_scene_writable(scene, name, "pointSetReplace"))
+	return 0;
+
+    if (point_count && !points) {
+	scene->failed = 1;
+	ged_obol_command_scene_notify(scene,
+		GED_DRAW_COMMAND_RESULT_FAILED, name, "pointSetReplace",
+		"missing point payload");
+	return 0;
+    }
+
+    if (!points || !point_count) {
+	(void)ged_obol_command_scene_remove_feature(scene, name,
+		"pointSetReplace");
+	if (scene->failed)
+	    return 0;
+	scene->changed++;
+	return 1;
+    }
+
+    BRLObolFeatureStyle obol_style =
+	ged_obol_feature_style_from_ged(style);
+    BRLObolFeatureHandle handle =
+	scene->controller->features().publishPointSet(name, scene->scope,
+		ged_obol_points_from_ged(points, point_count),
+		style ? &obol_style : NULL, &scene->owner);
+    if (!handle.isValid()) {
+	scene->failed = 1;
+	ged_obol_command_scene_notify(scene,
+		GED_DRAW_COMMAND_RESULT_FAILED, name, "pointSetReplace",
+		"feature publish failed");
+	return 0;
+    }
+
+    (void)ged_obol_feature_mark_overlay(scene->controller, handle,
+	    ged_obol_command_scene_overlay_info(scene, name));
+    scene->changed++;
+    ged_obol_command_scene_notify(scene,
+	    GED_DRAW_COMMAND_RESULT_UPDATED, name, "pointSetReplace",
+	    NULL, handle);
+    return 1;
+}
+
+extern "C" int
+ged_draw_command_scene_indexed_face_set_replace(
+	struct ged_draw_command_scene *scene,
+	const char *name,
+	const point_t *points,
+	size_t point_count,
+	const vect_t *normals,
+	size_t normal_count,
+	const int *indices,
+	size_t index_count,
+	const struct ged_draw_view_feature_style *style)
+{
+    if (!name) {
+	if (ged_obol_command_scene_valid(scene)) {
+	    scene->failed = 1;
+	    ged_obol_command_scene_notify(scene,
+		    GED_DRAW_COMMAND_RESULT_FAILED, NULL,
+		    "indexedFaceSetReplace", "missing feature name");
+	}
+	return 0;
+    }
+
+    if (!ged_obol_command_scene_writable(scene, name,
+	    "indexedFaceSetReplace"))
+	return 0;
+
+    if ((point_count && !points) || (index_count && !indices)) {
+	scene->failed = 1;
+	ged_obol_command_scene_notify(scene,
+		GED_DRAW_COMMAND_RESULT_FAILED, name,
+		"indexedFaceSetReplace", "missing indexed-face payload");
+	return 0;
+    }
+
+    if (!points || !point_count || !indices || !index_count) {
+	(void)ged_obol_command_scene_remove_feature(scene, name,
+		"indexedFaceSetReplace");
+	if (scene->failed)
+	    return 0;
+	scene->changed++;
+	return 1;
+    }
+
+    BRLObolFeatureStyle obol_style =
+	ged_obol_feature_style_from_ged(style);
+    BRLObolFeatureHandle handle =
+	scene->controller->features().publishIndexedFaceSet(name,
+		scene->scope,
+		ged_obol_points_from_ged(points, point_count),
+		ged_obol_vectors_from_ged(normals, normal_count),
+		ged_obol_indices_from_ged(indices, index_count),
+		style ? &obol_style : NULL, &scene->owner);
+    if (!handle.isValid()) {
+	scene->failed = 1;
+	ged_obol_command_scene_notify(scene,
+		GED_DRAW_COMMAND_RESULT_FAILED, name,
+		"indexedFaceSetReplace", "feature publish failed");
+	return 0;
+    }
+
+    (void)ged_obol_feature_mark_overlay(scene->controller, handle,
+	    ged_obol_command_scene_overlay_info(scene, name));
+    scene->changed++;
+    ged_obol_command_scene_notify(scene,
+	    GED_DRAW_COMMAND_RESULT_UPDATED, name, "indexedFaceSetReplace",
+	    NULL, handle);
+    return 1;
+}
+
+extern "C" int
+ged_draw_command_scene_hud_label_replace(
+	struct ged_draw_command_scene *scene,
+	const char *name,
+	const struct ged_diagnostic_hud_label *label)
+{
+    if (!name) {
+	if (ged_obol_command_scene_valid(scene)) {
+	    scene->failed = 1;
+	    ged_obol_command_scene_notify(scene,
+		    GED_DRAW_COMMAND_RESULT_FAILED, NULL, "hudLabelReplace",
+		    "missing feature name");
+	}
+	return 0;
+    }
+
+    if (!ged_obol_command_scene_writable(scene, name, "hudLabelReplace"))
+	return 0;
+
+    if (!label || !label->text || !label->text[0]) {
+	(void)ged_obol_command_scene_remove_feature(scene, name,
+		"hudLabelReplace");
+	if (scene->failed)
+	    return 0;
+	scene->changed++;
+	return 1;
+    }
+
+    BRLObolFeatureStyle obol_style;
+    obol_style.hasVisible = TRUE;
+    obol_style.visible = TRUE;
+    obol_style.hasSelectable = TRUE;
+    obol_style.selectable = TRUE;
+
+    std::vector<BRLObolLabel> labels;
+    labels.push_back(ged_obol_label_from_hud(*label));
+    BRLObolFeatureHandle handle =
+	scene->controller->features().publishHudLabels(name,
+		scene->scope, labels, &obol_style, &scene->owner);
+    if (!handle.isValid()) {
+	scene->failed = 1;
+	ged_obol_command_scene_notify(scene,
+		GED_DRAW_COMMAND_RESULT_FAILED, name, "hudLabelReplace",
+		"feature publish failed");
+	return 0;
+    }
+
+    (void)ged_obol_feature_mark_overlay(scene->controller, handle,
+	    ged_obol_command_scene_overlay_info(scene, name));
+    scene->changed++;
+    ged_obol_command_scene_notify(scene,
+	    GED_DRAW_COMMAND_RESULT_UPDATED, name, "hudLabelReplace",
+	    NULL, handle);
+    return 1;
+}
+
+extern "C" int
+ged_draw_command_scene_custom_node_replace(
+	struct ged_draw_command_scene *scene,
+	const char *name,
+	ged_draw_command_scene_custom_node_cb node_cb,
+	void *node_cb_data,
+	const struct ged_draw_view_feature_style *style)
+{
+    if (!name) {
+	if (ged_obol_command_scene_valid(scene)) {
+	    scene->failed = 1;
+	    ged_obol_command_scene_notify(scene,
+		    GED_DRAW_COMMAND_RESULT_FAILED, NULL,
+		    "customNodeReplace", "missing feature name");
+	}
+	return 0;
+    }
+
+    if (!ged_obol_command_scene_writable(scene, name,
+	    "customNodeReplace"))
+	return 0;
+
+    if (!node_cb) {
+	(void)ged_obol_command_scene_remove_feature(scene, name,
+		"customNodeReplace");
+	if (scene->failed)
+	    return 0;
+	scene->changed++;
+	return 1;
+    }
+
+    struct ged_draw_command_scene_custom_node_request request =
+	GED_DRAW_COMMAND_SCENE_CUSTOM_NODE_REQUEST_INIT;
+    request.feature_name = name;
+    request.owner_id = scene->owner.ownerId.getString();
+    request.owner_role = scene->owner.ownerRole.getString();
+    request.generation = scene->owner.generation;
+    request.local = scene->scope == BRLObolFeatureScope::Local ? 1 : 0;
+
+    SoNode *node = static_cast<SoNode *>(node_cb(&request,
+	    node_cb_data));
+    if (!node) {
+	scene->failed = 1;
+	ged_obol_command_scene_notify(scene,
+		GED_DRAW_COMMAND_RESULT_FAILED, name,
+		"customNodeReplace", "custom Coin node provider returned null");
+	return 0;
+    }
+
+    BRLObolFeatureStyle obol_style =
+	ged_obol_feature_style_from_ged(style);
+    BRLObolFeatureHandle handle =
+	scene->controller->features().publishCustomNode(name,
+		scene->scope, node, style ? &obol_style : NULL,
+		&scene->owner);
+    if (!handle.isValid()) {
+	scene->failed = 1;
+	ged_obol_command_scene_notify(scene,
+		GED_DRAW_COMMAND_RESULT_FAILED, name,
+		"customNodeReplace", "custom Coin node publish failed");
+	return 0;
+    }
+
+    (void)ged_obol_feature_mark_overlay(scene->controller, handle,
+	    ged_obol_command_scene_overlay_info(scene, name));
+    scene->changed++;
+    ged_obol_command_scene_notify(scene,
+	    GED_DRAW_COMMAND_RESULT_UPDATED, name,
+	    "customNodeReplace", NULL, handle);
+    return 1;
+}
+
+extern "C" int
+ged_draw_command_scene_feature_metadata_replace(
+	struct ged_draw_command_scene *scene,
+	const char *name,
+	const struct ged_draw_command_scene_metadata *metadata,
+	size_t metadata_count)
+{
+    if (!name) {
+	if (ged_obol_command_scene_valid(scene)) {
+	    scene->failed = 1;
+	    ged_obol_command_scene_notify(scene,
+		    GED_DRAW_COMMAND_RESULT_FAILED, NULL, "metadataReplace",
+		    "missing feature name");
+	}
+	return 0;
+    }
+
+    if (!ged_obol_command_scene_writable(scene, name, "metadataReplace"))
+	return 0;
+
+    BRLObolFeatureHandle handle =
+	scene->controller->features().findOwned(name,
+		scene->scope == BRLObolFeatureScope::Local ?
+		BRLOBOL_FEATURE_SCOPE_LOCAL : BRLOBOL_FEATURE_SCOPE_SHARED,
+		&scene->owner);
+    if (!handle.isValid()) {
+	scene->failed = 1;
+	ged_obol_command_scene_notify(scene,
+		GED_DRAW_COMMAND_RESULT_FAILED, name, "metadataReplace",
+		"owned feature not found");
+	return 0;
+    }
+
+    std::vector<BRLObolFeatureMetadata> obol_metadata;
+    obol_metadata.reserve(metadata_count);
+    for (size_t i = 0; metadata && i < metadata_count; i++) {
+	if (!metadata[i].key || !metadata[i].key[0])
+	    continue;
+	BRLObolFeatureMetadata item;
+	item.key = metadata[i].key;
+	item.value = metadata[i].value ? metadata[i].value : "";
+	obol_metadata.push_back(item);
+    }
+
+    if (!scene->controller->features().replaceMetadata(handle,
+	    obol_metadata)) {
+	scene->failed = 1;
+	ged_obol_command_scene_notify(scene,
+		GED_DRAW_COMMAND_RESULT_FAILED, name, "metadataReplace",
+		"metadata replace failed", handle);
+	return 0;
+    }
+
+    scene->changed++;
+    ged_obol_command_scene_notify(scene,
+	    GED_DRAW_COMMAND_RESULT_UPDATED, name, "metadataReplace",
+	    NULL, handle);
+    return 1;
+}
+
+extern "C" int
+ged_draw_command_scene_feature_primitive_metadata_replace(
+	struct ged_draw_command_scene *scene,
+	const char *name,
+	int primitive,
+	const struct ged_draw_command_scene_metadata *metadata,
+	size_t metadata_count)
+{
+    if (!name) {
+	if (ged_obol_command_scene_valid(scene)) {
+	    scene->failed = 1;
+	    ged_obol_command_scene_notify(scene,
+		    GED_DRAW_COMMAND_RESULT_FAILED, NULL,
+		    "primitiveMetadataReplace", "missing feature name");
+	}
+	return 0;
+    }
+    if (primitive < 0) {
+	if (ged_obol_command_scene_valid(scene)) {
+	    scene->failed = 1;
+	    ged_obol_command_scene_notify(scene,
+		    GED_DRAW_COMMAND_RESULT_FAILED, name,
+		    "primitiveMetadataReplace",
+		    "invalid primitive index");
+	}
+	return 0;
+    }
+
+    if (!ged_obol_command_scene_writable(scene, name,
+	    "primitiveMetadataReplace"))
+	return 0;
+
+    BRLObolFeatureHandle handle =
+	scene->controller->features().findOwned(name,
+		scene->scope == BRLObolFeatureScope::Local ?
+		BRLOBOL_FEATURE_SCOPE_LOCAL : BRLOBOL_FEATURE_SCOPE_SHARED,
+		&scene->owner);
+    if (!handle.isValid()) {
+	scene->failed = 1;
+	ged_obol_command_scene_notify(scene,
+		GED_DRAW_COMMAND_RESULT_FAILED, name,
+		"primitiveMetadataReplace", "owned feature not found");
+	return 0;
+    }
+
+    std::vector<BRLObolFeatureMetadata> obol_metadata;
+    obol_metadata.reserve(metadata_count);
+    for (size_t i = 0; metadata && i < metadata_count; i++) {
+	if (!metadata[i].key || !metadata[i].key[0])
+	    continue;
+	BRLObolFeatureMetadata item;
+	item.key = metadata[i].key;
+	item.value = metadata[i].value ? metadata[i].value : "";
+	obol_metadata.push_back(item);
+    }
+
+    if (!scene->controller->features().replacePrimitiveMetadata(handle,
+	    static_cast<int32_t>(primitive), obol_metadata)) {
+	scene->failed = 1;
+	ged_obol_command_scene_notify(scene,
+		GED_DRAW_COMMAND_RESULT_FAILED, name,
+		"primitiveMetadataReplace",
+		"primitive metadata replace failed", handle);
+	return 0;
+    }
+
+    scene->changed++;
+    ged_obol_command_scene_notify(scene,
+	    GED_DRAW_COMMAND_RESULT_UPDATED, name,
+	    "primitiveMetadataReplace", NULL, handle);
     return 1;
 }
 
@@ -4773,7 +5779,14 @@ ged_draw_command_scene_commit(struct ged_draw_command_scene *scene)
     if (!ged_obol_command_scene_valid(scene))
 	return 0;
 
-    const int ret = scene->failed ? 0 : 1;
+    const int ret = (scene->failed ||
+	    !scene->controller->features().commandOwnerGenerationCurrent(
+		scene->owner)) ? 0 : 1;
+    ged_obol_command_scene_notify(scene,
+	    ret ? GED_DRAW_COMMAND_RESULT_ACCEPTED :
+	    GED_DRAW_COMMAND_RESULT_FAILED,
+	    NULL, "commit",
+	    ret ? NULL : "command-scene commit rejected");
     scene->magic = 0;
     delete scene;
     return ret;
@@ -5871,6 +6884,152 @@ ged_draw_obol_overlay_erase_name_context(
 }
 
 extern "C" int
+ged_draw_view_context_object_remove(
+	struct ged *gedp,
+	void *view_ctx,
+	const char *name,
+	ged_draw_shape_ref shape_ref,
+	struct bu_vls *result)
+{
+    if (!gedp || !view_ctx || !name || !name[0])
+	return 0;
+
+    if (ged_draw_view_context_feature_exists(view_ctx, name)) {
+	if (!ged_draw_view_context_feature_remove(view_ctx, name)) {
+	    if (result)
+		bu_vls_printf(result, "No view feature named %s\n", name);
+	    return 0;
+	}
+	return 1;
+    }
+
+    if (ged_draw_shape_ref_is_null(shape_ref)) {
+	if (ged_draw_obol_overlay_erase_name_context(gedp, view_ctx, name) ||
+		ged_draw_source_erase_groups_by_name_at_root(gedp, name))
+	    return 1;
+	if (result)
+	    bu_vls_printf(result, "No view feature named %s\n", name);
+	return 0;
+    }
+
+    struct ged_draw_shape_record rec;
+    if (!ged_draw_shape_record_get(gedp, shape_ref, &rec)) {
+	if (result)
+	    bu_vls_printf(result, "No view feature named %s\n", name);
+	return 0;
+    }
+    if (rec.fullpath) {
+	if (result)
+	    bu_vls_printf(result,
+		    "View feature %s is associated with a database object - use 'erase' cmd to clear\n",
+		    name);
+	return 0;
+    }
+
+    return ged_draw_shape_ref_release(gedp, shape_ref);
+}
+
+extern "C" int
+ged_draw_view_context_object_visible_get(
+	struct ged *gedp,
+	void *view_ctx,
+	const char *name,
+	ged_draw_shape_ref shape_ref,
+	int *visible,
+	struct bu_vls *result)
+{
+    if (!gedp || !view_ctx || !name || !name[0] || !visible)
+	return 0;
+
+    if (ged_draw_view_context_feature_exists(view_ctx, name)) {
+	struct ged_draw_view_feature_style style =
+	    GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+	if (!ged_draw_view_context_feature_style_get(view_ctx, name, &style)) {
+	    if (result)
+		bu_vls_printf(result, "No view feature named %s\n", name);
+	    return 0;
+	}
+	*visible = style.visible ? 1 : 0;
+	return 1;
+    }
+
+    if (ged_draw_shape_ref_is_null(shape_ref)) {
+	if (result)
+	    bu_vls_printf(result, "No view feature named %s\n", name);
+	return 0;
+    }
+
+    struct ged_draw_shape_record rec;
+    if (!ged_draw_shape_record_get(gedp, shape_ref, &rec)) {
+	if (result)
+	    bu_vls_printf(result, "No view feature named %s\n", name);
+	return 0;
+    }
+    *visible = rec.visible ? 1 : 0;
+    return 1;
+}
+
+extern "C" int
+ged_draw_view_context_object_visible_set(
+	struct ged *gedp,
+	void *view_ctx,
+	const char *name,
+	ged_draw_shape_ref shape_ref,
+	int visible,
+	struct bu_vls *result)
+{
+    if (!gedp || !view_ctx || !name || !name[0])
+	return 0;
+
+    if (ged_draw_view_context_feature_exists(view_ctx, name)) {
+	struct ged_draw_view_feature_style style =
+	    GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+	if (!ged_draw_view_context_feature_style_get(view_ctx, name, &style)) {
+	    if (result)
+		bu_vls_printf(result, "No view feature named %s\n", name);
+	    return 0;
+	}
+	style.visible = visible ? 1 : 0;
+	return ged_draw_view_context_feature_style_apply(view_ctx, name,
+		&style, 0);
+    }
+
+    if (ged_draw_shape_ref_is_null(shape_ref)) {
+	if (result)
+	    bu_vls_printf(result, "No view feature named %s\n", name);
+	return 0;
+    }
+
+    return ged_draw_shape_ref_set_visible(gedp, shape_ref, visible ? 1 : 0);
+}
+
+extern "C" int
+ged_draw_view_context_object_realize(
+	struct ged *gedp,
+	void *view_ctx,
+	const char *name,
+	ged_draw_shape_ref shape_ref,
+	struct bu_vls *result)
+{
+    if (!gedp || !view_ctx || !name || !name[0])
+	return 0;
+
+    if (ged_draw_view_context_feature_exists(view_ctx, name)) {
+	(void)ged_draw_view_context_feature_realize(view_ctx, name, 1);
+	return 1;
+    }
+
+    if (ged_draw_shape_ref_is_null(shape_ref)) {
+	if (result)
+	    bu_vls_printf(result, "No view feature named %s\n", name);
+	return 0;
+    }
+
+    (void)ged_draw_shape_ref_realize_context(gedp, shape_ref, view_ctx);
+    return 1;
+}
+
+extern "C" int
 ged_draw_obol_overlay_geometry_insert_context(
 	struct ged *gedp,
 	void *view_ctx,
@@ -6576,27 +7735,20 @@ ged_draw_obol_database_source_mark_stale_for_path(
     return changed >= 0 ? 1 : 0;
 }
 
-extern "C" int
-ged_draw_obol_database_source_record_for_path(
-	struct ged *gedp,
-	const char *path,
-	struct ged_draw_obol_database_source_record *out)
+static int
+ged_obol_database_source_record_from_summary(
+	struct ged_draw_obol_database_source_record *out,
+	const BRLObolDatabaseSourceSummary &summary)
 {
     if (!out)
 	return 0;
 
     memset(out, 0, sizeof(*out));
-    SoBRLDatabaseSource *source =
-	ged_obol_owned_database_source_for_path(gedp, path);
-    if (!source)
-	return 0;
-
-    BRLObolDatabaseSourceSummary summary;
-    if (!source->getSummary(summary) || !summary.valid)
+    if (!summary.valid)
 	return 0;
 
     out->valid = 1;
-    out->database_path = source->path.getValue().getString();
+    out->database_path = summary.path.getString();
     out->draw_mode = summary.representationMode >= 0 ?
 	summary.representationMode :
 	ged_obol_database_draw_mode_to_ged(summary.drawMode);
@@ -6626,6 +7778,28 @@ ged_draw_obol_database_source_record_for_path(
     out->realization_curve_scale = (fastf_t)summary.realizationCurveScale;
     out->realization_point_scale = (fastf_t)summary.realizationPointScale;
     return 1;
+}
+
+extern "C" int
+ged_draw_obol_database_source_record_for_path(
+	struct ged *gedp,
+	const char *path,
+	struct ged_draw_obol_database_source_record *out)
+{
+    if (!out)
+	return 0;
+
+    memset(out, 0, sizeof(*out));
+    SoBRLDatabaseSource *source =
+	ged_obol_owned_database_source_for_path(gedp, path);
+    if (!source)
+	return 0;
+
+    BRLObolDatabaseSourceSummary summary;
+    if (!source->getSummary(summary) || !summary.valid)
+	return 0;
+
+    return ged_obol_database_source_record_from_summary(out, summary);
 }
 
 extern "C" int
@@ -7332,6 +8506,45 @@ ged_draw_obol_database_source_paths_foreach(
     return 1;
 }
 
+extern "C" int
+ged_draw_obol_database_source_records_foreach(
+	struct ged *gedp,
+	int skip_overlay_groups,
+	ged_draw_obol_database_source_record_cb cb,
+	void *userdata)
+{
+    if (!gedp || !cb || !ged_draw_obol_scene_controller_owned(gedp))
+	return -1;
+
+    SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
+    if (!scene)
+	return -1;
+
+    const int source_count = scene->getDatabaseSourceCount();
+    if (source_count <= 0)
+	return 1;
+
+    for (int i = 0; i < source_count; i++) {
+	BRLObolDatabaseSourceSummary summary;
+	if (!scene->getDatabaseSourceSummary(i, summary) || !summary.valid)
+	    continue;
+
+	if (skip_overlay_groups &&
+		ged_obol_group_path_is_overlay(scene,
+		    summary.parentGroupPath.getString()))
+	    continue;
+
+	struct ged_draw_obol_database_source_record record;
+	if (!ged_obol_database_source_record_from_summary(&record, summary))
+	    continue;
+	if (record.database_path && record.database_path[0] &&
+		!(*cb)(gedp, &record, userdata))
+	    return 0;
+    }
+
+    return 1;
+}
+
 static SbBool
 ged_obol_shape_node_bool_field(SoNode *node,
 			       const char *field_name,
@@ -7491,6 +8704,51 @@ ged_draw_obol_group_database_source_paths_foreach(
 	const char *source_path = summary.path.getString();
 	if (source_path && source_path[0] && !(*cb)(gedp, source_path,
 		userdata))
+	    return 0;
+    }
+
+    return 1;
+}
+
+extern "C" int
+ged_draw_obol_group_database_source_records_foreach(
+	struct ged *gedp,
+	const char *group_path,
+	ged_draw_obol_database_source_record_cb cb,
+	void *userdata)
+{
+    if (!gedp || !group_path || !group_path[0] || !cb ||
+	    !ged_draw_obol_scene_controller_owned(gedp))
+	return -1;
+
+    SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
+    if (!scene)
+	return -1;
+
+    const std::string target_group =
+	ged_obol_group_path_from_record_path(group_path);
+    if (target_group.empty())
+	return -1;
+
+    const int source_count = scene->getDatabaseSourceCount();
+    for (int i = 0; i < source_count; i++) {
+	BRLObolDatabaseSourceSummary summary;
+	if (!scene->getDatabaseSourceSummary(i, summary) || !summary.valid)
+	    continue;
+
+	const std::string owner_group_path =
+	    ged_obol_database_source_owner_group_path_from_summary(summary);
+	if (!ged_obol_path_equal(owner_group_path.c_str(),
+		target_group.c_str()) &&
+		!ged_obol_path_has_prefix(owner_group_path.c_str(),
+		    target_group.c_str()))
+	    continue;
+
+	struct ged_draw_obol_database_source_record record;
+	if (!ged_obol_database_source_record_from_summary(&record, summary))
+	    continue;
+	if (record.database_path && record.database_path[0] &&
+		!(*cb)(gedp, &record, userdata))
 	    return 0;
     }
 
@@ -11545,6 +12803,10 @@ ged_draw_obol_scene_sync_transaction(
 	    changed = ged_obol_apply_visibility_transaction(txn, result,
 		    scene);
 	    break;
+	case GED_DRAW_TXN_HIGHLIGHT:
+	    changed = ged_obol_apply_highlight_transaction(txn, result,
+		    scene);
+	    break;
 	case GED_DRAW_TXN_MATERIAL_CHANGED:
 	case GED_DRAW_TXN_REFRESH_MATERIAL_COLORS:
 	    changed = (result && result->status >= 0) ? 1 : 0;
@@ -11593,7 +12855,6 @@ ged_draw_obol_scene_sync_transaction(
 	    break;
 	case GED_DRAW_TXN_DEFAULT_DRAW_MODE:
 	case GED_DRAW_TXN_TRANSPARENCY:
-	case GED_DRAW_TXN_HIGHLIGHT:
 	case GED_DRAW_TXN_NONE:
 	default:
 	    break;

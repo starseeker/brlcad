@@ -12,7 +12,10 @@
 
 #include "brlobol/pick_detail.h"
 #include "brlobol/view_controller.h"
+#include "brlobol/view_store.h"
 #include "qtcad/QgView.h"
+#include "rt/view.h"
+#include "QgLegacyViewContext.h"
 
 #include <Inventor/SbLine.h>
 #include <Inventor/SbViewVolume.h>
@@ -36,6 +39,7 @@ QgObolPickRecord::QgObolPickRecord(void) :
     path(),
     sourceName(),
     sourceType(),
+    featureName(),
     materialShader(),
     editIntentId(),
     editIntentRole(),
@@ -50,6 +54,7 @@ QgObolPickRecord::QgObolPickRecord(void) :
     los(0),
     primitiveKind(UNKNOWN),
     primitiveIndex(-1),
+    featurePrimitiveIndex(-1),
     faceVertexIndexA(-1),
     faceVertexIndexB(-1),
     faceVertexIndexC(-1),
@@ -58,8 +63,42 @@ QgObolPickRecord::QgObolPickRecord(void) :
     nearestFaceEdgeVertexIndexB(-1),
     nearestFaceVertexSlot(-1),
     nearestFaceVertexIndex(-1),
-    materialColorValid(false)
+    materialColorValid(false),
+    featurePickResolved(false),
+    featurePrimitiveMetadata()
 {
+}
+
+static void *
+qg_obol_pick_view_context(QgView *display)
+{
+    return display ? qg_legacy_view_to_context(display->view()) : NULL;
+}
+
+static std::string
+qg_obol_pick_view_scope_name(QgView *display)
+{
+    void *view_ctx = qg_obol_pick_view_context(display);
+    if (!view_ctx)
+	return std::string("shared");
+
+    const char *name = rt_view_context_name_get(view_ctx);
+    if (name && name[0])
+	return std::string(name);
+
+    char fallback[64] = {0};
+    std::snprintf(fallback, sizeof(fallback), "%p", view_ctx);
+    return std::string(fallback);
+}
+
+static BRLObolFeatureOwner
+qg_obol_pick_view_owner(QgView *display)
+{
+    BRLObolFeatureOwner owner;
+    owner.ownerToken = qg_obol_pick_view_context(display);
+    owner.ownerId = qg_obol_pick_view_scope_name(display).c_str();
+    owner.ownerRole = "view";
+    return owner;
 }
 
 static int
@@ -100,6 +139,55 @@ qg_obol_brl_pick_detail(const SoPickedPoint *pickedPoint)
     }
 
     return NULL;
+}
+
+static bool
+qg_obol_feature_pick_from_record(BRLObolViewController *controller,
+	const BRLObolFeatureOwner *owner,
+	const QgObolPickRecord &record,
+	BRLObolFeaturePrimitivePick &pick)
+{
+    if (!controller || record.primitiveIndex < 0)
+	return false;
+
+    const std::string pickedName = record.path.empty() ?
+	record.sourceName : record.path;
+    if (pickedName.empty())
+	return false;
+
+    if (!(owner && controller->features().resolvePrimitivePick(
+	    pickedName.c_str(), static_cast<int32_t>(record.primitiveIndex),
+	    pick, BRLOBOL_FEATURE_SCOPE_LOCAL, owner)) &&
+	    !controller->features().resolvePrimitivePick(pickedName.c_str(),
+		static_cast<int32_t>(record.primitiveIndex), pick,
+		BRLOBOL_FEATURE_SCOPE_SHARED, NULL))
+	return false;
+
+    return true;
+}
+
+static void
+qg_obol_resolve_feature_pick(BRLObolViewController *controller,
+	const BRLObolFeatureOwner *owner,
+	QgObolPickRecord &record)
+{
+    record.featurePickResolved = false;
+    record.featureName.clear();
+    record.featurePrimitiveIndex = -1;
+    record.featurePrimitiveMetadata.clear();
+
+    BRLObolFeaturePrimitivePick pick;
+    if (!qg_obol_feature_pick_from_record(controller, owner, record, pick))
+	return;
+
+    record.featurePickResolved = true;
+    record.featureName = pick.featureName.getString();
+    record.featurePrimitiveIndex = static_cast<int>(pick.primitiveIndex);
+    for (size_t i = 0; i < pick.metadata.size(); i++) {
+	record.featurePrimitiveMetadata.push_back(std::make_pair(
+		std::string(pick.metadata[i].key.getString()),
+		std::string(pick.metadata[i].value.getString())));
+    }
 }
 
 static QgObolPickRecord
@@ -171,6 +259,62 @@ qg_obol_pick_record(const BRLObolRtPickResult &pick)
     return qg_obol_pick_record(&pick.detail, pick.point, pick.distance);
 }
 
+static int
+qg_obol_apply_feature_states(BRLObolViewController *controller,
+	const BRLObolFeatureOwner *owner,
+	const std::vector<QgObolPickRecord> &records,
+	bool select,
+	bool highlight)
+{
+    if (!controller || records.empty() || (!select && !highlight))
+	return 0;
+
+    struct FeaturePrimitiveGroup {
+	BRLObolFeatureHandle handle;
+	std::vector<int32_t> primitives;
+    };
+    std::vector<FeaturePrimitiveGroup> groups;
+
+    for (size_t i = 0; i < records.size(); i++) {
+	BRLObolFeaturePrimitivePick pick;
+	if (!qg_obol_feature_pick_from_record(controller, owner, records[i],
+		pick))
+	    continue;
+
+	FeaturePrimitiveGroup *group = NULL;
+	for (size_t j = 0; j < groups.size(); j++) {
+	    if (groups[j].handle.id == pick.handle.id) {
+		group = &groups[j];
+		break;
+	    }
+	}
+	if (!group) {
+	    FeaturePrimitiveGroup next;
+	    next.handle = pick.handle;
+	    groups.push_back(next);
+	    group = &groups.back();
+	}
+	if (std::find(group->primitives.begin(), group->primitives.end(),
+		pick.primitiveIndex) == group->primitives.end())
+	    group->primitives.push_back(pick.primitiveIndex);
+    }
+
+    int applied = 0;
+    for (size_t i = 0; i < groups.size(); i++) {
+	if (groups[i].primitives.empty())
+	    continue;
+	if (select && !controller->features().replaceSelectedPrimitives(
+		groups[i].handle, groups[i].primitives))
+	    continue;
+	if (highlight && !controller->features().replaceHighlightedPrimitives(
+		groups[i].handle, groups[i].primitives))
+	    continue;
+	applied++;
+    }
+
+    return applied;
+}
+
 static std::string
 qg_obol_normalized_pick_path(const std::string &path)
 {
@@ -183,6 +327,8 @@ qg_obol_normalized_pick_path(const std::string &path)
 static std::string
 qg_obol_pick_record_path(const QgObolPickRecord &record)
 {
+    if (record.featurePickResolved)
+	return qg_obol_normalized_pick_path(record.featureName);
     return qg_obol_normalized_pick_path(record.path);
 }
 
@@ -234,6 +380,7 @@ qg_obol_sort_pick_records(std::vector<QgObolPickRecord> &records)
 
 static int
 qg_obol_pick_source_full_detail(BRLObolViewController *controller,
+	const BRLObolFeatureOwner *owner,
 	const SbLine &line,
 	bool pickAll,
 	std::vector<QgObolPickRecord> &records,
@@ -251,9 +398,11 @@ qg_obol_pick_source_full_detail(BRLObolViewController *controller,
 	sourcePick.hit ? 1 : 0;
     if (submittedSourceRequestCount)
 	*submittedSourceRequestCount = submitted;
-    if (added)
-	qg_obol_insert_pick_record(records,
-		qg_obol_pick_record(sourcePick), pickAll);
+    if (added) {
+	QgObolPickRecord record = qg_obol_pick_record(sourcePick);
+	qg_obol_resolve_feature_pick(controller, owner, record);
+	qg_obol_insert_pick_record(records, record, pickAll);
+    }
 
     return added;
 }
@@ -288,6 +437,7 @@ qg_obol_pick_camera_line(BRLObolViewController *controller,
 
 static int
 qg_obol_pick_rt_exact(BRLObolViewController *controller,
+	const BRLObolFeatureOwner *owner,
 	const SbLine &line,
 	bool pickAll,
 	std::vector<QgObolPickRecord> &records)
@@ -302,6 +452,7 @@ qg_obol_pick_rt_exact(BRLObolViewController *controller,
     for (size_t i = 0; i < rtPicks.size(); i++) {
 	const BRLObolRtPickResult &rtPick = rtPicks[i];
 	QgObolPickRecord record = qg_obol_pick_record(rtPick);
+	qg_obol_resolve_feature_pick(controller, owner, record);
 	if (qg_obol_pick_path_already_recorded(records, record))
 	    continue;
 
@@ -331,6 +482,7 @@ qg_obol_pick_point_internal(QgView *display,
     if (!controller || !controller->getViewport() ||
 	    !controller->getViewport()->getRoot())
 	return 0;
+    BRLObolFeatureOwner owner = qg_obol_pick_view_owner(display);
 
     int width = 0;
     int height = 0;
@@ -373,29 +525,33 @@ qg_obol_pick_point_internal(QgView *display,
 	    const SoPickedPoint *pickedPoint = pickedPoints[i];
 	    const SoBRLPickDetail *detail =
 		qg_obol_brl_pick_detail(pickedPoint);
-	    if (detail)
-		qg_obol_insert_pick_record(records,
-			qg_obol_pick_record(pickedPoint, detail, &rayOrigin),
-			pickAll);
+	    if (detail) {
+		QgObolPickRecord record = qg_obol_pick_record(pickedPoint,
+			detail, &rayOrigin);
+		qg_obol_resolve_feature_pick(controller, &owner, record);
+		qg_obol_insert_pick_record(records, record, pickAll);
+	    }
 	}
     } else {
 	const SoPickedPoint *pickedPoint = pickAction.getPickedPoint();
 	const SoBRLPickDetail *detail =
 	    qg_obol_brl_pick_detail(pickedPoint);
-	if (detail)
-	    qg_obol_insert_pick_record(records,
-		    qg_obol_pick_record(pickedPoint, detail, &rayOrigin),
-		    pickAll);
+	if (detail) {
+	    QgObolPickRecord record = qg_obol_pick_record(pickedPoint,
+		    detail, &rayOrigin);
+	    qg_obol_resolve_feature_pick(controller, &owner, record);
+	    qg_obol_insert_pick_record(records, record, pickAll);
+	}
     }
 
-    qg_obol_pick_source_full_detail(controller, line, pickAll, records,
+    qg_obol_pick_source_full_detail(controller, &owner, line, pickAll, records,
 	    submittedSourceRequestCount);
 
     {
 	SbLine rtLine = line;
 	if (records.empty())
 	    (void)qg_obol_pick_camera_line(controller, vx, vy, rtLine);
-	qg_obol_pick_rt_exact(controller, rtLine, pickAll, records);
+	qg_obol_pick_rt_exact(controller, &owner, rtLine, pickAll, records);
     }
 
     if (pickAll)
@@ -435,6 +591,7 @@ qg_obol_pick_ray(QgView *display,
     if (!controller || !controller->getViewport() ||
 	    !controller->getViewport()->getRoot())
 	return 0;
+    BRLObolFeatureOwner owner = qg_obol_pick_view_owner(display);
 
     int width = 0;
     int height = 0;
@@ -461,24 +618,28 @@ qg_obol_pick_ray(QgView *display,
 	    const SoPickedPoint *pickedPoint = pickedPoints[i];
 	    const SoBRLPickDetail *detail =
 		qg_obol_brl_pick_detail(pickedPoint);
-	    if (detail)
-		qg_obol_insert_pick_record(records,
-			qg_obol_pick_record(pickedPoint, detail, &origin),
-			pickAll);
+	    if (detail) {
+		QgObolPickRecord record = qg_obol_pick_record(pickedPoint,
+			detail, &origin);
+		qg_obol_resolve_feature_pick(controller, &owner, record);
+		qg_obol_insert_pick_record(records, record, pickAll);
+	    }
 	}
     } else {
 	const SoPickedPoint *pickedPoint = pickAction.getPickedPoint();
 	const SoBRLPickDetail *detail =
 	    qg_obol_brl_pick_detail(pickedPoint);
-	if (detail)
-	    qg_obol_insert_pick_record(records,
-		    qg_obol_pick_record(pickedPoint, detail, &origin),
-		    pickAll);
+	if (detail) {
+	    QgObolPickRecord record = qg_obol_pick_record(pickedPoint,
+		    detail, &origin);
+	    qg_obol_resolve_feature_pick(controller, &owner, record);
+	    qg_obol_insert_pick_record(records, record, pickAll);
+	}
     }
 
-    qg_obol_pick_source_full_detail(controller, line, pickAll, records,
+    qg_obol_pick_source_full_detail(controller, &owner, line, pickAll, records,
 	    submittedSourceRequestCount);
-    qg_obol_pick_rt_exact(controller, line, pickAll, records);
+    qg_obol_pick_rt_exact(controller, &owner, line, pickAll, records);
 
     if (pickAll)
 	qg_obol_sort_pick_records(records);
@@ -490,6 +651,14 @@ static std::string
 qg_obol_pick_unique_key(const QgObolPickRecord &record)
 {
     char buffer[128] = {0};
+    if (record.featurePickResolved) {
+	std::snprintf(buffer, sizeof(buffer), ":feature:%d:%d",
+		record.primitiveKind,
+		record.featurePrimitiveIndex);
+	std::string key = record.featureName;
+	key.append(buffer);
+	return key;
+    }
     std::snprintf(buffer, sizeof(buffer), ":%u:%d:%d:%d",
 	    record.sourceId,
 	    record.primitiveKind,
@@ -559,6 +728,33 @@ qg_obol_pick_rect(QgView *display,
     }
 
     return static_cast<int>(records.size());
+}
+
+int
+qg_obol_pick_apply_feature_state(QgView *display,
+	const QgObolPickRecord &record,
+	bool select,
+	bool highlight)
+{
+    std::vector<QgObolPickRecord> records;
+    records.push_back(record);
+    return qg_obol_pick_apply_feature_states(display, records, select,
+	    highlight);
+}
+
+int
+qg_obol_pick_apply_feature_states(QgView *display,
+	const std::vector<QgObolPickRecord> &records,
+	bool select,
+	bool highlight)
+{
+    if (!display)
+	return 0;
+
+    BRLObolViewController *controller = display->obolViewController();
+    BRLObolFeatureOwner owner = qg_obol_pick_view_owner(display);
+    return qg_obol_apply_feature_states(controller, &owner, records, select,
+	    highlight);
 }
 
 // Local Variables:

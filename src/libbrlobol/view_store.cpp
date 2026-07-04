@@ -10,6 +10,7 @@
 
 #include "brlobol/axes.h"
 #include "brlobol/edit_preview.h"
+#include "brlobol/hud_label_overlay.h"
 #include "brlobol/line_layer_overlay.h"
 #include "brlobol/lod_realization.h"
 #include "brlobol/mesh_shape.h"
@@ -62,6 +63,27 @@ store_owner_key(const BRLObolFeatureOwner *owner)
     const char *id = owner->ownerId.getString();
     if (id && id[0])
 	return std::string("I:") + id;
+
+    return std::string();
+}
+
+static std::string
+store_owner_generation_key(const BRLObolFeatureOwner *owner)
+{
+    if (!owner)
+	return std::string();
+
+    if (owner->ownerToken) {
+	char buf[64] = {0};
+	snprintf(buf, sizeof(buf), "T:%p", owner->ownerToken);
+	return std::string(buf);
+    }
+
+    const char *id = owner->ownerId.getString();
+    const char *role = owner->ownerRole.getString();
+    if ((id && id[0]) || (role && role[0]))
+	return std::string("I:") + (id ? id : "") + "|R:" +
+	    (role ? role : "");
 
     return std::string();
 }
@@ -502,6 +524,7 @@ BRLObolFeatureOwner::BRLObolFeatureOwner(void) :
     ownerToken(NULL),
     ownerId(""),
     ownerRole(""),
+    generation(0),
     resultCallback(NULL),
     callbackUserData(NULL)
 {
@@ -536,7 +559,8 @@ BRLObolLabel::BRLObolLabel(void) :
     target(0.0f, 0.0f, 0.0f),
     anchor(0),
     arrow(FALSE),
-    fontSize(20.0f)
+    fontSize(20.0f),
+    sourceId(0)
 {
 }
 
@@ -545,6 +569,26 @@ BRLObolLineLayer::BRLObolLineLayer(void) :
     points(),
     commands(),
     style()
+{
+}
+
+BRLObolFeatureMetadata::BRLObolFeatureMetadata(void) :
+    key(""),
+    value("")
+{
+}
+
+BRLObolFeaturePrimitiveMetadata::BRLObolFeaturePrimitiveMetadata(void) :
+    primitiveIndex(-1),
+    metadata()
+{
+}
+
+BRLObolFeaturePrimitivePick::BRLObolFeaturePrimitivePick(void) :
+    handle(),
+    featureName(""),
+    primitiveIndex(-1),
+    metadata()
 {
 }
 
@@ -557,6 +601,10 @@ BRLObolFeatureSummary::BRLObolFeatureSummary(void) :
     pointCount(0),
     commandCount(0),
     childCount(0),
+    metadataCount(0),
+    primitiveMetadataCount(0),
+    selectedPrimitiveCount(0),
+    highlightedPrimitiveCount(0),
     owner(),
     overlay()
 {
@@ -578,7 +626,11 @@ BRLObolFeatureRecord::BRLObolFeatureRecord(void) :
     labels(),
     axesCenters(),
     halfAxesSize(1.0f),
-    layers()
+    layers(),
+    metadata(),
+    primitiveMetadata(),
+    selectedPrimitives(),
+    highlightedPrimitives()
 {
 }
 
@@ -644,6 +696,10 @@ struct BRLObolFeatureStoreRecord {
     std::vector<SbVec3f> axesCenters;
     float halfAxesSize;
     std::vector<BRLObolLineLayer> layers;
+    std::vector<BRLObolFeatureMetadata> metadata;
+    std::vector<BRLObolFeaturePrimitiveMetadata> primitiveMetadata;
+    std::vector<int32_t> selectedPrimitives;
+    std::vector<int32_t> highlightedPrimitives;
     SbString identity;
     SbString editIntentId;
     SbString editIntentRole;
@@ -669,6 +725,10 @@ struct BRLObolFeatureStoreRecord {
 	axesCenters(),
 	halfAxesSize(1.0f),
 	layers(),
+	metadata(),
+	primitiveMetadata(),
+	selectedPrimitives(),
+	highlightedPrimitives(),
 	identity(""),
 	editIntentId(""),
 	editIntentRole(""),
@@ -679,13 +739,34 @@ struct BRLObolFeatureStoreRecord {
     }
 };
 
+static void
+store_primitive_metadata_for_record(const BRLObolFeatureStoreRecord *rec,
+	int32_t primitiveIndex,
+	std::vector<BRLObolFeatureMetadata> &metadataOut)
+{
+    metadataOut.clear();
+    if (!rec || primitiveIndex < 0)
+	return;
+
+    for (std::vector<BRLObolFeaturePrimitiveMetadata>::const_iterator it =
+	    rec->primitiveMetadata.begin();
+	    it != rec->primitiveMetadata.end(); ++it) {
+	if (it->primitiveIndex != primitiveIndex)
+	    continue;
+	metadataOut = it->metadata;
+	return;
+    }
+}
+
 struct BRLObolFeatureStore::Impl {
     BRLObolViewController *controller;
     uint64_t nextId;
     std::map<uint64_t, BRLObolFeatureStoreRecord *> records;
     std::map<std::string, uint64_t> names;
+    std::map<std::string, uint64_t> ownerGenerations;
 
-    Impl(void) : controller(NULL), nextId(1), records(), names()
+    Impl(void) : controller(NULL), nextId(1), records(), names(),
+	ownerGenerations()
     {
     }
 
@@ -705,6 +786,7 @@ struct BRLObolFeatureStore::Impl {
 	}
 	records.clear();
 	names.clear();
+	ownerGenerations.clear();
     }
 
     BRLObolFeatureStoreRecord *record(BRLObolFeatureHandle handle) const
@@ -777,6 +859,10 @@ struct BRLObolFeatureStore::Impl {
 	}
 
 	rec->kind = kind;
+	rec->metadata.clear();
+	rec->primitiveMetadata.clear();
+	rec->selectedPrimitives.clear();
+	rec->highlightedPrimitives.clear();
 	if (style)
 	    rec->style = *style;
 	if (owner)
@@ -814,7 +900,98 @@ struct BRLObolFeatureStore::Impl {
 	if (controller && node)
 	    controller->requestRender("view-feature-store");
     }
+
+    void markOwnerGeneration(const BRLObolFeatureOwner &owner)
+    {
+	if (owner.generation == 0)
+	    return;
+
+	const std::string key = store_owner_generation_key(&owner);
+	if (key.empty())
+	    return;
+
+	uint64_t &generation = ownerGenerations[key];
+	if (owner.generation > generation)
+	    generation = owner.generation;
+    }
+
+    SbBool ownerGenerationCurrent(const BRLObolFeatureOwner &owner) const
+    {
+	if (owner.generation == 0)
+	    return TRUE;
+
+	const std::string key = store_owner_generation_key(&owner);
+	if (key.empty())
+	    return TRUE;
+
+	std::map<std::string, uint64_t>::const_iterator it =
+	    ownerGenerations.find(key);
+	return it == ownerGenerations.end() ||
+	    owner.generation >= it->second ? TRUE : FALSE;
+    }
 };
+
+static void
+store_apply_vlist_primitive_field(SoMFInt32 &field,
+	const std::vector<int32_t> &primitives)
+{
+    field.setNum(0);
+    if (!primitives.empty())
+	field.setValues(0, static_cast<int>(primitives.size()),
+		&primitives[0]);
+}
+
+static void
+store_apply_vlist_primitives(SoBRLVListShape *shape,
+	const BRLObolFeatureStoreRecord &rec)
+{
+    if (!shape)
+	return;
+
+    store_apply_vlist_primitive_field(shape->selectedPrimitive,
+	    rec.selectedPrimitives);
+    store_apply_vlist_primitive_field(shape->highlightedPrimitive,
+	    rec.highlightedPrimitives);
+}
+
+static size_t
+store_line_segment_primitive_count(const std::vector<int32_t> &commands)
+{
+    size_t count = 0;
+    SbBool haveLast = FALSE;
+    for (size_t i = 0; i < commands.size(); i++) {
+	switch (commands[i]) {
+	    case static_cast<int32_t>(BRLObolLineCommand::Move):
+		haveLast = TRUE;
+		break;
+	    case static_cast<int32_t>(BRLObolLineCommand::Draw):
+		if (haveLast)
+		    count++;
+		haveLast = TRUE;
+		break;
+	    default:
+		break;
+	}
+    }
+    return count;
+}
+
+static std::vector<int32_t>
+store_primitive_subset_for_layer(const std::vector<int32_t> &primitives,
+	size_t firstPrimitive,
+	size_t primitiveCount)
+{
+    std::vector<int32_t> out;
+    const size_t end = firstPrimitive + primitiveCount;
+    for (size_t i = 0; i < primitives.size(); i++) {
+	if (primitives[i] < 0)
+	    continue;
+	const size_t primitive = static_cast<size_t>(primitives[i]);
+	if (primitive >= firstPrimitive && primitive < end)
+	    out.push_back(static_cast<int32_t>(primitive - firstPrimitive));
+    }
+    return out;
+}
 
 static SoBRLVListShape *
 store_vlist_node(const BRLObolFeatureStoreRecord &rec)
@@ -861,6 +1038,7 @@ store_vlist_node(const BRLObolFeatureStoreRecord &rec)
     shape->recordRole = "view-feature";
     shape->sourceId = rec.sourceRevision;
     store_apply_vlist_style(shape, rec.style);
+    store_apply_vlist_primitives(shape, rec);
 
     std::vector<int32_t> commands =
 	store_normalized_line_commands(rec.points, rec.commands);
@@ -1018,6 +1196,7 @@ static SoNode *
 store_line_layers_node(const BRLObolFeatureStoreRecord &rec)
 {
     SoBRLSceneGroup *sep = store_feature_group_node(rec);
+    size_t primitiveOffset = 0;
     for (size_t i = 0; i < rec.layers.size(); i++) {
 	BRLObolFeatureStoreRecord layerRec = rec;
 	layerRec.name = rec.layers[i].name.getLength() > 0 ?
@@ -1027,6 +1206,13 @@ store_line_layers_node(const BRLObolFeatureStoreRecord &rec)
 	layerRec.commands = rec.layers[i].commands;
 	layerRec.style = store_merge_feature_style(rec.style,
 		rec.layers[i].style);
+	const size_t primitiveCount =
+	    store_line_segment_primitive_count(layerRec.commands);
+	layerRec.selectedPrimitives = store_primitive_subset_for_layer(
+		rec.selectedPrimitives, primitiveOffset, primitiveCount);
+	layerRec.highlightedPrimitives = store_primitive_subset_for_layer(
+		rec.highlightedPrimitives, primitiveOffset, primitiveCount);
+	primitiveOffset += primitiveCount;
 	layerRec.kind = BRLObolFeatureKind::Lines;
 	SoBRLVListShape *shape = store_vlist_node(layerRec);
 	if (shape)
@@ -1115,12 +1301,41 @@ store_label_node(const BRLObolFeatureStoreRecord &rec)
 }
 
 static SoNode *
+store_hud_label_node(const BRLObolFeatureStoreRecord &rec)
+{
+    SoBRLSceneGroup *sep = store_feature_group_node(rec);
+    const SbColor fallbackColor = rec.style.hasColor ?
+	rec.style.color : SbColor(1.0f, 1.0f, 1.0f);
+    const SbBool visible = rec.style.hasVisible ? rec.style.visible : TRUE;
+
+    for (size_t i = 0; i < rec.labels.size(); i++) {
+	const BRLObolLabel &label = rec.labels[i];
+	if (label.text.getLength() == 0)
+	    continue;
+
+	const SbColor color = label.hasColor ? label.color : fallbackColor;
+	SoBRLHUDLabelOverlay *overlay = new SoBRLHUDLabelOverlay;
+	overlay->labelId = rec.name;
+	overlay->sourceId = label.sourceId;
+	overlay->text = label.text;
+	overlay->position = SbVec2f(label.point[0], label.point[1]);
+	overlay->color = color;
+	overlay->fontSize = label.fontSize > 0.0f ? label.fontSize : 12.0f;
+	overlay->visible = visible;
+	overlay->rebuildGeometry();
+	sep->addChild(overlay);
+    }
+    return sep;
+}
+
+static SoNode *
 store_node_for_feature(const BRLObolFeatureStoreRecord &rec)
 {
     switch (rec.kind) {
 	case BRLObolFeatureKind::Labels:
-	case BRLObolFeatureKind::HudLabel:
 	    return store_label_node(rec);
+	case BRLObolFeatureKind::HudLabel:
+	    return store_hud_label_node(rec);
 	case BRLObolFeatureKind::Axes:
 	    return store_axes_node(rec);
 	case BRLObolFeatureKind::LineLayer:
@@ -1129,9 +1344,19 @@ store_node_for_feature(const BRLObolFeatureStoreRecord &rec)
 	    return store_indexed_face_node(rec);
 	case BRLObolFeatureKind::EditPreview:
 	    return store_edit_preview_node(rec);
+	case BRLObolFeatureKind::CustomNode:
+	    return rec.node;
 	default:
 	    return store_vlist_node(rec);
     }
+}
+
+static SoNode *
+store_rebuild_node_for_feature(const BRLObolFeatureStoreRecord &rec)
+{
+    if (rec.kind == BRLObolFeatureKind::CustomNode)
+	return rec.node;
+    return store_node_for_feature(rec);
 }
 
 BRLObolFeatureStore::BRLObolFeatureStore(void) : impl(new Impl)
@@ -1265,6 +1490,20 @@ BRLObolFeatureStore::removePrefix(const SbString &prefix,
     return removed;
 }
 
+void
+BRLObolFeatureStore::markCommandOwnerGeneration(
+	const BRLObolFeatureOwner &owner)
+{
+    this->impl->markOwnerGeneration(owner);
+}
+
+SbBool
+BRLObolFeatureStore::commandOwnerGenerationCurrent(
+	const BRLObolFeatureOwner &owner) const
+{
+    return this->impl->ownerGenerationCurrent(owner);
+}
+
 BRLObolFeatureHandle
 BRLObolFeatureStore::publishLineSet(const SbString &name,
 	BRLObolFeatureScope scope,
@@ -1280,7 +1519,7 @@ BRLObolFeatureStore::publishLineSet(const SbString &name,
 
     rec->points = points;
     rec->commands = commands;
-    SoNode *node = store_node_for_feature(*rec);
+    SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated, "publishLineSet");
     return this->impl->handle(rec);
@@ -1316,7 +1555,7 @@ BRLObolFeatureStore::publishIndexedLineSet(const SbString &name,
     rec->points = linePoints;
     rec->commands = commands;
     rec->indices = indices;
-    SoNode *node = store_node_for_feature(*rec);
+    SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
 	    "publishIndexedLineSet");
@@ -1338,7 +1577,7 @@ BRLObolFeatureStore::publishPointSet(const SbString &name,
 	return BRLObolFeatureHandle();
     rec->points = points;
     rec->commands = commands;
-    SoNode *node = store_node_for_feature(*rec);
+    SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
 	    "publishPointSet");
@@ -1357,10 +1596,29 @@ BRLObolFeatureStore::publishLabels(const SbString &name,
     if (!rec)
 	return BRLObolFeatureHandle();
     rec->labels = labels;
-    SoNode *node = store_node_for_feature(*rec);
+    SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
 	    "publishLabels");
+    return this->impl->handle(rec);
+}
+
+BRLObolFeatureHandle
+BRLObolFeatureStore::publishHudLabels(const SbString &name,
+	BRLObolFeatureScope scope,
+	const std::vector<BRLObolLabel> &labels,
+	const BRLObolFeatureStyle *style,
+	const BRLObolFeatureOwner *owner)
+{
+    BRLObolFeatureStoreRecord *rec = this->impl->upsert(name, scope,
+	    BRLObolFeatureKind::HudLabel, style, owner);
+    if (!rec)
+	return BRLObolFeatureHandle();
+    rec->labels = labels;
+    SoNode *node = store_rebuild_node_for_feature(*rec);
+    this->impl->setNode(rec, node);
+    this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
+	    "publishHudLabels");
     return this->impl->handle(rec);
 }
 
@@ -1382,7 +1640,7 @@ BRLObolFeatureStore::publishArrow(const SbString &name,
 
     rec->points = points;
     rec->commands.clear();
-    SoNode *node = store_node_for_feature(*rec);
+    SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
 	    "publishArrow");
@@ -1403,7 +1661,7 @@ BRLObolFeatureStore::publishAxes(const SbString &name,
 	return BRLObolFeatureHandle();
     rec->axesCenters = centers;
     rec->halfAxesSize = halfAxesSize;
-    SoNode *node = store_node_for_feature(*rec);
+    SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
 	    "publishAxes");
@@ -1430,7 +1688,7 @@ BRLObolFeatureStore::publishLineLayers(const SbString &name,
 	rec->commands.insert(rec->commands.end(), layers[i].commands.begin(),
 		layers[i].commands.end());
     }
-    SoNode *node = store_node_for_feature(*rec);
+    SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
 	    "publishLineLayers");
@@ -1492,10 +1750,38 @@ BRLObolFeatureStore::publishIndexedFaceSet(const SbString &name,
     rec->normals = normals;
     rec->indices = indices;
     rec->commands.clear();
-    SoNode *node = store_node_for_feature(*rec);
+    SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
 	    "publishIndexedFaceSet");
+    return this->impl->handle(rec);
+}
+
+BRLObolFeatureHandle
+BRLObolFeatureStore::publishCustomNode(const SbString &name,
+	BRLObolFeatureScope scope,
+	SoNode *node,
+	const BRLObolFeatureStyle *style,
+	const BRLObolFeatureOwner *owner)
+{
+    if (!node)
+	return BRLObolFeatureHandle();
+
+    BRLObolFeatureStoreRecord *rec = this->impl->upsert(name, scope,
+	    BRLObolFeatureKind::CustomNode, style, owner);
+    if (!rec)
+	return BRLObolFeatureHandle();
+
+    rec->points.clear();
+    rec->commands.clear();
+    rec->indices.clear();
+    rec->normals.clear();
+    rec->labels.clear();
+    rec->axesCenters.clear();
+    rec->layers.clear();
+    this->impl->setNode(rec, node);
+    this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
+	    "publishCustomNode");
     return this->impl->handle(rec);
 }
 
@@ -1530,7 +1816,7 @@ BRLObolFeatureStore::publishEditPreview(const SbString &name,
     if (callbacks)
 	rec->previewCallbacks = *callbacks;
 
-    SoNode *node = store_node_for_feature(*rec);
+    SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
 	    "publishEditPreview");
@@ -1560,7 +1846,7 @@ BRLObolFeatureStore::replaceEditPreviewGeometry(
     rec->inputsRevision = inputsRevision ? inputsRevision :
 	static_cast<uint32_t>(rec->revision);
 
-    SoNode *node = store_node_for_feature(*rec);
+    SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
 	    "replaceEditPreviewGeometry");
@@ -1609,7 +1895,7 @@ BRLObolFeatureStore::appendLinePoint(BRLObolFeatureHandle handle,
 	const SbVec3f &point)
 {
     BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
-    if (!rec)
+    if (!rec || rec->kind == BRLObolFeatureKind::CustomNode)
 	return FALSE;
 
     rec->points.push_back(point);
@@ -1627,7 +1913,7 @@ BRLObolFeatureStore::replaceLabels(BRLObolFeatureHandle handle,
 	const std::vector<BRLObolLabel> &labels)
 {
     BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
-    if (!rec)
+    if (!rec || rec->kind == BRLObolFeatureKind::CustomNode)
 	return FALSE;
 
     rec->labels = labels;
@@ -1781,7 +2067,7 @@ BRLObolFeatureStore::applyStyle(BRLObolFeatureHandle handle,
     }
 
     rec->revision++;
-    SoNode *node = store_node_for_feature(*rec);
+    SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
 	    "applyStyle");
@@ -1863,7 +2149,7 @@ BRLObolFeatureStore::setOverlayInfo(BRLObolFeatureHandle handle,
 
     rec->overlay = overlay;
     rec->revision++;
-    SoNode *node = store_node_for_feature(*rec);
+    SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
 	    "setOverlayInfo");
@@ -1879,7 +2165,7 @@ BRLObolFeatureStore::clearOverlayInfo(BRLObolFeatureHandle handle)
 
     rec->overlay = BRLObolOverlayInfo();
     rec->revision++;
-    SoNode *node = store_node_for_feature(*rec);
+    SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
 	    "clearOverlayInfo");
@@ -1898,13 +2184,224 @@ BRLObolFeatureStore::overlayInfo(BRLObolFeatureHandle handle,
 }
 
 SbBool
+BRLObolFeatureStore::replaceMetadata(BRLObolFeatureHandle handle,
+	const std::vector<BRLObolFeatureMetadata> &metadata)
+{
+    BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
+    if (!rec)
+	return FALSE;
+
+    rec->metadata = metadata;
+    rec->revision++;
+    this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
+	    "replaceMetadata");
+    return TRUE;
+}
+
+SbBool
+BRLObolFeatureStore::metadata(BRLObolFeatureHandle handle,
+	std::vector<BRLObolFeatureMetadata> &metadataOut) const
+{
+    metadataOut.clear();
+    BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
+    if (!rec)
+	return FALSE;
+
+    metadataOut = rec->metadata;
+    return TRUE;
+}
+
+SbBool
+BRLObolFeatureStore::replacePrimitiveMetadata(BRLObolFeatureHandle handle,
+	int32_t primitiveIndex,
+	const std::vector<BRLObolFeatureMetadata> &metadata)
+{
+    BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
+    if (!rec || primitiveIndex < 0)
+	return FALSE;
+
+    for (std::vector<BRLObolFeaturePrimitiveMetadata>::iterator it =
+	    rec->primitiveMetadata.begin();
+	    it != rec->primitiveMetadata.end(); ++it) {
+	if (it->primitiveIndex != primitiveIndex)
+	    continue;
+	if (metadata.empty())
+	    rec->primitiveMetadata.erase(it);
+	else
+	    it->metadata = metadata;
+	rec->revision++;
+	this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
+		"replacePrimitiveMetadata");
+	return TRUE;
+    }
+
+    if (!metadata.empty()) {
+	BRLObolFeaturePrimitiveMetadata item;
+	item.primitiveIndex = primitiveIndex;
+	item.metadata = metadata;
+	rec->primitiveMetadata.push_back(item);
+	rec->revision++;
+	this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
+		"replacePrimitiveMetadata");
+    }
+    return TRUE;
+}
+
+SbBool
+BRLObolFeatureStore::primitiveMetadata(BRLObolFeatureHandle handle,
+	int32_t primitiveIndex,
+	std::vector<BRLObolFeatureMetadata> &metadataOut) const
+{
+    metadataOut.clear();
+    BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
+    if (!rec || primitiveIndex < 0)
+	return FALSE;
+
+    for (std::vector<BRLObolFeaturePrimitiveMetadata>::const_iterator it =
+	    rec->primitiveMetadata.begin();
+	    it != rec->primitiveMetadata.end(); ++it) {
+	if (it->primitiveIndex != primitiveIndex)
+	    continue;
+	metadataOut = it->metadata;
+	return TRUE;
+    }
+
+    return TRUE;
+}
+
+SbBool
+BRLObolFeatureStore::resolvePrimitivePick(const SbString &name,
+	int32_t primitiveIndex,
+	BRLObolFeaturePrimitivePick &pickOut,
+	unsigned int scopeMask,
+	const BRLObolFeatureOwner *owner) const
+{
+    pickOut = BRLObolFeaturePrimitivePick();
+    if (primitiveIndex < 0)
+	return FALSE;
+
+    BRLObolFeatureStoreRecord *rec = this->impl->recordByName(name,
+	    scopeMask, owner);
+    if (rec) {
+	pickOut.handle = BRLObolFeatureHandle(rec->id, rec->revision);
+	pickOut.featureName = rec->name;
+	pickOut.primitiveIndex = primitiveIndex;
+	store_primitive_metadata_for_record(rec, primitiveIndex,
+		pickOut.metadata);
+	return TRUE;
+    }
+
+    const std::string cleanName = store_string(name);
+    if (cleanName.empty())
+	return FALSE;
+
+    for (std::map<uint64_t, BRLObolFeatureStoreRecord *>::const_iterator it =
+	    this->impl->records.begin(); it != this->impl->records.end();
+	    ++it) {
+	rec = it->second;
+	if (!rec || rec->kind != BRLObolFeatureKind::LineLayer)
+	    continue;
+	if (!(store_scope_bit(rec->scope) & scopeMask))
+	    continue;
+	if (owner && !store_owner_matches(rec->owner, owner))
+	    continue;
+
+	size_t primitiveOffset = 0;
+	for (size_t i = 0; i < rec->layers.size(); i++) {
+	    const BRLObolLineLayer &layer = rec->layers[i];
+	    const SbString layerName = layer.name.getLength() > 0 ?
+		layer.name : rec->name;
+	    const size_t primitiveCount =
+		store_line_segment_primitive_count(layer.commands);
+	    if (store_string(layerName) != cleanName) {
+		primitiveOffset += primitiveCount;
+		continue;
+	    }
+	    if (static_cast<size_t>(primitiveIndex) >= primitiveCount)
+		return FALSE;
+
+	    const int32_t resolvedPrimitive = static_cast<int32_t>(
+		    primitiveOffset + static_cast<size_t>(primitiveIndex));
+	    pickOut.handle = BRLObolFeatureHandle(rec->id, rec->revision);
+	    pickOut.featureName = rec->name;
+	    pickOut.primitiveIndex = resolvedPrimitive;
+	    store_primitive_metadata_for_record(rec, resolvedPrimitive,
+		    pickOut.metadata);
+	    return TRUE;
+	}
+    }
+
+    return FALSE;
+}
+
+SbBool
+BRLObolFeatureStore::replaceSelectedPrimitives(BRLObolFeatureHandle handle,
+	const std::vector<int32_t> &primitives)
+{
+    BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
+    if (!rec)
+	return FALSE;
+
+    rec->selectedPrimitives = primitives;
+    rec->revision++;
+    SoNode *node = store_rebuild_node_for_feature(*rec);
+    this->impl->setNode(rec, node);
+    this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
+	    "replaceSelectedPrimitives");
+    return TRUE;
+}
+
+SbBool
+BRLObolFeatureStore::replaceHighlightedPrimitives(BRLObolFeatureHandle handle,
+	const std::vector<int32_t> &primitives)
+{
+    BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
+    if (!rec)
+	return FALSE;
+
+    rec->highlightedPrimitives = primitives;
+    rec->revision++;
+    SoNode *node = store_rebuild_node_for_feature(*rec);
+    this->impl->setNode(rec, node);
+    this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
+	    "replaceHighlightedPrimitives");
+    return TRUE;
+}
+
+SbBool
+BRLObolFeatureStore::selectedPrimitives(BRLObolFeatureHandle handle,
+	std::vector<int32_t> &primitivesOut) const
+{
+    primitivesOut.clear();
+    BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
+    if (!rec)
+	return FALSE;
+
+    primitivesOut = rec->selectedPrimitives;
+    return TRUE;
+}
+
+SbBool
+BRLObolFeatureStore::highlightedPrimitives(BRLObolFeatureHandle handle,
+	std::vector<int32_t> &primitivesOut) const
+{
+    primitivesOut.clear();
+    BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
+    if (!rec)
+	return FALSE;
+
+    primitivesOut = rec->highlightedPrimitives;
+    return TRUE;
+}
+
+SbBool
 BRLObolFeatureStore::realize(BRLObolFeatureHandle handle,
 	SbBool UNUSED(recursive))
 {
     BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
     if (!rec)
 	return FALSE;
-    SoNode *node = store_node_for_feature(*rec);
+    SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     return TRUE;
 }
@@ -1936,6 +2433,10 @@ BRLObolFeatureStore::summaryOwned(const SbString &name,
     summaryOut.scope = rec->scope;
     summaryOut.pointCount = rec->points.size();
     summaryOut.commandCount = rec->commands.size();
+    summaryOut.metadataCount = rec->metadata.size();
+    summaryOut.primitiveMetadataCount = rec->primitiveMetadata.size();
+    summaryOut.selectedPrimitiveCount = rec->selectedPrimitives.size();
+    summaryOut.highlightedPrimitiveCount = rec->highlightedPrimitives.size();
     summaryOut.owner = rec->owner;
     summaryOut.overlay = rec->overlay;
     if (rec->node && rec->node->isOfType(SoGroup::getClassTypeId()))
@@ -1971,6 +2472,10 @@ BRLObolFeatureStore::record(BRLObolFeatureHandle handle,
     recordOut.axesCenters = rec->axesCenters;
     recordOut.halfAxesSize = rec->halfAxesSize;
     recordOut.layers = rec->layers;
+    recordOut.metadata = rec->metadata;
+    recordOut.primitiveMetadata = rec->primitiveMetadata;
+    recordOut.selectedPrimitives = rec->selectedPrimitives;
+    recordOut.highlightedPrimitives = rec->highlightedPrimitives;
     return TRUE;
 }
 

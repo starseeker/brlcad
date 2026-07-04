@@ -201,12 +201,9 @@ nmg_plot_eu(struct ged *gedp, struct edgeuse *es_eu, const struct bn_tol *tol)
     struct bg_line_layer_builder *plot = bg_line_layer_builder_create();
 
     nmg_line_layer_around_eu(plot, es_eu, tab, 1, tol);
-    int handled = ged_diagnostic_line_layer_publish(gedp, "nmg::_EU_", plot);
-    void *view_ctx = ged_view_active_ctx(gedp);
-    if (!handled && view_ctx) {
-	(void)ged_draw_view_context_diagnostic_line_layer_builder_replace(
-		view_ctx, "nmg::_EU_", plot);
-    }
+    (void)_ged_line_layer_builder_publish_command_scene_feature(gedp,
+	    "nmg::_EU_", plot, "nmg", "command-result", "nmg::_EU_",
+	    "nmg-edgeuse", 0);
 
     bg_line_layer_builder_free(plot);
     bu_free((void *)tab, "nmg_ed tab[]");

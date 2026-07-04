@@ -16,6 +16,7 @@
 #include <Inventor/actions/SoSubAction.h>
 
 class SoBRLDatabaseSource;
+struct BRLObolDatabaseSourceRealizationCache;
 
 class BRLOBOL_EXPORT SoBRLRealizeAction : public SoAction {
     typedef SoAction inherited;
@@ -44,6 +45,8 @@ private:
     unsigned int realizedSourceCount;
     unsigned int failedSourceCount;
     SbString diagnostics;
+    BRLObolDatabaseSourceRealizationCache *realizationCache;
+    SbBool seedingCache;
 };
 
 #endif /* BRLOBOL_REALIZE_ACTION_H */

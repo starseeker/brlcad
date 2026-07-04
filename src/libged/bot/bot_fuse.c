@@ -162,20 +162,16 @@ show_dangling_edges(struct ged *gedp, const uint32_t *magic_p, const char *name,
 
     if (out_type == 1) {
 	/* Add overlay */
-	void *view_ctx = ged_view_active_ctx(gedp);
-	if (view_ctx) {
-	    struct bu_vls nroot = BU_VLS_INIT_ZERO;
-	    bu_vls_sprintf(&nroot, "bot_fuse::%s", name);
-	    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
-	    style.color_valid = 1;
-	    VSET(style.color, 255, 255, 0);
-	    if (lines.count)
-		(void)ged_draw_view_context_lines_replace(view_ctx, bu_vls_cstr(&nroot), 0,
-			(const point_t *)lines.points, NULL, lines.count, &style);
-	    else
-		(void)ged_draw_view_context_feature_remove(view_ctx, bu_vls_cstr(&nroot));
-	    bu_vls_free(&nroot);
-	}
+	struct bu_vls nroot = BU_VLS_INIT_ZERO;
+	bu_vls_sprintf(&nroot, "bot_fuse::%s", name);
+	struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+	style.color_valid = 1;
+	VSET(style.color, 255, 255, 0);
+	(void)_ged_line_set_publish_command_scene_feature(gedp,
+		bu_vls_cstr(&nroot), (const point_t *)lines.points, NULL,
+		lines.count, &style, "bot_fuse", "command-result", NULL,
+		"open-edge", 0);
+	bu_vls_free(&nroot);
 	bot_fuse_lines_free(&lines);
 	bu_log("Showing open edges...\n");
     } else if (out_type == 2) {

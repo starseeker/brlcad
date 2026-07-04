@@ -14,6 +14,7 @@
 #include "brlobol/axes.h"
 #include "brlobol/database_source.h"
 #include "brlobol/edit_preview.h"
+#include "brlobol/evaluated_wire.h"
 #include "brlobol/export_action.h"
 #include "brlobol/grid.h"
 #include "brlobol/headless_window_host.h"

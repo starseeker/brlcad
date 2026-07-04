@@ -1744,13 +1744,29 @@ ged_uplot_publish_feature(struct ged *gedp, const char *name, struct ged_uplot_s
     return ret;
 }
 
+static void
+ged_command_metadata_add(struct ged_draw_command_scene_metadata *metadata,
+	size_t *metadata_count,
+	const char *key,
+	const char *value)
+{
+    if (!metadata || !metadata_count || !key)
+	return;
+
+    metadata[*metadata_count].key = key;
+    metadata[*metadata_count].value = value ? value : "";
+    (*metadata_count)++;
+}
+
 static int
 ged_uplot_publish_command_scene_feature(struct ged *gedp,
 	struct ged_uplot_stream *stream,
 	const char *name,
 	const char *owner_id,
 	const char *owner_role,
-	const char *remove_prefix)
+	const char *remove_prefix,
+	const char *result_kind,
+	uint64_t generation)
 {
     void *view_ctx = gedp ? ged_view_active_ctx(gedp) : NULL;
     if (!view_ctx || !stream || !name)
@@ -1760,6 +1776,7 @@ ged_uplot_publish_command_scene_feature(struct ged *gedp,
 	GED_DRAW_COMMAND_SCENE_DESC_INIT;
     desc.owner_id = owner_id;
     desc.owner_role = owner_role;
+    desc.generation = generation;
     struct ged_draw_command_scene *scene =
 	ged_draw_command_scene_begin(view_ctx, &desc);
     if (!scene) {
@@ -1782,14 +1799,261 @@ ged_uplot_publish_command_scene_feature(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
+    size_t point_count = 0;
+    for (size_t i = 0; i < live_layers; i++)
+	point_count += layers[i].point_count;
+
     int ret = ged_draw_command_scene_line_layers_replace(scene, name,
 	    layers, live_layers, NULL) ? BRLCAD_OK : BRLCAD_ERROR;
+    if (ret == BRLCAD_OK) {
+	char layer_count_buf[64] = {0};
+	char point_count_buf[64] = {0};
+	char generation_buf[64] = {0};
+	snprintf(layer_count_buf, sizeof(layer_count_buf), "%zu",
+		live_layers);
+	snprintf(point_count_buf, sizeof(point_count_buf), "%zu",
+		point_count);
+	if (generation)
+	    snprintf(generation_buf, sizeof(generation_buf), "%llu",
+		    (unsigned long long)generation);
+	struct ged_draw_command_scene_metadata metadata[7];
+	size_t metadata_count = 0;
+	ged_command_metadata_add(metadata, &metadata_count,
+		"result.feature", name);
+	ged_command_metadata_add(metadata, &metadata_count,
+		"result.format", "uplot-line-layers");
+	ged_command_metadata_add(metadata, &metadata_count,
+		"result.layer_count", layer_count_buf);
+	ged_command_metadata_add(metadata, &metadata_count,
+		"result.point_count", point_count_buf);
+	if (owner_id && owner_id[0])
+	    ged_command_metadata_add(metadata, &metadata_count,
+		    "result.owner", owner_id);
+	if (result_kind && result_kind[0])
+	    ged_command_metadata_add(metadata, &metadata_count,
+		    "result.kind", result_kind);
+	if (generation_buf[0])
+	    ged_command_metadata_add(metadata, &metadata_count,
+		    "result.generation", generation_buf);
+	ret = ged_draw_command_scene_feature_metadata_replace(scene, name,
+		metadata, metadata_count) ? BRLCAD_OK : BRLCAD_ERROR;
+    }
     ged_uplot_feature_layers_free(layers, names, live_layers);
     if (ret == BRLCAD_OK)
 	ret = ged_draw_command_scene_commit(scene) ? BRLCAD_OK : BRLCAD_ERROR;
     else
 	ged_draw_command_scene_abort(scene);
     return ret;
+}
+
+extern "C" int
+_ged_line_layer_builder_publish_command_scene_feature(struct ged *gedp,
+	const char *name,
+	const struct bg_line_layer_builder *builder,
+	const char *owner_id,
+	const char *owner_role,
+	const char *remove_prefix,
+	const char *result_kind,
+	uint64_t generation)
+{
+    if (!gedp || !name || !builder)
+	return BRLCAD_ERROR;
+
+    void *view_ctx = ged_view_active_ctx(gedp);
+    if (view_ctx) {
+	struct ged_draw_command_scene_desc desc =
+	    GED_DRAW_COMMAND_SCENE_DESC_INIT;
+	desc.owner_id = owner_id;
+	desc.owner_role = owner_role;
+	desc.generation = generation;
+	struct ged_draw_command_scene *scene =
+	    ged_draw_command_scene_begin(view_ctx, &desc);
+	if (scene) {
+	    if (remove_prefix && remove_prefix[0])
+		(void)ged_draw_command_scene_features_remove_prefix(scene,
+			remove_prefix);
+
+	    struct ged_draw_view_feature_style style =
+		GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+	    style.visible = 1;
+	    style.selectable = 1;
+	    const int published =
+		ged_draw_command_scene_line_layer_builder_replace(scene,
+			name, builder, &style);
+	    int metadata_published = 0;
+	    if (published) {
+		char layer_count_buf[64] = {0};
+		char point_count_buf[64] = {0};
+		char generation_buf[64] = {0};
+		snprintf(layer_count_buf, sizeof(layer_count_buf), "%zu",
+			bg_line_layer_builder_layer_count(builder));
+		snprintf(point_count_buf, sizeof(point_count_buf), "%zu",
+			bg_line_layer_builder_point_count(builder));
+		if (generation)
+		    snprintf(generation_buf, sizeof(generation_buf), "%llu",
+			    (unsigned long long)generation);
+		struct ged_draw_command_scene_metadata metadata[7];
+		size_t metadata_count = 0;
+		ged_command_metadata_add(metadata, &metadata_count,
+			"result.feature", name);
+		ged_command_metadata_add(metadata, &metadata_count,
+			"result.format", "line-layer-builder");
+		ged_command_metadata_add(metadata, &metadata_count,
+			"result.layer_count", layer_count_buf);
+		ged_command_metadata_add(metadata, &metadata_count,
+			"result.point_count", point_count_buf);
+		if (owner_id && owner_id[0])
+		    ged_command_metadata_add(metadata, &metadata_count,
+			    "result.owner", owner_id);
+		if (result_kind && result_kind[0])
+		    ged_command_metadata_add(metadata, &metadata_count,
+			    "result.kind", result_kind);
+		if (generation_buf[0])
+		    ged_command_metadata_add(metadata, &metadata_count,
+			    "result.generation", generation_buf);
+		metadata_published =
+		    ged_draw_command_scene_feature_metadata_replace(scene,
+			    name, metadata, metadata_count);
+	    }
+	    if (published && metadata_published &&
+		    ged_draw_command_scene_commit(scene))
+		return BRLCAD_OK;
+	    if (!published || !metadata_published)
+		ged_draw_command_scene_abort(scene);
+	    return BRLCAD_ERROR;
+	}
+    }
+
+    int handled = ged_diagnostic_line_layer_publish(gedp, name, builder);
+    if (!handled && view_ctx) {
+	handled = ged_draw_view_context_diagnostic_line_layer_builder_replace(
+		view_ctx, name, builder);
+    }
+    return handled ? BRLCAD_OK : BRLCAD_ERROR;
+}
+
+extern "C" int
+_ged_line_set_publish_command_scene_feature(struct ged *gedp,
+	const char *name,
+	const point_t *points,
+	const int *cmds,
+	size_t point_count,
+	const struct ged_draw_view_feature_style *style,
+	const char *owner_id,
+	const char *owner_role,
+	const char *remove_prefix,
+	const char *result_kind,
+	uint64_t generation)
+{
+    if (!gedp || !name)
+	return BRLCAD_ERROR;
+
+    void *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx)
+	return BRLCAD_ERROR;
+
+    struct ged_draw_view_feature_style publish_style =
+	GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+    if (style)
+	publish_style = *style;
+    if (publish_style.visible < 0)
+	publish_style.visible = 1;
+    if (publish_style.selectable < 0)
+	publish_style.selectable = 1;
+
+    struct ged_draw_command_scene_desc desc =
+	GED_DRAW_COMMAND_SCENE_DESC_INIT;
+    desc.owner_id = owner_id;
+    desc.owner_role = owner_role;
+    desc.generation = generation;
+    struct ged_draw_command_scene *scene =
+	ged_draw_command_scene_begin(view_ctx, &desc);
+    if (!scene) {
+	if (remove_prefix && remove_prefix[0])
+	    (void)ged_draw_view_context_features_remove_prefix(view_ctx,
+		    remove_prefix);
+	if (!points || !point_count)
+	    return ged_draw_view_context_feature_remove(view_ctx, name) ?
+		BRLCAD_OK : BRLCAD_ERROR;
+	return ged_draw_view_context_lines_replace(view_ctx, name, 0,
+		points, cmds, point_count, &publish_style) ?
+	    BRLCAD_OK : BRLCAD_ERROR;
+    }
+
+    if (remove_prefix && remove_prefix[0])
+	(void)ged_draw_command_scene_features_remove_prefix(scene,
+		remove_prefix);
+
+    const int published = ged_draw_command_scene_line_set_replace(scene,
+	    name, points, cmds, point_count, &publish_style);
+    int metadata_published = 1;
+    if (published && points && point_count) {
+	char point_count_buf[64] = {0};
+	char generation_buf[64] = {0};
+	snprintf(point_count_buf, sizeof(point_count_buf), "%zu",
+		point_count);
+	if (generation)
+	    snprintf(generation_buf, sizeof(generation_buf), "%llu",
+		    (unsigned long long)generation);
+	struct ged_draw_command_scene_metadata metadata[6];
+	size_t metadata_count = 0;
+	ged_command_metadata_add(metadata, &metadata_count,
+		"result.feature", name);
+	ged_command_metadata_add(metadata, &metadata_count,
+		"result.format", "line-set");
+	ged_command_metadata_add(metadata, &metadata_count,
+		"result.point_count", point_count_buf);
+	if (owner_id && owner_id[0])
+	    ged_command_metadata_add(metadata, &metadata_count,
+		    "result.owner", owner_id);
+	if (result_kind && result_kind[0])
+	    ged_command_metadata_add(metadata, &metadata_count,
+		    "result.kind", result_kind);
+	if (generation_buf[0])
+	    ged_command_metadata_add(metadata, &metadata_count,
+		    "result.generation", generation_buf);
+	metadata_published =
+	    ged_draw_command_scene_feature_metadata_replace(scene, name,
+		    metadata, metadata_count);
+    }
+
+    if (published && metadata_published &&
+	    ged_draw_command_scene_commit(scene))
+	return BRLCAD_OK;
+    if (!published || !metadata_published)
+	ged_draw_command_scene_abort(scene);
+    return BRLCAD_ERROR;
+}
+
+extern "C" int
+_ged_command_scene_features_remove_prefix(struct ged *gedp,
+	const char *prefix,
+	const char *owner_id,
+	const char *owner_role,
+	uint64_t generation)
+{
+    if (!gedp || !prefix || !prefix[0])
+	return BRLCAD_ERROR;
+
+    void *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx)
+	return BRLCAD_ERROR;
+
+    struct ged_draw_command_scene_desc desc =
+	GED_DRAW_COMMAND_SCENE_DESC_INIT;
+    desc.owner_id = owner_id;
+    desc.owner_role = owner_role;
+    desc.generation = generation;
+    struct ged_draw_command_scene *scene =
+	ged_draw_command_scene_begin(view_ctx, &desc);
+    if (!scene) {
+	(void)ged_draw_view_context_features_remove_prefix(view_ctx, prefix);
+	return BRLCAD_OK;
+    }
+
+    (void)ged_draw_command_scene_features_remove_prefix(scene, prefix);
+    return ged_draw_command_scene_commit(scene) ?
+	BRLCAD_OK : BRLCAD_ERROR;
 }
 
 extern "C" int
@@ -1817,7 +2081,9 @@ _ged_draw_uplot_to_command_scene_feature(struct ged *gedp,
 	int mode,
 	const char *owner_id,
 	const char *owner_role,
-	const char *remove_prefix)
+	const char *remove_prefix,
+	const char *result_kind,
+	uint64_t generation)
 {
     if (!gedp || !fp || !name || !ged_view_active_ctx(gedp))
 	return BRLCAD_ERROR;
@@ -1828,7 +2094,8 @@ _ged_draw_uplot_to_command_scene_feature(struct ged *gedp,
     int ret = ged_uplot_parse_stream(&ctx, fp);
     if (ret == BRLCAD_OK)
 	ret = ged_uplot_publish_command_scene_feature(gedp, &ctx, name,
-		owner_id, owner_role, remove_prefix);
+		owner_id, owner_role, remove_prefix, result_kind,
+		generation);
 
     ged_uplot_builder_free(&ctx);
     return ret;
@@ -1866,6 +2133,50 @@ _ged_draw_uplot_files_to_feature(struct ged *gedp, const char * const *files, si
     return ret;
 }
 
+extern "C" int
+_ged_draw_uplot_files_to_command_scene_feature(
+	struct ged *gedp,
+	const char * const *files,
+	size_t file_count,
+	const char *name,
+	double char_size,
+	int mode,
+	const char *owner_id,
+	const char *owner_role,
+	const char *remove_prefix,
+	const char *result_kind,
+	uint64_t generation)
+{
+    if (!gedp || !files || !file_count || !name || !ged_view_active_ctx(gedp))
+	return BRLCAD_ERROR;
+
+    struct ged_uplot_stream ctx;
+    ged_uplot_builder_init(&ctx, char_size, mode);
+
+    int ret = BRLCAD_OK;
+    for (size_t i = 0; i < file_count; i++) {
+	FILE *fp = fopen(files[i], "rb");
+	if (!fp) {
+	    if (gedp->ged_result_str)
+		bu_vls_printf(gedp->ged_result_str, "failed to open plot file - %s\n", files[i]);
+	    ret = BRLCAD_ERROR;
+	    break;
+	}
+	ret = ged_uplot_parse_stream(&ctx, fp);
+	fclose(fp);
+	if (ret != BRLCAD_OK)
+	    break;
+    }
+
+    if (ret == BRLCAD_OK)
+	ret = ged_uplot_publish_command_scene_feature(gedp, &ctx, name,
+		owner_id, owner_role, remove_prefix, result_kind,
+		generation);
+
+    ged_uplot_builder_free(&ctx);
+    return ret;
+}
+
 extern "C" struct ged_uplot_stream *
 _ged_uplot_stream_create(double char_size, int mode)
 {
@@ -1895,10 +2206,12 @@ _ged_uplot_stream_publish_command_scene_feature(struct ged *gedp,
 	const char *name,
 	const char *owner_id,
 	const char *owner_role,
-	const char *remove_prefix)
+	const char *remove_prefix,
+	const char *result_kind,
+	uint64_t generation)
 {
     return ged_uplot_publish_command_scene_feature(gedp, stream, name,
-	    owner_id, owner_role, remove_prefix);
+	    owner_id, owner_role, remove_prefix, result_kind, generation);
 }
 
 extern "C" void

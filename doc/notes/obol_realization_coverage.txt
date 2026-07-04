@@ -58,6 +58,13 @@ publishing an empty handled Obol mesh result rather than falling back to
 retained `_ged_drawtrees`.  This keeps failure-mode tests tied to the direct
 provider contract and prevents legacy indexed-face geometry from silently
 reappearing.
+Database-source realization cache ownership is internal to libbrlobol.  A
+`SoBRLRealizeAction` clears its temporary cache, seeds it from already-current
+realized shared geometry in the traversed scene, and then realizes stale
+database sources.  This preserves local geometry reuse when GED or another
+caller synchronizes transformed leaf instances in separate transactions, while
+still avoiding a persistent cross-refresh cache until key/invalidation/refcount
+policy is explicit.
 Staged RT mesh LoD payload copying also owns optional active normals as a
 provider-neutral triangle-corner array, so normal payloads do not leak the
 underlying RT/BSG cache container into libbrlobol consumers.  The RT mesh-LoD
@@ -167,6 +174,15 @@ geometry setters on a visible shape detach it from the shared source,
 preserving direct GED/edit mutation semantics.  LoD-backed mesh instances keep
 a per-instance `SoBRLLodMeshShape` wrapper so view-specific display LoD state
 can change independently of shared full-detail source geometry.
+`ged_test_obol_draw_sync` now covers the same solid reached through repeated
+comb instances under different transforms.  The regression requires the two
+visible leaf sources to reference one shared local geometry node, keeps that
+geometry in source-local coordinates, validates transformed source/subtree
+bounds, verifies logical visibility/highlight transactions on the repeated
+instances, checks direct source-instance stale/redraw reuse from an
+already-current sibling, guards logical redraw against retained fallback state,
+covers shaded shared local mesh reuse, and runs autoview against the
+transformed scene envelope.
 
 External primary geometry published to a database source follows the same
 source-local rule.  Line, point, and indexed-triangle payloads must be in
@@ -184,11 +200,15 @@ lighting.
 
 Evaluated draw modes are provider-owned Obol database-source outputs for the
 requested path.  Evaluated sampled-points publishes the sampled indexed-face
-payload directly to the Obol source.  Evaluated wire factors the legacy Big-E
-line-set producer away from retained shape refs and publishes the line set
-directly to the Obol source.  The Big-E implementation should move into
-libbrlobol once its librt resource ownership and optional deterministic
-per-region/job parallelization design are explicit.
+payload directly to the Obol source.  Evaluated wire now has a libbrlobol
+provider boundary: GED resolves runtime/source state, calls
+`brlobol_evaluated_wire_*`, and publishes the resulting source-local line set
+through neutral database-source or shape-ref facades.  The implementation
+behind that boundary is still the legacy Big-E algorithm, but it now owns a
+per-call librt `struct resource` rather than using `rt_uniresource`.  The next
+cleanup is libbrlobol-internal modernization of the algorithm itself and
+optional deterministic per-region/job parallelization with per-worker
+resources.
 
 Standalone material-object identity, first mesh edge/vertex action identity,
 and typed edit-preview intent identity across pick/snap/measure/export are now
@@ -324,6 +344,10 @@ libbrlobol draw-mode-only mutations must not demote existing non-simple
 representations.  Summary reads also need to use the selected database source
 instance, not the first source sharing the same logical database path, because
 wire/shaded/evaluated mode sources can coexist during a transaction.
+GED Obol shape refs must preserve the same representation-mode identity:
+mode-specific refs carry an explicit draw mode in their Obol context token,
+and evaluated shape-ref realization enters that mode's publication scope
+before calling the direct evaluated provider.
 External GED primary geometry publication has an additional hardening contract:
 line, annotation, point, and indexed-face publishers clear existing primary
 realized children on the target `SoBRLDatabaseSource` before installing the new

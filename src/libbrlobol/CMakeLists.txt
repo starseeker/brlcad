@@ -4,6 +4,7 @@ set(
   axes.cpp
   database_source.cpp
   edit_preview.cpp
+  evaluated_wire.cpp
   export_action.cpp
   grid.cpp
   headless_window_host.cpp
@@ -78,7 +79,9 @@ cmakefiles(
   adc.cpp
   axes.cpp
   database_source.cpp
+  database_source_realization.h
   edit_preview.cpp
+  evaluated_wire.cpp
   export_action.cpp
   grid.cpp
   headless_window_host.cpp

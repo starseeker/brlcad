@@ -21,6 +21,7 @@
 #include "common.h"
 #include "ged.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -85,9 +86,10 @@ struct overlaps_context {
 };
 
 static void
-check_publish_overlap_label(struct ged *gedp, const struct overlaps_context *context)
+check_publish_overlap_label(struct ged *gedp, void *view_ctx,
+	const struct overlaps_context *context)
 {
-    if (!gedp || !context || !ged_diagnostic_hud_label_handler_available(gedp))
+    if (!gedp || !context)
 	return;
 
     struct bu_vls text = BU_VLS_INIT_ZERO;
@@ -104,9 +106,108 @@ check_publish_overlap_label(struct ged *gedp, const struct overlaps_context *con
     label.color[2] = 0;
     label.font_size = 12.0;
     label.source_id = (uint32_t)context->noverlaps;
-    (void)ged_diagnostic_hud_label_publish(gedp, &label);
+
+    if (view_ctx) {
+	struct ged_draw_command_scene_desc desc =
+	    GED_DRAW_COMMAND_SCENE_DESC_INIT;
+	desc.owner_id = "check";
+	desc.owner_role = "command-result";
+	struct ged_draw_command_scene *scene =
+	    ged_draw_command_scene_begin(view_ctx, &desc);
+	if (scene) {
+	    int published = ged_draw_command_scene_hud_label_replace(scene,
+		    label.label_id, &label);
+	    char total[64] = {0};
+	    char unique[64] = {0};
+	    snprintf(total, sizeof(total), "%zu", context->noverlaps);
+	    snprintf(unique, sizeof(unique), "%zu",
+		    context->unique_overlap_count);
+	    struct ged_draw_command_scene_metadata metadata[5] = {
+		{"result.feature", label.label_id},
+		{"result.owner", "check"},
+		{"result.kind", "overlap-summary"},
+		{"result.overlap_count", total},
+		{"result.unique_overlap_count", unique}
+	    };
+	    int metadata_published = published ?
+		ged_draw_command_scene_feature_metadata_replace(scene,
+			label.label_id, metadata, 5) : 0;
+	    if (published && metadata_published &&
+		    ged_draw_command_scene_commit(scene)) {
+		bu_vls_free(&text);
+		return;
+	    }
+	    if (!published || !metadata_published)
+		ged_draw_command_scene_abort(scene);
+	    bu_vls_free(&text);
+	    return;
+	}
+    }
+
+    if (ged_diagnostic_hud_label_handler_available(gedp))
+	(void)ged_diagnostic_hud_label_publish(gedp, &label);
 
     bu_vls_free(&text);
+}
+
+static int
+check_publish_overlap_lines(struct ged *gedp, void *view_ctx,
+	const struct bg_line_layer_builder *builder)
+{
+    if (!gedp || !builder)
+	return 0;
+
+    if (view_ctx) {
+	struct ged_draw_command_scene_desc desc =
+	    GED_DRAW_COMMAND_SCENE_DESC_INIT;
+	desc.owner_id = "check";
+	desc.owner_role = "command-result";
+	struct ged_draw_command_scene *scene =
+	    ged_draw_command_scene_begin(view_ctx, &desc);
+	if (scene) {
+	    struct ged_draw_view_feature_style style =
+		GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+	    style.visible = 1;
+	    style.selectable = 1;
+	    (void)ged_draw_command_scene_features_remove_prefix(scene,
+		    "check::overlaps");
+	    int published =
+		ged_draw_command_scene_line_layer_builder_replace(scene,
+			"check::overlaps", builder, &style);
+	    char layer_count[64] = {0};
+	    char point_count[64] = {0};
+	    snprintf(layer_count, sizeof(layer_count), "%zu",
+		    bg_line_layer_builder_layer_count(builder));
+	    snprintf(point_count, sizeof(point_count), "%zu",
+		    bg_line_layer_builder_point_count(builder));
+	    struct ged_draw_command_scene_metadata metadata[6] = {
+		{"result.feature", "check::overlaps"},
+		{"result.format", "line-layer-builder"},
+		{"result.layer_count", layer_count},
+		{"result.point_count", point_count},
+		{"result.owner", "check"},
+		{"result.kind", "overlap"}
+	    };
+	    int metadata_published = published ?
+		ged_draw_command_scene_feature_metadata_replace(scene,
+			"check::overlaps", metadata, 6) : 0;
+	    if (published && metadata_published &&
+		    ged_draw_command_scene_commit(scene))
+		return 1;
+	    if (!published || !metadata_published)
+		ged_draw_command_scene_abort(scene);
+	    return 0;
+	}
+    }
+
+    int handled = ged_diagnostic_line_layer_publish(gedp,
+	    "check::overlaps", builder);
+    if (!handled && view_ctx) {
+	handled =
+	    ged_draw_view_context_diagnostic_line_layer_builder_replace(
+		    view_ctx, "check::overlaps", builder);
+    }
+    return handled;
 }
 
 static void
@@ -398,16 +499,12 @@ int check_overlaps(struct ged *gedp, struct current_state *state,
     printOverlaps(gedp, &callbackdata, options);
 
     if (overlay_enabled) {
-	int handled = ged_diagnostic_line_layer_publish(gedp,
-		"check::overlaps", check_plot.builder);
-	if (!handled && view_ctx) {
-	    (void)ged_draw_view_context_diagnostic_line_layer_builder_replace(
-		    view_ctx, "check::overlaps", check_plot.builder);
-	}
+	(void)check_publish_overlap_lines(gedp, view_ctx,
+		check_plot.builder);
 	ged_check_plot_free(&check_plot);
     }
     if (options->overlaps_overlay_flag)
-	check_publish_overlap_label(gedp, &callbackdata);
+	check_publish_overlap_label(gedp, view_ctx, &callbackdata);
 
     if (plot_overlaps) {
 	fclose(plot_overlaps);

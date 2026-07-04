@@ -719,20 +719,15 @@ _bot_cmd_plot(void *bs, int argc, const char **argv)
 	cmds[pi++] = BG_GEOMETRY_LINE_DRAW;
     }
 
-    void *view_ctx = ged_view_active_ctx(gb->gedp);
-    if (view_ctx) {
-	struct bu_vls nroot = BU_VLS_INIT_ZERO;
-	bu_vls_sprintf(&nroot, "bot::%s", "_bot_face_plot");
-	(void)ged_draw_view_context_feature_remove(view_ctx, bu_vls_cstr(&nroot));
-	if (point_count) {
-	    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
-	    style.color_valid = 1;
-	    VSET(style.color, rgb[0], rgb[1], rgb[2]);
-	    (void)ged_draw_view_context_lines_replace(view_ctx, bu_vls_cstr(&nroot), 0,
-		    (const point_t *)points, cmds, point_count, &style);
-	}
-	bu_vls_free(&nroot);
-    }
+    struct bu_vls nroot = BU_VLS_INIT_ZERO;
+    bu_vls_sprintf(&nroot, "bot::%s", "_bot_face_plot");
+    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+    style.color_valid = 1;
+    VSET(style.color, rgb[0], rgb[1], rgb[2]);
+    (void)_ged_line_set_publish_command_scene_feature(gb->gedp,
+	    bu_vls_cstr(&nroot), (const point_t *)points, cmds, point_count,
+	    &style, "bot", "command-result", NULL, "face-plot", 0);
+    bu_vls_free(&nroot);
 
     if (points)
 	bu_free(points, "bot face plot points");

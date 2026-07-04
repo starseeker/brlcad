@@ -373,6 +373,208 @@ _ged_draw_view_feature_prefix_remove_cb(bsg_feature_ref UNUSED(ref),
     return 1;
 }
 
+size_t
+ged_draw_view_context_feature_metadata_count(void *view_ctx, const char *name)
+{
+    if (!view_ctx || !name)
+	return 0;
+
+    if (ged_draw_obol_view_context_feature_store_active(view_ctx))
+	return ged_draw_obol_view_context_feature_metadata_count(view_ctx,
+		name);
+
+    return 0;
+}
+
+int
+ged_draw_view_context_feature_metadata_copy(
+	void *view_ctx,
+	const char *name,
+	size_t index,
+	struct bu_vls *key,
+	struct bu_vls *value)
+{
+    if (key)
+	bu_vls_trunc(key, 0);
+    if (value)
+	bu_vls_trunc(value, 0);
+    if (!view_ctx || !name)
+	return 0;
+
+    if (ged_draw_obol_view_context_feature_store_active(view_ctx))
+	return ged_draw_obol_view_context_feature_metadata_copy(view_ctx,
+		name, index, key, value);
+
+    return 0;
+}
+
+size_t
+ged_draw_view_context_feature_primitive_metadata_count(
+	void *view_ctx,
+	const char *name,
+	int primitive)
+{
+    if (!view_ctx || !name || primitive < 0)
+	return 0;
+
+    if (ged_draw_obol_view_context_feature_store_active(view_ctx))
+	return ged_draw_obol_view_context_feature_primitive_metadata_count(
+		view_ctx, name, primitive);
+
+    return 0;
+}
+
+int
+ged_draw_view_context_feature_primitive_metadata_copy(
+	void *view_ctx,
+	const char *name,
+	int primitive,
+	size_t index,
+	struct bu_vls *key,
+	struct bu_vls *value)
+{
+    if (key)
+	bu_vls_trunc(key, 0);
+    if (value)
+	bu_vls_trunc(value, 0);
+    if (!view_ctx || !name || primitive < 0)
+	return 0;
+
+    if (ged_draw_obol_view_context_feature_store_active(view_ctx))
+	return ged_draw_obol_view_context_feature_primitive_metadata_copy(
+		view_ctx, name, primitive, index, key, value);
+
+    return 0;
+}
+
+int
+ged_draw_view_context_feature_pick_primitive_resolve(
+	void *view_ctx,
+	const char *picked_feature_name,
+	int picked_primitive,
+	int select,
+	int highlight,
+	struct bu_vls *feature_name,
+	int *feature_primitive)
+{
+    if (feature_name)
+	bu_vls_trunc(feature_name, 0);
+    if (feature_primitive)
+	*feature_primitive = -1;
+    if (!view_ctx || !picked_feature_name || picked_primitive < 0 ||
+	    !feature_primitive)
+	return 0;
+
+    if (ged_draw_obol_view_context_feature_store_active(view_ctx))
+	return ged_draw_obol_view_context_feature_pick_primitive_resolve(
+		view_ctx, picked_feature_name, picked_primitive, select,
+		highlight, feature_name, feature_primitive);
+
+    return 0;
+}
+
+int
+ged_draw_view_context_feature_selected_primitives_replace(
+	void *view_ctx,
+	const char *name,
+	const int *primitives,
+	size_t primitive_count)
+{
+    if (!view_ctx || !name || (primitive_count && !primitives))
+	return 0;
+
+    if (ged_draw_obol_view_context_feature_store_active(view_ctx))
+	return ged_draw_obol_view_context_feature_selected_primitives_replace(
+		view_ctx, name, primitives, primitive_count);
+
+    return 0;
+}
+
+int
+ged_draw_view_context_feature_highlighted_primitives_replace(
+	void *view_ctx,
+	const char *name,
+	const int *primitives,
+	size_t primitive_count)
+{
+    if (!view_ctx || !name || (primitive_count && !primitives))
+	return 0;
+
+    if (ged_draw_obol_view_context_feature_store_active(view_ctx))
+	return ged_draw_obol_view_context_feature_highlighted_primitives_replace(
+		view_ctx, name, primitives, primitive_count);
+
+    return 0;
+}
+
+size_t
+ged_draw_view_context_feature_selected_primitive_count(
+	void *view_ctx,
+	const char *name)
+{
+    if (!view_ctx || !name)
+	return 0;
+
+    if (ged_draw_obol_view_context_feature_store_active(view_ctx))
+	return ged_draw_obol_view_context_feature_selected_primitive_count(
+		view_ctx, name);
+
+    return 0;
+}
+
+size_t
+ged_draw_view_context_feature_highlighted_primitive_count(
+	void *view_ctx,
+	const char *name)
+{
+    if (!view_ctx || !name)
+	return 0;
+
+    if (ged_draw_obol_view_context_feature_store_active(view_ctx))
+	return ged_draw_obol_view_context_feature_highlighted_primitive_count(
+		view_ctx, name);
+
+    return 0;
+}
+
+int
+ged_draw_view_context_feature_selected_primitive_at(
+	void *view_ctx,
+	const char *name,
+	size_t index,
+	int *primitive)
+{
+    if (primitive)
+	*primitive = -1;
+    if (!view_ctx || !name || !primitive)
+	return 0;
+
+    if (ged_draw_obol_view_context_feature_store_active(view_ctx))
+	return ged_draw_obol_view_context_feature_selected_primitive_at(
+		view_ctx, name, index, primitive);
+
+    return 0;
+}
+
+int
+ged_draw_view_context_feature_highlighted_primitive_at(
+	void *view_ctx,
+	const char *name,
+	size_t index,
+	int *primitive)
+{
+    if (primitive)
+	*primitive = -1;
+    if (!view_ctx || !name || !primitive)
+	return 0;
+
+    if (ged_draw_obol_view_context_feature_store_active(view_ctx))
+	return ged_draw_obol_view_context_feature_highlighted_primitive_at(
+		view_ctx, name, index, primitive);
+
+    return 0;
+}
+
 int
 ged_draw_view_context_features_remove_prefix(void *view_ctx, const char *prefix)
 {

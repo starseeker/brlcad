@@ -16,6 +16,7 @@
 
 #include <stdint.h>
 #include <string>
+#include <utility>
 #include <vector>
 
 class QgView;
@@ -34,6 +35,7 @@ struct QTCAD_EXPORT QgObolPickRecord {
     std::string path;
     std::string sourceName;
     std::string sourceType;
+    std::string featureName;
     std::string materialShader;
     std::string editIntentId;
     std::string editIntentRole;
@@ -48,6 +50,7 @@ struct QTCAD_EXPORT QgObolPickRecord {
     int los;
     int primitiveKind;
     int primitiveIndex;
+    int featurePrimitiveIndex;
     int faceVertexIndexA;
     int faceVertexIndexB;
     int faceVertexIndexC;
@@ -57,6 +60,8 @@ struct QTCAD_EXPORT QgObolPickRecord {
     int nearestFaceVertexSlot;
     int nearestFaceVertexIndex;
     bool materialColorValid;
+    bool featurePickResolved;
+    std::vector<std::pair<std::string, std::string> > featurePrimitiveMetadata;
 };
 
 /**
@@ -105,6 +110,30 @@ QTCAD_EXPORT int qg_obol_pick_rect(QgView *display,
 	bool firstOnly,
 	std::vector<QgObolPickRecord> &records,
 	int *submittedSourceRequestCount = 0);
+
+/**
+ * Apply Obol feature primitive state for a resolved pick record.  Database
+ * object picks normally do not resolve to feature-store primitives; this helper
+ * is intended for command-result and overlay feature picks.
+ *
+ * Returns 1 when the record resolved to an Obol feature primitive and all
+ * requested state was applied.
+ */
+QTCAD_EXPORT int qg_obol_pick_apply_feature_state(QgView *display,
+	const QgObolPickRecord &record,
+	bool select,
+	bool highlight);
+
+/**
+ * Apply Obol feature primitive state for all resolved pick records, grouping
+ * primitives by parent feature before replacing selected/highlighted state.
+ *
+ * Returns the number of Obol parent features updated.
+ */
+QTCAD_EXPORT int qg_obol_pick_apply_feature_states(QgView *display,
+	const std::vector<QgObolPickRecord> &records,
+	bool select,
+	bool highlight);
 
 #endif /* QGOBOLPICK_H */
 

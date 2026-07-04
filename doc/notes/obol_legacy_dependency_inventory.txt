@@ -865,12 +865,13 @@ unowned contexts:
 
 Production libged named diagnostic line-overlay producers still exercise the
 retained GED draw-view bridge while retained feature storage remains in place,
-but line-feature replacement/removal must stay behind opaque context helpers.
-Joint mesh, BoT fuse/check/face-plot, lint plot, gdiff result, and preview
-eye-path overlays route through `ged_draw_view_context_lines_replace` and
-`ged_draw_view_context_feature_remove` from the public `ged/draw.h`
-facade instead of the private draw-view header or typed `struct bsg_view`
-line-feature helper calls:
+but primary command line-feature replacement/removal must move behind
+command-scene ownership.  Joint mesh, BoT fuse/check/face-plot, lint plot,
+gdiff result, and preview eye-path overlays now publish through
+`_ged_line_set_publish_command_scene_feature`; the helper centralizes the
+remaining public `ged/draw.h` direct-view fallback for unowned contexts instead
+of duplicating `ged_draw_view_context_lines_replace` or
+`ged_draw_view_context_feature_remove` in each producer:
 
 * libged named diagnostic line-overlay producers: no typed GED draw-view line-feature calls
 
@@ -1161,16 +1162,21 @@ include `rt/view_legacy_bsg.h`, and
 through GED facades instead of typed RT snapshot calls.  It also routes
 view-name reads and independent-scope lifecycle through GED facades and no
 longer includes `rt/view_legacy_bsg.h`.  Generic
-view-object list/find/info, style, removal, update, and shape-ref realization
+view-object list/find/info, style, update, deletion, and shape-ref realization
 in `src/libged/view/objs.cpp` now use the public `ged/draw.h`
-draw-view context facade, including context-form feature-style apply and
-feature-realize helpers, route mouse-state updates through a GED facade, and
-report draw modes with `GED_DRAW_MODE_*` names instead of including direct
-BSG headers, `rt/view_legacy_bsg.h`, or libged's private draw-view header.
+draw-view context facade.  Deletion routes through
+`ged_draw_view_context_object_remove`, which centralizes feature, overlay,
+source-group, and transient shape-ref cleanup behind one neutral facade.
+Draw visibility and update/realize route through object-level visible/get/set
+and realize facades that centralize feature-vs-shape-ref dispatch.  The
+remaining color/arrow style paths use context-form feature-style apply, route
+mouse-state updates through a GED facade, and report draw modes with
+`GED_DRAW_MODE_*` names instead of including direct BSG headers,
+`rt/view_legacy_bsg.h`, or libged's private draw-view header.
 Deprecated gobject create/delete command handling in
 `src/libged/view/gobjs.cpp` now uses `ged_draw_view_context_gobject_create`
-and public feature existence/removal helpers; retained scene-ref allocation,
-appearance setup, shape user-data ownership, and `draw_gather_paths`
+for creation and delegates deletion to the canonical `view obj remove` path;
+retained scene-ref allocation, appearance setup, shape user-data ownership, and `draw_gather_paths`
 population stay in the draw bridge implementation instead of the command file:
 
 * libged view-object screen/model/info snapshots: no typed RT view snapshot calls
@@ -1415,10 +1421,10 @@ through GED view-context facades while routing view-size, perspective restore
 writes, and final refresh through `ged_view_context_size_set`,
 `ged_view_context_perspective_set`, and `ged_view_context_update`.
 `src/libged/draw/preview.cpp` routes preview camera setup, view-to-model
-reads, center updates, and retained preview eye-path feature
-cleanup/publication through GED view-context and GED draw-view context helpers
-while using the GED update facade for preview camera refreshes.  Those three
-files no longer include `rt/view_legacy_bsg.h`.  `src/libged/mirror/mirror.c`
+reads, and center updates through GED view-context helpers, while preview
+eye-path cleanup/publication routes through the shared command-scene line-set
+helper.  Those three files no longer include `rt/view_legacy_bsg.h`.
+`src/libged/mirror/mirror.c`
 routes post-draw view refresh through `ged_view_context_update` after active
 view lookup and no longer includes `rt/view_legacy_bsg.h`:
 
@@ -1428,10 +1434,12 @@ Production libged NIRT/qray and rtcheck diagnostics still exercise retained
 subprocess and uplot-backed feature publication while ray diagnostics migrate,
 but view snapshot reads and stale-feature cleanup must stay behind opaque
 context helpers.  `src/libged/nirt/nirt.cpp` routes shot center, direction,
-qray glyph scale, vnirt view-to-model conversion, and stale qray feature
-cleanup through GED view-context facades and the public GED draw-view context
-facade; it no longer includes `rt/view_legacy_bsg.h`, libged's private
-draw-view header, or direct BSG appearance/node headers.
+qray glyph scale, and vnirt view-to-model conversion through GED view-context
+facades; stale qray result cleanup routes through
+`_ged_command_scene_features_remove_prefix`, which centralizes the remaining
+public GED draw-view prefix-removal fallback for unowned views.  NIRT no
+longer includes `rt/view_legacy_bsg.h`, libged's private draw-view header, or
+direct BSG appearance/node headers.
 `src/libged/rtcheck/rtcheck2.cpp` routes
 overlap glyph scale through the GED scale facade and stale rtcheck prefix
 cleanup through the same context boundary, and no longer includes

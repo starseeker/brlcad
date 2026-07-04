@@ -35,6 +35,7 @@ class SoFieldSensor;
 class SoSensor;
 struct db_i;
 struct rt_mesh_lod;
+struct BRLObolDatabaseSourceRealizationCache;
 
 struct BRLOBOL_EXPORT BRLObolDatabaseSourceSummary {
     BRLObolDatabaseSourceSummary(void);
@@ -645,6 +646,13 @@ protected:
     virtual ~SoBRLDatabaseSource(void);
 
 private:
+    friend SbBool brlobol_database_source_realize_wireframe_with_cache(
+	    SoBRLDatabaseSource *source,
+	    BRLObolDatabaseSourceRealizationCache *cache);
+    friend SbBool brlobol_database_source_realize_mesh_with_cache(
+	    SoBRLDatabaseSource *source,
+	    BRLObolDatabaseSourceRealizationCache *cache);
+
     static void fieldSensorCB(void *data, SoSensor *sensor);
     void attachFieldSensors(void);
     void detachFieldSensors(void);

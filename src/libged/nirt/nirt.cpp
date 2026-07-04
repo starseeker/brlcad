@@ -62,23 +62,11 @@
 static void
 nirt_qray_result_clear(struct ged *gedp, const char *name)
 {
-    void *view_ctx = gedp ? ged_view_active_ctx(gedp) : NULL;
-    if (!view_ctx || !name || !name[0])
+    if (!gedp || !name || !name[0])
 	return;
 
-    struct ged_draw_command_scene_desc desc =
-	GED_DRAW_COMMAND_SCENE_DESC_INIT;
-    desc.owner_id = "nirt";
-    desc.owner_role = "command-result";
-    struct ged_draw_command_scene *scene =
-	ged_draw_command_scene_begin(view_ctx, &desc);
-    if (scene) {
-	(void)ged_draw_command_scene_features_remove_prefix(scene, name);
-	(void)ged_draw_command_scene_commit(scene);
-	return;
-    }
-
-    (void)ged_draw_view_context_features_remove_prefix(view_ctx, name);
+    (void)_ged_command_scene_features_remove_prefix(gedp, name,
+	    "nirt", "command-result", 0);
 }
 
 struct nirt_info {
@@ -606,7 +594,7 @@ ged_nirt_core(struct ged *gedp, int argc, const char *argv[])
 	    int pret = _ged_draw_uplot_to_command_scene_feature(gedp, fp,
 		    bu_vls_cstr(&gedp->i->ged_gdp->gd_qray_basename),
 		    csize, gedp->i->ged_gdp->gd_uplotOutputMode,
-		    "nirt", "command-result", NULL);
+		    "nirt", "command-result", NULL, "query-ray", 0);
 	    fclose(fp);
 	    if (pret != BRLCAD_OK)
 		bu_log("Error loading plot data from %s\n", bu_vls_cstr(&nv.plotfile));

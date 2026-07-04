@@ -13,6 +13,7 @@
 #include "brlobol/mesh_shape.h"
 #include "brlobol/pick_detail.h"
 #include "brlobol/view_controller.h"
+#include "brlobol/view_store.h"
 #include "bu/app.h"
 #include "bu/env.h"
 #include "bu/file.h"
@@ -28,6 +29,7 @@
 #include "wdb.h"
 
 #include <Inventor/SoViewport.h>
+#include <Inventor/SbRotation.h>
 #include <Inventor/actions/SoRayPickAction.h>
 #include <Inventor/nodes/SoCamera.h>
 #include <Inventor/nodes/SoSeparator.h>
@@ -235,6 +237,87 @@ main(int argc, char **argv)
 	FAIL("qtcad select point filter should expose normalized Obol pick paths");
     if (view.legacyBackendInitialized())
 	FAIL("qtcad select point filter should not initialize the legacy display manager for Obol picks");
+
+    BRLObolFeatureStyle command_style;
+    command_style.hasSelectable = TRUE;
+    command_style.selectable = TRUE;
+    command_style.hasColor = TRUE;
+    command_style.color = SbColor(1.0f, 1.0f, 0.0f);
+    BRLObolLineLayer command_layer;
+    command_layer.name = "rtcheck::overlaps/yellow";
+    command_layer.points.push_back(SbVec3f(-0.5f, 0.0f, 2.0f));
+    command_layer.commands.push_back(static_cast<int32_t>(
+	    BRLObolLineCommand::Move));
+    command_layer.points.push_back(SbVec3f(0.5f, 0.0f, 2.0f));
+    command_layer.commands.push_back(static_cast<int32_t>(
+	    BRLObolLineCommand::Draw));
+    std::vector<BRLObolLineLayer> command_layers;
+    command_layers.push_back(command_layer);
+    BRLObolFeatureHandle command_handle =
+	controller->features().publishLineLayers("rtcheck::overlaps",
+		BRLObolFeatureScope::Shared, command_layers, &command_style);
+    std::vector<BRLObolFeatureMetadata> command_primitive_metadata;
+    BRLObolFeatureMetadata command_metadata;
+    command_metadata.key = "overlap.objects";
+    command_metadata.value = "box.s cone.s";
+    command_primitive_metadata.push_back(command_metadata);
+    if (!command_handle.isValid() ||
+	    !controller->features().replacePrimitiveMetadata(command_handle,
+		0, command_primitive_metadata))
+	FAIL("qtcad command-result pick fixture should publish primitive metadata");
+    SoCamera *command_camera = controller->getCamera();
+    if (command_camera) {
+	command_camera->position = SbVec3f(0.0f, 0.0f, 5.0f);
+	command_camera->orientation = SbRotation::identity();
+    }
+
+    std::vector<QgObolPickRecord> commandRayPicks;
+    if (qg_obol_pick_ray(&view, SbVec3f(0.0f, 0.0f, 5.0f),
+	    SbVec3f(0.0f, 0.0f, -1.0f), false, commandRayPicks) != 1)
+	FAIL("qtcad command-result ray pick should hit the front line-layer child");
+    if (commandRayPicks[0].path != "rtcheck::overlaps/yellow" ||
+	    !commandRayPicks[0].featurePickResolved ||
+	    commandRayPicks[0].featureName != "rtcheck::overlaps" ||
+	    commandRayPicks[0].featurePrimitiveIndex != 0 ||
+	    commandRayPicks[0].featurePrimitiveMetadata.size() != 1 ||
+	    commandRayPicks[0].featurePrimitiveMetadata[0].first !=
+		"overlap.objects" ||
+	    commandRayPicks[0].featurePrimitiveMetadata[0].second !=
+		"box.s cone.s")
+	FAIL("qtcad command-result pick should resolve child layer hits to parent primitive metadata");
+    if (qg_obol_pick_apply_feature_state(&view, commandRayPicks[0], true,
+	    true) != 1)
+	FAIL("qtcad command-result pick helper should apply parent primitive state");
+    BRLObolFeatureRecord command_record;
+    if (!controller->features().record(command_handle, command_record) ||
+	    command_record.selectedPrimitives.size() != 1 ||
+	    command_record.selectedPrimitives[0] != 0 ||
+	    command_record.highlightedPrimitives.size() != 1 ||
+	    command_record.highlightedPrimitives[0] != 0)
+	FAIL("qtcad command-result pick helper should update parent primitive state");
+    std::vector<int32_t> no_primitives;
+    if (!controller->features().replaceSelectedPrimitives(command_handle,
+	    no_primitives) ||
+	    !controller->features().replaceHighlightedPrimitives(command_handle,
+		no_primitives))
+	FAIL("qtcad command-result pick fixture should clear primitive state");
+
+    QgSelectPntFilter commandFilter;
+    commandFilter.first_only = true;
+    commandFilter.set_view_widget(&view);
+    QMouseEvent commandRelease = mouse_event(QEvent::MouseButtonRelease, 90,
+	    70, Qt::LeftButton, Qt::LeftButton);
+    if (!commandFilter.eventFilter(NULL, &commandRelease))
+	FAIL("qtcad select point filter should accept command-result picks");
+    if (!commandFilter.selected_paths().empty())
+	FAIL("qtcad command-result selection should not publish database paths");
+    if (!controller->features().record(command_handle, command_record) ||
+	    command_record.selectedPrimitives.size() != 1 ||
+	    command_record.selectedPrimitives[0] != 0 ||
+	    command_record.highlightedPrimitives.size() != 1 ||
+	    command_record.highlightedPrimitives[0] != 0)
+	FAIL("qtcad select point filter should apply command-result primitive state");
+    controller->features().remove(command_handle);
 
     std::vector<QgObolPickRecord> rectPicks;
     if (qg_obol_pick_rect(&view, 70, 50, 110, 90, 8.0f, false, rectPicks) <= 0)
