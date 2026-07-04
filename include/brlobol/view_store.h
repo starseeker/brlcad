@@ -141,6 +141,8 @@ enum BRLObolPolygonFillFlag {
 struct BRLOBOL_EXPORT BRLObolFeatureStyle {
     SbBool hasVisible;
     SbBool visible;
+    SbBool hasSelectable;
+    SbBool selectable;
     SbBool hasColor;
     SbColor color;
     SbBool hasLineWidth;

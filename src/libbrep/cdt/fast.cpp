@@ -1647,6 +1647,8 @@ detria_CDT(struct bg_line_layer *layer,
     ON_RTree rt_trims;
     ON_2dPointArray on_surf_points;
     const ON_Surface *s = face.SurfaceOf();
+    if (!s)
+	return;
     double surface_width, surface_height;
     int fi = face.m_face_index;
 
@@ -1989,7 +1991,11 @@ brep_facecdt_plot(struct bu_vls *vls, const char *solid_name,
 
     for (int face_index = 0; face_index < brep->m_F.Count(); face_index++) {
         ON_BrepFace *face = brep->Face(face_index);
+        if (!face)
+            continue;
         const ON_Surface *s = face->SurfaceOf();
+        if (!s)
+            continue;
         double surface_width, surface_height;
         if (s->GetSurfaceSize(&surface_width, &surface_height)) {
             // reparameterization of the face's surface and transforms the "u"
@@ -2045,6 +2051,8 @@ bg_CDT(std::vector<int> &faces, std::vector<fastf_t> &pnt_norms, std::vector<fas
     ON_RTree rt_trims;
     ON_2dPointArray on_surf_points;
     const ON_Surface *s = face.SurfaceOf();
+    if (!s)
+	return;
     double surface_width, surface_height;
     int fi = face.m_face_index;
 
@@ -2297,7 +2305,11 @@ brep_cdt_fast(int **faces, int *face_cnt, vect_t **pnt_norms, point_t **pnts, in
 
     for (int face_index = 0; face_index < brep->m_F.Count(); face_index++) {
         ON_BrepFace *face = brep->Face(face_index);
+        if (!face)
+            continue;
         const ON_Surface *s = face->SurfaceOf();
+        if (!s)
+            continue;
         double surface_width, surface_height;
         if (s->GetSurfaceSize(&surface_width, &surface_height)) {
             // reparameterization of the face's surface and transforms the "u"

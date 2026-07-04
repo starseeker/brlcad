@@ -206,6 +206,7 @@ ged_init(struct ged *gedp)
     gedp->i->ged_gdp->gd_draw_retained_source_owner_appends = 0;
     gedp->i->ged_gdp->gd_draw_retained_group_mutations = 0;
     gedp->i->ged_gdp->gd_draw_retained_shape_mutations = 0;
+    gedp->i->ged_gdp->gd_draw_retained_drawtree_invocations = 0;
     BU_PTBL_INIT(&gedp->i->ged_gdp->gd_draw_observers);
     gedp->i->ged_gdp->gd_draw_observers_init = 1;
     gedp->i->ged_gdp->gd_draw_next_observer_token = 1;

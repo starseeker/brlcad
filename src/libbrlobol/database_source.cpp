@@ -1152,7 +1152,10 @@ assign_realized_identity(ShapeT *shape,
 	    static_cast<float>(tsp->ts_mater.ma_color[0]),
 	    static_cast<float>(tsp->ts_mater.ma_color[1]),
 	    static_cast<float>(tsp->ts_mater.ma_color[2]));
-    if (source && source->materialColorValid.getValue()) {
+    if (source && source->materialColorValid.getValue() &&
+	    (source->materialPolicy.getValue() !=
+		SoBRLDatabaseSource::MATERIAL_DATABASE ||
+	     !shape->materialColorValid.getValue())) {
 	shape->materialColorValid = TRUE;
 	shape->materialColor = source->materialColor.getValue();
     }
@@ -1440,6 +1443,7 @@ vlist_from_plot_internal(struct rt_db_internal *intern,
     return shape;
 }
 
+
 static union tree *
 realize_leaf(struct db_tree_state *tsp,
 	const struct db_full_path *pathp,
@@ -1664,34 +1668,6 @@ vlist_from_pnts(const struct rt_pnts_internal *pnts)
 	    scaleValid.data(), scales.data(),
 	    normalValid.data(), normals.data(),
 	    static_cast<int>(points.size()));
-    return shape;
-}
-
-static SoBRLMeshShape *
-mesh_from_arb(const struct rt_arb_internal *arb)
-{
-    if (!arb)
-	return NULL;
-    RT_ARB_CK_MAGIC(arb);
-
-    SbVec3f points[8];
-    for (int i = 0; i < 8; i++) {
-	points[i] = SbVec3f(static_cast<float>(arb->pt[i][X]),
-		static_cast<float>(arb->pt[i][Y]),
-		static_cast<float>(arb->pt[i][Z]));
-    }
-
-    static const int32_t indices[36] = {
-	3, 2, 1, 3, 1, 0,
-	4, 5, 6, 4, 6, 7,
-	4, 7, 3, 4, 3, 0,
-	2, 6, 5, 2, 5, 1,
-	1, 5, 4, 1, 4, 0,
-	7, 6, 2, 7, 2, 3
-    };
-
-    SoBRLMeshShape *shape = new SoBRLMeshShape;
-    shape->setIndexedTriangles(points, 8, indices, 36);
     return shape;
 }
 
@@ -2057,8 +2033,6 @@ mesh_from_internal(struct rt_db_internal *intern,
 	return faceSetShape;
 
     switch (intern->idb_type) {
-	case ID_ARB8:
-	    return mesh_from_arb(static_cast<const struct rt_arb_internal *>(intern->idb_ptr));
 	case ID_BOT:
 	    return mesh_from_bot(static_cast<const struct rt_bot_internal *>(intern->idb_ptr), source);
 	default:
@@ -2216,6 +2190,107 @@ realize_mesh_leaf(struct db_tree_state *tsp,
 
     return make_nop_tree();
 }
+
+
+static void
+source_bounds_extend_points(SbBox3f &bounds,
+	const SoMFVec3f &points,
+	const SbMatrix &matrix)
+{
+    for (int i = 0; i < points.getNum(); i++) {
+	SbVec3f transformed;
+	matrix.multVecMatrix(points[i], transformed);
+	bounds.extendBy(transformed);
+    }
+}
+
+
+static SbBool
+source_bounds_for_realized_node(const SoNode *node,
+	const SbMatrix &matrix,
+	SbBox3f &bounds)
+{
+    bounds.makeEmpty();
+    if (!node || node_is_source_placement_transform(node) ||
+	    node_is_auxiliary_vlist(node) || node_is_auxiliary_source(node))
+	return FALSE;
+
+    if (node->isOfType(SoBRLVListShape::getClassTypeId())) {
+	const SoBRLVListShape *shape =
+	    static_cast<const SoBRLVListShape *>(node);
+	const SoBRLVListShape *geom = shape->getGeometrySource();
+	if (!geom || geom->point.getNum() <= 0)
+	    return FALSE;
+	source_bounds_extend_points(bounds, geom->point, matrix);
+	return bounds.isEmpty() ? FALSE : TRUE;
+    }
+
+    if (node->isOfType(SoBRLMeshShape::getClassTypeId())) {
+	const SoBRLMeshShape *shape =
+	    static_cast<const SoBRLMeshShape *>(node);
+	const SoBRLMeshShape *geom = shape->getGeometrySource();
+	if (!geom || geom->point.getNum() <= 0)
+	    return FALSE;
+	source_bounds_extend_points(bounds, geom->point, matrix);
+	return bounds.isEmpty() ? FALSE : TRUE;
+    }
+
+    if (!node->isOfType(SoGroup::getClassTypeId()))
+	return FALSE;
+
+    const SoGroup *group = static_cast<const SoGroup *>(node);
+    SbMatrix childMatrix = matrix;
+    SbBool valid = FALSE;
+    for (int i = 0; i < group->getNumChildren(); i++) {
+	const SoNode *child = group->getChild(i);
+	if (!child)
+	    continue;
+	if (child->isOfType(SoMatrixTransform::getClassTypeId())) {
+	    const SoMatrixTransform *transform =
+		static_cast<const SoMatrixTransform *>(child);
+	    childMatrix.multRight(transform->matrix.getValue());
+	    continue;
+	}
+
+	SbBox3f childBounds;
+	if (source_bounds_for_realized_node(child, childMatrix,
+		childBounds)) {
+	    bounds.extendBy(childBounds);
+	    valid = TRUE;
+	}
+    }
+
+    return valid && !bounds.isEmpty() ? TRUE : FALSE;
+}
+
+
+static void
+update_source_bounds_from_realized_geometry(SoBRLDatabaseSource *source)
+{
+    if (!source)
+	return;
+
+    SbBox3f bounds;
+    bounds.makeEmpty();
+    SbBool valid = FALSE;
+    const SbMatrix identity = SbMatrix::identity();
+    for (int i = 0; i < source->getNumChildren(); i++) {
+	SbBox3f childBounds;
+	if (source_bounds_for_realized_node(source->getChild(i), identity,
+		childBounds)) {
+	    bounds.extendBy(childBounds);
+	    valid = TRUE;
+	}
+    }
+
+    if (valid && !bounds.isEmpty()) {
+	(void)source->setSourceBoundsState(TRUE, bounds.getMin(),
+		bounds.getMax());
+    } else {
+	source->clearSourceBounds();
+    }
+}
+
 
 SoBRLDatabaseSource::SoBRLDatabaseSource(void) :
     dbip(NULL),
@@ -3299,6 +3374,7 @@ SoBRLDatabaseSource::realizeDatabaseWireframe(void)
     this->realizationIdentity = source_realization_identity(this);
     this->stale = FALSE;
     this->staleReason = STALE_NONE;
+    update_source_bounds_from_realized_geometry(this);
     this->syncRealizedShapeOwnerState();
     return TRUE;
 }
@@ -3362,6 +3438,7 @@ SoBRLDatabaseSource::realizeDatabaseMesh(void)
     this->realizationIdentity = source_realization_identity(this);
     this->stale = FALSE;
     this->staleReason = STALE_NONE;
+    update_source_bounds_from_realized_geometry(this);
     this->syncRealizedShapeOwnerState();
     return TRUE;
 }

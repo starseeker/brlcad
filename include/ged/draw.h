@@ -179,6 +179,7 @@ struct ged_draw_view_line_style {
 
 struct ged_draw_view_feature_style {
     int visible;
+    int selectable;
     int color_valid;
     unsigned char color[3];
     int line_width;
@@ -188,7 +189,7 @@ struct ged_draw_view_feature_style {
     fastf_t arrow_tip_width;
 };
 
-#define GED_DRAW_VIEW_FEATURE_STYLE_INIT { -1, 0, {0, 0, 0}, -1, -1, -1, -1.0, -1.0 }
+#define GED_DRAW_VIEW_FEATURE_STYLE_INIT { -1, -1, 0, {0, 0, 0}, -1, -1, -1, -1.0, -1.0 }
 
 struct ged_draw_view_label_data {
     const char *text;
@@ -220,6 +221,18 @@ struct ged_draw_view_line_layer_data {
 };
 
 #define GED_DRAW_VIEW_LINE_LAYER_DATA_INIT { NULL, NULL, NULL, 0, GED_DRAW_VIEW_FEATURE_STYLE_INIT }
+
+struct ged_draw_command_scene;
+
+struct ged_draw_command_scene_desc {
+    const char *owner_id;
+    const char *owner_role;
+    const char *run_id;
+    uint64_t generation;
+    int local;
+};
+
+#define GED_DRAW_COMMAND_SCENE_DESC_INIT { NULL, NULL, NULL, 0, 0 }
 
 enum ged_draw_view_snap_kind {
     GED_DRAW_VIEW_SNAP_GRID = 1,
@@ -493,13 +506,14 @@ struct ged_draw_view_feature_summary {
     int is_overlay;
     int is_label;
     int is_transient_preview;
+    int is_command_result;
     int visible;
     unsigned char color[3];
     size_t child_count;
     size_t geometry_command_count;
 };
 
-#define GED_DRAW_VIEW_FEATURE_SUMMARY_INIT { 0, 0, 0, 0, 0, {0, 0, 0}, 0, 0 }
+#define GED_DRAW_VIEW_FEATURE_SUMMARY_INIT { 0, 0, 0, 0, 0, 0, {0, 0, 0}, 0, 0 }
 
 typedef int (*ged_draw_view_db_object_record_cb)(
 	const struct ged_draw_view_db_object_record *rec,
@@ -1159,6 +1173,37 @@ ged_draw_view_context_line_layers_replace(
 	const struct ged_draw_view_line_layer_data *layers,
 	size_t layer_count,
 	const struct ged_draw_view_feature_style *style);
+
+GED_EXPORT extern struct ged_draw_command_scene *
+ged_draw_command_scene_begin(
+	void *view_ctx,
+	const struct ged_draw_command_scene_desc *desc);
+
+GED_EXPORT extern size_t
+ged_draw_command_scene_features_remove_prefix(
+	struct ged_draw_command_scene *scene,
+	const char *prefix);
+
+GED_EXPORT extern int
+ged_draw_command_scene_line_layer_builder_replace(
+	struct ged_draw_command_scene *scene,
+	const char *name,
+	const struct bg_line_layer_builder *builder,
+	const struct ged_draw_view_feature_style *style);
+
+GED_EXPORT extern int
+ged_draw_command_scene_line_layers_replace(
+	struct ged_draw_command_scene *scene,
+	const char *name,
+	const struct ged_draw_view_line_layer_data *layers,
+	size_t layer_count,
+	const struct ged_draw_view_feature_style *style);
+
+GED_EXPORT extern int
+ged_draw_command_scene_commit(struct ged_draw_command_scene *scene);
+
+GED_EXPORT extern void
+ged_draw_command_scene_abort(struct ged_draw_command_scene *scene);
 
 GED_EXPORT extern int
 ged_draw_view_context_tcl_polygons_replace(

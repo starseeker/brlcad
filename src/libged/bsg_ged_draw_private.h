@@ -349,6 +349,8 @@ struct ged_draw_obol_view_feature_record {
     size_t label_count;
     size_t axes_center_count;
     size_t child_count;
+    const char *line_layer_parent_name;
+    size_t line_layer_index;
 };
 
 typedef int (*ged_draw_obol_view_feature_record_cb)(
@@ -622,6 +624,18 @@ GED_EXPORT extern int ged_draw_obol_view_context_feature_line_command_at(
 	const char *name,
 	size_t index,
 	int *out);
+GED_EXPORT extern int ged_draw_obol_view_context_feature_layer_points_copy(
+	void *view_ctx,
+	const char *name,
+	size_t layer_index,
+	point_t **points,
+	size_t *point_count);
+GED_EXPORT extern int ged_draw_obol_view_context_feature_layer_line_command_at(
+	void *view_ctx,
+	const char *name,
+	size_t layer_index,
+	size_t point_index,
+	int *out);
 GED_EXPORT extern int ged_draw_obol_view_context_tcl_lines_replace(
 	void *view_ctx,
 	const char *name,
@@ -730,6 +744,7 @@ GED_EXPORT extern int ged_draw_source_clear_db_groups_in_scope(
 	void *view_ctx);
 GED_EXPORT extern void ged_draw_log(int level, const char *fmt, ...) _BU_ATTR_PRINTF23;
 GED_EXPORT extern void ged_draw_test_force_primitive_face_set_failure(int enable);
+GED_EXPORT extern int ged_draw_test_primitive_face_set_failure_enabled(void);
 GED_EXPORT extern void ged_draw_view_context_foreach_export_record(
 	void *view_ctx,
 	unsigned int query_flags,
@@ -1271,6 +1286,12 @@ ged_draw_obol_database_source_publish_indexed_face_set_for_path(
 	size_t normal_count,
 	const int *indices,
 	size_t index_count);
+GED_EXPORT extern int ged_draw_obol_database_source_eval_points_for_path(
+	struct ged *gedp,
+	const char *path);
+GED_EXPORT extern int ged_draw_obol_database_source_eval_wireframe_for_path(
+	struct ged *gedp,
+	const char *path);
 GED_EXPORT extern int ged_draw_obol_local_shape_publish_line_set_for_path(
 	struct ged *gedp,
 	const char *group_path,
@@ -1629,6 +1650,7 @@ struct ged_draw_index_stats {
     uint64_t retained_source_owner_appends;
     uint64_t retained_group_mutations;
     uint64_t retained_shape_mutations;
+    uint64_t retained_drawtree_invocations;
 };
 
 GED_EXPORT extern void ged_draw_index_stats_get(struct ged *gedp,
@@ -1650,9 +1672,6 @@ GED_EXPORT extern int ged_draw_group_ref_appearance_settings(struct ged *gedp,
 GED_EXPORT extern int ged_draw_group_ref_set_visible(struct ged *gedp,
 						     ged_draw_group_ref ref,
 						     int visible);
-GED_EXPORT extern int ged_draw_shape_ref_apply_qray_work_flag(struct ged *gedp,
-							      ged_draw_shape_ref ref,
-							      int wflag);
 GED_EXPORT extern int ged_draw_shape_ref_release(struct ged *gedp,
 						 ged_draw_shape_ref ref);
 GED_EXPORT extern int ged_draw_shape_ref_realize_context(struct ged *gedp,

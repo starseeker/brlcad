@@ -170,27 +170,214 @@ struct cstate {
 };
 
 
+enum ged_gqa_result_family {
+    GQA_RESULT_OVERLAPS = 0,
+    GQA_RESULT_GAPS,
+    GQA_RESULT_ADJ_AIR,
+    GQA_RESULT_EXP_AIR,
+    GQA_RESULT_COUNT
+};
+
 struct ged_gqa_plot {
-    struct bg_line_layer_builder *builder;
+    struct bg_line_layer_builder *builder[GQA_RESULT_COUNT];
 } ged_gqa_plot;
 
-static int
-ged_gqa_plot_append(const point_t a, const point_t b)
+static const char *
+ged_gqa_result_name(enum ged_gqa_result_family family)
 {
-    if (!ged_gqa_plot.builder)
+    switch (family) {
+	case GQA_RESULT_OVERLAPS:
+	    return "gqa::overlaps";
+	case GQA_RESULT_GAPS:
+	    return "gqa::gaps";
+	case GQA_RESULT_ADJ_AIR:
+	    return "gqa::adjacent-air";
+	case GQA_RESULT_EXP_AIR:
+	    return "gqa::exposed-air";
+	default:
+	    return NULL;
+    }
+}
+
+static int *
+ged_gqa_result_color(enum ged_gqa_result_family family)
+{
+    switch (family) {
+	case GQA_RESULT_OVERLAPS:
+	    return overlap_color;
+	case GQA_RESULT_GAPS:
+	    return gap_color;
+	case GQA_RESULT_ADJ_AIR:
+	    return adjAir_color;
+	case GQA_RESULT_EXP_AIR:
+	    return expAir_color;
+	default:
+	    return NULL;
+    }
+}
+
+static int
+ged_gqa_result_requested(enum ged_gqa_result_family family)
+{
+    switch (family) {
+	case GQA_RESULT_OVERLAPS:
+	    return (analysis_flags & ANALYSIS_PLOT_OVERLAPS) ? 1 : 0;
+	case GQA_RESULT_GAPS:
+	    return (analysis_flags & ANALYSIS_GAPS) ? 1 : 0;
+	case GQA_RESULT_ADJ_AIR:
+	    return (analysis_flags & ANALYSIS_ADJ_AIR) ? 1 : 0;
+	case GQA_RESULT_EXP_AIR:
+	    return (analysis_flags & ANALYSIS_EXP_AIR) ? 1 : 0;
+	default:
+	    return 0;
+    }
+}
+
+static int
+ged_gqa_result_visuals_requested(void)
+{
+    int i;
+    for (i = 0; i < GQA_RESULT_COUNT; i++) {
+	if (ged_gqa_result_requested((enum ged_gqa_result_family)i))
+	    return 1;
+    }
+    return 0;
+}
+
+static int
+ged_gqa_plot_create(void)
+{
+    int i;
+    memset(&ged_gqa_plot, 0, sizeof(ged_gqa_plot));
+    for (i = 0; i < GQA_RESULT_COUNT; i++) {
+	if (!ged_gqa_result_requested((enum ged_gqa_result_family)i))
+	    continue;
+	ged_gqa_plot.builder[i] = bg_line_layer_builder_create();
+	if (!ged_gqa_plot.builder[i]) {
+	    int j;
+	    for (j = 0; j < i; j++) {
+		if (ged_gqa_plot.builder[j])
+		    bg_line_layer_builder_free(ged_gqa_plot.builder[j]);
+	    }
+	    memset(&ged_gqa_plot, 0, sizeof(ged_gqa_plot));
+	    return 0;
+	}
+    }
+    return 1;
+}
+
+static int
+ged_gqa_plot_append(enum ged_gqa_result_family family, const point_t a,
+	const point_t b)
+{
+    int *rgb;
+
+    if (family < 0 || family >= GQA_RESULT_COUNT ||
+	    !ged_gqa_plot.builder[family])
 	return 0;
 
-    if (!bg_line_layer_builder_add(ged_gqa_plot.builder, 255, 255, 0, a, BG_GEOMETRY_LINE_MOVE))
+    rgb = ged_gqa_result_color(family);
+    if (!rgb)
 	return 0;
-    return bg_line_layer_builder_add(ged_gqa_plot.builder, 255, 255, 0, b, BG_GEOMETRY_LINE_DRAW);
+
+    if (!bg_line_layer_builder_add(ged_gqa_plot.builder[family],
+		rgb[0], rgb[1], rgb[2], a, BG_GEOMETRY_LINE_MOVE))
+	return 0;
+    return bg_line_layer_builder_add(ged_gqa_plot.builder[family],
+	    rgb[0], rgb[1], rgb[2], b, BG_GEOMETRY_LINE_DRAW);
 }
 
 static void
 ged_gqa_plot_free(void)
 {
-    if (ged_gqa_plot.builder)
-	bg_line_layer_builder_free(ged_gqa_plot.builder);
+    int i;
+    for (i = 0; i < GQA_RESULT_COUNT; i++) {
+	if (ged_gqa_plot.builder[i])
+	    bg_line_layer_builder_free(ged_gqa_plot.builder[i]);
+    }
     memset(&ged_gqa_plot, 0, sizeof(ged_gqa_plot));
+}
+
+static int
+gqa_publish_result_fallback(struct ged *gedp, void *active_view,
+	enum ged_gqa_result_family family)
+{
+    const char *name = ged_gqa_result_name(family);
+    struct bg_line_layer_builder *builder =
+	(family >= 0 && family < GQA_RESULT_COUNT) ?
+	ged_gqa_plot.builder[family] : NULL;
+
+    if (!gedp || !name || !builder)
+	return 0;
+
+    int handled = ged_diagnostic_line_layer_publish(gedp, name, builder);
+    if (!handled && active_view) {
+	handled = ged_draw_view_context_diagnostic_line_layer_builder_replace(
+		active_view, name, builder);
+    }
+    return handled;
+}
+
+static int
+gqa_publish_result_visuals(struct ged *gedp, void *active_view)
+{
+    int i;
+    int have_builder = 0;
+
+    if (!gedp)
+	return 0;
+
+    for (i = 0; i < GQA_RESULT_COUNT; i++) {
+	if (ged_gqa_plot.builder[i]) {
+	    have_builder = 1;
+	    break;
+	}
+    }
+    if (!have_builder)
+	return 0;
+
+    if (active_view) {
+	struct ged_draw_command_scene_desc desc =
+	    GED_DRAW_COMMAND_SCENE_DESC_INIT;
+	desc.owner_id = "gqa";
+	desc.owner_role = "command-result";
+	struct ged_draw_command_scene *scene =
+	    ged_draw_command_scene_begin(active_view, &desc);
+	if (scene) {
+	    struct ged_draw_view_feature_style style =
+		GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+	    style.visible = 1;
+	    style.selectable = 1;
+	    for (i = 0; i < GQA_RESULT_COUNT; i++) {
+		const char *name =
+		    ged_gqa_result_name((enum ged_gqa_result_family)i);
+		if (name)
+		    (void)ged_draw_command_scene_features_remove_prefix(
+			    scene, name);
+	    }
+	    for (i = 0; i < GQA_RESULT_COUNT; i++) {
+		const char *name =
+		    ged_gqa_result_name((enum ged_gqa_result_family)i);
+		if (!name || !ged_gqa_plot.builder[i])
+		    continue;
+		if (!ged_draw_command_scene_line_layer_builder_replace(
+			scene, name, ged_gqa_plot.builder[i], &style)) {
+		    ged_draw_command_scene_abort(scene);
+		    return 0;
+		}
+	    }
+	    int ret = ged_draw_command_scene_commit(scene);
+	    return ret ? 1 : 0;
+	}
+    }
+
+    int handled = 0;
+    for (i = 0; i < GQA_RESULT_COUNT; i++) {
+	if (ged_gqa_plot.builder[i])
+	    handled |= gqa_publish_result_fallback(gedp, active_view,
+		    (enum ged_gqa_result_family)i);
+    }
+    return handled;
 }
 
 /* summary data structure for objects specified on command line */
@@ -858,7 +1045,7 @@ _gqa_overlap(struct application *ap,
 
     if (analysis_flags & ANALYSIS_PLOT_OVERLAPS) {
 	bu_semaphore_acquire(state->sem_worker);
-	(void)ged_gqa_plot_append(ihit, ohit);
+	(void)ged_gqa_plot_append(GQA_RESULT_OVERLAPS, ihit, ohit);
 	bu_semaphore_release(state->sem_worker);
     }
 
@@ -931,6 +1118,10 @@ void _gqa_exposed_air(struct application *ap,
 	pdv_3line(plot_expair, in_pt, out_pt);
 	bu_semaphore_release(state->sem_plot);
     }
+
+    bu_semaphore_acquire(state->sem_worker);
+    (void)ged_gqa_plot_append(GQA_RESULT_EXP_AIR, in_pt, out_pt);
+    bu_semaphore_release(state->sem_worker);
 }
 
 
@@ -1042,6 +1233,13 @@ _gqa_hit(struct application *ap, struct partition *PartHeadp, struct seg *segs)
 			pl_color(plot_gaps, V3ARGS(gap_color));
 			pdv_3line(plot_gaps, pt, gapEnd);
 			bu_semaphore_release(state->sem_plot);
+		    }
+		    {
+			vect_t gapEnd;
+			VJOIN1(gapEnd, pt, -gap_dist, ap->a_ray.r_dir);
+			bu_semaphore_acquire(state->sem_worker);
+			(void)ged_gqa_plot_append(GQA_RESULT_GAPS, pt, gapEnd);
+			bu_semaphore_release(state->sem_worker);
 		    }
 		}
 	    }
@@ -1255,10 +1453,16 @@ _gqa_hit(struct application *ap, struct partition *PartHeadp, struct seg *segs)
 		d *= 0.25;
 		VJOIN1(aapt, pt, d, ap->a_ray.r_dir);
 
-		bu_semaphore_acquire(state->sem_plot);
-		pl_color(plot_adjair, V3ARGS(adjAir_color));
-		pdv_3line(plot_adjair, pt, aapt);
-		bu_semaphore_release(state->sem_plot);
+		if (plot_adjair) {
+		    bu_semaphore_acquire(state->sem_plot);
+		    pl_color(plot_adjair, V3ARGS(adjAir_color));
+		    pdv_3line(plot_adjair, pt, aapt);
+		    bu_semaphore_release(state->sem_plot);
+		}
+
+		bu_semaphore_acquire(state->sem_worker);
+		(void)ged_gqa_plot_append(GQA_RESULT_ADJ_AIR, pt, aapt);
+		bu_semaphore_release(state->sem_worker);
 	    }
 	}
 
@@ -2548,7 +2752,7 @@ ged_gqa_core(struct ged *gedp, int argc, const char *argv[])
     struct region *regp;
     static const char *usage = "object [object ...]";
     struct resource resp[MAX_PSW];	/* memory resources for multi-cpu processing */
-    int overlay_enabled = 0;
+    int result_visuals_enabled = 0;
 
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
@@ -2614,14 +2818,16 @@ ged_gqa_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     void *active_view = ged_view_active_ctx(gedp);
-    overlay_enabled = (analysis_flags & ANALYSIS_PLOT_OVERLAPS) &&
+    result_visuals_enabled = ged_gqa_result_visuals_requested() &&
 	(active_view || ged_diagnostic_line_layer_handler_available(gedp));
-    if (analysis_flags & ANALYSIS_PLOT_OVERLAPS) {
-	memset(&ged_gqa_plot, 0, sizeof(ged_gqa_plot));
-	if (overlay_enabled)
-	    ged_gqa_plot.builder = bg_line_layer_builder_create();
-	else
-	    bu_vls_printf(gedp->ged_result_str, "overlap overlay requested, but no view is available\n");
+    if (ged_gqa_result_visuals_requested()) {
+	if (result_visuals_enabled) {
+	    if (!ged_gqa_plot_create())
+		result_visuals_enabled = 0;
+	} else if (analysis_flags & ANALYSIS_PLOT_OVERLAPS) {
+	    bu_vls_printf(gedp->ged_result_str,
+		    "overlap overlay requested, but no view is available\n");
+	}
     }
 
     rtip = rt_i_create(gedp->dbip);
@@ -2779,20 +2985,15 @@ aborted:
     if (!aborted) {
 	summary_reports(gedp, &state);
 
-	if (overlay_enabled) {
-	    int handled = ged_diagnostic_line_layer_publish(gedp,
-		    "gqa::overlaps", ged_gqa_plot.builder);
-	    if (!handled && active_view) {
-		(void)ged_draw_view_context_diagnostic_line_layer_builder_replace(
-			active_view, "gqa::overlaps", ged_gqa_plot.builder);
-	    }
+	if (result_visuals_enabled) {
+	    (void)gqa_publish_result_visuals(gedp, active_view);
 	}
 	if (analysis_flags & ANALYSIS_PLOT_OVERLAPS)
 	    gqa_publish_overlap_label(gedp);
     } else
 	aborted = 0; /* reset flag */
 
-    if (overlay_enabled)
+    if (result_visuals_enabled)
 	ged_gqa_plot_free();
 
     /* Clear out the lists */

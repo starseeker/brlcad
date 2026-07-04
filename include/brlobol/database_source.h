@@ -106,6 +106,12 @@ struct BRLOBOL_EXPORT BRLObolAuxiliaryLineSetDisplayState {
     uint32_t materialRevision;
 };
 
+/*
+ * External primary geometry published to a database source is source-local.
+ * Callers must not pre-apply the source drawMatrix to these point arrays.
+ * Bridges from legacy instance/world-space producers are responsible for
+ * normalizing points back to source-local coordinates before publication.
+ */
 struct BRLOBOL_EXPORT BRLObolExternalLineSet {
     BRLObolExternalLineSet(void);
 
@@ -449,6 +455,10 @@ public:
     SoSFEnum materialPolicy;
     SoSFBool colorOverride;
     SoSFColor color;
+    /* Local-to-scene placement metadata for this source instance.  Primary
+     * geometry remains source-local; render traversal and summaries apply
+     * this transform explicitly instead of baking it into point/index arrays.
+     */
     SoSFBool drawMatrixValid;
     SoSFMatrix drawMatrix;
     SoSFBool drawCenterValid;
@@ -554,6 +564,10 @@ public:
 	const SbColor &materialColor,
 	uint32_t materialRevision);
     int applyDisplayPatch(const BRLObolDatabaseSourceDisplayPatch &patch);
+    /* Update local-to-scene placement metadata.  This does not mutate primary
+     * geometry coordinates; database realization and external publication
+     * must keep drawable arrays in source-local space.
+     */
     int setPlacementState(SbBool drawMatrixValid,
 	const SbMatrix &drawMatrix,
 	SbBool drawCenterValid,
@@ -572,6 +586,10 @@ public:
     SbBool realizeDatabaseMesh(void);
     int clearRealizedGeometry(SbBool preserveAuxiliary = TRUE);
     int clearExternalPrimaryGeometry(void);
+    /* Publish source-local primary geometry for externally supplied source
+     * realizations.  These APIs preserve source placement separately via
+     * setPlacementState/drawMatrix.
+     */
     int publishExternalLineSet(const BRLObolExternalLineSet &lineSet);
     int publishExternalPointSet(const BRLObolExternalPointSet &pointSet);
     int publishExternalTriangleMesh(

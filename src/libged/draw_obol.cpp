@@ -1922,6 +1922,10 @@ ged_obol_feature_style_from_ged(
 	out.hasVisible = TRUE;
 	out.visible = style->visible ? TRUE : FALSE;
     }
+    if (style->selectable != -1) {
+	out.hasSelectable = TRUE;
+	out.selectable = style->selectable ? TRUE : FALSE;
+    }
     if (style->color_valid) {
 	out.hasColor = TRUE;
 	out.color = ged_obol_color_from_rgb(style->color);
@@ -1961,6 +1965,8 @@ ged_obol_feature_style_to_ged(
     *dst = init;
     if (src.hasVisible)
 	dst->visible = src.visible ? 1 : 0;
+    if (src.hasSelectable)
+	dst->selectable = src.selectable ? 1 : 0;
     if (src.hasColor) {
 	dst->color_valid = 1;
 	ged_obol_rgb_from_color(src.color, dst->color);
@@ -2133,6 +2139,80 @@ ged_obol_feature_mark_overlay(BRLObolViewController *controller,
     if (!controller || !handle.isValid())
 	return 0;
     return controller->features().setOverlayInfo(handle, overlay) ? 1 : 0;
+}
+
+#define GED_DRAW_COMMAND_SCENE_MAGIC 0x67646373u
+
+struct ged_draw_command_scene {
+    uint32_t magic;
+    void *view_ctx;
+    BRLObolViewController *controller;
+    BRLObolFeatureOwner owner;
+    BRLObolFeatureScope scope;
+    int changed;
+    int failed;
+};
+
+static int
+ged_obol_command_scene_valid(const struct ged_draw_command_scene *scene)
+{
+    return scene && scene->magic == GED_DRAW_COMMAND_SCENE_MAGIC &&
+	scene->controller;
+}
+
+static BRLObolFeatureOwner
+ged_obol_command_scene_owner(
+	void *view_ctx,
+	const struct ged_draw_command_scene_desc *desc)
+{
+    BRLObolFeatureOwner owner;
+    const char *owner_id = (desc && desc->owner_id && desc->owner_id[0]) ?
+	desc->owner_id : "ged-command";
+    const char *owner_role =
+	(desc && desc->owner_role && desc->owner_role[0]) ?
+	desc->owner_role : "command-scene";
+    const char *run_id = (desc && desc->run_id && desc->run_id[0]) ?
+	desc->run_id : NULL;
+
+    std::string id(owner_id);
+    if (run_id) {
+	id += "#";
+	id += run_id;
+    }
+    owner.ownerToken = NULL;
+    owner.ownerId = id.c_str();
+    owner.ownerRole = owner_role;
+    if (owner.ownerId.getLength() == 0)
+	owner.ownerId = ged_obol_view_scope_name(view_ctx).c_str();
+    return owner;
+}
+
+static BRLObolOverlayInfo
+ged_obol_command_scene_overlay_info(
+	const struct ged_draw_command_scene *scene,
+	const char *source_path)
+{
+    BRLObolOverlayInfo info =
+	ged_obol_model_overlay_info(scene ? scene->view_ctx : NULL,
+		BRLObolOverlayClass::CommandResult,
+		BRLObolOverlayLifecycle::PerCommand,
+		BRLObolOverlayOrder::PostTransparent,
+		source_path);
+    return info;
+}
+
+static int
+ged_obol_command_scene_remove_feature(
+	struct ged_draw_command_scene *scene,
+	const char *name)
+{
+    if (!ged_obol_command_scene_valid(scene) || !name)
+	return 0;
+
+    return scene->controller->features().removeOwned(name,
+	    scene->scope == BRLObolFeatureScope::Local ?
+	    BRLOBOL_FEATURE_SCOPE_LOCAL : BRLOBOL_FEATURE_SCOPE_SHARED,
+	    &scene->owner) ? 1 : 0;
 }
 
 static BRLObolFeatureHandle
@@ -2379,6 +2459,9 @@ ged_draw_obol_view_context_feature_summary(
 	 obol_summary.kind == BRLObolFeatureKind::HudLabel) ? 1 : 0;
     summary->is_transient_preview =
 	(obol_summary.kind == BRLObolFeatureKind::EditPreview) ? 1 : 0;
+    summary->is_command_result =
+	(obol_summary.overlay.overlayClass ==
+	 BRLObolOverlayClass::CommandResult) ? 1 : 0;
     summary->is_overlay = (obol_summary.overlay.isOverlay ||
 	    (!summary->is_label &&
 	    !summary->is_transient_preview)) ? 1 : 0;
@@ -2649,6 +2732,54 @@ struct ged_obol_feature_records_visit {
     int count;
 };
 
+static BRLObolFeatureStyle
+ged_obol_line_layer_effective_style(const BRLObolFeatureStyle &parent,
+	const BRLObolFeatureStyle &layer)
+{
+    BRLObolFeatureStyle out = parent;
+    if (layer.hasVisible) {
+	out.hasVisible = TRUE;
+	out.visible = layer.visible;
+    }
+    if (layer.hasSelectable) {
+	out.hasSelectable = TRUE;
+	out.selectable = layer.selectable;
+    }
+    if (layer.hasColor) {
+	out.hasColor = TRUE;
+	out.color = layer.color;
+    }
+    if (layer.hasLineWidth) {
+	out.hasLineWidth = TRUE;
+	out.lineWidth = layer.lineWidth;
+    }
+    if (layer.hasLineStyle) {
+	out.hasLineStyle = TRUE;
+	out.lineStyle = layer.lineStyle;
+    }
+    if (layer.hasArrow) {
+	out.hasArrow = TRUE;
+	out.arrow = layer.arrow;
+    }
+    if (layer.hasArrowTip) {
+	out.hasArrowTip = TRUE;
+	out.arrowTipLength = layer.arrowTipLength;
+	out.arrowTipWidth = layer.arrowTipWidth;
+    }
+    return out;
+}
+
+static int
+ged_obol_feature_record_visible(const BRLObolFeatureStyle &parent,
+	const BRLObolFeatureStyle *child)
+{
+    if (parent.hasVisible && !parent.visible)
+	return 0;
+    if (child && child->hasVisible && !child->visible)
+	return 0;
+    return 1;
+}
+
 static int
 ged_obol_feature_record_glob_matches(const char *glob, const SbString &name)
 {
@@ -2657,6 +2788,61 @@ ged_obol_feature_record_glob_matches(const char *glob, const SbString &name)
 
     const char *str = name.getString();
     return (str && bu_path_match(glob, str, 0) == 0) ? 1 : 0;
+}
+
+static int
+ged_obol_feature_record_emit(struct ged_obol_feature_records_visit *ctx,
+	const BRLObolFeatureRecord &record,
+	const SbString &name,
+	enum ged_draw_obol_view_feature_kind kind,
+	const BRLObolFeatureStyle &style,
+	int visible,
+	size_t point_count,
+	size_t command_count,
+	size_t index_count,
+	size_t normal_count,
+	size_t label_count,
+	size_t axes_center_count,
+	size_t child_count,
+	const char *line_layer_parent_name,
+	size_t line_layer_index)
+{
+    if (!ctx || !ctx->cb)
+	return 0;
+
+    if ((ctx->query_flags & GED_DRAW_VIEW_EXPORT_QUERY_VISIBLE_ONLY) &&
+	    !visible)
+	return 1;
+
+    if (!ged_obol_feature_record_glob_matches(ctx->glob, name))
+	return 1;
+
+    struct ged_draw_obol_view_feature_record out;
+    memset(&out, 0, sizeof(out));
+    out.name = name.getString();
+    out.kind = kind;
+    out.local = record.scope == BRLObolFeatureScope::Local ? 1 : 0;
+    out.visible = visible;
+    out.realized = record.realized ? 1 : 0;
+    out.color[0] = 255;
+    out.color[1] = 255;
+    out.color[2] = 255;
+    if (style.hasColor)
+	ged_obol_rgb_from_color(style.color, out.color);
+    out.line_style = style.hasLineStyle ? style.lineStyle : 0;
+    out.line_width = style.hasLineWidth ? style.lineWidth : 1;
+    out.point_count = point_count;
+    out.command_count = command_count;
+    out.index_count = index_count;
+    out.normal_count = normal_count;
+    out.label_count = label_count;
+    out.axes_center_count = axes_center_count;
+    out.child_count = child_count;
+    out.line_layer_parent_name = line_layer_parent_name;
+    out.line_layer_index = line_layer_index;
+
+    ctx->count++;
+    return ctx->cb(&out, ctx->userdata);
 }
 
 static int
@@ -2675,47 +2861,42 @@ ged_obol_feature_record_visit_cb(const BRLObolFeatureRecord &record,
     if (wants_db && !wants_view)
 	return 1;
 
-    const int visible = record.style.hasVisible ?
-	(record.style.visible ? 1 : 0) : 1;
-    if ((ctx->query_flags & GED_DRAW_VIEW_EXPORT_QUERY_VISIBLE_ONLY) &&
-	    !visible)
+    if (record.kind == BRLObolFeatureKind::LineLayer &&
+	    !record.layers.empty()) {
+	for (size_t i = 0; i < record.layers.size(); i++) {
+	    const BRLObolLineLayer &layer = record.layers[i];
+	    BRLObolFeatureStyle style =
+		ged_obol_line_layer_effective_style(record.style,
+			layer.style);
+	    int visible = ged_obol_feature_record_visible(record.style,
+		    &layer.style);
+	    size_t child_count = layer.points.empty() ? 0 : 1;
+	    if (!ged_obol_feature_record_emit(ctx, record,
+		    layer.name.getLength() ? layer.name : record.name,
+		    GED_DRAW_OBOL_VIEW_FEATURE_KIND_LINES, style, visible,
+		    layer.points.size(), layer.commands.size(), 0, 0, 0, 0,
+		    child_count, record.name.getString(), i))
+		return 0;
+	}
 	return 1;
-
-    if (!ged_obol_feature_record_glob_matches(ctx->glob, record.name))
-	return 1;
-
-    struct ged_draw_obol_view_feature_record out;
-    memset(&out, 0, sizeof(out));
-    out.name = record.name.getString();
-    out.kind = ged_obol_view_feature_kind(record.kind);
-    out.local = record.scope == BRLObolFeatureScope::Local ? 1 : 0;
-    out.visible = visible;
-    out.realized = record.realized ? 1 : 0;
-    out.color[0] = 255;
-    out.color[1] = 255;
-    out.color[2] = 255;
-    if (record.style.hasColor)
-	ged_obol_rgb_from_color(record.style.color, out.color);
-    out.line_style = record.style.hasLineStyle ? record.style.lineStyle : 0;
-    out.line_width = record.style.hasLineWidth ? record.style.lineWidth : 1;
-    out.point_count = record.points.size();
-    out.command_count = record.commands.size();
-    out.index_count = record.indices.size();
-    out.normal_count = record.normals.size();
-    out.label_count = record.labels.size();
-    out.axes_center_count = record.axesCenters.size();
-    out.child_count = record.layers.empty() ? 0 : record.layers.size();
-    if (!out.child_count) {
-	if (record.labels.size())
-	    out.child_count = record.labels.size();
-	else if (record.axesCenters.size())
-	    out.child_count = record.axesCenters.size();
-	else if (record.points.size())
-	    out.child_count = 1;
     }
 
-    ctx->count++;
-    return ctx->cb(&out, ctx->userdata);
+    size_t child_count = 0;
+    if (!record.layers.empty())
+	child_count = record.layers.size();
+    else if (!record.labels.empty())
+	child_count = record.labels.size();
+    else if (!record.axesCenters.empty())
+	child_count = record.axesCenters.size();
+    else if (!record.points.empty())
+	child_count = 1;
+
+    return ged_obol_feature_record_emit(ctx, record, record.name,
+	    ged_obol_view_feature_kind(record.kind), record.style,
+	    ged_obol_feature_record_visible(record.style, NULL),
+	    record.points.size(), record.commands.size(),
+	    record.indices.size(), record.normals.size(), record.labels.size(),
+	    record.axesCenters.size(), child_count, NULL, 0);
 }
 
 extern "C" int
@@ -4448,6 +4629,166 @@ ged_draw_obol_view_context_selection_set_path(
 	    ged_obol_skip_leading_slash(path), obol_kind, &owner) ? 1 : 0;
 }
 
+extern "C" struct ged_draw_command_scene *
+ged_draw_command_scene_begin(
+	void *view_ctx,
+	const struct ged_draw_command_scene_desc *desc)
+{
+    BRLObolViewController *controller =
+	ged_obol_view_controller_for_context(view_ctx);
+    if (!controller)
+	return NULL;
+
+    struct ged_draw_command_scene *scene = new ged_draw_command_scene;
+    scene->magic = GED_DRAW_COMMAND_SCENE_MAGIC;
+    scene->view_ctx = view_ctx;
+    scene->controller = controller;
+    scene->owner = ged_obol_command_scene_owner(view_ctx, desc);
+    scene->scope = (desc && desc->local) ?
+	BRLObolFeatureScope::Local : BRLObolFeatureScope::Shared;
+    scene->changed = 0;
+    scene->failed = 0;
+    return scene;
+}
+
+extern "C" size_t
+ged_draw_command_scene_features_remove_prefix(
+	struct ged_draw_command_scene *scene,
+	const char *prefix)
+{
+    if (!ged_obol_command_scene_valid(scene) || !prefix)
+	return 0;
+
+    size_t removed = 0;
+    if (scene->scope == BRLObolFeatureScope::Local) {
+	removed = scene->controller->features().removePrefix(prefix,
+		BRLOBOL_FEATURE_SCOPE_LOCAL, &scene->owner);
+    } else {
+	removed = scene->controller->features().removePrefix(prefix,
+		BRLOBOL_FEATURE_SCOPE_SHARED, &scene->owner);
+    }
+    scene->changed += static_cast<int>(removed);
+    return removed;
+}
+
+extern "C" int
+ged_draw_command_scene_line_layer_builder_replace(
+	struct ged_draw_command_scene *scene,
+	const char *name,
+	const struct bg_line_layer_builder *builder,
+	const struct ged_draw_view_feature_style *style)
+{
+    if (!ged_obol_command_scene_valid(scene) || !name)
+	return 0;
+
+    if (!builder || !bg_line_layer_builder_point_count(builder)) {
+	(void)ged_obol_command_scene_remove_feature(scene, name);
+	scene->changed++;
+	return 1;
+    }
+
+    BRLObolFeatureStyle obol_style =
+	ged_obol_feature_style_from_ged(style);
+    BRLObolFeatureHandle handle =
+	scene->controller->features().publishLineLayerBuilder(name,
+		scene->scope, builder, style ? &obol_style : NULL,
+		&scene->owner);
+    if (!handle.isValid()) {
+	scene->failed = 1;
+	return 0;
+    }
+
+    (void)ged_obol_feature_mark_overlay(scene->controller, handle,
+	    ged_obol_command_scene_overlay_info(scene, name));
+    scene->changed++;
+    return 1;
+}
+
+extern "C" int
+ged_draw_command_scene_line_layers_replace(
+	struct ged_draw_command_scene *scene,
+	const char *name,
+	const struct ged_draw_view_line_layer_data *layers,
+	size_t layer_count,
+	const struct ged_draw_view_feature_style *style)
+{
+    if (!ged_obol_command_scene_valid(scene) || !name)
+	return 0;
+
+    size_t live_layers = 0;
+    for (size_t i = 0; layers && i < layer_count; i++) {
+	if (layers[i].points && layers[i].point_count)
+	    live_layers++;
+    }
+    if (!layers || !live_layers) {
+	(void)ged_obol_command_scene_remove_feature(scene, name);
+	scene->changed++;
+	return 1;
+    }
+
+    std::vector<BRLObolLineLayer> obol_layers;
+    obol_layers.reserve(live_layers);
+    for (size_t i = 0; i < layer_count; i++) {
+	if (!layers[i].points || !layers[i].point_count)
+	    continue;
+
+	BRLObolLineLayer layer;
+	layer.name = layers[i].name ? layers[i].name : name;
+	layer.style = ged_obol_feature_style_from_ged(&layers[i].style);
+	layer.points.reserve(layers[i].point_count);
+	layer.commands.reserve(layers[i].point_count);
+	for (size_t j = 0; j < layers[i].point_count; j++) {
+	    layer.points.push_back(SbVec3f(
+		    static_cast<float>(layers[i].points[j][0]),
+		    static_cast<float>(layers[i].points[j][1]),
+		    static_cast<float>(layers[i].points[j][2])));
+	    const int command = layers[i].commands ?
+		layers[i].commands[j] : -1;
+	    layer.commands.push_back(ged_obol_line_command_from_ged(command,
+		    j));
+	}
+	obol_layers.push_back(layer);
+    }
+
+    BRLObolFeatureStyle obol_style =
+	ged_obol_feature_style_from_ged(style);
+    BRLObolFeatureHandle handle =
+	scene->controller->features().publishLineLayers(name,
+		scene->scope, obol_layers, style ? &obol_style : NULL,
+		&scene->owner);
+    if (!handle.isValid()) {
+	scene->failed = 1;
+	return 0;
+    }
+
+    (void)ged_obol_feature_mark_overlay(scene->controller, handle,
+	    ged_obol_command_scene_overlay_info(scene, name));
+    scene->changed++;
+    return 1;
+}
+
+extern "C" int
+ged_draw_command_scene_commit(struct ged_draw_command_scene *scene)
+{
+    if (!ged_obol_command_scene_valid(scene))
+	return 0;
+
+    const int ret = scene->failed ? 0 : 1;
+    scene->magic = 0;
+    delete scene;
+    return ret;
+}
+
+extern "C" void
+ged_draw_command_scene_abort(struct ged_draw_command_scene *scene)
+{
+    if (!ged_obol_command_scene_valid(scene))
+	return;
+
+    scene->magic = 0;
+    delete scene;
+}
+
 extern "C" int
 ged_draw_obol_view_context_line_layer_builder_replace(
 	void *view_ctx,
@@ -4901,6 +5242,77 @@ ged_draw_obol_view_context_feature_line_command_at(
 	    index, command))
 	return 0;
     *out = ged_obol_line_command_to_ged(command);
+    return 1;
+}
+
+static int
+ged_obol_feature_layer_lookup(void *view_ctx,
+	const char *name,
+	size_t layer_index,
+	BRLObolLineLayer &layer)
+{
+    BRLObolViewController *controller =
+	ged_obol_view_controller_for_context(view_ctx);
+    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
+	    view_ctx, name);
+    BRLObolFeatureRecord record;
+    if (!handle.isValid() || !controller->features().record(handle,
+	    record) || record.kind != BRLObolFeatureKind::LineLayer ||
+	    layer_index >= record.layers.size())
+	return 0;
+
+    layer = record.layers[layer_index];
+    return 1;
+}
+
+extern "C" int
+ged_draw_obol_view_context_feature_layer_points_copy(
+	void *view_ctx,
+	const char *name,
+	size_t layer_index,
+	point_t **points,
+	size_t *point_count)
+{
+    if (points)
+	*points = NULL;
+    if (point_count)
+	*point_count = 0;
+    if (!points || !point_count)
+	return 0;
+
+    BRLObolLineLayer layer;
+    if (!ged_obol_feature_layer_lookup(view_ctx, name, layer_index, layer))
+	return 0;
+
+    if (layer.points.empty())
+	return 1;
+    *points = (point_t *)bu_calloc(layer.points.size(), sizeof(point_t),
+	    "GED Obol feature layer points copy");
+    for (size_t i = 0; i < layer.points.size(); i++)
+	ged_obol_point_from_sb((*points)[i], layer.points[i]);
+    *point_count = layer.points.size();
+    return 1;
+}
+
+extern "C" int
+ged_draw_obol_view_context_feature_layer_line_command_at(
+	void *view_ctx,
+	const char *name,
+	size_t layer_index,
+	size_t point_index,
+	int *out)
+{
+    if (out)
+	*out = 0;
+    if (!out)
+	return 0;
+
+    BRLObolLineLayer layer;
+    if (!ged_obol_feature_layer_lookup(view_ctx, name, layer_index, layer) ||
+	    point_index >= layer.commands.size())
+	return 0;
+
+    *out = ged_obol_line_command_to_ged(layer.commands[point_index]);
     return 1;
 }
 
@@ -5646,58 +6058,6 @@ ged_obol_database_source_scene_instance_for_path(
     if (scene_out)
 	*scene_out = scene;
     return 1;
-}
-
-static SbBool
-ged_obol_database_source_world_to_local_matrix(
-	SoBRLDatabaseSource *source,
-	SbMatrix &worldToLocal)
-{
-    worldToLocal = SbMatrix::identity();
-    if (!source)
-	return FALSE;
-
-    BRLObolDatabaseSourceSummary summary;
-    if (!source->getSummary(summary) || !summary.valid ||
-	    !summary.drawMatrixValid)
-	return FALSE;
-
-    SbMatrix localToWorld = summary.drawMatrix;
-    if (localToWorld.equals(SbMatrix::identity(), 0.000001f))
-	return FALSE;
-    if (fabs(localToWorld.det4()) <= FLT_EPSILON)
-	return FALSE;
-
-    worldToLocal = localToWorld.inverse();
-    return TRUE;
-}
-
-static SbBool
-ged_obol_database_source_indexed_face_points_are_world(void)
-{
-    /* Legacy evaluated BoT paths publish instance-space mesh vertices.
-     * Normalize them before handing geometry to the Obol source-local API. */
-    if (ged_obol_database_source_publication_depth <= 0)
-	return FALSE;
-
-    return (ged_obol_database_source_publication_mode ==
-	    GED_DRAW_MODE_SHADED_BOTS ||
-	    ged_obol_database_source_publication_mode ==
-	    GED_DRAW_MODE_HIDDEN_LINE) ? TRUE : FALSE;
-}
-
-static SbVec3f
-ged_obol_database_source_local_point(
-	const point_t point,
-	const SbMatrix *worldToLocal)
-{
-    SbVec3f localPoint(
-	    static_cast<float>(point[0]),
-	    static_cast<float>(point[1]),
-	    static_cast<float>(point[2]));
-    if (worldToLocal)
-	worldToLocal->multVecMatrix(localPoint, localPoint);
-    return localPoint;
 }
 
 static int
@@ -10299,16 +10659,6 @@ ged_draw_obol_database_source_publish_indexed_face_set_for_path(
 	    source_instance_key))
 	return 0;
 
-    SbMatrix worldToLocal;
-    const SbMatrix *worldToLocalPtr = NULL;
-    if (ged_obol_database_source_indexed_face_points_are_world()) {
-	SoBRLDatabaseSource *source =
-	    scene->findDatabaseSourceInstance(source_instance_key.c_str());
-	if (ged_obol_database_source_world_to_local_matrix(source,
-		worldToLocal))
-	    worldToLocalPtr = &worldToLocal;
-    }
-
     if (!point_count || !index_count) {
 	BRLObolExternalTriangleMesh empty_mesh;
 	const int published =
@@ -10336,8 +10686,10 @@ ged_draw_obol_database_source_publish_indexed_face_set_for_path(
     std::vector<SbVec3f> obol_points;
     obol_points.reserve(point_count);
     for (size_t i = 0; i < point_count; i++) {
-	obol_points.push_back(ged_obol_database_source_local_point(points[i],
-		worldToLocalPtr));
+	obol_points.push_back(SbVec3f(
+		static_cast<float>(points[i][0]),
+		static_cast<float>(points[i][1]),
+		static_cast<float>(points[i][2])));
     }
 
     BRLObolExternalTriangleMesh triangle_mesh;

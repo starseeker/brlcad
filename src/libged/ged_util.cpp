@@ -1649,11 +1649,18 @@ ged_uplot_parse_stream(struct ged_uplot_stream *ctx, FILE *fp)
 }
 
 static int
-ged_uplot_publish_feature(struct ged *gedp, const char *name, struct ged_uplot_stream *ctx)
+ged_uplot_feature_layers_create(const char *name,
+	struct ged_uplot_stream *ctx,
+	struct ged_draw_view_line_layer_data **layers_out,
+	char ***names_out,
+	size_t *live_layers_out)
 {
-    void *view_ctx = gedp ? ged_view_active_ctx(gedp) : NULL;
-    if (!view_ctx || !name || !ctx)
+    if (!name || !ctx || !layers_out || !names_out || !live_layers_out)
 	return BRLCAD_ERROR;
+
+    *layers_out = NULL;
+    *names_out = NULL;
+    *live_layers_out = 0;
 
     size_t live_layers = 0;
     for (size_t i = 0; i < ctx->layer_count; i++) {
@@ -1694,18 +1701,94 @@ ged_uplot_publish_feature(struct ged *gedp, const char *name, struct ged_uplot_s
 	idx++;
     }
 
-    int ret = ged_draw_view_context_line_layers_replace(view_ctx, name, 0,
-	    layers, live_layers, NULL) ? BRLCAD_OK : BRLCAD_ERROR;
+    *layers_out = layers;
+    *names_out = names;
+    *live_layers_out = live_layers;
+    return BRLCAD_OK;
+}
 
+static void
+ged_uplot_feature_layers_free(
+	struct ged_draw_view_line_layer_data *layers,
+	char **names,
+	size_t live_layers)
+{
     for (size_t i = 0; i < live_layers; i++) {
-	if (names[i])
+	if (names && names[i])
 	    bu_free(names[i], "ged uplot feature layer name");
     }
     if (names)
 	bu_free(names, "ged uplot feature layer names");
     if (layers)
 	bu_free(layers, "ged uplot feature layers");
+}
 
+static int
+ged_uplot_publish_feature(struct ged *gedp, const char *name, struct ged_uplot_stream *ctx)
+{
+    void *view_ctx = gedp ? ged_view_active_ctx(gedp) : NULL;
+    if (!view_ctx || !name || !ctx)
+	return BRLCAD_ERROR;
+
+    struct ged_draw_view_line_layer_data *layers = NULL;
+    char **names = NULL;
+    size_t live_layers = 0;
+    if (ged_uplot_feature_layers_create(name, ctx, &layers, &names,
+	    &live_layers) != BRLCAD_OK)
+	return BRLCAD_ERROR;
+
+    int ret = ged_draw_view_context_line_layers_replace(view_ctx, name, 0,
+	    layers, live_layers, NULL) ? BRLCAD_OK : BRLCAD_ERROR;
+
+    ged_uplot_feature_layers_free(layers, names, live_layers);
+    return ret;
+}
+
+static int
+ged_uplot_publish_command_scene_feature(struct ged *gedp,
+	struct ged_uplot_stream *stream,
+	const char *name,
+	const char *owner_id,
+	const char *owner_role,
+	const char *remove_prefix)
+{
+    void *view_ctx = gedp ? ged_view_active_ctx(gedp) : NULL;
+    if (!view_ctx || !stream || !name)
+	return BRLCAD_ERROR;
+
+    struct ged_draw_command_scene_desc desc =
+	GED_DRAW_COMMAND_SCENE_DESC_INIT;
+    desc.owner_id = owner_id;
+    desc.owner_role = owner_role;
+    struct ged_draw_command_scene *scene =
+	ged_draw_command_scene_begin(view_ctx, &desc);
+    if (!scene) {
+	if (remove_prefix && remove_prefix[0])
+	    (void)ged_draw_view_context_features_remove_prefix(view_ctx,
+		    remove_prefix);
+	return ged_uplot_publish_feature(gedp, name, stream);
+    }
+
+    if (remove_prefix && remove_prefix[0])
+	(void)ged_draw_command_scene_features_remove_prefix(scene,
+		remove_prefix);
+
+    struct ged_draw_view_line_layer_data *layers = NULL;
+    char **names = NULL;
+    size_t live_layers = 0;
+    if (ged_uplot_feature_layers_create(name, stream, &layers, &names,
+	    &live_layers) != BRLCAD_OK) {
+	ged_draw_command_scene_abort(scene);
+	return BRLCAD_ERROR;
+    }
+
+    int ret = ged_draw_command_scene_line_layers_replace(scene, name,
+	    layers, live_layers, NULL) ? BRLCAD_OK : BRLCAD_ERROR;
+    ged_uplot_feature_layers_free(layers, names, live_layers);
+    if (ret == BRLCAD_OK)
+	ret = ged_draw_command_scene_commit(scene) ? BRLCAD_OK : BRLCAD_ERROR;
+    else
+	ged_draw_command_scene_abort(scene);
     return ret;
 }
 
@@ -1721,6 +1804,31 @@ _ged_draw_uplot_to_feature(struct ged *gedp, FILE *fp, const char *name, double 
     int ret = ged_uplot_parse_stream(&ctx, fp);
     if (ret == BRLCAD_OK)
 	ret = ged_uplot_publish_feature(gedp, name, &ctx);
+
+    ged_uplot_builder_free(&ctx);
+    return ret;
+}
+
+extern "C" int
+_ged_draw_uplot_to_command_scene_feature(struct ged *gedp,
+	FILE *fp,
+	const char *name,
+	double char_size,
+	int mode,
+	const char *owner_id,
+	const char *owner_role,
+	const char *remove_prefix)
+{
+    if (!gedp || !fp || !name || !ged_view_active_ctx(gedp))
+	return BRLCAD_ERROR;
+
+    struct ged_uplot_stream ctx;
+    ged_uplot_builder_init(&ctx, char_size, mode);
+
+    int ret = ged_uplot_parse_stream(&ctx, fp);
+    if (ret == BRLCAD_OK)
+	ret = ged_uplot_publish_command_scene_feature(gedp, &ctx, name,
+		owner_id, owner_role, remove_prefix);
 
     ged_uplot_builder_free(&ctx);
     return ret;
@@ -1779,6 +1887,18 @@ extern "C" int
 _ged_uplot_stream_publish_feature(struct ged *gedp, struct ged_uplot_stream *stream, const char *name)
 {
     return ged_uplot_publish_feature(gedp, name, stream);
+}
+
+extern "C" int
+_ged_uplot_stream_publish_command_scene_feature(struct ged *gedp,
+	struct ged_uplot_stream *stream,
+	const char *name,
+	const char *owner_id,
+	const char *owner_role,
+	const char *remove_prefix)
+{
+    return ged_uplot_publish_command_scene_feature(gedp, stream, name,
+	    owner_id, owner_role, remove_prefix);
 }
 
 extern "C" void

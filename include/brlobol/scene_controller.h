@@ -191,6 +191,9 @@ public:
 	const int32_t *commands,
 	int count,
 	const BRLObolAuxiliaryLineSetDisplayState *displayState = NULL);
+    /* External primary geometry is source-local.  The database source's
+     * placement state carries local-to-scene transforms separately.
+     */
     int publishDatabaseSourceExternalLineSet(const char *sourcePath,
 	const BRLObolExternalLineSet &lineSet);
     int publishDatabaseSourceInstanceExternalLineSet(

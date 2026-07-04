@@ -30,6 +30,7 @@
 
 #include "bg/plane.h"
 #include "bg/sat.h"
+#include "bn/mat.h"
 #include "bu/hash.h"
 #include "bu/log.h"
 #include "bu/malloc.h"
@@ -206,6 +207,10 @@ static int ged_draw_obol_database_source_container_info(
 	const char *path,
 	int draw_tree_depth,
 	struct ged_draw_obol_scene_context_info *out);
+static int ged_draw_obol_source_localize_points(point_t **local_points_out,
+						const point_t *points,
+						size_t point_count,
+						const mat_t local_to_scene);
 static char *_ged_draw_scene_ref_owner_path_string(bsg_scene_ref ref);
 static int _ged_draw_scene_ref_obol_ensure_source(bsg_scene_ref primary_ref);
 static int _ged_draw_scene_ref_obol_ensure_owner_source(
@@ -494,6 +499,14 @@ static int ged_draw_scene_ref_publish_bspline_wireframe_line_set(
 	const struct bn_tol *tol,
 	int *obol_published);
 static int ged_draw_scene_ref_publish_indexed_face_set(
+	bsg_scene_ref ref,
+	const point_t *points,
+	size_t point_count,
+	const vect_t *normals,
+	size_t normal_count,
+	const int *indices,
+	size_t index_count);
+static int ged_draw_scene_ref_publish_transformed_indexed_face_set(
 	bsg_scene_ref ref,
 	const point_t *points,
 	size_t point_count,
@@ -823,6 +836,8 @@ struct ged_draw_shape_draft {
     bsg_scene_ref shape_ref;
     char *obol_source_path;
     int remove_uncommitted_obol_source;
+    int source_localize_mat_valid;
+    mat_t source_localize_mat;
     int committed;
 };
 
@@ -994,6 +1009,24 @@ ged_draw_shape_draft_apply_obol_placement(ged_draw_shape_draft *draft,
 	    ged_draw_shape_draft_obol_placement_cb, &ctx);
 }
 
+static void
+ged_draw_shape_draft_source_localize_mat_set(ged_draw_shape_draft *draft,
+					     const mat_t local_to_scene)
+{
+    if (!draft || !local_to_scene)
+	return;
+
+    draft->source_localize_mat_valid = 1;
+    MAT_COPY(draft->source_localize_mat, local_to_scene);
+}
+
+static int
+ged_draw_mode_publishes_transformed_mesh(int draw_mode)
+{
+    return (draw_mode == GED_DRAW_MODE_SHADED_BOTS ||
+	    draw_mode == GED_DRAW_MODE_HIDDEN_LINE) ? 1 : 0;
+}
+
 struct ged_draw_shape_draft_bounds_ctx {
     point_t bmin;
     point_t bmax;
@@ -1105,6 +1138,8 @@ ged_draw_shape_draft_create_context(struct ged *gedp, void *view_ctx, int regist
     draft->shape_ref = shape_ref;
     draft->obol_source_path = NULL;
     draft->remove_uncommitted_obol_source = 0;
+    draft->source_localize_mat_valid = 0;
+    MAT_IDN(draft->source_localize_mat);
     draft->committed = 0;
     if (registered && !ged_draw_shape_draft_apply_db_object_marker(shape_ref)) {
 	ged_draw_shape_draft_destroy(draft);
@@ -1176,6 +1211,8 @@ struct _ged_draw_shape_draft_obol_mesh_ctx {
     size_t normal_count;
     const int *indices;
     size_t index_count;
+    int localize_points;
+    mat_t local_to_scene;
 };
 
 
@@ -1186,10 +1223,25 @@ _ged_draw_shape_draft_obol_mesh_cb(struct ged *gedp,
 {
     struct _ged_draw_shape_draft_obol_mesh_ctx *ctx =
 	(struct _ged_draw_shape_draft_obol_mesh_ctx *)userdata;
-    return ctx ?
-	ged_draw_obol_database_source_publish_indexed_face_set_for_path(
-		gedp, path, ctx->points, ctx->point_count, ctx->normals,
-		ctx->normal_count, ctx->indices, ctx->index_count) : 0;
+    if (!ctx)
+	return 0;
+
+    const point_t *publish_points = ctx->points;
+    point_t *local_points = NULL;
+    if (ctx->localize_points) {
+	if (!ged_draw_obol_source_localize_points(&local_points,
+		ctx->points, ctx->point_count, ctx->local_to_scene))
+	    return 0;
+	if (local_points)
+	    publish_points = (const point_t *)local_points;
+    }
+
+    int ret = ged_draw_obol_database_source_publish_indexed_face_set_for_path(
+	    gedp, path, publish_points, ctx->point_count, ctx->normals,
+	    ctx->normal_count, ctx->indices, ctx->index_count);
+    if (local_points)
+	bu_free(local_points, "GED Obol source-local mesh points");
+    return ret;
 }
 
 
@@ -1214,6 +1266,10 @@ ged_draw_shape_draft_publish_indexed_face_set_obol(
     ctx.normal_count = normal_count;
     ctx.indices = indices;
     ctx.index_count = index_count;
+    if (draft->source_localize_mat_valid) {
+	ctx.localize_points = 1;
+	MAT_COPY(ctx.local_to_scene, draft->source_localize_mat);
+    }
 
     return ged_draw_shape_draft_obol_source_path_apply(draft,
 	    _ged_draw_shape_draft_obol_mesh_cb, &ctx);
@@ -1697,8 +1753,9 @@ ged_draw_shape_draft_apply_path_source_state(
     if (has_draw_mat) {
 	if (!draw_mat)
 	    return 0;
-	if (!ged_draw_shape_draft_apply_obol_placement(draft, 1, draw_mat,
-		0, NULL, 0, 0.0)) {
+	int obol_placed = ged_draw_shape_draft_apply_obol_placement(draft,
+		1, draw_mat, 0, NULL, 0, 0.0);
+	if (!obol_placed) {
 	    if (!ged_draw_scene_ref_set_draw_mat(shape_ref, draw_mat))
 		return 0;
 	}
@@ -2003,12 +2060,16 @@ ged_draw_shape_draft_apply_evaluated_path_display(
     if (!_ged_draw_shape_draft_apply_material_rgb(draft, material_rgb))
 	return 0;
     if (has_transform && transform) {
-	if (!ged_draw_shape_draft_apply_obol_placement(draft, 1, transform,
-		0, NULL, 0, 0.0)) {
+	int obol_placed = ged_draw_shape_draft_apply_obol_placement(draft,
+		1, transform, 0, NULL, 0, 0.0);
+	if (!obol_placed) {
 	    if (!ged_draw_scene_ref_set_transform(shape_ref, transform))
 		return 0;
 	    ged_draw_note_retained_shape_mutation(draft->gedp);
 	}
+	if (obol_placed && ged_draw_mode_publishes_transformed_mesh(
+		settings->draw_mode))
+	    ged_draw_shape_draft_source_localize_mat_set(draft, transform);
 	/* Obol owns draft evaluated-path transform placement; BSG is fallback. */
     }
     if (!settings->draw_solid_lines_only &&
@@ -2471,6 +2532,9 @@ ged_draw_add_tree_nmg_region_to_group(
 	ged_draw_shape_draft_destroy(draft);
 	return 0;
     }
+    if (settings && tsp &&
+	    ged_draw_mode_publishes_transformed_mesh(settings->draw_mode))
+	ged_draw_shape_draft_source_localize_mat_set(draft, tsp->ts_mat);
 
     if (!ged_draw_shape_draft_publish_nmg_region(draft, r, style)) {
 	ged_draw_shape_draft_destroy(draft);
@@ -2507,6 +2571,9 @@ ged_draw_add_tree_primitive_face_set_to_group(
 	ged_draw_shape_draft_destroy(draft);
 	return 0;
     }
+    if (settings && tsp &&
+	    ged_draw_mode_publishes_transformed_mesh(settings->draw_mode))
+	ged_draw_shape_draft_source_localize_mat_set(draft, tsp->ts_mat);
 
     int ok = 0;
     if (!force_failure && ip->idb_meth && ip->idb_meth->ft_indexed_face_set) {
@@ -3682,10 +3749,18 @@ _ged_draw_view_export_detail_geometry_from_obol_feature(
 
     if (detail->geometry_kind == GED_DRAW_VIEW_EXPORT_GEOMETRY_LINE_SET ||
 	    detail->geometry_kind == GED_DRAW_VIEW_EXPORT_GEOMETRY_POINT_SET) {
-	if (!ged_draw_obol_view_context_feature_points_copy(view_ctx,
-		feature->name, &detail->arrays.points,
-		&detail->arrays.point_count))
-	    return 0;
+	if (feature->line_layer_parent_name) {
+	    if (!ged_draw_obol_view_context_feature_layer_points_copy(
+		    view_ctx, feature->line_layer_parent_name,
+		    feature->line_layer_index, &detail->arrays.points,
+		    &detail->arrays.point_count))
+		return 0;
+	} else {
+	    if (!ged_draw_obol_view_context_feature_points_copy(view_ctx,
+		    feature->name, &detail->arrays.points,
+		    &detail->arrays.point_count))
+		return 0;
+	}
 	detail->arrays.command_count = detail->arrays.point_count;
 	if (detail->arrays.command_count) {
 	    detail->arrays.commands = (int *)bu_calloc(
@@ -3696,7 +3771,15 @@ _ged_draw_view_export_detail_geometry_from_obol_feature(
 	for (size_t i = 0; i < detail->arrays.command_count; i++) {
 	    if (detail->geometry_kind == GED_DRAW_VIEW_EXPORT_GEOMETRY_POINT_SET)
 		detail->arrays.commands[i] = GED_DRAW_VIEW_LINE_POINT_DRAW;
-	    else if (!ged_draw_obol_view_context_feature_line_command_at(
+	    else if (feature->line_layer_parent_name &&
+		    !ged_draw_obol_view_context_feature_layer_line_command_at(
+		    view_ctx, feature->line_layer_parent_name,
+		    feature->line_layer_index, i, &detail->arrays.commands[i]))
+		detail->arrays.commands[i] =
+		    (i % 2) ? GED_DRAW_VIEW_LINE_DRAW :
+		    GED_DRAW_VIEW_LINE_MOVE;
+	    else if (!feature->line_layer_parent_name &&
+		    !ged_draw_obol_view_context_feature_line_command_at(
 		    view_ctx, feature->name, i, &detail->arrays.commands[i]))
 		detail->arrays.commands[i] =
 		    (i % 2) ? GED_DRAW_VIEW_LINE_DRAW :
@@ -6628,6 +6711,37 @@ _ged_draw_obol_publish_point_cb(struct ged *gedp,
 }
 
 
+static int
+ged_draw_obol_source_localize_points(point_t **local_points_out,
+				     const point_t *points,
+				     size_t point_count,
+				     const mat_t local_to_scene)
+{
+    if (local_points_out)
+	*local_points_out = NULL;
+    if (!local_points_out)
+	return 0;
+    if (!point_count)
+	return 1;
+    if (!points || !local_to_scene)
+	return 0;
+    if (bn_mat_is_identity(local_to_scene))
+	return 1;
+
+    mat_t scene_to_local;
+    if (!bn_mat_inverse(scene_to_local, local_to_scene))
+	return 0;
+
+    point_t *local_points = (point_t *)bu_calloc(point_count,
+	    sizeof(point_t), "GED Obol source-local mesh points");
+    for (size_t i = 0; i < point_count; i++)
+	MAT4X3PNT(local_points[i], scene_to_local, points[i]);
+
+    *local_points_out = local_points;
+    return 1;
+}
+
+
 struct _ged_draw_obol_publish_mesh_ctx {
     const point_t *points;
     size_t point_count;
@@ -6635,6 +6749,8 @@ struct _ged_draw_obol_publish_mesh_ctx {
     size_t normal_count;
     const int *indices;
     size_t index_count;
+    int localize_points;
+    mat_t local_to_scene;
 };
 
 static int
@@ -6644,10 +6760,25 @@ _ged_draw_obol_publish_mesh_cb(struct ged *gedp,
 {
     struct _ged_draw_obol_publish_mesh_ctx *ctx =
 	(struct _ged_draw_obol_publish_mesh_ctx *)userdata;
-    return ctx ?
-	ged_draw_obol_database_source_publish_indexed_face_set_for_path(
-		gedp, path, ctx->points, ctx->point_count, ctx->normals,
-		ctx->normal_count, ctx->indices, ctx->index_count) : 0;
+    if (!ctx)
+	return 0;
+
+    const point_t *publish_points = ctx->points;
+    point_t *local_points = NULL;
+    if (ctx->localize_points) {
+	if (!ged_draw_obol_source_localize_points(&local_points,
+		ctx->points, ctx->point_count, ctx->local_to_scene))
+	    return 0;
+	if (local_points)
+	    publish_points = (const point_t *)local_points;
+    }
+
+    int ret = ged_draw_obol_database_source_publish_indexed_face_set_for_path(
+	    gedp, path, publish_points, ctx->point_count, ctx->normals,
+	    ctx->normal_count, ctx->indices, ctx->index_count);
+    if (local_points)
+	bu_free(local_points, "GED Obol source-local mesh points");
+    return ret;
 }
 
 
@@ -9567,10 +9698,7 @@ ged_draw_source_erase_path_at_root(struct ged *gedp, const char *path)
 
     int obol_erased = ged_draw_obol_erase_exact_path_owner(gedp, path,
 	    NULL, -1);
-    if (obol_erased) {
-	/* Obol owns exact-path source/group erase; retained erase is fallback. */
-	return 1;
-    }
+    /* Obol owns exact-path source/group erase; retained erase is fallback. */
 
     bsg_scene_ref root_ref = _ged_draw_source_root_scene_ref(gedp);
     if (ged_draw_scene_ref_is_null(root_ref))
@@ -9628,10 +9756,7 @@ ged_draw_source_erase_path_prefix_at_root(struct ged *gedp, const char *path)
 
     int obol_erased = ged_draw_obol_erase_path_prefix_owner(gedp, path,
 	    NULL, -1);
-    if (obol_erased) {
-	/* Obol owns path-prefix source/group erase; retained erase is fallback. */
-	return 1;
-    }
+    /* Obol owns path-prefix source/group erase; retained erase is fallback. */
 
     bsg_scene_ref root_ref = _ged_draw_source_root_scene_ref(gedp);
     if (ged_draw_scene_ref_is_null(root_ref))
@@ -9654,10 +9779,6 @@ ged_draw_source_erase_path_in_active_scope(struct ged *gedp,
 
     int obol_erased = ged_draw_obol_erase_exact_path_owner(gedp, path,
 	    view_ctx, mode);
-    if (obol_erased) {
-	/* Obol owns exact-path source/group erase; retained erase is fallback. */
-	return 1;
-    }
 
     bsg_scene_ref base_ref =
 	_ged_draw_active_scope_scene_ref(gedp, view_ctx, 0, 0);
@@ -9678,10 +9799,6 @@ ged_draw_source_erase_path_prefix_in_active_scope(struct ged *gedp,
 
     int obol_erased = ged_draw_obol_erase_path_prefix_owner(gedp, path,
 	    view_ctx, mode);
-    if (obol_erased) {
-	/* Obol owns path-prefix source/group erase; retained erase is fallback. */
-	return 1;
-    }
 
     bsg_scene_ref base_ref =
 	_ged_draw_active_scope_scene_ref(gedp, view_ctx, 0, 0);
@@ -12140,16 +12257,22 @@ ged_draw_shape_ref_obol_publish_indexed_face_set(
 	const vect_t *normals,
 	size_t normal_count,
 	const int *indices,
-	size_t index_count)
+	size_t index_count,
+	int localize_points,
+	const mat_t local_to_scene)
 {
-    struct _ged_draw_obol_publish_mesh_ctx ctx = {
-	points,
-	point_count,
-	normals,
-	normal_count,
-	indices,
-	index_count
-    };
+    struct _ged_draw_obol_publish_mesh_ctx ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.points = points;
+    ctx.point_count = point_count;
+    ctx.normals = normals;
+    ctx.normal_count = normal_count;
+    ctx.indices = indices;
+    ctx.index_count = index_count;
+    if (localize_points && local_to_scene) {
+	ctx.localize_points = 1;
+	MAT_COPY(ctx.local_to_scene, local_to_scene);
+    }
     (void)ged_draw_shape_ref_obol_sync_source_placement(gedp, ref,
 	    shape_ref);
     return _ged_draw_shape_ref_try_obol_paths(gedp, ref, shape_ref,
@@ -12319,8 +12442,8 @@ ged_draw_shape_ref_publish_indexed_face_set(struct ged *gedp,
 {
     bsg_scene_ref shape_ref = _ged_draw_shape_ref_scene_ref(gedp, ref);
     if (ged_draw_shape_ref_obol_publish_indexed_face_set(gedp, ref,
-	    shape_ref, points, point_count, normals, normal_count, indices,
-	    index_count))
+	    shape_ref, points, point_count, normals, normal_count,
+	    indices, index_count, 0, NULL))
 	return 1;
     if (ged_draw_scene_ref_is_null(shape_ref))
 	return 0;
@@ -14880,8 +15003,7 @@ ged_draw_source_database_leaf_draft_create(
     }
     if (name) {
 	(void)ged_draw_obol_database_source_ensure_for_path(gedp, name,
-		dbip, settings ? settings->draw_mode : GED_DRAW_MODE_WIRE,
-		0);
+		dbip, settings ? settings->draw_mode : GED_DRAW_MODE_WIRE, 0);
 	(void)ged_draw_obol_database_source_set_placement_for_path(gedp,
 		name, 1, draw_mat, 0, NULL, has_draw_size, draw_size);
 	bu_free(name, "path string");
@@ -17299,24 +17421,6 @@ ged_draw_scene_ref_strict_fallback(bsg_scene_ref ref)
 }
 
 
-static void
-ged_draw_scene_ref_apply_qray_work_flag(bsg_scene_ref ref, int wflag)
-{
-    bsg_scene_set_work_flag(ref, wflag);
-}
-
-
-int
-ged_draw_shape_ref_apply_qray_work_flag(struct ged *gedp, ged_draw_shape_ref ref, int wflag)
-{
-    bsg_scene_ref shape_ref = _ged_draw_shape_ref_scene_ref(gedp, ref);
-    if (ged_draw_scene_ref_is_null(shape_ref))
-	return 0;
-    ged_draw_scene_ref_apply_qray_work_flag(shape_ref, wflag);
-    return 1;
-}
-
-
 static int
 ged_draw_scene_ref_set_legacy_color_info(bsg_scene_ref ref,
 					 const unsigned char basecolor[3],
@@ -17436,7 +17540,6 @@ ged_draw_scene_ref_apply_overlay_geometry_attributes(bsg_scene_ref ref,
     (void)ged_draw_scene_ref_set_legacy_color_info(ref, rgb, 0, 0);
     (void)ged_draw_scene_ref_set_color(ref, rgb);
     (void)ged_draw_scene_ref_set_legacy_region_id(ref, 0);
-    bsg_scene_set_work_flag(ref, 0);
     (void)ged_draw_scene_ref_set_transparency(ref, transparency);
     ged_draw_scene_ref_set_draw_mode(ref, draw_mode);
     return 1;
@@ -20155,17 +20258,18 @@ ged_draw_scene_ref_publish_indexed_face_set(bsg_scene_ref ref,
 	obol_published =
 	    ged_draw_shape_ref_obol_publish_indexed_face_set(
 		    shape_data->gedp, shape_ref, ref, points, point_count,
-		    normals, normal_count, indices, index_count);
+		    normals, normal_count, indices, index_count, 0, NULL);
 	if (!obol_published) {
-	    struct _ged_draw_obol_publish_mesh_ctx ctx = {
-		points,
-		point_count,
-		normals,
-		normal_count,
-		indices,
-		index_count
-	    };
+	    struct _ged_draw_obol_publish_mesh_ctx ctx;
+	    memset(&ctx, 0, sizeof(ctx));
+	    ctx.points = points;
+	    ctx.point_count = point_count;
+	    ctx.normals = normals;
+	    ctx.normal_count = normal_count;
+	    ctx.indices = indices;
+	    ctx.index_count = index_count;
 	    (void)_ged_draw_scene_ref_obol_ensure_source(ref);
+	    (void)ged_draw_scene_ref_obol_sync_source_placement(ref);
 	    obol_published =
 		_ged_draw_scene_ref_obol_source_snapshot_path_apply(ref,
 			_ged_draw_obol_publish_mesh_cb, &ctx);
@@ -20186,6 +20290,83 @@ ged_draw_scene_ref_publish_indexed_face_set(bsg_scene_ref ref,
 	return 0;
 
     /* Obol owns source-adapter indexed-face publication; BSG is fallback. */
+    shape_data->geometry_command_count = point_count;
+    shape_data->geometry_revision++;
+    bsg_scene_invalidate(ref);
+    return 1;
+}
+
+
+static int
+ged_draw_scene_ref_publish_transformed_indexed_face_set(
+	bsg_scene_ref ref,
+	const point_t *points,
+	size_t point_count,
+	const vect_t *normals,
+	size_t normal_count,
+	const int *indices,
+	size_t index_count)
+{
+    ged_draw_shape_state *shape_data = _ged_draw_shape_state_get_scene_ref(ref);
+    int obol_published = 0;
+
+    if (!shape_data)
+	return 0;
+    if (!point_count || !index_count)
+	return ged_draw_scene_ref_geometry_clear(ref);
+    if (!points || !indices)
+	return 0;
+    if (shape_data->gedp) {
+	struct ged_draw_scene_draw_state_summary draw_state;
+	memset(&draw_state, 0, sizeof(draw_state));
+	(void)ged_draw_scene_ref_draw_state_summary(ref, &draw_state);
+
+	ged_draw_shape_ref shape_ref =
+	    _ged_draw_shape_ref_from_scene_ref(shape_data->gedp, ref);
+	const int localize_points = draw_state.draw_mat_valid &&
+	    ged_draw_mode_publishes_transformed_mesh(draw_state.draw_mode) ?
+	    1 : 0;
+	const fastf_t *local_to_scene = draw_state.draw_mat_valid ?
+	    draw_state.draw_mat : NULL;
+	obol_published =
+	    ged_draw_shape_ref_obol_publish_indexed_face_set(
+		    shape_data->gedp, shape_ref, ref, points, point_count,
+		    normals, normal_count, indices, index_count,
+		    localize_points, local_to_scene);
+	if (!obol_published) {
+	    struct _ged_draw_obol_publish_mesh_ctx ctx;
+	    memset(&ctx, 0, sizeof(ctx));
+	    ctx.points = points;
+	    ctx.point_count = point_count;
+	    ctx.normals = normals;
+	    ctx.normal_count = normal_count;
+	    ctx.indices = indices;
+	    ctx.index_count = index_count;
+	    if (localize_points && local_to_scene) {
+		ctx.localize_points = 1;
+		MAT_COPY(ctx.local_to_scene, local_to_scene);
+	    }
+	    (void)_ged_draw_scene_ref_obol_ensure_source(ref);
+	    (void)ged_draw_scene_ref_obol_sync_source_placement(ref);
+	    obol_published =
+		_ged_draw_scene_ref_obol_source_snapshot_path_apply(ref,
+			_ged_draw_obol_publish_mesh_cb, &ctx);
+	}
+    }
+
+    int bsg_published = 0;
+    if (!obol_published) {
+	bsg_scene_ref geometry_ref =
+	    ged_draw_scene_ref_geometry_publication_target(ref);
+	if (!bsg_scene_ref_is_null(geometry_ref)) {
+	    bsg_published = bsg_geometry_ref_set_indexed_face_set(
+		    bsg_scene_ref_as_geometry(geometry_ref), points, point_count,
+		    normals, normal_count, indices, index_count);
+	}
+    }
+    if (!bsg_published && !obol_published)
+	return 0;
+
     shape_data->geometry_command_count = point_count;
     shape_data->geometry_revision++;
     bsg_scene_invalidate(ref);
@@ -20217,17 +20398,18 @@ ged_draw_scene_ref_update_indexed_face_set(bsg_scene_ref ref,
 	obol_published =
 	    ged_draw_shape_ref_obol_publish_indexed_face_set(
 		    shape_data->gedp, shape_ref, ref, points, point_count,
-		    normals, normal_count, indices, index_count);
+		    normals, normal_count, indices, index_count, 0, NULL);
 	if (!obol_published) {
-	    struct _ged_draw_obol_publish_mesh_ctx ctx = {
-		points,
-		point_count,
-		normals,
-		normal_count,
-		indices,
-		index_count
-	    };
+	    struct _ged_draw_obol_publish_mesh_ctx ctx;
+	    memset(&ctx, 0, sizeof(ctx));
+	    ctx.points = points;
+	    ctx.point_count = point_count;
+	    ctx.normals = normals;
+	    ctx.normal_count = normal_count;
+	    ctx.indices = indices;
+	    ctx.index_count = index_count;
 	    (void)_ged_draw_scene_ref_obol_ensure_source(ref);
+	    (void)ged_draw_scene_ref_obol_sync_source_placement(ref);
 	    obol_published =
 		_ged_draw_scene_ref_obol_source_snapshot_path_apply(ref,
 			_ged_draw_obol_publish_mesh_cb, &ctx);
@@ -20298,7 +20480,7 @@ ged_draw_scene_ref_publish_primitive_face_set(bsg_scene_ref ref,
     }
 
     ok = face_set.point_count || face_set.index_count ?
-	ged_draw_scene_ref_publish_indexed_face_set(ref,
+	ged_draw_scene_ref_publish_transformed_indexed_face_set(ref,
 		(const point_t *)face_set.points, face_set.point_count,
 		(const vect_t *)face_set.normals, face_set.normal_count,
 		face_set.indices, face_set.index_count) :
@@ -22607,7 +22789,7 @@ ged_draw_scene_ref_geometry_publish_nmg_region(bsg_scene_ref ref,
 		    point_count, index_count))
 	    goto cleanup;
 
-	ok = ged_draw_scene_ref_publish_indexed_face_set(ref,
+	ok = ged_draw_scene_ref_publish_transformed_indexed_face_set(ref,
 		(const point_t *)points, point_count,
 		(const vect_t *)normals, point_count,
 		indices, index_count);

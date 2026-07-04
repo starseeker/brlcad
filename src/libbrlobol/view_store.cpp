@@ -174,6 +174,80 @@ store_shape_commands(const std::vector<int32_t> &commands)
     return shapeCommands;
 }
 
+static int32_t
+store_line_command_from_bg(int command, size_t pointIndex)
+{
+    switch (command) {
+	case BG_GEOMETRY_LINE_MOVE:
+	    return static_cast<int32_t>(BRLObolLineCommand::Move);
+	case BG_GEOMETRY_LINE_DRAW:
+	    return static_cast<int32_t>(BRLObolLineCommand::Draw);
+	case BG_GEOMETRY_POINT_DRAW:
+	    return static_cast<int32_t>(BRLObolLineCommand::Point);
+	default:
+	    break;
+    }
+    return pointIndex ? static_cast<int32_t>(BRLObolLineCommand::Draw) :
+	static_cast<int32_t>(BRLObolLineCommand::Move);
+}
+
+static std::vector<BRLObolLineLayer>
+store_line_layers_from_builder(const SbString &featureName,
+	const struct bg_line_layer_builder *builder)
+{
+    std::vector<BRLObolLineLayer> layers;
+    const size_t layerCount = bg_line_layer_builder_layer_count(builder);
+    layers.reserve(layerCount);
+
+    for (size_t i = 0; i < layerCount; i++) {
+	const struct bg_line_layer *bgLayer =
+	    bg_line_layer_builder_layer_at(builder, i);
+	const size_t pointCount = bg_line_layer_point_count(bgLayer);
+	if (!bgLayer || !pointCount)
+	    continue;
+
+	BRLObolLineLayer layer;
+	const char *layerName = bg_line_layer_name(bgLayer);
+	std::string fullLayerName = store_string(featureName);
+	if (layerName && layerName[0]) {
+	    fullLayerName += "/";
+	    fullLayerName += layerName;
+	}
+	layer.name = fullLayerName.c_str();
+	layer.points.reserve(pointCount);
+	layer.commands.reserve(pointCount);
+
+	unsigned char r = 255;
+	unsigned char g = 255;
+	unsigned char b = 255;
+	if (bg_line_layer_color(bgLayer, &r, &g, &b)) {
+	    layer.style.hasColor = TRUE;
+	    layer.style.color = SbColor(
+		    static_cast<float>(r) / 255.0f,
+		    static_cast<float>(g) / 255.0f,
+		    static_cast<float>(b) / 255.0f);
+	}
+
+	const point_t *points = bg_line_layer_points(bgLayer);
+	const int *commands = bg_line_layer_commands(bgLayer);
+	for (size_t j = 0; j < pointCount; j++) {
+	    if (points) {
+		layer.points.push_back(SbVec3f(
+			static_cast<float>(points[j][0]),
+			static_cast<float>(points[j][1]),
+			static_cast<float>(points[j][2])));
+	    }
+	    const int command = commands ? commands[j] : -1;
+	    layer.commands.push_back(store_line_command_from_bg(command, j));
+	}
+
+	if (!layer.points.empty())
+	    layers.push_back(layer);
+    }
+
+    return layers;
+}
+
 static void
 store_apply_vlist_style(SoBRLVListShape *shape,
 	const BRLObolFeatureStyle &style)
@@ -182,6 +256,8 @@ store_apply_vlist_style(SoBRLVListShape *shape,
 	return;
     if (style.hasVisible)
 	shape->visible = style.visible;
+    if (style.hasSelectable)
+	shape->selectable = style.selectable;
     if (style.hasColor) {
 	shape->colorOverride = TRUE;
 	shape->color = style.color;
@@ -200,6 +276,8 @@ store_apply_mesh_style(SoBRLMeshShape *shape,
 	return;
     if (style.hasVisible)
 	shape->visible = style.visible;
+    if (style.hasSelectable)
+	shape->selectable = style.selectable;
     if (style.hasColor) {
 	shape->colorOverride = TRUE;
 	shape->color = style.color;
@@ -217,6 +295,43 @@ store_apply_mesh_color(SoBRLMeshShape *shape, const SbColor &color)
 	return;
     shape->colorOverride = TRUE;
     shape->color = color;
+}
+
+static BRLObolFeatureStyle
+store_merge_feature_style(const BRLObolFeatureStyle &base,
+	const BRLObolFeatureStyle &overrideStyle)
+{
+    BRLObolFeatureStyle out = base;
+    if (overrideStyle.hasVisible) {
+	out.hasVisible = TRUE;
+	out.visible = overrideStyle.visible;
+    }
+    if (overrideStyle.hasSelectable) {
+	out.hasSelectable = TRUE;
+	out.selectable = overrideStyle.selectable;
+    }
+    if (overrideStyle.hasColor) {
+	out.hasColor = TRUE;
+	out.color = overrideStyle.color;
+    }
+    if (overrideStyle.hasLineWidth) {
+	out.hasLineWidth = TRUE;
+	out.lineWidth = overrideStyle.lineWidth;
+    }
+    if (overrideStyle.hasLineStyle) {
+	out.hasLineStyle = TRUE;
+	out.lineStyle = overrideStyle.lineStyle;
+    }
+    if (overrideStyle.hasArrow) {
+	out.hasArrow = TRUE;
+	out.arrow = overrideStyle.arrow;
+    }
+    if (overrideStyle.hasArrowTip) {
+	out.hasArrowTip = TRUE;
+	out.arrowTipLength = overrideStyle.arrowTipLength;
+	out.arrowTipWidth = overrideStyle.arrowTipWidth;
+    }
+    return out;
 }
 
 static void
@@ -358,6 +473,8 @@ operator!=(const BRLObolPolygonHandle &a, const BRLObolPolygonHandle &b)
 BRLObolFeatureStyle::BRLObolFeatureStyle(void) :
     hasVisible(FALSE),
     visible(TRUE),
+    hasSelectable(FALSE),
+    selectable(TRUE),
     hasColor(FALSE),
     color(1.0f, 1.0f, 1.0f),
     hasLineWidth(FALSE),
@@ -617,8 +734,7 @@ struct BRLObolFeatureStore::Impl {
 		continue;
 	    if (!(store_scope_bit(rec->scope) & scopeMask))
 		continue;
-	    if (rec->scope == BRLObolFeatureScope::Local &&
-		    !store_owner_matches(rec->owner, owner))
+	    if (owner && !store_owner_matches(rec->owner, owner))
 		continue;
 	    return rec;
 	}
@@ -909,7 +1025,8 @@ store_line_layers_node(const BRLObolFeatureStoreRecord &rec)
 	layerRec.identity = layerRec.name;
 	layerRec.points = rec.layers[i].points;
 	layerRec.commands = rec.layers[i].commands;
-	layerRec.style = rec.layers[i].style;
+	layerRec.style = store_merge_feature_style(rec.style,
+		rec.layers[i].style);
 	layerRec.kind = BRLObolFeatureKind::Lines;
 	SoBRLVListShape *shape = store_vlist_node(layerRec);
 	if (shape)
@@ -1134,8 +1251,7 @@ BRLObolFeatureStore::removePrefix(const SbString &prefix,
 	    continue;
 	if (!(store_scope_bit(it->second->scope) & scopeMask))
 	    continue;
-	if (it->second->scope == BRLObolFeatureScope::Local &&
-		!store_owner_matches(it->second->owner, owner))
+	if (owner && !store_owner_matches(it->second->owner, owner))
 	    continue;
 	const std::string name = store_string(it->second->name);
 	if (name.compare(0, p.size(), p) == 0)
@@ -1336,10 +1452,21 @@ BRLObolFeatureStore::publishLineLayerBuilder(const SbString &name,
     if (!rec)
 	return BRLObolFeatureHandle();
 
+    rec->layers = store_line_layers_from_builder(name, builder);
+    rec->points.clear();
+    rec->commands.clear();
+    for (size_t i = 0; i < rec->layers.size(); i++) {
+	rec->points.insert(rec->points.end(), rec->layers[i].points.begin(),
+		rec->layers[i].points.end());
+	rec->commands.insert(rec->commands.end(),
+		rec->layers[i].commands.begin(), rec->layers[i].commands.end());
+    }
+
     SoBRLLineLayerOverlay *overlay = new SoBRLLineLayerOverlay;
     overlay->overlayId = name;
     overlay->sourceId = static_cast<uint32_t>(rec->revision);
-    overlay->selectable = TRUE;
+    overlay->selectable = rec->style.hasSelectable ?
+	rec->style.selectable : TRUE;
     overlay->rebuildGeometry(builder);
     this->impl->setNode(rec, overlay);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
@@ -1626,6 +1753,10 @@ BRLObolFeatureStore::applyStyle(BRLObolFeatureHandle handle,
     if (style.hasVisible) {
 	rec->style.hasVisible = TRUE;
 	rec->style.visible = style.visible;
+    }
+    if (style.hasSelectable) {
+	rec->style.hasSelectable = TRUE;
+	rec->style.selectable = style.selectable;
     }
     if (style.hasColor) {
 	rec->style.hasColor = TRUE;

@@ -40,6 +40,24 @@ regression instead of relying on a quadratic all-pairs wire scan.  Vlist
 measure and snap traversal must stay linear over SoBRLVListShape command
 arrays; indexed segment lookup rescans the command stream and made the
 prototype hierarchy measure path scale poorly on pinewood.g and havoc.g.
+GED draw transaction coverage now exercises the same leaf-instance realization
+boundary for normal database draw modes: wire, shaded-BoT, shaded, and
+hidden-line draws expand roots to full leaf paths and realize those paths as
+Obol database sources instead of relying on aggregate BSG draw-tree
+publication.  This is required for shaded modes because aggregate root mesh
+sources collapse per-leaf material/color state unless they explicitly retain a
+sub-instance partition.
+Direct provider draws also ensure an explicit Obol group for the requested
+root path before leaf-instance realization.  The group is the scene/object
+identity boundary for comb/root operations; leaf database sources remain the
+geometry realization boundary.  Later GED group lookup must therefore find the
+existing Obol group and must not create a retained placeholder after a direct
+draw.
+Direct mesh providers honor the GED primitive face-set failure test hook by
+publishing an empty handled Obol mesh result rather than falling back to
+retained `_ged_drawtrees`.  This keeps failure-mode tests tied to the direct
+provider contract and prevents legacy indexed-face geometry from silently
+reappearing.
 Staged RT mesh LoD payload copying also owns optional active normals as a
 provider-neutral triangle-corner array, so normal payloads do not leak the
 underlying RT/BSG cache container into libbrlobol consumers.  The RT mesh-LoD
@@ -150,6 +168,28 @@ preserving direct GED/edit mutation semantics.  LoD-backed mesh instances keep
 a per-instance `SoBRLLodMeshShape` wrapper so view-specific display LoD state
 can change independently of shared full-detail source geometry.
 
+External primary geometry published to a database source follows the same
+source-local rule.  Line, point, and indexed-triangle payloads must be in
+source-local coordinates; `drawMatrix` remains placement metadata.  Legacy
+draw-tree and scene-ref mesh paths that obtain transformed arrays localize
+points explicitly before Obol publication.  The generic database-source mesh
+publisher is source-local-only and no longer uses draw mode to infer point
+space.
+
+Primitive shaded realization should prefer librt-owned topology over
+duplicated libbrlobol face tables.  ARB/RPP shaded meshes now use the generic
+librt tessellation path; the removed hand-coded ARB shortcut produced inward
+normals for `mk_rpp` boxes and failed the GED mode 2 drawing baseline under
+lighting.
+
+Evaluated draw modes are provider-owned Obol database-source outputs for the
+requested path.  Evaluated sampled-points publishes the sampled indexed-face
+payload directly to the Obol source.  Evaluated wire factors the legacy Big-E
+line-set producer away from retained shape refs and publishes the line set
+directly to the Obol source.  The Big-E implementation should move into
+libbrlobol once its librt resource ownership and optional deterministic
+per-region/job parallelization design are explicit.
+
 Standalone material-object identity, first mesh edge/vertex action identity,
 and typed edit-preview intent identity across pick/snap/measure/export are now
 covered.  SoBRLEditPreview can publish explicit edit-intent id/role metadata
@@ -205,7 +245,7 @@ Coverage Table
 | Database object | Old draw input | Obol representation | Current status |
 | --- | --- | --- | --- |
 | combination/region | db_walk_tree hierarchy and member matrices | SoBRLDatabaseSource subtree with SoSeparator and SoMatrixTransform per leaf path | Covered for direct primitives, instanced combinations, pinewood.g, and havoc.g hierarchy |
-| arb8/rpp | rt_obj_plot wire, rt_arb internal | SoBRLVListShape for wire, direct SoBRLMeshShape for shaded | Covered by generated database draw/export/pick/snap/measure tests |
+| arb8/rpp | rt_obj_plot wire, rt_obj_tess shaded | SoBRLVListShape for wire, tessellated SoBRLMeshShape for shaded | Covered by generated database draw/export/pick/snap/measure tests and GED mode 2 image baseline |
 | bot | rt_obj_plot wire, rt_bot face arrays | SoBRLVListShape for wire, direct SoBRLMeshShape for shaded | Covered by generated database mesh/export/bounds tests |
 | sph | rt_obj_plot, rt_obj_tess | SoBRLVListShape for wire, tessellated SoBRLMeshShape for shaded | Covered by generated database shaded export/pick/snap/measure tests |
 | ell | rt_obj_plot, rt_obj_tess | SoBRLVListShape for wire, tessellated SoBRLMeshShape for shaded | Covered by generated database shaded export/bounds/measure tests |
@@ -291,21 +331,33 @@ external payload, while preserving auxiliary VLIST/source children.  This is
 covered by `SoBRLDatabaseSource::clearRealizedGeometry` in libbrlobol and by the
 current `ged_test_draw` Obol image gate.
 
+Transform-specific hardening added a focused `ged_test_obol_draw_sync`
+regression for mesh publication under source placement.  The test sets a
+non-identity source placement, publishes a source-local mesh payload, and
+verifies that the resulting `SoBRLMeshShape` stores those source-local points
+while the database source keeps the placement matrix.  This protects the direct
+publisher contract; transformed legacy producers are covered by the draw-mode
+image gates.
+
 Near-Term Gates
 ---------------
 
 1. Preserve the `GED_DRAW_MODE_EVAL_WIRE`, `GED_DRAW_MODE_HIDDEN_LINE`, and
    `GED_DRAW_MODE_EVAL_POINTS` representation paths in qged/qtcad integration
    work, including source bounds updates from external geometry publication.
-2. Promote BREP and BSpline/NURB shaded rows from diagnostics to stable native
+2. Add repeated-solid, repeated-comb, bounds, autoview, and selection/edit
+   identity regressions for multiple instances with different transforms.
+3. Define persistent shared-geometry cache keys, reference counts, invalidation
+   rules, and database-edit behavior before adding cross-refresh reuse.
+4. Promote BREP and BSpline/NURB shaded rows from diagnostics to stable native
    or tessellated representation when the underlying converters are reliable.
-3. Promote diagnostic/fallback rows such as BREP, legacy HF, annotation, and
+5. Promote diagnostic/fallback rows such as BREP, legacy HF, annotation, and
    point-clouds to native Obol representations where that adds stable user
    value.
-4. Complete broader live edit-tool lifecycle/state semantics and extend stable
+6. Complete broader live edit-tool lifecycle/state semantics and extend stable
    edge/vertex identity beyond the current indexed-mesh action coverage where
    native or tessellated curved nodes need to report those sub-entities.
-5. Promote the controlled Generic_Twin.g opt-in workflow gate to a default
+7. Promote the controlled Generic_Twin.g opt-in workflow gate to a default
    gate after large-BoT staged LoD realization can publish diagnostics for
    invalid BoTs, preserve mixed implicit/mesh identity, and avoid blocking
    routine qtcad developer tests.

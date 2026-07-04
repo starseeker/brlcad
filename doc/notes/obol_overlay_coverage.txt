@@ -33,8 +33,13 @@ the compatibility fallback when no Obol handler consumes the diagnostic.
 
 Current routed producers:
 
-* GQA overlap overlays, published as gqa::overlaps
+* GQA overlap lines, published as gqa::overlaps through the GED command-scene
+  helper
 * check overlap overlays, published as check::overlaps
+* rtcheck uplot overlap lines, published as rtcheck:: through the GED
+  command-scene helper
+* NIRT/qray plot lines, published as query_ray through the GED command-scene
+  helper
 * BREP debug line plots, published as brep::<debug-name>
 * NMG edge-use debug overlays, published as nmg::_EU_ or nmg::_EDGEUSES_
 
@@ -55,6 +60,80 @@ Line-layer overlays preserve:
 * layer color as an Obol color override
 * per-line primitive index for pick/export/snap/measure
 * visibility and selectability
+
+Interactive Command Visualizations
+----------------------------------
+
+Command outputs such as nirt rays, rtcheck overlap results, and gqa overlap or
+gap diagnostics are scene-integrated command results, not just visual
+decoration.  Their Obol representation must be directly interactive: Coin
+nodes may be pickable, selectable, highlightable at primitive granularity, and
+usable by snap/measure/export actions when the command declares those
+semantics.
+
+The libged-facing API should remain a command-owned scene transaction layer
+rather than unmanaged scene mutation.  Commands should publish result sets with:
+
+* owner id, owner role, and generation/run id
+* shared scene scope by default, with view-local scope available when the
+  command is explicitly view-specific
+* replace/remove-prefix/commit lifecycle
+* selectable and visible style
+* stable feature and per-result identities
+* pick metadata sufficient for detail panels, selection, and highlighting
+* optional command-result callbacks for asynchronous producers
+
+libbrlobol remains responsible for turning those records into Coin scene
+participants.  Typed records are the preferred path for common visualizations,
+but they are not the upper bound of the design.  The migration should expose a
+controlled custom Coin scene-object provider path for complex command or
+plugin-authored interactions.  That provider can construct direct Coin nodes,
+manipulators, sensors, and callbacks, but only inside an owner-scoped Obol
+scene-object boundary that defines replacement, removal, teardown, pick
+identity, selection/highlight integration, and database-edit invalidation.
+
+This preserves the main motivation for the Obol migration: BRL-CAD commands and
+future user-provided extensions should be able to use Coin's richer scene graph
+and interaction model instead of falling back to raw OpenGL display-manager
+fragments or legacy ad-hoc draw streams.
+
+Case-study expectations:
+
+* rtcheck should publish generation-safe overlap result features so stale
+  subprocess output cannot replace a newer run.  Individual overlap lines need
+  pick detail, primitive selection/highlight state, and metadata identifying
+  the overlapping objects/result record.
+* nirt/qray publishes ray plot line layers through command-scene ownership and
+  no longer mutates the legacy qray display-list work flag.  The next step is
+  to split ray segments, hit markers, and labels into richer result records
+  with pick/detail metadata rather than treating the plot as anonymous line
+  geometry.
+* gqa overlap lines publish through command-scene ownership and retain
+  feature-store payloads for export/readback.  The next step is to add
+  structured result metadata for overlaps, gaps, air, and summary labels so
+  severity and result identity survive picking and selection.
+
+Feature-store style now carries `selectable` intent from GED through
+BRLObolFeatureStore realization.  Line-layer builder overlays already preserve
+pick/export/snap/measure identity, and line-layer feature publication now
+propagates parent selectable style to realized child line shapes.
+
+The initial GED command-scene context publishes command-owned line-layer
+features through this path.  It preserves owner metadata on shared
+command-result features, stamps `CommandResult` overlay metadata, and supports
+owner-scoped prefix removal.  Shared scope is the default because the existing
+nirt, rtcheck, gqa, and uplot in-scene line behaviors are scene-level results
+visible across views; commands that are genuinely view-local must request local
+scope explicitly.
+
+rtcheck, NIRT/qray, and GQA overlap output now use command-scene ownership for
+their real line streams.  Obol feature export enumerates line-layer children as
+per-layer line records instead of exporting one flattened parent record.  That
+preserves existing color-layer record behavior and gives future command-result
+picking a stable per-layer/per-result boundary without splitting ownership into
+many independent feature-store records.  Builder-published line layers also
+retain their layer payloads in the feature store, so export/readback sees the
+same points and commands as the realized Coin overlay.
 
 Draw-Test Overlay Findings
 --------------------------
@@ -90,7 +169,20 @@ geometry offsets.
 Remaining Migration Work
 ------------------------
 
-1. Route remaining diagnostic label producers to SoBRLHUDLabelOverlay where
+1. Extend the command-scene transaction API beyond line-layer replacement:
+   generation-safe async commits, primitive selection/highlight, result
+   metadata lookup, command callbacks, and a custom Coin scene-object provider
+   contract.
+2. Continue rtcheck, NIRT/qray, and GQA overlap output from command-owned
+   line-layer publication to per-result pick/detail metadata, stale-run
+   rejection, and primitive highlight/selection.  Migrate remaining GQA
+   diagnostics to the same command-scene ownership model while preserving
+   current shared scene-level line-layer/HUD behavior unless a command
+   explicitly requests view-local scope.
+3. Add tests proving a command-owned custom provider can insert, pick,
+   highlight/select, update, and remove a complex Obol/Coin object without
+   leaking nodes after command teardown or database edits.
+4. Route remaining diagnostic label producers to SoBRLHUDLabelOverlay where
    labels should not be flattened into line geometry.
-2. Keep legacy BSG overlay publication only behind explicit compatibility paths
+5. Keep legacy BSG overlay publication only behind explicit compatibility paths
    until the qtcad/GED Obol path is authoritative.

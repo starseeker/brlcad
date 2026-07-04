@@ -52,6 +52,12 @@ ged_draw_test_force_primitive_face_set_failure(int enable)
     ged_draw_test_force_face_set_failure = enable ? 1 : 0;
 }
 
+int
+ged_draw_test_primitive_face_set_failure_enabled(void)
+{
+    return ged_draw_test_force_face_set_failure;
+}
+
 static int
 dl_add_line_set(int dashflag, const point_t *points, const int *commands,
 		size_t point_count, const struct db_full_path *pathp,

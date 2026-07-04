@@ -2192,23 +2192,54 @@ function(_brlobol_pivot_guard_check_legacy_header_include_hygiene)
     endif()
   endforeach()
 
+  set(_libged_gqa_cmd "${BRLCAD_SOURCE_DIR}/src/libged/gqa/gqa.cpp")
+  if(EXISTS "${_libged_gqa_cmd}")
+    file(READ "${_libged_gqa_cmd}" _libged_gqa_cmd_contents)
+    foreach(_token
+	[[ged_draw_command_scene_begin]]
+	[[ged_draw_command_scene_features_remove_prefix]]
+	[[ged_draw_command_scene_line_layer_builder_replace]]
+	[[ged_draw_command_scene_commit]]
+	[[owner_id[ \t\r\n]*=[ \t\r\n]*"gqa"]]
+	[[owner_role[ \t\r\n]*=[ \t\r\n]*"command-result"]]
+	[["gqa::overlaps"]]
+	[["gqa::gaps"]]
+	[["gqa::adjacent-air"]]
+	[["gqa::exposed-air"]])
+      string(REGEX MATCH "${_token}" _libged_gqa_cmd_token_hit
+	"${_libged_gqa_cmd_contents}")
+      if(NOT _libged_gqa_cmd_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/libged/gqa/gqa.cpp must publish GQA line-result diagnostics through the GED command-scene API token ${_token}")
+      endif()
+    endforeach()
+  endif()
+
   set(_libged_gqa_test "${BRLCAD_SOURCE_DIR}/src/libged/tests/test_gqa.c")
   if(EXISTS "${_libged_gqa_test}")
     file(READ "${_libged_gqa_test}" _libged_gqa_test_contents)
     foreach(_token
 	[[ged_view_active_ctx]]
+	[[ged_draw_view_context_feature_summary]]
+	[[is_command_result]]
 	[[struct[ \t\r\n]+ged_draw_view_record_query]]
 	[[GED_DRAW_VIEW_RECORD_QUERY_VIEW_OBJECTS]]
 	[[struct[ \t\r\n]+ged_draw_view_db_object_record]]
 	[[ged_draw_foreach_view_record_query]]
 	[[ged_draw_view_db_object_record_foreach_segment]]
 	[[rec->[ \t\r\n]*path]]
-	[[rec->[ \t\r\n]*vlist_point_count]])
+	[[rec->[ \t\r\n]*vlist_point_count]]
+	[[open_gqa_result_fixture]]
+	[[run_gqa_result_case]]
+	[["gqa::overlaps"]]
+	[["gqa::gaps"]]
+	[["gqa::adjacent-air"]]
+	[["gqa::exposed-air"]])
       string(REGEX MATCH "${_token}" _libged_gqa_test_token_hit
 	"${_libged_gqa_test_contents}")
       if(NOT _libged_gqa_test_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/tests/test_gqa.c must validate GQA overlap overlay geometry through neutral GED view-record token ${_token}")
+	  "src/libged/tests/test_gqa.c must validate GQA command-result overlay geometry through neutral GED view-record token ${_token}")
       endif()
     endforeach()
     foreach(_pat
@@ -7808,18 +7839,21 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endforeach()
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]ged/draw\.h]]
-	[[ged_draw_view_context_feature_remove]])
+	[[ged_draw_command_scene_features_remove_prefix]]
+	[[_ged_draw_uplot_to_command_scene_feature]])
       string(REGEX MATCH "${_token}" _libged_nirt_qray_token_hit
 	"${_libged_nirt_contents}")
       if(NOT _libged_nirt_qray_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/nirt/nirt.cpp must route qray feature cleanup through the public GED draw view context facade")
+	  "src/libged/nirt/nirt.cpp must route qray graphics through command-scene result publication")
       endif()
     endforeach()
     foreach(_pat
 	[[#[ \t]*include[ \t]*[<"]\.\./bsg_ged_draw_view_private\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/(appearance|node)\.h]]
 	[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
+	[[ged_draw_view_context_feature_remove]]
+	[[_ged_draw_uplot_to_feature]]
 	[[(^|[^A-Za-z0-9_])bsg_(appearance|node)[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])BSG_(APPEARANCE|NODE)_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])struct[ \t]+bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
@@ -8812,18 +8846,19 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       endif()
 	    endforeach()
 	    foreach(_token
-		[[#[ \t]*include[ \t]*[<"]ged/draw\.h]]
-		[[ged_draw_view_context_features_remove_prefix]]
-		[[_ged_uplot_stream_publish_feature]])
+		[[#[ \t]*include[ \t]*[<"]ged/view\.h]]
+		[[_ged_uplot_stream_publish_command_scene_feature]])
       string(REGEX MATCH "${_token}" _libged_rtcheck2_feature_token_hit
 	"${_libged_rtcheck2_contents}")
 	      if(NOT _libged_rtcheck2_feature_token_hit)
 		_brlobol_pivot_guard_fail(
-		  "src/libged/rtcheck/rtcheck2.cpp must route rtcheck feature cleanup through the public GED draw-view context facade")
+		  "src/libged/rtcheck/rtcheck2.cpp must route rtcheck result publishing through the GED command-scene uplot helper")
 	      endif()
 	    endforeach()
     foreach(_pat
 	[[#[ \t]*include[ \t]*[<"]bsg/feature\.h]]
+	[[ged_draw_view_context_features_remove_prefix]]
+	[[_ged_uplot_stream_publish_feature]]
 	[[(^|[^A-Za-z0-9_])struct[ \t]+bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_ref([^A-Za-z0-9_]|$)]]
 	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
@@ -9244,7 +9279,8 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 		[[#[ \t]*include[ \t]*[<"]ged/draw\.h]]
 		[[BG_GEOMETRY_LINE_MOVE]]
 		[[GED_DRAW_VIEW_LINE_LAYER_DATA_INIT]]
-	[[ged_draw_view_context_line_layers_replace]])
+	[[ged_draw_view_context_line_layers_replace]]
+	[[ged_draw_command_scene_line_layers_replace]])
       string(REGEX MATCH "${_token}" _libged_uplot_util_token_hit
 	"${_libged_uplot_util_contents}")
 	      if(NOT _libged_uplot_util_token_hit)
@@ -17119,7 +17155,6 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	ged_draw_source_group_ref_commit_database_leaf_draft
 	ged_draw_scene_ref_realize
 	ged_draw_scene_ref_realize_dispatch
-	ged_draw_shape_ref_apply_qray_work_flag
 	ged_draw_group_ref_set_visible
 	ged_draw_shape_ref_translate_geometry
 	ged_draw_shape_ref_set_center
@@ -17220,7 +17255,6 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 		ged_draw_scene_ref_source_snapshot
 		"ged_draw_scene_ref_source_snapshot(ref, &snapshot)"
 		ged_draw_scene_ref_release_source_owner
-	ged_draw_scene_ref_apply_qray_work_flag
 	ged_draw_scene_ref_foreach_child
 	_ged_draw_scene_ref_first_shape_record_child_cb
 	ged_draw_scene_ref_material_summary
@@ -19149,18 +19183,18 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	  _brlobol_pivot_guard_fail(
 	    "${_rel} must route redraw-time view-info and LoD work through the shape-ref source-adapter facade")
 	endif()
-	string(FIND "${_contents}" "ged_draw_shape_ref_realize_context"
-	  _ged_transactions_shape_context_idx)
-	if(_ged_transactions_shape_context_idx EQUAL -1)
-	  _brlobol_pivot_guard_fail(
-	    "src/libged/bsg_ged_draw_transactions.c must realize shape refs through the context-shaped helper")
-	endif()
-	string(FIND "${_contents}" "ged_draw_create_evaluated_path_shape_ref"
-	  _ged_transactions_draft_context_idx)
-	if(_ged_transactions_draft_context_idx EQUAL -1)
-	  _brlobol_pivot_guard_fail(
-	    "src/libged/bsg_ged_draw_transactions.c must create evaluated-shape drafts through the source-adapter helper")
-	endif()
+	foreach(_token
+	    ged_draw_apply_evaluated_provider_paths
+	    ged_draw_obol_database_source_eval_wireframe_for_path
+	    ged_draw_obol_database_source_eval_points_for_path
+	    gd_draw_retained_drawtree_invocations)
+	  string(FIND "${_contents}" "${_token}"
+	    _ged_transactions_evaluated_provider_idx)
+	  if(_ged_transactions_evaluated_provider_idx EQUAL -1)
+	    _brlobol_pivot_guard_fail(
+	      "src/libged/bsg_ged_draw_transactions.c must route evaluated draw modes through direct Obol provider token ${_token}")
+	  endif()
+	endforeach()
 		foreach(_token
 		    ged_draw_shape_ref_set_visible
 		    ged_draw_group_ref_set_visible
@@ -19199,8 +19233,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 		    ged_draw_group_ref_redraw_wireframe
 		    ged_draw_shape_ref_redraw_wireframe
 		    ged_draw_group_ref_index_for_component
-		    ged_draw_shape_ref_index_for_component
-		    ged_draw_create_evaluated_path_shape_ref)
+		    ged_draw_shape_ref_index_for_component)
 		  string(FIND "${_contents}" "${_token}"
 		    _ged_transactions_realization_facade_idx)
 		  if(_ged_transactions_realization_facade_idx EQUAL -1)
@@ -19310,7 +19343,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 		  "${_contents}")
 		if(_ged_transactions_direct_eval_draft_hit)
 		  _brlobol_pivot_guard_fail(
-		    "src/libged/bsg_ged_draw_transactions.c reintroduced direct evaluated-shape draft setup instead of ged_draw_create_evaluated_path_shape_ref: ${_ged_transactions_direct_eval_draft_hit}")
+		    "src/libged/bsg_ged_draw_transactions.c reintroduced direct evaluated-shape draft setup instead of direct Obol evaluated providers: ${_ged_transactions_direct_eval_draft_hit}")
 		endif()
 	      endforeach()
 	      foreach(_pat
@@ -21793,6 +21826,8 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 	[[GED scoped component mode-filter erase should remove only matching-mode owned Obol sources]]
 	[[GED scoped component mode-filter erase should preserve nonmatching owner draw mode]]
 	[[GED scoped component mode-filter erase should not expose stale retained shape records]]
+	[[mode-specific Obol provider draw should avoid retained draw-tree fallback]]
+	[[mode-specific Obol provider draw should avoid retained shape mutation]]
 	[[GED nested leaf reference removal should remove only non-root owned Obol sources]]
 	[[GED source removal transaction should remove matching owned Obol component sources]]
 	[[GED visibility transaction should update owned Obol state without full-scene sync]]
@@ -21804,14 +21839,17 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 	[[GED erase-prefix transaction should succeed]]
 	[[GED erase-prefix transaction should remove only matching owned Obol sources]]
 	[[GED display/material transaction canary cleanup should restore baseline]]
-	[[GED submodel draw should publish leaf wireframes as owned Obol auxiliary VLISTs]]
+	[[GED submodel draw should realize direct primary owned Obol geometry without legacy auxiliary staging]]
 	[[GED Obol current wireframe draw should avoid retained primitive publication]]
+	[[GED Obol current wireframe draw should avoid retained draw-tree fallback]]
 	[[GED Obol BREP wireframe draw should avoid retained primitive publication]]
 	[[GED BREP wireframe draw should publish owned Obol line geometry]]
 	[[GED Obol adaptive CSG LoD draw should avoid retained primitive publication]]
 	[[GED Obol adaptive CSG LoD draw should publish owned line geometry]]
 	[[GED Obol submodel draw should avoid retained child-source staging]]
+	[[GED Obol submodel draw should avoid retained draw-tree fallback]]
 	[[GED Obol submodel temp-source draw should avoid retained child-source staging]]
+	[[GED Obol submodel temp-source draw should avoid retained draw-tree fallback]]
 	[[GED submodel temp-source draw should not leak a temporary owned Obol leaf source]]
 	[[submodel_temp_owner\.s]]
 	[[GED BoT mesh LoD update should publish owned Obol mesh fields]]

@@ -59,28 +59,26 @@
 #include "../qray.h"
 #include "../ged_private.h"
 
-#define GED_NIRT_DL_WFLAG_DOWN 1
-
-struct dl_wflag_ctx {
-    struct ged *gedp;
-    int wflag;
-};
-
-static int
-set_wflag_cb(const struct ged_draw_shape_record *rec, void *userdata)
-{
-    struct dl_wflag_ctx *ctx = (struct dl_wflag_ctx *)userdata;
-    if (rec)
-	ged_draw_shape_ref_apply_qray_work_flag(ctx->gedp, rec->ref,
-		ctx->wflag);
-    return 1;
-}
-
 static void
-dl_set_wflag(struct ged *gedp, int wflag)
+nirt_qray_result_clear(struct ged *gedp, const char *name)
 {
-    struct dl_wflag_ctx ctx = {gedp, wflag};
-    ged_draw_foreach_shape_record(gedp, set_wflag_cb, &ctx);
+    void *view_ctx = gedp ? ged_view_active_ctx(gedp) : NULL;
+    if (!view_ctx || !name || !name[0])
+	return;
+
+    struct ged_draw_command_scene_desc desc =
+	GED_DRAW_COMMAND_SCENE_DESC_INIT;
+    desc.owner_id = "nirt";
+    desc.owner_role = "command-result";
+    struct ged_draw_command_scene *scene =
+	ged_draw_command_scene_begin(view_ctx, &desc);
+    if (scene) {
+	(void)ged_draw_command_scene_features_remove_prefix(scene, name);
+	(void)ged_draw_command_scene_commit(scene);
+	return;
+    }
+
+    (void)ged_draw_view_context_features_remove_prefix(view_ctx, name);
 }
 
 struct nirt_info {
@@ -226,8 +224,6 @@ ged_nirt_core(struct ged *gedp, int argc, const char *argv[])
 	int retcode = bu_process_wait_n(&np.p, 0);
 	if (retcode != 0)
 	    _ged_wait_status(gedp->ged_result_str, retcode);
-
-	dl_set_wflag(gedp, GED_NIRT_DL_WFLAG_DOWN);
 
 	return BRLCAD_OK;
     }
@@ -597,11 +593,9 @@ ged_nirt_core(struct ged *gedp, int argc, const char *argv[])
     if (retcode != 0)
 	_ged_wait_status(gedp->ged_result_str, retcode);
 
-    dl_set_wflag(gedp, GED_NIRT_DL_WFLAG_DOWN);
-
-    /* Whether or not we're doing graphics, if we took a shot we should clear any
-     * old objects from prior shots. */
-    (void)ged_draw_view_context_feature_remove(view_ctx,
+    /* Whether or not we're doing graphics, if we took a shot we should clear
+     * any old command-owned objects from prior shots. */
+    nirt_qray_result_clear(gedp,
 	    bu_vls_cstr(&gedp->i->ged_gdp->gd_qray_basename));
 
     /* If we're supposed to do graphics, look for the plot file */
@@ -609,9 +603,10 @@ ged_nirt_core(struct ged *gedp, int argc, const char *argv[])
 	FILE *fp = fopen(bu_vls_cstr(&nv.plotfile), "rb");
 	if (fp) {
 	    fastf_t csize = view_ctx ? ged_view_context_scale_get(view_ctx) * 0.01 : 1.0;
-	    int pret = _ged_draw_uplot_to_feature(gedp, fp,
+	    int pret = _ged_draw_uplot_to_command_scene_feature(gedp, fp,
 		    bu_vls_cstr(&gedp->i->ged_gdp->gd_qray_basename),
-		    csize, gedp->i->ged_gdp->gd_uplotOutputMode);
+		    csize, gedp->i->ged_gdp->gd_uplotOutputMode,
+		    "nirt", "command-result", NULL);
 	    fclose(fp);
 	    if (pret != BRLCAD_OK)
 		bu_log("Error loading plot data from %s\n", bu_vls_cstr(&nv.plotfile));

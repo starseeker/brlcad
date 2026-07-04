@@ -46,6 +46,7 @@
 
 #include "bg/line_layer.h"
 #include "ged/draw.h"
+#include "./bsg_ged_draw_private.h"
 
 struct bigE_data {
     struct db_i *dbip;
@@ -1829,29 +1830,48 @@ fix_halfs(struct bigE_data *dgcdp)
 }
 
 
-int
-ged_draw_shape_ref_eval_wireframe(struct ged *gedp, ged_draw_shape_ref ref)
+static const char *
+bigE_skip_leading_slash(const char *path)
 {
+    if (!path)
+	return NULL;
+    while (*path == '/')
+	path++;
+    return path;
+}
 
+
+static int
+bigE_evaluate_path_line_set(struct db_i *dbip,
+			    const char *path,
+			    const struct bn_tol *tol,
+			    const struct bg_tess_tol *ttol,
+			    point_t **points_out,
+			    int **commands_out,
+			    size_t *count_out)
+{
     struct bigE_data dgcdp;
     int ret = BRLCAD_OK;
 
-    struct ged_draw_shape_source_snapshot source;
-    if (!ged_draw_shape_ref_source_snapshot(gedp, ref, &source))
-	return BRLCAD_OK;
-    if (!source.dbip || !source.tol || !source.ttol)
+    if (points_out)
+	*points_out = NULL;
+    if (commands_out)
+	*commands_out = NULL;
+    if (count_out)
+	*count_out = 0;
+
+    path = bigE_skip_leading_slash(path);
+    if (!dbip || !path || !path[0] || !tol || !ttol ||
+	    !points_out || !commands_out || !count_out)
 	return BRLCAD_ERROR;
 
-    dgcdp.dbip = source.dbip;
+    memset(&dgcdp, 0, sizeof(dgcdp));
+    dgcdp.dbip = dbip;
     dgcdp.do_polysolids = 0;
-    dgcdp.fp = (struct db_full_path *)source.fullpath;
-    dgcdp.tol = source.tol;
-    dgcdp.ttol = source.ttol;
+    dgcdp.fp = NULL;
+    dgcdp.tol = tol;
+    dgcdp.ttol = ttol;
     dgcdp.vlfree = &rt_vlfree;
-    dgcdp.line_points = NULL;
-    dgcdp.line_commands = NULL;
-    dgcdp.line_count = 0;
-    dgcdp.line_capacity = 0;
 
     BU_ALLOC(dgcdp.ap, struct application);
     RT_APPLICATION_INIT(dgcdp.ap);
@@ -1868,24 +1888,10 @@ ged_draw_shape_ref_eval_wireframe(struct ged *gedp, ged_draw_shape_ref ref)
     dgcdp.ap->a_rt_i = dgcdp.rtip;
     dgcdp.nvectors = 0;
 
-    const char *path = NULL;
-    struct bu_vls ppath = BU_VLS_INIT_ZERO;
-    if (dgcdp.fp) {
-	db_path_to_vls(&ppath, dgcdp.fp);
-	path = bu_vls_cstr(&ppath);
-    } else {
-	path = source.name;
-    }
-
     if (!path || rt_gettrees(dgcdp.rtip, 1, (const char **)&path, 1)) {
-	bu_ptbl_free(&dgcdp.leaf_list);
-
-	rt_i_destroy(dgcdp.rtip);
-	bu_free(dgcdp.ap, "struct application");
-	bu_vls_free(&ppath);
-	return BRLCAD_ERROR;
+	ret = BRLCAD_ERROR;
+	goto cleanup;
     }
-    bu_vls_free(&ppath);
 
     struct region *rp;
     union E_tree *eptr;
@@ -1901,10 +1907,16 @@ ged_draw_shape_ref_eval_wireframe(struct ged *gedp, ged_draw_shape_ref ref)
 	free_etree(eptr, &dgcdp);
 	bu_ptbl_reset(&dgcdp.leaf_list);
     }
-    if (!ged_draw_shape_ref_publish_line_set(gedp, ref,
-	    (const point_t *)dgcdp.line_points, dgcdp.line_commands,
-	    dgcdp.line_count))
-	ret = BRLCAD_ERROR;
+
+    *points_out = dgcdp.line_points;
+    *commands_out = dgcdp.line_commands;
+    *count_out = dgcdp.line_count;
+    dgcdp.line_points = NULL;
+    dgcdp.line_commands = NULL;
+    dgcdp.line_count = 0;
+    dgcdp.line_capacity = 0;
+
+cleanup:
     bigE_line_free(&dgcdp);
 
     rt_i_destroy(dgcdp.rtip);
@@ -1912,6 +1924,93 @@ ged_draw_shape_ref_eval_wireframe(struct ged *gedp, ged_draw_shape_ref ref)
 
     /* free leaf_list */
     bu_ptbl_free(&dgcdp.leaf_list);
+
+    return ret;
+}
+
+
+int
+ged_draw_shape_ref_eval_wireframe(struct ged *gedp, ged_draw_shape_ref ref)
+{
+    if (!gedp || ged_draw_shape_ref_is_null(ref))
+	return BRLCAD_OK;
+
+    struct ged_draw_shape_source_snapshot source;
+    if (!ged_draw_shape_ref_source_snapshot(gedp, ref, &source))
+	return BRLCAD_OK;
+    if (!source.dbip || !source.tol || !source.ttol)
+	return BRLCAD_ERROR;
+
+    const char *path = NULL;
+    struct bu_vls ppath = BU_VLS_INIT_ZERO;
+    if (source.fullpath) {
+	db_path_to_vls(&ppath, source.fullpath);
+	path = bu_vls_cstr(&ppath);
+    } else {
+	path = source.name;
+    }
+
+    point_t *line_points = NULL;
+    int *line_commands = NULL;
+    size_t line_count = 0;
+    int ret = bigE_evaluate_path_line_set(source.dbip, path, source.tol,
+	    source.ttol, &line_points, &line_commands, &line_count);
+    bu_vls_free(&ppath);
+    if (ret != BRLCAD_OK)
+	return ret;
+
+    if (!ged_draw_shape_ref_publish_line_set(gedp, ref,
+	    (const point_t *)line_points, line_commands, line_count))
+	ret = BRLCAD_ERROR;
+
+    if (line_points)
+	bu_free(line_points, "bigE typed line points");
+    if (line_commands)
+	bu_free(line_commands, "bigE typed line commands");
+
+    return ret;
+}
+
+
+int
+ged_draw_obol_database_source_eval_wireframe_for_path(struct ged *gedp,
+						      const char *path)
+{
+    if (!gedp || !path || !path[0])
+	return BRLCAD_ERROR;
+
+    struct ged_draw_obol_database_source_runtime runtime;
+    memset(&runtime, 0, sizeof(runtime));
+    if (!ged_draw_obol_database_source_runtime_for_path(gedp, path,
+	    &runtime) || !runtime.valid || !runtime.dbip)
+	return BRLCAD_ERROR;
+
+    struct bn_tol tol;
+    BN_TOL_INIT_SET_TOL(&tol);
+
+    struct bg_tess_tol ttol;
+    BG_TESS_TOL_INIT_SET_TOL(&ttol);
+    if (runtime.tessellation_abs_tol >= 0.0)
+	ttol.abs = runtime.tessellation_abs_tol;
+    if (runtime.tessellation_rel_tol >= 0.0)
+	ttol.rel = runtime.tessellation_rel_tol;
+    if (runtime.tessellation_norm_tol >= 0.0)
+	ttol.norm = runtime.tessellation_norm_tol;
+
+    point_t *line_points = NULL;
+    int *line_commands = NULL;
+    size_t line_count = 0;
+    int ret = bigE_evaluate_path_line_set(runtime.dbip, path, &tol, &ttol,
+	    &line_points, &line_commands, &line_count);
+    if (ret == BRLCAD_OK &&
+	    !ged_draw_obol_database_source_publish_line_set_for_path(gedp,
+		path, (const point_t *)line_points, line_commands, line_count))
+	ret = BRLCAD_ERROR;
+
+    if (line_points)
+	bu_free(line_points, "bigE typed line points");
+    if (line_commands)
+	bu_free(line_commands, "bigE typed line commands");
 
     return ret;
 }

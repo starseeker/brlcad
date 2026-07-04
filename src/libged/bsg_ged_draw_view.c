@@ -518,7 +518,8 @@ static void
 _ged_draw_view_feature_style_to_bsg(struct bsg_feature_style *dst,
 				    const struct ged_draw_view_feature_style *src)
 {
-    memset(dst, 0, sizeof(*dst));
+    struct bsg_feature_style init = BSG_FEATURE_STYLE_INIT;
+    *dst = init;
     if (!src)
 	return;
 
@@ -538,7 +539,9 @@ static void
 _ged_draw_view_feature_style_from_bsg(struct ged_draw_view_feature_style *dst,
 				      const struct bsg_feature_style *src)
 {
-    memset(dst, 0, sizeof(*dst));
+    struct ged_draw_view_feature_style init =
+	GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+    *dst = init;
     if (!src)
 	return;
 

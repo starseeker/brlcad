@@ -281,6 +281,35 @@ test_feature_nodes(BRLObolViewController &view)
 		recordRole.getValue().getString(), "view-feature") != 0)
 	FAIL("cleared feature overlay metadata should restore view-feature node role");
 
+    BRLObolFeatureStyle unselectableStyle;
+    unselectableStyle.hasSelectable = TRUE;
+    unselectableStyle.selectable = FALSE;
+    if (!view.features().applyStyle(localA, unselectableStyle))
+	FAIL("feature selectable style should be applicable");
+    localNode = view.features().node(localA);
+    if (!localNode ||
+	    !localNode->isOfType(SoBRLVListShape::getClassTypeId()) ||
+	    static_cast<SoBRLVListShape *>(localNode)->selectable.getValue())
+	FAIL("feature selectable style should control realized line shapes");
+
+    BRLObolLineLayer layer;
+    layer.name = "layered-line/red";
+    layer.points = points;
+    layer.commands = lineCommands;
+    std::vector<BRLObolLineLayer> layers;
+    layers.push_back(layer);
+    BRLObolFeatureHandle layeredHandle = view.features().publishLineLayers(
+	    "layered-line",
+	    BRLObolFeatureScope::Shared,
+	    layers,
+	    &unselectableStyle);
+    SoNode *layeredNode = view.features().node(layeredHandle);
+    SoBRLVListShape *layeredShape = static_cast<SoBRLVListShape *>(
+	    first_node_of_type(layeredNode, SoBRLVListShape::getClassTypeId()));
+    if (!layeredHandle.isValid() || !layeredShape ||
+	    layeredShape->selectable.getValue())
+	FAIL("parent selectable style should reach realized line-layer children");
+
     struct edit_preview_callback_state previewState;
     previewState.revision = 42;
     previewState.updateCount = 0;

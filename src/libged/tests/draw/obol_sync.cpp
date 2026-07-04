@@ -21,6 +21,7 @@
 #include "brlobol/view_controller.h"
 #include "brlobol/view_store.h"
 #include "bg/line_layer.h"
+#include "bg/plot3.h"
 #include "bu/app.h"
 #include "bu/env.h"
 #include "bu/file.h"
@@ -36,6 +37,7 @@
 #include "wdb.h"
 
 #include "../../bsg_ged_draw_private.h"
+#include "../../ged_private.h"
 
 #include <Inventor/SbMatrix.h>
 #include <Inventor/SbVec3f.h>
@@ -424,6 +426,7 @@ exercise_mode_specific_source_lifecycle(struct ged *gedp,
 	int representation_mode,
 	int expect_vlist,
 	int expect_mesh,
+	int expect_direct_provider,
 	const char *label)
 {
     if (!gedp || !controller || !path)
@@ -437,8 +440,18 @@ exercise_mode_specific_source_lifecycle(struct ged *gedp,
     char mode_arg[16] = {0};
     snprintf(mode_arg, sizeof(mode_arg), "-m%d", mode);
     const char *draw_mode_cmd[4] = {"draw", mode_arg, path, NULL};
+    ged_draw_index_stats_reset(gedp);
     if (ged_exec_draw(gedp, 3, draw_mode_cmd) != BRLCAD_OK)
 	FAIL("mode-specific draw command should succeed");
+    if (expect_direct_provider) {
+	struct ged_draw_index_stats direct_provider_stats;
+	memset(&direct_provider_stats, 0, sizeof(direct_provider_stats));
+	ged_draw_index_stats_get(gedp, &direct_provider_stats);
+	if (direct_provider_stats.retained_drawtree_invocations)
+	    FAIL("mode-specific Obol provider draw should avoid retained draw-tree fallback");
+	if (direct_provider_stats.retained_shape_mutations)
+	    FAIL("mode-specific Obol provider draw should avoid retained shape mutation");
+    }
     if (source_representation_count(controller, path, representation_mode) != 1)
 	FAIL("mode-specific draw should create exactly one target representation source");
     if (verify_mode_source(controller, path, representation_mode,
@@ -489,6 +502,91 @@ exercise_mode_specific_source_lifecycle(struct ged *gedp,
 	FAIL("mode-specific erase should not leave target representation sources");
     if (!source_for_path(controller, path))
 	FAIL("mode-specific erase should preserve the shared wire source");
+
+    return 0;
+}
+
+static int
+exercise_mesh_source_local_publication(struct ged *gedp,
+	SoBRLSceneController *controller,
+	const char *path)
+{
+    if (!gedp || !controller || !path)
+	FAIL("mesh source-local test needs GED and Obol scene state");
+
+    const int mode = GED_DRAW_MODE_SHADED_BOTS;
+    const int representation = SoBRLDatabaseSource::REPRESENTATION_SHADED_BOTS;
+    (void)ged_draw_source_erase_path_in_active_scope(gedp, path,
+	    ged_draw_active_view_ctx(gedp), mode);
+
+    if (!ged_draw_obol_database_source_publication_begin(gedp,
+	    ged_draw_active_view_ctx(gedp), mode))
+	FAIL("mesh source-local publication scope should begin");
+    if (!ged_draw_obol_database_source_ensure_for_path(gedp, path,
+	    gedp->dbip, mode, 0)) {
+	ged_draw_obol_database_source_publication_end(gedp);
+	FAIL("mesh source-local test ensure should succeed");
+    }
+
+    SoBRLDatabaseSource *source =
+	source_for_representation(controller, path, representation);
+    BRLObolDatabaseSourceSummary summary;
+    if (!source || !source->getSummary(summary) || !summary.valid ||
+	    summary.instanceKey.getLength() == 0) {
+	ged_draw_obol_database_source_publication_end(gedp);
+	FAIL("mesh source-local test should find mode source");
+    }
+
+    SbMatrix placement = SbMatrix::identity();
+    placement.setTranslate(SbVec3f(24.0f, 1.0f, 2.0f));
+    if (controller->setDatabaseSourceInstancePlacementState(
+		summary.instanceKey.getString(), TRUE, placement,
+		FALSE, SbVec3f(0.0f, 0.0f, 0.0f), FALSE, 0.0f) < 0) {
+	ged_draw_obol_database_source_publication_end(gedp);
+	FAIL("mesh source-local test should set source placement");
+    }
+
+    point_t source_local_points[4] = {
+	{1.0, 1.0, 1.0},
+	{2.0, 1.0, 1.0},
+	{1.0, 2.0, 1.0},
+	{2.0, 2.0, 1.0}
+    };
+    vect_t normals[4] = {
+	{0.0, 0.0, 1.0},
+	{0.0, 0.0, 1.0},
+	{0.0, 0.0, 1.0},
+	{0.0, 0.0, 1.0}
+    };
+    int indices[5] = {0, 1, 3, 2, -1};
+
+    if (!ged_draw_obol_database_source_publish_indexed_face_set_for_path(
+	    gedp, path, (const point_t *)source_local_points, 4,
+	    (const vect_t *)normals, 4, indices, 5)) {
+	ged_draw_obol_database_source_publication_end(gedp);
+	FAIL("mesh source-local publication should succeed");
+    }
+    ged_draw_obol_database_source_publication_end(gedp);
+
+    source = source_for_representation(controller, path, representation);
+    SoBRLMeshShape *mesh = source ? source->getRealizedMesh() : NULL;
+    if (!mesh || mesh->point.getNum() != 4 ||
+	    fabs(mesh->point[0][0] - 1.0f) > 0.001f ||
+	    fabs(mesh->point[0][1] - 1.0f) > 0.001f ||
+	    fabs(mesh->point[0][2] - 1.0f) > 0.001f ||
+	    fabs(mesh->point[3][0] - 2.0f) > 0.001f ||
+	    fabs(mesh->point[3][1] - 2.0f) > 0.001f ||
+	    fabs(mesh->point[3][2] - 1.0f) > 0.001f)
+	FAIL("mesh publication should store source-local geometry under source placement");
+
+    if (!source->getSummary(summary) || !summary.valid ||
+	    !summary.drawMatrixValid ||
+	    !summary.drawMatrix.equals(placement, 0.0001f))
+	FAIL("mesh source-local publication should preserve source placement");
+
+    if (!ged_draw_source_erase_path_in_active_scope(gedp, path,
+	    ged_draw_active_view_ctx(gedp), mode))
+	FAIL("mesh source-local test cleanup should erase mode source");
 
     return 0;
 }
@@ -977,6 +1075,103 @@ main(int argc, char **argv)
 		BRLObolOverlayOrder::PostTransparent))
 	FAIL("GED diagnostic line-layer replacement should stamp typed Obol diagnostic metadata");
 
+    struct ged_draw_command_scene_desc command_scene_desc =
+	GED_DRAW_COMMAND_SCENE_DESC_INIT;
+    command_scene_desc.owner_id = "rtcheck";
+    command_scene_desc.owner_role = "command-result";
+    struct ged_draw_command_scene *command_scene =
+	ged_draw_command_scene_begin(feature_view_ctx, &command_scene_desc);
+    if (!command_scene)
+	FAIL("GED command-scene begin should create an Obol-backed publication context");
+    struct ged_draw_view_feature_style command_style =
+	GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+    command_style.visible = 1;
+    command_style.selectable = 0;
+    struct ged_draw_view_line_layer_data command_layer =
+	GED_DRAW_VIEW_LINE_LAYER_DATA_INIT;
+    command_layer.name = "rtcheck::overlaps/yellow";
+    command_layer.points = feature_points;
+    command_layer.commands = feature_cmds;
+    command_layer.point_count = 2;
+    if (!ged_draw_command_scene_line_layers_replace(command_scene,
+	    "rtcheck::overlaps", &command_layer, 1, &command_style) ||
+	    !ged_draw_command_scene_commit(command_scene))
+	FAIL("GED command-scene line-layer replacement should commit");
+    BRLObolFeatureHandle command_handle =
+	owned_controller->features().find("rtcheck::overlaps",
+		BRLOBOL_FEATURE_SCOPE_SHARED);
+    BRLObolFeatureRecord command_record;
+    if (!command_handle.isValid() ||
+	    !owned_controller->features().record(command_handle,
+		command_record) ||
+	    command_record.scope != BRLObolFeatureScope::Shared ||
+	    !BU_STR_EQUAL(command_record.owner.ownerId.getString(),
+		"rtcheck") ||
+	    !BU_STR_EQUAL(command_record.owner.ownerRole.getString(),
+		"command-result") ||
+	    !command_record.style.hasSelectable ||
+	    command_record.style.selectable ||
+	    !feature_overlay_matches(owned_controller, "rtcheck::overlaps",
+		BRLObolOverlayClass::CommandResult,
+		BRLObolOverlayLifecycle::PerCommand,
+		BRLObolOverlayOrder::PostTransparent))
+	FAIL("GED command-scene result should be shared, owned, selectable-aware command content");
+
+    command_scene = ged_draw_command_scene_begin(feature_view_ctx,
+	    &command_scene_desc);
+    if (!command_scene ||
+	    ged_draw_command_scene_features_remove_prefix(command_scene,
+		"rtcheck::") != 1 ||
+	    !ged_draw_command_scene_commit(command_scene) ||
+	    owned_controller->features().exists("rtcheck::overlaps"))
+	FAIL("GED command-scene remove-prefix should remove owned shared command results");
+
+    FILE *nirt_plot = tmpfile();
+    if (!nirt_plot)
+	FAIL("NIRT/qray command-scene uplot test should create a temporary plot stream");
+    int old_plot_mode = pl_getOutputMode();
+    pl_setOutputMode(PL_OUTPUT_MODE_BINARY);
+    point_t nirt_a = VINIT_ZERO;
+    point_t nirt_b = {1.0, 0.0, 0.0};
+    pl_color(nirt_plot, 0, 255, 0);
+    pdv_3line(nirt_plot, nirt_a, nirt_b);
+    pl_setOutputMode(old_plot_mode);
+    rewind(nirt_plot);
+    if (_ged_draw_uplot_to_command_scene_feature(gedp, nirt_plot,
+	    "query_ray", 1.0, PL_OUTPUT_MODE_BINARY, "nirt",
+	    "command-result", "query_ray") != BRLCAD_OK) {
+	fclose(nirt_plot);
+	FAIL("NIRT/qray uplot import should publish through command-scene ownership");
+    }
+    fclose(nirt_plot);
+    BRLObolFeatureHandle nirt_handle =
+	owned_controller->features().find("query_ray",
+		BRLOBOL_FEATURE_SCOPE_SHARED);
+    BRLObolFeatureRecord nirt_record;
+    if (!nirt_handle.isValid() ||
+	    !owned_controller->features().record(nirt_handle, nirt_record) ||
+	    nirt_record.kind != BRLObolFeatureKind::LineLayer ||
+	    nirt_record.scope != BRLObolFeatureScope::Shared ||
+	    !BU_STR_EQUAL(nirt_record.owner.ownerId.getString(), "nirt") ||
+	    !BU_STR_EQUAL(nirt_record.owner.ownerRole.getString(),
+		"command-result") ||
+	    nirt_record.layers.size() != 1 ||
+	    nirt_record.points.size() != 2 ||
+	    !feature_overlay_matches(owned_controller, "query_ray",
+		BRLObolOverlayClass::CommandResult,
+		BRLObolOverlayLifecycle::PerCommand,
+		BRLObolOverlayOrder::PostTransparent))
+	FAIL("NIRT/qray command-scene uplot result should be shared owned command content");
+    command_scene_desc.owner_id = "nirt";
+    command_scene = ged_draw_command_scene_begin(feature_view_ctx,
+	    &command_scene_desc);
+    if (!command_scene ||
+	    ged_draw_command_scene_features_remove_prefix(command_scene,
+		"query_ray") != 1 ||
+	    !ged_draw_command_scene_commit(command_scene) ||
+	    owned_controller->features().exists("query_ray"))
+	FAIL("NIRT/qray command-scene cleanup should remove owned shared command results");
+
     struct rt_preview_callback_state rt_preview_state = {77, 0, 0};
     struct rt_view_edit_preview_callbacks rt_preview_callbacks =
 	RT_VIEW_EDIT_PREVIEW_CALLBACKS_INIT;
@@ -1222,20 +1417,19 @@ main(int argc, char **argv)
 
     if (exercise_mode_specific_source_lifecycle(gedp, owned_scene,
 	    "box.s", GED_DRAW_MODE_EVAL_WIRE,
-	    SoBRLDatabaseSource::REPRESENTATION_EVAL_WIRE, 1, 0,
+	    SoBRLDatabaseSource::REPRESENTATION_EVAL_WIRE, 1, 0, 1,
 	    "evaluated-wire"))
 	return 1;
     if (exercise_mode_specific_source_lifecycle(gedp, owned_scene,
 	    "box.s", GED_DRAW_MODE_HIDDEN_LINE,
-	    SoBRLDatabaseSource::REPRESENTATION_HIDDEN_LINE, 0, 1,
+	    SoBRLDatabaseSource::REPRESENTATION_HIDDEN_LINE, 0, 1, 1,
 	    "hidden-line"))
 	return 1;
     if (exercise_mode_specific_source_lifecycle(gedp, owned_scene,
 	    "box.s", GED_DRAW_MODE_EVAL_POINTS,
-	    SoBRLDatabaseSource::REPRESENTATION_EVAL_POINTS, 0, 1,
+	    SoBRLDatabaseSource::REPRESENTATION_EVAL_POINTS, 0, 1, 1,
 	    "evaluated-points"))
 	return 1;
-
     const char *draw_annot_line[2] = {"draw", "annot_line.s"};
     if (ged_exec_draw(gedp, 2, draw_annot_line) != BRLCAD_OK)
 	FAIL("GED annotation draw should succeed for owned Obol publication");
@@ -1260,19 +1454,21 @@ main(int argc, char **argv)
 	source_for_path(owned_scene, "annot_line.s");
     SoBRLVListShape *annot_shape = annot_source ?
 	annot_source->getRealizedShape() : NULL;
+    const SoBRLVListShape *annot_geom_source = annot_shape ?
+	annot_shape->getGeometrySource() : NULL;
     if (owned_scene->getDatabaseSourceCount() != 3 ||
-	    !annot_shape ||
-	    annot_shape->point.getNum() != 2 ||
-	    annot_shape->command.getNum() != 2 ||
-	    annot_shape->command[0] != SoBRLVListShape::MOVE ||
-	    annot_shape->command[1] != SoBRLVListShape::DRAW ||
+	    !annot_shape || !annot_geom_source ||
+	    annot_geom_source->point.getNum() != 2 ||
+	    annot_geom_source->command.getNum() != 2 ||
+	    annot_geom_source->command[0] != SoBRLVListShape::MOVE ||
+	    annot_geom_source->command[1] != SoBRLVListShape::DRAW ||
 	    strcmp(annot_shape->sourceType.getValue().getString(),
 		"annotation") != 0 ||
 	    strcmp(annot_shape->geometryKind.getValue().getString(),
 		"annotation") != 0 ||
-	    fabs(annot_shape->point[1][0] - 50.25f) > 0.001f ||
-	    fabs(annot_shape->point[1][1] - 0.5f) > 0.001f ||
-	    fabs(annot_shape->point[1][2]) > 0.001f)
+	    fabs(annot_geom_source->point[1][0] - 50.25f) > 0.001f ||
+	    fabs(annot_geom_source->point[1][1] - 0.5f) > 0.001f ||
+	    fabs(annot_geom_source->point[1][2]) > 0.001f)
 	FAIL("GED annotation draw should publish line segments into the owned Obol source");
     const char *erase_annot_line[2] = {"erase", "annot_line.s"};
     if (ged_exec_erase(gedp, 2, erase_annot_line) != BRLCAD_OK ||
@@ -1282,29 +1478,33 @@ main(int argc, char **argv)
     const char *draw_submodel_owner[2] = {"draw", "submodel_owner.s"};
     ged_draw_index_stats_reset(gedp);
     if (ged_exec_draw(gedp, 2, draw_submodel_owner) != BRLCAD_OK)
-	FAIL("GED submodel draw should succeed for owned Obol auxiliary publication");
+	FAIL("GED submodel draw should succeed for owned Obol direct publication");
     struct ged_draw_index_stats submodel_owner_stats;
     memset(&submodel_owner_stats, 0, sizeof(submodel_owner_stats));
     ged_draw_index_stats_get(gedp, &submodel_owner_stats);
     if (submodel_owner_stats.retained_child_source_creations)
 	FAIL("GED Obol submodel draw should avoid retained child-source staging");
+    if (submodel_owner_stats.retained_drawtree_invocations)
+	FAIL("GED Obol submodel draw should avoid retained draw-tree fallback");
     SoBRLDatabaseSource *submodel_source =
 	source_for_path(owned_scene, "submodel_owner.s");
     if (!submodel_source || owned_scene->getDatabaseSourceCount() != 3)
 	FAIL("GED submodel draw should create an owned Obol source");
-    SoBRLVListShape *submodel_aux =
-	auxiliary_for_path_variant(submodel_source, "box.s");
-    if (!submodel_aux)
-	FAIL("GED submodel draw should publish an owned Obol auxiliary VLIST for the referenced leaf");
-    if (submodel_aux->point.getNum() == 0 ||
-	    submodel_aux->command.getNum() != submodel_aux->point.getNum() ||
-	    strcmp(submodel_aux->recordRole.getValue().getString(),
-		"auxiliary") != 0 ||
-	    strcmp(submodel_aux->sourceType.getValue().getString(),
-		"auxiliary-line-set") != 0 ||
-	    !path_equal(submodel_aux->ownerSourcePath.getValue().getString(),
-		"submodel_owner.s"))
-	FAIL("GED submodel draw should publish leaf wireframes as owned Obol auxiliary VLISTs");
+    SoBRLVListShape *submodel_shape = submodel_source->getRealizedShape();
+    const SoBRLVListShape *submodel_geom = submodel_shape ?
+	submodel_shape->getGeometrySource() : NULL;
+    if (!submodel_shape || !submodel_geom ||
+	    submodel_geom->point.getNum() == 0 ||
+	    submodel_geom->command.getNum() != submodel_geom->point.getNum() ||
+	    strcmp(submodel_shape->recordRole.getValue().getString(),
+		"database") != 0 ||
+	    strcmp(submodel_shape->sourceType.getValue().getString(),
+		"submodel") != 0 ||
+	    !path_equal(submodel_shape->ownerSourcePath.getValue().getString(),
+		"submodel_owner.s") ||
+	    auxiliary_for_path_variant(submodel_source, "box.s")) {
+	FAIL("GED submodel draw should realize direct primary owned Obol geometry without legacy auxiliary staging");
+    }
     const char *erase_submodel_owner[2] = {"erase", "submodel_owner.s"};
     if (ged_exec_erase(gedp, 2, erase_submodel_owner) != BRLCAD_OK ||
 	    owned_scene->getDatabaseSourceCount() != 2 ||
@@ -1315,25 +1515,30 @@ main(int argc, char **argv)
     };
     ged_draw_index_stats_reset(gedp);
     if (ged_exec_draw(gedp, 2, draw_submodel_temp_owner) != BRLCAD_OK)
-	FAIL("GED submodel temp-source draw should succeed for owned Obol auxiliary publication");
+	FAIL("GED submodel temp-source draw should succeed for owned Obol direct publication");
     struct ged_draw_index_stats submodel_temp_owner_stats;
     memset(&submodel_temp_owner_stats, 0,
 	    sizeof(submodel_temp_owner_stats));
     ged_draw_index_stats_get(gedp, &submodel_temp_owner_stats);
     if (submodel_temp_owner_stats.retained_child_source_creations)
 	FAIL("GED Obol submodel temp-source draw should avoid retained child-source staging");
+    if (submodel_temp_owner_stats.retained_drawtree_invocations)
+	FAIL("GED Obol submodel temp-source draw should avoid retained draw-tree fallback");
     SoBRLDatabaseSource *submodel_temp_source =
 	source_for_path(owned_scene, "submodel_temp_owner.s");
     if (!submodel_temp_source || owned_scene->getDatabaseSourceCount() != 3 ||
 	    source_for_path(owned_scene, "nested_leaf.s"))
 	FAIL("GED submodel temp-source draw should not leak a temporary owned Obol leaf source");
-    SoBRLVListShape *submodel_temp_aux =
-	auxiliary_for_path_variant(submodel_temp_source, "nested_leaf.s");
-    if (!submodel_temp_aux ||
-	    submodel_temp_aux->point.getNum() == 0 ||
-	    strcmp(submodel_temp_aux->recordRole.getValue().getString(),
-		"auxiliary") != 0)
-	FAIL("GED submodel temp-source draw should publish the referenced leaf as owned Obol auxiliary geometry");
+    SoBRLVListShape *submodel_temp_shape =
+	submodel_temp_source->getRealizedShape();
+    const SoBRLVListShape *submodel_temp_geom = submodel_temp_shape ?
+	submodel_temp_shape->getGeometrySource() : NULL;
+    if (!submodel_temp_shape || !submodel_temp_geom ||
+	    submodel_temp_geom->point.getNum() == 0 ||
+	    strcmp(submodel_temp_shape->recordRole.getValue().getString(),
+		"database") != 0 ||
+	    auxiliary_for_path_variant(submodel_temp_source, "nested_leaf.s"))
+	FAIL("GED submodel temp-source draw should realize direct primary owned Obol geometry");
     const char *erase_submodel_temp_owner[2] = {
 	"erase", "submodel_temp_owner.s"
     };
@@ -2232,16 +2437,24 @@ main(int argc, char **argv)
 		    &box_record);
 	    if (!box_record.found)
 		FAIL("GED shape record should refresh after shaded draw source realization");
-	    box_source = owned_scene->findDatabaseSource("/box.s");
-	    if (!box_source)
-		box_source = source_for_path(owned_scene, "box.s");
+	    box_source = source_for_representation(owned_scene, "box.s",
+		    SoBRLDatabaseSource::REPRESENTATION_SHADED);
+	    if (!box_source) {
+		box_source = owned_scene->findDatabaseSource("/box.s");
+		if (!box_source)
+		    box_source = source_for_path(owned_scene, "box.s");
+	    }
 	    if (!box_source)
 		FAIL("owned Obol source should remain available after shaded draw source realization");
 	    box_mesh = box_source->getRealizedMesh();
-	    if (!box_mesh ||
-		    box_mesh->point.getNum() == 0 ||
-		    box_mesh->coordIndex.getNum() == 0)
+	    {
+		const SoBRLMeshShape *box_mesh_geom = box_mesh ?
+		    box_mesh->getGeometrySource() : NULL;
+		if (!box_mesh_geom ||
+			box_mesh_geom->point.getNum() == 0 ||
+			box_mesh_geom->coordIndex.getNum() == 0)
 		FAIL("GED shaded source realization should publish owned Obol mesh fields");
+	    }
 	    BRLObolDatabaseSourceSummary box_realized_summary;
 	    if (!box_source->getSummary(box_realized_summary) ||
 		    box_realized_summary.stale ||
@@ -2381,6 +2594,8 @@ main(int argc, char **argv)
 	    ged_draw_index_stats_get(gedp, &current_wire_stats);
 	    if (current_wire_stats.retained_primitive_wireframe_publications)
 		FAIL("GED Obol current wireframe draw should avoid retained primitive publication");
+	    if (current_wire_stats.retained_drawtree_invocations)
+		FAIL("GED Obol current wireframe draw should avoid retained draw-tree fallback");
 	    box_record.found = 0;
 	    ged_draw_foreach_shape_record(gedp, record_source_state_cb,
 		    &box_record);
@@ -3866,6 +4081,10 @@ main(int argc, char **argv)
     if (!ged_draw_shape_ref_release(gedp, direct_leaf_record.ref) ||
 	    source_for_path(owned_scene, "draft_move.s"))
 	FAIL("GED direct database-leaf commit cleanup should remove the owned source");
+
+    if (exercise_mesh_source_local_publication(gedp, owned_scene,
+	    "box.s"))
+	return 1;
 
     ged_draw_obol_scene_controller_detach(gedp);
     if (ged_draw_obol_scene_controller(gedp) ||

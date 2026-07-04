@@ -106,6 +106,7 @@ struct ged_drawable {
     uint64_t                     gd_draw_retained_source_owner_appends;
     uint64_t                     gd_draw_retained_group_mutations;
     uint64_t                     gd_draw_retained_shape_mutations;
+    uint64_t                     gd_draw_retained_drawtree_invocations;
     struct bu_ptbl               gd_draw_observers;     /**< @brief GED-owned post-transaction draw observer records */
     uintptr_t                    gd_draw_next_observer_token;
     int                          gd_draw_observers_init;
@@ -351,6 +352,14 @@ GED_EXPORT extern int _ged_draw_uplot_to_feature(struct ged *gedp,
 				       const char *name,
 				       double char_size,
 				       int mode);
+GED_EXPORT extern int _ged_draw_uplot_to_command_scene_feature(struct ged *gedp,
+				       FILE *fp,
+				       const char *name,
+				       double char_size,
+				       int mode,
+				       const char *owner_id,
+				       const char *owner_role,
+				       const char *remove_prefix);
 GED_EXPORT extern int _ged_draw_uplot_files_to_feature(struct ged *gedp,
 				       const char * const *files,
 				       size_t file_count,
@@ -366,6 +375,12 @@ GED_EXPORT extern int _ged_uplot_stream_process(struct ged_uplot_stream *stream,
 GED_EXPORT extern int _ged_uplot_stream_publish_feature(struct ged *gedp,
 				       struct ged_uplot_stream *stream,
 				       const char *name);
+GED_EXPORT extern int _ged_uplot_stream_publish_command_scene_feature(struct ged *gedp,
+				       struct ged_uplot_stream *stream,
+				       const char *name,
+				       const char *owner_id,
+				       const char *owner_role,
+				       const char *remove_prefix);
 GED_EXPORT extern void _ged_uplot_stream_free(struct ged_uplot_stream *stream);
 
 /* defined in editit.c */

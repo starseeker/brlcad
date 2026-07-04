@@ -40,6 +40,49 @@ level: view +Z is the camera-back/out-of-screen direction, and look direction
 is -view-Z.
 
 
+Database Source Geometry and Placement
+--------------------------------------
+
+`SoBRLDatabaseSource` primary geometry is source-local.  VLIST, point, and
+mesh point arrays published to a database source must not have the source
+`drawMatrix` pre-applied.  `drawMatrix` is local-to-scene placement metadata
+and is applied explicitly by traversal, bounds, autoview, and export/pick/snap
+code that needs scene coordinates.
+
+Database realization follows the same rule.  `db_walk_tree` supplies path,
+material/region state, and member transforms; libbrlobol refetches drawable
+primitive geometry with an identity matrix for cache misses, builds shared
+local geometry, and gives each visible leaf an explicit instance transform.
+The visible leaf shape keeps path identity and draw/edit state, while the
+shared node is geometry only.
+
+GED draw transactions follow the same leaf-instance boundary for normal
+database draw modes.  Obol-owned wire, shaded-BoT, shaded, and hidden-line
+draw requests are expanded with `db_walk_tree_leaf_instances`; each resulting
+full leaf path becomes an explicit Obol database source and is realized by
+libbrlobol.  Do not replace this with aggregate root mesh sources unless the
+aggregate representation can preserve per-leaf material, region, identity, and
+transform semantics explicitly.
+
+Evaluated wire and evaluated sampled-points are requested-path providers rather
+than leaf-instance expansion.  They publish source-local provider output to the
+Obol database source for the requested path, preserving draw matrix placement
+as source metadata.  The current evaluated-wire provider still uses the old
+Big-E algorithm internally; a future libbrlobol implementation must keep the
+same source-local output and deterministic requested-path identity contract.
+
+External primary geometry publication also follows this rule.  Producers must
+emit source-local geometry before calling the libbrlobol publish APIs.  Legacy
+draw-tree paths that still obtain transformed mesh arrays localize those arrays
+explicitly at the producer boundary before publication; the generic
+database-source publisher does not infer coordinate space from draw mode.
+
+Bounds code must avoid double-applying placement.  If a realized source already
+contains explicit realization transforms, bounds traversal uses those child
+transforms.  If a source has only source-local published bounds and no realized
+children, bounds traversal applies `drawMatrix` to the source-local bounds.
+
+
 BRL-CAD Matrix Contract
 -----------------------
 

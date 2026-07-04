@@ -1020,6 +1020,8 @@ ged_draw_index_stats_get(struct ged *gedp, struct ged_draw_index_stats *stats)
 	gdp->gd_draw_retained_group_mutations;
     stats->retained_shape_mutations =
 	gdp->gd_draw_retained_shape_mutations;
+    stats->retained_drawtree_invocations =
+	gdp->gd_draw_retained_drawtree_invocations;
 }
 
 
@@ -1044,6 +1046,7 @@ ged_draw_index_stats_reset(struct ged *gedp)
     gdp->gd_draw_retained_source_owner_appends = 0;
     gdp->gd_draw_retained_group_mutations = 0;
     gdp->gd_draw_retained_shape_mutations = 0;
+    gdp->gd_draw_retained_drawtree_invocations = 0;
 }
 
 

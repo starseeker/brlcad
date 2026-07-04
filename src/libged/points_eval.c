@@ -39,6 +39,7 @@
 #include "analyze.h"
 
 #include "ged/draw.h"
+#include "./bsg_ged_draw_private.h"
 
 int
 ged_draw_shape_ref_eval_points(struct ged *gedp, ged_draw_shape_ref ref)
@@ -78,6 +79,57 @@ ged_draw_shape_ref_eval_points(struct ged *gedp, ged_draw_shape_ref ref)
 
     rt_db_free_internal(&intern);
 
+    return ret;
+}
+
+
+int
+ged_draw_obol_database_source_eval_points_for_path(struct ged *gedp,
+						   const char *path)
+{
+    if (!gedp || !gedp->dbip || !path || !path[0])
+	return BRLCAD_ERROR;
+
+    struct db_full_path dfp;
+    db_full_path_init(&dfp);
+    if (db_string_to_path(&dfp, gedp->dbip, path) != 0)
+	return BRLCAD_ERROR;
+
+    struct directory *dp = DB_FULL_PATH_CUR_DIR(&dfp);
+    if (!dp) {
+	db_free_full_path(&dfp);
+	return BRLCAD_ERROR;
+    }
+
+    struct rt_db_internal intern;
+    RT_DB_INTERNAL_INIT(&intern);
+    if (rt_db_get_internal(&intern, dp, gedp->dbip, NULL) < 0) {
+	db_free_full_path(&dfp);
+	return BRLCAD_ERROR;
+    }
+
+    struct rt_primitive_indexed_face_set face_set;
+    memset(&face_set, 0, sizeof(face_set));
+
+    int ret = rt_obj_sampled_face_set(&face_set, &intern);
+    if (ret == BRLCAD_OK) {
+	ret = ged_draw_obol_database_source_publish_indexed_face_set_for_path(
+		gedp, path,
+		(const point_t *)face_set.points, face_set.point_count,
+		(const vect_t *)face_set.normals, face_set.normal_count,
+		face_set.indices, face_set.index_count) ? BRLCAD_OK :
+	    BRLCAD_ERROR;
+    }
+
+    if (face_set.points)
+	bu_free(face_set.points, "sample point face-set points");
+    if (face_set.normals)
+	bu_free(face_set.normals, "sample point face-set normals");
+    if (face_set.indices)
+	bu_free(face_set.indices, "sample point face-set indices");
+
+    rt_db_free_internal(&intern);
+    db_free_full_path(&dfp);
     return ret;
 }
 
