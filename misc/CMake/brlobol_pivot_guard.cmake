@@ -500,6 +500,8 @@ function(_brlobol_pivot_guard_check_capability2_rt_feature_adapter)
 	ged_draw_view_context_object_remove
 	ged_draw_view_context_object_visible_get
 	ged_draw_view_context_object_visible_set
+	ged_draw_view_context_object_style_get
+	ged_draw_view_context_object_style_apply
 	ged_draw_view_context_object_realize
 	ged_draw_obol_overlay_erase_name_context
 	ged_draw_source_erase_groups_by_name_at_root
@@ -9806,15 +9808,14 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]ged/draw\.h]]
 	[[GED_DRAW_MODE_WIRE]]
-	[[ged_draw_view_context_feature_exists]]
 	[[ged_draw_view_context_object_remove]]
 	[[ged_draw_view_context_object_visible_get]]
 	[[ged_draw_view_context_object_visible_set]]
+	[[ged_draw_view_context_object_style_get]]
+	[[ged_draw_view_context_object_style_apply]]
 	[[ged_draw_view_context_object_realize]]
 	[[ged_draw_view_context_gobject_create]]
-	[[struct[ \t]+ged_draw_view_feature_style]]
-	[[ged_draw_view_context_feature_style_get]]
-	[[ged_draw_view_context_feature_style_apply]])
+	[[struct[ \t]+ged_draw_view_feature_style]])
       string(REGEX MATCH "${_token}" _libged_view_objs_cmd_token_hit
 	"${_libged_view_objs_cmd_contents}")
       if(NOT _libged_view_objs_cmd_token_hit)
@@ -9831,6 +9832,10 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[(^|[^A-Za-z0-9_])ged_draw_source_erase_groups_by_name_at_root[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_shape_ref_release[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_view_context_feature_realize[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_feature_style_get[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_view_context_feature_style_apply[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_shape_ref_get_color[ \t\r\n]*\(]]
+	[[(^|[^A-Za-z0-9_])ged_draw_shape_ref_set_color[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_shape_ref_set_visible[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])ged_draw_shape_ref_realize_context[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])_view_cmd_objs([^A-Za-z0-9_]|$)]]
@@ -18140,6 +18145,8 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[ged_draw_view_context_object_remove]]
 	[[ged_draw_view_context_object_visible_get]]
 	[[ged_draw_view_context_object_visible_set]]
+	[[ged_draw_view_context_object_style_get]]
+	[[ged_draw_view_context_object_style_apply]]
 	[[ged_draw_view_context_object_realize]]
 	[[ged_draw_view_polygon_ref_is_null]]
 	[[ged_draw_view_context_polygon_create]]

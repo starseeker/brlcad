@@ -87,6 +87,9 @@ Common fields include visibility, color, line width, point size, opacity,
 selectable, pickable, arrow enabled, arrow width, arrow length, label text,
 polygon fill mode, and command-result highlight policy.  Unsupported fields
 should fail through capability checks with an object type in the diagnostic.
+The command layer should route common lifecycle/style operations through
+object-level GED draw facades, leaving feature, database shape-ref, and Obol
+overlay-group dispatch in the draw bridge.
 
 Structured output should be available from the start.  UI callers need a
 stable way to query object class, scope, owner, capabilities, draw mode, style,
@@ -103,8 +106,8 @@ Migration policy:
   `view annotation`
 * keep polygon-specific editing under `view polygon`
 * keep database display/edit-proxy insertion under `view db`
-* retire direct feature/shape-ref branching from command files once the typed
-  object APIs cover the remaining style and info paths
+* keep direct feature/shape-ref branching out of command files; typed
+  object APIs own common lifecycle, visibility, style, and realization policy
 
 This design is intentionally Obol-only.  BSG support should remain at most a
 legacy fallback for unowned views, not a parallel object-management model.

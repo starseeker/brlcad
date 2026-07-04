@@ -6883,6 +6883,83 @@ ged_draw_obol_overlay_erase_name_context(
     return removed > 0 ? 1 : 0;
 }
 
+static SoBRLSceneGroup *
+ged_draw_obol_overlay_group_for_name(struct ged *gedp,
+	const char *name,
+	std::string *group_path)
+{
+    if (!gedp || !name || !name[0] ||
+	    !ged_draw_obol_scene_controller_owned(gedp))
+	return NULL;
+
+    SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
+    if (!scene)
+	return NULL;
+
+    std::string path = ged_obol_overlay_group_path_for_name(name);
+    SoGroup *group = scene->findGroup(path.c_str());
+    if (!group || !group->isOfType(SoBRLSceneGroup::getClassTypeId()))
+	return NULL;
+
+    if (group_path)
+	*group_path = path;
+    return static_cast<SoBRLSceneGroup *>(group);
+}
+
+static int
+ged_draw_obol_overlay_group_style_apply(struct ged *gedp,
+	const std::string &group_path,
+	SoBRLSceneGroup *group,
+	const struct ged_draw_view_feature_style *style,
+	struct bu_vls *result,
+	const char *name)
+{
+    if (!gedp || group_path.empty() || !group || !style)
+	return 0;
+
+    if (style->arrow >= 0 || style->arrow_tip_length >= 0.0 ||
+	    style->arrow_tip_width >= 0.0) {
+	if (result)
+	    bu_vls_printf(result,
+		    "View object %s does not support arrow settings\n", name);
+	return 0;
+    }
+
+    SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
+    if (!scene)
+	return 0;
+
+    SbBool visible = group->visible.getValue();
+    int line_style = group->lineStyle.getValue();
+    int line_width = group->lineWidth.getValue();
+    SbBool color_override = group->colorOverride.getValue();
+    SbColor color = group->color.getValue();
+    if (style->visible >= 0)
+	visible = style->visible ? TRUE : FALSE;
+    if (style->line_style >= 0)
+	line_style = style->line_style;
+    if (style->line_width >= 0)
+	line_width = style->line_width;
+    if (style->color_valid) {
+	color_override = TRUE;
+	color = ged_obol_color_from_rgb(style->color);
+    }
+
+    int changed = scene->setGroupDisplayState(group_path.c_str(),
+	    visible,
+	    group->selected.getValue(),
+	    group->highlighted.getValue(),
+	    line_style,
+	    line_width,
+	    group->transparency.getValue(),
+	    color_override,
+	    color,
+	    group->materialColorValid.getValue(),
+	    group->materialColor.getValue(),
+	    group->materialRevision.getValue());
+    return changed >= 0 ? 1 : 0;
+}
+
 extern "C" int
 ged_draw_view_context_object_remove(
 	struct ged *gedp,
@@ -6954,6 +7031,13 @@ ged_draw_view_context_object_visible_get(
     }
 
     if (ged_draw_shape_ref_is_null(shape_ref)) {
+	std::string group_path;
+	SoBRLSceneGroup *group =
+	    ged_draw_obol_overlay_group_for_name(gedp, name, &group_path);
+	if (group) {
+	    *visible = group->visible.getValue() ? 1 : 0;
+	    return 1;
+	}
 	if (result)
 	    bu_vls_printf(result, "No view feature named %s\n", name);
 	return 0;
@@ -6995,12 +7079,169 @@ ged_draw_view_context_object_visible_set(
     }
 
     if (ged_draw_shape_ref_is_null(shape_ref)) {
+	std::string group_path;
+	SoBRLSceneGroup *group =
+	    ged_draw_obol_overlay_group_for_name(gedp, name, &group_path);
+	if (group) {
+	    struct ged_draw_view_feature_style style =
+		GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+	    style.visible = visible ? 1 : 0;
+	    return ged_draw_obol_overlay_group_style_apply(gedp, group_path,
+		    group, &style, result, name);
+	}
 	if (result)
 	    bu_vls_printf(result, "No view feature named %s\n", name);
 	return 0;
     }
 
     return ged_draw_shape_ref_set_visible(gedp, shape_ref, visible ? 1 : 0);
+}
+
+struct ged_draw_object_color_prefix_state {
+    struct ged *gedp;
+    const struct db_full_path *prefix;
+    const unsigned char *rgb;
+};
+
+static int
+ged_draw_object_color_prefix_cb(const struct ged_draw_shape_record *rec,
+	void *ud)
+{
+    struct ged_draw_object_color_prefix_state *ctx =
+	(struct ged_draw_object_color_prefix_state *)ud;
+    if (!ctx || !rec || !rec->fullpath || !ctx->prefix ||
+	    !db_full_path_match_top(ctx->prefix, rec->fullpath))
+	return 1;
+    if (ctx->rgb)
+	(void)ged_draw_shape_ref_set_color(ctx->gedp, rec->ref, ctx->rgb);
+    return 1;
+}
+
+extern "C" int
+ged_draw_view_context_object_style_get(
+	struct ged *gedp,
+	void *view_ctx,
+	const char *name,
+	ged_draw_shape_ref shape_ref,
+	struct ged_draw_view_feature_style *style,
+	struct bu_vls *result)
+{
+    if (!gedp || !view_ctx || !name || !name[0] || !style)
+	return 0;
+
+    struct ged_draw_view_feature_style init =
+	GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+    *style = init;
+
+    if (ged_draw_view_context_feature_exists(view_ctx, name)) {
+	if (!ged_draw_view_context_feature_style_get(view_ctx, name, style)) {
+	    if (result)
+		bu_vls_printf(result, "No view feature named %s\n", name);
+	    return 0;
+	}
+	if (style->arrow < 0)
+	    style->arrow = 0;
+	return 1;
+    }
+
+    if (ged_draw_shape_ref_is_null(shape_ref)) {
+	std::string group_path;
+	SoBRLSceneGroup *group =
+	    ged_draw_obol_overlay_group_for_name(gedp, name, &group_path);
+	if (group) {
+	    style->visible = group->visible.getValue() ? 1 : 0;
+	    style->color_valid = group->colorOverride.getValue() ? 1 : 0;
+	    ged_obol_rgb_from_color(group->color.getValue(), style->color);
+	    style->line_width = group->lineWidth.getValue();
+	    style->line_style = group->lineStyle.getValue();
+	    return 1;
+	}
+	if (result)
+	    bu_vls_printf(result, "No view object named %s\n", name);
+	return 0;
+    }
+
+    struct ged_draw_shape_record rec;
+    if (!ged_draw_shape_record_get(gedp, shape_ref, &rec)) {
+	if (result)
+	    bu_vls_printf(result, "No view object named %s\n", name);
+	return 0;
+    }
+
+    style->visible = rec.visible ? 1 : 0;
+    style->color_valid = 1;
+    (void)ged_draw_shape_ref_get_color(gedp, shape_ref, style->color);
+    style->line_width = rec.line_width;
+    return 1;
+}
+
+extern "C" int
+ged_draw_view_context_object_style_apply(
+	struct ged *gedp,
+	void *view_ctx,
+	const char *name,
+	ged_draw_shape_ref shape_ref,
+	const struct ged_draw_view_feature_style *style,
+	int recursive,
+	struct bu_vls *result)
+{
+    if (!gedp || !view_ctx || !name || !name[0] || !style)
+	return 0;
+
+    if (ged_draw_view_context_feature_exists(view_ctx, name))
+	return ged_draw_view_context_feature_style_apply(view_ctx, name, style,
+		recursive);
+
+    if (ged_draw_shape_ref_is_null(shape_ref)) {
+	std::string group_path;
+	SoBRLSceneGroup *group =
+	    ged_draw_obol_overlay_group_for_name(gedp, name, &group_path);
+	if (group)
+	    return ged_draw_obol_overlay_group_style_apply(gedp, group_path,
+		    group, style, result, name);
+	if (result)
+	    bu_vls_printf(result, "No view object named %s\n", name);
+	return 0;
+    }
+
+    struct ged_draw_shape_record rec;
+    if (!ged_draw_shape_record_get(gedp, shape_ref, &rec)) {
+	if (result)
+	    bu_vls_printf(result, "No view object named %s\n", name);
+	return 0;
+    }
+
+    if (style->arrow >= 0 || style->arrow_tip_length >= 0.0 ||
+	    style->arrow_tip_width >= 0.0) {
+	if (result)
+	    bu_vls_printf(result,
+		    "View object %s does not support arrow settings\n", name);
+	return 0;
+    }
+    if (style->line_width >= 0 || style->line_style >= 0) {
+	if (result)
+	    bu_vls_printf(result,
+		    "View object %s does not support line style settings\n", name);
+	return 0;
+    }
+
+    int ok = 1;
+    if (style->visible >= 0)
+	ok = ged_draw_shape_ref_set_visible(gedp, shape_ref,
+		style->visible ? 1 : 0) && ok;
+    if (style->color_valid) {
+	ok = ged_draw_shape_ref_set_color(gedp, shape_ref, style->color) && ok;
+	if (recursive && rec.fullpath) {
+	    struct ged_draw_object_color_prefix_state ctx;
+	    ctx.gedp = gedp;
+	    ctx.prefix = rec.fullpath;
+	    ctx.rgb = style->color;
+	    ged_draw_foreach_shape_record(gedp,
+		    ged_draw_object_color_prefix_cb, &ctx);
+	}
+    }
+
+    return ok ? 1 : 0;
 }
 
 extern "C" int

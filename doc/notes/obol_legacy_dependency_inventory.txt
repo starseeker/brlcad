@@ -1168,11 +1168,13 @@ draw-view context facade.  Deletion routes through
 `ged_draw_view_context_object_remove`, which centralizes feature, overlay,
 source-group, and transient shape-ref cleanup behind one neutral facade.
 Draw visibility and update/realize route through object-level visible/get/set
-and realize facades that centralize feature-vs-shape-ref dispatch.  The
-remaining style paths are reached through `view object style`, route
-mouse-state updates through a GED facade, and report draw modes with
-`GED_DRAW_MODE_*` names instead of including direct BSG headers,
-`rt/view_legacy_bsg.h`, or libged's private draw-view header.
+and realize facades that centralize feature-vs-shape-ref dispatch.  Style
+paths now route through `ged_draw_view_context_object_style_get` and
+`ged_draw_view_context_object_style_apply`, which centralize feature,
+database shape-ref, and Obol overlay-group style dispatch.  Mouse-state
+updates use a GED facade, and draw modes report with `GED_DRAW_MODE_*` names
+instead of including direct BSG headers, `rt/view_legacy_bsg.h`, or libged's
+private draw-view header.
 Database display/edit-proxy command handling now reaches
 `ged_draw_view_context_gobject_create` through `view db add` and deletion
 through `view db delete`/`view object delete`;
@@ -1180,7 +1182,7 @@ retained scene-ref allocation, appearance setup, shape user-data ownership, and 
 population stay in the draw bridge implementation instead of the command file:
 
 * libged view-object screen/model/info snapshots: no typed RT view snapshot calls
-* libged generic view-object command paths: no private draw-view header, direct BSG headers, BSG feature tokens, BSG draw-mode constants, or retired `view obj`/`view gobjs` public syntax
+* libged generic view-object command paths: no private draw-view header, direct BSG headers, BSG feature tokens, BSG draw-mode constants, direct feature-style/shape-color mutation, or retired `view obj`/`view gobjs` public syntax
 * libged database view-object command paths: no private draw-view header, direct BSG headers, retained scene refs, BSG appearance settings, direct overlay-create calls, or BSG feature tokens
 
 Libged view-command selection, feature-depth, label, line, axes, LoD, and

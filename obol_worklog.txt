@@ -26,6 +26,14 @@ Line annotations now accept one or more point triples in `create` and
 round-trip.  `view annotation line remove` removes a zero-based point range,
 and `view annotation line clear` removes the line feature.
 
+View-object lifecycle, visibility, style, and realization now route through
+object-level GED draw facades.  `ged_draw_view_context_object_style_get` and
+`ged_draw_view_context_object_style_apply` centralize feature, database
+shape-ref, and Obol overlay-group style dispatch in the draw bridge, including
+color support for `view db add --as` aliases and capability rejection for
+unsupported arrow settings.  `view/objs.cpp` no longer includes the private
+BSG draw header or calls direct feature-style or shape-color mutation APIs.
+
 The old command surface was a design problem, not just a missing color/arrow
 style facade.  It mixed annotations, database shape refs, transient edit
 proxies, command-result visuals, and type-specific editors behind one resolver
@@ -837,9 +845,10 @@ View-object draw visibility and update now route through
 `ged_draw_view_context_object_visible_get`,
 `ged_draw_view_context_object_visible_set`, and
 `ged_draw_view_context_object_realize`.  These facades keep feature-vs-shape-ref
-dispatch in the draw bridge instead of in `view/objs.cpp`; the command file
-still owns color/arrow style handling until that path gets a matching neutral
-style facade.
+dispatch in the draw bridge instead of in `view/objs.cpp`.  Color, line style,
+and arrow style now route through `ged_draw_view_context_object_style_get` and
+`ged_draw_view_context_object_style_apply`; unsupported style fields fail by
+object capability in the bridge rather than by command-local special cases.
 
 Design notes to keep current
 ----------------------------

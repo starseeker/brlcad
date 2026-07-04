@@ -294,6 +294,13 @@ main(int argc, const char **argv)
 
     const char *c11[] = {"view", "db", "add", "all.g", "--as", "g2", NULL};
     ASSERT(run_view(gedp, 6, c11) == BRLCAD_OK);
+    const char *c11a[] = {"view", "object", "style", "set", "g2", "color", "20/30/40", NULL};
+    ASSERT(run_view(gedp, 7, c11a) == BRLCAD_OK);
+    const char *c11b[] = {"view", "object", "style", "get", "g2", "color", NULL};
+    ASSERT(run_view(gedp, 6, c11b) == BRLCAD_OK);
+    ASSERT(result_str(gedp).find("20/30/40") != std::string::npos);
+    const char *c11c[] = {"view", "object", "style", "set", "g2", "arrow", "1", NULL};
+    ASSERT(run_view(gedp, 7, c11c) == BRLCAD_ERROR);
     const char *c12[] = {"view", "db", "delete", "g2", NULL};
     ASSERT(run_view(gedp, 4, c12) == BRLCAD_OK);
 

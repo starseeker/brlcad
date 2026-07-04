@@ -1224,6 +1224,25 @@ ged_draw_view_context_object_visible_set(
 	struct bu_vls *result);
 
 GED_EXPORT extern int
+ged_draw_view_context_object_style_get(
+	struct ged *gedp,
+	void *view_ctx,
+	const char *name,
+	ged_draw_shape_ref shape_ref,
+	struct ged_draw_view_feature_style *style,
+	struct bu_vls *result);
+
+GED_EXPORT extern int
+ged_draw_view_context_object_style_apply(
+	struct ged *gedp,
+	void *view_ctx,
+	const char *name,
+	ged_draw_shape_ref shape_ref,
+	const struct ged_draw_view_feature_style *style,
+	int recursive,
+	struct bu_vls *result);
+
+GED_EXPORT extern int
 ged_draw_view_context_object_realize(
 	struct ged *gedp,
 	void *view_ctx,

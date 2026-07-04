@@ -42,7 +42,6 @@ extern "C" {
 #include "ged/draw.h"
 }
 #include "./ged_view.h"
-#include "../bsg_ged_draw_private.h"
 #include "../ged_private.h"
 
 static struct ged_draw_view_record_query
@@ -249,40 +248,6 @@ _view_obj_shape_ref_find(struct ged *gedp,
     return ctx.ref;
 }
 
-struct view_obj_color_prefix_state {
-    struct ged *gedp;
-    const struct db_full_path *prefix;
-    const unsigned char *rgb;
-    int report;
-    struct bu_vls *out;
-};
-
-static int
-_view_obj_color_prefix_cb(const struct ged_draw_shape_record *rec, void *ud)
-{
-    struct view_obj_color_prefix_state *ctx =
-	(struct view_obj_color_prefix_state *)ud;
-    if (!ctx || !rec || !rec->fullpath || !ctx->prefix ||
-	    !db_full_path_match_top(ctx->prefix, rec->fullpath))
-	return 1;
-
-    if (ctx->rgb) {
-	(void)ged_draw_shape_ref_set_color(ctx->gedp, rec->ref, ctx->rgb);
-	return 1;
-    }
-
-    if (ctx->report && ctx->out) {
-	unsigned char rgb[3] = {0, 0, 0};
-	(void)ged_draw_shape_ref_get_color(ctx->gedp, rec->ref, rgb);
-	const char *name = rec->display_name ? rec->display_name : rec->leaf_name;
-	if (!name && rec->fullpath)
-	    name = "";
-	bu_vls_printf(ctx->out, "%s: %d/%d/%d\n", name ? name : "",
-		rgb[0], rgb[1], rgb[2]);
-    }
-    return 1;
-}
-
 int
 _objs_cmd_draw(void *bs, int argc, const char **argv)
 {
@@ -364,74 +329,29 @@ _objs_cmd_color(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    if (ged_draw_view_context_feature_exists(gd->cv, gd->vobj) && !(recurse && ac == 0)) {
-	struct ged_draw_view_feature_style style;
-	if (!ged_draw_view_context_feature_style_get(gd->cv, gd->vobj, &style)) {
-	    bu_vls_printf(gedp->ged_result_str, "No view feature named %s\n", gd->vobj);
-	    return BRLCAD_ERROR;
-	}
-	if (ac == 0) {
-	    bu_vls_printf(gedp->ged_result_str, "%d/%d/%d\n",
-		    style.color[0], style.color[1], style.color[2]);
-	    return BRLCAD_OK;
-	}
-
-	struct bu_color val;
-	if (bu_opt_color(NULL, 1, (const char **)&argv[0], (void *)&val) != 1) {
-	    bu_vls_printf(gedp->ged_result_str, "Invalid argument %s\n", argv[0]);
-	    return BRLCAD_ERROR;
-	}
-	bu_color_to_rgb_chars(&val, style.color);
-	style.color_valid = 1;
-	ged_draw_view_context_feature_style_apply(gd->cv, gd->vobj, &style, recurse);
-	return BRLCAD_OK;
-    }
-
-    if (ged_draw_shape_ref_is_null(gd->shape_ref)) {
-	bu_vls_printf(gedp->ged_result_str, "No view feature named %s\n", gd->vobj);
-	return BRLCAD_ERROR;
-    }
-
-    struct ged_draw_shape_record shape_rec;
-    if (!ged_draw_shape_record_get(gedp, gd->shape_ref, &shape_rec)) {
-	bu_vls_printf(gedp->ged_result_str, "No view feature named %s\n", gd->vobj);
-	return BRLCAD_ERROR;
-    }
+    struct ged_draw_view_feature_style style =
+	GED_DRAW_VIEW_FEATURE_STYLE_INIT;
 
     if (ac == 0) {
-	unsigned char rgb[3] = {0, 0, 0};
-	(void)ged_draw_shape_ref_get_color(gedp, gd->shape_ref, rgb);
-	bu_vls_printf(gedp->ged_result_str, "%d/%d/%d\n", rgb[0], rgb[1], rgb[2]);
-	if (recurse && shape_rec.fullpath) {
-	    struct view_obj_color_prefix_state ctx;
-	    ctx.gedp = gedp;
-	    ctx.prefix = shape_rec.fullpath;
-	    ctx.rgb = NULL;
-	    ctx.report = 1;
-	    ctx.out = gedp->ged_result_str;
-	    ged_draw_foreach_shape_record(gedp, _view_obj_color_prefix_cb, &ctx);
-	}
+	if (!ged_draw_view_context_object_style_get(gedp, gd->cv, gd->vobj,
+		gd->shape_ref, &style, gedp->ged_result_str))
+	    return BRLCAD_ERROR;
+	bu_vls_printf(gedp->ged_result_str, "%d/%d/%d\n",
+		style.color[0], style.color[1], style.color[2]);
 	return BRLCAD_OK;
     }
+
     struct bu_color val;
     if (bu_opt_color(NULL, 1, (const char **)&argv[0], (void *)&val) != 1) {
 	bu_vls_printf(gedp->ged_result_str, "Invalid argument %s\n", argv[0]);
 	return BRLCAD_ERROR;
     }
 
-    unsigned char rgb[3] = {0, 0, 0};
-    bu_color_to_rgb_chars(&val, rgb);
-    (void)ged_draw_shape_ref_set_color(gedp, gd->shape_ref, rgb);
-    if (recurse && shape_rec.fullpath) {
-	struct view_obj_color_prefix_state ctx;
-	ctx.gedp = gedp;
-	ctx.prefix = shape_rec.fullpath;
-	ctx.rgb = rgb;
-	ctx.report = 0;
-	ctx.out = NULL;
-	ged_draw_foreach_shape_record(gedp, _view_obj_color_prefix_cb, &ctx);
-    }
-    return BRLCAD_OK;
+    bu_color_to_rgb_chars(&val, style.color);
+    style.color_valid = 1;
+    return ged_draw_view_context_object_style_apply(gedp, gd->cv, gd->vobj,
+	    gd->shape_ref, &style, recurse, gedp->ged_result_str) ?
+	BRLCAD_OK : BRLCAD_ERROR;
 }
 
 int
@@ -449,55 +369,61 @@ _objs_cmd_arrow(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    if (ged_draw_view_context_feature_exists(gd->cv, gd->vobj)) {
-	struct ged_draw_view_feature_style style;
-	if (!ged_draw_view_context_feature_style_get(gd->cv, gd->vobj, &style)) {
-	    bu_vls_printf(gedp->ged_result_str, "No view feature named %s\n", gd->vobj);
-	    return BRLCAD_ERROR;
-	}
-	if (argc == 0) {
-	    bu_vls_printf(gedp->ged_result_str, "%d\n", style.arrow > 0 ? 1 : 0);
-	    return BRLCAD_OK;
-	}
-	if (BU_STR_EQUAL(argv[0], "0") || BU_STR_EQUAL(argv[0], "1")) {
-	    style.arrow = BU_STR_EQUAL(argv[0], "1") ? 1 : 0;
-	    ged_draw_view_context_feature_style_apply(gd->cv, gd->vobj, &style, 0);
-	    return BRLCAD_OK;
-	}
-	if (BU_STR_EQUAL(argv[0], "width"))  {
-	    if (argc == 2) {
-		fastf_t width = 0.0;
-		if (bu_opt_fastf_t(NULL, 1, (const char **)&argv[1], (void *)&width) != 1) {
-		    bu_vls_printf(gedp->ged_result_str, "Invalid argument %s\n", argv[0]);
-		    return BRLCAD_ERROR;
-		}
-		style.arrow_tip_width = width;
-		ged_draw_view_context_feature_style_apply(gd->cv, gd->vobj, &style, 0);
-		return BRLCAD_OK;
-	    }
-	    bu_vls_printf(gedp->ged_result_str, "%f\n", style.arrow_tip_width);
-	    return BRLCAD_OK;
-	}
-	if (BU_STR_EQUAL(argv[0], "length"))  {
-	    if (argc == 2) {
-		fastf_t length = 0.0;
-		if (bu_opt_fastf_t(NULL, 1, (const char **)&argv[1], (void *)&length) != 1) {
-		    bu_vls_printf(gedp->ged_result_str, "Invalid argument %s\n", argv[0]);
-		    return BRLCAD_ERROR;
-		}
-		style.arrow_tip_length = length;
-		ged_draw_view_context_feature_style_apply(gd->cv, gd->vobj, &style, 0);
-		return BRLCAD_OK;
-	    }
-	    bu_vls_printf(gedp->ged_result_str, "%f\n", style.arrow_tip_length);
-	    return BRLCAD_OK;
-	}
-	bu_vls_printf(gedp->ged_result_str, "Invalid argument %s\n", argv[0]);
+    struct ged_draw_view_feature_style style =
+	GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+    if (!ged_draw_view_context_object_style_get(gedp, gd->cv, gd->vobj,
+	    gd->shape_ref, &style, gedp->ged_result_str))
+	return BRLCAD_ERROR;
+
+    if (style.arrow < 0 && style.arrow_tip_width < 0.0 &&
+	    style.arrow_tip_length < 0.0) {
+	bu_vls_printf(gedp->ged_result_str,
+		"View object %s does not support arrow settings\n", gd->vobj);
 	return BRLCAD_ERROR;
     }
 
-    bu_vls_printf(gedp->ged_result_str,
-	    "View feature %s does not support arrow settings\n", gd->vobj);
+    if (argc == 0) {
+	bu_vls_printf(gedp->ged_result_str, "%d\n", style.arrow > 0 ? 1 : 0);
+	return BRLCAD_OK;
+    }
+    if (BU_STR_EQUAL(argv[0], "0") || BU_STR_EQUAL(argv[0], "1")) {
+	style.arrow = BU_STR_EQUAL(argv[0], "1") ? 1 : 0;
+	return ged_draw_view_context_object_style_apply(gedp, gd->cv,
+		gd->vobj, gd->shape_ref, &style, 0,
+		gedp->ged_result_str) ? BRLCAD_OK : BRLCAD_ERROR;
+    }
+    if (BU_STR_EQUAL(argv[0], "width"))  {
+	if (argc == 2) {
+	    fastf_t width = 0.0;
+	    if (bu_opt_fastf_t(NULL, 1, (const char **)&argv[1], (void *)&width) != 1) {
+		bu_vls_printf(gedp->ged_result_str, "Invalid argument %s\n", argv[0]);
+		return BRLCAD_ERROR;
+	    }
+	    style.arrow_tip_width = width;
+	    return ged_draw_view_context_object_style_apply(gedp, gd->cv,
+		    gd->vobj, gd->shape_ref, &style, 0,
+		    gedp->ged_result_str) ? BRLCAD_OK : BRLCAD_ERROR;
+	}
+	bu_vls_printf(gedp->ged_result_str, "%f\n", style.arrow_tip_width);
+	return BRLCAD_OK;
+    }
+    if (BU_STR_EQUAL(argv[0], "length"))  {
+	if (argc == 2) {
+	    fastf_t length = 0.0;
+	    if (bu_opt_fastf_t(NULL, 1, (const char **)&argv[1], (void *)&length) != 1) {
+		bu_vls_printf(gedp->ged_result_str, "Invalid argument %s\n", argv[0]);
+		return BRLCAD_ERROR;
+	    }
+	    style.arrow_tip_length = length;
+	    return ged_draw_view_context_object_style_apply(gedp, gd->cv,
+		    gd->vobj, gd->shape_ref, &style, 0,
+		    gedp->ged_result_str) ? BRLCAD_OK : BRLCAD_ERROR;
+	}
+	bu_vls_printf(gedp->ged_result_str, "%f\n", style.arrow_tip_length);
+	return BRLCAD_OK;
+    }
+
+    bu_vls_printf(gedp->ged_result_str, "Invalid argument %s\n", argv[0]);
     return BRLCAD_ERROR;
 }
 
@@ -864,11 +790,6 @@ _view_cmd_object(void *bs, int argc, const char **argv)
 	const char *style_cmd = sub_argv[1];
 	gd->vobj = sub_argv[2];
 	gd->shape_ref = _view_obj_shape_ref_find(gedp, gd->cv, gd->vobj, list_view, list_db, gd->local_obj);
-	if ((!ged_draw_view_context_feature_exists(gd->cv, gd->vobj) &&
-		ged_draw_shape_ref_is_null(gd->shape_ref))) {
-	    bu_vls_printf(gedp->ged_result_str, "No view object named %s\n", gd->vobj);
-	    return BRLCAD_ERROR;
-	}
 	if (BU_STR_EQUAL(style_cmd, "get")) {
 	    if (sub_argc != 4) {
 		bu_vls_printf(gedp->ged_result_str,
