@@ -1,336 +1,116 @@
-BRL-CAD Obol Overlay Coverage
-=============================
+BRL-CAD Obol Overlay and Command-Result Coverage
+================================================
 
 Scope
 -----
 
-This note tracks the Obol-side overlay representation needed by the Obol pivot.
-It is intentionally separate from bg_line_layer ownership: bg_line_layer remains
-the neutral low-level diagnostic producer/container, and libbrlobol converts it
-to Obol nodes only at publication boundaries.
+This note tracks Obol-side overlay and command-result representation.  The
+neutral low-level diagnostic container is still `bg_line_layer`; libbrlobol
+converts it to Obol/Coin scene objects only at publication boundaries.
 
-Current Obol Overlay Representations
-------------------------------------
+Current Obol Representations
+----------------------------
 
-| Overlay source | Obol representation | Current status |
+| Source | Obol representation | Status |
 | --- | --- | --- |
-| color-keyed diagnostic lines and points from bg_line_layer_builder | SoBRLLineLayerOverlay, with one SoBRLVListShape child per color layer | Covered by libbrlobol_prototype conversion/export/pick/snap/measure tests |
-| model axes | SoBRLAxes producing SoBRLVListShape geometry | Covered by libbrlobol_prototype overlay tests |
-| work grid | SoBRLGrid producing SoBRLVListShape geometry | Covered by libbrlobol_prototype overlay tests |
-| ADC / angle-distance cursor | SoBRLADC producing SoBRLVListShape geometry | Covered by libbrlobol_prototype overlay tests |
-| edit previews | SoBRLEditPreview producing wire or mesh preview nodes | Covered by libbrlobol_prototype edit-preview tests |
-| diagnostic and HUD labels | SoBRLHUDLabelOverlay wrapping direct Obol SoHUDKit/SoHUDLabel nodes | Covered by libbrlobol_prototype controller tests, qtcad overlay-sync tests, and libbrlobol_render |
-| HUD labels and rubber-band controls | Direct Obol HUD nodes | Covered by libbrlobol_render and libbrlobol_nanort_render |
+| color-keyed diagnostic lines/points | `SoBRLLineLayerOverlay` with one `SoBRLVListShape` child per color layer | Covered by conversion/export/pick/snap/measure tests |
+| simple command line sets | typed command-scene line-set feature | Used by gdiff, lint, joint, bot helpers, and preview eye paths |
+| command point output | typed command-scene point-set feature | Used by compatible `vdraw send` point payloads |
+| command indexed-face output | typed command-scene indexed-face-set feature | Used by compatible `vdraw send` face payloads |
+| diagnostic and HUD labels | `SoBRLHUDLabelOverlay` / direct HUD nodes | Used by GQA and check summaries |
+| model axes | `SoBRLAxes` | Covered by libbrlobol overlay tests |
+| work grid | `SoBRLGrid` | Covered by libbrlobol overlay tests |
+| ADC | `SoBRLADC` | Covered by libbrlobol overlay tests |
+| edit previews | `SoBRLEditPreview` | Covered by edit-preview tests |
+| complex command/plugin objects | command-scene `CustomNode` feature | Initial owner-scoped provider hook exists |
 
-Publication Paths
------------------
+Routed Producers
+----------------
 
-GED diagnostic producers publish bg_line_layer_builder data through the neutral
-ged_diagnostic_line_layer_publish callback.  qged installs an adapter that
-replaces the current QgView BRLObolViewController overlay with
-SoBRLLineLayerOverlay.  Existing BSG feature publication is retained only as
-the compatibility fallback when no Obol handler consumes the diagnostic.
+These producers currently publish through the command-scene path when an Obol
+view exists:
 
-Current routed producers:
+* rtcheck uplot overlap lines as shared `rtcheck::` line layers.
+* NIRT/qray plot lines as shared `query_ray` line layers.
+* `check overlaps -o` lines and summary HUD labels as `check::overlaps`.
+* GQA overlap, gap, adjacent-air, exposed-air, overlap-summary HUD, and
+  opt-in dense volume-sample plot lines.
+* GED `overlay` command uplot imports as shared `overlay::` line layers.
+* `vdraw send` line, point, and indexed-face-compatible `_VDRW*` results.
+* `gdiff`, `lint`, `joint`, `bot plot`, `bot_fuse`, `bot check`, and preview
+  eye-path line visualizations.
+* BREP debug line plots and NMG edge-use debug overlays.
 
-* GQA overlap, gap, adjacent-air, and exposed-air lines, published as
-  gqa::overlaps, gqa::gaps, gqa::adjacent-air, and gqa::exposed-air through
-  the GED command-scene helper
-* GQA volume sample plot lines, published as `gqa::volume-samples` through the
-  GED command-scene helper when the existing `-p` option requests the dense
-  plot stream
-* check overlap overlays, published as check::overlaps through the GED
-  command-scene helper
-* rtcheck uplot overlap lines, published as rtcheck:: through the GED
-  command-scene helper
-* NIRT/qray plot lines, published as query_ray through the GED command-scene
-  helper
-* GED overlay-command uplot imports, published as `overlay::` command-result
-  line layers owned by `overlay`
-* `vdraw send` line, point, and indexed-face output, published as `_VDRW*`
-  command-result features owned by `vdraw`
-* `gdiff`, `lint`, `joint`, `bot plot`, `bot_fuse`, and `bot check` simple
-  line-set visualizations, published through the shared command-scene line-set
-  helper with command-result metadata
-* BREP debug line plots, published as `brep::<debug-name>` through the shared
-  command-scene line-layer builder helper
-* NMG edge-use debug overlays, published as `nmg::_EU_` or `nmg::_EDGEUSES_`
-  through the shared command-scene line-layer builder helper
+Fallback direct diagnostic callbacks remain only for non-command-scene
+consumers and unowned views.
 
-Current routed HUD label producers:
+Command-Result Contract
+-----------------------
 
-* GQA overlap summaries, published as command-scene `gqa::overlaps::summary`
-  HUD labels owned by `gqa`
-* check overlap summaries, published as command-scene
-  `check::overlaps::summary` HUD labels owned by `check`
-
-Preserved Overlay Identity
---------------------------
-
-Line-layer overlays preserve:
-
-* overlay path and per-color layer path
-* layer name
-* source revision id
-* Obol source type "line-layer"
-* layer color as an Obol color override
-* per-line primitive index for pick/export/snap/measure
-* visibility and selectability
-
-Interactive Command Visualizations
-----------------------------------
-
-Command outputs such as nirt rays, rtcheck overlap results, check overlaps, and
-gqa overlap or gap diagnostics are scene-integrated command results, not just visual
-decoration.  Their Obol representation must be directly interactive: Coin
-nodes may be pickable, selectable, highlightable at primitive granularity, and
-usable by snap/measure/export actions when the command declares those
+Command outputs such as NIRT rays, rtcheck overlap results, check overlaps, and
+GQA diagnostics are scene objects, not passive decorations.  Their Obol
+representation must be pickable, selectable, highlightable at primitive
+granularity, and usable by snap/measure/export when the command declares those
 semantics.
 
-The libged-facing API should remain a command-owned scene transaction layer
-rather than unmanaged scene mutation.  Commands should publish result sets with:
+Commands should publish result sets with:
 
-* owner id, owner role, and generation/run id
-* shared scene scope by default, with view-local scope available when the
-  command is explicitly view-specific
+* owner id, owner role, and optional generation/run id
+* shared scene scope by default, with explicit view-local opt-in
 * replace/remove-prefix/commit lifecycle
-* selectable and visible style
-* stable feature and per-result identities
-* structured key/value result metadata for detail panels and command-specific
-  lookup
-* per-primitive key/value metadata for picked/selected result details
-* pick metadata sufficient for selection and highlighting
-* synchronous command-result callbacks for active transaction producers
-* custom Coin node providers for complex command-authored scene objects
+* visible/selectable style
+* stable feature id plus per-primitive indices
+* feature metadata and per-primitive metadata for detail panels
+* primitive selected/highlighted state
+* pick identity that resolves child Coin hits to parent result primitives
+* synchronous transaction callbacks for active producers
+* explicit custom-provider teardown rules for long-lived Coin callbacks
 
-The owner generation is a freshness fence, not a feature identity component.
-Owner-scoped lookup and cleanup should continue to match by owner token/id/role
-so a newer command run can remove or replace older results from the same
-command.  A command-scene transaction with a nonzero generation must not publish
-or commit after a newer generation for the same owner has begun.  A generation
-of zero remains the unfenced compatibility mode for synchronous or legacy
-callers.
+Owner generation is a freshness fence, not part of feature identity.  A
+nonzero generation must prevent stale asynchronous output from replacing newer
+results for the same owner.  Generation zero remains the unfenced compatibility
+mode for synchronous callers.
 
-Command-scene result metadata is stored on the owned feature record as generic
-key/value fields.  This is the common substrate for detail panels and
-command-specific lookup, not a replacement for primitive pick identity.  Result
-families such as rtcheck overlaps, gqa gaps, and NIRT hits should define stable
-keys for their own domains while preserving the same owner, lifecycle, and
-teardown semantics as their geometry/HUD features.  The neutral GED view API
-now exposes metadata count and key/value readback so command detail panels and
-tests do not need to include libbrlobol-private record types.
+Current Interaction State
+-------------------------
 
-Command-result VLIST features also preserve selected and highlighted primitive
-index lists.  The lists are stored on the owned feature record, exposed through
-neutral GED view APIs, and applied to realized `SoBRLVListShape`
-`selectedPrimitive` and `highlightedPrimitive` fields.  Line-layer command
-results map parent primitive indices across per-layer VLIST children by line
-segment offset, so a command can treat a multi-color result as one selectable
-result set.  This is state plumbing; commands still need pick-hit generation
-that maps Coin/librt hits onto these primitive indices and domain metadata.
+The feature store can preserve command-result metadata, per-primitive metadata,
+selected/highlighted primitive lists, and line-layer child-to-parent primitive
+resolution.  Neutral GED APIs expose that data without requiring callers to
+include libbrlobol-private record types.
 
-Command-result features also store per-primitive key/value metadata keyed by
-that same primitive namespace.  Command-scene producers can replace metadata
-for a primitive index, and neutral GED view APIs can count/copy it for detail
-panels and command-specific lookup.  This is the generic substrate for rtcheck
-overlap object pairs, NIRT hit/segment details, and GQA severity/result IDs; it
-does not replace the remaining need to generate pick hits that identify the
-right primitive index.
+qtcad consumes the bridge for real Obol/Coin pick details.  It keeps raw child
+`SoBRLPickDetail` identity, adds resolved parent feature/primitive identity,
+copies primitive metadata, and routes resolved command-result or overlay picks
+into Obol primitive selected/highlighted state instead of database path
+selection.
 
-Command-result line-layer child hits can now be resolved back to the parent
-feature namespace.  `BRLObolFeatureStore::resolvePrimitivePick` first accepts
-direct feature/primitive picks, then maps named line-layer children by line
-segment offset to the parent feature primitive index and parent primitive
-metadata.  The neutral GED helper
-`ged_draw_view_context_feature_pick_primitive_resolve` preserves the scope
-contract by trying view-local owned features first and shared scene features
-second, and can apply selected/highlighted primitive state to the resolved
-parent feature.
+Custom Coin Provider Policy
+---------------------------
 
-qtcad now consumes that bridge for real Obol/Coin pick details.  `QgObolPick`
-keeps the raw child `SoBRLPickDetail` identity in the pick record and adds the
-resolved parent feature name, parent primitive index, and parent primitive
-metadata.  The qtcad point/box/ray selection filters route resolved
-command-result and overlay feature picks into Obol selected/highlighted
-primitive state instead of sending feature or child-layer names through the GED
-database selection path.  This is the first GUI pick-event integration for
-rtcheck/NIRT/GQA-style shared scene result lines; remaining work is
-command-specific detail-panel schemas and richer command/plugin interaction
-contracts.
+Typed records are preferred for common line/HUD/point/face visualizations.
+Custom Coin nodes are for complex command or plugin-authored interactions that
+need direct Coin scene graph features.  They must remain inside an
+owner-scoped Obol boundary that defines:
 
-GED command-scene transactions can report synchronous result callbacks to the
-active producer.  These callbacks carry accepted, updated, removed, and failed
-events plus operation names, feature names, diagnostics, and feature handles for
-successful feature updates.  They are intentionally transaction-scoped; custom
-Coin providers that need longer-lived callbacks must define explicit ownership
-and lifetime rules instead of storing stack-owned GED callback state in feature
-records.
+* replacement, removal, and teardown
+* pick identity and primitive-state integration
+* callback/sensor/manipulator lifetime
+* selection/highlight synchronization
+* database-edit invalidation
+* structured metadata and transaction callback behavior
 
-libbrlobol remains responsible for turning those records into Coin scene
-participants.  Typed records are the preferred path for common visualizations,
-but they are not the upper bound of the design.  The migration should expose a
-controlled custom Coin scene-object provider path for complex command or
-plugin-authored interactions.  That provider can construct direct Coin nodes,
-manipulators, sensors, and callbacks, but only inside an owner-scoped Obol
-scene-object boundary that defines replacement, removal, teardown, pick
-identity, selection/highlight integration, and database-edit invalidation.
+The first provider hook exists: GED command-scene producers can publish an
+opaque provider-returned `SoNode` as a `CustomNode` feature, interpreted only by
+the C++ Obol adapter.  The remaining design work is richer persistent
+interaction behavior, not basic node ownership.
 
-The first provider hook is now in place.  GED command-scene producers can
-publish a custom `SoNode` as a `CustomNode` feature through an opaque C callback
-that is interpreted only by the C++ Obol adapter.  These custom nodes use the
-same command owner, scope, metadata, primitive-state, overlay, transaction
-callback, generation-fence, replacement, and prefix-removal rules as typed
-line/HUD features.  The remaining custom-provider design work is not basic node
-ownership; it is the richer contract for persistent callbacks, manipulators,
-pick-detail production, selection/highlight synchronization, and invalidation
-on database edits.
+Next Work
+---------
 
-This preserves the main motivation for the Obol migration: BRL-CAD commands and
-future user-provided extensions should be able to use Coin's richer scene graph
-and interaction model instead of falling back to raw OpenGL display-manager
-fragments or legacy ad-hoc draw streams.
-
-Case-study expectations:
-
-* rtcheck should publish generation-safe overlap result features so stale
-  subprocess output cannot replace a newer run.  The current command-scene API
-  supports owner generation fencing, and rtcheck supplies a run generation to
-  the uplot command-scene helper.  The shared uplot helper now publishes
-  baseline owner/kind/format/count metadata, and command-scene primitive
-  metadata can now carry overlap object/depth/domain keys.  Child layer picks
-  can resolve to the shared `rtcheck::` parent feature primitive namespace, and
-  qtcad selection filters can apply selected/highlighted primitive state for
-  those resolved picks.  rtcheck still needs its real overlap records mapped
-  into those per-primitive keys plus detail-panel consumption for individual
-  overlap lines.
-* check overlap lines and the overlap summary HUD label publish through
-  command-scene ownership as shared scene results.  The next step is shared
-  with rtcheck: richer structured overlap metadata, primitive
-  pick/highlight mapping, and generation tokens for any asynchronous check
-  producers that are added later.
-* nirt/qray publishes ray plot line layers through command-scene ownership and
-  no longer mutates the legacy qray display-list work flag.  Stale qray result
-  cleanup uses the centralized command-scene prefix helper, leaving direct
-  view-prefix removal only as helper-owned fallback for unowned views.  The
-  next step is to split ray segments, hit markers, and labels into richer
-  result records with pick/detail metadata rather than treating the plot as
-  anonymous line geometry.
-* `vdraw send` publishes line-compatible, point-compatible, and
-  indexed-face-compatible `_VDRW*` command-result features through
-  command-scene ownership.  Lines use line-layer records, points use typed
-  point-set records, and faces use typed indexed-face-set records.  The old
-  neutral overlay geometry fallback remains only for non-command-scene
-  consumers or invalid/unsupported payloads.
-* `gdiff`, `lint`, `joint`, `bot plot`, `bot_fuse`, `bot check`, and preview
-  eye-path output publish simple line-set command-result features through the
-  shared command-scene line-set helper.  These remain typed line-set records
-  rather than line-layer groups because their existing payloads are
-  single-color command visualizations; richer per-primitive metadata can be
-  layered on those records later.
-* brep debug plots and nmg edge-use diagnostics publish through the shared
-  command-scene line-layer builder helper.  They are still simple line-layer
-  results; richer per-primitive metadata can be added later if those command
-  families need selection/detail-panel behavior.
-* gqa overlap, gap, adjacent-air, and exposed-air lines publish through
-  command-scene ownership and retain feature-store payloads for
-  export/readback.  The overlap summary HUD label is also command-scene owned
-  and backed by `SoBRLHUDLabelOverlay`.  Dense GQA volume sample plot streams
-  use an explicit opt-in policy: when `-p` requests plot output, the same
-  volume sample segments publish as shared `gqa::volume-samples`
-  command-result lines while preserving the file plot.  The next step is to add
-  structured result metadata for these diagnostics so severity and result
-  identity survive picking and selection, then consume the resolved primitive
-  metadata in command-specific panels.
-
-Feature-store style now carries `selectable` intent from GED through
-BRLObolFeatureStore realization.  Line-layer builder overlays already preserve
-pick/export/snap/measure identity, and line-layer feature publication now
-propagates parent selectable style to realized child line shapes.
-
-The initial GED command-scene context publishes command-owned line-layer and HUD
-label features through this path.  It preserves owner metadata on shared
-command-result features, stamps `CommandResult` overlay metadata, supports
-owner-scoped prefix removal, stores key/value result metadata on feature
-records, reports synchronous transaction callbacks, supports custom Coin node
-providers, and rejects stale nonzero owner generations. Shared scope is the
-default because the existing nirt, rtcheck, check, gqa, and uplot in-scene
-line/HUD behaviors are scene-level results visible across views; commands that
-are genuinely view-local must request local scope explicitly.
-
-rtcheck, NIRT/qray, check overlap, BREP/NMG, GQA, vdraw, and simple line-set
-command visualizations now use command-scene ownership for their real scene
-payloads.  Obol feature export enumerates line-layer children as per-layer line
-records instead of exporting one flattened parent record.  That preserves
-existing color-layer record behavior and gives future command-result picking a
-stable per-layer/per-result boundary without splitting ownership into many
-independent feature-store records.  Builder-published line layers also retain
-their layer payloads in the feature store, so export/readback sees the same
-points and commands as the realized Coin overlay.
-
-The GED `overlay` command now follows the same ownership model for imported
-uplot files.  Single-file and multi-file/pattern imports publish shared
-`overlay::` command-result line layers with `result.kind=uplot-overlay` and
-`result.format=uplot-line-layers`.  The lower-level anonymous uplot feature
-helper remains compatibility plumbing for non-command callers, not the primary
-command path.
-
-The `vdraw send` path also follows this ownership model.  It publishes shared
-`_VDRW*` command-result features with `result.kind=vdraw-line`,
-`result.kind=vdraw-point`, or `result.kind=vdraw-indexed-face` and matching
-`result.format` values.  Active command-scene publication failures are
-authoritative: vdraw reports failure rather than silently inserting through the
-legacy neutral overlay fallback.
-
-Draw-Test Overlay Findings
---------------------------
-
-`ged_test_drawing_basic` label cases v012 through v017 now validate Obol label
-placement and visibility with a Hamming/perceptual threshold instead of exact
-pixel identity.  The remaining raw diffs are localized to the yellow label
-glyph/antialiasing area and leader-line vicinity; the database geometry,
-feature color, and label anchor position otherwise match the controls.  This
-is intentional: Obol labels should use real Obol text rendering, not preserve
-the old display-manager glyph rasterization.
-
-Model-anchored label size is now an explicit presentation field:
-
-* `BRLObolLabel::fontSize`
-* `ged_draw_view_label_data::font_size`
-* `rt_view_feature_label::font_size`
-* `bsg_feature_label_data::font_size` for compatibility fallback transport
-
-A non-positive value means use the Obol default.  The current default is 20
-pixels for legibility.  TclCAD data labels route their existing `gdls_size`
-through the GED label record, so callers can set label size without reaching
-into display-manager state.
-
-`ged_test_drawing_basic` axes cases v018 and v019 also use a small
-Hamming/perceptual threshold.  The axes color style is now applied to the
-`SoBRLAxes` generated VLIST shape; the remaining difference is a one-pixel
-origin/endpoint raster shift, not a missing color or geometry-state bug.  If
-exact axes pixel parity ever becomes important, the fix belongs in the shared
-camera/projection policy documented in `brl_obol_matrices.txt`, not in axes
-geometry offsets.
-
-Remaining Migration Work
-------------------------
-
-1. Extend the command-scene transaction API beyond initial typed
-   line/HUD/custom-node replacement and primitive metadata storage:
-   richer typed point/mesh interaction, pick-result integration, detail-panel
-   consumption, and richer custom Coin scene-object provider contracts.
-2. Continue rtcheck, NIRT/qray, check overlap, BREP/NMG, and GQA
-   command-scene diagnostics from command-owned line-layer/HUD publication to
-   richer command-specific result metadata, per-result pick detail, and
-   pick-hit-to-primitive state updates.  Keep generation tokens mandatory for
-   new asynchronous publishers and preserve current shared scene-level
-   line-layer/HUD behavior unless a command explicitly requests view-local
-   scope.
-3. Extend custom-provider tests from insertion/update/removal to picking,
-   highlight/select synchronization, manipulator callbacks, and database-edit
-   invalidation.  Define persistent callback ownership/lifetime only inside
-   that richer custom-provider contract.
-4. Route remaining diagnostic label producers to SoBRLHUDLabelOverlay where
-   labels should not be flattened into line geometry.
-5. Keep legacy BSG overlay publication only behind explicit compatibility paths
-   until the qtcad/GED Obol path is authoritative.
+* Add command-specific schemas for rtcheck/check overlap, NIRT segments/hits,
+  and GQA result severities using feature and per-primitive metadata.
+* Route detail panels through neutral readback APIs.
+* Add generation tokens to any newly asynchronous producers.
+* Prefer converting remaining old-style drawing producers to command-scene
+  features before expanding the custom Coin behavior surface.

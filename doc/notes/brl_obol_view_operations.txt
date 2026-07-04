@@ -4,61 +4,40 @@ BRL-CAD / Obol View Operation Semantics
 Purpose
 -------
 
-This note records BRL-CAD view-object behaviors that are command semantics,
-not generic Obol rendering preferences.  Obol may support nicer or broader
-visualization modes, but BRL-CAD commands and tests should route through
-explicit operation modes when historical behavior matters.
+This note records BRL-CAD view-object behavior that is command semantics, not
+generic Obol rendering preference.  Obol can support richer visualization and
+interaction than legacy display-manager code, but command behavior should flow
+through typed object operations with explicit ownership and capabilities.
 
+Current Command Model
+---------------------
 
-Obol View Object Command Design
--------------------------------
+The old GED `view obj`, `view objs`, and `view gobjs` spellings are retired,
+not compatibility aliases.  They mixed annotations, database instances,
+transient edit proxies, command-result visuals, type-specific editors, and
+style mutation behind one resolver.
 
-The retired GED `view obj` grammar mixed several concepts behind one name
-resolver:
+The Obol-oriented command split is:
 
-* user-authored view annotations such as lines, arrows, labels, axes, and
-  polygons
-* database object display instances and transient edit proxies
-* command-result scene objects such as nirt, rtcheck, check, gqa, overlay, and
-  vdraw outputs
-* type-specific editors whose verbs were nested under `view obj create`
-* style mutation that still branches between feature records and database
-  shape refs
+* `view object` for lifecycle, info, visibility, style, and realization.
+* `view annotation` for user-authored line, arrow, label, and axes objects.
+* `view polygon` for polygon creation/editing.
+* `view db` for database display/edit-proxy insertion.
+* Future `view result` and `view tool` families should manage command-owned
+  scene results and interactive Coin tools rather than overloading
+  `view object` with type-specific creation verbs.
 
-Obol treats these as scene objects with explicit type, capability, scope,
-owner, and lifecycle metadata.  New implementation work should target the
-typed Obol command surface rather than preserving the retired `view obj` and
-`view gobjs` spellings.
+`view object` command code should resolve one typed object handle and dispatch
+through object/capability APIs.  It must not independently branch on "feature
+exists" versus "shape ref exists" and then perform separate mutations.
+Lifecycle, visibility, style, and realization dispatch belongs in object-level
+GED draw facades and the Obol draw bridge.
 
-The core object record should identify:
-
-* stable object id/name and optional display label
-* class: annotation, database-instance, command-result, edit-proxy, tool, or
-  custom-node
-* scope: shared scene by default, view-local only when explicitly requested
-* owner id/role/generation for command-owned or plugin-owned objects
-* database path and draw mode for database-backed objects
-* capabilities: visible, selectable, pickable, style, arrow, label, axes,
-  polygon, database-instance, command-result, manipulator, editable, exportable
-* geometry or provider kind, plus typed result metadata and per-primitive
-  metadata when available
-* lifecycle policy: persistent user object, command-result replacement group,
-  edit-preview proxy, or view-local tool state
-
-Command code should resolve one typed object handle first, then dispatch
-through object/capability APIs.  It should not independently test "feature
-exists" versus "shape ref exists" and then perform separate mutations.  This
-keeps color, visibility, selection, update/realize, delete, pick metadata, and
-interactive behavior centralized in the Obol/GED draw bridge.
-
-User-facing command shape:
+Current user-facing shape:
 
 * `view object list [--all|--annotations|--database] [-L] [glob]`
 * `view object info <id> [field]`
-* `view object show <id>`
-* `view object hide <id>`
-* `view object delete <id>`
-* `view object realize <id>`
+* `view object show|hide|delete|realize <id>`
 * `view object style get <id> <field>`
 * `view object style set <id> <field> <value> ...`
 * `view annotation line create <id> x y z [x y z ...]`
@@ -73,70 +52,76 @@ User-facing command shape:
 * `view polygon append|select|move|update|close|open|fill|fill_color|csg|import|export ...`
 * `view db add <path> [--as <id>]`
 * `view db delete <id|path>`
-* future result/tool management should use similarly explicit `view result`
-  and `view tool` command families instead of generic object subverbs
 
-The exact spelling can change during implementation, but the separation of
-responsibilities should not.  Lifecycle verbs operate on objects.  Annotation
-verbs create and edit user geometry.  Database verbs manage database display
-instances.  Result verbs inspect command-owned scene results.  Tool verbs
-manage interactive Coin manipulators or other live behaviors.
+Typed Object Contract
+---------------------
 
-Style should be a typed property set, not a collection of ad hoc setters.
-Common fields include visibility, color, line width, point size, opacity,
-selectable, pickable, arrow enabled, arrow width, arrow length, label text,
-polygon fill mode, and command-result highlight policy.  Unsupported fields
-should fail through capability checks with an object type in the diagnostic.
-The command layer should route common lifecycle/style operations through
-object-level GED draw facades, leaving feature, database shape-ref, and Obol
-overlay-group dispatch in the draw bridge.
+Every managed view object should expose enough metadata for command-line and UI
+callers to reason about it without parsing human strings:
 
-Structured output should be available from the start.  UI callers need a
-stable way to query object class, scope, owner, capabilities, draw mode, style,
-metadata counts, primitive counts, and database target without parsing
-human-oriented strings.  `--json` is the preferred compatibility-neutral
-answer for new consumers.
+* stable id/name and optional display label
+* class: annotation, database-instance, command-result, edit-proxy, tool, or
+  custom-node
+* scope: shared scene by default, view-local only when explicitly requested
+* owner id, owner role, and optional generation for command/plugin results
+* database path and draw mode for database-backed objects
+* lifecycle policy: persistent user object, command-result replacement group,
+  edit-preview proxy, or view-local tool state
+* capabilities: visible, selectable, pickable, style, arrow, label, axes,
+  polygon, database-instance, command-result, manipulator, editable,
+  exportable
+* style fields: color, line width, point size, opacity, selectable, pickable,
+  arrow enabled, arrow width, arrow length, label text, polygon fill mode, and
+  command-result highlight policy
+* result metadata, per-primitive metadata, primitive selected/highlighted
+  state, and pick identity when available
 
-Migration policy:
+Unsupported style or lifecycle operations should fail through capability
+checks that identify the object type.  For example, arrows are valid for line
+annotation features but should be rejected for database-source or overlay
+group aliases unless those object classes grow a real arrow capability.
 
-* do not keep `view obj`, `view objs`, or `view gobjs` as compatibility
-  aliases
-* keep lifecycle and style operations under `view object`
-* keep user-authored line, arrow, label, and axes operations under
-  `view annotation`
-* keep polygon-specific editing under `view polygon`
-* keep database display/edit-proxy insertion under `view db`
-* keep direct feature/shape-ref branching out of command files; typed
-  object APIs own common lifecycle, visibility, style, and realization policy
+Structured output should be available for new consumers.  `--json` is the
+preferred compatibility-neutral form for object info/list results once the
+typed resolver/registry is in place.
 
-This design is intentionally Obol-only.  BSG support should remain at most a
-legacy fallback for unowned views, not a parallel object-management model.
+Richer Behavior Policy
+----------------------
 
+Do not try to fully specify every future Coin manipulator, sensor, callback, or
+detail-panel behavior before the remaining old drawing paths are gone.  The
+stable contract needed now is narrower:
+
+* object owner, scope, lifecycle, replacement/removal, and teardown
+* capability discovery and typed style mutation
+* pick identity, primitive metadata, and selected/highlighted primitive state
+* custom Coin provider ownership and callback lifetime rules
+* database-edit invalidation semantics for command/tool-owned objects
+
+Typed Obol records are the preferred path for common line/HUD/point/face
+visualizations.  Custom Coin providers are for complex command/plugin-authored
+scene objects and must remain inside an owner-scoped Obol scene-object boundary
+with explicit teardown and invalidation rules.  They are not a back door for
+anonymous scene mutation.
 
 Polygon Fill
 ------------
 
-BRL-CAD's GED `view polygon fill ...` command means hatch fill: compute
-line segments clipped to the polygon interior, draw those segments using the
-polygon fill color, and keep the polygon edge as a separate outline.  It does
-not mean "draw a translucent triangulated surface" in the legacy command
-contract.
+BRL-CAD's GED `view polygon fill ...` command means hatch fill: compute line
+segments clipped to the polygon interior, draw those segments using the polygon
+fill color, and keep the polygon edge as a separate outline.  It does not mean
+"draw a translucent triangulated surface" in the legacy command contract.
 
 Obol supports both fill interpretations:
 
 * `BRLOBOL_POLYGON_FILL_HATCH` preserves GED/BRL-CAD hatch semantics.
 * `BRLOBOL_POLYGON_FILL_MESH` draws a triangulated mesh fill.
-* Both flags may be enabled when a caller wants a shaded fill plus the
-  historical hatch overlay.
+* Both flags may be enabled when a caller wants shaded fill plus historical
+  hatch overlay.
 
-The existing `BRLObolPolygonStore::setFill` method is intentionally kept as a
-legacy hatch-fill operation.  Obol-native callers that want surface fill should
-use `setFillFlags` or set `BRLObolPolygonVisual::fillFlags` explicitly.
-
-Sketch import/export maps the legacy sketch polygon `fill_flag` to hatch fill.
-Mesh fill is an Obol view visualization option and is not written as that
-legacy sketch fill flag.
-
+The existing `BRLObolPolygonStore::setFill` method remains a legacy hatch-fill
+operation.  Obol-native callers that want surface fill should use
+`setFillFlags` or set `BRLObolPolygonVisual::fillFlags` explicitly.
 
 Hatch Slope Stability
 ---------------------

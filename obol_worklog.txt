@@ -6,869 +6,142 @@ Last compressed: 2026-07-04
 Purpose
 -------
 
-This file is a compact historical log for the Obol migration.  Older
-turn-by-turn detail was intentionally collapsed because the root text files had
-grown too large to be useful as handoff documents.  Use git history for exact
-diffs and use `doc/notes/` for durable design contracts.
+This file is a compact historical log for the Obol migration.  Turn-by-turn
+detail was intentionally collapsed because the root text files had become hard
+to use as handoff documents.  Use git history for exact diffs and `doc/notes/`
+for durable design contracts.
 
-2026-07-04: Obol view-object command surface replaced
------------------------------------------------------
+2026-07-04: Documentation reset
+-------------------------------
 
-The `view obj`, `view objs`, and `view gobjs` public command spellings were
-retired instead of kept as compatibility aliases.  The replacement surface is
-split by responsibility: `view object` handles lifecycle, info, visibility,
-style, and realization; `view annotation` handles user-authored line, arrow,
-label, and axes objects; `view polygon` handles polygon editing; and `view db`
-handles database display/edit-proxy insertion.
+The root handoff files were shortened to reflect the current migration state:
+finish retiring old-style non-Obol drawing drivers first, while defining only
+the minimal richer-behavior contracts needed to keep command-result and custom
+Coin work on a stable path.  `obol_legacy_dependency_inventory.txt` was reduced
+to guard-visible dependency rows, active owners, removal conditions, and
+current blockers instead of historical prose.
 
-Line annotations now accept one or more point triples in `create` and
-`append`, so callers can create an actual line without a separate append
-round-trip.  `view annotation line remove` removes a zero-based point range,
-and `view annotation line clear` removes the line feature.
+2026-07-04: View object command surface replaced
+------------------------------------------------
+
+The public `view obj`, `view objs`, and `view gobjs` spellings were retired
+instead of kept as aliases.  The replacement surface is split by responsibility:
+`view object` handles lifecycle, info, visibility, style, and realization;
+`view annotation` handles line, arrow, label, and axes objects; `view polygon`
+handles polygon editing; and `view db` handles database display/edit-proxy
+insertion.
+
+Line annotations accept one or more point triples in `create` and `append`.
+`view annotation line remove` removes a zero-based point range, and
+`view annotation line clear` removes the line feature.
 
 View-object lifecycle, visibility, style, and realization now route through
-object-level GED draw facades.  `ged_draw_view_context_object_style_get` and
-`ged_draw_view_context_object_style_apply` centralize feature, database
-shape-ref, and Obol overlay-group style dispatch in the draw bridge, including
-color support for `view db add --as` aliases and capability rejection for
-unsupported arrow settings.  `view/objs.cpp` no longer includes the private
-BSG draw header or calls direct feature-style or shape-color mutation APIs.
+object-level GED draw facades.  Feature, database shape-ref, and Obol overlay
+group style dispatch lives in the draw bridge, including color support for
+`view db add --as` aliases and capability rejection for unsupported arrow
+settings.
 
-The old command surface was a design problem, not just a missing color/arrow
-style facade.  It mixed annotations, database shape refs, transient edit
-proxies, command-result visuals, and type-specific editors behind one resolver
-and then branched on feature-vs-shape-ref state inside the command
-implementation.
-
-`doc/notes/brl_obol_view_operations.txt` now records the Obol-only command
-model.  The next implementation hardening step is to keep consolidating the
-internals behind a typed object resolver/registry with explicit class, scope,
-owner, database target, lifecycle, draw mode, capabilities, style, metadata,
-and pick state, without reintroducing old spelling aliases.
-
-2026-07-04: multi-instance transform reuse hardened
+2026-07-04: Multi-instance transform reuse hardened
 ---------------------------------------------------
 
-libbrlobol database realization now carries an internal, ref-owned geometry
-cache through `SoBRLRealizeAction`.  The action first seeds that cache from
-already-current realized shared geometry, then realizes stale sources.  This
-keeps reuse action-scoped rather than persistent, but lets legacy GED paths
-that synchronize one leaf source at a time still reuse existing local geometry
-for later transformed instances.
+libbrlobol database realization now carries an action-scoped shared-geometry
+cache.  The action seeds from already-current realized shared geometry, then
+realizes stale sources.  Repeated comb/solid instances can share source-local
+geometry while retaining per-instance transforms and identity.
 
-`ged_test_obol_draw_sync` now draws a repeated comb/solid hierarchy, verifies
-that transformed leaf database sources share one local geometry node, checks
-local/shared geometry bounds, validates transformed source and scene subtree
-bounds, exercises autoview on the transformed envelope, and erases the root
-without leaking sources.  GED Obol context-token DB fullpath parsing now strips
-internal `@N` instance suffixes only for DB lookup so indexed Obol identity no
-longer emits `db_string_to_path` warnings.
+`ged_test_obol_draw_sync` covers repeated transformed instances, shared local
+geometry reuse, source/subtree bounds, autoview on the transformed envelope,
+visibility/highlight transactions, direct stale/redraw reuse from current
+siblings, shaded shared mesh reuse, and erase cleanup.
 
-2026-07-04: evaluated-wire resource ownership hardened
-------------------------------------------------------
+2026-07-04: Evaluated-wire boundary moved to libbrlobol
+-------------------------------------------------------
 
-The libbrlobol evaluated-wire provider no longer mutates or uses global
-`rt_uniresource`.  Each provider call now owns an initialized librt
-`struct resource`, assigns it to the evaluation `application`, and cleans it
-with `rt_clean_resource` before destroying the temporary `rt_i`.
-
-The pivot guard now requires the explicit `rt_init_resource`/`rt_clean_resource`
-lifecycle in `src/libbrlobol/evaluated_wire.cpp` and rejects any
-`rt_uniresource` use there.  This keeps the provider ready for future
-deterministic internal parallelization with per-worker resources.
-
-2026-07-04: evaluated-wire provider boundary moved to libbrlobol
-----------------------------------------------------------------
-
-GED evaluated-wire realization is now a thin adapter.  `wireframe_eval.c`
+GED evaluated-wire realization became a thin adapter.  `wireframe_eval.c`
 resolves GED runtime/source state, calls the public
 `brlobol_evaluated_wire_*` line-set API, and publishes through neutral GED
-shape-ref or database-source facades.  The legacy Big-E implementation was
-moved behind `src/libbrlobol/evaluated_wire.cpp`, where it owns neutral
-`BG_GEOMETRY_LINE_*` command generation and has no GED/BSG scene-ref
-dependency.
+shape-ref or database-source facades.  The legacy Big-E implementation now
+lives behind `src/libbrlobol/evaluated_wire.cpp` and no longer depends on GED
+or BSG scene-ref internals.
 
-The pivot guard now enforces the boundary: GED may call the libbrlobol
-provider and publication facades, while libbrlobol must not include GED draw
-or BSG private headers.  The remaining evaluated-wire work is implementation
-modernization inside libbrlobol, including optional deterministic internal
-parallelization.
+The provider no longer mutates global `rt_uniresource`; each call owns and
+cleans a librt `struct resource`.  Remaining work is libbrlobol-internal
+modernization, including optional deterministic parallel evaluation with
+per-worker resources.
 
-2026-07-04: mode-aware evaluated-source refs
+2026-07-04: Mode-aware evaluated source refs
 --------------------------------------------
 
-GED Obol database-source refs now preserve representation mode when multiple
-sources share the same database path.  The private Obol bridge exposes
-mode-aware database-source record iteration, and GED context tokens include an
-optional draw-mode identity so `box.s` wire, evaluated-wire, hidden-line, and
-evaluated-point refs do not collapse to the same path-only token.
+Obol database-source refs now preserve representation mode when multiple
+sources share a database path.  Wire, evaluated wire, hidden-line, evaluated
+points, and shaded refs no longer collapse to one path-only token.
+Evaluated source realization enters the direct Obol publication scope for the
+ref's mode before calling the provider; retained evaluated wrappers remain
+fallback only for true retained scene refs.
 
-`ged_draw_shape_ref_realize_context` now realizes evaluated wire/point
-database sources through the direct Obol provider under the same publication
-scope used by draw transactions.  Retained shape-ref evaluated wrappers remain
-only as fallback for true retained scene refs.  `ged_test_obol_draw_sync` now
-marks an evaluated-wire source instance stale, resolves its mode-specific
-shape ref, calls realize-context, and verifies the evaluated source becomes
-current rather than publishing onto the shared wire source.
+2026-07-04: Command-scene result model expanded
+-----------------------------------------------
 
-Focused verification passed with:
-`ninja -C build libged libbrlobol ged_test_obol_draw_sync`;
-`ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_obol_draw_sync|ged_test_drawing_basic)$' -j4 --timeout 240 --output-on-failure`.
+The GED/libbrlobol command-scene API now publishes owner-scoped shared or
+view-local features with replacement/removal, generation fencing, metadata,
+primitive metadata, primitive selected/highlighted state, child line-layer pick
+resolution, and transaction callbacks.
 
-2026-07-04: qtcad command-result pick integration
+Typed feature kinds include line layers, line sets, point sets, indexed face
+sets, HUD labels, and custom Coin nodes.  The custom-node hook lets commands
+provide an opaque Coin node through a C-safe callback interpreted only by the
+C++ Obol adapter, while preserving the same owner, scope, metadata, primitive
+state, generation, replacement, and removal rules as typed features.
+
+rtcheck, NIRT/qray, check overlap, GQA diagnostics, BREP/NMG debug lines,
+overlay-command uplot import, `vdraw send`, preview eye paths, and several
+simple command line-set visualizations now publish through command-scene
+helpers instead of anonymous direct view-line mutation.
+
+2026-07-04: qtcad command-result picks integrated
 -------------------------------------------------
 
-qtcad Obol pick records now carry canonical feature-store pick identity in
-addition to the raw Coin detail identity.  `QgObolPickRecord` preserves the
-raw child `path` and `primitiveIndex`, and adds `featureName`,
-`featurePrimitiveIndex`, `featurePickResolved`, and primitive metadata copied
-from the resolved Obol parent primitive.  `QgObolPick.cpp` resolves real
-`SoBRLPickDetail` hits through `BRLObolFeatureStore::resolvePrimitivePick`, so
-Coin hits on children such as `rtcheck::overlaps/yellow` map back to the shared
-parent `rtcheck::overlaps` primitive namespace.
+qtcad Obol pick records now carry resolved feature-store identity in addition
+to raw Coin detail.  Real child line-layer picks can resolve back to the parent
+command-result feature and primitive namespace, with primitive metadata copied
+into the pick record.
 
-The qtcad point/box/ray selection filters now separate database picks from
-resolved Obol feature picks.  Database picks continue through the existing
-database path selection flow; resolved command-result or overlay feature picks
-replace selected/highlighted primitive state on the Obol parent feature and do
-not publish feature/layer names as database selection paths.  The feature-state
-application helper groups picked primitives by parent feature before replacing
-state, so rectangle and pick-all workflows can select multiple primitives on a
-single command-result feature.
+qtcad point, box, and ray selection filters separate database picks from
+resolved Obol feature picks.  Resolved command-result and overlay feature picks
+update Obol selected/highlighted primitive state instead of being treated as
+database selection paths.
 
-`test_qtcad_obol_pick` now publishes a shared `rtcheck::overlaps` line-layer
-feature, ray-picks the real Coin VLIST child `rtcheck::overlaps/yellow`,
-verifies resolved parent primitive metadata, applies primitive state through
-the qtcad helper, and verifies the point-selection filter updates parent
-selected/highlighted primitive state without creating database selection paths.
-
-2026-07-04: command-result primitive pick resolver
---------------------------------------------------
-
-Command-result line-layer child picks can now resolve back to the parent Obol
-feature and the parent primitive namespace.  `BRLObolFeatureStore` exposes
-`BRLObolFeaturePrimitivePick` and `resolvePrimitivePick`, first checking direct
-features and then mapping `LineLayer` child names by line-segment primitive
-offset.  The resolved result carries the parent feature handle/name, primitive
-index, and any per-primitive metadata stored on that parent primitive.
-
-The neutral GED view API now exposes
-`ged_draw_view_context_feature_pick_primitive_resolve`.  Obol-backed views try
-view-local owned features first, then shared scene features; BSG-backed views
-return no result.  The helper can also set selected/highlighted primitive state
-on the resolved parent feature.  `libbrlobol_view_store` covers direct local
-and child-layer resolution, and `ged_test_obol_draw_sync` covers
-`rtcheck::overlaps/yellow` resolving to shared `rtcheck::overlaps` primitive
-0 while applying parent primitive selection/highlight state.
-
-2026-07-04: command-result primitive metadata
----------------------------------------------
-
-Command-result features now have per-primitive key/value metadata.  The
-libbrlobol feature store owns `BRLObolFeaturePrimitiveMetadata` records, clears
-stale primitive metadata on feature replacement, reports primitive metadata
-record counts in summaries, copies primitive metadata through feature records,
-and exposes replace/readback helpers keyed by primitive index.
-
-The neutral GED API now exposes primitive metadata count/copy readback, and the
-GED command-scene API exposes owner-scoped
-`ged_draw_command_scene_feature_primitive_metadata_replace`.  BSG-backed views
-return no primitive metadata; Obol-backed views delegate to the feature store.
-`ged_test_obol_draw_sync` publishes `overlap.objects` and `overlap.depth`
-metadata on primitive 0 of `rtcheck::overlaps` and verifies neutral readback,
-summary count, record preservation, and transaction callbacks.
-
-Focused verification passed with:
-`ninja -C build libbrlobol libged ged_test_obol_draw_sync ged_test_gqa test_brlobol_view_store ged_test_draw`;
-and
-`ctest --test-dir build -R '^(brlobol_pivot_guard|libbrlobol_view_store|ged_test_obol_draw_sync|ged_test_gqa|ged_test_drawing_basic)$' -j4 --timeout 240 --output-on-failure`.
-
-2026-07-04: command-scene custom Coin node provider
----------------------------------------------------
-
-The Obol feature store now has a first-class `CustomNode` feature kind and
-`BRLObolFeatureStore::publishCustomNode`.  Custom features preserve the
-provider-returned `SoNode` under normal Obol feature ownership, replacement,
-removal, metadata, primitive-state, overlay, and summary/record semantics.
-Generic metadata/style/primitive-state updates keep the custom node intact, and
-typed geometry mutation helpers reject custom records instead of fabricating
-VLIST geometry.
-
-GED command-scene transactions now expose
-`ged_draw_command_scene_custom_node_replace`, a C-safe provider hook that
-passes feature/owner/generation/scope request metadata and treats the returned
-opaque pointer as a Coin `SoNode` only inside the C++ Obol adapter.  Custom
-nodes are generation-fenced, shared by default, overlay-stamped as command
-results, callback-reported, and removed through the same owner-scoped cleanup
-path as typed line/HUD features.
-
-`libbrlobol_view_store` covers direct custom-node publication, replacement,
-metadata/style/primitive preservation, and removal.  `ged_test_obol_draw_sync`
-covers command-scene provider request metadata, shared command-result
-publication, metadata, primitive state, callbacks, and owner-scoped cleanup for
-`custom::node`.
-
-Focused verification passed with:
-`ninja -C build libbrlobol libged ged_test_obol_draw_sync ged_test_gqa test_brlobol_view_store ged_test_draw`;
-and
-`ctest --test-dir build -R '^(brlobol_pivot_guard|libbrlobol_view_store|ged_test_obol_draw_sync|ged_test_gqa|ged_test_drawing_basic)$' -j4 --timeout 240 --output-on-failure`.
-
-2026-07-04: command-scene result callbacks
-------------------------------------------
-
-GED command-scene transactions now support synchronous command-result
-callbacks through `ged_draw_command_scene_desc`.  The callback reports
-accepted, updated, removed, and failed transaction events with the operation
-name, feature name, optional diagnostic text, and feature handle for successful
-feature updates.  The adapter invokes these callbacks only during active
-transaction operations and commit, avoiding storage of GED callback state in
-long-lived Obol feature records.
-
-`ged_test_obol_draw_sync` covers line-layer update, metadata update,
-owner-scoped prefix removal, and stale-generation rejection callbacks on the
-shared `rtcheck::` command-result path.  The pivot guard now protects the
-public callback API, adapter notify helper, and regression coverage.
-
-Focused verification passed with:
-`ninja -C build libbrlobol libged ged_test_obol_draw_sync ged_test_gqa test_brlobol_view_store ged_test_draw`;
-and
-`ctest --test-dir build -R '^(brlobol_pivot_guard|libbrlobol_view_store|ged_test_obol_draw_sync|ged_test_gqa|ged_test_drawing_basic)$' -j4 --timeout 240 --output-on-failure`.
-
-2026-07-04: command-result primitive state
-------------------------------------------
-
-Command-result feature records now carry selected and highlighted primitive
-index lists.  `BRLObolFeatureStore` exposes replace/readback helpers, copies
-the lists through feature summaries and records, clears stale primitive state on
-feature publish/upsert, and applies the lists to realized `SoBRLVListShape`
-`selectedPrimitive` and `highlightedPrimitive` fields.  Line-layer command
-results split parent primitive indices across per-layer VLIST children by line
-segment offset, preserving a single command-result primitive namespace for
-multi-color result layers.
-
-The neutral GED view API now exposes selected/highlighted primitive replacement,
-count, and indexed readback functions.  BSG-backed views return no primitive
-feature state; Obol-backed views delegate to the feature store.  The
-libbrlobol view-store regression verifies store/readback/realized VLIST
-behavior, and `ged_test_obol_draw_sync` verifies the neutral GED API,
-summary counts, feature-record state, and realized Coin fields on
-`rtcheck::overlaps`.
-
-Focused verification passed with:
-`ninja -C build libbrlobol libged ged_test_obol_draw_sync ged_test_gqa test_brlobol_view_store`;
-`ctest --test-dir build -R '^(brlobol_pivot_guard|libbrlobol_view_store|ged_test_obol_draw_sync|ged_test_gqa)$' -j4 --timeout 240 --output-on-failure`;
-`ninja -C build ged_test_draw`;
-`ctest --test-dir build -R '^ged_test_drawing_basic$' --timeout 240 --output-on-failure`;
-and `git diff --check`.
-
-2026-07-04: real command-result metadata publication
+2026-07-04: Database drawing and autoview stabilized
 ----------------------------------------------------
 
-Migrated command diagnostics now populate baseline metadata on their real
-command-result features.  The shared uplot helper records owner, kind, format,
-layer count, point count, feature name, and generation when present; rtcheck
-uses kind `overlap`, and NIRT/qray uses kind `query-ray`.  The shared
-line-layer builder helper records the same baseline metadata for BREP/NMG
-diagnostics, with producer-provided kinds such as `brep-debug-plot`,
-`nmg-edgeuses`, and `nmg-edgeuse`.
-
-GQA and `check overlaps` explicit command-scene transactions now attach
-metadata to their line and HUD summary features.  GQA records `overlap`, `gap`,
-`adjacent-air`, `exposed-air`, and `overlap-summary` kinds; check records
-`overlap` and `overlap-summary`.  These explicit transactions now also avoid
-legacy diagnostic fallback after an Obol command-scene publish/metadata/commit
-failure, matching the stale-generation behavior of the shared helpers.
-
-The neutral GED view API now exposes
-`ged_draw_view_context_feature_metadata_count` and
-`ged_draw_view_context_feature_metadata_copy`.  `ged_test_gqa` validates real
-GQA/check metadata through those neutral APIs, and `ged_test_obol_draw_sync`
-validates helper-generated metadata for NIRT/qray and builder-published
-command results.
-
-Focused verification passed with:
-`ninja -C build libbrlobol libged ged_test_obol_draw_sync ged_test_gqa test_brlobol_view_store`;
-`ctest --test-dir build -R '^(brlobol_pivot_guard|libbrlobol_view_store|ged_test_obol_draw_sync|ged_test_gqa)$' -j4 --timeout 240 --output-on-failure`;
-`ninja -C build ged_test_draw`;
-`ctest --test-dir build -R '^ged_test_drawing_basic$' --timeout 240 --output-on-failure`;
-and `git diff --check`.
-
-2026-07-04: command-result metadata records
--------------------------------------------
-
-Command-scene result features can now carry structured key/value metadata.
-`BRLObolFeatureStore` stores metadata on feature records, reports metadata
-counts in summaries, exposes replace/readback helpers, and clears stale
-metadata on feature publish/upsert so a new command result cannot inherit
-detail fields from an older run.
-
-The GED command-scene API exposes
-`ged_draw_command_scene_feature_metadata_replace`, which is owner-scoped and
-generation-fenced like geometry/HUD publication.  `ged_test_obol_draw_sync`
-publishes `result.kind` and `result.count` metadata on `rtcheck::overlaps` and
-verifies the owned command-result record.  `libbrlobol_view_store` verifies
-store-level metadata round-trip, summary count, record copy, and publish-time
-metadata clearing.
-
-Focused verification passed with:
-`ninja -C build libbrlobol libged ged_test_obol_draw_sync ged_test_gqa test_brlobol_view_store`;
-`ctest --test-dir build -R '^(brlobol_pivot_guard|libbrlobol_view_store|ged_test_obol_draw_sync|ged_test_gqa)$' -j4 --timeout 240 --output-on-failure`;
-`ninja -C build ged_test_draw`;
-`ctest --test-dir build -R '^ged_test_drawing_basic$' --timeout 240 --output-on-failure`;
-and `git diff --check`.
-
-2026-07-04: command-scene generation fencing
----------------------------------------------
-
-Command-scene owners now carry an optional generation field.  The Obol feature
-store tracks the newest generation seen for each command owner token/id/role,
-and command-scene mutation/commit paths reject nonzero generations older than
-the current owner generation.  Owner matching deliberately ignores generation
-so newer command runs can still remove or replace older results under the same
-owner.
-
-rtcheck now assigns a monotonically increasing command generation to each
-subprocess run and passes it through the uplot command-scene helper.  This keeps
-late subprocess output from replacing a newer `rtcheck::` result while leaving
-generation zero as the unfenced compatibility mode for synchronous legacy
-callers.  The shared line-layer builder helper now also treats command-scene
-publication or commit failure as authoritative and falls back only when no
-command-scene context exists.  `ged_test_obol_draw_sync` includes stale
-generation regressions using `rtcheck::generation` and
-`nmg::_helper_generation`, and the pivot guard now protects the store, adapter,
-rtcheck, helper, and regression tokens.
-
-Focused verification passed with:
-`ninja -C build libbrlobol libged ged_test_obol_draw_sync ged_test_gqa test_brlobol_view_store`;
-`ctest --test-dir build -R '^(brlobol_pivot_guard|libbrlobol_view_store|ged_test_obol_draw_sync|ged_test_gqa)$' -j4 --timeout 240 --output-on-failure`;
-`ninja -C build ged_test_draw`;
-`ctest --test-dir build -R '^ged_test_drawing_basic$' --timeout 240 --output-on-failure`;
-and `git diff --check`.
-
-2026-07-04: remaining line-layer diagnostics command-scene helper
------------------------------------------------------------------
-
-BREP debug line plots and NMG edge-use diagnostics now publish through a shared
-libged line-layer builder command-scene helper when an Obol view is active.
-The helper stamps shared command-result ownership, visible/selectable style, and
-owner-scoped replacement, while preserving the old diagnostic line-layer
-callback and direct view-context replacement only as centralized fallback for
-non-command-scene consumers.
-
-`_brep_plot_publish`, draw's `nmg::_EDGEUSES_` output, and `nmg_plot_eu` now
-call the helper with `brep` or `nmg` ownership instead of open-coded
-diagnostic callback publication.  `ged_test_obol_draw_sync` covers the helper
-directly and verifies shared owner metadata, `CommandResult` overlay metadata,
-feature-store line-layer payloads, and owner-scoped cleanup.  The pivot guard
-now protects the helper and requires those producers to use it.
-
-Focused verification passed with:
-`ninja -C build libged ged_test_obol_draw_sync`;
-`ninja -C build libged ged_test_gqa ged_test_obol_draw_sync test_brlobol_view_store`;
-`ctest --test-dir build -R '^brlobol_pivot_guard$' --timeout 240 --output-on-failure`;
-`ctest --test-dir build -R '^(brlobol_pivot_guard|libbrlobol_view_store|ged_test_obol_draw_sync|ged_test_gqa)$' -j4 --timeout 240 --output-on-failure`;
-and `git diff --check`.
-
-2026-07-04: check overlap command-scene migration
--------------------------------------------------
-
-`check -o overlaps` now publishes `check::overlaps` line layers and
-`check::overlaps::summary` HUD labels through command-scene ownership under
-owner `check`.  The old diagnostic line-layer and HUD callbacks remain as
-fallbacks for non-command-scene consumers only.
-
-`ged_test_gqa` now also runs `check overlaps -P 1 -o -g 250mm-50mm ovlp`
-against its overlap fixture and verifies the check line feature, summary HUD
-label, command-result metadata, and exported segments through neutral GED view
-APIs.  The pivot guard now requires `check_overlaps.c` to keep the
-command-scene line and HUD paths.
-
-Focused verification passed with:
-`ninja -C build libged ged_test_gqa ged_test_obol_draw_sync test_brlobol_view_store`;
-`ctest --test-dir build -R '^ged_test_gqa$' --timeout 90 --output-on-failure`;
-`ctest --test-dir build -R '^(brlobol_pivot_guard|libbrlobol_view_store|ged_test_obol_draw_sync|ged_test_gqa)$' -j4 --timeout 240 --output-on-failure`;
-and `git diff --check`.
-
-2026-07-04: GQA overlap summary HUD label command-scene migration
------------------------------------------------------------------
-
-GQA overlap summary HUD labels now publish as command-scene `HudLabel`
-features owned by `gqa`, using `gqa::overlaps::summary` and
-`SoBRLHUDLabelOverlay` realization in the Obol feature store.  The old
-`ged_diagnostic_hud_label_publish` callback remains only as fallback when no
-Obol command-scene view is available.
-
-The command-scene API now has a generic HUD-label replace helper beside the
-line-layer helpers, and `BRLObolFeatureStore::publishHudLabels` realizes
-screen-space HUD labels as `SoBRLHUDLabelOverlay` nodes instead of ordinary
-3D `SoText2` labels.  `ged_test_gqa` validates the summary through neutral
-Obol feature summary and label readback, while `libbrlobol_view_store` covers
-HUD label node realization/source id preservation.  The pivot guard now
-requires the GQA HUD summary path to remain command-scene owned.
-
-Focused verification passed with:
-`ninja -C build libbrlobol libged ged_test_gqa test_brlobol_view_store`;
-and `ctest --test-dir build -R '^(ged_test_gqa|libbrlobol_view_store|brlobol_pivot_guard)$' --timeout 240 --output-on-failure`.
-
-2026-07-04: GQA non-overlap line diagnostics
---------------------------------------------
-
-GQA gap, adjacent-air, and exposed-air line diagnostics now use the same
-command-scene ownership model as overlap lines.  A single GQA result builder
-set publishes shared `gqa::overlaps`, `gqa::gaps`, `gqa::adjacent-air`, and
-`gqa::exposed-air` command-result line layers owned by `gqa`, with the old
-diagnostic line-layer callback retained only as no-command-scene fallback.
-Volume sampling plot streams were deliberately left on the file/plot path for
-now because they need a separate density/scene-policy decision before being
-inserted into the interactive scene.
-
-`ged_test_gqa` now creates a temporary GQA fixture for the gap and air cases,
-initializes an owned Obol scene, verifies each feature summarizes as
-command-result scene content, and counts exported line segments through the
-neutral GED view-record path.  This also exposed and fixed an old adjacent-air
-plot bug: `plot_adjair` is now null-checked before writing plot3 data, so
-scene publication no longer requires `-p` plot-file output.
-
-Focused verification passed with:
-`ninja -C build libged ged_test_gqa`;
-`ctest --test-dir build -R '^(ged_test_gqa|brlobol_pivot_guard)$' --timeout 240 --output-on-failure`;
-`ninja -C build libged ged_test_gqa ged_test_obol_draw_sync test_brlobol_view_store`;
-`ctest --test-dir build -R '^(brlobol_pivot_guard|libbrlobol_view_store|ged_test_obol_draw_sync|ged_test_gqa)$' -j4 --timeout 240 --output-on-failure`;
-`ninja -C build gqa mged plot3-dm`;
-`ctest --test-dir build -R '^regress-gqa$' --timeout 300 --output-on-failure`;
-and `git diff --check`.
-
-2026-07-04: GQA overlap command-scene migration
------------------------------------------------
-
-GQA overlap line output now publishes through the GED command-scene API as a
-shared `gqa::overlaps` command-result line layer owned by `gqa`.  The old
-neutral diagnostic line-layer path remains only as no-command-scene
-compatibility fallback.  `ged_test_gqa` now initializes an owned Obol scene,
-requires the published feature to summarize as command-result scene content,
-and still exports the overlap line segments through the GED view-record path.
-
-This exposed a lower-level feature-store gap: line-layer builder publication
-realized Coin geometry but did not preserve the layer payload in the
-BRLObolFeatureStore record.  Builder-published line layers now copy per-layer
-points, commands, colors, and parent-qualified layer names into the feature
-record, so command-scene, diagnostic, export, snap, and measure paths have the
-same stable record data.
-
-Focused verification passed with:
-`ninja -C build libbrlobol libged ged_test_gqa test_brlobol_view_store`;
-`ninja -C build ged_test_obol_draw_sync test_brlobol_view_store ged_test_gqa`;
-`ctest --test-dir build -R '^(brlobol_pivot_guard|libbrlobol_view_store|ged_test_obol_draw_sync|ged_test_gqa)$' -j4 --timeout 240 --output-on-failure`;
-and `git diff --check`.
-
-2026-07-04: NIRT/qray command-scene migration
----------------------------------------------
-
-NIRT/qray plot output now publishes through the GED command-scene helper
-instead of the neutral feature importer.  The `query_ray` result family is a
-shared command-result line layer owned by `nirt`, with owner-scoped prefix
-removal before each shot and the same owner/role metadata used by rtcheck.
-`ged_test_obol_draw_sync` covers the direct uplot-to-command-scene helper,
-including shared feature publication, line-layer geometry, command-result
-overlay metadata, and owner-scoped removal.
-
-The old qray display-list work flag was removed from NIRT and from the libged
-draw bridge.  That flag only mutated retained BSG shape state after a NIRT run
-and had no Obol command-scene contract.  The pivot guard now treats the removed
-helpers as gone instead of allowing them as part of the migrated draw surface.
-
-Focused verification passed with:
-`ninja -C build libged ged_test_obol_draw_sync`;
-`ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_obol_draw_sync)$' --timeout 240 --output-on-failure`;
-and `ctest --test-dir build -R '^(brlobol_pivot_guard|libbrlobol_view_store|ged_test_obol_draw_sync|ged_test_ged_draw_scene_typed|ged_test_ged_draw_scene_core)$' -j4 --timeout 240 --output-on-failure`.
-
-2026-07-04: rtcheck command-scene migration and draw-scene repair
------------------------------------------------------------------
-
-rtcheck's uplot overlap stream now publishes through the GED command-scene
-helper instead of calling the generic feature publisher directly.  The real
-command path publishes shared `rtcheck::` command-result line layers with owner
-metadata, `CommandResult` overlay metadata, and owner-scoped prefix cleanup.
-The helper keeps a compatibility fallback internally for non-Obol contexts, but
-owned Obol views now receive command-owned scene content by default.  This
-matches the current line-result behavior for nirt/rtcheck/gqa: scene-level
-results are visible across views unless a command explicitly requests
-view-local scope.
-
-The uplot refactor exposed that Obol line-layer feature export was flattening a
-multi-layer feature into one parent line record.  GED export now enumerates
-line-layer children as per-layer line records with merged parent/layer style,
-per-layer colors, and per-layer point/command readback while retaining one
-owned Obol feature in the store.  This preserves existing qray/NIRT-style
-color-layer record semantics and is also the right boundary for future
-per-result picking/highlighting.
-
-Direct Obol database-source draw now ensures an explicit group for the
-requested root path before leaf-instance realization.  This keeps later
-`ged_draw_group_ref_lookup_or_create` calls idempotent and avoids creating
-retained placeholders after a direct-provider draw.  Direct mesh providers also
-honor the GED primitive face-set failure test hook by publishing an empty Obol
-mesh result and reporting the path handled, preventing fallback to retained
-`_ged_drawtrees` from reintroducing legacy indexed-face geometry.
-
-Focused verification passed with:
-`ninja -C build libged ged_test_ged_draw_scene ged_test_obol_draw_sync test_brlobol_view_store`;
-`ninja -C build ged_test_draw`;
-`ctest --test-dir build -R '^(brlobol_pivot_guard|libbrlobol_view_store|ged_test_obol_draw_sync|ged_test_ged_draw_scene_typed|ged_test_ged_draw_scene_core)$' -j4 --timeout 240 --output-on-failure`;
-and `ctest --test-dir build -R '^ged_test_drawing_basic$' --timeout 240 --output-on-failure`.
-
-2026-07-04: interactive command visualization direction
--------------------------------------------------------
-
-The nirt, rtcheck, and gqa migration target was clarified as command-owned
-interactive Obol/Coin scene content rather than passive overlay drawing.
-libged commands should publish owned result features with lifecycle, owner/run
-identity, selectable/pickable state, and command metadata.  Typed feature
-records are the first rung, not the ceiling: the longer-term command-scene API
-must allow controlled custom Coin scene-object providers so BRL-CAD commands
-and future user extensions can publish complex nodes, manipulators, sensors,
-and callbacks while preserving Obol ownership, teardown, pick detail, primitive
-highlight state, and database-edit invalidation semantics.
-
-Feature style now carries `selectable` intent through the GED feature API and
-BRLObolFeatureStore realization.  The libbrlobol view-store regression verifies
-that both direct line features and child shapes of published line-layer
-features honor unselectable style.
-
-The first GED command-scene publication context was added on top of the Obol
-feature store.  It can begin a command-owned scene publication, replace shared
-or view-local line-layer results, remove owned result prefixes, and commit the
-context.  Default scope is shared/scene-general to match current nirt,
-rtcheck, gqa, and uplot-style in-scene line behavior; view-local publication is
-explicit.  Shared command-result records now preserve owner metadata, and
-owner-scoped prefix removal filters shared records by owner when supplied.
-`ged_test_obol_draw_sync` covers an rtcheck-style shared result with selectable
-style, `CommandResult` overlay metadata, command owner identity, and owned
-prefix removal.
-
-Focused verification passed with:
-`ninja -C build test_brlobol_view_store`;
-`ninja -C build ged_test_obol_draw_sync test_brlobol_view_store`;
-and `ctest --test-dir build -R '^(libbrlobol_view_store|ged_test_obol_draw_sync)$' -j2 --timeout 240 --output-on-failure`.
-
-2026-07-04: evaluated draw providers and retained mirror removal
-----------------------------------------------------------------
-
-GED evaluated wire and evaluated sampled-points draw modes now publish through
-direct Obol database-source providers for the requested path.  Evaluated
-sampled-points samples the target primitive and publishes the indexed-face
-payload directly to the Obol source.  Evaluated wire now factors the old Big-E
-line-set producer away from retained shape refs and publishes the resulting
-line set directly to the Obol source.  Later work moved that legacy Big-E
-implementation behind a libbrlobol provider boundary; this entry records the
-first direct-provider migration before that move.
-
-Successful direct Obol draw providers no longer invoke `_ged_drawtrees` as a
-retained BSG compatibility mirror.  The transaction layer now counts retained
-draw-tree fallback invocations, and `ged_test_obol_draw_sync` asserts that
-direct hidden-line, evaluated-wire, evaluated-points, current wire, and
-submodel draws do not use retained draw-tree fallback or retained shape
-mutation during provider draw.
-
-Focused verification passed with:
-`ninja -C build ged_test_obol_draw_sync`;
-`ctest --test-dir build -R '^ged_test_obol_draw_sync$' --timeout 240 --output-on-failure`;
-and `ctest --test-dir build -R '^ged_test_drawing_basic$' --timeout 240 --output-on-failure`.
-
-2026-07-04: direct Obol leaf-source draw and ARB shading repair
----------------------------------------------------------------
-
-GED draw transactions now use direct Obol database-source realization for
-normal database draw modes.  For wire, shaded-BoT, shaded, and hidden-line
-draws, the transaction layer walks requested roots with
-`db_walk_tree_leaf_instances`, publishes each full leaf path as its own Obol
-database source, applies display/appearance state there, and realizes through
-libbrlobol.  This keeps inherited material state and tree transforms on the
-same leaf-instance boundary used by libbrlobol realization, avoiding aggregate
-mode-specific sources that collapse color/material state.
-
-`_ged_drawtrees` is no longer the authoritative publication path for these
-modes.  It is now retained only for no-owned-scene compatibility, unsupported
-legacy callers, and exceptional fallback when a direct Obol provider cannot
-realize requested roots.  Erase paths clear both Obol authoritative sources and
-any retained fallback state.
-
-Mode 2 primitive shading exposed a separate libbrlobol issue: the hand-coded
-ARB shaded mesh shortcut produced inward normals for `mk_rpp`-style ARBs,
-leaving flat surfaces nearly black under GL lighting.  That shortcut was
-removed; ARBs now fall through to librt tessellation like other primitives, so
-ARB topology and face orientation stay owned by librt.
-
-Focused verification passed with:
-`ninja -C build ged_test_draw ged_test_obol_draw_sync test_brlobol_prototype`;
-`ctest --test-dir build -R '^ged_test_drawing_basic$' --timeout 240 --output-on-failure`;
-`ctest --test-dir build -R '^ged_test_obol_draw_sync$' --timeout 240 --output-on-failure`;
-and `ctest --test-dir build -R '^libbrlobol_prototype$' --timeout 240 --output-on-failure`.
-
-2026-07-04: source-local-only mesh publication bridge
------------------------------------------------------
-
-The generic Obol database-source indexed-face publisher in `draw_obol.cpp` is
-now source-local-only.  The mode-based
-`ged_obol_database_source_indexed_face_points_are_world()` compatibility
-adapter was removed, so the bridge no longer guesses coordinate space from
-publication mode.
-
-Legacy transformed mesh producers in `bsg_ged_draw_source.c` now localize their
-points explicitly before Obol publication.  Draft tree/evaluated producers
-record the local-to-scene placement matrix when Obol placement is installed,
-and transformed scene-ref primitive/NMG face-set publication uses an explicit
-inverse-matrix publication path for Obol while preserving the original
-transformed arrays for retained BSG fallback.
-
-The `ged_test_obol_draw_sync` source-placement mesh regression now asserts the
-direct database-source publisher contract: the caller supplies source-local
-points, the mesh stores those points unchanged, and the source placement matrix
-remains separate.
-
-Verification passed with:
-`ninja -C build ged_test_draw test_brlobol_prototype test_brlobol_lod_update_action ged_test_obol_draw_sync test_qtcad_obol_draw_sync`;
-`ctest --test-dir build -R '^ged_test_drawing_basic$' --timeout 240 --output-on-failure`;
-`ctest --test-dir build -R '^(brlobol_pivot_guard|libbrlobol_prototype|libbrlobol_lod_update_action|ged_test_obol_draw_sync|test_qtcad_obol_draw_sync)$' -j3 --timeout 240 --output-on-failure`;
-and `git diff --check`.
-
-2026-07-03: database-source transform and publication hardening
----------------------------------------------------------------
-
-The resumed hardening pass clarified the source-local geometry contract:
-database-source primary geometry lives in source-local coordinates, while
-`drawMatrix` carries local-to-scene placement separately.  Realized database
-leaves use local shared geometry plus per-instance transforms from the
-tree-walk state.  External primary geometry publication keeps the same
-contract; legacy transformed mesh producers normalize through the inverse
-source placement before publishing.
-
-The GED sync regression covers mesh publication under source placement.  The
-test creates a mode-specific shaded-BoT database source, assigns a non-identity
-placement, publishes source-local mesh points, and verifies the stored Obol
-mesh remains source-local while the source placement matrix remains intact.
-
-Autoview work was checked during this pass and remained present:
-`autoview2` calls the Obol database autoview bounds bridge, which obtains
-database-scene bounds from libbrlobol.
-
-The root active guide and the matrix/realization notes were refreshed to state
-the source-local publication contract, the transformed legacy producer
-boundary, and the next design steps around transform tests and persistent
-geometry caching.
-
-Verification passed with:
-`ninja -C build ged_test_draw test_brlobol_prototype test_brlobol_lod_update_action ged_test_obol_draw_sync test_qtcad_obol_draw_sync`;
-`ctest --test-dir build -R '^ged_test_drawing_basic$' --timeout 240 --output-on-failure`;
-`ctest --test-dir build -R '^(brlobol_pivot_guard|libbrlobol_prototype|libbrlobol_lod_update_action|ged_test_obol_draw_sync|test_qtcad_obol_draw_sync)$' -j3 --timeout 240 --output-on-failure`;
-and `git diff --check`.
-
-2026-07-03: local shared geometry and librt import guard
--------------------------------------------------------
-
-libbrlobol database realization was moved to local-space shared geometry.  The
-`db_walk_tree` callback remains the source of instance paths, inherited
-material/region state, and accumulated matrices, but drawable geometry is no
-longer generated from transformed callback internals.  On each realization
-cache miss, libbrlobol refetches the primitive with an identity matrix, checks
-the imported payload magic, builds a local geometry node, and lets each visible
-database leaf reference that geometry through an explicit instance shape and
-transform.
-
-The shared-geometry cache is realization-local.  Refresh removes realized
-children and releases every shared target as a unit.  Persistent reuse across
-refreshes was deferred until content/revision keys and ownership counts are
-explicit.
-
-A real `box.s` ARB import poison was isolated below libbrlobol: an lldb
-conditional breakpoint observed `ext.ext_buf == ip->idb_ptr` before
-`bu_free_external(&ext)` in `rt_db_get_internal5`.  The libbrlobol guard avoids
-using poisoned callback geometry for drawable realization, but the root-cause
-investigation belongs in librt allocator/import ownership.
-
-2026-07-03: draw basic and mode-specific realization repairs
------------------------------------------------------------
-
-`ged_test_drawing_basic` was brought back onto current Obol paths.  The repair
-work covered polygon CSG empty-target handling, Obol-owned store clearing on
-GED zap, representation-specific database sources for evaluated wire,
-hidden-line, and sampled/evaluated point modes, and external geometry
-publication that clears stale primary realized children while preserving
-auxiliary records.
-
-The draw-mode coverage now treats mode-specific database sources as first
-class Obol database-source instances rather than demoting them to generic
-wireframe.  Summary reads must select the correct source instance because
-wire, shaded, evaluated wire, hidden-line, and evaluated point representations
-can coexist for the same logical database path.
-
-2026-07-03: LoD action and qtcad draw-sync hardening
+Normal database draw modes moved to direct Obol providers.  Wire, shaded-BoT,
+shaded, and hidden-line draws expand requested roots to leaf database-source
+instances and realize those sources in libbrlobol.  Successful direct providers
+no longer mirror through `_ged_drawtrees`.
+
+The GED basic drawing test passes through Obol capture.  Autoview was retained:
+`autoview2` uses the Obol database autoview bridge, and GED can read
+libbrlobol scene bounds for autoview.
+
+2026-07-04: Source-local geometry contract hardened
 ---------------------------------------------------
 
-Focused LoD update failures were traced to custom-action traversal reaching
-unrelated scene-state nodes.  Export, measure, snap, and source-mesh pick
-actions now skip arbitrary state nodes in generic handlers and delegate only to
-groups and transforms, preserving traversal and model-matrix updates without
-invoking unrelated elements.
+External database-source publication and direct realization now require
+source-local point/index arrays.  `SoBRLDatabaseSource::drawMatrix` remains
+placement metadata.  Legacy transformed producers explicitly localize points
+before publishing to libbrlobol.
 
-qtcad draw-sync tests were updated for representation-specific source
-ownership.  A shaded source and a shared wire source for the same path may
-coexist intentionally, and source erases/adds must target their own owner
-scope.
+An ARB import alias/free-pattern failure is guarded by refetching primitive
+geometry with an identity matrix and validating payload magic before plotting
+or tessellation.  The guard avoids building drawable geometry from poisoned
+tree-walk callback internals; the underlying librt alias still needs root-cause
+diagnosis if reproduced outside Obol.
 
-Capability 2 owner-store migration summary
-------------------------------------------
+Verification Notes
+------------------
 
-GED-owned feature, polygon, and selection storage were moved toward
-libbrlobol ownership:
-
-* `BRLObolFeatureStore` tracks owner-aware feature records and typed overlay
-  metadata.
-* GED-owned RT feature/edit-preview facade traffic publishes through neutral RT
-  adapters into Obol feature records.
-* `BRLObolPolygonStore` owns GED view polygons and exposes model-point update,
-  readback, fill, CSG, snap, and import/export workflows through Obol-backed
-  adapters.
-* `BRLObolSelectionStore` tracks owner/kind-aware selected paths and qtcad
-  selection updates through neutral RT selection APIs.
-* Diagnostic line-layer fallback producers moved onto a typed GED/Obol facade
-  instead of anonymous retained line-layer replacement.
-
-Retained BSG implementations remain only for unowned or legacy compatibility
-contexts.  They should not be expanded as primary GED-owned behavior.
-
-qtcad/Obol rendering and view migration summary
------------------------------------------------
-
-qtcad visible-content capture, pick, snap, measure, export, selection sync,
-overlay sync, edit preview, and draw sync have focused Obol regression gates.
-The direct Obol camera bridge uses the libbrlobol view adapter rather than
-private qtcad/GED camera math.  Orthographic import treats BRL-CAD `gv_size` as
-horizontal view size and maps Obol camera height to `gv_size / aspect`.
-
-Autoview uses a separate database-source envelope query so historical padded
-object framing stays distinct from tight scene/subtree bounds.
-
-2026-07-04: repeated instances and Obol highlight transaction
--------------------------------------------------------------
-
-The repeated comb/solid regression was expanded beyond transform bounds and
-autoview.  It now verifies logical visibility/highlight updates across repeated
-instances, direct source-instance stale/redraw using the libbrlobol
-realization-action seed cache, logical redraw without retained fallback state,
-shaded shared local mesh reuse, and erase cleanup for both wire and shaded
-representations.
-
-This exposed that `GED_DRAW_TXN_HIGHLIGHT` was still ignored by the Obol
-transaction bridge.  `draw_obol.cpp` now applies highlight directly to matching
-Obol database-source instances and scene groups, mirroring the existing
-visibility transaction behavior instead of relying on retained legacy state to
-leak partial highlight changes into Obol.
-
-2026-07-04: GQA volume samples as opt-in command results
---------------------------------------------------------
-
-GQA volume sampling plot streams now have an explicit Obol scene policy.  They
-remain opt-in through the existing `-p` dense plot request, but when an owned
-Obol view is active the sampled volume segments also publish as the shared
-`gqa::volume-samples` command-result line layer with normal command-scene
-owner metadata and readback.  This avoids flooding scenes during ordinary
-volume analysis while retiring the file-only visualization path for the cases
-where users asked for the dense sample plot.
-
-2026-07-04: overlay command uplot imports
------------------------------------------
-
-The GED `overlay` command now publishes imported uplot files through
-command-scene ownership as shared `overlay::` command-result line layers.
-Single-file and multi-file/pattern imports use the same command-scene uplot
-metadata contract as rtcheck and NIRT/qray (`result.format=uplot-line-layers`,
-`result.kind=uplot-overlay`, owner `overlay`).  The anonymous uplot feature
-helper remains available as compatibility plumbing, but it is no longer the
-primary overlay command path.
-
-2026-07-04: vdraw streams as command results
---------------------------------------------
-
-`vdraw send` now publishes line-compatible, point-compatible, and
-indexed-face-compatible output through command-scene ownership as shared
-`_VDRW*` command-result features owned by `vdraw`.  Lines publish as
-line-layer records, points publish as typed point-set records, and faces
-publish as typed indexed-face-set records.  The results carry baseline metadata
-(`result.kind`, `result.format`, point counts, and index counts), stay out of
-the database, and remain selectable/exportable through the normal Obol feature
-store.
-
-If an active command-scene publication fails, `vdraw send` now returns `-1`
-rather than silently inserting the payload through the legacy fallback.  The
-neutral overlay geometry path remains only as fallback when no command-scene
-context exists or when a payload is unsupported by command-scene publication.
-
-2026-07-04: simple line-set command visualizations
---------------------------------------------------
-
-GED now has a shared command-scene line-set helper for single-color command
-visualizations.  It publishes typed line-set features with command-result
-ownership, visible/selectable style, baseline metadata (`result.format=line-set`,
-owner, kind, point count, and generation when present), and owner-scoped
-command-scene failure behavior.  Legacy direct view line replacement remains
-only as fallback when no Obol command-scene context exists.
-
-`gdiff` ray-difference lines, `lint_visual`, `joint`, `bot plot`,
-`bot_fuse` open-edge visualization, and `bot check` edge visualization now use
-that helper instead of calling `ged_draw_view_context_lines_replace` or
-`ged_draw_view_context_feature_remove` directly.  The pivot guard protects the
-shared helper and these migrated callers, and `ged_test_drawing_basic` covers
-helper publication, metadata, geometry readback, and command-owned removal.
-
-Preview eye-path output now uses the same helper as owner `preview`, kind
-`eye-path`, and shared command-result feature `preview::eye_path`.  The
-preview-specific guard still requires camera state to route through GED
-view-context accessors, but no longer accepts direct view-context line feature
-replacement/removal for the eye-path overlay.
-
-NIRT/qray stale result cleanup now calls
-`_ged_command_scene_features_remove_prefix`, which performs owner-scoped
-command-scene prefix removal for owner `nirt` and keeps the direct
-`ged_draw_view_context_features_remove_prefix` fallback centralized for
-unowned views.  `nirt.cpp` no longer owns direct qray prefix cleanup policy,
-and the pivot guard rejects reintroducing that direct fallback there.
-
-View-object deletion now routes through
-`ged_draw_view_context_object_remove`.  The facade owns feature removal,
-Obol overlay deletion, source-group cleanup, database-object protection, and
-transient shape-ref release; the public command surface now reaches it through
-`view object delete` and `view db delete`.  The pivot guard rejects
-reintroducing direct cleanup calls in the command files.
-
-View-object draw visibility and update now route through
-`ged_draw_view_context_object_visible_get`,
-`ged_draw_view_context_object_visible_set`, and
-`ged_draw_view_context_object_realize`.  These facades keep feature-vs-shape-ref
-dispatch in the draw bridge instead of in `view/objs.cpp`.  Color, line style,
-and arrow style now route through `ged_draw_view_context_object_style_get` and
-`ged_draw_view_context_object_style_apply`; unsupported style fields fail by
-object capability in the bridge rather than by command-local special cases.
-
-Design notes to keep current
-----------------------------
-
-* `doc/notes/brl_obol_matrices.txt`: coordinate frames, camera math, autoview
-  envelope policy, and database-source geometry/placement contract.
-* `doc/notes/obol_realization_coverage.txt`: realized primitive coverage,
-  identity fields, source-local shared geometry, mode-specific draw findings,
-  and near-term gates.
-* `doc/notes/obol_legacy_dependency_inventory.txt`: guarded BSG/libdm
-  dependencies and ownership phase notes.
-
-Next work recorded from this compression
-----------------------------------------
-
-1. Expand transform regression tests for repeated solids, repeated comb trees,
-   multi-instance bounds, autoview, and edit/selection identity.
-2. Specify persistent shared-geometry cache keys, reference counts, invalidation
-   rules, and database-edit behavior before adding cross-refresh reuse.
-3. Treat PCA/canonical mesh matching as an optional duplicate-detection layer
-   after deterministic cache correctness is stable.
-4. Continue replacing BSG fallback families with explicit Obol/libbrlobol
-   records or adapters only where neutral RT/GED boundaries require them.
+Recent focused verification included `brlobol_pivot_guard`,
+`ged_test_drawing_basic`, `ged_test_view_command`, `ged_test_obol_draw_sync`,
+`ged_test_gqa`, `libbrlobol_prototype`, `libbrlobol_lod_update_action`, and
+`test_qtcad_obol_draw_sync`, plus `git diff --check`.  See
+`obol_activework.txt` for the current command lines.
