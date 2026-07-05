@@ -343,8 +343,8 @@ main(int argc, char **argv)
 	    1,
 	    1,
 	    BRLOBOL_LOD_DRAW_SHADED,
-	    "rt_mesh_lod",
-	    "rt-cache-v1",
+	    "brlobol_mesh_lod",
+	    "brlobol-cache-v1",
 	    BRLOBOL_LOD_QUALITY_FAST_DISPLAY);
     BRLObolLodResult displayResult = qtcad_source_snap_result(displayRequest,
 	    BRLOBOL_LOD_RESULT_MESH, BRLOBOL_LOD_QUALITY_FAST_DISPLAY);

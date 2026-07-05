@@ -22,6 +22,12 @@ brlcad_add_test(NAME libbrlobol_lod_service COMMAND test_brlobol_lod_service)
 brlcad_addexec(test_brlobol_lod_update_action test_lod_update_action.cpp "libbrlobol;libwdb;libbu;Obol::Obol;Threads::Threads" TEST ALL_CXX)
 brlcad_add_test(NAME libbrlobol_lod_update_action COMMAND test_brlobol_lod_update_action)
 
+brlcad_addexec(test_brlobol_draw_cache test_draw_cache.cpp "libbrlobol;libwdb;libbu;Obol::Obol" TEST ALL_CXX)
+brlcad_add_test(NAME libbrlobol_draw_cache COMMAND test_brlobol_draw_cache)
+
+brlcad_addexec(test_brlobol_mesh_lod_cache test_mesh_lod_cache.cpp "libbrlobol;libwdb;libbu;Obol::Obol" TEST ALL_CXX)
+brlcad_add_test(NAME libbrlobol_mesh_lod_cache COMMAND test_brlobol_mesh_lod_cache)
+
 brlcad_addexec(test_brlobol_scene_ref test_scene_ref.cpp "libbrlobol;librt;libbu;Obol::Obol" TEST ALL_CXX)
 brlcad_add_test(NAME libbrlobol_scene_ref COMMAND test_brlobol_scene_ref)
 
@@ -52,11 +58,13 @@ endif()
 cmakefiles(
   CMakeLists.txt
   test_headless_window_host.cpp
+  test_draw_cache.cpp
   test_image_display.cpp
   test_image_source.cpp
   test_lod_realization.cpp
   test_lod_service.cpp
   test_lod_update_action.cpp
+  test_mesh_lod_cache.cpp
   test_nanort_render.cpp
   test_prototype.cpp
   test_render.cpp

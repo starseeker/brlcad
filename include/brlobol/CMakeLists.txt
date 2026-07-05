@@ -4,6 +4,7 @@ set(
   axes.h
   database_source.h
   defines.h
+  draw_cache.h
   edit_preview.h
   evaluated_wire.h
   export_action.h
@@ -20,6 +21,7 @@ set(
   lod_update_action.h
   material_object.h
   measure_action.h
+  mesh_lod_cache.h
   mesh_lod_submit_action.h
   mesh_residency_action.h
   mesh_shape.h

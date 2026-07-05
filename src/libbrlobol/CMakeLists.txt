@@ -3,6 +3,7 @@ set(
   adc.cpp
   axes.cpp
   database_source.cpp
+  draw_cache.cpp
   edit_preview.cpp
   evaluated_wire.cpp
   export_action.cpp
@@ -20,6 +21,7 @@ set(
   lod_update_action.cpp
   material_object.cpp
   measure_action.cpp
+  mesh_lod_cache.cpp
   mesh_lod_submit_action.cpp
   mesh_residency_action.cpp
   mesh_shape.cpp
@@ -81,6 +83,7 @@ cmakefiles(
   axes.cpp
   database_source.cpp
   database_source_realization.h
+  draw_cache.cpp
   edit_preview.cpp
   evaluated_wire.cpp
   export_action.cpp
@@ -99,6 +102,7 @@ cmakefiles(
   lod_update_action.cpp
   material_object.cpp
   measure_action.cpp
+  mesh_lod_cache.cpp
   mesh_lod_submit_action.cpp
   mesh_residency_action.cpp
   mesh_shape.cpp

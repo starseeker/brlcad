@@ -151,7 +151,7 @@ native_defaults(struct rt_view_context_native *n)
 	RT_VIEW_SNAP_KIND_ENDPOINT | RT_VIEW_SNAP_KIND_MIDPOINT |
 	RT_VIEW_SNAP_KIND_INTERSECTION | RT_VIEW_SNAP_KIND_PERPENDICULAR |
 	RT_VIEW_SNAP_KIND_TANGENT | RT_VIEW_SNAP_KIND_OVERLAY_HANDLE;
-    n->snap_tolerance_factor = 1.0;
+    n->snap_tolerance_factor = 10.0;
 }
 
 static void

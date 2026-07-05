@@ -5091,7 +5091,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     source->sourceRevision = 8;
     source->drawMode = SoBRLDatabaseSource::SHADED;
     source->lodBotThreshold = 4;
-    if (db_mesh_lod_update(dbip, "tet.bot") != BRLCAD_OK)
+    if (brlobol_mesh_lod_cache_update(dbip, "tet.bot") != BRLCAD_OK)
 	FAIL("database-backed BoT LoD cache setup should pass");
     root->addChild(source);
 
@@ -5119,21 +5119,21 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	mesh->lodPointCount.getValue() > 4 ||
 	mesh->lodOriginalPointCount.getValue() == 0 ||
 	mesh->lodOriginalPointCount.getValue() > 4)
-	FAIL("database-backed BoT mesh should publish cached RT LoD metadata");
+	FAIL("database-backed BoT mesh should publish cached Obol LoD metadata");
     if (!nearly_equal(mesh->lodBoundsMin.getValue()[0], 0.0f) ||
 	!nearly_equal(mesh->lodBoundsMin.getValue()[1], 0.0f) ||
 	!nearly_equal(mesh->lodBoundsMin.getValue()[2], 0.0f) ||
 	!nearly_equal(mesh->lodBoundsMax.getValue()[0], 2.0f) ||
 	!nearly_equal(mesh->lodBoundsMax.getValue()[1], 2.0f) ||
 	!nearly_equal(mesh->lodBoundsMax.getValue()[2], 2.0f))
-	FAIL("database-backed BoT mesh should publish cached RT LoD bounds");
+	FAIL("database-backed BoT mesh should publish cached Obol LoD bounds");
     if (!mesh->lodStagedAvailable.getValue() ||
 	mesh->lodResultKind.getValue() != BRLOBOL_LOD_RESULT_MESH ||
 	mesh->lodQualityTier.getValue() != BRLOBOL_LOD_QUALITY_FAST_DISPLAY ||
 	strcmp(mesh->lodProviderId.getValue().getString(),
-	       "rt_mesh_lod") != 0 ||
+	       "brlobol_mesh_lod") != 0 ||
 	mesh->lodCacheKey.getValue().getLength() == 0)
-	FAIL("database-backed BoT mesh should publish staged RT LoD result fields");
+	FAIL("database-backed BoT mesh should publish staged Obol LoD result fields");
 
     SoBRLExportAction botMeshExactExport;
     botMeshExactExport.apply(root);
@@ -5165,14 +5165,14 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	botTriangle->lodNormalCount != mesh->lodNormalCount.getValue() ||
 	botTriangle->lodHasSnappedPoints != mesh->lodHasSnappedPoints.getValue() ||
 	botTriangle->lodHasNormals != mesh->lodHasNormals.getValue())
-	FAIL("database-backed BoT export should carry cached RT LoD metadata");
+	FAIL("database-backed BoT export should carry cached Obol LoD metadata");
     if (!nearly_equal(botTriangle->lodBoundsMin[0], mesh->lodBoundsMin.getValue()[0]) ||
 	!nearly_equal(botTriangle->lodBoundsMin[1], mesh->lodBoundsMin.getValue()[1]) ||
 	!nearly_equal(botTriangle->lodBoundsMin[2], mesh->lodBoundsMin.getValue()[2]) ||
 	!nearly_equal(botTriangle->lodBoundsMax[0], mesh->lodBoundsMax.getValue()[0]) ||
 	!nearly_equal(botTriangle->lodBoundsMax[1], mesh->lodBoundsMax.getValue()[1]) ||
 	!nearly_equal(botTriangle->lodBoundsMax[2], mesh->lodBoundsMax.getValue()[2]))
-	FAIL("database-backed BoT export should carry cached RT LoD bounds");
+	FAIL("database-backed BoT export should carry cached Obol LoD bounds");
     bbox = botMeshExport.getBounds();
     if (bbox.isEmpty() ||
 	!nearly_equal(bbox.getMin()[0], 0.0f) ||

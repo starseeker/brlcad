@@ -34,6 +34,7 @@
 #include "bu/hash.h"
 #include "bu/malloc.h"
 #include "bg/clip.h"
+#include "brlobol/draw_cache.h"
 
 #include "ged.h"
 #include "ged/draw.h"
@@ -192,7 +193,7 @@ _ged_draw_observer_find(struct ged_drawable *gdp,
     for (size_t i = 0; i < BU_PTBL_LEN(&gdp->gd_draw_observers); i++) {
 	struct ged_draw_observer_entry *entry =
 	    (struct ged_draw_observer_entry *)BU_PTBL_GET(
-		    &gdp->gd_draw_observers, i);
+		&gdp->gd_draw_observers, i);
 	if (entry && entry->token == token)
 	    return entry;
     }
@@ -209,7 +210,7 @@ _ged_draw_observers_have_active(struct ged *gedp)
     for (size_t i = 0; i < BU_PTBL_LEN(&gdp->gd_draw_observers); i++) {
 	struct ged_draw_observer_entry *entry =
 	    (struct ged_draw_observer_entry *)BU_PTBL_GET(
-		    &gdp->gd_draw_observers, i);
+		&gdp->gd_draw_observers, i);
 	if (entry && entry->active && entry->func)
 	    return 1;
     }
@@ -221,14 +222,14 @@ static void
 _ged_draw_observers_prune(struct ged_drawable *gdp)
 {
     if (!gdp || !gdp->gd_draw_observers_init ||
-	    gdp->gd_draw_observer_dispatch_depth > 0)
+	gdp->gd_draw_observer_dispatch_depth > 0)
 	return;
 
     size_t i = 0;
     while (i < BU_PTBL_LEN(&gdp->gd_draw_observers)) {
 	struct ged_draw_observer_entry *entry =
 	    (struct ged_draw_observer_entry *)BU_PTBL_GET(
-		    &gdp->gd_draw_observers, i);
+		&gdp->gd_draw_observers, i);
 	if (entry && (!entry->active || !entry->func)) {
 	    bu_ptbl_rm(&gdp->gd_draw_observers, (long *)entry);
 	    _ged_draw_observer_entry_free(entry);
@@ -246,7 +247,7 @@ _ged_draw_observers_dispatch(struct ged *gedp,
 {
     struct ged_drawable *gdp = _ged_draw_gdp(gedp);
     if (!gdp || !gdp->gd_draw_observers_init || !txn || !result ||
-	    result->status <= 0)
+	result->status <= 0)
 	return;
 
     size_t len = BU_PTBL_LEN(&gdp->gd_draw_observers);
@@ -254,7 +255,7 @@ _ged_draw_observers_dispatch(struct ged *gedp,
     for (size_t i = 0; i < len; i++) {
 	struct ged_draw_observer_entry *entry =
 	    (struct ged_draw_observer_entry *)BU_PTBL_GET(
-		    &gdp->gd_draw_observers, i);
+		&gdp->gd_draw_observers, i);
 	if (!entry || !entry->active || !entry->func)
 	    continue;
 	entry->func(gedp, txn, result, entry->client_data);
@@ -277,7 +278,7 @@ ged_draw_observer_add(struct ged *gedp,
 
     struct ged_draw_observer_entry *entry =
 	(struct ged_draw_observer_entry *)bu_calloc(1, sizeof(*entry),
-		"ged draw observer entry");
+	    "ged draw observer entry");
     entry->token = gdp->gd_draw_next_observer_token++;
     if (!entry->token)
 	entry->token = gdp->gd_draw_next_observer_token++;
@@ -319,7 +320,7 @@ ged_draw_observers_free(struct ged *gedp)
     for (size_t i = 0; i < BU_PTBL_LEN(&gdp->gd_draw_observers); i++) {
 	struct ged_draw_observer_entry *entry =
 	    (struct ged_draw_observer_entry *)BU_PTBL_GET(
-		    &gdp->gd_draw_observers, i);
+		&gdp->gd_draw_observers, i);
 	_ged_draw_observer_entry_free(entry);
     }
     bu_ptbl_free(&gdp->gd_draw_observers);
@@ -397,7 +398,7 @@ _ged_draw_shape_record_has_component(const struct ged_draw_shape_record *rec,
 	return 0;
 
     if (rec->display_name &&
-	    _ged_draw_path_has_component(rec->display_name, name))
+	_ged_draw_path_has_component(rec->display_name, name))
 	return 1;
     if (rec->fullpath && _dbfullpath_has_component(rec->fullpath, name))
 	return 1;
@@ -456,7 +457,7 @@ _ged_draw_rename_group_cb(const struct ged_draw_group_record *rec, void *userdat
     struct ged_draw_rename_ctx *ctx =
 	(struct ged_draw_rename_ctx *)userdata;
     if (!ctx || !ctx->gedp || !ctx->old_path || !ctx->new_path ||
-	    !rec || !rec->path)
+	!rec || !rec->path)
 	return 1;
 
     const char *path = ged_draw_dbpath_skip_lead_slash(rec->path);
@@ -501,12 +502,12 @@ _ged_draw_collect_obol_source_rename_cb(struct ged *UNUSED(gedp),
     struct ged_draw_rename_source_ctx *ctx =
 	(struct ged_draw_rename_source_ctx *)userdata;
     if (!ctx || !source_path || !source_path[0] ||
-	    !ctx->old_path || !ctx->new_path)
+	!ctx->old_path || !ctx->new_path)
 	return 1;
 
     struct bu_vls updated = BU_VLS_INIT_ZERO;
     if (!_ged_draw_path_replace_component(&updated, source_path,
-	    ctx->old_path, ctx->new_path)) {
+					  ctx->old_path, ctx->new_path)) {
 	bu_vls_free(&updated);
 	return 1;
     }
@@ -520,7 +521,7 @@ _ged_draw_collect_obol_source_rename_cb(struct ged *UNUSED(gedp),
 
     struct ged_draw_rename_source_entry *entry =
 	(struct ged_draw_rename_source_entry *)bu_calloc(1, sizeof(*entry),
-		"draw rename source entry");
+	    "draw rename source entry");
     entry->old_path = bu_strdup(old_path);
     entry->new_path = bu_strdup(new_path);
     bu_ptbl_ins(&ctx->entries, (long *)entry);
@@ -532,8 +533,8 @@ _ged_draw_collect_obol_source_rename_cb(struct ged *UNUSED(gedp),
 
 static int
 _ged_draw_apply_obol_component_source_renames(struct ged *gedp,
-					     const char *old_path,
-					     const char *new_path)
+	const char *old_path,
+	const char *new_path)
 {
     if (!gedp || !old_path || !new_path)
 	return 0;
@@ -544,14 +545,14 @@ _ged_draw_apply_obol_component_source_renames(struct ged *gedp,
     bu_ptbl_init(&ctx.entries, 8, "draw rename source entries");
 
     int status = ged_draw_obol_database_source_paths_foreach(gedp, 1,
-	    _ged_draw_collect_obol_source_rename_cb, &ctx);
+		 _ged_draw_collect_obol_source_rename_cb, &ctx);
     int changed = 0;
     if (status >= 0) {
 	unsigned long long revision = ged_draw_scene_revision(gedp) + 1;
 	for (size_t i = 0; i < BU_PTBL_LEN(&ctx.entries); i++) {
 	    struct ged_draw_rename_source_entry *entry =
 		(struct ged_draw_rename_source_entry *)BU_PTBL_GET(&ctx.entries,
-			i);
+		    i);
 	    if (entry && ged_draw_obol_database_source_rename_for_path(gedp,
 		    entry->old_path, entry->new_path, revision))
 		changed++;
@@ -560,8 +561,8 @@ _ged_draw_apply_obol_component_source_renames(struct ged *gedp,
 
     for (size_t i = 0; i < BU_PTBL_LEN(&ctx.entries); i++)
 	_ged_draw_rename_source_entry_free(
-		(struct ged_draw_rename_source_entry *)BU_PTBL_GET(&ctx.entries,
-		    i));
+	    (struct ged_draw_rename_source_entry *)BU_PTBL_GET(&ctx.entries,
+		i));
     bu_ptbl_free(&ctx.entries);
 
     return changed;
@@ -581,9 +582,9 @@ _ged_draw_apply_database_rename(struct ged *gedp,
     ctx.old_path = old_path;
     ctx.new_path = new_path;
     ctx.changed = ged_draw_obol_database_source_rename_for_path(gedp,
-	    old_path, new_path, ged_draw_scene_revision(gedp) + 1) ? 1 : 0;
+		  old_path, new_path, ged_draw_scene_revision(gedp) + 1) ? 1 : 0;
     ctx.changed += _ged_draw_apply_obol_component_source_renames(gedp,
-	    old_path, new_path);
+		   old_path, new_path);
     ged_draw_foreach_group_record(gedp, _ged_draw_rename_group_cb, &ctx);
     return ctx.changed;
 }
@@ -639,14 +640,14 @@ ged_draw_mark_database_change(struct ged *gedp,
     ctx.reason = reason ? reason : GED_DRAW_STALE_SOURCE_CHANGED;
     ctx.changed = 0;
     int indexed = ctx.path ?
-	ged_draw_shape_ref_index_for_component(gedp, ctx.path,
-		_ged_draw_mark_db_change_index_cb, &ctx) : -1;
+		  ged_draw_shape_ref_index_for_component(gedp, ctx.path,
+		      _ged_draw_mark_db_change_index_cb, &ctx) : -1;
     if (indexed < 0) {
 	struct ged_drawable *gdp = _ged_draw_gdp(gedp);
 	if (gdp)
 	    gdp->gd_draw_index_fallback_shape_scans++;
 	ged_draw_foreach_shape_record(gedp, _ged_draw_mark_db_change_cb,
-		&ctx);
+				      &ctx);
     }
     return ctx.changed;
 }
@@ -677,8 +678,8 @@ _ged_draw_set_transparency_cb(const struct ged_draw_shape_record *rec,
 	return 1;
 
     if (!ZERO(rec->transparency - ctx->transparency) &&
-	    ged_draw_shape_ref_set_transparency(ctx->gedp, rec->ref,
-		ctx->transparency)) {
+	ged_draw_shape_ref_set_transparency(ctx->gedp, rec->ref,
+					    ctx->transparency)) {
 	ctx->changed++;
     }
 
@@ -744,8 +745,8 @@ _ged_draw_visibility_group_cb(const struct ged_draw_group_record *rec,
 	return 1;
 
     if (rec->visible != ctx->visible &&
-	    ged_draw_group_ref_set_visible(ctx->gedp, rec->ref,
-		ctx->visible)) {
+	ged_draw_group_ref_set_visible(ctx->gedp, rec->ref,
+				       ctx->visible)) {
 	ctx->changed++;
     }
 
@@ -774,8 +775,8 @@ _ged_draw_visibility_shape_cb(const struct ged_draw_shape_record *rec,
 	return 1;
 
     if (rec->visible != ctx->visible &&
-	    ged_draw_shape_ref_set_visible(ctx->gedp, rec->ref,
-		ctx->visible)) {
+	ged_draw_shape_ref_set_visible(ctx->gedp, rec->ref,
+				       ctx->visible)) {
 	ctx->changed++;
     }
 
@@ -820,7 +821,7 @@ _ged_draw_highlight_shape_cb(const struct ged_draw_shape_record *rec,
 	    continue;
 	ctx->matched++;
 	(void)ged_draw_shape_set_highlighted(ctx->gedp, rec->ref,
-		ctx->highlighted);
+					     ctx->highlighted);
 	break;
     }
 
@@ -886,10 +887,10 @@ _ged_draw_redraw_all_cb(const struct ged_draw_group_record *rec, void *ud)
     if (ctx->view_ctx && !ged_draw_group_record_in_view(rec, ctx->view_ctx))
 	return 1;
     void *redraw_view_ctx = ctx->view_ctx ? ctx->view_ctx :
-	((rec->in_view_scope && rec->view) ? rec->view :
-	 ged_draw_active_view_ctx(ctx->gedp));
+			    ((rec->in_view_scope && rec->view) ? rec->view :
+			     ged_draw_active_view_ctx(ctx->gedp));
     int ret = _ged_draw_redraw_group_ref(ctx->gedp, rec->ref, 0,
-	    redraw_view_ctx);
+					 redraw_view_ctx);
     if (ret < 0) {
 	ctx->ret = -1;
 	return 0;
@@ -916,10 +917,10 @@ _ged_draw_redraw_path_cb(const struct ged_draw_group_record *rec, void *ud)
     if (db_full_path_match_top(rec->fullpath, ctx->obj_path)) {
 	ctx->found = 1;
 	void *redraw_view_ctx = ctx->view_ctx ? ctx->view_ctx :
-	    ((rec->in_view_scope && rec->view) ? rec->view :
-	     ged_draw_active_view_ctx(ctx->gedp));
+				((rec->in_view_scope && rec->view) ? rec->view :
+				 ged_draw_active_view_ctx(ctx->gedp));
 	ctx->ret = _ged_draw_redraw_group_ref(ctx->gedp, rec->ref, 0,
-		redraw_view_ctx);
+					      redraw_view_ctx);
 	return 0;
     }
 
@@ -977,7 +978,7 @@ _ged_draw_redraw_source_add_shape(struct ged_draw_redraw_source_ctx *ctx,
 
     struct ged_draw_group_record grec;
     if (!ged_draw_group_record_get(ctx->gedp,
-	    ged_draw_group_ref_of_shape(ctx->gedp, ref), &grec))
+				   ged_draw_group_ref_of_shape(ctx->gedp, ref), &grec))
 	return 1;
     if (grec.is_overlay)
 	return 1;
@@ -986,11 +987,11 @@ _ged_draw_redraw_source_add_shape(struct ged_draw_redraw_source_ctx *ctx,
 
     struct ged_draw_redraw_shape_entry *entry =
 	(struct ged_draw_redraw_shape_entry *)bu_calloc(1, sizeof(*entry),
-		"redraw source shape entry");
+	    "redraw source shape entry");
     entry->ref = ref;
     entry->view_ctx = ctx->view_ctx ? ctx->view_ctx :
-	((grec.in_view_scope && grec.view) ? grec.view :
-	 ged_draw_active_view_ctx(ctx->gedp));
+		      ((grec.in_view_scope && grec.view) ? grec.view :
+		       ged_draw_active_view_ctx(ctx->gedp));
     bu_ptbl_ins(&ctx->shape_refs, (long *)entry);
     return 1;
 }
@@ -1041,14 +1042,14 @@ _ged_draw_redraw_source(struct ged *gedp, const char *path,
     bu_ptbl_init(&ctx.shape_refs, 8, "redraw source shape refs");
 
     int indexed = ctx.path ?
-	ged_draw_shape_ref_index_for_component(gedp, ctx.path,
-		_ged_draw_redraw_source_index_cb, &ctx) : -1;
+		  ged_draw_shape_ref_index_for_component(gedp, ctx.path,
+		      _ged_draw_redraw_source_index_cb, &ctx) : -1;
     if (indexed < 0) {
 	struct ged_drawable *gdp = _ged_draw_gdp(gedp);
 	if (gdp)
 	    gdp->gd_draw_index_fallback_shape_scans++;
 	ged_draw_foreach_shape_record(gedp, _ged_draw_redraw_source_shape_cb,
-		&ctx);
+				      &ctx);
     }
 
     int redrawn = 0;
@@ -1060,10 +1061,10 @@ _ged_draw_redraw_source(struct ged *gedp, const char *path,
 	    continue;
 	entry->ref.scene_revision = 0;
 	int ret = ged_draw_shape_ref_redraw_wireframe(gedp, entry->ref,
-		gedp->dbip, wdbp->wdb_initial_tree_state.ts_tol,
-		wdbp->wdb_initial_tree_state.ts_ttol,
-		entry->view_ctx ? entry->view_ctx :
-		ged_draw_active_view_ctx(gedp), 0);
+		  gedp->dbip, wdbp->wdb_initial_tree_state.ts_tol,
+		  wdbp->wdb_initial_tree_state.ts_ttol,
+		  entry->view_ctx ? entry->view_ctx :
+		  ged_draw_active_view_ctx(gedp), 0);
 	if (ret < 0)
 	    failed = 1;
 	else
@@ -1101,7 +1102,7 @@ ged_draw_txn_view_array(struct ged *gedp,
     }
 
     void **out = (void **)bu_calloc(count, sizeof(void *),
-	    "draw transaction view context array");
+				    "draw transaction view context array");
     if (rt_view_context_is_independent(view_ctx)) {
 	out[0] = view_ctx;
     } else {
@@ -1152,8 +1153,8 @@ struct ged_draw_autoview_bounds_ctx {
 
 static int
 ged_draw_autoview_accumulate_path_bounds(
-	struct ged_draw_autoview_bounds_ctx *ctx,
-	const char *path)
+    struct ged_draw_autoview_bounds_ctx *ctx,
+    const char *path)
 {
     point_t bmin, bmax, center, padded_min, padded_max;
 
@@ -1165,7 +1166,7 @@ ged_draw_autoview_accumulate_path_bounds(
 	return 1;
 
     if (rt_obj_bounds(ctx->msgs, ctx->gedp->dbip, 1, &path, 0, bmin,
-	    bmax) != BRLCAD_OK)
+		      bmax) != BRLCAD_OK)
 	return 1;
 
     fastf_t size = bmax[X] - bmin[X];
@@ -1173,9 +1174,9 @@ ged_draw_autoview_accumulate_path_bounds(
     V_MAX(size, bmax[Z] - bmin[Z]);
     VADD2SCALE(center, bmax, bmin, 0.5);
     VSET(padded_min, center[X] - size, center[Y] - size,
-	    center[Z] - size);
+	 center[Z] - size);
     VSET(padded_max, center[X] + size, center[Y] + size,
-	    center[Z] + size);
+	 center[Z] + size);
 
     VMINMAX(ctx->min, ctx->max, padded_min);
     VMINMAX(ctx->min, ctx->max, padded_max);
@@ -1186,8 +1187,8 @@ ged_draw_autoview_accumulate_path_bounds(
 
 static int
 ged_draw_autoview_accumulate_obol_source_path(struct ged *gedp,
-					      const char *path,
-					      void *userdata)
+	const char *path,
+	void *userdata)
 {
     struct ged_draw_autoview_bounds_ctx *ctx =
 	(struct ged_draw_autoview_bounds_ctx *)userdata;
@@ -1223,7 +1224,7 @@ ged_draw_autoview_for_transaction(struct ged *gedp,
     VSETALL(source_bounds.max, -INFINITY);
     if (!have_obol_bounds)
 	(void)ged_draw_obol_database_source_paths_foreach(gedp, 1,
-	    ged_draw_autoview_accumulate_obol_source_path, &source_bounds);
+		ged_draw_autoview_accumulate_obol_source_path, &source_bounds);
 
     struct ged_draw_autoview_bounds_ctx path_bounds;
     memset(&path_bounds, 0, sizeof(path_bounds));
@@ -1235,7 +1236,7 @@ ged_draw_autoview_for_transaction(struct ged *gedp,
 	for (int i = 0; i < draw_count; i++) {
 	    const char *path = draw_paths[i];
 	    (void)ged_draw_autoview_accumulate_path_bounds(&path_bounds,
-		path);
+		    path);
 	}
     }
 
@@ -1244,23 +1245,23 @@ ged_draw_autoview_for_transaction(struct ged *gedp,
 	if (!view_ctxs[i])
 	    continue;
 	if (have_obol_bounds &&
-		rt_view_context_autoview_bounds(view_ctxs[i],
-		    RT_VIEW_AUTOVIEW_SCALE_DEFAULT, obol_min, obol_max)) {
+	    rt_view_context_autoview_bounds(view_ctxs[i],
+					    RT_VIEW_AUTOVIEW_SCALE_DEFAULT, obol_min, obol_max)) {
 	    adjusted++;
 	    continue;
 	}
 	if (rt_view_context_autoview(view_ctxs[i],
-		RT_VIEW_AUTOVIEW_SCALE_DEFAULT, 0))
+				     RT_VIEW_AUTOVIEW_SCALE_DEFAULT, 0))
 	    adjusted++;
 	else if (source_bounds.have_bounds &&
-		rt_view_context_autoview_bounds(view_ctxs[i],
-		    RT_VIEW_AUTOVIEW_SCALE_DEFAULT, source_bounds.min,
-		    source_bounds.max))
+		 rt_view_context_autoview_bounds(view_ctxs[i],
+			 RT_VIEW_AUTOVIEW_SCALE_DEFAULT, source_bounds.min,
+			 source_bounds.max))
 	    adjusted++;
 	else if (path_bounds.have_bounds &&
-		rt_view_context_autoview_bounds(view_ctxs[i],
-		    RT_VIEW_AUTOVIEW_SCALE_DEFAULT, path_bounds.min,
-		    path_bounds.max))
+		 rt_view_context_autoview_bounds(view_ctxs[i],
+			 RT_VIEW_AUTOVIEW_SCALE_DEFAULT, path_bounds.min,
+			 path_bounds.max))
 	    adjusted++;
     }
 
@@ -1279,7 +1280,7 @@ ged_draw_finalize_lod_shape_cb(const struct ged_draw_shape_record *rec,
     if (!ctx || !rec)
 	return 1;
     if (ged_draw_shape_ref_lod_ensure(ctx->gedp, rec->ref,
-	    ctx->first_view_ctx, ctx->view_ctxs, ctx->view_ctx_count))
+				      ctx->first_view_ctx, ctx->view_ctxs, ctx->view_ctx_count))
 	ctx->ensured++;
     return 1;
 }
@@ -1313,23 +1314,23 @@ ged_draw_finalize_lod_for_transaction(struct ged *gedp,
 
 static int
 ged_draw_prepare_obol_database_source_one_path(
-	struct ged *gedp,
-	const char *path,
-	const struct ged_draw_appearance_settings *settings);
+    struct ged *gedp,
+    const char *path,
+    const struct ged_draw_appearance_settings *settings);
 
 
 static int
 ged_draw_apply_evaluated_provider_paths(
-	struct ged *gedp,
-	void *view_ctx,
-	const char **paths,
-	int path_count,
-	const struct ged_draw_appearance_settings *settings)
+    struct ged *gedp,
+    void *view_ctx,
+    const char **paths,
+    int path_count,
+    const struct ged_draw_appearance_settings *settings)
 {
     if (!gedp || !gedp->dbip || !view_ctx || !paths || path_count <= 0 ||
-	    !settings ||
-	    (settings->draw_mode != GED_DRAW_MODE_EVAL_WIRE &&
-	     settings->draw_mode != GED_DRAW_MODE_EVAL_POINTS))
+	!settings ||
+	(settings->draw_mode != GED_DRAW_MODE_EVAL_WIRE &&
+	 settings->draw_mode != GED_DRAW_MODE_EVAL_POINTS))
 	return -1;
 
     if (!ged_draw_obol_scene_controller_ensure_owned(gedp, 1))
@@ -1394,7 +1395,7 @@ struct ged_draw_obol_database_source_leaf_ctx {
 
 
 static union tree *
-ged_draw_obol_database_source_make_nop_tree(void)
+    ged_draw_obol_database_source_make_nop_tree(void)
 {
     union tree *curtree;
 
@@ -1407,13 +1408,13 @@ ged_draw_obol_database_source_make_nop_tree(void)
 
 static int
 ged_draw_prepare_obol_database_source_one_path(
-	struct ged *gedp,
-	const char *path,
-	const struct ged_draw_appearance_settings *settings)
+    struct ged *gedp,
+    const char *path,
+    const struct ged_draw_appearance_settings *settings)
 {
     if (!gedp || !gedp->dbip || !path || !path[0] ||
-	    !settings || !ged_draw_mode_uses_obol_database_source(
-		settings->draw_mode))
+	!settings || !ged_draw_mode_uses_obol_database_source(
+	    settings->draw_mode))
 	return 0;
 
     if (!ged_draw_obol_database_source_ensure_for_path(gedp, path,
@@ -1421,22 +1422,22 @@ ged_draw_prepare_obol_database_source_one_path(
 	return 0;
 
     (void)ged_draw_obol_database_source_update_display_for_path(
-	    gedp, path,
-	    1, 1,
-	    0, 0,
-	    1, settings->draw_mode,
-	    0, 0,
-	    1, settings->s_line_width,
-	    1, settings->transparency,
-	    settings->color_override ? 1 : 0, settings->color,
-	    0, NULL,
-	    0, 0);
+	gedp, path,
+	1, 1,
+	0, 0,
+	1, settings->draw_mode,
+	0, 0,
+	1, settings->s_line_width,
+	1, settings->transparency,
+	settings->color_override ? 1 : 0, settings->color,
+	0, NULL,
+	0, 0);
     (void)ged_draw_obol_database_source_update_appearance_for_path(
-	    gedp, path,
-	    1, settings->s_line_width,
-	    1, settings->transparency,
-	    1, settings->color_override,
-	    settings->color_override ? 1 : 0, settings->color);
+	gedp, path,
+	1, settings->s_line_width,
+	1, settings->transparency,
+	1, settings->color_override,
+	settings->color_override ? 1 : 0, settings->color);
 
     return 1;
 }
@@ -1444,18 +1445,18 @@ ged_draw_prepare_obol_database_source_one_path(
 
 static int
 ged_draw_apply_obol_database_source_one_path(
-	struct ged *gedp,
-	const char *path,
-	const struct ged_draw_appearance_settings *settings)
+    struct ged *gedp,
+    const char *path,
+    const struct ged_draw_appearance_settings *settings)
 {
     if (!ged_draw_prepare_obol_database_source_one_path(gedp, path,
 	    settings))
 	return 0;
 
     if (ged_draw_test_primitive_face_set_failure_enabled() &&
-	    ged_draw_mode_publishes_direct_face_set(settings->draw_mode)) {
+	ged_draw_mode_publishes_direct_face_set(settings->draw_mode)) {
 	(void)ged_draw_obol_database_source_publish_indexed_face_set_for_path(
-		gedp, path, NULL, 0, NULL, 0, NULL, 0);
+	    gedp, path, NULL, 0, NULL, 0, NULL, 0);
 	return 1;
     }
 
@@ -1463,8 +1464,95 @@ ged_draw_apply_obol_database_source_one_path(
 }
 
 
+static void
+ged_draw_aabb_proxy_line_set(const point_t bmin,
+			     const point_t bmax,
+			     point_t points[24],
+			     int commands[24])
+{
+    point_t corners[8];
+    static const int edges[12][2] = {
+	{0, 1}, {1, 2}, {2, 3}, {3, 0},
+	{4, 5}, {5, 6}, {6, 7}, {7, 4},
+	{0, 4}, {1, 5}, {2, 6}, {3, 7}
+    };
+
+    VSET(corners[0], bmin[X], bmin[Y], bmin[Z]);
+    VSET(corners[1], bmax[X], bmin[Y], bmin[Z]);
+    VSET(corners[2], bmax[X], bmax[Y], bmin[Z]);
+    VSET(corners[3], bmin[X], bmax[Y], bmin[Z]);
+    VSET(corners[4], bmin[X], bmin[Y], bmax[Z]);
+    VSET(corners[5], bmax[X], bmin[Y], bmax[Z]);
+    VSET(corners[6], bmax[X], bmax[Y], bmax[Z]);
+    VSET(corners[7], bmin[X], bmax[Y], bmax[Z]);
+
+    for (size_t i = 0; i < 12; i++) {
+	VMOVE(points[i * 2], corners[edges[i][0]]);
+	VMOVE(points[i * 2 + 1], corners[edges[i][1]]);
+	commands[i * 2] = GED_DRAW_VIEW_LINE_MOVE;
+	commands[i * 2 + 1] = GED_DRAW_VIEW_LINE_DRAW;
+    }
+}
+
+
+static int
+ged_draw_apply_obol_database_source_proxy_path(
+    struct ged *gedp,
+    const char *path,
+    const struct ged_draw_appearance_settings *settings)
+{
+    if (!ged_draw_prepare_obol_database_source_one_path(gedp, path,
+	    settings))
+	return 0;
+
+    const char *lookup_path = ged_draw_dbpath_skip_lead_slash(path);
+    if (!lookup_path || !lookup_path[0])
+	return 0;
+
+    struct BRLObolDrawProxyRecord record;
+    if (brlobol_draw_proxy_cache_get(gedp->dbip, lookup_path,
+				     BRLOBOL_DRAW_CACHE_PROXY_AABB, &record) != BRLCAD_OK) {
+	struct BRLObolDrawCacheStatus status;
+	int refresh_ret = brlobol_draw_proxy_cache_refresh(gedp->dbip,
+			  lookup_path, BRLOBOL_DRAW_CACHE_PROXY_AABB, &status);
+	if (refresh_ret != BRLCAD_OK)
+	    return 0;
+	int get_ret = brlobol_draw_proxy_cache_get(gedp->dbip, lookup_path,
+		      BRLOBOL_DRAW_CACHE_PROXY_AABB, &record);
+	if (get_ret != BRLCAD_OK)
+	    return 0;
+    }
+
+    if (record.pointCount != 2)
+	return 0;
+
+    point_t points[24];
+    int commands[24];
+    ged_draw_aabb_proxy_line_set(record.points[0], record.points[1],
+				 points, commands);
+    int published = ged_draw_obol_database_source_publish_line_set_for_path(
+	gedp, path, (const point_t *)points, commands, 24);
+    if (published) {
+	struct BRLObolDrawMetadataRecord metadata;
+	brlobol_draw_metadata_record_init(&metadata);
+	if (brlobol_draw_path_metadata_cache_get(gedp->dbip, lookup_path,
+		&metadata) != BRLCAD_OK &&
+	    brlobol_draw_path_metadata_cache_refresh(gedp->dbip, lookup_path,
+		NULL) == BRLCAD_OK) {
+	    (void)brlobol_draw_path_metadata_cache_get(gedp->dbip,
+		lookup_path, &metadata);
+	}
+	if (metadata.directoryFound)
+	    (void)ged_draw_obol_database_source_apply_draw_metadata_for_path(
+		gedp, path, &metadata);
+    }
+
+    return published;
+}
+
+
 static union tree *
-ged_draw_apply_obol_database_source_leaf_cb(
+    ged_draw_apply_obol_database_source_leaf_cb(
 	struct db_tree_state *UNUSED(tsp),
 	const struct db_full_path *pathp,
 	struct directory *dp,
@@ -1473,7 +1561,7 @@ ged_draw_apply_obol_database_source_leaf_cb(
     struct ged_draw_obol_database_source_leaf_ctx *ctx =
 	(struct ged_draw_obol_database_source_leaf_ctx *)client_data;
     if (!ctx || !ctx->gedp || !ctx->settings || !pathp || !dp ||
-	    ctx->failed)
+	ctx->failed)
 	return TREE_NULL;
 
     char *path = db_path_to_string(pathp);
@@ -1485,7 +1573,7 @@ ged_draw_apply_obol_database_source_leaf_cb(
     }
 
     int realized = ged_draw_apply_obol_database_source_one_path(ctx->gedp,
-	    path, ctx->settings);
+		   path, ctx->settings);
     bu_free(path, "draw Obol leaf source path");
     if (!realized) {
 	ctx->failed = 1;
@@ -1499,9 +1587,9 @@ ged_draw_apply_obol_database_source_leaf_cb(
 
 static int
 ged_draw_apply_obol_database_source_leaf_paths(
-	struct ged *gedp,
-	const char *path,
-	const struct ged_draw_appearance_settings *settings)
+    struct ged *gedp,
+    const char *path,
+    const struct ged_draw_appearance_settings *settings)
 {
     if (!gedp || !gedp->dbip || !path || !path[0] || !settings)
 	return 0;
@@ -1517,8 +1605,8 @@ ged_draw_apply_obol_database_source_leaf_paths(
 
     const char *av[1] = { ged_draw_dbpath_skip_lead_slash(path) };
     int ret = db_walk_tree_leaf_instances(gedp->dbip, 1, av, 1, &init_state,
-	    NULL, NULL, ged_draw_apply_obol_database_source_leaf_cb,
-	    (void *)&ctx);
+					  NULL, NULL, ged_draw_apply_obol_database_source_leaf_cb,
+					  (void *)&ctx);
     db_free_db_tree_state(&init_state);
 
     return (ret >= 0 && !ctx.failed && ctx.realized > 0) ? 1 : 0;
@@ -1527,15 +1615,15 @@ ged_draw_apply_obol_database_source_leaf_paths(
 
 static int
 ged_draw_apply_obol_database_source_paths(
-	struct ged *gedp,
-	void *view_ctx,
-	const char **paths,
-	int path_count,
-	const struct ged_draw_appearance_settings *settings)
+    struct ged *gedp,
+    void *view_ctx,
+    const char **paths,
+    int path_count,
+    const struct ged_draw_appearance_settings *settings)
 {
     if (!gedp || !gedp->dbip || !view_ctx || !paths || path_count <= 0 ||
-	    !settings || !ged_draw_mode_uses_obol_database_source(
-		settings->draw_mode))
+	!settings || !ged_draw_mode_uses_obol_database_source(
+	    settings->draw_mode))
 	return 0;
 
     if (!ged_draw_obol_scene_controller_attached(gedp))
@@ -1549,10 +1637,14 @@ ged_draw_apply_obol_database_source_paths(
 
 	(void)ged_draw_obol_group_ensure_for_path(gedp, path, path,
 		settings->draw_mode, 0);
-	if (ged_draw_apply_obol_database_source_leaf_paths(gedp, path,
-		settings) ||
-		ged_draw_apply_obol_database_source_one_path(gedp, path,
-		    settings))
+	if ((settings->defer_leaf_expansion &&
+	     ged_draw_apply_obol_database_source_proxy_path(gedp, path,
+		     settings)) ||
+	    (!settings->defer_leaf_expansion &&
+	     (ged_draw_apply_obol_database_source_leaf_paths(gedp, path,
+		     settings) ||
+	      ged_draw_apply_obol_database_source_one_path(gedp, path,
+		      settings))))
 	    realized++;
     }
 
@@ -1571,7 +1663,7 @@ ged_draw_apply_retained_drawtrees(struct ged *gedp,
 	gedp->i->ged_gdp->gd_draw_retained_drawtree_invocations++;
 
     return _ged_drawtrees(gedp, draw_count, draw_paths, _GED_DRAW_WIREFRAME,
-	    dgcdp);
+			  dgcdp);
 }
 
 
@@ -1587,7 +1679,7 @@ _ged_draw_paths_realized(struct ged *gedp,
     int realized = 0;
     for (int i = 0; i < path_count; i++) {
 	if (paths[i] && paths[i][0] &&
-		ged_draw_path_state(gedp, view_ctx, paths[i], -1) > 0)
+	    ged_draw_path_state(gedp, view_ctx, paths[i], -1) > 0)
 	    realized++;
     }
     return realized;
@@ -1619,7 +1711,7 @@ _ged_draw_apply_draw(struct ged *gedp,
 	return 0;
 
     const char **draw_paths = (const char **)bu_calloc(path_count + 1,
-	    sizeof(const char *), "draw transaction paths");
+			      sizeof(const char *), "draw transaction paths");
     int draw_count = 0;
     for (int i = 0; i < path_count; i++) {
 	if (paths[i] && paths[i][0])
@@ -1630,7 +1722,7 @@ _ged_draw_apply_draw(struct ged *gedp,
 	return 0;
     }
     struct ged_draw_appearance_settings neutral_settings =
-	GED_DRAW_APPEARANCE_SETTINGS_INIT;
+	    GED_DRAW_APPEARANCE_SETTINGS_INIT;
     if (txn->appearance)
 	neutral_settings =
 	    *(const struct ged_draw_appearance_settings *)txn->appearance;
@@ -1640,7 +1732,7 @@ _ged_draw_apply_draw(struct ged *gedp,
 	    ged_draw_transaction_make(GED_DRAW_TXN_ERASE, draw_paths[i]);
 	erase_txn.view = view_ctx;
 	erase_txn.mode = (txn->mode >= 0) ? txn->mode :
-	    (neutral_settings.mixed_modes ? (int)neutral_settings.draw_mode : -1);
+			 (neutral_settings.mixed_modes ? (int)neutral_settings.draw_mode : -1);
 	ged_draw_apply_transaction(gedp, &erase_txn, NULL);
     }
 
@@ -1658,32 +1750,34 @@ _ged_draw_apply_draw(struct ged *gedp,
 
     int ret = 0;
     int obol_publication = ged_draw_obol_database_source_publication_begin(
-	    gedp, view_ctx, neutral_settings.draw_mode);
+			       gedp, view_ctx, neutral_settings.draw_mode);
     if (neutral_settings.draw_mode == GED_DRAW_MODE_EVAL_WIRE ||
-	    neutral_settings.draw_mode == GED_DRAW_MODE_EVAL_POINTS) {
+	neutral_settings.draw_mode == GED_DRAW_MODE_EVAL_POINTS) {
 	ret = ged_draw_apply_evaluated_provider_paths(gedp, view_ctx, draw_paths,
-		draw_count,
-		&neutral_settings);
+	      draw_count,
+	      &neutral_settings);
 	if (ret < 0)
 	    ret = -1;
 	else
 	    ret = 0;
     } else if (obol_publication &&
-	    ged_draw_mode_uses_obol_database_source(
-		neutral_settings.draw_mode)) {
+	       ged_draw_mode_uses_obol_database_source(
+		   neutral_settings.draw_mode)) {
 	int realized = ged_draw_apply_obol_database_source_paths(gedp,
-		view_ctx, draw_paths, draw_count, &neutral_settings);
+		       view_ctx, draw_paths, draw_count, &neutral_settings);
 	if (realized == draw_count) {
 	    ged_draw_obol_database_source_publication_end(gedp);
 	    obol_publication = 0;
 	    ret = 0;
+	} else if (neutral_settings.defer_leaf_expansion) {
+	    ret = -1;
 	} else {
 	    ret = ged_draw_apply_retained_drawtrees(gedp, draw_count,
-		    draw_paths, &dgcdp);
+						    draw_paths, &dgcdp);
 	}
     } else {
 	ret = ged_draw_apply_retained_drawtrees(gedp, draw_count, draw_paths,
-		&dgcdp);
+						&dgcdp);
     }
     if (obol_publication)
 	ged_draw_obol_database_source_publication_end(gedp);
@@ -1695,7 +1789,7 @@ _ged_draw_apply_draw(struct ged *gedp,
 	 * the retained draw state in that case so transaction observers and
 	 * callers see the scene change that actually happened. */
 	int realized = _ged_draw_paths_realized(gedp, view_ctx, draw_paths,
-		draw_count);
+						draw_count);
 	if (realized == draw_count)
 	    ret = 0;
     }
@@ -1707,11 +1801,11 @@ _ged_draw_apply_draw(struct ged *gedp,
 
     if (txn->autoview)
 	(void)ged_draw_autoview_for_transaction(gedp, view_ctx, draw_paths,
-	    draw_count);
+						draw_count);
     (void)ged_draw_finalize_lod_for_transaction(gedp, view_ctx);
     if (txn->autoview)
 	(void)ged_draw_autoview_for_transaction(gedp, view_ctx, draw_paths,
-	    draw_count);
+						draw_count);
     (void)ged_selection_draw_sync(gedp, NULL);
 
     if (result) {
@@ -1748,7 +1842,7 @@ _ged_draw_reexpand_group_seen(const struct ged_draw_reexpand_source_ctx *ctx,
     for (size_t i = 0; i < BU_PTBL_LEN(&ctx->groups); i++) {
 	const struct ged_draw_reexpand_group_entry *entry =
 	    (const struct ged_draw_reexpand_group_entry *)BU_PTBL_GET(
-		    &ctx->groups, i);
+		&ctx->groups, i);
 	if (entry && entry->ref.token == ref.token)
 	    return 1;
     }
@@ -1762,7 +1856,7 @@ _ged_draw_reexpand_group_add(struct ged_draw_reexpand_source_ctx *ctx,
 			     const struct ged_draw_group_record *rec)
 {
     if (!ctx || !rec || !rec->path || rec->is_overlay ||
-	    ged_draw_group_ref_is_null(rec->ref))
+	ged_draw_group_ref_is_null(rec->ref))
 	return 0;
     if (ctx->view_ctx && !ged_draw_group_record_in_view(rec, ctx->view_ctx))
 	return 0;
@@ -1771,14 +1865,14 @@ _ged_draw_reexpand_group_add(struct ged_draw_reexpand_source_ctx *ctx,
 
     struct ged_draw_reexpand_group_entry *entry =
 	(struct ged_draw_reexpand_group_entry *)bu_calloc(1, sizeof(*entry),
-		"reexpand group entry");
+	    "reexpand group entry");
     entry->ref = rec->ref;
     entry->path = bu_strdup(rec->path);
     entry->view_ctx = ctx->view_ctx ? ctx->view_ctx :
-	((rec->in_view_scope && rec->view) ? rec->view :
-	 ged_draw_active_view_ctx(ctx->gedp));
+		      ((rec->in_view_scope && rec->view) ? rec->view :
+		       ged_draw_active_view_ctx(ctx->gedp));
     struct ged_draw_appearance_settings appearance =
-	GED_DRAW_APPEARANCE_SETTINGS_INIT;
+	    GED_DRAW_APPEARANCE_SETTINGS_INIT;
     if (!ged_draw_group_ref_appearance_settings(ctx->gedp, rec->ref,
 	    &appearance)) {
 	appearance.draw_mode = rec->draw_mode;
@@ -1840,7 +1934,7 @@ _ged_draw_reexpand_source_shape_cb(const struct ged_draw_shape_record *rec,
 
 static int
 _ged_draw_reexpand_source_group_index_cb(ged_draw_group_ref ref,
-					 void *userdata)
+	void *userdata)
 {
     struct ged_draw_reexpand_source_ctx *ctx =
 	(struct ged_draw_reexpand_source_ctx *)userdata;
@@ -1854,7 +1948,7 @@ _ged_draw_reexpand_source_group_index_cb(ged_draw_group_ref ref,
 
 static int
 _ged_draw_reexpand_source_shape_index_cb(ged_draw_shape_ref ref,
-					 void *userdata)
+	void *userdata)
 {
     struct ged_draw_reexpand_source_ctx *ctx =
 	(struct ged_draw_reexpand_source_ctx *)userdata;
@@ -1862,7 +1956,7 @@ _ged_draw_reexpand_source_shape_index_cb(ged_draw_shape_ref ref,
 	return 1;
 
     (void)_ged_draw_reexpand_group_add_ref(ctx,
-	    ged_draw_group_ref_of_shape(ctx->gedp, ref));
+					   ged_draw_group_ref_of_shape(ctx->gedp, ref));
     return 1;
 }
 
@@ -1881,25 +1975,25 @@ _ged_draw_reexpand_source_groups(struct ged *gedp, const char *path,
     bu_ptbl_init(&ctx.groups, 8, "reexpand source groups");
 
     int groups_indexed = ctx.path ?
-	ged_draw_group_ref_index_for_component(gedp, ctx.path,
-		_ged_draw_reexpand_source_group_index_cb, &ctx) : -1;
+			 ged_draw_group_ref_index_for_component(gedp, ctx.path,
+			     _ged_draw_reexpand_source_group_index_cb, &ctx) : -1;
     int shapes_indexed = ctx.path ?
-	ged_draw_shape_ref_index_for_component(gedp, ctx.path,
-		_ged_draw_reexpand_source_shape_index_cb, &ctx) : -1;
+			 ged_draw_shape_ref_index_for_component(gedp, ctx.path,
+			     _ged_draw_reexpand_source_shape_index_cb, &ctx) : -1;
 
     if (groups_indexed < 0) {
 	struct ged_drawable *gdp = _ged_draw_gdp(gedp);
 	if (gdp)
 	    gdp->gd_draw_index_fallback_group_scans++;
 	ged_draw_foreach_group_record(gedp,
-		_ged_draw_reexpand_source_group_cb, &ctx);
+				      _ged_draw_reexpand_source_group_cb, &ctx);
     }
     if (shapes_indexed < 0) {
 	struct ged_drawable *gdp = _ged_draw_gdp(gedp);
 	if (gdp)
 	    gdp->gd_draw_index_fallback_shape_scans++;
 	ged_draw_foreach_shape_record(gedp,
-		_ged_draw_reexpand_source_shape_cb, &ctx);
+				      _ged_draw_reexpand_source_shape_cb, &ctx);
     }
 
     int reexpanded = 0;
@@ -2111,7 +2205,7 @@ _ged_draw_apply_transaction_inner(struct ged *gedp,
 		return 0;
 	    if (txn->view || txn->mode >= 0)
 		ret = ged_draw_erase_path_string_scoped(gedp, path,
-			txn->view, txn->mode);
+							txn->view, txn->mode);
 	    else
 		ret = ged_draw_erase_path_string(gedp, path);
 	    if (result) {
@@ -2124,7 +2218,7 @@ _ged_draw_apply_transaction_inner(struct ged *gedp,
 		return 0;
 	    if (txn->view || txn->mode >= 0)
 		ret = ged_draw_erase_path_prefix_string_scoped(gedp, path,
-			txn->view, txn->mode);
+		      txn->view, txn->mode);
 	    else
 		ret = ged_draw_erase_path_prefix_string(gedp, path);
 	    if (result) {
@@ -2133,8 +2227,7 @@ _ged_draw_apply_transaction_inner(struct ged *gedp,
 	    }
 	    break;
 	case GED_DRAW_TXN_TEARDOWN:
-	case GED_DRAW_TXN_CLEAR:
-	{
+	case GED_DRAW_TXN_CLEAR: {
 	    ged_draw_clear(gedp);
 	    ret = (child_count0 > 0 || rev0 != 0) ? 1 : 0;
 	    if (result)
@@ -2199,7 +2292,7 @@ _ged_draw_apply_transaction_inner(struct ged *gedp,
 	    break;
 	case GED_DRAW_TXN_SOURCE_UPDATED:
 	    ret = ged_draw_apply_database_update(gedp, path, txn->removed,
-		    txn->redraw);
+						 txn->redraw);
 	    if (result) {
 		if (txn->removed)
 		    result->affected_groups = (ret > 0) ? ret : 0;
@@ -2220,7 +2313,7 @@ _ged_draw_apply_transaction_inner(struct ged *gedp,
 	    if (!path)
 		return 0;
 	    ret = ged_draw_erase_nonroot_component_string_scoped(gedp, path,
-		    txn->view, txn->mode);
+		  txn->view, txn->mode);
 	    if (result) {
 		result->affected_groups = ret;
 		result->affected_shapes = ret;
@@ -2292,12 +2385,12 @@ ged_draw_apply_transaction(struct ged *gedp,
 	} else if (ret == 0 && _ged_draw_txn_kind_changes_scene(txn->kind)) {
 	    int obol_ret =
 		ged_draw_obol_scene_sync_attached_transaction(gedp, txn,
-			result);
+		    result);
 	    if (obol_ret > 0) {
 		ret = obol_ret;
 		result->status = ret;
 		_ged_draw_txn_bump_revision_if_needed(gedp, txn, ret,
-			result->scene_revision_before);
+						      result->scene_revision_before);
 		result->scene_revision_after = ged_draw_scene_revision(gedp);
 	    }
 	}
@@ -2327,7 +2420,7 @@ ged_draw_apply_database_update(struct ged *gedp,
     }
 
     int marked = ged_draw_mark_database_change(gedp, path,
-	    GED_DRAW_STALE_SOURCE_CHANGED);
+		 GED_DRAW_STALE_SOURCE_CHANGED);
     if (!redraw)
 	return marked;
 

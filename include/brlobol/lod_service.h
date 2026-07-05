@@ -29,7 +29,7 @@ typedef uint64_t BRLObolLodSubscriberId;
 typedef void (*BRLObolLodResultReadyCB)(
 	BRLObolLodService *service, void *userData);
 
-struct BRLOBOL_EXPORT BRLObolRtMeshLodProvider {
+struct BRLOBOL_EXPORT BRLObolMeshLodProvider {
     struct db_i *dbip;
     struct rt_view_info view;
     SbBool useView;
@@ -39,7 +39,7 @@ struct BRLOBOL_EXPORT BRLObolRtMeshLodProvider {
     int forcedLevel;
     int reset;
 
-    BRLObolRtMeshLodProvider(void);
+    BRLObolMeshLodProvider(void);
     void clear(void);
 };
 
@@ -50,6 +50,15 @@ struct BRLOBOL_EXPORT BRLObolRtSourceFullDetailProvider {
     uint64_t maxFullDetailPointCount;
 
     BRLObolRtSourceFullDetailProvider(void);
+    void clear(void);
+};
+
+struct BRLOBOL_EXPORT BRLObolRtProxyProvider {
+    struct db_i *dbip;
+    int proxyKind;
+    SbBool useRequestBounds;
+
+    BRLObolRtProxyProvider(void);
     void clear(void);
 };
 
@@ -72,11 +81,22 @@ struct BRLOBOL_EXPORT BRLObolLodTask {
 };
 
 BRLOBOL_EXPORT BRLObolLodResult
-brlobol_rt_mesh_lod_provider_task(const BRLObolLodRequest &request,
+brlobol_mesh_lod_provider_task(const BRLObolLodRequest &request,
 	void *userData);
 
 BRLOBOL_EXPORT void
-brlobol_rt_mesh_lod_provider_free(void *userData);
+brlobol_mesh_lod_provider_free(void *userData);
+
+BRLOBOL_EXPORT BRLObolLodResult
+brlobol_mesh_lod_cache_provider_task(const BRLObolLodRequest &request,
+	void *userData);
+
+BRLOBOL_EXPORT BRLObolLodResult
+brlobol_rt_proxy_provider_task(const BRLObolLodRequest &request,
+	void *userData);
+
+BRLOBOL_EXPORT void
+brlobol_rt_proxy_provider_free(void *userData);
 
 BRLOBOL_EXPORT BRLObolLodResult
 brlobol_rt_source_full_detail_provider_task(

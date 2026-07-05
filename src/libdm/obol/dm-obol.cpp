@@ -255,6 +255,10 @@ obol_render(struct dm *dmp)
     if (obol_sync_view(dmp) != BRLCAD_OK)
 	return BRLCAD_ERROR;
     (void)pv->controller->realizePending();
+    if (pv->controller->isLodAutoSubmitEnabled())
+	(void)pv->controller->submitLodRequestsIfNeeded();
+    if (pv->controller->hasPendingLodResults())
+	(void)pv->controller->processPendingLodResults();
 
     const SbViewportRegion &region = pv->controller->getViewportRegion();
     SbVec2s size = region.getViewportSizePixels();

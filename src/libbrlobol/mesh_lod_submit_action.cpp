@@ -16,6 +16,8 @@
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoNode.h>
 
+#include <errno.h>
+#include <stdlib.h>
 #include <string.h>
 
 SO_ACTION_SOURCE(SoBRLMeshLodSubmitAction);
@@ -28,14 +30,16 @@ SoBRLMeshLodSubmitAction::SoBRLMeshLodSubmitAction(void) :
     generation(0),
     viewRevision(0),
     policyRevision(0),
-    providerId("rt_mesh_lod"),
-    providerVersion("rt-cache-v1"),
+    providerId("brlobol_mesh_lod"),
+    providerVersion("brlobol-cache-v1"),
     qualityTier(BRLOBOL_LOD_QUALITY_FAST_DISPLAY),
     refreshMissing(TRUE),
     reset(0),
     useForcedLevel(FALSE),
     forcedLevel(0),
     requireLodBacked(TRUE),
+    submitAabbProxyStage(FALSE),
+    submitObbProxyStage(FALSE),
     viewState(NULL),
     visitedMeshCount(0),
     submittedTaskCount(0),
@@ -181,6 +185,26 @@ SoBRLMeshLodSubmitAction::getRequireLodBacked(void) const
 }
 
 void
+SoBRLMeshLodSubmitAction::setProxyStages(SbBool submitAabb,
+	SbBool submitObb)
+{
+    this->submitAabbProxyStage = submitAabb ? TRUE : FALSE;
+    this->submitObbProxyStage = submitObb ? TRUE : FALSE;
+}
+
+SbBool
+SoBRLMeshLodSubmitAction::getSubmitAabbProxyStage(void) const
+{
+    return this->submitAabbProxyStage;
+}
+
+SbBool
+SoBRLMeshLodSubmitAction::getSubmitObbProxyStage(void) const
+{
+    return this->submitObbProxyStage;
+}
+
+void
 SoBRLMeshLodSubmitAction::setViewLodState(
     const BRLObolViewLodState *newViewState)
 {
@@ -232,6 +256,22 @@ SoBRLMeshLodSubmitAction::nodeAction(SoAction *action, SoNode *node)
 {
     if (node->isOfType(SoGroup::getClassTypeId()))
 	node->doAction(action);
+}
+
+static uint32_t
+mesh_lod_debug_delay_milliseconds(const char *env_name)
+{
+    const char *delay = getenv(env_name);
+    if (!delay || !delay[0])
+	return 0;
+
+    errno = 0;
+    char *end = NULL;
+    unsigned long value = strtoul(delay, &end, 10);
+    if (errno != 0 || end == delay || value > UINT32_MAX)
+	return 0;
+
+    return (uint32_t)value;
 }
 
 void
@@ -314,7 +354,86 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	return;
     }
 
-    BRLObolRtMeshLodProvider *provider = new BRLObolRtMeshLodProvider;
+    uint64_t dependencyTaskId = 0;
+    if (submitAction->submitAabbProxyStage ||
+	submitAction->submitObbProxyStage) {
+	BRLObolLodRequest aabbRequest;
+	shape->makeLodRequest(aabbRequest,
+			      submitAction->databaseId.getString(),
+			      submitAction->databaseRevision,
+			      submitAction->viewRevision,
+			      submitAction->policyRevision,
+			      BRLOBOL_LOD_DRAW_SHADED,
+			      "rt_proxy_aabb",
+			      "rt-proxy-v1",
+			      BRLOBOL_LOD_QUALITY_PROXY);
+
+	if (submitAction->submitAabbProxyStage &&
+	    !submitAction->service->hasActiveRequest(aabbRequest)) {
+	    BRLObolRtProxyProvider *provider = new BRLObolRtProxyProvider;
+	    provider->dbip = submitAction->dbip;
+	    provider->proxyKind = BRLOBOL_LOD_PROXY_AABB;
+	    provider->useRequestBounds = TRUE;
+
+	    BRLObolLodTask task;
+	    task.generation = submitAction->generation;
+	    task.request = aabbRequest;
+	    task.realize = brlobol_rt_proxy_provider_task;
+	    task.realizeData = provider;
+	    task.realizeDataFree = brlobol_rt_proxy_provider_free;
+	    task.debugDelayMilliseconds =
+		mesh_lod_debug_delay_milliseconds(
+		    "BRLOBOL_LOD_AABB_TASK_DELAY_MS");
+	    uint64_t taskId = submitAction->service->submitIfNotActive(task);
+	    if (taskId != 0) {
+		dependencyTaskId = taskId;
+		submitAction->submittedTaskCount++;
+	    } else {
+		brlobol_rt_proxy_provider_free(provider);
+	    }
+	}
+
+	if (submitAction->submitObbProxyStage) {
+	    BRLObolLodRequest obbRequest;
+	    shape->makeLodRequest(obbRequest,
+				  submitAction->databaseId.getString(),
+				  submitAction->databaseRevision,
+				  submitAction->viewRevision,
+				  submitAction->policyRevision,
+				  BRLOBOL_LOD_DRAW_SHADED,
+				  "rt_proxy_obb",
+				  "rt-proxy-v1",
+				  BRLOBOL_LOD_QUALITY_PROXY);
+
+	    if (!submitAction->service->hasActiveRequest(obbRequest)) {
+		BRLObolRtProxyProvider *provider = new BRLObolRtProxyProvider;
+		provider->dbip = submitAction->dbip;
+		provider->proxyKind = BRLOBOL_LOD_PROXY_OBB;
+		provider->useRequestBounds = TRUE;
+
+		BRLObolLodTask task;
+		task.generation = submitAction->generation;
+		task.request = obbRequest;
+		if (dependencyTaskId != 0)
+		    task.addDependency(dependencyTaskId);
+		task.realize = brlobol_rt_proxy_provider_task;
+		task.realizeData = provider;
+		task.realizeDataFree = brlobol_rt_proxy_provider_free;
+		task.debugDelayMilliseconds =
+		    mesh_lod_debug_delay_milliseconds(
+			"BRLOBOL_LOD_OBB_TASK_DELAY_MS");
+		uint64_t taskId = submitAction->service->submitIfNotActive(task);
+		if (taskId != 0) {
+		    dependencyTaskId = taskId;
+		    submitAction->submittedTaskCount++;
+		} else {
+		    brlobol_rt_proxy_provider_free(provider);
+		}
+	    }
+	}
+    }
+
+    BRLObolMeshLodProvider *provider = new BRLObolMeshLodProvider;
     provider->dbip = submitAction->dbip;
     provider->view = submitAction->view;
     provider->useView = TRUE;
@@ -327,15 +446,19 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
     BRLObolLodTask task;
     task.generation = submitAction->generation;
     task.request = request;
-    task.realize = brlobol_rt_mesh_lod_provider_task;
+    task.realize = brlobol_mesh_lod_provider_task;
     task.realizeData = provider;
-    task.realizeDataFree = brlobol_rt_mesh_lod_provider_free;
+    task.realizeDataFree = brlobol_mesh_lod_provider_free;
+    if (dependencyTaskId != 0)
+	task.addDependency(dependencyTaskId);
+    task.debugDelayMilliseconds =
+	mesh_lod_debug_delay_milliseconds("BRLOBOL_LOD_TASK_DELAY_MS");
 
     uint64_t taskId = suppressActiveDuplicate ?
 		      submitAction->service->submitIfNotActive(task) :
 		      submitAction->service->submit(task);
     if (taskId == 0) {
-	brlobol_rt_mesh_lod_provider_free(provider);
+	brlobol_mesh_lod_provider_free(provider);
 	submitAction->skippedMeshCount++;
 	submitAction->appendDiagnostic(target,
 				       suppressActiveDuplicate &&

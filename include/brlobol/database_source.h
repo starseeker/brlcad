@@ -10,6 +10,7 @@
 #define BRLOBOL_DATABASE_SOURCE_H
 
 #include "brlobol/defines.h"
+#include "brlobol/mesh_lod_cache.h"
 
 #include <stdint.h>
 
@@ -34,7 +35,6 @@ class SoBRLMaterialObject;
 class SoFieldSensor;
 class SoSensor;
 struct db_i;
-struct rt_mesh_lod;
 struct BRLObolDatabaseSourceRealizationCache;
 
 struct BRLOBOL_EXPORT BRLObolDatabaseSourceSummary {
@@ -143,6 +143,7 @@ struct BRLOBOL_EXPORT BRLObolExternalTriangleMesh {
     int indexCount;
     const char *sourceType;
     const char *geometryKind;
+    SbBool lodBacked;
 };
 
 struct BRLOBOL_EXPORT BRLObolExternalAnnotationSegment {
@@ -504,8 +505,8 @@ public:
      */
     void setDatabase(struct db_i *dbip);
     struct db_i *getDatabase(void) const;
-    void setMeshLod(struct rt_mesh_lod *lod);
-    struct rt_mesh_lod *getMeshLod(void) const;
+    void setMeshLod(struct BRLObolMeshLod *lod);
+    struct BRLObolMeshLod *getMeshLod(void) const;
     void clearMeshLod(void);
     int setMeshLodBounds(const SbVec3f &bmin, const SbVec3f &bmax);
     SbBool getMeshLodBounds(SbVec3f &bmin, SbVec3f &bmax) const;
@@ -659,7 +660,7 @@ private:
     void syncRealizedShapeOwnerState(void);
 
     struct db_i *dbip;
-    struct rt_mesh_lod *meshLod;
+    struct BRLObolMeshLod *meshLod;
     SbBool meshLodBoundsValid;
     SbVec3f meshLodBoundsMin;
     SbVec3f meshLodBoundsMax;

@@ -198,6 +198,28 @@ BRLObolViewLodState::MeshPayload::getTriangle(int triangleIndex,
     return TRUE;
 }
 
+BRLObolViewLodState::ProxyPayload::ProxyPayload(void) :
+    resultKind(BRLOBOL_LOD_RESULT_NONE),
+    qualityTier(BRLOBOL_LOD_QUALITY_METADATA),
+    providerStatus(BRLOBOL_LOD_PROVIDER_UNKNOWN),
+    viewRevision(0),
+    policyRevision(0),
+    diagnostic("")
+{
+}
+
+SbBool
+BRLObolViewLodState::ProxyPayload::isValid(void) const
+{
+    return this->proxy.isValid();
+}
+
+size_t
+BRLObolViewLodState::ProxyPayload::estimateBytes(void) const
+{
+    return sizeof(*this);
+}
+
 BRLObolViewLodState::BRLObolViewLodState(void)
 {
 }
@@ -210,6 +232,7 @@ void
 BRLObolViewLodState::clear(void)
 {
     this->meshBindings.clear();
+    this->proxyBindings.clear();
 }
 
 SbBool
@@ -250,6 +273,53 @@ BRLObolViewLodState::applyMeshResult(const SoBRLMeshShape *shape,
     return TRUE;
 }
 
+SbBool
+BRLObolViewLodState::applyProxyResult(const SoBRLMeshShape *shape,
+				      const BRLObolLodResult &result)
+{
+    if (!shape ||
+	(result.resultKind != BRLOBOL_LOD_RESULT_AABB &&
+	 result.resultKind != BRLOBOL_LOD_RESULT_PROXY) ||
+	result.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
+	!result.proxy.isValid())
+	return FALSE;
+
+    ProxyPayloadPtr payload(new ProxyPayload);
+    payload->proxy = result.proxy;
+    payload->sourcePath = shape->sourcePath.getValue();
+    payload->sourceName = shape->sourceName.getValue();
+    payload->sourceIdentity = shape->sourceIdentity.getValue();
+    payload->cacheIdentity = shape->cacheIdentity.getValue();
+    payload->cacheKey = result.cacheKey.value;
+    payload->resultKind = result.resultKind;
+    payload->qualityTier = result.qualityTier;
+    payload->providerStatus = result.providerStatus;
+    payload->viewRevision = result.request.viewRevision;
+    payload->policyRevision = result.request.policyRevision;
+    payload->counts = result.counts;
+    payload->bounds = result.bounds;
+    payload->diagnostic = result.diagnostic;
+
+    std::vector<std::string> keys;
+    view_lod_shape_keys(keys, shape);
+    view_lod_result_keys(keys, result);
+    for (size_t i = 0; i < keys.size(); i++)
+	this->proxyBindings[keys[i]] = payload;
+
+    return TRUE;
+}
+
+SbBool
+BRLObolViewLodState::applyDisplayResult(const SoBRLMeshShape *shape,
+					const BRLObolLodResult &result)
+{
+    if (result.resultKind == BRLOBOL_LOD_RESULT_MESH ||
+	result.resultKind == BRLOBOL_LOD_RESULT_FULL_DETAIL)
+	return this->applyMeshResult(shape, result);
+
+    return this->applyProxyResult(shape, result);
+}
+
 const BRLObolViewLodState::MeshPayload *
 BRLObolViewLodState::findMesh(const SoBRLMeshShape *shape) const
 {
@@ -283,10 +353,43 @@ BRLObolViewLodState::findMeshForResult(
     return NULL;
 }
 
+const BRLObolViewLodState::ProxyPayload *
+BRLObolViewLodState::findProxy(const SoBRLMeshShape *shape) const
+{
+    std::vector<std::string> keys;
+    view_lod_shape_keys(keys, shape);
+    for (size_t i = 0; i < keys.size(); i++) {
+	std::unordered_map<std::string, ProxyPayloadPtr>::const_iterator it =
+	    this->proxyBindings.find(keys[i]);
+	if (it != this->proxyBindings.end() && it->second &&
+	    it->second->isValid())
+	    return it->second.get();
+    }
+
+    return NULL;
+}
+
+const BRLObolViewLodState::ProxyPayload *
+BRLObolViewLodState::findProxyForResult(
+    const BRLObolLodResult &result) const
+{
+    std::vector<std::string> keys;
+    view_lod_result_keys(keys, result);
+    for (size_t i = 0; i < keys.size(); i++) {
+	std::unordered_map<std::string, ProxyPayloadPtr>::const_iterator it =
+	    this->proxyBindings.find(keys[i]);
+	if (it != this->proxyBindings.end() && it->second &&
+	    it->second->isValid())
+	    return it->second.get();
+    }
+
+    return NULL;
+}
+
 size_t
 BRLObolViewLodState::bindingCount(void) const
 {
-    return this->meshBindings.size();
+    return this->meshBindings.size() + this->proxyBindings.size();
 }
 
 static std::vector<BRLObolViewLodState::MeshPayloadPtr>
@@ -308,10 +411,53 @@ view_lod_unique_payloads(
     return payloads;
 }
 
+static std::vector<BRLObolViewLodState::ProxyPayloadPtr>
+view_lod_unique_proxy_payloads(
+    const std::unordered_map<std::string,
+    BRLObolViewLodState::ProxyPayloadPtr> &bindings)
+{
+    std::vector<BRLObolViewLodState::ProxyPayloadPtr> payloads;
+    for (std::unordered_map<std::string,
+	 BRLObolViewLodState::ProxyPayloadPtr>::const_iterator it =
+	     bindings.begin(); it != bindings.end(); ++it) {
+	if (!it->second)
+	    continue;
+	if (std::find(payloads.begin(), payloads.end(), it->second) ==
+	    payloads.end())
+	    payloads.push_back(it->second);
+    }
+
+    return payloads;
+}
+
 size_t
 BRLObolViewLodState::payloadCount(void) const
 {
+    return view_lod_unique_payloads(this->meshBindings).size() +
+	   view_lod_unique_proxy_payloads(this->proxyBindings).size();
+}
+
+size_t
+BRLObolViewLodState::meshPayloadCount(void) const
+{
     return view_lod_unique_payloads(this->meshBindings).size();
+}
+
+size_t
+BRLObolViewLodState::proxyPayloadCount(int proxyKind) const
+{
+    std::vector<ProxyPayloadPtr> payloads =
+	view_lod_unique_proxy_payloads(this->proxyBindings);
+    size_t count = 0;
+    for (size_t i = 0; i < payloads.size(); i++) {
+	if (!payloads[i] || !payloads[i]->isValid())
+	    continue;
+	if (proxyKind == BRLOBOL_LOD_PROXY_NONE ||
+	    payloads[i]->proxy.kind == proxyKind)
+	    count++;
+    }
+
+    return count;
 }
 
 size_t
@@ -322,6 +468,10 @@ BRLObolViewLodState::estimateDisplayMeshBytes(void) const
     size_t bytes = 0;
     for (size_t i = 0; i < payloads.size(); i++)
 	bytes += payloads[i]->estimateBytes();
+    std::vector<ProxyPayloadPtr> proxyPayloads =
+	view_lod_unique_proxy_payloads(this->proxyBindings);
+    for (size_t i = 0; i < proxyPayloads.size(); i++)
+	bytes += proxyPayloads[i]->estimateBytes();
 
     return bytes;
 }
@@ -338,6 +488,7 @@ BRLObolViewLodState::evictDisplayMeshes(unsigned int *evictedMeshCount)
     if (evictedMeshCount)
 	*evictedMeshCount = static_cast<unsigned int>(payloads.size());
     this->meshBindings.clear();
+    this->proxyBindings.clear();
     return bytes;
 }
 
@@ -519,6 +670,18 @@ brlobol_view_lod_mesh_for_action(SoAction *action,
     const BRLObolViewLodState *viewState =
 	SoBRLViewLodElement::get(action->getState());
     return viewState ? viewState->findMesh(shape) : NULL;
+}
+
+const BRLObolViewLodState::ProxyPayload *
+brlobol_view_lod_proxy_for_action(SoAction *action,
+				  const SoBRLMeshShape *shape)
+{
+    if (!action || !shape)
+	return NULL;
+
+    const BRLObolViewLodState *viewState =
+	SoBRLViewLodElement::get(action->getState());
+    return viewState ? viewState->findProxy(shape) : NULL;
 }
 
 /*

@@ -251,6 +251,18 @@ mesh_payload_variant_result(const BRLObolLodRequest &request,
 }
 
 static BRLObolLodResult
+mesh_payload_coarse_task(const BRLObolLodRequest &request, void *UNUSED(userData))
+{
+    return mesh_payload_variant_result(request, 1, 1);
+}
+
+static BRLObolLodResult
+mesh_payload_refined_task(const BRLObolLodRequest &request, void *UNUSED(userData))
+{
+    return mesh_payload_variant_result(request, 2, 3);
+}
+
+static BRLObolLodResult
 source_full_detail_result(const BRLObolLodRequest &request)
 {
     BRLObolLodResult result;
@@ -299,12 +311,31 @@ wait_for_service(BRLObolLodService &service)
 {
     for (int i = 0; i < 400; i++) {
 	if (service.inFlightCount() == 0 &&
-	    service.queuedResultCountForDiagnostics() == 1)
+	    service.queuedResultCountForDiagnostics() >= 1)
 	    return 0;
 	std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 
     printf("FAIL: LoD service did not produce update-action result\n");
+    return 1;
+}
+
+static int
+wait_for_service_queued(BRLObolLodService &service,
+			size_t minQueuedCount,
+			SbBool requireDelayedTask,
+			SbBool requireNoInFlight)
+{
+    for (int i = 0; i < 400; i++) {
+	if (service.queuedResultCountForDiagnostics() >= minQueuedCount &&
+	    (!requireDelayedTask ||
+	     service.delayedTaskCountForDiagnostics() > 0) &&
+	    (!requireNoInFlight || service.inFlightCount() == 0))
+	    return 0;
+	std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+
+    printf("FAIL: LoD service did not reach expected queued result state\n");
     return 1;
 }
 
@@ -332,21 +363,21 @@ expected_view_lod_level(struct db_i *dbip,
     if (!dbip || !name || !view || !level)
 	return 1;
 
-    struct rt_mesh_lod *lod = db_mesh_lod_get(dbip, name);
+    struct BRLObolMeshLod *lod = brlobol_mesh_lod_get(dbip, name);
     if (!lod)
 	return 1;
 
-    struct rt_mesh_lod_info info = RT_MESH_LOD_INFO_INIT;
+    struct BRLObolMeshLodInfo info = BRLOBOL_MESH_LOD_INFO_INIT;
     int ret = 0;
-    if (rt_mesh_lod_load_view(lod, view, 0) < 0 ||
-	!rt_mesh_lod_info_get(lod, &info) ||
+    if (brlobol_mesh_lod_load_view(lod, view, 0) < 0 ||
+	!brlobol_mesh_lod_info_get(lod, &info) ||
 	info.active_level < 0) {
 	ret = 1;
     } else {
 	*level = info.active_level;
     }
 
-    rt_mesh_lod_destroy(lod);
+    brlobol_mesh_lod_destroy(lod);
     return ret;
 }
 
@@ -639,8 +670,8 @@ test_update_action_direct(void)
 			  11,
 			  12,
 			  BRLOBOL_LOD_DRAW_SHADED,
-			  "rt_mesh_lod",
-			  "rt-cache-v1",
+			  "brlobol_mesh_lod",
+			  "brlobol-cache-v1",
 			  BRLOBOL_LOD_QUALITY_FAST_DISPLAY);
     if (meshDRequest.sourceCounts.faceCount != 1 ||
 	meshDRequest.sourceCounts.pointCount != 3 ||
@@ -2949,8 +2980,8 @@ test_mesh_lod_request_and_view_info(void)
 			 34,
 			 56,
 			 BRLOBOL_LOD_DRAW_SHADED,
-			 "rt_mesh_lod",
-			 "rt-cache-v1",
+			 "brlobol_mesh_lod",
+			 "brlobol-cache-v1",
 			 BRLOBOL_LOD_QUALITY_FAST_DISPLAY);
 
     if (strcmp(request.databaseId.getString(), "db://request-test") != 0 ||
@@ -2962,7 +2993,7 @@ test_mesh_lod_request_and_view_info(void)
 	request.policyRevision != 56 ||
 	request.drawMode != BRLOBOL_LOD_DRAW_SHADED ||
 	request.lodPolicy != 9 ||
-	strcmp(request.providerId.getString(), "rt_mesh_lod") != 0 ||
+	strcmp(request.providerId.getString(), "brlobol_mesh_lod") != 0 ||
 	request.qualityTier != BRLOBOL_LOD_QUALITY_FAST_DISPLAY ||
 	request.sourceCounts.faceCount != 1 ||
 	request.sourceCounts.pointCount != 3 ||
@@ -2980,8 +3011,8 @@ test_mesh_lod_request_and_view_info(void)
 			 34,
 			 56,
 			 BRLOBOL_LOD_DRAW_SHADED,
-			 "rt_mesh_lod",
-			 "rt-cache-v1",
+			 "brlobol_mesh_lod",
+			 "brlobol-cache-v1",
 			 BRLOBOL_LOD_QUALITY_FAST_DISPLAY);
     if (strcmp(firstKey.value.getString(),
 	       brlobol_lod_cache_key(sameRequest).value.getString()) != 0) {
@@ -3805,7 +3836,7 @@ test_mesh_lod_submit_action(void)
     if (!service.start(1, TRUE)) {
 	printf("FAIL: LoD submit action service did not start\n");
 	root->unref();
-	db_mesh_lod_clear(dbip);
+	brlobol_mesh_lod_cache_clear_database(dbip);
 	db_close(dbip);
 	bu_file_delete(dbpath);
 	bu_dirclear(cache_dir);
@@ -3824,8 +3855,8 @@ test_mesh_lod_submit_action(void)
 			 55,
 			 66,
 			 BRLOBOL_LOD_DRAW_SHADED,
-			 "rt_mesh_lod",
-			 "rt-cache-v1",
+			 "brlobol_mesh_lod",
+			 "brlobol-cache-v1",
 			 BRLOBOL_LOD_QUALITY_FAST_DISPLAY);
     BRLObolLodTask activeTask;
     activeTask.generation = service.beginGeneration();
@@ -3836,7 +3867,7 @@ test_mesh_lod_submit_action(void)
 	printf("FAIL: LoD submit action active-duplicate fixture did not queue request\n");
 	service.stop();
 	root->unref();
-	db_mesh_lod_clear(dbip);
+	brlobol_mesh_lod_cache_clear_database(dbip);
 	db_close(dbip);
 	bu_file_delete(dbpath);
 	bu_dirclear(cache_dir);
@@ -3858,7 +3889,7 @@ test_mesh_lod_submit_action(void)
 	printf("FAIL: LoD submit action did not skip active duplicate view/policy request\n");
 	service.stop();
 	root->unref();
-	db_mesh_lod_clear(dbip);
+	brlobol_mesh_lod_cache_clear_database(dbip);
 	db_close(dbip);
 	bu_file_delete(dbpath);
 	bu_dirclear(cache_dir);
@@ -3867,7 +3898,7 @@ test_mesh_lod_submit_action(void)
     if (wait_for_service(service)) {
 	service.stop();
 	root->unref();
-	db_mesh_lod_clear(dbip);
+	brlobol_mesh_lod_cache_clear_database(dbip);
 	db_close(dbip);
 	bu_file_delete(dbpath);
 	bu_dirclear(cache_dir);
@@ -3882,7 +3913,7 @@ test_mesh_lod_submit_action(void)
 	    printf("FAIL: LoD submit action active-duplicate fixture did not preserve queued request\n");
 	    service.stop();
 	    root->unref();
-	    db_mesh_lod_clear(dbip);
+	    brlobol_mesh_lod_cache_clear_database(dbip);
 	    db_close(dbip);
 	    bu_file_delete(dbpath);
 	    bu_dirclear(cache_dir);
@@ -3905,7 +3936,7 @@ test_mesh_lod_submit_action(void)
 	printf("FAIL: LoD submit action did not submit expected mesh task\n");
 	service.stop();
 	root->unref();
-	db_mesh_lod_clear(dbip);
+	brlobol_mesh_lod_cache_clear_database(dbip);
 	db_close(dbip);
 	bu_file_delete(dbpath);
 	bu_dirclear(cache_dir);
@@ -3915,7 +3946,7 @@ test_mesh_lod_submit_action(void)
     if (wait_for_service(service)) {
 	service.stop();
 	root->unref();
-	db_mesh_lod_clear(dbip);
+	brlobol_mesh_lod_cache_clear_database(dbip);
 	db_close(dbip);
 	bu_file_delete(dbpath);
 	bu_dirclear(cache_dir);
@@ -3928,7 +3959,7 @@ test_mesh_lod_submit_action(void)
 	printf("FAIL: LoD submit action result drain failed\n");
 	service.stop();
 	root->unref();
-	db_mesh_lod_clear(dbip);
+	brlobol_mesh_lod_cache_clear_database(dbip);
 	db_close(dbip);
 	bu_file_delete(dbpath);
 	bu_dirclear(cache_dir);
@@ -3941,7 +3972,7 @@ test_mesh_lod_submit_action(void)
 	printf("FAIL: LoD submit action view-policy active level helper failed\n");
 	service.stop();
 	root->unref();
-	db_mesh_lod_clear(dbip);
+	brlobol_mesh_lod_cache_clear_database(dbip);
 	db_close(dbip);
 	bu_file_delete(dbpath);
 	bu_dirclear(cache_dir);
@@ -3952,7 +3983,7 @@ test_mesh_lod_submit_action(void)
 	printf("FAIL: LoD submit action did not use view-policy active level\n");
 	service.stop();
 	root->unref();
-	db_mesh_lod_clear(dbip);
+	brlobol_mesh_lod_cache_clear_database(dbip);
 	db_close(dbip);
 	bu_file_delete(dbpath);
 	bu_dirclear(cache_dir);
@@ -3972,7 +4003,7 @@ test_mesh_lod_submit_action(void)
 	printf("FAIL: LoD submit action result drain failed\n");
 	service.stop();
 	root->unref();
-	db_mesh_lod_clear(dbip);
+	brlobol_mesh_lod_cache_clear_database(dbip);
 	db_close(dbip);
 	bu_file_delete(dbpath);
 	bu_dirclear(cache_dir);
@@ -4008,8 +4039,8 @@ test_mesh_lod_submit_action(void)
 			     55,
 			     66,
 			     BRLOBOL_LOD_DRAW_SHADED,
-			     "rt_mesh_lod",
-			     "rt-cache-v1",
+			     "brlobol_mesh_lod",
+			     "brlobol-cache-v1",
 			     BRLOBOL_LOD_QUALITY_FAST_DISPLAY);
 	if (activeRequest.sourceCounts.faceCount != 1 ||
 	    activeRequest.sourceCounts.pointCount != 3 ||
@@ -4840,7 +4871,7 @@ test_mesh_lod_submit_action(void)
     service.stop();
     renderRoot->unref();
     root->unref();
-    db_mesh_lod_clear(dbip);
+    brlobol_mesh_lod_cache_clear_database(dbip);
     db_close(dbip);
     bu_file_delete(dbpath);
     bu_dirclear(cache_dir);
@@ -4888,7 +4919,7 @@ test_view_controller_source_backed_multi_source_exact_submit(void)
 	!mesh->isLodDisplayActive()) {
 	printf("FAIL: controller multi-source exact submit fixture did not stage LoD mesh\n");
 	root->unref();
-	db_mesh_lod_clear(right_dbip);
+	brlobol_mesh_lod_cache_clear_database(right_dbip);
 	db_close(right_dbip);
 	db_close(wrong_dbip);
 	bu_file_delete(right_dbpath);
@@ -4904,7 +4935,7 @@ test_view_controller_source_backed_multi_source_exact_submit(void)
     if (!service.start(1, TRUE)) {
 	printf("FAIL: controller multi-source source-backed exact service did not start\n");
 	root->unref();
-	db_mesh_lod_clear(right_dbip);
+	brlobol_mesh_lod_cache_clear_database(right_dbip);
 	db_close(right_dbip);
 	db_close(wrong_dbip);
 	bu_file_delete(right_dbpath);
@@ -4977,7 +5008,7 @@ test_view_controller_source_backed_multi_source_exact_submit(void)
 
     service.stop();
     root->unref();
-    db_mesh_lod_clear(right_dbip);
+    brlobol_mesh_lod_cache_clear_database(right_dbip);
     db_close(right_dbip);
     db_close(wrong_dbip);
     bu_file_delete(right_dbpath);
@@ -5014,7 +5045,7 @@ test_view_controller_source_backed_partial_ready_submit(void)
 	!readyMesh->isLodDisplayActive()) {
 	printf("FAIL: controller partial-ready exact fixture did not stage ready LoD mesh\n");
 	root->unref();
-	db_mesh_lod_clear(dbip);
+	brlobol_mesh_lod_cache_clear_database(dbip);
 	db_close(dbip);
 	bu_file_delete(dbpath);
 	return 1;
@@ -5032,7 +5063,7 @@ test_view_controller_source_backed_partial_ready_submit(void)
 	!missingMesh->isLodDisplayActive()) {
 	printf("FAIL: controller partial-ready exact fixture did not stage missing LoD mesh\n");
 	root->unref();
-	db_mesh_lod_clear(dbip);
+	brlobol_mesh_lod_cache_clear_database(dbip);
 	db_close(dbip);
 	bu_file_delete(dbpath);
 	return 1;
@@ -5046,7 +5077,7 @@ test_view_controller_source_backed_partial_ready_submit(void)
     if (!service.start(1, TRUE)) {
 	printf("FAIL: controller partial-ready source-backed exact service did not start\n");
 	root->unref();
-	db_mesh_lod_clear(dbip);
+	brlobol_mesh_lod_cache_clear_database(dbip);
 	db_close(dbip);
 	bu_file_delete(dbpath);
 	return 1;
@@ -5146,7 +5177,7 @@ test_view_controller_source_backed_partial_ready_submit(void)
     }
 
     root->unref();
-    db_mesh_lod_clear(dbip);
+    brlobol_mesh_lod_cache_clear_database(dbip);
     db_close(dbip);
     bu_file_delete(dbpath);
     return ret;
@@ -5195,7 +5226,7 @@ test_view_controller_lod_submit_and_apply(void)
     if (!service.start(1, TRUE)) {
 	printf("FAIL: LoD view-controller service did not start\n");
 	root->unref();
-	db_mesh_lod_clear(dbip);
+	brlobol_mesh_lod_cache_clear_database(dbip);
 	db_close(dbip);
 	bu_file_delete(dbpath);
 	bu_dirclear(cache_dir);
@@ -5214,16 +5245,16 @@ test_view_controller_lod_submit_and_apply(void)
 	    printf("FAIL: LoD view-controller revisions were not initialized\n");
 	    service.stop();
 	    root->unref();
-	    db_mesh_lod_clear(dbip);
+	    brlobol_mesh_lod_cache_clear_database(dbip);
 	    db_close(dbip);
 	    bu_file_delete(dbpath);
 	    bu_dirclear(cache_dir);
 	    return 1;
 	}
 
-	if (controller.submitLodRequests(NULL, service.beginGeneration()) != 1 ||
+	if (controller.submitLodRequests(NULL, service.beginGeneration()) != 3 ||
 	    controller.getLastLodVisitedMeshCount() != 1 ||
-	    controller.getLastLodSubmittedTaskCount() != 1 ||
+	    controller.getLastLodSubmittedTaskCount() != 3 ||
 	    controller.getLastLodSkippedMeshCount() != 0 ||
 	    controller.getLastLodDiagnostics().getLength() != 0 ||
 	    !controller.isRenderRequested() ||
@@ -5232,7 +5263,7 @@ test_view_controller_lod_submit_and_apply(void)
 	    printf("FAIL: LoD view controller did not submit expected task\n");
 	    service.stop();
 	    root->unref();
-	    db_mesh_lod_clear(dbip);
+	    brlobol_mesh_lod_cache_clear_database(dbip);
 	    db_close(dbip);
 	    bu_file_delete(dbpath);
 	    bu_dirclear(cache_dir);
@@ -5242,7 +5273,7 @@ test_view_controller_lod_submit_and_apply(void)
 	if (wait_for_service(service)) {
 	    service.stop();
 	    root->unref();
-	    db_mesh_lod_clear(dbip);
+	    brlobol_mesh_lod_cache_clear_database(dbip);
 	    db_close(dbip);
 	    bu_file_delete(dbpath);
 	    bu_dirclear(cache_dir);
@@ -5253,7 +5284,7 @@ test_view_controller_lod_submit_and_apply(void)
 	    printf("FAIL: LoD view controller did not observe result-ready wakeup\n");
 	    service.stop();
 	    root->unref();
-	    db_mesh_lod_clear(dbip);
+	    brlobol_mesh_lod_cache_clear_database(dbip);
 	    db_close(dbip);
 	    bu_file_delete(dbpath);
 	    bu_dirclear(cache_dir);
@@ -5262,14 +5293,15 @@ test_view_controller_lod_submit_and_apply(void)
 
 	controller.clearRenderRequest();
 	if (!controller.hasPendingLodResults() ||
-	    controller.processPendingLodResults() != 1 ||
-	    controller.getLastLodResultCount() != 1 ||
-	    controller.getLastLodMatchedResultCount() != 1 ||
-	    controller.getLastLodAppliedResultCount() != 1 ||
+	    controller.processPendingLodResults() != 3 ||
+	    controller.getLastLodResultCount() != 3 ||
+	    controller.getLastLodMatchedResultCount() != 3 ||
+	    controller.getLastLodAppliedResultCount() != 3 ||
 	    controller.getLastLodRejectedResultCount() != 0 ||
 	    controller.getLastLodUnmatchedResultCount() != 0 ||
 	    controller.getLastLodDiagnostics().getLength() != 0 ||
 	    !controller.getViewLodState()->findMesh(mesh) ||
+	    !controller.getViewLodState()->findProxy(mesh) ||
 	    !controller.isRenderRequested() ||
 	    strcmp(controller.getRenderReason().getString(),
 		   "lod-result") != 0 ||
@@ -5277,7 +5309,7 @@ test_view_controller_lod_submit_and_apply(void)
 	    printf("FAIL: LoD view controller did not apply service result\n");
 	    service.stop();
 	    root->unref();
-	    db_mesh_lod_clear(dbip);
+	    brlobol_mesh_lod_cache_clear_database(dbip);
 	    db_close(dbip);
 	    bu_file_delete(dbpath);
 	    bu_dirclear(cache_dir);
@@ -5293,7 +5325,7 @@ test_view_controller_lod_submit_and_apply(void)
 	    printf("FAIL: LoD view controller did not enable auto submit\n");
 	    service.stop();
 	    root->unref();
-	    db_mesh_lod_clear(dbip);
+	    brlobol_mesh_lod_cache_clear_database(dbip);
 	    db_close(dbip);
 	    bu_file_delete(dbpath);
 	    bu_dirclear(cache_dir);
@@ -5309,7 +5341,7 @@ test_view_controller_lod_submit_and_apply(void)
 	    printf("FAIL: LoD view controller did not skip resident changed-scene LoD request\n");
 	    service.stop();
 	    root->unref();
-	    db_mesh_lod_clear(dbip);
+	    brlobol_mesh_lod_cache_clear_database(dbip);
 	    db_close(dbip);
 	    bu_file_delete(dbpath);
 	    bu_dirclear(cache_dir);
@@ -5319,7 +5351,7 @@ test_view_controller_lod_submit_and_apply(void)
 	    printf("FAIL: LoD view controller duplicated unchanged auto-submit\n");
 	    service.stop();
 	    root->unref();
-	    db_mesh_lod_clear(dbip);
+	    brlobol_mesh_lod_cache_clear_database(dbip);
 	    db_close(dbip);
 	    bu_file_delete(dbpath);
 	    bu_dirclear(cache_dir);
@@ -5329,7 +5361,7 @@ test_view_controller_lod_submit_and_apply(void)
 	    printf("FAIL: LoD view controller queued duplicate resident request result\n");
 	    service.stop();
 	    root->unref();
-	    db_mesh_lod_clear(dbip);
+	    brlobol_mesh_lod_cache_clear_database(dbip);
 	    db_close(dbip);
 	    bu_file_delete(dbpath);
 	    bu_dirclear(cache_dir);
@@ -5350,7 +5382,7 @@ test_view_controller_lod_submit_and_apply(void)
 	    printf("FAIL: LoD view controller did not skip resident threshold policy request\n");
 	    service.stop();
 	    root->unref();
-	    db_mesh_lod_clear(dbip);
+	    brlobol_mesh_lod_cache_clear_database(dbip);
 	    db_close(dbip);
 	    bu_file_delete(dbpath);
 	    bu_dirclear(cache_dir);
@@ -5360,7 +5392,7 @@ test_view_controller_lod_submit_and_apply(void)
 	    printf("FAIL: LoD view controller queued duplicate threshold request result\n");
 	    service.stop();
 	    root->unref();
-	    db_mesh_lod_clear(dbip);
+	    brlobol_mesh_lod_cache_clear_database(dbip);
 	    db_close(dbip);
 	    bu_file_delete(dbpath);
 	    bu_dirclear(cache_dir);
@@ -5370,8 +5402,8 @@ test_view_controller_lod_submit_and_apply(void)
 	uint64_t previousViewRevision = controller.getLodViewRevision();
 	camera->height = 90.0f;
 	controller.clearRenderRequest();
-	if (controller.submitLodRequestsIfNeeded() != 1 ||
-	    controller.getLastLodSubmittedTaskCount() != 1 ||
+	if (controller.submitLodRequestsIfNeeded() != 3 ||
+	    controller.getLastLodSubmittedTaskCount() != 3 ||
 	    controller.getLodViewRevision() == previousViewRevision ||
 	    !controller.isRenderRequested() ||
 	    strcmp(controller.getRenderReason().getString(),
@@ -5379,7 +5411,7 @@ test_view_controller_lod_submit_and_apply(void)
 	    printf("FAIL: LoD view controller did not auto-submit camera field change\n");
 	    service.stop();
 	    root->unref();
-	    db_mesh_lod_clear(dbip);
+	    brlobol_mesh_lod_cache_clear_database(dbip);
 	    db_close(dbip);
 	    bu_file_delete(dbpath);
 	    bu_dirclear(cache_dir);
@@ -5388,21 +5420,21 @@ test_view_controller_lod_submit_and_apply(void)
 	if (wait_for_service(service)) {
 	    service.stop();
 	    root->unref();
-	    db_mesh_lod_clear(dbip);
+	    brlobol_mesh_lod_cache_clear_database(dbip);
 	    db_close(dbip);
 	    bu_file_delete(dbpath);
 	    bu_dirclear(cache_dir);
 	    return 1;
 	}
 	controller.clearRenderRequest();
-	if (controller.processPendingLodResults() != 1 ||
-	    controller.getLastLodAppliedResultCount() != 1 ||
+	if (controller.processPendingLodResults() != 3 ||
+	    controller.getLastLodAppliedResultCount() != 3 ||
 	    strcmp(controller.getRenderReason().getString(),
 		   "lod-result") != 0) {
 	    printf("FAIL: LoD view controller did not apply camera field result\n");
 	    service.stop();
 	    root->unref();
-	    db_mesh_lod_clear(dbip);
+	    brlobol_mesh_lod_cache_clear_database(dbip);
 	    db_close(dbip);
 	    bu_file_delete(dbpath);
 	    bu_dirclear(cache_dir);
@@ -5424,22 +5456,22 @@ test_view_controller_lod_submit_and_apply(void)
 	    printf("FAIL: LoD view controller did not record forced-level policy\n");
 	    service.stop();
 	    root->unref();
-	    db_mesh_lod_clear(dbip);
+	    brlobol_mesh_lod_cache_clear_database(dbip);
 	    db_close(dbip);
 	    bu_file_delete(dbpath);
 	    bu_dirclear(cache_dir);
 	    return 1;
 	}
 	controller.clearRenderRequest();
-	if (controller.submitLodRequestsIfNeeded() != 1 ||
-	    controller.getLastLodSubmittedTaskCount() != 1 ||
+	if (controller.submitLodRequestsIfNeeded() != 3 ||
+	    controller.getLastLodSubmittedTaskCount() != 3 ||
 	    !controller.isRenderRequested() ||
 	    strcmp(controller.getRenderReason().getString(),
 		   "lod-submit") != 0) {
 	    printf("FAIL: LoD view controller did not auto-submit forced-level policy\n");
 	    service.stop();
 	    root->unref();
-	    db_mesh_lod_clear(dbip);
+	    brlobol_mesh_lod_cache_clear_database(dbip);
 	    db_close(dbip);
 	    bu_file_delete(dbpath);
 	    bu_dirclear(cache_dir);
@@ -5448,15 +5480,15 @@ test_view_controller_lod_submit_and_apply(void)
 	if (wait_for_service(service)) {
 	    service.stop();
 	    root->unref();
-	    db_mesh_lod_clear(dbip);
+	    brlobol_mesh_lod_cache_clear_database(dbip);
 	    db_close(dbip);
 	    bu_file_delete(dbpath);
 	    bu_dirclear(cache_dir);
 	    return 1;
 	}
 	controller.clearRenderRequest();
-	if (controller.processPendingLodResults() != 1 ||
-	    controller.getLastLodAppliedResultCount() != 1 ||
+	if (controller.processPendingLodResults() != 3 ||
+	    controller.getLastLodAppliedResultCount() != 3 ||
 	    !controller.getViewLodState()->findMesh(mesh) ||
 	    controller.getViewLodState()->findMesh(mesh)->activeLevel !=
 	    forcedLevel ||
@@ -5465,7 +5497,7 @@ test_view_controller_lod_submit_and_apply(void)
 	    printf("FAIL: LoD view controller did not apply forced-level result\n");
 	    service.stop();
 	    root->unref();
-	    db_mesh_lod_clear(dbip);
+	    brlobol_mesh_lod_cache_clear_database(dbip);
 	    db_close(dbip);
 	    bu_file_delete(dbpath);
 	    bu_dirclear(cache_dir);
@@ -5483,7 +5515,7 @@ test_view_controller_lod_submit_and_apply(void)
 	    printf("FAIL: LoD view controller did not clear forced-level policy\n");
 	    service.stop();
 	    root->unref();
-	    db_mesh_lod_clear(dbip);
+	    brlobol_mesh_lod_cache_clear_database(dbip);
 	    db_close(dbip);
 	    bu_file_delete(dbpath);
 	    bu_dirclear(cache_dir);
@@ -5496,19 +5528,19 @@ test_view_controller_lod_submit_and_apply(void)
 	    printf("FAIL: LoD view controller did not advance view revision\n");
 	    service.stop();
 	    root->unref();
-	    db_mesh_lod_clear(dbip);
+	    brlobol_mesh_lod_cache_clear_database(dbip);
 	    db_close(dbip);
 	    bu_file_delete(dbpath);
 	    bu_dirclear(cache_dir);
 	    return 1;
 	}
 	controller.clearRenderRequest();
-	if (controller.submitLodRequestsIfNeeded() != 1 ||
-	    controller.getLastLodSubmittedTaskCount() != 1) {
+	if (controller.submitLodRequestsIfNeeded() != 3 ||
+	    controller.getLastLodSubmittedTaskCount() != 3) {
 	    printf("FAIL: LoD view controller did not auto-submit view change\n");
 	    service.stop();
 	    root->unref();
-	    db_mesh_lod_clear(dbip);
+	    brlobol_mesh_lod_cache_clear_database(dbip);
 	    db_close(dbip);
 	    bu_file_delete(dbpath);
 	    bu_dirclear(cache_dir);
@@ -5528,7 +5560,7 @@ test_view_controller_lod_submit_and_apply(void)
 
     service.stop();
     root->unref();
-    db_mesh_lod_clear(dbip);
+    brlobol_mesh_lod_cache_clear_database(dbip);
     db_close(dbip);
     bu_file_delete(dbpath);
     bu_dirclear(cache_dir);
@@ -5616,6 +5648,201 @@ test_view_controller_shared_lod_is_view_local(void)
     return ret;
 }
 
+static int
+test_view_controller_progressive_lod_results(void)
+{
+    SoSeparator *root = new SoSeparator;
+    root->ref();
+    SoBRLLodMeshShape *mesh = make_lod_mesh("/progress/lod.bot", "lod.bot");
+    root->addChild(mesh);
+
+    BRLObolLodService service;
+    if (!service.start(2, TRUE)) {
+	printf("FAIL: progressive LoD service did not start\n");
+	root->unref();
+	return 1;
+    }
+
+    int ret = 0;
+    {
+	BRLObolViewController controller(root, NULL);
+	controller.setLodService(&service);
+	controller.setLodPolicyRevision(17);
+	controller.clearRenderRequest();
+
+	BRLObolLodRequest request = make_request("/progress/lod.bot", "lod.bot");
+	request.viewRevision = controller.getLodViewRevision();
+	request.policyRevision = controller.getLodPolicyRevision();
+
+	uint64_t generation = service.beginGeneration();
+	BRLObolLodTask coarseTask;
+	coarseTask.generation = generation;
+	coarseTask.request = request;
+	coarseTask.realize = mesh_payload_coarse_task;
+	BRLObolLodTask refinedTask;
+	refinedTask.generation = generation;
+	refinedTask.request = request;
+	refinedTask.realize = mesh_payload_refined_task;
+	refinedTask.debugDelayMilliseconds = 200;
+
+	if (service.submit(coarseTask) == 0 ||
+	    service.submit(refinedTask) == 0) {
+	    printf("FAIL: progressive LoD service did not accept staged tasks\n");
+	    ret = 1;
+	}
+
+	if (!ret && wait_for_service_queued(service, 1, TRUE, FALSE))
+	    ret = 1;
+
+	if (!ret) {
+	    controller.clearRenderRequest();
+	    if (controller.processPendingLodResults(1) != 1 ||
+		controller.getLastLodAppliedResultCount() != 1 ||
+		!controller.isRenderRequested() ||
+		strcmp(controller.getRenderReason().getString(),
+		       "lod-result") != 0) {
+		printf("FAIL: progressive LoD controller did not apply coarse result\n");
+		ret = 1;
+	    }
+	}
+
+	if (!ret) {
+	    const BRLObolViewLodState::MeshPayload *payload =
+		controller.getViewLodState()->findMesh(mesh);
+	    SoBRLExportAction displayExport;
+	    displayExport.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
+	    displayExport.apply(controller.getRenderSceneRoot());
+	    if (!payload ||
+		payload->activeLevel != 1 ||
+		payload->getTriangleCount() != 1 ||
+		displayExport.getTriangleCount() != 1 ||
+		mesh->lodAvailable.getValue() ||
+		mesh->isLodDisplayActive() ||
+		mesh->getTriangleCount() != 1) {
+		printf("FAIL: progressive LoD coarse result did not become visible view payload\n");
+		ret = 1;
+	    }
+	}
+
+	if (!ret && wait_for_service_queued(service, 1, FALSE, TRUE))
+	    ret = 1;
+
+	if (!ret) {
+	    controller.clearRenderRequest();
+	    if (controller.processPendingLodResults(1) != 1 ||
+		controller.getLastLodAppliedResultCount() != 1 ||
+		!controller.isRenderRequested() ||
+		strcmp(controller.getRenderReason().getString(),
+		       "lod-result") != 0) {
+		printf("FAIL: progressive LoD controller did not apply refined result\n");
+		ret = 1;
+	    }
+	}
+
+	if (!ret) {
+	    const BRLObolViewLodState::MeshPayload *payload =
+		controller.getViewLodState()->findMesh(mesh);
+	    SoBRLExportAction displayExport;
+	    displayExport.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
+	    displayExport.apply(controller.getRenderSceneRoot());
+	    if (!payload ||
+		payload->activeLevel != 2 ||
+		payload->getTriangleCount() != 3 ||
+		displayExport.getTriangleCount() != 3 ||
+		service.queuedResultCountForDiagnostics() != 0 ||
+		mesh->lodAvailable.getValue() ||
+		mesh->isLodDisplayActive() ||
+		mesh->getTriangleCount() != 1) {
+		printf("FAIL: progressive LoD refined result did not replace coarse view payload\n");
+		ret = 1;
+	    }
+	}
+    }
+
+    service.stop();
+    root->unref();
+    return ret;
+}
+
+static int
+test_view_local_lod_only_pick(void)
+{
+    SoSeparator *root = new SoSeparator;
+    root->ref();
+    SoBRLLodMeshShape *mesh = make_lod_mesh("/pick/lod.bot", "lod.bot");
+    mesh->sourceId = 515;
+    root->addChild(mesh);
+
+    if (mesh->evictDisplayMeshPreservingSourceMetrics() == 0 ||
+	!mesh->isLodBackedMesh() ||
+	mesh->getTriangleCount() != 0 ||
+	mesh->point.getNum() != 0 ||
+	mesh->coordIndex.getNum() != 0) {
+	printf("FAIL: view-local LoD pick fixture did not evict shared mesh arrays\n");
+	root->unref();
+	return 1;
+    }
+
+    int ret = 0;
+    {
+	BRLObolViewController controller(root, NULL);
+	BRLObolLodRequest request = make_request("/pick/lod.bot", "lod.bot");
+	request.viewRevision = controller.getLodViewRevision();
+	request.policyRevision = controller.getLodPolicyRevision();
+	BRLObolLodResult result = mesh_payload_variant_result(request, 1, 1);
+
+	SoBRLLodUpdateAction update;
+	update.setViewLodState(controller.getViewLodState());
+	update.addResult(result);
+	update.apply(controller.getRenderSceneRoot());
+	if (update.getAppliedResultCount() != 1 ||
+	    !controller.getViewLodState()->findMesh(mesh)) {
+	    printf("FAIL: view-local LoD pick fixture did not bind display payload\n");
+	    ret = 1;
+	}
+
+	if (!ret) {
+	    SbViewportRegion viewport(100, 100);
+	    SoRayPickAction displayPick(viewport);
+	    displayPick.setRay(SbVec3f(1.5f, 0.2f, 5.0f),
+			       SbVec3f(0.0f, 0.0f, -1.0f));
+	    displayPick.apply(controller.getRenderSceneRoot());
+	    const SoPickedPoint *pickedPoint = displayPick.getPickedPoint();
+	    const SoDetail *rawDetail = pickedPoint ?
+		pickedPoint->getDetail(mesh) : NULL;
+	    const SoBRLPickDetail *pickDetail =
+		(rawDetail &&
+		 rawDetail->isOfType(SoBRLPickDetail::getClassTypeId())) ?
+		static_cast<const SoBRLPickDetail *>(rawDetail) : NULL;
+	    if (!pickDetail ||
+		strcmp(pickDetail->getPath().getString(), "/pick/lod.bot") != 0 ||
+		pickDetail->getSourceId() != 515 ||
+		pickDetail->getPrimitiveKind() != SoBRLPickDetail::FACE ||
+		pickDetail->getPrimitiveIndex() != 0) {
+		printf("FAIL: display pick did not use view-local LoD-only payload identity\n");
+		ret = 1;
+	    }
+	}
+
+	if (!ret) {
+	    mesh->setPickGeometryPolicy(SoBRLMeshShape::PICK_FULL_DETAIL);
+	    SbViewportRegion viewport(100, 100);
+	    SoRayPickAction exactPick(viewport);
+	    exactPick.setRay(SbVec3f(1.5f, 0.2f, 5.0f),
+			     SbVec3f(0.0f, 0.0f, -1.0f));
+	    exactPick.apply(controller.getRenderSceneRoot());
+	    if (exactPick.getPickedPoint()) {
+		printf("FAIL: full-detail pick incorrectly used view-local LoD-only payload\n");
+		ret = 1;
+	    }
+	    mesh->setPickGeometryPolicy(SoBRLMeshShape::PICK_DISPLAY_LEVEL);
+	}
+    }
+
+    root->unref();
+    return ret;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -5650,6 +5877,10 @@ main(int argc, char **argv)
     if (test_view_controller_source_backed_partial_ready_submit())
 	return 1;
     if (test_view_controller_shared_lod_is_view_local())
+	return 1;
+    if (test_view_controller_progressive_lod_results())
+	return 1;
+    if (test_view_local_lod_only_pick())
 	return 1;
     if (test_view_controller_lod_submit_and_apply())
 	return 1;

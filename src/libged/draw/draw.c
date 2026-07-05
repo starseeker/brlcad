@@ -110,6 +110,54 @@ dl_add_primitive_wireframe_line_set(int dashflag, const struct rt_db_internal *i
 	    pathp, tsp, wireframe_color_override, ip);
 }
 
+static int
+draw_obol_database_shaded_sources(struct ged *gedp,
+	int argc,
+	const char *argv[],
+	struct _ged_client_data *dgcdp)
+{
+    int i = 0;
+    int handled = 0;
+
+    if (!gedp || !gedp->dbip || !argv || !dgcdp)
+	return 0;
+    if (!ged_draw_obol_scene_controller_attached(gedp))
+	return 0;
+    if (dgcdp->vs.draw_mode != _GED_SHADED_MODE_BOTS &&
+	    dgcdp->vs.draw_mode != _GED_SHADED_MODE_ALL)
+	return 0;
+
+    for (i = 0; i < argc; ++i) {
+	struct db_full_path dfp;
+	ged_draw_group_ref draw_group_ref = GED_DRAW_GROUP_REF_NULL;
+
+	db_full_path_init(&dfp);
+	if (db_string_to_path(&dfp, gedp->dbip, argv[i]) == 0)
+	    draw_group_ref = ged_draw_group_ref_lookup_or_create(gedp, &dfp);
+	db_free_full_path(&dfp);
+
+	if (ged_draw_group_ref_is_null(draw_group_ref))
+	    return 0;
+
+	ged_draw_group_ref_set_appearance_settings(gedp, draw_group_ref,
+		&dgcdp->vs);
+	(void)ged_draw_obol_group_update_appearance_for_path(gedp,
+		argv[i], &dgcdp->vs);
+
+	if (!ged_draw_obol_database_source_ensure_for_path(gedp, argv[i],
+		gedp->dbip, dgcdp->vs.draw_mode, 0))
+	    return 0;
+	handled++;
+    }
+
+    if (handled > 0 && dgcdp->autoview) {
+	const char *autoview_args[1] = {"autoview"};
+	ged_exec_autoview(gedp, 1, autoview_args);
+    }
+
+    return handled > 0 ? 1 : 0;
+}
+
 
 int
 _ged_drawH_part2_line_set(int dashflag, const point_t *points,
@@ -389,7 +437,13 @@ plot_shaded_eval(
 	if (brep_made) {
 	    ret = get_path_and_state(&ts, &input_path, path_name, gedp);
 	    if (ret == BRLCAD_OK) {
+		int scoped =
+		    ged_draw_obol_database_source_publication_begin(gedp,
+			    dgcdp ? dgcdp->view_ctx : NULL,
+			    GED_DRAW_MODE_EVAL_WIRE);
 		plot_shaded(&ts, &input_path, &brep_intern, dgcdp);
+		if (scoped)
+		    ged_draw_obol_database_source_publication_end(gedp);
 
 		rt_db_free_internal(&brep_intern);
 		db_free_full_path(&input_path);
@@ -1006,6 +1060,12 @@ _ged_drawtrees(struct ged *gedp, int argc, const char *argv[], int kind, struct 
 		dgcdp.vs.draw_mode == _GED_HIDDEN_LINE)
 	    {
 		struct _ged_client_data dgcdp_save;
+
+		if (draw_obol_database_shaded_sources(gedp, argc, argv,
+			&dgcdp)) {
+		    ret = BRLCAD_OK;
+		    break;
+		}
 
 		for (i = 0; i < argc; ++i) {
 		    if (drawtrees_depth == 1) {

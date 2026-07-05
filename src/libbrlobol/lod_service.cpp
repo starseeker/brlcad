@@ -7,9 +7,12 @@
 
 #include "common.h"
 
+#include "brlobol/draw_cache.h"
 #include "brlobol/lod_service.h"
+#include "brlobol/mesh_lod_cache.h"
 
 #include "raytrace.h"
+#include "rt/view.h"
 
 #include <algorithm>
 #include <chrono>
@@ -26,13 +29,13 @@
 #include <thread>
 #include <vector>
 
-BRLObolRtMeshLodProvider::BRLObolRtMeshLodProvider(void)
+BRLObolMeshLodProvider::BRLObolMeshLodProvider(void)
 {
     clear();
 }
 
 void
-BRLObolRtMeshLodProvider::clear(void)
+BRLObolMeshLodProvider::clear(void)
 {
     dbip = NULL;
     rt_view_info_init(&view);
@@ -56,6 +59,19 @@ BRLObolRtSourceFullDetailProvider::clear(void)
     validateSourceMetrics = TRUE;
     maxFullDetailFaceCount = 0;
     maxFullDetailPointCount = 0;
+}
+
+BRLObolRtProxyProvider::BRLObolRtProxyProvider(void)
+{
+    clear();
+}
+
+void
+BRLObolRtProxyProvider::clear(void)
+{
+    dbip = NULL;
+    proxyKind = BRLOBOL_LOD_PROXY_AABB;
+    useRequestBounds = TRUE;
 }
 
 BRLObolLodTask::BRLObolLodTask(void)
@@ -87,14 +103,9 @@ BRLObolLodTask::addDependency(uint64_t taskId)
 }
 
 static const char *
-lod_request_object_name(const BRLObolLodRequest &request)
+lod_request_leaf_name(const char *name)
 {
-    const char *name = request.objectName.getString();
-    if (name && name[0])
-	return name;
-
-    name = request.objectPath.getString();
-    if (!name || !name[0])
+    if (!name)
 	return NULL;
 
     const char *slash = strrchr(name, '/');
@@ -104,6 +115,18 @@ lod_request_object_name(const BRLObolLodRequest &request)
     while (*name == '/')
 	name++;
     return name[0] ? name : NULL;
+}
+
+static const char *
+lod_request_object_name(const BRLObolLodRequest &request)
+{
+    const char *name = request.objectName.getString();
+    const char *leaf = lod_request_leaf_name(name);
+    if (leaf)
+	return leaf;
+
+    name = request.objectPath.getString();
+    return lod_request_leaf_name(name);
 }
 
 static BRLObolLodResult
@@ -148,6 +171,189 @@ lod_request_source_counts_known(const BRLObolLodRequest &request)
 {
     return request.sourceCounts.faceCount != 0 ||
 	   request.sourceCounts.pointCount != 0 ? TRUE : FALSE;
+}
+
+static BRLObolLodCounts
+lod_counts_from_request(const BRLObolLodRequest &request)
+{
+    return request.sourceCounts;
+}
+
+static BRLObolLodResult
+lod_aabb_result_from_record(const BRLObolLodRequest &request,
+			    const BRLObolDrawProxyRecord &record,
+			    const char *diagnostic)
+{
+    BRLObolLodCounts counts = lod_counts_from_request(request);
+
+    if (record.kind != BRLOBOL_LOD_PROXY_AABB || record.pointCount != 2)
+	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
+					  "Obol AABB draw proxy record is invalid");
+
+    SbBox3f bounds;
+    bounds.makeEmpty();
+    bounds.extendBy(SbVec3f(static_cast<float>(record.points[0][X]),
+			    static_cast<float>(record.points[0][Y]),
+			    static_cast<float>(record.points[0][Z])));
+    bounds.extendBy(SbVec3f(static_cast<float>(record.points[1][X]),
+			    static_cast<float>(record.points[1][Y]),
+			    static_cast<float>(record.points[1][Z])));
+    BRLObolLodResult result = brlobol_lod_aabb_result(request, bounds,
+			      &counts);
+    if (diagnostic)
+	result.diagnostic = diagnostic;
+    return result;
+}
+
+static BRLObolLodResult
+lod_aabb_result_from_request(const BRLObolLodRequest &request,
+			     SbBool useRequestBounds)
+{
+    BRLObolLodCounts counts = lod_counts_from_request(request);
+    if (!useRequestBounds || request.bounds.isEmpty())
+	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_CACHE_MISS,
+					  "Obol AABB draw proxy cache entry unavailable");
+    BRLObolLodResult result = brlobol_lod_aabb_result(request,
+			      request.bounds, &counts);
+    result.diagnostic = "Obol AABB draw proxy using request bounds";
+    return result;
+}
+
+static BRLObolLodResult
+lod_aabb_result_from_cache_or_db(const BRLObolLodRequest &request,
+				 struct db_i *dbip,
+				 SbBool useRequestBounds)
+{
+    if (!dbip)
+	return lod_aabb_result_from_request(request, useRequestBounds);
+
+    const char *name = lod_request_object_name(request);
+    if (!name)
+	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
+					  "Obol draw proxy provider request has no object name");
+
+    BRLObolDrawProxyRecord record;
+    brlobol_draw_proxy_record_init(&record);
+    if (brlobol_draw_proxy_cache_get(dbip, name, BRLOBOL_LOD_PROXY_AABB,
+				     &record) ==
+	BRLCAD_OK)
+	return lod_aabb_result_from_record(request, record,
+					   "Obol AABB draw proxy loaded from cache");
+
+    if (brlobol_draw_proxy_cache_refresh(dbip, name,
+					 BRLOBOL_LOD_PROXY_AABB, NULL) ==
+	BRLCAD_OK &&
+	brlobol_draw_proxy_cache_get(dbip, name, BRLOBOL_LOD_PROXY_AABB,
+				     &record) ==
+	BRLCAD_OK)
+	return lod_aabb_result_from_record(request, record,
+					   "Obol AABB draw proxy generated and cached");
+
+    return lod_aabb_result_from_request(request, useRequestBounds);
+}
+
+static SbBool
+lod_obb_proxy_from_points(BRLObolLodProxy &proxy, const point_t *points,
+			  size_t pointCount)
+{
+    if (!points || pointCount != 8)
+	return FALSE;
+
+    point_t center;
+    VSETALL(center, 0.0);
+    for (int i = 0; i < 8; i++)
+	VADD2(center, center, points[i]);
+    VSCALE(center, center, 1.0 / 8.0);
+
+    vect_t xaxis, yaxis, zaxis;
+    VSUB2(xaxis, points[1], points[0]);
+    VSUB2(yaxis, points[3], points[0]);
+    VSUB2(zaxis, points[4], points[0]);
+    const fastf_t xlen = MAGNITUDE(xaxis);
+    const fastf_t ylen = MAGNITUDE(yaxis);
+    const fastf_t zlen = MAGNITUDE(zaxis);
+    if (xlen <= 0.0 && ylen <= 0.0 && zlen <= 0.0)
+	return FALSE;
+
+    if (xlen > 0.0)
+	VSCALE(xaxis, xaxis, 1.0 / xlen);
+    else
+	VSET(xaxis, 1.0, 0.0, 0.0);
+    if (ylen > 0.0)
+	VSCALE(yaxis, yaxis, 1.0 / ylen);
+    else
+	VSET(yaxis, 0.0, 1.0, 0.0);
+    if (zlen > 0.0)
+	VSCALE(zaxis, zaxis, 1.0 / zlen);
+    else
+	VSET(zaxis, 0.0, 0.0, 1.0);
+
+    proxy.clear();
+    proxy.kind = BRLOBOL_LOD_PROXY_OBB;
+    proxy.center = SbVec3f(static_cast<float>(center[X]),
+			   static_cast<float>(center[Y]),
+			   static_cast<float>(center[Z]));
+    proxy.axisX = SbVec3f(static_cast<float>(xaxis[X]),
+			  static_cast<float>(xaxis[Y]),
+			  static_cast<float>(xaxis[Z]));
+    proxy.axisY = SbVec3f(static_cast<float>(yaxis[X]),
+			  static_cast<float>(yaxis[Y]),
+			  static_cast<float>(yaxis[Z]));
+    proxy.axisZ = SbVec3f(static_cast<float>(zaxis[X]),
+			  static_cast<float>(zaxis[Y]),
+			  static_cast<float>(zaxis[Z]));
+    proxy.halfExtents = SbVec3f(static_cast<float>(xlen * 0.5),
+				static_cast<float>(ylen * 0.5),
+				static_cast<float>(zlen * 0.5));
+    proxy.bounds.makeEmpty();
+    for (int i = 0; i < 8; i++) {
+	proxy.bounds.extendBy(SbVec3f(static_cast<float>(points[i][X]),
+				      static_cast<float>(points[i][Y]),
+				      static_cast<float>(points[i][Z])));
+    }
+
+    return proxy.isValid();
+}
+
+static BRLObolLodResult
+lod_obb_result_from_cache_or_db(const BRLObolLodRequest &request,
+				struct db_i *dbip)
+{
+    if (!dbip)
+	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_CACHE_MISS,
+					  "Obol OBB draw proxy cache entry unavailable");
+
+    const char *name = lod_request_object_name(request);
+    if (!name)
+	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
+					  "Obol draw proxy provider request has no object name");
+
+    BRLObolDrawProxyRecord record;
+    brlobol_draw_proxy_record_init(&record);
+    if (brlobol_draw_proxy_cache_get(dbip, name, BRLOBOL_LOD_PROXY_OBB,
+				     &record) !=
+	BRLCAD_OK) {
+	if (brlobol_draw_proxy_cache_refresh(dbip, name,
+					     BRLOBOL_LOD_PROXY_OBB, NULL) !=
+	    BRLCAD_OK ||
+	    brlobol_draw_proxy_cache_get(dbip, name,
+					 BRLOBOL_LOD_PROXY_OBB, &record) !=
+	    BRLCAD_OK)
+	    return lod_provider_status_result(request,
+					      BRLOBOL_LOD_PROVIDER_CACHE_MISS,
+					      "Obol OBB draw proxy cache entry unavailable");
+    }
+
+    BRLObolLodProxy proxy;
+    if (!lod_obb_proxy_from_points(proxy, record.points, record.pointCount))
+	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
+					  "Obol OBB draw proxy record is invalid");
+
+    BRLObolLodCounts counts = lod_counts_from_request(request);
+    BRLObolLodResult result = brlobol_lod_proxy_result(request, proxy,
+			      &counts);
+    result.diagnostic = "Obol OBB draw proxy loaded from cache";
+    return result;
 }
 
 static SbString
@@ -751,93 +957,191 @@ brlobol_lod_submit_rt_source_full_detail_request(
 }
 
 BRLObolLodResult
-brlobol_rt_mesh_lod_provider_task(const BRLObolLodRequest &request,
-				  void *userData)
+brlobol_mesh_lod_provider_task(const BRLObolLodRequest &request,
+			       void *userData)
 {
-    BRLObolRtMeshLodProvider *provider =
-	static_cast<BRLObolRtMeshLodProvider *>(userData);
+    BRLObolMeshLodProvider *provider =
+	static_cast<BRLObolMeshLodProvider *>(userData);
     if (!provider || !provider->dbip)
 	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
-					  "RT mesh LoD provider has no database");
+					  "Obol mesh LoD provider has no database");
 
     const char *name = lod_request_object_name(request);
     if (!name)
 	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
-					  "RT mesh LoD provider request has no object name");
+					  "Obol mesh LoD provider request has no object name");
 
-    struct rt_mesh_lod_cache_status status = RT_MESH_LOD_CACHE_STATUS_INIT;
-    if (db_mesh_lod_status(provider->dbip, name, &status) != BRLCAD_OK)
+    struct BRLObolMeshLodCacheStatus status =
+	BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
+    if (brlobol_mesh_lod_cache_status(provider->dbip, name, &status) != BRLCAD_OK)
 	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
-					  "RT mesh LoD provider could not query cache status");
+					  "Obol mesh LoD provider could not query cache status");
 
     if ((!status.has_cache_key || !status.has_cached_payload ||
 	 status.stale_cache_entry) && provider->refreshMissing) {
-	if (db_mesh_lod_refresh(provider->dbip, name, &status) != BRLCAD_OK)
+	if (brlobol_mesh_lod_cache_refresh(provider->dbip, name, &status) != BRLCAD_OK)
 	    return lod_provider_status_result(request,
 					      BRLOBOL_LOD_PROVIDER_CACHE_MISS,
-					      "RT mesh LoD provider could not refresh cache entry");
+					      "Obol mesh LoD provider could not refresh cache entry");
     }
 
-    struct rt_mesh_lod *lod = db_mesh_lod_get(provider->dbip, name);
-    if (!lod)
+    struct BRLObolMeshLod *lod = brlobol_mesh_lod_get(provider->dbip, name);
+    if (!lod) {
+	std::ostringstream diagnostic;
+	diagnostic << "Obol mesh LoD provider has no cache payload for "
+		   << name << " (cache_key=" << status.cache_key
+		   << ", has_key=" << status.has_cache_key
+		   << ", has_payload=" << status.has_cached_payload
+		   << ", stale=" << status.stale_cache_entry << ")";
 	return lod_provider_status_result(request,
 					  status.stale_cache_entry ? BRLOBOL_LOD_PROVIDER_STALE :
 					  BRLOBOL_LOD_PROVIDER_CACHE_MISS,
-					  "RT mesh LoD provider has no cache payload");
-
-    int load_ret = provider->useForcedLevel ?
-		   rt_mesh_lod_load_level(lod, provider->forcedLevel, provider->reset) :
-		   (provider->useView ?
-		    rt_mesh_lod_load_view(lod, &provider->view, provider->reset) :
-		    rt_mesh_lod_load_view(lod, NULL, provider->reset));
-    if (load_ret < 0) {
-	rt_mesh_lod_destroy(lod);
-	return lod_provider_status_result(request,
-					  BRLOBOL_LOD_PROVIDER_CACHE_MISS,
-					  "RT mesh LoD provider could not load a view level");
+					  diagnostic.str().c_str());
     }
 
-    struct rt_mesh_lod_info info = RT_MESH_LOD_INFO_INIT;
-    int have_info = rt_mesh_lod_info_get(lod, &info);
-    if (!rt_mesh_lod_has_active_data(lod)) {
+    int load_ret = provider->useForcedLevel ?
+		   brlobol_mesh_lod_load_level(lod, provider->forcedLevel, provider->reset) :
+		   (provider->useView ?
+		    brlobol_mesh_lod_load_view(lod, &provider->view, provider->reset) :
+		    brlobol_mesh_lod_load_view(lod, NULL, provider->reset));
+    if (load_ret < 0) {
+	brlobol_mesh_lod_destroy(lod);
+	return lod_provider_status_result(request,
+					  BRLOBOL_LOD_PROVIDER_CACHE_MISS,
+					  "Obol mesh LoD provider could not load a view level");
+    }
+
+    struct BRLObolMeshLodInfo info = BRLOBOL_MESH_LOD_INFO_INIT;
+    int have_info = brlobol_mesh_lod_info_get(lod, &info);
+    if (!brlobol_mesh_lod_has_active_data(lod)) {
 	BRLObolLodResult result =
-	    brlobol_lod_result_from_rt_mesh_info(request, info, &status);
-	rt_mesh_lod_destroy(lod);
+	    brlobol_lod_result_from_mesh_lod_info(request, info, &status);
+	brlobol_mesh_lod_destroy(lod);
 	result.providerStatus = BRLOBOL_LOD_PROVIDER_CACHE_MISS;
-	result.diagnostic = "RT mesh LoD provider loaded no active mesh data";
+	result.diagnostic = "Obol mesh LoD provider loaded no active mesh data";
 	return result;
     }
     if (!have_info) {
-	rt_mesh_lod_destroy(lod);
+	brlobol_mesh_lod_destroy(lod);
 	return lod_provider_status_result(request,
 					  BRLOBOL_LOD_PROVIDER_CACHE_MISS,
-					  "RT mesh LoD provider loaded no mesh metadata");
+					  "Obol mesh LoD provider loaded no mesh metadata");
     }
 
     BRLObolLodResult result =
-	brlobol_lod_result_from_rt_mesh_info(request, info, &status);
+	brlobol_lod_result_from_mesh_lod_info(request, info, &status);
     if (result.providerStatus == BRLOBOL_LOD_PROVIDER_READY) {
-	struct rt_mesh_lod_data data;
-	if (!rt_mesh_lod_data_get(lod, &data) ||
-	    !brlobol_lod_mesh_payload_from_rt_mesh_data(result.mesh, data)) {
-	    rt_mesh_lod_destroy(lod);
+	struct BRLObolMeshLodData data;
+	if (!brlobol_mesh_lod_data_get(lod, &data) ||
+	    !brlobol_lod_mesh_payload_from_mesh_lod_data(result.mesh, data)) {
+	    brlobol_mesh_lod_destroy(lod);
 	    return lod_provider_status_result(request,
 					      BRLOBOL_LOD_PROVIDER_CACHE_MISS,
-					      "RT mesh LoD provider could not copy active mesh payload");
+					      "Obol mesh LoD provider could not copy active mesh payload");
 	}
 	if (provider->shrinkAfterCopy)
-	    rt_mesh_lod_memshrink(lod);
+	    brlobol_mesh_lod_memshrink(lod);
     }
 
-    rt_mesh_lod_destroy(lod);
+    brlobol_mesh_lod_destroy(lod);
+    return result;
+}
+
+BRLObolLodResult
+brlobol_mesh_lod_cache_provider_task(const BRLObolLodRequest &request,
+				     void *userData)
+{
+    BRLObolMeshLodProvider *provider =
+	static_cast<BRLObolMeshLodProvider *>(userData);
+    if (!provider || !provider->dbip)
+	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
+					  "Obol mesh LoD cache provider has no database");
+
+    const char *name = lod_request_object_name(request);
+    if (!name)
+	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
+					  "Obol mesh LoD cache provider request has no object name");
+
+    struct BRLObolMeshLodCacheStatus status =
+	BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
+    if (brlobol_mesh_lod_cache_status(provider->dbip, name, &status) != BRLCAD_OK)
+	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
+					  "Obol mesh LoD cache provider could not query cache status");
+
+    if ((!status.has_cache_key || !status.has_cached_payload ||
+	 status.stale_cache_entry) && provider->refreshMissing) {
+	if (brlobol_mesh_lod_cache_refresh(provider->dbip, name, &status) != BRLCAD_OK)
+	    return lod_provider_status_result(request,
+					      BRLOBOL_LOD_PROVIDER_CACHE_MISS,
+					      "Obol mesh LoD cache provider could not refresh cache entry");
+    }
+
+    BRLObolLodResult result;
+    result.request = request;
+    result.cacheKey = brlobol_lod_cache_key(request);
+    result.resultKind = BRLOBOL_LOD_RESULT_DIAGNOSTIC;
+    result.qualityTier = request.qualityTier;
+    result.providerStatus =
+	(status.has_cache_key && status.has_cached_payload &&
+	 !status.stale_cache_entry) ? BRLOBOL_LOD_PROVIDER_READY :
+	(status.stale_cache_entry ? BRLOBOL_LOD_PROVIDER_STALE :
+	 BRLOBOL_LOD_PROVIDER_CACHE_MISS);
+    result.terminal = TRUE;
+    result.geometry.kind = BRLOBOL_LOD_GEOMETRY_MESH_LOD_CACHE;
+    result.geometry.providerId = request.providerId;
+    result.geometry.providerVersion = request.providerVersion;
+    result.geometry.providerToken = status.cache_key;
+    result.geometry.cacheKey = result.cacheKey;
+    if (result.providerStatus == BRLOBOL_LOD_PROVIDER_READY)
+	result.diagnostic = "Obol mesh LoD cache entry ready";
+    else
+	result.diagnostic = "Obol mesh LoD cache entry unavailable";
+    return result;
+}
+
+BRLObolLodResult
+brlobol_rt_proxy_provider_task(const BRLObolLodRequest &request,
+			       void *userData)
+{
+    BRLObolRtProxyProvider *provider =
+	static_cast<BRLObolRtProxyProvider *>(userData);
+    if (!provider)
+	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
+					  "Obol draw proxy provider has no provider state");
+
+    if (provider->proxyKind == BRLOBOL_LOD_PROXY_AABB)
+	return lod_aabb_result_from_cache_or_db(request, provider->dbip,
+						provider->useRequestBounds);
+
+    if (provider->proxyKind != BRLOBOL_LOD_PROXY_OBB)
+	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
+					  "Obol draw proxy provider has unknown proxy kind");
+
+    BRLObolLodResult result = lod_obb_result_from_cache_or_db(request,
+			      provider->dbip);
+    if (result.providerStatus == BRLOBOL_LOD_PROVIDER_READY)
+	return result;
+
+    result = lod_aabb_result_from_cache_or_db(request, provider->dbip,
+	     provider->useRequestBounds);
+    if (result.providerStatus == BRLOBOL_LOD_PROVIDER_READY)
+	result.diagnostic = "Obol OBB draw proxy unavailable; using AABB proxy";
     return result;
 }
 
 void
-brlobol_rt_mesh_lod_provider_free(void *userData)
+brlobol_rt_proxy_provider_free(void *userData)
 {
-    BRLObolRtMeshLodProvider *provider =
-	static_cast<BRLObolRtMeshLodProvider *>(userData);
+    BRLObolRtProxyProvider *provider =
+	static_cast<BRLObolRtProxyProvider *>(userData);
+    delete provider;
+}
+
+void
+brlobol_mesh_lod_provider_free(void *userData)
+{
+    BRLObolMeshLodProvider *provider =
+	static_cast<BRLObolMeshLodProvider *>(userData);
     delete provider;
 }
 

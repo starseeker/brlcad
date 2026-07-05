@@ -916,21 +916,21 @@ make_provider_test_db(char *dbpath, size_t dbpath_len, struct db_i **dbip_out)
 
     FILE *fp = bu_temp_file(dbpath, dbpath_len);
     if (!fp) {
-	printf("FAIL: LoD RT provider temp file\n");
+	printf("FAIL: LoD Obol mesh provider temp file\n");
 	return 1;
     }
     fclose(fp);
 
     struct db_i *dbip = db_create(dbpath, 5);
     if (!dbip) {
-	printf("FAIL: LoD RT provider db_create\n");
+	printf("FAIL: LoD Obol mesh provider db_create\n");
 	bu_file_delete(dbpath);
 	return 1;
     }
 
     struct rt_wdb *wdbp = wdb_dbopen(dbip, RT_WDB_TYPE_DB_DISK);
     if (!wdbp) {
-	printf("FAIL: LoD RT provider wdb_dbopen\n");
+	printf("FAIL: LoD Obol mesh provider wdb_dbopen\n");
 	db_close(dbip);
 	bu_file_delete(dbpath);
 	return 1;
@@ -938,14 +938,14 @@ make_provider_test_db(char *dbpath, size_t dbpath_len, struct db_i **dbip_out)
 
     if (mk_bot(wdbp, objname, RT_BOT_SOLID, RT_BOT_UNORIENTED, 0,
 	       4, 4, vertices, faces, NULL, NULL) != 0) {
-	printf("FAIL: LoD RT provider mk_bot\n");
+	printf("FAIL: LoD Obol mesh provider mk_bot\n");
 	db_close(dbip);
 	bu_file_delete(dbpath);
 	return 1;
     }
     if (mk_bot(wdbp, tri_objname, RT_BOT_SOLID, RT_BOT_UNORIENTED, 0,
 	       6, 2, tri_vertices, tri_faces, NULL, NULL) != 0) {
-	printf("FAIL: LoD RT provider mk_bot disjoint triangles\n");
+	printf("FAIL: LoD Obol mesh provider mk_bot disjoint triangles\n");
 	db_close(dbip);
 	bu_file_delete(dbpath);
 	return 1;
@@ -1789,9 +1789,9 @@ test_rt_mesh_provider_task(void)
 	cachedNormals.push_back(1.0 + (fastf_t)i);
     }
 
-    struct rt_mesh_lod_cache_status storeStatus =
-	    RT_MESH_LOD_CACHE_STATUS_INIT;
-    if (db_mesh_lod_store_mesh(dbip, "lod-provider.bot",
+    struct BRLObolMeshLodCacheStatus storeStatus =
+	    BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
+    if (brlobol_mesh_lod_cache_store_mesh(dbip, "lod-provider.bot",
 			       (const point_t *)cachedVertices.data(),
 			       cachedVertices.size() / 3,
 			       (const vect_t *)cachedNormals.data(), cachedFaces.data(),
@@ -1799,15 +1799,15 @@ test_rt_mesh_provider_task(void)
 			       &storeStatus) != BRLCAD_OK ||
 	!storeStatus.has_cache_key ||
 	!storeStatus.has_cached_payload) {
-	printf("FAIL: LoD RT provider did not store cached mesh normals\n");
-	db_mesh_lod_clear(dbip);
+	printf("FAIL: LoD Obol mesh provider did not store cached mesh normals\n");
+	brlobol_mesh_lod_cache_clear_database(dbip);
 	db_close(dbip);
 	bu_file_delete(dbpath);
 	bu_dirclear(cache_dir);
 	return 1;
     }
 
-    BRLObolRtMeshLodProvider provider;
+    BRLObolMeshLodProvider provider;
     provider.dbip = dbip;
     provider.useView = TRUE;
     provider.refreshMissing = TRUE;
@@ -1819,15 +1819,15 @@ test_rt_mesh_provider_task(void)
     task.generation = 1;
     task.request = make_request("/lod-provider.bot");
     task.request.objectName = "lod-provider.bot";
-    task.request.providerId = "rt_mesh_lod";
-    task.request.providerVersion = "rt-cache-v1";
-    task.realize = brlobol_rt_mesh_lod_provider_task;
+    task.request.providerId = "brlobol_mesh_lod";
+    task.request.providerVersion = "brlobol-cache-v1";
+    task.realize = brlobol_mesh_lod_provider_task;
     task.realizeData = &provider;
 
     BRLObolLodService service;
     if (!service.start(1, TRUE)) {
-	printf("FAIL: LoD RT provider service did not start\n");
-	db_mesh_lod_clear(dbip);
+	printf("FAIL: LoD Obol mesh provider service did not start\n");
+	brlobol_mesh_lod_cache_clear_database(dbip);
 	db_close(dbip);
 	bu_file_delete(dbpath);
 	bu_dirclear(cache_dir);
@@ -1835,9 +1835,9 @@ test_rt_mesh_provider_task(void)
     }
 
     if (service.submit(task) == 0) {
-	printf("FAIL: LoD RT provider service did not accept task\n");
+	printf("FAIL: LoD Obol mesh provider service did not accept task\n");
 	service.stop();
-	db_mesh_lod_clear(dbip);
+	brlobol_mesh_lod_cache_clear_database(dbip);
 	db_close(dbip);
 	bu_file_delete(dbpath);
 	bu_dirclear(cache_dir);
@@ -1846,7 +1846,7 @@ test_rt_mesh_provider_task(void)
 
     if (wait_for_settled(service, 1)) {
 	service.stop();
-	db_mesh_lod_clear(dbip);
+	brlobol_mesh_lod_cache_clear_database(dbip);
 	db_close(dbip);
 	bu_file_delete(dbpath);
 	bu_dirclear(cache_dir);
@@ -1862,7 +1862,7 @@ test_rt_mesh_provider_task(void)
 	results[0].resultKind != BRLOBOL_LOD_RESULT_MESH ||
 	results[0].qualityTier != task.request.qualityTier ||
 	results[0].providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
-	results[0].geometry.kind != BRLOBOL_LOD_GEOMETRY_RT_MESH_CACHE ||
+	results[0].geometry.kind != BRLOBOL_LOD_GEOMETRY_MESH_LOD_CACHE ||
 	results[0].geometry.providerToken == 0 ||
 	!results[0].geometry.isValid() ||
 	results[0].counts.faceCount != 4 ||
@@ -1871,17 +1871,17 @@ test_rt_mesh_provider_task(void)
 	results[0].mesh.points.size() != 4 ||
 	results[0].mesh.coordIndex.size() != 12 ||
 	!brlobol_lod_result_matches_request(results[0], task.request)) {
-	printf("FAIL: LoD RT provider task did not return cached mesh result\n");
+	printf("FAIL: LoD Obol mesh provider task did not return cached mesh result\n");
 	ret = 1;
     }
 
-    BRLObolRtMeshLodProvider cachedNormalProvider;
+    BRLObolMeshLodProvider cachedNormalProvider;
     cachedNormalProvider.dbip = dbip;
     cachedNormalProvider.useForcedLevel = TRUE;
     cachedNormalProvider.forcedLevel = 1;
     cachedNormalProvider.refreshMissing = FALSE;
     BRLObolLodResult cachedNormalResult =
-	brlobol_rt_mesh_lod_provider_task(task.request, &cachedNormalProvider);
+	brlobol_mesh_lod_provider_task(task.request, &cachedNormalProvider);
     SbBool sawSeededNormal = FALSE;
     for (size_t i = 0; i < cachedNormalResult.mesh.normals.size(); i++) {
 	if (cachedNormalResult.mesh.normals[i][2] > 1.5f)
@@ -1900,11 +1900,11 @@ test_rt_mesh_provider_task(void)
 	!sawSeededNormal ||
 	!brlobol_lod_result_matches_request(cachedNormalResult,
 					    task.request)) {
-	printf("FAIL: LoD RT provider did not return cached mesh normals\n");
+	printf("FAIL: LoD Obol mesh provider did not return cached mesh normals\n");
 	ret = 1;
     }
 
-    BRLObolRtMeshLodProvider forcedProvider;
+    BRLObolMeshLodProvider forcedProvider;
     forcedProvider.dbip = dbip;
     forcedProvider.useForcedLevel = TRUE;
     forcedProvider.forcedLevel = (results.size() == 1 &&
@@ -1916,64 +1916,64 @@ test_rt_mesh_provider_task(void)
     BRLObolLodRequest forcedRequest = task.request;
     forcedRequest.qualityTier = BRLOBOL_LOD_QUALITY_FULL_DETAIL;
     BRLObolLodResult forcedResult =
-	brlobol_rt_mesh_lod_provider_task(forcedRequest, &forcedProvider);
+	brlobol_mesh_lod_provider_task(forcedRequest, &forcedProvider);
     if (forcedResult.resultKind != BRLOBOL_LOD_RESULT_MESH ||
 	forcedResult.qualityTier != BRLOBOL_LOD_QUALITY_FULL_DETAIL ||
 	forcedResult.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
 	forcedResult.geometry.activeLevel != forcedProvider.forcedLevel ||
 	!forcedResult.mesh.isValid()) {
-	printf("FAIL: LoD RT provider forced-level task did not return requested level mesh result\n");
+	printf("FAIL: LoD Obol mesh provider forced-level task did not return requested level mesh result\n");
 	ret = 1;
     }
 
-    struct rt_mesh_lod_cache_status invalidateStatus =
-	    RT_MESH_LOD_CACHE_STATUS_INIT;
-    if (db_mesh_lod_invalidate(dbip, "lod-provider.bot",
+    struct BRLObolMeshLodCacheStatus invalidateStatus =
+	    BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
+    if (brlobol_mesh_lod_cache_invalidate(dbip, "lod-provider.bot",
 			       &invalidateStatus) != BRLCAD_OK ||
 	!invalidateStatus.cleared_cache_entry ||
 	!invalidateStatus.cleared_cache_key ||
 	invalidateStatus.has_cache_key ||
 	invalidateStatus.has_cached_payload) {
-	printf("FAIL: LoD RT provider database invalidation status failed\n");
+	printf("FAIL: LoD Obol mesh provider database invalidation status failed\n");
 	ret = 1;
     }
 
-    BRLObolRtMeshLodProvider staleProvider;
+    BRLObolMeshLodProvider staleProvider;
     staleProvider.dbip = dbip;
     staleProvider.refreshMissing = FALSE;
 
     BRLObolLodResult staleResult =
-	brlobol_rt_mesh_lod_provider_task(task.request, &staleProvider);
+	brlobol_mesh_lod_provider_task(task.request, &staleProvider);
     if (staleResult.providerStatus != BRLOBOL_LOD_PROVIDER_CACHE_MISS ||
 	!staleResult.stale ||
-	strcmp(staleResult.diagnostic.getString(),
-	       "RT mesh LoD provider has no cache payload") != 0 ||
+	strstr(staleResult.diagnostic.getString(),
+	       "Obol mesh LoD provider has no cache payload") == NULL ||
 	staleResult.mesh.isValid()) {
-	printf("FAIL: LoD RT provider did not report cache miss after database invalidation\n");
+	printf("FAIL: LoD Obol mesh provider did not report cache miss after database invalidation\n");
 	ret = 1;
     }
 
-    BRLObolRtMeshLodProvider refreshProvider;
+    BRLObolMeshLodProvider refreshProvider;
     refreshProvider.dbip = dbip;
     refreshProvider.useView = TRUE;
     refreshProvider.refreshMissing = TRUE;
     refreshProvider.view = provider.view;
 
     BRLObolLodResult refreshResult =
-	brlobol_rt_mesh_lod_provider_task(task.request, &refreshProvider);
+	brlobol_mesh_lod_provider_task(task.request, &refreshProvider);
     if (refreshResult.resultKind != BRLOBOL_LOD_RESULT_MESH ||
 	refreshResult.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
-	refreshResult.geometry.kind != BRLOBOL_LOD_GEOMETRY_RT_MESH_CACHE ||
+	refreshResult.geometry.kind != BRLOBOL_LOD_GEOMETRY_MESH_LOD_CACHE ||
 	!refreshResult.geometry.isValid() ||
 	refreshResult.counts.faceCount != 4 ||
 	refreshResult.counts.pointCount != 4 ||
 	!refreshResult.mesh.isValid() ||
 	!brlobol_lod_result_matches_request(refreshResult, task.request)) {
-	printf("FAIL: LoD RT provider did not refresh cache after database invalidation\n");
+	printf("FAIL: LoD Obol mesh provider did not refresh cache after database invalidation\n");
 	ret = 1;
     }
 
-    db_mesh_lod_clear(dbip);
+    brlobol_mesh_lod_cache_clear_database(dbip);
     db_close(dbip);
     bu_file_delete(dbpath);
     bu_dirclear(cache_dir);

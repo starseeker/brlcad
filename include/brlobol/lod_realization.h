@@ -10,7 +10,7 @@
 #define BRLOBOL_LOD_REALIZATION_H
 
 #include "brlobol/defines.h"
-#include "rt/view.h"
+#include "brlobol/mesh_lod_cache.h"
 
 #include <Inventor/SbBox.h>
 #include <Inventor/SbString.h>
@@ -62,7 +62,7 @@ enum BRLObolLodProviderStatus {
 
 enum BRLObolLodGeometryHandleKind {
     BRLOBOL_LOD_GEOMETRY_NONE = 0,
-    BRLOBOL_LOD_GEOMETRY_RT_MESH_CACHE = 1,
+    BRLOBOL_LOD_GEOMETRY_MESH_LOD_CACHE = 1,
     BRLOBOL_LOD_GEOMETRY_OBOL_MESH = 2,
     BRLOBOL_LOD_GEOMETRY_PROVIDER_TOKEN = 3
 };
@@ -218,17 +218,17 @@ BRLOBOL_EXPORT BRLObolLodCacheKey
 brlobol_lod_cache_key(const BRLObolLodRequest &request);
 
 BRLOBOL_EXPORT SbBool
-brlobol_lod_mesh_payload_from_rt_mesh_data(BRLObolLodMeshPayload &payload,
-	const struct rt_mesh_lod_data &data);
+brlobol_lod_mesh_payload_from_mesh_lod_data(BRLObolLodMeshPayload &payload,
+	const struct BRLObolMeshLodData &data);
 
 BRLOBOL_EXPORT SbBool
 brlobol_lod_result_matches_request(const BRLObolLodResult &result,
 	const BRLObolLodRequest &request);
 
 BRLOBOL_EXPORT BRLObolLodResult
-brlobol_lod_result_from_rt_mesh_info(const BRLObolLodRequest &request,
-	const struct rt_mesh_lod_info &info,
-	const struct rt_mesh_lod_cache_status *status);
+brlobol_lod_result_from_mesh_lod_info(const BRLObolLodRequest &request,
+	const struct BRLObolMeshLodInfo &info,
+	const struct BRLObolMeshLodCacheStatus *status);
 
 BRLOBOL_EXPORT BRLObolLodResult
 brlobol_lod_directory_result(const BRLObolLodRequest &request,

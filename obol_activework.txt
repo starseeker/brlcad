@@ -48,6 +48,10 @@ fallback tests and old callers.  libbv still must not own scene objects,
 display lists, Tcl/display-manager state, polygon stores, snap/selection
 resolution, LoD caches, or retained scene graph behavior; libbrlobol/Obol
 should own the scene graph and richer Coin interaction objects.
+Persistent drawing cache policy also belongs with libbrlobol.  librt may
+provide geometry queries and extraction primitives, but AABB/OBB/metadata
+cache ownership and background draw-realization policy should not live in
+librt.
 
 The next push should favor removing remaining old-style non-Obol drawing
 drivers before expanding richer Coin behavior.  Richer behavior needs only the
@@ -74,6 +78,25 @@ Core Invariants
   identity, source metrics, bounds, draw/material/selection state, and optional
   source/full-detail arrays; `BRLObolViewController` owns active
   `BRLObolViewLodState` payloads and binds them into Coin traversal.
+* Persistent drawing cache data has one filesystem root:
+  `BU_DIR_CACHE/.DbDrawCache`.  libbrlobol owns the draw proxy/metadata cache
+  (`draw_data.format`) for AABB, OBB, object-local draw metadata, and
+  full-path aggregate draw metadata.  libbrlobol also owns the mesh POP LoD
+  cache implementation/API (`brlobol_mesh_lod_*`).  Mesh POP LoD data shares
+  the same root through `mesh_lod.format`.  librt does not own draw-cache or
+  mesh-LoD cache state.
+* Database object change notifications invalidate draw-cache proxy/metadata
+  records for the changed object and all indexed ancestor objects on affected
+  paths.  Duplicate instance ids are canonicalized to object names before
+  invalidation; only the directly changed object clears its mesh-LoD cache key.
+* External database-source primary geometry published by Obol/GED providers is
+  a legitimate source-local realization even when it is proxy geometry for a
+  different final draw mode.  Source replacement/state sync must preserve and
+  revalidate this external primary until an explicit erase, clear, replacement,
+  or stale database edit invalidates it.
+* Legacy BSG mesh LoD code is quarantined to `BU_DIR_CACHE/.BsgMeshLodCache`.
+  It must not share, version, or clear libbrlobol's `.DbDrawCache`; new cache
+  work belongs in libbrlobol while the retained BSG renderer path is removed.
 * Applying active display LoD requires an explicit view state.  A direct
   `SoBRLLodUpdateAction` with no `BRLObolViewLodState` rejects matched results
   instead of mutating shared mesh fields; non-render tools needing LoD should use
@@ -96,6 +119,39 @@ Current Baseline
 * Direct wire, shaded-BoT, shaded, and hidden-line draws expand requested roots
   with `db_walk_tree_leaf_instances`, realize leaf database sources, and ensure
   an explicit Obol group for the requested root.
+* Startup/deferred leaf expansion can publish an AABB proxy line set directly
+  from the libbrlobol draw cache as the database-source external primary.  This
+  path now survives attached-controller source sync for shaded draws and gives
+  qtcad an immediate first visual for `Generic_Twin.g all` without expanding
+  every leaf.
+* A bounded post-proxy expansion bridge can now expand union children of
+  already drawn database sources without invoking the full leaf-realization
+  path.  The single-source API consumes available libbrlobol child AABB cache
+  records, applies the child path placement matrix, publishes child proxy line
+  sets as source-local external primary geometry, and leaves missing comb proxy
+  generation to the background/cache population path rather than blocking
+  expansion on subtree walks.  Visible-frontier APIs repeat that prewarm/expand
+  step over the current database-source frontier under a requested root, so an
+  application can advance recursive refinement in bounded render-thread passes.
+  The companion prewarm path submits child AABB cache tasks through the
+  attached `BRLObolLodService`, so cache population can run on worker threads
+  before expansion consumes the records.
+  `test_qtcad_obol_progressive_lod_generic_twin_startup_expand` verifies
+  `Generic_Twin.g all` grows from the startup root proxy through two
+  service-backed visible-frontier passes, increases source-tree depth, and
+  produces an image-visible frame change.
+* The draw metadata cache has both object-local records and full-path aggregate
+  records.  Full-path metadata refresh uses librt tree-state walking to cache
+  inherited region id, air, material id, LOS, color, shader, and inheritance
+  state for a realized leaf path while preserving the object-local records used
+  for direct directory/attribute facts.
+* qtcad startup-refine coverage now verifies the next transition as well:
+  after the deferred proxy first frame is visible, the same target can be
+  promoted to the mesh-backed qtcad path and then progress through view-local
+  AABB, OBB, and mesh LoD payloads.
+* Native `rt_view_context` snapping uses the historical interactive tolerance
+  factor of 10.0, matching the old BSG view-state initialization while keeping
+  qtcad Obol database snapping on the non-legacy path.
 * Repeated comb/solid instances under different transforms share local
   geometry during realization while retaining per-instance transforms and
   identity.
@@ -244,6 +300,52 @@ Known Risks
   payloads.  Update actions now require an explicit view state, so any caller
   still expecting direct mesh mutation should be converted rather than
   grandfathered.  See `doc/notes/brl_obol_view_lod.txt`.
+* LoD request submission treats render-root database sources as logical roots.
+  If a transitional render root exposes both a view-local and shared copy of
+  the same database source, the controller collapses matching instance
+  key/path/draw-mode identities before submitting LoD work.  This prevents
+  duplicate active requests while preserving full source traversal for picking,
+  snap, export, and exact-detail source matching.
+* AABB/OBB draw proxy, local metadata caching, and mesh POP LoD
+  generation/loading moved to libbrlobol.  The transitional librt
+  `db_lod_proxy_*`, `db_mesh_lod_*`, and `rt_mesh_lod_*` APIs were removed, as
+  were the per-`db_i` draw/mesh cache contexts and mesh scene-ref BSG adapter
+  entry points.  AABB/OBB/metadata draw-cache operations and mesh LoD cache
+  handles now share libbrlobol-owned per-cache LMDB contexts so repeated status,
+  get, store, and refresh operations do not open duplicate LMDB environments.
+  Mesh LoD cache payload/key access is also serialized per cache context to keep
+  progressive worker reads, writes, and invalidation from racing.
+* The qtcad progressive LoD test now requires multiple LoD candidates and
+  multiple active view-local staged payloads at the AABB, OBB, and mesh stages,
+  so the cache-backed startup path is not validated solely through the first
+  realized mesh.
+* The qtcad progressive LoD harness now supports parameterized draw targets,
+  direct/facetized modes, phase-level startup timing diagnostics,
+  `--startup-only`, `--startup-refine`, `--startup-expand`, and a
+  repeated-target slow CTest.
+  `test_qtcad_obol_progressive_lod_startup_refine` captures the first deferred
+  proxy frame, promotes to the normal mesh-backed qtcad path, and then verifies
+  staged AABB -> OBB -> mesh refinement.  `slow-test_qtcad_obol_progressive_lod_repeated_moss`
+  is skipped unless `BRLCAD_RUN_SLOW_TESTS=1`, then builds a four-copy private
+  moss scene and requires 24 visited LoD candidates.  Generic_Twin full-root
+  startup-only is now a bounded CTest gate; the first proxy visual appears
+  quickly.  Generic_Twin startup-expand is also gated and proves the attached
+  LoD service can prewarm visible-frontier child AABB records and then consume
+  those cached child proxies in repeated post-first-frame passes without full
+  leaf realization.
+  Direct full-root startup-refine still times out in the synchronous
+  full-detail promotion phase.  m35 remains a manual optimization probe.
+* Cached full-path draw metadata is available through libbrlobol, covered by
+  `libbrlobol_draw_cache`, consumed by startup proxy publication, and
+  invalidated through both database-index fanout for indexed full paths and
+  libbrlobol cache-side object-name fanout.  The cache-side path index lets
+  removal/rename notifications clear stale full-path metadata even when the
+  post-edit hierarchy can no longer reconstruct the old path.
+* Attached Obol controller draw, erase, stale-source, erase-prefix,
+  source-update, source-reference removal, source-rename, clear, clear-scope,
+  and teardown transactions now have explicit scene-state coverage proving they
+  clear view-local LoD payloads while preserving the intended shared-scene
+  source sync.  The remaining coverage gap is no-owned-scene fallback paths.
 * Evaluated wire now defaults to the boolweave-backed evaluator, with explicit
   `RT_EVAL_WIREFRAME_F_BIGE` fallback available for comparison/debugging.  The
   public `rt_eval_wireframe` vlist/options API, requested-path identity, and
@@ -292,72 +394,102 @@ Recent focused gates include:
 * `ctest --test-dir build -R '^(ged_test_mged_view_state|ged_test_drawing_quad)$' --timeout 240 --output-on-failure`
 * `ninja -C build test_brlobol_lod_update_action`
 * `ctest --test-dir build -R '^libbrlobol_lod_update_action$' --timeout 240 --output-on-failure`
+* `ninja -C build test_qtcad_obol_progressive_lod gsh mged`
+* `ctest --test-dir build -R '^(gsh_obol_progressive_lod|mged_obol_progressive_lod|test_qtcad_obol_progressive_lod)$' --output-on-failure`
+* `ninja -C build libbsg librt libbrlobol libged gsh`
+* `ctest --test-dir build -R '^(rt_view_info|libbrlobol_lod_realization|libbrlobol_lod_service|libbrlobol_lod_update_action|test_qtcad_obol_progressive_lod|gsh_obol_progressive_lod|mged_obol_progressive_lod)$' --output-on-failure`
+* `ninja -C build libbrlobol libged gsh mged test_qtcad_obol_progressive_lod`
+* `ninja -C build test_brlobol_lod_realization test_brlobol_lod_service test_brlobol_lod_update_action`
+* `ctest --test-dir build -R '^(libbrlobol_lod_realization|libbrlobol_lod_service|libbrlobol_lod_update_action|test_qtcad_obol_progressive_lod|gsh_obol_progressive_lod|mged_obol_progressive_lod)$' --output-on-failure`
+* `ninja -C build libbrlobol librt test_brlobol_mesh_lod_cache rt_view_info rt_view_legacy_bsg`
+* `ctest --test-dir build -R '^(libbrlobol_mesh_lod_cache|rt_view_info|rt_view_legacy_bsg)$' --output-on-failure`
+* `ninja -C build libbrlobol libged gsh mged test_brlobol_lod_realization test_brlobol_lod_service test_brlobol_lod_update_action test_brlobol_mesh_lod_cache test_qtcad_obol_progressive_lod`
+* `ctest --test-dir build -R '^(libbrlobol_lod_realization|libbrlobol_lod_service|libbrlobol_lod_update_action|libbrlobol_mesh_lod_cache|test_qtcad_obol_progressive_lod|gsh_obol_progressive_lod|mged_obol_progressive_lod|rt_view_info|rt_view_legacy_bsg)$' --output-on-failure`
+* `ninja -C build test_brlobol_draw_cache test_brlobol_mesh_lod_cache test_brlobol_lod_service test_brlobol_lod_update_action gsh mged test_qtcad_obol_progressive_lod`
+* `ctest --test-dir build -R '^(libbrlobol_draw_cache|libbrlobol_mesh_lod_cache|libbrlobol_lod_realization|libbrlobol_lod_service|libbrlobol_lod_update_action|test_qtcad_obol_progressive_lod|gsh_obol_progressive_lod|mged_obol_progressive_lod|ged_test_obol_draw_sync)$' --output-on-failure`
+* `ctest --test-dir build --repeat until-fail:5 -R '^gsh_obol_progressive_lod$' --output-on-failure`
+* `ninja -C build test_qtcad_obol_progressive_lod`
+* `ctest --test-dir build -R '^test_qtcad_obol_progressive_lod$' --output-on-failure`
+* `BRLCAD_ROOT=$PWD/build QT_QPA_PLATFORM=offscreen QTCAD_OBOL_FORCE_OSMESA=1 build/bin/test_qtcad_obol_progressive_lod src/libged/tests/draw/moss.g`
+* `ctest --test-dir build -N -R 'progressive_lod'`
+* `ctest --test-dir build -R '^slow-test_qtcad_obol_progressive_lod_repeated_moss$' --output-on-failure` verifies default skip behavior.
+* `BRLCAD_RUN_SLOW_TESTS=1 ctest --test-dir build -R '^slow-test_qtcad_obol_progressive_lod_repeated_moss$' --output-on-failure`
+* `BRLCAD_RUN_SLOW_TESTS=1 BRLCAD_ROOT=$PWD/build QT_QPA_PLATFORM=offscreen QTCAD_OBOL_FORCE_OSMESA=1 build/bin/test_qtcad_obol_progressive_lod --slow src/libged/tests/draw/moss.g all.g all.bot facetize 18 2 4`
+* `build/bin/test_qtcad_obol_progressive_lod --startup-only build/share/db/faa/Generic_Twin.g - all direct 1 1`
+* `ctest --test-dir build -R '^test_qtcad_obol_progressive_lod_generic_twin_startup$' --output-on-failure`
+* `BRLCAD_ROOT=$PWD/build QT_QPA_PLATFORM=offscreen QTCAD_OBOL_FORCE_OSMESA=1 build/bin/test_qtcad_obol_progressive_lod --startup-expand --startup-expand-passes 2 build/share/db/faa/Generic_Twin.g - all direct 4 1`
+* `ctest --test-dir build -R '^test_qtcad_obol_progressive_lod_generic_twin_startup_expand$' --output-on-failure`
+* `ninja -C build ged_test_draw ged_test_lod ged_test_obol_draw_sync`
+* `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_drawing_lod|ged_test_obol_draw_sync)$' --output-on-failure` currently has no LoD crash after forcing Obol capture for the LoD draw test, but `ged_test_drawing_basic` and `ged_test_drawing_lod` still report image-baseline differences.
+* `ninja -C build ged_test_state_services`
+* `ctest --test-dir build -R '^(libbrlobol_draw_cache|libbrlobol_mesh_lod_cache|ged_test_state_services|ged_test_obol_draw_sync|test_qtcad_obol_progressive_lod|test_qtcad_obol_progressive_lod_startup_refine|test_qtcad_obol_progressive_lod_generic_twin_startup|test_qtcad_obol_progressive_lod_generic_twin_startup_expand)$' --output-on-failure`
+* `ninja -C build ged_test_obol_draw_sync`
+* `ctest --test-dir build -R '^ged_test_obol_draw_sync$' --output-on-failure`
 * `git diff --check`
 
 Run the draw/basic/view-command subset after view command or draw facade work.
 Run the broader libbrlobol/qtcad subset after matrix, source-local geometry,
 LoD, realization, or command-scene pick/metadata work.
+Generic_Twin full-root startup-only is now gated by
+`test_qtcad_obol_progressive_lod_generic_twin_startup`, and bounded
+post-proxy visible-frontier expansion is gated by
+`test_qtcad_obol_progressive_lod_generic_twin_startup_expand`.  A direct
+two-pass run on this machine reached `sources=1->25`, `depth=1->3`, and
+`proxies=24`, with most time spent in the second render-thread expansion pass.
+Manual Generic_Twin startup-refine still times out after the first proxy frame
+because synchronous full-detail promotion does not return quickly enough; treat
+automatic asynchronous cache-backed frontier scheduling after the first visual
+as the next large-root optimization target.  m35 remains a manual optimization
+probe.
 
 Next Implementation Steps
 -------------------------
 
-1. Continue converting caller-facing workflows that still depend on retained
-   BSG or immediate libdm drawing.  Treat any hit on raw draw callbacks as a
+1. Retire remaining caller-facing workflows that still depend on retained BSG
+   or immediate libdm drawing.  Treat any hit on raw draw callbacks as a
    missing high-level Obol/GED operation, not as a reason to add an adapter
    stream to `dm-obol`.
-2. Extend the shared-scene/per-view-root Obol attach model to any remaining
-   multi-view caller/test paths.  Quad drawing now verifies shared scene,
-   view-local root, independent database draw/clear, and shared/local object
-   clear behavior through Obol `screengrab`; future failures here should be
-   treated as regressions in the Obol model, not as BSG fallback coverage.
-   Add GED-level coverage that draw/erase/source-update transactions also
-   invalidate attached view LoD payloads.
-3. Inventory remaining `rt/view_legacy_bsg.h` includes and classify each use:
+2. Convert the GED basic/LoD image tests to authoritative Obol baselines after
+   proving the remaining visual differences are correct.  The LoD draw test no
+   longer crashes when native Obol view contexts are active; the remaining
+   failures are image-parity/baseline issues.
+3. Remove or port the remaining libbsg mesh payload internals once no retained
+   BSG renderer path needs them.  Any remaining `rt_mesh_lod_*`/`db_mesh_lod_*`
+   hits are migration bugs.
+4. Rework large-root refinement so the post-proxy promotion path does not
+   synchronously expand every leaf.  Generic_Twin startup-only proves fast
+   time-to-first-visual, Generic_Twin startup-expand now proves repeated
+   service-backed visible-frontier AABB proxy consumption after the first
+   frame, and the bounded repeated-moss slow gate covers staged multi-element
+   AABB/OBB/mesh progression.  The remaining scale question is automatic
+   asynchronous background scheduling of large database frontiers, including
+   duplicate-instance path identity, non-union CSG child handling, and cache
+   population scheduling that can publish AABB/OBB/mesh data as it becomes
+   available.
+5. Extend the shared-scene/per-view-root Obol attach model to any remaining
+   multi-view caller/test paths.  Primary attached mutation transaction
+   view-LoD invalidation is now covered; add focused coverage for
+   no-owned-scene fallback paths only where those callers still need to survive
+   until removal.
+6. Inventory remaining `rt/view_legacy_bsg.h` includes and classify each use:
    explicit retained fallback, neutral libbv-backed view mechanics, or
    libbrlobol/Obol scene/interaction behavior.  Focus first on caller-facing
    workflows rather than `_ged_drawtrees` itself.
-4. Move neutral RT view dispatch out of `src/librt/view_legacy_bsg.c` once the
+7. Move neutral RT view dispatch out of `src/librt/view_legacy_bsg.c` once the
    remaining fallback-only retained BSG calls are isolated.
-5. Continue deleting or isolating code that assumes a mirrored per-DM scene.
-   The target model is one GED-owned shared scene with per-view render wrappers
-   and local roots; shared operations must act on the GED scene owner, while
-   independent/view-local operations must act on the matching view endpoint.
-6. Continue migrating scene/interaction features still routed through retained
-   BSG fallback.  Current priority areas are no-owned-scene behavior, old
-   application display-host assumptions, selection/snap resolution,
-   faceplate/readback paths, and any direct display-stream compatibility that
-   still drives visible behavior.
-7. Add or complete explicit Obol/libbrlobol adapters for native contexts where
+8. Add or complete explicit Obol/libbrlobol adapters for native contexts where
    broader tests still depend on retained fallback behavior: scene clear,
    command-result lookup/removal, pick, selection, snap, polygon, faceplate,
-   and readback.
-8. Inventory remaining primary old-style drawing behavior and migrate features
-   to Obol providers or command-scene features.  Keep `_ged_drawtrees` and
-   retained adapters as fallback only, not as mirrors for successful Obol-owned
-   transactions.
+   framebuffer/readback, and application refresh.
 9. Continue moving command visualizations from generic line/HUD publication to
    typed command-result records only where it helps retire legacy behavior:
    command-specific metadata, primitive pick/highlight mapping, detail-panel
-   lookup, and generation fencing for asynchronous producers.
-10. Define the minimal richer-behavior contract now, but do not overbuild it:
-   object class, owner, scope, lifecycle, capabilities, style, structured
-   output, pick identity, primitive metadata, custom Coin provider lifetime,
-   teardown, selection/highlight synchronization, and database-edit
-   invalidation.
-11. Continue evaluated-wire modernization behind `rt_eval_wireframe`: keep the
-   RTree-backed face-pair enumerator, but redesign the Eplot face-geometry
-   stage so thin-shell models such as havoc do not require millions of
-   repeated face-pair evaluations per region.  Likely next steps are
-   region-local candidate queues, stronger geometric rejection before edge
-   line/plane work, candidate-result reuse for repeated leaf-pair patterns
-   where transforms permit it, and then parallel queued candidate/ray jobs
-   with per-thread resources and deterministic merge.  Do not spend further
-   time on PCA/canonical matching until legacy drawing paths and evaluated-wire
-   candidate generation are structurally under control.
-12. Extend repeated-instance regression coverage into LoD, selection, edit, and
-   explicit database-change behavior without retained mirror state.
-13. Design persistent geometry caching only after the legacy-driver cleanup is
-   further along.  Define cache keys, database revision inputs, usage counts,
-   invalidation, and edit/update behavior before implementation.
-14. Revisit PCA/canonical mesh matching after the cache contract is stable; use
-   it as optional duplicate detection, not as a core correctness dependency.
+   lookup, generation fencing, and asynchronous producer teardown.
+10. Continue evaluated-wire modernization behind `rt_eval_wireframe`, focusing
+   on the havoc thin-shell candidate explosion: stronger geometric rejection,
+   reusable leaf-pair candidate results, deterministic lower-level parallel
+   candidate/ray jobs, and no further PCA/canonical matching work until legacy
+   draw paths and cache ownership are structurally cleaner.
+11. Revisit PCA/canonical mesh matching only after cache keys, revision inputs,
+   usage counts, invalidation, and edit/update behavior are stable; use it as
+   optional duplicate detection, not as a correctness dependency.

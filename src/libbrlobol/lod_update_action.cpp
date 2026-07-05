@@ -208,7 +208,7 @@ SoBRLLodUpdateAction::meshShapeAction(SoAction *action, SoNode *node)
 	    continue;
 	}
 
-	if (updateAction->viewState->applyMeshResult(shape, result))
+	if (updateAction->viewState->applyDisplayResult(shape, result))
 	    updateAction->appliedResultCount++;
 	else {
 	    updateAction->rejectedResultCount++;

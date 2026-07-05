@@ -39,7 +39,6 @@ struct rt_view_snap_result_bsg;
 struct bsg_snap_result;
 struct db_i;
 struct directory;
-struct rt_mesh_lod;
 struct bsg_view_knobs;
 struct bsg_view_set;
 struct bu_color;
@@ -1726,15 +1725,6 @@ rt_view_snap_tolerance_factor_set_bsg(struct bsg_view *v, double factor);
 
 RT_EXPORT extern int
 rt_view_context_snap_tolerance_factor_set_bsg(void *ctx, double factor);
-
-RT_EXPORT extern int
-rt_mesh_lod_load_view_scene_ref_bsg(struct rt_mesh_lod *lod,
-				    rt_view_scene_ref_bsg visibility_ref,
-				    struct bsg_view *v,
-				    int reset);
-
-RT_EXPORT extern void
-rt_mesh_lod_free_scene_ref_bsg(rt_view_scene_ref_bsg ref);
 
 __END_DECLS
 

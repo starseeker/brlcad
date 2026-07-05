@@ -93,8 +93,10 @@ BRLObolLodProxy::isValid(void) const
     if (kind == BRLOBOL_LOD_PROXY_AABB)
 	return bounds.isEmpty() ? FALSE : TRUE;
     if (kind == BRLOBOL_LOD_PROXY_OBB)
-	return halfExtents[0] > 0.0f && halfExtents[1] > 0.0f &&
-	       halfExtents[2] > 0.0f ? TRUE : FALSE;
+	return halfExtents[0] >= 0.0f && halfExtents[1] >= 0.0f &&
+	       halfExtents[2] >= 0.0f &&
+	       (halfExtents[0] > 0.0f || halfExtents[1] > 0.0f ||
+		halfExtents[2] > 0.0f) ? TRUE : FALSE;
     return FALSE;
 }
 
@@ -349,8 +351,8 @@ brlobol_lod_cache_key(const BRLObolLodRequest &request)
 }
 
 SbBool
-brlobol_lod_mesh_payload_from_rt_mesh_data(BRLObolLodMeshPayload &payload,
-	const struct rt_mesh_lod_data &data)
+brlobol_lod_mesh_payload_from_mesh_lod_data(BRLObolLodMeshPayload &payload,
+	const struct BRLObolMeshLodData &data)
 {
     payload.clear();
 
@@ -413,9 +415,10 @@ brlobol_lod_result_matches_request(const BRLObolLodResult &result,
 }
 
 BRLObolLodResult
-brlobol_lod_result_from_rt_mesh_info(const BRLObolLodRequest &request,
-				     const struct rt_mesh_lod_info &info,
-				     const struct rt_mesh_lod_cache_status *status)
+brlobol_lod_result_from_mesh_lod_info(
+    const BRLObolLodRequest &request,
+    const struct BRLObolMeshLodInfo &info,
+    const struct BRLObolMeshLodCacheStatus *status)
 {
     BRLObolLodResult result;
 
@@ -438,7 +441,7 @@ brlobol_lod_result_from_rt_mesh_info(const BRLObolLodRequest &request,
     result.hasSnappedPoints = info.has_snapped_points ? TRUE : FALSE;
     result.hasNormals = info.has_normals ? TRUE : FALSE;
 
-    result.geometry.kind = BRLOBOL_LOD_GEOMETRY_RT_MESH_CACHE;
+    result.geometry.kind = BRLOBOL_LOD_GEOMETRY_MESH_LOD_CACHE;
     result.geometry.providerId = request.providerId;
     result.geometry.providerVersion = request.providerVersion;
     result.geometry.cacheKey = result.cacheKey;
@@ -450,16 +453,16 @@ brlobol_lod_result_from_rt_mesh_info(const BRLObolLodRequest &request,
 	result.stale = status->stale_cache_entry ? TRUE : FALSE;
 	if (status->stale_cache_entry) {
 	    result.providerStatus = BRLOBOL_LOD_PROVIDER_STALE;
-	    result.diagnostic = "stale RT mesh LoD cache entry";
+	    result.diagnostic = "stale Obol mesh LoD cache entry";
 	} else if (!status->has_cache_key || !status->has_cached_payload) {
 	    result.providerStatus = BRLOBOL_LOD_PROVIDER_CACHE_MISS;
-	    result.diagnostic = "RT mesh LoD cache payload unavailable";
+	    result.diagnostic = "Obol mesh LoD cache payload unavailable";
 	}
     }
 
     if (!info.has_faces || !info.has_points) {
 	result.providerStatus = BRLOBOL_LOD_PROVIDER_CACHE_MISS;
-	result.diagnostic = "RT mesh LoD result has no active mesh payload";
+	result.diagnostic = "Obol mesh LoD result has no active mesh payload";
     }
 
     return result;

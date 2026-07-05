@@ -91,8 +91,8 @@ static int
 test_rt_mesh_result(void)
 {
     BRLObolLodRequest request = make_request();
-    struct rt_mesh_lod_info info = RT_MESH_LOD_INFO_INIT;
-    struct rt_mesh_lod_cache_status status = RT_MESH_LOD_CACHE_STATUS_INIT;
+    struct BRLObolMeshLodInfo info = BRLOBOL_MESH_LOD_INFO_INIT;
+    struct BRLObolMeshLodCacheStatus status = BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
 
     info.active_level = 2;
     info.face_count = 8;
@@ -114,11 +114,11 @@ test_rt_mesh_result(void)
     status.cache_key = 0xfeed;
 
     BRLObolLodResult result =
-	brlobol_lod_result_from_rt_mesh_info(request, info, &status);
+	brlobol_lod_result_from_mesh_lod_info(request, info, &status);
     if (result.resultKind != BRLOBOL_LOD_RESULT_MESH ||
 	result.qualityTier != BRLOBOL_LOD_QUALITY_FAST_DISPLAY ||
 	result.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
-	result.geometry.kind != BRLOBOL_LOD_GEOMETRY_RT_MESH_CACHE ||
+	result.geometry.kind != BRLOBOL_LOD_GEOMETRY_MESH_LOD_CACHE ||
 	result.geometry.activeLevel != 2 ||
 	result.geometry.providerToken != 0xfeed ||
 	!result.geometry.isValid() ||
@@ -129,16 +129,16 @@ test_rt_mesh_result(void)
 	!result.hasSnappedPoints ||
 	!result.hasNormals ||
 	!brlobol_lod_result_matches_request(result, request)) {
-	printf("FAIL: RT mesh LoD result conversion\n");
+	printf("FAIL: Obol mesh LoD result conversion\n");
 	return 1;
     }
 
     status.stale_cache_entry = 1;
-    result = brlobol_lod_result_from_rt_mesh_info(request, info, &status);
+    result = brlobol_lod_result_from_mesh_lod_info(request, info, &status);
     if (!result.stale ||
 	result.providerStatus != BRLOBOL_LOD_PROVIDER_STALE ||
 	result.diagnostic.getLength() == 0) {
-	printf("FAIL: RT mesh LoD stale status conversion\n");
+	printf("FAIL: Obol mesh LoD stale status conversion\n");
 	return 1;
     }
 
@@ -151,7 +151,7 @@ test_rt_mesh_payload_copy(void)
     point_t points[4];
     vect_t normals[6];
     int faces[6] = {0, 1, 2, 0, 3, 1};
-    struct rt_mesh_lod_data data;
+    struct BRLObolMeshLodData data;
     BRLObolLodMeshPayload payload;
 
     memset(&data, 0, sizeof(data));
@@ -168,7 +168,7 @@ test_rt_mesh_payload_copy(void)
     data.normals = normals;
     data.normal_count = 6;
 
-    if (!brlobol_lod_mesh_payload_from_rt_mesh_data(payload, data) ||
+    if (!brlobol_lod_mesh_payload_from_mesh_lod_data(payload, data) ||
 	!payload.isValid() ||
 	payload.points.size() != 4 ||
 	payload.normals.size() != 6 ||
@@ -176,36 +176,36 @@ test_rt_mesh_payload_copy(void)
 	payload.coordIndex[4] != 3 ||
 	fabs((double)payload.normals[5][2] - 6.0) > 1.0e-6 ||
 	fabs((double)payload.points[1][0] - 2.0) > 1.0e-6) {
-	printf("FAIL: RT mesh LoD payload copy\n");
+	printf("FAIL: Obol mesh LoD payload copy\n");
 	return 1;
     }
 
     faces[5] = 9;
-    if (brlobol_lod_mesh_payload_from_rt_mesh_data(payload, data) ||
+    if (brlobol_lod_mesh_payload_from_mesh_lod_data(payload, data) ||
 	payload.isValid() ||
 	!payload.points.empty() ||
 	!payload.coordIndex.empty()) {
-	printf("FAIL: RT mesh LoD payload copy accepted invalid index\n");
+	printf("FAIL: Obol mesh LoD payload copy accepted invalid index\n");
 	return 1;
     }
 
     faces[5] = 1;
     data.normal_count = 5;
-    if (brlobol_lod_mesh_payload_from_rt_mesh_data(payload, data) ||
+    if (brlobol_lod_mesh_payload_from_mesh_lod_data(payload, data) ||
 	payload.isValid() ||
 	!payload.points.empty() ||
 	!payload.normals.empty() ||
 	!payload.coordIndex.empty()) {
-	printf("FAIL: RT mesh LoD payload copy accepted invalid normals\n");
+	printf("FAIL: Obol mesh LoD payload copy accepted invalid normals\n");
 	return 1;
     }
 
     data.normals = NULL;
     data.normal_count = 0;
-    if (!brlobol_lod_mesh_payload_from_rt_mesh_data(payload, data) ||
+    if (!brlobol_lod_mesh_payload_from_mesh_lod_data(payload, data) ||
 	!payload.isValid() ||
 	!payload.normals.empty()) {
-	printf("FAIL: RT mesh LoD payload copy rejected mesh without normals\n");
+	printf("FAIL: Obol mesh LoD payload copy rejected mesh without normals\n");
 	return 1;
     }
 

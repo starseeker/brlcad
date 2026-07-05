@@ -5235,7 +5235,7 @@ cleanup:
 }
 
 static int
-test_bsg_mesh_lod_adapter_boundary(void)
+test_bsg_scene_ref_adapter_boundary(void)
 {
     struct bsg_view *v = make_view("rt_view_lod_bounds_callback");
     struct bsg_view *shared = make_view("rt_view_shared_settings_adapter");
@@ -5244,7 +5244,6 @@ test_bsg_mesh_lod_adapter_boundary(void)
     rt_view_scene_ref neutral_obol_ref = RT_VIEW_SCENE_REF_NULL_INIT;
     rt_view_scene_ref neutral_obol_ref_copy = RT_VIEW_SCENE_REF_NULL_INIT;
     rt_view_scene_ref neutral_bsg_same_pointer = RT_VIEW_SCENE_REF_NULL_INIT;
-    rt_view_scene_ref_bsg null_ref_bsg = rt_view_scene_ref_null_bsg();
     fastf_t *scale_storage = NULL;
     int ret = 0;
 
@@ -5286,21 +5285,6 @@ test_bsg_mesh_lod_adapter_boundary(void)
 	ret = 1;
 	goto cleanup;
     }
-
-    if (rt_mesh_lod_load_view_scene_ref(NULL, neutral_null_ref, v, 0) != -1) {
-	printf("FAIL: null neutral mesh lod view-scene-ref load adapter\n");
-	ret = 1;
-	goto cleanup;
-    }
-
-    if (rt_mesh_lod_load_view_scene_ref_bsg(NULL, null_ref_bsg, v, 0) != -1) {
-	printf("FAIL: null mesh lod view-scene-ref load adapter\n");
-	ret = 1;
-	goto cleanup;
-    }
-
-    rt_mesh_lod_free_scene_ref(neutral_null_ref);
-    rt_mesh_lod_free_scene_ref_bsg(null_ref_bsg);
 
     if (!fastf_equal(rt_view_scale_from_bsg(NULL), 1.0) ||
 	    !fastf_equal(rt_view_context_scale_from_bsg(NULL), 1.0) ||
@@ -7128,7 +7112,7 @@ main(int argc, char *argv[])
 	return 1;
     if (test_bsg_faceplate_state_adapter())
 	return 1;
-    if (test_bsg_mesh_lod_adapter_boundary())
+    if (test_bsg_scene_ref_adapter_boundary())
 	return 1;
     if (test_bsg_edit_view_adapter())
 	return 1;

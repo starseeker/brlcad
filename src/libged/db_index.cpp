@@ -34,6 +34,9 @@
 #include <unordered_set>
 #include <vector>
 
+#include "brlobol/draw_cache.h"
+#include "brlobol/lod_realization.h"
+#include "brlobol/mesh_lod_cache.h"
 #include "bu/hash.h"
 #include "raytrace.h"
 #include "rt/view.h"
@@ -332,7 +335,7 @@ ged_db_index_add_child(struct ged_db_index *index,
 		       unsigned long long instance_count)
 {
     if (!index || !index->gedp || !index->gedp->dbip || !parent_id ||
-	    child_name.empty())
+	child_name.empty())
 	return;
 
     ged_db_index_id object_id = ged_db_index_string_hash(child_name);
@@ -347,7 +350,7 @@ ged_db_index_add_child(struct ged_db_index *index,
     }
 
     ged_db_index_id child_id = is_instance ?
-	ged_db_index_string_hash(instance_name) : object_id;
+			       ged_db_index_string_hash(instance_name) : object_id;
     struct directory *child_dp =
 	db_lookup(index->gedp->dbip, child_name.c_str(), LOOKUP_QUIET);
     if (child_dp == RT_DIR_NULL)
@@ -355,7 +358,7 @@ ged_db_index_add_child(struct ged_db_index *index,
 
     if (is_instance || index->records.find(child_id) == index->records.end())
 	ged_db_index_record_put(index, child_id, object_id, instance_name,
-		child_dp, is_instance);
+				child_dp, is_instance);
     else if (!child_dp) {
 	ged_db_index_record_native &record = index->records[child_id];
 	if (!record.dp)
@@ -406,7 +409,7 @@ ged_db_index_add_comb_children(struct ged_db_index *index, struct directory *dp)
 	ged_db_index_id child_object_id = ged_db_index_string_hash(leaf.name);
 	instance_counts[child_object_id]++;
 	ged_db_index_add_child(index, parent_id, leaf.name, leaf.bool_op,
-		instance_counts[child_object_id]);
+			       instance_counts[child_object_id]);
     }
 
     rt_db_free_internal(&intern);
@@ -423,7 +426,7 @@ ged_db_index_add_removed_names(struct ged_db_index *index)
 	if (index->records.find(entry.first) != index->records.end())
 	    continue;
 	ged_db_index_record_put(index, entry.first, entry.first, entry.second,
-		nullptr, 0);
+				nullptr, 0);
     }
 }
 
@@ -442,12 +445,14 @@ ged_db_index_rebuild(struct ged_db_index *index)
     struct directory *dp = RT_DIR_NULL;
     FOR_ALL_DIRECTORY_START(dp, index->gedp->dbip) {
 	ged_db_index_add_object(index, dp);
-    } FOR_ALL_DIRECTORY_END;
+    }
+    FOR_ALL_DIRECTORY_END;
 
     FOR_ALL_DIRECTORY_START(dp, index->gedp->dbip) {
 	if (dp && !(dp->d_flags & DB_LS_HIDDEN))
 	    ged_db_index_add_comb_children(index, dp);
-    } FOR_ALL_DIRECTORY_END;
+    }
+    FOR_ALL_DIRECTORY_END;
 
     ged_db_index_add_removed_names(index);
     index->revision++;
@@ -467,17 +472,73 @@ ged_db_index_ready(struct ged *gedp)
 }
 
 
+static std::vector<std::vector<ged_db_index_id>>
+ged_db_index_affected_paths(struct ged_db_index *index,
+			    ged_db_index_id object_id,
+			    size_t max_depth);
+
+static std::unordered_set<std::string>
+ged_db_index_affected_full_path_cache_keys(struct ged_db_index *index,
+	ged_db_index_id object_id);
+
+
+static void
+ged_db_index_note_lod_name_change(struct ged *gedp,
+				  const std::string &name,
+				  int invalidate_mesh_lod)
+{
+    if (!gedp || !gedp->dbip || name.empty())
+	return;
+
+    (void)brlobol_draw_proxy_cache_invalidate(gedp->dbip, name.c_str(),
+	    BRLOBOL_LOD_PROXY_AABB, NULL);
+    (void)brlobol_draw_proxy_cache_invalidate(gedp->dbip, name.c_str(),
+	    BRLOBOL_LOD_PROXY_OBB, NULL);
+    (void)brlobol_draw_metadata_cache_invalidate(gedp->dbip, name.c_str(), NULL);
+    (void)brlobol_draw_path_metadata_cache_invalidate(gedp->dbip,
+	    name.c_str(), NULL);
+    if (invalidate_mesh_lod)
+	(void)brlobol_mesh_lod_cache_invalidate(gedp->dbip, name.c_str(), NULL);
+}
+
+
 static void
 ged_db_index_note_lod_change(struct ged *gedp, const char *name)
 {
-    if (!gedp || !gedp->dbip || !name)
+    if (!gedp || !gedp->dbip || !name || !name[0])
 	return;
 
-    struct directory *dp = db_lookup(gedp->dbip, name, LOOKUP_QUIET);
-    if (dp == RT_DIR_NULL || dp->d_minor_type != DB5_MINORTYPE_BRLCAD_BOT)
-	return;
+    std::unordered_set<std::string> affected_names;
+    affected_names.insert(std::string(name));
 
-    (void)db_mesh_lod_invalidate(gedp->dbip, name, NULL);
+    (void)brlobol_draw_path_metadata_cache_invalidate_object(gedp->dbip,
+	    name, NULL);
+
+    struct ged_db_index *index = ged_db_index_state(gedp);
+    if (index && index->revision) {
+	ged_db_index_id object_id = ged_db_index_name_hash(name);
+	std::vector<std::vector<ged_db_index_id>> affected_paths =
+	    ged_db_index_affected_paths(index, object_id, 0);
+	std::unordered_set<std::string> affected_path_keys =
+	    ged_db_index_affected_full_path_cache_keys(index, object_id);
+	for (const std::vector<ged_db_index_id> &path : affected_paths) {
+	    for (ged_db_index_id path_id : path) {
+		ged_db_index_id canonical_id =
+		    ged_db_index_canonical_object_id(index, path_id);
+		auto record_it = index->records.find(canonical_id);
+		if (record_it != index->records.end() &&
+		    !record_it->second.name.empty())
+		    affected_names.insert(record_it->second.name);
+	    }
+	}
+	for (const std::string &affected_path_key : affected_path_keys)
+	    (void)brlobol_draw_path_metadata_cache_invalidate(gedp->dbip,
+		affected_path_key.c_str(), NULL);
+    }
+
+    for (const std::string &affected_name : affected_names)
+	ged_db_index_note_lod_name_change(gedp, affected_name,
+					  affected_name == name);
 }
 
 
@@ -504,7 +565,7 @@ ged_db_index_cycle_dfs(struct ged_db_index *index,
 	    int child_color = color[child_object_id];
 	    if (child_color == 0) {
 		ged_db_index_cycle_dfs(index, child_object_id, color, stack,
-			cyclic);
+				       cyclic);
 	    } else if (child_color == 1) {
 		auto cycle_start =
 		    std::find(stack.begin(), stack.end(), child_object_id);
@@ -549,11 +610,11 @@ ged_db_index_standard_tops(struct ged_db_index *index)
     int tops_cnt = db_ls(index->gedp->dbip, DB_LS_TOPS, NULL, &all_paths);
     if (tops_cnt > 0 && all_paths) {
 	std::sort(all_paths, all_paths + tops_cnt,
-		[](const struct directory *a, const struct directory *b) {
-		    const char *aname = (a && a->d_namep) ? a->d_namep : "";
-		    const char *bname = (b && b->d_namep) ? b->d_namep : "";
-		    return strcmp(aname, bname) < 0;
-		});
+	[](const struct directory *a, const struct directory *b) {
+	    const char *aname = (a && a->d_namep) ? a->d_namep : "";
+	    const char *bname = (b && b->d_namep) ? b->d_namep : "";
+	    return strcmp(aname, bname) < 0;
+	});
 	for (int i = 0; i < tops_cnt; i++) {
 	    if (!all_paths[i] || !all_paths[i]->d_namep)
 		continue;
@@ -666,7 +727,7 @@ ged_db_index_collect_affected_paths(struct ged_db_index *index,
     auto use_it = index->parents.find(object_id);
     if (use_it == index->parents.end() || use_it->second.empty()) {
 	if ((!max_depth || max_depth >= 1) &&
-		index->records.find(object_id) != index->records.end()) {
+	    index->records.find(object_id) != index->records.end()) {
 	    paths.push_back({object_id});
 	}
 	return;
@@ -676,7 +737,7 @@ ged_db_index_collect_affected_paths(struct ged_db_index *index,
     for (const ged_db_index_use_native &use : use_it->second) {
 	std::vector<std::vector<ged_db_index_id>> parent_paths;
 	ged_db_index_collect_affected_paths(index, use.parent_id, max_depth,
-		stack, parent_paths);
+					    stack, parent_paths);
 	for (std::vector<ged_db_index_id> &path : parent_paths) {
 	    if (max_depth && path.size() + 1 > max_depth)
 		continue;
@@ -696,8 +757,124 @@ ged_db_index_affected_paths(struct ged_db_index *index,
     std::vector<std::vector<ged_db_index_id>> paths;
     std::vector<ged_db_index_id> stack;
     ged_db_index_collect_affected_paths(index, object_id, max_depth, stack,
-	    paths);
+					paths);
     return paths;
+}
+
+
+static int
+ged_db_index_path_cache_key(struct ged_db_index *index,
+			    const std::vector<ged_db_index_id> &path,
+			    std::string &key)
+{
+    key.clear();
+    if (!index || path.empty())
+	return 0;
+
+    for (ged_db_index_id id : path) {
+	ged_db_index_id canonical_id =
+	    ged_db_index_canonical_object_id(index, id);
+	auto record_it = index->records.find(canonical_id);
+	if (record_it == index->records.end() ||
+	    record_it->second.name.empty())
+	    return 0;
+	if (!key.empty())
+	    key.append("/");
+	key.append(record_it->second.name);
+    }
+
+    return !key.empty();
+}
+
+
+static void
+ged_db_index_collect_descendant_paths(
+    struct ged_db_index *index,
+    ged_db_index_id object_id,
+    std::vector<ged_db_index_id> &stack,
+    std::vector<std::vector<ged_db_index_id>> &paths)
+{
+    if (!index || !object_id)
+	return;
+
+    object_id = ged_db_index_canonical_object_id(index, object_id);
+    if (!object_id)
+	return;
+
+    if (std::find(stack.begin(), stack.end(), object_id) != stack.end())
+	return;
+
+    paths.push_back({object_id});
+
+    auto child_it = index->children.find(object_id);
+    if (child_it == index->children.end() || child_it->second.empty())
+	return;
+
+    stack.push_back(object_id);
+    for (const ged_db_index_child_native &child : child_it->second) {
+	ged_db_index_id child_object_id =
+	    ged_db_index_canonical_object_id(index, child.id);
+	if (!child_object_id)
+	    continue;
+	std::vector<std::vector<ged_db_index_id>> child_paths;
+	ged_db_index_collect_descendant_paths(index, child_object_id,
+					     stack, child_paths);
+	for (const std::vector<ged_db_index_id> &child_path : child_paths) {
+	    if (child_path.empty())
+		continue;
+	    std::vector<ged_db_index_id> path;
+	    path.reserve(child_path.size() + 1);
+	    path.push_back(object_id);
+	    path.insert(path.end(), child_path.begin(), child_path.end());
+	    paths.push_back(path);
+	}
+    }
+    stack.pop_back();
+}
+
+
+static std::vector<std::vector<ged_db_index_id>>
+ged_db_index_descendant_paths(struct ged_db_index *index,
+			      ged_db_index_id object_id)
+{
+    std::vector<std::vector<ged_db_index_id>> paths;
+    std::vector<ged_db_index_id> stack;
+    ged_db_index_collect_descendant_paths(index, object_id, stack, paths);
+    return paths;
+}
+
+
+static std::unordered_set<std::string>
+ged_db_index_affected_full_path_cache_keys(struct ged_db_index *index,
+	ged_db_index_id object_id)
+{
+    std::unordered_set<std::string> keys;
+    if (!index || !object_id)
+	return keys;
+
+    std::vector<std::vector<ged_db_index_id>> prefixes =
+	ged_db_index_affected_paths(index, object_id, 0);
+    std::vector<std::vector<ged_db_index_id>> suffixes =
+	ged_db_index_descendant_paths(index, object_id);
+    if (prefixes.empty() || suffixes.empty())
+	return keys;
+
+    for (const std::vector<ged_db_index_id> &prefix : prefixes) {
+	if (prefix.empty())
+	    continue;
+	for (const std::vector<ged_db_index_id> &suffix : suffixes) {
+	    std::vector<ged_db_index_id> full_path = prefix;
+	    if (suffix.size() > 1)
+		full_path.insert(full_path.end(), suffix.begin() + 1,
+				 suffix.end());
+
+	    std::string key;
+	    if (ged_db_index_path_cache_key(index, full_path, key))
+		keys.insert(key);
+	}
+    }
+
+    return keys;
 }
 
 
@@ -765,8 +942,8 @@ ged_db_index_note_object_change(struct ged *gedp,
 	return 0;
 
     if (change_kind != GED_DB_INDEX_OBJECT_CHANGED &&
-	    change_kind != GED_DB_INDEX_OBJECT_ADDED &&
-	    change_kind != GED_DB_INDEX_OBJECT_REMOVED)
+	change_kind != GED_DB_INDEX_OBJECT_ADDED &&
+	change_kind != GED_DB_INDEX_OBJECT_REMOVED)
 	return 0;
 
     struct ged_db_index *index = ged_db_index_state(gedp);
@@ -797,8 +974,8 @@ ged_db_index_note_object_name_change(struct ged *gedp,
 	return 0;
 
     if (change_kind != GED_DB_INDEX_OBJECT_CHANGED &&
-	    change_kind != GED_DB_INDEX_OBJECT_ADDED &&
-	    change_kind != GED_DB_INDEX_OBJECT_REMOVED)
+	change_kind != GED_DB_INDEX_OBJECT_ADDED &&
+	change_kind != GED_DB_INDEX_OBJECT_REMOVED)
 	return 0;
 
     struct ged_db_index *index = ged_db_index_state(gedp);
@@ -809,6 +986,7 @@ ged_db_index_note_object_name_change(struct ged *gedp,
 	ged_db_index_id id = ged_db_index_name_hash(name);
 	if (!id)
 	    return 0;
+	ged_db_index_note_lod_change(gedp, name);
 	index->removed_names[id] = std::string(name);
 	index->pending_flags |= GED_DB_INDEX_REFRESH_DB_CHANGE;
 	ged_db_index_record_remove(index, id);
@@ -907,7 +1085,7 @@ ged_db_index_child_at(struct ged *gedp,
 
     auto child_it = index->children.find(parent_id);
     if ((child_it == index->children.end() || row >= child_it->second.size()) &&
-	    ged_db_index_rebuild(index))
+	ged_db_index_rebuild(index))
 	child_it = index->children.find(parent_id);
     if (child_it == index->children.end() || row >= child_it->second.size())
 	return 0;
@@ -958,10 +1136,10 @@ ged_db_index_object_use_at(struct ged *gedp,
     object_id = ged_db_index_canonical_object_id(index, object_id);
     auto use_it = index->parents.find(object_id);
     if (use_it == index->parents.end() &&
-	    index->records.find(object_id) != index->records.end())
+	index->records.find(object_id) != index->records.end())
 	return 0;
     if ((use_it == index->parents.end() || row >= use_it->second.size()) &&
-	    ged_db_index_rebuild(index)) {
+	ged_db_index_rebuild(index)) {
 	object_id = ged_db_index_canonical_object_id(index, object_id);
 	use_it = index->parents.find(object_id);
     }
@@ -996,7 +1174,7 @@ ged_db_index_affected_path_count(struct ged *gedp,
 	return paths.size();
 
     if (index->records.find(ged_db_index_canonical_object_id(index,
-		object_id)) != index->records.end())
+			    object_id)) != index->records.end())
 	return 0;
 
     if (ged_db_index_rebuild(index)) {
@@ -1023,9 +1201,9 @@ ged_db_index_affected_path_at(struct ged *gedp,
     std::vector<std::vector<ged_db_index_id>> paths =
 	ged_db_index_affected_paths(index, object_id, max_depth);
     if (row >= paths.size() &&
-	    index->records.find(ged_db_index_canonical_object_id(index,
-		object_id)) == index->records.end() &&
-	    ged_db_index_rebuild(index)) {
+	index->records.find(ged_db_index_canonical_object_id(index,
+			    object_id)) == index->records.end() &&
+	ged_db_index_rebuild(index)) {
 	paths = ged_db_index_affected_paths(index, object_id, max_depth);
     }
     if (row >= paths.size())
@@ -1048,7 +1226,7 @@ ged_db_index_valid_id(struct ged *gedp, ged_db_index_id id)
     if (index->records.find(id) != index->records.end())
 	return 1;
     if (ged_db_index_rebuild(index) &&
-	    index->records.find(id) != index->records.end())
+	index->records.find(id) != index->records.end())
 	return 1;
     return 0;
 }

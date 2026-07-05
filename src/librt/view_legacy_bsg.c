@@ -38,7 +38,7 @@
 #include "bsg/feature.h"
 #include "bsg/geometry.h"
 #include "bsg/interaction.h"
-#include "bsg/lod.h"
+#include "bsg/lod.h"		/* bsg_view_bounds */
 #include "bsg/measure.h"
 #include "bsg/node.h"
 #include "bsg/pick.h"
@@ -56,9 +56,6 @@
 #include "rt/primitives/sketch_legacy_bsg.h"
 #include "rt/view_legacy_bsg.h"
 #include "view_context_private.h"
-
-struct bsg_mesh_lod *
-_rt_mesh_lod_bsg(struct rt_mesh_lod *lod);
 
 struct rt_view_line_set_context_bsg {
     bsg_line_set_ref lines;
@@ -8298,57 +8295,6 @@ rt_view_context_snap_tolerance_factor_set(void *ctx, double factor)
 	return _rt_view_context_native_snap_tolerance_factor_set(ctx,
 		factor);
     return rt_view_context_snap_tolerance_factor_set_bsg(ctx, factor);
-}
-
-int
-rt_mesh_lod_load_view_scene_ref_bsg(struct rt_mesh_lod *lod,
-				    rt_view_scene_ref_bsg visibility_ref,
-				    struct bsg_view *v,
-				    int reset)
-{
-    struct bsg_mesh_lod *bsg_lod = _rt_mesh_lod_bsg(lod);
-    if (!bsg_lod)
-	return -1;
-
-    return bsg_mesh_lod_load_view_scene_ref(bsg_lod,
-	    rt_view_scene_ref_to_bsg(visibility_ref), v, reset);
-}
-
-int
-rt_mesh_lod_load_view_scene_ref(struct rt_mesh_lod *lod,
-				rt_view_scene_ref visibility_ref,
-				void *view_ctx,
-				int reset)
-{
-    struct bsg_mesh_lod *bsg_lod = _rt_mesh_lod_bsg(lod);
-    if (!bsg_lod)
-	return -1;
-    if (!rt_view_scene_ref_is_null(visibility_ref) &&
-	    rt_view_scene_ref_backend(visibility_ref) !=
-		RT_VIEW_SCENE_BACKEND_NONE &&
-	    rt_view_scene_ref_backend(visibility_ref) !=
-		RT_VIEW_SCENE_BACKEND_BSG)
-	return -1;
-
-    return bsg_mesh_lod_load_view_scene_ref(bsg_lod,
-	    rt_view_neutral_scene_ref_to_bsg(visibility_ref),
-	    (struct bsg_view *)view_ctx, reset);
-}
-
-void
-rt_mesh_lod_free_scene_ref_bsg(rt_view_scene_ref_bsg ref)
-{
-    bsg_mesh_lod_free_scene_ref(rt_view_scene_ref_to_bsg(ref));
-}
-
-void
-rt_mesh_lod_free_scene_ref(rt_view_scene_ref ref)
-{
-    if (!rt_view_scene_ref_is_null(ref) &&
-	    rt_view_scene_ref_backend(ref) != RT_VIEW_SCENE_BACKEND_NONE &&
-	    rt_view_scene_ref_backend(ref) != RT_VIEW_SCENE_BACKEND_BSG)
-	return;
-    bsg_mesh_lod_free_scene_ref(rt_view_neutral_scene_ref_to_bsg(ref));
 }
 
 /*

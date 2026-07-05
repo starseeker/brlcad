@@ -39,7 +39,6 @@ __BEGIN_DECLS
 struct db_i;
 struct directory;
 struct bu_vls;
-struct rt_mesh_lod;
 
 typedef void (*rt_view_context_update_callback_t)(void *view_ctx, void *data);
 typedef void (*rt_view_selection_path_callback_t)(const char *path, void *data);
@@ -351,63 +350,63 @@ struct rt_view_feature_label {
 };
 
 typedef int (*rt_view_context_feature_owns_ref_callback_t)(
-	rt_view_feature_ref ref,
-	void *data);
+    rt_view_feature_ref ref,
+    void *data);
 typedef int (*rt_view_context_edit_preview_publish_event_callback_t)(
-	void *ctx,
-	rt_view_feature_ref feature,
-	enum rt_view_edit_preview_event event,
-	const char *source_path,
-	void *data);
-typedef rt_view_feature_ref (*rt_view_context_feature_overlay_ensure_callback_t)(
-	void *ctx,
-	const char *name,
-	const void *owner,
-	void *preview_ctx,
-	const struct rt_view_edit_preview_callbacks *callbacks,
-	const char *source_path,
-	void *data);
-typedef rt_view_feature_ref (*rt_view_context_feature_label_ensure_callback_t)(
-	void *ctx,
-	const char *name,
-	const void *owner,
-	void *data);
+    void *ctx,
+    rt_view_feature_ref feature,
+    enum rt_view_edit_preview_event event,
+    const char *source_path,
+    void *data);
+typedef rt_view_feature_ref(*rt_view_context_feature_overlay_ensure_callback_t)(
+    void *ctx,
+    const char *name,
+    const void *owner,
+    void *preview_ctx,
+    const struct rt_view_edit_preview_callbacks *callbacks,
+    const char *source_path,
+    void *data);
+typedef rt_view_feature_ref(*rt_view_context_feature_label_ensure_callback_t)(
+    void *ctx,
+    const char *name,
+    const void *owner,
+    void *data);
 typedef int (*rt_view_context_feature_remove_callback_t)(
-	void *ctx,
-	const char *name,
-	void *data);
+    void *ctx,
+    const char *name,
+    void *data);
 typedef int (*rt_view_feature_set_context_callback_t)(
-	rt_view_feature_ref ref,
-	void *ctx,
-	void *data);
+    rt_view_feature_ref ref,
+    void *ctx,
+    void *data);
 typedef int (*rt_view_feature_set_visible_callback_t)(
-	rt_view_feature_ref ref,
-	int visible,
-	void *data);
+    rt_view_feature_ref ref,
+    int visible,
+    void *data);
 typedef int (*rt_view_feature_set_color_callback_t)(
-	rt_view_feature_ref ref,
-	int r,
-	int g,
-	int b,
-	void *data);
+    rt_view_feature_ref ref,
+    int r,
+    int g,
+    int b,
+    void *data);
 typedef int (*rt_view_feature_touch_callback_t)(
-	rt_view_feature_ref ref,
-	void *data);
+    rt_view_feature_ref ref,
+    void *data);
 typedef int (*rt_view_feature_labels_replace_callback_t)(
-	rt_view_feature_ref ref,
-	const struct rt_view_feature_label *labels,
-	size_t label_count,
-	void *data);
+    rt_view_feature_ref ref,
+    const struct rt_view_feature_label *labels,
+    size_t label_count,
+    void *data);
 typedef int (*rt_view_feature_points_replace_callback_t)(
-	rt_view_feature_ref ref,
-	enum rt_view_feature_family family,
-	const point_t *points,
-	const int *cmds,
-	size_t point_count,
-	void *data);
+    rt_view_feature_ref ref,
+    enum rt_view_feature_family family,
+    const point_t *points,
+    const int *cmds,
+    size_t point_count,
+    void *data);
 typedef int (*rt_view_feature_clear_geometry_callback_t)(
-	rt_view_feature_ref ref,
-	void *data);
+    rt_view_feature_ref ref,
+    void *data);
 
 struct rt_view_context_feature_adapter {
     rt_view_context_feature_owns_ref_callback_t owns_ref;
@@ -427,32 +426,32 @@ struct rt_view_context_feature_adapter {
 
 RT_EXPORT extern int
 rt_view_context_feature_adapter_set(
-	void *ctx,
-	const struct rt_view_context_feature_adapter *adapter);
+    void *ctx,
+    const struct rt_view_context_feature_adapter *adapter);
 
 RT_EXPORT extern int
 rt_view_context_feature_adapter_get(
-	void *ctx,
-	struct rt_view_context_feature_adapter *adapter);
+    void *ctx,
+    struct rt_view_context_feature_adapter *adapter);
 
 RT_EXPORT extern int
 rt_view_feature_ref_is_null(rt_view_feature_ref ref);
 
 RT_EXPORT extern int
 rt_view_context_edit_preview_publish_event(
-	void *ctx,
-	rt_view_feature_ref feature,
-	enum rt_view_edit_preview_event event,
-	const char *source_path);
+    void *ctx,
+    rt_view_feature_ref feature,
+    enum rt_view_edit_preview_event event,
+    const char *source_path);
 
 RT_EXPORT extern rt_view_feature_ref
 rt_view_context_feature_overlay_ensure(
-	void *ctx,
-	const char *name,
-	const void *owner,
-	void *preview_ctx,
-	const struct rt_view_edit_preview_callbacks *callbacks,
-	const char *source_path);
+    void *ctx,
+    const char *name,
+    const void *owner,
+    void *preview_ctx,
+    const struct rt_view_edit_preview_callbacks *callbacks,
+    const char *source_path);
 
 RT_EXPORT extern rt_view_feature_ref
 rt_view_context_feature_label_ensure(void *ctx,
@@ -524,121 +523,121 @@ struct rt_view_polygon_record {
 };
 
 typedef int (*rt_view_polygon_record_callback_t)(rt_view_polygon_ref ref,
-						 const struct rt_view_polygon_record *record,
-						 void *data);
+	const struct rt_view_polygon_record *record,
+	void *data);
 
 typedef int (*rt_view_context_polygon_owns_ref_callback_t)(
-	rt_view_polygon_ref ref,
-	void *data);
+    rt_view_polygon_ref ref,
+    void *data);
 typedef int (*rt_view_context_polygon_record_get_callback_t)(
-	rt_view_polygon_ref ref,
-	struct rt_view_polygon_record *record,
-	void *data);
-typedef rt_view_polygon_ref (*rt_view_context_polygon_create_callback_t)(
-	void *ctx,
-	int type,
-	point_t *fp,
-	void *data);
-typedef rt_view_polygon_ref (*rt_view_context_polygon_select_callback_t)(
-	void *ctx,
-	point_t *cp,
-	void *data);
-typedef rt_view_polygon_ref (*rt_view_context_polygon_find_callback_t)(
-	void *ctx,
-	const char *name,
-	void *data);
-typedef rt_view_polygon_ref (*rt_view_context_polygon_dup_callback_t)(
-	void *ctx,
-	const char *name,
-	const char *new_name,
-	void *data);
+    rt_view_polygon_ref ref,
+    struct rt_view_polygon_record *record,
+    void *data);
+typedef rt_view_polygon_ref(*rt_view_context_polygon_create_callback_t)(
+    void *ctx,
+    int type,
+    point_t *fp,
+    void *data);
+typedef rt_view_polygon_ref(*rt_view_context_polygon_select_callback_t)(
+    void *ctx,
+    point_t *cp,
+    void *data);
+typedef rt_view_polygon_ref(*rt_view_context_polygon_find_callback_t)(
+    void *ctx,
+    const char *name,
+    void *data);
+typedef rt_view_polygon_ref(*rt_view_context_polygon_dup_callback_t)(
+    void *ctx,
+    const char *name,
+    const char *new_name,
+    void *data);
 typedef void (*rt_view_context_polygon_visit_records_callback_t)(
-	void *ctx,
-	rt_view_polygon_record_callback_t callback,
-	void *callback_data,
-	void *data);
+    void *ctx,
+    rt_view_polygon_record_callback_t callback,
+    void *callback_data,
+    void *data);
 typedef size_t (*rt_view_context_polygon_snap_count_callback_t)(
-	void *ctx,
-	rt_view_polygon_ref exclude,
-	void *data);
+    void *ctx,
+    rt_view_polygon_ref exclude,
+    void *data);
 typedef int (*rt_view_context_polygon_clear_point_selection_callback_t)(
-	void *ctx,
-	void *data);
+    void *ctx,
+    void *data);
 typedef int (*rt_view_context_polygon_update_callback_t)(
-	rt_view_polygon_ref ref,
-	void *ctx,
-	int utype,
-	void *data);
+    rt_view_polygon_ref ref,
+    void *ctx,
+    int utype,
+    void *data);
 typedef int (*rt_view_context_polygon_update_screen_pt_callback_t)(
-	rt_view_polygon_ref ref,
-	void *ctx,
-	int x,
-	int y,
-	int utype,
-	void *data);
+    rt_view_polygon_ref ref,
+    void *ctx,
+    int x,
+    int y,
+    int utype,
+    void *data);
 typedef int (*rt_view_polygon_move_callback_t)(
-	rt_view_polygon_ref ref,
-	point_t *current_point,
-	point_t *previous_point,
-	void *data);
+    rt_view_polygon_ref ref,
+    point_t *current_point,
+    point_t *previous_point,
+    void *data);
 typedef int (*rt_view_polygon_set_name_callback_t)(
-	rt_view_polygon_ref ref,
-	const char *name,
-	void *data);
+    rt_view_polygon_ref ref,
+    const char *name,
+    void *data);
 typedef int (*rt_view_polygon_set_context_callback_t)(
-	rt_view_polygon_ref ref,
-	void *ctx,
-	void *data);
+    rt_view_polygon_ref ref,
+    void *ctx,
+    void *data);
 typedef int (*rt_view_polygon_set_visual_callback_t)(
-	rt_view_polygon_ref ref,
-	const struct bu_color *edge_color,
-	const struct bu_color *fill_color,
-	fastf_t fill_slope_x,
-	fastf_t fill_slope_y,
-	fastf_t fill_density,
-	fastf_t vZ,
-	int fill_flag,
-	void *data);
+    rt_view_polygon_ref ref,
+    const struct bu_color *edge_color,
+    const struct bu_color *fill_color,
+    fastf_t fill_slope_x,
+    fastf_t fill_slope_y,
+    fastf_t fill_density,
+    fastf_t vZ,
+    int fill_flag,
+    void *data);
 typedef int (*rt_view_polygon_set_open_callback_t)(
-	rt_view_polygon_ref ref,
-	int open,
-	void *data);
+    rt_view_polygon_ref ref,
+    int open,
+    void *data);
 typedef int (*rt_view_polygon_close_callback_t)(
-	rt_view_polygon_ref ref,
-	void *data);
+    rt_view_polygon_ref ref,
+    void *data);
 typedef int (*rt_view_polygon_clear_selected_point_callback_t)(
-	rt_view_polygon_ref ref,
-	void *data);
+    rt_view_polygon_ref ref,
+    void *data);
 typedef int (*rt_view_polygon_remove_callback_t)(
-	rt_view_polygon_ref ref,
-	void *data);
+    rt_view_polygon_ref ref,
+    void *data);
 typedef void *(*rt_view_polygon_user_data_callback_t)(
-	rt_view_polygon_ref ref,
-	void *data);
+    rt_view_polygon_ref ref,
+    void *data);
 typedef int (*rt_view_polygon_user_data_set_callback_t)(
-	rt_view_polygon_ref ref,
-	void *user_data,
-	void *data);
+    rt_view_polygon_ref ref,
+    void *user_data,
+    void *data);
 typedef int (*rt_view_polygon_csg_callback_t)(
-	rt_view_polygon_ref target,
-	rt_view_polygon_ref stencil,
-	bg_clip_t op,
-	void *data);
-typedef rt_view_polygon_ref (*rt_view_polygon_import_sketch_context_callback_t)(
-	const char *name,
-	struct db_i *dbip,
-	struct directory *dp,
-	void *ctx,
-	void *data);
+    rt_view_polygon_ref target,
+    rt_view_polygon_ref stencil,
+    bg_clip_t op,
+    void *data);
+typedef rt_view_polygon_ref(*rt_view_polygon_import_sketch_context_callback_t)(
+    const char *name,
+    struct db_i *dbip,
+    struct directory *dp,
+    void *ctx,
+    void *data);
 typedef struct directory *(*rt_view_polygon_export_sketch_callback_t)(
-	struct db_i *dbip,
-	const char *name,
-	rt_view_polygon_ref ref,
-	void *data);
+    struct db_i *dbip,
+    const char *name,
+    rt_view_polygon_ref ref,
+    void *data);
 typedef int (*rt_view_context_polygon_snap_exclude_set_callback_t)(
-	void *ctx,
-	rt_view_polygon_ref ref,
-	void *data);
+    void *ctx,
+    rt_view_polygon_ref ref,
+    void *data);
 
 struct rt_view_context_polygon_adapter {
     rt_view_context_polygon_owns_ref_callback_t owns_ref;
@@ -671,13 +670,13 @@ struct rt_view_context_polygon_adapter {
 
 RT_EXPORT extern int
 rt_view_context_polygon_adapter_set(
-	void *ctx,
-	const struct rt_view_context_polygon_adapter *adapter);
+    void *ctx,
+    const struct rt_view_context_polygon_adapter *adapter);
 
 RT_EXPORT extern int
 rt_view_context_polygon_adapter_get(
-	void *ctx,
-	struct rt_view_context_polygon_adapter *adapter);
+    void *ctx,
+    struct rt_view_context_polygon_adapter *adapter);
 
 RT_EXPORT extern int
 rt_view_polygon_ref_is_null(rt_view_polygon_ref ref);
@@ -702,9 +701,9 @@ rt_view_context_polygon_dup(void *ctx,
 
 RT_EXPORT extern void
 rt_view_context_polygon_visit_records(
-	void *ctx,
-	rt_view_polygon_record_callback_t callback,
-	void *data);
+    void *ctx,
+    rt_view_polygon_record_callback_t callback,
+    void *data);
 
 RT_EXPORT extern size_t
 rt_view_context_polygon_snap_count(void *ctx, rt_view_polygon_ref exclude);
@@ -717,10 +716,10 @@ rt_view_polygon_update_context(rt_view_polygon_ref ref, void *ctx, int utype);
 
 RT_EXPORT extern int
 rt_view_polygon_update_screen_pt_context(rt_view_polygon_ref ref,
-					 void *ctx,
-					 int x,
-					 int y,
-					 int utype);
+	void *ctx,
+	int x,
+	int y,
+	int utype);
 
 RT_EXPORT extern int
 rt_view_polygon_move(rt_view_polygon_ref ref,
@@ -780,71 +779,6 @@ rt_view_polygon_export_sketch(struct db_i *dbip,
 RT_EXPORT extern int
 rt_view_context_polygon_snap_exclude_set(void *ctx, rt_view_polygon_ref ref);
 
-/* Borrowed active LoD arrays; valid until the LoD is reloaded or destroyed. */
-struct rt_mesh_lod_data {
-    const int *faces;
-    size_t face_count;
-    const point_t *points;
-    size_t point_count;
-    const point_t *points_orig;
-    size_t point_orig_count;
-    const vect_t *normals;
-    size_t normal_count;
-    point_t bmin;
-    point_t bmax;
-};
-
-/* Full-detail mesh arrays supplied by producer callbacks.  The callback owns
- * the array lifetimes; RT borrows them until the matching clear/free callback.
- * Normal payloads are optional, but when present must contain one normal per
- * triangle corner: normal_count == face_count * 3. */
-struct rt_mesh_lod_detail {
-    const int *faces;
-    size_t face_count;
-    const point_t *points;
-    size_t point_count;
-    const point_t *points_orig;
-    size_t point_orig_count;
-    const vect_t *normals;
-    size_t normal_count;
-};
-
-typedef int (*rt_mesh_lod_detail_setup_callback)(struct rt_mesh_lod_detail *detail, void *cb_data);
-typedef int (*rt_mesh_lod_detail_clear_callback)(void *cb_data);
-typedef int (*rt_mesh_lod_detail_free_callback)(void *cb_data);
-
-/* Summary of the active mesh LoD state.  This is stable to copy and does not
- * borrow array storage from the LoD provider. */
-struct rt_mesh_lod_info {
-    int active_level;
-    size_t face_count;
-    size_t point_count;
-    size_t point_orig_count;
-    size_t normal_count;
-    int has_faces;
-    int has_points;
-    int has_original_points;
-    int has_snapped_points;
-    int has_normals;
-    point_t bmin;
-    point_t bmax;
-};
-
-/* Stable status for a database object's mesh LoD cache entry.  The key is an
- * opaque provider cache key; callers should treat it as diagnostic metadata,
- * not as an addressable storage handle. */
-struct rt_mesh_lod_cache_status {
-    int directory_found;
-    int is_bot;
-    int has_cache_key;
-    int has_cached_payload;
-    int stale_cache_entry;
-    int cleared_cache_entry;
-    int generated_cache_entry;
-    unsigned long long cache_key;
-    unsigned long long cleared_cache_key;
-};
-
 struct rt_view_render_summary {
     int item_count;
     int highlighted_count;
@@ -859,15 +793,15 @@ struct rt_view_render_export_consistency {
 };
 
 typedef void *(*rt_view_context_pick_semantic_path_callback_t)(
-	void *ctx,
-	const char *path_pattern,
-	void *data);
+    void *ctx,
+    const char *path_pattern,
+    void *data);
 
 typedef int (*rt_view_context_render_export_consistency_callback_t)(
-	void *ctx,
-	const char *drawn_prefix,
-	struct rt_view_render_export_consistency *summary,
-	void *data);
+    void *ctx,
+    const char *drawn_prefix,
+    struct rt_view_render_export_consistency *summary,
+    void *data);
 
 struct rt_view_context_scene_adapter {
     rt_view_context_pick_semantic_path_callback_t pick_semantic_path;
@@ -876,20 +810,20 @@ struct rt_view_context_scene_adapter {
 };
 
 typedef int (*rt_view_context_selection_available_callback_t)(
-	void *ctx,
-	void *data);
+    void *ctx,
+    void *data);
 typedef size_t (*rt_view_context_selection_count_callback_t)(
-	void *ctx,
-	void *data);
+    void *ctx,
+    void *data);
 typedef int (*rt_view_context_selection_set_pick_result_context_callback_t)(
-	void *ctx,
-	const void *result_ctx,
-	rt_view_selection_path_callback_t callback,
-	void *callback_data,
-	void *data);
+    void *ctx,
+    const void *result_ctx,
+    rt_view_selection_path_callback_t callback,
+    void *callback_data,
+    void *data);
 typedef int (*rt_view_context_selection_clear_callback_t)(
-	void *ctx,
-	void *data);
+    void *ctx,
+    void *data);
 
 struct rt_view_context_selection_adapter {
     rt_view_context_selection_available_callback_t available;
@@ -915,8 +849,6 @@ struct rt_view_feature_geometry_summary {
 #define RT_VIEW_AXES_STATE_INIT { 0, VINIT_ZERO, 0.0, 0, {0, 0, 0}, 0, 0, {0, 0, 0}, 0, 0, 0, 0, 0.0, 0, 0, {0, 0, 0}, {0, 0, 0} }
 #define RT_VIEW_OTHER_STATE_INIT { 0, {0, 0, 0}, {0, 0, 0}, 0 }
 #define RT_VIEW_PARAMS_STATE_INIT { 0, 0, 0, 0, 0, 0, 0, {0, 0, 0}, 0 }
-#define RT_MESH_LOD_INFO_INIT { -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, VINIT_ZERO, VINIT_ZERO }
-#define RT_MESH_LOD_CACHE_STATUS_INIT { 0, 0, 0, 0, 0, 0, 0, 0, 0 }
 #define RT_VIEW_RENDER_SUMMARY_INIT { 0, 0 }
 #define RT_VIEW_RENDER_EXPORT_CONSISTENCY_INIT { 0, 0, 0, 0, 0 }
 #define RT_VIEW_FEATURE_GEOMETRY_SUMMARY_INIT { 0, 0, 0 }
@@ -1143,35 +1075,6 @@ RT_EXPORT extern void rt_view_adc_model_to_view(struct rt_view_adc_state *adcs, 
 RT_EXPORT extern void rt_view_adc_grid_to_view(struct rt_view_adc_state *adcs, mat_t model2view, fastf_t amax);
 RT_EXPORT extern void rt_view_adc_view_to_grid(struct rt_view_adc_state *adcs, mat_t model2view);
 RT_EXPORT extern void rt_view_adc_reset(struct rt_view_adc_state *adcs, mat_t view2model, mat_t model2view);
-
-/* Routines for managing the mesh LoD cache */
-RT_EXPORT extern void db_mesh_lod_init(struct db_i *dbip, int verbose);
-RT_EXPORT extern void db_mesh_lod_clear(struct db_i *dbip);
-RT_EXPORT extern void rt_mesh_lod_cache_clear_all(void);
-RT_EXPORT extern int db_mesh_lod_update(struct db_i *dbip, const char *name);
-RT_EXPORT extern void rt_mesh_lod_cache_status_init(struct rt_mesh_lod_cache_status *status);
-RT_EXPORT extern int db_mesh_lod_status(struct db_i *dbip, const char *name, struct rt_mesh_lod_cache_status *status);
-RT_EXPORT extern int db_mesh_lod_refresh(struct db_i *dbip, const char *name, struct rt_mesh_lod_cache_status *status);
-RT_EXPORT extern int db_mesh_lod_invalidate(struct db_i *dbip, const char *name, struct rt_mesh_lod_cache_status *status);
-/* Store caller-owned mesh arrays in the database LoD cache.  normals is
- * optional; when supplied it must contain one normal per triangle corner in
- * faces order, i.e. face_count * 3 normals. */
-RT_EXPORT extern int db_mesh_lod_store_mesh(struct db_i *dbip, const char *name, const point_t *vertices, size_t vertex_count, const vect_t *normals, const int *faces, size_t face_count, unsigned long long user_key, fastf_t fidelity_ratio, struct rt_mesh_lod_cache_status *status);
-RT_EXPORT extern struct rt_mesh_lod *db_mesh_lod_get(struct db_i *dbip, const char *name);
-RT_EXPORT extern int rt_mesh_lod_load_level(struct rt_mesh_lod *lod, int level, int reset);
-RT_EXPORT extern int rt_mesh_lod_load_view(struct rt_mesh_lod *lod, const struct rt_view_info *info, int reset);
-RT_EXPORT extern int rt_mesh_lod_load_view_scene_ref(struct rt_mesh_lod *lod, rt_view_scene_ref visibility_ref, void *view_ctx, int reset);
-RT_EXPORT extern void rt_mesh_lod_free_scene_ref(rt_view_scene_ref ref);
-RT_EXPORT extern int rt_mesh_lod_current_level(const struct rt_mesh_lod *lod);
-RT_EXPORT extern int rt_mesh_lod_has_active_data(const struct rt_mesh_lod *lod);
-RT_EXPORT extern int rt_mesh_lod_data_get(const struct rt_mesh_lod *lod, struct rt_mesh_lod_data *data);
-RT_EXPORT extern void rt_mesh_lod_info_init(struct rt_mesh_lod_info *info);
-RT_EXPORT extern int rt_mesh_lod_info_get(const struct rt_mesh_lod *lod, struct rt_mesh_lod_info *info);
-RT_EXPORT extern void rt_mesh_lod_detail_init(struct rt_mesh_lod_detail *detail);
-RT_EXPORT extern int rt_mesh_lod_detail_callbacks_set(struct rt_mesh_lod *lod, rt_mesh_lod_detail_setup_callback setup_clbk, rt_mesh_lod_detail_clear_callback clear_clbk, rt_mesh_lod_detail_free_callback free_clbk, void *cb_data);
-RT_EXPORT extern void rt_mesh_lod_detail_callbacks_clear(struct rt_mesh_lod *lod);
-RT_EXPORT extern void rt_mesh_lod_memshrink(struct rt_mesh_lod *lod);
-RT_EXPORT extern void rt_mesh_lod_destroy(struct rt_mesh_lod *lod);
 
 /**
  * NOTE: Normally, librt doesn't have a concept of a "display" of the geometry.

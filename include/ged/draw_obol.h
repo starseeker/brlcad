@@ -28,11 +28,64 @@
 
 #include "common.h"
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "ged/defines.h"
 
 __BEGIN_DECLS
+
+struct ged_draw_obol_lod_service_status {
+    int attached;
+    int running;
+    int auto_submit;
+    size_t worker_count;
+    size_t in_flight;
+    size_t pending_tasks;
+    size_t queued_results;
+    size_t queued_cache_writes;
+    size_t delayed_tasks;
+    unsigned int last_visited_mesh_count;
+    unsigned int last_submitted_task_count;
+    unsigned int last_skipped_mesh_count;
+    size_t last_result_count;
+    unsigned int last_matched_result_count;
+    unsigned int last_applied_result_count;
+    unsigned int last_rejected_result_count;
+    unsigned int last_unmatched_result_count;
+    size_t active_mesh_payloads;
+    size_t active_aabb_proxy_payloads;
+    size_t active_obb_proxy_payloads;
+    char last_diagnostics[2048];
+};
+
+struct ged_draw_obol_source_expansion_status {
+    size_t child_count;
+    size_t considered;
+    size_t expanded;
+    size_t existing;
+    size_t skipped_non_union;
+    size_t skipped_duplicate_instance;
+    size_t skipped_invalid;
+    size_t remaining;
+    size_t proxy_published;
+    size_t metadata_applied;
+    size_t comb_sources;
+    size_t leaf_sources;
+};
+
+struct ged_draw_obol_source_prewarm_status {
+    size_t child_count;
+    size_t considered;
+    size_t submitted;
+    size_t already_cached;
+    size_t skipped_non_union;
+    size_t skipped_duplicate_instance;
+    size_t skipped_invalid;
+    size_t remaining;
+    size_t comb_sources;
+    size_t leaf_sources;
+};
 
 /**
  * C-compatible form of ged_draw_obol_controller_attach.
@@ -55,9 +108,9 @@ ged_draw_obol_controller_attach_opaque(struct ged *gedp,
  */
 GED_EXPORT int
 ged_draw_obol_controller_attach_opaque_for_view(struct ged *gedp,
-						void *view_ctx,
-						void *controller,
-						int sync_current_scene);
+	void *view_ctx,
+	void *controller,
+	int sync_current_scene);
 
 /**
  * Detach a previously borrowed opaque Obol view controller.
@@ -65,6 +118,71 @@ ged_draw_obol_controller_attach_opaque_for_view(struct ged *gedp,
 GED_EXPORT void
 ged_draw_obol_controller_detach_opaque(struct ged *gedp,
 				       void *controller);
+
+GED_EXPORT int
+ged_draw_obol_lod_service_start(struct ged *gedp,
+				void *view_ctx,
+				size_t worker_count);
+
+GED_EXPORT int
+ged_draw_obol_lod_service_stop(struct ged *gedp,
+			       void *view_ctx);
+
+GED_EXPORT int
+ged_draw_obol_lod_service_poll(struct ged *gedp,
+			       void *view_ctx,
+			       size_t max_results,
+			       struct ged_draw_obol_lod_service_status *status);
+
+GED_EXPORT int
+ged_draw_obol_lod_service_status(struct ged *gedp,
+				 void *view_ctx,
+				 struct ged_draw_obol_lod_service_status *status);
+
+GED_EXPORT size_t
+ged_draw_obol_lod_service_prewarm(struct ged *gedp,
+				  void *view_ctx,
+				  int argc,
+				  const char * const *argv,
+				  struct ged_draw_obol_lod_service_status *status);
+
+GED_EXPORT int
+ged_draw_obol_database_source_expand_children(
+    struct ged *gedp,
+    void *view_ctx,
+    const char *path,
+    int ged_draw_mode,
+    size_t max_children,
+    struct ged_draw_obol_source_expansion_status *status);
+
+GED_EXPORT size_t
+ged_draw_obol_database_source_prewarm_child_aabb_proxies(
+    struct ged *gedp,
+    void *view_ctx,
+    const char *path,
+    int ged_draw_mode,
+    size_t max_children,
+    struct ged_draw_obol_source_prewarm_status *status);
+
+GED_EXPORT size_t
+ged_draw_obol_database_source_prewarm_visible_child_aabb_proxies(
+    struct ged *gedp,
+    void *view_ctx,
+    const char *root_path,
+    int ged_draw_mode,
+    size_t max_sources,
+    size_t max_children_per_source,
+    struct ged_draw_obol_source_prewarm_status *status);
+
+GED_EXPORT int
+ged_draw_obol_database_source_expand_visible_children(
+    struct ged *gedp,
+    void *view_ctx,
+    const char *root_path,
+    int ged_draw_mode,
+    size_t max_sources,
+    size_t max_children_per_source,
+    struct ged_draw_obol_source_expansion_status *status);
 
 __END_DECLS
 
@@ -135,10 +253,10 @@ ged_draw_obol_scene_controller_owned(struct ged *gedp);
  */
 GED_EXPORT int
 ged_draw_obol_scene_sync_transaction(
-	struct ged *gedp,
-	const struct ged_draw_transaction *txn,
-	const struct ged_draw_transaction_result *result,
-	SoBRLSceneController *controller = NULL);
+    struct ged *gedp,
+    const struct ged_draw_transaction *txn,
+    const struct ged_draw_transaction_result *result,
+    SoBRLSceneController *controller = NULL);
 
 /**
  * Rebuild @p controller's database-source scene from the current GED draw set.
@@ -166,9 +284,9 @@ ged_draw_obol_controller_attach(struct ged *gedp,
 
 GED_EXPORT int
 ged_draw_obol_controller_attach_for_view(struct ged *gedp,
-					 void *view_ctx,
-					 BRLObolViewController *controller,
-					 int sync_current_scene = 1);
+	void *view_ctx,
+	BRLObolViewController *controller,
+	int sync_current_scene = 1);
 
 /**
  * Stop mirroring GED draw transactions to the currently attached controller.
@@ -191,10 +309,10 @@ ged_draw_obol_controller(struct ged *gedp);
  */
 GED_EXPORT int
 ged_draw_obol_sync_transaction(
-	struct ged *gedp,
-	const struct ged_draw_transaction *txn,
-	const struct ged_draw_transaction_result *result,
-	BRLObolViewController *controller = NULL);
+    struct ged *gedp,
+    const struct ged_draw_transaction *txn,
+    const struct ged_draw_transaction_result *result,
+    BRLObolViewController *controller = NULL);
 
 /**
  * Rebuild @p controller's database-source scene from the current GED draw set.

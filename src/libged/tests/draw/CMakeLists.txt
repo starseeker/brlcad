@@ -99,6 +99,7 @@ endif(TARGET ged_test_lod)
 brlcad_add_test(NAME ged_test_drawing_lod COMMAND ged_test_lod -c "${CMAKE_CURRENT_SOURCE_DIR}")
 if(TARGET ged_test_lod)
   set_property(TEST ged_test_drawing_lod APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+  set_property(TEST ged_test_drawing_lod APPEND PROPERTY ENVIRONMENT GED_TEST_DRAW_OBOL_CAPTURE=1)
 endif(TARGET ged_test_lod)
 distclean(${CMAKE_CURRENT_BINARY_DIR}/moss_lod_tmp.g)
 

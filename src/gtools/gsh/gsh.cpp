@@ -68,11 +68,11 @@
 #define GSH_READ_SIZE 1024
 void
 p_watch(
-	std::shared_ptr<std::string> obuf,
-	std::atomic<bool> &thread_done,
-	int fd,
-	std::mutex &buf_mutex
-       )
+    std::shared_ptr<std::string> obuf,
+    std::atomic<bool> &thread_done,
+    int fd,
+    std::mutex &buf_mutex
+)
 {
     // If we don't have a sane file descriptor, don't proceed
     if (fd < 0) {
@@ -103,20 +103,21 @@ p_watch(
     thread_done = true;
 }
 
-class ProcessIOHandler {
-    public:
-	ProcessIOHandler(int, ged_io_func_t, void *);
-	~ProcessIOHandler();
+class ProcessIOHandler
+{
+public:
+    ProcessIOHandler(int, ged_io_func_t, void *);
+    ~ProcessIOHandler();
 
-	std::string read();
-	std::atomic<bool> thread_done = false;
+    std::string read();
+    std::atomic<bool> thread_done = false;
 
-    private:
-	int fd = -1;
+private:
+    int fd = -1;
 
-	std::shared_ptr<std::string> curr_buf;
-	std::mutex buf_mutex;
-	std::thread watch_thread;
+    std::shared_ptr<std::string> curr_buf;
+    std::mutex buf_mutex;
+    std::thread watch_thread;
 };
 
 ProcessIOHandler::ProcessIOHandler(int f, ged_io_func_t, void *)
@@ -150,20 +151,26 @@ ProcessIOHandler::read()
     return lcpy;
 }
 
-class DisplayHash {
-    public:
-	bool hash(struct ged *, bool, bool);
-	void dirty(struct ged *, const DisplayHash &);
-	unsigned long long d = 0;
-	unsigned long long v = 0;
-	unsigned long long l = 0;
-	unsigned long long g = 0;
+class DisplayHash
+{
+public:
+    bool hash(struct ged *, bool, bool);
+    void dirty(struct ged *, const DisplayHash &);
+    unsigned long long d = 0;
+    unsigned long long v = 0;
+    unsigned long long l = 0;
+    unsigned long long g = 0;
+    unsigned long long r = 0;
 };
 
 bool
 DisplayHash::hash(struct ged *gedp, bool db_index_check, bool qged_display_mode)
 {
-    d = 0; v = 0; l = 0; g = 0;
+    d = 0;
+    v = 0;
+    l = 0;
+    g = 0;
+    r = 0;
     void *view_ctx = ged_view_active_ctx(gedp);
     if (!view_ctx)
 	return false;
@@ -191,6 +198,8 @@ DisplayHash::hash(struct ged *gedp, bool db_index_check, bool qged_display_mode)
     }
 
     g = ged_draw_scene_hash(gedp);
+    if (db_index_check && ged_view_context_refresh_dirty_get(view_ctx))
+	r = 1;
 
     return true;
 }
@@ -218,45 +227,49 @@ DisplayHash::dirty(struct ged *gedp, const DisplayHash &o)
     if (g != o.g) {
 	dm_set_native_repaint_pending(dmp, 1);
     }
+    if (r != o.r || r) {
+	dm_set_native_repaint_pending(dmp, 1);
+    }
 }
 
 /* The overall state of the gsh application is encapsulated by a state class
  * called GshState.  It defines the method for executing libged commands and
  * manages the linenoise interactive thread, as well as the necessary state
  * tracking for triggering view updating. */
-class GshState {
-    public:
-	GshState();
-	~GshState();
+class GshState
+{
+public:
+    GshState();
+    ~GshState();
 
-	// Run GED commands
-	int eval(int argc, const char **argv);
+    // Run GED commands
+    int eval(int argc, const char **argv);
 
-	// Command line interactive prompt
-	std::shared_ptr<linenoise::linenoiseState> l;
-	std::atomic<bool> linenoise_done = false;
-	std::atomic<bool> io_working = false;
-	std::mutex print_mutex;
+    // Command line interactive prompt
+    std::shared_ptr<linenoise::linenoiseState> l;
+    std::atomic<bool> linenoise_done = false;
+    std::atomic<bool> io_working = false;
+    std::mutex print_mutex;
 
-	// Create a listener for a subprocess
-	void listen(int fd, struct ged_subprocess *p, bu_process_io_t t, ged_io_func_t c, void *d);
-	void disconnect(struct ged_subprocess *p, bu_process_io_t t);
-	// Print subprocesses outputs (if any)
-	void subprocess_output();
-	size_t listeners_cnt();
+    // Create a listener for a subprocess
+    void listen(int fd, struct ged_subprocess *p, bu_process_io_t t, ged_io_func_t c, void *d);
+    void disconnect(struct ged_subprocess *p, bu_process_io_t t);
+    // Print subprocesses outputs (if any)
+    void subprocess_output();
+    size_t listeners_cnt();
 
-	// Display management
-	void view_checkpoint();
-	void view_update();
-	DisplayHash prev_hash;
+    // Display management
+    void view_checkpoint();
+    void view_update();
+    DisplayHash prev_hash;
 
-	struct ged *gedp;
-	std::string gfile;  // Mostly used to test the post_opendb callback
-	bool qged_display_mode = false;  // Set if we're testing QGED style commands
-    private:
-	// Active listeners
-	std::map<std::pair<struct ged_subprocess *, bu_process_io_t>, ProcessIOHandler *> listeners;
-	std::mutex listeners_lock;
+    struct ged *gedp;
+    std::string gfile;  // Mostly used to test the post_opendb callback
+    bool qged_display_mode = false;  // Set if we're testing QGED style commands
+private:
+    // Active listeners
+    std::map<std::pair<struct ged_subprocess *, bu_process_io_t>, ProcessIOHandler *> listeners;
+    std::mutex listeners_lock;
 
 };
 
@@ -321,7 +334,7 @@ gsh_db_search_callback(int argc, const char *argv[], void *UNUSED(u1), void *u2)
 	std::string rstr(bu_vls_cstr(gedp->ged_result_str));
 	if (rstr.length() && rstr.c_str()[rstr.length() - 1] != '\n')
 	    rstr.append("\n");
-        bu_log("%s", rstr.c_str());
+	bu_log("%s", rstr.c_str());
     }
 
     /* Restore any non-exec output */
@@ -599,6 +612,7 @@ GshState::view_update()
 	    txn.view = view_ctx;
 	    ged_draw_apply_transaction(gedp, &txn, NULL);
 	    dm_draw_end(dmp);
+	    ged_view_context_refresh_complete(view_ctx);
 	}
     }
 #endif
@@ -609,12 +623,12 @@ GshState::view_update()
 // application, since linenoise I/O is blocking.
 void
 g_cmdline(
-	std::shared_ptr<GshState> gs,
-	std::shared_ptr<linenoise::linenoiseState> l,
-	std::atomic<bool> &thread_done,
-	std::atomic<bool> &io_working,
-	std::mutex &print_mutex
-	)
+    std::shared_ptr<GshState> gs,
+    std::shared_ptr<linenoise::linenoiseState> l,
+    std::atomic<bool> &thread_done,
+    std::atomic<bool> &io_working,
+    std::mutex &print_mutex
+)
 {
     // Reusable working containers for linenoise input processing
     struct bu_vls iline = BU_VLS_INIT_ZERO;
@@ -743,7 +757,8 @@ main(int argc, const char **argv)
     bu_setprogname(argv[0]);
 
     /* Done with program name */
-    argv++; argc--;
+    argv++;
+    argc--;
 
     /* Options */
     int print_help = 0;
@@ -780,11 +795,11 @@ main(int argc, const char **argv)
     if (report_versions) {
 	struct bu_vls msg = BU_VLS_INIT_ZERO;
 	bu_vls_sprintf(&msg, "%s%s%s%s%s",
-		brlcad_ident("Geometry Shell (gsh)"),
-		bu_version(),
-		bn_version(),
-		rt_version(),
-		ged_version());
+		       brlcad_ident("Geometry Shell (gsh)"),
+		       bu_version(),
+		       bn_version(),
+		       rt_version(),
+		       ged_version());
 #ifdef USE_DM
 	bu_vls_printf(&msg, "%s", dm_version());
 #endif
@@ -812,19 +827,20 @@ main(int argc, const char **argv)
     // If we're non-interactive, just evaluate and exit without getting into
     // linenoise and threading.  First, see if we've got a viable .g file.
     if (argc && bu_file_exists(argv[0], NULL)) {
-          int ac = 2;
-          const char *av[3];
-	  av[0] = "open";
-	  av[1] = argv[0];
-	  av[2] = NULL;
-	  int ret = gs.get()->eval(ac, (const char **)av);
-	  if (ret != BRLCAD_OK)
-	      return EXIT_FAILURE;
+	int ac = 2;
+	const char *av[3];
+	av[0] = "open";
+	av[1] = argv[0];
+	av[2] = NULL;
+	int ret = gs.get()->eval(ac, (const char **)av);
+	if (ret != BRLCAD_OK)
+	    return EXIT_FAILURE;
 
-	  /* If we reach this part of the code, argv[0] is a .g file and
-	   * has been handled - skip ahead to the commands. */
-	  argv++; argc--;
-      }
+	/* If we reach this part of the code, argv[0] is a .g file and
+	 * has been handled - skip ahead to the commands. */
+	argv++;
+	argc--;
+    }
 
     /* If we have been given more than a .g filename execute the provided argv
      * commands and exit. Deliberately making this case a very simple execution
@@ -864,11 +880,11 @@ main(int argc, const char **argv)
     // us to integrate input from async commands into terminal output while
     // remaining interactive.
     std::thread g_cmdline_thread(
-	    g_cmdline, gs, gs.get()->l,
-	    std::ref(gs.get()->linenoise_done),
-	    std::ref(gs.get()->io_working),
-	    std::ref(gs.get()->print_mutex)
-	    );
+	g_cmdline, gs, gs.get()->l,
+	std::ref(gs.get()->linenoise_done),
+	std::ref(gs.get()->io_working),
+	std::ref(gs.get()->print_mutex)
+    );
 
     // Give the linenoise thread a little time to set up - it's cleaner
     // when we enter the main loop if the prompt is already set.

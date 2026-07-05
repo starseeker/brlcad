@@ -12,6 +12,7 @@ set(TEST_QTCAD_OBOL_FACEPLATE_SYNC_SRCS test_qtcad_obol_faceplate_sync.cpp)
 set(TEST_QTCAD_OBOL_MEASURE_SRCS test_qtcad_obol_measure.cpp)
 set(TEST_QTCAD_OBOL_OVERLAY_SYNC_SRCS test_qtcad_obol_overlay_sync.cpp)
 set(TEST_QTCAD_OBOL_PICK_SRCS test_qtcad_obol_pick.cpp)
+set(TEST_QTCAD_OBOL_PROGRESSIVE_LOD_SRCS test_qtcad_obol_progressive_lod.cpp)
 set(TEST_QTCAD_OBOL_REAL_MODELS_SRCS test_qtcad_obol_real_models.cpp)
 set(TEST_QTCAD_OBOL_SELECTION_SYNC_SRCS test_qtcad_obol_selection_sync.cpp)
 set(TEST_QTCAD_OBOL_SNAP_SRCS test_qtcad_obol_snap.cpp)
@@ -557,6 +558,97 @@ if(TARGET test_qtcad_obol_real_models)
   endforeach()
 endif(TARGET test_qtcad_obol_real_models)
 
+if(TARGET Qt6::Widgets)
+  add_executable(test_qtcad_obol_progressive_lod ${TEST_QTCAD_OBOL_PROGRESSIVE_LOD_SRCS})
+  target_link_libraries(
+    test_qtcad_obol_progressive_lod
+    libqtcad
+    libged
+    librt
+    libbu
+    Qt6::Widgets
+    )
+endif(TARGET Qt6::Widgets)
+if(NOT TARGET test_qtcad_obol_progressive_lod AND TARGET Qt5::Widgets)
+  add_executable(test_qtcad_obol_progressive_lod ${TEST_QTCAD_OBOL_PROGRESSIVE_LOD_SRCS})
+  target_link_libraries(
+    test_qtcad_obol_progressive_lod
+    libqtcad
+    libged
+    librt
+    libbu
+    Qt5::Widgets
+    )
+endif(NOT TARGET test_qtcad_obol_progressive_lod AND TARGET Qt5::Widgets)
+if(TARGET test_qtcad_obol_progressive_lod)
+  target_compile_definitions(test_qtcad_obol_progressive_lod PRIVATE BRLCADBUILD HAVE_CONFIG_H)
+  brlcad_add_test(
+    NAME test_qtcad_obol_progressive_lod
+    COMMAND test_qtcad_obol_progressive_lod "${CMAKE_SOURCE_DIR}/src/libged/tests/draw/moss.g")
+  set_tests_properties(test_qtcad_obol_progressive_lod PROPERTIES TIMEOUT 120)
+  set_property(TEST test_qtcad_obol_progressive_lod
+    APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+  set_property(TEST test_qtcad_obol_progressive_lod
+    APPEND PROPERTY ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+  set_property(TEST test_qtcad_obol_progressive_lod
+    APPEND PROPERTY ENVIRONMENT QTCAD_OBOL_FORCE_OSMESA=1)
+  set_property(TEST test_qtcad_obol_progressive_lod
+    APPEND PROPERTY LABELS drawing_baseline)
+  brlcad_add_test(
+    NAME test_qtcad_obol_progressive_lod_startup_refine
+    COMMAND test_qtcad_obol_progressive_lod --startup-refine "${CMAKE_SOURCE_DIR}/src/libged/tests/draw/moss.g" all.g all.bot facetize 2 2)
+  set_tests_properties(test_qtcad_obol_progressive_lod_startup_refine PROPERTIES TIMEOUT 120)
+  set_property(TEST test_qtcad_obol_progressive_lod_startup_refine
+    APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+  set_property(TEST test_qtcad_obol_progressive_lod_startup_refine
+    APPEND PROPERTY ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+  set_property(TEST test_qtcad_obol_progressive_lod_startup_refine
+    APPEND PROPERTY ENVIRONMENT QTCAD_OBOL_FORCE_OSMESA=1)
+  set_property(TEST test_qtcad_obol_progressive_lod_startup_refine
+    APPEND PROPERTY LABELS drawing_baseline)
+  brlcad_add_test(
+    NAME test_qtcad_obol_progressive_lod_generic_twin_startup
+    COMMAND test_qtcad_obol_progressive_lod --startup-only "${CMAKE_BINARY_DIR}/share/db/faa/Generic_Twin.g" - all direct 1 1)
+  set_tests_properties(test_qtcad_obol_progressive_lod_generic_twin_startup PROPERTIES TIMEOUT 45)
+  set_property(TEST test_qtcad_obol_progressive_lod_generic_twin_startup
+    APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+  set_property(TEST test_qtcad_obol_progressive_lod_generic_twin_startup
+    APPEND PROPERTY ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+  set_property(TEST test_qtcad_obol_progressive_lod_generic_twin_startup
+    APPEND PROPERTY ENVIRONMENT QTCAD_OBOL_FORCE_OSMESA=1)
+  set_property(TEST test_qtcad_obol_progressive_lod_generic_twin_startup
+    APPEND PROPERTY LABELS drawing_baseline)
+  brlcad_add_test(
+    NAME test_qtcad_obol_progressive_lod_generic_twin_startup_expand
+    COMMAND test_qtcad_obol_progressive_lod --startup-expand --startup-expand-passes 2 "${CMAKE_BINARY_DIR}/share/db/faa/Generic_Twin.g" - all direct 4 1)
+  set_tests_properties(test_qtcad_obol_progressive_lod_generic_twin_startup_expand PROPERTIES TIMEOUT 120)
+  set_property(TEST test_qtcad_obol_progressive_lod_generic_twin_startup_expand
+    APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+  set_property(TEST test_qtcad_obol_progressive_lod_generic_twin_startup_expand
+    APPEND PROPERTY ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+  set_property(TEST test_qtcad_obol_progressive_lod_generic_twin_startup_expand
+    APPEND PROPERTY ENVIRONMENT QTCAD_OBOL_FORCE_OSMESA=1)
+  set_property(TEST test_qtcad_obol_progressive_lod_generic_twin_startup_expand
+    APPEND PROPERTY LABELS drawing_baseline)
+  distclean(${CMAKE_CURRENT_BINARY_DIR}/qtcad_obol_progressive_lod_tmp.g)
+  distclean(${CMAKE_CURRENT_BINARY_DIR}/qtcad_obol_progressive_lod_cache)
+  brlcad_add_test(
+    NAME slow-test_qtcad_obol_progressive_lod_repeated_moss
+    COMMAND test_qtcad_obol_progressive_lod --slow "${CMAKE_SOURCE_DIR}/src/libged/tests/draw/moss.g" all.g all.bot facetize 24 2 4)
+  set_tests_properties(slow-test_qtcad_obol_progressive_lod_repeated_moss
+    PROPERTIES TIMEOUT 300)
+  set_property(TEST slow-test_qtcad_obol_progressive_lod_repeated_moss
+    PROPERTY SKIP_RETURN_CODE 123)
+  set_property(TEST slow-test_qtcad_obol_progressive_lod_repeated_moss
+    APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+  set_property(TEST slow-test_qtcad_obol_progressive_lod_repeated_moss
+    APPEND PROPERTY ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+  set_property(TEST slow-test_qtcad_obol_progressive_lod_repeated_moss
+    APPEND PROPERTY ENVIRONMENT QTCAD_OBOL_FORCE_OSMESA=1)
+  set_property(TEST slow-test_qtcad_obol_progressive_lod_repeated_moss
+    APPEND PROPERTY LABELS drawing_baseline)
+endif(TARGET test_qtcad_obol_progressive_lod)
+
 foreach(_qtcad_obol_swrast_test
     test_qtcad_obol_controller
     test_qtcad_obol_window_host
@@ -569,6 +661,11 @@ foreach(_qtcad_obol_swrast_test
     test_qtcad_obol_snap
     test_qtcad_obol_measure
     test_qtcad_obol_overlay_sync
+    test_qtcad_obol_progressive_lod
+    test_qtcad_obol_progressive_lod_startup_refine
+    test_qtcad_obol_progressive_lod_generic_twin_startup
+    test_qtcad_obol_progressive_lod_generic_twin_startup_expand
+    slow-test_qtcad_obol_progressive_lod_repeated_moss
     test_qtcad_obol_real_models_pinewood_wire
     test_qtcad_obol_real_models_pinewood_shaded
     test_qtcad_obol_real_models_havoc_wire
@@ -759,6 +856,7 @@ cmakefiles(
   ${TEST_QTCAD_OBOL_MEASURE_SRCS}
   ${TEST_QTCAD_OBOL_OVERLAY_SYNC_SRCS}
   ${TEST_QTCAD_OBOL_PICK_SRCS}
+  ${TEST_QTCAD_OBOL_PROGRESSIVE_LOD_SRCS}
   ${TEST_QTCAD_OBOL_REAL_MODELS_SRCS}
   ${TEST_QTCAD_OBOL_SELECTION_SYNC_SRCS}
   ${TEST_QTCAD_OBOL_SNAP_SRCS}

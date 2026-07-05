@@ -43,7 +43,8 @@ class SoBRLMeshShape;
  * active display payloads selected for that view.  Coin actions reach the
  * state through SoBRLViewLodElement rather than by mutating shared mesh nodes.
  */
-class BRLOBOL_EXPORT BRLObolViewLodState {
+class BRLOBOL_EXPORT BRLObolViewLodState
+{
 public:
     struct BRLOBOL_EXPORT MeshPayload {
 	BRLObolLodMeshPayload mesh;
@@ -69,34 +70,66 @@ public:
 	size_t estimateBytes(void) const;
 	int getTriangleCount(void) const;
 	SbBool getTriangleVertexIndices(int triangleIndex,
-		int &indexA,
-		int &indexB,
-		int &indexC) const;
+					int &indexA,
+					int &indexB,
+					int &indexC) const;
 	SbBool getTriangle(int triangleIndex,
-		SbVec3f &a,
-		SbVec3f &b,
-		SbVec3f &c) const;
+			   SbVec3f &a,
+			   SbVec3f &b,
+			   SbVec3f &c) const;
     };
     typedef std::shared_ptr<MeshPayload> MeshPayloadPtr;
+
+    struct BRLOBOL_EXPORT ProxyPayload {
+	BRLObolLodProxy proxy;
+	SbString sourcePath;
+	SbString sourceName;
+	SbString sourceIdentity;
+	SbString cacheIdentity;
+	SbString cacheKey;
+	int resultKind;
+	int qualityTier;
+	int providerStatus;
+	uint64_t viewRevision;
+	uint64_t policyRevision;
+	BRLObolLodCounts counts;
+	SbBox3f bounds;
+	SbString diagnostic;
+
+	ProxyPayload(void);
+	SbBool isValid(void) const;
+	size_t estimateBytes(void) const;
+    };
+    typedef std::shared_ptr<ProxyPayload> ProxyPayloadPtr;
 
     BRLObolViewLodState(void);
     ~BRLObolViewLodState(void);
 
     void clear(void);
     SbBool applyMeshResult(const SoBRLMeshShape *shape,
-	    const BRLObolLodResult &result);
+			   const BRLObolLodResult &result);
+    SbBool applyProxyResult(const SoBRLMeshShape *shape,
+			    const BRLObolLodResult &result);
+    SbBool applyDisplayResult(const SoBRLMeshShape *shape,
+			      const BRLObolLodResult &result);
     const MeshPayload *findMesh(const SoBRLMeshShape *shape) const;
     const MeshPayload *findMeshForResult(const BRLObolLodResult &result) const;
+    const ProxyPayload *findProxy(const SoBRLMeshShape *shape) const;
+    const ProxyPayload *findProxyForResult(const BRLObolLodResult &result) const;
     size_t bindingCount(void) const;
     size_t payloadCount(void) const;
+    size_t meshPayloadCount(void) const;
+    size_t proxyPayloadCount(int proxyKind = BRLOBOL_LOD_PROXY_NONE) const;
     size_t estimateDisplayMeshBytes(void) const;
     size_t evictDisplayMeshes(unsigned int *evictedMeshCount = NULL);
 
 private:
     std::unordered_map<std::string, MeshPayloadPtr> meshBindings;
+    std::unordered_map<std::string, ProxyPayloadPtr> proxyBindings;
 };
 
-class BRLOBOL_EXPORT SoBRLViewLodElement : public SoElement {
+class BRLOBOL_EXPORT SoBRLViewLodElement : public SoElement
+{
     typedef SoElement inherited;
 
     SO_ELEMENT_HEADER(SoBRLViewLodElement);
@@ -110,8 +143,8 @@ public:
     virtual SoElement *copyMatchInfo(void) const;
 
     static void set(SoState *state,
-	    SoNode *node,
-	    const BRLObolViewLodState *viewState);
+		    SoNode *node,
+		    const BRLObolViewLodState *viewState);
     static const BRLObolViewLodState *get(SoState *state);
 
 protected:
@@ -121,7 +154,8 @@ private:
     const BRLObolViewLodState *viewState;
 };
 
-class BRLOBOL_EXPORT SoBRLViewLodGroup : public SoGroup {
+class BRLOBOL_EXPORT SoBRLViewLodGroup : public SoGroup
+{
     typedef SoGroup inherited;
 
     SO_NODE_HEADER(SoBRLViewLodGroup);
@@ -151,6 +185,10 @@ private:
 
 BRLOBOL_EXPORT const BRLObolViewLodState::MeshPayload *
 brlobol_view_lod_mesh_for_action(SoAction *action,
-	const SoBRLMeshShape *shape);
+				 const SoBRLMeshShape *shape);
+
+BRLOBOL_EXPORT const BRLObolViewLodState::ProxyPayload *
+brlobol_view_lod_proxy_for_action(SoAction *action,
+				  const SoBRLMeshShape *shape);
 
 #endif /* BRLOBOL_VIEW_LOD_H */

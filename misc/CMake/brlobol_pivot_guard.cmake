@@ -21202,12 +21202,12 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	db_mesh_lod_refresh
 	db_mesh_lod_status
 	db_mesh_lod_store_mesh
-	rt_mesh_lod_cache_clear_all)
+	brlobol_draw_cache_clear_all)
       string(REGEX MATCH "${_token}" _ged_view_lod_token_hit
 	"${_ged_view_lod_contents}")
       if(NOT _ged_view_lod_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/view/lod.cpp must clear LoD caches through RT-owned token ${_token}")
+	  "src/libged/view/lod.cpp must clear LoD caches through the current cache-owner token ${_token}")
       endif()
     endforeach()
     string(REGEX MATCH [[bsg_mesh_lod_clear_cache]]

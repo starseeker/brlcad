@@ -77,6 +77,7 @@
 #include "bu/bitv.h"
 #include "bu/cache.h"
 #include "bu/color.h"
+#include "bu/file.h"
 #include "bu/hash.h"
 #include "bu/malloc.h"
 #include "bu/parallel.h"
@@ -103,15 +104,18 @@
 // Number of levels of detail to define
 #define POP_MAXLEVEL 16
 
-// Subdirectory in BRL-CAD cache to hold this type of LoD data
-#define POP_CACHEDIR ".POPLoD"
+// Legacy BSG mesh LoD cache storage.  Obol drawing caches live under
+// .DbDrawCache and are owned by libbrlobol; keep this retired path isolated so
+// BSG cache maintenance cannot clear active Obol drawing data.
+#define POP_CACHEDIR ".BsgMeshLodCache"
 
 // Factor by which to bump out bounds to avoid points on box edges
 #define MBUMP 1.01
 
 /* On-disk format version.  Increment whenever the binary layout of any cached
- * payload changes.  bsg_mesh_lod_context_create() reads this from
- * BU_DIR_CACHE/.POPLoD/format; a mismatch clears the entire .POPLoD tree. */
+ * mesh payload changes.  bsg_mesh_lod_context_create() reads this from the
+ * legacy BSG cache tree; a mismatch clears only that tree so stale entries
+ * don't accumulate. */
 #define CACHE_CURRENT_FORMAT 2
 
 /* There are various individual pieces of data in the cache associated with
@@ -130,6 +134,15 @@
 #define CACHE_TRI_LEVEL "t"
 
 typedef int (*full_detail_clbk_t)(struct bsg_mesh_lod *, void *);
+
+static int
+bsg_mesh_lod_cache_write_semaphore(void)
+{
+    static int sem = 0;
+    if (!sem)
+	sem = bu_semaphore_register("BSG_MESH_LOD_CACHE_WRITE");
+    return sem;
+}
 
 static void
 obj_bb(int *have_objs, vect_t *min, vect_t *max, struct bsg_node *s, struct bsg_view *v)
@@ -626,7 +639,6 @@ _obj_visible(struct bsg_node *s, struct bsg_view *v)
 
 struct bsg_mesh_lod_context_internal {
     struct bu_cache *lod_cache;
-    struct bu_cache_txn *lod_rtxn;  /* active read transaction, held across cache_get/cache_done */
 
     struct bu_cache *name_cache;
 
@@ -659,13 +671,21 @@ bsg_mesh_lod_context_create(const char *name)
     BU_GET(i->fname, struct bu_vls);
     bu_vls_init(i->fname);
     bu_vls_sprintf(i->fname, "%s", bu_vls_cstr(&fname));
-    i->lod_rtxn = NULL;
 
-    // Check the on-disk format version.  If it doesn't match CACHE_CURRENT_FORMAT,
-    // clear the entire .POPLoD tree so stale entries don't accumulate.
+    char dir[MAXPATHLEN];
+    bu_dir(dir, MAXPATHLEN, BU_DIR_CACHE, NULL);
+    if (!bu_file_exists(dir, NULL))
+	bu_mkdir(dir);
+    bu_dir(dir, MAXPATHLEN, BU_DIR_CACHE, POP_CACHEDIR, NULL);
+    if (!bu_file_exists(dir, NULL))
+	bu_mkdir(dir);
+
+    // Check the on-disk mesh format version.  If it doesn't match
+    // CACHE_CURRENT_FORMAT, clear the legacy BSG cache tree so stale entries
+    // don't accumulate.
     {
 	char format_path[MAXPATHLEN];
-	bu_dir(format_path, MAXPATHLEN, BU_DIR_CACHE, POP_CACHEDIR, "format", NULL);
+	bu_dir(format_path, MAXPATHLEN, BU_DIR_CACHE, POP_CACHEDIR, "mesh_lod.format", NULL);
 	long disk_format_version = -1;
 	{
 	    std::ifstream format_file(format_path);
@@ -675,6 +695,9 @@ bsg_mesh_lod_context_create(const char *name)
 	if (disk_format_version > 0 && disk_format_version != CACHE_CURRENT_FORMAT) {
 	    bu_log("Old mesh lod cache version (%ld) found in format file at %s - clearing\n", disk_format_version, format_path);
 	    bsg_mesh_lod_clear_cache(NULL, 0);
+	    bu_dir(dir, MAXPATHLEN, BU_DIR_CACHE, POP_CACHEDIR, NULL);
+	    if (!bu_file_exists(dir, NULL))
+		bu_mkdir(dir);
 	}
 	FILE *fp = fopen(format_path, "w");
 	if (fp) {
@@ -891,6 +914,8 @@ class POPState {
 	size_t cache_get(void **data, const char *component);
 	void cache_done();
 	void cache_del(const char *component);
+	struct bu_cache_txn *read_txn_bc_ = nullptr;
+	struct bu_cache_txn *write_txn_bc_ = nullptr;
 
 	// Specific loading and unloading methods
 	void tri_pop_load(int start_level, int level);
@@ -1493,35 +1518,33 @@ POPState::set_level(int level)
     return true;
 }
 
-// Rather than committing all data to the cache in one transaction, use keys with
-// appended strings to the hash to denote the individual pieces - basically
-// what we were doing with files, but in the db instead
-//
-// This will also allow easier removal of larger subcomponents if we need to
-// back off on saved LoD.
 bool
 POPState::cache_write(const char *component, std::stringstream &s)
 {
-    std::string keystr = std::to_string(hash) + std::string(":") + std::string(component);
     std::string buffer = s.str();
-    size_t wsize = bu_cache_write((void *)buffer.data(), buffer.length(), keystr.c_str(), c->i->lod_cache, NULL);
+    if (!buffer.length())
+	return false;
+
+    std::string keystr = std::to_string(hash) + std::string(":") + std::string(component);
+    size_t wsize = bu_cache_write((void *)buffer.data(), buffer.length(),
+	    keystr.c_str(), c->i->lod_cache, &write_txn_bc_);
     return (wsize > 0);
 }
 
-// This pulls the data, but keeps a transaction open because the
-// calling code will want to manipulate the data directly.  After that
-// process is complete, cache_done() should be called.
+// This pulls the data, but keeps a transaction open because the calling code
+// will want to manipulate the data directly.  After that process is complete,
+// cache_done() should be called.
 size_t
 POPState::cache_get(void **data, const char *component)
 {
     std::string keystr = std::to_string(hash) + std::string(":") + std::string(component);
-    return bu_cache_get(data, keystr.c_str(), c->i->lod_cache, &c->i->lod_rtxn);
+    return bu_cache_get(data, keystr.c_str(), c->i->lod_cache, &read_txn_bc_);
 }
 
 void
 POPState::cache_done()
 {
-    bu_cache_get_done(&c->i->lod_rtxn);
+    bu_cache_get_done(&read_txn_bc_);
 }
 
 bool
@@ -1667,6 +1690,9 @@ POPState::cache()
 	return;
     }
 
+    int write_sem = bsg_mesh_lod_cache_write_semaphore();
+    bu_semaphore_acquire(write_sem);
+
     // Stash the original mesh bbox and the min and max bounds, which will be used in decoding
     {
 	std::stringstream s;
@@ -1681,11 +1707,26 @@ POPState::cache()
 	is_valid = cache_write(CACHE_OBJ_BOUNDS, s);
     }
 
-    if (!is_valid)
+    if (!is_valid) {
+	bu_cache_write_abort(&write_txn_bc_);
+	bu_semaphore_release(write_sem);
 	return;
+    }
 
     // Serialize triangle-specific data
     is_valid = cache_tri();
+
+    if (write_txn_bc_) {
+	if (is_valid) {
+	    if (bu_cache_write_commit(c->i->lod_cache, &write_txn_bc_) !=
+		    BRLCAD_OK)
+		is_valid = false;
+	} else {
+	    bu_cache_write_abort(&write_txn_bc_);
+	}
+    }
+
+    bu_semaphore_release(write_sem);
 }
 
 // Transfer coordinate into level precision
@@ -2220,7 +2261,7 @@ bsg_mesh_lod_clear_cache(struct bsg_mesh_lod_context *c, unsigned long long key)
 	return;
     }
 
-    // Clear everything - nuke the whole POPLoD cache directory
+    // Clear everything - nuke the whole legacy BSG mesh LoD cache directory
     bu_dir(dir, MAXPATHLEN, BU_DIR_CACHE, POP_CACHEDIR, NULL);
     bu_dirclear((const char *)dir);
 }

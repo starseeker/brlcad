@@ -19,6 +19,7 @@
 #include "brlobol/scene_group.h"
 #include "brlobol/vlist_shape.h"
 #include "brlobol/view_controller.h"
+#include "brlobol/view_lod.h"
 #include "brlobol/view_store.h"
 #include "bg/line_layer.h"
 #include "bg/plot3.h"
@@ -425,6 +426,83 @@ source_for_path(SoBRLSceneController *controller, const char *path)
     return NULL;
 }
 
+static int
+seed_view_lod_probe_payload(BRLObolViewController *controller,
+			    const char *path,
+			    const char *name)
+{
+    if (!controller || !controller->getViewLodState() || !path || !name)
+	return 0;
+
+    SoBRLMeshShape *mesh = new SoBRLMeshShape;
+    mesh->ref();
+    mesh->sourcePath = path;
+    mesh->sourceName = name;
+
+    BRLObolLodRequest request;
+    request.databaseId = "ged-obol-sync";
+    request.sourceRevision = 1;
+    request.sourceContentHash = 1;
+    request.objectPath = path;
+    request.objectName = name;
+    request.viewRevision = 1;
+    request.policyRevision = 1;
+    request.drawMode = BRLOBOL_LOD_DRAW_WIRE;
+    request.providerId = "ged-obol-sync-probe";
+    request.providerVersion = "1";
+    request.qualityTier = BRLOBOL_LOD_QUALITY_PROXY;
+    request.bounds = SbBox3f(SbVec3f(-1.0f, -1.0f, -1.0f),
+	    SbVec3f(1.0f, 1.0f, 1.0f));
+
+    BRLObolLodCounts counts;
+    counts.faceCount = 1;
+    counts.pointCount = 2;
+    BRLObolLodResult result =
+	brlobol_lod_aabb_result(request, request.bounds, &counts);
+
+    const int seeded = controller->getViewLodState()->applyProxyResult(
+	    mesh, result) &&
+	controller->getViewLodState()->payloadCount() > 0;
+    mesh->unref();
+    return seeded;
+}
+
+static int
+apply_attached_view_lod_invalidation_probe(struct ged *gedp,
+	BRLObolViewController *controller,
+	struct ged_draw_transaction *txn,
+	const char *label)
+{
+    if (!gedp || !controller || !txn || !label)
+	return 1;
+
+    if (!seed_view_lod_probe_payload(controller, "box.s", "box.s")) {
+	fprintf(stderr,
+		"FAIL: attached Obol view-controller LoD invalidation probe should seed %s payload\n",
+		label);
+	return 1;
+    }
+
+    struct ged_draw_transaction_result result;
+    ged_draw_transaction_result_init(&result);
+    int ret = ged_draw_apply_transaction(gedp, txn, &result);
+    ged_draw_transaction_result_free(&result);
+    if (ret <= 0) {
+	fprintf(stderr,
+		"FAIL: attached Obol %s transaction should succeed\n",
+		label);
+	return 1;
+    }
+    if (controller->getViewLodState()->payloadCount() != 0) {
+	fprintf(stderr,
+		"FAIL: attached Obol %s transaction should clear view-local LoD state\n",
+		label);
+	return 1;
+    }
+
+    return 0;
+}
+
 static std::string
 source_instance_key_for_view(const char *view_name, const char *path)
 {
@@ -531,8 +609,9 @@ verify_mode_source(SoBRLSceneController *controller,
 	FAIL("mode-specific source should preserve exact representation mode");
     if ((summary.visible ? 1 : 0) != expect_visible)
 	FAIL("mode-specific source visibility should match expected state");
-    if ((summary.stale ? 1 : 0) != expect_stale)
+    if ((summary.stale ? 1 : 0) != expect_stale) {
 	FAIL("mode-specific source stale state should match expected state");
+    }
     if (!expect_stale &&
 	    summary.realizationStatus != SoBRLDatabaseSource::REALIZED)
 	FAIL("mode-specific source should be realized when expected current");
@@ -2530,6 +2609,8 @@ main(int argc, char **argv)
 	    mesh_shape->point.getNum() == 0 ||
 	    mesh_shape->coordIndex.getNum() == 0)
 	FAIL("GED BoT mesh LoD update should publish owned Obol mesh fields");
+    if (!mesh_shape->isLodBackedMesh())
+	FAIL("GED BoT mesh LoD update should realize a LoD-backed Obol mesh");
     if (!mesh_source->getMeshLod())
 	FAIL("GED Obol mesh LoD draw should store the runtime handle on the owned source");
     if (!mesh_source->getMeshLodBounds(mesh_lod_bmin, mesh_lod_bmax))
@@ -5045,6 +5126,176 @@ main(int argc, char **argv)
 	    !source_for_path(view_scene, "ball.s"))
 	FAIL("view-wrapper reattach full sync should rebuild current GED draw state");
 
+    if (!seed_view_lod_probe_payload(&view_controller, "box.s", "box.s"))
+	FAIL("attached Obol view-controller LoD invalidation probe should seed draw payload");
+    const char *attached_draw_draft[2] = {"draw", "draft_move.s"};
+    if (ged_exec_draw(gedp, 2, attached_draw_draft) != BRLCAD_OK ||
+	    view_controller.getViewLodState()->payloadCount() != 0)
+	FAIL("attached Obol draw transaction should clear view-local LoD state");
+    if (view_scene->getDatabaseSourceCount() != 3 ||
+	    !source_for_path(view_scene, "draft_move.s"))
+	FAIL("attached Obol draw transaction should still sync the drawn source");
+
+    if (!seed_view_lod_probe_payload(&view_controller, "box.s", "box.s"))
+	FAIL("attached Obol view-controller LoD invalidation probe should seed erase payload");
+    const char *attached_erase_draft[2] = {"erase", "draft_move.s"};
+    if (ged_exec_erase(gedp, 2, attached_erase_draft) != BRLCAD_OK ||
+	    view_controller.getViewLodState()->payloadCount() != 0)
+	FAIL("attached Obol erase transaction should clear view-local LoD state");
+    if (view_scene->getDatabaseSourceCount() != 2 ||
+	    source_for_path(view_scene, "draft_move.s"))
+	FAIL("attached Obol erase transaction should remove the erased source");
+
+    if (!seed_view_lod_probe_payload(&view_controller, "box.s", "box.s"))
+	FAIL("attached Obol view-controller LoD invalidation probe should seed source-update payload");
+    struct ged_draw_transaction attached_source_update =
+	ged_draw_transaction_make(GED_DRAW_TXN_SOURCE_UPDATED, "box.s");
+    attached_source_update.redraw = 0;
+    struct ged_draw_transaction_result attached_source_result;
+    ged_draw_transaction_result_init(&attached_source_result);
+    if (ged_draw_apply_transaction(gedp, &attached_source_update,
+	    &attached_source_result) <= 0 ||
+	    view_controller.getViewLodState()->payloadCount() != 0) {
+	ged_draw_transaction_result_free(&attached_source_result);
+	FAIL("attached Obol source-update transaction should clear view-local LoD state");
+    }
+    ged_draw_transaction_result_free(&attached_source_result);
+    const char *attached_redraw_box[2] = {"draw", "box.s"};
+    if (ged_exec_draw(gedp, 2, attached_redraw_box) != BRLCAD_OK ||
+	    view_scene->getDatabaseSourceCount() != 2 ||
+	    !source_for_path(view_scene, "box.s"))
+	FAIL("attached Obol source-update refresh should restore box source");
+
+    if (!seed_view_lod_probe_payload(&view_controller, "box.s", "box.s"))
+	FAIL("attached Obol view-controller LoD invalidation probe should seed clear payload");
+    struct ged_draw_transaction attached_clear =
+	ged_draw_transaction_make(GED_DRAW_TXN_CLEAR, NULL);
+    struct ged_draw_transaction_result attached_clear_result;
+    ged_draw_transaction_result_init(&attached_clear_result);
+    if (ged_draw_apply_transaction(gedp, &attached_clear,
+	    &attached_clear_result) <= 0) {
+	ged_draw_transaction_result_free(&attached_clear_result);
+	FAIL("attached Obol clear transaction should succeed");
+    }
+    ged_draw_transaction_result_free(&attached_clear_result);
+    if (view_controller.getViewLodState()->payloadCount() != 0 ||
+	    view_scene->getDatabaseSourceCount() != 0)
+	FAIL("attached Obol clear transaction should clear view-local LoD state and scene sources");
+    if (ged_exec_draw(gedp, 2, draw_box) != BRLCAD_OK ||
+	    ged_exec_draw(gedp, 2, draw_ball) != BRLCAD_OK ||
+	    view_scene->getDatabaseSourceCount() != 2 ||
+	    !source_for_path(view_scene, "box.s") ||
+	    !source_for_path(view_scene, "ball.s"))
+	FAIL("attached Obol clear transaction redraw should restore current GED draw state");
+
+    struct ged_draw_transaction attached_stale_source =
+	ged_draw_transaction_make(GED_DRAW_TXN_STALE_SOURCE, "box.s");
+    attached_stale_source.stale_reason = GED_DRAW_STALE_SETTINGS_CHANGED;
+    if (apply_attached_view_lod_invalidation_probe(gedp, &view_controller,
+	    &attached_stale_source, "stale-source"))
+	return 1;
+    if (view_scene->getDatabaseSourceCount() != 2 ||
+	    !source_for_path(view_scene, "box.s") ||
+	    !source_for_path(view_scene, "ball.s"))
+	FAIL("attached Obol stale-source transaction should preserve scene sources");
+
+    if (ged_exec_draw(gedp, 2, attached_draw_draft) != BRLCAD_OK ||
+	    view_scene->getDatabaseSourceCount() != 3 ||
+	    !source_for_path(view_scene, "draft_move.s"))
+	FAIL("attached Obol erase-prefix setup should draw draft source");
+    struct ged_draw_transaction attached_erase_prefix =
+	ged_draw_transaction_make(GED_DRAW_TXN_ERASE_PREFIX,
+		"draft_move.s");
+    if (apply_attached_view_lod_invalidation_probe(gedp, &view_controller,
+	    &attached_erase_prefix, "erase-prefix"))
+	return 1;
+    if (view_scene->getDatabaseSourceCount() != 2 ||
+	    source_for_path(view_scene, "draft_move.s"))
+	FAIL("attached Obol erase-prefix transaction should remove matching source");
+
+    const char *attached_draw_nested_leaf[2] = {
+	"draw", "nested_parent.c/nested_child.c/nested_leaf.s"
+    };
+    if (ged_exec_draw(gedp, 2, attached_draw_nested_leaf) != BRLCAD_OK ||
+	    view_scene->getDatabaseSourceCount() != 3 ||
+	    !source_for_path(view_scene,
+		"nested_parent.c/nested_child.c/nested_leaf.s"))
+	FAIL("attached Obol reference-removal setup should draw nested source");
+    struct ged_draw_transaction attached_reference_removal =
+	ged_draw_transaction_make(GED_DRAW_TXN_SOURCE_REFERENCES_REMOVED,
+		"nested_leaf.s");
+    if (apply_attached_view_lod_invalidation_probe(gedp, &view_controller,
+	    &attached_reference_removal, "source-reference removal"))
+	return 1;
+    if (view_scene->getDatabaseSourceCount() != 2 ||
+	    source_for_path(view_scene,
+		"nested_parent.c/nested_child.c/nested_leaf.s"))
+	FAIL("attached Obol source-reference removal should remove matching nested source");
+
+    const char *attached_draw_renamed_source[2] = {
+	"draw", "renamed_source.s"
+    };
+    if (ged_exec_draw(gedp, 2, attached_draw_renamed_source) != BRLCAD_OK ||
+	    view_scene->getDatabaseSourceCount() != 3 ||
+	    !source_for_path(view_scene, "renamed_source.s"))
+	FAIL("attached Obol rename setup should draw renamed source");
+    if (!seed_view_lod_probe_payload(&view_controller, "box.s", "box.s"))
+	FAIL("attached Obol view-controller LoD invalidation probe should seed source-rename payload");
+    const char *attached_move_source[3] = {
+	"move", "renamed_source.s", "__obol_attached_renamed_source.s"
+    };
+    if (ged_exec(gedp, 3, attached_move_source) != BRLCAD_OK ||
+	    view_controller.getViewLodState()->payloadCount() != 0)
+	FAIL("attached Obol source-rename command should clear view-local LoD state");
+    if (view_scene->getDatabaseSourceCount() != 3 ||
+	    source_for_path(view_scene, "renamed_source.s") ||
+	    !source_for_path(view_scene, "__obol_attached_renamed_source.s"))
+	FAIL("attached Obol source-rename command should rename source in place");
+    const char *attached_move_source_back[3] = {
+	"move", "__obol_attached_renamed_source.s", "renamed_source.s"
+    };
+    if (ged_exec(gedp, 3, attached_move_source_back) != BRLCAD_OK ||
+	    view_scene->getDatabaseSourceCount() != 3 ||
+	    !source_for_path(view_scene, "renamed_source.s") ||
+	    source_for_path(view_scene, "__obol_attached_renamed_source.s"))
+	FAIL("attached Obol source-rename restore should return to database source name");
+    const char *attached_erase_renamed_source[2] = {
+	"erase", "renamed_source.s"
+    };
+    if (ged_exec_erase(gedp, 2, attached_erase_renamed_source) != BRLCAD_OK ||
+	    view_scene->getDatabaseSourceCount() != 2 ||
+	    source_for_path(view_scene, "renamed_source.s"))
+	FAIL("attached Obol source-rename cleanup should restore baseline sources");
+
+    struct ged_draw_transaction attached_clear_scope =
+	ged_draw_transaction_make(GED_DRAW_TXN_CLEAR_SCOPE, NULL);
+    attached_clear_scope.view = ged_draw_active_view_ctx(gedp);
+    if (apply_attached_view_lod_invalidation_probe(gedp, &view_controller,
+	    &attached_clear_scope, "clear-scope"))
+	return 1;
+    if (view_scene->getDatabaseSourceCount() != 0)
+	FAIL("attached Obol clear-scope transaction should clear scoped scene sources");
+    if (ged_exec_draw(gedp, 2, draw_box) != BRLCAD_OK ||
+	    ged_exec_draw(gedp, 2, draw_ball) != BRLCAD_OK ||
+	    view_scene->getDatabaseSourceCount() != 2 ||
+	    !source_for_path(view_scene, "box.s") ||
+	    !source_for_path(view_scene, "ball.s"))
+	FAIL("attached Obol clear-scope transaction redraw should restore baseline sources");
+
+    struct ged_draw_transaction attached_teardown =
+	ged_draw_transaction_make(GED_DRAW_TXN_TEARDOWN, NULL);
+    if (apply_attached_view_lod_invalidation_probe(gedp, &view_controller,
+	    &attached_teardown, "teardown"))
+	return 1;
+    if (view_scene->getDatabaseSourceCount() != 0)
+	FAIL("attached Obol teardown transaction should clear scene sources");
+    if (ged_exec_draw(gedp, 2, draw_box) != BRLCAD_OK ||
+	    ged_exec_draw(gedp, 2, draw_ball) != BRLCAD_OK ||
+	    view_scene->getDatabaseSourceCount() != 2 ||
+	    !source_for_path(view_scene, "box.s") ||
+	    !source_for_path(view_scene, "ball.s"))
+	FAIL("attached Obol teardown transaction redraw should restore baseline sources");
+
     void *independent_view = rt_view_context_create();
     if (!independent_view)
 	FAIL("Obol independent view source-owner test view should be created");
@@ -5123,13 +5374,14 @@ main(int argc, char **argv)
 
     point_t zap_polygon_origin = {0.0, 0.0, 0.0};
     void *zap_view_ctx = ged_view_active_ctx(gedp);
-    if (ged_draw_view_polygon_ref_is_null(
-		ged_draw_view_context_polygon_create(zap_view_ctx,
-		    "zap::polygon", 0, GED_DRAW_VIEW_POLYGON_SQUARE,
-		    zap_polygon_origin)) ||
-	    ged_draw_view_polygon_ref_is_null(
-		ged_draw_view_context_polygon_find(zap_view_ctx,
-		    "zap::polygon")))
+    ged_draw_view_polygon_ref zap_created =
+	ged_draw_view_context_polygon_create(zap_view_ctx,
+		"zap::polygon", 0, GED_DRAW_VIEW_POLYGON_SQUARE,
+		zap_polygon_origin);
+    ged_draw_view_polygon_ref zap_found =
+	ged_draw_view_context_polygon_find(zap_view_ctx, "zap::polygon");
+    if (ged_draw_view_polygon_ref_is_null(zap_created) ||
+	    ged_draw_view_polygon_ref_is_null(zap_found))
 	FAIL("Obol polygon store should publish a test polygon before zap");
 
     const char *zap_cmd[1] = {"zap"};

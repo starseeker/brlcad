@@ -741,7 +741,7 @@ struct ged_draw_source_state {
     struct db_full_path *fp;
     const struct bn_tol *tol;
     const struct bg_tess_tol *ttol;
-    struct rt_mesh_lod *rt_mesh_lod;
+    struct BRLObolMeshLod *mesh_lod;
     point_t mesh_lod_bmin;
     point_t mesh_lod_bmax;
     int mesh_lod_bounds_valid;
@@ -808,7 +808,7 @@ struct ged_draw_source_runtime_summary {
     const char *name;
     const struct bn_tol *tol;
     const struct bg_tess_tol *ttol;
-    struct rt_mesh_lod *rt_mesh_lod;
+    struct BRLObolMeshLod *mesh_lod;
     int mesh_lod_bounds_valid;
     point_t mesh_lod_bmin;
     point_t mesh_lod_bmax;
@@ -7765,7 +7765,7 @@ ged_draw_scene_ref_obol_database_source_runtime(
 
 
 struct ged_draw_scene_ref_obol_mesh_lod_set {
-    struct rt_mesh_lod *lod;
+    struct BRLObolMeshLod *lod;
 };
 
 
@@ -7786,7 +7786,7 @@ ged_draw_scene_ref_obol_mesh_lod_set_cb(
 static int
 ged_draw_scene_ref_obol_mesh_lod_set(
 	bsg_scene_ref ref,
-	struct rt_mesh_lod *lod)
+	struct BRLObolMeshLod *lod)
 {
     struct ged_draw_scene_ref_obol_mesh_lod_set update;
     update.lod = lod;
@@ -8078,9 +8078,9 @@ ged_draw_source_data_free(void *data)
 	bu_free(d->fp, "ged draw source full path");
 	d->fp = NULL;
     }
-    if (d->rt_mesh_lod) {
-	rt_mesh_lod_destroy(d->rt_mesh_lod);
-	d->rt_mesh_lod = NULL;
+    if (d->mesh_lod) {
+	brlobol_mesh_lod_destroy(d->mesh_lod);
+	d->mesh_lod = NULL;
     }
     BU_PUT(d, struct ged_draw_source_state);
 }
@@ -14219,12 +14219,12 @@ ged_draw_scene_ref_source_runtime_summary(
 	out->tol = snapshot.tol;
 	out->ttol = snapshot.ttol;
 	if (obol_runtime_valid) {
-	    out->rt_mesh_lod = obol_runtime.rt_mesh_lod;
+	    out->mesh_lod = obol_runtime.mesh_lod;
 	    out->mesh_lod_bounds_valid = obol_runtime.mesh_lod_bounds_valid;
 	    VMOVE(out->mesh_lod_bmin, obol_runtime.mesh_lod_bmin);
 	    VMOVE(out->mesh_lod_bmax, obol_runtime.mesh_lod_bmax);
 	} else if (source) {
-	    out->rt_mesh_lod = source->rt_mesh_lod;
+	    out->mesh_lod = source->mesh_lod;
 	    out->mesh_lod_bounds_valid = source->mesh_lod_bounds_valid;
 	    VMOVE(out->mesh_lod_bmin, source->mesh_lod_bmin);
 	    VMOVE(out->mesh_lod_bmax, source->mesh_lod_bmax);
@@ -14242,12 +14242,12 @@ ged_draw_scene_ref_source_runtime_summary(
     out->tol = source->tol;
     out->ttol = source->ttol;
     if (obol_runtime_valid) {
-	out->rt_mesh_lod = obol_runtime.rt_mesh_lod;
+	out->mesh_lod = obol_runtime.mesh_lod;
 	out->mesh_lod_bounds_valid = obol_runtime.mesh_lod_bounds_valid;
 	VMOVE(out->mesh_lod_bmin, obol_runtime.mesh_lod_bmin);
 	VMOVE(out->mesh_lod_bmax, obol_runtime.mesh_lod_bmax);
     } else {
-	out->rt_mesh_lod = source->rt_mesh_lod;
+	out->mesh_lod = source->mesh_lod;
 	out->mesh_lod_bounds_valid = source->mesh_lod_bounds_valid;
 	VMOVE(out->mesh_lod_bmin, source->mesh_lod_bmin);
 	VMOVE(out->mesh_lod_bmax, source->mesh_lod_bmax);
@@ -14259,7 +14259,7 @@ ged_draw_scene_ref_source_runtime_summary(
 static int
 ged_draw_scene_ref_source_mesh_lod_set(
 	bsg_scene_ref ref,
-	struct rt_mesh_lod *lod)
+	struct BRLObolMeshLod *lod)
 {
     if (ged_draw_scene_ref_obol_mesh_lod_set(ref, lod))
 	return 1;
@@ -14270,7 +14270,7 @@ ged_draw_scene_ref_source_mesh_lod_set(
     if (!source)
 	return 0;
 
-    source->rt_mesh_lod = lod;
+    source->mesh_lod = lod;
     if (shape_data && shape_data->gedp && shape_data->gedp->i &&
 	    shape_data->gedp->i->ged_gdp)
 	shape_data->gedp->i->ged_gdp->gd_draw_retained_mesh_lod_runtime_updates++;
@@ -14367,20 +14367,20 @@ ged_draw_scene_ref_source_mesh_lod_load_view(
     memset(&source, 0, sizeof(source));
     if (ged_draw_scene_ref_is_null(ref) ||
 	    !ged_draw_scene_ref_source_runtime_summary(ref, &source) ||
-	    !source.rt_mesh_lod || !view_ctx)
+	    !source.mesh_lod || !view_ctx)
 	return -1;
 
     struct ged_draw_obol_database_source_runtime obol_runtime;
     memset(&obol_runtime, 0, sizeof(obol_runtime));
     if (ged_draw_scene_ref_obol_database_source_runtime(ref,
 		&obol_runtime) &&
-	    obol_runtime.rt_mesh_lod == source.rt_mesh_lod) {
+	    obol_runtime.mesh_lod == source.mesh_lod) {
 	struct rt_view_info view_info = RT_VIEW_INFO_INIT;
 	ged_draw_view_context_info_get(&view_info, view_ctx);
-	return rt_mesh_lod_load_view(source.rt_mesh_lod, &view_info, 0);
+	return brlobol_mesh_lod_load_view(source.mesh_lod, &view_info, 0);
     }
 
-    return rt_mesh_lod_load_view_scene_ref(source.rt_mesh_lod,
+    return brlobol_mesh_lod_load_view_scene_ref(source.mesh_lod,
 	    ged_draw_scene_ref_to_rt_view_ref(ref), view_ctx, 0);
 }
 
@@ -14402,41 +14402,41 @@ ged_draw_scene_ref_source_bot_mesh_lod_realize(
     ged_draw_log(1, "bot_lod_mesh_realize %s[%s]", source.name,
 	    _ged_draw_source_view_context_name(view_ctx));
 
-    if (!source.rt_mesh_lod) {
+    if (!source.mesh_lod) {
 	struct db_i *dbip = source.dbip;
 	struct directory *dp = source.leaf_dp;
 
 	if (!dbip || !dp)
 	    return 0;
 
-	struct rt_mesh_lod_cache_status status = RT_MESH_LOD_CACHE_STATUS_INIT;
-	if (db_mesh_lod_status(dbip, dp->d_namep, &status) != BRLCAD_OK)
+	struct BRLObolMeshLodCacheStatus status = BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
+	if (brlobol_mesh_lod_cache_status(dbip, dp->d_namep, &status) != BRLCAD_OK)
 	    return 0;
 	if (!status.has_cache_key || !status.has_cached_payload || status.stale_cache_entry) {
-	    if (db_mesh_lod_refresh(dbip, dp->d_namep, &status) != BRLCAD_OK)
+	    if (brlobol_mesh_lod_cache_refresh(dbip, dp->d_namep, &status) != BRLCAD_OK)
 		return 0;
 	}
 	if (!status.has_cache_key || !status.has_cached_payload)
 	    return 0;
 
-	struct rt_mesh_lod *rt_lod = db_mesh_lod_get(dbip, dp->d_namep);
-	if (!rt_lod) {
-	    if (db_mesh_lod_refresh(dbip, dp->d_namep, &status) != BRLCAD_OK ||
+	struct BRLObolMeshLod *mesh_lod = brlobol_mesh_lod_get(dbip, dp->d_namep);
+	if (!mesh_lod) {
+	    if (brlobol_mesh_lod_cache_refresh(dbip, dp->d_namep, &status) != BRLCAD_OK ||
 		    !status.has_cache_key || !status.has_cached_payload)
 		return 0;
-	    rt_lod = db_mesh_lod_get(dbip, dp->d_namep);
+	    mesh_lod = brlobol_mesh_lod_get(dbip, dp->d_namep);
 	}
-	if (!rt_lod)
+	if (!mesh_lod)
 	    return 0;
 
-	ged_draw_scene_ref_source_mesh_lod_set(ref, rt_lod);
+	ged_draw_scene_ref_source_mesh_lod_set(ref, mesh_lod);
 
 	int level = ged_draw_scene_ref_source_mesh_lod_load_view(ref, view_ctx);
 	if (level < 0)
 	    bu_log("Error loading info for initial LoD view\n");
 
-	struct rt_mesh_lod_info info = RT_MESH_LOD_INFO_INIT;
-	if (rt_mesh_lod_info_get(rt_lod, &info))
+	struct BRLObolMeshLodInfo info = BRLOBOL_MESH_LOD_INFO_INIT;
+	if (brlobol_mesh_lod_info_get(mesh_lod, &info))
 	    ged_draw_scene_ref_source_mesh_lod_bounds_set(ref, info.bmin,
 		    info.bmax);
 
@@ -14469,7 +14469,7 @@ ged_draw_scene_ref_source_brep_mesh_lod_realize(
     ged_draw_log(1, "brep_lod_mesh_realize %s[%s]", source.name,
 	    _ged_draw_source_view_context_name(view_ctx));
 
-    if (!source.rt_mesh_lod) {
+    if (!source.mesh_lod) {
 	struct db_i *dbip = source.dbip;
 	struct directory *dp = source.leaf_dp;
 
@@ -14478,22 +14478,22 @@ ged_draw_scene_ref_source_brep_mesh_lod_realize(
 
 	const struct bn_tol *tol = source.tol;
 	const struct bg_tess_tol *ttol = source.ttol;
-	struct rt_mesh_lod *rt_lod = NULL;
+	struct BRLObolMeshLod *mesh_lod = NULL;
 	point_t bmin, bmax;
 	int bounds_valid = 0;
-	if (!ged_draw_brep_mesh_lod_cache_prepare(&rt_lod, bmin, bmax,
+	if (!ged_draw_brep_mesh_lod_cache_prepare(&mesh_lod, bmin, bmax,
 		&bounds_valid, dbip, dp, ttol, tol))
 	    return 0;
-	if (!rt_lod)
+	if (!mesh_lod)
 	    return 0;
 
-	ged_draw_scene_ref_source_mesh_lod_set(ref, rt_lod);
+	ged_draw_scene_ref_source_mesh_lod_set(ref, mesh_lod);
 	if (bounds_valid)
 	    ged_draw_scene_ref_source_mesh_lod_bounds_set(ref, bmin, bmax);
 
 	(void)ged_draw_scene_ref_source_mesh_lod_bounds_restore(ref);
 
-	if (!ged_draw_brep_mesh_lod_detail_setup(rt_lod, dbip, dp, ttol, tol))
+	if (!ged_draw_brep_mesh_lod_detail_setup(mesh_lod, dbip, dp, ttol, tol))
 	    return 0;
 
 	int level = ged_draw_scene_ref_source_mesh_lod_load_view(ref, view_ctx);
@@ -15392,12 +15392,12 @@ typedef int (*ged_draw_mesh_lod_publish_cb)(
 
 static int
 ged_draw_mesh_lod_publish_current(
-	struct rt_mesh_lod *lod,
+	struct BRLObolMeshLod *lod,
 	ged_draw_mesh_lod_publish_cb cb,
 	void *cb_data)
 {
-    struct rt_mesh_lod_data lod_data;
-    if (!lod || !cb || !rt_mesh_lod_data_get(lod, &lod_data))
+    struct BRLObolMeshLodData lod_data;
+    if (!lod || !cb || !brlobol_mesh_lod_data_get(lod, &lod_data))
 	return 0;
 
     const int *faces = lod_data.faces;
@@ -15505,7 +15505,7 @@ ged_draw_scene_ref_publish_current_mesh_lod(bsg_scene_ref ref)
 
     struct ged_draw_mesh_lod_scene_publish ctx;
     ctx.ref = ref;
-    int ret = ged_draw_mesh_lod_publish_current(source.rt_mesh_lod,
+    int ret = ged_draw_mesh_lod_publish_current(source.mesh_lod,
 	    ged_draw_mesh_lod_scene_publish_cb, &ctx);
     if (ret) {
 	(void)ged_draw_scene_ref_source_mesh_lod_bounds_restore(ref);
@@ -15534,7 +15534,7 @@ ged_draw_mesh_lod_obol_publish_cb(
     struct ged_draw_mesh_lod_obol_publish *ctx =
 	(struct ged_draw_mesh_lod_obol_publish *)data;
     return ctx && ctx->gedp && ctx->path ?
-	ged_draw_obol_database_source_publish_indexed_face_set_for_path(
+	ged_draw_obol_database_source_publish_lod_indexed_face_set_for_path(
 		ctx->gedp, ctx->path, points, point_count, normals,
 		normal_count, indices, index_count) : 0;
 }
@@ -15544,7 +15544,7 @@ static int
 ged_draw_obol_database_source_publish_current_mesh_lod(
 	struct ged *gedp,
 	const char *path,
-	struct rt_mesh_lod *lod)
+	struct BRLObolMeshLod *lod)
 {
     struct ged_draw_mesh_lod_obol_publish ctx;
     ctx.gedp = gedp;
@@ -15625,49 +15625,49 @@ ged_draw_obol_database_source_bot_mesh_lod_realize(
 	    &runtime) || !runtime.valid)
 	return 0;
 
-    struct rt_mesh_lod *rt_lod = runtime.rt_mesh_lod;
-    if (!rt_lod) {
-	struct rt_mesh_lod_cache_status status = RT_MESH_LOD_CACHE_STATUS_INIT;
-	if (db_mesh_lod_status(dbip, dp->d_namep, &status) != BRLCAD_OK)
+    struct BRLObolMeshLod *mesh_lod = runtime.mesh_lod;
+    if (!mesh_lod) {
+	struct BRLObolMeshLodCacheStatus status = BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
+	if (brlobol_mesh_lod_cache_status(dbip, dp->d_namep, &status) != BRLCAD_OK)
 	    return 0;
 	if (!status.has_cache_key || !status.has_cached_payload ||
 		status.stale_cache_entry) {
-	    if (db_mesh_lod_refresh(dbip, dp->d_namep, &status) != BRLCAD_OK)
+	    if (brlobol_mesh_lod_cache_refresh(dbip, dp->d_namep, &status) != BRLCAD_OK)
 		return 0;
 	}
 	if (!status.has_cache_key || !status.has_cached_payload)
 	    return 0;
 
-	rt_lod = db_mesh_lod_get(dbip, dp->d_namep);
-	if (!rt_lod) {
-	    if (db_mesh_lod_refresh(dbip, dp->d_namep, &status) != BRLCAD_OK ||
+	mesh_lod = brlobol_mesh_lod_get(dbip, dp->d_namep);
+	if (!mesh_lod) {
+	    if (brlobol_mesh_lod_cache_refresh(dbip, dp->d_namep, &status) != BRLCAD_OK ||
 		    !status.has_cache_key || !status.has_cached_payload)
 		return 0;
-	    rt_lod = db_mesh_lod_get(dbip, dp->d_namep);
+	    mesh_lod = brlobol_mesh_lod_get(dbip, dp->d_namep);
 	}
-	if (!rt_lod)
+	if (!mesh_lod)
 	    return 0;
 
 	if (!ged_draw_obol_database_source_set_mesh_lod_for_path(gedp, path,
-		rt_lod)) {
-	    rt_mesh_lod_destroy(rt_lod);
+		mesh_lod)) {
+	    brlobol_mesh_lod_destroy(mesh_lod);
 	    return 0;
 	}
     }
 
     struct rt_view_info view_info = RT_VIEW_INFO_INIT;
     ged_draw_view_context_info_get(&view_info, view_ctx);
-    int level = rt_mesh_lod_load_view(rt_lod, &view_info, 0);
+    int level = brlobol_mesh_lod_load_view(mesh_lod, &view_info, 0);
     if (level < 0)
 	bu_log("Error loading info for initial Obol LoD view\n");
 
-    struct rt_mesh_lod_info info = RT_MESH_LOD_INFO_INIT;
-    if (rt_mesh_lod_info_get(rt_lod, &info))
+    struct BRLObolMeshLodInfo info = BRLOBOL_MESH_LOD_INFO_INIT;
+    if (brlobol_mesh_lod_info_get(mesh_lod, &info))
 	(void)ged_draw_obol_database_source_set_mesh_lod_bounds_for_path(gedp,
 		path, info.bmin, info.bmax);
 
     int published = ged_draw_obol_database_source_publish_current_mesh_lod(
-	    gedp, path, rt_lod);
+	    gedp, path, mesh_lod);
     if (published) {
 	struct ged_draw_obol_database_source_record record;
 	memset(&record, 0, sizeof(record));
@@ -15701,25 +15701,25 @@ ged_draw_obol_database_source_brep_mesh_lod_realize(
 	    &runtime) || !runtime.valid)
 	return 0;
 
-    struct rt_mesh_lod *rt_lod = runtime.rt_mesh_lod;
-    if (!rt_lod) {
+    struct BRLObolMeshLod *mesh_lod = runtime.mesh_lod;
+    if (!mesh_lod) {
 	point_t bmin, bmax;
 	int bounds_valid = 0;
-	if (!ged_draw_brep_mesh_lod_cache_prepare(&rt_lod, bmin, bmax,
+	if (!ged_draw_brep_mesh_lod_cache_prepare(&mesh_lod, bmin, bmax,
 		&bounds_valid, dbip, dp, ttol, tol))
 	    return 0;
-	if (!rt_lod)
+	if (!mesh_lod)
 	    return 0;
 
-	if (!ged_draw_brep_mesh_lod_detail_setup(rt_lod, dbip, dp, ttol,
+	if (!ged_draw_brep_mesh_lod_detail_setup(mesh_lod, dbip, dp, ttol,
 		tol)) {
-	    rt_mesh_lod_destroy(rt_lod);
+	    brlobol_mesh_lod_destroy(mesh_lod);
 	    return 0;
 	}
 
 	if (!ged_draw_obol_database_source_set_mesh_lod_for_path(gedp, path,
-		rt_lod)) {
-	    rt_mesh_lod_destroy(rt_lod);
+		mesh_lod)) {
+	    brlobol_mesh_lod_destroy(mesh_lod);
 	    return 0;
 	}
 
@@ -15730,17 +15730,17 @@ ged_draw_obol_database_source_brep_mesh_lod_realize(
 
     struct rt_view_info view_info = RT_VIEW_INFO_INIT;
     ged_draw_view_context_info_get(&view_info, view_ctx);
-    int level = rt_mesh_lod_load_view(rt_lod, &view_info, 0);
+    int level = brlobol_mesh_lod_load_view(mesh_lod, &view_info, 0);
     if (level < 0)
 	bu_log("Error loading info for initial Obol BREP LoD view\n");
 
-    struct rt_mesh_lod_info info = RT_MESH_LOD_INFO_INIT;
-    if (rt_mesh_lod_info_get(rt_lod, &info))
+    struct BRLObolMeshLodInfo info = BRLOBOL_MESH_LOD_INFO_INIT;
+    if (brlobol_mesh_lod_info_get(mesh_lod, &info))
 	(void)ged_draw_obol_database_source_set_mesh_lod_bounds_for_path(gedp,
 		path, info.bmin, info.bmax);
 
     int published = ged_draw_obol_database_source_publish_current_mesh_lod(
-	    gedp, path, rt_lod);
+	    gedp, path, mesh_lod);
     if (published) {
 	struct ged_draw_obol_database_source_record record;
 	memset(&record, 0, sizeof(record));

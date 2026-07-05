@@ -249,7 +249,7 @@ db_open(const char *name, const char *mode)
 #endif
 
     bu_ptbl_init(&dbip->i->dbi_clients, 128, "dbi_clients[]");
-    bu_ptbl_init(&dbip->i->dbi_changed_clbks , 8, "dbi_changed_clbks]");
+    bu_ptbl_init(&dbip->i->dbi_changed_clbks, 8, "dbi_changed_clbks]");
     bu_ptbl_init(&dbip->i->dbi_update_nref_clbks, 8, "dbi_update_nref_clbks");
 
     dbip->dbi_magic = DBI_MAGIC;		/* Now it's valid */
@@ -373,7 +373,7 @@ db_close(register struct db_i *dbip)
 
     RT_CK_DBI(dbip);
     if (RT_G_DEBUG&RT_DEBUG_DB) bu_log("db_close(%s) %p uses=%d\n",
-				    dbip->dbi_filename, (void *)dbip, dbip->i->dbi_uses);
+					   dbip->dbi_filename, (void *)dbip, dbip->i->dbi_uses);
 
     bu_semaphore_acquire(sem_uses);
     if ((--dbip->i->dbi_uses) > 0) {
@@ -557,22 +557,22 @@ db_dump(struct rt_wdb *wdbp, struct db_i *dbip)
 
     /* Output all directory entries */
     FOR_ALL_DIRECTORY_START(dp, dbip)
-	RT_CK_DIR(dp);
-	//if (out_global && BU_STR_EQUAL(dp->d_namep, "_GLOBAL")) {
-	    //bu_log("db_dump() - in append-only mode, and target db already has a _GLOBAL object");
-	    //continue;
-	//}
-	/* XXX Need to go to internal form, if database versions don't match */
-	if (db_get_external(&ext, dp, dbip) < 0) {
-	    bu_log("db_dump() read failed on %s, skipping\n", dp->d_namep);
-	    continue;
-	}
-	if (wdb_export_external(wdbp, &ext, dp->d_namep, dp->d_flags & ~(RT_DIR_INMEM), dp->d_minor_type) < 0) {
-	    bu_log("db_dump() write failed on %s, aborting\n", dp->d_namep);
-	    bu_free_external(&ext);
-	    return -1;
-	}
+    RT_CK_DIR(dp);
+    //if (out_global && BU_STR_EQUAL(dp->d_namep, "_GLOBAL")) {
+    //bu_log("db_dump() - in append-only mode, and target db already has a _GLOBAL object");
+    //continue;
+    //}
+    /* XXX Need to go to internal form, if database versions don't match */
+    if (db_get_external(&ext, dp, dbip) < 0) {
+	bu_log("db_dump() read failed on %s, skipping\n", dp->d_namep);
+	continue;
+    }
+    if (wdb_export_external(wdbp, &ext, dp->d_namep, dp->d_flags & ~(RT_DIR_INMEM), dp->d_minor_type) < 0) {
+	bu_log("db_dump() write failed on %s, aborting\n", dp->d_namep);
 	bu_free_external(&ext);
+	return -1;
+    }
+    bu_free_external(&ext);
     FOR_ALL_DIRECTORY_END;
     return 0;
 }
@@ -630,9 +630,6 @@ db_i_internal_create(void)
     struct db_i_internal *i;
     BU_GET(i, struct db_i_internal);
     i->dbi_magic = DBI_MAGIC;
-    i->mesh_c = NULL;
-    i->mesh_c_completed = 0;
-    i->mesh_c_target = 0;
     i->material_head = MATER_NULL;
     i->dbi_directory_hd = NULL;
     bu_ptbl_init(&i->dbi_directory_blocks, 8, "dbi_directory_blocks");
@@ -645,10 +642,6 @@ db_i_internal_destroy(struct db_i_internal *i)
 {
     if (!i)
 	return;
-
-    if (i->mesh_c)
-	_rt_mesh_lod_context_destroy(i->mesh_c);
-    i->mesh_c = NULL;
 
     /* Free any directory blocks */
     for (size_t ii = 0; ii < BU_PTBL_LEN(&i->dbi_directory_blocks); ii++)

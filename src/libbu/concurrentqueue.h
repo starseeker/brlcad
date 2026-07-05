@@ -1,3 +1,4 @@
+// BRL-CAD local copy: kept in libbu for shared internal use.
 // Provides a C++11 implementation of a multi-producer, multi-consumer lock-free queue.
 // An overview, including benchmark results, is provided here:
 //     http://moodycamel.com/blog/2014/a-fast-general-purpose-lock-free-queue-for-c++

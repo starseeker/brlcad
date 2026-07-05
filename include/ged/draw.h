@@ -98,9 +98,10 @@ struct ged_draw_appearance_settings {
     int draw_solid_lines_only;
     int draw_non_subtract_only;
     int strict_fallback;
+    int defer_leaf_expansion;        /**< Obol database-source draw may publish the requested root first. */
 };
 
-#define GED_DRAW_APPEARANCE_SETTINGS_INIT {GED_DRAW_MODE_WIRE, 0, 1.0, 0, {255, 0, 0}, 1, 0.0, 0.0, 0, 0, 0}
+#define GED_DRAW_APPEARANCE_SETTINGS_INIT {GED_DRAW_MODE_WIRE, 0, 1.0, 0, {255, 0, 0}, 1, 0.0, 0.0, 0, 0, 0, 0}
 
 typedef enum ged_draw_transaction_kind {
     GED_DRAW_TXN_NONE = 0,
@@ -155,10 +156,10 @@ struct ged_draw_transaction_result {
 
 typedef uintptr_t ged_draw_observer_token;
 typedef void (*ged_draw_transaction_observer_func_t)(
-	struct ged *gedp,
-	const struct ged_draw_transaction *txn,
-	const struct ged_draw_transaction_result *result,
-	void *client_data);
+    struct ged *gedp,
+    const struct ged_draw_transaction *txn,
+    const struct ged_draw_transaction_result *result,
+    void *client_data);
 
 __BEGIN_DECLS
 
@@ -244,8 +245,8 @@ struct ged_draw_command_result {
 #define GED_DRAW_COMMAND_RESULT_INIT { GED_DRAW_COMMAND_RESULT_NONE, NULL, NULL, NULL, 0, 0 }
 
 typedef void (*ged_draw_command_result_cb)(
-	const struct ged_draw_command_result *result,
-	void *data);
+    const struct ged_draw_command_result *result,
+    void *data);
 
 struct ged_draw_command_scene_custom_node_request {
     const char *feature_name;
@@ -258,8 +259,8 @@ struct ged_draw_command_scene_custom_node_request {
 #define GED_DRAW_COMMAND_SCENE_CUSTOM_NODE_REQUEST_INIT { NULL, NULL, NULL, 0, 0 }
 
 typedef void *(*ged_draw_command_scene_custom_node_cb)(
-	const struct ged_draw_command_scene_custom_node_request *request,
-	void *data);
+    const struct ged_draw_command_scene_custom_node_request *request,
+    void *data);
 
 struct ged_draw_command_scene_desc {
     const char *owner_id;
@@ -289,8 +290,8 @@ typedef struct rt_view_lod_policy ged_draw_view_lod_policy;
 
 typedef int (*ged_draw_view_feature_depth_cb)(fastf_t depth, void *data);
 typedef int (*ged_draw_view_context_selection_path_cb)(void *view_ctx,
-						       const char *path,
-						       void *data);
+	const char *path,
+	void *data);
 
 enum ged_draw_view_polygon_type {
     GED_DRAW_VIEW_POLYGON_GENERAL = 0,
@@ -566,8 +567,8 @@ struct ged_draw_view_feature_summary {
 #define GED_DRAW_VIEW_FEATURE_SUMMARY_INIT { 0, 0, 0, 0, 0, 0, {0, 0, 0}, 0, 0, 0, 0, 0, 0 }
 
 typedef int (*ged_draw_view_db_object_record_cb)(
-	const struct ged_draw_view_db_object_record *rec,
-	void *userdata);
+    const struct ged_draw_view_db_object_record *rec,
+    void *userdata);
 
 typedef int (*ged_draw_view_segment_cb)(const point_t a,
 					const point_t b,
@@ -577,7 +578,7 @@ typedef int (*ged_draw_view_point_cb)(const point_t pt,
 				      void *userdata);
 
 typedef int (*ged_draw_shape_ref_index_cb)(ged_draw_shape_ref ref,
-					   void *userdata);
+	void *userdata);
 
 #define GED_DRAW_VIEW_RECORD_QUERY_VIEW_OBJECTS 0x01u
 #define GED_DRAW_VIEW_RECORD_QUERY_DB_OBJECTS   0x02u
@@ -673,7 +674,7 @@ ged_draw_default_mode(const struct ged *gedp);
  */
 GED_EXPORT extern void
 ged_draw_erase_path(struct ged *gedp,
-			     const struct db_full_path *dfp);
+		    const struct db_full_path *dfp);
 
 /**
  * Erase from @p gedp's drawn-object set every scene object whose path
@@ -690,7 +691,7 @@ ged_draw_erase_name(struct ged *gedp, const char *name);
  */
 GED_EXPORT extern void
 ged_draw_erase_path_prefix(struct ged *gedp,
-			       const struct db_full_path *dfp);
+			   const struct db_full_path *dfp);
 
 /**
  * Compute the axis-aligned bounding box of the visible drawn scene in
@@ -702,7 +703,7 @@ ged_draw_erase_path_prefix(struct ged *gedp,
  */
 GED_EXPORT extern int
 ged_draw_bounds(struct ged *gedp, vect_t *min, vect_t *max,
-		    int pflag);
+		int pflag);
 
 /**
  * Set the draw-scene highlight state for every drawn shape.  A non-zero
@@ -802,9 +803,9 @@ ged_draw_shape_record_get(struct ged *gedp,
 
 GED_EXPORT extern int
 ged_draw_shape_ref_source_snapshot(
-	struct ged *gedp,
-	ged_draw_shape_ref ref,
-	struct ged_draw_shape_source_snapshot *out);
+    struct ged *gedp,
+    ged_draw_shape_ref ref,
+    struct ged_draw_shape_source_snapshot *out);
 
 GED_EXPORT extern int
 ged_draw_group_record_get(struct ged *gedp,
@@ -825,10 +826,10 @@ ged_draw_foreach_shape_record(struct ged *gedp,
 
 GED_EXPORT extern void
 ged_draw_foreach_view_record_query(
-	void *view_ctx,
-	const struct ged_draw_view_record_query *query,
-	ged_draw_view_db_object_record_cb cb,
-	void *userdata);
+    void *view_ctx,
+    const struct ged_draw_view_record_query *query,
+    ged_draw_view_db_object_record_cb cb,
+    void *userdata);
 
 GED_EXPORT extern void
 ged_draw_foreach_view_db_object_record(void *view_ctx,
@@ -837,15 +838,15 @@ ged_draw_foreach_view_db_object_record(void *view_ctx,
 
 GED_EXPORT extern void
 ged_draw_foreach_visible_view_db_object_record(void *view_ctx,
-					      ged_draw_view_db_object_record_cb cb,
-					      void *userdata);
+	ged_draw_view_db_object_record_cb cb,
+	void *userdata);
 
 GED_EXPORT extern void
 ged_draw_foreach_visible_view_db_object_record_mode(
-	void *view_ctx,
-	int draw_mode,
-	ged_draw_view_db_object_record_cb cb,
-	void *userdata);
+    void *view_ctx,
+    int draw_mode,
+    ged_draw_view_db_object_record_cb cb,
+    void *userdata);
 
 GED_EXPORT extern void
 ged_draw_foreach_visible_view_record(void *view_ctx,
@@ -854,64 +855,64 @@ ged_draw_foreach_visible_view_record(void *view_ctx,
 
 GED_EXPORT extern int
 ged_draw_view_db_object_record_foreach_segment(
-	const struct ged_draw_view_db_object_record *rec,
-	ged_draw_view_segment_cb cb,
-	void *userdata);
+    const struct ged_draw_view_db_object_record *rec,
+    ged_draw_view_segment_cb cb,
+    void *userdata);
 
 GED_EXPORT extern int
 ged_draw_view_db_object_record_foreach_point(
-	const struct ged_draw_view_db_object_record *rec,
-	ged_draw_view_point_cb cb,
-	void *userdata);
+    const struct ged_draw_view_db_object_record *rec,
+    ged_draw_view_point_cb cb,
+    void *userdata);
 
 GED_EXPORT extern int
 ged_draw_view_db_object_record_has_segments(
-	const struct ged_draw_view_db_object_record *rec);
+    const struct ged_draw_view_db_object_record *rec);
 
 GED_EXPORT extern void
 ged_draw_view_db_object_record_geometry_report(
-	const struct ged_draw_view_db_object_record *rec,
-	struct bu_vls *out);
+    const struct ged_draw_view_db_object_record *rec,
+    struct bu_vls *out);
 
 GED_EXPORT extern int
 ged_draw_view_db_object_record_annotation_summary(
-	const struct ged_draw_view_db_object_record *rec,
-	size_t point_index,
-	struct ged_draw_view_annotation_summary *out);
+    const struct ged_draw_view_db_object_record *rec,
+    size_t point_index,
+    struct ged_draw_view_annotation_summary *out);
 
 GED_EXPORT extern int
 ged_draw_view_db_object_record_line_summary(
-	const struct ged_draw_view_db_object_record *rec,
-	struct ged_draw_view_line_summary *out);
+    const struct ged_draw_view_db_object_record *rec,
+    struct ged_draw_view_line_summary *out);
 
 GED_EXPORT extern int
 ged_draw_view_db_object_record_line_point_at(
-	const struct ged_draw_view_db_object_record *rec,
-	size_t index,
-	point_t out);
+    const struct ged_draw_view_db_object_record *rec,
+    size_t index,
+    point_t out);
 
 GED_EXPORT extern int
 ged_draw_view_db_object_record_line_command_at(
-	const struct ged_draw_view_db_object_record *rec,
-	size_t index,
-	int *out);
+    const struct ged_draw_view_db_object_record *rec,
+    size_t index,
+    int *out);
 
 GED_EXPORT extern int
 ged_draw_view_db_object_record_surface_summary(
-	const struct ged_draw_view_db_object_record *rec,
-	struct ged_draw_view_surface_summary *out);
+    const struct ged_draw_view_db_object_record *rec,
+    struct ged_draw_view_surface_summary *out);
 
 GED_EXPORT extern int
 ged_draw_view_db_object_record_surface_index_at(
-	const struct ged_draw_view_db_object_record *rec,
-	size_t index,
-	int *out);
+    const struct ged_draw_view_db_object_record *rec,
+    size_t index,
+    int *out);
 
 GED_EXPORT extern int
 ged_draw_view_rendered_object_summary(
-	void *view_ctx,
-	uint64_t cache_identity,
-	struct ged_draw_view_rendered_object_summary *out);
+    void *view_ctx,
+    uint64_t cache_identity,
+    struct ged_draw_view_rendered_object_summary *out);
 
 GED_EXPORT extern ged_draw_shape_ref
 ged_draw_first_shape_ref(struct ged *gedp);
@@ -1060,20 +1061,20 @@ ged_draw_view_context_selection_count(void *view_ctx);
 
 GED_EXPORT extern int
 ged_draw_view_context_selection_path_foreach(
-	void *view_ctx,
-	ged_draw_view_context_selection_path_cb cb,
-	void *data);
+    void *view_ctx,
+    ged_draw_view_context_selection_path_cb cb,
+    void *data);
 
 GED_EXPORT extern int
 ged_draw_view_context_selection_clear(void *view_ctx);
 
 GED_EXPORT extern int
 ged_draw_view_selection_add_shape_ref_context(
-	struct ged *gedp,
-	void *view_ctx,
-	ged_draw_shape_ref ref,
-	void **selection_view_ctx,
-	struct bu_vls *path);
+    struct ged *gedp,
+    void *view_ctx,
+    ged_draw_shape_ref ref,
+    void **selection_view_ctx,
+    struct bu_vls *path);
 
 GED_EXPORT extern uint64_t
 ged_draw_view_context_frame_revision(void *view_ctx);
@@ -1087,7 +1088,7 @@ ged_draw_view_context_feature_remove(void *view_ctx,
 
 GED_EXPORT extern int
 ged_draw_view_context_features_remove_prefix(void *view_ctx,
-					     const char *prefix);
+	const char *prefix);
 
 GED_EXPORT extern int
 ged_draw_view_context_feature_exists(void *view_ctx,
@@ -1099,21 +1100,21 @@ ged_draw_view_context_feature_visible(void *view_ctx,
 
 GED_EXPORT extern int
 ged_draw_view_context_feature_visible_set(void *view_ctx,
-					  const char *name,
-					  int visible);
+	const char *name,
+	int visible);
 
 GED_EXPORT extern int
 ged_draw_view_context_feature_style_get(
-	void *view_ctx,
-	const char *name,
-	struct ged_draw_view_feature_style *style);
+    void *view_ctx,
+    const char *name,
+    struct ged_draw_view_feature_style *style);
 
 GED_EXPORT extern int
 ged_draw_view_context_feature_style_apply(
-	void *view_ctx,
-	const char *name,
-	const struct ged_draw_view_feature_style *style,
-	int recursive);
+    void *view_ctx,
+    const char *name,
+    const struct ged_draw_view_feature_style *style,
+    int recursive);
 
 GED_EXPORT extern int
 ged_draw_view_context_feature_realize(void *view_ctx,
@@ -1122,133 +1123,133 @@ ged_draw_view_context_feature_realize(void *view_ctx,
 
 GED_EXPORT extern size_t
 ged_draw_view_context_feature_metadata_count(void *view_ctx,
-					     const char *name);
+	const char *name);
 
 GED_EXPORT extern int
 ged_draw_view_context_feature_metadata_copy(void *view_ctx,
-					    const char *name,
-					    size_t index,
-					    struct bu_vls *key,
-					    struct bu_vls *value);
-
-GED_EXPORT extern size_t
-ged_draw_view_context_feature_primitive_metadata_count(void *view_ctx,
-						      const char *name,
-						      int primitive);
-
-GED_EXPORT extern int
-ged_draw_view_context_feature_primitive_metadata_copy(
-	void *view_ctx,
 	const char *name,
-	int primitive,
 	size_t index,
 	struct bu_vls *key,
 	struct bu_vls *value);
 
+GED_EXPORT extern size_t
+ged_draw_view_context_feature_primitive_metadata_count(void *view_ctx,
+	const char *name,
+	int primitive);
+
+GED_EXPORT extern int
+ged_draw_view_context_feature_primitive_metadata_copy(
+    void *view_ctx,
+    const char *name,
+    int primitive,
+    size_t index,
+    struct bu_vls *key,
+    struct bu_vls *value);
+
 GED_EXPORT extern int
 ged_draw_view_context_feature_pick_primitive_resolve(
-	void *view_ctx,
-	const char *picked_feature_name,
-	int picked_primitive,
-	int select,
-	int highlight,
-	struct bu_vls *feature_name,
-	int *feature_primitive);
+    void *view_ctx,
+    const char *picked_feature_name,
+    int picked_primitive,
+    int select,
+    int highlight,
+    struct bu_vls *feature_name,
+    int *feature_primitive);
 
 GED_EXPORT extern int
 ged_draw_view_context_feature_selected_primitives_replace(
-	void *view_ctx,
-	const char *name,
-	const int *primitives,
-	size_t primitive_count);
+    void *view_ctx,
+    const char *name,
+    const int *primitives,
+    size_t primitive_count);
 
 GED_EXPORT extern int
 ged_draw_view_context_feature_highlighted_primitives_replace(
-	void *view_ctx,
-	const char *name,
-	const int *primitives,
-	size_t primitive_count);
+    void *view_ctx,
+    const char *name,
+    const int *primitives,
+    size_t primitive_count);
 
 GED_EXPORT extern size_t
 ged_draw_view_context_feature_selected_primitive_count(void *view_ctx,
-						      const char *name);
+	const char *name);
 
 GED_EXPORT extern size_t
 ged_draw_view_context_feature_highlighted_primitive_count(void *view_ctx,
-							 const char *name);
+	const char *name);
 
 GED_EXPORT extern int
 ged_draw_view_context_feature_selected_primitive_at(void *view_ctx,
-						    const char *name,
-						    size_t index,
-						    int *primitive);
+	const char *name,
+	size_t index,
+	int *primitive);
 
 GED_EXPORT extern int
 ged_draw_view_context_feature_highlighted_primitive_at(void *view_ctx,
-						       const char *name,
-						       size_t index,
-						       int *primitive);
+	const char *name,
+	size_t index,
+	int *primitive);
 
 GED_EXPORT extern int
 ged_draw_view_context_gobject_create(
-	struct ged *gedp,
-	void *view_ctx,
-	const char *db_path,
-	const char *gobject_name,
-	struct bu_vls *result);
+    struct ged *gedp,
+    void *view_ctx,
+    const char *db_path,
+    const char *gobject_name,
+    struct bu_vls *result);
 
 GED_EXPORT extern int
 ged_draw_view_context_object_remove(
-	struct ged *gedp,
-	void *view_ctx,
-	const char *name,
-	ged_draw_shape_ref shape_ref,
-	struct bu_vls *result);
+    struct ged *gedp,
+    void *view_ctx,
+    const char *name,
+    ged_draw_shape_ref shape_ref,
+    struct bu_vls *result);
 
 GED_EXPORT extern int
 ged_draw_view_context_object_visible_get(
-	struct ged *gedp,
-	void *view_ctx,
-	const char *name,
-	ged_draw_shape_ref shape_ref,
-	int *visible,
-	struct bu_vls *result);
+    struct ged *gedp,
+    void *view_ctx,
+    const char *name,
+    ged_draw_shape_ref shape_ref,
+    int *visible,
+    struct bu_vls *result);
 
 GED_EXPORT extern int
 ged_draw_view_context_object_visible_set(
-	struct ged *gedp,
-	void *view_ctx,
-	const char *name,
-	ged_draw_shape_ref shape_ref,
-	int visible,
-	struct bu_vls *result);
+    struct ged *gedp,
+    void *view_ctx,
+    const char *name,
+    ged_draw_shape_ref shape_ref,
+    int visible,
+    struct bu_vls *result);
 
 GED_EXPORT extern int
 ged_draw_view_context_object_style_get(
-	struct ged *gedp,
-	void *view_ctx,
-	const char *name,
-	ged_draw_shape_ref shape_ref,
-	struct ged_draw_view_feature_style *style,
-	struct bu_vls *result);
+    struct ged *gedp,
+    void *view_ctx,
+    const char *name,
+    ged_draw_shape_ref shape_ref,
+    struct ged_draw_view_feature_style *style,
+    struct bu_vls *result);
 
 GED_EXPORT extern int
 ged_draw_view_context_object_style_apply(
-	struct ged *gedp,
-	void *view_ctx,
-	const char *name,
-	ged_draw_shape_ref shape_ref,
-	const struct ged_draw_view_feature_style *style,
-	int recursive,
-	struct bu_vls *result);
+    struct ged *gedp,
+    void *view_ctx,
+    const char *name,
+    ged_draw_shape_ref shape_ref,
+    const struct ged_draw_view_feature_style *style,
+    int recursive,
+    struct bu_vls *result);
 
 GED_EXPORT extern int
 ged_draw_view_context_object_realize(
-	struct ged *gedp,
-	void *view_ctx,
-	const char *name,
-	ged_draw_shape_ref shape_ref,
-	struct bu_vls *result);
+    struct ged *gedp,
+    void *view_ctx,
+    const char *name,
+    ged_draw_shape_ref shape_ref,
+    struct bu_vls *result);
 
 GED_EXPORT extern int
 ged_draw_view_context_feature_depth(void *view_ctx,
@@ -1258,16 +1259,16 @@ ged_draw_view_context_feature_depth(void *view_ctx,
 
 GED_EXPORT extern int
 ged_draw_view_context_feature_depth_foreach(
-	void *view_ctx,
-	int mode,
-	ged_draw_view_feature_depth_cb cb,
-	void *data);
+    void *view_ctx,
+    int mode,
+    ged_draw_view_feature_depth_cb cb,
+    void *data);
 
 GED_EXPORT extern int
 ged_draw_view_context_snap_first_candidate(void *view_ctx,
-					   const point_t sample,
-					   enum ged_draw_view_snap_kind kind,
-					   point_t candidate);
+	const point_t sample,
+	enum ged_draw_view_snap_kind kind,
+	point_t candidate);
 
 GED_EXPORT extern void
 ged_draw_view_context_info_get(struct rt_view_info *view_info,
@@ -1275,191 +1276,191 @@ ged_draw_view_context_info_get(struct rt_view_info *view_info,
 
 GED_EXPORT extern int
 ged_draw_view_context_lod_policy_get(
-	ged_draw_view_lod_policy *policy,
-	const void *view_ctx);
+    ged_draw_view_lod_policy *policy,
+    const void *view_ctx);
 
 GED_EXPORT extern int
 ged_draw_view_context_lod_policy_apply(
-	void *view_ctx,
-	const ged_draw_view_lod_policy *policy);
+    void *view_ctx,
+    const ged_draw_view_lod_policy *policy);
 
 GED_EXPORT extern int
 ged_draw_view_context_lod_policy_apply_bot_threshold(
-	void *view_ctx,
-	const ged_draw_view_lod_policy *policy,
-	size_t bot_threshold);
+    void *view_ctx,
+    const ged_draw_view_lod_policy *policy,
+    size_t bot_threshold);
 
 GED_EXPORT extern int
 ged_draw_view_context_indexed_face_set_replace(
-	void *view_ctx,
-	const char *name,
-	int local,
-	const point_t *points,
-	size_t point_count,
-	const vect_t *normals,
-	size_t normal_count,
-	const int *indices,
-	size_t index_count,
-	const struct ged_draw_view_feature_style *style);
+    void *view_ctx,
+    const char *name,
+    int local,
+    const point_t *points,
+    size_t point_count,
+    const vect_t *normals,
+    size_t normal_count,
+    const int *indices,
+    size_t index_count,
+    const struct ged_draw_view_feature_style *style);
 
 GED_EXPORT extern int
 ged_draw_view_context_lines_replace(
-	void *view_ctx,
-	const char *name,
-	int local,
-	const point_t *points,
-	const int *cmds,
-	size_t point_count,
-	const struct ged_draw_view_feature_style *style);
+    void *view_ctx,
+    const char *name,
+    int local,
+    const point_t *points,
+    const int *cmds,
+    size_t point_count,
+    const struct ged_draw_view_feature_style *style);
 
 GED_EXPORT extern int
 ged_draw_view_context_lines_create_model_annotation(
-	void *view_ctx,
-	const char *name,
-	int local,
-	const point_t point);
+    void *view_ctx,
+    const char *name,
+    int local,
+    const point_t point);
 
 GED_EXPORT extern int
 ged_draw_view_context_lines_append_point(void *view_ctx,
-					 const char *name,
-					 const point_t point);
+	const char *name,
+	const point_t point);
 
 GED_EXPORT extern int
 ged_draw_view_context_annotation_line_create(
-	void *view_ctx,
-	const char *name,
-	int local,
-	const point_t *points,
-	size_t point_count,
-	const struct ged_draw_view_feature_style *style,
-	struct bu_vls *result);
+    void *view_ctx,
+    const char *name,
+    int local,
+    const point_t *points,
+    size_t point_count,
+    const struct ged_draw_view_feature_style *style,
+    struct bu_vls *result);
 
 GED_EXPORT extern int
 ged_draw_view_context_annotation_line_append(
-	void *view_ctx,
-	const char *name,
-	const point_t *points,
-	size_t point_count,
-	struct bu_vls *result);
+    void *view_ctx,
+    const char *name,
+    const point_t *points,
+    size_t point_count,
+    struct bu_vls *result);
 
 GED_EXPORT extern int
 ged_draw_view_context_annotation_line_remove_points(
-	void *view_ctx,
-	const char *name,
-	size_t start,
-	size_t count,
-	struct bu_vls *result);
+    void *view_ctx,
+    const char *name,
+    size_t start,
+    size_t count,
+    struct bu_vls *result);
 
 GED_EXPORT extern int
 ged_draw_view_context_annotation_line_clear(
-	void *view_ctx,
-	const char *name,
-	struct bu_vls *result);
+    void *view_ctx,
+    const char *name,
+    struct bu_vls *result);
 
 GED_EXPORT extern int
 ged_draw_view_context_line_layer_builder_replace(
-	void *view_ctx,
-	const char *name,
-	int local,
-	const struct bg_line_layer_builder *builder);
+    void *view_ctx,
+    const char *name,
+    int local,
+    const struct bg_line_layer_builder *builder);
 
 GED_EXPORT extern int
 ged_draw_view_context_diagnostic_line_layer_builder_replace(
-	void *view_ctx,
-	const char *name,
-	const struct bg_line_layer_builder *builder);
+    void *view_ctx,
+    const char *name,
+    const struct bg_line_layer_builder *builder);
 
 GED_EXPORT extern int
 ged_draw_view_context_line_layers_replace(
-	void *view_ctx,
-	const char *name,
-	int local,
-	const struct ged_draw_view_line_layer_data *layers,
-	size_t layer_count,
-	const struct ged_draw_view_feature_style *style);
+    void *view_ctx,
+    const char *name,
+    int local,
+    const struct ged_draw_view_line_layer_data *layers,
+    size_t layer_count,
+    const struct ged_draw_view_feature_style *style);
 
 GED_EXPORT extern struct ged_draw_command_scene *
 ged_draw_command_scene_begin(
-	void *view_ctx,
-	const struct ged_draw_command_scene_desc *desc);
+    void *view_ctx,
+    const struct ged_draw_command_scene_desc *desc);
 
 GED_EXPORT extern size_t
 ged_draw_command_scene_features_remove_prefix(
-	struct ged_draw_command_scene *scene,
-	const char *prefix);
+    struct ged_draw_command_scene *scene,
+    const char *prefix);
 
 GED_EXPORT extern int
 ged_draw_command_scene_line_layer_builder_replace(
-	struct ged_draw_command_scene *scene,
-	const char *name,
-	const struct bg_line_layer_builder *builder,
-	const struct ged_draw_view_feature_style *style);
+    struct ged_draw_command_scene *scene,
+    const char *name,
+    const struct bg_line_layer_builder *builder,
+    const struct ged_draw_view_feature_style *style);
 
 GED_EXPORT extern int
 ged_draw_command_scene_line_layers_replace(
-	struct ged_draw_command_scene *scene,
-	const char *name,
-	const struct ged_draw_view_line_layer_data *layers,
-	size_t layer_count,
-	const struct ged_draw_view_feature_style *style);
+    struct ged_draw_command_scene *scene,
+    const char *name,
+    const struct ged_draw_view_line_layer_data *layers,
+    size_t layer_count,
+    const struct ged_draw_view_feature_style *style);
 
 GED_EXPORT extern int
 ged_draw_command_scene_line_set_replace(
-	struct ged_draw_command_scene *scene,
-	const char *name,
-	const point_t *points,
-	const int *cmds,
-	size_t point_count,
-	const struct ged_draw_view_feature_style *style);
+    struct ged_draw_command_scene *scene,
+    const char *name,
+    const point_t *points,
+    const int *cmds,
+    size_t point_count,
+    const struct ged_draw_view_feature_style *style);
 
 GED_EXPORT extern int
 ged_draw_command_scene_point_set_replace(
-	struct ged_draw_command_scene *scene,
-	const char *name,
-	const point_t *points,
-	size_t point_count,
-	const struct ged_draw_view_feature_style *style);
+    struct ged_draw_command_scene *scene,
+    const char *name,
+    const point_t *points,
+    size_t point_count,
+    const struct ged_draw_view_feature_style *style);
 
 GED_EXPORT extern int
 ged_draw_command_scene_indexed_face_set_replace(
-	struct ged_draw_command_scene *scene,
-	const char *name,
-	const point_t *points,
-	size_t point_count,
-	const vect_t *normals,
-	size_t normal_count,
-	const int *indices,
-	size_t index_count,
-	const struct ged_draw_view_feature_style *style);
+    struct ged_draw_command_scene *scene,
+    const char *name,
+    const point_t *points,
+    size_t point_count,
+    const vect_t *normals,
+    size_t normal_count,
+    const int *indices,
+    size_t index_count,
+    const struct ged_draw_view_feature_style *style);
 
 GED_EXPORT extern int
 ged_draw_command_scene_hud_label_replace(
-	struct ged_draw_command_scene *scene,
-	const char *name,
-	const struct ged_diagnostic_hud_label *label);
+    struct ged_draw_command_scene *scene,
+    const char *name,
+    const struct ged_diagnostic_hud_label *label);
 
 GED_EXPORT extern int
 ged_draw_command_scene_custom_node_replace(
-	struct ged_draw_command_scene *scene,
-	const char *name,
-	ged_draw_command_scene_custom_node_cb node_cb,
-	void *node_cb_data,
-	const struct ged_draw_view_feature_style *style);
+    struct ged_draw_command_scene *scene,
+    const char *name,
+    ged_draw_command_scene_custom_node_cb node_cb,
+    void *node_cb_data,
+    const struct ged_draw_view_feature_style *style);
 
 GED_EXPORT extern int
 ged_draw_command_scene_feature_metadata_replace(
-	struct ged_draw_command_scene *scene,
-	const char *name,
-	const struct ged_draw_command_scene_metadata *metadata,
-	size_t metadata_count);
+    struct ged_draw_command_scene *scene,
+    const char *name,
+    const struct ged_draw_command_scene_metadata *metadata,
+    size_t metadata_count);
 
 GED_EXPORT extern int
 ged_draw_command_scene_feature_primitive_metadata_replace(
-	struct ged_draw_command_scene *scene,
-	const char *name,
-	int primitive,
-	const struct ged_draw_command_scene_metadata *metadata,
-	size_t metadata_count);
+    struct ged_draw_command_scene *scene,
+    const char *name,
+    int primitive,
+    const struct ged_draw_command_scene_metadata *metadata,
+    size_t metadata_count);
 
 GED_EXPORT extern int
 ged_draw_command_scene_commit(struct ged_draw_command_scene *scene);
@@ -1469,38 +1470,38 @@ ged_draw_command_scene_abort(struct ged_draw_command_scene *scene);
 
 GED_EXPORT extern int
 ged_draw_view_context_tcl_polygons_replace(
-	void *view_ctx,
-	const char *name,
-	const point_t *points,
-	const int *cmds,
-	size_t point_count,
-	const struct ged_draw_view_feature_style *style);
+    void *view_ctx,
+    const char *name,
+    const point_t *points,
+    const int *cmds,
+    size_t point_count,
+    const struct ged_draw_view_feature_style *style);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_polygons_replace(
-	void *view_ctx,
-	const char *name,
-	int draw,
-	const point_t *points,
-	const int *cmds,
-	size_t point_count,
-	const struct ged_draw_view_feature_style *style);
+    void *view_ctx,
+    const char *name,
+    int draw,
+    const point_t *points,
+    const int *cmds,
+    size_t point_count,
+    const struct ged_draw_view_feature_style *style);
 
 GED_EXPORT extern int
 ged_draw_view_context_tcl_labels_replace(
-	void *view_ctx,
-	const char *name,
-	int draw,
-	const struct ged_draw_view_label_data *labels,
-	size_t label_count);
+    void *view_ctx,
+    const char *name,
+    int draw,
+    const struct ged_draw_view_label_data *labels,
+    size_t label_count);
 
 GED_EXPORT extern int
 ged_draw_view_context_labels_replace(
-	void *view_ctx,
-	const char *name,
-	int local,
-	const struct ged_draw_view_label_data *labels,
-	size_t label_count);
+    void *view_ctx,
+    const char *name,
+    int local,
+    const struct ged_draw_view_label_data *labels,
+    size_t label_count);
 
 GED_EXPORT extern int
 ged_draw_view_context_label_create(void *view_ctx,
@@ -1513,14 +1514,14 @@ ged_draw_view_context_label_create(void *view_ctx,
 
 GED_EXPORT extern int
 ged_draw_view_context_annotation_label_create(
-	void *view_ctx,
-	const char *name,
-	int local,
-	const char *text,
-	const point_t point,
-	const point_t target,
-	int has_target,
-	struct bu_vls *result);
+    void *view_ctx,
+    const char *name,
+    int local,
+    const char *text,
+    const point_t point,
+    const point_t target,
+    int has_target,
+    struct bu_vls *result);
 
 GED_EXPORT extern size_t
 ged_draw_view_context_label_count(void *view_ctx,
@@ -1554,183 +1555,183 @@ ged_draw_view_context_line_width_set(void *view_ctx,
 
 GED_EXPORT extern int
 ged_draw_view_context_line_style_get(
-	void *view_ctx,
-	const char *name,
-	struct ged_draw_view_line_style *style);
+    void *view_ctx,
+    const char *name,
+    struct ged_draw_view_line_style *style);
 
 GED_EXPORT extern int
 ged_draw_view_context_feature_points_copy(void *view_ctx,
-					  const char *name,
-					  point_t **points,
-					  size_t *point_count);
+	const char *name,
+	point_t **points,
+	size_t *point_count);
 
 GED_EXPORT extern int
 ged_draw_view_context_feature_line_command_at(
-	void *view_ctx,
-	const char *name,
-	size_t index,
-	int *out);
+    void *view_ctx,
+    const char *name,
+    size_t index,
+    int *out);
 
 GED_EXPORT extern int
 ged_draw_view_context_lines_points_copy(
-	void *view_ctx,
-	const char *name,
-	point_t **points,
-	size_t *point_count);
+    void *view_ctx,
+    const char *name,
+    point_t **points,
+    size_t *point_count);
 
 GED_EXPORT extern int
 ged_draw_view_context_tcl_lines_replace(
-	void *view_ctx,
-	const char *name,
-	const point_t *points,
-	size_t point_count,
-	const struct ged_draw_view_line_style *style);
+    void *view_ctx,
+    const char *name,
+    const point_t *points,
+    size_t point_count,
+    const struct ged_draw_view_line_style *style);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_lines_draw_get(
-	void *view_ctx,
-	const char *name);
+    void *view_ctx,
+    const char *name);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_lines_draw_set(
-	void *view_ctx,
-	const char *name,
-	int draw);
+    void *view_ctx,
+    const char *name,
+    int draw);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_lines_style_get(
-	void *view_ctx,
-	const char *name,
-	struct ged_draw_view_line_style *style);
+    void *view_ctx,
+    const char *name,
+    struct ged_draw_view_line_style *style);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_lines_color_set(
-	void *view_ctx,
-	const char *name,
-	int r,
-	int g,
-	int b);
+    void *view_ctx,
+    const char *name,
+    int r,
+    int g,
+    int b);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_lines_line_width_set(
-	void *view_ctx,
-	const char *name,
-	int line_width);
+    void *view_ctx,
+    const char *name,
+    int line_width);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_lines_points_copy(
-	void *view_ctx,
-	const char *name,
-	point_t **points,
-	size_t *point_count);
+    void *view_ctx,
+    const char *name,
+    point_t **points,
+    size_t *point_count);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_lines_points_replace(
-	void *view_ctx,
-	const char *name,
-	const point_t *points,
-	size_t point_count,
-	const struct ged_draw_view_line_style *style);
+    void *view_ctx,
+    const char *name,
+    const point_t *points,
+    size_t point_count,
+    const struct ged_draw_view_line_style *style);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_labels_draw_get(
-	void *view_ctx,
-	const char *name);
+    void *view_ctx,
+    const char *name);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_labels_replace(
-	void *view_ctx,
-	const char *name,
-	int draw,
-	const struct ged_draw_view_label_data *labels,
-	size_t label_count);
+    void *view_ctx,
+    const char *name,
+    int draw,
+    const struct ged_draw_view_label_data *labels,
+    size_t label_count);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_labels_color_get(
-	void *view_ctx,
-	const char *name,
-	unsigned char rgb[3]);
+    void *view_ctx,
+    const char *name,
+    unsigned char rgb[3]);
 
 GED_EXPORT extern size_t
 ged_draw_view_context_data_labels_count(
-	void *view_ctx,
-	const char *name);
+    void *view_ctx,
+    const char *name);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_labels_copy(
-	void *view_ctx,
-	const char *name,
-	size_t index,
-	struct bu_vls *text,
-	point_t point,
-	unsigned char rgb[3]);
+    void *view_ctx,
+    const char *name,
+    size_t index,
+    struct bu_vls *text,
+    point_t point,
+    unsigned char rgb[3]);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_labels_point_set(
-	void *view_ctx,
-	const char *name,
-	size_t index,
-	const point_t point);
+    void *view_ctx,
+    const char *name,
+    size_t index,
+    const point_t point);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_arrows_draw_get(
-	void *view_ctx,
-	const char *name);
+    void *view_ctx,
+    const char *name);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_arrows_draw_set(
-	void *view_ctx,
-	const char *name,
-	int draw);
+    void *view_ctx,
+    const char *name,
+    int draw);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_arrows_style_get(
-	void *view_ctx,
-	const char *name,
-	struct ged_draw_view_feature_style *style);
+    void *view_ctx,
+    const char *name,
+    struct ged_draw_view_feature_style *style);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_arrows_color_set(
-	void *view_ctx,
-	const char *name,
-	int r,
-	int g,
-	int b);
+    void *view_ctx,
+    const char *name,
+    int r,
+    int g,
+    int b);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_arrows_line_width_set(
-	void *view_ctx,
-	const char *name,
-	int line_width);
+    void *view_ctx,
+    const char *name,
+    int line_width);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_arrows_points_copy(
-	void *view_ctx,
-	const char *name,
-	point_t **points,
-	size_t *point_count);
+    void *view_ctx,
+    const char *name,
+    point_t **points,
+    size_t *point_count);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_arrows_points_replace(
-	void *view_ctx,
-	const char *name,
-	const point_t *points,
-	size_t point_count,
-	const struct ged_draw_view_feature_style *style);
+    void *view_ctx,
+    const char *name,
+    const point_t *points,
+    size_t point_count,
+    const struct ged_draw_view_feature_style *style);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_arrows_tip_get(
-	void *view_ctx,
-	const char *name,
-	fastf_t *tip_length,
-	fastf_t *tip_width);
+    void *view_ctx,
+    const char *name,
+    fastf_t *tip_length,
+    fastf_t *tip_width);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_arrows_tip_set(
-	void *view_ctx,
-	const char *name,
-	fastf_t tip_length,
-	fastf_t tip_width);
+    void *view_ctx,
+    const char *name,
+    fastf_t tip_length,
+    fastf_t tip_width);
 
 GED_EXPORT extern int
 ged_draw_view_context_arrow_tip_get(void *view_ctx,
@@ -1746,128 +1747,128 @@ ged_draw_view_context_arrow_tip_set(void *view_ctx,
 
 GED_EXPORT extern int
 ged_draw_view_context_tcl_arrows_replace(
-	void *view_ctx,
-	const char *name,
-	const point_t *points,
-	size_t point_count,
-	const struct ged_draw_view_feature_style *style);
+    void *view_ctx,
+    const char *name,
+    const point_t *points,
+    size_t point_count,
+    const struct ged_draw_view_feature_style *style);
 
 GED_EXPORT extern int
 ged_draw_view_context_feature_axes_centers_copy(
-	void *view_ctx,
-	const char *name,
-	point_t **centers,
-	size_t *center_count);
+    void *view_ctx,
+    const char *name,
+    point_t **centers,
+    size_t *center_count);
 
 GED_EXPORT extern int
 ged_draw_view_context_tcl_axes_replace(
-	void *view_ctx,
-	const char *name,
-	const point_t *centers,
-	size_t center_count,
-	fastf_t half_axes_size,
-	const struct ged_draw_view_feature_style *style);
+    void *view_ctx,
+    const char *name,
+    const point_t *centers,
+    size_t center_count,
+    fastf_t half_axes_size,
+    const struct ged_draw_view_feature_style *style);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_axes_draw_get(
-	void *view_ctx,
-	const char *name);
+    void *view_ctx,
+    const char *name);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_axes_draw_set(
-	void *view_ctx,
-	const char *name,
-	int draw);
+    void *view_ctx,
+    const char *name,
+    int draw);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_axes_style_get(
-	void *view_ctx,
-	const char *name,
-	struct ged_draw_view_feature_style *style);
+    void *view_ctx,
+    const char *name,
+    struct ged_draw_view_feature_style *style);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_axes_color_set(
-	void *view_ctx,
-	const char *name,
-	int r,
-	int g,
-	int b);
+    void *view_ctx,
+    const char *name,
+    int r,
+    int g,
+    int b);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_axes_line_width_set(
-	void *view_ctx,
-	const char *name,
-	int line_width);
+    void *view_ctx,
+    const char *name,
+    int line_width);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_axes_half_size_get(
-	void *view_ctx,
-	const char *name,
-	fastf_t *half_axes_size);
+    void *view_ctx,
+    const char *name,
+    fastf_t *half_axes_size);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_axes_size_get(
-	void *view_ctx,
-	const char *name,
-	fastf_t display_scale,
-	fastf_t *size);
+    void *view_ctx,
+    const char *name,
+    fastf_t display_scale,
+    fastf_t *size);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_axes_centers_copy(
-	void *view_ctx,
-	const char *name,
-	point_t **centers,
-	size_t *center_count);
+    void *view_ctx,
+    const char *name,
+    point_t **centers,
+    size_t *center_count);
 
 GED_EXPORT extern int
 ged_draw_view_context_data_axes_centers_replace(
-	void *view_ctx,
-	const char *name,
-	const point_t *centers,
-	size_t center_count,
-	fastf_t half_axes_size,
-	const struct ged_draw_view_feature_style *style);
+    void *view_ctx,
+    const char *name,
+    const point_t *centers,
+    size_t center_count,
+    fastf_t half_axes_size,
+    const struct ged_draw_view_feature_style *style);
 
 GED_EXPORT extern int
 ged_draw_view_context_axes_create(
-	void *view_ctx,
-	const char *name,
-	int local,
-	const struct ged_draw_view_axes_state *state);
+    void *view_ctx,
+    const char *name,
+    int local,
+    const struct ged_draw_view_axes_state *state);
 
 GED_EXPORT extern int
 ged_draw_view_context_axes_state_get(
-	void *view_ctx,
-	const char *name,
-	struct ged_draw_view_axes_state *state);
+    void *view_ctx,
+    const char *name,
+    struct ged_draw_view_axes_state *state);
 
 GED_EXPORT extern int
 ged_draw_view_context_axes_state_replace(
-	void *view_ctx,
-	const char *name,
-	const struct ged_draw_view_axes_state *state);
+    void *view_ctx,
+    const char *name,
+    const struct ged_draw_view_axes_state *state);
 
 GED_EXPORT extern int
 ged_draw_view_context_annotation_axes_create(
-	void *view_ctx,
-	const char *name,
-	int local,
-	const struct ged_draw_view_axes_state *state,
-	struct bu_vls *result);
+    void *view_ctx,
+    const char *name,
+    int local,
+    const struct ged_draw_view_axes_state *state,
+    struct bu_vls *result);
 
 GED_EXPORT extern int
 ged_draw_view_context_annotation_axes_state_get(
-	void *view_ctx,
-	const char *name,
-	struct ged_draw_view_axes_state *state,
-	struct bu_vls *result);
+    void *view_ctx,
+    const char *name,
+    struct ged_draw_view_axes_state *state,
+    struct bu_vls *result);
 
 GED_EXPORT extern int
 ged_draw_view_context_annotation_axes_state_replace(
-	void *view_ctx,
-	const char *name,
-	const struct ged_draw_view_axes_state *state,
-	struct bu_vls *result);
+    void *view_ctx,
+    const char *name,
+    const struct ged_draw_view_axes_state *state,
+    struct bu_vls *result);
 
 GED_EXPORT extern int
 ged_draw_view_polygon_ref_is_null(ged_draw_view_polygon_ref ref);
@@ -1878,8 +1879,8 @@ ged_draw_view_context_polygon_find(void *view_ctx,
 
 GED_EXPORT extern ged_draw_view_polygon_ref
 ged_draw_view_context_polygon_find_scoped(void *view_ctx,
-					  const char *name,
-					  int local_only);
+	const char *name,
+	int local_only);
 
 GED_EXPORT extern ged_draw_view_polygon_ref
 ged_draw_view_context_polygon_create(void *view_ctx,
@@ -1890,10 +1891,10 @@ ged_draw_view_context_polygon_create(void *view_ctx,
 
 GED_EXPORT extern ged_draw_view_polygon_ref
 ged_draw_view_context_polygon_import_sketch(const char *name,
-					    struct db_i *dbip,
-					    struct directory *dp,
-					    void *view_ctx,
-					    int local);
+	struct db_i *dbip,
+	struct directory *dp,
+	void *view_ctx,
+	int local);
 
 GED_EXPORT extern int
 ged_draw_view_polygon_export_sketch(struct db_i *dbip,
@@ -1914,10 +1915,10 @@ ged_draw_view_context_polygon_update(ged_draw_view_polygon_ref ref,
 
 GED_EXPORT extern int
 ged_draw_view_context_polygon_update_screen_pt(ged_draw_view_polygon_ref ref,
-					       void *view_ctx,
-					       int x,
-					       int y,
-					       int op);
+	void *view_ctx,
+	int x,
+	int y,
+	int op);
 
 GED_EXPORT extern int
 ged_draw_view_polygon_set_current(ged_draw_view_polygon_ref ref,
@@ -1931,7 +1932,7 @@ ged_draw_view_polygon_set_contour_open(ged_draw_view_polygon_ref ref,
 
 GED_EXPORT extern int
 ged_draw_view_polygon_set_all_contours_open(ged_draw_view_polygon_ref ref,
-					    int open);
+	int open);
 
 GED_EXPORT extern int
 ged_draw_view_context_polygon_area(ged_draw_view_polygon_ref ref,
@@ -1968,9 +1969,9 @@ ged_draw_view_context_polygon_csg(ged_draw_view_polygon_ref target,
 
 GED_EXPORT extern int
 ged_draw_view_context_feature_summary(
-	void *view_ctx,
-	const char *name,
-	struct ged_draw_view_feature_summary *summary);
+    void *view_ctx,
+    const char *name,
+    struct ged_draw_view_feature_summary *summary);
 
 GED_EXPORT extern const struct db_full_path *
 ged_draw_scene_context_fullpath(void *scene_ctx);
@@ -2026,8 +2027,8 @@ ged_draw_shape_ref_geometry_clear(struct ged *gedp,
 
 GED_EXPORT extern int
 ged_draw_shape_ref_update_bounds_from_geometry(struct ged *gedp,
-					       ged_draw_shape_ref ref,
-					       int *bad_cmd);
+	ged_draw_shape_ref ref,
+	int *bad_cmd);
 
 GED_EXPORT extern int
 ged_draw_shape_ref_publish_line_set(struct ged *gedp,
@@ -2044,22 +2045,22 @@ ged_draw_shape_ref_publish_point_set(struct ged *gedp,
 
 GED_EXPORT extern int
 ged_draw_shape_ref_publish_indexed_face_set(struct ged *gedp,
-					    ged_draw_shape_ref ref,
-					    const point_t *points,
-					    size_t point_count,
-					    const vect_t *normals,
-					    size_t normal_count,
-					    const int *indices,
-					    size_t index_count);
+	ged_draw_shape_ref ref,
+	const point_t *points,
+	size_t point_count,
+	const vect_t *normals,
+	size_t normal_count,
+	const int *indices,
+	size_t index_count);
 
 GED_EXPORT extern int
 ged_draw_shape_ref_publish_primitive_wireframe(struct ged *gedp,
-					       ged_draw_shape_ref ref,
-					       struct rt_db_internal *ip,
-					       const struct bg_tess_tol *ttol,
-					       const struct bn_tol *tol,
-					       void *view_ctx,
-					       int adaptive);
+	ged_draw_shape_ref ref,
+	struct rt_db_internal *ip,
+	const struct bg_tess_tol *ttol,
+	const struct bn_tol *tol,
+	void *view_ctx,
+	int adaptive);
 
 GED_EXPORT extern int
 ged_draw_shape_ref_eval_wireframe(struct ged *gedp,
@@ -2077,8 +2078,8 @@ ged_draw_highlight_shape_ref_by_name(struct ged *gedp, const char *name);
 
 GED_EXPORT extern int
 ged_draw_view_selection_set_highlighted_shape_ref(struct ged *gedp,
-						  void *view_ctx,
-						  ged_draw_shape_ref ref);
+	void *view_ctx,
+	ged_draw_shape_ref ref);
 
 /**
  * Returns 1 if @p gedp has at least one drawn shape, 0 otherwise.

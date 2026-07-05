@@ -1,7 +1,7 @@
 BRL-CAD Obol Worklog
 ====================
 
-Last compressed: 2026-07-04
+Last compressed: 2026-07-05
 
 Purpose
 -------
@@ -10,6 +10,382 @@ This file is a compact historical log for the Obol migration.  Turn-by-turn
 detail was intentionally collapsed because the root text files had become hard
 to use as handoff documents.  Use git history for exact diffs and `doc/notes/`
 for durable design contracts.
+
+2026-07-05: service-backed bounded frontier post-proxy expansion
+---------------------------------------------------------------
+
+Added a GED/Obol bridge API for bounded direct-child database-source expansion
+after a deferred startup proxy is visible.  The bridge resolves the requested
+path through the GED database index, expands direct union children without
+calling the full leaf-realization path, applies each child's path placement
+matrix, and publishes cached child AABB proxy line sets as source-local
+external primary geometry.  It intentionally consumes libbrlobol draw-cache
+records rather than refreshing missing comb AABBs inside the expansion call, so
+large-root expansion stays cache-driven instead of blocking on subtree walks.
+Duplicate direct-child instances and non-union CSG children are skipped until
+explicit instance identity and CSG-aware partial visualization rules are
+designed.
+
+Added a companion GED/Obol prewarm API that submits bounded direct-child AABB
+proxy tasks through the attached `BRLObolLodService`.  Those tasks refresh
+libbrlobol `.DbDrawCache` records on worker threads and do not publish
+view-LoD payloads.  The application/render thread can then call expansion to
+consume ready cache records and mutate the Coin scene.
+
+The direct-child API is now wrapped by visible-frontier APIs that collect the
+current database-source frontier under a requested root and repeat the same
+bounded prewarm/expand step for each visible source.  This keeps cache
+population on worker threads while allowing the render/application thread to
+advance recursive proxy refinement in explicit, bounded passes.
+
+`test_qtcad_obol_progressive_lod` now has `--startup-expand`, and CTest
+registers `test_qtcad_obol_progressive_lod_generic_twin_startup_expand`.  The
+Generic_Twin case draws `all` with deferred leaf expansion, captures the root
+proxy first frame, then runs two service-backed visible-frontier passes.  The
+current direct run reaches `sources=1->25`, `depth=1->3`, and `proxies=24`,
+verifying that recursive source-depth growth and child proxy publication
+change both database-source state and the rendered image.
+
+Focused verification passed:
+`ninja -C build test_qtcad_obol_progressive_lod`,
+`BRLCAD_ROOT=$PWD/build QT_QPA_PLATFORM=offscreen QTCAD_OBOL_FORCE_OSMESA=1 QTCAD_OBOL_PROGRESSIVE_LOD_PHASE_LOG=1 timeout 45 build/bin/test_qtcad_obol_progressive_lod --startup-expand --startup-expand-passes 2 build/share/db/faa/Generic_Twin.g - all direct 4 1`,
+and
+`ctest --test-dir build -R '^(libbrlobol_draw_cache|libbrlobol_mesh_lod_cache|ged_test_state_services|ged_test_obol_draw_sync|test_qtcad_obol_progressive_lod|test_qtcad_obol_progressive_lod_startup_refine|test_qtcad_obol_progressive_lod_generic_twin_startup|test_qtcad_obol_progressive_lod_generic_twin_startup_expand)$' --output-on-failure`.
+
+2026-07-05: large-root startup gate and BoT face-mode import cleanup
+--------------------------------------------------------------------
+
+Generic_Twin full-root startup-only was rechecked with the qtcad progressive
+LoD harness.  The proxy first visual now appears quickly, so
+`test_qtcad_obol_progressive_lod_generic_twin_startup` is registered as a
+bounded CTest gate when `Generic_Twin.g` is available.  The corresponding
+startup-refine probe still times out after the proxy frame, isolating the
+remaining scale problem to synchronous full-detail promotion/refinement rather
+than time-to-first-visual.
+
+The Generic_Twin probe also exposed repeated empty BoT face-mode diagnostics.
+librt BoT import now treats an empty serialized plate-mode face-mode string as
+no face-mode bitvector instead of calling `bu_hex_to_bitv("")`, eliminating
+that large-model startup noise without changing non-empty face-mode handling.
+
+2026-07-05: path-aware draw metadata cache and startup consumption
+------------------------------------------------------------------
+
+The libbrlobol draw cache now has full-path aggregate metadata records in
+addition to object-local metadata records.  `brlobol_draw_path_metadata_*`
+status/refresh/invalidate/store/get APIs use exact full-path cache keys, and
+refresh derives inherited region id, air, material id, LOS, color, shader, and
+inheritance state from `db_follow_path_for_state` rather than duplicating
+tree-walk rules.
+
+`libbrlobol_draw_cache` now builds a top-comb/region/leaf fixture proving that
+object-local leaf metadata remains plain while full-path metadata captures the
+inherited aggregate draw state.  The same test covers reopen persistence,
+exact path invalidation/refresh, whole-database clear, and null/error handling
+for the path metadata API.
+
+Startup proxy publication now consumes full-path metadata when cached proxy
+geometry is shown before full leaf expansion.  The GED/Obol bridge applies the
+cached region, air, material id, LOS, and shader fields to the external-primary
+proxy shape while preserving existing display-state material override
+precedence.  Attached views use the same mode-scoped database-source instance
+lookup as proxy publication, so metadata is applied to the source instance
+that actually owns the startup proxy geometry.
+
+GED database-index invalidation now also clears exact full-path metadata keys
+for indexed paths containing a changed object.  This covers leaf edits, reused
+ancestor paths, and comb metadata changes that affect descendant inherited
+state.  A libbrlobol path-index side record now lets object-name invalidation
+scan and clear cached full-path metadata entries containing the changed object
+name, covering destructive removal/rename cases where the post-edit index may
+no longer reconstruct the stale full path.
+
+Focused verification passed:
+`ninja -C build test_brlobol_draw_cache test_brlobol_mesh_lod_cache ged_test_state_services ged_test_obol_draw_sync test_qtcad_obol_progressive_lod`,
+`ctest --test-dir build -R '^(libbrlobol_draw_cache|libbrlobol_mesh_lod_cache|ged_test_state_services|ged_test_obol_draw_sync|test_qtcad_obol_progressive_lod|test_qtcad_obol_progressive_lod_startup_refine)$' --output-on-failure`,
+and `git diff --check`.
+
+2026-07-05: attached view-LoD invalidation coverage
+---------------------------------------------------
+
+`ged_test_obol_draw_sync` now seeds an attached controller's
+`BRLObolViewLodState` and verifies that draw, erase, stale-source,
+erase-prefix, source-update, source-reference removal, source-rename, clear,
+clear-scope, and teardown transactions clear view-local LoD payloads while
+keeping shared-scene source sync correct.  This covers the primary transaction
+paths that can otherwise leave stale view-specific LoD payloads resident after
+the shared object set changes.
+
+Expanding the source-rename coverage exposed a libbrlobol retargeting bug:
+realized shape/material source rename code kept pointers returned from
+`lookup_name_from_path(SbString(...))` after the temporary `SbString` was gone.
+The retarget path and auxiliary source setup now materialize stable
+`std::string` leaf names before assigning Coin fields.
+
+Focused verification passed:
+`ninja -C build ged_test_obol_draw_sync` and
+`ctest --test-dir build -R '^ged_test_obol_draw_sync$' --output-on-failure`.
+
+2026-07-05: dependency-aware draw-cache invalidation
+----------------------------------------------------
+
+GED database-index change notifications now clear libbrlobol draw-cache proxy
+and metadata records for the changed object and every indexed ancestor object
+on affected paths.  Duplicate instance ids are canonicalized back to database
+object names before cache invalidation, so a leaf edit clears reused comb/root
+proxy bounds without creating instance-suffixed cache keys.  The directly
+changed object also clears any mesh-LoD cache key unconditionally, covering
+name-only removal events where a live directory pointer may no longer exist.
+
+`ged_test_state_services` now seeds cached AABB proxies for a reused child,
+its parent comb, two roots, and an unrelated top, then verifies a child change
+invalidates only the affected hierarchy entries.  The test also reopens a fresh
+fixture after the DB-index fanout stress section so normal event/draw service
+coverage is not distorted by thousands of synthetic stress objects.
+
+Focused verification passed:
+`ninja -C build ged_test_state_services` and
+`ctest --test-dir build -R '^(libbrlobol_draw_cache|libbrlobol_mesh_lod_cache|ged_test_state_services|test_qtcad_obol_progressive_lod|test_qtcad_obol_progressive_lod_startup_refine)$' --output-on-failure`.
+
+2026-07-05: qtcad startup-refine progressive LoD coverage
+---------------------------------------------------------
+
+The cache ownership answer remains libbrlobol: persistent draw proxy,
+metadata, and mesh POP LoD payloads live under `BU_DIR_CACHE/.DbDrawCache` and
+are versioned/invalidated by libbrlobol, not librt.  librt remains the source
+of database geometry operations and view/primitive facts.
+
+Added `--startup-refine` to `test_qtcad_obol_progressive_lod` and registered
+`test_qtcad_obol_progressive_lod_startup_refine`.  The new qtcad case verifies
+the full transitional flow: deferred startup draw produces a visible
+cache-backed proxy first frame, then the same target is promoted to the normal
+mesh-backed qtcad path and progresses through view-local AABB, OBB, and mesh
+LoD payloads.
+
+That test exposed duplicate LoD submission when a render root contained both
+view-local and shared copies of the same database sources.  `BRLObolViewController`
+now uses a logical database-source-root collection for LoD submission,
+collapsing matching instance-key/path/draw-mode identities before applying the
+submit action.  General database-source collection remains pointer-based for
+snap, pick, export, measure, and exact source matching.
+
+Focused verification passed:
+`ninja -C build test_qtcad_obol_progressive_lod` and
+`ctest --test-dir build -R '^test_qtcad_obol_progressive_lod(_startup_refine)?$' --output-on-failure`.
+
+The exploratory `test_qtcad_obol_snap` failure was a native view-context
+default mismatch: Obol/qtcad derived its database-snap tolerance from
+`rt_view_context`, whose native default factor was 1.0 while historical BSG
+view state initialized interactive snapping with factor 10.0.  The native
+default now matches BSG, so Obol-backed qtcad snapping refines the current
+point without initializing the legacy display manager.  Focused verification
+also passed for `test_qtcad_obol_snap`, `rt_view_info`, and
+`rt_view_legacy_bsg`.
+
+2026-07-05: Cache-backed startup proxy preservation
+---------------------------------------------------
+
+The draw-cache ownership decision is now firm: persistent AABB/OBB/metadata
+and mesh POP LoD cache state belongs to libbrlobol under
+`BU_DIR_CACHE/.DbDrawCache`, not librt.  librt remains a source of geometry
+queries/extraction primitives, but Obol/libbrlobol owns draw-cache policy,
+invalidation, progressive staging, and Coin scene publication.
+
+qtcad startup-only drawing exposed a source-lifecycle bug after the cache move:
+`Generic_Twin.g all` published an AABB proxy line set into the shared Obol
+scene, but attached source sync then treated the shaded source as needing a
+mesh realization and dropped the external primary before the first render.  The
+Obol database-source replacement path now preserves existing external primary
+geometry as mode-agnostic fallback content and revalidates it against the
+replacement revision.  This keeps shaded startup AABB line proxies visible
+until explicit erase/clear/replacement or a real database invalidation removes
+them.
+
+`test_qtcad_obol_progressive_lod` now checks the scene graph as well as the
+rendered image for startup-only draws: before the first readback, the render
+scene must contain realized database geometry.  A manual Generic_Twin startup
+run without diagnostic overhead passed with a non-black first image and about
+0.52 seconds to first visual on this machine (`draw_apply` about 0.39 seconds,
+first readback about 0.005 seconds).  The database still emits repeated
+empty-bitv warnings during that probe; they are separate from the Obol proxy
+rendering fix.
+
+Focused verification passed:
+`ninja -C build test_qtcad_obol_progressive_lod test_brlobol_draw_cache test_brlobol_mesh_lod_cache`,
+`ctest --test-dir build -R '^test_qtcad_obol_progressive_lod$' --output-on-failure`,
+`ctest --test-dir build -R '^(libbrlobol_draw_cache|libbrlobol_mesh_lod_cache|ged_test_obol_draw_sync)$' --output-on-failure`,
+`build/bin/test_qtcad_obol_progressive_lod --startup-only build/share/db/faa/Generic_Twin.g - all direct 1 1`, and
+`git diff --check`.
+
+2026-07-05: qtcad progressive LoD slow stress harness
+-----------------------------------------------------
+
+`test_qtcad_obol_progressive_lod` is now parameterized beyond the original
+`moss.g` case.  The harness accepts explicit facetize root, draw target,
+facetize/direct mode, minimum visited mesh count, minimum active payload count,
+and optional copy count.  When copy count is greater than one, the test creates
+a private repeated draw target with GED `cp`/`g` commands inside the temporary
+database, then runs the same staged AABB -> OBB -> mesh checks against that
+larger scene.  The test output reports copy/open/view setup, cache clear,
+tolerance setup, facetize, repeated-target construction, LoD policy setup, GED
+draw transaction, Obol sync, autoview, first framebuffer readback,
+time-to-first-visual, service startup, submit time, and staged AABB/OBB/mesh
+settlement timing.
+
+Added `slow-test_qtcad_obol_progressive_lod_repeated_moss`, which skips by
+default and runs only when `BRLCAD_RUN_SLOW_TESTS=1` is inherited by CTest.
+The registered slow case facetizes `moss.g`, builds a four-copy repeated draw
+target, requires 24 visited LoD candidates, and verifies multiple active
+payloads and image-visible progression.  A direct Generic_Twin full-root shaded
+probe timed out at 300 seconds, and an m35 full-root shaded probe was manually
+stopped after exceeding a useful interactive window; those remain manual
+optimization probes rather than registered gates.
+
+Focused verification passed:
+`ninja -C build test_qtcad_obol_progressive_lod`,
+`ctest --test-dir build -R '^test_qtcad_obol_progressive_lod$' --output-on-failure`,
+`ctest --test-dir build -R '^slow-test_qtcad_obol_progressive_lod_repeated_moss$' --output-on-failure` showing skip behavior,
+and `BRLCAD_RUN_SLOW_TESTS=1 ctest --test-dir build -R '^slow-test_qtcad_obol_progressive_lod_repeated_moss$' --output-on-failure`.
+The verified four-copy direct harness run reported 24 visited LoD candidates,
+active staged payload counts of 4 AABB, 4 OBB, and 12 mesh payloads, and
+time-to-first-visual around 22 seconds on this machine.
+
+After adding phase-level startup diagnostics, the default moss direct harness
+run reported a 2.855 second first visual, with 2.379 seconds in facetize,
+0.202 seconds in GED draw transaction application, 0.177 seconds in Obol sync,
+0.064 seconds in first framebuffer readback, and post-submit settlement at
+0.029 seconds for AABB, 0.414 seconds for OBB, and 1.132 seconds for mesh.
+These fields are intended to guide the remaining Generic_Twin/m35 full-root
+startup optimization work.
+
+2026-07-05: qtcad progressive LoD multi-candidate coverage
+----------------------------------------------------------
+
+`test_qtcad_obol_progressive_lod` now asserts that the slowed-cache qtcad path
+does more than advance the first realized mesh.  The test counts realized mesh
+nodes for diagnostics, requires the controller to visit multiple LoD
+candidates, and waits for at least two active view-local AABB payloads, two OBB
+payloads, and two mesh-LoD payloads before accepting the progressive
+AABB -> OBB -> mesh image sequence.
+
+Focused verification passed:
+`ninja -C build test_qtcad_obol_progressive_lod`,
+`ctest --test-dir build -R '^test_qtcad_obol_progressive_lod$' --output-on-failure`,
+and a direct offscreen run against `src/libged/tests/draw/moss.g`, which
+facetized 6 roots, visited 6 LoD candidates, and reported active staged
+payload counts of 2 AABB, 2 OBB, and 3 mesh payloads at the checked frames.
+
+2026-07-05: Draw/mesh cache context hardening
+---------------------------------------------
+
+Legacy BSG mesh LoD cache storage was quarantined under
+`BU_DIR_CACHE/.BsgMeshLodCache`.  libbrlobol remains the owner of the active
+Obol draw cache root (`BU_DIR_CACHE/.DbDrawCache`), and old BSG format checks
+or clear operations can no longer remove current Obol AABB/OBB/metadata/mesh
+LoD cache data.
+
+The AABB/OBB/metadata draw cache now has a libbrlobol-owned per-cache LMDB
+context registry.  Public `brlobol_draw_*` calls still use the simple db/name
+API, but repeated status/get/store/refresh operations reuse one cache handle per
+database cache path.  `brlobol_draw_cache_clear_all` closes those contexts
+before clearing cache files, and `libbrlobol_draw_cache` covers proxy records,
+metadata records, reopen persistence, targeted invalidation, database clear,
+clear-all/reopen, and null/error handling.
+
+The mesh LoD cache also gained per-cache access serialization around LMDB
+key/payload reads, write transactions, and clear operations.  This addresses an
+intermittent progressive-service race where status could report an existing
+mesh payload while a worker immediately failed to construct the LoD object from
+the same cache.
+
+Focused verification passed:
+`ninja -C build test_brlobol_draw_cache test_brlobol_mesh_lod_cache test_brlobol_lod_service test_brlobol_lod_update_action gsh mged test_qtcad_obol_progressive_lod`,
+`ctest --test-dir build -R '^(libbrlobol_draw_cache|libbrlobol_mesh_lod_cache|libbrlobol_lod_realization|libbrlobol_lod_service|libbrlobol_lod_update_action|test_qtcad_obol_progressive_lod|gsh_obol_progressive_lod|mged_obol_progressive_lod|ged_test_obol_draw_sync)$' --output-on-failure`,
+and `ctest --test-dir build --repeat until-fail:5 -R '^gsh_obol_progressive_lod$' --output-on-failure`.
+
+2026-07-05: Mesh LoD cache ownership moved to libbrlobol
+--------------------------------------------------------
+
+libbrlobol now owns the mesh LoD cache implementation and API in
+`include/brlobol/mesh_lod_cache.h` and `src/libbrlobol/mesh_lod_cache.cpp`.
+The `brlobol_mesh_lod_*` boundary covers cache status/refresh/invalidate,
+manual mesh storage, active payload loading by level/view/scene-ref, data/info
+copyout, detail callbacks, memory shrink, and destruction.  POP generation and
+loading are now direct libbrlobol responsibilities using the shared
+`.DbDrawCache/mesh_lod.format` store.  A libbrlobol-owned context registry
+shares one LMDB environment per database cache among multiple handles.
+
+libbrlobol providers, `SoBRLDatabaseSource`, GED `view lod cache`,
+database-edit invalidation, BREP mesh-cache helpers, the Obol/legacy GED draw
+bridge, qtcad tests, and libbrlobol tests were migrated from
+`rt_mesh_lod_*`/`db_mesh_lod_*` to `brlobol_mesh_lod_*`.  Provider IDs now use
+`brlobol_mesh_lod` / `brlobol_mesh_lod_cache`, and LoD geometry handles use
+`BRLOBOL_LOD_GEOMETRY_MESH_LOD_CACHE`.
+
+The transitional librt `db_mesh_lod_*`/`rt_mesh_lod_*` API, per-`db_i` mesh
+cache state, mesh scene-ref BSG adapter entry points, and unregistered old
+librt mesh-LoD test were removed.  `rt_view_info` is now a focused librt view
+snapshot test, and `libbrlobol_mesh_lod_cache` covers cache behavior, callback
+replacement/failure, active normals, memory shrink/reload, persistence, and
+null handling.
+
+Focused verification passed:
+`ninja -C build libbrlobol librt test_brlobol_mesh_lod_cache rt_view_info rt_view_legacy_bsg`,
+`ctest --test-dir build -R '^(libbrlobol_mesh_lod_cache|rt_view_info|rt_view_legacy_bsg)$' --output-on-failure`,
+`ninja -C build libbrlobol libged gsh mged test_brlobol_lod_realization test_brlobol_lod_service test_brlobol_lod_update_action test_brlobol_mesh_lod_cache test_qtcad_obol_progressive_lod`, and
+`ctest --test-dir build -R '^(libbrlobol_lod_realization|libbrlobol_lod_service|libbrlobol_lod_update_action|libbrlobol_mesh_lod_cache|test_qtcad_obol_progressive_lod|gsh_obol_progressive_lod|mged_obol_progressive_lod|rt_view_info|rt_view_legacy_bsg)$' --output-on-failure`.
+`ged_test_drawing_lod` no longer crashes after the draw-test refresh helper was
+taught not to pass native Obol view contexts to legacy retained BSG drawing, but
+`ged_test_drawing_basic` and `ged_test_drawing_lod` still need image-baseline
+resolution.
+
+2026-07-05: Draw cache ownership moved toward libbrlobol
+--------------------------------------------------------
+
+Persistent drawing cache policy was moved out of librt for the AABB/OBB proxy
+path.  libbrlobol now owns `include/brlobol/draw_cache.h` and
+`src/libbrlobol/draw_cache.cpp`, storing AABB proxy records, OBB proxy
+records, and local draw metadata under `BU_DIR_CACHE/.DbDrawCache` with
+`draw_data.format`.  The transitional librt `db_lod_proxy_*` API, per-`db_i`
+draw-cache context, and app-level invalidation calls were removed, so AABB/OBB
+draw-cache ownership is no longer split between librt and libbrlobol.
+
+The mesh POP LoD cache now shares the same filesystem source of truth,
+`.DbDrawCache`, using `mesh_lod.format`.  Its caller-facing API subsequently
+moved into libbrlobol, and the later cleanup moved POP generation/loading there
+as well.  librt no longer owns a mesh-LoD cache API or per-database mesh cache
+state.
+
+`concurrentqueue.h` was moved to `src/libbu` for future draw-cache/background
+population pipelines.  The libbrlobol draw cache initially opened/closed the
+LMDB cache per operation and cached object-local metadata.  Later hardening
+added the libbrlobol-owned per-cache context registry; later path-aware
+metadata work added exact full-path aggregate records for inherited draw state.
+
+GSH now treats the view refresh dirty flag as display invalidation and clears
+it only after repaint, so background/progressive LoD result application does
+not rely on incidental scene hashes.  The focused cache/LoD gate passed:
+`ninja -C build libbsg librt libbrlobol libged gsh` and
+`ctest --test-dir build -R '^(rt_view_info|libbrlobol_lod_realization|libbrlobol_lod_service|libbrlobol_lod_update_action|test_qtcad_obol_progressive_lod|gsh_obol_progressive_lod|mged_obol_progressive_lod)$' --output-on-failure`.
+
+2026-07-05: Progressive LoD staged payload status
+-------------------------------------------------
+
+The progressive LoD pipeline now exposes active view-local payload counts
+through `view lod service status`: active mesh payloads, active AABB proxy
+payloads, and active OBB proxy payloads.  The counters come from
+`BRLObolViewLodState`, count unique payloads rather than per-key bindings, and
+make the AABB -> OBB -> mesh startup state observable to GED applications and
+headless tests.
+
+The gsh and classic MGED progressive LoD image tests now require all three
+active payload stages to appear in the status log in addition to requiring
+decoded PNG frame changes.  The qtcad progressive test already drains to AABB,
+then OBB, then mesh while checking scene state and rendered images.  Focused
+verification passed:
+
+* `ninja -C build libbrlobol libged gsh mged test_qtcad_obol_progressive_lod`
+* `ctest --test-dir build -R '^(libbrlobol_lod_realization|libbrlobol_lod_service|libbrlobol_lod_update_action|test_qtcad_obol_progressive_lod|gsh_obol_progressive_lod|mged_obol_progressive_lod)$' --output-on-failure`
 
 2026-07-04: Documentation reset
 -------------------------------
@@ -519,3 +895,89 @@ Focused verification passed:
 
 * `ninja -C build test_brlobol_lod_update_action`
 * `ctest --test-dir build -R '^libbrlobol_lod_update_action$' --timeout 240 --output-on-failure`
+
+2026-07-05: GED/DM LoD service integration and Obol draw sync hardening
+-----------------------------------------------------------------------
+
+The progressive LoD notification model is currently implemented in
+libbrlobol, not librt.  `BRLObolLodService` owns worker threads, accepts
+source/cache-backed LoD requests, and exposes a result-ready subscription.
+That callback is only a notification: `BRLObolViewController` marks pending
+results, and the application/DM render path explicitly drains and applies
+results with the view-local `BRLObolViewLodState`.  librt remains the
+deterministic provider/cache layer and does not mutate Coin scene state or
+drive application event loops.
+
+Added shared libged controls for this service through
+`view lod service status|start|stop|poll`.  The Obol DM backend now submits
+view LoD requests and drains pending results from its render path when
+auto-submit is enabled, matching the intended "draw now, refine as background
+results arrive" behavior while keeping each attached view's LoD state
+independent.
+
+The Obol draw bridge was hardened in several places needed by that model:
+
+* owned scene controllers now always ensure the GED transaction observer;
+* independent view transactions are no longer skipped when they target
+  source owners in the shared scene;
+* redraw/source-stale handling re-realizes evaluated-wire and evaluated-point
+  external representations under the correct publication scope;
+* mesh-LoD publication now creates `SoBRLLodMeshShape` instances instead of
+  plain mesh shapes, so service submissions recognize them as LoD-backed;
+* database-source realization policy changes update identity/staleness state;
+* polygon lookup handles names containing `::` correctly.
+
+Focused verification passed:
+
+* `ninja -C build ged_test_obol_draw_sync`
+* `ctest --test-dir build -R '^ged_test_obol_draw_sync$' --output-on-failure`
+* `ninja -C build libbrlobol libged dm-obol gsh`
+
+2026-07-05: Progressive LoD and LoD-only pick coverage
+------------------------------------------------------
+
+Added focused libbrlobol coverage for the two core view-local LoD behavior
+questions.  A progressive controller/service test submits a fast coarse LoD
+task and a delayed refined LoD task through the real `BRLObolLodService`,
+processes one result at a time, and verifies that display-level traversal first
+sees the coarse payload and then the refined payload without shared mesh
+mutation.  A pick test evicts a LoD-backed mesh's resident point/index arrays,
+binds only a view-local LoD payload, and verifies display-level picking returns
+the correct BRL-CAD identity while full-detail picking does not use the display
+LoD as exact geometry.
+
+Focused verification passed:
+
+* `ninja -C build test_brlobol_lod_update_action`
+* `ctest --test-dir build -R '^libbrlobol_lod_update_action$' --timeout 240 --output-on-failure`
+
+2026-07-05: Full-stack progressive LoD image gates
+--------------------------------------------------
+
+Added the first full-stack progressive image tests for the Obol LoD service
+path.  `BRLOBOL_LOD_TASK_DELAY_MS` now provides a debug-only delay hook in the
+libbrlobol mesh-LoD submit action, allowing tests to force visible
+intermediate frames while leaving normal runtime behavior unchanged.
+
+The gsh and classic MGED tests create private `moss.g` copies, facetize
+`all.g` into `all.bot`, use private cache directories, start the view LoD
+service, draw through the Obol DM, capture multiple screengrabs, and verify
+both service counters and decoded PNG differences.  The qtcad test drives the
+same service/controller model through an offscreen `QgView`, captures an
+initial frame before LoD submission, drains an intermediate result, then drains
+to settlement so image progression is deterministic.
+
+Two service-path fixes came out of that coverage.  The mesh-LoD provider now
+normalizes database source paths to leaf names before querying the librt cache,
+matching how the cache keys are populated.  libged now stops owned attached
+controller LoD services before deleting any attached controller in a GED
+teardown batch, avoiding service callbacks racing scene/controller destruction.
+
+Focused verification passed:
+
+* `ninja -C build test_qtcad_obol_progressive_lod gsh mged`
+* `ctest --test-dir build -R '^(gsh_obol_progressive_lod|mged_obol_progressive_lod|test_qtcad_obol_progressive_lod)$' --output-on-failure`
+
+This original coverage proved delayed mesh-LoD refinement through gsh, MGED,
+and qtcad.  The later staged-payload status work extended it to prove AABB and
+OBB startup phases as active view-local payloads before mesh settlement.

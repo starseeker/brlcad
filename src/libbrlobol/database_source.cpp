@@ -228,7 +228,8 @@ BRLObolExternalTriangleMesh::BRLObolExternalTriangleMesh(void) :
     indices(NULL),
     indexCount(0),
     sourceType("indexed-face-set"),
-    geometryKind("surface")
+    geometryKind("surface"),
+    lodBacked(FALSE)
 {
 }
 
@@ -456,6 +457,20 @@ lookup_name_from_path(const SbString &path)
     if (!name[0])
 	return NULL;
     return name;
+}
+
+static std::string
+stable_name_from_path(const char *path, int fallbackToPath)
+{
+    if (!path)
+	return std::string();
+
+    SbString stablePath(path);
+    const char *name = lookup_name_from_path(stablePath);
+    if (name && name[0])
+	return std::string(name);
+
+    return fallbackToPath ? std::string(path) : std::string();
 }
 
 static std::string
@@ -2044,16 +2059,17 @@ publish_lod_metadata_if_cached(SoBRLMeshShape *shape, struct db_i *dbip,
     if (!shape || !dbip || !sourceName)
 	return;
 
-    struct rt_mesh_lod_cache_status status = RT_MESH_LOD_CACHE_STATUS_INIT;
-    (void)db_mesh_lod_status(dbip, sourceName, &status);
+    struct BRLObolMeshLodCacheStatus status =
+	    BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
+    (void)brlobol_mesh_lod_cache_status(dbip, sourceName, &status);
 
-    struct rt_mesh_lod *lod = db_mesh_lod_get(dbip, sourceName);
+    struct BRLObolMeshLod *lod = brlobol_mesh_lod_get(dbip, sourceName);
     if (!lod)
 	return;
 
-    struct rt_mesh_lod_info info = RT_MESH_LOD_INFO_INIT;
-    if (rt_mesh_lod_load_view(lod, NULL, 0) >= 0 &&
-	rt_mesh_lod_info_get(lod, &info)) {
+    struct BRLObolMeshLodInfo info = BRLOBOL_MESH_LOD_INFO_INIT;
+    if (brlobol_mesh_lod_load_view(lod, NULL, 0) >= 0 &&
+	brlobol_mesh_lod_info_get(lod, &info)) {
 	BRLObolLodRequest request;
 	request.databaseId = dbip->dbi_filename ? dbip->dbi_filename : "";
 	request.sourceContentHash = status.cache_key;
@@ -2061,8 +2077,8 @@ publish_lod_metadata_if_cached(SoBRLMeshShape *shape, struct db_i *dbip,
 	request.objectName = sourceName;
 	request.drawMode = BRLOBOL_LOD_DRAW_SHADED;
 	request.lodPolicy = shape->lodPolicy.getValue();
-	request.providerId = "rt_mesh_lod";
-	request.providerVersion = "rt-cache-v1";
+	request.providerId = "brlobol_mesh_lod";
+	request.providerVersion = "brlobol-cache-v1";
 	request.qualityTier = BRLOBOL_LOD_QUALITY_FAST_DISPLAY;
 	request.sourceCounts.faceCount = info.face_count;
 	request.sourceCounts.pointCount = info.point_count;
@@ -2076,11 +2092,11 @@ publish_lod_metadata_if_cached(SoBRLMeshShape *shape, struct db_i *dbip,
 				     static_cast<float>(info.bmax[Y]),
 				     static_cast<float>(info.bmax[Z])));
 	BRLObolLodResult result =
-	    brlobol_lod_result_from_rt_mesh_info(request, info, &status);
+	    brlobol_lod_result_from_mesh_lod_info(request, info, &status);
 	publish_lod_result_metadata(shape, result);
     }
 
-    rt_mesh_lod_destroy(lod);
+    brlobol_mesh_lod_destroy(lod);
 }
 
 static void
@@ -2893,6 +2909,7 @@ SoBRLDatabaseSource::setRealizationViewPolicy(SbBool viewDependent,
 	float pointScale)
 {
     int changed = 0;
+    int activePolicyChanged = 0;
     if (this->realizationViewDependent.getValue() != viewDependent) {
 	this->realizationViewDependent = viewDependent;
 	changed = 1;
@@ -2906,6 +2923,16 @@ SoBRLDatabaseSource::setRealizationViewPolicy(SbBool viewDependent,
 	this->realizationBotThreshold = botThreshold;
 	changed = 1;
     }
+    if (this->lodBotThreshold.getValue() != botThreshold) {
+	if (this->lodBotThresholdSensor)
+	    this->lodBotThresholdSensor->detach();
+	this->lodBotThreshold = botThreshold;
+	if (this->lodBotThresholdSensor)
+	    this->lodBotThresholdSensor->attach(&this->lodBotThreshold);
+	this->realizationIdentity = source_realization_identity(this);
+	activePolicyChanged = 1;
+	changed = 1;
+    }
     if (database_source_float_different(
 	    this->realizationCurveScale.getValue(), curveScale)) {
 	this->realizationCurveScale = curveScale;
@@ -2916,6 +2943,8 @@ SoBRLDatabaseSource::setRealizationViewPolicy(SbBool viewDependent,
 	this->realizationPointScale = pointScale;
 	changed = 1;
     }
+    if (activePolicyChanged)
+	this->markStale(STALE_VIEW);
     if (changed)
 	this->syncRealizedShapeOwnerState();
     return changed;
@@ -3177,7 +3206,7 @@ SoBRLDatabaseSource::getDatabase(void) const {
 }
 
 void
-SoBRLDatabaseSource::setMeshLod(struct rt_mesh_lod *lod)
+SoBRLDatabaseSource::setMeshLod(struct BRLObolMeshLod *lod)
 {
     if (this->meshLod == lod) {
 	if (!lod)
@@ -3186,13 +3215,13 @@ SoBRLDatabaseSource::setMeshLod(struct rt_mesh_lod *lod)
     }
 
     if (this->meshLod)
-	rt_mesh_lod_destroy(this->meshLod);
+	brlobol_mesh_lod_destroy(this->meshLod);
 
     this->meshLod = lod;
     this->clearMeshLodBounds();
 }
 
-struct rt_mesh_lod *
+struct BRLObolMeshLod *
 SoBRLDatabaseSource::getMeshLod(void) const {
     return this->meshLod;
 }
@@ -3201,7 +3230,7 @@ void
 SoBRLDatabaseSource::clearMeshLod(void)
 {
     if (this->meshLod)
-	rt_mesh_lod_destroy(this->meshLod);
+	brlobol_mesh_lod_destroy(this->meshLod);
     this->meshLod = NULL;
     this->clearMeshLodBounds();
 }
@@ -3324,11 +3353,14 @@ retarget_realized_shape_source(ShapeT *shape,
     if (!shape || !newSourcePath)
 	return;
 
-    const char *oldName = oldSourcePath ? lookup_name_from_path(oldSourcePath) :
-			  NULL;
-    const char *newName = lookup_name_from_path(SbString(newSourcePath));
-    if (!newName)
-	newName = newSourcePath;
+    const std::string oldNameStorage =
+	stable_name_from_path(oldSourcePath, 0);
+    const char *oldName = oldNameStorage.empty() ? NULL :
+			  oldNameStorage.c_str();
+    const std::string newNameStorage =
+	stable_name_from_path(newSourcePath, 1);
+    const char *newName = newNameStorage.empty() ? newSourcePath :
+			  newNameStorage.c_str();
 
     const std::string recordRole = shape->recordRole.getValue().getString();
     const int auxiliary = BU_STR_EQUAL(recordRole.c_str(), "auxiliary");
@@ -3384,11 +3416,14 @@ retarget_material_object_source(SoBRLMaterialObject *object,
     if (!object || !newSourcePath)
 	return;
 
-    const char *oldName = oldSourcePath ? lookup_name_from_path(oldSourcePath) :
-			  NULL;
-    const char *newName = lookup_name_from_path(SbString(newSourcePath));
-    if (!newName)
-	newName = newSourcePath;
+    const std::string oldNameStorage =
+	stable_name_from_path(oldSourcePath, 0);
+    const char *oldName = oldNameStorage.empty() ? NULL :
+			  oldNameStorage.c_str();
+    const std::string newNameStorage =
+	stable_name_from_path(newSourcePath, 1);
+    const char *newName = newNameStorage.empty() ? newSourcePath :
+			  newNameStorage.c_str();
 
     const char *sourceName = object->sourceName.getValue().getString();
     object->sourcePath = newSourcePath;
@@ -4046,8 +4081,11 @@ SoBRLDatabaseSource::publishExternalTriangleMesh(
     }
 
     (void)this->clearRealizedGeometry(TRUE);
-    SoBRLMeshShape *shape = new SoBRLMeshShape;
+    SoBRLMeshShape *shape = triangleMesh.lodBacked ?
+			    new SoBRLLodMeshShape : new SoBRLMeshShape;
     database_source_add_realized_child(this, shape);
+    if (triangleMesh.lodBacked)
+	shape->setLodBackedMesh(TRUE);
 
     assign_external_primary_identity(shape, this,
 				     external_string_or_default(triangleMesh.sourceType,
@@ -4361,9 +4399,14 @@ SoBRLDatabaseSource::setAuxiliarySourceLineSet(const char *sourcePath,
 	return 0;
     }
 
+    const std::string sourceNameStorage =
+	stable_name_from_path(sourcePath, 1);
+    const char *sourceName = sourceNameStorage.empty() ? sourcePath :
+			     sourceNameStorage.c_str();
+
     if (!source) {
 	source = new SoBRLDatabaseSource;
-	source->setName(SbName(lookup_name_from_path(SbString(sourcePath))));
+	source->setName(SbName(sourceName));
 	database_source_add_realized_child(this, source);
     }
 
@@ -4372,7 +4415,7 @@ SoBRLDatabaseSource::setAuxiliarySourceLineSet(const char *sourcePath,
 					    this->dbip, this->drawMode.getValue(), revision);
     source->auxiliarySource = TRUE;
     source->displayName = (auxDisplayName && auxDisplayName[0]) ?
-			  auxDisplayName : lookup_name_from_path(SbString(sourcePath));
+			  auxDisplayName : sourceName;
     source->visible = this->visible.getValue();
     source->highlighted = this->highlighted.getValue();
     source->lineStyle = this->lineStyle.getValue();
@@ -4392,7 +4435,7 @@ SoBRLDatabaseSource::setAuxiliarySourceLineSet(const char *sourcePath,
     (void)remove_source_placement_transform(source);
 
     const char *shapeName = (auxDisplayName && auxDisplayName[0]) ?
-			    auxDisplayName : lookup_name_from_path(SbString(sourcePath));
+			    auxDisplayName : sourceName;
     const int changed = source->setAuxiliaryLineSet(shapeName, points,
 			commands, count, displayState);
     if (changed > 0) {

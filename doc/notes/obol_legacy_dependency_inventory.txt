@@ -86,6 +86,23 @@ display lists, Tcl/display-manager state, polygon stores, snap/selection
 resolution, LoD caches, and retained scene-graph behavior remain outside this
 libbv boundary.
 
+Persistent draw cache ownership now belongs to libbrlobol.  AABB/OBB proxy,
+object-local metadata, and full-path aggregate metadata cache data live under
+`BU_DIR_CACHE/.DbDrawCache` through the libbrlobol draw-cache API; the old
+librt `db_lod_proxy_*` path has been removed.  Full-path metadata refresh uses
+librt tree-state walking for inherited region/material/color state, but the
+cache storage and policy remain libbrlobol responsibilities.  Mesh POP LoD
+caller workflows now use the libbrlobol
+`brlobol_mesh_lod_*` API and share the same cache root through
+`mesh_lod.format`.  POP generation/loading now live behind that libbrlobol
+API, and the old librt `db_mesh_lod_*`/`rt_mesh_lod_*` facade, per-`db_i`
+mesh-cache state, and mesh scene-ref BSG adapter entry points were removed.
+Any new cache-management work should target libbrlobol, not librt.  Remaining
+libbsg mesh payload code is retained-scene implementation detail until the
+retained BSG renderer path itself is retired.  That legacy implementation is
+quarantined under `BU_DIR_CACHE/.BsgMeshLodCache` so it cannot share or clear
+the libbrlobol-owned `.DbDrawCache` tree.
+
 Current migrated boundaries include:
 
 * Owned Obol scene/source/group operations in the GED draw bridge.
@@ -185,6 +202,10 @@ Active Blockers To Retiring Legacy Paths
   and screengrab path is present, and MGED's Obol refresh no longer uses
   `dm_draw_objs`, but GUI/input/faceplate/readback integration remains broader
   migration work.
+* The active mesh POP LoD cache API and generation/loading implementation are
+  in libbrlobol.  The remaining BSG mesh-LoD payload code is quarantined
+  retained-renderer implementation detail under `.BsgMeshLodCache`; delete it
+  once no retained BSG renderer path needs it.
 
 Removal Policy
 --------------

@@ -48,6 +48,8 @@
 static const char *controller_database_id(const struct db_i *dbip);
 static std::vector<SoBRLDatabaseSource *> controller_render_database_sources(
     const BRLObolViewController *controller);
+static std::vector<SoBRLDatabaseSource *> controller_render_database_source_roots(
+    const BRLObolViewController *controller);
 static std::vector<SoBRLMeshShape *> controller_render_mesh_shapes(
     const BRLObolViewController *controller);
 
@@ -162,6 +164,45 @@ controller_configure_render_environment(SoViewport *viewport)
 }
 
 static void
+controller_append_database_source_unique(
+    std::vector<SoBRLDatabaseSource *> &sources,
+    SoBRLDatabaseSource *source)
+{
+    if (!source)
+	return;
+
+    const SbString sourceInstance = source->instanceKey.getValue();
+    const SbString sourcePath = source->path.getValue();
+    const int sourceDrawMode = source->drawMode.getValue();
+    struct db_i *sourceDbip = source->getDatabase();
+
+    for (size_t i = 0; i < sources.size(); i++) {
+	SoBRLDatabaseSource *existing = sources[i];
+	if (!existing)
+	    continue;
+	if (existing == source)
+	    return;
+
+	const SbString existingInstance = existing->instanceKey.getValue();
+	if (sourceInstance.getLength() > 0 &&
+	    existingInstance.getLength() > 0 &&
+	    strcmp(sourceInstance.getString(),
+		   existingInstance.getString()) == 0)
+	    return;
+
+	if (sourcePath.getLength() > 0 &&
+	    existing->path.getValue().getLength() > 0 &&
+	    sourceDbip == existing->getDatabase() &&
+	    sourceDrawMode == existing->drawMode.getValue() &&
+	    strcmp(sourcePath.getString(),
+		   existing->path.getValue().getString()) == 0)
+	    return;
+    }
+
+    sources.push_back(source);
+}
+
+static void
 controller_collect_database_sources(SoNode *node,
 				    std::vector<SoBRLDatabaseSource *> &sources)
 {
@@ -183,6 +224,28 @@ controller_collect_database_sources(SoNode *node,
 }
 
 static void
+controller_collect_database_source_roots(
+    SoNode *node,
+    std::vector<SoBRLDatabaseSource *> &sources)
+{
+    if (!node)
+	return;
+
+    if (node->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
+	SoBRLDatabaseSource *source = static_cast<SoBRLDatabaseSource *>(node);
+	controller_append_database_source_unique(sources, source);
+	return;
+    }
+
+    if (!node->isOfType(SoGroup::getClassTypeId()))
+	return;
+
+    SoGroup *group = static_cast<SoGroup *>(node);
+    for (int i = 0; i < group->getNumChildren(); i++)
+	controller_collect_database_source_roots(group->getChild(i), sources);
+}
+
+static void
 controller_collect_mesh_shapes(SoNode *node,
 			       std::vector<SoBRLMeshShape *> &shapes)
 {
@@ -201,6 +264,30 @@ controller_collect_mesh_shapes(SoNode *node,
     SoGroup *group = static_cast<SoGroup *>(node);
     for (int i = 0; i < group->getNumChildren(); i++)
 	controller_collect_mesh_shapes(group->getChild(i), shapes);
+}
+
+static std::vector<SoBRLDatabaseSource *>
+controller_render_database_source_roots(
+    const BRLObolViewController *controller)
+{
+    std::vector<SoBRLDatabaseSource *> sources;
+    if (!controller)
+	return sources;
+
+    SoNode *root = controller->getRenderSceneRoot();
+    if (!root)
+	root = controller->getSceneRoot();
+    controller_collect_database_source_roots(root, sources);
+    if (!sources.empty())
+	return sources;
+
+    const int sourceCount = controller->getDatabaseSourceCount();
+    for (int i = 0; i < sourceCount; i++) {
+	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
+	controller_append_database_source_unique(sources, source);
+    }
+
+    return sources;
 }
 
 static std::vector<SoBRLDatabaseSource *>
@@ -1842,7 +1929,7 @@ BRLObolViewController::submitLodRequests(BRLObolLodService *service,
     }
 
     std::vector<SoBRLDatabaseSource *> sources =
-	controller_render_database_sources(this);
+	controller_render_database_source_roots(this);
     for (size_t i = 0; i < sources.size(); i++) {
 	SoBRLDatabaseSource *source = sources[i];
 	if (!source)
@@ -1866,6 +1953,7 @@ BRLObolViewController::submitLodRequests(BRLObolLodService *service,
 	action.setRefreshMissing(refreshMissing);
 	action.setReset(reset);
 	action.setViewLodState(this->viewLodState);
+	action.setProxyStages(TRUE, TRUE);
 	if (this->lodUseForcedLevel)
 	    action.setForcedLevel(this->lodForcedLevel);
 	action.apply(source);
@@ -2030,6 +2118,19 @@ const SbString &
 BRLObolViewController::getLastLodDiagnostics(void) const
 {
     return this->lastLodDiagnostics;
+}
+
+size_t
+BRLObolViewController::getActiveLodMeshPayloadCount(void) const
+{
+    return this->viewLodState ? this->viewLodState->meshPayloadCount() : 0;
+}
+
+size_t
+BRLObolViewController::getActiveLodProxyPayloadCount(int proxyKind) const
+{
+    return this->viewLodState ?
+	   this->viewLodState->proxyPayloadCount(proxyKind) : 0;
 }
 
 SoBRLSceneController *

@@ -2620,23 +2620,17 @@ struct BRLObolPolygonStore::Impl {
 	const std::string cleanName = store_string(name);
 	if (cleanName.empty())
 	    return NULL;
-	for (std::map<std::string, uint64_t>::const_iterator it =
-		 names.begin(); it != names.end(); ++it) {
-	    const std::string &key = it->first;
-	    if (key.size() < 3)
+
+	for (std::map<uint64_t, BRLObolPolygonStoreRecord *>::const_iterator it =
+		 records.begin(); it != records.end(); ++it) {
+	    BRLObolPolygonStoreRecord *rec = it->second;
+	    if (!rec)
 		continue;
-	    const size_t namePos = key.rfind(':');
-	    const std::string keyName = namePos == std::string::npos ?
-					key.substr(2) : key.substr(namePos + 1);
-	    if (keyName != cleanName)
+	    if (store_string(rec->name) != cleanName)
 		continue;
-	    std::map<uint64_t, BRLObolPolygonStoreRecord *>::const_iterator rit =
-		records.find(it->second);
-	    if (rit == records.end() || !rit->second)
+	    if (!(store_scope_bit(rec->scope) & scopeMask))
 		continue;
-	    if (!(store_scope_bit(rit->second->scope) & scopeMask))
-		continue;
-	    return rit->second;
+	    return rec;
 	}
 	return NULL;
     }

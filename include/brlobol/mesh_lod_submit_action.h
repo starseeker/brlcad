@@ -52,6 +52,9 @@ public:
     int getForcedLevel(void) const;
     void setRequireLodBacked(SbBool requireLodBacked);
     SbBool getRequireLodBacked(void) const;
+    void setProxyStages(SbBool submitAabb, SbBool submitObb);
+    SbBool getSubmitAabbProxyStage(void) const;
+    SbBool getSubmitObbProxyStage(void) const;
     void setViewLodState(const BRLObolViewLodState *viewState);
     const BRLObolViewLodState *getViewLodState(void) const;
 
@@ -84,6 +87,8 @@ private:
     SbBool useForcedLevel;
     int forcedLevel;
     SbBool requireLodBacked;
+    SbBool submitAabbProxyStage;
+    SbBool submitObbProxyStage;
     const BRLObolViewLodState *viewState;
     unsigned int visitedMeshCount;
     unsigned int submittedTaskCount;

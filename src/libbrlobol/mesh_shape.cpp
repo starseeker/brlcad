@@ -1055,6 +1055,88 @@ mesh_shape_render_hidden_line(SoBRLMeshShape *shape,
     glPopAttrib();
 }
 
+static SbBool
+mesh_shape_proxy_corners(const BRLObolViewLodState::ProxyPayload *viewProxy,
+			 SbVec3f corners[8])
+{
+    if (!viewProxy || !viewProxy->isValid())
+	return FALSE;
+
+    const BRLObolLodProxy &proxy = viewProxy->proxy;
+    if (proxy.kind == BRLOBOL_LOD_PROXY_AABB) {
+	if (proxy.bounds.isEmpty())
+	    return FALSE;
+	const SbVec3f bmin = proxy.bounds.getMin();
+	const SbVec3f bmax = proxy.bounds.getMax();
+	corners[0].setValue(bmin[0], bmin[1], bmin[2]);
+	corners[1].setValue(bmax[0], bmin[1], bmin[2]);
+	corners[2].setValue(bmax[0], bmax[1], bmin[2]);
+	corners[3].setValue(bmin[0], bmax[1], bmin[2]);
+	corners[4].setValue(bmin[0], bmin[1], bmax[2]);
+	corners[5].setValue(bmax[0], bmin[1], bmax[2]);
+	corners[6].setValue(bmax[0], bmax[1], bmax[2]);
+	corners[7].setValue(bmin[0], bmax[1], bmax[2]);
+	return TRUE;
+    }
+
+    if (proxy.kind == BRLOBOL_LOD_PROXY_OBB) {
+	SbVec3f ax = proxy.axisX;
+	SbVec3f ay = proxy.axisY;
+	SbVec3f az = proxy.axisZ;
+	if (ax.length() > 0.0f)
+	    ax.normalize();
+	if (ay.length() > 0.0f)
+	    ay.normalize();
+	if (az.length() > 0.0f)
+	    az.normalize();
+	ax *= proxy.halfExtents[0];
+	ay *= proxy.halfExtents[1];
+	az *= proxy.halfExtents[2];
+	corners[0] = proxy.center - ax - ay - az;
+	corners[1] = proxy.center + ax - ay - az;
+	corners[2] = proxy.center + ax + ay - az;
+	corners[3] = proxy.center - ax + ay - az;
+	corners[4] = proxy.center - ax - ay + az;
+	corners[5] = proxy.center + ax - ay + az;
+	corners[6] = proxy.center + ax + ay + az;
+	corners[7] = proxy.center - ax + ay + az;
+	return TRUE;
+    }
+
+    return FALSE;
+}
+
+static void
+mesh_shape_render_proxy(SoBRLMeshShape *shape,
+			const BRLObolViewLodState::ProxyPayload *viewProxy)
+{
+    SbVec3f corners[8];
+    if (!mesh_shape_proxy_corners(viewProxy, corners))
+	return;
+
+    static const int edges[12][2] = {
+	{0, 1}, {1, 2}, {2, 3}, {3, 0},
+	{4, 5}, {5, 6}, {6, 7}, {7, 4},
+	{0, 4}, {1, 5}, {2, 6}, {3, 7}
+    };
+
+    glPushAttrib(GL_CURRENT_BIT | GL_ENABLE_BIT | GL_LIGHTING_BIT |
+		 GL_LINE_BIT);
+    glDisable(GL_LIGHTING);
+    if (shape->lineWidth.getValue() > 0)
+	glLineWidth(static_cast<GLfloat>(shape->lineWidth.getValue()));
+    set_mesh_gl_material(shape, -1);
+    glBegin(GL_LINES);
+    for (size_t i = 0; i < 12; i++) {
+	const SbVec3f &a = corners[edges[i][0]];
+	const SbVec3f &b = corners[edges[i][1]];
+	glVertex3f(a[0], a[1], a[2]);
+	glVertex3f(b[0], b[1], b[2]);
+    }
+    glEnd();
+    glPopAttrib();
+}
+
 void
 SoBRLMeshShape::GLRender(SoGLRenderAction *action)
 {
@@ -1063,6 +1145,12 @@ SoBRLMeshShape::GLRender(SoGLRenderAction *action)
 
     const BRLObolViewLodState::MeshPayload *viewPayload =
 	brlobol_view_lod_mesh_for_action(action, this);
+    const BRLObolViewLodState::ProxyPayload *viewProxy =
+	viewPayload ? NULL : brlobol_view_lod_proxy_for_action(action, this);
+    if (viewProxy) {
+	mesh_shape_render_proxy(this, viewProxy);
+	return;
+    }
 
     if (this->hiddenLine.getValue() ||
 	this->drawMode.getValue() == BRLOBOL_LOD_DRAW_HIDDEN_LINE) {
@@ -1102,6 +1190,24 @@ SoBRLMeshShape::computeBBox(SoAction *action, SbBox3f &box, SbVec3f &center)
 	return;
     }
 
+    const BRLObolViewLodState::ProxyPayload *viewProxy =
+	brlobol_view_lod_proxy_for_action(action, this);
+    if (viewProxy) {
+	if (!viewProxy->bounds.isEmpty()) {
+	    box = viewProxy->bounds;
+	} else if (!viewProxy->proxy.bounds.isEmpty()) {
+	    box = viewProxy->proxy.bounds;
+	} else {
+	    SbVec3f corners[8];
+	    if (mesh_shape_proxy_corners(viewProxy, corners)) {
+		for (size_t i = 0; i < 8; i++)
+		    box.extendBy(corners[i]);
+	    }
+	}
+	center = box.isEmpty() ? SbVec3f(0.0f, 0.0f, 0.0f) : box.getCenter();
+	return;
+    }
+
     const SoBRLMeshShape *geom = this->getGeometrySource();
     if (geom->point.getNum() > 0) {
 	for (int i = 0; i < geom->point.getNum(); i++)
@@ -1121,14 +1227,20 @@ SoBRLMeshShape::generatePrimitives(SoAction *action)
 
     const BRLObolViewLodState::MeshPayload *candidateViewPayload =
 	brlobol_view_lod_mesh_for_action(action, this);
+    const BRLObolViewLodState::ProxyPayload *candidateViewProxy =
+	candidateViewPayload ? NULL : brlobol_view_lod_proxy_for_action(action,
+		this);
     const SbBool pickFullDetail =
 	(this->getPickGeometryPolicy() == PICK_FULL_DETAIL &&
-	 (this->lodDisplayActive.getValue() || candidateViewPayload)) ?
+	 (this->lodDisplayActive.getValue() || candidateViewPayload ||
+	  candidateViewProxy)) ?
 	TRUE : FALSE;
     const SbBool usePreservedFullDetail =
 	(pickFullDetail && this->hasFullDetailMesh()) ? TRUE : FALSE;
     if (pickFullDetail && !usePreservedFullDetail &&
 	this->isLodBackedMesh())
+	return;
+    if (!pickFullDetail && candidateViewProxy)
 	return;
 
     const BRLObolViewLodState::MeshPayload *viewPayload =

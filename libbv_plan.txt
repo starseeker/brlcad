@@ -146,7 +146,6 @@ libbv must not own:
 librt owns:
 
 * RT-facing view snapshots and adapters built from libbv state.
-* Mesh LoD policy and `rt_mesh_lod_*` logic.
 * Edit view snapshots for primitive edit code.
 * `db_i`/`directory`/path-aware helpers.
 * Thin compatibility dispatch from existing `rt_view_context_*` APIs to libbv
@@ -156,6 +155,8 @@ libbrlobol/Obol owns:
 
 * Scene graph ownership, source/group/shape identity, and draw-state metadata.
 * View-aware LoD realization decisions that affect scene objects.
+* Persistent draw-cache policy for AABB/OBB proxy data, local/path draw
+  metadata, and mesh POP LoD.
 * Per-view active LoD payloads, LoD traversal bindings, source-backed exact
   request fallback, and LoD memory eviction.
 * Command-scene publication for NIRT, rtcheck, GQA, qray/uplot, BREP/NMG
@@ -195,7 +196,6 @@ fields in librt.  Add only RT-specific state beside it.
 Native RT context state may include:
 
 * RT LoD policy.
-* OBB/radius cache if the data is RT-specific or derived from scene bounds.
 * Refresh suppression/drawn-count fields only until they move to libbv or a
   display host.
 * Faceplate states that are not scene objects yet: ADC, grid, axes, params.
@@ -416,28 +416,35 @@ Suggested Near-Term Work Items
    immediate libdm drawing.  If `dm-obol` exposes a missing callback, add or
    retarget the high-level Obol/GED operation instead of emulating the old
    stream.
-2. Extend the shared-scene/per-view-render-root Obol attach model to remaining
+2. Convert the GED basic/LoD image tests to authoritative Obol baselines after
+   proving the remaining visual differences are correct.  The LoD draw test no
+   longer crashes when native Obol view contexts are active; the remaining
+   failures are image-parity/baseline issues.
+3. Remove or port remaining retained-BSG mesh payload internals after the
+   retained renderer path no longer needs them.  Any remaining
+   `rt_mesh_lod_*`/`db_mesh_lod_*` reference is a migration bug.
+4. Extend the shared-scene/per-view-render-root Obol attach model to remaining
    multi-view caller/test paths.  Quad drawing now uses Obol attach and normal
    `screengrab`; future multi-view failures should be treated as Obol model
    regressions or missing high-level capabilities, not as reasons to revive
    mirrored BSG/DM state.
    Include explicit view-LoD invalidation and cache-only LoD fixtures in this
    coverage.
-3. Inventory remaining `rt/view_legacy_bsg.h` includes and classify each one:
+5. Inventory remaining `rt/view_legacy_bsg.h` includes and classify each one:
    keep explicit retained fallback, migrate to neutral libbv-backed RT context,
    or migrate to libbrlobol/Obol scene APIs.
-4. Continue deleting or isolating code that assumes each DM has a mirrored
+5. Continue deleting or isolating code that assumes each DM has a mirrored
    scene.  Shared operations should act on the GED-owned scene, while
    independent/view-local operations should act on the matching view endpoint.
-5. Move neutral RT view dispatch out of `view_legacy_bsg.c` once the remaining
+6. Move neutral RT view dispatch out of `view_legacy_bsg.c` once the remaining
    caller-facing BSG fallback points are isolated.
-6. Continue migrating scene/interaction features still routed through retained
+7. Continue migrating scene/interaction features still routed through retained
    BSG fallback, especially no-owned-scene draw/view behavior, selection/snap
    resolution, faceplate/readback paths, and lower display-host assumptions.
-7. Use focused failures in broader GED/qtcad/qged/mged workflows as migration
+8. Use focused failures in broader GED/qtcad/qged/mged workflows as migration
    signals.  Do not add new behavior to retained BSG just to preserve old
    side effects.
-8. After caller-facing BSG dependencies shrink, remove libbsg from non-legacy
+9. After caller-facing BSG dependencies shrink, remove libbsg from non-legacy
    dependency rows and update the pivot guard and inventory in the same change.
 
 Verification Gates

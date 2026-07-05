@@ -34,6 +34,7 @@
 #include <bu.h>
 #include <brlobol/init.h>
 #include <brlobol/database_source.h>
+#include <brlobol/mesh_lod_cache.h>
 #include <brlobol/scene_controller.h>
 #include <brlobol/vlist_shape.h>
 #include <brlobol/view_controller.h>
@@ -67,7 +68,7 @@ ged_changed_callback(struct db_i *dbip, struct directory *dp, int mode, void *u_
 
     // Need to invalidate any LoD caches associated with this dp
     if (dbip && dp && dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT)
-	(void)db_mesh_lod_invalidate(dbip, dp->d_namep, NULL);
+	(void)brlobol_mesh_lod_cache_invalidate(dbip, dp->d_namep, NULL);
 
     switch(mode) {
 	case 0:
@@ -109,6 +110,28 @@ draw_test_active_view_ctx(struct ged *gedp)
 	return BU_PTBL_GET(views, 0);
 
     return ged_view_active_ctx(gedp);
+}
+
+static void *
+draw_test_active_retained_view_ctx(struct ged *gedp)
+{
+    if (!gedp)
+	return NULL;
+
+    void *active = ged_view_active_ctx(gedp);
+    if (rt_view_context_is_retained(active))
+	return active;
+
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
+    if (views) {
+	for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
+	    void *view_ctx = BU_PTBL_GET(views, i);
+	    if (rt_view_context_is_retained(view_ctx))
+		return view_ctx;
+	}
+    }
+
+    return NULL;
 }
 
 static SoDB::ContextManager *
@@ -509,7 +532,7 @@ draw_test_images_differ(const char *a, const char *b, int offmany_threshold)
 extern "C" void
 dm_refresh(struct ged *gedp)
 {
-    void *v = draw_test_active_view_ctx(gedp);
+    void *v = draw_test_active_retained_view_ctx(gedp);
     if (!v)
 	return;
     struct ged_draw_transaction txn =

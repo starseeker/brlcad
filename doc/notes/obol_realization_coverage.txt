@@ -24,9 +24,12 @@ The required hierarchy smoke models are:
 
 The larger maturity candidate is share/db/faa/Generic_Twin.g.  It is the
 largest in-tree example, includes valid and invalid BoTs, and mixes in
-implicit solids.  It should become the final qtcad/Obol large-model gate once
-staged LoD realization and large-BoT diagnostics are mature enough for the
-extra runtime.
+implicit solids.  qtcad now has bounded Generic_Twin startup gates for the
+first cache-backed root proxy and two post-proxy cached visible-frontier AABB
+expansion passes.  Full large-root startup refinement is still not a default
+gate because synchronous full-detail promotion can block too long; it should
+be promoted only after automatic recursive/background cache-backed refinement
+is in place.
 
 The focused CTest gates are libbrlobol_prototype and
 test_qtcad_obol_draw_sync.  libbrlobol_prototype requires both staged models
@@ -65,13 +68,15 @@ database sources.  This preserves local geometry reuse when GED or another
 caller synchronizes transformed leaf instances in separate transactions, while
 still avoiding a persistent cross-refresh cache until key/invalidation/refcount
 policy is explicit.
-Staged RT mesh LoD payload copying also owns optional active normals as a
+Staged mesh LoD payload copying also owns optional active normals as a
 provider-neutral triangle-corner array, so normal payloads do not leak the
-underlying RT/BSG cache container into libbrlobol consumers.  The RT mesh-LoD
-provider gate seeds a normal-bearing cached mesh and verifies that the copied
-Obol payload receives the normals through the RT facade.  Generated mesh LoD
-stores use the same triangle-corner normal contract, and rt_view_info verifies
-those normals round-trip through active RT LoD data.
+underlying cache container into libbrlobol consumers.  The mesh-LoD provider
+now loads from the libbrlobol-owned `.DbDrawCache/mesh_lod.format` store, and
+its gate seeds a normal-bearing cached mesh and verifies that the copied Obol
+payload receives the normals through the libbrlobol cache API.  Generated mesh
+LoD stores use the same triangle-corner normal contract.  Mesh-LoD cache
+behavior is covered by `libbrlobol_mesh_lod_cache`; `rt_view_info` is now
+limited to librt view snapshot policy.
 test_qtcad_obol_draw_sync
 also verifies the real GED draw-observer path used by qged/qtcad: a
 ged_exec_draw command updates a QgView Obol database source and the resulting
@@ -150,7 +155,7 @@ hints remain whole-object until a bounded measurement provider exists.  The
 same LoD gate also verifies source-backed request conversion replaces stale template
 `source_query.*` params with current request metadata, and that non-forced
 mesh LoD submissions use the same view-policy active level as a direct
-`rt_mesh_lod_load_view` selection for the submitted `rt_view_info` while
+`brlobol_mesh_lod_load_view` selection for the submitted `rt_view_info` while
 rejecting duplicate queued/running view-policy requests through LoD service
 active-request tracking.
 
@@ -398,7 +403,8 @@ Near-Term Gates
 6. Complete broader live edit-tool lifecycle/state semantics and extend stable
    edge/vertex identity beyond the current indexed-mesh action coverage where
    native or tessellated curved nodes need to report those sub-entities.
-7. Promote the controlled Generic_Twin.g opt-in workflow gate to a default
-   gate after large-BoT staged LoD realization can publish diagnostics for
-   invalid BoTs, preserve mixed implicit/mesh identity, and avoid blocking
-   routine qtcad developer tests.
+7. Extend the bounded Generic_Twin startup gates into a full default
+   large-root refinement gate after automatic recursive/background
+   cache-backed expansion can publish AABB/OBB/mesh updates, preserve mixed
+   implicit/mesh identity, report invalid large-BoT diagnostics, and avoid
+   blocking routine qtcad developer tests.
