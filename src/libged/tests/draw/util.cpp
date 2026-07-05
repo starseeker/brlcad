@@ -394,11 +394,8 @@ draw_test_obol_debug_dump(struct ged *gedp, int id,
 }
 
 static int
-draw_test_obol_screengrab(struct ged *gedp, int id, const char *filename)
+draw_test_obol_screengrab_impl(struct ged *gedp, int id, const char *filename)
 {
-    if (!draw_test_obol_capture_enabled())
-	return 0;
-
     SoDB::ContextManager *manager = draw_test_obol_context_manager();
     if (!manager) {
 	bu_log("Obol draw-test capture requested, but OSMesa context manager is unavailable\n");
@@ -446,6 +443,67 @@ draw_test_obol_screengrab(struct ged *gedp, int id, const char *filename)
 
     return draw_test_write_rgb_png(filename, buffer, size[0], size[1]) == BRLCAD_OK ?
 	1 : -1;
+}
+
+extern "C" int
+draw_test_obol_screengrab(struct ged *gedp, int id, const char *filename)
+{
+    return draw_test_obol_screengrab_impl(gedp, id, filename);
+}
+
+static int
+draw_test_obol_screengrab_if_enabled(struct ged *gedp, int id,
+	const char *filename)
+{
+    if (!draw_test_obol_capture_enabled())
+	return 0;
+
+    return draw_test_obol_screengrab_impl(gedp, id, filename);
+}
+
+extern "C" long
+draw_test_count_nonblack_pixels(const char *filename)
+{
+    icv_image_t *img = icv_read(filename, BU_MIME_IMAGE_PNG, 0, 0);
+    if (!img)
+	return -1;
+
+    long cnt = 0;
+    size_t npix = (size_t)img->width * img->height;
+    double *d = img->data;
+    for (size_t i = 0; i < npix; i++) {
+	if (d[3*i] > 0.001 || d[3*i+1] > 0.001 || d[3*i+2] > 0.001)
+	    cnt++;
+    }
+
+    icv_destroy(img);
+    return cnt;
+}
+
+extern "C" int
+draw_test_images_differ(const char *a, const char *b, int offmany_threshold)
+{
+    icv_image_t *ia = icv_read(a, BU_MIME_IMAGE_PNG, 0, 0);
+    icv_image_t *ib = icv_read(b, BU_MIME_IMAGE_PNG, 0, 0);
+    if (!ia || !ib) {
+	if (ia)
+	    icv_destroy(ia);
+	if (ib)
+	    icv_destroy(ib);
+	return -1;
+    }
+
+    int match = 0;
+    int off1 = 0;
+    int offmany = 0;
+    int diff = icv_diff(&match, &off1, &offmany, ia, ib);
+    icv_destroy(ia);
+    icv_destroy(ib);
+
+    if (!diff)
+	return 0;
+
+    return (offmany >= offmany_threshold) ? 1 : 0;
 }
 
 extern "C" void
@@ -497,7 +555,7 @@ img_cmp(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool clear
     dm_refresh(gedp);
     const char *s_av[2] = {"screengrab", NULL};
     s_av[1] = bu_vls_cstr(&tname);
-    int obol_capture = draw_test_obol_screengrab(gedp, id,
+    int obol_capture = draw_test_obol_screengrab_if_enabled(gedp, id,
 	    bu_vls_cstr(&tname));
     if (obol_capture < 0)
 	bu_file_delete(bu_vls_cstr(&tname));
@@ -635,7 +693,7 @@ img_not_empty(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool
     dm_refresh(gedp);
     const char *s_av[2] = {"screengrab", NULL};
     s_av[1] = bu_vls_cstr(&tname);
-    int obol_capture = draw_test_obol_screengrab(gedp, id,
+    int obol_capture = draw_test_obol_screengrab_if_enabled(gedp, id,
 	    bu_vls_cstr(&tname));
     if (obol_capture < 0)
 	bu_file_delete(bu_vls_cstr(&tname));

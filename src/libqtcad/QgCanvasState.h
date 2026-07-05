@@ -68,9 +68,10 @@
  * Ownership summary
  * ─────────────────
  * local_v  – Opaque handle for the view created by
- *            qg_legacy_view_local_create in the canvas constructor; released
- *            by qg_legacy_view_local_free in the canvas destructor.  The
- *            canvas owns it unconditionally.
+ *            qg_legacy_view_local_create in the canvas constructor; destroyed
+ *            through the normal RT view-context lifetime path by
+ *            qg_legacy_view_local_free in the canvas destructor.  The canvas
+ *            owns it unconditionally.
  *
  * v        – Normally points to local_v (the widget-owned view).  When
  *            QgCanvasBase::set_view() is called with a non-null external

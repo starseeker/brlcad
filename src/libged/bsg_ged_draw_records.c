@@ -28,6 +28,7 @@
 
 #include "common.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "bu/hash.h"
@@ -261,42 +262,81 @@ struct _draw_path_state_ctx {
 
 
 static int
-_draw_obol_source_visible_in_view(
+_draw_obol_record_instance_in_view(
+	const struct ged_draw_obol_database_source_record *record,
+	void *view_ctx)
+{
+    if (!record || !record->database_path || !record->database_path[0])
+	return 0;
+
+    const char *instance_key = record->instance_key;
+    if (!view_ctx || !rt_view_context_is_independent(view_ctx)) {
+	if (!instance_key || !instance_key[0])
+	    return 1;
+
+	const char mode_marker[] = ":ged-draw-mode:";
+	struct bu_vls base_key = BU_VLS_INIT_ZERO;
+	const char *marker = NULL;
+	const char *candidate = instance_key;
+	while ((candidate = strstr(candidate, mode_marker)) != NULL) {
+	    marker = candidate;
+	    candidate++;
+	}
+	if (marker)
+	    bu_vls_strncpy(&base_key, instance_key,
+		    (size_t)(marker - instance_key));
+	else
+	    bu_vls_strcpy(&base_key, instance_key);
+	int ret = _draw_path_equal(bu_vls_cstr(&base_key),
+		record->database_path);
+	bu_vls_free(&base_key);
+	return ret;
+    }
+
+    const char *view_name = rt_view_context_name_get(view_ctx);
+    char fallback[64] = {0};
+    if (!view_name || !view_name[0]) {
+	snprintf(fallback, sizeof(fallback), "%p", view_ctx);
+	view_name = fallback;
+    }
+
+    struct bu_vls prefix = BU_VLS_INIT_ZERO;
+    bu_vls_printf(&prefix, "ged-view:%s:", view_name);
+    int ret = (instance_key && bu_strncmp(instance_key, bu_vls_cstr(&prefix),
+	    bu_vls_strlen(&prefix)) == 0) ? 1 : 0;
+    bu_vls_free(&prefix);
+    return ret;
+}
+
+
+static int
+_draw_obol_source_record_visible_in_view(
 	struct ged *gedp,
-	const char *source_path,
+	const struct ged_draw_obol_database_source_record *record,
 	void *view_ctx,
 	int mode,
 	struct ged_draw_group_record_summary *group_out)
 {
     if (group_out)
 	memset(group_out, 0, sizeof(*group_out));
-    if (!gedp || !source_path || !source_path[0])
+    if (!gedp || !record || !record->valid || !record->database_path ||
+	    !record->database_path[0] || !record->visible)
+	return 0;
+    if (mode >= 0 && record->draw_mode != mode)
+	return 0;
+    if (!_draw_obol_record_instance_in_view(record, view_ctx))
 	return 0;
 
-    struct ged_draw_scene_display_summary shape_summary;
-    if (!ged_draw_obol_database_source_display_summary_for_path(gedp,
-	    source_path, &shape_summary) || !shape_summary.valid ||
-	    !shape_summary.visible)
-	return 0;
-    if (mode >= 0 && shape_summary.draw_mode != mode)
-	return 0;
-
-    struct bu_vls group_path = BU_VLS_INIT_ZERO;
-    if (ged_draw_obol_database_source_owner_group_path_for_path(gedp,
-	    source_path, &group_path)) {
+    if (record->owner_group_path && record->owner_group_path[0]) {
 	struct ged_draw_group_record_summary group_summary = {0};
-	if (!ged_draw_obol_group_record_summary_for_path(gedp,
-		bu_vls_cstr(&group_path), &group_summary) ||
-		group_summary.is_overlay || !group_summary.visible ||
-		!_draw_group_record_summary_in_view(&group_summary,
-		    view_ctx)) {
-	    bu_vls_free(&group_path);
-	    return 0;
+	if (ged_draw_obol_group_record_summary_for_path(gedp,
+		record->owner_group_path, &group_summary)) {
+	    if (group_summary.is_overlay || !group_summary.visible)
+		return 0;
+	    if (group_out)
+		*group_out = group_summary;
 	}
-	if (group_out)
-	    *group_out = group_summary;
     }
-    bu_vls_free(&group_path);
 
     return 1;
 }
@@ -336,18 +376,19 @@ _draw_obol_source_record_path(struct bu_vls *storage,
 
 
 static int
-_draw_path_state_obol_source_cb(struct ged *gedp,
-				const char *source_path,
-				void *ud)
+_draw_path_state_obol_source_record_cb(struct ged *gedp,
+	const struct ged_draw_obol_database_source_record *record,
+	void *ud)
 {
     struct _draw_path_state_ctx *ctx =
 	(struct _draw_path_state_ctx *)ud;
-    if (!ctx || !gedp || !source_path || !source_path[0])
+    if (!ctx || !gedp || !record || !record->database_path ||
+	    !record->database_path[0])
 	return 1;
 
     struct ged_draw_group_record_summary group_summary = {0};
-    if (!_draw_obol_source_visible_in_view(gedp, source_path, ctx->view_ctx,
-	    ctx->mode, &group_summary))
+    if (!_draw_obol_source_record_visible_in_view(gedp, record,
+	    ctx->view_ctx, ctx->mode, &group_summary))
 	return 1;
     if (group_summary.path && !_draw_path_equal(ctx->path, group_summary.path) &&
 	    _draw_path_is_prefix(group_summary.path, ctx->path))
@@ -355,7 +396,7 @@ _draw_path_state_obol_source_cb(struct ged *gedp,
 
     struct bu_vls record_path_storage = BU_VLS_INIT_ZERO;
     const char *key = _draw_obol_source_record_path(&record_path_storage,
-	    source_path, &group_summary);
+	    record->database_path, &group_summary);
     const char *query_leaf = _draw_path_leaf_name(ctx->path);
     const char *source_leaf = _draw_path_leaf_name(key);
     if (query_leaf && source_leaf && BU_STR_EQUAL(query_leaf, source_leaf))
@@ -505,8 +546,8 @@ ged_draw_path_state(struct ged *gedp,
     ctx.drawn_leaf_paths = drawn;
 
     if (ged_draw_obol_scene_controller_full_synced(gedp)) {
-	int obol_status = ged_draw_obol_database_source_paths_foreach(gedp, 1,
-		_draw_path_state_obol_source_cb, &ctx);
+	int obol_status = ged_draw_obol_database_source_records_foreach(gedp, 1,
+		_draw_path_state_obol_source_record_cb, &ctx);
 	if (obol_status >= 0) {
 	    int state = _draw_path_state_eval(gedp, bu_vls_cstr(&norm),
 		    &ctx);
@@ -727,22 +768,23 @@ _draw_list_shape_ref_path_cb(ged_draw_shape_ref ref, void *ud)
 
 
 static int
-_draw_list_obol_source_path_cb(struct ged *gedp,
-			       const char *source_path,
-			       void *ud)
+_draw_list_obol_source_record_cb(struct ged *gedp,
+	const struct ged_draw_obol_database_source_record *record,
+	void *ud)
 {
     struct _draw_path_list_ctx *ctx = (struct _draw_path_list_ctx *)ud;
-    if (!ctx || !source_path || !source_path[0])
+    if (!ctx || !record || !record->database_path ||
+	    !record->database_path[0])
 	return 1;
 
     struct ged_draw_group_record_summary group_summary = {0};
-    if (!_draw_obol_source_visible_in_view(gedp, source_path, ctx->view_ctx,
-	    ctx->mode, &group_summary))
+    if (!_draw_obol_source_record_visible_in_view(gedp, record,
+	    ctx->view_ctx, ctx->mode, &group_summary))
 	return 1;
 
     struct bu_vls record_path_storage = BU_VLS_INIT_ZERO;
     const char *record_path = _draw_obol_source_record_path(
-	    &record_path_storage, source_path, &group_summary);
+	    &record_path_storage, record->database_path, &group_summary);
     (void)_draw_path_list_add(ctx, record_path);
     bu_vls_free(&record_path_storage);
     return 1;
@@ -750,23 +792,24 @@ _draw_list_obol_source_path_cb(struct ged *gedp,
 
 
 static int
-_draw_list_obol_source_path_collapsed_cb(struct ged *gedp,
-					 const char *source_path,
-					 void *ud)
+_draw_list_obol_source_record_collapsed_cb(struct ged *gedp,
+	const struct ged_draw_obol_database_source_record *record,
+	void *ud)
 {
     struct _draw_path_list_ctx *ctx = (struct _draw_path_list_ctx *)ud;
-    if (!ctx || !source_path || !source_path[0])
+    if (!ctx || !record || !record->database_path ||
+	    !record->database_path[0])
 	return 1;
 
     struct ged_draw_group_record_summary group_summary = {0};
-    if (!_draw_obol_source_visible_in_view(gedp, source_path, ctx->view_ctx,
-	    ctx->mode, &group_summary))
+    if (!_draw_obol_source_record_visible_in_view(gedp, record,
+	    ctx->view_ctx, ctx->mode, &group_summary))
 	return 1;
 
     struct bu_vls record_path_storage = BU_VLS_INIT_ZERO;
     struct bu_vls candidate = BU_VLS_INIT_ZERO;
     const char *record_path = _draw_obol_source_record_path(
-	    &record_path_storage, source_path, &group_summary);
+	    &record_path_storage, record->database_path, &group_summary);
     const char *best = record_path;
     if (record_path && record_path[0]) {
 	size_t len = strlen(record_path);
@@ -798,16 +841,17 @@ struct _draw_has_paths_ctx {
 
 
 static int
-_draw_has_paths_obol_source_cb(struct ged *gedp,
-			       const char *source_path,
-			       void *ud)
+_draw_has_paths_obol_source_record_cb(struct ged *gedp,
+	const struct ged_draw_obol_database_source_record *record,
+	void *ud)
 {
     struct _draw_has_paths_ctx *ctx = (struct _draw_has_paths_ctx *)ud;
-    if (!ctx || !gedp || !source_path || !source_path[0])
+    if (!ctx || !gedp || !record || !record->database_path ||
+	    !record->database_path[0])
 	return 1;
 
-    if (!_draw_obol_source_visible_in_view(gedp, source_path, ctx->view_ctx,
-	    ctx->mode, NULL))
+    if (!_draw_obol_source_record_visible_in_view(gedp, record,
+	    ctx->view_ctx, ctx->mode, NULL))
 	return 1;
 
     ctx->found = 1;
@@ -865,9 +909,9 @@ ged_draw_list_paths(struct ged *gedp,
 
     int obol_status = -1;
     if (ged_draw_obol_scene_controller_full_synced(gedp)) {
-	obol_status = ged_draw_obol_database_source_paths_foreach(gedp, 1,
-		expanded ? _draw_list_obol_source_path_cb :
-		    _draw_list_obol_source_path_collapsed_cb, &ctx);
+	obol_status = ged_draw_obol_database_source_records_foreach(gedp, 1,
+		expanded ? _draw_list_obol_source_record_cb :
+		    _draw_list_obol_source_record_collapsed_cb, &ctx);
     }
 
     if (obol_status < 0) {
@@ -906,8 +950,8 @@ ged_draw_has_paths(struct ged *gedp,
     ctx.mode = mode;
 
     if (ged_draw_obol_scene_controller_full_synced(gedp)) {
-	int obol_status = ged_draw_obol_database_source_paths_foreach(gedp, 1,
-		_draw_has_paths_obol_source_cb, &ctx);
+	int obol_status = ged_draw_obol_database_source_records_foreach(gedp, 1,
+		_draw_has_paths_obol_source_record_cb, &ctx);
 	if (obol_status >= 0)
 	    return ctx.found;
     }

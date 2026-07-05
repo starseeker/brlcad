@@ -30,12 +30,14 @@
 #include "vmath.h"
 
 class BRLObolLodService;
+class BRLObolViewLodState;
 class BRLObolFeatureStore;
 class BRLObolPolygonStore;
 class BRLObolSelectionStore;
 class SoBRLExportAction;
 class SoBRLMeasureAction;
 class SoBRLSnapAction;
+class SoBRLViewLodGroup;
 class SoCamera;
 class SoGroup;
 class SoNode;
@@ -65,7 +67,11 @@ public:
 
     void setSceneRoot(SoNode *root);
     SoNode *getSceneRoot(void) const;
+    void setRenderSceneRoot(SoNode *root);
+    SoNode *getRenderSceneRoot(void) const;
     SoNode *getRenderRoot(void) const;
+    BRLObolViewLodState *getViewLodState(void) const;
+    void clearViewLodState(void);
 
     void setCamera(SoCamera *camera);
     SoCamera *getCamera(void) const;
@@ -359,6 +365,7 @@ public:
 	BRLObolDatabaseSourceSummary &summary) const;
 
 private:
+    void setViewportSceneGraphWithLod(SoNode *root);
     void syncRenderManager(void);
     void advanceLodViewRevision(void);
     void advanceLodPolicyRevision(void);
@@ -368,6 +375,8 @@ private:
 
     SoBRLSceneController sceneController;
     SoViewport *viewport;
+    SoBRLViewLodGroup *renderLodRoot;
+    BRLObolViewLodState *viewLodState;
     SoRenderManager *renderManager;
     SoCamera *activeCamera;
     SbViewportRegion viewportRegion;

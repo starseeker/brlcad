@@ -201,9 +201,9 @@ qtgl_open(void *ctx, void *UNUSED(interp), int argc, const char **argv)
     struct dm_qtvars *pubvars = NULL;
     struct qtgl_vars *privars = NULL;
 
-    /* Make sure we have a Qt widget context.  A retained BSG view can still
-     * arrive as a default context when no application widget is available. */
-    if (!ctx || dm_view_context_is_retained_legacy(ctx))
+    /* Make sure we have a Qt widget context.  Default app plumbing can still
+     * pass an opaque RT view context when no application widget is available. */
+    if (!ctx || rt_view_context_is_valid(ctx))
 	return NULL;
 
     BU_GET(dmp, struct dm);

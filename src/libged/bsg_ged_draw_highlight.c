@@ -147,6 +147,10 @@ ged_draw_set_highlight_state(struct ged *gedp, int highlighted)
 {
     if (!gedp)
 	return;
+
+    uint64_t highlight_rev0 = ged_draw_highlight_revision(gedp);
+    int obol_changed = ged_draw_obol_highlight_state_set(gedp, highlighted);
+
     if (!highlighted) {
 	struct ged_drawable *gdp = gedp->i ? gedp->i->ged_gdp : NULL;
 	/* Fast path: when exactly one shape is highlighted and tracked,
@@ -159,6 +163,10 @@ ged_draw_set_highlight_state(struct ged *gedp, int highlighted)
 	}
     }
     _sg_set_highlight_all(gedp, highlighted);
+    if (obol_changed &&
+	    ged_draw_highlight_revision(gedp) == highlight_rev0 &&
+	    gedp->i && gedp->i->ged_gdp)
+	gedp->i->ged_gdp->gd_highlight_rev++;
 }
 
 

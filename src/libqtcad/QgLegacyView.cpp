@@ -68,10 +68,7 @@ qg_legacy_view_local_create(const char *name)
 void
 qg_legacy_view_local_free(qg_legacy_view *view)
 {
-    /* Canvas-local views may outlive GED scene cleanup in tests and app
-     * shutdown; keep the historical qtcad release behavior until the lower
-     * retained view source is retired. */
-    rt_view_context_release_storage(qg_legacy_view_to_context(view));
+    qg_legacy_view_local_destroy(view);
 }
 
 void

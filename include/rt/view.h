@@ -929,6 +929,7 @@ RT_EXPORT extern fastf_t rt_view_lod_curve_scale(const struct rt_view_info *info
 RT_EXPORT extern size_t rt_view_lod_bot_threshold(const struct rt_view_info *info);
 RT_EXPORT extern fastf_t rt_view_avg_sample_spacing(const struct rt_view_info *info);
 RT_EXPORT extern fastf_t rt_view_solid_point_spacing(const struct rt_view_info *info, fastf_t solid_width);
+RT_EXPORT extern int rt_view_context_is_valid(const void *ctx);
 RT_EXPORT extern int rt_view_context_is_retained(const void *ctx);
 RT_EXPORT extern const char *rt_view_context_name_get(const void *ctx);
 RT_EXPORT extern int rt_view_context_name_set(void *ctx, const char *name);

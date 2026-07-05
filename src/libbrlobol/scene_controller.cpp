@@ -3883,9 +3883,9 @@ SoBRLSceneController::getSceneSubtreeBounds(const char *nodePath,
     if (!path[0] || !normalizedPath[0])
 	node = this->root;
     if (!node)
-	node = this->findGroup(path);
-    if (!node)
 	node = this->findDatabaseSource(path);
+    if (!node)
+	node = this->findGroup(path);
     if (!node)
 	node = this->findShape(path);
 

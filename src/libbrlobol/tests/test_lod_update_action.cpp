@@ -222,6 +222,35 @@ mesh_payload_task(const BRLObolLodRequest &request, void *UNUSED(userData))
 }
 
 static BRLObolLodResult
+mesh_payload_variant_result(const BRLObolLodRequest &request,
+	int activeLevel,
+	int triangleCount)
+{
+    BRLObolLodResult result = mesh_payload_result(request);
+
+    result.geometry.activeLevel = activeLevel;
+    result.mesh.clear();
+    result.mesh.points.push_back(SbVec3f(0.0f, 0.0f, 0.0f));
+    result.mesh.points.push_back(SbVec3f(2.0f, 0.0f, 0.0f));
+    result.mesh.points.push_back(SbVec3f(0.0f, 2.0f, 0.0f));
+    result.mesh.points.push_back(SbVec3f(0.0f, 0.0f, 2.0f));
+    result.mesh.points.push_back(SbVec3f(2.0f, 2.0f, 0.0f));
+    static const int32_t indices[] = {
+	0, 1, 2,
+	0, 3, 1,
+	1, 4, 2
+    };
+    const int clampedTriangleCount =
+	triangleCount < 1 ? 1 : (triangleCount > 3 ? 3 : triangleCount);
+    for (int i = 0; i < clampedTriangleCount * 3; i++)
+	result.mesh.coordIndex.push_back(indices[i]);
+    result.counts.faceCount = static_cast<uint64_t>(clampedTriangleCount);
+    result.counts.pointCount = static_cast<uint64_t>(result.mesh.points.size());
+
+    return result;
+}
+
+static BRLObolLodResult
 source_full_detail_result(const BRLObolLodRequest &request)
 {
     BRLObolLodResult result;
@@ -538,7 +567,32 @@ test_update_action_direct(void)
     BRLObolLodResult resultMissing =
 	attributes_result(make_request("/mesh/missing", "missing"), "missing");
 
+    SoBRLLodUpdateAction missingViewStateUpdate;
+    missingViewStateUpdate.addResult(resultD);
+    missingViewStateUpdate.apply(root);
+    if (missingViewStateUpdate.getMatchedResultCount() != 1 ||
+	    missingViewStateUpdate.getAppliedResultCount() != 0 ||
+	    missingViewStateUpdate.getRejectedResultCount() != 1 ||
+	    missingViewStateUpdate.getUnmatchedResultCount() != 0 ||
+	    missingViewStateUpdate.getDiagnostics().getLength() == 0 ||
+	    meshD->lodAvailable.getValue() ||
+	    meshD->isLodDisplayActive() ||
+	    meshD->point.getNum() != 3 ||
+	    meshD->coordIndex.getNum() != 3 ||
+	    meshD->getTriangleCount() != 1) {
+	printf("FAIL: LoD update action without view state mutated mesh or did not reject result\n");
+	root->unref();
+	return 1;
+    }
+
+    BRLObolViewLodState viewState;
+    SoBRLViewLodGroup *renderRoot = new SoBRLViewLodGroup;
+    renderRoot->ref();
+    renderRoot->setViewLodState(&viewState);
+    renderRoot->addChild(root);
+
     SoBRLLodUpdateAction update;
+    update.setViewLodState(&viewState);
     update.addResult(resultA);
     update.addResult(resultB);
     update.addResult(resultC);
@@ -546,54 +600,34 @@ test_update_action_direct(void)
     update.addResult(resultMissing);
     update.apply(root);
 
+    const BRLObolViewLodState::MeshPayload *meshDPayload =
+	viewState.findMesh(meshD);
     if (update.getResultCount() != 5 ||
 	    update.getMatchedResultCount() != 4 ||
-	    update.getAppliedResultCount() != 2 ||
-	    update.getRejectedResultCount() != 2 ||
+	    update.getAppliedResultCount() != 1 ||
+	    update.getRejectedResultCount() != 3 ||
 	    update.getUnmatchedResultCount() != 1 ||
-	    update.getDiagnostics().getLength() == 0) {
-	printf("FAIL: LoD update action direct counts\n");
+	    update.getDiagnostics().getLength() == 0 ||
+	    !meshDPayload ||
+	    meshDPayload->activeLevel != 2 ||
+	    meshDPayload->getTriangleCount() != 2) {
+	printf("FAIL: LoD update action view-local counts or payload\n");
+	renderRoot->unref();
 	root->unref();
 	return 1;
     }
 
-    if (!meshA->lodStagedAvailable.getValue() ||
-	    meshA->lodResultKind.getValue() != BRLOBOL_LOD_RESULT_ATTRIBUTES ||
-	    meshA->lodAttributeValue.getNum() != 1 ||
-	    strcmp(meshA->lodAttributeValue[0].getString(), "proxy") != 0) {
-	printf("FAIL: LoD update action did not apply matched result\n");
-	root->unref();
-	return 1;
-    }
-
-    if (meshB->lodStagedAvailable.getValue() ||
-	    meshB->lodProviderStatus.getValue() != BRLOBOL_LOD_PROVIDER_STALE ||
-	    meshB->lodDiagnostic.getValue().getLength() == 0) {
-	printf("FAIL: LoD update action did not reject stale result\n");
-	root->unref();
-	return 1;
-    }
-
-    if (meshC->lodStagedAvailable.getValue() ||
-	    meshC->lodProviderStatus.getValue() != BRLOBOL_LOD_PROVIDER_CACHE_MISS ||
-	    meshC->lodDiagnostic.getValue().getLength() == 0) {
-	printf("FAIL: LoD update action did not reject cache-miss result\n");
-	root->unref();
-	return 1;
-    }
-
-    if (!meshD->lodStagedAvailable.getValue() ||
-	    !meshD->lodAvailable.getValue() ||
-	    meshD->lodResultKind.getValue() != BRLOBOL_LOD_RESULT_MESH ||
-	    meshD->lodActiveLevel.getValue() != 2 ||
-	    meshD->lodFaceCount.getValue() != 2 ||
-	    meshD->lodPointCount.getValue() != 4 ||
-	    meshD->point.getNum() != 4 ||
-	    meshD->coordIndex.getNum() != 6 ||
-	    meshD->getTriangleCount() != 2 ||
-	    !meshD->hasFullDetailMesh() ||
-	    meshD->getFullDetailTriangleCount() != 1) {
-	printf("FAIL: LoD update action did not apply staged mesh payload\n");
+    if (meshA->lodStagedAvailable.getValue() ||
+	    meshB->lodStagedAvailable.getValue() ||
+	    meshC->lodStagedAvailable.getValue() ||
+	    meshD->lodStagedAvailable.getValue() ||
+	    meshD->lodAvailable.getValue() ||
+	    meshD->isLodDisplayActive() ||
+	    meshD->point.getNum() != 3 ||
+	    meshD->coordIndex.getNum() != 3 ||
+	    meshD->getTriangleCount() != 1) {
+	printf("FAIL: LoD update action view-local update mutated shared mesh fields\n");
+	renderRoot->unref();
 	root->unref();
 	return 1;
     }
@@ -614,52 +648,57 @@ test_update_action_direct(void)
 	    meshDRequest.bounds.getMax()[0] > 1.0f ||
 	    meshDRequest.bounds.getMax()[1] > 1.0f) {
 	printf("FAIL: LoD-backed mesh request did not preserve full-detail source identity\n");
+	renderRoot->unref();
 	root->unref();
 	return 1;
     }
 
     SoBRLExportAction exactExport;
-    exactExport.apply(root);
+    exactExport.apply(renderRoot);
     if (exactExport.getGeometryPolicy() != SoBRLExportAction::FULL_DETAIL ||
 	    exactExport.getTriangleCount() != 4 ||
 	    exactExport.getSkippedLodDisplayMeshCount() != 1 ||
 	    exactExport.getSourceBackedFullDetailRequestCount() != 0) {
 	printf("FAIL: default export did not use preserved full-detail mesh\n");
+	renderRoot->unref();
 	root->unref();
 	return 1;
     }
 
     SoBRLExportAction displayExport;
     displayExport.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
-    displayExport.apply(root);
+    displayExport.apply(renderRoot);
     if (displayExport.getGeometryPolicy() != SoBRLExportAction::DISPLAY_LEVEL ||
 	    displayExport.getTriangleCount() != 5 ||
 	    displayExport.getSkippedLodDisplayMeshCount() != 0) {
 	printf("FAIL: display-level export did not include active display LoD mesh\n");
+	renderRoot->unref();
 	root->unref();
 	return 1;
     }
 
     SoBRLMeasureAction exactMeasure;
-    exactMeasure.apply(root);
+    exactMeasure.apply(renderRoot);
     if (exactMeasure.getGeometryPolicy() != SoBRLMeasureAction::FULL_DETAIL ||
 	    exactMeasure.getTriangleCount() != 4 ||
 	    exactMeasure.getSkippedLodDisplayMeshCount() != 1 ||
 	    exactMeasure.getSourceBackedFullDetailRequestCount() != 0 ||
 	    fabsf(exactMeasure.getSurfaceArea() - 2.0f) > 1.0e-5f) {
 	printf("FAIL: default measure did not use preserved full-detail mesh\n");
+	renderRoot->unref();
 	root->unref();
 	return 1;
     }
 
     SoBRLMeasureAction displayMeasure;
     displayMeasure.setGeometryPolicy(SoBRLMeasureAction::DISPLAY_LEVEL);
-    displayMeasure.apply(root);
+    displayMeasure.apply(renderRoot);
     if (displayMeasure.getGeometryPolicy() != SoBRLMeasureAction::DISPLAY_LEVEL ||
 	    displayMeasure.getTriangleCount() != 5 ||
 	    displayMeasure.getSkippedLodDisplayMeshCount() != 0 ||
 	    fabsf(displayMeasure.getSurfaceArea() - 5.5f) > 1.0e-5f) {
 	printf("FAIL: display-level measure did not include active display LoD mesh\n");
+	renderRoot->unref();
 	root->unref();
 	return 1;
     }
@@ -668,12 +707,13 @@ test_update_action_direct(void)
     displaySnap.setEnabledKinds(SoBRLSnapAction::FACE_NEAREST);
     displaySnap.setQueryPoint(SbVec3f(1.5f, 0.2f, 0.0f));
     displaySnap.setTolerance(0.1f);
-    displaySnap.apply(root);
+    displaySnap.apply(renderRoot);
     if (displaySnap.getGeometryPolicy() != SoBRLSnapAction::DISPLAY_LEVEL ||
 	    !displaySnap.hasCandidate() ||
 	    strcmp(displaySnap.getPath().getString(), "/mesh/d") != 0 ||
 	    displaySnap.getSkippedLodDisplayMeshCount() != 0) {
 	printf("FAIL: display-level snap did not use active display LoD mesh\n");
+	renderRoot->unref();
 	root->unref();
 	return 1;
     }
@@ -683,12 +723,13 @@ test_update_action_direct(void)
     exactSnap.setEnabledKinds(SoBRLSnapAction::FACE_NEAREST);
     exactSnap.setQueryPoint(SbVec3f(1.5f, 0.2f, 0.0f));
     exactSnap.setTolerance(0.1f);
-    exactSnap.apply(root);
+    exactSnap.apply(renderRoot);
     if (exactSnap.getGeometryPolicy() != SoBRLSnapAction::FULL_DETAIL ||
 	    exactSnap.hasCandidate() ||
 	    exactSnap.getSkippedLodDisplayMeshCount() != 1 ||
 	    exactSnap.getSourceBackedFullDetailRequestCount() != 0) {
 	printf("FAIL: full-detail snap did not skip active display LoD mesh\n");
+	renderRoot->unref();
 	root->unref();
 	return 1;
     }
@@ -701,18 +742,20 @@ test_update_action_direct(void)
     exactFullSnap.setEnabledKinds(SoBRLSnapAction::FACE_NEAREST);
     exactFullSnap.setQueryPoint(SbVec3f(0.2f, 0.2f, 0.0f));
     exactFullSnap.setTolerance(0.1f);
-    exactFullSnap.apply(root);
+    exactFullSnap.apply(renderRoot);
     if (!exactFullSnap.hasCandidate() ||
 	    strcmp(exactFullSnap.getPath().getString(), "/mesh/d") != 0 ||
 	    exactFullSnap.getSkippedLodDisplayMeshCount() != 1 ||
 	    exactFullSnap.getSourceBackedFullDetailRequestCount() != 0) {
 	printf("FAIL: full-detail snap did not use preserved full-detail mesh\n");
+	renderRoot->unref();
 	root->unref();
 	return 1;
     }
 
     if (meshD->getPickGeometryPolicy() != SoBRLMeshShape::PICK_DISPLAY_LEVEL) {
 	printf("FAIL: mesh pick policy should default to display-level geometry\n");
+	renderRoot->unref();
 	root->unref();
 	return 1;
     }
@@ -721,7 +764,7 @@ test_update_action_direct(void)
     SoRayPickAction displayPick(pickViewport);
     displayPick.setRay(SbVec3f(1.5f, 0.2f, 5.0f),
 	    SbVec3f(0.0f, 0.0f, -1.0f));
-    displayPick.apply(root);
+    displayPick.apply(renderRoot);
     const SoPickedPoint *pickedPoint = displayPick.getPickedPoint();
     const SoDetail *rawDetail = pickedPoint ? pickedPoint->getDetail(meshD) :
 	NULL;
@@ -732,6 +775,7 @@ test_update_action_direct(void)
 	    strcmp(pickDetail->getPath().getString(), "/mesh/d") != 0 ||
 	    pickDetail->getPrimitiveKind() != SoBRLPickDetail::FACE) {
 	printf("FAIL: display-level pick did not use active display LoD mesh\n");
+	renderRoot->unref();
 	root->unref();
 	return 1;
     }
@@ -740,9 +784,10 @@ test_update_action_direct(void)
     SoRayPickAction exactMissPick(pickViewport);
     exactMissPick.setRay(SbVec3f(1.5f, 0.2f, 5.0f),
 	    SbVec3f(0.0f, 0.0f, -1.0f));
-    exactMissPick.apply(root);
+    exactMissPick.apply(renderRoot);
     if (exactMissPick.getPickedPoint()) {
 	printf("FAIL: full-detail pick did not skip active display LoD mesh\n");
+	renderRoot->unref();
 	root->unref();
 	return 1;
     }
@@ -750,7 +795,7 @@ test_update_action_direct(void)
     SoRayPickAction exactHitPick(pickViewport);
     exactHitPick.setRay(SbVec3f(0.2f, 0.2f, 5.0f),
 	    SbVec3f(0.0f, 0.0f, -1.0f));
-    exactHitPick.apply(root);
+    exactHitPick.apply(renderRoot);
     pickedPoint = exactHitPick.getPickedPoint();
     rawDetail = pickedPoint ? pickedPoint->getDetail(meshD) : NULL;
     pickDetail =
@@ -763,48 +808,13 @@ test_update_action_direct(void)
 	    pickDetail->getFaceVertexIndexB() != 1 ||
 	    pickDetail->getFaceVertexIndexC() != 2) {
 	printf("FAIL: full-detail pick did not use preserved full-detail mesh\n");
+	renderRoot->unref();
 	root->unref();
 	return 1;
     }
     meshD->setPickGeometryPolicy(SoBRLMeshShape::PICK_DISPLAY_LEVEL);
 
-    size_t displayBytes = meshD->estimateDisplayMeshBytes();
-    size_t fullDetailBytes = meshD->estimateFullDetailMeshBytes();
-    size_t residentBytes = meshD->estimateResidentMeshBytes();
-    if (displayBytes == 0 || fullDetailBytes == 0 ||
-	    residentBytes != displayBytes + fullDetailBytes) {
-	printf("FAIL: resident LoD mesh byte accounting did not include display and full-detail payloads\n");
-	root->unref();
-	return 1;
-    }
-
-    size_t freedBytes = meshD->evictFullDetailMesh();
-    BRLObolSourceMeshRequest evictedRequest;
-    if (freedBytes != fullDetailBytes ||
-	    meshD->hasFullDetailMesh() ||
-	    meshD->estimateFullDetailMeshBytes() != 0 ||
-	    meshD->estimateResidentMeshBytes() != displayBytes ||
-	    !meshD->makeSourceMeshRequest(evictedRequest) ||
-	    check_source_mesh_request(evictedRequest, "/mesh/d", "d", 0)) {
-	printf("FAIL: full-detail eviction did not preserve source-backed request metadata\n");
-	root->unref();
-	return 1;
-    }
-
-    SoBRLExportAction evictedExactExport;
-    evictedExactExport.apply(root);
-    if (evictedExactExport.getGeometryPolicy() != SoBRLExportAction::FULL_DETAIL ||
-	    evictedExactExport.getTriangleCount() != 3 ||
-	    evictedExactExport.getSkippedLodDisplayMeshCount() != 1 ||
-	    evictedExactExport.getSourceBackedFullDetailRequestCount() != 1 ||
-	    check_source_mesh_request(
-		evictedExactExport.getSourceBackedFullDetailRequest(0),
-		"/mesh/d", "d", 0)) {
-	printf("FAIL: evicted full-detail mesh did not fall back to source-backed exact export request\n");
-	root->unref();
-	return 1;
-    }
-
+    renderRoot->unref();
     root->unref();
     return 0;
 }
@@ -2857,7 +2867,7 @@ test_update_action_service_drain(void)
     BRLObolLodTask task;
     task.generation = service.beginGeneration();
     task.request = make_request("drained.bot", "drained.bot");
-    task.realize = aabb_task;
+    task.realize = mesh_payload_task;
     if (service.submit(task) == 0) {
 	printf("FAIL: LoD update action service did not accept task\n");
 	service.stop();
@@ -2871,7 +2881,9 @@ test_update_action_service_drain(void)
 	return 1;
     }
 
+    BRLObolViewLodState viewState;
     SoBRLLodUpdateAction update;
+    update.setViewLodState(&viewState);
     if (update.drainService(service) != 1 ||
 	    update.getResultCount() != 1) {
 	printf("FAIL: LoD update action did not drain service result\n");
@@ -2881,12 +2893,16 @@ test_update_action_service_drain(void)
     }
 
     update.apply(root);
+    const BRLObolViewLodState::MeshPayload *payload =
+	viewState.findMesh(mesh);
     if (update.getAppliedResultCount() != 1 ||
 	    update.getUnmatchedResultCount() != 0 ||
-	    !mesh->lodStagedAvailable.getValue() ||
-	    mesh->lodResultKind.getValue() != BRLOBOL_LOD_RESULT_AABB ||
-	    mesh->lodFaceCount.getValue() != 1 ||
-	    mesh->lodPointCount.getValue() != 3) {
+	    !payload ||
+	    payload->getTriangleCount() != 2 ||
+	    mesh->lodStagedAvailable.getValue() ||
+	    mesh->lodAvailable.getValue() ||
+	    mesh->isLodDisplayActive() ||
+	    mesh->getTriangleCount() != 1) {
 	printf("FAIL: LoD update action did not apply drained service result\n");
 	service.stop();
 	root->unref();
@@ -3943,7 +3959,14 @@ test_mesh_lod_submit_action(void)
 	return 1;
     }
 
+    BRLObolViewLodState viewState;
+    SoBRLViewLodGroup *renderRoot = new SoBRLViewLodGroup;
+    renderRoot->ref();
+    renderRoot->setViewLodState(&viewState);
+    renderRoot->addChild(root);
+
     SoBRLLodUpdateAction update;
+    update.setViewLodState(&viewState);
     update.setResults(viewPolicyResults);
     if (update.getResultCount() != 1) {
 	printf("FAIL: LoD submit action result drain failed\n");
@@ -3958,19 +3981,23 @@ test_mesh_lod_submit_action(void)
 
     update.apply(root);
     int ret = 0;
+    const BRLObolViewLodState::MeshPayload *activePayload =
+	viewState.findMesh(mesh);
     if (update.getAppliedResultCount() != 1 ||
 	    update.getRejectedResultCount() != 0 ||
-	    !mesh->lodAvailable.getValue() ||
-	    !mesh->isLodDisplayActive() ||
-	    mesh->lodResultKind.getValue() != BRLOBOL_LOD_RESULT_MESH ||
-	    mesh->lodFaceCount.getValue() != 4 ||
-	    mesh->lodPointCount.getValue() != 4 ||
-	    mesh->getTriangleCount() != 4) {
+	    !activePayload ||
+	    activePayload->resultKind != BRLOBOL_LOD_RESULT_MESH ||
+	    activePayload->counts.faceCount != 4 ||
+	    activePayload->counts.pointCount != 4 ||
+	    activePayload->getTriangleCount() != 4 ||
+	    mesh->lodAvailable.getValue() ||
+	    mesh->isLodDisplayActive() ||
+	    mesh->getTriangleCount() != 1) {
 	printf("FAIL: LoD submit action result did not update mesh payload\n");
 	ret = 1;
     }
     if (!ret && mesh->hasFullDetailMesh()) {
-	printf("FAIL: LoD-backed mesh retained full-detail payload after display LoD update\n");
+	printf("FAIL: LoD-backed mesh retained unexpected full-detail payload\n");
 	ret = 1;
     }
     if (!ret) {
@@ -3996,6 +4023,7 @@ test_mesh_lod_submit_action(void)
     if (!ret) {
 	SoBRLMeshLodSubmitAction duplicateSubmit;
 	duplicateSubmit.setService(&service);
+	duplicateSubmit.setViewLodState(&viewState);
 	duplicateSubmit.setDatabase(dbip, "db://lod-submit-test", 2026);
 	duplicateSubmit.setViewInfo(&view);
 	duplicateSubmit.setGeneration(service.beginGeneration());
@@ -4014,7 +4042,7 @@ test_mesh_lod_submit_action(void)
 
     if (!ret) {
 	SoBRLExportAction exactExport;
-	exactExport.apply(root);
+	exactExport.apply(renderRoot);
 	if (exactExport.getGeometryPolicy() != SoBRLExportAction::FULL_DETAIL ||
 		exactExport.getTriangleCount() != 1 ||
 		exactExport.getSkippedLodDisplayMeshCount() != 1 ||
@@ -4049,8 +4077,8 @@ test_mesh_lod_submit_action(void)
 		    ret = 1;
 		}
 		if (!ret) {
-		    SoBRLExportAction controllerExport;
-		    controllerExport.apply(root);
+			    SoBRLExportAction controllerExport;
+			    controllerExport.apply(renderRoot);
 		    BRLObolLodRequest controllerExportRequest;
 		    if (controllerExport.getSourceBackedFullDetailRequestCount() != 1 ||
 			    !controllerExport.makeSourceBackedFullDetailLodRequest(0,
@@ -4121,7 +4149,7 @@ test_mesh_lod_submit_action(void)
     if (!ret) {
 	SoBRLMeasureAction exactMeasure;
 	exactMeasure.setQueryPoint(SbVec3f(0.25f, 0.25f, 0.0f));
-	exactMeasure.apply(root);
+	exactMeasure.apply(renderRoot);
 	if (exactMeasure.getGeometryPolicy() != SoBRLMeasureAction::FULL_DETAIL ||
 		exactMeasure.getTriangleCount() != 1 ||
 		exactMeasure.getSkippedLodDisplayMeshCount() != 1 ||
@@ -4164,30 +4192,30 @@ test_mesh_lod_submit_action(void)
 		    source_full_detail_result(sourceLodRequest);
 		std::vector<BRLObolLodResult> sourceResults;
 		sourceResults.push_back(sourceResult);
-		if (exactMeasure.consumeSourceBackedFullDetailResults(
-			sourceResults) != 1 ||
-			exactMeasure.getTriangleCount() != beforeTriangleCount + 1 ||
-			exactMeasure.getSurfaceArea() <= beforeArea) {
-		    printf("FAIL: exact measure did not consume source-backed full-detail LoD result\n");
-		    ret = 1;
-		}
-		if (!ret) {
-		    SoBRLMeasureAction controllerMeasure;
-		    controllerMeasure.setQueryPoint(SbVec3f(0.25f, 0.25f,
-			    0.0f));
-		    controllerMeasure.apply(root);
-		    BRLObolLodRequest controllerMeasureRequest;
-		    if (controllerMeasure.getSourceBackedFullDetailRequestCount() != 1 ||
-			    !controllerMeasure.makeSourceBackedFullDetailLodRequest(0,
-				controllerMeasureRequest)) {
-			printf("FAIL: controller source-backed exact measure helper did not collect source request\n");
-			ret = 1;
-		    } else {
-			BRLObolLodService controllerMeasureService;
-			if (!controllerMeasureService.start(1, TRUE)) {
-			    printf("FAIL: controller source-backed exact measure helper service did not start\n");
+			if (exactMeasure.consumeSourceBackedFullDetailResults(
+				sourceResults) != 1 ||
+			    exactMeasure.getTriangleCount() != beforeTriangleCount + 1 ||
+			    exactMeasure.getSurfaceArea() <= beforeArea) {
+			    printf("FAIL: exact measure did not consume source-backed full-detail LoD result\n");
 			    ret = 1;
-			} else {
+			}
+			if (!ret) {
+			    SoBRLMeasureAction controllerMeasure;
+			    controllerMeasure.setQueryPoint(SbVec3f(0.25f, 0.25f,
+								    0.0f));
+			    controllerMeasure.apply(renderRoot);
+			    BRLObolLodRequest controllerMeasureRequest;
+			    if (controllerMeasure.getSourceBackedFullDetailRequestCount() != 1 ||
+				!controllerMeasure.makeSourceBackedFullDetailLodRequest(0,
+					controllerMeasureRequest)) {
+				printf("FAIL: controller source-backed exact measure helper did not collect source request\n");
+				ret = 1;
+			    } else {
+				BRLObolLodService controllerMeasureService;
+				if (!controllerMeasureService.start(1, TRUE)) {
+				    printf("FAIL: controller source-backed exact measure helper service did not start\n");
+				    ret = 1;
+				} else {
 			    if (submit_source_full_detail_task(
 				    controllerMeasureService,
 				    controllerMeasureRequest)) {
@@ -4224,7 +4252,7 @@ test_mesh_lod_submit_action(void)
 	SoBRLMeasureAction limitedMeasureMiss;
 	limitedMeasureMiss.setQueryPoint(SbVec3f(5.0f, 5.0f, 0.0f));
 	limitedMeasureMiss.setQueryDistanceLimit(0.1f);
-	limitedMeasureMiss.apply(root);
+	limitedMeasureMiss.apply(renderRoot);
 	if (!limitedMeasureMiss.hasQueryDistanceLimit() ||
 		fabsf(limitedMeasureMiss.getQueryDistanceLimit() - 0.1f) >
 		1.0e-6f ||
@@ -4238,7 +4266,7 @@ test_mesh_lod_submit_action(void)
 	SoBRLMeasureAction boundedMeasure;
 	boundedMeasure.setQueryPoint(SbVec3f(0.25f, 0.25f, 0.0f));
 	boundedMeasure.setQueryDistanceLimit(0.5f);
-	boundedMeasure.apply(root);
+	boundedMeasure.apply(renderRoot);
 	if (boundedMeasure.getSourceBackedFullDetailRequestCount() != 1) {
 	    printf("FAIL: bounded exact measure did not collect source-backed request\n");
 	    ret = 1;
@@ -4274,7 +4302,7 @@ test_mesh_lod_submit_action(void)
 	exactSnap.setEnabledKinds(SoBRLSnapAction::FACE_NEAREST);
 	exactSnap.setQueryPoint(SbVec3f(1.5f, 0.2f, 0.0f));
 	exactSnap.setTolerance(0.1f);
-	exactSnap.apply(root);
+	exactSnap.apply(renderRoot);
 	if (exactSnap.hasCandidate() ||
 		exactSnap.getSkippedLodDisplayMeshCount() != 1 ||
 		exactSnap.getSourceBackedFullDetailRequestCount() != 1) {
@@ -4315,29 +4343,29 @@ test_mesh_lod_submit_action(void)
 		std::vector<BRLObolLodResult> sourceResults;
 		sourceResults.push_back(sourceResult);
 		exactSnap.setQueryPoint(SbVec3f(0.2f, 0.2f, 0.0f));
-		if (exactSnap.consumeSourceBackedFullDetailResults(
-			sourceResults) != 1 ||
-			!exactSnap.hasCandidate() ||
-			exactSnap.getKind() != SoBRLSnapAction::FACE_NEAREST ||
+			if (exactSnap.consumeSourceBackedFullDetailResults(
+				sourceResults) != 1 ||
+				!exactSnap.hasCandidate() ||
+				exactSnap.getKind() != SoBRLSnapAction::FACE_NEAREST ||
 			exactSnap.getPrimitiveIndex() != 0 ||
 			strcmp(exactSnap.getPath().getString(),
 			    "/lod-submit.bot") != 0) {
-		    printf("FAIL: exact snap did not consume source-backed full-detail LoD result\n");
-		    ret = 1;
-		}
-		if (!ret) {
-		    SoBRLSnapAction controllerSnap;
-		    controllerSnap.setGeometryPolicy(SoBRLSnapAction::FULL_DETAIL);
-		    controllerSnap.setEnabledKinds(SoBRLSnapAction::FACE_NEAREST);
-		    controllerSnap.setQueryPoint(SbVec3f(1.5f, 0.2f, 0.0f));
-		    controllerSnap.setTolerance(0.1f);
-		    controllerSnap.apply(root);
-		    BRLObolLodRequest controllerSnapRequest;
-		    if (controllerSnap.getSourceBackedFullDetailRequestCount() != 1 ||
-			    !controllerSnap.makeSourceBackedFullDetailLodRequest(0,
-				controllerSnapRequest)) {
-			printf("FAIL: controller source-backed exact snap helper did not collect source request\n");
-			ret = 1;
+			    printf("FAIL: exact snap did not consume source-backed full-detail LoD result\n");
+			    ret = 1;
+			}
+			if (!ret) {
+			    SoBRLSnapAction controllerSnap;
+			    controllerSnap.setGeometryPolicy(SoBRLSnapAction::FULL_DETAIL);
+			    controllerSnap.setEnabledKinds(SoBRLSnapAction::FACE_NEAREST);
+			    controllerSnap.setQueryPoint(SbVec3f(1.5f, 0.2f, 0.0f));
+			    controllerSnap.setTolerance(0.1f);
+			    controllerSnap.apply(renderRoot);
+			    BRLObolLodRequest controllerSnapRequest;
+			    if (controllerSnap.getSourceBackedFullDetailRequestCount() != 1 ||
+				!controllerSnap.makeSourceBackedFullDetailLodRequest(0,
+					controllerSnapRequest)) {
+				printf("FAIL: controller source-backed exact snap helper did not collect source request\n");
+				ret = 1;
 		    } else {
 			BRLObolLodService controllerSnapService;
 			if (!controllerSnapService.start(1, TRUE)) {
@@ -4387,21 +4415,21 @@ test_mesh_lod_submit_action(void)
 			sourcePick.detail.getPrimitiveIndex() != 0 ||
 			sourcePick.detail.getFaceVertexIndexA() != 0 ||
 			sourcePick.detail.getFaceVertexIndexB() != 1 ||
-			sourcePick.detail.getFaceVertexIndexC() != 2 ||
-			fabsf(sourcePick.distance - 5.0f) > 1.0e-5f) {
-		    printf("FAIL: exact pick did not consume source-backed full-detail LoD result\n");
-		    ret = 1;
-		}
-		SoBRLSourceMeshPickAction sourcePickAction;
-		mesh->setPickGeometryPolicy(SoBRLMeshShape::PICK_FULL_DETAIL);
-		sourcePickAction.setRay(SbVec3f(0.2f, 0.2f, 5.0f),
-			SbVec3f(0.0f, 0.0f, -1.0f));
-		sourcePickAction.apply(root);
-		if (sourcePickAction.getVisitedMeshCount() != 2 ||
-			sourcePickAction.getSourceBackedFullDetailRequestCount() != 1) {
-		    printf("FAIL: exact pick action did not collect and consume source-backed full-detail LoD result\n");
-		    ret = 1;
-		} else {
+				sourcePick.detail.getFaceVertexIndexC() != 2 ||
+				fabsf(sourcePick.distance - 5.0f) > 1.0e-5f) {
+			    printf("FAIL: exact pick did not consume source-backed full-detail LoD result\n");
+			    ret = 1;
+			}
+			SoBRLSourceMeshPickAction sourcePickAction;
+			mesh->setPickGeometryPolicy(SoBRLMeshShape::PICK_FULL_DETAIL);
+			sourcePickAction.setRay(SbVec3f(0.2f, 0.2f, 5.0f),
+						SbVec3f(0.0f, 0.0f, -1.0f));
+			sourcePickAction.apply(renderRoot);
+			if (sourcePickAction.getVisitedMeshCount() != 2 ||
+			    sourcePickAction.getSourceBackedFullDetailRequestCount() != 1) {
+			    printf("FAIL: exact pick action did not collect and consume source-backed full-detail LoD result\n");
+			    ret = 1;
+			} else {
 		    BRLObolLodRequest pickLodRequest;
 		    BRLObolSourceMeshPickResult actionPick;
 		    const BRLObolSourceMeshRequest &pickSourceRequest =
@@ -4681,36 +4709,29 @@ test_mesh_lod_submit_action(void)
     }
 
     if (!ret) {
-	size_t displayBytes = mesh->estimateDisplayMeshBytes();
-	size_t residentBytes = mesh->estimateResidentMeshBytes();
-	size_t freedBytes = mesh->evictActiveDisplayMesh();
-	BRLObolSourceMeshRequest evictedDisplayRequest;
-	SoGetBoundingBoxAction bboxAction(SbViewportRegion(100, 100));
-	bboxAction.apply(mesh);
+	size_t displayBytes = viewState.estimateDisplayMeshBytes();
+	unsigned int evictedMeshCount = 0;
+	size_t freedBytes = viewState.evictDisplayMeshes(&evictedMeshCount);
 	if (displayBytes == 0 ||
-		residentBytes != displayBytes ||
 		freedBytes != displayBytes ||
+		evictedMeshCount != 1 ||
+		viewState.estimateDisplayMeshBytes() != 0 ||
+		viewState.findMesh(mesh) ||
 		mesh->isLodDisplayActive() ||
-		mesh->getTriangleCount() != 0 ||
-		mesh->estimateDisplayMeshBytes() != 0 ||
-		mesh->estimateResidentMeshBytes() != 0 ||
-		!mesh->makeSourceMeshRequest(evictedDisplayRequest) ||
-		check_source_mesh_request(evictedDisplayRequest,
-		    "/lod-submit.bot", "lod-submit.bot", 101) ||
-		bboxAction.getBoundingBox().isEmpty() ||
-		bboxAction.getBoundingBox().getMax()[0] > 1.0f ||
-		bboxAction.getBoundingBox().getMax()[1] > 1.0f) {
-	    printf("FAIL: active display eviction did not preserve source-backed LoD identity\n");
+		mesh->lodAvailable.getValue() ||
+		mesh->getTriangleCount() != 1) {
+	    printf("FAIL: view-local display eviction did not clear view payload without mutating mesh\n");
 	    ret = 1;
 	}
     }
 
     if (!ret) {
 	SoBRLExportAction evictedDisplayExactExport;
-	evictedDisplayExactExport.apply(root);
+	evictedDisplayExactExport.apply(renderRoot);
 	if (evictedDisplayExactExport.getGeometryPolicy() !=
 		SoBRLExportAction::FULL_DETAIL ||
 		evictedDisplayExactExport.getTriangleCount() != 1 ||
+		evictedDisplayExactExport.getSkippedLodDisplayMeshCount() != 0 ||
 		evictedDisplayExactExport.getSourceBackedFullDetailRequestCount() != 1 ||
 		check_source_mesh_request(
 		    evictedDisplayExactExport.getSourceBackedFullDetailRequest(0),
@@ -4722,10 +4743,11 @@ test_mesh_lod_submit_action(void)
 
     if (!ret) {
 	SoBRLMeasureAction evictedDisplayExactMeasure;
-	evictedDisplayExactMeasure.apply(root);
+	evictedDisplayExactMeasure.apply(renderRoot);
 	if (evictedDisplayExactMeasure.getGeometryPolicy() !=
 		SoBRLMeasureAction::FULL_DETAIL ||
 		evictedDisplayExactMeasure.getTriangleCount() != 1 ||
+		evictedDisplayExactMeasure.getSkippedLodDisplayMeshCount() != 0 ||
 		evictedDisplayExactMeasure.getSourceBackedFullDetailRequestCount() != 1 ||
 		check_source_mesh_request(
 		    evictedDisplayExactMeasure.getSourceBackedFullDetailRequest(0),
@@ -4741,8 +4763,9 @@ test_mesh_lod_submit_action(void)
 	evictedDisplayExactSnap.setEnabledKinds(SoBRLSnapAction::FACE_NEAREST);
 	evictedDisplayExactSnap.setQueryPoint(SbVec3f(1.5f, 0.2f, 0.0f));
 	evictedDisplayExactSnap.setTolerance(0.1f);
-	evictedDisplayExactSnap.apply(root);
+	evictedDisplayExactSnap.apply(renderRoot);
 	if (evictedDisplayExactSnap.hasCandidate() ||
+		evictedDisplayExactSnap.getSkippedLodDisplayMeshCount() != 0 ||
 		evictedDisplayExactSnap.getSourceBackedFullDetailRequestCount() != 1 ||
 		check_source_mesh_request(
 		    evictedDisplayExactSnap.getSourceBackedFullDetailRequest(0),
@@ -4758,7 +4781,7 @@ test_mesh_lod_submit_action(void)
 	mesh->setPickGeometryPolicy(SoBRLMeshShape::PICK_FULL_DETAIL);
 	evictedDisplayPick.setRay(SbVec3f(0.2f, 0.2f, 5.0f),
 		SbVec3f(0.0f, 0.0f, -1.0f));
-	evictedDisplayPick.apply(root);
+	evictedDisplayPick.apply(renderRoot);
 	if (evictedDisplayPick.getSourceBackedFullDetailRequestCount() != 1 ||
 		!evictedDisplayPick.makeSourceBackedFullDetailLodRequest(0,
 		    evictedDisplayPickRequest) ||
@@ -4771,9 +4794,10 @@ test_mesh_lod_submit_action(void)
     }
 
     if (!ret) {
-	int forcedLevel = mesh->lodActiveLevel.getValue();
+	int forcedLevel = expectedViewLevel;
 	SoBRLMeshLodSubmitAction forcedSubmit;
 	forcedSubmit.setService(&service);
+	forcedSubmit.setViewLodState(&viewState);
 	forcedSubmit.setDatabase(dbip, "db://lod-submit-test", 2026);
 	forcedSubmit.setViewInfo(&view);
 	forcedSubmit.setGeneration(service.beginGeneration());
@@ -4798,10 +4822,14 @@ test_mesh_lod_submit_action(void)
 		ret = 1;
 	    } else {
 		SoBRLLodUpdateAction forcedUpdate;
+		forcedUpdate.setViewLodState(&viewState);
 		forcedUpdate.setResults(forcedResults);
 		forcedUpdate.apply(root);
+		const BRLObolViewLodState::MeshPayload *forcedPayload =
+		    viewState.findMesh(mesh);
 		if (forcedUpdate.getAppliedResultCount() != 1 ||
-			mesh->lodActiveLevel.getValue() != forcedLevel) {
+			!forcedPayload ||
+			forcedPayload->activeLevel != forcedLevel) {
 		    printf("FAIL: LoD submit action forced-level result was not applied\n");
 		    ret = 1;
 		}
@@ -4810,6 +4838,7 @@ test_mesh_lod_submit_action(void)
     }
 
     service.stop();
+    renderRoot->unref();
     root->unref();
     db_mesh_lod_clear(dbip);
     db_close(dbip);
@@ -5240,6 +5269,7 @@ test_view_controller_lod_submit_and_apply(void)
 		controller.getLastLodRejectedResultCount() != 0 ||
 		controller.getLastLodUnmatchedResultCount() != 0 ||
 		controller.getLastLodDiagnostics().getLength() != 0 ||
+		!controller.getViewLodState()->findMesh(mesh) ||
 		!controller.isRenderRequested() ||
 		strcmp(controller.getRenderReason().getString(),
 		    "lod-result") != 0 ||
@@ -5379,7 +5409,9 @@ test_view_controller_lod_submit_and_apply(void)
 	    return 1;
 	}
 
-	int forcedLevel = mesh->lodActiveLevel.getValue();
+	const BRLObolViewLodState::MeshPayload *activePayload =
+	    controller.getViewLodState()->findMesh(mesh);
+	int forcedLevel = activePayload ? activePayload->activeLevel : 0;
 	uint64_t previousPolicyRevision = controller.getLodPolicyRevision();
 	controller.clearRenderRequest();
 	controller.setLodForcedLevel(forcedLevel);
@@ -5425,7 +5457,9 @@ test_view_controller_lod_submit_and_apply(void)
 	controller.clearRenderRequest();
 	if (controller.processPendingLodResults() != 1 ||
 		controller.getLastLodAppliedResultCount() != 1 ||
-		mesh->lodActiveLevel.getValue() != forcedLevel ||
+		!controller.getViewLodState()->findMesh(mesh) ||
+		controller.getViewLodState()->findMesh(mesh)->activeLevel !=
+		    forcedLevel ||
 		strcmp(controller.getRenderReason().getString(),
 		    "lod-result") != 0) {
 	    printf("FAIL: LoD view controller did not apply forced-level result\n");
@@ -5483,12 +5517,12 @@ test_view_controller_lod_submit_and_apply(void)
     }
 
     int ret = 0;
-    if (!mesh->lodAvailable.getValue() ||
-	    mesh->lodResultKind.getValue() != BRLOBOL_LOD_RESULT_MESH ||
-	    mesh->lodFaceCount.getValue() != 4 ||
-	    mesh->lodPointCount.getValue() != 4 ||
-	    mesh->getTriangleCount() != 4) {
-	printf("FAIL: LoD view-controller result did not update mesh payload\n");
+    if (mesh->lodAvailable.getValue() ||
+	    mesh->isLodDisplayActive() ||
+	    mesh->point.getNum() != 3 ||
+	    mesh->coordIndex.getNum() != 3 ||
+	    mesh->getTriangleCount() != 1) {
+	printf("FAIL: LoD view-controller result mutated shared mesh payload\n");
 	ret = 1;
     }
 
@@ -5498,6 +5532,87 @@ test_view_controller_lod_submit_and_apply(void)
     db_close(dbip);
     bu_file_delete(dbpath);
     bu_dirclear(cache_dir);
+    return ret;
+}
+
+static int
+test_view_controller_shared_lod_is_view_local(void)
+{
+    SoSeparator *shared = new SoSeparator;
+    shared->ref();
+    SoBRLLodMeshShape *mesh = make_lod_mesh("/shared/lod.bot",
+	    "lod.bot");
+    shared->addChild(mesh);
+
+    int ret = 0;
+    {
+	BRLObolViewController viewA(shared, NULL);
+	BRLObolViewController viewB(shared, NULL);
+
+	BRLObolLodRequest request = make_request("/shared/lod.bot",
+		"lod.bot");
+	BRLObolLodResult resultA =
+	    mesh_payload_variant_result(request, 1, 2);
+	BRLObolLodResult resultB =
+	    mesh_payload_variant_result(request, 3, 3);
+
+	SoBRLLodUpdateAction updateA;
+	updateA.setViewLodState(viewA.getViewLodState());
+	updateA.addResult(resultA);
+	updateA.apply(viewA.getRenderSceneRoot());
+	SoBRLLodUpdateAction updateB;
+	updateB.setViewLodState(viewB.getViewLodState());
+	updateB.addResult(resultB);
+	updateB.apply(viewB.getRenderSceneRoot());
+
+	if (updateA.getAppliedResultCount() != 1 ||
+		updateB.getAppliedResultCount() != 1 ||
+		!viewA.getViewLodState()->findMesh(mesh) ||
+		!viewB.getViewLodState()->findMesh(mesh)) {
+	    printf("FAIL: shared LoD view-local update did not bind payloads\n");
+	    ret = 1;
+	}
+
+	if (!ret) {
+	    SoBRLExportAction exportA;
+	    exportA.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
+	    exportA.apply(viewA.getRenderSceneRoot());
+	    SoBRLExportAction exportB;
+	    exportB.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
+	    exportB.apply(viewB.getRenderSceneRoot());
+	    if (exportA.getTriangleCount() != 2 ||
+		    exportB.getTriangleCount() != 3) {
+		printf("FAIL: shared LoD view-local exports did not stay independent\n");
+		ret = 1;
+	    }
+	}
+
+	if (!ret) {
+	    SoBRLExportAction exactA;
+	    exactA.apply(viewA.getRenderSceneRoot());
+	    if (exactA.getTriangleCount() != 0 ||
+		    exactA.getSkippedLodDisplayMeshCount() != 1 ||
+		    exactA.getSourceBackedFullDetailRequestCount() != 1 ||
+		    check_source_mesh_request(
+			exactA.getSourceBackedFullDetailRequest(0),
+			"/shared/lod.bot", "lod.bot", 0)) {
+		printf("FAIL: shared LoD view-local exact export did not request source mesh\n");
+		ret = 1;
+	    }
+	}
+
+	if (!ret &&
+		(mesh->isLodDisplayActive() ||
+		 mesh->lodAvailable.getValue() ||
+		 mesh->point.getNum() != 3 ||
+		 mesh->coordIndex.getNum() != 3 ||
+		 mesh->getTriangleCount() != 1)) {
+	    printf("FAIL: shared LoD view-local update mutated shared mesh fields\n");
+	    ret = 1;
+	}
+    }
+
+    shared->unref();
     return ret;
 }
 
@@ -5533,6 +5648,8 @@ main(int argc, char **argv)
     if (test_view_controller_source_backed_multi_source_exact_submit())
 	return 1;
     if (test_view_controller_source_backed_partial_ready_submit())
+	return 1;
+    if (test_view_controller_shared_lod_is_view_local())
 	return 1;
     if (test_view_controller_lod_submit_and_apply())
 	return 1;

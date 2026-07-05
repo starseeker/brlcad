@@ -55,6 +55,7 @@
 #include "rt/edit_legacy_bsg.h"
 #include "rt/primitives/sketch_legacy_bsg.h"
 #include "rt/view_legacy_bsg.h"
+#include "view_context_private.h"
 
 struct bsg_mesh_lod *
 _rt_mesh_lod_bsg(struct rt_mesh_lod *lod);
@@ -591,6 +592,13 @@ rt_view_context_is_bsg(const void *ctx)
 }
 
 int
+rt_view_context_is_valid(const void *ctx)
+{
+    return (_rt_view_context_native_is(ctx) || rt_view_context_is_bsg(ctx)) ?
+	1 : 0;
+}
+
+int
 rt_view_context_is_retained(const void *ctx)
 {
     return rt_view_context_is_bsg(ctx);
@@ -606,6 +614,8 @@ rt_view_context_user_data_from_bsg(const void *ctx)
 void *
 rt_view_context_user_data_get(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_user_data_get(ctx);
     return rt_view_context_user_data_from_bsg(ctx);
 }
 
@@ -623,6 +633,8 @@ rt_view_context_user_data_set_bsg(void *ctx, void *user_data)
 int
 rt_view_context_user_data_set(void *ctx, void *user_data)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_user_data_set(ctx, user_data);
     return rt_view_context_user_data_set_bsg(ctx, user_data);
 }
 
@@ -640,6 +652,8 @@ rt_view_context_tclcad_data_set_bsg(void *ctx, void *tcl_data)
 int
 rt_view_context_tclcad_data_set(void *ctx, void *tcl_data)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_tclcad_data_set(ctx, tcl_data);
     return rt_view_context_tclcad_data_set_bsg(ctx, tcl_data);
 }
 
@@ -761,6 +775,8 @@ rt_view_context_callbacks_set_bsg(void *ctx, struct bu_ptbl *callbacks)
 int
 rt_view_context_callbacks_set(void *ctx, struct bu_ptbl *callbacks)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_callbacks_set(ctx, callbacks);
     return rt_view_context_callbacks_set_bsg(ctx, callbacks);
 }
 
@@ -777,7 +793,7 @@ rt_view_context_create_bsg(void)
 void *
 rt_view_context_create(void)
 {
-    return rt_view_context_create_bsg();
+    return _rt_view_context_native_create();
 }
 
 void *
@@ -793,7 +809,7 @@ rt_view_context_create_with_set_bsg(void *view_set_ctx)
 void *
 rt_view_context_create_with_set(void *view_set_ctx)
 {
-    return rt_view_context_create_with_set_bsg(view_set_ctx);
+    return _rt_view_context_native_create_with_set(view_set_ctx);
 }
 
 void *
@@ -808,10 +824,63 @@ rt_view_context_create_copy_with_set_bsg(const void *src_ctx,
     return v;
 }
 
+static int
+rt_view_context_native_copy_from_bsg(void *dst_ctx, const void *src_ctx)
+{
+    const struct bsg_view *src = (const struct bsg_view *)src_ctx;
+    if (!_rt_view_context_native_is(dst_ctx))
+	return 0;
+    if (!src_ctx)
+	return 1;
+    if (!src || src->magic != BSG_VIEW_MAGIC)
+	return 0;
+
+    (void)_rt_view_context_native_name_set(dst_ctx,
+	    bu_vls_cstr(&src->gv_name));
+    (void)_rt_view_context_native_user_data_set(dst_ctx, src->u_data);
+    (void)_rt_view_context_native_display_manager_set(dst_ctx, src->dmp);
+    (void)_rt_view_context_native_dimensions_set(dst_ctx, src->gv_width,
+	    src->gv_height);
+    (void)_rt_view_context_native_scale_state_set(dst_ctx, src->gv_scale,
+	    src->gv_i_scale, src->gv_a_scale, src->gv_size, src->gv_isize);
+    (void)_rt_view_context_native_unit_conversion_set(dst_ctx,
+	    src->gv_local2base, src->gv_base2local);
+    (void)_rt_view_context_native_perspective_set(dst_ctx,
+	    src->gv_perspective);
+    (void)_rt_view_context_native_aet_state_set(dst_ctx, src->gv_aet);
+    (void)_rt_view_context_native_eye_pos_set(dst_ctx, src->gv_eye_pos);
+    (void)_rt_view_context_native_keypoint_set(dst_ctx, src->gv_keypoint);
+    (void)_rt_view_context_native_rotate_about_set(dst_ctx,
+	    src->gv_rotate_about);
+    (void)_rt_view_context_native_coord_set(dst_ctx, src->gv_coord);
+    (void)_rt_view_context_native_current_point_set(dst_ctx, src->gv_point);
+    (void)_rt_view_context_native_previous_mouse_set(dst_ctx,
+	    src->gv_prevMouseX, src->gv_prevMouseY);
+    (void)_rt_view_context_native_mouse_state_set(dst_ctx, src->gv_mouse_x,
+	    src->gv_mouse_y);
+    (void)_rt_view_context_native_rotation_set(dst_ctx, src->gv_rotation);
+    (void)_rt_view_context_native_center_mat_set(dst_ctx, src->gv_center);
+    (void)_rt_view_context_native_model2view_set(dst_ctx, src->gv_model2view);
+    (void)_rt_view_context_native_view2model_set(dst_ctx, src->gv_view2model);
+    (void)_rt_view_context_native_pmodel2view_set(dst_ctx,
+	    src->gv_pmodel2view);
+    (void)_rt_view_context_native_pmat_set(dst_ctx, src->gv_pmat);
+    return 1;
+}
+
 void *
 rt_view_context_create_copy_with_set(const void *src_ctx, void *view_set_ctx)
 {
-    return rt_view_context_create_copy_with_set_bsg(src_ctx, view_set_ctx);
+    if (_rt_view_context_native_is(src_ctx))
+	return _rt_view_context_native_create_copy_with_set(src_ctx,
+		view_set_ctx);
+
+    void *ctx = _rt_view_context_native_create_with_set(view_set_ctx);
+    if (!rt_view_context_native_copy_from_bsg(ctx, src_ctx)) {
+	rt_view_context_free(ctx);
+	return NULL;
+    }
+    return ctx;
 }
 
 void
@@ -833,6 +902,14 @@ rt_view_context_free_bsg(void *ctx)
 void
 rt_view_context_free(void *ctx)
 {
+    if (_rt_view_context_native_is(ctx)) {
+	rt_view_context_scene_adapter_clear(ctx);
+	rt_view_context_feature_adapter_clear(ctx);
+	rt_view_context_polygon_adapter_clear(ctx);
+	rt_view_context_selection_adapter_clear(ctx);
+	_rt_view_context_native_free(ctx);
+	return;
+    }
     rt_view_context_free_bsg(ctx);
 }
 
@@ -856,6 +933,13 @@ rt_view_context_release_storage_bsg(void *ctx)
 int
 rt_view_context_release_storage(void *ctx)
 {
+    if (_rt_view_context_native_is(ctx)) {
+	rt_view_context_scene_adapter_clear(ctx);
+	rt_view_context_feature_adapter_clear(ctx);
+	rt_view_context_polygon_adapter_clear(ctx);
+	rt_view_context_selection_adapter_clear(ctx);
+	return _rt_view_context_native_release_storage(ctx);
+    }
     return rt_view_context_release_storage_bsg(ctx);
 }
 
@@ -880,12 +964,16 @@ rt_view_context_name_from_bsg(const void *ctx)
 int
 rt_view_context_name_set(void *ctx, const char *name)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_name_set(ctx, name);
     return rt_view_context_name_set_bsg(ctx, name);
 }
 
 const char *
 rt_view_context_name_get(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_name_get(ctx);
     return rt_view_context_name_from_bsg(ctx);
 }
 
@@ -898,6 +986,8 @@ rt_view_context_width_from_bsg(const void *ctx)
 int
 rt_view_context_width_get(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_width_get(ctx);
     return rt_view_context_width_from_bsg(ctx);
 }
 
@@ -910,6 +1000,8 @@ rt_view_context_height_from_bsg(const void *ctx)
 int
 rt_view_context_height_get(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_height_get(ctx);
     return rt_view_context_height_from_bsg(ctx);
 }
 
@@ -922,6 +1014,8 @@ rt_view_context_dimensions_set_bsg(void *ctx, int width, int height)
 int
 rt_view_context_dimensions_set(void *ctx, int width, int height)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_dimensions_set(ctx, width, height);
     return rt_view_context_dimensions_set_bsg(ctx, width, height);
 }
 
@@ -934,6 +1028,8 @@ rt_view_context_display_manager_from_bsg(const void *ctx)
 void *
 rt_view_context_display_manager_get(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_display_manager_get(ctx);
     return rt_view_context_display_manager_from_bsg(ctx);
 }
 
@@ -946,6 +1042,8 @@ rt_view_context_display_manager_set_bsg(void *ctx, void *dmp)
 int
 rt_view_context_display_manager_set(void *ctx, void *dmp)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_display_manager_set(ctx, dmp);
     return rt_view_context_display_manager_set_bsg(ctx, dmp);
 }
 
@@ -958,6 +1056,8 @@ rt_view_context_edit_matrix_set_bsg(void *ctx, matp_t edit_mat)
 int
 rt_view_context_edit_matrix_set(void *ctx, matp_t edit_mat)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_edit_matrix_set(ctx, edit_mat);
     return rt_view_context_edit_matrix_set_bsg(ctx, edit_mat);
 }
 
@@ -970,6 +1070,8 @@ rt_view_context_edit_matrix_clear_bsg(void *ctx)
 int
 rt_view_context_edit_matrix_clear(void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_edit_matrix_clear(ctx);
     return rt_view_context_edit_matrix_clear_bsg(ctx);
 }
 
@@ -982,12 +1084,17 @@ rt_view_context_frame_revision_from_bsg(const void *ctx)
 uint64_t
 rt_view_context_frame_revision_get(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_frame_revision_get(ctx);
     return rt_view_context_frame_revision_from_bsg(ctx);
 }
 
 uint64_t
 rt_view_context_frame_revision_bump(void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_frame_revision_bump(ctx);
+
     struct bsg_view *v = (struct bsg_view *)ctx;
     if (!v)
 	return 0;
@@ -1023,6 +1130,8 @@ rt_view_context_refresh_request_bsg(void *ctx, uint32_t flags)
 int
 rt_view_context_refresh_request(void *ctx, uint32_t flags)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_refresh_request(ctx, flags);
     return rt_view_context_refresh_request_bsg(ctx, flags);
 }
 
@@ -1035,6 +1144,8 @@ rt_view_context_refresh_dirty_from_bsg(const void *ctx)
 int
 rt_view_context_refresh_dirty_get(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_refresh_dirty_get(ctx);
     return rt_view_context_refresh_dirty_from_bsg(ctx);
 }
 
@@ -1047,6 +1158,8 @@ rt_view_context_refresh_consume_bsg(void *ctx)
 uint32_t
 rt_view_context_refresh_consume(void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_refresh_consume(ctx);
     return rt_view_context_refresh_consume_bsg(ctx);
 }
 
@@ -1059,6 +1172,8 @@ rt_view_context_refresh_complete_bsg(void *ctx)
 int
 rt_view_context_refresh_complete(void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_refresh_complete(ctx);
     return rt_view_context_refresh_complete_bsg(ctx);
 }
 
@@ -1071,6 +1186,8 @@ rt_view_context_refresh_enabled_from_bsg(const void *ctx)
 int
 rt_view_context_refresh_enabled_get(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_refresh_enabled_get(ctx);
     return rt_view_context_refresh_enabled_from_bsg(ctx);
 }
 
@@ -1083,6 +1200,8 @@ rt_view_context_refresh_enabled_set_bsg(void *ctx, int enabled)
 int
 rt_view_context_refresh_enabled_set(void *ctx, int enabled)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_refresh_enabled_set(ctx, enabled);
     return rt_view_context_refresh_enabled_set_bsg(ctx, enabled);
 }
 
@@ -1095,6 +1214,8 @@ rt_view_context_refresh_suppressed_from_bsg(const void *ctx)
 int
 rt_view_context_refresh_suppressed_get(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_refresh_suppressed_get(ctx);
     return rt_view_context_refresh_suppressed_from_bsg(ctx);
 }
 
@@ -1107,6 +1228,8 @@ rt_view_context_refresh_suppress_begin_bsg(void *ctx)
 int
 rt_view_context_refresh_suppress_begin(void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_refresh_suppress_begin(ctx);
     return rt_view_context_refresh_suppress_begin_bsg(ctx);
 }
 
@@ -1119,6 +1242,8 @@ rt_view_context_refresh_suppress_end_bsg(void *ctx)
 int
 rt_view_context_refresh_suppress_end(void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_refresh_suppress_end(ctx);
     return rt_view_context_refresh_suppress_end_bsg(ctx);
 }
 
@@ -1131,6 +1256,8 @@ rt_view_context_refresh_drawn_count_from_bsg(const void *ctx)
 int
 rt_view_context_refresh_drawn_count_get(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_refresh_drawn_count_get(ctx);
     return rt_view_context_refresh_drawn_count_from_bsg(ctx);
 }
 
@@ -1143,6 +1270,8 @@ rt_view_context_refresh_drawn_count_set_bsg(void *ctx, int count)
 int
 rt_view_context_refresh_drawn_count_set(void *ctx, int count)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_refresh_drawn_count_set(ctx, count);
     return rt_view_context_refresh_drawn_count_set_bsg(ctx, count);
 }
 
@@ -1155,6 +1284,8 @@ rt_view_context_scale_from_bsg(const void *ctx)
 fastf_t
 rt_view_context_scale_get(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_scale_get(ctx);
     return rt_view_context_scale_from_bsg(ctx);
 }
 
@@ -1167,6 +1298,8 @@ rt_view_context_scale_storage_from_bsg(void *ctx)
 fastf_t *
 rt_view_context_scale_storage_get(void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_scale_storage_get(ctx);
     return rt_view_context_scale_storage_from_bsg(ctx);
 }
 
@@ -1180,6 +1313,8 @@ rt_view_context_size_from_bsg(const void *ctx)
 fastf_t
 rt_view_context_size_get(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_size_get(ctx);
     return rt_view_context_size_from_bsg(ctx);
 }
 
@@ -1203,6 +1338,9 @@ rt_view_context_scale_state_set(void *ctx,
 				fastf_t size,
 				fastf_t inverse_size)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_scale_state_set(ctx, scale,
+		initial_scale, absolute_scale, size, inverse_size);
     return rt_view_context_scale_state_set_bsg(ctx, scale, initial_scale,
 	    absolute_scale, size, inverse_size);
 }
@@ -1216,6 +1354,8 @@ rt_view_context_initial_scale_from_bsg(const void *ctx)
 fastf_t
 rt_view_context_initial_scale_get(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_initial_scale_get(ctx);
     return rt_view_context_initial_scale_from_bsg(ctx);
 }
 
@@ -1228,6 +1368,8 @@ rt_view_context_initial_scale_set_bsg(void *ctx, fastf_t scale)
 int
 rt_view_context_initial_scale_set(void *ctx, fastf_t scale)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_initial_scale_set(ctx, scale);
     return rt_view_context_initial_scale_set_bsg(ctx, scale);
 }
 
@@ -1240,6 +1382,8 @@ rt_view_context_absolute_scale_from_bsg(const void *ctx)
 fastf_t
 rt_view_context_absolute_scale_get(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_absolute_scale_get(ctx);
     return rt_view_context_absolute_scale_from_bsg(ctx);
 }
 
@@ -1252,6 +1396,8 @@ rt_view_context_absolute_scale_set_bsg(void *ctx, fastf_t scale)
 int
 rt_view_context_absolute_scale_set(void *ctx, fastf_t scale)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_absolute_scale_set(ctx, scale);
     return rt_view_context_absolute_scale_set_bsg(ctx, scale);
 }
 
@@ -1269,6 +1415,9 @@ rt_view_context_unit_conversion_set(void *ctx,
 				    fastf_t local2base,
 				    fastf_t base2local)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_unit_conversion_set(ctx, local2base,
+		base2local);
     return rt_view_context_unit_conversion_set_bsg(ctx, local2base,
 	    base2local);
 }
@@ -1282,6 +1431,8 @@ rt_view_context_local2base_from_bsg(const void *ctx)
 fastf_t
 rt_view_context_local2base_get(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_local2base_get(ctx);
     return rt_view_context_local2base_from_bsg(ctx);
 }
 
@@ -1294,6 +1445,8 @@ rt_view_context_base2local_from_bsg(const void *ctx)
 fastf_t
 rt_view_context_base2local_get(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_base2local_get(ctx);
     return rt_view_context_base2local_from_bsg(ctx);
 }
 
@@ -1312,6 +1465,8 @@ rt_view_context_frametime_set_bsg(void *ctx, uint64_t frametime)
 int
 rt_view_context_frametime_set(void *ctx, uint64_t frametime)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_frametime_set(ctx, frametime);
     return rt_view_context_frametime_set_bsg(ctx, frametime);
 }
 
@@ -1324,6 +1479,8 @@ rt_view_context_lod_bounds_callback_is_bsg(const void *ctx)
 int
 rt_view_context_lod_bounds_callback_is(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_lod_bounds_callback_is(ctx);
     return rt_view_context_lod_bounds_callback_is_bsg(ctx);
 }
 
@@ -1336,6 +1493,8 @@ rt_view_context_is_independent_bsg(const void *ctx)
 int
 rt_view_context_is_independent(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_is_independent(ctx);
     return rt_view_context_is_independent_bsg(ctx);
 }
 
@@ -1349,6 +1508,8 @@ rt_view_context_independent_scope_is_null_bsg(void *ctx, int create)
 int
 rt_view_context_independent_scope_is_null(void *ctx, int create)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_independent_scope_is_null(ctx, create);
     return rt_view_context_independent_scope_is_null_bsg(ctx, create);
 }
 
@@ -1361,6 +1522,10 @@ rt_view_context_independent_scope_destroy_bsg(void *ctx)
 void
 rt_view_context_independent_scope_destroy(void *ctx)
 {
+    if (_rt_view_context_native_is(ctx)) {
+	_rt_view_context_native_independent_scope_destroy(ctx);
+	return;
+    }
     rt_view_context_independent_scope_destroy_bsg(ctx);
 }
 
@@ -1378,6 +1543,9 @@ rt_view_set_context_add_bsg(void *view_set_ctx, void *view_ctx)
 int
 rt_view_set_context_add(void *view_set_ctx, void *view_ctx)
 {
+    if (_rt_view_set_context_native_is(view_set_ctx) ||
+	    _rt_view_context_native_is(view_ctx))
+	return _rt_view_set_context_native_add(view_set_ctx, view_ctx);
     return rt_view_set_context_add_bsg(view_set_ctx, view_ctx);
 }
 
@@ -1395,6 +1563,9 @@ rt_view_set_context_remove_bsg(void *view_set_ctx, void *view_ctx)
 int
 rt_view_set_context_remove(void *view_set_ctx, void *view_ctx)
 {
+    if (_rt_view_set_context_native_is(view_set_ctx) ||
+	    _rt_view_context_native_is(view_ctx))
+	return _rt_view_set_context_native_remove(view_set_ctx, view_ctx);
     return rt_view_set_context_remove_bsg(view_set_ctx, view_ctx);
 }
 
@@ -1564,6 +1735,8 @@ rt_view_context_line_set_create(void *ctx,
 				unsigned char g,
 				unsigned char b)
 {
+    if (_rt_view_context_native_is(ctx))
+	return NULL;
     return rt_view_context_line_set_create_bsg(ctx, name, r, g, b);
 }
 
@@ -1678,6 +1851,10 @@ rt_view_context_update_callback_set(void *ctx,
 				    rt_view_context_update_callback_t callback,
 				    void *data)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_update_callback_set(ctx, callback,
+		data);
+
     struct bsg_view *v = (struct bsg_view *)ctx;
 
     if (!v)
@@ -1754,6 +1931,10 @@ rt_view_context_info_from_bsg(struct rt_view_info *info, const void *ctx)
 void
 rt_view_context_info_get(struct rt_view_info *info, const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx)) {
+	_rt_view_context_native_info_get(info, ctx);
+	return;
+    }
     rt_view_context_info_from_bsg(info, ctx);
 }
 
@@ -1783,6 +1964,9 @@ rt_view_context_obb_get(const void *ctx,
 			vect_t extent2,
 			vect_t extent3)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_obb_get(ctx, center, extent1, extent2,
+		extent3);
     return rt_view_context_obb_from_bsg(ctx, center, extent1, extent2, extent3);
 }
 
@@ -1819,6 +2003,8 @@ rt_view_context_radius_from_bsg(const void *ctx)
 fastf_t
 rt_view_context_radius_get(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_radius_get(ctx);
     return rt_view_context_radius_from_bsg(ctx);
 }
 
@@ -1868,6 +2054,8 @@ rt_view_context_screen_to_view(fastf_t *fx,
 			       fastf_t x,
 			       fastf_t y)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_screen_to_view(fx, fy, ctx, x, y);
     return rt_view_context_screen_to_view_from_bsg(fx, fy, ctx, x, y);
 }
 
@@ -1902,6 +2090,8 @@ rt_view_context_screen_point_from_bsg(point_t point,
 int
 rt_view_context_screen_point_get(point_t point, void *ctx, fastf_t x, fastf_t y)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_screen_point_get(point, ctx, x, y);
     return rt_view_context_screen_point_from_bsg(point, ctx, x, y);
 }
 
@@ -1930,6 +2120,8 @@ rt_view_context_current_point_from_bsg(point_t point, const void *ctx)
 int
 rt_view_context_current_point_get(point_t point, const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_current_point_get(point, ctx);
     return rt_view_context_current_point_from_bsg(point, ctx);
 }
 
@@ -1952,6 +2144,8 @@ rt_view_context_current_point_set_bsg(void *ctx, const point_t point)
 int
 rt_view_context_current_point_set(void *ctx, const point_t point)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_current_point_set(ctx, point);
     return rt_view_context_current_point_set_bsg(ctx, point);
 }
 
@@ -1979,6 +2173,8 @@ rt_view_context_previous_mouse_from_bsg(fastf_t *x, fastf_t *y, const void *ctx)
 int
 rt_view_context_previous_mouse_get(fastf_t *x, fastf_t *y, const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_previous_mouse_get(x, y, ctx);
     return rt_view_context_previous_mouse_from_bsg(x, y, ctx);
 }
 
@@ -2002,6 +2198,8 @@ rt_view_context_previous_mouse_set_bsg(void *ctx, fastf_t x, fastf_t y)
 int
 rt_view_context_previous_mouse_set(void *ctx, fastf_t x, fastf_t y)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_previous_mouse_set(ctx, x, y);
     return rt_view_context_previous_mouse_set_bsg(ctx, x, y);
 }
 
@@ -2037,6 +2235,8 @@ int
 rt_view_context_mouse_delta_settings_get(struct rt_view_mouse_delta_settings *settings,
 					 const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_mouse_delta_settings_get(settings, ctx);
     return rt_view_context_mouse_delta_settings_from_bsg(settings, ctx);
 }
 
@@ -2067,6 +2267,8 @@ rt_view_context_mouse_state_set_bsg(void *ctx, int x, int y)
 int
 rt_view_context_mouse_state_set(void *ctx, int x, int y)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_mouse_state_set(ctx, x, y);
     return rt_view_context_mouse_state_set_bsg(ctx, x, y);
 }
 
@@ -2192,6 +2394,8 @@ rt_view_context_interactive_rect_state_get(
 	struct rt_view_interactive_rect_state *record,
 	const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_interactive_rect_state_get(record, ctx);
     return rt_view_context_interactive_rect_state_from_bsg(record, ctx);
 }
 
@@ -2222,6 +2426,9 @@ rt_view_context_interactive_rect_state_set(
 	void *ctx,
 	const struct rt_view_interactive_rect_state *record)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_interactive_rect_state_set(ctx,
+		record);
     return rt_view_context_interactive_rect_state_set_bsg(ctx, record);
 }
 
@@ -2324,6 +2531,8 @@ rt_view_context_adc_state_from_bsg(struct rt_view_adc_state *record,
 int
 rt_view_context_adc_state_get(struct rt_view_adc_state *record, const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_adc_state_get(record, ctx);
     return rt_view_context_adc_state_from_bsg(record, ctx);
 }
 
@@ -2350,6 +2559,8 @@ rt_view_context_adc_state_set_bsg(void *ctx,
 int
 rt_view_context_adc_state_set(void *ctx, const struct rt_view_adc_state *record)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_adc_state_set(ctx, record);
     return rt_view_context_adc_state_set_bsg(ctx, record);
 }
 
@@ -2424,6 +2635,8 @@ rt_view_context_grid_state_from_bsg(struct rt_view_grid_state *record,
 int
 rt_view_context_grid_state_get(struct rt_view_grid_state *record, const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_grid_state_get(record, ctx);
     return rt_view_context_grid_state_from_bsg(record, ctx);
 }
 
@@ -2450,6 +2663,8 @@ rt_view_context_grid_state_set_bsg(void *ctx,
 int
 rt_view_context_grid_state_set(void *ctx, const struct rt_view_grid_state *record)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_grid_state_set(ctx, record);
     return rt_view_context_grid_state_set_bsg(ctx, record);
 }
 
@@ -2552,6 +2767,8 @@ int
 rt_view_context_model_axes_state_get(struct rt_view_axes_state *record,
 				     const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_model_axes_state_get(record, ctx);
     return rt_view_context_model_axes_state_from_bsg(record, ctx);
 }
 
@@ -2579,6 +2796,8 @@ int
 rt_view_context_model_axes_state_set(void *ctx,
 				     const struct rt_view_axes_state *record)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_model_axes_state_set(ctx, record);
     return rt_view_context_model_axes_state_set_bsg(ctx, record);
 }
 
@@ -2611,6 +2830,8 @@ int
 rt_view_context_view_axes_state_get(struct rt_view_axes_state *record,
 				    const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_view_axes_state_get(record, ctx);
     return rt_view_context_view_axes_state_from_bsg(record, ctx);
 }
 
@@ -2638,6 +2859,8 @@ int
 rt_view_context_view_axes_state_set(void *ctx,
 				    const struct rt_view_axes_state *record)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_view_axes_state_set(ctx, record);
     return rt_view_context_view_axes_state_set_bsg(ctx, record);
 }
 
@@ -2705,6 +2928,8 @@ int
 rt_view_context_center_dot_state_get(struct rt_view_other_state *record,
 				     const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_center_dot_state_get(record, ctx);
     return rt_view_context_center_dot_state_from_bsg(record, ctx);
 }
 
@@ -2732,6 +2957,8 @@ int
 rt_view_context_center_dot_state_set(void *ctx,
 				     const struct rt_view_other_state *record)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_center_dot_state_set(ctx, record);
     return rt_view_context_center_dot_state_set_bsg(ctx, record);
 }
 
@@ -2764,6 +2991,9 @@ int
 rt_view_context_scale_overlay_state_get(struct rt_view_other_state *record,
 					const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_scale_overlay_state_get(record,
+		ctx);
     return rt_view_context_scale_overlay_state_from_bsg(record, ctx);
 }
 
@@ -2792,6 +3022,9 @@ int
 rt_view_context_scale_overlay_state_set(void *ctx,
 					const struct rt_view_other_state *record)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_scale_overlay_state_set(ctx,
+		record);
     return rt_view_context_scale_overlay_state_set_bsg(ctx, record);
 }
 
@@ -2865,6 +3098,8 @@ int
 rt_view_context_params_state_get(struct rt_view_params_state *record,
 				 const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_params_state_get(record, ctx);
     return rt_view_context_params_state_from_bsg(record, ctx);
 }
 
@@ -2892,6 +3127,8 @@ int
 rt_view_context_params_state_set(void *ctx,
 				 const struct rt_view_params_state *record)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_params_state_set(ctx, record);
     return rt_view_context_params_state_set_bsg(ctx, record);
 }
 
@@ -3013,6 +3250,8 @@ rt_view_context_orientation_quat_from_bsg(quat_t orientation, const void *ctx)
 int
 rt_view_context_orientation_quat_get(quat_t orientation, const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_orientation_quat_get(orientation, ctx);
     return rt_view_context_orientation_quat_from_bsg(orientation, ctx);
 }
 
@@ -3040,6 +3279,8 @@ rt_view_context_aet_from_bsg(vect_t aet, const void *ctx)
 int
 rt_view_context_aet_get(vect_t aet, const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_aet_get(aet, ctx);
     return rt_view_context_aet_from_bsg(aet, ctx);
 }
 
@@ -3062,6 +3303,8 @@ rt_view_context_aet_set_bsg(void *ctx, const vect_t aet)
 int
 rt_view_context_aet_set(void *ctx, const vect_t aet)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_aet_set(ctx, aet);
     return rt_view_context_aet_set_bsg(ctx, aet);
 }
 
@@ -3084,6 +3327,8 @@ rt_view_context_aet_state_set_bsg(void *ctx, const vect_t aet)
 int
 rt_view_context_aet_state_set(void *ctx, const vect_t aet)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_aet_state_set(ctx, aet);
     return rt_view_context_aet_state_set_bsg(ctx, aet);
 }
 
@@ -3106,6 +3351,8 @@ rt_view_context_update_bsg(void *ctx)
 int
 rt_view_context_update(void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_update(ctx);
     return rt_view_context_update_bsg(ctx);
 }
 
@@ -3129,6 +3376,8 @@ rt_view_context_autoview_bsg(void *ctx, fastf_t scale, int all_view_objs)
 int
 rt_view_context_autoview(void *ctx, fastf_t scale, int all_view_objs)
 {
+    if (_rt_view_context_native_is(ctx))
+	return 0;
     return rt_view_context_autoview_bsg(ctx, scale, all_view_objs);
 }
 
@@ -3160,6 +3409,8 @@ rt_view_context_autoview_bounds(void *ctx,
 				const point_t min,
 				const point_t max)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_autoview_bounds(ctx, scale, min, max);
     return rt_view_context_autoview_bounds_bsg(ctx, scale, min, max);
 }
 
@@ -3218,6 +3469,9 @@ rt_view_context_adjust(void *ctx,
 		       int mode,
 		       unsigned long long flags)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_adjust(ctx, dx, dy, keypoint, mode,
+		flags);
     return rt_view_context_adjust_bsg(ctx, dx, dy, keypoint, mode, flags);
 }
 
@@ -3236,6 +3490,8 @@ rt_view_context_hash_bsg(const void *ctx)
 unsigned long long
 rt_view_context_hash(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_hash(ctx);
     return rt_view_context_hash_bsg(ctx);
 }
 
@@ -3436,6 +3692,8 @@ rt_view_context_snap_candidates_result(void *ctx,
 				       unsigned long long kinds,
 				       void *out_ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return 0;
     return rt_view_context_snap_candidates_result_bsg(ctx, sample, tol, kinds,
 	    (struct rt_view_snap_result_bsg *)out_ctx);
 }
@@ -3456,6 +3714,9 @@ rt_view_context_snap_first_candidate(void *ctx,
     VSET(candidate, 0.0, 0.0, 0.0);
 
     if (!ctx || !sample || !kinds)
+	return 0;
+
+    if (_rt_view_context_native_is(ctx))
 	return 0;
 
     VMOVE(bsg_sample, sample);
@@ -3493,6 +3754,8 @@ rt_view_context_snap_point_2d(void *ctx,
 			      fastf_t *vy,
 			      unsigned long long kinds)
 {
+    if (_rt_view_context_native_is(ctx))
+	return 0;
     return rt_view_context_snap_point_2d_bsg(ctx, vx, vy, kinds);
 }
 
@@ -3514,6 +3777,8 @@ rt_view_context_snap_grid_2d_bsg(void *ctx, fastf_t *vx, fastf_t *vy)
 int
 rt_view_context_snap_grid_2d(void *ctx, fastf_t *vx, fastf_t *vy)
 {
+    if (_rt_view_context_native_is(ctx))
+	return 0;
     return rt_view_context_snap_grid_2d_bsg(ctx, vx, vy);
 }
 
@@ -3565,6 +3830,10 @@ rt_view_context_measure_candidates(void *ctx,
 				   point_t b,
 				   struct rt_view_measure_result *out)
 {
+    if (out)
+	memset(out, 0, sizeof(*out));
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_measure_candidates(ctx, a, b, out);
     return rt_view_context_measure_candidates_bsg(ctx, a, b, out);
 }
 
@@ -3615,6 +3884,8 @@ rt_view_context_pick_point_bsg(void *ctx, int x, int y, int first_only)
 void *
 rt_view_context_pick_point(void *ctx, int x, int y, int first_only)
 {
+    if (_rt_view_context_native_is(ctx))
+	return NULL;
     return (void *)rt_view_context_pick_point_bsg(ctx, x, y, first_only);
 }
 
@@ -3633,6 +3904,8 @@ rt_view_context_pick_nearest_bsg(void *ctx, int x, int y)
 void *
 rt_view_context_pick_nearest(void *ctx, int x, int y)
 {
+    if (_rt_view_context_native_is(ctx))
+	return NULL;
     return (void *)rt_view_context_pick_nearest_bsg(ctx, x, y);
 }
 
@@ -3651,6 +3924,8 @@ rt_view_context_pick_rect_bsg(void *ctx, int x0, int y0, int x1, int y1)
 void *
 rt_view_context_pick_rect(void *ctx, int x0, int y0, int x1, int y1)
 {
+    if (_rt_view_context_native_is(ctx))
+	return NULL;
     return (void *)rt_view_context_pick_rect_bsg(ctx, x0, y0, x1, y1);
 }
 
@@ -3678,6 +3953,9 @@ rt_view_context_pick_semantic_path(void *ctx, const char *path_pattern)
 	if (result)
 	    return result;
     }
+
+    if (_rt_view_context_native_is(ctx))
+	return NULL;
 
     return (void *)rt_view_context_pick_semantic_path_bsg(ctx, path_pattern);
 }
@@ -3967,6 +4245,9 @@ rt_view_context_selection_available(void *ctx)
 	    adapter.available)
 	return adapter.available(ctx, adapter.data);
 
+    if (_rt_view_context_native_is(ctx))
+	return 0;
+
     return rt_view_context_selection_available_bsg(ctx);
 }
 
@@ -3990,6 +4271,9 @@ rt_view_context_selection_count(void *ctx)
     if (rt_view_context_selection_adapter_get(ctx, &adapter) &&
 	    adapter.count)
 	return adapter.count(ctx, adapter.data);
+
+    if (_rt_view_context_native_is(ctx))
+	return 0;
 
     return rt_view_context_selection_count_bsg(ctx);
 }
@@ -4073,6 +4357,9 @@ rt_view_context_selection_set_pick_result_context(
 	return adapter.set_pick_result_context(ctx, result_ctx, callback,
 		data, adapter.data);
 
+    if (_rt_view_context_native_is(ctx))
+	return 0;
+
     return rt_view_context_selection_set_pick_result_context_bsg(ctx,
 	    result_ctx, (rt_view_selection_path_callback_bsg_t)callback, data);
 }
@@ -4102,6 +4389,9 @@ rt_view_context_selection_clear(void *ctx)
 	    adapter.clear)
 	return adapter.clear(ctx, adapter.data);
 
+    if (_rt_view_context_native_is(ctx))
+	return 0;
+
     return rt_view_context_selection_clear_bsg(ctx);
 }
 
@@ -4114,6 +4404,8 @@ rt_view_set_views_bsg(struct bsg_view_set *s)
 struct bu_ptbl *
 rt_view_set_context_views(void *view_set_ctx)
 {
+    if (_rt_view_set_context_native_is(view_set_ctx))
+	return _rt_view_set_context_native_views(view_set_ctx);
     return rt_view_set_views_bsg((struct bsg_view_set *)view_set_ctx);
 }
 
@@ -4126,6 +4418,8 @@ rt_view_set_recycle_pool_bsg(struct bsg_view_set *s)
 void *
 rt_view_set_context_recycle_pool(void *view_set_ctx)
 {
+    if (_rt_view_set_context_native_is(view_set_ctx))
+	return _rt_view_set_context_native_recycle_pool(view_set_ctx);
     return rt_view_set_recycle_pool_bsg((struct bsg_view_set *)view_set_ctx);
 }
 
@@ -4141,6 +4435,8 @@ rt_view_set_find_view_bsg(struct bsg_view_set *s, const char *name)
 void *
 rt_view_set_context_find_view(void *view_set_ctx, const char *name)
 {
+    if (_rt_view_set_context_native_is(view_set_ctx))
+	return _rt_view_set_context_native_find_view(view_set_ctx, name);
     return (void *)rt_view_set_find_view_bsg(
 	    (struct bsg_view_set *)view_set_ctx, name);
 }
@@ -4148,10 +4444,7 @@ rt_view_set_context_find_view(void *view_set_ctx, const char *name)
 void *
 rt_view_set_context_create(void)
 {
-    struct bsg_view_set *s;
-    BU_GET(s, struct bsg_view_set);
-    rt_view_set_context_init((void *)s);
-    return (void *)s;
+    return _rt_view_set_context_native_create();
 }
 
 void
@@ -4159,6 +4452,11 @@ rt_view_set_context_destroy(void *view_set_ctx)
 {
     if (!view_set_ctx)
 	return;
+
+    if (_rt_view_set_context_native_is(view_set_ctx)) {
+	_rt_view_set_context_native_destroy(view_set_ctx);
+	return;
+    }
 
     struct bsg_view_set *s = (struct bsg_view_set *)view_set_ctx;
     rt_view_set_context_free(view_set_ctx);
@@ -4177,6 +4475,10 @@ rt_view_set_init_bsg(struct bsg_view_set *s)
 void
 rt_view_set_context_init(void *view_set_ctx)
 {
+    if (_rt_view_set_context_native_is(view_set_ctx)) {
+	_rt_view_set_context_native_init(view_set_ctx);
+	return;
+    }
     rt_view_set_init_bsg((struct bsg_view_set *)view_set_ctx);
 }
 
@@ -4192,6 +4494,10 @@ rt_view_set_free_bsg(struct bsg_view_set *s)
 void
 rt_view_set_context_free(void *view_set_ctx)
 {
+    if (_rt_view_set_context_native_is(view_set_ctx)) {
+	_rt_view_set_context_native_free(view_set_ctx);
+	return;
+    }
     rt_view_set_free_bsg((struct bsg_view_set *)view_set_ctx);
 }
 
@@ -4231,6 +4537,9 @@ rt_view_context_view_set_attach_bsg(void *ctx, void *view_set_ctx)
 int
 rt_view_context_view_set_attach(void *ctx, void *view_set_ctx)
 {
+    if (_rt_view_context_native_is(ctx) ||
+	    _rt_view_set_context_native_is(view_set_ctx))
+	return _rt_view_context_native_view_set_attach(ctx, view_set_ctx);
     return rt_view_context_view_set_attach_bsg(ctx, view_set_ctx);
 }
 
@@ -4278,6 +4587,8 @@ rt_view_context_knobs_reset_bsg(void *ctx, int category)
 int
 rt_view_context_knobs_reset(void *ctx, int category)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_knobs_reset(ctx, category);
     return rt_view_context_knobs_reset_bsg(ctx, category);
 }
 
@@ -4394,6 +4705,8 @@ int
 rt_view_context_knobs_state_get(struct rt_view_knobs *knobs,
 				const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_knobs_state_get(knobs, ctx);
     return rt_view_context_knobs_state_from_bsg(knobs, ctx);
 }
 
@@ -4414,6 +4727,8 @@ int
 rt_view_context_knobs_state_set(void *ctx,
 				const struct rt_view_knobs *knobs)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_knobs_state_set(ctx, knobs);
     return rt_view_context_knobs_state_set_bsg(ctx, knobs);
 }
 
@@ -4445,6 +4760,8 @@ unsigned long long
 rt_view_context_knobs_hash(void *ctx,
 			   struct bu_data_hash_state *state)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_knobs_hash(ctx, state);
     return rt_view_context_knobs_hash_bsg(ctx, state);
 }
 
@@ -4492,6 +4809,10 @@ rt_view_context_knobs_cmd_process(vect_t *rvec,
 				  int model_flag,
 				  int incr_flag)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_knobs_cmd_process(rvec, do_rot,
+		tvec, do_tran, ctx, cmd, factor, origin, model_flag,
+		incr_flag);
     return rt_view_context_knobs_cmd_process_bsg(rvec, do_rot, tvec, do_tran,
 	    ctx, cmd, factor, origin, model_flag, incr_flag);
 }
@@ -4522,6 +4843,9 @@ rt_view_context_knobs_translate(void *ctx,
 				const vect_t tvec,
 				int model_flag)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_knobs_translate(ctx, tvec,
+		model_flag);
     return rt_view_context_knobs_translate_bsg(ctx, tvec, model_flag);
 }
 
@@ -4560,6 +4884,9 @@ rt_view_context_knobs_rotate(void *ctx,
 			     const matp_t obj_rot,
 			     const pointp_t pvt_pt)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_knobs_rotate(ctx, rvec, origin,
+		coords, obj_rot, pvt_pt);
     return rt_view_context_knobs_rotate_bsg(ctx, rvec, origin, coords,
 	    obj_rot, pvt_pt);
 }
@@ -4583,6 +4910,8 @@ rt_view_context_knobs_update_rate_flags_bsg(void *ctx)
 int
 rt_view_context_knobs_update_rate_flags(void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_knobs_update_rate_flags(ctx);
     return rt_view_context_knobs_update_rate_flags_bsg(ctx);
 }
 
@@ -4612,6 +4941,8 @@ int
 rt_view_context_knob_values_get(struct rt_view_knob_values *values,
 				const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_knob_values_get(values, ctx);
     return rt_view_context_knob_values_from_bsg(values, ctx);
 }
 
@@ -4633,6 +4964,8 @@ rt_view_context_knobs_calibrate_bsg(void *ctx)
 int
 rt_view_context_knobs_calibrate(void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_knobs_calibrate(ctx);
     return rt_view_context_knobs_calibrate_bsg(ctx);
 }
 
@@ -4716,6 +5049,8 @@ rt_view_independent_scope_ref_bsg(struct bsg_view *v, int create)
 rt_view_scene_ref
 rt_view_context_independent_scope_ref(void *ctx, int create)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_independent_scope_ref(ctx, create);
     return rt_view_neutral_scene_ref_from_bsg(
 	    bsg_view_independent_scope_ref((struct bsg_view *)ctx, create));
 }
@@ -4724,6 +5059,8 @@ rt_view_context_independent_scope_ref(void *ctx, int create)
 rt_view_scene_ref
 rt_view_context_scene_root_ref(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_scene_root_ref(ctx);
     return rt_view_neutral_scene_ref_from_bsg(
 	    bsg_view_scene_ref((const struct bsg_view *)ctx));
 }
@@ -4732,6 +5069,8 @@ rt_view_context_scene_root_ref(const void *ctx)
 int
 rt_view_context_scene_root_ref_attach(void *ctx, rt_view_scene_ref root_ref)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_scene_root_ref_attach(ctx, root_ref);
     if (!rt_view_scene_ref_is_null(root_ref) &&
 	    rt_view_scene_ref_backend(root_ref) != RT_VIEW_SCENE_BACKEND_NONE &&
 	    rt_view_scene_ref_backend(root_ref) != RT_VIEW_SCENE_BACKEND_BSG)
@@ -4772,6 +5111,8 @@ rt_view_context_scene_attached_bsg(const void *ctx)
 int
 rt_view_context_scene_attached(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_scene_attached(ctx);
     return rt_view_context_scene_attached_bsg(ctx);
 }
 
@@ -4796,6 +5137,8 @@ rt_view_context_scene_anchor_ensure_bsg(void *ctx)
 int
 rt_view_context_scene_anchor_ensure(void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return 0;
     return rt_view_context_scene_anchor_ensure_bsg(ctx);
 }
 
@@ -4818,6 +5161,8 @@ rt_view_context_scene_shared_bsg(const void *a_ctx, const void *b_ctx)
 int
 rt_view_context_scene_shared(const void *a_ctx, const void *b_ctx)
 {
+    if (_rt_view_context_native_is(a_ctx) || _rt_view_context_native_is(b_ctx))
+	return 0;
     return rt_view_context_scene_shared_bsg(a_ctx, b_ctx);
 }
 
@@ -4883,6 +5228,9 @@ rt_view_context_visible_render_summary(void *ctx,
 	summary->highlighted_count = 0;
     }
 
+    if (_rt_view_context_native_is(ctx))
+	return 0;
+
     if (!summary ||
 	    !rt_view_context_visible_render_summary_bsg(ctx, &bsg_summary))
 	return 0;
@@ -4929,6 +5277,8 @@ cleanup:
 int
 rt_view_context_named_line_render_count(void *ctx, const char *name)
 {
+    if (_rt_view_context_native_is(ctx))
+	return 0;
     return rt_view_context_named_line_render_count_bsg(ctx, name);
 }
 
@@ -5102,6 +5452,9 @@ rt_view_context_render_export_consistency(
 		adapter.data))
 	return 1;
 
+    if (_rt_view_context_native_is(ctx))
+	return 0;
+
     if (!summary ||
 	    !rt_view_context_render_export_consistency_bsg(ctx, drawn_prefix,
 		&bsg_summary))
@@ -5167,6 +5520,8 @@ rt_view_clear_flags_to_bsg(int flags)
 size_t
 rt_view_context_clear(void *ctx, int flags)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_clear(ctx, flags);
     return rt_view_context_clear_bsg(ctx, rt_view_clear_flags_to_bsg(flags));
 }
 
@@ -5185,6 +5540,8 @@ rt_view_context_perspective_from_bsg(const void *ctx)
 fastf_t
 rt_view_context_perspective_get(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_perspective_get(ctx);
     return rt_view_context_perspective_from_bsg(ctx);
 }
 
@@ -5207,6 +5564,8 @@ rt_view_context_perspective_set_bsg(void *ctx, fastf_t perspective)
 int
 rt_view_context_perspective_set(void *ctx, fastf_t perspective)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_perspective_set(ctx, perspective);
     return rt_view_context_perspective_set_bsg(ctx, perspective);
 }
 
@@ -5234,6 +5593,8 @@ rt_view_context_model2view_from_bsg(mat_t model2view, const void *ctx)
 int
 rt_view_context_model2view_get(mat_t model2view, const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_model2view_get(model2view, ctx);
     return rt_view_context_model2view_from_bsg(model2view, ctx);
 }
 
@@ -5256,6 +5617,8 @@ rt_view_context_model2view_set_bsg(void *ctx, const mat_t model2view)
 int
 rt_view_context_model2view_set(void *ctx, const mat_t model2view)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_model2view_set(ctx, model2view);
     return rt_view_context_model2view_set_bsg(ctx, model2view);
 }
 
@@ -5284,6 +5647,8 @@ rt_view_context_view2model_from_bsg(mat_t view2model, const void *ctx)
 int
 rt_view_context_view2model_get(mat_t view2model, const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_view2model_get(view2model, ctx);
     return rt_view_context_view2model_from_bsg(view2model, ctx);
 }
 
@@ -5306,6 +5671,8 @@ rt_view_context_view2model_set_bsg(void *ctx, const mat_t view2model)
 int
 rt_view_context_view2model_set(void *ctx, const mat_t view2model)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_view2model_set(ctx, view2model);
     return rt_view_context_view2model_set_bsg(ctx, view2model);
 }
 
@@ -5334,6 +5701,8 @@ rt_view_context_pmodel2view_from_bsg(mat_t pmodel2view, const void *ctx)
 int
 rt_view_context_pmodel2view_get(mat_t pmodel2view, const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_pmodel2view_get(pmodel2view, ctx);
     return rt_view_context_pmodel2view_from_bsg(pmodel2view, ctx);
 }
 
@@ -5356,6 +5725,8 @@ rt_view_context_pmodel2view_set_bsg(void *ctx, const mat_t pmodel2view)
 int
 rt_view_context_pmodel2view_set(void *ctx, const mat_t pmodel2view)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_pmodel2view_set(ctx, pmodel2view);
     return rt_view_context_pmodel2view_set_bsg(ctx, pmodel2view);
 }
 
@@ -5383,6 +5754,8 @@ rt_view_context_pmat_from_bsg(mat_t pmat, const void *ctx)
 int
 rt_view_context_pmat_get(mat_t pmat, const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_pmat_get(pmat, ctx);
     return rt_view_context_pmat_from_bsg(pmat, ctx);
 }
 
@@ -5405,6 +5778,8 @@ rt_view_context_pmat_set_bsg(void *ctx, const mat_t pmat)
 int
 rt_view_context_pmat_set(void *ctx, const mat_t pmat)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_pmat_set(ctx, pmat);
     return rt_view_context_pmat_set_bsg(ctx, pmat);
 }
 
@@ -5432,6 +5807,8 @@ rt_view_context_rotation_from_bsg(mat_t rotation, const void *ctx)
 int
 rt_view_context_rotation_get(mat_t rotation, const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_rotation_get(rotation, ctx);
     return rt_view_context_rotation_from_bsg(rotation, ctx);
 }
 
@@ -5454,6 +5831,8 @@ rt_view_context_rotation_set_bsg(void *ctx, const mat_t rotation)
 int
 rt_view_context_rotation_set(void *ctx, const mat_t rotation)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_rotation_set(ctx, rotation);
     return rt_view_context_rotation_set_bsg(ctx, rotation);
 }
 
@@ -5481,6 +5860,8 @@ rt_view_context_center_from_bsg(mat_t center, const void *ctx)
 int
 rt_view_context_center_get(mat_t center, const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_center_get(center, ctx);
     return rt_view_context_center_from_bsg(center, ctx);
 }
 
@@ -5503,6 +5884,8 @@ rt_view_context_center_vec_set_bsg(void *ctx, const point_t center)
 int
 rt_view_context_center_set(void *ctx, const point_t center)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_center_set(ctx, center);
     return rt_view_context_center_vec_set_bsg(ctx, center);
 }
 
@@ -5532,6 +5915,8 @@ rt_view_context_plane_from_bsg(plane_t *plane, const void *ctx)
 int
 rt_view_context_plane_get(plane_t *plane, const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_plane_get(plane, ctx);
     return rt_view_context_plane_from_bsg(plane, ctx);
 }
 
@@ -5579,6 +5964,8 @@ int
 rt_view_context_lod_policy_get(struct rt_view_lod_policy *policy,
 			       const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_lod_policy_get(policy, ctx);
     return rt_view_context_lod_policy_from_bsg(policy, ctx);
 }
 
@@ -5618,6 +6005,8 @@ int
 rt_view_context_lod_policy_apply(void *ctx,
 				 const struct rt_view_lod_policy *policy)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_lod_policy_apply(ctx, policy);
     return rt_view_context_lod_policy_apply_bsg(ctx, policy);
 }
 
@@ -5640,6 +6029,23 @@ rt_view_context_lod_policy_copy_bsg(void *dst_ctx, const void *src_ctx)
 int
 rt_view_context_lod_policy_copy(void *dst_ctx, const void *src_ctx)
 {
+    if (_rt_view_context_native_is(dst_ctx) ||
+	    _rt_view_context_native_is(src_ctx)) {
+	struct rt_view_lod_policy policy = RT_VIEW_LOD_POLICY_INIT;
+
+	if (_rt_view_context_native_is(src_ctx)) {
+	    if (!_rt_view_context_native_lod_policy_get(&policy, src_ctx))
+		return 0;
+	} else {
+	    if (!rt_view_context_lod_policy_from_bsg(&policy, src_ctx))
+		return 0;
+	}
+
+	if (_rt_view_context_native_is(dst_ctx))
+	    return _rt_view_context_native_lod_policy_apply(dst_ctx,
+		    &policy);
+	return rt_view_context_lod_policy_apply_bsg(dst_ctx, &policy);
+    }
     return rt_view_context_lod_policy_copy_bsg(dst_ctx, src_ctx);
 }
 
@@ -5663,6 +6069,8 @@ rt_view_context_lod_bounds_update_bsg(void *ctx)
 int
 rt_view_context_lod_bounds_update(void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_lod_bounds_update(ctx);
     return rt_view_context_lod_bounds_update_bsg(ctx);
 }
 
@@ -5686,6 +6094,8 @@ rt_view_context_lod_bounds_callback_set_bsg(void *ctx)
 int
 rt_view_context_lod_bounds_callback_set(void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_lod_bounds_callback_set(ctx);
     return rt_view_context_lod_bounds_callback_set_bsg(ctx);
 }
 
@@ -5754,6 +6164,9 @@ struct rt_view_bounds_update_state {
 void *
 rt_view_context_bounds_update_suspend(void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_bounds_update_suspend(ctx);
+
     rt_view_bounds_update_callback_bsg_t callback =
 	rt_view_context_bounds_update_callback_from_bsg(ctx);
     if (!callback)
@@ -5770,6 +6183,10 @@ int
 rt_view_context_bounds_update_restore(void *ctx, void *state_ctx,
 				      int refresh_bounds)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_bounds_update_restore(ctx, state_ctx,
+		refresh_bounds);
+
     struct rt_view_bounds_update_state *state =
 	(struct rt_view_bounds_update_state *)state_ctx;
     if (!state)
@@ -5812,6 +6229,8 @@ rt_view_context_scale_set_bsg(void *ctx, fastf_t scale)
 int
 rt_view_context_scale_set(void *ctx, fastf_t scale)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_scale_set(ctx, scale);
     return rt_view_context_scale_set_bsg(ctx, scale);
 }
 
@@ -5922,6 +6341,8 @@ rt_view_context_size_set_bsg(void *ctx, fastf_t size)
 int
 rt_view_context_size_set(void *ctx, fastf_t size)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_size_set(ctx, size);
     return rt_view_context_size_set_bsg(ctx, size);
 }
 
@@ -5940,6 +6361,8 @@ rt_view_context_inverse_size_from_bsg(const void *ctx)
 fastf_t
 rt_view_context_inverse_size_get(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_inverse_size_get(ctx);
     return rt_view_context_inverse_size_from_bsg(ctx);
 }
 
@@ -5967,6 +6390,8 @@ rt_view_context_eye_pos_from_bsg(point_t eye_pos, const void *ctx)
 int
 rt_view_context_eye_pos_get(point_t eye_pos, const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_eye_pos_get(eye_pos, ctx);
     return rt_view_context_eye_pos_from_bsg(eye_pos, ctx);
 }
 
@@ -5989,6 +6414,8 @@ rt_view_context_eye_pos_set_bsg(void *ctx, const point_t eye_pos)
 int
 rt_view_context_eye_pos_set(void *ctx, const point_t eye_pos)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_eye_pos_set(ctx, eye_pos);
     return rt_view_context_eye_pos_set_bsg(ctx, eye_pos);
 }
 
@@ -6016,6 +6443,8 @@ rt_view_context_keypoint_from_bsg(point_t keypoint, const void *ctx)
 int
 rt_view_context_keypoint_get(point_t keypoint, const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_keypoint_get(keypoint, ctx);
     return rt_view_context_keypoint_from_bsg(keypoint, ctx);
 }
 
@@ -6038,6 +6467,8 @@ rt_view_context_keypoint_set_bsg(void *ctx, const point_t keypoint)
 int
 rt_view_context_keypoint_set(void *ctx, const point_t keypoint)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_keypoint_set(ctx, keypoint);
     return rt_view_context_keypoint_set_bsg(ctx, keypoint);
 }
 
@@ -6056,6 +6487,8 @@ rt_view_context_rotate_about_from_bsg(const void *ctx)
 char
 rt_view_context_rotate_about_get(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_rotate_about_get(ctx);
     return rt_view_context_rotate_about_from_bsg(ctx);
 }
 
@@ -6078,6 +6511,8 @@ rt_view_context_rotate_about_set_bsg(void *ctx, char rotate_about)
 int
 rt_view_context_rotate_about_set(void *ctx, char rotate_about)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_rotate_about_set(ctx, rotate_about);
     return rt_view_context_rotate_about_set_bsg(ctx, rotate_about);
 }
 
@@ -6096,6 +6531,8 @@ rt_view_context_coord_from_bsg(const void *ctx)
 char
 rt_view_context_coord_get(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_coord_get(ctx);
     return rt_view_context_coord_from_bsg(ctx);
 }
 
@@ -6118,6 +6555,8 @@ rt_view_context_coord_set_bsg(void *ctx, char coord)
 int
 rt_view_context_coord_set(void *ctx, char coord)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_coord_set(ctx, coord);
     return rt_view_context_coord_set_bsg(ctx, coord);
 }
 
@@ -6136,6 +6575,8 @@ rt_view_context_snap_lines_from_bsg(const void *ctx)
 int
 rt_view_context_snap_lines_get(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_snap_lines_get(ctx);
     return rt_view_context_snap_lines_from_bsg(ctx);
 }
 
@@ -6158,6 +6599,8 @@ rt_view_context_snap_lines_set_bsg(void *ctx, int enabled)
 int
 rt_view_context_snap_lines_set(void *ctx, int enabled)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_snap_lines_set(ctx, enabled);
     return rt_view_context_snap_lines_set_bsg(ctx, enabled);
 }
 
@@ -6517,6 +6960,9 @@ rt_view_context_feature_geometry_summary(
 	summary->command_count = 0;
     }
 
+    if (_rt_view_context_native_is(ctx))
+	return 0;
+
     if (!summary ||
 	    !rt_view_context_feature_geometry_summary_bsg(ctx, name,
 		&bsg_summary))
@@ -6647,6 +7093,9 @@ rt_view_context_edit_preview_publish_event(
 		source_path, adapter.data);
     }
 
+    if (_rt_view_context_native_is(ctx))
+	return 0;
+
     return rt_view_context_edit_preview_publish_event_bsg(ctx, feature, event,
 	    source_path);
 }
@@ -6666,6 +7115,9 @@ rt_view_context_feature_overlay_ensure(
 	return adapter.overlay_ensure(ctx, name, owner, preview_ctx,
 		callbacks, source_path, adapter.data);
 
+    if (_rt_view_context_native_is(ctx))
+	return RT_VIEW_FEATURE_REF_NULL;
+
     return rt_view_context_feature_overlay_ensure_bsg(ctx, name, owner,
 	    preview_ctx, callbacks, source_path);
 }
@@ -6680,6 +7132,9 @@ rt_view_context_feature_label_ensure(void *ctx,
 	    adapter.label_ensure)
 	return adapter.label_ensure(ctx, name, owner, adapter.data);
 
+    if (_rt_view_context_native_is(ctx))
+	return RT_VIEW_FEATURE_REF_NULL;
+
     return rt_view_context_feature_label_ensure_bsg(ctx, name, owner);
 }
 
@@ -6690,6 +7145,9 @@ rt_view_context_feature_remove(void *ctx, const char *name)
     if (rt_view_context_feature_adapter_get(ctx, &adapter) &&
 	    adapter.remove)
 	return adapter.remove(ctx, name, adapter.data);
+
+    if (_rt_view_context_native_is(ctx))
+	return 0;
 
     return rt_view_context_feature_remove_bsg(ctx, name);
 }
@@ -6703,6 +7161,9 @@ rt_view_feature_set_context(rt_view_feature_ref ref, void *ctx)
 	    (void)adapter.set_context(ref, ctx, adapter.data);
 	return;
     }
+
+    if (_rt_view_context_native_is(ctx))
+	return;
 
     rt_view_feature_set_context_bsg(ref, ctx);
 }
@@ -7171,6 +7632,9 @@ rt_view_context_polygon_create(void *ctx, int type, point_t *fp)
 	    return ref;
     }
 
+    if (_rt_view_context_native_is(ctx))
+	return RT_VIEW_POLYGON_REF_NULL;
+
     return rt_view_context_polygon_create_bsg(ctx, type, fp);
 }
 
@@ -7185,6 +7649,9 @@ rt_view_context_polygon_select(void *ctx, point_t *cp)
 	    return ref;
     }
 
+    if (_rt_view_context_native_is(ctx))
+	return RT_VIEW_POLYGON_REF_NULL;
+
     return rt_view_context_polygon_select_bsg(ctx, cp);
 }
 
@@ -7198,6 +7665,9 @@ rt_view_context_polygon_find(void *ctx, const char *name)
 	if (!rt_view_polygon_ref_is_null(ref))
 	    return ref;
     }
+
+    if (_rt_view_context_native_is(ctx))
+	return RT_VIEW_POLYGON_REF_NULL;
 
     return rt_view_context_polygon_find_bsg(ctx, name);
 }
@@ -7216,6 +7686,9 @@ rt_view_context_polygon_dup(void *ctx,
 	    return ref;
     }
 
+    if (_rt_view_context_native_is(ctx))
+	return RT_VIEW_POLYGON_REF_NULL;
+
     return rt_view_context_polygon_dup_bsg(ctx, name, new_name);
 }
 
@@ -7232,6 +7705,9 @@ rt_view_context_polygon_visit_records(
 	return;
     }
 
+    if (_rt_view_context_native_is(ctx))
+	return;
+
     rt_view_context_polygon_visit_records_bsg(ctx, callback, data);
 }
 
@@ -7242,6 +7718,9 @@ rt_view_context_polygon_snap_count(void *ctx, rt_view_polygon_ref exclude)
     if (rt_view_context_polygon_adapter_get(ctx, &adapter) &&
 	    adapter.snap_count)
 	return adapter.snap_count(ctx, exclude, adapter.data);
+
+    if (_rt_view_context_native_is(ctx))
+	return 0;
 
     return rt_view_context_polygon_snap_count_bsg(ctx, exclude);
 }
@@ -7254,6 +7733,9 @@ rt_view_context_polygon_clear_point_selection(void *ctx)
 	    adapter.clear_point_selection)
 	return adapter.clear_point_selection(ctx, adapter.data);
 
+    if (_rt_view_context_native_is(ctx))
+	return 0;
+
     return rt_view_context_polygon_clear_point_selection_bsg(ctx);
 }
 
@@ -7264,6 +7746,9 @@ rt_view_polygon_update_context(rt_view_polygon_ref ref, void *ctx, int utype)
     if (rt_view_polygon_adapter_for_ref(ref, &adapter))
 	return adapter.update ?
 	    adapter.update(ref, ctx, utype, adapter.data) : 0;
+
+    if (_rt_view_context_native_is(ctx))
+	return 0;
 
     return rt_view_polygon_update_context_bsg(ref, ctx, utype);
 }
@@ -7280,6 +7765,9 @@ rt_view_polygon_update_screen_pt_context(rt_view_polygon_ref ref,
 	return adapter.update_screen_pt ?
 	    adapter.update_screen_pt(ref, ctx, x, y, utype, adapter.data) :
 	    0;
+
+    if (_rt_view_context_native_is(ctx))
+	return 0;
 
     return rt_view_polygon_update_screen_pt_context_bsg(ref, ctx, x, y, utype);
 }
@@ -7316,6 +7804,9 @@ rt_view_polygon_set_context(rt_view_polygon_ref ref, void *ctx)
     if (rt_view_polygon_adapter_for_ref(ref, &adapter))
 	return adapter.set_context ?
 	    adapter.set_context(ref, ctx, adapter.data) : 0;
+
+    if (_rt_view_context_native_is(ctx))
+	return 0;
 
     return rt_view_polygon_set_context_bsg(ref, ctx);
 }
@@ -7433,6 +7924,9 @@ rt_view_polygon_import_sketch_context(const char *name,
 	    return ref;
     }
 
+    if (_rt_view_context_native_is(ctx))
+	return RT_VIEW_POLYGON_REF_NULL;
+
     return rt_view_polygon_import_sketch_context_bsg(name, dbip, dp, ctx);
 }
 
@@ -7457,6 +7951,9 @@ rt_view_context_polygon_snap_exclude_set(void *ctx, rt_view_polygon_ref ref)
 	    adapter.snap_exclude_set)
 	return adapter.snap_exclude_set(ctx, ref, adapter.data);
 
+    if (_rt_view_context_native_is(ctx))
+	return 0;
+
     return rt_view_context_polygon_snap_exclude_set_bsg(ctx, ref);
 }
 
@@ -7475,6 +7972,8 @@ rt_view_context_snap_source_flags_from_bsg(const void *ctx)
 int
 rt_view_context_snap_source_flags_get(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_snap_source_flags_get(ctx);
     return rt_view_context_snap_source_flags_from_bsg(ctx);
 }
 
@@ -7497,6 +7996,8 @@ rt_view_context_snap_source_flags_set_bsg(void *ctx, int flags)
 int
 rt_view_context_snap_source_flags_set(void *ctx, int flags)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_snap_source_flags_set(ctx, flags);
     return rt_view_context_snap_source_flags_set_bsg(ctx, flags);
 }
 
@@ -7515,6 +8016,8 @@ rt_view_context_snap_kind_mask_from_bsg(const void *ctx)
 unsigned long long
 rt_view_context_snap_kind_mask_get(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_snap_kind_mask_get(ctx);
     return rt_view_context_snap_kind_mask_from_bsg(ctx);
 }
 
@@ -7548,6 +8051,8 @@ rt_view_context_snap_exclude_feature_clear_bsg(void *ctx)
 int
 rt_view_context_snap_exclude_feature_clear(void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_snap_exclude_feature_clear(ctx);
     return rt_view_context_snap_exclude_feature_clear_bsg(ctx);
 }
 
@@ -7566,6 +8071,8 @@ rt_view_context_prepare_tcl_snap_bsg(void *ctx)
 unsigned long long
 rt_view_context_prepare_tcl_snap(void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_prepare_tcl_snap(ctx);
     return rt_view_context_prepare_tcl_snap_bsg(ctx);
 }
 
@@ -7588,6 +8095,8 @@ rt_view_context_center_linesnap_bsg(void *ctx)
 int
 rt_view_context_center_linesnap(void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return 0;
     return rt_view_context_center_linesnap_bsg(ctx);
 }
 
@@ -7606,6 +8115,8 @@ rt_view_context_zclip_from_bsg(const void *ctx)
 int
 rt_view_context_zclip_get(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_zclip_get(ctx);
     return rt_view_context_zclip_from_bsg(ctx);
 }
 
@@ -7628,6 +8139,8 @@ rt_view_context_zclip_set_bsg(void *ctx, int zclip)
 int
 rt_view_context_zclip_set(void *ctx, int zclip)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_zclip_set(ctx, zclip);
     return rt_view_context_zclip_set_bsg(ctx, zclip);
 }
 
@@ -7646,6 +8159,8 @@ rt_view_context_framebuffer_mode_from_bsg(const void *ctx)
 int
 rt_view_context_framebuffer_mode_get(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_framebuffer_mode_get(ctx);
     return rt_view_context_framebuffer_mode_from_bsg(ctx);
 }
 
@@ -7668,6 +8183,8 @@ rt_view_context_framebuffer_mode_set_bsg(void *ctx, int mode)
 int
 rt_view_context_framebuffer_mode_set(void *ctx, int mode)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_framebuffer_mode_set(ctx, mode);
     return rt_view_context_framebuffer_mode_set_bsg(ctx, mode);
 }
 
@@ -7686,6 +8203,8 @@ rt_view_context_cleared_from_bsg(const void *ctx)
 int
 rt_view_context_cleared_get(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_cleared_get(ctx);
     return rt_view_context_cleared_from_bsg(ctx);
 }
 
@@ -7708,6 +8227,8 @@ rt_view_context_cleared_set_bsg(void *ctx, int cleared)
 int
 rt_view_context_cleared_set(void *ctx, int cleared)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_cleared_set(ctx, cleared);
     return rt_view_context_cleared_set_bsg(ctx, cleared);
 }
 
@@ -7727,6 +8248,8 @@ rt_view_context_settings_shared_bsg(const void *a, const void *b)
 int
 rt_view_context_settings_shared(const void *a, const void *b)
 {
+    if (_rt_view_context_native_is(a) || _rt_view_context_native_is(b))
+	return _rt_view_context_native_settings_shared(a, b);
     return rt_view_context_settings_shared_bsg(a, b);
 }
 
@@ -7746,6 +8269,8 @@ rt_view_context_snap_tolerance_factor_from_bsg(const void *ctx)
 double
 rt_view_context_snap_tolerance_factor_get(const void *ctx)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_snap_tolerance_factor_get(ctx);
     return rt_view_context_snap_tolerance_factor_from_bsg(ctx);
 }
 
@@ -7769,6 +8294,9 @@ rt_view_context_snap_tolerance_factor_set_bsg(void *ctx, double factor)
 int
 rt_view_context_snap_tolerance_factor_set(void *ctx, double factor)
 {
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_snap_tolerance_factor_set(ctx,
+		factor);
     return rt_view_context_snap_tolerance_factor_set_bsg(ctx, factor);
 }
 

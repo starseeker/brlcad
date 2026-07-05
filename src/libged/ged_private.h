@@ -117,6 +117,7 @@ struct ged_drawable {
     int                          gd_obol_scene_controller_owned; /**< @brief non-zero when libged owns gd_obol_scene_controller */
     int                          gd_obol_controller_owned; /**< @brief non-zero when libged owns gd_obol_controller */
     int                          gd_obol_scene_controller_full_sync; /**< @brief non-zero when gd_obol_scene_controller has a full retained-scene mirror */
+    void                        *gd_obol_attached_controllers; /**< @brief C++ registry of attached Obol controllers, optionally scoped to GED views */
     void                        *gd_obol_preserved_sources; /**< @brief libged-owned detached Obol source inventory pending controller handoff */
     struct bu_ptbl               gd_obol_context_tokens; /**< @brief GED-owned Obol scene-context tokens returned through legacy scene_ctx APIs */
     int                          gd_obol_context_tokens_init;

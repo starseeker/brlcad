@@ -3170,8 +3170,10 @@ main(int argc, char *argv[])
 	dm_set_bg(DMP, dm_bg[0], dm_bg[1], dm_bg[2], dm_bg[0], dm_bg[1], dm_bg[2]);
     }
 
-    /* initialize a display manager */
-    if (s->interactive && s->classic_mged) {
+    /* initialize a display manager.  Interactive classic MGED prompts when no
+     * target is specified; batch/classic MGED only attaches when the user
+     * explicitly requests a non-nu display manager. */
+    if ((s->interactive && s->classic_mged) || (!s->interactive && attach)) {
 	if (!attach) {
 	    get_attached(s);
 	} else {

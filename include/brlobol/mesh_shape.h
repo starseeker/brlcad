@@ -178,6 +178,7 @@ public:
     size_t estimateFullDetailMeshBytes(void) const;
     size_t estimateResidentMeshBytes(void) const;
     size_t evictFullDetailMesh(void);
+    size_t evictDisplayMeshPreservingSourceMetrics(void);
     size_t evictActiveDisplayMesh(void);
     SbBool isPrimitiveSelected(int primitiveIndex) const;
     SbBool isPrimitiveHighlighted(int primitiveIndex) const;

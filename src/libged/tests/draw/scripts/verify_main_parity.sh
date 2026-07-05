@@ -116,7 +116,7 @@ if [[ -z "$MAIN_BUILD_DIR" ]]; then
     # Build only the draw-test executables to save time
     cmake --build "$MAIN_BUILD_DIR" --target \
         ged_test_draw ged_test_faceplate ged_test_lod ged_test_select_draw \
-        ged_test_quad ged_test_bsg_render_stability \
+        ged_test_quad \
         -j"$(nproc)"
 else
     echo "Using pre-built main at: $MAIN_BUILD_DIR"

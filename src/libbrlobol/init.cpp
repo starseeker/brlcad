@@ -31,6 +31,7 @@
 #include "brlobol/scene_group.h"
 #include "brlobol/snap_action.h"
 #include "brlobol/viewport_image.h"
+#include "brlobol/view_lod.h"
 #include "brlobol/vlist_shape.h"
 
 #include <Inventor/SoDB.h>
@@ -90,6 +91,8 @@ brlobol_init(SoDB::ContextManager *contextManager)
     SoBRLMaterialObject::initClass();
     SoBRLSourceMeshPickAction::initClass();
     SoBRLRealizeAction::initClass();
+    SoBRLViewLodElement::initClass();
+    SoBRLViewLodGroup::initClass();
     SoBRLLodUpdateAction::initClass();
     SoBRLMeshLodSubmitAction::initClass();
     SoBRLMeshResidencyAction::initClass();

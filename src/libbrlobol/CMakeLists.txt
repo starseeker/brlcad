@@ -29,6 +29,7 @@ set(
   scene_group.cpp
   snap_action.cpp
   view_controller.cpp
+  view_lod.cpp
   view_store.cpp
   viewport_image.cpp
   vlist_shape.cpp
@@ -107,6 +108,7 @@ cmakefiles(
   scene_group.cpp
   snap_action.cpp
   view_controller.cpp
+  view_lod.cpp
   view_store.cpp
   viewport_image.cpp
   vlist_shape.cpp

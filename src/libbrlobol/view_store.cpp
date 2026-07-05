@@ -1455,6 +1455,29 @@ BRLObolFeatureStore::removeOwned(const SbString &name,
 }
 
 size_t
+BRLObolFeatureStore::removeScope(unsigned int scopeMask,
+	const BRLObolFeatureOwner *owner)
+{
+    std::vector<BRLObolFeatureHandle> handles;
+    for (std::map<uint64_t, BRLObolFeatureStoreRecord *>::const_iterator it =
+	    this->impl->records.begin(); it != this->impl->records.end(); ++it) {
+	if (!it->second)
+	    continue;
+	if (!(store_scope_bit(it->second->scope) & scopeMask))
+	    continue;
+	if (owner && !store_owner_matches(it->second->owner, owner))
+	    continue;
+	handles.push_back(this->impl->handle(it->second));
+    }
+
+    size_t removed = 0;
+    for (size_t i = 0; i < handles.size(); i++)
+	if (this->remove(handles[i]))
+	    removed++;
+    return removed;
+}
+
+size_t
 BRLObolFeatureStore::removePrefix(const SbString &prefix)
 {
     return this->removePrefix(prefix, BRLOBOL_FEATURE_SCOPE_ALL, NULL);
@@ -2598,7 +2621,12 @@ struct BRLObolPolygonStore::Impl {
 	for (std::map<std::string, uint64_t>::const_iterator it =
 		names.begin(); it != names.end(); ++it) {
 	    const std::string &key = it->first;
-	    if (key.size() < 3 || key.substr(2) != cleanName)
+	    if (key.size() < 3)
+		continue;
+	    const size_t namePos = key.rfind(':');
+	    const std::string keyName = namePos == std::string::npos ?
+		key.substr(2) : key.substr(namePos + 1);
+	    if (keyName != cleanName)
 		continue;
 	    std::map<uint64_t, BRLObolPolygonStoreRecord *>::const_iterator rit =
 		records.find(it->second);
@@ -3591,6 +3619,26 @@ BRLObolPolygonStore::remove(BRLObolPolygonHandle handle)
     this->impl->records.erase(rec->id);
     delete rec;
     return TRUE;
+}
+
+size_t
+BRLObolPolygonStore::removeScope(unsigned int scopeMask)
+{
+    std::vector<BRLObolPolygonHandle> handles;
+    for (std::map<uint64_t, BRLObolPolygonStoreRecord *>::const_iterator it =
+	    this->impl->records.begin(); it != this->impl->records.end(); ++it) {
+	if (!it->second)
+	    continue;
+	if (!(store_scope_bit(it->second->scope) & scopeMask))
+	    continue;
+	handles.push_back(this->impl->handle(it->second));
+    }
+
+    size_t removed = 0;
+    for (size_t i = 0; i < handles.size(); i++)
+	if (this->remove(handles[i]))
+	    removed++;
+    return removed;
 }
 
 SbBool

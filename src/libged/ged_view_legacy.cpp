@@ -19,15 +19,17 @@
  */
 /** @file libged/ged_view_legacy.cpp
  *
- * GED-owned opaque view-context facades for the transitional retained BSG
- * backend.  Keep direct rt/view_legacy_bsg.h use isolated here until GED view
- * storage is backed by Obol/libbrlobol.
+ * GED-owned opaque view-context facades.  Keep direct rt/view_legacy_bsg.h use
+ * isolated here for transitional retained-BSG fallback adapters while neutral
+ * GED view storage moves through the native libbv-backed RT context path.
  */
 
 #include "common.h"
 
 #include "bu/malloc.h"
 #include "bu/ptbl.h"
+#include "dm/obol.h"
+#include "ged/draw_obol.h"
 #include "ged/view.h"
 #include "rt/view_legacy_bsg.h"
 #include "./bsg_ged_draw_private.h"
@@ -527,6 +529,14 @@ ged_view_context_display_manager_get(const void *view_ctx)
 extern "C" GED_EXPORT int
 ged_view_context_display_manager_set(void *view_ctx, void *dmp)
 {
+    if (view_ctx && !dmp) {
+	void *old_dmp = rt_view_context_display_manager_get(view_ctx);
+	void *old_controller = dm_obol_controller((struct dm *)old_dmp);
+	if (old_controller) {
+	    struct ged *gedp = (struct ged *)rt_view_context_user_data_get(view_ctx);
+	    ged_draw_obol_controller_detach_opaque(gedp, old_controller);
+	}
+    }
     return rt_view_context_display_manager_set(view_ctx, dmp);
 }
 

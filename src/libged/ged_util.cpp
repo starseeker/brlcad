@@ -3615,7 +3615,9 @@ _ged_characterize_pathspec(struct bu_vls *normalized, struct ged *gedp, const ch
 int
 ged_draw_scene_available(struct ged *gedp)
 {
-    return ged_draw_group_ref_is_null(ged_scene_root_group_ref(gedp)) ? 0 : 1;
+    if (!ged_draw_group_ref_is_null(ged_scene_root_group_ref(gedp)))
+	return 1;
+    return ged_view_active_ctx(gedp) ? 1 : 0;
 }
 
 void

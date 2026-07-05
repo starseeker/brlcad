@@ -46,6 +46,82 @@ data-overlay facades, not direct feature-store helpers; new workflows should
 prefer `view annotation` or `view polygon` for user-authored geometry and
 command-result publication for command-owned visualizations.
 
+Common View Mechanics Boundary
+------------------------------
+
+Generic view mechanics should live in the new clean libbv, not in librt and
+not as preserved historical bview-era API compatibility.  The clean API uses
+the short `bv_*` prefix because `bv` already means BRL-CAD view.  The old
+mainline libbv is useful as reference material for formulas and behavior, but
+the replacement defines a smaller explicit contract:
+
+* camera/view state and derived matrices
+* autoview-bounds math and screen/model coordinate transforms
+* input/knob state and command processing
+* view-set bookkeeping for shared view state
+
+The current librt neutral `rt_view_context` constructors are native/libbv
+backed for generic view mechanics.  Explicit `_bsg` constructors remain for
+retained fallback behavior only.  Native scene/interaction operations should
+route through installed Obol/libbrlobol adapters; without an adapter they
+return neutral empty/no-op results rather than implicitly creating BSG storage.
+Native RT contexts may hold transitional integration state such as Obol
+scene-root attachment, independent-view scope flags, and basic measurement
+results, but those are RT/GED/Obol bridge services rather than libbv-owned
+state.
+Use `rt_view_context_is_valid` when code needs to reject any opaque RT
+view-context pointer, native or retained.  Use `rt_view_context_is_retained`
+only for explicit BSG fallback identity; it is not a display-host capability
+test.
+
+The new libbv must not own Obol scene graph objects, command-result objects,
+database draw state, display lists, Tcl/display-manager state, polygon stores,
+snap/selection resolution, LoD caches, or retained BSG compatibility.  Those
+belong in Obol/libbrlobol, GED command facades, display-host code, librt
+RT-facing state/adapters, or explicit legacy adapters depending on the
+feature.
+
+Display-Host Migration Boundary
+-------------------------------
+
+The headless `dm-obol` backend is a retained Obol/Coin display host, not a
+translation layer for old immediate drawing streams.  It renders the attached
+Obol scene for normal `screengrab`, and its raw libdm draw callbacks are
+intentionally no-ops.  If MGED, GSH, RTWizard, TclCAD, or qged code reaches for
+callbacks such as `dm_draw_objs`, treat that as one of two migration signals:
+the caller should be retargeted to a high-level GED/Obol operation, or the
+Obol path is missing a high-level capability that should be implemented there.
+`dm attach obol` registers a borrowed `BRLObolViewController` for the target
+GED view, so multi-view applications should attach one Obol DM/controller per
+view rather than sharing a raw immediate draw stream.  The GED owns one
+authoritative shared Obol scene; attached view controllers are render
+endpoints with their own local roots.  Shared views render the shared scene
+plus their local root.  Independent views render only their local root, where
+independent database display and view-local objects live.
+Classic/batch MGED now honors `-c -a obol`, registers the borrowed controller
+with GED, and refreshes the Obol `dozoom` path through
+`GED_DRAW_TXN_REDRAW`; the remaining MGED raw draw callback is only non-Obol
+fallback until that display path is retired.
+
+The supported refresh shape is:
+
+* update neutral view state through libbv/librt-backed view contexts
+* mutate scene/annotation/command-result state through GED draw facades or
+  libbrlobol/Obol APIs
+* apply a draw transaction such as `GED_DRAW_TXN_REDRAW` when scene refresh is
+  needed
+* let the display host render/capture the retained Obol scene
+
+Shared operations must mutate the GED-owned scene controller.  View-local and
+independent-view operations must mutate the attached view endpoint.  Avoid
+mirroring shared scene contents into each DM controller; doing so makes LoD,
+selection, database edit invalidation, and command-result ownership harder to
+reason about.
+
+Do not add a compatibility stream that reconstructs Obol state from legacy
+immediate draw callbacks.  That would preserve the BSG-era dual ownership we
+are trying to delete.
+
 Current user-facing shape:
 
 * `view object list [--all|--annotations|--database] [-L] [glob]`

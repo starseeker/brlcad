@@ -10,6 +10,7 @@
 #include "brlobol/export_action.h"
 #include "brlobol/lod_service.h"
 #include "brlobol/mesh_shape.h"
+#include "brlobol/view_lod.h"
 #include "brlobol/vlist_shape.h"
 
 #include "bu/path.h"
@@ -561,6 +562,7 @@ SoBRLExportAction::initClass(void)
 {
     SO_ACTION_INIT_CLASS(SoBRLExportAction, SoAction);
     SO_ENABLE(SoBRLExportAction, SoModelMatrixElement);
+    SO_ENABLE(SoBRLExportAction, SoBRLViewLodElement);
     SO_ACTION_ADD_METHOD(SoNode, SoBRLExportAction::nodeAction);
     SO_ACTION_ADD_METHOD(SoBRLVListShape, SoBRLExportAction::vlistShapeAction);
     SO_ACTION_ADD_METHOD(SoBRLMeshShape, SoBRLExportAction::meshShapeAction);
@@ -1169,6 +1171,8 @@ SoBRLExportAction::meshShapeAction(SoAction *action, SoNode *node)
     if (!shape->visible.getValue())
 	return;
 
+    const BRLObolViewLodState::MeshPayload *viewPayload =
+	brlobol_view_lod_mesh_for_action(action, shape);
     const SbBool useFullDetail =
 	(exportAction->geometryPolicy == SoBRLExportAction::FULL_DETAIL &&
 	 shape->hasFullDetailMesh()) ? TRUE : FALSE;
@@ -1176,7 +1180,7 @@ SoBRLExportAction::meshShapeAction(SoAction *action, SoNode *node)
 	(exportAction->geometryPolicy == SoBRLExportAction::FULL_DETAIL &&
 	 shape->needsSourceBackedFullDetail()) ? TRUE : FALSE;
     if (exportAction->geometryPolicy == SoBRLExportAction::FULL_DETAIL &&
-	    shape->isLodDisplayActive())
+	    (shape->isLodDisplayActive() || viewPayload))
 	exportAction->skippedLodDisplayMeshCount++;
     const SbMatrix &localToWorld = SoModelMatrixElement::get(action->getState());
     if (useSourceBackedFullDetail) {
@@ -1184,8 +1188,14 @@ SoBRLExportAction::meshShapeAction(SoAction *action, SoNode *node)
 	return;
     }
 
+    const SbBool useViewPayload =
+	(!useFullDetail &&
+	 exportAction->geometryPolicy == SoBRLExportAction::DISPLAY_LEVEL &&
+	 viewPayload) ? TRUE : FALSE;
     int triangleCount = useFullDetail ?
-	shape->getFullDetailTriangleCount() : shape->getTriangleCount();
+	shape->getFullDetailTriangleCount() :
+	(useViewPayload ? viewPayload->getTriangleCount() :
+	    shape->getTriangleCount());
     if (exportAction->recordStorageEnabled)
 	export_reserve_records(exportAction->triangles,
 		static_cast<size_t>(triangleCount));
@@ -1200,6 +1210,11 @@ SoBRLExportAction::meshShapeAction(SoAction *action, SoNode *node)
 	    if (!shape->getFullDetailTriangle(i, a, b, c))
 		continue;
 	    if (!shape->getFullDetailTriangleVertexIndices(i, ia, ib, ic))
+		continue;
+	} else if (useViewPayload) {
+	    if (!viewPayload->getTriangle(i, a, b, c))
+		continue;
+	    if (!viewPayload->getTriangleVertexIndices(i, ia, ib, ic))
 		continue;
 	} else {
 	    if (!shape->getTriangle(i, a, b, c))
@@ -1220,6 +1235,34 @@ SoBRLExportAction::meshShapeAction(SoAction *action, SoNode *node)
 	    continue;
 	}
 
+	const SbBool lodAvailable = useViewPayload ? TRUE :
+	    shape->lodAvailable.getValue();
+	const int lodActiveLevel = useViewPayload ? viewPayload->activeLevel :
+	    shape->lodActiveLevel.getValue();
+	const uint32_t lodFaceCount = useViewPayload ?
+	    static_cast<uint32_t>(viewPayload->counts.faceCount > UINT32_MAX ?
+		UINT32_MAX : viewPayload->counts.faceCount) :
+	    shape->lodFaceCount.getValue();
+	const uint32_t lodPointCount = useViewPayload ?
+	    static_cast<uint32_t>(viewPayload->counts.pointCount > UINT32_MAX ?
+		UINT32_MAX : viewPayload->counts.pointCount) :
+	    shape->lodPointCount.getValue();
+	const uint32_t lodOriginalPointCount = useViewPayload ?
+	    static_cast<uint32_t>(
+		viewPayload->counts.originalPointCount > UINT32_MAX ?
+		UINT32_MAX : viewPayload->counts.originalPointCount) :
+	    shape->lodOriginalPointCount.getValue();
+	const uint32_t lodNormalCount = useViewPayload ?
+	    static_cast<uint32_t>(viewPayload->counts.normalCount > UINT32_MAX ?
+		UINT32_MAX : viewPayload->counts.normalCount) :
+	    shape->lodNormalCount.getValue();
+	const SbVec3f lodBoundsMin =
+	    useViewPayload && !viewPayload->bounds.isEmpty() ?
+	    viewPayload->bounds.getMin() : shape->lodBoundsMin.getValue();
+	const SbVec3f lodBoundsMax =
+	    useViewPayload && !viewPayload->bounds.isEmpty() ?
+	    viewPayload->bounds.getMax() : shape->lodBoundsMax.getValue();
+
 	exportAction->appendTriangle(shape->sourcePath.getValue(),
 		shape->sourceName.getValue(), shape->sourceType.getValue(),
 		shape->sourceId.getValue(),
@@ -1235,16 +1278,18 @@ SoBRLExportAction::meshShapeAction(SoAction *action, SoNode *node)
 		shape->editIntentId.getValue(),
 		shape->editIntentRole.getValue(),
 		shape->lodPolicy.getValue(),
-		shape->lodAvailable.getValue(),
-		shape->lodActiveLevel.getValue(),
-		shape->lodFaceCount.getValue(),
-		shape->lodPointCount.getValue(),
-		shape->lodOriginalPointCount.getValue(),
-		shape->lodNormalCount.getValue(),
-		shape->lodHasSnappedPoints.getValue(),
-		shape->lodHasNormals.getValue(),
-		shape->lodBoundsMin.getValue(),
-		shape->lodBoundsMax.getValue(),
+		lodAvailable,
+		lodActiveLevel,
+		lodFaceCount,
+		lodPointCount,
+		lodOriginalPointCount,
+		lodNormalCount,
+		useViewPayload ? viewPayload->hasSnappedPoints :
+		    shape->lodHasSnappedPoints.getValue(),
+		useViewPayload ? viewPayload->hasNormals :
+		    shape->lodHasNormals.getValue(),
+		lodBoundsMin,
+		lodBoundsMax,
 		shape->colorOverride.getValue(),
 		shape->color.getValue(), worldA, worldB, worldC);
 	export_apply_shape_metadata(exportAction->triangles.back(),

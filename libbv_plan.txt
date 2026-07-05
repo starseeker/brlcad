@@ -1,0 +1,493 @@
+BRL-CAD libbv Refactor And Caller Cleanup Plan
+==============================================
+
+Last refreshed: 2026-07-05
+
+Purpose
+-------
+
+This file is the implementation plan for separating generic BRL-CAD view
+mechanics into the new clean libbv while deleting legacy BSG/adapter logic
+where Obol/libbrlobol can own the scene and interaction model directly.
+
+Two goals are active and must be pursued together:
+
+* Move common non-scene view logic to libbv so librt/libged/qtcad do not grow
+  independent view math, matrix, input, and view-set implementations.
+* Retire legacy retained BSG logic by migrating scene, interaction, selection,
+  command-visualization, and display-object behavior to libbrlobol/Obol.
+
+Do not treat this as an API preservation exercise.  The historical mainline
+libbv is reference material for formulas and behavior only.  The new libbv uses
+short `bv_*` names because `bv` already means BRL-CAD view, but it is not
+required to preserve the old bview data model.
+
+Current State
+-------------
+
+Implemented libbv scaffold:
+
+* `include/bv.h`
+* `include/bv/view.h`
+* `src/libbv/view.c`
+* `src/libbv/tests/view.c`
+
+The scaffold owns core view state, matrix updates, autoview bounds,
+screen/model transforms, knob state, simple adjustment logic, and view-set
+bookkeeping.  It is wired into the build as `libbv`, below librt/libged/libdm
+in the dependency graph.
+
+Implemented native librt view context:
+
+* `src/librt/view_context_native.c`
+* `src/librt/view_context_private.h`
+
+Neutral `rt_view_context_create*` and `rt_view_set_context_create` now create
+native/libbv-backed contexts.  Explicit `_bsg` constructors still create
+retained BSG contexts for fallback tests and old callers.
+`rt_view_context_is_valid` identifies either native/libbv or explicit BSG
+contexts, while `rt_view_context_is_retained` remains true only for explicit
+BSG fallback contexts.
+
+Native dispatch currently covers:
+
+* lifecycle, names, dimensions, display-manager/user/TclCAD data, callbacks
+* refresh state, scale/size/unit conversion, perspective, frame revision
+* matrices, rotation, center, plane, AET, eye position, keypoint, OBB/radius
+* autoview from explicit bounds, screen/model transforms, adjust, hash
+* current/previous mouse point state and generic mouse delta settings
+* knob state, hash, command processing, translate/rotate/rate/calibration
+* LoD policy and bounds-update callback state
+* faceplate/display state records: interactive rectangle, ADC, grid, axes,
+  center dot, scale overlay, params
+* snap setting scalars, zclip, framebuffer mode, cleared/settings-shared state
+* native scene-root attachment for attached Obol controllers, native
+  independent-view scope state, and basic model-space measurement
+
+Native scene/interaction behavior is deliberately not implemented in libbv.
+Pick, selection, feature, polygon, line-set, and render diagnostic operations
+use installed adapters when present and otherwise return neutral empty/no-op
+results for native contexts.  That prevents accidental BSG storage creation
+while Obol/libbrlobol caller migration continues.
+
+Current verification:
+
+* `ninja -C build libbv librt libged libqtcad rt_view_legacy_bsg ged_test_view_command ged_test_obol_draw_sync test_qtcad_obol_draw_sync test_qtcad_obol_faceplate_sync test_qtcad_obol_selection_sync`
+* `ctest --test-dir build -R '^(rt_view_legacy_bsg|ged_test_obol_draw_sync|ged_test_view_command|test_qtcad_obol_draw_sync|test_qtcad_obol_faceplate_sync|test_qtcad_obol_selection_sync)$' --timeout 240 --output-on-failure`
+* `git diff --check`
+
+Current remaining problem:
+
+* The native RT context is in its own source file, but public neutral dispatch
+  still lives in `src/librt/view_legacy_bsg.c`.  Split neutral dispatch into a
+  non-legacy file once caller migration stabilizes.
+* GED and qtcad now create/use native neutral view contexts for the focused
+  Obol workflows, but no-owned-scene and older application paths still need
+  retained adapters until they can attach/create Obol controllers.
+* A first headless Obol display host exists as `dm-obol`, and `dm attach obol`
+  registers its borrowed `BRLObolViewController` with libged for the target
+  GED view.  Classic/headless MGED-style tests, RTWizard display-backed tests,
+  and `gsh --new-cmds` can now attach Obol and capture through ordinary
+  `screengrab`.  Classic/batch MGED honors `-c -a obol`; its Obol refresh path
+  applies a high-level GED redraw transaction rather than driving
+  `dm_draw_objs`.
+* The libged Obol bridge now uses one GED-owned shared scene controller per
+  GED session plus per-view attached render endpoints for borrowed Obol DMs.
+  Each attached view controller keeps its own local scene root for view-local
+  annotations, polygons, independent-view database display, and future
+  view-local tools.  The render root is rebound by view state: shared views
+  render `shared-root + local-root`, while independent views render only their
+  local root.  Transaction sync updates the authoritative shared scene for
+  shared database state and the matching view endpoint for independent
+  database state.
+* Active display LoD for shared Obol geometry is owned by each
+  `BRLObolViewController`, not by the shared mesh node.  The controller binds a
+  `BRLObolViewLodState` into Coin traversal for its render root, and
+  draw/erase/source transactions invalidate attached view LoD state.  This is
+  libbrlobol/Obol scene behavior, not libbv view mechanics.
+* Some operations exposed through `rt_view_context_*` are not view mechanics at
+  all.  They are scene/interaction/display behaviors and should migrate to
+  Obol/libbrlobol rather than libbv.
+
+Recent focused verification:
+
+* `ninja -C build libbrlobol libged ged_test_quad ged_test_mged_view_state`
+* `ctest --test-dir build -R '^(ged_test_mged_view_state|ged_test_drawing_quad)$' --timeout 240 --output-on-failure`
+
+Target Ownership
+----------------
+
+libbv owns:
+
+* View/camera state.
+* Derived matrices: model2view, view2model, pmodel2view, pmat, rotation,
+  center.
+* View dimensions, scale, size, inverse size, perspective scalar, local/base
+  unit conversion.
+* Autoview from explicit bounds.
+* Screen-to-view and screen-to-model transforms.
+* Mouse/current-point state needed for generic view manipulation.
+* Generic knob state and knob command interpretation.
+* Basic refresh counters/dirty bits and other display-independent settings
+  only when they are truly view state.
+* View-set bookkeeping for multiple views.
+
+libbv must not own:
+
+* BRL-CAD database tree walking, directory/path lookup, or mesh LoD caches.
+* Obol scene graph objects, Coin nodes, manipulators, or interactive scene
+  behavior.
+* Command result objects such as rtcheck/NIRT/GQA overlays.
+* Selection, pick semantics, object metadata, or per-primitive identity.
+* Polygon/annotation object storage beyond generic view math helpers.
+* Display managers, framebuffers, TclCAD state, or retained display lists.
+* Legacy BSG retained-scene compatibility.
+
+librt owns:
+
+* RT-facing view snapshots and adapters built from libbv state.
+* Mesh LoD policy and `rt_mesh_lod_*` logic.
+* Edit view snapshots for primitive edit code.
+* `db_i`/`directory`/path-aware helpers.
+* Thin compatibility dispatch from existing `rt_view_context_*` APIs to libbv
+  while callers are being cleaned up.
+
+libbrlobol/Obol owns:
+
+* Scene graph ownership, source/group/shape identity, and draw-state metadata.
+* View-aware LoD realization decisions that affect scene objects.
+* Per-view active LoD payloads, LoD traversal bindings, source-backed exact
+  request fallback, and LoD memory eviction.
+* Command-scene publication for NIRT, rtcheck, GQA, qray/uplot, BREP/NMG
+  diagnostics, preview eye paths, and future command-owned visuals.
+* Pick/selection/highlight identity and richer Coin interaction behavior.
+* User-authored scene objects such as annotations, axes, labels, polygons, and
+  database display proxies.
+
+libged/qtcad/dm callers should:
+
+* Use neutral view/context APIs when they only need view mechanics.
+* Use libbrlobol/Obol APIs when they need scene or command-visualization
+  behavior.
+* Avoid direct BSG access except inside explicit retained fallback adapters.
+
+Implementation Phases
+---------------------
+
+Phase 1: Define the native RT view context around libbv
+
+Create a native context type in librt, for example:
+
+    struct rt_view_context_native {
+        uint32_t magic;
+        struct bv view;
+        struct rt_view_context_native_set *view_set;
+        void *user_data;
+        void *display_manager;
+        void *tclcad_data;
+        struct bu_ptbl *callbacks;
+        ...
+    };
+
+The native context should embed or own `struct bv`; do not duplicate bv state
+fields in librt.  Add only RT-specific state beside it.
+
+Native RT context state may include:
+
+* RT LoD policy.
+* OBB/radius cache if the data is RT-specific or derived from scene bounds.
+* Refresh suppression/drawn-count fields only until they move to libbv or a
+  display host.
+* Faceplate states that are not scene objects yet: ADC, grid, axes, params.
+* Adapter callback tables for scene/feature/polygon/selection while callers
+  are transitioning.
+* Independent-scope scene refs and backend tags, but not scene storage.
+
+Do not put native RT context implementation in `view_legacy_bsg.c` long term.
+Prefer a new file such as `src/librt/view_context.c` or
+`src/librt/view_context_native.c`, leaving `view_legacy_bsg.c` for explicit
+BSG adapters only.
+
+Phase 2: Switch neutral constructors to native/libbv
+
+Change these neutral entry points:
+
+* `rt_view_context_create`
+* `rt_view_context_create_with_set`
+* `rt_view_context_create_copy_with_set`
+* `rt_view_set_context_create`
+* `rt_view_set_context_init/free/destroy`
+* `rt_view_set_context_add/remove/find/views`
+
+Expected behavior:
+
+* Neutral constructors create native/libbv-backed contexts.
+* Explicit `_bsg` constructors continue to create retained BSG contexts.
+* `rt_view_context_is_retained(ctx)` returns true only for explicit retained
+  BSG contexts.
+* Tests should stop expecting neutral contexts to be BSG.
+
+This is the first important deletion pressure point: code that still requires a
+retained BSG view must call explicit `_bsg` creation or be migrated.
+
+Phase 3: Dispatch core view mechanics through libbv
+
+Update neutral `rt_view_context_*` functions to dispatch:
+
+* native/libbv context -> `bv_*`
+* explicit BSG context -> `_bsg` adapter
+* unsupported scene/interaction behavior on native context -> adapter callback
+  if present, otherwise no-op/failure
+
+Core mechanics to migrate first:
+
+* name, dimensions, scale, size, initial/absolute scale
+* local2base/base2local
+* model2view/view2model/pmodel2view/pmat
+* rotation, center, aet, eye position, keypoint
+* autoview bounds
+* screen_to_view and screen_point/model point
+* plane extraction
+* mouse/current/previous point
+* generic adjust
+* knob state, knob hash, knob command processing, translate/rotate/calibrate
+* frame revision and hash
+
+Keep wrappers compatible for callers, but make the implementation use `bv_*`
+where the operation is generic view mechanics.
+
+Phase 4: Decide where borderline state lives
+
+Some current `rt_view_context_*` state is not obviously libbv or Obol.  Decide
+case by case:
+
+* Refresh dirty/enabled/suppress/drawn-count: likely basic view/display-host
+  state.  If kept generic, move to libbv; otherwise keep in qtcad/dm host.
+* ADC/grid/model-axes/view-axes/params/center-dot/scale overlay: if these are
+  faceplate state only, they can be libbv records.  If they become interactive
+  scene objects, migrate to libbrlobol/Obol.
+* Snap settings: generic flags can be libbv, but snap candidates, feature
+  excludes, and scene-object source lookup belong to libbrlobol/Obol or a GED
+  scene facade.
+* Display manager, framebuffer mode, TclCAD data: keep out of libbv.  These
+  belong in display host/adapters until deleted.
+
+Do not move a feature to libbv just because it is currently stored on a view.
+Move it only if it is independent of database, scene graph, display manager,
+and retained compatibility.
+
+Phase 5: Migrate libged and qtcad callers to neutral/native contexts
+
+GED:
+
+* Update `src/libged/ged_view_legacy.cpp` so default GED view state uses
+  neutral/native `rt_view_context_create_with_set`.
+* Remove direct `rt/view_legacy_bsg.h` includes from GED files that only need
+  neutral view mechanics.
+* Keep retained `_bsg` paths only in explicitly named fallback/adapter files.
+* Make view command tests assert neutral context behavior where possible.
+
+qtcad:
+
+* Keep opaque `qg_legacy_view` handles while the UI is transitioning, but make
+  local view creation native/libbv-backed.
+* Do not let qtcad public headers expose BSG or libdm implementation types.
+* Move qtcad scene operations to libbrlobol/Obol controller APIs rather than
+  retained BSG view storage.
+* Replace `rt_view_context_release_storage` assumptions with normal context
+  destroy/free once native ownership is stable.
+
+libdm:
+
+* Keep only display-host questions in libdm.
+* Remove uses where `rt_view_context_is_retained` is only a proxy for "can this
+  display path operate."
+
+Phase 6: Migrate scene and command behavior to libbrlobol
+
+Anything involving scene objects should not land in libbv.  Move or keep
+moving these to libbrlobol/Obol:
+
+* command-scene publication
+* pick result contexts that need scene identity
+* selection set synchronization
+* polygon storage and polygon CSG operations
+* annotation lifecycle/style/visibility/realization
+* line/label/axis command visualizations
+* rtcheck/NIRT/GQA/qray/uplot/BREP/NMG debug visuals
+* custom Coin providers and future command-owned interaction nodes
+
+Desired direction:
+
+* librt can expose neutral data structures and callbacks.
+* libged owns command syntax and command-to-scene facade calls.
+* libbrlobol owns scene objects, Coin provider lifetime, pick metadata, and
+  database-edit invalidation.
+
+Phase 7: Delete legacy paths by dependency gates
+
+Deletion order:
+
+1. Stop neutral context creation from returning BSG.
+2. Remove libbsg from librt's required dependency row once only explicit
+   legacy `_bsg` adapter code needs it.
+3. Move `_bsg` adapter code out of the default librt build if possible, or
+   isolate it behind a legacy component.
+4. Remove `_ged_drawtrees` dependencies from successful Obol draw paths.
+5. Delete no-longer-used retained feature wrappers and direct BSG helper calls.
+6. Retire `rt/view_legacy_bsg.h` once no maintained callers need retained BSG
+   view state.
+
+Do not preserve BSG just to keep tests passing.  Update tests to assert the new
+ownership model and keep only explicit retained fallback tests where the
+fallback still exists.
+
+Completed Work Items
+--------------------
+
+1. Added native/libbv RT context and native view-set structs.
+2. Converted neutral context constructors and lifecycle functions to native.
+3. Converted core matrix/autoview-bounds/screen/knob APIs to native-vs-BSG
+   dispatch.
+4. Added native dispatch for refresh, faceplate/display state, LoD policy,
+   snap settings, and simple display flags.
+5. Updated `rt_view_legacy_bsg` tests so neutral context is non-retained and
+   explicit `_bsg` context remains retained.
+6. Converted focused GED and qtcad Obol workflows to operate on native neutral
+   views with installed Obol scene/feature/polygon/selection adapters.
+7. Added native scene-root attachment for Obol roots, native independent-view
+   scope state, and basic native measure-candidate results.
+8. Fixed borrowed Obol view-controller feature/polygon store activation and
+   database-source/group publication paths so attached controllers are usable
+   without first converting them to owned controllers.
+9. Fixed libbrlobol subtree-bounds lookup to prefer database-source nodes over
+   same-path structural groups, matching scene tree summary semantics for
+   transformed repeated instances.
+10. Built and ran:
+
+       ninja -C build libbv librt libged libqtcad rt_view_legacy_bsg ged_test_view_command ged_test_obol_draw_sync test_qtcad_obol_draw_sync test_qtcad_obol_faceplate_sync test_qtcad_obol_selection_sync
+       ctest --test-dir build -R '^(rt_view_legacy_bsg|ged_test_obol_draw_sync|ged_test_view_command|test_qtcad_obol_draw_sync|test_qtcad_obol_faceplate_sync|test_qtcad_obol_selection_sync)$' --timeout 240 --output-on-failure
+11. Removed the libdm `dm_view_context_is_retained_legacy` proxy.  QtGL now
+    rejects opaque RT view-context pointers with neutral
+    `rt_view_context_is_valid`, so native/libbv contexts are not mistaken for
+    Qt widget pointers and retained-ness is no longer used as a display-host
+    capability test.
+12. Retired the retained Tcl overlay BSG regression instead of preserving it.
+    GED's default active view remains native/libbv-backed, and Tcl/data overlay
+    lifecycle coverage belongs in Obol/native view-command, draw-scene, and
+    draw-sync tests.
+13. Built and ran:
+
+       ninja -C build librt libdm rt_view_legacy_bsg test_dm_backend_draw_item dm-qtgl
+       ctest --test-dir build -R '^(rt_view_legacy_bsg|dm_backend_draw_item|brlobol_pivot_guard)$' --timeout 240 --output-on-failure
+       ninja -C build ged_test_draw ged_test_ged_draw_scene
+       ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_ged_draw_scene_core)$' --timeout 240 --output-on-failure
+       ninja -C build test_brlobol_prototype test_brlobol_lod_update_action test_qtcad_obol_draw_sync
+       ctest --test-dir build -R '^(libbrlobol_prototype|libbrlobol_lod_update_action|test_qtcad_obol_draw_sync)$' --timeout 240 --output-on-failure
+14. Added the headless `dm-obol` backend, `dm_obol_controller` accessor, and
+    GED `dm attach obol` bridge.  Converted MGED view-state, MGED shaded-mode,
+    and RTWizard display-backed tests to Obol attach plus normal `screengrab`.
+15. Retargeted `gsh --new-cmds` refresh from `dm_draw_objs` to a high-level
+    `GED_DRAW_TXN_REDRAW` transaction, fixed Obol DM teardown ordering, and
+    added the `gsh_obol_smoke` attach/draw/autoview/screengrab CTest.
+16. Added a per-view Obol attached-controller registry in libged.  `dm attach
+    obol -V <view>` registers a borrowed DM controller without detaching other
+    view controllers, transaction sync fans out to all attached Obol scenes,
+    view-object operations resolve the controller for their own view, and view
+    DM clearing detaches only the matching borrowed controller.  Added
+    multi-Obol-DM coverage to `ged_test_mged_view_state`.
+17. Built and ran:
+
+       ninja -C build gsh dm-obol ged_test_mged_view_state ged_test_mged_shaded_mode ged_test_rtwizard_view
+       ctest --test-dir build -R '^(gsh_obol_smoke|brlobol_pivot_guard|ged_test_mged_view_state|ged_test_mged_shaded_mode|ged_test_rtwizard_view)$' --timeout 240 --output-on-failure
+       git diff --check
+18. Retargeted MGED's Obol `dozoom` refresh to `GED_DRAW_TXN_REDRAW`, made
+    non-interactive classic startup honor `-c -a obol`, guarded Tk handler
+    setup so headless Obol does not take GUI-only paths, and added
+    `mged_obol_smoke`.
+
+       ninja -C build mged
+       ctest --test-dir build -R '^(mged_obol_smoke|gsh_obol_smoke|brlobol_pivot_guard|ged_test_mged_view_state|ged_test_mged_shaded_mode|ged_test_rtwizard_view)$' --timeout 240 --output-on-failure
+
+Suggested Near-Term Work Items
+------------------------------
+
+1. Convert caller-facing workflows that still depend on retained BSG or raw
+   immediate libdm drawing.  If `dm-obol` exposes a missing callback, add or
+   retarget the high-level Obol/GED operation instead of emulating the old
+   stream.
+2. Extend the shared-scene/per-view-render-root Obol attach model to remaining
+   multi-view caller/test paths.  Quad drawing now uses Obol attach and normal
+   `screengrab`; future multi-view failures should be treated as Obol model
+   regressions or missing high-level capabilities, not as reasons to revive
+   mirrored BSG/DM state.
+   Include explicit view-LoD invalidation and cache-only LoD fixtures in this
+   coverage.
+3. Inventory remaining `rt/view_legacy_bsg.h` includes and classify each one:
+   keep explicit retained fallback, migrate to neutral libbv-backed RT context,
+   or migrate to libbrlobol/Obol scene APIs.
+4. Continue deleting or isolating code that assumes each DM has a mirrored
+   scene.  Shared operations should act on the GED-owned scene, while
+   independent/view-local operations should act on the matching view endpoint.
+5. Move neutral RT view dispatch out of `view_legacy_bsg.c` once the remaining
+   caller-facing BSG fallback points are isolated.
+6. Continue migrating scene/interaction features still routed through retained
+   BSG fallback, especially no-owned-scene draw/view behavior, selection/snap
+   resolution, faceplate/readback paths, and lower display-host assumptions.
+7. Use focused failures in broader GED/qtcad/qged/mged workflows as migration
+   signals.  Do not add new behavior to retained BSG just to preserve old
+   side effects.
+8. After caller-facing BSG dependencies shrink, remove libbsg from non-legacy
+   dependency rows and update the pivot guard and inventory in the same change.
+
+Verification Gates
+------------------
+
+Focused gates after libbv/librt view-context changes:
+
+* `ninja -C build libbv librt bv_test rt_view_info rt_view_legacy_bsg`
+* `ctest --test-dir build -R '^(bv_basic|rt_view_info|rt_view_legacy_bsg)$' --output-on-failure`
+* `ninja -C build libbrlobol libged libqtcad`
+* `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_view_command|ged_test_obol_draw_sync|test_qtcad_obol_draw_sync)$' --timeout 240 --output-on-failure`
+* `ninja -C build gsh dm-obol ged_test_mged_view_state ged_test_mged_shaded_mode ged_test_rtwizard_view`
+* `ctest --test-dir build -R '^(mged_obol_smoke|gsh_obol_smoke|ged_test_mged_view_state|ged_test_mged_shaded_mode|ged_test_rtwizard_view)$' --timeout 240 --output-on-failure`
+* `git diff --check`
+
+Broader gates after caller cleanup:
+
+* `ninja -C build ged_test_draw ged_test_ged_draw_scene`
+* `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_ged_draw_scene_core)$' --timeout 240 --output-on-failure`
+* `ninja -C build test_brlobol_prototype test_brlobol_lod_update_action test_qtcad_obol_draw_sync`
+* `ctest --test-dir build -R '^(libbrlobol_prototype|libbrlobol_lod_update_action|test_qtcad_obol_draw_sync)$' --timeout 240 --output-on-failure`
+
+Success Criteria
+----------------
+
+The libbv refactor is realized when:
+
+* Generic view mechanics are implemented once in libbv.
+* Neutral `rt_view_context` is native/libbv-backed by default.
+* librt contains only RT-facing wrappers/snapshots/adapters, not duplicate view
+  mechanics.
+* libged/qtcad can create and manipulate ordinary views without creating BSG
+  retained view objects.
+* Scene/interaction/command visualization behavior is owned by libbrlobol/Obol
+  or explicit GED facades, not libbv.
+* BSG use is explicit, quarantined, and removable.
+* Tests assert the new ownership model instead of preserving accidental legacy
+  behavior.
+
+Known Risks
+-----------
+
+* `rt_view_context_*` has accumulated a large surface area.  Avoid trying to
+  move it wholesale into libbv; split it by responsibility.
+* Some qtcad/libged paths may rely on BSG side effects through neutral context
+  creation.  Treat failures as migration signals, not reasons to keep neutral
+  BSG ownership.
+* Faceplate and snap behavior can blur the boundary between view state and
+  scene interaction.  Keep storage generic only when it is genuinely
+  scene-independent.
+* Deleting BSG too late leaves confusing dual ownership.  Deleting BSG too
+  early without Obol replacements risks losing command visualization behavior.
+  Use explicit adapter callbacks to bridge only while migrating.

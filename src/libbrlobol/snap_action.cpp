@@ -10,6 +10,7 @@
 #include "brlobol/lod_service.h"
 #include "brlobol/mesh_shape.h"
 #include "brlobol/snap_action.h"
+#include "brlobol/view_lod.h"
 #include "brlobol/vlist_shape.h"
 
 #include <Inventor/SbBox.h>
@@ -255,6 +256,7 @@ SoBRLSnapAction::initClass(void)
 {
     SO_ACTION_INIT_CLASS(SoBRLSnapAction, SoAction);
     SO_ENABLE(SoBRLSnapAction, SoModelMatrixElement);
+    SO_ENABLE(SoBRLSnapAction, SoBRLViewLodElement);
     SO_ACTION_ADD_METHOD(SoNode, SoBRLSnapAction::nodeAction);
     SO_ACTION_ADD_METHOD(SoBRLVListShape, SoBRLSnapAction::vlistShapeAction);
     SO_ACTION_ADD_METHOD(SoBRLMeshShape, SoBRLSnapAction::meshShapeAction);
@@ -719,6 +721,8 @@ SoBRLSnapAction::meshShapeAction(SoAction *action, SoNode *node)
     SoBRLMeshShape *shape = static_cast<SoBRLMeshShape *>(node);
     if (!shape->visible.getValue() || !shape->selectable.getValue())
 	return;
+    const BRLObolViewLodState::MeshPayload *viewPayload =
+	brlobol_view_lod_mesh_for_action(action, shape);
     const SbBool useFullDetail =
 	(snapAction->geometryPolicy == SoBRLSnapAction::FULL_DETAIL &&
 	 shape->hasFullDetailMesh()) ? TRUE : FALSE;
@@ -726,7 +730,7 @@ SoBRLSnapAction::meshShapeAction(SoAction *action, SoNode *node)
 	(snapAction->geometryPolicy == SoBRLSnapAction::FULL_DETAIL &&
 	 shape->needsSourceBackedFullDetail()) ? TRUE : FALSE;
     if (snapAction->geometryPolicy == SoBRLSnapAction::FULL_DETAIL &&
-	    shape->isLodDisplayActive())
+	    (shape->isLodDisplayActive() || viewPayload))
 	snapAction->skippedLodDisplayMeshCount++;
     const SbMatrix &localToWorld = SoModelMatrixElement::get(action->getState());
     if (useSourceBackedFullDetail) {
@@ -740,8 +744,14 @@ SoBRLSnapAction::meshShapeAction(SoAction *action, SoNode *node)
     SbBox3f centerBox;
     centerBox.makeEmpty();
 
+    const SbBool useViewPayload =
+	(!useFullDetail &&
+	 snapAction->geometryPolicy == SoBRLSnapAction::DISPLAY_LEVEL &&
+	 viewPayload) ? TRUE : FALSE;
     int triangleCount = useFullDetail ?
-	shape->getFullDetailTriangleCount() : shape->getTriangleCount();
+	shape->getFullDetailTriangleCount() :
+	(useViewPayload ? viewPayload->getTriangleCount() :
+	    shape->getTriangleCount());
     for (int i = 0; i < triangleCount; i++) {
 	int ia = -1;
 	int ib = -1;
@@ -753,6 +763,11 @@ SoBRLSnapAction::meshShapeAction(SoAction *action, SoNode *node)
 	    if (!shape->getFullDetailTriangleVertexIndices(i, ia, ib, ic))
 		continue;
 	    if (!shape->getFullDetailTriangle(i, a, b, c))
+		continue;
+	} else if (useViewPayload) {
+	    if (!viewPayload->getTriangleVertexIndices(i, ia, ib, ic))
+		continue;
+	    if (!viewPayload->getTriangle(i, a, b, c))
 		continue;
 	} else {
 	    if (!shape->getTriangleVertexIndices(i, ia, ib, ic))

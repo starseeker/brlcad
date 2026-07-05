@@ -44,7 +44,9 @@
 #include "vmath.h"
 #include "bu/env.h"
 #include "bu/ptbl.h"
+#include "dm/obol.h"
 #include "ged.h"
+#include "ged/draw_obol.h"
 #include "ged/view.h"
 #include "rt/view.h"
 #include "tclcad.h"
@@ -125,13 +127,24 @@ mged_dm_init(
     void *ctx = view_state->vs_gvp;
     if ((DMP = dm_open(ctx, (void *)s->interp, dm_type, argc-1, argv)) == DM_NULL)
 	return TCL_ERROR;
+    ged_view_context_display_manager_set(view_state->vs_gvp, (void *)DMP);
+    void *obol_controller = dm_obol_controller(DMP);
+    if (obol_controller &&
+	    !ged_draw_obol_controller_attach_opaque_for_view(s->gedp,
+		view_state->vs_gvp, obol_controller, 1)) {
+	ged_view_context_display_manager_set(view_state->vs_gvp, NULL);
+	dm_close(DMP);
+	DMP = DM_NULL;
+	return TCL_ERROR;
+    }
 
     /*XXXX this eventually needs to move into Ogl's private structure */
     dm_set_vp(DMP, ged_view_context_scale_storage_get(view_state->vs_gvp));
     dm_set_perspective(DMP, mged_variables->mv_perspective_mode);
 
 #ifdef HAVE_TK
-    if (dm_graphical(DMP) && !BU_STR_EQUAL(dm_get_dm_name(DMP), "swrast")) {
+    if (tkwin != NULL && dm_graphical(DMP) &&
+	    !BU_STR_EQUAL(dm_get_dm_name(DMP), "swrast")) {
 	Tk_DeleteGenericHandler(doEvent, (ClientData)s);
 	Tk_CreateGenericHandler(doEvent, (ClientData)s);
     }
@@ -245,6 +258,11 @@ release(struct mged_state *s, char *name, int need_close)
      */
     if (s->mged_curr_dm->dm_tie != NULL)
 	s->mged_curr_dm->dm_tie->cl_tie = (struct mged_dm *)NULL;
+
+    if (s->mged_curr_dm && s->mged_curr_dm->dm_view_state &&
+	    s->mged_curr_dm->dm_view_state->vs_gvp)
+	ged_view_context_display_manager_set(
+		s->mged_curr_dm->dm_view_state->vs_gvp, NULL);
 
     if (need_close)
 	dm_close(DMP);

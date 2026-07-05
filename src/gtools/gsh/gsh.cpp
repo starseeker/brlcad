@@ -411,8 +411,8 @@ GshState::~GshState()
 	void *view_ctx = (void *)BU_PTBL_GET(views, i);
 	struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
 	if (dmp) {
-	    dm_close(dmp);
 	    ged_view_context_display_manager_set(view_ctx, NULL);
+	    dm_close(dmp);
 	}
     }
 #endif
@@ -594,7 +594,10 @@ GshState::view_update()
 	    dm_get_bg(&dm_bg1, &dm_bg2, dmp);
 	    dm_set_bg(dmp, dm_bg1[0], dm_bg1[1], dm_bg1[2], dm_bg2[0], dm_bg2[1], dm_bg2[2]);
 	    dm_set_native_repaint_pending(dmp, 0);
-	    dm_draw_objs(view_ctx);
+	    struct ged_draw_transaction txn =
+		ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
+	    txn.view = view_ctx;
+	    ged_draw_apply_transaction(gedp, &txn, NULL);
 	    dm_draw_end(dmp);
 	}
     }

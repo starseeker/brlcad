@@ -417,6 +417,8 @@ public:
     SbBool removeOwned(const SbString &name,
 	unsigned int scopeMask,
 	const BRLObolFeatureOwner *owner);
+    size_t removeScope(unsigned int scopeMask,
+	const BRLObolFeatureOwner *owner = NULL);
     size_t removePrefix(const SbString &prefix);
     size_t removePrefix(const SbString &prefix,
 	unsigned int scopeMask,
@@ -632,6 +634,7 @@ public:
 	const SbVec3f &previousPoint);
     SbBool rename(BRLObolPolygonHandle handle, const SbString &newName);
     SbBool remove(BRLObolPolygonHandle handle);
+    size_t removeScope(unsigned int scopeMask);
 
     SbBool record(BRLObolPolygonHandle handle,
 	BRLObolPolygonRecord &recordOut) const;

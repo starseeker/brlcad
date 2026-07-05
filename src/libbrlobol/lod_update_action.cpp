@@ -10,6 +10,7 @@
 #include "brlobol/lod_service.h"
 #include "brlobol/lod_update_action.h"
 #include "brlobol/mesh_shape.h"
+#include "brlobol/view_lod.h"
 
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoNode.h>
@@ -19,6 +20,7 @@
 SO_ACTION_SOURCE(SoBRLLodUpdateAction);
 
 SoBRLLodUpdateAction::SoBRLLodUpdateAction(void) :
+    viewState(NULL),
     matchedResultCount(0),
     appliedResultCount(0),
     rejectedResultCount(0),
@@ -72,6 +74,18 @@ SoBRLLodUpdateAction::drainService(BRLObolLodService &service,
     this->results.insert(this->results.end(), drained.begin(), drained.end());
     this->matched.clear();
     return count;
+}
+
+void
+SoBRLLodUpdateAction::setViewLodState(BRLObolViewLodState *newViewState)
+{
+    this->viewState = newViewState;
+}
+
+BRLObolViewLodState *
+SoBRLLodUpdateAction::getViewLodState(void) const
+{
+    return this->viewState;
 }
 
 size_t
@@ -187,12 +201,19 @@ SoBRLLodUpdateAction::meshShapeAction(SoAction *action, SoNode *node)
 	    updateAction->matchedResultCount++;
 	}
 
-	if (shape->applyStagedLodResult(result, &result.request)) {
-	    updateAction->appliedResultCount++;
-	} else {
+	if (!updateAction->viewState) {
 	    updateAction->rejectedResultCount++;
 	    updateAction->appendDiagnostic(result,
-		    "staged LoD result rejected by mesh");
+		    "view-local LoD update requires a view state");
+	    continue;
+	}
+
+	if (updateAction->viewState->applyMeshResult(shape, result))
+	    updateAction->appliedResultCount++;
+	else {
+	    updateAction->rejectedResultCount++;
+	    updateAction->appendDiagnostic(result,
+		    "view-local LoD result rejected by mesh");
 	}
     }
 }

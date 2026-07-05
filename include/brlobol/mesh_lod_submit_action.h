@@ -20,6 +20,7 @@
 #include <stdint.h>
 
 class BRLObolLodService;
+class BRLObolViewLodState;
 struct db_i;
 
 class BRLOBOL_EXPORT SoBRLMeshLodSubmitAction : public SoAction {
@@ -51,6 +52,8 @@ public:
     int getForcedLevel(void) const;
     void setRequireLodBacked(SbBool requireLodBacked);
     SbBool getRequireLodBacked(void) const;
+    void setViewLodState(const BRLObolViewLodState *viewState);
+    const BRLObolViewLodState *getViewLodState(void) const;
 
     unsigned int getVisitedMeshCount(void) const;
     unsigned int getSubmittedTaskCount(void) const;
@@ -81,6 +84,7 @@ private:
     SbBool useForcedLevel;
     int forcedLevel;
     SbBool requireLodBacked;
+    const BRLObolViewLodState *viewState;
     unsigned int visitedMeshCount;
     unsigned int submittedTaskCount;
     unsigned int skippedMeshCount;

@@ -68,54 +68,41 @@ function(_brlobol_pivot_guard_check_file _file)
   endforeach()
 endfunction()
 
-function(_brlobol_pivot_guard_check_ged_tcl_overlay_bsg_test)
-  set(_ged_tcl_overlay_bsg_test "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/tcl_overlay_bsg.cpp")
-  if(EXISTS "${_ged_tcl_overlay_bsg_test}")
-    file(READ "${_ged_tcl_overlay_bsg_test}" _ged_tcl_overlay_bsg_contents)
+function(_brlobol_pivot_guard_check_retired_ged_bsg_tests)
+  foreach(_rel
+      src/libged/tests/draw/bsg_quad_stability.cpp
+      src/libged/tests/draw/bsg_render_stability.cpp
+      src/libged/tests/draw/mged_bsg.cpp
+      src/libged/tests/draw/mged_shaded_mode_bsg.cpp
+      src/libged/tests/draw/rtwizard_bsg.cpp
+      src/libged/tests/draw/tcl_overlay_bsg.cpp)
+    if(EXISTS "${BRLCAD_SOURCE_DIR}/${_rel}")
+      _brlobol_pivot_guard_fail(
+	"${_rel} was retired; keep migrated coverage in Obol/native GED draw tests instead of reintroducing BSG fixtures")
+    endif()
+  endforeach()
+
+  set(_ged_draw_tests_cmake "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/CMakeLists.txt")
+  if(EXISTS "${_ged_draw_tests_cmake}")
+    file(READ "${_ged_draw_tests_cmake}" _ged_draw_tests_cmake_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view\.h]]
-	ged_view_active_ctx
-	ged_draw_view_context_scene_attached
-	ged_draw_view_context_tcl_lines_replace
-	ged_draw_view_context_feature_exists
-	ged_draw_view_context_feature_summary
-	ged_draw_view_context_feature_points_copy
-	ged_draw_view_context_feature_line_command_at
-	ged_draw_view_context_feature_style_get
-	ged_draw_view_context_tcl_arrows_replace
-	ged_draw_view_context_tcl_axes_replace
-	ged_draw_view_context_data_polygons_replace
-	ged_draw_view_context_tcl_labels_replace
-	rt_view_context_display_manager_get
-	rt_view_context_display_manager_set)
-      string(REGEX MATCH "${_token}" _ged_tcl_overlay_token_hit
-	"${_ged_tcl_overlay_bsg_contents}")
-      if(NOT _ged_tcl_overlay_token_hit)
+	[[ged_test_bsg_quad_stability]]
+	[[ged_test_bsg_render_stability]]
+	[[ged_test_mged_bsg]]
+	[[ged_test_mged_shaded_mode_bsg]]
+	[[ged_test_rtwizard_bsg]]
+	[[ged_test_tcl_overlay_bsg]]
+	[[bsg_quad_stability\.cpp]]
+	[[bsg_render_stability\.cpp]]
+	[[mged_bsg\.cpp]]
+	[[mged_shaded_mode_bsg\.cpp]]
+	[[rtwizard_bsg\.cpp]]
+	[[tcl_overlay_bsg\.cpp]])
+      string(REGEX MATCH "${_token}" _ged_tcl_overlay_target_hit
+	"${_ged_draw_tests_cmake_contents}")
+      if(_ged_tcl_overlay_target_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/tests/draw/tcl_overlay_bsg.cpp must route retained Tcl overlay lifecycle checks through opaque GED/RT context helper ${_token}")
-      endif()
-    endforeach()
-    foreach(_pat
-	[[#[ \t]*include[ \t]*[<"]\.\./\.\./bsg_ged_draw_view_private\.h]]
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[#[ \t]*include[ \t]*[<"]bsg/]]
-	[[gedp[ \t\r\n]*->[ \t\r\n]*ged_gvp]]
-	[[->[ \t\r\n]*dmp]]
-	[[(^|[^A-Za-z0-9_])rt_view_context_display_manager_from_bsg[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])rt_view_context_display_manager_set_bsg[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])struct[ \t\r\n]+bsg_view([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])bsg_feature_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])bsg_view_[A-Za-z0-9_]*[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])BSG_FEATURE_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])BSG_GEOMETRY_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])BSG_OVERLAY_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])BSG_ANCHOR_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])ged_draw_view_(feature_exists|feature_visible|feature_visible_set|feature_style_get|line_color_set|line_width_set|feature_points_copy|tcl_lines_replace|tcl_polygons_replace|tcl_labels_replace|label_count|label_copy|label_point_set|arrow_tip_get|arrow_tip_set|tcl_arrows_replace|feature_axes_centers_copy|tcl_axes_replace)[ \t\r\n]*\(]])
-      string(REGEX MATCH "${_pat}" _ged_tcl_overlay_direct_hit
-	"${_ged_tcl_overlay_bsg_contents}")
-      if(_ged_tcl_overlay_direct_hit)
-	_brlobol_pivot_guard_fail(
-	  "src/libged/tests/draw/tcl_overlay_bsg.cpp reintroduced direct BSG view/feature access instead of opaque GED/RT context helpers: ${_ged_tcl_overlay_direct_hit}")
+	  "src/libged/tests/draw/CMakeLists.txt reintroduced retired GED BSG test token ${_token}")
       endif()
     endforeach()
   endif()
@@ -1713,7 +1700,6 @@ function(_brlobol_pivot_guard_check_legacy_header_include_hygiene)
 	[[dm_draw_objs]]
 		[[rt_view_context_create]]
 		[[rt_view_context_free]]
-		[[rt_view_context_release_storage]]
 		[[rt_view_context_view_set_attach]]
 	[[rt_view_context_name_set]]
 	[[rt_view_set_context_add]]
@@ -2286,7 +2272,6 @@ function(_brlobol_pivot_guard_check_legacy_header_include_hygiene)
       src/libged/tests/draw/measure_semantics.cpp
       src/libged/tests/draw/selection_semantics.cpp
       src/libged/tests/draw/snap_semantics.cpp
-      src/libged/tests/draw/tcl_overlay_bsg.cpp
       src/libged/tests/draw/view_command.cpp
       src/libged/tests/test_gqa.c
       src/libqtcad/tests/qsketch.cpp
@@ -5479,6 +5464,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 		  "rt_view_lod_bot_threshold"
 		  "rt_view_avg_sample_spacing"
 		  "rt_view_solid_point_spacing"
+		  "rt_view_context_is_valid"
 		  "rt_view_context_is_retained"
 		  "rt_view_context_create"
 		  "rt_view_context_create_with_set"
@@ -6374,6 +6360,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[#[ \t]*include[ \t]*[<"]bsg/view_state\.h]]
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
 	rt_view_context_is_bsg
+	[[(^|[^A-Za-z0-9_])rt_view_context_is_valid[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])rt_view_context_is_retained[ \t\r\n]*\(]]
 	rt_view_context_user_data_from_bsg
 	[[(^|[^A-Za-z0-9_])rt_view_context_user_data_get[ \t\r\n]*\(]]
@@ -7167,6 +7154,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	"rt_view_context_aet_get(actual, NULL"
 	"rt_view_context_aet_set(NULL"
 	"rt_view_context_aet_state_set(NULL"
+	"rt_view_context_is_valid(NULL"
 	"rt_view_context_is_retained(NULL"
 	rt_view_context_user_data_from_bsg
 	"rt_view_context_user_data_get(NULL"
@@ -10395,7 +10383,6 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_libdm_view}" _libdm_view_contents)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]rt/view\.h]]
-	[[rt_view_context_is_retained]]
 	[[rt_view_context_width_get]]
 	[[rt_view_context_height_get]]
 	[[rt_view_context_dimensions_set]]
@@ -10701,7 +10688,6 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	"DM_VIEW_REFRESH_VIEW"
 	"DM_VIEW_REFRESH_FORCE"
 	"DM_VIEW_REFRESH_ALL"
-	"dm_view_context_is_retained_legacy"
 	"dm_view_context_width_get"
 	"dm_view_context_height_get"
 	"dm_view_context_dimensions_set"
@@ -10796,12 +10782,12 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libdm_qtgl_impl}")
     file(READ "${_libdm_qtgl_impl}" _libdm_qtgl_contents)
     foreach(_token
-	[[dm_view_context_is_retained_legacy]])
+	[[rt_view_context_is_valid]])
       string(REGEX MATCH "${_token}" _libdm_qtgl_context_token_hit
 	"${_libdm_qtgl_contents}")
       if(NOT _libdm_qtgl_context_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libdm/qtgl/dm-qtgl.cpp must route retained legacy context rejection through dm_view_context_is_retained_legacy")
+	  "src/libdm/qtgl/dm-qtgl.cpp must reject opaque RT view contexts through rt_view_context_is_valid")
       endif()
     endforeach()
     foreach(_pat
@@ -11233,9 +11219,8 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	      src/libqtcad/QgSW.cpp
 	      src/libqtcad/QgGL.cpp
 	      src/libged/tests/draw/aet.cpp
-	      src/libged/tests/draw/bsg_quad_stability.cpp
 	      src/libged/tests/draw/quad.cpp
-	      src/libged/tests/draw/rtwizard_bsg.cpp
+	      src/libged/tests/draw/rtwizard_view.cpp
 	      src/libged/tests/draw/util.cpp
 	      src/libged/tests/draw/view_command.cpp
 	      src/libged/tests/draw/view_independent.cpp
@@ -11257,9 +11242,8 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 
 	  foreach(_rel
 	      src/libged/tests/draw/aet.cpp
-	      src/libged/tests/draw/bsg_quad_stability.cpp
 	      src/libged/tests/draw/quad.cpp
-	      src/libged/tests/draw/rtwizard_bsg.cpp
+	      src/libged/tests/draw/rtwizard_view.cpp
 	      src/libged/tests/draw/view_command.cpp
 	      src/libged/tests/draw/view_independent.cpp
 	      src/libqtcad/tests/ged_test_dm_backend_bench.cpp)
@@ -12184,16 +12168,14 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	      "src/libged/ged_view_legacy.cpp|rt_view_context_rotate_about_set"
 	      "src/libged/tests/draw/aet.cpp|rt/view.h|ged_view_set_ctx|ged_view_set_views_ctx|ged_view_active_ctx_set|ged_view_context_owned_add|rt_view_context_create_with_set|rt_view_set_context_remove|rt_view_set_context_add|rt_view_context_name_set|rt_view_context_display_manager_get|rt_view_context_display_manager_set|rt_view_context_dimensions_set|rt_view_context_unit_conversion_set|rt_view_context_scale_storage_get|rt_view_context_aet_set|rt_view_context_update"
 	      "src/libged/tests/draw/basic.cpp|rt/view.h|ged_view_active_ctx|rt_view_context_display_manager_get|rt_view_context_dimensions_set|rt_view_context_unit_conversion_set|rt_view_context_scale_storage_get"
-	      "src/libged/tests/draw/bsg_quad_stability.cpp|rt/view.h|ged_view_set_ctx|ged_view_set_views_ctx|ged_view_active_ctx_set|ged_view_context_owned_add|rt_view_context_create|rt_view_set_context_remove|rt_view_set_context_add|rt_view_context_name_set|rt_view_context_display_manager_get|rt_view_context_display_manager_set|rt_view_context_dimensions_set|rt_view_context_unit_conversion_set|rt_view_context_scale_storage_get|rt_view_context_independent_scope_is_null|rt_view_context_scene_attached|rt_view_context_scene_anchor_ensure"
-	      "src/libged/tests/draw/bsg_render_stability.cpp|rt/view.h|ged_view_active_ctx|rt_view_context_display_manager_get|rt_view_context_display_manager_set|rt_view_context_dimensions_set|rt_view_context_unit_conversion_set|rt_view_context_scale_storage_get"
 	      "src/libged/tests/draw/faceplate.cpp|rt/view.h|ged_view_active_ctx|rt_view_context_display_manager_get|rt_view_context_display_manager_set|rt_view_context_dimensions_set|rt_view_context_unit_conversion_set|rt_view_context_scale_storage_get|rt_view_context_frametime_set"
 	      "src/libged/tests/draw/lod.cpp|rt/view.h|ged_view_active_ctx|rt_view_context_display_manager_get|rt_view_context_display_manager_set|rt_view_context_dimensions_set|rt_view_context_unit_conversion_set|rt_view_context_scale_storage_get"
 	      "src/libged/tests/draw/lod_crossrun.cpp|rt/view.h|ged_view_active_ctx|rt_view_context_display_manager_get|rt_view_context_display_manager_set|rt_view_context_dimensions_set|rt_view_context_unit_conversion_set|rt_view_context_scale_storage_get"
 	      "src/libged/tests/draw/measure_semantics.cpp|rt/view.h|rt_view_context_create|rt_view_context_dimensions_set|rt_view_context_measure_candidates|rt_view_context_free"
-	      "src/libged/tests/draw/mged_bsg.cpp|rt/view.h|ged_view_active_ctx|rt_view_context_display_manager_get|rt_view_context_display_manager_set|rt_view_context_dimensions_set|rt_view_context_unit_conversion_set|rt_view_context_scale_storage_get|rt_view_context_scene_attached|RT_VIEW_OTHER_STATE_INIT|rt_view_context_center_dot_state_get|rt_view_context_center_dot_state_set|rt_view_context_edit_matrix_clear|rt_view_context_edit_matrix_set|RT_VIEW_RENDER_SUMMARY_INIT|rt_view_context_visible_render_summary(v,"
-	      "src/libged/tests/draw/mged_shaded_mode_bsg.cpp|rt/view.h|ged_view_active_ctx|rt_view_context_display_manager_get|rt_view_context_display_manager_set|rt_view_context_dimensions_set|rt_view_context_unit_conversion_set|rt_view_context_scale_storage_get"
+	      "src/libged/tests/draw/mged_view_state.cpp|rt/view.h|ged_view_active_ctx|rt_view_context_display_manager_get|rt_view_context_display_manager_set|rt_view_context_dimensions_set|rt_view_context_unit_conversion_set|rt_view_context_scale_storage_get|rt_view_context_edit_matrix_clear|rt_view_context_edit_matrix_set|GED_DRAW_TXN_REDRAW|ged_exec_screengrab|ged_draw_highlight_revision|draw_test_images_differ|ged_exec_dm"
+	      "src/libged/tests/draw/mged_shaded_mode.cpp|rt/view.h|ged_view_active_ctx|rt_view_context_display_manager_get|rt_view_context_display_manager_set|rt_view_context_dimensions_set|rt_view_context_unit_conversion_set|rt_view_context_scale_storage_get"
 	      "src/libged/tests/draw/quad.cpp|rt/view.h|ged_view_set_ctx|ged_view_set_views_ctx|ged_view_active_ctx_set|ged_view_context_owned_add|rt_view_context_create_with_set|rt_view_set_context_remove|rt_view_set_context_add|rt_view_context_name_set|rt_view_context_display_manager_get|rt_view_context_display_manager_set|rt_view_context_dimensions_set|rt_view_context_unit_conversion_set|rt_view_context_scale_storage_get|rt_view_context_is_independent|GED_DRAW_VIEW_FEATURE_SUMMARY_INIT|ged_draw_view_context_feature_summary(ged_view_active_ctx|ged_draw_view_context_feature_summary(v,"
-	      "src/libged/tests/draw/rtwizard_bsg.cpp|rt/view.h|ged_view_active_ctx|ged_view_active_ctx_set|ged_view_set_ctx|ged_view_context_owned_add|rt_view_context_create_with_set|rt_view_context_name_set|rt_view_set_context_add|rt_view_context_display_manager_get|rt_view_context_display_manager_set|rt_view_context_dimensions_set|rt_view_context_unit_conversion_set|rt_view_context_scale_storage_get|rt_view_context_scene_anchor_ensure|rt_view_context_scene_attached|rt_view_context_scene_shared|rt_view_context_model2view_get"
+	      "src/libged/tests/draw/rtwizard_view.cpp|rt/view.h|ged_view_active_ctx|ged_view_active_ctx_set|ged_view_set_ctx|ged_view_context_owned_add|rt_view_context_create_with_set|rt_view_context_name_set|rt_view_set_context_add|rt_view_context_display_manager_get|rt_view_context_display_manager_set|rt_view_context_dimensions_set|rt_view_context_unit_conversion_set|rt_view_context_scale_storage_get|rt_view_context_is_valid|rt_view_context_model2view_get"
 	      "src/libged/tests/draw/select.cpp|rt/view.h|ged_view_active_ctx|rt_view_context_display_manager_get|rt_view_context_display_manager_set|rt_view_context_dimensions_set|rt_view_context_unit_conversion_set|rt_view_context_scale_storage_get"
       "src/libged/tests/draw/snap_semantics.cpp|rt/view.h|rt_view_context_create|rt_view_context_dimensions_set|rt_view_context_grid_state_get|rt_view_context_grid_state_set|rt_view_context_snap_source_flags_set|rt_view_snap_result_context_create|rt_view_context_snap_candidates_result|rt_view_snap_result_context_point|rt_view_context_snap_point_2d|rt_view_context_free"
       "src/libged/tests/test_state_services.cpp|ged_view_active_ctx|void *view_ctx|ged_draw_path_state|ged_draw_list_paths"
@@ -12770,17 +12752,14 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   foreach(_rel
       src/libged/tests/draw/aet.cpp
       src/libged/tests/draw/basic.cpp
-      src/libged/tests/draw/bsg_quad_stability.cpp
-      src/libged/tests/draw/bsg_render_stability.cpp
       src/libged/tests/draw/faceplate.cpp
       src/libged/tests/draw/lod.cpp
       src/libged/tests/draw/lod_crossrun.cpp
-      src/libged/tests/draw/mged_shaded_mode_bsg.cpp
       src/libged/tests/draw/measure_semantics.cpp
-      src/libged/tests/draw/mged_bsg.cpp
-      src/libged/tests/draw/mged_shaded_mode_bsg.cpp
+      src/libged/tests/draw/mged_view_state.cpp
+      src/libged/tests/draw/mged_shaded_mode.cpp
       src/libged/tests/draw/quad.cpp
-      src/libged/tests/draw/rtwizard_bsg.cpp
+      src/libged/tests/draw/rtwizard_view.cpp
       src/libged/tests/draw/select.cpp
       src/libged/tests/draw/snap_semantics.cpp)
     set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
@@ -12803,7 +12782,6 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   foreach(_rel
       src/libged/tests/draw/aet.cpp
       src/libged/tests/draw/basic.cpp
-      src/libged/tests/draw/bsg_render_stability.cpp
       src/libged/tests/draw/faceplate.cpp
       src/libged/tests/draw/lod.cpp
       src/libged/tests/draw/lod_crossrun.cpp
@@ -12841,7 +12819,6 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   foreach(_rel
       src/libged/tests/draw/aet.cpp
       src/libged/tests/draw/basic.cpp
-      src/libged/tests/draw/bsg_render_stability.cpp
       src/libged/tests/draw/faceplate.cpp
       src/libged/tests/draw/lod.cpp
       src/libged/tests/draw/lod_crossrun.cpp
@@ -12941,8 +12918,10 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	ged_test_faceplate
 	ged_test_lod
 	ged_test_select_draw
-	ged_test_bsg_render_stability
-	ged_test_lod_crossrun)
+	ged_test_lod_crossrun
+	ged_test_mged_view_state
+	ged_test_mged_shaded_mode
+	ged_test_rtwizard_view)
       string(REGEX MATCH "${_target}[^\\n]*libbsg"
 	_libged_draw_setup_test_libbsg_hit
 	"${_libged_draw_setup_tests_cmake_contents}")
@@ -12953,7 +12932,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endforeach()
   endif()
 
-  set(_ged_mged_bsg_test "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/mged_bsg.cpp")
+  set(_ged_mged_bsg_test "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/mged_view_state.cpp")
   if(EXISTS "${_ged_mged_bsg_test}")
     file(READ "${_ged_mged_bsg_test}" _ged_mged_bsg_test_contents)
     foreach(_token
@@ -12964,21 +12943,18 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[rt_view_context_dimensions_set]]
 	[[rt_view_context_unit_conversion_set]]
 	[[rt_view_context_scale_storage_get]]
-	[[rt_view_context_scene_attached]]
-	[[struct[ \t\r\n]+rt_view_other_state]]
-	[[RT_VIEW_OTHER_STATE_INIT]]
-	[[rt_view_context_center_dot_state_get]]
-	[[rt_view_context_center_dot_state_set]]
 	[[rt_view_context_edit_matrix_clear]]
 	[[rt_view_context_edit_matrix_set]]
-	[[struct[ \t\r\n]+rt_view_render_summary]]
-	[[RT_VIEW_RENDER_SUMMARY_INIT]]
-	[[rt_view_context_visible_render_summary]])
+	[[s_av\[2\][ \t\r\n]*=[ \t\r\n]*"obol"]]
+	[[GED_DRAW_TXN_REDRAW]]
+	[[ged_exec_screengrab]]
+	[[ged_draw_highlight_revision]]
+	[[draw_test_images_differ]])
       string(REGEX MATCH "${_token}" _ged_mged_bsg_token_hit
 	"${_ged_mged_bsg_test_contents}")
       if(NOT _ged_mged_bsg_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/tests/draw/mged_bsg.cpp must route retained view setup and state checks through neutral rt/view.h context token ${_token}")
+	  "src/libged/tests/draw/mged_view_state.cpp must cover neutral view setup and Obol DM state checks with token ${_token}")
       endif()
     endforeach()
     foreach(_pat
@@ -13019,22 +12995,22 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	"${_ged_mged_bsg_test_contents}")
       if(_ged_mged_bsg_direct_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/tests/draw/mged_bsg.cpp reintroduced direct BSG utility/view-state or typed setup access: ${_ged_mged_bsg_direct_hit}")
+	  "src/libged/tests/draw/mged_view_state.cpp reintroduced direct BSG utility/view-state or typed setup access: ${_ged_mged_bsg_direct_hit}")
       endif()
     endforeach()
     set(_ged_mged_bsg_tests_cmake "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/CMakeLists.txt")
     if(EXISTS "${_ged_mged_bsg_tests_cmake}")
       file(READ "${_ged_mged_bsg_tests_cmake}" _ged_mged_bsg_tests_cmake_contents)
-      string(REGEX MATCH [[ged_test_mged_bsg[^\n]*mged_bsg\.cpp[^\n]*libbsg]]
+      string(REGEX MATCH [[ged_test_mged_view_state[^\n]*mged_view_state\.cpp[^\n]*libbsg]]
 	_ged_mged_bsg_libbsg_hit "${_ged_mged_bsg_tests_cmake_contents}")
       if(_ged_mged_bsg_libbsg_hit)
 	_brlobol_pivot_guard_fail(
-	  "ged_test_mged_bsg must not directly link libbsg while render summary checks route through neutral rt/view.h")
+	  "ged_test_mged_view_state must not directly link libbsg while Obol DM state checks route through neutral rt/view.h")
       endif()
     endif()
   endif()
 
-  set(_ged_mged_shaded_mode_test "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/mged_shaded_mode_bsg.cpp")
+  set(_ged_mged_shaded_mode_test "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/mged_shaded_mode.cpp")
   if(EXISTS "${_ged_mged_shaded_mode_test}")
     file(READ "${_ged_mged_shaded_mode_test}" _ged_mged_shaded_mode_test_contents)
     foreach(_token
@@ -13049,7 +13025,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	"${_ged_mged_shaded_mode_test_contents}")
       if(NOT _ged_mged_shaded_mode_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/tests/draw/mged_shaded_mode_bsg.cpp must route retained view setup through neutral rt/view.h context wrappers")
+	  "src/libged/tests/draw/mged_shaded_mode.cpp must route view setup through neutral rt/view.h context wrappers")
       endif()
     endforeach()
     foreach(_pat
@@ -13071,18 +13047,18 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	"${_ged_mged_shaded_mode_test_contents}")
       if(_ged_mged_shaded_mode_direct_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/tests/draw/mged_shaded_mode_bsg.cpp reintroduced direct BSG defines or retained-view setup use: ${_ged_mged_shaded_mode_direct_hit}")
+	  "src/libged/tests/draw/mged_shaded_mode.cpp reintroduced direct BSG defines or retained-view setup use: ${_ged_mged_shaded_mode_direct_hit}")
       endif()
     endforeach()
     set(_ged_mged_shaded_mode_tests_cmake "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/CMakeLists.txt")
     if(EXISTS "${_ged_mged_shaded_mode_tests_cmake}")
       file(READ "${_ged_mged_shaded_mode_tests_cmake}" _ged_mged_shaded_mode_tests_cmake_contents)
-      string(REGEX MATCH [[ged_test_mged_shaded_mode_bsg[^\n]*mged_shaded_mode_bsg\.cpp[^\n]*libbsg]]
+      string(REGEX MATCH [[ged_test_mged_shaded_mode[^\n]*mged_shaded_mode\.cpp[^\n]*libbsg]]
 	_ged_mged_shaded_mode_libbsg_hit
 	"${_ged_mged_shaded_mode_tests_cmake_contents}")
       if(_ged_mged_shaded_mode_libbsg_hit)
 	_brlobol_pivot_guard_fail(
-	  "ged_test_mged_shaded_mode_bsg must not directly link libbsg while shaded-mode coverage uses GED/DM owner libraries")
+	  "ged_test_mged_shaded_mode must not directly link libbsg while shaded-mode coverage uses GED/DM owner libraries")
       endif()
     endif()
   endif()
@@ -13572,18 +13548,17 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]brlobol/evaluated_wire\.h]]
 	[[#[ \t]*include[ \t]*[<"]bg/line_layer\.h]]
+	[[#[ \t]*include[ \t]*[<"]rt/eval_wireframe\.h]]
 	[[BG_GEOMETRY_LINE_MOVE]]
 	[[BG_GEOMETRY_LINE_DRAW]]
-	[[struct[ \t]+resource[ \t]+resource]]
-	[[rt_init_resource]]
-	[[rt_clean_resource]]
+	[[rt_eval_wireframe]]
 	[[brlobol_evaluated_wire_evaluate_path_line_set]]
 	[[brlobol_evaluated_wire_line_set_free]])
       string(REGEX MATCH "${_token}" _brlobol_evaluated_wire_impl_token_hit
 	"${_brlobol_evaluated_wire_impl_contents}")
       if(NOT _brlobol_evaluated_wire_impl_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libbrlobol/evaluated_wire.cpp must own evaluated-wire line-set production token ${_token}")
+	  "src/libbrlobol/evaluated_wire.cpp must own evaluated-wire adapter token ${_token}")
       endif()
     endforeach()
     foreach(_pat
@@ -13602,7 +13577,29 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       endif()
     endforeach()
   else()
-    _brlobol_pivot_guard_fail("src/libbrlobol/evaluated_wire.cpp must own evaluated-wire implementation")
+    _brlobol_pivot_guard_fail("src/libbrlobol/evaluated_wire.cpp must own evaluated-wire adapter implementation")
+  endif()
+
+  set(_librt_eval_wireframe_impl "${BRLCAD_SOURCE_DIR}/src/librt/eval_wireframe.cpp")
+  if(EXISTS "${_librt_eval_wireframe_impl}")
+    file(READ "${_librt_eval_wireframe_impl}" _librt_eval_wireframe_impl_contents)
+    foreach(_token
+	[[#[ \t]*include[ \t]*[<"]rt/eval_wireframe\.h]]
+	[[rt_eval_wireframe]]
+	[[RT_EVAL_WIREFRAME_F_BOOLWEAVE]]
+	[[RT_EVAL_WIREFRAME_F_BIGE]]
+	[[struct[ \t]+resource[ \t]+resource]]
+	[[rt_init_resource]]
+	[[rt_clean_resource]])
+      string(REGEX MATCH "${_token}" _librt_eval_wireframe_impl_token_hit
+	"${_librt_eval_wireframe_impl_contents}")
+      if(NOT _librt_eval_wireframe_impl_token_hit)
+	_brlobol_pivot_guard_fail(
+	  "src/librt/eval_wireframe.cpp must own evaluated-wire evaluator token ${_token}")
+      endif()
+    endforeach()
+  else()
+    _brlobol_pivot_guard_fail("src/librt/eval_wireframe.cpp must own evaluated-wire evaluator implementation")
   endif()
 
   set(_libged_points_eval "${BRLCAD_SOURCE_DIR}/src/libged/points_eval.c")
@@ -20809,7 +20806,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     endif()
   endif()
 
-  set(_libged_rtwizard_bsg_test "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/rtwizard_bsg.cpp")
+  set(_libged_rtwizard_bsg_test "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/rtwizard_view.cpp")
   if(EXISTS "${_libged_rtwizard_bsg_test}")
     file(READ "${_libged_rtwizard_bsg_test}" _rtwizard_bsg_contents)
     foreach(_token
@@ -20825,15 +20822,13 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[rt_view_context_dimensions_set]]
 	[[rt_view_context_unit_conversion_set]]
 	[[rt_view_context_scale_storage_get]]
-	[[rt_view_context_scene_anchor_ensure]]
-	[[rt_view_context_scene_attached]]
-	[[rt_view_context_scene_shared]]
+	[[rt_view_context_is_valid]]
 	[[rt_view_context_model2view_get]])
       string(REGEX MATCH "${_token}" _rtwizard_bsg_adapter_hit
 	"${_rtwizard_bsg_contents}")
       if(NOT _rtwizard_bsg_adapter_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/tests/draw/rtwizard_bsg.cpp must route retained view setup, view matrix reads, and scene-anchor checks through neutral rt/view.h context wrappers")
+	  "src/libged/tests/draw/rtwizard_view.cpp must route view setup and view matrix reads through neutral rt/view.h context wrappers")
       endif()
     endforeach()
     foreach(_pat
@@ -20872,95 +20867,17 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	"${_rtwizard_bsg_contents}")
       if(_rtwizard_bsg_direct_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/tests/draw/rtwizard_bsg.cpp reintroduced direct BSG retained-view setup, view matrix, or scene-anchor access: ${_rtwizard_bsg_direct_hit}")
+	  "src/libged/tests/draw/rtwizard_view.cpp reintroduced direct BSG retained-view setup, view matrix, or scene-anchor access: ${_rtwizard_bsg_direct_hit}")
       endif()
     endforeach()
     set(_rtwizard_bsg_tests_cmake "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/CMakeLists.txt")
     if(EXISTS "${_rtwizard_bsg_tests_cmake}")
       file(READ "${_rtwizard_bsg_tests_cmake}" _rtwizard_bsg_tests_cmake_contents)
-      string(REGEX MATCH [[ged_test_rtwizard_bsg[^\n]*rtwizard_bsg\.cpp[^\n]*libbsg]]
+      string(REGEX MATCH [[ged_test_rtwizard_view[^\n]*rtwizard_view\.cpp[^\n]*libbsg]]
 	_rtwizard_bsg_libbsg_hit "${_rtwizard_bsg_tests_cmake_contents}")
       if(_rtwizard_bsg_libbsg_hit)
 	_brlobol_pivot_guard_fail(
-	  "ged_test_rtwizard_bsg must not directly link libbsg while scene-anchor checks route through neutral rt/view.h wrappers")
-      endif()
-    endif()
-  endif()
-
-  set(_libged_bsg_quad_stability_test "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/bsg_quad_stability.cpp")
-  if(EXISTS "${_libged_bsg_quad_stability_test}")
-    file(READ "${_libged_bsg_quad_stability_test}" _bsg_quad_stability_contents)
-    foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view\.h]]
-	[[ged_view_set_ctx]]
-	[[ged_view_set_views_ctx]]
-	[[ged_view_active_ctx_set]]
-	[[rt_view_context_create]]
-	[[rt_view_set_context_remove]]
-	[[rt_view_set_context_add]]
-	[[rt_view_context_name_set]]
-	[[rt_view_context_display_manager_get]]
-	[[rt_view_context_display_manager_set]]
-	[[rt_view_context_dimensions_set]]
-	[[rt_view_context_unit_conversion_set]]
-	[[rt_view_context_scale_storage_get]]
-	[[rt_view_context_independent_scope_is_null]]
-	[[rt_view_context_scene_attached]]
-	[[rt_view_context_scene_anchor_ensure]])
-      string(REGEX MATCH "${_token}" _bsg_quad_stability_adapter_hit
-	"${_bsg_quad_stability_contents}")
-      if(NOT _bsg_quad_stability_adapter_hit)
-	_brlobol_pivot_guard_fail(
-	  "src/libged/tests/draw/bsg_quad_stability.cpp must route retained view setup and scene-anchor checks through neutral rt/view.h context wrappers")
-      endif()
-    endforeach()
-    foreach(_pat
-	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-	[[#[ \t]*include[ \t]*[<"]bsg/(node|util)\.h]]
-	[[struct[ \t\r\n]+bsg_view]]
-	[[gedp[ \t\r\n]*->[ \t\r\n]*ged_gvp]]
-	[[->[ \t\r\n]*dmp]]
-	[[->[ \t\r\n]*gv_name]]
-	[[(^|[^A-Za-z0-9_])rt_view_context_create_bsg[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])rt_view_set_context_remove_bsg[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])rt_view_set_context_add_bsg[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])rt_view_context_name_set_bsg[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])rt_view_context_display_manager_from_bsg[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])rt_view_context_display_manager_set_bsg[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])rt_view_context_dimensions_set_bsg[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])rt_view_context_unit_conversion_set_bsg[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])rt_view_context_scale_storage_from_bsg[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])rt_view_context_independent_scope_is_null_bsg[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])rt_view_context_scene_attached_bsg[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])rt_view_context_scene_anchor_ensure_bsg[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])rt_view_set_views_bsg[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])rt_view_set_remove_view_bsg[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])rt_view_init_bsg[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])rt_view_set_add_view_bsg[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])rt_view_dimensions_set_bsg[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])rt_view_unit_conversion_set_bsg[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])rt_view_scale_storage_from_bsg[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])rt_view_independent_scope_ref_bsg[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])rt_view_scene_attached_bsg[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])rt_view_scene_anchor_ensure_bsg[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])bsg_view_scene_(attached|separator_ref|shared)([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])bsg_scene_[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
-	[[(^|[^A-Za-z0-9_])bsg_separator_ref([^A-Za-z0-9_]|$)]])
-      string(REGEX MATCH "${_pat}" _bsg_quad_stability_direct_hit
-	"${_bsg_quad_stability_contents}")
-      if(_bsg_quad_stability_direct_hit)
-	_brlobol_pivot_guard_fail(
-	  "src/libged/tests/draw/bsg_quad_stability.cpp reintroduced direct BSG scene-anchor or retained-view setup access: ${_bsg_quad_stability_direct_hit}")
-      endif()
-    endforeach()
-    set(_bsg_quad_stability_tests_cmake "${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/CMakeLists.txt")
-    if(EXISTS "${_bsg_quad_stability_tests_cmake}")
-      file(READ "${_bsg_quad_stability_tests_cmake}" _bsg_quad_stability_tests_cmake_contents)
-      string(REGEX MATCH [[ged_test_bsg_quad_stability[^\n]*bsg_quad_stability\.cpp[^\n]*libbsg]]
-	_bsg_quad_stability_libbsg_hit "${_bsg_quad_stability_tests_cmake_contents}")
-      if(_bsg_quad_stability_libbsg_hit)
-	_brlobol_pivot_guard_fail(
-	  "ged_test_bsg_quad_stability must not directly link libbsg while scene-anchor checks route through rt/view_legacy_bsg.h")
+	  "ged_test_rtwizard_view must not directly link libbsg while view checks route through neutral rt/view.h wrappers")
       endif()
     endif()
   endif()
@@ -29072,7 +28989,7 @@ _brlobol_pivot_guard_check_qtcad_model_draw_view_boundary()
 _brlobol_pivot_guard_check_qtcad_plugin_context_boundary()
 _brlobol_pivot_guard_check_qged_fbserv_header_boundary()
 _brlobol_pivot_guard_check_qged_view_info_rt_adapter()
-_brlobol_pivot_guard_check_ged_tcl_overlay_bsg_test()
+_brlobol_pivot_guard_check_retired_ged_bsg_tests()
 
 if("${BRLOBOL_PIVOT_GUARD_MODE}" STREQUAL "strict")
   file(GLOB_RECURSE _files LIST_DIRECTORIES false

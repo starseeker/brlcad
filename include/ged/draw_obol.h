@@ -32,6 +32,42 @@
 
 #include "ged/defines.h"
 
+__BEGIN_DECLS
+
+/**
+ * C-compatible form of ged_draw_obol_controller_attach.
+ *
+ * @p controller is a borrowed BRLObolViewController pointer passed as opaque
+ * storage so C callers such as the GED dm command can attach a libdm-owned
+ * Obol backend without exposing C++ types.
+ */
+GED_EXPORT int
+ged_draw_obol_controller_attach_opaque(struct ged *gedp,
+				       void *controller,
+				       int sync_current_scene);
+
+/**
+ * Attach a borrowed Obol view controller for one GED view.
+ *
+ * Unlike ged_draw_obol_controller_attach_opaque, this does not replace other
+ * attached Obol controllers.  It is intended for libdm-owned Obol display
+ * managers, where each view has its own renderer/controller.
+ */
+GED_EXPORT int
+ged_draw_obol_controller_attach_opaque_for_view(struct ged *gedp,
+						void *view_ctx,
+						void *controller,
+						int sync_current_scene);
+
+/**
+ * Detach a previously borrowed opaque Obol view controller.
+ */
+GED_EXPORT void
+ged_draw_obol_controller_detach_opaque(struct ged *gedp,
+				       void *controller);
+
+__END_DECLS
+
 #ifdef __cplusplus
 
 class BRLObolViewController;
@@ -127,6 +163,12 @@ GED_EXPORT int
 ged_draw_obol_controller_attach(struct ged *gedp,
 				BRLObolViewController *controller,
 				int sync_current_scene = 1);
+
+GED_EXPORT int
+ged_draw_obol_controller_attach_for_view(struct ged *gedp,
+					 void *view_ctx,
+					 BRLObolViewController *controller,
+					 int sync_current_scene = 1);
 
 /**
  * Stop mirroring GED draw transactions to the currently attached controller.

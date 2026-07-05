@@ -10,6 +10,7 @@
 #include "brlobol/lod_realization.h"
 #include "brlobol/mesh_shape.h"
 #include "brlobol/pick_detail.h"
+#include "brlobol/view_lod.h"
 
 #include <Inventor/SbVec3f.h>
 #include <Inventor/SoPrimitiveVertex.h>
@@ -487,6 +488,24 @@ SoBRLMeshShape::evictFullDetailMesh(void)
     if (this->hasFullDetailMesh())
 	this->updateSourceMeshMetricsFromFullDetail();
     this->clearFullDetailMesh();
+    return freedBytes;
+}
+
+size_t
+SoBRLMeshShape::evictDisplayMeshPreservingSourceMetrics(void)
+{
+    if (this->getGeometrySource() != this)
+	return 0;
+
+    size_t freedBytes = this->estimateDisplayMeshBytes();
+    if (freedBytes == 0)
+	return 0;
+
+    if (!this->sourceMeshMetricsValid)
+	this->updateSourceMeshMetricsFromFields();
+
+    this->setIndexedTriangleFields(NULL, 0, NULL, 0);
+    this->lodDisplayActive = FALSE;
     return freedBytes;
 }
 
@@ -974,15 +993,23 @@ set_mesh_gl_material(SoBRLMeshShape *shape, int primitiveIndex)
 }
 
 static void
-mesh_shape_emit_triangles(SoBRLMeshShape *shape, SbBool setMaterial)
+mesh_shape_emit_triangles(SoBRLMeshShape *shape,
+	const BRLObolViewLodState::MeshPayload *viewPayload,
+	SbBool setMaterial)
 {
     glBegin(GL_TRIANGLES);
-    for (int i = 0; i < shape->getTriangleCount(); i++) {
+    const int triangleCount = viewPayload ? viewPayload->getTriangleCount() :
+	shape->getTriangleCount();
+    for (int i = 0; i < triangleCount; i++) {
 	SbVec3f a;
 	SbVec3f b;
 	SbVec3f c;
-	if (!shape->getTriangle(i, a, b, c))
+	if (viewPayload) {
+	    if (!viewPayload->getTriangle(i, a, b, c))
+		continue;
+	} else if (!shape->getTriangle(i, a, b, c)) {
 	    continue;
+	}
 
 	SbVec3f normal = (b - a).cross(c - a);
 	if (normal.length() > 0.0f)
@@ -1001,7 +1028,8 @@ mesh_shape_emit_triangles(SoBRLMeshShape *shape, SbBool setMaterial)
 }
 
 static void
-mesh_shape_render_hidden_line(SoBRLMeshShape *shape)
+mesh_shape_render_hidden_line(SoBRLMeshShape *shape,
+	const BRLObolViewLodState::MeshPayload *viewPayload)
 {
     glPushAttrib(GL_CURRENT_BIT | GL_ENABLE_BIT | GL_LIGHTING_BIT |
 	    GL_POLYGON_BIT | GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT |
@@ -1014,7 +1042,7 @@ mesh_shape_render_hidden_line(SoBRLMeshShape *shape)
     glDepthFunc(GL_LESS);
     glEnable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(1.0f, 1.0f);
-    mesh_shape_emit_triangles(shape, FALSE);
+    mesh_shape_emit_triangles(shape, viewPayload, FALSE);
 
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glDisable(GL_POLYGON_OFFSET_FILL);
@@ -1023,7 +1051,7 @@ mesh_shape_render_hidden_line(SoBRLMeshShape *shape)
     if (shape->lineWidth.getValue() > 0)
 	glLineWidth(static_cast<GLfloat>(shape->lineWidth.getValue()));
     set_mesh_gl_material(shape, -1);
-    mesh_shape_emit_triangles(shape, TRUE);
+    mesh_shape_emit_triangles(shape, viewPayload, TRUE);
     glPopAttrib();
 }
 
@@ -1033,9 +1061,12 @@ SoBRLMeshShape::GLRender(SoGLRenderAction *action)
     if (!this->visible.getValue() || !this->shouldGLRender(action))
 	return;
 
+    const BRLObolViewLodState::MeshPayload *viewPayload =
+	brlobol_view_lod_mesh_for_action(action, this);
+
     if (this->hiddenLine.getValue() ||
 	    this->drawMode.getValue() == BRLOBOL_LOD_DRAW_HIDDEN_LINE) {
-	mesh_shape_render_hidden_line(this);
+	mesh_shape_render_hidden_line(this, viewPayload);
 	return;
     }
 
@@ -1045,16 +1076,29 @@ SoBRLMeshShape::GLRender(SoGLRenderAction *action)
     glLightModeli(GL_LIGHT_MODEL_TWO_SIDE,
 	    this->isLodBackedMesh() ? GL_TRUE : GL_FALSE);
     set_mesh_gl_material(this, -1);
-    mesh_shape_emit_triangles(this, TRUE);
+    mesh_shape_emit_triangles(this, viewPayload, TRUE);
     glPopAttrib();
 }
 
 void
-SoBRLMeshShape::computeBBox(SoAction *UNUSED(action), SbBox3f &box, SbVec3f &center)
+SoBRLMeshShape::computeBBox(SoAction *action, SbBox3f &box, SbVec3f &center)
 {
     box.makeEmpty();
     if (!this->visible.getValue()) {
 	center = SbVec3f(0.0f, 0.0f, 0.0f);
+	return;
+    }
+
+    const BRLObolViewLodState::MeshPayload *viewPayload =
+	brlobol_view_lod_mesh_for_action(action, this);
+    if (viewPayload) {
+	if (!viewPayload->bounds.isEmpty()) {
+	    box = viewPayload->bounds;
+	} else {
+	    for (size_t i = 0; i < viewPayload->mesh.points.size(); i++)
+		box.extendBy(viewPayload->mesh.points[i]);
+	}
+	center = box.isEmpty() ? SbVec3f(0.0f, 0.0f, 0.0f) : box.getCenter();
 	return;
     }
 
@@ -1075,14 +1119,24 @@ SoBRLMeshShape::generatePrimitives(SoAction *action)
     if (!this->visible.getValue() || !this->selectable.getValue())
 	return;
 
+    const BRLObolViewLodState::MeshPayload *candidateViewPayload =
+	brlobol_view_lod_mesh_for_action(action, this);
     const SbBool pickFullDetail =
 	(this->getPickGeometryPolicy() == PICK_FULL_DETAIL &&
-	 this->lodDisplayActive.getValue()) ? TRUE : FALSE;
-    if (pickFullDetail && !this->hasFullDetailMesh())
+	 (this->lodDisplayActive.getValue() || candidateViewPayload)) ?
+	TRUE : FALSE;
+    const SbBool usePreservedFullDetail =
+	(pickFullDetail && this->hasFullDetailMesh()) ? TRUE : FALSE;
+    if (pickFullDetail && !usePreservedFullDetail &&
+	    this->isLodBackedMesh())
 	return;
 
-    const int triangleCount = pickFullDetail ?
-	this->getFullDetailTriangleCount() : this->getTriangleCount();
+    const BRLObolViewLodState::MeshPayload *viewPayload =
+	pickFullDetail ? NULL : candidateViewPayload;
+    const int triangleCount = usePreservedFullDetail ?
+	this->getFullDetailTriangleCount() :
+	(viewPayload ? viewPayload->getTriangleCount() :
+	    this->getTriangleCount());
     const SoBRLMeshShape *geom = this->getGeometrySource();
 
     SoPrimitiveVertex v0;
@@ -1106,12 +1160,17 @@ SoBRLMeshShape::generatePrimitives(SoAction *action)
 	SbVec3f a;
 	SbVec3f b;
 	SbVec3f c;
-	if (pickFullDetail) {
+	if (usePreservedFullDetail) {
 	    if (!this->getFullDetailTriangleVertexIndices(i, ia, ib, ic))
 		continue;
 	    a = geom->fullDetailPoint[static_cast<size_t>(ia)];
 	    b = geom->fullDetailPoint[static_cast<size_t>(ib)];
 	    c = geom->fullDetailPoint[static_cast<size_t>(ic)];
+	} else if (viewPayload) {
+	    if (!viewPayload->getTriangleVertexIndices(i, ia, ib, ic))
+		continue;
+	    if (!viewPayload->getTriangle(i, a, b, c))
+		continue;
 	} else {
 	    if (!this->getTriangleVertexIndices(i, ia, ib, ic))
 		continue;

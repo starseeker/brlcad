@@ -1,0 +1,149 @@
+BRL-CAD Obol Shared Scene and View-LoD Design
+=============================================
+
+Purpose
+-------
+
+libbrlobol uses one authoritative scene graph for BRL-CAD database and
+command-scene identity, while each 3D view renders that scene through its own
+camera, local root, and view-local policy state.  LoD must follow the view, not
+the shared object: two views can legitimately choose different display meshes
+for the same shared object while selection, edits, draw/erase, and source
+identity remain common.
+
+Scene Ownership
+---------------
+
+The GED/Obol bridge owns one shared scene controller for the GED session.
+Attached Obol display managers are render endpoints:
+
+* shared views render `shared-root + local-root`;
+* independent views render only their local root;
+* each attached `BRLObolViewController` owns its camera, viewport, local root,
+  and view services;
+* view-local annotations, polygons, independent database display, and future
+  interactive tools live under the controller local root;
+* shared database objects are not duplicated into each view.
+
+Draw and erase operate by adding/removing scene objects from the correct root.
+The LoD binding described below does not own geometry placement in the scene
+tree, so it does not change draw/erase semantics.  If a shared object is
+erased, no view can render it because the node is gone from the shared root.
+The view-LoD cache is also invalidated on draw/erase/source transactions so
+deleted payloads do not remain as hidden memory.
+
+View-LoD Ownership
+------------------
+
+The active display LoD selected for a view is owned by
+`BRLObolViewLodState`, which is owned by `BRLObolViewController`.  Shared
+`SoBRLMeshShape` nodes keep stable source identity, source metrics, bounds,
+draw state, material/region state, selection/highlight state, and optional
+source/full-detail arrays.  They do not need to hold the active display LoD
+mesh.
+
+This is a hybrid model:
+
+* shared nodes define object identity and source-backed exact geometry
+  requests;
+* view controllers own the active display payloads selected for their camera
+  and LoD policy;
+* Coin traversal receives the correct view state through
+  `SoBRLViewLodGroup`/`SoBRLViewLodElement`;
+* display-level render, export, measure, snap, and pick paths use the
+  view-bound payload when present;
+* full-detail export, measure, snap, and pick paths skip the view display
+  payload and use preserved full-detail geometry or source-backed exact
+  requests.
+
+`SoBRLLodUpdateAction` requires an explicit `BRLObolViewLodState` to apply
+active display LoD.  A matching result with no view state is rejected and
+reported as a diagnostic rather than mutating the shared mesh.  If a non-render
+tool needs LoD-like output, it should create a scratch view/controller state or
+consume the provider result directly; libbrlobol should not grow a second
+view-independent active-LoD concept.
+
+Invalidation
+------------
+
+View-LoD payloads are view-specific cache entries and are invalidated whenever
+the underlying shared object set changes.  The GED Obol transaction fanout
+clears attached view LoD state for:
+
+* draw;
+* erase and erase-prefix;
+* clear, clear-scope, and teardown;
+* stale-source notifications;
+* source update, source reference removal, and source rename;
+* full scene rebuilds.
+
+Pure visibility, highlight, material refresh, and redraw transactions do not
+clear LoD payloads unless they force a full scene rebuild.  Camera and LoD
+policy changes advance view/policy revisions and submit new LoD requests; stale
+results are rejected by revision checks.
+
+Memory Policy
+-------------
+
+Full-detail arrays are optional once enough source metrics exist to reconstruct
+source-backed requests.  A LoD-backed shared node may contain only identity,
+source counts, source bounds, and draw/material/selection metadata.  It does
+not need the full triangle arrays to render display LoD or request exact
+geometry from librt/cache.
+
+Controller memory budgeting accounts for both:
+
+* mesh-node resident data, including optional source/full-detail arrays; and
+* view-local LoD payloads in `BRLObolViewLodState`.
+
+When a budget requires eviction, the controller releases memory in this order:
+
+1. full-detail/source display arrays on shared meshes that have an active
+   view-LoD payload, preserving source metrics for future requests;
+2. view-local LoD payloads;
+3. legacy node-local LoD/full-detail payloads handled by
+   `SoBRLMeshResidencyAction`.
+
+This means LoD can be loaded from cache and displayed without populating
+full-detail shared geometry.  It also means turning LoD off or clearing a view
+can release the view-local payloads without modifying the shared scene.
+Exact operations still work if source metrics and database/source identity are
+available; they should request source-backed full detail instead of depending
+on retained display arrays.
+
+Selection and Interaction
+-------------------------
+
+Selection and highlight state remain on the shared or local scene object, not
+inside the LoD payload.  Display-level actions map selected/highlighted
+primitive state through the rendered primitive index.  Source-backed exact
+paths remain the authoritative mechanism for precise topology-sensitive
+operations when display LoD is insufficient.
+
+Future richer Coin manipulators should follow the same rule: object identity
+and interaction state belong to the scene object, while view-specific
+realization choices belong to the view traversal state.
+
+Current Regression Coverage
+---------------------------
+
+`libbrlobol_lod_update_action` now covers:
+
+* direct update actions rejecting matched LoD results when no view state is
+  supplied;
+* two view controllers rendering different display LoD payloads from one
+  shared mesh;
+* exact export skipping the view LoD and producing a source-backed full-detail
+  request;
+* shared mesh fields remaining unmutated by controller-applied LoD;
+* controller mesh residency budgeting evicting both optional source arrays and
+  view-local display payloads.
+
+Follow-up Coverage Needed
+-------------------------
+
+Add GED-level image or scene-state coverage proving that draw, erase, source
+update, and clear transactions invalidate attached view LoD state while keeping
+shared/local root ownership correct.  Also add a cache-only LoD fixture where a
+LoD-backed shared mesh starts with source metrics but no full-detail arrays and
+still renders through a view-local payload.

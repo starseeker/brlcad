@@ -19,23 +19,12 @@
  */
 /** @file mged/dozoom.c
  *
- * MGED scene rendering via the BSG draw path, for both non-stereo and stereo
- * eyes.
+ * MGED scene refresh for normal and stereo eyes.
  *
- * Both paths delegate to dm_draw_objs(), which resolves the retained BSG
- * scene to render batches.  Highlighted edit-mode objects are rendered at
- * their edited position by staging the edit matrix on the retained view
- * before the draw call; render-item drawing picks this up and swaps the
- * modelview matrix for the duration of each such object.
- *
- * The stereo path (which_eye == 1 or 2) builds a Deering perspective matrix
- * with a left/right eye offset and installs it into v->gv_pmat; dm_draw_objs()
- * then loads it via dm_loadpmatrix() in the standard separated
- * projection/modelview pipeline.  Stereo viewport selection (which controls
- * the split-screen left/right scissor regions in gl_loadMatrix) is performed
- * by an explicit dm_loadmatrix() with which_eye != 0 before dm_draw_objs()
- * runs.  v->gv_pmat is saved and restored around the stereo render so the
- * non-stereo perspective state is not perturbed.
+ * Obol display managers refresh through the high-level GED draw transaction
+ * path and let the outer MGED frame's dm_draw_end render the retained
+ * Obol/Coin scene.  Older non-Obol display managers still use the legacy
+ * immediate draw fallback until those display paths are retired.
  */
 
 #include "common.h"
@@ -43,6 +32,7 @@
 #include <math.h>
 #include "vmath.h"
 #include "bn.h"
+#include "dm/obol.h"
 #include "dm/view.h"
 #include "ged/draw.h"
 #include "ged/view.h"
@@ -80,6 +70,31 @@ _mged_count_drawn_cb(const struct ged_draw_shape_record *rec, void *userdata)
     return 1; /* continue traversal */
 }
 
+static int
+_mged_count_visible_cb(const struct ged_draw_shape_record *rec, void *userdata)
+{
+    int *np = (int *)userdata;
+    if (rec && rec->visible)
+	(*np)++;
+    return 1;
+}
+
+static int
+_mged_high_level_refresh(struct mged_state *s, void *view_ctx)
+{
+    if (!s || !s->gedp || !view_ctx || !DMP || !dm_obol_controller(DMP))
+	return 0;
+
+    struct ged_draw_transaction txn =
+	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
+    struct ged_draw_transaction_result result;
+    ged_draw_transaction_result_init(&result);
+    txn.view = view_ctx;
+    int ret = ged_draw_apply_transaction(s->gedp, &txn, &result);
+    ged_draw_transaction_result_free(&result);
+    return ret >= 0 ? 1 : 0;
+}
+
 /*
  * Paint one eye of the scene.
  *
@@ -87,15 +102,14 @@ _mged_count_drawn_cb(const struct ged_draw_shape_record *rec, void *userdata)
  * which_eye == 1  Stereo right eye.
  * which_eye == 2  Stereo left eye.
  *
- * In all cases rendering is performed by dm_draw_objs(), which uses the
- * retained scene when the GED draw scene is available.  The stereo case differs from
+ * In the Obol case rendering is prepared by a GED redraw transaction; the
+ * legacy fallback still calls dm_draw_objs().  The stereo case differs from
  * the non-stereo case only in that:
  *   - v->gv_pmat is overridden with a Deering eye-offset perspective for
- *     the duration of the call (saved/restored around dm_draw_objs);
+ *     the duration of the call;
  *   - dm_loadmatrix(DMP, gv_model2view, which_eye) is called once before
- *     dm_draw_objs() so that gl_loadMatrix() can select the correct stereo
- *     viewport/scissor region (the matrix upload there is harmless because
- *     dm_draw_objs() will re-upload model2view immediately after).
+ *     refresh so legacy GL display managers can select the correct stereo
+ *     viewport/scissor region.
  */
 void
 dozoom(struct mged_state *s, int which_eye)
@@ -114,7 +128,7 @@ dozoom(struct mged_state *s, int which_eye)
     ged_view_context_refresh_drawn_count_set(view_ctx, 0);
 
     /* Keep the retained view's display manager in sync so that
-     * dm_draw_objs() can find the DM.  This must be done every frame
+     * refresh code can find the DM.  This must be done every frame
      * because set_curr_dm() (called from refresh()) updates
      * s->mged_curr_dm without updating the view's display pointer. */
     ged_view_context_display_manager_set(view_ctx, (void *)DMP);
@@ -149,7 +163,7 @@ dozoom(struct mged_state *s, int which_eye)
 	}
     } else {
 	/* ----- Stereo: install a Deering eye-offset perspective into
-	 * v->gv_pmat so dm_draw_objs() will load it via dm_loadpmatrix().
+	 * v->gv_pmat so the display host can load it via dm_loadpmatrix().
 	 *
 	 * Stereo requires a non-zero gv_perspective: the eye-distance
 	 * to_eye_scr below derives from it.  When mv_perspective_mode is
@@ -176,16 +190,15 @@ dozoom(struct mged_state *s, int which_eye)
 	deering_persp_mat(perspective_mat, l, h, eye);
 	ged_view_context_pmat_set(view_ctx, perspective_mat);
 
-	/* Force dm_draw_objs() to apply the perspective matrix even when the
-	 * retained view perspective was 0; dm_draw_objs() gates the projection
+	/* Force the display host to apply the perspective matrix even when the
+	 * retained view perspective was 0; legacy drawing gates the projection
 	 * load on a non-zero perspective angle. */
 	if (view_perspective < SMALL_FASTF)
 	    ged_view_context_perspective_set(view_ctx, persp);
 
 	/* Stereo viewport / scissor selection.  gl_loadMatrix() inspects
 	 * which_eye (1 = right, 2 = left) and adjusts glViewport+glScissor
-	 * accordingly; the matrix upload itself is then redone by
-	 * dm_draw_objs() with which_eye=0 (which is a no-op for viewport). */
+	 * accordingly. */
 	dm_loadmatrix(DMP, model2view, which_eye);
     }
 
@@ -196,15 +209,11 @@ dozoom(struct mged_state *s, int which_eye)
     else
 	ged_view_context_edit_matrix_clear(view_ctx);
 
-    /* dm_draw_objs() handles:
-     *   - framebuffer overlay/underlay
-     *   - dm_loadmatrix(gv_model2view)
-     *   - dm_loadpmatrix(gv_pmat) for perspective (incl. stereo eye-offset)
-     *   - retained-scene render via render batches without exposing the
-     *     view's scene attachment
-     *   - per-object edit matrix swap for highlighted edit objects
-    */
-    dm_draw_objs(view_ctx);
+    int high_level_refresh = _mged_high_level_refresh(s, view_ctx);
+    if (!high_level_refresh) {
+	/* Legacy fallback for non-Obol display managers. */
+	dm_draw_objs(view_ctx);
+    }
 
     /* Clear edit-mat pointer now that the frame is done. */
     ged_view_context_edit_matrix_clear(view_ctx);
@@ -212,17 +221,18 @@ dozoom(struct mged_state *s, int which_eye)
     /* Restore gv_pmat (no-op for which_eye == 0). */
     ged_view_context_pmat_set(view_ctx, saved_pmat);
 
-    /* Count drawn objects for usepen.c zone-based picking.  Each rendered
-     * shape records the bsg_view frame revision when painted; comparing the
-     * semantic draw record against the retained frame revision gives a
-     * frame-by-frame "what got drawn" count without application graph
-     * traversal. */
+    /* Count drawn objects for usepen.c zone-based picking. */
     if (s->gedp && ged_draw_scene_available(s->gedp)) {
 	int ndrawn = 0;
-	struct _mged_count_drawn_ctx ctx;
-	ctx.np = &ndrawn;
-	ctx.frame_rev = ged_view_context_frame_revision_get(view_ctx);
-	ged_draw_foreach_shape_record(s->gedp, _mged_count_drawn_cb, &ctx);
+	if (high_level_refresh) {
+	    ged_draw_foreach_shape_record(s->gedp, _mged_count_visible_cb,
+		    &ndrawn);
+	} else {
+	    struct _mged_count_drawn_ctx ctx;
+	    ctx.np = &ndrawn;
+	    ctx.frame_rev = ged_view_context_frame_revision_get(view_ctx);
+	    ged_draw_foreach_shape_record(s->gedp, _mged_count_drawn_cb, &ctx);
+	}
 	ged_view_context_refresh_drawn_count_set(view_ctx, ndrawn);
     }
 

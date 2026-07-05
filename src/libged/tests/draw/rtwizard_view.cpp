@@ -1,4 +1,4 @@
-/*                  R T W I Z A R D _ B S G . C P P
+/*                  R T W I Z A R D _ V I E W . C P P
  * BRL-CAD
  *
  * Copyright (c) 2026 United States Government as represented by
@@ -17,9 +17,9 @@
  * License along with this file; see the file named COPYING for more
  * information.
  */
-/** @file rtwizard_bsg.cpp
+/** @file rtwizard_view.cpp
  *
- * Phase 5 (drawing_stack_modernization) rtwizard migration exit-criteria test.
+ * rtwizard view-pipeline regression tests.
  *
  * rtwizard's headless (--no-gui) pipeline computes rt view parameters via the
  * libtclcad GED API:
@@ -36,22 +36,25 @@
  * as command-line arguments to the rt/rtedge subprocess.  No display-manager
  * rendering occurs; the view feature is purely a lightweight camera container.
  *
- * Stage C ensures that libtclcad/commands.c creates a retained scene anchor
- * for every new view, including the null-DM
- * "v1" view above.  This test exercises the equivalent C-API path and
- * verifies:
+ * This test exercises the equivalent C-API path and verifies:
  *
- *   1. null_view_scene_ref     — A null-DM secondary view gets a scene handle,
- *                                mirroring what libtclcad does for "new_view nu".
+ *   1. null_view_context       — A null-DM secondary view is a valid neutral
+ *                                RT view context with no display manager.
  *   2. eyemodel_finite         — draw + autoview + get_eyemodel produces a
  *                                plausible (finite, non-degenerate) eye model.
- *   3. nodisplaylist_path      — Secondary views share the active draw scene
- *                                (no legacy go_draw_dlist fallback path).
+ *   3. multiple_null_views     — Multiple secondary null-DM views can coexist
+ *                                in the GED view set without retained fallback
+ *                                assumptions.
+ *   4. obol_render             — A GUI/display-backed rtwizard path can attach
+ *                                the headless Obol DM and capture an image.
+ *   5. obol_eyemodel_consistency — Re-applying the same view state to an
+ *                                Obol-backed view produces stable output.
  *
- * All tests use the "nu" (null) display-manager so no display hardware or X11
- * server is required.
+ * The camera-only tests use "nu" view contexts.  Display-backed tests attach
+ * the headless Obol/Coin display manager, so no display hardware or X11 server
+ * is required.
  *
- * Usage: ged_test_rtwizard_bsg [-c] <directory-containing-moss.g>
+ * Usage: ged_test_rtwizard_view [-c] <directory-containing-moss.g>
  */
 
 #include "common.h"
@@ -68,6 +71,7 @@
 #include <dm.h>
 #include <ged.h>
 #include <icv.h>
+#include "ged/draw.h"
 #include "rt/view.h"
 
 extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);
@@ -81,7 +85,7 @@ close_gedp(struct ged *gedp)
 }
 
 /*
- * Open a GED instance for CLI-mode testing (no DM needed, BSG enabled).
+ * Open a GED instance for CLI-mode testing with no display manager.
  * Simulates the go_open step in the rtwizard headless Tcl pipeline.
  *
  * rtwizard --no-gui never attaches a display-manager to the main GED instance;
@@ -120,9 +124,6 @@ make_null_view(struct ged *gedp, const char *vname)
     rt_view_context_unit_conversion_set(v, gedp->dbip->dbi_local2base,
 	gedp->dbip->dbi_base2local);
 
-    /* Every new libtclcad view gets a retained scene anchor. */
-    (void)rt_view_context_scene_anchor_ensure(v);
-
     rt_view_set_context_add(view_set_ctx, v);
     ged_view_context_owned_add(gedp, v);
 
@@ -130,25 +131,25 @@ make_null_view(struct ged *gedp, const char *vname)
 }
 
 /* ========================================================================== */
-/* Test 1: null-DM secondary view gets a BSG scene root                       */
+/* Test 1: null-DM secondary view is a valid neutral view context             */
 /* ========================================================================== */
 static int
-test_null_view_scene_ref(const char *datadir)
+test_null_view_context(const char *datadir)
 {
-    bu_log("\n--- Test 1: null-DM secondary view gets BSG root ---\n");
+    bu_log("\n--- Test 1: null-DM secondary view context ---\n");
 
     struct bu_vls fname = BU_VLS_INIT_ZERO;
     bu_vls_sprintf(&fname, "%s/moss.g", datadir);
     std::ifstream orig(bu_vls_cstr(&fname), std::ios::binary);
-    std::ofstream tmp("rtw_bsg_t1.g", std::ios::binary);
+    std::ofstream tmp("rtw_view_t1.g", std::ios::binary);
     tmp << orig.rdbuf();
     orig.close(); tmp.close();
     bu_vls_free(&fname);
 
-    struct ged *gedp = open_gedp_null("rtw_bsg_t1.g");
+    struct ged *gedp = open_gedp_null("rtw_view_t1.g");
     if (!gedp) {
 	bu_log("FAIL: ged_open failed\n");
-	bu_file_delete("rtw_bsg_t1.g");
+	bu_file_delete("rtw_view_t1.g");
 	return 1;
     }
 
@@ -156,23 +157,37 @@ test_null_view_scene_ref(const char *datadir)
     void *v1 = make_null_view(gedp, "v1");
 
     int fail = 0;
-    if (!rt_view_context_scene_attached(v1)) {
-	bu_log("FAIL: secondary null-DM view has no BSG root\n");
+    if (!v1 || !rt_view_context_is_valid(v1)) {
+	bu_log("FAIL: secondary null-DM view is not a valid RT view context\n");
 	fail = 1;
     } else {
-	bu_log("PASS: secondary null-DM view has BSG root (Phase 5 libtclcad path)\n");
+	bu_log("PASS: secondary null-DM view is a valid RT view context\n");
     }
 
-    /* Also verify the default GED view has a BSG root (set by ged_open). */
-    if (!rt_view_context_scene_attached(ged_view_active_ctx(gedp))) {
-	bu_log("FAIL: default GED view has no BSG root\n");
+    if (rt_view_context_display_manager_get(v1) != NULL) {
+	bu_log("FAIL: secondary null-DM view unexpectedly has a display manager\n");
 	fail = 1;
     } else {
-	bu_log("PASS: default GED view has BSG root\n");
+	bu_log("PASS: secondary null-DM view has no display manager\n");
+    }
+
+    const char *vname = rt_view_context_name_get(v1);
+    if (!vname || BU_STR_EQUAL(vname, "v1") == 0) {
+	bu_log("FAIL: secondary null-DM view name is not v1\n");
+	fail = 1;
+    } else {
+	bu_log("PASS: secondary null-DM view name is v1\n");
+    }
+
+    if (!rt_view_context_is_valid(ged_view_active_ctx(gedp))) {
+	bu_log("FAIL: default GED active view is not a valid RT view context\n");
+	fail = 1;
+    } else {
+	bu_log("PASS: default GED active view is a valid RT view context\n");
     }
 
     close_gedp(gedp);
-    bu_file_delete("rtw_bsg_t1.g");
+    bu_file_delete("rtw_view_t1.g");
     return fail;
 }
 
@@ -187,15 +202,15 @@ test_eyemodel_finite(const char *datadir)
     struct bu_vls fname = BU_VLS_INIT_ZERO;
     bu_vls_sprintf(&fname, "%s/moss.g", datadir);
     std::ifstream orig(bu_vls_cstr(&fname), std::ios::binary);
-    std::ofstream tmp("rtw_bsg_t2.g", std::ios::binary);
+    std::ofstream tmp("rtw_view_t2.g", std::ios::binary);
     tmp << orig.rdbuf();
     orig.close(); tmp.close();
     bu_vls_free(&fname);
 
-    struct ged *gedp = open_gedp_null("rtw_bsg_t2.g");
+    struct ged *gedp = open_gedp_null("rtw_view_t2.g");
     if (!gedp) {
 	bu_log("FAIL: ged_open failed\n");
-	bu_file_delete("rtw_bsg_t2.g");
+	bu_file_delete("rtw_view_t2.g");
 	return 1;
     }
 
@@ -271,30 +286,30 @@ test_eyemodel_finite(const char *datadir)
     }
 
     close_gedp(gedp);
-    bu_file_delete("rtw_bsg_t2.g");
+    bu_file_delete("rtw_view_t2.g");
     return fail;
 }
 
 /* ========================================================================== */
-/* Test 3: secondary views share active scene ref (legacy fallback not used)  */
+/* Test 3: multiple secondary null-DM views coexist in the GED view set       */
 /* ========================================================================== */
 static int
-test_nodisplaylist_path(const char *datadir)
+test_multiple_null_views(const char *datadir)
 {
-    bu_log("\n--- Test 3: shared scene ref on secondary views (go_draw_dlist not entered) ---\n");
+    bu_log("\n--- Test 3: multiple secondary null-DM views ---\n");
 
     struct bu_vls fname = BU_VLS_INIT_ZERO;
     bu_vls_sprintf(&fname, "%s/moss.g", datadir);
     std::ifstream orig(bu_vls_cstr(&fname), std::ios::binary);
-    std::ofstream tmp("rtw_bsg_t3.g", std::ios::binary);
+    std::ofstream tmp("rtw_view_t3.g", std::ios::binary);
     tmp << orig.rdbuf();
     orig.close(); tmp.close();
     bu_vls_free(&fname);
 
-    struct ged *gedp = open_gedp_null("rtw_bsg_t3.g");
+    struct ged *gedp = open_gedp_null("rtw_view_t3.g");
     if (!gedp) {
 	bu_log("FAIL: ged_open failed\n");
-	bu_file_delete("rtw_bsg_t3.g");
+	bu_file_delete("rtw_view_t3.g");
 	return 1;
     }
 
@@ -302,7 +317,7 @@ test_nodisplaylist_path(const char *datadir)
     const char *s_av[4] = {"draw", "all.g", NULL};
     ged_exec_draw(gedp, 2, s_av);
 
-    /* Create four secondary views and verify root sharing with the active tree */
+    /* Create four secondary views and verify neutral context identity. */
     void *views[4];
     char vname[4][8];
     int fail = 0;
@@ -310,54 +325,46 @@ test_nodisplaylist_path(const char *datadir)
 	snprintf(vname[i], sizeof(vname[i]), "v%d", i + 1);
 	views[i] = make_null_view(gedp, vname[i]);
 
-	if (!rt_view_context_scene_attached(views[i])) {
-	    bu_log("FAIL: view '%s' has no BSG root; go_draw_dlist fallback would be used\n", vname[i]);
+	if (!views[i] || !rt_view_context_is_valid(views[i])) {
+	    bu_log("FAIL: view '%s' is not a valid RT view context\n", vname[i]);
+	    fail = 1;
+	}
+	if (rt_view_context_display_manager_get(views[i]) != NULL) {
+	    bu_log("FAIL: view '%s' unexpectedly has a display manager\n", vname[i]);
 	    fail = 1;
 	}
     }
-
-    if (!fail) {
-	bu_log("PASS: all 4 secondary null-DM views have BSG roots\n");
-	bu_log("      => go_draw_dlist legacy dl_* fallback is NOT entered for any rtwizard view\n");
-    }
-
-    /* Phase F: the view scene ref is shared across views in the same GED draw set. */
-    int shared = 1;
-    for (int i = 0; i < 4; i++) {
-	if (!rt_view_context_scene_shared(views[i], ged_view_active_ctx(gedp))) {
-	    bu_log("FAIL: view '%s' scene ref is not shared with the active GED draw root\n", vname[i]);
-	    shared = 0;
-	    fail = 1;
-	}
-    }
-    if (shared)
-	bu_log("PASS: all secondary views share the active GED scene ref\n");
+    if (!fail)
+	bu_log("PASS: all 4 secondary null-DM views are valid neutral contexts\n");
 
     close_gedp(gedp);
-    bu_file_delete("rtw_bsg_t3.g");
+    bu_file_delete("rtw_view_t3.g");
     return fail;
 }
 
-/* ---- helpers for swrast (GUI-mode) tests --------------------------------- */
+/* ---- helpers for Obol display-backed tests -------------------------------- */
 
 /*
- * Open a GED instance with an attached swrast DM (mirrors the rtwizard GUI
+ * Open a GED instance with an attached Obol DM (mirrors the rtwizard GUI
  * context, where the MGED widget has a real display manager for rendering).
  */
 static struct ged *
-open_gedp_swrast(const char *gfile, int width, int height)
+open_gedp_obol(const char *gfile, int width, int height)
 {
     struct ged *gedp = ged_open("db", gfile, 1);
     if (!gedp) return NULL;
 
-    bu_setenv("DM_SWRAST", "1", 1);
     db_add_changed_clbk(gedp->dbip, &ged_changed_callback, (void *)gedp);
 
-    const char *s_av[6] = {"dm", "attach", "swrast", "RTW_SW", NULL};
+    const char *s_av[6] = {"dm", "attach", "obol", "RTW_OBOL", NULL};
     ged_exec_dm(gedp, 4, s_av);
 
     void *v = ged_view_active_ctx(gedp);
     struct dm *dmp  = (struct dm *)rt_view_context_display_manager_get(v);
+    if (!dmp) {
+	ged_close(gedp);
+	return NULL;
+    }
     dm_set_width(dmp, width);
     dm_set_height(dmp, height);
     dm_configure_win(dmp, 0);
@@ -375,13 +382,13 @@ open_gedp_swrast(const char *gfile, int width, int height)
 
 /* Simple draw-only refresh for a GED's current view. */
 static void
-do_swrast_refresh(struct ged *gedp)
+do_obol_refresh(struct ged *gedp)
 {
     void *v = ged_view_active_ctx(gedp);
-    struct dm *dmp  = (struct dm *)rt_view_context_display_manager_get(v);
-    dm_draw_begin(dmp);
-    dm_draw_objs(v);
-    dm_draw_end(dmp);
+    struct ged_draw_transaction txn =
+	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
+    txn.view = v;
+    ged_draw_apply_transaction(gedp, &txn, NULL);
 }
 
 /* Count non-background (non-black) pixels in a PNG. */
@@ -421,37 +428,36 @@ images_match_rtw(const char *a, const char *b, int adiff_allow)
 }
 
 /* ========================================================================== */
-/* Test 4: rtwizard GUI-path — swrast view gets BSG root, wireframe renders   */
+/* Test 4: rtwizard GUI-path Obol view renders and yields eye model          */
 /* ========================================================================== */
 static int
-test_gui_swrast_render(const char *datadir)
+test_gui_obol_render(const char *datadir)
 {
-    bu_log("\n--- Test 4: rtwizard GUI path (swrast DM) — BSG root + wireframe renders ---\n");
+    bu_log("\n--- Test 4: rtwizard GUI path (Obol DM) renders ---\n");
 
     struct bu_vls fname = BU_VLS_INIT_ZERO;
     bu_vls_sprintf(&fname, "%s/moss.g", datadir);
     std::ifstream orig(bu_vls_cstr(&fname), std::ios::binary);
-    std::ofstream tmp("rtw_bsg_t4.g", std::ios::binary);
+    std::ofstream tmp("rtw_view_t4.g", std::ios::binary);
     tmp << orig.rdbuf();
     orig.close(); tmp.close();
     bu_vls_free(&fname);
 
-    /* Open with swrast DM — simulates the MGED widget used in rtwizard GUI */
-    struct ged *gedp = open_gedp_swrast("rtw_bsg_t4.g", 512, 512);
+    /* Open with Obol DM - simulates the MGED widget used in rtwizard GUI. */
+    struct ged *gedp = open_gedp_obol("rtw_view_t4.g", 512, 512);
     if (!gedp) {
-	bu_log("FAIL: ged_open (swrast) failed\n");
-	bu_file_delete("rtw_bsg_t4.g");
+	bu_log("FAIL: ged_open (Obol) failed\n");
+	bu_file_delete("rtw_view_t4.g");
 	return 1;
     }
 
     int fail = 0;
 
-    /* BSG root must be set on the swrast-DM view (same guarantee as null-DM) */
-    if (!rt_view_context_scene_attached(ged_view_active_ctx(gedp))) {
-	bu_log("FAIL: swrast-DM view has no BSG root\n");
+    if (!rt_view_context_is_valid(ged_view_active_ctx(gedp))) {
+	bu_log("FAIL: Obol-DM active view is not a valid RT view context\n");
 	fail = 1;
     } else {
-	bu_log("PASS: swrast-DM view has BSG root\n");
+	bu_log("PASS: Obol-DM active view is a valid RT view context\n");
     }
 
     /* Draw + autoview + ae — mirrors MGEDpage::draw() + refreshDisplay() */
@@ -462,19 +468,19 @@ test_gui_swrast_render(const char *datadir)
     s_av[0] = "ae"; s_av[1] = "35"; s_av[2] = "25"; s_av[3] = NULL;
     ged_exec_ae(gedp, 3, s_av);
 
-    /* Render via BSG path */
-    do_swrast_refresh(gedp);
+    /* Render through the active display path. */
+    do_obol_refresh(gedp);
 
     /* Capture to PNG via screengrab */
-    const char *sg_av[3] = {"screengrab", "rtw_bsg_t4.png", NULL};
+    const char *sg_av[3] = {"screengrab", "rtw_view_t4.png", NULL};
     ged_exec_screengrab(gedp, 2, sg_av);
 
-    long npix = count_nonblack_rtw("rtw_bsg_t4.png");
+    long npix = count_nonblack_rtw("rtw_view_t4.png");
     if (npix <= 0) {
-	bu_log("FAIL: GUI-mode (swrast) wireframe image is empty (%ld non-black pixels)\n", npix);
+	bu_log("FAIL: GUI-mode (Obol) wireframe image is empty (%ld non-black pixels)\n", npix);
 	fail = 1;
     } else {
-	bu_log("PASS: GUI-mode (swrast) wireframe rendered %ld non-black pixels\n", npix);
+	bu_log("PASS: GUI-mode (Obol) wireframe rendered %ld non-black pixels\n", npix);
     }
 
     /* Get eye model — the same call rtwizard makes before spawning rt */
@@ -492,9 +498,9 @@ test_gui_swrast_render(const char *datadir)
 	bu_log("PASS: GUI-mode eye model viewsize = %g\n", viewsize);
     }
 
-    bu_file_delete("rtw_bsg_t4.png");
+    bu_file_delete("rtw_view_t4.png");
     close_gedp(gedp);
-    bu_file_delete("rtw_bsg_t4.g");
+    bu_file_delete("rtw_view_t4.g");
     return fail;
 }
 
@@ -517,15 +523,15 @@ test_gui_eyemodel_consistency(const char *datadir)
     struct bu_vls fname = BU_VLS_INIT_ZERO;
     bu_vls_sprintf(&fname, "%s/moss.g", datadir);
     std::ifstream orig(bu_vls_cstr(&fname), std::ios::binary);
-    std::ofstream tmp("rtw_bsg_t5.g", std::ios::binary);
+    std::ofstream tmp("rtw_view_t5.g", std::ios::binary);
     tmp << orig.rdbuf();
     orig.close(); tmp.close();
     bu_vls_free(&fname);
 
-    struct ged *gedp = open_gedp_swrast("rtw_bsg_t5.g", 512, 512);
+    struct ged *gedp = open_gedp_obol("rtw_view_t5.g", 512, 512);
     if (!gedp) {
-	bu_log("FAIL: ged_open (swrast) failed\n");
-	bu_file_delete("rtw_bsg_t5.g");
+	bu_log("FAIL: ged_open (Obol) failed\n");
+	bu_file_delete("rtw_view_t5.g");
 	return 1;
     }
 
@@ -545,8 +551,8 @@ test_gui_eyemodel_consistency(const char *datadir)
     rt_view_context_model2view_get(saved_m2v, v);
 
     /* Render A */
-    do_swrast_refresh(gedp);
-    const char *sg_av[3] = {"screengrab", "rtw_bsg_t5_A.png", NULL};
+    do_obol_refresh(gedp);
+    const char *sg_av[3] = {"screengrab", "rtw_view_t5_A.png", NULL};
     ged_exec_screengrab(gedp, 2, sg_av);
     bu_log("Captured image A (az=45 el=30 tw=0)\n");
 
@@ -568,15 +574,15 @@ test_gui_eyemodel_consistency(const char *datadir)
     ged_exec_ae(gedp, 4, s_av);
 
     /* Render B */
-    do_swrast_refresh(gedp);
-    sg_av[1] = "rtw_bsg_t5_B.png";
+    do_obol_refresh(gedp);
+    sg_av[1] = "rtw_view_t5_B.png";
     ged_exec_screengrab(gedp, 2, sg_av);
     bu_log("Captured image B (same ae applied fresh)\n");
 
     int fail = 0;
 
     /* Images A and B must be pixel-identical (same camera, same geometry) */
-    if (!images_match_rtw("rtw_bsg_t5_A.png", "rtw_bsg_t5_B.png", 10)) {
+    if (!images_match_rtw("rtw_view_t5_A.png", "rtw_view_t5_B.png", 10)) {
 	bu_log("FAIL: image A != image B (same ae params but different pixels)\n");
 	fail = 1;
     } else {
@@ -619,10 +625,10 @@ test_gui_eyemodel_consistency(const char *datadir)
     }
 
     bu_vls_free(&em_str);
-    bu_file_delete("rtw_bsg_t5_A.png");
-    bu_file_delete("rtw_bsg_t5_B.png");
+    bu_file_delete("rtw_view_t5_A.png");
+    bu_file_delete("rtw_view_t5_B.png");
     close_gedp(gedp);
-    bu_file_delete("rtw_bsg_t5.g");
+    bu_file_delete("rtw_view_t5.g");
     return fail;
 }
 
@@ -648,16 +654,16 @@ main(int argc, char *argv[])
     const char *datadir = argv[1];
 
     int failures = 0;
-    failures += test_null_view_scene_ref(datadir);
+    failures += test_null_view_context(datadir);
     failures += test_eyemodel_finite(datadir);
-    failures += test_nodisplaylist_path(datadir);
-    failures += test_gui_swrast_render(datadir);
+    failures += test_multiple_null_views(datadir);
+    failures += test_gui_obol_render(datadir);
     failures += test_gui_eyemodel_consistency(datadir);
 
     if (failures == 0) {
-	bu_log("\nAll Phase 5 rtwizard BSG migration tests PASSED (%d/5)\n", 5);
+	bu_log("\nAll rtwizard view tests PASSED (%d/5)\n", 5);
     } else {
-	bu_log("\n%d Phase 5 rtwizard BSG migration test(s) FAILED\n", failures);
+	bu_log("\n%d rtwizard view test(s) FAILED\n", failures);
     }
     return failures;
 }

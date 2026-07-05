@@ -2338,6 +2338,7 @@ test_bsg_view_scope_adapter(void)
     void *release_storage_view = NULL;
     void *neutral_release_storage_view = NULL;
     void *opaque_view = NULL;
+    void *neutral_set = NULL;
     struct bu_ptbl *callbacks = NULL;
     struct bu_ptbl *callbacks_replacement = NULL;
     struct bu_ptbl *callbacks_neutral = NULL;
@@ -2491,6 +2492,7 @@ test_bsg_view_scope_adapter(void)
 	    rt_view_context_lod_bounds_callback_is(NULL) ||
 	    rt_view_context_is_independent_bsg(NULL) ||
 	    rt_view_context_is_independent(NULL) ||
+	    rt_view_context_is_valid(NULL) ||
 	    !rt_view_context_independent_scope_is_null_bsg(NULL, 1) ||
 	    !rt_view_context_independent_scope_is_null(NULL, 1) ||
 	    !fastf_equal(rt_view_context_size_from_bsg(NULL), 0.0) ||
@@ -2502,8 +2504,71 @@ test_bsg_view_scope_adapter(void)
     rt_view_context_independent_scope_destroy(NULL);
     rt_view_context_free(NULL);
 
-    opaque_view = rt_view_context_create_with_set(&set);
+    neutral_set = rt_view_set_context_create();
+    opaque_view = rt_view_context_create_with_set(neutral_set);
+    if (!neutral_set ||
+	    !opaque_view ||
+	    !rt_view_context_is_valid(opaque_view) ||
+	    rt_view_context_is_bsg(opaque_view) ||
+	    rt_view_context_is_retained(opaque_view) ||
+	    !rt_view_context_name_set(opaque_view,
+		"rt_view_native_lifecycle_adapter") ||
+	    !rt_view_set_context_add(neutral_set, opaque_view) ||
+	    rt_view_set_context_find_view(neutral_set,
+		"rt_view_native_lifecycle_adapter") != opaque_view ||
+	    !rt_view_context_scale_state_set(opaque_view, 10.0, 20.0,
+		30.0, 40.0, 0.025) ||
+	    !fastf_equal(rt_view_context_scale_get(opaque_view), 10.0) ||
+	    !fastf_equal(rt_view_context_size_get(opaque_view), 40.0) ||
+	    rt_view_context_scene_attached(opaque_view) ||
+	    rt_view_context_scene_shared(set_view, opaque_view) ||
+	    rt_view_context_is_independent(opaque_view) ||
+	    !rt_view_context_independent_scope_is_null(opaque_view, 0) ||
+	    !rt_view_context_lod_bounds_callback_set(opaque_view) ||
+	    !rt_view_context_lod_bounds_callback_is(opaque_view)) {
+	printf("FAIL: native neutral view-context lifecycle\n");
+	ret = 1;
+	goto cleanup;
+    }
+    BU_GET(callbacks_neutral, struct bu_ptbl);
+    bu_ptbl_init(callbacks_neutral, 8,
+	    "rt view native callback table neutral test");
+    if (!rt_view_context_callbacks_set(opaque_view, callbacks_neutral)) {
+	printf("FAIL: native neutral view-context callback table set\n");
+	ret = 1;
+	goto cleanup;
+    }
+    callbacks_neutral = NULL;
+    if (!rt_view_context_callbacks_set(opaque_view, NULL)) {
+	printf("FAIL: native neutral view-context callback table clear\n");
+	ret = 1;
+	goto cleanup;
+    }
+    rt_view_context_free(opaque_view);
+    opaque_view = NULL;
+
+    opaque_view = rt_view_context_create_copy_with_set(v, neutral_set);
     if (!opaque_view ||
+	    !rt_view_context_is_valid(opaque_view) ||
+	    rt_view_context_is_bsg(opaque_view) ||
+	    !BU_STR_EQUAL(rt_view_context_name_get(opaque_view),
+		bu_vls_cstr(&v->gv_name)) ||
+	    !fastf_equal(rt_view_context_scale_get(opaque_view),
+		v->gv_scale) ||
+	    !fastf_equal(rt_view_context_size_get(opaque_view),
+		v->gv_size)) {
+	printf("FAIL: native neutral view-context copy from BSG source\n");
+	ret = 1;
+	goto cleanup;
+    }
+    rt_view_context_free(opaque_view);
+    opaque_view = NULL;
+    rt_view_set_context_destroy(neutral_set);
+    neutral_set = NULL;
+
+    opaque_view = rt_view_context_create_with_set_bsg(&set);
+    if (!opaque_view ||
+	    !rt_view_context_is_valid(opaque_view) ||
 	    !rt_view_context_is_bsg(opaque_view) ||
 	    !rt_view_context_scene_attached_bsg(opaque_view) ||
 	    !rt_view_context_scene_attached(opaque_view) ||
@@ -2516,8 +2581,9 @@ test_bsg_view_scope_adapter(void)
     rt_view_context_free(opaque_view);
     opaque_view = NULL;
 
-    opaque_view = rt_view_context_create();
+    opaque_view = rt_view_context_create_bsg();
     if (!opaque_view ||
+	    !rt_view_context_is_valid(opaque_view) ||
 	    !rt_view_context_is_bsg(opaque_view) ||
 	    !rt_view_context_name_set_bsg(opaque_view,
 		"rt_view_opaque_lifecycle_adapter") ||
@@ -2604,8 +2670,9 @@ test_bsg_view_scope_adapter(void)
     rt_view_context_free(opaque_view);
     opaque_view = NULL;
 
-    opaque_view = rt_view_context_create_copy_with_set(v, &set);
+    opaque_view = rt_view_context_create_copy_with_set_bsg(v, &set);
     if (!opaque_view ||
+	    !rt_view_context_is_valid(opaque_view) ||
 	    !rt_view_context_is_bsg(opaque_view) ||
 	    !rt_view_context_scene_attached(opaque_view) ||
 	    !rt_view_context_scene_shared(set_view, opaque_view) ||
@@ -2647,7 +2714,9 @@ test_bsg_view_scope_adapter(void)
 	goto cleanup;
     }
     if (rt_view_context_is_bsg(NULL) ||
+	    rt_view_context_is_valid(NULL) ||
 	    rt_view_context_is_retained(NULL) ||
+	    !rt_view_context_is_valid(lifecycle_view) ||
 	    !rt_view_context_is_bsg(lifecycle_view) ||
 	    !rt_view_context_is_retained(lifecycle_view)) {
 	printf("FAIL: BSG view context adapter\n");
@@ -2701,7 +2770,6 @@ test_bsg_view_scope_adapter(void)
     if (!neutral_release_storage_view ||
 	    !rt_view_context_name_set(neutral_release_storage_view,
 		"rt_view_release_storage_adapter_neutral") ||
-	    !rt_view_context_free_contents_bsg(neutral_release_storage_view) ||
 	    !rt_view_context_release_storage(neutral_release_storage_view)) {
 	printf("FAIL: retained view storage release context adapter\n");
 	ret = 1;
@@ -3428,7 +3496,9 @@ cleanup:
 	BU_PUT(callbacks_neutral, struct bu_ptbl);
     }
     bu_vls_free(&rt_pick_path);
-    rt_view_context_free_bsg(opaque_view);
+    rt_view_context_free(opaque_view);
+    if (neutral_set)
+	rt_view_set_context_destroy(neutral_set);
     if (set_initialized && lifecycle_view && lifecycle_view->vset == &set)
 	rt_view_set_remove_view_bsg(&set, lifecycle_view);
     if (set_initialized && set_view)

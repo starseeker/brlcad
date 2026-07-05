@@ -22,6 +22,7 @@
 #include "brlobol/view_store.h"
 #include "bg/line_layer.h"
 #include "bg/plane.h"
+#include "bg/polygon.h"
 #include "bu/hash.h"
 #include "bu/malloc.h"
 #include "bu/path.h"
@@ -39,6 +40,7 @@
 #include "./ged_private.h"
 
 #include <algorithm>
+#include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoSeparator.h>
 #include <float.h>
 #include <limits.h>
@@ -56,6 +58,16 @@ static thread_local int ged_obol_source_summary_force_adapter = 0;
 static thread_local int ged_obol_database_source_publication_depth = 0;
 static thread_local void *ged_obol_database_source_publication_view = NULL;
 static thread_local int ged_obol_database_source_publication_mode = -1;
+
+static void ged_obol_transaction_observer(
+	struct ged *gedp,
+	const struct ged_draw_transaction *txn,
+	const struct ged_draw_transaction_result *result,
+	void *client_data);
+static int ged_obol_bind_view_render_root(
+	void *view_ctx,
+	SoBRLSceneController *shared_scene,
+	BRLObolViewController *view_controller);
 
 class ged_obol_source_summary_adapter_scope {
 public:
@@ -119,12 +131,125 @@ struct ged_obol_preserved_source {
     int drawMode;
 };
 
+struct ged_obol_attached_controller {
+    ged_obol_attached_controller(void) :
+	view_ctx(NULL),
+	scene_controller(NULL),
+	view_controller(NULL),
+	owned_scene_controller(0),
+	owned_view_controller(0),
+	full_sync(0),
+	use_attached_view_scope(0),
+	render_endpoint_only(0),
+	render_shared_root_visible(-1)
+    {
+    }
+
+    void *view_ctx;
+    SoBRLSceneController *scene_controller;
+    BRLObolViewController *view_controller;
+    int owned_scene_controller;
+    int owned_view_controller;
+    int full_sync;
+    int use_attached_view_scope;
+    int render_endpoint_only;
+    int render_shared_root_visible;
+};
+
 static struct ged_drawable *
 ged_obol_gdp(struct ged *gedp)
 {
     if (!gedp || !gedp->i)
 	return NULL;
     return gedp->i->ged_gdp;
+}
+
+static std::vector<ged_obol_attached_controller> *
+ged_obol_attached_controllers(struct ged_drawable *gdp, int create)
+{
+    if (!gdp)
+	return NULL;
+    if (!gdp->gd_obol_attached_controllers && create)
+	gdp->gd_obol_attached_controllers =
+	    new std::vector<ged_obol_attached_controller>();
+    return static_cast<std::vector<ged_obol_attached_controller> *>(
+	    gdp->gd_obol_attached_controllers);
+}
+
+static void
+ged_obol_delete_owned_attached_controller(
+	const ged_obol_attached_controller &entry)
+{
+    if (entry.owned_view_controller && entry.view_controller) {
+	delete entry.view_controller;
+	return;
+    }
+
+    if (entry.owned_scene_controller && entry.scene_controller)
+	delete entry.scene_controller;
+}
+
+static void
+ged_obol_primary_clear(struct ged_drawable *gdp)
+{
+    if (!gdp)
+	return;
+    gdp->gd_obol_scene_controller = NULL;
+    gdp->gd_obol_controller = NULL;
+    gdp->gd_obol_scene_controller_owned = 0;
+    gdp->gd_obol_controller_owned = 0;
+    gdp->gd_obol_scene_controller_full_sync = 0;
+}
+
+static void
+ged_obol_primary_set(struct ged_drawable *gdp,
+	const ged_obol_attached_controller *entry)
+{
+    if (!gdp || !entry) {
+	ged_obol_primary_clear(gdp);
+	return;
+    }
+
+    gdp->gd_obol_scene_controller = entry->scene_controller;
+    gdp->gd_obol_controller = entry->view_controller;
+    gdp->gd_obol_scene_controller_owned = entry->owned_scene_controller ? 1 : 0;
+    gdp->gd_obol_controller_owned = entry->owned_view_controller ? 1 : 0;
+    gdp->gd_obol_scene_controller_full_sync = entry->full_sync ? 1 : 0;
+}
+
+static void
+ged_obol_primary_refresh_from_registry(struct ged_drawable *gdp)
+{
+    std::vector<ged_obol_attached_controller> *entries =
+	ged_obol_attached_controllers(gdp, 0);
+    if (!entries || entries->empty()) {
+	ged_obol_primary_clear(gdp);
+	return;
+    }
+
+    for (const ged_obol_attached_controller &entry : *entries) {
+	if (!entry.render_endpoint_only) {
+	    ged_obol_primary_set(gdp, &entry);
+	    return;
+	}
+    }
+
+    ged_obol_primary_set(gdp, &entries->front());
+}
+
+static void
+ged_obol_attached_controllers_free(struct ged_drawable *gdp)
+{
+    std::vector<ged_obol_attached_controller> *entries =
+	ged_obol_attached_controllers(gdp, 0);
+    if (!entries)
+	return;
+
+    for (const ged_obol_attached_controller &entry : *entries)
+	ged_obol_delete_owned_attached_controller(entry);
+    delete entries;
+    gdp->gd_obol_attached_controllers = NULL;
+    ged_obol_primary_clear(gdp);
 }
 
 static void
@@ -1685,6 +1810,54 @@ ged_obol_set_group_highlighted(SoBRLSceneController *scene,
     return 1;
 }
 
+static void
+ged_obol_append_database_source_instance_key(
+	std::vector<std::string> &instance_keys,
+	const BRLObolDatabaseSourceSummary &summary);
+
+extern "C" int
+ged_draw_obol_highlight_state_set(struct ged *gedp, int highlighted)
+{
+    SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
+    if (!scene)
+	return 0;
+
+    std::vector<std::string> instance_keys;
+    const int source_count = scene->getDatabaseSourceCount();
+    for (int i = 0; i < source_count; i++) {
+	BRLObolDatabaseSourceSummary summary;
+	if (!scene->getDatabaseSourceSummary(i, summary) ||
+		!summary.valid)
+	    continue;
+	ged_obol_append_database_source_instance_key(instance_keys, summary);
+    }
+
+    int changed = 0;
+    for (const std::string &instance_key : instance_keys) {
+	if (ged_obol_set_database_source_highlighted(scene,
+		instance_key.c_str(), highlighted))
+	    changed = 1;
+    }
+
+    const int tree_count = scene->getSceneTreeSummaryCount();
+    for (int i = 0; i < tree_count; i++) {
+	BRLObolSceneTreeSummary tree_summary;
+	if (!scene->getSceneTreeSummary(i, tree_summary) ||
+		!tree_summary.valid ||
+		tree_summary.nodeKind != BRLObolSceneTreeSummary::NODE_GROUP ||
+		tree_summary.path.getLength() == 0 ||
+		BU_STR_EQUAL(tree_summary.path.getString(), "/"))
+	    continue;
+	if (ged_obol_set_group_highlighted(scene,
+		tree_summary.path.getString(), highlighted))
+	    changed = 1;
+    }
+
+    if (changed)
+	scene->realizePending();
+    return changed;
+}
+
 static int
 ged_obol_apply_highlight_transaction(
 	const struct ged_draw_transaction *txn,
@@ -1887,6 +2060,13 @@ ged_obol_clear_database_sources_in_scope(SoBRLSceneController *scene,
     if (!scene)
 	return 0;
 
+    if (!ged_obol_view_scope_is_independent(view_ctx)) {
+	int changed = (scene->clearDatabaseSources() > 0) ? 1 : 0;
+	if (changed && ged_obol_prune_empty_groups(scene))
+	    changed = 1;
+	return changed;
+    }
+
     std::vector<std::string> instance_keys;
     const int source_count = scene->getDatabaseSourceCount();
     for (int i = 0; i < source_count; i++) {
@@ -1921,6 +2101,23 @@ ged_draw_obol_controller(struct ged *gedp)
     return static_cast<BRLObolViewController *>(gdp->gd_obol_controller);
 }
 
+static ged_obol_attached_controller *
+ged_obol_attached_controller_for_view(struct ged *gedp, void *view_ctx)
+{
+    struct ged_drawable *gdp = ged_obol_gdp(gedp);
+    std::vector<ged_obol_attached_controller> *entries =
+	ged_obol_attached_controllers(gdp, 0);
+    if (!entries || !view_ctx)
+	return NULL;
+
+    for (ged_obol_attached_controller &entry : *entries) {
+	if (entry.view_ctx == view_ctx && entry.view_controller)
+	    return &entry;
+    }
+
+    return NULL;
+}
+
 int
 ged_draw_obol_scene_controller_owned(struct ged *gedp)
 {
@@ -1931,20 +2128,76 @@ ged_draw_obol_scene_controller_owned(struct ged *gedp)
 }
 
 extern "C" int
+ged_draw_obol_scene_controller_attached(struct ged *gedp)
+{
+    struct ged_drawable *gdp = ged_obol_gdp(gedp);
+    std::vector<ged_obol_attached_controller> *entries =
+	ged_obol_attached_controllers(gdp, 0);
+    return (ged_draw_obol_scene_controller(gedp) ||
+	    (entries && !entries->empty())) ? 1 : 0;
+}
+
+extern "C" int
 ged_draw_obol_scene_controller_ensure_owned(struct ged *gedp,
 					    int sync_current_scene)
 {
-    SoBRLSceneController *scene =
-	ged_draw_obol_scene_controller_ensure(gedp, sync_current_scene);
-    return scene && ged_draw_obol_scene_controller_owned(gedp) ? 1 : 0;
+    if (!ged_obol_gdp(gedp))
+	return 0;
+
+    SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
+    if (scene && ged_draw_obol_scene_controller_owned(gedp)) {
+	struct ged_drawable *gdp = ged_obol_gdp(gedp);
+	if (sync_current_scene && gdp &&
+		!gdp->gd_obol_scene_controller_full_sync) {
+	    (void)ged_draw_obol_scene_sync_full_scene(gedp, NULL, 0, scene);
+	    gdp->gd_obol_scene_controller_full_sync = 1;
+	}
+	return 1;
+    }
+
+    brlobol_init(NULL);
+
+    SoSeparator *root = new SoSeparator;
+    BRLObolViewController *owned_controller = new BRLObolViewController(root);
+    SoBRLSceneController *owned_scene = owned_controller->getSceneController();
+    struct ged_drawable *gdp = ged_obol_gdp(gedp);
+    std::vector<ged_obol_attached_controller> *entries =
+	ged_obol_attached_controllers(gdp, 1);
+    if (!entries) {
+	delete owned_controller;
+	return 0;
+    }
+
+    ged_obol_attached_controller entry;
+    entry.scene_controller = owned_scene;
+    entry.view_controller = owned_controller;
+    entry.owned_scene_controller = 0;
+    entry.owned_view_controller = 1;
+    entry.full_sync = 0;
+    entry.use_attached_view_scope = 0;
+    entry.render_endpoint_only = 0;
+    entries->insert(entries->begin(), entry);
+    ged_obol_primary_set(gdp, &entries->front());
+
+    if (sync_current_scene) {
+	(void)ged_draw_obol_scene_sync_full_scene(gedp, NULL, 0,
+		owned_scene);
+	entries->front().full_sync = 1;
+	ged_obol_primary_set(gdp, &entries->front());
+    }
+
+    return 1;
 }
 
 extern "C" int
 ged_draw_obol_scene_controller_full_synced(struct ged *gedp)
 {
     struct ged_drawable *gdp = ged_obol_gdp(gedp);
-    return (gdp && gdp->gd_obol_scene_controller &&
-	    gdp->gd_obol_scene_controller_full_sync) ? 1 : 0;
+    if (gdp && gdp->gd_obol_scene_controller &&
+	    gdp->gd_obol_scene_controller_full_sync &&
+	    ged_draw_obol_scene_controller_owned(gedp))
+	return 1;
+    return 0;
 }
 
 static unsigned char
@@ -2011,8 +2264,12 @@ ged_obol_view_controller_for_context(void *view_ctx)
     struct ged *gedp = view_ctx ?
 	static_cast<struct ged *>(ged_view_context_user_data_get(view_ctx)) :
 	NULL;
-    if (!gedp || !ged_draw_obol_scene_controller_owned(gedp))
+    if (!gedp)
 	return NULL;
+    ged_obol_attached_controller *entry =
+	ged_obol_attached_controller_for_view(gedp, view_ctx);
+    if (entry && entry->view_controller)
+	return entry->view_controller;
     return ged_draw_obol_controller(gedp);
 }
 
@@ -2025,11 +2282,45 @@ ged_obol_view_controller_ensure_for_context(void *view_ctx,
 	NULL;
     if (!gedp)
 	return NULL;
-    if (!ged_draw_obol_scene_controller_owned(gedp) &&
-	    !ged_draw_obol_scene_controller_ensure_owned(gedp,
-		sync_current_scene))
+    ged_obol_attached_controller *entry =
+	ged_obol_attached_controller_for_view(gedp, view_ctx);
+    if (entry && entry->view_controller)
+	return entry->view_controller;
+    BRLObolViewController *controller = ged_draw_obol_controller(gedp);
+    if (controller)
+	return controller;
+    if (!ged_draw_obol_scene_controller_ensure_owned(gedp, sync_current_scene))
 	return NULL;
     return ged_draw_obol_controller(gedp);
+}
+
+static BRLObolViewController *
+ged_obol_shared_view_controller_ensure_for_context(void *view_ctx,
+	int sync_current_scene)
+{
+    struct ged *gedp = view_ctx ?
+	static_cast<struct ged *>(ged_view_context_user_data_get(view_ctx)) :
+	NULL;
+    if (!gedp)
+	return NULL;
+    BRLObolViewController *controller = ged_draw_obol_controller(gedp);
+    if (controller)
+	return controller;
+    if (!ged_draw_obol_scene_controller_ensure_owned(gedp, sync_current_scene))
+	return NULL;
+    return ged_draw_obol_controller(gedp);
+}
+
+static BRLObolViewController *
+ged_obol_view_controller_for_scope(void *view_ctx,
+	int local,
+	int sync_current_scene)
+{
+    return local ?
+	ged_obol_view_controller_ensure_for_context(view_ctx,
+		sync_current_scene) :
+	ged_obol_shared_view_controller_ensure_for_context(view_ctx,
+		sync_current_scene);
 }
 
 static BRLObolFeatureStyle
@@ -2213,6 +2504,47 @@ ged_obol_feature_handle(BRLObolViewController *controller,
 	return shared;
 
     return controller->features().find(name);
+}
+
+struct ged_obol_feature_lookup {
+    BRLObolViewController *controller;
+    BRLObolFeatureHandle handle;
+};
+
+static ged_obol_feature_lookup
+ged_obol_feature_lookup_for_context(void *view_ctx, const char *name)
+{
+    ged_obol_feature_lookup out;
+    out.controller = NULL;
+    out.handle = BRLObolFeatureHandle();
+    if (!name)
+	return out;
+
+    BRLObolViewController *local_controller =
+	ged_obol_view_controller_for_context(view_ctx);
+    if (local_controller) {
+	BRLObolFeatureHandle handle =
+	    ged_obol_feature_handle(local_controller, view_ctx, name);
+	if (handle.isValid()) {
+	    out.controller = local_controller;
+	    out.handle = handle;
+	    return out;
+	}
+    }
+
+    BRLObolViewController *shared_controller =
+	ged_obol_shared_view_controller_ensure_for_context(view_ctx, 0);
+    if (shared_controller && shared_controller != local_controller) {
+	BRLObolFeatureHandle handle =
+	    shared_controller->features().find(name,
+		    BRLOBOL_FEATURE_SCOPE_SHARED);
+	if (handle.isValid()) {
+	    out.controller = shared_controller;
+	    out.handle = handle;
+	}
+    }
+
+    return out;
 }
 
 static BRLObolFeatureScope
@@ -2575,41 +2907,53 @@ ged_draw_obol_view_context_feature_store_active(void *view_ctx)
 extern "C" size_t
 ged_draw_obol_view_context_clear(void *view_ctx, int flags)
 {
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    if (!controller || !(flags & GED_VIEW_CLEAR_VIEW))
+    if (!(flags & GED_VIEW_CLEAR_VIEW))
 	return 0;
 
-    controller->features().clear();
-    controller->polygons().clear();
+    size_t removed = 0;
     if (flags & GED_VIEW_CLEAR_LOCAL) {
+	BRLObolViewController *controller =
+	    ged_obol_view_controller_for_context(view_ctx);
+	if (!controller)
+	    return 0;
 	BRLObolFeatureOwner owner = ged_obol_feature_owner(view_ctx, 1);
+	removed += controller->features().removeScope(
+		BRLOBOL_FEATURE_SCOPE_LOCAL, &owner);
+	removed += controller->polygons().removeScope(
+		BRLOBOL_FEATURE_SCOPE_LOCAL);
 	controller->selection().clear(&owner, BRLOBOL_SELECTION_ALL);
     } else {
+	BRLObolViewController *controller =
+	    ged_obol_shared_view_controller_ensure_for_context(view_ctx, 0);
+	if (!controller)
+	    return 0;
+	removed += controller->features().removeScope(
+		BRLOBOL_FEATURE_SCOPE_SHARED, NULL);
+	removed += controller->polygons().removeScope(
+		BRLOBOL_FEATURE_SCOPE_SHARED);
 	controller->selection().clear(NULL, BRLOBOL_SELECTION_ALL);
     }
-    return 1;
+    return removed;
 }
 
 extern "C" int
 ged_draw_obol_view_context_feature_exists(void *view_ctx, const char *name)
 {
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    if (!controller || !name)
+    ged_obol_feature_lookup lookup =
+	ged_obol_feature_lookup_for_context(view_ctx, name);
+    if (!lookup.controller || !name)
 	return 0;
-    return ged_obol_feature_handle(controller, view_ctx, name).isValid() ?
-	1 : 0;
+    return lookup.handle.isValid() ? 1 : 0;
 }
 
 extern "C" int
 ged_draw_obol_view_context_feature_remove(void *view_ctx, const char *name)
 {
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    if (!controller || !name)
+    ged_obol_feature_lookup lookup =
+	ged_obol_feature_lookup_for_context(view_ctx, name);
+    if (!lookup.controller || !lookup.handle.isValid())
 	return 0;
-    return ged_obol_remove_feature(controller, view_ctx, name, -1);
+    return lookup.controller->features().remove(lookup.handle) ? 1 : 0;
 }
 
 extern "C" size_t
@@ -2617,15 +2961,23 @@ ged_draw_obol_view_context_features_remove_prefix(
 	void *view_ctx,
 	const char *prefix)
 {
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    if (!controller || !prefix || !prefix[0])
+    if (!prefix || !prefix[0])
 	return 0;
-    BRLObolFeatureOwner owner = ged_obol_feature_owner(view_ctx, 1);
-    size_t removed = controller->features().removePrefix(prefix,
-	    BRLOBOL_FEATURE_SCOPE_LOCAL, &owner);
-    removed += controller->features().removePrefix(prefix,
-	    BRLOBOL_FEATURE_SCOPE_SHARED, NULL);
+
+    size_t removed = 0;
+    BRLObolViewController *local_controller =
+	ged_obol_view_controller_for_context(view_ctx);
+    if (local_controller) {
+	BRLObolFeatureOwner owner = ged_obol_feature_owner(view_ctx, 1);
+	removed += local_controller->features().removePrefix(prefix,
+		BRLOBOL_FEATURE_SCOPE_LOCAL, &owner);
+    }
+
+    BRLObolViewController *shared_controller =
+	ged_obol_shared_view_controller_ensure_for_context(view_ctx, 0);
+    if (shared_controller)
+	removed += shared_controller->features().removePrefix(prefix,
+		BRLOBOL_FEATURE_SCOPE_SHARED, NULL);
     return removed;
 }
 
@@ -2639,20 +2991,34 @@ ged_draw_obol_view_context_feature_summary(
 	return 0;
 
     memset(summary, 0, sizeof(*summary));
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    if (!controller || !name)
+    if (!name)
 	return 0;
 
-    BRLObolFeatureOwner owner = ged_obol_feature_owner(view_ctx, 1);
     BRLObolFeatureSummary obol_summary;
-    if (!controller->features().summaryOwned(name, obol_summary,
-	    BRLOBOL_FEATURE_SCOPE_LOCAL, &owner))
-	return 0;
-    if (!obol_summary.exists &&
-	    !controller->features().summary(name, obol_summary,
-		BRLOBOL_FEATURE_SCOPE_SHARED))
-	return 0;
+    BRLObolViewController *summary_controller = NULL;
+
+    BRLObolViewController *local_controller =
+	ged_obol_view_controller_for_context(view_ctx);
+    if (local_controller) {
+	BRLObolFeatureOwner owner = ged_obol_feature_owner(view_ctx, 1);
+	if (!local_controller->features().summaryOwned(name, obol_summary,
+		BRLOBOL_FEATURE_SCOPE_LOCAL, &owner))
+	    return 0;
+	if (obol_summary.exists)
+	    summary_controller = local_controller;
+    }
+
+    if (!obol_summary.exists) {
+	BRLObolViewController *shared_controller =
+	    ged_obol_shared_view_controller_ensure_for_context(view_ctx, 0);
+	if (!shared_controller ||
+		!shared_controller->features().summary(name, obol_summary,
+		    BRLOBOL_FEATURE_SCOPE_SHARED))
+	    return 0;
+	if (obol_summary.exists)
+	    summary_controller = shared_controller;
+    }
+
     if (!obol_summary.exists)
 	return 1;
 
@@ -2678,10 +3044,12 @@ ged_draw_obol_view_context_feature_summary(
 	    (!summary->is_label &&
 	    !summary->is_transient_preview)) ? 1 : 0;
 
-    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
-	    view_ctx, name);
+    BRLObolFeatureHandle handle = summary_controller ?
+	ged_obol_feature_handle(summary_controller, view_ctx, name) :
+	BRLObolFeatureHandle();
     BRLObolFeatureStyle style;
-    if (handle.isValid() && controller->features().style(handle, style) &&
+    if (summary_controller && handle.isValid() &&
+	    summary_controller->features().style(handle, style) &&
 	    style.hasColor)
 	ged_obol_rgb_from_color(style.color, summary->color);
 
@@ -3005,12 +3373,11 @@ ged_draw_obol_view_context_feature_style_get(
     if (!style)
 	return 0;
 
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
-	    view_ctx, name);
+    ged_obol_feature_lookup lookup =
+	ged_obol_feature_lookup_for_context(view_ctx, name);
     BRLObolFeatureStyle obol_style;
-    if (!handle.isValid() || !controller->features().style(handle,
+    if (!lookup.handle.isValid() || !lookup.controller ||
+	    !lookup.controller->features().style(lookup.handle,
 	    obol_style))
 	return 0;
     ged_obol_feature_style_to_ged(style, obol_style);
@@ -3024,16 +3391,14 @@ ged_draw_obol_view_context_feature_style_apply(
 	const struct ged_draw_view_feature_style *style,
 	int recursive)
 {
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
-	    view_ctx, name);
-    if (!handle.isValid() || !style)
+    ged_obol_feature_lookup lookup =
+	ged_obol_feature_lookup_for_context(view_ctx, name);
+    if (!lookup.controller || !lookup.handle.isValid() || !style)
 	return 0;
 
     BRLObolFeatureStyle obol_style =
 	ged_obol_feature_style_from_ged(style);
-    return controller->features().applyStyle(handle, obol_style,
+    return lookup.controller->features().applyStyle(lookup.handle, obol_style,
 	    recursive ? TRUE : FALSE) ? 1 : 0;
 }
 
@@ -3042,13 +3407,11 @@ ged_draw_obol_view_context_feature_realize(void *view_ctx,
 	const char *name,
 	int recursive)
 {
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
-	    view_ctx, name);
-    if (!handle.isValid())
+    ged_obol_feature_lookup lookup =
+	ged_obol_feature_lookup_for_context(view_ctx, name);
+    if (!lookup.handle.isValid() || !lookup.controller)
 	return 0;
-    return controller->features().realize(handle,
+    return lookup.controller->features().realize(lookup.handle,
 	    recursive ? TRUE : FALSE) ? 1 : 0;
 }
 
@@ -3446,7 +3809,7 @@ ged_draw_obol_view_context_indexed_face_set_replace(
 	const struct ged_draw_view_feature_style *style)
 {
     BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
+	ged_obol_view_controller_for_scope(view_ctx, local, 1);
     if (!controller || !name || !points || !point_count || !indices ||
 	    !index_count)
 	return 0;
@@ -3473,7 +3836,7 @@ ged_draw_obol_view_context_lines_replace(
 	const struct ged_draw_view_feature_style *style)
 {
     BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
+	ged_obol_view_controller_for_scope(view_ctx, local, 1);
     if (!controller || !name)
 	return 0;
     if (!points || !point_count)
@@ -4258,28 +4621,47 @@ ged_obol_polygon_auto_name(BRLObolViewController *controller)
 extern "C" ged_draw_view_polygon_ref
 ged_draw_obol_view_context_polygon_find(void *view_ctx, const char *name)
 {
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    if (!controller || !name)
+    if (!name)
 	return GED_DRAW_VIEW_POLYGON_REF_NULL;
-    return ged_obol_ged_polygon_ref(controller,
-	    controller->polygons().find(name));
+
+    BRLObolViewController *local_controller =
+	ged_obol_view_controller_for_context(view_ctx);
+    if (local_controller) {
+	BRLObolPolygonHandle local =
+	    local_controller->polygons().find(name,
+		    BRLOBOL_FEATURE_SCOPE_LOCAL);
+	if (local.isValid())
+	    return ged_obol_ged_polygon_ref(local_controller, local);
+    }
+
+    BRLObolViewController *shared_controller =
+	ged_obol_shared_view_controller_ensure_for_context(view_ctx, 0);
+    if (!shared_controller)
+	return GED_DRAW_VIEW_POLYGON_REF_NULL;
+    return ged_obol_ged_polygon_ref(shared_controller,
+	    shared_controller->polygons().find(name,
+		BRLOBOL_FEATURE_SCOPE_SHARED));
 }
 
 extern "C" ged_draw_view_polygon_ref
 ged_draw_obol_view_context_polygon_find_scoped(
 	void *view_ctx,
-	const char *name,
-	int local_only)
+    const char *name,
+    int local_only)
 {
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    if (!controller || !name)
+    if (!name)
 	return GED_DRAW_VIEW_POLYGON_REF_NULL;
-    unsigned int scope_mask = local_only ? BRLOBOL_FEATURE_SCOPE_LOCAL :
-	BRLOBOL_FEATURE_SCOPE_ALL;
-    return ged_obol_ged_polygon_ref(controller,
-	    controller->polygons().find(name, scope_mask));
+
+    if (local_only) {
+	BRLObolViewController *controller =
+	    ged_obol_view_controller_for_context(view_ctx);
+	if (!controller)
+	    return GED_DRAW_VIEW_POLYGON_REF_NULL;
+	return ged_obol_ged_polygon_ref(controller,
+		controller->polygons().find(name, BRLOBOL_FEATURE_SCOPE_LOCAL));
+    }
+
+    return ged_draw_obol_view_context_polygon_find(view_ctx, name);
 }
 
 extern "C" ged_draw_view_polygon_ref
@@ -4287,11 +4669,11 @@ ged_draw_obol_view_context_polygon_create(
 	void *view_ctx,
 	const char *name,
 	int local,
-	int type,
-	const point_t screen_point)
+    int type,
+    const point_t screen_point)
 {
     BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
+	ged_obol_view_controller_for_scope(view_ctx, local, 1);
     return ged_obol_ged_polygon_ref(controller,
 	    ged_obol_polygon_create_named(controller, view_ctx, name, local,
 		type, screen_point));
@@ -4303,10 +4685,10 @@ ged_draw_obol_view_context_polygon_import_sketch(
 	struct db_i *dbip,
 	struct directory *dp,
 	void *view_ctx,
-	int local)
+    int local)
 {
     BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
+	ged_obol_view_controller_for_scope(view_ctx, local, 1);
     if (!controller || !name)
 	return GED_DRAW_VIEW_POLYGON_REF_NULL;
     return ged_obol_ged_polygon_ref(controller,
@@ -5128,10 +5510,11 @@ ged_draw_obol_view_context_selection_set_path(
 extern "C" struct ged_draw_command_scene *
 ged_draw_command_scene_begin(
 	void *view_ctx,
-	const struct ged_draw_command_scene_desc *desc)
+    const struct ged_draw_command_scene_desc *desc)
 {
+    const int local = desc && desc->local;
     BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
+	ged_obol_view_controller_for_scope(view_ctx, local, 1);
     if (!controller)
 	return NULL;
 
@@ -5141,7 +5524,7 @@ ged_draw_command_scene_begin(
     scene->controller = controller;
     scene->owner = ged_obol_command_scene_owner(view_ctx, desc);
     scene->controller->features().markCommandOwnerGeneration(scene->owner);
-    scene->scope = (desc && desc->local) ?
+    scene->scope = local ?
 	BRLObolFeatureScope::Local : BRLObolFeatureScope::Shared;
     scene->result_cb = desc ? desc->result_cb : NULL;
     scene->result_cb_data = desc ? desc->result_cb_data : NULL;
@@ -5813,11 +6196,11 @@ extern "C" int
 ged_draw_obol_view_context_line_layer_builder_replace(
 	void *view_ctx,
 	const char *name,
-	int local,
-	const struct bg_line_layer_builder *builder)
+    int local,
+    const struct bg_line_layer_builder *builder)
 {
     BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
+	ged_obol_view_controller_for_scope(view_ctx, local, 1);
     if (!controller || !name)
 	return 0;
     if (!builder || !bg_line_layer_builder_point_count(builder))
@@ -5845,9 +6228,10 @@ ged_draw_obol_view_context_diagnostic_line_layer_builder_replace(
 	return ret;
 
     BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
-	    view_ctx, name);
+	ged_obol_view_controller_for_scope(view_ctx, 0, 0);
+    BRLObolFeatureHandle handle = controller ?
+	controller->features().find(name, BRLOBOL_FEATURE_SCOPE_SHARED) :
+	BRLObolFeatureHandle();
     return ged_obol_feature_mark_overlay(controller, handle,
 	    ged_obol_model_overlay_info(view_ctx,
 		BRLObolOverlayClass::Diagnostic,
@@ -5863,10 +6247,10 @@ ged_draw_obol_view_context_line_layers_replace(
 	int local,
 	const struct ged_draw_view_line_layer_data *layers,
 	size_t layer_count,
-	const struct ged_draw_view_feature_style *style)
+    const struct ged_draw_view_feature_style *style)
 {
     BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
+	ged_obol_view_controller_for_scope(view_ctx, local, 1);
     if (!controller || !name)
 	return 0;
 
@@ -5927,15 +6311,23 @@ ged_draw_obol_view_context_lines_create_model_annotation(
     point_t points[1];
     VMOVE(points[0], point);
     int cmds[1] = {GED_DRAW_VIEW_LINE_MOVE};
+    struct ged_draw_view_feature_style style =
+	GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+    style.color_valid = 1;
+    style.color[0] = 255;
+    style.color[1] = 0;
+    style.color[2] = 0;
     int ret = ged_draw_obol_view_context_lines_replace(view_ctx, name, local,
-	    points, cmds, 1, NULL);
+	    points, cmds, 1, &style);
     if (!ret)
 	return 0;
 
     BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
-	    view_ctx, name);
+	ged_obol_view_controller_for_scope(view_ctx, local, 0);
+    BRLObolFeatureHandle handle = local ?
+	ged_obol_feature_handle(controller, view_ctx, name) :
+	(controller ? controller->features().find(name,
+	    BRLOBOL_FEATURE_SCOPE_SHARED) : BRLObolFeatureHandle());
     return ged_obol_feature_mark_overlay(controller, handle,
 	    ged_obol_model_overlay_info(view_ctx,
 		BRLObolOverlayClass::UserAnnotation,
@@ -5950,13 +6342,11 @@ ged_draw_obol_view_context_lines_append_point(
 	const char *name,
 	const point_t point)
 {
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
-	    view_ctx, name);
-    if (!handle.isValid() || !point)
+    ged_obol_feature_lookup lookup =
+	ged_obol_feature_lookup_for_context(view_ctx, name);
+    if (!lookup.handle.isValid() || !lookup.controller || !point)
 	return 0;
-    return controller->features().appendLinePoint(handle, SbVec3f(
+    return lookup.controller->features().appendLinePoint(lookup.handle, SbVec3f(
 	    static_cast<float>(point[X]),
 	    static_cast<float>(point[Y]),
 	    static_cast<float>(point[Z]))) ? 1 : 0;
@@ -5984,7 +6374,7 @@ ged_draw_obol_view_context_label_create(
     }
 
     BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
+	ged_obol_view_controller_for_scope(view_ctx, local, 1);
     if (!controller || !name)
 	return 0;
 
@@ -6004,10 +6394,10 @@ ged_draw_obol_view_context_labels_replace(
 	const char *name,
 	int local,
 	const struct ged_draw_view_label_data *labels,
-	size_t label_count)
+    size_t label_count)
 {
     BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
+	ged_obol_view_controller_for_scope(view_ctx, local, 1);
     if (!controller || !name)
 	return 0;
     if (!labels || !label_count)
@@ -6042,12 +6432,11 @@ ged_draw_obol_view_context_tcl_labels_replace(
 extern "C" size_t
 ged_draw_obol_view_context_label_count(void *view_ctx, const char *name)
 {
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
-	    view_ctx, name);
+    ged_obol_feature_lookup lookup =
+	ged_obol_feature_lookup_for_context(view_ctx, name);
     std::vector<BRLObolLabel> labels;
-    if (!handle.isValid() || !controller->features().labels(handle, labels))
+    if (!lookup.handle.isValid() || !lookup.controller ||
+	    !lookup.controller->features().labels(lookup.handle, labels))
 	return 0;
     return labels.size();
 }
@@ -6061,12 +6450,11 @@ ged_draw_obol_view_context_label_copy(
 	point_t point,
 	unsigned char rgb[3])
 {
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
-	    view_ctx, name);
+    ged_obol_feature_lookup lookup =
+	ged_obol_feature_lookup_for_context(view_ctx, name);
     std::vector<BRLObolLabel> labels;
-    if (!handle.isValid() || !controller->features().labels(handle, labels) ||
+    if (!lookup.handle.isValid() || !lookup.controller ||
+	    !lookup.controller->features().labels(lookup.handle, labels) ||
 	    index >= labels.size())
 	return 0;
 
@@ -6080,7 +6468,8 @@ ged_draw_obol_view_context_label_copy(
     if (rgb) {
 	BRLObolFeatureStyle style;
 	const SbColor color = label.hasColor ? label.color :
-	    (controller->features().style(handle, style) && style.hasColor ?
+	    (lookup.controller->features().style(lookup.handle, style) &&
+		style.hasColor ?
 		style.color : SbColor(1.0f, 1.0f, 1.0f));
 	ged_obol_rgb_from_color(color, rgb);
     }
@@ -6094,20 +6483,19 @@ ged_draw_obol_view_context_label_point_set(
 	size_t index,
 	const point_t point)
 {
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
-	    view_ctx, name);
+    ged_obol_feature_lookup lookup =
+	ged_obol_feature_lookup_for_context(view_ctx, name);
     std::vector<BRLObolLabel> labels;
-    if (!handle.isValid() || !point ||
-	    !controller->features().labels(handle, labels) ||
+    if (!lookup.handle.isValid() || !lookup.controller || !point ||
+	    !lookup.controller->features().labels(lookup.handle, labels) ||
 	    index >= labels.size())
 	return 0;
     labels[index].point = SbVec3f(
 	    static_cast<float>(point[X]),
 	    static_cast<float>(point[Y]),
 	    static_cast<float>(point[Z]));
-    return controller->features().replaceLabels(handle, labels) ? 1 : 0;
+    return lookup.controller->features().replaceLabels(lookup.handle,
+	    labels) ? 1 : 0;
 }
 
 extern "C" int
@@ -6145,18 +6533,16 @@ ged_draw_obol_view_context_line_color_set(
 	int g,
 	int b)
 {
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
-	    view_ctx, name);
-    if (!handle.isValid())
+    ged_obol_feature_lookup lookup =
+	ged_obol_feature_lookup_for_context(view_ctx, name);
+    if (!lookup.handle.isValid() || !lookup.controller)
 	return 0;
     unsigned char rgb[3] = {
 	static_cast<unsigned char>(std::max(0, std::min(255, r))),
 	static_cast<unsigned char>(std::max(0, std::min(255, g))),
 	static_cast<unsigned char>(std::max(0, std::min(255, b)))
     };
-    return controller->features().setColor(handle,
+    return lookup.controller->features().setColor(lookup.handle,
 	    ged_obol_color_from_rgb(rgb)) ? 1 : 0;
 }
 
@@ -6166,13 +6552,12 @@ ged_draw_obol_view_context_line_width_set(
 	const char *name,
 	int line_width)
 {
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
-	    view_ctx, name);
-    if (!handle.isValid())
+    ged_obol_feature_lookup lookup =
+	ged_obol_feature_lookup_for_context(view_ctx, name);
+    if (!lookup.handle.isValid() || !lookup.controller)
 	return 0;
-    return controller->features().setLineWidth(handle, line_width) ? 1 : 0;
+    return lookup.controller->features().setLineWidth(lookup.handle,
+	    line_width) ? 1 : 0;
 }
 
 extern "C" int
@@ -6189,12 +6574,11 @@ ged_draw_obol_view_context_feature_points_copy(
     if (!points || !point_count)
 	return 0;
 
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
-	    view_ctx, name);
+    ged_obol_feature_lookup lookup =
+	ged_obol_feature_lookup_for_context(view_ctx, name);
     std::vector<SbVec3f> obol_points;
-    if (!handle.isValid() || !controller->features().points(handle,
+    if (!lookup.handle.isValid() || !lookup.controller ||
+	    !lookup.controller->features().points(lookup.handle,
 	    obol_points))
 	return 0;
 
@@ -6222,12 +6606,11 @@ ged_draw_obol_view_context_feature_indices_copy(
     if (!indices || !index_count)
 	return 0;
 
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
-	    view_ctx, name);
+    ged_obol_feature_lookup lookup =
+	ged_obol_feature_lookup_for_context(view_ctx, name);
     std::vector<int32_t> obol_indices;
-    if (!handle.isValid() || !controller->features().indices(handle,
+    if (!lookup.handle.isValid() || !lookup.controller ||
+	    !lookup.controller->features().indices(lookup.handle,
 	    obol_indices))
 	return 0;
 
@@ -6253,12 +6636,11 @@ ged_draw_obol_view_context_feature_line_command_at(
     if (!out)
 	return 0;
 
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
-	    view_ctx, name);
+    ged_obol_feature_lookup lookup =
+	ged_obol_feature_lookup_for_context(view_ctx, name);
     int32_t command = 0;
-    if (!handle.isValid() || !controller->features().lineCommandAt(handle,
+    if (!lookup.handle.isValid() || !lookup.controller ||
+	    !lookup.controller->features().lineCommandAt(lookup.handle,
 	    index, command))
 	return 0;
     *out = ged_obol_line_command_to_ged(command);
@@ -6271,12 +6653,11 @@ ged_obol_feature_layer_lookup(void *view_ctx,
 	size_t layer_index,
 	BRLObolLineLayer &layer)
 {
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
-	    view_ctx, name);
+    ged_obol_feature_lookup lookup =
+	ged_obol_feature_lookup_for_context(view_ctx, name);
     BRLObolFeatureRecord record;
-    if (!handle.isValid() || !controller->features().record(handle,
+    if (!lookup.handle.isValid() || !lookup.controller ||
+	    !lookup.controller->features().record(lookup.handle,
 	    record) || record.kind != BRLObolFeatureKind::LineLayer ||
 	    layer_index >= record.layers.size())
 	return 0;
@@ -6406,13 +6787,12 @@ ged_draw_obol_view_context_arrow_tip_get(
     if (tip_width)
 	*tip_width = 0.0;
 
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
-	    view_ctx, name);
+    ged_obol_feature_lookup lookup =
+	ged_obol_feature_lookup_for_context(view_ctx, name);
     float length = 0.0f;
     float width = 0.0f;
-    if (!handle.isValid() || !controller->features().arrowTip(handle,
+    if (!lookup.handle.isValid() || !lookup.controller ||
+	    !lookup.controller->features().arrowTip(lookup.handle,
 	    length, width))
 	return 0;
     if (tip_length)
@@ -6429,13 +6809,11 @@ ged_draw_obol_view_context_arrow_tip_set(
 	fastf_t tip_length,
 	fastf_t tip_width)
 {
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
-	    view_ctx, name);
-    if (!handle.isValid())
+    ged_obol_feature_lookup lookup =
+	ged_obol_feature_lookup_for_context(view_ctx, name);
+    if (!lookup.handle.isValid() || !lookup.controller)
 	return 0;
-    return controller->features().setArrowTip(handle,
+    return lookup.controller->features().setArrowTip(lookup.handle,
 	    static_cast<float>(tip_length),
 	    static_cast<float>(tip_width)) ? 1 : 0;
 }
@@ -6569,7 +6947,7 @@ ged_draw_obol_view_context_axes_create(
 	return 0;
 
     BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
+	ged_obol_view_controller_for_scope(view_ctx, local, 1);
     if (!controller || !name)
 	return 0;
 
@@ -7392,7 +7770,7 @@ ged_draw_obol_database_source_publication_begin(
 	void *view_ctx,
 	int publication_draw_mode)
 {
-    if (!gedp || !ged_draw_obol_scene_controller_owned(gedp))
+    if (!gedp || !ged_draw_obol_scene_controller_attached(gedp))
 	return 0;
 
     ged_obol_database_source_publication_depth++;
@@ -7881,7 +8259,7 @@ ged_draw_obol_scene_context_info_for_path(
 	return 0;
     memset(out, 0, sizeof(*out));
     if (!gedp || !path || !path[0] ||
-	    !ged_draw_obol_scene_controller_owned(gedp))
+	    !ged_draw_obol_scene_controller_attached(gedp))
 	return 0;
 
     SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
@@ -7906,7 +8284,7 @@ ged_draw_obol_scene_child_context_info_for_path(
     memset(out, 0, sizeof(*out));
     if (!gedp || !path || !path[0] ||
 	    index > static_cast<size_t>(INT_MAX) ||
-	    !ged_draw_obol_scene_controller_owned(gedp))
+	    !ged_draw_obol_scene_controller_attached(gedp))
 	return 0;
 
     SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
@@ -7997,6 +8375,13 @@ ged_obol_database_source_record_from_summary(
 
     out->valid = 1;
     out->database_path = summary.path.getString();
+    out->instance_key = summary.instanceKey.getString();
+    const char *owner_group_path = summary.parentGroupPath.getString();
+    out->owner_group_path = (owner_group_path && owner_group_path[0]) ?
+	owner_group_path : summary.path.getString();
+    out->visible = summary.visible ? 1 : 0;
+    out->highlighted = summary.highlighted ? 1 : 0;
+    out->transparency = ged_obol_reported_transparency(summary.transparency);
     out->draw_mode = summary.representationMode >= 0 ?
 	summary.representationMode :
 	ged_obol_database_draw_mode_to_ged(summary.drawMode);
@@ -8409,7 +8794,7 @@ ged_draw_obol_database_source_ensure_for_path(
 	uint64_t source_revision)
 {
     if (!gedp || !path || !path[0] || !dbip ||
-	    !ged_draw_obol_scene_controller_owned(gedp))
+	    !ged_draw_obol_scene_controller_attached(gedp))
 	return 0;
 
     SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
@@ -9830,7 +10215,7 @@ ged_draw_obol_group_ensure_for_path(
 	int overlay)
 {
     if (!gedp || !path || !path[0] ||
-	    !ged_draw_obol_scene_controller_owned(gedp))
+	    !ged_draw_obol_scene_controller_attached(gedp))
 	return 0;
 
     const std::string group_path = ged_obol_group_path_from_record_path(path);
@@ -10031,9 +10416,25 @@ ged_draw_obol_group_shape_count_for_path(
 	return 0;
 
     const std::string group_path = ged_obol_group_path_from_record_path(path);
-    const int count = scene->getGroupDatabaseSourceCount(group_path.c_str());
+    int count = scene->getGroupDatabaseSourceCount(group_path.c_str());
     if (count < 0)
-	return 0;
+	count = 0;
+
+    const int source_count = scene->getDatabaseSourceCount();
+    for (int i = 0; i < source_count; i++) {
+	BRLObolDatabaseSourceSummary summary;
+	if (!scene->getDatabaseSourceSummary(i, summary) || !summary.valid)
+	    continue;
+
+	const std::string owner_group_path =
+	    ged_obol_database_source_owner_group_path_from_summary(summary);
+	if (ged_obol_path_equal(owner_group_path.c_str(),
+		group_path.c_str()))
+	    continue;
+	if (ged_obol_path_has_prefix(owner_group_path.c_str(),
+		group_path.c_str()))
+	    count++;
+    }
 
     *out = count;
     return 1;
@@ -13113,15 +13514,142 @@ ged_draw_obol_scene_sync_transaction(
     return changed ? 1 : 0;
 }
 
+static int
+ged_obol_transaction_invalidates_view_lod(
+	const struct ged_draw_transaction *txn,
+	int full_sync)
+{
+    if (full_sync)
+	return 1;
+    if (!txn)
+	return 0;
+
+    switch (txn->kind) {
+	case GED_DRAW_TXN_DRAW:
+	case GED_DRAW_TXN_ERASE:
+	case GED_DRAW_TXN_CLEAR:
+	case GED_DRAW_TXN_TEARDOWN:
+	case GED_DRAW_TXN_CLEAR_SCOPE:
+	case GED_DRAW_TXN_STALE_SOURCE:
+	case GED_DRAW_TXN_ERASE_PREFIX:
+	case GED_DRAW_TXN_SOURCE_UPDATED:
+	case GED_DRAW_TXN_SOURCE_REFERENCES_REMOVED:
+	case GED_DRAW_TXN_SOURCE_RENAMED:
+	    return 1;
+	default:
+	    return 0;
+    }
+}
+
 extern "C" int
 ged_draw_obol_scene_sync_attached_transaction(
 	struct ged *gedp,
 	const struct ged_draw_transaction *txn,
 	const struct ged_draw_transaction_result *result)
 {
-    if (!ged_draw_obol_scene_controller(gedp))
+    if (!gedp || !txn)
 	return 0;
-    return ged_draw_obol_scene_sync_transaction(gedp, txn, result, NULL);
+
+    struct ged_drawable *gdp = ged_obol_gdp(gedp);
+    std::vector<ged_obol_attached_controller> *entries =
+	ged_obol_attached_controllers(gdp, 0);
+    if (!entries || entries->empty()) {
+	if (!ged_draw_obol_scene_controller(gedp))
+	    return 0;
+	return ged_draw_obol_scene_sync_transaction(gedp, txn, result, NULL);
+    }
+
+    int changed = 0;
+    for (ged_obol_attached_controller &entry : *entries) {
+	if (!entry.scene_controller)
+	    continue;
+
+	if (entry.render_endpoint_only && entry.view_controller) {
+	    const int shared_root_visible =
+		ged_obol_view_scope_is_independent(entry.view_ctx) ? 0 : 1;
+	    if (entry.render_shared_root_visible != shared_root_visible) {
+		SoBRLSceneController *shared_scene =
+		    ged_draw_obol_scene_controller(gedp);
+		if (shared_scene &&
+			ged_obol_bind_view_render_root(entry.view_ctx,
+			    shared_scene, entry.view_controller))
+		    entry.render_shared_root_visible = shared_root_visible;
+	    }
+	}
+
+	if (!entry.use_attached_view_scope &&
+		ged_obol_view_scope_is_independent(txn->view))
+	    continue;
+	if (entry.render_endpoint_only) {
+	    if (!ged_obol_view_scope_is_independent(entry.view_ctx))
+		continue;
+	    if (txn->kind == GED_DRAW_TXN_CLEAR ||
+		    txn->kind == GED_DRAW_TXN_TEARDOWN)
+		continue;
+	}
+
+	const struct ged_draw_transaction *sync_txn = txn;
+	struct ged_draw_transaction local_txn;
+	int full_sync = 0;
+
+	if (entry.use_attached_view_scope && entry.view_ctx) {
+	    const int txn_independent =
+		ged_obol_view_scope_is_independent(txn->view);
+	    const int entry_independent =
+		ged_obol_view_scope_is_independent(entry.view_ctx);
+
+	    if (txn_independent && txn->view != entry.view_ctx)
+		continue;
+
+	    if (entry_independent && txn->view != entry.view_ctx) {
+		switch (txn->kind) {
+		    case GED_DRAW_TXN_SOURCE_UPDATED:
+		    case GED_DRAW_TXN_SOURCE_REFERENCES_REMOVED:
+		    case GED_DRAW_TXN_SOURCE_RENAMED:
+		    case GED_DRAW_TXN_STALE_SOURCE:
+		    case GED_DRAW_TXN_MATERIAL_CHANGED:
+		    case GED_DRAW_TXN_REFRESH_MATERIAL_COLORS:
+		    case GED_DRAW_TXN_HIGHLIGHT:
+			full_sync = 1;
+			break;
+		    case GED_DRAW_TXN_REDRAW:
+			/* A redraw for one concrete shared view is a render
+			 * refresh, not an instruction to rebuild independent
+			 * attached scenes.  Database edits still use the
+			 * source/material/highlight cases above to refresh all
+			 * scopes that contain the affected sources. */
+			if (txn->view)
+			    continue;
+			full_sync = 1;
+			break;
+		    case GED_DRAW_TXN_CLEAR:
+		    case GED_DRAW_TXN_TEARDOWN:
+			break;
+		    default:
+			continue;
+		}
+	    }
+
+	    local_txn = *txn;
+	    local_txn.view = entry.view_ctx;
+	    sync_txn = &local_txn;
+	}
+
+	int entry_changed = full_sync ?
+	    ged_draw_obol_scene_sync_full_scene(gedp, entry.view_ctx,
+		    ged_obol_transaction_source_revision(result),
+		    entry.scene_controller) :
+	    ged_draw_obol_scene_sync_transaction(gedp, sync_txn, result,
+		    entry.scene_controller);
+	if (entry.view_controller &&
+		ged_obol_transaction_invalidates_view_lod(sync_txn,
+		    full_sync))
+	    entry.view_controller->clearViewLodState();
+	if (entry_changed)
+	    changed = 1;
+    }
+
+    return changed ? 1 : 0;
 }
 
 int
@@ -13156,7 +13684,7 @@ ged_obol_transaction_observer(
 	void *client_data)
 {
     (void)client_data;
-    (void)ged_draw_obol_scene_sync_transaction(gedp, txn, result, NULL);
+    (void)ged_draw_obol_scene_sync_attached_transaction(gedp, txn, result);
 }
 
 static void
@@ -13276,6 +13804,19 @@ ged_obol_replay_preserved_sources(
 }
 
 static int
+ged_obol_observer_ensure(struct ged *gedp, struct ged_drawable *gdp)
+{
+    if (!gedp || !gdp)
+	return 0;
+    if (gdp->gd_obol_observer_token)
+	return 1;
+
+    gdp->gd_obol_observer_token = ged_draw_observer_add(gedp,
+	    ged_obol_transaction_observer, NULL);
+    return gdp->gd_obol_observer_token ? 1 : 0;
+}
+
+static int
 ged_draw_obol_attach_common(struct ged *gedp,
 	SoBRLSceneController *scene_controller,
 	BRLObolViewController *view_controller,
@@ -13289,21 +13830,24 @@ ged_draw_obol_attach_common(struct ged *gedp,
 
     ged_draw_obol_scene_controller_detach(gedp);
 
-    gdp->gd_obol_scene_controller = scene_controller;
-    gdp->gd_obol_controller = view_controller;
-    gdp->gd_obol_scene_controller_owned = owned_scene_controller ? 1 : 0;
-    gdp->gd_obol_controller_owned = owned_view_controller ? 1 : 0;
-    gdp->gd_obol_scene_controller_full_sync = 0;
-    gdp->gd_obol_observer_token = ged_draw_observer_add(gedp,
-	    ged_obol_transaction_observer, NULL);
-    if (!gdp->gd_obol_observer_token) {
-	gdp->gd_obol_scene_controller = NULL;
-	gdp->gd_obol_controller = NULL;
-	gdp->gd_obol_scene_controller_owned = 0;
-	gdp->gd_obol_controller_owned = 0;
-	gdp->gd_obol_scene_controller_full_sync = 0;
+    if (!ged_obol_observer_ensure(gedp, gdp))
 	return 0;
-    }
+
+    std::vector<ged_obol_attached_controller> *entries =
+	ged_obol_attached_controllers(gdp, 1);
+    if (!entries)
+	return 0;
+
+    ged_obol_attached_controller entry;
+    entry.scene_controller = scene_controller;
+    entry.view_controller = view_controller;
+    entry.owned_scene_controller = owned_scene_controller ? 1 : 0;
+    entry.owned_view_controller = owned_view_controller ? 1 : 0;
+    entry.full_sync = 0;
+    entry.use_attached_view_scope = 0;
+    entry.render_endpoint_only = 0;
+    entries->push_back(entry);
+    ged_obol_primary_set(gdp, &entries->back());
 
     std::vector<ged_obol_preserved_source> preserved_sources;
     if (sync_current_scene)
@@ -13319,8 +13863,97 @@ ged_draw_obol_attach_common(struct ged *gedp,
     if (sync_current_scene && !replayed_preserved)
 	(void)ged_draw_obol_scene_sync_full_scene(gedp, NULL, 0,
 		scene_controller);
-    if (sync_current_scene)
-	gdp->gd_obol_scene_controller_full_sync = 1;
+    if (sync_current_scene) {
+	entries->back().full_sync = 1;
+	ged_obol_primary_set(gdp, &entries->back());
+    }
+
+    return 1;
+}
+
+static int
+ged_obol_bind_view_render_root(void *view_ctx,
+	SoBRLSceneController *shared_scene,
+	BRLObolViewController *view_controller)
+{
+    if (!shared_scene || !view_controller)
+	return 0;
+
+    SoNode *shared_root = shared_scene->getSceneRoot();
+    if (!shared_root)
+	return 0;
+
+    SoNode *local_root = view_controller->getSceneRoot();
+    if (!local_root || local_root == shared_root) {
+	SoBRLSceneGroup *view_group = new SoBRLSceneGroup;
+	std::string group_path("_view/");
+	group_path += ged_obol_view_scope_name(view_ctx);
+	view_group->groupPath = group_path.c_str();
+	view_controller->setSceneRoot(view_group);
+	local_root = view_group;
+    }
+
+    SoSeparator *render_root = new SoSeparator;
+    if (!ged_obol_view_scope_is_independent(view_ctx))
+	render_root->addChild(shared_root);
+    if (local_root && local_root != shared_root)
+	render_root->addChild(local_root);
+    view_controller->setRenderSceneRoot(render_root);
+    return 1;
+}
+
+static int
+ged_draw_obol_attach_view_common(struct ged *gedp,
+	void *view_ctx,
+	SoBRLSceneController *scene_controller,
+	BRLObolViewController *view_controller,
+	int sync_current_scene)
+{
+    struct ged_drawable *gdp = ged_obol_gdp(gedp);
+    if (!gdp || !scene_controller || !view_controller)
+	return 0;
+
+    if (!ged_obol_observer_ensure(gedp, gdp))
+	return 0;
+
+    SoBRLSceneController *shared_scene =
+	ged_draw_obol_scene_controller_ensure(gedp, sync_current_scene);
+    if (!shared_scene ||
+	    !ged_obol_bind_view_render_root(view_ctx, shared_scene,
+		view_controller))
+	return 0;
+
+    std::vector<ged_obol_attached_controller> *entries =
+	ged_obol_attached_controllers(gdp, 1);
+    if (!entries)
+	return 0;
+
+    for (size_t i = 0; i < entries->size(); i++) {
+	ged_obol_attached_controller &entry = (*entries)[i];
+	if (entry.view_ctx == view_ctx ||
+		entry.view_controller == view_controller ||
+		entry.scene_controller == scene_controller) {
+	    ged_obol_delete_owned_attached_controller(entry);
+	    entries->erase(entries->begin() +
+		    static_cast<std::vector<ged_obol_attached_controller>::difference_type>(i));
+	    break;
+	}
+    }
+
+    ged_obol_attached_controller entry;
+    entry.view_ctx = view_ctx;
+    entry.scene_controller = view_controller->getSceneController();
+    entry.view_controller = view_controller;
+    entry.owned_scene_controller = 0;
+    entry.owned_view_controller = 0;
+    entry.full_sync = 0;
+    entry.use_attached_view_scope = 1;
+    entry.render_endpoint_only = 1;
+    entry.render_shared_root_visible =
+	ged_obol_view_scope_is_independent(view_ctx) ? 0 : 1;
+    entries->push_back(entry);
+
+    ged_obol_primary_refresh_from_registry(gdp);
 
     return 1;
 }
@@ -13343,6 +13976,40 @@ ged_draw_obol_controller_attach(struct ged *gedp,
 	return 0;
     return ged_draw_obol_attach_common(gedp, controller->getSceneController(),
 	    controller, sync_current_scene, 0, 0);
+}
+
+extern "C" int
+ged_draw_obol_controller_attach_opaque(struct ged *gedp,
+	void *controller,
+	int sync_current_scene)
+{
+    return ged_draw_obol_controller_attach(gedp,
+	static_cast<BRLObolViewController *>(controller),
+	sync_current_scene);
+}
+
+int
+ged_draw_obol_controller_attach_for_view(struct ged *gedp,
+	void *view_ctx,
+	BRLObolViewController *controller,
+	int sync_current_scene)
+{
+    if (!controller)
+	return 0;
+    return ged_draw_obol_attach_view_common(gedp, view_ctx,
+	    controller->getSceneController(), controller,
+	    sync_current_scene);
+}
+
+extern "C" int
+ged_draw_obol_controller_attach_opaque_for_view(struct ged *gedp,
+	void *view_ctx,
+	void *controller,
+	int sync_current_scene)
+{
+    return ged_draw_obol_controller_attach_for_view(gedp, view_ctx,
+	static_cast<BRLObolViewController *>(controller),
+	sync_current_scene);
 }
 
 SoBRLSceneController *
@@ -13384,43 +14051,66 @@ ged_draw_obol_scene_controller_detach(struct ged *gedp)
     if (!gdp)
 	return;
 
-    if (gdp->gd_obol_observer_token) {
-	(void)ged_draw_observer_remove(gedp, gdp->gd_obol_observer_token);
-	gdp->gd_obol_observer_token = 0;
-    }
-
-    BRLObolViewController *owned_controller =
-	gdp->gd_obol_controller_owned ?
-	static_cast<BRLObolViewController *>(gdp->gd_obol_controller) :
-	NULL;
-    SoBRLSceneController *owned_scene =
-	(!owned_controller && gdp->gd_obol_scene_controller_owned) ?
-	static_cast<SoBRLSceneController *>(gdp->gd_obol_scene_controller) :
-	NULL;
     SoBRLSceneController *preserve_scene =
-	(gdp->gd_obol_scene_controller_owned || gdp->gd_obol_controller_owned) ?
-	static_cast<SoBRLSceneController *>(gdp->gd_obol_scene_controller) :
-	NULL;
+	static_cast<SoBRLSceneController *>(gdp->gd_obol_scene_controller);
     if (preserve_scene) {
 	std::vector<ged_obol_preserved_source> preserved_sources;
 	ged_obol_collect_preserved_sources(preserve_scene, preserved_sources);
 	ged_obol_preserved_sources_store(gdp, preserved_sources);
     }
-    gdp->gd_obol_scene_controller = NULL;
-    gdp->gd_obol_controller = NULL;
-    gdp->gd_obol_scene_controller_owned = 0;
-    gdp->gd_obol_controller_owned = 0;
-    gdp->gd_obol_scene_controller_full_sync = 0;
-    if (owned_controller)
-	delete owned_controller;
-    else if (owned_scene)
-	delete owned_scene;
+
+    if (gdp->gd_obol_observer_token) {
+	(void)ged_draw_observer_remove(gedp, gdp->gd_obol_observer_token);
+	gdp->gd_obol_observer_token = 0;
+    }
+
+    ged_obol_attached_controllers_free(gdp);
 }
 
 void
 ged_draw_obol_controller_detach(struct ged *gedp)
 {
     ged_draw_obol_scene_controller_detach(gedp);
+}
+
+extern "C" void
+ged_draw_obol_controller_detach_opaque(struct ged *gedp,
+	void *controller)
+{
+    struct ged_drawable *gdp = ged_obol_gdp(gedp);
+    BRLObolViewController *view_controller =
+	static_cast<BRLObolViewController *>(controller);
+    if (!gdp || !view_controller)
+	return;
+
+    std::vector<ged_obol_attached_controller> *entries =
+	ged_obol_attached_controllers(gdp, 0);
+    if (!entries)
+	return;
+
+    for (size_t i = 0; i < entries->size(); i++) {
+	ged_obol_attached_controller &entry = (*entries)[i];
+	if (entry.view_controller != view_controller)
+	    continue;
+	ged_obol_delete_owned_attached_controller(entry);
+	entries->erase(entries->begin() +
+		static_cast<std::vector<ged_obol_attached_controller>::difference_type>(i));
+	break;
+    }
+
+    if (entries->empty()) {
+	delete entries;
+	gdp->gd_obol_attached_controllers = NULL;
+	ged_obol_primary_clear(gdp);
+	if (gdp->gd_obol_observer_token) {
+	    (void)ged_draw_observer_remove(gedp,
+		    gdp->gd_obol_observer_token);
+	    gdp->gd_obol_observer_token = 0;
+	}
+	return;
+    }
+
+    ged_obol_primary_refresh_from_registry(gdp);
 }
 
 // Local Variables:

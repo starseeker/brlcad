@@ -38,7 +38,7 @@
 #include <ged/draw.h>
 #include <ged/event_txn.h>
 
-#define QDIFF_THRES 20
+#define QDIFF_THRES 25
 
 static int keep_images = 0;
 
@@ -84,18 +84,16 @@ dm_refresh(struct ged *gedp, int vnum)
     ged_draw_apply_transaction(gedp, &txn, NULL);
 
     struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(v);
-    /* Ensure rendering goes to this view's DM context, not the last-active one.
-     * With multiple DMs (e.g. quad views), each has its own OSMesa context.
-     * Without making the correct context current here, dm_set_bg and
-     * dm_draw_objs will operate on whichever context was last activated,
-     * leaving this view's buffer empty when swrast_getDisplayImage reads it. */
+    if (!dmp)
+	return;
+    /* Ensure rendering goes to this view's DM context, not the last-active
+     * one.  With multiple Obol DMs each view has its own OSMesa context. */
     dm_make_current(dmp);
     unsigned char *dm_bg1;
     unsigned char *dm_bg2;
     dm_get_bg(&dm_bg1, &dm_bg2, dmp);
     dm_set_bg(dmp, dm_bg1[0], dm_bg1[1], dm_bg1[2], dm_bg2[0], dm_bg2[1], dm_bg2[2]);
     dm_set_native_repaint_pending(dmp, 0);
-    dm_draw_objs(v);
     dm_draw_end(dmp);
 }
 
@@ -466,8 +464,6 @@ main(int ac, char *av[]) {
     const char *s_av[15] = {NULL};
     gedp = ged_open("db", "moss_quad_tmp.g", 1);
 
-    bu_setenv("DM_SWRAST", "1", 1);
-
     // We don't want the default GED views for this test
     void *view_set_ctx = ged_view_set_ctx(gedp);
     rt_view_set_context_remove(view_set_ctx, NULL);
@@ -479,7 +475,7 @@ main(int ac, char *av[]) {
     // out to test the behavior of multiple views and dms, so we need to
     // set up multiples.  We'll start out with four non-independent views,
     // to mimic the most common multi-dm/view display - a Quad view widget.
-    // Each view will get its own attached swrast DM.
+    // Each view gets its own attached Obol DM/controller.
     for (size_t i = 0; i < 4; i++) {
 	char view_name[16];
 	snprintf(view_name, sizeof(view_name), "V%zd", i);
@@ -490,15 +486,16 @@ main(int ac, char *av[]) {
 	rt_view_set_context_add(view_set_ctx, v);
 	ged_view_context_owned_add(gedp, v);
 
-	/* To generate images that will allow us to check if the drawing
-	 * is proceeding as expected, we use the swrast off-screen dm. */
+	/* To generate images that allow us to check multi-view behavior, use
+	 * the headless Obol/Coin display host rather than legacy immediate
+	 * draw streams. */
 	struct bu_vls dm_name = BU_VLS_INIT_ZERO;
 	s_av[0] = "dm";
 	s_av[1] = "attach";
 	s_av[2] = "-V";
 	s_av[3] = view_name;
-	s_av[4] = "swrast";
-	bu_vls_sprintf(&dm_name, "SW%zd", i);
+	s_av[4] = "obol";
+	bu_vls_sprintf(&dm_name, "OB%zd", i);
 	s_av[5] = bu_vls_cstr(&dm_name);
 	s_av[6] = NULL;
 	ged_exec_dm(gedp, 6, s_av);
@@ -519,18 +516,6 @@ main(int ac, char *av[]) {
 	rt_view_context_dimensions_set(v, dm_get_width(dmp), dm_get_height(dmp));
 	rt_view_context_unit_conversion_set(v, gedp->dbip->dbi_local2base,
 	    gedp->dbip->dbi_base2local);
-
-	// The default (fast) wireframe has some differences from
-	// the slower full OpenGL draw path - disable it for the
-	// purposes of these tests.
-	s_av[0] = "dm";
-	s_av[1] = "set";
-	s_av[2] = "--dm";
-	s_av[3] = bu_vls_cstr(&dm_name);
-	s_av[4] = "fast_wireframe";
-	s_av[5] = "0";
-	s_av[6] = NULL;
-	ged_exec_dm(gedp, 6, s_av);
 
 	// Done with dm name
 	bu_vls_free(&dm_name);

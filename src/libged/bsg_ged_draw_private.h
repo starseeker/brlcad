@@ -104,6 +104,11 @@ enum {
 struct ged_draw_obol_database_source_record {
     int valid;
     const char *database_path;
+    const char *instance_key;
+    const char *owner_group_path;
+    int visible;
+    int highlighted;
+    fastf_t transparency;
     int draw_mode;
     int material_policy;
     uint64_t source_revision;
@@ -1139,6 +1144,9 @@ GED_EXPORT extern int ged_draw_obol_scene_database_autoview_bounds(
 	int *empty_out);
 GED_EXPORT extern void ged_draw_obol_preserved_sources_free(
 	struct ged *gedp);
+GED_EXPORT extern int ged_draw_obol_highlight_state_set(
+	struct ged *gedp,
+	int highlighted);
 GED_EXPORT extern int ged_draw_obol_scene_root_child_count(
 	struct ged *gedp,
 	size_t *out);
@@ -1564,6 +1572,8 @@ ged_draw_obol_database_source_realize_for_path(struct ged *gedp,
 GED_EXPORT extern int ged_draw_obol_scene_controller_ensure_owned(
 	struct ged *gedp,
 	int sync_current_scene);
+GED_EXPORT extern int ged_draw_obol_scene_controller_attached(
+	struct ged *gedp);
 GED_EXPORT extern int ged_draw_obol_scene_controller_full_synced(
 	struct ged *gedp);
 GED_EXPORT extern int ged_draw_obol_scene_sync_attached_transaction(

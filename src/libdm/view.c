@@ -47,12 +47,6 @@
 #include "dm.h"
 
 int
-dm_view_context_is_retained_legacy(const void *view_ctx)
-{
-    return rt_view_context_is_retained(view_ctx);
-}
-
-int
 dm_view_context_width_get(const void *view_ctx)
 {
     return rt_view_context_width_get(view_ctx);

@@ -16,9 +16,11 @@
 #include "brlobol/measure_action.h"
 #include "brlobol/mesh_lod_submit_action.h"
 #include "brlobol/mesh_residency_action.h"
+#include "brlobol/mesh_shape.h"
 #include "brlobol/pick_detail.h"
 #include "brlobol/snap_action.h"
 #include "brlobol/view_controller.h"
+#include "brlobol/view_lod.h"
 #include "brlobol/view_store.h"
 #include "raytrace.h"
 #include "rt/view.h"
@@ -44,6 +46,10 @@
 #include <Inventor/nodes/SoSeparator.h>
 
 static const char *controller_database_id(const struct db_i *dbip);
+static std::vector<SoBRLDatabaseSource *> controller_render_database_sources(
+	const BRLObolViewController *controller);
+static std::vector<SoBRLMeshShape *> controller_render_mesh_shapes(
+	const BRLObolViewController *controller);
 
 SbMatrix
 brlobol_sbmatrix_from_brl_mat(const mat_t mat)
@@ -153,6 +159,87 @@ controller_configure_render_environment(SoViewport *viewport)
     renderEnvironment->addChild(headlight);
 
     root->insertChild(renderEnvironment, 0);
+}
+
+static void
+controller_collect_database_sources(SoNode *node,
+	std::vector<SoBRLDatabaseSource *> &sources)
+{
+    if (!node)
+	return;
+
+    if (node->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
+	SoBRLDatabaseSource *source = static_cast<SoBRLDatabaseSource *>(node);
+	if (std::find(sources.begin(), sources.end(), source) == sources.end())
+	    sources.push_back(source);
+    }
+
+    if (!node->isOfType(SoGroup::getClassTypeId()))
+	return;
+
+    SoGroup *group = static_cast<SoGroup *>(node);
+    for (int i = 0; i < group->getNumChildren(); i++)
+	controller_collect_database_sources(group->getChild(i), sources);
+}
+
+static void
+controller_collect_mesh_shapes(SoNode *node,
+	std::vector<SoBRLMeshShape *> &shapes)
+{
+    if (!node)
+	return;
+
+    if (node->isOfType(SoBRLMeshShape::getClassTypeId())) {
+	SoBRLMeshShape *shape = static_cast<SoBRLMeshShape *>(node);
+	if (std::find(shapes.begin(), shapes.end(), shape) == shapes.end())
+	    shapes.push_back(shape);
+    }
+
+    if (!node->isOfType(SoGroup::getClassTypeId()))
+	return;
+
+    SoGroup *group = static_cast<SoGroup *>(node);
+    for (int i = 0; i < group->getNumChildren(); i++)
+	controller_collect_mesh_shapes(group->getChild(i), shapes);
+}
+
+static std::vector<SoBRLDatabaseSource *>
+controller_render_database_sources(const BRLObolViewController *controller)
+{
+    std::vector<SoBRLDatabaseSource *> sources;
+    if (!controller)
+	return sources;
+
+    SoNode *root = controller->getRenderSceneRoot();
+    if (!root)
+	root = controller->getSceneRoot();
+    controller_collect_database_sources(root, sources);
+    if (!sources.empty())
+	return sources;
+
+    const int sourceCount = controller->getDatabaseSourceCount();
+    for (int i = 0; i < sourceCount; i++) {
+	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
+	if (source && std::find(sources.begin(), sources.end(), source) ==
+		sources.end())
+	    sources.push_back(source);
+    }
+
+    return sources;
+}
+
+static std::vector<SoBRLMeshShape *>
+controller_render_mesh_shapes(const BRLObolViewController *controller)
+{
+    std::vector<SoBRLMeshShape *> shapes;
+    if (!controller)
+	return shapes;
+
+    SoNode *root = controller->getRenderSceneRoot();
+    if (!root)
+	root = controller->getSceneRoot();
+    controller_collect_mesh_shapes(root, shapes);
+    return shapes;
 }
 
 static SbString
@@ -268,8 +355,10 @@ controller_database_source_for_request(BRLObolViewController *controller,
     if (!controller)
 	return NULL;
 
-    for (int i = 0; i < controller->getDatabaseSourceCount(); i++) {
-	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
+    std::vector<SoBRLDatabaseSource *> sources =
+	controller_render_database_sources(controller);
+    for (size_t i = 0; i < sources.size(); i++) {
+	SoBRLDatabaseSource *source = sources[i];
 	if (!source || !source->getDatabase())
 	    continue;
 
@@ -299,8 +388,10 @@ controller_database_source_count(BRLObolViewController *controller)
     if (!controller)
 	return 0;
 
-    for (int i = 0; i < controller->getDatabaseSourceCount(); i++) {
-	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
+    std::vector<SoBRLDatabaseSource *> sources =
+	controller_render_database_sources(controller);
+    for (size_t i = 0; i < sources.size(); i++) {
+	SoBRLDatabaseSource *source = sources[i];
 	if (source && source->getDatabase())
 	    count++;
     }
@@ -476,6 +567,8 @@ controller_consume_source_full_detail(BRLObolViewController *controller,
 BRLObolViewController::BRLObolViewController(void) :
     sceneController(),
     viewport(new SoViewport),
+    renderLodRoot(NULL),
+    viewLodState(new BRLObolViewLodState),
     renderManager(new SoRenderManager),
     activeCamera(NULL),
     viewportRegion(1, 1),
@@ -525,6 +618,8 @@ BRLObolViewController::BRLObolViewController(void) :
 BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
     sceneController(),
     viewport(new SoViewport),
+    renderLodRoot(NULL),
+    viewLodState(new BRLObolViewLodState),
     renderManager(new SoRenderManager),
     activeCamera(NULL),
     viewportRegion(1, 1),
@@ -585,6 +680,8 @@ BRLObolViewController::~BRLObolViewController(void)
     this->selectionStore = NULL;
     this->setCamera(NULL);
     this->setSceneRoot(NULL);
+    delete this->viewLodState;
+    this->viewLodState = NULL;
     this->renderManager->setSceneGraph(NULL);
     delete this->renderManager;
     this->renderManager = NULL;
@@ -593,11 +690,35 @@ BRLObolViewController::~BRLObolViewController(void)
 }
 
 void
+BRLObolViewController::setViewportSceneGraphWithLod(SoNode *root)
+{
+    if (this->renderLodRoot) {
+	this->viewport->setSceneGraph(NULL);
+	this->renderLodRoot->unref();
+	this->renderLodRoot = NULL;
+    }
+
+    if (!root) {
+	this->viewport->setSceneGraph(NULL);
+	return;
+    }
+
+    SoBRLViewLodGroup *wrapper = new SoBRLViewLodGroup;
+    wrapper->ref();
+    wrapper->setViewLodState(this->viewLodState);
+    wrapper->addChild(root);
+    this->renderLodRoot = wrapper;
+    this->viewport->setSceneGraph(wrapper);
+}
+
+void
 BRLObolViewController::setSceneRoot(SoNode *root)
 {
     this->clearRtPickCaches();
+    if (this->viewLodState)
+	this->viewLodState->clear();
     this->sceneController.setSceneRoot(root);
-    this->viewport->setSceneGraph(root);
+    this->setViewportSceneGraphWithLod(root);
     this->syncRenderManager();
     this->requestRender("scene-root");
 }
@@ -608,10 +729,40 @@ BRLObolViewController::getSceneRoot(void) const
     return this->sceneController.getSceneRoot();
 }
 
+void
+BRLObolViewController::setRenderSceneRoot(SoNode *root)
+{
+    this->clearRtPickCaches();
+    if (this->viewLodState)
+	this->viewLodState->clear();
+    this->setViewportSceneGraphWithLod(root);
+    this->syncRenderManager();
+    this->requestRender("render-scene-root");
+}
+
+SoNode *
+BRLObolViewController::getRenderSceneRoot(void) const
+{
+    return this->viewport->getSceneGraph();
+}
+
 SoNode *
 BRLObolViewController::getRenderRoot(void) const
 {
     return this->viewport->getRoot();
+}
+
+BRLObolViewLodState *
+BRLObolViewController::getViewLodState(void) const
+{
+    return this->viewLodState;
+}
+
+void
+BRLObolViewController::clearViewLodState(void)
+{
+    if (this->viewLodState)
+	this->viewLodState->clear();
 }
 
 void
@@ -989,9 +1140,10 @@ controller_lod_source_signature(const BRLObolViewController *controller)
     if (!controller)
 	return SbString("");
 
-    const int sourceCount = controller->getDatabaseSourceCount();
-    for (int i = 0; i < sourceCount; i++) {
-	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
+    std::vector<SoBRLDatabaseSource *> sources =
+	controller_render_database_sources(controller);
+    for (size_t i = 0; i < sources.size(); i++) {
+	SoBRLDatabaseSource *source = sources[i];
 	if (!source || !source->getDatabase())
 	    continue;
 	if (source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED ||
@@ -1174,8 +1326,10 @@ BRLObolViewController::prepareRtPickCaches(void)
     std::vector<struct db_i *> sourceDatabases;
     std::vector<uint32_t> sourceRevisions;
 
-    for (int i = 0; i < this->getDatabaseSourceCount(); i++) {
-	SoBRLDatabaseSource *source = this->getDatabaseSource(i);
+    std::vector<SoBRLDatabaseSource *> sources =
+	controller_render_database_sources(this);
+    for (size_t i = 0; i < sources.size(); i++) {
+	SoBRLDatabaseSource *source = sources[i];
 	if (!source || !source->getDatabase() ||
 		source->path.getValue().getLength() == 0)
 	    continue;
@@ -1470,7 +1624,9 @@ BRLObolViewController::evictMeshPayloadsToBudget(
     this->lastMeshBudgetEvictedFullDetailMeshCount = 0;
     this->lastMeshBudgetEvictedDisplayMeshCount = 0;
 
-    SoNode *root = this->getSceneRoot();
+    SoNode *root = this->getRenderSceneRoot();
+    if (!root)
+	root = this->getSceneRoot();
     if (!root)
 	return 0;
 
@@ -1479,10 +1635,12 @@ BRLObolViewController::evictMeshPayloadsToBudget(
     action.setEvictDisplayPayloads(evictDisplayPayloads);
     action.apply(root);
 
+    const size_t viewLodBytes = this->viewLodState ?
+	this->viewLodState->estimateDisplayMeshBytes() : 0;
     this->lastMeshBudgetInitialResidentBytes =
-	action.getInitialResidentMeshBytes();
+	action.getInitialResidentMeshBytes() + viewLodBytes;
     this->lastMeshBudgetFinalResidentBytes =
-	action.getFinalResidentMeshBytes();
+	action.getFinalResidentMeshBytes() + viewLodBytes;
     this->lastMeshBudgetFreedFullDetailBytes =
 	action.getFreedFullDetailBytes();
     this->lastMeshBudgetFreedDisplayBytes =
@@ -1493,7 +1651,41 @@ BRLObolViewController::evictMeshPayloadsToBudget(
     this->lastMeshBudgetEvictedDisplayMeshCount =
 	action.getEvictedDisplayMeshCount();
 
-    size_t freedBytes = action.getFreedResidentMeshBytes();
+    if (this->lastMeshBudgetFinalResidentBytes > maxBytes &&
+	    this->viewLodState) {
+	std::vector<SoBRLMeshShape *> shapes =
+	    controller_render_mesh_shapes(this);
+	for (size_t i = 0; i < shapes.size(); i++) {
+	    if (this->lastMeshBudgetFinalResidentBytes <= maxBytes)
+		break;
+	    if (!this->viewLodState->findMesh(shapes[i]))
+		continue;
+	    size_t freed = shapes[i]->evictDisplayMeshPreservingSourceMetrics();
+	    if (freed == 0)
+		continue;
+	    this->lastMeshBudgetFreedFullDetailBytes += freed;
+	    this->lastMeshBudgetEvictedFullDetailMeshCount++;
+	    this->lastMeshBudgetFinalResidentBytes =
+		this->lastMeshBudgetFinalResidentBytes > freed ?
+		this->lastMeshBudgetFinalResidentBytes - freed : 0;
+	}
+    }
+
+    if (evictDisplayPayloads &&
+	    this->lastMeshBudgetFinalResidentBytes > maxBytes &&
+	    this->viewLodState) {
+	unsigned int evicted = 0;
+	size_t freed = this->viewLodState->evictDisplayMeshes(&evicted);
+	if (freed > 0) {
+	    this->lastMeshBudgetFreedDisplayBytes += freed;
+	    this->lastMeshBudgetEvictedDisplayMeshCount += evicted;
+	    this->lastMeshBudgetFinalResidentBytes =
+		this->lastMeshBudgetFinalResidentBytes > freed ?
+		this->lastMeshBudgetFinalResidentBytes - freed : 0;
+	}
+    }
+
+    size_t freedBytes = this->getLastMeshBudgetFreedResidentBytes();
     if (freedBytes > 0)
 	this->requestRender("lod-memory-budget");
     return freedBytes;
@@ -1587,7 +1779,8 @@ BRLObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
 {
     if (!this->lodService || !this->lodService->isRunning())
 	return 0;
-    if (!this->activeCamera || !this->getSceneRoot())
+    if (!this->activeCamera ||
+	    (!this->getSceneRoot() && !this->getRenderSceneRoot()))
 	return 0;
 
     this->syncLodViewSignature(TRUE);
@@ -1643,14 +1836,15 @@ BRLObolViewController::submitLodRequests(BRLObolLodService *service,
 	return -1;
     }
 
-    if (!this->getSceneRoot()) {
+    if (!this->getSceneRoot() && !this->getRenderSceneRoot()) {
 	this->lastLodDiagnostics = "LoD submission requires a scene root";
 	return -1;
     }
 
-    const int sourceCount = this->getDatabaseSourceCount();
-    for (int i = 0; i < sourceCount; i++) {
-	SoBRLDatabaseSource *source = this->getDatabaseSource(i);
+    std::vector<SoBRLDatabaseSource *> sources =
+	controller_render_database_sources(this);
+    for (size_t i = 0; i < sources.size(); i++) {
+	SoBRLDatabaseSource *source = sources[i];
 	if (!source)
 	    continue;
 
@@ -1671,6 +1865,7 @@ BRLObolViewController::submitLodRequests(BRLObolLodService *service,
 	action.setRevisions(this->lodViewRevision, this->lodPolicyRevision);
 	action.setRefreshMissing(refreshMissing);
 	action.setReset(reset);
+	action.setViewLodState(this->viewLodState);
 	if (this->lodUseForcedLevel)
 	    action.setForcedLevel(this->lodForcedLevel);
 	action.apply(source);
@@ -1710,7 +1905,9 @@ BRLObolViewController::applyLodResults(BRLObolLodService *service,
 	return -1;
     }
 
-    SoNode *root = this->getSceneRoot();
+    SoNode *root = this->getRenderSceneRoot();
+    if (!root)
+	root = this->getSceneRoot();
     if (!root) {
 	this->lastLodDiagnostics = "LoD result application requires a scene root";
 	return -1;
@@ -1724,6 +1921,7 @@ BRLObolViewController::applyLodResults(BRLObolLodService *service,
 	return 0;
 
     SoBRLLodUpdateAction update;
+    update.setViewLodState(this->viewLodState);
     for (size_t i = 0; i < drained.size(); i++) {
 	if (drained[i].request.viewRevision != this->lodViewRevision ||
 		drained[i].request.policyRevision != this->lodPolicyRevision) {

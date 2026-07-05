@@ -64,7 +64,6 @@ struct dm_view_data {
 #define DM_VIEW_REFRESH_FORCE       0x80000000u
 #define DM_VIEW_REFRESH_ALL         0xffffffffu
 
-DM_EXPORT extern int dm_view_context_is_retained_legacy(const void *view_ctx);
 DM_EXPORT extern int dm_view_context_width_get(const void *view_ctx);
 DM_EXPORT extern int dm_view_context_height_get(const void *view_ctx);
 DM_EXPORT extern int dm_view_context_dimensions_set(void *view_ctx, int width, int height);

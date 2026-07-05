@@ -490,6 +490,12 @@ _objs_cmd_update(void *bs, int argc, const char **argv)
     ged_draw_view_polygon_ref poly_ref =
 	ged_draw_view_context_polygon_find_scoped(gd->cv, gd->vobj,
 		gd->local_obj);
+    if (ged_draw_view_polygon_ref_is_null(poly_ref) && !gd->local_obj) {
+	poly_ref = ged_draw_view_context_polygon_find_scoped(gd->cv,
+		gd->vobj, 1);
+	if (!ged_draw_view_polygon_ref_is_null(poly_ref))
+	    gd->local_obj = 1;
+    }
     if (!ged_draw_view_polygon_ref_is_null(poly_ref)) {
 	if (have_xy) {
 	    if (!ged_draw_view_context_polygon_update_screen_pt(poly_ref,

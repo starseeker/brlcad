@@ -38,6 +38,7 @@
 #include "brlobol/snap_action.h"
 #include "brlobol/source_mesh_request.h"
 #include "brlobol/view_controller.h"
+#include "brlobol/view_lod.h"
 #include "brlobol/view_store.h"
 #include "brlobol/viewport_image.h"
 #include "brlobol/vlist_shape.h"

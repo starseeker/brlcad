@@ -21,6 +21,31 @@ Coin work on a stable path.  `obol_legacy_dependency_inventory.txt` was reduced
 to guard-visible dependency rows, active owners, removal conditions, and
 current blockers instead of historical prose.
 
+2026-07-04: View-mechanics boundary pivot
+-----------------------------------------
+
+The BSG-removal plan was redirected away from growing native generic view
+mechanics inside librt.  Generic non-scene view state, camera matrices,
+autoview-bounds math, screen/model transforms, input/knob state, refresh and
+settings values, and view-set bookkeeping should live in a new clean libbv.
+The old mainline libbv in `/home/starseeker/brlcad_vanilla` is reference
+material only; the new libbv uses the short `bv_*` prefix but is not required
+to preserve the historical bview-era data model or full old API surface.
+Scene objects, display lists, Tcl/display manager state, polygon stores,
+snap/selection, LoD caches, and retained scene graph behavior are explicitly
+outside the new libbv boundary.
+
+2026-07-04: Initial clean libbv scaffold
+----------------------------------------
+
+The new libbv scaffold now builds as `libbv` with public `bv.h` and
+`bv/view.h` headers, short `bv_*` API names, CMake/source-dir/pkg-config
+wiring, and a `bv_basic` regression test.  The initial implementation covers
+view state initialization/copying, camera matrices, autoview bounds,
+screen/model transforms, plane extraction, mouse/view adjustment, knob state
+processing, and view-set bookkeeping.  It deliberately does not carry forward
+old bview scene-object/display-list/Tcl/display-manager responsibilities.
+
 2026-07-04: Evaluated-wire default and havoc diagnosis
 ------------------------------------------------------
 
@@ -272,6 +297,88 @@ or tessellation.  The guard avoids building drawable geometry from poisoned
 tree-walk callback internals; the underlying librt alias still needs root-cause
 diagnosis if reproduced outside Obol.
 
+2026-07-04: libbv native RT view context started
+------------------------------------------------
+
+A clean BSG-free libbv scaffold was added for common view mechanics: view
+state, matrix updates, autoview-bounds math, screen/model transforms, generic
+knobs, adjustment logic, and view-set bookkeeping.
+
+librt now has a native/libbv-backed neutral `rt_view_context` implementation
+in `view_context_native.c`.  Neutral constructors create native contexts and
+explicit `_bsg` constructors remain retained fallback only.  Native dispatch
+covers generic view mechanics, knobs, refresh/display state records, LoD
+policy, snap setting scalars, zclip/framebuffer/cleared settings, and update
+callbacks.
+
+Scene/interaction operations are intentionally not implemented in libbv:
+native contexts use installed scene/feature/polygon/selection adapters when
+available and otherwise return neutral empty/no-op results instead of creating
+or mutating retained BSG state.  The remaining cleanup is to inventory broader
+caller-facing legacy dependencies, migrate each feature to native contexts plus
+Obol/libbrlobol adapters, then move neutral dispatch out of
+`view_legacy_bsg.c`.
+
+Focused verification added:
+
+* `ninja -C build libbv librt rt_view_info rt_view_legacy_bsg`
+* `ctest --test-dir build -R '^(bv_basic|rt_view_info|rt_view_legacy_bsg)$' --output-on-failure`
+
+2026-07-04: Native view caller cleanup
+--------------------------------------
+
+Focused GED and qtcad Obol workflows now use native neutral
+`rt_view_context` storage with installed Obol adapters instead of depending on
+retained BSG side effects.  qtcad local views use normal RT view-context
+destruction, and GED/qtcad no longer call the retained storage-release helper
+for those focused native paths.
+
+Native RT view contexts gained Obol scene-root attachment, independent-view
+scope state, and basic model-space measure-candidate results.  These are
+transitional RT-context services for Obol/GED/qtcad integration; libbv still
+owns only generic view mechanics and does not own scene objects or selection
+state.
+
+Borrowed Obol view controllers can now publish database sources/groups,
+activate feature/polygon stores, and detach while preserving database-source
+summaries.  Obol-only shape drafts can apply display names, visibility,
+highlight, material/style, line-set publication, evaluated-region metadata,
+tree-result state, and database-leaf display without a retained shape-ref
+mirror.
+
+Repeated transformed-instance bounds were hardened in libbrlobol by preferring
+database-source nodes over same-path structural groups during subtree-bounds
+lookup, matching the scene-tree summary semantics.
+
+Focused verification passed:
+
+* `ninja -C build libged libqtcad ged_test_view_command ged_test_obol_draw_sync test_qtcad_obol_draw_sync test_qtcad_obol_faceplate_sync test_qtcad_obol_selection_sync rt_view_legacy_bsg`
+* `ctest --test-dir build -R '^(rt_view_legacy_bsg|ged_test_obol_draw_sync|ged_test_view_command|test_qtcad_obol_draw_sync|test_qtcad_obol_faceplate_sync|test_qtcad_obol_selection_sync)$' --timeout 240 --output-on-failure`
+
+2026-07-04: libdm retained-view proxy removed
+---------------------------------------------
+
+The libdm `dm_view_context_is_retained_legacy` helper was removed.  QtGL was
+using retained BSG identity as a proxy for "this pointer is not a QWidget";
+that became wrong once neutral RT contexts became native/libbv-backed.  The
+new public `rt_view_context_is_valid` predicate identifies any RT view context,
+native or retained, while `rt_view_context_is_retained` remains BSG-only.
+QtGL now rejects opaque RT view-context pointers with the neutral predicate.
+
+The retained Tcl overlay regression was retired instead of preserved.  GED's
+default active view remains native/libbv-backed, and Tcl/data overlay lifecycle
+coverage now belongs in Obol/native view-command, draw-scene, and draw-sync
+tests rather than in standalone retained-BSG fixtures.
+
+Focused verification passed:
+
+* `ninja -C build librt libdm rt_view_legacy_bsg test_dm_backend_draw_item dm-qtgl`
+* `ctest --test-dir build -R '^(rt_view_legacy_bsg|dm_backend_draw_item|brlobol_pivot_guard)$' --timeout 240 --output-on-failure`
+* `ninja -C build ged_test_draw ged_test_ged_draw_scene`
+* `ctest --test-dir build -R '^(ged_test_drawing_basic|ged_test_ged_draw_scene_core)$' --timeout 240 --output-on-failure`
+* `ninja -C build test_brlobol_prototype test_brlobol_lod_update_action test_qtcad_obol_draw_sync`
+* `ctest --test-dir build -R '^(libbrlobol_prototype|libbrlobol_lod_update_action|test_qtcad_obol_draw_sync)$' --timeout 240 --output-on-failure`
+
 Verification Notes
 ------------------
 
@@ -280,3 +387,135 @@ Recent focused verification included `brlobol_pivot_guard`,
 `ged_test_gqa`, `libbrlobol_prototype`, `libbrlobol_lod_update_action`, and
 `test_qtcad_obol_draw_sync`, plus `git diff --check`.  See
 `obol_activework.txt` for the current command lines.
+
+2026-07-04: Headless Obol DM and classic shell smoke
+----------------------------------------------------
+
+Added a headless `dm-obol` libdm plugin backed by libbrlobol/Coin.  The plugin
+owns a `BRLObolViewController`, renders with OSMesa for normal `screengrab`,
+and exposes only an opaque controller accessor so libged can attach the
+backend-owned controller without making libdm depend on libged.  Historical
+immediate-mode libdm draw callbacks are intentionally no-ops in this backend;
+MGED/GSH/RTWizard refresh paths must use high-level GED draw transactions and
+then let the Obol DM render the retained scene.
+
+`dm attach obol` now attaches the backend controller to the GED Obol draw
+bridge.  Converted `ged_test_mged_view_state`, `ged_test_mged_shaded_mode`,
+and display-backed `ged_test_rtwizard_view` coverage to attach Obol and use
+normal `screengrab`.  Highlight state now updates attached Obol database
+sources/groups directly when no legacy retained shape-ref mirror exists.
+
+The `gsh --new-cmds` repaint loop now uses `GED_DRAW_TXN_REDRAW` instead of
+`dm_draw_objs`.  A teardown crash exposed by piping classic commands into `gsh`
+was fixed by clearing the view display-manager association before closing the
+DM and by detaching a matching borrowed Obol controller when the view DM is
+cleared.  Added `gsh_obol_smoke` as an automated attach/draw/autoview/
+screengrab/teardown guard.
+
+Classic/batch MGED now honors `-c -a obol` instead of staying on the initial
+`nu` display manager.  The MGED attach path registers the borrowed Obol
+controller with GED, skips GUI-only Tk event-handler setup for headless Obol,
+and the Obol `dozoom` path refreshes through `GED_DRAW_TXN_REDRAW`.  Added
+`mged_obol_smoke` to guard attach/draw/autoview/screengrab/teardown.
+
+Focused verification passed:
+
+* `ninja -C build gsh dm-obol ged_test_mged_view_state ged_test_mged_shaded_mode ged_test_rtwizard_view`
+* `ctest --test-dir build -R '^(mged_obol_smoke|gsh_obol_smoke|brlobol_pivot_guard|ged_test_mged_view_state|ged_test_mged_shaded_mode|ged_test_rtwizard_view)$' --timeout 240 --output-on-failure`
+* `git diff --check`
+
+2026-07-04: Per-view Obol DM controller registry
+------------------------------------------------
+
+The GED Obol bridge now keeps a registry of attached Obol controllers instead
+of treating `dm attach obol` as a single GED-global controller replacement.
+The C bridge has a view-scoped opaque attach API for libdm-owned controllers,
+draw transaction sync fans out to all registered Obol scenes, and view-object
+operations resolve the controller registered for their own GED view before
+falling back to the compatibility primary controller.  Clearing a view display
+manager now detaches only the matching borrowed Obol controller.
+
+Added multi-Obol-DM coverage to `ged_test_mged_view_state`; the test attaches a
+second Obol DM to a secondary view and verifies that shared draw transactions
+populate both Obol scene controllers.
+
+Focused verification passed:
+
+* `ninja -C build ged_test_mged_view_state`
+* `ctest --test-dir build -R '^ged_test_mged_view_state$' --timeout 240 --output-on-failure`
+* `ctest --test-dir build -R '^(gsh_obol_smoke|brlobol_pivot_guard|ged_test_mged_view_state|ged_test_mged_shaded_mode|ged_test_rtwizard_view)$' --timeout 240 --output-on-failure`
+
+2026-07-05: Shared GED Obol scene plus per-view render roots
+------------------------------------------------------------
+
+Reworked attached Obol DMs from mirrored scene owners into render endpoints on
+one GED-owned shared scene.  Each attached view controller now keeps a local
+scene root, and its render root is rebound by view state: shared views render
+the shared GED scene plus their local root, while independent views render only
+their local root.  Database draw/clear transaction sync now updates the shared
+scene for shared scope and the matching view endpoint for independent scope.
+
+View-object lookup, removal, prefix removal, clear, and style application were
+hardened so local records resolve through the attached view controller and
+shared records resolve through the GED scene owner.  Scoped feature/polygon
+store removal APIs were added for correct shared-vs-local clears.  Local
+polygon lookup was fixed for the polygon store's `L::name` keys, annotation
+lines now default to the historical red style, and shared line style changes
+apply to the actual shared feature controller.
+
+`ged_test_drawing_quad` now exercises Obol attach/capture for shared drawing,
+independent drawing, local view objects, shared view objects, and mixed
+shared/independent clears.  The only baseline adjustment was a narrow pdiff
+tolerance bump for visually equivalent Obol/Coin polygon edge rasterization.
+
+Focused verification passed:
+
+* `ninja -C build libbrlobol libged ged_test_quad ged_test_mged_view_state`
+* `ctest --test-dir build -R '^(ged_test_mged_view_state|ged_test_drawing_quad)$' --timeout 240 --output-on-failure`
+
+2026-07-05: View-local LoD bindings for shared Obol scenes
+----------------------------------------------------------
+
+Hardened the shared-scene/per-view-render-root model for LoD.  Controllers now
+own `BRLObolViewLodState`, expose it to Coin traversal through
+`SoBRLViewLodGroup`/`SoBRLViewLodElement`, and apply controller-drained LoD
+results into view-local payloads instead of mutating shared mesh
+`point`/`coordIndex` fields.  Render, display-level export, measure, snap, and
+pick consume the bound view payload; exact paths skip it and use preserved
+source geometry or source-backed full-detail requests.
+
+Controller LoD submission and RT pick/source helpers now discover database
+sources through the composed render root, so attached views see the GED shared
+scene plus their local root.  GED draw transaction fanout clears attached view
+LoD state on draw/erase/clear/source-change rebuilds.  Mesh residency budgeting
+now accounts for view-local LoD payloads and can evict optional shared source
+arrays while preserving source metrics.
+
+The design is documented in `doc/notes/brl_obol_view_lod.txt`.
+
+Focused verification passed:
+
+* `ninja -C build libbrlobol libged test_brlobol_lod_update_action ged_test_mged_view_state ged_test_quad`
+* `ctest --test-dir build -R '^(libbrlobol_lod_update_action|ged_test_mged_view_state)$' --timeout 240 --output-on-failure`
+* `ctest --test-dir build -R '^ged_test_drawing_quad$' --timeout 240 --output-on-failure`
+
+2026-07-05: LoD update action requires explicit view state
+----------------------------------------------------------
+
+Removed the remaining view-independent active-LoD escape hatch from
+`SoBRLLodUpdateAction`.  Matched results with no `BRLObolViewLodState` now
+reject with diagnostics instead of calling `SoBRLMeshShape::applyStagedLodResult`
+and mutating shared mesh fields.  The direct update, service-drain, and
+submit-action tests now install view-local payloads explicitly and verify that
+shared mesh point/index and active-LoD fields remain unchanged.
+
+Full-detail picking was adjusted for the view-local model: when a normal shared
+mesh has an active view-local display payload and the pick policy requests full
+detail, picking skips the view payload and falls back to resident shared
+geometry.  LoD-backed meshes without resident full-detail geometry still require
+the source-backed exact pick path.
+
+Focused verification passed:
+
+* `ninja -C build test_brlobol_lod_update_action`
+* `ctest --test-dir build -R '^libbrlobol_lod_update_action$' --timeout 240 --output-on-failure`

@@ -10,6 +10,7 @@
 #include "brlobol/measure_action.h"
 #include "brlobol/lod_service.h"
 #include "brlobol/mesh_shape.h"
+#include "brlobol/view_lod.h"
 #include "brlobol/vlist_shape.h"
 
 #include <Inventor/elements/SoModelMatrixElement.h>
@@ -426,6 +427,7 @@ SoBRLMeasureAction::initClass(void)
 {
     SO_ACTION_INIT_CLASS(SoBRLMeasureAction, SoAction);
     SO_ENABLE(SoBRLMeasureAction, SoModelMatrixElement);
+    SO_ENABLE(SoBRLMeasureAction, SoBRLViewLodElement);
     SO_ACTION_ADD_METHOD(SoNode, SoBRLMeasureAction::nodeAction);
     SO_ACTION_ADD_METHOD(SoBRLVListShape, SoBRLMeasureAction::vlistShapeAction);
     SO_ACTION_ADD_METHOD(SoBRLMeshShape, SoBRLMeasureAction::meshShapeAction);
@@ -1013,6 +1015,8 @@ SoBRLMeasureAction::meshShapeAction(SoAction *action, SoNode *node)
     SoBRLMeshShape *shape = static_cast<SoBRLMeshShape *>(node);
     if (!shape->visible.getValue())
 	return;
+    const BRLObolViewLodState::MeshPayload *viewPayload =
+	brlobol_view_lod_mesh_for_action(action, shape);
     const SbBool useFullDetail =
 	(measureAction->geometryPolicy == SoBRLMeasureAction::FULL_DETAIL &&
 	 shape->hasFullDetailMesh()) ? TRUE : FALSE;
@@ -1020,7 +1024,7 @@ SoBRLMeasureAction::meshShapeAction(SoAction *action, SoNode *node)
 	(measureAction->geometryPolicy == SoBRLMeasureAction::FULL_DETAIL &&
 	 shape->needsSourceBackedFullDetail()) ? TRUE : FALSE;
     if (measureAction->geometryPolicy == SoBRLMeasureAction::FULL_DETAIL &&
-	    shape->isLodDisplayActive())
+	    (shape->isLodDisplayActive() || viewPayload))
 	measureAction->skippedLodDisplayMeshCount++;
     const SbMatrix &localToWorld = SoModelMatrixElement::get(action->getState());
     if (useSourceBackedFullDetail) {
@@ -1031,8 +1035,14 @@ SoBRLMeasureAction::meshShapeAction(SoAction *action, SoNode *node)
     const SbString &editIntentId = shape->editIntentId.getValue();
     const SbString &editIntentRole = shape->editIntentRole.getValue();
 
+    const SbBool useViewPayload =
+	(!useFullDetail &&
+	 measureAction->geometryPolicy == SoBRLMeasureAction::DISPLAY_LEVEL &&
+	 viewPayload) ? TRUE : FALSE;
     int localTriangleCount = useFullDetail ?
-	shape->getFullDetailTriangleCount() : shape->getTriangleCount();
+	shape->getFullDetailTriangleCount() :
+	(useViewPayload ? viewPayload->getTriangleCount() :
+	    shape->getTriangleCount());
     SbBool measuredShape = FALSE;
 
     for (int i = 0; i < localTriangleCount; i++) {
@@ -1046,6 +1056,11 @@ SoBRLMeasureAction::meshShapeAction(SoAction *action, SoNode *node)
 	    if (!shape->getFullDetailTriangleVertexIndices(i, ia, ib, ic))
 		continue;
 	    if (!shape->getFullDetailTriangle(i, a, b, c))
+		continue;
+	} else if (useViewPayload) {
+	    if (!viewPayload->getTriangleVertexIndices(i, ia, ib, ic))
+		continue;
+	    if (!viewPayload->getTriangle(i, a, b, c))
 		continue;
 	} else {
 	    if (!shape->getTriangleVertexIndices(i, ia, ib, ic))

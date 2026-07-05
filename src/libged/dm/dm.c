@@ -33,6 +33,8 @@
 #include "bu/opt.h"
 #include "bu/vls.h"
 #include "dm.h"
+#include "dm/obol.h"
+#include "ged/draw_obol.h"
 #include "rt/view.h"
 
 #include "../ged_private.h"
@@ -719,6 +721,22 @@ _dm_cmd_attach(void *ds, int argc, const char **argv)
     ged_view_context_display_manager_set(target_view, dmp);
     if (target_view == ged_view_active_ctx(gedp))
 	ged_draw_ensure_root_attached(gedp);
+
+    if (BU_STR_EQUAL(argv[0], "obol")) {
+	void *controller = dm_obol_controller(dmp);
+	if (!controller ||
+		!ged_draw_obol_controller_attach_opaque_for_view(gedp,
+		    target_view, controller, 1)) {
+	    bu_vls_printf(gedp->ged_result_str,
+		    "failed to attach GED draw state to Obol DM %s",
+		    bu_vls_cstr(&dm_name));
+	    ged_view_context_display_manager_set(target_view, NULL);
+	    dm_close(dmp);
+	    bu_vls_free(&dm_name);
+	    bu_vls_free(&view_name);
+	    return BRLCAD_ERROR;
+	}
+    }
 
     /* Record the framebuffer device corresponding to this active DM type so
      * libged rt can launch a matching standalone fb window without querying

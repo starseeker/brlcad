@@ -24,6 +24,7 @@
 
 #include "common.h"
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -36,6 +37,7 @@
 
 #include "ged.h"
 #include "ged/draw.h"
+#include "rt/calc.h"
 #include "rt/view.h"
 #include "ged/selection_state.h"
 #include "./ged_private.h"
@@ -1139,23 +1141,130 @@ ged_draw_prepare_views_for_transaction(struct ged *gedp,
 }
 
 
+struct ged_draw_autoview_bounds_ctx {
+    struct ged *gedp;
+    struct bu_vls *msgs;
+    point_t min;
+    point_t max;
+    int have_bounds;
+};
+
+
+static int
+ged_draw_autoview_accumulate_path_bounds(
+	struct ged_draw_autoview_bounds_ctx *ctx,
+	const char *path)
+{
+    point_t bmin, bmax, center, padded_min, padded_max;
+
+    if (!ctx || !ctx->gedp || !ctx->gedp->dbip || !path || !path[0])
+	return 1;
+
+    path = ged_draw_dbpath_skip_lead_slash(path);
+    if (!path || !path[0])
+	return 1;
+
+    if (rt_obj_bounds(ctx->msgs, ctx->gedp->dbip, 1, &path, 0, bmin,
+	    bmax) != BRLCAD_OK)
+	return 1;
+
+    fastf_t size = bmax[X] - bmin[X];
+    V_MAX(size, bmax[Y] - bmin[Y]);
+    V_MAX(size, bmax[Z] - bmin[Z]);
+    VADD2SCALE(center, bmax, bmin, 0.5);
+    VSET(padded_min, center[X] - size, center[Y] - size,
+	    center[Z] - size);
+    VSET(padded_max, center[X] + size, center[Y] + size,
+	    center[Z] + size);
+
+    VMINMAX(ctx->min, ctx->max, padded_min);
+    VMINMAX(ctx->min, ctx->max, padded_max);
+    ctx->have_bounds = 1;
+    return 1;
+}
+
+
+static int
+ged_draw_autoview_accumulate_obol_source_path(struct ged *gedp,
+					      const char *path,
+					      void *userdata)
+{
+    struct ged_draw_autoview_bounds_ctx *ctx =
+	(struct ged_draw_autoview_bounds_ctx *)userdata;
+    if (ctx && !ctx->gedp)
+	ctx->gedp = gedp;
+    return ged_draw_autoview_accumulate_path_bounds(ctx, path);
+}
+
+
 static int
 ged_draw_autoview_for_transaction(struct ged *gedp,
-				  void *view_ctx)
+				  void *view_ctx,
+				  const char **draw_paths,
+				  int draw_count)
 {
     void **view_ctxs = NULL;
     size_t view_ctx_count = ged_draw_txn_view_array(gedp, view_ctx, &view_ctxs);
     if (!view_ctx_count || !view_ctxs)
 	return 0;
 
+    vect_t obol_min, obol_max;
+    int obol_empty = 1;
+    int have_obol_bounds =
+	ged_draw_obol_scene_database_autoview_bounds(gedp, &obol_min,
+	    &obol_max, &obol_empty) && !obol_empty;
+
+    struct bu_vls msgs = BU_VLS_INIT_ZERO;
+    struct ged_draw_autoview_bounds_ctx source_bounds;
+    memset(&source_bounds, 0, sizeof(source_bounds));
+    source_bounds.gedp = gedp;
+    source_bounds.msgs = &msgs;
+    VSETALL(source_bounds.min, INFINITY);
+    VSETALL(source_bounds.max, -INFINITY);
+    if (!have_obol_bounds)
+	(void)ged_draw_obol_database_source_paths_foreach(gedp, 1,
+	    ged_draw_autoview_accumulate_obol_source_path, &source_bounds);
+
+    struct ged_draw_autoview_bounds_ctx path_bounds;
+    memset(&path_bounds, 0, sizeof(path_bounds));
+    path_bounds.gedp = gedp;
+    path_bounds.msgs = &msgs;
+    VSETALL(path_bounds.min, INFINITY);
+    VSETALL(path_bounds.max, -INFINITY);
+    if (gedp && gedp->dbip && draw_paths && draw_count > 0) {
+	for (int i = 0; i < draw_count; i++) {
+	    const char *path = draw_paths[i];
+	    (void)ged_draw_autoview_accumulate_path_bounds(&path_bounds,
+		path);
+	}
+    }
+
     int adjusted = 0;
     for (size_t i = 0; i < view_ctx_count; i++) {
 	if (!view_ctxs[i])
 	    continue;
-	if (rt_view_context_autoview(view_ctxs[i], RT_VIEW_AUTOVIEW_SCALE_DEFAULT, 0))
+	if (have_obol_bounds &&
+		rt_view_context_autoview_bounds(view_ctxs[i],
+		    RT_VIEW_AUTOVIEW_SCALE_DEFAULT, obol_min, obol_max)) {
+	    adjusted++;
+	    continue;
+	}
+	if (rt_view_context_autoview(view_ctxs[i],
+		RT_VIEW_AUTOVIEW_SCALE_DEFAULT, 0))
+	    adjusted++;
+	else if (source_bounds.have_bounds &&
+		rt_view_context_autoview_bounds(view_ctxs[i],
+		    RT_VIEW_AUTOVIEW_SCALE_DEFAULT, source_bounds.min,
+		    source_bounds.max))
+	    adjusted++;
+	else if (path_bounds.have_bounds &&
+		rt_view_context_autoview_bounds(view_ctxs[i],
+		    RT_VIEW_AUTOVIEW_SCALE_DEFAULT, path_bounds.min,
+		    path_bounds.max))
 	    adjusted++;
     }
 
+    bu_vls_free(&msgs);
     bu_free(view_ctxs, "draw transaction view context array");
     return adjusted;
 }
@@ -1429,7 +1538,7 @@ ged_draw_apply_obol_database_source_paths(
 		settings->draw_mode))
 	return 0;
 
-    if (!ged_draw_obol_scene_controller_ensure_owned(gedp, 1))
+    if (!ged_draw_obol_scene_controller_attached(gedp))
 	return 0;
 
     int realized = 0;
@@ -1591,22 +1700,25 @@ _ged_draw_apply_draw(struct ged *gedp,
 	    ret = 0;
     }
 
-    bu_free((void *)draw_paths, "draw transaction paths");
-
-    if (ret != 0)
+    if (ret != 0) {
+	bu_free((void *)draw_paths, "draw transaction paths");
 	return -1;
+    }
 
     if (txn->autoview)
-	(void)ged_draw_autoview_for_transaction(gedp, view_ctx);
+	(void)ged_draw_autoview_for_transaction(gedp, view_ctx, draw_paths,
+	    draw_count);
     (void)ged_draw_finalize_lod_for_transaction(gedp, view_ctx);
     if (txn->autoview)
-	(void)ged_draw_autoview_for_transaction(gedp, view_ctx);
+	(void)ged_draw_autoview_for_transaction(gedp, view_ctx, draw_paths,
+	    draw_count);
     (void)ged_selection_draw_sync(gedp, NULL);
 
     if (result) {
 	result->affected_groups = draw_count;
 	result->affected_shapes = ged_draw_shape_count(gedp);
     }
+    bu_free((void *)draw_paths, "draw transaction paths");
     return draw_count;
 }
 

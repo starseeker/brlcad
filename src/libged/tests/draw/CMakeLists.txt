@@ -1,6 +1,7 @@
 set(
   test_deps
   dm-swrast
+  dm-obol
   ged-close
   ged-draw
   ged-dm
@@ -193,7 +194,7 @@ set(
   quad_03_007_ctrl.png
   quad_03_008_ctrl.png
 )
-brlcad_addexec(ged_test_quad quad.cpp "libged;libdm" TEST)
+brlcad_addexec(ged_test_quad quad.cpp "libged;libdm;libbrlobol" TEST)
 if(TARGET ged_test_quad)
   foreach(tdp ${test_deps})
     if (TARGET ${tdp})
@@ -224,40 +225,6 @@ if(TARGET ged_test_aet)
     endif ()
   endforeach()
 endif(TARGET ged_test_aet)
-
-# BSG render stability across repeated swrast draws
-brlcad_addexec(ged_test_bsg_render_stability "bsg_render_stability.cpp;util.cpp" "libged;libdm;libbrlobol" TEST)
-if(TARGET ged_test_bsg_render_stability)
-  foreach(tdp ${test_deps})
-    if (TARGET ${tdp})
-      add_dependencies(ged_test_bsg_render_stability ${tdp})
-    endif ()
-  endforeach()
-endif(TARGET ged_test_bsg_render_stability)
-brlcad_add_test(NAME ged_test_bsg_render_stability COMMAND ged_test_bsg_render_stability -c "${CMAKE_CURRENT_SOURCE_DIR}")
-if(TARGET ged_test_bsg_render_stability)
-  set_property(TEST ged_test_bsg_render_stability APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
-endif()
-distclean(${CMAKE_CURRENT_BINARY_DIR}/moss_bsg_render_stability_tmp.g)
-distclean(${CMAKE_CURRENT_BINARY_DIR}/bsg_render_stability_cache)
-
-# Multi-view BSG render stability and per-view root independence
-brlcad_addexec(ged_test_bsg_quad_stability "bsg_quad_stability.cpp;util.cpp" "libged;libdm;libbrlobol" TEST)
-if(TARGET ged_test_bsg_quad_stability)
-  foreach(tdp ${test_deps})
-    if (TARGET ${tdp})
-      add_dependencies(ged_test_bsg_quad_stability ${tdp})
-    endif ()
-  endforeach()
-endif(TARGET ged_test_bsg_quad_stability)
-brlcad_add_test(NAME ged_test_bsg_quad_stability
-  COMMAND ged_test_bsg_quad_stability -c "${CMAKE_CURRENT_SOURCE_DIR}")
-if(TARGET ged_test_bsg_quad_stability)
-  set_property(TEST ged_test_bsg_quad_stability
-    APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
-endif()
-distclean(${CMAKE_CURRENT_BINARY_DIR}/moss_bsg_quad_tmp.g)
-distclean(${CMAKE_CURRENT_BINARY_DIR}/bsg_quad_stability_cache)
 
 # Typed selection, snap, and measure semantic records
 brlcad_addexec(ged_test_selection_semantics "selection_semantics.cpp" "libged;libbu" TEST)
@@ -323,43 +290,41 @@ endif()
 distclean(${CMAKE_CURRENT_BINARY_DIR}/moss_lod_cr_tmp.g)
 distclean(${CMAKE_CURRENT_BINARY_DIR}/lod_crossrun_cache)
 
-# MGED BSG scene and render contract regression tests
-brlcad_addexec(ged_test_mged_bsg "mged_bsg.cpp;util.cpp" "libged;libdm;libbrlobol" TEST)
-if(TARGET ged_test_mged_bsg)
+# MGED view-state regression tests not covered by image baselines.
+brlcad_addexec(ged_test_mged_view_state "mged_view_state.cpp;util.cpp" "libged;libdm;libbrlobol" TEST)
+if(TARGET ged_test_mged_view_state)
   foreach(tdp ${test_deps})
     if (TARGET ${tdp})
-      add_dependencies(ged_test_mged_bsg ${tdp})
+      add_dependencies(ged_test_mged_view_state ${tdp})
     endif ()
   endforeach()
-endif(TARGET ged_test_mged_bsg)
-brlcad_add_test(NAME ged_test_mged_bsg COMMAND ged_test_mged_bsg -c "${CMAKE_CURRENT_SOURCE_DIR}")
-if(TARGET ged_test_mged_bsg)
-  set_property(TEST ged_test_mged_bsg APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+endif(TARGET ged_test_mged_view_state)
+brlcad_add_test(NAME ged_test_mged_view_state COMMAND ged_test_mged_view_state -c "${CMAKE_CURRENT_SOURCE_DIR}")
+if(TARGET ged_test_mged_view_state)
+  set_property(TEST ged_test_mged_view_state APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
 endif()
-distclean(${CMAKE_CURRENT_BINARY_DIR}/mged_bsg_t1.g)
-distclean(${CMAKE_CURRENT_BINARY_DIR}/mged_bsg_t2.g)
-distclean(${CMAKE_CURRENT_BINARY_DIR}/mged_bsg_t3.g)
-distclean(${CMAKE_CURRENT_BINARY_DIR}/mged_bsg_t4.g)
-distclean(${CMAKE_CURRENT_BINARY_DIR}/mged_bsg_t5.g)
+distclean(${CMAKE_CURRENT_BINARY_DIR}/mged_view_state_t1.g)
+distclean(${CMAKE_CURRENT_BINARY_DIR}/mged_view_state_t2.g)
+distclean(${CMAKE_CURRENT_BINARY_DIR}/mged_view_state_t3.g)
 
-# rtwizard BSG scene-root and render contract regression tests
-brlcad_addexec(ged_test_rtwizard_bsg "rtwizard_bsg.cpp;util.cpp" "libged;libdm;libbrlobol;libicv" TEST)
-if(TARGET ged_test_rtwizard_bsg)
+# rtwizard view pipeline regression tests.
+brlcad_addexec(ged_test_rtwizard_view "rtwizard_view.cpp;util.cpp" "libged;libdm;libbrlobol;libicv" TEST)
+if(TARGET ged_test_rtwizard_view)
   foreach(tdp ${test_deps})
     if (TARGET ${tdp})
-      add_dependencies(ged_test_rtwizard_bsg ${tdp})
+      add_dependencies(ged_test_rtwizard_view ${tdp})
     endif ()
   endforeach()
-endif(TARGET ged_test_rtwizard_bsg)
-brlcad_add_test(NAME ged_test_rtwizard_bsg COMMAND ged_test_rtwizard_bsg -c "${CMAKE_CURRENT_SOURCE_DIR}")
-if(TARGET ged_test_rtwizard_bsg)
-  set_property(TEST ged_test_rtwizard_bsg APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+endif(TARGET ged_test_rtwizard_view)
+brlcad_add_test(NAME ged_test_rtwizard_view COMMAND ged_test_rtwizard_view -c "${CMAKE_CURRENT_SOURCE_DIR}")
+if(TARGET ged_test_rtwizard_view)
+  set_property(TEST ged_test_rtwizard_view APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
 endif()
-distclean(${CMAKE_CURRENT_BINARY_DIR}/rtw_bsg_t1.g)
-distclean(${CMAKE_CURRENT_BINARY_DIR}/rtw_bsg_t2.g)
-distclean(${CMAKE_CURRENT_BINARY_DIR}/rtw_bsg_t3.g)
-distclean(${CMAKE_CURRENT_BINARY_DIR}/rtw_bsg_t4.g)
-distclean(${CMAKE_CURRENT_BINARY_DIR}/rtw_bsg_t5.g)
+distclean(${CMAKE_CURRENT_BINARY_DIR}/rtw_view_t1.g)
+distclean(${CMAKE_CURRENT_BINARY_DIR}/rtw_view_t2.g)
+distclean(${CMAKE_CURRENT_BINARY_DIR}/rtw_view_t3.g)
+distclean(${CMAKE_CURRENT_BINARY_DIR}/rtw_view_t4.g)
+distclean(${CMAKE_CURRENT_BINARY_DIR}/rtw_view_t5.g)
 
 # GED draw-scene API regression.
 brlcad_addexec(ged_test_ged_draw_scene "ged_draw_scene.cpp" "libged" TEST)
@@ -422,24 +387,7 @@ if(TARGET ged_test_obol_draw_sync)
 endif()
 distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_obol_draw_sync_tmp.g)
 
-# Phase T1/T4 (drawing_stack_modernization): BSG overlay feature lifecycle
-# structural test — verifies create/find/visit/remove without a display manager.
-brlcad_addexec(ged_test_tcl_overlay_bsg "tcl_overlay_bsg.cpp" "libged;libdm" TEST)
-if(TARGET ged_test_tcl_overlay_bsg)
-  foreach(tdp ${test_deps})
-    if (TARGET ${tdp})
-      add_dependencies(ged_test_tcl_overlay_bsg ${tdp})
-    endif ()
-  endforeach()
-endif(TARGET ged_test_tcl_overlay_bsg)
-brlcad_add_test(NAME ged_test_tcl_overlay_bsg
-  COMMAND ged_test_tcl_overlay_bsg "${CMAKE_CURRENT_SOURCE_DIR}")
-if(TARGET ged_test_tcl_overlay_bsg)
-  set_property(TEST ged_test_tcl_overlay_bsg APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
-endif()
-distclean(${CMAKE_CURRENT_BINARY_DIR}/tcl_overlay_bsg_tmp.g)
-
-# Phase V6: independent-view state is structural BSG scope, not a mode bit
+# Independent-view state is structural scope, not a mode bit.
 brlcad_addexec(ged_test_view_independent "view_independent.cpp" "libged;libbu" TEST)
 if(TARGET ged_test_view_independent)
   foreach(tdp ${test_deps})
@@ -470,18 +418,18 @@ if(TARGET ged_test_view_command)
 endif()
 
 # Lighting/zbuffer/zclip regression test (mged_shaded_mode_helper path)
-brlcad_addexec(ged_test_mged_shaded_mode_bsg "mged_shaded_mode_bsg.cpp;util.cpp" "libged;libdm;libbrlobol;libicv" TEST)
-if(TARGET ged_test_mged_shaded_mode_bsg)
+brlcad_addexec(ged_test_mged_shaded_mode "mged_shaded_mode.cpp;util.cpp" "libged;libdm;libbrlobol;libicv" TEST)
+if(TARGET ged_test_mged_shaded_mode)
   foreach(tdp ${test_deps})
     if (TARGET ${tdp})
-      add_dependencies(ged_test_mged_shaded_mode_bsg ${tdp})
+      add_dependencies(ged_test_mged_shaded_mode ${tdp})
     endif ()
   endforeach()
-endif(TARGET ged_test_mged_shaded_mode_bsg)
-brlcad_add_test(NAME ged_test_mged_shaded_mode_bsg
-  COMMAND ged_test_mged_shaded_mode_bsg "${CMAKE_CURRENT_SOURCE_DIR}")
-if(TARGET ged_test_mged_shaded_mode_bsg)
-  set_property(TEST ged_test_mged_shaded_mode_bsg
+endif(TARGET ged_test_mged_shaded_mode)
+brlcad_add_test(NAME ged_test_mged_shaded_mode
+  COMMAND ged_test_mged_shaded_mode "${CMAKE_CURRENT_SOURCE_DIR}")
+if(TARGET ged_test_mged_shaded_mode)
+  set_property(TEST ged_test_mged_shaded_mode
     APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
 endif()
 distclean(${CMAKE_CURRENT_BINARY_DIR}/smb_t1.g)
@@ -495,19 +443,16 @@ foreach(_ged_drawing_stage0_test
     ged_test_drawing_lod
     ged_test_drawing_select
     ged_test_drawing_quad
-    ged_test_bsg_render_stability
-    ged_test_bsg_quad_stability
     ged_test_selection_semantics
     ged_test_snap_semantics
     ged_test_measure_semantics
     ged_test_lod_crossrun
-    ged_test_mged_bsg
-    ged_test_rtwizard_bsg
+    ged_test_mged_view_state
+    ged_test_rtwizard_view
     ged_test_ged_draw_scene
-    ged_test_tcl_overlay_bsg
     ged_test_view_independent
     ged_test_view_command
-    ged_test_mged_shaded_mode_bsg)
+    ged_test_mged_shaded_mode)
   if(TEST ${_ged_drawing_stage0_test})
     set_property(TEST ${_ged_drawing_stage0_test} APPEND PROPERTY LABELS drawing_baseline)
   endif()
@@ -519,19 +464,16 @@ cmakefiles(
   moss.g
   moss.png
   rook.g
-  bsg_render_stability.cpp
-  bsg_quad_stability.cpp
   ged_draw_scene.cpp
   selection_semantics.cpp
   snap_semantics.cpp
   measure_semantics.cpp
-  tcl_overlay_bsg.cpp
   view_independent.cpp
   view_command.cpp
   lod_crossrun.cpp
-  mged_bsg.cpp
-  mged_shaded_mode_bsg.cpp
-  rtwizard_bsg.cpp
+  mged_view_state.cpp
+  mged_shaded_mode.cpp
+  rtwizard_view.cpp
   util.cpp
   scripts/verify_main_parity.sh
   ${basic_view_test_ctrls}

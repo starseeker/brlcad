@@ -217,6 +217,7 @@ ged_init(struct ged *gedp)
     gedp->i->ged_gdp->gd_obol_scene_controller_owned = 0;
     gedp->i->ged_gdp->gd_obol_controller_owned = 0;
     gedp->i->ged_gdp->gd_obol_scene_controller_full_sync = 0;
+    gedp->i->ged_gdp->gd_obol_attached_controllers = NULL;
     gedp->i->ged_gdp->gd_obol_preserved_sources = NULL;
     BU_PTBL_INIT(&gedp->i->ged_gdp->gd_obol_context_tokens);
     gedp->i->ged_gdp->gd_obol_context_tokens_init = 1;

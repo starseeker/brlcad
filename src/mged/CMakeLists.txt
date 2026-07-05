@@ -90,11 +90,19 @@ if(BRLCAD_ENABLE_TCL)
   add_target_deps(mged Tkhtml Tktable itcl_pkgIndex itk_pkgIndex TclIndexBld dm_plugins)
 
   # MGED needs the tclIndex and pkgIndex files set up correctly
-  add_dependencies(mged TclIndexBld)
+	  add_dependencies(mged TclIndexBld)
 
-  # MGED is one of the programs that gets a start menu entry
-  set_property(
-    INSTALL "${BIN_DIR}/$<TARGET_FILE_NAME:mged>"
+	  if(SH_EXEC)
+	    brlcad_add_test(NAME mged_obol_smoke
+	      COMMAND ${SH_EXEC} "${CMAKE_CURRENT_SOURCE_DIR}/mged_obol_smoke.sh"
+	      "$<TARGET_FILE:mged>" "${CMAKE_SOURCE_DIR}/src/libged/tests/draw/moss.g"
+	      "${CMAKE_CURRENT_BINARY_DIR}")
+	    set_property(TEST mged_obol_smoke APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+	  endif(SH_EXEC)
+
+	  # MGED is one of the programs that gets a start menu entry
+	  set_property(
+	    INSTALL "${BIN_DIR}/$<TARGET_FILE_NAME:mged>"
     PROPERTY CPACK_START_MENU_SHORTCUTS "MGED ${BRLCAD_VERSION}"
   )
   set_property(INSTALL "${BIN_DIR}/$<TARGET_FILE_NAME:mged>" PROPERTY CPACK_DESKTOP_SHORTCUTS "MGED ${BRLCAD_VERSION}")
@@ -112,6 +120,7 @@ set(
   cmd.h
   f_cmd.h
   menu.h
+  mged_obol_smoke.sh
   mged.h
   mged.ico
   mged.rc

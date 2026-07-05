@@ -19,6 +19,7 @@
 #include <vector>
 
 class BRLObolLodService;
+class BRLObolViewLodState;
 
 class BRLOBOL_EXPORT SoBRLLodUpdateAction : public SoAction {
     typedef SoAction inherited;
@@ -34,6 +35,8 @@ public:
     void addResult(const BRLObolLodResult &result);
     void setResults(const std::vector<BRLObolLodResult> &results);
     size_t drainService(BRLObolLodService &service, size_t maxResults = 0);
+    void setViewLodState(BRLObolViewLodState *viewState);
+    BRLObolViewLodState *getViewLodState(void) const;
 
     size_t getResultCount(void) const;
     unsigned int getMatchedResultCount(void) const;
@@ -54,6 +57,7 @@ private:
 
     std::vector<BRLObolLodResult> results;
     std::vector<SbBool> matched;
+    BRLObolViewLodState *viewState;
     unsigned int matchedResultCount;
     unsigned int appliedResultCount;
     unsigned int rejectedResultCount;

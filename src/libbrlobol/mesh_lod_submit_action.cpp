@@ -10,6 +10,7 @@
 #include "brlobol/lod_service.h"
 #include "brlobol/mesh_lod_submit_action.h"
 #include "brlobol/mesh_shape.h"
+#include "brlobol/view_lod.h"
 
 #include <Inventor/SbString.h>
 #include <Inventor/nodes/SoGroup.h>
@@ -35,6 +36,7 @@ SoBRLMeshLodSubmitAction::SoBRLMeshLodSubmitAction(void) :
     useForcedLevel(FALSE),
     forcedLevel(0),
     requireLodBacked(TRUE),
+    viewState(NULL),
     visitedMeshCount(0),
     submittedTaskCount(0),
     skippedMeshCount(0),
@@ -179,6 +181,19 @@ SoBRLMeshLodSubmitAction::getRequireLodBacked(void) const
     return this->requireLodBacked;
 }
 
+void
+SoBRLMeshLodSubmitAction::setViewLodState(
+	const BRLObolViewLodState *newViewState)
+{
+    this->viewState = newViewState;
+}
+
+const BRLObolViewLodState *
+SoBRLMeshLodSubmitAction::getViewLodState(void) const
+{
+    return this->viewState;
+}
+
 unsigned int
 SoBRLMeshLodSubmitAction::getVisitedMeshCount(void) const
 {
@@ -262,15 +277,28 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	    submitAction->qualityTier);
 
     BRLObolLodCacheKey requestKey = brlobol_lod_cache_key(request);
+    const BRLObolViewLodState::MeshPayload *viewPayload =
+	submitAction->viewState ?
+	submitAction->viewState->findMesh(shape) : NULL;
+    const SbBool viewPayloadResident =
+	(viewPayload &&
+	 viewPayload->resultKind == BRLOBOL_LOD_RESULT_MESH &&
+	 viewPayload->providerStatus == BRLOBOL_LOD_PROVIDER_READY &&
+	 requestKey.isValid() &&
+	 viewPayload->cacheKey.getLength() > 0 &&
+	 strcmp(viewPayload->cacheKey.getString(),
+	     requestKey.value.getString()) == 0) ? TRUE : FALSE;
+    const SbBool shapePayloadResident =
+	(shape->lodAvailable.getValue() &&
+	 shape->lodResultKind.getValue() == BRLOBOL_LOD_RESULT_MESH &&
+	 shape->lodProviderStatus.getValue() == BRLOBOL_LOD_PROVIDER_READY &&
+	 requestKey.isValid() &&
+	 shape->lodCacheKey.getValue().getLength() > 0 &&
+	 strcmp(shape->lodCacheKey.getValue().getString(),
+	     requestKey.value.getString()) == 0) ? TRUE : FALSE;
     if (!submitAction->useForcedLevel &&
 	    submitAction->reset == 0 &&
-	    shape->lodAvailable.getValue() &&
-	    shape->lodResultKind.getValue() == BRLOBOL_LOD_RESULT_MESH &&
-	    shape->lodProviderStatus.getValue() == BRLOBOL_LOD_PROVIDER_READY &&
-	    requestKey.isValid() &&
-	    shape->lodCacheKey.getValue().getLength() > 0 &&
-	    strcmp(shape->lodCacheKey.getValue().getString(),
-		requestKey.value.getString()) == 0) {
+	    (viewPayloadResident || shapePayloadResident)) {
 	submitAction->skippedMeshCount++;
 	submitAction->appendDiagnostic(target, "current LoD request is already resident");
 	return;
