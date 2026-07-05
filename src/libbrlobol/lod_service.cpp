@@ -972,7 +972,7 @@ brlobol_mesh_lod_provider_task(const BRLObolLodRequest &request,
 					  "Obol mesh LoD provider request has no object name");
 
     struct BRLObolMeshLodCacheStatus status =
-	BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
+	    BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
     if (brlobol_mesh_lod_cache_status(provider->dbip, name, &status) != BRLCAD_OK)
 	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
 					  "Obol mesh LoD provider could not query cache status");
@@ -1063,7 +1063,7 @@ brlobol_mesh_lod_cache_provider_task(const BRLObolLodRequest &request,
 					  "Obol mesh LoD cache provider request has no object name");
 
     struct BRLObolMeshLodCacheStatus status =
-	BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
+	    BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
     if (brlobol_mesh_lod_cache_status(provider->dbip, name, &status) != BRLCAD_OK)
 	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
 					  "Obol mesh LoD cache provider could not query cache status");

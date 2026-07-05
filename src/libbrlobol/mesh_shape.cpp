@@ -1229,7 +1229,7 @@ SoBRLMeshShape::generatePrimitives(SoAction *action)
 	brlobol_view_lod_mesh_for_action(action, this);
     const BRLObolViewLodState::ProxyPayload *candidateViewProxy =
 	candidateViewPayload ? NULL : brlobol_view_lod_proxy_for_action(action,
-		this);
+	    this);
     const SbBool pickFullDetail =
 	(this->getPickGeometryPolicy() == PICK_FULL_DETAIL &&
 	 (this->lodDisplayActive.getValue() || candidateViewPayload ||

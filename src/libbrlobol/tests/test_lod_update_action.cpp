@@ -5809,7 +5809,7 @@ test_view_local_lod_only_pick(void)
 	    displayPick.apply(controller.getRenderSceneRoot());
 	    const SoPickedPoint *pickedPoint = displayPick.getPickedPoint();
 	    const SoDetail *rawDetail = pickedPoint ?
-		pickedPoint->getDetail(mesh) : NULL;
+					pickedPoint->getDetail(mesh) : NULL;
 	    const SoBRLPickDetail *pickDetail =
 		(rawDetail &&
 		 rawDetail->isOfType(SoBRLPickDetail::getClassTypeId())) ?

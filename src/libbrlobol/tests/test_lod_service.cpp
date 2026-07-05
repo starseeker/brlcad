@@ -1792,11 +1792,11 @@ test_rt_mesh_provider_task(void)
     struct BRLObolMeshLodCacheStatus storeStatus =
 	    BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
     if (brlobol_mesh_lod_cache_store_mesh(dbip, "lod-provider.bot",
-			       (const point_t *)cachedVertices.data(),
-			       cachedVertices.size() / 3,
-			       (const vect_t *)cachedNormals.data(), cachedFaces.data(),
-			       cachedFaces.size() / 3, 0x12345678, 0.66,
-			       &storeStatus) != BRLCAD_OK ||
+					  (const point_t *)cachedVertices.data(),
+					  cachedVertices.size() / 3,
+					  (const vect_t *)cachedNormals.data(), cachedFaces.data(),
+					  cachedFaces.size() / 3, 0x12345678, 0.66,
+					  &storeStatus) != BRLCAD_OK ||
 	!storeStatus.has_cache_key ||
 	!storeStatus.has_cached_payload) {
 	printf("FAIL: LoD Obol mesh provider did not store cached mesh normals\n");
@@ -1929,7 +1929,7 @@ test_rt_mesh_provider_task(void)
     struct BRLObolMeshLodCacheStatus invalidateStatus =
 	    BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
     if (brlobol_mesh_lod_cache_invalidate(dbip, "lod-provider.bot",
-			       &invalidateStatus) != BRLCAD_OK ||
+					  &invalidateStatus) != BRLCAD_OK ||
 	!invalidateStatus.cleared_cache_entry ||
 	!invalidateStatus.cleared_cache_key ||
 	invalidateStatus.has_cache_key ||

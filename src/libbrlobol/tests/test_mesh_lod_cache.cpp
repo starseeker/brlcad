@@ -50,11 +50,11 @@ check_mesh_lod_payload(const char *label,
     struct BRLObolMeshLodInfo info = BRLOBOL_MESH_LOD_INFO_INIT;
 
     if (!brlobol_mesh_lod_data_get(lod, &data) ||
-	    data.face_count == 0 || data.face_count > maxFaceCount ||
-	    data.point_count == 0 || data.point_count > maxPointCount ||
-	    data.point_orig_count == 0 ||
-	    data.point_orig_count > maxPointCount ||
-	    !data.faces || !data.points || !data.points_orig) {
+	data.face_count == 0 || data.face_count > maxFaceCount ||
+	data.point_count == 0 || data.point_count > maxPointCount ||
+	data.point_orig_count == 0 ||
+	data.point_orig_count > maxPointCount ||
+	!data.faces || !data.points || !data.points_orig) {
 	printf("FAIL: %s mesh lod data faces=%zu points=%zu orig=%zu ptrs=%d/%d/%d\n",
 	       label, data.face_count, data.point_count, data.point_orig_count,
 	       data.faces ? 1 : 0, data.points ? 1 : 0,
@@ -68,21 +68,21 @@ check_mesh_lod_payload(const char *label,
     }
 
     if (!brlobol_mesh_lod_info_get(lod, &info) ||
-	    info.active_level < 0 ||
-	    info.face_count != data.face_count ||
-	    info.point_count != data.point_count ||
-	    info.point_orig_count != data.point_orig_count ||
-	    info.normal_count != data.normal_count ||
-	    !info.has_faces || !info.has_points ||
-	    !info.has_original_points ||
-	    info.has_normals != (data.normals ? 1 : 0)) {
+	info.active_level < 0 ||
+	info.face_count != data.face_count ||
+	info.point_count != data.point_count ||
+	info.point_orig_count != data.point_orig_count ||
+	info.normal_count != data.normal_count ||
+	!info.has_faces || !info.has_points ||
+	!info.has_original_points ||
+	info.has_normals != (data.normals ? 1 : 0)) {
 	printf("FAIL: %s mesh lod info\n", label);
 	return 1;
     }
 
     if (requireNormals &&
-	    (!data.normals || data.normal_count != data.face_count * 3 ||
-	     !fastf_equal(data.normals[0][Z], 1.0))) {
+	(!data.normals || data.normal_count != data.face_count * 3 ||
+	 !fastf_equal(data.normals[0][Z], 1.0))) {
 	printf("FAIL: %s mesh lod normals count=%zu\n",
 	       label, data.normal_count);
 	return 1;
@@ -109,7 +109,7 @@ static int
 mesh_lod_detail_setup_cb(struct BRLObolMeshLodDetail *detail, void *cbData)
 {
     struct mesh_lod_detail_test_data *data =
-	static_cast<struct mesh_lod_detail_test_data *>(cbData);
+	    static_cast<struct mesh_lod_detail_test_data *>(cbData);
 
     if (!detail || !data)
 	return -1;
@@ -132,7 +132,7 @@ static int
 mesh_lod_detail_clear_cb(void *cbData)
 {
     struct mesh_lod_detail_test_data *data =
-	static_cast<struct mesh_lod_detail_test_data *>(cbData);
+	    static_cast<struct mesh_lod_detail_test_data *>(cbData);
 
     if (data)
 	data->clear_count++;
@@ -143,7 +143,7 @@ static int
 mesh_lod_detail_free_cb(void *cbData)
 {
     struct mesh_lod_detail_test_data *data =
-	static_cast<struct mesh_lod_detail_test_data *>(cbData);
+	    static_cast<struct mesh_lod_detail_test_data *>(cbData);
 
     if (data)
 	data->free_count++;
@@ -195,28 +195,28 @@ test_detail_callbacks(struct db_i *dbip,
     failing.setup_return = -1;
 
     if (!lod || first_available_level(lod) < 0 ||
-	    !brlobol_mesh_lod_detail_callbacks_set(lod,
+	!brlobol_mesh_lod_detail_callbacks_set(lod,
 		mesh_lod_detail_setup_cb, mesh_lod_detail_clear_cb,
 		mesh_lod_detail_free_cb, &original) ||
-	    !brlobol_mesh_lod_detail_callbacks_set(lod,
+	!brlobol_mesh_lod_detail_callbacks_set(lod,
 		mesh_lod_detail_setup_cb, mesh_lod_detail_clear_cb,
 		mesh_lod_detail_free_cb, &replacement) ||
-	    original.free_count != 1 ||
-	    !brlobol_mesh_lod_has_active_data(lod) ||
-	    !brlobol_mesh_lod_data_get(lod, &detailData) ||
-	    replacement.setup_count != 0) {
+	original.free_count != 1 ||
+	!brlobol_mesh_lod_has_active_data(lod) ||
+	!brlobol_mesh_lod_data_get(lod, &detailData) ||
+	replacement.setup_count != 0) {
 	printf("FAIL: mesh lod detail callback replacement preserved POP data\n");
 	ret = 1;
 	goto cleanup;
     }
 
     if (brlobol_mesh_lod_load_level(lod, 100, 0) < 0 ||
-	    !brlobol_mesh_lod_data_get(lod, &detailData) ||
-	    !brlobol_mesh_lod_info_get(lod, &detailInfo) ||
-	    detailData.normal_count != faceCount * 3 ||
-	    detailInfo.normal_count != detailData.normal_count ||
-	    !detailInfo.has_normals || !detailData.normals ||
-	    replacement.setup_count != 1) {
+	!brlobol_mesh_lod_data_get(lod, &detailData) ||
+	!brlobol_mesh_lod_info_get(lod, &detailInfo) ||
+	detailData.normal_count != faceCount * 3 ||
+	detailInfo.normal_count != detailData.normal_count ||
+	!detailInfo.has_normals || !detailData.normals ||
+	replacement.setup_count != 1) {
 	printf("FAIL: mesh lod detail callback full-detail payload\n");
 	ret = 1;
 	goto cleanup;
@@ -225,21 +225,21 @@ test_detail_callbacks(struct db_i *dbip,
     if (!brlobol_mesh_lod_detail_callbacks_set(lod,
 	    mesh_lod_detail_setup_cb, mesh_lod_detail_clear_cb,
 	    mesh_lod_detail_free_cb, &failing) ||
-	    replacement.free_count != 1 ||
-	    brlobol_mesh_lod_current_level(lod) != -1 ||
-	    brlobol_mesh_lod_has_active_data(lod) ||
-	    brlobol_mesh_lod_data_get(lod, &detailData)) {
+	replacement.free_count != 1 ||
+	brlobol_mesh_lod_current_level(lod) != -1 ||
+	brlobol_mesh_lod_has_active_data(lod) ||
+	brlobol_mesh_lod_data_get(lod, &detailData)) {
 	printf("FAIL: mesh lod detail callback replacement invalidation\n");
 	ret = 1;
 	goto cleanup;
     }
 
     if (brlobol_mesh_lod_load_level(lod, 100, 1) >= 0 ||
-	    brlobol_mesh_lod_current_level(lod) != -1 ||
-	    brlobol_mesh_lod_has_active_data(lod) ||
-	    brlobol_mesh_lod_data_get(lod, &detailData) ||
-	    failing.setup_count != 1 ||
-	    failing.clear_count < 1) {
+	brlobol_mesh_lod_current_level(lod) != -1 ||
+	brlobol_mesh_lod_has_active_data(lod) ||
+	brlobol_mesh_lod_data_get(lod, &detailData) ||
+	failing.setup_count != 1 ||
+	failing.clear_count < 1) {
 	printf("FAIL: mesh lod detail callback failure clearing\n");
 	ret = 1;
 	goto cleanup;
@@ -274,7 +274,7 @@ main(int argc, char *argv[])
     int memshrinkLevel = -1;
     int ret = 0;
     struct BRLObolMeshLodCacheStatus cacheStatus =
-	BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
+	    BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
 
     bu_setprogname(argv[0]);
 
@@ -289,14 +289,14 @@ main(int argc, char *argv[])
     bu_setenv("BU_DIR_CACHE", cacheDir, 1);
 
     vertices = static_cast<fastf_t *>(bu_calloc(
-	static_cast<size_t>(vertexCount) * 3, sizeof(fastf_t),
-	"mesh lod vertices"));
+					  static_cast<size_t>(vertexCount) * 3, sizeof(fastf_t),
+					  "mesh lod vertices"));
     faces = static_cast<int *>(bu_calloc(
-	static_cast<size_t>(faceCount) * 3, sizeof(int),
-	"mesh lod faces"));
+				   static_cast<size_t>(faceCount) * 3, sizeof(int),
+				   "mesh lod faces"));
     detailNormals = static_cast<fastf_t *>(bu_calloc(
-	static_cast<size_t>(faceCount) * 3 * 3, sizeof(fastf_t),
-	"mesh lod detail normals"));
+	    static_cast<size_t>(faceCount) * 3 * 3, sizeof(fastf_t),
+	    "mesh lod detail normals"));
 
     for (int y = 0; y <= grid; y++) {
 	for (int x = 0; x <= grid; x++) {
@@ -355,7 +355,7 @@ main(int argc, char *argv[])
 	}
 
 	if (mk_bot(wdbp, objname, RT_BOT_SURFACE, RT_BOT_CCW, 0,
-		vertexCount, faceCount, vertices, faces, NULL, NULL) < 0) {
+		   vertexCount, faceCount, vertices, faces, NULL, NULL) < 0) {
 	    printf("FAIL: mesh lod mk_bot\n");
 	    ret = 1;
 	    goto cleanup;
@@ -364,7 +364,7 @@ main(int argc, char *argv[])
 	{
 	    int invalidFaces[3] = {0, 1, vertexCount};
 	    if (mk_bot(wdbp, invalidBotObjname, RT_BOT_SURFACE, RT_BOT_CCW,
-		    0, vertexCount, 1, vertices, invalidFaces, NULL, NULL) < 0) {
+		       0, vertexCount, 1, vertices, invalidFaces, NULL, NULL) < 0) {
 		printf("FAIL: mesh lod invalid mk_bot\n");
 		ret = 1;
 		goto cleanup;
@@ -382,31 +382,31 @@ main(int argc, char *argv[])
     }
 
     if (brlobol_mesh_lod_cache_status(dbip, objname, &cacheStatus) !=
-	    BRLCAD_OK ||
-	    !cacheStatus.directory_found || !cacheStatus.is_bot ||
-	    cacheStatus.has_cache_key || cacheStatus.has_cached_payload ||
-	    cacheStatus.stale_cache_entry) {
+	BRLCAD_OK ||
+	!cacheStatus.directory_found || !cacheStatus.is_bot ||
+	cacheStatus.has_cache_key || cacheStatus.has_cached_payload ||
+	cacheStatus.stale_cache_entry) {
 	printf("FAIL: mesh lod initial cache status\n");
 	ret = 1;
 	goto cleanup;
     }
 
     if (brlobol_mesh_lod_cache_refresh(dbip, invalidBotObjname,
-	    &cacheStatus) != BRLCAD_ERROR ||
-	    !cacheStatus.directory_found || !cacheStatus.is_bot ||
-	    cacheStatus.has_cache_key || cacheStatus.has_cached_payload ||
-	    brlobol_mesh_lod_get(dbip, invalidBotObjname)) {
+				       &cacheStatus) != BRLCAD_ERROR ||
+	!cacheStatus.directory_found || !cacheStatus.is_bot ||
+	cacheStatus.has_cache_key || cacheStatus.has_cached_payload ||
+	brlobol_mesh_lod_get(dbip, invalidBotObjname)) {
 	printf("FAIL: mesh lod invalid BoT cache rejection\n");
 	ret = 1;
 	goto cleanup;
     }
 
     if (brlobol_mesh_lod_cache_refresh(dbip, objname, &cacheStatus) !=
-	    BRLCAD_OK ||
-	    !cacheStatus.directory_found || !cacheStatus.is_bot ||
-	    !cacheStatus.has_cache_key || !cacheStatus.has_cached_payload ||
-	    cacheStatus.stale_cache_entry ||
-	    !cacheStatus.generated_cache_entry || !cacheStatus.cache_key) {
+	BRLCAD_OK ||
+	!cacheStatus.directory_found || !cacheStatus.is_bot ||
+	!cacheStatus.has_cache_key || !cacheStatus.has_cached_payload ||
+	cacheStatus.stale_cache_entry ||
+	!cacheStatus.generated_cache_entry || !cacheStatus.cache_key) {
 	printf("FAIL: mesh lod refresh status\n");
 	ret = 1;
 	goto cleanup;
@@ -430,9 +430,9 @@ main(int argc, char *argv[])
 	struct rt_view_info info = RT_VIEW_INFO_INIT;
 	info.size = 0.01;
 	if (brlobol_mesh_lod_load_view(lod, &info, 0) < 0 ||
-		check_mesh_lod_payload("mesh lod view", lod,
-		    static_cast<size_t>(faceCount),
-		    static_cast<size_t>(vertexCount), 0)) {
+	    check_mesh_lod_payload("mesh lod view", lod,
+				   static_cast<size_t>(faceCount),
+				   static_cast<size_t>(vertexCount), 0)) {
 	    ret = 1;
 	    goto cleanup;
 	}
@@ -442,24 +442,24 @@ main(int argc, char *argv[])
 	struct BRLObolMeshLod *meshLod = NULL;
 	int invalidStoreFaces[3] = {0, vertexCount, 1};
 	if (brlobol_mesh_lod_cache_store_mesh(dbip, meshObjname,
-		reinterpret_cast<const point_t *>(vertices),
-		static_cast<size_t>(vertexCount),
-		reinterpret_cast<const vect_t *>(detailNormals),
-		faces, static_cast<size_t>(faceCount), 424242ULL, 0.66,
-		&cacheStatus) != BRLCAD_OK ||
-		!cacheStatus.directory_found || cacheStatus.is_bot ||
-		!cacheStatus.has_cache_key || !cacheStatus.has_cached_payload ||
-		cacheStatus.stale_cache_entry ||
-		!cacheStatus.generated_cache_entry || !cacheStatus.cache_key) {
+					      reinterpret_cast<const point_t *>(vertices),
+					      static_cast<size_t>(vertexCount),
+					      reinterpret_cast<const vect_t *>(detailNormals),
+					      faces, static_cast<size_t>(faceCount), 424242ULL, 0.66,
+					      &cacheStatus) != BRLCAD_OK ||
+	    !cacheStatus.directory_found || cacheStatus.is_bot ||
+	    !cacheStatus.has_cache_key || !cacheStatus.has_cached_payload ||
+	    cacheStatus.stale_cache_entry ||
+	    !cacheStatus.generated_cache_entry || !cacheStatus.cache_key) {
 	    printf("FAIL: mesh lod store generated mesh status\n");
 	    ret = 1;
 	    goto cleanup;
 	}
 	meshLod = brlobol_mesh_lod_get(dbip, meshObjname);
 	if (!meshLod || first_available_level(meshLod) < 0 ||
-		check_mesh_lod_payload("mesh lod generated mesh", meshLod,
-		    static_cast<size_t>(faceCount),
-		    static_cast<size_t>(vertexCount), 1)) {
+	    check_mesh_lod_payload("mesh lod generated mesh", meshLod,
+				   static_cast<size_t>(faceCount),
+				   static_cast<size_t>(vertexCount), 1)) {
 	    printf("FAIL: mesh lod generated mesh data\n");
 	    ret = 1;
 	}
@@ -469,12 +469,12 @@ main(int argc, char *argv[])
 	    goto cleanup;
 
 	if (brlobol_mesh_lod_cache_store_mesh(dbip, meshObjname,
-		reinterpret_cast<const point_t *>(vertices),
-		static_cast<size_t>(vertexCount), NULL, invalidStoreFaces, 1,
-		777777ULL, 0.66, &cacheStatus) != BRLCAD_ERROR ||
-		!cacheStatus.has_cache_key ||
-		!cacheStatus.has_cached_payload ||
-		cacheStatus.cache_key != 424242ULL) {
+					      reinterpret_cast<const point_t *>(vertices),
+					      static_cast<size_t>(vertexCount), NULL, invalidStoreFaces, 1,
+					      777777ULL, 0.66, &cacheStatus) != BRLCAD_ERROR ||
+	    !cacheStatus.has_cache_key ||
+	    !cacheStatus.has_cached_payload ||
+	    cacheStatus.cache_key != 424242ULL) {
 	    printf("FAIL: mesh lod invalid generated mesh store preservation\n");
 	    ret = 1;
 	    goto cleanup;
@@ -482,8 +482,8 @@ main(int argc, char *argv[])
     }
 
     if (test_detail_callbacks(dbip, meshObjname, vertices, faces,
-	    detailNormals, static_cast<size_t>(vertexCount),
-	    static_cast<size_t>(faceCount))) {
+			      detailNormals, static_cast<size_t>(vertexCount),
+			      static_cast<size_t>(faceCount))) {
 	ret = 1;
 	goto cleanup;
     }
@@ -493,27 +493,27 @@ main(int argc, char *argv[])
 	struct BRLObolMeshLodData shrinkData;
 	struct BRLObolMeshLodInfo shrinkInfo = BRLOBOL_MESH_LOD_INFO_INIT;
 	if (brlobol_mesh_lod_load_level(lod, memshrinkLevel, 0) !=
-		memshrinkLevel ||
-		(activeLevel = brlobol_mesh_lod_current_level(lod)) < 0 ||
-		!brlobol_mesh_lod_has_active_data(lod)) {
+	    memshrinkLevel ||
+	    (activeLevel = brlobol_mesh_lod_current_level(lod)) < 0 ||
+	    !brlobol_mesh_lod_has_active_data(lod)) {
 	    printf("FAIL: mesh lod memshrink setup\n");
 	    ret = 1;
 	    goto cleanup;
 	}
 	brlobol_mesh_lod_memshrink(lod);
 	if (brlobol_mesh_lod_current_level(lod) != activeLevel ||
-		brlobol_mesh_lod_has_active_data(lod) ||
-		brlobol_mesh_lod_data_get(lod, &shrinkData) ||
-		brlobol_mesh_lod_info_get(lod, &shrinkInfo) ||
-		shrinkInfo.active_level != activeLevel) {
+	    brlobol_mesh_lod_has_active_data(lod) ||
+	    brlobol_mesh_lod_data_get(lod, &shrinkData) ||
+	    brlobol_mesh_lod_info_get(lod, &shrinkInfo) ||
+	    shrinkInfo.active_level != activeLevel) {
 	    printf("FAIL: mesh lod memshrink status\n");
 	    ret = 1;
 	    goto cleanup;
 	}
 	if (brlobol_mesh_lod_load_level(lod, activeLevel, 0) != activeLevel ||
-		check_mesh_lod_payload("mesh lod reload after memshrink", lod,
-		    static_cast<size_t>(faceCount),
-		    static_cast<size_t>(vertexCount), 0)) {
+	    check_mesh_lod_payload("mesh lod reload after memshrink", lod,
+				   static_cast<size_t>(faceCount),
+				   static_cast<size_t>(vertexCount), 0)) {
 	    printf("FAIL: mesh lod reload after memshrink\n");
 	    ret = 1;
 	    goto cleanup;
@@ -532,9 +532,9 @@ main(int argc, char *argv[])
 
     lod = brlobol_mesh_lod_get(dbip, objname);
     if (!lod || brlobol_mesh_lod_load_view(lod, NULL, 0) < 0 ||
-	    check_mesh_lod_payload("mesh lod reopen", lod,
-		static_cast<size_t>(faceCount),
-		static_cast<size_t>(vertexCount), 0)) {
+	check_mesh_lod_payload("mesh lod reopen", lod,
+			       static_cast<size_t>(faceCount),
+			       static_cast<size_t>(vertexCount), 0)) {
 	printf("FAIL: mesh lod reopen data\n");
 	ret = 1;
 	goto cleanup;
@@ -544,12 +544,12 @@ main(int argc, char *argv[])
     lod = NULL;
 
     if (brlobol_mesh_lod_cache_invalidate(dbip, objname, &cacheStatus) !=
-	    BRLCAD_OK ||
-	    !cacheStatus.directory_found || !cacheStatus.is_bot ||
-	    !cacheStatus.cleared_cache_entry ||
-	    !cacheStatus.cleared_cache_key ||
-	    cacheStatus.has_cache_key || cacheStatus.has_cached_payload ||
-	    cacheStatus.stale_cache_entry) {
+	BRLCAD_OK ||
+	!cacheStatus.directory_found || !cacheStatus.is_bot ||
+	!cacheStatus.cleared_cache_entry ||
+	!cacheStatus.cleared_cache_key ||
+	cacheStatus.has_cache_key || cacheStatus.has_cached_payload ||
+	cacheStatus.stale_cache_entry) {
 	printf("FAIL: mesh lod invalidate status\n");
 	ret = 1;
 	goto cleanup;
@@ -569,9 +569,9 @@ main(int argc, char *argv[])
 
     lod = brlobol_mesh_lod_get(dbip, objname);
     if (!lod || brlobol_mesh_lod_load_view(lod, NULL, 0) < 0 ||
-	    check_mesh_lod_payload("mesh lod update after invalidate", lod,
-		static_cast<size_t>(faceCount),
-		static_cast<size_t>(vertexCount), 0)) {
+	check_mesh_lod_payload("mesh lod update after invalidate", lod,
+			       static_cast<size_t>(faceCount),
+			       static_cast<size_t>(vertexCount), 0)) {
 	printf("FAIL: mesh lod compatibility update data\n");
 	ret = 1;
 	goto cleanup;
@@ -588,24 +588,24 @@ main(int argc, char *argv[])
 	brlobol_mesh_lod_cache_status_init(&cacheStatus);
 	brlobol_mesh_lod_detail_init(&nullDetail);
 	if (brlobol_mesh_lod_load_level(NULL, 0, 0) >= 0 ||
-		brlobol_mesh_lod_load_view(NULL, NULL, 0) >= 0 ||
-		brlobol_mesh_lod_current_level(NULL) >= 0 ||
-		brlobol_mesh_lod_has_active_data(NULL) ||
-		brlobol_mesh_lod_data_get(NULL, &nullData) ||
-		brlobol_mesh_lod_info_get(NULL, &nullInfo) ||
-		nullDetail.face_count ||
-		brlobol_mesh_lod_detail_callbacks_set(NULL, NULL, NULL, NULL,
+	    brlobol_mesh_lod_load_view(NULL, NULL, 0) >= 0 ||
+	    brlobol_mesh_lod_current_level(NULL) >= 0 ||
+	    brlobol_mesh_lod_has_active_data(NULL) ||
+	    brlobol_mesh_lod_data_get(NULL, &nullData) ||
+	    brlobol_mesh_lod_info_get(NULL, &nullInfo) ||
+	    nullDetail.face_count ||
+	    brlobol_mesh_lod_detail_callbacks_set(NULL, NULL, NULL, NULL,
 		    NULL) ||
-		nullInfo.active_level != -1 ||
-		cacheStatus.cache_key ||
-		brlobol_mesh_lod_cache_status(NULL, objname,
-		    &cacheStatus) != BRLCAD_ERROR ||
-		brlobol_mesh_lod_cache_status(dbip, NULL,
-		    &cacheStatus) != BRLCAD_ERROR ||
-		brlobol_mesh_lod_cache_status(dbip, objname,
-		    NULL) != BRLCAD_ERROR ||
-		brlobol_mesh_lod_cache_invalidate(NULL, objname,
-		    &cacheStatus) != BRLCAD_ERROR) {
+	    nullInfo.active_level != -1 ||
+	    cacheStatus.cache_key ||
+	    brlobol_mesh_lod_cache_status(NULL, objname,
+					  &cacheStatus) != BRLCAD_ERROR ||
+	    brlobol_mesh_lod_cache_status(dbip, NULL,
+					  &cacheStatus) != BRLCAD_ERROR ||
+	    brlobol_mesh_lod_cache_status(dbip, objname,
+					  NULL) != BRLCAD_ERROR ||
+	    brlobol_mesh_lod_cache_invalidate(NULL, objname,
+					      &cacheStatus) != BRLCAD_ERROR) {
 	    printf("FAIL: mesh lod null handling\n");
 	    ret = 1;
 	}

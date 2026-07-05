@@ -311,9 +311,9 @@ brlobol_draw_cache_key_component_is(const char *key, const char *component)
 
 static int
 brlobol_draw_path_component_is_instance_of(const char *component,
-					   size_t componentLen,
-					   const char *name,
-					   size_t nameLen)
+	size_t componentLen,
+	const char *name,
+	size_t nameLen)
 {
     if (!component || !componentLen || !name || !nameLen)
 	return 0;
@@ -1224,7 +1224,7 @@ brlobol_draw_metadata_cache_invalidate(db_i *dbip,
 				       BRLObolDrawCacheStatus *status)
 {
     return brlobol_draw_metadata_cache_invalidate_for_component(
-	dbip, name, BRLOBOL_DRAW_CACHE_METADATA, 0, status);
+	       dbip, name, BRLOBOL_DRAW_CACHE_METADATA, 0, status);
 }
 
 extern "C" int
@@ -1234,7 +1234,7 @@ brlobol_draw_metadata_cache_store(db_i *dbip,
 				  BRLObolDrawCacheStatus *status)
 {
     return brlobol_draw_metadata_cache_store_for_component(
-	dbip, name, BRLOBOL_DRAW_CACHE_METADATA, 0, record, status);
+	       dbip, name, BRLOBOL_DRAW_CACHE_METADATA, 0, record, status);
 }
 
 extern "C" int
@@ -1243,7 +1243,7 @@ brlobol_draw_metadata_cache_get(db_i *dbip,
 				BRLObolDrawMetadataRecord *record)
 {
     return brlobol_draw_metadata_cache_get_for_component(
-	dbip, name, BRLOBOL_DRAW_CACHE_METADATA, record);
+	       dbip, name, BRLOBOL_DRAW_CACHE_METADATA, record);
 }
 
 extern "C" int
@@ -1336,11 +1336,11 @@ brlobol_draw_path_metadata_cache_status(db_i *dbip,
 
 extern "C" int
 brlobol_draw_path_metadata_cache_invalidate(db_i *dbip,
-					    const char *path,
-					    BRLObolDrawCacheStatus *status)
+	const char *path,
+	BRLObolDrawCacheStatus *status)
 {
     return brlobol_draw_metadata_cache_invalidate_for_component(
-	dbip, path, BRLOBOL_DRAW_CACHE_PATH_METADATA, 1, status);
+	       dbip, path, BRLOBOL_DRAW_CACHE_PATH_METADATA, 1, status);
 }
 
 extern "C" int
@@ -1367,7 +1367,7 @@ brlobol_draw_path_metadata_cache_invalidate_object(
 	nkeys = bu_cache_keys(&keys, handle.cache);
 	for (int i = 0; i < nkeys; i++) {
 	    if (!brlobol_draw_cache_key_component_is(keys[i],
-		    BRLOBOL_DRAW_CACHE_PATH_METADATA_INDEX))
+		BRLOBOL_DRAW_CACHE_PATH_METADATA_INDEX))
 		continue;
 
 	    void *data = NULL;
@@ -1408,7 +1408,7 @@ brlobol_draw_path_metadata_cache_store(db_i *dbip,
 				       BRLObolDrawCacheStatus *status)
 {
     return brlobol_draw_metadata_cache_store_for_component(
-	dbip, path, BRLOBOL_DRAW_CACHE_PATH_METADATA, 1, record, status);
+	       dbip, path, BRLOBOL_DRAW_CACHE_PATH_METADATA, 1, record, status);
 }
 
 extern "C" int
@@ -1417,13 +1417,13 @@ brlobol_draw_path_metadata_cache_get(db_i *dbip,
 				     BRLObolDrawMetadataRecord *record)
 {
     return brlobol_draw_metadata_cache_get_for_component(
-	dbip, path, BRLOBOL_DRAW_CACHE_PATH_METADATA, record);
+	       dbip, path, BRLOBOL_DRAW_CACHE_PATH_METADATA, record);
 }
 
 extern "C" int
 brlobol_draw_path_metadata_cache_refresh(db_i *dbip,
-					 const char *path,
-					 BRLObolDrawCacheStatus *status)
+	const char *path,
+	BRLObolDrawCacheStatus *status)
 {
     BRLObolDrawMetadataRecord record;
     struct db_tree_state state;

@@ -325,7 +325,7 @@ main(int argc, char *argv[])
 	!status.directoryFound || !status.hasCachedPayload ||
 	!status.generatedCacheEntry ||
 	brlobol_draw_path_metadata_cache_get(dbip, path_full_name,
-	    &metadata) != BRLCAD_OK ||
+		&metadata) != BRLCAD_OK ||
 	check_path_metadata(&metadata)) {
 	ret = 1;
 	goto cleanup;
@@ -363,11 +363,11 @@ main(int argc, char *argv[])
 	!status.directoryFound || !status.clearedCacheEntry ||
 	status.hasCachedPayload ||
 	brlobol_draw_path_metadata_cache_get(dbip, path_full_name,
-	    &metadata) != BRLCAD_ERROR ||
+		&metadata) != BRLCAD_ERROR ||
 	brlobol_draw_path_metadata_cache_refresh(dbip, path_full_name,
-	    &status) != BRLCAD_OK ||
+		&status) != BRLCAD_OK ||
 	brlobol_draw_path_metadata_cache_get(dbip, path_full_name,
-	    &metadata) != BRLCAD_OK ||
+		&metadata) != BRLCAD_OK ||
 	check_path_metadata(&metadata)) {
 	printf("FAIL: draw cache path metadata invalidate/refresh\n");
 	ret = 1;
@@ -377,9 +377,9 @@ main(int argc, char *argv[])
     if (brlobol_draw_path_metadata_cache_refresh(dbip, path_region_full_name,
 	    &status) != BRLCAD_OK ||
 	brlobol_draw_path_metadata_cache_get(dbip, path_region_full_name,
-	    &metadata) != BRLCAD_OK ||
+		&metadata) != BRLCAD_OK ||
 	brlobol_draw_path_metadata_cache_get(dbip, path_full_name,
-	    &metadata) != BRLCAD_OK) {
+		&metadata) != BRLCAD_OK) {
 	printf("FAIL: draw cache path metadata object-invalidate setup\n");
 	ret = 1;
 	goto cleanup;
@@ -390,9 +390,9 @@ main(int argc, char *argv[])
 	!status.directoryFound || !status.clearedCacheEntry ||
 	status.hasCachedPayload ||
 	brlobol_draw_path_metadata_cache_get(dbip, path_full_name,
-	    &metadata) != BRLCAD_ERROR ||
+		&metadata) != BRLCAD_ERROR ||
 	brlobol_draw_path_metadata_cache_get(dbip, path_region_full_name,
-	    &metadata) != BRLCAD_OK) {
+		&metadata) != BRLCAD_OK) {
 	printf("FAIL: draw cache path metadata leaf object invalidate\n");
 	ret = 1;
 	goto cleanup;
@@ -401,13 +401,13 @@ main(int argc, char *argv[])
     if (brlobol_draw_path_metadata_cache_refresh(dbip, path_full_name,
 	    &status) != BRLCAD_OK ||
 	brlobol_draw_path_metadata_cache_invalidate_object(dbip,
-	    path_region_name, &status) != BRLCAD_OK ||
+		path_region_name, &status) != BRLCAD_OK ||
 	!status.directoryFound || !status.clearedCacheEntry ||
 	status.hasCachedPayload ||
 	brlobol_draw_path_metadata_cache_get(dbip, path_full_name,
-	    &metadata) != BRLCAD_ERROR ||
+		&metadata) != BRLCAD_ERROR ||
 	brlobol_draw_path_metadata_cache_get(dbip, path_region_full_name,
-	    &metadata) != BRLCAD_ERROR ||
+		&metadata) != BRLCAD_ERROR ||
 	brlobol_draw_metadata_cache_get(dbip, objname, &metadata) !=
 	BRLCAD_OK) {
 	printf("FAIL: draw cache path metadata ancestor object invalidate\n");
@@ -418,7 +418,7 @@ main(int argc, char *argv[])
     if (brlobol_draw_path_metadata_cache_refresh(dbip, path_full_name,
 	    &status) != BRLCAD_OK ||
 	brlobol_draw_path_metadata_cache_get(dbip, path_full_name,
-	    &metadata) != BRLCAD_OK) {
+		&metadata) != BRLCAD_OK) {
 	printf("FAIL: draw cache path metadata object-invalidate reseed\n");
 	ret = 1;
 	goto cleanup;
@@ -443,7 +443,7 @@ main(int argc, char *argv[])
 	brlobol_draw_metadata_cache_get(dbip, objname, &metadata) !=
 	BRLCAD_ERROR ||
 	brlobol_draw_path_metadata_cache_get(dbip, path_full_name,
-	    &metadata) !=
+		&metadata) !=
 	BRLCAD_ERROR) {
 	printf("FAIL: draw cache database clear\n");
 	ret = 1;
@@ -498,11 +498,11 @@ main(int argc, char *argv[])
 	brlobol_draw_metadata_cache_status(dbip, objname,
 					   NULL) != BRLCAD_ERROR ||
 	brlobol_draw_path_metadata_cache_status(NULL, path_full_name,
-	    &status) != BRLCAD_ERROR ||
+		&status) != BRLCAD_ERROR ||
 	brlobol_draw_path_metadata_cache_status(dbip, NULL,
-	    &status) != BRLCAD_ERROR ||
+		&status) != BRLCAD_ERROR ||
 	brlobol_draw_path_metadata_cache_status(dbip, path_full_name,
-					   NULL) != BRLCAD_ERROR) {
+		NULL) != BRLCAD_ERROR) {
 	printf("FAIL: draw cache null handling\n");
 	ret = 1;
 	goto cleanup;
