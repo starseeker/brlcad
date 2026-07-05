@@ -620,7 +620,7 @@ if(TARGET test_qtcad_obol_progressive_lod)
     APPEND PROPERTY LABELS drawing_baseline)
   brlcad_add_test(
     NAME test_qtcad_obol_progressive_lod_generic_twin_startup_expand
-    COMMAND test_qtcad_obol_progressive_lod --startup-expand --startup-expand-passes 2 "${CMAKE_BINARY_DIR}/share/db/faa/Generic_Twin.g" - all direct 4 1)
+    COMMAND test_qtcad_obol_progressive_lod --startup-expand --startup-expand-passes 4 "${CMAKE_BINARY_DIR}/share/db/faa/Generic_Twin.g" - all direct 4 1)
   set_tests_properties(test_qtcad_obol_progressive_lod_generic_twin_startup_expand PROPERTIES TIMEOUT 120)
   set_property(TEST test_qtcad_obol_progressive_lod_generic_twin_startup_expand
     APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})

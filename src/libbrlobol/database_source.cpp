@@ -170,6 +170,14 @@ BRLObolDatabaseSourceSummary::BRLObolDatabaseSourceSummary(void) :
     materialColor(1.0f, 1.0f, 1.0f),
     materialRevision(0),
     materialPolicy(SoBRLDatabaseSource::MATERIAL_INHERIT),
+    databaseMetadataValid(FALSE),
+    databaseRegionId(0),
+    databaseAirCode(0),
+    databaseMaterialId(0),
+    databaseLos(0),
+    databaseMaterialColorValid(FALSE),
+    databaseMaterialColor(1.0f, 1.0f, 1.0f),
+    databaseMaterialShader(""),
     colorOverride(FALSE),
     color(1.0f, 1.0f, 1.0f),
     drawMatrixValid(FALSE),
@@ -1284,6 +1292,38 @@ free_annotation_record_copy(struct rt_annot_internal *annot)
 
 template <typename ShapeT>
 static void
+apply_source_database_metadata(ShapeT *shape,
+			       const SoBRLDatabaseSource *source)
+{
+    if (!shape || !source || !source->databaseMetadataValid.getValue())
+	return;
+
+    shape->regionId = source->databaseRegionId.getValue();
+    shape->airCode = source->databaseAirCode.getValue();
+    shape->materialId = source->databaseMaterialId.getValue();
+    shape->los = source->databaseLos.getValue();
+
+    shape->materialColorValid =
+	source->databaseMaterialColorValid.getValue();
+    if (source->databaseMaterialColorValid.getValue()) {
+	shape->materialColor = source->databaseMaterialColor.getValue();
+    } else if (!source->materialColorValid.getValue()) {
+	shape->materialColor = SbColor(1.0f, 1.0f, 1.0f);
+    }
+    shape->materialShader = source->databaseMaterialShader.getValue();
+
+    if (source->materialColorValid.getValue() &&
+	(source->materialPolicy.getValue() !=
+	 SoBRLDatabaseSource::MATERIAL_DATABASE ||
+	 !shape->materialColorValid.getValue())) {
+	shape->materialColorValid = TRUE;
+	shape->materialColor = source->materialColor.getValue();
+	shape->materialRevision = source->materialRevision.getValue();
+    }
+}
+
+template <typename ShapeT>
+static void
 assign_realized_identity(ShapeT *shape,
 			 const struct db_tree_state *tsp,
 			 const char *path,
@@ -1343,6 +1383,7 @@ assign_realized_identity(ShapeT *shape,
 	    shape->materialColor = SbColor(1.0f, 1.0f, 1.0f);
 	}
 	shape->materialShader = "";
+	apply_source_database_metadata(shape, source);
 	return;
     }
 
@@ -1363,6 +1404,7 @@ assign_realized_identity(ShapeT *shape,
 	shape->materialColor = source->materialColor.getValue();
     }
     shape->materialShader = tsp->ts_mater.ma_shader ? tsp->ts_mater.ma_shader : "";
+    apply_source_database_metadata(shape, source);
 }
 
 template <typename ShapeT>
@@ -1473,6 +1515,7 @@ sync_shape_display_state(ShapeT *shape, const SoBRLDatabaseSource *source)
 	shape->materialColor = source->materialColor.getValue();
 	shape->materialRevision = source->materialRevision.getValue();
     }
+    apply_source_database_metadata(shape, source);
 }
 
 template <typename ShapeT>
@@ -2536,6 +2579,15 @@ SoBRLDatabaseSource::SoBRLDatabaseSource(void) :
     SO_NODE_ADD_FIELD(materialRevision, (0));
     SO_NODE_ADD_FIELD(materialPolicy, (MATERIAL_INHERIT));
     SO_NODE_SET_SF_ENUM_TYPE(materialPolicy, MaterialPolicy);
+    SO_NODE_ADD_FIELD(databaseMetadataValid, (FALSE));
+    SO_NODE_ADD_FIELD(databaseRegionId, (0));
+    SO_NODE_ADD_FIELD(databaseAirCode, (0));
+    SO_NODE_ADD_FIELD(databaseMaterialId, (0));
+    SO_NODE_ADD_FIELD(databaseLos, (0));
+    SO_NODE_ADD_FIELD(databaseMaterialColorValid, (FALSE));
+    SO_NODE_ADD_FIELD(databaseMaterialColor,
+		      (SbColor(1.0f, 1.0f, 1.0f)));
+    SO_NODE_ADD_FIELD(databaseMaterialShader, (""));
     SO_NODE_ADD_FIELD(colorOverride, (FALSE));
     SO_NODE_ADD_FIELD(color, (SbColor(1.0f, 1.0f, 1.0f)));
     SO_NODE_ADD_FIELD(drawMatrixValid, (FALSE));
@@ -2945,6 +2997,65 @@ SoBRLDatabaseSource::setRealizationViewPolicy(SbBool viewDependent,
     }
     if (activePolicyChanged)
 	this->markStale(STALE_VIEW);
+    if (changed)
+	this->syncRealizedShapeOwnerState();
+    return changed;
+}
+
+int
+SoBRLDatabaseSource::setDatabaseMetadataState(SbBool metadataValid,
+	int regionId,
+	int airCode,
+	int materialId,
+	int los,
+	SbBool metadataMaterialColorValid,
+	const SbColor &metadataMaterialColor,
+	const SbString &metadataMaterialShader)
+{
+    int changed = 0;
+    if (this->databaseMetadataValid.getValue() != metadataValid) {
+	this->databaseMetadataValid = metadataValid;
+	changed = 1;
+    }
+    if (this->databaseRegionId.getValue() != regionId) {
+	this->databaseRegionId = regionId;
+	changed = 1;
+    }
+    if (this->databaseAirCode.getValue() != airCode) {
+	this->databaseAirCode = airCode;
+	changed = 1;
+    }
+    if (this->databaseMaterialId.getValue() != materialId) {
+	this->databaseMaterialId = materialId;
+	changed = 1;
+    }
+    if (this->databaseLos.getValue() != los) {
+	this->databaseLos = los;
+	changed = 1;
+    }
+    if (this->databaseMaterialColorValid.getValue() !=
+	metadataMaterialColorValid) {
+	this->databaseMaterialColorValid = metadataMaterialColorValid;
+	changed = 1;
+    }
+    if (metadataMaterialColorValid &&
+	!database_source_color_equal(
+	    this->databaseMaterialColor.getValue(), metadataMaterialColor)) {
+	this->databaseMaterialColor = metadataMaterialColor;
+	changed = 1;
+    }
+    if (!metadataMaterialColorValid &&
+	!database_source_color_equal(this->databaseMaterialColor.getValue(),
+	    SbColor(1.0f, 1.0f, 1.0f))) {
+	this->databaseMaterialColor = SbColor(1.0f, 1.0f, 1.0f);
+	changed = 1;
+    }
+    if (strcmp(this->databaseMaterialShader.getValue().getString(),
+	    metadataMaterialShader.getString()) != 0) {
+	this->databaseMaterialShader = metadataMaterialShader;
+	changed = 1;
+    }
+
     if (changed)
 	this->syncRealizedShapeOwnerState();
     return changed;
@@ -4424,6 +4535,16 @@ SoBRLDatabaseSource::setAuxiliarySourceLineSet(const char *sourcePath,
     source->materialColorValid = this->materialColorValid.getValue();
     source->materialColor = this->materialColor.getValue();
     source->materialRevision = this->materialRevision.getValue();
+    source->databaseMetadataValid = this->databaseMetadataValid.getValue();
+    source->databaseRegionId = this->databaseRegionId.getValue();
+    source->databaseAirCode = this->databaseAirCode.getValue();
+    source->databaseMaterialId = this->databaseMaterialId.getValue();
+    source->databaseLos = this->databaseLos.getValue();
+    source->databaseMaterialColorValid =
+	this->databaseMaterialColorValid.getValue();
+    source->databaseMaterialColor = this->databaseMaterialColor.getValue();
+    source->databaseMaterialShader =
+	this->databaseMaterialShader.getValue();
     source->colorOverride = this->colorOverride.getValue();
     source->color = this->color.getValue();
     source->drawMatrixValid = this->drawMatrixValid.getValue();
@@ -5531,6 +5652,15 @@ SoBRLDatabaseSource::getSummary(BRLObolDatabaseSourceSummary &summary) const
     summary.materialColor = this->materialColor.getValue();
     summary.materialRevision = this->materialRevision.getValue();
     summary.materialPolicy = this->materialPolicy.getValue();
+    summary.databaseMetadataValid = this->databaseMetadataValid.getValue();
+    summary.databaseRegionId = this->databaseRegionId.getValue();
+    summary.databaseAirCode = this->databaseAirCode.getValue();
+    summary.databaseMaterialId = this->databaseMaterialId.getValue();
+    summary.databaseLos = this->databaseLos.getValue();
+    summary.databaseMaterialColorValid =
+	this->databaseMaterialColorValid.getValue();
+    summary.databaseMaterialColor = this->databaseMaterialColor.getValue();
+    summary.databaseMaterialShader = this->databaseMaterialShader.getValue();
     summary.colorOverride = this->colorOverride.getValue();
     summary.color = this->color.getValue();
     summary.drawMatrixValid = this->drawMatrixValid.getValue();

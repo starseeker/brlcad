@@ -487,6 +487,18 @@ ged_obol_transaction_ged_draw_mode(struct ged *gedp,
 }
 
 static int
+ged_obol_transaction_defer_leaf_expansion(
+    const struct ged_draw_transaction *txn)
+{
+    if (!txn || txn->kind != GED_DRAW_TXN_DRAW || !txn->appearance)
+	return 0;
+
+    const struct ged_draw_appearance_settings *appearance =
+	(const struct ged_draw_appearance_settings *)txn->appearance;
+    return appearance->defer_leaf_expansion ? 1 : 0;
+}
+
+static int
 ged_obol_drawn_path_mode(struct ged *gedp, void *view_ctx,
 			 const char *path)
 {
@@ -1376,13 +1388,15 @@ ged_obol_replace_path(struct ged *gedp,
 		      const char *path,
 		      int ged_draw_mode,
 		      uint32_t source_revision,
-		      SoBRLSceneController *scene)
+		      SoBRLSceneController *scene,
+		      int use_retained_state = 1)
 {
     if (!dbip || !path || !path[0] || !scene)
 	return 0;
 
-    ged_obol_source_state source_state =
-	ged_obol_find_source_state(gedp, view_ctx, path, ged_draw_mode);
+    ged_obol_source_state source_state = use_retained_state ?
+	ged_obol_find_source_state(gedp, view_ctx, path, ged_draw_mode) :
+	ged_obol_source_state();
     const bool retained_state_valid = source_state.valid;
     const uint32_t retained_source_revision = source_state.sourceRevision;
     const uint32_t retained_inputs_revision = source_state.inputsRevision;
@@ -13357,6 +13371,39 @@ ged_obol_apply_path_placement(struct ged *gedp,
 }
 
 static int
+ged_obol_apply_cached_path_metadata(struct ged *gedp,
+				    const char *path,
+				    struct ged_draw_obol_source_expansion_status *status)
+{
+    if (!gedp || !gedp->dbip || !path || !path[0])
+	return 0;
+
+    struct BRLObolDrawMetadataRecord metadata;
+    brlobol_draw_metadata_record_init(&metadata);
+    const char *metadata_path = ged_obol_skip_leading_slash(path);
+    if (!metadata_path || !metadata_path[0])
+	return 0;
+
+    if (brlobol_draw_path_metadata_cache_get(gedp->dbip, metadata_path,
+	    &metadata) != BRLCAD_OK &&
+	brlobol_draw_path_metadata_cache_refresh(gedp->dbip,
+	    metadata_path, NULL) == BRLCAD_OK) {
+	(void)brlobol_draw_path_metadata_cache_get(gedp->dbip,
+	    metadata_path, &metadata);
+    }
+    if (!metadata.directoryFound)
+	return 0;
+
+    if (!ged_draw_obol_database_source_apply_draw_metadata_for_path(gedp,
+	    path, &metadata))
+	return 0;
+
+    if (status)
+	status->metadata_applied++;
+    return 1;
+}
+
+static int
 ged_obol_publish_aabb_proxy_for_path(
     struct ged *gedp,
     void *view_ctx,
@@ -13397,23 +13444,6 @@ ged_obol_publish_aabb_proxy_for_path(
 	gedp, path, (const point_t *)points, commands, 24);
     if (published && status)
 	status->proxy_published++;
-
-    struct BRLObolDrawMetadataRecord metadata;
-    brlobol_draw_metadata_record_init(&metadata);
-    const char *metadata_path = ged_obol_skip_leading_slash(path);
-    if (published && metadata_path && metadata_path[0]) {
-	if (brlobol_draw_path_metadata_cache_get(gedp->dbip, metadata_path,
-		&metadata) != BRLCAD_OK &&
-	    brlobol_draw_path_metadata_cache_refresh(gedp->dbip,
-		metadata_path, NULL) == BRLCAD_OK) {
-	    (void)brlobol_draw_path_metadata_cache_get(gedp->dbip,
-		metadata_path, &metadata);
-	}
-	if (metadata.directoryFound &&
-	    ged_draw_obol_database_source_apply_draw_metadata_for_path(gedp,
-		path, &metadata) && status)
-	    status->metadata_applied++;
-    }
 
     if (scoped)
 	ged_draw_obol_database_source_publication_end(gedp);
@@ -13566,7 +13596,13 @@ ged_draw_obol_database_source_prewarm_child_aabb_proxies(
 
 	if (submitted >= max_children) {
 	    if (status)
-		status->remaining++;
+		status->remaining += child_count - row;
+	    break;
+	}
+
+	if (child.record.is_comb) {
+	    if (status)
+		status->comb_sources++;
 	    continue;
 	}
 
@@ -13719,6 +13755,12 @@ ged_draw_obol_database_source_expand_children(
 	    continue;
 	}
 
+	if (expanded >= max_children) {
+	    if (status)
+		status->remaining += child_count - row;
+	    break;
+	}
+
 	std::string child_path = parent_path;
 	if (!child_path.empty())
 	    child_path += "/";
@@ -13733,15 +13775,9 @@ ged_draw_obol_database_source_expand_children(
 	    continue;
 	}
 
-	if (expanded >= max_children) {
-	    if (status)
-		status->remaining++;
-	    continue;
-	}
-
 	const int replace_changed = ged_obol_replace_path(gedp, view_ctx,
 	    gedp->dbip, child_path.c_str(), ged_draw_mode, source_revision,
-	    scene);
+	    scene, 0);
 	if (replace_changed < 0) {
 	    if (status)
 		status->skipped_invalid++;
@@ -13752,11 +13788,13 @@ ged_draw_obol_database_source_expand_children(
 
 	(void)ged_obol_apply_path_placement(gedp, view_ctx,
 					    child_path.c_str(), ged_draw_mode);
+	(void)ged_obol_apply_cached_path_metadata(gedp, child_path.c_str(),
+						  status);
 
-	const int refresh_missing = child.record.is_comb ? 0 : 1;
-	(void)ged_obol_publish_aabb_proxy_for_path(gedp, view_ctx,
-	    child_path.c_str(), child_name, ged_draw_mode, refresh_missing,
-	    status);
+	if (!child.record.is_comb) {
+	    (void)ged_obol_publish_aabb_proxy_for_path(gedp, view_ctx,
+		child_path.c_str(), child_name, ged_draw_mode, 1, status);
+	}
 
 	if (status) {
 	    status->expanded++;
@@ -13771,8 +13809,10 @@ ged_draw_obol_database_source_expand_children(
     if (changed) {
 	ged_obol_attached_controller *entry =
 	    ged_obol_attached_controller_for_view(gedp, view_ctx);
-	if (entry && entry->view_controller)
+	if (entry && entry->view_controller) {
 	    entry->view_controller->clearViewLodState();
+	    entry->view_controller->requestRender("database-source-expand");
+	}
     }
 
     return expanded > 0 ? 1 : 0;
@@ -14125,6 +14165,33 @@ ged_obol_apply_draw_metadata_to_shape(
     shape->materialShader = record->hasShader ? record->shader : "";
 }
 
+static int
+ged_obol_apply_draw_metadata_to_source(
+    SoBRLDatabaseSource *source,
+    const struct BRLObolDrawMetadataRecord *record)
+{
+    if (!source || !record || !record->directoryFound)
+	return 0;
+
+    SbColor metadata_color(1.0f, 1.0f, 1.0f);
+    if (record->hasColor) {
+	metadata_color = SbColor(
+			     static_cast<float>(record->color[0]) / 255.0f,
+			     static_cast<float>(record->color[1]) / 255.0f,
+			     static_cast<float>(record->color[2]) / 255.0f);
+    }
+    (void)source->setDatabaseMetadataState(
+	TRUE,
+	record->hasRegionId ? record->regionId : 0,
+	record->hasAircode ? record->aircode : 0,
+	record->hasMaterialId ? record->materialId : 0,
+	record->hasLos ? record->los : 0,
+	record->hasColor ? TRUE : FALSE,
+	metadata_color,
+	record->hasShader ? SbString(record->shader) : SbString(""));
+    return 1;
+}
+
 extern "C" int
 ged_draw_obol_database_source_apply_draw_metadata_for_path(
     struct ged *gedp,
@@ -14145,7 +14212,7 @@ ged_draw_obol_database_source_apply_draw_metadata_for_path(
     if (!source)
 	return 0;
 
-    int updated = 0;
+    int updated = ged_obol_apply_draw_metadata_to_source(source, record);
 
     const int vlist_count = source->getRealizedShapeCount();
     for (int i = 0; i < vlist_count; i++) {
@@ -14486,6 +14553,73 @@ ged_obol_apply_redraw_transaction(
     return handled;
 }
 
+static int
+ged_obol_apply_cached_path_metadata_to_scene(
+    struct ged *gedp,
+    SoBRLSceneController *scene,
+    void *view_ctx,
+    const char *path,
+    int ged_draw_mode)
+{
+    if (!gedp || !gedp->dbip || !scene || !path || !path[0])
+	return 0;
+
+    struct BRLObolDrawMetadataRecord metadata;
+    brlobol_draw_metadata_record_init(&metadata);
+    const char *metadata_path = ged_obol_skip_leading_slash(path);
+    if (!metadata_path || !metadata_path[0])
+	return 0;
+
+    if (brlobol_draw_path_metadata_cache_get(gedp->dbip, metadata_path,
+	    &metadata) != BRLCAD_OK &&
+	brlobol_draw_path_metadata_cache_refresh(gedp->dbip,
+	    metadata_path, NULL) == BRLCAD_OK) {
+	(void)brlobol_draw_path_metadata_cache_get(gedp->dbip,
+	    metadata_path, &metadata);
+    }
+    if (!metadata.directoryFound)
+	return 0;
+
+    const std::string mode_key =
+	ged_obol_database_source_instance_key_for_mode(view_ctx, path,
+	    ged_draw_mode);
+    SoBRLDatabaseSource *source =
+	scene->findDatabaseSourceInstance(mode_key.c_str());
+    if (!source) {
+	const std::string base_key =
+	    ged_obol_database_source_instance_key(view_ctx, path);
+	source = scene->findDatabaseSourceInstance(base_key.c_str());
+    }
+
+    return ged_obol_apply_draw_metadata_to_source(source, &metadata);
+}
+
+static int
+ged_obol_replace_deferred_paths(
+    struct ged *gedp,
+    void *view_ctx,
+    struct db_i *dbip,
+    const std::vector<std::string> &paths,
+    int ged_draw_mode,
+    uint32_t source_revision,
+    SoBRLSceneController *scene)
+{
+    if (!gedp || !dbip || paths.empty() || !scene)
+	return 0;
+
+    int changed = 0;
+    for (const std::string &path : paths) {
+	if (ged_obol_replace_path(gedp, view_ctx, dbip, path.c_str(),
+		ged_draw_mode, source_revision, scene, 0) > 0)
+	    changed = 1;
+	if (ged_obol_apply_cached_path_metadata_to_scene(gedp, scene,
+		view_ctx, path.c_str(), ged_draw_mode))
+	    changed = 1;
+    }
+
+    return changed;
+}
+
 int
 ged_draw_obol_scene_sync_transaction(
     struct ged *gedp,
@@ -14512,6 +14646,15 @@ ged_draw_obol_scene_sync_transaction(
 	    if (result && result->affected_shapes <= 0 &&
 		result->affected_groups <= 0 && paths.empty())
 		break;
+	    const int ged_draw_mode =
+		ged_obol_transaction_ged_draw_mode(gedp, txn);
+	    if (ged_obol_transaction_defer_leaf_expansion(txn)) {
+		if (!paths.empty())
+		    changed = ged_obol_replace_deferred_paths(gedp, view_ctx,
+			      gedp->dbip, paths, ged_draw_mode, source_revision,
+			      scene);
+		break;
+	    }
 	    if (paths.empty()) {
 		changed = ged_draw_obol_scene_sync_full_scene(gedp,
 			  view_ctx, source_revision, scene);
@@ -14526,13 +14669,13 @@ ged_draw_obol_scene_sync_transaction(
 					      scene))
 			changed = 1;
 		    if (ged_obol_replace_paths(gedp->dbip, source_paths,
-					       ged_obol_transaction_ged_draw_mode(gedp, txn),
-					       source_revision, gedp, view_ctx, scene))
+					       ged_draw_mode, source_revision,
+					       gedp, view_ctx, scene))
 			changed = 1;
 		} else {
 		    changed = ged_obol_replace_paths(gedp->dbip, paths,
-						     ged_obol_transaction_ged_draw_mode(gedp, txn),
-						     source_revision, gedp, view_ctx, scene);
+						     ged_draw_mode, source_revision,
+						     gedp, view_ctx, scene);
 		}
 	    }
 	    break;

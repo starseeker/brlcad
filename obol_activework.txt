@@ -85,6 +85,11 @@ Core Invariants
   cache implementation/API (`brlobol_mesh_lod_*`).  Mesh POP LoD data shares
   the same root through `mesh_lod.format`.  librt does not own draw-cache or
   mesh-LoD cache state.
+* AABB/OBB draw proxies are leaf-solid geometry.  Comb nodes may have cached
+  metadata and scene/source nodes, but comb bounding boxes are derived
+  bottom-up from available transformed leaf facts for drawing/autoview; do not
+  synthesize comb proxy geometry by recursively walking the database in the
+  draw path.
 * Database object change notifications invalidate draw-cache proxy/metadata
   records for the changed object and all indexed ancestor objects on affected
   paths.  Duplicate instance ids are canonicalized to object names before
@@ -115,31 +120,35 @@ Current Baseline
 * GED basic drawing passes through Obol capture.  Normal database draw modes
   use direct Obol providers instead of retained `_ged_drawtrees` mirrors.
 * Autoview was preserved: `autoview2` calls the Obol database autoview bridge,
-  and `draw_obol.cpp` exposes libbrlobol scene bounds to GED.
+  and `draw_obol.cpp` exposes libbrlobol scene bounds to GED.  Deferred leaf
+  expansion does not fall back to recursive database object bounds when Obol
+  source bounds are empty; autoview remains pending until leaf-source bounds
+  are published or the user changes the camera.
 * Direct wire, shaded-BoT, shaded, and hidden-line draws expand requested roots
   with `db_walk_tree_leaf_instances`, realize leaf database sources, and ensure
   an explicit Obol group for the requested root.
-* Startup/deferred leaf expansion can publish an AABB proxy line set directly
-  from the libbrlobol draw cache as the database-source external primary.  This
-  path now survives attached-controller source sync for shaded draws and gives
-  qtcad an immediate first visual for `Generic_Twin.g all` without expanding
-  every leaf.
+* Startup/deferred leaf expansion creates database-source nodes and applies
+  cached metadata without forcing leaf realization.  Leaf solids with cached
+  AABB records can publish proxy line sets as source-local external primary
+  geometry; comb roots remain metadata/source structure until leaf proxy data
+  is available.
 * A bounded post-proxy expansion bridge can now expand union children of
   already drawn database sources without invoking the full leaf-realization
   path.  The single-source API consumes available libbrlobol child AABB cache
   records, applies the child path placement matrix, publishes child proxy line
-  sets as source-local external primary geometry, and leaves missing comb proxy
-  generation to the background/cache population path rather than blocking
-  expansion on subtree walks.  Visible-frontier APIs repeat that prewarm/expand
-  step over the current database-source frontier under a requested root, so an
+  sets for leaf solids as source-local external primary geometry, and keeps
+  comb children as metadata/source nodes rather than calculating comb boxes
+  from the database.  Visible-frontier APIs repeat that prewarm/expand step
+  over the current database-source frontier under a requested root, so an
   application can advance recursive refinement in bounded render-thread passes.
   The companion prewarm path submits child AABB cache tasks through the
   attached `BRLObolLodService`, so cache population can run on worker threads
   before expansion consumes the records.
   `test_qtcad_obol_progressive_lod_generic_twin_startup_expand` verifies
-  `Generic_Twin.g all` grows from the startup root proxy through two
-  service-backed visible-frontier passes, increases source-tree depth, and
-  produces an image-visible frame change.
+  `Generic_Twin.g all` grows from the startup metadata root through
+  service-backed visible-frontier passes, increases source-tree depth,
+  publishes leaf AABB proxies, refreshes autoview from Obol source bounds, and
+  produces an image-visible frame change without wireframe tessellation.
 * The draw metadata cache has both object-local records and full-path aggregate
   records.  Full-path metadata refresh uses librt tree-state walking to cache
   inherited region id, air, material id, LOS, color, shader, and inheritance
@@ -324,15 +333,17 @@ Known Risks
   `--startup-only`, `--startup-refine`, `--startup-expand`, and a
   repeated-target slow CTest.
   `test_qtcad_obol_progressive_lod_startup_refine` captures the first deferred
-  proxy frame, promotes to the normal mesh-backed qtcad path, and then verifies
-  staged AABB -> OBB -> mesh refinement.  `slow-test_qtcad_obol_progressive_lod_repeated_moss`
+  leaf-proxy frame for a proxy-eligible target, promotes to the normal
+  mesh-backed qtcad path, and then verifies staged AABB -> OBB -> mesh
+  refinement.  `slow-test_qtcad_obol_progressive_lod_repeated_moss`
   is skipped unless `BRLCAD_RUN_SLOW_TESTS=1`, then builds a four-copy private
   moss scene and requires 24 visited LoD candidates.  Generic_Twin full-root
-  startup-only is now a bounded CTest gate; the first proxy visual appears
-  quickly.  Generic_Twin startup-expand is also gated and proves the attached
-  LoD service can prewarm visible-frontier child AABB records and then consume
-  those cached child proxies in repeated post-first-frame passes without full
-  leaf realization.
+  startup-only is now a bounded CTest gate proving metadata-only deferred draw
+  returns quickly with no realized geometry and no wireframe tessellation.
+  Generic_Twin startup-expand is also gated and proves the attached LoD service
+  can prewarm visible-frontier leaf AABB records, consume those cached child
+  proxies in repeated post-startup passes, refresh autoview from Obol source
+  bounds, and render without full leaf realization.
   Direct full-root startup-refine still times out in the synchronous
   full-detail promotion phase.  m35 remains a manual optimization probe.
 * Cached full-path draw metadata is available through libbrlobol, covered by
@@ -434,13 +445,14 @@ Generic_Twin full-root startup-only is now gated by
 `test_qtcad_obol_progressive_lod_generic_twin_startup`, and bounded
 post-proxy visible-frontier expansion is gated by
 `test_qtcad_obol_progressive_lod_generic_twin_startup_expand`.  A direct
-two-pass run on this machine reached `sources=1->25`, `depth=1->3`, and
-`proxies=24`, with most time spent in the second render-thread expansion pass.
-Manual Generic_Twin startup-refine still times out after the first proxy frame
-because synchronous full-detail promotion does not return quickly enough; treat
-automatic asynchronous cache-backed frontier scheduling after the first visual
-as the next large-root optimization target.  m35 remains a manual optimization
-probe.
+four-pass run on this machine reached `sources=1->164`, `depth=1->5`,
+`proxies=18`, and `lit=250` in under a second.  The startup-only pass remains
+metadata-only (`sources=1`, `geometry=0`, `lit=0`) by design for a comb root.
+Manual Generic_Twin startup-refine still times out after proxy-visible
+expansion because synchronous full-detail promotion does not return quickly
+enough; treat automatic asynchronous cache-backed frontier scheduling after
+startup as the next large-root optimization target.  m35 remains a manual
+optimization probe.
 
 Next Implementation Steps
 -------------------------
@@ -458,14 +470,14 @@ Next Implementation Steps
    hits are migration bugs.
 4. Rework large-root refinement so the post-proxy promotion path does not
    synchronously expand every leaf.  Generic_Twin startup-only proves fast
-   time-to-first-visual, Generic_Twin startup-expand now proves repeated
-   service-backed visible-frontier AABB proxy consumption after the first
-   frame, and the bounded repeated-moss slow gate covers staged multi-element
-   AABB/OBB/mesh progression.  The remaining scale question is automatic
-   asynchronous background scheduling of large database frontiers, including
-   duplicate-instance path identity, non-union CSG child handling, and cache
-   population scheduling that can publish AABB/OBB/mesh data as it becomes
-   available.
+   metadata-only deferred draw, Generic_Twin startup-expand now proves repeated
+   service-backed visible-frontier leaf AABB proxy consumption and Obol-bound
+   autoview refresh, and the bounded repeated-moss slow gate covers staged
+   multi-element AABB/OBB/mesh progression.  The remaining scale question is
+   automatic asynchronous background scheduling of large database frontiers,
+   including duplicate-instance path identity, non-union CSG child handling,
+   autoview stability/settlement as leaf bounds arrive, and cache population
+   scheduling that can publish AABB/OBB/mesh data as it becomes available.
 5. Extend the shared-scene/per-view-root Obol attach model to any remaining
    multi-view caller/test paths.  Primary attached mutation transaction
    view-LoD invalidation is now covered; add focused coverage for

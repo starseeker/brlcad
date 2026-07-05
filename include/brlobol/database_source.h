@@ -75,6 +75,14 @@ struct BRLOBOL_EXPORT BRLObolDatabaseSourceSummary {
     SbColor materialColor;
     uint32_t materialRevision;
     int materialPolicy;
+    SbBool databaseMetadataValid;
+    int databaseRegionId;
+    int databaseAirCode;
+    int databaseMaterialId;
+    int databaseLos;
+    SbBool databaseMaterialColorValid;
+    SbColor databaseMaterialColor;
+    SbString databaseMaterialShader;
     SbBool colorOverride;
     SbColor color;
     SbBool drawMatrixValid;
@@ -455,6 +463,14 @@ public:
     SoSFColor materialColor;
     SoSFUInt32 materialRevision;
     SoSFEnum materialPolicy;
+    SoSFBool databaseMetadataValid;
+    SoSFInt32 databaseRegionId;
+    SoSFInt32 databaseAirCode;
+    SoSFInt32 databaseMaterialId;
+    SoSFInt32 databaseLos;
+    SoSFBool databaseMaterialColorValid;
+    SoSFColor databaseMaterialColor;
+    SoSFString databaseMaterialShader;
     SoSFBool colorOverride;
     SoSFColor color;
     /* Local-to-scene placement metadata for this source instance.  Primary
@@ -565,6 +581,14 @@ public:
 	SbBool materialColorValid,
 	const SbColor &materialColor,
 	uint32_t materialRevision);
+    int setDatabaseMetadataState(SbBool metadataValid,
+	int regionId,
+	int airCode,
+	int materialId,
+	int los,
+	SbBool metadataMaterialColorValid,
+	const SbColor &metadataMaterialColor,
+	const SbString &metadataMaterialShader);
     int applyDisplayPatch(const BRLObolDatabaseSourceDisplayPatch &patch);
     /* Update local-to-scene placement metadata.  This does not mutate primary
      * geometry coordinates; database realization and external publication

@@ -160,15 +160,32 @@ brlobol_draw_proxy_point_count(int kind)
     }
 }
 
-static union tree *
-    brlobol_draw_proxy_make_nop_tree(void)
+static int
+brlobol_draw_proxy_leaf_solid_directory(const directory *dp)
 {
-    union tree *curtree = TREE_NULL;
+    if (!dp || dp == RT_DIR_NULL)
+	return 0;
+    if (dp->d_addr == RT_DIR_PHONY_ADDR)
+	return 0;
+    if (dp->d_flags & RT_DIR_COMB)
+	return 0;
+    return (dp->d_flags & RT_DIR_SOLID) ? 1 : 0;
+}
 
-    BU_GET(curtree, union tree);
-    RT_TREE_INIT(curtree);
-    curtree->tr_op = OP_NOP;
-    return curtree;
+
+static int
+brlobol_draw_proxy_leaf_solid_name(db_i *dbip, const char *name,
+				   directory **dp_out)
+{
+    if (dp_out)
+	*dp_out = RT_DIR_NULL;
+    if (!dbip || !name || !name[0])
+	return 0;
+
+    directory *dp = db_lookup(dbip, name, LOOKUP_QUIET);
+    if (dp_out)
+	*dp_out = dp;
+    return brlobol_draw_proxy_leaf_solid_directory(dp);
 }
 
 
@@ -188,82 +205,6 @@ brlobol_draw_proxy_bbox_valid(const point_t bmin,
 	   brlobol_draw_proxy_point_finite(bmax) &&
 	   bmin[X] <= bmax[X] && bmin[Y] <= bmax[Y] &&
 	   bmin[Z] <= bmax[Z];
-}
-
-
-struct brlobol_draw_proxy_aabb_walk_ctx {
-    struct db_i *dbip;
-    point_t bmin;
-    point_t bmax;
-    int haveBounds;
-};
-
-
-static union tree *
-    brlobol_draw_proxy_aabb_leaf_cb(struct db_tree_state *tsp,
-				    const struct db_full_path *UNUSED(pathp),
-				    struct directory *dp,
-				    void *client_data)
-{
-    struct brlobol_draw_proxy_aabb_walk_ctx *ctx =
-	(struct brlobol_draw_proxy_aabb_walk_ctx *)client_data;
-    if (!ctx || !ctx->dbip || !tsp || !dp)
-	return brlobol_draw_proxy_make_nop_tree();
-
-    struct rt_db_internal intern;
-    RT_DB_INTERNAL_INIT(&intern);
-    if (rt_db_get_internal(&intern, dp, ctx->dbip, tsp->ts_mat) < 0)
-	return brlobol_draw_proxy_make_nop_tree();
-
-    point_t bmin, bmax;
-    const bn_tol tol = BN_TOL_INIT_TOL;
-    VSETALL(bmin, INFINITY);
-    VSETALL(bmax, -INFINITY);
-    if (intern.idb_meth && intern.idb_meth->ft_bbox &&
-	intern.idb_meth->ft_bbox(&intern, &bmin, &bmax, &tol) == 0 &&
-	brlobol_draw_proxy_bbox_valid(bmin, bmax)) {
-	VMINMAX(ctx->bmin, ctx->bmax, bmin);
-	VMINMAX(ctx->bmin, ctx->bmax, bmax);
-	ctx->haveBounds = 1;
-    }
-
-    rt_db_free_internal(&intern);
-    return brlobol_draw_proxy_make_nop_tree();
-}
-
-
-static int
-brlobol_draw_proxy_generate_fast_aabb(db_i *dbip,
-				      const char *name,
-				      point_t bmin,
-				      point_t bmax)
-{
-    if (!dbip || !name || !name[0])
-	return 0;
-
-    struct brlobol_draw_proxy_aabb_walk_ctx ctx;
-    memset(&ctx, 0, sizeof(ctx));
-    ctx.dbip = dbip;
-    VSETALL(ctx.bmin, INFINITY);
-    VSETALL(ctx.bmax, -INFINITY);
-
-    struct db_tree_state init_state;
-    db_init_db_tree_state(&init_state, dbip);
-    init_state.ts_stop_at_regions = 0;
-
-    const char *av[1] = {name};
-    int ret = db_walk_tree_leaf_instances(dbip, 1, av, 1, &init_state,
-					  NULL, NULL,
-					  brlobol_draw_proxy_aabb_leaf_cb,
-					  (void *)&ctx);
-    db_free_db_tree_state(&init_state);
-    if (ret < 0 || !ctx.haveBounds ||
-	!brlobol_draw_proxy_bbox_valid(ctx.bmin, ctx.bmax))
-	return 0;
-
-    VMOVE(bmin, ctx.bmin);
-    VMOVE(bmax, ctx.bmax);
-    return 1;
 }
 
 
@@ -570,8 +511,11 @@ brlobol_draw_proxy_status_current(db_i *dbip,
     if (!dbip || !name || !expectedSize)
 	return;
 
-    directory *dp = db_lookup(dbip, name, LOOKUP_QUIET);
+    directory *dp = RT_DIR_NULL;
+    int leaf_solid = brlobol_draw_proxy_leaf_solid_name(dbip, name, &dp);
     status->directoryFound = (dp != RT_DIR_NULL) ? 1 : 0;
+    if (!leaf_solid)
+	return;
 
     brlobol_draw_proxy_cache_key(key, name, kind);
     if (!key[0])
@@ -657,9 +601,10 @@ brlobol_draw_proxy_cache_store(db_i *dbip,
 	return BRLCAD_ERROR;
     brlobol_draw_cache_status_init(&current);
 
-    directory *dp = db_lookup(dbip, name, LOOKUP_QUIET);
+    directory *dp = RT_DIR_NULL;
+    int leaf_solid = brlobol_draw_proxy_leaf_solid_name(dbip, name, &dp);
     current.directoryFound = (dp != RT_DIR_NULL) ? 1 : 0;
-    if (dp == RT_DIR_NULL) {
+    if (!leaf_solid) {
 	if (status)
 	    *status = current;
 	return BRLCAD_ERROR;
@@ -702,6 +647,8 @@ brlobol_draw_proxy_cache_get(db_i *dbip,
     if (!dbip || !name || !record || !expectedCount)
 	return BRLCAD_ERROR;
     brlobol_draw_proxy_record_init(record);
+    if (!brlobol_draw_proxy_leaf_solid_name(dbip, name, NULL))
+	return BRLCAD_ERROR;
 
     brlobol_draw_proxy_cache_key(key, name, kind);
     if (!key[0])
@@ -745,10 +692,11 @@ brlobol_draw_proxy_cache_refresh(db_i *dbip,
     if (!dbip || !name || !brlobol_draw_proxy_point_count(kind))
 	return BRLCAD_ERROR;
 
-    directory *dp = db_lookup(dbip, name, LOOKUP_QUIET);
-    if (dp == RT_DIR_NULL) {
+    directory *dp = RT_DIR_NULL;
+    int leaf_solid = brlobol_draw_proxy_leaf_solid_name(dbip, name, &dp);
+    if (!leaf_solid) {
 	if (status)
-	    status->directoryFound = 0;
+	    status->directoryFound = (dp != RT_DIR_NULL) ? 1 : 0;
 	return BRLCAD_ERROR;
     }
 
@@ -765,12 +713,6 @@ brlobol_draw_proxy_cache_refresh(db_i *dbip,
 	    intern.idb_meth->ft_bbox(&intern, &bmin, &bmax,
 				     &tol) == 0 &&
 	    brlobol_draw_proxy_bbox_valid(bmin, bmax)) {
-	    VMOVE(points[0], bmin);
-	    VMOVE(points[1], bmax);
-	    ret = brlobol_draw_proxy_cache_store(dbip, name, kind, points,
-						 2, status);
-	} else if (brlobol_draw_proxy_generate_fast_aabb(dbip, name,
-		   bmin, bmax)) {
 	    VMOVE(points[0], bmin);
 	    VMOVE(points[1], bmax);
 	    ret = brlobol_draw_proxy_cache_store(dbip, name, kind, points,

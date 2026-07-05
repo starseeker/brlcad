@@ -38,6 +38,7 @@
 
 #include "ged.h"
 #include "ged/draw.h"
+#include "ged/draw_obol.h"
 #include "rt/calc.h"
 #include "rt/view.h"
 #include "ged/selection_state.h"
@@ -1202,7 +1203,8 @@ static int
 ged_draw_autoview_for_transaction(struct ged *gedp,
 				  void *view_ctx,
 				  const char **draw_paths,
-				  int draw_count)
+				  int draw_count,
+				  int allow_database_fallback)
 {
     void **view_ctxs = NULL;
     size_t view_ctx_count = ged_draw_txn_view_array(gedp, view_ctx, &view_ctxs);
@@ -1222,7 +1224,7 @@ ged_draw_autoview_for_transaction(struct ged *gedp,
     source_bounds.msgs = &msgs;
     VSETALL(source_bounds.min, INFINITY);
     VSETALL(source_bounds.max, -INFINITY);
-    if (!have_obol_bounds)
+    if (!have_obol_bounds && allow_database_fallback)
 	(void)ged_draw_obol_database_source_paths_foreach(gedp, 1,
 		ged_draw_autoview_accumulate_obol_source_path, &source_bounds);
 
@@ -1232,7 +1234,8 @@ ged_draw_autoview_for_transaction(struct ged *gedp,
     path_bounds.msgs = &msgs;
     VSETALL(path_bounds.min, INFINITY);
     VSETALL(path_bounds.max, -INFINITY);
-    if (gedp && gedp->dbip && draw_paths && draw_count > 0) {
+    if (allow_database_fallback && gedp && gedp->dbip && draw_paths &&
+	draw_count > 0) {
 	for (int i = 0; i < draw_count; i++) {
 	    const char *path = draw_paths[i];
 	    (void)ged_draw_autoview_accumulate_path_bounds(&path_bounds,
@@ -1250,7 +1253,8 @@ ged_draw_autoview_for_transaction(struct ged *gedp,
 	    adjusted++;
 	    continue;
 	}
-	if (rt_view_context_autoview(view_ctxs[i],
+	if (allow_database_fallback &&
+	    rt_view_context_autoview(view_ctxs[i],
 				     RT_VIEW_AUTOVIEW_SCALE_DEFAULT, 0))
 	    adjusted++;
 	else if (source_bounds.have_bounds &&
@@ -1498,6 +1502,7 @@ ged_draw_aabb_proxy_line_set(const point_t bmin,
 static int
 ged_draw_apply_obol_database_source_proxy_path(
     struct ged *gedp,
+    void *view_ctx,
     const char *path,
     const struct ged_draw_appearance_settings *settings)
 {
@@ -1509,22 +1514,61 @@ ged_draw_apply_obol_database_source_proxy_path(
     if (!lookup_path || !lookup_path[0])
 	return 0;
 
+    struct BRLObolDrawMetadataRecord metadata;
+    brlobol_draw_metadata_record_init(&metadata);
+    if (brlobol_draw_path_metadata_cache_get(gedp->dbip, lookup_path,
+	    &metadata) != BRLCAD_OK &&
+	brlobol_draw_path_metadata_cache_refresh(gedp->dbip, lookup_path,
+	    NULL) == BRLCAD_OK) {
+	(void)brlobol_draw_path_metadata_cache_get(gedp->dbip,
+	    lookup_path, &metadata);
+    }
+    if (metadata.directoryFound)
+	(void)ged_draw_obol_database_source_apply_draw_metadata_for_path(
+	    gedp, path, &metadata);
+
+    struct db_full_path full_path;
+    db_full_path_init(&full_path);
+    int path_ret = db_string_to_path(&full_path, gedp->dbip, lookup_path);
+    struct directory *leaf_dp = (path_ret == 0) ?
+	DB_FULL_PATH_CUR_DIR(&full_path) : RT_DIR_NULL;
+    if (leaf_dp == RT_DIR_NULL ||
+	leaf_dp->d_addr == RT_DIR_PHONY_ADDR ||
+	(leaf_dp->d_flags & RT_DIR_COMB) ||
+	!(leaf_dp->d_flags & RT_DIR_SOLID)) {
+	db_free_full_path(&full_path);
+	(void)view_ctx;
+	return 1;
+    }
+
+    const char *cache_name = leaf_dp->d_namep;
+    if (!cache_name || !cache_name[0]) {
+	db_free_full_path(&full_path);
+	return 1;
+    }
+
     struct BRLObolDrawProxyRecord record;
-    if (brlobol_draw_proxy_cache_get(gedp->dbip, lookup_path,
+    if (brlobol_draw_proxy_cache_get(gedp->dbip, cache_name,
 				     BRLOBOL_DRAW_CACHE_PROXY_AABB, &record) != BRLCAD_OK) {
 	struct BRLObolDrawCacheStatus status;
 	int refresh_ret = brlobol_draw_proxy_cache_refresh(gedp->dbip,
-			  lookup_path, BRLOBOL_DRAW_CACHE_PROXY_AABB, &status);
-	if (refresh_ret != BRLCAD_OK)
-	    return 0;
-	int get_ret = brlobol_draw_proxy_cache_get(gedp->dbip, lookup_path,
+			  cache_name, BRLOBOL_DRAW_CACHE_PROXY_AABB, &status);
+	if (refresh_ret != BRLCAD_OK) {
+	    db_free_full_path(&full_path);
+	    return 1;
+	}
+	int get_ret = brlobol_draw_proxy_cache_get(gedp->dbip, cache_name,
 		      BRLOBOL_DRAW_CACHE_PROXY_AABB, &record);
-	if (get_ret != BRLCAD_OK)
-	    return 0;
+	if (get_ret != BRLCAD_OK) {
+	    db_free_full_path(&full_path);
+	    return 1;
+	}
     }
 
-    if (record.pointCount != 2)
-	return 0;
+    if (record.pointCount != 2) {
+	db_free_full_path(&full_path);
+	return 1;
+    }
 
     point_t points[24];
     int commands[24];
@@ -1532,22 +1576,10 @@ ged_draw_apply_obol_database_source_proxy_path(
 				 points, commands);
     int published = ged_draw_obol_database_source_publish_line_set_for_path(
 	gedp, path, (const point_t *)points, commands, 24);
-    if (published) {
-	struct BRLObolDrawMetadataRecord metadata;
-	brlobol_draw_metadata_record_init(&metadata);
-	if (brlobol_draw_path_metadata_cache_get(gedp->dbip, lookup_path,
-		&metadata) != BRLCAD_OK &&
-	    brlobol_draw_path_metadata_cache_refresh(gedp->dbip, lookup_path,
-		NULL) == BRLCAD_OK) {
-	    (void)brlobol_draw_path_metadata_cache_get(gedp->dbip,
-		lookup_path, &metadata);
-	}
-	if (metadata.directoryFound)
-	    (void)ged_draw_obol_database_source_apply_draw_metadata_for_path(
-		gedp, path, &metadata);
-    }
+    (void)published;
 
-    return published;
+    db_free_full_path(&full_path);
+    return 1;
 }
 
 
@@ -1638,7 +1670,7 @@ ged_draw_apply_obol_database_source_paths(
 	(void)ged_draw_obol_group_ensure_for_path(gedp, path, path,
 		settings->draw_mode, 0);
 	if ((settings->defer_leaf_expansion &&
-	     ged_draw_apply_obol_database_source_proxy_path(gedp, path,
+	     ged_draw_apply_obol_database_source_proxy_path(gedp, view_ctx, path,
 		     settings)) ||
 	    (!settings->defer_leaf_expansion &&
 	     (ged_draw_apply_obol_database_source_leaf_paths(gedp, path,
@@ -1799,13 +1831,17 @@ _ged_draw_apply_draw(struct ged *gedp,
 	return -1;
     }
 
+    const int autoview_database_fallback =
+	neutral_settings.defer_leaf_expansion ? 0 : 1;
     if (txn->autoview)
 	(void)ged_draw_autoview_for_transaction(gedp, view_ctx, draw_paths,
-						draw_count);
+						draw_count,
+						autoview_database_fallback);
     (void)ged_draw_finalize_lod_for_transaction(gedp, view_ctx);
     if (txn->autoview)
 	(void)ged_draw_autoview_for_transaction(gedp, view_ctx, draw_paths,
-						draw_count);
+						draw_count,
+						autoview_database_fallback);
     (void)ged_selection_draw_sync(gedp, NULL);
 
     if (result) {

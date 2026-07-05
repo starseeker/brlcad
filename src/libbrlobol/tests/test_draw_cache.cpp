@@ -292,6 +292,23 @@ main(int argc, char *argv[])
 	goto cleanup;
     }
 
+    if (brlobol_draw_proxy_cache_status(dbip, path_top_name,
+					BRLOBOL_LOD_PROXY_AABB, &status) != BRLCAD_OK ||
+	!status.directoryFound || status.hasCachedPayload ||
+	brlobol_draw_proxy_cache_refresh(dbip, path_top_name,
+					 BRLOBOL_LOD_PROXY_AABB, &status) != BRLCAD_ERROR ||
+	!status.directoryFound || status.hasCachedPayload ||
+	brlobol_draw_proxy_cache_store(dbip, path_top_name,
+				       BRLOBOL_LOD_PROXY_OBB, obbPoints, 8,
+				       &status) != BRLCAD_ERROR ||
+	!status.directoryFound || status.hasCachedPayload ||
+	brlobol_draw_proxy_cache_get(dbip, path_top_name,
+				     BRLOBOL_LOD_PROXY_OBB, &proxy) != BRLCAD_ERROR) {
+	printf("FAIL: draw cache comb proxy rejection\n");
+	ret = 1;
+	goto cleanup;
+    }
+
     if (brlobol_draw_metadata_cache_refresh(dbip, objname, &status) !=
 	BRLCAD_OK ||
 	!status.directoryFound || !status.hasCachedPayload ||

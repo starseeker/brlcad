@@ -518,38 +518,36 @@ test_db_index(struct ged *gedp, size_t idx_scale_fanout)
 		cache_name, NULL) == BRLCAD_OK,
 	      "draw path metadata cache fixture must reseed child paths");
     }
-    const char *affected_cache_names[] = {
-	idx_child,
-	idx_parent,
-	idx_root_a,
-	idx_root_b
+    const char *affected_proxy_names[] = {
+	idx_child
     };
-    for (const char *cache_name : affected_cache_names) {
+    const char *unrelated_proxy_name = "cone.s";
+    for (const char *cache_name : affected_proxy_names) {
 	CHECK(brlobol_draw_proxy_cache_store(gedp->dbip, cache_name,
 					     BRLOBOL_LOD_PROXY_AABB, cache_points, 2, NULL) == BRLCAD_OK,
-	      "draw proxy cache fixture must store affected hierarchy entries");
+	      "draw proxy cache fixture must store affected leaf entry");
     }
-    CHECK(brlobol_draw_proxy_cache_store(gedp->dbip, "all.g",
+    CHECK(brlobol_draw_proxy_cache_store(gedp->dbip, unrelated_proxy_name,
 					 BRLOBOL_LOD_PROXY_AABB, cache_points, 2, NULL) == BRLCAD_OK,
-	  "draw proxy cache fixture must store unrelated entry");
+	  "draw proxy cache fixture must store unrelated leaf entry");
     if (idx_child_dp)
 	CHECK(ged_db_index_note_object_change(gedp, idx_child_dp,
 					      GED_DB_INDEX_OBJECT_CHANGED) == 1,
 	      "child change must be queued for cache invalidation coverage");
     struct BRLObolDrawProxyRecord cache_proxy;
-    for (const char *cache_name : affected_cache_names) {
+    for (const char *cache_name : affected_proxy_names) {
 	CHECK(brlobol_draw_proxy_cache_get(gedp->dbip, cache_name,
 					   BRLOBOL_LOD_PROXY_AABB, &cache_proxy) == BRLCAD_ERROR,
-	      "child change must invalidate cached draw proxies for affected ancestors");
+	      "child change must invalidate cached draw proxy for affected leaf");
     }
     for (const char *cache_name : child_path_cache_names) {
 	CHECK(brlobol_draw_path_metadata_cache_get(gedp->dbip, cache_name,
 		&cache_metadata) == BRLCAD_ERROR,
 	      "child change must invalidate cached draw metadata for affected child paths");
     }
-    CHECK(brlobol_draw_proxy_cache_get(gedp->dbip, "all.g",
+    CHECK(brlobol_draw_proxy_cache_get(gedp->dbip, unrelated_proxy_name,
 				       BRLOBOL_LOD_PROXY_AABB, &cache_proxy) == BRLCAD_OK,
-	  "child change must not invalidate unrelated cached draw proxies");
+	  "child change must not invalidate unrelated cached leaf draw proxy");
     CHECK(brlobol_draw_path_metadata_cache_get(gedp->dbip, "all.g",
 	    &cache_metadata) == BRLCAD_OK,
 	  "child change must not invalidate unrelated cached path metadata");

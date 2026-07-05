@@ -377,6 +377,44 @@ qtcad_obol_shape_matches_draw_metadata(
 
 
 static int
+qtcad_obol_source_matches_draw_metadata(
+    SoBRLDatabaseSource *source,
+    const struct BRLObolDrawMetadataRecord *record)
+{
+    if (!source || !record)
+	return 0;
+
+    BRLObolDatabaseSourceSummary summary;
+    if (!source->getSummary(summary) || !summary.valid ||
+	!summary.databaseMetadataValid)
+	return 0;
+
+    if (record->hasRegionId &&
+	summary.databaseRegionId != record->regionId)
+	return 0;
+    if (record->hasAircode &&
+	summary.databaseAirCode != record->aircode)
+	return 0;
+    if (record->hasLos && summary.databaseLos != record->los)
+	return 0;
+    if (record->hasMaterialId &&
+	summary.databaseMaterialId != record->materialId)
+	return 0;
+    if (record->hasColor &&
+	(!summary.databaseMaterialColorValid ||
+	 !qtcad_obol_color_matches_metadata(
+	     summary.databaseMaterialColor, record->color)))
+	return 0;
+    if (record->hasShader &&
+	!BU_STR_EQUAL(summary.databaseMaterialShader.getString(),
+		      record->shader))
+	return 0;
+
+    return 1;
+}
+
+
+static int
 qtcad_obol_scene_has_draw_metadata(
     SoBRLSceneController *scene,
     const struct BRLObolDrawMetadataRecord *record)
@@ -389,6 +427,8 @@ qtcad_obol_scene_has_draw_metadata(
 	SoBRLDatabaseSource *source = scene->getDatabaseSource(i);
 	if (!source)
 	    continue;
+	if (qtcad_obol_source_matches_draw_metadata(source, record))
+	    return 1;
 	const int vlistCount = source->getRealizedShapeCount();
 	for (int j = 0; j < vlistCount; j++) {
 	    if (qtcad_obol_shape_matches_draw_metadata(
@@ -426,6 +466,26 @@ qtcad_obol_render_has_draw_metadata(
 
     return 0;
 }
+
+
+static int
+qtcad_obol_autoview_refresh(struct ged *gedp,
+			    QgView &view,
+			    BRLObolViewController *controller,
+			    const char *render_reason)
+{
+    const char *autoview_cmd[1] = {"autoview"};
+    if (ged_exec_autoview(gedp, 1, autoview_cmd) != BRLCAD_OK)
+	return 0;
+
+    view.need_update(QG_VIEW_REFRESH);
+    if (controller)
+	controller->requestRender(render_reason ? render_reason :
+				  "progressive-lod-autoview");
+    QCoreApplication::processEvents();
+    return 1;
+}
+
 
 static void
 qtcad_obol_print_scene_source_diagnostics(const char *label,
@@ -1066,7 +1126,8 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 
     struct ged_draw_appearance_settings appearance =
 	    GED_DRAW_APPEARANCE_SETTINGS_INIT;
-    appearance.draw_mode = GED_DRAW_MODE_SHADED;
+    appearance.draw_mode = (testCase.startupOnly || testCase.startupExpand) ?
+			   GED_DRAW_MODE_WIRE : GED_DRAW_MODE_SHADED;
     appearance.defer_leaf_expansion = startup_deferred ? 1 : 0;
 
     struct ged_draw_transaction txn =
@@ -1106,11 +1167,13 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	cleanup();
 	return 0;
     }
+    int startup_realized_geometry_count = -1;
     if (startup_deferred) {
-	int realized_geometry_count =
+	startup_realized_geometry_count =
 	    qtcad_obol_render_realized_database_geometry_count(gedp,
 		controller);
-	if (realized_geometry_count <= 0) {
+	if (startup_realized_geometry_count <= 0 &&
+	    !testCase.startupOnly && !testCase.startupExpand) {
 	    fprintf(stderr,
 		    "qtcad progressive LoD startup scene graph has no realized database geometry: sources=%d\n",
 		    render_source_count);
@@ -1150,7 +1213,20 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 
     if (startup_deferred) {
 	int lit0 = lit_pixel_count(frame0);
-	if (frame0.isNull() || lit0 < 20) {
+	const int startup_has_first_visual =
+	    startup_realized_geometry_count > 0 && !frame0.isNull() &&
+	    lit0 >= 20;
+	if (!startup_has_first_visual && testCase.startupOnly) {
+	    fprintf(stderr,
+		    "qtcad_progressive_lod_startup case=%s lit=%d sources=%d geometry=%d",
+		    testCase.name, lit0, render_source_count,
+		    startup_realized_geometry_count);
+	    print_progressive_lod_timings(stderr, timings);
+	    fprintf(stderr, "\n");
+	    cleanup();
+	    return 1;
+	}
+	if (!startup_has_first_visual && !testCase.startupExpand) {
 	    fprintf(stderr,
 		    "qtcad Obol progressive LoD startup image check failed: case=%s lit=%d",
 		    testCase.name, lit0);
@@ -1160,8 +1236,9 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	    return 0;
 	}
 	fprintf(stderr,
-		"qtcad_progressive_lod_startup case=%s lit=%d sources=%d",
-		testCase.name, lit0, render_source_count);
+		"qtcad_progressive_lod_startup case=%s lit=%d sources=%d geometry=%d",
+		testCase.name, lit0, render_source_count,
+		startup_realized_geometry_count);
 	print_progressive_lod_timings(stderr, timings);
 	fprintf(stderr, "\n");
 	if (testCase.startupOnly) {
@@ -1195,7 +1272,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		size_t prewarm_submitted =
 		    ged_draw_obol_database_source_prewarm_visible_child_aabb_proxies(
 			gedp, qg_legacy_view_to_context(view.view()),
-			active_draw_target, GED_DRAW_MODE_SHADED, 0,
+			active_draw_target, appearance.draw_mode, 0,
 			testCase.minVisitedMeshCount, &pass_prewarm_status);
 		total_prewarm_submitted += prewarm_submitted;
 		if (!qtcad_obol_wait_for_lod_service_idle(gedp,
@@ -1229,12 +1306,14 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		qtcad_obol_prewarm_status_accumulate(&prewarm_status,
 						      &pass_prewarm_status);
 		if (prewarm_submitted == 0 &&
-		    pass_prewarm_status.already_cached == 0) {
+		    pass_prewarm_status.already_cached == 0 &&
+		    pass_prewarm_status.comb_sources == 0) {
 		    fprintf(stderr,
-			    "qtcad Obol progressive LoD startup-expand failed to submit visible child-frontier AABB prewarm: case=%s pass=%d children=%zu considered=%zu already_cached=%zu skipped_non_union=%zu skipped_duplicate=%zu skipped_invalid=%zu",
+			    "qtcad Obol progressive LoD startup-expand failed to submit visible child-frontier AABB prewarm: case=%s pass=%d children=%zu considered=%zu combs=%zu already_cached=%zu skipped_non_union=%zu skipped_duplicate=%zu skipped_invalid=%zu",
 			    testCase.name, pass + 1,
 			    pass_prewarm_status.child_count,
 			    pass_prewarm_status.considered,
+			    pass_prewarm_status.comb_sources,
 			    pass_prewarm_status.already_cached,
 			    pass_prewarm_status.skipped_non_union,
 			    pass_prewarm_status.skipped_duplicate_instance,
@@ -1250,7 +1329,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		int pass_expanded =
 		    ged_draw_obol_database_source_expand_visible_children(
 			gedp, qg_legacy_view_to_context(view.view()),
-			active_draw_target, GED_DRAW_MODE_SHADED, 0,
+			active_draw_target, appearance.draw_mode, 0,
 			testCase.minVisitedMeshCount, &pass_expansion_status);
 		record_progressive_lod_phase(pass_expand_seconds, phase_start,
 					     total_start, testCase,
@@ -1267,6 +1346,16 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	    int max_depth_after =
 		qtcad_obol_render_database_source_max_depth(gedp, controller,
 		    active_draw_target);
+	    if (!qtcad_obol_autoview_refresh(gedp, view, controller,
+		    "startup-expand-autoview")) {
+		fprintf(stderr,
+			"qtcad Obol progressive LoD startup-expand failed to autoview expanded proxy bounds: case=%s",
+			testCase.name);
+		print_progressive_lod_timings(stderr, timings);
+		fprintf(stderr, "\n");
+		cleanup();
+		return 0;
+	    }
 	    QCoreApplication::processEvents();
 	    view.get_viewport_image(frame_expand);
 	    int lit_expand = lit_pixel_count(frame_expand);

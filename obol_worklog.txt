@@ -11,17 +11,54 @@ detail was intentionally collapsed because the root text files had become hard
 to use as handoff documents.  Use git history for exact diffs and `doc/notes/`
 for durable design contracts.
 
+2026-07-05: leaf-only proxy expansion and Generic_Twin wire startup
+-------------------------------------------------------------------
+
+Tightened the deferred/progressive draw path around the intended leaf-only
+proxy model.  libbrlobol draw-cache AABB/OBB refresh now rejects combs and
+generates proxy records only from leaf solids.  Comb sources still carry
+metadata and child/source structure, but their drawing/autoview bounds are
+derived bottom-up from transformed leaf source bounds in the Obol scene rather
+than from synchronous recursive database box walks.
+
+The GED/Obol bridge now preserves deferred database-source nodes without
+forcing `realizePending`, applies cached full-path metadata to source nodes
+before geometry exists, and uses the leaf directory name for proxy-cache lookup
+when publishing a child leaf proxy.  Deferred transaction sync and
+visible-frontier expansion skip retained source-state scans, avoiding repeated
+database-index rebuilds during Generic_Twin expansion.  Expansion also requests
+a render when it mutates an attached Obol view.
+
+`test_qtcad_obol_progressive_lod` was corrected so Generic_Twin startup-only
+and startup-expand use wire mode.  A basic Generic_Twin wire startup now
+returns quickly as metadata-only source structure (`sources=1`, `geometry=0`,
+`lit=0`) and does not trigger tessellation.  The startup-expand path reruns GED
+autoview after leaf AABB proxies are published, proving Obol source bounds can
+frame the newly visible proxy geometry.  A four-pass direct run reached
+`sources=1->164`, `depth=1->5`, `proxies=18`, and `lit=250` in under a second.
+Deferred draw transaction autoview now suppresses recursive database-bound
+fallback when Obol source bounds are still empty, leaving autoview pending
+until leaf-source bounds arrive.
+
+Focused verification passed:
+`ninja -C build test_qtcad_obol_progressive_lod`,
+`BRLCAD_ROOT=$PWD/build QT_QPA_PLATFORM=offscreen QTCAD_OBOL_FORCE_OSMESA=1 QTCAD_OBOL_PROGRESSIVE_LOD_PHASE_LOG=1 timeout 120 build/bin/test_qtcad_obol_progressive_lod --startup-expand --startup-expand-passes 4 build/share/db/faa/Generic_Twin.g - all direct 4 1`,
+`BRLCAD_ROOT=$PWD/build QT_QPA_PLATFORM=offscreen QTCAD_OBOL_FORCE_OSMESA=1 timeout 45 build/bin/test_qtcad_obol_progressive_lod --startup-only build/share/db/faa/Generic_Twin.g - all direct 1 1`,
+and
+`ctest --test-dir build -R '^(libbrlobol_draw_cache|ged_test_state_services)$' --output-on-failure`.
+
 2026-07-05: service-backed bounded frontier post-proxy expansion
 ---------------------------------------------------------------
 
 Added a GED/Obol bridge API for bounded direct-child database-source expansion
-after a deferred startup proxy is visible.  The bridge resolves the requested
+after a deferred startup source is present.  The bridge resolves the requested
 path through the GED database index, expands direct union children without
 calling the full leaf-realization path, applies each child's path placement
-matrix, and publishes cached child AABB proxy line sets as source-local
+matrix, and publishes cached child leaf AABB proxy line sets as source-local
 external primary geometry.  It intentionally consumes libbrlobol draw-cache
-records rather than refreshing missing comb AABBs inside the expansion call, so
-large-root expansion stays cache-driven instead of blocking on subtree walks.
+records rather than refreshing missing subtree AABBs inside the expansion call,
+so large-root expansion stays cache-driven instead of blocking on database
+walks.
 Duplicate direct-child instances and non-union CSG children are skipped until
 explicit instance identity and CSG-aware partial visualization rules are
 designed.
@@ -41,10 +78,11 @@ advance recursive proxy refinement in explicit, bounded passes.
 `test_qtcad_obol_progressive_lod` now has `--startup-expand`, and CTest
 registers `test_qtcad_obol_progressive_lod_generic_twin_startup_expand`.  The
 Generic_Twin case draws `all` with deferred leaf expansion, captures the root
-proxy first frame, then runs two service-backed visible-frontier passes.  The
-current direct run reaches `sources=1->25`, `depth=1->3`, and `proxies=24`,
-verifying that recursive source-depth growth and child proxy publication
-change both database-source state and the rendered image.
+metadata-only startup frame, then runs service-backed visible-frontier passes.
+The original direct run reached `sources=1->25`, `depth=1->3`, and
+`proxies=24`; later leaf-only hardening changed the expected startup frame to
+metadata-only for comb roots and verifies rendered output after leaf proxy
+publication plus autoview refresh.
 
 Focused verification passed:
 `ninja -C build test_qtcad_obol_progressive_lod`,
@@ -56,12 +94,12 @@ and
 --------------------------------------------------------------------
 
 Generic_Twin full-root startup-only was rechecked with the qtcad progressive
-LoD harness.  The proxy first visual now appears quickly, so
+LoD harness.  The deferred startup draw now returns quickly, so
 `test_qtcad_obol_progressive_lod_generic_twin_startup` is registered as a
 bounded CTest gate when `Generic_Twin.g` is available.  The corresponding
-startup-refine probe still times out after the proxy frame, isolating the
-remaining scale problem to synchronous full-detail promotion/refinement rather
-than time-to-first-visual.
+startup-refine probe still times out after proxy-visible expansion, isolating
+the remaining scale problem to synchronous full-detail promotion/refinement
+rather than metadata/source startup.
 
 The Generic_Twin probe also exposed repeated empty BoT face-mode diagnostics.
 librt BoT import now treats an empty serialized plate-mode face-mode string as
@@ -130,18 +168,20 @@ Focused verification passed:
 ----------------------------------------------------
 
 GED database-index change notifications now clear libbrlobol draw-cache proxy
-and metadata records for the changed object and every indexed ancestor object
-on affected paths.  Duplicate instance ids are canonicalized back to database
-object names before cache invalidation, so a leaf edit clears reused comb/root
-proxy bounds without creating instance-suffixed cache keys.  The directly
-changed object also clears any mesh-LoD cache key unconditionally, covering
-name-only removal events where a live directory pointer may no longer exist.
+and metadata records for the changed object and affected indexed paths.
+Duplicate instance ids are canonicalized back to database object names before
+cache invalidation.  Leaf proxy records are object-local leaf records;
+full-path metadata records carry the ancestor/descendant invalidation load for
+comb edits.  The directly changed object also clears any mesh-LoD cache key
+unconditionally, covering name-only removal events where a live directory
+pointer may no longer exist.
 
-`ged_test_state_services` now seeds cached AABB proxies for a reused child,
-its parent comb, two roots, and an unrelated top, then verifies a child change
-invalidates only the affected hierarchy entries.  The test also reopens a fresh
-fixture after the DB-index fanout stress section so normal event/draw service
-coverage is not distorted by thousands of synthetic stress objects.
+`ged_test_state_services` now seeds cached full-path metadata across reused
+comb/leaf paths and AABB proxies only for leaf solids, then verifies a child
+change invalidates affected path metadata and the affected leaf proxy while
+preserving unrelated cache entries.  The test also reopens a fresh fixture
+after the DB-index fanout stress section so normal event/draw service coverage
+is not distorted by thousands of synthetic stress objects.
 
 Focused verification passed:
 `ninja -C build ged_test_state_services` and
