@@ -6,7 +6,10 @@
  */
 /** @file QgObolContextManager.h
  *
- * Private qtcad Obol ContextManager backed by Qt offscreen OpenGL contexts.
+ * Private qtcad Obol ContextManager backed by Qt-provided OpenGL contexts.
+ * QgGL renders directly through the current QOpenGLWidget context; this
+ * manager supplies matching Qt offscreen contexts for viewport image readback
+ * and QgSW presentation, with OSMesa retained only as a fallback.
  */
 
 #ifndef QGOBOLCONTEXTMANAGER_H
@@ -67,22 +70,31 @@ public:
 	if (qg_obol_context_force_osmesa())
 	    return this->createFallbackContext(ctx, width, height);
 
-	QSurfaceFormat format;
-	format.setDepthBufferSize(24);
-	format.setStencilBufferSize(8);
-
-	ctx->surface = new QOffscreenSurface;
-	ctx->surface->setFormat(format);
-	ctx->surface->create();
-	if (!ctx->surface->isValid()) {
-	    delete ctx->surface;
-	    ctx->surface = NULL;
-	    return this->createFallbackContext(ctx, width, height);
-	}
+	QSurfaceFormat format = QSurfaceFormat::defaultFormat();
+	if (format.renderableType() == QSurfaceFormat::DefaultRenderableType)
+	    format.setRenderableType(QSurfaceFormat::OpenGL);
+	if (format.depthBufferSize() < 24)
+	    format.setDepthBufferSize(24);
+	if (format.stencilBufferSize() < 8)
+	    format.setStencilBufferSize(8);
 
 	ctx->context = new QOpenGLContext;
 	ctx->context->setFormat(format);
+	QOpenGLContext *shareContext = QOpenGLContext::globalShareContext();
+	if (!shareContext)
+	    shareContext = QOpenGLContext::currentContext();
+	if (shareContext)
+	    ctx->context->setShareContext(shareContext);
 	if (!ctx->context->create()) {
+	    delete ctx->context;
+	    ctx->context = NULL;
+	    return this->createFallbackContext(ctx, width, height);
+	}
+
+	ctx->surface = new QOffscreenSurface;
+	ctx->surface->setFormat(ctx->context->format());
+	ctx->surface->create();
+	if (!ctx->surface->isValid()) {
 	    delete ctx->context;
 	    ctx->context = NULL;
 	    delete ctx->surface;

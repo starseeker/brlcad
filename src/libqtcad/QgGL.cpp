@@ -19,7 +19,7 @@
  */
 /** @file QgGL.cpp
  *
- * Use a QOpenGLWidget to display libdm drawing content.
+ * Use a QOpenGLWidget to display Obol/Coin drawing content.
  *
  */
 
@@ -37,16 +37,6 @@
 #include "QgLegacyViewContext.h"
 #include "qtcad/QgGL.h"
 #include "rt/view.h"
-
-// FROM MGED
-#define XMIN            (-2048)
-#define XMAX            (2047)
-#define YMIN            (-2048)
-#define YMAX            (2047)
-
-// from BSG_VIEW_MIN and BSG_VIEW_MAX
-#define QTGL_ZMIN -2048
-#define QTGL_ZMAX 2047
 
 static thread_local qg_legacy_fb *qggl_bridge_framebuffer = nullptr;
 
@@ -79,14 +69,7 @@ QgGL::QgGL(QWidget *parent)
     d->v = d->local_v;
     qgcanvas_sync_obol_camera(*d);
 
-    // We can't initialize dmp successfully until more of the OpenGL
-    // initialization is complete
     d->dmp = nullptr;
-
-    // If we weren't supplied with a framebuffer, allocate one.
-    // We don't open it until we have the dmp.
-    if (!d->ifp)
-d->ifp = qg_legacy_view_framebuffer_raw_create("qtgl");
 
     // This is an important Qt setting for interactivity - it allowing key
     // bindings to propagate to this widget and trigger actions such as
@@ -104,7 +87,7 @@ QgCanvasBridgeFactory::create_qtgl(QWidget *parent, qg_legacy_fb *fbp)
 QgGL::~QgGL()
 {
     qg_legacy_view_dm_close(d->dmp);
-    qg_legacy_view_framebuffer_release(d->ifp, d->m_init);
+    qg_legacy_view_framebuffer_release(d->ifp, 0);
     qgcanvas_destroy_obol(*d);
     qg_legacy_view_local_free(d->local_v);
     d->local_v = nullptr;
@@ -122,7 +105,7 @@ QgGL::view() const
 bool
 QgGL::legacyBackendInitialized() const
 {
-    return d->dmp != nullptr;
+    return false;
 }
 
 BRLObolViewController *
@@ -157,96 +140,26 @@ void QgGL::paintGL()
     if (!w || !h)
 return;
 
-    if (qgcanvas_obol_scene_has_content(*d)) {
-	qgcanvas_sync_obol_viewport(*d, this);
-	qgcanvas_sync_obol_camera(*d);
-	initializeOpenGLFunctions();
-	if (qgcanvas_render_obol_pending(*d, TRUE, TRUE)) {
-	    if (d->v) {
-		(void)rt_view_context_refresh_consume(qg_legacy_view_to_context(d->v));
-		rt_view_context_refresh_complete(qg_legacy_view_to_context(d->v));
-	    }
-	    if (d->dmp)
-		qg_legacy_view_dm_native_repaint_pending_set(d->dmp, 0);
-	    if (!d->obol_paint_initialized) {
-		d->obol_paint_initialized = true;
-		emit init_done();
-	    }
-	    return;
-	}
-    }
-
-    if (!d->m_init) {
-
-if (!d->dmp) {
-
-    // This is needed so we can work with Qt's OpenGL widget
-    // using standard OpenGL functions.
+    qgcanvas_sync_obol_viewport(*d, this);
+    qgcanvas_sync_obol_camera(*d);
     initializeOpenGLFunctions();
+    qgcanvas_request_obol_render_if_idle(*d, "qtgl-paint");
 
-    d->dmp = qg_legacy_view_dm_open_qtgl((void *)this);
-    if (!d->dmp)
-return;
-
-    // If we have a framebuffer, now we can open it
-    (void)qg_legacy_view_dm_framebuffer_setup_existing(d->ifp, d->dmp);
-}
-
-// QTGL_ZMIN and QTGL_ZMAX are historical - need better
-// documentation on why those specific values are used.
-(void)qg_legacy_view_dm_setup_qtgl(d->dmp, QTGL_ZMIN, QTGL_ZMAX);
-
-if (d->v) {
-    qg_legacy_view_dm_bind(d->v, d->dmp);
-    qg_legacy_view_dm_sync_dimensions(d->v, d->dmp);
-}
-
-// Ready to go
-d->m_init = true;
-emit init_done();
+    if (qgcanvas_render_obol_pending(*d, TRUE, TRUE) && d->v) {
+	(void)rt_view_context_refresh_consume(qg_legacy_view_to_context(d->v));
+	rt_view_context_refresh_complete(qg_legacy_view_to_context(d->v));
     }
-
-    if (!d->m_init || !d->dmp || !d->v)
-return;
-
-    QSize rsize = qgcanvas_render_size(this);
-    if (qg_legacy_view_dm_width_get(d->dmp) != rsize.width() ||
-	    qg_legacy_view_dm_height_get(d->dmp) != rsize.height()) {
-qg_legacy_view_dm_dimensions_set(d->dmp, rsize.width(), rsize.height());
-qg_legacy_view_dm_configure_window(d->dmp, 0);
-if (d->ifp)
-    qg_legacy_view_framebuffer_configure(d->ifp, rsize.width(),
-	    rsize.height());
+    if (!d->obol_paint_initialized) {
+	d->obol_paint_initialized = true;
+	emit init_done();
     }
-    qg_legacy_view_dm_sync_dimensions(d->v, d->dmp);
-
-    // Re-draw the background to clear any previous drawing
-    qg_legacy_view_dm_background_restore(d->dmp);
-
-    // Go ahead and set the flag, but (unlike the rendering thread
-    // implementation) we need to do the draw routine every time in paintGL, or
-    // we end up with unrendered frames.
-    (void)rt_view_context_refresh_consume(qg_legacy_view_to_context(d->v));
-    qg_legacy_view_dm_native_repaint_pending_set(d->dmp, 0);
-    qg_legacy_view_dm_draw(d->v);
-    qg_legacy_view_dm_draw_end(d->dmp);
-    rt_view_context_refresh_complete(qg_legacy_view_to_context(d->v));
 }
 
 void QgGL::resizeGL(int, int)
 {
     qgcanvas_sync_obol_viewport(*d, this);
-    if (!d->dmp || !d->v)
-return;
-    qg_legacy_view_dm_configure_window(d->dmp, 0);
-    qg_legacy_view_dm_sync_dimensions(d->v, d->dmp);
-    if (d->ifp) {
-qg_legacy_view_framebuffer_configure(d->ifp,
-	rt_view_context_width_get(qg_legacy_view_to_context(d->v)),
-	rt_view_context_height_get(qg_legacy_view_to_context(d->v)));
-    }
-    if (d->dmp)
-qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW);
+    if (d->v)
+	qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW);
     emit changed();
 }
 
@@ -254,19 +167,11 @@ void QgGL::resizeEvent(QResizeEvent *e)
 {
     QOpenGLWidget::resizeEvent(e);
     qgcanvas_sync_obol_viewport(*d, this);
-    if (!d->dmp || !d->v)
+    if (!d->v)
 return;
     QSize rsize = qgcanvas_render_size(this);
-    qg_legacy_view_dm_dimensions_set(d->dmp, rsize.width(), rsize.height());
     qg_legacy_view_dimensions_set(d->v, rsize.width(), rsize.height());
-    qg_legacy_view_dm_configure_window(d->dmp, 0);
-    if (d->ifp) {
-qg_legacy_view_framebuffer_configure(d->ifp,
-	rt_view_context_width_get(qg_legacy_view_to_context(d->v)),
-	rt_view_context_height_get(qg_legacy_view_to_context(d->v)));
-    }
-    if (d->dmp)
-qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW);
+    qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW);
     emit changed();
 }
 
@@ -471,15 +376,7 @@ void QgGL::get_viewport_image(QImage &img)
     if (!d->v)
 	return;
 
-    if (qgcanvas_obol_scene_has_content(*d)) {
-	qgcanvas_get_obol_viewport_image(*d, this, img, true);
-	if (!img.isNull())
-	    return;
-    }
-
-    if (!d->m_init || !d->dmp)
-	return;
-    img = grabFramebuffer();
+    qgcanvas_get_obol_viewport_image(*d, this, img, true);
 }
 
 void QgGL::get_obol_viewport_image(QImage &img)

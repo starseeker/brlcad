@@ -29,7 +29,9 @@
 #include "optical.h"
 #include "dm.h"
 #include "bu/parallel.h" /* for MAX_PSW */
+#include "bu/parse.h"
 #include "bu/ptbl.h"
+#include "rt/cmd.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -70,9 +72,21 @@ extern int rt_verbosity; /* from opt.c */
 /***** Variables declared in opt.c *****/
 extern char *framebuffer;		/* desired framebuffer */
 extern fastf_t azimuth, elevation;
+extern fastf_t rt_dist_tol;		/* Value for rti_tol.dist */
+extern fastf_t rt_perp_tol;		/* Value for rti_tol.perp */
+extern const char *densityfile;		/* name of density file */
+extern double airdensity;		/* is the scene hazy */
+extern double haze[3];			/* color of the haze */
+extern double units;
 extern int Query_one_pixel;
 extern int benchmark;
+extern int default_background;		/* Default is black */
+extern int default_units;
+extern int do_kut_plane;
+extern int doubles_out;			/* u_char or double .pix output file */
 extern int lightmodel;			/* Select lighting model */
+extern int model_units;
+extern int orientflag;			/* 1 means orientation has been set */
 extern int query_debug;
 extern int query_optical_debug;
 extern int query_x;
@@ -88,6 +102,7 @@ extern int top_down;			/* reverse the order of grid traversal */
 extern int use_air;			/* Handling of air in librt */
 extern int random_mode;                 /* Mode to shoot rays at random directions */
 extern int opencl_mode;			/* enable/disable OpenCL */
+extern plane_t kut_plane;
 
 /***** variables from grid.c *****/
 extern mat_t model2view;
@@ -96,6 +111,7 @@ extern point_t viewbase_model;		/* model-space location of viewplane corner */
 extern fastf_t gift_grid_rounding;
 
 /***** variables from main.c *****/
+extern struct fb *fbp;			/* Framebuffer handle */
 extern FILE *outfp;			/* optional output file */
 extern int output_is_binary;		/* !0 means output is binary */
 extern int report_progress;		/* !0 = user wants progress report */
@@ -107,6 +123,7 @@ extern int embed_icv_metadata;		/* !0 = embed render metadata in output PNG */
 
 /***** variables shared with worker() ******/
 extern unsigned char *scanbuf;		/* pixels for REMRT */
+extern unsigned char *pixmap;		/* pixmap for rerendering of black pixels */
 extern fastf_t aspect;			/* view aspect ratio X/Y */
 extern fastf_t cell_height;		/* model space grid cell height */
 extern fastf_t cell_width;		/* model space grid cell width */
@@ -118,6 +135,9 @@ extern int fullfloat_mode;
 extern int hypersample;			/* number of extra rays to fire */
 extern int incr_mode;			/* !0 for incremental resolution */
 extern int full_incr_mode;              /* !0 for fully incremental resolution */
+extern int per_processor_chunk;		/* how many pixels to do at once */
+extern int cur_pixel;			/* current pixel number, 0..last_pixel */
+extern int last_pixel;			/* last pixel number */
 extern ssize_t npsw;			/* number of worker PSWs to run */
 extern int reproj_cur;			/* number of pixels reprojected this frame */
 extern int reproj_max;			/* out of total number of pixels */
@@ -139,6 +159,7 @@ extern vect_t dx_model;			/* view delta-X as model-space vect (width of pixel as
 extern vect_t dx_unit;			/* unit-len dir vector of pixel side-to-side */
 extern vect_t dy_model;			/* view delta-Y as model-space vect (height of pixel as vector) */
 extern vect_t dy_unit;			/* unit-len dir vector of pixel top-to-bottom */
+extern struct bu_structparse view_parse[];
 /** 'jitter' variable values **/
 #define JITTER_CELL 0x1			/* jitter position of ray in each cell */
 #define JITTER_FRAME 0x2		/* jitter position of entire frame */
@@ -155,9 +176,12 @@ extern int objc;			/* Number of cmd-line treetops */
 extern char **objv;			/* array of treetop strings */
 extern struct bu_ptbl *cmd_objs;               /* container to hold cmd specified objects */
 extern char *outputfile;		/* name of base of output file */
+extern char *string_pix_start;		/* string spec of starting pixel */
+extern char *string_pix_end;		/* string spec of ending pixel */
 extern int benchmark;			/* No random numbers:  benchmark */
 extern int curframe;			/* current frame number */
 extern int desiredframe;		/* frame to start at */
+extern int finalframe;			/* frame to halt at */
 extern int matflag;			/* read matrix from stdin */
 extern int pix_end;			/* pixel to end at */
 extern int pix_start;			/* pixel to start at */
@@ -170,6 +194,7 @@ extern void do_run(int a, int b);
 extern void do_ae(double azim, double elev);
 extern int old_way(FILE *fp);
 extern int do_frame(int framenumber);
+extern struct command_tab rt_do_tab[];
 
 #ifdef USE_OPENCL
 enum {

@@ -66,16 +66,38 @@ ged_ert_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
-    if (!dmp) {
-	bu_vls_printf(gedp->ged_result_str, "no current display manager set\n");
+    struct fbserv_obj *fbs = gedp->ged_fbs;
+    if (!fbs) {
+	bu_vls_printf(gedp->ged_result_str, "no framebuffer server configured\n");
 	return BRLCAD_ERROR;
     }
 
-    struct fb *fbp = dm_get_fb(dmp);
-    if (!fbp) {
-	bu_vls_printf(gedp->ged_result_str, "attached display manager has no embedded framebuffer\n");
-	return BRLCAD_ERROR;
+    struct fbserv_fb_info fbinfo;
+    int have_fbserv_backend = (fbs_framebuffer_info(fbs, &fbinfo) == 0);
+    struct dm *dmp = NULL;
+    struct fb *fbp = NULL;
+    if (!have_fbserv_backend) {
+	if (ged_obol_fbserv_ensure_for_view(gedp, view_ctx) == BRLCAD_OK)
+	    have_fbserv_backend = (fbs_framebuffer_info(fbs, &fbinfo) == 0);
+    }
+
+    if (!have_fbserv_backend) {
+	dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
+	if (!dmp) {
+	    bu_vls_printf(gedp->ged_result_str, "no current display manager or framebuffer backend set\n");
+	    return BRLCAD_ERROR;
+	}
+
+	fbp = dm_get_fb(dmp);
+	if (!fbp) {
+	    bu_vls_printf(gedp->ged_result_str, "attached display manager has no embedded framebuffer\n");
+	    return BRLCAD_ERROR;
+	}
+	fbs->fbs_fbp = fbp;
+	if (fbs_framebuffer_info(fbs, &fbinfo) != 0) {
+	    bu_vls_printf(gedp->ged_result_str, "could not query embedded framebuffer dimensions\n");
+	    return BRLCAD_ERROR;
+	}
     }
 
     if (!ged_who_argc(gedp)) {
@@ -99,11 +121,6 @@ ged_ert_core(struct ged *gedp, int argc, const char *argv[])
     int prior_fb_mode = ged_view_context_framebuffer_mode_get(view_ctx);
     if (!prior_fb_mode)
 	ged_view_context_framebuffer_mode_set(view_ctx, 2);
-
-    // Have a framebuffer to target and objects to raytrace.  Next we need a
-    // framebuffer server.
-    struct fbserv_obj *fbs = gedp->ged_fbs;
-    fbs->fbs_fbp = fbp;
 
     /* Phase 3: Try the IPC fast path first (anonymous pipe / socketpair).
      * This avoids TCP port binding, firewall traversal, and port collisions.
@@ -135,11 +152,17 @@ ged_ert_core(struct ged *gedp, int argc, const char *argv[])
     }
     args.push_back(std::string("-M"));
 
-    int width = fb_getwidth(fbp);
-    int height = fb_getheight(fbp);
+    int width = fbinfo.width;
+    int height = fbinfo.height;
     if (width <= 0 || height <= 0) {
-	width = dm_get_width(dmp);
-	height = dm_get_height(dmp);
+	if (dmp) {
+	    width = dm_get_width(dmp);
+	    height = dm_get_height(dmp);
+	}
+    }
+    if (width <= 0 || height <= 0) {
+	bu_vls_printf(gedp->ged_result_str, "invalid embedded framebuffer dimensions\n");
+	return BRLCAD_ERROR;
     }
 
     args.push_back(std::string("-w"));
@@ -217,7 +240,7 @@ ged_ert_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     bu_log("ert: calling _ged_run_rt (using_ipc=%d fb_size=%dx%d)\n",
-	   using_ipc, fb_getwidth(fbp), fb_getheight(fbp));
+	   using_ipc, width, height);
     ret = _ged_run_rt(gedp, gd_rt_cmd_len, (const char **)gd_rt_cmd, (argc - i), &(argv[i]), 0, &rt_pid, clbk, u2);
     bu_log("ert: _ged_run_rt returned %d rt_pid=%d\n", ret, rt_pid);
 

@@ -15,9 +15,11 @@ Library taxonomy
 The contents of libqtcad fall into a small number of categories.  When adding a
 new file, place it in the category that best matches its responsibility.
 
-* Canvas / display-manager widgets
-    `QgGL`        - QOpenGLWidget-backed canvas driving dm-qtgl
-    `QgSW`        - QWidget-backed canvas driving dm-swrast (software raster)
+* Canvas / Obol presentation widgets
+    `QgGL`        - QOpenGLWidget-backed Obol/Coin canvas using Qt's current
+                    OpenGL context for visible rendering
+    `QgSW`        - QWidget-backed Obol/Coin canvas using offscreen render
+                    readback for presentation
     `QgView`      - thin wrapper that picks one of the canvas types at runtime
     `QgQuadView`  - 4-up arrangement of `QgView`s
 
@@ -114,7 +116,7 @@ Inside the BRL-CAD tree libqtcad is consumed by:
 
 * `src/qged` and its plugins (the primary client)
 * `src/libqtcad/tests` (`qgmodel`, `qgview`, `qsketch`, plus GED-level tests
-  that exercise the dm backends end-to-end)
+  that exercise Obol canvas/controller behavior end-to-end)
 
 `archer` and `libtclcad` do not currently depend on libqtcad.
 
@@ -137,5 +139,7 @@ will progressively:
 * wrap the public API in a `qtcad::` namespace
 * expand the test suite to use `QSignalSpy` / `QAbstractItemModelTester`
 
-Each phase is intended to land independently while keeping `libqtcad`,
-`qged`, `archer`, `dm-qtgl`, and `dm-swrast` building.
+Each phase is intended to land independently while keeping `libqtcad`, `qged`,
+and relevant application consumers building.  Normal qtcad canvas presentation
+is Obol-only; legacy display-manager plugins are compatibility debt rather than
+the primary qtcad rendering path.

@@ -19,9 +19,9 @@
  */
 /** @file view_context_private.h
  *
- * Internal native/libbv-backed RT view context helpers.  Public RT view
- * context entry points remain in view_legacy_bsg.c while retained BSG
- * adapters are being split away.
+ * Internal native/libbv-backed RT view context helpers and neutral adapter
+ * dispatch used by the public RT view API while retained BSG adapters are
+ * being split away.
  */
 
 #ifndef LIBRT_VIEW_CONTEXT_PRIVATE_H
@@ -32,6 +32,16 @@
 #include "rt/view.h"
 
 __BEGIN_DECLS
+
+void _rt_view_context_scene_adapter_clear(void *ctx);
+void _rt_view_context_feature_adapter_clear(void *ctx);
+void _rt_view_context_polygon_adapter_clear(void *ctx);
+void _rt_view_context_selection_adapter_clear(void *ctx);
+
+int _rt_view_feature_adapter_for_ref(rt_view_feature_ref ref,
+	struct rt_view_context_feature_adapter *adapter);
+int _rt_view_polygon_adapter_for_ref(rt_view_polygon_ref ref,
+	struct rt_view_context_polygon_adapter *adapter);
 
 int _rt_view_context_native_is(const void *ctx);
 int _rt_view_set_context_native_is(const void *view_set_ctx);

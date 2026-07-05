@@ -1929,8 +1929,18 @@ mesh_from_bot(const struct rt_bot_internal *bot,
 
     std::vector<int32_t> indices;
     indices.reserve(bot->num_faces * 3);
-    for (size_t i = 0; i < bot->num_faces * 3; i++)
-	indices.push_back(static_cast<int32_t>(bot->faces[i]));
+    for (size_t i = 0; i < bot->num_faces; i++) {
+	const int *face = &bot->faces[i * 3];
+	if (bot->orientation == RT_BOT_CW) {
+	    indices.push_back(static_cast<int32_t>(face[0]));
+	    indices.push_back(static_cast<int32_t>(face[2]));
+	    indices.push_back(static_cast<int32_t>(face[1]));
+	} else {
+	    indices.push_back(static_cast<int32_t>(face[0]));
+	    indices.push_back(static_cast<int32_t>(face[1]));
+	    indices.push_back(static_cast<int32_t>(face[2]));
+	}
+    }
 
     uint32_t threshold = source ? source->lodBotThreshold.getValue() : 0;
     SoBRLMeshShape *shape = (threshold > 0 &&
@@ -2267,17 +2277,17 @@ mesh_from_internal(struct rt_db_internal *intern,
     if (!internal_payload_magic_valid(intern))
 	return NULL;
 
-    SoBRLMeshShape *faceSetShape = mesh_from_primitive_face_set(intern,
-				   source);
-    if (faceSetShape)
-	return faceSetShape;
-
     switch (intern->idb_type) {
 	case ID_BOT:
 	    return mesh_from_bot(static_cast<const struct rt_bot_internal *>(intern->idb_ptr), source);
 	default:
 	    break;
     }
+
+    SoBRLMeshShape *faceSetShape = mesh_from_primitive_face_set(intern,
+				   source);
+    if (faceSetShape)
+	return faceSetShape;
 
     return mesh_from_tessellated_internal(intern, source);
 }
@@ -2370,6 +2380,18 @@ static union tree *
 		    sharedVListShape->geometryKind = "annotation";
 		}
 	    }
+	} else if ((source_record_draw_mode(data->source) ==
+		    BRLOBOL_LOD_DRAW_WIRE ||
+		    (source_record_draw_mode(data->source) ==
+			BRLOBOL_LOD_DRAW_SHADED_BOTS &&
+		     (!localIntern->idb_meth ||
+		      !localIntern->idb_meth->ft_indexed_face_set))) &&
+		   internalType != ID_BOT) {
+	    sharedVListShape = vlist_from_plot_internal(localIntern,
+			       data->source);
+	    if (sharedVListShape)
+		assign_shared_geometry_identity(sharedVListShape,
+						dp->d_namep, typeLabel, data->revision, "line");
 	} else {
 	    sharedMeshShape = mesh_from_internal(localIntern, data->source);
 	    if (sharedMeshShape)
@@ -3046,12 +3068,12 @@ SoBRLDatabaseSource::setDatabaseMetadataState(SbBool metadataValid,
     }
     if (!metadataMaterialColorValid &&
 	!database_source_color_equal(this->databaseMaterialColor.getValue(),
-	    SbColor(1.0f, 1.0f, 1.0f))) {
+				     SbColor(1.0f, 1.0f, 1.0f))) {
 	this->databaseMaterialColor = SbColor(1.0f, 1.0f, 1.0f);
 	changed = 1;
     }
     if (strcmp(this->databaseMaterialShader.getValue().getString(),
-	    metadataMaterialShader.getString()) != 0) {
+	       metadataMaterialShader.getString()) != 0) {
 	this->databaseMaterialShader = metadataMaterialShader;
 	changed = 1;
     }

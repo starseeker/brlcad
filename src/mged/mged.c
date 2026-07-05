@@ -70,6 +70,7 @@
 #define LIBTERMIO_IMPLEMENTATION
 #include "libtermio.h"
 #include "ged.h"
+#include "ged/draw_obol.h"
 #include "tclcad.h"
 
 /* private */
@@ -2019,6 +2020,7 @@ refresh(struct mged_state *s)
 
 	    if (dm_get_native_repaint_pending(DMP)) {
 
+		(void)ged_draw_obol_framebuffer_present(s->gedp);
 		dm_draw_begin(DMP);	/* update drawn scene prolog */
 
 		if (s->dbip != DBI_NULL) {
@@ -2192,6 +2194,8 @@ mged_finish(struct mged_state *s, int exitcode)
 	bu_ptbl_rm(&active_dm_set, (long *)p);
 
 	if (p && p->dm_dmp) {
+	    if (s->gedp)
+		ged_draw_obol_framebuffer_release(s->gedp);
 	    dm_close(p->dm_dmp);
 	    mged_slider_free_vls(p);
 	    bu_free(p, "release: mged_curr_dm");

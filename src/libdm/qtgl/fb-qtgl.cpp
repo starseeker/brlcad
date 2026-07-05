@@ -67,6 +67,7 @@ extern struct fb qtgl_interface;
 }
 
 #include <QApplication>
+#include <QSurfaceFormat>
 #include <QtGlobal>
 #include "QgLegacyViewContext.h"
 #include "QgLegacyViewDm.h"
@@ -96,6 +97,16 @@ struct qtglinfo {
 
     int alive;
 };
+
+static void
+qtgl_set_default_surface_format(void)
+{
+    QSurfaceFormat fmt;
+    fmt.setRenderableType(QSurfaceFormat::OpenGL);
+    fmt.setDepthBufferSize(24);
+    fmt.setStencilBufferSize(8);
+    QSurfaceFormat::setDefaultFormat(fmt);
+}
 
 #define QTGL(ptr) ((struct qtglinfo *)((ptr)->i->pp))
 #define QTGLL(ptr) ((ptr)->i->pp)     /* left hand side version */
@@ -504,11 +515,8 @@ fb_qtgl_open(struct fb *ifp, const char *UNUSED(file), int width, int height)
     qi->win_width = qi->vp_width = width;
     qi->win_height = qi->vp_height = height;
 
+    qtgl_set_default_surface_format();
     qi->qapp = new QApplication(qi->ac, qi->av);
-
-    QSurfaceFormat fmt;
-    fmt.setDepthBufferSize(24);
-    QSurfaceFormat::setDefaultFormat(fmt);
 
     qi->mw = new QgGLWin(qg_legacy_view_framebuffer_handle_from_raw(ifp));
     QgGL *canvas = qi->mw->canvasWidget();

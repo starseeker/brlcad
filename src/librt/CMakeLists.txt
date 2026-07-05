@@ -317,6 +317,7 @@ set(
   vds/vds.c
   vers.c
   view.c
+  view_context_adapters.c
   view_context_native.c
   view_legacy_bsg.c
   vlist.c

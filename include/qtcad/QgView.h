@@ -52,13 +52,12 @@ int view_type();
 void set_current(int);
 int current();
 
-void stash_hashes(); // Store current backend and view hash values
-bool diff_hashes();  // Set backend dirty flag if current hashes != stashed hashes.  (Does not update stored hash values - use stash_hashes for that operation.)
+void stash_hashes(); // Store current view hash values
+bool diff_hashes();  // Request refresh if current hashes != stashed hashes.  (Does not update stored hash values - use stash_hashes for that operation.)
 
 void save_image(int quad = 0);
 void render_to_file(const QString &filename);
-/* Render the current view and return the pixel data.  Obol content is captured
- * through Obol readback; legacy canvas capture remains the fallback. */
+/* Render the current Obol view and return the pixel data. */
 void get_viewport_image(QImage &img);
 /* Render the Obol-canonical scene and return the raw pixel data. */
 void get_obol_viewport_image(QImage &img);
@@ -68,6 +67,7 @@ bool isValid();
 qg_legacy_view * view();
 bool legacyBackendInitialized() const;
 BRLObolViewController *obolViewController();
+QgCanvasBase *canvasBase();
 
 void set_view(qg_legacy_view *);
 

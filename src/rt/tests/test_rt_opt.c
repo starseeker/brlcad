@@ -100,63 +100,6 @@ static int g_skip_current_checks = 0;
 static void
 reset_globals(void)
 {
-    extern size_t width;
-    extern size_t height;
-    extern int doubles_out;
-    extern fastf_t azimuth, elevation;
-    extern int lightmodel;
-    extern int rpt_overlap;
-    extern int default_background;
-    extern int output_is_binary;
-    extern int query_x, query_y;
-    extern int Query_one_pixel;
-    extern int query_optical_debug;
-    extern int query_debug;
-    extern int stereo;
-    extern int hypersample;
-    extern unsigned int jitter;
-    extern fastf_t rt_perspective;
-    extern fastf_t aspect;
-    extern fastf_t cell_width, cell_height;
-    extern int cell_newsize;
-    extern fastf_t eye_backoff;
-    extern fastf_t viewsize;
-    extern int incr_mode;
-    extern int full_incr_mode;
-    extern size_t incr_level, incr_nlevel;
-    extern size_t full_incr_sample, full_incr_nsamples;
-    extern ssize_t npsw;
-    extern int top_down;
-    extern int random_mode;
-    extern int opencl_mode;
-    extern double pmargs[9];
-    extern char pmfile[255];
-    extern int objc;
-    extern char **objv;
-    extern char *string_pix_start;
-    extern char *string_pix_end;
-    extern int pix_start, pix_end;
-    extern int matflag, orientflag;
-    extern int desiredframe, finalframe, curframe;
-    extern char *outputfile;
-    extern int benchmark;
-    extern int sub_grid_mode;
-    extern int sub_xmin, sub_ymin, sub_xmax, sub_ymax;
-    extern int use_air;
-    extern int save_overlaps;
-    extern int rtg_parallel;
-    extern double airdensity;
-    extern double haze[3];
-    extern int do_kut_plane;
-    extern plane_t kut_plane;
-    extern double units;
-    extern int default_units, model_units;
-    extern const char *densityfile;
-    extern fastf_t rt_dist_tol, rt_perp_tol;
-    extern char *framebuffer;
-    extern int space_partition;
-    extern int rt_verbosity;
-
     width          = 0;
     height         = 0;
     doubles_out    = 0;
@@ -306,7 +249,6 @@ reset_globals(void)
 static void
 test_opt_size(void)
 {
-    extern size_t width, height;
     {
 	reset_globals();
 	MAKE_ARGV(av, "rt", "-s", "256");
@@ -335,7 +277,6 @@ test_opt_size(void)
 static void
 test_opt_width(void)
 {
-    extern size_t width;
     reset_globals();
     MAKE_ARGV(av, "rt", "-w", "800");
     CALL_GET_ARGS(av, 1);
@@ -352,7 +293,6 @@ test_opt_width(void)
 static void
 test_opt_height(void)
 {
-    extern size_t height;
     reset_globals();
     MAKE_ARGV(av, "rt", "-n", "600");
     CALL_GET_ARGS(av, 1);
@@ -369,8 +309,6 @@ test_opt_height(void)
 static void
 test_opt_output(void)
 {
-    extern char *outputfile;
-    extern int doubles_out;
     reset_globals();
     MAKE_ARGV(av, "rt", "-o", "out.pix");
     CALL_GET_ARGS(av, 1);
@@ -388,8 +326,6 @@ test_opt_output(void)
 static void
 test_opt_output_double(void)
 {
-    extern char *outputfile;
-    extern int doubles_out;
     reset_globals();
     MAKE_ARGV(av, "rt", "-O", "out.dpix");
     CALL_GET_ARGS(av, 1);
@@ -408,7 +344,6 @@ test_opt_output_double(void)
 static void
 test_opt_framebuffer(void)
 {
-    extern char *framebuffer;
     reset_globals();
     MAKE_ARGV(av, "rt", "-F", "/dev/fb0");
     CALL_GET_ARGS(av, 1);
@@ -425,8 +360,6 @@ test_opt_framebuffer(void)
 static void
 test_opt_azimuth(void)
 {
-    extern fastf_t azimuth;
-    extern int matflag;
     reset_globals();
     matflag = 1; /* should be cleared by -a */
     MAKE_ARGV(av, "rt", "-a", "45");
@@ -445,8 +378,6 @@ test_opt_azimuth(void)
 static void
 test_opt_elevation(void)
 {
-    extern fastf_t elevation;
-    extern int matflag;
     reset_globals();
     matflag = 1;
     MAKE_ARGV(av, "rt", "-e", "35");
@@ -465,7 +396,6 @@ test_opt_elevation(void)
 static void
 test_opt_perspective(void)
 {
-    extern fastf_t rt_perspective;
     reset_globals();
     MAKE_ARGV(av, "rt", "-p", "45");
     CALL_GET_ARGS(av, 1);
@@ -488,7 +418,6 @@ test_opt_perspective(void)
 static void
 test_opt_eye_backoff(void)
 {
-    extern fastf_t eye_backoff;
     reset_globals();
     MAKE_ARGV(av, "rt", "-E", "2.5");
     CALL_GET_ARGS(av, 1);
@@ -505,7 +434,6 @@ test_opt_eye_backoff(void)
 static void
 test_opt_view_aspect(void)
 {
-    extern fastf_t aspect;
     /* Plain fraction */
     reset_globals();
     MAKE_ARGV(av, "rt", "-V", "1.5");
@@ -537,7 +465,6 @@ test_opt_view_aspect(void)
 static void
 test_opt_matflag(void)
 {
-    extern int matflag;
     reset_globals();
     MAKE_ARGV(av, "rt", "-M");
     CALL_GET_ARGS(av, 1);
@@ -554,8 +481,6 @@ test_opt_matflag(void)
 static void
 test_opt_cell_width(void)
 {
-    extern fastf_t cell_width;
-    extern int cell_newsize;
     reset_globals();
     MAKE_ARGV(av, "rt", "-g", "2.5");
     CALL_GET_ARGS(av, 1);
@@ -573,8 +498,6 @@ test_opt_cell_width(void)
 static void
 test_opt_cell_height(void)
 {
-    extern fastf_t cell_height;
-    extern int cell_newsize;
     reset_globals();
     MAKE_ARGV(av, "rt", "-G", "3.0");
     CALL_GET_ARGS(av, 1);
@@ -592,7 +515,6 @@ test_opt_cell_height(void)
 static void
 test_opt_subgrid(void)
 {
-    extern int sub_xmin, sub_ymin, sub_xmax, sub_ymax, sub_grid_mode;
     /* standard comma-separated form */
     reset_globals();
     MAKE_ARGV(av, "rt", "-j", "10,20,300,400");
@@ -621,8 +543,6 @@ test_opt_subgrid(void)
 static void
 test_opt_cut_plane(void)
 {
-    extern int do_kut_plane;
-    extern plane_t kut_plane;
     const double inv_sqrt3 = 1.0 / sqrt(3.0);
     const double sqrt3 = sqrt(3.0);
     reset_globals();
@@ -708,8 +628,6 @@ test_opt_ambient(void)
 static void
 test_opt_light_model(void)
 {
-    extern int lightmodel;
-
     /* Simple model selection */
     reset_globals();
     MAKE_ARGV(av, "rt", "-l", "3");
@@ -733,9 +651,6 @@ test_opt_light_model(void)
 static void
 test_opt_haze(void)
 {
-    extern double airdensity;
-    extern double haze[3];
-
     /* Without spaces */
     reset_globals();
     MAKE_ARGV(av, "rt", "-m", "2.5e-8,0.75,0.95,0.99");
@@ -763,7 +678,6 @@ test_opt_haze(void)
 static void
 test_opt_incremental(void)
 {
-    extern int incr_mode;
     reset_globals();
     MAKE_ARGV(av, "rt", "-i");
     CALL_GET_ARGS(av, 1);
@@ -780,7 +694,6 @@ test_opt_incremental(void)
 static void
 test_opt_topdown(void)
 {
-    extern int top_down;
     reset_globals();
     MAKE_ARGV(av, "rt", "-t");
     CALL_GET_ARGS(av, 1);
@@ -797,7 +710,6 @@ test_opt_topdown(void)
 static void
 test_opt_stereo(void)
 {
-    extern int stereo;
     reset_globals();
     MAKE_ARGV(av, "rt", "-S");
     CALL_GET_ARGS(av, 1);
@@ -814,8 +726,6 @@ test_opt_stereo(void)
 static void
 test_opt_hypersample(void)
 {
-    extern int hypersample;
-    extern unsigned int jitter;
     reset_globals();
     MAKE_ARGV(av, "rt", "-H", "4");
     CALL_GET_ARGS(av, 1);
@@ -833,7 +743,6 @@ test_opt_hypersample(void)
 static void
 test_opt_jitter(void)
 {
-    extern unsigned int jitter;
     reset_globals();
     MAKE_ARGV(av, "rt", "-J", "3");
     CALL_GET_ARGS(av, 1);
@@ -856,7 +765,6 @@ test_opt_jitter(void)
 static void
 test_opt_units(void)
 {
-    extern int model_units, default_units;
     reset_globals();
     MAKE_ARGV(av, "rt", "-u", "model");
     CALL_GET_ARGS(av, 1);
@@ -875,7 +783,6 @@ test_opt_units(void)
 static void
 test_opt_use_air(void)
 {
-    extern int use_air;
     reset_globals();
     MAKE_ARGV(av, "rt", "-U", "1");
     CALL_GET_ARGS(av, 1);
@@ -892,8 +799,6 @@ test_opt_use_air(void)
 static void
 test_opt_tolerance(void)
 {
-    extern fastf_t rt_dist_tol, rt_perp_tol;
-
     /* Single dist only */
     reset_globals();
     MAKE_ARGV(av, "rt", "-T", "0.01");
@@ -926,7 +831,6 @@ test_opt_tolerance(void)
 static void
 test_opt_opencl(void)
 {
-    extern int opencl_mode;
     reset_globals();
     MAKE_ARGV(av, "rt", "-z", "1");
     CALL_GET_ARGS(av, 1);
@@ -958,7 +862,6 @@ test_opt_command(void)
 static void
 test_opt_density_file(void)
 {
-    extern const char *densityfile;
     reset_globals();
     MAKE_ARGV(av, "rt", "-d", "density.tbl");
     CALL_GET_ARGS(av, 1);
@@ -975,7 +878,6 @@ test_opt_density_file(void)
 static void
 test_opt_start_frame(void)
 {
-    extern int desiredframe;
     reset_globals();
     MAKE_ARGV(av, "rt", "-D", "5");
     CALL_GET_ARGS(av, 1);
@@ -992,7 +894,6 @@ test_opt_start_frame(void)
 static void
 test_opt_end_frame(void)
 {
-    extern int finalframe;
     reset_globals();
     MAKE_ARGV(av, "rt", "-K", "100");
     CALL_GET_ARGS(av, 1);
@@ -1009,8 +910,6 @@ test_opt_end_frame(void)
 static void
 test_opt_single_pixel(void)
 {
-    extern char *string_pix_start;
-    extern ssize_t npsw;
     reset_globals();
     MAKE_ARGV(av, "rt", "-b", "100 200");
     CALL_GET_ARGS(av, 1);
@@ -1028,8 +927,6 @@ test_opt_single_pixel(void)
 static void
 test_opt_query_pixel(void)
 {
-    extern int Query_one_pixel, query_x, query_y;
-
     reset_globals();
     MAKE_ARGV(av, "rt", "-Q", "40,80");
     CALL_GET_ARGS(av, 1);
@@ -1049,8 +946,6 @@ test_opt_query_pixel(void)
 static void
 test_opt_objects_file(void)
 {
-    extern int objc;
-    extern char **objv;
     char tmpfile[512] = {0};
     FILE *fp;
 
@@ -1120,8 +1015,6 @@ test_opt_objects_file(void)
 static void
 test_opt_plus(void)
 {
-    extern int output_is_binary;
-
     reset_globals();
     MAKE_ARGV(av, "rt", "-+", "t");
     CALL_GET_ARGS(av, 1);
@@ -1160,8 +1053,6 @@ test_opt_rand_table(void)
 static void
 test_opt_verbose(void)
 {
-    extern int rt_verbosity;
-
     /* Plain -v from default -1: increase_level(-1 cast to unsigned) is
      * already all-ones, so rt_verbosity stays -1 (0xffffffff). */
     reset_globals();
@@ -1272,7 +1163,6 @@ test_opt_bu_debug(void)
 static void
 test_opt_cpus(void)
 {
-    extern ssize_t npsw;
     reset_globals();
     MAKE_ARGV(av, "rt", "-P", "4");
     CALL_GET_ARGS(av, 1);
@@ -1295,7 +1185,6 @@ test_opt_cpus(void)
 static void
 test_opt_benchmark(void)
 {
-    extern int benchmark;
     reset_globals();
     MAKE_ARGV(av, "rt", "-B");
     CALL_GET_ARGS(av, 1);
@@ -1312,7 +1201,6 @@ test_opt_benchmark(void)
 static void
 test_opt_report_overlaps(void)
 {
-    extern int rpt_overlap;
     /* default is 1; -r is a flag that re-affirms it */
     reset_globals();
     rpt_overlap = 0;
@@ -1332,7 +1220,6 @@ test_opt_report_overlaps(void)
 static void
 test_opt_no_overlap(void)
 {
-    extern int rpt_overlap;
     reset_globals();
     MAKE_ARGV(av, "rt", "-R");
     CALL_GET_ARGS(av, 1);
@@ -1349,7 +1236,6 @@ test_opt_no_overlap(void)
 static void
 test_opt_white_bg(void)
 {
-    extern int default_background;
     reset_globals();
     MAKE_ARGV(av, "rt", "-W");
     CALL_GET_ARGS(av, 1);
@@ -1478,11 +1364,6 @@ test_optind_boundary(void)
 static void
 test_multiple_opts(void)
 {
-    extern size_t width, height;
-    extern fastf_t azimuth, elevation;
-    extern int benchmark;
-    extern int top_down;
-
     if (g_short_only)
 	return;
 

@@ -193,6 +193,9 @@ int
 ged_illum_core(struct ged *gedp, int argc, const char *argv[])
 {
     int illum = 1;
+    int changed = 0;
+    struct ged_draw_transaction txn;
+    struct ged_draw_transaction_result result;
     static const char *usage = "[-n] obj";
 
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
@@ -221,12 +224,10 @@ ged_illum_core(struct ged *gedp, int argc, const char *argv[])
     if (argc != 2)
 	goto bad;
 
-    struct ged_draw_transaction txn =
-	ged_draw_transaction_make_value(GED_DRAW_TXN_HIGHLIGHT,
-					argv[1], (double)illum);
-    struct ged_draw_transaction_result result;
+    txn = ged_draw_transaction_make_value(GED_DRAW_TXN_HIGHLIGHT,
+	    argv[1], (double)illum);
     ged_draw_transaction_result_init(&result);
-    int changed = ged_draw_apply_transaction(gedp, &txn, &result);
+    changed = ged_draw_apply_transaction(gedp, &txn, &result);
     ged_draw_transaction_result_free(&result);
     if (!changed) {
 	bu_vls_printf(gedp->ged_result_str, "illum: %s not found", argv[1]);

@@ -25,6 +25,7 @@
 #include <Inventor/nodes/SoSeparator.h>
 
 #include <algorithm>
+#include <cmath>
 #include <string.h>
 #include <vector>
 
@@ -143,6 +144,12 @@ positive_zoom(int xzoom, int yzoom)
     int x = xzoom > 0 ? xzoom : 1;
     int y = yzoom > 0 ? yzoom : 1;
     return (float)((x < y) ? x : y);
+}
+
+static bool
+same_float(float a, float b)
+{
+    return std::fabs(a - b) <= 1.0e-6f;
 }
 
 static BRLObolFramebufferAttachment *
@@ -453,9 +460,18 @@ BRLObolWindowHost::setFramebufferView(imgstream_fb_t *fb,
     if (!attachment || !view)
 	return -1;
 
+    float zoom = positive_zoom(view->xzoom, view->yzoom);
+    SbVec2f oldCenter = attachment->viewport->sourceCenter.getValue();
+    if (same_float(oldCenter[0], (float)view->xcenter) &&
+	    same_float(oldCenter[1], (float)view->ycenter) &&
+	    same_float(attachment->viewport->sourceZoom.getValue(), zoom))
+	return 0;
+
     attachment->viewport->sourceCenter.setValue((float)view->xcenter,
 				      (float)view->ycenter);
-    attachment->viewport->sourceZoom = positive_zoom(view->xzoom, view->yzoom);
+    attachment->viewport->sourceZoom = zoom;
+    if (attachment->viewport->rebuildGeometry() != 0)
+	return -1;
     if (this->p->controller)
 	this->p->controller->requestRender("fb-view");
     return 0;

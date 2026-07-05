@@ -26,7 +26,6 @@
 #include <cassert>
 
 #include "bu.h"
-#include "bsg.h"
 #include "ged.h"
 
 const size_t MAX_ARGS = 5;
@@ -230,11 +229,13 @@ LLVMFuzzerTestOneInput(const int8_t *data, size_t size)
     /* FIXME: To draw, we need to init this LIBRT global */
     BU_LIST_INIT(&rt_vlfree);
 
-    /* Need a view for commands that expect a view */
-    struct bsg_view *gvp;
-    BU_GET(gvp, struct bsg_view);
-    bsg_init(gvp, &g->ged_views);
-    g->ged_gvp = gvp;
+    /* ged_create supplies a default view context; update its unit state for
+     * commands that inspect active-view geometry. */
+    void *view_ctx = ged_view_active_ctx(g);
+    if (view_ctx) {
+	ged_view_context_unit_conversion_set(view_ctx, g->dbip->dbi_local2base,
+		g->dbip->dbi_base2local);
+    }
 
     void *libged = bu_dlopen(NULL, BU_RTLD_LAZY);
     if (!libged) {

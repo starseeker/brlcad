@@ -1055,6 +1055,43 @@ mesh_shape_render_hidden_line(SoBRLMeshShape *shape,
     glPopAttrib();
 }
 
+static void
+mesh_shape_render_wire(SoBRLMeshShape *shape,
+		       const BRLObolViewLodState::MeshPayload *viewPayload)
+{
+    glPushAttrib(GL_CURRENT_BIT | GL_ENABLE_BIT | GL_LIGHTING_BIT |
+		 GL_LINE_BIT | GL_DEPTH_BUFFER_BIT);
+    glDisable(GL_LIGHTING);
+    glEnable(GL_DEPTH_TEST);
+    if (shape->lineWidth.getValue() > 0)
+	glLineWidth(static_cast<GLfloat>(shape->lineWidth.getValue()));
+    set_mesh_gl_material(shape, -1);
+
+    glBegin(GL_LINES);
+    const int triangleCount = viewPayload ? viewPayload->getTriangleCount() :
+			      shape->getTriangleCount();
+    for (int i = 0; i < triangleCount; i++) {
+	SbVec3f a;
+	SbVec3f b;
+	SbVec3f c;
+	if (viewPayload) {
+	    if (!viewPayload->getTriangle(i, a, b, c))
+		continue;
+	} else if (!shape->getTriangle(i, a, b, c)) {
+	    continue;
+	}
+
+	glVertex3f(a[0], a[1], a[2]);
+	glVertex3f(b[0], b[1], b[2]);
+	glVertex3f(b[0], b[1], b[2]);
+	glVertex3f(c[0], c[1], c[2]);
+	glVertex3f(c[0], c[1], c[2]);
+	glVertex3f(a[0], a[1], a[2]);
+    }
+    glEnd();
+    glPopAttrib();
+}
+
 static SbBool
 mesh_shape_proxy_corners(const BRLObolViewLodState::ProxyPayload *viewProxy,
 			 SbVec3f corners[8])
@@ -1155,6 +1192,11 @@ SoBRLMeshShape::GLRender(SoGLRenderAction *action)
     if (this->hiddenLine.getValue() ||
 	this->drawMode.getValue() == BRLOBOL_LOD_DRAW_HIDDEN_LINE) {
 	mesh_shape_render_hidden_line(this, viewPayload);
+	return;
+    }
+
+    if (this->drawMode.getValue() == BRLOBOL_LOD_DRAW_WIRE) {
+	mesh_shape_render_wire(this, viewPayload);
 	return;
     }
 

@@ -411,32 +411,6 @@ get_server_by_pc(struct pkg_conn *pc)
     return SERVERS_NULL;
 }
 
-/* variables shared with viewing model */
-/* AmbientIntensity is declared (with correct DLL-import on Windows) via optical/defines.h */
-extern fastf_t azimuth, elevation;
-extern int lightmodel;
-extern int use_air;
-
-/* variables shared with worker() */
-extern int hypersample;
-extern unsigned int jitter;
-extern fastf_t rt_perspective;
-extern fastf_t aspect;
-extern fastf_t eye_backoff;
-extern size_t width;
-extern size_t height;
-
-/* variables shared with do.c */
-extern int matflag;
-extern int benchmark;
-extern char *outputfile;		/* output file name */
-extern int desiredframe;
-extern int finalframe;
-
-extern fastf_t rt_dist_tol;		/* Value for rti_tol.dist */
-extern fastf_t rt_perp_tol;		/* Value for rti_tol.perp */
-extern char *framebuffer;
-
 extern struct rt_g rt_g;
 
 extern struct pkg_switch pkgswitch[]; /* given at end */

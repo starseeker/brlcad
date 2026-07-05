@@ -89,7 +89,7 @@ main(int argc, char **argv)
     BU_OPT(d[0],  "h", "help",   "", NULL, &print_help,    "Print help and exit");
     BU_OPT(d[1],  "?", "",       "", NULL, &print_help,    "");
     BU_OPT(d[2],  "c", "no-gui", "", NULL, &console_mode,  "Run without GUI");
-    BU_OPT(d[3],  "s", "swrast", "", NULL, &swrast_mode,   "Use software rendering for 3D view");
+    BU_OPT(d[3],  "s", "swrast", "", NULL, &swrast_mode,   "Use offscreen rendering for 3D view");
     BU_OPT(d[4],  "4", "quad",   "", NULL, &quad_mode,     "Launch using quad view");
     BU_OPT_NULL(d[5]);
 
@@ -150,7 +150,8 @@ main(int argc, char **argv)
     if (!swrast_mode) {
 	QSurfaceFormat fmt;
 	fmt.setRenderableType(QSurfaceFormat::OpenGL);
-	fmt.setDepthBufferSize(16);
+	fmt.setDepthBufferSize(24);
+	fmt.setStencilBufferSize(8);
 	QSurfaceFormat::setDefaultFormat(fmt);
     }
 #endif

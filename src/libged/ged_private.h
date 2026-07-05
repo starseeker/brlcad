@@ -157,6 +157,9 @@ void ged_scene_root_group_ref_set(struct ged *gedp, ged_draw_group_ref root);
 void ged_scene_root_ref_clear(struct ged *gedp);
 void ged_view_legacy_state_init(struct ged *gedp);
 void ged_view_legacy_state_free(struct ged *gedp);
+int ged_obol_fbserv_ensure_for_view(struct ged *gedp, void *view_ctx);
+int ged_obol_fbserv_present(struct ged *gedp);
+void ged_obol_fbserv_release(struct ged *gedp);
 __END_DECLS
 
 

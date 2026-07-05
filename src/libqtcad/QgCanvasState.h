@@ -82,26 +82,20 @@
  *            Passing nullptr to set_view() reverts v back to local_v.  The
  *            canvas never frees v — it only frees local_v.
  *
- * dmp      – Opened lazily in the first paint event through the opaque
- *            qg_legacy_view_dm_open_* helpers; closed by
- *            qg_legacy_view_dm_close() in the canvas destructor.  The canvas
- *            owns it.
+ * dmp      – Transitional retained-backend slot.  qtcad canvases no longer
+ *            open qtgl/swrast DMs; this remains null while dependent code is
+ *            being converted away from backend-specific framebuffer plumbing.
  *
- * ifp      – When the canvas is constructed without a caller-supplied fb*,
- *            it allocates a raw framebuffer through
- *            qg_legacy_view_framebuffer_raw_create() and owns it.  The
- *            destructor releases it through qg_legacy_view_framebuffer_release(),
- *            which preserves the retained initialized-vs-raw lifetime split.
- *            When the caller supplies a standalone fb* at construction time,
- *            the canvas does not close it on destruction.
+ * ifp      – Optional caller-supplied framebuffer bridge.  qtcad no longer
+ *            allocates fallback framebuffer state for ordinary canvases.
  */
 struct QgCanvasState {
     /* ---- view / dm / fb plumbing ---- */
     qg_legacy_view *v = nullptr;           /* active view: normally == local_v,
 	                                       set_view() can redirect to an
 	                                       external caller-owned legacy view     */
-    qg_legacy_dm   *dmp = nullptr;        /* retained display manager (owned) */
-    qg_legacy_fb   *ifp = nullptr;        /* framebuffer (see ownership note) */
+    qg_legacy_dm   *dmp = nullptr;        /* transitional retained backend */
+    qg_legacy_fb   *ifp = nullptr;        /* optional framebuffer bridge */
     qg_legacy_view *local_v = nullptr;     /* widget-owned view (canvas owns)   */
     BRLObolViewController *obol = nullptr; /* Obol-canonical view controller */
 
@@ -116,7 +110,7 @@ struct QgCanvasState {
 
     /* ---- widget-level tracking ---- */
     int    current = 1;     /* 1 = this view is active */
-    bool   m_init = false;  /* DM has been opened and configured */
+    bool   m_init = false;  /* retained-DM initialization; remains false */
     int    x_prev = -INT_MAX;
     int    y_prev = -INT_MAX;
     double x_press_pos = -INT_MAX;
@@ -463,11 +457,11 @@ qgcanvas_render_obol_pending(QgCanvasState &s,
     return s.obol->renderPending(clearWindow, clearZBuffer, NULL);
 }
 
-/** Store current DM and view hashes in @p s. */
+/** Store current view hashes in @p s. */
 static inline void
 qgcanvas_stash_hashes(QgCanvasState &s)
 {
-    s.prev_dhash = qg_legacy_view_dm_hash(s.dmp);
+    s.prev_dhash = 0;
     s.prev_vhash = rt_view_context_hash(qg_legacy_view_to_context(s.v));
 }
 
@@ -482,13 +476,11 @@ qgcanvas_request_update(QgCanvasState &s, uint32_t flags)
     if (s.v)
 	rt_view_context_refresh_request(qg_legacy_view_to_context(s.v),
 					requested);
-    if (s.dmp)
-	qg_legacy_view_dm_native_repaint_pending_set(s.dmp, 1);
 }
 
 /**
- * Compare current DM/view hashes against the stored values and update the
- * view refresh record and DM wakeup flag when differences are found.
+ * Compare current view hashes against the stored values and update the
+ * view refresh record when differences are found.
  *
  * Returns true if any value changed.  The caller is responsible for calling
  * need_update() and emitting changed() — signal emission requires a QObject
@@ -498,21 +490,9 @@ static inline bool
 qgcanvas_diff_hashes_check(QgCanvasState &s)
 {
     bool ret = false;
-    unsigned long long c_dhash = qg_legacy_view_dm_hash(s.dmp);
     unsigned long long c_vhash =
 	rt_view_context_hash(qg_legacy_view_to_context(s.v));
 
-    if (qg_legacy_view_dm_native_repaint_pending_get(s.dmp)) {
-	if (s.v)
-	    rt_view_context_refresh_request(qg_legacy_view_to_context(s.v),
-					    RT_VIEW_REFRESH_FORCE);
-	ret = true;
-    }
-
-    if (s.prev_dhash != c_dhash) {
-	qgcanvas_request_update(s, RT_VIEW_REFRESH_FRAMEBUFFER | RT_VIEW_REFRESH_FORCE);
-	ret = true;
-    }
     if (s.prev_vhash != c_vhash) {
 	qgcanvas_request_update(s, RT_VIEW_REFRESH_VIEW | RT_VIEW_REFRESH_DRAW);
 	ret = true;
@@ -546,13 +526,6 @@ qgcanvas_set_view(QgCanvasState &s, qg_legacy_view *nv)
 	return;
     }
     s.v = nv;
-    if (!s.dmp) {
-	qgcanvas_sync_obol_camera(s);
-	return;
-    }
-    qg_legacy_view_dm_bind(s.v, s.dmp);
-    qg_legacy_view_dm_configure_window(s.dmp, 0);
-    qg_legacy_view_dm_sync_dimensions(s.v, s.dmp);
     qgcanvas_sync_obol_camera(s);
 }
 

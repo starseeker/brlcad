@@ -326,6 +326,7 @@ set(
   ged_inside.c
   ged_track.c
   ged_util.cpp
+  obol_fbserv.cpp
   get_obj_bounds.c
   get_solid_kp.c
   path.c

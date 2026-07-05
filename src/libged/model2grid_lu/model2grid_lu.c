@@ -43,6 +43,7 @@ ged_model2grid_lu_core(struct ged *gedp, int argc, const char *argv[])
     point_t mo_view_pt;           /* model origin in view space */
     point_t diff;
     double scan[3];
+    void *view_ctx = NULL;
     static const char *usage = "x y z";
     double l2bval = (gedp->dbip) ? gedp->dbip->dbi_local2base : 1.0;
     double b2lval = (gedp->dbip) ? gedp->dbip->dbi_base2local : 1.0;
@@ -57,7 +58,7 @@ ged_model2grid_lu_core(struct ged *gedp, int argc, const char *argv[])
     if (argc != 4)
 	goto bad;
 
-    void *view_ctx = ged_view_active_ctx(gedp);
+    view_ctx = ged_view_active_ctx(gedp);
     ged_view_context_model2view_get(model2view, view_ctx);
     view_scale = ged_view_context_scale_get(view_ctx);
     MAT4X3PNT(mo_view_pt, model2view, model_pt);

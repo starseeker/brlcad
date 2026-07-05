@@ -259,6 +259,9 @@ release(struct mged_state *s, char *name, int need_close)
     if (s->mged_curr_dm->dm_tie != NULL)
 	s->mged_curr_dm->dm_tie->cl_tie = (struct mged_dm *)NULL;
 
+    if (need_close && s->gedp)
+	ged_draw_obol_framebuffer_release(s->gedp);
+
     if (s->mged_curr_dm && s->mged_curr_dm->dm_view_state &&
 	    s->mged_curr_dm->dm_view_state->vs_gvp)
 	ged_view_context_display_manager_set(

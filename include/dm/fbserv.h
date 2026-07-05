@@ -48,6 +48,8 @@
 #define DM_FBSERV_H
 
 #include "common.h"
+#include <stddef.h>
+#include <stdint.h>
 #include "pkg.h"
 #include "dm/defines.h"
 
@@ -62,6 +64,43 @@ __BEGIN_DECLS
 #define FBSERV_OBJ_NULL (struct fbserv_obj *)NULL
 
 struct fbserv_obj;
+
+struct fbserv_fb_info {
+    int max_width;
+    int max_height;
+    int width;
+    int height;
+};
+
+struct fbserv_colormap {
+    uint16_t red[256];
+    uint16_t green[256];
+    uint16_t blue[256];
+};
+
+struct fbserv_fb_ops {
+    int (*info)(void *ctx, struct fbserv_fb_info *info);
+    int (*clear)(void *ctx, const unsigned char rgb[3]);
+    ssize_t (*read)(void *ctx, int x, int y, unsigned char *rgb, size_t count);
+    ssize_t (*write)(void *ctx, int x, int y, const unsigned char *rgb, size_t count);
+    int (*readrect)(void *ctx, int xmin, int ymin, int width, int height, unsigned char *rgb);
+    int (*writerect)(void *ctx, int xmin, int ymin, int width, int height, const unsigned char *rgb);
+    int (*bwreadrect)(void *ctx, int xmin, int ymin, int width, int height, unsigned char *bw);
+    int (*bwwriterect)(void *ctx, int xmin, int ymin, int width, int height, const unsigned char *bw);
+    int (*cursor)(void *ctx, int mode, int x, int y);
+    int (*getcursor)(void *ctx, int *mode, int *x, int *y);
+    int (*setcursor)(void *ctx, const unsigned char *bits, int xbits, int ybits, int xorig, int yorig);
+    int (*scursor)(void *ctx, int mode, int x, int y);
+    int (*window)(void *ctx, int xcenter, int ycenter);
+    int (*zoom)(void *ctx, int xzoom, int yzoom);
+    int (*view)(void *ctx, int xcenter, int ycenter, int xzoom, int yzoom);
+    int (*getview)(void *ctx, int *xcenter, int *ycenter, int *xzoom, int *yzoom);
+    int (*rmap)(void *ctx, struct fbserv_colormap *cmap);
+    int (*wmap)(void *ctx, const struct fbserv_colormap *cmap);
+    int (*flush)(void *ctx);
+    int (*poll)(void *ctx);
+    int (*help)(void *ctx);
+};
 
 struct fbserv_listener {
     int fbsl_fd;                        /**< @brief socket fd to listen for connections (copy of listener fd) */
@@ -88,6 +127,8 @@ struct fbserv_client {
 
 struct fbserv_obj {
     struct fb *fbs_fbp;                            /**< @brief framebuffer pointer */
+    const struct fbserv_fb_ops *fbs_fb_ops;        /**< @brief optional non-libdm framebuffer implementation */
+    void *fbs_fb_ctx;                              /**< @brief user data for fbs_fb_ops */
     void *fbs_interp;                              /**< @brief interpreter */
     struct fbserv_listener fbs_listener;           /**< @brief data for listening */
     struct fbserv_client fbs_clients[MAX_CLIENTS]; /**< @brief connected clients */
@@ -131,6 +172,12 @@ struct fbserv_obj {
 
 DM_EXPORT extern int fbs_open(struct fbserv_obj *fbsp, int port);
 DM_EXPORT extern int fbs_close(struct fbserv_obj *fbsp);
+DM_EXPORT extern int fbs_set_backend(struct fbserv_obj *fbsp,
+	const struct fbserv_fb_ops *ops,
+	void *ctx);
+DM_EXPORT extern void fbs_clear_backend(struct fbserv_obj *fbsp);
+DM_EXPORT extern int fbs_framebuffer_info(struct fbserv_obj *fbsp,
+	struct fbserv_fb_info *info);
 DM_EXPORT extern struct pkg_switch *fbs_pkg_switch(void);
 DM_EXPORT extern void fbs_setup_socket(int fd);
 DM_EXPORT extern int fbs_new_client(struct fbserv_obj *fbsp, struct pkg_conn *pcp, void *data);

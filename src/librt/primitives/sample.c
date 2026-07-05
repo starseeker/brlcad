@@ -162,11 +162,14 @@ rt_obj_sampled_face_set(struct rt_primitive_indexed_face_set *face_set,
     VSET(v2, -1*tx1, ty2, 0);
     VSET(v3, tx1, ty2, 0);
 
+    struct pnt_normal *pn = NULL;
+    size_t point_idx = 0;
+    size_t index_idx = 0;
+    size_t normal_idx = 0;
     struct pnt_normal *pl = (struct pnt_normal *)pnts->point;
     if (!pl)
 	goto done;
 
-    struct pnt_normal *pn = NULL;
     for (BU_LIST_FOR(pn, pnt_normal, &(pl->l)))
 	sample_count++;
 
@@ -183,9 +186,6 @@ rt_obj_sampled_face_set(struct rt_primitive_indexed_face_set *face_set,
     indices = (int *)bu_calloc(face_set->index_count, sizeof(int),
 	    "sample point face-set indices");
 
-    size_t point_idx = 0;
-    size_t index_idx = 0;
-    size_t normal_idx = 0;
     for (BU_LIST_FOR(pn, pnt_normal, &(pl->l))) {
 	vect_t v1pp, v2pp, v3pp = {0.0, 0.0, 0.0};
 	vect_t v1fp, v2fp, v3fp = {0.0, 0.0, 0.0};

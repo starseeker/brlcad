@@ -181,6 +181,74 @@ test_imgstream_display_host_bridge(void)
     return 0;
 }
 
+static int
+test_framebuffer_stream_helper(void)
+{
+    BRLObolWindowHost host;
+    BRLObolFramebufferStream stream(&host);
+
+    CHECK(stream.configure(4, 3) == 0, "framebuffer stream accepts size");
+
+    BRLObolFramebufferInfo info;
+    CHECK(stream.info(&info) == 0, "framebuffer stream reports dimensions");
+    CHECK(info.width == 4 && info.height == 3 &&
+	  info.max_width == 4 && info.max_height == 3,
+	  "framebuffer stream dimensions match configuration");
+    CHECK(stream.framebuffer() != NULL, "framebuffer stream opens imgstream framebuffer");
+    CHECK(host.getFramebufferCount() == 1,
+	  "framebuffer stream attaches one image to Obol host");
+
+    imgstream_fb_t *fb = stream.framebuffer();
+    SoBRLImageSource *source = host.getFramebufferImageSource(fb);
+    SoBRLViewportImage *viewport = host.getFramebufferViewportImage(fb);
+    CHECK(source != NULL && viewport != NULL,
+	  "framebuffer stream exposes host image nodes");
+
+    unsigned char blue[3] = {0, 0, 255};
+    CHECK(stream.writerect(1, 1, 1, 1, blue) == 1,
+	  "framebuffer stream writes pixels");
+    CHECK(source->hasPendingStreamUpdate() == TRUE,
+	  "framebuffer stream write marks source update pending");
+    CHECK(stream.present() == 0,
+	  "framebuffer stream presents pending pixels to Obol image");
+    CHECK(viewport->realizedDirtyRevision.getValue() ==
+	  source->dirtyRevision.getValue(),
+	  "framebuffer stream present refreshes Obol image");
+    CHECK(source->hasPendingStreamUpdate() == FALSE,
+	  "framebuffer stream present clears pending source update");
+
+    CHECK(stream.view(2, 1, 3, 3) == 0,
+	  "framebuffer stream records view state");
+    CHECK(stream.present() == 0,
+	  "framebuffer stream presents view state");
+    CHECK(float_equal(viewport->sourceCenter.getValue()[0], 2.0f) &&
+	  float_equal(viewport->sourceCenter.getValue()[1], 1.0f) &&
+	  float_equal(viewport->sourceZoom.getValue(), 3.0f),
+	  "framebuffer stream maps view state to viewport image");
+
+    CHECK(stream.cursor(1, 3, 2) == 0,
+	  "framebuffer stream records cursor state");
+    CHECK(stream.present() == 0,
+	  "framebuffer stream presents cursor state");
+    CHECK(viewport->cursorVisible.getValue() == TRUE &&
+	  float_equal(viewport->cursorImagePosition.getValue()[0], 3.0f) &&
+	  float_equal(viewport->cursorImagePosition.getValue()[1], 2.0f),
+	  "framebuffer stream maps cursor state to viewport image");
+
+    stream.close();
+    CHECK(host.getFramebufferCount() == 0,
+	  "framebuffer stream close detaches host image nodes");
+
+    CHECK(stream.configure(2, 2) == 0 && stream.ensure() == 0,
+	  "framebuffer stream reopens after close");
+    CHECK(host.getFramebufferCount() == 1,
+	  "framebuffer stream reattaches after close");
+    stream.setHost(NULL);
+    CHECK(host.getFramebufferCount() == 0,
+	  "framebuffer stream host change closes attachment");
+    return 0;
+}
+
 int
 main(int ac, char **av)
 {
@@ -192,6 +260,8 @@ main(int ac, char **av)
     if (test_window_host_contract())
 	return 1;
     if (test_imgstream_display_host_bridge())
+	return 1;
+    if (test_framebuffer_stream_helper())
 	return 1;
 
     return 0;

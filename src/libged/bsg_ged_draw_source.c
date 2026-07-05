@@ -12294,7 +12294,7 @@ ged_draw_scene_ref_source_snapshot(
     memset(out, 0, sizeof(*out));
     ged_draw_shape_state *shape_data = _ged_draw_shape_state_get_scene_ref(ref);
     struct ged_draw_source_state *source =
-	shape_data ? shape_data->source_data : NULL;
+	shape_data ? (struct ged_draw_source_state *)shape_data->source_data : NULL;
 
     struct ged_draw_obol_database_source_runtime obol_runtime;
     memset(&obol_runtime, 0, sizeof(obol_runtime));
@@ -14202,7 +14202,7 @@ ged_draw_scene_ref_source_runtime_summary(
     memset(out, 0, sizeof(*out));
     ged_draw_shape_state *shape_data = _ged_draw_shape_state_get_scene_ref(ref);
     struct ged_draw_source_state *source =
-	shape_data ? shape_data->source_data : NULL;
+	shape_data ? (struct ged_draw_source_state *)shape_data->source_data : NULL;
 
     struct ged_draw_obol_database_source_runtime obol_runtime;
     memset(&obol_runtime, 0, sizeof(obol_runtime));
@@ -14266,7 +14266,7 @@ ged_draw_scene_ref_source_mesh_lod_set(
 
     ged_draw_shape_state *shape_data = _ged_draw_shape_state_get_scene_ref(ref);
     struct ged_draw_source_state *source =
-	shape_data ? shape_data->source_data : NULL;
+	shape_data ? (struct ged_draw_source_state *)shape_data->source_data : NULL;
     if (!source)
 	return 0;
 
@@ -14289,7 +14289,7 @@ ged_draw_scene_ref_source_mesh_lod_bounds_set(
 
     ged_draw_shape_state *shape_data = _ged_draw_shape_state_get_scene_ref(ref);
     struct ged_draw_source_state *source =
-	shape_data ? shape_data->source_data : NULL;
+	shape_data ? (struct ged_draw_source_state *)shape_data->source_data : NULL;
     if (!source)
 	return 0;
 

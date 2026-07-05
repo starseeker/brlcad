@@ -38,6 +38,7 @@ if(BRLCAD_ENABLE_QT)
   else()
     qt5_wrap_cpp(moc_srcs ${moc_headers})
   endif(Qt6Widgets_FOUND)
+  set(fbserv_moc_src "${CMAKE_CURRENT_BINARY_DIR}/moc_fbserv.cpp")
 
   # https://github.com/Alexhuszagh/BreezeStyleSheets
   if(Qt6Widgets_FOUND)
@@ -74,8 +75,45 @@ if(BRLCAD_ENABLE_QT)
   target_compile_definitions(qged PRIVATE BRLCADBUILD HAVE_CONFIG_H)
   install(TARGETS qged RUNTIME DESTINATION ${BIN_DIR} LIBRARY DESTINATION ${LIB_DIR} ARCHIVE DESTINATION ${LIB_DIR})
 
-  # Make sure all dm and ged plugins are accounted for when we build qged
-  add_dependencies(qged dm_plugins ged_plugins)
+  # qged's view and embedded framebuffer paths are Obol/libbrlobol based.
+  # GED plugins are still loaded at runtime; legacy display-manager plugins are
+  # not a qged build prerequisite.
+  add_dependencies(qged ged_plugins)
+
+  add_executable(test_qged_obol_fbserv test_qged_obol_fbserv.cpp fbserv.cpp ${fbserv_moc_src})
+  if(Qt6Widgets_FOUND)
+    target_link_libraries(
+      test_qged_obol_fbserv
+      libqtcad
+      libged
+      libdm
+      librt
+      libbu
+      Qt6::Widgets
+      Qt6::Network
+      Qt6::OpenGL
+      Qt6::OpenGLWidgets
+    )
+  else()
+    target_link_libraries(
+      test_qged_obol_fbserv
+      libqtcad
+      libged
+      libdm
+      librt
+      libbu
+      Qt5::Widgets
+      Qt5::Network
+    )
+  endif(Qt6Widgets_FOUND)
+  target_compile_definitions(test_qged_obol_fbserv PRIVATE BRLCADBUILD HAVE_CONFIG_H)
+  brlcad_add_test(NAME test_qged_obol_fbserv COMMAND test_qged_obol_fbserv)
+  set_property(TEST test_qged_obol_fbserv
+    APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+  set_property(TEST test_qged_obol_fbserv
+    APPEND PROPERTY ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+  set_property(TEST test_qged_obol_fbserv
+    APPEND PROPERTY LABELS drawing_baseline)
 
   foreach(qh ${qth_names})
     distclean(moc_${qh}.cpp_parameters)
@@ -100,6 +138,7 @@ set(
   fonts/Inconsolata-LICENSE.txt
   fonts/Inconsolata.otf
   main.cpp
+  test_qged_obol_fbserv.cpp
   qged_signals.eps
   qged_signals.dia
   view_update_cycle.odg

@@ -7,6 +7,7 @@ set(
   edit_preview.cpp
   evaluated_wire.cpp
   export_action.cpp
+  framebuffer.cpp
   grid.cpp
   headless_window_host.cpp
   hud_label_overlay.cpp
@@ -87,6 +88,7 @@ cmakefiles(
   edit_preview.cpp
   evaluated_wire.cpp
   export_action.cpp
+  framebuffer.cpp
   grid.cpp
   headless_window_host.cpp
   hud_label_overlay.cpp

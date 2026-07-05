@@ -30,14 +30,10 @@ These rows must match `src/source_dirs.cmake` and are checked by
 * qged: libqtcad
 * mged: libtclcad
 
-The qged executable still has a direct build dependency on dm_plugins:
-
-* qged plugin dependency: dm_plugins
-
 Additional guard-visible dependency expectations:
 
 * qtcad Obol tests: no direct libdm/libbsg/dm_plugins link
-* qtcad QgSW swrast integration test: no direct libbsg link
+* qtcad Obol window-host/readback tests: no direct libbsg link
 * selected converter and simulate build targets: no direct libbsg link
 
 Current Direct Legacy Owners
@@ -47,7 +43,8 @@ Direct non-test `rt/view_legacy_bsg.h` inclusion is limited to boundary files:
 
 * `src/libged/ged_view_legacy.cpp`: GED retained-view bridge and adapter
   installation.
-* `src/librt/view_legacy_bsg.c`: RT legacy BSG adapter implementation.
+* `src/librt/view_legacy_bsg.c`: RT legacy BSG adapter implementation and
+  remaining public neutral wrapper dispatch pending the next split.
 
 The direct `libged` to `libbrlobol` dependency is intentional.  libged owns the
 neutral GED draw transaction to Obol scene-controller bridge in
@@ -59,12 +56,15 @@ Remaining direct legacy target rows are transitional:
 * `libged` still links `libdm` and `libbsg` for retained draw/view,
   faceplate, plot/select/snap/measure, framebuffer, and no-owned-scene
   compatibility paths.
-* `libqtcad`, `libtclcad`, qged, and mged still carry display-manager or
+* `libqtcad`, `libtclcad`, and mged still carry display-manager or
   application hosting dependencies while visible rendering/input/readback
-  migration continues.
+  migration continues.  qged no longer has a `dm_plugins` build prerequisite,
+  but it still reaches fbserv through libdm until the protocol is moved.
 * `libdm` still depends on `libbsg`; both are compatibility layers until
-  framebuffer/display behavior moves to libimgstream, libicv, and
-  Obol/libbrlobol display-host paths.
+  display behavior moves to libimgstream, libicv, and Obol/libbrlobol
+  display-host paths.  fbserv packet handling is being isolated behind a
+  backend-neutral operation table so the protocol can later move beside
+  libimgstream/libicv without becoming libbrlobol scene logic.
 
 Current Migration Boundaries
 ----------------------------
@@ -108,6 +108,9 @@ Current migrated boundaries include:
 * Owned Obol scene/source/group operations in the GED draw bridge.
 * Direct Obol database draw providers for wire, shaded-BoT, shaded, and
   hidden-line draw modes.
+* GED draw transactions no longer fall back to retained `_ged_drawtrees` on
+  provider failure.  Supported transaction draw modes must realize through
+  Obol/libbrlobol providers or fail explicitly.
 * Preview script tree redraws through GED draw transactions instead of direct
   `_ged_drawtrees` calls.
 * Object-level GED draw facades for view-object lifecycle, visibility, style,
@@ -126,7 +129,9 @@ Current migrated boundaries include:
 * qray/uplot private direct-feature helper exposure has been retired; command
   visualizations should use command-scene publication helpers.
 * Neutral RT adapters for scene, polygon, selection, feature/edit-preview, and
-  retained view-context operations.  Neutral RT view constructors now return
+  retained view-context operations.  Scene/feature/polygon/selection adapter
+  registries now live in `src/librt/view_context_adapters.c` rather than the
+  explicit BSG adapter source.  Neutral RT view constructors now return
   native/libbv-backed contexts; explicit `_bsg` constructors remain retained
   fallback only.
 * Focused GED and qtcad Obol workflows now use native neutral RT view contexts
@@ -145,6 +150,16 @@ Current migrated boundaries include:
   `screengrab`, and exposes only the opaque `dm_obol_controller` accessor.
   It does not implement legacy immediate draw streams; callers must refresh
   through high-level GED/Obol operations.
+* qged, GSH, and classic MGED embedded framebuffer traffic now use
+  Obol/imgstream-backed fbserv bridges instead of selecting legacy qtcad
+  GL/swrast framebuffer canvases or requiring a `struct fb` display path.
+  MGED and TclCAD expose `ert` through the Obol-capable GED path, and their
+  refresh loops present pending framebuffer stream state before render
+  traversal.  GSH and classic MGED have fast headless `ert` smoke coverage
+  that launches real rt subprocesses through the Obol IPC framebuffer path and
+  verifies visible Obol-rendered framebuffer screenshots.  qged coverage still
+  exercises the backend operation table directly rather than an app-level
+  `ert` launch.
 * GED `dm attach obol` registers the backend controller with the GED Obol draw
   bridge for the target view.  A GED session owns one shared Obol scene, while
   attached Obol DMs are per-view render endpoints with local roots.  Shared
@@ -162,15 +177,42 @@ Current migrated boundaries include:
 * Retained fallback tests that need BSG storage use explicit `_bsg`
   constructors rather than GED's neutral default active view, and are removed
   when Obol/native tests cover the migrated behavior.  The standalone Tcl
-  overlay BSG regression is retired.
+  overlay BSG regression and transitional `rt_view_legacy_bsg` test are
+  retired.  Generic harnesses such as GED fuzzing use GED's default active
+  native view context instead of initializing BSG view storage directly.
 * Borrowed Obol view controllers can publish database sources/groups and
   activate feature/polygon stores without first converting to owned
   controllers.
 * Obol-only shape draft/source-state paths can publish display/style/material,
   line-set, evaluated-region, and database-leaf state without requiring a
   retained shape-ref mirror.
-* qtcad Obol workflow tests that avoid direct libdm/libbsg/dm_plugins links
-  and can force the swrast Obol route with `QTCAD_OBOL_FORCE_OSMESA=1`.
+* qtcad ordinary canvas painting is Obol-only: `QgGL` renders pending Obol/Coin
+  work through Qt's current `QOpenGLWidget` context, and `QgSW` presents Obol
+  readback through QWidget painting.
+* qged and gsh embedded framebuffer traffic now uses Obol/imgstream-backed
+  fbserv operation tables instead of direct legacy framebuffer canvases.
+  qged presents pending stream state from Qt's update path; gsh presents from
+  its command-thread update pump through the libged Obol fbserv bridge.  The
+  fbserv packet parser still lives in libdm until it can move beside
+  libimgstream/libicv, but framebuffer scene presentation is libbrlobol/Obol
+  owned and producer threads do not mutate Coin nodes.
+* qtcad Obol readback prefers a Qt offscreen
+  `QOpenGLContext`/`QOffscreenSurface` derived from Qt's default
+  `QSurfaceFormat`, sharing with current/global Qt contexts when possible, and
+  falls back to OSMesa when the platform cannot create a Qt OpenGL context.
+  Tests may still force the OSMesa path with `QTCAD_OBOL_FORCE_OSMESA=1`.
+* Embedded framebuffers are represented as Obol scene content via
+  `SoBRLImageSource` and `SoBRLViewportImage` under the window-host controller
+  root.
+* fbserv protocol handling in libdm now supports an application-provided
+  framebuffer operation table.  Legacy `struct fb` remains the fallback
+  backend, but Obol hosts can expose framebuffer/image-stream behavior without
+  selecting a legacy display-manager framebuffer.
+* qged installs an Obol/imgstream fbserv backend for embedded framebuffer
+  traffic.  Its operation table delegates image, view, cursor, colormap, flush,
+  and poll behavior to libbrlobol's `BRLObolFramebufferStream`, attached to the
+  active `QgView` Obol window host.  qged's fbserv path no longer branches
+  between qtcad GL and swrast legacy framebuffer canvases.
 
 Active Blockers To Retiring Legacy Paths
 ----------------------------------------
@@ -185,23 +227,32 @@ Active Blockers To Retiring Legacy Paths
   Obol DMs.  Remaining hardening is to apply this model to old no-owned-scene
   and application paths, then remove compatibility code that exists only to
   mirror retained BSG/DM state.
-* Native RT view dispatch still lives in `src/librt/view_legacy_bsg.c` beside
-  explicit BSG adapter dispatch.  Split neutral dispatch into a non-legacy
-  file after the remaining fallback-only calls are isolated.
+* Neutral RT adapter registry dispatch has moved to
+  `src/librt/view_context_adapters.c`, but many public neutral RT view
+  wrappers still live in `src/librt/view_legacy_bsg.c` beside explicit BSG
+  adapter dispatch.  Split those wrappers into a non-legacy file after the
+  remaining fallback-only calls are isolated.
 * Lower display-stream, framebuffer, and display-manager behavior still needs
-  completion through libimgstream/libicv and Obol display-host paths, but new
-  display-host guards should use explicit neutral capabilities or context
-  identity checks rather than retained BSG identity.
+  completion through libimgstream/libicv and Obol display-host paths.  qged,
+  GSH, and classic MGED now have Obol/imgstream-backed fbserv bridges, but the
+  protocol implementation still lives in libdm and stronger intermediate-frame
+  image verification still needs either a bounded fixture or an explicit
+  slow-test category.  New display-host guards should use explicit neutral
+  capabilities or context identity checks rather than retained BSG identity.
 * Some utility/application targets still depend on legacy display libraries
   even after their local vlist/uplot data paths have moved to BG/RT names.
-* BSG-backed retained draw facade code remains as compatibility, but migrated
-  features should not add new behavior there.
-* qged/mged/TclCAD visible rendering, refresh/input, faceplate, framebuffer,
-  and readback still need full Obol/libimgstream replacements before libdm and
-  libbsg target rows can be removed.  The initial MGED-classic/GSH Obol attach
-  and screengrab path is present, and MGED's Obol refresh no longer uses
-  `dm_draw_objs`, but GUI/input/faceplate/readback integration remains broader
-  migration work.
+* BSG-backed retained draw facade code remains as compatibility for old
+  unsupported callers, but migrated transaction draw features should not add
+  new behavior there and should not route through retained `_ged_drawtrees`.
+* qged visible canvas rendering and embedded framebuffer streaming are now
+  Obol/imgstream-backed, but qged still has broader UI/input/faceplate/readback
+  hardening to finish around the Obol display host.  mged/TclCAD visible
+  rendering, refresh/input, faceplate,
+  framebuffer, and readback still need full Obol/libimgstream replacements
+  before libdm and libbsg target rows can be removed.  The initial
+  MGED-classic/GSH Obol attach and screengrab path is present, and MGED's Obol
+  refresh no longer uses `dm_draw_objs`, but GUI/input/faceplate/readback
+  integration remains broader migration work.
 * The active mesh POP LoD cache API and generation/loading implementation are
   in libbrlobol.  The remaining BSG mesh-LoD payload code is quarantined
   retained-renderer implementation detail under `.BsgMeshLodCache`; delete it
@@ -234,7 +285,7 @@ Phase Summary
 | --- | --- | --- |
 | libbrlobol | Direct-BSG/DM-free; lower transitives remain through librt/libwdb and image/display host work | Keep direct-BSG/DM-free while lower layers migrate |
 | libged | Still directly links libdm/libbsg for retained compatibility | GED drawing, view objects, command results, faceplate, selection, snap/measure, framebuffer, and no-owned-scene paths use Obol/libimgstream facades |
-| qtcad/qged | qtcad links libdm; qged depends on dm_plugins | Visible rendering, input, readback, plugins, and qged draw/view workflows run through Obol without libdm/libbsg/dm_plugins |
+| qtcad/qged | qtcad still links libdm; qged links libdm transitively for fbserv but no longer depends on dm_plugins | Remaining input, readback, plugins, and qged view workflows run through Obol without libdm/libbsg; fbserv protocol moves to an image-stream protocol layer |
 | libtclcad/mged | libtclcad links libdm; mged hosts DM workflows; initial Obol DM attach/screengrab path exists and Obol refresh is high-level | View creation, refresh, input, faceplate, and readback use Obol/libimgstream paths |
-| libdm/libbsg | Compatibility display and scene layers | Framebuffer/display/image behavior is replaced by libimgstream/libicv/Obol display hosts, then libdm/libbsg are removed |
+| libdm/libbsg | Compatibility display and scene layers; fbserv protocol is backend-neutral but still located in libdm | Framebuffer protocol moves beside libimgstream/libicv, display/image behavior is replaced by Obol display hosts, then libdm/libbsg are removed |
 | utilities | Some direct libdm rows remain | Each use is deleted, routed through libimgstream/fb_compat, replaced by Obol readback/display, or assigned to libicv |

@@ -281,7 +281,7 @@ mesh_lod_context_create(const char *name)
 
     char dir[MAXPATHLEN];
     bu_dir(dir, MAXPATHLEN, BU_DIR_CACHE, NULL);
-    if (!bu_file_exists(dir, NULL))
+    if (dir[0] && !bu_file_exists(dir, NULL))
 	bu_mkdir(dir);
     bu_dir(dir, MAXPATHLEN, BU_DIR_CACHE, POP_CACHEDIR, NULL);
     if (!bu_file_exists(dir, NULL))

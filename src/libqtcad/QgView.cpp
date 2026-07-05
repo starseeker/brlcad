@@ -206,6 +206,12 @@ QgView::obolViewController()
     return canvas ? canvas->obolViewController() : nullptr;
 }
 
+QgCanvasBase *
+QgView::canvasBase()
+{
+    return canvas;
+}
+
 void
 QgView::set_view(qg_legacy_view *nv)
 {

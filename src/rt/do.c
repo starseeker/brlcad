@@ -57,29 +57,12 @@
 extern FILE *fdopen(int fd, const char *mode);
 #endif
 
-/***** Variables shared with viewing model *** */
-extern FILE *outfp;			/* optional pixel output file */
-extern mat_t view2model;
-extern mat_t model2view;
-/***** end of sharing with viewing model *****/
-
-/***** variables shared with opt.c *****/
-extern int	orientflag;		/* 1 means orientation has been set */
-/***** end variables shared with opt.c *****/
-
-/***** variables shared with rt.c *****/
-extern char *string_pix_start;	/* string spec of starting pixel */
-extern char *string_pix_end;	/* string spec of ending pixel */
-extern int finalframe;		/* frame to halt at */
-/***** end variables shared with rt.c *****/
-
 void def_tree(register struct rt_i *rtip);
 void do_ae(double azim, double elev);
 void res_pr(void);
 void memory_summary(void);
 extern void worker(int cpu, void *arg);
 
-extern struct icv_image *bif;
 unsigned char *pixmap = NULL; /**< Pixel Map for rerendering of black pixels */
 
 
@@ -526,8 +509,6 @@ parse_deprecated(const struct bu_structparse *UNUSED(sp), const char *name, void
 }
 
 
-/* viewing module specific variables */
-extern struct bu_structparse view_parse[];
 static int rt_bot_minpieces_deprecated = 0;
 
 /* Per-application CLINE beam radius override.  Negative means "no override".
@@ -628,11 +609,6 @@ def_tree(register struct rt_i *rtip)
 
 /*********************************************************************************/
 #ifdef USE_OPENCL
-/* from opt.c */
-extern double haze[3];
-extern double airdensity;
-
-
 static unsigned int clt_mode;           /* Active render buffers */
 static uint8_t clt_o[2];		/* Sub buffer offsets in bytes: {CLT_COLOR, MAX} */
 

@@ -463,5 +463,5 @@ The view-math migration is complete when:
 * direct-camera parity tests prove the row-axis orientation import;
 * perspective either uses an explicit matrix path or is explicitly excluded
   from the orthographic bridge tests; and
-* system OpenGL and OSMesa/swrast qtcad paths use the same libbrlobol view
-  adapter.
+* qtcad visible Qt/system-OpenGL presentation and OSMesa/offscreen readback use
+  the same libbrlobol view adapter.

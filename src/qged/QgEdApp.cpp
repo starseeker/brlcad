@@ -340,14 +340,12 @@ QgEdApp::QgEdApp(int &argc, char *argv[], int swrast_mode, int quad_mode) :QAppl
     QTextStream stream(&file);
     setStyleSheet(stream.readAll());
 
-    // Backend policy:
-    //   - dm-qtgl  (hardware OpenGL via QgGL) is the default when BRL-CAD is
-    //     built with OpenGL support.  It delegates rendering to the system GPU
-    //     and is substantially faster than software rasterization for
-    //     interactive 3-D work.
-    //   - dm-swrast (Mesa OSMesa software rasterizer via QgSW) is the fallback
-    //     selected by the user with the -s / --swrast command-line flag, or
-    //     automatically used in environments where OpenGL is unavailable.
+    // Canvas policy:
+    //   - QgGL is the default when BRL-CAD is built with OpenGL support.  It
+    //     presents Obol/Coin output through a QOpenGLWidget.
+    //   - QgSW is selected by the -s / --swrast command-line flag or when
+    //     OpenGL is unavailable.  It presents Obol/Coin output through an
+    //     offscreen render/readback path.
     //
     // The QgEdMainWindow constructor expects a QgView_* canvas type constant
     // (QgView_GL or QgView_SW), not a raw swrast_mode boolean.  The
@@ -355,7 +353,7 @@ QgEdApp::QgEdApp(int &argc, char *argv[], int swrast_mode, int quad_mode) :QAppl
 #ifdef BRLCAD_OPENGL
     int canvas_type = swrast_mode ? QgView_SW : QgView_GL;
 #else
-    int canvas_type = QgView_SW; /* No OpenGL support — software rasterizer only */
+    int canvas_type = QgView_SW; /* No OpenGL support - offscreen presentation only */
 #endif
 
     // Create the windows
@@ -374,11 +372,8 @@ QgEdApp::QgEdApp(int &argc, char *argv[], int swrast_mode, int quad_mode) :QAppl
     m_obol_draw_observer_token = ged_draw_observer_add(gedp,
 	    &qged_obol_draw_observer, (void *)this);
 
-    // Unfortunately, there are technical differences involved with
-    // the embedded fb mechanisms depending on whether we are using
-    // the system native OpenGL or our fallback software rasterizer
-    int type = w->CurrentDisplay()->view_type();
-    qdm_configure_ged_fbserv_handlers(gedp, type);
+    // Embedded framebuffer handling is routed through the active Obol view.
+    qdm_configure_ged_fbserv_handlers(gedp, w->CurrentDisplay());
 
     // Read the saved window size, if any
     QSettings settings("BRL-CAD", "QGED");
@@ -401,7 +396,7 @@ QgEdApp::QgEdApp(int &argc, char *argv[], int swrast_mode, int quad_mode) :QAppl
     w->show();
 
     // If the 3D view didn't set up appropriately, let the user know they
-    // should try the fallback SW rendering mode.  We must do this after the
+    // should try the offscreen rendering mode.  We must do this after the
     // show() call, because it isn't until after that point that we know
     // whether the setup of the system's OpenGL context setup was successful.
     //
@@ -414,7 +409,7 @@ QgEdApp::QgEdApp(int &argc, char *argv[], int swrast_mode, int quad_mode) :QAppl
     // and recover the OpenGL state of the main app, we might still be able
     // to achieve an automatic transparent fallback feature for the end user.
     if (!w->isValid3D()) {
-	bu_exit(EXIT_FAILURE, "OpenGL failed to initialize properly.  Recommend running qged with '-s' option to use fallback swrast rendering.");
+	bu_exit(EXIT_FAILURE, "OpenGL failed to initialize properly.  Recommend running qged with '-s' option to use offscreen rendering.");
     }
 
     // Assign QGED specific open/close db handlers to the gedp

@@ -19,7 +19,7 @@
  */
 /** @file QgSW.cpp
  *
- * Qt widget for visualizing libosmesa OpenGL software rasterizer output.
+ * Qt widget for visualizing Obol/Coin output using offscreen readback.
  */
 
 #define USE_MGL_NAMESPACE 1
@@ -39,19 +39,6 @@
 #include "QgLegacyViewContext.h"
 #include "qtcad/QgSW.h"
 #include "rt/view.h"
-
-// Using the full BSG_VIEW_MIN/BSG_VIEW_MAX was causing drawing artifacts with moss I
-// in shaded mode (I think I was seeing the "Z-fighting" problem:
-// https://www.sjbaker.org/steve/omniv/love_your_z_buffer.html )
-//
-// Setting to (-1,1) clips geometry too quickly as we start to zoom in.
-// -100,100 seems to work, but may need a better long term solution to
-// this... maybe basing it on the currently visible object bounds?
-#define QTSW_ZMIN -100
-#define QTSW_ZMAX 100
-/* Background grey level used when capturing the viewport as an image.
- * Dark but not black, so the yellow wireframe is clearly visible. */
-#define QTSW_SCREENSHOT_BG_GREY 40
 
 static thread_local qg_legacy_fb *qgsw_bridge_framebuffer = nullptr;
 
@@ -84,13 +71,7 @@ QgSW::QgSW(QWidget *parent)
     d->v = d->local_v;
     qgcanvas_sync_obol_camera(*d);
 
-    // Don't dm_open until we have the view.
     d->dmp = nullptr;
-
-    // If we weren't supplied with a framebuffer, allocate one.
-    // We don't open it until we have the dmp.
-    if (!d->ifp)
-d->ifp = qg_legacy_view_framebuffer_raw_create("swrast");
 
     // This is an important Qt setting for interactivity - it allowing key
     // bindings to propagate to this widget and trigger actions such as
@@ -108,7 +89,7 @@ QgCanvasBridgeFactory::create_swrast(QWidget *parent, qg_legacy_fb *fbp)
 QgSW::~QgSW()
 {
     qg_legacy_view_dm_close(d->dmp);
-    qg_legacy_view_framebuffer_release(d->ifp, d->m_init);
+    qg_legacy_view_framebuffer_release(d->ifp, 0);
     qgcanvas_destroy_obol(*d);
     qg_legacy_view_local_free(d->local_v);
     d->local_v = nullptr;
@@ -126,7 +107,7 @@ QgSW::view() const
 bool
 QgSW::legacyBackendInitialized() const
 {
-    return d->dmp != nullptr;
+    return false;
 }
 
 BRLObolViewController *
@@ -177,93 +158,28 @@ void QgSW::queued_update()
 
 void QgSW::paintEvent(QPaintEvent *e)
 {
-    // Without a view, SWrast can't work
     if (!d->v)
 return;
 
-    if (qgcanvas_obol_scene_has_content(*d)) {
-	QImage obolImage;
-	qgcanvas_get_obol_viewport_image(*d, this, obolImage, true);
-	if (!obolImage.isNull()) {
-	    QPainter painter(this);
-	    painter.drawImage(QPoint(0, 0), obolImage);
-	    QWidget::paintEvent(e);
-	    return;
-	}
-    }
-
-    if (!d->m_init) {
-
-if (!d->dmp) {
-    // swrast will need to know the window size
     QSize rsize = qgcanvas_render_size(this);
     qg_legacy_view_dimensions_set(d->v, rsize.width(), rsize.height());
+    qgcanvas_sync_obol_viewport(*d, this);
+    qgcanvas_sync_obol_camera(*d);
+    qgcanvas_request_obol_render_if_idle(*d, "qtsw-paint");
 
-    d->dmp = qg_legacy_view_dm_open_swrast(d->v, this);
-    if (!d->dmp)
-return;
-
-    // If we have a framebuffer, now we can open it
-    (void)qg_legacy_view_dm_framebuffer_setup_existing(d->ifp, d->dmp);
-}
-
-(void)qg_legacy_view_dm_setup_swrast(d->dmp, QTSW_ZMIN, QTSW_ZMAX);
-
-qg_legacy_view_dm_bind(d->v, d->dmp);
-qg_legacy_view_dm_sync_dimensions(d->v, d->dmp);
-
-// Ready to go
-d->m_init = true;
-
-emit init_done();
+    QImage image;
+    qgcanvas_get_obol_viewport_image(*d, this, image, true);
+    if (image.isNull()) {
+	QWidget::paintEvent(e);
+	return;
     }
-
-    if (!d->m_init || !d->dmp)
-return;
-
-    // Go ahead and set the flag, but (unlike the rendering thread
-    // implementation) we need to do the draw routine every time in paintGL, or
-    // we end up with unrendered frames.
-    qg_legacy_view_dm_native_repaint_pending_set(d->dmp, 0);
-
-    QSize rsize = qgcanvas_render_size(this);
-    if (qg_legacy_view_dm_width_get(d->dmp) != rsize.width() ||
-	    qg_legacy_view_dm_height_get(d->dmp) != rsize.height()) {
-qg_legacy_view_dm_dimensions_set(d->dmp, rsize.width(), rsize.height());
-qg_legacy_view_dm_configure_window(d->dmp, 0);
-if (d->ifp)
-    qg_legacy_view_framebuffer_configure(d->ifp, rsize.width(),
-	    rsize.height());
-    }
-    qg_legacy_view_dm_sync_dimensions(d->v, d->dmp);
-
-    qg_legacy_view_dm_background_restore(d->dmp);
-
-    (void)rt_view_context_refresh_consume(qg_legacy_view_to_context(d->v));
-    qg_legacy_view_dm_draw_begin(d->dmp);
-    qg_legacy_view_dm_draw(d->v);
-    qg_legacy_view_dm_draw_end(d->dmp);
-    rt_view_context_refresh_complete(qg_legacy_view_to_context(d->v));
-
-    // Set up a QImage with the rendered output..
-    unsigned char *dm_image;
-    if (qg_legacy_view_dm_display_image_get(d->dmp, &dm_image, 0, 1)) {
-return;
-    }
-    QImage image(dm_image, qg_legacy_view_dm_width_get(d->dmp),
-	    qg_legacy_view_dm_height_get(d->dmp), QImage::Format_RGBX8888);
-    image.setDevicePixelRatio(devicePixelRatioF());
     QPainter painter(this);
-    painter.translate(0, height());
-    painter.scale(1.0, -1.0);
     painter.drawImage(QPoint(0, 0), image);
-    if (qgcanvas_obol_scene_has_content(*d)) {
-	QImage obolImage;
-	qgcanvas_get_obol_viewport_image(*d, this, obolImage, true);
-	if (!obolImage.isNull()) {
-	    painter.resetTransform();
-	    painter.drawImage(QPoint(0, 0), obolImage);
-	}
+    (void)rt_view_context_refresh_consume(qg_legacy_view_to_context(d->v));
+    rt_view_context_refresh_complete(qg_legacy_view_to_context(d->v));
+    if (!d->obol_paint_initialized) {
+	d->obol_paint_initialized = true;
+	emit init_done();
     }
     QWidget::paintEvent(e);
 }
@@ -272,16 +188,9 @@ void QgSW::resizeEvent(QResizeEvent *e)
 {
     QWidget::resizeEvent(e);
     qgcanvas_sync_obol_viewport(*d, this);
-    if (d->dmp && d->v) {
+    if (d->v) {
 	QSize rsize = qgcanvas_render_size(this);
-	qg_legacy_view_dm_dimensions_set(d->dmp, rsize.width(), rsize.height());
 	qg_legacy_view_dimensions_set(d->v, rsize.width(), rsize.height());
-	qg_legacy_view_dm_configure_window(d->dmp, 0);
-	if (d->ifp) {
-	    qg_legacy_view_framebuffer_configure(d->ifp,
-		    rt_view_context_width_get(qg_legacy_view_to_context(d->v)),
-		    rt_view_context_height_get(qg_legacy_view_to_context(d->v)));
-	}
 	qgcanvas_request_update(*d, RT_VIEW_REFRESH_VIEW | RT_VIEW_REFRESH_FRAMEBUFFER);
 	emit changed();
     }
@@ -446,18 +355,10 @@ emit changed();
 
 void QgSW::save_image()
 {
-    // Set up a QImage with the rendered output..
-    unsigned char *dm_image;
-    if (qg_legacy_view_dm_display_image_get(d->dmp, &dm_image, 0, 1)) {
-return;
-    }
-    QImage image(dm_image, qg_legacy_view_dm_width_get(d->dmp),
-	    qg_legacy_view_dm_height_get(d->dmp), QImage::Format_RGBX8888);
-#if QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
-    image.flipped(Qt::Vertical).save("file.png");
-#else
-    image.mirrored(false, true).save("file.png");
-#endif
+    QImage image;
+    get_viewport_image(image);
+    if (!image.isNull())
+	image.save("file.png");
 }
 
 /* Render the current view to a file without relying on Qt paint events.
@@ -470,64 +371,13 @@ void QgSW::render_to_file(const QString &filename)
 img.convertToFormat(QImage::Format_RGB32).save(filename);
 }
 
-/* Render the current view and return the pixel data.  Obol content is captured
- * through Obol readback; legacy DM capture remains the fallback. */
+/* Render the current Obol view and return the pixel data. */
 void QgSW::get_viewport_image(QImage &img)
 {
     img = QImage();  /* null sentinel */
     if (!d->v) return;
 
-    if (qgcanvas_obol_scene_has_content(*d)) {
-	qgcanvas_get_obol_viewport_image(*d, this, img, true);
-	if (!img.isNull())
-	    return;
-    }
-
-    /* Ensure DM is initialised (reuse render_to_file init logic) */
-    if (!d->m_init) {
-if (!d->dmp) {
-    int rw = (width()  > 50) ? width()  : 800;
-    int rh = (height() > 50) ? height() : 600;
-    qg_legacy_view_dimensions_set(d->v, rw, rh);
-    d->dmp = qg_legacy_view_dm_open_swrast(d->v, this);
-    if (!d->dmp) return;
-}
-(void)qg_legacy_view_dm_setup_swrast(d->dmp, QTSW_ZMIN, QTSW_ZMAX);
-qg_legacy_view_dm_bind(d->v, d->dmp);
-qg_legacy_view_dm_sync_dimensions(d->v, d->dmp);
-d->m_init = true;
-    }
-    if (!d->dmp) return;
-
-    /* Render */
-    unsigned char bg1[3] = {0, 0, 0};
-    unsigned char bg2[3] = {0, 0, 0};
-    (void)qg_legacy_view_dm_background_get(d->dmp, bg1, bg2);
-    /* Use a dark-grey background for better visibility in screenshots;
-     * fall through to the stored background if it is already non-black. */
-    if (bg1[0] == 0 && bg1[1] == 0 && bg1[2] == 0 &&
-    bg2[0] == 0 && bg2[1] == 0 && bg2[2] == 0) {
-/* Default black: override with a neutral dark background */
-bg1[0] = bg1[1] = bg1[2] = QTSW_SCREENSHOT_BG_GREY;
-bg2[0] = bg2[1] = bg2[2] = QTSW_SCREENSHOT_BG_GREY;
-    }
-    qg_legacy_view_dm_background_set(d->dmp, bg1, bg2);
-    qg_legacy_view_dm_load_current_model2view(d->dmp, d->v, 0);
-    (void)rt_view_context_refresh_consume(qg_legacy_view_to_context(d->v));
-    qg_legacy_view_dm_draw_begin(d->dmp);
-    qg_legacy_view_dm_draw(d->v);
-    qg_legacy_view_dm_draw_end(d->dmp);
-    rt_view_context_refresh_complete(qg_legacy_view_to_context(d->v));
-
-    unsigned char *vp_image = nullptr;
-    if (qg_legacy_view_dm_display_image_get(d->dmp, &vp_image, 1, 1) ||
-	    !vp_image)
-	return;
-    /* Copy pixel data into a QImage (QImage doesn't own vp_image) */
-    img = QImage(vp_image, qg_legacy_view_dm_width_get(d->dmp),
-	    qg_legacy_view_dm_height_get(d->dmp),
- QImage::Format_RGBA8888).copy();
-    qg_legacy_view_dm_display_image_release(vp_image);
+    qgcanvas_get_obol_viewport_image(*d, this, img, true);
 }
 
 void QgSW::get_obol_viewport_image(QImage &img)

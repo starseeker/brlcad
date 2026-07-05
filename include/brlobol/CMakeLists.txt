@@ -8,6 +8,7 @@ set(
   edit_preview.h
   evaluated_wire.h
   export_action.h
+  framebuffer.h
   grid.h
   headless_window_host.h
   hud_label_overlay.h

@@ -301,9 +301,9 @@ brlobol_draw_cache_ensure_root(void)
     char dir[MAXPATHLEN];
 
     bu_dir(dir, MAXPATHLEN, BU_DIR_CACHE, NULL);
-    if (!bu_file_exists(dir, NULL))
+    if (dir[0] && !bu_file_exists(dir, NULL))
 	bu_mkdir(dir);
-    if (!bu_file_exists(dir, NULL))
+    if (dir[0] && !bu_file_exists(dir, NULL))
 	return 0;
 
     bu_dir(dir, MAXPATHLEN, BU_DIR_CACHE, BRLOBOL_DRAW_CACHE_DIR, NULL);

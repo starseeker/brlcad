@@ -1382,6 +1382,24 @@ ged_obol_apply_view_lod_policy(struct ged *gedp,
 }
 
 static int
+ged_obol_view_lod_mesh_enabled(struct ged *gedp,
+			       void *view_ctx)
+{
+    if (!gedp)
+	return 0;
+
+    void *policy_view = view_ctx ? view_ctx : ged_view_active_ctx(gedp);
+    if (!policy_view)
+	return 0;
+
+    ged_draw_view_lod_policy policy;
+    if (!ged_draw_view_context_lod_policy_get(&policy, policy_view))
+	return 0;
+
+    return policy.mesh_enabled ? 1 : 0;
+}
+
+static int
 ged_obol_replace_path(struct ged *gedp,
 		      void *view_ctx,
 		      struct db_i *dbip,
@@ -1395,8 +1413,8 @@ ged_obol_replace_path(struct ged *gedp,
 	return 0;
 
     ged_obol_source_state source_state = use_retained_state ?
-	ged_obol_find_source_state(gedp, view_ctx, path, ged_draw_mode) :
-	ged_obol_source_state();
+					 ged_obol_find_source_state(gedp, view_ctx, path, ged_draw_mode) :
+					 ged_obol_source_state();
     const bool retained_state_valid = source_state.valid;
     const uint32_t retained_source_revision = source_state.sourceRevision;
     const uint32_t retained_inputs_revision = source_state.inputsRevision;
@@ -1504,7 +1522,9 @@ ged_obol_replace_path(struct ged *gedp,
 	changed = 1;
     if (!preserve_external_current) {
 	int role_flags = SoBRLDatabaseSource::REALIZATION_ROLE_NONE;
-	if (ged_draw_mode == GED_DRAW_MODE_EVAL_POINTS)
+	if (ged_draw_mode == GED_DRAW_MODE_EVAL_POINTS ||
+	    (ged_draw_mode == GED_DRAW_MODE_WIRE &&
+	     ged_obol_view_lod_mesh_enabled(gedp, view_ctx)))
 	    role_flags |= SoBRLDatabaseSource::REALIZATION_ROLE_MESH;
 	if (scene->setDatabaseSourceInstanceRealizationRoleFlags(
 		instance_key.c_str(), role_flags) >= 0)
@@ -2245,6 +2265,56 @@ ged_obol_attached_controller_for_view(struct ged *gedp, void *view_ctx)
     }
 
     return NULL;
+}
+
+static void
+ged_obol_advance_lod_policy_revision(BRLObolViewController *controller)
+{
+    if (!controller)
+	return;
+
+    const uint64_t current_revision = controller->getLodPolicyRevision();
+    controller->setLodPolicyRevision(
+	current_revision == UINT64_MAX ? 1 : current_revision + 1);
+}
+
+extern "C" int
+ged_draw_obol_view_lod_policy_changed(struct ged *gedp, void *view_ctx)
+{
+    ged_obol_attached_controller *entry =
+	ged_obol_attached_controller_for_view(gedp, view_ctx);
+    if (!entry || !entry->view_controller)
+	return 0;
+
+    BRLObolViewController *view_controller = entry->view_controller;
+    view_controller->clearViewLodState();
+    ged_obol_advance_lod_policy_revision(view_controller);
+
+    SoBRLSceneController *scene = entry->scene_controller;
+    if (!scene)
+	scene = view_controller->getSceneController();
+
+    int changed = 1;
+    if (scene) {
+	const int independent_view =
+	    ged_obol_view_scope_is_independent(view_ctx);
+	const int source_count = scene->getDatabaseSourceCount();
+	for (int i = 0; i < source_count; i++) {
+	    BRLObolDatabaseSourceSummary summary;
+	    if (!scene->getDatabaseSourceSummary(i, summary) ||
+		!summary.valid || summary.instanceKey.getLength() == 0)
+		continue;
+	    if (independent_view &&
+		!ged_obol_database_source_instance_in_scope(summary, view_ctx))
+		continue;
+	    if (ged_obol_apply_view_lod_policy(gedp, view_ctx, scene,
+					       summary.instanceKey.getString()) > 0)
+		changed = 1;
+	}
+    }
+
+    view_controller->requestRender("view-lod-policy");
+    return changed;
 }
 
 static size_t
@@ -13358,9 +13428,9 @@ ged_obol_apply_path_placement(struct ged *gedp,
     int applied = 0;
     if (ret == 0) {
 	int scoped = ged_draw_obol_database_source_publication_begin(gedp,
-			view_ctx, ged_draw_mode);
+		     view_ctx, ged_draw_mode);
 	applied = ged_draw_obol_database_source_set_placement_for_path(gedp,
-		      path, 1, state.ts_mat, 0, NULL, 0, 0);
+		  path, 1, state.ts_mat, 0, NULL, 0, 0);
 	if (scoped)
 	    ged_draw_obol_database_source_publication_end(gedp);
     }
@@ -13385,12 +13455,8 @@ ged_obol_apply_cached_path_metadata(struct ged *gedp,
 	return 0;
 
     if (brlobol_draw_path_metadata_cache_get(gedp->dbip, metadata_path,
-	    &metadata) != BRLCAD_OK &&
-	brlobol_draw_path_metadata_cache_refresh(gedp->dbip,
-	    metadata_path, NULL) == BRLCAD_OK) {
-	(void)brlobol_draw_path_metadata_cache_get(gedp->dbip,
-	    metadata_path, &metadata);
-    }
+	    &metadata) != BRLCAD_OK)
+	return 0;
     if (!metadata.directoryFound)
 	return 0;
 
@@ -13401,6 +13467,38 @@ ged_obol_apply_cached_path_metadata(struct ged *gedp,
     if (status)
 	status->metadata_applied++;
     return 1;
+}
+
+static int
+ged_obol_apply_index_record_metadata(
+    struct ged *gedp,
+    const char *path,
+    const struct ged_db_index_record *record,
+    struct ged_draw_obol_source_expansion_status *status)
+{
+    if (!record || !record->valid || !record->dp)
+	return ged_obol_apply_cached_path_metadata(gedp, path, status);
+
+    struct BRLObolDrawMetadataRecord metadata;
+    brlobol_draw_metadata_record_init(&metadata);
+    metadata.directoryFound = 1;
+    metadata.isPhony = (record->dp->d_addr == RT_DIR_PHONY_ADDR) ? 1 : 0;
+    metadata.flags = record->dp->d_flags;
+    metadata.majorType = record->dp->d_major_type;
+    metadata.minorType = record->dp->d_minor_type;
+    metadata.isSolid = (record->dp->d_flags & RT_DIR_SOLID) ? 1 : 0;
+    metadata.isComb = (record->dp->d_flags & RT_DIR_COMB) ? 1 : 0;
+    metadata.isRegion = (record->dp->d_flags & RT_DIR_REGION) ? 1 : 0;
+    metadata.isHidden = (record->dp->d_flags & RT_DIR_HIDDEN) ? 1 : 0;
+
+    if (ged_draw_obol_database_source_apply_draw_metadata_for_path(gedp,
+	    path, &metadata)) {
+	if (status)
+	    status->metadata_applied++;
+	return 1;
+    }
+
+    return ged_obol_apply_cached_path_metadata(gedp, path, status);
 }
 
 static int
@@ -13420,13 +13518,13 @@ ged_obol_publish_aabb_proxy_for_path(
     struct BRLObolDrawProxyRecord record;
     brlobol_draw_proxy_record_init(&record);
     if (brlobol_draw_proxy_cache_get(gedp->dbip, cache_name,
-	    BRLOBOL_DRAW_CACHE_PROXY_AABB, &record) != BRLCAD_OK) {
+				     BRLOBOL_DRAW_CACHE_PROXY_AABB, &record) != BRLCAD_OK) {
 	if (!refresh_missing)
 	    return 0;
 	if (brlobol_draw_proxy_cache_refresh(gedp->dbip, cache_name,
-		BRLOBOL_DRAW_CACHE_PROXY_AABB, NULL) != BRLCAD_OK ||
+					     BRLOBOL_DRAW_CACHE_PROXY_AABB, NULL) != BRLCAD_OK ||
 	    brlobol_draw_proxy_cache_get(gedp->dbip, cache_name,
-		BRLOBOL_DRAW_CACHE_PROXY_AABB, &record) != BRLCAD_OK)
+					 BRLOBOL_DRAW_CACHE_PROXY_AABB, &record) != BRLCAD_OK)
 	    return 0;
     }
 
@@ -13439,9 +13537,9 @@ ged_obol_publish_aabb_proxy_for_path(
 				 points, commands);
 
     int scoped = ged_draw_obol_database_source_publication_begin(gedp,
-		     view_ctx, ged_draw_mode);
+		 view_ctx, ged_draw_mode);
     int published = ged_draw_obol_database_source_publish_line_set_for_path(
-	gedp, path, (const point_t *)points, commands, 24);
+			gedp, path, (const point_t *)points, commands, 24);
     if (published && status)
 	status->proxy_published++;
 
@@ -13480,7 +13578,7 @@ ged_obol_submit_child_aabb_prewarm(
 	return 0;
 
     BRLObolRtProxyProvider *provider = new (std::nothrow)
-	BRLObolRtProxyProvider;
+    BRLObolRtProxyProvider;
     if (!provider)
 	return 0;
 
@@ -13544,7 +13642,7 @@ ged_draw_obol_database_source_prewarm_child_aabb_proxies(
 
     std::vector<ged_db_index_id> path_ids(path_len);
     if (ged_db_index_path_resolve(gedp, path, path_ids.data(),
-	    path_ids.size()) != path_len)
+				  path_ids.size()) != path_len)
 	return 0;
 
     const ged_db_index_id parent_id = path_ids.back();
@@ -13609,7 +13707,7 @@ ged_draw_obol_database_source_prewarm_child_aabb_proxies(
 	struct BRLObolDrawCacheStatus cache_status;
 	brlobol_draw_cache_status_init(&cache_status);
 	if (brlobol_draw_proxy_cache_status(gedp->dbip, child_name,
-		BRLOBOL_DRAW_CACHE_PROXY_AABB, &cache_status) == BRLCAD_OK &&
+					    BRLOBOL_DRAW_CACHE_PROXY_AABB, &cache_status) == BRLCAD_OK &&
 	    cache_status.hasCachedPayload) {
 	    if (status)
 		status->already_cached++;
@@ -13707,7 +13805,7 @@ ged_draw_obol_database_source_expand_children(
 
     std::vector<ged_db_index_id> path_ids(path_len);
     if (ged_db_index_path_resolve(gedp, path, path_ids.data(),
-	    path_ids.size()) != path_len)
+				  path_ids.size()) != path_len)
 	return 0;
 
     const ged_db_index_id parent_id = path_ids.back();
@@ -13776,8 +13874,8 @@ ged_draw_obol_database_source_expand_children(
 	}
 
 	const int replace_changed = ged_obol_replace_path(gedp, view_ctx,
-	    gedp->dbip, child_path.c_str(), ged_draw_mode, source_revision,
-	    scene, 0);
+				    gedp->dbip, child_path.c_str(), ged_draw_mode, source_revision,
+				    scene, 0);
 	if (replace_changed < 0) {
 	    if (status)
 		status->skipped_invalid++;
@@ -13788,12 +13886,12 @@ ged_draw_obol_database_source_expand_children(
 
 	(void)ged_obol_apply_path_placement(gedp, view_ctx,
 					    child_path.c_str(), ged_draw_mode);
-	(void)ged_obol_apply_cached_path_metadata(gedp, child_path.c_str(),
-						  status);
+	(void)ged_obol_apply_index_record_metadata(gedp, child_path.c_str(),
+		&child.record, status);
 
 	if (!child.record.is_comb) {
 	    (void)ged_obol_publish_aabb_proxy_for_path(gedp, view_ctx,
-		child_path.c_str(), child_name, ged_draw_mode, 1, status);
+		    child_path.c_str(), child_name, ged_draw_mode, 1, status);
 	}
 
 	if (status) {
@@ -14208,7 +14306,7 @@ ged_draw_obol_database_source_apply_draw_metadata_for_path(
 	return 0;
 
     SoBRLDatabaseSource *source = scene ?
-	scene->findDatabaseSourceInstance(source_instance_key.c_str()) : NULL;
+				  scene->findDatabaseSourceInstance(source_instance_key.c_str()) : NULL;
     if (!source)
 	return 0;
 
@@ -14573,9 +14671,9 @@ ged_obol_apply_cached_path_metadata_to_scene(
     if (brlobol_draw_path_metadata_cache_get(gedp->dbip, metadata_path,
 	    &metadata) != BRLCAD_OK &&
 	brlobol_draw_path_metadata_cache_refresh(gedp->dbip,
-	    metadata_path, NULL) == BRLCAD_OK) {
+		metadata_path, NULL) == BRLCAD_OK) {
 	(void)brlobol_draw_path_metadata_cache_get(gedp->dbip,
-	    metadata_path, &metadata);
+		metadata_path, &metadata);
     }
     if (!metadata.directoryFound)
 	return 0;
@@ -14610,7 +14708,7 @@ ged_obol_replace_deferred_paths(
     int changed = 0;
     for (const std::string &path : paths) {
 	if (ged_obol_replace_path(gedp, view_ctx, dbip, path.c_str(),
-		ged_draw_mode, source_revision, scene, 0) > 0)
+				  ged_draw_mode, source_revision, scene, 0) > 0)
 	    changed = 1;
 	if (ged_obol_apply_cached_path_metadata_to_scene(gedp, scene,
 		view_ctx, path.c_str(), ged_draw_mode))

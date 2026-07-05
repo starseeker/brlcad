@@ -30,6 +30,7 @@
 #include "bu/getopt.h"
 /* private */
 #include "./iges_struct.h"
+#include "./iges_extern.h"
 #include "./iges_types.h"
 #include "brlcad_ident.h"
 

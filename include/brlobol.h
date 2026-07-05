@@ -16,6 +16,7 @@
 #include "brlobol/edit_preview.h"
 #include "brlobol/evaluated_wire.h"
 #include "brlobol/export_action.h"
+#include "brlobol/framebuffer.h"
 #include "brlobol/grid.h"
 #include "brlobol/headless_window_host.h"
 #include "brlobol/hud_label_overlay.h"

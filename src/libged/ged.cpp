@@ -413,8 +413,10 @@ ged_free(struct ged *gedp)
 
     bu_ptbl_free(&gedp->ged_subp);
 
-    if (gedp->ged_fbs)
+    if (gedp->ged_fbs) {
+	ged_obol_fbserv_release(gedp);
 	BU_PUT(gedp->ged_fbs, struct fbserv_obj);
+    }
 
     bu_ptbl_free(&gedp->editor_opts);
     bu_ptbl_free(&gedp->terminal_opts);

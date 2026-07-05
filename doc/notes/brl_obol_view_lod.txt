@@ -82,6 +82,13 @@ clear LoD payloads unless they force a full scene rebuild.  Camera and LoD
 policy changes advance view/policy revisions and submit new LoD requests; stale
 results are rejected by revision checks.
 
+For Obol-attached views, `view lod` policy changes are applied through the
+GED/Obol bridge rather than by forcing a legacy redraw.  The bridge clears the
+attached controller's `BRLObolViewLodState`, advances its LoD policy revision,
+refreshes realization view policy on source instances in the affected view
+scope, and requests an Obol render.  Non-Obol views still use legacy redraw as
+the fallback update mechanism.
+
 Memory Policy
 -------------
 
@@ -213,6 +220,15 @@ environments for the same `.DbDrawCache/mesh_lod.format` store.  Mesh LoD
 cache key/payload reads, write transactions, and clear operations are
 serialized per cache context so progressive worker threads cannot observe a
 ready status and then fail to load the same payload from a racing cache handle.
+The underlying libbu LMDB cache environment is opened with `MDB_NOTLS`, so
+reader slots are associated with transaction objects rather than worker
+threads.  This is required for BRLObol's worker-thread cache access pattern and
+prevents `MDB_BAD_RSLOT` failures during concurrent LoD cache reads/writes.
+The cache filesystem setup is also defensive about cache-root resolution:
+`bu_mkdir` ignores empty paths, libbrlobol skips explicit creation of an empty
+`BU_DIR_CACHE` root, and `bu_cache_open` builds relative cache component paths
+under `.` if `BU_DIR_CACHE` resolves empty.  Progressive workers must never
+turn `.DbDrawCache` setup into attempts to create `""` or `/.DbDrawCache`.
 The old librt `db_mesh_lod_*`/`rt_mesh_lod_*` facade and per-`db_i`
 mesh-cache state were removed.
 
@@ -261,6 +277,13 @@ source root already traverses its child mesh shapes.  General source
 collection for picking, snap, export, measure, and exact-detail matching stays
 pointer-based so those tools can still reason about the actual scene objects
 they traversed.
+
+For fast large-root shaded display, shaded-BoT representation is explicitly a
+hybrid.  BoT leaves are realized as mesh shapes directly from the BoT primitive
+data; non-BoT leaves remain wire/vlist shapes and must not force full CSG/NMG
+tessellation merely because the view wants shaded BoT LoD.  Full shaded CSG
+realization remains a separate, more expensive mode with different scheduling
+requirements.
 
 libged exposes the low-level service controls as
 `view lod service status|start|stop|poll`.  The Obol DM backend also submits

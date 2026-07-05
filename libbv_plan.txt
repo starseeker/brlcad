@@ -39,6 +39,7 @@ in the dependency graph.
 
 Implemented native librt view context:
 
+* `src/librt/view_context_adapters.c`
 * `src/librt/view_context_native.c`
 * `src/librt/view_context_private.h`
 
@@ -68,7 +69,10 @@ Native scene/interaction behavior is deliberately not implemented in libbv.
 Pick, selection, feature, polygon, line-set, and render diagnostic operations
 use installed adapters when present and otherwise return neutral empty/no-op
 results for native contexts.  That prevents accidental BSG storage creation
-while Obol/libbrlobol caller migration continues.
+while Obol/libbrlobol caller migration continues.  The adapter registries for
+scene, feature, polygon, and selection are now isolated in
+`view_context_adapters.c`; the explicit BSG source only consumes those
+registry helpers while public wrapper dispatch is being split.
 
 Current verification:
 
@@ -78,9 +82,10 @@ Current verification:
 
 Current remaining problem:
 
-* The native RT context is in its own source file, but public neutral dispatch
-  still lives in `src/librt/view_legacy_bsg.c`.  Split neutral dispatch into a
-  non-legacy file once caller migration stabilizes.
+* The native RT context and neutral adapter registries are in their own source
+  files, but many public neutral RT view wrappers still live in
+  `src/librt/view_legacy_bsg.c`.  Split those wrappers into a non-legacy file
+  once caller migration stabilizes.
 * GED and qtcad now create/use native neutral view contexts for the focused
   Obol workflows, but no-owned-scene and older application paths still need
   retained adapters until they can attach/create Obol controllers.
@@ -113,6 +118,9 @@ Recent focused verification:
 
 * `ninja -C build libbrlobol libged ged_test_quad ged_test_mged_view_state`
 * `ctest --test-dir build -R '^(ged_test_mged_view_state|ged_test_drawing_quad)$' --timeout 240 --output-on-failure`
+* `ninja -C build librt rt_view_info rt_view_legacy_bsg`
+* `ctest --test-dir build -R '^(rt_view_info|rt_view_legacy_bsg)$' --output-on-failure`
+* `ctest --test-dir build -R '^bv_basic$' --output-on-failure`
 
 Target Ownership
 ----------------
@@ -203,10 +211,12 @@ Native RT context state may include:
   are transitioning.
 * Independent-scope scene refs and backend tags, but not scene storage.
 
-Do not put native RT context implementation in `view_legacy_bsg.c` long term.
-Prefer a new file such as `src/librt/view_context.c` or
-`src/librt/view_context_native.c`, leaving `view_legacy_bsg.c` for explicit
-BSG adapters only.
+Do not put native RT context implementation or neutral adapter registries in
+`view_legacy_bsg.c` long term.  `src/librt/view_context_native.c` owns native
+storage and `src/librt/view_context_adapters.c` owns context-bound adapter
+registries; the next split should move the remaining public neutral wrapper
+dispatch into a non-legacy source file, leaving `view_legacy_bsg.c` for
+explicit BSG adapters only.
 
 Phase 2: Switch neutral constructors to native/libbv
 
@@ -333,7 +343,9 @@ Deletion order:
    legacy `_bsg` adapter code needs it.
 3. Move `_bsg` adapter code out of the default librt build if possible, or
    isolate it behind a legacy component.
-4. Remove `_ged_drawtrees` dependencies from successful Obol draw paths.
+4. Remove `_ged_drawtrees` dependencies from successful Obol draw paths.  The
+   GED transaction path is done; remaining work is old `draw.c` internals and
+   unsupported application/no-owned-scene callers.
 5. Delete no-longer-used retained feature wrappers and direct BSG helper calls.
 6. Retire `rt/view_legacy_bsg.h` once no maintained callers need retained BSG
    view state.
@@ -408,6 +420,20 @@ Completed Work Items
 
        ninja -C build mged
        ctest --test-dir build -R '^(mged_obol_smoke|gsh_obol_smoke|brlobol_pivot_guard|ged_test_mged_view_state|ged_test_mged_shaded_mode|ged_test_rtwizard_view)$' --timeout 240 --output-on-failure
+19. Removed retained `_ged_drawtrees` fallback from GED draw transactions and
+    removed the old `draw.c` tree walker from the command path.  Supported
+    transaction draw modes now either realize through Obol/libbrlobol providers
+    or fail explicitly; `draw.c` is now the command-registration shim.
+
+       ninja -C build libged ged_test_obol_draw_sync ged_test_ged_draw_scene ged_test_view_command ged_test_draw
+       ctest --test-dir build -R '^(ged_test_obol_draw_sync|ged_test_view_command)$' --timeout 240 --output-on-failure
+       ctest --test-dir build -R 'ged_test_ged_draw_scene' --timeout 240 --output-on-failure
+20. qtcad ordinary canvas painting is Obol-only.  `QgGL` renders through Qt's
+    current `QOpenGLWidget` context for visible system OpenGL; `QgSW` presents
+    Obol readback through QWidget painting.  Obol readback now prefers a Qt
+    offscreen `QOpenGLContext`/`QOffscreenSurface` derived from the default
+    `QSurfaceFormat` and shared with Qt contexts when possible, falling back to
+    OSMesa only when Qt cannot provide a platform OpenGL context.
 
 Suggested Near-Term Work Items
 ------------------------------
@@ -436,8 +462,10 @@ Suggested Near-Term Work Items
 5. Continue deleting or isolating code that assumes each DM has a mirrored
    scene.  Shared operations should act on the GED-owned scene, while
    independent/view-local operations should act on the matching view endpoint.
-6. Move neutral RT view dispatch out of `view_legacy_bsg.c` once the remaining
-   caller-facing BSG fallback points are isolated.
+6. Continue moving neutral RT view dispatch out of `view_legacy_bsg.c`.
+   Adapter registries are already isolated in `view_context_adapters.c`; the
+   remaining public wrapper dispatch should move once caller-facing BSG
+   fallback points are isolated.
 7. Continue migrating scene/interaction features still routed through retained
    BSG fallback, especially no-owned-scene draw/view behavior, selection/snap
    resolution, faceplate/readback paths, and lower display-host assumptions.
@@ -452,7 +480,7 @@ Verification Gates
 
 Focused gates after libbv/librt view-context changes:
 
-* `ninja -C build libbv librt bv_test rt_view_info rt_view_legacy_bsg`
+* `ninja -C build libbv librt rt_view_info rt_view_legacy_bsg`
 * `ctest --test-dir build -R '^(bv_basic|rt_view_info|rt_view_legacy_bsg)$' --output-on-failure`
 * `ninja -C build libbrlobol libged libqtcad`
 * `ctest --test-dir build -R '^(brlobol_pivot_guard|ged_test_view_command|ged_test_obol_draw_sync|test_qtcad_obol_draw_sync)$' --timeout 240 --output-on-failure`

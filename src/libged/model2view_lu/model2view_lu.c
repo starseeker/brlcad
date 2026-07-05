@@ -40,6 +40,7 @@ ged_model2view_lu_core(struct ged *gedp, int argc, const char *argv[])
     mat_t model2view;
     point_t view_pt;
     double model_pt[3]; /* intentionally double for scan */
+    void *view_ctx = NULL;
     static const char *usage = "x y z";
     double l2bval = (gedp->dbip) ? gedp->dbip->dbi_local2base : 1.0;
     double b2lval = (gedp->dbip) ? gedp->dbip->dbi_base2local : 1.0;
@@ -59,7 +60,7 @@ ged_model2view_lu_core(struct ged *gedp, int argc, const char *argv[])
 	sscanf(argv[3], "%lf", &model_pt[Z]) != 1)
 	goto bad;
 
-    void *view_ctx = ged_view_active_ctx(gedp);
+    view_ctx = ged_view_active_ctx(gedp);
     ged_view_context_model2view_get(model2view, view_ctx);
     view_scale = ged_view_context_scale_get(view_ctx);
     VSCALE(model_pt, model_pt, l2bval);

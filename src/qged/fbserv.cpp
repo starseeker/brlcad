@@ -34,17 +34,26 @@
 #include "common.h"
 
 /* bu/ipc.h removed - transport handled by libpkg */
+#include "brlobol/framebuffer.h"
 #include "bu/log.h"
 #include "bu/malloc.h"
 #include "bu/vls.h"
+#include "dm.h"
 #include "dm/fbserv.h"
 #include "ged.h"
+#include "imgstream/fb_compat.h"
 #include "./fbserv.h"
-#include "QgLegacyViewDm.h"
-#include "qtcad/QgGL.h"
-#include "qtcad/QgSW.h"
+#include "qtcad/QgCanvasBase.h"
+#include "qtcad/QgObolWindowHost.h"
 #include "qtcad/QgTypes.h"
+#include "qtcad/QgView.h"
 #include <QElapsedTimer>
+#include <QSize>
+#include <QWidget>
+
+#include <algorithm>
+#include <cmath>
+#include <cstring>
 
 namespace {
 static const qint64 DRAIN_TIME_BUDGET_MS = 4;
@@ -57,12 +66,257 @@ qdm_fbserv_obj(void *fbsp)
     return static_cast<struct fbserv_obj *>(fbsp);
 }
 
-static qg_legacy_fb *
-qdm_framebuffer_handle(struct fbserv_obj *fbsp)
+class QDMObolFramebufferBridge {
+public:
+    explicit QDMObolFramebufferBridge(QgView *v = nullptr) :
+	framebuffer(&host)
+    {
+	setDisplay(v);
+    }
+
+    ~QDMObolFramebufferBridge()
+    {
+	framebuffer.close();
+    }
+
+    void setDisplay(QgView *v)
+    {
+	if (display != v) {
+	    framebuffer.close();
+	    display = v;
+	}
+	display = v;
+	host.setCanvas(display ? display->canvasBase() : nullptr);
+	framebuffer.setHost(&host);
+    }
+
+    int info(struct fbserv_fb_info *fbinfo)
+    {
+	if (!fbinfo || ensureFramebuffer() != 0)
+	    return -1;
+
+	BRLObolFramebufferInfo info;
+	if (framebuffer.info(&info) != 0)
+	    return -1;
+	fbinfo->max_width = info.max_width;
+	fbinfo->max_height = info.max_height;
+	fbinfo->width = info.width;
+	fbinfo->height = info.height;
+	return 0;
+    }
+
+    int clear(const unsigned char rgb[3])
+    {
+	return ensureFramebuffer() == 0 ? framebuffer.clear(rgb) : -1;
+    }
+
+    ssize_t read(int x, int y, unsigned char *rgb, size_t count)
+    {
+	return ensureFramebuffer() == 0 ? framebuffer.read(x, y, rgb, count) : -1;
+    }
+
+    ssize_t write(int x, int y, const unsigned char *rgb, size_t count)
+    {
+	return ensureFramebuffer() == 0 ? framebuffer.write(x, y, rgb, count) : -1;
+    }
+
+    int readrect(int xmin, int ymin, int w, int h, unsigned char *rgb)
+    {
+	return ensureFramebuffer() == 0 ? framebuffer.readrect(xmin, ymin, w, h, rgb) : -1;
+    }
+
+    int writerect(int xmin, int ymin, int w, int h, const unsigned char *rgb)
+    {
+	return ensureFramebuffer() == 0 ? framebuffer.writerect(xmin, ymin, w, h, rgb) : -1;
+    }
+
+    int bwreadrect(int xmin, int ymin, int w, int h, unsigned char *bw)
+    {
+	return ensureFramebuffer() == 0 ? framebuffer.bwreadrect(xmin, ymin, w, h, bw) : -1;
+    }
+
+    int bwwriterect(int xmin, int ymin, int w, int h, const unsigned char *bw)
+    {
+	return ensureFramebuffer() == 0 ? framebuffer.bwwriterect(xmin, ymin, w, h, bw) : -1;
+    }
+
+    int cursor(int mode, int x, int y)
+    {
+	return ensureFramebuffer() == 0 ? framebuffer.cursor(mode, x, y) : -1;
+    }
+
+    int getcursor(int *mode, int *x, int *y)
+    {
+	return ensureFramebuffer() == 0 ? framebuffer.getcursor(mode, x, y) : -1;
+    }
+
+    int setcursor(const unsigned char *bits, int xbits, int ybits, int xorig, int yorig)
+    {
+	return ensureFramebuffer() == 0 ? framebuffer.setcursor(bits, xbits, ybits, xorig, yorig) : -1;
+    }
+
+    int scursor(int mode, int x, int y)
+    {
+	return ensureFramebuffer() == 0 ? framebuffer.scursor(mode, x, y) : -1;
+    }
+
+    int window(int xcenter, int ycenter)
+    {
+	return ensureFramebuffer() == 0 ? framebuffer.window(xcenter, ycenter) : -1;
+    }
+
+    int zoom(int xzoom, int yzoom)
+    {
+	return ensureFramebuffer() == 0 ? framebuffer.zoom(xzoom, yzoom) : -1;
+    }
+
+    int view(int xcenter, int ycenter, int xzoom, int yzoom)
+    {
+	return ensureFramebuffer() == 0 ? framebuffer.view(xcenter, ycenter, xzoom, yzoom) : -1;
+    }
+
+    int getview(int *xcenter, int *ycenter, int *xzoom, int *yzoom)
+    {
+	return ensureFramebuffer() == 0 ? framebuffer.getview(xcenter, ycenter, xzoom, yzoom) : -1;
+    }
+
+    int rmap(struct fbserv_colormap *out)
+    {
+	if (!out)
+	    return -1;
+	if (ensureFramebuffer() != 0)
+	    return -1;
+	struct imgstream_fb_colormap imap;
+	if (framebuffer.rmap(&imap) != 0)
+	    return -1;
+	for (int i = 0; i < 256; i++) {
+	    out->red[i] = imap.red[i];
+	    out->green[i] = imap.green[i];
+	    out->blue[i] = imap.blue[i];
+	}
+	return 0;
+    }
+
+    int wmap(const struct fbserv_colormap *in)
+    {
+	if (ensureFramebuffer() != 0)
+	    return -1;
+	if (!in)
+	    return framebuffer.wmap(nullptr);
+	struct imgstream_fb_colormap imap;
+	for (int i = 0; i < 256; i++) {
+	    imap.red[i] = in->red[i];
+	    imap.green[i] = in->green[i];
+	    imap.blue[i] = in->blue[i];
+	}
+	return framebuffer.wmap(&imap);
+    }
+
+    int flush()
+    {
+	return ensureFramebuffer() == 0 ? framebuffer.flush() : -1;
+    }
+
+    int poll()
+    {
+	return framebuffer.poll();
+    }
+
+    int help()
+    {
+	return 0;
+    }
+
+    void notifyUpdated()
+    {
+	if (display) {
+	    if (ensureFramebuffer() == 0)
+		(void)framebuffer.present();
+	    display->need_update(QG_VIEW_REFRESH);
+	}
+    }
+
+private:
+    QSize renderSize() const
+    {
+	QgCanvasBase *canvas = display ? display->canvasBase() : nullptr;
+	QWidget *widget = canvas ? canvas->canvasWidget() : nullptr;
+	if (!widget)
+	    return QSize(512, 512);
+	qreal dpr = widget->devicePixelRatioF();
+	int rw = std::max(1, (int)std::ceil(widget->width() * dpr));
+	int rh = std::max(1, (int)std::ceil(widget->height() * dpr));
+	return QSize(rw, rh);
+    }
+
+    int ensureFramebuffer()
+    {
+	if (!display || !display->canvasBase())
+	    return -1;
+
+	host.setCanvas(display->canvasBase());
+	QSize size = renderSize();
+	if (framebuffer.configure(size.width(), size.height()) != 0)
+	    return -1;
+	return framebuffer.ensure();
+    }
+
+    QgView *display = nullptr;
+    QgObolWindowHost host;
+    BRLObolFramebufferStream framebuffer;
+};
+
+static QDMObolFramebufferBridge *
+qdm_obol_bridge(struct fbserv_obj *fbsp)
 {
-    return fbsp ? qg_legacy_view_framebuffer_handle_from_raw(fbsp->fbs_fbp) :
-	nullptr;
+    return fbsp ? static_cast<QDMObolFramebufferBridge *>(fbsp->fbs_fb_ctx) : nullptr;
 }
+
+static int qdm_obol_fb_info(void *ctx, struct fbserv_fb_info *info) { return static_cast<QDMObolFramebufferBridge *>(ctx)->info(info); }
+static int qdm_obol_fb_clear(void *ctx, const unsigned char rgb[3]) { return static_cast<QDMObolFramebufferBridge *>(ctx)->clear(rgb); }
+static ssize_t qdm_obol_fb_read(void *ctx, int x, int y, unsigned char *rgb, size_t count) { return static_cast<QDMObolFramebufferBridge *>(ctx)->read(x, y, rgb, count); }
+static ssize_t qdm_obol_fb_write(void *ctx, int x, int y, const unsigned char *rgb, size_t count) { return static_cast<QDMObolFramebufferBridge *>(ctx)->write(x, y, rgb, count); }
+static int qdm_obol_fb_readrect(void *ctx, int xmin, int ymin, int width, int height, unsigned char *rgb) { return static_cast<QDMObolFramebufferBridge *>(ctx)->readrect(xmin, ymin, width, height, rgb); }
+static int qdm_obol_fb_writerect(void *ctx, int xmin, int ymin, int width, int height, const unsigned char *rgb) { return static_cast<QDMObolFramebufferBridge *>(ctx)->writerect(xmin, ymin, width, height, rgb); }
+static int qdm_obol_fb_bwreadrect(void *ctx, int xmin, int ymin, int width, int height, unsigned char *bw) { return static_cast<QDMObolFramebufferBridge *>(ctx)->bwreadrect(xmin, ymin, width, height, bw); }
+static int qdm_obol_fb_bwwriterect(void *ctx, int xmin, int ymin, int width, int height, const unsigned char *bw) { return static_cast<QDMObolFramebufferBridge *>(ctx)->bwwriterect(xmin, ymin, width, height, bw); }
+static int qdm_obol_fb_cursor(void *ctx, int mode, int x, int y) { return static_cast<QDMObolFramebufferBridge *>(ctx)->cursor(mode, x, y); }
+static int qdm_obol_fb_getcursor(void *ctx, int *mode, int *x, int *y) { return static_cast<QDMObolFramebufferBridge *>(ctx)->getcursor(mode, x, y); }
+static int qdm_obol_fb_setcursor(void *ctx, const unsigned char *bits, int xbits, int ybits, int xorig, int yorig) { return static_cast<QDMObolFramebufferBridge *>(ctx)->setcursor(bits, xbits, ybits, xorig, yorig); }
+static int qdm_obol_fb_scursor(void *ctx, int mode, int x, int y) { return static_cast<QDMObolFramebufferBridge *>(ctx)->scursor(mode, x, y); }
+static int qdm_obol_fb_window(void *ctx, int xcenter, int ycenter) { return static_cast<QDMObolFramebufferBridge *>(ctx)->window(xcenter, ycenter); }
+static int qdm_obol_fb_zoom(void *ctx, int xzoom, int yzoom) { return static_cast<QDMObolFramebufferBridge *>(ctx)->zoom(xzoom, yzoom); }
+static int qdm_obol_fb_view(void *ctx, int xcenter, int ycenter, int xzoom, int yzoom) { return static_cast<QDMObolFramebufferBridge *>(ctx)->view(xcenter, ycenter, xzoom, yzoom); }
+static int qdm_obol_fb_getview(void *ctx, int *xcenter, int *ycenter, int *xzoom, int *yzoom) { return static_cast<QDMObolFramebufferBridge *>(ctx)->getview(xcenter, ycenter, xzoom, yzoom); }
+static int qdm_obol_fb_rmap(void *ctx, struct fbserv_colormap *cmap) { return static_cast<QDMObolFramebufferBridge *>(ctx)->rmap(cmap); }
+static int qdm_obol_fb_wmap(void *ctx, const struct fbserv_colormap *cmap) { return static_cast<QDMObolFramebufferBridge *>(ctx)->wmap(cmap); }
+static int qdm_obol_fb_flush(void *ctx) { return static_cast<QDMObolFramebufferBridge *>(ctx)->flush(); }
+static int qdm_obol_fb_poll(void *ctx) { return static_cast<QDMObolFramebufferBridge *>(ctx)->poll(); }
+static int qdm_obol_fb_help(void *ctx) { return static_cast<QDMObolFramebufferBridge *>(ctx)->help(); }
+
+static const struct fbserv_fb_ops qdm_obol_fb_ops = {
+    qdm_obol_fb_info,
+    qdm_obol_fb_clear,
+    qdm_obol_fb_read,
+    qdm_obol_fb_write,
+    qdm_obol_fb_readrect,
+    qdm_obol_fb_writerect,
+    qdm_obol_fb_bwreadrect,
+    qdm_obol_fb_bwwriterect,
+    qdm_obol_fb_cursor,
+    qdm_obol_fb_getcursor,
+    qdm_obol_fb_setcursor,
+    qdm_obol_fb_scursor,
+    qdm_obol_fb_window,
+    qdm_obol_fb_zoom,
+    qdm_obol_fb_view,
+    qdm_obol_fb_getview,
+    qdm_obol_fb_rmap,
+    qdm_obol_fb_wmap,
+    qdm_obol_fb_flush,
+    qdm_obol_fb_poll,
+    qdm_obol_fb_help
+};
 
 }
 
@@ -70,15 +324,9 @@ static int qdm_is_listening(struct fbserv_obj *fbsp);
 static int qdm_listen_on_port(struct fbserv_obj *fbsp, int available_port);
 static void qdm_open_server_handler(struct fbserv_obj *fbsp);
 static void qdm_close_server_handler(struct fbserv_obj *fbsp);
-#ifdef BRLCAD_OPENGL
 static void qdm_open_client_handler(struct fbserv_obj *fbsp, int i,
 	void *data);
 static void qdm_open_ipc_client_handler(struct fbserv_obj *fbsp, int i,
-	void *data);
-#endif
-static void qdm_open_sw_client_handler(struct fbserv_obj *fbsp, int i,
-	void *data);
-static void qdm_open_ipc_sw_client_handler(struct fbserv_obj *fbsp, int i,
 	void *data);
 static void qdm_close_client_handler(struct fbserv_obj *fbsp, int i);
 static void qdm_close_ipc_client_handler(struct fbserv_obj *fbsp, int i);
@@ -98,9 +346,6 @@ QFBSocket::client_handler()
     struct pkg_conn *pkc = fbs->fbs_clients[ind].fbsc_pkg;
     if (!pkc || !s)
 	return;
-
-    /* Set the current framebuffer pointer for callback functions */
-    pkc->pkc_server_data = (void *)fbs->fbs_fbp;
 
     // Read data.  NOTE:  we're using the Qt read routines rather than
     // pkg_suckin, so we can't call fbs_existing_client_hander from libdm.
@@ -258,7 +503,6 @@ qdm_close_server_handler(struct fbserv_obj *fbsp)
     delete nl;
 }
 
-#ifdef BRLCAD_OPENGL
 static void
 qdm_open_client_handler(struct fbserv_obj *fbsp, int i, void *data)
 {
@@ -269,39 +513,10 @@ qdm_open_client_handler(struct fbserv_obj *fbsp, int i, void *data)
     /* Phase D2: tear down on remote disconnect. */
     QObject::connect(s->s, &QTcpSocket::disconnected, s, &QFBSocket::on_disconnected, Qt::QueuedConnection);
 
-    QgGL *ctx =
-	qg_legacy_view_framebuffer_qtgl_canvas_get(qdm_framebuffer_handle(fbsp));
-    if (ctx) {
-	QObject::connect(s, &QFBSocket::updated, ctx, &QgGL::need_update, Qt::QueuedConnection);
-    }
-}
-#endif
-
-// Because swrast uses a bsg_view as its context pointer, we need to unpack the
-// app data to get our Qt widget ctx when using that display method.  In other
-// words, the swrast backend is generic - it has no knowledge of Qt - and the
-// Qt widget we need to notify for update/redraw purposes is coming (from the
-// libdm perspective) solely from the application - which is why it lives in
-// the user data slot rather than the context.  (The swrast offscreen rendering
-// context is still present and relevant, hence the need for a separate user
-// pointer.)  The advantage of using a generic swrast backend is that such a
-// setup allows us to use the same logic both for Qt widget rendering and
-// headless image generation.
-static void
-qdm_open_sw_client_handler(struct fbserv_obj *fbsp, int i, void *data)
-{
-    bu_log("open_client_handler\n");
-    fbsp->fbs_clients[i].fbsc_chan = data;
-    QFBSocket *s = (QFBSocket *)data;
-    QObject::connect(s->s, &QTcpSocket::readyRead, s, &QFBSocket::client_handler, Qt::QueuedConnection);
-    /* Phase D2: tear down on remote disconnect. */
-    QObject::connect(s->s, &QTcpSocket::disconnected, s, &QFBSocket::on_disconnected, Qt::QueuedConnection);
-
-    QgSW *ctx =
-	qg_legacy_view_framebuffer_swrast_canvas_get(qdm_framebuffer_handle(fbsp));
-    if (ctx) {
-	QObject::connect(s, &QFBSocket::updated, ctx, &QgSW::need_update, Qt::QueuedConnection);
-    }
+    if (QDMObolFramebufferBridge *bridge = qdm_obol_bridge(fbsp))
+	QObject::connect(s, &QFBSocket::updated, s,
+			 [bridge]() { bridge->notifyUpdated(); },
+			 Qt::QueuedConnection);
 }
 
 static void
@@ -318,38 +533,35 @@ qdm_close_client_handler(struct fbserv_obj *fbsp, int i)
 }
 
 void
-qdm_configure_ged_fbserv_handlers(struct ged *gedp, int view_type)
+qdm_configure_ged_fbserv_handlers(struct ged *gedp, QgView *display)
 {
     if (!gedp || !gedp->ged_fbs)
 	return;
+
+    static QDMObolFramebufferBridge *bridge = nullptr;
+    if (!bridge)
+	bridge = new QDMObolFramebufferBridge(display);
+    bridge->setDisplay(display);
 
     gedp->ged_fbs->fbs_is_listening = &qdm_is_listening;
     gedp->ged_fbs->fbs_listen_on_port = &qdm_listen_on_port;
     gedp->ged_fbs->fbs_open_server_handler = &qdm_open_server_handler;
     gedp->ged_fbs->fbs_close_server_handler = &qdm_close_server_handler;
-
-#ifdef BRLCAD_OPENGL
-    if (view_type == QgView_GL) {
-	gedp->ged_fbs->fbs_open_client_handler = &qdm_open_client_handler;
-	gedp->ged_fbs->fbs_open_ipc_client_handler =
-	    &qdm_open_ipc_client_handler;
-    }
-#endif
-    if (view_type == QgView_SW) {
-	gedp->ged_fbs->fbs_open_client_handler = &qdm_open_sw_client_handler;
-	gedp->ged_fbs->fbs_open_ipc_client_handler =
-	    &qdm_open_ipc_sw_client_handler;
-    }
-
+    gedp->ged_fbs->fbs_open_client_handler = &qdm_open_client_handler;
+    gedp->ged_fbs->fbs_open_ipc_client_handler = &qdm_open_ipc_client_handler;
     gedp->ged_fbs->fbs_close_client_handler = &qdm_close_client_handler;
     gedp->ged_fbs->fbs_close_ipc_client_handler =
 	&qdm_close_ipc_client_handler;
+    gedp->ged_fbs->fbs_callback = (void (*)(void *))FBS_CALLBACK_NULL;
+    gedp->ged_fbs->fbs_clientData = NULL;
+    gedp->ged_fbs->fbs_fbp = NULL;
+    (void)fbs_set_backend(gedp->ged_fbs, &qdm_obol_fb_ops, bridge);
 }
 
 const char *
 qdm_init_messages(void)
 {
-    return qg_legacy_view_dm_init_messages();
+    return dm_init_msgs();
 }
 
 
@@ -458,11 +670,10 @@ QFBIPCSocket::ipc_handler()
 }
 
 
-#ifdef BRLCAD_OPENGL
 static void
 qdm_open_ipc_client_handler(struct fbserv_obj *fbsp, int i, void *UNUSED(data))
 {
-    bu_log("open_ipc_client_handler (GL)\n");
+    bu_log("open_ipc_client_handler\n");
 
     QFBIPCSocket *s = new QFBIPCSocket;
     s->ind  = i;
@@ -474,36 +685,10 @@ qdm_open_ipc_client_handler(struct fbserv_obj *fbsp, int i, void *UNUSED(data))
     QObject::connect(s->notifier, &QSocketNotifier::activated,
 		     s, &QFBIPCSocket::ipc_handler, Qt::QueuedConnection);
 
-    QgGL *ctx =
-	qg_legacy_view_framebuffer_qtgl_canvas_get(qdm_framebuffer_handle(fbsp));
-    if (ctx) {
-	QObject::connect(s, &QFBIPCSocket::updated,
-			 ctx, &QgGL::need_update, Qt::QueuedConnection);
-    }
-}
-#endif
-
-static void
-qdm_open_ipc_sw_client_handler(struct fbserv_obj *fbsp, int i, void *UNUSED(data))
-{
-    bu_log("open_ipc_client_handler (SW)\n");
-
-    QFBIPCSocket *s = new QFBIPCSocket;
-    s->ind  = i;
-    s->fbsp = fbsp;
-    s->notifier = new QSocketNotifier(fbsp->fbs_clients[i].fbsc_fd,
-				      QSocketNotifier::Read, s);
-    fbsp->fbs_clients[i].fbsc_chan = (void *)s;
-
-    QObject::connect(s->notifier, &QSocketNotifier::activated,
-		     s, &QFBIPCSocket::ipc_handler, Qt::QueuedConnection);
-
-    QgSW *ctx =
-	qg_legacy_view_framebuffer_swrast_canvas_get(qdm_framebuffer_handle(fbsp));
-    if (ctx) {
-	QObject::connect(s, &QFBIPCSocket::updated,
-			 ctx, &QgSW::need_update, Qt::QueuedConnection);
-    }
+    if (QDMObolFramebufferBridge *bridge = qdm_obol_bridge(fbsp))
+	QObject::connect(s, &QFBIPCSocket::updated, s,
+			 [bridge]() { bridge->notifyUpdated(); },
+			 Qt::QueuedConnection);
 }
 
 static void

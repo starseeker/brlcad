@@ -549,6 +549,12 @@ _action_recurse(bsg_node *node,
     bsg_state_ref state_ref = bsg_state_ref_push(parent_state);
     struct bsg_state *state = bsg_state_ref_state(state_ref);
     struct bsg_state *parent = bsg_state_ref_state(parent_state);
+    struct bsg_action_state compat;
+    int is_drawable = 0;
+    int visible_only = 0;
+    int drawable_visible = 0;
+    int independent_root = 0;
+    int is_switch = 0;
     if (!state || !parent)
 	goto done;
 
@@ -577,7 +583,6 @@ _action_recurse(bsg_node *node,
 
     _apply_state_node(node, state_ref);
 
-    struct bsg_action_state compat;
     memset(&compat, 0, sizeof(compat));
     compat.state = state_ref;
     compat.view = state->view;
@@ -636,10 +641,10 @@ _action_recurse(bsg_node *node,
 	goto done;
     }
 
-    int is_drawable = (_node_is_type(node, bsg_shape_type()) ||
+    is_drawable = (_node_is_type(node, bsg_shape_type()) ||
 	    bsg_node_is_database_source(node));
-    int visible_only = (traversal->flags & BSG_ACTION_TRAVERSE_VISIBLE_ONLY) != 0;
-    int drawable_visible = is_drawable &&
+    visible_only = (traversal->flags & BSG_ACTION_TRAVERSE_VISIBLE_ONLY) != 0;
+    drawable_visible = is_drawable &&
 	(!visible_only || state->visible || state->force_draw);
     if (drawable_visible && traversal->shape_cb &&
 	    !traversal->shape_cb(node, &compat, traversal->userdata)) {
@@ -647,7 +652,6 @@ _action_recurse(bsg_node *node,
 	goto done;
     }
 
-    int independent_root = 0;
     if ((traversal->flags & BSG_ACTION_TRAVERSE_INDEPENDENT_ROOT) &&
 	    traversal->view && bsg_view_scene_root(traversal->view) &&
 	    bsg_view_is_independent(traversal->view) &&
@@ -655,7 +659,7 @@ _action_recurse(bsg_node *node,
 	independent_root = 1;
     }
 
-    int is_switch = bsg_node_type_is_a(node, bsg_switch_type());
+    is_switch = bsg_node_type_is_a(node, bsg_switch_type());
     for (size_t i = 0; i < BU_PTBL_LEN(&node->children); i++) {
 	bsg_node *child = (bsg_node *)BU_PTBL_GET(&node->children, i);
 	if (independent_root && _independent_root_skip_child(child))

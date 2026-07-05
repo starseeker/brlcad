@@ -45,7 +45,6 @@
 #include "./ged_private.h"
 #include "./bsg_ged_draw_private.h"
 #include "./bsg_ged_draw_view_private.h"
-#include "./draw/ged_draw.h"
 
 struct ged_draw_db_update_ctx {
     struct ged *gedp;
@@ -1376,6 +1375,42 @@ ged_draw_mode_uses_obol_database_source(int draw_mode)
     }
 }
 
+static const char *
+ged_draw_mode_name(int draw_mode)
+{
+    switch (draw_mode) {
+	case GED_DRAW_MODE_WIRE:
+	    return "wire";
+	case GED_DRAW_MODE_SHADED_BOTS:
+	    return "shaded-bots";
+	case GED_DRAW_MODE_SHADED:
+	    return "shaded";
+	case GED_DRAW_MODE_EVAL_WIRE:
+	    return "evaluated-wire";
+	case GED_DRAW_MODE_HIDDEN_LINE:
+	    return "hidden-line";
+	case GED_DRAW_MODE_EVAL_POINTS:
+	    return "evaluated-points";
+	default:
+	    return "unknown";
+    }
+}
+
+static void
+ged_draw_report_obol_provider_failure(struct ged *gedp,
+				      int draw_mode,
+				      int realized,
+				      int draw_count)
+{
+    if (!gedp)
+	return;
+
+    bu_vls_printf(gedp->ged_result_str,
+		  "Obol draw provider failed for %s mode: realized %d of %d requested path%s\n",
+		  ged_draw_mode_name(draw_mode), realized, draw_count,
+		  draw_count == 1 ? "" : "s");
+}
+
 static int
 ged_draw_mode_publishes_direct_face_set(int draw_mode)
 {
@@ -1686,39 +1721,6 @@ ged_draw_apply_obol_database_source_paths(
 
 
 static int
-ged_draw_apply_retained_drawtrees(struct ged *gedp,
-				  int draw_count,
-				  const char **draw_paths,
-				  struct _ged_client_data *dgcdp)
-{
-    if (gedp && gedp->i && gedp->i->ged_gdp)
-	gedp->i->ged_gdp->gd_draw_retained_drawtree_invocations++;
-
-    return _ged_drawtrees(gedp, draw_count, draw_paths, _GED_DRAW_WIREFRAME,
-			  dgcdp);
-}
-
-
-static int
-_ged_draw_paths_realized(struct ged *gedp,
-			 void *view_ctx,
-			 const char **paths,
-			 int path_count)
-{
-    if (!gedp || !view_ctx || !paths || path_count <= 0)
-	return 0;
-
-    int realized = 0;
-    for (int i = 0; i < path_count; i++) {
-	if (paths[i] && paths[i][0] &&
-	    ged_draw_path_state(gedp, view_ctx, paths[i], -1) > 0)
-	    realized++;
-    }
-    return realized;
-}
-
-
-static int
 _ged_draw_apply_draw(struct ged *gedp,
 		     const struct ged_draw_transaction *txn,
 		     const char *path,
@@ -1772,59 +1774,48 @@ _ged_draw_apply_draw(struct ged *gedp,
     ged_draw_active_view_ctx_set(gedp, view_ctx);
     (void)ged_draw_prepare_views_for_transaction(gedp, view_ctx);
 
-    struct _ged_client_data dgcdp;
-    memset(&dgcdp, 0, sizeof(dgcdp));
-    dgcdp.gedp = gedp;
-    dgcdp.view_ctx = view_ctx;
-    dgcdp.autoview = txn->autoview ? 1 : 0;
-    dgcdp.nmg_triangulate = 1;
-    dgcdp.vs = neutral_settings;
-
     int ret = 0;
     int obol_publication = ged_draw_obol_database_source_publication_begin(
 			       gedp, view_ctx, neutral_settings.draw_mode);
     if (neutral_settings.draw_mode == GED_DRAW_MODE_EVAL_WIRE ||
 	neutral_settings.draw_mode == GED_DRAW_MODE_EVAL_POINTS) {
-	ret = ged_draw_apply_evaluated_provider_paths(gedp, view_ctx, draw_paths,
-	      draw_count,
-	      &neutral_settings);
-	if (ret < 0)
+	const int realized = ged_draw_apply_evaluated_provider_paths(gedp,
+			 view_ctx, draw_paths, draw_count, &neutral_settings);
+	if (realized == draw_count)
+	    ret = 0;
+	else {
+	    ged_draw_report_obol_provider_failure(gedp,
+		    neutral_settings.draw_mode, realized, draw_count);
 	    ret = -1;
-	else
-	    ret = 0;
-    } else if (obol_publication &&
-	       ged_draw_mode_uses_obol_database_source(
+	}
+    } else if (ged_draw_mode_uses_obol_database_source(
 		   neutral_settings.draw_mode)) {
-	int realized = ged_draw_apply_obol_database_source_paths(gedp,
-		       view_ctx, draw_paths, draw_count, &neutral_settings);
-	if (realized == draw_count) {
-	    ged_draw_obol_database_source_publication_end(gedp);
-	    obol_publication = 0;
-	    ret = 0;
-	} else if (neutral_settings.defer_leaf_expansion) {
+	if (!obol_publication) {
+	    ged_draw_report_obol_provider_failure(gedp,
+		    neutral_settings.draw_mode, 0, draw_count);
 	    ret = -1;
 	} else {
-	    ret = ged_draw_apply_retained_drawtrees(gedp, draw_count,
-						    draw_paths, &dgcdp);
+	    int realized = ged_draw_apply_obol_database_source_paths(gedp,
+			   view_ctx, draw_paths, draw_count, &neutral_settings);
+	    if (realized == draw_count) {
+		ged_draw_obol_database_source_publication_end(gedp);
+		obol_publication = 0;
+		ret = 0;
+	    } else {
+		ged_draw_report_obol_provider_failure(gedp,
+			neutral_settings.draw_mode, realized, draw_count);
+		ret = -1;
+	    }
 	}
     } else {
-	ret = ged_draw_apply_retained_drawtrees(gedp, draw_count, draw_paths,
-						&dgcdp);
+	bu_vls_printf(gedp->ged_result_str,
+		      "Unsupported draw mode %d has no Obol provider\n",
+		      neutral_settings.draw_mode);
+	ret = -1;
     }
     if (obol_publication)
 	ged_draw_obol_database_source_publication_end(gedp);
     ged_draw_active_view_ctx_set(gedp, saved_view);
-
-    if (ret != 0) {
-	/* Legacy draw walking may report failure for multi-path instance
-	 * draws even after realizing all requested child-path groups.  Trust
-	 * the retained draw state in that case so transaction observers and
-	 * callers see the scene change that actually happened. */
-	int realized = _ged_draw_paths_realized(gedp, view_ctx, draw_paths,
-						draw_count);
-	if (realized == draw_count)
-	    ret = 0;
-    }
 
     if (ret != 0) {
 	bu_free((void *)draw_paths, "draw transaction paths");

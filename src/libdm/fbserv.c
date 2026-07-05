@@ -51,20 +51,241 @@
 #define FBSERV_TLS_IMPL
 #include "../fbserv/tls_wrap.h"
 
-/**
- * Helper: extract the current framebuffer pointer from a pkg_conn
- * whose pkc_server_data points to the owning fbserv_client.
- */
-static struct fb *
-_fbs_conn_fb(struct pkg_conn *pcp)
+static struct fbserv_obj *
+_fbs_conn_obj(struct pkg_conn *pcp)
 {
     struct fbserv_client *fbscp;
     if (!pcp || !pcp->pkc_server_data)
 	return NULL;
     fbscp = (struct fbserv_client *)pcp->pkc_server_data;
-    if (!fbscp->fbsc_fbsp)
-	return NULL;
-    return fbscp->fbsc_fbsp->fbs_fbp;
+    return fbscp->fbsc_fbsp;
+}
+
+static int
+fbs_has_backend(const struct fbserv_obj *fbsp)
+{
+    return fbsp && fbsp->fbs_fb_ops && fbsp->fbs_fb_ctx;
+}
+
+static int
+fbs_has_framebuffer(const struct fbserv_obj *fbsp)
+{
+    return fbs_has_backend(fbsp) || (fbsp && fbsp->fbs_fbp);
+}
+
+static void
+fbs_colormap_from_dm(struct fbserv_colormap *dst, const ColorMap *src)
+{
+    int i;
+    if (!dst || !src)
+	return;
+    for (i = 0; i < 256; i++) {
+	dst->red[i] = src->cm_red[i];
+	dst->green[i] = src->cm_green[i];
+	dst->blue[i] = src->cm_blue[i];
+    }
+}
+
+static void
+fbs_colormap_to_dm(ColorMap *dst, const struct fbserv_colormap *src)
+{
+    int i;
+    if (!dst || !src)
+	return;
+    for (i = 0; i < 256; i++) {
+	dst->cm_red[i] = src->red[i];
+	dst->cm_green[i] = src->green[i];
+	dst->cm_blue[i] = src->blue[i];
+    }
+}
+
+static int
+fbs_fb_info(struct fbserv_obj *fbsp, struct fbserv_fb_info *info)
+{
+    if (!fbsp || !info)
+	return -1;
+    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->info)
+	return fbsp->fbs_fb_ops->info(fbsp->fbs_fb_ctx, info);
+    if (!fbsp->fbs_fbp || !fbsp->fbs_fbp->i)
+	return -1;
+    info->max_width = fbsp->fbs_fbp->i->if_max_width;
+    info->max_height = fbsp->fbs_fbp->i->if_max_height;
+    info->width = fbsp->fbs_fbp->i->if_width;
+    info->height = fbsp->fbs_fbp->i->if_height;
+    return 0;
+}
+
+static int
+fbs_fb_clear(struct fbserv_obj *fbsp, const unsigned char rgb[3])
+{
+    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->clear)
+	return fbsp->fbs_fb_ops->clear(fbsp->fbs_fb_ctx, rgb);
+    return fbsp && fbsp->fbs_fbp ? fb_clear(fbsp->fbs_fbp, (unsigned char *)rgb) : -1;
+}
+
+static ssize_t
+fbs_fb_read(struct fbserv_obj *fbsp, int x, int y, unsigned char *rgb, size_t count)
+{
+    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->read)
+	return fbsp->fbs_fb_ops->read(fbsp->fbs_fb_ctx, x, y, rgb, count);
+    return fbsp && fbsp->fbs_fbp ? fb_read(fbsp->fbs_fbp, x, y, rgb, count) : -1;
+}
+
+static ssize_t
+fbs_fb_write(struct fbserv_obj *fbsp, int x, int y, const unsigned char *rgb, size_t count)
+{
+    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->write)
+	return fbsp->fbs_fb_ops->write(fbsp->fbs_fb_ctx, x, y, rgb, count);
+    return fbsp && fbsp->fbs_fbp ? fb_write(fbsp->fbs_fbp, x, y, rgb, count) : -1;
+}
+
+static int
+fbs_fb_readrect(struct fbserv_obj *fbsp, int xmin, int ymin, int width, int height, unsigned char *rgb)
+{
+    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->readrect)
+	return fbsp->fbs_fb_ops->readrect(fbsp->fbs_fb_ctx, xmin, ymin, width, height, rgb);
+    return fbsp && fbsp->fbs_fbp ? fb_readrect(fbsp->fbs_fbp, xmin, ymin, width, height, rgb) : -1;
+}
+
+static int
+fbs_fb_writerect(struct fbserv_obj *fbsp, int xmin, int ymin, int width, int height, const unsigned char *rgb)
+{
+    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->writerect)
+	return fbsp->fbs_fb_ops->writerect(fbsp->fbs_fb_ctx, xmin, ymin, width, height, rgb);
+    return fbsp && fbsp->fbs_fbp ? fb_writerect(fbsp->fbs_fbp, xmin, ymin, width, height, rgb) : -1;
+}
+
+static int
+fbs_fb_bwreadrect(struct fbserv_obj *fbsp, int xmin, int ymin, int width, int height, unsigned char *bw)
+{
+    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->bwreadrect)
+	return fbsp->fbs_fb_ops->bwreadrect(fbsp->fbs_fb_ctx, xmin, ymin, width, height, bw);
+    return fbsp && fbsp->fbs_fbp ? fb_bwreadrect(fbsp->fbs_fbp, xmin, ymin, width, height, bw) : -1;
+}
+
+static int
+fbs_fb_bwwriterect(struct fbserv_obj *fbsp, int xmin, int ymin, int width, int height, const unsigned char *bw)
+{
+    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->bwwriterect)
+	return fbsp->fbs_fb_ops->bwwriterect(fbsp->fbs_fb_ctx, xmin, ymin, width, height, bw);
+    return fbsp && fbsp->fbs_fbp ? fb_bwwriterect(fbsp->fbs_fbp, xmin, ymin, width, height, bw) : -1;
+}
+
+static int
+fbs_fb_cursor(struct fbserv_obj *fbsp, int mode, int x, int y)
+{
+    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->cursor)
+	return fbsp->fbs_fb_ops->cursor(fbsp->fbs_fb_ctx, mode, x, y);
+    return fbsp && fbsp->fbs_fbp ? fb_cursor(fbsp->fbs_fbp, mode, x, y) : -1;
+}
+
+static int
+fbs_fb_getcursor(struct fbserv_obj *fbsp, int *mode, int *x, int *y)
+{
+    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->getcursor)
+	return fbsp->fbs_fb_ops->getcursor(fbsp->fbs_fb_ctx, mode, x, y);
+    return fbsp && fbsp->fbs_fbp ? fb_getcursor(fbsp->fbs_fbp, mode, x, y) : -1;
+}
+
+static int
+fbs_fb_setcursor(struct fbserv_obj *fbsp, const unsigned char *bits, int xbits, int ybits, int xorig, int yorig)
+{
+    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->setcursor)
+	return fbsp->fbs_fb_ops->setcursor(fbsp->fbs_fb_ctx, bits, xbits, ybits, xorig, yorig);
+    return fbsp && fbsp->fbs_fbp ? fb_setcursor(fbsp->fbs_fbp, bits, xbits, ybits, xorig, yorig) : -1;
+}
+
+static int
+fbs_fb_scursor(struct fbserv_obj *fbsp, int mode, int x, int y)
+{
+    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->scursor)
+	return fbsp->fbs_fb_ops->scursor(fbsp->fbs_fb_ctx, mode, x, y);
+    return fbsp && fbsp->fbs_fbp ? fb_scursor(fbsp->fbs_fbp, mode, x, y) : -1;
+}
+
+static int
+fbs_fb_window(struct fbserv_obj *fbsp, int xcenter, int ycenter)
+{
+    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->window)
+	return fbsp->fbs_fb_ops->window(fbsp->fbs_fb_ctx, xcenter, ycenter);
+    return fbsp && fbsp->fbs_fbp ? fb_window(fbsp->fbs_fbp, xcenter, ycenter) : -1;
+}
+
+static int
+fbs_fb_zoom(struct fbserv_obj *fbsp, int xzoom, int yzoom)
+{
+    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->zoom)
+	return fbsp->fbs_fb_ops->zoom(fbsp->fbs_fb_ctx, xzoom, yzoom);
+    return fbsp && fbsp->fbs_fbp ? fb_zoom(fbsp->fbs_fbp, xzoom, yzoom) : -1;
+}
+
+static int
+fbs_fb_view(struct fbserv_obj *fbsp, int xcenter, int ycenter, int xzoom, int yzoom)
+{
+    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->view)
+	return fbsp->fbs_fb_ops->view(fbsp->fbs_fb_ctx, xcenter, ycenter, xzoom, yzoom);
+    return fbsp && fbsp->fbs_fbp ? fb_view(fbsp->fbs_fbp, xcenter, ycenter, xzoom, yzoom) : -1;
+}
+
+static int
+fbs_fb_getview(struct fbserv_obj *fbsp, int *xcenter, int *ycenter, int *xzoom, int *yzoom)
+{
+    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->getview)
+	return fbsp->fbs_fb_ops->getview(fbsp->fbs_fb_ctx, xcenter, ycenter, xzoom, yzoom);
+    return fbsp && fbsp->fbs_fbp ? fb_getview(fbsp->fbs_fbp, xcenter, ycenter, xzoom, yzoom) : -1;
+}
+
+static int
+fbs_fb_rmap(struct fbserv_obj *fbsp, struct fbserv_colormap *cmap)
+{
+    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->rmap)
+	return fbsp->fbs_fb_ops->rmap(fbsp->fbs_fb_ctx, cmap);
+    if (fbsp && fbsp->fbs_fbp) {
+	ColorMap dm_map;
+	int ret = fb_rmap(fbsp->fbs_fbp, &dm_map);
+	fbs_colormap_from_dm(cmap, &dm_map);
+	return ret;
+    }
+    return -1;
+}
+
+static int
+fbs_fb_wmap(struct fbserv_obj *fbsp, const struct fbserv_colormap *cmap)
+{
+    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->wmap)
+	return fbsp->fbs_fb_ops->wmap(fbsp->fbs_fb_ctx, cmap);
+    if (fbsp && fbsp->fbs_fbp) {
+	if (!cmap)
+	    return fb_wmap(fbsp->fbs_fbp, COLORMAP_NULL);
+	ColorMap dm_map;
+	fbs_colormap_to_dm(&dm_map, cmap);
+	return fb_wmap(fbsp->fbs_fbp, &dm_map);
+    }
+    return -1;
+}
+
+static int
+fbs_fb_flush(struct fbserv_obj *fbsp)
+{
+    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->flush)
+	return fbsp->fbs_fb_ops->flush(fbsp->fbs_fb_ctx);
+    return fbsp && fbsp->fbs_fbp ? fb_flush(fbsp->fbs_fbp) : -1;
+}
+
+static int
+fbs_fb_poll(struct fbserv_obj *fbsp)
+{
+    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->poll)
+	return fbsp->fbs_fb_ops->poll(fbsp->fbs_fb_ctx);
+    return fbsp && fbsp->fbs_fbp ? fb_poll(fbsp->fbs_fbp) : -1;
+}
+
+static int
+fbs_fb_help(struct fbserv_obj *fbsp)
+{
+    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->help)
+	return fbsp->fbs_fb_ops->help(fbsp->fbs_fb_ctx);
+    return fbsp && fbsp->fbs_fbp ? fb_help(fbsp->fbs_fbp) : 0;
 }
 
 static void
@@ -153,7 +374,7 @@ fbs_data_guard(struct pkg_conn *pcp, char *buf)
 	return -1;
     }
 
-    if (!fbsp || !fbsp->fbs_fbp) {
+    if (!fbs_has_framebuffer(fbsp)) {
 	bu_log("fbserv: data request (type %d) with null framebuffer\n",
 	       pcp->pkc_type);
 	(void)pkg_plong(erbuf, -1);
@@ -237,7 +458,7 @@ fbs_rfbopen(struct pkg_conn *pcp, char *buf)
 {
     struct fbserv_client *fbscp;
     struct fbserv_obj *fbsp;
-    struct fb *curr_fbp = _fbs_conn_fb(pcp);
+    struct fbserv_fb_info info;
     char rbuf[5*NET_LONG_LEN+1] = {0};
     int want;
 
@@ -261,13 +482,24 @@ fbs_rfbopen(struct pkg_conn *pcp, char *buf)
 	    return;
 	}
     }
+    fbsp = _fbs_conn_obj(pcp);
+    if (fbs_fb_info(fbsp, &info) != 0) {
+	(void)pkg_plong(&rbuf[0*NET_LONG_LEN], -1);
+	(void)pkg_plong(&rbuf[1*NET_LONG_LEN], 0);
+	(void)pkg_plong(&rbuf[2*NET_LONG_LEN], 0);
+	(void)pkg_plong(&rbuf[3*NET_LONG_LEN], 0);
+	(void)pkg_plong(&rbuf[4*NET_LONG_LEN], 0);
+	pkg_send(MSG_RETURN, rbuf, 5*NET_LONG_LEN, pcp);
+	if (buf) (void)free(buf);
+	return;
+    }
 
     /* Don't really open a new framebuffer --- use existing one */
     (void)pkg_plong(&rbuf[0*NET_LONG_LEN], 0);	/* ret */
-    (void)pkg_plong(&rbuf[1*NET_LONG_LEN], curr_fbp->i->if_max_width);
-    (void)pkg_plong(&rbuf[2*NET_LONG_LEN], curr_fbp->i->if_max_height);
-    (void)pkg_plong(&rbuf[3*NET_LONG_LEN], curr_fbp->i->if_width);
-    (void)pkg_plong(&rbuf[4*NET_LONG_LEN], curr_fbp->i->if_height);
+    (void)pkg_plong(&rbuf[1*NET_LONG_LEN], info.max_width);
+    (void)pkg_plong(&rbuf[2*NET_LONG_LEN], info.max_height);
+    (void)pkg_plong(&rbuf[3*NET_LONG_LEN], info.width);
+    (void)pkg_plong(&rbuf[4*NET_LONG_LEN], info.height);
 
     want = 5*NET_LONG_LEN;
     if (pkg_send(MSG_RETURN, rbuf, want, pcp) != want)
@@ -282,17 +514,17 @@ fbs_rfbopen(struct pkg_conn *pcp, char *buf)
 void
 fbs_rfbclose(struct pkg_conn *pcp, char *buf)
 {
-    struct fb *curr_fbp;
+    struct fbserv_obj *fbsp;
     char rbuf[NET_LONG_LEN+1] = {0};
 
     if (fbs_data_guard(pcp, buf) < 0) return;
-    curr_fbp = _fbs_conn_fb(pcp);
+    fbsp = _fbs_conn_obj(pcp);
 
     /*
      * We are playing FB server so we don't really close the frame
      * buffer.  We should flush output however.
      */
-    (void)fb_flush(curr_fbp);
+    (void)fbs_fb_flush(fbsp);
     (void)pkg_plong(&rbuf[0], 0);		/* return success */
 
     /* Don't check for errors, linger mode or other events may have
@@ -326,7 +558,7 @@ fbs_rfbfree(struct pkg_conn *pcp, char *buf)
 void
 fbs_rfbclear(struct pkg_conn *pcp, char *buf)
 {
-    struct fb *curr_fbp;
+    struct fbserv_obj *fbsp;
     RGBpixel bg;
     char rbuf[NET_LONG_LEN+1] = {0};
 
@@ -335,13 +567,13 @@ fbs_rfbclear(struct pkg_conn *pcp, char *buf)
 	return;
     }
     if (fbs_data_guard(pcp, buf) < 0) return;
-    curr_fbp = _fbs_conn_fb(pcp);
+    fbsp = _fbs_conn_obj(pcp);
 
     bg[RED] = buf[0];
     bg[GRN] = buf[1];
     bg[BLU] = buf[2];
 
-    (void)pkg_plong(rbuf, fb_clear(curr_fbp, bg));
+    (void)pkg_plong(rbuf, fbs_fb_clear(fbsp, bg));
     pkg_send(MSG_RETURN, rbuf, NET_LONG_LEN, pcp);
 
     (void)free(buf);
@@ -356,14 +588,14 @@ fbs_rfbread(struct pkg_conn *pcp, char *buf)
     int ret;
     static unsigned char *scanbuf = NULL;
     static size_t buflen = 0;
-    struct fb *curr_fbp;
+    struct fbserv_obj *fbsp;
 
     if (!buf) {
 	bu_log("fbs_rfbread: null buffer\n");
 	return;
     }
     if (fbs_data_guard(pcp, buf) < 0) return;
-    curr_fbp = _fbs_conn_fb(pcp);
+    fbsp = _fbs_conn_obj(pcp);
 
     x = pkg_glong(&buf[0*NET_LONG_LEN]);
     y = pkg_glong(&buf[1*NET_LONG_LEN]);
@@ -383,7 +615,7 @@ fbs_rfbread(struct pkg_conn *pcp, char *buf)
 	}
     }
 
-    ret = fb_read(curr_fbp, x, y, scanbuf, num);
+    ret = fbs_fb_read(fbsp, x, y, scanbuf, num);
     if (ret < 0) ret = 0;		/* map error indications */
     /* sending a 0-length package indicates error */
     pkg_send(MSG_RETURN, (char *)scanbuf, ret*sizeof(RGBpixel), pcp);
@@ -398,20 +630,20 @@ fbs_rfbwrite(struct pkg_conn *pcp, char *buf)
     char rbuf[NET_LONG_LEN+1] = {0};
     int ret;
     int type;
-    struct fb *curr_fbp;
+    struct fbserv_obj *fbsp;
 
     if (!buf) {
 	bu_log("fbs_rfbwrite: null buffer\n");
 	return;
     }
     if (fbs_data_guard(pcp, buf) < 0) return;
-    curr_fbp = _fbs_conn_fb(pcp);
+    fbsp = _fbs_conn_obj(pcp);
 
     x = pkg_glong(&buf[0*NET_LONG_LEN]);
     y = pkg_glong(&buf[1*NET_LONG_LEN]);
     num = pkg_glong(&buf[2*NET_LONG_LEN]);
     type = pcp->pkc_type;
-    ret = fb_write(curr_fbp, x, y, (unsigned char *)&buf[3*NET_LONG_LEN], (size_t)num);
+    ret = fbs_fb_write(fbsp, x, y, (unsigned char *)&buf[3*NET_LONG_LEN], (size_t)num);
 
     if (type < MSG_NORETURN) {
 	(void)pkg_plong(&rbuf[0*NET_LONG_LEN], ret);
@@ -430,14 +662,14 @@ fbs_rfbreadrect(struct pkg_conn *pcp, char *buf)
     int ret;
     static unsigned char *scanbuf = NULL;
     static size_t buflen = 0;
-    struct fb *curr_fbp;
+    struct fbserv_obj *fbsp;
 
     if (!buf) {
 	bu_log("fbs_rfbreadrect: null buffer\n");
 	return;
     }
     if (fbs_data_guard(pcp, buf) < 0) return;
-    curr_fbp = _fbs_conn_fb(pcp);
+    fbsp = _fbs_conn_obj(pcp);
 
     xmin = pkg_glong(&buf[0*NET_LONG_LEN]);
     ymin = pkg_glong(&buf[1*NET_LONG_LEN]);
@@ -459,7 +691,7 @@ fbs_rfbreadrect(struct pkg_conn *pcp, char *buf)
 	}
     }
 
-    ret = fb_readrect(curr_fbp, xmin, ymin, width, height, scanbuf);
+    ret = fbs_fb_readrect(fbsp, xmin, ymin, width, height, scanbuf);
     if (ret < 0) ret = 0;		/* map error indications */
     /* sending a 0-length package indicates error */
     pkg_send(MSG_RETURN, (char *)scanbuf, ret*sizeof(RGBpixel), pcp);
@@ -475,14 +707,14 @@ fbs_rfbwriterect(struct pkg_conn *pcp, char *buf)
     char rbuf[NET_LONG_LEN+1] = {0};
     int ret;
     int type;
-    struct fb *curr_fbp;
+    struct fbserv_obj *fbsp;
 
     if (!buf) {
 	bu_log("fbs_rfbwriterect: null buffer\n");
 	return;
     }
     if (fbs_data_guard(pcp, buf) < 0) return;
-    curr_fbp = _fbs_conn_fb(pcp);
+    fbsp = _fbs_conn_obj(pcp);
 
     x = pkg_glong(&buf[0*NET_LONG_LEN]);
     y = pkg_glong(&buf[1*NET_LONG_LEN]);
@@ -490,8 +722,8 @@ fbs_rfbwriterect(struct pkg_conn *pcp, char *buf)
     height = pkg_glong(&buf[3*NET_LONG_LEN]);
 
     type = pcp->pkc_type;
-    ret = fb_writerect(curr_fbp, x, y, width, height,
-		       (unsigned char *)&buf[4*NET_LONG_LEN]);
+    ret = fbs_fb_writerect(fbsp, x, y, width, height,
+	    (unsigned char *)&buf[4*NET_LONG_LEN]);
 
     if (type < MSG_NORETURN) {
 	(void)pkg_plong(&rbuf[0*NET_LONG_LEN], ret);
@@ -510,14 +742,14 @@ fbs_rfbbwreadrect(struct pkg_conn *pcp, char *buf)
     int ret;
     static unsigned char *scanbuf = NULL;
     static int buflen = 0;
-    struct fb *curr_fbp;
+    struct fbserv_obj *fbsp;
 
     if (!buf) {
 	bu_log("fbs_rfbbwreadrect: null buffer\n");
 	return;
     }
     if (fbs_data_guard(pcp, buf) < 0) return;
-    curr_fbp = _fbs_conn_fb(pcp);
+    fbsp = _fbs_conn_obj(pcp);
 
     xmin = pkg_glong(&buf[0*NET_LONG_LEN]);
     ymin = pkg_glong(&buf[1*NET_LONG_LEN]);
@@ -539,7 +771,7 @@ fbs_rfbbwreadrect(struct pkg_conn *pcp, char *buf)
 	}
     }
 
-    ret = fb_bwreadrect(curr_fbp, xmin, ymin, width, height, scanbuf);
+    ret = fbs_fb_bwreadrect(fbsp, xmin, ymin, width, height, scanbuf);
     if (ret < 0) ret = 0;		/* map error indications */
     /* sending a 0-length package indicates error */
     pkg_send(MSG_RETURN, (char *)scanbuf, ret, pcp);
@@ -555,14 +787,14 @@ fbs_rfbbwwriterect(struct pkg_conn *pcp, char *buf)
     char rbuf[NET_LONG_LEN+1] = {0};
     int ret;
     int type;
-    struct fb *curr_fbp;
+    struct fbserv_obj *fbsp;
 
     if (!buf) {
 	bu_log("fbs_rfbbwwriterect: null buffer\n");
 	return;
     }
     if (fbs_data_guard(pcp, buf) < 0) return;
-    curr_fbp = _fbs_conn_fb(pcp);
+    fbsp = _fbs_conn_obj(pcp);
 
     x = pkg_glong(&buf[0*NET_LONG_LEN]);
     y = pkg_glong(&buf[1*NET_LONG_LEN]);
@@ -570,8 +802,8 @@ fbs_rfbbwwriterect(struct pkg_conn *pcp, char *buf)
     height = pkg_glong(&buf[3*NET_LONG_LEN]);
 
     type = pcp->pkc_type;
-    ret = fb_writerect(curr_fbp, x, y, width, height,
-		       (unsigned char *)&buf[4*NET_LONG_LEN]);
+    ret = fbs_fb_bwwriterect(fbsp, x, y, width, height,
+	    (unsigned char *)&buf[4*NET_LONG_LEN]);
 
     if (type < MSG_NORETURN) {
 	(void)pkg_plong(&rbuf[0*NET_LONG_LEN], ret);
@@ -586,20 +818,20 @@ fbs_rfbcursor(struct pkg_conn *pcp, char *buf)
 {
     int mode, x, y;
     char rbuf[NET_LONG_LEN+1] = {0};
-    struct fb *curr_fbp;
+    struct fbserv_obj *fbsp;
 
     if (!buf) {
 	bu_log("fbs_rfbcursor: null buffer\n");
 	return;
     }
     if (fbs_data_guard(pcp, buf) < 0) return;
-    curr_fbp = _fbs_conn_fb(pcp);
+    fbsp = _fbs_conn_obj(pcp);
 
     mode = pkg_glong(&buf[0*NET_LONG_LEN]);
     x = pkg_glong(&buf[1*NET_LONG_LEN]);
     y = pkg_glong(&buf[2*NET_LONG_LEN]);
 
-    (void)pkg_plong(&rbuf[0], fb_cursor(curr_fbp, mode, x, y));
+    (void)pkg_plong(&rbuf[0], fbs_fb_cursor(fbsp, mode, x, y));
     pkg_send(MSG_RETURN, rbuf, NET_LONG_LEN, pcp);
     (void)free(buf);
 }
@@ -611,11 +843,11 @@ fbs_rfbgetcursor(struct pkg_conn *pcp, char *buf)
     int ret;
     int mode, x, y;
     char rbuf[4*NET_LONG_LEN+1] = {0};
-    struct fb *curr_fbp;
+    struct fbserv_obj *fbsp;
 
     if (fbs_data_guard(pcp, buf) < 0) return;
-    curr_fbp = _fbs_conn_fb(pcp);
-    ret = fb_getcursor(curr_fbp, &mode, &x, &y);
+    fbsp = _fbs_conn_obj(pcp);
+    ret = fbs_fb_getcursor(fbsp, &mode, &x, &y);
     (void)pkg_plong(&rbuf[0*NET_LONG_LEN], ret);
     (void)pkg_plong(&rbuf[1*NET_LONG_LEN], mode);
     (void)pkg_plong(&rbuf[2*NET_LONG_LEN], x);
@@ -635,22 +867,22 @@ fbs_rfbsetcursor(struct pkg_conn *pcp, char *buf)
     int ret;
     int xbits, ybits;
     int xorig, yorig;
-    struct fb *curr_fbp;
+    struct fbserv_obj *fbsp;
 
     if (!buf) {
 	bu_log("fbs_rfsetcursor: null buffer\n");
 	return;
     }
     if (fbs_data_guard(pcp, buf) < 0) return;
-    curr_fbp = _fbs_conn_fb(pcp);
+    fbsp = _fbs_conn_obj(pcp);
 
     xbits = pkg_glong(&buf[0*NET_LONG_LEN]);
     ybits = pkg_glong(&buf[1*NET_LONG_LEN]);
     xorig = pkg_glong(&buf[2*NET_LONG_LEN]);
     yorig = pkg_glong(&buf[3*NET_LONG_LEN]);
 
-    ret = fb_setcursor(curr_fbp, (unsigned char *)&buf[4*NET_LONG_LEN],
-		       xbits, ybits, xorig, yorig);
+    ret = fbs_fb_setcursor(fbsp, (unsigned char *)&buf[4*NET_LONG_LEN],
+	    xbits, ybits, xorig, yorig);
 
     if (pcp->pkc_type < MSG_NORETURN) {
 	(void)pkg_plong(&rbuf[0*NET_LONG_LEN], ret);
@@ -666,20 +898,20 @@ fbs_rfbscursor(struct pkg_conn *pcp, char *buf)
 {
     int mode, x, y;
     char rbuf[NET_LONG_LEN+1] = {0};
-    struct fb *curr_fbp;
+    struct fbserv_obj *fbsp;
 
     if (!buf) {
 	bu_log("fbs_rfbscursor: null buffer\n");
 	return;
     }
     if (fbs_data_guard(pcp, buf) < 0) return;
-    curr_fbp = _fbs_conn_fb(pcp);
+    fbsp = _fbs_conn_obj(pcp);
 
     mode = pkg_glong(&buf[0*NET_LONG_LEN]);
     x = pkg_glong(&buf[1*NET_LONG_LEN]);
     y = pkg_glong(&buf[2*NET_LONG_LEN]);
 
-    (void)pkg_plong(&rbuf[0], fb_scursor(curr_fbp, mode, x, y));
+    (void)pkg_plong(&rbuf[0], fbs_fb_scursor(fbsp, mode, x, y));
     pkg_send(MSG_RETURN, rbuf, NET_LONG_LEN, pcp);
     (void)free(buf);
 }
@@ -691,19 +923,19 @@ fbs_rfbwindow(struct pkg_conn *pcp, char *buf)
 {
     int x, y;
     char rbuf[NET_LONG_LEN+1] = {0};
-    struct fb *curr_fbp;
+    struct fbserv_obj *fbsp;
 
     if (!buf) {
 	bu_log("fbs_rfbwindow: null buffer\n");
 	return;
     }
     if (fbs_data_guard(pcp, buf) < 0) return;
-    curr_fbp = _fbs_conn_fb(pcp);
+    fbsp = _fbs_conn_obj(pcp);
 
     x = pkg_glong(&buf[0*NET_LONG_LEN]);
     y = pkg_glong(&buf[1*NET_LONG_LEN]);
 
-    (void)pkg_plong(&rbuf[0], fb_window(curr_fbp, x, y));
+    (void)pkg_plong(&rbuf[0], fbs_fb_window(fbsp, x, y));
     pkg_send(MSG_RETURN, rbuf, NET_LONG_LEN, pcp);
 
     (void)free(buf);
@@ -716,19 +948,19 @@ fbs_rfbzoom(struct pkg_conn *pcp, char *buf)
 {
     int x, y;
     char rbuf[NET_LONG_LEN+1] = {0};
-    struct fb *curr_fbp;
+    struct fbserv_obj *fbsp;
 
     if (!buf) {
 	bu_log("fbs_rfbzoom: null buffer\n");
 	return;
     }
     if (fbs_data_guard(pcp, buf) < 0) return;
-    curr_fbp = _fbs_conn_fb(pcp);
+    fbsp = _fbs_conn_obj(pcp);
 
     x = pkg_glong(&buf[0*NET_LONG_LEN]);
     y = pkg_glong(&buf[1*NET_LONG_LEN]);
 
-    (void)pkg_plong(&rbuf[0], fb_zoom(curr_fbp, x, y));
+    (void)pkg_plong(&rbuf[0], fbs_fb_zoom(fbsp, x, y));
     pkg_send(MSG_RETURN, rbuf, NET_LONG_LEN, pcp);
     (void)free(buf);
 }
@@ -740,21 +972,21 @@ fbs_rfbview(struct pkg_conn *pcp, char *buf)
     int ret;
     int xcenter, ycenter, xzoom, yzoom;
     char rbuf[NET_LONG_LEN+1] = {0};
-    struct fb *curr_fbp;
+    struct fbserv_obj *fbsp;
 
     if (!buf) {
 	bu_log("fbs_rfbv: null buffer\n");
 	return;
     }
     if (fbs_data_guard(pcp, buf) < 0) return;
-    curr_fbp = _fbs_conn_fb(pcp);
+    fbsp = _fbs_conn_obj(pcp);
 
     xcenter = pkg_glong(&buf[0*NET_LONG_LEN]);
     ycenter = pkg_glong(&buf[1*NET_LONG_LEN]);
     xzoom = pkg_glong(&buf[2*NET_LONG_LEN]);
     yzoom = pkg_glong(&buf[3*NET_LONG_LEN]);
 
-    ret = fb_view(curr_fbp, xcenter, ycenter, xzoom, yzoom);
+    ret = fbs_fb_view(fbsp, xcenter, ycenter, xzoom, yzoom);
     (void)pkg_plong(&rbuf[0], ret);
     pkg_send(MSG_RETURN, rbuf, NET_LONG_LEN, pcp);
     (void)free(buf);
@@ -767,11 +999,11 @@ fbs_rfbgetview(struct pkg_conn *pcp, char *buf)
     int ret;
     int xcenter, ycenter, xzoom, yzoom;
     char rbuf[5*NET_LONG_LEN+1] = {0};
-    struct fb *curr_fbp;
+    struct fbserv_obj *fbsp;
 
     if (fbs_data_guard(pcp, buf) < 0) return;
-    curr_fbp = _fbs_conn_fb(pcp);
-    ret = fb_getview(curr_fbp, &xcenter, &ycenter, &xzoom, &yzoom);
+    fbsp = _fbs_conn_obj(pcp);
+    ret = fbs_fb_getview(fbsp, &xcenter, &ycenter, &xzoom, &yzoom);
     (void)pkg_plong(&rbuf[0*NET_LONG_LEN], ret);
     (void)pkg_plong(&rbuf[1*NET_LONG_LEN], xcenter);
     (void)pkg_plong(&rbuf[2*NET_LONG_LEN], ycenter);
@@ -790,17 +1022,17 @@ fbs_rfbrmap(struct pkg_conn *pcp, char *buf)
 {
     register int i;
     char rbuf[NET_LONG_LEN+1] = {0};
-    ColorMap map;
+    struct fbserv_colormap map;
     unsigned char cm[256*2*3];
-    struct fb *curr_fbp;
+    struct fbserv_obj *fbsp;
 
     if (fbs_data_guard(pcp, buf) < 0) return;
-    curr_fbp = _fbs_conn_fb(pcp);
-    (void)pkg_plong(&rbuf[0*NET_LONG_LEN], fb_rmap(curr_fbp, &map));
+    fbsp = _fbs_conn_obj(pcp);
+    (void)pkg_plong(&rbuf[0*NET_LONG_LEN], fbs_fb_rmap(fbsp, &map));
     for (i = 0; i < 256; i++) {
-	(void)pkg_pshort((char *)(cm+2*(0+i)), map.cm_red[i]);
-	(void)pkg_pshort((char *)(cm+2*(256+i)), map.cm_green[i]);
-	(void)pkg_pshort((char *)(cm+2*(512+i)), map.cm_blue[i]);
+	(void)pkg_pshort((char *)(cm+2*(0+i)), map.red[i]);
+	(void)pkg_pshort((char *)(cm+2*(256+i)), map.green[i]);
+	(void)pkg_pshort((char *)(cm+2*(512+i)), map.blue[i]);
     }
     pkg_send(MSG_DATA, (char *)cm, sizeof(cm), pcp);
     pkg_send(MSG_RETURN, rbuf, NET_LONG_LEN, pcp);
@@ -823,25 +1055,25 @@ fbs_rfbwmap(struct pkg_conn *pcp, char *buf)
     int i;
     char rbuf[NET_LONG_LEN+1] = {0};
     long ret;
-    ColorMap map;
-    struct fb *curr_fbp;
+    struct fbserv_colormap map;
+    struct fbserv_obj *fbsp;
 
     if (!buf) {
 	bu_log("fbs_rfbwmap: null buffer\n");
 	return;
     }
     if (fbs_data_guard(pcp, buf) < 0) return;
-    curr_fbp = _fbs_conn_fb(pcp);
+    fbsp = _fbs_conn_obj(pcp);
 
     if (pcp->pkc_len == 0) {
-	ret = fb_wmap(curr_fbp, COLORMAP_NULL);
+	ret = fbs_fb_wmap(fbsp, NULL);
     } else {
 	for (i = 0; i < 256; i++) {
-	    map.cm_red[i] = pkg_gshort(buf+2*(0+i));
-	    map.cm_green[i] = pkg_gshort(buf+2*(256+i));
-	    map.cm_blue[i] = pkg_gshort(buf+2*(512+i));
+	    map.red[i] = pkg_gshort(buf+2*(0+i));
+	    map.green[i] = pkg_gshort(buf+2*(256+i));
+	    map.blue[i] = pkg_gshort(buf+2*(512+i));
 	}
-	ret = fb_wmap(curr_fbp, &map);
+	ret = fbs_fb_wmap(fbsp, &map);
     }
     (void)pkg_plong(&rbuf[0], ret);
     pkg_send(MSG_RETURN, rbuf, NET_LONG_LEN, pcp);
@@ -854,11 +1086,11 @@ fbs_rfbflush(struct pkg_conn *pcp, char *buf)
 {
     int ret;
     char rbuf[NET_LONG_LEN+1] = {0};
-    struct fb *curr_fbp;
+    struct fbserv_obj *fbsp;
 
     if (fbs_data_guard(pcp, buf) < 0) return;
-    curr_fbp = _fbs_conn_fb(pcp);
-    ret = fb_flush(curr_fbp);
+    fbsp = _fbs_conn_obj(pcp);
+    ret = fbs_fb_flush(fbsp);
 
     if (pcp->pkc_type < MSG_NORETURN) {
 	(void)pkg_plong(rbuf, ret);
@@ -874,12 +1106,12 @@ fbs_rfbflush(struct pkg_conn *pcp, char *buf)
 void
 fbs_rfbpoll(struct pkg_conn *pcp, char *buf)
 {
-    struct fb *curr_fbp;
+    struct fbserv_obj *fbsp;
 
     if (fbs_data_guard(pcp, buf) < 0) return;
-    curr_fbp = _fbs_conn_fb(pcp);
+    fbsp = _fbs_conn_obj(pcp);
 
-    (void)fb_poll(curr_fbp);
+    (void)fbs_fb_poll(fbsp);
     if (buf) {
 	(void)free(buf);
     }
@@ -895,18 +1127,18 @@ fbs_rfbhelp(struct pkg_conn *pcp, char *buf)
 {
     long ret;
     char rbuf[NET_LONG_LEN+1] = {0};
-    struct fb *curr_fbp;
+    struct fbserv_obj *fbsp;
 
     if (!buf) {
 	bu_log("fbs_rfbhelp: null buffer\n");
 	return;
     }
     if (fbs_data_guard(pcp, buf) < 0) return;
-    curr_fbp = _fbs_conn_fb(pcp);
+    fbsp = _fbs_conn_obj(pcp);
 
     (void)pkg_glong(&buf[0*NET_LONG_LEN]);
 
-    ret = fb_help(curr_fbp);
+    ret = fbs_fb_help(fbsp);
     (void)pkg_plong(&rbuf[0], ret);
     pkg_send(MSG_RETURN, rbuf, NET_LONG_LEN, pcp);
     (void)free(buf);
@@ -940,6 +1172,38 @@ fbs_generate_token(struct fbserv_obj *fbsp)
 	fbserv_generate_token(fbsp->fbs_auth_token);
     }
     return fbsp->fbs_auth_token;
+}
+
+
+int
+fbs_set_backend(struct fbserv_obj *fbsp,
+	const struct fbserv_fb_ops *ops,
+	void *ctx)
+{
+    if (!fbsp || !ops || !ctx || !ops->info)
+	return BRLCAD_ERROR;
+
+    fbsp->fbs_fb_ops = ops;
+    fbsp->fbs_fb_ctx = ctx;
+    return BRLCAD_OK;
+}
+
+
+void
+fbs_clear_backend(struct fbserv_obj *fbsp)
+{
+    if (!fbsp)
+	return;
+
+    fbsp->fbs_fb_ops = NULL;
+    fbsp->fbs_fb_ctx = NULL;
+}
+
+
+int
+fbs_framebuffer_info(struct fbserv_obj *fbsp, struct fbserv_fb_info *info)
+{
+    return fbs_fb_info(fbsp, info);
 }
 
 

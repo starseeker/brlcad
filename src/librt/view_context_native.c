@@ -216,7 +216,7 @@ _rt_view_context_native_create_copy_with_set(const void *src_ctx,
 	return NULL;
 
     if (src) {
-	void *callbacks = n->callbacks;
+	struct bu_ptbl *callbacks = n->callbacks;
 	uint32_t magic = n->magic;
 	*n = *src;
 	n->magic = magic;

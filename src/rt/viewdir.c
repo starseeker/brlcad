@@ -35,10 +35,6 @@
 #include "./rtuif.h"
 #include "./ext.h"
 
-
-extern	int	width;			/* # of pixels in X; picture width */
-extern int	npsw;			/* number of worker PSWs to run */
-
 /* Viewing module specific "set" variables */
 struct bu_structparse view_parse[] = {
     {"",	0, (char *)0,	0,	BU_STRUCTPARSE_FUNC_NULL }

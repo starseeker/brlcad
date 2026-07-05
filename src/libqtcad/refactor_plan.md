@@ -39,7 +39,10 @@ Current tree notes:
 - QgCanvasState pimpl struct (src/libqtcad/QgCanvasState.h) consolidates the duplicated private state of QgGL and QgSW; shared inline helpers (qgcanvas_render_size, qgcanvas_stash_hashes, qgcanvas_diff_hashes_check, qgcanvas_aet, qgcanvas_set_view) eliminate the textual duplication previously present in both canvas .cpp files.
 - QgCanvasInput class (src/libqtcad/QgCanvasInput.h/.cpp) replaced the deleted legacy free-function input API with a per-canvas-instance class whose drag-tracking maps are instance members rather than global statics; cross-canvas interference is therefore impossible.
 - QgGL and QgSW now inherit QgCanvasBase in addition to QOpenGLWidget/QWidget; their public headers carry only a forward-declared QgCanvasState* pimpl pointer (no STL/libdm/libbv member exposure); render_to_file() and get_viewport_image() added to QgGL.
+- QgGL/QgSW ordinary canvas painting is Obol-only.  QgGL renders pending Obol work through Qt's current QOpenGLWidget context; QgSW presents Obol readback through QWidget painting.  They no longer open dm-qtgl/dm-swrast fallback display managers for normal canvas drawing.
+- qtcad Obol readback uses a private Qt ContextManager that starts from Qt's default QSurfaceFormat, requests desktop OpenGL when Qt has not selected a renderable type, shares with Qt's current/global context when available, and falls back to OSMesa when the platform cannot create a Qt OpenGL context.
 - QgView now holds a single QgCanvasBase *canvas pointer; the #ifdef BRLCAD_OPENGL duplication that previously appeared in every method body has been replaced with a single make_canvas() factory function plus virtual dispatch; the class header no longer includes QgGL.h or QgSW.h.
+- qged embedded framebuffer traffic no longer branches on QgGL versus QgSW legacy framebuffer canvases.  qged installs a backend-neutral fbserv operation table and delegates image-stream presentation to libbrlobol's `BRLObolFramebufferStream` attached to the active QgView Obol window host, so qtcad canvas type is presentation-only.
 - Phase 3 is complete.
 
 Phase 4 — Filter hierarchy unification
@@ -125,7 +128,8 @@ Current tree notes:
 Phase 8 — Test and CI coverage
 
 Current tree notes:
-- Headless QApplication coverage has already started: src/libqtcad/tests contains qgmodel/qgview test programs plus the offscreen ged_test_qged_swrast integration test, and the latter is wired into CTest with QT_QPA_PLATFORM=offscreen.
+- Headless QApplication coverage now focuses on Obol paths: src/libqtcad/tests contains qgmodel/qgview tests, Obol controller/window-host/draw/faceplate/pick/snap/measure/export tests, and progressive LoD tests wired into CTest with QT_QPA_PLATFORM=offscreen.  The old ged_test_qged_swrast and dm backend benchmark sources/tests have been retired.
+- qged no longer has a `dm_plugins` build prerequisite for its Obol/qtcad view path.  The remaining framebuffer validation gap is an application-level streaming test that drives `ert`/fbserv traffic into an Obol-hosted image stream and verifies intermediate rendered frames.
 - QAbstractItemModelTester coverage now includes a dedicated offscreen CTest entry (test_qgmodel_model_tester) over QgModel, with QSignalSpy checks for fetch/open and layout-change signals; the old Model_Test TODO in QgModel.h is removed.
 
 - Add headless QApplication-based unit tests (using QSignalSpy and QTest) for the most logic-heavy classes: QgModel (tree fetch/hierarchy), QgKeyValModel, QgAttributesModel, each filter family (synthetic mouse events), QgFlowLayout, QgToolPalette selection logic, QgConsole command echo / completion, QgSignalFlags flag round-tripping.
@@ -159,7 +163,7 @@ Current tree notes:
 Sequencing and risk
 
 - Phases 0–2 and 5 are low-risk (mechanical, no behavior change) and unblock everything else.
-- Phase 3 (canvas unification) is the highest-value change for the drawing stack work currently in flight, but it must land while qged, archer, and the dm-qtgl/dm-swrast plugins are buildable at each step.
+- Phase 3 (canvas unification) is the highest-value change for the drawing stack work currently in flight.  qtcad canvases should stay Obol-only; remaining dm-qtgl/dm-swrast work is compatibility/fbserv debt, not the normal qtcad rendering path.
 - Phase 4 (filter unification) has a localized blast radius (mostly src/qged/plugins/{polygon,view/measure,view/select,…}); doable independently.
 - Phase 6 (session abstraction) is the most invasive design change and should follow Phase 2, after the headers no longer leak C structs.
 - Phase 7 (namespacing) is best done last so it only renames once, with shim headers for one release.
@@ -168,6 +172,6 @@ Sequencing and risk
 At every step the gating check is:
 
 cmake -DBRLCAD_ENABLE_QT=ON ...;
-cmake --build … --target libqtcad qged archer dm-qtgl dm-swrast
+cmake --build ... --target libqtcad qged test_qtcad_obol_controller test_qtcad_obol_window_host
 
 and the existing tests under src/libqtcad/tests must continue to pass.

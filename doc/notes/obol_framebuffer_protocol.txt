@@ -1,0 +1,116 @@
+Obol Framebuffer Protocol Boundary
+==================================
+
+Status
+------
+
+The fbserv wire protocol currently lives in libdm because historical embedded
+framebuffer users reached it through display managers and `struct fb`.
+That location is transitional.  New code should treat fbserv as a
+framebuffer/image-stream protocol, not as display-manager or scene-graph
+behavior.
+
+Target Ownership
+----------------
+
+Long term, protocol parsing and transport handling should move to a small
+framebuffer-stream layer beside libimgstream/libicv.  Possible names include a
+standalone `libfbserv` or a libimgstream protocol module.  The important
+boundary is:
+
+* Protocol layer: owns TCP/IPC packet handling, fbserv compatibility commands,
+  stream dimensions, pixel writes/reads, colormaps, cursor/view compatibility
+  state, and backend-neutral operation dispatch.
+* libimgstream/libicv: own concrete image buffer storage, pixel formats,
+  conversion, import/export, and image-stream primitives.
+* libbrlobol: owns Obol/Coin presentation of image streams, scene placement,
+  view-local roots, render scheduling, pick/interaction behavior, selection
+  metadata, and lifecycle inside BRL-CAD scenes.  The reusable
+  `BRLObolFramebufferStream` helper owns the common image-stream-to-window-host
+  lifecycle for memory-backed embedded framebuffer streams.
+
+libbrlobol should not own fbserv packet parsing or `struct fb` compatibility.
+Keeping that boundary clean avoids replacing one legacy display-manager
+coupling with a scene-graph coupling.
+
+Current Bridge
+--------------
+
+The current libdm fbserv implementation has a backend operation table.  If a
+host installs the table, protocol handlers call those operations; otherwise the
+legacy `struct fb` functions remain the fallback backend.  This lets migrated
+applications prove Obol/imgstream framebuffer behavior before the protocol is
+physically moved out of libdm.
+
+qged uses this path today.  Its fbserv bridge opens an `imgstream` framebuffer
+at the active `QgView` render size and delegates pixel, view, cursor, colormap,
+flush, and poll behavior to `BRLObolFramebufferStream`.  qged only supplies Qt
+render sizing, fbserv operation shims, and view refresh notification.  qged no
+longer selects between qtcad GL and swrast framebuffer canvases for embedded
+framebuffer traffic.
+
+GSH, classic MGED, and other non-Qt GED hosts use a libged Obol fbserv bridge
+when an Obol DM is attached and no application-specific fbserv backend is
+installed.  That bridge uses the same `BRLObolFramebufferStream` helper, owns
+the generic fbserv watcher threads, and exposes an application update hook,
+`ged_draw_obol_framebuffer_present`, so framebuffer stream state can be
+published to the Obol scene before rendering.  The bridge is intentionally not
+a new libdm framebuffer implementation; it is a transitional owner for the
+protocol-to-imgstream path until fbserv moves out of libdm.
+
+Current automated coverage includes `test_qged_obol_fbserv`,
+`gsh_obol_smoke`, `gsh_obol_ert_smoke`, and `mged_obol_ert_smoke`.  These
+prove the qged operation table path and the plain GED Obol bridge can attach,
+publish framebuffer state, present pending updates, launch real `ert`
+subprocesses through the Obol IPC framebuffer path, and render through attached
+Obol views.
+
+The remaining coverage gap is a bounded slow streaming-image test that captures
+intermediate framebuffer states rather than only the final/presented state.
+In the current build, `NIST_MBE_PMI_3.g` is an empty 104-byte database because
+the STEP conversion target is unavailable.  `NIST_MBE_PMI_7-10.g` can produce
+distinct intermediate Obol framebuffer screenshots during a single-threaded
+`ert`, but setup/runtime is too long for the default smoke suite.  Treat that
+as manual/slow regression material until a shorter deterministic fixture or
+explicit slow-test gate exists.
+
+Threading Contract
+------------------
+
+Framebuffer producers may run on network/pkg watcher threads.  Those threads
+may update `imgstream` pixel data, fb-compatible cursor/view state, dirty
+metadata, and generation counters, but they must not mutate Coin/Obol scene
+graph fields or rebuild geometry.
+
+`SoBRLImageSource` therefore treats stream notification as a pending-update
+marker only.  Its dirty callback records an atomic pending generation and does
+not write Inventor fields.  The update owner calls `refreshFromStream`,
+`SoBRLViewportImage::syncFromSource`, or `BRLObolFramebufferStream::present`
+to copy coherent stream state into Coin fields and texture geometry.
+
+The render traversal is read-only with respect to framebuffer scene state.
+Applications must serialize their own update/present phase before render.
+For qged, the Qt socket/notifier callback is the update phase and calls
+`BRLObolFramebufferStream::present` before requesting a view refresh.  For
+GSH, the command-thread delay pump owns update/render in the headless smoke
+path; the main subprocess-output loop does not render because the dm-obol
+OSMesa renderer is thread-affine in that configuration.  Classic MGED and
+TclCAD present pending Obol framebuffer state from their view refresh paths
+before `dm_draw_begin`, keeping `ert` and other embedded framebuffer producers
+dirty-only until the application update phase.
+
+Design Implications
+-------------------
+
+* New framebuffer work should target the backend operation table, not raw
+  `struct fb`, display-manager internals, or legacy qtcad canvas lookup.
+* Obol hosts should expose framebuffer content as scene objects or view-local
+  presentation roots over image streams through `BRLObolFramebufferStream`.
+* Producer callbacks should publish dirty state only.  Coin field writes,
+  geometry rebuilds, texture refresh, and render requests belong in an
+  application/update phase, not in fbserv watcher threads or render traversal.
+* MGED and GSH use the same pattern: attach an Obol view/controller, install an
+  image-stream framebuffer backend, and verify raytrace updates appear in
+  rendered screenshots.
+* Once qged, GSH, MGED, and tests no longer need libdm's `struct fb` fallback,
+  move the protocol implementation beside libimgstream/libicv and shrink libdm.

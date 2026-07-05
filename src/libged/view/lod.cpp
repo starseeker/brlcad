@@ -104,9 +104,11 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
     }
     auto commit_lod_policy = [&]() {
 	ged_draw_view_context_lod_policy_apply(view_ctx, &lod_policy);
-	int rac = 1;
-	const char *rav[1] = {"redraw"};
-	ged_exec_redraw(gedp, rac, (const char **)rav);
+	if (!ged_draw_obol_view_lod_policy_changed(gedp, view_ctx)) {
+	    int rac = 1;
+	    const char *rav[1] = {"redraw"};
+	    ged_exec_redraw(gedp, rac, (const char **)rav);
+	}
     };
     auto redraw_view = [&]() {
 	int rac = 1;
@@ -228,7 +230,7 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		done++;
 		bu_log("Caching BoT %s (%d of %d)\n", dp->d_namep, done, total);
 		struct BRLObolMeshLodCacheStatus status =
-		    BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
+			BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
 		if (brlobol_mesh_lod_cache_refresh(gedp->dbip, dp->d_namep, &status) != BRLCAD_OK ||
 		    !status.has_cache_key)
 		    continue;
@@ -284,10 +286,10 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		// Because BRep LoD uses generated mesh data rather than a database
 		// full-detail mesh payload, store it with a fidelity ratio of 1.
 		struct BRLObolMeshLodCacheStatus status =
-		    BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
+			BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
 		(void)brlobol_mesh_lod_cache_store_mesh(gedp->dbip, dp->d_namep,
-					     (const point_t *)pnts, (size_t)pnt_cnt, normals,
-					     faces, (size_t)face_cnt, key, 1.0, &status);
+							(const point_t *)pnts, (size_t)pnt_cnt, normals,
+							faces, (size_t)face_cnt, key, 1.0, &status);
 
 		rt_db_free_internal(&dbintern);
 		bu_free(faces, "faces");
@@ -322,7 +324,7 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		if ((dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT) ||
 		    (dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP)) {
 		    struct BRLObolMeshLodCacheStatus status =
-			BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
+			    BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
 		    if (brlobol_mesh_lod_cache_status(gedp->dbip, dp->d_namep, &status) != BRLCAD_OK ||
 			!status.has_cache_key) {
 			return BRLCAD_ERROR;

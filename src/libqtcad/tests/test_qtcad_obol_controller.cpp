@@ -148,9 +148,10 @@ main(int argc, char **argv)
     if (!camera->isOfType(SoOrthographicCamera::getClassTypeId()))
 	FAIL("QgView Obol controller should default to an orthographic camera");
     if (!controller->getViewport() ||
-	    controller->getViewport()->getSceneGraph() != controller->getSceneRoot() ||
+	    !controller->getRenderSceneRoot() ||
+	    controller->getViewport()->getSceneGraph() != controller->getRenderSceneRoot() ||
 	    controller->getViewport()->getCamera() != camera)
-	FAIL("QgView Obol controller should wire scene and camera through SoViewport");
+	FAIL("QgView Obol controller should wire render scene and camera through SoViewport");
     if (!controller->getRenderManager() ||
 	    controller->getRenderManager()->getSceneGraph() != controller->getRenderRoot() ||
 	    controller->getRenderManager()->getCamera() != camera)

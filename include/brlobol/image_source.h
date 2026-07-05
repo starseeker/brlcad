@@ -20,6 +20,8 @@
 #include <Inventor/nodes/SoNode.h>
 #include <Inventor/nodes/SoSubNode.h>
 
+#include <atomic>
+
 class BRLOBOL_EXPORT SoBRLImageSource : public SoNode {
     typedef SoNode inherited;
 
@@ -72,6 +74,10 @@ public:
     int setStream(imgstream_t *stream);
     void clearSource(void);
     imgstream_t *getStream(void) const;
+    /* Thread-safe, non-mutating check for producer data not yet applied
+     * to the Coin fields by refreshFromStream().
+     */
+    SbBool hasPendingStreamUpdate(void) const;
     int refreshFromStream(void);
     SbBool ownsStream(void) const;
 
@@ -86,6 +92,8 @@ private:
 
     imgstream_t *stream;
     imgstream_subscriber_id subscriberId;
+    std::atomic<uint64_t> pendingGeneration;
+    std::atomic<uint64_t> realizedGeneration;
     SbBool streamOwned;
 };
 

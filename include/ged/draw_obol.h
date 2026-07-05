@@ -119,6 +119,24 @@ GED_EXPORT void
 ged_draw_obol_controller_detach_opaque(struct ged *gedp,
 				       void *controller);
 
+/**
+ * Present pending Obol framebuffer stream state into the attached view scene.
+ *
+ * Applications should call this from their view/update thread before render
+ * traversal.  fbserv producer threads only update image-stream state; they do
+ * not mutate Coin/Obol scene graph fields directly.
+ */
+GED_EXPORT int
+ged_draw_obol_framebuffer_present(struct ged *gedp);
+
+/**
+ * Release the libged-owned Obol framebuffer bridge, if one is active.
+ *
+ * Call this before destroying an attached Obol display manager/controller.
+ */
+GED_EXPORT void
+ged_draw_obol_framebuffer_release(struct ged *gedp);
+
 GED_EXPORT int
 ged_draw_obol_lod_service_start(struct ged *gedp,
 				void *view_ctx,
@@ -138,6 +156,10 @@ GED_EXPORT int
 ged_draw_obol_lod_service_status(struct ged *gedp,
 				 void *view_ctx,
 				 struct ged_draw_obol_lod_service_status *status);
+
+GED_EXPORT int
+ged_draw_obol_view_lod_policy_changed(struct ged *gedp,
+				      void *view_ctx);
 
 GED_EXPORT size_t
 ged_draw_obol_lod_service_prewarm(struct ged *gedp,

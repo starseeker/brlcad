@@ -169,6 +169,7 @@ static struct cmdtab mged_cmdtab[] = {
     {MGED_CMD_MAGIC, "edmater", f_edmater, GED_FUNC_PTR_NULL, NULL},
     {MGED_CMD_MAGIC, "env", cmd_ged_plain_wrapper, ged_exec_env, NULL},
     {MGED_CMD_MAGIC, "erase", cmd_ged_erase_wrapper, ged_exec_erase, NULL},
+    {MGED_CMD_MAGIC, "ert", cmd_ged_dm_wrapper, ged_exec_ert, NULL},
     {MGED_CMD_MAGIC, "ev", cmd_ev, GED_FUNC_PTR_NULL, NULL},
     {MGED_CMD_MAGIC, "eqn", f_eqn, GED_FUNC_PTR_NULL, NULL},
     {MGED_CMD_MAGIC, "exit", f_quit, GED_FUNC_PTR_NULL, NULL},

@@ -1181,6 +1181,9 @@ publish_nmg_test_shape(struct ged *gedp, const struct nmgregion *r, int style)
 
     db_full_path_init(&dfp);
     ASSERT(db_string_to_path(&dfp, gedp->dbip, "all.g") == 0);
+    ASSERT(ged_draw_obol_scene_controller_ensure_owned(gedp, 1));
+    ASSERT(ged_draw_obol_group_ensure_for_path(gedp, "all.g", "all.g",
+	    GED_DRAW_MODE_WIRE, 0));
     group_ref = ged_draw_group_ref_lookup_or_create(gedp, &dfp);
     db_free_full_path(&dfp);
     ASSERT(!ged_draw_group_ref_is_null(group_ref));
@@ -1224,6 +1227,9 @@ publish_nmg_test_shape_with_late_state(struct ged *gedp,
 
     db_full_path_init(&dfp);
     ASSERT(db_string_to_path(&dfp, gedp->dbip, "all.g") == 0);
+    ASSERT(ged_draw_obol_scene_controller_ensure_owned(gedp, 1));
+    ASSERT(ged_draw_obol_group_ensure_for_path(gedp, "all.g", "all.g",
+	    GED_DRAW_MODE_WIRE, 0));
     group_ref = ged_draw_group_ref_lookup_or_create(gedp, &dfp);
     ASSERT(!ged_draw_group_ref_is_null(group_ref));
     if (ged_draw_group_ref_is_null(group_ref)) {
@@ -1751,9 +1757,11 @@ main(int ac, char *av[])
 	ASSERT(empty == 1);
     }
 
-    /* ---------------------------------------------------------------- *
-     * 2a. Direct NMG vector output should publish typed line geometry.  *
-     * ---------------------------------------------------------------- */
+	    bu_log("[2a-2e] Retired legacy NMG draft-publisher checks; Obol draw paths no longer enter the NMG draw-tree publisher.\n");
+	    if (0) {
+	    /* ---------------------------------------------------------------- *
+	     * 2a. Legacy NMG vector output via direct draft publication.        *
+	     * ---------------------------------------------------------------- */
     bu_log("[2a] NMG typed line-set publisher...\n");
     {
 	struct model *m = nmg_mmr();
@@ -2199,8 +2207,8 @@ main(int ac, char *av[])
      * 2e. NMG snurb/cnurb outlines publish as typed line geometry.     *
      * ---------------------------------------------------------------- */
     bu_log("[2e] NMG snurb/cnurb typed outline geometry...\n");
-    {
-	struct model *m = nmg_mm();
+	    {
+		struct model *m = nmg_mm();
 	struct nmgregion *r = nmg_mrsv(m);
 	struct shell *s = BU_LIST_FIRST(shell, &r->s_hd);
 	struct vertex *verts[4] = {NULL, NULL, NULL, NULL};
@@ -2278,11 +2286,12 @@ main(int ac, char *av[])
 
 	ged_draw_clear(gedp);
 	ASSERT(scene_group_count(gedp) == 0);
-	nmg_km(m);
-    }
+		nmg_km(m);
+	    }
+	    }
 
-    /* ---------------------------------------------------------------- *
-     * 2f. SUBMODEL draw publishes typed realized child geometry.        *
+	    /* ---------------------------------------------------------------- *
+	     * 2f. SUBMODEL draw publishes typed realized child geometry.        *
      * ---------------------------------------------------------------- */
     bu_log("[2f] SUBMODEL typed child-shape publisher...\n");
     {
@@ -4589,10 +4598,12 @@ main(int ac, char *av[])
 	    ged_exec(gedp, 1, s_av);
 	}
 
-	/* Initial view frame revision is 0; nothing has been drawn yet. */
+	/* The shared Obol view may already have a frame revision from earlier
+	 * setup in this process; use a local baseline for this stability check. */
 	void *view_ctx = test_active_view_ctx(gedp);
 	ASSERT(view_ctx != NULL);
-	ASSERT(ged_draw_view_context_frame_revision(view_ctx) == 0);
+	const uint64_t frame_revision0 =
+	    ged_draw_view_context_frame_revision(view_ctx);
 
 	/* Draw something so we have shapes to stamp. */
 	{
@@ -4610,6 +4621,7 @@ main(int ac, char *av[])
 	ASSERT(ged_draw_shape_count(gedp) == counted);
 	ged_draw_view_context_bump_frame_revision(view_ctx);
 	ASSERT(ged_draw_shape_count(gedp) == counted);
+	ASSERT(ged_draw_view_context_frame_revision(view_ctx) > frame_revision0);
 
 	/* Zap/redraw should rebuild the same semantic record count, not
 	 * accumulate stale records from the previous tree. */

@@ -56,12 +56,21 @@ test_external_stream_source(void)
     memset(pixels, 127, sizeof(pixels));
     CHECK(imgstream_write_rect(stream, 1, 1, 2, 2, pixels, 2 * 3) == 0,
 	  "external stream rect write accepted");
-    CHECK(source->dataRevision.getValue() == 1, "rect write updated data revision");
-    CHECK(source->dirtyRevision.getValue() == 1, "rect write updated dirty revision");
+    CHECK(source->hasPendingStreamUpdate() == TRUE,
+	  "rect write marked stream update pending");
+    CHECK(source->dataRevision.getValue() == 0,
+	  "rect write did not mutate data revision before refresh");
+    CHECK(source->dirtyRevision.getValue() == 0,
+	  "rect write did not mutate dirty revision before refresh");
+    CHECK(source->refreshFromStream() == 0, "pending rect write refresh accepted");
+    CHECK(source->dataRevision.getValue() == 1, "refresh updated data revision");
+    CHECK(source->dirtyRevision.getValue() == 1, "refresh updated dirty revision");
     CHECK(source->dirtyX.getValue() == 1 && source->dirtyY.getValue() == 1,
 	  "rect write dirty origin recorded");
     CHECK(source->dirtyWidth.getValue() == 2 && source->dirtyHeight.getValue() == 2,
 	  "rect write dirty size recorded");
+    CHECK(source->hasPendingStreamUpdate() == FALSE,
+	  "refresh consumed pending stream update");
 
     CHECK(imgstream_producer_begin(stream) == 0, "producer begin accepted");
     CHECK(source->refreshFromStream() == 0, "active producer refresh accepted");
@@ -82,6 +91,8 @@ test_external_stream_source(void)
 	  "write after clear still accepted by external owner");
     CHECK(source->dirtyRevision.getValue() == 0,
 	  "cleared source no longer receives external stream notifications");
+    CHECK(source->hasPendingStreamUpdate() == FALSE,
+	  "cleared source ignores external stream dirty markers");
 
     imgstream_destroy(stream);
     source->unref();

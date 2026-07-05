@@ -43,10 +43,12 @@
 #ifdef USE_DM
 #  define DM_WITH_RT
 #  include "dm.h"
+#  include "dm/fbserv.h"
 #endif
 
 #include "ged.h"
 #include "ged/draw.h"
+#include "ged/draw_obol.h"
 #include "ged/db_index.h"
 #include "ged/view.h"
 
@@ -267,6 +269,8 @@ public:
     std::string gfile;  // Mostly used to test the post_opendb callback
     bool qged_display_mode = false;  // Set if we're testing QGED style commands
 private:
+    std::mutex view_update_mutex;
+
     // Active listeners
     std::map<std::pair<struct ged_subprocess *, bu_process_io_t>, ProcessIOHandler *> listeners;
     std::mutex listeners_lock;
@@ -419,6 +423,12 @@ GshState::GshState()
 GshState::~GshState()
 {
 #ifdef USE_DM
+    if (gedp)
+	ged_draw_obol_framebuffer_release(gedp);
+
+    if (gedp && gedp->ged_fbs && gedp->ged_fbs->fbs_close_server_handler)
+	(void)fbs_close(gedp->ged_fbs);
+
     struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	void *view_ctx = (void *)BU_PTBL_GET(views, i);
@@ -586,6 +596,8 @@ void
 GshState::view_update()
 {
 #ifdef USE_DM
+    std::lock_guard<std::mutex> update_guard(view_update_mutex);
+
     DisplayHash hashes;
     if (!hashes.hash(gedp, true, qged_display_mode))
 	return;
@@ -611,11 +623,51 @@ GshState::view_update()
 		ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
 	    txn.view = view_ctx;
 	    ged_draw_apply_transaction(gedp, &txn, NULL);
+	    (void)ged_draw_obol_framebuffer_present(gedp);
 	    dm_draw_end(dmp);
 	    ged_view_context_refresh_complete(view_ctx);
 	}
     }
 #endif
+}
+
+// The primary interaction thread managing the command line
+// input from the user.  Must not be the main thread of the
+// application, since linenoise I/O is blocking.
+static int
+gsh_delay_pump(GshState *gs, int argc, const char **argv)
+{
+    static const char *usage = "Usage: delay sec usec";
+    if (!gs || !gs->gedp || argc != 3) {
+	if (gs && gs->gedp)
+	    bu_vls_sprintf(gs->gedp->ged_result_str, "%s", usage);
+	return argc == 1 ? GED_HELP : BRLCAD_ERROR;
+    }
+
+    bu_vls_trunc(gs->gedp->ged_result_str, 0);
+    long sec = atol(argv[1]);
+    long usec = atol(argv[2]);
+    if (sec < 0)
+	sec = 0;
+    if (usec < 0)
+	usec = 0;
+
+    std::chrono::microseconds requested(sec * 1000000LL + usec);
+    std::chrono::steady_clock::time_point deadline =
+	std::chrono::steady_clock::now() + requested;
+    const std::chrono::microseconds step(200000);
+    while (std::chrono::steady_clock::now() < deadline) {
+	std::chrono::microseconds remaining =
+	    std::chrono::duration_cast<std::chrono::microseconds>(
+		deadline - std::chrono::steady_clock::now());
+	std::chrono::microseconds chunk = remaining < step ? remaining : step;
+	if (chunk.count() > 0)
+	    std::this_thread::sleep_for(chunk);
+	gs->subprocess_output();
+	gs->view_update();
+    }
+
+    return BRLCAD_OK;
 }
 
 // The primary interaction thread managing the command line
@@ -673,7 +725,9 @@ g_cmdline(
 	    ac = (int)tmp_av.size();
 	}
 
-	int gret = gs.get()->eval(ac, (const char **)av);
+	int gret = BU_STR_EQUAL(av[0], "delay") ?
+	    gsh_delay_pump(gs.get(), ac, (const char **)av) :
+	    gs.get()->eval(ac, (const char **)av);
 
 	/* If the eval tells us it's time to quite, clean up and break the loop */
 	if (gret == GED_EXIT) {

@@ -26,6 +26,16 @@ next_revision(uint32_t value)
     return value == UINT32_MAX ? UINT32_MAX : value + 1;
 }
 
+static void
+atomic_store_max(std::atomic<uint64_t> &target, uint64_t value)
+{
+    uint64_t current = target.load(std::memory_order_acquire);
+    while (current < value &&
+	    !target.compare_exchange_weak(current, value,
+		std::memory_order_release, std::memory_order_acquire))
+	;
+}
+
 static SoBRLImageSource::PixelFormat
 pixel_format_from_stream(enum imgstream_pixel_format format)
 {
@@ -42,6 +52,8 @@ pixel_format_from_stream(enum imgstream_pixel_format format)
 SoBRLImageSource::SoBRLImageSource(void) :
     stream(NULL),
     subscriberId(-1),
+    pendingGeneration(0),
+    realizedGeneration(0),
     streamOwned(FALSE)
 {
     SO_NODE_CONSTRUCTOR(SoBRLImageSource);
@@ -111,6 +123,8 @@ SoBRLImageSource::resetStreamFields(Status statusValue, const char *diagnosticVa
     this->dirtyHeight = 0;
     this->streamConnected = FALSE;
     this->producerActive = FALSE;
+    this->pendingGeneration.store(0, std::memory_order_release);
+    this->realizedGeneration.store(0, std::memory_order_release);
 }
 
 void
@@ -124,6 +138,8 @@ SoBRLImageSource::releaseStream(void)
 
     this->stream = NULL;
     this->subscriberId = -1;
+    this->pendingGeneration.store(0, std::memory_order_release);
+    this->realizedGeneration.store(0, std::memory_order_release);
     this->streamOwned = FALSE;
 }
 
@@ -146,6 +162,14 @@ SbBool
 SoBRLImageSource::ownsStream(void) const
 {
     return this->streamOwned;
+}
+
+SbBool
+SoBRLImageSource::hasPendingStreamUpdate(void) const
+{
+    uint64_t pending = this->pendingGeneration.load(std::memory_order_acquire);
+    uint64_t realized = this->realizedGeneration.load(std::memory_order_acquire);
+    return pending > realized ? TRUE : FALSE;
 }
 
 int
@@ -195,6 +219,8 @@ SoBRLImageSource::attachStream(imgstream_t *newStream, SbBool owned, SourceKind 
 	    imgstream_destroy(newStream);
 	this->stream = NULL;
 	this->streamOwned = FALSE;
+	this->pendingGeneration.store(0, std::memory_order_release);
+	this->realizedGeneration.store(0, std::memory_order_release);
 	this->resetStreamFields(STATUS_FAILED, "failed to subscribe to image stream");
 	this->sourceRevision = next_revision(this->sourceRevision.getValue());
 	return -1;
@@ -232,6 +258,8 @@ SoBRLImageSource::refreshFromStream(void)
     this->status = info.producer_active ? STATUS_STREAMING : STATUS_READY;
     this->diagnostic = "";
     this->streamConnected = TRUE;
+    atomic_store_max(this->pendingGeneration, info.generation);
+    this->realizedGeneration.store(info.generation, std::memory_order_release);
 
     if (info.dirty) {
 	this->dirtyRevision = image_source_clamp_u32(info.generation);
@@ -245,20 +273,11 @@ SoBRLImageSource::refreshFromStream(void)
 }
 
 void
-SoBRLImageSource::dirtyCB(void *ctx, const struct imgstream_rect *rect, uint64_t generation)
+SoBRLImageSource::dirtyCB(void *ctx, const struct imgstream_rect *UNUSED(rect), uint64_t generation)
 {
     SoBRLImageSource *source = static_cast<SoBRLImageSource *>(ctx);
     if (!source)
 	return;
 
-    source->dataRevision = image_source_clamp_u32(generation);
-    source->dirtyRevision = image_source_clamp_u32(generation);
-    if (rect) {
-	source->dirtyX = image_source_clamp_u32(rect->x);
-	source->dirtyY = image_source_clamp_u32(rect->y);
-	source->dirtyWidth = image_source_clamp_u32(rect->width);
-	source->dirtyHeight = image_source_clamp_u32(rect->height);
-    }
-
-    source->refreshFromStream();
+    atomic_store_max(source->pendingGeneration, generation);
 }

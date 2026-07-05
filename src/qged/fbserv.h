@@ -37,6 +37,7 @@
 #include <iostream>
 
 struct ged;
+class QgView;
 
 // Per client info (TCP path)
 class QFBSocket : public QObject
@@ -94,15 +95,11 @@ class QFBServer : public QTcpServer
 };
 
 
-__BEGIN_DECLS
-
 extern void
-qdm_configure_ged_fbserv_handlers(struct ged *gedp, int view_type);
+qdm_configure_ged_fbserv_handlers(struct ged *gedp, QgView *display);
 
 extern const char *
 qdm_init_messages(void);
-
-__END_DECLS
 
 #endif /* QDM_FBSERV_H */
 

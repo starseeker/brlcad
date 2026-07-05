@@ -27,6 +27,7 @@
 #include "common.h"
 #include "bu/units.h"
 #include "ged.h"
+#include "ged/draw_obol.h"
 #include "ged/view.h"
 #include "rt/view.h"
 #include "tclcad.h"
@@ -166,6 +167,7 @@ go_refresh(struct ged *gedp, void *draw_view_ctx)
 	restore_zbuffer = 1;
     }
 
+    (void)ged_draw_obol_framebuffer_present(gedp);
     (void)dm_draw_begin(dmp);
     go_refresh_draw(gedp, draw_view_ctx, restore_zbuffer);
     (void)dm_draw_end(dmp);

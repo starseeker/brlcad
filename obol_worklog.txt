@@ -11,6 +11,224 @@ detail was intentionally collapsed because the root text files had become hard
 to use as handoff documents.  Use git history for exact diffs and `doc/notes/`
 for durable design contracts.
 
+2026-07-05: Clang 21 strict-warning hardening
+---------------------------------------------
+
+The active build is now clean under FreeBSD clang/clang++ 21.1.8 with the
+project's strict `-Werror` settings.  The libfort warning was fixed directly:
+`src/libbu/fort.h` now exposes `ft_wchar_t` so C++ callers still use
+`wchar_t` while C compilation avoids spelling the C++ keyword under
+`-Wc++-compat`; libfort declarations and implementation use that type
+consistently.  Related libbu C++-compat fixes include explicit const-null
+returns in `path_normalize.c` and C++ literal-operator spelling cleanup in
+`date.h`.
+
+Several unity-build failures exposed real old-code issues rather than Obol
+logic regressions.  RT-family shared globals are now declared through
+`src/rt/ext.h` instead of block-local externs in `rt`, `remrt`, `rtsrv`, and
+`test_rt_opt`.  The standalone `rt_view_legacy_bsg` transitional test was
+removed instead of patched because it only exercised retained BSG adapter
+behavior.  The GED fuzz harness no longer includes or initializes BSG view
+storage; it uses GED's default active view context and updates its unit state.
+
+The IGES converter also had actual correctness hazards surfaced by the newer
+compiler.  `iges/main.c` includes the converter extern contract before defining
+globals, and partial solid-of-revolution output now assigns and manages a real
+cutting-solid name (`rev.<entity>.cut`) before creating and referencing the
+ARB8.
+
+Verification passed:
+`ninja -C build`,
+`build/src/rt/test_rt_opt`,
+`ctest --test-dir build -R '^(libbrlobol_image_source|libbrlobol_window_host|libbrlobol_headless_window_host|test_qtcad_obol_window_host|gsh_obol_smoke|test_qged_obol_fbserv|mged_obol_ert_smoke)$' --timeout 240 --output-on-failure`,
+`ctest --test-dir build -R '^(bu_datetime[0-9]+|bu_file_realpath_[0-9]+|bu_path_component_|bu_path_dirname_|bu_path_basename_)' --timeout 120 --output-on-failure`,
+`ctest --test-dir build -R '^fuzz_ged_smoke$' --timeout 120 --output-on-failure`,
+`cc -std=c11 -Wc++-compat -Werror -Iinclude -Ibuild/include -Ibuild/include/brlcad -c src/libbu/fort.c -o /tmp/brlcad_fort_compile_test.o`,
+and `git diff --check`.
+
+2026-07-05: Obol framebuffer dirty/present split and GSH ert smoke
+------------------------------------------------------------------
+
+Hardened the Obol framebuffer bridge around a read-only render traversal.
+`BRLObolFramebufferStream` no longer mutates Coin/Obol scene nodes from pixel,
+view, cursor, or protocol write operations.  Those operations update
+`imgstream` and fb-compatible state only.  `BRLObolFramebufferStream::present`
+is now the explicit update-phase operation that refreshes `SoBRLImageSource`,
+syncs `SoBRLViewportImage`, and applies framebuffer view/cursor state.
+
+`SoBRLImageSource` stream dirty callbacks no longer write Inventor fields.
+They update only an atomic pending-generation marker, exposed through
+`hasPendingStreamUpdate`; explicit refresh/present calls consume the stream
+state on the application/update owner.  The coarse
+`BRLObolViewController` scene-graph mutex added during earlier crash
+debugging was removed because render threads should be read-only and the
+mutex caused controller teardown assertions.
+
+qged now presents pending framebuffer stream state from its Qt update callback
+before requesting a view refresh.  libged now has an Obol fbserv bridge for
+non-Qt hosts with `ged_draw_obol_framebuffer_present` and
+`ged_draw_obol_framebuffer_release`; `screengrab` presents pending framebuffer
+state before asking the DM for an image.  GSH releases the bridge before
+closing attached Obol DMs.
+
+GSH `ert` support was shaken down for the headless Obol DM.  fbserv watcher
+threads remain dirty publishers only.  Rendering remains on the command thread
+because the OSMesa-backed dm-obol renderer is thread-affine in this setup; the
+gsh-local `delay sec usec` pump now periodically drains subprocess output and
+applies view/framebuffer updates on that thread using wall-clock timing.
+
+Focused verification passed:
+`ninja -C build libbrlobol libged gsh qged test_brlobol_window_host test_brlobol_image_source test_brlobol_image_display test_qtcad_obol_window_host test_qtcad_obol_draw_sync ged_test_obol_draw_sync`,
+`ctest --test-dir build -R '^(libbrlobol_window_host|libbrlobol_image_source|libbrlobol_image_display|test_qtcad_obol_window_host|test_qtcad_obol_draw_sync|ged_test_obol_draw_sync)$' --timeout 240 --output-on-failure`,
+`sh src/gtools/gsh/gsh_obol_smoke.sh build/bin/gsh build/share/db/axis.g /tmp`,
+and
+`printf 'dm attach obol\ndraw all\nautoview\nert\ndelay 20 0\nquit\n' | timeout 60 build/bin/gsh --new-cmds build/share/db/axis.g`.
+
+2026-07-05: qged fbserv backend isolation
+-----------------------------------------
+
+Introduced a backend-neutral fbserv operation table in libdm so the wire
+protocol no longer has to call directly through `struct fb` operations.  The
+legacy `struct fb` path remains as the compatibility backend, while new hosts
+can install their own framebuffer implementation and expose size, pixel,
+cursor, view, colormap, flush, poll, and help operations.
+
+qged now installs an Obol/imgstream framebuffer backend for embedded
+framebuffer traffic.  The bridge opens an `imgstream` framebuffer sized to the
+active `QgView`, attaches it to the Obol window-host framebuffer scene
+placement, forwards fbserv pixel updates into the image stream, and schedules
+normal qtcad view refresh.  The pixel/view/cursor lifecycle is now factored
+into libbrlobol as `BRLObolFramebufferStream`, leaving qged with thin fbserv
+operation shims plus Qt sizing/refresh notification.  The qged fbserv path no
+longer chooses qtcad GL versus swrast legacy framebuffer canvases, no longer
+depends on `dm_plugins`, and does not overwrite libdm's per-client protocol
+state with a raw framebuffer pointer.
+
+The design decision for libdm retirement is recorded: fbserv packet/protocol
+handling should eventually move to a small framebuffer/image-stream protocol
+library beside libimgstream/libicv, while libbrlobol owns only Obol scene
+presentation, interaction, and lifecycle for the resulting image stream.
+
+Focused verification passed:
+`cmake -S . -B build`,
+`ninja -C build libdm libged libqtcad qged`,
+`ninja -C build libbrlobol libqtcad qged test_brlobol_window_host test_qtcad_obol_window_host test_qtcad_obol_draw_sync ged_test_obol_draw_sync`,
+`ctest --test-dir build -R '^(libbrlobol_window_host|test_qtcad_obol_window_host|test_qtcad_obol_draw_sync|ged_test_obol_draw_sync)$' --timeout 240 --output-on-failure`,
+`ninja -C build test_qtcad_obol_window_host test_qtcad_obol_draw_sync ged_test_obol_draw_sync`,
+`ctest --test-dir build -R '^(test_qtcad_obol_window_host|test_qtcad_obol_draw_sync|ged_test_obol_draw_sync)$' --timeout 240 --output-on-failure`,
+and `git diff --check`.
+
+2026-07-05: draw/qtcad Obol presentation cleanup
+------------------------------------------------
+
+Removed the retained `_ged_drawtrees` fallback from GED draw transactions and
+removed the old `draw.c` tree walker from the command path.  `draw.c` is now a
+GED command-registration shim for draw/redraw/E/ev/loadview/preview entry
+points; supported transaction draw modes realize through Obol/libbrlobol
+providers or report explicit provider failure.
+
+qtcad ordinary canvas painting is Obol-only.  `QgGL` renders pending Obol/Coin
+work through Qt's current `QOpenGLWidget` context for visible system-OpenGL
+presentation, while `QgSW` presents Obol offscreen readback through QWidget
+painting.  The qtcad Obol readback context manager now starts from Qt's default
+`QSurfaceFormat`, requests desktop OpenGL when Qt has not selected a renderable
+type, shares with Qt current/global contexts when possible, and falls back to
+OSMesa when the platform cannot create a Qt OpenGL context.  Embedded
+framebuffers are represented as Obol scene content via `SoBRLImageSource` plus
+`SoBRLViewportImage` under the window-host controller root.
+
+The stale `ged_test_qged_swrast` and display-manager backend benchmark
+sources/tests were retired.  The GED draw command macro was restored to the
+scanner-standard `X, XID` form, and a CMake reconfigure regenerated wrappers
+including `ged_exec_draw` and `ged_exec_redraw`.
+
+Focused verification passed after rebuilding fresh executables:
+`cmake -S . -B build`,
+`ninja -C build libged libqtcad qged test_brlobol_window_host test_qtcad_obol_controller test_qtcad_obol_window_host test_qtcad_obol_draw_sync test_qtcad_obol_faceplate_sync test_qtcad_obol_pick test_qtcad_obol_snap test_qtcad_obol_measure test_qtcad_obol_export test_qtcad_obol_progressive_lod`,
+`ctest --test-dir build -R '^(libbrlobol_window_host|test_qtcad_obol_controller|test_qtcad_obol_window_host|test_qtcad_obol_draw_sync|test_qtcad_obol_faceplate_sync|test_qtcad_obol_pick|test_qtcad_obol_snap|test_qtcad_obol_measure|test_qtcad_obol_export)$' --timeout 240 --output-on-failure`,
+and
+`ctest --test-dir build -R '^(test_qtcad_obol_progressive_lod_generic_twin_startup|test_qtcad_obol_progressive_lod_generic_twin_startup_expand|test_qtcad_obol_progressive_lod_generic_twin_wire_lod|test_qtcad_obol_progressive_lod_generic_twin_shaded_lod)$' --timeout 240 --output-on-failure`.
+A manual non-forced `test_qtcad_obol_window_host` run succeeded, but the
+headless Qt offscreen platform reported that it cannot create a platform
+OpenGL context, so that run exercised the OSMesa fallback rather than proving a
+real system-GL platform.  `ged_test_drawing_basic` remains a known
+image-baseline-difference failure.
+
+2026-07-05: neutral RT view adapter registry split
+--------------------------------------------------
+
+Moved the neutral RT view scene, feature, polygon, and selection adapter
+registries out of `src/librt/view_legacy_bsg.c` into
+`src/librt/view_context_adapters.c`.  The public adapter set/get APIs and
+object-ref lookup helpers now live in the non-BSG source; the explicit BSG
+adapter implementation consumes those helpers and still owns remaining legacy
+fallback behavior.
+
+This is a behavior-preserving split toward making `view_legacy_bsg.c` an
+explicit retained-BSG adapter file only.  The remaining debt is to move the
+public neutral `rt_view_context_*` wrapper dispatch out of the legacy source
+once fallback-only BSG calls are isolated.
+
+Focused verification passed after rebuilding fresh executables:
+`ninja -C build librt rt_view_info rt_view_legacy_bsg`,
+`ctest --test-dir build -R '^(rt_view_info|rt_view_legacy_bsg)$' --output-on-failure`,
+`ctest --test-dir build -R '^bv_basic$' --output-on-failure`,
+`ninja -C build ged_test_obol_draw_sync ged_test_view_command test_qtcad_obol_draw_sync test_qtcad_obol_faceplate_sync test_qtcad_obol_selection_sync`,
+and
+`ctest --test-dir build -R '^(ged_test_obol_draw_sync|ged_test_view_command|test_qtcad_obol_draw_sync|test_qtcad_obol_faceplate_sync|test_qtcad_obol_selection_sync)$' --timeout 240 --output-on-failure`.
+
+2026-07-05: Generic_Twin wire/shaded LoD hardening
+--------------------------------------------------
+
+Generic_Twin large-root LoD coverage now avoids the legacy full draw
+transaction for the expensive promotion phases.  The wire startup-LoD test
+still begins with a deferred metadata root and bounded visible-frontier leaf
+AABB proxy expansion, but full wire promotion now installs a direct Obol
+database source and realizes it through libbrlobol.  That removed the prior
+multi-minute libged transaction stall.  The same test verifies staged
+view-local AABB, OBB, and mesh LoD payloads, rendered image changes, centered
+wire output, and `view lod mesh 0` clearing active view-local payloads while
+returning to full-detail wire drawing.
+
+Wire-mode BoT LoD now renders mesh payloads as triangle edges instead of
+falling through to shaded triangles.  BoT mesh import is prioritized ahead of
+generic indexed-face/tessellation paths, so BoT wire/shaded LoD uses the mesh
+already present in the primitive.  Non-BoT wire-mode mesh-role sources stay on
+vlist plotting to avoid accidental tessellation.
+
+The shaded Generic_Twin gate uses shaded-BoT representation.  libbrlobol now
+treats shaded-BoT like wire mode for non-BoT leaves: non-BoTs remain vlist
+wire geometry while BoTs become mesh shapes.  This keeps the large-root
+shaded test bounded and avoids NMG/CSG tessellation failures such as `half`
+primitive tessellation while still exercising shaded BoT mesh LoD.
+
+`view lod` now notifies attached Obol views directly.  For Obol-attached
+views, policy changes clear `BRLObolViewLodState`, advance the view LoD policy
+revision, refresh source realization view policy, and request an Obol render
+instead of calling legacy `redraw`.  Non-Obol views still fall back to redraw.
+
+The libbu LMDB cache wrapper now opens environments with `MDB_NOTLS`, tying
+reader slots to transaction objects rather than worker threads.  This removed
+`MDB_BAD_RSLOT` failures when BRLObol LoD worker threads concurrently queried
+and populated `.DbDrawCache`.
+
+The shaded Generic_Twin LoD gate initially timed out after the mesh stage.
+`lldb` showed the main thread blocked in `BRLObolLodService::stop`, with LoD
+workers contending inside mesh-LoD cache context creation and one worker
+calling `bu_mkdir("")`.  The cache path setup now rejects empty directory
+creation, skips explicit creation of an empty cache root, and makes
+`bu_cache_open` build relative component paths under `.` when `BU_DIR_CACHE`
+resolves empty.  The shaded LoD gate now completes in about 2.7 seconds, with
+service shutdown taking milliseconds.
+
+Focused verification passed:
+`ninja -C build bu_test test_brlobol_draw_cache test_brlobol_mesh_lod_cache ged_test_obol_draw_sync ged_test_ged_draw_scene test_qtcad_obol_progressive_lod`,
+`ctest --test-dir build -R '^(bu_cache|libbrlobol_draw_cache|libbrlobol_mesh_lod_cache)$' --output-on-failure`,
+`ctest --test-dir build -R '^(ged_test_ged_draw_scene_|ged_test_obol_draw_sync$|test_qtcad_obol_progressive_lod_generic_twin_(startup|startup_expand|wire_lod|shaded_lod)$)' --output-on-failure`,
+`BRLCAD_ROOT=$PWD/build QT_QPA_PLATFORM=offscreen QTCAD_OBOL_FORCE_OSMESA=1 QTCAD_OBOL_PROGRESSIVE_LOD_PHASE_LOG=1 build/bin/test_qtcad_obol_progressive_lod --startup-wire-lod --startup-expand-passes 4 build/share/db/faa/Generic_Twin.g - all direct 4 1`,
+`BRLCAD_ROOT=$PWD/build QT_QPA_PLATFORM=offscreen QTCAD_OBOL_FORCE_OSMESA=1 QTCAD_OBOL_PROGRESSIVE_LOD_PHASE_LOG=1 build/bin/test_qtcad_obol_progressive_lod --shaded-lod build/share/db/faa/Generic_Twin.g - all direct 4 1`,
+and `git diff --check`.
+
 2026-07-05: leaf-only proxy expansion and Generic_Twin wire startup
 -------------------------------------------------------------------
 
@@ -1021,3 +1239,48 @@ Focused verification passed:
 This original coverage proved delayed mesh-LoD refinement through gsh, MGED,
 and qtcad.  The later staged-payload status work extended it to prove AABB and
 OBB startup phases as active view-local payloads before mesh settlement.
+
+2026-07-05: Classic MGED ert through Obol framebuffer bridge
+------------------------------------------------------------
+
+Classic MGED now exposes the libged `ert` command through its display-manager
+wrapper, and TclCAD exposes `ert` as a view-scoped command alongside the other
+raytrace commands.  MGED and TclCAD refresh paths call
+`ged_draw_obol_framebuffer_present` before render traversal, so fbserv watcher
+threads remain dirty-only and the application update path owns Coin/Obol scene
+mutation.  MGED also releases the libged Obol framebuffer bridge before
+closing Obol display managers.
+
+Added `mged_obol_ert_smoke`, which runs classic MGED headless with the Obol DM,
+draws `moss.g` `all.g`, launches `ert`, captures a screengrab, and decodes the
+PNG to verify visible non-blank framebuffer content.
+
+Focused verification passed:
+
+* `ninja -C build mged gsh qged`
+* `sh src/mged/mged_obol_ert_smoke.sh build/bin/mged src/libged/tests/draw/moss.g /tmp`
+* `ctest --test-dir build -R '^(mged_obol_smoke|mged_obol_ert_smoke|mged_obol_progressive_lod)$' --timeout 240 --output-on-failure`
+* `sh src/gtools/gsh/gsh_obol_smoke.sh build/bin/gsh build/share/db/axis.g /tmp`
+
+2026-07-05: GSH ert smoke through Obol framebuffer bridge
+---------------------------------------------------------
+
+Added `gsh_obol_ert_smoke`, a headless gsh test that attaches the Obol DM,
+draws `moss.g` `all.g`, launches a real `ert`, verifies the rt subprocess used
+the Obol IPC framebuffer path, captures a screengrab, and decodes the PNG to
+ensure visible framebuffer content reached the Obol scene.  This complements
+the qged backend operation-table unit test and the classic MGED ERT smoke by
+covering the non-Tcl plain GED host path.
+
+The slow streaming-image question remains separate.  In this build
+`NIST_MBE_PMI_3.g` is an empty 104-byte database because STEP conversion is not
+available.  A manual run against generated `NIST_MBE_PMI_7-10.g` produced
+distinct intermediate Obol framebuffer screenshots during a single-threaded
+`ert`, but setup/runtime was too long for the default smoke suite.  Keep this
+as manual/slow-regression material until a bounded fixture or explicit
+slow-test gate exists.
+
+Focused verification passed:
+
+* `ninja -C build`
+* `ctest --test-dir build -R '^(libbrlobol_image_source|libbrlobol_window_host|libbrlobol_headless_window_host|test_qtcad_obol_window_host|test_qged_obol_fbserv|gsh_obol_smoke|gsh_obol_ert_smoke|gsh_obol_progressive_lod|mged_obol_smoke|mged_obol_ert_smoke|mged_obol_progressive_lod)$' --timeout 240 --output-on-failure`

@@ -1347,7 +1347,7 @@ BRLObolViewController::getLodForcedLevel(void) const
 
 void
 BRLObolViewController::setExactFullDetailBudget(uint64_t maxFaceCount,
-	uint64_t maxPointCount)
+						uint64_t maxPointCount)
 {
     this->maxExactFullDetailFaceCount = maxFaceCount;
     this->maxExactFullDetailPointCount = maxPointCount;

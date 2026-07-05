@@ -42,14 +42,6 @@
 #include "./rtuif.h"
 #include "./ext.h"
 
-
-extern int rpt_overlap;
-
-/* from opt.c */
-extern double units;
-extern int default_units;
-extern int model_units;
-
 static size_t hit_count=0;
 static fastf_t cell_area=0.0;
 

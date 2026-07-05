@@ -29,6 +29,7 @@
 
 #include <map>
 #include <string>
+#include <vector>
 
 #include "bu/app.h"
 #include "bu/dylib.h"
@@ -38,8 +39,8 @@
 #include "ged.h"
 #include "./include/plugin.h"
 
-extern "C" int
-main(int argc, const char *argv[])
+int
+main(int argc, char *argv[])
 {
     bu_setprogname(argv[0]);
     argc--; argv++;
@@ -95,8 +96,13 @@ main(int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
+    std::vector<const char *> process_argv;
+    process_argv.reserve((size_t)argc);
+    for (int i = 0; i < argc; i++)
+	process_argv.push_back(argv[i]);
+
     const struct ged_cmd_process *p = plugin->p;
-    int ret =  p->i->func(argc, argv);
+    int ret =  p->i->func(argc, process_argv.data());
     bu_dlclose(dl_handle);
     return ret;
 }

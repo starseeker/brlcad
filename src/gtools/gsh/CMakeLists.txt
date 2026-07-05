@@ -9,6 +9,13 @@ if(SH_EXEC AND TARGET gsh)
     "${CMAKE_CURRENT_BINARY_DIR}")
   set_property(TEST gsh_obol_smoke APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
 
+  brlcad_add_test(NAME gsh_obol_ert_smoke
+    COMMAND ${SH_EXEC} "${CMAKE_CURRENT_SOURCE_DIR}/gsh_obol_ert_smoke.sh"
+    "$<TARGET_FILE:gsh>" "${CMAKE_SOURCE_DIR}/src/libged/tests/draw/moss.g"
+    "${CMAKE_CURRENT_BINARY_DIR}")
+  set_tests_properties(gsh_obol_ert_smoke PROPERTIES TIMEOUT 90)
+  set_property(TEST gsh_obol_ert_smoke APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+
   brlcad_add_test(NAME gsh_obol_progressive_lod
     COMMAND ${SH_EXEC} "${CMAKE_CURRENT_SOURCE_DIR}/gsh_obol_progressive_lod.sh"
     "$<TARGET_FILE:gsh>" "${CMAKE_SOURCE_DIR}/src/libged/tests/draw/moss.g"
@@ -19,6 +26,7 @@ endif(SH_EXEC AND TARGET gsh)
 
 cmakefiles(
   CMakeLists.txt
+  gsh_obol_ert_smoke.sh
   gsh_obol_progressive_lod.sh
   gsh_obol_smoke.sh
 )

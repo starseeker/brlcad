@@ -19,15 +19,9 @@
  */
 /** @file qtcad/QgSW.h
  *
- * This defines a Qt widget for displaying the visualization results of the
- * bundled libosmesa OpenGL software rasterizer, using the swrast libdm
- * backend.
- *
- * Unlike the standard QgGL widget, this can display OpenGL rendered graphics
- * even if the OpenGL stack on the host operating system is non-functional (it
- * will be a great deal slower, but since it does not rely on any system
- * capabilities to produce its images it should work in any environment where a
- * basic Qt gui can load.)
+ * This defines a Qt widget for displaying Obol/Coin output from an offscreen
+ * render/readback path.  Unlike QgGL, it does not require the widget itself
+ * to own a native OpenGL presentation surface.
  */
 
 #ifndef QGSW_H

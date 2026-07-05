@@ -630,6 +630,30 @@ if(TARGET test_qtcad_obol_progressive_lod)
     APPEND PROPERTY ENVIRONMENT QTCAD_OBOL_FORCE_OSMESA=1)
   set_property(TEST test_qtcad_obol_progressive_lod_generic_twin_startup_expand
     APPEND PROPERTY LABELS drawing_baseline)
+  brlcad_add_test(
+    NAME test_qtcad_obol_progressive_lod_generic_twin_wire_lod
+    COMMAND test_qtcad_obol_progressive_lod --startup-wire-lod --startup-expand-passes 4 "${CMAKE_BINARY_DIR}/share/db/faa/Generic_Twin.g" - all direct 4 1)
+  set_tests_properties(test_qtcad_obol_progressive_lod_generic_twin_wire_lod PROPERTIES TIMEOUT 180)
+  set_property(TEST test_qtcad_obol_progressive_lod_generic_twin_wire_lod
+    APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+  set_property(TEST test_qtcad_obol_progressive_lod_generic_twin_wire_lod
+    APPEND PROPERTY ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+  set_property(TEST test_qtcad_obol_progressive_lod_generic_twin_wire_lod
+    APPEND PROPERTY ENVIRONMENT QTCAD_OBOL_FORCE_OSMESA=1)
+  set_property(TEST test_qtcad_obol_progressive_lod_generic_twin_wire_lod
+    APPEND PROPERTY LABELS drawing_baseline)
+  brlcad_add_test(
+    NAME test_qtcad_obol_progressive_lod_generic_twin_shaded_lod
+    COMMAND test_qtcad_obol_progressive_lod --shaded-lod "${CMAKE_BINARY_DIR}/share/db/faa/Generic_Twin.g" - all direct 4 1)
+  set_tests_properties(test_qtcad_obol_progressive_lod_generic_twin_shaded_lod PROPERTIES TIMEOUT 180)
+  set_property(TEST test_qtcad_obol_progressive_lod_generic_twin_shaded_lod
+    APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+  set_property(TEST test_qtcad_obol_progressive_lod_generic_twin_shaded_lod
+    APPEND PROPERTY ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+  set_property(TEST test_qtcad_obol_progressive_lod_generic_twin_shaded_lod
+    APPEND PROPERTY ENVIRONMENT QTCAD_OBOL_FORCE_OSMESA=1)
+  set_property(TEST test_qtcad_obol_progressive_lod_generic_twin_shaded_lod
+    APPEND PROPERTY LABELS drawing_baseline)
   distclean(${CMAKE_CURRENT_BINARY_DIR}/qtcad_obol_progressive_lod_tmp.g)
   distclean(${CMAKE_CURRENT_BINARY_DIR}/qtcad_obol_progressive_lod_cache)
   brlcad_add_test(
@@ -649,7 +673,7 @@ if(TARGET test_qtcad_obol_progressive_lod)
     APPEND PROPERTY LABELS drawing_baseline)
 endif(TARGET test_qtcad_obol_progressive_lod)
 
-foreach(_qtcad_obol_swrast_test
+foreach(_qtcad_obol_offscreen_test
     test_qtcad_obol_controller
     test_qtcad_obol_window_host
     test_qtcad_obol_draw_sync
@@ -665,36 +689,22 @@ foreach(_qtcad_obol_swrast_test
     test_qtcad_obol_progressive_lod_startup_refine
     test_qtcad_obol_progressive_lod_generic_twin_startup
     test_qtcad_obol_progressive_lod_generic_twin_startup_expand
+    test_qtcad_obol_progressive_lod_generic_twin_wire_lod
+    test_qtcad_obol_progressive_lod_generic_twin_shaded_lod
     slow-test_qtcad_obol_progressive_lod_repeated_moss
     test_qtcad_obol_real_models_pinewood_wire
     test_qtcad_obol_real_models_pinewood_shaded
     test_qtcad_obol_real_models_havoc_wire
     test_qtcad_obol_real_models_m35_wire_interactions
     test_qtcad_obol_real_models_m35_wire_pick_all_stress)
-  if(TEST ${_qtcad_obol_swrast_test})
-    set_property(TEST ${_qtcad_obol_swrast_test}
+  if(TEST ${_qtcad_obol_offscreen_test})
+    set_property(TEST ${_qtcad_obol_offscreen_test}
       APPEND PROPERTY ENVIRONMENT QTCAD_OBOL_FORCE_OSMESA=1)
   endif()
 endforeach()
 
-# Qt / QgSW headless integration test (Phase 4 BSG + dm-swrast via Qt widget path).
-# Uses Qt's built-in offscreen platform — no X11 display required.
 if(TARGET Qt6::Widgets)
-  set(GED_TEST_QGED_SWRAST_DATA_DIR "${CMAKE_SOURCE_DIR}/src/libged/tests/draw")
   set(QGMODEL_TEST_DATA_G "${CMAKE_SOURCE_DIR}/src/libged/tests/draw/moss.g")
-  add_executable(ged_test_qged_swrast ged_test_qged_swrast.cpp)
-  target_include_directories(ged_test_qged_swrast PRIVATE
-    "${CMAKE_SOURCE_DIR}/src/libged"
-    )
-  target_link_libraries(
-    ged_test_qged_swrast
-    libqtcad
-    libged
-    libdm
-    librt
-    libbu
-    Qt6::Widgets
-    )
   # qsketch - standalone .g sketch editing demo
   # qsketch.cpp defines QSketchEditWindow inline and uses #include "qsketch.moc"
   # at the bottom, so we need AUTOMOC ON rather than qt6_wrap_cpp.
@@ -707,23 +717,6 @@ if(TARGET Qt6::Widgets)
     libbu
     Qt6::Widgets
     )
-
-  target_compile_definitions(ged_test_qged_swrast PRIVATE BRLCADBUILD HAVE_CONFIG_H)
-  if(TARGET dm-swrast)
-    add_dependencies(ged_test_qged_swrast dm-swrast)
-  endif()
-  brlcad_add_test(NAME ged_test_qged_swrast
-    COMMAND ged_test_qged_swrast -c "${GED_TEST_QGED_SWRAST_DATA_DIR}")
-  set_property(TEST ged_test_qged_swrast
-    APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
-  set_property(TEST ged_test_qged_swrast
-    APPEND PROPERTY ENVIRONMENT QT_QPA_PLATFORM=offscreen)
-  set_property(TEST ged_test_qged_swrast
-    APPEND PROPERTY ENVIRONMENT QTCAD_OBOL_FORCE_OSMESA=1)
-  set_property(TEST ged_test_qged_swrast
-    APPEND PROPERTY LABELS drawing_baseline)
-  distclean(${CMAKE_CURRENT_BINARY_DIR}/moss_qgswrast_tmp.g)
-  distclean(${CMAKE_CURRENT_BINARY_DIR}/qgswrast_cache)
 
   # Phase 8: standalone libqtcad plugin reuse test.
   # Deliberately links only libqtcad + Qt6::Widgets (NOT libged/qged) to
@@ -795,37 +788,6 @@ if(TARGET Qt6::Widgets)
   endif()
 endif(TARGET Qt6::Widgets)
 
-# Phase B: dm-swrast vs dm-qtgl backend benchmark.
-# Reports per-frame timing and fps for each backend.  The dm-qtgl section
-# requires hardware OpenGL and is skipped gracefully in headless environments.
-# Exit status is always 0 — this is a benchmark, not a pass/fail test.
-if(TARGET Qt6::Widgets)
-# set(GED_TEST_DM_BACKEND_BENCH_DATA_DIR "${CMAKE_SOURCE_DIR}/src/libged/tests/draw")
-# add_executable(ged_test_dm_backend_bench ged_test_dm_backend_bench.cpp)
-# target_include_directories(ged_test_dm_backend_bench PRIVATE
-#   "${CMAKE_SOURCE_DIR}/src/libged"
-#   "${CMAKE_SOURCE_DIR}/src/libqtcad"
-#   )
-# set(_bench_libs libqtcad libged libdm librt libbu Qt6::Widgets)
-# if(TARGET dm-swrast)
-#   list(APPEND _bench_libs dm-swrast)
-# endif()
-# if(TARGET dm-qtgl)
-#   list(APPEND _bench_libs dm-qtgl)
-# endif()
-# target_link_libraries(ged_test_dm_backend_bench ${_bench_libs})
-# target_compile_definitions(ged_test_dm_backend_bench PRIVATE BRLCADBUILD HAVE_CONFIG_H)
-# brlcad_add_test(NAME ged_test_dm_backend_bench
-#   COMMAND ged_test_dm_backend_bench "${GED_TEST_DM_BACKEND_BENCH_DATA_DIR}")
-# set_property(TEST ged_test_dm_backend_bench
-#   APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
-# set_property(TEST ged_test_dm_backend_bench
-#   APPEND PROPERTY ENVIRONMENT QT_QPA_PLATFORM=offscreen)
-# distclean(${CMAKE_CURRENT_BINARY_DIR}/dmbench_swrast_tmp.g)
-# distclean(${CMAKE_CURRENT_BINARY_DIR}/dmbench_qtgl_tmp.g)
-# distclean(${CMAKE_CURRENT_BINARY_DIR}/dmbench_cache)
-endif(TARGET Qt6::Widgets)
-
 if(TARGET Qt5::Widgets AND NOT TARGET Qt6::Widgets)
   add_executable(qsketch ${QSKETCH_SRCS})
   set_target_properties(qsketch PROPERTIES AUTOMOC ON)
@@ -844,8 +806,6 @@ endif(TARGET qsketch)
 
 cmakefiles(
   CMakeLists.txt
-  ged_test_dm_backend_bench.cpp
-  ged_test_qged_swrast.cpp
   ${QGMODEL_SRCS}
   ${QGVIEW_SRCS}
   ${QSKETCH_SRCS}

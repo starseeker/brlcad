@@ -80,6 +80,8 @@ int
 ged_how_core(struct ged *gedp, int argc, const char *argv[])
 {
     int both = 0;
+    int dmode = 0;
+    fastf_t transparency = 0.0;
     static const char *usage = "[-b] object";
     const char *obj_arg = NULL;
 
@@ -121,8 +123,8 @@ ged_how_core(struct ged *gedp, int argc, const char *argv[])
     if (!ctx.match)
 	goto not_found;
 
-    int dmode = (int)ctx.match->draw_mode;
-    fastf_t transparency = ctx.match->transparency;
+    dmode = (int)ctx.match->draw_mode;
+    transparency = ctx.match->transparency;
     if (dmode == _GED_HIDDEN_LINE) {
 	if (both)
 	    bu_vls_printf(gedp->ged_result_str, "%d 1", _GED_HIDDEN_LINE);

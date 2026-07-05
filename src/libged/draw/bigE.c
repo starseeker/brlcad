@@ -114,6 +114,20 @@ struct bigE_line_set {
     size_t capacity;
 };
 
+#if defined(__GNUC__) || defined(__clang__)
+#  define BIGE_LEGACY_UNUSED __attribute__((unused))
+#else
+#  define BIGE_LEGACY_UNUSED
+#endif
+
+static void bigE_line_set_free(struct bigE_line_set *lines) BIGE_LEGACY_UNUSED;
+static void Eplot(union E_tree *eptr,
+		  struct bigE_line_set *lines,
+		  struct _ged_client_data *dgcdp) BIGE_LEGACY_UNUSED;
+static void free_etree(union E_tree *eptr,
+		       struct _ged_client_data *dgcdp) BIGE_LEGACY_UNUSED;
+static void fix_halfs(struct _ged_client_data *dgcdp) BIGE_LEGACY_UNUSED;
+
 
 static void
 bigE_line_set_init(struct bigE_line_set *lines)
@@ -2036,17 +2050,20 @@ fix_halfs(struct _ged_client_data *dgcdp)
 
 
 int
-ged_E_core(struct ged *gedp, int argc, const char *argv[])
+ged_eval_wire_display_core(struct ged *gedp, int argc, const char *argv[], int ev_compat)
 {
-    int i;
     int c;
-    int ac = 1;
-    char *av[2];
-    struct _ged_client_data *dgcdp;
-    static const char *usage = "[-C#/#/# -s] objects(s)";
+    int no_autoview = 0;
+    struct ged_draw_appearance_settings settings =
+	GED_DRAW_APPEARANCE_SETTINGS_INIT;
+    const char *cmd_name = (argv && argc > 0 && argv[0]) ? argv[0] : "E";
+    const char *usage = ev_compat ?
+	"[-C#/#/# -w -T] object(s)" :
+	"[-C#/#/# -s] object(s)";
 
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
     GED_CHECK_DRAWABLE(gedp, BRLCAD_ERROR);
+    GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
     /* initialize result */
@@ -2054,23 +2071,16 @@ ged_E_core(struct ged *gedp, int argc, const char *argv[])
 
     /* must be wanting help */
     if (argc == 1) {
-	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", argv[0], usage);
+	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", cmd_name, usage);
 	return GED_HELP;
     }
 
-    /* XXX: where is this released? */
-    BU_ALLOC(dgcdp, struct _ged_client_data);
-    dgcdp->gedp = gedp;
-    dgcdp->view_ctx = ged_view_active_ctx(gedp);
-    dgcdp->wdbp = wdb_dbopen(dgcdp->gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
-    dgcdp->do_polysolids = 0;
-    dgcdp->vs.color_override = 0;
-    dgcdp->vs.transparency = 0;
-    dgcdp->vs.draw_mode = GED_DRAW_MODE_EVAL_WIRE;
+    settings.draw_mode = GED_DRAW_MODE_EVAL_WIRE;
 
     /* Parse options. */
     bu_optind = 1;          /* re-init bu_getopt() */
-    while ((c=bu_getopt(argc, (char * const *)argv, "sC:")) != -1) {
+    while ((c = bu_getopt(argc, (char * const *)argv,
+		    ev_compat ? "dfnqrstuvwSTP:C:R" : "sC:R")) != -1) {
 	switch (c) {
 	    case 'C':
 		{
@@ -2089,18 +2099,42 @@ ged_E_core(struct ged *gedp, int argc, const char *argv[])
 		    if (g < 0 || g > 255) g = 255;
 		    if (b < 0 || b > 255) b = 255;
 
-		    dgcdp->vs.color_override = 1;
-		    dgcdp->vs.color[0] = r;
-		    dgcdp->vs.color[1] = g;
-		    dgcdp->vs.color[2] = b;
+		    settings.color_override = 1;
+		    settings.color[0] = r;
+		    settings.color[1] = g;
+		    settings.color[2] = b;
 		}
 		break;
 	    case 's':
-		dgcdp->do_polysolids = 1;
+		settings.draw_solid_lines_only = 1;
+		break;
+	    case 'S':
+		settings.draw_non_subtract_only = 1;
+		break;
+	    case 'R':
+		no_autoview = 1;
+		break;
+	    case 'P':
+		/* Parallelism is managed inside the librt evaluator. */
+		break;
+	    case 'd':
+	    case 'f':
+	    case 'n':
+	    case 'q':
+	    case 'r':
+	    case 't':
+	    case 'u':
+	    case 'v':
+	    case 'w':
+	    case 'T':
+		/* Legacy ev display-shaping flags have no direct Obol
+		 * draw-state equivalent.  The modern command semantics are:
+		 * request evaluated wire display and let libbrlobol/librt
+		 * choose the appropriate realization. */
 		break;
 	    default:
 		{
-		    bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", argv[0], usage);
+		    bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", cmd_name, usage);
 		    return BRLCAD_ERROR;
 		}
 	}
@@ -2108,94 +2142,29 @@ ged_E_core(struct ged *gedp, int argc, const char *argv[])
     argc -= bu_optind;
     argv += bu_optind;
 
-    av[1] = (char *)0;
-    for (i = 0; i < argc; ++i) {
-	{
-	    struct db_full_path dfp;
-	    db_full_path_init(&dfp);
-	    if (db_string_to_path(&dfp, gedp->dbip, argv[i]) == 0) {
-		ged_draw_apply_erase_path(gedp, &dfp);
-		dgcdp->draw_group_ref = ged_draw_group_ref_lookup_or_create(gedp, &dfp);
-	    } else {
-		dgcdp->draw_group_ref = GED_DRAW_GROUP_REF_NULL;
-	    }
-	    db_free_full_path(&dfp);
-	}
-
-	/* bigE is the evaluated-wireframe draw mode. */
-	if (!ged_draw_group_ref_is_null(dgcdp->draw_group_ref)) {
-	    struct ged_draw_appearance_settings settings = dgcdp->vs;
-	    settings.draw_mode = GED_DRAW_MODE_EVAL_WIRE;
-	    ged_draw_group_ref_set_appearance_settings(gedp, dgcdp->draw_group_ref,
-		    &settings);
-	}
-
-	BU_ALLOC(dgcdp->ap, struct application);
-	RT_APPLICATION_INIT(dgcdp->ap);
-	dgcdp->ap->a_resource = &rt_uniresource;
-	rt_uniresource.re_magic = RESOURCE_MAGIC;
-	if (!BU_LIST_IS_INITIALIZED(&rt_uniresource.re_nmgfree))
-	    BU_LIST_INIT(&rt_uniresource.re_nmgfree);
-
-	bu_ptbl_init(&dgcdp->leaf_list, 8, "leaf_list");
-
-	dgcdp->rtip = rt_i_create(gedp->dbip);
-	dgcdp->rtip->rti_tol = dgcdp->wdbp->wdb_tol;	/* struct copy */
-	dgcdp->rtip->useair = 1;
-	dgcdp->ap->a_rt_i = dgcdp->rtip;
-
-	dgcdp->nvectors = 0;
-	(void)time(&dgcdp->start_time);
-
-	av[0] = (char *)argv[i];
-	if (rt_gettrees(dgcdp->rtip, ac, (const char **)av, 1)) {
-	    bu_ptbl_free(&dgcdp->leaf_list);
-
-	    rt_i_destroy(dgcdp->rtip);
-	    bu_free(dgcdp, "dgcdp");
-
-	    bu_vls_printf(gedp->ged_result_str, "Failed to get objects\n");
-	    return BRLCAD_ERROR;
-	}
-	{
-	    struct region *rp;
-	    union E_tree *eptr;
-	    struct db_tree_state ts;
-	    struct db_full_path path;
-
-	    for (BU_LIST_FOR (rp, region, &(dgcdp->rtip->HeadRegion))) {
-		struct bigE_line_set lines;
-
-		bigE_line_set_init(&lines);
-		dgcdp->num_halfs = 0;
-		eptr = e_build_etree(rp->reg_treetop, dgcdp);
-
-		if (dgcdp->num_halfs)
-		    fix_halfs(dgcdp);
-
-		Eplot(eptr, &lines, dgcdp);
-		free_etree(eptr, dgcdp);
-		bu_ptbl_reset(&dgcdp->leaf_list);
-		ts.ts_mater = rp->reg_mater;
-		db_string_to_path(&path, gedp->dbip, rp->reg_name);
-		_ged_drawH_part2_line_set(0, (const point_t *)lines.points,
-			lines.commands, lines.count, &path, &ts, dgcdp);
-		db_free_full_path(&path);
-		bigE_line_set_free(&lines);
-	    }
-	    rt_i_destroy(dgcdp->rtip);
-	}
+    if (!argc) {
+	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", cmd_name, usage);
+	return BRLCAD_ERROR;
     }
 
-    (void)time(&dgcdp->etime);
+    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_draw_transaction txn =
+	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, NULL);
+    txn.view = view_ctx;
+    txn.paths = argv;
+    txn.path_count = argc;
+    txn.appearance = &settings;
+    txn.autoview = !no_autoview && !ged_draw_has_paths(gedp, view_ctx, -1);
 
-    /* free leaf_list */
-    bu_ptbl_free(&dgcdp->leaf_list);
+    return (ged_draw_apply_transaction(gedp, &txn, NULL) < 0) ?
+	BRLCAD_ERROR : BRLCAD_OK;
+}
 
-    bu_vls_printf(gedp->ged_result_str, "E: %ld vectors in %ld sec\n",
-		  dgcdp->nvectors, (long)(dgcdp->etime - dgcdp->start_time));
 
-    return BRLCAD_OK;
+int
+ged_E_core(struct ged *gedp, int argc, const char *argv[])
+{
+    return ged_eval_wire_display_core(gedp, argc, argv, 0);
 }
 
 /*

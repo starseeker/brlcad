@@ -133,6 +133,7 @@ rt_edit_nmg_set_edit_mode(struct rt_edit *s, int mode)
     struct rt_nmg_edit *n = (struct rt_nmg_edit *)s->ipe_ptr;
     bu_clbk_t f = NULL;
     void *d = NULL;
+    int view_update_request = 1;
 
     rt_edit_set_edflag(s, mode);
 
@@ -171,7 +172,6 @@ rt_edit_nmg_set_edit_mode(struct rt_edit *s, int mode)
 	    if (*n->es_eu->up.magic_p == NMG_LOOPUSE_MAGIC)
 		nmg_veu(&n->es_eu->up.lu_p->down_hd, n->es_eu->up.magic_p);
 	    /* no change of state or edit_flag */
-	    int view_update_request = 1;
 	    f = NULL; d = NULL;
 	    rt_edit_map_clbk_get(&f, &d, s->m, ECMD_VIEW_SET_FLAG, BU_CLBK_DURING);
 	    if (f)

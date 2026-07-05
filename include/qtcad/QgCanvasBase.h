@@ -21,11 +21,11 @@
  *
  * Abstract interface for libqtcad canvas widgets.
  *
- * Both QgGL (hardware OpenGL via QOpenGLWidget) and QgSW (software
- * rasterizer via QWidget) implement this interface so that higher-level
- * widgets (QgView, QgQuadView, …) can hold a single typed pointer and
- * call virtual methods without sprinkling BRLCAD_OPENGL preprocessor
- * guards throughout their implementation.
+ * Both QgGL (QOpenGLWidget presentation) and QgSW (QWidget/offscreen
+ * presentation) implement this interface so that higher-level widgets
+ * (QgView, QgQuadView, ...) can hold a single typed pointer and call
+ * virtual methods without sprinkling BRLCAD_OPENGL preprocessor guards
+ * throughout their implementation.
  *
  * QgCanvasBase is deliberately NOT a QObject subclass.  Because Qt
  * forbids multiple QObject inheritance the concrete canvas widgets
@@ -74,7 +74,7 @@ public:
     /** Transitional view handle associated with this canvas (may be nullptr). */
     virtual qg_legacy_view *view() const = 0;
 
-    /** True once the retained fallback backend has been initialized. */
+    /** Transitional compatibility hook; Obol-only canvases return false. */
     virtual bool legacyBackendInitialized() const = 0;
 
     /** Obol-canonical view controller for migrated drawing code. */
@@ -83,12 +83,12 @@ public:
     /** Bind an external transitional view.  Pass nullptr to revert to the local view. */
     virtual void set_view(qg_legacy_view *) = 0;
 
-    /** Store current DM and view hash values for later comparison. */
+    /** Store current view hash values for later comparison. */
     virtual void stash_hashes() = 0;
 
     /**
      * Compare current hashes against the stored values.
-     * Sets the DM dirty flag and emits changed() if they differ.
+     * Emits changed() if they differ.
      * Does NOT update the stored values (call stash_hashes() for that).
      */
     virtual bool diff_hashes() = 0;
@@ -106,9 +106,7 @@ public:
     virtual void render_to_file(const QString &filename) = 0;
 
     /**
-     * Render the current view and return the pixel data in @p img. During the
-     * Obol migration this prefers Obol readback when migrated content exists
-     * and falls back to the legacy canvas backend otherwise.
+     * Render the current Obol view and return the pixel data in @p img.
      */
     virtual void get_viewport_image(QImage &img) = 0;
 
@@ -119,9 +117,8 @@ public:
     virtual void get_obol_viewport_image(QImage &img) = 0;
 
     /**
-     * Request a canvas refresh using qtcad legacy-view refresh flags.  This
-     * is the typed path used by QgView so migrated Obol state sees the same
-     * semantic view/update requests as the legacy renderer.
+     * Request a canvas refresh using qtcad view refresh flags.  This is the
+     * typed path used by QgView so Obol state sees semantic update requests.
      */
     virtual void request_update(uint32_t refresh_flags) = 0;
 

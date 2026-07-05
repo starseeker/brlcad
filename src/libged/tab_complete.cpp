@@ -38,6 +38,8 @@
 #include "bu/str.h"
 #include "ged.h"
 
+#include "./ged_private.h"
+
 static int
 alphanum_cmp(const void *a, const void *b, void *UNUSED(data)) {
     struct directory *ga = *(struct directory **)a;

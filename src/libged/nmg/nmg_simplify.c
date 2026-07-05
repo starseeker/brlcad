@@ -54,6 +54,7 @@ ged_nmg_simplify_core(struct ged *gedp, int argc, const char *argv[])
     int success = 0;
     int shell_count=0;
     int ret = BRLCAD_ERROR;
+    int event_batch_opened = 0;
     size_t i;
     struct bu_list *vlfree = &rt_vlfree;
 
@@ -253,7 +254,7 @@ out1:
 	bu_vls_printf(gedp->ged_result_str,
 		"Single vertexuse in shell of %s has been ignored in conversion\n", nmg_name);
 
-    int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+    event_batch_opened = (ged_event_batch_begin(gedp) > 0);
     dp = db_diradd(gedp->dbip, new_name,
 	RT_DIR_PHONY_ADDR, 0, RT_DIR_SOLID, (void *)&new_intern.idb_type);
 
