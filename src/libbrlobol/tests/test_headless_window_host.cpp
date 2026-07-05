@@ -33,7 +33,8 @@
     } \
 } while (0)
 
-class HeadlessTestContextManager : public SoDB::ContextManager {
+class HeadlessTestContextManager : public SoDB::ContextManager
+{
 public:
     HeadlessTestContextManager(void) :
 	renderCount(0),
@@ -63,12 +64,12 @@ public:
     }
 
     virtual SbBool renderScene(SoNode *scene, unsigned int width, unsigned int height,
-	    unsigned char *pixels, unsigned int nrcomponents,
-	    const float background_rgb[3])
+			       unsigned char *pixels, unsigned int nrcomponents,
+			       const float background_rgb[3])
     {
 	(void)background_rgb;
 	if (!scene || !pixels || width == 0 || height == 0 ||
-		nrcomponents < 1 || nrcomponents > 4)
+	    nrcomponents < 1 || nrcomponents > 4)
 	    return FALSE;
 
 	this->renderCount++;
@@ -121,17 +122,17 @@ test_headless_contract(void)
     CHECK(host.open(&desc) == 0, "headless host opens");
     CHECK(host.isOpen(), "headless host records open state");
     CHECK(host.getDesc().mode == BRLOBOL_WINDOW_HEADLESS,
-	"headless host forces headless window mode");
+	  "headless host forces headless window mode");
     CHECK(host.getDesc().backend == BRLOBOL_WINDOW_BACKEND_OFFSCREEN,
-	"headless host forces offscreen backend");
+	  "headless host forces offscreen backend");
     CHECK(host.getDesc().visible == FALSE,
-	"headless host disables visible windows");
+	  "headless host disables visible windows");
     CHECK(host.getController() != NULL, "headless host has a controller");
     CHECK(host.getController()->getCamera() != NULL,
-	"headless host seeds a default camera");
+	  "headless host seeds a default camera");
     CHECK(host.getController()->getViewportRegion().getWindowSize()[0] == 7 &&
-	    host.getController()->getViewportRegion().getWindowSize()[1] == 5,
-	"headless host applies requested viewport size");
+	  host.getController()->getViewportRegion().getWindowSize()[1] == 5,
+	  "headless host applies requested viewport size");
 
     host.setPollRate(42);
     CHECK(host.pollRate() == 42, "headless host stores positive poll rate");
@@ -156,25 +157,25 @@ test_headless_render_pending(HeadlessTestContextManager *manager)
 
     CHECK(host.renderPending() == 1, "open-requested render is drained");
     CHECK(!host.getController()->isRenderRequested(),
-	"successful headless render consumes request");
+	  "successful headless render consumes request");
     CHECK(host.getRenderCount() == 1 && manager->renderCount == 1,
-	"headless host records render count");
+	  "headless host records render count");
     CHECK(strcmp(host.getLastRenderReason().getString(), "camera") == 0,
-	"headless host records consumed render reason");
+	  "headless host records consumed render reason");
     CHECK(host.getLastFrameWidth() == 6 && host.getLastFrameHeight() == 4 &&
-	    host.getLastFrameComponents() == 3,
-	"headless host records frame dimensions");
+	  host.getLastFrameComponents() == 3,
+	  "headless host records frame dimensions");
     CHECK(host.getLastFrameBufferSize() == 6 * 4 * 3,
-	"headless host records frame byte count");
+	  "headless host records frame byte count");
     const unsigned char *pixels = host.getLastFrameBuffer();
     CHECK(pixels != NULL && pixels[0] == 31 && pixels[1] == 63 && pixels[2] == 127,
-	"headless host preserves rendered pixels");
+	  "headless host preserves rendered pixels");
 
     CHECK(host.poll(NULL) == 0, "headless poll is idle without pending render");
     host.getController()->requestRender("poll-render");
     CHECK(host.poll(NULL) == 1, "headless poll drains pending render");
     CHECK(strcmp(host.getLastRenderReason().getString(), "poll-render") == 0,
-	"headless poll records render reason");
+	  "headless poll records render reason");
     return 0;
 }
 
@@ -186,27 +187,27 @@ test_imgstream_headless_poll(HeadlessTestContextManager *UNUSED(manager))
 
     brlobol_window_host_unregister_display_host();
     CHECK(brlobol_window_host_register_display_host(&host) == 0,
-	"headless host registers as display host");
+	  "headless host registers as display host");
 
     imgstream_fb_t *fb = imgstream_fb_open("/dev/swrast", 3, 2);
     CHECK(fb != NULL, "swrast framebuffer opens through headless host");
     CHECK(host.isOpen(), "swrast framebuffer opens headless host");
     CHECK(host.getDesc().mode == BRLOBOL_WINDOW_HEADLESS &&
-	    host.getDesc().backend == BRLOBOL_WINDOW_BACKEND_OFFSCREEN,
-	"swrast framebuffer uses headless offscreen descriptor");
+	  host.getDesc().backend == BRLOBOL_WINDOW_BACKEND_OFFSCREEN,
+	  "swrast framebuffer uses headless offscreen descriptor");
 
     unsigned char rgb[3] = {255, 255, 255};
     CHECK(imgstream_fb_writerect(fb, 0, 0, 1, 1, rgb) == 1,
-	"swrast framebuffer write succeeds");
+	  "swrast framebuffer write succeeds");
     CHECK(imgstream_fb_flush(fb) == 0,
-	"swrast framebuffer flush syncs Obol image nodes");
+	  "swrast framebuffer flush syncs Obol image nodes");
     CHECK(imgstream_fb_poll(fb) == 1,
-	"swrast framebuffer poll drains headless render");
+	  "swrast framebuffer poll drains headless render");
     CHECK(host.getLastFrameWidth() == 3 && host.getLastFrameHeight() == 2 &&
-	    host.getLastFrameComponents() == 4,
-	"swrast poll records RGBA headless frame");
+	  host.getLastFrameComponents() == 4,
+	  "swrast poll records RGBA headless frame");
     CHECK(strcmp(host.getLastRenderReason().getString(), "fb-flush") == 0,
-	"swrast poll records framebuffer render reason");
+	  "swrast poll records framebuffer render reason");
 
     imgstream_fb_close(fb);
     brlobol_window_host_unregister_display_host();
@@ -222,7 +223,7 @@ main(int ac, char **av)
     HeadlessTestContextManager manager;
     brlobol_init(&manager);
     CHECK(SoDB::getContextManager() == &manager,
-	"brlobol_init installs test context manager");
+	  "brlobol_init installs test context manager");
 
     if (test_headless_contract())
 	return 1;

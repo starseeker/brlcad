@@ -30,11 +30,11 @@ test_external_stream_source(void)
     source->ref();
 
     CHECK(source->sourceKind.getValue() == SoBRLImageSource::SOURCE_EMPTY,
-	"default source kind is empty");
+	  "default source kind is empty");
     CHECK(source->status.getValue() == SoBRLImageSource::STATUS_EMPTY,
-	"default status is empty");
+	  "default status is empty");
     CHECK(source->pixelWidth.getValue() == 0 && source->pixelHeight.getValue() == 0,
-	"default dimensions are empty");
+	  "default dimensions are empty");
     CHECK(source->getStream() == NULL, "default stream is null");
 
     imgstream_t *stream = imgstream_create(4, 3, IMGSTREAM_PIXEL_RGB8);
@@ -44,44 +44,44 @@ test_external_stream_source(void)
     CHECK(source->ownsStream() == FALSE, "external stream remains borrowed");
     CHECK(source->streamConnected.getValue() == TRUE, "stream marked connected");
     CHECK(source->sourceKind.getValue() == SoBRLImageSource::SOURCE_IMAGE_STREAM,
-	"external source kind recorded");
+	  "external source kind recorded");
     CHECK(source->status.getValue() == SoBRLImageSource::STATUS_READY,
-	"external stream is initially ready");
+	  "external stream is initially ready");
     CHECK(source->pixelWidth.getValue() == 4 && source->pixelHeight.getValue() == 3,
-	"external stream dimensions recorded");
+	  "external stream dimensions recorded");
     CHECK(source->pixelFormat.getValue() == SoBRLImageSource::PIXEL_RGB8,
-	"external stream pixel format recorded");
+	  "external stream pixel format recorded");
 
     unsigned char pixels[2 * 2 * 3];
     memset(pixels, 127, sizeof(pixels));
     CHECK(imgstream_write_rect(stream, 1, 1, 2, 2, pixels, 2 * 3) == 0,
-	"external stream rect write accepted");
+	  "external stream rect write accepted");
     CHECK(source->dataRevision.getValue() == 1, "rect write updated data revision");
     CHECK(source->dirtyRevision.getValue() == 1, "rect write updated dirty revision");
     CHECK(source->dirtyX.getValue() == 1 && source->dirtyY.getValue() == 1,
-	"rect write dirty origin recorded");
+	  "rect write dirty origin recorded");
     CHECK(source->dirtyWidth.getValue() == 2 && source->dirtyHeight.getValue() == 2,
-	"rect write dirty size recorded");
+	  "rect write dirty size recorded");
 
     CHECK(imgstream_producer_begin(stream) == 0, "producer begin accepted");
     CHECK(source->refreshFromStream() == 0, "active producer refresh accepted");
     CHECK(source->producerActive.getValue() == TRUE, "producer active recorded");
     CHECK(source->status.getValue() == SoBRLImageSource::STATUS_STREAMING,
-	"active producer status recorded");
+	  "active producer status recorded");
     CHECK(imgstream_producer_end(stream) == 0, "producer end accepted");
     CHECK(source->refreshFromStream() == 0, "inactive producer refresh accepted");
     CHECK(source->producerActive.getValue() == FALSE, "inactive producer recorded");
     CHECK(source->status.getValue() == SoBRLImageSource::STATUS_READY,
-	"inactive producer status recorded");
+	  "inactive producer status recorded");
 
     source->clearSource();
     CHECK(source->getStream() == NULL, "clear released external stream");
     CHECK(source->streamConnected.getValue() == FALSE, "clear disconnected source");
     CHECK(source->dirtyRevision.getValue() == 0, "clear reset dirty revision");
     CHECK(imgstream_write_rect(stream, 0, 0, 1, 1, pixels, 1 * 3) == 0,
-	"write after clear still accepted by external owner");
+	  "write after clear still accepted by external owner");
     CHECK(source->dirtyRevision.getValue() == 0,
-	"cleared source no longer receives external stream notifications");
+	  "cleared source no longer receives external stream notifications");
 
     imgstream_destroy(stream);
     source->unref();
@@ -105,19 +105,19 @@ test_static_image_source(void)
     CHECK(source->getStream() != NULL, "static image created stream");
     CHECK(source->ownsStream() == TRUE, "static image stream is owned");
     CHECK(source->sourceKind.getValue() == SoBRLImageSource::SOURCE_STATIC_IMAGE,
-	"static source kind recorded");
+	  "static source kind recorded");
     CHECK(source->status.getValue() == SoBRLImageSource::STATUS_READY,
-	"static source is ready");
+	  "static source is ready");
     CHECK(source->pixelWidth.getValue() == 2 && source->pixelHeight.getValue() == 2,
-	"static dimensions recorded");
+	  "static dimensions recorded");
     CHECK(source->pixelFormat.getValue() == SoBRLImageSource::PIXEL_RGB8,
-	"static image pixel format recorded");
+	  "static image pixel format recorded");
     CHECK(source->dataRevision.getValue() == 1, "static image copied at generation one");
     CHECK(source->dirtyRevision.getValue() == 1, "static image initial dirty generation recorded");
     CHECK(BU_STR_EQUAL(source->colorSpace.getValue().getString(), "srgb"),
-	"static image color space recorded");
+	  "static image color space recorded");
     CHECK(BU_STR_EQUAL(source->alphaMode.getValue().getString(), "none"),
-	"static image alpha mode recorded");
+	  "static image alpha mode recorded");
 
     source->clearSource();
     CHECK(source->getStream() == NULL, "clear destroyed owned static stream");

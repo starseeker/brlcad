@@ -36,7 +36,7 @@ make_request(void)
     request.providerVersion = "1";
     request.qualityTier = BRLOBOL_LOD_QUALITY_FAST_DISPLAY;
     request.bounds = SbBox3f(SbVec3f(-1.0f, -2.0f, -3.0f),
-	    SbVec3f(4.0f, 5.0f, 6.0f));
+			     SbVec3f(4.0f, 5.0f, 6.0f));
     request.sourceCounts.faceCount = 17;
     request.sourceCounts.pointCount = 19;
     request.sourceCounts.originalPointCount = 23;
@@ -60,7 +60,7 @@ test_key_determinism(void)
     BRLObolLodCacheKey key_a = brlobol_lod_cache_key(a);
     BRLObolLodCacheKey key_b = brlobol_lod_cache_key(b);
     if (!key_a.isValid() || !key_b.isValid() ||
-	    strcmp(key_a.value.getString(), key_b.value.getString()) != 0) {
+	strcmp(key_a.value.getString(), key_b.value.getString()) != 0) {
 	printf("FAIL: LoD cache key not deterministic across parameter order\n");
 	return 1;
     }
@@ -116,19 +116,19 @@ test_rt_mesh_result(void)
     BRLObolLodResult result =
 	brlobol_lod_result_from_rt_mesh_info(request, info, &status);
     if (result.resultKind != BRLOBOL_LOD_RESULT_MESH ||
-	    result.qualityTier != BRLOBOL_LOD_QUALITY_FAST_DISPLAY ||
-	    result.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
-	    result.geometry.kind != BRLOBOL_LOD_GEOMETRY_RT_MESH_CACHE ||
-	    result.geometry.activeLevel != 2 ||
-	    result.geometry.providerToken != 0xfeed ||
-	    !result.geometry.isValid() ||
-	    result.counts.faceCount != 8 ||
-	    result.counts.pointCount != 9 ||
-	    result.counts.originalPointCount != 10 ||
-	    result.counts.normalCount != 24 ||
-	    !result.hasSnappedPoints ||
-	    !result.hasNormals ||
-	    !brlobol_lod_result_matches_request(result, request)) {
+	result.qualityTier != BRLOBOL_LOD_QUALITY_FAST_DISPLAY ||
+	result.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
+	result.geometry.kind != BRLOBOL_LOD_GEOMETRY_RT_MESH_CACHE ||
+	result.geometry.activeLevel != 2 ||
+	result.geometry.providerToken != 0xfeed ||
+	!result.geometry.isValid() ||
+	result.counts.faceCount != 8 ||
+	result.counts.pointCount != 9 ||
+	result.counts.originalPointCount != 10 ||
+	result.counts.normalCount != 24 ||
+	!result.hasSnappedPoints ||
+	!result.hasNormals ||
+	!brlobol_lod_result_matches_request(result, request)) {
 	printf("FAIL: RT mesh LoD result conversion\n");
 	return 1;
     }
@@ -136,8 +136,8 @@ test_rt_mesh_result(void)
     status.stale_cache_entry = 1;
     result = brlobol_lod_result_from_rt_mesh_info(request, info, &status);
     if (!result.stale ||
-	    result.providerStatus != BRLOBOL_LOD_PROVIDER_STALE ||
-	    result.diagnostic.getLength() == 0) {
+	result.providerStatus != BRLOBOL_LOD_PROVIDER_STALE ||
+	result.diagnostic.getLength() == 0) {
 	printf("FAIL: RT mesh LoD stale status conversion\n");
 	return 1;
     }
@@ -169,22 +169,22 @@ test_rt_mesh_payload_copy(void)
     data.normal_count = 6;
 
     if (!brlobol_lod_mesh_payload_from_rt_mesh_data(payload, data) ||
-	    !payload.isValid() ||
-	    payload.points.size() != 4 ||
-	    payload.normals.size() != 6 ||
-	    payload.coordIndex.size() != 6 ||
-	    payload.coordIndex[4] != 3 ||
-	    fabs((double)payload.normals[5][2] - 6.0) > 1.0e-6 ||
-	    fabs((double)payload.points[1][0] - 2.0) > 1.0e-6) {
+	!payload.isValid() ||
+	payload.points.size() != 4 ||
+	payload.normals.size() != 6 ||
+	payload.coordIndex.size() != 6 ||
+	payload.coordIndex[4] != 3 ||
+	fabs((double)payload.normals[5][2] - 6.0) > 1.0e-6 ||
+	fabs((double)payload.points[1][0] - 2.0) > 1.0e-6) {
 	printf("FAIL: RT mesh LoD payload copy\n");
 	return 1;
     }
 
     faces[5] = 9;
     if (brlobol_lod_mesh_payload_from_rt_mesh_data(payload, data) ||
-	    payload.isValid() ||
-	    !payload.points.empty() ||
-	    !payload.coordIndex.empty()) {
+	payload.isValid() ||
+	!payload.points.empty() ||
+	!payload.coordIndex.empty()) {
 	printf("FAIL: RT mesh LoD payload copy accepted invalid index\n");
 	return 1;
     }
@@ -192,10 +192,10 @@ test_rt_mesh_payload_copy(void)
     faces[5] = 1;
     data.normal_count = 5;
     if (brlobol_lod_mesh_payload_from_rt_mesh_data(payload, data) ||
-	    payload.isValid() ||
-	    !payload.points.empty() ||
-	    !payload.normals.empty() ||
-	    !payload.coordIndex.empty()) {
+	payload.isValid() ||
+	!payload.points.empty() ||
+	!payload.normals.empty() ||
+	!payload.coordIndex.empty()) {
 	printf("FAIL: RT mesh LoD payload copy accepted invalid normals\n");
 	return 1;
     }
@@ -203,8 +203,8 @@ test_rt_mesh_payload_copy(void)
     data.normals = NULL;
     data.normal_count = 0;
     if (!brlobol_lod_mesh_payload_from_rt_mesh_data(payload, data) ||
-	    !payload.isValid() ||
-	    !payload.normals.empty()) {
+	!payload.isValid() ||
+	!payload.normals.empty()) {
 	printf("FAIL: RT mesh LoD payload copy rejected mesh without normals\n");
 	return 1;
     }
@@ -233,13 +233,13 @@ test_stage_results(void)
     BRLObolLodResult result =
 	brlobol_lod_directory_result(request, dependencies);
     if (result.resultKind != BRLOBOL_LOD_RESULT_DIRECTORY ||
-	    result.qualityTier != BRLOBOL_LOD_QUALITY_METADATA ||
-	    result.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
-	    result.terminal ||
-	    result.dependencies.size() != 1 ||
-	    strcmp(result.dependencies[0].objectPath.getString(),
-		"/all.g/child.bot") != 0 ||
-	    !brlobol_lod_result_matches_request(result, request)) {
+	result.qualityTier != BRLOBOL_LOD_QUALITY_METADATA ||
+	result.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
+	result.terminal ||
+	result.dependencies.size() != 1 ||
+	strcmp(result.dependencies[0].objectPath.getString(),
+	       "/all.g/child.bot") != 0 ||
+	!brlobol_lod_result_matches_request(result, request)) {
 	printf("FAIL: LoD directory stage result\n");
 	return 1;
     }
@@ -250,10 +250,10 @@ test_stage_results(void)
     attributes.push_back(color);
     result = brlobol_lod_attributes_result(request, attributes);
     if (result.resultKind != BRLOBOL_LOD_RESULT_ATTRIBUTES ||
-	    result.qualityTier != BRLOBOL_LOD_QUALITY_ATTRIBUTES ||
-	    result.attributes.size() != 1 ||
-	    strcmp(result.attributes[0].name.getString(), "display.color") != 0 ||
-	    !brlobol_lod_result_matches_request(result, request)) {
+	result.qualityTier != BRLOBOL_LOD_QUALITY_ATTRIBUTES ||
+	result.attributes.size() != 1 ||
+	strcmp(result.attributes[0].name.getString(), "display.color") != 0 ||
+	!brlobol_lod_result_matches_request(result, request)) {
 	printf("FAIL: LoD attributes stage result\n");
 	return 1;
     }
@@ -261,12 +261,12 @@ test_stage_results(void)
     counts.lineCount = 12;
     result = brlobol_lod_aabb_result(request, request.bounds, &counts);
     if (result.resultKind != BRLOBOL_LOD_RESULT_AABB ||
-	    result.qualityTier != BRLOBOL_LOD_QUALITY_PROXY ||
-	    result.proxy.kind != BRLOBOL_LOD_PROXY_AABB ||
-	    !result.proxy.isValid() ||
-	    result.bounds.isEmpty() ||
-	    result.counts.lineCount != 12 ||
-	    !brlobol_lod_result_matches_request(result, request)) {
+	result.qualityTier != BRLOBOL_LOD_QUALITY_PROXY ||
+	result.proxy.kind != BRLOBOL_LOD_PROXY_AABB ||
+	!result.proxy.isValid() ||
+	result.bounds.isEmpty() ||
+	result.counts.lineCount != 12 ||
+	!brlobol_lod_result_matches_request(result, request)) {
 	printf("FAIL: LoD AABB stage result\n");
 	return 1;
     }
@@ -280,12 +280,12 @@ test_stage_results(void)
     proxy.halfExtents.setValue(4.0f, 5.0f, 6.0f);
     result = brlobol_lod_proxy_result(request, proxy, NULL);
     if (result.resultKind != BRLOBOL_LOD_RESULT_PROXY ||
-	    result.qualityTier != BRLOBOL_LOD_QUALITY_PROXY ||
-	    result.proxy.kind != BRLOBOL_LOD_PROXY_OBB ||
-	    !result.proxy.isValid() ||
-	    fabs((double)result.proxy.center[0] - 1.0) > 1.0e-6 ||
-	    fabs((double)result.proxy.halfExtents[2] - 6.0) > 1.0e-6 ||
-	    !brlobol_lod_result_matches_request(result, request)) {
+	result.qualityTier != BRLOBOL_LOD_QUALITY_PROXY ||
+	result.proxy.kind != BRLOBOL_LOD_PROXY_OBB ||
+	!result.proxy.isValid() ||
+	fabs((double)result.proxy.center[0] - 1.0) > 1.0e-6 ||
+	fabs((double)result.proxy.halfExtents[2] - 6.0) > 1.0e-6 ||
+	!brlobol_lod_result_matches_request(result, request)) {
 	printf("FAIL: LoD proxy stage result\n");
 	return 1;
     }
@@ -293,20 +293,20 @@ test_stage_results(void)
     proxy.clear();
     result = brlobol_lod_proxy_result(request, proxy, NULL);
     if (result.providerStatus != BRLOBOL_LOD_PROVIDER_ERROR ||
-	    !result.terminal ||
-	    result.diagnostic.getLength() == 0) {
+	!result.terminal ||
+	result.diagnostic.getLength() == 0) {
 	printf("FAIL: LoD invalid proxy diagnostic result\n");
 	return 1;
     }
 
     result.clear();
     result.addDependency("/all.g/leaf.bot", "leaf.bot", 41, 0x99,
-	    BRLOBOL_LOD_QUALITY_FAST_DISPLAY, TRUE);
+			 BRLOBOL_LOD_QUALITY_FAST_DISPLAY, TRUE);
     result.addAttribute("draw.mode", "wire");
     if (result.dependencies.size() != 1 ||
-	    !result.dependencies[0].optional ||
-	    result.attributes.size() != 1 ||
-	    strcmp(result.attributes[0].value.getString(), "wire") != 0) {
+	!result.dependencies[0].optional ||
+	result.attributes.size() != 1 ||
+	strcmp(result.attributes[0].value.getString(), "wire") != 0) {
 	printf("FAIL: LoD result append helpers\n");
 	return 1;
     }

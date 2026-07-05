@@ -42,7 +42,8 @@
 	return 1; \
     } while (0)
 
-class BRLOBOLRenderContext {
+class BRLOBOLRenderContext
+{
 public:
     BRLOBOLRenderContext(unsigned int w, unsigned int h) :
 	context(NULL),
@@ -86,19 +87,19 @@ public:
 	if (previousContext) {
 	    GLint fmt = 0;
 	    OSMesaGetColorBuffer(previousContext, &previousWidth, &previousHeight,
-		    &fmt, &previousBuffer);
+				 &fmt, &previousBuffer);
 	    previousFormat = (GLenum)fmt;
 	}
 
 	return OSMesaMakeCurrent(context, buffer.get(), GL_UNSIGNED_BYTE,
-		static_cast<GLsizei>(width), static_cast<GLsizei>(height)) ? TRUE : FALSE;
+				 static_cast<GLsizei>(width), static_cast<GLsizei>(height)) ? TRUE : FALSE;
     }
 
     void restorePrevious(void)
     {
 	if (previousContext && previousBuffer) {
 	    OSMesaMakeCurrent(previousContext, previousBuffer, GL_UNSIGNED_BYTE,
-		    previousWidth, previousHeight);
+			      previousWidth, previousHeight);
 	} else {
 	    OSMesaMakeCurrent(NULL, NULL, 0, 0, 0);
 	}
@@ -116,7 +117,8 @@ public:
     GLenum previousFormat;
 };
 
-class BRLOBOLRenderContextManager : public SoDB::ContextManager {
+class BRLOBOLRenderContextManager : public SoDB::ContextManager
+{
 public:
     virtual void *createOffscreenContext(unsigned int width, unsigned int height)
     {
@@ -170,8 +172,8 @@ static void
 set_pixel(BRLOBOLSoftwareLineState *state, int x, int y)
 {
     if (!state || !state->pixels || x < 0 || y < 0 ||
-	    x >= static_cast<int>(state->width) ||
-	    y >= static_cast<int>(state->height))
+	x >= static_cast<int>(state->width) ||
+	y >= static_cast<int>(state->height))
 	return;
 
     unsigned char *p = state->pixels + ((y * state->width + x) * state->components);
@@ -230,7 +232,7 @@ draw_line(BRLOBOLSoftwareLineState *state, const SbVec3f &a, const SbVec3f &b)
 
 static void
 software_line_cb(void *userdata, SoCallbackAction *action,
-	const SoPrimitiveVertex *v1, const SoPrimitiveVertex *v2)
+		 const SoPrimitiveVertex *v1, const SoPrimitiveVertex *v2)
 {
     BRLOBOLSoftwareLineState *state = static_cast<BRLOBOLSoftwareLineState *>(userdata);
     if (!state || !v1 || !v2)
@@ -245,7 +247,8 @@ software_line_cb(void *userdata, SoCallbackAction *action,
     state->lineCount++;
 }
 
-class BRLOBOLSoftwareLineContextManager : public SoDB::ContextManager {
+class BRLOBOLSoftwareLineContextManager : public SoDB::ContextManager
+{
 public:
     BRLOBOLSoftwareLineContextManager(void) :
 	lastLineCount(0),
@@ -272,12 +275,12 @@ public:
     }
 
     virtual SbBool renderScene(SoNode *scene, unsigned int width, unsigned int height,
-	    unsigned char *pixels, unsigned int nrcomponents,
-	    const float background_rgb[3])
+			       unsigned char *pixels, unsigned int nrcomponents,
+			       const float background_rgb[3])
     {
 	(void)background_rgb;
 	if (!scene || !pixels || width == 0 || height == 0 ||
-		nrcomponents < 1 || nrcomponents > 4)
+	    nrcomponents < 1 || nrcomponents > 4)
 	    return FALSE;
 
 	SoSearchAction search;
@@ -318,7 +321,8 @@ public:
     int lastOverlayCount;
 };
 
-class BRLOBOLDiagnosticContextManager : public SoDB::ContextManager {
+class BRLOBOLDiagnosticContextManager : public SoDB::ContextManager
+{
 public:
     BRLOBOLDiagnosticContextManager(void) :
 	diagnosticCount(0),
@@ -346,8 +350,8 @@ public:
     }
 
     virtual SbBool renderScene(SoNode *UNUSED(scene), unsigned int UNUSED(width),
-	    unsigned int UNUSED(height), unsigned char *UNUSED(pixels),
-	    unsigned int UNUSED(nrcomponents), const float background_rgb[3])
+			       unsigned int UNUSED(height), unsigned char *UNUSED(pixels),
+			       unsigned int UNUSED(nrcomponents), const float background_rgb[3])
     {
 	(void)background_rgb;
 	return FALSE;
@@ -546,8 +550,8 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (diagnosticRenderer.render(root))
 	FAIL("diagnostic ContextManager should decline renderScene and fail without GL context");
     if (diagnosticManager.diagnosticCount <= 0 ||
-	    strstr(diagnosticManager.lastComponent.getString(), "SoOffscreenRenderer") == NULL ||
-	    strstr(diagnosticManager.lastMessage.getString(), "renderScene") == NULL)
+	strstr(diagnosticManager.lastComponent.getString(), "SoOffscreenRenderer") == NULL ||
+	strstr(diagnosticManager.lastMessage.getString(), "renderScene") == NULL)
 	FAIL("ContextManager diagnostic hook should report backend renderScene fallback");
 
     root->unref();

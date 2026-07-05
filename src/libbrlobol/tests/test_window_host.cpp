@@ -60,10 +60,10 @@ test_window_host_contract(void)
     CHECK(host.getController() != NULL, "window host owns a view controller");
     CHECK(host.getController()->getSceneRoot() != NULL, "window host creates scene root");
     CHECK(host.getController()->getSceneRoot()->isOfType(SoGroup::getClassTypeId()),
-	"window host scene root is a group");
+	  "window host scene root is a group");
     CHECK(host.getController()->getViewportRegion().getWindowSize()[0] == 6 &&
-	    host.getController()->getViewportRegion().getWindowSize()[1] == 4,
-	"window host applies requested viewport size");
+	  host.getController()->getViewportRegion().getWindowSize()[1] == 4,
+	  "window host applies requested viewport size");
 
     BRLObolInputBinding binding;
     binding.eventType = BRLOBOL_INPUT_KEY;
@@ -82,9 +82,9 @@ test_window_host_contract(void)
     event.type = BRLOBOL_INPUT_KEY;
     event.key = 'f';
     CHECK(host.handleInputEvent(&event, &profile) == 1,
-	"window host applies semantic input profile action");
+	  "window host applies semantic input profile action");
     CHECK(host.getController()->isRenderRequested(),
-	"semantic input action requests render");
+	  "semantic input action requests render");
     host.getController()->clearRenderRequest();
 
     host.close();
@@ -111,9 +111,9 @@ test_imgstream_display_host_bridge(void)
 
     brlobol_window_host_unregister_display_host();
     CHECK(brlobol_window_host_register_display_host(NULL) == -1,
-	"null Obol display host registration is rejected");
+	  "null Obol display host registration is rejected");
     CHECK(brlobol_window_host_register_display_host(&host) == 0,
-	"Obol display host registered with libimgstream");
+	  "Obol display host registered with libimgstream");
 
     imgstream_fb_t *fb = imgstream_fb_open("/dev/qtgl", 5, 4);
     CHECK(fb != NULL, "display framebuffer opens through Obol host");
@@ -125,49 +125,49 @@ test_imgstream_display_host_bridge(void)
     CHECK(source != NULL, "display host creates image source");
     CHECK(viewport != NULL, "display host creates viewport image");
     CHECK(source->getStream() == imgstream_fb_stream(fb),
-	"display host image source borrows framebuffer stream");
+	  "display host image source borrows framebuffer stream");
     CHECK(viewport->getImageSource() == source,
-	"display host viewport image references source");
+	  "display host viewport image references source");
     CHECK(viewport->getTextureNode() != NULL &&
-	    texture_matches(viewport->getTextureNode(), 5, 4, 3),
-	"display host realizes framebuffer texture");
+	  texture_matches(viewport->getTextureNode(), 5, 4, 3),
+	  "display host realizes framebuffer texture");
     CHECK(host.getController()->getSceneRoot()->isOfType(SoGroup::getClassTypeId()),
-	"display host controller root is a group");
+	  "display host controller root is a group");
     CHECK(static_cast<SoGroup *>(host.getController()->getSceneRoot())->getNumChildren() >= 2,
-	"display host attaches image nodes to controller root");
+	  "display host attaches image nodes to controller root");
 
     unsigned char red[3] = {255, 0, 0};
     CHECK(imgstream_fb_writerect(fb, 2, 1, 1, 1, red) == 1,
-	"framebuffer write updates stream");
+	  "framebuffer write updates stream");
     CHECK(imgstream_fb_flush(fb) == 0, "display host flush syncs stream");
     CHECK(viewport->realizedDirtyRevision.getValue() == source->dirtyRevision.getValue(),
-	"display host flush refreshes viewport dirty revision");
+	  "display host flush refreshes viewport dirty revision");
 
     CHECK(imgstream_fb_view(fb, 3, 2, 4, 4) == 0,
-	"display host accepts framebuffer view transform");
+	  "display host accepts framebuffer view transform");
     CHECK(float_equal(viewport->sourceCenter.getValue()[0], 3.0f) &&
-	    float_equal(viewport->sourceCenter.getValue()[1], 2.0f) &&
-	    float_equal(viewport->sourceZoom.getValue(), 4.0f),
-	"display host maps framebuffer view to viewport image");
+	  float_equal(viewport->sourceCenter.getValue()[1], 2.0f) &&
+	  float_equal(viewport->sourceZoom.getValue(), 4.0f),
+	  "display host maps framebuffer view to viewport image");
 
     CHECK(imgstream_fb_cursor(fb, 1, 4, 3) == 0,
-	"display host accepts cursor state");
+	  "display host accepts cursor state");
     CHECK(viewport->cursorVisible.getValue() == TRUE &&
-	    float_equal(viewport->cursorImagePosition.getValue()[0], 4.0f) &&
-	    float_equal(viewport->cursorImagePosition.getValue()[1], 3.0f),
-	"display host maps cursor state to viewport image");
+	  float_equal(viewport->cursorImagePosition.getValue()[0], 4.0f) &&
+	  float_equal(viewport->cursorImagePosition.getValue()[1], 3.0f),
+	  "display host maps cursor state to viewport image");
 
     CHECK(imgstream_fb_viewport(fb, 1, 2, 11, 8) == 0,
-	"display host accepts viewport state");
+	  "display host accepts viewport state");
     CHECK(host.getController()->getViewportRegion().getWindowSize()[0] == 10 &&
-	    host.getController()->getViewportRegion().getWindowSize()[1] == 6,
-	"display host maps viewport state to controller size");
+	  host.getController()->getViewportRegion().getWindowSize()[1] == 6,
+	  "display host maps viewport state to controller size");
 
     unsigned char cursorBits[1] = {0xff};
     CHECK(imgstream_fb_setcursor(fb, cursorBits, 8, 1, 0, 0) == 0,
-	"display host accepts custom cursor shape");
+	  "display host accepts custom cursor shape");
     CHECK(viewport->cursorShape.getValue() == SoBRLViewportImage::CURSOR_CUSTOM,
-	"display host records custom cursor policy");
+	  "display host records custom cursor policy");
 
     CHECK(imgstream_fb_poll(fb) == 0, "display host poll succeeds");
     CHECK(imgstream_fb_poll_rate(fb) == 0, "display host poll rate defaults to zero");
@@ -177,7 +177,7 @@ test_imgstream_display_host_bridge(void)
 
     brlobol_window_host_unregister_display_host();
     CHECK(imgstream_fb_open("/dev/qtgl", 2, 2) == NULL,
-	"display framebuffer fails explicitly without registered host");
+	  "display framebuffer fails explicitly without registered host");
     return 0;
 }
 

@@ -79,20 +79,20 @@ test_viewport_image(void)
     CHECK(viewport->getTextureNode() != NULL, "viewport image owns texture node");
     CHECK(viewport->getImageFaceSet() != NULL, "viewport image owns face set");
     CHECK(texture_matches(viewport->getTextureNode(), 4, 2, 4),
-	"viewport texture dimensions match source");
+	  "viewport texture dimensions match source");
     CHECK(viewport->realizedDataRevision.getValue() == source->dataRevision.getValue(),
-	"viewport data revision recorded");
+	  "viewport data revision recorded");
     CHECK(viewport->realizedDirtyRevision.getValue() == source->dirtyRevision.getValue(),
-	"viewport dirty revision recorded");
+	  "viewport dirty revision recorded");
 
     unsigned char pixel[4] = {200, 30, 20, 255};
     CHECK(imgstream_write_rect(stream, 1, 0, 1, 1, pixel, 4) == 0,
-	"viewport source dirty write accepted");
+	  "viewport source dirty write accepted");
     CHECK(viewport->syncFromSource() == 0, "viewport sync rebuilt after dirty source");
     CHECK(viewport->realizedDirtyRevision.getValue() == source->dirtyRevision.getValue(),
-	"viewport dirty revision refreshed");
+	  "viewport dirty revision refreshed");
     CHECK(texture_matches(viewport->getTextureNode(), 4, 2, 4),
-	"viewport refreshed texture dimensions match source");
+	  "viewport refreshed texture dimensions match source");
 
     viewport->unref();
     source->unref();
@@ -129,18 +129,18 @@ test_image_plane(void)
     CHECK(plane->getTextureNode() != NULL, "image plane owns texture node");
     CHECK(plane->getImageFaceSet() != NULL, "image plane owns face set");
     CHECK(texture_matches(plane->getTextureNode(), 4, 2, 4),
-	"image plane texture dimensions match source");
+	  "image plane texture dimensions match source");
     CHECK(plane->realizedDataRevision.getValue() == source->dataRevision.getValue(),
-	"image plane data revision recorded");
+	  "image plane data revision recorded");
     CHECK(plane->realizedDirtyRevision.getValue() == source->dirtyRevision.getValue(),
-	"image plane dirty revision recorded");
+	  "image plane dirty revision recorded");
 
     unsigned char pixel[4] = {0, 180, 60, 255};
     CHECK(imgstream_write_rect(stream, 2, 1, 1, 1, pixel, 4) == 0,
-	"plane source dirty write accepted");
+	  "plane source dirty write accepted");
     CHECK(plane->syncFromSource() == 0, "image plane sync rebuilt after dirty source");
     CHECK(plane->realizedDirtyRevision.getValue() == source->dirtyRevision.getValue(),
-	"image plane dirty revision refreshed");
+	  "image plane dirty revision refreshed");
 
     plane->unref();
     source->unref();

@@ -39,7 +39,8 @@
 	return 1; \
     } while (0)
 
-class BRLOBOLRenderContext {
+class BRLOBOLRenderContext
+{
 public:
     BRLOBOLRenderContext(unsigned int w, unsigned int h) :
 	context(NULL),
@@ -81,19 +82,19 @@ public:
 	if (previousContext) {
 	    GLint fmt = 0;
 	    OSMesaGetColorBuffer(previousContext, &previousWidth, &previousHeight,
-		    &fmt, &previousBuffer);
+				 &fmt, &previousBuffer);
 	    previousFormat = (GLenum)fmt;
 	}
 
 	return OSMesaMakeCurrent(context, buffer.get(), GL_UNSIGNED_BYTE,
-		static_cast<GLsizei>(width), static_cast<GLsizei>(height)) ? TRUE : FALSE;
+				 static_cast<GLsizei>(width), static_cast<GLsizei>(height)) ? TRUE : FALSE;
     }
 
     void restorePrevious(void)
     {
 	if (previousContext && previousBuffer) {
 	    OSMesaMakeCurrent(previousContext, previousBuffer, GL_UNSIGNED_BYTE,
-		    previousWidth, previousHeight);
+			      previousWidth, previousHeight);
 	} else {
 	    OSMesaMakeCurrent(NULL, NULL, 0, 0, 0);
 	}
@@ -110,7 +111,8 @@ public:
     GLenum previousFormat;
 };
 
-class BRLOBOLRenderContextManager : public SoDB::ContextManager {
+class BRLOBOLRenderContextManager : public SoDB::ContextManager
+{
 public:
     virtual void *createOffscreenContext(unsigned int width, unsigned int height)
     {
@@ -284,7 +286,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     SoBRLRealizeAction realize;
     realize.apply(root);
     if (realize.getRealizedSourceCount() != 1 ||
-	    source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED)
+	source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED)
 	FAIL("NanoRT scene should realize database-backed shaded source");
 
     SoBRLMeshShape *mesh = source->getRealizedMesh();
@@ -340,7 +342,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("NanoRT-rendered scene pick should return a BRL-CAD Obol detail");
     const SoBRLPickDetail *pickDetail = static_cast<const SoBRLPickDetail *>(rawDetail);
     if (strcmp(pickDetail->getPath().getString(), "/backend_ball.s") != 0 ||
-	    pickDetail->getPrimitiveKind() != SoBRLPickDetail::FACE)
+	pickDetail->getPrimitiveKind() != SoBRLPickDetail::FACE)
 	FAIL("NanoRT-rendered scene pick detail should preserve mesh face identity");
 
     char rgbpath[MAXPATHLEN] = {0};
