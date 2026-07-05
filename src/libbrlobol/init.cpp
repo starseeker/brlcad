@@ -36,9 +36,11 @@
 
 #include <Inventor/SoDB.h>
 
-namespace {
+namespace
+{
 
-class BRLOBOLNullContextManager : public SoDB::ContextManager {
+class BRLOBOLNullContextManager : public SoDB::ContextManager
+{
 public:
     virtual void *createOffscreenContext(unsigned int UNUSED(width), unsigned int UNUSED(height))
     {

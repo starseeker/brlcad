@@ -58,7 +58,7 @@ SoBRLADC::rebuildGeometry(void)
 	tick = cross * 0.5f;
 
     const float radians = this->angleDegrees.getValue() *
-	static_cast<float>(M_PI / 180.0);
+			  static_cast<float>(M_PI / 180.0);
     SbVec3f c = this->center.getValue();
     SbVec3f dir(std::cos(radians), std::sin(radians), 0.0f);
     SbVec3f perp(-dir[1], dir[0], 0.0f);

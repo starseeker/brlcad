@@ -30,19 +30,19 @@ SO_ACTION_SOURCE(SoBRLExportAction);
 
 static SbBool
 export_source_full_detail_result_valid(const BRLObolSourceMeshRequest &sourceRequest,
-	const BRLObolLodResult &result)
+				       const BRLObolLodResult &result)
 {
     if (result.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
-	    result.resultKind != BRLOBOL_LOD_RESULT_FULL_DETAIL ||
-	    !result.mesh.isValid())
+	result.resultKind != BRLOBOL_LOD_RESULT_FULL_DETAIL ||
+	!result.mesh.isValid())
 	return FALSE;
 
     size_t faceCount = result.mesh.coordIndex.size() / 3;
     if ((sourceRequest.faceCount != 0 &&
-		sourceRequest.faceCount != static_cast<uint64_t>(faceCount)) ||
-	    (sourceRequest.pointCount != 0 &&
-		sourceRequest.pointCount !=
-		static_cast<uint64_t>(result.mesh.points.size())))
+	 sourceRequest.faceCount != static_cast<uint64_t>(faceCount)) ||
+	(sourceRequest.pointCount != 0 &&
+	 sourceRequest.pointCount !=
+	 static_cast<uint64_t>(result.mesh.points.size())))
 	return FALSE;
 
     return TRUE;
@@ -50,7 +50,7 @@ export_source_full_detail_result_valid(const BRLObolSourceMeshRequest &sourceReq
 
 static int
 export_source_mesh_face_index(const BRLObolLodMeshPayload &mesh,
-	size_t faceSlot, size_t faceCount)
+			      size_t faceSlot, size_t faceCount)
 {
     if (mesh.faceIndex.size() == faceCount)
 	return static_cast<int>(mesh.faceIndex[faceSlot]);
@@ -59,19 +59,19 @@ export_source_mesh_face_index(const BRLObolLodMeshPayload &mesh,
 
 static int
 export_source_mesh_vertex_index(const BRLObolLodMeshPayload &mesh,
-	int localIndex)
+				int localIndex)
 {
     if (localIndex < 0)
 	return localIndex;
     if (mesh.vertexIndex.size() == mesh.points.size())
 	return static_cast<int>(
-		mesh.vertexIndex[static_cast<size_t>(localIndex)]);
+		   mesh.vertexIndex[static_cast<size_t>(localIndex)]);
     return localIndex;
 }
 
 static SbVec3f
 export_transform_point_normal(const SbMatrix &localToWorld,
-	const SbVec3f &localNormal)
+			      const SbVec3f &localNormal)
 {
     SbMatrix normalMatrix = localToWorld.inverse().transpose();
     SbVec3f worldNormal;
@@ -83,9 +83,9 @@ export_transform_point_normal(const SbMatrix &localToWorld,
 
 static float
 export_transform_point_scale(const SbMatrix &localToWorld,
-	const SbVec3f &localPoint,
-	const SbVec3f &worldPoint,
-	float localScale)
+			     const SbVec3f &localPoint,
+			     const SbVec3f &worldPoint,
+			     float localScale)
 {
     if (localScale <= 0.0f)
 	return localScale;
@@ -97,15 +97,15 @@ export_transform_point_scale(const SbMatrix &localToWorld,
 	for (int yi = 0; yi < 2; yi++) {
 	    for (int zi = 0; zi < 2; zi++) {
 		SbVec3f localCorner(
-			localPoint[0] + offset[xi],
-			localPoint[1] + offset[yi],
-			localPoint[2] + offset[zi]);
+		    localPoint[0] + offset[xi],
+		    localPoint[1] + offset[yi],
+		    localPoint[2] + offset[zi]);
 		SbVec3f worldCorner;
 		localToWorld.multVecMatrix(localCorner, worldCorner);
 		const SbVec3f delta = worldCorner - worldPoint;
 		for (int axis = 0; axis < 3; axis++) {
 		    const float radius = delta[axis] < 0.0f ?
-			-delta[axis] : delta[axis];
+					 -delta[axis] : delta[axis];
 		    if (radius > worldScale)
 			worldScale = radius;
 		}
@@ -128,7 +128,7 @@ export_reserve_records(std::vector<Record> &records, size_t additionalCount)
 	return;
 
     size_t grown = records.capacity() > 0 ?
-	records.capacity() * 2 : additionalCount;
+		   records.capacity() * 2 : additionalCount;
     if (grown < required)
 	grown = required;
     records.reserve(grown);
@@ -160,7 +160,7 @@ export_identity_value(const char *identity)
 
 static SbString
 export_record_identity_fallback(const SbString &path,
-	const SbString &sourceName)
+				const SbString &sourceName)
 {
     return path.getLength() > 0 ? path : sourceName;
 }
@@ -170,7 +170,7 @@ static void
 export_update_record_identity_values(Record &record)
 {
     const SbString cacheIdentity = record.cacheIdentity.getLength() > 0 ?
-	record.cacheIdentity : record.sourceIdentity;
+				   record.cacheIdentity : record.sourceIdentity;
     record.cacheIdentityValue =
 	export_identity_value(cacheIdentity.getString());
     record.sourceIdentityValue =
@@ -180,10 +180,10 @@ export_update_record_identity_values(Record &record)
 template <typename Record>
 static void
 export_init_record_metadata(Record &record,
-	const SbString &path,
-	const SbString &sourceName,
-	const SbString &sourceType,
-	const char *fallbackGeometryKind)
+			    const SbString &path,
+			    const SbString &sourceName,
+			    const SbString &sourceType,
+			    const char *fallbackGeometryKind)
 {
     record.displayName = export_record_display_name(path, sourceName);
     record.geometryName = sourceName.getLength() > 0 ? sourceName : sourceType;
@@ -204,8 +204,8 @@ export_init_record_metadata(Record &record,
 template <typename Record, typename Shape>
 static void
 export_apply_shape_metadata(Record &record,
-	const Shape *shape,
-	const char *fallbackGeometryKind)
+			    const Shape *shape,
+			    const char *fallbackGeometryKind)
 {
     if (!shape)
 	return;
@@ -216,14 +216,14 @@ export_apply_shape_metadata(Record &record,
     const SbString &geometryKind = shape->geometryKind.getValue();
 
     record.displayName = displayName.getLength() > 0 ?
-	displayName : export_record_display_name(shape->sourcePath.getValue(),
-		shape->sourceName.getValue());
+			 displayName : export_record_display_name(shape->sourcePath.getValue(),
+			     shape->sourceName.getValue());
     record.geometryName = geometryName.getLength() > 0 ?
-	geometryName : shape->sourceName.getValue();
+			  geometryName : shape->sourceName.getValue();
     record.cacheIdentity = shape->cacheIdentity.getValue();
     record.sourceIdentity = sourceIdentity.getLength() > 0 ?
-	sourceIdentity : export_record_identity_fallback(
-		shape->sourcePath.getValue(), shape->sourceName.getValue());
+			    sourceIdentity : export_record_identity_fallback(
+				shape->sourcePath.getValue(), shape->sourceName.getValue());
     export_update_record_identity_values(record);
     record.databaseIntent = shape->databaseIntent.getValue() ? 1 : 0;
     record.overlayIntent = shape->overlayIntent.getValue() ? 1 : 0;
@@ -234,24 +234,24 @@ export_apply_shape_metadata(Record &record,
     record.drawMode = shape->drawMode.getValue();
     record.recordRole = shape->recordRole.getValue();
     record.geometryKind = geometryKind.getLength() > 0 ?
-	geometryKind : SbString(fallbackGeometryKind ? fallbackGeometryKind : "");
+			  geometryKind : SbString(fallbackGeometryKind ? fallbackGeometryKind : "");
 }
 
 template <typename Record>
 static void
 export_apply_source_request_metadata(Record &record,
-	const BRLObolSourceMeshRequest &request,
-	const char *fallbackGeometryKind)
+				     const BRLObolSourceMeshRequest &request,
+				     const char *fallbackGeometryKind)
 {
     record.displayName = request.displayName.getLength() > 0 ?
-	request.displayName : export_record_display_name(request.path,
-		request.sourceName);
+			 request.displayName : export_record_display_name(request.path,
+			     request.sourceName);
     record.geometryName = request.geometryName.getLength() > 0 ?
-	request.geometryName : request.sourceName;
+			  request.geometryName : request.sourceName;
     record.cacheIdentity = request.cacheIdentity;
     record.sourceIdentity = request.sourceIdentity.getLength() > 0 ?
-	request.sourceIdentity : export_record_identity_fallback(
-		request.path, request.sourceName);
+			    request.sourceIdentity : export_record_identity_fallback(
+				request.path, request.sourceName);
     export_update_record_identity_values(record);
     record.databaseIntent = request.databaseIntent ? 1 : 0;
     record.overlayIntent = request.overlayIntent ? 1 : 0;
@@ -262,7 +262,7 @@ export_apply_source_request_metadata(Record &record,
     record.drawMode = request.drawMode;
     record.recordRole = request.recordRole;
     record.geometryKind = request.geometryKind.getLength() > 0 ?
-	request.geometryKind : SbString(fallbackGeometryKind ? fallbackGeometryKind : "");
+			  request.geometryKind : SbString(fallbackGeometryKind ? fallbackGeometryKind : "");
 }
 
 static void
@@ -304,7 +304,7 @@ export_object_key(const Record &record)
 template <typename Record>
 static void
 export_object_init_common(SoBRLExportAction::ObjectRecord &object,
-	const Record &record)
+			  const Record &record)
 {
     object.sequence = record.sequence;
     object.path = record.path;
@@ -340,7 +340,7 @@ export_object_init_common(SoBRLExportAction::ObjectRecord &object,
 template <typename Record>
 static void
 export_object_update_common(SoBRLExportAction::ObjectRecord &object,
-	const Record &record)
+			    const Record &record)
 {
     if (record.sequence < object.sequence)
 	object.sequence = record.sequence;
@@ -354,16 +354,16 @@ export_object_update_common(SoBRLExportAction::ObjectRecord &object,
     if (object.geometryKind.getLength() == 0) {
 	object.geometryKind = record.geometryKind;
     } else if (record.geometryKind.getLength() > 0 &&
-	    strcmp(object.geometryKind.getString(),
-		record.geometryKind.getString()) != 0) {
+	       strcmp(object.geometryKind.getString(),
+		      record.geometryKind.getString()) != 0) {
 	object.geometryKind = "mixed";
     }
 }
 
 static void
 export_object_add_line(SoBRLExportAction::ObjectRecord &object,
-	const SoBRLExportAction::LineRecord &record,
-	int index)
+		       const SoBRLExportAction::LineRecord &record,
+		       int index)
 {
     export_object_update_common(object, record);
     object.lineIndices.push_back(index);
@@ -373,15 +373,15 @@ export_object_add_line(SoBRLExportAction::ObjectRecord &object,
 
 static void
 export_object_add_point(SoBRLExportAction::ObjectRecord &object,
-	const SoBRLExportAction::PointRecord &record,
-	int index)
+			const SoBRLExportAction::PointRecord &record,
+			int index)
 {
     export_object_update_common(object, record);
     object.pointIndices.push_back(index);
     object.bounds.extendBy(record.point);
     if (record.pointScaleValid && record.pointScale > 0.0f) {
 	const SbVec3f radius(record.pointScale, record.pointScale,
-		record.pointScale);
+			     record.pointScale);
 	object.bounds.extendBy(record.point - radius);
 	object.bounds.extendBy(record.point + radius);
     }
@@ -389,8 +389,8 @@ export_object_add_point(SoBRLExportAction::ObjectRecord &object,
 
 static void
 export_object_add_triangle(SoBRLExportAction::ObjectRecord &object,
-	const SoBRLExportAction::TriangleRecord &record,
-	int index)
+			   const SoBRLExportAction::TriangleRecord &record,
+			   int index)
 {
     export_object_update_common(object, record);
     object.triangleIndices.push_back(index);
@@ -401,29 +401,29 @@ export_object_add_triangle(SoBRLExportAction::ObjectRecord &object,
 
 static int
 export_object_record_matches_glob(
-	const SoBRLExportAction::ObjectRecord &record,
-	const char *glob)
+    const SoBRLExportAction::ObjectRecord &record,
+    const char *glob)
 {
     if (!glob || !glob[0])
 	return 1;
 
     return bu_path_match(glob, record.path.getString(), 0) == 0 ||
-	bu_path_match(glob, record.displayName.getString(), 0) == 0 ||
-	bu_path_match(glob, record.sourceName.getString(), 0) == 0;
+	   bu_path_match(glob, record.displayName.getString(), 0) == 0 ||
+	   bu_path_match(glob, record.sourceName.getString(), 0) == 0;
 }
 
 static int
 export_object_record_matches_query(
-	const SoBRLExportAction::ObjectRecord &record,
-	unsigned int queryFlags,
-	const char *glob,
-	int drawMode)
+    const SoBRLExportAction::ObjectRecord &record,
+    unsigned int queryFlags,
+    const char *glob,
+    int drawMode)
 {
     if ((queryFlags & SoBRLExportAction::QUERY_VISIBLE_ONLY) &&
-	    !record.visible)
+	!record.visible)
 	return 0;
     if ((queryFlags & SoBRLExportAction::QUERY_LOCAL_ONLY) &&
-	    !record.localSource)
+	!record.localSource)
 	return 0;
     if (drawMode >= 0 && record.drawMode != drawMode)
 	return 0;
@@ -436,10 +436,10 @@ export_object_record_matches_query(
 	(queryFlags & SoBRLExportAction::QUERY_VIEW_OBJECTS) ? 1 : 0;
     if (wantsDatabase || wantsView) {
 	const int isDatabase = record.databaseIntent &&
-	    !record.nonDatabaseSource;
+			       !record.nonDatabaseSource;
 	const int isView = record.overlayIntent || record.hudIntent ||
-	    record.localSource || record.sharedSource ||
-	    record.nonDatabaseSource;
+			   record.localSource || record.sharedSource ||
+			   record.nonDatabaseSource;
 	if (wantsDatabase && isDatabase)
 	    return 1;
 	if (wantsView && isView)
@@ -452,13 +452,13 @@ export_object_record_matches_query(
 
 static const SoBRLExportAction::TriangleRecord *
 export_object_first_triangle(
-	const std::vector<SoBRLExportAction::TriangleRecord> &triangles,
-	const SoBRLExportAction::ObjectRecord &record)
+    const std::vector<SoBRLExportAction::TriangleRecord> &triangles,
+    const SoBRLExportAction::ObjectRecord &record)
 {
     for (size_t i = 0; i < record.triangleIndices.size(); i++) {
 	int triangleIndex = record.triangleIndices[i];
 	if (triangleIndex < 0 ||
-		static_cast<size_t>(triangleIndex) >= triangles.size())
+	    static_cast<size_t>(triangleIndex) >= triangles.size())
 	    continue;
 	return &triangles[static_cast<size_t>(triangleIndex)];
     }
@@ -468,7 +468,7 @@ export_object_first_triangle(
 
 static int
 export_triangle_vertex_id(const SoBRLExportAction::TriangleRecord &triangle,
-	size_t vertexSlot)
+			  size_t vertexSlot)
 {
     if (vertexSlot == 0)
 	return triangle.vertexIndexA;
@@ -479,8 +479,8 @@ export_triangle_vertex_id(const SoBRLExportAction::TriangleRecord &triangle,
 
 static SbVec3f
 export_triangle_vertex_point(
-	const SoBRLExportAction::TriangleRecord &triangle,
-	size_t vertexSlot)
+    const SoBRLExportAction::TriangleRecord &triangle,
+    size_t vertexSlot)
 {
     if (vertexSlot == 0)
 	return triangle.a;
@@ -491,7 +491,7 @@ export_triangle_vertex_point(
 
 static int
 export_surface_compact_vertex_slot(std::vector<int> &vertexIds,
-	std::vector<SbVec3f> &points, int vertexId, const SbVec3f &point)
+				   std::vector<SbVec3f> &points, int vertexId, const SbVec3f &point)
 {
     if (vertexId >= 0) {
 	for (size_t i = 0; i < vertexIds.size(); i++) {
@@ -507,10 +507,10 @@ export_surface_compact_vertex_slot(std::vector<int> &vertexIds,
 
 static void
 export_object_surface_compact_detail(
-	const std::vector<SoBRLExportAction::TriangleRecord> &triangles,
-	const SoBRLExportAction::ObjectRecord &record,
-	std::vector<SbVec3f> *pointsOut,
-	std::vector<int> *indicesOut)
+    const std::vector<SoBRLExportAction::TriangleRecord> &triangles,
+    const SoBRLExportAction::ObjectRecord &record,
+    std::vector<SbVec3f> *pointsOut,
+    std::vector<int> *indicesOut)
 {
     std::vector<int> vertexIds;
     std::vector<SbVec3f> points;
@@ -521,15 +521,15 @@ export_object_surface_compact_detail(
     for (size_t i = 0; i < record.triangleIndices.size(); i++) {
 	int triangleIndex = record.triangleIndices[i];
 	if (triangleIndex < 0 ||
-		static_cast<size_t>(triangleIndex) >= triangles.size())
+	    static_cast<size_t>(triangleIndex) >= triangles.size())
 	    continue;
 	const SoBRLExportAction::TriangleRecord &triangle =
 	    triangles[static_cast<size_t>(triangleIndex)];
 	for (size_t vertexSlot = 0; vertexSlot < 3; vertexSlot++) {
 	    indices.push_back(export_surface_compact_vertex_slot(vertexIds,
-		    points,
-		    export_triangle_vertex_id(triangle, vertexSlot),
-		    export_triangle_vertex_point(triangle, vertexSlot)));
+			      points,
+			      export_triangle_vertex_id(triangle, vertexSlot),
+			      export_triangle_vertex_point(triangle, vertexSlot)));
 	}
     }
 
@@ -632,15 +632,15 @@ SoBRLExportAction::getObjectRecord(int index) const
 
 int
 SoBRLExportAction::collectObjectRecords(std::vector<ObjectRecord> &records,
-	unsigned int queryFlags,
-	const char *glob,
-	int drawMode) const
+					unsigned int queryFlags,
+					const char *glob,
+					int drawMode) const
 {
     this->rebuildObjectRecords();
     records.clear();
     for (size_t i = 0; i < this->objects.size(); i++) {
 	if (!export_object_record_matches_query(this->objects[i],
-		queryFlags, glob, drawMode))
+						queryFlags, glob, drawMode))
 	    continue;
 	records.push_back(this->objects[i]);
     }
@@ -682,7 +682,7 @@ SoBRLExportAction::getObjectRecordLinePoint(const ObjectRecord &record,
 	return FALSE;
     int lineIndex = record.lineIndices[segmentIndex];
     if (lineIndex < 0 ||
-	    static_cast<size_t>(lineIndex) >= this->lines.size())
+	static_cast<size_t>(lineIndex) >= this->lines.size())
 	return FALSE;
 
     const LineRecord &line = this->lines[static_cast<size_t>(lineIndex)];
@@ -700,7 +700,7 @@ SoBRLExportAction::getObjectRecordLineCommand(const ObjectRecord &record,
 	return FALSE;
     int lineIndex = record.lineIndices[segmentIndex];
     if (lineIndex < 0 ||
-	    static_cast<size_t>(lineIndex) >= this->lines.size())
+	static_cast<size_t>(lineIndex) >= this->lines.size())
 	return FALSE;
     command = (index % 2) ? LINE_DRAW : LINE_MOVE;
     return TRUE;
@@ -730,15 +730,15 @@ SoBRLExportAction::getObjectRecordPointSummary(const ObjectRecord &record,
 
 SbBool
 SoBRLExportAction::getObjectRecordPoint(const ObjectRecord &record,
-	size_t index,
-	SbVec3f &point) const
+					size_t index,
+					SbVec3f &point) const
 {
     point = SbVec3f(0.0f, 0.0f, 0.0f);
     if (index >= record.pointIndices.size())
 	return FALSE;
     int pointIndex = record.pointIndices[index];
     if (pointIndex < 0 ||
-	    static_cast<size_t>(pointIndex) >= this->points.size())
+	static_cast<size_t>(pointIndex) >= this->points.size())
 	return FALSE;
 
     point = this->points[static_cast<size_t>(pointIndex)].point;
@@ -766,7 +766,7 @@ SoBRLExportAction::getObjectRecordSurfaceSummary(const ObjectRecord &record,
     std::vector<SbVec3f> surfacePoints;
     std::vector<int> surfaceIndices;
     export_object_surface_compact_detail(this->triangles, record,
-	    &surfacePoints, &surfaceIndices);
+					 &surfacePoints, &surfaceIndices);
     const TriangleRecord *firstTriangle =
 	export_object_first_triangle(this->triangles, record);
     if (!firstTriangle)
@@ -798,7 +798,7 @@ SoBRLExportAction::getObjectRecordSurfacePoint(const ObjectRecord &record,
 
     std::vector<SbVec3f> surfacePoints;
     export_object_surface_compact_detail(this->triangles, record,
-	    &surfacePoints, NULL);
+					 &surfacePoints, NULL);
     if (index >= surfacePoints.size())
 	return FALSE;
 
@@ -820,7 +820,7 @@ SoBRLExportAction::getObjectRecordSurfaceDetail(const ObjectRecord &record,
     }
 
     export_object_surface_compact_detail(this->triangles, record,
-	    surfacePoints, surfaceIndices);
+					 surfacePoints, surfaceIndices);
     return TRUE;
 }
 
@@ -831,7 +831,7 @@ SoBRLExportAction::getObjectRecordSurfaceIndex(const ObjectRecord &record,
 {
     std::vector<int> surfaceIndices;
     export_object_surface_compact_detail(this->triangles, record, NULL,
-	    &surfaceIndices);
+					 &surfaceIndices);
     if (index >= surfaceIndices.size())
 	return FALSE;
 
@@ -861,7 +861,7 @@ void
 SoBRLExportAction::setGeometryPolicy(GeometryPolicy policy)
 {
     this->geometryPolicy = (policy == SoBRLExportAction::DISPLAY_LEVEL) ?
-	SoBRLExportAction::DISPLAY_LEVEL : SoBRLExportAction::FULL_DETAIL;
+			   SoBRLExportAction::DISPLAY_LEVEL : SoBRLExportAction::FULL_DETAIL;
 }
 
 SoBRLExportAction::GeometryPolicy
@@ -894,19 +894,19 @@ SoBRLExportAction::makeSourceBackedFullDetailLodRequest(int index,
 	const BRLObolLodRequest *templateRequest) const
 {
     if (index < 0 ||
-	    static_cast<size_t>(index) >=
-	    this->sourceBackedFullDetailRequests.size())
+	static_cast<size_t>(index) >=
+	this->sourceBackedFullDetailRequests.size())
 	return FALSE;
 
     return brlobol_lod_rt_source_full_detail_request_from_source_mesh_request(
-	request, this->sourceBackedFullDetailRequests[static_cast<size_t>(index)],
-	templateRequest);
+	       request, this->sourceBackedFullDetailRequests[static_cast<size_t>(index)],
+	       templateRequest);
 }
 
 SbBool
 SoBRLExportAction::appendSourceBackedFullDetailResult(
-	const BRLObolSourceMeshRequest &sourceRequest,
-	const BRLObolLodResult &result)
+    const BRLObolSourceMeshRequest &sourceRequest,
+    const BRLObolLodResult &result)
 {
     if (!export_source_full_detail_result_valid(sourceRequest, result))
 	return FALSE;
@@ -919,20 +919,20 @@ SoBRLExportAction::appendSourceBackedFullDetailResult(
 	int ib = result.mesh.coordIndex[i * 3 + 1];
 	int ic = result.mesh.coordIndex[i * 3 + 2];
 	if (ia < 0 || ib < 0 || ic < 0 ||
-		static_cast<size_t>(ia) >= result.mesh.points.size() ||
-		static_cast<size_t>(ib) >= result.mesh.points.size() ||
-		static_cast<size_t>(ic) >= result.mesh.points.size())
+	    static_cast<size_t>(ia) >= result.mesh.points.size() ||
+	    static_cast<size_t>(ib) >= result.mesh.points.size() ||
+	    static_cast<size_t>(ic) >= result.mesh.points.size())
 	    return FALSE;
 
 	SbVec3f worldA;
 	SbVec3f worldB;
 	SbVec3f worldC;
 	sourceRequest.localToWorld.multVecMatrix(
-		result.mesh.points[static_cast<size_t>(ia)], worldA);
+	    result.mesh.points[static_cast<size_t>(ia)], worldA);
 	sourceRequest.localToWorld.multVecMatrix(
-		result.mesh.points[static_cast<size_t>(ib)], worldB);
+	    result.mesh.points[static_cast<size_t>(ib)], worldB);
 	sourceRequest.localToWorld.multVecMatrix(
-		result.mesh.points[static_cast<size_t>(ic)], worldC);
+	    result.mesh.points[static_cast<size_t>(ic)], worldC);
 	const int sourceIa = export_source_mesh_vertex_index(result.mesh, ia);
 	const int sourceIb = export_source_mesh_vertex_index(result.mesh, ib);
 	const int sourceIc = export_source_mesh_vertex_index(result.mesh, ic);
@@ -943,35 +943,35 @@ SoBRLExportAction::appendSourceBackedFullDetailResult(
 	}
 
 	this->appendTriangle(sourceRequest.path, sourceRequest.sourceName,
-		sourceRequest.sourceType, sourceRequest.sourceId,
-		sourceRequest.regionId, sourceRequest.airCode,
-		sourceRequest.materialId, sourceRequest.los,
-		sourceRequest.materialColorValid, sourceRequest.materialColor,
-		sourceRequest.materialShader,
-		export_source_mesh_face_index(result.mesh, i, faceCount),
-		sourceIa, sourceIb, sourceIc, sourceRequest.selected,
-		sourceRequest.highlighted,
-		sourceRequest.ghosted, sourceRequest.hiddenLine,
-		sourceRequest.editEmphasis, sourceRequest.editIntentId,
-		sourceRequest.editIntentRole, sourceRequest.lodPolicy,
-		sourceRequest.lodAvailable, sourceRequest.lodActiveLevel,
-		result.counts.faceCount > 0 ?
-		    static_cast<uint32_t>(result.counts.faceCount) :
-		    static_cast<uint32_t>(faceCount),
-		result.counts.pointCount > 0 ?
-		    static_cast<uint32_t>(result.counts.pointCount) :
-		    static_cast<uint32_t>(result.mesh.points.size()),
-		static_cast<uint32_t>(result.counts.originalPointCount),
-		static_cast<uint32_t>(result.counts.normalCount),
-		result.hasSnappedPoints, result.hasNormals,
-		result.bounds.isEmpty() ? sourceRequest.lodBoundsMin :
-		    result.bounds.getMin(),
-		result.bounds.isEmpty() ? sourceRequest.lodBoundsMax :
-		    result.bounds.getMax(),
-		sourceRequest.colorOverride, sourceRequest.color,
-		worldA, worldB, worldC);
+			     sourceRequest.sourceType, sourceRequest.sourceId,
+			     sourceRequest.regionId, sourceRequest.airCode,
+			     sourceRequest.materialId, sourceRequest.los,
+			     sourceRequest.materialColorValid, sourceRequest.materialColor,
+			     sourceRequest.materialShader,
+			     export_source_mesh_face_index(result.mesh, i, faceCount),
+			     sourceIa, sourceIb, sourceIc, sourceRequest.selected,
+			     sourceRequest.highlighted,
+			     sourceRequest.ghosted, sourceRequest.hiddenLine,
+			     sourceRequest.editEmphasis, sourceRequest.editIntentId,
+			     sourceRequest.editIntentRole, sourceRequest.lodPolicy,
+			     sourceRequest.lodAvailable, sourceRequest.lodActiveLevel,
+			     result.counts.faceCount > 0 ?
+			     static_cast<uint32_t>(result.counts.faceCount) :
+			     static_cast<uint32_t>(faceCount),
+			     result.counts.pointCount > 0 ?
+			     static_cast<uint32_t>(result.counts.pointCount) :
+			     static_cast<uint32_t>(result.mesh.points.size()),
+			     static_cast<uint32_t>(result.counts.originalPointCount),
+			     static_cast<uint32_t>(result.counts.normalCount),
+			     result.hasSnappedPoints, result.hasNormals,
+			     result.bounds.isEmpty() ? sourceRequest.lodBoundsMin :
+			     result.bounds.getMin(),
+			     result.bounds.isEmpty() ? sourceRequest.lodBoundsMax :
+			     result.bounds.getMax(),
+			     sourceRequest.colorOverride, sourceRequest.color,
+			     worldA, worldB, worldC);
 	export_apply_source_request_metadata(this->triangles.back(),
-		sourceRequest, "surface");
+					     sourceRequest, "surface");
     }
 
     return TRUE;
@@ -979,17 +979,17 @@ SoBRLExportAction::appendSourceBackedFullDetailResult(
 
 int
 SoBRLExportAction::submitSourceBackedFullDetailRequests(
-	BRLObolLodService *service, uint64_t generation, struct db_i *dbip,
-	const BRLObolLodRequest *templateRequest,
-	uint64_t maxFullDetailFaceCount,
-	uint64_t maxFullDetailPointCount) const
+    BRLObolLodService *service, uint64_t generation, struct db_i *dbip,
+    const BRLObolLodRequest *templateRequest,
+    uint64_t maxFullDetailFaceCount,
+    uint64_t maxFullDetailPointCount) const
 {
     int submitted = 0;
     for (size_t i = 0; i < this->sourceBackedFullDetailRequests.size(); i++) {
 	if (brlobol_lod_submit_rt_source_full_detail_request(service,
-		generation, this->sourceBackedFullDetailRequests[i], dbip,
-		templateRequest, maxFullDetailFaceCount,
-		maxFullDetailPointCount) != 0)
+	    generation, this->sourceBackedFullDetailRequests[i], dbip,
+	    templateRequest, maxFullDetailFaceCount,
+	    maxFullDetailPointCount) != 0)
 	    submitted++;
     }
     return submitted;
@@ -997,8 +997,8 @@ SoBRLExportAction::submitSourceBackedFullDetailRequests(
 
 int
 SoBRLExportAction::consumeSourceBackedFullDetailResults(
-	const std::vector<BRLObolLodResult> &results,
-	const BRLObolLodRequest *templateRequest)
+    const std::vector<BRLObolLodResult> &results,
+    const BRLObolLodRequest *templateRequest)
 {
     std::vector<SbBool> used(results.size(), FALSE);
     int consumed = 0;
@@ -1012,7 +1012,7 @@ SoBRLExportAction::consumeSourceBackedFullDetailResults(
 
 	for (size_t j = 0; j < results.size(); j++) {
 	    if (used[j] ||
-		    !brlobol_lod_result_matches_request(results[j], expected))
+		!brlobol_lod_result_matches_request(results[j], expected))
 		continue;
 	    if (this->appendSourceBackedFullDetailResult(
 		    this->sourceBackedFullDetailRequests[i], results[j])) {
@@ -1037,7 +1037,7 @@ void
 SoBRLExportAction::nodeAction(SoAction *action, SoNode *node)
 {
     if (node->isOfType(SoGroup::getClassTypeId()) ||
-	    node->isOfType(SoTransformation::getClassTypeId()))
+	node->isOfType(SoTransformation::getClassTypeId()))
 	node->doAction(action);
 }
 
@@ -1053,9 +1053,9 @@ SoBRLExportAction::vlistShapeAction(SoAction *action, SoNode *node)
     const SoBRLVListShape *geom = shape->getGeometrySource();
     if (exportAction->recordStorageEnabled) {
 	export_reserve_records(exportAction->lines,
-	    static_cast<size_t>(shape->getSegmentCount()));
+			       static_cast<size_t>(shape->getSegmentCount()));
 	export_reserve_records(exportAction->points,
-		static_cast<size_t>(shape->getPointPrimitiveCount()));
+			       static_cast<size_t>(shape->getPointPrimitiveCount()));
     }
 
     SbVec3f last;
@@ -1083,24 +1083,24 @@ SoBRLExportAction::vlistShapeAction(SoAction *action, SoNode *node)
 		    exportAction->appendLineSummary(worldA, worldB);
 		} else {
 		    exportAction->appendLine(shape->sourcePath.getValue(),
-			    shape->sourceName.getValue(), shape->sourceType.getValue(),
-			    shape->sourceId.getValue(),
-			    shape->regionId.getValue(), shape->airCode.getValue(),
-			    shape->materialId.getValue(), shape->los.getValue(),
-			    shape->materialColorValid.getValue(),
-			    shape->materialColor.getValue(),
-			    shape->materialShader.getValue(), segmentIndex,
-			    shape->isPrimitiveSelected(segmentIndex),
-			    shape->isPrimitiveHighlighted(segmentIndex),
-			    shape->ghosted.getValue(), shape->hiddenLine.getValue(),
-			    shape->editEmphasis.getValue(),
-			    shape->editIntentId.getValue(),
-			    shape->editIntentRole.getValue(),
-			    shape->lodPolicy.getValue(),
-			    shape->colorOverride.getValue(),
-			    shape->color.getValue(), worldA, worldB);
+					     shape->sourceName.getValue(), shape->sourceType.getValue(),
+					     shape->sourceId.getValue(),
+					     shape->regionId.getValue(), shape->airCode.getValue(),
+					     shape->materialId.getValue(), shape->los.getValue(),
+					     shape->materialColorValid.getValue(),
+					     shape->materialColor.getValue(),
+					     shape->materialShader.getValue(), segmentIndex,
+					     shape->isPrimitiveSelected(segmentIndex),
+					     shape->isPrimitiveHighlighted(segmentIndex),
+					     shape->ghosted.getValue(), shape->hiddenLine.getValue(),
+					     shape->editEmphasis.getValue(),
+					     shape->editIntentId.getValue(),
+					     shape->editIntentRole.getValue(),
+					     shape->lodPolicy.getValue(),
+					     shape->colorOverride.getValue(),
+					     shape->color.getValue(), worldA, worldB);
 		    export_apply_shape_metadata(exportAction->lines.back(),
-			    shape, "line");
+						shape, "line");
 		}
 		segmentIndex++;
 	    }
@@ -1118,11 +1118,11 @@ SoBRLExportAction::vlistShapeAction(SoAction *action, SoNode *node)
 		shape->getPointScale(i, pointScale) ? 1 : 0;
 	    if (pointScaleValid)
 		pointScale = export_transform_point_scale(localToWorld,
-		    geom->point[i], worldPoint, pointScale);
+			     geom->point[i], worldPoint, pointScale);
 
 	    if (!exportAction->recordStorageEnabled) {
 		exportAction->appendPointSummary(pointScaleValid, pointScale,
-			worldPoint);
+						 worldPoint);
 		continue;
 	    }
 
@@ -1134,31 +1134,31 @@ SoBRLExportAction::vlistShapeAction(SoAction *action, SoNode *node)
 		shape->getPointNormal(i, pointNormal) ? 1 : 0;
 	    if (pointNormalValid)
 		pointNormal = export_transform_point_normal(localToWorld,
-			pointNormal);
+			      pointNormal);
 
 	    exportAction->appendPoint(shape->sourcePath.getValue(),
-		    shape->sourceName.getValue(), shape->sourceType.getValue(),
-		    shape->sourceId.getValue(),
-		    shape->regionId.getValue(), shape->airCode.getValue(),
-		    shape->materialId.getValue(), shape->los.getValue(),
-		    shape->materialColorValid.getValue(),
-		    shape->materialColor.getValue(),
-		    shape->materialShader.getValue(), i,
-		    shape->isPrimitiveSelected(i),
-		    shape->isPrimitiveHighlighted(i),
-		    shape->ghosted.getValue(), shape->hiddenLine.getValue(),
-		    shape->editEmphasis.getValue(),
-		    shape->editIntentId.getValue(),
-		    shape->editIntentRole.getValue(),
-		    shape->lodPolicy.getValue(),
-		    shape->colorOverride.getValue(),
-		    shape->color.getValue(),
-		    pointColorValid, pointColor,
-		    pointScaleValid, pointScale,
-		    pointNormalValid, pointNormal,
-		    worldPoint);
+				      shape->sourceName.getValue(), shape->sourceType.getValue(),
+				      shape->sourceId.getValue(),
+				      shape->regionId.getValue(), shape->airCode.getValue(),
+				      shape->materialId.getValue(), shape->los.getValue(),
+				      shape->materialColorValid.getValue(),
+				      shape->materialColor.getValue(),
+				      shape->materialShader.getValue(), i,
+				      shape->isPrimitiveSelected(i),
+				      shape->isPrimitiveHighlighted(i),
+				      shape->ghosted.getValue(), shape->hiddenLine.getValue(),
+				      shape->editEmphasis.getValue(),
+				      shape->editIntentId.getValue(),
+				      shape->editIntentRole.getValue(),
+				      shape->lodPolicy.getValue(),
+				      shape->colorOverride.getValue(),
+				      shape->color.getValue(),
+				      pointColorValid, pointColor,
+				      pointScaleValid, pointScale,
+				      pointNormalValid, pointNormal,
+				      worldPoint);
 	    export_apply_shape_metadata(exportAction->points.back(),
-		    shape, "point");
+					shape, "point");
 	}
     }
 }
@@ -1180,7 +1180,7 @@ SoBRLExportAction::meshShapeAction(SoAction *action, SoNode *node)
 	(exportAction->geometryPolicy == SoBRLExportAction::FULL_DETAIL &&
 	 shape->needsSourceBackedFullDetail()) ? TRUE : FALSE;
     if (exportAction->geometryPolicy == SoBRLExportAction::FULL_DETAIL &&
-	    (shape->isLodDisplayActive() || viewPayload))
+	(shape->isLodDisplayActive() || viewPayload))
 	exportAction->skippedLodDisplayMeshCount++;
     const SbMatrix &localToWorld = SoModelMatrixElement::get(action->getState());
     if (useSourceBackedFullDetail) {
@@ -1193,12 +1193,12 @@ SoBRLExportAction::meshShapeAction(SoAction *action, SoNode *node)
 	 exportAction->geometryPolicy == SoBRLExportAction::DISPLAY_LEVEL &&
 	 viewPayload) ? TRUE : FALSE;
     int triangleCount = useFullDetail ?
-	shape->getFullDetailTriangleCount() :
-	(useViewPayload ? viewPayload->getTriangleCount() :
-	    shape->getTriangleCount());
+			shape->getFullDetailTriangleCount() :
+			(useViewPayload ? viewPayload->getTriangleCount() :
+			 shape->getTriangleCount());
     if (exportAction->recordStorageEnabled)
 	export_reserve_records(exportAction->triangles,
-		static_cast<size_t>(triangleCount));
+			       static_cast<size_t>(triangleCount));
     for (int i = 0; i < triangleCount; i++) {
 	SbVec3f a;
 	SbVec3f b;
@@ -1236,26 +1236,26 @@ SoBRLExportAction::meshShapeAction(SoAction *action, SoNode *node)
 	}
 
 	const SbBool lodAvailable = useViewPayload ? TRUE :
-	    shape->lodAvailable.getValue();
+				    shape->lodAvailable.getValue();
 	const int lodActiveLevel = useViewPayload ? viewPayload->activeLevel :
-	    shape->lodActiveLevel.getValue();
+				   shape->lodActiveLevel.getValue();
 	const uint32_t lodFaceCount = useViewPayload ?
-	    static_cast<uint32_t>(viewPayload->counts.faceCount > UINT32_MAX ?
-		UINT32_MAX : viewPayload->counts.faceCount) :
-	    shape->lodFaceCount.getValue();
+				      static_cast<uint32_t>(viewPayload->counts.faceCount > UINT32_MAX ?
+					  UINT32_MAX : viewPayload->counts.faceCount) :
+				      shape->lodFaceCount.getValue();
 	const uint32_t lodPointCount = useViewPayload ?
-	    static_cast<uint32_t>(viewPayload->counts.pointCount > UINT32_MAX ?
-		UINT32_MAX : viewPayload->counts.pointCount) :
-	    shape->lodPointCount.getValue();
+				       static_cast<uint32_t>(viewPayload->counts.pointCount > UINT32_MAX ?
+					   UINT32_MAX : viewPayload->counts.pointCount) :
+				       shape->lodPointCount.getValue();
 	const uint32_t lodOriginalPointCount = useViewPayload ?
-	    static_cast<uint32_t>(
-		viewPayload->counts.originalPointCount > UINT32_MAX ?
-		UINT32_MAX : viewPayload->counts.originalPointCount) :
-	    shape->lodOriginalPointCount.getValue();
+					       static_cast<uint32_t>(
+						       viewPayload->counts.originalPointCount > UINT32_MAX ?
+						       UINT32_MAX : viewPayload->counts.originalPointCount) :
+					       shape->lodOriginalPointCount.getValue();
 	const uint32_t lodNormalCount = useViewPayload ?
-	    static_cast<uint32_t>(viewPayload->counts.normalCount > UINT32_MAX ?
-		UINT32_MAX : viewPayload->counts.normalCount) :
-	    shape->lodNormalCount.getValue();
+					static_cast<uint32_t>(viewPayload->counts.normalCount > UINT32_MAX ?
+					    UINT32_MAX : viewPayload->counts.normalCount) :
+					shape->lodNormalCount.getValue();
 	const SbVec3f lodBoundsMin =
 	    useViewPayload && !viewPayload->bounds.isEmpty() ?
 	    viewPayload->bounds.getMin() : shape->lodBoundsMin.getValue();
@@ -1264,36 +1264,36 @@ SoBRLExportAction::meshShapeAction(SoAction *action, SoNode *node)
 	    viewPayload->bounds.getMax() : shape->lodBoundsMax.getValue();
 
 	exportAction->appendTriangle(shape->sourcePath.getValue(),
-		shape->sourceName.getValue(), shape->sourceType.getValue(),
-		shape->sourceId.getValue(),
-		shape->regionId.getValue(), shape->airCode.getValue(),
-		shape->materialId.getValue(), shape->los.getValue(),
-		shape->materialColorValid.getValue(),
-		shape->materialColor.getValue(),
-		shape->materialShader.getValue(), i,
-		ia, ib, ic,
-		shape->isPrimitiveSelected(i), shape->isPrimitiveHighlighted(i),
-		shape->ghosted.getValue(), shape->hiddenLine.getValue(),
-		shape->editEmphasis.getValue(),
-		shape->editIntentId.getValue(),
-		shape->editIntentRole.getValue(),
-		shape->lodPolicy.getValue(),
-		lodAvailable,
-		lodActiveLevel,
-		lodFaceCount,
-		lodPointCount,
-		lodOriginalPointCount,
-		lodNormalCount,
-		useViewPayload ? viewPayload->hasSnappedPoints :
-		    shape->lodHasSnappedPoints.getValue(),
-		useViewPayload ? viewPayload->hasNormals :
-		    shape->lodHasNormals.getValue(),
-		lodBoundsMin,
-		lodBoundsMax,
-		shape->colorOverride.getValue(),
-		shape->color.getValue(), worldA, worldB, worldC);
+				     shape->sourceName.getValue(), shape->sourceType.getValue(),
+				     shape->sourceId.getValue(),
+				     shape->regionId.getValue(), shape->airCode.getValue(),
+				     shape->materialId.getValue(), shape->los.getValue(),
+				     shape->materialColorValid.getValue(),
+				     shape->materialColor.getValue(),
+				     shape->materialShader.getValue(), i,
+				     ia, ib, ic,
+				     shape->isPrimitiveSelected(i), shape->isPrimitiveHighlighted(i),
+				     shape->ghosted.getValue(), shape->hiddenLine.getValue(),
+				     shape->editEmphasis.getValue(),
+				     shape->editIntentId.getValue(),
+				     shape->editIntentRole.getValue(),
+				     shape->lodPolicy.getValue(),
+				     lodAvailable,
+				     lodActiveLevel,
+				     lodFaceCount,
+				     lodPointCount,
+				     lodOriginalPointCount,
+				     lodNormalCount,
+				     useViewPayload ? viewPayload->hasSnappedPoints :
+				     shape->lodHasSnappedPoints.getValue(),
+				     useViewPayload ? viewPayload->hasNormals :
+				     shape->lodHasNormals.getValue(),
+				     lodBoundsMin,
+				     lodBoundsMax,
+				     shape->colorOverride.getValue(),
+				     shape->color.getValue(), worldA, worldB, worldC);
 	export_apply_shape_metadata(exportAction->triangles.back(),
-		shape, "surface");
+				    shape, "surface");
     }
 }
 
@@ -1335,26 +1335,29 @@ SoBRLExportAction::rebuildObjectRecords(void) const
     this->objects.clear();
     std::vector<ExportPrimitiveRef> refs;
     refs.reserve(this->lines.size() + this->points.size() +
-	    this->triangles.size());
+		 this->triangles.size());
     for (size_t i = 0; i < this->lines.size(); i++) {
 	ExportPrimitiveRef ref = {this->lines[i].sequence, 0,
-	    static_cast<int>(i)};
+				  static_cast<int>(i)
+				 };
 	refs.push_back(ref);
     }
     for (size_t i = 0; i < this->points.size(); i++) {
 	ExportPrimitiveRef ref = {this->points[i].sequence, 1,
-	    static_cast<int>(i)};
+				  static_cast<int>(i)
+				 };
 	refs.push_back(ref);
     }
     for (size_t i = 0; i < this->triangles.size(); i++) {
 	ExportPrimitiveRef ref = {this->triangles[i].sequence, 2,
-	    static_cast<int>(i)};
+				  static_cast<int>(i)
+				 };
 	refs.push_back(ref);
     }
     std::sort(refs.begin(), refs.end(),
-	    [](const ExportPrimitiveRef &a, const ExportPrimitiveRef &b) {
-		return a.sequence < b.sequence;
-	    });
+    [](const ExportPrimitiveRef &a, const ExportPrimitiveRef &b) {
+	return a.sequence < b.sequence;
+    });
 
     std::unordered_map<std::string, size_t> objectIndexByKey;
     objectIndexByKey.reserve(refs.size());
@@ -1375,13 +1378,13 @@ SoBRLExportAction::rebuildObjectRecords(void) const
 	    ObjectRecord object;
 	    if (ref.kind == 0)
 		export_object_init_common(object,
-			this->lines[static_cast<size_t>(ref.index)]);
+					  this->lines[static_cast<size_t>(ref.index)]);
 	    else if (ref.kind == 1)
 		export_object_init_common(object,
-			this->points[static_cast<size_t>(ref.index)]);
+					  this->points[static_cast<size_t>(ref.index)]);
 	    else
 		export_object_init_common(object,
-			this->triangles[static_cast<size_t>(ref.index)]);
+					  this->triangles[static_cast<size_t>(ref.index)]);
 	    this->objects.push_back(object);
 	    objectIndex = this->objects.size() - 1;
 	    objectIndexByKey[key] = objectIndex;
@@ -1392,25 +1395,25 @@ SoBRLExportAction::rebuildObjectRecords(void) const
 	ObjectRecord &object = this->objects[objectIndex];
 	if (ref.kind == 0)
 	    export_object_add_line(object,
-		    this->lines[static_cast<size_t>(ref.index)], ref.index);
+				   this->lines[static_cast<size_t>(ref.index)], ref.index);
 	else if (ref.kind == 1)
 	    export_object_add_point(object,
-		    this->points[static_cast<size_t>(ref.index)], ref.index);
+				    this->points[static_cast<size_t>(ref.index)], ref.index);
 	else
 	    export_object_add_triangle(object,
-		    this->triangles[static_cast<size_t>(ref.index)], ref.index);
+				       this->triangles[static_cast<size_t>(ref.index)], ref.index);
     }
 
     std::sort(this->objects.begin(), this->objects.end(),
-	    [](const ObjectRecord &a, const ObjectRecord &b) {
-		return a.sequence < b.sequence;
-	    });
+    [](const ObjectRecord &a, const ObjectRecord &b) {
+	return a.sequence < b.sequence;
+    });
     this->objectRecordsDirty = FALSE;
 }
 
 void
 SoBRLExportAction::appendSourceBackedFullDetailRequest(
-	const SoBRLMeshShape *shape, const SbMatrix &localToWorld)
+    const SoBRLMeshShape *shape, const SbMatrix &localToWorld)
 {
     if (!shape)
 	return;
@@ -1432,7 +1435,7 @@ SoBRLExportAction::appendLineSummary(const SbVec3f &a, const SbVec3f &b)
 
 void
 SoBRLExportAction::appendPointSummary(int pointScaleValid, float pointScale,
-	const SbVec3f &point)
+				      const SbVec3f &point)
 {
     this->pointCount++;
     this->bounds.extendBy(point);
@@ -1455,17 +1458,17 @@ SoBRLExportAction::appendTriangleSummary(const SbVec3f &a, const SbVec3f &b,
 
 void
 SoBRLExportAction::appendLine(const SbString &path, const SbString &sourceName,
-	const SbString &sourceType, uint32_t sourceId,
-	int regionId, int airCode, int materialId, int los,
-	int materialColorValid, const SbColor &materialColor,
-	const SbString &materialShader, int primitiveIndex,
-	int selected, int highlighted, int ghosted,
-	int hiddenLine, int editEmphasis,
-	const SbString &editIntentId,
-	const SbString &editIntentRole,
-	uint32_t lodPolicy,
-	int colorOverride, const SbColor &color,
-	const SbVec3f &a, const SbVec3f &b)
+			      const SbString &sourceType, uint32_t sourceId,
+			      int regionId, int airCode, int materialId, int los,
+			      int materialColorValid, const SbColor &materialColor,
+			      const SbString &materialShader, int primitiveIndex,
+			      int selected, int highlighted, int ghosted,
+			      int hiddenLine, int editEmphasis,
+			      const SbString &editIntentId,
+			      const SbString &editIntentRole,
+			      uint32_t lodPolicy,
+			      int colorOverride, const SbColor &color,
+			      const SbVec3f &a, const SbVec3f &b)
 {
     if (!this->recordStorageEnabled) {
 	this->appendLineSummary(a, b);
@@ -1508,20 +1511,20 @@ SoBRLExportAction::appendLine(const SbString &path, const SbString &sourceName,
 
 void
 SoBRLExportAction::appendPoint(const SbString &path, const SbString &sourceName,
-	const SbString &sourceType, uint32_t sourceId,
-	int regionId, int airCode, int materialId, int los,
-	int materialColorValid, const SbColor &materialColor,
-	const SbString &materialShader, int primitiveIndex,
-	int selected, int highlighted, int ghosted,
-	int hiddenLine, int editEmphasis,
-	const SbString &editIntentId,
-	const SbString &editIntentRole,
-	uint32_t lodPolicy,
-	int colorOverride, const SbColor &color,
-	int pointColorValid, const SbColor &pointColor,
-	int pointScaleValid, float pointScale,
-	int pointNormalValid, const SbVec3f &pointNormal,
-	const SbVec3f &point)
+			       const SbString &sourceType, uint32_t sourceId,
+			       int regionId, int airCode, int materialId, int los,
+			       int materialColorValid, const SbColor &materialColor,
+			       const SbString &materialShader, int primitiveIndex,
+			       int selected, int highlighted, int ghosted,
+			       int hiddenLine, int editEmphasis,
+			       const SbString &editIntentId,
+			       const SbString &editIntentRole,
+			       uint32_t lodPolicy,
+			       int colorOverride, const SbColor &color,
+			       int pointColorValid, const SbColor &pointColor,
+			       int pointScaleValid, float pointScale,
+			       int pointNormalValid, const SbVec3f &pointNormal,
+			       const SbVec3f &point)
 {
     if (!this->recordStorageEnabled) {
 	this->appendPointSummary(pointScaleValid, pointScale, point);
@@ -1566,7 +1569,7 @@ SoBRLExportAction::appendPoint(const SbString &path, const SbString &sourceName,
     this->bounds.extendBy(point);
     if (record.pointScaleValid && record.pointScale > 0.0f) {
 	const SbVec3f radius(record.pointScale, record.pointScale,
-		record.pointScale);
+			     record.pointScale);
 	this->bounds.extendBy(point - radius);
 	this->bounds.extendBy(point + radius);
     }
@@ -1574,23 +1577,23 @@ SoBRLExportAction::appendPoint(const SbString &path, const SbString &sourceName,
 
 void
 SoBRLExportAction::appendTriangle(const SbString &path,
-	const SbString &sourceName, const SbString &sourceType,
-	uint32_t sourceId, int regionId, int airCode, int materialId, int los,
-	const int materialColorValid, const SbColor &materialColor,
-	const SbString &materialShader, int primitiveIndex,
-	int vertexIndexA, int vertexIndexB, int vertexIndexC,
-	int selected, int highlighted, int ghosted,
-	int hiddenLine, int editEmphasis,
-	const SbString &editIntentId,
-	const SbString &editIntentRole,
-	uint32_t lodPolicy,
-	int lodAvailable, int lodActiveLevel, uint32_t lodFaceCount,
-	uint32_t lodPointCount, uint32_t lodOriginalPointCount,
-	uint32_t lodNormalCount, int lodHasSnappedPoints,
-	int lodHasNormals, const SbVec3f &lodBoundsMin,
-	const SbVec3f &lodBoundsMax,
-	const int colorOverride, const SbColor &color,
-	const SbVec3f &a, const SbVec3f &b, const SbVec3f &c)
+				  const SbString &sourceName, const SbString &sourceType,
+				  uint32_t sourceId, int regionId, int airCode, int materialId, int los,
+				  const int materialColorValid, const SbColor &materialColor,
+				  const SbString &materialShader, int primitiveIndex,
+				  int vertexIndexA, int vertexIndexB, int vertexIndexC,
+				  int selected, int highlighted, int ghosted,
+				  int hiddenLine, int editEmphasis,
+				  const SbString &editIntentId,
+				  const SbString &editIntentRole,
+				  uint32_t lodPolicy,
+				  int lodAvailable, int lodActiveLevel, uint32_t lodFaceCount,
+				  uint32_t lodPointCount, uint32_t lodOriginalPointCount,
+				  uint32_t lodNormalCount, int lodHasSnappedPoints,
+				  int lodHasNormals, const SbVec3f &lodBoundsMin,
+				  const SbVec3f &lodBoundsMax,
+				  const int colorOverride, const SbColor &color,
+				  const SbVec3f &a, const SbVec3f &b, const SbVec3f &c)
 {
     if (!this->recordStorageEnabled) {
 	this->appendTriangleSummary(a, b, c);

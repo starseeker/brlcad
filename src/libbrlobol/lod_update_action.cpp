@@ -58,7 +58,7 @@ SoBRLLodUpdateAction::addResult(const BRLObolLodResult &result)
 
 void
 SoBRLLodUpdateAction::setResults(
-	const std::vector<BRLObolLodResult> &newResults)
+    const std::vector<BRLObolLodResult> &newResults)
 {
     this->results = newResults;
     this->matched.clear();
@@ -66,7 +66,7 @@ SoBRLLodUpdateAction::setResults(
 
 size_t
 SoBRLLodUpdateAction::drainService(BRLObolLodService &service,
-	size_t maxResults)
+				   size_t maxResults)
 {
     std::vector<BRLObolLodResult> drained;
     size_t count = service.drainResults(drained, maxResults);
@@ -128,19 +128,19 @@ static SbBool
 lod_update_string_matches(const SbString &a, const SbString &b)
 {
     return a.getLength() > 0 && b.getLength() > 0 &&
-	strcmp(a.getString(), b.getString()) == 0 ? TRUE : FALSE;
+	   strcmp(a.getString(), b.getString()) == 0 ? TRUE : FALSE;
 }
 
 static SbBool
 lod_update_path_matches(const SbString &shapePath,
-	const SbString &resultPath)
+			const SbString &resultPath)
 {
     if (lod_update_string_matches(shapePath, resultPath))
 	return TRUE;
 
     if (shapePath.getLength() > 1 && resultPath.getLength() > 0 &&
-	    shapePath.getString()[0] == '/' &&
-	    strcmp(shapePath.getString() + 1, resultPath.getString()) == 0)
+	shapePath.getString()[0] == '/' &&
+	strcmp(shapePath.getString() + 1, resultPath.getString()) == 0)
 	return TRUE;
 
     return FALSE;
@@ -148,16 +148,16 @@ lod_update_path_matches(const SbString &shapePath,
 
 static SbBool
 lod_update_matches_shape(const SoBRLMeshShape *shape,
-	const BRLObolLodResult &result)
+			 const BRLObolLodResult &result)
 {
     if (!shape)
 	return FALSE;
 
     if (lod_update_path_matches(shape->sourcePath.getValue(),
-	    result.request.objectPath))
+				result.request.objectPath))
 	return TRUE;
     if (lod_update_string_matches(shape->sourceName.getValue(),
-	    result.request.objectName))
+				  result.request.objectName))
 	return TRUE;
 
     return FALSE;
@@ -204,7 +204,7 @@ SoBRLLodUpdateAction::meshShapeAction(SoAction *action, SoNode *node)
 	if (!updateAction->viewState) {
 	    updateAction->rejectedResultCount++;
 	    updateAction->appendDiagnostic(result,
-		    "view-local LoD update requires a view state");
+					   "view-local LoD update requires a view state");
 	    continue;
 	}
 
@@ -213,20 +213,20 @@ SoBRLLodUpdateAction::meshShapeAction(SoAction *action, SoNode *node)
 	else {
 	    updateAction->rejectedResultCount++;
 	    updateAction->appendDiagnostic(result,
-		    "view-local LoD result rejected by mesh");
+					   "view-local LoD result rejected by mesh");
 	}
     }
 }
 
 void
 SoBRLLodUpdateAction::appendDiagnostic(const BRLObolLodResult &result,
-	const char *message)
+				       const char *message)
 {
     if (this->diagnostics.getLength() > 0)
 	this->diagnostics += "\n";
 
     SbString target = result.request.objectPath.getLength() > 0 ?
-	result.request.objectPath : result.request.objectName;
+		      result.request.objectPath : result.request.objectName;
     this->diagnostics += target.getLength() > 0 ? target : SbString("<unknown>");
     this->diagnostics += ": ";
     this->diagnostics += message ? message : "LoD update diagnostic";
@@ -245,7 +245,7 @@ SoBRLLodUpdateAction::finalizeUnmatchedDiagnostics(void)
 	    continue;
 	this->unmatchedResultCount++;
 	this->appendDiagnostic(this->results[i],
-		"staged LoD result did not match any mesh");
+			       "staged LoD result did not match any mesh");
     }
 }
 

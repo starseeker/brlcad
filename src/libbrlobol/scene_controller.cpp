@@ -50,7 +50,7 @@ scene_path_equal(const char *stored, const char *path)
 
 static int
 database_source_path_equal(const SoBRLDatabaseSource *source,
-	const char *path)
+			   const char *path)
 {
     if (!source || !path)
 	return 0;
@@ -71,7 +71,7 @@ database_source_effective_instance_key(const SoBRLDatabaseSource *source)
 
 static int
 database_source_instance_key_equal(const SoBRLDatabaseSource *source,
-	const char *instanceKey)
+				   const char *instanceKey)
 {
     if (!source || !instanceKey)
 	return 0;
@@ -82,7 +82,7 @@ database_source_instance_key_equal(const SoBRLDatabaseSource *source,
 
 static SoBRLDatabaseSource *
 find_database_source_recursive(SoGroup *group, const char *sourcePath,
-	SoGroup **parentOut = NULL, int *childIndexOut = NULL)
+			       SoGroup **parentOut = NULL, int *childIndexOut = NULL)
 {
     if (parentOut)
 	*parentOut = NULL;
@@ -109,8 +109,8 @@ find_database_source_recursive(SoGroup *group, const char *sourcePath,
 	if (node->isOfType(SoGroup::getClassTypeId())) {
 	    SoBRLDatabaseSource *found =
 		find_database_source_recursive(
-			static_cast<SoGroup *>(node), sourcePath,
-			parentOut, childIndexOut);
+		    static_cast<SoGroup *>(node), sourcePath,
+		    parentOut, childIndexOut);
 	    if (found)
 		return found;
 	}
@@ -129,8 +129,8 @@ database_source_instance_key_for_path(SoGroup *group, const char *sourcePath)
 
 static SoBRLDatabaseSource *
 find_database_source_instance_recursive(SoGroup *group,
-	const char *sourceInstanceKey,
-	SoGroup **parentOut = NULL, int *childIndexOut = NULL)
+					const char *sourceInstanceKey,
+					SoGroup **parentOut = NULL, int *childIndexOut = NULL)
 {
     if (parentOut)
 	*parentOut = NULL;
@@ -147,7 +147,7 @@ find_database_source_instance_recursive(SoGroup *group,
 	    SoBRLDatabaseSource *source =
 		static_cast<SoBRLDatabaseSource *>(node);
 	    if (database_source_instance_key_equal(source,
-		    sourceInstanceKey)) {
+						   sourceInstanceKey)) {
 		if (parentOut)
 		    *parentOut = group;
 		if (childIndexOut)
@@ -158,8 +158,8 @@ find_database_source_instance_recursive(SoGroup *group,
 	if (node->isOfType(SoGroup::getClassTypeId())) {
 	    SoBRLDatabaseSource *found =
 		find_database_source_instance_recursive(
-			static_cast<SoGroup *>(node), sourceInstanceKey,
-			parentOut, childIndexOut);
+		    static_cast<SoGroup *>(node), sourceInstanceKey,
+		    parentOut, childIndexOut);
 	    if (found)
 		return found;
 	}
@@ -184,7 +184,7 @@ count_database_sources_recursive(const SoGroup *group)
 	}
 	if (node->isOfType(SoGroup::getClassTypeId()))
 	    count += count_database_sources_recursive(
-		    static_cast<const SoGroup *>(node));
+			 static_cast<const SoGroup *>(node));
     }
     return count;
 }
@@ -206,7 +206,7 @@ count_scene_groups_recursive(const SoGroup *group)
 	    count++;
 	if (node->isOfType(SoGroup::getClassTypeId()))
 	    count += count_scene_groups_recursive(
-		    static_cast<const SoGroup *>(node));
+			 static_cast<const SoGroup *>(node));
     }
     return count;
 }
@@ -230,7 +230,7 @@ database_source_at_recursive(SoGroup *group, int index, int &seen)
 	}
 	if (node->isOfType(SoGroup::getClassTypeId())) {
 	    SoBRLDatabaseSource *found = database_source_at_recursive(
-		    static_cast<SoGroup *>(node), index, seen);
+					     static_cast<SoGroup *>(node), index, seen);
 	    if (found)
 		return found;
 	}
@@ -261,14 +261,14 @@ clear_database_sources_recursive(SoGroup *group)
 	}
 	if (node->isOfType(SoGroup::getClassTypeId()))
 	    removed += clear_database_sources_recursive(
-		    static_cast<SoGroup *>(node));
+			   static_cast<SoGroup *>(node));
     }
     return removed;
 }
 
 static void
 scene_group_path_components(const char *groupPath,
-	std::vector<std::string> &components)
+			    std::vector<std::string> &components)
 {
     components.clear();
     if (!groupPath)
@@ -284,7 +284,7 @@ scene_group_path_components(const char *groupPath,
 	    cursor++;
 	if (cursor > start)
 	    components.push_back(std::string(start,
-			static_cast<size_t>(cursor - start)));
+					     static_cast<size_t>(cursor - start)));
 	while (*cursor == '/')
 	    cursor++;
     }
@@ -337,7 +337,7 @@ scene_group_find_child(SoGroup *parent, const char *leafName)
     for (int i = 0; i < parent->getNumChildren(); i++) {
 	SoNode *child = parent->getChild(i);
 	if (!child || !child->isOfType(SoBRLSceneGroup::getClassTypeId()) ||
-		!scene_group_node_name_equal(child, leafName))
+	    !scene_group_node_name_equal(child, leafName))
 	    continue;
 	return static_cast<SoGroup *>(child);
     }
@@ -366,7 +366,7 @@ scene_group_find_child_const(const SoGroup *parent, const char *leafName)
     for (int i = 0; i < parent->getNumChildren(); i++) {
 	const SoNode *child = parent->getChild(i);
 	if (!child || !child->isOfType(SoBRLSceneGroup::getClassTypeId()) ||
-		!scene_group_node_name_equal(child, leafName))
+	    !scene_group_node_name_equal(child, leafName))
 	    continue;
 	return static_cast<const SoGroup *>(child);
     }
@@ -409,7 +409,7 @@ scene_group_find_path_const(const SoNode *sceneRoot, const char *groupPath)
     scene_group_path_components(groupPath, components);
     for (size_t i = 0; i < components.size(); i++) {
 	current = scene_group_find_child_const(current,
-		components[i].c_str());
+					       components[i].c_str());
 	if (!current)
 	    return NULL;
     }
@@ -428,7 +428,7 @@ scene_child_summary_path(const SbString &parentPath, const SoNode *child)
 	return "";
 
     if (parentPath.getLength() == 0 ||
-	    strcmp(parentPath.getString(), "/") == 0)
+	strcmp(parentPath.getString(), "/") == 0)
 	return SbString(childName.getString());
 
     SbString childPath = parentPath;
@@ -444,7 +444,7 @@ scene_group_append_path(const SbString &parentPath, const char *leafName)
 	return parentPath;
 
     if (parentPath.getLength() == 0 ||
-	    strcmp(parentPath.getString(), "/") == 0)
+	strcmp(parentPath.getString(), "/") == 0)
 	return SbString(leafName);
 
     SbString childPath = parentPath;
@@ -455,11 +455,11 @@ scene_group_append_path(const SbString &parentPath, const char *leafName)
 
 static SbString
 scene_group_component_path(const std::vector<std::string> &components,
-	size_t count)
+			   size_t count)
 {
     SbString path("");
     const size_t limit = count < components.size() ?
-	count : components.size();
+			 count : components.size();
     for (size_t i = 0; i < limit; i++)
 	path = scene_group_append_path(path, components[i].c_str());
     return path;
@@ -504,14 +504,14 @@ scene_group_update_path_recursive(SoGroup *group, const SbString &groupPath)
 
 	const SbString childPath = scene_child_summary_path(groupPath, child);
 	scene_group_update_path_recursive(static_cast<SoGroup *>(child),
-		childPath);
+					  childPath);
     }
 }
 
 static SoBRLDatabaseSource *
 database_source_summary_at_recursive(SoGroup *group, int index, int &seen,
-	int groupDepth, const SbString &groupPath, SbString &parentGroupPath,
-	int &drawTreeDepth)
+				     int groupDepth, const SbString &groupPath, SbString &parentGroupPath,
+				     int &drawTreeDepth)
 {
     if (!group || index < 0)
 	return NULL;
@@ -541,9 +541,9 @@ database_source_summary_at_recursive(SoGroup *group, int index, int &seen,
 		scene_group_summary_path(node, childPath);
 	    SoBRLDatabaseSource *found =
 		database_source_summary_at_recursive(
-			static_cast<SoGroup *>(node), index, seen,
-			groupDepth + 1, childGroupPath, parentGroupPath,
-			drawTreeDepth);
+		    static_cast<SoGroup *>(node), index, seen,
+		    groupDepth + 1, childGroupPath, parentGroupPath,
+		    drawTreeDepth);
 	    if (found)
 		return found;
 	}
@@ -563,16 +563,16 @@ static int
 scene_group_color_equal(const SbColor &a, const SbColor &b)
 {
     return !scene_group_float_different(a[0], b[0]) &&
-	!scene_group_float_different(a[1], b[1]) &&
-	!scene_group_float_different(a[2], b[2]);
+	   !scene_group_float_different(a[1], b[1]) &&
+	   !scene_group_float_different(a[2], b[2]);
 }
 
 static int
 scene_group_vec3f_equal(const SbVec3f &a, const SbVec3f &b)
 {
     return !scene_group_float_different(a[0], b[0]) &&
-	!scene_group_float_different(a[1], b[1]) &&
-	!scene_group_float_different(a[2], b[2]);
+	   !scene_group_float_different(a[1], b[1]) &&
+	   !scene_group_float_different(a[2], b[2]);
 }
 
 static int
@@ -588,8 +588,8 @@ static int
 scene_node_is_shape(const SoNode *node)
 {
     return node &&
-	(node->isOfType(SoBRLVListShape::getClassTypeId()) ||
-	 node->isOfType(SoBRLMeshShape::getClassTypeId()));
+	   (node->isOfType(SoBRLVListShape::getClassTypeId()) ||
+	    node->isOfType(SoBRLMeshShape::getClassTypeId()));
 }
 
 static SbString
@@ -618,12 +618,12 @@ scene_shape_path_equal(const SoNode *node, const char *shapePath)
     if (strcmp(stored, shapePath) == 0)
 	return 1;
     return strcmp(skip_leading_slash(stored),
-	    skip_leading_slash(shapePath)) == 0;
+		  skip_leading_slash(shapePath)) == 0;
 }
 
 static SoNode *
 scene_shape_find_in_group(SoGroup *group, const char *shapePath,
-	SoGroup **parentOut)
+			  SoGroup **parentOut)
 {
     if (!group || !shapePath)
 	return NULL;
@@ -634,18 +634,18 @@ scene_shape_find_in_group(SoGroup *group, const char *shapePath,
 	    continue;
 
 	if (scene_node_is_shape(child) &&
-		scene_shape_path_equal(child, shapePath)) {
+	    scene_shape_path_equal(child, shapePath)) {
 	    if (parentOut)
 		*parentOut = group;
 	    return child;
 	}
 
 	if (!child->isOfType(SoGroup::getClassTypeId()) ||
-		child->isOfType(SoBRLDatabaseSource::getClassTypeId()))
+	    child->isOfType(SoBRLDatabaseSource::getClassTypeId()))
 	    continue;
 
 	SoNode *found = scene_shape_find_in_group(
-		static_cast<SoGroup *>(child), shapePath, parentOut);
+			    static_cast<SoGroup *>(child), shapePath, parentOut);
 	if (found)
 	    return found;
     }
@@ -655,7 +655,7 @@ scene_shape_find_in_group(SoGroup *group, const char *shapePath,
 
 static SoNode *
 scene_shape_find_path(SoNode *sceneRoot, const char *shapePath,
-	SoGroup **parentOut)
+		      SoGroup **parentOut)
 {
     if (parentOut)
 	*parentOut = NULL;
@@ -671,10 +671,10 @@ scene_shape_find_path(SoNode *sceneRoot, const char *shapePath,
 template <typename ShapeT>
 static int
 scene_shape_set_draw_state_typed(ShapeT *shape,
-	int drawMode,
-	SbBool databaseIntent,
-	SbBool overlayIntent,
-	SbBool hudIntent)
+				 int drawMode,
+				 SbBool databaseIntent,
+				 SbBool overlayIntent,
+				 SbBool hudIntent)
 {
     if (!shape)
 	return 0;
@@ -701,38 +701,38 @@ scene_shape_set_draw_state_typed(ShapeT *shape,
 
 static int
 scene_shape_set_draw_state(SoNode *node,
-	int drawMode,
-	SbBool databaseIntent,
-	SbBool overlayIntent,
-	SbBool hudIntent)
+			   int drawMode,
+			   SbBool databaseIntent,
+			   SbBool overlayIntent,
+			   SbBool hudIntent)
 {
     if (!node)
 	return 0;
     if (node->isOfType(SoBRLVListShape::getClassTypeId()))
 	return scene_shape_set_draw_state_typed(
-		static_cast<SoBRLVListShape *>(node), drawMode,
-		databaseIntent, overlayIntent, hudIntent);
+		   static_cast<SoBRLVListShape *>(node), drawMode,
+		   databaseIntent, overlayIntent, hudIntent);
     if (node->isOfType(SoBRLMeshShape::getClassTypeId()))
 	return scene_shape_set_draw_state_typed(
-		static_cast<SoBRLMeshShape *>(node), drawMode,
-		databaseIntent, overlayIntent, hudIntent);
+		   static_cast<SoBRLMeshShape *>(node), drawMode,
+		   databaseIntent, overlayIntent, hudIntent);
     return 0;
 }
 
 template <typename ShapeT>
 static int
 scene_shape_set_display_state_typed(ShapeT *shape,
-	SbBool visible,
-	SbBool selected,
-	SbBool highlighted,
-	int lineStyle,
-	int lineWidth,
-	float transparency,
-	SbBool colorOverride,
-	const SbColor &color,
-	SbBool materialColorValid,
-	const SbColor &materialColor,
-	uint32_t materialRevision)
+				    SbBool visible,
+				    SbBool selected,
+				    SbBool highlighted,
+				    int lineStyle,
+				    int lineWidth,
+				    float transparency,
+				    SbBool colorOverride,
+				    const SbColor &color,
+				    SbBool materialColorValid,
+				    const SbColor &materialColor,
+				    uint32_t materialRevision)
 {
     if (!shape)
 	return 0;
@@ -759,7 +759,7 @@ scene_shape_set_display_state_typed(ShapeT *shape,
 	changed = 1;
     }
     if (scene_group_float_different(shape->transparency.getValue(),
-	    transparency)) {
+				    transparency)) {
 	shape->transparency = transparency;
 	changed = 1;
     }
@@ -776,7 +776,7 @@ scene_shape_set_display_state_typed(ShapeT *shape,
 	changed = 1;
     }
     if (!scene_group_color_equal(shape->materialColor.getValue(),
-	    materialColor)) {
+				 materialColor)) {
 	shape->materialColor = materialColor;
 	changed = 1;
     }
@@ -789,44 +789,44 @@ scene_shape_set_display_state_typed(ShapeT *shape,
 
 static int
 scene_shape_set_display_state(SoNode *node,
-	SbBool visible,
-	SbBool selected,
-	SbBool highlighted,
-	int lineStyle,
-	int lineWidth,
-	float transparency,
-	SbBool colorOverride,
-	const SbColor &color,
-	SbBool materialColorValid,
-	const SbColor &materialColor,
-	uint32_t materialRevision)
+			      SbBool visible,
+			      SbBool selected,
+			      SbBool highlighted,
+			      int lineStyle,
+			      int lineWidth,
+			      float transparency,
+			      SbBool colorOverride,
+			      const SbColor &color,
+			      SbBool materialColorValid,
+			      const SbColor &materialColor,
+			      uint32_t materialRevision)
 {
     if (!node)
 	return 0;
     if (node->isOfType(SoBRLVListShape::getClassTypeId()))
 	return scene_shape_set_display_state_typed(
-		static_cast<SoBRLVListShape *>(node), visible, selected,
-		highlighted, lineStyle, lineWidth, transparency,
-		colorOverride, color, materialColorValid, materialColor,
-		materialRevision);
+		   static_cast<SoBRLVListShape *>(node), visible, selected,
+		   highlighted, lineStyle, lineWidth, transparency,
+		   colorOverride, color, materialColorValid, materialColor,
+		   materialRevision);
     if (node->isOfType(SoBRLMeshShape::getClassTypeId()))
 	return scene_shape_set_display_state_typed(
-		static_cast<SoBRLMeshShape *>(node), visible, selected,
-		highlighted, lineStyle, lineWidth, transparency,
-		colorOverride, color, materialColorValid, materialColor,
-		materialRevision);
+		   static_cast<SoBRLMeshShape *>(node), visible, selected,
+		   highlighted, lineStyle, lineWidth, transparency,
+		   colorOverride, color, materialColorValid, materialColor,
+		   materialRevision);
     return 0;
 }
 
 template <typename ShapeT>
 static int
 scene_shape_set_placement_state_typed(ShapeT *shape,
-	SbBool drawMatrixValid,
-	const SbMatrix &drawMatrix,
-	SbBool drawCenterValid,
-	const SbVec3f &drawCenter,
-	SbBool drawSizeValid,
-	float drawSize)
+				      SbBool drawMatrixValid,
+				      const SbMatrix &drawMatrix,
+				      SbBool drawCenterValid,
+				      const SbVec3f &drawCenter,
+				      SbBool drawSizeValid,
+				      float drawSize)
 {
     if (!shape)
 	return 0;
@@ -861,53 +861,53 @@ scene_shape_set_placement_state_typed(ShapeT *shape,
 
 static int
 scene_shape_set_placement_state(SoNode *node,
-	SbBool drawMatrixValid,
-	const SbMatrix &drawMatrix,
-	SbBool drawCenterValid,
-	const SbVec3f &drawCenter,
-	SbBool drawSizeValid,
-	float drawSize)
+				SbBool drawMatrixValid,
+				const SbMatrix &drawMatrix,
+				SbBool drawCenterValid,
+				const SbVec3f &drawCenter,
+				SbBool drawSizeValid,
+				float drawSize)
 {
     if (!node)
 	return 0;
     if (node->isOfType(SoBRLVListShape::getClassTypeId()))
 	return scene_shape_set_placement_state_typed(
-		static_cast<SoBRLVListShape *>(node), drawMatrixValid,
-		drawMatrix, drawCenterValid, drawCenter, drawSizeValid,
-		drawSize);
+		   static_cast<SoBRLVListShape *>(node), drawMatrixValid,
+		   drawMatrix, drawCenterValid, drawCenter, drawSizeValid,
+		   drawSize);
     if (node->isOfType(SoBRLMeshShape::getClassTypeId()))
 	return scene_shape_set_placement_state_typed(
-		static_cast<SoBRLMeshShape *>(node), drawMatrixValid,
-		drawMatrix, drawCenterValid, drawCenter, drawSizeValid,
-		drawSize);
+		   static_cast<SoBRLMeshShape *>(node), drawMatrixValid,
+		   drawMatrix, drawCenterValid, drawCenter, drawSizeValid,
+		   drawSize);
     return 0;
 }
 
 template <typename ShapeT>
 static int
 scene_shape_set_source_state_typed(ShapeT *shape,
-	const char *ownerSourcePath,
-	uint32_t ownerSourceRevision,
-	uint32_t ownerInputsRevision,
-	uint32_t ownerViewRevision,
-	uint32_t ownerRealizedRevision,
-	uint32_t ownerRealizedSourceRevision,
-	uint32_t ownerRealizedInputsRevision,
-	uint32_t ownerRealizedViewRevision,
-	int ownerRealizationStatus,
-	const char *ownerRealizationDiagnostic,
-	const char *ownerRealizationIdentity,
-	SbBool ownerSourceStale,
-	uint32_t ownerStaleReason)
+				   const char *ownerSourcePath,
+				   uint32_t ownerSourceRevision,
+				   uint32_t ownerInputsRevision,
+				   uint32_t ownerViewRevision,
+				   uint32_t ownerRealizedRevision,
+				   uint32_t ownerRealizedSourceRevision,
+				   uint32_t ownerRealizedInputsRevision,
+				   uint32_t ownerRealizedViewRevision,
+				   int ownerRealizationStatus,
+				   const char *ownerRealizationDiagnostic,
+				   const char *ownerRealizationIdentity,
+				   SbBool ownerSourceStale,
+				   uint32_t ownerStaleReason)
 {
     if (!shape)
 	return 0;
 
     const SbString sourcePath(ownerSourcePath ? ownerSourcePath : "");
     const SbString diagnostic(ownerRealizationDiagnostic ?
-	    ownerRealizationDiagnostic : "");
+			      ownerRealizationDiagnostic : "");
     const SbString identity(ownerRealizationIdentity ?
-	    ownerRealizationIdentity : "");
+			    ownerRealizationIdentity : "");
     int changed = 0;
     changed |= scene_group_set_string(shape->ownerSourcePath, sourcePath);
     if (shape->ownerSourceRevision.getValue() != ownerSourceRevision) {
@@ -927,29 +927,29 @@ scene_shape_set_source_state_typed(ShapeT *shape,
 	changed = 1;
     }
     if (shape->ownerRealizedSourceRevision.getValue() !=
-	    ownerRealizedSourceRevision) {
+	ownerRealizedSourceRevision) {
 	shape->ownerRealizedSourceRevision = ownerRealizedSourceRevision;
 	changed = 1;
     }
     if (shape->ownerRealizedInputsRevision.getValue() !=
-	    ownerRealizedInputsRevision) {
+	ownerRealizedInputsRevision) {
 	shape->ownerRealizedInputsRevision = ownerRealizedInputsRevision;
 	changed = 1;
     }
     if (shape->ownerRealizedViewRevision.getValue() !=
-	    ownerRealizedViewRevision) {
+	ownerRealizedViewRevision) {
 	shape->ownerRealizedViewRevision = ownerRealizedViewRevision;
 	changed = 1;
     }
     if (shape->ownerRealizationStatus.getValue() !=
-	    ownerRealizationStatus) {
+	ownerRealizationStatus) {
 	shape->ownerRealizationStatus = ownerRealizationStatus;
 	changed = 1;
     }
     changed |= scene_group_set_string(shape->ownerRealizationDiagnostic,
-	    diagnostic);
+				      diagnostic);
     changed |= scene_group_set_string(shape->ownerRealizationIdentity,
-	    identity);
+				      identity);
     if (shape->ownerSourceStale.getValue() != ownerSourceStale) {
 	shape->ownerSourceStale = ownerSourceStale;
 	changed = 1;
@@ -963,40 +963,40 @@ scene_shape_set_source_state_typed(ShapeT *shape,
 
 static int
 scene_shape_set_source_state(SoNode *node,
-	const char *ownerSourcePath,
-	uint32_t ownerSourceRevision,
-	uint32_t ownerInputsRevision,
-	uint32_t ownerViewRevision,
-	uint32_t ownerRealizedRevision,
-	uint32_t ownerRealizedSourceRevision,
-	uint32_t ownerRealizedInputsRevision,
-	uint32_t ownerRealizedViewRevision,
-	int ownerRealizationStatus,
-	const char *ownerRealizationDiagnostic,
-	const char *ownerRealizationIdentity,
-	SbBool ownerSourceStale,
-	uint32_t ownerStaleReason)
+			     const char *ownerSourcePath,
+			     uint32_t ownerSourceRevision,
+			     uint32_t ownerInputsRevision,
+			     uint32_t ownerViewRevision,
+			     uint32_t ownerRealizedRevision,
+			     uint32_t ownerRealizedSourceRevision,
+			     uint32_t ownerRealizedInputsRevision,
+			     uint32_t ownerRealizedViewRevision,
+			     int ownerRealizationStatus,
+			     const char *ownerRealizationDiagnostic,
+			     const char *ownerRealizationIdentity,
+			     SbBool ownerSourceStale,
+			     uint32_t ownerStaleReason)
 {
     if (!node)
 	return 0;
     if (node->isOfType(SoBRLVListShape::getClassTypeId()))
 	return scene_shape_set_source_state_typed(
-		static_cast<SoBRLVListShape *>(node), ownerSourcePath,
-		ownerSourceRevision, ownerInputsRevision, ownerViewRevision,
-		ownerRealizedRevision, ownerRealizedSourceRevision,
-		ownerRealizedInputsRevision, ownerRealizedViewRevision,
-		ownerRealizationStatus, ownerRealizationDiagnostic,
-		ownerRealizationIdentity, ownerSourceStale,
-		ownerStaleReason);
+		   static_cast<SoBRLVListShape *>(node), ownerSourcePath,
+		   ownerSourceRevision, ownerInputsRevision, ownerViewRevision,
+		   ownerRealizedRevision, ownerRealizedSourceRevision,
+		   ownerRealizedInputsRevision, ownerRealizedViewRevision,
+		   ownerRealizationStatus, ownerRealizationDiagnostic,
+		   ownerRealizationIdentity, ownerSourceStale,
+		   ownerStaleReason);
     if (node->isOfType(SoBRLMeshShape::getClassTypeId()))
 	return scene_shape_set_source_state_typed(
-		static_cast<SoBRLMeshShape *>(node), ownerSourcePath,
-		ownerSourceRevision, ownerInputsRevision, ownerViewRevision,
-		ownerRealizedRevision, ownerRealizedSourceRevision,
-		ownerRealizedInputsRevision, ownerRealizedViewRevision,
-		ownerRealizationStatus, ownerRealizationDiagnostic,
-		ownerRealizationIdentity, ownerSourceStale,
-		ownerStaleReason);
+		   static_cast<SoBRLMeshShape *>(node), ownerSourcePath,
+		   ownerSourceRevision, ownerInputsRevision, ownerViewRevision,
+		   ownerRealizedRevision, ownerRealizedSourceRevision,
+		   ownerRealizedInputsRevision, ownerRealizedViewRevision,
+		   ownerRealizationStatus, ownerRealizationDiagnostic,
+		   ownerRealizationIdentity, ownerSourceStale,
+		   ownerStaleReason);
     return 0;
 }
 
@@ -1007,10 +1007,10 @@ scene_shape_owner_source_path(const SoNode *node)
 	return "";
     if (node->isOfType(SoBRLVListShape::getClassTypeId()))
 	return static_cast<const SoBRLVListShape *>(node)->
-	    ownerSourcePath.getValue();
+	       ownerSourcePath.getValue();
     if (node->isOfType(SoBRLMeshShape::getClassTypeId()))
 	return static_cast<const SoBRLMeshShape *>(node)->
-	    ownerSourcePath.getValue();
+	       ownerSourcePath.getValue();
     return "";
 }
 
@@ -1021,16 +1021,16 @@ scene_shape_owner_source_instance_key(const SoNode *node)
 	return "";
     if (node->isOfType(SoBRLVListShape::getClassTypeId()))
 	return static_cast<const SoBRLVListShape *>(node)->
-	    ownerSourceInstanceKey.getValue();
+	       ownerSourceInstanceKey.getValue();
     if (node->isOfType(SoBRLMeshShape::getClassTypeId()))
 	return static_cast<const SoBRLMeshShape *>(node)->
-	    ownerSourceInstanceKey.getValue();
+	       ownerSourceInstanceKey.getValue();
     return "";
 }
 
 static int
 scene_group_erase_nested_subpath(SoGroup *parent,
-	const std::vector<std::string> &components)
+				 const std::vector<std::string> &components)
 {
     if (!parent || components.empty())
 	return 0;
@@ -1043,7 +1043,7 @@ scene_group_erase_nested_subpath(SoGroup *parent,
     }
 
     SoGroup *target = scene_group_find_child(current,
-	    components.back().c_str());
+		      components.back().c_str());
     if (!target)
 	return 0;
 
@@ -1125,7 +1125,7 @@ rt_view_scene_ref
 SoBRLSceneController::getSceneRef(void) const
 {
     return rt_view_scene_ref_make(const_cast<SoBRLSceneController *>(this),
-	    RT_VIEW_SCENE_BACKEND_OBOL);
+				  RT_VIEW_SCENE_BACKEND_OBOL);
 }
 
 SbBool
@@ -1133,7 +1133,7 @@ SoBRLSceneController::sceneRefIsObol(rt_view_scene_ref ref)
 {
     return (!rt_view_scene_ref_is_null(ref) &&
 	    rt_view_scene_ref_backend(ref) == RT_VIEW_SCENE_BACKEND_OBOL) ?
-	TRUE : FALSE;
+	   TRUE : FALSE;
 }
 
 SoBRLSceneController *
@@ -1142,7 +1142,7 @@ SoBRLSceneController::fromSceneRef(rt_view_scene_ref ref)
     if (!SoBRLSceneController::sceneRefIsObol(ref))
 	return NULL;
     return static_cast<SoBRLSceneController *>(
-	    rt_view_scene_ref_context(ref));
+	       rt_view_scene_ref_context(ref));
 }
 
 const SoBRLSceneController *
@@ -1244,7 +1244,7 @@ SoBRLSceneController::ensureGroup(const char *groupPath)
 	const SbString childPath =
 	    scene_group_append_path(currentPath, components[i].c_str());
 	SoGroup *child = scene_group_find_child(current,
-		components[i].c_str());
+						components[i].c_str());
 	if (!child) {
 	    SoBRLSceneGroup *newGroup = new SoBRLSceneGroup;
 	    newGroup->setName(SbName(components[i].c_str()));
@@ -1289,7 +1289,7 @@ SoBRLSceneController::setGroupDrawIntent(const char *groupPath,
 	changed = 1;
     }
     changed |= scene_group_set_string(sceneGroup->drawIntentPath,
-	    nextIntentPath);
+				      nextIntentPath);
     if (sceneGroup->drawMode.getValue() != drawMode) {
 	sceneGroup->drawMode = drawMode;
 	changed = 1;
@@ -1303,7 +1303,7 @@ SoBRLSceneController::setGroupDrawIntent(const char *groupPath,
 	changed = 1;
     }
     if (sceneGroup->revalidationRevision.getValue() !=
-	    revalidationRevision) {
+	revalidationRevision) {
 	sceneGroup->revalidationRevision = revalidationRevision;
 	changed = 1;
     }
@@ -1356,7 +1356,7 @@ SoBRLSceneController::setGroupDisplayState(const char *groupPath,
 	changed = 1;
     }
     if (scene_group_float_different(sceneGroup->transparency.getValue(),
-	    transparency)) {
+				    transparency)) {
 	sceneGroup->transparency = transparency;
 	changed = 1;
     }
@@ -1369,12 +1369,12 @@ SoBRLSceneController::setGroupDisplayState(const char *groupPath,
 	changed = 1;
     }
     if (sceneGroup->materialColorValid.getValue() !=
-	    materialColorValid) {
+	materialColorValid) {
 	sceneGroup->materialColorValid = materialColorValid;
 	changed = 1;
     }
     if (!scene_group_color_equal(sceneGroup->materialColor.getValue(),
-	    materialColor)) {
+				 materialColor)) {
 	sceneGroup->materialColor = materialColor;
 	changed = 1;
     }
@@ -1390,7 +1390,7 @@ SoBRLSceneController::setGroupDisplayState(const char *groupPath,
 
 int
 SoBRLSceneController::renameGroup(const char *groupPath,
-	const char *newLeafName)
+				  const char *newLeafName)
 {
     if (!newLeafName || !newLeafName[0] || strchr(newLeafName, '/'))
 	return 0;
@@ -1411,7 +1411,7 @@ SoBRLSceneController::renameGroup(const char *groupPath,
     }
 
     SoGroup *target = scene_group_find_child(parent,
-	    components.back().c_str());
+		      components.back().c_str());
     if (!target)
 	return 0;
     if (scene_group_node_name_equal(target, newLeafName))
@@ -1469,7 +1469,7 @@ SoBRLSceneController::removeChildFromGroup(const char *groupPath,
 
 int
 SoBRLSceneController::eraseGroupSubpath(const char *parentGroupPath,
-	const char *subpath)
+					const char *subpath)
 {
     SoGroup *parent = scene_group_find_path(this->root, parentGroupPath);
     if (!parent)
@@ -1505,7 +1505,7 @@ SoBRLSceneController::removeGroup(const char *groupPath)
     }
 
     SoGroup *target = scene_group_find_child(parent,
-	    components.back().c_str());
+		      components.back().c_str());
     if (!target)
 	return 0;
 
@@ -1534,7 +1534,7 @@ int
 SoBRLSceneController::getGroupChildCount(const char *groupPath) const
 {
     const SoGroup *group = scene_group_find_path_const(this->root,
-	    groupPath);
+			   groupPath);
     if (!group)
 	return -1;
     return group->getNumChildren();
@@ -1542,10 +1542,10 @@ SoBRLSceneController::getGroupChildCount(const char *groupPath) const
 
 int
 SoBRLSceneController::getGroupDescendantGroupCount(
-	const char *groupPath) const
+    const char *groupPath) const
 {
     const SoGroup *group = scene_group_find_path_const(this->root,
-	    groupPath);
+			   groupPath);
     if (!group)
 	return -1;
     return count_scene_groups_recursive(group);
@@ -1553,10 +1553,10 @@ SoBRLSceneController::getGroupDescendantGroupCount(
 
 int
 SoBRLSceneController::getGroupDatabaseSourceCount(
-	const char *groupPath) const
+    const char *groupPath) const
 {
     const SoGroup *group = scene_group_find_path_const(this->root,
-	    groupPath);
+			   groupPath);
     if (!group)
 	return -1;
     return count_database_sources_recursive(group);
@@ -1578,11 +1578,11 @@ SoBRLSceneController::findShapeParent(const char *shapePath) const
 
 int
 SoBRLSceneController::moveShapeToGroup(const char *shapePath,
-	const char *groupPath)
+				       const char *groupPath)
 {
     SoGroup *currentParent = NULL;
     SoNode *shape = scene_shape_find_path(this->root, shapePath,
-	    &currentParent);
+					  &currentParent);
     if (!shape)
 	return 0;
 
@@ -1626,17 +1626,17 @@ SoBRLSceneController::removeShape(const char *shapePath)
 
 int
 SoBRLSceneController::setShapeDrawState(const char *shapePath,
-	int drawMode,
-	SbBool databaseIntent,
-	SbBool overlayIntent,
-	SbBool hudIntent)
+					int drawMode,
+					SbBool databaseIntent,
+					SbBool overlayIntent,
+					SbBool hudIntent)
 {
     SoNode *shape = scene_shape_find_path(this->root, shapePath, NULL);
     if (!shape)
 	return -1;
 
     const int changed = scene_shape_set_draw_state(shape, drawMode,
-	    databaseIntent, overlayIntent, hudIntent);
+			databaseIntent, overlayIntent, hudIntent);
     if (changed > 0)
 	this->advanceFrameRevision();
     return changed;
@@ -1661,9 +1661,9 @@ SoBRLSceneController::setShapeDisplayState(const char *shapePath,
 	return -1;
 
     const int changed = scene_shape_set_display_state(shape, visible,
-	    selected, highlighted, lineStyle, lineWidth, transparency,
-	    colorOverride, color, materialColorValid, materialColor,
-	    materialRevision);
+			selected, highlighted, lineStyle, lineWidth, transparency,
+			colorOverride, color, materialColorValid, materialColor,
+			materialRevision);
     if (changed > 0)
 	this->advanceFrameRevision();
     return changed;
@@ -1683,8 +1683,8 @@ SoBRLSceneController::setShapePlacementState(const char *shapePath,
 	return -1;
 
     const int changed = scene_shape_set_placement_state(shape,
-	    drawMatrixValid, drawMatrix, drawCenterValid, drawCenter,
-	    drawSizeValid, drawSize);
+			drawMatrixValid, drawMatrix, drawCenterValid, drawCenter,
+			drawSizeValid, drawSize);
     if (changed > 0)
 	this->advanceFrameRevision();
     return changed;
@@ -1692,49 +1692,49 @@ SoBRLSceneController::setShapePlacementState(const char *shapePath,
 
 int
 SoBRLSceneController::publishDatabaseSourceAuxiliaryLineSet(
-	const char *sourcePath,
-	const char *name,
-	const SbVec3f *points,
-	const int32_t *commands,
-	int count,
-	const BRLObolAuxiliaryLineSetDisplayState *displayState)
+    const char *sourcePath,
+    const char *name,
+    const SbVec3f *points,
+    const int32_t *commands,
+    int count,
+    const BRLObolAuxiliaryLineSetDisplayState *displayState)
 {
     if (!this->root || !this->root->isOfType(SoGroup::getClassTypeId()))
 	return -1;
 
     SbString sourceInstanceKey = database_source_instance_key_for_path(
-	    static_cast<SoGroup *>(this->root), sourcePath);
+				     static_cast<SoGroup *>(this->root), sourcePath);
     if (sourceInstanceKey.getLength() == 0)
 	return -1;
 
     return this->publishDatabaseSourceInstanceAuxiliaryLineSet(
-	    sourceInstanceKey.getString(),
-	    name, points, commands, count, displayState);
+	       sourceInstanceKey.getString(),
+	       name, points, commands, count, displayState);
 }
 
 int
 SoBRLSceneController::publishDatabaseSourceAuxiliarySourceLineSet(
-	const char *sourcePath,
-	const char *auxiliarySourcePath,
-	const char *displayName,
-	const SbVec3f *points,
-	const int32_t *commands,
-	int count,
-	const BRLObolAuxiliaryLineSetDisplayState *displayState)
+    const char *sourcePath,
+    const char *auxiliarySourcePath,
+    const char *displayName,
+    const SbVec3f *points,
+    const int32_t *commands,
+    int count,
+    const BRLObolAuxiliaryLineSetDisplayState *displayState)
 {
     return this->publishDatabaseSourceInstanceAuxiliarySourceLineSet(
-	    sourcePath, auxiliarySourcePath, displayName, points, commands,
-	    count, displayState);
+	       sourcePath, auxiliarySourcePath, displayName, points, commands,
+	       count, displayState);
 }
 
 int
 SoBRLSceneController::publishDatabaseSourceInstanceAuxiliaryLineSet(
-	const char *sourceInstanceKey,
-	const char *name,
-	const SbVec3f *points,
-	const int32_t *commands,
-	int count,
-	const BRLObolAuxiliaryLineSetDisplayState *displayState)
+    const char *sourceInstanceKey,
+    const char *name,
+    const SbVec3f *points,
+    const int32_t *commands,
+    int count,
+    const BRLObolAuxiliaryLineSetDisplayState *displayState)
 {
     if (!sourceInstanceKey || !sourceInstanceKey[0] || !name || !name[0])
 	return -1;
@@ -1745,7 +1745,7 @@ SoBRLSceneController::publishDatabaseSourceInstanceAuxiliaryLineSet(
 	return -1;
 
     const int changed = source->setAuxiliaryLineSet(name, points, commands,
-	    count, displayState);
+			count, displayState);
     if (changed > 0) {
 	if (count == 0)
 	    this->advanceStructuralRevision();
@@ -1757,16 +1757,16 @@ SoBRLSceneController::publishDatabaseSourceInstanceAuxiliaryLineSet(
 
 int
 SoBRLSceneController::publishDatabaseSourceInstanceAuxiliarySourceLineSet(
-	const char *sourceInstanceKey,
-	const char *auxiliarySourcePath,
-	const char *displayName,
-	const SbVec3f *points,
-	const int32_t *commands,
-	int count,
-	const BRLObolAuxiliaryLineSetDisplayState *displayState)
+    const char *sourceInstanceKey,
+    const char *auxiliarySourcePath,
+    const char *displayName,
+    const SbVec3f *points,
+    const int32_t *commands,
+    int count,
+    const BRLObolAuxiliaryLineSetDisplayState *displayState)
 {
     if (!sourceInstanceKey || !sourceInstanceKey[0] ||
-	    !auxiliarySourcePath || !auxiliarySourcePath[0])
+	!auxiliarySourcePath || !auxiliarySourcePath[0])
 	return -1;
 
     SoBRLDatabaseSource *source =
@@ -1775,8 +1775,8 @@ SoBRLSceneController::publishDatabaseSourceInstanceAuxiliarySourceLineSet(
 	return -1;
 
     const int changed = source->setAuxiliarySourceLineSet(
-	    auxiliarySourcePath, displayName, points, commands, count,
-	    displayState);
+			    auxiliarySourcePath, displayName, points, commands, count,
+			    displayState);
     if (changed > 0) {
 	if (count == 0)
 	    this->advanceStructuralRevision();
@@ -1788,25 +1788,25 @@ SoBRLSceneController::publishDatabaseSourceInstanceAuxiliarySourceLineSet(
 
 int
 SoBRLSceneController::publishDatabaseSourceExternalLineSet(
-	const char *sourcePath,
-	const BRLObolExternalLineSet &lineSet)
+    const char *sourcePath,
+    const BRLObolExternalLineSet &lineSet)
 {
     if (!this->root || !this->root->isOfType(SoGroup::getClassTypeId()))
 	return -1;
 
     SbString sourceInstanceKey = database_source_instance_key_for_path(
-	    static_cast<SoGroup *>(this->root), sourcePath);
+				     static_cast<SoGroup *>(this->root), sourcePath);
     if (sourceInstanceKey.getLength() == 0)
 	return -1;
 
     return this->publishDatabaseSourceInstanceExternalLineSet(
-	    sourceInstanceKey.getString(), lineSet);
+	       sourceInstanceKey.getString(), lineSet);
 }
 
 int
 SoBRLSceneController::publishDatabaseSourceInstanceExternalLineSet(
-	const char *sourceInstanceKey,
-	const BRLObolExternalLineSet &lineSet)
+    const char *sourceInstanceKey,
+    const BRLObolExternalLineSet &lineSet)
 {
     if (!sourceInstanceKey || !sourceInstanceKey[0])
 	return -1;
@@ -1824,25 +1824,25 @@ SoBRLSceneController::publishDatabaseSourceInstanceExternalLineSet(
 
 int
 SoBRLSceneController::publishDatabaseSourceExternalPointSet(
-	const char *sourcePath,
-	const BRLObolExternalPointSet &pointSet)
+    const char *sourcePath,
+    const BRLObolExternalPointSet &pointSet)
 {
     if (!this->root || !this->root->isOfType(SoGroup::getClassTypeId()))
 	return -1;
 
     SbString sourceInstanceKey = database_source_instance_key_for_path(
-	    static_cast<SoGroup *>(this->root), sourcePath);
+				     static_cast<SoGroup *>(this->root), sourcePath);
     if (sourceInstanceKey.getLength() == 0)
 	return -1;
 
     return this->publishDatabaseSourceInstanceExternalPointSet(
-	    sourceInstanceKey.getString(), pointSet);
+	       sourceInstanceKey.getString(), pointSet);
 }
 
 int
 SoBRLSceneController::publishDatabaseSourceInstanceExternalPointSet(
-	const char *sourceInstanceKey,
-	const BRLObolExternalPointSet &pointSet)
+    const char *sourceInstanceKey,
+    const BRLObolExternalPointSet &pointSet)
 {
     if (!sourceInstanceKey || !sourceInstanceKey[0])
 	return -1;
@@ -1860,25 +1860,25 @@ SoBRLSceneController::publishDatabaseSourceInstanceExternalPointSet(
 
 int
 SoBRLSceneController::publishDatabaseSourceExternalTriangleMesh(
-	const char *sourcePath,
-	const BRLObolExternalTriangleMesh &triangleMesh)
+    const char *sourcePath,
+    const BRLObolExternalTriangleMesh &triangleMesh)
 {
     if (!this->root || !this->root->isOfType(SoGroup::getClassTypeId()))
 	return -1;
 
     SbString sourceInstanceKey = database_source_instance_key_for_path(
-	    static_cast<SoGroup *>(this->root), sourcePath);
+				     static_cast<SoGroup *>(this->root), sourcePath);
     if (sourceInstanceKey.getLength() == 0)
 	return -1;
 
     return this->publishDatabaseSourceInstanceExternalTriangleMesh(
-	    sourceInstanceKey.getString(), triangleMesh);
+	       sourceInstanceKey.getString(), triangleMesh);
 }
 
 int
 SoBRLSceneController::publishDatabaseSourceInstanceExternalTriangleMesh(
-	const char *sourceInstanceKey,
-	const BRLObolExternalTriangleMesh &triangleMesh)
+    const char *sourceInstanceKey,
+    const BRLObolExternalTriangleMesh &triangleMesh)
 {
     if (!sourceInstanceKey || !sourceInstanceKey[0])
 	return -1;
@@ -1896,25 +1896,25 @@ SoBRLSceneController::publishDatabaseSourceInstanceExternalTriangleMesh(
 
 int
 SoBRLSceneController::publishDatabaseSourceExternalAnnotation(
-	const char *sourcePath,
-	const BRLObolExternalAnnotation &annotation)
+    const char *sourcePath,
+    const BRLObolExternalAnnotation &annotation)
 {
     if (!this->root || !this->root->isOfType(SoGroup::getClassTypeId()))
 	return -1;
 
     SbString sourceInstanceKey = database_source_instance_key_for_path(
-	    static_cast<SoGroup *>(this->root), sourcePath);
+				     static_cast<SoGroup *>(this->root), sourcePath);
     if (sourceInstanceKey.getLength() == 0)
 	return -1;
 
     return this->publishDatabaseSourceInstanceExternalAnnotation(
-	    sourceInstanceKey.getString(), annotation);
+	       sourceInstanceKey.getString(), annotation);
 }
 
 int
 SoBRLSceneController::publishDatabaseSourceInstanceExternalAnnotation(
-	const char *sourceInstanceKey,
-	const BRLObolExternalAnnotation &annotation)
+    const char *sourceInstanceKey,
+    const BRLObolExternalAnnotation &annotation)
 {
     if (!sourceInstanceKey || !sourceInstanceKey[0])
 	return -1;
@@ -1932,23 +1932,23 @@ SoBRLSceneController::publishDatabaseSourceInstanceExternalAnnotation(
 
 int
 SoBRLSceneController::clearDatabaseSourceExternalPrimaryGeometry(
-	const char *sourcePath)
+    const char *sourcePath)
 {
     if (!this->root || !this->root->isOfType(SoGroup::getClassTypeId()))
 	return -1;
 
     SbString sourceInstanceKey = database_source_instance_key_for_path(
-	    static_cast<SoGroup *>(this->root), sourcePath);
+				     static_cast<SoGroup *>(this->root), sourcePath);
     if (sourceInstanceKey.getLength() == 0)
 	return -1;
 
     return this->clearDatabaseSourceInstanceExternalPrimaryGeometry(
-	    sourceInstanceKey.getString());
+	       sourceInstanceKey.getString());
 }
 
 int
 SoBRLSceneController::clearDatabaseSourceInstanceExternalPrimaryGeometry(
-	const char *sourceInstanceKey)
+    const char *sourceInstanceKey)
 {
     if (!sourceInstanceKey || !sourceInstanceKey[0])
 	return -1;
@@ -1971,17 +1971,17 @@ SoBRLSceneController::clearDatabaseSourceAuxiliaryShapes(const char *sourcePath)
 	return -1;
 
     SbString sourceInstanceKey = database_source_instance_key_for_path(
-	    static_cast<SoGroup *>(this->root), sourcePath);
+				     static_cast<SoGroup *>(this->root), sourcePath);
     if (sourceInstanceKey.getLength() == 0)
 	return -1;
 
     return this->clearDatabaseSourceInstanceAuxiliaryShapes(
-	    sourceInstanceKey.getString());
+	       sourceInstanceKey.getString());
 }
 
 int
 SoBRLSceneController::clearDatabaseSourceInstanceAuxiliaryShapes(
-	const char *sourceInstanceKey)
+    const char *sourceInstanceKey)
 {
     if (!sourceInstanceKey || !sourceInstanceKey[0])
 	return -1;
@@ -2018,12 +2018,12 @@ SoBRLSceneController::setShapeSourceState(const char *shapePath,
 	return -1;
 
     const int changed = scene_shape_set_source_state(shape,
-	    ownerSourcePath, ownerSourceRevision, ownerInputsRevision,
-	    ownerViewRevision, ownerRealizedRevision,
-	    ownerRealizedSourceRevision, ownerRealizedInputsRevision,
-	    ownerRealizedViewRevision, ownerRealizationStatus,
-	    ownerRealizationDiagnostic, ownerRealizationIdentity,
-	    ownerSourceStale, ownerStaleReason);
+			ownerSourcePath, ownerSourceRevision, ownerInputsRevision,
+			ownerViewRevision, ownerRealizedRevision,
+			ownerRealizedSourceRevision, ownerRealizedInputsRevision,
+			ownerRealizedViewRevision, ownerRealizationStatus,
+			ownerRealizationDiagnostic, ownerRealizationIdentity,
+			ownerSourceStale, ownerStaleReason);
     if (changed > 0)
 	this->advanceFrameRevision();
     return changed;
@@ -2033,7 +2033,7 @@ SoBRLDatabaseSource *
 SoBRLSceneController::getDatabaseSource(int index) const
 {
     if (index < 0 || !this->root ||
-	    !this->root->isOfType(SoGroup::getClassTypeId()))
+	!this->root->isOfType(SoGroup::getClassTypeId()))
 	return NULL;
 
     SoGroup *group = static_cast<SoGroup *>(this->root);
@@ -2055,7 +2055,7 @@ SoBRLDatabaseSource *
 SoBRLSceneController::findDatabaseSource(const char *sourcePath) const
 {
     if (!sourcePath || !sourcePath[0] || !this->root ||
-	    !this->root->isOfType(SoGroup::getClassTypeId()))
+	!this->root->isOfType(SoGroup::getClassTypeId()))
 	return NULL;
 
     SoGroup *group = static_cast<SoGroup *>(this->root);
@@ -2064,10 +2064,10 @@ SoBRLSceneController::findDatabaseSource(const char *sourcePath) const
 
 SoBRLDatabaseSource *
 SoBRLSceneController::findDatabaseSourceInstance(
-	const char *sourceInstanceKey) const
+    const char *sourceInstanceKey) const
 {
     if (!sourceInstanceKey || !sourceInstanceKey[0] || !this->root ||
-	    !this->root->isOfType(SoGroup::getClassTypeId()))
+	!this->root->isOfType(SoGroup::getClassTypeId()))
 	return NULL;
 
     SoGroup *group = static_cast<SoGroup *>(this->root);
@@ -2086,29 +2086,29 @@ SoBRLSceneController::replaceDatabaseSource(const char *sourcePath,
 
 int
 SoBRLSceneController::replaceDatabaseSourceInstance(
-	const char *sourceInstanceKey,
-	const char *sourcePath,
-	struct db_i *database,
-	int drawMode,
-	uint32_t sourceRevision)
+    const char *sourceInstanceKey,
+    const char *sourcePath,
+    struct db_i *database,
+    int drawMode,
+    uint32_t sourceRevision)
 {
     return this->replaceDatabaseSourceInstanceRepresentation(
-	    sourceInstanceKey, sourcePath, NULL, -1, database, drawMode,
-	    sourceRevision);
+	       sourceInstanceKey, sourcePath, NULL, -1, database, drawMode,
+	       sourceRevision);
 }
 
 int
 SoBRLSceneController::replaceDatabaseSourceInstanceRepresentation(
-	const char *sourceInstanceKey,
-	const char *sourcePath,
-	const char *sourceRepresentationKey,
-	int sourceRepresentationMode,
-	struct db_i *database,
-	int drawMode,
-	uint32_t sourceRevision)
+    const char *sourceInstanceKey,
+    const char *sourcePath,
+    const char *sourceRepresentationKey,
+    int sourceRepresentationMode,
+    struct db_i *database,
+    int drawMode,
+    uint32_t sourceRevision)
 {
     if (!sourceInstanceKey || !sourceInstanceKey[0] ||
-	    !sourcePath || !sourcePath[0])
+	!sourcePath || !sourcePath[0])
 	return -1;
     if (!database)
 	return this->removeDatabaseSourceInstance(sourceInstanceKey);
@@ -2119,7 +2119,7 @@ SoBRLSceneController::replaceDatabaseSourceInstanceRepresentation(
     int childIndex = -1;
     SoBRLDatabaseSource *source =
 	find_database_source_instance_recursive(group, sourceInstanceKey, NULL,
-		&childIndex);
+	    &childIndex);
     if (!source)
 	source = new SoBRLDatabaseSource;
 
@@ -2152,7 +2152,7 @@ SoBRLSceneController::renameDatabaseSource(const char *sourcePath,
 	return -1;
 
     SbString sourceInstanceKey = database_source_instance_key_for_path(
-	    static_cast<SoGroup *>(this->root), sourcePath);
+				     static_cast<SoGroup *>(this->root), sourcePath);
     if (sourceInstanceKey.getLength() == 0)
 	return 0;
 
@@ -2163,20 +2163,20 @@ SoBRLSceneController::renameDatabaseSource(const char *sourcePath,
 
 int
 SoBRLSceneController::renameDatabaseSourceInstance(
-	const char *sourceInstanceKey,
-	const char *newSourceInstanceKey,
-	const char *newSourcePath,
-	uint32_t sourceRevision)
+    const char *sourceInstanceKey,
+    const char *newSourceInstanceKey,
+    const char *newSourcePath,
+    uint32_t sourceRevision)
 {
     if (!sourceInstanceKey || !sourceInstanceKey[0] ||
-	    !newSourceInstanceKey || !newSourceInstanceKey[0] ||
-	    !newSourcePath || !newSourcePath[0])
+	!newSourceInstanceKey || !newSourceInstanceKey[0] ||
+	!newSourcePath || !newSourcePath[0])
 	return -1;
     if ((strcmp(sourceInstanceKey, newSourceInstanceKey) == 0 ||
-	    strcmp(skip_leading_slash(sourceInstanceKey),
+	 strcmp(skip_leading_slash(sourceInstanceKey),
 		skip_leading_slash(newSourceInstanceKey)) == 0) &&
-	    database_source_path_equal(this->findDatabaseSourceInstance(
-		    sourceInstanceKey), newSourcePath))
+	database_source_path_equal(this->findDatabaseSourceInstance(
+				       sourceInstanceKey), newSourcePath))
 	return 0;
     if (!this->root || !this->root->isOfType(SoGroup::getClassTypeId()))
 	return -1;
@@ -2185,7 +2185,7 @@ SoBRLSceneController::renameDatabaseSourceInstance(
     SoGroup *sourceParent = NULL;
     int sourceIndex = -1;
     SoBRLDatabaseSource *source = find_database_source_instance_recursive(
-	    rootGroup, sourceInstanceKey, &sourceParent, &sourceIndex);
+				      rootGroup, sourceInstanceKey, &sourceParent, &sourceIndex);
     if (!source || !sourceParent || sourceIndex < 0)
 	return 0;
 
@@ -2193,13 +2193,13 @@ SoBRLSceneController::renameDatabaseSourceInstance(
     int conflictIndex = -1;
     SoBRLDatabaseSource *conflict =
 	find_database_source_instance_recursive(rootGroup,
-		newSourceInstanceKey, &conflictParent, &conflictIndex);
+	    newSourceInstanceKey, &conflictParent, &conflictIndex);
     if (conflict && conflict != source && conflictParent &&
-	    conflictIndex >= 0)
+	conflictIndex >= 0)
 	conflictParent->removeChild(conflictIndex);
 
     const int changed = source->retargetDatabaseSourceInstance(
-	    newSourceInstanceKey, newSourcePath, sourceRevision);
+			    newSourceInstanceKey, newSourcePath, sourceRevision);
     if (changed > 0 || conflict)
 	this->advanceStructuralRevision();
     return changed > 0 || conflict ? 1 : changed;
@@ -2225,7 +2225,7 @@ SoBRLSceneController::setDatabaseSourceState(const char *sourcePath,
 	return -1;
 
     SbString sourceInstanceKey = database_source_instance_key_for_path(
-	    static_cast<SoGroup *>(this->root), sourcePath);
+				     static_cast<SoGroup *>(this->root), sourcePath);
     if (sourceInstanceKey.getLength() == 0)
 	return -1;
 
@@ -2237,20 +2237,20 @@ SoBRLSceneController::setDatabaseSourceState(const char *sourcePath,
 
 int
 SoBRLSceneController::setDatabaseSourceInstanceState(
-	const char *sourceInstanceKey,
-	SbBool sourceRevisionValid,
-	uint32_t sourceRevision,
-	uint32_t inputsRevision,
-	SbBool visible,
-	SbBool highlighted,
-	int lineStyle,
-	int lineWidth,
-	float transparency,
-	SbBool colorOverride,
-	const SbColor &color,
-	SbBool materialColorValid,
-	const SbColor &materialColor,
-	uint32_t materialRevision)
+    const char *sourceInstanceKey,
+    SbBool sourceRevisionValid,
+    uint32_t sourceRevision,
+    uint32_t inputsRevision,
+    SbBool visible,
+    SbBool highlighted,
+    int lineStyle,
+    int lineWidth,
+    float transparency,
+    SbBool colorOverride,
+    const SbColor &color,
+    SbBool materialColorValid,
+    const SbColor &materialColor,
+    uint32_t materialRevision)
 {
     SoBRLDatabaseSource *source =
 	this->findDatabaseSourceInstance(sourceInstanceKey);
@@ -2258,9 +2258,9 @@ SoBRLSceneController::setDatabaseSourceInstanceState(
 	return -1;
 
     const int changed = source->setDisplayState(sourceRevisionValid,
-	    sourceRevision, inputsRevision, visible, highlighted, lineStyle,
-	    lineWidth, transparency, colorOverride, color, materialColorValid,
-	    materialColor, materialRevision);
+			sourceRevision, inputsRevision, visible, highlighted, lineStyle,
+			lineWidth, transparency, colorOverride, color, materialColorValid,
+			materialColor, materialRevision);
     if (changed > 0)
 	this->advanceFrameRevision();
     return changed;
@@ -2274,18 +2274,18 @@ SoBRLSceneController::setDatabaseSourceDisplayPatch(const char *sourcePath,
 	return -1;
 
     SbString sourceInstanceKey = database_source_instance_key_for_path(
-	    static_cast<SoGroup *>(this->root), sourcePath);
+				     static_cast<SoGroup *>(this->root), sourcePath);
     if (sourceInstanceKey.getLength() == 0)
 	return -1;
 
     return this->setDatabaseSourceInstanceDisplayPatch(
-	    sourceInstanceKey.getString(), patch);
+	       sourceInstanceKey.getString(), patch);
 }
 
 int
 SoBRLSceneController::setDatabaseSourceInstanceDisplayPatch(
-	const char *sourceInstanceKey,
-	const BRLObolDatabaseSourceDisplayPatch &patch)
+    const char *sourceInstanceKey,
+    const BRLObolDatabaseSourceDisplayPatch &patch)
 {
     SoBRLDatabaseSource *source =
 	this->findDatabaseSourceInstance(sourceInstanceKey);
@@ -2306,19 +2306,19 @@ SoBRLSceneController::setDatabaseSourceDisplayName(const char *sourcePath,
 	return -1;
 
     SbString sourceInstanceKey = database_source_instance_key_for_path(
-	    static_cast<SoGroup *>(this->root), sourcePath);
+				     static_cast<SoGroup *>(this->root), sourcePath);
     if (sourceInstanceKey.getLength() == 0)
 	return -1;
 
     return this->setDatabaseSourceInstanceDisplayName(
-	    sourceInstanceKey.getString(),
-	    displayName);
+	       sourceInstanceKey.getString(),
+	       displayName);
 }
 
 int
 SoBRLSceneController::setDatabaseSourceInstanceDisplayName(
-	const char *sourceInstanceKey,
-	const char *displayName)
+    const char *sourceInstanceKey,
+    const char *displayName)
 {
     SoBRLDatabaseSource *source =
 	this->findDatabaseSourceInstance(sourceInstanceKey);
@@ -2339,18 +2339,18 @@ SoBRLSceneController::setDatabaseSourceDrawMode(const char *sourcePath,
 	return -1;
 
     SbString sourceInstanceKey = database_source_instance_key_for_path(
-	    static_cast<SoGroup *>(this->root), sourcePath);
+				     static_cast<SoGroup *>(this->root), sourcePath);
     if (sourceInstanceKey.getLength() == 0)
 	return -1;
 
     return this->setDatabaseSourceInstanceDrawMode(
-	    sourceInstanceKey.getString(), drawMode);
+	       sourceInstanceKey.getString(), drawMode);
 }
 
 int
 SoBRLSceneController::setDatabaseSourceInstanceDrawMode(
-	const char *sourceInstanceKey,
-	int drawMode)
+    const char *sourceInstanceKey,
+    int drawMode)
 {
     SoBRLDatabaseSource *source =
 	this->findDatabaseSourceInstance(sourceInstanceKey);
@@ -2361,11 +2361,11 @@ SoBRLSceneController::setDatabaseSourceInstanceDrawMode(
     const int currentRepresentationMode =
 	source->representationMode.getValue();
     if (currentRepresentationMode ==
-	    SoBRLDatabaseSource::REPRESENTATION_DEFAULT ||
-	    currentRepresentationMode ==
-	    SoBRLDatabaseSource::REPRESENTATION_WIRE ||
-	    currentRepresentationMode ==
-	    SoBRLDatabaseSource::REPRESENTATION_SHADED) {
+	SoBRLDatabaseSource::REPRESENTATION_DEFAULT ||
+	currentRepresentationMode ==
+	SoBRLDatabaseSource::REPRESENTATION_WIRE ||
+	currentRepresentationMode ==
+	SoBRLDatabaseSource::REPRESENTATION_SHADED) {
 	const int representationMode =
 	    drawMode == SoBRLDatabaseSource::SHADED ?
 	    SoBRLDatabaseSource::REPRESENTATION_SHADED :
@@ -2377,7 +2377,7 @@ SoBRLSceneController::setDatabaseSourceInstanceDrawMode(
 	    existingRepresentationKey :
 	    database_source_effective_instance_key(source);
 	const int representationChanged = source->setRepresentationState(
-		representationKey.getString(), representationMode);
+					      representationKey.getString(), representationMode);
 	if (representationChanged > 0)
 	    changed = 1;
     }
@@ -2388,9 +2388,9 @@ SoBRLSceneController::setDatabaseSourceInstanceDrawMode(
 
 int
 SoBRLSceneController::setDatabaseSourceInstanceRepresentation(
-	const char *sourceInstanceKey,
-	const char *sourceRepresentationKey,
-	int sourceRepresentationMode)
+    const char *sourceInstanceKey,
+    const char *sourceRepresentationKey,
+    int sourceRepresentationMode)
 {
     SoBRLDatabaseSource *source =
 	this->findDatabaseSourceInstance(sourceInstanceKey);
@@ -2398,7 +2398,7 @@ SoBRLSceneController::setDatabaseSourceInstanceRepresentation(
 	return -1;
 
     const int changed = source->setRepresentationState(
-	    sourceRepresentationKey, sourceRepresentationMode);
+			    sourceRepresentationKey, sourceRepresentationMode);
     if (changed > 0)
 	this->advanceFrameRevision();
     return changed;
@@ -2412,19 +2412,19 @@ SoBRLSceneController::setDatabaseSourceMaterialPolicy(const char *sourcePath,
 	return -1;
 
     SbString sourceInstanceKey = database_source_instance_key_for_path(
-	    static_cast<SoGroup *>(this->root), sourcePath);
+				     static_cast<SoGroup *>(this->root), sourcePath);
     if (sourceInstanceKey.getLength() == 0)
 	return -1;
 
     return this->setDatabaseSourceInstanceMaterialPolicy(
-	    sourceInstanceKey.getString(),
-	    materialPolicy);
+	       sourceInstanceKey.getString(),
+	       materialPolicy);
 }
 
 int
 SoBRLSceneController::setDatabaseSourceInstanceMaterialPolicy(
-	const char *sourceInstanceKey,
-	int materialPolicy)
+    const char *sourceInstanceKey,
+    int materialPolicy)
 {
     SoBRLDatabaseSource *source =
 	this->findDatabaseSourceInstance(sourceInstanceKey);
@@ -2450,25 +2450,25 @@ SoBRLSceneController::setDatabaseSourcePlacementState(const char *sourcePath,
 	return -1;
 
     SbString sourceInstanceKey = database_source_instance_key_for_path(
-	    static_cast<SoGroup *>(this->root), sourcePath);
+				     static_cast<SoGroup *>(this->root), sourcePath);
     if (sourceInstanceKey.getLength() == 0)
 	return -1;
 
     return this->setDatabaseSourceInstancePlacementState(
-	    sourceInstanceKey.getString(),
-	    drawMatrixValid, drawMatrix, drawCenterValid, drawCenter,
-	    drawSizeValid, drawSize);
+	       sourceInstanceKey.getString(),
+	       drawMatrixValid, drawMatrix, drawCenterValid, drawCenter,
+	       drawSizeValid, drawSize);
 }
 
 int
 SoBRLSceneController::setDatabaseSourceInstancePlacementState(
-	const char *sourceInstanceKey,
-	SbBool drawMatrixValid,
-	const SbMatrix &drawMatrix,
-	SbBool drawCenterValid,
-	const SbVec3f &drawCenter,
-	SbBool drawSizeValid,
-	float drawSize)
+    const char *sourceInstanceKey,
+    SbBool drawMatrixValid,
+    const SbMatrix &drawMatrix,
+    SbBool drawCenterValid,
+    const SbVec3f &drawCenter,
+    SbBool drawSizeValid,
+    float drawSize)
 {
     SoBRLDatabaseSource *source =
 	this->findDatabaseSourceInstance(sourceInstanceKey);
@@ -2476,7 +2476,7 @@ SoBRLSceneController::setDatabaseSourceInstancePlacementState(
 	return -1;
 
     const int changed = source->setPlacementState(drawMatrixValid,
-	    drawMatrix, drawCenterValid, drawCenter, drawSizeValid, drawSize);
+			drawMatrix, drawCenterValid, drawCenter, drawSizeValid, drawSize);
     if (changed > 0)
 	this->advanceFrameRevision();
     return changed;
@@ -2492,21 +2492,21 @@ SoBRLSceneController::setDatabaseSourceBoundsState(const char *sourcePath,
 	return -1;
 
     SbString sourceInstanceKey = database_source_instance_key_for_path(
-	    static_cast<SoGroup *>(this->root), sourcePath);
+				     static_cast<SoGroup *>(this->root), sourcePath);
     if (sourceInstanceKey.getLength() == 0)
 	return -1;
 
     return this->setDatabaseSourceInstanceBoundsState(
-	    sourceInstanceKey.getString(), boundsValid,
-	    boundsMin, boundsMax);
+	       sourceInstanceKey.getString(), boundsValid,
+	       boundsMin, boundsMax);
 }
 
 int
 SoBRLSceneController::setDatabaseSourceInstanceBoundsState(
-	const char *sourceInstanceKey,
-	SbBool boundsValid,
-	const SbVec3f &boundsMin,
-	const SbVec3f &boundsMax)
+    const char *sourceInstanceKey,
+    SbBool boundsValid,
+    const SbVec3f &boundsMin,
+    const SbVec3f &boundsMax)
 {
     SoBRLDatabaseSource *source =
 	this->findDatabaseSourceInstance(sourceInstanceKey);
@@ -2514,7 +2514,7 @@ SoBRLSceneController::setDatabaseSourceInstanceBoundsState(
 	return -1;
 
     const int changed = source->setSourceBoundsState(boundsValid,
-	    boundsMin, boundsMax);
+			boundsMin, boundsMax);
     if (changed > 0)
 	this->advanceFrameRevision();
     return changed;
@@ -2528,7 +2528,7 @@ SoBRLSceneController::markDatabaseSourceStale(const char *sourcePath,
 	return -1;
 
     SbString sourceInstanceKey = database_source_instance_key_for_path(
-	    static_cast<SoGroup *>(this->root), sourcePath);
+				     static_cast<SoGroup *>(this->root), sourcePath);
     if (sourceInstanceKey.getLength() == 0)
 	return -1;
 
@@ -2538,8 +2538,8 @@ SoBRLSceneController::markDatabaseSourceStale(const char *sourcePath,
 
 int
 SoBRLSceneController::markDatabaseSourceInstanceStale(
-	const char *sourceInstanceKey,
-	uint32_t staleReason)
+    const char *sourceInstanceKey,
+    uint32_t staleReason)
 {
     SoBRLDatabaseSource *source =
 	this->findDatabaseSourceInstance(sourceInstanceKey);
@@ -2551,7 +2551,7 @@ SoBRLSceneController::markDatabaseSourceInstanceStale(
 
     uint32_t nextSourceRevision = source->sourceRevision.getValue();
     if (staleReason & (SoBRLDatabaseSource::STALE_SOURCE |
-	    SoBRLDatabaseSource::STALE_DATABASE))
+		       SoBRLDatabaseSource::STALE_DATABASE))
 	nextSourceRevision++;
 
     const uint32_t nextReason =
@@ -2583,24 +2583,24 @@ SoBRLSceneController::setDatabaseSourceRealizationState(const char *sourcePath,
 	return -1;
 
     SbString sourceInstanceKey = database_source_instance_key_for_path(
-	    static_cast<SoGroup *>(this->root), sourcePath);
+				     static_cast<SoGroup *>(this->root), sourcePath);
     if (sourceInstanceKey.getLength() == 0)
 	return -1;
 
     return this->setDatabaseSourceInstanceRealizationState(
-	    sourceInstanceKey.getString(),
-	    realizationStatus, realizedSourceRevision, realizedInputsRevision,
-	    staleReason, diagnostic);
+	       sourceInstanceKey.getString(),
+	       realizationStatus, realizedSourceRevision, realizedInputsRevision,
+	       staleReason, diagnostic);
 }
 
 int
 SoBRLSceneController::setDatabaseSourceInstanceRealizationState(
-	const char *sourceInstanceKey,
-	int realizationStatus,
-	uint32_t realizedSourceRevision,
-	uint32_t realizedInputsRevision,
-	uint32_t staleReason,
-	const char *diagnostic)
+    const char *sourceInstanceKey,
+    int realizationStatus,
+    uint32_t realizedSourceRevision,
+    uint32_t realizedInputsRevision,
+    uint32_t staleReason,
+    const char *diagnostic)
 {
     SoBRLDatabaseSource *source =
 	this->findDatabaseSourceInstance(sourceInstanceKey);
@@ -2608,8 +2608,8 @@ SoBRLSceneController::setDatabaseSourceInstanceRealizationState(
 	return -1;
 
     const int changed = source->setRealizationState(realizationStatus,
-	    realizedSourceRevision, realizedInputsRevision, staleReason,
-	    diagnostic);
+			realizedSourceRevision, realizedInputsRevision, staleReason,
+			diagnostic);
     if (changed > 0)
 	this->advanceFrameRevision();
     return changed;
@@ -2617,26 +2617,26 @@ SoBRLSceneController::setDatabaseSourceInstanceRealizationState(
 
 int
 SoBRLSceneController::setDatabaseSourceRealizationRoleFlags(
-	const char *sourcePath,
-	int roleFlags)
+    const char *sourcePath,
+    int roleFlags)
 {
     if (!this->root || !this->root->isOfType(SoGroup::getClassTypeId()))
 	return -1;
 
     SbString sourceInstanceKey = database_source_instance_key_for_path(
-	    static_cast<SoGroup *>(this->root), sourcePath);
+				     static_cast<SoGroup *>(this->root), sourcePath);
     if (sourceInstanceKey.getLength() == 0)
 	return -1;
 
     return this->setDatabaseSourceInstanceRealizationRoleFlags(
-	    sourceInstanceKey.getString(),
-	    roleFlags);
+	       sourceInstanceKey.getString(),
+	       roleFlags);
 }
 
 int
 SoBRLSceneController::setDatabaseSourceInstanceRealizationRoleFlags(
-	const char *sourceInstanceKey,
-	int roleFlags)
+    const char *sourceInstanceKey,
+    int roleFlags)
 {
     SoBRLDatabaseSource *source =
 	this->findDatabaseSourceInstance(sourceInstanceKey);
@@ -2651,34 +2651,34 @@ SoBRLSceneController::setDatabaseSourceInstanceRealizationRoleFlags(
 
 int
 SoBRLSceneController::setDatabaseSourceRealizationViewPolicy(
-	const char *sourcePath,
-	SbBool viewDependent,
-	float viewScale,
-	uint32_t botThreshold,
-	float curveScale,
-	float pointScale)
+    const char *sourcePath,
+    SbBool viewDependent,
+    float viewScale,
+    uint32_t botThreshold,
+    float curveScale,
+    float pointScale)
 {
     if (!this->root || !this->root->isOfType(SoGroup::getClassTypeId()))
 	return -1;
 
     SbString sourceInstanceKey = database_source_instance_key_for_path(
-	    static_cast<SoGroup *>(this->root), sourcePath);
+				     static_cast<SoGroup *>(this->root), sourcePath);
     if (sourceInstanceKey.getLength() == 0)
 	return -1;
 
     return this->setDatabaseSourceInstanceRealizationViewPolicy(
-	    sourceInstanceKey.getString(),
-	    viewDependent, viewScale, botThreshold, curveScale, pointScale);
+	       sourceInstanceKey.getString(),
+	       viewDependent, viewScale, botThreshold, curveScale, pointScale);
 }
 
 int
 SoBRLSceneController::setDatabaseSourceInstanceRealizationViewPolicy(
-	const char *sourceInstanceKey,
-	SbBool viewDependent,
-	float viewScale,
-	uint32_t botThreshold,
-	float curveScale,
-	float pointScale)
+    const char *sourceInstanceKey,
+    SbBool viewDependent,
+    float viewScale,
+    uint32_t botThreshold,
+    float curveScale,
+    float pointScale)
 {
     SoBRLDatabaseSource *source =
 	this->findDatabaseSourceInstance(sourceInstanceKey);
@@ -2686,7 +2686,7 @@ SoBRLSceneController::setDatabaseSourceInstanceRealizationViewPolicy(
 	return -1;
 
     const int changed = source->setRealizationViewPolicy(viewDependent,
-	    viewScale, botThreshold, curveScale, pointScale);
+			viewScale, botThreshold, curveScale, pointScale);
     if (changed > 0)
 	this->advanceFrameRevision();
     return changed;
@@ -2700,18 +2700,18 @@ SoBRLSceneController::moveDatabaseSourceToGroup(const char *sourcePath,
 	return -1;
 
     SbString sourceInstanceKey = database_source_instance_key_for_path(
-	    static_cast<SoGroup *>(this->root), sourcePath);
+				     static_cast<SoGroup *>(this->root), sourcePath);
     if (sourceInstanceKey.getLength() == 0)
 	return 0;
 
     return this->moveDatabaseSourceInstanceToGroup(
-	    sourceInstanceKey.getString(), groupPath);
+	       sourceInstanceKey.getString(), groupPath);
 }
 
 int
 SoBRLSceneController::moveDatabaseSourceInstanceToGroup(
-	const char *sourceInstanceKey,
-	const char *groupPath)
+    const char *sourceInstanceKey,
+    const char *groupPath)
 {
     if (!sourceInstanceKey || !sourceInstanceKey[0] || !groupPath)
 	return -1;
@@ -2722,7 +2722,7 @@ SoBRLSceneController::moveDatabaseSourceInstanceToGroup(
     SoGroup *sourceParent = NULL;
     int sourceIndex = -1;
     SoBRLDatabaseSource *source = find_database_source_instance_recursive(
-	    rootGroup, sourceInstanceKey, &sourceParent, &sourceIndex);
+				      rootGroup, sourceInstanceKey, &sourceParent, &sourceIndex);
     if (!source || !sourceParent || sourceIndex < 0)
 	return 0;
 
@@ -2747,7 +2747,7 @@ SoBRLSceneController::removeDatabaseSource(const char *sourcePath)
 	return -1;
 
     SbString sourceInstanceKey = database_source_instance_key_for_path(
-	    static_cast<SoGroup *>(this->root), sourcePath);
+				     static_cast<SoGroup *>(this->root), sourcePath);
     if (sourceInstanceKey.getLength() == 0)
 	return 0;
 
@@ -2756,7 +2756,7 @@ SoBRLSceneController::removeDatabaseSource(const char *sourcePath)
 
 int
 SoBRLSceneController::removeDatabaseSourceInstance(
-	const char *sourceInstanceKey)
+    const char *sourceInstanceKey)
 {
     if (!sourceInstanceKey || !sourceInstanceKey[0])
 	return 0;
@@ -2795,7 +2795,7 @@ SoBRLSceneController::getDatabaseSourceSummary(int index,
 {
     summary = BRLObolDatabaseSourceSummary();
     if (index < 0 || !this->root ||
-	    !this->root->isOfType(SoGroup::getClassTypeId()))
+	!this->root->isOfType(SoGroup::getClassTypeId()))
 	return FALSE;
 
     SoGroup *group = static_cast<SoGroup *>(this->root);
@@ -2803,7 +2803,7 @@ SoBRLSceneController::getDatabaseSourceSummary(int index,
     SbString parentGroupPath("");
     int drawTreeDepth = 0;
     SoBRLDatabaseSource *source = database_source_summary_at_recursive(
-	    group, index, seen, 0, "/", parentGroupPath, drawTreeDepth);
+				      group, index, seen, 0, "/", parentGroupPath, drawTreeDepth);
     if (!source)
 	return FALSE;
 
@@ -2929,8 +2929,8 @@ SoBRLSceneController::getRealizedMaterialProperty(int materialIndex,
 
 static void
 scene_tree_summary_fill(const SoNode *node, int depth, SbBool hasParent,
-	int ownerSourceIndex, const SbString &ownerSourcePath,
-	const SbString &nodePath, BRLObolSceneTreeSummary &summary)
+			int ownerSourceIndex, const SbString &ownerSourcePath,
+			const SbString &nodePath, BRLObolSceneTreeSummary &summary)
 {
     summary = BRLObolSceneTreeSummary();
     if (!node)
@@ -3014,8 +3014,8 @@ scene_tree_summary_fill(const SoNode *node, int depth, SbBool hasParent,
     }
 
     summary.nodeKind = summary.isGroup ?
-	BRLObolSceneTreeSummary::NODE_GROUP :
-	BRLObolSceneTreeSummary::NODE_OTHER;
+		       BRLObolSceneTreeSummary::NODE_GROUP :
+		       BRLObolSceneTreeSummary::NODE_OTHER;
     summary.path = scene_group_summary_path(node, nodePath);
 }
 
@@ -3027,7 +3027,7 @@ scene_public_realized_shape_node(const SoNode *node)
 	return NULL;
 
     if (node->isOfType(SoBRLVListShape::getClassTypeId()) ||
-	    node->isOfType(SoBRLMeshShape::getClassTypeId()))
+	node->isOfType(SoBRLMeshShape::getClassTypeId()))
 	return node;
 
     if (node->isOfType(SoGroup::getClassTypeId())) {
@@ -3105,9 +3105,9 @@ scene_tree_summary_node_count(const SoNode *node)
 
 static SbBool
 find_scene_tree_summary_in_node(const SoNode *node, int &index, int depth,
-	SbBool hasParent, int ownerSourceIndex,
-	const SbString &ownerSourcePath, const SbString &nodePath,
-	BRLObolSceneTreeSummary &summary)
+				SbBool hasParent, int ownerSourceIndex,
+				const SbString &ownerSourcePath, const SbString &nodePath,
+				BRLObolSceneTreeSummary &summary)
 {
     if (!node)
 	return FALSE;
@@ -3136,7 +3136,7 @@ find_scene_tree_summary_in_node(const SoNode *node, int &index, int depth,
 
     if (index == 0) {
 	scene_tree_summary_fill(node, depth, hasParent, ownerSourceIndex,
-		ownerSourcePath, nodePath, summary);
+				ownerSourcePath, nodePath, summary);
 	return TRUE;
     }
     index--;
@@ -3148,8 +3148,8 @@ find_scene_tree_summary_in_node(const SoNode *node, int &index, int depth,
 	    const SbString childPath =
 		scene_child_summary_path(nodePath, child);
 	    if (find_scene_tree_summary_in_node(child, index,
-		    depth + 1, TRUE, ownerSourceIndex, ownerSourcePath,
-		    childPath, summary))
+						depth + 1, TRUE, ownerSourceIndex, ownerSourcePath,
+						childPath, summary))
 		return TRUE;
 	}
     }
@@ -3173,7 +3173,7 @@ SoBRLSceneController::getSceneTreeSummary(int index,
 
     if (index == 0) {
 	scene_tree_summary_fill(this->root, 0, FALSE, -1, "", "/",
-		summary);
+				summary);
 	return TRUE;
     }
     index--;
@@ -3188,7 +3188,7 @@ SoBRLSceneController::getSceneTreeSummary(int index,
 	int childOwnerIndex = -1;
 	SbString childOwnerPath("");
 	if (child &&
-		child->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
+	    child->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
 	    const SoBRLDatabaseSource *source =
 		static_cast<const SoBRLDatabaseSource *>(child);
 	    childOwnerIndex = sourceIndex;
@@ -3198,7 +3198,7 @@ SoBRLSceneController::getSceneTreeSummary(int index,
 
 	const SbString childPath = scene_child_summary_path("/", child);
 	if (find_scene_tree_summary_in_node(child, index, 1, TRUE,
-		childOwnerIndex, childOwnerPath, childPath, summary))
+					    childOwnerIndex, childOwnerPath, childPath, summary))
 	    return TRUE;
     }
 
@@ -3213,8 +3213,8 @@ scene_summary_path_equal(const SbString &summaryPath, const char *nodePath)
 
 static const SoGroup *
 scene_tree_group_find_by_summary_path(const SoNode *node,
-	const char *nodePath,
-	const SbString &fallbackPath)
+				      const char *nodePath,
+				      const SbString &fallbackPath)
 {
     if (!node || !nodePath || !node->isOfType(SoGroup::getClassTypeId()))
 	return NULL;
@@ -3230,7 +3230,7 @@ scene_tree_group_find_by_summary_path(const SoNode *node,
 	    continue;
 	const SbString childPath = scene_child_summary_path(groupPath, child);
 	const SoGroup *found = scene_tree_group_find_by_summary_path(child,
-		nodePath, childPath);
+			       nodePath, childPath);
 	if (found)
 	    return found;
     }
@@ -3251,11 +3251,11 @@ SoBRLSceneController::getSceneTreeSummaryForPath(const char *nodePath,
     const int count = this->getSceneTreeSummaryCount();
     for (int i = 0; i < count; i++) {
 	if (!this->getSceneTreeSummary(i, candidate) ||
-		!candidate.valid ||
-		!scene_summary_path_equal(candidate.path, nodePath))
+	    !candidate.valid ||
+	    !scene_summary_path_equal(candidate.path, nodePath))
 	    continue;
 	if (candidate.nodeKind ==
-		BRLObolSceneTreeSummary::NODE_DATABASE_SOURCE) {
+	    BRLObolSceneTreeSummary::NODE_DATABASE_SOURCE) {
 	    summary = candidate;
 	    return TRUE;
 	}
@@ -3296,9 +3296,9 @@ SoBRLSceneController::getSceneChildTreeSummary(const char *nodePath,
 	const SbString childPath =
 	    scene_child_summary_path(parentSummary.path, child);
 	scene_tree_summary_fill(publicChild,
-		parentSummary.drawTreeDepth + 1, TRUE,
-		parentSummary.ownerSourceIndex,
-		source->path.getValue(), childPath, summary);
+				parentSummary.drawTreeDepth + 1, TRUE,
+				parentSummary.ownerSourceIndex,
+				source->path.getValue(), childPath, summary);
 	if (!summary.valid)
 	    return FALSE;
 	if (summary.ownerSourcePath.getLength() == 0)
@@ -3321,9 +3321,9 @@ SoBRLSceneController::getSceneChildTreeSummary(const char *nodePath,
 
 	const SoNode *child = group->getChild(childIndex);
 	const SbString childPath = scene_child_summary_path(
-		parentSummary.path, child);
+				       parentSummary.path, child);
 	scene_tree_summary_fill(child, parentSummary.drawTreeDepth + 1,
-		TRUE, -1, "", childPath, summary);
+				TRUE, -1, "", childPath, summary);
 	return summary.valid;
     }
 
@@ -3332,8 +3332,8 @@ SoBRLSceneController::getSceneChildTreeSummary(const char *nodePath,
 
 static void
 scene_display_summary_fill_common(BRLObolSceneDisplaySummary &summary,
-	int nodeKind, int ownerSourceIndex, const SbString &ownerSourcePath,
-	const SbString &nodePath)
+				  int nodeKind, int ownerSourceIndex, const SbString &ownerSourcePath,
+				  const SbString &nodePath)
 {
     summary = BRLObolSceneDisplaySummary();
     summary.valid = TRUE;
@@ -3346,16 +3346,16 @@ scene_display_summary_fill_common(BRLObolSceneDisplaySummary &summary,
 template <typename ShapeT>
 static void
 scene_display_summary_fill_shape(const ShapeT *shape, int nodeKind,
-	int ownerSourceIndex, const SbString &ownerSourcePath,
-	BRLObolSceneDisplaySummary &summary)
+				 int ownerSourceIndex, const SbString &ownerSourcePath,
+				 BRLObolSceneDisplaySummary &summary)
 {
     SbString effectiveOwnerPath = ownerSourcePath;
     if (shape && effectiveOwnerPath.getLength() == 0 &&
-	    shape->ownerSourcePath.getValue().getLength() > 0)
+	shape->ownerSourcePath.getValue().getLength() > 0)
 	effectiveOwnerPath = shape->ownerSourcePath.getValue();
     scene_display_summary_fill_common(summary, nodeKind, ownerSourceIndex,
-	    effectiveOwnerPath,
-	    shape ? shape->sourcePath.getValue() : SbString(""));
+				      effectiveOwnerPath,
+				      shape ? shape->sourcePath.getValue() : SbString(""));
     if (!shape)
 	return;
 
@@ -3385,8 +3385,8 @@ scene_display_summary_fill_shape(const ShapeT *shape, int nodeKind,
 
 static void
 scene_display_summary_fill(const SoNode *node, int ownerSourceIndex,
-	const SbString &ownerSourcePath, const SbString &nodePath,
-	BRLObolSceneDisplaySummary &summary)
+			   const SbString &ownerSourcePath, const SbString &nodePath,
+			   BRLObolSceneDisplaySummary &summary)
 {
     summary = BRLObolSceneDisplaySummary();
     if (!node)
@@ -3396,8 +3396,8 @@ scene_display_summary_fill(const SoNode *node, int ownerSourceIndex,
 	const SoBRLDatabaseSource *source =
 	    static_cast<const SoBRLDatabaseSource *>(node);
 	scene_display_summary_fill_common(summary,
-		BRLObolSceneTreeSummary::NODE_DATABASE_SOURCE,
-		ownerSourceIndex, ownerSourcePath, source->path.getValue());
+					  BRLObolSceneTreeSummary::NODE_DATABASE_SOURCE,
+					  ownerSourceIndex, ownerSourcePath, source->path.getValue());
 	summary.ownerSourceInstanceKey =
 	    database_source_effective_instance_key(source);
 	summary.isDatabaseSource = TRUE;
@@ -3421,17 +3421,17 @@ scene_display_summary_fill(const SoNode *node, int ownerSourceIndex,
 
     if (node->isOfType(SoBRLVListShape::getClassTypeId())) {
 	scene_display_summary_fill_shape(
-		static_cast<const SoBRLVListShape *>(node),
-		BRLObolSceneTreeSummary::NODE_VLIST_SHAPE,
-		ownerSourceIndex, ownerSourcePath, summary);
+	    static_cast<const SoBRLVListShape *>(node),
+	    BRLObolSceneTreeSummary::NODE_VLIST_SHAPE,
+	    ownerSourceIndex, ownerSourcePath, summary);
 	return;
     }
 
     if (node->isOfType(SoBRLMeshShape::getClassTypeId())) {
 	scene_display_summary_fill_shape(
-		static_cast<const SoBRLMeshShape *>(node),
-		BRLObolSceneTreeSummary::NODE_MESH_SHAPE,
-		ownerSourceIndex, ownerSourcePath, summary);
+	    static_cast<const SoBRLMeshShape *>(node),
+	    BRLObolSceneTreeSummary::NODE_MESH_SHAPE,
+	    ownerSourceIndex, ownerSourcePath, summary);
 	return;
     }
 
@@ -3439,9 +3439,9 @@ scene_display_summary_fill(const SoNode *node, int ownerSourceIndex,
 	const SoBRLMaterialObject *object =
 	    static_cast<const SoBRLMaterialObject *>(node);
 	scene_display_summary_fill_common(summary,
-		BRLObolSceneTreeSummary::NODE_MATERIAL_OBJECT,
-		ownerSourceIndex, ownerSourcePath,
-		object->sourcePath.getValue());
+					  BRLObolSceneTreeSummary::NODE_MATERIAL_OBJECT,
+					  ownerSourceIndex, ownerSourcePath,
+					  object->sourcePath.getValue());
 	return;
     }
 
@@ -3451,8 +3451,8 @@ scene_display_summary_fill(const SoNode *node, int ownerSourceIndex,
 	const SbString retainedPath =
 	    scene_group_summary_path(node, nodePath);
 	scene_display_summary_fill_common(summary,
-		BRLObolSceneTreeSummary::NODE_GROUP,
-		ownerSourceIndex, ownerSourcePath, retainedPath);
+					  BRLObolSceneTreeSummary::NODE_GROUP,
+					  ownerSourceIndex, ownerSourcePath, retainedPath);
 	summary.hasDrawIntent = group->drawIntentValid.getValue();
 	if (summary.hasDrawIntent) {
 	    summary.intentPath = group->drawIntentPath.getValue();
@@ -3478,16 +3478,16 @@ scene_display_summary_fill(const SoNode *node, int ownerSourceIndex,
     }
 
     const int nodeKind = node->isOfType(SoGroup::getClassTypeId()) ?
-	BRLObolSceneTreeSummary::NODE_GROUP :
-	BRLObolSceneTreeSummary::NODE_OTHER;
+			 BRLObolSceneTreeSummary::NODE_GROUP :
+			 BRLObolSceneTreeSummary::NODE_OTHER;
     scene_display_summary_fill_common(summary, nodeKind, ownerSourceIndex,
-	    ownerSourcePath, nodePath);
+				      ownerSourcePath, nodePath);
 }
 
 static SbBool
 find_scene_display_summary_in_node(const SoNode *node, int &index,
-	int ownerSourceIndex, const SbString &ownerSourcePath,
-	const SbString &nodePath, BRLObolSceneDisplaySummary &summary)
+				   int ownerSourceIndex, const SbString &ownerSourcePath,
+				   const SbString &nodePath, BRLObolSceneDisplaySummary &summary)
 {
     if (!node)
 	return FALSE;
@@ -3515,7 +3515,7 @@ find_scene_display_summary_in_node(const SoNode *node, int &index,
 
     if (index == 0) {
 	scene_display_summary_fill(node, ownerSourceIndex, ownerSourcePath,
-		nodePath, summary);
+				   nodePath, summary);
 	return TRUE;
     }
     index--;
@@ -3527,7 +3527,7 @@ find_scene_display_summary_in_node(const SoNode *node, int &index,
 	    const SbString childPath =
 		scene_child_summary_path(nodePath, child);
 	    if (find_scene_display_summary_in_node(child, index,
-		    ownerSourceIndex, ownerSourcePath, childPath, summary))
+						   ownerSourceIndex, ownerSourcePath, childPath, summary))
 		return TRUE;
 	}
     }
@@ -3565,7 +3565,7 @@ SoBRLSceneController::getSceneDisplaySummary(int index,
 	int childOwnerIndex = -1;
 	SbString childOwnerPath("");
 	if (child &&
-		child->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
+	    child->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
 	    const SoBRLDatabaseSource *source =
 		static_cast<const SoBRLDatabaseSource *>(child);
 	    childOwnerIndex = sourceIndex;
@@ -3575,7 +3575,7 @@ SoBRLSceneController::getSceneDisplaySummary(int index,
 
 	const SbString childPath = scene_child_summary_path("/", child);
 	if (find_scene_display_summary_in_node(child, index,
-		childOwnerIndex, childOwnerPath, childPath, summary))
+					       childOwnerIndex, childOwnerPath, childPath, summary))
 	    return TRUE;
     }
 
@@ -3584,7 +3584,7 @@ SoBRLSceneController::getSceneDisplaySummary(int index,
 
 static void
 scene_material_summary_from_display(const BRLObolSceneDisplaySummary &display,
-	BRLObolSceneMaterialSummary &summary)
+				    BRLObolSceneMaterialSummary &summary)
 {
     summary = BRLObolSceneMaterialSummary();
     if (!display.valid)
@@ -3693,9 +3693,9 @@ scene_bounds_transform_box(const SbBox3f &bounds, const SbMatrix &matrix)
 	for (int yi = 0; yi < 2; yi++) {
 	    for (int zi = 0; zi < 2; zi++) {
 		const SbVec3f corner(
-			xi ? bmax[0] : bmin[0],
-			yi ? bmax[1] : bmin[1],
-			zi ? bmax[2] : bmin[2]);
+		    xi ? bmax[0] : bmin[0],
+		    yi ? bmax[1] : bmin[1],
+		    zi ? bmax[2] : bmin[2]);
 		SbVec3f transformedCorner;
 		matrix.multVecMatrix(corner, transformedCorner);
 		transformed.extendBy(transformedCorner);
@@ -3713,25 +3713,25 @@ scene_node_is_overlay_intent(const SoNode *node)
 	return FALSE;
     if (node->isOfType(SoBRLSceneGroup::getClassTypeId()))
 	return static_cast<const SoBRLSceneGroup *>(node)->
-	    overlayIntent.getValue();
+	       overlayIntent.getValue();
     if (node->isOfType(SoBRLVListShape::getClassTypeId()))
 	return static_cast<const SoBRLVListShape *>(node)->
-	    overlayIntent.getValue();
+	       overlayIntent.getValue();
     if (node->isOfType(SoBRLMeshShape::getClassTypeId()))
 	return static_cast<const SoBRLMeshShape *>(node)->
-	    overlayIntent.getValue();
+	       overlayIntent.getValue();
     return FALSE;
 }
 
 static SbBool
 scene_database_source_uses_realized_placement(
-	const SoBRLDatabaseSource *source)
+    const SoBRLDatabaseSource *source)
 {
     if (!source ||
-	    source->realizationStatus.getValue() !=
-	    SoBRLDatabaseSource::REALIZED ||
-	    (source->realizationRoleFlags.getValue() &
-	     SoBRLDatabaseSource::REALIZATION_ROLE_EXTERNAL))
+	source->realizationStatus.getValue() !=
+	SoBRLDatabaseSource::REALIZED ||
+	(source->realizationRoleFlags.getValue() &
+	 SoBRLDatabaseSource::REALIZATION_ROLE_EXTERNAL))
 	return FALSE;
 
     return (source->getRealizedShapeCount() > 0 ||
@@ -3741,7 +3741,7 @@ scene_database_source_uses_realized_placement(
 
 static SbBool
 scene_bounds_for_node_transformed(const SoNode *node, const SbMatrix &matrix,
-	SbBox3f &bounds, SbBool includeOverlays)
+				  SbBox3f &bounds, SbBool includeOverlays)
 {
     bounds.makeEmpty();
     if (!node)
@@ -3785,14 +3785,14 @@ scene_bounds_for_node_transformed(const SoNode *node, const SbMatrix &matrix,
 		}
 	    }
 	    if (!hasSourceTransform &&
-		    !scene_database_source_uses_realized_placement(source) &&
-		    source->drawMatrixValid.getValue())
+		!scene_database_source_uses_realized_placement(source) &&
+		source->drawMatrixValid.getValue())
 		childMatrix.multRight(source->drawMatrix.getValue());
 	}
 	for (int i = 0; i < group->getNumChildren(); i++) {
 	    const SoNode *child = group->getChild(i);
 	    if (child &&
-		    child->isOfType(SoMatrixTransform::getClassTypeId())) {
+		child->isOfType(SoMatrixTransform::getClassTypeId())) {
 		const SoMatrixTransform *transform =
 		    static_cast<const SoMatrixTransform *>(child);
 		childMatrix.multRight(transform->matrix.getValue());
@@ -3800,7 +3800,7 @@ scene_bounds_for_node_transformed(const SoNode *node, const SbMatrix &matrix,
 	    }
 	    SbBox3f childBounds;
 	    if (scene_bounds_for_node_transformed(child, childMatrix,
-		    childBounds, includeOverlays)) {
+						  childBounds, includeOverlays)) {
 		bounds.extendBy(childBounds);
 		valid = TRUE;
 	    }
@@ -3829,7 +3829,7 @@ scene_bounds_for_node_transformed(const SoNode *node, const SbMatrix &matrix,
 
 static SbBool
 scene_bounds_for_node(const SoNode *node, SbBox3f &bounds,
-	SbBool includeOverlays)
+		      SbBool includeOverlays)
 {
     return scene_bounds_for_node_transformed(node, SbMatrix::identity(),
 	    bounds, includeOverlays);
@@ -3837,8 +3837,8 @@ scene_bounds_for_node(const SoNode *node, SbBox3f &bounds,
 
 static void
 scene_bounds_summary_fill(const SoNode *node, int ownerSourceIndex,
-	const SbString &ownerSourcePath, const SbString &nodePath,
-	BRLObolSceneBoundsSummary &summary)
+			  const SbString &ownerSourcePath, const SbString &nodePath,
+			  BRLObolSceneBoundsSummary &summary)
 {
     summary = BRLObolSceneBoundsSummary();
     if (!node)
@@ -3856,14 +3856,14 @@ scene_bounds_summary_fill(const SoNode *node, int ownerSourceIndex,
     summary.ownerSourceInstanceKey =
 	scene_shape_owner_source_instance_key(node);
     if (summary.ownerSourceInstanceKey.getLength() == 0 &&
-	    node->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
+	node->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
 	const SoBRLDatabaseSource *source =
 	    static_cast<const SoBRLDatabaseSource *>(node);
 	summary.ownerSourceInstanceKey =
 	    database_source_effective_instance_key(source);
     }
     summary.path = summary.nodeKind == BRLObolSceneTreeSummary::NODE_GROUP ?
-	scene_group_summary_path(node, nodePath) : scene_bounds_node_path(node);
+		   scene_group_summary_path(node, nodePath) : scene_bounds_node_path(node);
     summary.boundsValid = scene_bounds_for_node(node, summary.bounds, TRUE);
 }
 
@@ -3894,8 +3894,8 @@ SoBRLSceneController::getSceneSubtreeBounds(const char *nodePath,
 
 static SbBool
 find_scene_bounds_summary_in_node(const SoNode *node, int &index,
-	int ownerSourceIndex, const SbString &ownerSourcePath,
-	const SbString &nodePath, BRLObolSceneBoundsSummary &summary)
+				  int ownerSourceIndex, const SbString &ownerSourcePath,
+				  const SbString &nodePath, BRLObolSceneBoundsSummary &summary)
 {
     if (!node)
 	return FALSE;
@@ -3920,7 +3920,7 @@ find_scene_bounds_summary_in_node(const SoNode *node, int &index,
 
     if (index == 0) {
 	scene_bounds_summary_fill(node, ownerSourceIndex, ownerSourcePath,
-		nodePath, summary);
+				  nodePath, summary);
 	return TRUE;
     }
     index--;
@@ -3932,7 +3932,7 @@ find_scene_bounds_summary_in_node(const SoNode *node, int &index,
 	    const SbString childPath =
 		scene_child_summary_path(nodePath, child);
 	    if (find_scene_bounds_summary_in_node(child, index,
-		    ownerSourceIndex, ownerSourcePath, childPath, summary))
+						  ownerSourceIndex, ownerSourcePath, childPath, summary))
 		return TRUE;
 	}
     }
@@ -3970,7 +3970,7 @@ SoBRLSceneController::getSceneBoundsSummary(int index,
 	int childOwnerIndex = -1;
 	SbString childOwnerPath("");
 	if (child &&
-		child->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
+	    child->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
 	    const SoBRLDatabaseSource *source =
 		static_cast<const SoBRLDatabaseSource *>(child);
 	    childOwnerIndex = sourceIndex;
@@ -3980,7 +3980,7 @@ SoBRLSceneController::getSceneBoundsSummary(int index,
 
 	const SbString childPath = scene_child_summary_path("/", child);
 	if (find_scene_bounds_summary_in_node(child, index,
-		childOwnerIndex, childOwnerPath, childPath, summary))
+					      childOwnerIndex, childOwnerPath, childPath, summary))
 	    return TRUE;
     }
 

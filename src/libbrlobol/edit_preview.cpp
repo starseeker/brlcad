@@ -135,8 +135,8 @@ SbBool
 SoBRLEditPreview::needsRealization(void) const
 {
     return this->stale.getValue() ||
-	this->realizedSourceRevision.getValue() != this->sourceRevision.getValue() ||
-	this->realizedInputsRevision.getValue() != this->inputsRevision.getValue();
+	   this->realizedSourceRevision.getValue() != this->sourceRevision.getValue() ||
+	   this->realizedInputsRevision.getValue() != this->inputsRevision.getValue();
 }
 
 void
@@ -151,9 +151,9 @@ SoBRLEditPreview::clearPreview(void)
 
 SoBRLVListShape *
 SoBRLEditPreview::appendLineSet(const SbString &identity,
-	const SbVec3f *points,
-	const int32_t *commands,
-	int count)
+				const SbVec3f *points,
+				const int32_t *commands,
+				int count)
 {
     if (!points || !commands || count <= 0) {
 	this->previewStatus = FAILED;
@@ -199,9 +199,9 @@ SoBRLEditPreview::markCurrent(void)
 
 SoBRLVListShape *
 SoBRLEditPreview::setLineSet(const SbString &identity,
-	const SbVec3f *points,
-	const int32_t *commands,
-	int count)
+			     const SbVec3f *points,
+			     const int32_t *commands,
+			     int count)
 {
     this->removeAllChildren();
 
@@ -216,10 +216,10 @@ SoBRLEditPreview::setLineSet(const SbString &identity,
 
 SoBRLVListShape *
 SoBRLEditPreview::setTransformedLineSet(const SbString &identity,
-	const SbMatrix &matrix,
-	const SbVec3f *points,
-	const int32_t *commands,
-	int count)
+					const SbMatrix &matrix,
+					const SbVec3f *points,
+					const int32_t *commands,
+					int count)
 {
     this->removeAllChildren();
 

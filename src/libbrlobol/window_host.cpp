@@ -147,7 +147,7 @@ positive_zoom(int xzoom, int yzoom)
 
 static BRLObolFramebufferAttachment *
 find_attachment(std::vector<BRLObolFramebufferAttachment> &attachments,
-	imgstream_fb_t *fb)
+		imgstream_fb_t *fb)
 {
     for (size_t i = 0; i < attachments.size(); i++) {
 	if (attachments[i].fb == fb)
@@ -158,7 +158,7 @@ find_attachment(std::vector<BRLObolFramebufferAttachment> &attachments,
 
 static const BRLObolFramebufferAttachment *
 find_attachment_const(const std::vector<BRLObolFramebufferAttachment> &attachments,
-	imgstream_fb_t *fb)
+		      imgstream_fb_t *fb)
 {
     for (size_t i = 0; i < attachments.size(); i++) {
 	if (attachments[i].fb == fb)
@@ -220,7 +220,7 @@ BRLObolWindowHost::getDesc(void) const
 
 void
 BRLObolWindowHost::attachController(BRLObolViewController *controller,
-	SbBool takeOwnership)
+				    SbBool takeOwnership)
 {
     this->close();
     if (this->p->ownsController)
@@ -237,7 +237,7 @@ BRLObolWindowHost::getController(void) const
 
 int
 BRLObolWindowHost::handleInputEvent(const BRLObolInputEvent *event,
-	const BRLObolInputProfile *profile)
+				    const BRLObolInputProfile *profile)
 {
     if (!event)
 	return -1;
@@ -261,7 +261,7 @@ BRLObolWindowHost::handleInputEvent(const BRLObolInputEvent *event,
 
 int
 BRLObolWindowHost::applyInputAction(BRLObolInputAction action,
-	const BRLObolInputEvent *UNUSED(event))
+				    const BRLObolInputEvent *UNUSED(event))
 {
     if (action == BRLOBOL_ACTION_NONE)
 	return 0;
@@ -286,7 +286,7 @@ BRLObolWindowHost::pollRate(void) const
 
 int
 BRLObolWindowHost::openFramebuffer(imgstream_fb_t *fb,
-	const struct imgstream_fb_spec_info *info)
+				   const struct imgstream_fb_spec_info *info)
 {
     if (!fb)
 	return -1;
@@ -297,9 +297,9 @@ BRLObolWindowHost::openFramebuffer(imgstream_fb_t *fb,
     desc.width = (unsigned int)std::max<size_t>(imgstream_fb_width(fb), 1);
     desc.height = (unsigned int)std::max<size_t>(imgstream_fb_height(fb), 1);
     desc.mode = (info && info->display == IMGSTREAM_FB_DISPLAY_SWRAST) ?
-	BRLOBOL_WINDOW_HEADLESS : BRLOBOL_WINDOW_TOPLEVEL;
+		BRLOBOL_WINDOW_HEADLESS : BRLOBOL_WINDOW_TOPLEVEL;
     desc.backend = info ? backend_from_fb_display(info->display) :
-	BRLOBOL_WINDOW_BACKEND_AUTO;
+		   BRLOBOL_WINDOW_BACKEND_AUTO;
     desc.visible = desc.mode == BRLOBOL_WINDOW_TOPLEVEL;
     if (info && info->host && info->host_len)
 	desc.display = SbString(info->host, 0, (int)info->host_len - 1);
@@ -336,7 +336,7 @@ BRLObolWindowHost::openFramebuffer(imgstream_fb_t *fb,
     viewport->position.setValue(0.0f, 0.0f);
     viewport->size.setValue((float)desc.width, (float)desc.height);
     viewport->sourceCenter.setValue((float)desc.width * 0.5f,
-	    (float)desc.height * 0.5f);
+				    (float)desc.height * 0.5f);
     viewport->sourceZoom = 1.0f;
     viewport->cursorVisible = FALSE;
     if (viewport->rebuildGeometry() != 0) {
@@ -385,7 +385,7 @@ BRLObolWindowHost::flushFramebuffer(imgstream_fb_t *fb)
 	return -1;
 
     if (attachment->source->refreshFromStream() != 0 ||
-	    attachment->viewport->syncFromSource() != 0)
+	attachment->viewport->syncFromSource() != 0)
 	return -1;
     if (this->p->controller)
 	this->p->controller->requestRender("fb-flush");
@@ -401,8 +401,8 @@ BRLObolWindowHost::resetFramebuffer(imgstream_fb_t *fb)
 	return -1;
 
     attachment->viewport->sourceCenter.setValue(
-	    (float)imgstream_fb_width(fb) * 0.5f,
-	    (float)imgstream_fb_height(fb) * 0.5f);
+	(float)imgstream_fb_width(fb) * 0.5f,
+	(float)imgstream_fb_height(fb) * 0.5f);
     attachment->viewport->sourceZoom = 1.0f;
     attachment->viewport->cursorVisible = FALSE;
     if (attachment->viewport->syncFromSource() != 0)
@@ -434,7 +434,7 @@ BRLObolWindowHost::setFramebufferViewport(imgstream_fb_t *fb,
 
     if (this->p->controller)
 	this->p->controller->setViewportSize((unsigned int)width,
-		(unsigned int)height);
+					     (unsigned int)height);
     attachment->viewport->position.setValue((float)left, (float)top);
     attachment->viewport->size.setValue((float)width, (float)height);
     if (attachment->viewport->syncFromSource() != 0)
@@ -446,7 +446,7 @@ BRLObolWindowHost::setFramebufferViewport(imgstream_fb_t *fb,
 
 int
 BRLObolWindowHost::setFramebufferView(imgstream_fb_t *fb,
-	const struct imgstream_fb_view *view)
+				      const struct imgstream_fb_view *view)
 {
     BRLObolFramebufferAttachment *attachment =
 	find_attachment(this->p->framebuffers, fb);
@@ -454,7 +454,7 @@ BRLObolWindowHost::setFramebufferView(imgstream_fb_t *fb,
 	return -1;
 
     attachment->viewport->sourceCenter.setValue((float)view->xcenter,
-	    (float)view->ycenter);
+				      (float)view->ycenter);
     attachment->viewport->sourceZoom = positive_zoom(view->xzoom, view->yzoom);
     if (this->p->controller)
 	this->p->controller->requestRender("fb-view");
@@ -463,7 +463,7 @@ BRLObolWindowHost::setFramebufferView(imgstream_fb_t *fb,
 
 int
 BRLObolWindowHost::setFramebufferCursor(imgstream_fb_t *fb,
-	const struct imgstream_fb_cursor *cursor)
+					const struct imgstream_fb_cursor *cursor)
 {
     BRLObolFramebufferAttachment *attachment =
 	find_attachment(this->p->framebuffers, fb);
@@ -474,7 +474,7 @@ BRLObolWindowHost::setFramebufferCursor(imgstream_fb_t *fb,
     attachment->viewport->cursorImagePosition.setValue((float)cursor->x,
 	    (float)cursor->y);
     attachment->viewport->cursorShape = cursor->mode ?
-	SoBRLViewportImage::CURSOR_DEFAULT : SoBRLViewportImage::CURSOR_NONE;
+					SoBRLViewportImage::CURSOR_DEFAULT : SoBRLViewportImage::CURSOR_NONE;
     if (this->p->controller)
 	this->p->controller->requestRender("fb-cursor");
     return 0;
@@ -492,7 +492,7 @@ BRLObolWindowHost::setFramebufferScreenCursor(imgstream_fb_t *fb,
     attachment->viewport->cursorVisible = mode ? TRUE : FALSE;
     attachment->viewport->cursorImagePosition.setValue((float)x, (float)y);
     attachment->viewport->cursorShape = mode ?
-	SoBRLViewportImage::CURSOR_DEFAULT : SoBRLViewportImage::CURSOR_NONE;
+					SoBRLViewportImage::CURSOR_DEFAULT : SoBRLViewportImage::CURSOR_NONE;
     if (this->p->controller)
 	this->p->controller->requestRender("fb-screen-cursor");
     return 0;
@@ -513,7 +513,7 @@ BRLObolWindowHost::setFramebufferCursorShape(imgstream_fb_t *fb,
 	attachment->viewport->cursorShape = SoBRLViewportImage::CURSOR_CUSTOM;
     } else {
 	attachment->viewport->cursorShape = attachment->viewport->cursorVisible.getValue() ?
-	    SoBRLViewportImage::CURSOR_DEFAULT : SoBRLViewportImage::CURSOR_NONE;
+					    SoBRLViewportImage::CURSOR_DEFAULT : SoBRLViewportImage::CURSOR_NONE;
     }
     if (this->p->controller)
 	this->p->controller->requestRender("fb-cursor-shape");
@@ -544,8 +544,8 @@ BRLObolWindowHost::getFramebufferViewportImage(imgstream_fb_t *fb) const
 
 static int
 brlobol_fb_host_open(imgstream_fb_t *fb,
-	const struct imgstream_fb_spec_info *info,
-	void *data)
+		     const struct imgstream_fb_spec_info *info,
+		     void *data)
 {
     BRLObolWindowHost *host = static_cast<BRLObolWindowHost *>(data);
     return host ? host->openFramebuffer(fb, info) : -1;
@@ -575,8 +575,8 @@ brlobol_fb_host_reset(imgstream_fb_t *fb, void *data)
 
 static int
 brlobol_fb_host_viewport(imgstream_fb_t *fb,
-	int left, int top, int right, int bottom,
-	void *data)
+			 int left, int top, int right, int bottom,
+			 void *data)
 {
     BRLObolWindowHost *host = static_cast<BRLObolWindowHost *>(data);
     return host ? host->setFramebufferViewport(fb, left, top, right, bottom) : -1;
@@ -584,8 +584,8 @@ brlobol_fb_host_viewport(imgstream_fb_t *fb,
 
 static int
 brlobol_fb_host_view(imgstream_fb_t *fb,
-	const struct imgstream_fb_view *view,
-	void *data)
+		     const struct imgstream_fb_view *view,
+		     void *data)
 {
     BRLObolWindowHost *host = static_cast<BRLObolWindowHost *>(data);
     return host ? host->setFramebufferView(fb, view) : -1;
@@ -593,8 +593,8 @@ brlobol_fb_host_view(imgstream_fb_t *fb,
 
 static int
 brlobol_fb_host_cursor(imgstream_fb_t *fb,
-	const struct imgstream_fb_cursor *cursor,
-	void *data)
+		       const struct imgstream_fb_cursor *cursor,
+		       void *data)
 {
     BRLObolWindowHost *host = static_cast<BRLObolWindowHost *>(data);
     return host ? host->setFramebufferCursor(fb, cursor) : -1;
@@ -602,8 +602,8 @@ brlobol_fb_host_cursor(imgstream_fb_t *fb,
 
 static int
 brlobol_fb_host_scursor(imgstream_fb_t *fb,
-	int mode, int x, int y,
-	void *data)
+			int mode, int x, int y,
+			void *data)
 {
     BRLObolWindowHost *host = static_cast<BRLObolWindowHost *>(data);
     return host ? host->setFramebufferScreenCursor(fb, mode, x, y) : -1;
@@ -611,9 +611,9 @@ brlobol_fb_host_scursor(imgstream_fb_t *fb,
 
 static int
 brlobol_fb_host_setcursor(imgstream_fb_t *fb,
-	const unsigned char *bits, int xbits, int ybits,
-	int xorig, int yorig,
-	void *data)
+			  const unsigned char *bits, int xbits, int ybits,
+			  int xorig, int yorig,
+			  void *data)
 {
     BRLObolWindowHost *host = static_cast<BRLObolWindowHost *>(data);
     return host ? host->setFramebufferCursorShape(fb, bits, xbits, ybits,

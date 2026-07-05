@@ -94,7 +94,7 @@ BRLObolLodProxy::isValid(void) const
 	return bounds.isEmpty() ? FALSE : TRUE;
     if (kind == BRLOBOL_LOD_PROXY_OBB)
 	return halfExtents[0] > 0.0f && halfExtents[1] > 0.0f &&
-	    halfExtents[2] > 0.0f ? TRUE : FALSE;
+	       halfExtents[2] > 0.0f ? TRUE : FALSE;
     return FALSE;
 }
 
@@ -136,8 +136,8 @@ SbBool
 BRLObolLodGeometryHandle::isValid(void) const
 {
     return kind != BRLOBOL_LOD_GEOMETRY_NONE &&
-	(cacheKey.isValid() || providerToken != 0 ||
-	 providerId.getLength() > 0) ? TRUE : FALSE;
+	   (cacheKey.isValid() || providerToken != 0 ||
+	    providerId.getLength() > 0) ? TRUE : FALSE;
 }
 
 BRLObolLodMeshPayload::BRLObolLodMeshPayload(void)
@@ -160,11 +160,11 @@ BRLObolLodMeshPayload::isValid(void) const
 {
     const size_t faceCount = coordIndex.size() / 3;
     return !points.empty() && coordIndex.size() >= 3 &&
-	coordIndex.size() % 3 == 0 &&
-	(normals.empty() || normals.size() == coordIndex.size()) &&
-	(faceIndex.empty() || faceIndex.size() == faceCount) &&
-	(vertexIndex.empty() || vertexIndex.size() == points.size()) ?
-	TRUE : FALSE;
+	   coordIndex.size() % 3 == 0 &&
+	   (normals.empty() || normals.size() == coordIndex.size()) &&
+	   (faceIndex.empty() || faceIndex.size() == faceCount) &&
+	   (vertexIndex.empty() || vertexIndex.size() == points.size()) ?
+	   TRUE : FALSE;
 }
 
 BRLObolLodRequest::BRLObolLodRequest(void)
@@ -195,7 +195,7 @@ BRLObolLodRequest::clear(void)
 
 void
 BRLObolLodRequest::addProviderParam(const SbString &name,
-	const SbString &value)
+				    const SbString &value)
 {
     BRLObolLodProviderParam param;
     param.name = name;
@@ -234,8 +234,8 @@ BRLObolLodResult::clear(void)
 
 void
 BRLObolLodResult::addDependency(const SbString &objectPath,
-	const SbString &objectName, uint64_t sourceRevision,
-	uint64_t sourceContentHash, int requiredQualityTier, SbBool optional)
+				const SbString &objectName, uint64_t sourceRevision,
+				uint64_t sourceContentHash, int requiredQualityTier, SbBool optional)
 {
     BRLObolLodDependency dependency;
 
@@ -260,7 +260,7 @@ BRLObolLodResult::addAttribute(const SbString &name, const SbString &value)
 
 static void
 append_string_field(std::ostringstream &out, const char *name,
-	const SbString &value)
+		    const SbString &value)
 {
     const char *str = value.getString();
     size_t len = str ? strlen(str) : 0;
@@ -281,7 +281,7 @@ append_int_field(std::ostringstream &out, const char *name, int value)
 
 static void
 append_bounds_field(std::ostringstream &out, const char *name,
-	const SbBox3f &bounds)
+		    const SbBox3f &bounds)
 {
     out << name << '=';
     if (bounds.isEmpty()) {
@@ -298,7 +298,7 @@ append_bounds_field(std::ostringstream &out, const char *name,
 
 static bool
 param_less(const BRLObolLodProviderParam &a,
-	const BRLObolLodProviderParam &b)
+	   const BRLObolLodProviderParam &b)
 {
     int name_cmp = strcmp(a.name.getString(), b.name.getString());
     if (name_cmp != 0)
@@ -330,7 +330,7 @@ brlobol_lod_cache_key(const BRLObolLodRequest &request)
     append_uint_field(out, "face_count", request.sourceCounts.faceCount);
     append_uint_field(out, "point_count", request.sourceCounts.pointCount);
     append_uint_field(out, "original_point_count",
-	    request.sourceCounts.originalPointCount);
+		      request.sourceCounts.originalPointCount);
     append_uint_field(out, "normal_count", request.sourceCounts.normalCount);
     append_uint_field(out, "line_count", request.sourceCounts.lineCount);
     append_uint_field(out, "byte_count", request.sourceCounts.byteCount);
@@ -338,7 +338,7 @@ brlobol_lod_cache_key(const BRLObolLodRequest &request)
     std::vector<BRLObolLodProviderParam> params = request.providerParams;
     std::sort(params.begin(), params.end(), param_less);
     append_uint_field(out, "provider_param_count",
-	    static_cast<uint64_t>(params.size()));
+		      static_cast<uint64_t>(params.size()));
     for (size_t i = 0; i < params.size(); i++) {
 	append_string_field(out, "provider_param_name", params[i].name);
 	append_string_field(out, "provider_param_value", params[i].value);
@@ -355,26 +355,26 @@ brlobol_lod_mesh_payload_from_rt_mesh_data(BRLObolLodMeshPayload &payload,
     payload.clear();
 
     if (!data.faces || !data.points || data.face_count == 0 ||
-	    data.point_count == 0)
+	data.point_count == 0)
 	return FALSE;
 
     if (data.point_count >
-	    static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
-	    data.face_count >
-	    static_cast<size_t>(std::numeric_limits<int32_t>::max()) / 3)
+	static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
+	data.face_count >
+	static_cast<size_t>(std::numeric_limits<int32_t>::max()) / 3)
 	return FALSE;
 
     size_t index_count = data.face_count * 3;
     if ((data.normals && data.normal_count != index_count) ||
-	    (!data.normals && data.normal_count != 0))
+	(!data.normals && data.normal_count != 0))
 	return FALSE;
 
     payload.points.reserve(data.point_count);
     for (size_t i = 0; i < data.point_count; i++) {
 	payload.points.push_back(SbVec3f(
-		static_cast<float>(data.points[i][X]),
-		static_cast<float>(data.points[i][Y]),
-		static_cast<float>(data.points[i][Z])));
+				     static_cast<float>(data.points[i][X]),
+				     static_cast<float>(data.points[i][Y]),
+				     static_cast<float>(data.points[i][Z])));
     }
 
     payload.coordIndex.reserve(index_count);
@@ -391,9 +391,9 @@ brlobol_lod_mesh_payload_from_rt_mesh_data(BRLObolLodMeshPayload &payload,
 	payload.normals.reserve(index_count);
 	for (size_t i = 0; i < index_count; i++) {
 	    payload.normals.push_back(SbVec3f(
-		    static_cast<float>(data.normals[i][X]),
-		    static_cast<float>(data.normals[i][Y]),
-		    static_cast<float>(data.normals[i][Z])));
+					  static_cast<float>(data.normals[i][X]),
+					  static_cast<float>(data.normals[i][Y]),
+					  static_cast<float>(data.normals[i][Z])));
 	}
     }
 
@@ -402,20 +402,20 @@ brlobol_lod_mesh_payload_from_rt_mesh_data(BRLObolLodMeshPayload &payload,
 
 SbBool
 brlobol_lod_result_matches_request(const BRLObolLodResult &result,
-	const BRLObolLodRequest &request)
+				   const BRLObolLodRequest &request)
 {
     BRLObolLodCacheKey expected = brlobol_lod_cache_key(request);
     BRLObolLodCacheKey actual = result.cacheKey.isValid() ?
-	result.cacheKey : brlobol_lod_cache_key(result.request);
+				result.cacheKey : brlobol_lod_cache_key(result.request);
 
     return strcmp(expected.value.getString(), actual.value.getString()) == 0 ?
-	TRUE : FALSE;
+	   TRUE : FALSE;
 }
 
 BRLObolLodResult
 brlobol_lod_result_from_rt_mesh_info(const BRLObolLodRequest &request,
-	const struct rt_mesh_lod_info &info,
-	const struct rt_mesh_lod_cache_status *status)
+				     const struct rt_mesh_lod_info &info,
+				     const struct rt_mesh_lod_cache_status *status)
 {
     BRLObolLodResult result;
 
@@ -425,12 +425,12 @@ brlobol_lod_result_from_rt_mesh_info(const BRLObolLodRequest &request,
     result.qualityTier = request.qualityTier;
     result.providerStatus = BRLOBOL_LOD_PROVIDER_READY;
     result.bounds = SbBox3f(
-	    SbVec3f(static_cast<float>(info.bmin[X]),
-		static_cast<float>(info.bmin[Y]),
-		static_cast<float>(info.bmin[Z])),
-	    SbVec3f(static_cast<float>(info.bmax[X]),
-		static_cast<float>(info.bmax[Y]),
-		static_cast<float>(info.bmax[Z])));
+			SbVec3f(static_cast<float>(info.bmin[X]),
+				static_cast<float>(info.bmin[Y]),
+				static_cast<float>(info.bmin[Z])),
+			SbVec3f(static_cast<float>(info.bmax[X]),
+				static_cast<float>(info.bmax[Y]),
+				static_cast<float>(info.bmax[Z])));
     result.counts.faceCount = info.face_count;
     result.counts.pointCount = info.point_count;
     result.counts.originalPointCount = info.point_orig_count;
@@ -467,7 +467,7 @@ brlobol_lod_result_from_rt_mesh_info(const BRLObolLodRequest &request,
 
 static BRLObolLodResult
 stage_result_base(const BRLObolLodRequest &request, int resultKind,
-	int qualityTier)
+		  int qualityTier)
 {
     BRLObolLodResult result;
 
@@ -483,10 +483,10 @@ stage_result_base(const BRLObolLodRequest &request, int resultKind,
 
 BRLObolLodResult
 brlobol_lod_directory_result(const BRLObolLodRequest &request,
-	const std::vector<BRLObolLodDependency> &dependencies)
+			     const std::vector<BRLObolLodDependency> &dependencies)
 {
     BRLObolLodResult result = stage_result_base(request,
-	    BRLOBOL_LOD_RESULT_DIRECTORY, BRLOBOL_LOD_QUALITY_METADATA);
+			      BRLOBOL_LOD_RESULT_DIRECTORY, BRLOBOL_LOD_QUALITY_METADATA);
 
     result.dependencies = dependencies;
     return result;
@@ -494,10 +494,10 @@ brlobol_lod_directory_result(const BRLObolLodRequest &request,
 
 BRLObolLodResult
 brlobol_lod_attributes_result(const BRLObolLodRequest &request,
-	const std::vector<BRLObolLodAttribute> &attributes)
+			      const std::vector<BRLObolLodAttribute> &attributes)
 {
     BRLObolLodResult result = stage_result_base(request,
-	    BRLOBOL_LOD_RESULT_ATTRIBUTES, BRLOBOL_LOD_QUALITY_ATTRIBUTES);
+			      BRLOBOL_LOD_RESULT_ATTRIBUTES, BRLOBOL_LOD_QUALITY_ATTRIBUTES);
 
     result.attributes = attributes;
     return result;
@@ -505,10 +505,10 @@ brlobol_lod_attributes_result(const BRLObolLodRequest &request,
 
 BRLObolLodResult
 brlobol_lod_aabb_result(const BRLObolLodRequest &request,
-	const SbBox3f &bounds, const BRLObolLodCounts *counts)
+			const SbBox3f &bounds, const BRLObolLodCounts *counts)
 {
     BRLObolLodResult result = stage_result_base(request,
-	    BRLOBOL_LOD_RESULT_AABB, BRLOBOL_LOD_QUALITY_PROXY);
+			      BRLOBOL_LOD_RESULT_AABB, BRLOBOL_LOD_QUALITY_PROXY);
 
     result.bounds = bounds;
     result.proxy.kind = BRLOBOL_LOD_PROXY_AABB;
@@ -520,10 +520,10 @@ brlobol_lod_aabb_result(const BRLObolLodRequest &request,
 
 BRLObolLodResult
 brlobol_lod_proxy_result(const BRLObolLodRequest &request,
-	const BRLObolLodProxy &proxy, const BRLObolLodCounts *counts)
+			 const BRLObolLodProxy &proxy, const BRLObolLodCounts *counts)
 {
     BRLObolLodResult result = stage_result_base(request,
-	    BRLOBOL_LOD_RESULT_PROXY, BRLOBOL_LOD_QUALITY_PROXY);
+			      BRLOBOL_LOD_RESULT_PROXY, BRLOBOL_LOD_QUALITY_PROXY);
 
     result.proxy = proxy;
     result.bounds = proxy.bounds;

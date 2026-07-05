@@ -48,7 +48,7 @@ view_lod_shape_primary_key(const SoBRLMeshShape *shape)
 	return std::string();
 
     std::string key = view_lod_string_key("identity",
-	    shape->sourceIdentity.getValue());
+					  shape->sourceIdentity.getValue());
     if (!key.empty())
 	return key;
 
@@ -67,7 +67,7 @@ view_lod_shape_primary_key(const SoBRLMeshShape *shape)
 
 static void
 view_lod_append_unique_key(std::vector<std::string> &keys,
-	const std::string &key)
+			   const std::string &key)
 {
     if (key.empty())
 	return;
@@ -82,36 +82,36 @@ view_lod_append_unique_key(std::vector<std::string> &keys,
 
 static void
 view_lod_shape_keys(std::vector<std::string> &keys,
-	const SoBRLMeshShape *shape)
+		    const SoBRLMeshShape *shape)
 {
     if (!shape)
 	return;
 
     view_lod_append_unique_key(keys, view_lod_string_key("identity",
-	    shape->sourceIdentity.getValue()));
+			       shape->sourceIdentity.getValue()));
     view_lod_append_unique_key(keys, view_lod_string_key("path",
-	    shape->sourcePath.getValue()));
+			       shape->sourcePath.getValue()));
     if (shape->sourcePath.getValue().getLength() > 1 &&
-	    shape->sourcePath.getValue().getString()[0] == '/')
+	shape->sourcePath.getValue().getString()[0] == '/')
 	view_lod_append_unique_key(keys, std::string("path:") +
-		(shape->sourcePath.getValue().getString() + 1));
+				   (shape->sourcePath.getValue().getString() + 1));
     view_lod_append_unique_key(keys, view_lod_string_key("name",
-	    shape->sourceName.getValue()));
+			       shape->sourceName.getValue()));
     view_lod_append_unique_key(keys, view_lod_shape_primary_key(shape));
 }
 
 static void
 view_lod_result_keys(std::vector<std::string> &keys,
-	const BRLObolLodResult &result)
+		     const BRLObolLodResult &result)
 {
     view_lod_append_unique_key(keys, view_lod_string_key("path",
-	    result.request.objectPath));
+			       result.request.objectPath));
     if (result.request.objectPath.getLength() > 1 &&
-	    result.request.objectPath.getString()[0] == '/')
+	result.request.objectPath.getString()[0] == '/')
 	view_lod_append_unique_key(keys, std::string("path:") +
-		(result.request.objectPath.getString() + 1));
+				   (result.request.objectPath.getString() + 1));
     view_lod_append_unique_key(keys, view_lod_string_key("name",
-	    result.request.objectName));
+			       result.request.objectName));
 }
 
 BRLObolViewLodState::MeshPayload::MeshPayload(void) :
@@ -136,10 +136,10 @@ size_t
 BRLObolViewLodState::MeshPayload::estimateBytes(void) const
 {
     return this->mesh.points.size() * sizeof(SbVec3f) +
-	this->mesh.normals.size() * sizeof(SbVec3f) +
-	this->mesh.coordIndex.size() * sizeof(int32_t) +
-	this->mesh.faceIndex.size() * sizeof(int32_t) +
-	this->mesh.vertexIndex.size() * sizeof(int32_t);
+	   this->mesh.normals.size() * sizeof(SbVec3f) +
+	   this->mesh.coordIndex.size() * sizeof(int32_t) +
+	   this->mesh.faceIndex.size() * sizeof(int32_t) +
+	   this->mesh.vertexIndex.size() * sizeof(int32_t);
 }
 
 int
@@ -168,9 +168,9 @@ BRLObolViewLodState::MeshPayload::getTriangleVertexIndices(int triangleIndex,
     indexB = this->mesh.coordIndex[base + 1];
     indexC = this->mesh.coordIndex[base + 2];
     if (indexA < 0 || indexB < 0 || indexC < 0 ||
-	    static_cast<size_t>(indexA) >= this->mesh.points.size() ||
-	    static_cast<size_t>(indexB) >= this->mesh.points.size() ||
-	    static_cast<size_t>(indexC) >= this->mesh.points.size()) {
+	static_cast<size_t>(indexA) >= this->mesh.points.size() ||
+	static_cast<size_t>(indexB) >= this->mesh.points.size() ||
+	static_cast<size_t>(indexC) >= this->mesh.points.size()) {
 	indexA = -1;
 	indexB = -1;
 	indexC = -1;
@@ -214,12 +214,12 @@ BRLObolViewLodState::clear(void)
 
 SbBool
 BRLObolViewLodState::applyMeshResult(const SoBRLMeshShape *shape,
-	const BRLObolLodResult &result)
+				     const BRLObolLodResult &result)
 {
     if (!shape ||
-	    result.resultKind != BRLOBOL_LOD_RESULT_MESH ||
-	    result.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
-	    !result.mesh.isValid())
+	result.resultKind != BRLOBOL_LOD_RESULT_MESH ||
+	result.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
+	!result.mesh.isValid())
 	return FALSE;
 
     MeshPayloadPtr payload(new MeshPayload);
@@ -259,7 +259,7 @@ BRLObolViewLodState::findMesh(const SoBRLMeshShape *shape) const
 	std::unordered_map<std::string, MeshPayloadPtr>::const_iterator it =
 	    this->meshBindings.find(keys[i]);
 	if (it != this->meshBindings.end() && it->second &&
-		it->second->isValid())
+	    it->second->isValid())
 	    return it->second.get();
     }
 
@@ -268,7 +268,7 @@ BRLObolViewLodState::findMesh(const SoBRLMeshShape *shape) const
 
 const BRLObolViewLodState::MeshPayload *
 BRLObolViewLodState::findMeshForResult(
-	const BRLObolLodResult &result) const
+    const BRLObolLodResult &result) const
 {
     std::vector<std::string> keys;
     view_lod_result_keys(keys, result);
@@ -276,7 +276,7 @@ BRLObolViewLodState::findMeshForResult(
 	std::unordered_map<std::string, MeshPayloadPtr>::const_iterator it =
 	    this->meshBindings.find(keys[i]);
 	if (it != this->meshBindings.end() && it->second &&
-		it->second->isValid())
+	    it->second->isValid())
 	    return it->second.get();
     }
 
@@ -291,17 +291,17 @@ BRLObolViewLodState::bindingCount(void) const
 
 static std::vector<BRLObolViewLodState::MeshPayloadPtr>
 view_lod_unique_payloads(
-	const std::unordered_map<std::string,
-	    BRLObolViewLodState::MeshPayloadPtr> &bindings)
+    const std::unordered_map<std::string,
+    BRLObolViewLodState::MeshPayloadPtr> &bindings)
 {
     std::vector<BRLObolViewLodState::MeshPayloadPtr> payloads;
     for (std::unordered_map<std::string,
-	    BRLObolViewLodState::MeshPayloadPtr>::const_iterator it =
-	    bindings.begin(); it != bindings.end(); ++it) {
+	 BRLObolViewLodState::MeshPayloadPtr>::const_iterator it =
+	     bindings.begin(); it != bindings.end(); ++it) {
 	if (!it->second)
 	    continue;
 	if (std::find(payloads.begin(), payloads.end(), it->second) ==
-		payloads.end())
+	    payloads.end())
 	    payloads.push_back(it->second);
     }
 
@@ -363,7 +363,7 @@ SoBRLViewLodElement::push(SoState *state)
 {
     const SoBRLViewLodElement *prev =
 	static_cast<const SoBRLViewLodElement *>(
-		this->getNextInStack());
+	    this->getNextInStack());
     this->viewState = prev ? prev->viewState : NULL;
     inherited::push(state);
 }
@@ -386,16 +386,16 @@ SoBRLViewLodElement::copyMatchInfo(void) const
 
 void
 SoBRLViewLodElement::set(SoState *state,
-	SoNode *UNUSED(node),
-	const BRLObolViewLodState *newViewState)
+			 SoNode *UNUSED(node),
+			 const BRLObolViewLodState *newViewState)
 {
     if (!state || !state->isElementEnabled(SoBRLViewLodElement::getClassStackIndex()))
 	return;
 
     SoBRLViewLodElement *element =
 	static_cast<SoBRLViewLodElement *>(
-		SoElement::getElement(state,
-		    SoBRLViewLodElement::getClassStackIndex()));
+	    SoElement::getElement(state,
+				  SoBRLViewLodElement::getClassStackIndex()));
     element->viewState = newViewState;
 }
 
@@ -407,8 +407,8 @@ SoBRLViewLodElement::get(SoState *state)
 
     const SoBRLViewLodElement *element =
 	static_cast<const SoBRLViewLodElement *>(
-		SoElement::getConstElement(state,
-		    SoBRLViewLodElement::getClassStackIndex()));
+	    SoElement::getConstElement(state,
+				       SoBRLViewLodElement::getClassStackIndex()));
     return element ? element->viewState : NULL;
 }
 
@@ -511,7 +511,7 @@ SoBRLViewLodGroup::pick(SoPickAction *action)
 
 const BRLObolViewLodState::MeshPayload *
 brlobol_view_lod_mesh_for_action(SoAction *action,
-	const SoBRLMeshShape *shape)
+				 const SoBRLMeshShape *shape)
 {
     if (!action || !shape)
 	return NULL;

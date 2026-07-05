@@ -47,9 +47,9 @@
 
 static const char *controller_database_id(const struct db_i *dbip);
 static std::vector<SoBRLDatabaseSource *> controller_render_database_sources(
-	const BRLObolViewController *controller);
+    const BRLObolViewController *controller);
 static std::vector<SoBRLMeshShape *> controller_render_mesh_shapes(
-	const BRLObolViewController *controller);
+    const BRLObolViewController *controller);
 
 SbMatrix
 brlobol_sbmatrix_from_brl_mat(const mat_t mat)
@@ -58,14 +58,14 @@ brlobol_sbmatrix_from_brl_mat(const mat_t mat)
 	return SbMatrix::identity();
 
     return SbMatrix(
-	static_cast<float>(mat[0]),  static_cast<float>(mat[4]),
-	static_cast<float>(mat[8]),  static_cast<float>(mat[12]),
-	static_cast<float>(mat[1]),  static_cast<float>(mat[5]),
-	static_cast<float>(mat[9]),  static_cast<float>(mat[13]),
-	static_cast<float>(mat[2]),  static_cast<float>(mat[6]),
-	static_cast<float>(mat[10]), static_cast<float>(mat[14]),
-	static_cast<float>(mat[3]),  static_cast<float>(mat[7]),
-	static_cast<float>(mat[11]), static_cast<float>(mat[15]));
+	       static_cast<float>(mat[0]),  static_cast<float>(mat[4]),
+	       static_cast<float>(mat[8]),  static_cast<float>(mat[12]),
+	       static_cast<float>(mat[1]),  static_cast<float>(mat[5]),
+	       static_cast<float>(mat[9]),  static_cast<float>(mat[13]),
+	       static_cast<float>(mat[2]),  static_cast<float>(mat[6]),
+	       static_cast<float>(mat[10]), static_cast<float>(mat[14]),
+	       static_cast<float>(mat[3]),  static_cast<float>(mat[7]),
+	       static_cast<float>(mat[11]), static_cast<float>(mat[15]));
 }
 
 SbRotation
@@ -113,8 +113,8 @@ controller_find_render_environment(SoSeparator *root)
     for (int i = 0; i < root->getNumChildren(); i++) {
 	SoNode *child = root->getChild(i);
 	if (child &&
-		child->isOfType(SoGroup::getClassTypeId()) &&
-		strcmp(child->getName().getString(), name) == 0)
+	    child->isOfType(SoGroup::getClassTypeId()) &&
+	    strcmp(child->getName().getString(), name) == 0)
 	    return static_cast<SoGroup *>(child);
     }
 
@@ -163,7 +163,7 @@ controller_configure_render_environment(SoViewport *viewport)
 
 static void
 controller_collect_database_sources(SoNode *node,
-	std::vector<SoBRLDatabaseSource *> &sources)
+				    std::vector<SoBRLDatabaseSource *> &sources)
 {
     if (!node)
 	return;
@@ -184,7 +184,7 @@ controller_collect_database_sources(SoNode *node,
 
 static void
 controller_collect_mesh_shapes(SoNode *node,
-	std::vector<SoBRLMeshShape *> &shapes)
+			       std::vector<SoBRLMeshShape *> &shapes)
 {
     if (!node)
 	return;
@@ -221,7 +221,7 @@ controller_render_database_sources(const BRLObolViewController *controller)
     for (int i = 0; i < sourceCount; i++) {
 	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
 	if (source && std::find(sources.begin(), sources.end(), source) ==
-		sources.end())
+	    sources.end())
 	    sources.push_back(source);
     }
 
@@ -250,8 +250,8 @@ rt_pick_result_path(const BRLObolRtPickResult &pick)
 
 static SbBool
 rt_pick_result_path_recorded(
-	const std::vector<BRLObolRtPickResult> &results,
-	const BRLObolRtPickResult &candidate)
+    const std::vector<BRLObolRtPickResult> &results,
+    const BRLObolRtPickResult &candidate)
 {
     const SbString candidatePath = rt_pick_result_path(candidate);
     if (candidatePath.getLength() == 0)
@@ -259,7 +259,7 @@ rt_pick_result_path_recorded(
 
     for (size_t i = 0; i < results.size(); i++) {
 	if (strcmp(rt_pick_result_path(results[i]).getString(),
-		candidatePath.getString()) == 0)
+		   candidatePath.getString()) == 0)
 	    return TRUE;
     }
 
@@ -268,8 +268,8 @@ rt_pick_result_path_recorded(
 
 static void
 insert_rt_pick_result(std::vector<BRLObolRtPickResult> &results,
-	const BRLObolRtPickResult &pick,
-	SbBool pickAll)
+		      const BRLObolRtPickResult &pick,
+		      SbBool pickAll)
 {
     if (pickAll) {
 	std::vector<BRLObolRtPickResult>::iterator it = results.begin();
@@ -303,7 +303,7 @@ controller_path_leaf(const char *path)
 
 static SbBool
 controller_path_contains_request(const char *sourcePath,
-	const char *requestPath)
+				 const char *requestPath)
 {
     const char *source = controller_path_skip_slashes(sourcePath);
     const char *request = controller_path_skip_slashes(requestPath);
@@ -315,19 +315,19 @@ controller_path_contains_request(const char *sourcePath,
 	return FALSE;
 
     return request[sourceLen] == '\0' || request[sourceLen] == '/' ?
-	TRUE : FALSE;
+	   TRUE : FALSE;
 }
 
 static SbBool
 controller_source_matches_request(SoBRLDatabaseSource *source,
-	const BRLObolSourceMeshRequest &request)
+				  const BRLObolSourceMeshRequest &request)
 {
     if (!source)
 	return FALSE;
 
     const char *sourcePath = source->path.getValue().getString();
     if (controller_path_contains_request(sourcePath,
-	    request.path.getString()))
+					 request.path.getString()))
 	return TRUE;
 
     if (request.path.getLength() > 0)
@@ -339,13 +339,13 @@ controller_source_matches_request(SoBRLDatabaseSource *source,
 
     const char *cleanSourcePath = controller_path_skip_slashes(sourcePath);
     return strcmp(sourceName, cleanSourcePath) == 0 ||
-	strcmp(sourceName, controller_path_leaf(sourcePath)) == 0 ? TRUE :
-	FALSE;
+	   strcmp(sourceName, controller_path_leaf(sourcePath)) == 0 ? TRUE :
+	   FALSE;
 }
 
 static SoBRLDatabaseSource *
 controller_database_source_for_request(BRLObolViewController *controller,
-	const BRLObolSourceMeshRequest &request)
+				       const BRLObolSourceMeshRequest &request)
 {
     SoBRLDatabaseSource *singleSource = NULL;
     SoBRLDatabaseSource *matchedSource = NULL;
@@ -401,7 +401,7 @@ controller_database_source_count(BRLObolViewController *controller)
 
 static void
 controller_source_request_template(BRLObolLodRequest &requestTemplate,
-	SoBRLDatabaseSource *source)
+				   SoBRLDatabaseSource *source)
 {
     requestTemplate.clear();
     if (!source)
@@ -414,27 +414,27 @@ controller_source_request_template(BRLObolLodRequest &requestTemplate,
 
 static SbBool
 controller_consume_one_source_full_detail_result(
-	SoBRLExportAction &action,
-	const BRLObolSourceMeshRequest &sourceRequest,
-	const BRLObolLodResult &result)
+    SoBRLExportAction &action,
+    const BRLObolSourceMeshRequest &sourceRequest,
+    const BRLObolLodResult &result)
 {
     return action.appendSourceBackedFullDetailResult(sourceRequest, result);
 }
 
 static SbBool
 controller_consume_one_source_full_detail_result(
-	SoBRLMeasureAction &action,
-	const BRLObolSourceMeshRequest &sourceRequest,
-	const BRLObolLodResult &result)
+    SoBRLMeasureAction &action,
+    const BRLObolSourceMeshRequest &sourceRequest,
+    const BRLObolLodResult &result)
 {
     return action.consumeSourceBackedFullDetailResult(sourceRequest, result);
 }
 
 static SbBool
 controller_consume_one_source_full_detail_result(
-	SoBRLSnapAction &action,
-	const BRLObolSourceMeshRequest &sourceRequest,
-	const BRLObolLodResult &result)
+    SoBRLSnapAction &action,
+    const BRLObolSourceMeshRequest &sourceRequest,
+    const BRLObolLodResult &result)
 {
     return action.consumeSourceBackedFullDetailResult(sourceRequest, result);
 }
@@ -442,9 +442,9 @@ controller_consume_one_source_full_detail_result(
 template <typename Action>
 static int
 controller_consume_source_full_detail(BRLObolViewController *controller,
-	Action &action,
-	uint64_t generation,
-	int *submittedRequestCount)
+				      Action &action,
+				      uint64_t generation,
+				      int *submittedRequestCount)
 {
     if (submittedRequestCount)
 	*submittedRequestCount = 0;
@@ -502,7 +502,7 @@ controller_consume_source_full_detail(BRLObolViewController *controller,
 	return 0;
 
     std::vector<SbBool> requestMatched(
-	    static_cast<size_t>(requestCount), FALSE);
+	static_cast<size_t>(requestCount), FALSE);
     int consumed = 0;
     if (!expectedRequests.empty()) {
 	std::vector<BRLObolLodResult> sourceResults;
@@ -510,20 +510,20 @@ controller_consume_source_full_detail(BRLObolViewController *controller,
 	if (!sourceResults.empty()) {
 	    std::vector<SbBool> used(sourceResults.size(), FALSE);
 	    std::vector<SbBool> requestConsumed(
-		    static_cast<size_t>(requestCount), FALSE);
+		static_cast<size_t>(requestCount), FALSE);
 
 	    for (size_t i = 0; i < expectedRequests.size(); i++) {
 		const int requestIndex = expectedRequestIndices[i];
 		if (requestIndex < 0 ||
-			static_cast<size_t>(requestIndex) >=
-			requestConsumed.size() ||
-			requestConsumed[static_cast<size_t>(requestIndex)])
+		    static_cast<size_t>(requestIndex) >=
+		    requestConsumed.size() ||
+		    requestConsumed[static_cast<size_t>(requestIndex)])
 		    continue;
 
 		for (size_t j = 0; j < sourceResults.size(); j++) {
 		    if (used[j] ||
-			    !brlobol_lod_result_matches_request(
-				sourceResults[j], expectedRequests[i]))
+			!brlobol_lod_result_matches_request(
+			    sourceResults[j], expectedRequests[i]))
 			continue;
 
 		    used[j] = TRUE;
@@ -545,8 +545,8 @@ controller_consume_source_full_detail(BRLObolViewController *controller,
     for (size_t i = 0; i < submitSourceRequests.size(); i++) {
 	const int requestIndex = submitRequestIndices[i];
 	if (requestIndex >= 0 &&
-		static_cast<size_t>(requestIndex) < requestMatched.size() &&
-		requestMatched[static_cast<size_t>(requestIndex)])
+	    static_cast<size_t>(requestIndex) < requestMatched.size() &&
+	    requestMatched[static_cast<size_t>(requestIndex)])
 	    continue;
 
 	BRLObolLodRequest requestTemplate;
@@ -608,9 +608,9 @@ BRLObolViewController::BRLObolViewController(void) :
     lastLodRejectedResultCount(0),
     lastLodUnmatchedResultCount(0),
     lastLodDiagnostics(""),
-	featureStore(new BRLObolFeatureStore(this)),
-	polygonStore(new BRLObolPolygonStore(this)),
-	selectionStore(new BRLObolSelectionStore)
+    featureStore(new BRLObolFeatureStore(this)),
+    polygonStore(new BRLObolPolygonStore(this)),
+    selectionStore(new BRLObolSelectionStore)
 {
     controller_configure_render_environment(this->viewport);
 }
@@ -659,9 +659,9 @@ BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
     lastLodRejectedResultCount(0),
     lastLodUnmatchedResultCount(0),
     lastLodDiagnostics(""),
-	featureStore(new BRLObolFeatureStore(this)),
-	polygonStore(new BRLObolPolygonStore(this)),
-	selectionStore(new BRLObolSelectionStore)
+    featureStore(new BRLObolFeatureStore(this)),
+    polygonStore(new BRLObolPolygonStore(this)),
+    selectionStore(new BRLObolSelectionStore)
 {
     controller_configure_render_environment(this->viewport);
     this->setSceneRoot(root);
@@ -830,20 +830,20 @@ BRLObolViewController::syncCameraFromRtViewContext(const void *viewCtx,
     const double perspectiveDegrees =
 	rt_view_context_perspective_get(viewCtx);
     const SbBool wantPerspective = perspectiveDegrees > SMALL_FASTF ?
-	TRUE : FALSE;
+				   TRUE : FALSE;
 
     SoCamera *camera = this->activeCamera;
     if (!camera ||
-	    (wantPerspective &&
-	     !camera->isOfType(SoPerspectiveCamera::getClassTypeId())) ||
-	    (!wantPerspective &&
-	     !camera->isOfType(SoOrthographicCamera::getClassTypeId()))) {
+	(wantPerspective &&
+	 !camera->isOfType(SoPerspectiveCamera::getClassTypeId())) ||
+	(!wantPerspective &&
+	 !camera->isOfType(SoOrthographicCamera::getClassTypeId()))) {
 	if (!createCamera)
 	    return FALSE;
 
 	camera = wantPerspective ?
-	    static_cast<SoCamera *>(new SoPerspectiveCamera) :
-	    static_cast<SoCamera *>(new SoOrthographicCamera);
+		 static_cast<SoCamera *>(new SoPerspectiveCamera) :
+		 static_cast<SoCamera *>(new SoOrthographicCamera);
 	this->setCamera(camera);
     }
 
@@ -851,16 +851,16 @@ BRLObolViewController::syncCameraFromRtViewContext(const void *viewCtx,
     int viewHeight = rt_view_context_height_get(viewCtx);
     SbVec2s window = this->viewportRegion.getWindowSize();
     if (window[0] <= 1 && window[1] <= 1 &&
-	    viewWidth > 0 && viewHeight > 0) {
+	viewWidth > 0 && viewHeight > 0) {
 	this->setViewportSize(static_cast<unsigned int>(viewWidth),
-	    static_cast<unsigned int>(viewHeight));
+			      static_cast<unsigned int>(viewHeight));
 	window = this->viewportRegion.getWindowSize();
     }
 
     double aspect = controller_aspect_from_region(this->viewportRegion);
     if (aspect <= SMALL_FASTF && viewWidth > 0 && viewHeight > 0)
 	aspect = static_cast<double>(viewWidth) /
-	    static_cast<double>(viewHeight);
+		 static_cast<double>(viewHeight);
     if (aspect <= SMALL_FASTF)
 	aspect = 1.0;
 
@@ -894,8 +894,8 @@ BRLObolViewController::syncCameraFromRtViewContext(const void *viewCtx,
     const SbBool orthographic =
 	camera->isOfType(SoOrthographicCamera::getClassTypeId());
     double distance = orthographic ?
-	horizontalSize * 5.0 :
-	(verticalSize * 0.5) / std::tan(heightAngle * 0.5);
+		      horizontalSize * 5.0 :
+		      (verticalSize * 0.5) / std::tan(heightAngle * 0.5);
     if (distance <= horizontalSize * 0.5)
 	distance = horizontalSize * 0.5;
     if (distance <= SMALL_FASTF)
@@ -910,16 +910,16 @@ BRLObolViewController::syncCameraFromRtViewContext(const void *viewCtx,
     camera->viewportMapping = SoCamera::LEAVE_ALONE;
     camera->aspectRatio = static_cast<float>(aspect);
     camera->position = SbVec3f(
-	static_cast<float>(center[X] + viewZ[X] * distance),
-	static_cast<float>(center[Y] + viewZ[Y] * distance),
-	static_cast<float>(center[Z] + viewZ[Z] * distance));
+			   static_cast<float>(center[X] + viewZ[X] * distance),
+			   static_cast<float>(center[Y] + viewZ[Y] * distance),
+			   static_cast<float>(center[Z] + viewZ[Z] * distance));
     camera->orientation = orientation;
     camera->focalDistance = static_cast<float>(distance);
     camera->nearDistance = static_cast<float>(
-	std::max(distance * 0.001, 1.0e-6));
+			       std::max(distance * 0.001, 1.0e-6));
     camera->farDistance = static_cast<float>(
-	std::max(distance + horizontalSize * 100.0,
-	    distance + 1.0));
+			      std::max(distance + horizontalSize * 100.0,
+				       distance + 1.0));
 
     if (camera->isOfType(SoPerspectiveCamera::getClassTypeId())) {
 	SoPerspectiveCamera *perspectiveCamera =
@@ -1043,8 +1043,8 @@ BRLObolViewController::consumeRenderRequest(SbString *reason)
 
 SbBool
 BRLObolViewController::renderPending(SbBool clearWindow,
-	SbBool clearZBuffer,
-	SbString *reason)
+				     SbBool clearZBuffer,
+				     SbString *reason)
 {
     if (this->lodAutoSubmit)
 	(void)this->submitLodRequestsIfNeeded();
@@ -1053,7 +1053,7 @@ BRLObolViewController::renderPending(SbBool clearWindow,
 	this->processPendingLodResults();
 
     if (!this->renderRequested || !this->renderManager ||
-	    !this->activeCamera || !this->getRenderRoot())
+	!this->activeCamera || !this->getRenderRoot())
 	return FALSE;
 
     SbString renderReasonCopy;
@@ -1071,7 +1071,7 @@ SbBool
 BRLObolViewController::isRenderRequested(void) const
 {
     return (this->renderRequested || this->hasPendingLodResults()) ?
-	TRUE : FALSE;
+	   TRUE : FALSE;
 }
 
 const SbString &
@@ -1084,13 +1084,13 @@ static int
 size_to_int_saturated(size_t value)
 {
     return value > static_cast<size_t>(std::numeric_limits<int>::max()) ?
-	std::numeric_limits<int>::max() : static_cast<int>(value);
+	   std::numeric_limits<int>::max() : static_cast<int>(value);
 }
 
 static void
 append_controller_lod_diagnostic(SbString &diagnostics,
-	const SbString &target,
-	const char *message)
+				 const SbString &target,
+				 const char *message)
 {
     if (diagnostics.getLength() > 0)
 	diagnostics += "\n";
@@ -1115,7 +1115,7 @@ append_signature_string(std::ostringstream &out, const char *value)
 
 static SbString
 controller_lod_view_signature(const struct rt_view_info &view,
-	SbBool haveCamera)
+			      SbBool haveCamera)
 {
     std::ostringstream out;
 
@@ -1147,8 +1147,8 @@ controller_lod_source_signature(const BRLObolViewController *controller)
 	if (!source || !source->getDatabase())
 	    continue;
 	if (source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED ||
-		source->needsRealization() ||
-		source->getRealizedMeshCount() <= 0)
+	    source->needsRealization() ||
+	    source->getRealizedMeshCount() <= 0)
 	    continue;
 
 	out << "source;";
@@ -1168,7 +1168,7 @@ controller_lod_source_signature(const BRLObolViewController *controller)
 
 void
 BRLObolViewController::lodResultReadyCB(
-	BRLObolLodService *UNUSED(service), void *userData)
+    BRLObolLodService *UNUSED(service), void *userData)
 {
     BRLObolViewController *controller =
 	static_cast<BRLObolViewController *>(userData);
@@ -1196,7 +1196,7 @@ BRLObolViewController::setLodService(BRLObolLodService *service)
     if (this->lodService)
 	this->lodResultSubscriberId =
 	    this->lodService->subscribeResultReady(
-		    BRLObolViewController::lodResultReadyCB, this);
+		BRLObolViewController::lodResultReadyCB, this);
 }
 
 BRLObolLodService *
@@ -1280,9 +1280,9 @@ BRLObolViewController::getMaxExactFullDetailPointCount(void) const
 
 int
 BRLObolViewController::consumeExportSourceFullDetail(
-	SoBRLExportAction &exportAction,
-	uint64_t generation,
-	int *submittedRequestCount)
+    SoBRLExportAction &exportAction,
+    uint64_t generation,
+    int *submittedRequestCount)
 {
     return controller_consume_source_full_detail(this, exportAction,
 	    generation, submittedRequestCount);
@@ -1290,9 +1290,9 @@ BRLObolViewController::consumeExportSourceFullDetail(
 
 int
 BRLObolViewController::consumeMeasureSourceFullDetail(
-	SoBRLMeasureAction &measureAction,
-	uint64_t generation,
-	int *submittedRequestCount)
+    SoBRLMeasureAction &measureAction,
+    uint64_t generation,
+    int *submittedRequestCount)
 {
     return controller_consume_source_full_detail(this, measureAction,
 	    generation, submittedRequestCount);
@@ -1300,9 +1300,9 @@ BRLObolViewController::consumeMeasureSourceFullDetail(
 
 int
 BRLObolViewController::consumeSnapSourceFullDetail(
-	SoBRLSnapAction &snapAction,
-	uint64_t generation,
-	int *submittedRequestCount)
+    SoBRLSnapAction &snapAction,
+    uint64_t generation,
+    int *submittedRequestCount)
 {
     return controller_consume_source_full_detail(this, snapAction,
 	    generation, submittedRequestCount);
@@ -1331,12 +1331,12 @@ BRLObolViewController::prepareRtPickCaches(void)
     for (size_t i = 0; i < sources.size(); i++) {
 	SoBRLDatabaseSource *source = sources[i];
 	if (!source || !source->getDatabase() ||
-		source->path.getValue().getLength() == 0)
+	    source->path.getValue().getLength() == 0)
 	    continue;
 	sourcePaths.push_back(source->path.getValue());
 	sourceDatabases.push_back(source->getDatabase());
 	sourceRevisions.push_back(
-		static_cast<uint32_t>(source->sourceRevision.getValue()));
+	    static_cast<uint32_t>(source->sourceRevision.getValue()));
     }
 
     SbBool sameSignature =
@@ -1347,11 +1347,11 @@ BRLObolViewController::prepareRtPickCaches(void)
     if (sameSignature) {
 	for (size_t i = 0; i < sourcePaths.size(); i++) {
 	    if (sourceDatabases[i] != this->rtPickCacheDatabases[i] ||
-		    sourceRevisions[i] != this->rtPickCacheSourceRevisions[i] ||
-		    strcmp(sourcePaths[i].getString(),
-			this->rtPickCachePaths[i].getString()) != 0 ||
-		    !this->rtPickCaches[i] ||
-		    !this->rtPickCaches[i]->isReady()) {
+		sourceRevisions[i] != this->rtPickCacheSourceRevisions[i] ||
+		strcmp(sourcePaths[i].getString(),
+		       this->rtPickCachePaths[i].getString()) != 0 ||
+		!this->rtPickCaches[i] ||
+		!this->rtPickCaches[i]->isReady()) {
 		sameSignature = FALSE;
 		break;
 	    }
@@ -1399,19 +1399,19 @@ uint32_t
 BRLObolViewController::getRtPickCacheSourceRevision(int index) const
 {
     if (index < 0 ||
-	    static_cast<size_t>(index) >=
-	    this->rtPickCacheSourceRevisions.size())
+	static_cast<size_t>(index) >=
+	this->rtPickCacheSourceRevisions.size())
 	return 0;
     return this->rtPickCacheSourceRevisions[static_cast<size_t>(index)];
 }
 
 int
 BRLObolViewController::pickSourceMeshExactRay(
-	BRLObolSourceMeshPickResult &pick,
-	const SbVec3f &rayOrigin,
-	const SbVec3f &rayDirection,
-	uint64_t generation,
-	int *submittedRequestCount)
+    BRLObolSourceMeshPickResult &pick,
+    const SbVec3f &rayOrigin,
+    const SbVec3f &rayDirection,
+    uint64_t generation,
+    int *submittedRequestCount)
 {
     pick.clear();
     if (submittedRequestCount)
@@ -1475,26 +1475,26 @@ BRLObolViewController::pickSourceMeshExactRay(
 	return 0;
 
     std::vector<SbBool> requestMatched(
-	    static_cast<size_t>(requestCount), FALSE);
+	static_cast<size_t>(requestCount), FALSE);
     if (!expectedRequests.empty()) {
 	std::vector<BRLObolLodResult> sourceResults;
 	service->drainMatchingResults(sourceResults, expectedRequests);
 	if (!sourceResults.empty()) {
 	    std::vector<SbBool> used(sourceResults.size(), FALSE);
 	    std::vector<SbBool> requestConsumed(
-		    static_cast<size_t>(requestCount), FALSE);
+		static_cast<size_t>(requestCount), FALSE);
 	    for (size_t i = 0; i < expectedRequests.size(); i++) {
 		const int requestIndex = expectedRequestIndices[i];
 		if (requestIndex < 0 ||
-			static_cast<size_t>(requestIndex) >=
-			requestConsumed.size() ||
-			requestConsumed[static_cast<size_t>(requestIndex)])
+		    static_cast<size_t>(requestIndex) >=
+		    requestConsumed.size() ||
+		    requestConsumed[static_cast<size_t>(requestIndex)])
 		    continue;
 
 		for (size_t j = 0; j < sourceResults.size(); j++) {
 		    if (used[j] ||
-			    !brlobol_lod_result_matches_request(
-				sourceResults[j], expectedRequests[i]))
+			!brlobol_lod_result_matches_request(
+			    sourceResults[j], expectedRequests[i]))
 			continue;
 
 		    used[j] = TRUE;
@@ -1520,8 +1520,8 @@ BRLObolViewController::pickSourceMeshExactRay(
     for (size_t i = 0; i < submitSourceRequests.size(); i++) {
 	const int requestIndex = submitRequestIndices[i];
 	if (requestIndex >= 0 &&
-		static_cast<size_t>(requestIndex) < requestMatched.size() &&
-		requestMatched[static_cast<size_t>(requestIndex)])
+	    static_cast<size_t>(requestIndex) < requestMatched.size() &&
+	    requestMatched[static_cast<size_t>(requestIndex)])
 	    continue;
 
 	BRLObolLodRequest requestTemplate;
@@ -1544,10 +1544,10 @@ BRLObolViewController::pickSourceMeshExactRay(
 
 int
 BRLObolViewController::pickRtExactRay(
-	std::vector<BRLObolRtPickResult> &results,
-	const SbVec3f &rayOrigin,
-	const SbVec3f &rayDirection,
-	SbBool pickAll)
+    std::vector<BRLObolRtPickResult> &results,
+    const SbVec3f &rayOrigin,
+    const SbVec3f &rayDirection,
+    SbBool pickAll)
 {
     results.clear();
 
@@ -1576,8 +1576,8 @@ BRLObolViewController::pickRtExactRay(
 
 void
 BRLObolViewController::setMeshResidencyBudget(
-	size_t maxBytes,
-	SbBool evictDisplayPayloads)
+    size_t maxBytes,
+    SbBool evictDisplayPayloads)
 {
     this->meshResidencyBudgetEnabled = TRUE;
     this->maxResidentMeshBytes = maxBytes;
@@ -1613,8 +1613,8 @@ BRLObolViewController::isMeshResidencyDisplayEvictionEnabled(void) const
 
 size_t
 BRLObolViewController::evictMeshPayloadsToBudget(
-	size_t maxBytes,
-	SbBool evictDisplayPayloads)
+    size_t maxBytes,
+    SbBool evictDisplayPayloads)
 {
     this->lastMeshBudgetInitialResidentBytes = 0;
     this->lastMeshBudgetFinalResidentBytes = 0;
@@ -1636,7 +1636,7 @@ BRLObolViewController::evictMeshPayloadsToBudget(
     action.apply(root);
 
     const size_t viewLodBytes = this->viewLodState ?
-	this->viewLodState->estimateDisplayMeshBytes() : 0;
+				this->viewLodState->estimateDisplayMeshBytes() : 0;
     this->lastMeshBudgetInitialResidentBytes =
 	action.getInitialResidentMeshBytes() + viewLodBytes;
     this->lastMeshBudgetFinalResidentBytes =
@@ -1652,7 +1652,7 @@ BRLObolViewController::evictMeshPayloadsToBudget(
 	action.getEvictedDisplayMeshCount();
 
     if (this->lastMeshBudgetFinalResidentBytes > maxBytes &&
-	    this->viewLodState) {
+	this->viewLodState) {
 	std::vector<SoBRLMeshShape *> shapes =
 	    controller_render_mesh_shapes(this);
 	for (size_t i = 0; i < shapes.size(); i++) {
@@ -1672,8 +1672,8 @@ BRLObolViewController::evictMeshPayloadsToBudget(
     }
 
     if (evictDisplayPayloads &&
-	    this->lastMeshBudgetFinalResidentBytes > maxBytes &&
-	    this->viewLodState) {
+	this->lastMeshBudgetFinalResidentBytes > maxBytes &&
+	this->viewLodState) {
 	unsigned int evicted = 0;
 	size_t freed = this->viewLodState->evictDisplayMeshes(&evicted);
 	if (freed > 0) {
@@ -1698,8 +1698,8 @@ BRLObolViewController::enforceMeshResidencyBudget(void)
 	return 0;
 
     return this->evictMeshPayloadsToBudget(
-	    this->maxResidentMeshBytes,
-	    this->meshResidencyEvictDisplayPayloads);
+	       this->maxResidentMeshBytes,
+	       this->meshResidencyEvictDisplayPayloads);
 }
 
 size_t
@@ -1718,9 +1718,9 @@ size_t
 BRLObolViewController::getLastMeshBudgetFreedResidentBytes(void) const
 {
     return this->lastMeshBudgetInitialResidentBytes >
-	this->lastMeshBudgetFinalResidentBytes ?
-	this->lastMeshBudgetInitialResidentBytes -
-	this->lastMeshBudgetFinalResidentBytes : 0;
+	   this->lastMeshBudgetFinalResidentBytes ?
+	   this->lastMeshBudgetInitialResidentBytes -
+	   this->lastMeshBudgetFinalResidentBytes : 0;
 }
 
 size_t
@@ -1766,7 +1766,7 @@ BRLObolViewController::processPendingLodResults(size_t maxResults)
 	return 0;
 
     if (!this->hasPendingLodResults() &&
-	    this->lodService->queuedResultCountForDiagnostics() == 0)
+	this->lodService->queuedResultCountForDiagnostics() == 0)
 	return 0;
 
     (void)this->applyLodResults(this->lodService, maxResults);
@@ -1780,7 +1780,7 @@ BRLObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
     if (!this->lodService || !this->lodService->isRunning())
 	return 0;
     if (!this->activeCamera ||
-	    (!this->getSceneRoot() && !this->getRenderSceneRoot()))
+	(!this->getSceneRoot() && !this->getRenderSceneRoot()))
 	return 0;
 
     this->syncLodViewSignature(TRUE);
@@ -1790,9 +1790,9 @@ BRLObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
 	return 0;
 
     if (this->lodLastSubmittedViewRevision == this->lodViewRevision &&
-	    this->lodLastSubmittedPolicyRevision == this->lodPolicyRevision &&
-	    strcmp(this->lodLastSubmittedSourceSignature.getString(),
-		signature.getString()) == 0)
+	this->lodLastSubmittedPolicyRevision == this->lodPolicyRevision &&
+	strcmp(this->lodLastSubmittedSourceSignature.getString(),
+	       signature.getString()) == 0)
 	return 0;
 
     if (this->lodActiveGeneration != 0)
@@ -1800,7 +1800,7 @@ BRLObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
 
     uint64_t generation = this->lodService->beginGeneration();
     int submitted = this->submitLodRequests(this->lodService, generation,
-	    refreshMissing, reset);
+					    refreshMissing, reset);
     if (submitted >= 0) {
 	this->lodActiveGeneration = generation;
 	this->lodLastSubmittedViewRevision = this->lodViewRevision;
@@ -1851,15 +1851,15 @@ BRLObolViewController::submitLodRequests(BRLObolLodService *service,
 	struct db_i *dbip = source->getDatabase();
 	if (!dbip) {
 	    append_controller_lod_diagnostic(this->lastLodDiagnostics,
-		    source->path.getValue(),
-		    "database source has no database for LoD submission");
+					     source->path.getValue(),
+					     "database source has no database for LoD submission");
 	    continue;
 	}
 
 	SoBRLMeshLodSubmitAction action;
 	action.setService(service);
 	action.setDatabase(dbip, controller_database_id(dbip),
-		source->sourceRevision.getValue());
+			   source->sourceRevision.getValue());
 	action.setViewInfo(&view);
 	action.setGeneration(generation);
 	action.setRevisions(this->lodViewRevision, this->lodPolicyRevision);
@@ -1875,20 +1875,20 @@ BRLObolViewController::submitLodRequests(BRLObolLodService *service,
 	this->lastLodSkippedMeshCount += action.getSkippedMeshCount();
 	if (action.getDiagnostics().getLength() > 0)
 	    append_controller_lod_diagnostic(this->lastLodDiagnostics,
-		    source->path.getValue(),
-		    action.getDiagnostics().getString());
+					     source->path.getValue(),
+					     action.getDiagnostics().getString());
     }
 
     if (this->lastLodSubmittedTaskCount > 0)
 	this->requestRender("lod-submit");
 
     return size_to_int_saturated(
-	    static_cast<size_t>(this->lastLodSubmittedTaskCount));
+	       static_cast<size_t>(this->lastLodSubmittedTaskCount));
 }
 
 int
 BRLObolViewController::applyLodResults(BRLObolLodService *service,
-	size_t maxResults)
+				       size_t maxResults)
 {
     if (!service)
 	service = this->lodService;
@@ -1916,7 +1916,7 @@ BRLObolViewController::applyLodResults(BRLObolLodService *service,
     std::vector<BRLObolLodResult> drained;
     this->lastLodResultCount = service->drainResults(drained, maxResults);
     this->lodResultsPending.store(
-	    service->queuedResultCountForDiagnostics() > 0 ? 1 : 0);
+	service->queuedResultCountForDiagnostics() > 0 ? 1 : 0);
     if (this->lastLodResultCount == 0)
 	return 0;
 
@@ -1924,11 +1924,11 @@ BRLObolViewController::applyLodResults(BRLObolLodService *service,
     update.setViewLodState(this->viewLodState);
     for (size_t i = 0; i < drained.size(); i++) {
 	if (drained[i].request.viewRevision != this->lodViewRevision ||
-		drained[i].request.policyRevision != this->lodPolicyRevision) {
+	    drained[i].request.policyRevision != this->lodPolicyRevision) {
 	    this->lastLodRejectedResultCount++;
 	    append_controller_lod_diagnostic(this->lastLodDiagnostics,
-		    drained[i].request.objectPath,
-		    "stale LoD result revision rejected");
+					     drained[i].request.objectPath,
+					     "stale LoD result revision rejected");
 	    continue;
 	}
 	update.addResult(drained[i]);
@@ -1945,7 +1945,7 @@ BRLObolViewController::applyLodResults(BRLObolLodService *service,
 	this->lastLodDiagnostics += update.getDiagnostics();
     }
     this->lodResultsPending.store(
-	    service->queuedResultCountForDiagnostics() > 0 ? 1 : 0);
+	service->queuedResultCountForDiagnostics() > 0 ? 1 : 0);
 
     if (this->lastLodAppliedResultCount > 0) {
 	this->requestRender("lod-result");
@@ -1953,7 +1953,7 @@ BRLObolViewController::applyLodResults(BRLObolLodService *service,
     }
 
     return size_to_int_saturated(
-	    static_cast<size_t>(this->lastLodAppliedResultCount));
+	       static_cast<size_t>(this->lastLodAppliedResultCount));
 }
 
 uint64_t
@@ -2198,12 +2198,12 @@ BRLObolViewController::replaceEditPreviewWithIntent(const char *previewId,
 
     preview->previewId = previewId;
     preview->setEditIntent(editIntentId ? editIntentId : "",
-	    editIntentRole ? editIntentRole : "preview");
+			   editIntentRole ? editIntentRole : "preview");
     preview->sourceRevision = sourceRevision;
     preview->inputsRevision = inputsRevision;
     SoBRLVListShape *shape = preview->setLineSet(
-	    (identity && identity[0]) ? identity : previewId,
-	    points, commands, count);
+				 (identity && identity[0]) ? identity : previewId,
+				 points, commands, count);
     if (!shape)
 	return -1;
 
@@ -2292,8 +2292,8 @@ BRLObolViewController::replaceHUDLabelOverlay(const char *labelId,
     SoGroup *group = static_cast<SoGroup *>(root);
     const int childIndex = find_hud_label_overlay_child(group, labelId);
     SoBRLHUDLabelOverlay *label = childIndex >= 0 ?
-	static_cast<SoBRLHUDLabelOverlay *>(group->getChild(childIndex)) :
-	new SoBRLHUDLabelOverlay;
+				  static_cast<SoBRLHUDLabelOverlay *>(group->getChild(childIndex)) :
+				  new SoBRLHUDLabelOverlay;
 
     label->labelId = labelId;
     label->sourceId = sourceId;
@@ -2356,8 +2356,8 @@ BRLObolViewController::setGroupDrawIntent(const char *groupPath,
 	uint32_t revalidationRevision)
 {
     const int changed = this->sceneController.setGroupDrawIntent(groupPath,
-	    intentPath, drawMode, fallbackDrawMode, overlayIntent,
-	    revalidationRevision);
+			intentPath, drawMode, fallbackDrawMode, overlayIntent,
+			revalidationRevision);
     if (changed > 0)
 	this->requestRender("scene-group");
     return changed;
@@ -2378,9 +2378,9 @@ BRLObolViewController::setGroupDisplayState(const char *groupPath,
 	uint32_t materialRevision)
 {
     const int changed = this->sceneController.setGroupDisplayState(
-	    groupPath, visible, selected, highlighted, lineStyle,
-	    lineWidth, transparency, colorOverride, color,
-	    materialColorValid, materialColor, materialRevision);
+			    groupPath, visible, selected, highlighted, lineStyle,
+			    lineWidth, transparency, colorOverride, color,
+			    materialColorValid, materialColor, materialRevision);
     if (changed > 0)
 	this->requestRender("scene-group");
     return changed;
@@ -2388,7 +2388,7 @@ BRLObolViewController::setGroupDisplayState(const char *groupPath,
 
 int
 BRLObolViewController::renameGroup(const char *groupPath,
-	const char *newLeafName)
+				   const char *newLeafName)
 {
     const int changed =
 	this->sceneController.renameGroup(groupPath, newLeafName);
@@ -2456,14 +2456,14 @@ BRLObolViewController::getGroupChildCount(const char *groupPath) const
 
 int
 BRLObolViewController::getGroupDescendantGroupCount(
-	const char *groupPath) const
+    const char *groupPath) const
 {
     return this->sceneController.getGroupDescendantGroupCount(groupPath);
 }
 
 int
 BRLObolViewController::getGroupDatabaseSourceCount(
-	const char *groupPath) const
+    const char *groupPath) const
 {
     return this->sceneController.getGroupDatabaseSourceCount(groupPath);
 }
@@ -2482,7 +2482,7 @@ BRLObolViewController::findShapeParent(const char *shapePath) const
 
 int
 BRLObolViewController::moveShapeToGroup(const char *shapePath,
-	const char *groupPath)
+					const char *groupPath)
 {
     const int changed =
 	this->sceneController.moveShapeToGroup(shapePath, groupPath);
@@ -2508,7 +2508,7 @@ BRLObolViewController::setShapeDrawState(const char *shapePath,
 	SbBool hudIntent)
 {
     const int changed = this->sceneController.setShapeDrawState(shapePath,
-	    drawMode, databaseIntent, overlayIntent, hudIntent);
+			drawMode, databaseIntent, overlayIntent, hudIntent);
     if (changed > 0)
 	this->requestRender("scene-shape");
     return changed;
@@ -2529,9 +2529,9 @@ BRLObolViewController::setShapeDisplayState(const char *shapePath,
 	uint32_t materialRevision)
 {
     const int changed = this->sceneController.setShapeDisplayState(
-	    shapePath, visible, selected, highlighted, lineStyle, lineWidth,
-	    transparency, colorOverride, color, materialColorValid,
-	    materialColor, materialRevision);
+			    shapePath, visible, selected, highlighted, lineStyle, lineWidth,
+			    transparency, colorOverride, color, materialColorValid,
+			    materialColor, materialRevision);
     if (changed > 0)
 	this->requestRender("scene-shape");
     return changed;
@@ -2547,8 +2547,8 @@ BRLObolViewController::setShapePlacementState(const char *shapePath,
 	float drawSize)
 {
     const int changed = this->sceneController.setShapePlacementState(
-	    shapePath, drawMatrixValid, drawMatrix, drawCenterValid,
-	    drawCenter, drawSizeValid, drawSize);
+			    shapePath, drawMatrixValid, drawMatrix, drawCenterValid,
+			    drawCenter, drawSizeValid, drawSize);
     if (changed > 0)
 	this->requestRender("scene-shape");
     return changed;
@@ -2571,12 +2571,12 @@ BRLObolViewController::setShapeSourceState(const char *shapePath,
 	uint32_t ownerStaleReason)
 {
     const int changed = this->sceneController.setShapeSourceState(
-	    shapePath, ownerSourcePath, ownerSourceRevision,
-	    ownerInputsRevision, ownerViewRevision, ownerRealizedRevision,
-	    ownerRealizedSourceRevision, ownerRealizedInputsRevision,
-	    ownerRealizedViewRevision, ownerRealizationStatus,
-	    ownerRealizationDiagnostic, ownerRealizationIdentity,
-	    ownerSourceStale, ownerStaleReason);
+			    shapePath, ownerSourcePath, ownerSourceRevision,
+			    ownerInputsRevision, ownerViewRevision, ownerRealizedRevision,
+			    ownerRealizedSourceRevision, ownerRealizedInputsRevision,
+			    ownerRealizedViewRevision, ownerRealizationStatus,
+			    ownerRealizationDiagnostic, ownerRealizationIdentity,
+			    ownerSourceStale, ownerStaleReason);
     if (changed > 0)
 	this->requestRender("scene-shape");
     return changed;
@@ -2589,7 +2589,7 @@ BRLObolViewController::replaceDatabaseSource(const char *sourcePath,
 	uint32_t sourceRevision)
 {
     int changed = this->sceneController.replaceDatabaseSource(sourcePath,
-	    dbip, drawMode, sourceRevision);
+		  dbip, drawMode, sourceRevision);
     if (changed > 0) {
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
@@ -2599,14 +2599,14 @@ BRLObolViewController::replaceDatabaseSource(const char *sourcePath,
 
 int
 BRLObolViewController::replaceDatabaseSourceInstance(
-	const char *sourceInstanceKey,
-	const char *sourcePath,
-	struct db_i *dbip,
-	int drawMode,
-	uint32_t sourceRevision)
+    const char *sourceInstanceKey,
+    const char *sourcePath,
+    struct db_i *dbip,
+    int drawMode,
+    uint32_t sourceRevision)
 {
     int changed = this->sceneController.replaceDatabaseSourceInstance(
-	    sourceInstanceKey, sourcePath, dbip, drawMode, sourceRevision);
+		      sourceInstanceKey, sourcePath, dbip, drawMode, sourceRevision);
     if (changed > 0) {
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
@@ -2631,10 +2631,10 @@ BRLObolViewController::setDatabaseSourceState(const char *sourcePath,
 	uint32_t materialRevision)
 {
     const int changed = this->sceneController.setDatabaseSourceState(
-	    sourcePath, sourceRevisionValid, sourceRevision, inputsRevision,
-	    visible, highlighted, lineStyle, lineWidth, transparency,
-	    colorOverride, color, materialColorValid, materialColor,
-	    materialRevision);
+			    sourcePath, sourceRevisionValid, sourceRevision, inputsRevision,
+			    visible, highlighted, lineStyle, lineWidth, transparency,
+			    colorOverride, color, materialColorValid, materialColor,
+			    materialRevision);
     if (changed > 0) {
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
@@ -2644,26 +2644,26 @@ BRLObolViewController::setDatabaseSourceState(const char *sourcePath,
 
 int
 BRLObolViewController::setDatabaseSourceInstanceState(
-	const char *sourceInstanceKey,
-	SbBool sourceRevisionValid,
-	uint32_t sourceRevision,
-	uint32_t inputsRevision,
-	SbBool visible,
-	SbBool highlighted,
-	int lineStyle,
-	int lineWidth,
-	float transparency,
-	SbBool colorOverride,
-	const SbColor &color,
-	SbBool materialColorValid,
-	const SbColor &materialColor,
-	uint32_t materialRevision)
+    const char *sourceInstanceKey,
+    SbBool sourceRevisionValid,
+    uint32_t sourceRevision,
+    uint32_t inputsRevision,
+    SbBool visible,
+    SbBool highlighted,
+    int lineStyle,
+    int lineWidth,
+    float transparency,
+    SbBool colorOverride,
+    const SbColor &color,
+    SbBool materialColorValid,
+    const SbColor &materialColor,
+    uint32_t materialRevision)
 {
     const int changed = this->sceneController.setDatabaseSourceInstanceState(
-	    sourceInstanceKey, sourceRevisionValid, sourceRevision,
-	    inputsRevision, visible, highlighted, lineStyle, lineWidth,
-	    transparency, colorOverride, color, materialColorValid,
-	    materialColor, materialRevision);
+			    sourceInstanceKey, sourceRevisionValid, sourceRevision,
+			    inputsRevision, visible, highlighted, lineStyle, lineWidth,
+			    transparency, colorOverride, color, materialColorValid,
+			    materialColor, materialRevision);
     if (changed > 0) {
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
@@ -2676,7 +2676,7 @@ BRLObolViewController::setDatabaseSourceDisplayPatch(const char *sourcePath,
 	const BRLObolDatabaseSourceDisplayPatch &patch)
 {
     const int changed = this->sceneController.setDatabaseSourceDisplayPatch(
-	    sourcePath, patch);
+			    sourcePath, patch);
     if (changed > 0) {
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
@@ -2686,12 +2686,12 @@ BRLObolViewController::setDatabaseSourceDisplayPatch(const char *sourcePath,
 
 int
 BRLObolViewController::setDatabaseSourceInstanceDisplayPatch(
-	const char *sourceInstanceKey,
-	const BRLObolDatabaseSourceDisplayPatch &patch)
+    const char *sourceInstanceKey,
+    const BRLObolDatabaseSourceDisplayPatch &patch)
 {
     const int changed =
 	this->sceneController.setDatabaseSourceInstanceDisplayPatch(
-		sourceInstanceKey, patch);
+	    sourceInstanceKey, patch);
     if (changed > 0) {
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
@@ -2704,7 +2704,7 @@ BRLObolViewController::setDatabaseSourceDisplayName(const char *sourcePath,
 	const char *displayName)
 {
     const int changed = this->sceneController.setDatabaseSourceDisplayName(
-	    sourcePath, displayName);
+			    sourcePath, displayName);
     if (changed > 0) {
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
@@ -2714,12 +2714,12 @@ BRLObolViewController::setDatabaseSourceDisplayName(const char *sourcePath,
 
 int
 BRLObolViewController::setDatabaseSourceInstanceDisplayName(
-	const char *sourceInstanceKey,
-	const char *displayName)
+    const char *sourceInstanceKey,
+    const char *displayName)
 {
     const int changed =
 	this->sceneController.setDatabaseSourceInstanceDisplayName(
-		sourceInstanceKey, displayName);
+	    sourceInstanceKey, displayName);
     if (changed > 0) {
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
@@ -2734,7 +2734,7 @@ BRLObolViewController::setDatabaseSourceBoundsState(const char *sourcePath,
 	const SbVec3f &boundsMax)
 {
     const int changed = this->sceneController.setDatabaseSourceBoundsState(
-	    sourcePath, boundsValid, boundsMin, boundsMax);
+			    sourcePath, boundsValid, boundsMin, boundsMax);
     if (changed > 0) {
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
@@ -2744,14 +2744,14 @@ BRLObolViewController::setDatabaseSourceBoundsState(const char *sourcePath,
 
 int
 BRLObolViewController::setDatabaseSourceInstanceBoundsState(
-	const char *sourceInstanceKey,
-	SbBool boundsValid,
-	const SbVec3f &boundsMin,
-	const SbVec3f &boundsMax)
+    const char *sourceInstanceKey,
+    SbBool boundsValid,
+    const SbVec3f &boundsMin,
+    const SbVec3f &boundsMax)
 {
     const int changed =
 	this->sceneController.setDatabaseSourceInstanceBoundsState(
-		sourceInstanceKey, boundsValid, boundsMin, boundsMax);
+	    sourceInstanceKey, boundsValid, boundsMin, boundsMax);
     if (changed > 0) {
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
@@ -2761,11 +2761,11 @@ BRLObolViewController::setDatabaseSourceInstanceBoundsState(
 
 int
 BRLObolViewController::setDatabaseSourceMaterialPolicy(
-	const char *sourcePath,
-	int materialPolicy)
+    const char *sourcePath,
+    int materialPolicy)
 {
     const int changed = this->sceneController.setDatabaseSourceMaterialPolicy(
-	    sourcePath, materialPolicy);
+			    sourcePath, materialPolicy);
     if (changed > 0) {
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
@@ -2775,12 +2775,12 @@ BRLObolViewController::setDatabaseSourceMaterialPolicy(
 
 int
 BRLObolViewController::setDatabaseSourceInstanceMaterialPolicy(
-	const char *sourceInstanceKey,
-	int materialPolicy)
+    const char *sourceInstanceKey,
+    int materialPolicy)
 {
     const int changed =
 	this->sceneController.setDatabaseSourceInstanceMaterialPolicy(
-		sourceInstanceKey, materialPolicy);
+	    sourceInstanceKey, materialPolicy);
     if (changed > 0) {
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
@@ -2793,7 +2793,7 @@ BRLObolViewController::markDatabaseSourceStale(const char *sourcePath,
 	uint32_t staleReason)
 {
     const int changed = this->sceneController.markDatabaseSourceStale(
-	    sourcePath, staleReason);
+			    sourcePath, staleReason);
     if (changed > 0) {
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
@@ -2803,11 +2803,11 @@ BRLObolViewController::markDatabaseSourceStale(const char *sourcePath,
 
 int
 BRLObolViewController::markDatabaseSourceInstanceStale(
-	const char *sourceInstanceKey,
-	uint32_t staleReason)
+    const char *sourceInstanceKey,
+    uint32_t staleReason)
 {
     const int changed = this->sceneController.markDatabaseSourceInstanceStale(
-	    sourceInstanceKey, staleReason);
+			    sourceInstanceKey, staleReason);
     if (changed > 0) {
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
@@ -2828,10 +2828,10 @@ BRLObolViewController::removeDatabaseSource(const char *sourcePath)
 
 int
 BRLObolViewController::removeDatabaseSourceInstance(
-	const char *sourceInstanceKey)
+    const char *sourceInstanceKey)
 {
     int removed = this->sceneController.removeDatabaseSourceInstance(
-	    sourceInstanceKey);
+		      sourceInstanceKey);
     if (removed > 0) {
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
@@ -2844,7 +2844,7 @@ BRLObolViewController::moveDatabaseSourceToGroup(const char *sourcePath,
 	const char *groupPath)
 {
     int moved = this->sceneController.moveDatabaseSourceToGroup(sourcePath,
-	    groupPath);
+		groupPath);
     if (moved > 0) {
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
@@ -2854,11 +2854,11 @@ BRLObolViewController::moveDatabaseSourceToGroup(const char *sourcePath,
 
 int
 BRLObolViewController::moveDatabaseSourceInstanceToGroup(
-	const char *sourceInstanceKey,
-	const char *groupPath)
+    const char *sourceInstanceKey,
+    const char *groupPath)
 {
     int moved = this->sceneController.moveDatabaseSourceInstanceToGroup(
-	    sourceInstanceKey, groupPath);
+		    sourceInstanceKey, groupPath);
     if (moved > 0) {
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
@@ -2891,10 +2891,10 @@ BRLObolViewController::getDatabaseSourceCount(void) const
 
 SoBRLDatabaseSource *
 BRLObolViewController::findDatabaseSourceInstance(
-	const char *sourceInstanceKey) const
+    const char *sourceInstanceKey) const
 {
     return this->sceneController.findDatabaseSourceInstance(
-	    sourceInstanceKey);
+	       sourceInstanceKey);
 }
 
 SbBool

@@ -133,7 +133,7 @@ SoBRLVListShape::getSharedGeometrySource(void)
 {
     SoNode *node = this->sharedGeometry.getValue();
     if (node && node != this &&
-	    node->isOfType(SoBRLVListShape::getClassTypeId()))
+	node->isOfType(SoBRLVListShape::getClassTypeId()))
 	return static_cast<SoBRLVListShape *>(node);
     return this;
 }
@@ -143,7 +143,7 @@ SoBRLVListShape::getSharedGeometrySource(void) const
 {
     const SoNode *node = this->sharedGeometry.getValue();
     if (node && node != this &&
-	    node->isOfType(SoBRLVListShape::getClassTypeId()))
+	node->isOfType(SoBRLVListShape::getClassTypeId()))
 	return static_cast<const SoBRLVListShape *>(node);
     return this;
 }
@@ -327,9 +327,9 @@ SoBRLVListShape::updateDrawBoundsFromPoints(void)
 
     this->drawCenterValid = TRUE;
     this->drawCenter = SbVec3f(
-	    (bmin[0] + bmax[0]) * 0.5f,
-	    (bmin[1] + bmax[1]) * 0.5f,
-	    (bmin[2] + bmax[2]) * 0.5f);
+			   (bmin[0] + bmax[0]) * 0.5f,
+			   (bmin[1] + bmax[1]) * 0.5f,
+			   (bmin[2] + bmax[2]) * 0.5f);
 
     float size = bmax[0] - bmin[0];
     if ((bmax[1] - bmin[1]) > size)
@@ -343,8 +343,8 @@ SoBRLVListShape::updateDrawBoundsFromPoints(void)
 
 void
 SoBRLVListShape::setPointAttributes(const int *colorValid,
-	const SbColor *colors, const int *scaleValid, const float *scales,
-	const int *normalValid, const SbVec3f *normals, int count)
+				    const SbColor *colors, const int *scaleValid, const float *scales,
+				    const int *normalValid, const SbVec3f *normals, int count)
 {
     this->pointColorValid.setNum(0);
     this->pointColor.setNum(0);
@@ -497,9 +497,9 @@ SoBRLVListShape::getPointColor(int primitiveIndex, SbColor &colorOut) const
     colorOut = SbColor(1.0f, 1.0f, 1.0f);
     const SoBRLVListShape *geom = this->getGeometrySource();
     if (primitiveIndex < 0 ||
-	    primitiveIndex >= geom->pointColorValid.getNum() ||
-	    primitiveIndex >= geom->pointColor.getNum() ||
-	    !geom->pointColorValid[primitiveIndex])
+	primitiveIndex >= geom->pointColorValid.getNum() ||
+	primitiveIndex >= geom->pointColor.getNum() ||
+	!geom->pointColorValid[primitiveIndex])
 	return FALSE;
 
     colorOut = geom->pointColor[primitiveIndex];
@@ -512,9 +512,9 @@ SoBRLVListShape::getPointScale(int primitiveIndex, float &scaleOut) const
     scaleOut = 0.0f;
     const SoBRLVListShape *geom = this->getGeometrySource();
     if (primitiveIndex < 0 ||
-	    primitiveIndex >= geom->pointScaleValid.getNum() ||
-	    primitiveIndex >= geom->pointScale.getNum() ||
-	    !geom->pointScaleValid[primitiveIndex])
+	primitiveIndex >= geom->pointScaleValid.getNum() ||
+	primitiveIndex >= geom->pointScale.getNum() ||
+	!geom->pointScaleValid[primitiveIndex])
 	return FALSE;
 
     scaleOut = geom->pointScale[primitiveIndex];
@@ -527,9 +527,9 @@ SoBRLVListShape::getPointNormal(int primitiveIndex, SbVec3f &normalOut) const
     normalOut = SbVec3f(0.0f, 0.0f, 1.0f);
     const SoBRLVListShape *geom = this->getGeometrySource();
     if (primitiveIndex < 0 ||
-	    primitiveIndex >= geom->pointNormalValid.getNum() ||
-	    primitiveIndex >= geom->pointNormal.getNum() ||
-	    !geom->pointNormalValid[primitiveIndex])
+	primitiveIndex >= geom->pointNormalValid.getNum() ||
+	primitiveIndex >= geom->pointNormal.getNum() ||
+	!geom->pointNormalValid[primitiveIndex])
 	return FALSE;
 
     normalOut = geom->pointNormal[primitiveIndex];
@@ -585,7 +585,7 @@ static void
 set_vlist_default_gl_color(SoBRLVListShape *shape)
 {
     const SbColor &c = shape->materialColorValid.getValue() ?
-	shape->materialColor.getValue() : shape->color.getValue();
+		       shape->materialColor.getValue() : shape->color.getValue();
     glColor3f(c[0], c[1], c[2]);
 }
 
@@ -600,14 +600,14 @@ static SbBool
 vlist_needs_independent_segment_rendering(const SoBRLVListShape *shape)
 {
     return shape &&
-	(shape->selectedPrimitive.getNum() > 0 ||
-	 shape->highlightedPrimitive.getNum() > 0);
+	   (shape->selectedPrimitive.getNum() > 0 ||
+	    shape->highlightedPrimitive.getNum() > 0);
 }
 
 static void
 vlist_gl_vertex_at(const SoBRLVListShape *shape,
-	const SoBRLVListShape *geom,
-	int index)
+		   const SoBRLVListShape *geom,
+		   int index)
 {
     double precisePoint[3] = {0.0, 0.0, 0.0};
     if (shape && shape->getPrecisePoint(index, precisePoint)) {
@@ -621,8 +621,8 @@ vlist_gl_vertex_at(const SoBRLVListShape *shape,
 
 static void
 vlist_render_independent_segments(SoBRLVListShape *shape,
-	const SoBRLVListShape *geom,
-	int n)
+				  const SoBRLVListShape *geom,
+				  int n)
 {
     SbBool haveLast = FALSE;
     int lastIndex = -1;
@@ -654,8 +654,8 @@ vlist_render_independent_segments(SoBRLVListShape *shape,
 
 static void
 vlist_render_line_strips(SoBRLVListShape *shape,
-	const SoBRLVListShape *geom,
-	int n)
+			 const SoBRLVListShape *geom,
+			 int n)
 {
     SbBool stripOpen = FALSE;
 
@@ -824,11 +824,11 @@ SoBRLVListShape::createLineSegmentDetail(SoRayPickAction *UNUSED(action),
     detail->setMaterialId(this->materialId.getValue());
     detail->setLos(this->los.getValue());
     detail->setMaterialColor(this->materialColorValid.getValue(),
-	    this->materialColor.getValue());
+			     this->materialColor.getValue());
     detail->setMaterialShader(this->materialShader.getValue());
     detail->setPrimitive(SoBRLPickDetail::LINE_SEGMENT, -1);
     detail->setEditIntent(this->editIntentId.getValue(),
-	    this->editIntentRole.getValue());
+			  this->editIntentRole.getValue());
 
     const SoDetail *vertexDetail = v1 ? v1->getDetail() : NULL;
     if (vertexDetail && vertexDetail->isOfType(SoPointDetail::getClassTypeId())) {
@@ -842,8 +842,8 @@ SoBRLVListShape::createLineSegmentDetail(SoRayPickAction *UNUSED(action),
 
 SoDetail *
 SoBRLVListShape::createPointDetail(SoRayPickAction *UNUSED(action),
-	const SoPrimitiveVertex *v,
-	SoPickedPoint *UNUSED(pp))
+				   const SoPrimitiveVertex *v,
+				   SoPickedPoint *UNUSED(pp))
 {
     SoBRLPickDetail *detail = new SoBRLPickDetail;
     detail->setPath(this->sourcePath.getValue());
@@ -855,11 +855,11 @@ SoBRLVListShape::createPointDetail(SoRayPickAction *UNUSED(action),
     detail->setMaterialId(this->materialId.getValue());
     detail->setLos(this->los.getValue());
     detail->setMaterialColor(this->materialColorValid.getValue(),
-	    this->materialColor.getValue());
+			     this->materialColor.getValue());
     detail->setMaterialShader(this->materialShader.getValue());
     detail->setPrimitive(SoBRLPickDetail::POINT, -1);
     detail->setEditIntent(this->editIntentId.getValue(),
-	    this->editIntentRole.getValue());
+			  this->editIntentRole.getValue());
 
     const SoDetail *vertexDetail = v ? v->getDetail() : NULL;
     if (vertexDetail && vertexDetail->isOfType(SoPointDetail::getClassTypeId())) {

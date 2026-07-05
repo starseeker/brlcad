@@ -110,7 +110,7 @@ SoBRLRealizeAction::databaseSourceAction(SoAction *action, SoNode *node)
 
     if (realizeAction->seedingCache) {
 	brlobol_database_source_seed_realization_cache(
-		source, realizeAction->realizationCache);
+	    source, realizeAction->realizationCache);
 	source->doAction(action);
 	return;
     }
@@ -118,20 +118,20 @@ SoBRLRealizeAction::databaseSourceAction(SoAction *action, SoNode *node)
     realizeAction->visitedSourceCount++;
     const int roleFlags = source->realizationRoleFlags.getValue();
     if (source->needsRealization() &&
-	    !(roleFlags & SoBRLDatabaseSource::REALIZATION_ROLE_EXTERNAL)) {
+	!(roleFlags & SoBRLDatabaseSource::REALIZATION_ROLE_EXTERNAL)) {
 	if (source->getDatabase()) {
 	    SbBool realized = FALSE;
 	    if ((roleFlags & SoBRLDatabaseSource::REALIZATION_ROLE_MESH) ||
-		    source->representationMode.getValue() ==
-		    SoBRLDatabaseSource::REPRESENTATION_HIDDEN_LINE ||
-		    source->representationMode.getValue() ==
-		    SoBRLDatabaseSource::REPRESENTATION_EVAL_POINTS ||
-		    source->drawMode.getValue() == SoBRLDatabaseSource::SHADED)
+		source->representationMode.getValue() ==
+		SoBRLDatabaseSource::REPRESENTATION_HIDDEN_LINE ||
+		source->representationMode.getValue() ==
+		SoBRLDatabaseSource::REPRESENTATION_EVAL_POINTS ||
+		source->drawMode.getValue() == SoBRLDatabaseSource::SHADED)
 		realized = brlobol_database_source_realize_mesh_with_cache(
-			source, realizeAction->realizationCache);
+			       source, realizeAction->realizationCache);
 	    else
 		realized = brlobol_database_source_realize_wireframe_with_cache(
-			source, realizeAction->realizationCache);
+			       source, realizeAction->realizationCache);
 
 	    if (realized)
 		realizeAction->realizedSourceCount++;

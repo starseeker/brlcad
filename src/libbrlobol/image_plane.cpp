@@ -91,29 +91,29 @@ SoBRLImagePlane::rebuildGeometry(void)
     float displayWidth = 0.0f;
     float displayHeight = 0.0f;
     brlobol_image_fit_size((float)payload.width, (float)payload.height,
-	    requestedWidth, requestedHeight, this->fit.getValue() + 1,
-	    this->sizeMode.getValue() == IMAGE_ASPECT,
-	    &displayWidth, &displayHeight);
+			   requestedWidth, requestedHeight, this->fit.getValue() + 1,
+			   this->sizeMode.getValue() == IMAGE_ASPECT,
+			   &displayWidth, &displayHeight);
 
     float u0 = 0.0f;
     float v0 = 0.0f;
     float u1 = 1.0f;
     float v1 = 1.0f;
     brlobol_image_texture_rect((float)payload.width, (float)payload.height,
-	    SbVec2f(-1.0f, -1.0f), 1.0f, this->fit.getValue() + 1,
-	    &u0, &v0, &u1, &v1);
+			       SbVec2f(-1.0f, -1.0f), 1.0f, this->fit.getValue() + 1,
+			       &u0, &v0, &u1, &v1);
 
     SoTexture2 *texture = NULL;
     SoFaceSet *face = NULL;
     SoSeparator *quad = brlobol_image_make_textured_quad(&payload,
-	    displayWidth * -0.5f, displayHeight * -0.5f, 0.0f,
-	    displayWidth, displayHeight, u0, v0, u1, v1,
-	    this->opacity.getValue(),
-	    this->selectable.getValue(),
-	    this->depthTest.getValue(),
-	    this->depthWrite.getValue(),
-	    this->doubleSided.getValue(),
-	    &texture, &face);
+			displayWidth * -0.5f, displayHeight * -0.5f, 0.0f,
+			displayWidth, displayHeight, u0, v0, u1, v1,
+			this->opacity.getValue(),
+			this->selectable.getValue(),
+			this->depthTest.getValue(),
+			this->depthWrite.getValue(),
+			this->doubleSided.getValue(),
+			&texture, &face);
     if (!quad)
 	return -1;
 
@@ -134,8 +134,8 @@ SoBRLImagePlane::syncFromSource(void)
     if (source->refreshFromStream() != 0)
 	return -1;
     if (this->getNumChildren() == 0 ||
-	    this->realizedDataRevision.getValue() != source->dataRevision.getValue() ||
-	    this->realizedDirtyRevision.getValue() != source->dirtyRevision.getValue())
+	this->realizedDataRevision.getValue() != source->dataRevision.getValue() ||
+	this->realizedDirtyRevision.getValue() != source->dirtyRevision.getValue())
 	return this->rebuildGeometry();
     return 0;
 }

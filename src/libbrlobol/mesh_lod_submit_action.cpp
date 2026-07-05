@@ -57,7 +57,7 @@ SoBRLMeshLodSubmitAction::initClass(void)
     SO_ACTION_ADD_METHOD(SoNode, SoBRLMeshLodSubmitAction::nodeAction);
     SO_ACTION_ADD_METHOD(SoGroup, SoBRLMeshLodSubmitAction::nodeAction);
     SO_ACTION_ADD_METHOD(SoBRLMeshShape,
-	    SoBRLMeshLodSubmitAction::meshShapeAction);
+			 SoBRLMeshLodSubmitAction::meshShapeAction);
 }
 
 void
@@ -74,7 +74,7 @@ SoBRLMeshLodSubmitAction::getService(void) const
 
 void
 SoBRLMeshLodSubmitAction::setDatabase(struct db_i *newDbip,
-	const char *newDatabaseId, uint64_t newDatabaseRevision)
+				      const char *newDatabaseId, uint64_t newDatabaseRevision)
 {
     this->dbip = newDbip;
     this->databaseId = newDatabaseId ? newDatabaseId : "";
@@ -92,8 +92,7 @@ SoBRLMeshLodSubmitAction::setViewInfo(const struct rt_view_info *info)
 }
 
 const struct rt_view_info &
-SoBRLMeshLodSubmitAction::getViewInfo(void) const
-{
+SoBRLMeshLodSubmitAction::getViewInfo(void) const {
     return this->view;
 }
 
@@ -111,7 +110,7 @@ SoBRLMeshLodSubmitAction::getGeneration(void) const
 
 void
 SoBRLMeshLodSubmitAction::setRevisions(uint64_t newViewRevision,
-	uint64_t newPolicyRevision)
+				       uint64_t newPolicyRevision)
 {
     this->viewRevision = newViewRevision;
     this->policyRevision = newPolicyRevision;
@@ -119,7 +118,7 @@ SoBRLMeshLodSubmitAction::setRevisions(uint64_t newViewRevision,
 
 void
 SoBRLMeshLodSubmitAction::setProvider(const char *newProviderId,
-	const char *newProviderVersion)
+				      const char *newProviderVersion)
 {
     this->providerId = newProviderId ? newProviderId : "";
     this->providerVersion = newProviderVersion ? newProviderVersion : "";
@@ -183,7 +182,7 @@ SoBRLMeshLodSubmitAction::getRequireLodBacked(void) const
 
 void
 SoBRLMeshLodSubmitAction::setViewLodState(
-	const BRLObolViewLodState *newViewState)
+    const BRLObolViewLodState *newViewState)
 {
     this->viewState = newViewState;
 }
@@ -245,7 +244,7 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
     submitAction->visitedMeshCount++;
 
     SbString target = shape->sourcePath.getValue().getLength() > 0 ?
-	shape->sourcePath.getValue() : shape->sourceName.getValue();
+		      shape->sourcePath.getValue() : shape->sourceName.getValue();
 
     if (submitAction->requireLodBacked && !shape->isLodBackedMesh()) {
 	submitAction->skippedMeshCount++;
@@ -267,14 +266,14 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 
     BRLObolLodRequest request;
     shape->makeLodRequest(request,
-	    submitAction->databaseId.getString(),
-	    submitAction->databaseRevision,
-	    submitAction->viewRevision,
-	    submitAction->policyRevision,
-	    BRLOBOL_LOD_DRAW_SHADED,
-	    submitAction->providerId.getString(),
-	    submitAction->providerVersion.getString(),
-	    submitAction->qualityTier);
+			  submitAction->databaseId.getString(),
+			  submitAction->databaseRevision,
+			  submitAction->viewRevision,
+			  submitAction->policyRevision,
+			  BRLOBOL_LOD_DRAW_SHADED,
+			  submitAction->providerId.getString(),
+			  submitAction->providerVersion.getString(),
+			  submitAction->qualityTier);
 
     BRLObolLodCacheKey requestKey = brlobol_lod_cache_key(request);
     const BRLObolViewLodState::MeshPayload *viewPayload =
@@ -287,7 +286,7 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	 requestKey.isValid() &&
 	 viewPayload->cacheKey.getLength() > 0 &&
 	 strcmp(viewPayload->cacheKey.getString(),
-	     requestKey.value.getString()) == 0) ? TRUE : FALSE;
+		requestKey.value.getString()) == 0) ? TRUE : FALSE;
     const SbBool shapePayloadResident =
 	(shape->lodAvailable.getValue() &&
 	 shape->lodResultKind.getValue() == BRLOBOL_LOD_RESULT_MESH &&
@@ -295,10 +294,10 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	 requestKey.isValid() &&
 	 shape->lodCacheKey.getValue().getLength() > 0 &&
 	 strcmp(shape->lodCacheKey.getValue().getString(),
-	     requestKey.value.getString()) == 0) ? TRUE : FALSE;
+		requestKey.value.getString()) == 0) ? TRUE : FALSE;
     if (!submitAction->useForcedLevel &&
-	    submitAction->reset == 0 &&
-	    (viewPayloadResident || shapePayloadResident)) {
+	submitAction->reset == 0 &&
+	(viewPayloadResident || shapePayloadResident)) {
 	submitAction->skippedMeshCount++;
 	submitAction->appendDiagnostic(target, "current LoD request is already resident");
 	return;
@@ -308,10 +307,10 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	(!submitAction->useForcedLevel && submitAction->reset == 0) ?
 	TRUE : FALSE;
     if (suppressActiveDuplicate &&
-	    submitAction->service->hasActiveRequest(request)) {
+	submitAction->service->hasActiveRequest(request)) {
 	submitAction->skippedMeshCount++;
 	submitAction->appendDiagnostic(target,
-		"current LoD request is already active");
+				       "current LoD request is already active");
 	return;
     }
 
@@ -333,16 +332,16 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
     task.realizeDataFree = brlobol_rt_mesh_lod_provider_free;
 
     uint64_t taskId = suppressActiveDuplicate ?
-	submitAction->service->submitIfNotActive(task) :
-	submitAction->service->submit(task);
+		      submitAction->service->submitIfNotActive(task) :
+		      submitAction->service->submit(task);
     if (taskId == 0) {
 	brlobol_rt_mesh_lod_provider_free(provider);
 	submitAction->skippedMeshCount++;
 	submitAction->appendDiagnostic(target,
-		suppressActiveDuplicate &&
-		submitAction->service->hasActiveRequest(request) ?
-		"current LoD request is already active" :
-		"LoD service rejected mesh task");
+				       suppressActiveDuplicate &&
+				       submitAction->service->hasActiveRequest(request) ?
+				       "current LoD request is already active" :
+				       "LoD service rejected mesh task");
 	return;
     }
 

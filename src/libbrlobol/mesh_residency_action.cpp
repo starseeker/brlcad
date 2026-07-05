@@ -45,7 +45,7 @@ SoBRLMeshResidencyAction::initClass(void)
     SO_ACTION_ADD_METHOD(SoNode, SoBRLMeshResidencyAction::nodeAction);
     SO_ACTION_ADD_METHOD(SoGroup, SoBRLMeshResidencyAction::nodeAction);
     SO_ACTION_ADD_METHOD(SoBRLMeshShape,
-	    SoBRLMeshResidencyAction::meshShapeAction);
+			 SoBRLMeshResidencyAction::meshShapeAction);
 }
 
 void
@@ -124,7 +124,7 @@ size_t
 SoBRLMeshResidencyAction::getFreedResidentMeshBytes(void) const
 {
     return this->initialResidentMeshBytes > this->finalResidentMeshBytes ?
-	this->initialResidentMeshBytes - this->finalResidentMeshBytes : 0;
+	   this->initialResidentMeshBytes - this->finalResidentMeshBytes : 0;
 }
 
 void
@@ -185,9 +185,9 @@ SoBRLMeshResidencyAction::evictToBudget(void)
 	return;
 
     std::sort(this->entries.begin(), this->entries.end(),
-	    [](const Entry &a, const Entry &b) {
-		return a.fullDetailBytes > b.fullDetailBytes;
-	    });
+    [](const Entry &a, const Entry &b) {
+	return a.fullDetailBytes > b.fullDetailBytes;
+    });
     for (size_t i = 0; i < this->entries.size(); i++) {
 	if (this->finalResidentMeshBytes <= this->maxResidentMeshBytes)
 	    return;
@@ -205,18 +205,18 @@ SoBRLMeshResidencyAction::evictToBudget(void)
     }
 
     if (!this->evictDisplayPayloads ||
-	    this->finalResidentMeshBytes <= this->maxResidentMeshBytes)
+	this->finalResidentMeshBytes <= this->maxResidentMeshBytes)
 	return;
 
     for (size_t i = 0; i < this->entries.size(); i++) {
 	SoBRLMeshShape *shape = this->entries[i].shape;
 	this->entries[i].displayBytes = shape ?
-	    shape->estimateDisplayMeshBytes() : 0;
+					shape->estimateDisplayMeshBytes() : 0;
     }
     std::sort(this->entries.begin(), this->entries.end(),
-	    [](const Entry &a, const Entry &b) {
-		return a.displayBytes > b.displayBytes;
-	    });
+    [](const Entry &a, const Entry &b) {
+	return a.displayBytes > b.displayBytes;
+    });
 
     for (size_t i = 0; i < this->entries.size(); i++) {
 	if (this->finalResidentMeshBytes <= this->maxResidentMeshBytes)

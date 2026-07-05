@@ -178,7 +178,7 @@ SoBRLMeshShape::getSharedGeometrySource(void)
 {
     SoNode *node = this->sharedGeometry.getValue();
     if (node && node != this &&
-	    node->isOfType(SoBRLMeshShape::getClassTypeId()))
+	node->isOfType(SoBRLMeshShape::getClassTypeId()))
 	return static_cast<SoBRLMeshShape *>(node);
     return this;
 }
@@ -188,7 +188,7 @@ SoBRLMeshShape::getSharedGeometrySource(void) const
 {
     const SoNode *node = this->sharedGeometry.getValue();
     if (node && node != this &&
-	    node->isOfType(SoBRLMeshShape::getClassTypeId()))
+	node->isOfType(SoBRLMeshShape::getClassTypeId()))
 	return static_cast<const SoBRLMeshShape *>(node);
     return this;
 }
@@ -197,9 +197,9 @@ SoBRLMeshShape *
 SoBRLMeshShape::getGeometrySource(void)
 {
     if (this->getSharedGeometrySource() != this &&
-	    this->lodDisplayActive.getValue() &&
-	    this->point.getNum() > 0 &&
-	    this->coordIndex.getNum() > 0)
+	this->lodDisplayActive.getValue() &&
+	this->point.getNum() > 0 &&
+	this->coordIndex.getNum() > 0)
 	return this;
 
     return this->getSharedGeometrySource();
@@ -209,9 +209,9 @@ const SoBRLMeshShape *
 SoBRLMeshShape::getGeometrySource(void) const
 {
     if (this->getSharedGeometrySource() != this &&
-	    this->lodDisplayActive.getValue() &&
-	    this->point.getNum() > 0 &&
-	    this->coordIndex.getNum() > 0)
+	this->lodDisplayActive.getValue() &&
+	this->point.getNum() > 0 &&
+	this->coordIndex.getNum() > 0)
 	return this;
 
     return this->getSharedGeometrySource();
@@ -219,7 +219,7 @@ SoBRLMeshShape::getGeometrySource(void) const
 
 void
 SoBRLMeshShape::setIndexedTriangles(const SbVec3f *points, int pointCount,
-	const int32_t *indices, int indexCount)
+				    const int32_t *indices, int indexCount)
 {
     this->sharedGeometry = NULL;
     this->clearFullDetailMesh();
@@ -282,9 +282,9 @@ SoBRLMeshShape::getTriangleVertexIndices(int triangleIndex, int &indexA, int &in
     indexB = geom->coordIndex[base + 1];
     indexC = geom->coordIndex[base + 2];
     if (indexA < 0 || indexB < 0 || indexC < 0 ||
-	    indexA >= geom->point.getNum() ||
-	    indexB >= geom->point.getNum() ||
-	    indexC >= geom->point.getNum()) {
+	indexA >= geom->point.getNum() ||
+	indexB >= geom->point.getNum() ||
+	indexC >= geom->point.getNum()) {
 	indexA = -1;
 	indexB = -1;
 	indexC = -1;
@@ -311,9 +311,9 @@ SoBRLMeshShape::getFullDetailTriangleCount(void) const
 
 SbBool
 SoBRLMeshShape::getFullDetailTriangle(int triangleIndex,
-	SbVec3f &a,
-	SbVec3f &b,
-	SbVec3f &c) const
+				      SbVec3f &a,
+				      SbVec3f &b,
+				      SbVec3f &c) const
 {
     int ia = -1;
     int ib = -1;
@@ -349,9 +349,9 @@ SoBRLMeshShape::getFullDetailTriangleVertexIndices(int triangleIndex,
     indexB = geom->fullDetailCoordIndex[base + 1];
     indexC = geom->fullDetailCoordIndex[base + 2];
     if (indexA < 0 || indexB < 0 || indexC < 0 ||
-	    static_cast<size_t>(indexA) >= geom->fullDetailPoint.size() ||
-	    static_cast<size_t>(indexB) >= geom->fullDetailPoint.size() ||
-	    static_cast<size_t>(indexC) >= geom->fullDetailPoint.size()) {
+	static_cast<size_t>(indexA) >= geom->fullDetailPoint.size() ||
+	static_cast<size_t>(indexB) >= geom->fullDetailPoint.size() ||
+	static_cast<size_t>(indexC) >= geom->fullDetailPoint.size()) {
 	indexA = -1;
 	indexB = -1;
 	indexC = -1;
@@ -412,7 +412,7 @@ SoBRLMeshShape::makeSourceMeshRequest(BRLObolSourceMeshRequest &request) const
 
     const SoBRLMeshShape *geom = this->getSharedGeometrySource();
     if (!geom->fullDetailPoint.empty() &&
-	    !geom->fullDetailCoordIndex.empty()) {
+	!geom->fullDetailCoordIndex.empty()) {
 	request.faceCount =
 	    static_cast<uint64_t>(geom->fullDetailCoordIndex.size() / 3);
 	request.pointCount = static_cast<uint64_t>(geom->fullDetailPoint.size());
@@ -441,9 +441,9 @@ SoBRLMeshShape::needsSourceBackedFullDetail(void) const
 	return FALSE;
 
     if (!this->lodDisplayActive.getValue() &&
-	    !this->lodBacked.getValue() &&
-	    !(this->lodAvailable.getValue() &&
-		this->lodResultKind.getValue() == BRLOBOL_LOD_RESULT_MESH))
+	!this->lodBacked.getValue() &&
+	!(this->lodAvailable.getValue() &&
+	  this->lodResultKind.getValue() == BRLOBOL_LOD_RESULT_MESH))
 	return FALSE;
 
     BRLObolSourceMeshRequest request;
@@ -472,7 +472,7 @@ size_t
 SoBRLMeshShape::estimateResidentMeshBytes(void) const
 {
     return this->estimateDisplayMeshBytes() +
-	this->estimateFullDetailMeshBytes();
+	   this->estimateFullDetailMeshBytes();
 }
 
 size_t
@@ -578,10 +578,10 @@ mesh_nearest_face_edge_slot(const SbVec3f &hit, const SbVec3f vertices[3])
     static const int edges[3][2] = {{0, 1}, {1, 2}, {2, 0}};
     int nearest = 0;
     float nearestDist = mesh_distance_squared_to_segment(hit,
-	    vertices[edges[0][0]], vertices[edges[0][1]]);
+			vertices[edges[0][0]], vertices[edges[0][1]]);
     for (int i = 1; i < 3; i++) {
 	float dist = mesh_distance_squared_to_segment(hit,
-		vertices[edges[i][0]], vertices[edges[i][1]]);
+		     vertices[edges[i][0]], vertices[edges[i][1]]);
 	if (dist < nearestDist) {
 	    nearest = i;
 	    nearestDist = dist;
@@ -639,7 +639,7 @@ SoBRLMeshShape::PickGeometryPolicy
 SoBRLMeshShape::getPickGeometryPolicy(void) const
 {
     return (this->pickGeometryPolicy.getValue() == PICK_FULL_DETAIL) ?
-	PICK_FULL_DETAIL : PICK_DISPLAY_LEVEL;
+	   PICK_FULL_DETAIL : PICK_DISPLAY_LEVEL;
 }
 
 SbBool
@@ -650,14 +650,14 @@ SoBRLMeshShape::isLodDisplayActive(void) const
 
 void
 SoBRLMeshShape::makeLodRequest(BRLObolLodRequest &request,
-	const char *databaseId,
-	uint64_t databaseRevision,
-	uint64_t viewRevision,
-	uint64_t policyRevision,
-	int requestDrawMode,
-	const char *providerId,
-	const char *providerVersion,
-	int qualityTier) const
+			       const char *databaseId,
+			       uint64_t databaseRevision,
+			       uint64_t viewRevision,
+			       uint64_t policyRevision,
+			       int requestDrawMode,
+			       const char *providerId,
+			       const char *providerVersion,
+			       int qualityTier) const
 {
     request.clear();
 
@@ -680,13 +680,13 @@ SoBRLMeshShape::makeLodRequest(BRLObolLodRequest &request,
     const SbBool useSourceMetrics =
 	(!useFullDetail && geom->sourceMeshMetricsValid) ? TRUE : FALSE;
     request.sourceCounts.faceCount = useFullDetail ?
-	static_cast<uint64_t>(geom->fullDetailCoordIndex.size() / 3) :
-	(useSourceMetrics ? geom->sourceMeshFaceCount :
-	    static_cast<uint64_t>(geom->getTriangleCount()));
+				     static_cast<uint64_t>(geom->fullDetailCoordIndex.size() / 3) :
+				     (useSourceMetrics ? geom->sourceMeshFaceCount :
+				      static_cast<uint64_t>(geom->getTriangleCount()));
     request.sourceCounts.pointCount = useFullDetail ?
-	static_cast<uint64_t>(geom->fullDetailPoint.size()) :
-	(useSourceMetrics ? geom->sourceMeshPointCount :
-	    static_cast<uint64_t>(geom->point.getNum()));
+				      static_cast<uint64_t>(geom->fullDetailPoint.size()) :
+				      (useSourceMetrics ? geom->sourceMeshPointCount :
+				       static_cast<uint64_t>(geom->point.getNum()));
 
     SbBox3f bounds;
     bounds.makeEmpty();
@@ -740,7 +740,7 @@ SoBRLMeshShape::clearStagedLodResult(void)
 
 SbBool
 SoBRLMeshShape::applyStagedLodResult(const BRLObolLodResult &result,
-	const BRLObolLodRequest *expectedRequest)
+				     const BRLObolLodRequest *expectedRequest)
 {
     if (expectedRequest && !brlobol_lod_result_matches_request(result,
 	    *expectedRequest)) {
@@ -751,9 +751,9 @@ SoBRLMeshShape::applyStagedLodResult(const BRLObolLodResult &result,
     }
 
     if (result.providerStatus == BRLOBOL_LOD_PROVIDER_STALE ||
-	    result.providerStatus == BRLOBOL_LOD_PROVIDER_CANCELLED ||
-	    result.providerStatus == BRLOBOL_LOD_PROVIDER_CACHE_MISS ||
-	    result.providerStatus == BRLOBOL_LOD_PROVIDER_ERROR) {
+	result.providerStatus == BRLOBOL_LOD_PROVIDER_CANCELLED ||
+	result.providerStatus == BRLOBOL_LOD_PROVIDER_CACHE_MISS ||
+	result.providerStatus == BRLOBOL_LOD_PROVIDER_ERROR) {
 	this->clearStagedLodResult();
 	this->lodResultKind = result.resultKind;
 	this->lodQualityTier = result.qualityTier;
@@ -786,14 +786,14 @@ SoBRLMeshShape::applyStagedLodResult(const BRLObolLodResult &result,
 	this->lodBoundsMax = result.bounds.getMax();
     }
     if (result.resultKind == BRLOBOL_LOD_RESULT_MESH ||
-	    result.resultKind == BRLOBOL_LOD_RESULT_FULL_DETAIL) {
+	result.resultKind == BRLOBOL_LOD_RESULT_FULL_DETAIL) {
 	this->lodAvailable = TRUE;
 	this->lodActiveLevel = result.geometry.activeLevel;
 	if (result.mesh.isValid() &&
-		result.mesh.points.size() <=
-		static_cast<size_t>(std::numeric_limits<int>::max()) &&
-		result.mesh.coordIndex.size() <=
-		static_cast<size_t>(std::numeric_limits<int>::max())) {
+	    result.mesh.points.size() <=
+	    static_cast<size_t>(std::numeric_limits<int>::max()) &&
+	    result.mesh.coordIndex.size() <=
+	    static_cast<size_t>(std::numeric_limits<int>::max())) {
 	    if (result.resultKind == BRLOBOL_LOD_RESULT_MESH) {
 		if (!this->sourceMeshMetricsValid)
 		    this->updateSourceMeshMetricsFromFields();
@@ -805,9 +805,9 @@ SoBRLMeshShape::applyStagedLodResult(const BRLObolLodResult &result,
 		this->clearFullDetailMesh();
 	    }
 	    this->setIndexedTriangleFields(result.mesh.points.data(),
-		    static_cast<int>(result.mesh.points.size()),
-		    result.mesh.coordIndex.data(),
-		    static_cast<int>(result.mesh.coordIndex.size()));
+					   static_cast<int>(result.mesh.points.size()),
+					   result.mesh.coordIndex.data(),
+					   static_cast<int>(result.mesh.coordIndex.size()));
 	    if (result.resultKind == BRLOBOL_LOD_RESULT_FULL_DETAIL)
 		this->updateSourceMeshMetricsFromFields();
 	    this->lodDisplayActive =
@@ -823,26 +823,26 @@ SoBRLMeshShape::applyStagedLodResult(const BRLObolLodResult &result,
     this->lodDependencyOptional.setNum(0);
     for (size_t i = 0; i < result.dependencies.size(); i++) {
 	this->lodDependencyPath.set1Value(static_cast<int>(i),
-		result.dependencies[i].objectPath);
+					  result.dependencies[i].objectPath);
 	this->lodDependencyName.set1Value(static_cast<int>(i),
-		result.dependencies[i].objectName);
+					  result.dependencies[i].objectName);
 	this->lodDependencySourceRevision.set1Value(static_cast<int>(i),
-		mesh_lod_uint64_string(result.dependencies[i].sourceRevision));
+					 mesh_lod_uint64_string(result.dependencies[i].sourceRevision));
 	this->lodDependencySourceHash.set1Value(static_cast<int>(i),
-		mesh_lod_uint64_string(result.dependencies[i].sourceContentHash));
+						mesh_lod_uint64_string(result.dependencies[i].sourceContentHash));
 	this->lodDependencyQualityTier.set1Value(static_cast<int>(i),
-		result.dependencies[i].requiredQualityTier);
+				      result.dependencies[i].requiredQualityTier);
 	this->lodDependencyOptional.set1Value(static_cast<int>(i),
-		result.dependencies[i].optional);
+					      result.dependencies[i].optional);
     }
 
     this->lodAttributeName.setNum(0);
     this->lodAttributeValue.setNum(0);
     for (size_t i = 0; i < result.attributes.size(); i++) {
 	this->lodAttributeName.set1Value(static_cast<int>(i),
-		result.attributes[i].name);
+					 result.attributes[i].name);
 	this->lodAttributeValue.set1Value(static_cast<int>(i),
-		result.attributes[i].value);
+					  result.attributes[i].value);
     }
 
     this->lodProxyKind = result.proxy.kind;
@@ -904,7 +904,7 @@ SoBRLMeshShape::captureFullDetailMesh(void)
 	this->fullDetailPoint.push_back(geom->point[i]);
 
     this->fullDetailCoordIndex.reserve(
-	    static_cast<size_t>(geom->coordIndex.getNum()));
+	static_cast<size_t>(geom->coordIndex.getNum()));
     for (int i = 0; i < geom->coordIndex.getNum(); i++)
 	this->fullDetailCoordIndex.push_back(geom->coordIndex[i]);
 }
@@ -916,9 +916,9 @@ SoBRLMeshShape::restoreFullDetailMesh(void)
 	return;
 
     this->setIndexedTriangleFields(this->fullDetailPoint.data(),
-	    static_cast<int>(this->fullDetailPoint.size()),
-	    this->fullDetailCoordIndex.data(),
-	    static_cast<int>(this->fullDetailCoordIndex.size()));
+				   static_cast<int>(this->fullDetailPoint.size()),
+				   this->fullDetailCoordIndex.data(),
+				   static_cast<int>(this->fullDetailCoordIndex.size()));
     this->updateSourceMeshMetricsFromFields();
     this->clearFullDetailMesh();
 }
@@ -932,7 +932,7 @@ SoBRLMeshShape::clearFullDetailMesh(void)
 
 static SbBool
 mesh_shape_gl_color(SoBRLMeshShape *shape, int primitiveIndex,
-	SbColor &color, float &alpha)
+		    SbColor &color, float &alpha)
 {
     if (shape->isPrimitiveHighlighted(primitiveIndex)) {
 	color = shape->highlightedColor.getValue();
@@ -953,7 +953,7 @@ mesh_shape_gl_color(SoBRLMeshShape *shape, int primitiveIndex,
     }
 
     color = shape->materialColorValid.getValue() ?
-	shape->materialColor.getValue() : shape->color.getValue();
+	    shape->materialColor.getValue() : shape->color.getValue();
     alpha = 1.0f;
     return FALSE;
 }
@@ -994,12 +994,12 @@ set_mesh_gl_material(SoBRLMeshShape *shape, int primitiveIndex)
 
 static void
 mesh_shape_emit_triangles(SoBRLMeshShape *shape,
-	const BRLObolViewLodState::MeshPayload *viewPayload,
-	SbBool setMaterial)
+			  const BRLObolViewLodState::MeshPayload *viewPayload,
+			  SbBool setMaterial)
 {
     glBegin(GL_TRIANGLES);
     const int triangleCount = viewPayload ? viewPayload->getTriangleCount() :
-	shape->getTriangleCount();
+			      shape->getTriangleCount();
     for (int i = 0; i < triangleCount; i++) {
 	SbVec3f a;
 	SbVec3f b;
@@ -1029,11 +1029,11 @@ mesh_shape_emit_triangles(SoBRLMeshShape *shape,
 
 static void
 mesh_shape_render_hidden_line(SoBRLMeshShape *shape,
-	const BRLObolViewLodState::MeshPayload *viewPayload)
+			      const BRLObolViewLodState::MeshPayload *viewPayload)
 {
     glPushAttrib(GL_CURRENT_BIT | GL_ENABLE_BIT | GL_LIGHTING_BIT |
-	    GL_POLYGON_BIT | GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT |
-	    GL_LINE_BIT);
+		 GL_POLYGON_BIT | GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT |
+		 GL_LINE_BIT);
     glDisable(GL_LIGHTING);
     glEnable(GL_DEPTH_TEST);
     glDepthMask(GL_TRUE);
@@ -1065,7 +1065,7 @@ SoBRLMeshShape::GLRender(SoGLRenderAction *action)
 	brlobol_view_lod_mesh_for_action(action, this);
 
     if (this->hiddenLine.getValue() ||
-	    this->drawMode.getValue() == BRLOBOL_LOD_DRAW_HIDDEN_LINE) {
+	this->drawMode.getValue() == BRLOBOL_LOD_DRAW_HIDDEN_LINE) {
 	mesh_shape_render_hidden_line(this, viewPayload);
 	return;
     }
@@ -1074,7 +1074,7 @@ SoBRLMeshShape::GLRender(SoGLRenderAction *action)
     glEnable(GL_LIGHTING);
     glDisable(GL_COLOR_MATERIAL);
     glLightModeli(GL_LIGHT_MODEL_TWO_SIDE,
-	    this->isLodBackedMesh() ? GL_TRUE : GL_FALSE);
+		  this->isLodBackedMesh() ? GL_TRUE : GL_FALSE);
     set_mesh_gl_material(this, -1);
     mesh_shape_emit_triangles(this, viewPayload, TRUE);
     glPopAttrib();
@@ -1128,15 +1128,15 @@ SoBRLMeshShape::generatePrimitives(SoAction *action)
     const SbBool usePreservedFullDetail =
 	(pickFullDetail && this->hasFullDetailMesh()) ? TRUE : FALSE;
     if (pickFullDetail && !usePreservedFullDetail &&
-	    this->isLodBackedMesh())
+	this->isLodBackedMesh())
 	return;
 
     const BRLObolViewLodState::MeshPayload *viewPayload =
 	pickFullDetail ? NULL : candidateViewPayload;
     const int triangleCount = usePreservedFullDetail ?
-	this->getFullDetailTriangleCount() :
-	(viewPayload ? viewPayload->getTriangleCount() :
-	    this->getTriangleCount());
+			      this->getFullDetailTriangleCount() :
+			      (viewPayload ? viewPayload->getTriangleCount() :
+			       this->getTriangleCount());
     const SoBRLMeshShape *geom = this->getGeometrySource();
 
     SoPrimitiveVertex v0;
@@ -1206,10 +1206,10 @@ SoBRLMeshShape::generatePrimitives(SoAction *action)
 
 SoDetail *
 SoBRLMeshShape::createTriangleDetail(SoRayPickAction *UNUSED(action),
-	const SoPrimitiveVertex *v1,
-	const SoPrimitiveVertex *v2,
-	const SoPrimitiveVertex *v3,
-	SoPickedPoint *pp)
+				     const SoPrimitiveVertex *v1,
+				     const SoPrimitiveVertex *v2,
+				     const SoPrimitiveVertex *v3,
+				     SoPickedPoint *pp)
 {
     SoBRLPickDetail *detail = new SoBRLPickDetail;
     detail->setPath(this->sourcePath.getValue());
@@ -1221,11 +1221,11 @@ SoBRLMeshShape::createTriangleDetail(SoRayPickAction *UNUSED(action),
     detail->setMaterialId(this->materialId.getValue());
     detail->setLos(this->los.getValue());
     detail->setMaterialColor(this->materialColorValid.getValue(),
-	    this->materialColor.getValue());
+			     this->materialColor.getValue());
     detail->setMaterialShader(this->materialShader.getValue());
     detail->setPrimitive(SoBRLPickDetail::FACE, -1);
     detail->setEditIntent(this->editIntentId.getValue(),
-	    this->editIntentRole.getValue());
+			  this->editIntentRole.getValue());
 
     const SoDetail *vertexDetail = v1 ? v1->getDetail() : NULL;
     if (vertexDetail && vertexDetail->isOfType(SoFaceDetail::getClassTypeId())) {
@@ -1241,7 +1241,7 @@ SoBRLMeshShape::createTriangleDetail(SoRayPickAction *UNUSED(action),
 		p2 ? p2->getCoordinateIndex() : -1
 	    };
 	    detail->setFaceVertexIndices(vertexIndices[0], vertexIndices[1],
-		    vertexIndices[2]);
+					 vertexIndices[2]);
 
 	    if (v1 && v2 && v3) {
 		static const int edges[3][2] = {{0, 1}, {1, 2}, {2, 0}};
@@ -1254,10 +1254,10 @@ SoBRLMeshShape::createTriangleDetail(SoRayPickAction *UNUSED(action),
 		int vertexSlot = mesh_nearest_face_vertex_slot(hit, vertices);
 		int edgeSlot = mesh_nearest_face_edge_slot(hit, vertices);
 		detail->setNearestFaceVertex(vertexSlot,
-			vertexIndices[vertexSlot]);
+					     vertexIndices[vertexSlot]);
 		detail->setNearestFaceEdge(edgeSlot,
-			vertexIndices[edges[edgeSlot][0]],
-			vertexIndices[edges[edgeSlot][1]]);
+					   vertexIndices[edges[edgeSlot][0]],
+					   vertexIndices[edges[edgeSlot][1]]);
 	    }
 	}
     }

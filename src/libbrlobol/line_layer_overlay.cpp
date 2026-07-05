@@ -89,7 +89,7 @@ SoBRLLineLayerOverlay::rebuildGeometry(const struct bg_line_layer_builder *build
 	    point_t p;
 	    int command = -1;
 	    if (!bg_line_layer_point_at(layer, i, p) ||
-		    !bg_line_layer_command_at(layer, i, &command))
+		!bg_line_layer_command_at(layer, i, &command))
 		continue;
 
 	    int shapeCommand = convert_line_layer_command(command);
@@ -97,8 +97,8 @@ SoBRLLineLayerOverlay::rebuildGeometry(const struct bg_line_layer_builder *build
 		continue;
 
 	    points.push_back(SbVec3f(static_cast<float>(p[X]),
-			static_cast<float>(p[Y]),
-			static_cast<float>(p[Z])));
+				     static_cast<float>(p[Y]),
+				     static_cast<float>(p[Z])));
 	    commands.push_back(shapeCommand);
 	}
 
@@ -117,9 +117,9 @@ SoBRLLineLayerOverlay::rebuildGeometry(const struct bg_line_layer_builder *build
 	shape->sourceType = "line-layer";
 	shape->sourceId = this->sourceId.getValue();
 	shape->displayName = layerName ? SbString(layerName) :
-	    this->overlayId.getValue();
+			     this->overlayId.getValue();
 	shape->geometryName = layerName ? SbString(layerName) :
-	    SbString("line-layer");
+			      SbString("line-layer");
 	shape->sourceIdentity = shape->sourcePath.getValue();
 	shape->cacheIdentity = shape->sourcePath.getValue();
 	shape->databaseIntent = FALSE;
@@ -135,11 +135,11 @@ SoBRLLineLayerOverlay::rebuildGeometry(const struct bg_line_layer_builder *build
 	shape->selectable = this->selectable.getValue();
 	shape->colorOverride = TRUE;
 	shape->color = SbColor(
-		static_cast<float>(r) / 255.0f,
-		static_cast<float>(g) / 255.0f,
-		static_cast<float>(b) / 255.0f);
+			   static_cast<float>(r) / 255.0f,
+			   static_cast<float>(g) / 255.0f,
+			   static_cast<float>(b) / 255.0f);
 	shape->setLineSet(points.data(), commands.data(),
-		static_cast<int>(points.size()));
+			  static_cast<int>(points.size()));
 	this->addChild(shape);
 	realized++;
     }

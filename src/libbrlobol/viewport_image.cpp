@@ -89,16 +89,16 @@ SoBRLViewportImage::getImageSource(void) const
 
 static void
 viewport_anchor_origin(int anchor, float positionX, float positionY,
-	float width, float height, float *x0, float *y0)
+		       float width, float height, float *x0, float *y0)
 {
     float outX = positionX;
     float outY = positionY;
 
     if (anchor == SoBRLViewportImage::LOWER_RIGHT ||
-	    anchor == SoBRLViewportImage::UPPER_RIGHT)
+	anchor == SoBRLViewportImage::UPPER_RIGHT)
 	outX -= width;
     if (anchor == SoBRLViewportImage::UPPER_LEFT ||
-	    anchor == SoBRLViewportImage::UPPER_RIGHT)
+	anchor == SoBRLViewportImage::UPPER_RIGHT)
 	outY -= height;
     if (anchor == SoBRLViewportImage::CENTER) {
 	outX -= width * 0.5f;
@@ -130,31 +130,31 @@ SoBRLViewportImage::rebuildGeometry(void)
     float displayHeight = 0.0f;
     SbVec2f requested = this->size.getValue();
     brlobol_image_fit_size((float)payload.width, (float)payload.height,
-	    requested[0], requested[1], this->fit.getValue(),
-	    this->preserveAspect.getValue() == TRUE,
-	    &displayWidth, &displayHeight);
+			   requested[0], requested[1], this->fit.getValue(),
+			   this->preserveAspect.getValue() == TRUE,
+			   &displayWidth, &displayHeight);
 
     SbVec2f pos = this->position.getValue();
     float x0 = 0.0f;
     float y0 = 0.0f;
     viewport_anchor_origin(this->anchor.getValue(), pos[0], pos[1],
-	    displayWidth, displayHeight, &x0, &y0);
+			   displayWidth, displayHeight, &x0, &y0);
 
     float u0 = 0.0f;
     float v0 = 0.0f;
     float u1 = 1.0f;
     float v1 = 1.0f;
     brlobol_image_texture_rect((float)payload.width, (float)payload.height,
-	    this->sourceCenter.getValue(), this->sourceZoom.getValue(),
-	    this->fit.getValue(), &u0, &v0, &u1, &v1);
+			       this->sourceCenter.getValue(), this->sourceZoom.getValue(),
+			       this->fit.getValue(), &u0, &v0, &u1, &v1);
 
     SoTexture2 *texture = NULL;
     SoFaceSet *face = NULL;
     SoSeparator *quad = brlobol_image_make_textured_quad(&payload,
-	    x0, y0, (float)this->zOrder.getValue(),
-	    displayWidth, displayHeight, u0, v0, u1, v1,
-	    this->opacity.getValue(), FALSE, FALSE, FALSE, TRUE,
-	    &texture, &face);
+			x0, y0, (float)this->zOrder.getValue(),
+			displayWidth, displayHeight, u0, v0, u1, v1,
+			this->opacity.getValue(), FALSE, FALSE, FALSE, TRUE,
+			&texture, &face);
     if (!quad)
 	return -1;
 
@@ -178,8 +178,8 @@ SoBRLViewportImage::syncFromSource(void)
     if (source->refreshFromStream() != 0)
 	return -1;
     if (this->getNumChildren() == 0 ||
-	    this->realizedDataRevision.getValue() != source->dataRevision.getValue() ||
-	    this->realizedDirtyRevision.getValue() != source->dirtyRevision.getValue())
+	this->realizedDataRevision.getValue() != source->dataRevision.getValue() ||
+	this->realizedDirtyRevision.getValue() != source->dirtyRevision.getValue())
 	return this->rebuildGeometry();
     return 0;
 }

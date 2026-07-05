@@ -51,7 +51,7 @@ brlobol_vlist_line_count(const struct bu_list *vhead, size_t *count_out)
     BU_LIST_EACH(vhead, vp, rt_vlist) {
 	for (size_t i = 0; i < vp->nused; i++) {
 	    if (vp->cmd[i] == RT_VLIST_LINE_MOVE ||
-		    vp->cmd[i] == RT_VLIST_LINE_DRAW)
+		vp->cmd[i] == RT_VLIST_LINE_DRAW)
 		(*count_out)++;
 	}
     }
@@ -83,9 +83,9 @@ brlobol_vlist_export_line_set(const struct bu_list *vhead,
 	return BRLCAD_OK;
 
     point_t *points = (point_t *)bu_calloc(count, sizeof(point_t),
-	    "evaluated-wire typed line points");
+					   "evaluated-wire typed line points");
     int *commands = (int *)bu_calloc(count, sizeof(int),
-	    "evaluated-wire typed line commands");
+				     "evaluated-wire typed line commands");
 
     BU_LIST_EACH(vhead, vp, rt_vlist) {
 	for (size_t i = 0; i < vp->nused; i++) {
@@ -115,13 +115,13 @@ brlobol_vlist_export_line_set(const struct bu_list *vhead,
 
 int
 brlobol_evaluated_wire_evaluate_path_line_set(
-	struct db_i *dbip,
-	const char *path,
-	const struct bn_tol *tol,
-	const struct bg_tess_tol *ttol,
-	point_t **points_out,
-	int **commands_out,
-	size_t *count_out)
+    struct db_i *dbip,
+    const char *path,
+    const struct bn_tol *tol,
+    const struct bg_tess_tol *ttol,
+    point_t **points_out,
+    int **commands_out,
+    size_t *count_out)
 {
     int ret = BRLCAD_OK;
     struct bu_list vhead;
@@ -134,7 +134,7 @@ brlobol_evaluated_wire_evaluate_path_line_set(
     if (count_out)
 	*count_out = 0;
     if (!dbip || !path || !path[0] || !tol || !ttol ||
-	    !points_out || !commands_out || !count_out)
+	!points_out || !commands_out || !count_out)
 	return BRLCAD_ERROR;
 
     BU_LIST_INIT(&vhead);
@@ -144,7 +144,7 @@ brlobol_evaluated_wire_evaluate_path_line_set(
     ret = rt_eval_wireframe(&vhead, &vlfree, dbip, path, tol, ttol, &opts);
     if (ret == BRLCAD_OK)
 	ret = brlobol_vlist_export_line_set(&vhead, points_out, commands_out,
-		count_out);
+					    count_out);
 
     RT_FREE_VLIST(&vlfree, &vhead);
     bg_vlist_cleanup(&vlfree);

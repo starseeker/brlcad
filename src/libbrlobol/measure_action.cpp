@@ -29,11 +29,11 @@ SO_ACTION_SOURCE(SoBRLMeasureAction);
 
 static SbBool
 measure_source_full_detail_result_valid(const BRLObolSourceMeshRequest &sourceRequest,
-	const BRLObolLodResult &result)
+					const BRLObolLodResult &result)
 {
     if (result.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
-	    result.resultKind != BRLOBOL_LOD_RESULT_FULL_DETAIL ||
-	    !result.mesh.isValid())
+	result.resultKind != BRLOBOL_LOD_RESULT_FULL_DETAIL ||
+	!result.mesh.isValid())
 	return FALSE;
 
     size_t faceCount = result.mesh.coordIndex.size() / 3;
@@ -46,7 +46,7 @@ measure_source_full_detail_result_valid(const BRLObolSourceMeshRequest &sourceRe
 	    if (resultFaceCount > sourceRequest.faceCount)
 		return FALSE;
 	    if (resultFaceCount < sourceRequest.faceCount &&
-		    result.mesh.faceIndex.size() != faceCount)
+		result.mesh.faceIndex.size() != faceCount)
 		return FALSE;
 	} else if (sourceRequest.faceCount != resultFaceCount) {
 	    return FALSE;
@@ -59,7 +59,7 @@ measure_source_full_detail_result_valid(const BRLObolSourceMeshRequest &sourceRe
 	    if (resultPointCount > sourceRequest.pointCount)
 		return FALSE;
 	    if (resultPointCount < sourceRequest.pointCount &&
-		    result.mesh.vertexIndex.size() != result.mesh.points.size())
+		result.mesh.vertexIndex.size() != result.mesh.points.size())
 		return FALSE;
 	} else if (sourceRequest.pointCount != resultPointCount) {
 	    return FALSE;
@@ -71,7 +71,7 @@ measure_source_full_detail_result_valid(const BRLObolSourceMeshRequest &sourceRe
 
 static int
 measure_source_mesh_face_index(const BRLObolLodMeshPayload &mesh,
-	size_t faceSlot, size_t faceCount)
+			       size_t faceSlot, size_t faceCount)
 {
     if (mesh.faceIndex.size() == faceCount)
 	return static_cast<int>(mesh.faceIndex[faceSlot]);
@@ -80,13 +80,13 @@ measure_source_mesh_face_index(const BRLObolLodMeshPayload &mesh,
 
 static int
 measure_source_mesh_vertex_index(const BRLObolLodMeshPayload &mesh,
-	int localIndex)
+				 int localIndex)
 {
     if (localIndex < 0)
 	return localIndex;
     if (mesh.vertexIndex.size() == mesh.points.size())
 	return static_cast<int>(
-		mesh.vertexIndex[static_cast<size_t>(localIndex)]);
+		   mesh.vertexIndex[static_cast<size_t>(localIndex)]);
     return localIndex;
 }
 
@@ -130,37 +130,37 @@ static long long
 measure_endpoint_cell_coord(float value)
 {
     return static_cast<long long>(floor(static_cast<double>(value) /
-	    static_cast<double>(MEASURE_ANGLE_VERTEX_TOLERANCE)));
+					static_cast<double>(MEASURE_ANGLE_VERTEX_TOLERANCE)));
 }
 
 static measure_endpoint_cell
 measure_endpoint_cell_for_point(const SbVec3f &point)
 {
     return measure_make_endpoint_cell(
-	    measure_endpoint_cell_coord(point[0]),
-	    measure_endpoint_cell_coord(point[1]),
-	    measure_endpoint_cell_coord(point[2]));
+	       measure_endpoint_cell_coord(point[0]),
+	       measure_endpoint_cell_coord(point[1]),
+	       measure_endpoint_cell_coord(point[2]));
 }
 
 static void
 measure_collect_angle_endpoint_candidates(
-	const std::map<measure_endpoint_cell, std::vector<size_t> > &endpointMap,
-	const SbVec3f &point,
-	std::vector<size_t> &candidates)
+    const std::map<measure_endpoint_cell, std::vector<size_t> > &endpointMap,
+    const SbVec3f &point,
+    std::vector<size_t> &candidates)
 {
     measure_endpoint_cell center = measure_endpoint_cell_for_point(point);
     for (int dx = -1; dx <= 1; dx++) {
 	for (int dy = -1; dy <= 1; dy++) {
 	    for (int dz = -1; dz <= 1; dz++) {
 		measure_endpoint_cell key = measure_make_endpoint_cell(
-			center.x + dx, center.y + dy, center.z + dz);
+						center.x + dx, center.y + dy, center.z + dz);
 		std::map<measure_endpoint_cell,
 		    std::vector<size_t> >::const_iterator it =
-		    endpointMap.find(key);
+			endpointMap.find(key);
 		if (it == endpointMap.end())
 		    continue;
 		candidates.insert(candidates.end(), it->second.begin(),
-			it->second.end());
+				  it->second.end());
 	    }
 	}
     }
@@ -168,9 +168,9 @@ measure_collect_angle_endpoint_candidates(
 
 static void
 measure_add_angle_endpoint(
-	std::map<measure_endpoint_cell, std::vector<size_t> > &endpointMap,
-	const SbVec3f &point,
-	size_t segmentIndex)
+    std::map<measure_endpoint_cell, std::vector<size_t> > &endpointMap,
+    const SbVec3f &point,
+    size_t segmentIndex)
 {
     endpointMap[measure_endpoint_cell_for_point(point)].push_back(segmentIndex);
 }
@@ -215,7 +215,7 @@ closest_point_on_segment(const SbVec3f &query, const SbVec3f &a, const SbVec3f &
 
 static float
 distance_squared_to_segment(const SbVec3f &p, const SbVec3f &a,
-	const SbVec3f &b)
+			    const SbVec3f &b)
 {
     SbVec3f closest = closest_point_on_segment(p, a, b);
     return (p - closest).sqrLength();
@@ -242,10 +242,10 @@ nearest_face_edge_slot(const SbVec3f &point, const SbVec3f vertices[3])
     static const int edges[3][2] = {{0, 1}, {1, 2}, {2, 0}};
     int nearest = 0;
     float nearestDist = distance_squared_to_segment(point,
-	    vertices[edges[0][0]], vertices[edges[0][1]]);
+			vertices[edges[0][0]], vertices[edges[0][1]]);
     for (int i = 1; i < 3; i++) {
 	float dist = distance_squared_to_segment(point,
-		vertices[edges[i][0]], vertices[edges[i][1]]);
+		     vertices[edges[i][0]], vertices[edges[i][1]]);
 	if (dist < nearestDist) {
 	    nearest = i;
 	    nearestDist = dist;
@@ -256,9 +256,9 @@ nearest_face_edge_slot(const SbVec3f &point, const SbVec3f vertices[3])
 
 static SbVec3f
 closest_point_on_triangle(const SbVec3f &query,
-	const SbVec3f &a,
-	const SbVec3f &b,
-	const SbVec3f &c)
+			  const SbVec3f &a,
+			  const SbVec3f &b,
+			  const SbVec3f &c)
 {
     SbVec3f ab = b - a;
     SbVec3f ac = c - a;
@@ -322,10 +322,10 @@ same_point(const SbVec3f &a, const SbVec3f &b)
 
 static SbBool
 shared_segment_vertex(const measure_segment_record &sa,
-	const measure_segment_record &sb,
-	SbVec3f &shared,
-	SbVec3f &otherA,
-	SbVec3f &otherB)
+		      const measure_segment_record &sb,
+		      SbVec3f &shared,
+		      SbVec3f &otherA,
+		      SbVec3f &otherB)
 {
     if (same_point(sa.a, sb.a)) {
 	shared = sa.a;
@@ -356,9 +356,9 @@ shared_segment_vertex(const measure_segment_record &sa,
 
 static SbBool
 segment_angle_degrees(const SbVec3f &shared,
-	const SbVec3f &otherA,
-	const SbVec3f &otherB,
-	float &angleDegrees)
+		      const SbVec3f &otherA,
+		      const SbVec3f &otherB,
+		      float &angleDegrees)
 {
     SbVec3f va = otherA - shared;
     SbVec3f vb = otherB - shared;
@@ -517,7 +517,7 @@ void
 SoBRLMeasureAction::setGeometryPolicy(GeometryPolicy policy)
 {
     this->geometryPolicy = (policy == SoBRLMeasureAction::DISPLAY_LEVEL) ?
-	SoBRLMeasureAction::DISPLAY_LEVEL : SoBRLMeasureAction::FULL_DETAIL;
+			   SoBRLMeasureAction::DISPLAY_LEVEL : SoBRLMeasureAction::FULL_DETAIL;
 }
 
 SoBRLMeasureAction::GeometryPolicy
@@ -562,24 +562,24 @@ SoBRLMeasureAction::makeSourceBackedFullDetailLodRequest(int index,
 	const BRLObolLodRequest *templateRequest) const
 {
     if (index < 0 ||
-	    static_cast<size_t>(index) >=
-	    this->sourceBackedFullDetailRequests.size())
+	static_cast<size_t>(index) >=
+	this->sourceBackedFullDetailRequests.size())
 	return FALSE;
 
     return brlobol_lod_rt_source_full_detail_request_from_source_mesh_request(
-	request, this->sourceBackedFullDetailRequests[static_cast<size_t>(index)],
-	templateRequest);
+	       request, this->sourceBackedFullDetailRequests[static_cast<size_t>(index)],
+	       templateRequest);
 }
 
 SbBool
 SoBRLMeasureAction::consumeSourceBackedFullDetailResult(
-	const BRLObolSourceMeshRequest &sourceRequest,
-	const BRLObolLodResult &result)
+    const BRLObolSourceMeshRequest &sourceRequest,
+    const BRLObolLodResult &result)
 {
     if (!measure_source_full_detail_result_valid(sourceRequest, result))
 	return FALSE;
     if (!this->selectionAllows(sourceRequest.selected) ||
-	    !this->highlightAllows(sourceRequest.highlighted))
+	!this->highlightAllows(sourceRequest.highlighted))
 	return TRUE;
 
     size_t faceCount = result.mesh.coordIndex.size() / 3;
@@ -589,28 +589,28 @@ SoBRLMeasureAction::consumeSourceBackedFullDetailResult(
 	int ib = result.mesh.coordIndex[i * 3 + 1];
 	int ic = result.mesh.coordIndex[i * 3 + 2];
 	if (ia < 0 || ib < 0 || ic < 0 ||
-		static_cast<size_t>(ia) >= result.mesh.points.size() ||
-		static_cast<size_t>(ib) >= result.mesh.points.size() ||
-		static_cast<size_t>(ic) >= result.mesh.points.size())
+	    static_cast<size_t>(ia) >= result.mesh.points.size() ||
+	    static_cast<size_t>(ib) >= result.mesh.points.size() ||
+	    static_cast<size_t>(ic) >= result.mesh.points.size())
 	    return FALSE;
 
 	SbVec3f pointA = this->pointForCoordinateSpace(
-		sourceRequest.localToWorld,
-		result.mesh.points[static_cast<size_t>(ia)]);
+			     sourceRequest.localToWorld,
+			     result.mesh.points[static_cast<size_t>(ia)]);
 	SbVec3f pointB = this->pointForCoordinateSpace(
-		sourceRequest.localToWorld,
-		result.mesh.points[static_cast<size_t>(ib)]);
+			     sourceRequest.localToWorld,
+			     result.mesh.points[static_cast<size_t>(ib)]);
 	SbVec3f pointC = this->pointForCoordinateSpace(
-		sourceRequest.localToWorld,
-		result.mesh.points[static_cast<size_t>(ic)]);
+			     sourceRequest.localToWorld,
+			     result.mesh.points[static_cast<size_t>(ic)]);
 	const int sourceIa = measure_source_mesh_vertex_index(result.mesh, ia);
 	const int sourceIb = measure_source_mesh_vertex_index(result.mesh, ib);
 	const int sourceIc = measure_source_mesh_vertex_index(result.mesh, ic);
 	measuredShape = TRUE;
 	this->measureTriangle(sourceRequest.path, sourceRequest.editIntentId,
-		sourceRequest.editIntentRole,
-		measure_source_mesh_face_index(result.mesh, i, faceCount),
-		pointA, pointB, pointC, sourceIa, sourceIb, sourceIc);
+			      sourceRequest.editIntentRole,
+			      measure_source_mesh_face_index(result.mesh, i, faceCount),
+			      pointA, pointB, pointC, sourceIa, sourceIb, sourceIc);
     }
 
     if (measuredShape)
@@ -621,17 +621,17 @@ SoBRLMeasureAction::consumeSourceBackedFullDetailResult(
 
 int
 SoBRLMeasureAction::submitSourceBackedFullDetailRequests(
-	BRLObolLodService *service, uint64_t generation, struct db_i *dbip,
-	const BRLObolLodRequest *templateRequest,
-	uint64_t maxFullDetailFaceCount,
-	uint64_t maxFullDetailPointCount) const
+    BRLObolLodService *service, uint64_t generation, struct db_i *dbip,
+    const BRLObolLodRequest *templateRequest,
+    uint64_t maxFullDetailFaceCount,
+    uint64_t maxFullDetailPointCount) const
 {
     int submitted = 0;
     for (size_t i = 0; i < this->sourceBackedFullDetailRequests.size(); i++) {
 	if (brlobol_lod_submit_rt_source_full_detail_request(service,
-		generation, this->sourceBackedFullDetailRequests[i], dbip,
-		templateRequest, maxFullDetailFaceCount,
-		maxFullDetailPointCount) != 0)
+	    generation, this->sourceBackedFullDetailRequests[i], dbip,
+	    templateRequest, maxFullDetailFaceCount,
+	    maxFullDetailPointCount) != 0)
 	    submitted++;
     }
     return submitted;
@@ -639,8 +639,8 @@ SoBRLMeasureAction::submitSourceBackedFullDetailRequests(
 
 int
 SoBRLMeasureAction::consumeSourceBackedFullDetailResults(
-	const std::vector<BRLObolLodResult> &results,
-	const BRLObolLodRequest *templateRequest)
+    const std::vector<BRLObolLodResult> &results,
+    const BRLObolLodRequest *templateRequest)
 {
     std::vector<SbBool> used(results.size(), FALSE);
     int consumed = 0;
@@ -654,7 +654,7 @@ SoBRLMeasureAction::consumeSourceBackedFullDetailResults(
 
 	for (size_t j = 0; j < results.size(); j++) {
 	    if (used[j] ||
-		    !brlobol_lod_result_matches_request(results[j], expected))
+		!brlobol_lod_result_matches_request(results[j], expected))
 		continue;
 	    if (this->consumeSourceBackedFullDetailResult(
 		    this->sourceBackedFullDetailRequests[i], results[j])) {
@@ -891,7 +891,7 @@ void
 SoBRLMeasureAction::nodeAction(SoAction *action, SoNode *node)
 {
     if (node->isOfType(SoGroup::getClassTypeId()) ||
-	    node->isOfType(SoTransformation::getClassTypeId()))
+	node->isOfType(SoTransformation::getClassTypeId()))
 	node->doAction(action);
 }
 
@@ -935,7 +935,7 @@ SoBRLMeasureAction::vlistShapeAction(SoAction *action, SoNode *node)
 
 	const int currentSegment = segmentIndex++;
 	if (!measureAction->selectionAllows(shape->isPrimitiveSelected(currentSegment)) ||
-		!measureAction->highlightAllows(shape->isPrimitiveHighlighted(currentSegment))) {
+	    !measureAction->highlightAllows(shape->isPrimitiveHighlighted(currentSegment))) {
 	    last = geom->point[i];
 	    continue;
 	}
@@ -945,7 +945,7 @@ SoBRLMeasureAction::vlistShapeAction(SoAction *action, SoNode *node)
 
 	measuredShape = TRUE;
 	measureAction->measureSegment(sourcePath, editIntentId,
-		editIntentRole, currentSegment, pointA, pointB);
+				      editIntentRole, currentSegment, pointA, pointB);
 	if (measureAction->angleComputationEnabled) {
 	    measure_segment_record record;
 	    record.path = sourcePath;
@@ -972,7 +972,7 @@ SoBRLMeasureAction::vlistShapeAction(SoAction *action, SoNode *node)
 		    measuredSegments[i].b, candidates);
 	    std::sort(candidates.begin(), candidates.end());
 	    candidates.erase(std::unique(candidates.begin(), candidates.end()),
-		    candidates.end());
+			     candidates.end());
 	    for (size_t j = 0; j < candidates.size(); j++)
 		connectedPairs.push_back(std::make_pair(candidates[j], i));
 	    measure_add_angle_endpoint(endpointMap, measuredSegments[i].a, i);
@@ -981,7 +981,7 @@ SoBRLMeasureAction::vlistShapeAction(SoAction *action, SoNode *node)
 
 	std::sort(connectedPairs.begin(), connectedPairs.end());
 	connectedPairs.erase(std::unique(connectedPairs.begin(),
-		connectedPairs.end()), connectedPairs.end());
+					 connectedPairs.end()), connectedPairs.end());
 	for (size_t i = 0; i < connectedPairs.size(); i++) {
 	    size_t segmentA = connectedPairs[i].first;
 	    size_t segmentB = connectedPairs[i].second;
@@ -990,17 +990,17 @@ SoBRLMeasureAction::vlistShapeAction(SoAction *action, SoNode *node)
 	    SbVec3f otherB;
 	    float degrees = 0.0f;
 	    if (!shared_segment_vertex(measuredSegments[segmentA],
-		    measuredSegments[segmentB], shared, otherA, otherB))
+				       measuredSegments[segmentB], shared, otherA, otherB))
 		continue;
 	    if (!segment_angle_degrees(shared, otherA, otherB, degrees))
 		continue;
 	    measureAction->considerAngle(measuredSegments[segmentA].path,
-		    measuredSegments[segmentA].editIntentId,
-		    measuredSegments[segmentA].editIntentRole,
-		    measuredSegments[segmentA].primitiveIndex,
-		    measuredSegments[segmentB].primitiveIndex,
-		    shared,
-		    degrees);
+					 measuredSegments[segmentA].editIntentId,
+					 measuredSegments[segmentA].editIntentRole,
+					 measuredSegments[segmentA].primitiveIndex,
+					 measuredSegments[segmentB].primitiveIndex,
+					 shared,
+					 degrees);
 	}
     }
 
@@ -1024,7 +1024,7 @@ SoBRLMeasureAction::meshShapeAction(SoAction *action, SoNode *node)
 	(measureAction->geometryPolicy == SoBRLMeasureAction::FULL_DETAIL &&
 	 shape->needsSourceBackedFullDetail()) ? TRUE : FALSE;
     if (measureAction->geometryPolicy == SoBRLMeasureAction::FULL_DETAIL &&
-	    (shape->isLodDisplayActive() || viewPayload))
+	(shape->isLodDisplayActive() || viewPayload))
 	measureAction->skippedLodDisplayMeshCount++;
     const SbMatrix &localToWorld = SoModelMatrixElement::get(action->getState());
     if (useSourceBackedFullDetail) {
@@ -1040,9 +1040,9 @@ SoBRLMeasureAction::meshShapeAction(SoAction *action, SoNode *node)
 	 measureAction->geometryPolicy == SoBRLMeasureAction::DISPLAY_LEVEL &&
 	 viewPayload) ? TRUE : FALSE;
     int localTriangleCount = useFullDetail ?
-	shape->getFullDetailTriangleCount() :
-	(useViewPayload ? viewPayload->getTriangleCount() :
-	    shape->getTriangleCount());
+			     shape->getFullDetailTriangleCount() :
+			     (useViewPayload ? viewPayload->getTriangleCount() :
+			      shape->getTriangleCount());
     SbBool measuredShape = FALSE;
 
     for (int i = 0; i < localTriangleCount; i++) {
@@ -1079,7 +1079,7 @@ SoBRLMeasureAction::meshShapeAction(SoAction *action, SoNode *node)
 
 	measuredShape = TRUE;
 	measureAction->measureTriangle(sourcePath, editIntentId,
-		editIntentRole, i, pointA, pointB, pointC, ia, ib, ic);
+				       editIntentRole, i, pointA, pointB, pointC, ia, ib, ic);
     }
 
     if (measuredShape)
@@ -1126,7 +1126,7 @@ SoBRLMeasureAction::resetResults(void)
 
 void
 SoBRLMeasureAction::appendSourceBackedFullDetailRequest(
-	const SoBRLMeshShape *shape, const SbMatrix &localToWorld)
+    const SoBRLMeshShape *shape, const SbMatrix &localToWorld)
 {
     if (!shape)
 	return;
@@ -1148,7 +1148,7 @@ SoBRLMeasureAction::appendSourceBackedFullDetailRequest(
 	    request.queryBounds.makeEmpty();
 	    if (this->haveQueryDistanceLimit && localDistanceLimit >= 0.0f) {
 		SbVec3f delta(localDistanceLimit, localDistanceLimit,
-			localDistanceLimit);
+			      localDistanceLimit);
 		request.queryBounds.extendBy(localQuery - delta);
 		request.queryBounds.extendBy(localQuery + delta);
 		request.queryToleranceValid = 1;
@@ -1163,10 +1163,10 @@ SoBRLMeasureAction::appendSourceBackedFullDetailRequest(
 
 void
 SoBRLMeasureAction::measureSegment(const SbString &path,
-	const SbString &editIntentId,
-	const SbString &editIntentRole,
-	int primitiveIndex,
-	const SbVec3f &a, const SbVec3f &b)
+				   const SbString &editIntentId,
+				   const SbString &editIntentRole,
+				   int primitiveIndex,
+				   const SbVec3f &a, const SbVec3f &b)
 {
     this->bounds.extendBy(a);
     this->bounds.extendBy(b);
@@ -1195,12 +1195,12 @@ SoBRLMeasureAction::measureSegment(const SbString &path,
 
 void
 SoBRLMeasureAction::considerAngle(const SbString &path,
-	const SbString &editIntentId,
-	const SbString &editIntentRole,
-	int primitiveIndexA,
-	int primitiveIndexB,
-	const SbVec3f &point,
-	float degrees)
+				  const SbString &editIntentId,
+				  const SbString &editIntentRole,
+				  int primitiveIndexA,
+				  int primitiveIndexB,
+				  const SbVec3f &point,
+				  float degrees)
 {
     float dist = this->haveQueryPoint ? (this->queryPoint - point).length() : 0.0f;
     if (!this->queryDistanceAllows(dist))
@@ -1237,13 +1237,13 @@ SoBRLMeasureAction::pointForCoordinateSpace(const SbMatrix &localToWorld,
 
 void
 SoBRLMeasureAction::measureTriangle(const SbString &path,
-	const SbString &editIntentId,
-	const SbString &editIntentRole,
-	int primitiveIndex,
-	const SbVec3f &a, const SbVec3f &b, const SbVec3f &c,
-	int vertexIndexA,
-	int vertexIndexB,
-	int vertexIndexC)
+				    const SbString &editIntentId,
+				    const SbString &editIntentRole,
+				    int primitiveIndex,
+				    const SbVec3f &a, const SbVec3f &b, const SbVec3f &c,
+				    int vertexIndexA,
+				    int vertexIndexB,
+				    int vertexIndexC)
 {
     static const int edges[3][2] = {{0, 1}, {1, 2}, {2, 0}};
 

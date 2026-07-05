@@ -27,11 +27,11 @@ SO_ACTION_SOURCE(SoBRLSnapAction);
 
 static SbBool
 snap_source_full_detail_result_valid(const BRLObolSourceMeshRequest &sourceRequest,
-	const BRLObolLodResult &result)
+				     const BRLObolLodResult &result)
 {
     if (result.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
-	    result.resultKind != BRLOBOL_LOD_RESULT_FULL_DETAIL ||
-	    !result.mesh.isValid())
+	result.resultKind != BRLOBOL_LOD_RESULT_FULL_DETAIL ||
+	!result.mesh.isValid())
 	return FALSE;
 
     size_t faceCount = result.mesh.coordIndex.size() / 3;
@@ -51,7 +51,7 @@ snap_source_full_detail_result_valid(const BRLObolSourceMeshRequest &sourceReque
 	    if (resultPointCount > sourceRequest.pointCount)
 		return FALSE;
 	    if (resultPointCount < sourceRequest.pointCount &&
-		    result.mesh.vertexIndex.size() != result.mesh.points.size())
+		result.mesh.vertexIndex.size() != result.mesh.points.size())
 		return FALSE;
 	} else if (sourceRequest.pointCount != resultPointCount) {
 	    return FALSE;
@@ -63,7 +63,7 @@ snap_source_full_detail_result_valid(const BRLObolSourceMeshRequest &sourceReque
 
 static int
 snap_source_mesh_face_index(const BRLObolLodMeshPayload &mesh,
-	size_t faceSlot, size_t faceCount)
+			    size_t faceSlot, size_t faceCount)
 {
     if (mesh.faceIndex.size() == faceCount)
 	return static_cast<int>(mesh.faceIndex[faceSlot]);
@@ -72,13 +72,13 @@ snap_source_mesh_face_index(const BRLObolLodMeshPayload &mesh,
 
 static int
 snap_source_mesh_vertex_index(const BRLObolLodMeshPayload &mesh,
-	int localIndex)
+			      int localIndex)
 {
     if (localIndex < 0)
 	return localIndex;
     if (mesh.vertexIndex.size() == mesh.points.size())
 	return static_cast<int>(
-		mesh.vertexIndex[static_cast<size_t>(localIndex)]);
+		   mesh.vertexIndex[static_cast<size_t>(localIndex)]);
     return localIndex;
 }
 
@@ -155,9 +155,9 @@ snap_closest_point_on_segment(const SbVec3f &query, const SbVec3f &a, const SbVe
 
 static SbVec3f
 snap_closest_point_on_triangle(const SbVec3f &query,
-	const SbVec3f &a,
-	const SbVec3f &b,
-	const SbVec3f &c)
+			       const SbVec3f &a,
+			       const SbVec3f &b,
+			       const SbVec3f &c)
 {
     SbVec3f ab = b - a;
     SbVec3f ac = c - a;
@@ -205,9 +205,9 @@ snap_closest_point_on_triangle(const SbVec3f &query,
 
 static SbBool
 closest_point_on_plane(const SbVec3f &query,
-	const SbVec3f &origin,
-	const SbVec3f &normal,
-	SbVec3f &candidate)
+		       const SbVec3f &origin,
+		       const SbVec3f &normal,
+		       SbVec3f &candidate)
 {
     SbVec3f n = normal;
     float len = n.length();
@@ -326,7 +326,7 @@ void
 SoBRLSnapAction::setGeometryPolicy(GeometryPolicy policy)
 {
     this->geometryPolicy = (policy == SoBRLSnapAction::DISPLAY_LEVEL) ?
-	SoBRLSnapAction::DISPLAY_LEVEL : SoBRLSnapAction::FULL_DETAIL;
+			   SoBRLSnapAction::DISPLAY_LEVEL : SoBRLSnapAction::FULL_DETAIL;
 }
 
 SoBRLSnapAction::GeometryPolicy
@@ -359,19 +359,19 @@ SoBRLSnapAction::makeSourceBackedFullDetailLodRequest(int index,
 	const BRLObolLodRequest *templateRequest) const
 {
     if (index < 0 ||
-	    static_cast<size_t>(index) >=
-	    this->sourceBackedFullDetailRequests.size())
+	static_cast<size_t>(index) >=
+	this->sourceBackedFullDetailRequests.size())
 	return FALSE;
 
     return brlobol_lod_rt_source_full_detail_request_from_source_mesh_request(
-	request, this->sourceBackedFullDetailRequests[static_cast<size_t>(index)],
-	templateRequest);
+	       request, this->sourceBackedFullDetailRequests[static_cast<size_t>(index)],
+	       templateRequest);
 }
 
 SbBool
 SoBRLSnapAction::consumeSourceBackedFullDetailResult(
-	const BRLObolSourceMeshRequest &sourceRequest,
-	const BRLObolLodResult &result)
+    const BRLObolSourceMeshRequest &sourceRequest,
+    const BRLObolLodResult &result)
 {
     if (!snap_source_full_detail_result_valid(sourceRequest, result))
 	return FALSE;
@@ -387,20 +387,20 @@ SoBRLSnapAction::consumeSourceBackedFullDetailResult(
 	int ib = result.mesh.coordIndex[i * 3 + 1];
 	int ic = result.mesh.coordIndex[i * 3 + 2];
 	if (ia < 0 || ib < 0 || ic < 0 ||
-		static_cast<size_t>(ia) >= result.mesh.points.size() ||
-		static_cast<size_t>(ib) >= result.mesh.points.size() ||
-		static_cast<size_t>(ic) >= result.mesh.points.size())
+	    static_cast<size_t>(ia) >= result.mesh.points.size() ||
+	    static_cast<size_t>(ib) >= result.mesh.points.size() ||
+	    static_cast<size_t>(ic) >= result.mesh.points.size())
 	    return FALSE;
 
 	SbVec3f pointA = this->pointForCoordinateSpace(
-		sourceRequest.localToWorld,
-		result.mesh.points[static_cast<size_t>(ia)]);
+			     sourceRequest.localToWorld,
+			     result.mesh.points[static_cast<size_t>(ia)]);
 	SbVec3f pointB = this->pointForCoordinateSpace(
-		sourceRequest.localToWorld,
-		result.mesh.points[static_cast<size_t>(ib)]);
+			     sourceRequest.localToWorld,
+			     result.mesh.points[static_cast<size_t>(ib)]);
 	SbVec3f pointC = this->pointForCoordinateSpace(
-		sourceRequest.localToWorld,
-		result.mesh.points[static_cast<size_t>(ic)]);
+			     sourceRequest.localToWorld,
+			     result.mesh.points[static_cast<size_t>(ic)]);
 	const int sourceFaceIndex =
 	    snap_source_mesh_face_index(result.mesh, i, faceCount);
 	const int sourceIa = snap_source_mesh_vertex_index(result.mesh, ia);
@@ -411,56 +411,56 @@ SoBRLSnapAction::consumeSourceBackedFullDetailResult(
 	centerBox.extendBy(pointC);
 
 	this->consider(VERTEX, sourceRequest.path,
-		sourceRequest.editIntentId, sourceRequest.editIntentRole,
-		sourceFaceIndex, query, pointA, sourceIa);
+		       sourceRequest.editIntentId, sourceRequest.editIntentRole,
+		       sourceFaceIndex, query, pointA, sourceIa);
 	this->consider(VERTEX, sourceRequest.path,
-		sourceRequest.editIntentId, sourceRequest.editIntentRole,
-		sourceFaceIndex, query, pointB, sourceIb);
+		       sourceRequest.editIntentId, sourceRequest.editIntentRole,
+		       sourceFaceIndex, query, pointB, sourceIb);
 	this->consider(VERTEX, sourceRequest.path,
-		sourceRequest.editIntentId, sourceRequest.editIntentRole,
-		sourceFaceIndex, query, pointC, sourceIc);
+		       sourceRequest.editIntentId, sourceRequest.editIntentRole,
+		       sourceFaceIndex, query, pointC, sourceIc);
 	this->consider(EDGE_NEAREST, sourceRequest.path,
-		sourceRequest.editIntentId, sourceRequest.editIntentRole,
-		sourceFaceIndex, query,
-		snap_closest_point_on_segment(query, pointA, pointB),
-		-1, 0, sourceIa, sourceIb);
+		       sourceRequest.editIntentId, sourceRequest.editIntentRole,
+		       sourceFaceIndex, query,
+		       snap_closest_point_on_segment(query, pointA, pointB),
+		       -1, 0, sourceIa, sourceIb);
 	this->consider(EDGE_NEAREST, sourceRequest.path,
-		sourceRequest.editIntentId, sourceRequest.editIntentRole,
-		sourceFaceIndex, query,
-		snap_closest_point_on_segment(query, pointB, pointC),
-		-1, 1, sourceIb, sourceIc);
+		       sourceRequest.editIntentId, sourceRequest.editIntentRole,
+		       sourceFaceIndex, query,
+		       snap_closest_point_on_segment(query, pointB, pointC),
+		       -1, 1, sourceIb, sourceIc);
 	this->consider(EDGE_NEAREST, sourceRequest.path,
-		sourceRequest.editIntentId, sourceRequest.editIntentRole,
-		sourceFaceIndex, query,
-		snap_closest_point_on_segment(query, pointC, pointA),
-		-1, 2, sourceIc, sourceIa);
+		       sourceRequest.editIntentId, sourceRequest.editIntentRole,
+		       sourceFaceIndex, query,
+		       snap_closest_point_on_segment(query, pointC, pointA),
+		       -1, 2, sourceIc, sourceIa);
 	this->consider(FACE_NEAREST, sourceRequest.path,
-		sourceRequest.editIntentId, sourceRequest.editIntentRole,
-		sourceFaceIndex, query,
-		snap_closest_point_on_triangle(query, pointA, pointB, pointC));
+		       sourceRequest.editIntentId, sourceRequest.editIntentRole,
+		       sourceFaceIndex, query,
+		       snap_closest_point_on_triangle(query, pointA, pointB, pointC));
     }
 
     if (!centerBox.isEmpty())
 	this->consider(CENTER, sourceRequest.path,
-		sourceRequest.editIntentId, sourceRequest.editIntentRole,
-		-1, query, centerBox.getCenter());
+		       sourceRequest.editIntentId, sourceRequest.editIntentRole,
+		       -1, query, centerBox.getCenter());
 
     return TRUE;
 }
 
 int
 SoBRLSnapAction::submitSourceBackedFullDetailRequests(
-	BRLObolLodService *service, uint64_t generation, struct db_i *dbip,
-	const BRLObolLodRequest *templateRequest,
-	uint64_t maxFullDetailFaceCount,
-	uint64_t maxFullDetailPointCount) const
+    BRLObolLodService *service, uint64_t generation, struct db_i *dbip,
+    const BRLObolLodRequest *templateRequest,
+    uint64_t maxFullDetailFaceCount,
+    uint64_t maxFullDetailPointCount) const
 {
     int submitted = 0;
     for (size_t i = 0; i < this->sourceBackedFullDetailRequests.size(); i++) {
 	if (brlobol_lod_submit_rt_source_full_detail_request(service,
-		generation, this->sourceBackedFullDetailRequests[i], dbip,
-		templateRequest, maxFullDetailFaceCount,
-		maxFullDetailPointCount) != 0)
+	    generation, this->sourceBackedFullDetailRequests[i], dbip,
+	    templateRequest, maxFullDetailFaceCount,
+	    maxFullDetailPointCount) != 0)
 	    submitted++;
     }
     return submitted;
@@ -468,8 +468,8 @@ SoBRLSnapAction::submitSourceBackedFullDetailRequests(
 
 int
 SoBRLSnapAction::consumeSourceBackedFullDetailResults(
-	const std::vector<BRLObolLodResult> &results,
-	const BRLObolLodRequest *templateRequest)
+    const std::vector<BRLObolLodResult> &results,
+    const BRLObolLodRequest *templateRequest)
 {
     std::vector<SbBool> used(results.size(), FALSE);
     int consumed = 0;
@@ -483,7 +483,7 @@ SoBRLSnapAction::consumeSourceBackedFullDetailResults(
 
 	for (size_t j = 0; j < results.size(); j++) {
 	    if (used[j] ||
-		    !brlobol_lod_result_matches_request(results[j], expected))
+		!brlobol_lod_result_matches_request(results[j], expected))
 		continue;
 	    if (this->consumeSourceBackedFullDetailResult(
 		    this->sourceBackedFullDetailRequests[i], results[j])) {
@@ -505,8 +505,8 @@ SoBRLSnapAction::setConstructionPlane(const SbVec3f &origin, const SbVec3f &norm
 
 void
 SoBRLSnapAction::setConstructionPlane(const SbVec3f &origin,
-	const SbVec3f &normal,
-	const SbString &path)
+				      const SbVec3f &normal,
+				      const SbString &path)
 {
     this->constructionPlaneOrigin = origin;
     this->constructionPlaneNormal = normal;
@@ -619,9 +619,9 @@ SoBRLSnapAction::beginTraversal(SoNode *node)
     if (this->constructionPlaneEnabled) {
 	SbVec3f planePoint;
 	if (closest_point_on_plane(this->queryPoint, this->constructionPlaneOrigin,
-		this->constructionPlaneNormal, planePoint)) {
+				   this->constructionPlaneNormal, planePoint)) {
 	    this->consider(CONSTRUCTION_PLANE, this->constructionPlanePath,
-		    SbString(""), SbString(""), -1, this->queryPoint, planePoint);
+			   SbString(""), SbString(""), -1, this->queryPoint, planePoint);
 	}
     }
 }
@@ -630,7 +630,7 @@ void
 SoBRLSnapAction::nodeAction(SoAction *action, SoNode *node)
 {
     if (node->isOfType(SoGroup::getClassTypeId()) ||
-	    node->isOfType(SoTransformation::getClassTypeId()))
+	node->isOfType(SoTransformation::getClassTypeId()))
 	node->doAction(action);
 }
 
@@ -684,15 +684,15 @@ SoBRLSnapAction::vlistShapeAction(SoAction *action, SoNode *node)
 	    centerBox.extendBy(pointB);
 
 	    snapAction->consider(ENDPOINT, sourcePath, editIntentId,
-		    editIntentRole, currentSegment, query, pointA);
+				 editIntentRole, currentSegment, query, pointA);
 	    snapAction->consider(ENDPOINT, sourcePath, editIntentId,
-		    editIntentRole, currentSegment, query, pointB);
+				 editIntentRole, currentSegment, query, pointB);
 	    snapAction->consider(LINE_NEAREST, sourcePath, editIntentId,
-		    editIntentRole, currentSegment, query,
-		    snap_closest_point_on_segment(query, pointA, pointB));
+				 editIntentRole, currentSegment, query,
+				 snap_closest_point_on_segment(query, pointA, pointB));
 	    snapAction->consider(MIDPOINT, sourcePath, editIntentId,
-		    editIntentRole, currentSegment, query,
-		    (pointA + pointB) * 0.5f);
+				 editIntentRole, currentSegment, query,
+				 (pointA + pointB) * 0.5f);
 	    last = geom->point[i];
 	    continue;
 	}
@@ -706,12 +706,12 @@ SoBRLSnapAction::vlistShapeAction(SoAction *action, SoNode *node)
 	SbVec3f worldPoint = snapAction->pointForCoordinateSpace(localToWorld, geom->point[i]);
 	centerBox.extendBy(worldPoint);
 	snapAction->consider(ENDPOINT, sourcePath, editIntentId,
-		editIntentRole, i, query, worldPoint);
+			     editIntentRole, i, query, worldPoint);
     }
 
     if (!centerBox.isEmpty())
 	snapAction->consider(CENTER, sourcePath, editIntentId, editIntentRole,
-		-1, query, centerBox.getCenter());
+			     -1, query, centerBox.getCenter());
 }
 
 void
@@ -730,7 +730,7 @@ SoBRLSnapAction::meshShapeAction(SoAction *action, SoNode *node)
 	(snapAction->geometryPolicy == SoBRLSnapAction::FULL_DETAIL &&
 	 shape->needsSourceBackedFullDetail()) ? TRUE : FALSE;
     if (snapAction->geometryPolicy == SoBRLSnapAction::FULL_DETAIL &&
-	    (shape->isLodDisplayActive() || viewPayload))
+	(shape->isLodDisplayActive() || viewPayload))
 	snapAction->skippedLodDisplayMeshCount++;
     const SbMatrix &localToWorld = SoModelMatrixElement::get(action->getState());
     if (useSourceBackedFullDetail) {
@@ -749,9 +749,9 @@ SoBRLSnapAction::meshShapeAction(SoAction *action, SoNode *node)
 	 snapAction->geometryPolicy == SoBRLSnapAction::DISPLAY_LEVEL &&
 	 viewPayload) ? TRUE : FALSE;
     int triangleCount = useFullDetail ?
-	shape->getFullDetailTriangleCount() :
-	(useViewPayload ? viewPayload->getTriangleCount() :
-	    shape->getTriangleCount());
+			shape->getFullDetailTriangleCount() :
+			(useViewPayload ? viewPayload->getTriangleCount() :
+			 shape->getTriangleCount());
     for (int i = 0; i < triangleCount; i++) {
 	int ia = -1;
 	int ib = -1;
@@ -786,36 +786,36 @@ SoBRLSnapAction::meshShapeAction(SoAction *action, SoNode *node)
 	centerBox.extendBy(pointC);
 
 	snapAction->consider(VERTEX, sourcePath, editIntentId, editIntentRole,
-		i, query, pointA, ia);
+			     i, query, pointA, ia);
 	snapAction->consider(VERTEX, sourcePath, editIntentId, editIntentRole,
-		i, query, pointB, ib);
+			     i, query, pointB, ib);
 	snapAction->consider(VERTEX, sourcePath, editIntentId, editIntentRole,
-		i, query, pointC, ic);
+			     i, query, pointC, ic);
 	snapAction->consider(EDGE_NEAREST, sourcePath, editIntentId,
-		editIntentRole, i, query,
-		snap_closest_point_on_segment(query, pointA, pointB),
-		-1, 0, ia, ib);
+			     editIntentRole, i, query,
+			     snap_closest_point_on_segment(query, pointA, pointB),
+			     -1, 0, ia, ib);
 	snapAction->consider(EDGE_NEAREST, sourcePath, editIntentId,
-		editIntentRole, i, query,
-		snap_closest_point_on_segment(query, pointB, pointC),
-		-1, 1, ib, ic);
+			     editIntentRole, i, query,
+			     snap_closest_point_on_segment(query, pointB, pointC),
+			     -1, 1, ib, ic);
 	snapAction->consider(EDGE_NEAREST, sourcePath, editIntentId,
-		editIntentRole, i, query,
-		snap_closest_point_on_segment(query, pointC, pointA),
-		-1, 2, ic, ia);
+			     editIntentRole, i, query,
+			     snap_closest_point_on_segment(query, pointC, pointA),
+			     -1, 2, ic, ia);
 	snapAction->consider(FACE_NEAREST, sourcePath, editIntentId,
-		editIntentRole, i, query,
-		snap_closest_point_on_triangle(query, pointA, pointB, pointC));
+			     editIntentRole, i, query,
+			     snap_closest_point_on_triangle(query, pointA, pointB, pointC));
     }
 
     if (!centerBox.isEmpty())
 	snapAction->consider(CENTER, sourcePath, editIntentId, editIntentRole,
-		-1, query, centerBox.getCenter());
+			     -1, query, centerBox.getCenter());
 }
 
 void
 SoBRLSnapAction::appendSourceBackedFullDetailRequest(
-	const SoBRLMeshShape *shape, const SbMatrix &localToWorld)
+    const SoBRLMeshShape *shape, const SbMatrix &localToWorld)
 {
     if (!shape)
 	return;
@@ -829,7 +829,7 @@ SoBRLSnapAction::appendSourceBackedFullDetailRequest(
 	    SbMatrix worldToLocal = localToWorld.inverse();
 	    worldToLocal.multVecMatrix(this->queryPoint, localQuery);
 	    localTolerance = snap_source_local_tolerance(worldToLocal,
-		    this->tolerance);
+			     this->tolerance);
 	}
 	if (localTolerance >= 0.0f) {
 	    SbVec3f delta(localTolerance, localTolerance, localTolerance);
@@ -846,14 +846,14 @@ SoBRLSnapAction::appendSourceBackedFullDetailRequest(
 
 void
 SoBRLSnapAction::consider(SnapKind kind, const SbString &path,
-	const SbString &editIntentId,
-	const SbString &editIntentRole,
-	int primitiveIndex,
-	const SbVec3f &query, const SbVec3f &candidate,
-	int vertexIndex,
-	int edgeSlot,
-	int edgeVertexIndexA,
-	int edgeVertexIndexB)
+			  const SbString &editIntentId,
+			  const SbString &editIntentRole,
+			  int primitiveIndex,
+			  const SbVec3f &query, const SbVec3f &candidate,
+			  int vertexIndex,
+			  int edgeSlot,
+			  int edgeVertexIndexA,
+			  int edgeVertexIndexB)
 {
     const float tieTolerance = 1.0e-6f;
 
@@ -868,7 +868,7 @@ SoBRLSnapAction::consider(SnapKind kind, const SbString &path,
 	    return;
 	if (fabsf(dist - this->bestDistance) <= tieTolerance) {
 	    if (this->priorityPolicy != FEATURE_PRIORITY ||
-		    snap_kind_priority(kind) >= snap_kind_priority(this->candidateKind))
+		snap_kind_priority(kind) >= snap_kind_priority(this->candidateKind))
 		return;
 	}
     }

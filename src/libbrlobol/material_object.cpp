@@ -56,7 +56,7 @@ SoBRLMaterialObject::clearProperties(void)
 
 void
 SoBRLMaterialObject::addProperty(const char *group, const char *name,
-	const char *value)
+				 const char *value)
 {
     const int index = this->getPropertyCount();
     this->propertyGroup.set1Value(index, group ? group : "");
@@ -66,12 +66,12 @@ SoBRLMaterialObject::addProperty(const char *group, const char *name,
 
 SbBool
 SoBRLMaterialObject::getProperty(int index, SbString &groupOut,
-	SbString &nameOut, SbString &valueOut) const
+				 SbString &nameOut, SbString &valueOut) const
 {
     if (index < 0 ||
-	    index >= this->propertyGroup.getNum() ||
-	    index >= this->propertyName.getNum() ||
-	    index >= this->propertyValue.getNum())
+	index >= this->propertyGroup.getNum() ||
+	index >= this->propertyName.getNum() ||
+	index >= this->propertyValue.getNum())
 	return FALSE;
 
     groupOut = this->propertyGroup[index];
@@ -82,7 +82,7 @@ SoBRLMaterialObject::getProperty(int index, SbString &groupOut,
 
 SbBool
 SoBRLMaterialObject::findProperty(const char *group, const char *name,
-	SbString &valueOut) const
+				  SbString &valueOut) const
 {
     if (!group || !name)
 	return FALSE;
@@ -92,10 +92,10 @@ SoBRLMaterialObject::findProperty(const char *group, const char *name,
 	SbString propertyNameValue;
 	SbString propertyValueValue;
 	if (!this->getProperty(i, propertyGroupValue, propertyNameValue,
-		    propertyValueValue))
+			       propertyValueValue))
 	    continue;
 	if (strcmp(propertyGroupValue.getString(), group) == 0 &&
-		strcmp(propertyNameValue.getString(), name) == 0) {
+	    strcmp(propertyNameValue.getString(), name) == 0) {
 	    valueOut = propertyValueValue;
 	    return TRUE;
 	}

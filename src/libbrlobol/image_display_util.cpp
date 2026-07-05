@@ -62,7 +62,7 @@ brlobol_image_payload_load(SoBRLImageSource *source, struct brlobol_image_payloa
     if (info.width == 0 || info.height == 0 || info.channels == 0)
 	return -1;
     if (info.width > (size_t)INT_MAX || info.height > (size_t)INT_MAX ||
-	    info.channels > (size_t)INT_MAX)
+	info.channels > (size_t)INT_MAX)
 	return -1;
 
     const size_t stride = info.width * info.channels;
@@ -85,9 +85,9 @@ brlobol_image_payload_load(SoBRLImageSource *source, struct brlobol_image_payloa
 
 void
 brlobol_image_fit_size(float sourceWidth, float sourceHeight,
-	float requestedWidth, float requestedHeight,
-	int fit, bool preserveAspect,
-	float *displayWidth, float *displayHeight)
+		       float requestedWidth, float requestedHeight,
+		       int fit, bool preserveAspect,
+		       float *displayWidth, float *displayHeight)
 {
     const float nativeWidth = positive_or(sourceWidth, 1.0f);
     const float nativeHeight = positive_or(sourceHeight, 1.0f);
@@ -119,8 +119,8 @@ brlobol_image_fit_size(float sourceWidth, float sourceHeight,
 
 void
 brlobol_image_texture_rect(float sourceWidth, float sourceHeight,
-	const SbVec2f &sourceCenter, float sourceZoom, int fit,
-	float *u0, float *v0, float *u1, float *v1)
+			   const SbVec2f &sourceCenter, float sourceZoom, int fit,
+			   float *u0, float *v0, float *u1, float *v1)
 {
     const float width = positive_or(sourceWidth, 1.0f);
     const float height = positive_or(sourceHeight, 1.0f);
@@ -159,18 +159,18 @@ brlobol_image_texture_rect(float sourceWidth, float sourceHeight,
 
 SoSeparator *
 brlobol_image_make_textured_quad(const struct brlobol_image_payload *payload,
-	float x0, float y0, float z0, float width, float height,
-	float u0, float v0, float u1, float v1,
-	float opacity, SbBool selectable, SbBool depthTest,
-	SbBool depthWrite, SbBool doubleSided,
-	SoTexture2 **textureOut, SoFaceSet **faceOut)
+				 float x0, float y0, float z0, float width, float height,
+				 float u0, float v0, float u1, float v1,
+				 float opacity, SbBool selectable, SbBool depthTest,
+				 SbBool depthWrite, SbBool doubleSided,
+				 SoTexture2 **textureOut, SoFaceSet **faceOut)
 {
     if (textureOut)
 	*textureOut = NULL;
     if (faceOut)
 	*faceOut = NULL;
     if (!payload || payload->pixels.empty() || payload->width <= 0 ||
-	    payload->height <= 0 || payload->channels <= 0)
+	payload->height <= 0 || payload->channels <= 0)
 	return NULL;
 
     SoSeparator *root = new SoSeparator;
@@ -196,7 +196,7 @@ brlobol_image_make_textured_quad(const struct brlobol_image_payload *payload,
     texture->wrapS = SoTexture2::CLAMP;
     texture->wrapT = SoTexture2::CLAMP;
     texture->setImageData(payload->width, payload->height, payload->channels,
-	    payload->pixels.data());
+			  payload->pixels.data());
     root->addChild(texture);
 
     SoMaterial *material = new SoMaterial;

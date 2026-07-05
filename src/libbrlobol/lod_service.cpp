@@ -108,7 +108,7 @@ lod_request_object_name(const BRLObolLodRequest &request)
 
 static BRLObolLodResult
 lod_provider_status_result(const BRLObolLodRequest &request, int status,
-	const char *diagnostic)
+			   const char *diagnostic)
 {
     BRLObolLodResult result;
 
@@ -119,7 +119,7 @@ lod_provider_status_result(const BRLObolLodRequest &request, int status,
     result.terminal = TRUE;
     result.diagnostic = diagnostic ? diagnostic : "";
     if (status == BRLOBOL_LOD_PROVIDER_CACHE_MISS ||
-	    status == BRLOBOL_LOD_PROVIDER_STALE)
+	status == BRLOBOL_LOD_PROVIDER_STALE)
 	result.stale = TRUE;
 
     return result;
@@ -127,17 +127,17 @@ lod_provider_status_result(const BRLObolLodRequest &request, int status,
 
 static SbBool
 lod_source_full_detail_exceeds_limits(
-	const BRLObolRtSourceFullDetailProvider *provider,
-	uint64_t faceCount, uint64_t pointCount)
+    const BRLObolRtSourceFullDetailProvider *provider,
+    uint64_t faceCount, uint64_t pointCount)
 {
     if (!provider)
 	return FALSE;
 
     if (provider->maxFullDetailFaceCount != 0 &&
-	    faceCount > provider->maxFullDetailFaceCount)
+	faceCount > provider->maxFullDetailFaceCount)
 	return TRUE;
     if (provider->maxFullDetailPointCount != 0 &&
-	    pointCount > provider->maxFullDetailPointCount)
+	pointCount > provider->maxFullDetailPointCount)
 	return TRUE;
 
     return FALSE;
@@ -147,7 +147,7 @@ static SbBool
 lod_request_source_counts_known(const BRLObolLodRequest &request)
 {
     return request.sourceCounts.faceCount != 0 ||
-	request.sourceCounts.pointCount != 0 ? TRUE : FALSE;
+	   request.sourceCounts.pointCount != 0 ? TRUE : FALSE;
 }
 
 static SbString
@@ -203,13 +203,13 @@ static void
 lod_remove_source_query_provider_params(BRLObolLodRequest &request)
 {
     request.providerParams.erase(
-	    std::remove_if(request.providerParams.begin(),
-		request.providerParams.end(),
-		[](const BRLObolLodProviderParam &param) {
-		    return strncmp(param.name.getString(), "source_query.",
-			    13) == 0;
-		}),
-	    request.providerParams.end());
+	std::remove_if(request.providerParams.begin(),
+		       request.providerParams.end(),
+    [](const BRLObolLodProviderParam &param) {
+	return strncmp(param.name.getString(), "source_query.",
+		       13) == 0;
+    }),
+    request.providerParams.end());
 }
 
 static SbBool
@@ -227,7 +227,7 @@ lod_parse_float_provider_param(float &value, const SbString &text)
     if (!(in >> parsed))
 	return FALSE;
     if (!std::isfinite(parsed) ||
-	    !lod_provider_param_has_no_trailing_tokens(in))
+	!lod_provider_param_has_no_trailing_tokens(in))
 	return FALSE;
     value = parsed;
     return TRUE;
@@ -295,13 +295,13 @@ lod_request_query_space_is_source_local(const BRLObolLodRequest &request)
     const BRLObolLodProviderParam *spaceParam =
 	lod_provider_param(request, "source_query.space");
     return spaceParam &&
-	strcmp(spaceParam->value.getString(), "source_local") == 0 ?
-	TRUE : FALSE;
+	   strcmp(spaceParam->value.getString(), "source_local") == 0 ?
+	   TRUE : FALSE;
 }
 
 static SbBool
 lod_request_snap_query_bounds(const BRLObolLodRequest &request,
-	SbBox3f &queryBounds)
+			      SbBox3f &queryBounds)
 {
     if (!lod_request_query_space_is_source_local(request))
 	return FALSE;
@@ -315,7 +315,7 @@ lod_request_snap_query_bounds(const BRLObolLodRequest &request,
 
     float tolerance = 0.0f;
     if (!lod_parse_float_provider_param(tolerance, toleranceParam->value) ||
-	    tolerance < 0.0f)
+	tolerance < 0.0f)
 	return FALSE;
 
     return lod_parse_bounds_provider_param(queryBounds, boundsParam->value);
@@ -323,8 +323,8 @@ lod_request_snap_query_bounds(const BRLObolLodRequest &request,
 
 static SbBool
 lod_request_pick_query_ray(const BRLObolLodRequest &request,
-	SbVec3f &rayOrigin,
-	SbVec3f &rayDirection)
+			   SbVec3f &rayOrigin,
+			   SbVec3f &rayDirection)
 {
     if (!lod_request_query_space_is_source_local(request))
 	return FALSE;
@@ -337,9 +337,9 @@ lod_request_pick_query_ray(const BRLObolLodRequest &request,
 	return FALSE;
 
     if (!lod_parse_vec3_provider_param(rayOrigin, originParam->value) ||
-	    !lod_parse_vec3_provider_param(rayDirection,
-		directionParam->value) ||
-	    rayDirection.length() <= 0.0f)
+	!lod_parse_vec3_provider_param(rayDirection,
+				       directionParam->value) ||
+	rayDirection.length() <= 0.0f)
 	return FALSE;
 
     rayDirection.normalize();
@@ -362,10 +362,10 @@ lod_request_has_scoped_subset_query(const BRLObolLodRequest &request)
 
 static SbBool
 lod_ray_intersects_triangle(const SbVec3f &origin,
-	const SbVec3f &direction,
-	const SbVec3f &a,
-	const SbVec3f &b,
-	const SbVec3f &c)
+			    const SbVec3f &direction,
+			    const SbVec3f &a,
+			    const SbVec3f &b,
+			    const SbVec3f &c)
 {
     const float epsilon = 1.0e-7f;
     const SbVec3f ab = b - a;
@@ -392,7 +392,7 @@ lod_ray_intersects_triangle(const SbVec3f &origin,
 
 static BRLObolLodResult
 lod_source_full_detail_payload_result(const BRLObolLodRequest &request,
-	const struct rt_bot_internal *bot)
+				      const struct rt_bot_internal *bot)
 {
     BRLObolLodResult result;
     SbBox3f queryBounds;
@@ -429,8 +429,8 @@ lod_source_full_detail_payload_result(const BRLObolLodRequest &request,
 	sourcePoints.reserve(bot->num_vertices);
 	for (size_t i = 0; i < bot->num_vertices; i++) {
 	    SbVec3f point(static_cast<float>(bot->vertices[i * 3]),
-		    static_cast<float>(bot->vertices[i * 3 + 1]),
-		    static_cast<float>(bot->vertices[i * 3 + 2]));
+			  static_cast<float>(bot->vertices[i * 3 + 1]),
+			  static_cast<float>(bot->vertices[i * 3 + 2]));
 	    sourcePoints.push_back(point);
 	}
 
@@ -440,9 +440,9 @@ lod_source_full_detail_payload_result(const BRLObolLodRequest &request,
 	    int ib = bot->faces[i * 3 + 1];
 	    int ic = bot->faces[i * 3 + 2];
 	    if (ia < 0 || ib < 0 || ic < 0 ||
-		    static_cast<size_t>(ia) >= bot->num_vertices ||
-		    static_cast<size_t>(ib) >= bot->num_vertices ||
-		    static_cast<size_t>(ic) >= bot->num_vertices) {
+		static_cast<size_t>(ia) >= bot->num_vertices ||
+		static_cast<size_t>(ib) >= bot->num_vertices ||
+		static_cast<size_t>(ic) >= bot->num_vertices) {
 		result.mesh.clear();
 		result.providerStatus = BRLOBOL_LOD_PROVIDER_ERROR;
 		result.diagnostic =
@@ -460,11 +460,11 @@ lod_source_full_detail_payload_result(const BRLObolLodRequest &request,
 		    continue;
 	    }
 	    if (useQueryRay &&
-		    !lod_ray_intersects_triangle(queryRayOrigin,
-			queryRayDirection,
-			sourcePoints[static_cast<size_t>(ia)],
-			sourcePoints[static_cast<size_t>(ib)],
-			sourcePoints[static_cast<size_t>(ic)]))
+		!lod_ray_intersects_triangle(queryRayOrigin,
+					     queryRayDirection,
+					     sourcePoints[static_cast<size_t>(ia)],
+					     sourcePoints[static_cast<size_t>(ib)],
+					     sourcePoints[static_cast<size_t>(ic)]))
 		continue;
 	    selectedFaces.push_back(i);
 	}
@@ -493,7 +493,7 @@ lod_source_full_detail_payload_result(const BRLObolLodRequest &request,
 	if (selectedFaces.size() < bot->num_faces) {
 	    std::vector<int32_t> sourceToLocal(bot->num_vertices, -1);
 	    result.mesh.points.reserve(std::min(bot->num_vertices,
-		    selectedFaces.size() * 3));
+						selectedFaces.size() * 3));
 	    result.mesh.vertexIndex.reserve(result.mesh.points.capacity());
 	    for (size_t i = 0; i < selectedFaces.size(); i++) {
 		size_t faceIndex = selectedFaces[i];
@@ -508,11 +508,11 @@ lod_source_full_detail_payload_result(const BRLObolLodRequest &request,
 			sourceToLocal[sourceSlot] = localIndex;
 			result.mesh.points.push_back(sourcePoints[sourceSlot]);
 			result.mesh.vertexIndex.push_back(
-				static_cast<int32_t>(sourceIndex));
+			    static_cast<int32_t>(sourceIndex));
 		    }
 		    result.mesh.coordIndex.push_back(localIndex);
 		    result.bounds.extendBy(
-			    result.mesh.points[static_cast<size_t>(localIndex)]);
+			result.mesh.points[static_cast<size_t>(localIndex)]);
 		}
 	    }
 	} else {
@@ -524,7 +524,7 @@ lod_source_full_detail_payload_result(const BRLObolLodRequest &request,
 		    int idx = bot->faces[faceIndex * 3 + j];
 		    result.mesh.coordIndex.push_back(static_cast<int32_t>(idx));
 		    result.bounds.extendBy(
-			    result.mesh.points[static_cast<size_t>(idx)]);
+			result.mesh.points[static_cast<size_t>(idx)]);
 		}
 	    }
 	}
@@ -548,54 +548,54 @@ lod_source_full_detail_payload_result(const BRLObolLodRequest &request,
 
 BRLObolLodResult
 brlobol_rt_source_full_detail_provider_task(
-	const BRLObolLodRequest &request, void *userData)
+    const BRLObolLodRequest &request, void *userData)
 {
     BRLObolRtSourceFullDetailProvider *provider =
 	static_cast<BRLObolRtSourceFullDetailProvider *>(userData);
     if (!provider || !provider->dbip)
 	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
-	    "RT source full-detail provider has no database");
+					  "RT source full-detail provider has no database");
 
     const SbBool scopedSubsetRequest =
 	lod_request_has_scoped_subset_query(request);
 
     if (!scopedSubsetRequest && lod_request_source_counts_known(request) &&
-	    lod_source_full_detail_exceeds_limits(provider,
+	lod_source_full_detail_exceeds_limits(provider,
 		request.sourceCounts.faceCount, request.sourceCounts.pointCount))
 	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_FALLBACK,
-	    "RT source full-detail provider request exceeds full-detail limits");
+					  "RT source full-detail provider request exceeds full-detail limits");
 
     const char *name = lod_request_object_name(request);
     if (!name)
 	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
-	    "RT source full-detail provider request has no object name");
+					  "RT source full-detail provider request has no object name");
 
     struct directory *dp = db_lookup(provider->dbip, name, LOOKUP_QUIET);
     if (dp == RT_DIR_NULL)
 	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
-	    "RT source full-detail provider could not find source object");
+					  "RT source full-detail provider could not find source object");
 
     struct rt_db_internal intern;
     RT_DB_INTERNAL_INIT(&intern);
     int internalType = rt_db_get_internal(&intern, dp, provider->dbip, NULL);
     if (internalType < 0)
 	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
-	    "RT source full-detail provider could not read source object");
+					  "RT source full-detail provider could not read source object");
 
     if (internalType != ID_BOT || intern.idb_type != ID_BOT ||
-	    intern.idb_ptr == NULL) {
+	intern.idb_ptr == NULL) {
 	rt_db_free_internal(&intern);
 	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
-	    "RT source full-detail provider source is not a BoT");
+					  "RT source full-detail provider source is not a BoT");
     }
 
     const struct rt_bot_internal *bot =
-	static_cast<const struct rt_bot_internal *>(intern.idb_ptr);
+	    static_cast<const struct rt_bot_internal *>(intern.idb_ptr);
     if (!bot || !bot->vertices || !bot->faces ||
-	    bot->num_vertices == 0 || bot->num_faces == 0) {
+	bot->num_vertices == 0 || bot->num_faces == 0) {
 	rt_db_free_internal(&intern);
 	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
-	    "RT source full-detail provider source BoT has no mesh payload");
+					  "RT source full-detail provider source BoT has no mesh payload");
     }
     RT_BOT_CK_MAGIC(bot);
 
@@ -603,34 +603,34 @@ brlobol_rt_source_full_detail_provider_task(
 	    bot->num_faces, bot->num_vertices)) {
 	rt_db_free_internal(&intern);
 	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_FALLBACK,
-	    "RT source full-detail provider source exceeds full-detail limits");
+					  "RT source full-detail provider source exceeds full-detail limits");
     }
 
     if (provider->validateSourceMetrics &&
-	    ((request.sourceCounts.faceCount != 0 &&
-		request.sourceCounts.faceCount != bot->num_faces) ||
-	     (request.sourceCounts.pointCount != 0 &&
-		request.sourceCounts.pointCount != bot->num_vertices))) {
+	((request.sourceCounts.faceCount != 0 &&
+	  request.sourceCounts.faceCount != bot->num_faces) ||
+	 (request.sourceCounts.pointCount != 0 &&
+	  request.sourceCounts.pointCount != bot->num_vertices))) {
 	rt_db_free_internal(&intern);
 	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_STALE,
-	    "RT source full-detail provider source metrics changed");
+					  "RT source full-detail provider source metrics changed");
     }
 
     if (bot->num_vertices >
-	    static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
-	    bot->num_faces >
-	    static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
-	    bot->num_faces >
-	    static_cast<size_t>(std::numeric_limits<size_t>::max() / 3)) {
+	static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
+	bot->num_faces >
+	static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
+	bot->num_faces >
+	static_cast<size_t>(std::numeric_limits<size_t>::max() / 3)) {
 	rt_db_free_internal(&intern);
 	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_FALLBACK,
-	    "RT source full-detail provider source exceeds copy limits");
+					  "RT source full-detail provider source exceeds copy limits");
     }
 
     BRLObolLodResult result =
 	lod_source_full_detail_payload_result(request, bot);
     if (result.providerStatus == BRLOBOL_LOD_PROVIDER_READY &&
-	    lod_source_full_detail_exceeds_limits(provider,
+	lod_source_full_detail_exceeds_limits(provider,
 		result.counts.faceCount, result.counts.pointCount)) {
 	result.mesh.clear();
 	result.geometry.clear();
@@ -655,12 +655,12 @@ brlobol_rt_source_full_detail_provider_free(void *userData)
 
 SbBool
 brlobol_lod_rt_source_full_detail_request_from_source_mesh_request(
-	BRLObolLodRequest &request,
-	const BRLObolSourceMeshRequest &sourceRequest,
-	const BRLObolLodRequest *templateRequest)
+    BRLObolLodRequest &request,
+    const BRLObolSourceMeshRequest &sourceRequest,
+    const BRLObolLodRequest *templateRequest)
 {
     if (sourceRequest.path.getLength() == 0 &&
-	    sourceRequest.sourceName.getLength() == 0)
+	sourceRequest.sourceName.getLength() == 0)
 	return FALSE;
 
     if (templateRequest)
@@ -670,7 +670,7 @@ brlobol_lod_rt_source_full_detail_request_from_source_mesh_request(
     lod_remove_source_query_provider_params(request);
 
     request.objectPath = sourceRequest.path.getLength() > 0 ?
-	sourceRequest.path : sourceRequest.sourceName;
+			 sourceRequest.path : sourceRequest.sourceName;
     request.objectName = sourceRequest.sourceName;
     if (request.objectName.getLength() == 0) {
 	const char *name = lod_request_object_name(request);
@@ -687,36 +687,36 @@ brlobol_lod_rt_source_full_detail_request_from_source_mesh_request(
     request.sourceCounts.faceCount = sourceRequest.faceCount;
     request.sourceCounts.pointCount = sourceRequest.pointCount;
     if ((sourceRequest.queryBoundsValid && !sourceRequest.queryBounds.isEmpty()) ||
-	    sourceRequest.queryRayValid || sourceRequest.queryToleranceValid)
+	sourceRequest.queryRayValid || sourceRequest.queryToleranceValid)
 	request.addProviderParam("source_query.space", "source_local");
     if (sourceRequest.queryBoundsValid && !sourceRequest.queryBounds.isEmpty()) {
 	request.addProviderParam("source_query.bounds",
-		lod_bounds_provider_param(sourceRequest.queryBounds));
+				 lod_bounds_provider_param(sourceRequest.queryBounds));
     }
     if (sourceRequest.queryRayValid) {
 	request.addProviderParam("source_query.ray.origin",
-		lod_vec3_provider_param(sourceRequest.queryRayOrigin));
+				 lod_vec3_provider_param(sourceRequest.queryRayOrigin));
 	request.addProviderParam("source_query.ray.direction",
-		lod_vec3_provider_param(sourceRequest.queryRayDirection));
+				 lod_vec3_provider_param(sourceRequest.queryRayDirection));
     }
     if (sourceRequest.queryToleranceValid) {
 	request.addProviderParam("source_query.tolerance",
-		lod_float_provider_param(sourceRequest.queryTolerance));
+				 lod_float_provider_param(sourceRequest.queryTolerance));
     }
 
     return request.objectPath.getLength() > 0 ||
-	request.objectName.getLength() > 0 ? TRUE : FALSE;
+	   request.objectName.getLength() > 0 ? TRUE : FALSE;
 }
 
 uint64_t
 brlobol_lod_submit_rt_source_full_detail_request(
-	BRLObolLodService *service,
-	uint64_t generation,
-	const BRLObolSourceMeshRequest &sourceRequest,
-	struct db_i *dbip,
-	const BRLObolLodRequest *templateRequest,
-	uint64_t maxFullDetailFaceCount,
-	uint64_t maxFullDetailPointCount)
+    BRLObolLodService *service,
+    uint64_t generation,
+    const BRLObolSourceMeshRequest &sourceRequest,
+    struct db_i *dbip,
+    const BRLObolLodRequest *templateRequest,
+    uint64_t maxFullDetailFaceCount,
+    uint64_t maxFullDetailPointCount)
 {
     if (!service || !dbip)
 	return 0;
@@ -752,49 +752,49 @@ brlobol_lod_submit_rt_source_full_detail_request(
 
 BRLObolLodResult
 brlobol_rt_mesh_lod_provider_task(const BRLObolLodRequest &request,
-	void *userData)
+				  void *userData)
 {
     BRLObolRtMeshLodProvider *provider =
 	static_cast<BRLObolRtMeshLodProvider *>(userData);
     if (!provider || !provider->dbip)
 	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
-	    "RT mesh LoD provider has no database");
+					  "RT mesh LoD provider has no database");
 
     const char *name = lod_request_object_name(request);
     if (!name)
 	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
-	    "RT mesh LoD provider request has no object name");
+					  "RT mesh LoD provider request has no object name");
 
     struct rt_mesh_lod_cache_status status = RT_MESH_LOD_CACHE_STATUS_INIT;
     if (db_mesh_lod_status(provider->dbip, name, &status) != BRLCAD_OK)
 	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_ERROR,
-	    "RT mesh LoD provider could not query cache status");
+					  "RT mesh LoD provider could not query cache status");
 
     if ((!status.has_cache_key || !status.has_cached_payload ||
-		status.stale_cache_entry) && provider->refreshMissing) {
+	 status.stale_cache_entry) && provider->refreshMissing) {
 	if (db_mesh_lod_refresh(provider->dbip, name, &status) != BRLCAD_OK)
 	    return lod_provider_status_result(request,
-		BRLOBOL_LOD_PROVIDER_CACHE_MISS,
-		"RT mesh LoD provider could not refresh cache entry");
+					      BRLOBOL_LOD_PROVIDER_CACHE_MISS,
+					      "RT mesh LoD provider could not refresh cache entry");
     }
 
     struct rt_mesh_lod *lod = db_mesh_lod_get(provider->dbip, name);
     if (!lod)
 	return lod_provider_status_result(request,
-	    status.stale_cache_entry ? BRLOBOL_LOD_PROVIDER_STALE :
-	    BRLOBOL_LOD_PROVIDER_CACHE_MISS,
-	    "RT mesh LoD provider has no cache payload");
+					  status.stale_cache_entry ? BRLOBOL_LOD_PROVIDER_STALE :
+					  BRLOBOL_LOD_PROVIDER_CACHE_MISS,
+					  "RT mesh LoD provider has no cache payload");
 
     int load_ret = provider->useForcedLevel ?
-	rt_mesh_lod_load_level(lod, provider->forcedLevel, provider->reset) :
-	(provider->useView ?
-	    rt_mesh_lod_load_view(lod, &provider->view, provider->reset) :
-	    rt_mesh_lod_load_view(lod, NULL, provider->reset));
+		   rt_mesh_lod_load_level(lod, provider->forcedLevel, provider->reset) :
+		   (provider->useView ?
+		    rt_mesh_lod_load_view(lod, &provider->view, provider->reset) :
+		    rt_mesh_lod_load_view(lod, NULL, provider->reset));
     if (load_ret < 0) {
 	rt_mesh_lod_destroy(lod);
 	return lod_provider_status_result(request,
-	    BRLOBOL_LOD_PROVIDER_CACHE_MISS,
-	    "RT mesh LoD provider could not load a view level");
+					  BRLOBOL_LOD_PROVIDER_CACHE_MISS,
+					  "RT mesh LoD provider could not load a view level");
     }
 
     struct rt_mesh_lod_info info = RT_MESH_LOD_INFO_INIT;
@@ -810,8 +810,8 @@ brlobol_rt_mesh_lod_provider_task(const BRLObolLodRequest &request,
     if (!have_info) {
 	rt_mesh_lod_destroy(lod);
 	return lod_provider_status_result(request,
-	    BRLOBOL_LOD_PROVIDER_CACHE_MISS,
-	    "RT mesh LoD provider loaded no mesh metadata");
+					  BRLOBOL_LOD_PROVIDER_CACHE_MISS,
+					  "RT mesh LoD provider loaded no mesh metadata");
     }
 
     BRLObolLodResult result =
@@ -819,11 +819,11 @@ brlobol_rt_mesh_lod_provider_task(const BRLObolLodRequest &request,
     if (result.providerStatus == BRLOBOL_LOD_PROVIDER_READY) {
 	struct rt_mesh_lod_data data;
 	if (!rt_mesh_lod_data_get(lod, &data) ||
-		!brlobol_lod_mesh_payload_from_rt_mesh_data(result.mesh, data)) {
+	    !brlobol_lod_mesh_payload_from_rt_mesh_data(result.mesh, data)) {
 	    rt_mesh_lod_destroy(lod);
 	    return lod_provider_status_result(request,
-		BRLOBOL_LOD_PROVIDER_CACHE_MISS,
-		"RT mesh LoD provider could not copy active mesh payload");
+					      BRLOBOL_LOD_PROVIDER_CACHE_MISS,
+					      "RT mesh LoD provider could not copy active mesh payload");
 	}
 	if (provider->shrinkAfterCopy)
 	    rt_mesh_lod_memshrink(lod);
@@ -915,10 +915,10 @@ struct BRLObolLodServicePrivate {
 
 static SbBool
 lod_generation_cancelled_unlocked(const BRLObolLodServicePrivate *p,
-	uint64_t generation)
+				  uint64_t generation)
 {
     return p->cancelledGenerations.find(generation) !=
-	p->cancelledGenerations.end() ? TRUE : FALSE;
+	   p->cancelledGenerations.end() ? TRUE : FALSE;
 }
 
 static SbBool
@@ -930,21 +930,21 @@ lod_generation_cancelled(BRLObolLodServicePrivate *p, uint64_t generation)
 
 static SbBool
 lod_generation_cancelled_or_stopping(BRLObolLodServicePrivate *p,
-	uint64_t generation)
+				     uint64_t generation)
 {
     std::lock_guard<std::mutex> lock(p->mutex);
     return p->stopping ||
-	lod_generation_cancelled_unlocked(p, generation) ? TRUE : FALSE;
+	   lod_generation_cancelled_unlocked(p, generation) ? TRUE : FALSE;
 }
 
 static SbBool
 lod_request_has_identity(const BRLObolLodRequest &request)
 {
     return request.databaseId.getLength() > 0 ||
-	request.objectPath.getLength() > 0 ||
-	request.objectName.getLength() > 0 ||
-	request.sourceRevision != 0 ||
-	request.sourceContentHash != 0 ? TRUE : FALSE;
+	   request.objectPath.getLength() > 0 ||
+	   request.objectName.getLength() > 0 ||
+	   request.sourceRevision != 0 ||
+	   request.sourceContentHash != 0 ? TRUE : FALSE;
 }
 
 static SbString
@@ -962,7 +962,7 @@ lod_active_request_key_recorded_unlocked(const BRLObolLodServicePrivate *p,
 
     for (size_t i = 0; i < p->activeRequestKeys.size(); i++) {
 	if (strcmp(p->activeRequestKeys[i].getString(),
-		key.getString()) == 0)
+		   key.getString()) == 0)
 	    return TRUE;
     }
 
@@ -971,14 +971,14 @@ lod_active_request_key_recorded_unlocked(const BRLObolLodServicePrivate *p,
 
 static void
 lod_active_request_key_remove_unlocked(BRLObolLodServicePrivate *p,
-	const SbString &key)
+				       const SbString &key)
 {
     if (!p || key.getLength() == 0)
 	return;
 
     for (size_t i = 0; i < p->activeRequestKeys.size(); i++) {
 	if (strcmp(p->activeRequestKeys[i].getString(),
-		key.getString()) != 0)
+		   key.getString()) != 0)
 	    continue;
 	p->activeRequestKeys.erase(p->activeRequestKeys.begin() + (long)i);
 	return;
@@ -987,7 +987,7 @@ lod_active_request_key_remove_unlocked(BRLObolLodServicePrivate *p,
 
 static BRLObolLodResult
 lod_service_status_result(const BRLObolLodTask &task, int status,
-	const char *diagnostic)
+			  const char *diagnostic)
 {
     BRLObolLodResult result;
 
@@ -998,7 +998,7 @@ lod_service_status_result(const BRLObolLodTask &task, int status,
     result.terminal = TRUE;
     result.diagnostic = diagnostic ? diagnostic : "";
     if (status == BRLOBOL_LOD_PROVIDER_CANCELLED ||
-	    status == BRLOBOL_LOD_PROVIDER_STALE)
+	status == BRLOBOL_LOD_PROVIDER_STALE)
 	result.stale = TRUE;
 
     return result;
@@ -1016,12 +1016,12 @@ lod_delayed_task_count_add(BRLObolLodServicePrivate *p, int delta)
 
     size_t decrement = (size_t)(-delta);
     p->delayedTasks = decrement > p->delayedTasks ?
-	0 : p->delayedTasks - decrement;
+		      0 : p->delayedTasks - decrement;
 }
 
 static SbBool
 lod_wait_for_debug_delay(BRLObolLodServicePrivate *p,
-	const BRLObolLodTask &task)
+			 const BRLObolLodTask &task)
 {
     if (task.debugDelayMilliseconds == 0)
 	return TRUE;
@@ -1070,7 +1070,7 @@ lod_normalize_result(BRLObolLodResult &result, const BRLObolLodTask &task)
 
 static SbBool
 lod_task_dependencies_ready(const BRLObolLodServicePrivate *p,
-	const BRLObolLodTask &task)
+			    const BRLObolLodTask &task)
 {
     if (lod_generation_cancelled_unlocked(p, task.generation))
 	return TRUE;
@@ -1101,21 +1101,21 @@ lod_execute_task(BRLObolLodServicePrivate *p, const BRLObolLodTask &task)
 {
     if (lod_generation_cancelled(p, task.generation))
 	return lod_service_status_result(task, BRLOBOL_LOD_PROVIDER_CANCELLED,
-	    "LoD task generation cancelled");
+					 "LoD task generation cancelled");
 
     if (!lod_wait_for_debug_delay(p, task))
 	return lod_service_status_result(task, BRLOBOL_LOD_PROVIDER_CANCELLED,
-	    "LoD task generation cancelled during debug delay");
+					 "LoD task generation cancelled during debug delay");
 
     if (!task.realize)
 	return lod_service_status_result(task, BRLOBOL_LOD_PROVIDER_ERROR,
-	    "LoD task has no realization callback");
+					 "LoD task has no realization callback");
 
     BRLObolLodResult result = (*task.realize)(task.request, task.realizeData);
 
     if (lod_generation_cancelled(p, task.generation))
 	return lod_service_status_result(task, BRLOBOL_LOD_PROVIDER_CANCELLED,
-	    "LoD task generation cancelled");
+					 "LoD task generation cancelled");
 
     lod_normalize_result(result, task);
     return result;
@@ -1161,7 +1161,7 @@ lod_collect_result_ready_callbacks(BRLObolLodServicePrivate *p)
 
 static void
 lod_complete_result_ready_callback(BRLObolLodServicePrivate *p,
-	BRLObolLodSubscriberId id)
+				   BRLObolLodSubscriberId id)
 {
     std::lock_guard<std::mutex> lock(p->mutex);
 
@@ -1191,7 +1191,7 @@ lod_notify_result_ready(BRLObolLodServicePrivate *p)
 
 static void
 lod_finish_task(BRLObolLodServicePrivate *p, const BRLObolLodWorkItem &item,
-	const BRLObolLodResult &result)
+		const BRLObolLodResult &result)
 {
     SbBool notifyResultReady = FALSE;
 
@@ -1202,7 +1202,7 @@ lod_finish_task(BRLObolLodServicePrivate *p, const BRLObolLodWorkItem &item,
 	if (p->inFlight > 0)
 	    p->inFlight--;
 	lod_active_request_key_remove_unlocked(p,
-		lod_request_active_key(item.task.request));
+					       lod_request_active_key(item.task.request));
 
 	if (item.task.publishResult) {
 	    notifyResultReady = p->results.empty() ? TRUE : FALSE;
@@ -1210,7 +1210,7 @@ lod_finish_task(BRLObolLodServicePrivate *p, const BRLObolLodWorkItem &item,
 	}
 
 	if (p->cacheWriterEnabled && item.task.writeCache &&
-		item.task.cacheWrite) {
+	    item.task.cacheWrite) {
 	    BRLObolLodCacheWriteItem writeItem;
 	    writeItem.result = result;
 	    writeItem.write = item.task.cacheWrite;
@@ -1343,7 +1343,7 @@ BRLObolLodService::stop(void)
     {
 	std::lock_guard<std::mutex> lock(this->p->mutex);
 	if (!this->p->running && this->p->workers.empty() &&
-		!this->p->cacheWriter.joinable())
+	    !this->p->cacheWriter.joinable())
 	    return;
 	this->p->stopping = TRUE;
     }
@@ -1431,8 +1431,8 @@ BRLObolLodService::isGenerationCancelled(uint64_t generation) const
 
 static uint64_t
 lod_service_submit_task(BRLObolLodServicePrivate *p,
-	const BRLObolLodTask &task,
-	SbBool skipActiveDuplicate)
+			const BRLObolLodTask &task,
+			SbBool skipActiveDuplicate)
 {
     uint64_t id = 0;
 
@@ -1457,7 +1457,7 @@ lod_service_submit_task(BRLObolLodServicePrivate *p,
 	const SbString activeKey =
 	    lod_request_active_key(item.task.request);
 	if (skipActiveDuplicate &&
-		lod_active_request_key_recorded_unlocked(p, activeKey))
+	    lod_active_request_key_recorded_unlocked(p, activeKey))
 	    return 0;
 
 	id = item.id;
@@ -1484,7 +1484,7 @@ BRLObolLodService::submitIfNotActive(const BRLObolLodTask &task)
 
 SbBool
 BRLObolLodService::hasActiveRequest(
-	const BRLObolLodRequest &request) const
+    const BRLObolLodRequest &request) const
 {
     const SbString key = lod_request_active_key(request);
 
@@ -1494,13 +1494,13 @@ BRLObolLodService::hasActiveRequest(
 
 size_t
 BRLObolLodService::drainResults(std::vector<BRLObolLodResult> &results,
-	size_t maxResults)
+				size_t maxResults)
 {
     size_t count = 0;
     std::lock_guard<std::mutex> lock(this->p->mutex);
 
     while (!this->p->results.empty() &&
-	    (maxResults == 0 || count < maxResults)) {
+	   (maxResults == 0 || count < maxResults)) {
 	results.push_back(this->p->results.front());
 	this->p->results.pop_front();
 	count++;
@@ -1511,9 +1511,9 @@ BRLObolLodService::drainResults(std::vector<BRLObolLodResult> &results,
 
 size_t
 BRLObolLodService::drainMatchingResults(
-	std::vector<BRLObolLodResult> &results,
-	const std::vector<BRLObolLodRequest> &requests,
-	size_t maxResults)
+    std::vector<BRLObolLodResult> &results,
+    const std::vector<BRLObolLodRequest> &requests,
+    size_t maxResults)
 {
     if (requests.empty())
 	return 0;
@@ -1522,7 +1522,7 @@ BRLObolLodService::drainMatchingResults(
     std::lock_guard<std::mutex> lock(this->p->mutex);
 
     for (std::deque<BRLObolLodResult>::iterator it =
-	    this->p->results.begin(); it != this->p->results.end();) {
+	     this->p->results.begin(); it != this->p->results.end();) {
 	if (maxResults != 0 && count >= maxResults)
 	    break;
 
@@ -1548,7 +1548,7 @@ BRLObolLodService::drainMatchingResults(
 
 BRLObolLodSubscriberId
 BRLObolLodService::subscribeResultReady(BRLObolLodResultReadyCB callback,
-	void *userData)
+					void *userData)
 {
     if (!callback)
 	return 0;
@@ -1590,7 +1590,7 @@ BRLObolLodService::unsubscribeResultReady(BRLObolLodSubscriberId id)
 	for (size_t j = 0; j < this->p->subscribers.size(); j++) {
 	    if (this->p->subscribers[j].id == id) {
 		this->p->subscribers.erase(
-			this->p->subscribers.begin() + (long)j);
+		    this->p->subscribers.begin() + (long)j);
 		break;
 	    }
 	}

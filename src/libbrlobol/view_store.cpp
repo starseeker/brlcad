@@ -83,26 +83,26 @@ store_owner_generation_key(const BRLObolFeatureOwner *owner)
     const char *role = owner->ownerRole.getString();
     if ((id && id[0]) || (role && role[0]))
 	return std::string("I:") + (id ? id : "") + "|R:" +
-	    (role ? role : "");
+	       (role ? role : "");
 
     return std::string();
 }
 
 static std::string
 store_key(BRLObolFeatureScope scope,
-	const SbString &name,
-	const BRLObolFeatureOwner *owner = NULL)
+	  const SbString &name,
+	  const BRLObolFeatureOwner *owner = NULL)
 {
     if (scope != BRLObolFeatureScope::Local)
 	return std::string("S:") + store_string(name);
 
     return std::string("L:") + store_owner_key(owner) + ":" +
-	store_string(name);
+	   store_string(name);
 }
 
 static SbBool
 store_owner_matches(const BRLObolFeatureOwner &recordOwner,
-	const BRLObolFeatureOwner *queryOwner)
+		    const BRLObolFeatureOwner *queryOwner)
 {
     if (!queryOwner)
 	return TRUE;
@@ -129,29 +129,29 @@ static SbBool
 store_selection_kind_matches(int recordKind, int queryKind)
 {
     return queryKind == BRLOBOL_SELECTION_ALL || recordKind == queryKind ?
-	TRUE : FALSE;
+	   TRUE : FALSE;
 }
 
 static int
 store_selection_record_kind(int kind)
 {
     return kind == BRLOBOL_SELECTION_ALL ?
-	BRLOBOL_SELECTION_SELECTED_PATH : kind;
+	   BRLOBOL_SELECTION_SELECTED_PATH : kind;
 }
 
 static unsigned int
 store_scope_bit(BRLObolFeatureScope scope)
 {
     return scope == BRLObolFeatureScope::Local ?
-	BRLOBOL_FEATURE_SCOPE_LOCAL : BRLOBOL_FEATURE_SCOPE_SHARED;
+	   BRLOBOL_FEATURE_SCOPE_LOCAL : BRLOBOL_FEATURE_SCOPE_SHARED;
 }
 
 static SbVec3f
 store_vec3(const point_t p)
 {
     return SbVec3f(static_cast<float>(p[X]),
-	    static_cast<float>(p[Y]),
-	    static_cast<float>(p[Z]));
+		   static_cast<float>(p[Y]),
+		   static_cast<float>(p[Z]));
 }
 
 static void
@@ -172,13 +172,13 @@ store_shape_command(int32_t command)
 
 static std::vector<int32_t>
 store_normalized_line_commands(const std::vector<SbVec3f> &points,
-	const std::vector<int32_t> &commands)
+			       const std::vector<int32_t> &commands)
 {
     std::vector<int32_t> normalized = commands;
 
     if (normalized.size() != points.size()) {
 	normalized.assign(points.size(), static_cast<int32_t>(
-		BRLObolLineCommand::Draw));
+			      BRLObolLineCommand::Draw));
 	if (!normalized.empty())
 	    normalized[0] = static_cast<int32_t>(BRLObolLineCommand::Move);
     }
@@ -210,12 +210,12 @@ store_line_command_from_bg(int command, size_t pointIndex)
 	    break;
     }
     return pointIndex ? static_cast<int32_t>(BRLObolLineCommand::Draw) :
-	static_cast<int32_t>(BRLObolLineCommand::Move);
+	   static_cast<int32_t>(BRLObolLineCommand::Move);
 }
 
 static std::vector<BRLObolLineLayer>
 store_line_layers_from_builder(const SbString &featureName,
-	const struct bg_line_layer_builder *builder)
+			       const struct bg_line_layer_builder *builder)
 {
     std::vector<BRLObolLineLayer> layers;
     const size_t layerCount = bg_line_layer_builder_layer_count(builder);
@@ -245,9 +245,9 @@ store_line_layers_from_builder(const SbString &featureName,
 	if (bg_line_layer_color(bgLayer, &r, &g, &b)) {
 	    layer.style.hasColor = TRUE;
 	    layer.style.color = SbColor(
-		    static_cast<float>(r) / 255.0f,
-		    static_cast<float>(g) / 255.0f,
-		    static_cast<float>(b) / 255.0f);
+				    static_cast<float>(r) / 255.0f,
+				    static_cast<float>(g) / 255.0f,
+				    static_cast<float>(b) / 255.0f);
 	}
 
 	const point_t *points = bg_line_layer_points(bgLayer);
@@ -255,9 +255,9 @@ store_line_layers_from_builder(const SbString &featureName,
 	for (size_t j = 0; j < pointCount; j++) {
 	    if (points) {
 		layer.points.push_back(SbVec3f(
-			static_cast<float>(points[j][0]),
-			static_cast<float>(points[j][1]),
-			static_cast<float>(points[j][2])));
+					   static_cast<float>(points[j][0]),
+					   static_cast<float>(points[j][1]),
+					   static_cast<float>(points[j][2])));
 	    }
 	    const int command = commands ? commands[j] : -1;
 	    layer.commands.push_back(store_line_command_from_bg(command, j));
@@ -272,7 +272,7 @@ store_line_layers_from_builder(const SbString &featureName,
 
 static void
 store_apply_vlist_style(SoBRLVListShape *shape,
-	const BRLObolFeatureStyle &style)
+			const BRLObolFeatureStyle &style)
 {
     if (!shape)
 	return;
@@ -292,7 +292,7 @@ store_apply_vlist_style(SoBRLVListShape *shape,
 
 static void
 store_apply_mesh_style(SoBRLMeshShape *shape,
-	const BRLObolFeatureStyle &style)
+		       const BRLObolFeatureStyle &style)
 {
     if (!shape)
 	return;
@@ -321,7 +321,7 @@ store_apply_mesh_color(SoBRLMeshShape *shape, const SbColor &color)
 
 static BRLObolFeatureStyle
 store_merge_feature_style(const BRLObolFeatureStyle &base,
-	const BRLObolFeatureStyle &overrideStyle)
+			  const BRLObolFeatureStyle &overrideStyle)
 {
     BRLObolFeatureStyle out = base;
     if (overrideStyle.hasVisible) {
@@ -372,8 +372,8 @@ static SbColor
 store_bu_to_sbcolor(const struct bu_color &src)
 {
     return SbColor(static_cast<float>(src.buc_rgb[RED]),
-	    static_cast<float>(src.buc_rgb[GRN]),
-	    static_cast<float>(src.buc_rgb[BLU]));
+		   static_cast<float>(src.buc_rgb[GRN]),
+		   static_cast<float>(src.buc_rgb[BLU]));
 }
 
 static SoGroup *
@@ -741,16 +741,16 @@ struct BRLObolFeatureStoreRecord {
 
 static void
 store_primitive_metadata_for_record(const BRLObolFeatureStoreRecord *rec,
-	int32_t primitiveIndex,
-	std::vector<BRLObolFeatureMetadata> &metadataOut)
+				    int32_t primitiveIndex,
+				    std::vector<BRLObolFeatureMetadata> &metadataOut)
 {
     metadataOut.clear();
     if (!rec || primitiveIndex < 0)
 	return;
 
     for (std::vector<BRLObolFeaturePrimitiveMetadata>::const_iterator it =
-	    rec->primitiveMetadata.begin();
-	    it != rec->primitiveMetadata.end(); ++it) {
+	     rec->primitiveMetadata.begin();
+	 it != rec->primitiveMetadata.end(); ++it) {
 	if (it->primitiveIndex != primitiveIndex)
 	    continue;
 	metadataOut = it->metadata;
@@ -778,7 +778,7 @@ struct BRLObolFeatureStore::Impl {
     void clear(void)
     {
 	for (std::map<uint64_t, BRLObolFeatureStoreRecord *>::iterator it =
-		records.begin(); it != records.end(); ++it) {
+		 records.begin(); it != records.end(); ++it) {
 	    if (it->second) {
 		store_release_node(controller, it->second->node);
 		delete it->second;
@@ -799,16 +799,16 @@ struct BRLObolFeatureStore::Impl {
     }
 
     BRLObolFeatureStoreRecord *recordByName(
-	    const SbString &name,
-	    unsigned int scopeMask,
-	    const BRLObolFeatureOwner *owner = NULL) const
+	const SbString &name,
+	unsigned int scopeMask,
+	const BRLObolFeatureOwner *owner = NULL) const
     {
 	const std::string cleanName = store_string(name);
 	if (cleanName.empty())
 	    return NULL;
 
 	for (std::map<uint64_t, BRLObolFeatureStoreRecord *>::const_iterator it =
-		records.begin(); it != records.end(); ++it) {
+		 records.begin(); it != records.end(); ++it) {
 	    BRLObolFeatureStoreRecord *rec = it->second;
 	    if (!rec)
 		continue;
@@ -824,10 +824,10 @@ struct BRLObolFeatureStore::Impl {
     }
 
     BRLObolFeatureStoreRecord *upsert(const SbString &name,
-	    BRLObolFeatureScope scope,
-	    BRLObolFeatureKind kind,
-	    const BRLObolFeatureStyle *style,
-	    const BRLObolFeatureOwner *owner)
+				      BRLObolFeatureScope scope,
+				      BRLObolFeatureKind kind,
+				      const BRLObolFeatureStyle *style,
+				      const BRLObolFeatureOwner *owner)
     {
 	if (store_string(name).empty())
 	    return NULL;
@@ -873,13 +873,13 @@ struct BRLObolFeatureStore::Impl {
     BRLObolFeatureHandle handle(const BRLObolFeatureStoreRecord *rec) const
     {
 	return rec ? BRLObolFeatureHandle(rec->id, rec->revision) :
-	    BRLObolFeatureHandle();
+	       BRLObolFeatureHandle();
     }
 
     void notify(const BRLObolFeatureStoreRecord *rec,
-	    BRLObolCommandResultStatus status,
-	    const char *command,
-	    const char *diagnostic = NULL) const
+		BRLObolCommandResultStatus status,
+		const char *command,
+		const char *diagnostic = NULL) const
     {
 	if (!rec || !rec->owner.resultCallback)
 	    return;
@@ -927,31 +927,31 @@ struct BRLObolFeatureStore::Impl {
 	std::map<std::string, uint64_t>::const_iterator it =
 	    ownerGenerations.find(key);
 	return it == ownerGenerations.end() ||
-	    owner.generation >= it->second ? TRUE : FALSE;
+	       owner.generation >= it->second ? TRUE : FALSE;
     }
 };
 
 static void
 store_apply_vlist_primitive_field(SoMFInt32 &field,
-	const std::vector<int32_t> &primitives)
+				  const std::vector<int32_t> &primitives)
 {
     field.setNum(0);
     if (!primitives.empty())
 	field.setValues(0, static_cast<int>(primitives.size()),
-		&primitives[0]);
+			&primitives[0]);
 }
 
 static void
 store_apply_vlist_primitives(SoBRLVListShape *shape,
-	const BRLObolFeatureStoreRecord &rec)
+			     const BRLObolFeatureStoreRecord &rec)
 {
     if (!shape)
 	return;
 
     store_apply_vlist_primitive_field(shape->selectedPrimitive,
-	    rec.selectedPrimitives);
+				      rec.selectedPrimitives);
     store_apply_vlist_primitive_field(shape->highlightedPrimitive,
-	    rec.highlightedPrimitives);
+				      rec.highlightedPrimitives);
 }
 
 static size_t
@@ -978,8 +978,8 @@ store_line_segment_primitive_count(const std::vector<int32_t> &commands)
 
 static std::vector<int32_t>
 store_primitive_subset_for_layer(const std::vector<int32_t> &primitives,
-	size_t firstPrimitive,
-	size_t primitiveCount)
+				 size_t firstPrimitive,
+				 size_t primitiveCount)
 {
     std::vector<int32_t> out;
     const size_t end = firstPrimitive + primitiveCount;
@@ -1046,7 +1046,7 @@ store_vlist_node(const BRLObolFeatureStoreRecord &rec)
 
     if (!rec.points.empty())
 	shape->setLineSet(&rec.points[0], &shapeCommands[0],
-		static_cast<int>(rec.points.size()));
+			  static_cast<int>(rec.points.size()));
     return shape;
 }
 
@@ -1062,10 +1062,10 @@ store_edit_preview_node(const BRLObolFeatureStoreRecord &rec)
 	std::vector<int32_t> shapeCommands =
 	    store_shape_commands(rec.commands);
 	preview->setLineSet(
-		rec.identity.getLength() > 0 ? rec.identity : rec.name,
-		&rec.points[0],
-		&shapeCommands[0],
-		static_cast<int>(rec.points.size()));
+	    rec.identity.getLength() > 0 ? rec.identity : rec.name,
+	    &rec.points[0],
+	    &shapeCommands[0],
+	    static_cast<int>(rec.points.size()));
     }
     return preview;
 }
@@ -1097,8 +1097,8 @@ store_feature_group_node(const BRLObolFeatureStoreRecord &rec)
 
 static void
 store_append_face_triangles(const std::vector<int32_t> &face,
-	size_t pointCount,
-	std::vector<int32_t> &triangles)
+			    size_t pointCount,
+			    std::vector<int32_t> &triangles)
 {
     if (face.size() < 3)
 	return;
@@ -1111,7 +1111,7 @@ store_append_face_triangles(const std::vector<int32_t> &face,
 
     for (size_t i = 0; i < cleanFace.size(); i++) {
 	if (cleanFace[i] < 0 ||
-		static_cast<size_t>(cleanFace[i]) >= pointCount)
+	    static_cast<size_t>(cleanFace[i]) >= pointCount)
 	    return;
     }
 
@@ -1124,7 +1124,7 @@ store_append_face_triangles(const std::vector<int32_t> &face,
 
 static std::vector<int32_t>
 store_indexed_faces_to_triangles(const std::vector<SbVec3f> &points,
-	const std::vector<int32_t> &indices)
+				 const std::vector<int32_t> &indices)
 {
     std::vector<int32_t> triangles;
     if (points.empty() || indices.empty())
@@ -1132,8 +1132,10 @@ store_indexed_faces_to_triangles(const std::vector<SbVec3f> &points,
 
     const SbBool hasSeparators =
 	std::find_if(indices.begin(), indices.end(),
-		[](int32_t idx) { return idx < 0; }) != indices.end() ?
-	TRUE : FALSE;
+    [](int32_t idx) {
+	return idx < 0;
+    }) != indices.end() ?
+		 TRUE : FALSE;
 
     if (!hasSeparators && indices.size() % 3 == 0) {
 	for (size_t i = 0; i < indices.size(); i += 3) {
@@ -1186,9 +1188,9 @@ store_indexed_face_node(const BRLObolFeatureStoreRecord &rec)
 	store_indexed_faces_to_triangles(rec.points, rec.indices);
     if (!rec.points.empty() && !triangles.empty())
 	shape->setIndexedTriangles(&rec.points[0],
-		static_cast<int>(rec.points.size()),
-		&triangles[0],
-		static_cast<int>(triangles.size()));
+				   static_cast<int>(rec.points.size()),
+				   &triangles[0],
+				   static_cast<int>(triangles.size()));
     return shape;
 }
 
@@ -1200,18 +1202,18 @@ store_line_layers_node(const BRLObolFeatureStoreRecord &rec)
     for (size_t i = 0; i < rec.layers.size(); i++) {
 	BRLObolFeatureStoreRecord layerRec = rec;
 	layerRec.name = rec.layers[i].name.getLength() > 0 ?
-	    rec.layers[i].name : rec.name;
+			rec.layers[i].name : rec.name;
 	layerRec.identity = layerRec.name;
 	layerRec.points = rec.layers[i].points;
 	layerRec.commands = rec.layers[i].commands;
 	layerRec.style = store_merge_feature_style(rec.style,
-		rec.layers[i].style);
+			 rec.layers[i].style);
 	const size_t primitiveCount =
 	    store_line_segment_primitive_count(layerRec.commands);
 	layerRec.selectedPrimitives = store_primitive_subset_for_layer(
-		rec.selectedPrimitives, primitiveOffset, primitiveCount);
+					  rec.selectedPrimitives, primitiveOffset, primitiveCount);
 	layerRec.highlightedPrimitives = store_primitive_subset_for_layer(
-		rec.highlightedPrimitives, primitiveOffset, primitiveCount);
+					     rec.highlightedPrimitives, primitiveOffset, primitiveCount);
 	primitiveOffset += primitiveCount;
 	layerRec.kind = BRLObolFeatureKind::Lines;
 	SoBRLVListShape *shape = store_vlist_node(layerRec);
@@ -1247,7 +1249,7 @@ store_label_node(const BRLObolFeatureStoreRecord &rec)
 {
     SoBRLSceneGroup *sep = store_feature_group_node(rec);
     const SbColor fallbackColor = rec.style.hasColor ?
-	rec.style.color : SbColor(1.0f, 1.0f, 1.0f);
+				  rec.style.color : SbColor(1.0f, 1.0f, 1.0f);
 
     for (size_t i = 0; i < rec.labels.size(); i++) {
 	const BRLObolLabel &label = rec.labels[i];
@@ -1261,9 +1263,9 @@ store_label_node(const BRLObolFeatureStoreRecord &rec)
 	    leader.points.push_back(label.target);
 	    leader.points.push_back(label.point);
 	    leader.commands.push_back(static_cast<int32_t>(
-		    BRLObolLineCommand::Move));
+					  BRLObolLineCommand::Move));
 	    leader.commands.push_back(static_cast<int32_t>(
-		    BRLObolLineCommand::Draw));
+					  BRLObolLineCommand::Draw));
 	    leader.style.hasColor = TRUE;
 	    leader.style.color = color;
 	    SoBRLVListShape *shape = store_vlist_node(leader);
@@ -1291,7 +1293,7 @@ store_label_node(const BRLObolFeatureStoreRecord &rec)
 	SoText2 *text = new SoText2;
 	text->string.set1Value(0, label.text);
 	text->justification = label.anchor == 2 ? SoText2::RIGHT :
-	    label.anchor == 1 ? SoText2::CENTER : SoText2::LEFT;
+			      label.anchor == 1 ? SoText2::CENTER : SoText2::LEFT;
 	text->depthTest = FALSE;
 	textSep->addChild(text);
 
@@ -1305,7 +1307,7 @@ store_hud_label_node(const BRLObolFeatureStoreRecord &rec)
 {
     SoBRLSceneGroup *sep = store_feature_group_node(rec);
     const SbColor fallbackColor = rec.style.hasColor ?
-	rec.style.color : SbColor(1.0f, 1.0f, 1.0f);
+				  rec.style.color : SbColor(1.0f, 1.0f, 1.0f);
     const SbBool visible = rec.style.hasVisible ? rec.style.visible : TRUE;
 
     for (size_t i = 0; i < rec.labels.size(); i++) {
@@ -1401,11 +1403,11 @@ BRLObolFeatureStore::find(const SbString &name, unsigned int scopeMask) const
 
 BRLObolFeatureHandle
 BRLObolFeatureStore::findOwned(const SbString &name,
-	unsigned int scopeMask,
-	const BRLObolFeatureOwner *owner) const
+			       unsigned int scopeMask,
+			       const BRLObolFeatureOwner *owner) const
 {
     return this->impl->handle(this->impl->recordByName(name, scopeMask,
-	    owner));
+			      owner));
 }
 
 SbBool
@@ -1416,8 +1418,8 @@ BRLObolFeatureStore::exists(const SbString &name, unsigned int scopeMask) const
 
 SbBool
 BRLObolFeatureStore::existsOwned(const SbString &name,
-	unsigned int scopeMask,
-	const BRLObolFeatureOwner *owner) const
+				 unsigned int scopeMask,
+				 const BRLObolFeatureOwner *owner) const
 {
     return this->findOwned(name, scopeMask, owner).isValid();
 }
@@ -1448,19 +1450,19 @@ BRLObolFeatureStore::remove(const SbString &name)
 
 SbBool
 BRLObolFeatureStore::removeOwned(const SbString &name,
-	unsigned int scopeMask,
-	const BRLObolFeatureOwner *owner)
+				 unsigned int scopeMask,
+				 const BRLObolFeatureOwner *owner)
 {
     return this->remove(this->findOwned(name, scopeMask, owner));
 }
 
 size_t
 BRLObolFeatureStore::removeScope(unsigned int scopeMask,
-	const BRLObolFeatureOwner *owner)
+				 const BRLObolFeatureOwner *owner)
 {
     std::vector<BRLObolFeatureHandle> handles;
     for (std::map<uint64_t, BRLObolFeatureStoreRecord *>::const_iterator it =
-	    this->impl->records.begin(); it != this->impl->records.end(); ++it) {
+	     this->impl->records.begin(); it != this->impl->records.end(); ++it) {
 	if (!it->second)
 	    continue;
 	if (!(store_scope_bit(it->second->scope) & scopeMask))
@@ -1485,8 +1487,8 @@ BRLObolFeatureStore::removePrefix(const SbString &prefix)
 
 size_t
 BRLObolFeatureStore::removePrefix(const SbString &prefix,
-	unsigned int scopeMask,
-	const BRLObolFeatureOwner *owner)
+				  unsigned int scopeMask,
+				  const BRLObolFeatureOwner *owner)
 {
     const std::string p = store_string(prefix);
     if (p.empty())
@@ -1494,7 +1496,7 @@ BRLObolFeatureStore::removePrefix(const SbString &prefix,
 
     std::vector<BRLObolFeatureHandle> handles;
     for (std::map<uint64_t, BRLObolFeatureStoreRecord *>::const_iterator it =
-	    this->impl->records.begin(); it != this->impl->records.end(); ++it) {
+	     this->impl->records.begin(); it != this->impl->records.end(); ++it) {
 	if (!it->second)
 	    continue;
 	if (!(store_scope_bit(it->second->scope) & scopeMask))
@@ -1515,28 +1517,28 @@ BRLObolFeatureStore::removePrefix(const SbString &prefix,
 
 void
 BRLObolFeatureStore::markCommandOwnerGeneration(
-	const BRLObolFeatureOwner &owner)
+    const BRLObolFeatureOwner &owner)
 {
     this->impl->markOwnerGeneration(owner);
 }
 
 SbBool
 BRLObolFeatureStore::commandOwnerGenerationCurrent(
-	const BRLObolFeatureOwner &owner) const
+    const BRLObolFeatureOwner &owner) const
 {
     return this->impl->ownerGenerationCurrent(owner);
 }
 
 BRLObolFeatureHandle
 BRLObolFeatureStore::publishLineSet(const SbString &name,
-	BRLObolFeatureScope scope,
-	const std::vector<SbVec3f> &points,
-	const std::vector<int32_t> &commands,
-	const BRLObolFeatureStyle *style,
-	const BRLObolFeatureOwner *owner)
+				    BRLObolFeatureScope scope,
+				    const std::vector<SbVec3f> &points,
+				    const std::vector<int32_t> &commands,
+				    const BRLObolFeatureStyle *style,
+				    const BRLObolFeatureOwner *owner)
 {
     BRLObolFeatureStoreRecord *rec = this->impl->upsert(name, scope,
-	    BRLObolFeatureKind::Lines, style, owner);
+				     BRLObolFeatureKind::Lines, style, owner);
     if (!rec)
 	return BRLObolFeatureHandle();
 
@@ -1566,12 +1568,12 @@ BRLObolFeatureStore::publishIndexedLineSet(const SbString &name,
 	    continue;
 	linePoints.push_back(points[static_cast<size_t>(idx)]);
 	commands.push_back(linePoints.size() % 2 == 1 ?
-		static_cast<int32_t>(BRLObolLineCommand::Move) :
-		static_cast<int32_t>(BRLObolLineCommand::Draw));
+			   static_cast<int32_t>(BRLObolLineCommand::Move) :
+			   static_cast<int32_t>(BRLObolLineCommand::Draw));
     }
 
     BRLObolFeatureStoreRecord *rec = this->impl->upsert(name, scope,
-	    BRLObolFeatureKind::IndexedLines, style, owner);
+				     BRLObolFeatureKind::IndexedLines, style, owner);
     if (!rec)
 	return BRLObolFeatureHandle();
 
@@ -1581,21 +1583,21 @@ BRLObolFeatureStore::publishIndexedLineSet(const SbString &name,
     SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
-	    "publishIndexedLineSet");
+		       "publishIndexedLineSet");
     return this->impl->handle(rec);
 }
 
 BRLObolFeatureHandle
 BRLObolFeatureStore::publishPointSet(const SbString &name,
-	BRLObolFeatureScope scope,
-	const std::vector<SbVec3f> &points,
-	const BRLObolFeatureStyle *style,
-	const BRLObolFeatureOwner *owner)
+				     BRLObolFeatureScope scope,
+				     const std::vector<SbVec3f> &points,
+				     const BRLObolFeatureStyle *style,
+				     const BRLObolFeatureOwner *owner)
 {
     std::vector<int32_t> commands(points.size(),
-	    static_cast<int32_t>(BRLObolLineCommand::Point));
+				  static_cast<int32_t>(BRLObolLineCommand::Point));
     BRLObolFeatureStoreRecord *rec = this->impl->upsert(name, scope,
-	    BRLObolFeatureKind::Points, style, owner);
+				     BRLObolFeatureKind::Points, style, owner);
     if (!rec)
 	return BRLObolFeatureHandle();
     rec->points = points;
@@ -1603,61 +1605,61 @@ BRLObolFeatureStore::publishPointSet(const SbString &name,
     SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
-	    "publishPointSet");
+		       "publishPointSet");
     return this->impl->handle(rec);
 }
 
 BRLObolFeatureHandle
 BRLObolFeatureStore::publishLabels(const SbString &name,
-	BRLObolFeatureScope scope,
-	const std::vector<BRLObolLabel> &labels,
-	const BRLObolFeatureStyle *style,
-	const BRLObolFeatureOwner *owner)
+				   BRLObolFeatureScope scope,
+				   const std::vector<BRLObolLabel> &labels,
+				   const BRLObolFeatureStyle *style,
+				   const BRLObolFeatureOwner *owner)
 {
     BRLObolFeatureStoreRecord *rec = this->impl->upsert(name, scope,
-	    BRLObolFeatureKind::Labels, style, owner);
+				     BRLObolFeatureKind::Labels, style, owner);
     if (!rec)
 	return BRLObolFeatureHandle();
     rec->labels = labels;
     SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
-	    "publishLabels");
+		       "publishLabels");
     return this->impl->handle(rec);
 }
 
 BRLObolFeatureHandle
 BRLObolFeatureStore::publishHudLabels(const SbString &name,
-	BRLObolFeatureScope scope,
-	const std::vector<BRLObolLabel> &labels,
-	const BRLObolFeatureStyle *style,
-	const BRLObolFeatureOwner *owner)
+				      BRLObolFeatureScope scope,
+				      const std::vector<BRLObolLabel> &labels,
+				      const BRLObolFeatureStyle *style,
+				      const BRLObolFeatureOwner *owner)
 {
     BRLObolFeatureStoreRecord *rec = this->impl->upsert(name, scope,
-	    BRLObolFeatureKind::HudLabel, style, owner);
+				     BRLObolFeatureKind::HudLabel, style, owner);
     if (!rec)
 	return BRLObolFeatureHandle();
     rec->labels = labels;
     SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
-	    "publishHudLabels");
+		       "publishHudLabels");
     return this->impl->handle(rec);
 }
 
 BRLObolFeatureHandle
 BRLObolFeatureStore::publishArrow(const SbString &name,
-	BRLObolFeatureScope scope,
-	const std::vector<SbVec3f> &points,
-	const BRLObolFeatureStyle *style,
-	const BRLObolFeatureOwner *owner)
+				  BRLObolFeatureScope scope,
+				  const std::vector<SbVec3f> &points,
+				  const BRLObolFeatureStyle *style,
+				  const BRLObolFeatureOwner *owner)
 {
     BRLObolFeatureStyle arrowStyle = style ? *style : BRLObolFeatureStyle();
     arrowStyle.hasArrow = TRUE;
     arrowStyle.arrow = TRUE;
 
     BRLObolFeatureStoreRecord *rec = this->impl->upsert(name, scope,
-	    BRLObolFeatureKind::Arrow, &arrowStyle, owner);
+				     BRLObolFeatureKind::Arrow, &arrowStyle, owner);
     if (!rec)
 	return BRLObolFeatureHandle();
 
@@ -1666,20 +1668,20 @@ BRLObolFeatureStore::publishArrow(const SbString &name,
     SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
-	    "publishArrow");
+		       "publishArrow");
     return this->impl->handle(rec);
 }
 
 BRLObolFeatureHandle
 BRLObolFeatureStore::publishAxes(const SbString &name,
-	BRLObolFeatureScope scope,
-	const std::vector<SbVec3f> &centers,
-	float halfAxesSize,
-	const BRLObolFeatureStyle *style,
-	const BRLObolFeatureOwner *owner)
+				 BRLObolFeatureScope scope,
+				 const std::vector<SbVec3f> &centers,
+				 float halfAxesSize,
+				 const BRLObolFeatureStyle *style,
+				 const BRLObolFeatureOwner *owner)
 {
     BRLObolFeatureStoreRecord *rec = this->impl->upsert(name, scope,
-	    BRLObolFeatureKind::Axes, style, owner);
+				     BRLObolFeatureKind::Axes, style, owner);
     if (!rec)
 	return BRLObolFeatureHandle();
     rec->axesCenters = centers;
@@ -1687,19 +1689,19 @@ BRLObolFeatureStore::publishAxes(const SbString &name,
     SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
-	    "publishAxes");
+		       "publishAxes");
     return this->impl->handle(rec);
 }
 
 BRLObolFeatureHandle
 BRLObolFeatureStore::publishLineLayers(const SbString &name,
-	BRLObolFeatureScope scope,
-	const std::vector<BRLObolLineLayer> &layers,
-	const BRLObolFeatureStyle *style,
-	const BRLObolFeatureOwner *owner)
+				       BRLObolFeatureScope scope,
+				       const std::vector<BRLObolLineLayer> &layers,
+				       const BRLObolFeatureStyle *style,
+				       const BRLObolFeatureOwner *owner)
 {
     BRLObolFeatureStoreRecord *rec = this->impl->upsert(name, scope,
-	    BRLObolFeatureKind::LineLayer, style, owner);
+				     BRLObolFeatureKind::LineLayer, style, owner);
     if (!rec)
 	return BRLObolFeatureHandle();
     rec->layers = layers;
@@ -1707,14 +1709,14 @@ BRLObolFeatureStore::publishLineLayers(const SbString &name,
     rec->commands.clear();
     for (size_t i = 0; i < layers.size(); i++) {
 	rec->points.insert(rec->points.end(), layers[i].points.begin(),
-		layers[i].points.end());
+			   layers[i].points.end());
 	rec->commands.insert(rec->commands.end(), layers[i].commands.begin(),
-		layers[i].commands.end());
+			     layers[i].commands.end());
     }
     SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
-	    "publishLineLayers");
+		       "publishLineLayers");
     return this->impl->handle(rec);
 }
 
@@ -1729,7 +1731,7 @@ BRLObolFeatureStore::publishLineLayerBuilder(const SbString &name,
 	return BRLObolFeatureHandle();
 
     BRLObolFeatureStoreRecord *rec = this->impl->upsert(name, scope,
-	    BRLObolFeatureKind::LineLayer, style, owner);
+				     BRLObolFeatureKind::LineLayer, style, owner);
     if (!rec)
 	return BRLObolFeatureHandle();
 
@@ -1738,20 +1740,20 @@ BRLObolFeatureStore::publishLineLayerBuilder(const SbString &name,
     rec->commands.clear();
     for (size_t i = 0; i < rec->layers.size(); i++) {
 	rec->points.insert(rec->points.end(), rec->layers[i].points.begin(),
-		rec->layers[i].points.end());
+			   rec->layers[i].points.end());
 	rec->commands.insert(rec->commands.end(),
-		rec->layers[i].commands.begin(), rec->layers[i].commands.end());
+			     rec->layers[i].commands.begin(), rec->layers[i].commands.end());
     }
 
     SoBRLLineLayerOverlay *overlay = new SoBRLLineLayerOverlay;
     overlay->overlayId = name;
     overlay->sourceId = static_cast<uint32_t>(rec->revision);
     overlay->selectable = rec->style.hasSelectable ?
-	rec->style.selectable : TRUE;
+			  rec->style.selectable : TRUE;
     overlay->rebuildGeometry(builder);
     this->impl->setNode(rec, overlay);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
-	    "publishLineLayerBuilder");
+		       "publishLineLayerBuilder");
     return this->impl->handle(rec);
 }
 
@@ -1765,7 +1767,7 @@ BRLObolFeatureStore::publishIndexedFaceSet(const SbString &name,
 	const BRLObolFeatureOwner *owner)
 {
     BRLObolFeatureStoreRecord *rec = this->impl->upsert(name, scope,
-	    BRLObolFeatureKind::IndexedFaceSet, style, owner);
+				     BRLObolFeatureKind::IndexedFaceSet, style, owner);
     if (!rec)
 	return BRLObolFeatureHandle();
 
@@ -1776,22 +1778,22 @@ BRLObolFeatureStore::publishIndexedFaceSet(const SbString &name,
     SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
-	    "publishIndexedFaceSet");
+		       "publishIndexedFaceSet");
     return this->impl->handle(rec);
 }
 
 BRLObolFeatureHandle
 BRLObolFeatureStore::publishCustomNode(const SbString &name,
-	BRLObolFeatureScope scope,
-	SoNode *node,
-	const BRLObolFeatureStyle *style,
-	const BRLObolFeatureOwner *owner)
+				       BRLObolFeatureScope scope,
+				       SoNode *node,
+				       const BRLObolFeatureStyle *style,
+				       const BRLObolFeatureOwner *owner)
 {
     if (!node)
 	return BRLObolFeatureHandle();
 
     BRLObolFeatureStoreRecord *rec = this->impl->upsert(name, scope,
-	    BRLObolFeatureKind::CustomNode, style, owner);
+				     BRLObolFeatureKind::CustomNode, style, owner);
     if (!rec)
 	return BRLObolFeatureHandle();
 
@@ -1804,56 +1806,56 @@ BRLObolFeatureStore::publishCustomNode(const SbString &name,
     rec->layers.clear();
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
-	    "publishCustomNode");
+		       "publishCustomNode");
     return this->impl->handle(rec);
 }
 
 BRLObolFeatureHandle
 BRLObolFeatureStore::publishEditPreview(const SbString &name,
-	const SbString &identity,
-	const SbString &editIntentId,
-	const SbString &editIntentRole,
-	const std::vector<SbVec3f> &points,
-	const std::vector<int32_t> &commands,
-	uint32_t sourceRevision,
-	uint32_t inputsRevision,
-	const BRLObolEditPreviewCallbacks *callbacks,
-	const BRLObolFeatureOwner *owner)
+					const SbString &identity,
+					const SbString &editIntentId,
+					const SbString &editIntentRole,
+					const std::vector<SbVec3f> &points,
+					const std::vector<int32_t> &commands,
+					uint32_t sourceRevision,
+					uint32_t inputsRevision,
+					const BRLObolEditPreviewCallbacks *callbacks,
+					const BRLObolFeatureOwner *owner)
 {
     BRLObolFeatureStoreRecord *rec = this->impl->upsert(name,
-	    BRLObolFeatureScope::Local, BRLObolFeatureKind::EditPreview,
-	    NULL, owner);
+				     BRLObolFeatureScope::Local, BRLObolFeatureKind::EditPreview,
+				     NULL, owner);
     if (!rec)
 	return BRLObolFeatureHandle();
 
     rec->identity = identity;
     rec->editIntentId = editIntentId.getLength() > 0 ? editIntentId : name;
     rec->editIntentRole = editIntentRole.getLength() > 0 ?
-	editIntentRole : SbString("preview");
+			  editIntentRole : SbString("preview");
     rec->points = points;
     rec->commands = store_normalized_line_commands(points, commands);
     rec->sourceRevision = sourceRevision ? sourceRevision :
-	static_cast<uint32_t>(rec->revision);
+			  static_cast<uint32_t>(rec->revision);
     rec->inputsRevision = inputsRevision ? inputsRevision :
-	static_cast<uint32_t>(rec->revision);
+			  static_cast<uint32_t>(rec->revision);
     if (callbacks)
 	rec->previewCallbacks = *callbacks;
 
     SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
-	    "publishEditPreview");
+		       "publishEditPreview");
     return this->impl->handle(rec);
 }
 
 SbBool
 BRLObolFeatureStore::replaceEditPreviewGeometry(
-	BRLObolFeatureHandle handle,
-	const SbString &identity,
-	const std::vector<SbVec3f> &points,
-	const std::vector<int32_t> &commands,
-	uint32_t sourceRevision,
-	uint32_t inputsRevision)
+    BRLObolFeatureHandle handle,
+    const SbString &identity,
+    const std::vector<SbVec3f> &points,
+    const std::vector<int32_t> &commands,
+    uint32_t sourceRevision,
+    uint32_t inputsRevision)
 {
     BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
     if (!rec || rec->kind != BRLObolFeatureKind::EditPreview)
@@ -1865,14 +1867,14 @@ BRLObolFeatureStore::replaceEditPreviewGeometry(
     rec->commands = store_normalized_line_commands(points, commands);
     rec->revision++;
     rec->sourceRevision = sourceRevision ? sourceRevision :
-	static_cast<uint32_t>(rec->revision);
+			  static_cast<uint32_t>(rec->revision);
     rec->inputsRevision = inputsRevision ? inputsRevision :
-	static_cast<uint32_t>(rec->revision);
+			  static_cast<uint32_t>(rec->revision);
 
     SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
-	    "replaceEditPreviewGeometry");
+		       "replaceEditPreviewGeometry");
     return TRUE;
 }
 
@@ -1884,7 +1886,7 @@ BRLObolFeatureStore::editPreviewRevision(BRLObolFeatureHandle handle) const
 	return 0;
     if (rec->previewCallbacks.revisionCallback)
 	return rec->previewCallbacks.revisionCallback(
-		rec->previewCallbacks.previewContext);
+		   rec->previewCallbacks.previewContext);
     return rec->sourceRevision;
 }
 
@@ -1893,29 +1895,29 @@ BRLObolFeatureStore::updateEditPreview(BRLObolFeatureHandle handle)
 {
     BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
     if (!rec || rec->kind != BRLObolFeatureKind::EditPreview ||
-	    !rec->previewCallbacks.updateCallback)
+	!rec->previewCallbacks.updateCallback)
 	return -1;
     return rec->previewCallbacks.updateCallback(
-	    rec->previewCallbacks.previewContext);
+	       rec->previewCallbacks.previewContext);
 }
 
 int
 BRLObolFeatureStore::pickEditPreview(BRLObolFeatureHandle handle,
-	int x,
-	int y,
-	void *pickOut) const
+				     int x,
+				     int y,
+				     void *pickOut) const
 {
     BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
     if (!rec || rec->kind != BRLObolFeatureKind::EditPreview ||
-	    !rec->previewCallbacks.pickCallback)
+	!rec->previewCallbacks.pickCallback)
 	return -1;
     return rec->previewCallbacks.pickCallback(
-	    rec->previewCallbacks.previewContext, x, y, pickOut);
+	       rec->previewCallbacks.previewContext, x, y, pickOut);
 }
 
 SbBool
 BRLObolFeatureStore::appendLinePoint(BRLObolFeatureHandle handle,
-	const SbVec3f &point)
+				     const SbVec3f &point)
 {
     BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
     if (!rec || rec->kind == BRLObolFeatureKind::CustomNode)
@@ -1927,13 +1929,13 @@ BRLObolFeatureStore::appendLinePoint(BRLObolFeatureHandle handle,
     SoNode *node = store_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
-	    "appendLinePoint");
+		       "appendLinePoint");
     return TRUE;
 }
 
 SbBool
 BRLObolFeatureStore::replaceLabels(BRLObolFeatureHandle handle,
-	const std::vector<BRLObolLabel> &labels)
+				   const std::vector<BRLObolLabel> &labels)
 {
     BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
     if (!rec || rec->kind == BRLObolFeatureKind::CustomNode)
@@ -1944,7 +1946,7 @@ BRLObolFeatureStore::replaceLabels(BRLObolFeatureHandle handle,
     SoNode *node = store_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
-	    "replaceLabels");
+		       "replaceLabels");
     return TRUE;
 }
 
@@ -1965,13 +1967,13 @@ BRLObolFeatureStore::clearGeometry(BRLObolFeatureHandle handle)
     rec->revision++;
     this->impl->setNode(rec, NULL);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
-	    "clearGeometry");
+		       "clearGeometry");
     return TRUE;
 }
 
 SbBool
 BRLObolFeatureStore::points(BRLObolFeatureHandle handle,
-	std::vector<SbVec3f> &pointsOut) const
+			    std::vector<SbVec3f> &pointsOut) const
 {
     BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
     if (!rec)
@@ -1982,7 +1984,7 @@ BRLObolFeatureStore::points(BRLObolFeatureHandle handle,
 
 SbBool
 BRLObolFeatureStore::commands(BRLObolFeatureHandle handle,
-	std::vector<int32_t> &commandsOut) const
+			      std::vector<int32_t> &commandsOut) const
 {
     BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
     if (!rec)
@@ -1993,8 +1995,8 @@ BRLObolFeatureStore::commands(BRLObolFeatureHandle handle,
 
 SbBool
 BRLObolFeatureStore::lineCommandAt(BRLObolFeatureHandle handle,
-	size_t index,
-	int32_t &commandOut) const
+				   size_t index,
+				   int32_t &commandOut) const
 {
     BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
     if (!rec || index >= rec->commands.size())
@@ -2005,7 +2007,7 @@ BRLObolFeatureStore::lineCommandAt(BRLObolFeatureHandle handle,
 
 SbBool
 BRLObolFeatureStore::labels(BRLObolFeatureHandle handle,
-	std::vector<BRLObolLabel> &labelsOut) const
+			    std::vector<BRLObolLabel> &labelsOut) const
 {
     BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
     if (!rec)
@@ -2016,8 +2018,8 @@ BRLObolFeatureStore::labels(BRLObolFeatureHandle handle,
 
 SbBool
 BRLObolFeatureStore::axesCenters(BRLObolFeatureHandle handle,
-	std::vector<SbVec3f> &centersOut,
-	float *halfAxesSizeOut) const
+				 std::vector<SbVec3f> &centersOut,
+				 float *halfAxesSizeOut) const
 {
     BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
     if (!rec)
@@ -2030,7 +2032,7 @@ BRLObolFeatureStore::axesCenters(BRLObolFeatureHandle handle,
 
 SbBool
 BRLObolFeatureStore::indices(BRLObolFeatureHandle handle,
-	std::vector<int32_t> &indicesOut) const
+			     std::vector<int32_t> &indicesOut) const
 {
     BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
     if (!rec)
@@ -2041,7 +2043,7 @@ BRLObolFeatureStore::indices(BRLObolFeatureHandle handle,
 
 SbBool
 BRLObolFeatureStore::normals(BRLObolFeatureHandle handle,
-	std::vector<SbVec3f> &normalsOut) const
+			     std::vector<SbVec3f> &normalsOut) const
 {
     BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
     if (!rec)
@@ -2052,8 +2054,8 @@ BRLObolFeatureStore::normals(BRLObolFeatureHandle handle,
 
 SbBool
 BRLObolFeatureStore::applyStyle(BRLObolFeatureHandle handle,
-	const BRLObolFeatureStyle &style,
-	SbBool UNUSED(recursive))
+				const BRLObolFeatureStyle &style,
+				SbBool UNUSED(recursive))
 {
     BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
     if (!rec)
@@ -2093,13 +2095,13 @@ BRLObolFeatureStore::applyStyle(BRLObolFeatureHandle handle,
     SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
-	    "applyStyle");
+		       "applyStyle");
     return TRUE;
 }
 
 SbBool
 BRLObolFeatureStore::style(BRLObolFeatureHandle handle,
-	BRLObolFeatureStyle &styleOut) const
+			   BRLObolFeatureStyle &styleOut) const
 {
     BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
     if (!rec)
@@ -2119,7 +2121,7 @@ BRLObolFeatureStore::setVisible(BRLObolFeatureHandle handle, SbBool visible)
 
 SbBool
 BRLObolFeatureStore::setColor(BRLObolFeatureHandle handle,
-	const SbColor &color)
+			      const SbColor &color)
 {
     BRLObolFeatureStyle style;
     style.hasColor = TRUE;
@@ -2129,7 +2131,7 @@ BRLObolFeatureStore::setColor(BRLObolFeatureHandle handle,
 
 SbBool
 BRLObolFeatureStore::setLineWidth(BRLObolFeatureHandle handle,
-	int lineWidth)
+				  int lineWidth)
 {
     BRLObolFeatureStyle style;
     style.hasLineWidth = TRUE;
@@ -2139,8 +2141,8 @@ BRLObolFeatureStore::setLineWidth(BRLObolFeatureHandle handle,
 
 SbBool
 BRLObolFeatureStore::arrowTip(BRLObolFeatureHandle handle,
-	float &tipLength,
-	float &tipWidth) const
+			      float &tipLength,
+			      float &tipWidth) const
 {
     BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
     if (!rec)
@@ -2152,8 +2154,8 @@ BRLObolFeatureStore::arrowTip(BRLObolFeatureHandle handle,
 
 SbBool
 BRLObolFeatureStore::setArrowTip(BRLObolFeatureHandle handle,
-	float tipLength,
-	float tipWidth)
+				 float tipLength,
+				 float tipWidth)
 {
     BRLObolFeatureStyle style;
     style.hasArrowTip = TRUE;
@@ -2164,7 +2166,7 @@ BRLObolFeatureStore::setArrowTip(BRLObolFeatureHandle handle,
 
 SbBool
 BRLObolFeatureStore::setOverlayInfo(BRLObolFeatureHandle handle,
-	const BRLObolOverlayInfo &overlay)
+				    const BRLObolOverlayInfo &overlay)
 {
     BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
     if (!rec)
@@ -2175,7 +2177,7 @@ BRLObolFeatureStore::setOverlayInfo(BRLObolFeatureHandle handle,
     SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
-	    "setOverlayInfo");
+		       "setOverlayInfo");
     return TRUE;
 }
 
@@ -2191,13 +2193,13 @@ BRLObolFeatureStore::clearOverlayInfo(BRLObolFeatureHandle handle)
     SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
-	    "clearOverlayInfo");
+		       "clearOverlayInfo");
     return TRUE;
 }
 
 SbBool
 BRLObolFeatureStore::overlayInfo(BRLObolFeatureHandle handle,
-	BRLObolOverlayInfo &overlayOut) const
+				 BRLObolOverlayInfo &overlayOut) const
 {
     BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
     if (!rec)
@@ -2208,7 +2210,7 @@ BRLObolFeatureStore::overlayInfo(BRLObolFeatureHandle handle,
 
 SbBool
 BRLObolFeatureStore::replaceMetadata(BRLObolFeatureHandle handle,
-	const std::vector<BRLObolFeatureMetadata> &metadata)
+				     const std::vector<BRLObolFeatureMetadata> &metadata)
 {
     BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
     if (!rec)
@@ -2217,13 +2219,13 @@ BRLObolFeatureStore::replaceMetadata(BRLObolFeatureHandle handle,
     rec->metadata = metadata;
     rec->revision++;
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
-	    "replaceMetadata");
+		       "replaceMetadata");
     return TRUE;
 }
 
 SbBool
 BRLObolFeatureStore::metadata(BRLObolFeatureHandle handle,
-	std::vector<BRLObolFeatureMetadata> &metadataOut) const
+			      std::vector<BRLObolFeatureMetadata> &metadataOut) const
 {
     metadataOut.clear();
     BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
@@ -2244,8 +2246,8 @@ BRLObolFeatureStore::replacePrimitiveMetadata(BRLObolFeatureHandle handle,
 	return FALSE;
 
     for (std::vector<BRLObolFeaturePrimitiveMetadata>::iterator it =
-	    rec->primitiveMetadata.begin();
-	    it != rec->primitiveMetadata.end(); ++it) {
+	     rec->primitiveMetadata.begin();
+	 it != rec->primitiveMetadata.end(); ++it) {
 	if (it->primitiveIndex != primitiveIndex)
 	    continue;
 	if (metadata.empty())
@@ -2254,7 +2256,7 @@ BRLObolFeatureStore::replacePrimitiveMetadata(BRLObolFeatureHandle handle,
 	    it->metadata = metadata;
 	rec->revision++;
 	this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
-		"replacePrimitiveMetadata");
+			   "replacePrimitiveMetadata");
 	return TRUE;
     }
 
@@ -2265,15 +2267,15 @@ BRLObolFeatureStore::replacePrimitiveMetadata(BRLObolFeatureHandle handle,
 	rec->primitiveMetadata.push_back(item);
 	rec->revision++;
 	this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
-		"replacePrimitiveMetadata");
+			   "replacePrimitiveMetadata");
     }
     return TRUE;
 }
 
 SbBool
 BRLObolFeatureStore::primitiveMetadata(BRLObolFeatureHandle handle,
-	int32_t primitiveIndex,
-	std::vector<BRLObolFeatureMetadata> &metadataOut) const
+				       int32_t primitiveIndex,
+				       std::vector<BRLObolFeatureMetadata> &metadataOut) const
 {
     metadataOut.clear();
     BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
@@ -2281,8 +2283,8 @@ BRLObolFeatureStore::primitiveMetadata(BRLObolFeatureHandle handle,
 	return FALSE;
 
     for (std::vector<BRLObolFeaturePrimitiveMetadata>::const_iterator it =
-	    rec->primitiveMetadata.begin();
-	    it != rec->primitiveMetadata.end(); ++it) {
+	     rec->primitiveMetadata.begin();
+	 it != rec->primitiveMetadata.end(); ++it) {
 	if (it->primitiveIndex != primitiveIndex)
 	    continue;
 	metadataOut = it->metadata;
@@ -2304,13 +2306,13 @@ BRLObolFeatureStore::resolvePrimitivePick(const SbString &name,
 	return FALSE;
 
     BRLObolFeatureStoreRecord *rec = this->impl->recordByName(name,
-	    scopeMask, owner);
+				     scopeMask, owner);
     if (rec) {
 	pickOut.handle = BRLObolFeatureHandle(rec->id, rec->revision);
 	pickOut.featureName = rec->name;
 	pickOut.primitiveIndex = primitiveIndex;
 	store_primitive_metadata_for_record(rec, primitiveIndex,
-		pickOut.metadata);
+					    pickOut.metadata);
 	return TRUE;
     }
 
@@ -2319,8 +2321,8 @@ BRLObolFeatureStore::resolvePrimitivePick(const SbString &name,
 	return FALSE;
 
     for (std::map<uint64_t, BRLObolFeatureStoreRecord *>::const_iterator it =
-	    this->impl->records.begin(); it != this->impl->records.end();
-	    ++it) {
+	     this->impl->records.begin(); it != this->impl->records.end();
+	 ++it) {
 	rec = it->second;
 	if (!rec || rec->kind != BRLObolFeatureKind::LineLayer)
 	    continue;
@@ -2333,7 +2335,7 @@ BRLObolFeatureStore::resolvePrimitivePick(const SbString &name,
 	for (size_t i = 0; i < rec->layers.size(); i++) {
 	    const BRLObolLineLayer &layer = rec->layers[i];
 	    const SbString layerName = layer.name.getLength() > 0 ?
-		layer.name : rec->name;
+				       layer.name : rec->name;
 	    const size_t primitiveCount =
 		store_line_segment_primitive_count(layer.commands);
 	    if (store_string(layerName) != cleanName) {
@@ -2344,12 +2346,12 @@ BRLObolFeatureStore::resolvePrimitivePick(const SbString &name,
 		return FALSE;
 
 	    const int32_t resolvedPrimitive = static_cast<int32_t>(
-		    primitiveOffset + static_cast<size_t>(primitiveIndex));
+						  primitiveOffset + static_cast<size_t>(primitiveIndex));
 	    pickOut.handle = BRLObolFeatureHandle(rec->id, rec->revision);
 	    pickOut.featureName = rec->name;
 	    pickOut.primitiveIndex = resolvedPrimitive;
 	    store_primitive_metadata_for_record(rec, resolvedPrimitive,
-		    pickOut.metadata);
+						pickOut.metadata);
 	    return TRUE;
 	}
     }
@@ -2370,7 +2372,7 @@ BRLObolFeatureStore::replaceSelectedPrimitives(BRLObolFeatureHandle handle,
     SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
-	    "replaceSelectedPrimitives");
+		       "replaceSelectedPrimitives");
     return TRUE;
 }
 
@@ -2387,13 +2389,13 @@ BRLObolFeatureStore::replaceHighlightedPrimitives(BRLObolFeatureHandle handle,
     SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
-	    "replaceHighlightedPrimitives");
+		       "replaceHighlightedPrimitives");
     return TRUE;
 }
 
 SbBool
 BRLObolFeatureStore::selectedPrimitives(BRLObolFeatureHandle handle,
-	std::vector<int32_t> &primitivesOut) const
+					std::vector<int32_t> &primitivesOut) const
 {
     primitivesOut.clear();
     BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
@@ -2419,7 +2421,7 @@ BRLObolFeatureStore::highlightedPrimitives(BRLObolFeatureHandle handle,
 
 SbBool
 BRLObolFeatureStore::realize(BRLObolFeatureHandle handle,
-	SbBool UNUSED(recursive))
+			     SbBool UNUSED(recursive))
 {
     BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
     if (!rec)
@@ -2431,21 +2433,21 @@ BRLObolFeatureStore::realize(BRLObolFeatureHandle handle,
 
 SbBool
 BRLObolFeatureStore::summary(const SbString &name,
-	BRLObolFeatureSummary &summaryOut,
-	unsigned int scopeMask) const
+			     BRLObolFeatureSummary &summaryOut,
+			     unsigned int scopeMask) const
 {
     return this->summaryOwned(name, summaryOut, scopeMask, NULL);
 }
 
 SbBool
 BRLObolFeatureStore::summaryOwned(const SbString &name,
-	BRLObolFeatureSummary &summaryOut,
-	unsigned int scopeMask,
-	const BRLObolFeatureOwner *owner) const
+				  BRLObolFeatureSummary &summaryOut,
+				  unsigned int scopeMask,
+				  const BRLObolFeatureOwner *owner) const
 {
     summaryOut = BRLObolFeatureSummary();
     BRLObolFeatureStoreRecord *rec = this->impl->recordByName(name,
-	    scopeMask, owner);
+				     scopeMask, owner);
     if (!rec)
 	return TRUE;
 
@@ -2472,7 +2474,7 @@ BRLObolFeatureStore::summaryOwned(const SbString &name,
 
 SbBool
 BRLObolFeatureStore::record(BRLObolFeatureHandle handle,
-	BRLObolFeatureRecord &recordOut) const
+			    BRLObolFeatureRecord &recordOut) const
 {
     recordOut = BRLObolFeatureRecord();
     BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
@@ -2504,22 +2506,22 @@ BRLObolFeatureStore::record(BRLObolFeatureHandle handle,
 
 void
 BRLObolFeatureStore::visitRecords(BRLObolFeatureRecordCallback callback,
-	void *userData,
-	unsigned int scopeMask,
-	const BRLObolFeatureOwner *owner) const
+				  void *userData,
+				  unsigned int scopeMask,
+				  const BRLObolFeatureOwner *owner) const
 {
     if (!callback)
 	return;
 
     for (std::map<uint64_t, BRLObolFeatureStoreRecord *>::const_iterator it =
-	    this->impl->records.begin(); it != this->impl->records.end(); ++it) {
+	     this->impl->records.begin(); it != this->impl->records.end(); ++it) {
 	BRLObolFeatureStoreRecord *rec = it->second;
 	if (!rec)
 	    continue;
 	if (!(store_scope_bit(rec->scope) & scopeMask))
 	    continue;
 	if (rec->scope == BRLObolFeatureScope::Local &&
-		!store_owner_matches(rec->owner, owner))
+	    !store_owner_matches(rec->owner, owner))
 	    continue;
 
 	BRLObolFeatureRecord record;
@@ -2592,7 +2594,7 @@ struct BRLObolPolygonStore::Impl {
     void clear(void)
     {
 	for (std::map<uint64_t, BRLObolPolygonStoreRecord *>::iterator it =
-		records.begin(); it != records.end(); ++it) {
+		 records.begin(); it != records.end(); ++it) {
 	    if (it->second) {
 		store_release_node(controller, it->second->node);
 		bg_polygon_free(&it->second->polygon);
@@ -2619,13 +2621,13 @@ struct BRLObolPolygonStore::Impl {
 	if (cleanName.empty())
 	    return NULL;
 	for (std::map<std::string, uint64_t>::const_iterator it =
-		names.begin(); it != names.end(); ++it) {
+		 names.begin(); it != names.end(); ++it) {
 	    const std::string &key = it->first;
 	    if (key.size() < 3)
 		continue;
 	    const size_t namePos = key.rfind(':');
 	    const std::string keyName = namePos == std::string::npos ?
-		key.substr(2) : key.substr(namePos + 1);
+					key.substr(2) : key.substr(namePos + 1);
 	    if (keyName != cleanName)
 		continue;
 	    std::map<uint64_t, BRLObolPolygonStoreRecord *>::const_iterator rit =
@@ -2642,7 +2644,7 @@ struct BRLObolPolygonStore::Impl {
     BRLObolPolygonHandle handle(const BRLObolPolygonStoreRecord *rec) const
     {
 	return rec ? BRLObolPolygonHandle(rec->id, rec->revision) :
-	    BRLObolPolygonHandle();
+	       BRLObolPolygonHandle();
     }
 
     void setNode(BRLObolPolygonStoreRecord *rec, SoNode *node)
@@ -2672,11 +2674,11 @@ store_polygon_init_one_point(struct bg_polygon *poly, const SbVec3f &point)
     poly->num_contours = 1;
     poly->hole = (int *)bu_calloc(1, sizeof(int), "BRLObol polygon hole");
     poly->contour = (struct bg_poly_contour *)bu_calloc(1,
-	    sizeof(struct bg_poly_contour), "BRLObol polygon contour");
+		    sizeof(struct bg_poly_contour), "BRLObol polygon contour");
     poly->contour[0].num_points = 1;
     poly->contour[0].open = 1;
     poly->contour[0].point = (point_t *)bu_calloc(1, sizeof(point_t),
-	    "BRLObol polygon point");
+			     "BRLObol polygon point");
     store_point(poly->contour[0].point[0], point);
 }
 
@@ -2737,7 +2739,7 @@ store_polygon_fill_flags(const BRLObolPolygonVisual &visual)
     if (flags)
 	return flags;
     return visual.fill ? BRLOBOL_POLYGON_FILL_HATCH :
-	BRLOBOL_POLYGON_FILL_NONE;
+	   BRLOBOL_POLYGON_FILL_NONE;
 }
 
 static void
@@ -2745,14 +2747,14 @@ store_polygon_set_fill_flags(BRLObolPolygonVisual &visual, unsigned int flags)
 {
     visual.fillFlags = store_polygon_valid_fill_flags(flags);
     visual.fill = (visual.fillFlags & BRLOBOL_POLYGON_FILL_HATCH) ?
-	TRUE : FALSE;
+		  TRUE : FALSE;
 }
 
 static SbVec3f
 store_polygon_origin(const struct bg_polygon &poly, const point_t fallback)
 {
     if (poly.num_contours > 0 && poly.contour && poly.contour[0].num_points > 0 &&
-	    poly.contour[0].point)
+	poly.contour[0].point)
 	return store_vec3(poly.contour[0].point[0]);
     return store_vec3(fallback);
 }
@@ -2771,7 +2773,7 @@ store_polygon_zplane(plane_t dst, const BRLObolPolygonStoreRecord *rec)
 
 static void
 store_polygon_plane_uv(fastf_t *u, fastf_t *v, const fastf_t *plane,
-	const SbVec3f &point)
+		       const SbVec3f &point)
 {
     if (u)
 	*u = 0.0;
@@ -2811,7 +2813,7 @@ store_polygon_project_to_plane(const fastf_t *plane, const SbVec3f &point)
 
 static SbVec3f
 store_polygon_project_to_zplane(const BRLObolPolygonStoreRecord *rec,
-	const SbVec3f &point)
+				const SbVec3f &point)
 {
     plane_t zplane;
     store_polygon_zplane(zplane, rec);
@@ -2822,7 +2824,7 @@ static void
 store_polygon_canonical_hatch_slope(vect2d_t out, const SbVec2f &slope)
 {
     V2SET(out, static_cast<fastf_t>(slope[0]),
-	    static_cast<fastf_t>(slope[1]));
+	  static_cast<fastf_t>(slope[1]));
     if (MAG2SQ(out) < SMALL_FASTF)
 	V2SET(out, 1.0, 0.0);
     V2UNITIZE(out);
@@ -2838,14 +2840,14 @@ store_polygon_canonical_hatch_slope(vect2d_t out, const SbVec2f &slope)
 
 static struct bg_polygon *
 store_polygon_hatch_segments(
-	const struct bg_polygon *poly,
-	const plane_t *vp,
-	const SbVec2f &slope,
-	float spacing)
+    const struct bg_polygon *poly,
+    const plane_t *vp,
+    const SbVec2f &slope,
+    float spacing)
 {
     if (!poly || !vp || poly->num_contours < 1 ||
-	    poly->contour[0].num_points < 3 ||
-	    fabs(static_cast<fastf_t>(spacing)) < BN_TOL_DIST)
+	poly->contour[0].num_points < 3 ||
+	fabs(static_cast<fastf_t>(spacing)) < BN_TOL_DIST)
 	return NULL;
 
     vect2d_t line_slope;
@@ -2858,22 +2860,22 @@ store_polygon_hatch_segments(
 
     poly_2d.num_contours = poly->num_contours;
     poly_2d.hole = (int *)bu_calloc(poly->num_contours, sizeof(int),
-	    "BRLObol hatch mask holes");
+				    "BRLObol hatch mask holes");
     poly_2d.contour = (struct bg_poly_contour *)bu_calloc(
-	    poly->num_contours, sizeof(struct bg_poly_contour),
-	    "BRLObol hatch mask contours");
+			  poly->num_contours, sizeof(struct bg_poly_contour),
+			  "BRLObol hatch mask contours");
     for (size_t i = 0; i < poly->num_contours; i++) {
 	poly_2d.hole[i] = poly->hole[i];
 	poly_2d.contour[i].num_points = poly->contour[i].num_points;
 	poly_2d.contour[i].point = (point_t *)bu_calloc(
-		poly->contour[i].num_points, sizeof(point_t),
-		"BRLObol hatch mask points");
+				       poly->contour[i].num_points, sizeof(point_t),
+				       "BRLObol hatch mask points");
 	for (size_t j = 0; j < poly->contour[i].num_points; j++) {
 	    vect2d_t p2d;
 	    point_t src_point;
 	    VMOVE(src_point, poly->contour[i].point[j]);
 	    bg_plane_closest_pt(&p2d[0], &p2d[1], const_cast<plane_t *>(vp),
-		    &src_point);
+				&src_point);
 	    VSET(poly_2d.contour[i].point[j], p2d[0], p2d[1], 0.0);
 	    V2MINMAX(b2d_min, b2d_max, p2d);
 	}
@@ -2886,7 +2888,7 @@ store_polygon_hatch_segments(
     V2MOVE(lseg, line_slope);
 
     const int dir_step_cnt = static_cast<int>(0.5 * ldiag /
-	    line_spacing + 1.0);
+			     line_spacing + 1.0);
     if (dir_step_cnt < 2) {
 	bg_polygon_free(&poly_2d);
 	return NULL;
@@ -2896,17 +2898,17 @@ store_polygon_hatch_segments(
     struct bg_polygon poly_lines = BG_POLYGON_NULL;
     poly_lines.num_contours = static_cast<size_t>(step_cnt);
     poly_lines.hole = (int *)bu_calloc(poly_lines.num_contours,
-	    sizeof(int), "BRLObol hatch line holes");
+				       sizeof(int), "BRLObol hatch line holes");
     poly_lines.contour = (struct bg_poly_contour *)bu_calloc(
-	    poly_lines.num_contours, sizeof(struct bg_poly_contour),
-	    "BRLObol hatch line contours");
+			     poly_lines.num_contours, sizeof(struct bg_poly_contour),
+			     "BRLObol hatch line contours");
 
     struct bg_poly_contour *c = &poly_lines.contour[0];
     vect2d_t p2d1, p2d2;
     c->num_points = 2;
     c->open = 1;
     c->point = (point_t *)bu_calloc(c->num_points, sizeof(point_t),
-	    "BRLObol hatch line points");
+				    "BRLObol hatch line points");
     V2JOIN1(p2d1, bcenter, ldiag * 0.51, lseg);
     V2JOIN1(p2d2, bcenter, -ldiag * 0.51, lseg);
     VSET(c->point[0], p2d1[0], p2d1[1], 0.0);
@@ -2919,7 +2921,7 @@ store_polygon_hatch_segments(
 	c->num_points = 2;
 	c->open = 1;
 	c->point = (point_t *)bu_calloc(c->num_points, sizeof(point_t),
-		"BRLObol hatch line points");
+					"BRLObol hatch line points");
 	V2JOIN2(p2d1, bcenter, line_spacing * i, per, ldiag * 0.51, lseg);
 	V2JOIN2(p2d2, bcenter, line_spacing * i, per, -ldiag * 0.51, lseg);
 	VSET(c->point[0], p2d1[0], p2d1[1], 0.0);
@@ -2933,9 +2935,9 @@ store_polygon_hatch_segments(
 	c->num_points = 2;
 	c->open = 1;
 	c->point = (point_t *)bu_calloc(c->num_points, sizeof(point_t),
-		"BRLObol hatch line points");
+					"BRLObol hatch line points");
 	const fastf_t offset = line_spacing *
-	    (static_cast<fastf_t>(i) - static_cast<fastf_t>(dir_step_cnt));
+			       (static_cast<fastf_t>(i) - static_cast<fastf_t>(dir_step_cnt));
 	V2JOIN2(p2d1, bcenter, offset, per, ldiag * 0.51, lseg);
 	V2JOIN2(p2d2, bcenter, offset, per, -ldiag * 0.51, lseg);
 	VSET(c->point[0], p2d1[0], p2d1[1], 0.0);
@@ -2943,7 +2945,7 @@ store_polygon_hatch_segments(
     }
 
     struct bg_polygon *fpoly = bg_clip_polygon(bg_Intersection,
-	    &poly_lines, &poly_2d, CLIPPER_MAX, NULL);
+			       &poly_lines, &poly_2d, CLIPPER_MAX, NULL);
     if (!fpoly || !fpoly->num_contours) {
 	bg_polygon_free(&poly_lines);
 	bg_polygon_free(&poly_2d);
@@ -2959,22 +2961,22 @@ store_polygon_hatch_segments(
     *poly_fill = BG_POLYGON_NULL;
     poly_fill->num_contours = fpoly->num_contours;
     poly_fill->hole = (int *)bu_calloc(fpoly->num_contours, sizeof(int),
-	    "BRLObol hatch output holes");
+				       "BRLObol hatch output holes");
     poly_fill->contour = (struct bg_poly_contour *)bu_calloc(
-	    fpoly->num_contours, sizeof(struct bg_poly_contour),
-	    "BRLObol hatch output contours");
+			     fpoly->num_contours, sizeof(struct bg_poly_contour),
+			     "BRLObol hatch output contours");
     for (size_t i = 0; i < fpoly->num_contours; i++) {
 	poly_fill->hole[i] = fpoly->hole[i];
 	poly_fill->contour[i].open = 1;
 	poly_fill->contour[i].num_points = fpoly->contour[i].num_points;
 	poly_fill->contour[i].point = (point_t *)bu_calloc(
-		fpoly->contour[i].num_points, sizeof(point_t),
-		"BRLObol hatch output points");
+					  fpoly->contour[i].num_points, sizeof(point_t),
+					  "BRLObol hatch output points");
 	for (size_t j = 0; j < fpoly->contour[i].num_points; j++) {
 	    bg_plane_pt_at(&poly_fill->contour[i].point[j],
-		    const_cast<plane_t *>(vp),
-		    fpoly->contour[i].point[j][0],
-		    fpoly->contour[i].point[j][1]);
+			   const_cast<plane_t *>(vp),
+			   fpoly->contour[i].point[j][0],
+			   fpoly->contour[i].point[j][1]);
 	}
     }
 
@@ -2990,9 +2992,9 @@ static SoNode *
 store_polygon_mesh_fill_node(const BRLObolPolygonStoreRecord &rec)
 {
     if (!(store_polygon_fill_flags(rec.visual) & BRLOBOL_POLYGON_FILL_MESH) ||
-	    rec.polygon.num_contours == 0 ||
-	    !rec.polygon.contour || rec.polygon.contour[0].num_points < 3 ||
-	    rec.polygon.contour[0].open)
+	rec.polygon.num_contours == 0 ||
+	!rec.polygon.contour || rec.polygon.contour[0].num_points < 3 ||
+	rec.polygon.contour[0].open)
 	return NULL;
 
     for (size_t i = 0; i < rec.polygon.num_contours; i++) {
@@ -3013,19 +3015,19 @@ store_polygon_mesh_fill_node(const BRLObolPolygonStoreRecord &rec)
 	vect_t normal;
 	plane_t plane;
 	if (bg_fit_plane(&center, &normal, contour.num_points, contour.point) ||
-		bg_plane_pt_nrml(&plane, center, normal))
+	    bg_plane_pt_nrml(&plane, center, normal))
 	    return NULL;
 
 	point2d_t *projected = (point2d_t *)bu_calloc(contour.num_points,
-		sizeof(point2d_t), "BRLObol projected polygon fill points");
+			       sizeof(point2d_t), "BRLObol projected polygon fill points");
 	for (size_t i = 0; i < contour.num_points; i++)
 	    bg_plane_closest_pt(&projected[i][0], &projected[i][1],
-		    &plane, &contour.point[i]);
+				&plane, &contour.point[i]);
 
 	int *faces = NULL;
 	int numFaces = 0;
 	int ret = bg_poly_triangulate(&faces, &numFaces, NULL, NULL, NULL, 0,
-		projected, contour.num_points, TRI_EAR_CLIPPING);
+				      projected, contour.num_points, TRI_EAR_CLIPPING);
 	bu_free(projected, "BRLObol projected polygon fill points");
 	if (ret || numFaces <= 0 || !faces) {
 	    if (faces)
@@ -3046,7 +3048,7 @@ store_polygon_mesh_fill_node(const BRLObolPolygonStoreRecord &rec)
 	point_t *outPts = NULL;
 	int numOutPts = 0;
 	int ret = bg_polygon_triangulate(&faces, &numFaces, &outPts, &numOutPts,
-		&poly, TRI_EAR_CLIPPING);
+					 &poly, TRI_EAR_CLIPPING);
 	bg_polygon_free(&poly);
 
 	if (ret || numFaces <= 0 || numOutPts <= 0 || !faces || !outPts) {
@@ -3095,7 +3097,7 @@ store_polygon_mesh_fill_node(const BRLObolPolygonStoreRecord &rec)
 
     if (!points.empty() && !indices.empty())
 	shape->setIndexedTriangles(&points[0], static_cast<int>(points.size()),
-		&indices[0], static_cast<int>(indices.size()));
+				   &indices[0], static_cast<int>(indices.size()));
     return shape;
 }
 
@@ -3103,15 +3105,15 @@ static SoNode *
 store_polygon_hatch_fill_node(const BRLObolPolygonStoreRecord &rec)
 {
     if (!(store_polygon_fill_flags(rec.visual) & BRLOBOL_POLYGON_FILL_HATCH) ||
-	    rec.polygon.num_contours == 0 ||
-	    !rec.polygon.contour || rec.polygon.contour[0].num_points < 3 ||
-	    rec.polygon.contour[0].open)
+	rec.polygon.num_contours == 0 ||
+	!rec.polygon.contour || rec.polygon.contour[0].num_points < 3 ||
+	rec.polygon.contour[0].open)
 	return NULL;
 
     plane_t zplane;
     store_polygon_zplane(zplane, &rec);
     struct bg_polygon *hatch = store_polygon_hatch_segments(&rec.polygon,
-	    &zplane, rec.visual.fillSlope, rec.visual.fillSpacing);
+			       &zplane, rec.visual.fillSlope, rec.visual.fillSpacing);
     if (!hatch)
 	return NULL;
 
@@ -3124,8 +3126,8 @@ store_polygon_hatch_fill_node(const BRLObolPolygonStoreRecord &rec)
 	for (size_t j = 0; j < contour.num_points; j++) {
 	    points.push_back(store_vec3(contour.point[j]));
 	    commands.push_back(j == 0 ?
-		    static_cast<int32_t>(BRLObolLineCommand::Move) :
-		    static_cast<int32_t>(BRLObolLineCommand::Draw));
+			       static_cast<int32_t>(BRLObolLineCommand::Move) :
+			       static_cast<int32_t>(BRLObolLineCommand::Draw));
 	}
     }
 
@@ -3177,8 +3179,8 @@ store_polygon_node(const BRLObolPolygonStoreRecord &rec)
 	    precisePoints.push_back(contour.point[j][Y]);
 	    precisePoints.push_back(contour.point[j][Z]);
 	    commands.push_back(j == 0 ?
-		    static_cast<int32_t>(BRLObolLineCommand::Move) :
-		    static_cast<int32_t>(BRLObolLineCommand::Draw));
+			       static_cast<int32_t>(BRLObolLineCommand::Move) :
+			       static_cast<int32_t>(BRLObolLineCommand::Draw));
 	}
 	if (!contour.open && contour.num_points > 1) {
 	    points.push_back(store_vec3(contour.point[0]));
@@ -3203,7 +3205,7 @@ store_polygon_node(const BRLObolPolygonStoreRecord &rec)
     feature.style.lineWidth = 1;
     SoBRLVListShape *shape = store_vlist_node(feature);
     shape->setPrecisePoints(precisePoints.empty() ? NULL :
-	    precisePoints.data(), static_cast<int>(points.size()));
+			    precisePoints.data(), static_cast<int>(points.size()));
     shape->sourceType = "view-polygon-edge";
     shape->geometryKind = "line";
 
@@ -3220,26 +3222,26 @@ store_polygon_node(const BRLObolPolygonStoreRecord &rec)
 
 static void
 store_polygon_append_point(BRLObolPolygonStoreRecord *rec,
-	const SbVec3f &point)
+			   const SbVec3f &point)
 {
     if (!rec)
 	return;
 
     SbVec3f model_point = store_polygon_project_to_plane(rec->viewPlane,
-	    point);
+			  point);
     if (rec->polygon.num_contours == 0)
 	store_polygon_init_one_point(&rec->polygon, model_point);
     else {
 	size_t contourIndex = rec->currentContour >= 0 ?
-	    static_cast<size_t>(rec->currentContour) : 0;
+			      static_cast<size_t>(rec->currentContour) : 0;
 	if (contourIndex >= rec->polygon.num_contours)
 	    contourIndex = rec->polygon.num_contours - 1;
 
 	struct bg_poly_contour *contour = &rec->polygon.contour[contourIndex];
 	const size_t oldCount = contour->num_points;
 	contour->point = (point_t *)bu_realloc(contour->point,
-		(oldCount + 1) * sizeof(point_t),
-		"BRLObol polygon append point");
+					       (oldCount + 1) * sizeof(point_t),
+					       "BRLObol polygon append point");
 	store_point(contour->point[oldCount], model_point);
 	contour->num_points = oldCount + 1;
     }
@@ -3247,8 +3249,8 @@ store_polygon_append_point(BRLObolPolygonStoreRecord *rec,
 
 static void
 store_polygon_set_rectangle(BRLObolPolygonStoreRecord *rec,
-	const SbVec3f &corner,
-	SbBool square)
+			    const SbVec3f &corner,
+			    SbBool square)
 {
     if (!rec)
 	return;
@@ -3273,27 +3275,27 @@ store_polygon_set_rectangle(BRLObolPolygonStoreRecord *rec,
     bg_polygon_free(&rec->polygon);
     rec->polygon.num_contours = 1;
     rec->polygon.hole = (int *)bu_calloc(1, sizeof(int),
-	    "BRLObol rectangle hole");
+					 "BRLObol rectangle hole");
     rec->polygon.contour = (struct bg_poly_contour *)bu_calloc(1,
-	    sizeof(struct bg_poly_contour), "BRLObol rectangle contour");
+			   sizeof(struct bg_poly_contour), "BRLObol rectangle contour");
     rec->polygon.contour[0].num_points = 4;
     rec->polygon.contour[0].open = 0;
     rec->polygon.contour[0].point = (point_t *)bu_calloc(4,
-	    sizeof(point_t), "BRLObol rectangle points");
+				    sizeof(point_t), "BRLObol rectangle points");
     store_point(rec->polygon.contour[0].point[0],
-	    store_polygon_plane_point(zplane, pfx, pfy));
+		store_polygon_plane_point(zplane, pfx, pfy));
     store_point(rec->polygon.contour[0].point[1],
-	    store_polygon_plane_point(zplane, pfx, fy));
+		store_polygon_plane_point(zplane, pfx, fy));
     store_point(rec->polygon.contour[0].point[2],
-	    store_polygon_plane_point(zplane, fx, fy));
+		store_polygon_plane_point(zplane, fx, fy));
     store_point(rec->polygon.contour[0].point[3],
-	    store_polygon_plane_point(zplane, fx, pfy));
+		store_polygon_plane_point(zplane, fx, pfy));
 }
 
 static void
 store_polygon_set_ellipse(BRLObolPolygonStoreRecord *rec,
-	const SbVec3f &corner,
-	SbBool circle)
+			  const SbVec3f &corner,
+			  SbBool circle)
 {
     if (!rec)
 	return;
@@ -3319,21 +3321,21 @@ store_polygon_set_ellipse(BRLObolPolygonStoreRecord *rec,
     bg_polygon_free(&rec->polygon);
     rec->polygon.num_contours = 1;
     rec->polygon.hole = (int *)bu_calloc(1, sizeof(int),
-	    "BRLObol ellipse hole");
+					 "BRLObol ellipse hole");
     rec->polygon.contour = (struct bg_poly_contour *)bu_calloc(1,
-	    sizeof(struct bg_poly_contour), "BRLObol ellipse contour");
+			   sizeof(struct bg_poly_contour), "BRLObol ellipse contour");
     rec->polygon.contour[0].num_points = nsegs;
     rec->polygon.contour[0].open = 0;
     rec->polygon.contour[0].point = (point_t *)bu_calloc(nsegs,
-	    sizeof(point_t), "BRLObol ellipse points");
+				    sizeof(point_t), "BRLObol ellipse points");
     for (int i = 0; i < nsegs; i++) {
 	const double twoPi = 6.283185307179586476925286766559;
 	const float a = static_cast<float>(twoPi *
-		static_cast<double>(i) / static_cast<double>(nsegs));
+					   static_cast<double>(i) / static_cast<double>(nsegs));
 	store_point(rec->polygon.contour[0].point[i],
-		store_polygon_plane_point(zplane,
-		    pfx + std::cos(a) * rx,
-		    pfy + std::sin(a) * ry));
+		    store_polygon_plane_point(zplane,
+					      pfx + std::cos(a) * rx,
+					      pfy + std::sin(a) * ry));
     }
 }
 
@@ -3373,11 +3375,11 @@ BRLObolPolygonStore::clear(void)
 
 BRLObolPolygonHandle
 BRLObolPolygonStore::create(const SbString &name,
-	BRLObolFeatureScope scope,
-	BRLObolPolygonType type,
-	const SbVec3f &originPoint,
-	const fastf_t *viewPlane,
-	float viewZ)
+			    BRLObolFeatureScope scope,
+			    BRLObolPolygonType type,
+			    const SbVec3f &originPoint,
+			    const fastf_t *viewPlane,
+			    float viewZ)
 {
     if (store_string(name).empty())
 	return BRLObolPolygonHandle();
@@ -3417,7 +3419,7 @@ BRLObolPolygonStore::selectAtModelPoint(const SbVec3f &point) const
     double best = INFINITY;
     const BRLObolPolygonStoreRecord *bestRec = NULL;
     for (std::map<uint64_t, BRLObolPolygonStoreRecord *>::const_iterator it =
-	    this->impl->records.begin(); it != this->impl->records.end(); ++it) {
+	     this->impl->records.begin(); it != this->impl->records.end(); ++it) {
 	BRLObolPolygonStoreRecord *rec = it->second;
 	if (!rec)
 	    continue;
@@ -3441,14 +3443,14 @@ BRLObolPolygonStore::selectAtModelPoint(const SbVec3f &point) const
 
 BRLObolPolygonHandle
 BRLObolPolygonStore::duplicate(BRLObolPolygonHandle handle,
-	const SbString &newName)
+			       const SbString &newName)
 {
     BRLObolPolygonStoreRecord *src = this->impl->record(handle);
     if (!src || store_string(newName).empty())
 	return BRLObolPolygonHandle();
 
     BRLObolPolygonHandle dstHandle = this->create(newName, src->scope,
-	    src->type, src->originPoint, src->viewPlane, src->visual.viewZ);
+				     src->type, src->originPoint, src->viewPlane, src->visual.viewZ);
     BRLObolPolygonStoreRecord *dst = this->impl->record(dstHandle);
     if (!dst)
 	return BRLObolPolygonHandle();
@@ -3465,7 +3467,7 @@ BRLObolPolygonStore::duplicate(BRLObolPolygonHandle handle,
 
 SbBool
 BRLObolPolygonStore::update(BRLObolPolygonHandle handle,
-	BRLObolPolygonUpdate update)
+			    BRLObolPolygonUpdate update)
 {
     BRLObolPolygonStoreRecord *rec = this->impl->record(handle);
     if (!rec)
@@ -3481,23 +3483,23 @@ BRLObolPolygonStore::update(BRLObolPolygonHandle handle,
 
 SbBool
 BRLObolPolygonStore::updateScreenPoint(BRLObolPolygonHandle handle,
-	int x,
-	int y,
-	BRLObolPolygonUpdate update)
+				       int x,
+				       int y,
+				       BRLObolPolygonUpdate update)
 {
     BRLObolPolygonStoreRecord *rec = this->impl->record(handle);
     if (!rec)
 	return FALSE;
 
     return this->updateModelPoint(handle,
-	    SbVec3f(static_cast<float>(x), static_cast<float>(y),
-		rec->originPoint[2]), update);
+				  SbVec3f(static_cast<float>(x), static_cast<float>(y),
+					  rec->originPoint[2]), update);
 }
 
 SbBool
 BRLObolPolygonStore::updateModelPoint(BRLObolPolygonHandle handle,
-	const SbVec3f &point,
-	BRLObolPolygonUpdate update)
+				      const SbVec3f &point,
+				      BRLObolPolygonUpdate update)
 {
     BRLObolPolygonStoreRecord *rec = this->impl->record(handle);
     if (!rec)
@@ -3510,11 +3512,11 @@ BRLObolPolygonStore::updateModelPoint(BRLObolPolygonHandle handle,
 	if (rec->currentContour < 0 || rec->currentPoint < 0)
 	    return FALSE;
 	struct bg_poly_contour &contour =
-	    rec->polygon.contour[rec->currentContour];
+		rec->polygon.contour[rec->currentContour];
 	if (static_cast<size_t>(rec->currentPoint) >= contour.num_points)
 	    return FALSE;
 	store_point(contour.point[rec->currentPoint],
-		store_polygon_project_to_zplane(rec, point));
+		    store_polygon_project_to_zplane(rec, point));
     } else if (update == BRLObolPolygonUpdate::PointSelect) {
 	SbVec3f model_point = store_polygon_project_to_zplane(rec, point);
 	const long selected_contour = rec->currentContour;
@@ -3524,7 +3526,7 @@ BRLObolPolygonStore::updateModelPoint(BRLObolPolygonHandle handle,
 	size_t start = 0;
 	size_t end = rec->polygon.num_contours;
 	if (selected_contour >= 0 &&
-		static_cast<size_t>(selected_contour) < end) {
+	    static_cast<size_t>(selected_contour) < end) {
 	    start = static_cast<size_t>(selected_contour);
 	    end = start + 1;
 	}
@@ -3560,8 +3562,8 @@ BRLObolPolygonStore::updateModelPoint(BRLObolPolygonHandle handle,
 
 SbBool
 BRLObolPolygonStore::move(BRLObolPolygonHandle handle,
-	const SbVec3f &currentPoint,
-	const SbVec3f &previousPoint)
+			  const SbVec3f &currentPoint,
+			  const SbVec3f &previousPoint)
 {
     BRLObolPolygonStoreRecord *rec = this->impl->record(handle);
     if (!rec)
@@ -3586,7 +3588,7 @@ BRLObolPolygonStore::move(BRLObolPolygonHandle handle,
 
 SbBool
 BRLObolPolygonStore::rename(BRLObolPolygonHandle handle,
-	const SbString &newName)
+			    const SbString &newName)
 {
     BRLObolPolygonStoreRecord *rec = this->impl->record(handle);
     if (!rec || store_string(newName).empty())
@@ -3626,7 +3628,7 @@ BRLObolPolygonStore::removeScope(unsigned int scopeMask)
 {
     std::vector<BRLObolPolygonHandle> handles;
     for (std::map<uint64_t, BRLObolPolygonStoreRecord *>::const_iterator it =
-	    this->impl->records.begin(); it != this->impl->records.end(); ++it) {
+	     this->impl->records.begin(); it != this->impl->records.end(); ++it) {
 	if (!it->second)
 	    continue;
 	if (!(store_scope_bit(it->second->scope) & scopeMask))
@@ -3643,7 +3645,7 @@ BRLObolPolygonStore::removeScope(unsigned int scopeMask)
 
 SbBool
 BRLObolPolygonStore::record(BRLObolPolygonHandle handle,
-	BRLObolPolygonRecord &recordOut) const
+			    BRLObolPolygonRecord &recordOut) const
 {
     BRLObolPolygonStoreRecord *rec = this->impl->record(handle);
     if (!rec)
@@ -3656,7 +3658,7 @@ BRLObolPolygonStore::record(BRLObolPolygonHandle handle,
     recordOut.type = rec->type;
     recordOut.fillFlags = store_polygon_fill_flags(rec->visual);
     recordOut.fill = (recordOut.fillFlags & BRLOBOL_POLYGON_FILL_HATCH) ?
-	TRUE : FALSE;
+		     TRUE : FALSE;
     recordOut.fillSlope = rec->visual.fillSlope;
     recordOut.fillSpacing = rec->visual.fillSpacing;
     recordOut.fillColor = rec->visual.fillColor;
@@ -3676,23 +3678,23 @@ BRLObolPolygonStore::record(BRLObolPolygonHandle handle,
 
 void
 BRLObolPolygonStore::visitRecords(BRLObolPolygonRecordCallback callback,
-	void *userData) const
+				  void *userData) const
 {
     if (!callback)
 	return;
     for (std::map<uint64_t, BRLObolPolygonStoreRecord *>::const_iterator it =
-	    this->impl->records.begin(); it != this->impl->records.end(); ++it) {
+	     this->impl->records.begin(); it != this->impl->records.end(); ++it) {
 	BRLObolPolygonRecord rec;
 	if (this->record(this->impl->handle(it->second), rec) &&
-		!callback(rec, userData))
+	    !callback(rec, userData))
 	    return;
     }
 }
 
 SbBool
 BRLObolPolygonStore::setCurrent(BRLObolPolygonHandle handle,
-	long contour,
-	long point)
+				long contour,
+				long point)
 {
     BRLObolPolygonStoreRecord *rec = this->impl->record(handle);
     if (!rec)
@@ -3712,12 +3714,12 @@ BRLObolPolygonStore::setCurrent(BRLObolPolygonHandle handle,
 
 SbBool
 BRLObolPolygonStore::setContourOpen(BRLObolPolygonHandle handle,
-	long contour,
-	SbBool open)
+				    long contour,
+				    SbBool open)
 {
     BRLObolPolygonStoreRecord *rec = this->impl->record(handle);
     if (!rec || contour < 0 ||
-	    contour >= static_cast<long>(rec->polygon.num_contours))
+	contour >= static_cast<long>(rec->polygon.num_contours))
 	return FALSE;
     rec->polygon.contour[contour].open = open ? 1 : 0;
     rec->revision++;
@@ -3727,7 +3729,7 @@ BRLObolPolygonStore::setContourOpen(BRLObolPolygonHandle handle,
 
 SbBool
 BRLObolPolygonStore::setAllContoursOpen(BRLObolPolygonHandle handle,
-	SbBool open)
+					SbBool open)
 {
     BRLObolPolygonStoreRecord *rec = this->impl->record(handle);
     if (!rec)
@@ -3755,7 +3757,7 @@ SbBool
 BRLObolPolygonStore::clearAllPointSelections(void)
 {
     for (std::map<uint64_t, BRLObolPolygonStoreRecord *>::iterator it =
-	    this->impl->records.begin(); it != this->impl->records.end(); ++it) {
+	     this->impl->records.begin(); it != this->impl->records.end(); ++it) {
 	if (it->second) {
 	    it->second->currentContour = -1;
 	    it->second->currentPoint = -1;
@@ -3767,14 +3769,14 @@ BRLObolPolygonStore::clearAllPointSelections(void)
 
 SbBool
 BRLObolPolygonStore::setVisual(BRLObolPolygonHandle handle,
-	const BRLObolPolygonVisual &visual)
+			       const BRLObolPolygonVisual &visual)
 {
     BRLObolPolygonStoreRecord *rec = this->impl->record(handle);
     if (!rec)
 	return FALSE;
     rec->visual = visual;
     store_polygon_set_fill_flags(rec->visual,
-	    store_polygon_fill_flags(rec->visual));
+				 store_polygon_fill_flags(rec->visual));
     rec->revision++;
     this->impl->realize(rec);
     return TRUE;
@@ -3782,7 +3784,7 @@ BRLObolPolygonStore::setVisual(BRLObolPolygonHandle handle,
 
 SbBool
 BRLObolPolygonStore::visual(BRLObolPolygonHandle handle,
-	BRLObolPolygonVisual &visualOut) const
+			    BRLObolPolygonVisual &visualOut) const
 {
     BRLObolPolygonStoreRecord *rec = this->impl->record(handle);
     if (!rec)
@@ -3793,7 +3795,7 @@ BRLObolPolygonStore::visual(BRLObolPolygonHandle handle,
 
 SbBool
 BRLObolPolygonStore::setEdgeColor(BRLObolPolygonHandle handle,
-	const SbColor &edgeColor)
+				  const SbColor &edgeColor)
 {
     BRLObolPolygonStoreRecord *rec = this->impl->record(handle);
     if (!rec)
@@ -3806,7 +3808,7 @@ BRLObolPolygonStore::setEdgeColor(BRLObolPolygonHandle handle,
 
 SbBool
 BRLObolPolygonStore::edgeColor(BRLObolPolygonHandle handle,
-	SbColor &edgeColorOut) const
+			       SbColor &edgeColorOut) const
 {
     BRLObolPolygonStoreRecord *rec = this->impl->record(handle);
     if (!rec)
@@ -3817,9 +3819,9 @@ BRLObolPolygonStore::edgeColor(BRLObolPolygonHandle handle,
 
 SbBool
 BRLObolPolygonStore::setFill(BRLObolPolygonHandle handle,
-	SbBool fill,
-	const SbVec2f &slope,
-	float spacing)
+			     SbBool fill,
+			     const SbVec2f &slope,
+			     float spacing)
 {
     BRLObolPolygonStoreRecord *rec = this->impl->record(handle);
     if (!rec)
@@ -3839,7 +3841,7 @@ BRLObolPolygonStore::setFill(BRLObolPolygonHandle handle,
 
 SbBool
 BRLObolPolygonStore::setFillFlags(BRLObolPolygonHandle handle,
-	unsigned int fillFlags)
+				  unsigned int fillFlags)
 {
     BRLObolPolygonStoreRecord *rec = this->impl->record(handle);
     if (!rec)
@@ -3852,7 +3854,7 @@ BRLObolPolygonStore::setFillFlags(BRLObolPolygonHandle handle,
 
 SbBool
 BRLObolPolygonStore::setFillColor(BRLObolPolygonHandle handle,
-	const SbColor &fillColor)
+				  const SbColor &fillColor)
 {
     BRLObolPolygonStoreRecord *rec = this->impl->record(handle);
     if (!rec)
@@ -3865,7 +3867,7 @@ BRLObolPolygonStore::setFillColor(BRLObolPolygonHandle handle,
 
 SbBool
 BRLObolPolygonStore::fillColor(BRLObolPolygonHandle handle,
-	SbColor &fillColorOut) const
+			       SbColor &fillColorOut) const
 {
     BRLObolPolygonStoreRecord *rec = this->impl->record(handle);
     if (!rec)
@@ -3876,7 +3878,7 @@ BRLObolPolygonStore::fillColor(BRLObolPolygonHandle handle,
 
 SbBool
 BRLObolPolygonStore::setGeometry(BRLObolPolygonHandle handle,
-	const struct bg_polygon *polygon)
+				 const struct bg_polygon *polygon)
 {
     BRLObolPolygonStoreRecord *rec = this->impl->record(handle);
     if (!rec || !polygon)
@@ -3889,15 +3891,14 @@ BRLObolPolygonStore::setGeometry(BRLObolPolygonHandle handle,
 }
 
 const struct bg_polygon *
-BRLObolPolygonStore::geometry(BRLObolPolygonHandle handle) const
-{
+BRLObolPolygonStore::geometry(BRLObolPolygonHandle handle) const {
     BRLObolPolygonStoreRecord *rec = this->impl->record(handle);
     return rec ? &rec->polygon : NULL;
 }
 
 SbBool
 BRLObolPolygonStore::copyGeometry(BRLObolPolygonHandle handle,
-	struct bg_polygon *polygonOut) const
+				  struct bg_polygon *polygonOut) const
 {
     BRLObolPolygonStoreRecord *rec = this->impl->record(handle);
     if (!rec || !polygonOut)
@@ -3931,27 +3932,27 @@ BRLObolPolygonStore::area(BRLObolPolygonHandle handle, double viewScale) const
     if (!rec)
 	return 0.0;
     return static_cast<double>(bg_find_polygon_area(&rec->polygon,
-	    CLIPPER_MAX, &rec->viewPlane, viewScale));
+			       CLIPPER_MAX, &rec->viewPlane, viewScale));
 }
 
 SbBool
 BRLObolPolygonStore::overlaps(BRLObolPolygonHandle a,
-	BRLObolPolygonHandle b,
-	const struct bn_tol &tol,
-	double viewScale) const
+			      BRLObolPolygonHandle b,
+			      const struct bn_tol &tol,
+			      double viewScale) const
 {
     BRLObolPolygonStoreRecord *ra = this->impl->record(a);
     BRLObolPolygonStoreRecord *rb = this->impl->record(b);
     if (!ra || !rb)
 	return FALSE;
     return bg_polygons_overlap(&ra->polygon, &rb->polygon, &ra->viewPlane,
-	    &tol, viewScale) ? TRUE : FALSE;
+			       &tol, viewScale) ? TRUE : FALSE;
 }
 
 SbBool
 BRLObolPolygonStore::csg(BRLObolPolygonHandle target,
-	BRLObolPolygonHandle stencil,
-	bg_clip_t op)
+			 BRLObolPolygonHandle stencil,
+			 bg_clip_t op)
 {
     BRLObolPolygonStoreRecord *rt = this->impl->record(target);
     BRLObolPolygonStoreRecord *rs = this->impl->record(stencil);
@@ -3977,11 +3978,11 @@ BRLObolPolygonStore::csg(BRLObolPolygonHandle target,
 
     const struct bn_tol tol = BN_TOL_INIT_TOL;
     if (!bg_polygons_overlap(&rt->polygon, &rs->polygon, &rt->viewPlane,
-	    &tol, CLIPPER_MAX))
+			     &tol, CLIPPER_MAX))
 	return FALSE;
 
     struct bg_polygon *result = bg_clip_polygon(op, &rt->polygon,
-	    &rs->polygon, CLIPPER_MAX, &rt->viewPlane);
+				&rs->polygon, CLIPPER_MAX, &rt->viewPlane);
     if (!result)
 	return FALSE;
 
@@ -3997,9 +3998,9 @@ BRLObolPolygonStore::csg(BRLObolPolygonHandle target,
 
 BRLObolPolygonHandle
 BRLObolPolygonStore::importSketch(const SbString &name,
-	BRLObolFeatureScope scope,
-	struct db_i *dbip,
-	struct directory *dp)
+				  BRLObolFeatureScope scope,
+				  struct db_i *dbip,
+				  struct directory *dp)
 {
     if (store_string(name).empty() || !dbip || !dp)
 	return BRLObolPolygonHandle();
@@ -4011,13 +4012,13 @@ BRLObolPolygonStore::importSketch(const SbString &name,
     struct rt_sketch_polygon_data data;
     rt_sketch_polygon_data_init(&data);
     if (db_sketch_to_polygon_data(&data, store_string(name).c_str(),
-		dbip, dp) != 0) {
+				  dbip, dp) != 0) {
 	rt_sketch_polygon_data_free(&data);
 	return BRLObolPolygonHandle();
     }
 
     if (data.polygon.num_contours == 0 ||
-	    store_polygon_point_count(data.polygon) == 0) {
+	store_polygon_point_count(data.polygon) == 0) {
 	rt_sketch_polygon_data_free(&data);
 	return BRLObolPolygonHandle();
     }
@@ -4031,10 +4032,10 @@ BRLObolPolygonStore::importSketch(const SbString &name,
     rec->originPoint = store_polygon_origin(data.polygon, data.origin_point);
     HMOVE(rec->viewPlane, data.vp);
     store_polygon_set_fill_flags(rec->visual,
-	    data.fill_flag ? BRLOBOL_POLYGON_FILL_HATCH :
-	    BRLOBOL_POLYGON_FILL_NONE);
+				 data.fill_flag ? BRLOBOL_POLYGON_FILL_HATCH :
+				 BRLOBOL_POLYGON_FILL_NONE);
     rec->visual.fillSlope = SbVec2f(static_cast<float>(data.fill_dir[0]),
-	    static_cast<float>(data.fill_dir[1]));
+				    static_cast<float>(data.fill_dir[1]));
     rec->visual.fillSpacing = static_cast<float>(data.fill_delta);
     rec->visual.fillColor = store_bu_to_sbcolor(data.fill_color);
     if (data.have_edge_color)
@@ -4052,8 +4053,8 @@ BRLObolPolygonStore::importSketch(const SbString &name,
 
 SbBool
 BRLObolPolygonStore::exportSketch(BRLObolPolygonHandle handle,
-	struct db_i *dbip,
-	const SbString &name) const
+				  struct db_i *dbip,
+				  const SbString &name) const
 {
     BRLObolPolygonStoreRecord *rec = this->impl->record(handle);
     if (!rec || !dbip || store_string(name).empty())
@@ -4076,7 +4077,7 @@ BRLObolPolygonStore::exportSketch(BRLObolPolygonHandle handle,
     bg_polygon_cpy(&data.polygon, &rec->polygon);
 
     struct directory *dp = db_sketch_polygon_data_to_sketch(dbip,
-	    store_string(name).c_str(), &data);
+			   store_string(name).c_str(), &data);
     rt_sketch_polygon_data_free(&data);
     return dp ? TRUE : FALSE;
 }
@@ -4086,7 +4087,7 @@ BRLObolPolygonStore::snapCount(BRLObolPolygonHandle exclude) const
 {
     size_t count = 0;
     for (std::map<uint64_t, BRLObolPolygonStoreRecord *>::const_iterator it =
-	    this->impl->records.begin(); it != this->impl->records.end(); ++it) {
+	     this->impl->records.begin(); it != this->impl->records.end(); ++it) {
 	if (!it->second)
 	    continue;
 	BRLObolPolygonHandle handle = this->impl->handle(it->second);
@@ -4143,13 +4144,13 @@ BRLObolSelectionStore::clear(const BRLObolFeatureOwner *owner, int kind)
     }
 
     this->impl->records.erase(std::remove_if(
-		this->impl->records.begin(),
-		this->impl->records.end(),
-		[owner, kind](const BRLObolSelectionRecord &rec) {
-		    return store_owner_matches(rec.owner, owner) &&
-			store_selection_kind_matches(rec.kind, kind);
-		}),
-	    this->impl->records.end());
+				  this->impl->records.begin(),
+				  this->impl->records.end(),
+    [owner, kind](const BRLObolSelectionRecord &rec) {
+	return store_owner_matches(rec.owner, owner) &&
+	       store_selection_kind_matches(rec.kind, kind);
+    }),
+    this->impl->records.end());
 }
 
 size_t
@@ -4162,7 +4163,7 @@ BRLObolSelectionStore::count(const BRLObolFeatureOwner *owner, int kind) const
     for (size_t i = 0; i < this->impl->records.size(); i++) {
 	const BRLObolSelectionRecord &rec = this->impl->records[i];
 	if (store_owner_matches(rec.owner, owner) &&
-		store_selection_kind_matches(rec.kind, kind))
+	    store_selection_kind_matches(rec.kind, kind))
 	    cnt++;
     }
     return cnt;
@@ -4170,7 +4171,7 @@ BRLObolSelectionStore::count(const BRLObolFeatureOwner *owner, int kind) const
 
 SbBool
 BRLObolSelectionStore::containsPath(const SbString &path, int kind,
-	const BRLObolFeatureOwner *owner) const
+				    const BRLObolFeatureOwner *owner) const
 {
     const std::string target = store_string(path);
     if (target.empty())
@@ -4178,8 +4179,8 @@ BRLObolSelectionStore::containsPath(const SbString &path, int kind,
     for (size_t i = 0; i < this->impl->records.size(); i++) {
 	const BRLObolSelectionRecord &rec = this->impl->records[i];
 	if (store_string(rec.path) == target &&
-		store_owner_matches(rec.owner, owner) &&
-		store_selection_kind_matches(rec.kind, kind))
+	    store_owner_matches(rec.owner, owner) &&
+	    store_selection_kind_matches(rec.kind, kind))
 	    return TRUE;
     }
     return FALSE;
@@ -4187,7 +4188,7 @@ BRLObolSelectionStore::containsPath(const SbString &path, int kind,
 
 SbBool
 BRLObolSelectionStore::addPath(const SbString &path, int kind,
-	const BRLObolFeatureOwner *owner)
+			       const BRLObolFeatureOwner *owner)
 {
     if (store_string(path).empty())
 	return FALSE;
@@ -4205,7 +4206,7 @@ BRLObolSelectionStore::addPath(const SbString &path, int kind,
 
 SbBool
 BRLObolSelectionStore::setPath(const SbString &path, int kind,
-	const BRLObolFeatureOwner *owner)
+			       const BRLObolFeatureOwner *owner)
 {
     this->clear(owner, kind);
     if (store_string(path).empty())
@@ -4215,14 +4216,14 @@ BRLObolSelectionStore::setPath(const SbString &path, int kind,
 
 SbBool
 BRLObolSelectionStore::removePath(const SbString &path, int kind,
-	const BRLObolFeatureOwner *owner)
+				  const BRLObolFeatureOwner *owner)
 {
     const std::string target = store_string(path);
     for (std::vector<BRLObolSelectionRecord>::iterator it =
-	    this->impl->records.begin(); it != this->impl->records.end(); ++it) {
+	     this->impl->records.begin(); it != this->impl->records.end(); ++it) {
 	if (store_string(it->path) == target &&
-		store_owner_matches(it->owner, owner) &&
-		store_selection_kind_matches(it->kind, kind)) {
+	    store_owner_matches(it->owner, owner) &&
+	    store_selection_kind_matches(it->kind, kind)) {
 	    this->impl->records.erase(it);
 	    return TRUE;
 	}
@@ -4234,7 +4235,7 @@ const BRLObolSelectionRecord *
 BRLObolSelectionStore::record(size_t index) const
 {
     return index < this->impl->records.size() ?
-	&this->impl->records[index] : NULL;
+	   &this->impl->records[index] : NULL;
 }
 
 SbBool
@@ -4253,7 +4254,7 @@ BRLObolSelectionStore::addRecord(const BRLObolSelectionRecord &record)
 
 SbBool
 BRLObolSelectionStore::setRecords(
-	const std::vector<BRLObolSelectionRecord> &records)
+    const std::vector<BRLObolSelectionRecord> &records)
 {
     this->impl->records.clear();
     for (size_t i = 0; i < records.size(); i++)
@@ -4263,17 +4264,17 @@ BRLObolSelectionStore::setRecords(
 
 void
 BRLObolSelectionStore::visitPaths(
-	int (*callback)(const SbString &path, void *userData),
-	void *userData,
-	const BRLObolFeatureOwner *owner,
-	int kind) const
+    int (*callback)(const SbString &path, void *userData),
+    void *userData,
+    const BRLObolFeatureOwner *owner,
+    int kind) const
 {
     if (!callback)
 	return;
     for (size_t i = 0; i < this->impl->records.size(); i++) {
 	const BRLObolSelectionRecord &rec = this->impl->records[i];
 	if (!store_owner_matches(rec.owner, owner) ||
-		!store_selection_kind_matches(rec.kind, kind))
+	    !store_selection_kind_matches(rec.kind, kind))
 	    continue;
 	if (!callback(rec.path, userData))
 	    return;
@@ -4282,10 +4283,10 @@ BRLObolSelectionStore::visitPaths(
 
 SbBool
 BRLObolSelectionStore::applyPickResults(
-	const std::vector<BRLObolSelectionRecord> &records,
-	void (*selectedPathCallback)(const SbString &path, void *userData),
-	void *userData,
-	const BRLObolFeatureOwner *owner)
+    const std::vector<BRLObolSelectionRecord> &records,
+    void (*selectedPathCallback)(const SbString &path, void *userData),
+    void *userData,
+    const BRLObolFeatureOwner *owner)
 {
     this->clear(owner, BRLOBOL_SELECTION_ALL);
     for (size_t i = 0; i < records.size(); i++) {
@@ -4294,8 +4295,8 @@ BRLObolSelectionStore::applyPickResults(
 	    rec.owner = *owner;
 	this->addRecord(rec);
 	if (selectedPathCallback &&
-		store_selection_record_kind(rec.kind) ==
-		BRLOBOL_SELECTION_SELECTED_PATH)
+	    store_selection_record_kind(rec.kind) ==
+	    BRLOBOL_SELECTION_SELECTED_PATH)
 	    selectedPathCallback(rec.path, userData);
     }
     return TRUE;
