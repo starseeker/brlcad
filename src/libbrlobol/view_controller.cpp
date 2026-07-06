@@ -53,6 +53,51 @@ static std::vector<SoBRLDatabaseSource *> controller_render_database_source_root
 static std::vector<SoBRLMeshShape *> controller_render_mesh_shapes(
     const BRLObolViewController *controller);
 
+BRLObolProgressiveOptions::BRLObolProgressiveOptions(void) :
+    maxLodResults(8),
+    maxProviders(0),
+    maxSources(4),
+    maxChildrenPerSource(64),
+    maxSubmissions(128),
+    flags(BRLOBOL_PROGRESSIVE_VISIBLE_FRONTIER |
+	  BRLOBOL_PROGRESSIVE_REQUIRE_CACHED_PROXIES)
+{
+}
+
+BRLObolProgressiveStatus::BRLObolProgressiveStatus(void)
+{
+    this->clear();
+}
+
+void
+BRLObolProgressiveStatus::clear(void)
+{
+    this->providerCount = 0;
+    this->providerAdvanced = 0;
+    this->lodResultsProcessed = 0;
+    this->lodResultsApplied = 0;
+    this->submitted = 0;
+    this->alreadyCached = 0;
+    this->expanded = 0;
+    this->existing = 0;
+    this->remaining = 0;
+    this->proxyPublished = 0;
+    this->metadataApplied = 0;
+    this->pendingTasks = 0;
+    this->inFlight = 0;
+    this->queuedResults = 0;
+    this->queuedCacheWrites = 0;
+    this->changed = 0;
+    this->hasMore = 0;
+}
+
+BRLObolProgressiveProviderRecord::BRLObolProgressiveProviderRecord(void) :
+    token(0),
+    callback(NULL),
+    userData(NULL)
+{
+}
+
 SbMatrix
 brlobol_sbmatrix_from_brl_mat(const mat_t mat)
 {
@@ -661,6 +706,10 @@ BRLObolViewController::BRLObolViewController(void) :
     viewportRegion(1, 1),
     renderRequested(FALSE),
     renderReason(""),
+    progressiveProviders(),
+    progressiveProviderNextToken(1),
+    progressiveWorkPending(0),
+    defaultProgressiveOptions(),
     lodService(NULL),
     lodResultSubscriberId(0),
     lodResultsPending(0),
@@ -712,6 +761,10 @@ BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
     viewportRegion(1, 1),
     renderRequested(FALSE),
     renderReason(""),
+    progressiveProviders(),
+    progressiveProviderNextToken(1),
+    progressiveWorkPending(0),
+    defaultProgressiveOptions(),
     lodService(NULL),
     lodResultSubscriberId(0),
     lodResultsPending(0),
@@ -757,6 +810,7 @@ BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
 
 BRLObolViewController::~BRLObolViewController(void)
 {
+    this->clearProgressiveProviders();
     this->setLodService(NULL);
     this->clearRtPickCaches();
     delete this->featureStore;
@@ -1133,11 +1187,7 @@ BRLObolViewController::renderPending(SbBool clearWindow,
 				     SbBool clearZBuffer,
 				     SbString *reason)
 {
-    if (this->lodAutoSubmit)
-	(void)this->submitLodRequestsIfNeeded();
-
-    if (this->hasPendingLodResults())
-	this->processPendingLodResults();
+    (void)this->advanceProgressiveWork(NULL, NULL);
 
     if (!this->renderRequested || !this->renderManager ||
 	!this->activeCamera || !this->getRenderRoot())
@@ -1157,7 +1207,8 @@ BRLObolViewController::renderPending(SbBool clearWindow,
 SbBool
 BRLObolViewController::isRenderRequested(void) const
 {
-    return (this->renderRequested || this->hasPendingLodResults()) ?
+    return (this->renderRequested || this->hasPendingLodResults() ||
+	    this->hasProgressiveWorkPending()) ?
 	   TRUE : FALSE;
 }
 
@@ -1165,6 +1216,184 @@ const SbString &
 BRLObolViewController::getRenderReason(void) const
 {
     return this->renderReason;
+}
+
+static void
+controller_accumulate_progressive_status(BRLObolProgressiveStatus &dst,
+	const BRLObolProgressiveStatus &src)
+{
+    dst.providerCount += src.providerCount;
+    dst.providerAdvanced += src.providerAdvanced;
+    dst.lodResultsProcessed += src.lodResultsProcessed;
+    dst.lodResultsApplied += src.lodResultsApplied;
+    dst.submitted += src.submitted;
+    dst.alreadyCached += src.alreadyCached;
+    dst.expanded += src.expanded;
+    dst.existing += src.existing;
+    dst.remaining += src.remaining;
+    dst.proxyPublished += src.proxyPublished;
+    dst.metadataApplied += src.metadataApplied;
+    dst.pendingTasks += src.pendingTasks;
+    dst.inFlight += src.inFlight;
+    dst.queuedResults += src.queuedResults;
+    dst.queuedCacheWrites += src.queuedCacheWrites;
+    if (src.changed)
+	dst.changed = 1;
+    if (src.hasMore)
+	dst.hasMore = 1;
+}
+
+uint64_t
+BRLObolViewController::registerProgressiveProvider(
+    BRLObolProgressiveAdvanceCallback callback,
+    void *userData)
+{
+    if (!callback)
+	return 0;
+
+    uint64_t token = this->progressiveProviderNextToken++;
+    if (token == 0)
+	token = this->progressiveProviderNextToken++;
+
+    BRLObolProgressiveProviderRecord record;
+    record.token = token;
+    record.callback = callback;
+    record.userData = userData;
+    this->progressiveProviders.push_back(record);
+    this->markProgressiveWorkPending();
+    this->requestRender("progressive-provider");
+    return token;
+}
+
+void
+BRLObolViewController::unregisterProgressiveProvider(uint64_t token)
+{
+    if (!token)
+	return;
+
+    this->progressiveProviders.erase(
+	std::remove_if(this->progressiveProviders.begin(),
+		      this->progressiveProviders.end(),
+    [token](const BRLObolProgressiveProviderRecord &record) {
+	return record.token == token;
+    }),
+    this->progressiveProviders.end());
+    if (this->progressiveProviders.empty())
+	this->clearProgressiveWorkPending();
+}
+
+void
+BRLObolViewController::clearProgressiveProviders(void)
+{
+    this->progressiveProviders.clear();
+    this->clearProgressiveWorkPending();
+}
+
+void
+BRLObolViewController::setDefaultProgressiveOptions(
+    const BRLObolProgressiveOptions *options)
+{
+    if (options)
+	this->defaultProgressiveOptions = *options;
+    else
+	this->defaultProgressiveOptions = BRLObolProgressiveOptions();
+    this->markProgressiveWorkPending();
+    this->requestRender("progressive-options");
+}
+
+const BRLObolProgressiveOptions &
+BRLObolViewController::getDefaultProgressiveOptions(void) const
+{
+    return this->defaultProgressiveOptions;
+}
+
+int
+BRLObolViewController::advanceProgressiveWork(
+    const BRLObolProgressiveOptions *options,
+    BRLObolProgressiveStatus *status)
+{
+    if (!options)
+	options = &this->defaultProgressiveOptions;
+
+    BRLObolProgressiveStatus localStatus;
+
+    if (this->lodAutoSubmit)
+	(void)this->submitLodRequestsIfNeeded();
+
+    if (this->hasPendingLodResults() ||
+	(this->lodService &&
+	 this->lodService->queuedResultCountForDiagnostics() > 0)) {
+	(void)this->processPendingLodResults(options->maxLodResults);
+	localStatus.lodResultsProcessed = this->lastLodResultCount;
+	localStatus.lodResultsApplied = this->lastLodAppliedResultCount;
+	if (this->lastLodAppliedResultCount > 0)
+	    localStatus.changed = 1;
+    }
+
+    size_t providerLimit = options->maxProviders;
+    size_t providerIndex = 0;
+    for (const BRLObolProgressiveProviderRecord &record :
+	 this->progressiveProviders) {
+	if (!record.callback)
+	    continue;
+	if (providerLimit && providerIndex >= providerLimit) {
+	    localStatus.hasMore = 1;
+	    break;
+	}
+
+	BRLObolProgressiveStatus providerStatus;
+	providerStatus.providerCount = 1;
+	int providerRet = (*record.callback)(this, record.userData, options,
+			 &providerStatus);
+	if (providerRet > 0) {
+	    providerStatus.changed = 1;
+	    providerStatus.providerAdvanced++;
+	} else if (providerRet < 0) {
+	    providerStatus.hasMore = 0;
+	}
+	controller_accumulate_progressive_status(localStatus,
+		providerStatus);
+	providerIndex++;
+    }
+
+    const int pending_service_work =
+	(localStatus.pendingTasks > 0 || localStatus.inFlight > 0 ||
+	 localStatus.queuedResults > 0 || localStatus.queuedCacheWrites > 0) ?
+	1 : 0;
+    if (pending_service_work)
+	localStatus.hasMore = 1;
+
+    if (localStatus.hasMore)
+	this->markProgressiveWorkPending();
+    else
+	this->clearProgressiveWorkPending();
+
+    if (localStatus.changed || localStatus.hasMore)
+	this->requestRender(localStatus.changed ? "progressive-update" :
+			    "progressive-pending");
+
+    if (status)
+	*status = localStatus;
+
+    return (localStatus.changed || localStatus.hasMore) ? 1 : 0;
+}
+
+void
+BRLObolViewController::markProgressiveWorkPending(void)
+{
+    this->progressiveWorkPending.store(1);
+}
+
+void
+BRLObolViewController::clearProgressiveWorkPending(void)
+{
+    this->progressiveWorkPending.store(0);
+}
+
+SbBool
+BRLObolViewController::hasProgressiveWorkPending(void) const
+{
+    return this->progressiveWorkPending.load() != 0 ? TRUE : FALSE;
 }
 
 static int

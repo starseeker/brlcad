@@ -149,6 +149,7 @@ return;
 	(void)rt_view_context_refresh_consume(qg_legacy_view_to_context(d->v));
 	rt_view_context_refresh_complete(qg_legacy_view_to_context(d->v));
     }
+    qgcanvas_queue_obol_progressive_update(*d, this);
     if (!d->obol_paint_initialized) {
 	d->obol_paint_initialized = true;
 	emit init_done();

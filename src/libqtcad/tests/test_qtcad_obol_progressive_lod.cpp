@@ -76,6 +76,7 @@ struct progressive_lod_case {
     int startupOnly;
     int startupRefine;
     int startupExpand;
+    int startupAutoExpand;
     int startupWireLod;
     int shadedLod;
     int slowLodDelays;
@@ -1035,7 +1036,8 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
     struct progressive_lod_timings timings = {};
     const int startup_deferred =
 	testCase.startupOnly || testCase.startupRefine ||
-	testCase.startupExpand || testCase.startupWireLod;
+	testCase.startupExpand || testCase.startupAutoExpand ||
+	testCase.startupWireLod;
     struct BRLObolDrawMetadataRecord startup_metadata;
     brlobol_draw_metadata_record_init(&startup_metadata);
 
@@ -1205,10 +1207,21 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	return 0;
     }
     controller_attached = startup_deferred ? 1 : 0;
+    if (testCase.startupAutoExpand) {
+	BRLObolProgressiveOptions options;
+	options.flags = BRLOBOL_PROGRESSIVE_VISIBLE_FRONTIER |
+	    BRLOBOL_PROGRESSIVE_REQUIRE_CACHED_PROXIES;
+	options.maxLodResults = 8;
+	options.maxSources = 4;
+	options.maxChildrenPerSource = 64;
+	options.maxSubmissions = 128;
+	controller->setDefaultProgressiveOptions(&options);
+    }
 
     struct ged_draw_appearance_settings appearance =
 	    GED_DRAW_APPEARANCE_SETTINGS_INIT;
     appearance.draw_mode = (testCase.startupOnly || testCase.startupExpand ||
+			    testCase.startupAutoExpand ||
 			    testCase.startupWireLod) ?
 			   GED_DRAW_MODE_WIRE : GED_DRAW_MODE_SHADED;
     appearance.defer_leaf_expansion = startup_deferred ? 1 : 0;
@@ -1332,6 +1345,20 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
     qtcad_obol_print_render_diagnostics(gedp, testCase, controller,
 					"after-view-all");
 
+    int startup_auto_source_count_before = -1;
+    int startup_auto_depth_before = -1;
+    int startup_auto_geometry_before = -1;
+    if (testCase.startupAutoExpand) {
+	startup_auto_source_count_before =
+	    qtcad_obol_render_database_source_count(gedp, controller);
+	startup_auto_depth_before =
+	    qtcad_obol_render_database_source_max_depth(gedp, controller,
+		active_draw_target);
+	startup_auto_geometry_before =
+	    qtcad_obol_render_realized_database_geometry_count(gedp,
+		controller);
+    }
+
     QImage frame0;
     phase_start = bu_gettime();
     view.get_viewport_image(frame0);
@@ -1355,7 +1382,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	    return 1;
 	}
 	if (!startup_has_first_visual && !testCase.startupExpand &&
-	    !testCase.startupWireLod) {
+	    !testCase.startupAutoExpand && !testCase.startupWireLod) {
 	    fprintf(stderr,
 		    "qtcad Obol progressive LoD startup image check failed: case=%s lit=%d",
 		    testCase.name, lit0);
@@ -1371,6 +1398,80 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	print_progressive_lod_timings(stderr, timings);
 	fprintf(stderr, "\n");
 	if (testCase.startupOnly) {
+	    cleanup();
+	    return 1;
+	}
+	if (testCase.startupAutoExpand) {
+	    int source_count_before = startup_auto_source_count_before;
+	    int max_depth_before = startup_auto_depth_before;
+	    int geometry_before = startup_auto_geometry_before;
+	    int source_count_after = source_count_before;
+	    int max_depth_after = max_depth_before;
+	    int realized_after = geometry_before;
+	    int lit_auto = 0;
+	    int diff_auto = 0;
+	    QImage frame_auto;
+	    struct ged_draw_obol_lod_service_status service_status;
+	    memset(&service_status, 0, sizeof(service_status));
+	    for (int frame = 0; frame < 120; frame++) {
+		QCoreApplication::processEvents();
+		view.get_viewport_image(frame_auto);
+		source_count_after =
+		    qtcad_obol_render_database_source_count(gedp,
+			controller);
+		max_depth_after =
+		    qtcad_obol_render_database_source_max_depth(gedp,
+			controller, active_draw_target);
+		realized_after =
+		    qtcad_obol_render_realized_database_geometry_count(gedp,
+			controller);
+		lit_auto = lit_pixel_count(frame_auto);
+		diff_auto = image_byte_diff(frame0, frame_auto);
+		if (source_count_after > source_count_before &&
+		    max_depth_after > max_depth_before &&
+		    realized_after >= geometry_before &&
+		    !frame_auto.isNull() && lit_auto >= 20 &&
+		    (diff_auto > 0 || lit0 >= 20))
+		    break;
+		if (!controller->hasProgressiveWorkPending())
+		    break;
+		std::this_thread::sleep_for(std::chrono::milliseconds(25));
+	    }
+	    (void)ged_draw_obol_lod_service_status(gedp,
+		qg_legacy_view_to_context(view.view()), &service_status);
+	    if (source_count_after <= source_count_before ||
+		max_depth_after <= max_depth_before ||
+		realized_after < geometry_before ||
+		frame_auto.isNull() || lit_auto < 20 ||
+		(diff_auto <= 0 && lit0 < 20)) {
+		fprintf(stderr,
+			"qtcad Obol progressive LoD startup-auto-expand failed: case=%s sources=%d->%d depth=%d->%d geometry=%d->%d lit=%d diff=%d last_submitted=%u active_aabb=%zu pending=%zu in_flight=%zu cache_writes=%zu",
+			testCase.name, source_count_before, source_count_after,
+			max_depth_before, max_depth_after,
+			geometry_before, realized_after,
+			lit_auto, diff_auto,
+			service_status.last_submitted_task_count,
+			service_status.active_aabb_proxy_payloads,
+			service_status.pending_tasks,
+			service_status.in_flight,
+			service_status.queued_cache_writes);
+		print_progressive_lod_timings(stderr, timings);
+		fprintf(stderr, "\n");
+		cleanup();
+		return 0;
+	    }
+	    fprintf(stderr,
+		    "qtcad_progressive_lod_startup_auto_expand case=%s sources=%d->%d depth=%d->%d geometry=%d->%d lit=%d diff=%d last_submitted=%u active_aabb=%zu pending=%zu in_flight=%zu cache_writes=%zu",
+		    testCase.name, source_count_before, source_count_after,
+		    max_depth_before, max_depth_after,
+		    geometry_before, realized_after,
+		    lit_auto, diff_auto,
+		    service_status.last_submitted_task_count,
+		    service_status.active_aabb_proxy_payloads,
+		    service_status.pending_tasks, service_status.in_flight,
+		    service_status.queued_cache_writes);
+	    print_progressive_lod_timings(stderr, timings);
+	    fprintf(stderr, "\n");
 	    cleanup();
 	    return 1;
 	}
@@ -1922,6 +2023,7 @@ main(int argc, char **argv)
     testCase.startupOnly = 0;
     testCase.startupRefine = 0;
     testCase.startupExpand = 0;
+    testCase.startupAutoExpand = 0;
     testCase.startupWireLod = 0;
     testCase.shadedLod = 0;
     testCase.slowLodDelays = 0;
@@ -1953,6 +2055,11 @@ main(int argc, char **argv)
 		arg++;
 		continue;
 	    }
+	    if (BU_STR_EQUAL(argv[arg], "--startup-auto-expand")) {
+		testCase.startupAutoExpand = 1;
+		arg++;
+		continue;
+	    }
 	    if (BU_STR_EQUAL(argv[arg], "--startup-wire-lod")) {
 		testCase.startupWireLod = 1;
 		arg++;
@@ -1977,11 +2084,13 @@ main(int argc, char **argv)
 	if ((testCase.startupOnly ? 1 : 0) +
 	    (testCase.startupRefine ? 1 : 0) +
 	    (testCase.startupExpand ? 1 : 0) +
+	    (testCase.startupAutoExpand ? 1 : 0) +
 	    (testCase.startupWireLod ? 1 : 0) > 1)
-	    FAIL("--startup-only, --startup-refine, --startup-expand, and --startup-wire-lod are mutually exclusive");
+	    FAIL("--startup-only, --startup-refine, --startup-expand, --startup-auto-expand, and --startup-wire-lod are mutually exclusive");
 	if (testCase.shadedLod &&
 	    (testCase.startupOnly || testCase.startupRefine ||
-	     testCase.startupExpand || testCase.startupWireLod))
+	     testCase.startupExpand || testCase.startupAutoExpand ||
+	     testCase.startupWireLod))
 	    FAIL("--shaded-lod is a separate direct shaded mode test");
 
 	const char *run_slow_tests = getenv("BRLCAD_RUN_SLOW_TESTS");
@@ -1992,7 +2101,7 @@ main(int argc, char **argv)
 	}
 
 	if (argc - arg < 4 || argc - arg > 7)
-	    FAIL("usage: test_qtcad_obol_progressive_lod <moss.g> OR test_qtcad_obol_progressive_lod [--slow] [--startup-only|--startup-refine|--startup-expand|--startup-wire-lod] [--shaded-lod] [--startup-expand-passes N] <db> <facetize-root|-> <draw-target> <facetize|direct> [min-visited] [min-active-payloads] [copy-count]");
+	    FAIL("usage: test_qtcad_obol_progressive_lod <moss.g> OR test_qtcad_obol_progressive_lod [--slow] [--startup-only|--startup-refine|--startup-expand|--startup-auto-expand|--startup-wire-lod] [--shaded-lod] [--startup-expand-passes N] <db> <facetize-root|-> <draw-target> <facetize|direct> [min-visited] [min-active-payloads] [copy-count]");
 
 	if (testCase.startupOnly)
 	    testCase.name = "startup";
@@ -2000,6 +2109,8 @@ main(int argc, char **argv)
 	    testCase.name = "startup_refine";
 	else if (testCase.startupExpand)
 	    testCase.name = "startup_expand";
+	else if (testCase.startupAutoExpand)
+	    testCase.name = "startup_auto_expand";
 	else if (testCase.startupWireLod)
 	    testCase.name = "startup_wire_lod";
 	else if (testCase.shadedLod)

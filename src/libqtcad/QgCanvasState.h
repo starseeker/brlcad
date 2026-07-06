@@ -37,6 +37,7 @@
 #include <cstring>
 #include <QImage>
 #include <QSize>
+#include <QTimer>
 #include <QWidget>
 
 #include "brlobol/init.h"
@@ -163,6 +164,24 @@ qgcanvas_request_obol_render_if_idle(QgCanvasState &s, const char *reason)
 	s.obol->requestRender(reason);
 }
 
+static inline void
+qgcanvas_advance_obol_progressive(QgCanvasState &s)
+{
+    if (s.obol)
+	(void)s.obol->advanceProgressiveWork(NULL, NULL);
+}
+
+static inline void
+qgcanvas_queue_obol_progressive_update(QgCanvasState &s, QWidget *w)
+{
+    if (!s.obol || !w || !s.obol->hasProgressiveWorkPending() ||
+	s.fb_update_queued)
+	return;
+
+    s.fb_update_queued = true;
+    QTimer::singleShot(16, w, SLOT(queued_update()));
+}
+
 /** Mirror the current RT view state into the Obol direct camera. */
 static inline void
 qgcanvas_sync_obol_camera(QgCanvasState &s)
@@ -184,6 +203,7 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
 	return;
 
     qgcanvas_sync_obol_viewport(s, w);
+    qgcanvas_advance_obol_progressive(s);
 
     const SbViewportRegion &region = s.obol->getViewportRegion();
     SbVec2s size = region.getViewportSizePixels();

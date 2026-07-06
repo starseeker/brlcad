@@ -86,6 +86,16 @@ static int ged_obol_bind_view_render_root(
     void *view_ctx,
     SoBRLSceneController *shared_scene,
     BRLObolViewController *view_controller);
+static int ged_obol_progressive_advance_provider(
+    BRLObolViewController *controller,
+    void *user_data,
+    const BRLObolProgressiveOptions *options,
+    BRLObolProgressiveStatus *status);
+
+struct ged_obol_progressive_provider_data {
+    struct ged *gedp;
+    void *view_ctx;
+};
 
 class ged_obol_source_summary_adapter_scope
 {
@@ -191,6 +201,8 @@ struct ged_obol_attached_controller {
 	view_controller(NULL),
 	lod_service(NULL),
 	lod_worker_count(0),
+	progressive_provider_data(NULL),
+	progressive_provider_token(0),
 	owned_scene_controller(0),
 	owned_view_controller(0),
 	owned_lod_service(0),
@@ -206,6 +218,8 @@ struct ged_obol_attached_controller {
     BRLObolViewController *view_controller;
     BRLObolLodService *lod_service;
     size_t lod_worker_count;
+    void *progressive_provider_data;
+    uint64_t progressive_provider_token;
     int owned_scene_controller;
     int owned_view_controller;
     int owned_lod_service;
@@ -236,6 +250,20 @@ ged_obol_attached_controllers(struct ged_drawable *gdp, int create)
 }
 
 static void
+ged_obol_unregister_progressive_provider(
+    const ged_obol_attached_controller &entry)
+{
+    if (entry.view_controller && entry.progressive_provider_token)
+	entry.view_controller->unregisterProgressiveProvider(
+	    entry.progressive_provider_token);
+
+    ged_obol_progressive_provider_data *data =
+	static_cast<ged_obol_progressive_provider_data *>(
+	    entry.progressive_provider_data);
+    delete data;
+}
+
+static void
 ged_obol_stop_attached_controller_lod(const ged_obol_attached_controller &entry)
 {
     if (entry.view_controller && entry.view_controller->getLodService() ==
@@ -253,6 +281,7 @@ static void
 ged_obol_delete_owned_attached_controller(
     const ged_obol_attached_controller &entry)
 {
+    ged_obol_unregister_progressive_provider(entry);
     ged_obol_stop_attached_controller_lod(entry);
 
     if (entry.owned_lod_service && entry.lod_service) {
@@ -14274,13 +14303,15 @@ ged_draw_obol_database_source_prewarm_visible_child_aabb_proxies(
     return submitted;
 }
 
-extern "C" int
-ged_draw_obol_database_source_expand_children(
+static int
+ged_obol_database_source_expand_children_impl(
     struct ged *gedp,
     void *view_ctx,
     const char *path,
     int ged_draw_mode,
     size_t max_children,
+    int refresh_missing_proxy,
+    int require_cached_leaf_proxy,
     struct ged_draw_obol_source_expansion_status *status)
 {
     ged_obol_source_expansion_status_clear(status);
@@ -14349,6 +14380,18 @@ ged_draw_obol_database_source_expand_children(
 		continue;
 	    }
 
+	    if (!child.record.is_comb && require_cached_leaf_proxy) {
+		struct BRLObolDrawCacheStatus cache_status;
+		brlobol_draw_cache_status_init(&cache_status);
+		if (brlobol_draw_proxy_cache_status(gedp->dbip, child_name,
+			BRLOBOL_DRAW_CACHE_PROXY_AABB, &cache_status) != BRLCAD_OK ||
+		    !cache_status.hasCachedPayload) {
+		    if (status)
+			status->remaining++;
+		    continue;
+		}
+	    }
+
 	    if (expanded >= max_children) {
 		if (status)
 		    status->remaining += child_count - row;
@@ -14387,7 +14430,8 @@ ged_draw_obol_database_source_expand_children(
 
 	    if (!child.record.is_comb) {
 		(void)ged_obol_publish_aabb_proxy_for_path(gedp, view_ctx,
-			child_path.c_str(), child_name, ged_draw_mode, 1, status);
+			child_path.c_str(), child_name, ged_draw_mode,
+			refresh_missing_proxy, status);
 	    }
 
 	    if (status) {
@@ -14414,13 +14458,28 @@ ged_draw_obol_database_source_expand_children(
 }
 
 extern "C" int
-ged_draw_obol_database_source_expand_visible_children(
+ged_draw_obol_database_source_expand_children(
+    struct ged *gedp,
+    void *view_ctx,
+    const char *path,
+    int ged_draw_mode,
+    size_t max_children,
+    struct ged_draw_obol_source_expansion_status *status)
+{
+    return ged_obol_database_source_expand_children_impl(gedp, view_ctx,
+	    path, ged_draw_mode, max_children, 1, 0, status);
+}
+
+static int
+ged_obol_database_source_expand_visible_children_impl(
     struct ged *gedp,
     void *view_ctx,
     const char *root_path,
     int ged_draw_mode,
     size_t max_sources,
     size_t max_children_per_source,
+    int refresh_missing_proxy,
+    int require_cached_leaf_proxy,
     struct ged_draw_obol_source_expansion_status *status)
 {
     ged_obol_source_expansion_status_clear(status);
@@ -14443,15 +14502,175 @@ ged_draw_obol_database_source_expand_visible_children(
 	struct ged_draw_obol_source_expansion_status path_status;
 	ged_obol_source_expansion_status_clear(&path_status);
 	const int path_changed =
-	    ged_draw_obol_database_source_expand_children(gedp, view_ctx,
+	    ged_obol_database_source_expand_children_impl(gedp, view_ctx,
 		path.c_str(), ged_draw_mode, max_children_per_source,
-		&path_status);
+		refresh_missing_proxy, require_cached_leaf_proxy, &path_status);
 	if (path_changed)
 	    changed = 1;
 	ged_obol_source_expansion_status_accumulate(status, &path_status);
     }
 
     return changed;
+}
+
+extern "C" int
+ged_draw_obol_database_source_expand_visible_children(
+    struct ged *gedp,
+    void *view_ctx,
+    const char *root_path,
+    int ged_draw_mode,
+    size_t max_sources,
+    size_t max_children_per_source,
+    struct ged_draw_obol_source_expansion_status *status)
+{
+    return ged_obol_database_source_expand_visible_children_impl(gedp,
+	    view_ctx, root_path, ged_draw_mode, max_sources,
+	    max_children_per_source, 1, 0, status);
+}
+
+static size_t
+ged_obol_remaining_budget(size_t budget, size_t used)
+{
+    if (!budget)
+	return 0;
+    return used >= budget ? 0 : budget - used;
+}
+
+static int
+ged_obol_progressive_advance_provider(
+    BRLObolViewController *controller,
+    void *user_data,
+    const BRLObolProgressiveOptions *options,
+    BRLObolProgressiveStatus *status)
+{
+    BRLObolProgressiveStatus local_status;
+    if (status)
+	local_status.providerCount = status->providerCount;
+
+    ged_obol_progressive_provider_data *data =
+	static_cast<ged_obol_progressive_provider_data *>(user_data);
+    if (!controller || !data || !data->gedp)
+	return -1;
+
+    struct ged *gedp = data->gedp;
+    void *view_ctx = data->view_ctx;
+    if (!options)
+	options = &controller->getDefaultProgressiveOptions();
+
+    const uint32_t flags = options->flags;
+    const int refresh_missing_proxy =
+	(flags & BRLOBOL_PROGRESSIVE_REFRESH_MISSING_PROXIES) ? 1 : 0;
+    const int require_cached_leaf_proxy =
+	(!refresh_missing_proxy &&
+	 (flags & BRLOBOL_PROGRESSIVE_REQUIRE_CACHED_PROXIES)) ? 1 : 0;
+
+    std::vector<ged_obol_drawn_source_path_mode> roots =
+	ged_obol_drawn_source_path_modes(gedp, view_ctx, -1, NULL);
+    if (roots.empty())
+	return 0;
+
+    size_t used_sources = 0;
+    size_t used_submissions = 0;
+    int changed = 0;
+    for (const ged_obol_drawn_source_path_mode &root : roots) {
+	if (options->maxSources && used_sources >= options->maxSources) {
+	    local_status.hasMore = 1;
+	    break;
+	}
+	if (options->maxSubmissions &&
+	    used_submissions >= options->maxSubmissions) {
+	    local_status.hasMore = 1;
+	    break;
+	}
+
+	size_t max_sources = ged_obol_remaining_budget(options->maxSources,
+			     used_sources);
+	size_t max_children = options->maxChildrenPerSource;
+	if (options->maxSubmissions) {
+	    size_t remaining_submissions =
+		ged_obol_remaining_budget(options->maxSubmissions,
+		    used_submissions);
+	    if (max_children == 0 || max_children > remaining_submissions)
+		max_children = remaining_submissions;
+	}
+
+	struct ged_draw_obol_source_prewarm_status prewarm_status;
+	ged_obol_source_prewarm_status_clear(&prewarm_status);
+	size_t submitted = 0;
+	if (flags & BRLOBOL_PROGRESSIVE_VISIBLE_FRONTIER) {
+	    submitted =
+		ged_draw_obol_database_source_prewarm_visible_child_aabb_proxies(
+		    gedp, view_ctx, root.path.c_str(), root.mode, max_sources,
+		    max_children, &prewarm_status);
+	} else {
+	    submitted =
+		ged_draw_obol_database_source_prewarm_child_aabb_proxies(
+		    gedp, view_ctx, root.path.c_str(), root.mode, max_children,
+		    &prewarm_status);
+	}
+	used_submissions += submitted;
+	local_status.submitted += prewarm_status.submitted;
+	local_status.alreadyCached += prewarm_status.already_cached;
+	local_status.remaining += prewarm_status.remaining;
+	if (submitted > 0)
+	    local_status.hasMore = 1;
+
+	struct ged_draw_obol_source_expansion_status expansion_status;
+	ged_obol_source_expansion_status_clear(&expansion_status);
+	int root_changed = 0;
+	if (flags & BRLOBOL_PROGRESSIVE_VISIBLE_FRONTIER) {
+	    root_changed =
+		ged_obol_database_source_expand_visible_children_impl(gedp,
+		    view_ctx, root.path.c_str(), root.mode, max_sources,
+		    max_children, refresh_missing_proxy,
+		    require_cached_leaf_proxy, &expansion_status);
+	} else {
+	    root_changed =
+		ged_obol_database_source_expand_children_impl(gedp, view_ctx,
+		    root.path.c_str(), root.mode, max_children,
+		    refresh_missing_proxy, require_cached_leaf_proxy,
+		    &expansion_status);
+	}
+	if (root_changed) {
+	    changed = 1;
+	    local_status.changed = 1;
+	}
+
+	local_status.expanded += expansion_status.expanded;
+	local_status.existing += expansion_status.existing;
+	local_status.remaining += expansion_status.remaining;
+	local_status.proxyPublished += expansion_status.proxy_published;
+	local_status.metadataApplied += expansion_status.metadata_applied;
+	used_sources += max_sources ? max_sources : 1;
+
+	if (expansion_status.expanded > 0)
+	    local_status.hasMore = 1;
+	if (expansion_status.remaining > 0)
+	    local_status.hasMore = 1;
+    }
+
+    struct ged_draw_obol_lod_service_status service_status;
+    memset(&service_status, 0, sizeof(service_status));
+    if (ged_draw_obol_lod_service_status(gedp, view_ctx, &service_status)) {
+	local_status.pendingTasks = service_status.pending_tasks;
+	local_status.inFlight = service_status.in_flight;
+	local_status.queuedResults = service_status.queued_results;
+	local_status.queuedCacheWrites = service_status.queued_cache_writes;
+	if (service_status.pending_tasks || service_status.in_flight ||
+	    service_status.queued_results ||
+	    service_status.queued_cache_writes)
+	    local_status.hasMore = 1;
+    }
+
+    if (local_status.hasMore && view_ctx)
+	ged_view_context_refresh_request(view_ctx, GED_VIEW_REFRESH_DRAW);
+    if (local_status.changed || local_status.hasMore)
+	controller->requestRender(local_status.changed ?
+	    "ged-progressive-update" : "ged-progressive-pending");
+
+    if (status)
+	*status = local_status;
+    return (changed || local_status.hasMore) ? 1 : 0;
 }
 
 extern "C" int
@@ -15747,6 +15966,33 @@ ged_obol_observer_ensure(struct ged *gedp, struct ged_drawable *gdp)
 }
 
 static int
+ged_obol_register_progressive_provider(struct ged *gedp,
+				       void *view_ctx,
+				       ged_obol_attached_controller &entry)
+{
+    if (!gedp || !entry.view_controller)
+	return 0;
+
+    ged_obol_progressive_provider_data *data =
+	new (std::nothrow) ged_obol_progressive_provider_data;
+    if (!data)
+	return 0;
+
+    data->gedp = gedp;
+    data->view_ctx = view_ctx;
+    uint64_t token = entry.view_controller->registerProgressiveProvider(
+			 ged_obol_progressive_advance_provider, data);
+    if (!token) {
+	delete data;
+	return 0;
+    }
+
+    entry.progressive_provider_data = data;
+    entry.progressive_provider_token = token;
+    return 1;
+}
+
+static int
 ged_draw_obol_attach_common(struct ged *gedp,
 			    SoBRLSceneController *scene_controller,
 			    BRLObolViewController *view_controller,
@@ -15879,6 +16125,10 @@ ged_draw_obol_attach_view_common(struct ged *gedp,
     entry.render_endpoint_only = 1;
     entry.render_shared_root_visible =
 	ged_obol_view_scope_is_independent(view_ctx) ? 0 : 1;
+    if (!ged_obol_register_progressive_provider(gedp, view_ctx, entry)) {
+	ged_obol_delete_owned_attached_controller(entry);
+	return 0;
+    }
     entries->push_back(entry);
 
     ged_obol_primary_refresh_from_registry(gdp);

@@ -462,8 +462,8 @@ Known Risks
   present and later OBB/mesh frames visibly differ.
 * The qtcad progressive LoD harness now supports parameterized draw targets,
   direct/facetized modes, phase-level startup timing diagnostics,
-  `--startup-only`, `--startup-refine`, `--startup-expand`, and a
-  repeated-target slow CTest.
+  `--startup-only`, `--startup-refine`, `--startup-expand`,
+  `--startup-auto-expand`, and a repeated-target slow CTest.
   `test_qtcad_obol_progressive_lod_startup_refine` captures the first deferred
   leaf-proxy frame for a proxy-eligible target, promotes to the normal
   mesh-backed qtcad path, and then verifies staged AABB -> OBB -> mesh
@@ -475,10 +475,24 @@ Known Risks
   Generic_Twin startup-expand is also gated and proves the attached LoD service
   can prewarm visible-frontier leaf AABB records, consume those cached child
   proxies in repeated post-startup passes, refresh autoview from Obol source
-  bounds, and render without full leaf realization.
+  bounds, and render without full leaf realization.  Generic_Twin
+  startup-auto-expand is gated and proves the normal qtcad readback/render path
+  can drive the attached controller's automatic bounded progressive tick
+  without explicit test-style prewarm/expand calls.
   Generic_Twin wire-LoD and shaded-BoT LoD are now gated and use direct Obol
   source realization for the promotion phase instead of the legacy full draw
   transaction.  m35 remains a manual optimization probe.
+* Bounded progressive database-source expansion is now a libbrlobol provider
+  callback, not a qtcad/manual test loop.  `BRLObolViewController` owns
+  progressive provider registration, default `BRLObolProgressiveOptions`,
+  pending-work state, and `advanceProgressiveWork`; libged registers a view
+  provider when an Obol controller attaches to a GED view.  The GED provider
+  walks the currently visible unshadowed source frontier, submits bounded child
+  AABB proxy prewarm tasks, expands only ready cached leaf proxies by default,
+  and can be configured to refresh missing proxies synchronously with
+  `BRLOBOL_PROGRESSIVE_REFRESH_MISSING_PROXIES`.  The default
+  `BRLOBOL_PROGRESSIVE_REQUIRE_CACHED_PROXIES` policy is intended for
+  deterministic timing and render-thread boundedness.
 * Cached full-path draw metadata is available through libbrlobol, covered by
   `libbrlobol_draw_cache`, consumed by startup proxy publication, and
   invalidated through both database-index fanout for indexed full paths and
@@ -561,15 +575,19 @@ Current gates:
 Run the draw/basic/view-command subset after view command or draw facade work.
 Run the broader libbrlobol/qtcad subset after matrix, source-local geometry,
 LoD, realization, or command-scene pick/metadata work.
-Generic_Twin full-root startup-only, startup-expand, wire-LoD, and shaded-BoT
-LoD are gated by the `test_qtcad_obol_progressive_lod_generic_twin_*` tests.
+Generic_Twin full-root startup-only, startup-expand, startup-auto-expand,
+wire-LoD, and shaded-BoT LoD are gated by the
+`test_qtcad_obol_progressive_lod_generic_twin_*` tests.
 The startup-only pass remains metadata-only (`sources=1`, `geometry=0`,
 `lit=0`) by design for a comb root.  A four-pass startup-expand run reaches
 leaf AABB proxies and centered proxy bounds without full leaf realization.
-Wire-LoD and shaded-BoT LoD then prove direct Obol promotion, staged
-AABB/OBB/mesh view-local payloads, and LoD-off full-detail wire fallback.
-Treat automatic priority scheduling of large cache-backed frontiers as the
-next large-root optimization target.  m35 remains a manual optimization probe.
+Startup-auto-expand proves the same visible-frontier source-depth progression
+through controller-driven automatic ticks.  Wire-LoD and shaded-BoT LoD then
+prove direct Obol promotion, staged AABB/OBB/mesh view-local payloads, and
+LoD-off full-detail wire fallback.  Treat duplicate-occurrence proxy
+expansion, non-union CSG child handling, and progressive autoview settlement
+as the next large-root correctness targets.  m35 remains a manual optimization
+probe.
 
 Next Implementation Steps
 -------------------------
@@ -586,15 +604,13 @@ Next Implementation Steps
 3. Remove or port the remaining libbsg mesh payload internals once no retained
    BSG renderer path needs them.  Any remaining `rt_mesh_lod_*`/`db_mesh_lod_*`
    hits are migration bugs.
-4. Rework large-root refinement scheduling so LoD submission does not visit or
-   enqueue every realized mesh when a view only needs representative staged
-   payloads for the next frame.  Generic_Twin startup, startup-expand,
-   wire-LoD, and shaded-BoT LoD are now bounded qtcad gates; the remaining
-   scale question is automatic priority scheduling of large database
-   frontiers, including duplicate-occurrence proxy expansion, non-union CSG
-   child handling, autoview stability/settlement as leaf bounds arrive, and
-   cache population that can publish AABB/OBB/mesh data as it becomes
-   available.
+4. Harden large-root refinement policy now that the automatic bounded provider
+   tick exists.  Generic_Twin startup, startup-expand, startup-auto-expand,
+   wire-LoD, and shaded-BoT LoD are bounded qtcad gates; the remaining scale
+   questions are duplicate-occurrence proxy expansion, non-union CSG child
+   handling, autoview stability/settlement as leaf bounds arrive, and cache
+   population that can publish AABB/OBB/mesh data as it becomes available
+   without synchronous full-detail root promotion.
 5. Harden the compact CAD database-instance representation.  Replace
    transitional off-scene shape handles with compact geometry/metadata records,
    add explicit promote/demote transaction APIs for selected, edited, and

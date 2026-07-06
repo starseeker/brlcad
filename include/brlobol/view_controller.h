@@ -47,9 +47,63 @@ struct bg_line_layer_builder;
 struct db_i;
 struct rt_view_info;
 
+class BRLObolViewController;
+
+#define BRLOBOL_PROGRESSIVE_VISIBLE_FRONTIER 0x00000001U
+#define BRLOBOL_PROGRESSIVE_REQUIRE_CACHED_PROXIES 0x00000002U
+#define BRLOBOL_PROGRESSIVE_REFRESH_MISSING_PROXIES 0x00000004U
+
 BRLOBOL_EXPORT SbMatrix brlobol_sbmatrix_from_brl_mat(const mat_t mat);
 BRLOBOL_EXPORT SbRotation brlobol_camera_orientation_from_brl_rotation(
     const mat_t rotation);
+
+struct BRLOBOL_EXPORT BRLObolProgressiveOptions {
+    BRLObolProgressiveOptions(void);
+
+    size_t maxLodResults;
+    size_t maxProviders;
+    size_t maxSources;
+    size_t maxChildrenPerSource;
+    size_t maxSubmissions;
+    uint32_t flags;
+};
+
+struct BRLOBOL_EXPORT BRLObolProgressiveStatus {
+    BRLObolProgressiveStatus(void);
+    void clear(void);
+
+    size_t providerCount;
+    size_t providerAdvanced;
+    size_t lodResultsProcessed;
+    size_t lodResultsApplied;
+    size_t submitted;
+    size_t alreadyCached;
+    size_t expanded;
+    size_t existing;
+    size_t remaining;
+    size_t proxyPublished;
+    size_t metadataApplied;
+    size_t pendingTasks;
+    size_t inFlight;
+    size_t queuedResults;
+    size_t queuedCacheWrites;
+    int changed;
+    int hasMore;
+};
+
+typedef int (*BRLObolProgressiveAdvanceCallback)(
+    BRLObolViewController *controller,
+    void *userData,
+    const BRLObolProgressiveOptions *options,
+    BRLObolProgressiveStatus *status);
+
+struct BRLOBOL_EXPORT BRLObolProgressiveProviderRecord {
+    BRLObolProgressiveProviderRecord(void);
+
+    uint64_t token;
+    BRLObolProgressiveAdvanceCallback callback;
+    void *userData;
+};
 
 /**
  * Narrow application-facing controller for an Obol-backed BRL-CAD view.
@@ -99,6 +153,20 @@ public:
 			 SbString *reason = NULL);
     SbBool isRenderRequested(void) const;
     const SbString &getRenderReason(void) const;
+    uint64_t registerProgressiveProvider(
+	BRLObolProgressiveAdvanceCallback callback,
+	void *userData);
+    void unregisterProgressiveProvider(uint64_t token);
+    void clearProgressiveProviders(void);
+    void setDefaultProgressiveOptions(
+	const BRLObolProgressiveOptions *options);
+    const BRLObolProgressiveOptions &getDefaultProgressiveOptions(void) const;
+    int advanceProgressiveWork(
+	const BRLObolProgressiveOptions *options = NULL,
+	BRLObolProgressiveStatus *status = NULL);
+    void markProgressiveWorkPending(void);
+    void clearProgressiveWorkPending(void);
+    SbBool hasProgressiveWorkPending(void) const;
 
     void setLodService(BRLObolLodService *service);
     BRLObolLodService *getLodService(void) const;
@@ -386,6 +454,10 @@ private:
     SbViewportRegion viewportRegion;
     SbBool renderRequested;
     SbString renderReason;
+    std::vector<BRLObolProgressiveProviderRecord> progressiveProviders;
+    uint64_t progressiveProviderNextToken;
+    std::atomic<int> progressiveWorkPending;
+    BRLObolProgressiveOptions defaultProgressiveOptions;
     BRLObolLodService *lodService;
     uint64_t lodResultSubscriberId;
     std::atomic<int> lodResultsPending;

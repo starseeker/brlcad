@@ -322,10 +322,18 @@ payloads.  `ged_draw_obol_database_source_prewarm_visible_child_aabb_proxies`
 and `ged_draw_obol_database_source_expand_visible_children` wrap the
 single-source operations over the currently visible database-source frontier
 under a requested root.  Repeating those visible-frontier calls advances
-recursive refinement in bounded passes.  This is not the final automatic
-recursive scheduler, but it proves the intended service-backed handoff: worker
-threads populate `.DbDrawCache`, while the application/render thread mutates
-the Coin scene.
+recursive refinement in bounded passes.  The automatic production path is now
+a narrow libbrlobol provider callback registered by the GED/Obol bridge when a
+view controller attaches to a GED view.  `BRLObolViewController` owns the
+bounded progressive tick, drains a limited number of LoD results, then calls
+registered providers on the application/render thread; the GED provider
+prewarms and expands only the visible source frontier.  Worker threads only
+populate `.DbDrawCache` and mark pending work; they never mutate Coin scene
+state.  Policy is explicit in `BRLObolProgressiveOptions`: tests use
+`BRLOBOL_PROGRESSIVE_REQUIRE_CACHED_PROXIES` for deterministic visible
+cache-ready expansion, while callers that want current-style immediate
+publication may enable `BRLOBOL_PROGRESSIVE_REFRESH_MISSING_PROXIES` and still
+retain per-tick source/child/result budgets.
 
 Mesh POP LoD payloads also live under `.DbDrawCache`, versioned by
 `mesh_lod.format`.  The caller-facing cache/loading API is now
@@ -523,13 +531,17 @@ Current application-level progressive coverage exercises staged AABB -> OBB ->
 mesh startup using delayed cache generation, checks scene-state payload
 presence across multiple active LoD candidates, checks rendered image
 progression, has a bounded opt-in repeated-scene stress gate, includes a
-bounded Generic_Twin full-root startup-only gate, and includes a bounded
-Generic_Twin startup-expand gate that proves service-prewarmed visible-frontier
-leaf AABB proxy publication after startup.  Generic_Twin now proves that large
+bounded Generic_Twin full-root startup-only gate, includes a bounded
+Generic_Twin startup-expand gate that proves the manual service-prewarmed
+visible-frontier path, and includes
+`test_qtcad_obol_progressive_lod_generic_twin_startup_auto_expand`, which
+starts from the same metadata-only root and relies on automatic controller
+progressive ticks during qtcad readback.  Generic_Twin now proves that large
 direct comb roots can start as metadata-only source structure, consume
-worker-populated leaf proxy records through repeated frontier passes, refresh
-autoview from Obol source bounds, and render without full leaf realization;
-direct startup-refine still times out after proxy-visible expansion because
+worker-populated leaf proxy records through bounded visible-frontier passes,
+and render without full leaf realization; the manual startup-expand case still
+refreshes autoview from Obol source bounds after proxy publication.
+Direct startup-refine still times out after proxy-visible expansion because
 full-detail promotion expands the whole root synchronously.  The
 qtcad harness timing line separates copy/open/view setup, cache clear,
 tolerance setup, facetize, repeated-target construction, LoD policy setup, GED
@@ -537,16 +549,13 @@ draw transaction, Obol sync, autoview, first framebuffer readback, service
 startup, submit, and AABB/OBB/mesh settlement.  Use those fields to distinguish
 first-visual startup regressions from post-proxy refinement cost.
 
-The remaining full-stack gap is an automatic recursive/background expansion
-pipeline for large roots.  It should populate `.DbDrawCache` records in the
-background, notify the owning view/session when AABB/OBB/mesh payloads are
-available, and let the render thread consume those records without ever
-requiring a synchronous full-detail root promotion.  The current
-visible-frontier APIs prove the repeated-pass contract manually; the remaining
-work is automatic scheduling, duplicate-occurrence handling in proxy/frontier
-expansion, CSG-aware handling for subtraction and intersection children, and
-bounded scheduling so large combs can refine incrementally without spending
-many seconds in one render-thread expansion pass.
+The remaining full-stack progressive gaps are policy and completeness issues,
+not the absence of an automatic tick.  Duplicate-occurrence handling in
+proxy/frontier expansion, CSG-aware handling for subtraction and intersection
+children, and autoview settlement still need production rules.  The scheduler
+is deliberately provider based so those rules can live in GED/libbrlobol
+providers while qtcad, gsh, and MGED simply ask the controller to advance one
+bounded tick before rendering.
 
 Autoview also needs a first-class progressive state.  A view can be framed from
 whatever Obol source bounds exist at a given time, but for a comb root that

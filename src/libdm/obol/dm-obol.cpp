@@ -256,10 +256,11 @@ obol_render(struct dm *dmp)
     if (obol_sync_view(dmp) != BRLCAD_OK)
 	return BRLCAD_ERROR;
     (void)pv->controller->realizePending();
-    if (pv->controller->isLodAutoSubmitEnabled())
-	(void)pv->controller->submitLodRequestsIfNeeded();
-    if (pv->controller->hasPendingLodResults())
-	(void)pv->controller->processPendingLodResults();
+    BRLObolProgressiveStatus progressive_status;
+    (void)pv->controller->advanceProgressiveWork(NULL,
+	    &progressive_status);
+    if (progressive_status.hasMore)
+	dm_set_native_repaint_pending(dmp, 1);
 
     const SbViewportRegion &region = pv->controller->getViewportRegion();
     SbVec2s size = region.getViewportSizePixels();

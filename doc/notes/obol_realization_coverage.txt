@@ -25,11 +25,12 @@ The required hierarchy smoke models are:
 The larger maturity candidate is share/db/faa/Generic_Twin.g.  It is the
 largest in-tree example, includes valid and invalid BoTs, and mixes in
 implicit solids.  qtcad now has bounded Generic_Twin startup gates for the
-first cache-backed root proxy and two post-proxy cached visible-frontier AABB
-expansion passes.  Full large-root startup refinement is still not a default
-gate because synchronous full-detail promotion can block too long; it should
-be promoted only after automatic recursive/background cache-backed refinement
-is in place.
+first cache-backed root proxy, manual post-proxy cached visible-frontier AABB
+expansion passes, and automatic controller-driven startup expansion through
+the normal qtcad readback path.  Full large-root startup refinement is still
+not a default gate because synchronous full-detail promotion can block too
+long; it should be promoted only after full-detail refinement can stay within
+the same bounded provider model.
 
 The focused CTest gates are libbrlobol_prototype and
 test_qtcad_obol_draw_sync.  libbrlobol_prototype requires both staged models
@@ -92,7 +93,10 @@ view payload through traversal state, and the shared source is not mutated.
 `libbrlobol_prototype` gates compact source AABB proxy and mesh payloads for
 bounds and BRL-aware picking without materializing child nodes.  qtcad
 progressive LoD gates the background-service path through AABB, OBB, and mesh
-payload stages with rendered image checks.
+payload stages with rendered image checks.  The Generic_Twin
+startup-auto-expand gate verifies that `BRLObolViewController` automatic
+progressive providers can advance visible database-source frontiers during
+normal qtcad rendering without explicit test-side prewarm/expand calls.
 LoD-on wire realization also has a source-local optimized startup path for
 high-face BoTs: it builds an immediate AABB proxy from BoT vertex bounds,
 avoids full mesh realization, and lets view-local LoD payloads replace that

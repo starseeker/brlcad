@@ -631,6 +631,18 @@ if(TARGET test_qtcad_obol_progressive_lod)
   set_property(TEST test_qtcad_obol_progressive_lod_generic_twin_startup_expand
     APPEND PROPERTY LABELS drawing_baseline)
   brlcad_add_test(
+    NAME test_qtcad_obol_progressive_lod_generic_twin_startup_auto_expand
+    COMMAND test_qtcad_obol_progressive_lod --startup-auto-expand "${CMAKE_BINARY_DIR}/share/db/faa/Generic_Twin.g" - all direct 4 1)
+  set_tests_properties(test_qtcad_obol_progressive_lod_generic_twin_startup_auto_expand PROPERTIES TIMEOUT 120)
+  set_property(TEST test_qtcad_obol_progressive_lod_generic_twin_startup_auto_expand
+    APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+  set_property(TEST test_qtcad_obol_progressive_lod_generic_twin_startup_auto_expand
+    APPEND PROPERTY ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+  set_property(TEST test_qtcad_obol_progressive_lod_generic_twin_startup_auto_expand
+    APPEND PROPERTY ENVIRONMENT QTCAD_OBOL_FORCE_OSMESA=1)
+  set_property(TEST test_qtcad_obol_progressive_lod_generic_twin_startup_auto_expand
+    APPEND PROPERTY LABELS drawing_baseline)
+  brlcad_add_test(
     NAME test_qtcad_obol_progressive_lod_generic_twin_wire_lod
     COMMAND test_qtcad_obol_progressive_lod --startup-wire-lod --startup-expand-passes 4 "${CMAKE_BINARY_DIR}/share/db/faa/Generic_Twin.g" - all direct 4 1)
   set_tests_properties(test_qtcad_obol_progressive_lod_generic_twin_wire_lod PROPERTIES TIMEOUT 180)
