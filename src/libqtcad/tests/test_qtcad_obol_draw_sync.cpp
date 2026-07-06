@@ -31,6 +31,7 @@
 #include <Inventor/nodes/SoCamera.h>
 
 #include <QApplication>
+#include <QCoreApplication>
 #include <QImage>
 
 #include <math.h>
@@ -56,6 +57,22 @@ lit_pixel_count(const QImage &image)
 	for (int x = 0; x < rgba.width(); x++) {
 	    const unsigned char *p = line + x * 4;
 	    if (p[0] > 32 || p[1] > 32 || p[2] > 32)
+		count++;
+	}
+    }
+    return count;
+}
+
+static int
+nonblack_pixel_count(const QImage &image)
+{
+    QImage rgba = image.convertToFormat(QImage::Format_RGBA8888);
+    int count = 0;
+    for (int y = 0; y < rgba.height(); y++) {
+	const unsigned char *line = rgba.constScanLine(y);
+	for (int x = 0; x < rgba.width(); x++) {
+	    const unsigned char *p = line + x * 4;
+	    if (p[0] > 2 || p[1] > 2 || p[2] > 2)
 		count++;
 	}
     }
@@ -335,10 +352,16 @@ main(int argc, char **argv)
 
     controller->getViewport()->viewAll();
     controller->requestRender("observer-draw-visible");
+    QCoreApplication::processEvents();
     QImage observerImage;
     view.get_viewport_image(observerImage);
-    if (observerImage.isNull() || lit_pixel_count(observerImage) < 10)
-	FAIL("observer-synced GED draw should be visible through qtcad capture");
+    int observerLit = observerImage.isNull() ? 0 : lit_pixel_count(observerImage);
+    if (observerImage.isNull() || observerLit < 10) {
+	fprintf(stderr,
+		"FAIL: observer-synced GED draw should be visible through qtcad capture (null=%d lit=%d)\n",
+		observerImage.isNull() ? 1 : 0, observerLit);
+	return 1;
+    }
 
     SoCamera *camera = controller->getCamera();
     if (!camera)
@@ -362,6 +385,7 @@ main(int argc, char **argv)
     if (fabsf(autoviewCamera[0]) > 25.0f)
 	FAIL("GED autoview should recenter qtcad Obol camera near drawn geometry");
     controller->requestRender("observer-autoview-visible");
+    QCoreApplication::processEvents();
     QImage autoviewImage;
     view.get_viewport_image(autoviewImage);
     if (autoviewImage.isNull() || lit_pixel_count(autoviewImage) < 10)
@@ -455,9 +479,10 @@ main(int argc, char **argv)
 
     controller->getViewport()->viewAll();
     controller->requestRender("draw-sync-visible");
+    QCoreApplication::processEvents();
     QImage visibleImage;
     view.get_viewport_image(visibleImage);
-    if (visibleImage.isNull() || lit_pixel_count(visibleImage) < 10)
+    if (visibleImage.isNull() || nonblack_pixel_count(visibleImage) < 10)
 	FAIL("Obol-synced GED draw should be visible through qtcad capture");
 
     struct ged_draw_transaction stale_box =

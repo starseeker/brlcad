@@ -791,14 +791,18 @@ function(_brlobol_pivot_guard_check_dependency_inventory)
     mged [[libtclcad]])
 
   file(READ "${BRLCAD_SOURCE_DIR}/src/qged/CMakeLists.txt" _qged_cmake)
-  string(FIND "${_qged_cmake}" "add_dependencies(qged dm_plugins ged_plugins)"
+  string(FIND "${_qged_cmake}" "add_dependencies(qged ged_plugins)"
     _qged_plugins_idx)
   if(_qged_plugins_idx EQUAL -1)
     _brlobol_pivot_guard_fail(
-      "qged dm_plugins dependency changed; update the Obol legacy dependency inventory and guard allowlist")
+      "qged plugin dependency changed; update the Obol legacy dependency inventory and guard allowlist")
+  endif()
+  string(FIND "${_qged_cmake}" "add_dependencies(qged dm_plugins" _qged_dm_plugins_idx)
+  if(NOT _qged_dm_plugins_idx EQUAL -1)
+    _brlobol_pivot_guard_fail("qged reintroduced dm_plugins as a build prerequisite")
   endif()
   _brlobol_pivot_guard_require_inventory_token("${_inventory}"
-    "qged plugin dependency: dm_plugins")
+    "qged plugin dependency: no dm_plugins")
 endfunction()
 
 function(_brlobol_pivot_guard_check_obol_realization_coverage)
@@ -1598,41 +1602,17 @@ function(_brlobol_pivot_guard_check_legacy_header_include_hygiene)
     foreach(_token
 	[[struct[ \t\r\n]+qg_legacy_dm[ \t\r\n]*;]]
 	[[struct[ \t\r\n]+qg_legacy_fb[ \t\r\n]*;]]
-	[[qg_legacy_view_display_manager_set]]
-	[[qg_legacy_view_dm_bind]]
-	[[qg_legacy_view_dm_sync_dimensions]]
-	[[qg_legacy_view_dm_hash]]
-	[[qg_legacy_view_dm_native_repaint_pending_get]]
-	[[qg_legacy_view_dm_native_repaint_pending_set]]
-	[[qg_legacy_view_dm_configure_window]]
-	[[qg_legacy_view_dm_width_get]]
-	[[qg_legacy_view_dm_height_get]]
-	[[qg_legacy_view_dm_dimensions_set]]
-	[[qg_legacy_view_dm_framebuffer_setup_existing]]
 	[[qg_legacy_view_dm_open_qtgl]]
 	[[qg_legacy_view_dm_open_swrast]]
 	[[qg_legacy_view_dm_close]]
-	[[qg_legacy_view_dm_setup_qtgl]]
-	[[qg_legacy_view_dm_setup_swrast]]
-	[[qg_legacy_view_dm_background_get]]
-	[[qg_legacy_view_dm_background_set]]
-	[[qg_legacy_view_dm_background_restore]]
-	[[qg_legacy_view_dm_draw_begin]]
-	[[qg_legacy_view_dm_draw_end]]
-	[[qg_legacy_view_dm_display_image_get]]
-	[[qg_legacy_view_dm_display_image_release]]
-	[[qg_legacy_view_dm_load_current_model2view]]
-	[[qg_legacy_view_framebuffer_raw_create]]
 	[[qg_legacy_view_framebuffer_handle_from_raw]]
 	[[qg_legacy_view_framebuffer_qtgl_canvas_get]]
 	[[qg_legacy_view_framebuffer_swrast_canvas_get]]
 	[[qg_legacy_view_framebuffer_release]]
 	[[qg_legacy_view_framebuffer_standalone_get]]
-	[[qg_legacy_view_framebuffer_configure]]
 	[[class[ \t\r\n]+QTCAD_EXPORT[ \t\r\n]+QgCanvasBridgeFactory]]
 	[[create_qtgl]]
 	[[create_swrast]]
-	[[qg_legacy_view_dm_draw]]
 	[[qg_legacy_view_dm_init_messages]])
       string(REGEX MATCH "${_token}" _qtcad_legacy_view_dm_hit
 	"${_qtcad_legacy_view_dm_contents}")
@@ -1691,13 +1671,11 @@ function(_brlobol_pivot_guard_check_legacy_header_include_hygiene)
 	[[qg_legacy_view_ged_view_set_add]]
 	[[qg_legacy_view_ged_view_set_remove]]
 	[[qg_legacy_view_ged_view_set_attach]]
-	[[qg_legacy_view_dm_draw]]
 	[[qg_legacy_view_from_context]]
 	[[qg_legacy_view_to_context]]
 	[[ged_view_active_ctx]]
 	[[ged_view_active_ctx_set]]
 	[[ged_view_set_ctx]]
-	[[dm_draw_objs]]
 		[[rt_view_context_create]]
 		[[rt_view_context_free]]
 		[[rt_view_context_view_set_attach]]
@@ -1706,9 +1684,15 @@ function(_brlobol_pivot_guard_check_legacy_header_include_hygiene)
 	[[rt_view_set_context_remove]]
 	[[rt_view_context_dimensions_set]]
 	[[rt_view_context_unit_conversion_set]]
-	[[rt_view_context_scale_storage_get]]
-	[[rt_view_context_display_manager_set]]
-	[[rt_view_context_model2view_get]])
+	[[qg_legacy_view_dm_open_qtgl]]
+	[[qg_legacy_view_dm_open_swrast]]
+	[[qg_legacy_view_dm_close]]
+	[[qg_legacy_view_framebuffer_handle_from_raw]]
+	[[qg_legacy_view_framebuffer_qtgl_canvas_get]]
+	[[qg_legacy_view_framebuffer_swrast_canvas_get]]
+	[[qg_legacy_view_framebuffer_release]]
+	[[qg_legacy_view_framebuffer_standalone_get]]
+	[[qg_legacy_view_dm_init_messages]])
       string(REGEX MATCH "${_token}" _qtcad_legacy_view_src_token_hit
 	"${_qtcad_legacy_view_src_contents}")
       if(NOT _qtcad_legacy_view_src_token_hit)
@@ -3196,7 +3180,7 @@ function(_brlobol_pivot_guard_check_brlobol_window_host)
 	"SoBRLSceneGroup"
 	"scene_group_summary_path"
 	"scene_group_update_path_recursive"
-	"database_source_summary_at_recursive"
+	"find_scene_bounds_summary_in_node"
 	"scene_shape_find_path"
 	"scene_shape_set_draw_state"
 	"scene_shape_set_display_state"
@@ -3296,7 +3280,7 @@ function(_brlobol_pivot_guard_check_brlobol_window_host)
 		"displayState"
 		"source->clearAuxiliaryShapes()"
 		"SoBRLSceneController::moveDatabaseSourceToGroup"
-		"find_database_source_recursive"
+	"find_database_source_instance_recursive"
 		"count_database_sources_recursive"
 	"scene_group_find_path_const(this->root"
 	"clear_database_sources_recursive"
@@ -3357,7 +3341,7 @@ function(_brlobol_pivot_guard_check_brlobol_window_host)
 		"SoBRLDatabaseSource::getMeshLod"
 		"SoBRLDatabaseSource::setMeshLodBounds"
 		"SoBRLDatabaseSource::getMeshLodBounds"
-		"rt_mesh_lod_destroy"
+	"brlobol_mesh_lod_destroy"
 		"summary.drawMatrixValid = this->drawMatrixValid.getValue()"
 		"sync_shape_placement_state"
 		"vlist_shape_is_auxiliary"
@@ -5664,33 +5648,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	  "rt_view_adc_model_to_view"
 	  "rt_view_adc_grid_to_view"
 	  "rt_view_adc_view_to_grid"
-	  "rt_view_adc_reset"
-	  "struct rt_mesh_lod"
-	  "struct rt_mesh_lod_data"
-	  "struct rt_mesh_lod_detail"
-	  "rt_mesh_lod_detail_setup_callback"
-	  "struct rt_mesh_lod_info"
-	  "struct rt_mesh_lod_cache_status"
-	  "rt_mesh_lod_cache_clear_all"
-	  "rt_mesh_lod_cache_status_init"
-	  "db_mesh_lod_status"
-	  "db_mesh_lod_refresh"
-	  "db_mesh_lod_invalidate"
-	  "db_mesh_lod_store_mesh"
-	  "faces order, i.e. face_count * 3 normals"
-	  "rt_mesh_lod_load_level"
-	  "rt_mesh_lod_load_view"
-	  "rt_mesh_lod_load_view_scene_ref"
-	  "rt_mesh_lod_free_scene_ref"
-	  "rt_mesh_lod_current_level"
-	  "rt_mesh_lod_has_active_data"
-	  "rt_mesh_lod_data_get"
-	  "rt_mesh_lod_info_get"
-	  "rt_mesh_lod_detail_init"
-	  "rt_mesh_lod_detail_callbacks_set"
-	  "rt_mesh_lod_detail_callbacks_clear"
-	  "rt_mesh_lod_memshrink"
-	  "rt_mesh_lod_destroy")
+	  "rt_view_adc_reset")
 	string(FIND "${_contents}" "${_token}" _token_idx)
 	if(_token_idx EQUAL -1)
 	  _brlobol_pivot_guard_fail(
@@ -5711,6 +5669,9 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
       [[(^|[^A-Za-z0-9_])bsg_view([^A-Za-z0-9_]|$)]]
       [[(^|[^A-Za-z0-9_])bsg_mesh_lod([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])db_mesh_lod_[A-Za-z0-9_]*[ \t\r\n]*\(]]
+      [[(^|[^A-Za-z0-9_])rt_mesh_lod_[A-Za-z0-9_]*[ \t\r\n]*\(]]
+      [[struct[ \t\r\n]+rt_mesh_lod]]
       [[struct[ \t\r\n]+bsg_view]]
       [[struct[ \t\r\n]+bsg_mesh_lod]]
       [[const[ \t\r\n]+struct[ \t\r\n]+bsg_view[ \t\r\n]*\*]]
@@ -6125,9 +6086,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 				rt_view_line_set_context_set_points_bsg
 				rt_view_line_set_context_set_points
 				rt_view_line_set_context_destroy_bsg
-				rt_view_line_set_context_destroy
-				rt_mesh_lod_load_view_scene_ref_bsg
-	rt_mesh_lod_free_scene_ref_bsg)
+				rt_view_line_set_context_destroy)
       string(FIND "${_view_legacy_bsg_contents}" "${_token}"
 	_view_legacy_adapter_idx)
       if(_view_legacy_adapter_idx EQUAL -1)
@@ -6780,10 +6739,6 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	[[(^|[^A-Za-z0-9_])rt_view_context_independent_scope_ref[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])rt_view_context_scene_root_ref[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])rt_view_context_scene_root_ref_attach[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])rt_mesh_lod_load_view_scene_ref[ \t\r\n]*\(]]
-	rt_mesh_lod_load_view_scene_ref_bsg
-	[[(^|[^A-Za-z0-9_])rt_mesh_lod_free_scene_ref[ \t\r\n]*\(]]
-	rt_mesh_lod_free_scene_ref_bsg
 	rt_view_adc_state_from_bsg
 	rt_view_adc_state_set_bsg
 	bsg_view_adc_get
@@ -7000,10 +6955,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_view_context_clear_bsg
 	[[(^|[^A-Za-z0-9_])rt_view_context_clear[ \t\r\n]*\(]]
 	bsg_view_bounds
-	quat_mat2quat
-	bsg_mesh_lod_load_view_scene_ref
-	bsg_mesh_lod_free_scene_ref
-	_rt_mesh_lod_bsg)
+	quat_mat2quat)
       string(REGEX MATCH "${_token}" _legacy_token_hit
 	"${_librt_view_legacy_contents}")
       if(NOT _legacy_token_hit)
@@ -7040,36 +6992,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_view_lod_curve_scale
 	rt_view_lod_bot_threshold
 	rt_view_avg_sample_spacing
-	rt_view_solid_point_spacing
-	rt_mesh_lod_load_view
-	rt_mesh_lod_current_level
-	rt_mesh_lod_has_active_data
-	rt_mesh_lod_data_get
-	rt_mesh_lod_info_get
-	rt_mesh_lod_detail_init
-	rt_mesh_lod_detail_callbacks_set
-	rt_mesh_lod_detail_callbacks_clear
-	rt_mesh_lod_memshrink
-	rt_mesh_lod_cache_status_init
-	db_mesh_lod_status
-	db_mesh_lod_refresh
-	db_mesh_lod_invalidate
-	db_mesh_lod_store_mesh
-	db_mesh_lod_update
-	"mesh lod full-detail callback did not publish valid normals"
-	"mesh lod full-detail callback replacement did not preserve active POP data"
-	"mesh lod full-detail callback replacement did not invalidate stale borrowed data"
-	"mesh lod full-detail callback clear did not release callback ownership"
-	"mesh lod full-detail callback setup failure did not clear stale active data"
-	"mesh lod full-detail callback missing arrays did not clear stale active data"
-	"mesh lod full-detail callback bad indices did not clear stale active data"
-	"mesh lod full-detail callback bad original indices did not clear stale active data"
-	"mesh lod full-detail callback producer failure did not clear partial active data"
-	"mesh lod invalid BoT cache rejection"
-	"mesh lod invalid generated mesh store should preserve existing cache status"
-	"mesh lod generated mesh normals"
-	"(const vect_t *)detail_normals"
-	"mesh lod get after reopen")
+	rt_view_solid_point_spacing)
       string(FIND "${_librt_view_info_test_contents}" "${_token}"
 	_librt_view_info_test_token_idx)
       if(_librt_view_info_test_token_idx EQUAL -1)
@@ -7081,6 +7004,9 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       [[#[ \t]*include[ \t]*[<"]bsg/]]
       [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
       [[(^|[^A-Za-z0-9_])rt_view_info_from_bsg([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])db_mesh_lod_[A-Za-z0-9_]*[ \t\r\n]*\(]]
+      [[(^|[^A-Za-z0-9_])rt_mesh_lod_[A-Za-z0-9_]*[ \t\r\n]*\(]]
+      [[struct[ \t\r\n]+rt_mesh_lod]]
       [[(^|[^A-Za-z0-9_])bsg_view([^A-Za-z0-9_]|$)]]
       [[struct[ \t\r\n]+bsg_view]]
     )
@@ -7095,10 +7021,10 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 
   set(_librt_view_legacy_bsg_test
     "${BRLCAD_SOURCE_DIR}/src/librt/tests/view_legacy_bsg.c")
-  if(NOT EXISTS "${_librt_view_legacy_bsg_test}")
+  if(EXISTS "${_librt_view_legacy_bsg_test}")
     _brlobol_pivot_guard_fail(
-      "src/librt/tests/view_legacy_bsg.c is required for transitional RT view-info adapter coverage")
-  else()
+      "src/librt/tests/view_legacy_bsg.c has been retired with BSG adapter test coverage")
+  elseif(FALSE)
     file(READ "${_librt_view_legacy_bsg_test}" _librt_view_legacy_bsg_test_contents)
     foreach(_token
 	"bsg/feature.h"
@@ -7487,10 +7413,6 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	rt_view_context_independent_scope_ref
 	rt_view_context_scene_root_ref
 	rt_view_context_scene_root_ref_attach
-	rt_mesh_lod_load_view_scene_ref
-	rt_mesh_lod_load_view_scene_ref_bsg
-	rt_mesh_lod_free_scene_ref
-	rt_mesh_lod_free_scene_ref_bsg
 	test_bsg_lod_policy_adapter
 	bsg_view_lod_source_policy_set
 	test_bsg_null_adapter
@@ -8569,10 +8491,10 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 
   set(_librt_lod_test
     "${BRLCAD_SOURCE_DIR}/src/librt/tests/lod.c")
-  if(NOT EXISTS "${_librt_lod_test}")
+  if(EXISTS "${_librt_lod_test}")
     _brlobol_pivot_guard_fail(
-      "src/librt/tests/lod.c is required for RT mesh-LoD API coverage")
-  else()
+      "src/librt/tests/lod.c has been retired; mesh LoD API coverage belongs to libbrlobol")
+  elseif(FALSE)
     file(READ "${_librt_lod_test}" _librt_lod_test_contents)
     foreach(_token
 	db_mesh_lod_update
@@ -12378,7 +12300,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
       "src/libged/draw/preview.cpp|ged_view_active_ctx"
       "src/libged/view/autoview2.cpp|ged_view_active_ctx|ged_view_find_ctx"
       "src/libged/draw/bigE.c|ged_view_active_ctx"
-      "src/libged/draw/draw.c|ged_view_active_ctx"
+      "src/libged/draw/draw.c|ged_draw2_core|ged_eval_wire_display_core"
       "src/libged/ged_util.cpp|ged_view_active_ctx"
       "src/libged/dm/dm.c|ged_view_active_ctx|ged_view_set_views_ctx|ged_view_find_ctx|ged_view_set_ctx|ged_view_context_owned_add"
       "src/libged/view/view.c|ged_view_active_ctx|ged_view_active_ctx_set|ged_view_find_ctx|ged_view_set_views_ctx"
@@ -13789,7 +13711,6 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   endforeach()
 
   foreach(_rel
-      src/libged/draw/draw.c
       src/libged/vutil.c)
     set(_file "${BRLCAD_SOURCE_DIR}/${_rel}")
     if(NOT EXISTS "${_file}")
@@ -17327,14 +17248,22 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_librt_tests_cmake}" _librt_tests_cmake_contents)
     foreach(_token
 	"brlcad_addexec(rt_view_info"
-	"brlcad_add_test(NAME rt_view_info"
-	"brlcad_addexec(rt_view_legacy_bsg"
-	"brlcad_add_test(NAME rt_view_legacy_bsg")
+	"brlcad_add_test(NAME rt_view_info")
       string(FIND "${_librt_tests_cmake_contents}" "${_token}"
 	_librt_view_info_cmake_token_idx)
       if(_librt_view_info_cmake_token_idx EQUAL -1)
 	_brlobol_pivot_guard_fail(
 	  "src/librt/tests/CMakeLists.txt must register RT view-info test ${_token}")
+      endif()
+    endforeach()
+    foreach(_token
+	"brlcad_addexec(rt_view_legacy_bsg"
+	"brlcad_add_test(NAME rt_view_legacy_bsg")
+      string(FIND "${_librt_tests_cmake_contents}" "${_token}"
+	_librt_view_legacy_cmake_token_idx)
+      if(NOT _librt_view_legacy_cmake_token_idx EQUAL -1)
+	_brlobol_pivot_guard_fail(
+	  "src/librt/tests/CMakeLists.txt reintroduced retired RT view legacy test ${_token}")
       endif()
     endforeach()
   endif()
@@ -18920,7 +18849,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	"src/libged/bsg_ged_draw_private.h reintroduced source-runtime storage that belongs in the source adapter: ${_ged_private_source_runtime_hit}")
     endif()
     string(REGEX MATCH
-      [[struct[ \t\r\n]+ged_draw_source_runtime_summary[ \t\r\n]*\{[^}]*struct[ \t\r\n]+rt_mesh_lod[ \t\r\n]*\*[ \t\r\n]*rt_mesh_lod]]
+      [[struct[ \t\r\n]+ged_draw_source_runtime_summary[ \t\r\n]*\{[^}]*struct[ \t\r\n]+BRLObolMeshLod[ \t\r\n]*\*[ \t\r\n]*mesh_lod]]
       _ged_source_runtime_summary_lod_hit "${_ged_bsg_draw_source_contents}")
     if(NOT _ged_source_runtime_summary_lod_hit)
       _brlobol_pivot_guard_fail(
@@ -19204,8 +19133,8 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_ged_bsg_draw_brep}" _ged_bsg_draw_brep_contents)
     foreach(_token
 	ged_draw_brep_mesh_lod_detail_setup
-	rt_mesh_lod_detail_callbacks_set
-	struct rt_mesh_lod_detail
+	brlobol_mesh_lod_detail_callbacks_set
+	struct BRLObolMeshLodDetail
 	_ged_draw_brep_mesh_info_clbk)
       string(REGEX MATCH "${_token}" _ged_brep_lod_token_hit
 	"${_ged_bsg_draw_brep_contents}")
@@ -19706,7 +19635,7 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
 	    ged_draw_apply_evaluated_provider_paths
 	    ged_draw_obol_database_source_eval_wireframe_for_path
 	    ged_draw_obol_database_source_eval_points_for_path
-	    gd_draw_retained_drawtree_invocations)
+	    ged_draw_report_obol_provider_failure)
 	  string(FIND "${_contents}" "${_token}"
 	    _ged_transactions_evaluated_provider_idx)
 	  if(_ged_transactions_evaluated_provider_idx EQUAL -1)
@@ -19908,13 +19837,15 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_draw_client_header}")
     file(READ "${_libged_draw_client_header}" _libged_draw_client_header_contents)
     foreach(_token
-	[[void[ \t\r\n]*\*[ \t\r\n]*view_ctx]]
-	[[struct[ \t\r\n]+ged_draw_appearance_settings[ \t\r\n]+vs]])
+	[[retained Big-E comparison implementation]]
+	[[struct[ \t\r\n]+_ged_client_data]]
+	[[struct[ \t\r\n]+application[ \t\r\n]*\*[ \t\r\n]*ap]]
+	[[struct[ \t\r\n]+rt_i[ \t\r\n]*\*[ \t\r\n]*rtip]])
       string(REGEX MATCH "${_token}" _libged_draw_client_header_token_hit
 	"${_libged_draw_client_header_contents}")
       if(NOT _libged_draw_client_header_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/draw/ged_draw.h must keep draw pipeline view client data as opaque view_ctx")
+	  "src/libged/draw/ged_draw.h must keep only the retained Big-E comparison state token ${_token}")
       endif()
     endforeach()
     foreach(_pat
@@ -19937,26 +19868,16 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_libged_draw_client_cmd}")
     file(READ "${_libged_draw_client_cmd}" _libged_draw_client_cmd_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]ged/draw\.h]]
-	[[#[ \t]*include[ \t]*[<"](\.\./|\./)?bsg_ged_draw_private\.h]]
-	[[ged_view_active_ctx]]
-	[[dgcdp[.]view_ctx]]
-	[[bsg_data[.]view_ctx]]
-	[[ged_draw_view_context_lod_policy_get]]
-	[[ged_draw_view_context_lod_policy_apply]]
-	[[ged_draw_view_context_lod_policy_apply_bot_threshold]]
-	[[_ged_line_layer_builder_publish_command_scene_feature]]
-	[[ged_draw_append_tree_shape_to_group]]
-	[[ged_draw_add_tree_line_set_to_group]]
-	[[ged_draw_add_tree_nmg_region_to_group]]
-	[[ged_draw_add_tree_primitive_face_set_to_group]]
-	[[ged_draw_add_tree_primitive_wireframe_to_group]]
-	[[ged_draw_group_ref_set_appearance_settings]])
+	[[Draw command registration and compatibility shims]]
+	[[ged_draw2_core]]
+	[[ged_eval_wire_display_core]]
+	[[ged_redraw2_core]]
+	[[historical _ged_drawtrees]])
       string(REGEX MATCH "${_token}" _libged_draw_client_cmd_token_hit
 	"${_libged_draw_client_cmd_contents}")
       if(NOT _libged_draw_client_cmd_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/draw/draw.c must keep draw client-data view access on opaque GED draw-view context helper ${_token}")
+	  "src/libged/draw/draw.c must stay a thin migrated draw command shim token ${_token}")
       endif()
     endforeach()
     foreach(_pat
@@ -20012,9 +19933,10 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_libged_bigE_client_cmd}" _libged_bigE_client_cmd_contents)
     foreach(_token
 	[[ged_view_active_ctx]]
-	[[dgcdp->[ \t\r\n]*view_ctx]]
 	[[struct[ \t\r\n]+ged_draw_appearance_settings]]
-	[[ged_draw_group_ref_set_appearance_settings]]
+	[[GED_DRAW_APPEARANCE_SETTINGS_INIT]]
+	[[ged_draw_transaction_make]]
+	[[txn[.]view[ \t\r\n]*=[ \t\r\n]*view_ctx]]
 	[[GED_DRAW_MODE_EVAL_WIRE]])
       string(REGEX MATCH "${_token}" _libged_bigE_client_cmd_token_hit
 	"${_libged_bigE_client_cmd_contents}")
@@ -20043,13 +19965,13 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   set(_libged_draw_txn_client "${BRLCAD_SOURCE_DIR}/src/libged/bsg_ged_draw_transactions.c")
   if(EXISTS "${_libged_draw_txn_client}")
     file(READ "${_libged_draw_txn_client}" _libged_draw_txn_client_contents)
-    string(REGEX MATCH [[dgcdp[.]view_ctx]] _libged_draw_txn_client_token_hit
+    string(REGEX MATCH [[void[ \t\r\n]*\*[ \t\r\n]*view_ctx]] _libged_draw_txn_client_token_hit
       "${_libged_draw_txn_client_contents}")
     if(NOT _libged_draw_txn_client_token_hit)
       _brlobol_pivot_guard_fail(
 	"src/libged/bsg_ged_draw_transactions.c must seed draw client data with opaque view_ctx")
     endif()
-    string(REGEX MATCH [[dgcdp[.]vs[ \t\r\n]*=[ \t\r\n]*neutral_settings]]
+    string(REGEX MATCH [[struct[ \t\r\n]+ged_draw_appearance_settings[ \t\r\n]+neutral_settings]]
       _libged_draw_txn_neutral_appearance_token_hit
       "${_libged_draw_txn_client_contents}")
     if(NOT _libged_draw_txn_neutral_appearance_token_hit)
@@ -20903,11 +20825,11 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   endforeach()
 
   if(EXISTS "${_ged_bsg_draw_source}")
-    string(FIND "${_ged_bsg_draw_source_contents}" "rt_mesh_lod_destroy"
+    string(FIND "${_ged_bsg_draw_source_contents}" "brlobol_mesh_lod_destroy"
       _ged_source_rt_lod_destroy_idx)
     if(_ged_source_rt_lod_destroy_idx EQUAL -1)
       _brlobol_pivot_guard_fail(
-	"src/libged/bsg_ged_draw_source.c must destroy draw source mesh-LoD handles through rt_mesh_lod_destroy")
+	"src/libged/bsg_ged_draw_source.c must destroy draw source mesh-LoD handles through brlobol_mesh_lod_destroy")
     endif()
     foreach(_token
 	"ged_draw_obol_database_source_bot_mesh_lod_realize"
@@ -20960,9 +20882,9 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_librt_private_header}" _librt_private_contents)
     string(FIND "${_librt_private_contents}" "struct rt_mesh_lod_context"
       _rt_mesh_lod_context_idx)
-    if(_rt_mesh_lod_context_idx EQUAL -1)
+    if(NOT _rt_mesh_lod_context_idx EQUAL -1)
       _brlobol_pivot_guard_fail(
-	"src/librt/librt_private.h must keep mesh LoD cache state behind rt_mesh_lod_context")
+	"src/librt/librt_private.h reintroduced RT-owned mesh LoD cache state")
     endif()
     string(REGEX MATCH [[(^|[^A-Za-z0-9_])bsg_mesh_lod_context([^A-Za-z0-9_]|$)]]
       _private_bsg_lod_context_hit "${_librt_private_contents}")
@@ -20977,9 +20899,9 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_db_open_impl}" _db_open_contents)
     string(FIND "${_db_open_contents}" "_rt_mesh_lod_context_destroy"
       _rt_mesh_lod_context_destroy_idx)
-    if(_rt_mesh_lod_context_destroy_idx EQUAL -1)
+    if(NOT _rt_mesh_lod_context_destroy_idx EQUAL -1)
       _brlobol_pivot_guard_fail(
-	"src/librt/db_open.c must destroy private mesh LoD cache state through _rt_mesh_lod_context_destroy")
+	"src/librt/db_open.c reintroduced RT-owned mesh LoD cache teardown")
     endif()
     set(_db_open_lod_forbidden
       [[#[ \t]*include[ \t]*[<"]bsg/lod\.h]]
@@ -20999,13 +20921,13 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
   if(EXISTS "${_ged_db_index_impl}")
     file(READ "${_ged_db_index_impl}" _ged_db_index_contents)
     foreach(_token
-	[[#[ \t]*include[ \t]*[<"]rt/view\.h]]
-	db_mesh_lod_invalidate)
+	[[#[ \t]*include[ \t]*[<"]brlobol/mesh_lod_cache\.h]]
+	brlobol_mesh_lod_cache_invalidate)
       string(REGEX MATCH "${_token}" _ged_db_index_token_hit
 	"${_ged_db_index_contents}")
       if(NOT _ged_db_index_token_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/libged/db_index.cpp must invalidate LoD cache through RT-owned token ${_token}")
+	  "src/libged/db_index.cpp must invalidate LoD cache through libbrlobol-owned token ${_token}")
       endif()
     endforeach()
     foreach(_pat
@@ -21195,13 +21117,13 @@ function(_brlobol_pivot_guard_check_librt_view_info_neutralization)
     file(READ "${_ged_view_lod_impl}" _ged_view_lod_contents)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]ged/draw\.h]]
-	[[#[ \t]*include[ \t]*[<"]rt/view\.h]]
+	[[#[ \t]*include[ \t]*[<"]brlobol/mesh_lod_cache\.h]]
 	[[ged_draw_view_context_lod_policy_get]]
 	[[ged_draw_view_context_lod_policy_apply]]
-	db_mesh_lod_clear
-	db_mesh_lod_refresh
-	db_mesh_lod_status
-	db_mesh_lod_store_mesh
+	brlobol_mesh_lod_cache_clear_database
+	brlobol_mesh_lod_cache_refresh
+	brlobol_mesh_lod_cache_status
+	brlobol_mesh_lod_cache_store_mesh
 	brlobol_draw_cache_clear_all)
       string(REGEX MATCH "${_token}" _ged_view_lod_token_hit
 	"${_ged_view_lod_contents}")
@@ -21704,13 +21626,14 @@ function(_brlobol_pivot_guard_check_capability1_scene_source_closeout)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]ged/db_index\.h]]
 	[[_draw_path_database_path_exists]]
-	[[ged_db_index_path_resolve]]
-	[[_draw_obol_source_visible_in_view]]
+	[[ged_db_index_path_exists]]
+	[[_draw_obol_source_record_visible_in_view]]
 	[[_draw_obol_source_record_path]]
-	[[_draw_list_obol_source_path_cb]]
-	[[_draw_list_obol_source_path_collapsed_cb]]
+	[[_draw_path_state_obol_source_record_cb]]
+	[[_draw_list_obol_source_record_cb]]
+	[[_draw_list_obol_source_record_collapsed_cb]]
 	[[ged_draw_obol_scene_controller_full_synced]]
-	[[ged_draw_obol_database_source_paths_foreach]])
+	[[ged_draw_obol_database_source_records_foreach]])
       string(REGEX MATCH "${_token}" _records_token_hit "${_records_contents}")
       if(NOT _records_token_hit)
 	_brlobol_pivot_guard_fail(
@@ -22043,8 +21966,8 @@ function(_brlobol_pivot_guard_check_libged_obol_draw_bridge)
 		[[getRealizedMesh]]
 		[[setIndexedTriangles]]
 		[[updateDrawBoundsFromPoints]]
-		[[BRLObolSceneBoundsSummary]]
-	[[getSceneBoundsSummary]]
+		[[getDatabaseSourceBounds]]
+	[[getSceneSubtreeBounds]]
 	[[BRLObolRealizedShapeSummary]])
       string(REGEX MATCH "${_token}" _ged_obol_src_token_hit
 	"${_ged_obol_src_contents}")
@@ -22474,26 +22397,25 @@ function(_brlobol_pivot_guard_check_qtcad_obol_test_links)
   file(READ "${_qtcad_tests_cmake}" _qtcad_tests)
   string(FIND "${_qtcad_tests}" "ged_test_qged_swrast"
     _qged_swrast_target_idx)
-  if(_qged_swrast_target_idx EQUAL -1)
+  if(NOT _qged_swrast_target_idx EQUAL -1)
     _brlobol_pivot_guard_fail(
-      "src/libqtcad/tests/CMakeLists.txt must define ged_test_qged_swrast")
+      "src/libqtcad/tests/CMakeLists.txt reintroduced retired ged_test_qged_swrast")
   endif()
   if(EXISTS "${BRLCAD_SOURCE_DIR}/doc/notes/obol_legacy_dependency_inventory.txt")
     file(READ "${BRLCAD_SOURCE_DIR}/doc/notes/obol_legacy_dependency_inventory.txt"
       _inventory)
     _brlobol_pivot_guard_require_inventory_token("${_inventory}"
-      "qtcad QgSW swrast integration test: no direct libbsg link")
+      "qtcad Obol tests: no direct libdm/libbsg/dm_plugins link")
   endif()
 
   foreach(_token
-      "_qtcad_obol_swrast_test"
-      "set_property(TEST \${_qtcad_obol_swrast_test}"
-      "set_property(TEST ged_test_qged_swrast"
+      "_qtcad_obol_offscreen_test"
+      "test_qtcad_obol_progressive_lod_generic_twin_startup_auto_expand"
       "QTCAD_OBOL_FORCE_OSMESA=1")
     string(FIND "${_qtcad_tests}" "${_token}" _qtcad_swrast_token_idx)
     if(_qtcad_swrast_token_idx EQUAL -1)
       _brlobol_pivot_guard_fail(
-	"src/libqtcad/tests/CMakeLists.txt must keep qtcad Obol swrast CTest environment token ${_token}")
+	"src/libqtcad/tests/CMakeLists.txt must keep qtcad Obol offscreen/OSMesa CTest token ${_token}")
     endif()
   endforeach()
 
@@ -22508,6 +22430,7 @@ function(_brlobol_pivot_guard_check_qtcad_obol_test_links)
     test_qtcad_obol_snap
     test_qtcad_obol_measure
     test_qtcad_obol_overlay_sync
+    test_qtcad_obol_progressive_lod
     test_qtcad_obol_real_models
     test_qtcad_obol_window_host
   )
@@ -22533,22 +22456,6 @@ function(_brlobol_pivot_guard_check_qtcad_obol_test_links)
 	endif()
       endforeach()
     endforeach()
-  endforeach()
-
-  string(REGEX MATCHALL
-    "target_link_libraries\\([ \t\r\n]*ged_test_qged_swrast[^)]*\\)"
-    _qged_swrast_link_blocks "${_qtcad_tests}")
-  if(NOT _qged_swrast_link_blocks)
-    _brlobol_pivot_guard_fail(
-      "ged_test_qged_swrast has no guarded target_link_libraries block")
-  endif()
-  foreach(_block IN LISTS _qged_swrast_link_blocks)
-    string(REGEX MATCH "(^|[ \t\r\n])libbsg([ \t\r\n]|$)"
-      _qged_swrast_libbsg_hit "${_block}")
-    if(_qged_swrast_libbsg_hit)
-      _brlobol_pivot_guard_fail(
-	"ged_test_qged_swrast must use the qtcad legacy-view bridge without a direct libbsg link")
-    endif()
   endforeach()
 
   string(REGEX MATCH
@@ -23805,8 +23712,14 @@ function(_brlobol_pivot_guard_check_qtcad_view_snapshot_adapters)
 	"qtcad/QgLegacyView.h"
 	"QgLegacyViewContext.h"
 	"rt/view.h"
+	"brlobol/view_controller.h"
+	"QgObolContextManager.h"
 	"qg_legacy_view_to_context"
 	"qgcanvas_sync_obol_camera"
+	"qgcanvas_sync_obol_viewport"
+	"qgcanvas_render_obol_pending"
+	"qgcanvas_get_obol_viewport_image"
+	"qgcanvas_queue_obol_progressive_update"
 	"syncCameraFromRtViewContext"
 	"rt_view_context_aet_set"
 	"rt_view_context_update"
@@ -23815,13 +23728,8 @@ function(_brlobol_pivot_guard_check_qtcad_view_snapshot_adapters)
 	"rt_view_context_model_axes_state_get"
 	"rt_view_context_view_axes_state_get"
 	"rt_view_context_hash"
-	"qg_legacy_view_dm_hash"
-	"qg_legacy_view_dm_native_repaint_pending_get"
-	"qg_legacy_view_dm_native_repaint_pending_set"
-	"qg_legacy_view_dm_configure_window"
 	"rt_view_context_refresh_request"
-	"qg_legacy_view_dm_bind"
-	"qg_legacy_view_dm_sync_dimensions")
+	"RT_VIEW_REFRESH_ALL")
       string(FIND "${_qtcad_canvas_state_contents}" "${_token}" _idx)
       if(_idx EQUAL -1)
 	_brlobol_pivot_guard_fail(
@@ -24998,8 +24906,6 @@ function(_brlobol_pivot_guard_check_qtcad_view_snapshot_adapters)
 	      [[qg_legacy_view_to_context]]
 	      [[RT_VIEW_REFRESH_VIEW]]
 	      [[RT_VIEW_REFRESH_DRAW]]
-	      [[RT_VIEW_REFRESH_FRAMEBUFFER]]
-	      [[RT_VIEW_REFRESH_FORCE]]
 	      [[RT_VIEW_REFRESH_ALL]]
 	      [[rt_view_context_refresh_request]])
 	    string(REGEX MATCH "${_token}" _qtcad_canvas_refresh_token_hit
@@ -25252,65 +25158,46 @@ function(_brlobol_pivot_guard_check_qtcad_view_snapshot_adapters)
 	"QgLegacyViewContext.h"
 	"rt/view.h"
 	"qg_legacy_view_to_context"
-	"rt_view_context_width_get"
-	"rt_view_context_height_get"
-	"qg_legacy_view_dm_bind"
-	"qg_legacy_view_dm_sync_dimensions"
-	"qg_legacy_view_dm_native_repaint_pending_set"
-	"qg_legacy_view_dm_configure_window"
-	"qg_legacy_view_dm_width_get"
-	"qg_legacy_view_dm_height_get"
-	"qg_legacy_view_dm_dimensions_set"
-	"qg_legacy_view_dm_framebuffer_setup_existing"
 	"qg_legacy_view_dm_close"
-	"qg_legacy_view_dm_background_restore"
-	"qg_legacy_view_dm_draw_end"
-	"qg_legacy_view_framebuffer_raw_create"
 	"qg_legacy_view_framebuffer_release"
 	"qg_legacy_view_framebuffer_standalone_get"
-	"qg_legacy_view_framebuffer_configure"
-	"qg_legacy_view_dm_draw")
+	"qgcanvas_init_obol"
+	"qgcanvas_sync_obol_viewport"
+	"qgcanvas_sync_obol_camera"
+	"qgcanvas_request_obol_render_if_idle"
+	"qgcanvas_queue_obol_progressive_update"
+	"BRLObolViewController"
+	"legacyBackendInitialized() const"
+	"return false"
+	"d->dmp = nullptr")
       string(FIND "${_contents}" "${_token}" _idx)
       if(_idx EQUAL -1)
 	_brlobol_pivot_guard_fail(
-	  "${_rel} must route framebuffer size view access through qtcad legacy-view helper token ${_token}")
+	  "${_rel} must render through Obol while retaining only narrow framebuffer compatibility helper token ${_token}")
       endif()
     endforeach()
     if("${_rel}" STREQUAL "src/libqtcad/QgSW.cpp")
-      string(FIND "${_contents}" "qg_legacy_view_dm_open_swrast" _idx)
-      if(_idx EQUAL -1)
-	_brlobol_pivot_guard_fail(
-	  "src/libqtcad/QgSW.cpp must route swrast open through qg_legacy_view_dm_open_swrast")
-      endif()
-      string(FIND "${_contents}" "qg_legacy_view_dm_setup_swrast" _idx)
-      if(_idx EQUAL -1)
-	_brlobol_pivot_guard_fail(
-	  "src/libqtcad/QgSW.cpp must route swrast backend setup through qg_legacy_view_dm_setup_swrast")
-      endif()
       foreach(_token
-	  "qg_legacy_view_dm_background_get"
-	  "qg_legacy_view_dm_background_set"
-	  "qg_legacy_view_dm_draw_begin"
-	  "qg_legacy_view_dm_display_image_get"
-	  "qg_legacy_view_dm_display_image_release"
-	  "qg_legacy_view_dm_load_current_model2view")
+	  "QgCanvasBridgeFactory::create_swrast"
+	  "qgcanvas_get_obol_viewport_image"
+	  "QPainter")
 	string(FIND "${_contents}" "${_token}" _idx)
 	if(_idx EQUAL -1)
 	  _brlobol_pivot_guard_fail(
-	    "src/libqtcad/QgSW.cpp must route swrast draw-time DM state through ${_token}")
+	    "src/libqtcad/QgSW.cpp must use the Obol software widget path token ${_token}")
 	endif()
       endforeach()
     else()
-      string(FIND "${_contents}" "qg_legacy_view_dm_open_qtgl" _idx)
-      if(_idx EQUAL -1)
-	_brlobol_pivot_guard_fail(
-	  "src/libqtcad/QgGL.cpp must route qtgl open through qg_legacy_view_dm_open_qtgl")
-      endif()
-      string(FIND "${_contents}" "qg_legacy_view_dm_setup_qtgl" _idx)
-      if(_idx EQUAL -1)
-	_brlobol_pivot_guard_fail(
-	  "src/libqtcad/QgGL.cpp must route qtgl backend setup through qg_legacy_view_dm_setup_qtgl")
-      endif()
+      foreach(_token
+	  "QgCanvasBridgeFactory::create_qtgl"
+	  "initializeOpenGLFunctions"
+	  "qgcanvas_render_obol_pending")
+	string(FIND "${_contents}" "${_token}" _idx)
+	if(_idx EQUAL -1)
+	  _brlobol_pivot_guard_fail(
+	    "src/libqtcad/QgGL.cpp must use the Obol Qt OpenGL path token ${_token}")
+	endif()
+      endforeach()
     endif()
     foreach(_pat
 	[[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
@@ -25380,10 +25267,10 @@ function(_brlobol_pivot_guard_check_qtcad_view_snapshot_adapters)
   set(_qtcad_sw "${BRLCAD_SOURCE_DIR}/src/libqtcad/QgSW.cpp")
   if(EXISTS "${_qtcad_sw}")
     file(READ "${_qtcad_sw}" _qtcad_sw_contents)
-    string(FIND "${_qtcad_sw_contents}" "qg_legacy_view_dm_load_current_model2view" _idx)
+    string(FIND "${_qtcad_sw_contents}" "qgcanvas_get_obol_viewport_image" _idx)
     if(_idx EQUAL -1)
       _brlobol_pivot_guard_fail(
-	"src/libqtcad/QgSW.cpp must route legacy SW matrix loads through qg_legacy_view_dm_load_current_model2view")
+	"src/libqtcad/QgSW.cpp must render software canvases through the Obol viewport image path")
     endif()
     string(REGEX MATCH [[rt_view_model2view_from_bsg|qg_legacy_view_(model2view_get)[ \t\r\n]*\(|dm_loadmatrix]]
       _qtcad_sw_direct "${_qtcad_sw_contents}")
@@ -26150,14 +26037,15 @@ function(_brlobol_pivot_guard_check_qged_fbserv_header_boundary)
     file(READ "${_qged_fbserv_src}" _qged_fbserv_src_contents)
     foreach(_token
 	[[#[ \t]*include[ \t]*[<"]dm/fbserv\.h]]
-	[[#[ \t]*include[ \t]*[<"]QgLegacyViewDm\.h]]
-	[[qdm_fbserv_obj]]
+	[[#[ \t]*include[ \t]*[<"]brlobol/framebuffer\.h]]
+	[[#[ \t]*include[ \t]*[<"]imgstream/fb_compat\.h]]
+	[[#[ \t]*include[ \t]*[<"]qtcad/QgObolWindowHost\.h]]
+	[[QDMObolFramebufferBridge]]
+	[[BRLObolFramebufferInfo]]
+	[[BRLObolFramebufferStream]]
+	[[imgstream_fb_colormap]]
 	[[qdm_configure_ged_fbserv_handlers]]
 	[[qdm_init_messages]]
-	[[qg_legacy_view_framebuffer_handle_from_raw]]
-	[[qg_legacy_view_framebuffer_qtgl_canvas_get]]
-	[[qg_legacy_view_framebuffer_swrast_canvas_get]]
-	[[qg_legacy_view_dm_init_messages]]
 	[[gedp->[ \t\r\n]*ged_fbs]]
 	[[fbs_open_client_handler]]
 	[[fbs_open_ipc_client_handler]]
@@ -26171,16 +26059,16 @@ function(_brlobol_pivot_guard_check_qged_fbserv_header_boundary)
       endif()
     endforeach()
     foreach(_pat
-	[[#[ \t]*include[ \t]*[<"]dm\.h]]
 	[[(^|[^A-Za-z0-9_])fb_get_dm[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])dm_get_ctx[ \t\r\n]*\(]]
 	[[(^|[^A-Za-z0-9_])dm_get_udata[ \t\r\n]*\(]]
-	[[(^|[^A-Za-z0-9_])dm_init_msgs[ \t\r\n]*\(]])
+	[[qg_legacy_view_framebuffer_]]
+	[[qg_legacy_view_dm_]])
       string(REGEX MATCH "${_pat}" _qged_fbserv_src_direct_hit
 	"${_qged_fbserv_src_contents}")
       if(_qged_fbserv_src_direct_hit)
 	_brlobol_pivot_guard_fail(
-	  "src/qged/fbserv.cpp reintroduced direct qged framebuffer-server DM lookup instead of the qtcad bridge: ${_qged_fbserv_src_direct_hit}")
+	  "src/qged/fbserv.cpp reintroduced qtcad DM framebuffer bridge usage instead of the Obol/imgstream bridge: ${_qged_fbserv_src_direct_hit}")
       endif()
     endforeach()
   endif()
@@ -27516,7 +27404,7 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "BRLObolLodAttribute"
       "BRLObolLodProxy"
       "BRLOBOL_LOD_QUALITY_FAST_DISPLAY"
-      "BRLOBOL_LOD_GEOMETRY_RT_MESH_CACHE"
+      "BRLOBOL_LOD_GEOMETRY_MESH_LOD_CACHE"
       "BRLOBOL_LOD_PROXY_OBB"
       "databaseRevision"
       "sourceRevision"
@@ -27539,9 +27427,9 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "fallback"
       "diagnostic"
       "brlobol_lod_cache_key"
-      "brlobol_lod_mesh_payload_from_rt_mesh_data"
+      "brlobol_lod_mesh_payload_from_mesh_lod_data"
       "brlobol_lod_result_matches_request"
-      "brlobol_lod_result_from_rt_mesh_info"
+      "brlobol_lod_result_from_mesh_lod_info"
       "brlobol_lod_directory_result"
       "brlobol_lod_attributes_result"
       "brlobol_lod_aabb_result"
@@ -27583,7 +27471,7 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "faceIndex.empty"
       "vertexIndex.clear"
       "vertexIndex.empty"
-      "brlobol_lod_mesh_payload_from_rt_mesh_data"
+      "brlobol_lod_mesh_payload_from_mesh_lod_data"
       "BRLOBOL_LOD_RESULT_DIRECTORY"
       "BRLOBOL_LOD_RESULT_ATTRIBUTES"
       "BRLOBOL_LOD_RESULT_AABB"
@@ -27607,9 +27495,9 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "BRLObolLodCacheWriteProc"
       "BRLObolLodSubscriberId"
       "BRLObolLodResultReadyCB"
-      "BRLObolRtMeshLodProvider"
-      "brlobol_rt_mesh_lod_provider_task"
-      "brlobol_rt_mesh_lod_provider_free"
+      "BRLObolMeshLodProvider"
+      "brlobol_mesh_lod_provider_task"
+      "brlobol_mesh_lod_provider_free"
       "BRLObolRtSourceFullDetailProvider"
       "brlobol_rt_source_full_detail_provider_task"
       "brlobol_rt_source_full_detail_provider_free"
@@ -27669,14 +27557,14 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "lod_active_request_key_recorded_unlocked"
       "BRLOBOL_LOD_PROVIDER_CANCELLED"
       "BRLOBOL_LOD_PROVIDER_STALE"
-      "brlobol_rt_mesh_lod_provider_task"
-      "brlobol_rt_mesh_lod_provider_free"
+      "brlobol_mesh_lod_provider_task"
+      "brlobol_mesh_lod_provider_free"
       "brlobol_rt_source_full_detail_provider_task"
       "brlobol_rt_source_full_detail_provider_free"
       "brlobol_lod_rt_source_full_detail_request_from_source_mesh_request"
       "brlobol_lod_submit_rt_source_full_detail_request"
-      "db_mesh_lod_status"
-      "db_mesh_lod_refresh"
+      "brlobol_mesh_lod_cache_status"
+      "brlobol_mesh_lod_cache_refresh"
       "rt_db_get_internal"
       "ID_BOT"
       "RT_BOT_CK_MAGIC"
@@ -27699,12 +27587,12 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "result.mesh.faceIndex"
       "result.mesh.vertexIndex"
       "sourceToLocal"
-      "rt_mesh_lod_has_active_data"
-      "rt_mesh_lod_load_level"
-      "rt_mesh_lod_info_get"
-      "rt_mesh_lod_data_get"
-      "rt_mesh_lod_memshrink"
-      "brlobol_lod_mesh_payload_from_rt_mesh_data"
+      "brlobol_mesh_lod_has_active_data"
+      "brlobol_mesh_lod_load_level"
+      "brlobol_mesh_lod_info_get"
+      "brlobol_mesh_lod_data_get"
+      "brlobol_mesh_lod_memshrink"
+      "brlobol_lod_mesh_payload_from_mesh_lod_data"
       "cacheWriteInFlight"
       "debugDelayMilliseconds"
       "completed.insert")
@@ -27753,7 +27641,10 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "BRLObolLodService"
       "service.drainResults"
       "SoBRLMeshShape"
-      "applyStagedLodResult"
+      "applyDisplayResult"
+      "applySourceResult"
+      "setViewLodState"
+      "view-local LoD update requires a view state"
       "lod_update_path_matches"
       "matchedResultCount"
       "appliedResultCount"
@@ -27865,9 +27756,9 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "makeLodRequest"
       "brlobol_lod_cache_key"
       "current LoD request is already resident"
-      "BRLObolRtMeshLodProvider"
-      "brlobol_rt_mesh_lod_provider_task"
-      "brlobol_rt_mesh_lod_provider_free"
+      "BRLObolMeshLodProvider"
+      "brlobol_mesh_lod_provider_task"
+      "brlobol_mesh_lod_provider_free"
       "realizeDataFree"
       "service->submit"
       "service->hasActiveRequest"
@@ -27953,7 +27844,7 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "isLodDisplayActive"
       "hasFullDetailMesh"
       "getFullDetailTriangleCount"
-      "getFullDetailTriangle"
+      "getTriangle"
       "makeLodRequest"
       "makeSourceMeshRequest"
       "needsSourceBackedFullDetail"
@@ -28095,11 +27986,11 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "lodBotThreshold"
       "BRLObolLodRequest"
       "BRLObolLodResult"
-      "brlobol_lod_result_from_rt_mesh_info"
-      "db_mesh_lod_status"
-      "db_mesh_lod_get"
-      "rt_mesh_lod_load_view"
-      "rt_mesh_lod_info_get"
+      "brlobol_lod_result_from_mesh_lod_info"
+      "brlobol_mesh_lod_cache_status"
+      "brlobol_mesh_lod_get"
+      "brlobol_mesh_lod_load_view"
+      "brlobol_mesh_lod_info_get"
       "SoBRLLodMeshShape"
       "applyStagedLodResult")
     string(FIND "${_db_source_impl}" "${_token}" _idx)
@@ -28284,7 +28175,7 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
 
   file(READ "${BRLCAD_SOURCE_DIR}/src/libbrlobol/tests/test_prototype.cpp" _prototype_test)
   foreach(_token
-      "db_mesh_lod_update(dbip, \"tet.bot\")"
+      "brlobol_mesh_lod_cache_update(dbip, \"tet.bot\")"
       "lodBotThreshold"
       "isLodBackedMesh"
       "SoBRLLodMeshShape"
@@ -28338,7 +28229,7 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "BRLOBOL_LOD_GEOMETRY_OBOL_MESH"
       "mesh_payload_result"
       "hasFullDetailMesh"
-      "getFullDetailTriangleCount"
+      "getTriangle"
       "full-detail snap did not use preserved full-detail mesh"
       "getSkippedLodDisplayMeshCount"
       "SoBRLExportAction::DISPLAY_LEVEL"
@@ -28357,24 +28248,24 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "setForcedLevel"
       "makeLodRequest"
       "getRtViewInfo"
-      "BRLOBOL_LOD_RESULT_AABB"
+      "BRLOBOL_LOD_RESULT_MESH"
       "SoBRLMeshLodSubmitAction"
       "SoBRLLodMeshShape"
       "isLodBackedMesh"
       "isLodPreserveFullDetailEnabled"
       "isLodDisplayActive"
       "expected_view_lod_level"
-      "rt_mesh_lod_load_view"
+      "brlobol_mesh_lod_load_view"
       "LoD submit action did not use view-policy active level"
       "LoD submit action did not skip already-resident view/policy request"
       "LoD view controller did not skip resident changed-scene LoD request"
       "LoD view controller did not skip resident threshold policy request"
       "LoD view controller queued duplicate resident request result"
       "LoD view controller queued duplicate threshold request result"
-      "LoD-backed mesh retained full-detail payload after display LoD update"
+      "LoD-backed mesh retained unexpected full-detail payload"
       "LoD-backed mesh request did not keep source metrics without full-detail payload"
-      "evictActiveDisplayMesh"
-      "active display eviction did not preserve source-backed LoD identity"
+      "view-local display eviction did not clear view payload without mutating mesh"
+      "view-local LoD pick fixture did not bind display payload"
       "evicted active display mesh did not keep source-backed exact export"
       "evicted active display mesh did not keep source-backed exact measure"
       "evicted active display mesh did not keep source-backed exact snap"
@@ -28473,12 +28364,12 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
   file(READ "${BRLCAD_SOURCE_DIR}/src/libbrlobol/tests/test_lod_realization.cpp" _lod_test)
   foreach(_token
       "brlobol_lod_cache_key"
-      "brlobol_lod_mesh_payload_from_rt_mesh_data"
+      "brlobol_lod_mesh_payload_from_mesh_lod_data"
       "brlobol_lod_result_matches_request"
-      "brlobol_lod_result_from_rt_mesh_info"
+      "brlobol_lod_result_from_mesh_lod_info"
       "viewRevision++"
       "stale_cache_entry"
-      "BRLOBOL_LOD_GEOMETRY_RT_MESH_CACHE"
+      "BRLOBOL_LOD_GEOMETRY_MESH_LOD_CACHE"
       "brlobol_lod_directory_result"
       "brlobol_lod_attributes_result"
       "brlobol_lod_aabb_result"
@@ -28517,22 +28408,22 @@ function(_brlobol_pivot_guard_check_brlobol_lod_metadata)
       "test_filtered_result_drain"
       "LoD filtered result drain did not isolate requested result"
       "staged_payload_task"
-      "brlobol_rt_mesh_lod_provider_task"
-      "BRLObolRtMeshLodProvider"
+      "brlobol_mesh_lod_provider_task"
+      "BRLObolMeshLodProvider"
       "BU_DIR_CACHE"
       "useForcedLevel"
       "forcedLevel"
       "shrinkAfterCopy"
       "cachedNormals"
-      "LoD RT provider did not store cached mesh normals"
+      "LoD Obol mesh provider did not store cached mesh normals"
       "cachedNormalProvider"
       "cachedNormalResult.counts.normalCount == 0"
       "cachedNormalResult.mesh.normals.size() !="
-      "LoD RT provider did not return cached mesh normals"
-      "db_mesh_lod_invalidate"
+      "LoD Obol mesh provider did not return cached mesh normals"
+      "brlobol_mesh_lod_cache_invalidate"
       "cleared_cache_entry"
       "refreshMissing = FALSE"
-      "RT mesh LoD provider has no cache payload"
+      "LoD Obol mesh provider task did not return cached mesh result"
       "brlobol_rt_source_full_detail_provider_task"
       "brlobol_lod_rt_source_full_detail_request_from_source_mesh_request"
       "brlobol_lod_submit_rt_source_full_detail_request"

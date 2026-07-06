@@ -1,6 +1,9 @@
 brlcad_addexec(gsh "gsh.cpp" "libged;libdm;libbu;Threads::Threads")
 target_include_directories(gsh BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../libtermio)
 add_dependencies(gsh dm_plugins ged_plugins)
+if(TARGET rt)
+  add_dependencies(gsh rt)
+endif(TARGET rt)
 
 if(SH_EXEC AND TARGET gsh)
   brlcad_add_test(NAME gsh_obol_smoke

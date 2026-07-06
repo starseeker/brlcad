@@ -127,7 +127,7 @@ real model geometry.  Generic_Twin.g is tracked as the larger FAA maturity
 candidate rather than a default CTest case until the large-model path can
 handle mixed valid/invalid BoTs, implicit solids, and staged LoD behavior
 without making routine developer tests too expensive.  Developers can run the
-current opt-in draw/readback maturity check by setting
+current controlled Generic_Twin.g opt-in workflow gate by setting
 BRLOBOL_QTCAD_GENERIC_TWIN=1 for test_qtcad_obol_real_models; the default
 test remains limited to the smaller routine models.
 test_qtcad_obol_controller verifies the qtcad GL/SW visible-content capture

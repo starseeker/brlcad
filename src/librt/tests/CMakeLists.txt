@@ -47,6 +47,9 @@ brlcad_addexec(rt_diff diff.c "${RT_TEST_LIBS}" TEST)
 brlcad_addexec(rt_default_object default_object.c "librt;libwdb;libbu;${M_LIBRARY}" TEST)
 brlcad_add_test(NAME rt_default_object COMMAND rt_default_object)
 
+brlcad_addexec(rt_fullpath_color fullpath_color.c "librt;libwdb;libbu;${M_LIBRARY}" TEST)
+brlcad_add_test(NAME rt_fullpath_color COMMAND rt_fullpath_color)
+
 if(BRLCAD_ENABLE_BINARY_ATTRIBUTES)
   brlcad_addexec(rt_binary_attribute binary_attribute.c "${RT_TEST_LIBS}" TEST)
   brlcad_add_test(NAME rt_binary_attribute COMMAND rt_binary_attribute)
@@ -134,6 +137,7 @@ set(
   default_object.c
   dsp_raytrace_check.c
   dsp_sa_vol_check.c
+  fullpath_color.c
   brep_boolean_tests.g
   cyclic_tests.g
   extreme_ssi_test.g

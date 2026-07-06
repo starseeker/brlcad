@@ -1317,9 +1317,6 @@ BRLObolViewController::advanceProgressiveWork(
 
     BRLObolProgressiveStatus localStatus;
 
-    if (this->lodAutoSubmit)
-	(void)this->submitLodRequestsIfNeeded();
-
     if (this->hasPendingLodResults() ||
 	(this->lodService &&
 	 this->lodService->queuedResultCountForDiagnostics() > 0)) {
@@ -1329,6 +1326,9 @@ BRLObolViewController::advanceProgressiveWork(
 	if (this->lastLodAppliedResultCount > 0)
 	    localStatus.changed = 1;
     }
+
+    if (this->lodAutoSubmit)
+	(void)this->submitLodRequestsIfNeeded();
 
     size_t providerLimit = options->maxProviders;
     size_t providerIndex = 0;
@@ -1480,6 +1480,19 @@ controller_lod_source_signature(const BRLObolViewController *controller)
     }
 
     return SbString(out.str().c_str());
+}
+
+static SbBool
+controller_lod_service_has_outstanding_work(const BRLObolLodService *service)
+{
+    if (!service)
+	return FALSE;
+
+    return service->inFlightCount() > 0 ||
+	   service->pendingTaskCountForDiagnostics() > 0 ||
+	   service->queuedResultCountForDiagnostics() > 0 ||
+	   service->queuedCacheWriteCountForDiagnostics() > 0 ||
+	   service->delayedTaskCountForDiagnostics() > 0 ? TRUE : FALSE;
 }
 
 void
@@ -2109,6 +2122,10 @@ BRLObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
 	this->lodLastSubmittedPolicyRevision == this->lodPolicyRevision &&
 	strcmp(this->lodLastSubmittedSourceSignature.getString(),
 	       signature.getString()) == 0)
+	return 0;
+
+    if (this->lodActiveGeneration != 0 &&
+	controller_lod_service_has_outstanding_work(this->lodService))
 	return 0;
 
     if (this->lodActiveGeneration != 0)

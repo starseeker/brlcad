@@ -77,7 +77,8 @@ if(BRLCAD_ENABLE_QT)
 
   # qged's view and embedded framebuffer paths are Obol/libbrlobol based.
   # GED plugins are still loaded at runtime; legacy display-manager plugins are
-  # not a qged build prerequisite.
+  # not a qged build prerequisite.  qged's own Qt plugins are added below and
+  # wired in after src/qged/plugins defines the aggregate target.
   add_dependencies(qged ged_plugins)
 
   add_executable(test_qged_obol_fbserv test_qged_obol_fbserv.cpp fbserv.cpp ${fbserv_moc_src})
@@ -123,6 +124,10 @@ endif(BRLCAD_ENABLE_QT)
 
 # Core application is defined, now handle plugins
 add_subdirectory(plugins)
+
+if(BRLCAD_ENABLE_QT AND TARGET qged AND TARGET qged_plugins)
+  add_dependencies(qged qged_plugins)
+endif()
 
 # Theme subdirectory handles file bookkeeping for CMake
 add_subdirectory(theme)

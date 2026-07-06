@@ -4532,8 +4532,8 @@ scene_database_source_bounds_recursive(const SoNode *node,
 	const SoBRLDatabaseSource *source =
 	    static_cast<const SoBRLDatabaseSource *>(node);
 	SbBox3f sourceBounds;
-	if (!source->getEffectiveSourceBounds(sourceBounds))
-	    (void)scene_bounds_for_node(source, sourceBounds, TRUE);
+	if (!scene_bounds_for_node(source, sourceBounds, TRUE))
+	    (void)source->getEffectiveSourceBounds(sourceBounds);
 	if (sourceBounds.isEmpty())
 	    return FALSE;
 	if (padForAutoview)

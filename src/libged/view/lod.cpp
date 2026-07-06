@@ -33,6 +33,7 @@
 #include "brlobol/mesh_lod_cache.h"
 #include "bu/cmd.h"
 #include "bu/hash.h"
+#include "bu/snooze.h"
 #include "bu/str.h"
 #include "bu/time.h"
 #include "bu/vls.h"
@@ -42,6 +43,20 @@
 
 #include "../ged_private.h"
 #include "./ged_view.h"
+
+static int
+lod_service_status_has_work(
+    const struct ged_draw_obol_lod_service_status *status)
+{
+    if (!status)
+	return 0;
+
+    return status->in_flight > 0 ||
+	   status->pending_tasks > 0 ||
+	   status->queued_results > 0 ||
+	   status->queued_cache_writes > 0 ||
+	   status->delayed_tasks > 0;
+}
 
 int
 _view_cmd_lod(void *bs, int argc, const char **argv)
@@ -58,7 +73,7 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
     int print_help = 0;
     static const char *usage = "view lod [csg|mesh] [0|1]\n"
 			       "view lod cache [clear [all_files] | exists] \n"
-			       "view lod service [status|start [workers]|stop|poll [max_results]|prewarm [all|bot ...]]\n"
+			       "view lod service [status|start [workers]|stop|poll [max_results]|wait [timeout_ms] [max_results]|prewarm [all|bot ...]]\n"
 			       "view lod scale [factor]\n"
 			       "view lod point_scale [factor]\n"
 			       "view lod curve_scale [factor]\n"
@@ -85,8 +100,10 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 	return GED_HELP;
     }
 
-    if (argc > 3 && !(argc >= 2 && BU_STR_EQUAL(argv[0], "service") &&
-		      BU_STR_EQUAL(argv[1], "prewarm"))) {
+    if (argc > 4 ||
+	(argc > 3 && !(argc >= 2 && BU_STR_EQUAL(argv[0], "service") &&
+		       (BU_STR_EQUAL(argv[1], "prewarm") ||
+			BU_STR_EQUAL(argv[1], "wait"))))) {
 	bu_vls_printf(gedp->ged_result_str, "Usage:\n%s", usage);
 	return BRLCAD_ERROR;
     }
@@ -448,6 +465,66 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		bu_vls_printf(gedp->ged_result_str, "%s\n",
 			      status.last_diagnostics);
 	    return BRLCAD_OK;
+	}
+
+	if (BU_STR_EQUAL(argv[1], "wait")) {
+	    int timeout_ms = 5000;
+	    int max_results = 0;
+	    if (argc >= 3 &&
+		(bu_opt_int(NULL, 1, (const char **)&argv[2],
+			    (void *)&timeout_ms) != 1 || timeout_ms < 0)) {
+		bu_vls_printf(gedp->ged_result_str,
+			      "invalid timeout in milliseconds: %s\n", argv[2]);
+		return BRLCAD_ERROR;
+	    }
+	    if (argc == 4 &&
+		(bu_opt_int(NULL, 1, (const char **)&argv[3],
+			    (void *)&max_results) != 1 || max_results < 0)) {
+		bu_vls_printf(gedp->ged_result_str,
+			      "invalid max result count: %s\n", argv[3]);
+		return BRLCAD_ERROR;
+	    }
+	    if (argc > 4) {
+		bu_vls_printf(gedp->ged_result_str, "Usage:\n%s", usage);
+		return BRLCAD_ERROR;
+	    }
+
+	    struct ged_draw_obol_lod_service_status status = {};
+	    int timed_out = 0;
+	    const int64_t start = bu_gettime();
+	    const int64_t timeout_us = (int64_t)timeout_ms * 1000;
+
+	    while (1) {
+		if (!ged_draw_obol_lod_service_poll(gedp, view_ctx,
+						    (size_t)max_results,
+						    &status)) {
+		    bu_vls_printf(gedp->ged_result_str,
+				  "unable to wait on Obol LoD service for the current view\n");
+		    return BRLCAD_ERROR;
+		}
+		if (!lod_service_status_has_work(&status))
+		    break;
+		if (timeout_us >= 0 && bu_gettime() - start >= timeout_us) {
+		    timed_out = 1;
+		    break;
+		}
+		bu_snooze(25000);
+	    }
+
+	    redraw_view();
+	    bu_vls_printf(gedp->ged_result_str,
+			  "wait_timed_out=%d submitted=%u applied=%u queued=%zu in_flight=%zu pending=%zu delayed=%zu\n",
+			  timed_out,
+			  status.last_submitted_task_count,
+			  status.last_applied_result_count,
+			  status.queued_results,
+			  status.in_flight,
+			  status.pending_tasks,
+			  status.delayed_tasks);
+	    if (status.last_diagnostics[0])
+		bu_vls_printf(gedp->ged_result_str, "%s\n",
+			      status.last_diagnostics);
+	    return timed_out ? BRLCAD_ERROR : BRLCAD_OK;
 	}
 
 	if (BU_STR_EQUAL(argv[1], "prewarm")) {

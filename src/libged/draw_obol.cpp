@@ -189,6 +189,26 @@ struct ged_obol_source_state {
     uint32_t materialRevision;
 };
 
+static void
+ged_obol_source_state_apply_appearance(
+    ged_obol_source_state &state,
+    const struct ged_draw_appearance_settings *settings)
+{
+    if (!settings)
+	return;
+
+    state.lineWidth = settings->s_line_width;
+    state.transparency = static_cast<float>(settings->transparency);
+    state.colorOverride = settings->color_override ? true : false;
+    state.color = ged_obol_color_from_rgb(settings->color);
+    if (state.colorOverride) {
+	state.materialColorValid = true;
+	state.materialColor = state.color;
+    }
+    if (state.groupValid)
+	state.groupTransparency = state.transparency;
+}
+
 struct ged_obol_preserved_source {
     std::string path;
     int drawMode;
@@ -659,6 +679,55 @@ ged_obol_path_can_publish_database_source(struct db_i *dbip, const char *path)
     return (dp->d_flags & RT_DIR_SOLID) ? 1 : 0;
 }
 
+static std::string
+ged_obol_db_path_without_instance_suffixes(const char *path)
+{
+    std::string lookup_path;
+    if (!path)
+	return lookup_path;
+
+    for (const char *cp = ged_obol_skip_leading_slash(path); *cp; cp++) {
+	if (*cp == '@' && cp[1] >= '0' && cp[1] <= '9') {
+	    while (cp[1] && cp[1] != '/')
+		cp++;
+	    continue;
+	}
+	lookup_path.push_back(*cp);
+    }
+    return lookup_path;
+}
+
+static int
+ged_obol_database_source_path_color(struct ged *gedp,
+				    const char *path,
+				    SbColor &color)
+{
+    if (!gedp || !gedp->dbip || !path || !path[0])
+	return 0;
+
+    const std::string lookup_path =
+	ged_obol_db_path_without_instance_suffixes(path);
+    if (lookup_path.empty())
+	return 0;
+
+    struct db_full_path fullpath;
+    db_full_path_init(&fullpath);
+    if (db_string_to_path(&fullpath, gedp->dbip, lookup_path.c_str()) != 0) {
+	db_free_full_path(&fullpath);
+	return 0;
+    }
+
+    struct bu_color db_color = BU_COLOR_INIT_ZERO;
+    db_full_path_color(&db_color, &fullpath, gedp->dbip);
+    unsigned char rgb[3] = {255, 255, 255};
+    bu_color_to_rgb_chars(&db_color, rgb);
+    color = SbColor(static_cast<float>(rgb[0]) / 255.0f,
+		    static_cast<float>(rgb[1]) / 255.0f,
+		    static_cast<float>(rgb[2]) / 255.0f);
+    db_free_full_path(&fullpath);
+    return 1;
+}
+
 static int
 ged_obol_path_equal(const char *a, const char *b)
 {
@@ -909,7 +978,7 @@ ged_obol_source_state_from_record(ged_obol_source_state &state,
 	ged_obol_source_summary_adapter_scope adapter_summary_scope;
 	struct ged_draw_scene_display_summary display_summary;
 	if (ged_draw_shape_ref_display_summary(gedp, record->ref,
-					       &display_summary) &&
+		&display_summary) &&
 	    display_summary.valid) {
 	    state.visible = display_summary.visible ? true : false;
 	    state.highlighted = display_summary.highlighted ? true : false;
@@ -934,10 +1003,21 @@ ged_obol_source_state_from_record(ged_obol_source_state &state,
 						&material_summary) && material_summary.valid)
 	    state.materialRevision =
 		ged_obol_fold_revision(material_summary.material_revision);
+
+	struct ged_draw_appearance_settings group_appearance =
+	    GED_DRAW_APPEARANCE_SETTINGS_INIT;
+	if (ged_draw_group_ref_appearance_settings(gedp, record->group,
+		&group_appearance) && group_appearance.color_override) {
+	    state.colorOverride = true;
+	    state.color = ged_obol_color_from_rgb(group_appearance.color);
+	    state.materialColorValid = true;
+	    state.materialColor = state.color;
+	}
     }
 
-    if (!state.materialColorValid && gedp && gedp->dbip &&
-	record->fullpath && record->fullpath->fp_len > 0) {
+    if ((!state.materialColorValid || state.materialRevision == 0) &&
+	    !state.colorOverride && gedp && gedp->dbip &&
+	    record->fullpath && record->fullpath->fp_len > 0) {
 	struct bu_color db_color = BU_COLOR_INIT_ZERO;
 	unsigned char rgb[3] = {255, 255, 255};
 	db_full_path_color(&db_color,
@@ -949,6 +1029,97 @@ ged_obol_source_state_from_record(ged_obol_source_state &state,
 				  static_cast<float>(rgb[1]) / 255.0f,
 				  static_cast<float>(rgb[2]) / 255.0f);
     }
+}
+
+static int
+ged_obol_source_state_from_database_source(ged_obol_source_state &state,
+					   struct ged *gedp,
+					   const char *path,
+					   int ged_draw_mode)
+{
+    if (!gedp || !path || !path[0])
+	return 0;
+
+    struct ged_draw_database_source_summary source_summary;
+    memset(&source_summary, 0, sizeof(source_summary));
+    struct ged_draw_scene_display_summary display_summary;
+    memset(&display_summary, 0, sizeof(display_summary));
+    const int have_source =
+	ged_draw_obol_database_source_summary_for_path(gedp, path,
+	    &source_summary) && source_summary.valid;
+    const int have_display =
+	ged_draw_obol_database_source_display_summary_for_path(gedp, path,
+	    &display_summary) && display_summary.valid;
+    if (!have_source && !have_display)
+	return 0;
+
+    state.valid = true;
+    state.viewMatched = true;
+    state.drawMode = ged_obol_database_draw_mode_from_ged(ged_draw_mode);
+    if (have_source) {
+	state.sourceRevision =
+	    ged_obol_fold_revision(source_summary.source_revision);
+	state.inputsRevision =
+	    ged_obol_fold_revision(source_summary.inputs_revision);
+    }
+    if (have_display) {
+	state.visible = display_summary.visible ? true : false;
+	state.highlighted = display_summary.highlighted ? true : false;
+	state.lineStyle = display_summary.line_style;
+	state.lineWidth = display_summary.line_width;
+	state.transparency =
+	    static_cast<float>(display_summary.transparency);
+	state.materialColorValid =
+	    display_summary.material_valid ? true : false;
+	if (state.materialColorValid) {
+	    state.materialColor = SbColor(
+		static_cast<float>(display_summary.material_color[0]) / 255.0f,
+		static_cast<float>(display_summary.material_color[1]) / 255.0f,
+		static_cast<float>(display_summary.material_color[2]) / 255.0f);
+	}
+    }
+
+    struct ged_draw_shape_material_summary material_summary;
+    if (ged_draw_obol_database_source_material_summary_for_path(gedp, path,
+	    &material_summary) && material_summary.valid)
+	state.materialRevision =
+	    ged_obol_fold_revision(material_summary.material_revision);
+
+    if ((!state.materialColorValid || state.materialRevision == 0) &&
+	    !state.colorOverride) {
+	SbColor db_material_color;
+	if (ged_obol_database_source_path_color(gedp, path,
+		db_material_color)) {
+	    state.materialColorValid = true;
+	    state.materialColor = db_material_color;
+	}
+    }
+
+    struct bu_vls owner_group_path = BU_VLS_INIT_ZERO;
+    if (ged_draw_obol_database_source_owner_group_path_for_path(gedp, path,
+	    &owner_group_path) && bu_vls_strlen(&owner_group_path) > 0) {
+	const char *group_path = bu_vls_cstr(&owner_group_path);
+	state.groupValid = true;
+	state.groupPath = group_path;
+	state.groupDrawMode = ged_obol_lod_draw_mode_from_ged(ged_draw_mode);
+	state.groupVisible = true;
+	state.groupOverlay = false;
+	state.groupTransparency = state.transparency;
+	struct ged_draw_group_record_summary group_summary;
+	memset(&group_summary, 0, sizeof(group_summary));
+	if (ged_draw_obol_group_record_summary_for_path(gedp, group_path,
+		&group_summary)) {
+	    state.groupDrawMode =
+		ged_obol_lod_draw_mode_from_ged(group_summary.draw_mode);
+	    state.groupVisible = group_summary.visible ? true : false;
+	    state.groupOverlay = group_summary.is_overlay ? true : false;
+	    state.groupTransparency =
+		static_cast<float>(group_summary.transparency);
+	}
+    }
+    bu_vls_free(&owner_group_path);
+
+    return 1;
 }
 
 struct ged_obol_find_source_state_context {
@@ -991,6 +1162,12 @@ ged_obol_find_source_state(struct ged *gedp,
 {
     if (!gedp || !path || !path[0])
 	return ged_obol_source_state();
+
+    ged_obol_source_state direct_state;
+    if (ged_obol_source_state_from_database_source(direct_state, gedp, path,
+	    ged_draw_mode))
+	return direct_state;
+
     if (ged_draw_mode >= 0 &&
 	ged_draw_path_state(gedp, view_ctx, path, ged_draw_mode) <= 0)
 	return ged_obol_source_state();
@@ -1110,18 +1287,26 @@ ged_obol_sync_group_state(SoBRLSceneController *scene,
 				  state.sourceRevision) > 0)
 	changed = 1;
 
+    const SbBool group_color_override =
+	state.colorOverride ? TRUE : FALSE;
+    const SbColor group_color = state.colorOverride ?
+	state.color : SbColor(1.0f, 1.0f, 1.0f);
+    const SbBool group_material_valid =
+	(state.colorOverride && state.materialColorValid) ? TRUE : FALSE;
+    const SbColor group_material = group_material_valid ?
+	state.materialColor : SbColor(1.0f, 1.0f, 1.0f);
     if (scene->setGroupDisplayState(state.groupPath.c_str(),
 				    state.groupVisible ? TRUE : FALSE,
 				    FALSE,
 				    FALSE,
-				    0,
+				    state.lineStyle,
 				    state.lineWidth,
 				    state.groupTransparency,
-				    FALSE,
-				    SbColor(1.0f, 1.0f, 1.0f),
-				    FALSE,
-				    SbColor(1.0f, 1.0f, 1.0f),
-				    0) > 0)
+				    group_color_override,
+				    group_color,
+				    group_material_valid,
+				    group_material,
+				    state.materialRevision) > 0)
 	changed = 1;
 
     if (source_instance_key && source_instance_key[0] &&
@@ -1669,10 +1854,11 @@ ged_obol_replace_path(struct ged *gedp,
 		      const char *path,
 		      int ged_draw_mode,
 		      uint32_t source_revision,
-		      SoBRLSceneController *scene,
-		      int use_retained_state = 1,
-		      int preserve_existing_revision = 0,
-		      const ged_obol_publish_placement_state *placement_state = NULL)
+			      SoBRLSceneController *scene,
+			      int use_retained_state = 1,
+			      int preserve_existing_revision = 0,
+			      const struct ged_draw_appearance_settings *appearance_settings = NULL,
+			      const ged_obol_publish_placement_state *placement_state = NULL)
 {
     if (!dbip || !path || !path[0] || !scene)
 	return 0;
@@ -1808,9 +1994,14 @@ ged_obol_replace_path(struct ged *gedp,
 	    ged_obol_database_source_publication_color_override ? true : false;
 	source_state.color = ged_obol_color_from_rgb(
 				 ged_obol_database_source_publication_color);
+	if (source_state.colorOverride) {
+	    source_state.materialColorValid = true;
+	    source_state.materialColor = source_state.color;
+	}
 	if (source_state.groupValid)
 	    source_state.groupTransparency = source_state.transparency;
     }
+    ged_obol_source_state_apply_appearance(source_state, appearance_settings);
     if (ged_obol_database_source_publication_depth > 0 &&
 	!ged_obol_database_source_publication_group_path.empty() &&
 	(!source_state.groupValid || !retained_state_valid)) {
@@ -1886,8 +2077,7 @@ ged_obol_replace_path(struct ged *gedp,
     int changed = scene->publishDatabaseSourceInstance(publish_state);
     if (changed < 0)
 	return changed;
-    if (!publish_state.targetGroupPath &&
-	ged_obol_sync_group_state(scene, source_state,
+    if (ged_obol_sync_group_state(scene, source_state,
 				  instance_key.c_str()))
 	changed = 1;
     if (preserve_external_current) {
@@ -1944,11 +2134,13 @@ ged_obol_replace_path_and_realize(struct ged *gedp,
 				  uint32_t source_revision,
 				  SoBRLSceneController *scene,
 				  int use_retained_state = 1,
-				  int preserve_existing_revision = 0)
+				  int preserve_existing_revision = 0,
+				  const struct ged_draw_appearance_settings *appearance_settings = NULL)
 {
     const int changed = ged_obol_replace_path(gedp, view_ctx, dbip, path,
 			ged_draw_mode, source_revision, scene,
-			use_retained_state, preserve_existing_revision);
+			use_retained_state, preserve_existing_revision,
+			appearance_settings);
     if (changed < 0)
 	return changed;
 
@@ -1968,7 +2160,8 @@ ged_obol_replace_paths(struct db_i *dbip,
 			       void *view_ctx,
 			       SoBRLSceneController *scene,
 			       int use_retained_state = 1,
-			       int preserve_existing_revision = 0)
+			       int preserve_existing_revision = 0,
+			       const struct ged_draw_appearance_settings *appearance_settings = NULL)
 {
     if (!dbip || paths.empty() || !scene)
 	return 0;
@@ -1979,9 +2172,10 @@ ged_obol_replace_paths(struct db_i *dbip,
     for (const std::string &path : paths) {
 	if (ged_obol_replace_path_and_realize(gedp, view_ctx, dbip,
 					      path.c_str(),
-					      ged_draw_mode, source_revision, scene,
-					      use_retained_state,
-					      preserve_existing_revision) > 0)
+						      ged_draw_mode, source_revision, scene,
+						      use_retained_state,
+						      preserve_existing_revision,
+						      appearance_settings) > 0)
 	    changed = 1;
     }
 
@@ -2817,10 +3011,10 @@ ged_draw_obol_lod_service_poll(struct ged *gedp,
     if (!entry || !entry->view_controller)
 	return 0;
 
-    if (entry->view_controller->isLodAutoSubmitEnabled())
-	(void)entry->view_controller->submitLodRequestsIfNeeded();
     if (entry->view_controller->hasPendingLodResults())
 	(void)entry->view_controller->processPendingLodResults(max_results);
+    if (entry->view_controller->isLodAutoSubmitEnabled())
+	(void)entry->view_controller->submitLodRequestsIfNeeded();
     ged_obol_lod_status_fill(entry, status);
     return 1;
 }
@@ -9811,7 +10005,7 @@ ged_draw_obol_database_source_ensure_for_path_with_placement(
 	const int changed = ged_obol_replace_path(gedp,
 			    ged_obol_database_source_publication_view, dbip, path,
 			    ged_obol_database_source_publication_mode, folded_revision,
-			    scene, 0, 1, &placement);
+			    scene, 0, 1, NULL, &placement);
 	return changed >= 0 ? 1 : 0;
     }
 
@@ -15096,6 +15290,54 @@ ged_draw_obol_scene_sync_full_scene(struct ged *gedp,
 }
 
 static int
+ged_obol_refresh_scene_material_colors(struct ged *gedp,
+				       SoBRLSceneController *scene)
+{
+    if (!gedp || !scene)
+	return 0;
+
+    const uint32_t material_revision =
+	ged_obol_fold_revision(ged_draw_material_revision(gedp));
+    const int source_count = scene->getDatabaseSourceCount();
+    int changed = 0;
+
+    for (int i = 0; i < source_count; i++) {
+	BRLObolDatabaseSourceSummary summary;
+	if (!scene->getDatabaseSourceSummary(i, summary) || !summary.valid)
+	    continue;
+
+	const char *path = summary.path.getString();
+	const char *instance_key = summary.instanceKey.getString();
+	if (!path || !path[0] || !instance_key || !instance_key[0])
+	    continue;
+
+	SbColor material_color;
+	if (!ged_obol_database_source_path_color(gedp, path, material_color))
+	    continue;
+
+	const int source_changed = scene->setDatabaseSourceInstanceState(
+				       instance_key,
+				       FALSE,
+				       summary.sourceRevision,
+				       summary.inputsRevision,
+				       summary.visible,
+				       summary.highlighted,
+				       summary.lineStyle,
+				       summary.lineWidth,
+				       summary.transparency,
+				       summary.colorOverride,
+				       summary.color,
+				       TRUE,
+				       material_color,
+				       material_revision);
+	if (source_changed > 0)
+	    changed = 1;
+    }
+
+    return changed;
+}
+
+static int
 ged_obol_apply_source_update_transaction(
     struct ged *gedp,
     void *view_ctx,
@@ -15431,7 +15673,8 @@ ged_obol_replace_deferred_paths(
     int ged_draw_mode,
     uint32_t source_revision,
     SoBRLSceneController *scene,
-    int preserve_existing_revision = 0)
+    int preserve_existing_revision = 0,
+    const struct ged_draw_appearance_settings *appearance_settings = NULL)
 {
     if (!gedp || !dbip || paths.empty() || !scene)
 	return 0;
@@ -15442,7 +15685,8 @@ ged_obol_replace_deferred_paths(
     for (const std::string &path : paths) {
 	if (ged_obol_replace_path(gedp, view_ctx, dbip, path.c_str(),
 				  ged_draw_mode, source_revision, scene, 0,
-				  preserve_existing_revision) > 0)
+				  preserve_existing_revision,
+				  appearance_settings) > 0)
 	    changed = 1;
 	if (ged_obol_apply_cached_path_metadata_to_scene(gedp, scene,
 		view_ctx, path.c_str(), ged_draw_mode))
@@ -15480,11 +15724,14 @@ ged_draw_obol_scene_sync_transaction(
 		break;
 	    const int ged_draw_mode =
 		ged_obol_transaction_ged_draw_mode(gedp, txn);
+	    const struct ged_draw_appearance_settings *appearance =
+		static_cast<const struct ged_draw_appearance_settings *>(
+		    txn->appearance);
 	    if (ged_obol_transaction_defer_leaf_expansion(txn)) {
 		if (!paths.empty())
 		    changed = ged_obol_replace_deferred_paths(gedp, view_ctx,
-			      gedp->dbip, paths, ged_draw_mode, source_revision,
-			      scene, 1);
+			  gedp->dbip, paths, ged_draw_mode, source_revision,
+			  scene, 1, appearance);
 		break;
 	    }
 	    if (paths.empty()) {
@@ -15502,12 +15749,14 @@ ged_draw_obol_scene_sync_transaction(
 			changed = 1;
 		    if (ged_obol_replace_paths(gedp->dbip, source_paths,
 					       ged_draw_mode, source_revision,
-					       gedp, view_ctx, scene, 0, 1))
+					       gedp, view_ctx, scene, 1, 1,
+					       appearance))
 			changed = 1;
 		} else {
 		    changed = ged_obol_replace_paths(gedp->dbip, paths,
 						     ged_draw_mode, source_revision,
-						     gedp, view_ctx, scene, 0, 1);
+						     gedp, view_ctx, scene, 1, 1,
+						     appearance);
 		}
 	    }
 	    break;
@@ -15574,7 +15823,9 @@ ged_draw_obol_scene_sync_transaction(
 	    break;
 	case GED_DRAW_TXN_MATERIAL_CHANGED:
 	case GED_DRAW_TXN_REFRESH_MATERIAL_COLORS:
-	    changed = (result && result->status >= 0) ? 1 : 0;
+	    changed = ged_obol_refresh_scene_material_colors(gedp, scene);
+	    if (!changed && result && result->status >= 0)
+		changed = 1;
 	    break;
 	case GED_DRAW_TXN_STALE_SOURCE:
 	    changed = ged_obol_apply_stale_source_transaction(gedp,

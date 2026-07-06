@@ -95,7 +95,7 @@ _ged_draw_shape_ref_selection_path(struct ged *gedp,
 
 
 static void
-_draw_path_normalize(struct bu_vls *out, const char *path)
+_draw_path_without_instance_suffixes(struct bu_vls *out, const char *path)
 {
     if (!out)
 	return;
@@ -104,7 +104,23 @@ _draw_path_normalize(struct bu_vls *out, const char *path)
 	return;
 
     path = ged_draw_dbpath_skip_lead_slash(path);
-    bu_vls_strcpy(out, path);
+    for (const char *cp = path; *cp; cp++) {
+	if (*cp == '@' && cp[1] >= '0' && cp[1] <= '9') {
+	    while (cp[1] && cp[1] != '/')
+		cp++;
+	    continue;
+	}
+	bu_vls_putc(out, *cp);
+    }
+}
+
+
+static void
+_draw_path_normalize(struct bu_vls *out, const char *path)
+{
+    _draw_path_without_instance_suffixes(out, path);
+    if (!out)
+	return;
     while (bu_vls_strlen(out) > 0 &&
 	    bu_vls_addr(out)[bu_vls_strlen(out) - 1] == '/')
 	bu_vls_trunc(out, bu_vls_strlen(out) - 1);
@@ -156,7 +172,11 @@ _draw_path_database_path_exists(struct ged *gedp, const char *path)
 	return 0;
     if (!ged_db_index_available(gedp))
 	return 0;
-    return ged_db_index_path_exists(gedp, path);
+    struct bu_vls db_path = BU_VLS_INIT_ZERO;
+    _draw_path_normalize(&db_path, path);
+    int ret = ged_db_index_path_exists(gedp, bu_vls_cstr(&db_path));
+    bu_vls_free(&db_path);
+    return ret;
 }
 
 
@@ -164,6 +184,18 @@ struct _draw_path_leaf_ctx {
     bu_hash_tbl *paths;
     size_t count;
 };
+
+
+static union tree *
+_draw_path_make_nop_tree(void)
+{
+    union tree *curtree;
+
+    BU_GET(curtree, union tree);
+    RT_TREE_INIT(curtree);
+    curtree->tr_op = OP_NOP;
+    return curtree;
+}
 
 
 static union tree *
@@ -185,7 +217,7 @@ _draw_path_leaf_cb(struct db_tree_state *UNUSED(tsp),
 	    strlen(key), (void *)1) == 1)
 	ctx->count++;
     bu_free(path, "draw path leaf string");
-    return TREE_NULL;
+    return _draw_path_make_nop_tree();
 }
 
 
@@ -202,10 +234,13 @@ _draw_path_expected_leaf_paths(struct ged *gedp, const char *path,
     ctx.paths = expected;
     ctx.count = 0;
 
-    const char *av[1] = {path};
+    struct bu_vls db_path = BU_VLS_INIT_ZERO;
+    _draw_path_normalize(&db_path, path);
+    const char *av[1] = {bu_vls_cstr(&db_path)};
     int ret = db_walk_tree(gedp->dbip, 1, av, 1, &state,
 	    NULL, NULL, _draw_path_leaf_cb, (void *)&ctx);
     db_free_db_tree_state(&state);
+    bu_vls_free(&db_path);
 
     if (ret < 0)
 	return 0;
@@ -254,6 +289,7 @@ struct _draw_path_state_ctx {
     const char *path;
     int mode;
     bu_hash_tbl *drawn_leaf_paths;
+    bu_hash_tbl *drawn_leaf_names;
     int exact_shape;
     int descendant_shape;
     int ancestor_group;
@@ -352,7 +388,11 @@ _draw_obol_source_record_path(struct bu_vls *storage,
     if (!source_path || !source_path[0])
 	return NULL;
 
-    return ged_draw_dbpath_skip_lead_slash(source_path);
+    if (!storage)
+	return ged_draw_dbpath_skip_lead_slash(source_path);
+
+    _draw_path_normalize(storage, source_path);
+    return bu_vls_cstr(storage);
 }
 
 
@@ -386,9 +426,14 @@ _draw_path_state_obol_source_record_cb(struct ged *gedp,
 	ctx->exact_shape = 1;
     if (_draw_path_is_prefix(ctx->path, key))
 	ctx->descendant_shape = 1;
-    if (key && key[0])
+    if (key && key[0]) {
 	(void)bu_hash_set(ctx->drawn_leaf_paths,
 		(const uint8_t *)key, strlen(key), (void *)1);
+	if (source_leaf && source_leaf[0] && ctx->drawn_leaf_names)
+	    (void)bu_hash_set(ctx->drawn_leaf_names,
+		    (const uint8_t *)source_leaf, strlen(source_leaf),
+		    (void *)1);
+    }
     bu_vls_free(&record_path_storage);
 
     return 1;
@@ -426,9 +471,14 @@ _draw_path_state_shape_ref_cb(ged_draw_shape_ref ref, void *ud)
 	ctx->exact_shape = 1;
     if (_draw_path_is_prefix(ctx->path, key))
 	ctx->descendant_shape = 1;
-    if (key && key[0])
+    if (key && key[0]) {
 	(void)bu_hash_set(ctx->drawn_leaf_paths,
 		(const uint8_t *)key, strlen(key), (void *)1);
+	const char *leaf = _draw_path_leaf_name(key);
+	if (leaf && leaf[0] && ctx->drawn_leaf_names)
+	    (void)bu_hash_set(ctx->drawn_leaf_names,
+		    (const uint8_t *)leaf, strlen(leaf), (void *)1);
+    }
 
     bu_free(path, "draw shape fullpath string");
     return 1;
@@ -466,9 +516,20 @@ _draw_path_state_eval(struct ged *gedp,
 	while ((e = bu_hash_next(expected, e)) != NULL) {
 	    uint8_t *key = NULL;
 	    size_t key_len = 0;
-	    if (bu_hash_key(e, &key, &key_len) == 0 &&
-		    bu_hash_get(ctx->drawn_leaf_paths, key, key_len))
+	    if (bu_hash_key(e, &key, &key_len) != 0)
+		continue;
+	    if (bu_hash_get(ctx->drawn_leaf_paths, key, key_len)) {
 		matched++;
+		continue;
+	    }
+	    struct bu_vls expected_path = BU_VLS_INIT_ZERO;
+	    bu_vls_strncpy(&expected_path, (const char *)key, key_len);
+	    const char *leaf = _draw_path_leaf_name(bu_vls_cstr(&expected_path));
+	    if (leaf && leaf[0] && ctx->drawn_leaf_names &&
+		    bu_hash_get(ctx->drawn_leaf_names,
+			(const uint8_t *)leaf, strlen(leaf)))
+		matched++;
+	    bu_vls_free(&expected_path);
 	}
 
 	if (ctx->exact_shape || matched == expected_count)
@@ -504,7 +565,12 @@ ged_draw_path_state(struct ged *gedp,
     }
 
     bu_hash_tbl *drawn = bu_hash_create(0);
-    if (!drawn) {
+    bu_hash_tbl *drawn_names = bu_hash_create(0);
+    if (!drawn || !drawn_names) {
+	if (drawn)
+	    bu_hash_destroy(drawn);
+	if (drawn_names)
+	    bu_hash_destroy(drawn_names);
 	bu_vls_free(&norm);
 	return 0;
     }
@@ -516,6 +582,7 @@ ged_draw_path_state(struct ged *gedp,
     ctx.path = bu_vls_cstr(&norm);
     ctx.mode = mode;
     ctx.drawn_leaf_paths = drawn;
+    ctx.drawn_leaf_names = drawn_names;
 
     if (ged_draw_obol_scene_controller_full_synced(gedp)) {
 	int obol_status = ged_draw_obol_database_source_records_foreach(gedp, 1,
@@ -524,6 +591,7 @@ ged_draw_path_state(struct ged *gedp,
 	    int state = _draw_path_state_eval(gedp, bu_vls_cstr(&norm),
 		    &ctx);
 	    bu_hash_destroy(drawn);
+	    bu_hash_destroy(drawn_names);
 	    bu_vls_free(&norm);
 	    return state;
 	}
@@ -534,6 +602,7 @@ ged_draw_path_state(struct ged *gedp,
 
     int state = _draw_path_state_eval(gedp, bu_vls_cstr(&norm), &ctx);
     bu_hash_destroy(drawn);
+    bu_hash_destroy(drawn_names);
     bu_vls_free(&norm);
     return state;
 }

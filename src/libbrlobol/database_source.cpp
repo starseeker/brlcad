@@ -4045,7 +4045,7 @@ cad_view_lod_assembly(const SoBRLDatabaseSource *source,
 	assembly->drawMode = SoCADAssembly::WIREFRAME;
     if (payload->resultKind == BRLOBOL_LOD_RESULT_AABB ||
 	payload->resultKind == BRLOBOL_LOD_RESULT_PROXY)
-	assembly->pickMode = SoCADAssembly::PICK_HYBRID;
+	assembly->pickMode = SoCADAssembly::PICK_BOUNDS;
     assembly->endUpdate();
 
     payload->assembly = assembly;
@@ -8871,7 +8871,7 @@ SoBRLDatabaseSource::getSummary(BRLObolDatabaseSourceSummary &summary) const
     summary.drawCenter = this->drawCenter.getValue();
     summary.drawSizeValid = this->drawSizeValid.getValue();
     summary.drawSize = this->drawSize.getValue();
-    summary.sourceBoundsValid = this->getSourceBounds(
+    summary.sourceBoundsValid = this->getEffectiveSourceBounds(
 				    summary.sourceBounds);
     summary.stale = this->stale.getValue();
     summary.staleReason = this->staleReason.getValue();

@@ -88,6 +88,9 @@ if(BRLCAD_ENABLE_TCL)
   endif(TK_LIBRARY)
   target_include_directories(mged BEFORE PRIVATE ${MGED_INCLUDE_DIRS})
   add_target_deps(mged Tkhtml Tktable itcl_pkgIndex itk_pkgIndex TclIndexBld dm_plugins)
+  if(TARGET rt)
+    add_dependencies(mged rt)
+  endif(TARGET rt)
 
   # MGED needs the tclIndex and pkgIndex files set up correctly
 	  add_dependencies(mged TclIndexBld)
