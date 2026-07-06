@@ -987,6 +987,7 @@ BRLObolDatabaseSourceRealizationCache::clear(void)
     unref_cached_geometry_map(this->sharedWireGeometry);
     unref_cached_geometry_map(this->sharedMeshVListGeometry);
     unref_cached_geometry_map(this->sharedMeshGeometry);
+    this->sharedWireCadGeometry.clear();
 }
 
 void
@@ -1011,6 +1012,17 @@ BRLObolDatabaseSourceRealizationCache::storeMeshGeometry(
     SoBRLMeshShape *shape)
 {
     store_cached_geometry_map(this->sharedMeshGeometry, key, shape);
+}
+
+void
+BRLObolDatabaseSourceRealizationCache::storeWireCadGeometry(
+    const std::string &key,
+    const obol::PartGeometry &geometry)
+{
+    if (key.empty())
+	return;
+
+    this->sharedWireCadGeometry[key] = geometry;
 }
 
 template <typename ShapeT>
@@ -1967,6 +1979,9 @@ vlist_from_aabb_proxy_bounds(const SbBox3f &bounds)
 
 static int
 source_has_auxiliary_children(const SoBRLDatabaseSource *source);
+static int
+cad_vlist_part_geometry(const SoBRLVListShape *shape,
+			obol::PartGeometry &geometry);
 
 static int
 realize_direct_leaf_wireframe(SoBRLDatabaseSource *source,
@@ -2210,7 +2225,29 @@ realize_direct_leaf_wireframe_compact(
     if (geometryKind && BU_STR_EQUAL(geometryKind, "annotation"))
 	shape->sourceType = "annotation";
 
-    const int compacted = source->setCompactVListInstance(shape);
+    const obol::PartGeometry *cadGeometry = NULL;
+    std::map<std::string, obol::PartGeometry>::iterator cadFound =
+	cache->sharedWireCadGeometry.find(cacheKey);
+    if (cadFound != cache->sharedWireCadGeometry.end()) {
+	cadGeometry = &cadFound->second;
+    } else {
+	obol::PartGeometry generatedGeometry;
+	int generated = 0;
+	{
+	    BRLObolPerformanceTimer timer(BRLOBOL_PERF_CAD_COMPACT_US);
+	    generated = cad_vlist_part_geometry(shape, generatedGeometry);
+	}
+	if (generated) {
+	    cache->storeWireCadGeometry(cacheKey, generatedGeometry);
+	    cadFound = cache->sharedWireCadGeometry.find(cacheKey);
+	    if (cadFound != cache->sharedWireCadGeometry.end())
+		cadGeometry = &cadFound->second;
+	}
+    }
+
+    const int compacted = cadGeometry ?
+	source->setCompactVListInstanceWithGeometry(shape, cadGeometry) :
+	source->setCompactVListInstance(shape);
     shape->unref();
     return compacted > 0 ? 1 : 0;
 }
@@ -3429,8 +3466,9 @@ cad_part_key_for_geometry(const char *kind,
 }
 
 static int
-cad_vlist_part_geometry(const SoBRLVListShape *shape,
-			obol::PartGeometry &geometry)
+cad_vlist_part_geometry_supported(const SoBRLVListShape *shape,
+				  const SoBRLVListShape **geomOut,
+				  int *countOut)
 {
     if (!shape || shape->hiddenLine.getValue() ||
 	shape->editEmphasis.getValue() ||
@@ -3455,8 +3493,26 @@ cad_vlist_part_geometry(const SoBRLVListShape *shape,
     if (n <= 0)
 	return 0;
 
+    if (geomOut)
+	*geomOut = geom;
+    if (countOut)
+	*countOut = n;
+    return 1;
+}
+
+static int
+cad_vlist_part_geometry(const SoBRLVListShape *shape,
+			obol::PartGeometry &geometry)
+{
+    const SoBRLVListShape *geom = NULL;
+    int n = 0;
+    if (!cad_vlist_part_geometry_supported(shape, &geom, &n))
+	return 0;
+
     obol::WireRep wire;
     wire.bounds.makeEmpty();
+    wire.segmentPoints.reserve(static_cast<size_t>(n));
+    wire.segmentIds.reserve(static_cast<size_t>(n / 2));
     SbBool haveLast = FALSE;
     int lastIndex = -1;
     uint32_t segmentIndex = 0;
@@ -3478,17 +3534,15 @@ cad_vlist_part_geometry(const SoBRLVListShape *shape,
 	if (!cad_vlist_point(shape, geom, lastIndex, a) ||
 	    !cad_vlist_point(shape, geom, i, b))
 	    return 0;
-	obol::WirePolyline polyline;
-	polyline.points.push_back(a);
-	polyline.points.push_back(b);
-	polyline.edgeId = segmentIndex++;
 	wire.bounds.extendBy(a);
 	wire.bounds.extendBy(b);
-	wire.polylines.push_back(polyline);
+	wire.segmentPoints.push_back(a);
+	wire.segmentPoints.push_back(b);
+	wire.segmentIds.push_back(segmentIndex++);
 	lastIndex = i;
     }
 
-    if (wire.polylines.empty() || wire.bounds.isEmpty())
+    if (wire.segmentPoints.empty() || wire.bounds.isEmpty())
 	return 0;
     geometry.wire = wire;
     return 1;
@@ -3770,14 +3824,16 @@ cad_wire_geometry_from_corners(const SbVec3f corners[8],
 
     obol::WireRep wire;
     wire.bounds.makeEmpty();
+    wire.segmentPoints.reserve(24);
+    wire.segmentIds.reserve(12);
     for (size_t i = 0; i < 12; i++) {
-	obol::WirePolyline polyline;
-	polyline.points.push_back(corners[edges[i][0]]);
-	polyline.points.push_back(corners[edges[i][1]]);
-	polyline.edgeId = static_cast<uint32_t>(i);
-	wire.bounds.extendBy(polyline.points[0]);
-	wire.bounds.extendBy(polyline.points[1]);
-	wire.polylines.push_back(polyline);
+	const SbVec3f &a = corners[edges[i][0]];
+	const SbVec3f &b = corners[edges[i][1]];
+	wire.segmentPoints.push_back(a);
+	wire.segmentPoints.push_back(b);
+	wire.segmentIds.push_back(static_cast<uint32_t>(i));
+	wire.bounds.extendBy(a);
+	wire.bounds.extendBy(b);
     }
     if (wire.bounds.isEmpty())
 	return 0;
@@ -3831,6 +3887,8 @@ cad_mesh_payload_part_geometry(const BRLObolLodMeshPayload &payload,
 	obol::WireRep wireRep;
 	wireRep.bounds = bounds;
 	uint32_t edgeId = 0;
+	wireRep.segmentPoints.reserve(payload.coordIndex.size() * 2);
+	wireRep.segmentIds.reserve(payload.coordIndex.size());
 	for (size_t i = 0; i + 2 < payload.coordIndex.size(); i += 3) {
 	    int tri[3] = {
 		payload.coordIndex[i],
@@ -3844,14 +3902,14 @@ cad_mesh_payload_part_geometry(const BRLObolLodMeshPayload &payload,
 		    static_cast<size_t>(a) >= payload.points.size() ||
 		    static_cast<size_t>(b) >= payload.points.size())
 		    return 0;
-		obol::WirePolyline polyline;
-		polyline.points.push_back(payload.points[static_cast<size_t>(a)]);
-		polyline.points.push_back(payload.points[static_cast<size_t>(b)]);
-		polyline.edgeId = edgeId++;
-		wireRep.polylines.push_back(polyline);
+		wireRep.segmentPoints.push_back(
+		    payload.points[static_cast<size_t>(a)]);
+		wireRep.segmentPoints.push_back(
+		    payload.points[static_cast<size_t>(b)]);
+		wireRep.segmentIds.push_back(edgeId++);
 	    }
 	}
-	if (wireRep.polylines.empty())
+	if (wireRep.segmentPoints.empty())
 	    return 0;
 	geometry.wire = wireRep;
     }
@@ -4174,13 +4232,22 @@ compact_add_vlist_instance(SoBRLDatabaseSource *source,
 			   SoBRLVListShape *shape,
 			   const SbMatrix &localMatrix,
 			   int &ordinal,
-			   int &unsupported)
+			   int &unsupported,
+			   const obol::PartGeometry *cachedGeometry = NULL)
 {
     if (!shape)
 	return;
 
     obol::PartGeometry geometry;
-    if (!cad_vlist_part_geometry(shape, geometry)) {
+    if (cachedGeometry) {
+	const SoBRLVListShape *geom = NULL;
+	int n = 0;
+	if (!cad_vlist_part_geometry_supported(shape, &geom, &n)) {
+	    unsupported = 1;
+	    return;
+	}
+	geometry = *cachedGeometry;
+    } else if (!cad_vlist_part_geometry(shape, geometry)) {
 	unsupported = 1;
 	return;
     }
@@ -4371,6 +4438,51 @@ SoBRLDatabaseSource::setCompactVListInstance(SoBRLVListShape *shape)
     const SbMatrix identity = SbMatrix::identity();
     compact_add_vlist_instance(this, *next, shape, identity, ordinal,
 	unsupported);
+
+    if (unsupported || next->entries.empty()) {
+	delete next;
+	return 0;
+    }
+
+    this->clearCompactInstanceIndex();
+    this->compactIndex = next;
+    this->compactIndexActive = TRUE;
+    remove_non_auxiliary_children(this);
+    this->markCompiledAssemblyDirty();
+
+    SbBox3f bounds;
+    if (source_bounds_for_realized_node(shape, identity, bounds))
+	(void)this->setSourceBoundsState(TRUE, bounds.getMin(),
+	    bounds.getMax());
+    else
+	this->clearSourceBounds();
+
+    brlobol_performance_counter_add(BRLOBOL_PERF_CAD_COMPACT_SOURCES, 1);
+    brlobol_performance_counter_add(BRLOBOL_PERF_CAD_COMPACT_INSTANCES,
+	static_cast<uint64_t>(this->compactIndex->entries.size()));
+    return static_cast<int>(this->compactIndex->entries.size());
+}
+
+int
+SoBRLDatabaseSource::setCompactVListInstanceWithGeometry(
+    SoBRLVListShape *shape,
+    const obol::PartGeometry *geometry)
+{
+    if (!shape || !geometry)
+	return 0;
+
+    BRLObolPerformanceTimer timer(BRLOBOL_PERF_CAD_COMPACT_US);
+    if (timer.active())
+	brlobol_performance_counter_add(BRLOBOL_PERF_CAD_COMPACT_ATTEMPTS, 1);
+
+    sync_shape_owner_state(shape, this);
+
+    BRLObolCompactInstanceIndex *next = new BRLObolCompactInstanceIndex;
+    int ordinal = 0;
+    int unsupported = 0;
+    const SbMatrix identity = SbMatrix::identity();
+    compact_add_vlist_instance(this, *next, shape, identity, ordinal,
+	unsupported, geometry);
 
     if (unsupported || next->entries.empty()) {
 	delete next;

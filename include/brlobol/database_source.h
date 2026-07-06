@@ -44,6 +44,7 @@ class SoSensor;
 struct db_i;
 struct BRLObolDatabaseSourceRealizationCache;
 struct BRLObolCompactInstanceIndex;
+namespace obol { struct PartGeometry; }
 
 struct BRLOBOL_EXPORT BRLObolDatabaseSourceSummary {
     BRLObolDatabaseSourceSummary(void);
@@ -655,6 +656,8 @@ public:
     int getRealizedMaterialObjectCount(void) const;
     int compactRealizedGeometry(void);
     int setCompactVListInstance(SoBRLVListShape *shape);
+    int setCompactVListInstanceWithGeometry(SoBRLVListShape *shape,
+	const obol::PartGeometry *geometry);
     int setCompactMeshInstance(SoBRLMeshShape *shape);
     SbBool hasCompactInstanceIndex(void) const;
     int getCompactInstanceCount(void) const;

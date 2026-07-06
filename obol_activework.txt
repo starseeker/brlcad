@@ -511,13 +511,31 @@ Known Risks
   leaf realization avoids transient child nodes for the common stable-source
   path, but the next hardening step is to replace those handles with tighter
   compact geometry/metadata records and define promote/demote transaction APIs
-  for selected/edited/inspected subsets.  The attempted render-time
-  group/root CAD aggregation did not prove out: `Generic_Twin.g all` already
-  renders quickly with flat source-local compact assemblies, while forced
-  root aggregation made render time much worse and did not reduce draw-time
-  source replacement or per-source setup costs.  The next scale effort should
-  target publication-time multi-instance compact sources, not post-realization
-  group/root assembly construction.
+  for selected/edited/inspected subsets.  Obol CAD wire geometry now accepts
+  flat segment-pair storage as well as polylines, and libbrlobol emits the
+  flat form for BRL-CAD vlist, proxy-box, and mesh-payload wire data.  This
+  removes thousands of tiny per-segment polyline allocations and lets Obol
+  render pure flat wires with sequential `GL_LINES` instead of an index buffer.
+  The July 6, 2026 measurements show the value: `Generic_Twin.g all` compact
+  warm draw improved to about 517 ms with CAD compact setup near 103 ms, while
+  `havoc.g havoc` compact warm draw improved to about 554-558 ms with CAD
+  compact setup near 57-59 ms.  Generic_Twin appears mostly unique at the leaf
+  geometry level, so per-primitive reuse has limited first-draw value there.
+  The attempted render-time group/root CAD aggregation still does not prove
+  out: Generic_Twin already renders quickly with source-local compact
+  assemblies, while forced root aggregation made render time much worse and did
+  not reduce draw-time source replacement or setup costs.  Next scale work
+  should target tree-walk/path-state cost, source replacement/publication
+  batching, and compact record cleanup.  Publication-time multi-instance
+  compact sources remain useful only where the draw frontier actually has
+  repeated part geometry; do not assume they help unique-leaf models.
+* Mesh upload has the same low-level copy issue as wire and now uses packed
+  `SbVec3f`/index vectors directly when uploading Obol CAD triangle meshes.
+  This is not the dominant shaded cost for `Generic_Twin.g all`: `draw -m2 all`
+  succeeds but spends about 2.8 s in mesh realization/tessellation while render
+  is about 13 ms.  Shaded optimization should therefore focus on avoiding
+  unnecessary tessellation, especially for BoTs and other primitives that can
+  provide display meshes directly, before tuning CAD mesh upload further.
 * A bounded slow ERT streaming image gate is still missing.  The current
   `NIST_MBE_PMI_3.g` build artifact is an empty database because STEP
   conversion is unavailable; `NIST_MBE_PMI_7-10.g` shows distinct intermediate
@@ -580,12 +598,13 @@ Next Implementation Steps
 5. Harden the compact CAD database-instance representation.  Replace
    transitional off-scene shape handles with compact geometry/metadata records,
    add explicit promote/demote transaction APIs for selected, edited, and
-   inspected subsets, and add publication-time multi-instance compact source
-   APIs so background AABB/OBB/mesh-LoD cache population can publish better
-   representations without forcing synchronous full-detail root expansion.
-   Avoid render-time group/root CAD aggregation unless a future benchmark
-   proves a specific bounded case improves over flat source-local compact
-   assemblies.
+   inspected subsets, and reduce source replacement/publication overhead.
+   Add publication-time multi-instance compact source APIs only where repeated
+   part geometry or background AABB/OBB/mesh-LoD cache population can publish
+   better representations without forcing synchronous full-detail root
+   expansion.  Avoid render-time group/root CAD aggregation unless a future
+   benchmark proves a specific bounded case improves over flat source-local
+   compact assemblies.
 6. Extend the shared-scene/per-view-root Obol attach model to any remaining
    multi-view caller/test paths.  Primary attached mutation transaction
    view-LoD invalidation is now covered; add focused coverage for

@@ -10,6 +10,8 @@
 
 #include <Inventor/SbBasic.h>
 
+#include <obol/cad/SoCADAssembly.h>
+
 #include <map>
 #include <string>
 
@@ -25,10 +27,13 @@ struct BRLObolDatabaseSourceRealizationCache {
     void storeWireGeometry(const std::string &key, SoBRLVListShape *shape);
     void storeMeshVListGeometry(const std::string &key, SoBRLVListShape *shape);
     void storeMeshGeometry(const std::string &key, SoBRLMeshShape *shape);
+    void storeWireCadGeometry(const std::string &key,
+	const obol::PartGeometry &geometry);
 
     std::map<std::string, SoBRLVListShape *> sharedWireGeometry;
     std::map<std::string, SoBRLVListShape *> sharedMeshVListGeometry;
     std::map<std::string, SoBRLMeshShape *> sharedMeshGeometry;
+    std::map<std::string, obol::PartGeometry> sharedWireCadGeometry;
 };
 
 SbBool brlobol_database_source_realize_wireframe_with_cache(

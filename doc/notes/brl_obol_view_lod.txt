@@ -107,10 +107,19 @@ Do not reintroduce render-time group/root CAD aggregation as the default scale
 strategy without new measurements.  On `Generic_Twin.g all`, flat
 source-local compact assemblies render quickly, while forced root aggregation
 was much slower and did not avoid draw-time source replacement or source-local
-compact setup.  The next scale path is publication-time construction of
-multi-instance compact sources that preserve per-instance path/pick/edit
-identity, with promotion to first-class Coin nodes only when interaction
-semantics require it.
+compact setup.  Obol CAD wire geometry now has a flat segment-pair
+representation in addition to polylines, and libbrlobol uses it for BRL-CAD
+vlist, proxy-box, and mesh-payload wire data.  That reduced per-source compact
+wire setup substantially in July 6, 2026 timing runs: `Generic_Twin.g all`
+compact warm draw measured about 517 ms with CAD compact setup near 103 ms,
+and `havoc.g havoc` compact warm draw measured about 554-558 ms with CAD
+compact setup near 57-59 ms.  Remaining scale work should target
+tree-walk/path-state cost, source replacement/publication batching, and compact
+record cleanup.  Publication-time multi-instance compact sources remain useful
+where the draw frontier actually has repeated part geometry and must preserve
+per-instance path/pick/edit identity, with promotion to first-class Coin nodes
+only when interaction semantics require it.  Do not assume that strategy helps
+models such as Generic_Twin where leaves may be mostly unique.
 
 Large selection sets should therefore not imply one Coin node per selected
 leaf.  The normal case is one compact source/assembly with selected,

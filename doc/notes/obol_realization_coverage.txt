@@ -445,8 +445,12 @@ Near-Term Gates
    view-local compact CAD payload updates, preserve mixed implicit/mesh
    identity, report invalid large-BoT diagnostics, and avoid blocking routine
    qtcad developer tests.
-8. Prototype publication-time multi-instance compact source construction for
-   large flat draw frontiers.  Do not use render-time group/root CAD
-   aggregation as the default; profiling showed it does not reduce
-   replacement/realization setup costs and can make Generic_Twin render much
-   slower than flat source-local compact assemblies.
+8. Continue large-draw optimization from the measured bottlenecks: reduce
+   tree-walk/path-state cost, batch source replacement/publication, and replace
+   compact off-scene shape handles with tighter geometry/metadata records.
+   Obol flat segment-pair wire storage has already reduced CAD compact setup
+   for normal wire draws.  Prototype publication-time multi-instance compact
+   sources only where repeated part geometry is actually present, and do not
+   use render-time group/root CAD aggregation as the default; profiling showed
+   it does not reduce replacement/realization setup costs and can make
+   Generic_Twin render much slower than flat source-local compact assemblies.
