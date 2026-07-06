@@ -6,6 +6,7 @@ set(
   defines.h
   draw_cache.h
   edit_preview.h
+  evaluated_points.h
   evaluated_wire.h
   export_action.h
   framebuffer.h

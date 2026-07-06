@@ -354,27 +354,28 @@ ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
      * command by command line options. */
     struct ged_draw_appearance_settings vs = GED_DRAW_APPEARANCE_SETTINGS_INIT;
 
-    int drawing_modes[6] = {-1, 0, 0, 0, 0, 0};
-    struct bu_opt_desc d[19];
+    int drawing_modes[7] = {-1, 0, 0, 0, 0, 0, 0};
+    struct bu_opt_desc d[20];
     BU_OPT(d[0],   "", "help",          "",                 NULL, &print_help,         "Print help and exit");
     BU_OPT(d[1],  "?", "",              "",                 NULL, &print_help,         "");
-    BU_OPT(d[2],  "m", "mode",         "#",          &bu_opt_int, &drawing_modes[0],  "0=wireframe;1=shaded bots;2=shaded;3=evaluated");
+    BU_OPT(d[2],  "m", "mode",         "#",          &bu_opt_int, &drawing_modes[0],  "0=wireframe;1=shaded bots;2=shaded;3=evaluated wire;4=hidden line;5=evaluated points");
     BU_OPT(d[3],   "", "wireframe",     "",                 NULL, &drawing_modes[1],  "Draw using only wireframes (mode = 0)");
     BU_OPT(d[4],   "", "shaded",        "",                 NULL, &drawing_modes[2],  "Shade bots, breps and polysolids (mode = 1)");
     BU_OPT(d[5],   "", "shaded-all",    "",                 NULL, &drawing_modes[3],  "Shade all solids, not evaluated (mode = 2)");
     BU_OPT(d[6],  "E", "evaluate",      "",                 NULL, &drawing_modes[4],  "Wireframe with evaluate booleans (mode = 3)");
     BU_OPT(d[7],  "h", "hidden-line",   "",                 NULL, &drawing_modes[5],  "Hidden line wireframes");
-    BU_OPT(d[8],  "A", "add-mode",      "",                 NULL, &vs.mixed_modes,    "Don't erase other drawn modes for specified paths (allows simultaneous shaded and wireframe drawing for the same object)");
-    BU_OPT(d[9],  "t", "transparency", "#",      &bu_opt_fastf_t, &vs.transparency,   "Set transparency level in drawing: range 0 (clear) to 1 (opaque)");
-    BU_OPT(d[10], "x", "",             "#",      &bu_opt_fastf_t, &vs.transparency,   "");
-    BU_OPT(d[11], "L", "",             "#",          &bu_opt_int, &bot_threshold,     "Set face count level for drawing bounding boxes instead of BoT triangles (NOTE: passing this updates the global view setting - bot_threshold is a view property).");
-    BU_OPT(d[12], "S", "no-subtract",   "",                 NULL, &vs.draw_non_subtract_only,  "Do not draw subtraction solids");
-    BU_OPT(d[13], "s", "no-dash",       "",                 NULL, &vs.draw_solid_lines_only,  "Use solid lines rather than dashed for subtraction solids");
-    BU_OPT(d[14], "C", "color",         "r/g/b", &draw_opt_color, &vs,                "Override object colors");
-    BU_OPT(d[15],  "", "line-width",   "#",          &bu_opt_int, &vs.s_line_width,   "Override default line width");
-    BU_OPT(d[16], "R", "no-autoview",   "",                 NULL, &no_autoview,       "Do not calculate automatic view, even if initial scene is empty.");
-    BU_OPT(d[17],  "", "strict",        "",                 NULL, &vs.strict_fallback, "Do not fall back to wireframe when shaded or hidden-line tessellation fails");
-    BU_OPT_NULL(d[18]);
+    BU_OPT(d[8],   "", "evaluated-points", "",              NULL, &drawing_modes[6],  "Sample evaluated geometry as point-display triangles (mode = 5)");
+    BU_OPT(d[9],  "A", "add-mode",      "",                 NULL, &vs.mixed_modes,    "Don't erase other drawn modes for specified paths (allows simultaneous shaded and wireframe drawing for the same object)");
+    BU_OPT(d[10], "t", "transparency", "#",      &bu_opt_fastf_t, &vs.transparency,   "Set transparency level in drawing: range 0 (clear) to 1 (opaque)");
+    BU_OPT(d[11], "x", "",             "#",      &bu_opt_fastf_t, &vs.transparency,   "");
+    BU_OPT(d[12], "L", "",             "#",          &bu_opt_int, &bot_threshold,     "Set face count level for drawing bounding boxes instead of BoT triangles (NOTE: passing this updates the global view setting - bot_threshold is a view property).");
+    BU_OPT(d[13], "S", "no-subtract",   "",                 NULL, &vs.draw_non_subtract_only,  "Do not draw subtraction solids");
+    BU_OPT(d[14], "s", "no-dash",       "",                 NULL, &vs.draw_solid_lines_only,  "Use solid lines rather than dashed for subtraction solids");
+    BU_OPT(d[15], "C", "color",         "r/g/b", &draw_opt_color, &vs,                "Override object colors");
+    BU_OPT(d[16],  "", "line-width",   "#",          &bu_opt_int, &vs.s_line_width,   "Override default line width");
+    BU_OPT(d[17], "R", "no-autoview",   "",                 NULL, &no_autoview,       "Do not calculate automatic view, even if initial scene is empty.");
+    BU_OPT(d[18],  "", "strict",        "",                 NULL, &vs.strict_fallback, "Do not fall back to wireframe when shaded or hidden-line tessellation fails");
+    BU_OPT_NULL(d[19]);
 
     /* If no args, must be wanting help */
     if (!argc) {
@@ -415,7 +416,7 @@ ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
     // Drawing modes may be set either by -m or by the more verbose options,
     // with the latter taking precedence if both are set.
     int have_override = 0;
-    for (int i = 1; i < 6; i++) {
+    for (int i = 1; i < 7; i++) {
 	if (drawing_modes[i]) {
 	    have_override++;
 	}
@@ -425,7 +426,7 @@ ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
     if (have_override) {
-	for (int i = 1; i < 6; i++) {
+	for (int i = 1; i < 7; i++) {
 	    if (drawing_modes[i]) {
 		drawing_modes[0] = i - 1;
 		break;

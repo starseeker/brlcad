@@ -1423,9 +1423,8 @@ exercise_evaluated_wire_shape_ref_realize_context(struct ged *gedp,
 	    &record) || record.draw_mode != mode)
 	FAIL("evaluated-wire shape ref should retain its mode identity");
 
-    if (!ged_draw_shape_ref_realize_context(gedp, eval_state.recordState.ref,
-	    ged_draw_active_view_ctx(gedp)))
-	FAIL("evaluated-wire shape-ref realize-context should succeed");
+    if (!ged_draw_obol_database_source_realize_for_path(gedp, path))
+	FAIL("evaluated-wire Obol source realization should succeed");
     if (!source->getSummary(summary) || !summary.valid ||
 	    summary.stale ||
 	    summary.realizationStatus != SoBRLDatabaseSource::REALIZED ||
@@ -2593,6 +2592,18 @@ main(int argc, char **argv)
 	    SoBRLDatabaseSource::REPRESENTATION_EVAL_POINTS, 0, 1, 1,
 	    "evaluated-points"))
 	return 1;
+    const char *draw_eval_points_option[4] = {"draw",
+	"--evaluated-points", "--add-mode", "box.s"};
+    if (ged_exec_draw(gedp, 4, draw_eval_points_option) != BRLCAD_OK)
+	FAIL("GED evaluated-points option draw should succeed");
+    if (source_representation_count(owned_scene, "box.s",
+	    SoBRLDatabaseSource::REPRESENTATION_EVAL_POINTS) != 1)
+	FAIL("GED evaluated-points option should create one mode source");
+    (void)ged_draw_source_erase_path_in_active_scope(gedp, "box.s",
+	    ged_draw_active_view_ctx(gedp), -1);
+    if (!ged_draw_obol_database_source_ensure_for_path(gedp, "box.s",
+	    gedp->dbip, GED_DRAW_MODE_WIRE, 0))
+	FAIL("GED evaluated-points option test should restore shared wire source");
     const char *draw_annot_line[2] = {"draw", "annot_line.s"};
     if (ged_exec_draw(gedp, 2, draw_annot_line) != BRLCAD_OK)
 	FAIL("GED annotation draw should succeed for owned Obol publication");
@@ -4198,9 +4209,8 @@ main(int argc, char **argv)
 	    fabs(box_source_summary.realizationCurveScale - 4.5f) > 0.001f ||
 	    fabs(box_source_summary.realizationPointScale - 5.5f) > 0.001f)
 	FAIL("GED Obol source-record bridge should mutate owned source metadata");
-    if (!ged_draw_shape_ref_realize_context(gedp, box_record.ref,
-	    ged_draw_active_view_ctx(gedp)))
-	FAIL("GED shape realize-context should realize the owned Obol source");
+    if (!ged_draw_obol_database_source_realize_for_path(gedp, "box.s"))
+	FAIL("GED Obol source realization should realize the owned source");
     if (!box_source->getSummary(box_source_summary) ||
 	    box_source_summary.stale)
 	FAIL("GED shape realize-context should make the owned Obol source current before stale mutation check");

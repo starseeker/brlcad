@@ -2062,14 +2062,6 @@ ged_draw_shape_ref_publish_primitive_wireframe(struct ged *gedp,
 	void *view_ctx,
 	int adaptive);
 
-GED_EXPORT extern int
-ged_draw_shape_ref_eval_wireframe(struct ged *gedp,
-				  ged_draw_shape_ref ref);
-
-GED_EXPORT extern int
-ged_draw_shape_ref_eval_points(struct ged *gedp,
-			       ged_draw_shape_ref ref);
-
 GED_EXPORT extern ged_draw_shape_ref
 ged_draw_highlighted_shape_ref(const struct ged *gedp);
 

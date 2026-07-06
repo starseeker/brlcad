@@ -227,9 +227,6 @@ static int ged_draw_scene_ref_is_view_scope(bsg_scene_ref ref);
 static int ged_draw_scene_ref_draw_tree_depth(bsg_scene_ref ref);
 static int ged_draw_scene_ref_draw_mode(bsg_scene_ref ref);
 static int ged_draw_scene_ref_visible(bsg_scene_ref ref);
-static void ged_draw_scene_ref_realization_set_view_context_policy(
-	bsg_scene_ref ref,
-	const void *view_ctx);
 static void ged_draw_scene_ref_set_draw_center(bsg_scene_ref ref,
 					       const point_t center);
 static int ged_draw_scene_ref_set_bounds(bsg_scene_ref ref,
@@ -291,13 +288,10 @@ static int ged_draw_scene_ref_apply_display_settings(
 	const struct ged_draw_appearance_settings *settings);
 static void ged_draw_scene_ref_set_material_rgb(bsg_scene_ref ref,
 						const unsigned char rgb[3]);
-static int ged_draw_scene_ref_realize_view_inputs_changed(bsg_scene_ref ref,
-							  void *view_ctx);
 static void ged_draw_scene_ref_invalidate(bsg_scene_ref ref);
 static int ged_draw_scene_ref_apply_path_state(struct ged *gedp,
 					       bsg_scene_ref ref,
 					       const struct db_full_path *path);
-static void ged_draw_scene_ref_realize(bsg_scene_ref ref, void *view_ctx);
 static bsg_scene_ref ged_draw_scene_ref_parent(bsg_scene_ref ref);
 static bsg_scene_ref ged_draw_scene_ref_source_owner(bsg_scene_ref ref);
 static int ged_draw_scene_ref_erase_nested_db_subpath(
@@ -477,13 +471,6 @@ static int ged_draw_scene_rt_ref_subtree_bounds(
 	vect_t *min,
 	vect_t *max,
 	int include_overlays);
-static void ged_draw_scene_ref_realize_dispatch(
-	bsg_scene_ref ref,
-	void *view_ctx);
-static int ged_draw_scene_ref_source_runtime_summary(
-	bsg_scene_ref ref,
-	struct ged_draw_source_runtime_summary *out);
-static int ged_draw_source_primitive_has_lod_realize(const struct rt_db_internal *ip);
 static int ged_draw_scene_ref_geometry_clear(bsg_scene_ref ref);
 static int ged_draw_scene_ref_publish_bot_wireframe_line_set(
 	bsg_scene_ref ref,
@@ -562,29 +549,7 @@ static int ged_draw_scene_ref_update_bounds_from_geometry(
 static int ged_draw_scene_ref_update_bounds_context(
 	bsg_scene_ref ref,
 	void *view_ctx);
-static int ged_draw_scene_ref_update_indexed_face_set(bsg_scene_ref ref,
-						      const point_t *points,
-						      size_t point_count,
-						      const vect_t *normals,
-						      size_t normal_count,
-						      const int *indices,
-						      size_t index_count);
 static int ged_draw_rt_internal_payload_valid(const struct rt_db_internal *ip);
-static int ged_draw_scene_ref_publish_current_face_set(bsg_scene_ref ref,
-						       struct rt_db_internal *ip,
-						       const struct bg_tess_tol *ttol,
-						       const struct bn_tol *tol,
-						       const struct rt_view_info *view_info);
-static int ged_draw_scene_ref_publish_current_wireframe(bsg_scene_ref ref,
-							struct rt_db_internal *ip,
-							const struct bg_tess_tol *ttol,
-							const struct bn_tol *tol,
-							void *view_ctx,
-							const struct rt_view_info *view_info,
-							int adaptive);
-static int ged_draw_scene_ref_publish_current_nmg_region(bsg_scene_ref ref,
-							 const struct nmgregion *r,
-							 int style);
 static int ged_draw_scene_ref_geometry_publish_nmg_model(bsg_scene_ref ref,
 							 const struct model *m,
 							 int style);
@@ -598,35 +563,16 @@ static int ged_draw_scene_ref_subtree_bounds(bsg_scene_ref ref,
 					     vect_t *min,
 					     vect_t *max,
 					     int include_overlays);
-static void ged_draw_scene_ref_realization_finish_view(
-	bsg_scene_ref ref,
-	void *view_ctx,
-	void *scene_view_ctx);
-static void ged_draw_scene_ref_realization_finish_current_view(
-	bsg_scene_ref ref,
-	void *view_ctx,
-	void *scene_view_ctx);
 static int ged_draw_scene_ref_set_changed(bsg_scene_ref ref, int changed);
 static int ged_draw_scene_ref_copy_draw_intent(bsg_scene_ref dst,
 					       bsg_scene_ref src);
 static int ged_draw_scene_ref_set_non_database_source(
 	bsg_scene_ref ref,
 	int non_database_source);
-static void ged_draw_scene_ref_realization_set_current(bsg_scene_ref ref,
-						       int current);
-static void ged_draw_scene_ref_realization_mark_current(bsg_scene_ref ref);
-static void ged_draw_scene_ref_realization_clear_stale(bsg_scene_ref ref);
 static void ged_draw_scene_ref_realization_set_roles(bsg_scene_ref ref,
 						     int csg_obj,
 						     int mesh_obj);
-static void ged_draw_scene_ref_realization_prepare_wireframe(bsg_scene_ref ref);
-static void ged_draw_scene_ref_realization_prepare_mesh(bsg_scene_ref ref);
 static void ged_draw_scene_ref_realization_prepare_surface(bsg_scene_ref ref);
-static int _ged_draw_scene_ref_mark_view_inputs_changed(bsg_scene_ref ref);
-static int ged_draw_scene_ref_realization_prepare_view_redraw(
-	bsg_scene_ref ref,
-	void *view_ctx);
-static int ged_draw_scene_ref_publish_current_mesh_lod(bsg_scene_ref ref);
 static int ged_draw_obol_database_source_bot_mesh_lod_realize(
 	struct ged *gedp,
 	const char *path,
@@ -670,12 +616,6 @@ static const char *ged_draw_scene_ref_draw_intent_path(bsg_scene_ref ref);
 static int ged_draw_scene_ref_draw_intent_mode(bsg_scene_ref ref,
 					       int *draw_mode);
 static int ged_draw_scene_ref_line_style(bsg_scene_ref ref);
-static int ged_draw_scene_ref_strict_fallback(bsg_scene_ref ref);
-static int ged_draw_scene_ref_realization_current(bsg_scene_ref ref);
-static int ged_draw_scene_ref_realization_view_dependent(bsg_scene_ref ref);
-static fastf_t ged_draw_scene_ref_realization_view_scale(bsg_scene_ref ref);
-static fastf_t ged_draw_scene_ref_realization_curve_scale(bsg_scene_ref ref);
-static fastf_t ged_draw_scene_ref_realization_point_scale(bsg_scene_ref ref);
 static int ged_draw_scene_ref_realization_pipeline_candidate(bsg_scene_ref ref);
 static struct ged *_ged_draw_scene_ref_owner_gedp(bsg_scene_ref ref);
 static void ged_draw_scene_ref_remember_owner_gedp(bsg_scene_ref ref,
@@ -697,18 +637,16 @@ static int ged_draw_scene_ref_obol_realization_policy_summary(
 static int ged_draw_scene_ref_obol_set_realization_roles(
 	bsg_scene_ref ref,
 	int role_flags);
-static int ged_draw_scene_ref_obol_set_realization_view_policy(
-	bsg_scene_ref ref,
-	int view_dependent,
-	fastf_t view_scale,
-	uint64_t bot_threshold,
-	fastf_t curve_scale,
-	fastf_t point_scale);
 static void _ged_draw_rt_db_internal_user_data_free(void *data);
 static int _ged_draw_scene_ref_user_data_set(
 	bsg_scene_ref ref,
 	void *data,
 	void (*free_cb)(void *));
+static int _ged_draw_scene_ref_overlay_internal_set(
+	struct ged *gedp,
+	bsg_scene_ref ref,
+	struct db_full_path *fp,
+	struct rt_db_internal **ip);
 static void _ged_draw_scene_ref_copy_display_state(bsg_scene_ref dst, bsg_scene_ref src);
 static int _ged_draw_scene_ref_apply_aux_display_state(bsg_scene_ref dst, bsg_scene_ref src);
 static int _ged_draw_scene_ref_apply_db_object_marker(bsg_scene_ref ref);
@@ -2700,17 +2638,6 @@ ged_draw_add_tree_primitive_wireframe_to_group(
 
     return ged_draw_shape_draft_commit_tree_result(draft, gedp, group_ref,
 	    settings, dashflag, pathp, tsp, wireframe_color_override);
-}
-
-
-static const char *
-_ged_draw_source_view_context_name(const void *view_ctx)
-{
-    if (!view_ctx)
-	return "NULL";
-
-    const char *name = ged_view_context_name_get(view_ctx);
-    return name ? name : "";
 }
 
 
@@ -7761,71 +7688,6 @@ ged_draw_scene_ref_obol_database_source_runtime(
     memset(out, 0, sizeof(*out));
     return ged_draw_scene_ref_obol_source_path_apply(ref,
 	    ged_draw_scene_ref_obol_database_source_runtime_cb, out);
-}
-
-
-struct ged_draw_scene_ref_obol_mesh_lod_set {
-    struct BRLObolMeshLod *lod;
-};
-
-
-static int
-ged_draw_scene_ref_obol_mesh_lod_set_cb(
-	struct ged *gedp,
-	const char *path,
-	void *data)
-{
-    struct ged_draw_scene_ref_obol_mesh_lod_set *update =
-	(struct ged_draw_scene_ref_obol_mesh_lod_set *)data;
-    return update ?
-	ged_draw_obol_database_source_set_mesh_lod_for_path(gedp, path,
-		update->lod) : 0;
-}
-
-
-static int
-ged_draw_scene_ref_obol_mesh_lod_set(
-	bsg_scene_ref ref,
-	struct BRLObolMeshLod *lod)
-{
-    struct ged_draw_scene_ref_obol_mesh_lod_set update;
-    update.lod = lod;
-    return ged_draw_scene_ref_obol_source_path_apply(ref,
-	    ged_draw_scene_ref_obol_mesh_lod_set_cb, &update);
-}
-
-
-struct ged_draw_scene_ref_obol_mesh_lod_bounds_set {
-    point_t bmin;
-    point_t bmax;
-};
-
-
-static int
-ged_draw_scene_ref_obol_mesh_lod_bounds_set_cb(
-	struct ged *gedp,
-	const char *path,
-	void *data)
-{
-    struct ged_draw_scene_ref_obol_mesh_lod_bounds_set *update =
-	(struct ged_draw_scene_ref_obol_mesh_lod_bounds_set *)data;
-    return update ?
-	ged_draw_obol_database_source_set_mesh_lod_bounds_for_path(gedp,
-		path, update->bmin, update->bmax) : 0;
-}
-
-
-static int
-ged_draw_scene_ref_obol_mesh_lod_bounds_set(
-	bsg_scene_ref ref,
-	const point_t bmin,
-	const point_t bmax)
-{
-    struct ged_draw_scene_ref_obol_mesh_lod_bounds_set update;
-    VMOVE(update.bmin, bmin);
-    VMOVE(update.bmax, bmax);
-    return ged_draw_scene_ref_obol_source_path_apply(ref,
-	    ged_draw_scene_ref_obol_mesh_lod_bounds_set_cb, &update);
 }
 
 
@@ -13650,93 +13512,6 @@ ged_draw_shape_ref_release(struct ged *gedp, ged_draw_shape_ref ref)
 
 
 static int
-ged_draw_obol_database_source_eval_mode_for_path(struct ged *gedp,
-						 void *view_ctx,
-						 const char *path,
-						 int draw_mode)
-{
-    if (!gedp || !path || !path[0])
-	return BRLCAD_ERROR;
-
-    int scoped = ged_draw_obol_database_source_publication_begin(gedp,
-	    view_ctx, draw_mode);
-    int ret = BRLCAD_ERROR;
-    if (draw_mode == GED_DRAW_MODE_EVAL_WIRE)
-	ret = ged_draw_obol_database_source_eval_wireframe_for_path(gedp,
-		path);
-    else if (draw_mode == GED_DRAW_MODE_EVAL_POINTS)
-	ret = ged_draw_obol_database_source_eval_points_for_path(gedp,
-		path);
-    if (scoped)
-	ged_draw_obol_database_source_publication_end(gedp);
-
-    return ret;
-}
-
-
-struct ged_draw_obol_eval_source_ctx {
-    int draw_mode;
-    void *view_ctx;
-    int ret;
-};
-
-
-static int
-ged_draw_obol_eval_source_path_cb(struct ged *gedp,
-				  const char *path,
-				  void *data)
-{
-    struct ged_draw_obol_eval_source_ctx *ctx =
-	(struct ged_draw_obol_eval_source_ctx *)data;
-    if (!ctx)
-	return 0;
-
-    ctx->ret = ged_draw_obol_database_source_eval_mode_for_path(gedp,
-	    ctx->view_ctx, path, ctx->draw_mode);
-    return ctx->ret == BRLCAD_OK ? 1 : 0;
-}
-
-
-int
-ged_draw_shape_ref_realize_context(struct ged *gedp, ged_draw_shape_ref ref,
-				   void *view_ctx)
-{
-    int obol_realized = 0;
-    struct ged_draw_obol_context_token *token =
-	ged_draw_shape_ref_obol_token(gedp, ref);
-    if (token && token->is_database_source && token->path &&
-	    token->path[0]) {
-	struct ged_draw_obol_draw_state_summary draw_state;
-	memset(&draw_state, 0, sizeof(draw_state));
-	int draw_mode = token->draw_mode_valid ? token->draw_mode : -1;
-	if (draw_mode < 0 &&
-		ged_draw_obol_database_source_draw_state_for_path(gedp,
-		    token->path, &draw_state) && draw_state.valid &&
-		draw_state.draw_mode_valid)
-	    draw_mode = draw_state.draw_mode;
-	if (draw_mode == GED_DRAW_MODE_EVAL_WIRE ||
-		draw_mode == GED_DRAW_MODE_EVAL_POINTS) {
-	    int eval_ret = ged_draw_obol_database_source_eval_mode_for_path(
-		    gedp, view_ctx, token->path, draw_mode);
-	    return eval_ret == BRLCAD_OK ? 1 : 0;
-	}
-	(void)ged_draw_shape_ref_lod_ensure_obol(gedp, ref, view_ctx);
-	obol_realized = ged_draw_obol_database_source_realize_for_path(gedp,
-		token->path);
-	/* Obol owns public shape realization; retained realization syncs the temporary adapter. */
-    }
-
-    bsg_scene_ref shape_ref = _ged_draw_shape_ref_runtime_scene_ref(gedp,
-	    ref);
-    if (ged_draw_scene_ref_is_null(shape_ref))
-	return obol_realized;
-    ged_draw_scene_ref_remember_owner_gedp(shape_ref, gedp);
-    ged_draw_scene_ref_realize(shape_ref, view_ctx);
-    return 1;
-}
-
-
-static int
 ged_draw_scene_rt_ref_set_visible(rt_view_scene_ref scene_ref, int visible)
 {
     return ged_draw_scene_ref_set_visible(
@@ -14126,53 +13901,26 @@ ged_draw_shape_ref_lod_ensure(struct ged *gedp, ged_draw_shape_ref ref,
 			      void **view_ctxs,
 			      size_t view_ctx_count)
 {
-    bsg_scene_ref shape_ref = _ged_draw_shape_ref_runtime_scene_ref(gedp,
-	    ref);
-    if (ged_draw_scene_ref_is_null(shape_ref))
-	return ged_draw_shape_ref_lod_ensure_obol(gedp, ref,
-		first_view_ctx);
-    if (!first_view_ctx)
+    if (!gedp || ged_draw_shape_ref_is_null(ref))
 	return 0;
 
-    ged_draw_view_lod_policy policy;
-    rt_view_context_lod_policy_get(&policy, first_view_ctx);
-    struct ged_draw_scene_draw_state_summary draw_state = {0};
-    if (!ged_draw_scene_ref_draw_state_summary(shape_ref, &draw_state))
-	return 1;
-    int candidate = draw_state.pipeline_candidate;
-    struct ged_draw_database_source_summary source_summary;
-    int source_backed =
-	ged_draw_scene_ref_database_source_summary(shape_ref, &source_summary) &&
-	source_summary.has_state;
-    if (!candidate && !source_backed)
-	return 1;
-    if (!candidate) {
-	struct ged_draw_shape_source_snapshot source = {0};
-	struct directory *dp = NULL;
-	if (ged_draw_scene_ref_source_snapshot(shape_ref, &source))
-	    dp = source.leaf_dp;
-	int mode = draw_state.draw_mode;
-	int mesh_ref = dp && policy.mesh_enabled &&
-	    ((dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT &&
-	      (mode == 0 || mode == 1)) ||
-	     (dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP &&
-	      mode == 1));
-	if (!mesh_ref && !(policy.csg_enabled && mode == 0))
-	    return 1;
-    }
-    int realized = 0;
+    struct ged_draw_obol_context_token *token =
+	ged_draw_shape_ref_obol_token(gedp, ref);
+    if (!token || !token->is_database_source || !token->path ||
+	    !token->path[0])
+	return 0;
+
+    int ensured = 0;
     for (size_t i = 0; i < view_ctx_count; i++) {
-	if (view_ctxs && view_ctxs[i]) {
-	    (void)ged_draw_scene_ref_realize_view_inputs_changed(shape_ref,
-		    view_ctxs[i]);
-	    realized = 1;
-	}
+	if (view_ctxs && view_ctxs[i] &&
+		ged_draw_shape_ref_lod_ensure_obol(gedp, ref, view_ctxs[i]))
+	    ensured = 1;
     }
-    if (!realized) {
-	(void)ged_draw_scene_ref_realize_view_inputs_changed(shape_ref,
+    if (!ensured && first_view_ctx)
+	ensured = ged_draw_shape_ref_lod_ensure_obol(gedp, ref,
 		first_view_ctx);
-    }
-    return 1;
+
+    return ensured;
 }
 
 
@@ -14188,803 +13936,6 @@ ged_draw_shape_ref_view_context(struct ged *gedp, ged_draw_shape_ref ref)
     if (!ged_draw_scene_ref_draw_state_summary(shape_ref, &draw_state))
 	return NULL;
     return draw_state.view_ctx;
-}
-
-
-static int
-ged_draw_scene_ref_source_runtime_summary(
-	bsg_scene_ref ref,
-	struct ged_draw_source_runtime_summary *out)
-{
-    if (!out)
-	return 0;
-
-    memset(out, 0, sizeof(*out));
-    ged_draw_shape_state *shape_data = _ged_draw_shape_state_get_scene_ref(ref);
-    struct ged_draw_source_state *source =
-	shape_data ? (struct ged_draw_source_state *)shape_data->source_data : NULL;
-
-    struct ged_draw_obol_database_source_runtime obol_runtime;
-    memset(&obol_runtime, 0, sizeof(obol_runtime));
-    int obol_runtime_valid =
-	ged_draw_scene_ref_obol_database_source_runtime(ref, &obol_runtime);
-
-    struct ged_draw_shape_source_snapshot snapshot;
-    memset(&snapshot, 0, sizeof(snapshot));
-    if (ged_draw_scene_ref_source_snapshot(ref, &snapshot)) {
-	out->dbip = snapshot.dbip;
-	out->fullpath = snapshot.fullpath;
-	out->leaf_dp = snapshot.leaf_dp;
-	out->name = snapshot.name;
-	out->tol = snapshot.tol;
-	out->ttol = snapshot.ttol;
-	if (obol_runtime_valid) {
-	    out->mesh_lod = obol_runtime.mesh_lod;
-	    out->mesh_lod_bounds_valid = obol_runtime.mesh_lod_bounds_valid;
-	    VMOVE(out->mesh_lod_bmin, obol_runtime.mesh_lod_bmin);
-	    VMOVE(out->mesh_lod_bmax, obol_runtime.mesh_lod_bmax);
-	} else if (source) {
-	    out->mesh_lod = source->mesh_lod;
-	    out->mesh_lod_bounds_valid = source->mesh_lod_bounds_valid;
-	    VMOVE(out->mesh_lod_bmin, source->mesh_lod_bmin);
-	    VMOVE(out->mesh_lod_bmax, source->mesh_lod_bmax);
-	}
-	return 1;
-    }
-
-    if (!source)
-	return 0;
-
-    out->dbip = source->dbip;
-    out->fullpath = ged_draw_scene_ref_fullpath(ref);
-    out->leaf_dp = ged_draw_scene_ref_leaf_dp(ref);
-    out->name = ged_draw_scene_ref_name(ref);
-    out->tol = source->tol;
-    out->ttol = source->ttol;
-    if (obol_runtime_valid) {
-	out->mesh_lod = obol_runtime.mesh_lod;
-	out->mesh_lod_bounds_valid = obol_runtime.mesh_lod_bounds_valid;
-	VMOVE(out->mesh_lod_bmin, obol_runtime.mesh_lod_bmin);
-	VMOVE(out->mesh_lod_bmax, obol_runtime.mesh_lod_bmax);
-    } else {
-	out->mesh_lod = source->mesh_lod;
-	out->mesh_lod_bounds_valid = source->mesh_lod_bounds_valid;
-	VMOVE(out->mesh_lod_bmin, source->mesh_lod_bmin);
-	VMOVE(out->mesh_lod_bmax, source->mesh_lod_bmax);
-    }
-    return 1;
-}
-
-
-static int
-ged_draw_scene_ref_source_mesh_lod_set(
-	bsg_scene_ref ref,
-	struct BRLObolMeshLod *lod)
-{
-    if (ged_draw_scene_ref_obol_mesh_lod_set(ref, lod))
-	return 1;
-
-    ged_draw_shape_state *shape_data = _ged_draw_shape_state_get_scene_ref(ref);
-    struct ged_draw_source_state *source =
-	shape_data ? (struct ged_draw_source_state *)shape_data->source_data : NULL;
-    if (!source)
-	return 0;
-
-    source->mesh_lod = lod;
-    if (shape_data && shape_data->gedp && shape_data->gedp->i &&
-	    shape_data->gedp->i->ged_gdp)
-	shape_data->gedp->i->ged_gdp->gd_draw_retained_mesh_lod_runtime_updates++;
-    return 1;
-}
-
-
-static int
-ged_draw_scene_ref_source_mesh_lod_bounds_set(
-	bsg_scene_ref ref,
-	const point_t bmin,
-	const point_t bmax)
-{
-    if (ged_draw_scene_ref_obol_mesh_lod_bounds_set(ref, bmin, bmax))
-	return 1;
-
-    ged_draw_shape_state *shape_data = _ged_draw_shape_state_get_scene_ref(ref);
-    struct ged_draw_source_state *source =
-	shape_data ? (struct ged_draw_source_state *)shape_data->source_data : NULL;
-    if (!source)
-	return 0;
-
-    VMOVE(source->mesh_lod_bmin, bmin);
-    VMOVE(source->mesh_lod_bmax, bmax);
-    source->mesh_lod_bounds_valid = 1;
-    if (shape_data && shape_data->gedp && shape_data->gedp->i &&
-	    shape_data->gedp->i->ged_gdp)
-	shape_data->gedp->i->ged_gdp->gd_draw_retained_mesh_lod_runtime_updates++;
-    return 1;
-}
-
-
-static int
-_ged_draw_scene_ref_set_transformed_bounds(
-	bsg_scene_ref ref,
-	const point_t src_bmin,
-	const point_t src_bmax)
-{
-    if (ged_draw_scene_ref_is_null(ref))
-	return 0;
-
-    struct ged_draw_scene_draw_state_summary draw_state;
-    memset(&draw_state, 0, sizeof(draw_state));
-    if (!ged_draw_scene_ref_draw_state_summary(ref, &draw_state) ||
-	    !draw_state.draw_mat_valid)
-	return 0;
-
-    point_t corners[8] = {
-	{src_bmin[X], src_bmin[Y], src_bmin[Z]},
-	{src_bmin[X], src_bmin[Y], src_bmax[Z]},
-	{src_bmin[X], src_bmax[Y], src_bmin[Z]},
-	{src_bmin[X], src_bmax[Y], src_bmax[Z]},
-	{src_bmax[X], src_bmin[Y], src_bmin[Z]},
-	{src_bmax[X], src_bmin[Y], src_bmax[Z]},
-	{src_bmax[X], src_bmax[Y], src_bmin[Z]},
-	{src_bmax[X], src_bmax[Y], src_bmax[Z]}
-    };
-
-    point_t bmin, bmax, tp;
-    MAT4X3PNT(tp, draw_state.draw_mat, corners[0]);
-    VMOVE(bmin, tp);
-    VMOVE(bmax, tp);
-    for (int i = 1; i < 8; i++) {
-	MAT4X3PNT(tp, draw_state.draw_mat, corners[i]);
-	VMIN(bmin, tp);
-	VMAX(bmax, tp);
-    }
-
-    return ged_draw_scene_ref_set_bounds(ref, bmin, bmax, 1);
-}
-
-
-static int
-ged_draw_scene_ref_source_mesh_lod_bounds_restore(bsg_scene_ref ref)
-{
-    struct ged_draw_source_runtime_summary source;
-    memset(&source, 0, sizeof(source));
-    if (ged_draw_scene_ref_is_null(ref) ||
-	    !ged_draw_scene_ref_source_runtime_summary(ref, &source) ||
-	    !source.mesh_lod_bounds_valid)
-	return 0;
-
-    return _ged_draw_scene_ref_set_transformed_bounds(ref,
-	    source.mesh_lod_bmin, source.mesh_lod_bmax);
-}
-
-
-static int
-ged_draw_scene_ref_source_mesh_lod_load_view(
-	bsg_scene_ref ref,
-	void *view_ctx)
-{
-    struct ged_draw_source_runtime_summary source;
-    memset(&source, 0, sizeof(source));
-    if (ged_draw_scene_ref_is_null(ref) ||
-	    !ged_draw_scene_ref_source_runtime_summary(ref, &source) ||
-	    !source.mesh_lod || !view_ctx)
-	return -1;
-
-    struct ged_draw_obol_database_source_runtime obol_runtime;
-    memset(&obol_runtime, 0, sizeof(obol_runtime));
-    if (ged_draw_scene_ref_obol_database_source_runtime(ref,
-		&obol_runtime) &&
-	    obol_runtime.mesh_lod == source.mesh_lod) {
-	struct rt_view_info view_info = RT_VIEW_INFO_INIT;
-	ged_draw_view_context_info_get(&view_info, view_ctx);
-	return brlobol_mesh_lod_load_view(source.mesh_lod, &view_info, 0);
-    }
-
-    return brlobol_mesh_lod_load_view_scene_ref(source.mesh_lod,
-	    ged_draw_scene_ref_to_rt_view_ref(ref), view_ctx, 0);
-}
-
-
-static int
-ged_draw_scene_ref_source_bot_mesh_lod_realize(
-	bsg_scene_ref ref,
-	void *view_ctx)
-{
-    if (ged_draw_scene_ref_is_null(ref) || !view_ctx)
-	return 0;
-
-    ged_draw_scene_ref_realization_prepare_mesh(ref);
-
-    struct ged_draw_source_runtime_summary source;
-    memset(&source, 0, sizeof(source));
-    if (!ged_draw_scene_ref_source_runtime_summary(ref, &source))
-	return 0;
-    ged_draw_log(1, "bot_lod_mesh_realize %s[%s]", source.name,
-	    _ged_draw_source_view_context_name(view_ctx));
-
-    if (!source.mesh_lod) {
-	struct db_i *dbip = source.dbip;
-	struct directory *dp = source.leaf_dp;
-
-	if (!dbip || !dp)
-	    return 0;
-
-	struct BRLObolMeshLodCacheStatus status = BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
-	if (brlobol_mesh_lod_cache_status(dbip, dp->d_namep, &status) != BRLCAD_OK)
-	    return 0;
-	if (!status.has_cache_key || !status.has_cached_payload || status.stale_cache_entry) {
-	    if (brlobol_mesh_lod_cache_refresh(dbip, dp->d_namep, &status) != BRLCAD_OK)
-		return 0;
-	}
-	if (!status.has_cache_key || !status.has_cached_payload)
-	    return 0;
-
-	struct BRLObolMeshLod *mesh_lod = brlobol_mesh_lod_get(dbip, dp->d_namep);
-	if (!mesh_lod) {
-	    if (brlobol_mesh_lod_cache_refresh(dbip, dp->d_namep, &status) != BRLCAD_OK ||
-		    !status.has_cache_key || !status.has_cached_payload)
-		return 0;
-	    mesh_lod = brlobol_mesh_lod_get(dbip, dp->d_namep);
-	}
-	if (!mesh_lod)
-	    return 0;
-
-	ged_draw_scene_ref_source_mesh_lod_set(ref, mesh_lod);
-
-	int level = ged_draw_scene_ref_source_mesh_lod_load_view(ref, view_ctx);
-	if (level < 0)
-	    bu_log("Error loading info for initial LoD view\n");
-
-	struct BRLObolMeshLodInfo info = BRLOBOL_MESH_LOD_INFO_INIT;
-	if (brlobol_mesh_lod_info_get(mesh_lod, &info))
-	    ged_draw_scene_ref_source_mesh_lod_bounds_set(ref, info.bmin,
-		    info.bmax);
-
-	(void)ged_draw_scene_ref_source_mesh_lod_bounds_restore(ref);
-    }
-
-    (void)ged_draw_scene_ref_source_mesh_lod_load_view(ref, view_ctx);
-    int published = ged_draw_scene_ref_publish_current_mesh_lod(ref);
-    if (published)
-	ged_draw_scene_ref_realization_finish_current_view(ref, view_ctx,
-		view_ctx);
-    return published;
-}
-
-
-static int
-ged_draw_scene_ref_source_brep_mesh_lod_realize(
-	bsg_scene_ref ref,
-	void *view_ctx)
-{
-    if (ged_draw_scene_ref_is_null(ref) || !view_ctx)
-	return 0;
-
-    ged_draw_scene_ref_realization_prepare_mesh(ref);
-
-    struct ged_draw_source_runtime_summary source;
-    memset(&source, 0, sizeof(source));
-    if (!ged_draw_scene_ref_source_runtime_summary(ref, &source))
-	return 0;
-    ged_draw_log(1, "brep_lod_mesh_realize %s[%s]", source.name,
-	    _ged_draw_source_view_context_name(view_ctx));
-
-    if (!source.mesh_lod) {
-	struct db_i *dbip = source.dbip;
-	struct directory *dp = source.leaf_dp;
-
-	if (!dbip || !dp)
-	    return 0;
-
-	const struct bn_tol *tol = source.tol;
-	const struct bg_tess_tol *ttol = source.ttol;
-	struct BRLObolMeshLod *mesh_lod = NULL;
-	point_t bmin, bmax;
-	int bounds_valid = 0;
-	if (!ged_draw_brep_mesh_lod_cache_prepare(&mesh_lod, bmin, bmax,
-		&bounds_valid, dbip, dp, ttol, tol))
-	    return 0;
-	if (!mesh_lod)
-	    return 0;
-
-	ged_draw_scene_ref_source_mesh_lod_set(ref, mesh_lod);
-	if (bounds_valid)
-	    ged_draw_scene_ref_source_mesh_lod_bounds_set(ref, bmin, bmax);
-
-	(void)ged_draw_scene_ref_source_mesh_lod_bounds_restore(ref);
-
-	if (!ged_draw_brep_mesh_lod_detail_setup(mesh_lod, dbip, dp, ttol, tol))
-	    return 0;
-
-	int level = ged_draw_scene_ref_source_mesh_lod_load_view(ref, view_ctx);
-	if (level < 0)
-	    bu_log("Error loading info for initial LoD view\n");
-    }
-
-    (void)ged_draw_scene_ref_source_mesh_lod_load_view(ref, view_ctx);
-    int published = ged_draw_scene_ref_publish_current_mesh_lod(ref);
-    if (published)
-	ged_draw_scene_ref_realization_finish_current_view(ref, view_ctx,
-		view_ctx);
-    return published;
-}
-
-
-static int
-ged_draw_scene_ref_source_adaptive_wireframe_update(
-	bsg_scene_ref ref,
-	void *view_ctx,
-	int force)
-{
-    if (ged_draw_scene_ref_is_null(ref) || !view_ctx)
-	return 0;
-
-    ged_draw_view_lod_policy policy;
-    ged_draw_view_context_lod_policy_get(&policy, view_ctx);
-    if (!policy.csg_enabled)
-	return 0;
-
-    struct ged_draw_scene_draw_state_summary draw_state;
-    memset(&draw_state, 0, sizeof(draw_state));
-    if (!ged_draw_scene_ref_draw_state_summary(ref, &draw_state))
-	return 0;
-
-    ged_draw_scene_ref_realization_prepare_wireframe(ref);
-
-    if (!draw_state.bounds_valid)
-	return 0;
-    if (!(ged_view_context_perspective_get(view_ctx) > SMALL_FASTF)) {
-	point_t obb_center = VINIT_ZERO;
-	vect_t obb_extent1 = VINIT_ZERO;
-	vect_t obb_extent2 = VINIT_ZERO;
-	vect_t obb_extent3 = VINIT_ZERO;
-	if (!rt_view_context_obb_get(view_ctx, obb_center, obb_extent1,
-		obb_extent2, obb_extent3) ||
-		!bg_sat_aabb_obb(draw_state.bounds_min,
-		    draw_state.bounds_max, obb_center, obb_extent1,
-		    obb_extent2, obb_extent3))
-	    return 0;
-    }
-
-    int rework = force ? 1 : 0;
-    if (!rework && !NEAR_EQUAL(ged_draw_scene_ref_realization_curve_scale(ref),
-	    policy.curve_scale, SMALL_FASTF))
-	rework = 1;
-    if (!rework && !NEAR_EQUAL(ged_draw_scene_ref_realization_point_scale(ref),
-	    policy.point_scale, SMALL_FASTF))
-	rework = 1;
-    if (!rework) {
-	fastf_t view_scale = ged_draw_scene_ref_realization_view_scale(ref);
-	fastf_t current_view_scale = ged_view_context_scale_get(view_ctx);
-	fastf_t delta = view_scale * 0.1/view_scale;
-	if (!NEAR_EQUAL(view_scale, current_view_scale, delta))
-	    rework = 1;
-    }
-    if (!rework)
-	return 0;
-
-    struct ged_draw_shape_source_snapshot source;
-    memset(&source, 0, sizeof(source));
-    if (!ged_draw_scene_ref_source_snapshot(ref, &source))
-	return 0;
-    (void)ged_draw_scene_ref_realization_prepare_view_redraw(ref, view_ctx);
-
-    struct directory *dp = source.leaf_dp;
-    struct db_i *dbip = source.dbip;
-    struct rt_db_internal dbintern;
-    RT_DB_INTERNAL_INIT(&dbintern);
-    struct rt_db_internal *ip = &dbintern;
-    if (!draw_state.draw_mat_valid)
-	return 0;
-    int ret = rt_db_get_internal(ip, dp, dbip, draw_state.draw_mat);
-    if (ret < 0)
-	return 0;
-
-    struct rt_view_info view_info;
-    ged_draw_view_context_info_get(&view_info, view_ctx);
-    (void)ged_draw_scene_ref_publish_current_wireframe(ref, ip, NULL,
-	    source.tol, view_ctx, &view_info, 1);
-
-    rt_db_free_internal(ip);
-
-    return 1;
-}
-
-
-static int
-ged_draw_scene_ref_source_wireframe_realize(
-	bsg_scene_ref ref,
-	void *view_ctx,
-	struct rt_db_internal *ip)
-{
-    struct ged_draw_shape_source_snapshot source;
-    memset(&source, 0, sizeof(source));
-    if (!ged_draw_scene_ref_source_snapshot(ref, &source))
-	return 0;
-
-    ged_draw_scene_ref_realization_prepare_wireframe(ref);
-
-    ged_draw_view_lod_policy policy;
-    ged_draw_view_context_lod_policy_get(&policy, view_ctx);
-
-    if (!view_ctx || !policy.csg_enabled) {
-	struct ged_draw_scene_draw_state_summary draw_state;
-	memset(&draw_state, 0, sizeof(draw_state));
-	if (!ged_draw_scene_ref_draw_state_summary(ref, &draw_state))
-	    return 0;
-	return ged_draw_scene_ref_publish_current_wireframe(ref, ip, source.ttol,
-		source.tol, draw_state.view_ctx, NULL, 0);
-    }
-
-    if (ged_draw_source_primitive_has_lod_realize(ip))
-	return ged_draw_scene_ref_source_adaptive_wireframe_update(ref, view_ctx,
-		1);
-
-    struct ged_draw_scene_draw_state_summary draw_state;
-    memset(&draw_state, 0, sizeof(draw_state));
-    if (!ged_draw_scene_ref_draw_state_summary(ref, &draw_state))
-	return 0;
-    return ged_draw_scene_ref_publish_current_wireframe(ref, ip, source.ttol,
-	    source.tol, draw_state.view_ctx, NULL, 0);
-}
-
-
-static int
-ged_draw_scene_ref_source_face_set_realize(
-	bsg_scene_ref ref,
-	void *view_ctx,
-	struct rt_db_internal *ip,
-	const char *name)
-{
-    if (!ip || !ip->idb_meth || !ip->idb_meth->ft_indexed_face_set)
-	return 0;
-
-    struct ged_draw_shape_source_snapshot source;
-    memset(&source, 0, sizeof(source));
-    if (!ged_draw_scene_ref_source_snapshot(ref, &source))
-	return 1;
-
-    struct rt_view_info view_info;
-    ged_draw_view_context_info_get(&view_info, view_ctx);
-    if (!ged_draw_scene_ref_publish_current_face_set(ref, ip, source.ttol,
-	    source.tol, &view_info)) {
-	bu_log("ERROR(%s): %s shaded face-set publication failed\n",
-		name ? name : "<unknown>", ip->idb_meth->ft_label);
-    }
-
-    return 1;
-}
-
-
-static int
-_ged_draw_scene_ref_source_tessellation_fallback(
-	bsg_scene_ref ref,
-	void *view_ctx,
-	struct rt_db_internal *ip,
-	const char *name,
-	const char *mode_name)
-{
-    if (ged_draw_scene_ref_strict_fallback(ref)) {
-	bu_log("ERROR(%s): %s tessellation failed; geometry cleared\n",
-		name ? name : "<unknown>", mode_name ? mode_name : "draw");
-	ged_draw_scene_ref_realization_clear_stale(ref);
-	return 0;
-    }
-
-    bu_log("WARNING(%s): %s tessellation failed; falling back to wireframe\n",
-	    name ? name : "<unknown>", mode_name ? mode_name : "draw");
-    return ged_draw_scene_ref_source_wireframe_realize(ref, view_ctx, ip);
-}
-
-
-static int
-ged_draw_scene_ref_source_tessellate_nmg_realize(
-	bsg_scene_ref ref,
-	void *view_ctx,
-	struct rt_db_internal *ip,
-	const char *name,
-	const char *mode_name)
-{
-    struct ged_draw_shape_source_snapshot source;
-    memset(&source, 0, sizeof(source));
-    if (!ged_draw_scene_ref_source_snapshot(ref, &source))
-	return 0;
-
-    struct directory *dp = source.leaf_dp;
-    const struct bn_tol *tol = source.tol;
-    const struct bg_tess_tol *ttol = source.ttol;
-    RT_CK_DB_INTERNAL(ip);
-    RT_CK_DIR(dp);
-    BN_CK_TOL(tol);
-    BG_CK_TESS_TOL(ttol);
-    if (!ip->idb_meth || !ip->idb_meth->ft_tessellate) {
-	bu_log("ERROR(%s): tessellation support not available\n", dp->d_namep);
-	return _ged_draw_scene_ref_source_tessellation_fallback(ref, view_ctx,
-		ip, name ? name : dp->d_namep, mode_name);
-    }
-
-    struct model *m = nmg_mm();
-    struct nmgregion *r = (struct nmgregion *)NULL;
-    if (ip->idb_meth->ft_tessellate(&r, m, ip, ttol, tol) < 0) {
-	bu_log("ERROR(%s): tessellation failure\n", dp->d_namep);
-	nmg_km(m);
-	return _ged_draw_scene_ref_source_tessellation_fallback(ref, view_ctx,
-		ip, name ? name : dp->d_namep, mode_name);
-    }
-
-    NMG_CK_REGION(r);
-    if (!ged_draw_scene_ref_publish_current_nmg_region(ref, r,
-	    GED_DRAW_NMG_STYLE_POLYGON)) {
-	nmg_km(m);
-	return _ged_draw_scene_ref_source_tessellation_fallback(ref, view_ctx,
-		ip, name ? name : dp->d_namep, mode_name);
-    }
-    nmg_km(m);
-
-    return 1;
-}
-
-
-static int
-ged_draw_scene_ref_source_standard_realize(
-	bsg_scene_ref ref,
-	void *view_ctx)
-{
-    struct ged_draw_scene_draw_state_summary draw_state;
-    memset(&draw_state, 0, sizeof(draw_state));
-    if (!ged_draw_scene_ref_draw_state_summary(ref, &draw_state))
-	return 0;
-
-    struct ged_draw_source_runtime_summary source;
-    memset(&source, 0, sizeof(source));
-    if (!ged_draw_scene_ref_source_runtime_summary(ref, &source))
-	return 0;
-
-    struct db_i *dbip = source.dbip;
-    const struct db_full_path *fp = source.fullpath;
-    if (fp && fp->fp_len <= 0)
-	return 0;
-    struct directory *dp = source.leaf_dp;
-    if (!dp)
-	return 0;
-
-    struct rt_db_internal dbintern;
-    RT_DB_INTERNAL_INIT(&dbintern);
-    struct rt_db_internal *ip = &dbintern;
-    if (!draw_state.draw_mat_valid)
-	return 0;
-    int ret = rt_db_get_internal(ip, dp, dbip, draw_state.draw_mat);
-    if (ret < 0)
-	return 0;
-
-    if (ip->idb_major_type != DB5_MAJORTYPE_BRLCAD) {
-	(void)ged_draw_scene_ref_source_wireframe_realize(ref, view_ctx, ip);
-	goto geom_done;
-    }
-
-    if (ip->idb_minor_type == DB5_MINORTYPE_BRLCAD_PIPE) {
-	(void)ged_draw_scene_ref_source_wireframe_realize(ref, view_ctx, ip);
-	goto geom_done;
-    }
-
-    if (draw_state.draw_mode > 0 &&
-	    ged_draw_scene_ref_source_face_set_realize(ref, view_ctx, ip,
-		dp->d_namep)) {
-	goto geom_done;
-    }
-
-    switch (draw_state.draw_mode) {
-	case GED_DRAW_MODE_WIRE:
-	case GED_DRAW_MODE_SHADED_BOTS:
-	    (void)ged_draw_scene_ref_source_wireframe_realize(ref, view_ctx, ip);
-	    ged_draw_scene_ref_set_draw_mode(ref, GED_DRAW_MODE_WIRE);
-	    break;
-	case GED_DRAW_MODE_SHADED:
-	    (void)ged_draw_scene_ref_source_tessellate_nmg_realize(ref,
-		    view_ctx, ip, dp->d_namep, "shaded");
-	    break;
-	case GED_DRAW_MODE_EVAL_WIRE:
-	    bu_log("Error - got too deep into _scene_obj_draw routine with evaluated wireframe mode\n");
-	    goto cleanup;
-	case GED_DRAW_MODE_HIDDEN_LINE:
-	    (void)ged_draw_scene_ref_source_tessellate_nmg_realize(ref,
-		    view_ctx, ip, dp->d_namep, "hidden-line");
-	    break;
-	case GED_DRAW_MODE_EVAL_POINTS:
-	    bu_log("Error - got too deep into _scene_obj_draw routine with evaluated sampled-points mode\n");
-	    goto cleanup;
-	default:
-	    (void)ged_draw_scene_ref_source_wireframe_realize(ref, view_ctx, ip);
-	    break;
-    }
-
-geom_done:
-    ged_draw_scene_ref_realization_finish_view(ref, view_ctx,
-	    draw_state.view_ctx);
-
-cleanup:
-    rt_db_free_internal(&dbintern);
-    return 1;
-}
-
-
-static int
-ged_draw_scene_ref_source_realize(
-	bsg_scene_ref ref,
-	void *view_ctx)
-{
-    if (!ged_draw_scene_ref_is_shape(ref))
-	return 0;
-
-    struct ged_draw_scene_draw_state_summary draw_state;
-    memset(&draw_state, 0, sizeof(draw_state));
-    if (!ged_draw_scene_ref_draw_state_summary(ref, &draw_state))
-	return 0;
-
-    struct ged_draw_source_runtime_summary source;
-    memset(&source, 0, sizeof(source));
-    if (!ged_draw_scene_ref_source_runtime_summary(ref, &source))
-	return 0;
-
-    const struct db_full_path *fp = source.fullpath;
-    if (fp && fp->fp_len <= 0)
-	return 0;
-
-    struct directory *dp = source.leaf_dp;
-    if (!dp)
-	return 0;
-
-    ged_draw_view_lod_policy policy;
-    ged_draw_view_context_lod_policy_get(&policy, view_ctx);
-
-    if (dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT && view_ctx &&
-	    policy.mesh_enabled &&
-	    (draw_state.draw_mode == GED_DRAW_MODE_WIRE ||
-	     draw_state.draw_mode == GED_DRAW_MODE_SHADED_BOTS))
-	return ged_draw_scene_ref_source_bot_mesh_lod_realize(ref, view_ctx);
-
-    if (dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP && view_ctx &&
-	    policy.mesh_enabled &&
-	    draw_state.draw_mode == GED_DRAW_MODE_SHADED_BOTS)
-	return ged_draw_scene_ref_source_brep_mesh_lod_realize(ref, view_ctx);
-
-    return ged_draw_scene_ref_source_standard_realize(ref, view_ctx);
-}
-
-
-struct ged_draw_realize_children_ctx {
-    void *view_ctx;
-};
-
-
-static int
-_ged_draw_realize_child_cb(bsg_scene_ref child_ref, void *userdata)
-{
-    struct ged_draw_realize_children_ctx *ctx =
-	(struct ged_draw_realize_children_ctx *)userdata;
-
-    ged_draw_scene_ref_realize(child_ref, ctx ? ctx->view_ctx : NULL);
-    return 1;
-}
-
-
-static int
-ged_draw_scene_ref_container_realize(
-	bsg_scene_ref ref,
-	void *view_ctx)
-{
-    struct ged_draw_source_runtime_summary source;
-    memset(&source, 0, sizeof(source));
-    if (ged_draw_scene_ref_is_shape(ref) &&
-	    ged_draw_scene_ref_source_runtime_summary(ref, &source))
-	return 0;
-
-    struct ged_draw_realize_children_ctx ctx = { view_ctx };
-    (void)ged_draw_scene_ref_foreach_child(ref, _ged_draw_realize_child_cb,
-	    &ctx);
-    return 1;
-}
-
-
-static int
-ged_draw_scene_ref_evaluated_realize(
-	bsg_scene_ref ref,
-	void *view_ctx)
-{
-    struct ged_draw_scene_draw_state_summary draw_state;
-    memset(&draw_state, 0, sizeof(draw_state));
-    if (!ged_draw_scene_ref_draw_state_summary(ref, &draw_state))
-	return 0;
-
-    if (draw_state.draw_mode != GED_DRAW_MODE_EVAL_WIRE &&
-	    draw_state.draw_mode != GED_DRAW_MODE_EVAL_POINTS)
-	return 0;
-
-    struct ged_draw_obol_eval_source_ctx eval_ctx = {
-	draw_state.draw_mode,
-	view_ctx,
-	BRLCAD_ERROR
-    };
-    if (ged_draw_scene_ref_obol_source_path_apply(ref,
-	    ged_draw_obol_eval_source_path_cb, &eval_ctx)) {
-	ged_draw_scene_ref_realization_finish_current_view(ref, view_ctx,
-		NULL);
-	return 1;
-    }
-
-    struct ged *gedp = _ged_draw_scene_ref_owner_gedp(ref);
-    ged_draw_shape_ref shape_ref = gedp ?
-	_ged_draw_shape_ref_from_scene_ref(gedp, ref) : GED_DRAW_SHAPE_REF_NULL;
-
-    if (draw_state.draw_mode == GED_DRAW_MODE_EVAL_WIRE)
-	ged_draw_shape_ref_eval_wireframe(gedp, shape_ref);
-    else
-	ged_draw_shape_ref_eval_points(gedp, shape_ref);
-
-    ged_draw_scene_ref_realization_finish_current_view(ref, view_ctx, NULL);
-    return 1;
-}
-
-
-static void
-ged_draw_scene_ref_realize_dispatch(
-	bsg_scene_ref ref,
-	void *view_ctx)
-{
-    if (ged_draw_scene_ref_realization_current(ref) && !view_ctx &&
-	    !ged_draw_scene_ref_realization_view_dependent(ref))
-	return;
-
-    struct ged_draw_scene_draw_state_summary draw_state;
-    memset(&draw_state, 0, sizeof(draw_state));
-    if (!ged_draw_scene_ref_draw_state_summary(ref, &draw_state))
-	return;
-    ged_draw_log(1, "draw_scene %s[%s]", draw_state.name,
-	    _ged_draw_source_view_context_name(view_ctx));
-
-    ged_draw_view_lod_policy policy;
-    ged_draw_view_context_lod_policy_get(&policy, view_ctx);
-    if (view_ctx && !policy.csg_enabled && !policy.mesh_enabled) {
-	ged_draw_scene_ref_realize(ref, NULL);
-	return;
-    }
-
-    if (ged_draw_scene_ref_container_realize(ref, view_ctx))
-	return;
-
-    if (ged_draw_scene_ref_evaluated_realize(ref, view_ctx))
-	return;
-
-    (void)ged_draw_scene_ref_source_realize(ref, view_ctx);
-}
-
-
-static int
-_ged_draw_scene_ref_overlay_internal_set(
-	struct ged *gedp,
-	bsg_scene_ref ref,
-	struct db_full_path *fp,
-	struct rt_db_internal **ip)
-{
-    if (ged_draw_scene_ref_is_null(ref) || !ip || !*ip)
-	return 0;
-
-    if (!ged_draw_scene_ref_apply_path_state(gedp, ref, fp))
-	return 0;
-
-    if (!_ged_draw_scene_ref_user_data_set(ref, (void *)*ip,
-	    _ged_draw_rt_db_internal_user_data_free))
-	return 0;
-
-    *ip = NULL;
-    return 1;
-}
-
-
-static void
-ged_draw_scene_ref_realize(bsg_scene_ref ref, void *view_ctx)
-{
-    ged_draw_scene_ref_realize_dispatch(ref, view_ctx);
 }
 
 
@@ -15074,6 +14025,28 @@ ged_draw_view_context_overlay_create(void *view_ctx, const char *name)
 	return bsg_scene_ref_null();
 
     return bsg_feature_ref_as_scene(ref);
+}
+
+
+static int
+_ged_draw_scene_ref_overlay_internal_set(
+	struct ged *gedp,
+	bsg_scene_ref ref,
+	struct db_full_path *fp,
+	struct rt_db_internal **ip)
+{
+    if (ged_draw_scene_ref_is_null(ref) || !ip || !*ip)
+	return 0;
+
+    if (!ged_draw_scene_ref_apply_path_state(gedp, ref, fp))
+	return 0;
+
+    if (!_ged_draw_scene_ref_user_data_set(ref, (void *)*ip,
+	    _ged_draw_rt_db_internal_user_data_free))
+	return 0;
+
+    *ip = NULL;
+    return 1;
 }
 
 
@@ -15467,50 +14440,6 @@ ged_draw_mesh_lod_publish_current(
 	    indices, index_count);
     bu_free(normals, "mesh lod indexed-face normals");
     bu_free(indices, "mesh lod indexed-face indices");
-    return ret;
-}
-
-
-struct ged_draw_mesh_lod_scene_publish {
-    bsg_scene_ref ref;
-};
-
-
-static int
-ged_draw_mesh_lod_scene_publish_cb(
-	void *data,
-	const point_t *points,
-	size_t point_count,
-	const vect_t *normals,
-	size_t normal_count,
-	const int *indices,
-	size_t index_count)
-{
-    struct ged_draw_mesh_lod_scene_publish *ctx =
-	(struct ged_draw_mesh_lod_scene_publish *)data;
-    return ctx ? ged_draw_scene_ref_update_indexed_face_set(ctx->ref,
-	    points, point_count, normals, normal_count, indices,
-	    index_count) : 0;
-}
-
-
-static int
-ged_draw_scene_ref_publish_current_mesh_lod(bsg_scene_ref ref)
-{
-    struct ged_draw_source_runtime_summary source;
-    memset(&source, 0, sizeof(source));
-    if (ged_draw_scene_ref_is_null(ref) ||
-	    !ged_draw_scene_ref_source_runtime_summary(ref, &source))
-	return 0;
-
-    struct ged_draw_mesh_lod_scene_publish ctx;
-    ctx.ref = ref;
-    int ret = ged_draw_mesh_lod_publish_current(source.mesh_lod,
-	    ged_draw_mesh_lod_scene_publish_cb, &ctx);
-    if (ret) {
-	(void)ged_draw_scene_ref_source_mesh_lod_bounds_restore(ref);
-	ged_draw_scene_ref_invalidate(ref);
-    }
     return ret;
 }
 
@@ -15980,52 +14909,6 @@ ged_draw_scene_ref_obol_set_realization_roles(
 
     return ged_draw_scene_ref_obol_source_path_apply(ref,
 	    ged_draw_scene_ref_obol_set_realization_roles_cb, &update);
-}
-
-
-struct ged_draw_scene_ref_obol_realization_view_policy_update {
-    int view_dependent;
-    fastf_t view_scale;
-    uint64_t bot_threshold;
-    fastf_t curve_scale;
-    fastf_t point_scale;
-};
-
-
-static int
-ged_draw_scene_ref_obol_set_realization_view_policy_cb(
-	struct ged *gedp,
-	const char *path,
-	void *data)
-{
-    struct ged_draw_scene_ref_obol_realization_view_policy_update *update =
-	(struct ged_draw_scene_ref_obol_realization_view_policy_update *)data;
-    return update ?
-	ged_draw_obol_database_source_set_realization_view_policy_for_path(
-		gedp, path, update->view_dependent, update->view_scale,
-		update->bot_threshold, update->curve_scale,
-		update->point_scale) : 0;
-}
-
-
-static int
-ged_draw_scene_ref_obol_set_realization_view_policy(
-	bsg_scene_ref ref,
-	int view_dependent,
-	fastf_t view_scale,
-	uint64_t bot_threshold,
-	fastf_t curve_scale,
-	fastf_t point_scale)
-{
-    struct ged_draw_scene_ref_obol_realization_view_policy_update update;
-    update.view_dependent = view_dependent;
-    update.view_scale = view_scale;
-    update.bot_threshold = bot_threshold;
-    update.curve_scale = curve_scale;
-    update.point_scale = point_scale;
-
-    return ged_draw_scene_ref_obol_source_path_apply(ref,
-	    ged_draw_scene_ref_obol_set_realization_view_policy_cb, &update);
 }
 
 
@@ -16887,28 +15770,6 @@ ged_draw_scene_ref_update_bounds_context(bsg_scene_ref ref, void *view_ctx)
 }
 
 
-static void
-ged_draw_scene_ref_realization_finish_view(bsg_scene_ref ref,
-					   void *view_ctx,
-					   void *scene_view_ctx)
-{
-    (void)ged_draw_scene_ref_update_bounds_context(ref, view_ctx);
-    if (scene_view_ctx)
-	ged_draw_scene_ref_realization_set_view_context_policy(ref,
-		scene_view_ctx);
-}
-
-
-static void
-ged_draw_scene_ref_realization_finish_current_view(bsg_scene_ref ref,
-						   void *view_ctx,
-						   void *scene_view_ctx)
-{
-    ged_draw_scene_ref_realization_finish_view(ref, view_ctx, scene_view_ctx);
-    ged_draw_scene_ref_realization_set_current(ref, 1);
-}
-
-
 static void *
 ged_draw_scene_ref_view_context(bsg_scene_ref ref)
 {
@@ -17733,13 +16594,6 @@ ged_draw_scene_ref_line_style(bsg_scene_ref ref)
 
 
 static int
-ged_draw_scene_ref_strict_fallback(bsg_scene_ref ref)
-{
-    return bsg_scene_strict_fallback(ref);
-}
-
-
-static int
 ged_draw_scene_ref_set_legacy_color_info(bsg_scene_ref ref,
 					 const unsigned char basecolor[3],
 					 int user_color,
@@ -18107,75 +16961,6 @@ ged_draw_scene_ref_set_material_revision(bsg_scene_ref ref,
 }
 
 
-static int
-ged_draw_scene_ref_realization_current(bsg_scene_ref ref)
-{
-    struct ged_draw_database_source_record record;
-    memset(&record, 0, sizeof(record));
-    if (!ged_draw_scene_ref_database_source_record_get(
-	    ged_draw_scene_ref_source_owner(ref), &record))
-	return 0;
-    return record.realization_status ==
-	GED_DRAW_DATABASE_SOURCE_REALIZATION_CURRENT;
-}
-
-
-static int
-ged_draw_scene_ref_realization_view_dependent(bsg_scene_ref ref)
-{
-    struct ged_draw_database_source_record record;
-    memset(&record, 0, sizeof(record));
-    if (!ged_draw_scene_ref_database_source_record_get(
-	    ged_draw_scene_ref_source_owner(ref), &record))
-	return 0;
-    return record.realization_view_dependent ? 1 : 0;
-}
-
-
-static void
-ged_draw_scene_ref_realization_set_current(bsg_scene_ref ref, int current)
-{
-    bsg_scene_ref source_ref = ged_draw_scene_ref_source_owner(ref);
-    struct ged_draw_database_source_record record;
-    memset(&record, 0, sizeof(record));
-    (void)ged_draw_scene_ref_database_source_record_get(source_ref, &record);
-    record.realization_status = current ?
-	GED_DRAW_DATABASE_SOURCE_REALIZATION_CURRENT :
-	GED_DRAW_DATABASE_SOURCE_REALIZATION_STALE;
-    (void)ged_draw_scene_ref_database_source_record_apply(source_ref,
-	    &record);
-    if (!bsg_scene_ref_equal(source_ref, ref))
-	(void)ged_draw_scene_ref_database_source_record_apply(ref, &record);
-    (void)ged_draw_scene_ref_obol_set_realization(ref, current, 0,
-	    record.realized_source_revision,
-	    record.realized_inputs_revision,
-	    current ? GED_DRAW_STALE_NONE : GED_DRAW_STALE_SOURCE_CHANGED);
-}
-
-
-static void
-ged_draw_scene_ref_realization_mark_current(bsg_scene_ref ref)
-{
-    bsg_scene_ref source_ref = ged_draw_scene_ref_source_owner(ref);
-    struct ged_draw_database_source_record record;
-    memset(&record, 0, sizeof(record));
-    if (!ged_draw_scene_ref_database_source_record_get(source_ref, &record))
-	return;
-
-    record.realized_source_revision = record.source_revision;
-    record.realized_inputs_revision = record.inputs_revision;
-    record.stale_reason = GED_DRAW_STALE_NONE;
-    (void)ged_draw_scene_ref_database_source_record_apply(source_ref,
-	    &record);
-    if (!bsg_scene_ref_equal(source_ref, ref))
-	(void)ged_draw_scene_ref_database_source_record_apply(ref, &record);
-    (void)ged_draw_scene_ref_obol_set_realization(ref, 1, 0,
-	    record.realized_source_revision,
-	    record.realized_inputs_revision,
-	    GED_DRAW_STALE_NONE);
-}
-
-
 static void
 ged_draw_scene_ref_mark_database_source_redraw_result(bsg_scene_ref ref,
 						      int failed)
@@ -18209,14 +16994,6 @@ ged_draw_scene_ref_mark_database_source_redraw_result(bsg_scene_ref ref,
 
 
 static void
-ged_draw_scene_ref_realization_clear_stale(bsg_scene_ref ref)
-{
-    ged_draw_scene_ref_geometry_clear(ref);
-    ged_draw_scene_ref_realization_set_current(ref, 0);
-}
-
-
-static void
 ged_draw_scene_ref_realization_set_roles(bsg_scene_ref ref, int csg_obj, int mesh_obj)
 {
     int flags = GED_DRAW_DATABASE_SOURCE_REALIZATION_ROLE_NONE;
@@ -18238,159 +17015,9 @@ ged_draw_scene_ref_realization_set_roles(bsg_scene_ref ref, int csg_obj, int mes
 
 
 static void
-ged_draw_scene_ref_realization_prepare_wireframe(bsg_scene_ref ref)
-{
-    ged_draw_scene_ref_realization_set_roles(ref, 1, 0);
-}
-
-
-static void
-ged_draw_scene_ref_realization_prepare_mesh(bsg_scene_ref ref)
-{
-    ged_draw_scene_ref_realization_set_roles(ref, 0, 1);
-}
-
-
-static void
 ged_draw_scene_ref_realization_prepare_surface(bsg_scene_ref ref)
 {
     ged_draw_scene_ref_realization_set_roles(ref, 0, 0);
-}
-
-
-static int
-ged_draw_scene_ref_realization_prepare_view_redraw(bsg_scene_ref ref,
-						   void *view_ctx)
-{
-    if (!view_ctx)
-	return 0;
-    (void)_ged_draw_scene_ref_mark_view_inputs_changed(ref);
-    ged_draw_scene_ref_realization_set_view_context_policy(ref, view_ctx);
-    return 1;
-}
-
-
-static int
-_ged_draw_scene_ref_mark_view_inputs_changed(bsg_scene_ref ref)
-{
-    bsg_scene_ref source_ref = ged_draw_scene_ref_source_owner(ref);
-    struct ged_draw_database_source_record record;
-    memset(&record, 0, sizeof(record));
-    if (!ged_draw_scene_ref_database_source_record_get(source_ref, &record))
-	return 0;
-
-    record.inputs_revision++;
-    record.stale_reason = GED_DRAW_STALE_VIEW_INPUT_CHANGED;
-    (void)ged_draw_scene_ref_database_source_record_apply(source_ref,
-	    &record);
-    if (!bsg_scene_ref_equal(source_ref, ref))
-	(void)ged_draw_scene_ref_database_source_record_apply(ref, &record);
-    (void)ged_draw_scene_ref_obol_set_realization(ref, 0, 0,
-	    record.realized_source_revision,
-	    record.realized_inputs_revision,
-	    record.stale_reason);
-    return 1;
-}
-
-
-static int
-ged_draw_scene_ref_realize_view_inputs_changed(bsg_scene_ref ref,
-					       void *view_ctx)
-{
-    if (ged_draw_scene_ref_is_null(ref))
-	return 0;
-
-    (void)_ged_draw_scene_ref_mark_view_inputs_changed(ref);
-    ged_draw_scene_ref_invalidate(ref);
-    ged_draw_scene_ref_realize(ref, view_ctx);
-    return 1;
-}
-
-
-static fastf_t
-ged_draw_scene_ref_realization_view_scale(bsg_scene_ref ref)
-{
-    struct ged_draw_obol_realization_policy_summary obol_summary;
-    memset(&obol_summary, 0, sizeof(obol_summary));
-    if (ged_draw_scene_ref_obol_realization_policy_summary(ref,
-	    &obol_summary) && obol_summary.valid)
-	return obol_summary.view_scale;
-
-    struct ged_draw_database_source_record record;
-    memset(&record, 0, sizeof(record));
-    if (!ged_draw_scene_ref_database_source_record_get(
-	    ged_draw_scene_ref_source_owner(ref), &record))
-	return 0.0;
-    return record.realization_view_scale;
-}
-
-
-static fastf_t
-ged_draw_scene_ref_realization_curve_scale(bsg_scene_ref ref)
-{
-    struct ged_draw_obol_realization_policy_summary obol_summary;
-    memset(&obol_summary, 0, sizeof(obol_summary));
-    if (ged_draw_scene_ref_obol_realization_policy_summary(ref,
-	    &obol_summary) && obol_summary.valid)
-	return obol_summary.curve_scale;
-
-    struct ged_draw_database_source_record record;
-    memset(&record, 0, sizeof(record));
-    if (!ged_draw_scene_ref_database_source_record_get(
-	    ged_draw_scene_ref_source_owner(ref), &record))
-	return 0.0;
-    return record.realization_curve_scale;
-}
-
-
-static fastf_t
-ged_draw_scene_ref_realization_point_scale(bsg_scene_ref ref)
-{
-    struct ged_draw_obol_realization_policy_summary obol_summary;
-    memset(&obol_summary, 0, sizeof(obol_summary));
-    if (ged_draw_scene_ref_obol_realization_policy_summary(ref,
-	    &obol_summary) && obol_summary.valid)
-	return obol_summary.point_scale;
-
-    struct ged_draw_database_source_record record;
-    memset(&record, 0, sizeof(record));
-    if (!ged_draw_scene_ref_database_source_record_get(
-	    ged_draw_scene_ref_source_owner(ref), &record))
-	return 0.0;
-    return record.realization_point_scale;
-}
-
-
-static void
-ged_draw_scene_ref_realization_set_view_context_policy(bsg_scene_ref ref,
-						       const void *view_ctx)
-{
-    if (!view_ctx)
-	return;
-
-    ged_draw_view_lod_policy policy;
-    rt_view_context_lod_policy_get(&policy, view_ctx);
-
-    bsg_scene_ref source_ref = ged_draw_scene_ref_source_owner(ref);
-    struct ged_draw_database_source_record record;
-    memset(&record, 0, sizeof(record));
-    (void)ged_draw_scene_ref_database_source_record_get(source_ref, &record);
-    record.realization_view_dependent =
-	(policy.csg_enabled || policy.mesh_enabled) ? 1 : 0;
-    record.realization_view_scale = rt_view_context_scale_get(view_ctx);
-    record.realization_bot_threshold = (uint64_t)policy.bot_threshold;
-    record.realization_curve_scale = policy.curve_scale;
-    record.realization_point_scale = policy.point_scale;
-    (void)ged_draw_scene_ref_database_source_record_apply(source_ref,
-	    &record);
-    if (!bsg_scene_ref_equal(source_ref, ref))
-	(void)ged_draw_scene_ref_database_source_record_apply(ref, &record);
-    (void)ged_draw_scene_ref_obol_set_realization_view_policy(ref,
-	    record.realization_view_dependent,
-	    record.realization_view_scale,
-	    record.realization_bot_threshold,
-	    record.realization_curve_scale,
-	    record.realization_point_scale);
 }
 
 
@@ -20411,37 +19038,6 @@ ged_draw_scene_ref_publish_primitive_wireframe(bsg_scene_ref ref,
 
 
 static int
-ged_draw_scene_ref_publish_current_wireframe(bsg_scene_ref ref,
-					     struct rt_db_internal *ip,
-					     const struct bg_tess_tol *ttol,
-					     const struct bn_tol *tol,
-					     void *view_ctx,
-					     const struct rt_view_info *view_info,
-					     int adaptive)
-{
-    if (ged_draw_scene_ref_is_null(ref) || !ip)
-	return 0;
-
-    if (!adaptive)
-	ged_draw_scene_ref_geometry_clear(ref);
-
-    if (ged_draw_scene_ref_publish_primitive_wireframe(ref, ip, ttol, tol,
-	    view_ctx, view_info, adaptive) < 0)
-	return 0;
-
-    if (adaptive) {
-	ged_draw_scene_ref_update_bounds_context(ref, view_ctx);
-	ged_draw_scene_ref_realization_mark_current(ref);
-	ged_draw_scene_ref_invalidate(ref);
-    } else {
-	ged_draw_scene_ref_realization_set_current(ref, 1);
-    }
-
-    return 1;
-}
-
-
-static int
 ged_draw_scene_ref_publish_line_set(bsg_scene_ref ref,
 				    const point_t *points,
 				    const int *commands,
@@ -20693,69 +19289,6 @@ ged_draw_scene_ref_publish_transformed_indexed_face_set(
 }
 
 
-static int
-ged_draw_scene_ref_update_indexed_face_set(bsg_scene_ref ref,
-					   const point_t *points,
-					   size_t point_count,
-					   const vect_t *normals,
-					   size_t normal_count,
-					   const int *indices,
-					   size_t index_count)
-{
-    ged_draw_shape_state *shape_data = _ged_draw_shape_state_get_scene_ref(ref);
-    int obol_published = 0;
-
-    if (!shape_data)
-	return 0;
-    if (!point_count || !index_count)
-	return ged_draw_scene_ref_geometry_clear(ref);
-    if (!points || !indices)
-	return 0;
-    if (shape_data->gedp) {
-	ged_draw_shape_ref shape_ref =
-	    _ged_draw_shape_ref_from_scene_ref(shape_data->gedp, ref);
-	obol_published =
-	    ged_draw_shape_ref_obol_publish_indexed_face_set(
-		    shape_data->gedp, shape_ref, ref, points, point_count,
-		    normals, normal_count, indices, index_count, 0, NULL);
-	if (!obol_published) {
-	    struct _ged_draw_obol_publish_mesh_ctx ctx;
-	    memset(&ctx, 0, sizeof(ctx));
-	    ctx.points = points;
-	    ctx.point_count = point_count;
-	    ctx.normals = normals;
-	    ctx.normal_count = normal_count;
-	    ctx.indices = indices;
-	    ctx.index_count = index_count;
-	    (void)_ged_draw_scene_ref_obol_ensure_source(ref);
-	    (void)ged_draw_scene_ref_obol_sync_source_placement(ref);
-	    obol_published =
-		_ged_draw_scene_ref_obol_source_snapshot_path_apply(ref,
-			_ged_draw_obol_publish_mesh_cb, &ctx);
-	}
-    }
-
-    int bsg_published = 0;
-    if (!obol_published) {
-	bsg_scene_ref geometry_ref =
-	    ged_draw_scene_ref_geometry_publication_target(ref);
-	if (!bsg_scene_ref_is_null(geometry_ref)) {
-	    bsg_published = bsg_geometry_ref_update_indexed_face_set(
-		    bsg_scene_ref_as_geometry(geometry_ref), points, point_count,
-		    normals, normal_count, indices, index_count);
-	}
-    }
-    if (!bsg_published && !obol_published)
-	return 0;
-
-    /* Obol owns source-adapter indexed-face updates; BSG is fallback. */
-    shape_data->geometry_command_count = point_count;
-    shape_data->geometry_revision++;
-    bsg_scene_invalidate(ref);
-    return 1;
-}
-
-
 static void
 _ged_draw_primitive_indexed_face_set_free(struct rt_primitive_indexed_face_set *face_set)
 {
@@ -20789,6 +19322,8 @@ ged_draw_scene_ref_publish_primitive_face_set(bsg_scene_ref ref,
 	    !ip->idb_meth->ft_indexed_face_set)
 	return 0;
 
+    ged_draw_scene_ref_realization_prepare_surface(ref);
+
     if (!view_info)
 	view_info = &default_view_info;
     ret = ip->idb_meth->ft_indexed_face_set(&face_set, ip, ttol, tol,
@@ -20807,19 +19342,6 @@ ged_draw_scene_ref_publish_primitive_face_set(bsg_scene_ref ref,
 
     _ged_draw_primitive_indexed_face_set_free(&face_set);
     return ok;
-}
-
-
-static int
-ged_draw_scene_ref_publish_current_face_set(bsg_scene_ref ref,
-					    struct rt_db_internal *ip,
-					    const struct bg_tess_tol *ttol,
-					    const struct bn_tol *tol,
-					    const struct rt_view_info *view_info)
-{
-    ged_draw_scene_ref_realization_prepare_surface(ref);
-    return ged_draw_scene_ref_publish_primitive_face_set(ref, ip, ttol, tol,
-	    view_info);
 }
 
 
@@ -23157,18 +21679,6 @@ cleanup:
 
 
 static int
-ged_draw_scene_ref_publish_current_nmg_region(bsg_scene_ref ref,
-					     const struct nmgregion *r,
-					     int style)
-{
-    if (!ged_draw_scene_ref_geometry_publish_nmg_region(ref, r, style))
-	return 0;
-    ged_draw_scene_ref_realization_set_current(ref, 1);
-    return 1;
-}
-
-
-static int
 ged_draw_scene_ref_geometry_publish_nmg_model(bsg_scene_ref ref,
 					     const struct model *m,
 					     int style)
@@ -23216,12 +21726,6 @@ _ged_draw_scene_ref_geometry_set_command_count(bsg_scene_ref ref, size_t vlen)
     shape_data->geometry_revision++;
 }
 
-
-static int
-ged_draw_source_primitive_has_lod_realize(const struct rt_db_internal *ip)
-{
-    return (ip && ip->idb_meth && ip->idb_meth->ft_lod_realize) ? 1 : 0;
-}
 
 
 /*

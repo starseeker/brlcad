@@ -2093,39 +2093,6 @@ ged_obol_replace_path(struct ged *gedp,
 }
 
 static int
-ged_obol_realize_external_representation(struct ged *gedp,
-	void *view_ctx,
-	const char *path,
-	int ged_draw_mode)
-{
-    if (!gedp || !path || !path[0])
-	return 0;
-
-    int ret = BRLCAD_ERROR;
-    int scoped = 0;
-    switch (ged_draw_mode) {
-	case GED_DRAW_MODE_EVAL_WIRE:
-	    scoped = ged_draw_obol_database_source_publication_begin(gedp,
-		     view_ctx, ged_draw_mode);
-	    ret = ged_draw_obol_database_source_eval_wireframe_for_path(gedp,
-		  path);
-	    if (scoped)
-		ged_draw_obol_database_source_publication_end(gedp);
-	    return ret == BRLCAD_OK ? 1 : 0;
-	case GED_DRAW_MODE_EVAL_POINTS:
-	    scoped = ged_draw_obol_database_source_publication_begin(gedp,
-		     view_ctx, ged_draw_mode);
-	    ret = ged_draw_obol_database_source_eval_points_for_path(gedp,
-		  path);
-	    if (scoped)
-		ged_draw_obol_database_source_publication_end(gedp);
-	    return ret == BRLCAD_OK ? 1 : 0;
-	default:
-	    return 0;
-    }
-}
-
-static int
 ged_obol_replace_path_and_realize(struct ged *gedp,
 				  void *view_ctx,
 				  struct db_i *dbip,
@@ -2144,8 +2111,9 @@ ged_obol_replace_path_and_realize(struct ged *gedp,
     if (changed < 0)
 	return changed;
 
-    if (ged_obol_realize_external_representation(gedp, view_ctx, path,
-	    ged_draw_mode))
+    if ((ged_draw_mode == GED_DRAW_MODE_EVAL_WIRE ||
+	 ged_draw_mode == GED_DRAW_MODE_EVAL_POINTS) &&
+	    ged_draw_obol_database_source_realize_for_path(gedp, path))
 	return 1;
 
     return changed;
@@ -8696,7 +8664,34 @@ ged_draw_view_context_object_realize(
 	return 0;
     }
 
-    (void)ged_draw_shape_ref_realize_context(gedp, shape_ref, view_ctx);
+    struct ged_draw_shape_record rec;
+    memset(&rec, 0, sizeof(rec));
+    if (!ged_draw_shape_record_get(gedp, shape_ref, &rec)) {
+	if (result)
+	    bu_vls_printf(result, "No view feature named %s\n", name);
+	return 0;
+    }
+
+    std::string path;
+    if (rec.fullpath) {
+	char *fullpath = db_path_to_string(rec.fullpath);
+	if (fullpath) {
+	    path = fullpath;
+	    bu_free(fullpath, "view object realize fullpath");
+	}
+    }
+    if (path.empty() && rec.display_name && rec.display_name[0])
+	path = rec.display_name;
+
+    if (path.empty() ||
+	    !ged_draw_obol_database_source_realize_for_path(gedp,
+		path.c_str())) {
+	if (result)
+	    bu_vls_printf(result, "No Obol database source named %s\n",
+		    name);
+	return 0;
+    }
+
     return 1;
 }
 

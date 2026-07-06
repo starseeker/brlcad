@@ -8,6 +8,8 @@
 #include "common.h"
 
 #include "brlobol/database_source.h"
+#include "brlobol/evaluated_points.h"
+#include "brlobol/evaluated_wire.h"
 #include "brlobol/export_action.h"
 #include "brlobol/lod_mesh_shape.h"
 #include "brlobol/lod_realization.h"
@@ -22,6 +24,7 @@
 #include "database_source_realization.h"
 #include "performance_private.h"
 
+#include "bg/line_layer.h"
 #include "bu/color.h"
 #include "bu/list.h"
 #include "bu/str.h"
@@ -628,6 +631,27 @@ source_uses_mesh_realization(const SoBRLDatabaseSource *source)
 	return 1;
 
     return source->drawMode.getValue() == SoBRLDatabaseSource::SHADED;
+}
+
+static int
+source_uses_evaluated_wire_realization(const SoBRLDatabaseSource *source)
+{
+    return source && source->representationMode.getValue() ==
+	   SoBRLDatabaseSource::REPRESENTATION_EVAL_WIRE;
+}
+
+static int
+source_uses_evaluated_points_realization(const SoBRLDatabaseSource *source)
+{
+    return source && source->representationMode.getValue() ==
+	   SoBRLDatabaseSource::REPRESENTATION_EVAL_POINTS;
+}
+
+static int
+source_uses_evaluated_path_realization(const SoBRLDatabaseSource *source)
+{
+    return source_uses_evaluated_wire_realization(source) ||
+	   source_uses_evaluated_points_realization(source);
 }
 
 static SbString
@@ -2759,6 +2783,168 @@ mesh_from_internal(struct rt_db_internal *intern,
 	return faceSetShape;
 
     return mesh_from_tessellated_internal(intern, source);
+}
+
+static std::string
+database_source_evaluated_path_string(const SoBRLDatabaseSource *source)
+{
+    if (!source)
+	return std::string();
+    return std::string(database_source_skip_leading_slash(
+			   source->path.getValue().getString()));
+}
+
+static int32_t
+evaluated_wire_command_to_vlist_command(int command, size_t index)
+{
+    if (command == BG_GEOMETRY_LINE_MOVE)
+	return SoBRLVListShape::MOVE;
+    if (command == BG_GEOMETRY_LINE_DRAW)
+	return SoBRLVListShape::DRAW;
+    if (command < 0 && (index % 2) == 0)
+	return SoBRLVListShape::MOVE;
+    if (command < 0)
+	return SoBRLVListShape::DRAW;
+    return -1;
+}
+
+static SoBRLVListShape *
+vlist_from_evaluated_wire_path(SoBRLDatabaseSource *source)
+{
+    struct db_i *dbip = source ? source->getDatabase() : NULL;
+    if (!source || !dbip)
+	return NULL;
+
+    const std::string path = database_source_evaluated_path_string(source);
+    if (path.empty())
+	return NULL;
+
+    struct bn_tol tol = BN_TOL_INIT_TOL;
+    struct bg_tess_tol ttol = source_tess_tol(source);
+    point_t *linePoints = NULL;
+    int *lineCommands = NULL;
+    size_t lineCount = 0;
+    const int ret = brlobol_evaluated_wire_evaluate_path_line_set(
+			dbip, path.c_str(), &tol, &ttol,
+			&linePoints, &lineCommands, &lineCount);
+    if (ret != BRLCAD_OK)
+	return NULL;
+    if (!lineCount || lineCount > static_cast<size_t>(INT_MAX)) {
+	brlobol_evaluated_wire_line_set_free(linePoints, lineCommands);
+	return NULL;
+    }
+
+    std::vector<SbVec3f> points;
+    std::vector<int32_t> commands;
+    points.reserve(lineCount);
+    commands.reserve(lineCount);
+    for (size_t i = 0; i < lineCount; i++) {
+	const int32_t command = evaluated_wire_command_to_vlist_command(
+				    lineCommands ? lineCommands[i] : -1, i);
+	if (command < 0) {
+	    brlobol_evaluated_wire_line_set_free(linePoints, lineCommands);
+	    return NULL;
+	}
+	points.push_back(SbVec3f(static_cast<float>(linePoints[i][X]),
+				 static_cast<float>(linePoints[i][Y]),
+				 static_cast<float>(linePoints[i][Z])));
+	commands.push_back(command);
+    }
+    brlobol_evaluated_wire_line_set_free(linePoints, lineCommands);
+
+    SoBRLVListShape *shape = new SoBRLVListShape;
+    shape->setLineSet(points.data(), commands.data(),
+		      static_cast<int>(points.size()));
+    return shape;
+}
+
+static SoBRLMeshShape *
+mesh_from_evaluated_points_path(SoBRLDatabaseSource *source)
+{
+    struct db_i *dbip = source ? source->getDatabase() : NULL;
+    if (!source || !dbip)
+	return NULL;
+
+    const std::string path = database_source_evaluated_path_string(source);
+    if (path.empty())
+	return NULL;
+
+    struct rt_primitive_indexed_face_set faceSet;
+    memset(&faceSet, 0, sizeof(faceSet));
+    const int ret = brlobol_evaluated_points_evaluate_path_face_set(
+			dbip, path.c_str(), &faceSet);
+    if (ret != BRLCAD_OK)
+	return NULL;
+
+    SoBRLMeshShape *shape = mesh_from_indexed_face_set(&faceSet, source);
+    brlobol_evaluated_points_face_set_free(&faceSet);
+    return shape;
+}
+
+static std::string
+database_source_evaluated_display_name(const SoBRLDatabaseSource *source)
+{
+    if (!source)
+	return std::string();
+
+    std::string name = database_source_leaf_component(source->path.getValue());
+    if (!name.empty())
+	return name;
+    return stable_name_from_path(source->path.getValue().getString(), 1);
+}
+
+static int
+realize_evaluated_wire_source(SoBRLDatabaseSource *source, uint32_t revision)
+{
+    if (!source)
+	return -1;
+
+    SoBRLVListShape *shape = vlist_from_evaluated_wire_path(source);
+    if (!shape) {
+	source->realizationDiagnostic =
+	    "evaluated-wire provider produced no drawable geometry";
+	return -1;
+    }
+
+    const std::string fullPath =
+	database_source_full_path_string(source->path.getValue());
+    const std::string displayName =
+	database_source_evaluated_display_name(source);
+    assign_realized_identity(shape, NULL, fullPath.c_str(),
+			     displayName.c_str(), "evaluated-wire",
+			     revision, source);
+    shape->geometryKind = "evaluated-wire";
+    source->setRealizationRoleFlags(SoBRLDatabaseSource::REALIZATION_ROLE_CSG);
+    database_source_add_realized_child(source, shape);
+    return 1;
+}
+
+static int
+realize_evaluated_points_source(SoBRLDatabaseSource *source, uint32_t revision)
+{
+    if (!source)
+	return -1;
+
+    SoBRLMeshShape *shape = mesh_from_evaluated_points_path(source);
+    if (!shape) {
+	source->realizationDiagnostic =
+	    "evaluated-points provider produced no drawable geometry";
+	return -1;
+    }
+
+    const std::string fullPath =
+	database_source_full_path_string(source->path.getValue());
+    const std::string displayName =
+	database_source_evaluated_display_name(source);
+    assign_realized_identity(shape, NULL, fullPath.c_str(),
+			     displayName.c_str(), "evaluated-points",
+			     revision, source);
+    shape->geometryKind = "evaluated-points";
+    source->setRealizationRoleFlags(
+	SoBRLDatabaseSource::REALIZATION_ROLE_CSG |
+	SoBRLDatabaseSource::REALIZATION_ROLE_MESH);
+    database_source_add_realized_child(source, shape);
+    return 1;
 }
 
 static SoBRLMeshShape *
@@ -5888,6 +6074,9 @@ brlobol_database_source_realize_wireframe_compact_with_cache(
     if (!source)
 	return -1;
 
+    if (source_uses_evaluated_path_realization(source))
+	return 0;
+
     source->realizationDiagnostic = "";
     if (!source->dbip) {
 	source->realizationDiagnostic = "database source has no database";
@@ -5973,6 +6162,18 @@ brlobol_database_source_realize_wireframe_with_cache(
     (void)remove_source_placement_transform(source);
 
     const uint32_t revision = source->sourceRevision.getValue();
+    if (source_uses_evaluated_wire_realization(source)) {
+	if (realize_evaluated_wire_source(source, revision) > 0) {
+	    mark_source_realized_current(source);
+	    update_source_bounds_from_realized_geometry(source);
+	    source->syncRealizedShapeOwnerState();
+	    return TRUE;
+	}
+	remove_non_auxiliary_children(source);
+	source->realizationIdentity = "";
+	return FALSE;
+    }
+
     int directRealized = 0;
     {
 	BRLObolPerformanceTimer directTimer(BRLOBOL_PERF_DIRECT_LEAF_US);
@@ -6082,6 +6283,9 @@ brlobol_database_source_realize_mesh_compact_with_cache(
     if (!source)
 	return -1;
 
+    if (source_uses_evaluated_path_realization(source))
+	return 0;
+
     source->realizationDiagnostic = "";
     if (!source->dbip) {
 	source->realizationDiagnostic = "database source has no database";
@@ -6167,6 +6371,18 @@ brlobol_database_source_realize_mesh_with_cache(
     (void)remove_source_placement_transform(source);
 
     const uint32_t revision = source->sourceRevision.getValue();
+    if (source_uses_evaluated_points_realization(source)) {
+	if (realize_evaluated_points_source(source, revision) > 0) {
+	    mark_source_realized_current(source);
+	    update_source_bounds_from_realized_geometry(source);
+	    source->syncRealizedShapeOwnerState();
+	    return TRUE;
+	}
+	remove_non_auxiliary_children(source);
+	source->realizationIdentity = "";
+	return FALSE;
+    }
+
     int directRealized = 0;
     {
 	BRLObolPerformanceTimer directTimer(BRLOBOL_PERF_DIRECT_LEAF_US);

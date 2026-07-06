@@ -45,6 +45,7 @@ static int draw_shaded = 0;
 static int draw_shaded_all = 0;
 static int draw_evaluate = 0;
 static int draw_hidden_line = 0;
+static int draw_evaluated_points = 0;
 static int draw_add_mode = 0;
 static fastf_t draw_transparency = 0.0;
 static int draw_bot_threshold = 0;
@@ -139,12 +140,13 @@ static const struct bu_opt_desc draw_opts[] = {
     {"V", "view", "name", &bu_opt_vls, (void *)&draw_view_name, "Specify view to draw on"},
     {"", "help", "", NULL, (void *)&draw_help, "Print help and exit"},
     {"?", "", "", NULL, (void *)&draw_help, ""},
-    {"m", "mode", "#", &bu_opt_int, (void *)&draw_mode, "0=wireframe;1=shaded bots;2=shaded;3=evaluated"},
+    {"m", "mode", "#", &bu_opt_int, (void *)&draw_mode, "0=wireframe;1=shaded bots;2=shaded;3=evaluated wire;4=hidden line;5=evaluated points"},
     {"", "wireframe", "", NULL, (void *)&draw_wireframe, "Draw using only wireframes (mode = 0)"},
     {"", "shaded", "", NULL, (void *)&draw_shaded, "Shade bots, breps and polysolids (mode = 1)"},
     {"", "shaded-all", "", NULL, (void *)&draw_shaded_all, "Shade all solids, not evaluated (mode = 2)"},
     {"E", "evaluate", "", NULL, (void *)&draw_evaluate, "Wireframe with evaluate booleans (mode = 3)"},
     {"h", "hidden-line", "", NULL, (void *)&draw_hidden_line, "Hidden line wireframes"},
+    {"", "evaluated-points", "", NULL, (void *)&draw_evaluated_points, "Sample evaluated geometry as point-display triangles (mode = 5)"},
     {"A", "add-mode", "", NULL, (void *)&draw_add_mode, "Don't erase other drawn modes for specified paths"},
     {"t", "transparency", "#", &bu_opt_fastf_t, (void *)&draw_transparency, "Set transparency level in drawing"},
     {"x", "", "#", &bu_opt_fastf_t, (void *)&draw_transparency, ""},
@@ -168,6 +170,7 @@ static const struct bu_opt_desc_meta draw_meta[] = {
     {"", "shaded-all", BU_OPT_ARG_FLAG, BU_OPT_VAL_BOOL, 0, NULL},
     {"E", "evaluate", BU_OPT_ARG_FLAG, BU_OPT_VAL_BOOL, 0, NULL},
     {"h", "hidden-line", BU_OPT_ARG_FLAG, BU_OPT_VAL_BOOL, 0, NULL},
+    {"", "evaluated-points", BU_OPT_ARG_FLAG, BU_OPT_VAL_BOOL, 0, NULL},
     {"A", "add-mode", BU_OPT_ARG_FLAG, BU_OPT_VAL_BOOL, 0, NULL},
     {"t", "transparency", BU_OPT_ARG_REQUIRED, BU_OPT_VAL_NUMBER, 0, NULL},
     {"x", "", BU_OPT_ARG_REQUIRED, BU_OPT_VAL_NUMBER, 0, NULL},

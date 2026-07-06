@@ -1394,12 +1394,6 @@ ged_draw_obol_database_source_publish_lod_indexed_face_set_for_path(
 	size_t normal_count,
 	const int *indices,
 	size_t index_count);
-GED_EXPORT extern int ged_draw_obol_database_source_eval_points_for_path(
-	struct ged *gedp,
-	const char *path);
-GED_EXPORT extern int ged_draw_obol_database_source_eval_wireframe_for_path(
-	struct ged *gedp,
-	const char *path);
 GED_EXPORT extern int ged_draw_obol_local_shape_publish_line_set_for_path(
 	struct ged *gedp,
 	const char *group_path,
@@ -1802,9 +1796,6 @@ GED_EXPORT extern int ged_draw_group_ref_set_visible(struct ged *gedp,
 						     int visible);
 GED_EXPORT extern int ged_draw_shape_ref_release(struct ged *gedp,
 						 ged_draw_shape_ref ref);
-GED_EXPORT extern int ged_draw_shape_ref_realize_context(struct ged *gedp,
-							 ged_draw_shape_ref ref,
-							 void *view_ctx);
 GED_EXPORT extern int ged_draw_shape_ref_set_visible(struct ged *gedp,
 						     ged_draw_shape_ref ref,
 						     int visible);

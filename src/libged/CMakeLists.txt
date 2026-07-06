@@ -331,7 +331,6 @@ set(
   get_solid_kp.c
   path.c
   pnts_util.c
-  points_eval.c
   polyclip.cpp
   qray.cpp
   selection_state.cpp
@@ -354,7 +353,6 @@ set(
   bsg_ged_draw_source.c
   view/data_lines.c
   wdb_importFg4Section.c
-  wireframe_eval.c
 )
 
 set_property(

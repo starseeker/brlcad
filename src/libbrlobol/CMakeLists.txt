@@ -6,6 +6,7 @@ set(
   database_source.cpp
   draw_cache.cpp
   edit_preview.cpp
+  evaluated_points.cpp
   evaluated_wire.cpp
   export_action.cpp
   framebuffer.cpp
@@ -90,6 +91,7 @@ cmakefiles(
   database_source_realization.h
   draw_cache.cpp
   edit_preview.cpp
+  evaluated_points.cpp
   evaluated_wire.cpp
   export_action.cpp
   framebuffer.cpp

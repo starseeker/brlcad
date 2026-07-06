@@ -25,6 +25,9 @@ brlcad_add_test(NAME libbrlobol_lod_update_action COMMAND test_brlobol_lod_updat
 brlcad_addexec(test_brlobol_draw_cache test_draw_cache.cpp "libbrlobol;libwdb;libbu;Obol::Obol" TEST ALL_CXX)
 brlcad_add_test(NAME libbrlobol_draw_cache COMMAND test_brlobol_draw_cache)
 
+brlcad_addexec(test_brlobol_evaluated_points test_evaluated_points.cpp "libbrlobol;libwdb;librt;libbu;Obol::Obol" TEST ALL_CXX)
+brlcad_add_test(NAME libbrlobol_evaluated_points COMMAND test_brlobol_evaluated_points)
+
 brlcad_addexec(test_brlobol_mesh_lod_cache test_mesh_lod_cache.cpp "libbrlobol;libwdb;libbu;Obol::Obol" TEST ALL_CXX)
 brlcad_add_test(NAME libbrlobol_mesh_lod_cache COMMAND test_brlobol_mesh_lod_cache)
 
@@ -59,6 +62,7 @@ cmakefiles(
   CMakeLists.txt
   test_headless_window_host.cpp
   test_draw_cache.cpp
+  test_evaluated_points.cpp
   test_image_display.cpp
   test_image_source.cpp
   test_lod_realization.cpp
