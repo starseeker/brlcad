@@ -373,6 +373,7 @@ SoBRLMeshShape::makeSourceMeshRequest(BRLObolSourceMeshRequest &request) const
     request.geometryName = this->geometryName.getValue();
     request.cacheIdentity = this->cacheIdentity.getValue();
     request.sourceIdentity = this->sourceIdentity.getValue();
+    request.ownerSourceInstanceKey = this->ownerSourceInstanceKey.getValue();
     request.databaseIntent = this->databaseIntent.getValue();
     request.overlayIntent = this->overlayIntent.getValue();
     request.hudIntent = this->hudIntent.getValue();
@@ -1367,6 +1368,7 @@ SoBRLMeshShape::createTriangleDetail(SoRayPickAction *UNUSED(action),
 {
     SoBRLPickDetail *detail = new SoBRLPickDetail;
     detail->setPath(this->sourcePath.getValue());
+    detail->setSourceInstanceKey(this->ownerSourceInstanceKey.getValue());
     detail->setSourceName(this->sourceName.getValue());
     detail->setSourceType(this->sourceType.getValue());
     detail->setSourceId(this->sourceId.getValue());

@@ -206,6 +206,11 @@ ged_draw_obol_database_source_expand_visible_children(
     size_t max_children_per_source,
     struct ged_draw_obol_source_expansion_status *status);
 
+GED_EXPORT int
+ged_draw_obol_database_source_count(struct ged *gedp,
+				    int skip_overlay_groups,
+				    size_t *out);
+
 __END_DECLS
 
 #ifdef __cplusplus

@@ -202,6 +202,7 @@ qg_obol_pick_record(const SoBRLPickDetail *detail,
 	return record;
 
     record.path = detail->getPath().getString();
+    record.sourceInstanceKey = detail->getSourceInstanceKey().getString();
     record.sourceName = detail->getSourceName().getString();
     record.sourceType = detail->getSourceType().getString();
     record.materialShader = detail->getMaterialShader().getString();

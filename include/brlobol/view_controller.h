@@ -175,6 +175,7 @@ public:
     const SbString &getLastLodDiagnostics(void) const;
     size_t getActiveLodMeshPayloadCount(void) const;
     size_t getActiveLodProxyPayloadCount(int proxyKind) const;
+    size_t getActiveLodCadPayloadCount(void) const;
 
     SoBRLSceneController *getSceneController(void);
     const SoBRLSceneController *getSceneController(void) const;

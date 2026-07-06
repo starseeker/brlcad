@@ -37,6 +37,12 @@ SbBool brlobol_database_source_realize_wireframe_with_cache(
 SbBool brlobol_database_source_realize_mesh_with_cache(
 	SoBRLDatabaseSource *source,
 	BRLObolDatabaseSourceRealizationCache *cache);
+int brlobol_database_source_realize_wireframe_compact_with_cache(
+	SoBRLDatabaseSource *source,
+	BRLObolDatabaseSourceRealizationCache *cache);
+int brlobol_database_source_realize_mesh_compact_with_cache(
+	SoBRLDatabaseSource *source,
+	BRLObolDatabaseSourceRealizationCache *cache);
 void brlobol_database_source_seed_realization_cache(
 	SoBRLDatabaseSource *source,
 	BRLObolDatabaseSourceRealizationCache *cache);

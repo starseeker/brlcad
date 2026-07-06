@@ -33,6 +33,7 @@ struct QTCAD_EXPORT QgObolPickRecord {
     QgObolPickRecord(void);
 
     std::string path;
+    std::string sourceInstanceKey;
     std::string sourceName;
     std::string sourceType;
     std::string featureName;

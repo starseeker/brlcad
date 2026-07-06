@@ -68,6 +68,7 @@ protected:
 
 private:
     static void nodeAction(SoAction *action, SoNode *node);
+    static void databaseSourceAction(SoAction *action, SoNode *node);
     static void meshShapeAction(SoAction *action, SoNode *node);
     void appendDiagnostic(const SbString &target, const char *message);
 

@@ -1,7 +1,7 @@
 BRL-CAD Obol Active Work Guide
 ==============================
 
-Last refreshed: 2026-07-05
+Last refreshed: 2026-07-06
 Branch: oboltest2
 
 Purpose
@@ -100,6 +100,9 @@ Core Invariants
   identity, source metrics, bounds, draw/material/selection state, and optional
   source/full-detail arrays; `BRLObolViewController` owns active
   `BRLObolViewLodState` payloads and binds them into Coin traversal.
+  Compact database sources use the same rule: view-specific AABB, OBB, mesh,
+  or full-detail results are bound as view-local CAD payloads and rendered
+  through the traversing view state, not by mutating the shared source node.
 * Persistent drawing cache data has one filesystem root:
   `BU_DIR_CACHE/.DbDrawCache`.  libbrlobol owns the draw proxy/metadata cache
   (`draw_data.format`) for AABB, OBB, object-local draw metadata, and
@@ -218,6 +221,41 @@ Current Baseline
 * Repeated comb/solid instances under different transforms share local
   geometry during realization while retaining per-instance transforms and
   identity.
+* Eligible database sources can now prepare an internal Obol `SoCADAssembly`
+  node.  With explicit child shapes still present, this assembly is a render
+  cache keyed to the source node id: direct wire and shaded leaves prepare one
+  part/instance, repeated transformed leaf instances prepare one shared part
+  with multiple instances, and unsupported per-primitive draw intent falls
+  back to explicit child traversal.  A source can also compact eligible
+  realized primary children into a source-owned instance index and remove
+  those child shape nodes, and the scene controller has an opt-in direct
+  compact realization path for stable simple leaf sources so no transient child
+  node is created.  In compact form, source-local CAD assemblies plus compact
+  action adapters preserve full BRL path/material/selection identity for
+  whole-instance
+  selected/unselected groupings, hidden instances, unpickable visible
+  instances, export, measure, snap, bounds, connected wire-angle measurement,
+  and BRL-aware picks.  Large selected/unselected subsets should remain
+  compact per-instance state on the source-local assembly unless a workflow
+  needs subset-specific interaction or render policy that cannot be expressed
+  that way.
+  Per-primitive selection/highlight and custom edit/manipulator state remain
+  the boundary that keeps or materializes explicit Coin nodes.
+* Compact CAD now covers both stable source realization and view-specific LoD
+  publication.  Direct compact realization is the synchronous stable-source
+  optimization.  When LoD is active, high-face BoT wire sources can publish a
+  source-local AABB proxy immediately, submit source-level AABB/OBB/mesh cache
+  work, and let the owning view render the ready result as a view-local compact
+  CAD payload.  This keeps the shared source selectable/erasable/editable while
+  avoiding full mesh realization during the first LoD-on draw.  Future shared
+  compact-part mutation remains a possible optimization for cases where a
+  result is truly view-independent, but it is not the active display-LoD owner.
+* Repeated comb/solid occurrences with identical path names and transforms are
+  still distinct Obol database-source instances when librt supplies comb
+  instance ids.  They may share the same local geometry node, but source
+  visibility, highlight, stale state, and pick details use the exact
+  `sourceInstanceKey` so a hidden first occurrence does not mask a pick of the
+  second.
 * Evaluated wire and evaluated sampled-points are Obol database-source
   provider outputs for the requested path.  Evaluated wire now has a librt
   core entry point, `rt_eval_wireframe(vhead, vlfree, dbip, path, tol, ttol,
@@ -418,6 +456,10 @@ Known Risks
   multiple active view-local staged payloads at the AABB, OBB, and mesh stages,
   so the cache-backed startup path is not validated solely through the first
   realized mesh.
+  Startup wire-LoD may already display source-local AABB proxies before the
+  service publishes its AABB result; the test therefore accepts an unchanged
+  startup->AABB image only when active AABB, OBB, and mesh payload counts are
+  present and later OBB/mesh frames visibly differ.
 * The qtcad progressive LoD harness now supports parameterized draw targets,
   direct/facetized modes, phase-level startup timing diagnostics,
   `--startup-only`, `--startup-refine`, `--startup-expand`, and a
@@ -464,6 +506,18 @@ Known Risks
 * Persistent cross-refresh geometry reuse is not yet designed.  PCA/canonical
   mesh matching may help later, but it should wait until legacy draw drivers
   and cache invalidation policy are stable.
+* The compact CAD integration still retains off-scene shape handles as
+  transitional record sources in the compact instance index.  Direct compact
+  leaf realization avoids transient child nodes for the common stable-source
+  path, but the next hardening step is to replace those handles with tighter
+  compact geometry/metadata records and define promote/demote transaction APIs
+  for selected/edited/inspected subsets.  The attempted render-time
+  group/root CAD aggregation did not prove out: `Generic_Twin.g all` already
+  renders quickly with flat source-local compact assemblies, while forced
+  root aggregation made render time much worse and did not reduce draw-time
+  source replacement or per-source setup costs.  The next scale effort should
+  target publication-time multi-instance compact sources, not post-realization
+  group/root assembly construction.
 * A bounded slow ERT streaming image gate is still missing.  The current
   `NIST_MBE_PMI_3.g` build artifact is an empty database because STEP
   conversion is unavailable; `NIST_MBE_PMI_7-10.g` shows distinct intermediate
@@ -476,6 +530,9 @@ Focused Verification
 Current gates:
 
 * `ninja -C build`
+* `ctest --test-dir obol/build -R '^test_cad_(ids|picking|benchmark)$' --output-on-failure`
+* `ctest --test-dir build -R '^(libbrlobol_prototype|libbrlobol_lod_update_action|libbrlobol_render)$' --output-on-failure`
+* `ctest --test-dir build -R 'qtcad_obol_progressive_lod|test_qtcad_obol_progressive_lod' --output-on-failure`
 * `build/src/rt/test_rt_opt`
 * `ctest --test-dir build -R '^(libbrlobol_image_source|libbrlobol_window_host|libbrlobol_headless_window_host|test_qtcad_obol_window_host|test_qged_obol_fbserv|gsh_obol_smoke|gsh_obol_ert_smoke|gsh_obol_progressive_lod|mged_obol_smoke|mged_obol_ert_smoke|mged_obol_progressive_lod)$' --timeout 240 --output-on-failure`
 * `ctest --test-dir build -R '^(bu_datetime[0-9]+|bu_file_realpath_[0-9]+|bu_path_component_|bu_path_dirname_|bu_path_basename_)' --timeout 120 --output-on-failure`
@@ -516,26 +573,36 @@ Next Implementation Steps
    payloads for the next frame.  Generic_Twin startup, startup-expand,
    wire-LoD, and shaded-BoT LoD are now bounded qtcad gates; the remaining
    scale question is automatic priority scheduling of large database
-   frontiers, including duplicate-instance path identity, non-union CSG child
-   handling, autoview stability/settlement as leaf bounds arrive, and cache
-   population that can publish AABB/OBB/mesh data as it becomes available.
-5. Extend the shared-scene/per-view-root Obol attach model to any remaining
+   frontiers, including duplicate-occurrence proxy expansion, non-union CSG
+   child handling, autoview stability/settlement as leaf bounds arrive, and
+   cache population that can publish AABB/OBB/mesh data as it becomes
+   available.
+5. Harden the compact CAD database-instance representation.  Replace
+   transitional off-scene shape handles with compact geometry/metadata records,
+   add explicit promote/demote transaction APIs for selected, edited, and
+   inspected subsets, and add publication-time multi-instance compact source
+   APIs so background AABB/OBB/mesh-LoD cache population can publish better
+   representations without forcing synchronous full-detail root expansion.
+   Avoid render-time group/root CAD aggregation unless a future benchmark
+   proves a specific bounded case improves over flat source-local compact
+   assemblies.
+6. Extend the shared-scene/per-view-root Obol attach model to any remaining
    multi-view caller/test paths.  Primary attached mutation transaction
    view-LoD invalidation is now covered; add focused coverage for
    no-owned-scene fallback paths only where those callers still need to survive
    until removal.
-6. Inventory remaining legacy draw/view fallbacks and classify each use:
+7. Inventory remaining legacy draw/view fallbacks and classify each use:
    explicit retained fallback, neutral libbv-backed view mechanics, or
    libbrlobol/Obol scene/interaction behavior.  Focus first on caller-facing
    workflows.  Transaction draw no longer uses retained `_ged_drawtrees`, and
    the old `draw.c` tree walker is gone from the command path; remaining work
    should target unsupported application/no-owned-scene behavior and explicit
    retained-adapter debt.
-7. Continue the RT view split: adapter registries are now in
+8. Continue the RT view split: adapter registries are now in
    `src/librt/view_context_adapters.c`, but public neutral RT view wrappers
    still need to move from `src/librt/view_legacy_bsg.c` into a non-legacy
    dispatch source once fallback-only retained BSG calls are isolated.
-8. Add or complete explicit Obol/libbrlobol adapters for native contexts where
+9. Add or complete explicit Obol/libbrlobol adapters for native contexts where
    broader tests still depend on retained fallback behavior: scene clear,
    command-result lookup/removal, pick, selection, snap, polygon, faceplate,
    framebuffer/readback, and application refresh.  qged, GSH, and classic MGED
@@ -544,15 +611,15 @@ Next Implementation Steps
    for intermediate streaming framebuffer image checks in attached views, then
    add qged app-level `ert` process coverage beyond the backend operation-table
    unit test.
-9. Continue moving command visualizations from generic line/HUD publication to
+10. Continue moving command visualizations from generic line/HUD publication to
    typed command-result records only where it helps retire legacy behavior:
    command-specific metadata, primitive pick/highlight mapping, detail-panel
    lookup, generation fencing, and asynchronous producer teardown.
-10. Continue evaluated-wire modernization behind `rt_eval_wireframe`, focusing
+11. Continue evaluated-wire modernization behind `rt_eval_wireframe`, focusing
    on the havoc thin-shell candidate explosion: stronger geometric rejection,
    reusable leaf-pair candidate results, deterministic lower-level parallel
    candidate/ray jobs, and no further PCA/canonical matching work until legacy
    draw paths and cache ownership are structurally cleaner.
-11. Revisit PCA/canonical mesh matching only after cache keys, revision inputs,
+12. Revisit PCA/canonical mesh matching only after cache keys, revision inputs,
    usage counts, invalidation, and edit/update behavior are stable; use it as
    optional duplicate detection, not as a correctness dependency.

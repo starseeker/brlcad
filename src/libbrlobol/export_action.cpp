@@ -7,6 +7,7 @@
 
 #include "common.h"
 
+#include "brlobol/database_source.h"
 #include "brlobol/export_action.h"
 #include "brlobol/lod_service.h"
 #include "brlobol/mesh_shape.h"
@@ -564,6 +565,8 @@ SoBRLExportAction::initClass(void)
     SO_ENABLE(SoBRLExportAction, SoModelMatrixElement);
     SO_ENABLE(SoBRLExportAction, SoBRLViewLodElement);
     SO_ACTION_ADD_METHOD(SoNode, SoBRLExportAction::nodeAction);
+    SO_ACTION_ADD_METHOD(SoBRLDatabaseSource,
+			 SoBRLExportAction::databaseSourceAction);
     SO_ACTION_ADD_METHOD(SoBRLVListShape, SoBRLExportAction::vlistShapeAction);
     SO_ACTION_ADD_METHOD(SoBRLMeshShape, SoBRLExportAction::meshShapeAction);
 }
@@ -1039,6 +1042,20 @@ SoBRLExportAction::nodeAction(SoAction *action, SoNode *node)
     if (node->isOfType(SoGroup::getClassTypeId()) ||
 	node->isOfType(SoTransformation::getClassTypeId()))
 	node->doAction(action);
+}
+
+void
+SoBRLExportAction::databaseSourceAction(SoAction *action, SoNode *node)
+{
+    SoBRLExportAction *exportAction =
+	static_cast<SoBRLExportAction *>(action);
+    SoBRLDatabaseSource *source = static_cast<SoBRLDatabaseSource *>(node);
+    const SbMatrix &parentToWorld =
+	SoModelMatrixElement::get(action->getState());
+    if (source->exportCompactInstances(exportAction, parentToWorld))
+	return;
+
+    source->doAction(action);
 }
 
 void

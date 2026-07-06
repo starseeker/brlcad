@@ -214,6 +214,18 @@ GED_EXPORT extern int
 ged_db_index_valid_id(struct ged *gedp, ged_db_index_id id);
 
 /**
+ * Report whether a database path string is known to the current index.
+ *
+ * This refreshes the index only when it is uninitialized or has explicit
+ * pending change flags.  Unlike ged_db_index_path_resolve(), ordinary misses
+ * do not trigger a defensive rebuild, so this is suitable for high-volume
+ * speculative existence checks during draw-state reconciliation.
+ */
+GED_EXPORT extern int
+ged_db_index_path_exists(struct ged *gedp,
+			 const char *path);
+
+/**
  * Resolve a database path string into database-index path ids.
  *
  * On success, returns the full number of ids in the resolved path.  When

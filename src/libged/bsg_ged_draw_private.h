@@ -1171,6 +1171,14 @@ GED_EXPORT extern int ged_draw_obol_database_source_publication_begin(
 	struct ged *gedp,
 	void *view_ctx,
 	int publication_draw_mode);
+GED_EXPORT extern void ged_draw_obol_database_source_publication_appearance_set(
+	struct ged *gedp,
+	const struct ged_draw_appearance_settings *settings);
+GED_EXPORT extern int ged_draw_obol_database_source_publication_appearance_active(
+	struct ged *gedp);
+GED_EXPORT extern void ged_draw_obol_database_source_publication_group_set(
+	struct ged *gedp,
+	const char *group_path);
 GED_EXPORT extern void ged_draw_obol_database_source_publication_end(
 	struct ged *gedp);
 GED_EXPORT extern int ged_draw_obol_database_source_paths_foreach(
@@ -1584,6 +1592,8 @@ ged_draw_obol_database_source_set_realization_view_policy_for_path(
 GED_EXPORT extern int
 ged_draw_obol_database_source_realize_for_path(struct ged *gedp,
 	const char *path);
+GED_EXPORT extern int
+ged_draw_obol_database_source_realize_pending(struct ged *gedp);
 GED_EXPORT extern int ged_draw_obol_scene_controller_ensure_owned(
 	struct ged *gedp,
 	int sync_current_scene);
@@ -1601,6 +1611,18 @@ GED_EXPORT extern int ged_draw_obol_database_source_ensure_for_path(
 	struct db_i *dbip,
 	int ged_draw_mode,
 	uint64_t source_revision);
+GED_EXPORT extern int ged_draw_obol_database_source_ensure_for_path_with_placement(
+	struct ged *gedp,
+	const char *path,
+	struct db_i *dbip,
+	int ged_draw_mode,
+	uint64_t source_revision,
+	int draw_mat_valid,
+	const mat_t draw_mat,
+	int draw_center_valid,
+	const point_t draw_center,
+	int draw_size_valid,
+	fastf_t draw_size);
 GED_EXPORT extern int ged_draw_obol_database_source_rename_for_path(
 	struct ged *gedp,
 	const char *path,

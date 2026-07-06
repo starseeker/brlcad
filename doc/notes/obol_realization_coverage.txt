@@ -68,6 +68,35 @@ database sources.  This preserves local geometry reuse when GED or another
 caller synchronizes transformed leaf instances in separate transactions, while
 still avoiding a persistent cross-refresh cache until key/invalidation/refcount
 policy is explicit.
+After realization, `SoBRLDatabaseSource` can prepare an internal compiled
+`SoCADAssembly` for eligible simple wire or mesh children.  While
+explicit child shapes remain in the scene, that assembly is a render
+acceleration cache keyed to the source node id and explicit children remain
+authoritative for identity, editing, export, measure, snap, and exact picking.
+`SoBRLDatabaseSource::compactRealizedGeometry()` can then promote eligible
+whole-instance state into a compact source-owned instance index, remove the
+explicit primary child shapes, and use the CAD assembly plus compact action
+adapters as the aggregate representation.  The scene controller can also opt
+into direct compact realization for stable simple leaf sources, which avoids
+building transient explicit primary children before creating the compact
+assembly.  `libbrlobol_prototype` gates direct wire, direct shaded, repeated
+comb-instance preparation, scene-controller compact policy, compact selected
+vs. unselected grouping, compact hidden/unpickable filtering, compact
+BRL-aware picks, and per-primitive draw-intent fallback.  Direct leaves prepare
+one part/instance, repeated transformed instances share one part with multiple
+instances, whole-instance state can remain compact, and per-primitive draw
+intent keeps explicit traversal.  Progressive AABB/OBB/mesh-LoD cache
+promotion is now covered through view-local compact CAD payloads: source-level
+LoD results bind to `BRLObolViewLodState`, compact database sources render the
+view payload through traversal state, and the shared source is not mutated.
+`libbrlobol_prototype` gates compact source AABB proxy and mesh payloads for
+bounds and BRL-aware picking without materializing child nodes.  qtcad
+progressive LoD gates the background-service path through AABB, OBB, and mesh
+payload stages with rendered image checks.
+LoD-on wire realization also has a source-local optimized startup path for
+high-face BoTs: it builds an immediate AABB proxy from BoT vertex bounds,
+avoids full mesh realization, and lets view-local LoD payloads replace that
+proxy as cache/service results arrive.
 Staged mesh LoD payload copying also owns optional active normals as a
 provider-neutral triangle-corner array, so normal payloads do not leak the
 underlying cache container into libbrlobol consumers.  The mesh-LoD provider
@@ -115,8 +144,8 @@ prefer Obol pick identity and leave the legacy display manager unopened when
 selecting migrated content.  The qtcad selection filter API exposes the
 resulting normalized paths directly for qged consumption instead of requiring
 callers to inspect BSG pick or interaction records, and the qtcad pick record
-preserves source-backed mesh face, vertex, nearest edge, and edit-intent
-identity for exact picks through the shared BRLObolViewController
+preserves source instance, source-backed mesh face, vertex, nearest edge, and
+edit-intent identity for exact picks through the shared BRLObolViewController
 source-backed mesh exact-ray helper.  The same gate verifies qtcad explicit
 ray picks reuse the controller-owned librt exact-pick cache through the shared
 BRLObolViewController RT exact-ray helper, merge display/RT hits in
@@ -165,6 +194,7 @@ Preserved Identity
 Every realized drawable Obol node must preserve:
 
 * full database path, including combination instances
+* source instance key for occurrence-specific selection and pick routing
 * source revision and realized source/input/view revisions
 * primitive name and type identity at shape level
 * inherited region/material identity currently carried by db_tree_state:
@@ -188,6 +218,12 @@ instances, checks direct source-instance stale/redraw reuse from an
 already-current sibling, guards logical redraw against retained fallback state,
 covers shaded shared local mesh reuse, and runs autoview against the
 transformed scene envelope.
+The same GED/Obol sync gate covers a comb containing two identical child
+occurrences of the same solid.  Draw expansion enables librt comb instance
+specifiers, publishes both occurrence-qualified source instances, reuses one
+local geometry node, hides only the targeted first occurrence, and verifies a
+Coin ray pick of the visible second occurrence reports the second source
+instance key.
 
 External primary geometry published to a database source follows the same
 source-local rule.  Line, point, and indexed-triangle payloads must be in
@@ -405,6 +441,12 @@ Near-Term Gates
    native or tessellated curved nodes need to report those sub-entities.
 7. Extend the bounded Generic_Twin startup gates into a full default
    large-root refinement gate after automatic recursive/background
-   cache-backed expansion can publish AABB/OBB/mesh updates, preserve mixed
-   implicit/mesh identity, report invalid large-BoT diagnostics, and avoid
-   blocking routine qtcad developer tests.
+   cache-backed expansion can publish AABB/OBB/mesh updates, including
+   view-local compact CAD payload updates, preserve mixed implicit/mesh
+   identity, report invalid large-BoT diagnostics, and avoid blocking routine
+   qtcad developer tests.
+8. Prototype publication-time multi-instance compact source construction for
+   large flat draw frontiers.  Do not use render-time group/root CAD
+   aggregation as the default; profiling showed it does not reduce
+   replacement/realization setup costs and can make Generic_Twin render much
+   slower than flat source-local compact assemblies.

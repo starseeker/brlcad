@@ -34,6 +34,8 @@ class SoNode;
 class SoPickAction;
 class SoState;
 class SoBRLMeshShape;
+class SoBRLDatabaseSource;
+class SoCADAssembly;
 
 /**
  * View-local active LoD bindings for shared Obol geometry.
@@ -102,6 +104,37 @@ public:
     };
     typedef std::shared_ptr<ProxyPayload> ProxyPayloadPtr;
 
+    struct BRLOBOL_EXPORT CadPayload {
+	BRLObolLodMeshPayload mesh;
+	BRLObolLodProxy proxy;
+	SbString sourcePath;
+	SbString sourceName;
+	SbString sourceIdentity;
+	SbString sourceInstanceKey;
+	SbString cacheIdentity;
+	SbString cacheKey;
+	int resultKind;
+	int qualityTier;
+	int providerStatus;
+	int drawMode;
+	uint64_t viewRevision;
+	uint64_t policyRevision;
+	BRLObolLodCounts counts;
+	SbBox3f bounds;
+	SbBool hasSnappedPoints;
+	SbBool hasNormals;
+	SbString diagnostic;
+	mutable SoCADAssembly *assembly;
+	mutable SbString assemblyKey;
+
+	CadPayload(void);
+	~CadPayload(void);
+	SbBool isValid(void) const;
+	size_t estimateBytes(void) const;
+	void clearAssembly(void) const;
+    };
+    typedef std::shared_ptr<CadPayload> CadPayloadPtr;
+
     BRLObolViewLodState(void);
     ~BRLObolViewLodState(void);
 
@@ -112,20 +145,26 @@ public:
 			    const BRLObolLodResult &result);
     SbBool applyDisplayResult(const SoBRLMeshShape *shape,
 			      const BRLObolLodResult &result);
+    SbBool applySourceResult(const SoBRLDatabaseSource *source,
+			     const BRLObolLodResult &result);
     const MeshPayload *findMesh(const SoBRLMeshShape *shape) const;
     const MeshPayload *findMeshForResult(const BRLObolLodResult &result) const;
     const ProxyPayload *findProxy(const SoBRLMeshShape *shape) const;
     const ProxyPayload *findProxyForResult(const BRLObolLodResult &result) const;
+    const CadPayload *findCad(const SoBRLDatabaseSource *source) const;
+    const CadPayload *findCadForResult(const BRLObolLodResult &result) const;
     size_t bindingCount(void) const;
     size_t payloadCount(void) const;
     size_t meshPayloadCount(void) const;
     size_t proxyPayloadCount(int proxyKind = BRLOBOL_LOD_PROXY_NONE) const;
+    size_t cadPayloadCount(void) const;
     size_t estimateDisplayMeshBytes(void) const;
     size_t evictDisplayMeshes(unsigned int *evictedMeshCount = NULL);
 
 private:
     std::unordered_map<std::string, MeshPayloadPtr> meshBindings;
     std::unordered_map<std::string, ProxyPayloadPtr> proxyBindings;
+    std::unordered_map<std::string, CadPayloadPtr> cadBindings;
 };
 
 class BRLOBOL_EXPORT SoBRLViewLodElement : public SoElement
@@ -190,5 +229,9 @@ brlobol_view_lod_mesh_for_action(SoAction *action,
 BRLOBOL_EXPORT const BRLObolViewLodState::ProxyPayload *
 brlobol_view_lod_proxy_for_action(SoAction *action,
 				  const SoBRLMeshShape *shape);
+
+BRLOBOL_EXPORT const BRLObolViewLodState::CadPayload *
+brlobol_view_lod_cad_for_action(SoAction *action,
+				const SoBRLDatabaseSource *source);
 
 #endif /* BRLOBOL_VIEW_LOD_H */

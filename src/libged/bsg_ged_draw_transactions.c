@@ -42,6 +42,7 @@
 #include "rt/calc.h"
 #include "rt/view.h"
 #include "ged/selection_state.h"
+#include "../librt/librt_private.h"
 #include "./ged_private.h"
 #include "./bsg_ged_draw_private.h"
 #include "./bsg_ged_draw_view_private.h"
@@ -1319,7 +1320,9 @@ static int
 ged_draw_prepare_obol_database_source_one_path(
     struct ged *gedp,
     const char *path,
-    const struct ged_draw_appearance_settings *settings);
+    const struct ged_draw_appearance_settings *settings,
+    int draw_mat_valid,
+    const mat_t draw_mat);
 
 
 static int
@@ -1345,7 +1348,7 @@ ged_draw_apply_evaluated_provider_paths(
 	if (!path || !path[0])
 	    continue;
 	if (!ged_draw_prepare_obol_database_source_one_path(gedp, path,
-		settings))
+		settings, 0, NULL))
 	    continue;
 	const int eval_ret =
 	    (settings->draw_mode == GED_DRAW_MODE_EVAL_WIRE) ?
@@ -1428,6 +1431,7 @@ ged_draw_mode_publishes_direct_face_set(int draw_mode)
 struct ged_draw_obol_database_source_leaf_ctx {
     struct ged *gedp;
     const struct ged_draw_appearance_settings *settings;
+    struct bu_hash_tbl *seen_paths;
     int realized;
     int failed;
 };
@@ -1444,21 +1448,89 @@ static union tree *
     return curtree;
 }
 
+static uint8_t *
+ged_draw_obol_leaf_instance_key_create(
+    const struct db_tree_state *tsp,
+    const struct db_full_path *pathp,
+    size_t *key_len)
+{
+    const uint32_t key_version = 4;
+    const int sofar = tsp ?
+		      (tsp->ts_sofar &
+		       (TS_SOFAR_MINUS | TS_SOFAR_INTER | TS_SOFAR_REGION)) : 0;
+    mat_t mat;
+    size_t len = sizeof(key_version) + sizeof(pathp ? pathp->fp_len : 0) +
+		 sizeof(sofar) + sizeof(mat);
+    uint8_t *key = NULL;
+    uint8_t *cursor = NULL;
+
+    if (key_len)
+	*key_len = 0;
+    if (!pathp)
+	return NULL;
+
+    RT_CK_FULL_PATH(pathp);
+    if (tsp)
+	MAT_COPY(mat, tsp->ts_mat);
+    else
+	MAT_IDN(mat);
+
+    for (size_t i = 0; i < pathp->fp_len; i++) {
+	const struct directory *dp = pathp->fp_names ?
+				     pathp->fp_names[i] : NULL;
+	const char *name = (dp && dp->d_namep) ? dp->d_namep : "";
+	len += sizeof(size_t) + strlen(name) + 1 + sizeof(int);
+    }
+
+    key = (uint8_t *)bu_malloc(len, "draw Obol leaf instance key");
+    cursor = key;
+#define GED_DRAW_OBOL_KEY_APPEND(_ptr, _len) do { \
+	memcpy(cursor, (_ptr), (_len)); \
+	cursor += (_len); \
+    } while (0)
+    GED_DRAW_OBOL_KEY_APPEND(&key_version, sizeof(key_version));
+    GED_DRAW_OBOL_KEY_APPEND(&pathp->fp_len, sizeof(pathp->fp_len));
+    GED_DRAW_OBOL_KEY_APPEND(&sofar, sizeof(sofar));
+    GED_DRAW_OBOL_KEY_APPEND(mat, sizeof(mat));
+    for (size_t i = 0; i < pathp->fp_len; i++) {
+	const struct directory *dp = pathp->fp_names ?
+				     pathp->fp_names[i] : NULL;
+	const char *name = (dp && dp->d_namep) ? dp->d_namep : "";
+	const int cinst = pathp->fp_cinst ?
+			  DB_FULL_PATH_GET_COMB_INST(pathp, i) : 0;
+	const size_t name_len = strlen(name) + 1;
+	GED_DRAW_OBOL_KEY_APPEND(&name_len, sizeof(name_len));
+	GED_DRAW_OBOL_KEY_APPEND(name, name_len);
+	GED_DRAW_OBOL_KEY_APPEND(&cinst, sizeof(cinst));
+    }
+#undef GED_DRAW_OBOL_KEY_APPEND
+
+    if (key_len)
+	*key_len = len;
+    return key;
+}
+
 
 static int
 ged_draw_prepare_obol_database_source_one_path(
     struct ged *gedp,
     const char *path,
-    const struct ged_draw_appearance_settings *settings)
+    const struct ged_draw_appearance_settings *settings,
+    int draw_mat_valid,
+    const mat_t draw_mat)
 {
     if (!gedp || !gedp->dbip || !path || !path[0] ||
 	!settings || !ged_draw_mode_uses_obol_database_source(
 	    settings->draw_mode))
 	return 0;
 
-    if (!ged_draw_obol_database_source_ensure_for_path(gedp, path,
-	    gedp->dbip, settings->draw_mode, 0))
+    if (!ged_draw_obol_database_source_ensure_for_path_with_placement(
+	    gedp, path, gedp->dbip, settings->draw_mode, 0,
+	    draw_mat_valid, draw_mat, 0, NULL, 0, 0.0))
 	return 0;
+
+    if (ged_draw_obol_database_source_publication_appearance_active(gedp))
+	return 1;
 
     (void)ged_draw_obol_database_source_update_display_for_path(
 	gedp, path,
@@ -1486,10 +1558,12 @@ static int
 ged_draw_apply_obol_database_source_one_path(
     struct ged *gedp,
     const char *path,
-    const struct ged_draw_appearance_settings *settings)
+    const struct ged_draw_appearance_settings *settings,
+    int draw_mat_valid,
+    const mat_t draw_mat)
 {
     if (!ged_draw_prepare_obol_database_source_one_path(gedp, path,
-	    settings))
+	    settings, draw_mat_valid, draw_mat))
 	return 0;
 
     if (ged_draw_test_primitive_face_set_failure_enabled() &&
@@ -1498,6 +1572,9 @@ ged_draw_apply_obol_database_source_one_path(
 	    gedp, path, NULL, 0, NULL, 0, NULL, 0);
 	return 1;
     }
+
+    if (ged_draw_obol_database_source_publication_appearance_active(gedp))
+	return 1;
 
     return ged_draw_obol_database_source_realize_for_path(gedp, path) ? 1 : 0;
 }
@@ -1542,7 +1619,7 @@ ged_draw_apply_obol_database_source_proxy_path(
     const struct ged_draw_appearance_settings *settings)
 {
     if (!ged_draw_prepare_obol_database_source_one_path(gedp, path,
-	    settings))
+	    settings, 0, NULL))
 	return 0;
 
     const char *lookup_path = ged_draw_dbpath_skip_lead_slash(path);
@@ -1620,7 +1697,7 @@ ged_draw_apply_obol_database_source_proxy_path(
 
 static union tree *
     ged_draw_apply_obol_database_source_leaf_cb(
-	struct db_tree_state *UNUSED(tsp),
+	struct db_tree_state *tsp,
 	const struct db_full_path *pathp,
 	struct directory *dp,
 	void *client_data)
@@ -1639,8 +1716,34 @@ static union tree *
 	return TREE_NULL;
     }
 
+    if (ctx->seen_paths) {
+	size_t key_len = 0;
+	uint8_t *key = ged_draw_obol_leaf_instance_key_create(tsp, pathp,
+			 &key_len);
+	if (!key || !key_len) {
+	    if (key)
+		bu_free(key, "draw Obol leaf instance key");
+	    bu_free(path, "draw Obol leaf source path");
+	    ctx->failed = 1;
+	    return TREE_NULL;
+	}
+	if (bu_hash_get(ctx->seen_paths, key, key_len)) {
+	    bu_free(key, "draw Obol leaf instance key");
+	    bu_free(path, "draw Obol leaf source path");
+	    return ged_draw_obol_database_source_make_nop_tree();
+	}
+	if (bu_hash_set(ctx->seen_paths, key, key_len, (void *)ctx) < 0) {
+	    bu_free(key, "draw Obol leaf instance key");
+	    bu_free(path, "draw Obol leaf source path");
+	    ctx->failed = 1;
+	    return TREE_NULL;
+	}
+	bu_free(key, "draw Obol leaf instance key");
+    }
+
     int realized = ged_draw_apply_obol_database_source_one_path(ctx->gedp,
-		   path, ctx->settings);
+		   path, ctx->settings, tsp ? 1 : 0,
+		   tsp ? tsp->ts_mat : NULL);
     bu_free(path, "draw Obol leaf source path");
     if (!realized) {
 	ctx->failed = 1;
@@ -1662,6 +1765,7 @@ ged_draw_apply_obol_database_source_leaf_paths(
 	return 0;
 
     struct db_tree_state init_state;
+    gedp->dbip->i->dbi_use_comb_instance_ids = 1;
     db_init_db_tree_state(&init_state, gedp->dbip);
     init_state.ts_stop_at_regions = 0;
 
@@ -1669,12 +1773,18 @@ ged_draw_apply_obol_database_source_leaf_paths(
     memset(&ctx, 0, sizeof(ctx));
     ctx.gedp = gedp;
     ctx.settings = settings;
+    ctx.seen_paths = bu_hash_create(8192);
+    if (!ctx.seen_paths) {
+	db_free_db_tree_state(&init_state);
+	return 0;
+    }
 
     const char *av[1] = { ged_draw_dbpath_skip_lead_slash(path) };
     int ret = db_walk_tree_leaf_instances(gedp->dbip, 1, av, 1, &init_state,
 					  NULL, NULL, ged_draw_apply_obol_database_source_leaf_cb,
 					  (void *)&ctx);
     db_free_db_tree_state(&init_state);
+    bu_hash_destroy(ctx.seen_paths);
 
     return (ret >= 0 && !ctx.failed && ctx.realized > 0) ? 1 : 0;
 }
@@ -1704,6 +1814,7 @@ ged_draw_apply_obol_database_source_paths(
 
 	(void)ged_draw_obol_group_ensure_for_path(gedp, path, path,
 		settings->draw_mode, 0);
+	ged_draw_obol_database_source_publication_group_set(gedp, path);
 	if ((settings->defer_leaf_expansion &&
 	     ged_draw_apply_obol_database_source_proxy_path(gedp, view_ctx, path,
 		     settings)) ||
@@ -1711,9 +1822,12 @@ ged_draw_apply_obol_database_source_paths(
 	     (ged_draw_apply_obol_database_source_leaf_paths(gedp, path,
 		     settings) ||
 	      ged_draw_apply_obol_database_source_one_path(gedp, path,
-		      settings))))
+		      settings, 0, NULL))))
 	    realized++;
     }
+
+    if (realized > 0)
+	(void)ged_draw_obol_database_source_realize_pending(gedp);
 
     (void)view_ctx;
     return realized;
@@ -1777,6 +1891,9 @@ _ged_draw_apply_draw(struct ged *gedp,
     int ret = 0;
     int obol_publication = ged_draw_obol_database_source_publication_begin(
 			       gedp, view_ctx, neutral_settings.draw_mode);
+    if (obol_publication)
+	ged_draw_obol_database_source_publication_appearance_set(gedp,
+	    &neutral_settings);
     if (neutral_settings.draw_mode == GED_DRAW_MODE_EVAL_WIRE ||
 	neutral_settings.draw_mode == GED_DRAW_MODE_EVAL_POINTS) {
 	const int realized = ged_draw_apply_evaluated_provider_paths(gedp,
@@ -1823,12 +1940,15 @@ _ged_draw_apply_draw(struct ged *gedp,
     }
 
     const int autoview_database_fallback =
-	neutral_settings.defer_leaf_expansion ? 0 : 1;
+	(neutral_settings.defer_leaf_expansion ||
+	 ged_draw_mode_uses_obol_database_source(neutral_settings.draw_mode)) ?
+	0 : 1;
     if (txn->autoview)
 	(void)ged_draw_autoview_for_transaction(gedp, view_ctx, draw_paths,
 						draw_count,
 						autoview_database_fallback);
-    (void)ged_draw_finalize_lod_for_transaction(gedp, view_ctx);
+    if (!ged_draw_mode_uses_obol_database_source(neutral_settings.draw_mode))
+	(void)ged_draw_finalize_lod_for_transaction(gedp, view_ctx);
     if (txn->autoview)
 	(void)ged_draw_autoview_for_transaction(gedp, view_ctx, draw_paths,
 						draw_count,
@@ -1837,7 +1957,15 @@ _ged_draw_apply_draw(struct ged *gedp,
 
     if (result) {
 	result->affected_groups = draw_count;
-	result->affected_shapes = ged_draw_shape_count(gedp);
+	if (ged_draw_mode_uses_obol_database_source(
+		neutral_settings.draw_mode)) {
+	    size_t source_count = 0;
+	    result->affected_shapes =
+		ged_draw_obol_database_source_count(gedp, 0,
+			&source_count) ? (int)source_count : draw_count;
+	} else {
+	    result->affected_shapes = ged_draw_shape_count(gedp);
+	}
     }
     bu_free((void *)draw_paths, "draw transaction paths");
     return draw_count;

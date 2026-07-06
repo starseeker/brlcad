@@ -47,6 +47,7 @@ extern "C" {
 }
 
 #include "brlobol/init.h"
+#include "brlobol/scene_group.h"
 #include "brlobol/view_controller.h"
 
 #include <Inventor/SbColor.h>
@@ -355,7 +356,7 @@ obol_open(void *ctx, void *interp, int argc, const char **argv)
     privars->this_dm = dmp;
     privars->view_ctx = ctx;
     privars->manager = manager;
-    privars->controller = new BRLObolViewController(new SoSeparator);
+    privars->controller = new BRLObolViewController(new SoBRLSceneGroup);
     privars->last_image = NULL;
     privars->last_image_size = 0;
     privars->lighting = 1;

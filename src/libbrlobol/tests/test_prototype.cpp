@@ -3051,7 +3051,8 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	BRLObolViewController viewController(root, camera);
 	if (viewController.getSceneRoot() != root ||
 	    viewController.getRenderRoot() == NULL ||
-	    viewController.getViewport()->getSceneGraph() != root ||
+	    viewController.getRenderSceneRoot() == NULL ||
+	    viewController.getViewport()->getSceneGraph() != viewController.getRenderSceneRoot() ||
 	    viewController.getRenderManager()->getSceneGraph() != viewController.getRenderRoot() ||
 	    viewController.getRenderManager()->getCamera() != camera ||
 	    viewController.getCamera() != camera ||
@@ -4445,6 +4446,13 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	shape->materialColorValid.getValue() ||
 	shape->regionId.getValue() != 0)
 	FAIL("direct primitive shape should preserve primitive identity fields");
+    if (source->hasCompiledAssembly())
+	FAIL("database source should not publish a compiled CAD assembly before render preparation");
+    if (source->prepareCompiledAssembly() != 1 ||
+	!source->hasCompiledAssembly() ||
+	source->getCompiledAssemblyPartCount() != 1 ||
+	source->getCompiledAssemblyInstanceCount() != 1)
+	FAIL("direct primitive wire realization should prepare one compiled CAD part instance");
 
     SoGetBoundingBoxAction dbBBoxAction(viewport);
     dbBBoxAction.apply(root);
@@ -4583,6 +4591,11 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	mesh->materialColorValid.getValue() ||
 	mesh->regionId.getValue() != 0)
 	FAIL("database-backed mesh should preserve primitive identity fields");
+    if (source->prepareCompiledAssembly() != 1 ||
+	!source->hasCompiledAssembly() ||
+	source->getCompiledAssemblyPartCount() != 1 ||
+	source->getCompiledAssemblyInstanceCount() != 1)
+	FAIL("direct primitive shaded realization should prepare one compiled CAD part instance");
 
     SoGetBoundingBoxAction dbMeshBBoxAction(viewport);
     dbMeshBBoxAction.apply(root);
@@ -5237,6 +5250,11 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	!nearly_equal(right_shape->materialColor.getValue()[1], 77.0f / 255.0f) ||
 	!nearly_equal(right_shape->materialColor.getValue()[2], 204.0f / 255.0f))
 	FAIL("assembly right region should publish inherited material identity on Obol shape fields");
+    if (source->prepareCompiledAssembly() != 1 ||
+	!source->hasCompiledAssembly() ||
+	source->getCompiledAssemblyPartCount() != 1 ||
+	source->getCompiledAssemblyInstanceCount() != 2)
+	FAIL("assembly realization should prepare one shared CAD part with two instances");
 
     SoGetBoundingBoxAction assemblyBBoxAction(viewport);
     assemblyBBoxAction.apply(root);
@@ -5366,6 +5384,9 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	segmentIntentExport.getLine(1).selected ||
 	segmentIntentExport.getLine(1).highlighted)
 	FAIL("wire export should carry per-segment selected and highlighted draw intent");
+    if (source->prepareCompiledAssembly() != 0 ||
+	source->hasCompiledAssembly())
+	FAIL("per-primitive wire draw intent should fall back from compiled CAD assembly rendering");
 
     left_shape->colorOverride = TRUE;
     left_shape->color = SbColor(0.9f, 0.1f, 0.2f);
@@ -5551,6 +5572,387 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     }
 
     root->unref();
+
+    root = new SoSeparator;
+    root->ref();
+
+    source = new SoBRLDatabaseSource;
+    source->setDatabase(dbip);
+    source->path = "assembly.c";
+    source->sourceRevision = 12;
+    root->addChild(source);
+
+    SoBRLRealizeAction compactAssemblyRealize;
+    compactAssemblyRealize.apply(root);
+    if (compactAssemblyRealize.getRealizedSourceCount() != 1 ||
+	source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED)
+	FAIL("compact assembly source should realize before compaction");
+    left_shape = shape_with_path(source, "/assembly.c/left.c/box.s");
+    right_shape = shape_with_path(source, "/assembly.c/right.c/box.s");
+    if (!left_shape || !right_shape)
+	FAIL("compact assembly setup should preserve explicit instance shapes before compaction");
+    const int compactLeftSegments = left_shape->getSegmentCount();
+    const int compactRightSegments = right_shape->getSegmentCount();
+    const int compactTotalSegments = total_segment_count(source);
+    left_shape->selected = TRUE;
+    if (source->compactRealizedGeometry() != 2 ||
+	!source->hasCompactInstanceIndex() ||
+	source->getCompactInstanceCount() != 2 ||
+	source->getRealizedShapeCount() != 0)
+	FAIL("compact assembly should replace explicit wire instance nodes with a compact instance index");
+    if (source->prepareCompiledAssembly() != 1 ||
+	!source->hasCompiledAssembly() ||
+	source->getCompiledAssemblyPartCount() != 1 ||
+	source->getCompiledAssemblyInstanceCount() != 2)
+	FAIL("compact assembly should publish one CAD part with two instances");
+
+    SoGetBoundingBoxAction compactAssemblyBBoxAction(viewport);
+    compactAssemblyBBoxAction.apply(root);
+    bbox = compactAssemblyBBoxAction.getBoundingBox();
+    if (bbox.isEmpty() ||
+	!nearly_equal(bbox.getMin()[0], 8.0f) ||
+	!nearly_equal(bbox.getMax()[0], 33.0f) ||
+	!nearly_equal(bbox.getMin()[1], -3.0f) ||
+	!nearly_equal(bbox.getMax()[1], 4.0f) ||
+	!nearly_equal(bbox.getMin()[2], -4.0f) ||
+	!nearly_equal(bbox.getMax()[2], 5.0f))
+	FAIL("compact assembly bounding box should preserve transformed instance bounds");
+
+    SoRayPickAction compactAssemblyPick(viewport);
+    compactAssemblyPick.setRay(SbVec3f(30.5f, -3.0f, 10.0f),
+			       SbVec3f(0.0f, 0.0f, -1.0f));
+    compactAssemblyPick.apply(root);
+    pickedPoint = compactAssemblyPick.getPickedPoint();
+    if (!pickedPoint)
+	FAIL("compact CAD assembly should remain pickable");
+    rawDetail = pickedPoint->getDetail();
+    if (!rawDetail || !rawDetail->isOfType(SoBRLPickDetail::getClassTypeId()))
+	FAIL("compact assembly pick should return a BRL-CAD Obol pick detail");
+    pickDetail = static_cast<const SoBRLPickDetail *>(rawDetail);
+    if (strcmp(pickDetail->getPath().getString(),
+	       "/assembly.c/right.c/box.s") != 0 ||
+	pickDetail->getRegionId() != 102 ||
+	pickDetail->getPrimitiveKind() != SoBRLPickDetail::LINE_SEGMENT)
+	FAIL("compact assembly pick detail should preserve transformed instance identity");
+
+    SoBRLSnapAction compactAssemblySnap;
+    compactAssemblySnap.setQueryPoint(SbVec3f(13.0f, 0.0f, -4.0f));
+    compactAssemblySnap.setTolerance(0.1f);
+    compactAssemblySnap.apply(root);
+    if (!compactAssemblySnap.hasCandidate() ||
+	strcmp(compactAssemblySnap.getPath().getString(),
+	       "/assembly.c/left.c/box.s") != 0)
+	FAIL("compact assembly snap should preserve source path identity");
+
+    SoBRLMeasureAction compactSelectedMeasure;
+    compactSelectedMeasure.setSelectionFilter(SoBRLMeasureAction::SELECTED_ONLY);
+    compactSelectedMeasure.apply(root);
+    if (!compactSelectedMeasure.hasSegments() ||
+	compactSelectedMeasure.getShapeCount() != 1)
+	FAIL("compact assembly selected-only measure should filter per instance");
+    bbox = compactSelectedMeasure.getBounds();
+    if (bbox.isEmpty() ||
+	!nearly_equal(bbox.getMin()[0], 8.0f) ||
+	!nearly_equal(bbox.getMax()[0], 13.0f))
+	FAIL("compact assembly selected-only measure should bound only selected instances");
+    SoBRLMeasureAction compactSelectedAngleMeasure;
+    compactSelectedAngleMeasure.setSelectionFilter(
+	SoBRLMeasureAction::SELECTED_ONLY);
+    compactSelectedAngleMeasure.setQueryPoint(SbVec3f(13.0f, 4.0f, 5.0f));
+    compactSelectedAngleMeasure.apply(root);
+    if (!compactSelectedAngleMeasure.hasAngle() ||
+	strcmp(compactSelectedAngleMeasure.getAnglePath().getString(),
+	       "/assembly.c/left.c/box.s") != 0 ||
+	!nearly_equal(compactSelectedAngleMeasure.getAngleDegrees(), 90.0f) ||
+	!nearly_equal(compactSelectedAngleMeasure.getAnglePoint()[0], 13.0f) ||
+	!nearly_equal(compactSelectedAngleMeasure.getAnglePoint()[1], 4.0f) ||
+	!nearly_equal(compactSelectedAngleMeasure.getAnglePoint()[2], 5.0f))
+	FAIL("compact assembly selected-only measure should preserve connected wire angles");
+
+    SoBRLExportAction compactAssemblyExport;
+    compactAssemblyExport.apply(root);
+    if (compactAssemblyExport.getLineCount() != compactTotalSegments ||
+	export_path_count(compactAssemblyExport,
+			  "/assembly.c/left.c/box.s") != compactLeftSegments ||
+	export_path_count(compactAssemblyExport,
+			  "/assembly.c/right.c/box.s") != compactRightSegments)
+	FAIL("compact assembly export should preserve full hierarchy line records");
+    const SoBRLExportAction::LineRecord *compactLeftLine =
+	export_line_with_path(compactAssemblyExport,
+			      "/assembly.c/left.c/box.s");
+    const SoBRLExportAction::LineRecord *compactRightLine =
+	export_line_with_path(compactAssemblyExport,
+			      "/assembly.c/right.c/box.s");
+    if (!compactLeftLine || !compactRightLine ||
+	!compactLeftLine->selected || compactRightLine->selected)
+	FAIL("compact assembly export should preserve selected/unselected instance grouping");
+
+    root->unref();
+
+    root = new SoSeparator;
+    root->ref();
+
+    source = new SoBRLDatabaseSource;
+    source->setDatabase(dbip);
+    source->path = "assembly.c";
+    source->sourceRevision = 13;
+    root->addChild(source);
+
+    SoBRLRealizeAction compactIntentRealize;
+    compactIntentRealize.apply(root);
+    if (compactIntentRealize.getRealizedSourceCount() != 1)
+	FAIL("compact draw-intent setup should realize one source");
+    left_shape = shape_with_path(source, "/assembly.c/left.c/box.s");
+    right_shape = shape_with_path(source, "/assembly.c/right.c/box.s");
+    if (!left_shape || !right_shape)
+	FAIL("compact draw-intent setup should preserve explicit instance shapes before compaction");
+    left_shape->selectable = FALSE;
+    right_shape->visible = FALSE;
+    if (source->compactRealizedGeometry() != 2 ||
+	!source->hasCompactInstanceIndex() ||
+	source->getRealizedShapeCount() != 0)
+	FAIL("compact draw-intent source should accept whole-instance visibility/selectability");
+
+    SoGetBoundingBoxAction compactIntentBBoxAction(viewport);
+    compactIntentBBoxAction.apply(root);
+    bbox = compactIntentBBoxAction.getBoundingBox();
+    if (bbox.isEmpty() ||
+	!nearly_equal(bbox.getMin()[0], 8.0f) ||
+	!nearly_equal(bbox.getMax()[0], 13.0f))
+	FAIL("compact hidden instance should not contribute bounding boxes");
+
+    SoRayPickAction compactUnpickablePick(viewport);
+    compactUnpickablePick.setRay(SbVec3f(10.5f, -3.0f, 10.0f),
+				 SbVec3f(0.0f, 0.0f, -1.0f));
+    compactUnpickablePick.apply(root);
+    if (compactUnpickablePick.getPickedPoint())
+	FAIL("compact unpickable visible instance should not be pickable");
+    SoRayPickAction compactHiddenPick(viewport);
+    compactHiddenPick.setRay(SbVec3f(30.5f, -3.0f, 10.0f),
+			     SbVec3f(0.0f, 0.0f, -1.0f));
+    compactHiddenPick.apply(root);
+    if (compactHiddenPick.getPickedPoint())
+	FAIL("compact hidden instance should not be pickable");
+
+    SoBRLSnapAction compactUnpickableSnap;
+    compactUnpickableSnap.setQueryPoint(SbVec3f(13.0f, 0.0f, -4.0f));
+    compactUnpickableSnap.setTolerance(0.1f);
+    compactUnpickableSnap.apply(root);
+    if (compactUnpickableSnap.hasCandidate())
+	FAIL("compact unpickable visible instance should not contribute snap candidates");
+
+    SoBRLExportAction compactIntentExport;
+    compactIntentExport.apply(root);
+    if (export_path_count(compactIntentExport,
+			  "/assembly.c/right.c/box.s") != 0 ||
+	export_path_count(compactIntentExport,
+			  "/assembly.c/left.c/box.s") <= 0)
+	FAIL("compact visibility should filter export without suppressing unpickable visible instances");
+
+    root->unref();
+
+    root = new SoSeparator;
+    root->ref();
+
+    source = new SoBRLDatabaseSource;
+    source->setDatabase(dbip);
+    source->path = "assembly.c";
+    source->sourceRevision = 14;
+    root->addChild(source);
+
+    SoBRLRealizeAction compactPrimitiveIntentRealize;
+    compactPrimitiveIntentRealize.apply(root);
+    if (compactPrimitiveIntentRealize.getRealizedSourceCount() != 1)
+	FAIL("compact primitive-intent setup should realize one source");
+    left_shape = shape_with_path(source, "/assembly.c/left.c/box.s");
+    if (!left_shape)
+	FAIL("compact primitive-intent setup should have a left instance");
+    left_shape->selectedPrimitive.set1Value(0, 0);
+    if (source->compactRealizedGeometry() != 0 ||
+	source->hasCompactInstanceIndex() ||
+	source->getRealizedShapeCount() != 2)
+	FAIL("per-primitive wire draw intent should keep explicit scene nodes");
+
+    root->unref();
+
+    root = new SoSeparator;
+    root->ref();
+
+    source = new SoBRLDatabaseSource;
+    source->setDatabase(dbip);
+    source->path = "assembly.c";
+    source->sourceRevision = 15;
+    root->addChild(source);
+
+    SoBRLSceneController compactPolicyController(root);
+    compactPolicyController.setCompactCadRealizationEnabled(TRUE);
+    if (!compactPolicyController.getCompactCadRealizationEnabled() ||
+	!compactPolicyController.realizePending() ||
+	compactPolicyController.getLastVisitedSourceCount() != 1 ||
+	compactPolicyController.getLastRealizedSourceCount() != 1 ||
+	compactPolicyController.getLastFailedSourceCount() != 0 ||
+	!source->hasCompactInstanceIndex() ||
+	source->getCompactInstanceCount() != 2 ||
+	source->getRealizedShapeCount() != 0)
+	FAIL("scene controller compact CAD policy should compact eligible realized database sources");
+
+    root->unref();
+
+    BRLObolViewLodState compactViewLodState;
+    SoBRLViewLodGroup *lodRoot = new SoBRLViewLodGroup;
+    lodRoot->ref();
+    lodRoot->setViewLodState(&compactViewLodState);
+
+    source = new SoBRLDatabaseSource;
+    source->setDatabase(dbip);
+    source->path = "box.s";
+    source->sourceRevision = 16;
+    lodRoot->addChild(source);
+
+    SoBRLSceneController compactProxyController(lodRoot);
+    compactProxyController.setCompactCadRealizationEnabled(TRUE);
+    if (!compactProxyController.realizePending() ||
+	!source->hasCompactInstanceIndex() ||
+	source->getRealizedShapeCount() != 0)
+	FAIL("compact view-LoD proxy setup should realize a compact source");
+
+    BRLObolLodRequest proxyRequest;
+    proxyRequest.objectPath = "box.s";
+    proxyRequest.objectName = "box.s";
+    proxyRequest.viewRevision = 1;
+    proxyRequest.policyRevision = 1;
+    proxyRequest.drawMode = BRLOBOL_LOD_DRAW_WIRE;
+    proxyRequest.providerId = "unit-test-proxy";
+    proxyRequest.providerVersion = "v1";
+    proxyRequest.qualityTier = BRLOBOL_LOD_QUALITY_PROXY;
+    SbBox3f proxyBounds(SbVec3f(-10.0f, -11.0f, -12.0f),
+			SbVec3f(10.0f, 11.0f, 12.0f));
+    BRLObolLodResult proxyResult =
+	brlobol_lod_aabb_result(proxyRequest, proxyBounds, NULL);
+
+    SoBRLLodUpdateAction compactProxyUpdate;
+    compactProxyUpdate.setViewLodState(&compactViewLodState);
+    compactProxyUpdate.addResult(proxyResult);
+    compactProxyUpdate.apply(lodRoot);
+    if (compactProxyUpdate.getMatchedResultCount() != 1 ||
+	compactProxyUpdate.getAppliedResultCount() != 1 ||
+	compactViewLodState.cadPayloadCount() != 1 ||
+	source->getRealizedShapeCount() != 0)
+	FAIL("compact source should accept view-local CAD proxy LoD without materializing child nodes");
+
+    SoGetBoundingBoxAction compactProxyBBox(viewport);
+    compactProxyBBox.apply(lodRoot);
+    bbox = compactProxyBBox.getBoundingBox();
+    if (bbox.isEmpty() ||
+	!nearly_equal(bbox.getMin()[0], -10.0f) ||
+	!nearly_equal(bbox.getMax()[0], 10.0f) ||
+	!nearly_equal(bbox.getMin()[1], -11.0f) ||
+	!nearly_equal(bbox.getMax()[1], 11.0f) ||
+	!nearly_equal(bbox.getMin()[2], -12.0f) ||
+	!nearly_equal(bbox.getMax()[2], 12.0f))
+	FAIL("compact view-local CAD proxy should drive view-specific bounds");
+
+    SoRayPickAction compactProxyPick(viewport);
+    compactProxyPick.setRay(SbVec3f(0.0f, -11.0f, 20.0f),
+			    SbVec3f(0.0f, 0.0f, -1.0f));
+    compactProxyPick.apply(lodRoot);
+    pickedPoint = compactProxyPick.getPickedPoint();
+    if (!pickedPoint)
+	FAIL("compact view-local CAD proxy should be pickable");
+    rawDetail = pickedPoint->getDetail();
+    if (!rawDetail || !rawDetail->isOfType(SoBRLPickDetail::getClassTypeId()))
+	FAIL("compact view-local CAD proxy pick should return a BRL-CAD detail");
+    pickDetail = static_cast<const SoBRLPickDetail *>(rawDetail);
+    if (strcmp(pickDetail->getPath().getString(), "box.s") != 0 ||
+	pickDetail->getPrimitiveKind() != SoBRLPickDetail::LINE_SEGMENT)
+	FAIL("compact view-local CAD proxy pick should preserve source identity");
+
+    lodRoot->unref();
+
+    compactViewLodState.clear();
+    lodRoot = new SoBRLViewLodGroup;
+    lodRoot->ref();
+    lodRoot->setViewLodState(&compactViewLodState);
+
+    source = new SoBRLDatabaseSource;
+    source->setDatabase(dbip);
+    source->path = "box.s";
+    source->sourceRevision = 17;
+    source->drawMode = SoBRLDatabaseSource::SHADED;
+    source->realizationRoleFlags = SoBRLDatabaseSource::REALIZATION_ROLE_MESH;
+    source->lodBotThreshold = 1;
+    lodRoot->addChild(source);
+
+    SoBRLSceneController compactMeshLodController(lodRoot);
+    compactMeshLodController.setCompactCadRealizationEnabled(TRUE);
+    if (!compactMeshLodController.realizePending() ||
+	!source->hasCompactInstanceIndex() ||
+	source->getRealizedMeshCount() != 0)
+	FAIL("compact view-LoD mesh setup should realize a compact shaded source");
+
+    BRLObolLodRequest meshRequest;
+    meshRequest.objectPath = "box.s";
+    meshRequest.objectName = "box.s";
+    meshRequest.viewRevision = 2;
+    meshRequest.policyRevision = 2;
+    meshRequest.drawMode = BRLOBOL_LOD_DRAW_SHADED;
+    meshRequest.providerId = "unit-test-mesh";
+    meshRequest.providerVersion = "v1";
+    meshRequest.qualityTier = BRLOBOL_LOD_QUALITY_FAST_DISPLAY;
+    BRLObolLodResult meshResult;
+    meshResult.request = meshRequest;
+    meshResult.cacheKey = brlobol_lod_cache_key(meshRequest);
+    meshResult.resultKind = BRLOBOL_LOD_RESULT_MESH;
+    meshResult.qualityTier = BRLOBOL_LOD_QUALITY_FAST_DISPLAY;
+    meshResult.providerStatus = BRLOBOL_LOD_PROVIDER_READY;
+    meshResult.geometry.activeLevel = 3;
+    meshResult.mesh.points.push_back(SbVec3f(-1.0f, -1.0f, 0.0f));
+    meshResult.mesh.points.push_back(SbVec3f(1.0f, -1.0f, 0.0f));
+    meshResult.mesh.points.push_back(SbVec3f(0.0f, 1.0f, 0.0f));
+    meshResult.mesh.coordIndex.push_back(0);
+    meshResult.mesh.coordIndex.push_back(1);
+    meshResult.mesh.coordIndex.push_back(2);
+    meshResult.bounds = SbBox3f(SbVec3f(-1.0f, -1.0f, 0.0f),
+				SbVec3f(1.0f, 1.0f, 0.0f));
+    meshResult.counts.faceCount = 1;
+    meshResult.counts.pointCount = 3;
+
+    SoBRLLodUpdateAction compactMeshUpdate;
+    compactMeshUpdate.setViewLodState(&compactViewLodState);
+    compactMeshUpdate.addResult(meshResult);
+    compactMeshUpdate.apply(lodRoot);
+    if (compactMeshUpdate.getMatchedResultCount() != 1 ||
+	compactMeshUpdate.getAppliedResultCount() != 1 ||
+	compactViewLodState.cadPayloadCount() != 1 ||
+	source->getRealizedMeshCount() != 0)
+	FAIL("compact source should accept view-local CAD mesh LoD without materializing child nodes");
+
+    SoGetBoundingBoxAction compactMeshBBox(viewport);
+    compactMeshBBox.apply(lodRoot);
+    bbox = compactMeshBBox.getBoundingBox();
+    if (bbox.isEmpty() ||
+	!nearly_equal(bbox.getMin()[0], -1.0f) ||
+	!nearly_equal(bbox.getMax()[0], 1.0f) ||
+	!nearly_equal(bbox.getMin()[1], -1.0f) ||
+	!nearly_equal(bbox.getMax()[1], 1.0f))
+	FAIL("compact view-local CAD mesh should drive view-specific bounds");
+
+    SoRayPickAction compactMeshPick(viewport);
+    compactMeshPick.setRay(SbVec3f(0.0f, 0.0f, 5.0f),
+			   SbVec3f(0.0f, 0.0f, -1.0f));
+    compactMeshPick.apply(lodRoot);
+    pickedPoint = compactMeshPick.getPickedPoint();
+    if (!pickedPoint)
+	FAIL("compact view-local CAD mesh should be pickable");
+    rawDetail = pickedPoint->getDetail();
+    if (!rawDetail || !rawDetail->isOfType(SoBRLPickDetail::getClassTypeId()))
+	FAIL("compact view-local CAD mesh pick should return a BRL-CAD detail");
+    pickDetail = static_cast<const SoBRLPickDetail *>(rawDetail);
+    if (strcmp(pickDetail->getPath().getString(), "box.s") != 0 ||
+	pickDetail->getPrimitiveKind() != SoBRLPickDetail::FACE)
+	FAIL("compact view-local CAD mesh pick should preserve source face identity");
+
+    lodRoot->unref();
 
     root = new SoSeparator;
     root->ref();

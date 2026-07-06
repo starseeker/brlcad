@@ -26,6 +26,7 @@
 #include <vector>
 
 class BRLObolLodService;
+class SoBRLDatabaseSource;
 class SoBRLMeshShape;
 struct db_i;
 
@@ -332,7 +333,9 @@ protected:
     virtual void beginTraversal(SoNode *node);
 
 private:
+    friend class SoBRLDatabaseSource;
     static void nodeAction(SoAction *action, SoNode *node);
+    static void databaseSourceAction(SoAction *action, SoNode *node);
     static void vlistShapeAction(SoAction *action, SoNode *node);
     static void meshShapeAction(SoAction *action, SoNode *node);
 

@@ -10,6 +10,7 @@
 #include "brlobol/database_source.h"
 #include "brlobol/realize_action.h"
 #include "database_source_realization.h"
+#include "performance_private.h"
 
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoNode.h>
@@ -22,7 +23,8 @@ SoBRLRealizeAction::SoBRLRealizeAction(void) :
     failedSourceCount(0),
     diagnostics(""),
     realizationCache(new BRLObolDatabaseSourceRealizationCache),
-    seedingCache(FALSE)
+    seedingCache(FALSE),
+    compactCadRealizationEnabled(FALSE)
 {
     SO_ACTION_CONSTRUCTOR(SoBRLRealizeAction);
 }
@@ -66,8 +68,24 @@ SoBRLRealizeAction::getDiagnostics(void) const
 }
 
 void
+SoBRLRealizeAction::setCompactCadRealizationEnabled(SbBool enabled)
+{
+    this->compactCadRealizationEnabled = enabled ? TRUE : FALSE;
+}
+
+SbBool
+SoBRLRealizeAction::getCompactCadRealizationEnabled(void) const
+{
+    return this->compactCadRealizationEnabled;
+}
+
+void
 SoBRLRealizeAction::beginTraversal(SoNode *node)
 {
+    BRLObolPerformanceTimer totalTimer(BRLOBOL_PERF_REALIZE_TOTAL_US);
+    if (totalTimer.active())
+	brlobol_performance_counter_add(BRLOBOL_PERF_REALIZE_CALLS, 1);
+
     this->visitedSourceCount = 0;
     this->realizedSourceCount = 0;
     this->failedSourceCount = 0;
@@ -75,9 +93,29 @@ SoBRLRealizeAction::beginTraversal(SoNode *node)
     if (this->realizationCache)
 	this->realizationCache->clear();
     this->seedingCache = TRUE;
+    int64_t phaseStart = brlobol_performance_time_now();
     this->traverse(node);
+    if (phaseStart > 0) {
+	const int64_t elapsed = brlobol_performance_time_now() - phaseStart;
+	if (elapsed > 0)
+	    brlobol_performance_counter_add(BRLOBOL_PERF_REALIZE_SEED_US,
+		static_cast<uint64_t>(elapsed));
+    }
     this->seedingCache = FALSE;
+    phaseStart = brlobol_performance_time_now();
     this->traverse(node);
+    if (phaseStart > 0) {
+	const int64_t elapsed = brlobol_performance_time_now() - phaseStart;
+	if (elapsed > 0)
+	    brlobol_performance_counter_add(BRLOBOL_PERF_REALIZE_WALK_US,
+		static_cast<uint64_t>(elapsed));
+    }
+    brlobol_performance_counter_add(BRLOBOL_PERF_SOURCES_VISITED,
+	static_cast<uint64_t>(this->visitedSourceCount));
+    brlobol_performance_counter_add(BRLOBOL_PERF_SOURCES_REALIZED,
+	static_cast<uint64_t>(this->realizedSourceCount));
+    brlobol_performance_counter_add(BRLOBOL_PERF_SOURCES_FAILED,
+	static_cast<uint64_t>(this->failedSourceCount));
 }
 
 void
@@ -121,17 +159,34 @@ SoBRLRealizeAction::databaseSourceAction(SoAction *action, SoNode *node)
 	!(roleFlags & SoBRLDatabaseSource::REALIZATION_ROLE_EXTERNAL)) {
 	if (source->getDatabase()) {
 	    SbBool realized = FALSE;
+	    int compactRealized = 0;
 	    if ((roleFlags & SoBRLDatabaseSource::REALIZATION_ROLE_MESH) ||
 		source->representationMode.getValue() ==
 		SoBRLDatabaseSource::REPRESENTATION_HIDDEN_LINE ||
 		source->representationMode.getValue() ==
 		SoBRLDatabaseSource::REPRESENTATION_EVAL_POINTS ||
-		source->drawMode.getValue() == SoBRLDatabaseSource::SHADED)
-		realized = brlobol_database_source_realize_mesh_with_cache(
-			       source, realizeAction->realizationCache);
-	    else
-		realized = brlobol_database_source_realize_wireframe_with_cache(
-			       source, realizeAction->realizationCache);
+		source->drawMode.getValue() == SoBRLDatabaseSource::SHADED) {
+		if (realizeAction->compactCadRealizationEnabled)
+		    compactRealized =
+			brlobol_database_source_realize_mesh_compact_with_cache(
+			    source, realizeAction->realizationCache);
+		if (compactRealized > 0)
+		    realized = TRUE;
+		else if (compactRealized == 0)
+		    realized = brlobol_database_source_realize_mesh_with_cache(
+				   source, realizeAction->realizationCache);
+	    } else {
+		if (realizeAction->compactCadRealizationEnabled)
+		    compactRealized =
+			brlobol_database_source_realize_wireframe_compact_with_cache(
+			    source, realizeAction->realizationCache);
+		if (compactRealized > 0)
+		    realized = TRUE;
+		else if (compactRealized == 0)
+		    realized =
+			brlobol_database_source_realize_wireframe_with_cache(
+			    source, realizeAction->realizationCache);
+	    }
 
 	    if (realized)
 		realizeAction->realizedSourceCount++;

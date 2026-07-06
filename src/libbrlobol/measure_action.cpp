@@ -7,6 +7,7 @@
 
 #include "common.h"
 
+#include "brlobol/database_source.h"
 #include "brlobol/measure_action.h"
 #include "brlobol/lod_service.h"
 #include "brlobol/mesh_shape.h"
@@ -429,6 +430,8 @@ SoBRLMeasureAction::initClass(void)
     SO_ENABLE(SoBRLMeasureAction, SoModelMatrixElement);
     SO_ENABLE(SoBRLMeasureAction, SoBRLViewLodElement);
     SO_ACTION_ADD_METHOD(SoNode, SoBRLMeasureAction::nodeAction);
+    SO_ACTION_ADD_METHOD(SoBRLDatabaseSource,
+			 SoBRLMeasureAction::databaseSourceAction);
     SO_ACTION_ADD_METHOD(SoBRLVListShape, SoBRLMeasureAction::vlistShapeAction);
     SO_ACTION_ADD_METHOD(SoBRLMeshShape, SoBRLMeasureAction::meshShapeAction);
 }
@@ -893,6 +896,20 @@ SoBRLMeasureAction::nodeAction(SoAction *action, SoNode *node)
     if (node->isOfType(SoGroup::getClassTypeId()) ||
 	node->isOfType(SoTransformation::getClassTypeId()))
 	node->doAction(action);
+}
+
+void
+SoBRLMeasureAction::databaseSourceAction(SoAction *action, SoNode *node)
+{
+    SoBRLMeasureAction *measureAction =
+	static_cast<SoBRLMeasureAction *>(action);
+    SoBRLDatabaseSource *source = static_cast<SoBRLDatabaseSource *>(node);
+    const SbMatrix &parentToWorld =
+	SoModelMatrixElement::get(action->getState());
+    if (source->measureCompactInstances(measureAction, parentToWorld))
+	return;
+
+    source->doAction(action);
 }
 
 void

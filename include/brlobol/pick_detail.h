@@ -57,6 +57,9 @@ public:
     void setPath(const SbString &path);
     const SbString &getPath(void) const;
 
+    void setSourceInstanceKey(const SbString &key);
+    const SbString &getSourceInstanceKey(void) const;
+
     void setSourceName(const SbString &name);
     const SbString &getSourceName(void) const;
 
@@ -113,6 +116,7 @@ public:
 
 private:
     SbString dbpath;
+    SbString sourceInstanceKey;
     SbString sourceName;
     SbString sourceType;
     SbString materialShader;

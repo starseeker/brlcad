@@ -2,6 +2,7 @@ set(
   LIBBRLOBOL_SRCS
   adc.cpp
   axes.cpp
+  cad_assembly.cpp
   database_source.cpp
   draw_cache.cpp
   edit_preview.cpp
@@ -27,6 +28,7 @@ set(
   mesh_residency_action.cpp
   mesh_shape.cpp
   pick_detail.cpp
+  performance.cpp
   realize_action.cpp
   scene_controller.cpp
   scene_group.cpp
@@ -82,6 +84,8 @@ cmakefiles(
   CMakeLists.txt
   adc.cpp
   axes.cpp
+  cad_assembly.cpp
+  cad_assembly_private.h
   database_source.cpp
   database_source_realization.h
   draw_cache.cpp
@@ -109,6 +113,8 @@ cmakefiles(
   mesh_residency_action.cpp
   mesh_shape.cpp
   pick_detail.cpp
+  performance.cpp
+  performance_private.h
   realize_action.cpp
   scene_controller.cpp
   scene_group.cpp

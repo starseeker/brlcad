@@ -100,7 +100,19 @@ rt_obj_sampled_face_set(struct rt_primitive_indexed_face_set *face_set,
 	if (!dbip)
 	    return BRLCAD_ERROR;
 	struct rt_wdb *wdbp = wdb_dbopen(dbip, RT_WDB_TYPE_DB_INMEM);
-	if (wdb_export(wdbp, oname, ip->idb_ptr, ip->idb_type, 1.0) < 0) {
+	if (!wdbp) {
+	    db_close(dbip);
+	    return BRLCAD_ERROR;
+	}
+	struct rt_db_internal copied_internal;
+	RT_DB_INTERNAL_INIT(&copied_internal);
+	mat_t identity;
+	MAT_IDN(identity);
+	if (rt_obj_xform(&copied_internal, identity, ip, 0, dbip) < 0) {
+	    db_close(dbip);
+	    return BRLCAD_ERROR;
+	}
+	if (wdb_put_internal(wdbp, oname, &copied_internal, 1.0) < 0) {
 	    db_close(dbip);
 	    return BRLCAD_ERROR;
 	}

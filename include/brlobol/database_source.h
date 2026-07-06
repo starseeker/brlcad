@@ -32,10 +32,18 @@
 class SoBRLVListShape;
 class SoBRLMeshShape;
 class SoBRLMaterialObject;
+class SoBRLCadAssembly;
+class SoBRLExportAction;
+class SoBRLMeasureAction;
+class SoBRLSnapAction;
 class SoFieldSensor;
+class SoGetBoundingBoxAction;
+class SoGLRenderAction;
+class SoRayPickAction;
 class SoSensor;
 struct db_i;
 struct BRLObolDatabaseSourceRealizationCache;
+struct BRLObolCompactInstanceIndex;
 
 struct BRLOBOL_EXPORT BRLObolDatabaseSourceSummary {
     BRLObolDatabaseSourceSummary(void);
@@ -645,6 +653,15 @@ public:
     SoBRLMaterialObject *getRealizedMaterialObject(void) const;
     SoBRLMaterialObject *getRealizedMaterialObject(int index) const;
     int getRealizedMaterialObjectCount(void) const;
+    int compactRealizedGeometry(void);
+    int setCompactVListInstance(SoBRLVListShape *shape);
+    int setCompactMeshInstance(SoBRLMeshShape *shape);
+    SbBool hasCompactInstanceIndex(void) const;
+    int getCompactInstanceCount(void) const;
+    int prepareCompiledAssembly(void);
+    SbBool hasCompiledAssembly(void) const;
+    int getCompiledAssemblyPartCount(void) const;
+    int getCompiledAssemblyInstanceCount(void) const;
     SbBool getSummary(BRLObolDatabaseSourceSummary &summary) const;
     int getRealizedShapeSummaryCount(void) const;
     SbBool getRealizedShapeSummary(int index,
@@ -669,12 +686,24 @@ public:
 
 protected:
     virtual ~SoBRLDatabaseSource(void);
+    void GLRender(SoGLRenderAction *action) override;
+    void getBoundingBox(SoGetBoundingBoxAction *action) override;
+    void rayPick(SoRayPickAction *action) override;
 
 private:
+    friend class SoBRLExportAction;
+    friend class SoBRLMeasureAction;
+    friend class SoBRLSnapAction;
     friend SbBool brlobol_database_source_realize_wireframe_with_cache(
 	    SoBRLDatabaseSource *source,
 	    BRLObolDatabaseSourceRealizationCache *cache);
     friend SbBool brlobol_database_source_realize_mesh_with_cache(
+	    SoBRLDatabaseSource *source,
+	    BRLObolDatabaseSourceRealizationCache *cache);
+    friend int brlobol_database_source_realize_wireframe_compact_with_cache(
+	    SoBRLDatabaseSource *source,
+	    BRLObolDatabaseSourceRealizationCache *cache);
+    friend int brlobol_database_source_realize_mesh_compact_with_cache(
 	    SoBRLDatabaseSource *source,
 	    BRLObolDatabaseSourceRealizationCache *cache);
 
@@ -682,9 +711,25 @@ private:
     void attachFieldSensors(void);
     void detachFieldSensors(void);
     void syncRealizedShapeOwnerState(void);
+    void clearCompiledAssembly(void);
+    void markCompiledAssemblyDirty(void);
+    void clearCompactInstanceIndex(void);
+    int syncCompiledAssembly(void);
+    int exportCompactInstances(SoBRLExportAction *action,
+	const SbMatrix &parentToWorld);
+    int measureCompactInstances(SoBRLMeasureAction *action,
+	const SbMatrix &parentToWorld);
+    int snapCompactInstances(SoBRLSnapAction *action,
+	const SbMatrix &parentToWorld);
 
     struct db_i *dbip;
     struct BRLObolMeshLod *meshLod;
+    SoBRLCadAssembly *compiledAssembly;
+    struct BRLObolCompactInstanceIndex *compactIndex;
+    SbBool compiledAssemblyDirty;
+    SbBool compiledAssemblyActive;
+    SbUniqueId compiledAssemblyNodeId;
+    SbBool compactIndexActive;
     SbBool meshLodBoundsValid;
     SbVec3f meshLodBoundsMin;
     SbVec3f meshLodBoundsMax;

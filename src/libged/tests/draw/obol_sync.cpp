@@ -15,6 +15,7 @@
 #include "brlobol/init.h"
 #include "brlobol/lod_realization.h"
 #include "brlobol/mesh_shape.h"
+#include "brlobol/pick_detail.h"
 #include "brlobol/scene_controller.h"
 #include "brlobol/scene_group.h"
 #include "brlobol/vlist_shape.h"
@@ -41,7 +42,10 @@
 #include "../../ged_private.h"
 
 #include <Inventor/SbMatrix.h>
+#include <Inventor/SbViewportRegion.h>
 #include <Inventor/SbVec3f.h>
+#include <Inventor/SoPickedPoint.h>
+#include <Inventor/actions/SoRayPickAction.h>
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoSeparator.h>
 
@@ -83,6 +87,8 @@ make_obol_sync_db(const char *dbpath)
     point_t rename_center = {8.0, 3.0, 0.0};
     point_t reuse_min = {-1.0, -1.0, -1.0};
     point_t reuse_max = { 1.0,  1.0,  1.0};
+    point_t duplicate_min = {70.0, -1.0, -1.0};
+    point_t duplicate_max = {72.0,  1.0,  1.0};
     fastf_t mesh_owner_vertices[12] = {
 	0.0, 0.0, 0.0,
 	2.0, 0.0, 0.0,
@@ -93,6 +99,7 @@ make_obol_sync_db(const char *dbpath)
 	0, 1, 2,
 	1, 3, 2
     };
+    char binunif_payload[4] = {1, 2, 3, 4};
 
     int ret = mk_rpp(wdbp, "box.s", bmin, bmax) == 0 &&
 	mk_sph(wdbp, "ball.s", center, 1.0) == 0 &&
@@ -102,9 +109,12 @@ make_obol_sync_db(const char *dbpath)
 	mk_sph(wdbp, "nested_sibling.s", nested_sibling_center, 1.0) == 0 &&
 	mk_sph(wdbp, "rename_source.s", rename_center, 1.0) == 0 &&
 	mk_rpp(wdbp, "reuse_leaf.s", reuse_min, reuse_max) == 0 &&
+	mk_rpp(wdbp, "dup_leaf.s", duplicate_min, duplicate_max) == 0 &&
 	mk_bot(wdbp, "mesh_owner.bot", RT_BOT_SURFACE, RT_BOT_CCW, 0,
 		4, 2, mesh_owner_vertices, mesh_owner_faces, NULL, NULL) == 0 &&
 	make_obol_sync_brep_sphere(wdbp, "brep_owner.brep") &&
+	mk_binunif(wdbp, "payload.binunif", binunif_payload,
+		WDB_BINUNIF_INT8, 4) == 0 &&
 	mk_submodel(wdbp, "submodel_owner.s", NULL, "box.s", 0) == 0 &&
 	mk_submodel(wdbp, "submodel_temp_owner.s", NULL,
 		"nested_leaf.s", 0) == 0;
@@ -167,6 +177,16 @@ make_obol_sync_db(const char *dbpath)
 	    mk_addmember("reuse_inst_b.c", &root_wm.l, NULL,
 		WMOP_UNION) != NULL &&
 	    mk_comb(wdbp, "reuse_root.c", &root_wm.l, 0, NULL, NULL,
+		NULL, 0, 0, 0, 0, 0, 0, 0) == 0;
+    }
+    if (ret) {
+	struct wmember duplicate_wm;
+	BU_LIST_INIT(&duplicate_wm.l);
+	ret = mk_addmember("dup_leaf.s", &duplicate_wm.l, NULL,
+		WMOP_UNION) != NULL &&
+	    mk_addmember("dup_leaf.s", &duplicate_wm.l, NULL,
+		WMOP_UNION) != NULL &&
+	    mk_comb(wdbp, "dup_twice.c", &duplicate_wm.l, 0, NULL, NULL,
 		NULL, 0, 0, 0, 0, 0, 0, 0) == 0;
     }
     if (ret) {
@@ -1139,6 +1159,121 @@ exercise_multi_instance_transform_reuse(struct ged *gedp,
     return 0;
 }
 
+static int
+exercise_duplicate_occurrence_pick_identity(struct ged *gedp,
+	SoBRLSceneController *controller)
+{
+    if (!gedp || !controller)
+	FAIL("duplicate occurrence pick test needs GED and Obol scene state");
+
+    const int initial_source_count = controller->getDatabaseSourceCount();
+    const char *path_a = "dup_twice.c/dup_leaf.s";
+    const char *path_b = "dup_twice.c/dup_leaf.s@1";
+    const char *draw_duplicate[2] = {"draw", "dup_twice.c"};
+    if (ged_exec_draw(gedp, 2, draw_duplicate) != BRLCAD_OK)
+	FAIL("GED duplicate occurrence draw should succeed");
+
+    SoBRLDatabaseSource *source_a = source_for_representation(controller,
+	    path_a, SoBRLDatabaseSource::REPRESENTATION_WIRE);
+    SoBRLDatabaseSource *source_b = source_for_representation(controller,
+	    path_b, SoBRLDatabaseSource::REPRESENTATION_WIRE);
+    if (!source_a || !source_b)
+	FAIL("GED duplicate occurrence draw should preserve both source instances");
+
+    BRLObolDatabaseSourceSummary summary_a;
+    BRLObolDatabaseSourceSummary summary_b;
+    if (!source_a->getSummary(summary_a) || !summary_a.valid ||
+	    !source_b->getSummary(summary_b) || !summary_b.valid ||
+	    BU_STR_EQUAL(summary_a.instanceKey.getString(),
+		summary_b.instanceKey.getString()))
+	FAIL("GED duplicate occurrence summaries should report distinct instance keys");
+
+    SoBRLVListShape *shape_a = source_a->getRealizedShape();
+    SoBRLVListShape *shape_b = source_b->getRealizedShape();
+    const SoBRLVListShape *geometry_a =
+	shape_a ? shape_a->getGeometrySource() : NULL;
+    const SoBRLVListShape *geometry_b =
+	shape_b ? shape_b->getGeometrySource() : NULL;
+    if (!shape_a || !shape_b || !geometry_a || !geometry_b ||
+	    geometry_a == shape_a || geometry_b == shape_b ||
+	    geometry_a != geometry_b)
+	FAIL("GED duplicate occurrences should remain separate sources sharing one geometry node");
+    if (strcmp(shape_a->ownerSourceInstanceKey.getValue().getString(),
+	    summary_a.instanceKey.getString()) != 0 ||
+	    strcmp(shape_b->ownerSourceInstanceKey.getValue().getString(),
+		summary_b.instanceKey.getString()) != 0)
+	FAIL("GED duplicate occurrence shapes should retain owner source instance keys");
+
+    if (controller->setDatabaseSourceInstanceState(
+	    summary_a.instanceKey.getString(),
+	    TRUE, summary_a.sourceRevision, summary_a.inputsRevision,
+	    FALSE, summary_a.highlighted, summary_a.lineStyle,
+	    summary_a.lineWidth, summary_a.transparency,
+	    summary_a.colorOverride, summary_a.color,
+	    summary_a.materialColorValid, summary_a.materialColor,
+	    summary_a.materialRevision) < 0)
+	FAIL("GED duplicate occurrence source visibility update should target one instance");
+    if (!source_a->getSummary(summary_a) || !summary_a.valid ||
+	    !source_b->getSummary(summary_b) || !summary_b.valid ||
+	    summary_a.visible || !summary_b.visible ||
+	    shape_a->visible.getValue() || !shape_b->visible.getValue())
+	FAIL("GED duplicate occurrence visibility should hide only the targeted instance");
+
+    SbVec3f segment_a;
+    SbVec3f segment_b;
+    if (!shape_b->getSegment(0, segment_a, segment_b))
+	FAIL("GED duplicate occurrence pick fixture should expose a wire segment");
+    SbVec3f midpoint(
+	0.5f * (segment_a[0] + segment_b[0]),
+	0.5f * (segment_a[1] + segment_b[1]),
+	0.5f * (segment_a[2] + segment_b[2]));
+
+    SbViewportRegion viewport(200, 200);
+    SoRayPickAction pick_action(viewport);
+    pick_action.setRay(
+	SbVec3f(midpoint[0], midpoint[1], midpoint[2] + 10.0f),
+	SbVec3f(0.0f, 0.0f, -1.0f));
+    pick_action.apply(controller->getSceneRoot());
+    const SoPickedPoint *picked_point = pick_action.getPickedPoint();
+    if (!picked_point)
+	FAIL("GED duplicate occurrence ray pick should hit the visible second instance");
+    const SoDetail *raw_detail = picked_point->getDetail(shape_b);
+    if (!raw_detail ||
+	    !raw_detail->isOfType(SoBRLPickDetail::getClassTypeId()))
+	FAIL("GED duplicate occurrence ray pick should return BRL-CAD pick detail");
+    const SoBRLPickDetail *pick_detail =
+	static_cast<const SoBRLPickDetail *>(raw_detail);
+    if (strcmp(pick_detail->getPath().getString(),
+	    summary_b.path.getString()) != 0 ||
+	    strcmp(pick_detail->getSourceInstanceKey().getString(),
+		summary_b.instanceKey.getString()) != 0 ||
+	    BU_STR_EQUAL(pick_detail->getSourceInstanceKey().getString(),
+		summary_a.instanceKey.getString()))
+	FAIL("GED duplicate occurrence pick detail should identify the visible source instance");
+
+    if (controller->setDatabaseSourceInstanceState(
+	    summary_a.instanceKey.getString(),
+	    TRUE, summary_a.sourceRevision, summary_a.inputsRevision,
+	    TRUE, summary_a.highlighted, summary_a.lineStyle,
+	    summary_a.lineWidth, summary_a.transparency,
+	    summary_a.colorOverride, summary_a.color,
+	    summary_a.materialColorValid, summary_a.materialColor,
+	    summary_a.materialRevision) < 0)
+	FAIL("GED duplicate occurrence source visibility restore should succeed");
+
+    const char *erase_duplicate[2] = {"erase", "dup_twice.c"};
+    if (ged_exec_erase(gedp, 2, erase_duplicate) != BRLCAD_OK)
+	FAIL("GED duplicate occurrence erase should succeed");
+    if (source_for_representation(controller, path_a,
+		SoBRLDatabaseSource::REPRESENTATION_WIRE) ||
+	    source_for_representation(controller, path_b,
+		SoBRLDatabaseSource::REPRESENTATION_WIRE) ||
+	    controller->getDatabaseSourceCount() != initial_source_count)
+	FAIL("GED duplicate occurrence cleanup should restore prior source state");
+
+    return 0;
+}
+
 static SoBRLVListShape *
 auxiliary_for_path_variant(SoBRLDatabaseSource *source, const char *path)
 {
@@ -1425,6 +1560,17 @@ main(int argc, char **argv)
 	    !source_for_path(owned_scene, "box.s") ||
 	    !source_for_path(owned_scene, "ball.s"))
 	FAIL("owned Obol scene controller should full-sync current GED draw state");
+    const int owned_source_count_before_binunif =
+	owned_scene->getDatabaseSourceCount();
+    const char *draw_binunif[2] = {"draw", "payload.binunif"};
+    if (ged_exec_draw(gedp, 2, draw_binunif) != BRLCAD_OK)
+	FAIL("real GED draw of non-drawable binunif should report command success");
+    if (owned_scene->getDatabaseSourceCount() !=
+	    owned_source_count_before_binunif ||
+	    source_for_path(owned_scene, "payload.binunif"))
+	FAIL("Obol draw bridge should not publish non-drawable binunif sources");
+    if (exercise_duplicate_occurrence_pick_identity(gedp, owned_scene))
+	return 1;
 
     void *feature_view_ctx = ged_view_active_ctx(gedp);
     if (!feature_view_ctx ||

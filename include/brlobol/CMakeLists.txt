@@ -27,6 +27,7 @@ set(
   mesh_residency_action.h
   mesh_shape.h
   pick_detail.h
+  performance.h
   realize_action.h
   scene_controller.h
   scene_group.h

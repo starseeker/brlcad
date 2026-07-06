@@ -460,6 +460,7 @@ pick_source_fill_detail(SoBRLPickDetail &detail,
     static const int edges[3][2] = {{0, 1}, {1, 2}, {2, 0}};
 
     detail.setPath(sourceRequest.path);
+    detail.setSourceInstanceKey(sourceRequest.ownerSourceInstanceKey);
     detail.setSourceName(sourceRequest.sourceName);
     detail.setSourceType(sourceRequest.sourceType);
     detail.setSourceId(sourceRequest.sourceId);
@@ -833,6 +834,7 @@ SoBRLPickDetail::SoBRLPickDetail(void)
 SoBRLPickDetail::SoBRLPickDetail(const SoBRLPickDetail &other) :
     SoDetail(other),
     dbpath(other.dbpath),
+    sourceInstanceKey(other.sourceInstanceKey),
     sourceName(other.sourceName),
     sourceType(other.sourceType),
     materialShader(other.materialShader),
@@ -866,6 +868,7 @@ SoBRLPickDetail::operator=(const SoBRLPickDetail &other)
 	return *this;
 
     this->dbpath = other.dbpath;
+    this->sourceInstanceKey = other.sourceInstanceKey;
     this->sourceName = other.sourceName;
     this->sourceType = other.sourceType;
     this->materialShader = other.materialShader;
@@ -915,6 +918,7 @@ void
 SoBRLPickDetail::clear(void)
 {
     this->dbpath = "";
+    this->sourceInstanceKey = "";
     this->sourceName = "";
     this->sourceType = "";
     this->materialShader = "";
@@ -950,6 +954,18 @@ const SbString &
 SoBRLPickDetail::getPath(void) const
 {
     return this->dbpath;
+}
+
+void
+SoBRLPickDetail::setSourceInstanceKey(const SbString &key)
+{
+    this->sourceInstanceKey = key;
+}
+
+const SbString &
+SoBRLPickDetail::getSourceInstanceKey(void) const
+{
+    return this->sourceInstanceKey;
 }
 
 void

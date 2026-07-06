@@ -2133,6 +2133,12 @@ BRLObolViewController::getActiveLodProxyPayloadCount(int proxyKind) const
 	   this->viewLodState->proxyPayloadCount(proxyKind) : 0;
 }
 
+size_t
+BRLObolViewController::getActiveLodCadPayloadCount(void) const
+{
+    return this->viewLodState ? this->viewLodState->cadPayloadCount() : 0;
+}
+
 SoBRLSceneController *
 BRLObolViewController::getSceneController(void)
 {

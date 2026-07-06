@@ -32,6 +32,8 @@ public:
     unsigned int getRealizedSourceCount(void) const;
     unsigned int getFailedSourceCount(void) const;
     const SbString &getDiagnostics(void) const;
+    void setCompactCadRealizationEnabled(SbBool enabled);
+    SbBool getCompactCadRealizationEnabled(void) const;
 
 protected:
     virtual void beginTraversal(SoNode *node);
@@ -47,6 +49,7 @@ private:
     SbString diagnostics;
     BRLObolDatabaseSourceRealizationCache *realizationCache;
     SbBool seedingCache;
+    SbBool compactCadRealizationEnabled;
 };
 
 #endif /* BRLOBOL_REALIZE_ACTION_H */

@@ -707,6 +707,13 @@ ged_db_index_path_cyclic(const std::vector<ged_db_index_id> &path)
 }
 
 
+static size_t
+ged_db_index_path_resolve_native(struct ged_db_index *index,
+				 const char *path,
+				 ged_db_index_id *ids,
+				 size_t capacity);
+
+
 static void
 ged_db_index_collect_affected_paths(struct ged_db_index *index,
 				    ged_db_index_id object_id,
@@ -1229,6 +1236,17 @@ ged_db_index_valid_id(struct ged *gedp, ged_db_index_id id)
 	index->records.find(id) != index->records.end())
 	return 1;
     return 0;
+}
+
+
+int
+ged_db_index_path_exists(struct ged *gedp, const char *path)
+{
+    struct ged_db_index *index = ged_db_index_ready(gedp);
+    if (!index || !path || !path[0])
+	return 0;
+
+    return ged_db_index_path_resolve_native(index, path, NULL, 0) > 0;
 }
 
 

@@ -44,6 +44,7 @@
 #  define DM_WITH_RT
 #  include "dm.h"
 #  include "dm/fbserv.h"
+#  include "dm/obol.h"
 #endif
 
 #include "ged.h"
@@ -619,10 +620,12 @@ GshState::view_update()
 	    dm_get_bg(&dm_bg1, &dm_bg2, dmp);
 	    dm_set_bg(dmp, dm_bg1[0], dm_bg1[1], dm_bg1[2], dm_bg2[0], dm_bg2[1], dm_bg2[2]);
 	    dm_set_native_repaint_pending(dmp, 0);
-	    struct ged_draw_transaction txn =
-		ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
-	    txn.view = view_ctx;
-	    ged_draw_apply_transaction(gedp, &txn, NULL);
+	    if (!dm_obol_controller(dmp)) {
+		struct ged_draw_transaction txn =
+		    ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
+		txn.view = view_ctx;
+		ged_draw_apply_transaction(gedp, &txn, NULL);
+	    }
 	    (void)ged_draw_obol_framebuffer_present(gedp);
 	    dm_draw_end(dmp);
 	    ged_view_context_refresh_complete(view_ctx);

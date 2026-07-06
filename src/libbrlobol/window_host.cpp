@@ -8,6 +8,7 @@
 #include "common.h"
 
 #include "brlobol/image_source.h"
+#include "brlobol/scene_group.h"
 #include "brlobol/view_controller.h"
 #include "brlobol/viewport_image.h"
 #include "brlobol/window_host.h"
@@ -113,7 +114,7 @@ controller_root_group(BRLObolViewController *controller)
 
     SoNode *root = controller->getSceneRoot();
     if (!root) {
-	SoSeparator *newRoot = new SoSeparator;
+	SoBRLSceneGroup *newRoot = new SoBRLSceneGroup;
 	newRoot->ref();
 	controller->setSceneRoot(newRoot);
 	newRoot->unref();

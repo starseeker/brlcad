@@ -32,6 +32,96 @@ erased, no view can render it because the node is gone from the shared root.
 The view-LoD cache is also invalidated on draw/erase/source transactions so
 deleted payloads do not remain as hidden memory.
 
+Compiled CAD Assemblies
+-----------------------
+
+`SoBRLDatabaseSource` may prepare an internal `SoCADAssembly` for
+render traversal when its realized children are simple wire or mesh instances.
+With explicit child shapes still present, this assembly is a rendering
+acceleration layer, not a second source of truth:
+
+* explicit BRL shape nodes remain in the scene and continue to own database
+  path identity, material/region state, selection/highlight state, edit
+  intent, export, measure, snap, and exact picking semantics;
+* the compiled assembly stores shared geometry parts plus flat instance records,
+  allowing repeated transformed leaf instances to render as one part with
+  multiple instances;
+* the assembly is keyed to the source node id, so normal Obol notifications from
+  child field edits invalidate cached render assemblies before the next render
+  preparation;
+* unsupported per-instance states, including per-primitive selection/highlight,
+  hidden-line emphasis, edit emphasis, and non-default line styles, fall back
+  to explicit child traversal;
+* accelerated aggregate picking can still return BRL-aware details through the
+  `SoCADAssembly::createPickDetail` hook, but libbrlobol keeps explicit nodes
+  available for the current editing and exact-query paths.
+
+For stable whole-instance state, `SoBRLDatabaseSource::compactRealizedGeometry`
+can replace explicit child shape nodes with a source-owned compact instance
+index plus the compiled CAD assembly.  The scene controller can also opt into
+direct compact realization for simple stable leaf sources, avoiding creation
+of transient child shape nodes when the source can be represented immediately
+as one compact wire or mesh instance.  In that state:
+
+* shared geometry parts and transformed instances remain aggregated for
+  rendering, bounds, and picking;
+* visibility, selectability, selection, highlight, material, region, path, and
+  edit-intent metadata are carried by compact instance records and action
+  adapters;
+* hidden instances are omitted from render, bounds, pick, export, measure, and
+  snap results;
+* unpickable instances stay visible/exportable but are excluded from pick and
+  snap;
+* compact measure/export/snap adapters preserve path/material/edit identity for
+  whole instances, including connected wire-angle measurement for compact wire
+  records;
+* whole-instance selected/unselected/highlighted groupings remain compact;
+* per-primitive selection/highlight, edit emphasis, hidden-line emphasis,
+  non-default line styles, and future custom manipulator/edit state must keep
+  or materialize explicit Coin nodes.
+
+The compact index currently retains off-scene shape handles as transitional
+record sources.  The next cleanup is to replace those handles with tighter
+metadata/geometry records and explicit promote/demote APIs for selected,
+edited, or inspected subsets.  The design boundary is deliberate: aggregate
+source-local CAD assemblies are for scalable whole-instance state, while
+first-class Coin nodes are for per-object/per-primitive interaction semantics.
+
+Direct compact realization is not the whole progressive-cache design.  It is a
+fast path for synchronous, stable source realization.  Progressive display LoD
+does not mutate that shared compact assembly.  When LoD is active, a source may
+publish cheap source-local fallback content such as a BoT AABB proxy, while
+the owning view binds ready AABB, OBB, mesh, or full-detail results as
+view-local compact CAD payloads.  Coin traversal resolves the payload from
+`BRLObolViewLodState` and renders/bounds/picks it in place of the shared source
+for that view only.  This keeps shared draw/erase/selection/database identity
+stable and lets another view render a different LoD for the same source.
+
+Shared compact-part mutation remains a possible future optimization for data
+that is truly view-independent, but it is not the active display-LoD owner.
+If added, it must be an explicit source transaction that replaces compact
+parts/instances, marks the compiled assembly dirty, and updates source
+bounds/autoview settlement on the application/render thread.
+
+Do not reintroduce render-time group/root CAD aggregation as the default scale
+strategy without new measurements.  On `Generic_Twin.g all`, flat
+source-local compact assemblies render quickly, while forced root aggregation
+was much slower and did not avoid draw-time source replacement or source-local
+compact setup.  The next scale path is publication-time construction of
+multi-instance compact sources that preserve per-instance path/pick/edit
+identity, with promotion to first-class Coin nodes only when interaction
+semantics require it.
+
+Large selection sets should therefore not imply one Coin node per selected
+leaf.  The normal case is one compact source/assembly with selected,
+unselected, hidden, and unpickable instance sets.  If a workflow needs a
+separate render or interaction policy for a subset, it may introduce a
+purpose-specific compact source or assembly for that subset, but only after
+the operation needs semantics that cannot be expressed as stable per-instance
+state on the shared source.  Individual solid editing, per-primitive
+selection, custom manipulators, and detailed inspection are the promotion
+triggers.
+
 View-LoD Ownership
 ------------------
 
@@ -62,6 +152,14 @@ reported as a diagnostic rather than mutating the shared mesh.  If a non-render
 tool needs LoD-like output, it should create a scratch view/controller state or
 consume the provider result directly; libbrlobol should not grow a second
 view-independent active-LoD concept.
+
+Compact database sources follow the same rule.  Source-level LoD results are
+accepted only with a view state, stored as `BRLObolViewLodState::CadPayload`,
+and rendered by `SoBRLDatabaseSource` through the action's
+`SoBRLViewLodElement`.  Proxy payloads build wire CAD boxes with robust bounds
+picking; mesh/full-detail payloads build shaded CAD geometry or wire edges
+according to the source draw mode.  The shared compact source remains the
+semantic owner for path/material/selection/edit identity.
 
 Invalidation
 ------------
@@ -98,6 +196,13 @@ source counts, source bounds, and draw/material/selection metadata.  It does
 not need the full triangle arrays to render display LoD or request exact
 geometry from librt/cache.
 
+LoD-on wire draws for high-face BoT leaves use this policy directly: the
+shared source can realize an AABB proxy from BoT vertex bounds, submit
+source-level AABB/OBB/mesh LoD work, and avoid storing the full mesh or full
+wire arrays for the first visual.  Turning LoD off advances the view policy and
+re-realizes the source without the BoT proxy threshold, restoring normal
+full-detail wire behavior.
+
 Controller memory budgeting accounts for both:
 
 * mesh-node resident data, including optional source/full-detail arrays; and
@@ -110,6 +215,10 @@ When a budget requires eviction, the controller releases memory in this order:
 2. view-local LoD payloads;
 3. legacy node-local LoD/full-detail payloads handled by
    `SoBRLMeshResidencyAction`.
+
+View-local payload eviction includes mesh payloads, proxy payloads, and compact
+CAD payloads.  Clearing a view or turning LoD off therefore releases staged
+per-view CAD geometry without modifying the shared scene.
 
 This means LoD can be loaded from cache and displayed without populating
 full-detail shared geometry.  It also means turning LoD off or clearing a view
@@ -425,10 +534,10 @@ background, notify the owning view/session when AABB/OBB/mesh payloads are
 available, and let the render thread consume those records without ever
 requiring a synchronous full-detail root promotion.  The current
 visible-frontier APIs prove the repeated-pass contract manually; the remaining
-work is automatic scheduling, duplicate-instance path identity, CSG-aware
-handling for subtraction and intersection children, and bounded scheduling so
-large combs can refine incrementally without spending many seconds in one
-render-thread expansion pass.
+work is automatic scheduling, duplicate-occurrence handling in proxy/frontier
+expansion, CSG-aware handling for subtraction and intersection children, and
+bounded scheduling so large combs can refine incrementally without spending
+many seconds in one render-thread expansion pass.
 
 Autoview also needs a first-class progressive state.  A view can be framed from
 whatever Obol source bounds exist at a given time, but for a comb root that

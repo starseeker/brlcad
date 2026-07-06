@@ -19,6 +19,9 @@
 #include <Inventor/SbVec3f.h>
 
 #include <stdint.h>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "rt/view.h"
 
@@ -39,6 +42,46 @@ struct BRLObolSceneBoundsSummary;
 struct BRLObolSceneDisplaySummary;
 struct BRLObolSceneMaterialSummary;
 struct BRLObolSceneTreeSummary;
+
+struct BRLOBOL_EXPORT BRLObolDatabaseSourcePublishState {
+    BRLObolDatabaseSourcePublishState(void);
+
+    const char *sourceInstanceKey;
+    const char *sourcePath;
+    const char *sourceRepresentationKey;
+    const char *targetGroupPath;
+    struct db_i *database;
+    int drawMode;
+    int representationMode;
+    SbBool sourceRevisionValid;
+    uint32_t sourceRevision;
+    uint32_t inputsRevision;
+    SbBool visible;
+    SbBool highlighted;
+    int lineStyle;
+    int lineWidth;
+    float transparency;
+    SbBool colorOverride;
+    SbColor color;
+    SbBool materialColorValid;
+    SbColor materialColor;
+    uint32_t materialRevision;
+    SbBool roleFlagsValid;
+    int roleFlags;
+    SbBool viewPolicyValid;
+    SbBool viewDependent;
+    float viewScale;
+    uint32_t botThreshold;
+    float curveScale;
+    float pointScale;
+    SbBool placementValid;
+    SbBool drawMatrixValid;
+    SbMatrix drawMatrix;
+    SbBool drawCenterValid;
+    SbVec3f drawCenter;
+    SbBool drawSizeValid;
+    float drawSize;
+};
 
 struct BRLOBOL_EXPORT BRLObolSceneSummary {
     BRLObolSceneSummary(void);
@@ -84,7 +127,17 @@ public:
     uint64_t getFrameRevision(void) const;
     SbBool getSceneSummary(BRLObolSceneSummary &summary) const;
 
+    /*
+     * Enable direct compact CAD realization for stable synchronous sources.
+     * Progressive cache-backed AABB/OBB/LoD promotion is a separate
+     * drain/apply path because worker threads must not mutate Coin state.
+     */
+    void setCompactCadRealizationEnabled(SbBool enabled);
+    SbBool getCompactCadRealizationEnabled(void) const;
     SbBool realizePending(void);
+    void beginSceneMutationBatch(size_t expectedDatabaseSources = 0,
+	size_t expectedGroups = 0);
+    void endSceneMutationBatch(void);
 
     SoGroup *findGroup(const char *groupPath) const;
     SoGroup *ensureGroup(const char *groupPath);
@@ -116,6 +169,8 @@ public:
     int getGroupChildCount(const char *groupPath) const;
     int getGroupDescendantGroupCount(const char *groupPath) const;
     int getGroupDatabaseSourceCount(const char *groupPath) const;
+    SbBool getDatabaseSourceBounds(SbBox3f &bounds,
+	SbBool padForAutoview) const;
     SbBool getSceneSubtreeBounds(const char *nodePath,
 	SbBool includeOverlays,
 	SbBox3f &bounds) const;
@@ -243,6 +298,8 @@ public:
 	struct db_i *database,
 	int drawMode,
 	uint32_t sourceRevision);
+    int publishDatabaseSourceInstance(
+	const BRLObolDatabaseSourcePublishState &state);
     int renameDatabaseSource(const char *sourcePath,
 	const char *newSourcePath,
 	uint32_t sourceRevision);
@@ -364,6 +421,10 @@ public:
     int clearDatabaseSources(void);
     SbBool getDatabaseSourceSummary(int index,
 	BRLObolDatabaseSourceSummary &summary) const;
+    SbBool getDatabaseSourceSummaryForPath(const char *sourcePath,
+	BRLObolDatabaseSourceSummary &summary) const;
+    SbBool getDatabaseSourceSummaryForInstance(const char *sourceInstanceKey,
+	BRLObolDatabaseSourceSummary &summary) const;
     int getRealizedShapeSummaryCount(void) const;
     SbBool getRealizedShapeSummary(int index,
 	BRLObolRealizedShapeSummary &summary) const;
@@ -398,10 +459,38 @@ public:
 private:
     void advanceFrameRevision(void);
     void advanceStructuralRevision(void);
+    void clearDatabaseSourceIndex(void) const;
+    void rebuildDatabaseSourceIndex(void) const;
+    void indexSceneGroup(SoGroup *group) const;
+    SoGroup *findIndexedGroup(const char *groupPath) const;
+    void indexDatabaseSource(SoBRLDatabaseSource *source,
+	SoGroup *parent = NULL) const;
+    void unindexDatabaseSource(SoBRLDatabaseSource *source) const;
+    SoBRLDatabaseSource *findIndexedDatabaseSource(
+	const char *sourcePath) const;
+    SbString databaseSourceInstanceKeyForPath(
+	const char *sourcePath) const;
+    SoBRLDatabaseSource *findIndexedDatabaseSourceInstance(
+	const char *sourceInstanceKey) const;
+    SoGroup *findIndexedDatabaseSourceInstanceParent(
+	const char *sourceInstanceKey) const;
+    SbBool databaseSourceSummaryForSource(SoBRLDatabaseSource *source,
+	BRLObolDatabaseSourceSummary &summary) const;
 
     SoNode *root;
     uint64_t structuralRevision;
     uint64_t frameRevision;
+    int mutationBatchDepth;
+    SbBool mutationBatchStructuralRevisionPending;
+    SbBool mutationBatchFrameRevisionPending;
+    SbBool compactCadRealizationEnabled;
+    mutable SbBool databaseSourceIndexValid;
+    mutable std::unordered_map<std::string, SoGroup *> groupPathIndex;
+    mutable std::unordered_map<std::string, SoBRLDatabaseSource *> databaseSourcePathIndex;
+    mutable std::unordered_map<std::string, SoBRLDatabaseSource *> databaseSourceInstanceIndex;
+    mutable std::unordered_map<std::string, SoGroup *> databaseSourceInstanceParentIndex;
+    mutable std::vector<SoBRLDatabaseSource *> databaseSourceOrder;
+    mutable std::unordered_map<SoBRLDatabaseSource *, size_t> databaseSourceOrderIndex;
     unsigned int lastVisitedSourceCount;
     unsigned int lastRealizedSourceCount;
     unsigned int lastFailedSourceCount;

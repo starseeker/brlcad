@@ -1800,9 +1800,16 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
     int diff03 = image_byte_diff(frame0, frame3);
     record_progressive_lod_phase(final_phase_seconds, phase_start,
 				 total_start, testCase, "image_metrics");
+    const int startup_wire_proxy_ok =
+	testCase.startupWireLod &&
+	active_aabb_payload_count >= testCase.minActivePayloadCount &&
+	active_obb_payload_count >= testCase.minActivePayloadCount &&
+	active_mesh_payload_count >= testCase.minActivePayloadCount &&
+	diff12 > 0 && diff23 > 0 && diff03 > 0;
     const int image_progression_ok = testCase.shadedLod ?
 				     (diff03 > 0 && diff23 > 0 && (diff01 > 0 || diff12 > 0)) :
-				     (diff01 > 0 && diff12 > 0 && diff23 > 0 && diff03 > 0);
+				     (startup_wire_proxy_ok ||
+				      (diff01 > 0 && diff12 > 0 && diff23 > 0 && diff03 > 0));
     if (frame0.isNull() || frame1.isNull() || frame2.isNull() ||
 	frame3.isNull() || lit0 < 20 || lit1 < 20 || lit2 < 20 ||
 	lit3 < 20 || !image_progression_ok) {

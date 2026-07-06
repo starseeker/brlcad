@@ -816,6 +816,7 @@ SoBRLVListShape::createLineSegmentDetail(SoRayPickAction *UNUSED(action),
 {
     SoBRLPickDetail *detail = new SoBRLPickDetail;
     detail->setPath(this->sourcePath.getValue());
+    detail->setSourceInstanceKey(this->ownerSourceInstanceKey.getValue());
     detail->setSourceName(this->sourceName.getValue());
     detail->setSourceType(this->sourceType.getValue());
     detail->setSourceId(this->sourceId.getValue());
@@ -847,6 +848,7 @@ SoBRLVListShape::createPointDetail(SoRayPickAction *UNUSED(action),
 {
     SoBRLPickDetail *detail = new SoBRLPickDetail;
     detail->setPath(this->sourcePath.getValue());
+    detail->setSourceInstanceKey(this->ownerSourceInstanceKey.getValue());
     detail->setSourceName(this->sourceName.getValue());
     detail->setSourceType(this->sourceType.getValue());
     detail->setSourceId(this->sourceId.getValue());

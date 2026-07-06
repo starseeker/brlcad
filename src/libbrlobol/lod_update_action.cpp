@@ -7,6 +7,7 @@
 
 #include "common.h"
 
+#include "brlobol/database_source.h"
 #include "brlobol/lod_service.h"
 #include "brlobol/lod_update_action.h"
 #include "brlobol/mesh_shape.h"
@@ -40,6 +41,8 @@ SoBRLLodUpdateAction::initClass(void)
     SO_ACTION_INIT_CLASS(SoBRLLodUpdateAction, SoAction);
     SO_ACTION_ADD_METHOD(SoNode, SoBRLLodUpdateAction::nodeAction);
     SO_ACTION_ADD_METHOD(SoGroup, SoBRLLodUpdateAction::nodeAction);
+    SO_ACTION_ADD_METHOD(SoBRLDatabaseSource,
+			 SoBRLLodUpdateAction::databaseSourceAction);
     SO_ACTION_ADD_METHOD(SoBRLMeshShape, SoBRLLodUpdateAction::meshShapeAction);
 }
 
@@ -163,6 +166,30 @@ lod_update_matches_shape(const SoBRLMeshShape *shape,
     return FALSE;
 }
 
+static SbBool
+lod_update_matches_source(const SoBRLDatabaseSource *source,
+			  const BRLObolLodResult &result)
+{
+    if (!source)
+	return FALSE;
+
+    if (lod_update_path_matches(source->path.getValue(),
+				result.request.objectPath))
+	return TRUE;
+    if (lod_update_string_matches(source->instanceKey.getValue(),
+				  result.request.objectPath))
+	return TRUE;
+
+    const char *path = source->path.getValue().getString();
+    const char *leaf = path ? strrchr(path, '/') : NULL;
+    leaf = (leaf && leaf[1]) ? leaf + 1 : path;
+    if (leaf && result.request.objectName.getLength() > 0 &&
+	strcmp(leaf, result.request.objectName.getString()) == 0)
+	return TRUE;
+
+    return FALSE;
+}
+
 void
 SoBRLLodUpdateAction::beginTraversal(SoNode *node)
 {
@@ -182,6 +209,47 @@ SoBRLLodUpdateAction::nodeAction(SoAction *action, SoNode *node)
 {
     if (node->isOfType(SoGroup::getClassTypeId()))
 	node->doAction(action);
+}
+
+void
+SoBRLLodUpdateAction::databaseSourceAction(SoAction *action, SoNode *node)
+{
+    SoBRLLodUpdateAction *updateAction =
+	static_cast<SoBRLLodUpdateAction *>(action);
+    SoBRLDatabaseSource *source = static_cast<SoBRLDatabaseSource *>(node);
+
+    if (!source->hasCompactInstanceIndex()) {
+	source->doAction(action);
+	return;
+    }
+
+    for (size_t i = 0; i < updateAction->results.size(); i++) {
+	BRLObolLodResult &result = updateAction->results[i];
+	if (!lod_update_matches_source(source, result))
+	    continue;
+
+	if (!updateAction->matched[i]) {
+	    updateAction->matched[i] = TRUE;
+	    updateAction->matchedResultCount++;
+	}
+
+	if (!updateAction->viewState) {
+	    updateAction->rejectedResultCount++;
+	    updateAction->appendDiagnostic(result,
+					   "view-local compact CAD LoD update requires a view state");
+	    continue;
+	}
+
+	if (updateAction->viewState->applySourceResult(source, result))
+	    updateAction->appliedResultCount++;
+	else {
+	    updateAction->rejectedResultCount++;
+	    updateAction->appendDiagnostic(result,
+					   "view-local compact CAD LoD result rejected by source");
+	}
+    }
+
+    source->doAction(action);
 }
 
 void

@@ -7,6 +7,7 @@
 
 #include "common.h"
 
+#include "brlobol/database_source.h"
 #include "brlobol/lod_service.h"
 #include "brlobol/mesh_shape.h"
 #include "brlobol/snap_action.h"
@@ -258,6 +259,8 @@ SoBRLSnapAction::initClass(void)
     SO_ENABLE(SoBRLSnapAction, SoModelMatrixElement);
     SO_ENABLE(SoBRLSnapAction, SoBRLViewLodElement);
     SO_ACTION_ADD_METHOD(SoNode, SoBRLSnapAction::nodeAction);
+    SO_ACTION_ADD_METHOD(SoBRLDatabaseSource,
+			 SoBRLSnapAction::databaseSourceAction);
     SO_ACTION_ADD_METHOD(SoBRLVListShape, SoBRLSnapAction::vlistShapeAction);
     SO_ACTION_ADD_METHOD(SoBRLMeshShape, SoBRLSnapAction::meshShapeAction);
 }
@@ -632,6 +635,19 @@ SoBRLSnapAction::nodeAction(SoAction *action, SoNode *node)
     if (node->isOfType(SoGroup::getClassTypeId()) ||
 	node->isOfType(SoTransformation::getClassTypeId()))
 	node->doAction(action);
+}
+
+void
+SoBRLSnapAction::databaseSourceAction(SoAction *action, SoNode *node)
+{
+    SoBRLSnapAction *snapAction = static_cast<SoBRLSnapAction *>(action);
+    SoBRLDatabaseSource *source = static_cast<SoBRLDatabaseSource *>(node);
+    const SbMatrix &parentToWorld =
+	SoModelMatrixElement::get(action->getState());
+    if (source->snapCompactInstances(snapAction, parentToWorld))
+	return;
+
+    source->doAction(action);
 }
 
 void

@@ -28,6 +28,7 @@ struct BRLOBOL_EXPORT BRLObolSourceMeshRequest {
     SbString geometryName;
     SbString cacheIdentity;
     SbString sourceIdentity;
+    SbString ownerSourceInstanceKey;
     int databaseIntent;
     int overlayIntent;
     int hudIntent;
@@ -91,6 +92,7 @@ struct BRLOBOL_EXPORT BRLObolSourceMeshRequest {
 	geometryName = "";
 	cacheIdentity = "";
 	sourceIdentity = "";
+	ownerSourceInstanceKey = "";
 	databaseIntent = 0;
 	overlayIntent = 0;
 	hudIntent = 0;

@@ -156,7 +156,7 @@ _draw_path_database_path_exists(struct ged *gedp, const char *path)
 	return 0;
     if (!ged_db_index_available(gedp))
 	return 0;
-    return ged_db_index_path_resolve(gedp, path, NULL, 0) > 0;
+    return ged_db_index_path_exists(gedp, path);
 }
 
 
@@ -345,33 +345,14 @@ _draw_obol_source_record_visible_in_view(
 static const char *
 _draw_obol_source_record_path(struct bu_vls *storage,
 			      const char *source_path,
-			      const struct ged_draw_group_record_summary *group_summary)
+			      const struct ged_draw_group_record_summary *UNUSED(group_summary))
 {
     if (storage)
 	bu_vls_trunc(storage, 0);
     if (!source_path || !source_path[0])
 	return NULL;
 
-    source_path = ged_draw_dbpath_skip_lead_slash(source_path);
-    if (!group_summary || !group_summary->path || !group_summary->path[0])
-	return source_path;
-
-    const char *group_path = ged_draw_dbpath_skip_lead_slash(
-	    group_summary->path);
-    if (!group_path || !group_path[0] ||
-	    _draw_path_equal(group_path, source_path) ||
-	    _draw_path_is_prefix(group_path, source_path))
-	return source_path;
-
-    const char *source_leaf = strrchr(source_path, '/');
-    source_leaf = source_leaf ? source_leaf + 1 : source_path;
-    if (!source_leaf || !source_leaf[0])
-	return source_path;
-
-    if (!storage)
-	return source_path;
-    bu_vls_printf(storage, "%s/%s", group_path, source_leaf);
-    return bu_vls_cstr(storage);
+    return ged_draw_dbpath_skip_lead_slash(source_path);
 }
 
 
@@ -408,15 +389,6 @@ _draw_path_state_obol_source_record_cb(struct ged *gedp,
     if (key && key[0])
 	(void)bu_hash_set(ctx->drawn_leaf_paths,
 		(const uint8_t *)key, strlen(key), (void *)1);
-    if (source_leaf && source_leaf[0] && ctx->path && ctx->path[0]) {
-	struct bu_vls synthesized = BU_VLS_INIT_ZERO;
-	bu_vls_printf(&synthesized, "%s/%s", ctx->path, source_leaf);
-	if (_draw_path_database_path_exists(gedp, bu_vls_cstr(&synthesized)))
-	    (void)bu_hash_set(ctx->drawn_leaf_paths,
-		    (const uint8_t *)bu_vls_cstr(&synthesized),
-		    bu_vls_strlen(&synthesized), (void *)1);
-	bu_vls_free(&synthesized);
-    }
     bu_vls_free(&record_path_storage);
 
     return 1;
