@@ -57,6 +57,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     vect_t tvec = VINIT_ZERO;
     fastf_t sx = 1.0;
     fastf_t sy = 1.0;
+    void *sentinel = (void *)v;
     int do_rot = 0;
     int do_tran = 0;
 
@@ -64,9 +65,13 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	return fail("new view is not valid");
     if (!near_fastf(v->scale, BV_DEFAULT_SCALE) || !near_fastf(v->size, 2.0 * BV_DEFAULT_SCALE))
 	return fail("new view scale/size defaults are incorrect");
+    if (!bv_refresh_enabled_get(v) || bv_refresh_dirty_get(v))
+	return fail("new view refresh defaults are incorrect");
 
     if (!bv_dimensions_set(v, 800, 400))
 	return fail("failed to set view dimensions");
+    if (!bv_user_data_set(v, sentinel) || bv_user_data_get(v) != sentinel)
+	return fail("failed to set view user data");
     if (!bv_screen_to_view(&sx, &sy, v, 400.0, 200.0))
 	return fail("failed to convert screen center to view");
     if (!near_fastf(sx, 0.0) || !near_fastf(sy, 0.0))
@@ -88,6 +93,27 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (!do_tran || do_rot || !near_fastf(tvec[X], 10.0))
 	return fail("absolute X knob command did not report the expected translation");
 
+    if (!bv_refresh_request(v, 0x3) || !bv_refresh_dirty_get(v))
+	return fail("refresh request did not mark view dirty");
+    if (bv_refresh_consume(v) != 0x3 || bv_refresh_dirty_get(v))
+	return fail("refresh consume did not return and clear dirty flags");
+    if (!bv_refresh_suppress_begin(v) || !bv_refresh_request(v, 0x4) ||
+	    bv_refresh_dirty_get(v) || !bv_refresh_suppressed_get(v))
+	return fail("refresh suppression did not hold dirty flags");
+    if (!bv_refresh_suppress_end(v) || bv_refresh_suppressed_get(v))
+	return fail("refresh suppression did not clear");
+    if (!bv_refresh_enabled_set(v, 0) || bv_refresh_enabled_get(v) ||
+	    !bv_refresh_request(v, 0x8) || bv_refresh_dirty_get(v))
+	return fail("disabled refresh did not hold dirty flags");
+    if (!bv_refresh_enabled_set(v, 1) || !bv_refresh_drawn_count_set(v, 7) ||
+	    bv_refresh_drawn_count_get(v) != 7)
+	return fail("refresh drawn count state failed");
+    if (!bv_frametime_set(v, 1234) || bv_frametime_get(v) != 1234 ||
+	    !bv_zclip_set(v, 1) || !bv_zclip_get(v) ||
+	    !bv_framebuffer_mode_set(v, 2) || bv_framebuffer_mode_get(v) != 2 ||
+	    !bv_cleared_set(v, 1) || !bv_cleared_get(v))
+	return fail("view bookkeeping state failed");
+
     if (!bv_name_set(v, "primary") || !bv_set_add(set, v))
 	return fail("failed to add named view to set");
     if (bv_set_find(set, "primary") != v)
@@ -97,6 +123,12 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 
     if (!bv_copy(v2, v) || !bv_center_get(center, v2) || !near_point(center, 1.0, 0.0, -1.0))
 	return fail("view copy did not preserve model center");
+    if (bv_user_data_get(v2) != sentinel ||
+	    bv_refresh_drawn_count_get(v2) != 7 ||
+	    bv_frametime_get(v2) != 1234 || !bv_zclip_get(v2) ||
+	    bv_framebuffer_mode_get(v2) != 2 ||
+	    !bv_cleared_get(v2))
+	return fail("view copy did not preserve bookkeeping state");
 
     bv_set_destroy(set);
     bv_destroy(v2);

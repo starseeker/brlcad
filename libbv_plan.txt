@@ -58,25 +58,63 @@ Native librt view contexts are libbv-backed:
 * `src/librt/view_context_adapters.c`
 * `src/librt/view_context_private.h`
 
-Neutral `rt_view_context_create*` paths create native/libbv-backed contexts.
-Explicit `_bsg` constructors still exist only for retained fallback tests and
-old callers.  Native contexts return empty/no-op results for scene behaviors
-unless an Obol/libbrlobol adapter is installed.
+Treat `rt_view_context_native` as disposable migration scaffolding over libbv,
+not as the long-term owner or a legacy surface.  ABI stability is not a
+goal for this branch.  The intended end state is direct libbv view mechanics
+plus libbrlobol/Obol scene behavior:
+
+* `struct bv` / `struct bv_set` are the real native view and view-set objects.
+* call sites should be rewritten, renamed, or deleted rather than preserving
+  `rt_view_context_*` legacy wrappers.
+* callbacks, display-manager pointers, TclCAD data pointers, and update hooks
+  are application-host state to move to libged/libtclcad hosts or eliminate.
+* scene refs, feature adapters, polygon adapters, selection adapters, picking,
+  snapping, command visuals, and LoD display behavior belong in libbrlobol/
+  Obol, not in librt or libbv.
+* geometry/edit helpers may use a `bv`/view snapshot as input, but librt
+  should not own retained interactive scene state.
+
+libbv now owns display-independent view bookkeeping formerly stored directly in
+native RT view contexts: refresh dirty flags, refresh enable/suppression state,
+drawn count, frame time, zclip, framebuffer mode, cleared state, and opaque
+host user data.  Native `rt_view_context_*` accessors delegate those operations
+to `bv_*` APIs instead of maintaining duplicate RT-side fields.
+
+Neutral `rt_view_context_create*` paths create native/libbv-backed contexts
+only as a migration bridge.  Native contexts return empty/no-op results for
+scene behaviors unless an Obol/libbrlobol adapter is installed.
 
 Remaining Work
 --------------
 
-1. Split neutral RT view wrappers out of `src/librt/view_legacy_bsg.c` into a
-   non-legacy source file.
-2. Audit GED, qtcad, MGED/TclCAD, and GSH for callers that still create or
-   assume retained BSG view contexts.
-3. Convert remaining scene/interaction operations exposed through
-   `rt_view_context_*` to Obol/libbrlobol APIs or explicit no-op adapter
-   behavior.
-4. Remove explicit BSG constructors and tests once no production workflow
-   needs them.
+Current `rt_view_context_native` field inventory:
+
+* `struct bv view` and `struct bv_set` are already the real libbv-owned view
+  state.
+* `display_manager`, `tclcad_data`, callbacks, and update hooks are
+  application-host state.  Move them to libged/libtclcad/application owners or
+  delete them where no modern caller needs them.
+* `scene_root_ref`, independent scene scope, feature/polygon/selection
+  adapters, picking, snapping, and LoD display behavior are libbrlobol/Obol
+  responsibilities.
+* edit matrices and faceplate/overlay records need a design decision: pure
+  data can move to libbv, but any scene-object realization belongs in
+  libbrlobol.
+
+1. Move remaining non-scene native RT view-context storage into libbv where it
+   is genuinely display-independent view state.  Good candidates are view-local
+   overlay/faceplate state records only if they remain data, not scene nodes.
+2. Move scene/interaction behavior currently exposed through `rt_view_context_*`
+   to libbrlobol/Obol adapters or delete it if it only preserves retained BSG
+   behavior.  Do not create a new large wrapper layer.
+3. Audit GED, qtcad, MGED/TclCAD, and GSH for callers that still create or
+   assume retained BSG view contexts; rewrite those callers to direct
+   libbv/libbrlobol ownership.
+4. Delete explicit BSG constructors, wrappers, and tests rather than carrying
+   legacy surfaces forward.
 5. Keep libbv tests focused on pure view mechanics: matrices, autoview,
-   transforms, knobs, view-set bookkeeping, and dirty/refresh state.
+   transforms, knobs, view-set bookkeeping, and display-independent view
+   bookkeeping.
 
 Verification
 ------------

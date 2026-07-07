@@ -42,27 +42,17 @@ struct rt_view_context_native {
     struct bv view;
     struct rt_view_set_context_native *view_set;
 
-    void *user_data;
     void *display_manager;
     void *tclcad_data;
     struct bu_ptbl *callbacks;
     rt_view_context_update_callback_t update_callback;
     void *update_callback_data;
 
-    uint32_t refresh_dirty;
-    int refresh_enabled;
-    int refresh_suppressed;
-    int refresh_drawn_count;
-    uint64_t frametime;
-
     int edit_matrix_valid;
     mat_t edit_matrix;
 
     struct rt_view_lod_policy lod_policy;
     int lod_bounds_callback_set;
-    int zclip;
-    int framebuffer_mode;
-    int cleared;
     int independent_scope_created;
     rt_view_scene_ref scene_root_ref;
 
@@ -137,7 +127,6 @@ native_defaults(struct rt_view_context_native *n)
     memset(n, 0, sizeof(*n));
     n->magic = RT_VIEW_CONTEXT_NATIVE_MAGIC;
     bv_init(&n->view);
-    n->refresh_enabled = 1;
     n->lod_policy = lod;
     n->interactive_rect = rect;
     n->adc = adc;
@@ -402,19 +391,14 @@ void *
 _rt_view_context_native_user_data_get(const void *ctx)
 {
     const struct rt_view_context_native *n = native_ctx_const(ctx);
-    return n ? n->user_data : NULL;
+    return bv_user_data_get(n ? &n->view : NULL);
 }
 
 int
 _rt_view_context_native_user_data_set(void *ctx, void *user_data)
 {
     struct rt_view_context_native *n = native_ctx(ctx);
-    if (!n)
-	return 0;
-
-    n->user_data = user_data;
-    n->view.user_data = user_data;
-    return 1;
+    return bv_user_data_set(n ? &n->view : NULL, user_data);
 }
 
 int
@@ -569,11 +553,7 @@ int
 _rt_view_context_native_frametime_set(void *ctx, uint64_t frametime)
 {
     struct rt_view_context_native *n = native_ctx(ctx);
-    if (!n)
-	return 0;
-
-    n->frametime = frametime;
-    return 1;
+    return bv_frametime_set(n ? &n->view : NULL, frametime);
 }
 
 int
@@ -583,106 +563,77 @@ _rt_view_context_native_refresh_request(void *ctx, uint32_t flags)
     if (!n)
 	return 0;
 
-    if (n->refresh_enabled && !n->refresh_suppressed)
-	n->refresh_dirty |= flags;
-    return 1;
+    return bv_refresh_request(&n->view, flags);
 }
 
 int
 _rt_view_context_native_refresh_dirty_get(const void *ctx)
 {
     const struct rt_view_context_native *n = native_ctx_const(ctx);
-    return (n && n->refresh_dirty) ? 1 : 0;
+    return bv_refresh_dirty_get(n ? &n->view : NULL);
 }
 
 uint32_t
 _rt_view_context_native_refresh_consume(void *ctx)
 {
     struct rt_view_context_native *n = native_ctx(ctx);
-    uint32_t dirty;
-    if (!n)
-	return 0;
-
-    dirty = n->refresh_dirty;
-    n->refresh_dirty = 0;
-    return dirty;
+    return bv_refresh_consume(n ? &n->view : NULL);
 }
 
 int
 _rt_view_context_native_refresh_complete(void *ctx)
 {
     struct rt_view_context_native *n = native_ctx(ctx);
-    if (!n)
-	return 0;
-
-    n->refresh_dirty = 0;
-    return 1;
+    return bv_refresh_complete(n ? &n->view : NULL);
 }
 
 int
 _rt_view_context_native_refresh_enabled_get(const void *ctx)
 {
     const struct rt_view_context_native *n = native_ctx_const(ctx);
-    return n ? n->refresh_enabled : 0;
+    return bv_refresh_enabled_get(n ? &n->view : NULL);
 }
 
 int
 _rt_view_context_native_refresh_enabled_set(void *ctx, int enabled)
 {
     struct rt_view_context_native *n = native_ctx(ctx);
-    if (!n)
-	return 0;
-
-    n->refresh_enabled = enabled ? 1 : 0;
-    return 1;
+    return bv_refresh_enabled_set(n ? &n->view : NULL, enabled);
 }
 
 int
 _rt_view_context_native_refresh_suppressed_get(const void *ctx)
 {
     const struct rt_view_context_native *n = native_ctx_const(ctx);
-    return (n && n->refresh_suppressed > 0) ? 1 : 0;
+    return bv_refresh_suppressed_get(n ? &n->view : NULL);
 }
 
 int
 _rt_view_context_native_refresh_suppress_begin(void *ctx)
 {
     struct rt_view_context_native *n = native_ctx(ctx);
-    if (!n)
-	return 0;
-
-    n->refresh_suppressed++;
-    return 1;
+    return bv_refresh_suppress_begin(n ? &n->view : NULL);
 }
 
 int
 _rt_view_context_native_refresh_suppress_end(void *ctx)
 {
     struct rt_view_context_native *n = native_ctx(ctx);
-    if (!n)
-	return 0;
-
-    if (n->refresh_suppressed > 0)
-	n->refresh_suppressed--;
-    return 1;
+    return bv_refresh_suppress_end(n ? &n->view : NULL);
 }
 
 int
 _rt_view_context_native_refresh_drawn_count_get(const void *ctx)
 {
     const struct rt_view_context_native *n = native_ctx_const(ctx);
-    return n ? n->refresh_drawn_count : 0;
+    return bv_refresh_drawn_count_get(n ? &n->view : NULL);
 }
 
 int
 _rt_view_context_native_refresh_drawn_count_set(void *ctx, int count)
 {
     struct rt_view_context_native *n = native_ctx(ctx);
-    if (!n)
-	return 0;
-
-    n->refresh_drawn_count = count;
-    return 1;
+    return bv_refresh_drawn_count_set(n ? &n->view : NULL, count);
 }
 
 fastf_t
@@ -1108,7 +1059,7 @@ _rt_view_context_native_clear(void *ctx, int UNUSED(flags))
     if (!n)
 	return 0;
 
-    n->refresh_dirty = 0;
+    (void)bv_refresh_complete(&n->view);
     return 0;
 }
 
@@ -1605,54 +1556,42 @@ int
 _rt_view_context_native_zclip_get(const void *ctx)
 {
     const struct rt_view_context_native *n = native_ctx_const(ctx);
-    return n ? n->zclip : 0;
+    return bv_zclip_get(n ? &n->view : NULL);
 }
 
 int
 _rt_view_context_native_zclip_set(void *ctx, int zclip)
 {
     struct rt_view_context_native *n = native_ctx(ctx);
-    if (!n)
-	return 0;
-
-    n->zclip = zclip ? 1 : 0;
-    return 1;
+    return bv_zclip_set(n ? &n->view : NULL, zclip);
 }
 
 int
 _rt_view_context_native_framebuffer_mode_get(const void *ctx)
 {
     const struct rt_view_context_native *n = native_ctx_const(ctx);
-    return n ? n->framebuffer_mode : 0;
+    return bv_framebuffer_mode_get(n ? &n->view : NULL);
 }
 
 int
 _rt_view_context_native_framebuffer_mode_set(void *ctx, int mode)
 {
     struct rt_view_context_native *n = native_ctx(ctx);
-    if (!n)
-	return 0;
-
-    n->framebuffer_mode = mode;
-    return 1;
+    return bv_framebuffer_mode_set(n ? &n->view : NULL, mode);
 }
 
 int
 _rt_view_context_native_cleared_get(const void *ctx)
 {
     const struct rt_view_context_native *n = native_ctx_const(ctx);
-    return n ? n->cleared : 0;
+    return bv_cleared_get(n ? &n->view : NULL);
 }
 
 int
 _rt_view_context_native_cleared_set(void *ctx, int cleared)
 {
     struct rt_view_context_native *n = native_ctx(ctx);
-    if (!n)
-	return 0;
-
-    n->cleared = cleared ? 1 : 0;
-    return 1;
+    return bv_cleared_set(n ? &n->view : NULL, cleared);
 }
 
 int

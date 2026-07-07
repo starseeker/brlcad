@@ -88,6 +88,7 @@ bv_init(struct bv *v)
     v->inverse_size = 1.0 / v->size;
     v->local2base = 1.0;
     v->base2local = 1.0;
+    v->refresh_enabled = 1;
     VSET(v->aet, 35.0, 25.0, 0.0);
     VSET(v->eye_pos, 0.0, 0.0, 1.0);
     v->coord_mode = 'v';
@@ -150,6 +151,14 @@ bv_copy(struct bv *dst, const struct bv *src)
     dst->local2base = src->local2base;
     dst->base2local = src->base2local;
     dst->frame_revision = src->frame_revision;
+    dst->refresh_dirty = src->refresh_dirty;
+    dst->refresh_enabled = src->refresh_enabled;
+    dst->refresh_suppressed = src->refresh_suppressed;
+    dst->refresh_drawn_count = src->refresh_drawn_count;
+    dst->frametime = src->frametime;
+    dst->zclip = src->zclip;
+    dst->framebuffer_mode = src->framebuffer_mode;
+    dst->cleared = src->cleared;
     VMOVE(dst->aet, src->aet);
     VMOVE(dst->eye_pos, src->eye_pos);
     VMOVE(dst->keypoint, src->keypoint);
@@ -197,6 +206,22 @@ bv_name_get(const struct bv *v)
 }
 
 int
+bv_user_data_set(struct bv *v, void *user_data)
+{
+    if (!bv_is_valid(v))
+	return 0;
+
+    v->user_data = user_data;
+    return 1;
+}
+
+void *
+bv_user_data_get(const struct bv *v)
+{
+    return bv_is_valid(v) ? v->user_data : NULL;
+}
+
+int
 bv_dimensions_set(struct bv *v, int width, int height)
 {
     if (!bv_is_valid(v))
@@ -204,6 +229,169 @@ bv_dimensions_set(struct bv *v, int width, int height)
 
     v->width = width;
     v->height = height;
+    return 1;
+}
+
+int
+bv_refresh_request(struct bv *v, uint32_t flags)
+{
+    if (!bv_is_valid(v))
+	return 0;
+
+    if (v->refresh_enabled && !v->refresh_suppressed)
+	v->refresh_dirty |= flags;
+    return 1;
+}
+
+int
+bv_refresh_dirty_get(const struct bv *v)
+{
+    return (bv_is_valid(v) && v->refresh_dirty) ? 1 : 0;
+}
+
+uint32_t
+bv_refresh_consume(struct bv *v)
+{
+    uint32_t dirty;
+
+    if (!bv_is_valid(v))
+	return 0;
+
+    dirty = v->refresh_dirty;
+    v->refresh_dirty = 0;
+    return dirty;
+}
+
+int
+bv_refresh_complete(struct bv *v)
+{
+    if (!bv_is_valid(v))
+	return 0;
+
+    v->refresh_dirty = 0;
+    return 1;
+}
+
+int
+bv_refresh_enabled_get(const struct bv *v)
+{
+    return bv_is_valid(v) ? v->refresh_enabled : 0;
+}
+
+int
+bv_refresh_enabled_set(struct bv *v, int enabled)
+{
+    if (!bv_is_valid(v))
+	return 0;
+
+    v->refresh_enabled = enabled ? 1 : 0;
+    return 1;
+}
+
+int
+bv_refresh_suppressed_get(const struct bv *v)
+{
+    return (bv_is_valid(v) && v->refresh_suppressed > 0) ? 1 : 0;
+}
+
+int
+bv_refresh_suppress_begin(struct bv *v)
+{
+    if (!bv_is_valid(v))
+	return 0;
+
+    v->refresh_suppressed++;
+    return 1;
+}
+
+int
+bv_refresh_suppress_end(struct bv *v)
+{
+    if (!bv_is_valid(v))
+	return 0;
+
+    if (v->refresh_suppressed > 0)
+	v->refresh_suppressed--;
+    return 1;
+}
+
+int
+bv_refresh_drawn_count_get(const struct bv *v)
+{
+    return bv_is_valid(v) ? v->refresh_drawn_count : 0;
+}
+
+int
+bv_refresh_drawn_count_set(struct bv *v, int count)
+{
+    if (!bv_is_valid(v))
+	return 0;
+
+    v->refresh_drawn_count = count;
+    return 1;
+}
+
+int
+bv_frametime_set(struct bv *v, uint64_t frametime)
+{
+    if (!bv_is_valid(v))
+	return 0;
+
+    v->frametime = frametime;
+    return 1;
+}
+
+uint64_t
+bv_frametime_get(const struct bv *v)
+{
+    return bv_is_valid(v) ? v->frametime : 0;
+}
+
+int
+bv_zclip_get(const struct bv *v)
+{
+    return bv_is_valid(v) ? v->zclip : 0;
+}
+
+int
+bv_zclip_set(struct bv *v, int zclip)
+{
+    if (!bv_is_valid(v))
+	return 0;
+
+    v->zclip = zclip ? 1 : 0;
+    return 1;
+}
+
+int
+bv_framebuffer_mode_get(const struct bv *v)
+{
+    return bv_is_valid(v) ? v->framebuffer_mode : 0;
+}
+
+int
+bv_framebuffer_mode_set(struct bv *v, int mode)
+{
+    if (!bv_is_valid(v))
+	return 0;
+
+    v->framebuffer_mode = mode;
+    return 1;
+}
+
+int
+bv_cleared_get(const struct bv *v)
+{
+    return bv_is_valid(v) ? v->cleared : 0;
+}
+
+int
+bv_cleared_set(struct bv *v, int cleared)
+{
+    if (!bv_is_valid(v))
+	return 0;
+
+    v->cleared = cleared ? 1 : 0;
     return 1;
 }
 

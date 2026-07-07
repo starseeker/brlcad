@@ -265,6 +265,24 @@ cmd_oed(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	(void)chg_state(s, ST_O_PICK, ST_VIEW, "error recovery");
 	return TCL_ERROR;
     }
+
+    Tcl_UnlinkVar(s->interp, "edit_solid_flag");
+    struct rt_edit_view ev;
+    rt_edit_view_from_context(&ev, view_state->vs_gvp);
+    if (rt_edit_reinit(MEDIT(s), &both, s->dbip, &s->tol.tol, &ev) != BRLCAD_OK) {
+	db_free_full_path(&lhs);
+	db_free_full_path(&rhs);
+	db_free_full_path(&both);
+	Tcl_AppendResult(interp, "Unable to initialize object edit state", (char *)NULL);
+	mged_highlight_clear(s);
+	(void)chg_state(s, ST_O_PICK, ST_VIEW, "error recovery");
+	return TCL_ERROR;
+    }
+    Tcl_LinkVar(s->interp, "edit_solid_flag", (char *)&MEDIT(s)->edit_flag, TCL_LINK_INT);
+    MEDIT(s)->mv_context = mged_variables->mv_context;
+    MEDIT(s)->vlfree = &rt_vlfree;
+    mged_edit_clbk_sync(MEDIT(s), s);
+
     (void)chg_state(s, ST_O_PICK, ST_O_PATH, "internal change of state");
 
     /* Select the matrix */

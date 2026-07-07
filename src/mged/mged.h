@@ -65,11 +65,6 @@
 // For signal.h
 #include "bu/interrupt.h"
 
-#include "tcl.h"
-#ifdef HAVE_TK
-#  include "tk.h"
-#  define HAVE_X11_TYPES 1
-#endif
 #include "bu/parallel.h"
 #include "bu/list.h"
 #include "bu/str.h"
@@ -77,7 +72,13 @@
 #include "ged.h"
 #include "ged/draw.h"
 #include "ged/event_txn.h"
+#include "rt/edit.h"
 #include "wdb.h"
+#include "tcl.h"
+#ifdef HAVE_TK
+#  include "tk.h"
+#  define HAVE_X11_TYPES 1
+#endif
 
 // We have to use different I/O mechanisms based on which
 // platform we're on.  Make a define to key off of.
@@ -126,38 +127,7 @@ struct cmdtab {
     struct mged_state *s;
 };
 
-/* Menu structures and defines
- *
- * Each active menu is installed by having a non-null entry in
- * menu_array[] which is a pointer
- * to an array of menu items.  The first ([0]) menu item is the title
- * for the menu, and the remaining items are individual menu entries.
- */
-struct menu_item {
-    char *menu_string;
-    void (*menu_func)(struct mged_state *, int, int, int);
-    int menu_arg;
-};
-
-#define NMENU 3
-#define MENU_L1 0 /* top-level solid-edit menu */
-#define MENU_L2 1 /* second-level menu */
-#define MENU_GEN 2 /* general features (mouse buttons) */
-
-#define MENUXLIM        (-1250)         /* Value to set X lim to for menu */
-#define MENUX           (-2048+115)     /* pixel position for menu, X */
-#define MENUY           1780            /* pixel position for menu, Y */
-#define SCROLLY         (2047)          /* starting Y pos for scroll area */
-#define MENU_DY         (-104)          /* Distance between menu items */
-#define SCROLL_DY       (-100)          /* Distance between scrollers */
-
-#define TITLE_XBASE     (-2048)         /* pixel X of title line start pos */
-#define TITLE_YBASE     (-1920)         /* pixel pos of last title line */
-#define SOLID_XBASE     MENUXLIM        /* X to start display text */
-#define SOLID_YBASE     (1920)          /* pixel pos of first solid line */
-#define TEXT0_DY        (-60)           /* #pixels per line, Size 0 */
-#define TEXT1_DY        (-90)           /* #pixels per line, Size 1 */
-
+#include "./menu.h"
 #include "./mged_dm.h" /* _view_state */
 
 struct mged_edit_state {
@@ -176,9 +146,7 @@ struct mged_edit_state {
     struct mged_dm *edit_rate_mt_dm;
     struct mged_dm *edit_rate_vt_dm;
 
-    // TODO - can we eliminate these?
     int es_edclass;            /* type of editing class for this solid */
-    int es_type;               /* COMGEOM solid type */
 };
 
 #define MEDIT(s) ((s)->s_edit->e)
@@ -212,9 +180,28 @@ struct mged_edit_state {
  * These are allocated storage in dozoom.c
  */
 
+// Callback registration mechanism for librt edit callbacks.
+__BEGIN_DECLS
+extern int mged_state_clbk_set(struct mged_state *s, int obj_type, int ed_cmd, int mode, bu_clbk_t f, void *d);
+extern int mged_state_clbk_get(bu_clbk_t *f, void **d, struct mged_state *s, int obj_type, int ed_cmd, int mode);
+extern int mged_edit_clbk_sync(struct rt_edit *se, struct mged_state *s);
+extern int mged_mmenu_set(int ac, const char **av, void *d, void *ms);
+extern int mged_menu_refresh(int ac, const char **av, void *d, void *ms);
+extern int arb_setup_rotface_clbk(int ac, const char **av, void *d, void *d2);
+extern int ecmd_bot_mode_clbk(int ac, const char **av, void *d, void *d2);
+extern int ecmd_bot_orient_clbk(int ac, const char **av, void *d, void *d2);
+extern int ecmd_bot_thick_clbk(int ac, const char **av, void *d, void *d2);
+extern int ecmd_bot_flags_clbk(int ac, const char **av, void *d, void *d2);
+extern int ecmd_bot_fmode_clbk(int ac, const char **av, void *d, void *d2);
+extern int ecmd_bot_pickt_multihit_clbk(int ac, const char **av, void *d, void *d2);
+extern int ecmd_nmg_edebug_clbk(int ac, const char **av, void *d, void *d2);
+extern int ecmd_extrude_skt_name_clbk(int ac, const char **av, void *d, void *d2);
+
 /* global application state */
+struct mged_state_impl;
 struct mged_state {
     uint32_t magic;
+    struct mged_state_impl *i;
     struct ged *gedp;
     struct db_i *dbip;
     struct rt_wdb *wdbp;
@@ -241,6 +228,9 @@ struct mged_state {
     /* Editing related */
     struct mged_edit_state *s_edit;
     int global_editing_state; // main global editing state (ugh)
+
+    /* Non-zero when an edit or view callback has requested redraw. */
+    int update_views;
 
     /* Asynchronous ged_exec state (cmd.cpp).
      * cmd_running is set to 1 while ged_exec runs in a worker thread so
@@ -277,6 +267,11 @@ struct mged_state {
 };
 extern struct mged_state *MGED_STATE;
 
+extern struct mged_state *mged_state_create(void);
+extern void mged_state_destroy(struct mged_state *s);
+extern void mged_state_init_internals(struct mged_state *s);
+extern void mged_state_destroy_internals(struct mged_state *s);
+
 static inline int
 mged_event_batch_begin(struct mged_state *s)
 {
@@ -292,9 +287,6 @@ mged_event_batch_end(struct mged_state *s, int started)
     if (started && s && s->gedp)
 	(void)ged_event_batch_end(s->gedp, NULL);
 }
-
-__BEGIN_DECLS
-
 
 /* defined in mged.c */
 extern jmp_buf jmp_env;
@@ -321,7 +313,6 @@ extern void moveHinstance(struct mged_state *s, struct directory *cdp, struct di
 extern void moveHobj(struct mged_state *s, struct directory *dp, matp_t xlate);
 extern void quit(struct mged_state *s);
 extern void refresh(struct mged_state *s);
-extern void sedit(struct mged_state *s);
 extern void setview(struct mged_state *s, double a1, double a2, double a3);
 extern void adcursor(struct mged_state *s);
 extern void get_attached(struct mged_state *s);
@@ -455,7 +446,6 @@ int gui_setup(struct mged_state *s, const char *dstr);
 
 
 /* buttons.c */
-void btn_head_menu(struct mged_state *s, int i, int menu, int item);
 void chg_l2menu(struct mged_state *s, int i);
 
 /* chgview.c */
@@ -468,7 +458,11 @@ extern void view_ring_destroy(struct mged_dm *dlp);
 
 /* cmd.c / cmd.cpp */
 int cmdline(struct mged_state *s, struct bu_vls *vp, int record);
-void mged_print_result(struct mged_state *s, int status);
+int mged_print_result(int, const char **, void *, void *);
+int mged_print_str(int, const char **, void *, void *);
+int mged_view_update(int, const char **, void *, void *);
+int mged_view_set_flag(int, const char **, void *, void *);
+int mged_get_filename(int, const char **, void *, void *);
 int gui_output(void *clientData, void *str);
 void mged_pr_output(Tcl_Interp *interp);
 void mged_sem_log_init(void);
@@ -487,13 +481,6 @@ void add_solid_record_path_to_result(Tcl_Interp *interpreter, const struct ged_d
 int redraw_visible_objects(struct mged_state *s);
 
 /* dozoom.c */
-
-/* edarb.c */
-int editarb(struct mged_state *s, vect_t pos_model);
-extern int newedge;	/* new edge for arb editing */
-
-/* edars.c */
-void find_ars_nearest_pnt(int *crv, int *col, struct rt_ars_internal *ars, point_t pick_pt, vect_t dir);
 
 /* f_db.c */
 struct mged_opendb_ctx {
@@ -567,26 +554,25 @@ void rect_image2view(struct mged_state *);
 void rb_set_dirty_flag(const struct bu_structparse *, const char *, void *, const char *, void *);
 
 /* edsol.c */
-void vls_solid(struct mged_state *s, struct bu_vls *vp, struct rt_db_internal *ip, const mat_t mat);
+void vls_solid(struct mged_state *s, struct bu_vls *vp, struct rt_edit *S, const mat_t mat);
 void transform_editing_solid(
     struct mged_state *s,
     struct rt_db_internal *os,		/* output solid */
     const mat_t mat,
     struct rt_db_internal *is,		/* input solid */
     int freedbi);
-void replot_editing_solid(struct mged_state *s);
-void sedit_abs_scale(struct mged_state *s);
+int replot_editing_solid(int, const char **, void *, void *);
 void sedit_accept(struct mged_state *s);
 void sedit_mouse(struct mged_state *s, const vect_t mousevec);
 void sedit_reject(struct mged_state *s);
-void sedit_vpick(struct mged_state *s, point_t v_pos);
-void oedit_abs_scale(struct mged_state *s);
 void oedit_accept(struct mged_state *s);
 void oedit_reject(struct mged_state *s);
 void objedit_mouse(struct mged_state *s, const vect_t mousevec);
 void label_edited_solid(struct mged_state *s, int *num_lines, point_t *lines, struct rt_point_labels pl[], int max_pl, const mat_t xform, struct rt_db_internal *ip);
 void init_oedit(struct mged_state *s);
 void init_sedit(struct mged_state *s);
+void set_e_axes_pos(struct mged_state *s, int both);
+int set_e_axes_pos_clbk(int, const char **, void *, void *);
 
 /* share.c */
 void usurp_all_resources(struct mged_dm *dlp1, struct mged_dm *dlp2);
@@ -603,19 +589,6 @@ extern void mged_variable_setup(struct mged_state *s);
 void set_scroll(struct mged_state *);
 int scroll_select(struct mged_state *s, int pen_x, int pen_y, int do_func);
 int scroll_display(struct mged_state *s, int y_top);
-
-/* edpipe.c */
-void pipe_scale_od(struct mged_state *s, struct rt_db_internal *, fastf_t);
-void pipe_scale_id(struct mged_state *s, struct rt_db_internal *, fastf_t);
-void pipe_seg_scale_od(struct mged_state *s, struct wdb_pipe_pnt *, fastf_t);
-void pipe_seg_scale_id(struct mged_state *s, struct wdb_pipe_pnt *, fastf_t);
-void pipe_seg_scale_radius(struct mged_state *s, struct wdb_pipe_pnt *, fastf_t);
-void pipe_scale_radius(struct mged_state *s, struct rt_db_internal *, fastf_t);
-struct wdb_pipe_pnt *find_pipe_pnt_nearest_pnt(struct mged_state *s, const struct bu_list *, const point_t);
-struct wdb_pipe_pnt *pipe_add_pnt(struct rt_pipe_internal *, struct wdb_pipe_pnt *, const point_t);
-void pipe_ins_pnt(struct rt_pipe_internal *, struct wdb_pipe_pnt *, const point_t);
-struct wdb_pipe_pnt *pipe_del_pnt(struct mged_state *s, struct wdb_pipe_pnt *);
-void pipe_move_pnt(struct mged_state *s, struct rt_pipe_internal *, struct wdb_pipe_pnt *, const point_t);
 
 /* vparse.c */
 extern void mged_vls_struct_parse(struct mged_state *s, struct bu_vls *vls, const char *title, struct bu_structparse *how_to_parse, const char *structp, int argc, const char *argv[]); /* defined in vparse.c */

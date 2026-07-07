@@ -146,6 +146,14 @@ struct bv {
     fastf_t local2base;
     fastf_t base2local;
     uint64_t frame_revision;
+    uint32_t refresh_dirty;
+    int refresh_enabled;
+    int refresh_suppressed;
+    int refresh_drawn_count;
+    uint64_t frametime;
+    int zclip;
+    int framebuffer_mode;
+    int cleared;
 
     vect_t aet;
     point_t eye_pos;
@@ -193,7 +201,28 @@ BV_EXPORT extern int bv_copy(struct bv *dst, const struct bv *src);
 
 BV_EXPORT extern int bv_name_set(struct bv *v, const char *name);
 BV_EXPORT extern const char *bv_name_get(const struct bv *v);
+BV_EXPORT extern int bv_user_data_set(struct bv *v, void *user_data);
+BV_EXPORT extern void *bv_user_data_get(const struct bv *v);
 BV_EXPORT extern int bv_dimensions_set(struct bv *v, int width, int height);
+BV_EXPORT extern int bv_refresh_request(struct bv *v, uint32_t flags);
+BV_EXPORT extern int bv_refresh_dirty_get(const struct bv *v);
+BV_EXPORT extern uint32_t bv_refresh_consume(struct bv *v);
+BV_EXPORT extern int bv_refresh_complete(struct bv *v);
+BV_EXPORT extern int bv_refresh_enabled_get(const struct bv *v);
+BV_EXPORT extern int bv_refresh_enabled_set(struct bv *v, int enabled);
+BV_EXPORT extern int bv_refresh_suppressed_get(const struct bv *v);
+BV_EXPORT extern int bv_refresh_suppress_begin(struct bv *v);
+BV_EXPORT extern int bv_refresh_suppress_end(struct bv *v);
+BV_EXPORT extern int bv_refresh_drawn_count_get(const struct bv *v);
+BV_EXPORT extern int bv_refresh_drawn_count_set(struct bv *v, int count);
+BV_EXPORT extern int bv_frametime_set(struct bv *v, uint64_t frametime);
+BV_EXPORT extern uint64_t bv_frametime_get(const struct bv *v);
+BV_EXPORT extern int bv_zclip_get(const struct bv *v);
+BV_EXPORT extern int bv_zclip_set(struct bv *v, int zclip);
+BV_EXPORT extern int bv_framebuffer_mode_get(const struct bv *v);
+BV_EXPORT extern int bv_framebuffer_mode_set(struct bv *v, int mode);
+BV_EXPORT extern int bv_cleared_get(const struct bv *v);
+BV_EXPORT extern int bv_cleared_set(struct bv *v, int cleared);
 
 BV_EXPORT extern int bv_update(struct bv *v);
 BV_EXPORT extern int bv_model2view_get(mat_t model2view, const struct bv *v);
