@@ -3287,10 +3287,6 @@ SoBRLSceneController::moveDatabaseSourceInstanceToGroup(
     const char *sourceInstanceKey,
     const char *groupPath)
 {
-    BRLObolPerformanceTimer timer(BRLOBOL_PERF_SOURCE_MOVE_US);
-    if (timer.active())
-	brlobol_performance_counter_add(BRLOBOL_PERF_SOURCE_MOVE_CALLS, 1);
-
     if (!sourceInstanceKey || !sourceInstanceKey[0] || !groupPath)
 	return -1;
     if (!this->root || !this->root->isOfType(SoGroup::getClassTypeId()))
@@ -3313,6 +3309,17 @@ SoBRLSceneController::moveDatabaseSourceInstanceToGroup(
     }
     if (!source || !sourceParent || sourceIndex < 0)
 	return 0;
+
+    SbString sourceParentPath = scene_group_index_path(sourceParent);
+    if (sourceParentPath.getLength() == 0 &&
+	sourceParent == scene_root_group(this->root))
+	sourceParentPath = "/";
+    if (scene_path_equal(sourceParentPath.getString(), groupPath))
+	return 0;
+
+    BRLObolPerformanceTimer timer(BRLOBOL_PERF_SOURCE_MOVE_US);
+    if (timer.active())
+	brlobol_performance_counter_add(BRLOBOL_PERF_SOURCE_MOVE_CALLS, 1);
 
     SoGroup *targetGroup = this->ensureGroup(groupPath);
     if (!targetGroup)

@@ -31,6 +31,8 @@ __BEGIN_DECLS
 #define BRLOBOL_DRAW_CACHE_PROXY_OBB 2
 
 struct db_i;
+struct db_tree_state;
+struct directory;
 
 struct BRLObolDrawCacheStatus {
     int directoryFound;
@@ -81,6 +83,12 @@ brlobol_draw_proxy_record_init(struct BRLObolDrawProxyRecord *record);
 
 BRLOBOL_EXPORT void
 brlobol_draw_metadata_record_init(struct BRLObolDrawMetadataRecord *record);
+
+BRLOBOL_EXPORT void
+brlobol_draw_metadata_record_from_tree_state(
+    struct BRLObolDrawMetadataRecord *record,
+    const struct db_tree_state *state,
+    const struct directory *dp);
 
 BRLOBOL_EXPORT void
 brlobol_draw_cache_clear_all(void);

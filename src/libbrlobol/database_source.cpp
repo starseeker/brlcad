@@ -866,6 +866,62 @@ convert_vlist(std::vector<SbVec3f> &points, std::vector<int32_t> &commands, cons
     }
 }
 
+static SoBRLVListShape *
+vlist_from_bot_wireframe(const struct rt_bot_internal *bot)
+{
+    if (!bot || !bot->vertices || !bot->faces ||
+	bot->num_vertices == 0 || bot->num_faces == 0 ||
+	bot->num_faces > static_cast<size_t>(INT_MAX / 4))
+	return NULL;
+    RT_BOT_CK_MAGIC(bot);
+
+    std::vector<SbVec3f> points;
+    std::vector<int32_t> commands;
+    points.reserve(bot->num_faces * 4);
+    commands.reserve(bot->num_faces * 4);
+
+    for (size_t i = 0; i < bot->num_faces; i++) {
+	const int *face = &bot->faces[i * 3];
+	if (face[0] < 0 || face[1] < 0 || face[2] < 0 ||
+	    static_cast<size_t>(face[0]) >= bot->num_vertices ||
+	    static_cast<size_t>(face[1]) >= bot->num_vertices ||
+	    static_cast<size_t>(face[2]) >= bot->num_vertices)
+	    continue;
+
+	const fastf_t *p0 = &bot->vertices[face[0] * 3];
+	const fastf_t *p1 = &bot->vertices[face[1] * 3];
+	const fastf_t *p2 = &bot->vertices[face[2] * 3];
+
+	points.push_back(SbVec3f(static_cast<float>(p0[X]),
+				 static_cast<float>(p0[Y]),
+				 static_cast<float>(p0[Z])));
+	commands.push_back(SoBRLVListShape::MOVE);
+	points.push_back(SbVec3f(static_cast<float>(p1[X]),
+				 static_cast<float>(p1[Y]),
+				 static_cast<float>(p1[Z])));
+	commands.push_back(SoBRLVListShape::DRAW);
+	points.push_back(SbVec3f(static_cast<float>(p2[X]),
+				 static_cast<float>(p2[Y]),
+				 static_cast<float>(p2[Z])));
+	commands.push_back(SoBRLVListShape::DRAW);
+	points.push_back(SbVec3f(static_cast<float>(p0[X]),
+				 static_cast<float>(p0[Y]),
+				 static_cast<float>(p0[Z])));
+	commands.push_back(SoBRLVListShape::DRAW);
+    }
+
+    if (points.empty() || points.size() != commands.size())
+	return NULL;
+
+    brlobol_performance_counter_add(BRLOBOL_PERF_VLIST_POINTS,
+	static_cast<uint64_t>(points.size()));
+
+    SoBRLVListShape *shape = new SoBRLVListShape;
+    shape->setLineSet(points.data(), commands.data(),
+		      static_cast<int>(points.size()));
+    return shape;
+}
+
 static double
 nonnegative_or_default(float value, double defaultValue)
 {
@@ -1091,6 +1147,7 @@ BRLObolDatabaseSourceRealizationCache::clear(void)
     unref_cached_geometry_map(this->sharedWireGeometry);
     unref_cached_geometry_map(this->sharedMeshVListGeometry);
     unref_cached_geometry_map(this->sharedMeshGeometry);
+    this->sharedWireBounds.clear();
     this->sharedWireCadGeometry.clear();
 }
 
@@ -1100,6 +1157,17 @@ BRLObolDatabaseSourceRealizationCache::storeWireGeometry(
     SoBRLVListShape *shape)
 {
     store_cached_geometry_map(this->sharedWireGeometry, key, shape);
+}
+
+void
+BRLObolDatabaseSourceRealizationCache::storeWireBounds(
+    const std::string &key,
+    const SbBox3f &bounds)
+{
+    if (key.empty() || bounds.isEmpty())
+	return;
+
+    this->sharedWireBounds[key] = bounds;
 }
 
 void
@@ -1946,7 +2014,13 @@ static union tree *
 	    return make_nop_tree();
 	}
 
-	sharedShape = vlist_from_plot_internal(localIntern, data->source);
+	if (localIntern->idb_type == ID_BOT) {
+	    sharedShape = vlist_from_bot_wireframe(
+		static_cast<const struct rt_bot_internal *>(
+		    localIntern->idb_ptr));
+	} else {
+	    sharedShape = vlist_from_plot_internal(localIntern, data->source);
+	}
 	if (!sharedShape) {
 	    char reason[256] = {0};
 	    data->failed_shapes++;
@@ -2085,6 +2159,58 @@ vlist_from_aabb_proxy_bounds(const SbBox3f &bounds)
     return shape;
 }
 
+static SbBool
+point_bbox_valid(const point_t bmin, const point_t bmax)
+{
+    for (int i = 0; i < 3; i++) {
+	if (!isfinite(bmin[i]) || !isfinite(bmax[i]) || bmin[i] > bmax[i])
+	    return FALSE;
+    }
+    return TRUE;
+}
+
+static SbBool
+local_bounds_from_internal(struct rt_db_internal *intern, SbBox3f &bounds)
+{
+    bounds.makeEmpty();
+    if (!intern || !intern->idb_meth || !intern->idb_meth->ft_bbox)
+	return FALSE;
+
+    point_t bmin;
+    point_t bmax;
+    VSETALL(bmin, INFINITY);
+    VSETALL(bmax, -INFINITY);
+    const struct bn_tol tol = BN_TOL_INIT_TOL;
+    if (intern->idb_meth->ft_bbox(intern, &bmin, &bmax, &tol) != 0 ||
+	!point_bbox_valid(bmin, bmax))
+	return FALSE;
+
+    bounds = database_source_box_from_minmax(
+		 SbVec3f(static_cast<float>(bmin[X]),
+			 static_cast<float>(bmin[Y]),
+			 static_cast<float>(bmin[Z])),
+		 SbVec3f(static_cast<float>(bmax[X]),
+			 static_cast<float>(bmax[Y]),
+			 static_cast<float>(bmax[Z])));
+    return bounds.isEmpty() ? FALSE : TRUE;
+}
+
+static void
+set_source_bounds_from_local_box(SoBRLDatabaseSource *source,
+				 const SbBox3f &bounds)
+{
+    if (!source)
+	return;
+
+    if (bounds.isEmpty()) {
+	source->clearSourceBounds();
+	return;
+    }
+
+    (void)source->setSourceBoundsState(TRUE, bounds.getMin(),
+				       bounds.getMax());
+}
+
 static int
 source_has_auxiliary_children(const SoBRLDatabaseSource *source);
 static int
@@ -2129,6 +2255,16 @@ realize_direct_leaf_wireframe(SoBRLDatabaseSource *source,
     brlobol_performance_counter_add(sharedShape ? BRLOBOL_PERF_WIRE_CACHE_HITS :
 	BRLOBOL_PERF_WIRE_CACHE_MISSES, 1);
 
+    SbBox3f localBounds;
+    SbBool localBoundsValid = FALSE;
+    std::map<std::string, SbBox3f>::const_iterator boundsFound =
+	cache->sharedWireBounds.find(cacheKey);
+    if (boundsFound != cache->sharedWireBounds.end() &&
+	!boundsFound->second.isEmpty()) {
+	localBounds = boundsFound->second;
+	localBoundsValid = TRUE;
+    }
+
     const char *typeLabel = sharedShape ?
 			    sharedShape->sourceType.getValue().getString() : NULL;
     int usedLodProxy = 0;
@@ -2148,6 +2284,9 @@ realize_direct_leaf_wireframe(SoBRLDatabaseSource *source,
 	validInternal.ownsLocal = true;
 
 	typeLabel = primitive_type_label(&validInternal.local);
+	if (validInternal.local.idb_type == ID_BOT)
+	    localBoundsValid = local_bounds_from_internal(&validInternal.local,
+		localBounds);
 	SbBox3f lodProxyBounds;
 	usedLodProxy = bot_lod_proxy_bounds(&validInternal.local,
 	    wireLodThreshold, lodProxyBounds);
@@ -2156,8 +2295,8 @@ realize_direct_leaf_wireframe(SoBRLDatabaseSource *source,
 	    if (sharedShape) {
 		assign_shared_geometry_identity(sharedShape, dp->d_namep,
 						typeLabel, revision, "proxy");
-		(void)source->setSourceBoundsState(TRUE,
-		    lodProxyBounds.getMin(), lodProxyBounds.getMax());
+		localBounds = lodProxyBounds;
+		localBoundsValid = TRUE;
 	    }
 	} else if (validInternal.local.idb_type == ID_MATERIAL) {
 	    SoBRLMaterialObject *materialObject =
@@ -2180,9 +2319,16 @@ realize_direct_leaf_wireframe(SoBRLDatabaseSource *source,
 	    return 1;
 	}
 
-	if (!sharedShape)
-	    sharedShape = vlist_from_plot_internal(&validInternal.local,
-		source);
+	if (!sharedShape) {
+	    if (validInternal.local.idb_type == ID_BOT) {
+		sharedShape = vlist_from_bot_wireframe(
+		    static_cast<const struct rt_bot_internal *>(
+			validInternal.local.idb_ptr));
+	    } else {
+		sharedShape = vlist_from_plot_internal(&validInternal.local,
+		    source);
+	    }
+	}
 	if (!sharedShape) {
 	    SbString msg;
 	    msg.sprintf(
@@ -2201,6 +2347,8 @@ realize_direct_leaf_wireframe(SoBRLDatabaseSource *source,
 	    }
 	}
 	cache->storeWireGeometry(cacheKey, sharedShape);
+	if (localBoundsValid)
+	    cache->storeWireBounds(cacheKey, localBounds);
 	typeLabel = sharedShape->sourceType.getValue().getString();
     }
 
@@ -2223,6 +2371,10 @@ realize_direct_leaf_wireframe(SoBRLDatabaseSource *source,
 	    brlobol_performance_counter_add(
 		BRLOBOL_PERF_REALIZED_INSTANCE_NODES, 1);
     }
+    if (localBoundsValid)
+	set_source_bounds_from_local_box(source, localBounds);
+    else
+	source->clearSourceBounds();
     return 1;
 }
 
@@ -2298,9 +2450,16 @@ realize_direct_leaf_wireframe_compact(
 	    return 0;
 	}
 
-	if (!sharedShape)
-	    sharedShape = vlist_from_plot_internal(&validInternal.local,
-		source);
+	if (!sharedShape) {
+	    if (validInternal.local.idb_type == ID_BOT) {
+		sharedShape = vlist_from_bot_wireframe(
+		    static_cast<const struct rt_bot_internal *>(
+			validInternal.local.idb_ptr));
+	    } else {
+		sharedShape = vlist_from_plot_internal(&validInternal.local,
+		    source);
+	    }
+	}
 	if (!sharedShape) {
 	    SbString msg;
 	    msg.sprintf(
@@ -3194,7 +3353,8 @@ realize_direct_leaf_mesh(SoBRLDatabaseSource *source,
 	    sharedMeshShape->geometryKind.getValue().getString();
 	shape->geometryKind = (geometryKind && geometryKind[0]) ?
 			      geometryKind : "surface";
-	if (typeLabel && BU_STR_EQUAL(typeLabel, "bot"))
+	if (typeLabel && BU_STR_EQUAL(typeLabel, "bot") &&
+	    source->lodBotThreshold.getValue() > 0)
 	    publish_lod_metadata_if_cached(shape, dbip, dp->d_namep);
 	leaf->addChild(shape);
     }
@@ -3342,7 +3502,8 @@ realize_direct_leaf_mesh_compact(
 	    sharedMeshShape->geometryKind.getValue().getString();
 	shape->geometryKind = (geometryKind && geometryKind[0]) ?
 			      geometryKind : "surface";
-	if (typeLabel && BU_STR_EQUAL(typeLabel, "bot"))
+	if (typeLabel && BU_STR_EQUAL(typeLabel, "bot") &&
+	    source->lodBotThreshold.getValue() > 0)
 	    publish_lod_metadata_if_cached(shape, dbip, dp->d_namep);
 	compacted = source->setCompactMeshInstance(shape);
 	shape->unref();
@@ -3491,7 +3652,8 @@ static union tree *
 	    sharedMeshShape->geometryKind.getValue().getString();
 	shape->geometryKind = (geometryKind && geometryKind[0]) ?
 			      geometryKind : "surface";
-	if (typeLabel && BU_STR_EQUAL(typeLabel, "bot"))
+	if (typeLabel && BU_STR_EQUAL(typeLabel, "bot") &&
+	    data->source->lodBotThreshold.getValue() > 0)
 	    publish_lod_metadata_if_cached(shape, tsp->ts_dbip, dp->d_namep);
 	leaf->addChild(shape);
     }
@@ -6316,7 +6478,9 @@ brlobol_database_source_realize_wireframe_with_cache(
 	source->realizationIdentity = source_realization_identity(source);
 	source->stale = FALSE;
 	source->staleReason = SoBRLDatabaseSource::STALE_NONE;
-	update_source_bounds_from_realized_geometry(source);
+	SbBox3f sourceBounds;
+	if (!source->getSourceBounds(sourceBounds))
+	    update_source_bounds_from_realized_geometry(source);
 	source->syncRealizedShapeOwnerState();
 	return TRUE;
     }

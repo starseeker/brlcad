@@ -63,7 +63,7 @@
 extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);
 
 /* ------------------------------------------------------------------ */
-/* Minimal GED setup (swrast DM, 512×512, az/el 35/25)                */
+/* Minimal GED setup (Obol DM, 512x512, az/el 35/25)                  */
 /* ------------------------------------------------------------------ */
 static struct ged *
 open_and_attach(const char *gfile)
@@ -72,10 +72,9 @@ open_and_attach(const char *gfile)
     if (!gedp)
 	return NULL;
 
-    bu_setenv("DM_SWRAST", "1", 1);
     db_add_changed_clbk(gedp->dbip, &ged_changed_callback, (void *)gedp);
 
-    const char *s_av[6] = {"dm", "attach", "swrast", "SW", NULL};
+    const char *s_av[6] = {"dm", "attach", "obol", "OBOL", NULL};
     ged_exec_dm(gedp, 4, s_av);
 
     void *v = ged_view_active_ctx(gedp);
@@ -118,7 +117,7 @@ render_to_file(struct ged *gedp, const char *outfile)
     dm_get_bg(&bg1, &bg2, dmp);
     dm_set_bg(dmp, bg1[0], bg1[1], bg1[2], bg2[0], bg2[1], bg2[2]);
     dm_set_native_repaint_pending(dmp, 0);
-    dm_draw_objs(v);
+    dm_draw_begin(dmp);
     dm_draw_end(dmp);
 
     const char *sg_av[2] = {"screengrab", outfile};

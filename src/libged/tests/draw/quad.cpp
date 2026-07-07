@@ -43,12 +43,15 @@
 
 static int keep_images = 0;
 
+extern "C" int draw_test_obol_screengrab_view_if_enabled(struct ged *gedp,
+	void *view_ctx, int id, const char *filename);
+
 // In order to handle changes to .g geometry contents, we need to defined
 // callbacks for the librt hooks that will update the working data structures.
 // In Qt we have libqtcad handle this, but as we are not using a QgModel we
 // need to do it ourselves.
 extern "C" void
-ged_changed_callback(struct db_i *dbip, struct directory *dp, int mode, void *u_data)
+quad_changed_callback(struct db_i *dbip, struct directory *dp, int mode, void *u_data)
 {
     struct ged *gedp = (struct ged *)u_data;
     const char *name = (dp) ? dp->d_namep : NULL;
@@ -160,14 +163,18 @@ img_cmp(int vnum, int id, struct ged *gedp, const char *cdir, bool clear, int so
     s_av[1] = "-D";
     s_av[2] = bu_vls_cstr(dm_get_pathname(dmp));
     s_av[3] = bu_vls_cstr(&tname);
-    if (ged_exec_screengrab(gedp, 4, s_av) & BRLCAD_ERROR) {
+    int obol_capture = draw_test_obol_screengrab_view_if_enabled(gedp, v,
+	    id, bu_vls_cstr(&tname));
+    if (obol_capture < 0)
+	bu_file_delete(bu_vls_cstr(&tname));
+    else if (!obol_capture &&
+	(ged_exec_screengrab(gedp, 4, s_av) & BRLCAD_ERROR)) {
 	bu_log("Failed to grab screen for DM %s\n", bu_vls_cstr(dm_get_pathname(dmp)));
 	if (clear)
 	    scene_clear(gedp, vnum, cnum);
 	bu_vls_free(&tname);
 	return BRLCAD_ERROR;
     }
-
     timg = icv_read(bu_vls_cstr(&tname), BU_MIME_IMAGE_PNG, 0, 0);
     if (!timg) {
 	if (soft_fail) {
@@ -470,7 +477,7 @@ main(int ac, char *av[]) {
     rt_view_set_context_remove(view_set_ctx, NULL);
 
     // Set callback so database changes notify public GED services.
-    db_add_changed_clbk(gedp->dbip, &ged_changed_callback, (void *)gedp);
+    db_add_changed_clbk(gedp->dbip, &quad_changed_callback, (void *)gedp);
 
     // Set up the views.  Unlike the other drawing tests, we are explicitly
     // out to test the behavior of multiple views and dms, so we need to

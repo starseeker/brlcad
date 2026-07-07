@@ -51,6 +51,7 @@
 #include <rt/view.h>
 #define DM_WITH_RT
 #include <dm.h>
+#include <dm/obol.h>
 #include <ged.h>
 #include <ged/draw.h>
 #include <ged/draw_obol.h>
@@ -96,6 +97,13 @@ static int
 draw_test_obol_debug_enabled(void)
 {
     const char *value = std::getenv("GED_TEST_DRAW_OBOL_DEBUG");
+    return value ? bu_str_true(value) : 0;
+}
+
+static int
+draw_test_compare_debug_enabled(void)
+{
+    const char *value = std::getenv("GED_TEST_DRAW_COMPARE_DEBUG");
     return value ? bu_str_true(value) : 0;
 }
 
@@ -417,7 +425,8 @@ draw_test_obol_debug_dump(struct ged *gedp, int id,
 }
 
 static int
-draw_test_obol_screengrab_impl(struct ged *gedp, int id, const char *filename)
+draw_test_obol_screengrab_impl(struct ged *gedp, void *view_ctx, int id,
+	const char *filename)
 {
     SoDB::ContextManager *manager = draw_test_obol_context_manager();
     if (!manager) {
@@ -426,15 +435,23 @@ draw_test_obol_screengrab_impl(struct ged *gedp, int id, const char *filename)
     }
     brlobol_init(manager);
 
-    (void)ged_draw_obol_scene_controller_ensure(gedp, 1);
-    BRLObolViewController *controller = ged_draw_obol_controller(gedp);
-    void *v = draw_test_active_view_ctx(gedp);
-    if (!controller || !v)
+    void *v = view_ctx ? view_ctx : draw_test_active_view_ctx(gedp);
+    if (!v)
+	return -1;
+
+    BRLObolViewController *controller = NULL;
+    struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(v);
+    if (dmp)
+	controller = (BRLObolViewController *)dm_obol_controller(dmp);
+    if (!controller) {
+	(void)ged_draw_obol_scene_controller_ensure(gedp, 1);
+	controller = ged_draw_obol_controller(gedp);
+    }
+    if (!controller)
 	return -1;
 
     int width = rt_view_context_width_get(v);
     int height = rt_view_context_height_get(v);
-    struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(v);
     if ((width <= 0 || height <= 0) && dmp) {
 	width = dm_get_width(dmp);
 	height = dm_get_height(dmp);
@@ -471,7 +488,7 @@ draw_test_obol_screengrab_impl(struct ged *gedp, int id, const char *filename)
 extern "C" int
 draw_test_obol_screengrab(struct ged *gedp, int id, const char *filename)
 {
-    return draw_test_obol_screengrab_impl(gedp, id, filename);
+    return draw_test_obol_screengrab_impl(gedp, NULL, id, filename);
 }
 
 static int
@@ -481,7 +498,17 @@ draw_test_obol_screengrab_if_enabled(struct ged *gedp, int id,
     if (!draw_test_obol_capture_enabled())
 	return 0;
 
-    return draw_test_obol_screengrab_impl(gedp, id, filename);
+    return draw_test_obol_screengrab_impl(gedp, NULL, id, filename);
+}
+
+extern "C" int
+draw_test_obol_screengrab_view_if_enabled(struct ged *gedp, void *view_ctx,
+	int id, const char *filename)
+{
+    if (!draw_test_obol_capture_enabled())
+	return 0;
+
+    return draw_test_obol_screengrab_impl(gedp, view_ctx, id, filename);
 }
 
 extern "C" long
@@ -549,7 +576,7 @@ dm_refresh(struct ged *gedp)
     dm_get_bg(&dm_bg1, &dm_bg2, dmp);
     dm_set_bg(dmp, dm_bg1[0], dm_bg1[1], dm_bg1[2], dm_bg2[0], dm_bg2[1], dm_bg2[2]);
     dm_set_native_repaint_pending(dmp, 0);
-    dm_draw_objs(v);
+    dm_draw_begin(dmp);
     dm_draw_end(dmp);
 }
 
@@ -607,6 +634,12 @@ img_cmp(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool clear
 	    return BRLCAD_ERROR;
 	}
 	bu_exit(EXIT_FAILURE, "failed to read %s\n", bu_vls_cstr(&cname));
+    }
+    if (draw_test_compare_debug_enabled()) {
+	bu_log("draw-compare-debug[%d]: target=%s ctrl=%s target-size=%zux%zu ctrl-size=%zux%zu target-cspace=%d ctrl-cspace=%d\n",
+		id, bu_vls_cstr(&tname), bu_vls_cstr(&cname),
+		timg->width, timg->height, ctrl->width, ctrl->height,
+		timg->color_space, ctrl->color_space);
     }
     bu_vls_free(&cname);
     int matching_cnt = 0;

@@ -78,6 +78,9 @@ if(TARGET ged_test_faceplate)
   endforeach()
 endif(TARGET ged_test_faceplate)
 brlcad_add_test(NAME ged_test_drawing_faceplate COMMAND ged_test_faceplate -c "${CMAKE_CURRENT_SOURCE_DIR}")
+if(TARGET ged_test_faceplate)
+  set_property(TEST ged_test_drawing_faceplate APPEND PROPERTY ENVIRONMENT GED_TEST_DRAW_OBOL_CAPTURE=1)
+endif(TARGET ged_test_faceplate)
 
 set(
   lod_test_ctrls
@@ -158,6 +161,10 @@ if(TARGET ged_test_select_draw)
   endforeach()
 endif(TARGET ged_test_select_draw)
 brlcad_add_test(NAME ged_test_drawing_select COMMAND ged_test_select_draw -c "${CMAKE_CURRENT_SOURCE_DIR}")
+if(TARGET ged_test_select_draw)
+  set_property(TEST ged_test_drawing_select APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+  set_property(TEST ged_test_drawing_select APPEND PROPERTY ENVIRONMENT GED_TEST_DRAW_OBOL_CAPTURE=1)
+endif(TARGET ged_test_select_draw)
 distclean(${CMAKE_CURRENT_BINARY_DIR}/moss_select_tmp.g)
 
 set(
@@ -195,7 +202,7 @@ set(
   quad_03_007_ctrl.png
   quad_03_008_ctrl.png
 )
-brlcad_addexec(ged_test_quad quad.cpp "libged;libdm;libbrlobol" TEST)
+brlcad_addexec(ged_test_quad "quad.cpp;util.cpp" "libged;libdm;libbrlobol" TEST)
 if(TARGET ged_test_quad)
   foreach(tdp ${test_deps})
     if (TARGET ${tdp})
@@ -204,6 +211,9 @@ if(TARGET ged_test_quad)
   endforeach()
 endif(TARGET ged_test_quad)
 brlcad_add_test(NAME ged_test_drawing_quad COMMAND ged_test_quad -c "${CMAKE_CURRENT_SOURCE_DIR}")
+if(TARGET ged_test_quad)
+  set_property(TEST ged_test_drawing_quad APPEND PROPERTY ENVIRONMENT GED_TEST_DRAW_OBOL_CAPTURE=1)
+endif(TARGET ged_test_quad)
 distclean(${CMAKE_CURRENT_BINARY_DIR}/moss_quad_tmp.g)
 
 # The idea here is to test view stability across resize events

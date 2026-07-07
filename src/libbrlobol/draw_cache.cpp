@@ -925,6 +925,26 @@ brlobol_draw_metadata_color_channel(float value)
 }
 
 static void
+brlobol_draw_metadata_record_set_color_from_mater(
+    BRLObolDrawMetadataRecord *record,
+    const mater_info *mater)
+{
+    if (!record || !mater || !mater->ma_color_valid)
+	return;
+
+    record->hasColor = 1;
+    record->color[0] =
+	(unsigned char)brlobol_draw_metadata_color_channel(
+	    mater->ma_color[0]);
+    record->color[1] =
+	(unsigned char)brlobol_draw_metadata_color_channel(
+	    mater->ma_color[1]);
+    record->color[2] =
+	(unsigned char)brlobol_draw_metadata_color_channel(
+	    mater->ma_color[2]);
+}
+
+static void
 brlobol_draw_metadata_record_apply_tree_state(
     BRLObolDrawMetadataRecord *record,
     const db_tree_state *state)
@@ -944,17 +964,15 @@ brlobol_draw_metadata_record_apply_tree_state(
 	record->materialId = state->ts_gmater;
     }
 
-    if (state->ts_mater.ma_color_valid) {
-	record->hasColor = 1;
-	record->color[0] =
-	    (unsigned char)brlobol_draw_metadata_color_channel(
-		state->ts_mater.ma_color[0]);
-	record->color[1] =
-	    (unsigned char)brlobol_draw_metadata_color_channel(
-		state->ts_mater.ma_color[1]);
-	record->color[2] =
-	    (unsigned char)brlobol_draw_metadata_color_channel(
-		state->ts_mater.ma_color[2]);
+    brlobol_draw_metadata_record_set_color_from_mater(record,
+						      &state->ts_mater);
+    if (!record->hasColor && record->hasRegionId) {
+	struct region rp;
+	memset(&rp, 0, sizeof(rp));
+	rp.reg_regionid = record->regionId;
+	db_mater_color_region(state->ts_dbip, &rp);
+	brlobol_draw_metadata_record_set_color_from_mater(record,
+							  &rp.reg_mater);
     }
     if (state->ts_mater.ma_shader && state->ts_mater.ma_shader[0]) {
 	record->hasShader = 1;
@@ -966,6 +984,20 @@ brlobol_draw_metadata_record_apply_tree_state(
 	record->hasInherit = 1;
 	record->inherit = 1;
     }
+}
+
+extern "C" void
+brlobol_draw_metadata_record_from_tree_state(
+    BRLObolDrawMetadataRecord *record,
+    const db_tree_state *state,
+    const directory *dp)
+{
+    if (!record)
+	return;
+
+    brlobol_draw_metadata_record_init(record);
+    brlobol_draw_metadata_record_apply_directory(record, dp);
+    brlobol_draw_metadata_record_apply_tree_state(record, state);
 }
 
 static void
@@ -1387,10 +1419,8 @@ brlobol_draw_path_metadata_cache_refresh(db_i *dbip,
 	return BRLCAD_ERROR;
     }
 
-    brlobol_draw_metadata_record_init(&record);
-    brlobol_draw_metadata_record_apply_directory(&record,
+    brlobol_draw_metadata_record_from_tree_state(&record, &state,
 	    DB_FULL_PATH_CUR_DIR(&fullPath));
-    brlobol_draw_metadata_record_apply_tree_state(&record, &state);
 
     db_free_full_path(&fullPath);
     db_free_db_tree_state(&state);

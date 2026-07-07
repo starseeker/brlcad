@@ -31,6 +31,11 @@ static const char *path_region_name = "path_region.r";
 static const char *path_top_name = "path_top.c";
 static const char *path_region_full_name = "path_top.c/path_region.r";
 static const char *path_full_name = "path_top.c/path_region.r/path_leaf.s";
+static const char *path_table_leaf_name = "path_table_leaf.s";
+static const char *path_table_region_name = "path_table_region.r";
+static const char *path_table_top_name = "path_table_top.c";
+static const char *path_table_full_name =
+    "path_table_top.c/path_table_region.r/path_table_leaf.s";
 
 static int
 fastf_equal(fastf_t a, fastf_t b)
@@ -63,10 +68,13 @@ static int
 make_path_metadata_tree(rt_wdb *wdbp)
 {
     point_t path_center;
+    point_t table_center;
     unsigned char region_rgb[3] = {10, 20, 30};
     unsigned char top_rgb[3] = {120, 130, 140};
     struct wmember region_members;
     struct wmember top_members;
+    struct wmember table_region_members;
+    struct wmember table_top_members;
 
     if (!wdbp)
 	return 1;
@@ -89,6 +97,26 @@ make_path_metadata_tree(rt_wdb *wdbp)
     if (mk_comb(wdbp, path_top_name, &top_members.l, 0,
 		"plastic", NULL, top_rgb, 0, 0, 0, 0,
 		1, 0, 0) < 0)
+	return 1;
+
+    VSET(table_center, 40.0, 0.0, 0.0);
+    if (mk_sph(wdbp, path_table_leaf_name, table_center, 2.0) < 0)
+	return 1;
+
+    BU_LIST_INIT(&table_region_members.l);
+    if (!mk_addmember(path_table_leaf_name, &table_region_members.l, NULL,
+	    WMOP_UNION))
+	return 1;
+    if (mk_comb(wdbp, path_table_region_name, &table_region_members.l, 1,
+		NULL, NULL, NULL, 177, 0, 0, 0, 0, 0, 0) < 0)
+	return 1;
+
+    BU_LIST_INIT(&table_top_members.l);
+    if (!mk_addmember(path_table_region_name, &table_top_members.l, NULL,
+	    WMOP_UNION))
+	return 1;
+    if (mk_comb(wdbp, path_table_top_name, &table_top_members.l, 0,
+		NULL, NULL, NULL, 0, 0, 0, 0, 0, 0, 0) < 0)
 	return 1;
 
     return 0;
@@ -180,6 +208,41 @@ check_path_metadata(const BRLObolDrawMetadataRecord *record)
     return 0;
 }
 
+static int
+check_path_color_table_metadata(
+    db_i *dbip,
+    const BRLObolDrawMetadataRecord *record)
+{
+    struct region rp;
+    unsigned char expected[3] = {0, 0, 0};
+
+    memset(&rp, 0, sizeof(rp));
+    rp.reg_regionid = 177;
+    db_mater_color_region(dbip, &rp);
+    if (!rp.reg_mater.ma_color_valid) {
+	printf("FAIL: path draw metadata color table setup\n");
+	return 1;
+    }
+    expected[0] = static_cast<unsigned char>(
+		     std::lround(rp.reg_mater.ma_color[0] * 255.0));
+    expected[1] = static_cast<unsigned char>(
+		     std::lround(rp.reg_mater.ma_color[1] * 255.0));
+    expected[2] = static_cast<unsigned char>(
+		     std::lround(rp.reg_mater.ma_color[2] * 255.0));
+
+    if (!record || !record->directoryFound || !record->isSolid ||
+	record->isComb || !record->isRegion ||
+	!record->hasRegionId || record->regionId != 177 ||
+	!record->hasColor || record->color[0] != expected[0] ||
+	record->color[1] != expected[1] ||
+	record->color[2] != expected[2]) {
+	printf("FAIL: path draw metadata color table fallback\n");
+	return 1;
+    }
+
+    return 0;
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -231,6 +294,7 @@ main(int argc, char *argv[])
 	ret = 1;
 	goto cleanup;
     }
+    db_mater_add(dbip, 177, 177, 41, 42, 43, MATER_NO_ADDR);
 
     {
 	rt_wdb *wdbp = wdb_dbopen(dbip, RT_WDB_TYPE_DB_DISK);
@@ -344,6 +408,16 @@ main(int argc, char *argv[])
 	brlobol_draw_path_metadata_cache_get(dbip, path_full_name,
 		&metadata) != BRLCAD_OK ||
 	check_path_metadata(&metadata)) {
+	ret = 1;
+	goto cleanup;
+    }
+
+    if (brlobol_draw_path_metadata_cache_refresh(dbip, path_table_full_name,
+	    &status) != BRLCAD_OK ||
+	!status.directoryFound || !status.hasCachedPayload ||
+	brlobol_draw_path_metadata_cache_get(dbip, path_table_full_name,
+		&metadata) != BRLCAD_OK ||
+	check_path_color_table_metadata(dbip, &metadata)) {
 	ret = 1;
 	goto cleanup;
     }

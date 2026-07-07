@@ -967,47 +967,48 @@ db_full_path_color(
     bu_color_from_rgb_chars(c, rgb_default);
 
     int explicit_color_valid = 0;
-    int color_inherit = 0;
+    int color_inherit = DB_INH_LOWER;
     int in_region = 0;
     int region_id = -1;
 
     for (size_t i = 0; i < pathp->fp_len; i++) {
-	struct bu_attribute_value_set c_avs;
-	db5_get_attributes(dbip, &c_avs, pathp->fp_names[i]);
-
 	const int is_comb = (pathp->fp_names[i]->d_flags & RT_DIR_COMB) ? 1 : 0;
-	if (!is_comb) {
-	    bu_avs_free(&c_avs);
+	if (!is_comb)
+	    continue;
+
+	struct rt_db_internal intern;
+	RT_DB_INTERNAL_INIT(&intern);
+	if (rt_db_get_internal(&intern, pathp->fp_names[i], dbip, NULL) < 0)
+	    continue;
+
+	if (intern.idb_type != ID_COMBINATION || !intern.idb_ptr) {
+	    rt_db_free_internal(&intern);
 	    continue;
 	}
 
-	const char *inherit_val = bu_avs_get(&c_avs, "inherit");
-	int inherit = (inherit_val && BU_STR_EQUAL(inherit_val, "1")) ? 1 : 0;
+	const struct rt_comb_internal *comb =
+	    (const struct rt_comb_internal *)intern.idb_ptr;
+	RT_CK_COMB(comb);
 
-	if (!in_region && color_inherit == 0) {
-	    const char *color_val = bu_avs_get(&c_avs, "color");
-	    if (!color_val)
-		color_val = bu_avs_get(&c_avs, "rgb");
-	    if (color_val && bu_opt_color(NULL, 1, &color_val, (void *)c) > 0) {
+	if (!in_region && color_inherit == DB_INH_LOWER) {
+	    if (comb->rgb_valid == 1) {
+		c->buc_rgb[RED] = ((fastf_t)comb->rgb[RED]) / 255.0;
+		c->buc_rgb[GRN] = ((fastf_t)comb->rgb[GRN]) / 255.0;
+		c->buc_rgb[BLU] = ((fastf_t)comb->rgb[BLU]) / 255.0;
 		explicit_color_valid = 1;
-		color_inherit = inherit;
+		color_inherit = comb->inherit;
 	    }
 	}
 
 	if (!in_region) {
-	    const int is_region =
-		(pathp->fp_names[i]->d_flags & RT_DIR_REGION) ||
-		bu_avs_get(&c_avs, "region") != NULL;
+	    const int is_region = comb->region_flag ? 1 : 0;
 	    if (is_region) {
-		const char *region_id_val = bu_avs_get(&c_avs, "region_id");
-		region_id = 0;
-		if (region_id_val)
-		    bu_opt_int(NULL, 1, &region_id_val, (void *)&region_id);
+		region_id = comb->region_id;
 		in_region = 1;
 	    }
 	}
 
-	bu_avs_free(&c_avs);
+	rt_db_free_internal(&intern);
     }
 
     if (!explicit_color_valid && region_id >= 0) {

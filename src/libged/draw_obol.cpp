@@ -161,7 +161,9 @@ struct ged_obol_source_state {
 	color(1.0f, 1.0f, 1.0f),
 	materialColorValid(false),
 	materialColor(1.0f, 1.0f, 1.0f),
-	materialRevision(0)
+	materialRevision(0),
+	drawMatrixValid(false),
+	drawMatrix(SbMatrix::identity())
     {
     }
 
@@ -186,6 +188,8 @@ struct ged_obol_source_state {
     bool materialColorValid;
     SbColor materialColor;
     uint32_t materialRevision;
+    bool drawMatrixValid;
+    SbMatrix drawMatrix;
 };
 
 static void
@@ -212,6 +216,9 @@ struct ged_obol_preserved_source {
     std::string path;
     int drawMode;
 };
+
+static SbMatrix
+ged_obol_sbmatrix_from_mat(const mat_t mat);
 
 struct ged_obol_attached_controller {
     ged_obol_attached_controller(void) :
@@ -1028,6 +1035,14 @@ ged_obol_source_state_from_database_source(ged_obol_source_state &state,
 	state.materialRevision =
 	    ged_obol_fold_revision(material_summary.material_revision);
 
+    struct ged_draw_obol_draw_state_summary draw_state;
+    memset(&draw_state, 0, sizeof(draw_state));
+    if (ged_draw_obol_database_source_draw_state_for_path(gedp, path,
+	    &draw_state) && draw_state.valid && draw_state.draw_mat_valid) {
+	state.drawMatrixValid = true;
+	state.drawMatrix = ged_obol_sbmatrix_from_mat(draw_state.draw_mat);
+    }
+
     if ((!state.materialColorValid || state.materialRevision == 0) &&
 	    !state.colorOverride) {
 	SbColor db_material_color;
@@ -1252,10 +1267,22 @@ ged_obol_sync_group_state(SoBRLSceneController *scene,
 				    state.materialRevision) > 0)
 	changed = 1;
 
-    if (source_instance_key && source_instance_key[0] &&
-	scene->moveDatabaseSourceInstanceToGroup(source_instance_key,
+    if (source_instance_key && source_instance_key[0]) {
+	int source_already_grouped = 0;
+	BRLObolDatabaseSourceSummary summary;
+	if (scene->getDatabaseSourceSummaryForInstance(source_instance_key,
+		summary) && summary.valid) {
+	    const std::string owner_group_path =
+		ged_obol_database_source_owner_group_path_from_summary(summary);
+	    source_already_grouped =
+		ged_obol_path_equal(owner_group_path.c_str(),
+				    state.groupPath.c_str());
+	}
+	if (!source_already_grouped &&
+	    scene->moveDatabaseSourceInstanceToGroup(source_instance_key,
 		state.groupPath.c_str()) > 0)
-	changed = 1;
+	    changed = 1;
+    }
     return changed;
 }
 
@@ -1797,11 +1824,11 @@ ged_obol_replace_path(struct ged *gedp,
 		      const char *path,
 		      int ged_draw_mode,
 		      uint32_t source_revision,
-			      SoBRLSceneController *scene,
-			      int use_retained_state = 1,
-			      int preserve_existing_revision = 0,
-			      const struct ged_draw_appearance_settings *appearance_settings = NULL,
-			      const ged_obol_publish_placement_state *placement_state = NULL)
+		      SoBRLSceneController *scene,
+		      int use_retained_state = 1,
+		      int preserve_existing_revision = 0,
+		      const struct ged_draw_appearance_settings *appearance_settings = NULL,
+		      const ged_obol_publish_placement_state *placement_state = NULL)
 {
     if (!dbip || !path || !path[0] || !scene)
 	return 0;
@@ -1904,6 +1931,9 @@ ged_obol_replace_path(struct ged *gedp,
 		existing_summary.materialColorValid ? true : false;
 	    source_state.materialColor = existing_summary.materialColor;
 	    source_state.materialRevision = existing_summary.materialRevision;
+	    source_state.drawMatrixValid =
+		existing_summary.drawMatrixValid ? true : false;
+	    source_state.drawMatrix = existing_summary.drawMatrix;
 	}
 	if (retained_state_valid) {
 	    source_state.sourceRevision = retained_source_revision;
@@ -2015,6 +2045,10 @@ ged_obol_replace_path(struct ged *gedp,
 	publish_state.drawSizeValid =
 	    placement_state->drawSizeValid ? TRUE : FALSE;
 	publish_state.drawSize = placement_state->drawSize;
+    } else if (source_state.drawMatrixValid) {
+	publish_state.placementValid = TRUE;
+	publish_state.drawMatrixValid = TRUE;
+	publish_state.drawMatrix = source_state.drawMatrix;
     }
 
     int changed = scene->publishDatabaseSourceInstance(publish_state);
@@ -2215,6 +2249,30 @@ ged_obol_matching_database_source_paths(
 		target.c_str(), component_first_idx, allow_path_prefix,
 		ged_draw_mode);
     return paths;
+}
+
+static std::vector<std::string>
+ged_obol_primary_matching_database_source_paths(
+    struct ged *gedp,
+    void *view_ctx,
+    const std::vector<std::string> &targets,
+    int ged_draw_mode)
+{
+    std::vector<std::string> source_paths;
+    if (!gedp || targets.empty())
+	return source_paths;
+
+    SoBRLSceneController *primary_scene =
+	ged_draw_obol_scene_controller(gedp);
+    if (!primary_scene)
+	return source_paths;
+
+    for (const std::string &target : targets) {
+	ged_obol_collect_database_sources_matching(source_paths,
+	    primary_scene, view_ctx, target.c_str(), 0, 1, ged_draw_mode);
+    }
+    ged_obol_remove_shadowed_source_paths(source_paths);
+    return source_paths;
 }
 
 static std::vector<std::string>
@@ -2759,21 +2817,27 @@ ged_draw_obol_view_lod_policy_changed(struct ged *gedp, void *view_ctx)
 {
     ged_obol_attached_controller *entry =
 	ged_obol_attached_controller_for_view(gedp, view_ctx);
-    if (!entry || !entry->view_controller)
+    BRLObolViewController *view_controller = entry ?
+					     entry->view_controller :
+					     ged_draw_obol_controller(gedp);
+    if (!view_controller)
 	return 0;
 
-    BRLObolViewController *view_controller = entry->view_controller;
     view_controller->clearViewLodState();
     ged_obol_advance_lod_policy_revision(view_controller);
 
-    SoBRLSceneController *scene = entry->scene_controller;
+    SoBRLSceneController *scene = entry ? entry->scene_controller : NULL;
     if (!scene)
 	scene = view_controller->getSceneController();
+    if (!scene)
+	scene = ged_draw_obol_scene_controller(gedp);
 
     int changed = 1;
     if (scene) {
 	const int independent_view =
 	    ged_obol_view_scope_is_independent(view_ctx);
+	const ged_obol_view_lod_policy_state policy_state =
+	    ged_obol_view_lod_policy_state_for_source(gedp, view_ctx);
 	const int source_count = scene->getDatabaseSourceCount();
 	for (int i = 0; i < source_count; i++) {
 	    BRLObolDatabaseSourceSummary summary;
@@ -2785,6 +2849,11 @@ ged_draw_obol_view_lod_policy_changed(struct ged *gedp, void *view_ctx)
 		continue;
 	    if (ged_obol_apply_view_lod_policy(gedp, view_ctx, scene,
 					       summary.instanceKey.getString()) > 0)
+		changed = 1;
+	    if (policy_state.valid && !policy_state.meshEnabled &&
+		scene->markDatabaseSourceInstanceStale(
+		    summary.instanceKey.getString(),
+		    SoBRLDatabaseSource::STALE_VIEW) > 0)
 		changed = 1;
 	}
     }
@@ -8904,6 +8973,8 @@ ged_obol_summary_material_color(
 {
     if (summary.materialColorValid)
 	return summary.materialColor;
+    if (summary.databaseMaterialColorValid)
+	return summary.databaseMaterialColor;
     if (summary.colorOverride)
 	return summary.color;
     return SbColor(1.0f, 1.0f, 1.0f);
@@ -12101,9 +12172,12 @@ ged_draw_obol_database_source_display_summary_for_path(
     out->line_width = summary.lineWidth;
     out->transparency = ged_obol_reported_transparency(summary.transparency);
     out->draw_mode = exact_draw_mode;
-    out->material_valid = 1;
-    ged_obol_rgb_from_color(ged_obol_summary_material_color(summary),
-			    out->material_color);
+    out->material_valid = (summary.materialColorValid ||
+			   summary.databaseMaterialColorValid ||
+			   summary.colorOverride) ? 1 : 0;
+    if (out->material_valid)
+	ged_obol_rgb_from_color(ged_obol_summary_material_color(summary),
+				out->material_color);
     return 1;
 }
 
@@ -15470,16 +15544,40 @@ static int
 ged_obol_refresh_scene_material_colors(struct ged *gedp,
 				       SoBRLSceneController *scene)
 {
-    if (!gedp || !scene)
+    if (!gedp || !gedp->dbip || !scene)
 	return 0;
 
-    const uint32_t material_revision =
-	ged_obol_fold_revision(ged_draw_material_revision(gedp));
-    const int changed =
-	scene->refreshDatabaseSourceMaterialColorsFromDatabase(
-	    material_revision,
-	    gedp->dbip);
-    return changed > 0 ? 1 : 0;
+    const int source_count = scene->getDatabaseSourceCount();
+    int changed = 0;
+    for (int i = 0; i < source_count; i++) {
+	SoBRLDatabaseSource *source = scene->getDatabaseSource(i);
+	if (!source)
+	    continue;
+
+	BRLObolDatabaseSourceSummary summary;
+	if (!source->getSummary(summary) || !summary.valid)
+	    continue;
+
+	const char *path = summary.path.getString();
+	const char *metadata_path = ged_obol_skip_leading_slash(path);
+	if (!metadata_path || !metadata_path[0])
+	    continue;
+
+	struct BRLObolDrawMetadataRecord metadata;
+	brlobol_draw_metadata_record_init(&metadata);
+	if (brlobol_draw_path_metadata_cache_refresh(gedp->dbip,
+		metadata_path, NULL) != BRLCAD_OK)
+	    continue;
+	if (brlobol_draw_path_metadata_cache_get(gedp->dbip,
+		metadata_path, &metadata) != BRLCAD_OK ||
+		!metadata.directoryFound)
+	    continue;
+
+	if (ged_obol_apply_draw_metadata_to_source(source, &metadata))
+	    changed = 1;
+    }
+
+    return changed ? 1 : 0;
 }
 
 static int
@@ -15884,7 +15982,11 @@ ged_draw_obol_scene_sync_transaction(
 			  view_ctx, source_revision, scene, 1);
 	    } else {
 		std::vector<std::string> source_paths =
-		    ged_obol_drawn_source_paths(gedp, view_ctx, -1, &paths);
+		    ged_obol_primary_matching_database_source_paths(gedp,
+			view_ctx, paths, ged_draw_mode);
+		if (source_paths.empty())
+		    source_paths =
+			ged_obol_drawn_source_paths(gedp, view_ctx, -1, &paths);
 		if (!source_paths.empty()) {
 		    std::vector<std::string> shadowed_targets =
 			ged_obol_shadowed_target_source_paths(paths,
@@ -15926,15 +16028,13 @@ ged_draw_obol_scene_sync_transaction(
 			continue;
 
 		    const char *source_path = summary.path.getString();
+		    const std::string owner_group_path =
+			ged_obol_database_source_owner_group_path_from_summary(
+			    summary);
 		    for (const std::string &target : paths) {
-			if (ged_obol_path_has_prefix(source_path,
-						     target.c_str()) ||
-			    ged_obol_path_has_component_name(source_path,
-							     target.c_str(), 0) ||
-			    (!ged_obol_path_equal(source_path,
-						  target.c_str()) &&
-			     ged_obol_path_has_prefix(target.c_str(),
-						      source_path))) {
+			if (ged_obol_path_equal(source_path, target.c_str()) ||
+			    ged_obol_path_equal(owner_group_path.c_str(),
+						target.c_str())) {
 			    ged_obol_append_database_source_instance_key(
 				matching_instance_keys, summary);
 			    break;
