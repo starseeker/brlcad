@@ -31,7 +31,6 @@
 #include "dm.h"
 #include "ged/draw.h"
 #include "rt/view.h"
-#include "../bsg_ged_draw_private.h"
 #include "../ged_private.h"
 
 /* Return 1 (and set *v) if the entire string parses as a number. */

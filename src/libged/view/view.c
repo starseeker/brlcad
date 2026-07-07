@@ -543,8 +543,8 @@ _view_cmd_vZ(void *bs, int argc, const char **argv)
     struct vZ_opt calc_far = { 0, BU_VLS_INIT_ZERO };
     struct bu_opt_desc d[4];
     BU_OPT(d[0], "h", "help", "",       NULL,  &print_help, "Print help");
-    BU_OPT(d[1], "N", "near", "[obj]",  &vZ_opt_read,  &calc_near,  "Find vZ value of closest view object vertex");
-    BU_OPT(d[2], "F", "far",  "[obj]",  &vZ_opt_read,  &calc_far,   "Find vZ value of furthest view object vertex");
+    BU_OPT(d[1], "N", "near", "[feature]",  &vZ_opt_read,  &calc_near,  "Find vZ value of closest view feature vertex");
+    BU_OPT(d[2], "F", "far",  "[feature]",  &vZ_opt_read,  &calc_far,   "Find vZ value of furthest view feature vertex");
     BU_OPT_NULL(d[3]);
 
     // We know we're the vZ command - start processing args
@@ -600,15 +600,13 @@ _view_cmd_vZ(void *bs, int argc, const char **argv)
 	return BRLCAD_OK;
     }
 
-    /* Phase T-final (drawing_stack_modernization): the legacy get/set
-     * scratch path that read or wrote `gv_tcl->gv_data_vZ` was removed
-     * from libged.  `gv_data_vZ` is a Tcl-mode editing scratch scalar
-     * that has no meaning to BSG rendering or to non-Tcl libged callers,
-     * and the deprecation message above already tells users to set vZ
+    /* The legacy get/set scratch path that read or wrote `gv_tcl->gv_data_vZ`
+     * was removed from libged.  `gv_data_vZ` is a Tcl-mode editing scratch
+     * scalar with no meaning to non-Tcl libged callers; callers should set vZ
      * values on data objects directly.  Tcl callers that still need the
-     * scratch can use the `data_vZ` command exposed by libtclcad
-     * (commands.c), which keeps the gv_tcl-resident scalar consistent
-     * with the rest of the Tcl editing-mode plumbing. */
+     * scratch can use the `data_vZ` command exposed by libtclcad (commands.c),
+     * which keeps the gv_tcl-resident scalar consistent with Tcl editing-mode
+     * plumbing. */
     bu_vls_printf(gedp->ged_result_str, "[WARNING] this command is deprecated - vZ values should be set on data objects.\n\nUsage:\n%s", usage_string);
     return GED_HELP;
 }
@@ -711,7 +709,7 @@ const struct bu_cmdtab _view_cmds[] = {
     { "knob",       _view_cmd_knob},
     { "list",       _view_cmd_list},
     { "lod",        _view_cmd_lod},
-    { "object",     _view_cmd_object},
+    { "feature",    _view_cmd_feature},
     { "polygon",    _view_cmd_polygon},
     { "quat",       _view_cmd_quat},
     { "selections", _view_cmd_selections},

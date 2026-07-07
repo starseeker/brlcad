@@ -34,15 +34,14 @@
 #include "../tclcad_private.h"
 #include "../view/view.h"
 
-/* Phase T1 (drawing_stack_modernization): keep draw-view label objects in sync
- * with the TclCAD per-view data-labels state so the modern renderer draws
+/* Keep draw-view label features in sync with the TclCAD per-view data-labels
+ * state so the current renderer draws
  * labels without the legacy dm_draw_labels path.
  *
- * Phase T3 (drawing_stack_modernization): the draw, color and labels getters in
- * to_data_labels_func now recover values through typed GED data-label facades
- * instead of TclCAD per-view data directly.  The size getter still uses
- * TclCAD per-view data because font size is not stored in the retained
- * draw-view child objects yet.
+ * The draw, color and labels getters in to_data_labels_func recover values
+ * through typed GED data-label facades instead of TclCAD per-view data
+ * directly.  The size getter still uses TclCAD per-view data because font size
+ * is not stored in the retained draw-view child features yet.
  *
  * TclCAD per-view data continues to be written by setters here because label
  * parsing still builds a TclCAD label-state input record.  This is now

@@ -70,7 +70,7 @@ Remaining direct legacy target rows are transitional:
 Current Migration Boundaries
 ----------------------------
 
-Obol-owned GED draw and view-object behavior should use neutral GED/RT facades
+Obol-owned GED draw and view-feature behavior should use neutral GED/RT facades
 and libbrlobol scene-controller or feature-store APIs.  New code should not
 reach directly into BSG scene/view state except inside explicit retained
 adapter files.
@@ -114,8 +114,12 @@ Current migrated boundaries include:
   Obol/libbrlobol providers or fail explicitly.
 * Preview script tree redraws through GED draw transactions instead of direct
   `_ged_drawtrees` calls.
-* Object-level GED draw facades for view-object lifecycle, visibility, style,
+* Managed-feature GED draw facades for view-feature lifecycle, visibility, style,
   and realization.
+  The public command surface is `view feature`; older object-style command
+  spellings are retired rather than retained as compatibility aliases.
+  Managed-feature deletion removes Obol feature, overlay, or database-source
+  records and no longer falls through to retained shape-ref release.
 * Annotation-level GED draw facades for user-authored line, label, and axes
   creation and editing, keeping feature-store lifecycle out of command
   parsers.
@@ -127,8 +131,24 @@ Current migrated boundaries include:
   `vdraw send`, preview eye paths, and simple command line-set visualizations.
   BREP owns diagnostic extraction; GED owns the reusable command-scene
   indexed-face publication boundary.
+* Overlay-command insertion/erase is Obol-only for active Obol feature stores.
+  Without an Obol feature store, overlay insert returns a null output/no-op and
+  erase is a no-op; retained BSG overlay fallback is removed.
+* libbrlobol owns effective database material/color-table lookup and source
+  material refresh for Obol database sources.  GED owns material revision
+  bookkeeping and invokes the Obol refresh bridge after material/color-table
+  edits.
+* libbrlobol owns draw-facing primitive `rt_db_internal` interpretation for
+  database-source publication, including primitive vlist conversion,
+  annotation publication, and submodel auxiliary wireframes.  GED's exported
+  primitive-wireframe helper is a C bridge that resolves the source instance
+  and delegates to libbrlobol.
 * qray/uplot private direct-feature helper exposure has been retired; command
   visualizations should use command-scene publication helpers.
+* Direct private GED draw bridge includes are now confined to internal draw
+  bridge implementation files.  Obol sync/GQA tests, autoview, `draw_obol.cpp`,
+  and GED view facade code use public `ged/draw.h`, `ged/draw_obol.h`, and
+  `ged/view.h` boundaries.
 * Neutral RT adapters for scene, polygon, selection, feature/edit-preview, and
   retained view-context operations.  Scene/feature/polygon/selection adapter
   registries now live in `src/librt/view_context_adapters.c` rather than the
@@ -184,9 +204,9 @@ Current migrated boundaries include:
 * Borrowed Obol view controllers can publish database sources/groups and
   activate feature/polygon stores without first converting to owned
   controllers.
-* Obol-only shape draft/source-state paths can publish display/style/material,
-  line-set, evaluated-region, and database-leaf state without requiring a
-  retained shape-ref mirror.
+* The evaluated/local shape-ref draft staging bridge has been removed.
+  Database-leaf, tree-result, and evaluated path publication use path-based
+  Obol database-source/group APIs instead of draft helpers.
 * qtcad ordinary canvas painting is Obol-only: `QgGL` renders pending Obol/Coin
   work through Qt's current `QOpenGLWidget` context, and `QgSW` presents Obol
   readback through QWidget painting.
@@ -222,8 +242,9 @@ Active Blockers To Retiring Legacy Paths
   manipulation, and neutral librt view contexts now use it.  Focused
   GED/qtcad Obol workflows use native contexts and Obol adapters, but broader
   caller-facing paths still need inventory and conversion.
-* No-owned-scene and old application workflows still need retained adapters
-  until callers can attach or create an Obol scene/controller.
+* No-owned-scene and old application workflows should either attach/create an
+  Obol scene/controller or accept explicit no-op behavior.  Retained adapters
+  should not be extended to keep migrated draw features alive.
 * libged now has a shared-scene/per-view-render-endpoint model for borrowed
   Obol DMs.  Remaining hardening is to apply this model to old no-owned-scene
   and application paths, then remove compatibility code that exists only to
@@ -245,6 +266,23 @@ Active Blockers To Retiring Legacy Paths
 * BSG-backed retained draw facade code remains as compatibility for old
   unsupported callers, but migrated transaction draw features should not add
   new behavior there and should not route through retained `_ged_drawtrees`.
+  The public shape-ref geometry publication wrappers and the old
+  `ged_test_ged_draw_scene` retained-scene shards have been removed.  Tests
+  that publish source geometry should use path-based Obol database-source APIs
+  instead of draft/scene-ref wrappers.  The unused tree-staging,
+  database-leaf, tree-result, evaluated-path, and local shape-ref draft
+  publication helpers have been deleted.  Scene-root erase compatibility wrappers,
+  the remaining `ged_draw_scene_root_*` source-root facade wrappers, the
+  source-root child-count helper, and the test-facing shape-ref release hook
+  have also been removed.  Tests now exercise public draw transactions,
+  `ged_draw_erase_name`, `ged_draw_has_groups`, `ged_draw_clear_view`, and
+  scene-context summaries instead of private retained-source cleanup or direct
+  draft/source-root helper calls.  Retained overlay geometry fallback,
+  retained color-table scene-ref refresh helpers, and GED-side primitive
+  `rt_db_internal` publication logic have been removed from the migrated Obol
+  path.  Pivot-guard and API-hygiene checks were updated so deleted
+  retained-scene tests and split helper files are not treated as required
+  coverage.
 * qged visible canvas rendering and embedded framebuffer streaming are now
   Obol/imgstream-backed, but qged still has broader UI/input/faceplate/readback
   hardening to finish around the Obol display host.  mged/TclCAD visible
@@ -285,8 +323,29 @@ Phase Summary
 | Area | Current dependency | Removal condition |
 | --- | --- | --- |
 | libbrlobol | Direct-BSG/DM-free; lower transitives remain through librt/libwdb and image/display host work | Keep direct-BSG/DM-free while lower layers migrate |
-| libged | Still directly links libdm/libbsg for retained compatibility | GED drawing, view objects, command results, faceplate, selection, snap/measure, framebuffer, and no-owned-scene paths use Obol/libimgstream facades |
+| libged | Still directly links libdm/libbsg for retained compatibility | GED drawing, view features, command results, faceplate, selection, snap/measure, framebuffer, and no-owned-scene paths use Obol/libimgstream facades |
 | qtcad/qged | qtcad still links libdm; qged links libdm transitively for fbserv but no longer depends on dm_plugins | Remaining input, readback, plugins, and qged view workflows run through Obol without libdm/libbsg; fbserv protocol moves to an image-stream protocol layer |
 | libtclcad/mged | libtclcad links libdm; mged hosts DM workflows; initial Obol DM attach/screengrab path exists and Obol refresh is high-level | View creation, refresh, input, faceplate, and readback use Obol/libimgstream paths |
 | libdm/libbsg | Compatibility display and scene layers; fbserv protocol is backend-neutral but still located in libdm | Framebuffer protocol moves beside libimgstream/libicv, display/image behavior is replaced by Obol display hosts, then libdm/libbsg are removed |
 | utilities | Some direct libdm rows remain | Each use is deleted, routed through libimgstream/fb_compat, replaced by Obol readback/display, or assigned to libicv |
+
+Immediate Draw Cleanup Targets
+------------------------------
+
+* Keep local-shape publication direct.  The retained-ref draft bridge is gone;
+  any future semantic draw result needing local geometry should publish through
+  explicit libbrlobol/Obol source or local-shape APIs rather than recreating a
+  scene-ref staging path.
+* Continue treating `view db` objects as Obol database-source owner groups:
+  style/delete/list behavior should operate on the owner group and its source
+  instances, not retained scene refs or fake feature-store records.
+* Remove remaining no-owned-scene/application fallback plumbing once callers
+  can attach/create Obol scene ownership.  Overlay insert/erase fallback is
+  already gone; any remaining command/import producer should publish
+  command-scene features directly or no-op without an Obol feature store.
+* Move metadata/readback fallback paths to Obol-owned records or neutral
+  libbv/libged records.  Do not recreate the removed public shape-ref
+  publication wrappers for tests.
+* Keep retained BSG tests only when they explicitly protect a still-supported
+  fallback caller.  Otherwise delete them or replace them with Obol-native
+  coverage.

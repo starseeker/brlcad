@@ -246,15 +246,11 @@ obj_write_bot(struct _ged_bot_dump_client_data *d, struct rt_bot_internal *bot, 
 }
 
 
-/* Phase T-final (drawing_stack_modernization): obj_write_data formerly
- * serialized the gv_tcl-resident data_arrows / data_axes / data_lines
- * overlay state into the OBJ file alongside the BoT geometry.  After T1
- * those overlays live in BSG VIEW_SCOPE objects (`_tcl_data_arrows`,
- * `_tcl_data_axes`, `_tcl_data_lines` and their sdata twins), and BSG is
- * the source of truth.  The legacy gv_tcl-coupled exporter has been
- * removed; obj_write_data is now a no-op stub.  A future replacement
- * could iterate `_tcl_data_*` BSG vlists if this OBJ-side overlay
- * bake-out is ever needed again. */
+/* obj_write_data formerly serialized gv_tcl-resident data_arrows, data_axes,
+ * and data_lines overlay state into the OBJ file alongside BoT geometry.  Those
+ * overlays now live behind typed GED draw facades, and the gv_tcl-coupled OBJ
+ * exporter has been removed; obj_write_data is a no-op stub unless OBJ-side
+ * overlay bake-out is restored through typed facade records. */
 void
 obj_write_data(struct _ged_bot_dump_client_data *d, struct ged *gedp, FILE *fp)
 {

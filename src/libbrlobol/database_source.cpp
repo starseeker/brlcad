@@ -36,6 +36,8 @@
 #include "rt/nongeom.h"
 #include "rt/db_fullpath.h"
 #include "rt/primitives/annot.h"
+#include "rt/primitives/brep.h"
+#include "rt/primitives/bspline.h"
 #include "rt/tree.h"
 #include "rt/vlist.h"
 #include "rt/view.h"
@@ -200,6 +202,84 @@ database_source_transform_bounds(const SbBox3f &bounds,
     }
 
     return transformed;
+}
+
+static const char *
+database_source_material_skip_leading_slash(const char *path)
+{
+    if (!path)
+	return "";
+    while (*path == '/')
+	path++;
+    return path;
+}
+
+static std::string
+database_source_db_path_without_instance_suffixes(const char *path)
+{
+    std::string lookupPath;
+    if (!path)
+	return lookupPath;
+
+    for (const char *cp = database_source_material_skip_leading_slash(path);
+	 *cp;
+	 cp++) {
+	if (*cp == '@' && cp[1] >= '0' && cp[1] <= '9') {
+	    while (cp[1] && cp[1] != '/')
+		cp++;
+	    continue;
+	}
+	lookupPath.push_back(*cp);
+    }
+    return lookupPath;
+}
+
+SbBool
+brlobol_database_source_fullpath_material_color(
+    struct db_i *dbip,
+    const struct db_full_path *pathp,
+    SbColor &color)
+{
+    if (!dbip || !pathp || pathp->fp_len <= 0)
+	return FALSE;
+
+    struct bu_color dbColor = BU_COLOR_INIT_ZERO;
+    db_full_path_color(&dbColor, const_cast<struct db_full_path *>(pathp),
+		       dbip);
+    unsigned char rgb[3] = {255, 255, 255};
+    bu_color_to_rgb_chars(&dbColor, rgb);
+    color = SbColor(static_cast<float>(rgb[0]) / 255.0f,
+		    static_cast<float>(rgb[1]) / 255.0f,
+		    static_cast<float>(rgb[2]) / 255.0f);
+    return TRUE;
+}
+
+SbBool
+brlobol_database_source_path_material_color(
+    struct db_i *dbip,
+    const char *path,
+    SbColor &color)
+{
+    if (!dbip || !path || !path[0])
+	return FALSE;
+
+    const std::string lookupPath =
+	database_source_db_path_without_instance_suffixes(path);
+    if (lookupPath.empty())
+	return FALSE;
+
+    struct db_full_path fullpath;
+    db_full_path_init(&fullpath);
+    if (db_string_to_path(&fullpath, dbip, lookupPath.c_str()) != 0) {
+	db_free_full_path(&fullpath);
+	return FALSE;
+    }
+
+    const SbBool matched =
+	brlobol_database_source_fullpath_material_color(dbip, &fullpath,
+						       color);
+    db_free_full_path(&fullpath);
+    return matched;
 }
 
 BRLObolDatabaseSourceSummary::BRLObolDatabaseSourceSummary(void) :
@@ -1736,7 +1816,9 @@ assign_material_identity(SoBRLMaterialObject *object,
 
 static SoBRLVListShape *
 vlist_from_plot_internal(struct rt_db_internal *intern,
-			 const SoBRLDatabaseSource *source)
+			 const SoBRLDatabaseSource *source,
+			 const struct bg_tess_tol *plotTtol = NULL,
+			 const struct bn_tol *plotTol = NULL)
 {
     if (!internal_payload_magic_valid(intern))
 	return NULL;
@@ -1758,8 +1840,10 @@ vlist_from_plot_internal(struct rt_db_internal *intern,
 
     struct bu_list vhead;
     BU_LIST_INIT(&vhead);
-    struct bg_tess_tol ttol = source_tess_tol(source);
+    struct bg_tess_tol ttol = plotTtol ? *plotTtol : source_tess_tol(source);
     struct bn_tol tol = BN_TOL_INIT_TOL;
+    if (plotTol)
+	tol = *plotTol;
     int ret = 0;
     {
 	BRLObolPerformanceTimer timer(BRLOBOL_PERF_PLOT_US);
@@ -5403,6 +5487,35 @@ SoBRLDatabaseSource::setDatabaseMetadataState(SbBool metadataValid,
 }
 
 int
+SoBRLDatabaseSource::refreshMaterialColorFromDatabase(
+    uint32_t nextMaterialRevision,
+    struct db_i *overrideDbip)
+{
+    struct db_i *colorDbip = overrideDbip ? overrideDbip : this->dbip;
+    SbColor nextMaterialColor(1.0f, 1.0f, 1.0f);
+    if (!brlobol_database_source_path_material_color(
+	    colorDbip,
+	    this->path.getValue().getString(),
+	    nextMaterialColor))
+	return 0;
+
+    return this->setDisplayState(
+	FALSE,
+	this->sourceRevision.getValue(),
+	this->inputsRevision.getValue(),
+	this->visible.getValue(),
+	this->highlighted.getValue(),
+	this->lineStyle.getValue(),
+	this->lineWidth.getValue(),
+	this->transparency.getValue(),
+	this->colorOverride.getValue(),
+	this->color.getValue(),
+	TRUE,
+	nextMaterialColor,
+	nextMaterialRevision);
+}
+
+int
 SoBRLDatabaseSource::setDisplayState(SbBool sourceRevisionValid,
 				     uint32_t nextSourceRevision,
 				     uint32_t nextInputsRevision,
@@ -6956,6 +7069,332 @@ SoBRLDatabaseSource::publishExternalAnnotation(
     } else {
 	this->clearSourceBounds();
     }
+    mark_external_primary_published_current(this);
+    this->syncRealizedShapeOwnerState();
+    return 1;
+}
+
+static void
+primitive_realization_line_set_free(
+    struct rt_primitive_lod_realization *realization)
+{
+    if (!realization)
+	return;
+    if (realization->line_points)
+	bu_free(realization->line_points, "primitive realization line-set points");
+    if (realization->line_commands)
+	bu_free(realization->line_commands,
+		"primitive realization line-set commands");
+    realization->line_points = NULL;
+    realization->line_commands = NULL;
+    realization->line_count = 0;
+    realization->line_capacity = 0;
+    realization->has_line_set = 0;
+}
+
+static int32_t
+primitive_realization_command_to_vlist_command(int command)
+{
+    switch (command) {
+	case RT_PRIMITIVE_LINE_MOVE:
+	    return SoBRLVListShape::MOVE;
+	case RT_PRIMITIVE_LINE_DRAW:
+	    return SoBRLVListShape::DRAW;
+	case RT_PRIMITIVE_POINT_DRAW:
+	    return SoBRLVListShape::POINT;
+	default:
+	    break;
+    }
+    return -1;
+}
+
+static int
+publish_primitive_realization_line_set(
+    SoBRLDatabaseSource *source,
+    struct rt_primitive_lod_realization *realization,
+    const char *sourceType)
+{
+    if (!source || !realization || !realization->has_line_set)
+	return 0;
+
+    if (realization->line_count > static_cast<size_t>(INT_MAX)) {
+	primitive_realization_line_set_free(realization);
+	return -1;
+    }
+
+    if (realization->line_count == 0) {
+	const int cleared = source->clearExternalPrimaryGeometry();
+	primitive_realization_line_set_free(realization);
+	return cleared > 0 ? 1 : 0;
+    }
+
+    std::vector<SbVec3f> points;
+    std::vector<int32_t> commands;
+    std::vector<double> precisePoints;
+    points.reserve(realization->line_count);
+    commands.reserve(realization->line_count);
+    precisePoints.reserve(realization->line_count * 3);
+    for (size_t i = 0; i < realization->line_count; i++) {
+	const int32_t command =
+	    primitive_realization_command_to_vlist_command(
+		realization->line_commands ? realization->line_commands[i] :
+		RT_PRIMITIVE_LINE_DRAW);
+	if (command < 0) {
+	    primitive_realization_line_set_free(realization);
+	    return -1;
+	}
+	points.push_back(SbVec3f(
+			     static_cast<float>(realization->line_points[i][X]),
+			     static_cast<float>(realization->line_points[i][Y]),
+			     static_cast<float>(realization->line_points[i][Z])));
+	commands.push_back(command);
+	precisePoints.push_back(realization->line_points[i][X]);
+	precisePoints.push_back(realization->line_points[i][Y]);
+	precisePoints.push_back(realization->line_points[i][Z]);
+    }
+
+    BRLObolExternalLineSet lineSet;
+    lineSet.points = points.empty() ? NULL : points.data();
+    lineSet.commands = commands.empty() ? NULL : commands.data();
+    lineSet.precisePoints = precisePoints.empty() ? NULL :
+			    precisePoints.data();
+    lineSet.count = static_cast<int>(points.size());
+    lineSet.sourceType = sourceType && sourceType[0] ? sourceType :
+			 "primitive-wireframe";
+    lineSet.geometryKind = "line";
+    const int published = source->publishExternalLineSet(lineSet);
+    primitive_realization_line_set_free(realization);
+    return published > 0 ? 1 : 0;
+}
+
+static void
+set_external_bounds_from_vlist_shape(
+    SoBRLDatabaseSource *source,
+    const SoBRLVListShape *shape)
+{
+    if (!source || !shape)
+	return;
+
+    const SoBRLVListShape *geometrySource = shape->getGeometrySource();
+    if (!geometrySource) {
+	source->clearSourceBounds();
+	return;
+    }
+
+    SbBox3f bounds;
+    bounds.makeEmpty();
+    const int pointCount = geometrySource->point.getNum();
+    for (int i = 0; i < pointCount; i++)
+	bounds.extendBy(geometrySource->point[i]);
+
+    if (bounds.isEmpty()) {
+	source->clearSourceBounds();
+	return;
+    }
+
+    source->setSourceBoundsState(TRUE, bounds.getMin(), bounds.getMax());
+}
+
+struct primitive_submodel_publish_ctx {
+    SoBRLDatabaseSource *source;
+    size_t childCount;
+    int failed;
+};
+
+static union tree *
+primitive_submodel_wireframe_leaf(struct db_tree_state *tsp,
+				  const struct db_full_path *pathp,
+				  struct directory *dp,
+				  void *clientData)
+{
+    struct primitive_submodel_publish_ctx *ctx =
+	static_cast<struct primitive_submodel_publish_ctx *>(clientData);
+    if (!ctx || !ctx->source || ctx->failed || !tsp || !tsp->ts_dbip ||
+	!dp)
+	return TREE_NULL;
+
+    char *pathName = pathp && pathp->fp_len > 0 ?
+		     db_path_to_string(pathp) : NULL;
+    const char *name = (pathName && pathName[0]) ? pathName :
+		       (dp->d_namep ? dp->d_namep : "submodel_leaf");
+
+    struct rt_db_internal intern;
+    RT_DB_INTERNAL_INIT(&intern);
+    int haveIntern = 0;
+    struct bu_list vhead;
+    BU_LIST_INIT(&vhead);
+    std::vector<SbVec3f> points;
+    std::vector<int32_t> commands;
+
+    if (rt_db_get_internal(&intern, dp, tsp->ts_dbip, NULL) < 0) {
+	ctx->failed = 1;
+	goto cleanup;
+    }
+    haveIntern = 1;
+
+    if (!internal_payload_magic_valid(&intern) ||
+	rt_obj_plot(&vhead, &intern, tsp->ts_ttol, tsp->ts_tol) < 0) {
+	ctx->failed = 1;
+	goto cleanup;
+    }
+
+    convert_vlist(points, commands, &vhead);
+    if (points.empty() || points.size() != commands.size() ||
+	points.size() > static_cast<size_t>(INT_MAX)) {
+	ctx->failed = 1;
+	goto cleanup;
+    }
+
+    for (size_t i = 0; i < points.size(); i++) {
+	point_t sourcePoint;
+	point_t transformedPoint;
+	VSET(sourcePoint, points[i][X], points[i][Y], points[i][Z]);
+	MAT4X3PNT(transformedPoint, tsp->ts_mat, sourcePoint);
+	points[i].setValue(static_cast<float>(transformedPoint[X]),
+			   static_cast<float>(transformedPoint[Y]),
+			   static_cast<float>(transformedPoint[Z]));
+    }
+
+    if (ctx->source->setAuxiliaryLineSet(
+	    name,
+	    points.empty() ? NULL : points.data(),
+	    commands.empty() ? NULL : commands.data(),
+	    static_cast<int>(points.size())) <= 0) {
+	ctx->failed = 1;
+	goto cleanup;
+    }
+
+    ctx->childCount++;
+
+cleanup:
+    RT_FREE_VLIST(&rt_vlfree, &vhead);
+    if (haveIntern)
+	rt_db_free_internal(&intern);
+    if (pathName)
+	bu_free(pathName, "BRLObol submodel leaf path string");
+    return ctx->failed ? TREE_NULL : make_nop_tree();
+}
+
+static int
+publish_primitive_submodel_wireframe(
+    SoBRLDatabaseSource *source,
+    struct rt_db_internal *intern,
+    const struct bg_tess_tol *ttol,
+    const struct bn_tol *tol)
+{
+    if (!source || !intern || intern->idb_type != ID_SUBMODEL ||
+	!intern->idb_ptr)
+	return 0;
+
+    struct rt_submodel_internal *submodel =
+	static_cast<struct rt_submodel_internal *>(intern->idb_ptr);
+    RT_SUBMODEL_CK_MAGIC(submodel);
+
+    struct db_i *dbip = DBI_NULL;
+    int closeDb = 0;
+    if (bu_vls_strlen(&submodel->file) != 0) {
+	dbip = db_open(bu_vls_addr(&submodel->file), DB_OPEN_READONLY);
+	if (dbip == DBI_NULL)
+	    return -1;
+	closeDb = 1;
+	if (!db_is_directory_non_empty(dbip) && db_dirbuild(dbip) < 0) {
+	    db_close(dbip);
+	    return -1;
+	}
+    } else {
+	RT_CK_DBI(submodel->dbip);
+	dbip = const_cast<struct db_i *>(submodel->dbip);
+    }
+
+    struct bn_tol localTol;
+    const struct bn_tol *useTol = tol;
+    if (!useTol) {
+	BN_TOL_INIT_SET_TOL(&localTol);
+	useTol = &localTol;
+    }
+
+    struct bg_tess_tol localTtol;
+    const struct bg_tess_tol *useTtol = ttol;
+    if (!useTtol) {
+	BG_TESS_TOL_INIT_SET_TOL(&localTtol);
+	useTtol = &localTtol;
+    }
+
+    (void)source->clearExternalPrimaryGeometry();
+    (void)source->clearAuxiliaryShapes();
+
+    struct db_tree_state state;
+    RT_DBTS_INIT(&state);
+    state.ts_dbip = dbip;
+    state.ts_ttol = useTtol;
+    state.ts_tol = useTol;
+    MAT_COPY(state.ts_mat, submodel->root2leaf);
+
+    struct primitive_submodel_publish_ctx ctx;
+    ctx.source = source;
+    ctx.childCount = 0;
+    ctx.failed = 0;
+
+    const char *argv[2];
+    argv[0] = bu_vls_addr(&submodel->treetop);
+    argv[1] = NULL;
+    int ret = db_walk_tree_leaf_instances(dbip, 1, argv, 1, &state, 0, NULL,
+	    primitive_submodel_wireframe_leaf, &ctx);
+
+    if (closeDb)
+	db_close(dbip);
+    if (ret < 0 || ctx.failed)
+	return -1;
+    return ctx.childCount ? 1 : 0;
+}
+
+int
+SoBRLDatabaseSource::publishPrimitiveWireframe(
+    struct rt_db_internal *intern,
+    const struct bg_tess_tol *ttol,
+    const struct bn_tol *tol)
+{
+    if (!intern)
+	return 0;
+    if (!internal_payload_magic_valid(intern))
+	return -1;
+
+    if (intern->idb_type == ID_SUBMODEL)
+	return publish_primitive_submodel_wireframe(this, intern, ttol, tol);
+
+    if (intern->idb_type == ID_BREP || intern->idb_type == ID_BSPLINE) {
+	struct rt_primitive_lod_realization realization;
+	memset(&realization, 0, sizeof(realization));
+	struct bn_tol localTol;
+	const struct bn_tol *useTol = tol;
+	if (!useTol) {
+	    BN_TOL_INIT_SET_TOL(&localTol);
+	    useTol = &localTol;
+	}
+	int ret = intern->idb_type == ID_BREP ?
+	    rt_brep_wireframe_line_set(&realization, intern, useTol) :
+	    rt_nurb_wireframe_line_set(&realization, intern, useTol);
+	if (ret < 0 || !realization.has_line_set) {
+	    primitive_realization_line_set_free(&realization);
+	    return -1;
+	}
+	return publish_primitive_realization_line_set(this, &realization,
+		"line-set");
+    }
+
+    SoBRLVListShape *shape =
+	vlist_from_plot_internal(intern, this, ttol, tol);
+    if (!shape)
+	return -1;
+
+    (void)this->clearRealizedGeometry(TRUE);
+    database_source_add_realized_child(this, shape);
+    const bool annotation = primitive_is_annotation(intern->idb_type,
+			    primitive_type_label(intern));
+    assign_external_primary_identity(shape, this,
+				     annotation ? "annotation" : "line-set",
+				     annotation ? "annotation" : "line");
+    set_external_bounds_from_vlist_shape(this, shape);
     mark_external_primary_published_current(this);
     this->syncRealizedShapeOwnerState();
     return 1;

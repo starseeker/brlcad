@@ -2160,6 +2160,27 @@ SoBRLSceneController::publishDatabaseSourceInstanceExternalLineSet(
 }
 
 int
+SoBRLSceneController::publishDatabaseSourceInstancePrimitiveWireframe(
+    const char *sourceInstanceKey,
+    struct rt_db_internal *intern,
+    const struct bg_tess_tol *ttol,
+    const struct bn_tol *tol)
+{
+    if (!sourceInstanceKey || !sourceInstanceKey[0] || !intern)
+	return -1;
+
+    SoBRLDatabaseSource *source =
+	this->findDatabaseSourceInstance(sourceInstanceKey);
+    if (!source)
+	return -1;
+
+    const int published = source->publishPrimitiveWireframe(intern, ttol, tol);
+    if (published > 0)
+	this->advanceStructuralRevision();
+    return published;
+}
+
+int
 SoBRLSceneController::publishDatabaseSourceExternalPointSet(
     const char *sourcePath,
     const BRLObolExternalPointSet &pointSet)
@@ -2943,6 +2964,49 @@ SoBRLSceneController::setDatabaseSourceInstanceMaterialPolicy(
 
     const int changed = source->setMaterialPolicyState(materialPolicy);
     if (changed > 0)
+	this->advanceFrameRevision();
+    return changed;
+}
+
+int
+SoBRLSceneController::refreshDatabaseSourceInstanceMaterialColorFromDatabase(
+    const char *sourceInstanceKey,
+    uint32_t materialRevision,
+    struct db_i *overrideDbip)
+{
+    SoBRLDatabaseSource *source =
+	this->findDatabaseSourceInstance(sourceInstanceKey);
+    if (!source)
+	return -1;
+
+    const int changed =
+	source->refreshMaterialColorFromDatabase(materialRevision, overrideDbip);
+    if (changed > 0)
+	this->advanceFrameRevision();
+    return changed;
+}
+
+int
+SoBRLSceneController::refreshDatabaseSourceMaterialColorsFromDatabase(
+    uint32_t materialRevision,
+    struct db_i *overrideDbip)
+{
+    if (!this->root || !this->root->isOfType(SoGroup::getClassTypeId()))
+	return -1;
+
+    const int sourceCount = this->getDatabaseSourceCount();
+    int changed = 0;
+    for (int i = 0; i < sourceCount; i++) {
+	SoBRLDatabaseSource *source = this->getDatabaseSource(i);
+	if (!source)
+	    continue;
+	const int sourceChanged =
+	    source->refreshMaterialColorFromDatabase(materialRevision,
+						    overrideDbip);
+	if (sourceChanged > 0)
+	    changed = 1;
+    }
+    if (changed)
 	this->advanceFrameRevision();
     return changed;
 }

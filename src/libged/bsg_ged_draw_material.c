@@ -19,7 +19,7 @@
  */
 /** @file libged/b_s_g___g_e_d___d_r_a_w___m_a_t_e_r_i_a_l_._c.c
  *
- * Legacy material/color refresh bridge for retained draw shapes.
+ * GED material/color revision bookkeeping for Obol database sources.
  */
 
 #include "common.h"
@@ -43,8 +43,9 @@ _color_shape_record_cb(const struct ged_draw_shape_record *rec, void *ud)
     if (!ctx || !rec)
 	return 1;
 
-    /* Lazy-color skip/stamp stays in the source adapter with the retained
-     * material revision and legacy color fields. */
+    /* Color-table interpretation lives in libbrlobol.  GED only requests
+     * refresh for drawn Obol database sources at the current material
+     * revision. */
     (void)ged_draw_shape_ref_refresh_material_color(ctx->gedp, rec->ref,
 	    ctx->dbip, ctx->mater_rev);
     return 1;

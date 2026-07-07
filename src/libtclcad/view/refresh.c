@@ -136,10 +136,9 @@ go_refresh_draw(struct ged *gedp, void *draw_view_ctx, int restore_zbuffer)
 	go_draw(draw_view_ctx);
     }
 
-    /* Phase T2-final: replaced dm_draw_viewobjs with dm_draw_objs so the
-     * full BSG view-scope object set (including T1-migrated overlays) and
-     * faceplate are rendered through the modern path.  Stash/restore the
-     * unit-conversion factors as before. */
+    /* Render the full retained view-scope feature set and faceplate through
+     * the current draw host.  Stash/restore the unit-conversion factors as
+     * before. */
     fastf_t l2b = ged_view_context_local2base_get(draw_view_ctx);
     fastf_t b2l = ged_view_context_base2local_get(draw_view_ctx);
     ged_view_context_unit_conversion_set(draw_view_ctx,

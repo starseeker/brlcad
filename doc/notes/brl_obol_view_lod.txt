@@ -568,9 +568,10 @@ qtcad startup-expand test proves the manual refresh path by rerunning GED
 autoview after leaf proxies are published; the remaining production work is
 automatic pending-autoview scheduling and cancellation.
 
-Also keep adding scene-state coverage for no-owned-scene fallback paths so the
-same view-local LoD invalidation contract is proven outside the primary
-attached-controller flow.
+Also keep adding scene-state coverage for no-owned-scene/no-feature-store
+no-op behavior so the view-local LoD invalidation contract is proven outside
+the primary attached-controller flow without recreating retained BSG fallback
+state.
 
 Startup proxy publication now consumes cached full-path metadata and
 `test_qtcad_obol_progressive_lod_startup_refine` asserts that seeded cached

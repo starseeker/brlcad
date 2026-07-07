@@ -32,7 +32,6 @@
 #include "ged/draw_obol.h"
 #include "ged/view.h"
 #include "rt/view_legacy_bsg.h"
-#include "./bsg_ged_draw_private.h"
 #include "./bsg_ged_draw_view_private.h"
 #include "./ged_private.h"
 

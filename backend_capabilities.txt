@@ -392,8 +392,9 @@ Recent cleanup state:
   mutate retained group state.
 * GED group lookup/create now returns a libged-owned Obol group ref directly
   when an owned Obol scene is active, including empty groups with draw intent
-  and no database sources; retained path construction remains only the
-  no-owned-scene fallback.
+  and no database sources; no-owned-scene callers should attach/create an Obol
+  scene or accept explicit no-op behavior rather than recreate retained
+  fallback ownership.
 * GED database-leaf draft commit now ensures the corresponding owned Obol
   database source at commit time and direct source/group-ref commits move it
   into the owned Obol group tree before falling back to retained parent

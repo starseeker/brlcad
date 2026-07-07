@@ -597,7 +597,7 @@ ged_draw_path_state(struct ged *gedp,
 	}
     }
 
-    ged_draw_scene_root_foreach_shape_ref(gedp, 0,
+    ged_draw_source_root_foreach_shape_ref(gedp, 0,
 	    _draw_path_state_shape_ref_cb, &ctx);
 
     int state = _draw_path_state_eval(gedp, bu_vls_cstr(&norm), &ctx);
@@ -957,10 +957,10 @@ ged_draw_list_paths(struct ged *gedp,
 
     if (obol_status < 0) {
 	if (expanded)
-	    ged_draw_scene_root_foreach_shape_ref(gedp, 0,
+	    ged_draw_source_root_foreach_shape_ref(gedp, 0,
 		    _draw_list_shape_ref_path_cb, &ctx);
 	else
-	    ged_draw_scene_root_foreach_shape_ref(gedp, 0,
+	    ged_draw_source_root_foreach_shape_ref(gedp, 0,
 		    _draw_list_shape_ref_path_collapsed_cb, &ctx);
     }
 
@@ -997,7 +997,7 @@ ged_draw_has_paths(struct ged *gedp,
 	    return ctx.found;
     }
 
-    ged_draw_scene_root_foreach_shape_ref(gedp, 0,
+    ged_draw_source_root_foreach_shape_ref(gedp, 0,
 	    _draw_has_paths_shape_ref_cb, &ctx);
     return ctx.found;
 }
@@ -1178,6 +1178,8 @@ ged_draw_group_record_get(struct ged *gedp,
     if (ged_draw_group_ref_tree_summary(gedp, ref, &tree_summary))
 	out->fullpath = tree_summary.fullpath;
     out->view = group_summary.view_ctx;
+    if (!ged_draw_group_ref_appearance_settings(gedp, ref, &out->appearance))
+	out->appearance = (struct ged_draw_appearance_settings)GED_DRAW_APPEARANCE_SETTINGS_INIT;
     out->draw_mode = group_summary.draw_mode;
     out->transparency = group_summary.transparency;
     out->visible = group_summary.visible;
@@ -1222,7 +1224,7 @@ ged_draw_foreach_group_record(struct ged *gedp,
     ctx.gedp = gedp;
     ctx.cb = cb;
     ctx.userdata = userdata;
-    (void)ged_draw_scene_root_foreach_group_ref(gedp,
+    (void)ged_draw_source_root_foreach_group_ref(gedp,
 	    _foreach_group_record_cb,
 	    &ctx);
 }
@@ -1258,7 +1260,7 @@ ged_draw_foreach_shape_record(struct ged *gedp,
     ctx.gedp = gedp;
     ctx.cb = cb;
     ctx.userdata = userdata;
-    (void)ged_draw_scene_root_foreach_shape_ref(gedp, 0,
+    (void)ged_draw_source_root_foreach_shape_ref(gedp, 0,
 	    _foreach_shape_record_cb, &ctx);
 }
 

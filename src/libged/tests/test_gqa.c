@@ -31,9 +31,8 @@
 #include "bg/plot3.h"
 #include <ged.h>
 #include <ged/draw.h>
+#include <ged/draw_obol.h>
 #include "wdb.h"
-
-#include "../bsg_ged_draw_private.h"
 
 struct gqa_segment_writer {
     FILE *fp;

@@ -1417,7 +1417,7 @@ ged_draw_view_context_annotation_label_create(
 
     if (ged_draw_view_context_feature_exists(view_ctx, name)) {
 	if (result)
-	    bu_vls_printf(result, "View object named %s already exists\n",
+	    bu_vls_printf(result, "View feature named %s already exists\n",
 		    name);
 	return 0;
     }
@@ -2566,7 +2566,7 @@ ged_draw_view_context_annotation_axes_create(
 
     if (ged_draw_view_context_feature_exists(view_ctx, name)) {
 	if (result)
-	    bu_vls_printf(result, "View object named %s already exists\n",
+	    bu_vls_printf(result, "View feature named %s already exists\n",
 		    name);
 	return 0;
     }
@@ -2593,14 +2593,14 @@ ged_draw_view_context_annotation_axes_state_get(
 
     if (!ged_draw_view_context_feature_exists(view_ctx, name)) {
 	if (result)
-	    bu_vls_printf(result, "View object named %s does not exist\n",
+	    bu_vls_printf(result, "View feature named %s does not exist\n",
 		    name);
 	return 0;
     }
 
     if (!ged_draw_view_context_axes_state_get(view_ctx, name, state)) {
 	if (result)
-	    bu_vls_printf(result, "View object %s has no axes state\n",
+	    bu_vls_printf(result, "View feature %s has no axes state\n",
 		    name);
 	return 0;
     }
@@ -2620,7 +2620,7 @@ ged_draw_view_context_annotation_axes_state_replace(
 
     if (!ged_draw_view_context_feature_exists(view_ctx, name)) {
 	if (result)
-	    bu_vls_printf(result, "View object named %s does not exist\n",
+	    bu_vls_printf(result, "View feature named %s does not exist\n",
 		    name);
 	return 0;
     }

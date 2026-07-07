@@ -219,33 +219,33 @@ main(int argc, const char **argv)
     ASSERT_VIEW_OK(gedp, 5, lc3);
     ASSERT(ged_draw_view_context_feature_exists(views[0], "u_line_edit") == 0);
 
-    const char *c1[] = {"view", "object", "info", "u_line", "type", NULL};
+    const char *c1[] = {"view", "feature", "info", "u_line", "type", NULL};
     ASSERT(run_view(gedp, 5, c1) == BRLCAD_OK);
 
-    const char *c2[] = {"view", "object", "hide", "u_line", NULL};
+    const char *c2[] = {"view", "feature", "hide", "u_line", NULL};
     ASSERT(run_view(gedp, 4, c2) == BRLCAD_OK);
-    const char *c3[] = {"view", "object", "info", "u_line", "visible", NULL};
+    const char *c3[] = {"view", "feature", "info", "u_line", "visible", NULL};
     ASSERT(run_view(gedp, 5, c3) == BRLCAD_OK);
     ASSERT(result_str(gedp).find("DOWN") != std::string::npos);
-    const char *c3a[] = {"view", "object", "show", "u_line", NULL};
+    const char *c3a[] = {"view", "feature", "show", "u_line", NULL};
     ASSERT(run_view(gedp, 4, c3a) == BRLCAD_OK);
-    const char *c3b[] = {"view", "object", "info", "u_line", "visible", NULL};
+    const char *c3b[] = {"view", "feature", "info", "u_line", "visible", NULL};
     ASSERT(run_view(gedp, 5, c3b) == BRLCAD_OK);
     ASSERT(result_str(gedp).find("UP") != std::string::npos);
 
-    const char *c3c[] = {"view", "object", "style", "set", "u_line", "color", "10/20/30", NULL};
+    const char *c3c[] = {"view", "feature", "style", "set", "u_line", "color", "10/20/30", NULL};
     ASSERT(run_view(gedp, 7, c3c) == BRLCAD_OK);
-    const char *c3d[] = {"view", "object", "info", "u_line", "color", NULL};
+    const char *c3d[] = {"view", "feature", "info", "u_line", "color", NULL};
     ASSERT(run_view(gedp, 5, c3d) == BRLCAD_OK);
     ASSERT(result_str(gedp).find("10/20/30") != std::string::npos);
 
-    const char *c4[] = {"view", "object", "list", "u_*", NULL};
+    const char *c4[] = {"view", "feature", "list", "u_*", NULL};
     ASSERT(run_view(gedp, 4, c4) == BRLCAD_OK);
     ASSERT(result_str(gedp).find("u_line") != std::string::npos);
 
-    const char *c5[] = {"view", "object", "style", "set", "u_line", "arrow", "1", NULL};
+    const char *c5[] = {"view", "feature", "style", "set", "u_line", "arrow", "1", NULL};
     ASSERT(run_view(gedp, 7, c5) == BRLCAD_OK);
-    const char *c5a[] = {"view", "object", "realize", "u_line", "12", "34", NULL};
+    const char *c5a[] = {"view", "feature", "realize", "u_line", "12", "34", NULL};
     ASSERT(run_view(gedp, 6, c5a) == BRLCAD_OK);
     const char *c5b[] = {"view", "vZ", "-N", "u_line", NULL};
     ASSERT(run_view(gedp, 4, c5b) == BRLCAD_OK);
@@ -254,7 +254,7 @@ main(int argc, const char **argv)
     const char *l0[] = {"view", "annotation", "label", "create", "u_label", "note", "1", "2", "3", NULL};
     ASSERT_VIEW_OK(gedp, 9, l0);
     ASSERT(ged_draw_view_context_label_count(views[0], "u_label") == 1);
-    const char *l1[] = {"view", "object", "info", "u_label", "type", NULL};
+    const char *l1[] = {"view", "feature", "info", "u_label", "type", NULL};
     ASSERT_VIEW_OK(gedp, 5, l1);
     ASSERT(!result_str(gedp).empty());
 
@@ -331,21 +331,21 @@ main(int argc, const char **argv)
 
     const char *c6[] = {"view", "-V", "V0", "annotation", "-L", "line", "create", "l_line", "0", "0", "0", NULL};
     ASSERT(run_view(gedp, 11, c6) == BRLCAD_OK);
-    const char *c7[] = {"view", "-V", "V0", "object", "list", NULL};
+    const char *c7[] = {"view", "-V", "V0", "feature", "list", NULL};
     ASSERT(run_view(gedp, 5, c7) == BRLCAD_OK);
     ASSERT(result_str(gedp).find("l_line") != std::string::npos);
-    const char *c8[] = {"view", "-V", "V1", "object", "list", NULL};
+    const char *c8[] = {"view", "-V", "V1", "feature", "list", NULL};
     ASSERT(run_view(gedp, 5, c8) == BRLCAD_OK);
     ASSERT(result_str(gedp).find("l_line") == std::string::npos);
 
     const char *c11[] = {"view", "db", "add", "all.g", "--as", "g2", NULL};
     ASSERT(run_view(gedp, 6, c11) == BRLCAD_OK);
-    const char *c11a[] = {"view", "object", "style", "set", "g2", "color", "20/30/40", NULL};
+    const char *c11a[] = {"view", "feature", "style", "set", "g2", "color", "20/30/40", NULL};
     ASSERT(run_view(gedp, 7, c11a) == BRLCAD_OK);
-    const char *c11b[] = {"view", "object", "style", "get", "g2", "color", NULL};
+    const char *c11b[] = {"view", "feature", "style", "get", "g2", "color", NULL};
     ASSERT(run_view(gedp, 6, c11b) == BRLCAD_OK);
     ASSERT(result_str(gedp).find("20/30/40") != std::string::npos);
-    const char *c11c[] = {"view", "object", "style", "set", "g2", "arrow", "1", NULL};
+    const char *c11c[] = {"view", "feature", "style", "set", "g2", "arrow", "1", NULL};
     ASSERT(run_view(gedp, 7, c11c) == BRLCAD_ERROR);
     const char *c12[] = {"view", "db", "delete", "g2", NULL};
     ASSERT(run_view(gedp, 4, c12) == BRLCAD_OK);

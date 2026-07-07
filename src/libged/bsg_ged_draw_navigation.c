@@ -44,7 +44,7 @@ ged_draw_has_shapes(struct ged *gedp)
     if (!gedp)
 	return 0;
     int found = 0;
-    ged_draw_scene_root_foreach_shape_ref(gedp, 0, _any_shape_cb, &found);
+    ged_draw_source_root_foreach_shape_ref(gedp, 0, _any_shape_cb, &found);
     return found;
 }
 
@@ -71,7 +71,7 @@ ged_draw_first_shape_ref(struct ged *gedp)
 
     struct _first_shape_data d;
     d.result = GED_DRAW_SHAPE_REF_NULL;
-    ged_draw_scene_root_foreach_shape_ref(gedp, 1, _first_shape_cb, &d);
+    ged_draw_source_root_foreach_shape_ref(gedp, 1, _first_shape_cb, &d);
     return d.result;
 }
 
@@ -116,7 +116,7 @@ _sg_build_shape_snapshot(struct ged *gedp, struct _shape_ref_snapshot *out)
     out->refs = NULL;
     out->count = 0;
     out->capacity = 0;
-    ged_draw_scene_root_foreach_shape_ref(gedp, 1, _snap_shape_cb,
+    ged_draw_source_root_foreach_shape_ref(gedp, 1, _snap_shape_cb,
 	    (void *)out);
 }
 

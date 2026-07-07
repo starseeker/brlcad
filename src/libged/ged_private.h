@@ -299,7 +299,6 @@ GED_EXPORT extern void ged_draw_observers_free(struct ged *gedp);
 struct draw_data_t {
     struct ged *gedp;
     struct db_i *dbip;
-    ged_draw_group_ref draw_parent_group_ref;
     void *view_ctx;
     struct ged_draw_appearance_settings *vs;
     const struct bn_tol *tol;

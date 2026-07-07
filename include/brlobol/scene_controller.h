@@ -254,6 +254,11 @@ public:
     int publishDatabaseSourceInstanceExternalLineSet(
 	const char *sourceInstanceKey,
 	const BRLObolExternalLineSet &lineSet);
+    int publishDatabaseSourceInstancePrimitiveWireframe(
+	const char *sourceInstanceKey,
+	struct rt_db_internal *intern,
+	const struct bg_tess_tol *ttol = NULL,
+	const struct bn_tol *tol = NULL);
     int publishDatabaseSourceExternalPointSet(const char *sourcePath,
 	const BRLObolExternalPointSet &pointSet);
     int publishDatabaseSourceInstanceExternalPointSet(
@@ -355,6 +360,13 @@ public:
 	int materialPolicy);
     int setDatabaseSourceInstanceMaterialPolicy(const char *sourceInstanceKey,
 	int materialPolicy);
+    int refreshDatabaseSourceInstanceMaterialColorFromDatabase(
+	const char *sourceInstanceKey,
+	uint32_t materialRevision,
+	struct db_i *overrideDbip = NULL);
+    int refreshDatabaseSourceMaterialColorsFromDatabase(
+	uint32_t materialRevision,
+	struct db_i *overrideDbip = NULL);
     int setDatabaseSourcePlacementState(const char *sourcePath,
 	SbBool drawMatrixValid,
 	const SbMatrix &drawMatrix,

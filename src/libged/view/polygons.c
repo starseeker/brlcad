@@ -90,7 +90,7 @@ _poly_cmd_create(void *bs, int argc, const char **argv)
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     if (_poly_exists(gd)) {
-	bu_vls_printf(gedp->ged_result_str, "View object named %s already exists\n", gd->vobj);
+	bu_vls_printf(gedp->ged_result_str, "View feature named %s already exists\n", gd->vobj);
 	return BRLCAD_ERROR;
     }
 
@@ -155,7 +155,7 @@ _poly_cmd_select(void *bs, int argc, const char **argv)
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     if (!_poly_exists(gd)) {
-	bu_vls_printf(gedp->ged_result_str, "View object %s does not exist\n", gd->vobj);
+	bu_vls_printf(gedp->ged_result_str, "View feature %s does not exist\n", gd->vobj);
 	return BRLCAD_ERROR;
     }
     struct ged_draw_view_polygon_record rec;
@@ -219,7 +219,7 @@ _poly_cmd_append(void *bs, int argc, const char **argv)
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     if (!_poly_exists(gd)) {
-	bu_vls_printf(gedp->ged_result_str, "View object %s does not exist\n", gd->vobj);
+	bu_vls_printf(gedp->ged_result_str, "View feature %s does not exist\n", gd->vobj);
 	return BRLCAD_ERROR;
     }
     struct ged_draw_view_polygon_record rec;
@@ -282,7 +282,7 @@ _poly_cmd_move(void *bs, int argc, const char **argv)
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     if (!_poly_exists(gd)) {
-	bu_vls_printf(gedp->ged_result_str, "View object %s does not exist\n", gd->vobj);
+	bu_vls_printf(gedp->ged_result_str, "View feature %s does not exist\n", gd->vobj);
 	return BRLCAD_ERROR;
     }
     struct ged_draw_view_polygon_record rec;
@@ -332,7 +332,7 @@ _poly_cmd_clear(void *bs, int argc, const char **argv)
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     if (!_poly_exists(gd)) {
-	bu_vls_printf(gedp->ged_result_str, "View object %s does not exist\n", gd->vobj);
+	bu_vls_printf(gedp->ged_result_str, "View feature %s does not exist\n", gd->vobj);
 	return BRLCAD_ERROR;
     }
     if (!ged_draw_view_polygon_set_current(_poly_ref(gd), 0, -1)) {
@@ -361,7 +361,7 @@ _poly_cmd_close(void *bs, int argc, const char **argv)
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     if (!_poly_exists(gd)) {
-	bu_vls_printf(gedp->ged_result_str, "View object %s does not exist\n", gd->vobj);
+	bu_vls_printf(gedp->ged_result_str, "View feature %s does not exist\n", gd->vobj);
 	return BRLCAD_ERROR;
     }
     struct ged_draw_view_polygon_record rec;
@@ -415,7 +415,7 @@ _poly_cmd_open(void *bs, int argc, const char **argv)
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     if (!_poly_exists(gd)) {
-	bu_vls_printf(gedp->ged_result_str, "View object %s does not exist\n", gd->vobj);
+	bu_vls_printf(gedp->ged_result_str, "View feature %s does not exist\n", gd->vobj);
 	return BRLCAD_ERROR;
     }
     struct ged_draw_view_polygon_record rec;
@@ -470,7 +470,7 @@ _poly_cmd_area(void *bs, int argc, const char **argv)
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     if (!_poly_exists(gd)) {
-	bu_vls_printf(gedp->ged_result_str, "View object %s does not exist\n", gd->vobj);
+	bu_vls_printf(gedp->ged_result_str, "View feature %s does not exist\n", gd->vobj);
 	return BRLCAD_ERROR;
     }
     fastf_t area = 0.0;
@@ -504,7 +504,7 @@ _poly_cmd_overlap(void *bs, int argc, const char **argv)
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     if (!_poly_exists(gd)) {
-	bu_vls_printf(gedp->ged_result_str, "View object %s does not exist\n", gd->vobj);
+	bu_vls_printf(gedp->ged_result_str, "View feature %s does not exist\n", gd->vobj);
 	return BRLCAD_ERROR;
     }
     if (!argc) {
@@ -514,7 +514,7 @@ _poly_cmd_overlap(void *bs, int argc, const char **argv)
 
     ged_draw_view_polygon_ref other_ref = ged_draw_view_context_polygon_find(gd->cv, argv[0]);
     if (ged_draw_view_polygon_ref_is_null(other_ref)) {
-	bu_vls_printf(gedp->ged_result_str, "View object %s does not exist\n", argv[0]);
+	bu_vls_printf(gedp->ged_result_str, "View feature %s does not exist\n", argv[0]);
 	return BRLCAD_ERROR;
     }
 
@@ -548,7 +548,7 @@ _poly_cmd_import(void *bs, int argc, const char **argv)
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     if (_poly_exists(gd)) {
-	bu_vls_printf(gedp->ged_result_str, "View object named %s already exists\n", gd->vobj);
+	bu_vls_printf(gedp->ged_result_str, "View feature named %s already exists\n", gd->vobj);
 	return BRLCAD_ERROR;
     }
 
@@ -593,7 +593,7 @@ _poly_cmd_export(void *bs, int argc, const char **argv)
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     if (!_poly_exists(gd)) {
-	bu_vls_printf(gedp->ged_result_str, "View object %s does not exist\n", gd->vobj);
+	bu_vls_printf(gedp->ged_result_str, "View feature %s does not exist\n", gd->vobj);
 	return BRLCAD_ERROR;
     }
     if (!ged_draw_view_polygon_has_data(_poly_ref(gd))) {
@@ -637,7 +637,7 @@ _poly_cmd_fill(void *bs, int argc, const char **argv)
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     if (!_poly_exists(gd)) {
-	bu_vls_printf(gedp->ged_result_str, "View object %s does not exist\n", gd->vobj);
+	bu_vls_printf(gedp->ged_result_str, "View feature %s does not exist\n", gd->vobj);
 	return BRLCAD_ERROR;
     }
     struct ged_draw_view_polygon_record rec;
@@ -693,7 +693,7 @@ _poly_cmd_fill_color(void *bs, int argc, const char **argv)
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     if (!_poly_exists(gd)) {
-	bu_vls_printf(gedp->ged_result_str, "View object %s does not exist\n", gd->vobj);
+	bu_vls_printf(gedp->ged_result_str, "View feature %s does not exist\n", gd->vobj);
 	return BRLCAD_ERROR;
     }
     if (!ged_draw_view_polygon_has_data(_poly_ref(gd))) {
@@ -741,7 +741,7 @@ _poly_cmd_csg(void *bs, int argc, const char **argv)
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     if (!_poly_exists(gd)) {
-	bu_vls_printf(gedp->ged_result_str, "View object %s does not exist\n", gd->vobj);
+	bu_vls_printf(gedp->ged_result_str, "View feature %s does not exist\n", gd->vobj);
 	return BRLCAD_ERROR;
     }
     if (!ged_draw_view_polygon_has_data(_poly_ref(gd))) {
@@ -773,7 +773,7 @@ _poly_cmd_csg(void *bs, int argc, const char **argv)
 
     ged_draw_view_polygon_ref other_ref = ged_draw_view_context_polygon_find(gd->cv, argv[1]);
     if (ged_draw_view_polygon_ref_is_null(other_ref)) {
-	bu_vls_printf(gedp->ged_result_str, "View object %s does not exist\n", argv[1]);
+	bu_vls_printf(gedp->ged_result_str, "View feature %s does not exist\n", argv[1]);
 	return BRLCAD_ERROR;
     }
 

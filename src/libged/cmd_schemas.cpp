@@ -380,7 +380,7 @@ static const struct bu_opt_cmd_desc view_subcommands[] = {
     {"knob", "Low level rotate, translate, and scale operations", NULL, NULL, raw_args_operands, NULL},
     {"list", "List available views", NULL, NULL, raw_args_operands, NULL},
     {"lod", "Manage level-of-detail settings", NULL, NULL, raw_args_operands, NULL},
-    {"object", "Manage typed Obol view objects", NULL, NULL, raw_args_operands, NULL},
+    {"feature", "Manage typed Obol view features", NULL, NULL, raw_args_operands, NULL},
     {"polygon", "Create and edit polygon annotation objects", NULL, NULL, raw_args_operands, NULL},
     {"quat", "Get or set the view quaternion", NULL, NULL, raw_args_operands, NULL},
     {"selections", "Manage view selections", NULL, NULL, raw_args_operands, NULL},

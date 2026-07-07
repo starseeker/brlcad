@@ -754,7 +754,7 @@ main(int ac, char *av[]) {
 
 
     /* Make sure "Z" clears in the expected way */
-    bu_log("Independent views - view object clearing - default\n");
+    bu_log("Independent views - view feature clearing - default\n");
     s_av[0] = "Z";
     s_av[1] = "-V";
     s_av[2] = "V0";
@@ -769,7 +769,7 @@ main(int ac, char *av[]) {
     ret += img_cmp(2, 3, gedp, ctrl_dir, false, soft_fail);
     ret += img_cmp(3, 3, gedp, ctrl_dir, false, soft_fail);
 
-    bu_log("Independent views - view object clearing - V2\n");
+    bu_log("Independent views - view feature clearing - V2\n");
     s_av[0] = "Z";
     s_av[1] = "-V";
     s_av[2] = "V2";
@@ -782,7 +782,7 @@ main(int ac, char *av[]) {
     ret += img_cmp(3, 3, gedp, ctrl_dir, false, soft_fail);
 
 
-    bu_log("Independent views - view object clearing - V3\n");
+    bu_log("Independent views - view feature clearing - V3\n");
     s_av[0] = "Z";
     s_av[1] = "-V";
     s_av[2] = "V3";
@@ -794,7 +794,7 @@ main(int ac, char *av[]) {
     ret += img_cmp(2, -1, gedp, ctrl_dir, false, soft_fail);
     ret += img_cmp(3, -1, gedp, ctrl_dir, false, soft_fail);
 
-    bu_log("Independent views - view object clearing - V1\n");
+    bu_log("Independent views - view feature clearing - V1\n");
     s_av[0] = "Z";
     s_av[1] = "-V";
     s_av[2] = "V1";
@@ -889,7 +889,7 @@ main(int ac, char *av[]) {
     vline(gedp, 4, 0, 0, 0, 10, 10, -100);
     // Turn the shared line green
     s_av[0] = "view";
-    s_av[1] = "object";
+    s_av[1] = "feature";
     s_av[2] = "style";
     s_av[3] = "set";
     s_av[4] = "l4";
@@ -966,7 +966,7 @@ main(int ac, char *av[]) {
     vline(gedp, 4, 0, 0, 0, 10, 10, -100);
     // Turn the shared line green
     s_av[0] = "view";
-    s_av[1] = "object";
+    s_av[1] = "feature";
     s_av[2] = "style";
     s_av[3] = "set";
     s_av[4] = "l4";
@@ -1015,7 +1015,7 @@ main(int ac, char *av[]) {
     vline(gedp, 4, 0, 0, 0, 10, 10, -100);
     // Turn the shared line green
     s_av[0] = "view";
-    s_av[1] = "object";
+    s_av[1] = "feature";
     s_av[2] = "style";
     s_av[3] = "set";
     s_av[4] = "l4";

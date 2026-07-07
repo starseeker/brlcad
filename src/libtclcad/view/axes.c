@@ -37,10 +37,10 @@
 #include "../tclcad_private.h"
 #include "../view/view.h"
 
-/* Phase T3 (drawing_stack_modernization): data-axes getters and setters now
- * operate through typed GED draw-view data-axis facades.  gv_tcl is no longer
- * read or written by this path; the draw-view feature is the canonical store.
- * BVDAS_DEFAULT_DM_WIDTH is the pixel-width fallback for dm_width in sf calcs. */
+/* Data-axes getters and setters operate through typed GED draw-view data-axis
+ * facades.  gv_tcl is no longer read or written by this path; the draw-view
+ * feature is the canonical store.  BVDAS_DEFAULT_DM_WIDTH is the pixel-width
+ * fallback for dm_width in sf calcs. */
 #define BVDAS_DEFAULT_DM_WIDTH 512  /* fallback pixel width when no DM is attached */
 
 static fastf_t

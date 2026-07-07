@@ -35,10 +35,9 @@
 #include "../tclcad_private.h"
 #include "../view/view.h"
 
-/* Phase T3 (drawing_stack_modernization): the "view get" introspection path
- * (getters in to_data_arrows_func) now recovers values through typed GED
- * draw-view data-arrow facades, making the draw view the canonical read
- * source for Tcl introspection.
+/* The "view get" introspection path (getters in to_data_arrows_func) recovers
+ * values through typed GED draw-view data-arrow facades, making the draw view
+ * the canonical read source for Tcl introspection.
  *
  * Setters no longer write gv_tcl at all; they request typed data-arrow facade
  * operations for color, line_width, tip_length, tip_width, draw, and points. */
@@ -246,7 +245,7 @@ to_data_arrows_func(Tcl_Interp *interp,
 	    struct ged_draw_view_feature_style saved_style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
 	    ged_draw_view_context_data_arrows_style_get(view_ctx, bsg_name, &saved_style);
 
-	    /* Clear out: remove old draw-view object. */
+	    /* Clear out: remove old draw-view feature. */
 	    if (ac < 2) {
 		ged_draw_view_context_data_arrows_points_replace(view_ctx,
 			bsg_name, NULL, 0, &saved_style);

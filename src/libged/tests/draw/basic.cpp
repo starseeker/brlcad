@@ -54,7 +54,7 @@ extern "C" void scene_clear(struct ged *gedp);
 static int
 view_polygon_csg_semantic_check(struct ged *gedp, const char *name)
 {
-    const char *s_av[7] = {"view", "object", "list", name, NULL};
+    const char *s_av[7] = {"view", "feature", "list", name, NULL};
     bu_vls_trunc(gedp->ged_result_str, 0);
     if (ged_exec_view(gedp, 4, s_av) != BRLCAD_OK) {
 	bu_log("view polygon semantic check failed: list command error for %s: %s\n",
@@ -373,7 +373,7 @@ main(int ac, char *av[]) {
     bu_log("Testing UP and DOWN visibility control of drawn objects...\n");
     poly_general(gedp);
     s_av[0] = "view";
-    s_av[1] = "object";
+    s_av[1] = "feature";
     s_av[2] = "hide";
     s_av[3] = "g1";
     s_av[4] = NULL;
@@ -406,7 +406,7 @@ main(int ac, char *av[]) {
 
     // Result is stored in c1 - turn off e1
     s_av[0] = "view";
-    s_av[1] = "object";
+    s_av[1] = "feature";
     s_av[2] = "hide";
     s_av[3] = "e1";
     s_av[4] = NULL;
@@ -431,7 +431,7 @@ main(int ac, char *av[]) {
 
     // Result is stored in c1 - turn off e1
     s_av[0] = "view";
-    s_av[1] = "object";
+    s_av[1] = "feature";
     s_av[2] = "hide";
     s_av[3] = "e1";
     s_av[4] = NULL;
@@ -456,7 +456,7 @@ main(int ac, char *av[]) {
 
     // Result is stored in c1 - turn off e1
     s_av[0] = "view";
-    s_av[1] = "object";
+    s_av[1] = "feature";
     s_av[2] = "hide";
     s_av[3] = "e1";
     s_av[4] = NULL;
@@ -471,7 +471,7 @@ main(int ac, char *av[]) {
     bu_log("Testing setting view feature color...\n");
     poly_general(gedp);
     s_av[0] = "view";
-    s_av[1] = "object";
+    s_av[1] = "feature";
     s_av[2] = "style";
     s_av[3] = "set";
     s_av[4] = "g1";

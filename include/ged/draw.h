@@ -392,6 +392,7 @@ struct ged_draw_group_record {
     const char *path;                    /**< borrowed */
     const struct db_full_path *fullpath; /**< borrowed; valid while draw scene is unchanged */
     void *view;                          /**< borrowed view context; NULL for view-independent groups */
+    struct ged_draw_appearance_settings appearance;
     int draw_mode;
     fastf_t transparency;
     int visible;
@@ -1199,7 +1200,7 @@ ged_draw_view_context_gobject_create(
     struct bu_vls *result);
 
 GED_EXPORT extern int
-ged_draw_view_context_object_remove(
+ged_draw_view_context_managed_feature_remove(
     struct ged *gedp,
     void *view_ctx,
     const char *name,
@@ -1207,7 +1208,7 @@ ged_draw_view_context_object_remove(
     struct bu_vls *result);
 
 GED_EXPORT extern int
-ged_draw_view_context_object_visible_get(
+ged_draw_view_context_managed_feature_visible_get(
     struct ged *gedp,
     void *view_ctx,
     const char *name,
@@ -1216,7 +1217,7 @@ ged_draw_view_context_object_visible_get(
     struct bu_vls *result);
 
 GED_EXPORT extern int
-ged_draw_view_context_object_visible_set(
+ged_draw_view_context_managed_feature_visible_set(
     struct ged *gedp,
     void *view_ctx,
     const char *name,
@@ -1225,7 +1226,7 @@ ged_draw_view_context_object_visible_set(
     struct bu_vls *result);
 
 GED_EXPORT extern int
-ged_draw_view_context_object_style_get(
+ged_draw_view_context_managed_feature_style_get(
     struct ged *gedp,
     void *view_ctx,
     const char *name,
@@ -1234,7 +1235,7 @@ ged_draw_view_context_object_style_get(
     struct bu_vls *result);
 
 GED_EXPORT extern int
-ged_draw_view_context_object_style_apply(
+ged_draw_view_context_managed_feature_style_apply(
     struct ged *gedp,
     void *view_ctx,
     const char *name,
@@ -1244,7 +1245,7 @@ ged_draw_view_context_object_style_apply(
     struct bu_vls *result);
 
 GED_EXPORT extern int
-ged_draw_view_context_object_realize(
+ged_draw_view_context_managed_feature_realize(
     struct ged *gedp,
     void *view_ctx,
     const char *name,
@@ -2029,38 +2030,6 @@ GED_EXPORT extern int
 ged_draw_shape_ref_update_bounds_from_geometry(struct ged *gedp,
 	ged_draw_shape_ref ref,
 	int *bad_cmd);
-
-GED_EXPORT extern int
-ged_draw_shape_ref_publish_line_set(struct ged *gedp,
-				    ged_draw_shape_ref ref,
-				    const point_t *points,
-				    const int *commands,
-				    size_t point_count);
-
-GED_EXPORT extern int
-ged_draw_shape_ref_publish_point_set(struct ged *gedp,
-				     ged_draw_shape_ref ref,
-				     const point_t *points,
-				     size_t point_count);
-
-GED_EXPORT extern int
-ged_draw_shape_ref_publish_indexed_face_set(struct ged *gedp,
-	ged_draw_shape_ref ref,
-	const point_t *points,
-	size_t point_count,
-	const vect_t *normals,
-	size_t normal_count,
-	const int *indices,
-	size_t index_count);
-
-GED_EXPORT extern int
-ged_draw_shape_ref_publish_primitive_wireframe(struct ged *gedp,
-	ged_draw_shape_ref ref,
-	struct rt_db_internal *ip,
-	const struct bg_tess_tol *ttol,
-	const struct bn_tol *tol,
-	void *view_ctx,
-	int adaptive);
 
 GED_EXPORT extern ged_draw_shape_ref
 ged_draw_highlighted_shape_ref(const struct ged *gedp);

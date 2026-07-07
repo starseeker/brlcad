@@ -41,7 +41,6 @@
 #include "rt/view.h"
 #include "vmath.h"
 
-#include "./bsg_ged_draw_private.h"
 #include "./ged_private.h"
 
 #include <algorithm>
@@ -679,55 +678,6 @@ ged_obol_path_can_publish_database_source(struct db_i *dbip, const char *path)
     return (dp->d_flags & RT_DIR_SOLID) ? 1 : 0;
 }
 
-static std::string
-ged_obol_db_path_without_instance_suffixes(const char *path)
-{
-    std::string lookup_path;
-    if (!path)
-	return lookup_path;
-
-    for (const char *cp = ged_obol_skip_leading_slash(path); *cp; cp++) {
-	if (*cp == '@' && cp[1] >= '0' && cp[1] <= '9') {
-	    while (cp[1] && cp[1] != '/')
-		cp++;
-	    continue;
-	}
-	lookup_path.push_back(*cp);
-    }
-    return lookup_path;
-}
-
-static int
-ged_obol_database_source_path_color(struct ged *gedp,
-				    const char *path,
-				    SbColor &color)
-{
-    if (!gedp || !gedp->dbip || !path || !path[0])
-	return 0;
-
-    const std::string lookup_path =
-	ged_obol_db_path_without_instance_suffixes(path);
-    if (lookup_path.empty())
-	return 0;
-
-    struct db_full_path fullpath;
-    db_full_path_init(&fullpath);
-    if (db_string_to_path(&fullpath, gedp->dbip, lookup_path.c_str()) != 0) {
-	db_free_full_path(&fullpath);
-	return 0;
-    }
-
-    struct bu_color db_color = BU_COLOR_INIT_ZERO;
-    db_full_path_color(&db_color, &fullpath, gedp->dbip);
-    unsigned char rgb[3] = {255, 255, 255};
-    bu_color_to_rgb_chars(&db_color, rgb);
-    color = SbColor(static_cast<float>(rgb[0]) / 255.0f,
-		    static_cast<float>(rgb[1]) / 255.0f,
-		    static_cast<float>(rgb[2]) / 255.0f);
-    db_free_full_path(&fullpath);
-    return 1;
-}
-
 static int
 ged_obol_path_equal(const char *a, const char *b)
 {
@@ -952,6 +902,12 @@ ged_obol_source_state_add_group(ged_obol_source_state &state,
     state.groupOverlay = group_record.is_overlay ? true : false;
     state.groupTransparency =
 	static_cast<float>(group_record.transparency);
+    if (group_record.appearance.color_override) {
+	state.colorOverride = true;
+	state.color = ged_obol_color_from_rgb(group_record.appearance.color);
+	state.materialColorValid = true;
+	state.materialColor = state.color;
+    }
 }
 
 static void
@@ -1004,30 +960,17 @@ ged_obol_source_state_from_record(ged_obol_source_state &state,
 	    state.materialRevision =
 		ged_obol_fold_revision(material_summary.material_revision);
 
-	struct ged_draw_appearance_settings group_appearance =
-	    GED_DRAW_APPEARANCE_SETTINGS_INIT;
-	if (ged_draw_group_ref_appearance_settings(gedp, record->group,
-		&group_appearance) && group_appearance.color_override) {
-	    state.colorOverride = true;
-	    state.color = ged_obol_color_from_rgb(group_appearance.color);
-	    state.materialColorValid = true;
-	    state.materialColor = state.color;
-	}
     }
 
     if ((!state.materialColorValid || state.materialRevision == 0) &&
 	    !state.colorOverride && gedp && gedp->dbip &&
 	    record->fullpath && record->fullpath->fp_len > 0) {
-	struct bu_color db_color = BU_COLOR_INIT_ZERO;
-	unsigned char rgb[3] = {255, 255, 255};
-	db_full_path_color(&db_color,
-			   (struct db_full_path *)record->fullpath, gedp->dbip);
-	bu_color_to_rgb_chars(&db_color, rgb);
-	state.materialColorValid = true;
-	state.materialColor = SbColor(
-				  static_cast<float>(rgb[0]) / 255.0f,
-				  static_cast<float>(rgb[1]) / 255.0f,
-				  static_cast<float>(rgb[2]) / 255.0f);
+	SbColor db_material_color;
+	if (brlobol_database_source_fullpath_material_color(
+		gedp->dbip, record->fullpath, db_material_color)) {
+	    state.materialColorValid = true;
+	    state.materialColor = db_material_color;
+	}
     }
 }
 
@@ -1088,7 +1031,7 @@ ged_obol_source_state_from_database_source(ged_obol_source_state &state,
     if ((!state.materialColorValid || state.materialRevision == 0) &&
 	    !state.colorOverride) {
 	SbColor db_material_color;
-	if (ged_obol_database_source_path_color(gedp, path,
+	if (gedp && brlobol_database_source_path_material_color(gedp->dbip, path,
 		db_material_color)) {
 	    state.materialColorValid = true;
 	    state.materialColor = db_material_color;
@@ -8319,7 +8262,7 @@ ged_draw_obol_overlay_group_style_apply(struct ged *gedp,
 	style->arrow_tip_width >= 0.0) {
 	if (result)
 	    bu_vls_printf(result,
-			  "View object %s does not support arrow settings\n", name);
+			  "View feature %s does not support arrow settings\n", name);
 	return 0;
     }
 
@@ -8358,8 +8301,182 @@ ged_draw_obol_overlay_group_style_apply(struct ged *gedp,
     return changed >= 0 ? 1 : 0;
 }
 
+static int
+ged_draw_obol_database_group_display_summary(
+    struct ged *gedp,
+    void *view_ctx,
+    const char *name,
+    struct ged_draw_scene_display_summary *summary)
+{
+    if (!gedp || !name || !name[0] ||
+	!ged_draw_obol_group_display_summary_for_path(gedp, name, summary))
+	return 0;
+
+    SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
+    if (!scene)
+	return 0;
+
+    const std::string target_group =
+	ged_obol_group_path_from_record_path(name);
+    if (target_group.empty())
+	return 0;
+
+    const int source_count = scene->getDatabaseSourceCount();
+    for (int i = 0; i < source_count; i++) {
+	BRLObolDatabaseSourceSummary source_summary;
+	if (!scene->getDatabaseSourceSummary(i, source_summary) ||
+	    !source_summary.valid ||
+	    !ged_obol_database_source_instance_in_scope(source_summary, view_ctx))
+	    continue;
+
+	const std::string owner_group_path =
+	    ged_obol_database_source_owner_group_path_from_summary(
+		source_summary);
+	if (ged_obol_path_equal(owner_group_path.c_str(),
+		target_group.c_str()) ||
+	    ged_obol_path_has_prefix(owner_group_path.c_str(),
+		target_group.c_str()))
+	    return 1;
+    }
+
+    return 0;
+}
+
+
+static int
+ged_draw_obol_database_group_remove(struct ged *gedp, void *view_ctx,
+				    const char *name)
+{
+    if (!gedp || !name || !name[0] ||
+	!ged_draw_obol_scene_controller_owned(gedp))
+	return 0;
+
+    SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
+    if (!scene)
+	return 0;
+
+    const std::string target_group =
+	ged_obol_group_path_from_record_path(name);
+    if (target_group.empty())
+	return 0;
+
+    struct ged_draw_scene_display_summary summary;
+    if (!ged_draw_obol_database_group_display_summary(gedp, view_ctx, name,
+	    &summary))
+	return 0;
+
+    std::vector<std::string> instance_keys;
+    const int source_count = scene->getDatabaseSourceCount();
+    for (int i = 0; i < source_count; i++) {
+	BRLObolDatabaseSourceSummary source_summary;
+	if (!scene->getDatabaseSourceSummary(i, source_summary) ||
+	    !source_summary.valid ||
+	    !ged_obol_database_source_instance_in_scope(source_summary, view_ctx))
+	    continue;
+
+	const std::string owner_group_path =
+	    ged_obol_database_source_owner_group_path_from_summary(
+		source_summary);
+	if (ged_obol_path_equal(owner_group_path.c_str(),
+		target_group.c_str()) ||
+	    ged_obol_path_has_prefix(owner_group_path.c_str(),
+		target_group.c_str()))
+	    ged_obol_append_database_source_instance_key(instance_keys,
+		source_summary);
+    }
+
+    int changed = ged_obol_remove_instance_keys(instance_keys, scene);
+    if (scene->removeGroup(target_group.c_str()) > 0)
+	changed = 1;
+    if (changed)
+	scene->realizePending();
+    return changed ? 1 : 0;
+}
+
+
+static int
+ged_draw_obol_database_group_style_get(
+    struct ged *gedp,
+    void *view_ctx,
+    const char *name,
+    struct ged_draw_view_feature_style *style)
+{
+    if (!style)
+	return 0;
+
+    struct ged_draw_scene_display_summary summary;
+    if (!ged_draw_obol_database_group_display_summary(gedp, view_ctx, name,
+	    &summary))
+	return 0;
+
+    struct ged_draw_appearance_settings appearance =
+	GED_DRAW_APPEARANCE_SETTINGS_INIT;
+    (void)ged_draw_obol_group_appearance_for_path(gedp, name, &appearance);
+
+    style->visible = summary.visible ? 1 : 0;
+    style->color_valid = appearance.color_override ? 1 : summary.material_valid;
+    if (appearance.color_override)
+	VMOVE(style->color, appearance.color);
+    else if (summary.material_valid)
+	VMOVE(style->color, summary.material_color);
+    else
+	VMOVE(style->color, appearance.color);
+    style->line_width = summary.line_width;
+    style->line_style = summary.line_style;
+    return 1;
+}
+
+
+static int
+ged_draw_obol_database_group_style_apply(
+    struct ged *gedp,
+    void *view_ctx,
+    const char *name,
+    const struct ged_draw_view_feature_style *style,
+    struct bu_vls *result)
+{
+    if (!gedp || !name || !name[0] || !style)
+	return 0;
+
+    struct ged_draw_scene_display_summary summary;
+    if (!ged_draw_obol_database_group_display_summary(gedp, view_ctx, name,
+	    &summary))
+	return 0;
+
+    if (style->arrow >= 0 || style->arrow_tip_length >= 0.0 ||
+	style->arrow_tip_width >= 0.0) {
+	if (result)
+	    bu_vls_printf(result,
+			  "View feature %s does not support arrow settings\n", name);
+	return 0;
+    }
+
+    int ok = 1;
+    if (style->visible >= 0)
+	ok = ged_draw_obol_group_update_display_for_path(gedp, name, 1,
+		style->visible ? 1 : 0) && ok;
+
+    if (style->color_valid || style->line_width >= 0) {
+	struct ged_draw_appearance_settings appearance =
+	    GED_DRAW_APPEARANCE_SETTINGS_INIT;
+	if (!ged_draw_obol_group_appearance_for_path(gedp, name, &appearance))
+	    return 0;
+	if (style->color_valid) {
+	    appearance.color_override = 1;
+	    VMOVE(appearance.color, style->color);
+	}
+	if (style->line_width >= 0)
+	    appearance.s_line_width = style->line_width;
+	ok = ged_draw_obol_group_update_appearance_for_path(gedp, name,
+		&appearance) && ok;
+    }
+
+    return ok ? 1 : 0;
+}
+
+
 extern "C" int
-ged_draw_view_context_object_remove(
+ged_draw_view_context_managed_feature_remove(
     struct ged *gedp,
     void *view_ctx,
     const char *name,
@@ -8380,7 +8497,8 @@ ged_draw_view_context_object_remove(
 
     if (ged_draw_shape_ref_is_null(shape_ref)) {
 	if (ged_draw_obol_overlay_erase_name_context(gedp, view_ctx, name) ||
-	    ged_draw_source_erase_groups_by_name_at_root(gedp, name))
+	    ged_draw_obol_database_source_remove_for_path(gedp, name) ||
+	    ged_draw_obol_database_group_remove(gedp, view_ctx, name))
 	    return 1;
 	if (result)
 	    bu_vls_printf(result, "No view feature named %s\n", name);
@@ -8401,11 +8519,17 @@ ged_draw_view_context_object_remove(
 	return 0;
     }
 
-    return ged_draw_shape_ref_release(gedp, shape_ref);
+    if (rec.display_name && rec.display_name[0] &&
+	    ged_draw_obol_database_source_remove_for_path(gedp, rec.display_name))
+	return 1;
+
+    if (result)
+	bu_vls_printf(result, "No Obol-managed view feature named %s\n", name);
+    return 0;
 }
 
 extern "C" int
-ged_draw_view_context_object_visible_get(
+ged_draw_view_context_managed_feature_visible_get(
     struct ged *gedp,
     void *view_ctx,
     const char *name,
@@ -8436,6 +8560,12 @@ ged_draw_view_context_object_visible_get(
 	    *visible = group->visible.getValue() ? 1 : 0;
 	    return 1;
 	}
+	struct ged_draw_scene_display_summary summary;
+	if (ged_draw_obol_database_group_display_summary(gedp, view_ctx, name,
+		&summary)) {
+	    *visible = summary.visible ? 1 : 0;
+	    return 1;
+	}
 	if (result)
 	    bu_vls_printf(result, "No view feature named %s\n", name);
 	return 0;
@@ -8452,7 +8582,7 @@ ged_draw_view_context_object_visible_get(
 }
 
 extern "C" int
-ged_draw_view_context_object_visible_set(
+ged_draw_view_context_managed_feature_visible_set(
     struct ged *gedp,
     void *view_ctx,
     const char *name,
@@ -8487,6 +8617,11 @@ ged_draw_view_context_object_visible_set(
 	    return ged_draw_obol_overlay_group_style_apply(gedp, group_path,
 		    group, &style, result, name);
 	}
+	struct ged_draw_scene_display_summary summary;
+	if (ged_draw_obol_database_group_display_summary(gedp, view_ctx, name,
+		&summary))
+	    return ged_draw_obol_group_update_display_for_path(gedp, name, 1,
+		       visible ? 1 : 0);
 	if (result)
 	    bu_vls_printf(result, "No view feature named %s\n", name);
 	return 0;
@@ -8495,18 +8630,18 @@ ged_draw_view_context_object_visible_set(
     return ged_draw_shape_ref_set_visible(gedp, shape_ref, visible ? 1 : 0);
 }
 
-struct ged_draw_object_color_prefix_state {
+struct ged_draw_managed_feature_color_prefix_state {
     struct ged *gedp;
     const struct db_full_path *prefix;
     const unsigned char *rgb;
 };
 
 static int
-ged_draw_object_color_prefix_cb(const struct ged_draw_shape_record *rec,
-				void *ud)
+ged_draw_managed_feature_color_prefix_cb(const struct ged_draw_shape_record *rec,
+					 void *ud)
 {
-    struct ged_draw_object_color_prefix_state *ctx =
-	(struct ged_draw_object_color_prefix_state *)ud;
+    struct ged_draw_managed_feature_color_prefix_state *ctx =
+	(struct ged_draw_managed_feature_color_prefix_state *)ud;
     if (!ctx || !rec || !rec->fullpath || !ctx->prefix ||
 	!db_full_path_match_top(ctx->prefix, rec->fullpath))
 	return 1;
@@ -8516,7 +8651,7 @@ ged_draw_object_color_prefix_cb(const struct ged_draw_shape_record *rec,
 }
 
 extern "C" int
-ged_draw_view_context_object_style_get(
+ged_draw_view_context_managed_feature_style_get(
     struct ged *gedp,
     void *view_ctx,
     const char *name,
@@ -8554,15 +8689,17 @@ ged_draw_view_context_object_style_get(
 	    style->line_style = group->lineStyle.getValue();
 	    return 1;
 	}
+	if (ged_draw_obol_database_group_style_get(gedp, view_ctx, name, style))
+	    return 1;
 	if (result)
-	    bu_vls_printf(result, "No view object named %s\n", name);
+	    bu_vls_printf(result, "No view feature named %s\n", name);
 	return 0;
     }
 
     struct ged_draw_shape_record rec;
     if (!ged_draw_shape_record_get(gedp, shape_ref, &rec)) {
 	if (result)
-	    bu_vls_printf(result, "No view object named %s\n", name);
+	    bu_vls_printf(result, "No view feature named %s\n", name);
 	return 0;
     }
 
@@ -8574,7 +8711,7 @@ ged_draw_view_context_object_style_get(
 }
 
 extern "C" int
-ged_draw_view_context_object_style_apply(
+ged_draw_view_context_managed_feature_style_apply(
     struct ged *gedp,
     void *view_ctx,
     const char *name,
@@ -8597,15 +8734,18 @@ ged_draw_view_context_object_style_apply(
 	if (group)
 	    return ged_draw_obol_overlay_group_style_apply(gedp, group_path,
 		    group, style, result, name);
+	if (ged_draw_obol_database_group_style_apply(gedp, view_ctx, name, style,
+		result))
+	    return 1;
 	if (result)
-	    bu_vls_printf(result, "No view object named %s\n", name);
+	    bu_vls_printf(result, "No view feature named %s\n", name);
 	return 0;
     }
 
     struct ged_draw_shape_record rec;
     if (!ged_draw_shape_record_get(gedp, shape_ref, &rec)) {
 	if (result)
-	    bu_vls_printf(result, "No view object named %s\n", name);
+	    bu_vls_printf(result, "No view feature named %s\n", name);
 	return 0;
     }
 
@@ -8613,13 +8753,13 @@ ged_draw_view_context_object_style_apply(
 	style->arrow_tip_width >= 0.0) {
 	if (result)
 	    bu_vls_printf(result,
-			  "View object %s does not support arrow settings\n", name);
+			  "View feature %s does not support arrow settings\n", name);
 	return 0;
     }
     if (style->line_width >= 0 || style->line_style >= 0) {
 	if (result)
 	    bu_vls_printf(result,
-			  "View object %s does not support line style settings\n", name);
+			  "View feature %s does not support line style settings\n", name);
 	return 0;
     }
 
@@ -8630,12 +8770,12 @@ ged_draw_view_context_object_style_apply(
     if (style->color_valid) {
 	ok = ged_draw_shape_ref_set_color(gedp, shape_ref, style->color) && ok;
 	if (recursive && rec.fullpath) {
-	    struct ged_draw_object_color_prefix_state ctx;
+	    struct ged_draw_managed_feature_color_prefix_state ctx;
 	    ctx.gedp = gedp;
 	    ctx.prefix = rec.fullpath;
 	    ctx.rgb = style->color;
 	    ged_draw_foreach_shape_record(gedp,
-					  ged_draw_object_color_prefix_cb, &ctx);
+					  ged_draw_managed_feature_color_prefix_cb, &ctx);
 	}
     }
 
@@ -8643,7 +8783,7 @@ ged_draw_view_context_object_style_apply(
 }
 
 extern "C" int
-ged_draw_view_context_object_realize(
+ged_draw_view_context_managed_feature_realize(
     struct ged *gedp,
     void *view_ctx,
     const char *name,
@@ -8677,7 +8817,7 @@ ged_draw_view_context_object_realize(
 	char *fullpath = db_path_to_string(rec.fullpath);
 	if (fullpath) {
 	    path = fullpath;
-	    bu_free(fullpath, "view object realize fullpath");
+	    bu_free(fullpath, "view feature realize fullpath");
 	}
     }
     if (path.empty() && rec.display_name && rec.display_name[0])
@@ -13085,6 +13225,27 @@ ged_draw_obol_database_source_clear_vlist_for_path(
 }
 
 extern "C" int
+ged_draw_obol_database_source_publish_primitive_wireframe_for_path(
+    struct ged *gedp,
+    const char *path,
+    struct rt_db_internal *ip,
+    const struct bg_tess_tol *ttol,
+    const struct bn_tol *tol)
+{
+    if (!gedp || !path || !path[0] || !ip)
+	return 0;
+
+    SoBRLSceneController *scene = NULL;
+    std::string source_instance_key;
+    if (!ged_obol_database_source_scene_instance_for_path(gedp, path, &scene,
+	    source_instance_key))
+	return 0;
+
+    return scene->publishDatabaseSourceInstancePrimitiveWireframe(
+	       source_instance_key.c_str(), ip, ttol, tol);
+}
+
+extern "C" int
 ged_draw_obol_database_source_publish_line_set_for_path(
     struct ged *gedp,
     const char *path,
@@ -15032,6 +15193,27 @@ ged_draw_obol_database_source_material_summary_for_path(
 }
 
 extern "C" int
+ged_draw_obol_database_source_refresh_material_color_for_path(
+    struct ged *gedp,
+    const char *path,
+    struct db_i *dbip,
+    uint64_t material_revision)
+{
+    SoBRLSceneController *scene = NULL;
+    std::string source_instance_key;
+    if (!ged_obol_database_source_scene_instance_for_path(gedp, path, &scene,
+	    source_instance_key))
+	return 0;
+
+    const int changed =
+	scene->refreshDatabaseSourceInstanceMaterialColorFromDatabase(
+	    source_instance_key.c_str(),
+	    ged_obol_fold_revision(material_revision),
+	    dbip);
+    return changed > 0 ? 1 : 0;
+}
+
+extern "C" int
 ged_draw_obol_database_source_evaluated_region_for_path(
     struct ged *gedp,
     const char *path,
@@ -15293,43 +15475,11 @@ ged_obol_refresh_scene_material_colors(struct ged *gedp,
 
     const uint32_t material_revision =
 	ged_obol_fold_revision(ged_draw_material_revision(gedp));
-    const int source_count = scene->getDatabaseSourceCount();
-    int changed = 0;
-
-    for (int i = 0; i < source_count; i++) {
-	BRLObolDatabaseSourceSummary summary;
-	if (!scene->getDatabaseSourceSummary(i, summary) || !summary.valid)
-	    continue;
-
-	const char *path = summary.path.getString();
-	const char *instance_key = summary.instanceKey.getString();
-	if (!path || !path[0] || !instance_key || !instance_key[0])
-	    continue;
-
-	SbColor material_color;
-	if (!ged_obol_database_source_path_color(gedp, path, material_color))
-	    continue;
-
-	const int source_changed = scene->setDatabaseSourceInstanceState(
-				       instance_key,
-				       FALSE,
-				       summary.sourceRevision,
-				       summary.inputsRevision,
-				       summary.visible,
-				       summary.highlighted,
-				       summary.lineStyle,
-				       summary.lineWidth,
-				       summary.transparency,
-				       summary.colorOverride,
-				       summary.color,
-				       TRUE,
-				       material_color,
-				       material_revision);
-	if (source_changed > 0)
-	    changed = 1;
-    }
-
-    return changed;
+    const int changed =
+	scene->refreshDatabaseSourceMaterialColorsFromDatabase(
+	    material_revision,
+	    gedp->dbip);
+    return changed > 0 ? 1 : 0;
 }
 
 static int

@@ -32,8 +32,13 @@
 #include <stdint.h>
 
 #include "ged/defines.h"
+#include "vmath.h"
 
 __BEGIN_DECLS
+
+struct rt_db_internal;
+struct bg_tess_tol;
+struct bn_tol;
 
 struct ged_draw_obol_lod_service_status {
     int attached;
@@ -210,6 +215,79 @@ GED_EXPORT int
 ged_draw_obol_database_source_count(struct ged *gedp,
 				    int skip_overlay_groups,
 				    size_t *out);
+
+GED_EXPORT int
+ged_draw_obol_database_source_remove_for_path(struct ged *gedp,
+					      const char *path);
+
+GED_EXPORT int
+ged_draw_obol_scene_controller_ensure_owned(struct ged *gedp,
+					    int sync_current_scene);
+
+GED_EXPORT int
+ged_draw_view_context_obol_scene_adapter_attach(struct ged *gedp,
+						void *view_ctx);
+
+GED_EXPORT int
+ged_draw_view_context_obol_feature_adapter_attach(struct ged *gedp,
+						  void *view_ctx);
+
+GED_EXPORT int
+ged_draw_view_context_obol_polygon_adapter_attach(struct ged *gedp,
+						  void *view_ctx);
+
+GED_EXPORT int
+ged_draw_view_context_obol_selection_adapter_attach(struct ged *gedp,
+						    void *view_ctx);
+
+GED_EXPORT size_t
+ged_draw_obol_view_context_clear(void *view_ctx,
+				 int flags);
+
+GED_EXPORT int
+ged_draw_obol_database_source_publish_line_set_for_path(
+    struct ged *gedp,
+    const char *path,
+    const point_t *points,
+    const int *commands,
+    size_t point_count);
+
+GED_EXPORT int
+ged_draw_obol_database_source_publish_point_set_for_path(
+    struct ged *gedp,
+    const char *path,
+    const point_t *points,
+    size_t point_count);
+
+GED_EXPORT int
+ged_draw_obol_database_source_publish_indexed_face_set_for_path(
+    struct ged *gedp,
+    const char *path,
+    const point_t *points,
+    size_t point_count,
+    const vect_t *normals,
+    size_t normal_count,
+    const int *indices,
+    size_t index_count);
+
+GED_EXPORT int
+ged_draw_obol_database_source_publish_lod_indexed_face_set_for_path(
+    struct ged *gedp,
+    const char *path,
+    const point_t *points,
+    size_t point_count,
+    const vect_t *normals,
+    size_t normal_count,
+    const int *indices,
+    size_t index_count);
+
+GED_EXPORT int
+ged_draw_obol_database_source_publish_primitive_wireframe_for_path(
+    struct ged *gedp,
+    const char *path,
+    struct rt_db_internal *ip,
+    const struct bg_tess_tol *ttol,
+    const struct bn_tol *tol);
 
 __END_DECLS
 

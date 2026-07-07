@@ -51,7 +51,7 @@ extern int _view_cmd_axes(void *bs, int argc, const char **argv);
 extern int _view_cmd_labels(void *bs, int argc, const char **argv);
 extern int _view_cmd_lod(void *bs, int argc, const char **argv);
 extern int _view_cmd_polygons(void *bs, int argc, const char **argv);
-extern int _view_cmd_object(void *bs, int argc, const char **argv);
+extern int _view_cmd_feature(void *bs, int argc, const char **argv);
 extern int _view_cmd_annotation(void *bs, int argc, const char **argv);
 extern int _view_cmd_polygon(void *bs, int argc, const char **argv);
 extern int _view_cmd_db_objects(void *bs, int argc, const char **argv);

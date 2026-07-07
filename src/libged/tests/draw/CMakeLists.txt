@@ -327,52 +327,6 @@ distclean(${CMAKE_CURRENT_BINARY_DIR}/rtw_view_t3.g)
 distclean(${CMAKE_CURRENT_BINARY_DIR}/rtw_view_t4.g)
 distclean(${CMAKE_CURRENT_BINARY_DIR}/rtw_view_t5.g)
 
-# GED draw-scene API regression.
-brlcad_addexec(ged_test_ged_draw_scene "ged_draw_scene.cpp" "libged" TEST)
-if(TARGET ged_test_ged_draw_scene)
-  foreach(tdp ${test_deps})
-    if (TARGET ${tdp})
-      add_dependencies(ged_test_ged_draw_scene ${tdp})
-    endif ()
-  endforeach()
-endif(TARGET ged_test_ged_draw_scene)
-set(ged_draw_scene_shards
-  typed
-  core
-  index
-  tree
-  highlight_material
-  view_scene
-  bounds_frame
-  highlight_revision
-  path_api
-  rename
-  ref_remove
-  source_update
-  selection_fanout
-  comb_update
-  scale
-  backend
-)
-foreach(draw_scene_shard ${ged_draw_scene_shards})
-  brlcad_add_test(NAME ged_test_ged_draw_scene_${draw_scene_shard} COMMAND ged_test_ged_draw_scene "${CMAKE_CURRENT_SOURCE_DIR}" "${draw_scene_shard}")
-  if(TARGET ged_test_ged_draw_scene)
-    set_property(TEST ged_test_ged_draw_scene_${draw_scene_shard} APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
-  endif()
-endforeach()
-distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_draw_scene_tmp.g)
-distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_draw_scene_cache)
-distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_draw_scene_all.g)
-distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_draw_scene_cache_all)
-distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_draw_scene_tree_view.g)
-distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_draw_scene_cache_tree_view)
-distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_draw_scene_retained.g)
-distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_draw_scene_cache_retained)
-foreach(draw_scene_shard ${ged_draw_scene_shards})
-  distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_draw_scene_${draw_scene_shard}.g)
-  distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_draw_scene_cache_${draw_scene_shard})
-endforeach()
-
 # GED draw transaction to Obol controller bridge regression.
 brlcad_addexec(ged_test_obol_draw_sync "obol_sync.cpp" "libged;libbrlobol;libwdb" TEST)
 if(TARGET ged_test_obol_draw_sync)
@@ -450,7 +404,6 @@ foreach(_ged_drawing_stage0_test
     ged_test_lod_crossrun
     ged_test_mged_view_state
     ged_test_rtwizard_view
-    ged_test_ged_draw_scene
     ged_test_view_independent
     ged_test_view_command
     ged_test_mged_shaded_mode)
@@ -465,7 +418,6 @@ cmakefiles(
   moss.g
   moss.png
   rook.g
-  ged_draw_scene.cpp
   selection_semantics.cpp
   snap_semantics.cpp
   measure_semantics.cpp

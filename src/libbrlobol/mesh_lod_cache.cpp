@@ -44,7 +44,7 @@
 #define POP_MAXLEVEL 16
 #define POP_CACHEDIR BRLOBOL_DRAW_CACHE_DIR
 #define MBUMP 1.01
-#define CACHE_CURRENT_FORMAT 2
+#define CACHE_CURRENT_FORMAT 3
 
 #define CACHE_POP_MAX_LEVEL "th"
 #define CACHE_POP_SWITCH_LEVEL "sw"
@@ -554,6 +554,14 @@ BRLObolPopState::triProcess(void)
 	}
     }
 
+    int firstPopulatedLevel = -1;
+    for (size_t levelIndex = 0; levelIndex < levelTris.size(); levelIndex++) {
+	if (levelTris[levelIndex].size()) {
+	    firstPopulatedLevel = static_cast<int>(levelIndex);
+	    break;
+	}
+    }
+
     size_t triSum = 0;
     if (maxFaceRatio > 0.99 || maxFaceRatio < 0) {
 	maxPopThresholdLevel = static_cast<int>(levelTris.size() - 1);
@@ -573,6 +581,9 @@ BRLObolPopState::triProcess(void)
 	    }
 	}
     }
+
+    if (firstPopulatedLevel >= 0 && maxPopThresholdLevel < firstPopulatedLevel)
+	maxPopThresholdLevel = firstPopulatedLevel;
 }
 
 BRLObolPopState::BRLObolPopState(

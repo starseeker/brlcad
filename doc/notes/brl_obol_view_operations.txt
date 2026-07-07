@@ -4,10 +4,10 @@ BRL-CAD / Obol View Operation Semantics
 Purpose
 -------
 
-This note records BRL-CAD view-object behavior that is command semantics, not
+This note records BRL-CAD managed view-feature behavior that is command semantics, not
 generic Obol rendering preference.  Obol can support richer visualization and
 interaction than legacy display-manager code, but command behavior should flow
-through typed object operations with explicit ownership and capabilities.
+through typed feature operations with explicit ownership and capabilities.
 
 Current Command Model
 ---------------------
@@ -19,18 +19,18 @@ style mutation behind one resolver.
 
 The Obol-oriented command split is:
 
-* `view object` for lifecycle, info, visibility, style, and realization.
+* `view feature` for lifecycle, info, visibility, style, and realization.
 * `view annotation` for user-authored line, arrow, label, and axes objects.
 * `view polygon` for polygon creation/editing.
 * `view db` for database display/edit-proxy insertion.
 * Future `view result` and `view tool` families should manage command-owned
   scene results and interactive Coin tools rather than overloading
-  `view object` with type-specific creation verbs.
+  `view feature` with type-specific creation verbs.
 
-`view object` command code should resolve one typed object handle and dispatch
-through object/capability APIs.  It must not independently branch on "feature
+`view feature` command code should resolve one typed feature handle and dispatch
+through feature/capability APIs.  It must not independently branch on "feature
 exists" versus "shape ref exists" and then perform separate mutations.
-Lifecycle, visibility, style, and realization dispatch belongs in object-level
+Lifecycle, visibility, style, and realization dispatch belongs in managed-feature
 GED draw facades and the Obol draw bridge.
 
 `view annotation` command code should follow the same rule at the annotation
@@ -124,11 +124,11 @@ are trying to delete.
 
 Current user-facing shape:
 
-* `view object list [--all|--annotations|--database] [-L] [glob]`
-* `view object info <id> [field]`
-* `view object show|hide|delete|realize <id>`
-* `view object style get <id> <field>`
-* `view object style set <id> <field> <value> ...`
+* `view feature list [--all|--annotations|--database] [-L] [glob]`
+* `view feature info <id> [field]`
+* `view feature show|hide|delete|realize <id>`
+* `view feature style get <id> <field>`
+* `view feature style set <id> <field> <value> ...`
 * `view annotation line create <id> x y z [x y z ...]`
 * `view annotation line append <id> x y z [x y z ...]`
 * `view annotation line remove <id> <zero-based-index> [count]`
@@ -145,7 +145,7 @@ Current user-facing shape:
 Typed Object Contract
 ---------------------
 
-Every managed view object should expose enough metadata for command-line and UI
+Every managed view feature should expose enough metadata for command-line and UI
 callers to reason about it without parsing human strings:
 
 * stable id/name and optional display label
@@ -171,7 +171,7 @@ annotation features but should be rejected for database-source or overlay
 group aliases unless those object classes grow a real arrow capability.
 
 Structured output should be available for new consumers.  `--json` is the
-preferred compatibility-neutral form for object info/list results once the
+preferred compatibility-neutral form for feature info/list results once the
 typed resolver/registry is in place.
 
 Richer Behavior Policy

@@ -58,7 +58,7 @@ static int _sg_erase_component_scoped(struct ged *gedp,
 static int
 _sg_erase_path(struct ged *gedp, const char *path)
 {
-    return ged_draw_scene_root_erase_path(gedp, path);
+    return ged_draw_source_erase_path_at_root(gedp, path);
 }
 
 
@@ -75,14 +75,14 @@ static void
 _sg_erase_all_names(struct ged *gedp, const char *name)
 {
     ged_draw_overlay_erase_name(gedp, name);
-    (void)ged_draw_scene_root_erase_groups_by_name(gedp, name);
+    (void)ged_draw_source_erase_groups_by_name_at_root(gedp, name);
 }
 
 
 static int
 _sg_erase_all_paths(struct ged *gedp, const char *path)
 {
-    return ged_draw_scene_root_erase_path_prefix(gedp, path);
+    return ged_draw_source_erase_path_prefix_at_root(gedp, path);
 }
 
 
@@ -133,7 +133,7 @@ _sg_erase_component_scoped(struct ged *gedp,
 static int
 _sg_bounding_sph(struct ged *gedp, vect_t *min, vect_t *max, int pflag)
 {
-    return ged_draw_scene_root_subtree_bounds(gedp, min, max, pflag);
+    return ged_draw_source_root_subtree_bounds(gedp, min, max, pflag);
 }
 
 
@@ -322,7 +322,7 @@ ged_draw_clear(struct ged *gedp)
     if (!gedp)
 	return;
 
-    (void)ged_draw_scene_root_clear_all_scope_children(gedp);
+    (void)ged_draw_source_root_clear_all_scope_children(gedp);
     ged_draw_registry_free(gedp);
 
     gedp->i->ged_gdp->gd_draw_rev = 0;
@@ -350,7 +350,7 @@ ged_draw_has_groups(struct ged *gedp)
     if (!gedp || !gedp->i || !gedp->i->ged_gdp)
 	return 0;
 
-    return ged_draw_scene_root_has_groups(gedp);
+    return ged_draw_source_root_has_groups(gedp);
 }
 
 

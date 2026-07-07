@@ -42,9 +42,22 @@ class SoGLRenderAction;
 class SoRayPickAction;
 class SoSensor;
 struct db_i;
+struct db_full_path;
+struct rt_db_internal;
+struct bg_tess_tol;
+struct bn_tol;
 struct BRLObolDatabaseSourceRealizationCache;
 struct BRLObolCompactInstanceIndex;
 namespace obol { struct PartGeometry; }
+
+BRLOBOL_EXPORT SbBool brlobol_database_source_fullpath_material_color(
+	struct db_i *dbip,
+	const struct db_full_path *pathp,
+	SbColor &color);
+BRLOBOL_EXPORT SbBool brlobol_database_source_path_material_color(
+	struct db_i *dbip,
+	const char *path,
+	SbColor &color);
 
 struct BRLOBOL_EXPORT BRLObolDatabaseSourceSummary {
     BRLObolDatabaseSourceSummary(void);
@@ -598,6 +611,8 @@ public:
 	SbBool metadataMaterialColorValid,
 	const SbColor &metadataMaterialColor,
 	const SbString &metadataMaterialShader);
+    int refreshMaterialColorFromDatabase(uint32_t materialRevision,
+	struct db_i *overrideDbip = NULL);
     int applyDisplayPatch(const BRLObolDatabaseSourceDisplayPatch &patch);
     /* Update local-to-scene placement metadata.  This does not mutate primary
      * geometry coordinates; database realization and external publication
@@ -631,6 +646,10 @@ public:
 	const BRLObolExternalTriangleMesh &triangleMesh);
     int publishExternalAnnotation(
 	const BRLObolExternalAnnotation &annotation);
+    int publishPrimitiveWireframe(
+	struct rt_db_internal *intern,
+	const struct bg_tess_tol *ttol = NULL,
+	const struct bn_tol *tol = NULL);
     SoBRLVListShape *getRealizedShape(void) const;
     SoBRLVListShape *getRealizedShape(int index) const;
     int getRealizedShapeCount(void) const;

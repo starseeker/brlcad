@@ -28,6 +28,7 @@
 #include "rt/geom.h"		/* for ID_POLY special support */
 #include "raytrace.h"
 #include "rt/db4.h"
+#include "ged/draw_obol.h"
 #include "ged/view.h"
 
 #include "./mged.h"
@@ -130,6 +131,18 @@ replot_modified_solid(
 	return -1;
     }
 
+    struct ged_draw_shape_record rec;
+    if (!ged_draw_shape_record_get(s->gedp, ref, &rec) ||
+	    !rec.fullpath || rec.fullpath->fp_len <= 0) {
+	Tcl_AppendResult(s->interp, "replot_modified_solid() stale draw path\n", (char *)NULL);
+	return -1;
+    }
+    char *source_path = db_path_to_string(rec.fullpath);
+    if (!source_path) {
+	Tcl_AppendResult(s->interp, "replot_modified_solid() unable to resolve draw path\n", (char *)NULL);
+	return -1;
+    }
+
     /* Release existing vlist of this solid */
     ged_draw_shape_ref_geometry_clear(s->gedp, ref);
 
@@ -143,16 +156,17 @@ replot_modified_solid(
 
     transform_editing_solid(s, &intern, mat, ip, 0);
 
-    if (ged_draw_shape_ref_publish_primitive_wireframe(s->gedp, ref, &intern,
-	    &s->tol.ttol, &s->tol.tol, NULL, 0) < 0) {
-	struct ged_draw_shape_record rec;
-	if (ged_draw_shape_record_get(s->gedp, ref, &rec) && rec.leaf_name)
-	    Tcl_AppendResult(s->interp, rec.leaf_name,
-		    ": re-plot failure\n", (char *)NULL);
+    if (ged_draw_obol_database_source_publish_primitive_wireframe_for_path(
+	    s->gedp, source_path, &intern, &s->tol.ttol, &s->tol.tol) <= 0) {
+	if (rec.leaf_name)
+	    Tcl_AppendResult(s->interp, rec.leaf_name, ": re-plot failure\n",
+		    (char *)NULL);
 	rt_db_free_internal(&intern);
+	bu_free(source_path, "MGED replot source path");
 	return -1;
     }
     rt_db_free_internal(&intern);
+    bu_free(source_path, "MGED replot source path");
 
     {
 	int bad_cmd = 0;

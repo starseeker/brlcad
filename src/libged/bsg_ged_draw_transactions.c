@@ -2206,13 +2206,6 @@ _ged_draw_txn_bump_revision_if_needed(struct ged *gedp,
 }
 
 
-static size_t
-_ged_draw_root_child_count(struct ged *gedp)
-{
-    return ged_draw_source_root_child_count(gedp);
-}
-
-
 static int
 _ged_draw_apply_transaction_inner(struct ged *gedp,
 				  const struct ged_draw_transaction *txn,
@@ -2223,7 +2216,7 @@ _ged_draw_apply_transaction_inner(struct ged *gedp,
 	return 0;
 
     uint64_t rev0 = gedp->i->ged_gdp->gd_draw_rev;
-    size_t child_count0 = _ged_draw_root_child_count(gedp);
+    int had_groups0 = ged_draw_has_groups(gedp);
     int ret = 0;
 
     switch (txn->kind) {
@@ -2256,9 +2249,9 @@ _ged_draw_apply_transaction_inner(struct ged *gedp,
 	case GED_DRAW_TXN_TEARDOWN:
 	case GED_DRAW_TXN_CLEAR: {
 	    ged_draw_clear(gedp);
-	    ret = (child_count0 > 0 || rev0 != 0) ? 1 : 0;
+	    ret = (had_groups0 || rev0 != 0) ? 1 : 0;
 	    if (result)
-		result->affected_groups = (int)child_count0;
+		result->affected_groups = had_groups0 ? 1 : 0;
 	    break;
 	}
 	case GED_DRAW_TXN_CLEAR_SCOPE:

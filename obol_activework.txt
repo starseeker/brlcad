@@ -1,7 +1,7 @@
 BRL-CAD Obol Active Work Guide
 ==============================
 
-Last refreshed: 2026-07-06
+Last refreshed: 2026-07-07
 Branch: oboltest2
 
 Purpose
@@ -126,6 +126,14 @@ Core Invariants
   different final draw mode.  Source replacement/state sync must preserve and
   revalidate this external primary until an explicit erase, clear, replacement,
   or stale database edit invalidates it.
+* Effective BRL-CAD database material/color-table interpretation for drawn
+  database sources belongs to libbrlobol.  GED owns material revision
+  bookkeeping and asks the Obol bridge to refresh; libbrlobol resolves
+  full-path/path colors and updates source material state.
+* Draw-facing `rt_db_internal` interpretation belongs to libbrlobol database
+  sources.  C GED/application bridge functions may select a source instance
+  and pass an already-loaded internal, but primitive vlist/annotation/submodel
+  conversion and external-primary publication are libbrlobol responsibilities.
 * Legacy BSG mesh LoD code is quarantined to `BU_DIR_CACHE/.BsgMeshLodCache`.
   It must not share, version, or clear libbrlobol's `.DbDrawCache`; new cache
   work belongs in libbrlobol while the retained BSG renderer path is removed.
@@ -192,6 +200,10 @@ Current Baseline
   inherited region id, air, material id, LOS, color, shader, and inheritance
   state for a realized leaf path while preserving the object-local records used
   for direct directory/attribute facts.
+* Database-source material/color refresh is libbrlobol-owned.  libbrlobol
+  exposes full-path and path color-table lookup helpers, source-level refresh,
+  and scene-controller refresh operations; GED only bumps/passes material
+  revisions after database material or color-table edits.
 * qtcad startup-refine coverage now verifies the next transition as well:
   after the deferred proxy first frame is visible, the same target can be
   promoted to the mesh-backed qtcad path and then progress through view-local
@@ -303,13 +315,13 @@ Current Baseline
 * Preview script tree redraws route through GED draw transactions, so preview
   uses the same Obol draw providers and mode-aware draw state as normal draw
   commands.  Preview eye paths remain command-scene result overlays.
-* The view-object command surface is migrated: retired public spellings
-  `view obj`, `view objs`, and `view gobjs` are not aliases.  `view object`
-  owns lifecycle/info/visibility/style/realize; `view annotation` owns line,
-  arrow, label, and axes creation/editing; `view polygon` owns polygon
-  editing; `view db` owns database display/edit-proxy insertion.
-* View-object lifecycle, visibility, style, and realization route through
-  object-level GED draw facades.  The command layer no longer branches directly
+* The view-feature command surface is migrated: retired public object-style
+  spellings are not aliases.  `view feature` owns lifecycle/info/visibility/
+  style/realize; `view annotation` owns line, arrow, label, and axes
+  creation/editing; `view polygon` owns polygon editing; `view db` owns Obol
+  database-source owner-group insertion/deletion.
+* View-feature lifecycle, visibility, style, and realization route through
+  managed-feature GED draw facades.  The command layer no longer branches directly
   between feature style and shape-ref color handling.
 * User-authored line, label, and axes annotation commands route creation and
   editing through annotation-level GED draw facades.  Command code parses
@@ -330,8 +342,10 @@ Current Baseline
   the command-scene path.  BREP extraction remains in the BREP command; generic
   indexed-face publication is isolated in the GED command-scene bridge.
 * Legacy private direct-uplot feature wrappers were removed.  qray/uplot
-  diagnostics now expose stream parsing plus command-scene publication; direct
-  retained line-layer replacement is only an internal no-owned-scene fallback.
+  diagnostics now expose stream parsing plus command-scene publication.
+  Overlay-command import and `vdraw send` are Obol-only for active Obol
+  contexts; without an Obol feature store, insertion is a no-output no-op
+  rather than a retained BSG fallback.
 * Obol draw-tree navigation is explicitly non-leaf aware: shapes may have
   child/source nodes, shape-ref context round trips preserve the exact Obol
   token including draw mode, and `group_ref_of_shape` reports the top drawn
@@ -374,7 +388,7 @@ Current Baseline
   views render `shared-root + local-root`; independent views render only their
   local root.  Database draw/clear transactions update the shared scene for
   shared scope and the matching local endpoint for independent scope.
-  View-object operations resolve local records first and then shared records
+  View-feature operations resolve local records first and then shared records
   on the GED scene owner.  The converted MGED view-state, MGED shaded-mode,
   and RTWizard display-backed tests use Obol attach plus normal `screengrab`;
   RTWizard's camera-only tests remain no-DM tests.  `gsh --new-cmds` refreshes
@@ -393,9 +407,41 @@ Current Baseline
   matters.  `ged_test_tcl_overlay_bsg` has been retired; Tcl/data overlay
   lifecycle coverage now belongs in the Obol/native view-command, draw-scene,
   and draw-sync tests rather than in a standalone BSG fixture.
-* Obol-only draft source-state paths now update display name, visibility,
-  highlight, style/material, line-set publication, evaluated-region metadata,
-  and tree-result state without requiring a retained shape-ref mirror.
+  The old `ged_test_ged_draw_scene` retained-scene regression shards were
+  deleted rather than adapted; retained scene-ref/draft publication parity is
+  no longer accepted as current draw coverage.  Public
+  `ged_draw_shape_ref_publish_*` compatibility wrappers were removed, and
+  direct source publication now uses path-based `ged_draw_obol_*_for_path`
+  APIs.  The unused tree-staging, database-leaf, and tree-result draft
+  publication helpers and their pivot guard/API-hygiene references were
+  deleted.
+  Retained overlay geometry insertion/erase fallback, public point/indexed-face
+  scene-ref publication wrappers, retained overlay `rt_db_internal` user-data
+  helpers, and retained color-table scene-ref refresh helpers were removed.
+  Draw-facing primitive/annotation/submodel `rt_db_internal` publication now
+  routes through libbrlobol database-source methods; GED's remaining exported
+  primitive-wireframe bridge only resolves the Obol source instance.
+  The legacy object-style feature command spelling is not retained as an alias;
+  lifecycle, style, visibility, and realization now use `view feature` and
+  `ged_draw_view_context_managed_feature_*` facades.  Managed-feature deletion
+  no longer falls through to retained shape-ref release; it removes Obol
+  feature, overlay, database-source, or database-source owner-group records and
+  fails explicitly if no Obol-managed target exists.
+  Direct private GED draw bridge includes were removed from GQA tests,
+  autoview, `draw_obol.cpp`, and GED view facade code.  `ged/draw_obol.h` now
+  exposes the C-safe Obol controller/source/adapter hooks those callers
+  legitimately need.  Direct scene-root erase wrappers
+  (`ged_draw_scene_root_erase_*`), the remaining `ged_draw_scene_root_*`
+  source-root facade wrappers, the source-root child-count helper, and the
+  test-facing `ged_draw_shape_ref_release` hook were removed.  Command/test
+  coverage now erases database-source state through public draw transactions or
+  `ged_draw_erase_name`; Obol sync no longer calls private source-root,
+  scoped-clear, active-scope erase, or draft lifecycle helpers directly.
+* The evaluated/local shape-ref draft staging bridge has been removed.
+  Database-leaf, tree-result, and evaluated path publication use path-based
+  Obol database-source/group APIs or fail explicitly; command/test coverage now
+  exercises draw/erase behavior, scene-context summaries, and public
+  transactions rather than direct draft-helper or retained-scene parity tests.
 * libbrlobol subtree-bounds lookup now prefers database-source nodes over
   same-path structural groups, keeping repeated transformed-instance bounds
   consistent with scene-tree summary bounds.
@@ -426,7 +472,7 @@ Known Risks
   helpers still need cleanup or deletion when their coverage is replaced.
 * The libged Obol bridge now separates GED-owned shared scene state from
   per-view render/local roots for borrowed Obol DMs.  The remaining hardening
-  is to apply this model across no-owned-scene fallback and older application
+  is to apply this model across no-owned-scene/no-op and older application
   paths, then delete compatibility paths whose only purpose was mirrored
   BSG/DM state.
 * Shared-scene LoD is no longer stored as mutable active mesh fields on shared
@@ -503,7 +549,8 @@ Known Risks
   source-update, source-reference removal, source-rename, clear, clear-scope,
   and teardown transactions now have explicit scene-state coverage proving they
   clear view-local LoD payloads while preserving the intended shared-scene
-  source sync.  The remaining coverage gap is no-owned-scene fallback paths.
+  source sync.  The remaining coverage gap is no-owned-scene/no-feature-store
+  no-op behavior.
 * Evaluated wire now defaults to the boolweave-backed evaluator, with explicit
   `RT_EVAL_WIREFRAME_F_BIGE` fallback available for comparison/debugging.  The
   public `rt_eval_wireframe` vlist/options API, requested-path identity, and
@@ -567,6 +614,7 @@ Current gates:
 * `ctest --test-dir build -R 'qtcad_obol_progressive_lod|test_qtcad_obol_progressive_lod' --output-on-failure`
 * `build/src/rt/test_rt_opt`
 * `ctest --test-dir build -R '^(libbrlobol_image_source|libbrlobol_window_host|libbrlobol_headless_window_host|test_qtcad_obol_window_host|test_qged_obol_fbserv|gsh_obol_smoke|gsh_obol_ert_smoke|gsh_obol_progressive_lod|mged_obol_smoke|mged_obol_ert_smoke|mged_obol_progressive_lod)$' --timeout 240 --output-on-failure`
+* `ctest --test-dir build -R 'brlobol_pivot_guard|libbsg_api_hygiene|ged_test_gqa|ged_test_obol_draw_sync|ged_test_view_command|mged_obol_smoke' --output-on-failure`
 * `ctest --test-dir build -R '^(bu_datetime[0-9]+|bu_file_realpath_[0-9]+|bu_path_component_|bu_path_dirname_|bu_path_basename_)' --timeout 120 --output-on-failure`
 * `ctest --test-dir build -R '^fuzz_ged_smoke$' --timeout 120 --output-on-failure`
 * `cc -std=c11 -Wc++-compat -Werror -Iinclude -Ibuild/include -Ibuild/include/brlcad -c src/libbu/fort.c -o /tmp/brlcad_fort_compile_test.o`
@@ -624,15 +672,21 @@ Next Implementation Steps
 6. Extend the shared-scene/per-view-root Obol attach model to any remaining
    multi-view caller/test paths.  Primary attached mutation transaction
    view-LoD invalidation is now covered; add focused coverage for
-   no-owned-scene fallback paths only where those callers still need to survive
-   until removal.
+   no-owned-scene/no-feature-store no-op behavior only where those callers
+   still need to survive until removal.
 7. Inventory remaining legacy draw/view fallbacks and classify each use:
    explicit retained fallback, neutral libbv-backed view mechanics, or
    libbrlobol/Obol scene/interaction behavior.  Focus first on caller-facing
    workflows.  Transaction draw no longer uses retained `_ged_drawtrees`, and
-   the old `draw.c` tree walker is gone from the command path; remaining work
-   should target unsupported application/no-owned-scene behavior and explicit
-   retained-adapter debt.
+   the old `draw.c` tree walker, retained-scene regression test, public
+   shape-ref publication wrappers, legacy object-style feature command syntax,
+   stale direct private bridge includes, scene-root compatibility wrappers,
+   source-root child-count plumbing, dead tree-staging/database-leaf/
+   tree-result draft publication helpers, and the evaluated/local shape-ref
+   draft staging bridge are gone from the command/test path; remaining work
+   should target unsupported application/no-owned-scene behavior, command or
+   import producers that still bypass command-scene publication, metadata
+   fallback plumbing, and explicit retained-adapter debt.
 8. Continue the RT view split: adapter registries are now in
    `src/librt/view_context_adapters.c`, but public neutral RT view wrappers
    still need to move from `src/librt/view_legacy_bsg.c` into a non-legacy

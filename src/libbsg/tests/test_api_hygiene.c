@@ -2076,7 +2076,7 @@ main(int argc, char **argv)
 	    "bsg_ged_draw_private.h",
 	    "direct private GED draw bridge includes are limited to libged draw internals",
 	    "src/libged/CMakeLists.txt;src/libged/ged_private.h;src/libged/draw/bigE.c;src/libged/draw/draw.c;src/libged/dm/dm.c",
-	    "src/libged/tests/draw/ged_draw_scene.cpp",
+	    NULL,
 	    "src/libged/bsg_ged_draw"
 	},
 	{
@@ -2563,8 +2563,6 @@ main(int argc, char **argv)
 	"src/libged/bsg_ged_draw.c",
 	"src/libged/draw.cpp",
 	"src/libged/draw/draw.c",
-	"src/libged/points_eval.c",
-	"src/libged/wireframe_eval.c",
 	"src/librt/primitives/generic.c",
 	"src/librt/primitives/sample.c",
 	"src/mged/dodraw.c",
@@ -2593,9 +2591,7 @@ main(int argc, char **argv)
 	"rt_sample_pnts("
     };
     const char *stage14b_realization_files[] = {
-	"src/libged/draw.cpp",
-	"src/libged/wireframe_eval.c",
-	"src/libged/points_eval.c"
+	"src/libged/draw.cpp"
     };
     const char *stage14b_realization_patterns[] = {
 	"struct bsg_node *",
@@ -2884,8 +2880,7 @@ main(int argc, char **argv)
 	"vdc_vhd"
     };
     const char *ged_typed_overlay_insert_files[] = {
-	"src/libged/bsg_ged_draw_overlay.c",
-	"src/libged/tests/draw/ged_draw_scene.cpp"
+	"src/libged/bsg_ged_draw_overlay.c"
     };
     const char *ged_typed_overlay_insert_patterns[] = {
 	"ged_draw_overlay_vlist_insert",
@@ -2894,21 +2889,10 @@ main(int argc, char **argv)
 	"BSG_ADD_VLIST",
 	"rt_vlfree"
     };
-    const char *ged_draw_ref_typed_geometry_patterns[] = {
-	"bsg/vlist.h",
-	"BSG_VLIST_",
-	"BSG_ADD_VLIST",
-	"bsg_vlist",
-	"ged_draw_scene_ref_geometry_current_list("
-    };
     const char *ged_draw_geometry_publish_files[] = {
 	"src/libged/bsg_ged_draw_source.c",
 	"src/libged/bsg_ged_draw_private.h",
-	"src/libged/bsg_ged_draw_draft.c",
-	"src/libged/bsg_ged_draw_refs.c",
 	"src/libged/draw.cpp",
-	"src/libged/wireframe_eval.c",
-	"src/libged/points_eval.c",
 	"src/libged/draw/draw.c",
 	"src/mged/dodraw.c"
     };
@@ -3123,20 +3107,15 @@ main(int argc, char **argv)
     const char *stage2_typed_node_authoring_files[] = {
 	"src/libdm/tests/test_backend_draw_item.c",
 	"src/libged/ged.cpp",
-	"src/libged/tests/draw/bsg_quad_stability.cpp",
-	"src/libged/tests/draw/ged_draw_scene.cpp",
-	"src/libged/tests/draw/rtwizard_bsg.cpp",
 	"src/libqtcad/QgGL.cpp",
 	"src/libqtcad/QgSW.cpp",
 	"src/libqtcad/tests/qsketch.cpp",
-	"src/librt/tests/lod.c",
 	"src/libtclcad/commands.c",
 	"src/mged/setup.c"
     };
     const char *stage2_raw_node_authoring_files[] = {
 	"src/libdm/tests/test_backend_draw_item.c",
-	"src/libqtcad/tests/qsketch.cpp",
-	"src/librt/tests/lod.c"
+	"src/libqtcad/tests/qsketch.cpp"
     };
     const char *stage2_scene_ref_authoring_patterns[] = {
 	"bsg/scene_builder.h",
@@ -3873,11 +3852,6 @@ main(int argc, char **argv)
 		sizeof(ged_typed_overlay_insert_patterns) / sizeof(ged_typed_overlay_insert_patterns[0]),
 		"GED overlay insertion must publish typed geometry, not vlist overlays");
     }
-
-    _scan_exact_file_for_patterns(srcroot, "src/libged/bsg_ged_draw_refs.c",
-	    ged_draw_ref_typed_geometry_patterns,
-	    sizeof(ged_draw_ref_typed_geometry_patterns) / sizeof(ged_draw_ref_typed_geometry_patterns[0]),
-	    "GED draw-ref geometry mutations must use typed geometry fields, not vlist round trips");
 
     for (size_t i = 0; i < sizeof(ged_draw_geometry_publish_files) / sizeof(ged_draw_geometry_publish_files[0]); i++) {
 	_scan_exact_file_for_patterns(srcroot, ged_draw_geometry_publish_files[i],

@@ -53,11 +53,12 @@ view exists:
 
 The old private direct-uplot feature publishing wrappers are retired.  Uplot
 producers should parse/build streams and publish through command-scene helpers;
-direct retained line-layer replacement is reserved for helper-internal
-no-owned-scene fallback.
+without an active Obol feature store, overlay insertion returns no output and
+does not recreate retained BSG overlay state.
 
 Fallback direct diagnostic callbacks remain only for non-command-scene
-consumers and unowned views.
+consumers that have not yet been migrated; they must not be used to preserve
+parallel retained Obol/BSG ownership for migrated overlay producers.
 
 Command-Result Contract
 -----------------------

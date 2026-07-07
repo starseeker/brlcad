@@ -32,7 +32,7 @@ differences are:
 
 BRL-CAD documentation describes the MGED screen coordinate system as
 right-handed, with +Z perpendicular to the screen and out of the screen.
-The librt view-object documentation defines azimuth 0 along model +X,
+The librt view-feature documentation defines azimuth 0 along model +X,
 positive azimuth counter-clockwise about +Z, and elevation +90 along +Z.
 Obol `SoCamera` defaults to position `(0, 0, 1)`, looking along negative Z,
 with up along positive Y.  Those conventions line up at the camera/view-space

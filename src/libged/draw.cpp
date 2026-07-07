@@ -269,10 +269,34 @@ draw_gather_paths(struct db_full_path *path, mat_t *curr_mat, void *client_data)
 
 	unsigned char rgb[3];
 	bu_color_to_rgb_chars(&dd->c, rgb);
-	(void)ged_draw_source_group_ref_commit_database_leaf_draft(dd->gedp,
-		dd->draw_parent_group_ref, dd->view_ctx, dd->dbip, path,
-		*curr_mat, dd->tol, dd->ttol, dd->vs, dd->bool_op, rgb,
-		has_draw_size, draw_size);
+	char *name = db_path_to_string(path);
+	if (!name)
+	    return;
+
+	const int draw_mode = dd->vs ? dd->vs->draw_mode : GED_DRAW_MODE_WIRE;
+	if (ged_draw_obol_database_source_ensure_for_path_with_placement(
+		dd->gedp, name, dd->dbip, draw_mode, 0,
+		1, *curr_mat, 0, NULL, has_draw_size, draw_size)) {
+	    const int solid_lines_only = dd->vs ? dd->vs->draw_solid_lines_only : 0;
+	    const int line_style =
+		(!solid_lines_only && dd->bool_op == OP_SUBTRACT) ? 1 : 0;
+	    const int line_width = dd->vs ? dd->vs->s_line_width : 1;
+	    const fastf_t transparency = dd->vs ? dd->vs->transparency : 1.0;
+	    const int color_valid = (dd->vs && dd->vs->color_override) ? 1 : 0;
+	    const unsigned char *color = color_valid ? dd->vs->color : NULL;
+	    (void)ged_draw_obol_database_source_update_display_for_path(
+		    dd->gedp, name,
+		    1, 1,
+		    1, 0,
+		    1, draw_mode,
+		    1, line_style,
+		    1, line_width,
+		    1, transparency,
+		    color_valid, color,
+		    1, rgb,
+		    0, 0);
+	}
+	bu_free(name, "draw gather Obol source path");
 
     }
 }
@@ -320,27 +344,6 @@ ged_draw_view_context_gobject_create(struct ged *gedp,
 	return 0;
     }
 
-    struct rt_db_internal *ip;
-    BU_GET(ip, struct rt_db_internal);
-    RT_DB_INTERNAL_INIT(ip);
-    if (rt_db_get_internal(ip, DB_FULL_PATH_CUR_DIR(fp), gedp->dbip, mat) < 0) {
-	db_free_full_path(fp);
-	BU_PUT(fp, struct db_full_path);
-	rt_db_free_internal(ip);
-	BU_PUT(ip, struct rt_db_internal);
-	return 0;
-    }
-
-    ged_draw_group_ref draw_parent_group_ref = GED_DRAW_GROUP_REF_NULL;
-    if (!ged_draw_view_context_overlay_internal_create_group_ref(gedp, view_ctx,
-	    gobject_name, fp, &ip, &draw_parent_group_ref)) {
-	db_free_full_path(fp);
-	BU_PUT(fp, struct db_full_path);
-	rt_db_free_internal(ip);
-	BU_PUT(ip, struct rt_db_internal);
-	return 0;
-    }
-
     unsigned char wcolor[3] = {255, 255, 255};
     struct ged_draw_appearance_settings vs = GED_DRAW_APPEARANCE_SETTINGS_INIT;
     std::map<struct directory *, fastf_t> s_size;
@@ -355,9 +358,20 @@ ged_draw_view_context_gobject_create(struct ged *gedp,
     dd.s_size = &s_size;
     bu_color_from_rgb_chars(&dd.c, wcolor);
     dd.vs = &vs;
-    dd.draw_parent_group_ref = draw_parent_group_ref;
 
+    int scoped = ged_draw_obol_database_source_publication_begin(gedp,
+	    view_ctx, vs.draw_mode);
+    if (!scoped) {
+	db_free_full_path(fp);
+	BU_PUT(fp, struct db_full_path);
+	if (result)
+	    bu_vls_printf(result, "Obol database-source publication is not available\n");
+	return 0;
+    }
+    ged_draw_obol_database_source_publication_appearance_set(gedp, &vs);
+    ged_draw_obol_database_source_publication_group_set(gedp, gobject_name);
     draw_gather_paths(fp, &mat, (void *)&dd);
+    ged_draw_obol_database_source_publication_end(gedp);
 
     db_free_full_path(fp);
     BU_PUT(fp, struct db_full_path);
