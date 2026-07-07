@@ -114,15 +114,59 @@ native_defaults(struct rt_view_context_native *n)
 {
     struct rt_view_lod_policy lod = RT_VIEW_LOD_POLICY_INIT;
     struct rt_view_interactive_rect_state rect =
-	RT_VIEW_INTERACTIVE_RECT_STATE_INIT;
+	    RT_VIEW_INTERACTIVE_RECT_STATE_INIT;
     struct rt_view_adc_state adc = RT_VIEW_ADC_STATE_INIT;
     struct rt_view_grid_state grid = RT_VIEW_GRID_STATE_INIT;
-    struct rt_view_axes_state axes = RT_VIEW_AXES_STATE_INIT;
-    struct rt_view_other_state other = RT_VIEW_OTHER_STATE_INIT;
+    struct rt_view_axes_state model_axes = RT_VIEW_AXES_STATE_INIT;
+    struct rt_view_axes_state view_axes = RT_VIEW_AXES_STATE_INIT;
+    struct rt_view_other_state center_dot = RT_VIEW_OTHER_STATE_INIT;
+    struct rt_view_other_state scale_overlay = RT_VIEW_OTHER_STATE_INIT;
     struct rt_view_params_state params = RT_VIEW_PARAMS_STATE_INIT;
 
     if (!n)
 	return;
+
+    grid.res_h = 1.0;
+    grid.res_v = 1.0;
+    grid.res_major_h = 5;
+    grid.res_major_v = 5;
+    VSET(grid.color, 255, 255, 255);
+
+    VSET(view_axes.axes_pos, 0.80, -0.80, 0.0);
+    view_axes.axes_size = 0.2;
+    view_axes.pos_only = 1;
+    view_axes.label_flag = 1;
+    view_axes.triple_color = 1;
+    VSET(view_axes.axes_color, 255, 255, 255);
+    VSET(view_axes.label_color, 255, 255, 0);
+
+    model_axes.axes_size = 2.0;
+    model_axes.label_flag = 1;
+    model_axes.tick_enabled = 1;
+    model_axes.tick_length = 4;
+    model_axes.tick_major_length = 8;
+    model_axes.tick_interval = 100.0;
+    model_axes.ticks_per_major = 10;
+    model_axes.tick_threshold = 8;
+    VSET(model_axes.axes_color, 255, 255, 255);
+    VSET(model_axes.label_color, 255, 255, 0);
+    VSET(model_axes.tick_color, 255, 255, 0);
+    VSET(model_axes.tick_major_color, 255, 0, 0);
+
+    center_dot.gos_font_size = 20;
+    VSET(center_dot.gos_line_color, 255, 255, 0);
+
+    scale_overlay.gos_font_size = 20;
+    VSET(scale_overlay.gos_line_color, 255, 255, 0);
+    VSET(scale_overlay.gos_text_color, 255, 255, 0);
+
+    params.draw_size = 1;
+    params.draw_center = 1;
+    params.draw_az = 1;
+    params.draw_el = 1;
+    params.draw_tw = 1;
+    VSET(params.color, 255, 255, 0);
+    params.font_size = 20;
 
     memset(n, 0, sizeof(*n));
     n->magic = RT_VIEW_CONTEXT_NATIVE_MAGIC;
@@ -131,15 +175,15 @@ native_defaults(struct rt_view_context_native *n)
     n->interactive_rect = rect;
     n->adc = adc;
     n->grid = grid;
-    n->model_axes = axes;
-    n->view_axes = axes;
-    n->center_dot = other;
-    n->scale_overlay = other;
+    n->model_axes = model_axes;
+    n->view_axes = view_axes;
+    n->center_dot = center_dot;
+    n->scale_overlay = scale_overlay;
     n->params = params;
     n->snap_kind_mask = RT_VIEW_SNAP_KIND_GRID |
-	RT_VIEW_SNAP_KIND_ENDPOINT | RT_VIEW_SNAP_KIND_MIDPOINT |
-	RT_VIEW_SNAP_KIND_INTERSECTION | RT_VIEW_SNAP_KIND_PERPENDICULAR |
-	RT_VIEW_SNAP_KIND_TANGENT | RT_VIEW_SNAP_KIND_OVERLAY_HANDLE;
+			RT_VIEW_SNAP_KIND_ENDPOINT | RT_VIEW_SNAP_KIND_MIDPOINT |
+			RT_VIEW_SNAP_KIND_INTERSECTION | RT_VIEW_SNAP_KIND_PERPENDICULAR |
+			RT_VIEW_SNAP_KIND_TANGENT | RT_VIEW_SNAP_KIND_OVERLAY_HANDLE;
     n->snap_tolerance_factor = 10.0;
 }
 
@@ -195,7 +239,7 @@ _rt_view_context_native_create_with_set(void *view_set_ctx)
 
 void *
 _rt_view_context_native_create_copy_with_set(const void *src_ctx,
-					     void *view_set_ctx)
+	void *view_set_ctx)
 {
     const struct rt_view_context_native *src = native_ctx_const(src_ctx);
     struct rt_view_context_native *n =
@@ -429,8 +473,8 @@ _rt_view_context_native_callbacks_set(void *ctx, struct bu_ptbl *callbacks)
 
 int
 _rt_view_context_native_update_callback_set(void *ctx,
-					   rt_view_context_update_callback_t callback,
-					   void *data)
+	rt_view_context_update_callback_t callback,
+	void *data)
 {
     struct rt_view_context_native *n = native_ctx(ctx);
     if (!n)
@@ -554,6 +598,13 @@ _rt_view_context_native_frametime_set(void *ctx, uint64_t frametime)
 {
     struct rt_view_context_native *n = native_ctx(ctx);
     return bv_frametime_set(n ? &n->view : NULL, frametime);
+}
+
+uint64_t
+_rt_view_context_native_frametime_get(const void *ctx)
+{
+    const struct rt_view_context_native *n = native_ctx_const(ctx);
+    return bv_frametime_get(n ? &n->view : NULL);
 }
 
 int
@@ -716,7 +767,7 @@ _rt_view_context_native_absolute_scale_set(void *ctx, fastf_t scale)
 
 int
 _rt_view_context_native_unit_conversion_set(void *ctx, fastf_t local2base,
-					    fastf_t base2local)
+	fastf_t base2local)
 {
     struct rt_view_context_native *n = native_ctx(ctx);
     if (!n)
@@ -953,7 +1004,7 @@ _rt_view_context_native_plane_get(plane_t *plane, const void *ctx)
 
 int
 _rt_view_context_native_orientation_quat_get(quat_t orientation,
-					     const void *ctx)
+	const void *ctx)
 {
     const struct rt_view_context_native *n = native_ctx_const(ctx);
     if (!orientation)
@@ -1040,12 +1091,12 @@ _rt_view_context_native_hash(const void *ctx)
     bu_data_hash_update(state, &n->view.scale, sizeof(n->view.scale));
     bu_data_hash_update(state, &n->view.size, sizeof(n->view.size));
     bu_data_hash_update(state, &n->view.perspective,
-	    sizeof(n->view.perspective));
+			sizeof(n->view.perspective));
     bu_data_hash_update(state, &n->view.aet, sizeof(n->view.aet));
     bu_data_hash_update(state, &n->view.rotation, sizeof(n->view.rotation));
     bu_data_hash_update(state, &n->view.center, sizeof(n->view.center));
     bu_data_hash_update(state, &n->view.model2view,
-	    sizeof(n->view.model2view));
+			sizeof(n->view.model2view));
     bu_data_hash_update(state, &n->lod_policy, sizeof(n->lod_policy));
     hv = bu_data_hash_val(state);
     bu_data_hash_destroy(state);
@@ -1110,13 +1161,13 @@ _rt_view_context_native_scene_root_ref(const void *ctx)
 
 int
 _rt_view_context_native_scene_root_ref_attach(void *ctx,
-					     rt_view_scene_ref root_ref)
+	rt_view_scene_ref root_ref)
 {
     struct rt_view_context_native *n = native_ctx(ctx);
     if (!n)
 	return 0;
     if (!rt_view_scene_ref_is_null(root_ref) &&
-	    rt_view_scene_ref_backend(root_ref) != RT_VIEW_SCENE_BACKEND_OBOL)
+	rt_view_scene_ref_backend(root_ref) != RT_VIEW_SCENE_BACKEND_OBOL)
 	return 0;
     n->scene_root_ref = root_ref;
     return !rt_view_scene_ref_is_null(root_ref) ? 1 : 0;
@@ -1131,7 +1182,7 @@ _rt_view_context_native_scene_attached(const void *ctx)
 
 int
 _rt_view_context_native_measure_candidates(void *ctx, point_t a, point_t b,
-					  struct rt_view_measure_result *out)
+	struct rt_view_measure_result *out)
 {
     vect_t delta;
     if (out)
@@ -1157,7 +1208,7 @@ _rt_view_context_native_screen_to_view(fastf_t *fx, fastf_t *fy, void *ctx,
 
 int
 _rt_view_context_native_screen_point_get(point_t point, void *ctx,
-					 fastf_t x, fastf_t y)
+	fastf_t x, fastf_t y)
 {
     struct rt_view_context_native *n = native_ctx(ctx);
     return n ? bv_screen_to_model(point, &n->view, x, y) : 0;
@@ -1191,7 +1242,7 @@ _rt_view_context_native_current_point_set(void *ctx, const point_t point)
 
 int
 _rt_view_context_native_previous_mouse_get(fastf_t *x, fastf_t *y,
-					   const void *ctx)
+	const void *ctx)
 {
     const struct rt_view_context_native *n = native_ctx_const(ctx);
     if (x)
@@ -1220,11 +1271,11 @@ _rt_view_context_native_previous_mouse_set(void *ctx, fastf_t x, fastf_t y)
 
 int
 _rt_view_context_native_mouse_delta_settings_get(
-	struct rt_view_mouse_delta_settings *settings, const void *ctx)
+    struct rt_view_mouse_delta_settings *settings, const void *ctx)
 {
     const struct rt_view_context_native *n = native_ctx_const(ctx);
     struct rt_view_mouse_delta_settings zero =
-	RT_VIEW_MOUSE_DELTA_SETTINGS_INIT;
+	    RT_VIEW_MOUSE_DELTA_SETTINGS_INIT;
 
     if (!settings)
 	return 0;
@@ -1249,7 +1300,7 @@ _rt_view_context_native_mouse_state_set(void *ctx, int x, int y)
 
 int
 _rt_view_context_native_interactive_rect_state_get(
-	struct rt_view_interactive_rect_state *record, const void *ctx)
+    struct rt_view_interactive_rect_state *record, const void *ctx)
 {
     const struct rt_view_context_native *n = native_ctx_const(ctx);
     if (!record)
@@ -1257,7 +1308,7 @@ _rt_view_context_native_interactive_rect_state_get(
 
     if (!n) {
 	struct rt_view_interactive_rect_state zero =
-	    RT_VIEW_INTERACTIVE_RECT_STATE_INIT;
+		RT_VIEW_INTERACTIVE_RECT_STATE_INIT;
 	*record = zero;
 	return 0;
     }
@@ -1268,7 +1319,7 @@ _rt_view_context_native_interactive_rect_state_get(
 
 int
 _rt_view_context_native_interactive_rect_state_set(
-	void *ctx, const struct rt_view_interactive_rect_state *record)
+    void *ctx, const struct rt_view_interactive_rect_state *record)
 {
     struct rt_view_context_native *n = native_ctx(ctx);
     if (!n || !record)
@@ -1340,7 +1391,7 @@ _rt_view_context_native_grid_state_set(void *ctx,
 
 int
 _rt_view_context_native_model_axes_state_get(
-	struct rt_view_axes_state *record, const void *ctx)
+    struct rt_view_axes_state *record, const void *ctx)
 {
     const struct rt_view_context_native *n = native_ctx_const(ctx);
     if (!record)
@@ -1358,7 +1409,7 @@ _rt_view_context_native_model_axes_state_get(
 
 int
 _rt_view_context_native_model_axes_state_set(
-	void *ctx, const struct rt_view_axes_state *record)
+    void *ctx, const struct rt_view_axes_state *record)
 {
     struct rt_view_context_native *n = native_ctx(ctx);
     if (!n || !record)
@@ -1370,7 +1421,7 @@ _rt_view_context_native_model_axes_state_set(
 
 int
 _rt_view_context_native_view_axes_state_get(
-	struct rt_view_axes_state *record, const void *ctx)
+    struct rt_view_axes_state *record, const void *ctx)
 {
     const struct rt_view_context_native *n = native_ctx_const(ctx);
     if (!record)
@@ -1388,7 +1439,7 @@ _rt_view_context_native_view_axes_state_get(
 
 int
 _rt_view_context_native_view_axes_state_set(
-	void *ctx, const struct rt_view_axes_state *record)
+    void *ctx, const struct rt_view_axes_state *record)
 {
     struct rt_view_context_native *n = native_ctx(ctx);
     if (!n || !record)
@@ -1400,7 +1451,7 @@ _rt_view_context_native_view_axes_state_set(
 
 int
 _rt_view_context_native_center_dot_state_get(
-	struct rt_view_other_state *record, const void *ctx)
+    struct rt_view_other_state *record, const void *ctx)
 {
     const struct rt_view_context_native *n = native_ctx_const(ctx);
     if (!record)
@@ -1418,7 +1469,7 @@ _rt_view_context_native_center_dot_state_get(
 
 int
 _rt_view_context_native_center_dot_state_set(
-	void *ctx, const struct rt_view_other_state *record)
+    void *ctx, const struct rt_view_other_state *record)
 {
     struct rt_view_context_native *n = native_ctx(ctx);
     if (!n || !record)
@@ -1430,7 +1481,7 @@ _rt_view_context_native_center_dot_state_set(
 
 int
 _rt_view_context_native_scale_overlay_state_get(
-	struct rt_view_other_state *record, const void *ctx)
+    struct rt_view_other_state *record, const void *ctx)
 {
     const struct rt_view_context_native *n = native_ctx_const(ctx);
     if (!record)
@@ -1448,7 +1499,7 @@ _rt_view_context_native_scale_overlay_state_get(
 
 int
 _rt_view_context_native_scale_overlay_state_set(
-	void *ctx, const struct rt_view_other_state *record)
+    void *ctx, const struct rt_view_other_state *record)
 {
     struct rt_view_context_native *n = native_ctx(ctx);
     if (!n || !record)
@@ -1460,7 +1511,7 @@ _rt_view_context_native_scale_overlay_state_set(
 
 int
 _rt_view_context_native_params_state_get(struct rt_view_params_state *record,
-					 const void *ctx)
+	const void *ctx)
 {
     const struct rt_view_context_native *n = native_ctx_const(ctx);
     if (!record)
@@ -1478,7 +1529,7 @@ _rt_view_context_native_params_state_get(struct rt_view_params_state *record,
 
 int
 _rt_view_context_native_params_state_set(
-	void *ctx, const struct rt_view_params_state *record)
+    void *ctx, const struct rt_view_params_state *record)
 {
     struct rt_view_context_native *n = native_ctx(ctx);
     if (!n || !record)
@@ -1816,14 +1867,14 @@ _rt_view_context_native_knobs_hash(void *ctx, struct bu_data_hash_state *state)
 
 int
 _rt_view_context_native_knobs_cmd_process(vect_t *rvec, int *do_rot,
-					  vect_t *tvec, int *do_tran,
-					  void *ctx, const char *cmd,
-					  fastf_t factor, char origin,
-					  int model_flag, int incr_flag)
+	vect_t *tvec, int *do_tran,
+	void *ctx, const char *cmd,
+	fastf_t factor, char origin,
+	int model_flag, int incr_flag)
 {
     struct rt_view_context_native *n = native_ctx(ctx);
     return n ? bv_knobs_cmd_process(rvec, do_rot, tvec, do_tran, &n->view,
-	    cmd, factor, origin, model_flag, incr_flag) : BRLCAD_ERROR;
+				    cmd, factor, origin, model_flag, incr_flag) : BRLCAD_ERROR;
 }
 
 int
@@ -1842,7 +1893,7 @@ _rt_view_context_native_knobs_rotate(void *ctx, const vect_t rvec,
 {
     struct rt_view_context_native *n = native_ctx(ctx);
     return n ? bv_knobs_rotate(&n->view, rvec, origin, coords, obj_rot,
-	    pvt_pt) : 0;
+			       pvt_pt) : 0;
 }
 
 int
@@ -1901,7 +1952,7 @@ _rt_view_context_native_lod_policy_get(struct rt_view_lod_policy *policy,
 
 int
 _rt_view_context_native_lod_policy_apply(void *ctx,
-					 const struct rt_view_lod_policy *policy)
+	const struct rt_view_lod_policy *policy)
 {
     struct rt_view_context_native *n = native_ctx(ctx);
     if (!n || !policy)
@@ -1965,7 +2016,7 @@ _rt_view_context_native_bounds_update_suspend(void *ctx)
 
 int
 _rt_view_context_native_bounds_update_restore(void *ctx, void *state_ctx,
-					      int UNUSED(refresh_bounds))
+	int UNUSED(refresh_bounds))
 {
     struct rt_view_context_native *n = native_ctx(ctx);
     struct rt_view_native_bounds_update_state *state =

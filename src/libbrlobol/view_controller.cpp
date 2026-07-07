@@ -2973,6 +2973,7 @@ BRLObolViewController::setDatabaseSourceState(const char *sourcePath,
 	uint32_t sourceRevision,
 	uint32_t inputsRevision,
 	SbBool visible,
+	SbBool selected,
 	SbBool highlighted,
 	int lineStyle,
 	int lineWidth,
@@ -2985,7 +2986,7 @@ BRLObolViewController::setDatabaseSourceState(const char *sourcePath,
 {
     const int changed = this->sceneController.setDatabaseSourceState(
 			    sourcePath, sourceRevisionValid, sourceRevision, inputsRevision,
-			    visible, highlighted, lineStyle, lineWidth, transparency,
+			    visible, selected, highlighted, lineStyle, lineWidth, transparency,
 			    colorOverride, color, materialColorValid, materialColor,
 			    materialRevision);
     if (changed > 0) {
@@ -3002,6 +3003,7 @@ BRLObolViewController::setDatabaseSourceInstanceState(
     uint32_t sourceRevision,
     uint32_t inputsRevision,
     SbBool visible,
+    SbBool selected,
     SbBool highlighted,
     int lineStyle,
     int lineWidth,
@@ -3014,7 +3016,7 @@ BRLObolViewController::setDatabaseSourceInstanceState(
 {
     const int changed = this->sceneController.setDatabaseSourceInstanceState(
 			    sourceInstanceKey, sourceRevisionValid, sourceRevision,
-			    inputsRevision, visible, highlighted, lineStyle, lineWidth,
+			    inputsRevision, visible, selected, highlighted, lineStyle, lineWidth,
 			    transparency, colorOverride, color, materialColorValid,
 			    materialColor, materialRevision);
     if (changed > 0) {

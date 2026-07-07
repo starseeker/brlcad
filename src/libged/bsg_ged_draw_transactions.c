@@ -1445,6 +1445,7 @@ ged_draw_prepare_obol_database_source_one_path(
 	gedp, path,
 	1, 1,
 	0, 0,
+	0, 0,
 	1, settings->draw_mode,
 	0, 0,
 	1, settings->s_line_width,

@@ -142,6 +142,18 @@ ged_draw_obol_framebuffer_present(struct ged *gedp);
 GED_EXPORT void
 ged_draw_obol_framebuffer_release(struct ged *gedp);
 
+/**
+ * Synchronize retained faceplate/HUD state from a GED view context into that
+ * view's Obol feature store.
+ *
+ * This is intentionally per-view: faceplate records describe one camera/view,
+ * not shared model geometry.  Missing Obol controllers are a no-op so callers
+ * may invoke this unconditionally from render/update paths.
+ */
+GED_EXPORT int
+ged_draw_obol_view_context_faceplate_sync(struct ged *gedp,
+					  void *view_ctx);
+
 GED_EXPORT int
 ged_draw_obol_lod_service_start(struct ged *gedp,
 				void *view_ctx,

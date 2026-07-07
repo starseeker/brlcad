@@ -287,6 +287,7 @@ draw_gather_paths(struct db_full_path *path, mat_t *curr_mat, void *client_data)
 	    (void)ged_draw_obol_database_source_update_display_for_path(
 		    dd->gedp, name,
 		    1, 1,
+		    0, 0,
 		    1, 0,
 		    1, draw_mode,
 		    1, line_style,

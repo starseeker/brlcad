@@ -475,6 +475,7 @@ struct ged_draw_scene_display_summary {
     const char *intent_path;             /**< borrowed; valid while scene is unchanged */
     int intent_draw_mode;
     int visible;
+    int selected;
     int highlighted;
     int line_style;
     int line_width;

@@ -1257,7 +1257,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		root_instance_key,
 		SoBRLDatabaseSource::REALIZATION_ROLE_MESH) < 0 ||
 	    scene->setDatabaseSourceInstanceRealizationViewPolicy(
-		root_instance_key, TRUE, 1.0f, 1, 1.0f, 1.0f) < 0 ||
+		root_instance_key, TRUE, 1.0f, 1.0f, 512, 512, 1, 1.0f, 1.0f) < 0 ||
 	    !controller->realizePending()) {
 	    record_progressive_lod_phase(timings.drawApplySeconds,
 					 phase_start, total_start,
@@ -1669,7 +1669,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		    root_instance_key,
 		    SoBRLDatabaseSource::REALIZATION_ROLE_MESH) < 0 ||
 		scene->setDatabaseSourceInstanceRealizationViewPolicy(
-		    root_instance_key, TRUE, 1.0f, 1, 1.0f, 1.0f) < 0) {
+		    root_instance_key, TRUE, 1.0f, 1.0f, 512, 512, 1, 1.0f, 1.0f) < 0) {
 		fprintf(stderr,
 			"qtcad Obol progressive LoD startup-wire-lod failed to install root source\n");
 		cleanup();

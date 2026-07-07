@@ -1249,7 +1249,8 @@ exercise_duplicate_occurrence_pick_identity(struct ged *gedp,
     if (controller->setDatabaseSourceInstanceState(
 	    summary_a.instanceKey.getString(),
 	    TRUE, summary_a.sourceRevision, summary_a.inputsRevision,
-	    FALSE, summary_a.highlighted, summary_a.lineStyle,
+	    FALSE, summary_a.selected, summary_a.highlighted,
+	    summary_a.lineStyle,
 	    summary_a.lineWidth, summary_a.transparency,
 	    summary_a.colorOverride, summary_a.color,
 	    summary_a.materialColorValid, summary_a.materialColor,
@@ -1296,7 +1297,8 @@ exercise_duplicate_occurrence_pick_identity(struct ged *gedp,
     if (controller->setDatabaseSourceInstanceState(
 	    summary_a.instanceKey.getString(),
 	    TRUE, summary_a.sourceRevision, summary_a.inputsRevision,
-	    TRUE, summary_a.highlighted, summary_a.lineStyle,
+	    TRUE, summary_a.selected, summary_a.highlighted,
+	    summary_a.lineStyle,
 	    summary_a.lineWidth, summary_a.transparency,
 	    summary_a.colorOverride, summary_a.color,
 	    summary_a.materialColorValid, summary_a.materialColor,
@@ -2926,6 +2928,7 @@ main(int argc, char **argv)
 	    7,
 	    TRUE,
 	    FALSE,
+	    FALSE,
 	    6,
 	    11,
 	    0.25f,
@@ -3106,6 +3109,7 @@ main(int argc, char **argv)
 	    TRUE,
 	    77,
 	    88,
+	    FALSE,
 	    FALSE,
 	    TRUE,
 	    3,
@@ -3846,6 +3850,7 @@ main(int argc, char **argv)
 	    struct rt_view_lod_policy lod_policy = RT_VIEW_LOD_POLICY_INIT;
 	    lod_policy.csg_enabled = 1;
 	    lod_policy.mesh_enabled = 0;
+	    lod_policy.scale = 1.75;
 	    lod_policy.bot_threshold = 77;
 	    lod_policy.curve_scale = 2.25;
 	    lod_policy.point_scale = 3.25;
@@ -3866,16 +3871,19 @@ main(int argc, char **argv)
 		    !box_realized_summary.realizationViewDependent ||
 		    fabs(box_realized_summary.realizationViewScale - 7.0f) >
 			0.001 ||
+		    fabs(box_realized_summary.realizationLodScale - 1.75f) >
+			0.001 ||
 		    box_realized_summary.realizationBotThreshold != 77 ||
 		    fabs(box_realized_summary.realizationCurveScale - 2.25f) >
 			0.001 ||
 		    fabs(box_realized_summary.realizationPointScale - 3.25f) >
 			0.001) {
 		fprintf(stderr,
-			"LoD Obol summary role=%d view=%d scale=%g bot=%u curve=%g point=%g\n",
+			"LoD Obol summary role=%d view=%d view_scale=%g lod_scale=%g bot=%u curve=%g point=%g\n",
 			box_realized_summary.realizationRoleFlags,
 			box_realized_summary.realizationViewDependent ? 1 : 0,
 			(double)box_realized_summary.realizationViewScale,
+			(double)box_realized_summary.realizationLodScale,
 			(unsigned)box_realized_summary.realizationBotThreshold,
 			(double)box_realized_summary.realizationCurveScale,
 			(double)box_realized_summary.realizationPointScale);
@@ -4026,6 +4034,7 @@ main(int argc, char **argv)
     struct rt_view_lod_policy stale_lod_policy = RT_VIEW_LOD_POLICY_INIT;
     stale_lod_policy.csg_enabled = 1;
     stale_lod_policy.mesh_enabled = 0;
+    stale_lod_policy.scale = 2.75;
     stale_lod_policy.bot_threshold = 91;
     stale_lod_policy.curve_scale = 6.25;
     stale_lod_policy.point_scale = 7.25;
@@ -4041,6 +4050,8 @@ main(int argc, char **argv)
 		SoBRLDatabaseSource::REALIZATION_ROLE_CSG) ||
 	    !box_realized_summary.realizationViewDependent ||
 	    fabs(box_realized_summary.realizationViewScale - 9.0f) >
+		0.001 ||
+	    fabs(box_realized_summary.realizationLodScale - 2.75f) >
 		0.001 ||
 	    box_realized_summary.realizationBotThreshold != 91 ||
 	    fabs(box_realized_summary.realizationCurveScale - 6.25f) >
@@ -4237,7 +4248,10 @@ main(int argc, char **argv)
     source_record.realization_role_flags =
 	SoBRLDatabaseSource::REALIZATION_ROLE_MESH;
     source_record.realization_view_dependent = 1;
+    source_record.realization_csg_lod_enabled = 0;
+    source_record.realization_mesh_lod_enabled = 1;
     source_record.realization_view_scale = 11.0;
+    source_record.realization_lod_scale = 3.5;
     source_record.realization_bot_threshold = 88;
     source_record.realization_curve_scale = 4.5;
     source_record.realization_point_scale = 5.5;
@@ -4259,7 +4273,10 @@ main(int argc, char **argv)
 	    box_source_summary.realizationRoleFlags !=
 	    SoBRLDatabaseSource::REALIZATION_ROLE_MESH ||
 	    !box_source_summary.realizationViewDependent ||
+	    box_source_summary.realizationCsgLodEnabled ||
+	    !box_source_summary.realizationMeshLodEnabled ||
 	    fabs(box_source_summary.realizationViewScale - 11.0f) > 0.001f ||
+	    fabs(box_source_summary.realizationLodScale - 3.5f) > 0.001f ||
 	    box_source_summary.realizationBotThreshold != 88 ||
 	    fabs(box_source_summary.realizationCurveScale - 4.5f) > 0.001f ||
 	    fabs(box_source_summary.realizationPointScale - 5.5f) > 0.001f)
@@ -4540,6 +4557,7 @@ main(int argc, char **argv)
 	    nested_sibling_initial_summary.sourceRevision,
 	    nested_sibling_initial_summary.inputsRevision,
 	    nested_sibling_initial_summary.visible,
+	    nested_sibling_initial_summary.selected,
 	    nested_sibling_initial_summary.highlighted,
 	    nested_sibling_initial_summary.lineStyle,
 	    23,

@@ -330,6 +330,8 @@ static int ged_draw_scene_ref_group_record_summary(
 struct _ged_draw_obol_update_display_ctx {
     int visible_valid;
     int visible;
+    int selected_valid;
+    int selected;
     int highlighted_valid;
     int highlighted;
     int draw_mode_valid;
@@ -485,14 +487,13 @@ static int ged_draw_obol_database_source_brep_mesh_lod_realize(
 	const struct bn_tol *tol,
 	void *view_ctx);
 static int ged_draw_obol_database_source_adaptive_wireframe_realize(
-	struct ged *gedp,
-	const char *path,
-	struct db_i *dbip,
-	const struct db_full_path *fullpath,
-	const mat_t draw_mat,
-	const struct bn_tol *tol,
-	void *view_ctx,
-	fastf_t draw_size);
+    struct ged *gedp,
+    const char *path,
+    struct db_i *dbip,
+    const struct db_full_path *fullpath,
+    const struct bn_tol *tol,
+    void *view_ctx,
+    fastf_t draw_size);
 static void ged_draw_primitive_realization_line_set_free(
 	struct rt_primitive_lod_realization *realization);
 static int ged_draw_obol_database_source_publish_realization_line_set(
@@ -604,7 +605,10 @@ struct ged_draw_database_source_record {
     ged_draw_database_source_realization_status realization_status;
     int realization_role_flags;
     int realization_view_dependent;
+    int realization_csg_lod_enabled;
+    int realization_mesh_lod_enabled;
     fastf_t realization_view_scale;
+    fastf_t realization_lod_scale;
     uint64_t realization_bot_threshold;
     fastf_t realization_curve_scale;
     fastf_t realization_point_scale;
@@ -4401,6 +4405,7 @@ _ged_draw_obol_update_display_cb(struct ged *gedp,
     if (ged_draw_obol_database_source_update_display_for_path(
 	    gedp, path,
 	    ctx->visible_valid, ctx->visible,
+	    ctx->selected_valid, ctx->selected,
 	    ctx->highlighted_valid, ctx->highlighted,
 	    ctx->draw_mode_valid, ctx->draw_mode,
 	    ctx->line_style_valid, ctx->line_style,
@@ -4412,6 +4417,7 @@ _ged_draw_obol_update_display_cb(struct ged *gedp,
 	return 1;
     return ged_draw_obol_shape_update_display_for_path(gedp, path,
 	    ctx->visible_valid, ctx->visible,
+	    ctx->selected_valid, ctx->selected,
 	    ctx->highlighted_valid, ctx->highlighted,
 	    ctx->draw_mode_valid, ctx->draw_mode,
 	    ctx->line_style_valid, ctx->line_style,
@@ -4428,6 +4434,8 @@ ged_draw_scene_ref_obol_update_display(
 	bsg_scene_ref ref,
 	int visible_valid,
 	int visible,
+	int selected_valid,
+	int selected,
 	int highlighted_valid,
 	int highlighted,
 	int draw_mode_valid,
@@ -4456,6 +4464,8 @@ ged_draw_scene_ref_obol_update_display(
     struct _ged_draw_obol_update_display_ctx ctx = {
 	visible_valid,
 	visible,
+	selected_valid,
+	selected,
 	highlighted_valid,
 	highlighted,
 	draw_mode_valid,
@@ -4898,8 +4908,14 @@ ged_draw_database_source_record_from_obol(
 	obol_record->realization_role_flags;
     record->realization_view_dependent =
 	obol_record->realization_view_dependent;
+    record->realization_csg_lod_enabled =
+	obol_record->realization_csg_lod_enabled;
+    record->realization_mesh_lod_enabled =
+	obol_record->realization_mesh_lod_enabled;
     record->realization_view_scale =
 	obol_record->realization_view_scale;
+    record->realization_lod_scale =
+	obol_record->realization_lod_scale;
     record->realization_bot_threshold =
 	obol_record->realization_bot_threshold;
     record->realization_curve_scale =
@@ -4943,8 +4959,14 @@ ged_draw_database_source_record_to_obol(
 	record->realization_role_flags;
     obol_record->realization_view_dependent =
 	record->realization_view_dependent;
+    obol_record->realization_csg_lod_enabled =
+	record->realization_csg_lod_enabled;
+    obol_record->realization_mesh_lod_enabled =
+	record->realization_mesh_lod_enabled;
     obol_record->realization_view_scale =
 	record->realization_view_scale;
+    obol_record->realization_lod_scale =
+	record->realization_lod_scale;
     obol_record->realization_bot_threshold =
 	record->realization_bot_threshold;
     obol_record->realization_curve_scale =
@@ -5098,8 +5120,13 @@ ged_draw_scene_ref_database_source_record_get(
 		bsg_record.realization_role_flags);
     record->realization_view_dependent =
 	bsg_record.realization_view_dependent;
+    record->realization_csg_lod_enabled =
+	bsg_record.realization_view_dependent;
+    record->realization_mesh_lod_enabled =
+	bsg_record.realization_view_dependent;
     record->realization_view_scale =
 	(fastf_t)bsg_record.realization_view_scale;
+    record->realization_lod_scale = 1.0;
     record->realization_bot_threshold =
 	bsg_record.realization_bot_threshold;
     record->realization_curve_scale =
@@ -7586,6 +7613,7 @@ ged_draw_scene_ref_display_summary(
     out->intent_path = intent ? bsg_draw_intent_path(intent) : NULL;
     out->intent_draw_mode = intent ? bsg_draw_intent_mode(intent) : -1;
     out->visible = ged_draw_scene_ref_visible(ref);
+    out->selected = 0;
     out->highlighted = ged_draw_scene_ref_highlighted(ref);
     out->line_style = ged_draw_scene_ref_line_style(ref);
     out->line_width = ged_draw_scene_ref_line_width(ref);
@@ -7855,6 +7883,7 @@ ged_draw_shape_ref_record_summary(struct ged *gedp,
 	if (ged_draw_obol_database_source_display_summary_for_path(gedp,
 		token->path, &display_summary) && display_summary.valid) {
 	    out->visible = display_summary.visible;
+	    out->selected = display_summary.selected;
 	    out->highlighted = display_summary.highlighted;
 	    out->transparency = display_summary.transparency;
 	    out->draw_mode = display_summary.draw_mode;
@@ -7900,6 +7929,7 @@ ged_draw_shape_ref_record_summary(struct ged *gedp,
 	if (ged_draw_obol_shape_display_summary_for_path(gedp, token->path,
 		&display_summary) && display_summary.valid) {
 	    out->visible = display_summary.visible;
+	    out->selected = display_summary.selected;
 	    out->highlighted = display_summary.highlighted;
 	    out->transparency = display_summary.transparency;
 	    out->draw_mode = display_summary.draw_mode;
@@ -9022,6 +9052,7 @@ ged_draw_scene_ref_shape_record_summary(
 	    shape_data->source_revision != shape_data->realized_source_revision ||
 	    shape_data->inputs_revision != shape_data->realized_inputs_revision);
     out->visible = ged_draw_scene_ref_visible(ref);
+    out->selected = 0;
     out->highlighted = ged_draw_scene_ref_highlighted(ref);
     out->evaluated_region = ged_draw_scene_ref_legacy_eval_flag(ref);
     out->drawn_revision = ged_draw_scene_ref_drawn_revision(ref);
@@ -9299,13 +9330,13 @@ ged_draw_shape_ref_obol_publish_line_set(
 	const int *commands,
 	size_t point_count)
 {
+    (void)ged_draw_shape_ref_obol_sync_source_placement(gedp, ref,
+	    shape_ref);
     struct _ged_draw_obol_publish_line_ctx ctx = {
 	points,
 	commands,
 	point_count
     };
-    (void)ged_draw_shape_ref_obol_sync_source_placement(gedp, ref,
-	    shape_ref);
     return _ged_draw_shape_ref_try_obol_paths(gedp, ref, shape_ref,
 	    _ged_draw_obol_publish_line_cb, &ctx,
 	    "GED Obol publish VLIST path");
@@ -10002,7 +10033,7 @@ ged_draw_scene_ref_wireframe_shape(bsg_scene_ref shape_ref, void *view_ctx,
     struct rt_db_internal *ip = &dbintern;
     int ret = -1;
     int get_ret = rt_db_get_internal(ip, DB_FULL_PATH_CUR_DIR(fp),
-	    dbip, draw_state.draw_mat);
+	    dbip, NULL);
     if (get_ret < 0)
 	return -1;
 
@@ -10191,6 +10222,8 @@ ged_draw_shape_ref_obol_update_display_lazy(
 	bsg_scene_ref *shape_ref_out,
 	int visible_valid,
 	int visible,
+	int selected_valid,
+	int selected,
 	int highlighted_valid,
 	int highlighted,
 	int draw_mode_valid,
@@ -10211,6 +10244,8 @@ ged_draw_shape_ref_obol_update_display_lazy(
     struct _ged_draw_obol_update_display_ctx ctx = {
 	visible_valid,
 	visible,
+	selected_valid,
+	selected,
 	highlighted_valid,
 	highlighted,
 	draw_mode_valid,
@@ -10239,7 +10274,7 @@ ged_draw_shape_ref_set_visible(struct ged *gedp, ged_draw_shape_ref ref,
 			       int visible)
 {
     int obol_updated = ged_draw_shape_ref_obol_update_display_lazy(gedp,
-	    ref, NULL, 1, visible, 0, 0, 0, 0, 0, 0, 0, 0,
+	    ref, NULL, 1, visible, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 	    0, 0.0, 0, NULL, 0, NULL, 0, 0);
     /* Obol owns public shape visibility mutation; retained fallback is retired. */
     return obol_updated;
@@ -10282,7 +10317,7 @@ ged_draw_shape_ref_set_color(struct ged *gedp, ged_draw_shape_ref ref,
 			     const unsigned char rgb[3])
 {
     int obol_updated = ged_draw_shape_ref_obol_update_display_lazy(gedp,
-	    ref, NULL, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	    ref, NULL, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 	    0, 0.0, 1, rgb, 0, NULL, 0, 0);
     /* Obol owns public shape color mutation; retained fallback is retired. */
     return obol_updated;
@@ -10294,9 +10329,21 @@ ged_draw_shape_ref_set_highlighted(struct ged *gedp, ged_draw_shape_ref ref,
 				   int highlighted)
 {
     int obol_updated = ged_draw_shape_ref_obol_update_display_lazy(gedp,
-	    ref, NULL, 0, 0, 1, highlighted, 0, 0, 0, 0, 0, 0,
-	    0, 0.0, 0, NULL, 0, NULL, 0, 0);
+	    ref, NULL, 0, 0, 0, 0, 1, highlighted, 0, 0, 0, 0,
+	    0, 0, 0, 0.0, 0, NULL, 0, NULL, 0, 0);
     /* Obol owns public shape highlight mutation; retained fallback is retired. */
+    return obol_updated;
+}
+
+
+int
+ged_draw_shape_ref_set_selected(struct ged *gedp, ged_draw_shape_ref ref,
+				int selected)
+{
+    int obol_updated = ged_draw_shape_ref_obol_update_display_lazy(gedp,
+	    ref, NULL, 0, 0, 1, selected, 0, 0, 0, 0, 0, 0,
+	    0, 0, 0, 0.0, 0, NULL, 0, NULL, 0, 0);
+    /* Obol owns public shape selection mutation; retained fallback is retired. */
     return obol_updated;
 }
 
@@ -10306,7 +10353,7 @@ ged_draw_shape_ref_set_transparency(struct ged *gedp, ged_draw_shape_ref ref,
 				    fastf_t transparency)
 {
     int obol_updated = ged_draw_shape_ref_obol_update_display_lazy(gedp,
-	    ref, NULL, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	    ref, NULL, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 	    1, transparency, 0, NULL, 0, NULL, 0, 0);
     /* Obol owns public shape transparency mutation; retained fallback is retired. */
     return obol_updated;
@@ -10336,7 +10383,7 @@ ged_draw_shape_ref_set_material_color(struct ged *gedp,
 	return 0;
     int obol_updated = ged_draw_shape_ref_obol_update_display_lazy(gedp, ref,
 	    NULL,
-	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 	    0, 0.0, 0, NULL, 1, rgb, 0, 0);
     /* Obol owns public shape material-color mutation; retained fallback is retired. */
     return obol_updated;
@@ -10459,7 +10506,12 @@ ged_draw_shape_ref_lod_ensure_obol(struct ged *gedp,
 	    gedp,
 	    token->path,
 	    (policy.csg_enabled || policy.mesh_enabled) ? 1 : 0,
+	    policy.csg_enabled ? 1 : 0,
+	    policy.mesh_enabled ? 1 : 0,
 	    rt_view_context_scale_get(first_view_ctx),
+	    policy.scale,
+	    rt_view_context_width_get(first_view_ctx),
+	    rt_view_context_height_get(first_view_ctx),
 	    (uint64_t)policy.bot_threshold,
 	    policy.curve_scale,
 	    policy.point_scale);
@@ -10475,13 +10527,8 @@ ged_draw_shape_ref_lod_ensure_obol(struct ged *gedp,
 	struct db_i *realize_dbip = runtime.valid && runtime.dbip ?
 	    runtime.dbip : gedp->dbip;
 	struct bn_tol local_tol = BN_TOL_INIT_TOL;
-	mat_t draw_mat;
-	if (draw_state.draw_mat_valid)
-	    MAT_COPY(draw_mat, draw_state.draw_mat);
-	else
-	    MAT_IDN(draw_mat);
 	(void)ged_draw_obol_database_source_adaptive_wireframe_realize(gedp,
-		token->path, realize_dbip, fullpath, draw_mat, &local_tol,
+		token->path, realize_dbip, fullpath, &local_tol,
 		first_view_ctx, runtime.draw_size_valid ? runtime.draw_size :
 		    0.0);
     }
@@ -10745,19 +10792,18 @@ ged_draw_obol_database_source_adaptive_wireframe_realize(
 	const char *path,
 	struct db_i *dbip,
 	const struct db_full_path *fullpath,
-	const mat_t draw_mat,
 	const struct bn_tol *tol,
 	void *view_ctx,
 	fastf_t draw_size)
 {
     if (!gedp || !path || !path[0] || !dbip || !fullpath ||
-	    fullpath->fp_len <= 0 || !draw_mat || !view_ctx)
+	    fullpath->fp_len <= 0 || !view_ctx)
 	return 0;
 
     struct rt_db_internal intern;
     RT_DB_INTERNAL_INIT(&intern);
     if (rt_db_get_internal(&intern, DB_FULL_PATH_CUR_DIR(fullpath), dbip,
-	    draw_mat) < 0)
+	    NULL) < 0)
 	return 0;
 
     int published = 0;
@@ -12053,6 +12099,7 @@ ged_draw_scene_ref_set_visible(bsg_scene_ref ref, int visible)
 	    0, 0,
 	    0, 0,
 	    0, 0,
+	    0, 0,
 	    0, 0.0,
 	    0, NULL,
 	    0, NULL,
@@ -12071,6 +12118,7 @@ ged_draw_scene_ref_set_transparency(bsg_scene_ref ref, fastf_t transparency)
 	return 0;
 
     if (ged_draw_scene_ref_obol_update_display(ref,
+	    0, 0,
 	    0, 0,
 	    0, 0,
 	    0, 0,
@@ -12099,6 +12147,7 @@ ged_draw_scene_ref_set_color(bsg_scene_ref ref, const unsigned char rgb[3])
 	    0, 0,
 	    0, 0,
 	    0, 0,
+	    0, 0,
 	    0, 0.0,
 	    1, rgb,
 	    0, NULL,
@@ -12117,6 +12166,7 @@ ged_draw_scene_ref_set_highlighted(bsg_scene_ref ref, int highlighted)
 	return 0;
 
     if (ged_draw_scene_ref_obol_update_display(ref,
+	    0, 0,
 	    0, 0,
 	    1, highlighted,
 	    0, 0,
@@ -12188,6 +12238,7 @@ ged_draw_scene_ref_set_line_style(bsg_scene_ref ref, int dashed)
 	    0, 0,
 	    0, 0,
 	    0, 0,
+	    0, 0,
 	    1, dashed,
 	    0, 0,
 	    0, 0.0,
@@ -12208,6 +12259,7 @@ ged_draw_scene_ref_set_line_width(bsg_scene_ref ref, int line_width)
 	return 0;
 
     if (ged_draw_scene_ref_obol_update_display(ref,
+	    0, 0,
 	    0, 0,
 	    0, 0,
 	    0, 0,
@@ -12245,6 +12297,7 @@ static void
 ged_draw_scene_ref_set_draw_mode(bsg_scene_ref ref, int draw_mode)
 {
     if (ged_draw_scene_ref_obol_update_display(ref,
+	    0, 0,
 	    0, 0,
 	    0, 0,
 	    1, draw_mode,
@@ -12799,6 +12852,7 @@ ged_draw_scene_ref_set_material_rgb(bsg_scene_ref ref,
 	    0, 0,
 	    0, 0,
 	    0, 0,
+	    0, 0,
 	    0, 0.0,
 	    0, NULL,
 	    1, rgb,
@@ -12817,6 +12871,7 @@ ged_draw_scene_ref_set_material_revision(bsg_scene_ref ref,
 	return 0;
 
     if (ged_draw_scene_ref_obol_update_display(ref,
+	    0, 0,
 	    0, 0,
 	    0, 0,
 	    0, 0,
@@ -14901,12 +14956,12 @@ ged_draw_scene_ref_publish_line_set(bsg_scene_ref ref,
 		shape_data->gedp, shape_ref, ref, points, commands,
 		point_count);
 	if (!obol_published) {
+	    (void)ged_draw_scene_ref_obol_sync_source_placement(ref);
 	    struct _ged_draw_obol_publish_line_ctx ctx = {
 		points,
 		commands,
 		point_count
 	    };
-	    (void)ged_draw_scene_ref_obol_sync_source_placement(ref);
 	    obol_published = ged_draw_scene_ref_obol_source_path_apply(ref,
 		    _ged_draw_obol_publish_line_cb, &ctx);
 	    if (!obol_published) {

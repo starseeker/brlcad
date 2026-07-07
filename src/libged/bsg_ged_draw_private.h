@@ -86,7 +86,10 @@ struct ged_draw_obol_realization_policy_summary {
     int valid;
     int role_flags;
     int view_dependent;
+    int csg_lod_enabled;
+    int mesh_lod_enabled;
     fastf_t view_scale;
+    fastf_t lod_scale;
     uint64_t bot_threshold;
     fastf_t curve_scale;
     fastf_t point_scale;
@@ -108,6 +111,7 @@ struct ged_draw_obol_database_source_record {
     const char *instance_key;
     const char *owner_group_path;
     int visible;
+    int selected;
     int highlighted;
     fastf_t transparency;
     int draw_mode;
@@ -121,7 +125,10 @@ struct ged_draw_obol_database_source_record {
     int realization_status;
     int realization_role_flags;
     int realization_view_dependent;
+    int realization_csg_lod_enabled;
+    int realization_mesh_lod_enabled;
     fastf_t realization_view_scale;
+    fastf_t realization_lod_scale;
     uint64_t realization_bot_threshold;
     fastf_t realization_curve_scale;
     fastf_t realization_point_scale;
@@ -242,6 +249,7 @@ struct ged_draw_shape_record_summary {
     int stale;
     const char *stale_reason;
     int visible;
+    int selected;
     int highlighted;
     int evaluated_region;
     uint64_t drawn_revision;
@@ -1276,6 +1284,8 @@ GED_EXPORT extern int ged_draw_obol_database_source_update_display_for_path(
 	const char *path,
 	int visible_valid,
 	int visible,
+	int selected_valid,
+	int selected,
 	int highlighted_valid,
 	int highlighted,
 	int draw_mode_valid,
@@ -1297,6 +1307,8 @@ GED_EXPORT extern int ged_draw_obol_shape_update_display_for_path(
 	const char *path,
 	int visible_valid,
 	int visible,
+	int selected_valid,
+	int selected,
 	int highlighted_valid,
 	int highlighted,
 	int draw_mode_valid,
@@ -1377,7 +1389,12 @@ ged_draw_obol_database_source_set_realization_view_policy_for_path(
 	struct ged *gedp,
 	const char *path,
 	int view_dependent,
+	int csg_lod_enabled,
+	int mesh_lod_enabled,
 	fastf_t view_scale,
+	fastf_t lod_scale,
+	int view_width,
+	int view_height,
 	uint64_t bot_threshold,
 	fastf_t curve_scale,
 	fastf_t point_scale);
@@ -1604,6 +1621,9 @@ GED_EXPORT extern int ged_draw_shape_ref_set_color(struct ged *gedp,
 GED_EXPORT extern int ged_draw_shape_ref_set_highlighted(struct ged *gedp,
 							 ged_draw_shape_ref ref,
 							 int highlighted);
+GED_EXPORT extern int ged_draw_shape_ref_set_selected(struct ged *gedp,
+						      ged_draw_shape_ref ref,
+						      int selected);
 GED_EXPORT extern int ged_draw_shape_ref_set_transparency(struct ged *gedp,
 							  ged_draw_shape_ref ref,
 							  fastf_t transparency);

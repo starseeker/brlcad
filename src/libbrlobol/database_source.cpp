@@ -305,11 +305,17 @@ BRLObolDatabaseSourceSummary::BRLObolDatabaseSourceSummary(void) :
     realizationIdentity(""),
     realizationRoleFlags(SoBRLDatabaseSource::REALIZATION_ROLE_NONE),
     realizationViewDependent(FALSE),
+    realizationCsgLodEnabled(FALSE),
+    realizationMeshLodEnabled(FALSE),
     realizationViewScale(0.0f),
+    realizationLodScale(1.0f),
+    realizationViewWidth(0),
+    realizationViewHeight(0),
     realizationBotThreshold(0),
     realizationCurveScale(0.0f),
     realizationPointScale(0.0f),
     visible(TRUE),
+    selected(FALSE),
     highlighted(FALSE),
     lineStyle(0),
     lineWidth(0),
@@ -328,6 +334,9 @@ BRLObolDatabaseSourceSummary::BRLObolDatabaseSourceSummary(void) :
     databaseMaterialShader(""),
     colorOverride(FALSE),
     color(1.0f, 1.0f, 1.0f),
+    selectedColor(1.0f, 1.0f, 1.0f),
+    highlightedColor(1.0f, 1.0f, 0.0f),
+    ghostedColor(0.55f, 0.55f, 0.55f),
     drawMatrixValid(FALSE),
     drawMatrix(SbMatrix::identity()),
     drawCenterValid(FALSE),
@@ -417,6 +426,8 @@ BRLObolExternalAnnotation::BRLObolExternalAnnotation(void) :
 BRLObolDatabaseSourceDisplayPatch::BRLObolDatabaseSourceDisplayPatch(void) :
     visibleValid(FALSE),
     visible(TRUE),
+    selectedValid(FALSE),
+    selected(FALSE),
     highlightedValid(FALSE),
     highlighted(FALSE),
     lineStyleValid(FALSE),
@@ -428,7 +439,13 @@ BRLObolDatabaseSourceDisplayPatch::BRLObolDatabaseSourceDisplayPatch(void) :
     colorOverrideValid(FALSE),
     colorOverride(FALSE),
     colorValid(FALSE),
-    color(1.0f, 1.0f, 1.0f)
+    color(1.0f, 1.0f, 1.0f),
+    selectedColorValid(FALSE),
+    selectedColor(1.0f, 1.0f, 1.0f),
+    highlightedColorValid(FALSE),
+    highlightedColor(1.0f, 1.0f, 0.0f),
+    ghostedColorValid(FALSE),
+    ghostedColor(0.55f, 0.55f, 0.55f)
 {
 }
 
@@ -557,6 +574,7 @@ BRLObolSceneDisplaySummary::BRLObolSceneDisplaySummary(void) :
     intentPath(""),
     intentDrawMode(-1),
     visible(TRUE),
+    selected(FALSE),
     highlighted(FALSE),
     lineStyle(0),
     lineWidth(0),
@@ -813,7 +831,7 @@ source_realization_identity(const SoBRLDatabaseSource *source)
 	return "";
 
     SbString identity;
-    identity.sprintf("dbsource:%s@%s#repr=%s;repr_mode=%d;mode=%d;source=%u;inputs=%u;view=%u;lod=%u;abs=%.9g;rel=%.9g;norm=%.9g",
+    identity.sprintf("dbsource:%s@%s#repr=%s;repr_mode=%d;mode=%d;source=%u;inputs=%u;view=%u;view_dep=%d;csg_lod=%d;mesh_lod=%d;view_scale=%.9g;lod_scale=%.9g;view_dims=%dx%d;lod=%u;curve=%.9g;point=%.9g;abs=%.9g;rel=%.9g;norm=%.9g",
 		     source_effective_instance_key(source).getString(),
 		     source->path.getValue().getString(),
 		     source_effective_representation_key(source).getString(),
@@ -822,7 +840,16 @@ source_realization_identity(const SoBRLDatabaseSource *source)
 		     source->sourceRevision.getValue(),
 		     source->inputsRevision.getValue(),
 		     source->viewRevision.getValue(),
+		     source->realizationViewDependent.getValue() ? 1 : 0,
+		     source->realizationCsgLodEnabled.getValue() ? 1 : 0,
+		     source->realizationMeshLodEnabled.getValue() ? 1 : 0,
+		     static_cast<double>(source->realizationViewScale.getValue()),
+		     static_cast<double>(source->realizationLodScale.getValue()),
+		     source->realizationViewWidth.getValue(),
+		     source->realizationViewHeight.getValue(),
 		     source->lodBotThreshold.getValue(),
+		     static_cast<double>(source->realizationCurveScale.getValue()),
+		     static_cast<double>(source->realizationPointScale.getValue()),
 		     static_cast<double>(source->tessellationAbsTol.getValue()),
 		     static_cast<double>(source->tessellationRelTol.getValue()),
 		     static_cast<double>(source->tessellationNormTol.getValue()));
@@ -941,6 +968,101 @@ source_tess_tol(const SoBRLDatabaseSource *source)
 
     return ttol;
 }
+
+static SbBool
+source_view_lod_active(const SoBRLDatabaseSource *source)
+{
+    return source && source->realizationViewDependent.getValue() ? TRUE : FALSE;
+}
+
+static SbBool
+source_csg_lod_active(const SoBRLDatabaseSource *source)
+{
+    return source_view_lod_active(source) &&
+	   source->realizationCsgLodEnabled.getValue() ? TRUE : FALSE;
+}
+
+static SbBool
+source_mesh_lod_active(const SoBRLDatabaseSource *source)
+{
+    return source_view_lod_active(source) &&
+	   source->realizationMeshLodEnabled.getValue() ? TRUE : FALSE;
+}
+
+static void
+source_view_info(struct rt_view_info *info,
+		 const SoBRLDatabaseSource *source)
+{
+    rt_view_info_init(info);
+    if (!info || !source)
+	return;
+
+    info->size = source->realizationViewScale.getValue();
+    info->width = source->realizationViewWidth.getValue();
+    info->height = source->realizationViewHeight.getValue();
+    info->lod.scale = source->realizationLodScale.getValue();
+    info->lod.curve_scale = source->realizationCurveScale.getValue();
+    info->lod.point_scale = source->realizationPointScale.getValue();
+    info->lod.bot_threshold = source->realizationBotThreshold.getValue();
+    rt_view_info_sanitize(info);
+}
+
+static fastf_t
+source_lod_solid_size(const SoBRLDatabaseSource *source,
+		      const SbBox3f &localBounds)
+{
+    if (source && source->drawSizeValid.getValue() &&
+	source->drawSize.getValue() > 0.0f)
+	return source->drawSize.getValue();
+
+    if (!localBounds.isEmpty()) {
+	const SbVec3f bmin = localBounds.getMin();
+	const SbVec3f bmax = localBounds.getMax();
+	return (bmax - bmin).length();
+    }
+
+    if (source && source->realizationViewScale.getValue() > 0.0f)
+	return source->realizationViewScale.getValue();
+
+    return 1.0;
+}
+
+static void
+source_lod_cache_key_append(std::string &cacheKey,
+			    const SoBRLDatabaseSource *source,
+			    const SbBox3f &localBounds)
+{
+    if (!source_view_lod_active(source))
+	return;
+
+    char suffix[256] = {0};
+    snprintf(suffix, sizeof(suffix),
+	     ":view-lod:%d:%d:%u:%.9g:%.9g:%dx%d:%.9g:%.9g:%.9g",
+	     source->realizationCsgLodEnabled.getValue() ? 1 : 0,
+	     source->realizationMeshLodEnabled.getValue() ? 1 : 0,
+	     source->realizationBotThreshold.getValue(),
+	     static_cast<double>(source->realizationViewScale.getValue()),
+	     static_cast<double>(source->realizationLodScale.getValue()),
+	     source->realizationViewWidth.getValue(),
+	     source->realizationViewHeight.getValue(),
+	     static_cast<double>(source->realizationCurveScale.getValue()),
+	     static_cast<double>(source->realizationPointScale.getValue()),
+	     static_cast<double>(source_lod_solid_size(source, localBounds)));
+    cacheKey += suffix;
+}
+
+static void
+primitive_realization_line_set_free(
+    struct rt_primitive_lod_realization *realization);
+
+static SoBRLVListShape *
+vlist_from_primitive_realization_line_set(
+    struct rt_primitive_lod_realization *realization,
+    const char *geometryKind);
+
+static SbBool
+local_bounds_from_internal(struct rt_db_internal *intern,
+			   SbBox3f &bounds);
 
 static SbBool
 node_is_auxiliary_vlist(const SoNode *node)
@@ -1118,6 +1240,16 @@ store_cached_geometry_map(std::map<std::string, ShapeT *> &cached,
 {
     if (!shape)
 	return;
+
+    /*
+     * Realization seeding rebuilds the per-action cache from already realized
+     * shared geometry.  Keep the internal shared-geometry key aligned with the
+     * exact cache key used for storage, including view-LoD policy suffixes.
+     * Instance shapes keep their user-facing geometry names separately.
+     */
+    shape->geometryName = key.c_str();
+    shape->cacheIdentity =
+	record_identity_with_revision(key.c_str(), shape->sourceId.getValue());
 
     typename std::map<std::string, ShapeT *>::iterator found =
 	cached.find(key);
@@ -1611,6 +1743,7 @@ assign_realized_identity(ShapeT *shape,
     shape->geometryKind = "";
     if (source) {
 	shape->visible = source->visible.getValue();
+	shape->selected = source->selected.getValue();
 	shape->highlighted = source->highlighted.getValue();
 	shape->lineStyle = source->lineStyle.getValue();
 	shape->lineWidth = source->lineWidth.getValue();
@@ -1753,12 +1886,16 @@ sync_shape_display_state(ShapeT *shape, const SoBRLDatabaseSource *source)
     shape->hiddenLine = (shape->drawMode.getValue() ==
 			 BRLOBOL_LOD_DRAW_HIDDEN_LINE) ? TRUE : FALSE;
     shape->visible = source->visible.getValue();
+    shape->selected = source->selected.getValue();
     shape->highlighted = source->highlighted.getValue();
     shape->lineStyle = source->lineStyle.getValue();
     shape->lineWidth = source->lineWidth.getValue();
     shape->transparency = source->transparency.getValue();
     shape->colorOverride = source->colorOverride.getValue();
     shape->color = source->color.getValue();
+    shape->selectedColor = source->selectedColor.getValue();
+    shape->highlightedColor = source->highlightedColor.getValue();
+    shape->ghostedColor = source->ghostedColor.getValue();
     if (source->materialColorValid.getValue()) {
 	shape->materialColorValid = TRUE;
 	shape->materialColor = source->materialColor.getValue();
@@ -1959,6 +2096,41 @@ vlist_from_plot_internal(struct rt_db_internal *intern,
 }
 
 
+static SoBRLVListShape *
+vlist_from_lod_realization_internal(struct rt_db_internal *intern,
+				    const SoBRLDatabaseSource *source,
+				    const SbBox3f &localBounds,
+				    const struct bn_tol *plotTol = NULL)
+{
+    if (!source_csg_lod_active(source) || !internal_payload_magic_valid(intern))
+	return NULL;
+    if (!intern->idb_meth || !intern->idb_meth->ft_lod_realize)
+	return NULL;
+    if (intern->idb_type == ID_BOT || intern->idb_type == ID_MATERIAL)
+	return NULL;
+
+    struct rt_primitive_lod_realization realization;
+    memset(&realization, 0, sizeof(realization));
+
+    struct rt_view_info viewInfo;
+    source_view_info(&viewInfo, source);
+
+    struct bn_tol tol = BN_TOL_INIT_TOL;
+    if (plotTol)
+	tol = *plotTol;
+
+    const fastf_t solidSize = source_lod_solid_size(source, localBounds);
+    const int ret = intern->idb_meth->ft_lod_realize(&realization, intern,
+	&tol, &viewInfo, solidSize);
+    if (ret < 0 || !realization.has_line_set) {
+	primitive_realization_line_set_free(&realization);
+	return NULL;
+    }
+
+    return vlist_from_primitive_realization_line_set(&realization, "line");
+}
+
+
 static union tree *
     realize_leaf(struct db_tree_state *tsp,
 		 const struct db_full_path *pathp,
@@ -1971,7 +2143,9 @@ static union tree *
 	return TREE_NULL;
 
     SoBRLVListShape *sharedShape = NULL;
-    const std::string cacheKey = realize_geometry_cache_key(dp);
+    SbBox3f cacheBounds;
+    std::string cacheKey = realize_geometry_cache_key(dp);
+    source_lod_cache_key_append(cacheKey, data->source, cacheBounds);
     std::map<std::string, SoBRLVListShape *>::iterator found =
 	data->cache->sharedWireGeometry.find(cacheKey);
     if (found != data->cache->sharedWireGeometry.end())
@@ -1993,6 +2167,9 @@ static union tree *
 	}
 
 	typeLabel = primitive_type_label(localIntern);
+	SbBox3f localBounds;
+	if (source_view_lod_active(data->source))
+	    (void)local_bounds_from_internal(localIntern, localBounds);
 	if (localIntern->idb_type == ID_MATERIAL) {
 	    SoBRLMaterialObject *materialObject =
 		material_object_from_internal(static_cast<struct rt_material_internal *>(localIntern->idb_ptr));
@@ -2007,7 +2184,7 @@ static union tree *
 	    assign_material_identity(materialObject, path, dp->d_namep,
 				     typeLabel, data->revision);
 	    leaf->addChild(materialObject);
-	    data->source->addChild(leaf);
+	    database_source_add_realized_child(data->source, leaf);
 	    data->realized_shapes++;
 	    if (path)
 		bu_free(path, "db_path_to_string");
@@ -2019,7 +2196,10 @@ static union tree *
 		static_cast<const struct rt_bot_internal *>(
 		    localIntern->idb_ptr));
 	} else {
-	    sharedShape = vlist_from_plot_internal(localIntern, data->source);
+	    sharedShape = vlist_from_lod_realization_internal(localIntern,
+		data->source, localBounds);
+	    if (!sharedShape)
+		sharedShape = vlist_from_plot_internal(localIntern, data->source);
 	}
 	if (!sharedShape) {
 	    char reason[256] = {0};
@@ -2055,7 +2235,7 @@ static union tree *
 	if (geometryKind && BU_STR_EQUAL(geometryKind, "annotation"))
 	    shape->sourceType = "annotation";
 	leaf->addChild(shape);
-	data->source->addChild(leaf);
+	database_source_add_realized_child(data->source, leaf);
 	if (timer.active())
 	    brlobol_performance_counter_add(
 		BRLOBOL_PERF_REALIZED_INSTANCE_NODES, 1);
@@ -2239,8 +2419,11 @@ realize_direct_leaf_wireframe(SoBRLDatabaseSource *source,
     const std::string fullPath =
 	database_source_full_path_string(source->path.getValue());
     SoBRLVListShape *sharedShape = NULL;
+    SbBox3f localBounds;
+    SbBool localBoundsValid = FALSE;
     std::string cacheKey = realize_geometry_cache_key(dp);
-    const uint32_t wireLodThreshold = source->lodBotThreshold.getValue();
+    const uint32_t wireLodThreshold = source_mesh_lod_active(source) ?
+				      source->lodBotThreshold.getValue() : 0;
     if (wireLodThreshold > 0 &&
 	dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT) {
 	char suffix[64] = {0};
@@ -2248,6 +2431,7 @@ realize_direct_leaf_wireframe(SoBRLDatabaseSource *source,
 		 wireLodThreshold);
 	cacheKey += suffix;
     }
+    source_lod_cache_key_append(cacheKey, source, localBounds);
     std::map<std::string, SoBRLVListShape *>::iterator found =
 	cache->sharedWireGeometry.find(cacheKey);
     if (found != cache->sharedWireGeometry.end())
@@ -2255,8 +2439,6 @@ realize_direct_leaf_wireframe(SoBRLDatabaseSource *source,
     brlobol_performance_counter_add(sharedShape ? BRLOBOL_PERF_WIRE_CACHE_HITS :
 	BRLOBOL_PERF_WIRE_CACHE_MISSES, 1);
 
-    SbBox3f localBounds;
-    SbBool localBoundsValid = FALSE;
     std::map<std::string, SbBox3f>::const_iterator boundsFound =
 	cache->sharedWireBounds.find(cacheKey);
     if (boundsFound != cache->sharedWireBounds.end() &&
@@ -2284,7 +2466,8 @@ realize_direct_leaf_wireframe(SoBRLDatabaseSource *source,
 	validInternal.ownsLocal = true;
 
 	typeLabel = primitive_type_label(&validInternal.local);
-	if (validInternal.local.idb_type == ID_BOT)
+	if (validInternal.local.idb_type == ID_BOT ||
+	    source_view_lod_active(source))
 	    localBoundsValid = local_bounds_from_internal(&validInternal.local,
 		localBounds);
 	SbBox3f lodProxyBounds;
@@ -2315,7 +2498,7 @@ realize_direct_leaf_wireframe(SoBRLDatabaseSource *source,
 				     fullPath.c_str(),
 				     dp->d_namep, typeLabel, revision);
 	    leaf->addChild(materialObject);
-	    source->addChild(leaf);
+	    database_source_add_realized_child(source, leaf);
 	    return 1;
 	}
 
@@ -2325,8 +2508,11 @@ realize_direct_leaf_wireframe(SoBRLDatabaseSource *source,
 		    static_cast<const struct rt_bot_internal *>(
 			validInternal.local.idb_ptr));
 	    } else {
-		sharedShape = vlist_from_plot_internal(&validInternal.local,
-		    source);
+		sharedShape = vlist_from_lod_realization_internal(
+		    &validInternal.local, source, localBounds);
+		if (!sharedShape)
+		    sharedShape = vlist_from_plot_internal(&validInternal.local,
+			source);
 	    }
 	}
 	if (!sharedShape) {
@@ -2366,7 +2552,7 @@ realize_direct_leaf_wireframe(SoBRLDatabaseSource *source,
 	if (geometryKind && BU_STR_EQUAL(geometryKind, "annotation"))
 	    shape->sourceType = "annotation";
 	leaf->addChild(shape);
-	source->addChild(leaf);
+	database_source_add_realized_child(source, leaf);
 	if (timer.active())
 	    brlobol_performance_counter_add(
 		BRLOBOL_PERF_REALIZED_INSTANCE_NODES, 1);
@@ -2401,8 +2587,11 @@ realize_direct_leaf_wireframe_compact(
     const std::string fullPath =
 	database_source_full_path_string(source->path.getValue());
     SoBRLVListShape *sharedShape = NULL;
+    SbBox3f localBounds;
+    SbBool localBoundsValid = FALSE;
     std::string cacheKey = realize_geometry_cache_key(dp);
-    const uint32_t wireLodThreshold = source->lodBotThreshold.getValue();
+    const uint32_t wireLodThreshold = source_mesh_lod_active(source) ?
+				      source->lodBotThreshold.getValue() : 0;
     if (wireLodThreshold > 0 &&
 	dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT) {
 	char suffix[64] = {0};
@@ -2410,6 +2599,7 @@ realize_direct_leaf_wireframe_compact(
 		 wireLodThreshold);
 	cacheKey += suffix;
     }
+    source_lod_cache_key_append(cacheKey, source, localBounds);
     std::map<std::string, SoBRLVListShape *>::iterator found =
 	cache->sharedWireGeometry.find(cacheKey);
     if (found != cache->sharedWireGeometry.end())
@@ -2435,6 +2625,10 @@ realize_direct_leaf_wireframe_compact(
 	validInternal.ownsLocal = true;
 
 	typeLabel = primitive_type_label(&validInternal.local);
+	if (validInternal.local.idb_type == ID_BOT ||
+	    source_view_lod_active(source))
+	    localBoundsValid = local_bounds_from_internal(&validInternal.local,
+		localBounds);
 	SbBox3f lodProxyBounds;
 	usedLodProxy = bot_lod_proxy_bounds(&validInternal.local,
 	    wireLodThreshold, lodProxyBounds);
@@ -2456,8 +2650,11 @@ realize_direct_leaf_wireframe_compact(
 		    static_cast<const struct rt_bot_internal *>(
 			validInternal.local.idb_ptr));
 	    } else {
-		sharedShape = vlist_from_plot_internal(&validInternal.local,
-		    source);
+		sharedShape = vlist_from_lod_realization_internal(
+		    &validInternal.local, source, localBounds);
+		if (!sharedShape)
+		    sharedShape = vlist_from_plot_internal(&validInternal.local,
+			source);
 	    }
 	}
 	if (!sharedShape) {
@@ -2478,6 +2675,8 @@ realize_direct_leaf_wireframe_compact(
 	    }
 	}
 	cache->storeWireGeometry(cacheKey, sharedShape);
+	if (localBoundsValid)
+	    cache->storeWireBounds(cacheKey, localBounds);
 	typeLabel = sharedShape->sourceType.getValue().getString();
     }
 
@@ -2516,6 +2715,8 @@ realize_direct_leaf_wireframe_compact(
 	source->setCompactVListInstanceWithGeometry(shape, cadGeometry) :
 	source->setCompactVListInstance(shape);
     shape->unref();
+    if (localBoundsValid)
+	set_source_bounds_from_local_box(source, localBounds);
     return compacted > 0 ? 1 : 0;
 }
 
@@ -2703,8 +2904,10 @@ primitive_indexed_face_set_free(struct rt_primitive_indexed_face_set *faceSet)
 
 static int
 indexed_face_finish(std::vector<int32_t> &face,
+		    std::vector<SbVec3f> &faceNormals,
 		    size_t pointCount,
 		    std::vector<int32_t> &triangles,
+		    std::vector<SbVec3f> *triangleNormals,
 		    size_t *faceCount,
 		    unsigned int *faceStamp,
 		    std::vector<unsigned int> &seen)
@@ -2716,9 +2919,15 @@ indexed_face_finish(std::vector<int32_t> &face,
 	triangles.push_back(face[0]);
 	triangles.push_back(face[i]);
 	triangles.push_back(face[i + 1]);
+	if (triangleNormals && faceNormals.size() == face.size()) {
+	    triangleNormals->push_back(faceNormals[0]);
+	    triangleNormals->push_back(faceNormals[i]);
+	    triangleNormals->push_back(faceNormals[i + 1]);
+	}
     }
 
     face.clear();
+    faceNormals.clear();
     if (faceCount)
 	(*faceCount)++;
     if (faceStamp && seen.size() == pointCount) {
@@ -2737,23 +2946,31 @@ static int
 indexed_faces_to_triangles(const int *indices,
 			   size_t indexCount,
 			   size_t pointCount,
-			   std::vector<int32_t> &triangles)
+			   std::vector<int32_t> &triangles,
+			   const vect_t *normals = NULL,
+			   size_t normalCount = 0,
+			   std::vector<SbVec3f> *triangleNormals = NULL)
 {
     if (!indices || !indexCount || !pointCount ||
 	pointCount > static_cast<size_t>(INT_MAX) ||
 	indexCount > static_cast<size_t>(INT_MAX))
 	return 0;
 
+    const int useNormals = normals && normalCount && triangleNormals;
+    size_t normalIndex = 0;
     size_t faceCount = 0;
     unsigned int faceStamp = 1;
     std::vector<unsigned int> seen(pointCount, 0);
     std::vector<int32_t> face;
+    std::vector<SbVec3f> faceNormals;
 
     for (size_t i = 0; i < indexCount; i++) {
 	const int idx = indices[i];
 	if (idx < 0) {
-	    if (idx != -1 || !indexed_face_finish(face, pointCount,
-						  triangles, &faceCount, &faceStamp, seen))
+	    if (idx != -1 || !indexed_face_finish(face, faceNormals,
+						  pointCount, triangles,
+						  triangleNormals, &faceCount,
+						  &faceStamp, seen))
 		return 0;
 	    continue;
 	}
@@ -2764,12 +2981,72 @@ indexed_faces_to_triangles(const int *indices,
 	    return 0;
 	seen[static_cast<size_t>(idx)] = faceStamp;
 	face.push_back(static_cast<int32_t>(idx));
+	if (useNormals) {
+	    if (normalIndex >= normalCount)
+		return 0;
+	    faceNormals.push_back(SbVec3f(
+				      static_cast<float>(normals[normalIndex][X]),
+				      static_cast<float>(normals[normalIndex][Y]),
+				      static_cast<float>(normals[normalIndex][Z])));
+	    normalIndex++;
+	}
     }
 
-    if (!face.empty() && !indexed_face_finish(face, pointCount,
-	    triangles, &faceCount, &faceStamp, seen))
+    if (!face.empty() && !indexed_face_finish(face, faceNormals, pointCount,
+	    triangles, triangleNormals, &faceCount, &faceStamp, seen))
+	return 0;
+    if (useNormals && normalIndex != normalCount)
+	return 0;
+    if (useNormals && triangleNormals->size() != triangles.size())
 	return 0;
     return faceCount > 0 && !triangles.empty();
+}
+
+static void
+sanitize_triangle_normals(std::vector<SbVec3f> &normals,
+			  const std::vector<SbVec3f> &points,
+			  const std::vector<int32_t> &triangles)
+{
+    if (normals.size() != triangles.size())
+	return;
+
+    for (size_t i = 0; i + 2 < triangles.size(); i += 3) {
+	const int32_t ia = triangles[i];
+	const int32_t ib = triangles[i + 1];
+	const int32_t ic = triangles[i + 2];
+	if (ia < 0 || ib < 0 || ic < 0 ||
+	    static_cast<size_t>(ia) >= points.size() ||
+	    static_cast<size_t>(ib) >= points.size() ||
+	    static_cast<size_t>(ic) >= points.size())
+	    continue;
+
+	SbVec3f faceNormal =
+	    (points[static_cast<size_t>(ib)] - points[static_cast<size_t>(ia)]).cross(
+		points[static_cast<size_t>(ic)] - points[static_cast<size_t>(ia)]);
+	if (faceNormal.length() > 0.0f)
+	    faceNormal.normalize();
+	else
+	    continue;
+
+	float normalDot = 0.0f;
+	for (size_t j = 0; j < 3; j++) {
+	    SbVec3f &n = normals[i + j];
+	    if (n.length() > 0.0f) {
+		n.normalize();
+		normalDot += n.dot(faceNormal);
+	    }
+	}
+
+	if (normalDot < 0.0f) {
+	    for (size_t j = 0; j < 3; j++)
+		normals[i + j].negate();
+	}
+
+	for (size_t j = 0; j < 3; j++) {
+	    if (normals[i + j].length() <= 0.0f)
+		normals[i + j] = faceNormal;
+	}
+    }
 }
 
 static SoBRLMeshShape *
@@ -2781,11 +3058,24 @@ mesh_from_indexed_face_set(const struct rt_primitive_indexed_face_set *faceSet,
 	faceSet->point_count > static_cast<size_t>(INT_MAX))
 	return NULL;
 
+    size_t cornerCount = 0;
+    for (size_t i = 0; i < faceSet->index_count; i++) {
+	if (faceSet->indices[i] >= 0)
+	    cornerCount++;
+    }
+    const int haveCompleteNormals =
+	faceSet->normals && faceSet->normal_count == cornerCount;
     std::vector<int32_t> triangles;
+    std::vector<SbVec3f> normals;
     if (!indexed_faces_to_triangles(faceSet->indices, faceSet->index_count,
-				    faceSet->point_count, triangles))
+				    faceSet->point_count, triangles,
+				    haveCompleteNormals ? faceSet->normals : NULL,
+				    haveCompleteNormals ? faceSet->normal_count : 0,
+				    haveCompleteNormals ? &normals : NULL))
 	return NULL;
     if (triangles.size() > static_cast<size_t>(INT_MAX))
+	return NULL;
+    if (haveCompleteNormals && normals.size() > static_cast<size_t>(INT_MAX))
 	return NULL;
 
     std::vector<SbVec3f> points;
@@ -2796,13 +3086,18 @@ mesh_from_indexed_face_set(const struct rt_primitive_indexed_face_set *faceSet,
 			     static_cast<float>(faceSet->points[i][Y]),
 			     static_cast<float>(faceSet->points[i][Z])));
     }
+    sanitize_triangle_normals(normals, points, triangles);
 
     uint32_t threshold = source ? source->lodBotThreshold.getValue() : 0;
     SoBRLMeshShape *shape = (threshold > 0 &&
 			     triangles.size() / 3 >= static_cast<size_t>(threshold)) ?
 			    new SoBRLLodMeshShape : new SoBRLMeshShape;
-    shape->setIndexedTriangles(points.data(), static_cast<int>(points.size()),
-			       triangles.data(), static_cast<int>(triangles.size()));
+    shape->setIndexedTriangles(points.data(),
+			       static_cast<int>(points.size()),
+			       triangles.data(),
+			       static_cast<int>(triangles.size()),
+			       normals.empty() ? NULL : normals.data(),
+			       static_cast<int>(normals.size()));
     return shape;
 }
 
@@ -2842,37 +3137,55 @@ publish_lod_result_metadata(SoBRLMeshShape *shape,
 }
 
 static void
-publish_lod_metadata_if_cached(SoBRLMeshShape *shape, struct db_i *dbip,
-			       const char *sourceName)
+publish_lod_mesh_if_available(SoBRLMeshShape *shape,
+			      const SoBRLDatabaseSource *source,
+			      struct db_i *dbip,
+			      const char *sourceName)
 {
     if (!shape || !dbip || !sourceName)
+	return;
+    if (!source_mesh_lod_active(source))
 	return;
 
     struct BRLObolMeshLodCacheStatus status =
 	    BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
-    (void)brlobol_mesh_lod_cache_status(dbip, sourceName, &status);
+    if (brlobol_mesh_lod_cache_status(dbip, sourceName, &status) != BRLCAD_OK)
+	return;
+    if (!status.has_cache_key || !status.has_cached_payload ||
+	status.stale_cache_entry) {
+	if (brlobol_mesh_lod_cache_refresh(dbip, sourceName, &status) !=
+	    BRLCAD_OK)
+	    return;
+    }
+    if (!status.has_cache_key || !status.has_cached_payload ||
+	status.stale_cache_entry)
+	return;
 
     struct BRLObolMeshLod *lod = brlobol_mesh_lod_get(dbip, sourceName);
     if (!lod)
 	return;
 
+    struct rt_view_info viewInfo;
+    source_view_info(&viewInfo, source);
+
     struct BRLObolMeshLodInfo info = BRLOBOL_MESH_LOD_INFO_INIT;
-    if (brlobol_mesh_lod_load_view(lod, NULL, 0) >= 0 &&
+    if (brlobol_mesh_lod_load_view(lod, &viewInfo, 0) >= 0 &&
 	brlobol_mesh_lod_info_get(lod, &info)) {
 	BRLObolLodRequest request;
-	request.databaseId = dbip->dbi_filename ? dbip->dbi_filename : "";
+	shape->makeLodRequest(request,
+	    dbip->dbi_filename ? dbip->dbi_filename : "",
+	    source ? source->sourceRevision.getValue() : 0,
+	    source ? source->viewRevision.getValue() : 0,
+	    0,
+	    BRLOBOL_LOD_DRAW_SHADED,
+	    "brlobol_mesh_lod",
+	    "brlobol-cache-v1",
+	    BRLOBOL_LOD_QUALITY_FAST_DISPLAY);
 	request.sourceContentHash = status.cache_key;
-	request.objectPath = sourceName;
-	request.objectName = sourceName;
-	request.drawMode = BRLOBOL_LOD_DRAW_SHADED;
-	request.lodPolicy = shape->lodPolicy.getValue();
-	request.providerId = "brlobol_mesh_lod";
-	request.providerVersion = "brlobol-cache-v1";
-	request.qualityTier = BRLOBOL_LOD_QUALITY_FAST_DISPLAY;
-	request.sourceCounts.faceCount = info.face_count;
-	request.sourceCounts.pointCount = info.point_count;
-	request.sourceCounts.originalPointCount = info.point_orig_count;
-	request.sourceCounts.normalCount = info.normal_count;
+	if (request.objectPath.getLength() == 0)
+	    request.objectPath = sourceName;
+	if (request.objectName.getLength() == 0)
+	    request.objectName = sourceName;
 	request.bounds = SbBox3f(
 			     SbVec3f(static_cast<float>(info.bmin[X]),
 				     static_cast<float>(info.bmin[Y]),
@@ -2882,7 +3195,13 @@ publish_lod_metadata_if_cached(SoBRLMeshShape *shape, struct db_i *dbip,
 				     static_cast<float>(info.bmax[Z])));
 	BRLObolLodResult result =
 	    brlobol_lod_result_from_mesh_lod_info(request, info, &status);
+	struct BRLObolMeshLodData data;
+	if (result.providerStatus == BRLOBOL_LOD_PROVIDER_READY &&
+	    brlobol_mesh_lod_data_get(lod, &data))
+	    (void)brlobol_lod_mesh_payload_from_mesh_lod_data(result.mesh,
+		data);
 	publish_lod_result_metadata(shape, result);
+	brlobol_mesh_lod_memshrink(lod);
     }
 
     brlobol_mesh_lod_destroy(lod);
@@ -3222,7 +3541,9 @@ realize_direct_leaf_mesh(SoBRLDatabaseSource *source,
 	database_source_full_path_string(source->path.getValue());
     SoBRLVListShape *sharedVListShape = NULL;
     SoBRLMeshShape *sharedMeshShape = NULL;
-    const std::string cacheKey = realize_geometry_cache_key(dp);
+    SbBox3f cacheBounds;
+    std::string cacheKey = realize_geometry_cache_key(dp);
+    source_lod_cache_key_append(cacheKey, source, cacheBounds);
     std::map<std::string, SoBRLVListShape *>::iterator foundVList =
 	cache->sharedMeshVListGeometry.find(cacheKey);
     if (foundVList != cache->sharedMeshVListGeometry.end()) {
@@ -3255,6 +3576,9 @@ realize_direct_leaf_mesh(SoBRLDatabaseSource *source,
 
 	typeLabel = primitive_type_label(&validInternal.local);
 	const int internalType = validInternal.local.idb_type;
+	SbBox3f localBounds;
+	if (source_view_lod_active(source))
+	    (void)local_bounds_from_internal(&validInternal.local, localBounds);
 	if (internalType == ID_MATERIAL) {
 	    SoBRLMaterialObject *materialObject =
 		material_object_from_internal(
@@ -3272,7 +3596,7 @@ realize_direct_leaf_mesh(SoBRLDatabaseSource *source,
 				     fullPath.c_str(),
 				     dp->d_namep, typeLabel, revision);
 	    leaf->addChild(materialObject);
-	    source->addChild(leaf);
+	    database_source_add_realized_child(source, leaf);
 	    return 1;
 	}
 
@@ -3284,8 +3608,11 @@ realize_direct_leaf_mesh(SoBRLDatabaseSource *source,
 		assign_shared_geometry_identity(sharedVListShape,
 		    dp->d_namep, typeLabel, revision, "point");
 	} else if (internalType == ID_SKETCH || internalType == ID_ANNOT) {
-	    sharedVListShape = vlist_from_plot_internal(&validInternal.local,
-		source);
+	    sharedVListShape = vlist_from_lod_realization_internal(
+		&validInternal.local, source, localBounds);
+	    if (!sharedVListShape)
+		sharedVListShape = vlist_from_plot_internal(&validInternal.local,
+		    source);
 	    if (sharedVListShape) {
 		assign_shared_geometry_identity(sharedVListShape,
 		    dp->d_namep, typeLabel, revision, "line");
@@ -3299,9 +3626,12 @@ realize_direct_leaf_mesh(SoBRLDatabaseSource *source,
 			BRLOBOL_LOD_DRAW_SHADED_BOTS &&
 		     (!validInternal.local.idb_meth ||
 		      !validInternal.local.idb_meth->ft_indexed_face_set))) &&
-		   internalType != ID_BOT) {
-	    sharedVListShape = vlist_from_plot_internal(&validInternal.local,
-		source);
+			   internalType != ID_BOT) {
+	    sharedVListShape = vlist_from_lod_realization_internal(
+		&validInternal.local, source, localBounds);
+	    if (!sharedVListShape)
+		sharedVListShape = vlist_from_plot_internal(&validInternal.local,
+		    source);
 	    if (sharedVListShape)
 		assign_shared_geometry_identity(sharedVListShape,
 		    dp->d_namep, typeLabel, revision, "line");
@@ -3355,10 +3685,10 @@ realize_direct_leaf_mesh(SoBRLDatabaseSource *source,
 			      geometryKind : "surface";
 	if (typeLabel && BU_STR_EQUAL(typeLabel, "bot") &&
 	    source->lodBotThreshold.getValue() > 0)
-	    publish_lod_metadata_if_cached(shape, dbip, dp->d_namep);
+	    publish_lod_mesh_if_available(shape, source, dbip, dp->d_namep);
 	leaf->addChild(shape);
     }
-    source->addChild(leaf);
+    database_source_add_realized_child(source, leaf);
     return 1;
 }
 
@@ -3386,7 +3716,9 @@ realize_direct_leaf_mesh_compact(
 	database_source_full_path_string(source->path.getValue());
     SoBRLVListShape *sharedVListShape = NULL;
     SoBRLMeshShape *sharedMeshShape = NULL;
-    const std::string cacheKey = realize_geometry_cache_key(dp);
+    SbBox3f cacheBounds;
+    std::string cacheKey = realize_geometry_cache_key(dp);
+    source_lod_cache_key_append(cacheKey, source, cacheBounds);
     std::map<std::string, SoBRLVListShape *>::iterator foundVList =
 	cache->sharedMeshVListGeometry.find(cacheKey);
     if (foundVList != cache->sharedMeshVListGeometry.end()) {
@@ -3419,6 +3751,9 @@ realize_direct_leaf_mesh_compact(
 
 	typeLabel = primitive_type_label(&validInternal.local);
 	const int internalType = validInternal.local.idb_type;
+	SbBox3f localBounds;
+	if (source_view_lod_active(source))
+	    (void)local_bounds_from_internal(&validInternal.local, localBounds);
 	if (internalType == ID_MATERIAL)
 	    return 0;
 
@@ -3430,8 +3765,11 @@ realize_direct_leaf_mesh_compact(
 		assign_shared_geometry_identity(sharedVListShape,
 		    dp->d_namep, typeLabel, revision, "point");
 	} else if (internalType == ID_SKETCH || internalType == ID_ANNOT) {
-	    sharedVListShape = vlist_from_plot_internal(&validInternal.local,
-		source);
+	    sharedVListShape = vlist_from_lod_realization_internal(
+		&validInternal.local, source, localBounds);
+	    if (!sharedVListShape)
+		sharedVListShape = vlist_from_plot_internal(&validInternal.local,
+		    source);
 	    if (sharedVListShape) {
 		assign_shared_geometry_identity(sharedVListShape,
 		    dp->d_namep, typeLabel, revision, "line");
@@ -3445,9 +3783,12 @@ realize_direct_leaf_mesh_compact(
 			BRLOBOL_LOD_DRAW_SHADED_BOTS &&
 		     (!validInternal.local.idb_meth ||
 		      !validInternal.local.idb_meth->ft_indexed_face_set))) &&
-		   internalType != ID_BOT) {
-	    sharedVListShape = vlist_from_plot_internal(&validInternal.local,
-		source);
+			   internalType != ID_BOT) {
+	    sharedVListShape = vlist_from_lod_realization_internal(
+		&validInternal.local, source, localBounds);
+	    if (!sharedVListShape)
+		sharedVListShape = vlist_from_plot_internal(&validInternal.local,
+		    source);
 	    if (sharedVListShape)
 		assign_shared_geometry_identity(sharedVListShape,
 		    dp->d_namep, typeLabel, revision, "line");
@@ -3504,7 +3845,7 @@ realize_direct_leaf_mesh_compact(
 			      geometryKind : "surface";
 	if (typeLabel && BU_STR_EQUAL(typeLabel, "bot") &&
 	    source->lodBotThreshold.getValue() > 0)
-	    publish_lod_metadata_if_cached(shape, dbip, dp->d_namep);
+	    publish_lod_mesh_if_available(shape, source, dbip, dp->d_namep);
 	compacted = source->setCompactMeshInstance(shape);
 	shape->unref();
     }
@@ -3525,7 +3866,9 @@ static union tree *
 
     SoBRLVListShape *sharedVListShape = NULL;
     SoBRLMeshShape *sharedMeshShape = NULL;
-    const std::string cacheKey = realize_geometry_cache_key(dp);
+    SbBox3f cacheBounds;
+    std::string cacheKey = realize_geometry_cache_key(dp);
+    source_lod_cache_key_append(cacheKey, data->source, cacheBounds);
     std::map<std::string, SoBRLVListShape *>::iterator foundVList =
 	data->cache->sharedMeshVListGeometry.find(cacheKey);
     if (foundVList != data->cache->sharedMeshVListGeometry.end()) {
@@ -3553,6 +3896,9 @@ static union tree *
 
 	typeLabel = primitive_type_label(localIntern);
 	const int internalType = localIntern->idb_type;
+	SbBox3f localBounds;
+	if (source_view_lod_active(data->source))
+	    (void)local_bounds_from_internal(localIntern, localBounds);
 	if (internalType == ID_MATERIAL) {
 	    SoBRLMaterialObject *materialObject =
 		material_object_from_internal(static_cast<struct rt_material_internal *>(localIntern->idb_ptr));
@@ -3567,7 +3913,7 @@ static union tree *
 	    assign_material_identity(materialObject, path, dp->d_namep,
 				     typeLabel, data->revision);
 	    leaf->addChild(materialObject);
-	    data->source->addChild(leaf);
+	    database_source_add_realized_child(data->source, leaf);
 	    data->realized_shapes++;
 	    if (path)
 		bu_free(path, "db_path_to_string");
@@ -3581,8 +3927,11 @@ static union tree *
 		assign_shared_geometry_identity(sharedVListShape,
 						dp->d_namep, typeLabel, data->revision, "point");
 	} else if (internalType == ID_SKETCH || internalType == ID_ANNOT) {
-	    sharedVListShape = vlist_from_plot_internal(localIntern,
-			       data->source);
+	    sharedVListShape = vlist_from_lod_realization_internal(localIntern,
+		data->source, localBounds);
+	    if (!sharedVListShape)
+		sharedVListShape = vlist_from_plot_internal(localIntern,
+		    data->source);
 	    if (sharedVListShape) {
 		assign_shared_geometry_identity(sharedVListShape,
 						dp->d_namep, typeLabel, data->revision, "line");
@@ -3597,9 +3946,12 @@ static union tree *
 			BRLOBOL_LOD_DRAW_SHADED_BOTS &&
 		     (!localIntern->idb_meth ||
 		      !localIntern->idb_meth->ft_indexed_face_set))) &&
-		   internalType != ID_BOT) {
-	    sharedVListShape = vlist_from_plot_internal(localIntern,
-			       data->source);
+			   internalType != ID_BOT) {
+	    sharedVListShape = vlist_from_lod_realization_internal(localIntern,
+		data->source, localBounds);
+	    if (!sharedVListShape)
+		sharedVListShape = vlist_from_plot_internal(localIntern,
+		    data->source);
 	    if (sharedVListShape)
 		assign_shared_geometry_identity(sharedVListShape,
 						dp->d_namep, typeLabel, data->revision, "line");
@@ -3654,10 +4006,11 @@ static union tree *
 			      geometryKind : "surface";
 	if (typeLabel && BU_STR_EQUAL(typeLabel, "bot") &&
 	    data->source->lodBotThreshold.getValue() > 0)
-	    publish_lod_metadata_if_cached(shape, tsp->ts_dbip, dp->d_namep);
+	    publish_lod_mesh_if_available(shape, data->source, tsp->ts_dbip,
+		dp->d_namep);
 	leaf->addChild(shape);
     }
-    data->source->addChild(leaf);
+    database_source_add_realized_child(data->source, leaf);
     data->realized_shapes++;
     if (path)
 	bu_free(path, "db_path_to_string");
@@ -4134,9 +4487,6 @@ cad_source_style(const SoBRLDatabaseSource *source)
     if (!source)
 	return style;
 
-    const SbColor selectedColor(0.0f, 0.75f, 1.0f);
-    const SbColor highlightedColor(1.0f, 1.0f, 0.0f);
-    const SbColor ghostedColor(0.55f, 0.55f, 0.55f);
     const SbColor materialColor =
 	source->materialColorValid.getValue() ?
 	source->materialColor.getValue() :
@@ -4145,9 +4495,11 @@ cad_source_style(const SoBRLDatabaseSource *source)
 	 source->color.getValue());
 
     style.hasColorOverride = true;
-    cad_shape_color(FALSE, selectedColor,
-		    source->highlighted.getValue(), highlightedColor,
-		    FALSE, ghostedColor,
+    cad_shape_color(source->selected.getValue(),
+		    source->selectedColor.getValue(),
+		    source->highlighted.getValue(),
+		    source->highlightedColor.getValue(),
+		    FALSE, source->ghostedColor.getValue(),
 		    source->colorOverride.getValue(), source->color.getValue(),
 		    TRUE, materialColor, source->color.getValue(),
 		    source->transparency.getValue(), style.color);
@@ -4360,7 +4712,7 @@ cad_view_lod_assembly_key(const SoBRLDatabaseSource *source,
     key += "|";
     key += payload ? payload->cacheKey.getString() : "";
     char buf[256] = {0};
-    snprintf(buf, sizeof(buf), "|%d|%d|%llu|%llu|%u|%u|%d|%d|%d|%d|%d|%d|%g|%d",
+    snprintf(buf, sizeof(buf), "|%d|%d|%llu|%llu|%u|%u|%d|%d|%d|%d|%d|%d|%d|%g|%d",
 	     payload ? payload->resultKind : 0,
 	     payload ? payload->qualityTier : 0,
 	     payload ? (unsigned long long)payload->viewRevision : 0ULL,
@@ -4369,6 +4721,7 @@ cad_view_lod_assembly_key(const SoBRLDatabaseSource *source,
 	     source ? source->inputsRevision.getValue() : 0,
 	     source ? source->drawMode.getValue() : 0,
 	     source ? source->visible.getValue() : 0,
+	     source ? source->selected.getValue() : 0,
 	     source ? source->highlighted.getValue() : 0,
 	     source ? source->colorOverride.getValue() : 0,
 	     source ? source->materialColorValid.getValue() : 0,
@@ -4376,6 +4729,18 @@ cad_view_lod_assembly_key(const SoBRLDatabaseSource *source,
 	     source ? source->transparency.getValue() : 0.0f,
 	     source ? source->drawMatrixValid.getValue() : 0);
     key += buf;
+    const SbColor selectedColor = source ?
+	source->selectedColor.getValue() : SbColor(1.0f, 1.0f, 1.0f);
+    const SbColor highlightedColor = source ?
+	source->highlightedColor.getValue() : SbColor(1.0f, 1.0f, 0.0f);
+    const SbColor ghostedColor = source ?
+	source->ghostedColor.getValue() : SbColor(0.55f, 0.55f, 0.55f);
+    for (int i = 0; i < 3; i++) {
+	char cbuf[128] = {0};
+	snprintf(cbuf, sizeof(cbuf), "|sc=%.9g|hc=%.9g|gc=%.9g",
+		 selectedColor[i], highlightedColor[i], ghostedColor[i]);
+	key += cbuf;
+    }
     const float *m = matrix[0];
     for (int i = 0; i < 16; i++) {
 	char mbuf[64] = {0};
@@ -5122,6 +5487,7 @@ SoBRLDatabaseSource::SoBRLDatabaseSource(void) :
     SO_NODE_ADD_FIELD(drawMode, (WIREFRAME));
     SO_NODE_SET_SF_ENUM_TYPE(drawMode, DrawMode);
     SO_NODE_ADD_FIELD(visible, (TRUE));
+    SO_NODE_ADD_FIELD(selected, (FALSE));
     SO_NODE_ADD_FIELD(highlighted, (FALSE));
     SO_NODE_ADD_FIELD(lineStyle, (0));
     SO_NODE_ADD_FIELD(lineWidth, (0));
@@ -5142,6 +5508,9 @@ SoBRLDatabaseSource::SoBRLDatabaseSource(void) :
     SO_NODE_ADD_FIELD(databaseMaterialShader, (""));
     SO_NODE_ADD_FIELD(colorOverride, (FALSE));
     SO_NODE_ADD_FIELD(color, (SbColor(1.0f, 1.0f, 1.0f)));
+    SO_NODE_ADD_FIELD(selectedColor, (SbColor(1.0f, 1.0f, 1.0f)));
+    SO_NODE_ADD_FIELD(highlightedColor, (SbColor(1.0f, 1.0f, 0.0f)));
+    SO_NODE_ADD_FIELD(ghostedColor, (SbColor(0.55f, 0.55f, 0.55f)));
     SO_NODE_ADD_FIELD(drawMatrixValid, (FALSE));
     SO_NODE_ADD_FIELD(drawMatrix, (SbMatrix::identity()));
     SO_NODE_ADD_FIELD(drawCenterValid, (FALSE));
@@ -5168,7 +5537,12 @@ SoBRLDatabaseSource::SoBRLDatabaseSource(void) :
     SO_NODE_ADD_FIELD(realizationIdentity, (""));
     SO_NODE_ADD_FIELD(realizationRoleFlags, (REALIZATION_ROLE_NONE));
     SO_NODE_ADD_FIELD(realizationViewDependent, (FALSE));
+    SO_NODE_ADD_FIELD(realizationCsgLodEnabled, (FALSE));
+    SO_NODE_ADD_FIELD(realizationMeshLodEnabled, (FALSE));
     SO_NODE_ADD_FIELD(realizationViewScale, (0.0f));
+    SO_NODE_ADD_FIELD(realizationLodScale, (1.0f));
+    SO_NODE_ADD_FIELD(realizationViewWidth, (0));
+    SO_NODE_ADD_FIELD(realizationViewHeight, (0));
     SO_NODE_ADD_FIELD(realizationBotThreshold, (0));
     SO_NODE_ADD_FIELD(realizationCurveScale, (0.0f));
     SO_NODE_ADD_FIELD(realizationPointScale, (0.0f));
@@ -5542,7 +5916,12 @@ SoBRLDatabaseSource::setRealizationRoleFlags(int roleFlags)
 
 int
 SoBRLDatabaseSource::setRealizationViewPolicy(SbBool viewDependent,
+	SbBool csgLodEnabled,
+	SbBool meshLodEnabled,
 	float viewScale,
+	float lodScale,
+	int viewWidth,
+	int viewHeight,
 	uint32_t botThreshold,
 	float curveScale,
 	float pointScale)
@@ -5551,15 +5930,46 @@ SoBRLDatabaseSource::setRealizationViewPolicy(SbBool viewDependent,
     int activePolicyChanged = 0;
     if (this->realizationViewDependent.getValue() != viewDependent) {
 	this->realizationViewDependent = viewDependent;
+	activePolicyChanged = 1;
+	changed = 1;
+    }
+    if (this->realizationCsgLodEnabled.getValue() != csgLodEnabled) {
+	this->realizationCsgLodEnabled = csgLodEnabled;
+	activePolicyChanged = 1;
+	changed = 1;
+    }
+    if (this->realizationMeshLodEnabled.getValue() != meshLodEnabled) {
+	this->realizationMeshLodEnabled = meshLodEnabled;
+	activePolicyChanged = 1;
 	changed = 1;
     }
     if (database_source_float_different(
 	    this->realizationViewScale.getValue(), viewScale)) {
 	this->realizationViewScale = viewScale;
+	activePolicyChanged = 1;
+	changed = 1;
+    }
+    if (lodScale <= 0.0f)
+	lodScale = 1.0f;
+    if (database_source_float_different(
+	    this->realizationLodScale.getValue(), lodScale)) {
+	this->realizationLodScale = lodScale;
+	activePolicyChanged = 1;
+	changed = 1;
+    }
+    if (this->realizationViewWidth.getValue() != viewWidth) {
+	this->realizationViewWidth = viewWidth;
+	activePolicyChanged = 1;
+	changed = 1;
+    }
+    if (this->realizationViewHeight.getValue() != viewHeight) {
+	this->realizationViewHeight = viewHeight;
+	activePolicyChanged = 1;
 	changed = 1;
     }
     if (this->realizationBotThreshold.getValue() != botThreshold) {
 	this->realizationBotThreshold = botThreshold;
+	activePolicyChanged = 1;
 	changed = 1;
     }
     if (this->lodBotThreshold.getValue() != botThreshold) {
@@ -5575,11 +5985,13 @@ SoBRLDatabaseSource::setRealizationViewPolicy(SbBool viewDependent,
     if (database_source_float_different(
 	    this->realizationCurveScale.getValue(), curveScale)) {
 	this->realizationCurveScale = curveScale;
+	activePolicyChanged = 1;
 	changed = 1;
     }
     if (database_source_float_different(
 	    this->realizationPointScale.getValue(), pointScale)) {
 	this->realizationPointScale = pointScale;
+	activePolicyChanged = 1;
 	changed = 1;
     }
     if (activePolicyChanged)
@@ -5666,6 +6078,7 @@ SoBRLDatabaseSource::refreshMaterialColorFromDatabase(
 	this->sourceRevision.getValue(),
 	this->inputsRevision.getValue(),
 	this->visible.getValue(),
+	this->selected.getValue(),
 	this->highlighted.getValue(),
 	this->lineStyle.getValue(),
 	this->lineWidth.getValue(),
@@ -5682,6 +6095,7 @@ SoBRLDatabaseSource::setDisplayState(SbBool sourceRevisionValid,
 				     uint32_t nextSourceRevision,
 				     uint32_t nextInputsRevision,
 				     SbBool nextVisible,
+				     SbBool nextSelected,
 				     SbBool nextHighlighted,
 				     int nextLineStyle,
 				     int nextLineWidth,
@@ -5705,6 +6119,10 @@ SoBRLDatabaseSource::setDisplayState(SbBool sourceRevisionValid,
     }
     if (this->visible.getValue() != nextVisible) {
 	this->visible = nextVisible;
+	changed = 1;
+    }
+    if (this->selected.getValue() != nextSelected) {
+	this->selected = nextSelected;
 	changed = 1;
     }
     if (this->highlighted.getValue() != nextHighlighted) {
@@ -5763,6 +6181,10 @@ SoBRLDatabaseSource::applyDisplayPatch(
 	this->visible = patch.visible;
 	changed = 1;
     }
+    if (patch.selectedValid && this->selected.getValue() != patch.selected) {
+	this->selected = patch.selected;
+	changed = 1;
+    }
     if (patch.highlightedValid &&
 	this->highlighted.getValue() != patch.highlighted) {
 	this->highlighted = patch.highlighted;
@@ -5792,6 +6214,24 @@ SoBRLDatabaseSource::applyDisplayPatch(
     if (patch.colorValid &&
 	!database_source_color_equal(this->color.getValue(), patch.color)) {
 	this->color = patch.color;
+	changed = 1;
+    }
+    if (patch.selectedColorValid &&
+	!database_source_color_equal(this->selectedColor.getValue(),
+				     patch.selectedColor)) {
+	this->selectedColor = patch.selectedColor;
+	changed = 1;
+    }
+    if (patch.highlightedColorValid &&
+	!database_source_color_equal(this->highlightedColor.getValue(),
+				     patch.highlightedColor)) {
+	this->highlightedColor = patch.highlightedColor;
+	changed = 1;
+    }
+    if (patch.ghostedColorValid &&
+	!database_source_color_equal(this->ghostedColor.getValue(),
+				     patch.ghostedColor)) {
+	this->ghostedColor = patch.ghostedColor;
 	changed = 1;
     }
     if (changed)
@@ -7272,24 +7712,22 @@ primitive_realization_command_to_vlist_command(int command)
     return -1;
 }
 
-static int
-publish_primitive_realization_line_set(
-    SoBRLDatabaseSource *source,
+static SoBRLVListShape *
+vlist_from_primitive_realization_line_set(
     struct rt_primitive_lod_realization *realization,
-    const char *sourceType)
+    const char *geometryKind)
 {
-    if (!source || !realization || !realization->has_line_set)
-	return 0;
+    if (!realization || !realization->has_line_set)
+	return NULL;
 
     if (realization->line_count > static_cast<size_t>(INT_MAX)) {
 	primitive_realization_line_set_free(realization);
-	return -1;
+	return NULL;
     }
 
     if (realization->line_count == 0) {
-	const int cleared = source->clearExternalPrimaryGeometry();
 	primitive_realization_line_set_free(realization);
-	return cleared > 0 ? 1 : 0;
+	return NULL;
     }
 
     std::vector<SbVec3f> points;
@@ -7305,7 +7743,7 @@ publish_primitive_realization_line_set(
 		RT_PRIMITIVE_LINE_DRAW);
 	if (command < 0) {
 	    primitive_realization_line_set_free(realization);
-	    return -1;
+	    return NULL;
 	}
 	points.push_back(SbVec3f(
 			     static_cast<float>(realization->line_points[i][X]),
@@ -7317,17 +7755,53 @@ publish_primitive_realization_line_set(
 	precisePoints.push_back(realization->line_points[i][Z]);
     }
 
+    SoBRLVListShape *shape = new SoBRLVListShape;
+    shape->setLineSet(points.empty() ? NULL : points.data(),
+		      commands.empty() ? NULL : commands.data(),
+		      static_cast<int>(points.size()));
+    shape->setPrecisePoints(precisePoints.empty() ? NULL :
+			    precisePoints.data(),
+			    static_cast<int>(points.size()));
+    shape->geometryKind = geometryKind && geometryKind[0] ?
+			  geometryKind : "line";
+    primitive_realization_line_set_free(realization);
+    return shape;
+}
+
+static int
+publish_primitive_realization_line_set(
+    SoBRLDatabaseSource *source,
+    struct rt_primitive_lod_realization *realization,
+    const char *sourceType)
+{
+    if (!source || !realization || !realization->has_line_set)
+	return 0;
+
+    if (realization->line_count == 0) {
+	const int cleared = source->clearExternalPrimaryGeometry();
+	primitive_realization_line_set_free(realization);
+	return cleared > 0 ? 1 : 0;
+    }
+
+    SoBRLVListShape *shape =
+	vlist_from_primitive_realization_line_set(realization, "line");
+    if (!shape)
+	return -1;
+    shape->ref();
+
+    const SoBRLVListShape *geom = shape->getGeometrySource();
     BRLObolExternalLineSet lineSet;
-    lineSet.points = points.empty() ? NULL : points.data();
-    lineSet.commands = commands.empty() ? NULL : commands.data();
-    lineSet.precisePoints = precisePoints.empty() ? NULL :
-			    precisePoints.data();
-    lineSet.count = static_cast<int>(points.size());
+    lineSet.points = geom && geom->point.getNum() > 0 ?
+		     geom->point.getValues(0) : NULL;
+    lineSet.commands = geom && geom->command.getNum() > 0 ?
+		       geom->command.getValues(0) : NULL;
+    lineSet.precisePoints = NULL;
+    lineSet.count = geom ? geom->point.getNum() : 0;
     lineSet.sourceType = sourceType && sourceType[0] ? sourceType :
 			 "primitive-wireframe";
     lineSet.geometryKind = "line";
     const int published = source->publishExternalLineSet(lineSet);
-    primitive_realization_line_set_free(realization);
+    shape->unref();
     return published > 0 ? 1 : 0;
 }
 
@@ -7565,8 +8039,70 @@ SoBRLDatabaseSource::publishPrimitiveWireframe(
 }
 
 void
+SoBRLDatabaseSource::syncCompactInstanceDisplayState(void)
+{
+    if (!this->compactIndex)
+	return;
+
+    this->compactIndex->hiddenInstances.clear();
+    this->compactIndex->selectedInstances.clear();
+    this->compactIndex->unpickableInstances.clear();
+
+    for (size_t i = 0; i < this->compactIndex->entries.size(); i++) {
+	BRLObolCompactInstanceEntry &entry = this->compactIndex->entries[i];
+	if (entry.vlist) {
+	    sync_shape_display_state(entry.vlist, this);
+	    sync_shape_owner_state(entry.vlist, this);
+	    entry.semantic = cad_vlist_semantic(entry.vlist);
+	} else if (entry.mesh) {
+	    sync_shape_display_state(entry.mesh, this);
+	    sync_shape_owner_state(entry.mesh, this);
+	    entry.semantic = cad_mesh_semantic(entry.mesh);
+	}
+
+	SbBool entryVisible = TRUE;
+	SbBool entrySelectable = TRUE;
+	SbBool entrySelected = FALSE;
+	SbBool entryHighlighted = FALSE;
+	obol::InstanceStyle style;
+	if (entry.vlist) {
+	    entryVisible = entry.vlist->visible.getValue();
+	    entrySelectable = entry.vlist->selectable.getValue();
+	    entrySelected = entry.vlist->selected.getValue();
+	    entryHighlighted = entry.vlist->highlighted.getValue();
+	    style = cad_vlist_style(entry.vlist);
+	} else if (entry.mesh) {
+	    entryVisible = entry.mesh->visible.getValue();
+	    entrySelectable = entry.mesh->selectable.getValue();
+	    entrySelected = entry.mesh->selected.getValue();
+	    entryHighlighted = entry.mesh->highlighted.getValue();
+	    style = cad_mesh_style(entry.mesh);
+	}
+
+	entry.visible = entryVisible;
+	entry.selectable = entrySelectable;
+	entry.selected = entrySelected;
+	entry.highlighted = entryHighlighted;
+	if (!entryVisible)
+	    this->compactIndex->hiddenInstances.push_back(entry.instance);
+	if (entrySelected)
+	    this->compactIndex->selectedInstances.push_back(entry.instance);
+	if (!entrySelectable)
+	    this->compactIndex->unpickableInstances.push_back(entry.instance);
+
+	for (size_t j = 0; j < this->compactIndex->instances.size(); j++) {
+	    if (this->compactIndex->instances[j].instance == entry.instance) {
+		this->compactIndex->instances[j].record.style = style;
+		break;
+	    }
+	}
+    }
+}
+
+void
 SoBRLDatabaseSource::syncRealizedShapeOwnerState(void)
 {
+    this->syncCompactInstanceDisplayState();
     this->markCompiledAssemblyDirty();
     sync_realized_shape_owner_state_in_node(this, this);
 }
@@ -7797,6 +8333,7 @@ SoBRLDatabaseSource::setAuxiliarySourceLineSet(const char *sourcePath,
     source->displayName = (auxDisplayName && auxDisplayName[0]) ?
 			  auxDisplayName : sourceName;
     source->visible = this->visible.getValue();
+    source->selected = this->selected.getValue();
     source->highlighted = this->highlighted.getValue();
     source->lineStyle = this->lineStyle.getValue();
     source->lineWidth = this->lineWidth.getValue();
@@ -7816,6 +8353,9 @@ SoBRLDatabaseSource::setAuxiliarySourceLineSet(const char *sourcePath,
 	this->databaseMaterialShader.getValue();
     source->colorOverride = this->colorOverride.getValue();
     source->color = this->color.getValue();
+    source->selectedColor = this->selectedColor.getValue();
+    source->highlightedColor = this->highlightedColor.getValue();
+    source->ghostedColor = this->ghostedColor.getValue();
     source->drawMatrixValid = this->drawMatrixValid.getValue();
     source->drawMatrix = this->drawMatrix.getValue();
     source->drawCenterValid = this->drawCenterValid.getValue();
@@ -9107,6 +9647,7 @@ realized_display_summary_fill(const SoNode *node, int ownerSourceIndex,
 	summary.intentPath = source->path.getValue();
 	summary.intentDrawMode = source->drawMode.getValue();
 	summary.visible = source->visible.getValue();
+	summary.selected = source->selected.getValue();
 	summary.highlighted = source->highlighted.getValue();
 	summary.lineStyle = source->lineStyle.getValue();
 	summary.lineWidth = source->lineWidth.getValue();
@@ -9659,12 +10200,20 @@ SoBRLDatabaseSource::getSummary(BRLObolDatabaseSourceSummary &summary) const
     summary.realizationRoleFlags = this->realizationRoleFlags.getValue();
     summary.realizationViewDependent =
 	this->realizationViewDependent.getValue();
+    summary.realizationCsgLodEnabled =
+	this->realizationCsgLodEnabled.getValue();
+    summary.realizationMeshLodEnabled =
+	this->realizationMeshLodEnabled.getValue();
     summary.realizationViewScale = this->realizationViewScale.getValue();
+    summary.realizationLodScale = this->realizationLodScale.getValue();
+    summary.realizationViewWidth = this->realizationViewWidth.getValue();
+    summary.realizationViewHeight = this->realizationViewHeight.getValue();
     summary.realizationBotThreshold =
 	this->realizationBotThreshold.getValue();
     summary.realizationCurveScale = this->realizationCurveScale.getValue();
     summary.realizationPointScale = this->realizationPointScale.getValue();
     summary.visible = this->visible.getValue();
+    summary.selected = this->selected.getValue();
     summary.highlighted = this->highlighted.getValue();
     summary.lineStyle = this->lineStyle.getValue();
     summary.lineWidth = this->lineWidth.getValue();
@@ -9684,6 +10233,9 @@ SoBRLDatabaseSource::getSummary(BRLObolDatabaseSourceSummary &summary) const
     summary.databaseMaterialShader = this->databaseMaterialShader.getValue();
     summary.colorOverride = this->colorOverride.getValue();
     summary.color = this->color.getValue();
+    summary.selectedColor = this->selectedColor.getValue();
+    summary.highlightedColor = this->highlightedColor.getValue();
+    summary.ghostedColor = this->ghostedColor.getValue();
     summary.drawMatrixValid = this->drawMatrixValid.getValue();
     summary.drawMatrix = this->drawMatrix.getValue();
     summary.drawCenterValid = this->drawCenterValid.getValue();

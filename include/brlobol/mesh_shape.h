@@ -51,6 +51,7 @@ public:
 
     SoMFVec3f point;
     SoMFInt32 coordIndex;
+    SoMFVec3f normal;
     SoSFString sourcePath;
     SoSFString sourceName;
     SoSFString sourceType;
@@ -165,6 +166,9 @@ public:
     const SoBRLMeshShape *getGeometrySource(void) const;
     void setIndexedTriangles(const SbVec3f *points, int pointCount,
 	    const int32_t *indices, int indexCount);
+    void setIndexedTriangles(const SbVec3f *points, int pointCount,
+	    const int32_t *indices, int indexCount,
+	    const SbVec3f *normals, int normalCount);
     int getTriangleCount(void) const;
     SbBool getTriangle(int triangleIndex, SbVec3f &a, SbVec3f &b, SbVec3f &c) const;
     SbBool getTriangleVertexIndices(int triangleIndex, int &indexA, int &indexB, int &indexC) const;
@@ -216,7 +220,8 @@ protected:
 
 private:
     void setIndexedTriangleFields(const SbVec3f *points, int pointCount,
-	    const int32_t *indices, int indexCount);
+	    const int32_t *indices, int indexCount,
+	    const SbVec3f *normals = NULL, int normalCount = 0);
     void updateSourceMeshMetricsFromFields(void);
     void updateSourceMeshMetricsFromFullDetail(void);
     void captureFullDetailMesh(void);

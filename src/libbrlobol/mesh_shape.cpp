@@ -52,6 +52,7 @@ SoBRLMeshShape::SoBRLMeshShape(void)
 
     SO_NODE_ADD_EMPTY_MFIELD(point);
     SO_NODE_ADD_EMPTY_MFIELD(coordIndex);
+    SO_NODE_ADD_EMPTY_MFIELD(normal);
     SO_NODE_ADD_FIELD(sourcePath, (""));
     SO_NODE_ADD_FIELD(sourceName, (""));
     SO_NODE_ADD_FIELD(sourceType, (""));
@@ -99,7 +100,7 @@ SoBRLMeshShape::SoBRLMeshShape(void)
     SO_NODE_ADD_FIELD(drawSize, (0.0f));
     SO_NODE_ADD_FIELD(colorOverride, (FALSE));
     SO_NODE_ADD_FIELD(color, (SbColor(1.0f, 1.0f, 1.0f)));
-    SO_NODE_ADD_FIELD(selectedColor, (SbColor(0.0f, 0.75f, 1.0f)));
+    SO_NODE_ADD_FIELD(selectedColor, (SbColor(1.0f, 1.0f, 1.0f)));
     SO_NODE_ADD_FIELD(highlightedColor, (SbColor(1.0f, 1.0f, 0.0f)));
     SO_NODE_ADD_FIELD(ghostedColor, (SbColor(0.55f, 0.55f, 0.55f)));
     SO_NODE_ADD_FIELD(visible, (TRUE));
@@ -229,16 +230,33 @@ SoBRLMeshShape::setIndexedTriangles(const SbVec3f *points, int pointCount,
 }
 
 void
+SoBRLMeshShape::setIndexedTriangles(const SbVec3f *points, int pointCount,
+				    const int32_t *indices, int indexCount,
+				    const SbVec3f *normals, int normalCount)
+{
+    this->sharedGeometry = NULL;
+    this->clearFullDetailMesh();
+    this->lodDisplayActive = FALSE;
+    this->setIndexedTriangleFields(points, pointCount, indices, indexCount,
+				   normals, normalCount);
+    this->updateSourceMeshMetricsFromFields();
+}
+
+void
 SoBRLMeshShape::setIndexedTriangleFields(const SbVec3f *points, int pointCount,
-	const int32_t *indices, int indexCount)
+	const int32_t *indices, int indexCount,
+	const SbVec3f *normals, int normalCount)
 {
     this->point.setNum(0);
     this->coordIndex.setNum(0);
+    this->normal.setNum(0);
     if (!points || pointCount <= 0 || !indices || indexCount <= 0)
 	return;
 
     this->point.setValues(0, pointCount, points);
     this->coordIndex.setValues(0, indexCount, indices);
+    if (normals && normalCount == indexCount)
+	this->normal.setValues(0, normalCount, normals);
 }
 
 int
@@ -457,6 +475,7 @@ SoBRLMeshShape::estimateDisplayMeshBytes(void) const
     const SoBRLMeshShape *geom = this->getGeometrySource();
     size_t bytes = static_cast<size_t>(geom->point.getNum()) * sizeof(SbVec3f);
     bytes += static_cast<size_t>(geom->coordIndex.getNum()) * sizeof(int32_t);
+    bytes += static_cast<size_t>(geom->normal.getNum()) * sizeof(SbVec3f);
     return bytes;
 }
 
@@ -805,10 +824,17 @@ SoBRLMeshShape::applyStagedLodResult(const BRLObolLodResult &result,
 	    } else {
 		this->clearFullDetailMesh();
 	    }
-	    this->setIndexedTriangleFields(result.mesh.points.data(),
-					   static_cast<int>(result.mesh.points.size()),
-					   result.mesh.coordIndex.data(),
-					   static_cast<int>(result.mesh.coordIndex.size()));
+	    const SbVec3f *normals = result.mesh.normals.empty() ?
+				     NULL : result.mesh.normals.data();
+	    const int normalCount = result.mesh.normals.empty() ? 0 :
+				    static_cast<int>(result.mesh.normals.size());
+	    this->setIndexedTriangleFields(
+		result.mesh.points.data(),
+		static_cast<int>(result.mesh.points.size()),
+		result.mesh.coordIndex.data(),
+		static_cast<int>(result.mesh.coordIndex.size()),
+		normals,
+		normalCount);
 	    if (result.resultKind == BRLOBOL_LOD_RESULT_FULL_DETAIL)
 		this->updateSourceMeshMetricsFromFields();
 	    this->lodDisplayActive =
@@ -994,9 +1020,26 @@ set_mesh_gl_material(SoBRLMeshShape *shape, int primitiveIndex)
 }
 
 static void
+set_mesh_gl_color(SoBRLMeshShape *shape, int primitiveIndex)
+{
+    SbColor color;
+    float alpha = 1.0f;
+    (void)mesh_shape_gl_color(shape, primitiveIndex, color, alpha);
+    glColor4f(color[0], color[1], color[2], alpha);
+}
+
+static SbBool
+mesh_shape_needs_per_primitive_color(const SoBRLMeshShape *shape)
+{
+    return shape &&
+	   (shape->selectedPrimitive.getNum() > 0 ||
+	    shape->highlightedPrimitive.getNum() > 0);
+}
+
+static void
 mesh_shape_emit_triangles(SoBRLMeshShape *shape,
 			  const BRLObolViewLodState::MeshPayload *viewPayload,
-			  SbBool setMaterial)
+			  SbBool perPrimitiveColor)
 {
     glBegin(GL_TRIANGLES);
     const int triangleCount = viewPayload ? viewPayload->getTriangleCount() :
@@ -1012,17 +1055,45 @@ mesh_shape_emit_triangles(SoBRLMeshShape *shape,
 	    continue;
 	}
 
-	SbVec3f normal = (b - a).cross(c - a);
-	if (normal.length() > 0.0f)
-	    normal.normalize();
-	else
-	    normal = SbVec3f(0.0f, 0.0f, 1.0f);
+	SbVec3f normalA;
+	SbVec3f normalB;
+	SbVec3f normalC;
+	const int normalBase = i * 3;
+	SbBool haveNormals = FALSE;
+	if (viewPayload &&
+		static_cast<size_t>(normalBase + 2) <
+		viewPayload->mesh.normals.size()) {
+	    normalA = viewPayload->mesh.normals[normalBase];
+	    normalB = viewPayload->mesh.normals[normalBase + 1];
+	    normalC = viewPayload->mesh.normals[normalBase + 2];
+	    haveNormals = TRUE;
+	} else if (!viewPayload) {
+	    const SoBRLMeshShape *geom = shape->getGeometrySource();
+	    if (normalBase + 2 < geom->normal.getNum()) {
+		normalA = geom->normal[normalBase];
+		normalB = geom->normal[normalBase + 1];
+		normalC = geom->normal[normalBase + 2];
+		haveNormals = TRUE;
+	    }
+	}
 
-	if (setMaterial)
-	    set_mesh_gl_material(shape, i);
-	glNormal3f(normal[0], normal[1], normal[2]);
+	if (!haveNormals) {
+	    normalA = (b - a).cross(c - a);
+	    if (normalA.length() > 0.0f)
+		normalA.normalize();
+	    else
+		normalA = SbVec3f(0.0f, 0.0f, 1.0f);
+	    normalB = normalA;
+	    normalC = normalA;
+	}
+
+	if (perPrimitiveColor)
+	    set_mesh_gl_color(shape, i);
+	glNormal3f(normalA[0], normalA[1], normalA[2]);
 	glVertex3f(a[0], a[1], a[2]);
+	glNormal3f(normalB[0], normalB[1], normalB[2]);
 	glVertex3f(b[0], b[1], b[2]);
+	glNormal3f(normalC[0], normalC[1], normalC[2]);
 	glVertex3f(c[0], c[1], c[2]);
     }
     glEnd();
@@ -1052,7 +1123,8 @@ mesh_shape_render_hidden_line(SoBRLMeshShape *shape,
     if (shape->lineWidth.getValue() > 0)
 	glLineWidth(static_cast<GLfloat>(shape->lineWidth.getValue()));
     set_mesh_gl_material(shape, -1);
-    mesh_shape_emit_triangles(shape, viewPayload, TRUE);
+    mesh_shape_emit_triangles(shape, viewPayload,
+			      mesh_shape_needs_per_primitive_color(shape));
     glPopAttrib();
 }
 
@@ -1069,6 +1141,8 @@ mesh_shape_render_wire(SoBRLMeshShape *shape,
     set_mesh_gl_material(shape, -1);
 
     glBegin(GL_LINES);
+    const SbBool perPrimitiveColor =
+	mesh_shape_needs_per_primitive_color(shape);
     const int triangleCount = viewPayload ? viewPayload->getTriangleCount() :
 			      shape->getTriangleCount();
     for (int i = 0; i < triangleCount; i++) {
@@ -1082,6 +1156,8 @@ mesh_shape_render_wire(SoBRLMeshShape *shape,
 	    continue;
 	}
 
+	if (perPrimitiveColor)
+	    set_mesh_gl_color(shape, i);
 	glVertex3f(a[0], a[1], a[2]);
 	glVertex3f(b[0], b[1], b[2]);
 	glVertex3f(b[0], b[1], b[2]);
@@ -1204,10 +1280,17 @@ SoBRLMeshShape::GLRender(SoGLRenderAction *action)
     glPushAttrib(GL_CURRENT_BIT | GL_ENABLE_BIT | GL_LIGHTING_BIT);
     glEnable(GL_LIGHTING);
     glDisable(GL_COLOR_MATERIAL);
-    glLightModeli(GL_LIGHT_MODEL_TWO_SIDE,
-		  this->isLodBackedMesh() ? GL_TRUE : GL_FALSE);
+    glLightModeli(GL_LIGHT_MODEL_TWO_SIDE, GL_TRUE);
     set_mesh_gl_material(this, -1);
-    mesh_shape_emit_triangles(this, viewPayload, TRUE);
+    const SbBool perPrimitiveColor =
+	mesh_shape_needs_per_primitive_color(this);
+    if (perPrimitiveColor) {
+	glEnable(GL_COLOR_MATERIAL);
+	glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE);
+    } else {
+	glDisable(GL_COLOR_MATERIAL);
+    }
+    mesh_shape_emit_triangles(this, viewPayload, perPrimitiveColor);
     glPopAttrib();
 }
 
@@ -1336,11 +1419,36 @@ SoBRLMeshShape::generatePrimitives(SoAction *action)
 	if (ia < 0 || ib < 0 || ic < 0)
 	    continue;
 
-	SbVec3f normal = (b - a).cross(c - a);
-	if (normal.length() > 0.0f)
-	    normal.normalize();
-	else
-	    normal = SbVec3f(0.0f, 0.0f, 1.0f);
+	SbVec3f normalA;
+	SbVec3f normalB;
+	SbVec3f normalC;
+	const int normalBase = i * 3;
+	SbBool haveNormals = FALSE;
+	if (viewPayload &&
+		static_cast<size_t>(normalBase + 2) <
+		viewPayload->mesh.normals.size()) {
+	    normalA = viewPayload->mesh.normals[normalBase];
+	    normalB = viewPayload->mesh.normals[normalBase + 1];
+	    normalC = viewPayload->mesh.normals[normalBase + 2];
+	    haveNormals = TRUE;
+	} else if (!usePreservedFullDetail && !viewPayload) {
+	    if (normalBase + 2 < geom->normal.getNum()) {
+		normalA = geom->normal[normalBase];
+		normalB = geom->normal[normalBase + 1];
+		normalC = geom->normal[normalBase + 2];
+		haveNormals = TRUE;
+	    }
+	}
+
+	if (!haveNormals) {
+	    normalA = (b - a).cross(c - a);
+	    if (normalA.length() > 0.0f)
+		normalA.normalize();
+	    else
+		normalA = SbVec3f(0.0f, 0.0f, 1.0f);
+	    normalB = normalA;
+	    normalC = normalA;
+	}
 
 	p0.setCoordinateIndex(ia);
 	p1.setCoordinateIndex(ib);
@@ -1352,9 +1460,9 @@ SoBRLMeshShape::generatePrimitives(SoAction *action)
 	v0.setPoint(a);
 	v1.setPoint(b);
 	v2.setPoint(c);
-	v0.setNormal(normal);
-	v1.setNormal(normal);
-	v2.setNormal(normal);
+	v0.setNormal(normalA);
+	v1.setNormal(normalB);
+	v2.setNormal(normalC);
 	this->invokeTriangleCallbacks(action, &v0, &v1, &v2);
     }
 }

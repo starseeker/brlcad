@@ -888,7 +888,24 @@ struct ged_selection_native_draw_sync_ctx {
     const ged_native_selection_set *set;
     std::map<void *, std::set<std::string>> *new_selection;
     const std::string *selected_path;
+    int display_changed;
 };
+
+
+static int
+ged_selection_native_draw_clear_selected_cb(
+	const struct ged_draw_shape_record *rec,
+	void *ud)
+{
+    struct ged_selection_native_draw_sync_ctx *ctx =
+	(struct ged_selection_native_draw_sync_ctx *)ud;
+    if (!ctx || !ctx->gedp || !rec || ged_draw_shape_ref_is_null(rec->ref))
+	return 1;
+
+    if (ged_draw_shape_ref_set_selected(ctx->gedp, rec->ref, 0))
+	ctx->display_changed = 1;
+    return 1;
+}
 
 
 static int
@@ -898,6 +915,9 @@ ged_selection_native_draw_sync_shape_ref(
 {
     if (!ctx || !ctx->gedp || !ctx->set || ged_draw_shape_ref_is_null(ref))
 	return 1;
+
+    if (ged_draw_shape_ref_set_selected(ctx->gedp, ref, 1))
+	ctx->display_changed = 1;
 
     void *view_ctx = ged_draw_shape_ref_view_context(ctx->gedp, ref);
     void *selection_view_ctx = NULL;
@@ -1039,6 +1059,10 @@ ged_selection_native_draw_sync(struct ged *gedp,
     ctx.set = set;
     ctx.new_selection = &new_selection;
     ctx.selected_path = nullptr;
+    ctx.display_changed = 0;
+
+    ged_draw_foreach_shape_record(gedp,
+	ged_selection_native_draw_clear_selected_cb, &ctx);
 
     std::vector<ged_selection_draw_sync_query> queries;
     int indexed = ged_selection_native_draw_sync_queries(gedp, set, queries);
@@ -1070,7 +1094,7 @@ ged_selection_native_draw_sync(struct ged *gedp,
 		&ctx);
     }
 
-    return old_selection != new_selection;
+    return old_selection != new_selection || ctx.display_changed;
 }
 
 

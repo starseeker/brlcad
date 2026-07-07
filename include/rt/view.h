@@ -870,6 +870,7 @@ RT_EXPORT extern int rt_view_context_height_get(const void *ctx);
 RT_EXPORT extern int rt_view_context_dimensions_set(void *ctx, int width, int height);
 RT_EXPORT extern int rt_view_context_unit_conversion_set(void *ctx, fastf_t local2base, fastf_t base2local);
 RT_EXPORT extern int rt_view_context_frametime_set(void *ctx, uint64_t frametime);
+RT_EXPORT extern uint64_t rt_view_context_frametime_get(const void *ctx);
 RT_EXPORT extern fastf_t rt_view_context_local2base_get(const void *ctx);
 RT_EXPORT extern fastf_t rt_view_context_base2local_get(const void *ctx);
 RT_EXPORT extern fastf_t rt_view_context_scale_get(const void *ctx);

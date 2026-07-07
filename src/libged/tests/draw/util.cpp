@@ -71,7 +71,7 @@ ged_changed_callback(struct db_i *dbip, struct directory *dp, int mode, void *u_
     if (dbip && dp && dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT)
 	(void)brlobol_mesh_lod_cache_invalidate(dbip, dp->d_namep, NULL);
 
-    switch(mode) {
+    switch (mode) {
 	case 0:
 	    ged_event_notify_object_modified(gedp, name, 1, NULL);
 	    break;
@@ -90,7 +90,7 @@ static int
 draw_test_obol_capture_enabled(void)
 {
     const char *value = std::getenv("GED_TEST_DRAW_OBOL_CAPTURE");
-    return value ? bu_str_true(value) : 0;
+    return value ? bu_str_true(value) : 1;
 }
 
 static int
@@ -160,27 +160,27 @@ draw_test_sync_obol_camera(BRLObolViewController *controller, void *view_ctx)
 
 static void
 draw_test_obol_debug_dump_node(int id, int source_index, SoNode *node,
-	int depth, int child_index)
+			       int depth, int child_index)
 {
     if (!node || depth > 3)
 	return;
 
     const char *type_name = node->getTypeId().getName().getString();
     bu_log("draw-obol-debug[%03d]: source[%d] node depth=%d child=%d ptr=%p type=%s isGroup=%d isMatrix=%d\n",
-	    id, source_index, depth, child_index, (void *)node, type_name,
-	    node->isOfType(SoGroup::getClassTypeId()) ? 1 : 0,
-	    node->isOfType(SoMatrixTransform::getClassTypeId()) ? 1 : 0);
+	   id, source_index, depth, child_index, (void *)node, type_name,
+	   node->isOfType(SoGroup::getClassTypeId()) ? 1 : 0,
+	   node->isOfType(SoMatrixTransform::getClassTypeId()) ? 1 : 0);
 
     if (node->isOfType(SoMatrixTransform::getClassTypeId())) {
 	SoMatrixTransform *transform = static_cast<SoMatrixTransform *>(node);
 	SbMatrix matrix = transform->matrix.getValue();
 	const SbMat &m = matrix;
 	bu_log("draw-obol-debug[%03d]: source[%d] node depth=%d matrix rows=[%.9g %.9g %.9g %.9g] [%.9g %.9g %.9g %.9g] [%.9g %.9g %.9g %.9g] [%.9g %.9g %.9g %.9g]\n",
-		id, source_index, depth,
-		m[0][0], m[0][1], m[0][2], m[0][3],
-		m[1][0], m[1][1], m[1][2], m[1][3],
-		m[2][0], m[2][1], m[2][2], m[2][3],
-		m[3][0], m[3][1], m[3][2], m[3][3]);
+	       id, source_index, depth,
+	       m[0][0], m[0][1], m[0][2], m[0][3],
+	       m[1][0], m[1][1], m[1][2], m[1][3],
+	       m[2][0], m[2][1], m[2][2], m[2][3],
+	       m[3][0], m[3][1], m[3][2], m[3][3]);
     }
 
     if (!node->isOfType(SoGroup::getClassTypeId()))
@@ -188,30 +188,30 @@ draw_test_obol_debug_dump_node(int id, int source_index, SoNode *node,
 
     SoGroup *group = static_cast<SoGroup *>(node);
     const int limit = group->getNumChildren() < 4 ?
-	group->getNumChildren() : 4;
+		      group->getNumChildren() : 4;
     for (int i = 0; i < limit; i++)
 	draw_test_obol_debug_dump_node(id, source_index, group->getChild(i),
-		depth + 1, i);
+				       depth + 1, i);
 }
 
 static int
 draw_test_write_rgb_png(const char *filename, const unsigned char *buffer,
-	int width, int height)
+			int width, int height)
 {
     if (!filename || !buffer || width <= 0 || height <= 0)
 	return BRLCAD_ERROR;
 
     icv_image_t *img = icv_create(static_cast<size_t>(width),
-	static_cast<size_t>(height), ICV_COLOR_SPACE_RGB);
+				  static_cast<size_t>(height), ICV_COLOR_SPACE_RGB);
     if (!img)
 	return BRLCAD_ERROR;
 
     for (int y = 0; y < height; y++) {
 	for (int x = 0; x < width; x++) {
 	    const size_t src = (static_cast<size_t>(y) *
-		static_cast<size_t>(width) + static_cast<size_t>(x)) * 3;
+				static_cast<size_t>(width) + static_cast<size_t>(x)) * 3;
 	    const size_t dst = (static_cast<size_t>(y) *
-		static_cast<size_t>(width) + static_cast<size_t>(x)) * 3;
+				static_cast<size_t>(width) + static_cast<size_t>(x)) * 3;
 	    img->data[dst] = static_cast<double>(buffer[src]) / 255.0;
 	    img->data[dst + 1] = static_cast<double>(buffer[src + 1]) / 255.0;
 	    img->data[dst + 2] = static_cast<double>(buffer[src + 2]) / 255.0;
@@ -225,7 +225,7 @@ draw_test_write_rgb_png(const char *filename, const unsigned char *buffer,
 
 static void
 draw_test_obol_debug_dump(struct ged *gedp, int id,
-	BRLObolViewController *controller, void *view_ctx)
+			  BRLObolViewController *controller, void *view_ctx)
 {
     if (!draw_test_obol_debug_enabled() || !gedp || !controller || !view_ctx)
 	return;
@@ -246,33 +246,33 @@ draw_test_obol_debug_dump(struct ged *gedp, int id,
     (void)rt_view_context_aet_get(aet, view_ctx);
 
     bu_log("draw-obol-debug[%03d]: view=%s size=%g scale=%g dims=%dx%d center=(%.17g %.17g %.17g) eye=(%.17g %.17g %.17g) aet=(%.17g %.17g %.17g) perspective=%g\n",
-	    id,
-	    rt_view_context_name_get(view_ctx) ?
-		rt_view_context_name_get(view_ctx) : "(null)",
-	    rt_view_context_size_get(view_ctx),
-	    rt_view_context_scale_get(view_ctx),
-	    rt_view_context_width_get(view_ctx),
-	    rt_view_context_height_get(view_ctx),
-	    center[X], center[Y], center[Z],
-	    eye[X], eye[Y], eye[Z],
-	    aet[X], aet[Y], aet[Z],
-	    rt_view_context_perspective_get(view_ctx));
+	   id,
+	   rt_view_context_name_get(view_ctx) ?
+	   rt_view_context_name_get(view_ctx) : "(null)",
+	   rt_view_context_size_get(view_ctx),
+	   rt_view_context_scale_get(view_ctx),
+	   rt_view_context_width_get(view_ctx),
+	   rt_view_context_height_get(view_ctx),
+	   center[X], center[Y], center[Z],
+	   eye[X], eye[Y], eye[Z],
+	   aet[X], aet[Y], aet[Z],
+	   rt_view_context_perspective_get(view_ctx));
 
     SoCamera *camera = controller->getCamera();
     if (camera) {
 	const SbVec3f &pos = camera->position.getValue();
 	bu_log("draw-obol-debug[%03d]: camera=%s pos=(%.9g %.9g %.9g) aspect=%.9g focal=%.9g near=%.9g far=%.9g\n",
-		id, camera->getTypeId().getName().getString(),
-		pos[0], pos[1], pos[2],
-		camera->aspectRatio.getValue(),
-		camera->focalDistance.getValue(),
-		camera->nearDistance.getValue(),
-		camera->farDistance.getValue());
+	       id, camera->getTypeId().getName().getString(),
+	       pos[0], pos[1], pos[2],
+	       camera->aspectRatio.getValue(),
+	       camera->focalDistance.getValue(),
+	       camera->nearDistance.getValue(),
+	       camera->farDistance.getValue());
 	if (camera->isOfType(SoOrthographicCamera::getClassTypeId())) {
 	    SoOrthographicCamera *ortho =
 		static_cast<SoOrthographicCamera *>(camera);
 	    bu_log("draw-obol-debug[%03d]: ortho-height=%.9g\n",
-		    id, ortho->height.getValue());
+		   id, ortho->height.getValue());
 	}
     }
 
@@ -283,15 +283,15 @@ draw_test_obol_debug_dump(struct ged *gedp, int id,
     BRLObolSceneSummary scene_summary;
     if (scene->getSceneSummary(scene_summary) && scene_summary.valid) {
 	bu_log("draw-obol-debug[%03d]: scene rootChildren=%d dbSources=%d nonDbRootChildren=%d visited=%u realized=%u failed=%u structural=%" PRIu64 " frame=%" PRIu64 "\n",
-		id,
-		scene_summary.rootChildCount,
-		scene_summary.databaseSourceCount,
-		scene_summary.nonDatabaseRootChildCount,
-		scene_summary.lastVisitedSourceCount,
-		scene_summary.lastRealizedSourceCount,
-		scene_summary.lastFailedSourceCount,
-		scene_summary.structuralRevision,
-		scene_summary.frameRevision);
+	       id,
+	       scene_summary.rootChildCount,
+	       scene_summary.databaseSourceCount,
+	       scene_summary.nonDatabaseRootChildCount,
+	       scene_summary.lastVisitedSourceCount,
+	       scene_summary.lastRealizedSourceCount,
+	       scene_summary.lastFailedSourceCount,
+	       scene_summary.structuralRevision,
+	       scene_summary.frameRevision);
     }
 
     SbBox3f bounds;
@@ -299,13 +299,13 @@ draw_test_obol_debug_dump(struct ged *gedp, int id,
 	const SbVec3f bmin = bounds.getMin();
 	const SbVec3f bmax = bounds.getMax();
 	bu_log("draw-obol-debug[%03d]: subtree-bounds / overlays=true min=(%.9g %.9g %.9g) max=(%.9g %.9g %.9g)\n",
-		id, bmin[0], bmin[1], bmin[2], bmax[0], bmax[1], bmax[2]);
+	       id, bmin[0], bmin[1], bmin[2], bmax[0], bmax[1], bmax[2]);
     }
     if (scene->getSceneSubtreeBounds("/", FALSE, bounds) && !bounds.isEmpty()) {
 	const SbVec3f bmin = bounds.getMin();
 	const SbVec3f bmax = bounds.getMax();
 	bu_log("draw-obol-debug[%03d]: subtree-bounds / overlays=false min=(%.9g %.9g %.9g) max=(%.9g %.9g %.9g)\n",
-		id, bmin[0], bmin[1], bmin[2], bmax[0], bmax[1], bmax[2]);
+	       id, bmin[0], bmin[1], bmin[2], bmax[0], bmax[1], bmax[2]);
     }
 
     const int source_count = scene->getDatabaseSourceCount();
@@ -315,54 +315,64 @@ draw_test_obol_debug_dump(struct ged *gedp, int id,
 	    continue;
 	SoBRLDatabaseSource *source_node = scene->getDatabaseSource(i);
 
-	bu_log("draw-obol-debug[%03d]: source[%d] ptr=%p path=%s instance=%s repr=%s reprMode=%d mode=%d visible=%d stale=%d status=%d shapes=%d meshes=%d drawMatrix=%d drawCenter=%d drawSize=%d sourceBounds=%d children=%d\n",
-		id, i,
-		(void *)source_node,
-		source.path.getString(),
-		source.instanceKey.getString(),
-		source.representationKey.getString(),
-		source.representationMode,
-		source.drawMode,
-		source.visible ? 1 : 0,
-		source.stale ? 1 : 0,
-		source.realizationStatus,
-		source.realizedShapeCount,
-		source.realizedMeshCount,
-		source.drawMatrixValid ? 1 : 0,
-		source.drawCenterValid ? 1 : 0,
-		source.drawSizeValid ? 1 : 0,
-		source.sourceBoundsValid ? 1 : 0,
-		source_node ? source_node->getNumChildren() : -1);
+	bu_log("draw-obol-debug[%03d]: source[%d] ptr=%p path=%s instance=%s repr=%s reprMode=%d mode=%d visible=%d selected=%d highlighted=%d colorOverride=%d color=(%.9g %.9g %.9g) materialValid=%d material=(%.9g %.9g %.9g) stale=%d status=%d shapes=%d meshes=%d drawMatrix=%d drawCenter=%d drawSize=%d sourceBounds=%d children=%d\n",
+	       id, i,
+	       (void *)source_node,
+	       source.path.getString(),
+	       source.instanceKey.getString(),
+	       source.representationKey.getString(),
+	       source.representationMode,
+	       source.drawMode,
+	       source.visible ? 1 : 0,
+	       source.selected ? 1 : 0,
+	       source.highlighted ? 1 : 0,
+	       source.colorOverride ? 1 : 0,
+	       source.color[0],
+	       source.color[1],
+	       source.color[2],
+	       source.materialColorValid ? 1 : 0,
+	       source.materialColor[0],
+	       source.materialColor[1],
+	       source.materialColor[2],
+	       source.stale ? 1 : 0,
+	       source.realizationStatus,
+	       source.realizedShapeCount,
+	       source.realizedMeshCount,
+	       source.drawMatrixValid ? 1 : 0,
+	       source.drawCenterValid ? 1 : 0,
+	       source.drawSizeValid ? 1 : 0,
+	       source.sourceBoundsValid ? 1 : 0,
+	       source_node ? source_node->getNumChildren() : -1);
 	if (source_node) {
 	    for (int child_index = 0;
-		    child_index < source_node->getNumChildren() &&
-		    child_index < 4;
-		    child_index++) {
+		 child_index < source_node->getNumChildren() &&
+		 child_index < 4;
+		 child_index++) {
 		SoNode *child = source_node->getChild(child_index);
 		const char *type_name = child ?
-		    child->getTypeId().getName().getString() : "<null>";
+					child->getTypeId().getName().getString() : "<null>";
 		bu_log("draw-obol-debug[%03d]: source[%d] child[%d]=%p type=%s isGroup=%d isMatrix=%d\n",
-			id, i, child_index, (void *)child, type_name,
-			child && child->isOfType(SoGroup::getClassTypeId()) ? 1 : 0,
-			child && child->isOfType(SoMatrixTransform::getClassTypeId()) ? 1 : 0);
+		       id, i, child_index, (void *)child, type_name,
+		       child && child->isOfType(SoGroup::getClassTypeId()) ? 1 : 0,
+		       child && child->isOfType(SoMatrixTransform::getClassTypeId()) ? 1 : 0);
 		draw_test_obol_debug_dump_node(id, i, child, 1, child_index);
 	    }
 	}
 	if (source.drawMatrixValid) {
 	    const SbMat &m = source.drawMatrix.getValue();
 	    bu_log("draw-obol-debug[%03d]: source[%d] drawMatrix rows=[%.9g %.9g %.9g %.9g] [%.9g %.9g %.9g %.9g] [%.9g %.9g %.9g %.9g] [%.9g %.9g %.9g %.9g]\n",
-		    id, i,
-		    m[0][0], m[0][1], m[0][2], m[0][3],
-		    m[1][0], m[1][1], m[1][2], m[1][3],
-		    m[2][0], m[2][1], m[2][2], m[2][3],
-		    m[3][0], m[3][1], m[3][2], m[3][3]);
+		   id, i,
+		   m[0][0], m[0][1], m[0][2], m[0][3],
+		   m[1][0], m[1][1], m[1][2], m[1][3],
+		   m[2][0], m[2][1], m[2][2], m[2][3],
+		   m[3][0], m[3][1], m[3][2], m[3][3]);
 	}
 	if (source.sourceBoundsValid && !source.sourceBounds.isEmpty()) {
 	    const SbVec3f bmin = source.sourceBounds.getMin();
 	    const SbVec3f bmax = source.sourceBounds.getMax();
 	    bu_log("draw-obol-debug[%03d]: source[%d] sourceBounds min=(%.9g %.9g %.9g) max=(%.9g %.9g %.9g)\n",
-		    id, i, bmin[0], bmin[1], bmin[2],
-		    bmax[0], bmax[1], bmax[2]);
+		   id, i, bmin[0], bmin[1], bmin[2],
+		   bmax[0], bmax[1], bmax[2]);
 	}
 	if (source_node) {
 	    SoBRLVListShape *shape = source_node->getRealizedShape(0);
@@ -370,15 +380,18 @@ draw_test_obol_debug_dump(struct ged *gedp, int id,
 		SbBox3f shape_bounds;
 		shape_bounds.makeEmpty();
 		for (int point_index = 0; point_index < shape->point.getNum();
-			point_index++)
+		     point_index++)
 		    shape_bounds.extendBy(shape->point[point_index]);
 		if (!shape_bounds.isEmpty()) {
 		    const SbVec3f bmin = shape_bounds.getMin();
 		    const SbVec3f bmax = shape_bounds.getMax();
-		    bu_log("draw-obol-debug[%03d]: source[%d] direct-shape ptr=%p points=%d bounds min=(%.9g %.9g %.9g) max=(%.9g %.9g %.9g)\n",
-			    id, i, (void *)shape, shape->point.getNum(),
-			    bmin[0], bmin[1], bmin[2],
-			    bmax[0], bmax[1], bmax[2]);
+		    bu_log("draw-obol-debug[%03d]: source[%d] direct-shape ptr=%p selected=%d highlighted=%d points=%d bounds min=(%.9g %.9g %.9g) max=(%.9g %.9g %.9g)\n",
+			   id, i, (void *)shape,
+			   shape->selected.getValue() ? 1 : 0,
+			   shape->highlighted.getValue() ? 1 : 0,
+			   shape->point.getNum(),
+			   bmin[0], bmin[1], bmin[2],
+			   bmax[0], bmax[1], bmax[2]);
 		}
 	    }
 	}
@@ -387,46 +400,48 @@ draw_test_obol_debug_dump(struct ged *gedp, int id,
     const int shape_count = scene->getRealizedShapeSummaryCount();
     const int shape_limit = shape_count < 32 ? shape_count : 32;
     bu_log("draw-obol-debug[%03d]: realized-shape-count=%d\n",
-	    id, shape_count);
+	   id, shape_count);
     for (int i = 0; i < shape_limit; i++) {
 	BRLObolRealizedShapeSummary shape;
 	if (!scene->getRealizedShapeSummary(i, shape) || !shape.valid)
 	    continue;
 
-		bu_log("draw-obol-debug[%03d]: shape[%d] path=%s owner=%s kind=%d drawMode=%d visible=%d points=%d commands=%d segments=%d tris=%d bounds=%d materialValid=%d material=(%.9g %.9g %.9g) region=%d air=%d gmater=%d los=%d shader=%s\n",
-			id, i,
-			shape.path.getString(),
-			shape.ownerSourcePath.getString(),
-			shape.shapeKind,
-			shape.drawMode,
-			shape.visible ? 1 : 0,
-			shape.pointCount,
-			shape.commandCount,
-			shape.segmentCount,
-			shape.triangleCount,
-			shape.boundsValid ? 1 : 0,
-			shape.materialColorValid ? 1 : 0,
-			shape.materialColor[0],
-			shape.materialColor[1],
-			shape.materialColor[2],
-			shape.regionId,
-			shape.airCode,
-			shape.materialId,
-			shape.los,
-			shape.materialShader.getString());
+	bu_log("draw-obol-debug[%03d]: shape[%d] path=%s owner=%s kind=%d drawMode=%d visible=%d selected=%d highlighted=%d points=%d commands=%d segments=%d tris=%d bounds=%d materialValid=%d material=(%.9g %.9g %.9g) region=%d air=%d gmater=%d los=%d shader=%s\n",
+	       id, i,
+	       shape.path.getString(),
+	       shape.ownerSourcePath.getString(),
+	       shape.shapeKind,
+	       shape.drawMode,
+	       shape.visible ? 1 : 0,
+	       shape.selected ? 1 : 0,
+	       shape.highlighted ? 1 : 0,
+	       shape.pointCount,
+	       shape.commandCount,
+	       shape.segmentCount,
+	       shape.triangleCount,
+	       shape.boundsValid ? 1 : 0,
+	       shape.materialColorValid ? 1 : 0,
+	       shape.materialColor[0],
+	       shape.materialColor[1],
+	       shape.materialColor[2],
+	       shape.regionId,
+	       shape.airCode,
+	       shape.materialId,
+	       shape.los,
+	       shape.materialShader.getString());
 	if (shape.boundsValid && !shape.bounds.isEmpty()) {
 	    const SbVec3f bmin = shape.bounds.getMin();
 	    const SbVec3f bmax = shape.bounds.getMax();
 	    bu_log("draw-obol-debug[%03d]: shape[%d] bounds min=(%.9g %.9g %.9g) max=(%.9g %.9g %.9g)\n",
-		    id, i, bmin[0], bmin[1], bmin[2],
-		    bmax[0], bmax[1], bmax[2]);
+		   id, i, bmin[0], bmin[1], bmin[2],
+		   bmax[0], bmax[1], bmax[2]);
 	}
     }
 }
 
 static int
 draw_test_obol_screengrab_impl(struct ged *gedp, void *view_ctx, int id,
-	const char *filename)
+			       const char *filename)
 {
     SoDB::ContextManager *manager = draw_test_obol_context_manager();
     if (!manager) {
@@ -460,9 +475,10 @@ draw_test_obol_screengrab_impl(struct ged *gedp, void *view_ctx, int id,
 	return -1;
 
     controller->setViewportSize(static_cast<unsigned int>(width),
-	static_cast<unsigned int>(height));
+				static_cast<unsigned int>(height));
     if (!draw_test_sync_obol_camera(controller, v))
 	return -1;
+    (void)ged_draw_obol_view_context_faceplate_sync(gedp, v);
     (void)controller->realizePending();
     draw_test_obol_debug_dump(gedp, id, controller, v);
 
@@ -482,7 +498,7 @@ draw_test_obol_screengrab_impl(struct ged *gedp, void *view_ctx, int id,
 	return -1;
 
     return draw_test_write_rgb_png(filename, buffer, size[0], size[1]) == BRLCAD_OK ?
-	1 : -1;
+	   1 : -1;
 }
 
 extern "C" int
@@ -493,7 +509,7 @@ draw_test_obol_screengrab(struct ged *gedp, int id, const char *filename)
 
 static int
 draw_test_obol_screengrab_if_enabled(struct ged *gedp, int id,
-	const char *filename)
+				     const char *filename)
 {
     if (!draw_test_obol_capture_enabled())
 	return 0;
@@ -606,7 +622,7 @@ img_cmp(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool clear
     const char *s_av[2] = {"screengrab", NULL};
     s_av[1] = bu_vls_cstr(&tname);
     int obol_capture = draw_test_obol_screengrab_if_enabled(gedp, id,
-	    bu_vls_cstr(&tname));
+		       bu_vls_cstr(&tname));
     if (obol_capture < 0)
 	bu_file_delete(bu_vls_cstr(&tname));
     else if (!obol_capture)
@@ -637,9 +653,9 @@ img_cmp(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool clear
     }
     if (draw_test_compare_debug_enabled()) {
 	bu_log("draw-compare-debug[%d]: target=%s ctrl=%s target-size=%zux%zu ctrl-size=%zux%zu target-cspace=%d ctrl-cspace=%d\n",
-		id, bu_vls_cstr(&tname), bu_vls_cstr(&cname),
-		timg->width, timg->height, ctrl->width, ctrl->height,
-		timg->color_space, ctrl->color_space);
+	       id, bu_vls_cstr(&tname), bu_vls_cstr(&cname),
+	       timg->width, timg->height, ctrl->width, ctrl->height,
+	       timg->color_space, ctrl->color_space);
     }
     bu_vls_free(&cname);
     int matching_cnt = 0;
@@ -750,7 +766,7 @@ img_not_empty(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool
     const char *s_av[2] = {"screengrab", NULL};
     s_av[1] = bu_vls_cstr(&tname);
     int obol_capture = draw_test_obol_screengrab_if_enabled(gedp, id,
-	    bu_vls_cstr(&tname));
+		       bu_vls_cstr(&tname));
     if (obol_capture < 0)
 	bu_file_delete(bu_vls_cstr(&tname));
     else if (!obol_capture)
@@ -794,7 +810,7 @@ img_not_empty(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool
     }
 
     bu_log("%d %s semantic non-empty check passed against empty scene.  %d empty pixels matching, %d nearly-empty pixels, %d visibly drawn pixels\n",
-	    id, img_root, matching_cnt, off_by_1_cnt, off_by_many_cnt);
+	   id, img_root, matching_cnt, off_by_1_cnt, off_by_many_cnt);
 
     if (clear_scene)
 	scene_clear(gedp);

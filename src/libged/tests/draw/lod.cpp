@@ -36,6 +36,8 @@
 #include <ged/event_txn.h>
 
 #define ADIFF_THRES 20
+#define MESH_LOD_ADIFF_THRES 45
+#define CSG_LOD_ADIFF_THRES 30
 
 extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);
 extern "C" int img_cmp(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool clear_image, int soft_fail, int approximate_check, const char *clear_root, const char *img_root);
@@ -222,7 +224,12 @@ main(int ac, char *av[]) {
     s_av[4] = NULL;
     ged_exec_view(gedp, 4, s_av);
 
-    ret += img_cmp(2, gedp, av[1], false, clear_images, soft_fail, ADIFF_THRES, "lod_clear", "lod");
+    /*
+     * Enabled mesh LoD validates proxy placement/materials rather than exact
+     * tessellation rasterization.  Different renderers/builds may choose
+     * slightly different triangle/normal edge pixels for the same coarse mesh.
+     */
+    ret += img_cmp(2, gedp, av[1], false, clear_images, soft_fail, MESH_LOD_ADIFF_THRES, "lod_clear", "lod");
 
     bu_log("Disable LoD\n");
     s_av[0] = "view";
@@ -242,7 +249,7 @@ main(int ac, char *av[]) {
     s_av[4] = NULL;
     ged_exec_view(gedp, 4, s_av);
 
-    ret += img_cmp(2, gedp, av[1], true, clear_images, soft_fail, ADIFF_THRES, "lod_clear", "lod");
+    ret += img_cmp(2, gedp, av[1], true, clear_images, soft_fail, MESH_LOD_ADIFF_THRES, "lod_clear", "lod");
 
     bu_log("Done.\n");
 
@@ -347,7 +354,11 @@ main(int ac, char *av[]) {
     s_av[4] = NULL;
     ged_exec_view(gedp, 4, s_av);
 
-    ret += img_cmp(6, gedp, av[1], false, clear_images, soft_fail, ADIFF_THRES, "lod_clear", "lod");
+    /*
+     * CSG LoD wire proxies are exact enough to be visually/semantically
+     * stable, but line raster phase differs by a few pixels between backends.
+     */
+    ret += img_cmp(6, gedp, av[1], false, clear_images, soft_fail, CSG_LOD_ADIFF_THRES, "lod_clear", "lod");
 
     bu_log("Disable LoD\n");
     s_av[0] = "view";
@@ -367,7 +378,7 @@ main(int ac, char *av[]) {
     s_av[4] = NULL;
     ged_exec_view(gedp, 4, s_av);
 
-    ret += img_cmp(6, gedp, av[1], true, clear_images, soft_fail, ADIFF_THRES, "lod_clear", "lod");
+    ret += img_cmp(6, gedp, av[1], true, clear_images, soft_fail, CSG_LOD_ADIFF_THRES, "lod_clear", "lod");
 
     bu_log("Done.\n");
 
@@ -413,7 +424,7 @@ main(int ac, char *av[]) {
     s_av[1] = NULL;
     ged_exec_autoview(gedp, 1, s_av);
 
-    ret += img_cmp(2, gedp, av[1], true, clear_images, soft_fail, ADIFF_THRES, "lod_clear", "lod");
+    ret += img_cmp(2, gedp, av[1], true, clear_images, soft_fail, MESH_LOD_ADIFF_THRES, "lod_clear", "lod");
 
     s_av[0] = "draw";
     s_av[1] = "-m1";

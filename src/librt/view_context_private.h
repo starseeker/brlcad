@@ -84,6 +84,7 @@ uint64_t _rt_view_context_native_frame_revision_get(const void *ctx);
 uint64_t _rt_view_context_native_frame_revision_bump(void *ctx);
 int _rt_view_context_native_model_matrices_identity(void *ctx);
 int _rt_view_context_native_frametime_set(void *ctx, uint64_t frametime);
+uint64_t _rt_view_context_native_frametime_get(const void *ctx);
 
 int _rt_view_context_native_refresh_request(void *ctx, uint32_t flags);
 int _rt_view_context_native_refresh_dirty_get(const void *ctx);

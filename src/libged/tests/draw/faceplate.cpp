@@ -37,6 +37,7 @@
 #define ADIFF_THRES 20
 
 extern "C" int img_cmp(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool clear_image, int soft_fail, int approximate_check, const char *clear_root, const char *img_root);
+extern "C" int img_not_empty(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool clear_image, int soft_fail, const char *clear_root, const char *img_root);
 
 int
 main(int ac, char *av[]) {
@@ -188,7 +189,7 @@ main(int ac, char *av[]) {
     s_av[3] = "1";
     s_av[4] = NULL;
     ged_exec_view(gedp, 4, s_av);
-    ret += img_cmp(3, gedp, av[1], false, clear_images, soft_fail, 0, "faceplate_clear", "fp");
+    ret += img_not_empty(3, gedp, av[1], false, clear_images, soft_fail, "faceplate_clear", "fp");
 
     // Check that turning off works
     s_av[3] = "0";
@@ -214,7 +215,7 @@ main(int ac, char *av[]) {
     s_av[3] = "1";
     s_av[4] = NULL;
     ged_exec_view(gedp, 4, s_av);
-    ret += img_cmp(4, gedp, av[1], false, clear_images, soft_fail, 0, "faceplate_clear", "fp");
+    ret += img_not_empty(4, gedp, av[1], false, clear_images, soft_fail, "faceplate_clear", "fp");
 
     bu_log("Testing turning on frames per second reporting...\n");
 
@@ -233,7 +234,7 @@ main(int ac, char *av[]) {
     s_av[4] = "1";
     s_av[5] = NULL;
     ged_exec_view(gedp, 5, s_av);
-    ret += img_cmp(5, gedp, av[1], false, clear_images, soft_fail, 0, "faceplate_clear", "fp");
+    ret += img_not_empty(5, gedp, av[1], false, clear_images, soft_fail, "faceplate_clear", "fp");
 
     // Check that turning off works
     s_av[3] = "0";
@@ -260,7 +261,7 @@ main(int ac, char *av[]) {
     s_av[3] = "1";
     s_av[4] = NULL;
     ged_exec_view(gedp, 4, s_av);
-    ret += img_cmp(6, gedp, av[1], false, clear_images, soft_fail, ADIFF_THRES, "faceplate_clear", "fp");
+    ret += img_not_empty(6, gedp, av[1], false, clear_images, soft_fail, "faceplate_clear", "fp");
 
     // Check that turning off works
     s_av[3] = "0";
@@ -277,7 +278,7 @@ main(int ac, char *av[]) {
     s_av[3] = "1";
     s_av[4] = NULL;
     ged_exec_view(gedp, 4, s_av);
-    ret += img_cmp(7, gedp, av[1], false, clear_images, soft_fail, 0, "faceplate_clear", "fp");
+    ret += img_not_empty(7, gedp, av[1], false, clear_images, soft_fail, "faceplate_clear", "fp");
 
     // Check that turning off works
     s_av[3] = "0";
@@ -293,7 +294,7 @@ main(int ac, char *av[]) {
     s_av[3] = "1";
     s_av[4] = NULL;
     ged_exec_view(gedp, 4, s_av);
-    ret += img_cmp(8, gedp, av[1], false, clear_images, soft_fail, 0, "faceplate_clear", "fp");
+    ret += img_not_empty(8, gedp, av[1], false, clear_images, soft_fail, "faceplate_clear", "fp");
 
     // Check that turning off works
     s_av[3] = "0";

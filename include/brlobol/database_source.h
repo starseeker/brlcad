@@ -84,11 +84,17 @@ struct BRLOBOL_EXPORT BRLObolDatabaseSourceSummary {
     SbString realizationIdentity;
     int realizationRoleFlags;
     SbBool realizationViewDependent;
+    SbBool realizationCsgLodEnabled;
+    SbBool realizationMeshLodEnabled;
     float realizationViewScale;
+    float realizationLodScale;
+    int realizationViewWidth;
+    int realizationViewHeight;
     uint32_t realizationBotThreshold;
     float realizationCurveScale;
     float realizationPointScale;
     SbBool visible;
+    SbBool selected;
     SbBool highlighted;
     int lineStyle;
     int lineWidth;
@@ -107,6 +113,9 @@ struct BRLOBOL_EXPORT BRLObolDatabaseSourceSummary {
     SbString databaseMaterialShader;
     SbBool colorOverride;
     SbColor color;
+    SbColor selectedColor;
+    SbColor highlightedColor;
+    SbColor ghostedColor;
     SbBool drawMatrixValid;
     SbMatrix drawMatrix;
     SbBool drawCenterValid;
@@ -214,6 +223,8 @@ struct BRLOBOL_EXPORT BRLObolDatabaseSourceDisplayPatch {
 
     SbBool visibleValid;
     SbBool visible;
+    SbBool selectedValid;
+    SbBool selected;
     SbBool highlightedValid;
     SbBool highlighted;
     SbBool lineStyleValid;
@@ -226,6 +237,12 @@ struct BRLOBOL_EXPORT BRLObolDatabaseSourceDisplayPatch {
     SbBool colorOverride;
     SbBool colorValid;
     SbColor color;
+    SbBool selectedColorValid;
+    SbColor selectedColor;
+    SbBool highlightedColorValid;
+    SbColor highlightedColor;
+    SbBool ghostedColorValid;
+    SbColor ghostedColor;
 };
 
 struct BRLOBOL_EXPORT BRLObolRealizedShapeSummary {
@@ -373,6 +390,7 @@ struct BRLOBOL_EXPORT BRLObolSceneDisplaySummary {
     SbString intentPath;
     int intentDrawMode;
     SbBool visible;
+    SbBool selected;
     SbBool highlighted;
     int lineStyle;
     int lineWidth;
@@ -477,6 +495,7 @@ public:
     SoSFBool auxiliarySource;
     SoSFEnum drawMode;
     SoSFBool visible;
+    SoSFBool selected;
     SoSFBool highlighted;
     SoSFInt32 lineStyle;
     SoSFInt32 lineWidth;
@@ -495,6 +514,9 @@ public:
     SoSFString databaseMaterialShader;
     SoSFBool colorOverride;
     SoSFColor color;
+    SoSFColor selectedColor;
+    SoSFColor highlightedColor;
+    SoSFColor ghostedColor;
     /* Local-to-scene placement metadata for this source instance.  Primary
      * geometry remains source-local; render traversal and summaries apply
      * this transform explicitly instead of baking it into point/index arrays.
@@ -524,7 +546,12 @@ public:
     SoSFString realizationIdentity;
     SoSFInt32 realizationRoleFlags;
     SoSFBool realizationViewDependent;
+    SoSFBool realizationCsgLodEnabled;
+    SoSFBool realizationMeshLodEnabled;
     SoSFFloat realizationViewScale;
+    SoSFFloat realizationLodScale;
+    SoSFInt32 realizationViewWidth;
+    SoSFInt32 realizationViewHeight;
     SoSFUInt32 realizationBotThreshold;
     SoSFFloat realizationCurveScale;
     SoSFFloat realizationPointScale;
@@ -586,7 +613,12 @@ public:
 	const char *diagnostic = NULL);
     int setRealizationRoleFlags(int roleFlags);
     int setRealizationViewPolicy(SbBool viewDependent,
+	SbBool csgLodEnabled,
+	SbBool meshLodEnabled,
 	float viewScale,
+	float lodScale,
+	int viewWidth,
+	int viewHeight,
 	uint32_t botThreshold,
 	float curveScale,
 	float pointScale);
@@ -594,6 +626,7 @@ public:
 	uint32_t sourceRevision,
 	uint32_t inputsRevision,
 	SbBool visible,
+	SbBool selected,
 	SbBool highlighted,
 	int lineStyle,
 	int lineWidth,
@@ -733,6 +766,7 @@ private:
     void attachFieldSensors(void);
     void detachFieldSensors(void);
     void syncRealizedShapeOwnerState(void);
+    void syncCompactInstanceDisplayState(void);
     void clearCompiledAssembly(void);
     void markCompiledAssemblyDirty(void);
     void clearCompactInstanceIndex(void);

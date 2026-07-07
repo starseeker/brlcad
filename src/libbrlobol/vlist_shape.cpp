@@ -91,7 +91,7 @@ SoBRLVListShape::SoBRLVListShape(void)
     SO_NODE_ADD_FIELD(drawSize, (0.0f));
     SO_NODE_ADD_FIELD(colorOverride, (FALSE));
     SO_NODE_ADD_FIELD(color, (SbColor(1.0f, 1.0f, 1.0f)));
-    SO_NODE_ADD_FIELD(selectedColor, (SbColor(0.0f, 0.75f, 1.0f)));
+    SO_NODE_ADD_FIELD(selectedColor, (SbColor(1.0f, 1.0f, 1.0f)));
     SO_NODE_ADD_FIELD(highlightedColor, (SbColor(1.0f, 1.0f, 0.0f)));
     SO_NODE_ADD_FIELD(ghostedColor, (SbColor(0.55f, 0.55f, 0.55f)));
     SO_NODE_ADD_FIELD(visible, (TRUE));

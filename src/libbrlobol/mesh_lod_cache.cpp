@@ -44,7 +44,7 @@
 #define POP_MAXLEVEL 16
 #define POP_CACHEDIR BRLOBOL_DRAW_CACHE_DIR
 #define MBUMP 1.01
-#define CACHE_CURRENT_FORMAT 3
+#define CACHE_CURRENT_FORMAT 4
 
 #define CACHE_POP_MAX_LEVEL "th"
 #define CACHE_POP_SWITCH_LEVEL "sw"
@@ -171,6 +171,102 @@ mesh_lod_arrays_validate(const int *faces,
     if (pointOrigCount)
 	*pointOrigCount = porigCnt;
     return 1;
+}
+
+static void
+mesh_lod_generate_crease_normals(std::vector<fastf_t> &normalStorage,
+				 const point_t *points,
+				 size_t pointCount,
+				 const int *faces,
+				 size_t faceCount)
+{
+    normalStorage.clear();
+    if (!points || !pointCount || !faces || !faceCount)
+	return;
+
+    std::vector<fastf_t> faceNormals(faceCount * 3, 0.0);
+    std::vector<size_t> vertexFaceCounts(pointCount, 0);
+
+    for (size_t faceIndex = 0; faceIndex < faceCount; faceIndex++) {
+	const int *face = &faces[3 * faceIndex];
+	const int ia = face[0];
+	const int ib = face[1];
+	const int ic = face[2];
+	if (ia < 0 || ib < 0 || ic < 0 ||
+	    static_cast<size_t>(ia) >= pointCount ||
+	    static_cast<size_t>(ib) >= pointCount ||
+	    static_cast<size_t>(ic) >= pointCount)
+	    return;
+
+	vect_t ab;
+	vect_t ac;
+	vect_t normal;
+	VSUB2(ab, points[ib], points[ia]);
+	VSUB2(ac, points[ic], points[ia]);
+	VCROSS(normal, ab, ac);
+	if (MAGNITUDE(normal) > SMALL_FASTF)
+	    VUNITIZE(normal);
+	else
+	    VSET(normal, 0.0, 0.0, 1.0);
+
+	faceNormals[3 * faceIndex + X] = normal[X];
+	faceNormals[3 * faceIndex + Y] = normal[Y];
+	faceNormals[3 * faceIndex + Z] = normal[Z];
+	vertexFaceCounts[static_cast<size_t>(ia)]++;
+	vertexFaceCounts[static_cast<size_t>(ib)]++;
+	vertexFaceCounts[static_cast<size_t>(ic)]++;
+    }
+
+    std::vector<size_t> vertexFaceOffsets(pointCount + 1, 0);
+    for (size_t vertexIndex = 0; vertexIndex < pointCount; vertexIndex++)
+	vertexFaceOffsets[vertexIndex + 1] =
+	    vertexFaceOffsets[vertexIndex] + vertexFaceCounts[vertexIndex];
+
+    std::vector<size_t> vertexFaceCursor = vertexFaceOffsets;
+    std::vector<size_t> vertexFaces(faceCount * 3, 0);
+    for (size_t faceIndex = 0; faceIndex < faceCount; faceIndex++) {
+	const int *face = &faces[3 * faceIndex];
+	for (int cornerIndex = 0; cornerIndex < 3; cornerIndex++) {
+	    const size_t vertexIndex = static_cast<size_t>(face[cornerIndex]);
+	    vertexFaces[vertexFaceCursor[vertexIndex]++] = faceIndex;
+	}
+    }
+
+    normalStorage.assign(faceCount * 9, 0.0);
+    const fastf_t creaseCos = 0.5;
+    for (size_t faceIndex = 0; faceIndex < faceCount; faceIndex++) {
+	const fastf_t *baseNormal = &faceNormals[3 * faceIndex];
+	for (int cornerIndex = 0; cornerIndex < 3; cornerIndex++) {
+	    const size_t vertexIndex =
+		static_cast<size_t>(faces[3 * faceIndex + cornerIndex]);
+	    vect_t smoothNormal;
+	    VSET(smoothNormal, 0.0, 0.0, 0.0);
+	    for (size_t i = vertexFaceOffsets[vertexIndex];
+		 i < vertexFaceOffsets[vertexIndex + 1]; i++) {
+		const size_t adjacentFace = vertexFaces[i];
+		const fastf_t *adjacentNormal =
+		    &faceNormals[3 * adjacentFace];
+		const fastf_t dot =
+		    baseNormal[X] * adjacentNormal[X] +
+		    baseNormal[Y] * adjacentNormal[Y] +
+		    baseNormal[Z] * adjacentNormal[Z];
+		if (dot >= creaseCos) {
+		    smoothNormal[X] += adjacentNormal[X];
+		    smoothNormal[Y] += adjacentNormal[Y];
+		    smoothNormal[Z] += adjacentNormal[Z];
+		}
+	    }
+	    if (MAGNITUDE(smoothNormal) > SMALL_FASTF)
+		VUNITIZE(smoothNormal);
+	    else
+		VMOVE(smoothNormal, baseNormal);
+
+	    const size_t normalIndex = 3 * (3 * faceIndex + cornerIndex);
+	    normalStorage[normalIndex + X] = smoothNormal[X];
+	    normalStorage[normalIndex + Y] = smoothNormal[Y];
+	    normalStorage[normalIndex + Z] = smoothNormal[Z];
+	}
+    }
 }
 
 static void
@@ -1783,9 +1879,17 @@ brlobol_mesh_lod_cache_refresh(struct db_i *dbip,
 	return BRLCAD_ERROR;
     }
 
+    std::vector<fastf_t> generatedNormals;
+    const point_t *botVertices =
+	reinterpret_cast<const point_t *>(bot->vertices);
+    mesh_lod_generate_crease_normals(generatedNormals, botVertices,
+	bot->num_vertices, bot->faces, bot->num_faces);
+    const vect_t *botNormals = generatedNormals.empty() ? NULL :
+	reinterpret_cast<const vect_t *>(generatedNormals.data());
+
     unsigned long long key = mesh_lod_cache_generate(
-				 context, reinterpret_cast<const point_t *>(bot->vertices),
-				 bot->num_vertices, NULL, bot->faces, bot->num_faces, 0, 0.66);
+				 context, botVertices, bot->num_vertices,
+				 botNormals, bot->faces, bot->num_faces, 0, 0.66);
     if (!key || mesh_lod_key_put(context, dp->d_namep, key) != 0) {
 	rt_db_free_internal(&dbintern);
 	mesh_lod_context_destroy(context);
@@ -1860,8 +1964,16 @@ brlobol_mesh_lod_cache_store_mesh(
 	return BRLCAD_OK;
     }
 
+    std::vector<fastf_t> generatedNormals;
+    if (!normals)
+	mesh_lod_generate_crease_normals(generatedNormals, vertices,
+	    vertexCount, faces, faceCount);
+    const vect_t *cacheNormals = normals ? normals :
+	(generatedNormals.empty() ? NULL :
+	 reinterpret_cast<const vect_t *>(generatedNormals.data()));
+
     unsigned long long key = mesh_lod_cache_generate(
-				 context, vertices, vertexCount, normals, faces, faceCount, userKey,
+				 context, vertices, vertexCount, cacheNormals, faces, faceCount, userKey,
 				 fidelityRatio);
     if (!key || mesh_lod_key_put(context, name, key) != 0) {
 	if (status)

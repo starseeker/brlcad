@@ -1014,6 +1014,14 @@ rt_view_context_frametime_set(void *ctx, uint64_t frametime)
     return rt_view_context_frametime_set_bsg(ctx, frametime);
 }
 
+uint64_t
+rt_view_context_frametime_get(const void *ctx)
+{
+    if (_rt_view_context_native_is(ctx))
+	return _rt_view_context_native_frametime_get(ctx);
+    return bsg_view_frametime((const struct bsg_view *)ctx);
+}
+
 int
 rt_view_context_lod_bounds_callback_is_bsg(const void *ctx)
 {

@@ -57,6 +57,7 @@ struct BRLOBOL_EXPORT BRLObolDatabaseSourcePublishState {
     uint32_t sourceRevision;
     uint32_t inputsRevision;
     SbBool visible;
+    SbBool selected;
     SbBool highlighted;
     int lineStyle;
     int lineWidth;
@@ -70,7 +71,12 @@ struct BRLOBOL_EXPORT BRLObolDatabaseSourcePublishState {
     int roleFlags;
     SbBool viewPolicyValid;
     SbBool viewDependent;
+    SbBool csgLodEnabled;
+    SbBool meshLodEnabled;
     float viewScale;
+    float lodScale;
+    int viewWidth;
+    int viewHeight;
     uint32_t botThreshold;
     float curveScale;
     float pointScale;
@@ -317,6 +323,7 @@ public:
 	uint32_t sourceRevision,
 	uint32_t inputsRevision,
 	SbBool visible,
+	SbBool selected,
 	SbBool highlighted,
 	int lineStyle,
 	int lineWidth,
@@ -331,6 +338,7 @@ public:
 	uint32_t sourceRevision,
 	uint32_t inputsRevision,
 	SbBool visible,
+	SbBool selected,
 	SbBool highlighted,
 	int lineStyle,
 	int lineWidth,
@@ -413,14 +421,24 @@ public:
 	int roleFlags);
     int setDatabaseSourceRealizationViewPolicy(const char *sourcePath,
 	SbBool viewDependent,
+	SbBool csgLodEnabled,
+	SbBool meshLodEnabled,
 	float viewScale,
+	float lodScale,
+	int viewWidth,
+	int viewHeight,
 	uint32_t botThreshold,
 	float curveScale,
 	float pointScale);
     int setDatabaseSourceInstanceRealizationViewPolicy(
 	const char *sourceInstanceKey,
 	SbBool viewDependent,
+	SbBool csgLodEnabled,
+	SbBool meshLodEnabled,
 	float viewScale,
+	float lodScale,
+	int viewWidth,
+	int viewHeight,
 	uint32_t botThreshold,
 	float curveScale,
 	float pointScale);

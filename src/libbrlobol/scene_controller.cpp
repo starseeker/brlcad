@@ -1100,6 +1100,7 @@ BRLObolDatabaseSourcePublishState::BRLObolDatabaseSourcePublishState(void) :
     sourceRevision(0),
     inputsRevision(0),
     visible(TRUE),
+    selected(FALSE),
     highlighted(FALSE),
     lineStyle(0),
     lineWidth(0),
@@ -1113,7 +1114,12 @@ BRLObolDatabaseSourcePublishState::BRLObolDatabaseSourcePublishState(void) :
     roleFlags(SoBRLDatabaseSource::REALIZATION_ROLE_NONE),
     viewPolicyValid(FALSE),
     viewDependent(FALSE),
+    csgLodEnabled(FALSE),
+    meshLodEnabled(FALSE),
     viewScale(0.0f),
+    lodScale(1.0f),
+    viewWidth(0),
+    viewHeight(0),
     botThreshold(0),
     curveScale(0.0f),
     pointScale(0.0f),
@@ -2568,6 +2574,7 @@ SoBRLSceneController::publishDatabaseSourceInstance(
 
     if (state.sourceRevisionValid || state.inputsRevision != 0 ||
 	source->visible.getValue() != state.visible ||
+	source->selected.getValue() != state.selected ||
 	source->highlighted.getValue() != state.highlighted ||
 	source->lineStyle.getValue() != state.lineStyle ||
 	source->lineWidth.getValue() != state.lineWidth ||
@@ -2583,7 +2590,7 @@ SoBRLSceneController::publishDatabaseSourceInstance(
 	source->materialRevision.getValue() != state.materialRevision) {
 	if (source->setDisplayState(state.sourceRevisionValid,
 		sourceRevision, state.inputsRevision,
-		state.visible, state.highlighted, state.lineStyle,
+		state.visible, state.selected, state.highlighted, state.lineStyle,
 		state.lineWidth, state.transparency, state.colorOverride,
 		state.color, state.materialColorValid, state.materialColor,
 		state.materialRevision) > 0)
@@ -2596,8 +2603,9 @@ SoBRLSceneController::publishDatabaseSourceInstance(
 
     if (state.viewPolicyValid &&
 	source->setRealizationViewPolicy(state.viewDependent,
-	    state.viewScale, state.botThreshold, state.curveScale,
-	    state.pointScale) > 0)
+	    state.csgLodEnabled, state.meshLodEnabled,
+	    state.viewScale, state.lodScale, state.viewWidth, state.viewHeight,
+	    state.botThreshold, state.curveScale, state.pointScale) > 0)
 	changed = 1;
 
     if (state.placementValid &&
@@ -2738,6 +2746,7 @@ SoBRLSceneController::setDatabaseSourceState(const char *sourcePath,
 	uint32_t sourceRevision,
 	uint32_t inputsRevision,
 	SbBool visible,
+	SbBool selected,
 	SbBool highlighted,
 	int lineStyle,
 	int lineWidth,
@@ -2758,7 +2767,7 @@ SoBRLSceneController::setDatabaseSourceState(const char *sourcePath,
 
     return this->setDatabaseSourceInstanceState(sourceInstanceKey.getString(),
 	    sourceRevisionValid, sourceRevision, inputsRevision, visible,
-	    highlighted, lineStyle, lineWidth, transparency, colorOverride,
+	    selected, highlighted, lineStyle, lineWidth, transparency, colorOverride,
 	    color, materialColorValid, materialColor, materialRevision);
 }
 
@@ -2769,6 +2778,7 @@ SoBRLSceneController::setDatabaseSourceInstanceState(
     uint32_t sourceRevision,
     uint32_t inputsRevision,
     SbBool visible,
+    SbBool selected,
     SbBool highlighted,
     int lineStyle,
     int lineWidth,
@@ -2789,7 +2799,7 @@ SoBRLSceneController::setDatabaseSourceInstanceState(
 	return -1;
 
     const int changed = source->setDisplayState(sourceRevisionValid,
-			sourceRevision, inputsRevision, visible, highlighted, lineStyle,
+			sourceRevision, inputsRevision, visible, selected, highlighted, lineStyle,
 			lineWidth, transparency, colorOverride, color, materialColorValid,
 			materialColor, materialRevision);
     if (changed > 0)
@@ -3227,7 +3237,12 @@ int
 SoBRLSceneController::setDatabaseSourceRealizationViewPolicy(
     const char *sourcePath,
     SbBool viewDependent,
+    SbBool csgLodEnabled,
+    SbBool meshLodEnabled,
     float viewScale,
+    float lodScale,
+    int viewWidth,
+    int viewHeight,
     uint32_t botThreshold,
     float curveScale,
     float pointScale)
@@ -3242,14 +3257,21 @@ SoBRLSceneController::setDatabaseSourceRealizationViewPolicy(
 
     return this->setDatabaseSourceInstanceRealizationViewPolicy(
 	       sourceInstanceKey.getString(),
-	       viewDependent, viewScale, botThreshold, curveScale, pointScale);
+	       viewDependent, csgLodEnabled, meshLodEnabled,
+	       viewScale, lodScale, viewWidth, viewHeight, botThreshold,
+	       curveScale, pointScale);
 }
 
 int
 SoBRLSceneController::setDatabaseSourceInstanceRealizationViewPolicy(
     const char *sourceInstanceKey,
     SbBool viewDependent,
+    SbBool csgLodEnabled,
+    SbBool meshLodEnabled,
     float viewScale,
+    float lodScale,
+    int viewWidth,
+    int viewHeight,
     uint32_t botThreshold,
     float curveScale,
     float pointScale)
@@ -3260,7 +3282,9 @@ SoBRLSceneController::setDatabaseSourceInstanceRealizationViewPolicy(
 	return -1;
 
     const int changed = source->setRealizationViewPolicy(viewDependent,
-			viewScale, botThreshold, curveScale, pointScale);
+			csgLodEnabled, meshLodEnabled,
+			viewScale, lodScale, viewWidth, viewHeight, botThreshold,
+			curveScale, pointScale);
     if (changed > 0)
 	this->advanceFrameRevision();
     return changed;
@@ -4096,6 +4120,7 @@ scene_display_summary_fill_shape(const ShapeT *shape, int nodeKind,
     summary.intentPath = shape->sourcePath.getValue();
     summary.intentDrawMode = shape->drawMode.getValue();
     summary.visible = shape->visible.getValue();
+    summary.selected = shape->selected.getValue();
     summary.highlighted = shape->highlighted.getValue();
     summary.lineStyle = shape->lineStyle.getValue();
     summary.lineWidth = shape->lineWidth.getValue();
@@ -4137,6 +4162,7 @@ scene_display_summary_fill(const SoNode *node, int ownerSourceIndex,
 	summary.intentPath = source->path.getValue();
 	summary.intentDrawMode = source->drawMode.getValue();
 	summary.visible = source->visible.getValue();
+	summary.selected = source->selected.getValue();
 	summary.highlighted = source->highlighted.getValue();
 	summary.lineStyle = source->lineStyle.getValue();
 	summary.lineWidth = source->lineWidth.getValue();
@@ -4193,6 +4219,7 @@ scene_display_summary_fill(const SoNode *node, int ownerSourceIndex,
 	    summary.intentDrawMode = group->drawMode.getValue();
 	}
 	summary.visible = group->visible.getValue();
+	summary.selected = group->selected.getValue();
 	summary.highlighted = group->highlighted.getValue();
 	summary.lineStyle = group->lineStyle.getValue();
 	summary.lineWidth = group->lineWidth.getValue();

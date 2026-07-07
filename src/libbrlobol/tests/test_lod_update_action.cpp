@@ -2410,7 +2410,7 @@ test_scene_database_source_summary(void)
     const SbColor sourceColor(0.5f, 0.25f, 0.125f);
     const SbColor sourceMaterial(0.25f, 0.5f, 0.75f);
     if (ownedScene.setDatabaseSourceState("lod-submit.bot", TRUE, 24, 44,
-					  FALSE, TRUE, 2, 6, 0.35f, TRUE, sourceColor, TRUE,
+					  FALSE, FALSE, TRUE, 2, 6, 0.35f, TRUE, sourceColor, TRUE,
 					  sourceMaterial, 77) != 1 ||
 	ownedScene.getStructuralRevision() != afterMoveStructuralRevision ||
 	ownedScene.getFrameRevision() <= afterMoveFrameRevision ||
@@ -2551,7 +2551,7 @@ test_scene_database_source_summary(void)
 	return 1;
     }
     if (ownedScene.setDatabaseSourceState("lod-submit.bot", FALSE, 99, 45,
-					  FALSE, TRUE, 2, 6, 0.35f, TRUE, sourceColor, TRUE,
+					  FALSE, FALSE, TRUE, 2, 6, 0.35f, TRUE, sourceColor, TRUE,
 					  sourceMaterial, 77) != 1 ||
 	ownedScene.getStructuralRevision() != afterMoveStructuralRevision ||
 	ownedScene.getFrameRevision() <= afterSourceStateFrameRevision ||
@@ -2567,11 +2567,11 @@ test_scene_database_source_summary(void)
     const uint64_t afterRevisionPreserveFrameRevision =
 	ownedScene.getFrameRevision();
     if (ownedScene.setDatabaseSourceState("lod-submit.bot", TRUE, 24, 45,
-					  FALSE, TRUE, 2, 6, 0.35f, TRUE, sourceColor, TRUE,
+					  FALSE, FALSE, TRUE, 2, 6, 0.35f, TRUE, sourceColor, TRUE,
 					  sourceMaterial, 77) != 0 ||
 	ownedScene.getFrameRevision() != afterRevisionPreserveFrameRevision ||
 	ownedScene.setDatabaseSourceState("missing.bot", TRUE, 1, 1,
-					  TRUE, FALSE, 0, 0, 0.0f, FALSE,
+					  TRUE, FALSE, FALSE, 0, 0, 0.0f, FALSE,
 					  SbColor(1.0f, 1.0f, 1.0f), FALSE,
 					  SbColor(1.0f, 1.0f, 1.0f), 0) != -1) {
 	printf("FAIL: scene controller source state should report no-op and missing updates\n");
@@ -2790,7 +2790,7 @@ test_scene_database_source_summary(void)
     if (ownedScene.moveDatabaseSourceInstanceToGroup(viewInstanceKey,
 	    "views/V0") != 1 ||
 	ownedScene.setDatabaseSourceInstanceState(sharedInstanceKey, TRUE,
-		33, 44, FALSE, TRUE, 3, 11, 0.5f, TRUE,
+		33, 44, FALSE, FALSE, TRUE, 3, 11, 0.5f, TRUE,
 		SbColor(0.1f, 0.2f, 0.3f), FALSE,
 		SbColor(1.0f, 1.0f, 1.0f), 0) != 1 ||
 	!find_database_source_summary_by_instance(ownedScene,
