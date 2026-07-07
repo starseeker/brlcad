@@ -55,15 +55,17 @@ qg_obol_snap_kind_priority(int kind)
 	    return 6;
 	case QgObolSnapRecord::CONSTRUCTION_PLANE:
 	    return 7;
+	case QgObolSnapRecord::GRID:
+	    return 8;
 	case QgObolSnapRecord::NONE:
 	default:
-	    return 8;
+	    return 9;
     }
 }
 
 static int
 qg_obol_snap_record_is_better(const QgObolSnapRecord &candidate,
-	const QgObolSnapRecord &current)
+			      const QgObolSnapRecord &current)
 {
     const float tieTolerance = 1.0e-6f;
 
@@ -77,12 +79,12 @@ qg_obol_snap_record_is_better(const QgObolSnapRecord &candidate,
 	return 0;
 
     return qg_obol_snap_kind_priority(candidate.kind) <
-	qg_obol_snap_kind_priority(current.kind);
+	   qg_obol_snap_kind_priority(current.kind);
 }
 
 static void
 qg_obol_snap_record_from_action(const SoBRLSnapAction &snapAction,
-	QgObolSnapRecord &record)
+				QgObolSnapRecord &record)
 {
     record.point = snapAction.getPoint();
     record.path = snapAction.getPath().getString();
@@ -99,7 +101,7 @@ qg_obol_snap_record_from_action(const SoBRLSnapAction &snapAction,
 
 static int
 qg_obol_snap_consume_source_full_detail(BRLObolViewController *controller,
-	SoBRLSnapAction &snapAction)
+					SoBRLSnapAction &snapAction)
 {
     if (!controller)
 	return 0;
@@ -112,11 +114,11 @@ qg_obol_snap_consume_source_full_detail(BRLObolViewController *controller,
 
 static int
 qg_obol_snap_point_with_policy(QgView *display,
-	const SbVec3f &query,
-	float tolerance,
-	uint32_t enabledKinds,
-	SoBRLSnapAction::GeometryPolicy geometryPolicy,
-	QgObolSnapRecord &record)
+			       const SbVec3f &query,
+			       float tolerance,
+			       uint32_t enabledKinds,
+			       SoBRLSnapAction::GeometryPolicy geometryPolicy,
+			       QgObolSnapRecord &record)
 {
     record = QgObolSnapRecord();
     if (!display)
@@ -124,14 +126,14 @@ qg_obol_snap_point_with_policy(QgView *display,
 
     BRLObolViewController *controller = display->obolViewController();
     if (!controller || !controller->getViewport() ||
-	    !controller->getViewport()->getRoot())
+	!controller->getViewport()->getRoot())
 	return 0;
 
     SoBRLSnapAction snapAction;
     snapAction.setQueryPoint(query);
     snapAction.setTolerance(tolerance > 0.0f ? tolerance : 1.0f);
     snapAction.setEnabledKinds(enabledKinds ? enabledKinds :
-	    static_cast<uint32_t>(QgObolSnapRecord::ALL_KINDS));
+			       static_cast<uint32_t>(QgObolSnapRecord::ALL_KINDS));
     snapAction.setPriorityPolicy(SoBRLSnapAction::FEATURE_PRIORITY);
     snapAction.setGeometryPolicy(geometryPolicy);
     snapAction.apply(controller->getViewport()->getRoot());
@@ -155,24 +157,24 @@ qg_obol_snap_point_with_policy(QgView *display,
 
 int
 qg_obol_snap_point(QgView *display,
-	const SbVec3f &query,
-	float tolerance,
-	uint32_t enabledKinds,
-	QgObolSnapRecord &record)
+		   const SbVec3f &query,
+		   float tolerance,
+		   uint32_t enabledKinds,
+		   QgObolSnapRecord &record)
 {
     return qg_obol_snap_point_with_policy(display, query, tolerance,
-	    enabledKinds, SoBRLSnapAction::DISPLAY_LEVEL, record);
+					  enabledKinds, SoBRLSnapAction::DISPLAY_LEVEL, record);
 }
 
 int
 qg_obol_snap_point_full_detail(QgView *display,
-	const SbVec3f &query,
-	float tolerance,
-	uint32_t enabledKinds,
-	QgObolSnapRecord &record)
+			       const SbVec3f &query,
+			       float tolerance,
+			       uint32_t enabledKinds,
+			       QgObolSnapRecord &record)
 {
     return qg_obol_snap_point_with_policy(display, query, tolerance,
-	    enabledKinds, SoBRLSnapAction::FULL_DETAIL, record);
+					  enabledKinds, SoBRLSnapAction::FULL_DETAIL, record);
 }
 
 // Local Variables:

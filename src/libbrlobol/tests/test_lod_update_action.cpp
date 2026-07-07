@@ -3211,12 +3211,6 @@ test_export_record_metadata(void)
     vlistShaded->setLineSet(points, commands, 2);
     root->addChild(vlistShaded);
 
-    SoBRLGrid *grid = new SoBRLGrid;
-    grid->overlayId = "overlay::metadata-grid";
-    grid->divisions = 1;
-    grid->rebuildGeometry();
-    root->addChild(grid);
-
     SoBRLLodMeshShape *sourceBacked =
 	make_lod_mesh("/metadata/source.bot", "source.bot");
     sourceBacked->sourceType = "bot";
@@ -3236,7 +3230,7 @@ test_export_record_metadata(void)
     exportAction.apply(root);
     if (exportAction.getTriangleCount() != 1 ||
 	exportAction.getPointCount() != 1 ||
-	exportAction.getLineCount() != 8 ||
+	exportAction.getLineCount() != 2 ||
 	exportAction.getSourceBackedFullDetailRequestCount() != 1) {
 	printf("FAIL: export metadata test did not collect expected records\n");
 	root->unref();
@@ -3310,43 +3304,7 @@ test_export_record_metadata(void)
 	return 1;
     }
 
-    const SoBRLExportAction::LineRecord *overlayRecord = NULL;
-    for (int i = 0; i < exportAction.getLineCount(); i++) {
-	const SoBRLExportAction::LineRecord &line = exportAction.getLine(i);
-	if (strcmp(line.path.getString(), "overlay::metadata-grid") == 0) {
-	    overlayRecord = &line;
-	    break;
-	}
-    }
-    uint64_t overlayCacheIdentity = 0;
-    uint64_t overlaySourceIdentity = 0;
-    if (overlayRecord) {
-	const SbString overlayCacheString =
-	    overlayRecord->cacheIdentity.getLength() > 0 ?
-	    overlayRecord->cacheIdentity : overlayRecord->sourceIdentity;
-	overlayCacheIdentity =
-	    SoBRLExportAction::identityValue(overlayCacheString);
-	overlaySourceIdentity =
-	    SoBRLExportAction::identityValue(overlayRecord->sourceIdentity);
-    }
-    if (!overlayRecord ||
-	!overlayRecord->overlayIntent ||
-	!overlayRecord->localSource ||
-	!overlayRecord->nonDatabaseSource ||
-	overlayRecord->databaseIntent ||
-	overlayRecord->sharedSource ||
-	overlayRecord->cacheIdentityValue == 0 ||
-	overlayRecord->sourceIdentityValue == 0 ||
-	overlayRecord->cacheIdentityValue != overlayCacheIdentity ||
-	overlayRecord->sourceIdentityValue != overlaySourceIdentity ||
-	strcmp(overlayRecord->recordRole.getString(), "overlay") != 0 ||
-	strcmp(overlayRecord->geometryName.getString(), "grid") != 0) {
-	printf("FAIL: overlay export record did not preserve overlay metadata\n");
-	root->unref();
-	return 1;
-    }
-
-    if (exportAction.getObjectRecordCount() != 4) {
+    if (exportAction.getObjectRecordCount() != 3) {
 	printf("FAIL: export object records did not group initial objects\n");
 	root->unref();
 	return 1;
@@ -3357,8 +3315,6 @@ test_export_record_metadata(void)
 	exportAction.getObjectRecord(1);
     const SoBRLExportAction::ObjectRecord &vlistShadedObject =
 	exportAction.getObjectRecord(2);
-    const SoBRLExportAction::ObjectRecord &overlayObject =
-	exportAction.getObjectRecord(3);
     if (strcmp(meshObject.path.getString(), "/metadata/mesh.bot") != 0 ||
 	meshObject.triangleIndices.size() != 1 ||
 	!meshObject.lineIndices.empty() ||
@@ -3397,21 +3353,6 @@ test_export_record_metadata(void)
 	root->unref();
 	return 1;
     }
-    if (strcmp(overlayObject.path.getString(), "overlay::metadata-grid") != 0 ||
-	overlayObject.lineIndices.size() != 6 ||
-	!overlayObject.pointIndices.empty() ||
-	!overlayObject.triangleIndices.empty() ||
-	!overlayObject.overlayIntent ||
-	!overlayObject.localSource ||
-	!overlayObject.nonDatabaseSource ||
-	overlayObject.cacheIdentityValue != overlayCacheIdentity ||
-	overlayObject.sourceIdentityValue != overlaySourceIdentity ||
-	strcmp(overlayObject.recordRole.getString(), "overlay") != 0) {
-	printf("FAIL: overlay object export record did not summarize overlay lines\n");
-	root->unref();
-	return 1;
-    }
-
     SoBRLExportAction::ObjectSurfaceSummary surfaceSummary;
     int surfaceIndex = -1;
     if (!exportAction.getObjectRecordSurfaceSummary(meshObject,
@@ -3461,26 +3402,17 @@ test_export_record_metadata(void)
 	root->unref();
 	return 1;
     }
-    if (!exportAction.getObjectRecordLineSummary(overlayObject,
-	    lineSummary) ||
-	lineSummary.pointCount != 12 ||
-	lineSummary.segmentCount != 6) {
-	printf("FAIL: overlay object export record did not provide line detail readback\n");
-	root->unref();
-	return 1;
-    }
-
     std::vector<SoBRLExportAction::ObjectRecord> queriedObjects;
     if (exportAction.collectObjectRecords(queriedObjects,
-					  SoBRLExportAction::QUERY_VISIBLE_ONLY) != 4 ||
+					  SoBRLExportAction::QUERY_VISIBLE_ONLY) != 3 ||
 	exportAction.collectObjectRecords(queriedObjects,
 					  SoBRLExportAction::QUERY_DATABASE_OBJECTS) != 3 ||
 	exportAction.collectObjectRecords(queriedObjects,
-					  SoBRLExportAction::QUERY_VIEW_OBJECTS) != 1 ||
+					  SoBRLExportAction::QUERY_VIEW_OBJECTS) != 0 ||
 	exportAction.collectObjectRecords(queriedObjects,
-					  SoBRLExportAction::QUERY_LOCAL_ONLY) != 1 ||
+					  SoBRLExportAction::QUERY_LOCAL_ONLY) != 0 ||
 	exportAction.collectObjectRecords(queriedObjects, 0,
-					  "overlay::*") != 1 ||
+					  "overlay::*") != 0 ||
 	exportAction.collectObjectRecords(queriedObjects,
 					  SoBRLExportAction::QUERY_DATABASE_OBJECTS, NULL,
 					  BRLOBOL_LOD_DRAW_WIRE) != 1 ||
@@ -3548,13 +3480,13 @@ test_export_record_metadata(void)
 	return 1;
     }
 
-    if (exportAction.getObjectRecordCount() != 5) {
+    if (exportAction.getObjectRecordCount() != 4) {
 	printf("FAIL: export object records did not rebuild after source-backed full-detail append\n");
 	root->unref();
 	return 1;
     }
     const SoBRLExportAction::ObjectRecord &sourceObject =
-	exportAction.getObjectRecord(4);
+	exportAction.getObjectRecord(3);
     if (strcmp(sourceObject.path.getString(), "/metadata/source.bot") != 0 ||
 	sourceObject.triangleIndices.size() != 1 ||
 	!sourceObject.databaseIntent ||

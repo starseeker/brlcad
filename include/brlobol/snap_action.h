@@ -24,10 +24,12 @@
 
 class BRLObolLodService;
 class SoBRLDatabaseSource;
+class SoBRLGrid;
 class SoBRLMeshShape;
 struct db_i;
 
-class BRLOBOL_EXPORT SoBRLSnapAction : public SoAction {
+class BRLOBOL_EXPORT SoBRLSnapAction : public SoAction
+{
     typedef SoAction inherited;
 
     SO_ACTION_HEADER(SoBRLSnapAction);
@@ -43,7 +45,8 @@ public:
 	CONSTRUCTION_PLANE = 32,
 	VERTEX = 64,
 	EDGE_NEAREST = 128,
-	ALL_KINDS = ENDPOINT | MIDPOINT | LINE_NEAREST | FACE_NEAREST | CENTER | CONSTRUCTION_PLANE | VERTEX | EDGE_NEAREST
+	GRID = 256,
+	ALL_KINDS = ENDPOINT | MIDPOINT | LINE_NEAREST | FACE_NEAREST | CENTER | CONSTRUCTION_PLANE | VERTEX | EDGE_NEAREST | GRID
     };
 
     enum SelectionFilter {
@@ -90,19 +93,19 @@ public:
 	    BRLObolLodRequest &request,
 	    const BRLObolLodRequest *templateRequest = 0) const;
     SbBool consumeSourceBackedFullDetailResult(
-	    const BRLObolSourceMeshRequest &sourceRequest,
-	    const BRLObolLodResult &result);
+	const BRLObolSourceMeshRequest &sourceRequest,
+	const BRLObolLodResult &result);
     int submitSourceBackedFullDetailRequests(BRLObolLodService *service,
 	    uint64_t generation, struct db_i *dbip,
 	    const BRLObolLodRequest *templateRequest = 0,
 	    uint64_t maxFullDetailFaceCount = 0,
 	    uint64_t maxFullDetailPointCount = 0) const;
     int consumeSourceBackedFullDetailResults(
-	    const std::vector<BRLObolLodResult> &results,
-	    const BRLObolLodRequest *templateRequest = 0);
+	const std::vector<BRLObolLodResult> &results,
+	const BRLObolLodRequest *templateRequest = 0);
     void setConstructionPlane(const SbVec3f &origin, const SbVec3f &normal);
     void setConstructionPlane(const SbVec3f &origin, const SbVec3f &normal,
-	    const SbString &path);
+			      const SbString &path);
     void clearConstructionPlane(void);
     SbBool hasConstructionPlane(void) const;
 
@@ -126,22 +129,23 @@ private:
     friend class SoBRLDatabaseSource;
     static void nodeAction(SoAction *action, SoNode *node);
     static void databaseSourceAction(SoAction *action, SoNode *node);
+    static void gridAction(SoAction *action, SoNode *node);
     static void vlistShapeAction(SoAction *action, SoNode *node);
     static void meshShapeAction(SoAction *action, SoNode *node);
 
     void appendSourceBackedFullDetailRequest(const SoBRLMeshShape *shape,
 	    const SbMatrix &localToWorld);
     void consider(SnapKind kind, const SbString &path,
-	    const SbString &editIntentId,
-	    const SbString &editIntentRole,
-	    int primitiveIndex,
-	    const SbVec3f &query, const SbVec3f &candidate,
-	    int vertexIndex = -1,
-	    int edgeSlot = -1,
-	    int edgeVertexIndexA = -1,
-	    int edgeVertexIndexB = -1);
+		  const SbString &editIntentId,
+		  const SbString &editIntentRole,
+		  int primitiveIndex,
+		  const SbVec3f &query, const SbVec3f &candidate,
+		  int vertexIndex = -1,
+		  int edgeSlot = -1,
+		  int edgeVertexIndexA = -1,
+		  int edgeVertexIndexB = -1);
     SbVec3f pointForCoordinateSpace(const SbMatrix &localToWorld,
-	    const SbVec3f &localPoint) const;
+				    const SbVec3f &localPoint) const;
     SbBool selectionAllows(SbBool selected) const;
 
     SbVec3f queryPoint;

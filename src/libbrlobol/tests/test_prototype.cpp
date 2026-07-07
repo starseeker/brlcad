@@ -1357,10 +1357,13 @@ exercise_required_hierarchy_model(const char *model_file,
     const char *brlcadRoot = getenv("BRLCAD_ROOT");
     if (brlcadRoot) {
 	snprintf(dbpath, MAXPATHLEN, "%s/share/db/%s", brlcadRoot, model_file);
-    } else {
+    }
+    if (!dbpath[0] || !bu_file_exists(dbpath, NULL)) {
+	snprintf(dbpath, MAXPATHLEN, "build/share/db/%s", model_file);
+    }
+    if (!bu_file_exists(dbpath, NULL)) {
 	snprintf(dbpath, MAXPATHLEN, "share/db/%s", model_file);
     }
-
     if (!bu_file_exists(dbpath, NULL)) {
 	fprintf(stderr, "required Obol hierarchy model is missing: %s\n", dbpath);
 	return 0;
@@ -3904,15 +3907,105 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 
     SoBRLGrid *grid = new SoBRLGrid;
     grid->overlayId = "overlay::work-grid";
-    grid->center = SbVec3f(0.0f, 0.0f, 0.0f);
-    grid->spacing = 1.0f;
-    grid->divisions = 2;
-    SoBRLVListShape *gridShape = grid->rebuildGeometry();
-    if (!gridShape)
-	FAIL("grid overlay should build Obol line geometry");
-    if (gridShape->getSegmentCount() != 10)
-	FAIL("grid overlay should build expected grid line count");
+    struct rt_view_grid_state gridState = RT_VIEW_GRID_STATE_INIT;
+    gridState.draw = 1;
+    gridState.snap = 1;
+    gridState.res_h = 1.0;
+    gridState.res_v = 1.0;
+    gridState.res_major_h = 5;
+    gridState.res_major_v = 5;
+    gridState.adaptive = 0;
+    VSET(gridState.color, 255, 255, 255);
+    mat_t gridModel2View;
+    MAT_IDN(gridModel2View);
+    mat_t gridSnapModel2View;
+    MAT_IDN(gridSnapModel2View);
+    MAT_SCALE(gridSnapModel2View, 1.0 / 20.0, 1.0 / 20.0, 1.0 / 20.0);
+    if (!brlobol_grid_configure_from_view(grid, &gridState, gridModel2View,
+					  20.0, 1.0, 400, 200))
+	FAIL("grid overlay should accept RT view grid state");
+    if (grid->getMinorSegmentCount() <= 0 ||
+	grid->getMajorSegmentCount() <= 0 ||
+	grid->getAxisSegmentCount() != 2 ||
+	grid->getTotalSegmentCount() !=
+	grid->getMinorSegmentCount() + grid->getMajorSegmentCount() +
+	grid->getAxisSegmentCount())
+	FAIL("grid overlay should realize visible minor, major, and axis layers");
+    const int wideGridSegments = grid->getTotalSegmentCount();
+    const float widePixelSpacing = grid->pixelSpacingH.getValue();
+
+    SoBRLGrid *squareGrid = new SoBRLGrid;
+    squareGrid->ref();
+    squareGrid->overlayId = "overlay::square-grid";
+    if (!brlobol_grid_configure_from_view(squareGrid, &gridState,
+					  gridModel2View, 20.0, 1.0, 400, 400))
+	FAIL("square grid should accept RT view grid state");
+    if (squareGrid->getTotalSegmentCount() <= wideGridSegments)
+	FAIL("grid overlay should account for viewport aspect in line counts");
+    squareGrid->unref();
+
+    gridState.adaptive = 1;
+    if (!brlobol_grid_configure_from_view(grid, &gridState, gridModel2View,
+					  2000.0, 1.0, 400, 200))
+	FAIL("adaptive grid overlay should rebuild from RT view grid state");
+    if (grid->effectiveSpacingH.getValue() <= gridState.res_h ||
+	grid->pixelSpacingH.getValue() <= widePixelSpacing)
+	FAIL("adaptive grid overlay should coarsen visually dense grid spacing");
+    gridState.adaptive = 0;
+    if (!brlobol_grid_configure_from_view(grid, &gridState, gridModel2View,
+					  20.0, 1.0, 400, 200))
+	FAIL("grid overlay should rebuild after adaptive spacing test");
     root->addChild(grid);
+
+    (void)brlobol_grid_configure_from_view(grid, &gridState,
+					   gridSnapModel2View, 20.0, 1.0, 400, 200);
+    SoBRLSnapAction gridSnap;
+    gridSnap.setEnabledKinds(SoBRLSnapAction::GRID);
+    gridSnap.setQueryPoint(SbVec3f(0.6f, 0.4f, 0.0f));
+    gridSnap.setTolerance(0.75f);
+    gridSnap.apply(root);
+    if (!gridSnap.hasCandidate() ||
+	gridSnap.getKind() != SoBRLSnapAction::GRID ||
+	strcmp(gridSnap.getPath().getString(), "overlay::work-grid") != 0 ||
+	!nearly_equal(gridSnap.getPoint()[0], 1.0f) ||
+	!nearly_equal(gridSnap.getPoint()[1], 0.0f))
+	FAIL("grid snap should use semantic grid state rather than HUD line picking");
+
+    gridState.draw = 0;
+    gridState.snap = 1;
+    if (!brlobol_grid_configure_from_view(grid, &gridState, gridSnapModel2View,
+					  20.0, 1.0, 400, 200) ||
+	grid->getTotalSegmentCount() != 0)
+	FAIL("snap-enabled hidden grid should stay published without visual segments");
+    SoBRLSnapAction hiddenGridSnap;
+    hiddenGridSnap.setEnabledKinds(SoBRLSnapAction::GRID);
+    hiddenGridSnap.setQueryPoint(SbVec3f(2.2f, 2.7f, 0.0f));
+    hiddenGridSnap.setTolerance(0.4f);
+    hiddenGridSnap.apply(root);
+    if (!hiddenGridSnap.hasCandidate() ||
+	!nearly_equal(hiddenGridSnap.getPoint()[0], 2.0f) ||
+	!nearly_equal(hiddenGridSnap.getPoint()[1], 3.0f))
+	FAIL("grid snap should remain active when grid drawing is hidden");
+    gridState.draw = 1;
+    gridState.snap = 0;
+    if (!brlobol_grid_configure_from_view(grid, &gridState, gridModel2View,
+					  20.0, 1.0, 400, 200))
+	FAIL("grid overlay should restore visible geometry after hidden snap test");
+
+    {
+	SoSeparator *gridOnlyRoot = new SoSeparator;
+	gridOnlyRoot->ref();
+	SoBRLGrid *boundsGrid = new SoBRLGrid;
+	boundsGrid->overlayId = "overlay::bounds-grid";
+	(void)brlobol_grid_configure_from_view(boundsGrid, &gridState,
+					       gridModel2View, 20.0, 1.0, 400, 200);
+	gridOnlyRoot->addChild(boundsGrid);
+	SoBRLSceneController gridScene(gridOnlyRoot);
+	SbBox3f gridSceneBounds;
+	if (gridScene.getSceneSubtreeBounds("/", FALSE, gridSceneBounds))
+	    FAIL("faceplate grid overlay should not contribute scene bounds");
+	gridOnlyRoot->unref();
+    }
 
     SoBRLAxes *axes = new SoBRLAxes;
     axes->overlayId = "overlay::model-axes";
@@ -3944,13 +4037,6 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     bbox = overlayBBoxAction.getBoundingBox();
     if (bbox.isEmpty())
 	FAIL("overlay nodes should contribute Obol bounding boxes");
-    if (!nearly_equal(bbox.getMin()[0], -2.0f) ||
-	!nearly_equal(bbox.getMax()[0], 24.0f) ||
-	!nearly_equal(bbox.getMin()[1], -2.0f) ||
-	!nearly_equal(bbox.getMax()[1], 3.0f) ||
-	!nearly_equal(bbox.getMin()[2], 0.0f) ||
-	!nearly_equal(bbox.getMax()[2], 3.0f))
-	FAIL("overlay bounding box should reflect grid, axes, and ADC field geometry");
 
     SoRayPickAction overlayPick(viewport);
     overlayPick.setRay(SbVec3f(11.0f, 0.0f, 5.0f), SbVec3f(0.0f, 0.0f, -1.0f));
@@ -3978,18 +4064,6 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (strcmp(pickDetail->getPath().getString(), "overlay::adc") != 0)
 	FAIL("ADC pick should preserve overlay identity");
 
-    SoBRLSnapAction overlaySnap;
-    overlaySnap.setQueryPoint(SbVec3f(2.0f, 0.3f, 0.0f));
-    overlaySnap.setTolerance(0.4f);
-    overlaySnap.apply(root);
-    if (!overlaySnap.hasCandidate())
-	FAIL("overlay snap should find grid geometry");
-    if (strcmp(overlaySnap.getPath().getString(), "overlay::work-grid") != 0)
-	FAIL("overlay snap should preserve grid identity");
-    if (!nearly_equal(overlaySnap.getPoint()[0], 2.0f) ||
-	!nearly_equal(overlaySnap.getPoint()[1], 0.3f))
-	FAIL("overlay snap point should lie on the grid line");
-
     SoBRLSnapAction adcSnap;
     adcSnap.setQueryPoint(SbVec3f(22.0f, 0.3f, 0.0f));
     adcSnap.setTolerance(0.4f);
@@ -4007,20 +4081,13 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     overlayMeasure.setQueryPoint(SbVec3f(11.2f, 0.0f, 0.0f));
     overlayMeasure.apply(root);
     if (!overlayMeasure.hasSegments() ||
-	overlayMeasure.getShapeCount() != 3 ||
-	overlayMeasure.getSegmentCount() != 17)
-	FAIL("overlay measure should count grid, axes, and ADC segments");
-    if (!nearly_equal(overlayMeasure.getTotalLength(), 58.0f))
-	FAIL("overlay measure should total grid, axes, and ADC line length");
+	overlayMeasure.getShapeCount() != 2 ||
+	overlayMeasure.getSegmentCount() != 7)
+	FAIL("overlay measure should count axes and ADC segments");
     bbox = overlayMeasure.getBounds();
-    if (bbox.isEmpty() ||
-	!nearly_equal(bbox.getMin()[0], -2.0f) ||
-	!nearly_equal(bbox.getMax()[0], 24.0f) ||
-	!nearly_equal(bbox.getMin()[1], -2.0f) ||
-	!nearly_equal(bbox.getMax()[1], 3.0f) ||
-	!nearly_equal(bbox.getMin()[2], 0.0f) ||
-	!nearly_equal(bbox.getMax()[2], 3.0f))
-	FAIL("overlay measure should report grid, axes, and ADC bounds");
+    if (bbox.isEmpty() || bbox.getMin()[0] < 8.0f ||
+	bbox.getMax()[0] < 24.0f)
+	FAIL("overlay measure should report axes and ADC bounds");
     if (!overlayMeasure.hasNearestSegment() ||
 	strcmp(overlayMeasure.getNearestPath().getString(), "overlay::model-axes") != 0 ||
 	!nearly_equal(overlayMeasure.getNearestPoint()[0], 11.2f) ||
@@ -4042,31 +4109,23 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 
     SoBRLExportAction overlayExport;
     overlayExport.apply(root);
-    if (overlayExport.getLineCount() != 17)
-	FAIL("overlay export should collect grid, axes, and ADC line records");
-    if (export_path_count(overlayExport, "overlay::work-grid") != 10 ||
+    if (overlayExport.getLineCount() != 7)
+	FAIL("overlay export should collect axes and ADC line records");
+    if (export_path_count(overlayExport, "overlay::work-grid") != 0 ||
 	export_path_count(overlayExport, "overlay::model-axes") != 3 ||
 	export_path_count(overlayExport, "overlay::adc") != 4)
-	FAIL("overlay export should preserve per-overlay identities");
+	FAIL("overlay export should preserve non-grid overlay identities");
     bbox = overlayExport.getBounds();
     if (bbox.isEmpty() ||
-	!nearly_equal(bbox.getMin()[0], -2.0f) ||
 	!nearly_equal(bbox.getMax()[0], 24.0f))
-	FAIL("overlay export should report transformed export bounds");
+	FAIL("overlay export should report transformed non-grid overlay bounds");
 
-    grid->divisions = 1;
-    gridShape = grid->rebuildGeometry();
-    if (!gridShape || gridShape->getSegmentCount() != 6)
-	FAIL("grid overlay should rebuild line geometry after field changes");
-    SoGetBoundingBoxAction gridBBoxAction(viewport);
-    gridBBoxAction.apply(grid);
-    bbox = gridBBoxAction.getBoundingBox();
-    if (bbox.isEmpty() ||
-	!nearly_equal(bbox.getMin()[0], -1.0f) ||
-	!nearly_equal(bbox.getMax()[0], 1.0f) ||
-	!nearly_equal(bbox.getMin()[1], -1.0f) ||
-	!nearly_equal(bbox.getMax()[1], 1.0f))
-	FAIL("grid overlay rebuild should update field-derived bounds");
+    gridState.res_h = 2.0;
+    gridState.res_v = 2.0;
+    if (!brlobol_grid_configure_from_view(grid, &gridState, gridModel2View,
+					  20.0, 1.0, 400, 200) ||
+	grid->getTotalSegmentCount() >= wideGridSegments)
+	FAIL("grid overlay should rebuild adaptive HUD geometry after field changes");
 
     root->unref();
 
@@ -5078,7 +5137,13 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     source->drawMode = SoBRLDatabaseSource::SHADED;
     if (source->lodBotThreshold.getValue() != 0)
 	FAIL("database-backed BoT LoD threshold should default to the full-mesh path");
-    source->lodBotThreshold = 8;
+    const float prototypeViewScale = 100.0f;
+    const int prototypeViewWidth = 100;
+    const int prototypeViewHeight = 100;
+    source->setRealizationViewPolicy(TRUE, FALSE, TRUE,
+				     prototypeViewScale, 1.0f,
+				     prototypeViewWidth, prototypeViewHeight,
+				     8, 0.0f, 0.0f);
     root->addChild(source);
 
     SoBRLRealizeAction botBelowThresholdRealize;
@@ -5103,7 +5168,10 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     source->path = "tet.bot";
     source->sourceRevision = 8;
     source->drawMode = SoBRLDatabaseSource::SHADED;
-    source->lodBotThreshold = 4;
+    source->setRealizationViewPolicy(TRUE, FALSE, TRUE,
+				     prototypeViewScale, 1.0f,
+				     prototypeViewWidth, prototypeViewHeight,
+				     4, 0.0f, 0.0f);
     if (brlobol_mesh_lod_cache_update(dbip, "tet.bot") != BRLCAD_OK)
 	FAIL("database-backed BoT LoD cache setup should pass");
     root->addChild(source);

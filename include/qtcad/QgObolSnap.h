@@ -29,7 +29,8 @@ struct QTCAD_EXPORT QgObolSnapRecord {
 	CONSTRUCTION_PLANE = 32,
 	VERTEX = 64,
 	EDGE_NEAREST = 128,
-	ALL_KINDS = ENDPOINT | MIDPOINT | LINE_NEAREST | FACE_NEAREST | CENTER | CONSTRUCTION_PLANE | VERTEX | EDGE_NEAREST
+	GRID = 256,
+	ALL_KINDS = ENDPOINT | MIDPOINT | LINE_NEAREST | FACE_NEAREST | CENTER | CONSTRUCTION_PLANE | VERTEX | EDGE_NEAREST | GRID
     };
 
     QgObolSnapRecord(void);
@@ -57,10 +58,10 @@ struct QTCAD_EXPORT QgObolSnapRecord {
  * Returns non-zero when a snap candidate is found and @p record is populated.
  */
 QTCAD_EXPORT int qg_obol_snap_point(QgView *display,
-	const SbVec3f &query,
-	float tolerance,
-	uint32_t enabledKinds,
-	QgObolSnapRecord &record);
+				    const SbVec3f &query,
+				    float tolerance,
+				    uint32_t enabledKinds,
+				    QgObolSnapRecord &record);
 
 /**
  * Snap @p query using exact full-detail mesh policy.  LoD-backed meshes with

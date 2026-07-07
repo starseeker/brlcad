@@ -151,7 +151,7 @@ rt_obj_sampled_face_set(struct rt_primitive_indexed_face_set *face_set,
     double avg_thickness = 0.0;
 
     int flags = RT_GEN_OBJ_PNTS_RAND;
-    if (rt_gen_obj_pnts(pnts, &avg_thickness, dbip, oname, &btol, flags, max_pnts, max_time, 2)) {
+    if (rt_gen_obj_pnts(pnts, &avg_thickness, dbip, oname, &btol, flags, max_pnts, max_time, 0)) {
 	if (ip->idb_type != ID_COMBINATION)
 	    db_close(dbip);
 	rt_sample_pnts_internal_free(pnts);
@@ -192,11 +192,11 @@ rt_obj_sampled_face_set(struct rt_primitive_indexed_face_set *face_set,
     face_set->normal_count = sample_count * 3;
     face_set->index_count = sample_count * 4;
     points = (point_t *)bu_calloc(face_set->point_count, sizeof(point_t),
-	    "sample point face-set points");
+				  "sample point face-set points");
     normals = (vect_t *)bu_calloc(face_set->normal_count, sizeof(vect_t),
-	    "sample point face-set normals");
+				  "sample point face-set normals");
     indices = (int *)bu_calloc(face_set->index_count, sizeof(int),
-	    "sample point face-set indices");
+			       "sample point face-set indices");
 
     for (BU_LIST_FOR(pn, pnt_normal, &(pl->l))) {
 	vect_t v1pp, v2pp, v3pp = {0.0, 0.0, 0.0};

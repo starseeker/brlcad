@@ -11,6 +11,8 @@ Read this file first when resuming Obol/libbrlobol migration work.  It records
 the current target state, invariants, known risks, and next implementation
 steps.  Use `obol_worklog.txt` for compressed history and `doc/notes/` for
 durable design contracts.
+Current debug draw performance characterization is in
+`doc/notes/obol_draw_perf_debug.txt`.
 
 Workspace
 ---------
@@ -69,6 +71,9 @@ Core Invariants
   aggregates of transformed leaf facts.
 * Command-generated visuals are Obol scene objects.  They are shared by
   default unless the command explicitly requests view-local scope.
+* Faceplate/work-grid drawing is an Obol HUD overlay.  Grid snapping is
+  semantic model-space state on `SoBRLGrid`, not a side effect of visible line
+  geometry.  A hidden grid may still snap when the view state enables snap.
 * Effective BRL-CAD material and color-table lookup belongs in libbrlobol.
   GED owns revision bookkeeping and requests refreshes.
 * Draw-facing `rt_db_internal` interpretation belongs in libbrlobol database
@@ -85,6 +90,9 @@ Current Baseline
 * Draw transactions no longer keep parallel retained BSG scene ownership.
 * View features, annotations, polygons, database-source records, material
   refresh, and primitive wireframe publication have Obol/libbrlobol paths.
+* Faceplate grid publication uses `SoBRLGrid` with adaptive minor/major/axis
+  HUD layers.  Bounds/autoview ignore the grid, while semantic snap traversals
+  can still use the grid state.
 * Command-scene coverage includes rtcheck, NIRT/qray, check overlap, GQA,
   BREP/NMG diagnostics, overlay uplot import, `vdraw send`, preview eye paths,
   and simple visualizations.
@@ -101,6 +109,12 @@ Current Baseline
   added complexity.
 * Evaluated wireframe defaults to the boolweave-backed librt path.  The old
   BigE-style method remains only as a comparison option.
+* Evaluated-points mode is an Obol/libbrlobol external representation.  CLINE
+  ray-sampling normals now degrade to radial or empty normals instead of
+  aborting the process on grazing/degenerate sample rays.
+* Current focused image gates pass for GED draw, faceplate/grid, LoD,
+  selection, snap semantics, Obol draw sync, and libbrlobol prototype/LoD
+  update tests.
 
 Known Risks
 -----------
@@ -123,6 +137,12 @@ Known Risks
   synchronous full-detail promotion.
 * Evaluated wireframe still has open performance/candidate-generation work for
   very thin shell models such as `havoc.g`.
+* Full shaded/hidden-line draws on large implicit-heavy models remain dominated
+  by tessellation and can emit verbose NMG diagnostics.  This is separate from
+  normal wire draw and should be tackled as a shaded-mode cleanup/optimization.
+* Normal wire draw for Generic_Twin/havoc is still mostly source publication
+  and render traversal cost, not primitive plotting.  Fresh benchmark evidence
+  is required before reintroducing CAD aggregation complexity.
 * Slow ERT streaming still needs a deterministic intermediate-frame image
   gate.
 
@@ -153,8 +173,8 @@ Next Steps
 7. Continue evaluated-wire follow-up: redesign thin-shell/havoc candidate
    generation, add deterministic parallel ray/classification work with
    per-thread resources, and keep boolweave as the default evaluator.
-8. Convert GED basic/LoD image baselines to verified Obol outputs and reduce
-   remaining DM/swrast baseline assumptions.
+8. Keep GED basic/LoD/selection/faceplate image baselines verified against
+   Obol outputs and reduce remaining DM/swrast baseline assumptions.
 9. Remove libbsg mesh payload/LoD internals and remaining libbsg tests once
    retained BSG rendering no longer needs them.
 10. Add deterministic slow-stream ERT tests that verify intermediate

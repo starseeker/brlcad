@@ -67,7 +67,8 @@ const struct bu_structparse rt_cline_parse[] = {
  * Calculate bounding RPP for cline
  */
 int
-rt_cline_bbox(struct rt_db_internal *ip, point_t *min, point_t *max, const struct bn_tol *UNUSED(tol)) {
+rt_cline_bbox(struct rt_db_internal *ip, point_t *min, point_t *max, const struct bn_tol *UNUSED(tol))
+{
     struct rt_cline_internal *cline_ip;
     vect_t rad, work;
     point_t top;
@@ -353,6 +354,7 @@ rt_cline_shot(struct soltab *stp, register struct xray *rp, struct application *
 void
 rt_cline_norm(struct hit *hitp, struct soltab *stp, struct xray *rp)
 {
+    struct cline_specific *cline = NULL;
     vect_t tmp;
     fastf_t dot;
 
@@ -360,6 +362,8 @@ rt_cline_norm(struct hit *hitp, struct soltab *stp, struct xray *rp)
 	return;
 
     RT_CK_HIT(hitp);
+
+    VJOIN1(hitp->hit_point, rp->r_pt, hitp->hit_dist, rp->r_dir);
 
     if (hitp->hit_surfno == 1 || hitp->hit_surfno == -1)
 	return;
@@ -369,21 +373,43 @@ rt_cline_norm(struct hit *hitp, struct soltab *stp, struct xray *rp)
     /* this is wrong, but agrees with FASTGEN */
     VCROSS(tmp, rp->r_dir, hitp->hit_vpriv);
     VCROSS(hitp->hit_normal, tmp, hitp->hit_vpriv);
-    VUNITIZE(hitp->hit_normal);
+    if (VNEAR_ZERO(hitp->hit_normal, VUNITIZE_TOL)) {
+	VSETALL(hitp->hit_normal, 0.0);
+    } else {
+	VUNITIZE(hitp->hit_normal);
+    }
+
+    if (VNEAR_ZERO(hitp->hit_normal, VUNITIZE_TOL) && stp && stp->st_specific) {
+	point_t axis_pt;
+	vect_t v_to_hit;
+	vect_t radial;
+	fastf_t axis_dist;
+
+	cline = (struct cline_specific *)stp->st_specific;
+	VSUB2(v_to_hit, hitp->hit_point, cline->V);
+	axis_dist = VDOT(v_to_hit, cline->h);
+	VJOIN1(axis_pt, cline->V, axis_dist, cline->h);
+	VSUB2(radial, hitp->hit_point, axis_pt);
+
+	if (!VNEAR_ZERO(radial, VUNITIZE_TOL)) {
+	    VMOVE(hitp->hit_normal, radial);
+	    VUNITIZE(hitp->hit_normal);
+	}
+    }
+
+    if (VNEAR_ZERO(hitp->hit_normal, VUNITIZE_TOL)) {
+	if (stp)
+	    bu_log("Unable to compute cline normal for solid %s for ray -p %g %g %g -d %g %g %g\n",
+		   stp->st_name, V3ARGS(rp->r_pt), V3ARGS(rp->r_dir));
+	return;
+    }
+
     dot = VDOT(hitp->hit_normal, rp->r_dir);
     if (dot < 0.0 && hitp->hit_surfno < 0) {
 	VREVERSE(hitp->hit_normal, hitp->hit_normal);
     } else if (dot > 0.0 && hitp->hit_surfno > 0) {
 	VREVERSE(hitp->hit_normal, hitp->hit_normal);
     }
-
-    if (MAGNITUDE(hitp->hit_normal) < 0.9) {
-	if (stp)
-	    bu_log("BAD normal for cline solid %s for ray -p %g %g %g -d %g %g %g\n",
-		    stp->st_name, V3ARGS(rp->r_pt), V3ARGS(rp->r_dir));
-	bu_bomb("BAD cline normal\n");
-    }
-    VJOIN1(hitp->hit_point, rp->r_pt, hitp->hit_dist, rp->r_dir);
 }
 
 

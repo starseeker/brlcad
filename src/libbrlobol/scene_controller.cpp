@@ -8,6 +8,7 @@
 #include "common.h"
 
 #include "brlobol/database_source.h"
+#include "brlobol/grid.h"
 #include "brlobol/line_layer_overlay.h"
 #include "brlobol/material_object.h"
 #include "brlobol/mesh_shape.h"
@@ -277,8 +278,8 @@ index_database_sources_recursive(
 	}
 	if (node->isOfType(SoGroup::getClassTypeId()))
 	    index_database_sources_recursive(static_cast<SoGroup *>(node),
-		groupPathIndex, pathIndex, instanceIndex, instanceParentIndex,
-		sourceOrder, sourceOrderIndex);
+					     groupPathIndex, pathIndex, instanceIndex, instanceParentIndex,
+					     sourceOrder, sourceOrderIndex);
     }
 }
 
@@ -545,6 +546,12 @@ scene_group_summary_path(const SoNode *node, const SbString &fallbackPath)
 	    static_cast<const SoBRLLineLayerOverlay *>(node);
 	if (overlay->overlayId.getValue().getLength() > 0)
 	    return overlay->overlayId.getValue();
+    }
+
+    if (node && node->isOfType(SoBRLGrid::getClassTypeId())) {
+	const SoBRLGrid *grid = static_cast<const SoBRLGrid *>(node);
+	if (grid->overlayId.getValue().getLength() > 0)
+	    return grid->overlayId.getValue();
     }
 
     return fallbackPath;
@@ -1317,11 +1324,11 @@ SoBRLSceneController::indexDatabaseSource(SoBRLDatabaseSource *source,
     const SbString instanceKey = database_source_effective_instance_key(source);
     index_put(this->databaseSourcePathIndex, path.getString(), source);
     index_put(this->databaseSourceInstanceIndex, instanceKey.getString(),
-	source);
+	      source);
     parent_index_put(this->databaseSourceInstanceParentIndex,
-	instanceKey.getString(), parent);
+		     instanceKey.getString(), parent);
     source_order_put(this->databaseSourceOrder,
-	this->databaseSourceOrderIndex, source);
+		     this->databaseSourceOrderIndex, source);
 }
 
 void
@@ -1335,9 +1342,9 @@ SoBRLSceneController::unindexDatabaseSource(SoBRLDatabaseSource *source) const
     index_erase(this->databaseSourcePathIndex, path.getString());
     index_erase(this->databaseSourceInstanceIndex, instanceKey.getString());
     parent_index_erase(this->databaseSourceInstanceParentIndex,
-	instanceKey.getString());
+		       instanceKey.getString());
     source_order_erase(this->databaseSourceOrder,
-	this->databaseSourceOrderIndex, source);
+		       this->databaseSourceOrderIndex, source);
 }
 
 void
@@ -1356,12 +1363,12 @@ SoBRLSceneController::rebuildDatabaseSourceIndex(void) const
     this->databaseSourceOrderIndex.clear();
     if (this->root && this->root->isOfType(SoGroup::getClassTypeId())) {
 	index_database_sources_recursive(static_cast<SoGroup *>(this->root),
-	    this->groupPathIndex,
-	    this->databaseSourcePathIndex,
-	    this->databaseSourceInstanceIndex,
-	    this->databaseSourceInstanceParentIndex,
-	    this->databaseSourceOrder,
-	    this->databaseSourceOrderIndex);
+					 this->groupPathIndex,
+					 this->databaseSourcePathIndex,
+					 this->databaseSourceInstanceIndex,
+					 this->databaseSourceInstanceParentIndex,
+					 this->databaseSourceOrder,
+					 this->databaseSourceOrderIndex);
     }
     this->databaseSourceIndexValid = TRUE;
 }
@@ -1440,7 +1447,7 @@ SoBRLSceneController::findIndexedDatabaseSourceInstanceParent(
 
     const char *normalized = skip_leading_slash(sourceInstanceKey);
     auto it = this->databaseSourceInstanceParentIndex.find(
-	      std::string(normalized ? normalized : sourceInstanceKey));
+		  std::string(normalized ? normalized : sourceInstanceKey));
     if (it != this->databaseSourceInstanceParentIndex.end())
 	return it->second;
     return NULL;
@@ -1778,7 +1785,7 @@ SoBRLSceneController::appendChildToGroup(const char *groupPath,
     group->addChild(child);
     if (child->isOfType(SoBRLDatabaseSource::getClassTypeId()))
 	this->indexDatabaseSource(static_cast<SoBRLDatabaseSource *>(child),
-	    group);
+				  group);
     else if (child->isOfType(SoGroup::getClassTypeId()))
 	this->clearDatabaseSourceIndex();
     this->advanceStructuralRevision();
@@ -2507,7 +2514,7 @@ SoBRLSceneController::publishDatabaseSourceInstance(
     const SbBool explicitTargetGroup =
 	(state.targetGroupPath && state.targetGroupPath[0]) ? TRUE : FALSE;
     SoGroup *targetGroup = explicitTargetGroup ?
-	this->ensureGroup(state.targetGroupPath) : rootGroup;
+			   this->ensureGroup(state.targetGroupPath) : rootGroup;
     if (!targetGroup)
 	return -1;
 
@@ -2579,21 +2586,21 @@ SoBRLSceneController::publishDatabaseSourceInstance(
 	source->lineStyle.getValue() != state.lineStyle ||
 	source->lineWidth.getValue() != state.lineWidth ||
 	scene_group_float_different(source->transparency.getValue(),
-	    state.transparency) ||
+				    state.transparency) ||
 	source->colorOverride.getValue() != state.colorOverride ||
 	(state.colorOverride &&
 	 !scene_group_color_equal(source->color.getValue(), state.color)) ||
 	source->materialColorValid.getValue() != state.materialColorValid ||
 	(state.materialColorValid &&
 	 !scene_group_color_equal(source->materialColor.getValue(),
-	     state.materialColor)) ||
+				  state.materialColor)) ||
 	source->materialRevision.getValue() != state.materialRevision) {
 	if (source->setDisplayState(state.sourceRevisionValid,
-		sourceRevision, state.inputsRevision,
-		state.visible, state.selected, state.highlighted, state.lineStyle,
-		state.lineWidth, state.transparency, state.colorOverride,
-		state.color, state.materialColorValid, state.materialColor,
-		state.materialRevision) > 0)
+				    sourceRevision, state.inputsRevision,
+				    state.visible, state.selected, state.highlighted, state.lineStyle,
+				    state.lineWidth, state.transparency, state.colorOverride,
+				    state.color, state.materialColorValid, state.materialColor,
+				    state.materialRevision) > 0)
 	    changed = 1;
     }
 
@@ -2603,15 +2610,15 @@ SoBRLSceneController::publishDatabaseSourceInstance(
 
     if (state.viewPolicyValid &&
 	source->setRealizationViewPolicy(state.viewDependent,
-	    state.csgLodEnabled, state.meshLodEnabled,
-	    state.viewScale, state.lodScale, state.viewWidth, state.viewHeight,
-	    state.botThreshold, state.curveScale, state.pointScale) > 0)
+					 state.csgLodEnabled, state.meshLodEnabled,
+					 state.viewScale, state.lodScale, state.viewWidth, state.viewHeight,
+					 state.botThreshold, state.curveScale, state.pointScale) > 0)
 	changed = 1;
 
     if (state.placementValid &&
 	source->setPlacementState(state.drawMatrixValid,
-	    state.drawMatrix, state.drawCenterValid, state.drawCenter,
-	    state.drawSizeValid, state.drawSize) > 0)
+				  state.drawMatrix, state.drawCenterValid, state.drawCenter,
+				  state.drawSizeValid, state.drawSize) > 0)
 	changed = 1;
 
     if (!sourceExisted) {
@@ -2709,7 +2716,7 @@ SoBRLSceneController::renameDatabaseSourceInstance(
     if (!source || !sourceParent || sourceIndex < 0) {
 	SoGroup *rootGroup = static_cast<SoGroup *>(this->root);
 	source = find_database_source_instance_recursive(rootGroup,
-	    sourceInstanceKey, &sourceParent, &sourceIndex);
+		 sourceInstanceKey, &sourceParent, &sourceIndex);
     }
     if (!source || !sourceParent || sourceIndex < 0)
 	return 0;
@@ -2723,7 +2730,7 @@ SoBRLSceneController::renameDatabaseSourceInstance(
 			     newSourceInstanceKey);
 	if (conflictParent)
 	    conflictIndex = scene_group_find_child_index(conflictParent,
-		conflict);
+			    conflict);
     }
     if (conflict && conflict != source && conflictParent &&
 	conflictIndex >= 0) {
@@ -3012,7 +3019,7 @@ SoBRLSceneController::refreshDatabaseSourceMaterialColorsFromDatabase(
 	    continue;
 	const int sourceChanged =
 	    source->refreshMaterialColorFromDatabase(materialRevision,
-						    overrideDbip);
+		overrideDbip);
 	if (sourceChanged > 0)
 	    changed = 1;
     }
@@ -3329,7 +3336,7 @@ SoBRLSceneController::moveDatabaseSourceInstanceToGroup(
     if (!source || !sourceParent || sourceIndex < 0) {
 	SoGroup *rootGroup = static_cast<SoGroup *>(this->root);
 	source = find_database_source_instance_recursive(rootGroup,
-	    sourceInstanceKey, &sourceParent, &sourceIndex);
+		 sourceInstanceKey, &sourceParent, &sourceIndex);
     }
     if (!source || !sourceParent || sourceIndex < 0)
 	return 0;
@@ -3397,7 +3404,7 @@ SoBRLSceneController::removeDatabaseSourceInstance(
     if (!source || !sourceParent || childIndex < 0) {
 	SoGroup *group = static_cast<SoGroup *>(this->root);
 	source = find_database_source_instance_recursive(group, sourceInstanceKey,
-	    &sourceParent, &childIndex);
+		 &sourceParent, &childIndex);
     }
     if (!sourceParent || childIndex < 0)
 	return 0;
@@ -3974,7 +3981,7 @@ SoBRLSceneController::getSceneTreeSummaryForPath(const char *nodePath,
     const char *normalizedPath = skip_leading_slash(nodePath);
     if (!nodePath[0] || !normalizedPath[0]) {
 	scene_tree_summary_fill(this->root, 0, FALSE, -1, "", "/",
-	    summary);
+				summary);
 	return summary.valid;
     }
 
@@ -3982,7 +3989,7 @@ SoBRLSceneController::getSceneTreeSummaryForPath(const char *nodePath,
     if (source) {
 	const int depth = scene_path_component_count(nodePath);
 	scene_tree_summary_fill(source, depth, depth > 0 ? TRUE : FALSE, -1,
-	    source->path.getValue(), source->path.getValue(), summary);
+				source->path.getValue(), source->path.getValue(), summary);
 	return summary.valid;
     }
 
@@ -3990,7 +3997,7 @@ SoBRLSceneController::getSceneTreeSummaryForPath(const char *nodePath,
     if (group) {
 	const int depth = scene_path_component_count(nodePath);
 	scene_tree_summary_fill(group, depth, depth > 0 ? TRUE : FALSE, -1,
-	    "", nodePath, summary);
+				"", nodePath, summary);
 	return summary.valid;
     }
 
@@ -3998,7 +4005,7 @@ SoBRLSceneController::getSceneTreeSummaryForPath(const char *nodePath,
     if (shape) {
 	const int depth = scene_path_component_count(nodePath);
 	scene_tree_summary_fill(shape, depth, depth > 0 ? TRUE : FALSE, -1,
-	    "", nodePath, summary);
+				"", nodePath, summary);
 	return summary.valid;
     }
 
@@ -4479,6 +4486,9 @@ scene_node_is_overlay_intent(const SoNode *node)
     if (node->isOfType(SoBRLMeshShape::getClassTypeId()))
 	return static_cast<const SoBRLMeshShape *>(node)->
 	       overlayIntent.getValue();
+    if (node->isOfType(SoBRLGrid::getClassTypeId()))
+	return static_cast<const SoBRLGrid *>(node)->
+	       overlayIntent.getValue();
     return FALSE;
 }
 
@@ -4612,9 +4622,9 @@ scene_autoview_padded_bounds(const SbBox3f &bounds)
 	size = bmax[2] - bmin[2];
 
     padded.extendBy(SbVec3f(center[0] - size, center[1] - size,
-	    center[2] - size));
+			    center[2] - size));
     padded.extendBy(SbVec3f(center[0] + size, center[1] + size,
-	    center[2] + size));
+			    center[2] + size));
     return padded;
 }
 
@@ -4647,7 +4657,7 @@ scene_database_source_bounds_recursive(const SoNode *node,
     const SoGroup *group = static_cast<const SoGroup *>(node);
     for (int i = 0; i < group->getNumChildren(); i++) {
 	if (scene_database_source_bounds_recursive(group->getChild(i),
-		bounds, padForAutoview))
+	    bounds, padForAutoview))
 	    valid = TRUE;
     }
 

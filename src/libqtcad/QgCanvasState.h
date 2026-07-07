@@ -374,7 +374,8 @@ qgcanvas_sync_obol_axes(QgCanvasState &s,
 static inline void
 qgcanvas_sync_obol_grid(QgCanvasState &s,
 			SoGroup *group,
-			const struct rt_view_grid_state &state)
+			const struct rt_view_grid_state &state,
+			void *view_ctx)
 {
     const char *overlayId = "faceplate::grid";
     const int childIndex = qgcanvas_find_obol_grid_child(group, overlayId);
@@ -390,18 +391,7 @@ qgcanvas_sync_obol_grid(QgCanvasState &s,
 		      static_cast<SoBRLGrid *>(group->getChild(childIndex)) :
 		      new SoBRLGrid;
     grid->overlayId = overlayId;
-    grid->center = SbVec3f(static_cast<float>(state.anchor[X]),
-			   static_cast<float>(state.anchor[Y]),
-			   static_cast<float>(state.anchor[Z]));
-    double spacing = state.res_h > SMALL_FASTF ? state.res_h : state.res_v;
-    if (spacing <= SMALL_FASTF)
-	spacing = 1.0;
-    grid->spacing = static_cast<float>(spacing);
-    int divisions = state.res_major_h > state.res_major_v ?
-		    state.res_major_h : state.res_major_v;
-    grid->divisions = divisions > 0 ? divisions : 5;
-    grid->visible = TRUE;
-    grid->rebuildGeometry();
+    (void)brlobol_grid_configure_from_view_context(grid, &state, view_ctx);
     if (childIndex < 0)
 	group->addChild(grid);
     qgcanvas_request_obol_render_if_idle(s, "faceplate");
@@ -460,7 +450,7 @@ qgcanvas_sync_obol_faceplate(QgCanvasState &s)
     (void)rt_view_context_view_axes_state_get(&viewAxes, view_ctx);
     (void)rt_view_context_adc_state_get(&adc, view_ctx);
 
-    qgcanvas_sync_obol_grid(s, group, grid);
+    qgcanvas_sync_obol_grid(s, group, grid, view_ctx);
     qgcanvas_sync_obol_axes(s, group, "faceplate::model_axes", modelAxes);
     qgcanvas_sync_obol_axes(s, group, "faceplate::view_axes", viewAxes);
     qgcanvas_sync_obol_adc(s, group, adc);

@@ -51,6 +51,12 @@ Obol database sources instead of relying on aggregate BSG draw-tree
 publication.  This is required for shaded modes because aggregate root mesh
 sources collapse per-leaf material/color state unless they explicitly retain a
 sub-instance partition.
+Evaluated-points draw mode is also covered as an Obol/libbrlobol external
+representation.  Its librt sampled-point helper now treats degenerate CLINE
+sample normals as recoverable: the CLINE normal routine falls back to a radial
+axis normal and otherwise returns an empty normal for the sampler to discard,
+instead of aborting the process.  This keeps mode 5 usable on
+Generic_Twin.g and havoc.g while preserving robust primitive behavior.
 Direct provider draws also ensure an explicit Obol group for the requested
 root path before leaf-instance realization.  The group is the scene/object
 identity boundary for comb/root operations; leaf database sources remain the

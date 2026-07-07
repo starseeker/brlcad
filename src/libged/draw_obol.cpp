@@ -13,6 +13,7 @@
 
 #include "brlobol/database_source.h"
 #include "brlobol/draw_cache.h"
+#include "brlobol/grid.h"
 #include "brlobol/init.h"
 #include "brlobol/image_source.h"
 #include "brlobol/lod_realization.h"
@@ -4214,110 +4215,28 @@ ged_obol_faceplate_sync_grid(BRLObolViewController *controller,
 	return;
     }
 
-    if (ZERO(grid.res_h))
-	grid.res_h = 1.0;
-    if (ZERO(grid.res_v))
-	grid.res_v = 1.0;
-    if (grid.res_major_h <= 0)
-	grid.res_major_h = 5;
-    if (grid.res_major_v <= 0)
-	grid.res_major_v = 5;
-
-    mat_t model2view;
-    if (!rt_view_context_model2view_get(model2view, view_ctx)) {
+    SoBRLGrid *node = new SoBRLGrid;
+    node->ref();
+    node->overlayId = name;
+    if (!brlobol_grid_configure_from_view_context(node, &grid, view_ctx) ||
+	node->getTotalSegmentCount() <= 0) {
+	node->unref();
 	ged_obol_faceplate_remove(controller, view_ctx, name);
 	return;
     }
 
-    const fastf_t scale = rt_view_context_scale_get(view_ctx);
-    const fastf_t base2local = rt_view_context_base2local_get(view_ctx);
-    const int width = rt_view_context_width_get(view_ctx);
-    const int height = rt_view_context_height_get(view_ctx);
-    const fastf_t aspect = (width > 0 && height > 0) ?
-			   (fastf_t)width / (fastf_t)height : 1.0;
-    if (ZERO(scale) || ZERO(base2local) || width <= 0) {
-	ged_obol_faceplate_remove(controller, view_ctx, name);
-	return;
-    }
-
-    const fastf_t inv_grid_res_h = 1.0 / (grid.res_h * base2local);
-    const fastf_t inv_grid_res_v = 1.0 / (grid.res_v * base2local);
-    const fastf_t sf = scale * base2local;
-    const fastf_t pixel_size = 2.0 * sf / width;
-    if ((grid.res_h * base2local) < pixel_size ||
-	(grid.res_v * base2local) < pixel_size) {
-	ged_obol_faceplate_remove(controller, view_ctx, name);
-	return;
-    }
-
-    const fastf_t inv_sf = 1.0 / sf;
-    const fastf_t inv_aspect = 1.0 / aspect;
-    const int nv_dots = static_cast<int>(2.0 * inv_aspect * sf *
-					 inv_grid_res_v + (2 * grid.res_major_v));
-    const int nh_dots = static_cast<int>(2.0 * sf * inv_grid_res_h +
-					 (2 * grid.res_major_h));
-
-    point_t view_grid_anchor;
-    point_t view_grid_anchor_local;
-    point_t view_lleft_corner;
-    point_t view_lleft_corner_local;
-    point_t view_grid_start_pt_local;
-    MAT4X3PNT(view_grid_anchor, model2view, grid.anchor);
-    VSCALE(view_grid_anchor_local, view_grid_anchor, sf);
-    VSET(view_lleft_corner, -1.0, -inv_aspect, 0.0);
-    VSCALE(view_lleft_corner_local, view_lleft_corner, sf);
-
-    const int nh = static_cast<int>((view_grid_anchor_local[X] -
-				     view_lleft_corner_local[X]) * inv_grid_res_h);
-    const int nv = static_cast<int>((view_grid_anchor_local[Y] -
-				     view_lleft_corner_local[Y]) * inv_grid_res_v);
-    const int nmh = nh / grid.res_major_h + 1;
-    const int nmv = nv / grid.res_major_v + 1;
-    VSET(view_grid_start_pt_local,
-	 view_grid_anchor_local[X] -
-	 (nmh * grid.res_h * grid.res_major_h * base2local),
-	 view_grid_anchor_local[Y] -
-	 (nmv * grid.res_v * grid.res_major_v * base2local),
-	 0.0);
-
-    std::vector<SbVec3f> points;
-    std::vector<int32_t> commands;
-    const int horizontal_count =
-	(nv_dots > 0 && grid.res_major_v > 0) ?
-	((nv_dots + grid.res_major_v - 1) / grid.res_major_v) : 0;
-    const int vertical_count =
-	(nh_dots > 0 && grid.res_major_h > 0 && grid.res_major_v != 1) ?
-	((nh_dots + grid.res_major_h - 1) / grid.res_major_h) : 0;
-    points.reserve(static_cast<size_t>(horizontal_count + vertical_count) * 2);
-    commands.reserve(points.capacity());
-    if (nh_dots > 0 && nv_dots > 0) {
-	const fastf_t x_first = view_grid_start_pt_local[X] * inv_sf;
-	const fastf_t x_last = (view_grid_start_pt_local[X] +
-				((nh_dots - 1) * grid.res_h * base2local)) * inv_sf;
-	const fastf_t y_first = view_grid_start_pt_local[Y] * inv_sf;
-	const fastf_t y_last = (view_grid_start_pt_local[Y] +
-				((nv_dots - 1) * grid.res_v * base2local)) * inv_sf;
-
-	for (int i = 0; i < nv_dots; i += grid.res_major_v) {
-	    const fastf_t fy = (view_grid_start_pt_local[Y] +
-				(i * grid.res_v * base2local)) * inv_sf;
-	    ged_obol_faceplate_append_line(points, commands, view_ctx,
-					   x_first, fy * aspect, x_last, fy * aspect);
-	}
-	if (grid.res_major_v != 1) {
-	    for (int i = 0; i < nh_dots; i += grid.res_major_h) {
-		const fastf_t fx = (view_grid_start_pt_local[X] +
-				    (i * grid.res_h * base2local)) * inv_sf;
-		ged_obol_faceplate_append_line(points, commands, view_ctx,
-					       fx, y_first * aspect, fx, y_last * aspect);
-	    }
-	}
-    }
-
-    BRLObolFeatureStyle style = ged_obol_faceplate_style(
-				    grid.color, 255, 255, 255, 2);
-    (void)ged_obol_faceplate_publish_lines(controller, view_ctx, name,
-					   points, commands, style);
+    BRLObolFeatureStyle style;
+    style.hasVisible = TRUE;
+    style.visible = TRUE;
+    style.hasSelectable = TRUE;
+    style.selectable = FALSE;
+    BRLObolFeatureOwner owner = ged_obol_feature_owner(view_ctx, 1);
+    BRLObolFeatureHandle handle =
+	controller->features().publishCustomNode(name,
+	    BRLObolFeatureScope::Local, node, &style, &owner);
+    node->unref();
+    (void)ged_obol_feature_mark_overlay(controller, handle,
+					ged_obol_faceplate_overlay_info(view_ctx));
 }
 
 static void

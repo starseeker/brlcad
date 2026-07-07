@@ -8,6 +8,7 @@
 #include "common.h"
 
 #include "brlobol/database_source.h"
+#include "brlobol/grid.h"
 #include "brlobol/lod_service.h"
 #include "brlobol/mesh_shape.h"
 #include "brlobol/snap_action.h"
@@ -103,9 +104,11 @@ snap_kind_priority(SoBRLSnapAction::SnapKind kind)
 	    return 6;
 	case SoBRLSnapAction::CONSTRUCTION_PLANE:
 	    return 7;
+	case SoBRLSnapAction::GRID:
+	    return 8;
 	case SoBRLSnapAction::NONE:
 	default:
-	    return 8;
+	    return 9;
     }
 }
 
@@ -261,6 +264,7 @@ SoBRLSnapAction::initClass(void)
     SO_ACTION_ADD_METHOD(SoNode, SoBRLSnapAction::nodeAction);
     SO_ACTION_ADD_METHOD(SoBRLDatabaseSource,
 			 SoBRLSnapAction::databaseSourceAction);
+    SO_ACTION_ADD_METHOD(SoBRLGrid, SoBRLSnapAction::gridAction);
     SO_ACTION_ADD_METHOD(SoBRLVListShape, SoBRLSnapAction::vlistShapeAction);
     SO_ACTION_ADD_METHOD(SoBRLMeshShape, SoBRLSnapAction::meshShapeAction);
 }
@@ -651,6 +655,50 @@ SoBRLSnapAction::databaseSourceAction(SoAction *action, SoNode *node)
 }
 
 void
+SoBRLSnapAction::gridAction(SoAction *action, SoNode *node)
+{
+    SoBRLSnapAction *snapAction = static_cast<SoBRLSnapAction *>(action);
+    SoBRLGrid *grid = static_cast<SoBRLGrid *>(node);
+    if (!grid->snapEnabled.getValue() ||
+	!(snapAction->enabledKinds & static_cast<uint32_t>(GRID)))
+	return;
+
+    double sf = static_cast<double>(grid->viewScale.getValue()) *
+		static_cast<double>(grid->baseToLocal.getValue());
+    if (sf <= 0.0)
+	return;
+
+    double stepH = static_cast<double>(grid->spacing.getValue()) *
+		   static_cast<double>(grid->baseToLocal.getValue());
+    double stepV = static_cast<double>(grid->spacingV.getValue()) *
+		   static_cast<double>(grid->baseToLocal.getValue());
+    if (stepH <= 0.0 || stepV <= 0.0)
+	return;
+
+    const SbMatrix modelToView = grid->modelToView.getValue();
+    const SbMatrix viewToModel = modelToView.inverse();
+    SbVec3f queryView;
+    modelToView.multVecMatrix(snapAction->queryPoint, queryView);
+
+    SbVec3f anchorView;
+    modelToView.multVecMatrix(grid->center.getValue(), anchorView);
+
+    const double qx = static_cast<double>(queryView[0]) * sf;
+    const double qy = static_cast<double>(queryView[1]) * sf;
+    const double ax = static_cast<double>(anchorView[0]) * sf;
+    const double ay = static_cast<double>(anchorView[1]) * sf;
+    const double sx = ax + std::round((qx - ax) / stepH) * stepH;
+    const double sy = ay + std::round((qy - ay) / stepV) * stepV;
+
+    SbVec3f snappedView(static_cast<float>(sx / sf),
+			static_cast<float>(sy / sf), queryView[2]);
+    SbVec3f snappedModel;
+    viewToModel.multVecMatrix(snappedView, snappedModel);
+    snapAction->consider(GRID, grid->overlayId.getValue(), SbString(""),
+			 SbString("grid-snap"), -1, snapAction->queryPoint, snappedModel);
+}
+
+void
 SoBRLSnapAction::vlistShapeAction(SoAction *action, SoNode *node)
 {
     SoBRLSnapAction *snapAction = static_cast<SoBRLSnapAction *>(action);
@@ -883,8 +931,10 @@ SoBRLSnapAction::consider(SnapKind kind, const SbString &path,
 	if (dist > this->bestDistance + tieTolerance)
 	    return;
 	if (fabsf(dist - this->bestDistance) <= tieTolerance) {
-	    if (this->priorityPolicy != FEATURE_PRIORITY ||
-		snap_kind_priority(kind) >= snap_kind_priority(this->candidateKind))
+	    if (this->priorityPolicy != FEATURE_PRIORITY &&
+		kind != GRID && this->candidateKind != GRID)
+		return;
+	    if (snap_kind_priority(kind) >= snap_kind_priority(this->candidateKind))
 		return;
 	}
     }

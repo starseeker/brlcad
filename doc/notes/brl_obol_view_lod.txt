@@ -466,6 +466,8 @@ progressive view LoD:
   source sync correct;
 * mesh-LoD publication creating LoD-backed mesh nodes;
 * database-source LoD policy propagation into realized source identity;
+* database-source cached mesh-LoD metadata publication only when the source has
+  an explicit view-realization policy enabling mesh LoD;
 * command polygon lookup for names containing `::`.
 
 Full-stack progressive image tests now cover delayed service population,

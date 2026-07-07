@@ -27,7 +27,7 @@ Current Obol Representations
 | legacy TclCAD data labels | `_tcl_data_labels` / `_tcl_sdata_labels` label feature | Managed by typed GED data-label facades, including movement, scaling, and pick/readback |
 | legacy TclCAD data polygons | `_tcl_data_polygons` / `_tcl_sdata_polygons` polygon outline feature | Managed by typed GED data-polygon facades |
 | model axes | `SoBRLAxes` | Covered by libbrlobol overlay tests |
-| work grid | `SoBRLGrid` | Covered by libbrlobol overlay tests |
+| work grid | `SoBRLGrid` adaptive HUD overlay with semantic grid snap state | Covered by libbrlobol overlay tests, GED faceplate image tests, and snap semantics tests |
 | ADC | `SoBRLADC` | Covered by libbrlobol overlay tests |
 | edit previews | `SoBRLEditPreview` | Covered by edit-preview tests |
 | complex command/plugin objects | command-scene `CustomNode` feature | Initial owner-scoped provider hook exists |
@@ -55,6 +55,10 @@ The old private direct-uplot feature publishing wrappers are retired.  Uplot
 producers should parse/build streams and publish through command-scene helpers;
 without an active Obol feature store, overlay insertion returns no output and
 does not recreate retained BSG overlay state.
+
+The work grid is not modeled as transformed database-line geometry.  It is a
+view aid owned by `SoBRLGrid`: visual lines are HUD overlay layers and grid
+snap is semantic model/view state.  See `doc/notes/obol_grid_snap.txt`.
 
 Fallback direct diagnostic callbacks remain only for non-command-scene
 consumers that have not yet been migrated; they must not be used to preserve

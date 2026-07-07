@@ -133,47 +133,54 @@ main(int argc, char **argv)
     if (view.legacyBackendInitialized())
 	FAIL("Obol faceplate sync should not require legacy DM initialization");
     if (!controller->isRenderRequested() ||
-	    strcmp(controller->getRenderReason().getString(), "faceplate") != 0)
+	strcmp(controller->getRenderReason().getString(), "faceplate") != 0)
 	FAIL("faceplate sync should request an Obol render");
 
     SoBRLGrid *obolGrid = static_cast<SoBRLGrid *>(
-	    find_overlay(root, "faceplate::grid"));
+			      find_overlay(root, "faceplate::grid"));
     SoBRLAxes *obolModelAxes = static_cast<SoBRLAxes *>(
-	    find_overlay(root, "faceplate::model_axes"));
+				   find_overlay(root, "faceplate::model_axes"));
     SoBRLAxes *obolViewAxes = static_cast<SoBRLAxes *>(
-	    find_overlay(root, "faceplate::view_axes"));
+				  find_overlay(root, "faceplate::view_axes"));
     SoBRLADC *obolAdc = static_cast<SoBRLADC *>(
-	    find_overlay(root, "faceplate::adc"));
+			    find_overlay(root, "faceplate::adc"));
 
     if (!obolGrid || !obolModelAxes || !obolViewAxes || !obolAdc)
 	FAIL("faceplate sync should publish grid, axes, and ADC Obol nodes");
     if (!near_float(obolGrid->center.getValue()[0], 1.0f) ||
-	    !near_float(obolGrid->center.getValue()[1], 2.0f) ||
-	    !near_float(obolGrid->center.getValue()[2], 3.0f) ||
-	    !near_float(obolGrid->spacing.getValue(), 2.0f) ||
-	    obolGrid->divisions.getValue() != 3 ||
-	    !obolGrid->getGeometryShape() ||
-	    obolGrid->getGeometryShape()->getSegmentCount() != 14)
-	FAIL("grid state should map to Obol grid geometry");
+	!near_float(obolGrid->center.getValue()[1], 2.0f) ||
+	!near_float(obolGrid->center.getValue()[2], 3.0f) ||
+	!near_float(obolGrid->spacing.getValue(), 2.0f) ||
+	!near_float(obolGrid->spacingV.getValue(), 4.0f) ||
+	obolGrid->majorDivisionsH.getValue() != 3 ||
+	obolGrid->majorDivisionsV.getValue() != 2 ||
+	obolGrid->getMinorSegmentCount() <= 0 ||
+	obolGrid->getMajorSegmentCount() <= 0 ||
+	obolGrid->getAxisSegmentCount() != 2 ||
+	obolGrid->getTotalSegmentCount() !=
+	obolGrid->getMinorSegmentCount() +
+	obolGrid->getMajorSegmentCount() +
+	obolGrid->getAxisSegmentCount())
+	FAIL("grid state should map to adaptive Obol grid hierarchy");
     if (!near_float(obolModelAxes->origin.getValue()[0], 4.0f) ||
-	    !near_float(obolModelAxes->origin.getValue()[1], 5.0f) ||
-	    !near_float(obolModelAxes->origin.getValue()[2], 6.0f) ||
-	    !near_float(obolModelAxes->size.getValue(), 7.0f) ||
-	    !obolModelAxes->getGeometryShape() ||
-	    obolModelAxes->getGeometryShape()->getSegmentCount() != 3)
+	!near_float(obolModelAxes->origin.getValue()[1], 5.0f) ||
+	!near_float(obolModelAxes->origin.getValue()[2], 6.0f) ||
+	!near_float(obolModelAxes->size.getValue(), 7.0f) ||
+	!obolModelAxes->getGeometryShape() ||
+	obolModelAxes->getGeometryShape()->getSegmentCount() != 3)
 	FAIL("model axes state should map to Obol axes geometry");
     if (!near_float(obolViewAxes->origin.getValue()[0], -0.8f) ||
-	    !near_float(obolViewAxes->origin.getValue()[1], -0.7f) ||
-	    !near_float(obolViewAxes->size.getValue(), 0.5f) ||
-	    !obolViewAxes->getGeometryShape() ||
-	    obolViewAxes->getGeometryShape()->getSegmentCount() != 3)
+	!near_float(obolViewAxes->origin.getValue()[1], -0.7f) ||
+	!near_float(obolViewAxes->size.getValue(), 0.5f) ||
+	!obolViewAxes->getGeometryShape() ||
+	obolViewAxes->getGeometryShape()->getSegmentCount() != 3)
 	FAIL("view axes state should map to Obol axes geometry");
     if (!near_float(obolAdc->center.getValue()[0], 8.0f) ||
-	    !near_float(obolAdc->center.getValue()[1], 9.0f) ||
-	    !near_float(obolAdc->angleDegrees.getValue(), 30.0f) ||
-	    !near_float(obolAdc->distance.getValue(), 12.0f) ||
-	    !obolAdc->getGeometryShape() ||
-	    obolAdc->getGeometryShape()->getSegmentCount() != 4)
+	!near_float(obolAdc->center.getValue()[1], 9.0f) ||
+	!near_float(obolAdc->angleDegrees.getValue(), 30.0f) ||
+	!near_float(obolAdc->distance.getValue(), 12.0f) ||
+	!obolAdc->getGeometryShape() ||
+	obolAdc->getGeometryShape()->getSegmentCount() != 4)
 	FAIL("ADC state should map to Obol ADC geometry");
 
     grid.draw = 0;
@@ -187,9 +194,9 @@ main(int argc, char **argv)
     view.need_update(QG_VIEW_DRAWN);
 
     if (find_overlay(root, "faceplate::grid") ||
-	    find_overlay(root, "faceplate::model_axes") ||
-	    find_overlay(root, "faceplate::view_axes") ||
-	    find_overlay(root, "faceplate::adc"))
+	find_overlay(root, "faceplate::model_axes") ||
+	find_overlay(root, "faceplate::view_axes") ||
+	find_overlay(root, "faceplate::adc"))
 	FAIL("disabled faceplate settings should remove Obol nodes");
 
     return 0;
