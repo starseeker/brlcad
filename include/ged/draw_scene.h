@@ -30,14 +30,14 @@ typedef struct ged_draw_scene_handle {
 
 #define GED_DRAW_SCENE_HANDLE_NULL_INIT { NULL, GED_DRAW_SCENE_BACKEND_NONE }
 
-static inline ged_draw_scene_handle
+static inline __attribute__((unused)) ged_draw_scene_handle
 ged_draw_scene_handle_null(void)
 {
     ged_draw_scene_handle ref = GED_DRAW_SCENE_HANDLE_NULL_INIT;
     return ref;
 }
 
-static inline ged_draw_scene_handle
+static inline __attribute__((unused)) ged_draw_scene_handle
 ged_draw_scene_handle_make(void *opaque, unsigned int backend)
 {
     ged_draw_scene_handle ref = GED_DRAW_SCENE_HANDLE_NULL_INIT;
@@ -46,13 +46,13 @@ ged_draw_scene_handle_make(void *opaque, unsigned int backend)
     return ref;
 }
 
-static inline int
+static inline __attribute__((unused)) int
 ged_draw_scene_handle_is_null(ged_draw_scene_handle ref)
 {
     return ref.opaque ? 0 : 1;
 }
 
-static inline int
+static inline __attribute__((unused)) int
 ged_draw_scene_handle_equal(ged_draw_scene_handle a,
 			    ged_draw_scene_handle b)
 {
@@ -67,13 +67,13 @@ ged_draw_scene_handle_equal(ged_draw_scene_handle a,
     return a.opaque == b.opaque;
 }
 
-static inline void *
+static inline __attribute__((unused)) void *
 ged_draw_scene_handle_context(ged_draw_scene_handle ref)
 {
     return ref.opaque;
 }
 
-static inline unsigned int
+static inline __attribute__((unused)) unsigned int
 ged_draw_scene_handle_backend(ged_draw_scene_handle ref)
 {
     return ref.opaque ? ref.backend : GED_DRAW_SCENE_BACKEND_NONE;

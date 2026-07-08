@@ -233,8 +233,8 @@ LLVMFuzzerTestOneInput(const int8_t *data, size_t size)
      * commands that inspect active-view geometry. */
     void *view_ctx = ged_view_active_ctx(g);
     if (view_ctx) {
-	ged_view_context_unit_conversion_set(view_ctx, g->dbip->dbi_local2base,
-		g->dbip->dbi_base2local);
+	bv_unit_conversion_set(bv_context_view((struct bv_context *)view_ctx),
+		g->dbip->dbi_local2base, g->dbip->dbi_base2local);
     }
 
     void *libged = bu_dlopen(NULL, BU_RTLD_LAZY);
