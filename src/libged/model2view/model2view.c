@@ -48,7 +48,7 @@ ged_model2view_core(struct ged *gedp, int argc, const char *argv[])
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     void *view_ctx = ged_view_active_ctx(gedp);
-    ged_view_context_model2view_get(model2view, view_ctx);
+    rt_view_context_model2view_get(model2view, view_ctx);
 
     /* get the model2view matrix */
     if (argc == 1) {

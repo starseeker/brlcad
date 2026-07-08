@@ -125,8 +125,8 @@ _bot_pick_ray(struct _ged_bot_ipick *gib, int argc, const char **argv,
 	}
 	mat_t view_center;
 	mat_t view_rotation;
-	ged_view_context_center_get(view_center, view_ctx);
-	ged_view_context_rotation_get(view_rotation, view_ctx);
+	rt_view_context_center_get(view_center, view_ctx);
+	rt_view_context_rotation_get(view_rotation, view_ctx);
 	MAT_DELTAS_GET_NEG(origin, view_center);
 	VSCALE(origin, origin, gedp->dbip->dbi_base2local);
 	VMOVEN(dir, view_rotation + 8, 3);

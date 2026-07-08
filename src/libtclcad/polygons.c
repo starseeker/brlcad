@@ -47,13 +47,13 @@ tclcad_polygons_sync_dm_dimensions(void *view_ctx)
 {
     struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
     if (dmp)
-	ged_view_context_dimensions_set(view_ctx, dm_get_width(dmp), dm_get_height(dmp));
+	rt_view_context_dimensions_set(view_ctx, dm_get_width(dmp), dm_get_height(dmp));
 }
 
 static const char *
 tclcad_polygons_view_name(const void *view_ctx)
 {
-    const char *name = ged_view_context_name_get(view_ctx);
+    const char *name = rt_view_context_name_get(view_ctx);
     return name ? name : "";
 }
 
@@ -165,12 +165,12 @@ _sync_tcl_polygon_view_snapshot(void *view_ctx, tclcad_polygon_state *gdpsp)
     if (!gdpsp)
 	return;
 
-    gdpsp->gdps_scale = ged_view_context_scale_get(view_ctx);
-    ged_view_context_center_get(view_center, view_ctx);
+    gdpsp->gdps_scale = rt_view_context_scale_get(view_ctx);
+    rt_view_context_center_get(view_center, view_ctx);
     VMOVE(gdpsp->gdps_origin, view_center);
-    ged_view_context_rotation_get(gdpsp->gdps_rotation, view_ctx);
-    ged_view_context_model2view_get(gdpsp->gdps_model2view, view_ctx);
-    ged_view_context_view2model_get(gdpsp->gdps_view2model, view_ctx);
+    rt_view_context_rotation_get(gdpsp->gdps_rotation, view_ctx);
+    rt_view_context_model2view_get(gdpsp->gdps_model2view, view_ctx);
+    rt_view_context_view2model_get(gdpsp->gdps_view2model, view_ctx);
 }
 
 static int
@@ -190,7 +190,7 @@ to_extract_contours_av(Tcl_Interp *interp, struct ged *gedp, void *view_ctx, str
     gpp->contour = (struct bg_poly_contour *)bu_calloc(contour_ac, sizeof(struct bg_poly_contour), "contour");
 
     if (vflag)
-	ged_view_context_view2model_get(view2model, view_ctx);
+	rt_view_context_view2model_get(view2model, view_ctx);
 
     for (j = 0; j < contour_ac; ++j) {
 	int ac;
@@ -754,7 +754,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 	    goto bad;
 
 	plane_t pl;
-	ged_view_context_plane_get(&pl, gdvp);
+	rt_view_context_plane_get(&pl, gdvp);
 
 	gpp = bg_clip_polygon((bg_clip_t)op,
 			       &gdpsp->gdps_polygons.polygon[i],
@@ -894,7 +894,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 	    goto bad;
 
 	plane_t pl;
-	ged_view_context_plane_get(&pl, gdvp);
+	rt_view_context_plane_get(&pl, gdvp);
 
 	area = bg_find_polygon_area(&gdpsp->gdps_polygons.polygon[i], CLIPPER_MAX,
 				     &pl, gdpsp->gdps_scale);
@@ -946,7 +946,7 @@ to_data_polygons_func(Tcl_Interp *interp,
 	    mat_t model2view;
 
 	    if (vflag)
-		ged_view_context_model2view_get(model2view, gdvp);
+		rt_view_context_model2view_get(model2view, gdvp);
 
 	    for (i = 0; i < gdpsp->gdps_polygons.num_polygons; ++i) {
 		bu_vls_printf(gedp->ged_result_str, " {");
@@ -1343,16 +1343,16 @@ to_poly_circ_mode_func(Tcl_Interp *interp,
 	return BRLCAD_ERROR;
     }
 
-    ged_view_context_previous_mouse_set(gdvp, x, y);
+    rt_view_context_previous_mouse_set(gdvp, x, y);
     (void)tclcad_view_polygon_mode_set(gdvp, TCLCAD_POLY_CIRCLE_MODE);
 
     tclcad_polygons_sync_dm_dimensions(gdvp);
-    ged_view_context_screen_to_view(&fx, &fy, gdvp, x, y);
+    rt_view_context_screen_to_view(&fx, &fy, gdvp, x, y);
     VSET(v_pt, fx, fy, tclcad_view_data_vZ_from_view_ctx(gdvp));
     {
-	unsigned long long snap_kinds = ged_view_context_prepare_tcl_snap(gdvp);
+	unsigned long long snap_kinds = rt_view_context_prepare_tcl_snap(gdvp);
 	if (snap_kinds)
-	    ged_view_context_snap_point_2d(gdvp, &v_pt[X], &v_pt[Y], snap_kinds);
+	    rt_view_context_snap_point_2d(gdvp, &v_pt[X], &v_pt[Y], snap_kinds);
     }
 
     MAT4X3PNT(m_pt, gdpsp->gdps_view2model, v_pt);
@@ -1408,16 +1408,16 @@ to_poly_cont_build_func(Tcl_Interp *interp,
 	return BRLCAD_ERROR;
     }
 
-    ged_view_context_previous_mouse_set(gdvp, x, y);
+    rt_view_context_previous_mouse_set(gdvp, x, y);
     (void)tclcad_view_polygon_mode_set(gdvp, TCLCAD_POLY_CONTOUR_MODE);
 
     tclcad_polygons_sync_dm_dimensions(gdvp);
-    ged_view_context_screen_to_view(&fx, &fy, gdvp, x, y);
+    rt_view_context_screen_to_view(&fx, &fy, gdvp, x, y);
     VSET(v_pt, fx, fy, tclcad_view_data_vZ_from_view_ctx(gdvp));
     {
-	unsigned long long snap_kinds = ged_view_context_prepare_tcl_snap(gdvp);
+	unsigned long long snap_kinds = rt_view_context_prepare_tcl_snap(gdvp);
 	if (snap_kinds)
-	    ged_view_context_snap_point_2d(gdvp, &v_pt[X], &v_pt[Y], snap_kinds);
+	    rt_view_context_snap_point_2d(gdvp, &v_pt[X], &v_pt[Y], snap_kinds);
     }
 
     MAT4X3PNT(m_pt, gdpsp->gdps_view2model, v_pt);
@@ -1770,16 +1770,16 @@ to_poly_ell_mode_func(Tcl_Interp *interp,
 	return BRLCAD_ERROR;
     }
 
-    ged_view_context_previous_mouse_set(gdvp, x, y);
+    rt_view_context_previous_mouse_set(gdvp, x, y);
     (void)tclcad_view_polygon_mode_set(gdvp, TCLCAD_POLY_ELLIPSE_MODE);
 
     tclcad_polygons_sync_dm_dimensions(gdvp);
-    ged_view_context_screen_to_view(&fx, &fy, gdvp, x, y);
+    rt_view_context_screen_to_view(&fx, &fy, gdvp, x, y);
     VSET(v_pt, fx, fy, tclcad_view_data_vZ_from_view_ctx(gdvp));
     {
-	unsigned long long snap_kinds = ged_view_context_prepare_tcl_snap(gdvp);
+	unsigned long long snap_kinds = rt_view_context_prepare_tcl_snap(gdvp);
 	if (snap_kinds)
-	    ged_view_context_snap_point_2d(gdvp, &v_pt[X], &v_pt[Y], snap_kinds);
+	    rt_view_context_snap_point_2d(gdvp, &v_pt[X], &v_pt[Y], snap_kinds);
     }
 
     MAT4X3PNT(m_pt, gdpsp->gdps_view2model, v_pt);
@@ -1927,7 +1927,7 @@ to_poly_rect_mode_func(Tcl_Interp *interp,
 	    return BRLCAD_ERROR;
 	}
     }
-    ged_view_context_previous_mouse_set(gdvp, x, y);
+    rt_view_context_previous_mouse_set(gdvp, x, y);
 
     if (sflag)
 	(void)tclcad_view_polygon_mode_set(gdvp, TCLCAD_POLY_SQUARE_MODE);
@@ -1935,12 +1935,12 @@ to_poly_rect_mode_func(Tcl_Interp *interp,
 	(void)tclcad_view_polygon_mode_set(gdvp, TCLCAD_POLY_RECTANGLE_MODE);
 
     tclcad_polygons_sync_dm_dimensions(gdvp);
-    ged_view_context_screen_to_view(&fx, &fy, gdvp, x, y);
+    rt_view_context_screen_to_view(&fx, &fy, gdvp, x, y);
     VSET(v_pt, fx, fy, tclcad_view_data_vZ_from_view_ctx(gdvp));
     {
-	unsigned long long snap_kinds = ged_view_context_prepare_tcl_snap(gdvp);
+	unsigned long long snap_kinds = rt_view_context_prepare_tcl_snap(gdvp);
 	if (snap_kinds)
-	    ged_view_context_snap_point_2d(gdvp, &v_pt[X], &v_pt[Y], snap_kinds);
+	    rt_view_context_snap_point_2d(gdvp, &v_pt[X], &v_pt[Y], snap_kinds);
     }
 
     MAT4X3PNT(m_pt, gdpsp->gdps_view2model, v_pt);

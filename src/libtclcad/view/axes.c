@@ -55,7 +55,7 @@ _tclcad_data_axes_display_scale(void *view_ctx)
     }
 
     struct rt_view_info view_info = RT_VIEW_INFO_INIT;
-    ged_view_context_info_get(&view_info, view_ctx);
+    rt_view_context_info_get(&view_info, view_ctx);
     return view_info.size / dm_width;
 }
 
@@ -777,11 +777,11 @@ to_model_axes(struct ged *gedp,
     }
 
     struct rt_view_axes_state axes;
-    if (!ged_view_context_model_axes_state_get(&axes, view_ctx))
+    if (!rt_view_context_model_axes_state_get(&axes, view_ctx))
 	return BRLCAD_ERROR;
     int ret = to_axes(gedp, view_ctx, &axes, argc, argv, usage);
     if (ret == BRLCAD_OK)
-	ged_view_context_model_axes_state_set(view_ctx, &axes);
+	rt_view_context_model_axes_state_set(view_ctx, &axes);
     return ret;
 }
 
@@ -807,11 +807,11 @@ go_view_axes(struct ged *gedp,
     }
 
     struct rt_view_axes_state axes;
-    if (!ged_view_context_view_axes_state_get(&axes, draw_view_ctx))
+    if (!rt_view_context_view_axes_state_get(&axes, draw_view_ctx))
 	return BRLCAD_ERROR;
     int ret = to_axes(gedp, draw_view_ctx, &axes, argc, argv, usage);
     if (ret == BRLCAD_OK)
-	ged_view_context_view_axes_state_set(draw_view_ctx, &axes);
+	rt_view_context_view_axes_state_set(draw_view_ctx, &axes);
     return ret;
 }
 
@@ -847,11 +847,11 @@ to_view_axes(struct ged *gedp,
     }
 
     struct rt_view_axes_state axes;
-    if (!ged_view_context_view_axes_state_get(&axes, view_ctx))
+    if (!rt_view_context_view_axes_state_get(&axes, view_ctx))
 	return BRLCAD_ERROR;
     int ret = to_axes(gedp, view_ctx, &axes, argc, argv, usage);
     if (ret == BRLCAD_OK)
-	ged_view_context_view_axes_state_set(view_ctx, &axes);
+	rt_view_context_view_axes_state_set(view_ctx, &axes);
     return ret;
 }
 

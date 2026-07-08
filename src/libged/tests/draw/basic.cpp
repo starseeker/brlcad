@@ -289,7 +289,7 @@ main(int ac, char *av[]) {
     ged_exec_dm(gedp, 4, s_av);
 
     void *v = ged_view_active_ctx(gedp);
-    struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(v);
+    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(v);
     dm_set_width(dmp, 512);
     dm_set_height(dmp, 512);
 

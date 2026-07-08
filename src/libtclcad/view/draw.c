@@ -47,10 +47,10 @@ go_draw(void *view_ctx)
 
     mat_t model2view;
     mat_t pmat;
-    fastf_t perspective = ged_view_context_perspective_get(view_ctx);
+    fastf_t perspective = rt_view_context_perspective_get(view_ctx);
 
-    ged_view_context_model2view_get(model2view, view_ctx);
-    ged_view_context_pmat_get(pmat, view_ctx);
+    rt_view_context_model2view_get(model2view, view_ctx);
+    rt_view_context_pmat_get(pmat, view_ctx);
     (void)dm_loadmatrix(dmp, model2view, 0);
 
     if (SMALL_FASTF < perspective)

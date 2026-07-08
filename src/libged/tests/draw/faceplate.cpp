@@ -109,12 +109,12 @@ main(int ac, char *av[]) {
     s_av[4] = NULL;
     int dm_attach_ret = ged_exec_dm(gedp, 4, s_av);
     void *v = ged_view_active_ctx(gedp);
-    if (dm_attach_ret != BRLCAD_OK || !v || !rt_view_context_display_manager_get(v)) {
+    if (dm_attach_ret != BRLCAD_OK || !v || !ged_view_context_display_manager_get(v)) {
 	bu_exit(EXIT_FAILURE, "failed to attach swrast display manager: %s\n",
 		bu_vls_strlen(gedp->ged_result_str) ? bu_vls_cstr(gedp->ged_result_str) : "no display manager available");
     }
 
-    struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(v);
+    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(v);
     dm_set_width(dmp, 512);
     dm_set_height(dmp, 512);
 
@@ -126,7 +126,7 @@ main(int ac, char *av[]) {
     dm_set_win_bounds(dmp, windowbounds);
 
     dm_set_vp(dmp, rt_view_context_scale_storage_get(v));
-    rt_view_context_display_manager_set(v, dmp);
+    ged_view_context_display_manager_set(v, dmp);
     rt_view_context_dimensions_set(v, dm_get_width(dmp), dm_get_height(dmp));
     rt_view_context_unit_conversion_set(v,
 	gedp->dbip->dbi_local2base,
@@ -220,7 +220,7 @@ main(int ac, char *av[]) {
     bu_log("Testing turning on frames per second reporting...\n");
 
     // So we don't get random values here, override the timing variable values
-    dmp = (struct dm *)rt_view_context_display_manager_get(v);
+    dmp = (struct dm *)ged_view_context_display_manager_get(v);
     if (!dmp) {
 	bu_exit(EXIT_FAILURE, "no active display manager available for fps faceplate test\n");
     }

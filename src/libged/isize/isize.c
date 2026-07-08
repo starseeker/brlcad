@@ -45,7 +45,7 @@ ged_isize_core(struct ged *gedp, int argc, const char *argv[])
     if (argc == 1) {
 	void *view_ctx = ged_view_active_ctx(gedp);
 	bu_vls_printf(gedp->ged_result_str, "%g",
-		      ged_view_context_inverse_size_get(view_ctx) *
+		      rt_view_context_inverse_size_get(view_ctx) *
 		      gedp->dbip->dbi_base2local);
 	return BRLCAD_OK;
     }

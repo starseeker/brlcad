@@ -94,14 +94,14 @@ capture_screengrab_nonempty(struct ged *gedp, const char *filename,
 static BRLObolViewController *
 obol_controller_for_view(void *view_ctx)
 {
-    struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(view_ctx);
+    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
     return dmp ? (BRLObolViewController *)dm_obol_controller(dmp) : NULL;
 }
 
 static int
 configure_obol_view(struct ged *gedp, void *view_ctx, int width, int height)
 {
-    struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(view_ctx);
+    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
     if (!dmp)
 	return 0;
 
@@ -112,7 +112,7 @@ configure_obol_view(struct ged *gedp, void *view_ctx, int width, int height)
     fastf_t wb[6] = {-1, 1, -1, 1, -100, 100};
     dm_set_win_bounds(dmp, wb);
     dm_set_vp(dmp, rt_view_context_scale_storage_get(view_ctx));
-    rt_view_context_display_manager_set(view_ctx, dmp);
+    ged_view_context_display_manager_set(view_ctx, dmp);
     rt_view_context_dimensions_set(view_ctx, dm_get_width(dmp),
 	    dm_get_height(dmp));
     rt_view_context_unit_conversion_set(view_ctx,
@@ -137,7 +137,7 @@ open_gedp(const char *gfile, int width, int height)
     ged_exec_dm(gedp, 4, s_av);
 
     void *v = ged_view_active_ctx(gedp);
-    struct dm *dmp  = (struct dm *)rt_view_context_display_manager_get(v);
+    struct dm *dmp  = (struct dm *)ged_view_context_display_manager_get(v);
     if (!dmp) {
 	ged_close(gedp);
 	return NULL;
@@ -149,7 +149,7 @@ open_gedp(const char *gfile, int width, int height)
     fastf_t wb[6] = {-1, 1, -1, 1, -100, 100};
     dm_set_win_bounds(dmp, wb);
     dm_set_vp(dmp, rt_view_context_scale_storage_get(v));
-    rt_view_context_display_manager_set(v, dmp);
+    ged_view_context_display_manager_set(v, dmp);
     rt_view_context_dimensions_set(v, dm_get_width(dmp), dm_get_height(dmp));
     rt_view_context_unit_conversion_set(v,
 	gedp->dbip->dbi_local2base,
@@ -280,14 +280,14 @@ test_edit_matrix(const char *datadir)
     void *v = ged_view_active_ctx(gedp);
     ged_draw_set_highlight_state(gedp, 1);
 
-    rt_view_context_edit_matrix_clear(v);
+    ged_view_context_edit_matrix_clear(v);
 
     /* Apply a clear translation through the neutral edit-matrix state. */
     mat_t edit_mat;
     MAT_IDN(edit_mat);
     edit_mat[3] = 10.0;
 
-    int edit_matrix_ready = rt_view_context_edit_matrix_set(v, edit_mat);
+    int edit_matrix_ready = ged_view_context_edit_matrix_set(v, edit_mat);
     int fail = 0;
     if (!edit_matrix_ready) {
 	bu_log("FAIL: edit-matrix set failed on the active view context\n");
@@ -296,7 +296,7 @@ test_edit_matrix(const char *datadir)
 	bu_log("PASS: edit-matrix set accepted by the active view context\n");
     }
 
-    if (!rt_view_context_edit_matrix_clear(v)) {
+    if (!ged_view_context_edit_matrix_clear(v)) {
 	bu_log("FAIL: edit-matrix clear failed on the active view context\n");
 	fail = 1;
     } else {

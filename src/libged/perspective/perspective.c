@@ -50,7 +50,7 @@ ged_perspective_core(struct ged *gedp, int argc, const char *argv[])
     /* get the perspective angle */
     if (argc == 1) {
 	bu_vls_printf(gedp->ged_result_str, "%g",
-		ged_view_context_perspective_get(view_ctx));
+		rt_view_context_perspective_get(view_ctx));
 	return BRLCAD_OK;
     }
 
@@ -61,7 +61,7 @@ ged_perspective_core(struct ged *gedp, int argc, const char *argv[])
 	    return BRLCAD_ERROR;
 	}
 
-	ged_view_context_perspective_set(view_ctx, perspective);
+	rt_view_context_perspective_set(view_ctx, perspective);
 
 	mat_t pmat;
 	if (SMALL_FASTF < perspective) {
@@ -70,9 +70,9 @@ ged_perspective_core(struct ged *gedp, int argc, const char *argv[])
 	} else {
 	    MAT_COPY(pmat, bn_mat_identity);
 	}
-	ged_view_context_pmat_set(view_ctx, pmat);
+	rt_view_context_pmat_set(view_ctx, pmat);
 
-	ged_view_context_update(view_ctx);
+	rt_view_context_update(view_ctx);
 
 	return BRLCAD_OK;
     }

@@ -58,8 +58,8 @@ ged_get_eyemodel_core(struct ged *gedp, int argc, const char *argv[])
 
     _ged_rt_set_eye_model(gedp, eye_model);
     void *view_ctx = ged_view_active_ctx(gedp);
-    ged_view_context_info_get(&view_info, view_ctx);
-    ged_view_context_orientation_quat_get(quat, view_ctx);
+    rt_view_context_info_get(&view_info, view_ctx);
+    rt_view_context_orientation_quat_get(quat, view_ctx);
 
     bu_vls_printf(gedp->ged_result_str, "viewsize %.15e;\n", view_info.size);
     bu_vls_printf(gedp->ged_result_str, "orientation %.15e %.15e %.15e %.15e;\n",

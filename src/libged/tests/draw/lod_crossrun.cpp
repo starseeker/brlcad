@@ -78,7 +78,7 @@ open_and_attach(const char *gfile)
     ged_exec_dm(gedp, 4, s_av);
 
     void *v = ged_view_active_ctx(gedp);
-    struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(v);
+    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(v);
     dm_set_width(dmp, 512);
     dm_set_height(dmp, 512);
     dm_configure_win(dmp, 0);
@@ -86,7 +86,7 @@ open_and_attach(const char *gfile)
     fastf_t wb[6] = {-1, 1, -1, 1, -100, 100};
     dm_set_win_bounds(dmp, wb);
     dm_set_vp(dmp, rt_view_context_scale_storage_get(v));
-    rt_view_context_display_manager_set(v, dmp);
+    ged_view_context_display_manager_set(v, dmp);
     rt_view_context_dimensions_set(v, dm_get_width(dmp), dm_get_height(dmp));
     rt_view_context_unit_conversion_set(v,
 	gedp->dbip->dbi_local2base,
@@ -112,7 +112,7 @@ render_to_file(struct ged *gedp, const char *outfile)
     txn.view = v;
     ged_draw_apply_transaction(gedp, &txn, NULL);
 
-    struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(v);
+    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(v);
     unsigned char *bg1, *bg2;
     dm_get_bg(&bg1, &bg2, dmp);
     dm_set_bg(dmp, bg1[0], bg1[1], bg1[2], bg2[0], bg2[1], bg2[2]);

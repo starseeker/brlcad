@@ -424,9 +424,9 @@ ged_ps_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     view_ctx = ged_view_active_ctx(gedp);
-    ged_view_context_model2view_get(model2view, view_ctx);
-    perspective = ged_view_context_perspective_get(view_ctx);
-    ged_view_context_eye_pos_get(eye_pos, view_ctx);
+    rt_view_context_model2view_get(model2view, view_ctx);
+    perspective = rt_view_context_perspective_get(view_ctx);
+    rt_view_context_eye_pos_get(eye_pos, view_ctx);
     dl_ps(view_ctx, fp, border, bu_vls_addr(&font), bu_vls_addr(&title), bu_vls_addr(&creator), linewidth, scale, xoffset, yoffset, model2view, perspective, eye_pos, border_red, border_green, border_blue);
 
     fclose(fp);

@@ -233,9 +233,9 @@ rect_zoom(struct ged *gedp, void *view_ctx, struct rt_view_interactive_rect_stat
     rect_adjust_for_zoom(rect);
 
     /* find old view center */
-    ged_view_context_center_get(view_center, view_ctx);
-    ged_view_context_model2view_get(model2view, view_ctx);
-    ged_view_context_view2model_get(view2model, view_ctx);
+    rt_view_context_center_get(view_center, view_ctx);
+    rt_view_context_model2view_get(model2view, view_ctx);
+    rt_view_context_view2model_get(view2model, view_ctx);
     MAT_DELTAS_GET_NEG(old_model_center, view_center);
     MAT4X3PNT(old_view_center, model2view, old_model_center);
 
@@ -268,10 +268,10 @@ rect_zoom(struct ged *gedp, void *view_ctx, struct rt_view_interactive_rect_stat
 	return BRLCAD_OK;
 
     /* set the new model center */
-    ged_view_context_center_vec_set(view_ctx, new_model_center);
-    ged_view_context_scale_set(view_ctx,
-	    ged_view_context_scale_get(view_ctx) * sf);
-    ged_view_context_update(view_ctx);
+    rt_view_context_center_set(view_ctx, new_model_center);
+    rt_view_context_scale_set(view_ctx,
+	    rt_view_context_scale_get(view_ctx) * sf);
+    rt_view_context_update(view_ctx);
 
     return BRLCAD_OK;
 }
@@ -334,7 +334,7 @@ ged_rect_core(struct ged *gedp,
     }
 
     struct rt_view_interactive_rect_state rect;
-    if (!ged_view_context_interactive_rect_state_get(&rect, view_ctx))
+    if (!rt_view_context_interactive_rect_state_get(&rect, view_ctx))
 	return BRLCAD_ERROR;
 
     if (BU_STR_EQUAL(parameter, "draw")) {
@@ -348,7 +348,7 @@ ged_rect_core(struct ged *gedp,
 		rect.draw = 1;
 	    else
 		rect.draw = 0;
-	    ged_view_context_interactive_rect_state_set(view_ctx, &rect);
+	    rt_view_context_interactive_rect_state_set(view_ctx, &rect);
 
 	    return BRLCAD_OK;
 	}
@@ -369,7 +369,7 @@ ged_rect_core(struct ged *gedp,
 	    rect.aspect = (fastf_t)rect.cdim[X] / rect.cdim[Y];
 
 	    rect_image2view(&rect);
-	    ged_view_context_interactive_rect_state_set(view_ctx, &rect);
+	    rt_view_context_interactive_rect_state_set(view_ctx, &rect);
 
 	    return BRLCAD_OK;
 	}
@@ -389,7 +389,7 @@ ged_rect_core(struct ged *gedp,
 	    rect.dim[Y] = user_pt[Y];
 
 	    rect_image2view(&rect);
-	    ged_view_context_interactive_rect_state_set(view_ctx, &rect);
+	    rt_view_context_interactive_rect_state_set(view_ctx, &rect);
 
 	    return BRLCAD_OK;
 	}
@@ -409,7 +409,7 @@ ged_rect_core(struct ged *gedp,
 	    rect.pos[Y] = user_pt[Y];
 
 	    rect_image2view(&rect);
-	    ged_view_context_interactive_rect_state_set(view_ctx, &rect);
+	    rt_view_context_interactive_rect_state_set(view_ctx, &rect);
 
 	    return BRLCAD_OK;
 	}
@@ -429,7 +429,7 @@ ged_rect_core(struct ged *gedp,
 	    rect.bg[0] = (int)user_pt[X];
 	    rect.bg[1] = (int)user_pt[Y];
 	    rect.bg[2] = (int)user_pt[Z];
-	    ged_view_context_interactive_rect_state_set(view_ctx, &rect);
+	    rt_view_context_interactive_rect_state_set(view_ctx, &rect);
 
 	    return BRLCAD_OK;
 	}
@@ -449,7 +449,7 @@ ged_rect_core(struct ged *gedp,
 	    rect.color[0] = (int)user_pt[X];
 	    rect.color[1] = (int)user_pt[Y];
 	    rect.color[2] = (int)user_pt[Z];
-	    ged_view_context_interactive_rect_state_set(view_ctx, &rect);
+	    rt_view_context_interactive_rect_state_set(view_ctx, &rect);
 
 	    return BRLCAD_OK;
 	}
@@ -469,7 +469,7 @@ ged_rect_core(struct ged *gedp,
 		rect.line_style = 0;
 	    else
 		rect.line_style = 1;
-	    ged_view_context_interactive_rect_state_set(view_ctx, &rect);
+	    rt_view_context_interactive_rect_state_set(view_ctx, &rect);
 
 	    return BRLCAD_OK;
 	}
@@ -489,7 +489,7 @@ ged_rect_core(struct ged *gedp,
 		rect.line_width = 0;
 	    else
 		rect.line_width = i;
-	    ged_view_context_interactive_rect_state_set(view_ctx, &rect);
+	    rt_view_context_interactive_rect_state_set(view_ctx, &rect);
 
 	    return BRLCAD_OK;
 	}
@@ -510,7 +510,7 @@ ged_rect_core(struct ged *gedp,
 	if (argc == 0) {
 	    int ret = rect_zoom(gedp, view_ctx, &rect);
 	    if (ret == BRLCAD_OK)
-		ged_view_context_interactive_rect_state_set(view_ctx, &rect);
+		rt_view_context_interactive_rect_state_set(view_ctx, &rect);
 	    return ret;
 	}
 

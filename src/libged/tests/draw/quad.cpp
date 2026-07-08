@@ -87,7 +87,7 @@ dm_refresh(struct ged *gedp, int vnum)
     txn.view = v;
     ged_draw_apply_transaction(gedp, &txn, NULL);
 
-    struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(v);
+    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(v);
     if (!dmp)
 	return;
     /* Ensure rendering goes to this view's DM context, not the last-active
@@ -155,7 +155,7 @@ img_cmp(int vnum, int id, struct ged *gedp, const char *cdir, bool clear, int so
     void *v = views ? BU_PTBL_GET(views, vnum) : NULL;
     if (!v)
 	bu_exit(EXIT_FAILURE, "Invalid view specifier: %d\n", vnum);
-    struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(v);
+    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(v);
     int cnum = rt_view_context_is_independent(v) ? vnum : -1;
 
     const char *s_av[4] = {NULL};
@@ -508,7 +508,7 @@ main(int ac, char *av[]) {
 	s_av[6] = NULL;
 	ged_exec_dm(gedp, 6, s_av);
 
-	struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(v);
+	struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(v);
 	dm_set_width(dmp, 512);
 	dm_set_height(dmp, 512);
 
@@ -520,7 +520,7 @@ main(int ac, char *av[]) {
 	dm_set_win_bounds(dmp, windowbounds);
 
 	dm_set_vp(dmp, rt_view_context_scale_storage_get(v));
-	rt_view_context_display_manager_set(v, dmp);
+	ged_view_context_display_manager_set(v, dmp);
 	rt_view_context_dimensions_set(v, dm_get_width(dmp), dm_get_height(dmp));
 	rt_view_context_unit_conversion_set(v, gedp->dbip->dbi_local2base,
 	    gedp->dbip->dbi_base2local);

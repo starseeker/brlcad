@@ -50,7 +50,7 @@ ged_quat_core(struct ged *gedp, int argc, const char *argv[])
 
     /* return Viewrot as a quaternion */
     if (argc == 1) {
-	ged_view_context_orientation_quat_get(quat, view_ctx);
+	rt_view_context_orientation_quat_get(quat, view_ctx);
 	bu_vls_printf(gedp->ged_result_str, "%.12g %.12g %.12g %.12g", V4ARGS(quat));
 	return BRLCAD_OK;
     }
@@ -74,8 +74,8 @@ ged_quat_core(struct ged *gedp, int argc, const char *argv[])
 
     mat_t rotation;
     quat_quat2mat(rotation, quat);
-    ged_view_context_rotation_set(view_ctx, rotation);
-    ged_view_context_update(view_ctx);
+    rt_view_context_rotation_set(view_ctx, rotation);
+    rt_view_context_update(view_ctx);
 
     return BRLCAD_OK;
 }

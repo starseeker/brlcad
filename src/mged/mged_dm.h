@@ -411,7 +411,7 @@ mged_dm_adc_state_get(struct mged_dm *dm, struct rt_view_adc_state *adc)
 {
     if (!dm || !dm->dm_view_state || !dm->dm_view_state->vs_gvp)
 	return 0;
-    return ged_view_context_adc_state_get(adc, dm->dm_view_state->vs_gvp);
+    return rt_view_context_adc_state_get(adc, dm->dm_view_state->vs_gvp);
 }
 
 static inline int
@@ -419,7 +419,7 @@ mged_dm_grid_state_get(struct mged_dm *dm, struct rt_view_grid_state *grid)
 {
     if (!dm || !dm->dm_view_state || !dm->dm_view_state->vs_gvp)
 	return 0;
-    return ged_view_context_grid_state_get(grid, dm->dm_view_state->vs_gvp);
+    return rt_view_context_grid_state_get(grid, dm->dm_view_state->vs_gvp);
 }
 
 static inline void
@@ -427,7 +427,7 @@ mged_dm_grid_state_set(struct mged_dm *dm, const struct rt_view_grid_state *grid
 {
     if (!dm || !dm->dm_view_state || !dm->dm_view_state->vs_gvp)
 	return;
-    ged_view_context_grid_state_set(dm->dm_view_state->vs_gvp, grid);
+    rt_view_context_grid_state_set(dm->dm_view_state->vs_gvp, grid);
 }
 
 static inline int
@@ -436,7 +436,7 @@ mged_dm_view_settings_shared(struct mged_dm *a, struct mged_dm *b)
     if (!a || !a->dm_view_state || !a->dm_view_state->vs_gvp ||
 	    !b || !b->dm_view_state || !b->dm_view_state->vs_gvp)
 	return 0;
-    return ged_view_context_settings_shared(a->dm_view_state->vs_gvp, b->dm_view_state->vs_gvp);
+    return rt_view_context_settings_shared(a->dm_view_state->vs_gvp, b->dm_view_state->vs_gvp);
 }
 
 #define MGED_DM_NULL ((struct mged_dm *)NULL)
@@ -476,8 +476,8 @@ mged_dm_view_settings_shared(struct mged_dm *a, struct mged_dm *b)
 #define scroll_y s->mged_curr_dm->dm_scroll_y
 #define scroll_array s->mged_curr_dm->dm_scroll_array
 
-#define VIEWSIZE	(ged_view_context_size_get(view_state->vs_gvp))	/* Width of viewing cube */
-#define VIEWFACTOR	(1/ged_view_context_scale_get(view_state->vs_gvp))
+#define VIEWSIZE	(rt_view_context_size_get(view_state->vs_gvp))	/* Width of viewing cube */
+#define VIEWFACTOR	(1/rt_view_context_scale_get(view_state->vs_gvp))
 
 #define RATE_ROT_FACTOR 6.0
 #define ABS_ROT_FACTOR 180.0

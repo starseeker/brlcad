@@ -73,7 +73,7 @@ _label_cmd_create(void *bs, int argc, const char **argv)
 	}
     } else {
 	fastf_t fx, fy;
-	if (!ged_view_context_screen_to_view(&fx, &fy, gd->cv,
+	if (!rt_view_context_screen_to_view(&fx, &fy, gd->cv,
 		(int)p[0], (int)p[1])) {
 	    return BRLCAD_ERROR;
 	}
@@ -83,7 +83,7 @@ _label_cmd_create(void *bs, int argc, const char **argv)
 	point_t tp;
 	VMOVE(tp, p);
 	mat_t view2model;
-	ged_view_context_view2model_get(view2model, gd->cv);
+	rt_view_context_view2model_get(view2model, gd->cv);
 	MAT4X3PNT(p, view2model, tp);
     }
     point_t target;

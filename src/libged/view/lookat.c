@@ -95,22 +95,22 @@ ged_lookat_core(struct ged *gedp, int argc, const char *argv[])
     VSCALE(look, look, lbval);
 
     VSET(tmp, 0.0, 0.0, 1.0);
-    ged_view_context_view2model_get(view2model, view_ctx);
+    rt_view_context_view2model_get(view2model, view_ctx);
     MAT4X3PNT(eye, view2model, tmp);
 
     VSUB2(dir, eye, look);
     VUNITIZE(dir);
     bn_ae_vec(&new_az, &new_el, dir);
 
-    ged_view_context_aet_get(view_aet, view_ctx);
+    rt_view_context_aet_get(view_aet, view_ctx);
     VSET(view_aet, new_az, new_el, view_aet[Z]);
-    ged_view_context_aet_set(view_ctx, view_aet);
+    rt_view_context_aet_set(view_ctx, view_aet);
 
-    view_scale = ged_view_context_scale_get(view_ctx);
+    view_scale = rt_view_context_scale_get(view_ctx);
     VJOIN1(new_center, eye, -view_scale, dir);
-    ged_view_context_center_vec_set(view_ctx, new_center);
+    rt_view_context_center_set(view_ctx, new_center);
 
-    ged_view_context_update(view_ctx);
+    rt_view_context_update(view_ctx);
 
     return BRLCAD_OK;
 }

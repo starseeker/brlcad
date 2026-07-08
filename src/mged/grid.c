@@ -109,7 +109,7 @@ set_grid_draw(const struct bu_structparse *sdp,
     if (grid_auto_size && grid->draw) {
 	struct rt_view_info view_info;
 	void *view_ctx = view_state->vs_gvp;
-	ged_view_context_info_get(&view_info, view_ctx);
+	rt_view_context_info_get(&view_info, view_ctx);
 	fastf_t res = view_info.size * s->dbip->dbi_base2local / 64.0;
 
 	grid->res_h = res;
@@ -176,8 +176,8 @@ draw_grid(struct mged_state *s)
 	ZERO(grid->res_v))
 	return;
 
-    view_scale = ged_view_context_scale_get(view_ctx);
-    ged_view_context_model2view_get(model2view, view_ctx);
+    view_scale = rt_view_context_scale_get(view_ctx);
+    rt_view_context_model2view_get(model2view, view_ctx);
 
     inv_grid_res_h= 1.0 / grid->res_h;
     inv_grid_res_v= 1.0 / grid->res_v;
@@ -275,8 +275,8 @@ snap_to_grid(
 	ZERO(grid->res_v))
 	return;
 
-    view_scale = ged_view_context_scale_get(view_ctx);
-    ged_view_context_model2view_get(model2view, view_ctx);
+    view_scale = rt_view_context_scale_get(view_ctx);
+    rt_view_context_model2view_get(model2view, view_ctx);
 
     sf = view_scale * s->dbip->dbi_base2local;
     inv_sf = 1 / sf;
@@ -333,8 +333,8 @@ snap_keypoint_to_grid(struct mged_state *s)
 	return;
     }
 
-    ged_view_context_model2view_get(model2view, view_ctx);
-    ged_view_context_view2model_get(view2model, view_ctx);
+    rt_view_context_model2view_get(model2view, view_ctx);
+    rt_view_context_view2model_get(view2model, view_ctx);
 
     if (s->global_editing_state == ST_S_EDIT) {
 	MAT4X3PNT(view_pt, model2view, MEDIT(s)->curr_e_axes_pos);
@@ -371,16 +371,16 @@ snap_view_center_to_grid(struct mged_state *s)
     if (s->dbip == DBI_NULL)
 	return;
 
-    ged_view_context_center_get(view_center, view_ctx);
-    ged_view_context_model2view_get(model2view, view_ctx);
-    ged_view_context_view2model_get(view2model, view_ctx);
+    rt_view_context_center_get(view_center, view_ctx);
+    rt_view_context_model2view_get(model2view, view_ctx);
+    rt_view_context_view2model_get(view2model, view_ctx);
 
     MAT_DELTAS_GET_NEG(model_pt, view_center);
     MAT4X3PNT(view_pt, model2view, model_pt);
     snap_to_grid(s, &view_pt[X], &view_pt[Y]);
     MAT4X3PNT(model_pt, view2model, view_pt);
 
-    ged_view_context_center_vec_set(view_ctx, model_pt);
+    rt_view_context_center_set(view_ctx, model_pt);
     new_mats(s);
 
     VSCALE(model_pt, model_pt, s->dbip->dbi_base2local);
@@ -412,7 +412,7 @@ round_to_grid(struct mged_state *s, fastf_t *view_dx, fastf_t *view_dy)
 	ZERO(grid->res_v))
 	return;
 
-    view_scale = ged_view_context_scale_get(view_ctx);
+    view_scale = rt_view_context_scale_get(view_ctx);
     sf = view_scale * s->dbip->dbi_base2local;
     inv_sf = 1 / sf;
 
@@ -460,8 +460,8 @@ snap_view_to_grid(struct mged_state *s, fastf_t view_dx, fastf_t view_dy)
 	ZERO(grid->res_v))
 	return;
 
-    ged_view_context_center_get(view_center, view_ctx);
-    ged_view_context_view2model_get(view2model, view_ctx);
+    rt_view_context_center_get(view_center, view_ctx);
+    rt_view_context_view2model_get(view2model, view_ctx);
 
     round_to_grid(s, &view_dx, &view_dy);
 
@@ -474,7 +474,7 @@ snap_view_to_grid(struct mged_state *s, fastf_t view_dx, fastf_t view_dy)
     VSUB2(model_pt, dm_work_pt, diff);
 
     VSCALE(model_pt, model_pt, s->dbip->dbi_local2base);
-    ged_view_context_center_vec_set(view_ctx, model_pt);
+    rt_view_context_center_set(view_ctx, model_pt);
     new_mats(s);
 }
 

@@ -49,7 +49,7 @@ ged_aet_core(struct ged *gedp, int argc, const char *argv[])
 
     /* get aet */
     if (argc == 1) {
-	ged_view_context_aet_get(aet, view_ctx);
+	rt_view_context_aet_get(aet, view_ctx);
 	bn_encode_vect(gedp->ged_result_str, aet, 1);
 	return BRLCAD_OK;
     }
@@ -74,11 +74,11 @@ ged_aet_core(struct ged *gedp, int argc, const char *argv[])
 
 	if (iflag) {
 	    vect_t view_aet;
-	    ged_view_context_aet_get(view_aet, view_ctx);
+	    rt_view_context_aet_get(view_aet, view_ctx);
 	    VADD2(aet, view_aet, aet);
 	}
-	ged_view_context_aet_set(view_ctx, aet);
-	ged_view_context_update(view_ctx);
+	rt_view_context_aet_set(view_ctx, aet);
+	rt_view_context_update(view_ctx);
 
 	return BRLCAD_OK;
     }
@@ -109,11 +109,11 @@ ged_aet_core(struct ged *gedp, int argc, const char *argv[])
 
 	if (iflag) {
 	    vect_t view_aet;
-	    ged_view_context_aet_get(view_aet, view_ctx);
+	    rt_view_context_aet_get(view_aet, view_ctx);
 	    VADD2(aet, view_aet, aet);
 	}
-	ged_view_context_aet_set(view_ctx, aet);
-	ged_view_context_update(view_ctx);
+	rt_view_context_aet_set(view_ctx, aet);
+	rt_view_context_update(view_ctx);
 
 	return BRLCAD_OK;
     }

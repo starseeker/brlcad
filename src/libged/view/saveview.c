@@ -176,7 +176,7 @@ ged_saveview_core(struct ged *gedp, int argc, const char *argv[])
 	snprintf(outlog, 255, "%s.log", base);
     }
     view_ctx = ged_view_active_ctx(gedp);
-    perspective = ged_view_context_perspective_get(view_ctx);
+    perspective = rt_view_context_perspective_get(view_ctx);
 
     /* Do not specify -v option to rt; batch jobs must print everything. -Mike */
     fprintf(fp, "#!/bin/sh\n%s -M ", rtcmd);

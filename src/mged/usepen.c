@@ -107,7 +107,7 @@ static void
 highlight_from_y(struct mged_state *s, int y) {
     int count;
     void *view_ctx = view_state->vs_gvp;
-    int drawn_count = ged_view_context_refresh_drawn_count_get(view_ctx);
+    int drawn_count = rt_view_context_refresh_drawn_count_get(view_ctx);
 
     /*
      * Divide the mouse into one vertical zone per shape painted in the last
@@ -155,7 +155,7 @@ f_aip(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	return TCL_ERROR;
     }
 
-    if (!ged_view_context_refresh_drawn_count_get(view_ctx)) {
+    if (!rt_view_context_refresh_drawn_count_get(view_ctx)) {
 	return TCL_OK;
     } else if (s->global_editing_state != ST_S_PICK && s->global_editing_state != ST_O_PICK  && s->global_editing_state != ST_O_PATH) {
 	return TCL_OK;
@@ -218,7 +218,7 @@ wrt_view(struct mged_state *s, mat_t out, const mat_t change, const mat_t in)
     mat_t view_center;
     void *view_ctx = view_state->vs_gvp;
 
-    ged_view_context_center_get(view_center, view_ctx);
+    rt_view_context_center_get(view_center, view_ctx);
     bn_mat_mul(t1, view_center, in);
     bn_mat_mul(t2, change, t1);
 

@@ -203,7 +203,7 @@ sl_atol(struct scroll_item *mptr, double val)
     }
 
     void *view_ctx = view_state->vs_gvp;
-    view_scale = ged_view_context_scale_get(view_ctx);
+    view_scale = rt_view_context_scale_get(view_ctx);
     bu_vls_printf(&vls, "knob %s %f", mptr->scroll_cmd, val * view_scale * s->dbip->dbi_base2local);
     Tcl_Eval(s->interp, bu_vls_addr(&vls));
     bu_vls_free(&vls);

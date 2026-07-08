@@ -183,15 +183,15 @@ DisplayHash::hash(struct ged *gedp, bool db_index_check, bool qged_display_mode)
 	return false;
 
     d = dm_hash(dmp);
-    v = ged_view_context_hash(view_ctx);
+    v = rt_view_context_hash(view_ctx);
 
     if (qged_display_mode) {
 	if (db_index_check) {
 	    unsigned long long updated = ged_db_index_refresh_flags(gedp);
 	    l = (updated) ? l + 1 : 0;
-	    if (ged_view_context_cleared_get(view_ctx)) {
+	    if (rt_view_context_cleared_get(view_ctx)) {
 		l = 1;
-		ged_view_context_cleared_set(view_ctx, 0);
+		rt_view_context_cleared_set(view_ctx, 0);
 	    }
 	} else {
 	    l = 0;
@@ -201,7 +201,7 @@ DisplayHash::hash(struct ged *gedp, bool db_index_check, bool qged_display_mode)
     }
 
     g = ged_draw_scene_hash(gedp);
-    if (db_index_check && ged_view_context_refresh_dirty_get(view_ctx))
+    if (db_index_check && rt_view_context_refresh_dirty_get(view_ctx))
 	r = 1;
 
     return true;
@@ -628,7 +628,7 @@ GshState::view_update()
 	    }
 	    (void)ged_draw_obol_framebuffer_present(gedp);
 	    dm_draw_end(dmp);
-	    ged_view_context_refresh_complete(view_ctx);
+	    rt_view_context_refresh_complete(view_ctx);
 	}
     }
 #endif

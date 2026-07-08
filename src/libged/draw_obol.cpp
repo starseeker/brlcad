@@ -718,7 +718,7 @@ ged_obol_view_scope_name(void *view_ctx)
     if (!view_ctx)
 	return "shared";
 
-    const char *name = ged_view_context_name_get(view_ctx);
+    const char *name = rt_view_context_name_get(view_ctx);
     if (name && name[0])
 	return std::string(name);
 
@@ -1454,7 +1454,10 @@ ged_obol_semantic_path_string(const char *path)
 	const char *slash = strchr(cursor, '/');
 	const size_t component_len = slash ?
 				     static_cast<size_t>(slash - cursor) : strlen(cursor);
-	std::string component(cursor, component_len);
+	std::string component;
+	component.reserve(component_len);
+	for (size_t i = 0; i < component_len; i++)
+	    component.push_back(cursor[i]);
 	if (!semantic.empty())
 	    semantic += "/";
 	semantic += ged_obol_strip_comb_instance_suffix(component);
@@ -1983,7 +1986,7 @@ ged_obol_view_lod_policy_state_for_source(struct ged *gedp, void *view_ctx)
     state.viewDependent =
 	(policy.csg_enabled || policy.mesh_enabled) ? true : false;
     state.viewScale =
-	static_cast<float>(ged_view_context_scale_get(policy_view));
+	static_cast<float>(rt_view_context_scale_get(policy_view));
     state.lodScale = static_cast<float>(policy.scale);
     state.viewWidth = rt_view_context_width_get(policy_view);
     state.viewHeight = rt_view_context_height_get(policy_view);
@@ -5198,7 +5201,7 @@ ged_obol_faceplate_sync_framebuffer(BRLObolViewController *controller,
     }
 
     struct dm *dmp =
-	    static_cast<struct dm *>(rt_view_context_display_manager_get(view_ctx));
+	    static_cast<struct dm *>(ged_view_context_display_manager_get(view_ctx));
     struct fb *fbp = dmp ? dm_get_fb(dmp) : NULL;
     if (!fbp) {
 	ged_obol_faceplate_remove(controller, view_ctx, name);
@@ -5851,7 +5854,7 @@ ged_obol_depth_consider(void *view_ctx,
 			fastf_t &depth)
 {
     mat_t model2view;
-    ged_view_context_model2view_get(model2view, view_ctx);
+    rt_view_context_model2view_get(model2view, view_ctx);
 
     point_t model_pt;
     point_t view_pt;
@@ -7141,7 +7144,7 @@ ged_draw_obol_view_context_polygon_area(
 
     *area = token->controller->polygons().area(
 		ged_obol_polygon_handle_from_rt_ref(rt_ref),
-		ged_view_context_scale_get(view_ctx));
+		rt_view_context_scale_get(view_ctx));
     return 1;
 }
 
@@ -7173,7 +7176,7 @@ ged_draw_obol_view_context_polygon_overlap(
 		   ged_obol_polygon_handle_from_rt_ref(rt_ref),
 		   other,
 		   *tol,
-		   ged_view_context_scale_get(view_ctx)) ? 1 : 0;
+		   rt_view_context_scale_get(view_ctx)) ? 1 : 0;
     return 1;
 }
 
@@ -7368,7 +7371,7 @@ ged_draw_rt_obol_polygon_update_screen_pt(
 	return 0;
 
     point_t model_point = VINIT_ZERO;
-    if (!ged_view_context_screen_point(model_point, view_ctx,
+    if (!rt_view_context_screen_point_get(model_point, view_ctx,
 				       (fastf_t)x, (fastf_t)y))
 	return 0;
 
@@ -16743,7 +16746,7 @@ ged_obol_progressive_advance_provider(
     }
 
     if (local_status.hasMore && view_ctx)
-	ged_view_context_refresh_request(view_ctx, GED_VIEW_REFRESH_DRAW);
+	rt_view_context_refresh_request(view_ctx, GED_VIEW_REFRESH_DRAW);
     if (local_status.changed || local_status.hasMore)
 	controller->requestRender(local_status.changed ?
 				  "ged-progressive-update" : "ged-progressive-pending");

@@ -54,7 +54,7 @@ ged_ypr_core(struct ged *gedp, int argc, const char *argv[])
 	point_t pt = VINIT_ZERO;
 	mat_t view_rotation;
 
-	ged_view_context_rotation_get(view_rotation, view_ctx);
+	rt_view_context_rotation_get(view_rotation, view_ctx);
 	bn_mat_trn(mat, view_rotation);
 	anim_v_unpermute(mat);
 
@@ -91,8 +91,8 @@ ged_ypr_core(struct ged *gedp, int argc, const char *argv[])
     anim_v_permute(mat);
     mat_t rotation;
     bn_mat_trn(rotation, mat);
-    ged_view_context_rotation_set(view_ctx, rotation);
-    ged_view_context_update(view_ctx);
+    rt_view_context_rotation_set(view_ctx, rotation);
+    rt_view_context_update(view_ctx);
 
     return BRLCAD_OK;
 }

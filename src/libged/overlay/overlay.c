@@ -133,7 +133,7 @@ ged_overlay_core(struct ged *gedp, int argc, const char *argv[])
 	    bu_vls_free(&vname);
 	    return BRLCAD_ERROR;
 	}
-	size = ged_view_context_scale_get(view_ctx) * 0.01;
+	size = rt_view_context_scale_get(view_ctx) * 0.01;
     }
 
     argc = opt_ret;

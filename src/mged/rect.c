@@ -310,9 +310,9 @@ zoom_rect_area(struct mged_state *s)
 	return;
 
     adjust_rect_for_zoom(s);
-    ged_view_context_center_get(view_center, view_ctx);
-    ged_view_context_model2view_get(model2view, view_ctx);
-    ged_view_context_view2model_get(view2model, view_ctx);
+    rt_view_context_center_get(view_center, view_ctx);
+    rt_view_context_model2view_get(model2view, view_ctx);
+    rt_view_context_view2model_get(view2model, view_ctx);
 
     /* find old view center */
     MAT_DELTAS_GET_NEG(old_model_center, view_center);

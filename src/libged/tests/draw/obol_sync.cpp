@@ -1202,9 +1202,9 @@ exercise_multi_instance_transform_reuse(struct ged *gedp,
 	FAIL("GED multi-instance autoview should succeed");
     mat_t view_center_mat;
     point_t view_center;
-    ged_view_context_center_get(view_center_mat, ged_draw_active_view_ctx(gedp));
+    rt_view_context_center_get(view_center_mat, ged_draw_active_view_ctx(gedp));
     MAT_DELTAS_GET_NEG(view_center, view_center_mat);
-    if (ged_view_context_size_get(ged_draw_active_view_ctx(gedp)) < 31.9 ||
+    if (rt_view_context_size_get(ged_draw_active_view_ctx(gedp)) < 31.9 ||
 	    fabs(view_center[X] - 3.0) > 0.1)
 	FAIL("GED multi-instance autoview should use transformed scene bounds");
 
@@ -3806,7 +3806,7 @@ main(int argc, char **argv)
 		    box_record.ref);
 	    if (!lod_view_ctx)
 		FAIL("GED LoD view context should be available");
-	    if (!ged_view_context_scale_set(lod_view_ctx, 7.0))
+	    if (!rt_view_context_scale_set(lod_view_ctx, 7.0))
 		FAIL("GED LoD view context scale should be settable");
 	    struct rt_view_lod_policy lod_policy = RT_VIEW_LOD_POLICY_INIT;
 	    lod_policy.csg_enabled = 1;
@@ -3815,7 +3815,7 @@ main(int argc, char **argv)
 	    lod_policy.bot_threshold = 77;
 	    lod_policy.curve_scale = 2.25;
 	    lod_policy.point_scale = 3.25;
-	    if (!ged_view_context_lod_policy_apply(lod_view_ctx, &lod_policy))
+	    if (!rt_view_context_lod_policy_apply(lod_view_ctx, &lod_policy))
 		FAIL("GED LoD view policy should be settable");
 	    void *lod_view_ctxs[1] = {lod_view_ctx};
 	    ged_draw_index_stats_reset(gedp);
@@ -3980,7 +3980,7 @@ main(int argc, char **argv)
 	    stale_box_ref);
     if (!stale_lod_view_ctx)
 	FAIL("GED stale shape-ref view context should recover cached source state");
-    if (!ged_view_context_scale_set(stale_lod_view_ctx, 9.0))
+    if (!rt_view_context_scale_set(stale_lod_view_ctx, 9.0))
 	FAIL("GED stale shape-ref LoD context scale should be settable");
     struct rt_view_lod_policy stale_lod_policy = RT_VIEW_LOD_POLICY_INIT;
     stale_lod_policy.csg_enabled = 1;
@@ -3989,7 +3989,7 @@ main(int argc, char **argv)
     stale_lod_policy.bot_threshold = 91;
     stale_lod_policy.curve_scale = 6.25;
     stale_lod_policy.point_scale = 7.25;
-    if (!ged_view_context_lod_policy_apply(stale_lod_view_ctx,
+    if (!rt_view_context_lod_policy_apply(stale_lod_view_ctx,
 	    &stale_lod_policy))
 	FAIL("GED stale shape-ref LoD policy should be settable");
     void *stale_lod_view_ctxs[1] = {stale_lod_view_ctx};

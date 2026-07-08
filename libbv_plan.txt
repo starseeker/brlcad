@@ -1,123 +1,185 @@
 BRL-CAD libbv Refactor Plan
 ===========================
 
-Last refreshed: 2026-07-07
+Last refreshed: 2026-07-08
 
 Purpose
 -------
 
-libbv is the clean BRL-CAD view-mechanics library.  It restores the useful
-idea behind historical libbv without preserving its old API or the later BSG
-scene ownership model.
+libbv is BRL-CAD's scene-graph-free view mechanics library.  It keeps the
+useful idea of a shared view layer without preserving the old libbv API, the
+historical bview data model, or the temporary BSG scene ownership model.
 
-Active Goals
-------------
+The intended split is:
 
-* Centralize non-scene view math and view state so librt, libged, qtcad, and
-  applications do not grow incompatible implementations.
-* Keep scene, selection, LoD, command visualization, and display-object
-  behavior in Obol/libbrlobol.
-* Remove legacy BSG adapters once callers have native libbv and Obol paths.
+* libbv owns passive, display-independent view state and view math.
+* libbrlobol/Obol owns scene objects, visualization realization, interaction
+  objects, picking, selection, command visuals, framebuffer presentation, and
+  view-aware LoD realization.
+* librt owns geometry/evaluation algorithms.  It should not retain
+  application scene state.
+* libged, qtcad, MGED, and GSH own application policy and host integration.
 
-libbv Owns
-----------
+Current Boundary Decision
+-------------------------
 
-* View/camera state.
+libbv should contain data and algorithms that remain valid without a database,
+display manager, framebuffer server, Obol scene, Coin node, Tcl interpreter, or
+application command context.  If a feature needs a scene object, a database path,
+a display window, or a command policy decision, it is not a libbv feature.
+
+libbv Owns Now
+--------------
+
+The current `struct bv` already has the right core shape:
+
+* view/camera state and view sets.
+* view dimensions, scale, size, perspective, unit conversion, z clipping, and
+  frame bookkeeping.
 * model2view, view2model, pmodel2view, pmat, rotation, and center matrices.
-* View dimensions, scale, size, perspective, and unit conversion.
-* Autoview from explicit bounds.
-* Screen/view/model coordinate transforms.
-* Generic mouse/current-point state used for view manipulation.
-* Generic knob state and knob command interpretation.
-* View-set bookkeeping and display-independent dirty/refresh counters.
+* eye, aet, keypoint, current point, mouse state, and generic view-adjust state.
+* screen/view/model coordinate conversion and plane helpers.
+* autoview from explicit bounds.
+* generic knob state and knob command interpretation.
+* display-independent refresh/dirty counters, frame time, framebuffer mode,
+  cleared state, and opaque host user data.
 
-libbv Does Not Own
+Good Next libbv Candidates
+--------------------------
+
+The remaining useful libbv candidates are passive per-view data records:
+
+* Faceplate and overlay state records: grid, ADC, model axes, view axes, center
+  dot, scale overlay, parameter display, and interactive rectangle state.
+  These belong in libbv only as data plus display-independent defaults and
+  validation.  Rendering those records as Obol/Coin nodes remains
+  libbrlobol/Obol work.
+* Snap preferences: line snapping enabled/disabled, snap source flags, snap kind
+  masks, and snap tolerance factors can live in libbv as per-view user
+  preferences.  Snap candidate generation from database geometry, polygons,
+  features, or scene objects remains libbrlobol/libged/qtcad work.
+* View-set lifecycle and bookkeeping refinements that make multi-view sharing
+  simpler without adding scene ownership.
+
+Target Context Shape
+--------------------
+
+`rt_view_context_native` should not survive as a renamed RT wrapper.  The target
+is a real libbv context, either `struct bv` if the current object remains
+sufficient or a small `struct bv_context` if grouping view mechanics, passive
+overlay records, snap preferences, and view-set membership behind one type makes
+call sites clearer.
+
+That libbv context should be usable directly by librt algorithms, libged, qtcad,
+MGED, GSH, and libbrlobol without carrying retained scene state.  Code that
+needs scene state should hold a libbv context plus an owner-specific companion
+object, not extend libbv to become a scene facade.
+
+Destination Map for Non-libbv State
+-----------------------------------
+
+The non-libbv fields currently mixed into `rt_view_context_native` should move
+to their natural owners:
+
+* Display-manager pointers, framebuffer/window handles, and headless backend
+  attachment state move to the application/view host layer: MGED, GSH, qtcad,
+  and libged-facing host objects.
+* TclCAD data moves to libtclcad/MGED command integration state.
+* Callback tables, update hooks, redraw scheduling, and application event
+  integration move to the application/view host layer.  libbrlobol may expose
+  scene/cache change notifications, but the host decides how to schedule redraws.
+* Edit matrices and edit-preview behavior move to the modern editing stack:
+  librt edit operations and math, libged/MGED/qtcad command policy, and
+  libbrlobol/Obol preview/manipulator visualization.
+* Scene root refs, independent scene scopes, shared scene handles, and per-view
+  overlay roots move to libbrlobol/Obol view attachment state.
+* LoD policy, cache advancement callbacks, and per-view LoD realization move to
+  libbrlobol/Obol view state.  If a future generic "quality preference" is
+  useful, it can be a passive libbv preference, but not the realization logic.
+* Selection, picking, feature, and polygon adapters move to libbrlobol/Obol plus
+  libged/qtcad command policy.
+* Snap solving and snap candidate construction move to libbrlobol/libged/qtcad.
+  Only passive snap preferences are libbv candidates.
+
+Keep Out of libbv
+-----------------
+
+Do not move these into libbv:
+
+* Obol/Coin nodes, scene refs, independent scene scopes, CAD packets, or source
+  publication.
+* Database sources, display lists, drawable geometry, or command visualization
+  objects.
+* Selection state, picking results, feature stores, polygon stores, or polygon
+  editing behavior.
+* Actual snap candidate construction or snap hit testing against scene/database
+  content.
+* LoD payloads, LoD caches, cache-population workers, and per-view LoD scene
+  realization.  A future generic view-quality preference could be libbv data,
+  but current LoD policy drives libbrlobol/Obol rendering and should stay out
+  of libbv.
+* Edit preview/manipulator state.  Editing should use librt edit operations,
+  libged/MGED/qtcad policy, and libbrlobol/Obol manipulators.  libbv supplies
+  view math snapshots only.
+* Display-manager pointers, TclCAD data, callbacks, update hooks, display
+  windows, framebuffer protocol handling, Auth/TLS, or fbserv wire logic.
+* Compatibility surfaces whose only purpose is preserving retained BSG behavior.
+
+Current Code State
 ------------------
 
-* Obol or Coin scene nodes.
-* Database sources, display lists, or drawable geometry.
-* Selection, snapping, picking, polygons, feature stores, annotations, or
-  command visuals.
-* LoD payloads or draw caches.
-* Framebuffer protocol handling or display-manager windows.
-* TclCAD/qged/MGED application policy.
-
-Current State
--------------
-
-Implemented scaffold:
+Implemented libbv core:
 
 * `include/bv.h`
 * `include/bv/view.h`
 * `src/libbv/view.c`
 * `src/libbv/tests/view.c`
 
-Native librt view contexts are libbv-backed:
+Current transitional state:
 
-* `src/librt/view_context_native.c`
-* `src/librt/view_context_adapters.c`
-* `src/librt/view_context_private.h`
+* `src/librt/view_context_native.c` embeds `struct bv` and delegates core view
+  mechanics to `bv_*`.
+* `rt_view_context_native` still stores several fields that should not stay
+  there long term: display manager/TclCAD/callback host fields, edit matrix,
+  scene root and independent scope refs, LoD policy state, faceplate/overlay
+  records, and snap preferences.
+* Neutral `rt_view_scene_ref` helpers are separate from the BSG adapter path.
+  They are still migration scaffolding, not a reason for librt to own a scene.
+* The sketch polygon BSG adapter path has been retired.  Remaining polygon
+  handling should stay on native/Obol adapter paths and then move out of the
+  generic RT view facade as callers are cleaned up.
+* `include/rt/view_legacy_bsg.h` and `src/librt/view_legacy_bsg.c` are legacy
+  removal targets, not design references.
 
-Treat `rt_view_context_native` as disposable migration scaffolding over libbv,
-not as the long-term owner or a legacy surface.  ABI stability is not a
-goal for this branch.  The intended end state is direct libbv view mechanics
-plus libbrlobol/Obol scene behavior:
-
-* `struct bv` / `struct bv_set` are the real native view and view-set objects.
-* call sites should be rewritten, renamed, or deleted rather than preserving
-  `rt_view_context_*` legacy wrappers.
-* callbacks, display-manager pointers, TclCAD data pointers, and update hooks
-  are application-host state to move to libged/libtclcad hosts or eliminate.
-* scene refs, feature adapters, polygon adapters, selection adapters, picking,
-  snapping, command visuals, and LoD display behavior belong in libbrlobol/
-  Obol, not in librt or libbv.
-* geometry/edit helpers may use a `bv`/view snapshot as input, but librt
-  should not own retained interactive scene state.
-
-libbv now owns display-independent view bookkeeping formerly stored directly in
-native RT view contexts: refresh dirty flags, refresh enable/suppression state,
-drawn count, frame time, zclip, framebuffer mode, cleared state, and opaque
-host user data.  Native `rt_view_context_*` accessors delegate those operations
-to `bv_*` APIs instead of maintaining duplicate RT-side fields.
-
-Neutral `rt_view_context_create*` paths create native/libbv-backed contexts
-only as a migration bridge.  Native contexts return empty/no-op results for
-scene behaviors unless an Obol/libbrlobol adapter is installed.
-
-Remaining Work
+Migration Plan
 --------------
 
-Current `rt_view_context_native` field inventory:
-
-* `struct bv view` and `struct bv_set` are already the real libbv-owned view
-  state.
-* `display_manager`, `tclcad_data`, callbacks, and update hooks are
-  application-host state.  Move them to libged/libtclcad/application owners or
-  delete them where no modern caller needs them.
-* `scene_root_ref`, independent scene scope, feature/polygon/selection
-  adapters, picking, snapping, and LoD display behavior are libbrlobol/Obol
-  responsibilities.
-* edit matrices and faceplate/overlay records need a design decision: pure
-  data can move to libbv, but any scene-object realization belongs in
-  libbrlobol.
-
-1. Move remaining non-scene native RT view-context storage into libbv where it
-   is genuinely display-independent view state.  Good candidates are view-local
-   overlay/faceplate state records only if they remain data, not scene nodes.
-2. Move scene/interaction behavior currently exposed through `rt_view_context_*`
-   to libbrlobol/Obol adapters or delete it if it only preserves retained BSG
-   behavior.  Do not create a new large wrapper layer.
-3. Audit GED, qtcad, MGED/TclCAD, and GSH for callers that still create or
-   assume retained BSG view contexts; rewrite those callers to direct
-   libbv/libbrlobol ownership.
-4. Delete explicit BSG constructors, wrappers, and tests rather than carrying
-   legacy surfaces forward.
-5. Keep libbv tests focused on pure view mechanics: matrices, autoview,
-   transforms, knobs, view-set bookkeeping, and display-independent view
-   bookkeeping.
+1. Add libbv-owned passive faceplate/overlay records and accessors, with
+   display-independent defaults matching current native RT defaults.
+2. Add libbv-owned snap preference records if qtcad/MGED/GSH need shared
+   behavior.  Keep snap solving outside libbv.
+3. Decide whether `struct bv` remains the public context or whether to introduce
+   `struct bv_context` as a thin libbv grouping type.  Do not base this on the
+   existing RT wrapper layout.
+4. Retarget native `rt_view_context_*` faceplate/snap accessors to delegate to
+   libbv, then migrate production callers to direct `bv_*` or libbrlobol APIs.
+5. Move display manager, TclCAD pointers, callbacks, and update hooks into
+   their actual application/view host owners.
+6. Move scene root, independent scope, feature, polygon, selection, picking,
+   and LoD realization APIs to libbrlobol/Obol-facing ownership, or delete
+   them where they only support BSG compatibility.
+7. Delete `rt_view_context_native` once its remaining state has a libbv,
+   libbrlobol, application-host, or deleted destination.
+8. Delete BSG-specific constructors, wrappers, tests, and headers once no
+   production caller needs them.
+9. Keep libbv tests focused on pure view mechanics and passive per-view data.
+   Test scene realization, picking, selection, LoD, and framebuffer behavior in
+   libbrlobol/libged/qtcad/MGED/GSH tests.
 
 Verification
 ------------
+
+After code changes following this plan:
 
 * `ninja -C build libbv librt libged libqtcad`
 * `ctest --test-dir build -R '^(bv_basic|rt_view_info|ged_test_view_command|ged_test_obol_draw_sync|test_qtcad_obol)' --output-on-failure`

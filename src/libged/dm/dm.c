@@ -59,7 +59,7 @@ struct _ged_dm_info {
 static const char *
 _dm_view_name(const void *view_ctx)
 {
-    const char *name = ged_view_context_name_get(view_ctx);
+    const char *name = rt_view_context_name_get(view_ctx);
     return name ? name : "";
 }
 
@@ -667,7 +667,7 @@ _dm_cmd_attach(void *ds, int argc, const char **argv)
     }
 
     if (!target_view) {
-	target_view = ged_view_context_create_with_set(view_set);
+	target_view = rt_view_context_create_with_set(view_set);
 	ged_view_set_context_add(view_set, target_view);
 	// This view is being created by GED, so it needs to be cleaned
 	// up by GED as well
@@ -686,10 +686,10 @@ _dm_cmd_attach(void *ds, int argc, const char **argv)
     // either shouldn't be necessary or probably should come after
     // dm_open has its chance to set up dm width and height (which
     // should be used before the fallback)
-    int target_width = ged_view_context_width_get(target_view);
-    int target_height = ged_view_context_height_get(target_view);
+    int target_width = rt_view_context_width_get(target_view);
+    int target_height = rt_view_context_height_get(target_view);
     if (!target_width || !target_height) {
-	ged_view_context_dimensions_set(target_view,
+	rt_view_context_dimensions_set(target_view,
 		target_width ? target_width : 512,
 		target_height ? target_height : 512);
     }
@@ -710,7 +710,7 @@ _dm_cmd_attach(void *ds, int argc, const char **argv)
     }
 
     void *scale_view = active_view ? active_view : target_view;
-    dm_set_vp(dmp, ged_view_context_scale_storage_get(scale_view));
+    dm_set_vp(dmp, rt_view_context_scale_storage_get(scale_view));
     dm_configure_win(dmp, 0);
     dm_set_pathname(dmp, bu_vls_cstr(&dm_name));
     dm_set_zbuffer(dmp, 1);

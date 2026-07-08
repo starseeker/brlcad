@@ -118,9 +118,9 @@ ged_ert_core(struct ged *gedp, int argc, const char *argv[])
     //     gv_fb_mode = 0) — see src/libged/fbclear/fbclear.c.
     //   * Programmatic callers that need to restore the prior fb_mode
     //     should snapshot it before invoking ert and write it back after.
-    int prior_fb_mode = ged_view_context_framebuffer_mode_get(view_ctx);
+    int prior_fb_mode = rt_view_context_framebuffer_mode_get(view_ctx);
     if (!prior_fb_mode)
-	ged_view_context_framebuffer_mode_set(view_ctx, 2);
+	rt_view_context_framebuffer_mode_set(view_ctx, 2);
 
     /* Phase 3: Try the IPC fast path first (anonymous pipe / socketpair).
      * This avoids TCP port binding, firewall traversal, and port collisions.
@@ -173,7 +173,7 @@ ged_ert_core(struct ged *gedp, int argc, const char *argv[])
     double aspect = (double)width/(double)height;
     bu_vls_sprintf(&wstr, "%.14e", aspect);
     args.push_back(std::string(bu_vls_cstr(&wstr)));
-    fastf_t perspective = ged_view_context_perspective_get(view_ctx);
+    fastf_t perspective = rt_view_context_perspective_get(view_ctx);
     if (perspective > 0) {
 	args.push_back(std::string("-p"));
 	bu_vls_sprintf(&wstr, "%.14e", perspective);

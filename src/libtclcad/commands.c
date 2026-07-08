@@ -98,7 +98,7 @@ tclcad_commands_display_manager(const void *view_ctx)
 static const char *
 tclcad_commands_view_name(const void *view_ctx)
 {
-    const char *name = ged_view_context_name_get(view_ctx);
+    const char *name = rt_view_context_name_get(view_ctx);
     return name ? name : "";
 }
 
@@ -107,7 +107,7 @@ tclcad_commands_sync_dm_dimensions(void *target_ctx, const void *source_ctx)
 {
     struct dm *dmp = tclcad_commands_display_manager(source_ctx);
     if (dmp)
-	ged_view_context_dimensions_set(target_ctx, dm_get_width(dmp), dm_get_height(dmp));
+	rt_view_context_dimensions_set(target_ctx, dm_get_width(dmp), dm_get_height(dmp));
 }
 
 static int to_base2local(struct ged *gedp,
@@ -1589,7 +1589,7 @@ to_constrain_rmode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    ged_view_context_previous_mouse_set(gdvp, x, y);
+    rt_view_context_previous_mouse_set(gdvp, x, y);
     tclcad_view_polygon_mode_set(gdvp, TCLCAD_CONSTRAINED_ROTATE_MODE);
 
     struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
@@ -1653,7 +1653,7 @@ to_constrain_tmode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    ged_view_context_previous_mouse_set(gdvp, x, y);
+    rt_view_context_previous_mouse_set(gdvp, x, y);
     tclcad_view_polygon_mode_set(gdvp, TCLCAD_CONSTRAINED_TRANSLATE_MODE);
 
     if (dm_get_pathname(tclcad_commands_display_manager(gdvp))) {
@@ -1900,8 +1900,8 @@ to_data_move_func(struct ged *gedp,
     sf = 2.0 / width;
     vx = (mx - cx) * sf;
     vy = (cy - my) * sf;
-    ged_view_context_model2view_get(model2view, gdvp);
-    ged_view_context_view2model_get(view2model, gdvp);
+    rt_view_context_model2view_get(model2view, gdvp);
+    rt_view_context_view2model_get(view2model, gdvp);
 
     if (BU_STR_EQUAL(argv[1], "data_polygons")) {
 	size_t i, j, k;
@@ -2293,7 +2293,7 @@ to_data_move_object_mode_func(struct ged *gedp,
     }
 
     /* At the moment, only the TclCAD polygon mode is being used. */
-    ged_view_context_previous_mouse_set(gdvp, x, y);
+    rt_view_context_previous_mouse_set(gdvp, x, y);
     tclcad_view_polygon_mode_set(gdvp, TCLCAD_DATA_MOVE_OBJECT_MODE);
 
     return BRLCAD_OK;
@@ -2382,7 +2382,7 @@ to_data_move_point_mode_func(struct ged *gedp,
     }
 
     /* At the moment, only the TclCAD polygon mode is being used. */
-    ged_view_context_previous_mouse_set(gdvp, x, y);
+    rt_view_context_previous_mouse_set(gdvp, x, y);
     tclcad_view_polygon_mode_set(gdvp, TCLCAD_DATA_MOVE_POINT_MODE);
 
     return BRLCAD_OK;
@@ -2503,7 +2503,7 @@ to_data_pick_func(struct ged *gedp,
     sf = 2.0 / width;
     vx = (mx - cx) * sf;
     vy = (cy - my) * sf;
-    ged_view_context_model2view_get(model2view, gdvp);
+    rt_view_context_model2view_get(model2view, gdvp);
 
     /* check for polygon points */
     tclcad_polygon_state *data_polygons = tclcad_view_polygon_state_from_view_ctx(gdvp, 0);
@@ -3674,7 +3674,7 @@ to_idle_mode(struct ged *gedp,
     mode = tclcad_view_polygon_mode_from_view_ctx(gdvp);
 
     struct rt_view_lod_policy lod_policy = RT_VIEW_LOD_POLICY_INIT;
-    if (ged_view_context_lod_policy_get(&lod_policy, gdvp) &&
+    if (rt_view_context_lod_policy_get(&lod_policy, gdvp) &&
 	    lod_policy.csg_enabled &&
 	    lod_policy.zoom_refresh &&
 	    mode == TCLCAD_SCALE_MODE)
@@ -3700,7 +3700,7 @@ to_idle_mode(struct ged *gedp,
     }
 
     struct rt_view_grid_state grid;
-    (void)ged_view_context_grid_state_get(&grid, gdvp);
+    (void)rt_view_context_grid_state_get(&grid, gdvp);
     if (grid.snap &&
 	    (mode == TCLCAD_TRANSLATE_MODE ||
 	     mode == TCLCAD_CONSTRAINED_TRANSLATE_MODE))
@@ -4041,7 +4041,7 @@ to_move_arb_edge_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    ged_view_context_previous_mouse_set(gdvp, x, y);
+    rt_view_context_previous_mouse_set(gdvp, x, y);
     tclcad_view_polygon_mode_set(gdvp, TCLCAD_MOVE_ARB_EDGE_MODE);
 
     struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
@@ -4099,7 +4099,7 @@ to_move_arb_face_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    ged_view_context_previous_mouse_set(gdvp, x, y);
+    rt_view_context_previous_mouse_set(gdvp, x, y);
     tclcad_view_polygon_mode_set(gdvp, TCLCAD_MOVE_ARB_FACE_MODE);
 
     struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
@@ -4213,7 +4213,7 @@ to_bot_move_pnt_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    ged_view_context_previous_mouse_set(gdvp, x, y);
+    rt_view_context_previous_mouse_set(gdvp, x, y);
     tclcad_view_polygon_mode_set(gdvp, TCLCAD_MOVE_BOT_POINT_MODE);
 
     struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
@@ -4272,7 +4272,7 @@ to_bot_move_pnts_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    ged_view_context_previous_mouse_set(gdvp, x, y);
+    rt_view_context_previous_mouse_set(gdvp, x, y);
     tclcad_view_polygon_mode_set(gdvp, TCLCAD_MOVE_BOT_POINTS_MODE);
 
     struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
@@ -4333,7 +4333,7 @@ to_metaball_move_pnt_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    ged_view_context_previous_mouse_set(gdvp, x, y);
+    rt_view_context_previous_mouse_set(gdvp, x, y);
     tclcad_view_polygon_mode_set(gdvp, TCLCAD_MOVE_METABALL_POINT_MODE);
 
     struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
@@ -4391,7 +4391,7 @@ to_pipe_move_pnt_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    ged_view_context_previous_mouse_set(gdvp, x, y);
+    rt_view_context_previous_mouse_set(gdvp, x, y);
     tclcad_view_polygon_mode_set(gdvp, TCLCAD_MOVE_PIPE_POINT_MODE);
 
     struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
@@ -4503,7 +4503,7 @@ to_new_view(struct ged *gedp,
 	new_view_ctx = active_view_ctx;
 	reuse_active_view = 1;
     } else {
-	new_view_ctx = ged_view_context_create_with_set(view_set_ctx);
+	new_view_ctx = rt_view_context_create_with_set(view_set_ctx);
 	if (!new_view_ctx) {
 	    bu_vls_printf(gedp->ged_result_str, "Failed to create %s\n", argv[1]);
 	    return BRLCAD_ERROR;
@@ -4541,7 +4541,7 @@ to_new_view(struct ged *gedp,
 	    bu_ptbl_free(callbacks);
 	    BU_PUT(callbacks, struct bu_ptbl);
 	    if (!reuse_active_view)
-		ged_view_context_free(new_view_ctx);
+		rt_view_context_free(new_view_ctx);
 	    bu_free((void *)av, "to_new_view: av");
 
 	    bu_vls_printf(gedp->ged_result_str, "Failed to create %s\n", argv[1]);
@@ -4552,7 +4552,7 @@ to_new_view(struct ged *gedp,
 	    BU_PUT(callbacks, struct bu_ptbl);
 	    (void)dm_close(new_dmp);
 	    if (!reuse_active_view)
-		ged_view_context_free(new_view_ctx);
+		rt_view_context_free(new_view_ctx);
 	    bu_free((void *)av, "to_new_view: av");
 
 	    bu_vls_printf(gedp->ged_result_str, "Failed to initialize %s\n", argv[1]);
@@ -4567,7 +4567,7 @@ to_new_view(struct ged *gedp,
     BU_GET(tvd, struct tclcad_view_data);
     tclcad_view_data_init(tvd, current_top->to_gedp);
 
-    if (!ged_view_context_name_set(new_view_ctx, argv[name_index]) ||
+    if (!rt_view_context_name_set(new_view_ctx, argv[name_index]) ||
 	    !tclcad_view_data_bind_view_ctx(new_view_ctx, tvd) ||
 	    !ged_view_context_callbacks_set(new_view_ctx, callbacks)) {
 	struct dm *failed_dmp = tclcad_commands_display_manager(new_view_ctx);
@@ -4578,7 +4578,7 @@ to_new_view(struct ged *gedp,
 	BU_PUT(callbacks, struct bu_ptbl);
 	BU_PUT(tvd, struct tclcad_view_data);
 	if (!reuse_active_view)
-	    ged_view_context_free(new_view_ctx);
+	    rt_view_context_free(new_view_ctx);
 
 	bu_vls_printf(gedp->ged_result_str, "Failed to initialize %s\n", argv[1]);
 	return BRLCAD_ERROR;
@@ -4589,10 +4589,10 @@ to_new_view(struct ged *gedp,
 	ged_view_context_owned_add(gedp, new_view_ctx);
 
     struct rt_view_lod_policy lod_policy = RT_VIEW_LOD_POLICY_INIT;
-    if (ged_view_context_lod_policy_get(&lod_policy, new_view_ctx)) {
+    if (rt_view_context_lod_policy_get(&lod_policy, new_view_ctx)) {
 	lod_policy.point_scale = 1.0;
 	lod_policy.curve_scale = 1.0;
-	ged_view_context_lod_policy_apply(new_view_ctx, &lod_policy);
+	rt_view_context_lod_policy_apply(new_view_ctx, &lod_policy);
     }
 
     tvd->gdv_fbs.fbs_listener.fbsl_fbsp = &tvd->gdv_fbs;
@@ -4611,7 +4611,7 @@ to_new_view(struct ged *gedp,
 
     struct dm *path_dmp = tclcad_commands_display_manager(new_view_ctx);
     struct bu_vls *pathname = dm_get_pathname(path_dmp);
-    const char *view_name = ged_view_context_name_get(new_view_ctx);
+    const char *view_name = rt_view_context_name_get(new_view_ctx);
     if (!view_name)
 	view_name = argv[name_index];
     if (pathname && bu_vls_strlen(pathname)) {
@@ -4680,7 +4680,7 @@ to_orotate_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    ged_view_context_previous_mouse_set(gdvp, x, y);
+    rt_view_context_previous_mouse_set(gdvp, x, y);
     tclcad_view_polygon_mode_set(gdvp, TCLCAD_OROTATE_MODE);
 
     struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
@@ -4737,7 +4737,7 @@ to_oscale_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    ged_view_context_previous_mouse_set(gdvp, x, y);
+    rt_view_context_previous_mouse_set(gdvp, x, y);
     tclcad_view_polygon_mode_set(gdvp, TCLCAD_OSCALE_MODE);
 
     struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
@@ -4795,7 +4795,7 @@ to_otranslate_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    ged_view_context_previous_mouse_set(gdvp, x, y);
+    rt_view_context_previous_mouse_set(gdvp, x, y);
     tclcad_view_polygon_mode_set(gdvp, TCLCAD_OTRANSLATE_MODE);
 
     struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
@@ -4845,7 +4845,7 @@ to_paint_rect_area(struct ged *gedp,
 
     struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(gdvp);
     struct rt_view_interactive_rect_state rect = RT_VIEW_INTERACTIVE_RECT_STATE_INIT;
-    (void)ged_view_context_interactive_rect_state_get(&rect, gdvp);
+    (void)rt_view_context_interactive_rect_state_get(&rect, gdvp);
     (void)fb_refresh(tvd->gdv_fbs.fbs_fbp, rect.pos[X], rect.pos[Y],
 	    rect.dim[X], rect.dim[Y]);
 
@@ -5088,7 +5088,7 @@ to_rect_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    ged_view_context_previous_mouse_set(gdvp, x, dm_get_height(tclcad_commands_display_manager(gdvp)) - y);
+    rt_view_context_previous_mouse_set(gdvp, x, dm_get_height(tclcad_commands_display_manager(gdvp)) - y);
     tclcad_view_polygon_mode_set(gdvp, TCLCAD_RECTANGLE_MODE);
 
     ac = 4;
@@ -5101,7 +5101,7 @@ to_rect_mode(struct ged *gedp,
 
     fastf_t prev_x = 0.0;
     fastf_t prev_y = 0.0;
-    (void)ged_view_context_previous_mouse_get(&prev_x, &prev_y, gdvp);
+    (void)rt_view_context_previous_mouse_get(&prev_x, &prev_y, gdvp);
     bu_vls_printf(&x_vls, "%d", (int)prev_x);
     bu_vls_printf(&y_vls, "%d", (int)prev_y);
     av[1] = "pos";
@@ -5173,7 +5173,7 @@ to_rotate_arb_face_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    ged_view_context_previous_mouse_set(gdvp, x, y);
+    rt_view_context_previous_mouse_set(gdvp, x, y);
     tclcad_view_polygon_mode_set(gdvp, TCLCAD_ROTATE_ARB_FACE_MODE);
 
     struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
@@ -5232,7 +5232,7 @@ to_rotate_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    ged_view_context_previous_mouse_set(gdvp, x, y);
+    rt_view_context_previous_mouse_set(gdvp, x, y);
     tclcad_view_polygon_mode_set(gdvp, TCLCAD_ROTATE_MODE);
 
     struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
@@ -5394,7 +5394,7 @@ to_protate_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    ged_view_context_previous_mouse_set(gdvp, x, y);
+    rt_view_context_previous_mouse_set(gdvp, x, y);
     tclcad_view_polygon_mode_set(gdvp, TCLCAD_PROTATE_MODE);
 
     struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
@@ -5452,7 +5452,7 @@ to_pscale_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    ged_view_context_previous_mouse_set(gdvp, x, y);
+    rt_view_context_previous_mouse_set(gdvp, x, y);
     tclcad_view_polygon_mode_set(gdvp, TCLCAD_PSCALE_MODE);
 
     struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
@@ -5510,7 +5510,7 @@ to_ptranslate_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    ged_view_context_previous_mouse_set(gdvp, x, y);
+    rt_view_context_previous_mouse_set(gdvp, x, y);
     tclcad_view_polygon_mode_set(gdvp, TCLCAD_PTRANSLATE_MODE);
 
     struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
@@ -5568,7 +5568,7 @@ to_data_scale_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    ged_view_context_previous_mouse_set(gdvp, x, y);
+    rt_view_context_previous_mouse_set(gdvp, x, y);
     tclcad_view_polygon_mode_set(gdvp, TCLCAD_DATA_SCALE_MODE);
 
     struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
@@ -5624,7 +5624,7 @@ to_scale_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    ged_view_context_previous_mouse_set(gdvp, x, y);
+    rt_view_context_previous_mouse_set(gdvp, x, y);
     tclcad_view_polygon_mode_set(gdvp, TCLCAD_SCALE_MODE);
 
     struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
@@ -5683,9 +5683,9 @@ to_screen2model(struct ged *gedp,
     }
 
     tclcad_commands_sync_dm_dimensions(gdvp, gdvp);
-    ged_view_context_screen_to_view(&x, &y, gdvp, x, y);
+    rt_view_context_screen_to_view(&x, &y, gdvp, x, y);
     VSET(view, x, y, 0.0);
-    ged_view_context_view2model_get(view2model, gdvp);
+    rt_view_context_view2model_get(view2model, gdvp);
     MAT4X3PNT(model, view2model, view);
 
     bu_vls_printf(gedp->ged_result_str, "%lf %lf %lf", V3ARGS(model));
@@ -5734,7 +5734,7 @@ to_screen2view(struct ged *gedp,
     }
 
     tclcad_commands_sync_dm_dimensions(gdvp, gdvp);
-    ged_view_context_screen_to_view(&x, &y, gdvp, x, y);
+    rt_view_context_screen_to_view(&x, &y, gdvp, x, y);
     VSET(view, x, y, 0.0);
 
     bu_vls_printf(gedp->ged_result_str, "%lf %lf %lf", V3ARGS(view));
@@ -5773,7 +5773,7 @@ to_set_coord(struct ged *gedp,
 
     /* Get coord */
     if (argc == 2) {
-	bu_vls_printf(gedp->ged_result_str, "%c", ged_view_context_coord_get(gdvp));
+	bu_vls_printf(gedp->ged_result_str, "%c", rt_view_context_coord_get(gdvp));
 	return BRLCAD_OK;
     }
 
@@ -5783,7 +5783,7 @@ to_set_coord(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    ged_view_context_coord_set(gdvp, argv[2][0]);
+    rt_view_context_coord_set(gdvp, argv[2][0]);
 
     return BRLCAD_OK;
 }
@@ -5832,22 +5832,22 @@ to_snap_view(struct ged *gedp,
     fvy = vy;
 
     tclcad_commands_sync_dm_dimensions(gdvp, gdvp);
-    ged_view_context_unit_conversion_set(gdvp,
-	    ged_view_context_local2base_get(gdvp),
+    rt_view_context_unit_conversion_set(gdvp,
+	    rt_view_context_local2base_get(gdvp),
 	    gedp->dbip->dbi_base2local);
 
     ged_view_active_ctx_set(gedp, gdvp);
     struct rt_view_grid_state grid;
-    (void)ged_view_context_grid_state_get(&grid, gdvp);
-    if (!ged_view_context_snap_lines_get(gdvp) && !grid.snap) {
+    (void)rt_view_context_grid_state_get(&grid, gdvp);
+    if (!rt_view_context_snap_lines_get(gdvp) && !grid.snap) {
 	bu_vls_printf(gedp->ged_result_str, "%lf %lf", fvx, fvy);
 	return BRLCAD_OK;
     }
 
     {
-	unsigned long long snap_kinds = ged_view_context_prepare_tcl_snap(gdvp);
+	unsigned long long snap_kinds = rt_view_context_prepare_tcl_snap(gdvp);
 	if (snap_kinds)
-	    ged_view_context_snap_point_2d(gdvp, &fvx, &fvy, snap_kinds);
+	    rt_view_context_snap_point_2d(gdvp, &fvx, &fvy, snap_kinds);
     }
 
     bu_vls_printf(gedp->ged_result_str, "%lf %lf", fvx, fvy);
@@ -5959,7 +5959,7 @@ to_translate_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    ged_view_context_previous_mouse_set(gdvp, x, y);
+    rt_view_context_previous_mouse_set(gdvp, x, y);
     tclcad_view_polygon_mode_set(gdvp, TCLCAD_TRANSLATE_MODE);
 
     struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
@@ -6219,8 +6219,8 @@ to_vmake(struct ged *gedp,
 	mat_t view_center;
 	fastf_t view_scale;
 
-	ged_view_context_center_get(view_center, gdvp);
-	view_scale = ged_view_context_scale_get(gdvp);
+	rt_view_context_center_get(view_center, gdvp);
+	view_scale = rt_view_context_scale_get(gdvp);
 	sprintf(center, "%f %f %f",
 		-view_center[MDX],
 		-view_center[MDY],
@@ -6313,7 +6313,7 @@ to_vslew(struct ged *gedp,
 
     if (ret == BRLCAD_OK) {
 	struct rt_view_grid_state grid;
-	(void)ged_view_context_grid_state_get(&grid, gdvp);
+	(void)rt_view_context_grid_state_get(&grid, gdvp);
 	if (grid.snap) {
 
 	    tclcad_commands_sync_dm_dimensions(gdvp, gdvp);
@@ -6325,8 +6325,8 @@ to_vslew(struct ged *gedp,
 	    ged_exec_grid(gedp, 2, (const char **)av);
 	}
 
-	if (ged_view_context_snap_lines_get(gdvp)) {
-	    ged_view_context_center_linesnap(gdvp);
+	if (rt_view_context_snap_lines_get(gdvp)) {
+	    rt_view_context_center_linesnap(gdvp);
 	}
 
 	struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(gdvp);
@@ -6433,7 +6433,7 @@ to_zclip(struct ged *gedp,
 
     /* get zclip flag */
     if (argc == 2) {
-	bu_vls_printf(gedp->ged_result_str, "%d", ged_view_context_zclip_get(gdvp));
+	bu_vls_printf(gedp->ged_result_str, "%d", rt_view_context_zclip_get(gdvp));
 	return BRLCAD_OK;
     }
 
@@ -6448,7 +6448,7 @@ to_zclip(struct ged *gedp,
     else if (1 < zclip)
 	zclip = 1;
 
-    ged_view_context_zclip_set(gdvp, zclip);
+    rt_view_context_zclip_set(gdvp, zclip);
     dm_set_zclip(tclcad_commands_display_manager(gdvp), zclip);
     to_refresh_view(gdvp);
 

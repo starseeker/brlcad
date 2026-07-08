@@ -199,9 +199,9 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
     int my = xmotion->y;
     int dx = mx - dm_omx;
     int dy = my - dm_omy;
-    view_local_scale = ged_view_context_scale_get(view_ctx) * s->dbip->dbi_base2local;
-    ged_view_context_center_get(view_center, view_ctx);
-    ged_view_context_view2model_get(view2model, view_ctx);
+    view_local_scale = rt_view_context_scale_get(view_ctx) * s->dbip->dbi_base2local;
+    rt_view_context_center_get(view_center, view_ctx);
+    rt_view_context_view2model_get(view2model, view_ctx);
 
     switch (am_mode) {
 	case AMM_IDLE:

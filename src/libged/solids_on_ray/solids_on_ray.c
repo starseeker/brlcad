@@ -229,10 +229,10 @@ ged_solids_on_ray_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     void *view_ctx = ged_view_active_ctx(gedp);
-    ged_view_context_center_get(view_center, view_ctx);
-    ged_view_context_rotation_get(view_rotation, view_ctx);
-    ged_view_context_model2view_get(model2view, view_ctx);
-    view_scale = ged_view_context_scale_get(view_ctx);
+    rt_view_context_center_get(view_center, view_ctx);
+    rt_view_context_rotation_get(view_rotation, view_ctx);
+    rt_view_context_model2view_get(model2view, view_ctx);
+    view_scale = rt_view_context_scale_get(view_ctx);
 
     MAT_DELTAS_GET_NEG(ray_orig, view_center);
     /*

@@ -321,24 +321,24 @@ work:
 	switch (mode) {
 	    case -1:
 		/* First step:  put eye in center */
-		ged_view_context_scale_set(view_ctx, scale);
-		ged_view_context_rotation_set(view_ctx, rot);
-		ged_view_context_center_vec_set(view_ctx, eye_model);
+		rt_view_context_scale_set(view_ctx, scale);
+		rt_view_context_rotation_set(view_ctx, rot);
+		rt_view_context_center_set(view_ctx, eye_model);
 		new_mats(s);
 		/* Second step:  put eye in front */
 		VSET(xlate, 0.0, 0.0, -1.0);	/* correction factor */
 		mat_t view2model;
-		ged_view_context_view2model_get(view2model, view_ctx);
+		rt_view_context_view2model_get(view2model, view_ctx);
 		MAT4X3PNT(eye_model, view2model, xlate);
-		ged_view_context_center_vec_set(view_ctx, eye_model);
+		rt_view_context_center_set(view_ctx, eye_model);
 		new_mats(s);
 		break;
 	    case 0: {
 		mat_t top_view;
 		MAT_IDN(top_view);
-		ged_view_context_scale_set(view_ctx, scale);
-		ged_view_context_rotation_set(view_ctx, top_view);	/* top view */
-		ged_view_context_center_vec_set(view_ctx, eye_model);
+		rt_view_context_scale_set(view_ctx, scale);
+		rt_view_context_rotation_set(view_ctx, top_view);	/* top view */
+		rt_view_context_center_set(view_ctx, eye_model);
 		new_mats(s);
 		break;
 	    }

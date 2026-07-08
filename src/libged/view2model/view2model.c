@@ -46,7 +46,7 @@ ged_view2model_core(struct ged *gedp, int argc, const char *argv[])
     /* get the view2model matrix */
     if (argc == 1) {
 	mat_t view2model;
-	ged_view_context_view2model_get(view2model, view_ctx);
+	rt_view_context_view2model_get(view2model, view_ctx);
 	bn_encode_mat(gedp->ged_result_str, view2model, 1);
 	return BRLCAD_OK;
     }

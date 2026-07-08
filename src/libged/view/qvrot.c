@@ -50,9 +50,9 @@ usejoy(void *view_ctx, double xangle, double yangle, double zangle)
      */
     MAT_IDN(newrot);
     bn_mat_angles_rad(newrot, xangle, yangle, zangle);
-    ged_view_context_rotation_get(view_rotation, view_ctx);
+    rt_view_context_rotation_get(view_rotation, view_ctx);
     bn_mat_mul2(newrot, view_rotation);
-    ged_view_context_rotation_set(view_ctx, view_rotation);
+    rt_view_context_rotation_set(view_ctx, view_rotation);
 }
 
 
@@ -131,9 +131,9 @@ ged_qvrot_core(struct ged *gedp, int argc, const char *argv[])
 
     mat_t rotation;
     bn_mat_angles(rotation, 270.0 + el * RAD2DEG, 0.0, 270.0 - az * RAD2DEG);
-    ged_view_context_rotation_set(view_ctx, rotation);
+    rt_view_context_rotation_set(view_ctx, rotation);
     usejoy(view_ctx, 0.0, 0.0, theta*DEG2RAD);
-    ged_view_context_update(view_ctx);
+    rt_view_context_update(view_ctx);
 
     return BRLCAD_OK;
 }

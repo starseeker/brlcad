@@ -106,7 +106,7 @@ ged_rtwizard_core(struct ged *gedp, int argc, const char *argv[])
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     view_ctx = ged_view_active_ctx(gedp);
-    perspective = ged_view_context_perspective_get(view_ctx);
+    perspective = rt_view_context_perspective_get(view_ctx);
     if (perspective > 0)
 	/* rtwizard --no_gui -perspective p -i db.g --viewsize size --orientation "A B C D" --eye_pt "X Y Z" */
 	args = argc + 1 + 1 + 1 + 2 + 2 + 2 + 2 + 2;
@@ -124,8 +124,8 @@ ged_rtwizard_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     _ged_rt_set_eye_model(gedp, eye_model);
-    ged_view_context_info_get(&view_info, view_ctx);
-    ged_view_context_orientation_quat_get(quat, view_ctx);
+    rt_view_context_info_get(&view_info, view_ctx);
+    rt_view_context_orientation_quat_get(quat, view_ctx);
 
     bu_vls_printf(&size_vls, "%.15e", view_info.size);
     bu_vls_printf(&orient_vls, "%.15e %.15e %.15e %.15e", V4ARGS(quat));

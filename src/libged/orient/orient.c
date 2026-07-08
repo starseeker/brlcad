@@ -79,8 +79,8 @@ ged_orient_core(struct ged *gedp, int argc, const char *argv[])
     mat_t rotation;
     quat_quat2mat(rotation, quat);
     void *view_ctx = ged_view_active_ctx(gedp);
-    ged_view_context_rotation_set(view_ctx, rotation);
-    ged_view_context_update(view_ctx);
+    rt_view_context_rotation_set(view_ctx, rotation);
+    rt_view_context_update(view_ctx);
 
     return BRLCAD_OK;
 }

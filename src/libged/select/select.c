@@ -47,7 +47,7 @@ _ged_select_botpts(struct ged *gedp, void *view_ctx, struct rt_bot_internal *bot
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
 
     mat_t model2view;
-    ged_view_context_model2view_get(model2view, view_ctx);
+    rt_view_context_model2view_get(model2view, view_ctx);
 
     if (rflag) {
 	vr = vwidth;
@@ -535,7 +535,7 @@ ged_select_core(struct ged *gedp, int argc, const char *argv[])
 	    return ret;
 	} else {
 	    mat_t model2view;
-	    ged_view_context_model2view_get(model2view, view_ctx);
+	    rt_view_context_model2view_get(model2view, view_ctx);
 	    if (pflag)
 		return dl_select_partial(view_ctx, model2view, gedp->ged_result_str, vx, vy, vr, vr, 1);
 	    else
@@ -559,7 +559,7 @@ ged_select_core(struct ged *gedp, int argc, const char *argv[])
 	    return ret;
 	} else {
 	    mat_t model2view;
-	    ged_view_context_model2view_get(model2view, view_ctx);
+	    rt_view_context_model2view_get(model2view, view_ctx);
 	    if (pflag)
 		return dl_select_partial(view_ctx, model2view, gedp->ged_result_str, vx, vy, vw, vh, 0);
 	    else
@@ -654,7 +654,7 @@ ged_rselect_core(struct ged *gedp, int argc, const char *argv[])
 
     void *view_ctx = ged_view_active_ctx(gedp);
     struct rt_view_interactive_rect_state rect;
-    if (!ged_view_context_interactive_rect_state_get(&rect, view_ctx))
+    if (!rt_view_context_interactive_rect_state_get(&rect, view_ctx))
 	return BRLCAD_ERROR;
 
     if (botip != (struct rt_bot_internal *)NULL) {
@@ -672,7 +672,7 @@ ged_rselect_core(struct ged *gedp, int argc, const char *argv[])
 	return ret;
     } else {
 	mat_t model2view;
-	ged_view_context_model2view_get(model2view, view_ctx);
+	rt_view_context_model2view_get(model2view, view_ctx);
 	if (pflag)
 	    return dl_select_partial(view_ctx, model2view, gedp->ged_result_str,
 				     rect.x,

@@ -105,9 +105,9 @@ draw_e_axes(struct mged_state *s)
     struct rt_view_axes_state gas;
     void *view_ctx = view_state->vs_gvp;
 
-    ged_view_context_info_get(&view_info, view_ctx);
-    ged_view_context_model2view_get(model2view, view_ctx);
-    ged_view_context_rotation_get(view_rotation, view_ctx);
+    rt_view_context_info_get(&view_info, view_ctx);
+    rt_view_context_model2view_get(model2view, view_ctx);
+    rt_view_context_rotation_get(view_rotation, view_ctx);
 
     if (s->global_editing_state == ST_S_EDIT) {
 	MAT4X3PNT(v_ap1, model2view, MEDIT(s)->e_axes_pos);
@@ -155,9 +155,9 @@ draw_m_axes(struct mged_state *s)
     struct rt_view_axes_state gas;
     void *view_ctx = view_state->vs_gvp;
 
-    ged_view_context_info_get(&view_info, view_ctx);
-    ged_view_context_model2view_get(model2view, view_ctx);
-    ged_view_context_rotation_get(view_rotation, view_ctx);
+    rt_view_context_info_get(&view_info, view_ctx);
+    rt_view_context_model2view_get(model2view, view_ctx);
+    rt_view_context_rotation_get(view_rotation, view_ctx);
 
     VSCALE(m_ap, axes_state->ax_model_pos, s->dbip->dbi_local2base);
     MAT4X3PNT(v_ap, model2view, m_ap);
@@ -184,8 +184,8 @@ draw_v_axes(struct mged_state *s)
     void *view_ctx = view_state->vs_gvp;
 
     (void)s;
-    ged_view_context_info_get(&view_info, view_ctx);
-    ged_view_context_rotation_get(view_rotation, view_ctx);
+    rt_view_context_info_get(&view_info, view_ctx);
+    rt_view_context_rotation_get(view_rotation, view_ctx);
 
     VSET(v_ap,
 	 axes_state->ax_view_pos[X] * RT_INV_VIEW,

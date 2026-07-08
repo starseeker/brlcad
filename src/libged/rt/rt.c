@@ -89,7 +89,7 @@ ged_rt_core(struct ged *gedp, int argc, const char *argv[])
 
     void *view_ctx = ged_view_active_ctx(gedp);
     const char *fbdev = ged_rt_framebuffer_device(gedp);
-    perspective = ged_view_context_perspective_get(view_ctx);
+    perspective = rt_view_context_perspective_get(view_ctx);
     if (fbdev) {
 	args = argc + 9 + 2 + (int)ged_who_argc(gedp);
     } else {

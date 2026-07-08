@@ -377,7 +377,7 @@ attach_display(struct ged *gedp, const struct options &opts)
 
     void *view_ctx = ged_view_active_ctx(gedp);
     struct dm *dmp = view_ctx ?
-	(struct dm *)rt_view_context_display_manager_get(view_ctx) : NULL;
+	(struct dm *)ged_view_context_display_manager_get(view_ctx) : NULL;
     if (!dmp)
 	return BRLCAD_ERROR;
 
@@ -389,7 +389,7 @@ attach_display(struct ged *gedp, const struct options &opts)
     fastf_t windowbounds[6] = {-1, 1, -1, 1, -100, 100};
     dm_set_win_bounds(dmp, windowbounds);
     dm_set_vp(dmp, rt_view_context_scale_storage_get(view_ctx));
-    rt_view_context_display_manager_set(view_ctx, dmp);
+    ged_view_context_display_manager_set(view_ctx, dmp);
     rt_view_context_dimensions_set(view_ctx, dm_get_width(dmp),
 	dm_get_height(dmp));
     rt_view_context_unit_conversion_set(view_ctx,
@@ -422,7 +422,7 @@ run_render(struct ged *gedp)
 {
     void *view_ctx = ged_view_active_ctx(gedp);
     struct dm *dmp = view_ctx ?
-	(struct dm *)rt_view_context_display_manager_get(view_ctx) : NULL;
+	(struct dm *)ged_view_context_display_manager_get(view_ctx) : NULL;
     if (!dmp)
 	return BRLCAD_ERROR;
     if (dm_draw_begin(dmp) != BRLCAD_OK)

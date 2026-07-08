@@ -60,7 +60,7 @@ ged_view2model_vec_core(struct ged *gedp, int argc, const char *argv[])
     /* convert from double to fastf_t */
     VMOVE(view_vec, scan);
 
-    ged_view_context_rotation_get(view_rotation, view_ctx);
+    rt_view_context_rotation_get(view_rotation, view_ctx);
     bn_mat_inv(inv_Viewrot, view_rotation);
     MAT4X3PNT(model_vec, inv_Viewrot, view_vec);
 

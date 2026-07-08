@@ -48,7 +48,7 @@ struct _view_vZ_ctx {
 static const char *
 _view_name(const void *view_ctx)
 {
-    const char *name = ged_view_context_name_get(view_ctx);
+    const char *name = rt_view_context_name_get(view_ctx);
     return name ? name : "";
 }
 
@@ -343,12 +343,12 @@ _view_cmd_independent(void *bs, int argc, const char **argv)
     }
 
     if (argc == 1) {
-	bu_vls_printf(gedp->ged_result_str, "%d\n", ged_view_context_is_independent(view_ctx));
+	bu_vls_printf(gedp->ged_result_str, "%d\n", rt_view_context_is_independent(view_ctx));
 	return BRLCAD_OK;
     }
 
     if (BU_STR_EQUAL(argv[1], "1")) {
-	if (ged_view_context_is_independent(view_ctx))
+	if (rt_view_context_is_independent(view_ctx))
 	    return BRLCAD_OK;
 
 	struct _view_independent_path *paths = NULL;
@@ -373,7 +373,7 @@ _view_cmd_independent(void *bs, int argc, const char **argv)
 	ged_view_active_ctx_set(gedp, cv);
 
 	if (!ged_draw_view_context_scene_attached(view_ctx) ||
-		ged_view_context_independent_scope_is_null(view_ctx, 1)) {
+		rt_view_context_independent_scope_is_null(view_ctx, 1)) {
 	    _view_independent_paths_free(paths, path_cnt);
 	    bu_vls_printf(gedp->ged_result_str, "failed to create independent draw scope for %s\n",
 		    argv[0]);
@@ -395,12 +395,12 @@ _view_cmd_independent(void *bs, int argc, const char **argv)
     }
 
     if (BU_STR_EQUAL(argv[1], "0")) {
-	if (!ged_view_context_is_independent(view_ctx))
+	if (!rt_view_context_is_independent(view_ctx))
 	    return BRLCAD_OK;
 	const char *z_av[4] = {"Z", "-V", NULL, "-g"};
 	z_av[2] = _view_name(view_ctx);
 	ged_exec_Z(gedp, 4, z_av);
-	ged_view_context_independent_scope_destroy(view_ctx);
+	rt_view_context_independent_scope_destroy(view_ctx);
 	return BRLCAD_OK;
     }
 
@@ -586,7 +586,7 @@ _view_cmd_vZ(void *bs, int argc, const char **argv)
 	} else {
 	    /* Check all drawn view features and database leaves. */
 	    struct _view_vZ_ctx ctx;
-	    ged_view_context_model2view_get(ctx.model2view, gd->cv);
+	    rt_view_context_model2view_get(ctx.model2view, gd->cv);
 	    ctx.calc_mode = calc_mode;
 	    ctx.vZ = (calc_mode) ? -DBL_MAX : DBL_MAX;
 	    ctx.have_vz = 0;
@@ -623,7 +623,7 @@ _view_cmd_width(void *ds, int argc, const char **argv)
 
     struct _ged_view_info *gd = (struct _ged_view_info *)ds;
     struct rt_view_info view_info;
-    ged_view_context_info_get(&view_info, gd->cv);
+    rt_view_context_info_get(&view_info, gd->cv);
     bu_vls_printf(gd->gedp->ged_result_str, "%d\n", view_info.width);
     return BRLCAD_OK;
 }
@@ -641,7 +641,7 @@ _view_cmd_height(void *ds, int argc, const char **argv)
 
     struct _ged_view_info *gd = (struct _ged_view_info *)ds;
     struct rt_view_info view_info;
-    ged_view_context_info_get(&view_info, gd->cv);
+    rt_view_context_info_get(&view_info, gd->cv);
     bu_vls_printf(gd->gedp->ged_result_str, "%d\n", view_info.height);
     return BRLCAD_OK;
 }

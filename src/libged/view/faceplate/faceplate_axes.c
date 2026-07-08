@@ -703,16 +703,16 @@ _fp_cmd_model_axes(void *bs, int argc, const char **argv)
 
     if (argc == 1) {
 	struct rt_view_axes_state axes;
-	if (!ged_view_context_model_axes_state_get(&axes, view_ctx))
+	if (!rt_view_context_model_axes_state_get(&axes, view_ctx))
 	    return BRLCAD_ERROR;
 	if (BU_STR_EQUAL("1", argv[0])) {
 	    axes.draw = 1;
-	    ged_view_context_model_axes_state_set(view_ctx, &axes);
+	    rt_view_context_model_axes_state_set(view_ctx, &axes);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("0", argv[0])) {
 	    axes.draw = 0;
-	    ged_view_context_model_axes_state_set(view_ctx, &axes);
+	    rt_view_context_model_axes_state_set(view_ctx, &axes);
 	    return BRLCAD_OK;
 	}
     }
@@ -737,7 +737,7 @@ _fp_cmd_model_axes(void *bs, int argc, const char **argv)
     (void)bu_opt_parse(NULL, acnt, argv, d);
 
     struct rt_view_axes_state axes;
-    if (!ged_view_context_model_axes_state_get(&axes, view_ctx))
+    if (!rt_view_context_model_axes_state_get(&axes, view_ctx))
 	return BRLCAD_ERROR;
 
     struct _ged_fp_axes_info ainfo;
@@ -746,7 +746,7 @@ _fp_cmd_model_axes(void *bs, int argc, const char **argv)
 
     int ret = _ged_subcmd_exec(gedp, d, _fp_axes_cmds, "view faceplate model_axes", "[options] subcommand [args]", (void *)&ainfo, argc, argv, help, cmd_pos);
     if (ret == BRLCAD_OK)
-	ged_view_context_model_axes_state_set(view_ctx, &axes);
+	rt_view_context_model_axes_state_set(view_ctx, &axes);
     return ret;
 }
 
@@ -774,16 +774,16 @@ _fp_cmd_view_axes(void *bs, int argc, const char **argv)
 
     if (argc == 1) {
 	struct rt_view_axes_state axes;
-	if (!ged_view_context_view_axes_state_get(&axes, view_ctx))
+	if (!rt_view_context_view_axes_state_get(&axes, view_ctx))
 	    return BRLCAD_ERROR;
 	if (BU_STR_EQUAL("1", argv[0])) {
 	    axes.draw = 1;
-	    ged_view_context_view_axes_state_set(view_ctx, &axes);
+	    rt_view_context_view_axes_state_set(view_ctx, &axes);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("0", argv[0])) {
 	    axes.draw = 0;
-	    ged_view_context_view_axes_state_set(view_ctx, &axes);
+	    rt_view_context_view_axes_state_set(view_ctx, &axes);
 	    return BRLCAD_OK;
 	}
     }
@@ -808,7 +808,7 @@ _fp_cmd_view_axes(void *bs, int argc, const char **argv)
     (void)bu_opt_parse(NULL, acnt, argv, d);
 
     struct rt_view_axes_state axes;
-    if (!ged_view_context_view_axes_state_get(&axes, view_ctx))
+    if (!rt_view_context_view_axes_state_get(&axes, view_ctx))
 	return BRLCAD_ERROR;
 
     struct _ged_fp_axes_info ainfo;
@@ -817,7 +817,7 @@ _fp_cmd_view_axes(void *bs, int argc, const char **argv)
 
     int ret = _ged_subcmd_exec(gedp, d, _fp_axes_cmds, "view faceplate view_axes", "[options] subcommand [args]", (void *)&ainfo, argc, argv, help, cmd_pos);
     if (ret == BRLCAD_OK)
-	ged_view_context_view_axes_state_set(view_ctx, &axes);
+	rt_view_context_view_axes_state_set(view_ctx, &axes);
     return ret;
 }
 

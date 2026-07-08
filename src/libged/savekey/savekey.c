@@ -103,9 +103,9 @@ ged_savekey_core(struct ged *gedp, int argc, const char *argv[])
      * Eye is in conventional place.
      */
     view_ctx = ged_view_active_ctx(gedp);
-    ged_view_context_info_get(&view_info, view_ctx);
-    ged_view_context_rotation_get(rotation, view_ctx);
-    ged_view_context_view2model_get(view2model, view_ctx);
+    rt_view_context_info_get(&view_info, view_ctx);
+    rt_view_context_rotation_get(rotation, view_ctx);
+    rt_view_context_view2model_get(view2model, view_ctx);
     VSET(temp, 0.0, 0.0, 1.0);
     MAT4X3PNT(eye_model, view2model, temp);
     savekey_rt_oldwrite(fp, view_info.size, rotation, eye_model);

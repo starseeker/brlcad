@@ -54,7 +54,7 @@ ged_center_core(struct ged *gedp, int argc, const char *argv[])
     /* get view center */
     if (argc == 1) {
 	mat_t view_center;
-	ged_view_context_center_get(view_center, view_ctx);
+	rt_view_context_center_get(view_center, view_ctx);
 	MAT_DELTAS_GET_NEG(center, view_center);
 	if (gedp->dbip)
 	    VSCALE(center, center, gedp->dbip->dbi_base2local);
@@ -66,7 +66,7 @@ ged_center_core(struct ged *gedp, int argc, const char *argv[])
     if (argc == 2 && BU_STR_EQUAL(argv[1], "-v")) {
 	std::ostringstream ss;
 	mat_t view_center;
-	ged_view_context_center_get(view_center, view_ctx);
+	rt_view_context_center_get(view_center, view_ctx);
 	MAT_DELTAS_GET_NEG(center, view_center);
 	if (gedp->dbip)
 	    VSCALE(center, center, gedp->dbip->dbi_base2local);
@@ -152,8 +152,8 @@ ged_center_core(struct ged *gedp, int argc, const char *argv[])
 
     if (gedp->dbip)
 	VSCALE(center, center, gedp->dbip->dbi_local2base);
-    ged_view_context_center_vec_set(view_ctx, center);
-    ged_view_context_update(view_ctx);
+    rt_view_context_center_set(view_ctx, center);
+    rt_view_context_update(view_ctx);
 
     return BRLCAD_OK;
 }

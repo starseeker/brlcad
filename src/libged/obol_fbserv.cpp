@@ -131,8 +131,8 @@ public:
 	view_ctx = new_view_ctx;
 	host.attachController(controller, FALSE);
 
-	int width = ged_view_context_width_get(view_ctx);
-	int height = ged_view_context_height_get(view_ctx);
+	int width = rt_view_context_width_get(view_ctx);
+	int height = rt_view_context_height_get(view_ctx);
 	struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
 	if (dmp) {
 	    if (width <= 0)
@@ -422,7 +422,7 @@ private:
     void notifyUpdatedLocked()
     {
 	if (view_ctx)
-	    (void)ged_view_context_refresh_request(view_ctx,
+	    (void)rt_view_context_refresh_request(view_ctx,
 		    GED_VIEW_REFRESH_FRAMEBUFFER);
 	struct dm *dmp = view_ctx ?
 	    (struct dm *)ged_view_context_display_manager_get(view_ctx) : NULL;

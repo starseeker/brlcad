@@ -27,12 +27,12 @@ static int
 do_zoom(struct ged *gedp, double sf)
 {
     void *view_ctx = ged_view_active_ctx(gedp);
-    fastf_t view_scale = ged_view_context_scale_get(view_ctx) / sf;
+    fastf_t view_scale = rt_view_context_scale_get(view_ctx) / sf;
     if (view_scale < RT_VIEW_MIN_SCALE)
 	view_scale = RT_VIEW_MIN_SCALE;
 
-    ged_view_context_scale_set(view_ctx, view_scale);
-    ged_view_context_update(view_ctx);
+    rt_view_context_scale_set(view_ctx, view_scale);
+    rt_view_context_update(view_ctx);
 
     return BRLCAD_OK;
 }

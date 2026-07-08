@@ -88,8 +88,8 @@ ged_setview_core(struct ged *gedp, int argc, const char *argv[])
 
     mat_t rotation;
     bn_mat_angles(rotation, rvec[X], rvec[Y], rvec[Z]);
-    ged_view_context_rotation_set(view_ctx, rotation);
-    ged_view_context_update(view_ctx);
+    rt_view_context_rotation_set(view_ctx, rotation);
+    rt_view_context_update(view_ctx);
 
     return BRLCAD_OK;
 }

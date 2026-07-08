@@ -105,14 +105,14 @@ ged_align_core(struct ged *gedp, int argc, const char *argv[])
     // get center as point
     point_t tmp = {0.0, 0.0, 0.0};
     mat_t view_center;
-    ged_view_context_center_get(view_center, view_ctx);
+    rt_view_context_center_get(view_center, view_ctx);
     MAT4X3PNT(center, view_center, tmp);
     VSCALE(center, center, -1.0);
 
     // calculate eye / center / align_pt distances
     vect_t xlate = {0.0, 0.0, 1.0};
     mat_t view2model;
-    ged_view_context_view2model_get(view2model, view_ctx);
+    rt_view_context_view2model_get(view2model, view_ctx);
     MAT4X3PNT(eye, view2model, xlate);
     VSCALE(eye, eye, scale);
     double dist_eye_center = DIST_PNT_PNT(center, eye);
@@ -130,19 +130,19 @@ ged_align_core(struct ged *gedp, int argc, const char *argv[])
 
     // update view ae using direction
     vect_t view_aet;
-    ged_view_context_aet_get(view_aet, view_ctx);
+    rt_view_context_aet_get(view_aet, view_ctx);
     VSET(view_aet, new_az, new_el, view_aet[Z]);
-    ged_view_context_aet_set(view_ctx, view_aet);
+    rt_view_context_aet_set(view_ctx, view_aet);
 
     // update eye
     point_t new_eye;
     VJOIN1(new_eye, align, -dist, dir);	// new_eye = align_pt - dist * dir
-    ged_view_context_view2model_get(view2model, view_ctx);
+    rt_view_context_view2model_get(view2model, view_ctx);
     MAT_DELTAS_VEC_NEG(view2model, new_eye);
-    ged_view_context_view2model_set(view_ctx, view2model);
+    rt_view_context_view2model_set(view_ctx, view2model);
 
     // done. update the view
-    ged_view_context_update(view_ctx);
+    rt_view_context_update(view_ctx);
 
     return BRLCAD_OK;
 }

@@ -48,7 +48,7 @@ ged_rmat_core(struct ged *gedp, int argc, const char *argv[])
 
     /* get the rotation matrix */
     if (argc == 1) {
-	ged_view_context_rotation_get(rotation, view_ctx);
+	rt_view_context_rotation_get(rotation, view_ctx);
 	bn_encode_mat(gedp->ged_result_str, rotation, 1);
 	return BRLCAD_OK;
     } else if (argc == 2) {
@@ -56,8 +56,8 @@ ged_rmat_core(struct ged *gedp, int argc, const char *argv[])
 	if (bn_decode_mat(rotation, argv[1]) != 16)
 	    return BRLCAD_ERROR;
 
-	ged_view_context_rotation_set(view_ctx, rotation);
-	ged_view_context_update(view_ctx);
+	rt_view_context_rotation_set(view_ctx, rotation);
+	rt_view_context_update(view_ctx);
 
 	return BRLCAD_OK;
     }

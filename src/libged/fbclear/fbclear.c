@@ -109,7 +109,7 @@ ged_fbclear_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
 
     if (reset_mode)
-	ged_view_context_framebuffer_mode_set(view_ctx, 0);
+	rt_view_context_framebuffer_mode_set(view_ctx, 0);
 
     (void)dm_draw_begin(dmp);
     fb_refresh(fbp, 0, 0, fb_getwidth(fbp), fb_getheight(fbp));

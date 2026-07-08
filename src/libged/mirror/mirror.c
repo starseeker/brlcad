@@ -216,7 +216,7 @@ ged_mirror_core(struct ged *gedp, int argc, const char *argv[])
 	(void)ged_exec_draw(gedp, 2, e_argv);
 	view_ctx = ged_view_active_ctx(gedp);
 	if (view_ctx)
-	    ged_view_context_update(view_ctx);
+	    rt_view_context_update(view_ctx);
     }
 
     if (event_batch_opened)

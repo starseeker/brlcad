@@ -48,7 +48,7 @@ ged_pmat_core(struct ged *gedp, int argc, const char *argv[])
 
     /* get the perspective matrix */
     if (argc == 1) {
-	ged_view_context_pmat_get(pmat, view_ctx);
+	rt_view_context_pmat_get(pmat, view_ctx);
 	bn_encode_mat(gedp->ged_result_str, pmat, 1);
 	return BRLCAD_OK;
     } else if (argc == 2) {
@@ -56,8 +56,8 @@ ged_pmat_core(struct ged *gedp, int argc, const char *argv[])
 	if (bn_decode_mat(pmat, argv[1]) != 16)
 	    return BRLCAD_ERROR;
 
-	ged_view_context_pmat_set(view_ctx, pmat);
-	ged_view_context_update(view_ctx);
+	rt_view_context_pmat_set(view_ctx, pmat);
+	rt_view_context_update(view_ctx);
 
 	return BRLCAD_OK;
     }

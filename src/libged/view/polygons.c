@@ -109,7 +109,7 @@ _poly_cmd_create(void *bs, int argc, const char **argv)
     }
 
     point_t sp;
-    if (!ged_view_context_screen_point(sp, gd->cv, (fastf_t)x, (fastf_t)y)) {
+    if (!rt_view_context_screen_point_get(sp, gd->cv, (fastf_t)x, (fastf_t)y)) {
 	bu_vls_printf(gedp->ged_result_str, "Failed to calculate screen point\n");
 	return BRLCAD_ERROR;
     }

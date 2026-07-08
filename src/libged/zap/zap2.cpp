@@ -50,7 +50,7 @@ zap_has_independent_views(struct ged *gedp)
     struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	void *view_ctx = (void *)BU_PTBL_GET(views, i);
-	if (view_ctx && ged_view_context_is_independent(view_ctx))
+	if (view_ctx && rt_view_context_is_independent(view_ctx))
 	    return 1;
     }
 
@@ -128,7 +128,7 @@ ged_zap2_core(struct ged *gedp, int argc, const char *argv[])
 	}
 
 	int flags = GED_VIEW_CLEAR_LOCAL;
-	if (clear_solid_objs && ged_view_context_is_independent(view_ctx)) {
+	if (clear_solid_objs && rt_view_context_is_independent(view_ctx)) {
 	    flags |= GED_VIEW_CLEAR_DB;
 	    zap_draw_db_scope(gedp, view_ctx);
 	}
@@ -137,7 +137,7 @@ ged_zap2_core(struct ged *gedp, int argc, const char *argv[])
 	    flags |= GED_VIEW_CLEAR_VIEW;
 
 	if (!ged_view_context_clear(view_ctx, flags))
-	    ged_view_context_cleared_set(view_ctx, 1);
+	    rt_view_context_cleared_set(view_ctx, 1);
 
 	bu_vls_free(&cvls);
 	return BRLCAD_OK;
@@ -155,15 +155,15 @@ ged_zap2_core(struct ged *gedp, int argc, const char *argv[])
     struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	view_ctx = (void *)BU_PTBL_GET(views, i);
-	if (ged_view_context_is_independent(view_ctx) && !clear_all_views)
+	if (rt_view_context_is_independent(view_ctx) && !clear_all_views)
 	    continue;
 	int flags = 0;
 	if (clear_solid_objs) {
 	    flags |= GED_VIEW_CLEAR_DB;
 	    if (!full_canonical_clear &&
-		    (ged_view_context_is_independent(view_ctx) || !cleared_shared_db))
+		    (rt_view_context_is_independent(view_ctx) || !cleared_shared_db))
 		zap_draw_db_scope(gedp,
-		    ged_view_context_is_independent(view_ctx) ? view_ctx : NULL);
+		    rt_view_context_is_independent(view_ctx) ? view_ctx : NULL);
 	}
 	if (clear_view_objs)
 	    flags |= GED_VIEW_CLEAR_VIEW;
@@ -174,7 +174,7 @@ ged_zap2_core(struct ged *gedp, int argc, const char *argv[])
 	    lret = ged_view_context_clear(view_ctx, flags);
 	}
 	if (!nret || !lret)
-	    ged_view_context_cleared_set(view_ctx, 1);
+	    rt_view_context_cleared_set(view_ctx, 1);
 
 	ret = BRLCAD_OK;
     }

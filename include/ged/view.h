@@ -33,22 +33,11 @@
 #include "bg/polygon.h"
 #include "rt/db_fullpath.h"
 #include "rt/db_instance.h"
+#include "rt/view.h"
 #include "ged/defines.h"
 
 __BEGIN_DECLS
 
-struct rt_view_grid_state;
-struct rt_view_info;
-struct rt_view_interactive_rect_state;
-struct rt_view_axes_state;
-struct rt_view_other_state;
-struct rt_view_params_state;
-struct rt_view_adc_state;
-struct rt_view_knobs;
-struct rt_view_knob_values;
-struct rt_view_lod_policy;
-struct rt_view_mouse_delta_settings;
-struct bu_data_hash_state;
 struct bu_ptbl;
 
 typedef void (*ged_view_context_update_callback_t)(void *view_ctx, void *data);
@@ -124,43 +113,23 @@ GED_EXPORT extern int ged_rot_args(struct ged *gedp, int argc, const char *argv[
 GED_EXPORT extern int ged_scale_args(struct ged *gedp, int argc, const char *argv[], fastf_t *sf1, fastf_t *sf2, fastf_t *sf3);
 
 /**
- * Opaque view-context scale helpers.
+ * GED-owned view-context host and policy helpers.
+ *
+ * Generic view mechanics are intentionally not mirrored here.  Callers that
+ * need scale, matrices, mouse state, knobs, passive faceplate records, or
+ * other display-independent view data should use the lower-level view API
+ * directly until those records complete their libbv migration.
  */
-GED_EXPORT extern fastf_t ged_view_context_scale_get(const void *view_ctx);
-GED_EXPORT extern int ged_view_context_scale_set(void *view_ctx, fastf_t scale);
-GED_EXPORT extern int ged_view_context_scale_state_set(void *view_ctx, fastf_t scale, fastf_t initial_scale, fastf_t absolute_scale, fastf_t size, fastf_t inverse_size);
-GED_EXPORT extern fastf_t ged_view_context_initial_scale_get(const void *view_ctx);
-GED_EXPORT extern int ged_view_context_initial_scale_set(void *view_ctx, fastf_t scale);
-GED_EXPORT extern fastf_t ged_view_context_absolute_scale_get(const void *view_ctx);
-GED_EXPORT extern int ged_view_context_absolute_scale_set(void *view_ctx, fastf_t scale);
-GED_EXPORT extern int ged_view_context_update(void *view_ctx);
 GED_EXPORT extern int ged_view_context_is_independent(const void *view_ctx);
 GED_EXPORT extern int ged_view_context_independent_scope_is_null(void *view_ctx, int create);
 GED_EXPORT extern void ged_view_context_independent_scope_destroy(void *view_ctx);
 GED_EXPORT extern size_t ged_view_context_clear(void *view_ctx, int flags);
-GED_EXPORT extern int ged_view_context_cleared_get(const void *view_ctx);
-GED_EXPORT extern int ged_view_context_cleared_set(void *view_ctx, int cleared);
-GED_EXPORT extern unsigned long long ged_view_context_hash(const void *view_ctx);
 GED_EXPORT extern void *ged_view_context_user_data_get(const void *view_ctx);
 GED_EXPORT extern int ged_view_context_user_data_set(void *view_ctx, void *user_data);
 GED_EXPORT extern int ged_view_context_tclcad_data_set(void *view_ctx, void *tcl_data);
 GED_EXPORT extern int ged_view_context_callbacks_set(void *view_ctx, struct bu_ptbl *callbacks);
-GED_EXPORT extern int ged_view_context_refresh_drawn_count_get(const void *view_ctx);
-GED_EXPORT extern int ged_view_context_refresh_drawn_count_set(void *view_ctx, int count);
-GED_EXPORT extern int ged_view_context_refresh_request(void *view_ctx, uint32_t flags);
-GED_EXPORT extern int ged_view_context_refresh_dirty_get(const void *view_ctx);
-GED_EXPORT extern uint32_t ged_view_context_refresh_consume(void *view_ctx);
-GED_EXPORT extern int ged_view_context_refresh_complete(void *view_ctx);
-GED_EXPORT extern int ged_view_context_refresh_enabled_get(const void *view_ctx);
-GED_EXPORT extern int ged_view_context_refresh_enabled_set(void *view_ctx, int enabled);
-GED_EXPORT extern int ged_view_context_refresh_suppressed_get(const void *view_ctx);
-GED_EXPORT extern int ged_view_context_refresh_suppress_begin(void *view_ctx);
-GED_EXPORT extern int ged_view_context_refresh_suppress_end(void *view_ctx);
 GED_EXPORT extern int ged_view_context_edit_matrix_set(void *view_ctx, matp_t edit_mat);
 GED_EXPORT extern int ged_view_context_edit_matrix_clear(void *view_ctx);
-GED_EXPORT extern uint64_t ged_view_context_frame_revision_get(const void *view_ctx);
-GED_EXPORT extern const char *ged_view_context_name_get(const void *view_ctx);
-GED_EXPORT extern int ged_view_context_name_set(void *view_ctx, const char *name);
 GED_EXPORT extern void *ged_view_context_create(void);
 GED_EXPORT extern void *ged_view_context_create_with_set(void *view_set_ctx);
 GED_EXPORT extern void *ged_view_context_create_copy_with_set(const void *src_view_ctx, void *view_set_ctx);
@@ -169,93 +138,6 @@ GED_EXPORT extern int ged_view_set_context_add(void *view_set_ctx, void *view_ct
 GED_EXPORT extern int ged_view_context_update_callback_set(void *view_ctx, ged_view_context_update_callback_t callback, void *data);
 GED_EXPORT extern void *ged_view_context_display_manager_get(const void *view_ctx);
 GED_EXPORT extern int ged_view_context_display_manager_set(void *view_ctx, void *dmp);
-GED_EXPORT extern int ged_view_context_width_get(const void *view_ctx);
-GED_EXPORT extern int ged_view_context_height_get(const void *view_ctx);
-GED_EXPORT extern int ged_view_context_dimensions_set(void *view_ctx, int width, int height);
-GED_EXPORT extern fastf_t *ged_view_context_scale_storage_get(void *view_ctx);
-GED_EXPORT extern int ged_view_context_framebuffer_mode_get(const void *view_ctx);
-GED_EXPORT extern int ged_view_context_framebuffer_mode_set(void *view_ctx, int mode);
-GED_EXPORT extern fastf_t ged_view_context_perspective_get(const void *view_ctx);
-GED_EXPORT extern int ged_view_context_perspective_set(void *view_ctx, fastf_t perspective);
-GED_EXPORT extern fastf_t ged_view_context_size_get(const void *view_ctx);
-GED_EXPORT extern int ged_view_context_size_set(void *view_ctx, fastf_t size);
-GED_EXPORT extern fastf_t ged_view_context_inverse_size_get(const void *view_ctx);
-GED_EXPORT extern fastf_t ged_view_context_local2base_get(const void *view_ctx);
-GED_EXPORT extern fastf_t ged_view_context_base2local_get(const void *view_ctx);
-GED_EXPORT extern void ged_view_context_eye_pos_get(point_t eye_pos, const void *view_ctx);
-GED_EXPORT extern int ged_view_context_eye_pos_set(void *view_ctx, const point_t eye_pos);
-GED_EXPORT extern void ged_view_context_keypoint_get(point_t keypoint, const void *view_ctx);
-GED_EXPORT extern int ged_view_context_keypoint_set(void *view_ctx, const point_t keypoint);
-GED_EXPORT extern char ged_view_context_rotate_about_get(const void *view_ctx);
-GED_EXPORT extern int ged_view_context_rotate_about_set(void *view_ctx, char rotate_about);
-GED_EXPORT extern char ged_view_context_coord_get(const void *view_ctx);
-GED_EXPORT extern int ged_view_context_coord_set(void *view_ctx, char coord);
-GED_EXPORT extern int ged_view_context_zclip_get(const void *view_ctx);
-GED_EXPORT extern int ged_view_context_zclip_set(void *view_ctx, int zclip);
-GED_EXPORT extern int ged_view_context_autoview(void *view_ctx, fastf_t scale, int all_view_objs);
-GED_EXPORT extern int ged_view_context_autoview_bounds(void *view_ctx, fastf_t scale, const point_t min, const point_t max);
-GED_EXPORT extern int ged_view_context_screen_to_view(fastf_t *fx, fastf_t *fy, void *view_ctx, fastf_t x, fastf_t y);
-GED_EXPORT extern int ged_view_context_screen_point(point_t point, void *view_ctx, fastf_t x, fastf_t y);
-GED_EXPORT extern int ged_view_context_previous_mouse_get(fastf_t *x, fastf_t *y, const void *view_ctx);
-GED_EXPORT extern int ged_view_context_previous_mouse_set(void *view_ctx, fastf_t x, fastf_t y);
-GED_EXPORT extern int ged_view_context_mouse_delta_settings_get(struct rt_view_mouse_delta_settings *settings, const void *view_ctx);
-GED_EXPORT extern int ged_view_context_mouse_state_set(void *view_ctx, int x, int y);
-GED_EXPORT extern void ged_view_context_model2view_get(mat_t model2view, const void *view_ctx);
-GED_EXPORT extern int ged_view_context_model2view_set(void *view_ctx, const mat_t model2view);
-GED_EXPORT extern void ged_view_context_view2model_get(mat_t view2model, const void *view_ctx);
-GED_EXPORT extern int ged_view_context_view2model_set(void *view_ctx, const mat_t view2model);
-GED_EXPORT extern void ged_view_context_pmodel2view_get(mat_t pmodel2view, const void *view_ctx);
-GED_EXPORT extern int ged_view_context_pmodel2view_set(void *view_ctx, const mat_t pmodel2view);
-GED_EXPORT extern void ged_view_context_pmat_get(mat_t pmat, const void *view_ctx);
-GED_EXPORT extern int ged_view_context_pmat_set(void *view_ctx, const mat_t pmat);
-GED_EXPORT extern void ged_view_context_center_get(mat_t center, const void *view_ctx);
-GED_EXPORT extern int ged_view_context_center_vec_set(void *view_ctx, const point_t center);
-GED_EXPORT extern void ged_view_context_rotation_get(mat_t rotation, const void *view_ctx);
-GED_EXPORT extern int ged_view_context_rotation_set(void *view_ctx, const mat_t rotation);
-GED_EXPORT extern void ged_view_context_aet_get(vect_t aet, const void *view_ctx);
-GED_EXPORT extern int ged_view_context_aet_set(void *view_ctx, const vect_t aet);
-GED_EXPORT extern int ged_view_context_aet_state_set(void *view_ctx, const vect_t aet);
-GED_EXPORT extern int ged_view_context_plane_get(plane_t *plane, const void *view_ctx);
-GED_EXPORT extern void ged_view_context_info_get(struct rt_view_info *info, const void *view_ctx);
-GED_EXPORT extern int ged_view_context_orientation_quat_get(quat_t orientation, const void *view_ctx);
-GED_EXPORT extern int ged_view_context_adc_state_get(struct rt_view_adc_state *adc, const void *view_ctx);
-GED_EXPORT extern int ged_view_context_adc_state_set(void *view_ctx, const struct rt_view_adc_state *adc);
-GED_EXPORT extern int ged_view_context_knobs_state_get(struct rt_view_knobs *knobs, const void *view_ctx);
-GED_EXPORT extern int ged_view_context_knobs_state_set(void *view_ctx, const struct rt_view_knobs *knobs);
-GED_EXPORT extern unsigned long long ged_view_context_knobs_hash(void *view_ctx, struct bu_data_hash_state *state);
-GED_EXPORT extern int ged_view_context_knob_values_get(struct rt_view_knob_values *values, const void *view_ctx);
-GED_EXPORT extern int ged_view_context_knobs_reset(void *view_ctx, int category);
-GED_EXPORT extern int ged_view_context_knobs_calibrate(void *view_ctx);
-GED_EXPORT extern int ged_view_context_knobs_cmd_process(vect_t *rvec, int *do_rot, vect_t *tvec, int *do_tran, void *view_ctx, const char *cmd, fastf_t factor, char origin, int model_flag, int incr_flag);
-GED_EXPORT extern int ged_view_context_knobs_translate(void *view_ctx, const vect_t tvec, int model_flag);
-GED_EXPORT extern int ged_view_context_knobs_rotate(void *view_ctx, const vect_t rvec, char origin, char coords, const matp_t obj_rot, const pointp_t pvt_pt);
-GED_EXPORT extern int ged_view_context_knobs_update_rate_flags(void *view_ctx);
-GED_EXPORT extern int ged_view_context_grid_state_get(struct rt_view_grid_state *grid, const void *view_ctx);
-GED_EXPORT extern int ged_view_context_grid_state_set(void *view_ctx, const struct rt_view_grid_state *grid);
-GED_EXPORT extern int ged_view_context_model_axes_state_get(struct rt_view_axes_state *axes, const void *view_ctx);
-GED_EXPORT extern int ged_view_context_model_axes_state_set(void *view_ctx, const struct rt_view_axes_state *axes);
-GED_EXPORT extern int ged_view_context_view_axes_state_get(struct rt_view_axes_state *axes, const void *view_ctx);
-GED_EXPORT extern int ged_view_context_view_axes_state_set(void *view_ctx, const struct rt_view_axes_state *axes);
-GED_EXPORT extern int ged_view_context_center_dot_state_get(struct rt_view_other_state *center_dot, const void *view_ctx);
-GED_EXPORT extern int ged_view_context_center_dot_state_set(void *view_ctx, const struct rt_view_other_state *center_dot);
-GED_EXPORT extern int ged_view_context_scale_overlay_state_get(struct rt_view_other_state *scale_state, const void *view_ctx);
-GED_EXPORT extern int ged_view_context_scale_overlay_state_set(void *view_ctx, const struct rt_view_other_state *scale_state);
-GED_EXPORT extern int ged_view_context_params_state_get(struct rt_view_params_state *params, const void *view_ctx);
-GED_EXPORT extern int ged_view_context_params_state_set(void *view_ctx, const struct rt_view_params_state *params);
-GED_EXPORT extern int ged_view_context_snap_grid_2d(void *view_ctx, fastf_t *vx, fastf_t *vy);
-GED_EXPORT extern unsigned long long ged_view_context_prepare_tcl_snap(void *view_ctx);
-GED_EXPORT extern int ged_view_context_snap_point_2d(void *view_ctx, fastf_t *vx, fastf_t *vy, unsigned long long kinds);
-GED_EXPORT extern int ged_view_context_interactive_rect_state_get(struct rt_view_interactive_rect_state *rect, const void *view_ctx);
-GED_EXPORT extern int ged_view_context_interactive_rect_state_set(void *view_ctx, const struct rt_view_interactive_rect_state *rect);
-GED_EXPORT extern int ged_view_context_snap_lines_get(const void *view_ctx);
-GED_EXPORT extern int ged_view_context_snap_lines_set(void *view_ctx, int enabled);
-GED_EXPORT extern int ged_view_context_center_linesnap(void *view_ctx);
-GED_EXPORT extern double ged_view_context_snap_tolerance_factor_get(const void *view_ctx);
-GED_EXPORT extern int ged_view_context_snap_tolerance_factor_set(void *view_ctx, double factor);
-GED_EXPORT extern int ged_view_context_unit_conversion_set(void *view_ctx, fastf_t local2base, fastf_t base2local);
-GED_EXPORT extern int ged_view_context_lod_policy_get(struct rt_view_lod_policy *policy, const void *view_ctx);
-GED_EXPORT extern int ged_view_context_lod_policy_apply(void *view_ctx, const struct rt_view_lod_policy *policy);
-GED_EXPORT extern int ged_view_context_settings_shared(const void *a, const void *b);
 
 /**
  * Translate the view.

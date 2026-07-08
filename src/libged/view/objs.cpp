@@ -484,7 +484,7 @@ _objs_cmd_update(void *bs, int argc, const char **argv)
 	    return BRLCAD_ERROR;
 	}
 	have_xy = 1;
-	ged_view_context_mouse_state_set(gd->cv, x, y);
+	rt_view_context_mouse_state_set(gd->cv, x, y);
     }
 
     ged_draw_view_polygon_ref poly_ref =

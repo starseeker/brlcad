@@ -455,7 +455,7 @@ draw_test_obol_screengrab_impl(struct ged *gedp, void *view_ctx, int id,
 	return -1;
 
     BRLObolViewController *controller = NULL;
-    struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(v);
+    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(v);
     if (dmp)
 	controller = (BRLObolViewController *)dm_obol_controller(dmp);
     if (!controller) {
@@ -583,7 +583,7 @@ dm_refresh(struct ged *gedp)
     txn.view = v;
     ged_draw_apply_transaction(gedp, &txn, NULL);
 
-    struct dm *dmp = (struct dm *)rt_view_context_display_manager_get(v);
+    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(v);
     if (!dmp)
 	return;
     dm_make_current(dmp);

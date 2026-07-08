@@ -502,16 +502,16 @@ _fp_cmd_irect(void *bs, int argc, const char **argv)
 
     if (argc == 1) {
 	struct rt_view_interactive_rect_state rect;
-	if (!ged_view_context_interactive_rect_state_get(&rect, view_ctx))
+	if (!rt_view_context_interactive_rect_state_get(&rect, view_ctx))
 	    return BRLCAD_ERROR;
 	if (BU_STR_EQUAL("1", argv[0])) {
 	    rect.draw = 1;
-	    ged_view_context_interactive_rect_state_set(view_ctx, &rect);
+	    rt_view_context_interactive_rect_state_set(view_ctx, &rect);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("0", argv[0])) {
 	    rect.draw = 0;
-	    ged_view_context_interactive_rect_state_set(view_ctx, &rect);
+	    rt_view_context_interactive_rect_state_set(view_ctx, &rect);
 	    return BRLCAD_OK;
 	}
     }
@@ -536,7 +536,7 @@ _fp_cmd_irect(void *bs, int argc, const char **argv)
     (void)bu_opt_parse(NULL, acnt, argv, d);
 
     struct rt_view_interactive_rect_state rect;
-    if (!ged_view_context_interactive_rect_state_get(&rect, view_ctx))
+    if (!rt_view_context_interactive_rect_state_get(&rect, view_ctx))
 	return BRLCAD_ERROR;
 
     struct _ged_fp_irect_info rinfo;
@@ -545,7 +545,7 @@ _fp_cmd_irect(void *bs, int argc, const char **argv)
 
     int ret = _ged_subcmd_exec(gedp, d, _fp_irect_cmds, "view faceplate irect", "[options] subcommand [args]", (void *)&rinfo, argc, argv, help, cmd_pos);
     if (ret == BRLCAD_OK)
-	ged_view_context_interactive_rect_state_set(view_ctx, &rect);
+	rt_view_context_interactive_rect_state_set(view_ctx, &rect);
     return ret;
 }
 

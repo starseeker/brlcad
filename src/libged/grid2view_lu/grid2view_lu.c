@@ -61,8 +61,8 @@ ged_grid2view_lu_core(struct ged *gedp, int argc, const char *argv[])
     scan[Z] = 0.0;
 
     view_ctx = ged_view_active_ctx(gedp);
-    ged_view_context_model2view_get(model2view, view_ctx);
-    view_scale = ged_view_context_scale_get(view_ctx);
+    rt_view_context_model2view_get(model2view, view_ctx);
+    view_scale = rt_view_context_scale_get(view_ctx);
     MAT4X3PNT(mo_view_pt, model2view, model_pt);
     f = view_scale * gedp->dbip->dbi_base2local;
     VSCALE(mo_view_pt, mo_view_pt, f);

@@ -289,7 +289,7 @@ ged_rtcheck2_core(struct ged *gedp, int argc, const char *argv[])
     rtcp->fp = bu_process_file_open(p, BU_PROCESS_STDOUT);
     /* Needed on Windows for successful rtcheck drawing data communication */
     setmode(fileno(rtcp->fp), O_BINARY);
-    rtcp->csize = ged_view_context_scale_get(view_ctx) * 0.01;
+    rtcp->csize = rt_view_context_scale_get(view_ctx) * 0.01;
     rtcp->uplot = _ged_uplot_stream_create(rtcp->csize, gedp->i->ged_gdp->gd_uplotOutputMode);
     rtcp->generation = ++rtcheck_command_generation;
     if (rtcp->generation == 0)

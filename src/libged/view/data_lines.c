@@ -95,7 +95,7 @@ _view_dlines_cmd_snap(void *bs, int argc, const char **argv)
     struct ged *gedp = vs->gedp;
     void *view_ctx = vs->view_ctx;
     if (argc == 1) {
-	bu_vls_printf(gedp->ged_result_str, "%d", ged_view_context_snap_lines_get(view_ctx));
+	bu_vls_printf(gedp->ged_result_str, "%d", rt_view_context_snap_lines_get(view_ctx));
 	return BRLCAD_OK;
     }
 
@@ -104,7 +104,7 @@ _view_dlines_cmd_snap(void *bs, int argc, const char **argv)
 
 	if (bu_sscanf(argv[1], "%d", &i) != 1) return BRLCAD_ERROR;
 
-	ged_view_context_snap_lines_set(view_ctx, i);
+	rt_view_context_snap_lines_set(view_ctx, i);
 
 	return BRLCAD_OK;
     }

@@ -412,10 +412,10 @@ bsg_vrestore(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc)
     if (vsaved) {
 	point_t saved_center;
 
-	ged_view_context_scale_set(view_ctx, sav_vscale);
-	ged_view_context_rotation_set(view_ctx, sav_viewrot);
+	rt_view_context_scale_set(view_ctx, sav_vscale);
+	rt_view_context_rotation_set(view_ctx, sav_viewrot);
 	MAT_DELTAS_GET_NEG(saved_center, sav_toviewcenter);
-	ged_view_context_center_vec_set(view_ctx, saved_center);
+	rt_view_context_center_set(view_ctx, saved_center);
 	new_mats(s);
 
 	(void)mged_svbase(s);
@@ -433,9 +433,9 @@ bsg_vsave(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), c
     struct mged_state *s = ctp->s;
     void *view_ctx = view_state->vs_gvp;
      /* save current view */
-    sav_vscale = ged_view_context_scale_get(view_ctx);
-    ged_view_context_rotation_get(sav_viewrot, view_ctx);
-    ged_view_context_center_get(sav_toviewcenter, view_ctx);
+    sav_vscale = rt_view_context_scale_get(view_ctx);
+    rt_view_context_rotation_get(sav_viewrot, view_ctx);
+    rt_view_context_center_get(sav_toviewcenter, view_ctx);
     vsaved = 1;
     return TCL_OK;
 }

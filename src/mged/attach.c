@@ -102,7 +102,7 @@ mged_dm_adc_state_set(struct mged_dm *dm, const struct rt_view_adc_state *adc)
 {
     if (!dm || !dm->dm_view_state || !dm->dm_view_state->vs_gvp)
 	return;
-    ged_view_context_adc_state_set(dm->dm_view_state->vs_gvp, adc);
+    rt_view_context_adc_state_set(dm->dm_view_state->vs_gvp, adc);
 }
 
 int
@@ -139,7 +139,7 @@ mged_dm_init(
     }
 
     /*XXXX this eventually needs to move into Ogl's private structure */
-    dm_set_vp(DMP, ged_view_context_scale_storage_get(view_state->vs_gvp));
+    dm_set_vp(DMP, rt_view_context_scale_storage_get(view_state->vs_gvp));
     dm_set_perspective(DMP, mged_variables->mv_perspective_mode);
 
 #ifdef HAVE_TK
@@ -722,7 +722,7 @@ dm_var_init(struct mged_state *s, struct mged_dm *target_dm)
     *view_state = *target_dm->dm_view_state;			/* struct copy */
     void *target_view_ctx = target_dm->dm_view_state->vs_gvp;
     void *view_set_ctx = ged_view_set_ctx(s->gedp);
-    void *view_ctx = ged_view_context_create_copy_with_set(target_view_ctx, view_set_ctx);
+    void *view_ctx = rt_view_context_create_copy_with_set(target_view_ctx, view_set_ctx);
     view_state->vs_gvp = view_ctx;
 
     /* Independent view state is managed through BSG view-scope records. */
@@ -730,12 +730,12 @@ dm_var_init(struct mged_state *s, struct mged_dm *target_dm)
     ged_view_context_update_callback_set(view_ctx,
 	    mged_view_callback, (void *)view_state);
     struct rt_view_lod_policy lod_policy = RT_VIEW_LOD_POLICY_INIT;
-    if (ged_view_context_lod_policy_get(&lod_policy, view_ctx)) {
+    if (rt_view_context_lod_policy_get(&lod_policy, view_ctx)) {
 	lod_policy.csg_enabled = 0;
 	lod_policy.zoom_refresh = 0;
 	lod_policy.point_scale = 1.0;
 	lod_policy.curve_scale = 1.0;
-	ged_view_context_lod_policy_apply(view_ctx, &lod_policy);
+	rt_view_context_lod_policy_apply(view_ctx, &lod_policy);
     }
     view_state->vs_rc = 1;
     view_ring_init(s->mged_curr_dm->dm_view_state, (struct _view_state *)NULL);

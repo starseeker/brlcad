@@ -49,7 +49,7 @@ ged_rotate_about_core(struct ged *gedp, int argc, const char *argv[])
     /* get "rotate about" point */
     if (argc == 1) {
 	bu_vls_printf(gedp->ged_result_str, "%c",
-		ged_view_context_rotate_about_get(view_ctx));
+		rt_view_context_rotate_about_get(view_ctx));
 	return BRLCAD_OK;
     }
 
@@ -60,7 +60,7 @@ ged_rotate_about_core(struct ged *gedp, int argc, const char *argv[])
 	    case 'k':
 	    case 'm':
 	    case 'v':
-		ged_view_context_rotate_about_set(view_ctx, argv[1][0]);
+		rt_view_context_rotate_about_set(view_ctx, argv[1][0]);
 		return BRLCAD_OK;
 	}
     }

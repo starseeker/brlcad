@@ -117,16 +117,16 @@ ged_view_snap(struct ged *gedp, int argc, const char *argv[])
     /* Handle tolerance */
     if (stol < DBL_MAX || stol < -DBL_MAX + 1) {
 	if (stol > -DBL_MAX) {
-	    ged_view_context_snap_tolerance_factor_set(view_ctx, stol);
+	    rt_view_context_snap_tolerance_factor_set(view_ctx, stol);
 	    if (!opt_ret) {
 		bu_vls_printf(gedp->ged_result_str, "%g",
-			ged_view_context_snap_tolerance_factor_get(view_ctx));
+			rt_view_context_snap_tolerance_factor_get(view_ctx));
 		return BRLCAD_OK;
 	    }
 	} else {
 	    // Report current tolerance
 	    bu_vls_printf(gedp->ged_result_str, "%g",
-		    ged_view_context_snap_tolerance_factor_get(view_ctx));
+		    rt_view_context_snap_tolerance_factor_get(view_ctx));
 	    return BRLCAD_OK;
 	}
     }
@@ -140,8 +140,8 @@ ged_view_snap(struct ged *gedp, int argc, const char *argv[])
 
     mat_t model2view;
     mat_t view2model;
-    ged_view_context_model2view_get(model2view, view_ctx);
-    ged_view_context_view2model_get(view2model, view_ctx);
+    rt_view_context_model2view_get(model2view, view_ctx);
+    rt_view_context_view2model_get(view2model, view_ctx);
 
     /* We may get a 2D screen point or a 3D model space point.  Either
      * should work - whatever we get, set up both points so we have

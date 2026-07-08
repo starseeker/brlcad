@@ -56,12 +56,12 @@ ged_scale_core(struct ged *gedp, int argc, const char *argv[])
     void *view_ctx = ged_view_active_ctx(gedp);
 
     /* scale the view */
-    fastf_t view_scale = ged_view_context_scale_get(view_ctx) * sf1;
+    fastf_t view_scale = rt_view_context_scale_get(view_ctx) * sf1;
     if (view_scale < RT_VIEW_MIN_SIZE)
 	view_scale = RT_VIEW_MIN_SIZE;
 
-    ged_view_context_scale_set(view_ctx, view_scale);
-    ged_view_context_update(view_ctx);
+    rt_view_context_scale_set(view_ctx, view_scale);
+    rt_view_context_update(view_ctx);
 
     return BRLCAD_OK;
 }

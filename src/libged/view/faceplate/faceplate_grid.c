@@ -410,16 +410,16 @@ _fp_cmd_grid(void *bs, int argc, const char **argv)
 
     if (argc == 1) {
 	struct rt_view_grid_state grid;
-	if (!ged_view_context_grid_state_get(&grid, view_ctx))
+	if (!rt_view_context_grid_state_get(&grid, view_ctx))
 	    return BRLCAD_ERROR;
 	if (BU_STR_EQUAL("1", argv[0])) {
 	    grid.draw = 1;
-	    ged_view_context_grid_state_set(view_ctx, &grid);
+	    rt_view_context_grid_state_set(view_ctx, &grid);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("0", argv[0])) {
 	    grid.draw = 0;
-	    ged_view_context_grid_state_set(view_ctx, &grid);
+	    rt_view_context_grid_state_set(view_ctx, &grid);
 	    return BRLCAD_OK;
 	}
     }
@@ -444,7 +444,7 @@ _fp_cmd_grid(void *bs, int argc, const char **argv)
     (void)bu_opt_parse(NULL, acnt, argv, d);
 
     struct rt_view_grid_state grid;
-    if (!ged_view_context_grid_state_get(&grid, view_ctx))
+    if (!rt_view_context_grid_state_get(&grid, view_ctx))
 	return BRLCAD_ERROR;
 
     struct _ged_fp_grid_info ginfo;
@@ -453,7 +453,7 @@ _fp_cmd_grid(void *bs, int argc, const char **argv)
 
     int ret = _ged_subcmd_exec(gedp, d, _fp_grid_cmds, "view faceplate grid", "[options] subcommand [args]", (void *)&ginfo, argc, argv, help, cmd_pos);
     if (ret == BRLCAD_OK)
-	ged_view_context_grid_state_set(view_ctx, &grid);
+	rt_view_context_grid_state_set(view_ctx, &grid);
     return ret;
 }
 

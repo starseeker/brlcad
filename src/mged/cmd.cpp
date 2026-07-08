@@ -692,9 +692,9 @@ cmd_ged_simulate_wrapper(ClientData clientData, Tcl_Interp *interpreter, int arg
 	point_t eye_pos;
 	fastf_t view_size;
 
-	ged_view_context_orientation_quat_get(quat, view_ctx);
-	ged_view_context_eye_pos_get(eye_pos, view_ctx);
-	view_size = ged_view_context_size_get(view_ctx);
+	rt_view_context_orientation_quat_get(quat, view_ctx);
+	rt_view_context_eye_pos_get(eye_pos, view_ctx);
+	view_size = rt_view_context_size_get(view_ctx);
 
 	/* Build "--view-quat=x,y,z,w" argument */
 	snprintf(quat_buf, sizeof(quat_buf),
@@ -2569,7 +2569,7 @@ cmd_blast(ClientData clientData, Tcl_Interp *UNUSED(interpreter), int argc, cons
 	    (void)mged_svbase(s);
 
 	    for (BU_LIST_FOR(vrp, view_ring, &view_state->vs_headView.l)) {
-		vrp->vr_scale = ged_view_context_scale_get(view_state->vs_gvp);
+		vrp->vr_scale = rt_view_context_scale_get(view_state->vs_gvp);
 	    }
 	}
     }
@@ -2594,7 +2594,7 @@ cmd_draw(ClientData clientData, Tcl_Interp *UNUSED(interpreter), int argc, const
 
     void *view_ctx = s->gedp ? ged_view_active_ctx(s->gedp) : NULL;
     if (view_ctx && DMP) {
-	ged_view_context_dimensions_set(view_ctx, dm_get_width(DMP), dm_get_height(DMP));
+	rt_view_context_dimensions_set(view_ctx, dm_get_width(DMP), dm_get_height(DMP));
     }
 
     return edit_com(s, argc, argv);
@@ -2831,31 +2831,31 @@ _view_cache_save(struct _view_cache *c, void *v, int include_knobs)
     if (!c || !v) return;
     c->valid = 1;
 
-    c->scale       = ged_view_context_scale_get(v);
-    c->initial_scale = ged_view_context_initial_scale_get(v);
-    c->absolute_scale = ged_view_context_absolute_scale_get(v);
-    c->size        = ged_view_context_size_get(v);
-    c->inverse_size = ged_view_context_inverse_size_get(v);
-    c->perspective = ged_view_context_perspective_get(v);
-    c->local2base  = ged_view_context_local2base_get(v);
-    c->base2local  = ged_view_context_base2local_get(v);
-    c->coord       = ged_view_context_coord_get(v);
-    c->rotate_about= ged_view_context_rotate_about_get(v);
+    c->scale       = rt_view_context_scale_get(v);
+    c->initial_scale = rt_view_context_initial_scale_get(v);
+    c->absolute_scale = rt_view_context_absolute_scale_get(v);
+    c->size        = rt_view_context_size_get(v);
+    c->inverse_size = rt_view_context_inverse_size_get(v);
+    c->perspective = rt_view_context_perspective_get(v);
+    c->local2base  = rt_view_context_local2base_get(v);
+    c->base2local  = rt_view_context_base2local_get(v);
+    c->coord       = rt_view_context_coord_get(v);
+    c->rotate_about= rt_view_context_rotate_about_get(v);
 
-    ged_view_context_eye_pos_get(c->eye_pos, v);
-    ged_view_context_keypoint_get(c->keypoint, v);
-    ged_view_context_aet_get(c->aet, v);
+    rt_view_context_eye_pos_get(c->eye_pos, v);
+    rt_view_context_keypoint_get(c->keypoint, v);
+    rt_view_context_aet_get(c->aet, v);
 
-    ged_view_context_rotation_get(c->rotation, v);
-    ged_view_context_center_get(c->center, v);
-    ged_view_context_model2view_get(c->model2view, v);
-    ged_view_context_view2model_get(c->view2model, v);
-    ged_view_context_pmodel2view_get(c->pmodel2view, v);
-    ged_view_context_pmat_get(c->pmat, v);
+    rt_view_context_rotation_get(c->rotation, v);
+    rt_view_context_center_get(c->center, v);
+    rt_view_context_model2view_get(c->model2view, v);
+    rt_view_context_view2model_get(c->view2model, v);
+    rt_view_context_pmodel2view_get(c->pmodel2view, v);
+    rt_view_context_pmat_get(c->pmat, v);
 
     c->have_knobs = include_knobs;
     if (include_knobs) {
-	ged_view_context_knobs_state_get(&c->k, v);
+	rt_view_context_knobs_state_get(&c->k, v);
     }
 }
 
@@ -2864,29 +2864,29 @@ _view_cache_restore(const struct _view_cache *c, void *v)
 {
     if (!c || !v || !c->valid) return;
 
-    ged_view_context_scale_state_set(v,
+    rt_view_context_scale_state_set(v,
 	    c->scale, c->initial_scale, c->absolute_scale,
 	    c->size, c->inverse_size);
-    ged_view_context_unit_conversion_set(v, c->local2base, c->base2local);
-    ged_view_context_perspective_set(v, c->perspective);
-    ged_view_context_coord_set(v, c->coord);
-    ged_view_context_rotate_about_set(v, c->rotate_about);
+    rt_view_context_unit_conversion_set(v, c->local2base, c->base2local);
+    rt_view_context_perspective_set(v, c->perspective);
+    rt_view_context_coord_set(v, c->coord);
+    rt_view_context_rotate_about_set(v, c->rotate_about);
 
-    ged_view_context_eye_pos_set(v, c->eye_pos);
-    ged_view_context_keypoint_set(v, c->keypoint);
-    ged_view_context_aet_state_set(v, c->aet);
+    rt_view_context_eye_pos_set(v, c->eye_pos);
+    rt_view_context_keypoint_set(v, c->keypoint);
+    rt_view_context_aet_state_set(v, c->aet);
 
-    ged_view_context_rotation_set(v, c->rotation);
+    rt_view_context_rotation_set(v, c->rotation);
     point_t view_center;
     MAT_DELTAS_GET_NEG(view_center, c->center);
-    ged_view_context_center_vec_set(v, view_center);
-    ged_view_context_model2view_set(v, c->model2view);
-    ged_view_context_view2model_set(v, c->view2model);
-    ged_view_context_pmodel2view_set(v, c->pmodel2view);
-    ged_view_context_pmat_set(v, c->pmat);
+    rt_view_context_center_set(v, view_center);
+    rt_view_context_model2view_set(v, c->model2view);
+    rt_view_context_view2model_set(v, c->view2model);
+    rt_view_context_pmodel2view_set(v, c->pmodel2view);
+    rt_view_context_pmat_set(v, c->pmat);
 
     if (c->have_knobs) {
-	ged_view_context_knobs_state_set(v, &c->k);
+	rt_view_context_knobs_state_set(v, &c->k);
     }
 }
 
@@ -2895,48 +2895,48 @@ _view_copy_to_staging(void *dst, void *src, struct mged_state *s, int include_kn
 {
     if (!dst || !src) return;
 
-    ged_view_context_scale_state_set(dst,
-	    ged_view_context_scale_get(src),
-	    ged_view_context_initial_scale_get(src),
-	    ged_view_context_absolute_scale_get(src),
-	    ged_view_context_size_get(src),
-	    ged_view_context_inverse_size_get(src));
-    ged_view_context_coord_set(dst, ged_view_context_coord_get(src));
-    ged_view_context_rotate_about_set(dst, ged_view_context_rotate_about_get(src));
-    ged_view_context_perspective_set(dst, ged_view_context_perspective_get(src));
+    rt_view_context_scale_state_set(dst,
+	    rt_view_context_scale_get(src),
+	    rt_view_context_initial_scale_get(src),
+	    rt_view_context_absolute_scale_get(src),
+	    rt_view_context_size_get(src),
+	    rt_view_context_inverse_size_get(src));
+    rt_view_context_coord_set(dst, rt_view_context_coord_get(src));
+    rt_view_context_rotate_about_set(dst, rt_view_context_rotate_about_get(src));
+    rt_view_context_perspective_set(dst, rt_view_context_perspective_get(src));
 
     /* Update db unit conversions */
-    ged_view_context_unit_conversion_set(dst,
+    rt_view_context_unit_conversion_set(dst,
 	    (s->dbip) ? s->dbip->dbi_local2base : 1.0,
 	    (s->dbip) ? s->dbip->dbi_base2local : 1.0);
 
     point_t view_point;
-    ged_view_context_eye_pos_get(view_point, src);
-    ged_view_context_eye_pos_set(dst, view_point);
-    ged_view_context_keypoint_get(view_point, src);
-    ged_view_context_keypoint_set(dst, view_point);
-    ged_view_context_aet_get(view_point, src);
-    ged_view_context_aet_state_set(dst, view_point);
+    rt_view_context_eye_pos_get(view_point, src);
+    rt_view_context_eye_pos_set(dst, view_point);
+    rt_view_context_keypoint_get(view_point, src);
+    rt_view_context_keypoint_set(dst, view_point);
+    rt_view_context_aet_get(view_point, src);
+    rt_view_context_aet_state_set(dst, view_point);
 
     mat_t view_mat;
-    ged_view_context_rotation_get(view_mat, src);
-    ged_view_context_rotation_set(dst, view_mat);
-    ged_view_context_center_get(view_mat, src);
+    rt_view_context_rotation_get(view_mat, src);
+    rt_view_context_rotation_set(dst, view_mat);
+    rt_view_context_center_get(view_mat, src);
     MAT_DELTAS_GET_NEG(view_point, view_mat);
-    ged_view_context_center_vec_set(dst, view_point);
-    ged_view_context_model2view_get(view_mat, src);
-    ged_view_context_model2view_set(dst, view_mat);
-    ged_view_context_view2model_get(view_mat, src);
-    ged_view_context_view2model_set(dst, view_mat);
-    ged_view_context_pmodel2view_get(view_mat, src);
-    ged_view_context_pmodel2view_set(dst, view_mat);
-    ged_view_context_pmat_get(view_mat, src);
-    ged_view_context_pmat_set(dst, view_mat);
+    rt_view_context_center_set(dst, view_point);
+    rt_view_context_model2view_get(view_mat, src);
+    rt_view_context_model2view_set(dst, view_mat);
+    rt_view_context_view2model_get(view_mat, src);
+    rt_view_context_view2model_set(dst, view_mat);
+    rt_view_context_pmodel2view_get(view_mat, src);
+    rt_view_context_pmodel2view_set(dst, view_mat);
+    rt_view_context_pmat_get(view_mat, src);
+    rt_view_context_pmat_set(dst, view_mat);
 
     if (include_knobs) {
 	struct rt_view_knobs knobs;
-	if (ged_view_context_knobs_state_get(&knobs, src))
-	    ged_view_context_knobs_state_set(dst, &knobs);
+	if (rt_view_context_knobs_state_get(&knobs, src))
+	    rt_view_context_knobs_state_set(dst, &knobs);
     }
 }
 
@@ -2945,43 +2945,43 @@ _view_copy_from_staging(void *dst, void *src, int include_knobs)
 {
     if (!dst || !src) return;
 
-    ged_view_context_scale_state_set(dst,
-	    ged_view_context_scale_get(src),
-	    ged_view_context_initial_scale_get(src),
-	    ged_view_context_absolute_scale_get(src),
-	    ged_view_context_size_get(src),
-	    ged_view_context_inverse_size_get(src));
-    ged_view_context_coord_set(dst, ged_view_context_coord_get(src));
-    ged_view_context_rotate_about_set(dst, ged_view_context_rotate_about_get(src));
-    ged_view_context_perspective_set(dst, ged_view_context_perspective_get(src));
+    rt_view_context_scale_state_set(dst,
+	    rt_view_context_scale_get(src),
+	    rt_view_context_initial_scale_get(src),
+	    rt_view_context_absolute_scale_get(src),
+	    rt_view_context_size_get(src),
+	    rt_view_context_inverse_size_get(src));
+    rt_view_context_coord_set(dst, rt_view_context_coord_get(src));
+    rt_view_context_rotate_about_set(dst, rt_view_context_rotate_about_get(src));
+    rt_view_context_perspective_set(dst, rt_view_context_perspective_get(src));
 
     point_t view_point;
-    ged_view_context_eye_pos_get(view_point, src);
-    ged_view_context_eye_pos_set(dst, view_point);
-    ged_view_context_keypoint_get(view_point, src);
-    ged_view_context_keypoint_set(dst, view_point);
-    ged_view_context_aet_get(view_point, src);
-    ged_view_context_aet_state_set(dst, view_point);
+    rt_view_context_eye_pos_get(view_point, src);
+    rt_view_context_eye_pos_set(dst, view_point);
+    rt_view_context_keypoint_get(view_point, src);
+    rt_view_context_keypoint_set(dst, view_point);
+    rt_view_context_aet_get(view_point, src);
+    rt_view_context_aet_state_set(dst, view_point);
 
     mat_t view_mat;
-    ged_view_context_rotation_get(view_mat, src);
-    ged_view_context_rotation_set(dst, view_mat);
-    ged_view_context_center_get(view_mat, src);
+    rt_view_context_rotation_get(view_mat, src);
+    rt_view_context_rotation_set(dst, view_mat);
+    rt_view_context_center_get(view_mat, src);
     MAT_DELTAS_GET_NEG(view_point, view_mat);
-    ged_view_context_center_vec_set(dst, view_point);
-    ged_view_context_model2view_get(view_mat, src);
-    ged_view_context_model2view_set(dst, view_mat);
-    ged_view_context_view2model_get(view_mat, src);
-    ged_view_context_view2model_set(dst, view_mat);
-    ged_view_context_pmodel2view_get(view_mat, src);
-    ged_view_context_pmodel2view_set(dst, view_mat);
-    ged_view_context_pmat_get(view_mat, src);
-    ged_view_context_pmat_set(dst, view_mat);
+    rt_view_context_center_set(dst, view_point);
+    rt_view_context_model2view_get(view_mat, src);
+    rt_view_context_model2view_set(dst, view_mat);
+    rt_view_context_view2model_get(view_mat, src);
+    rt_view_context_view2model_set(dst, view_mat);
+    rt_view_context_pmodel2view_get(view_mat, src);
+    rt_view_context_pmodel2view_set(dst, view_mat);
+    rt_view_context_pmat_get(view_mat, src);
+    rt_view_context_pmat_set(dst, view_mat);
 
     if (include_knobs) {
 	struct rt_view_knobs knobs;
-	if (ged_view_context_knobs_state_get(&knobs, src))
-	    ged_view_context_knobs_state_set(dst, &knobs);
+	if (rt_view_context_knobs_state_get(&knobs, src))
+	    rt_view_context_knobs_state_set(dst, &knobs);
     }
 }
 
@@ -3016,7 +3016,7 @@ _view_maybe_baseline_reset(struct mged_state *s, int do_reset)
      * view_state->k. Keep the retained view knob record in sync so a
      * subsequent "view knob" sees the reset values. */
     if (view_state && view_state->vs_gvp)
-	ged_view_context_knobs_state_set(view_state->vs_gvp, &view_state->k);
+	rt_view_context_knobs_state_set(view_state->vs_gvp, &view_state->k);
 }
 
 /* Calculate focused hash of a subset of the view to detect mutation of view
@@ -3030,12 +3030,12 @@ _view_mutation_hash(struct mged_state *ms, void *v)
     struct bu_data_hash_state *state = bu_data_hash_create();
     if (!state) return 0ULL;
 
-    fastf_t view_scale = ged_view_context_scale_get(v);
-    fastf_t view_initial_scale = ged_view_context_initial_scale_get(v);
-    fastf_t view_absolute_scale = ged_view_context_absolute_scale_get(v);
-    fastf_t view_size = ged_view_context_size_get(v);
-    fastf_t view_isize = ged_view_context_inverse_size_get(v);
-    fastf_t view_perspective = ged_view_context_perspective_get(v);
+    fastf_t view_scale = rt_view_context_scale_get(v);
+    fastf_t view_initial_scale = rt_view_context_initial_scale_get(v);
+    fastf_t view_absolute_scale = rt_view_context_absolute_scale_get(v);
+    fastf_t view_size = rt_view_context_size_get(v);
+    fastf_t view_isize = rt_view_context_inverse_size_get(v);
+    fastf_t view_perspective = rt_view_context_perspective_get(v);
     mat_t view_center;
     mat_t view_rotation;
     mat_t model2view;
@@ -3045,18 +3045,18 @@ _view_mutation_hash(struct mged_state *ms, void *v)
     vect_t eye_pos;
     vect_t keypoint;
     vect_t aet;
-    char coord = ged_view_context_coord_get(v);
-    char rotate_about = ged_view_context_rotate_about_get(v);
+    char coord = rt_view_context_coord_get(v);
+    char rotate_about = rt_view_context_rotate_about_get(v);
 
-    ged_view_context_center_get(view_center, v);
-    ged_view_context_rotation_get(view_rotation, v);
-    ged_view_context_model2view_get(model2view, v);
-    ged_view_context_view2model_get(view2model, v);
-    ged_view_context_pmodel2view_get(pmodel2view, v);
-    ged_view_context_pmat_get(pmat, v);
-    ged_view_context_eye_pos_get(eye_pos, v);
-    ged_view_context_keypoint_get(keypoint, v);
-    ged_view_context_aet_get(aet, v);
+    rt_view_context_center_get(view_center, v);
+    rt_view_context_rotation_get(view_rotation, v);
+    rt_view_context_model2view_get(model2view, v);
+    rt_view_context_view2model_get(view2model, v);
+    rt_view_context_pmodel2view_get(pmodel2view, v);
+    rt_view_context_pmat_get(pmat, v);
+    rt_view_context_eye_pos_get(eye_pos, v);
+    rt_view_context_keypoint_get(keypoint, v);
+    rt_view_context_aet_get(aet, v);
 
     /* Core scalar transforms */
     bu_data_hash_update(state, &view_scale, sizeof(view_scale));
@@ -3084,7 +3084,7 @@ _view_mutation_hash(struct mged_state *ms, void *v)
     bu_data_hash_update(state, &rotate_about, sizeof(char));
 
     /* Knob state (rates + absolute values + flags + origins) */
-    ged_view_context_knobs_hash(v, state);
+    rt_view_context_knobs_hash(v, state);
 
     /*
      * If we are in an edit mode (solid or object) include the active edit
@@ -3154,13 +3154,13 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
 	}
     } else {
 	/* No existing ged_gvp: create ephemeral staging view */
-	staging = ged_view_context_create();
+	staging = rt_view_context_create();
 	created_temp = 1;
 	/* Carry over dimensions for screen-dependent ops */
 	if (mged_view) {
-	    ged_view_context_dimensions_set(staging,
-		    ged_view_context_width_get(mged_view),
-		    ged_view_context_height_get(mged_view));
+	    rt_view_context_dimensions_set(staging,
+		    rt_view_context_width_get(mged_view),
+		    rt_view_context_height_get(mged_view));
 	}
     }
 
@@ -3174,7 +3174,7 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
     struct rt_view_knobs pre_knob;
     int have_pre_knob = 0;
     if (is_knob && mged_view) {
-	have_pre_knob = ged_view_context_knobs_state_get(&pre_knob,
+	have_pre_knob = rt_view_context_knobs_state_get(&pre_knob,
 		(shared_view ? mged_view : staging));
     }
 
@@ -3182,7 +3182,7 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
 	_view_copy_to_staging(staging, mged_view, s, is_knob);
     } else {
 	/* Shared path: ensure conversions up to date */
-	ged_view_context_unit_conversion_set(staging,
+	rt_view_context_unit_conversion_set(staging,
 		(s->dbip) ? s->dbip->dbi_local2base : 1.0,
 		(s->dbip) ? s->dbip->dbi_base2local : 1.0);
     }
@@ -3193,7 +3193,7 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
      * (We already sync view knob results back into view_state->k after each
      * libged invocation, so this merge is one-way authoritative.) */
     if (is_knob && view_state && view_state->vs_gvp) {
-	ged_view_context_knobs_state_set(staging, &view_state->k);
+	rt_view_context_knobs_state_set(staging, &view_state->k);
     }
 
     /* Point ged at staging (if we created a temp or if distinct) */
@@ -3213,7 +3213,7 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
 	    if (!created_temp)
 		_view_cache_restore(&prev, staging);
 	    else {
-		ged_view_context_free(staging);
+		rt_view_context_free(staging);
 		ged_view_active_ctx_set(s->gedp, NULL);
 	    }
 	}
@@ -3224,18 +3224,18 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
 	/* Roll back knob state on error */
 	if (is_knob && have_pre_knob) {
 	    if (shared_view) {
-		ged_view_context_knobs_state_set(mged_view, &pre_knob);
+		rt_view_context_knobs_state_set(mged_view, &pre_knob);
 		view_state->k = pre_knob;
 		_view_update_rate_flags_viewonly(s);
 	    } else {
-		ged_view_context_knobs_state_set(staging, &pre_knob);
+		rt_view_context_knobs_state_set(staging, &pre_knob);
 	    }
 	}
 	if (!shared_view) {
 	    if (!created_temp) {
 		_view_cache_restore(&prev, staging);
 	    } else {
-		ged_view_context_free(staging);
+		rt_view_context_free(staging);
 		ged_view_active_ctx_set(s->gedp, NULL);
 	    }
 	}
@@ -3251,7 +3251,7 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
     /* Copy updated retained-view knobs into view_state->k immediately after a
      * confirmed successful knob mutation, before later operations can exit. */
     if (is_knob) {
-	ged_view_context_knobs_state_get(&view_state->k, view_state->vs_gvp);
+	rt_view_context_knobs_state_get(&view_state->k, view_state->vs_gvp);
 	_view_update_rate_flags_viewonly(s);
     }
 
@@ -3273,7 +3273,7 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
 	    }
 	} else {
 	    /* Ephemeral staging freed; detach from ged */
-	    ged_view_context_free(staging);
+	    rt_view_context_free(staging);
 	    ged_view_active_ctx_set(s->gedp, NULL);
 	}
     }

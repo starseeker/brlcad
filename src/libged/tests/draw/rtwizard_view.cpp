@@ -164,7 +164,7 @@ test_null_view_context(const char *datadir)
 	bu_log("PASS: secondary null-DM view is a valid RT view context\n");
     }
 
-    if (rt_view_context_display_manager_get(v1) != NULL) {
+    if (ged_view_context_display_manager_get(v1) != NULL) {
 	bu_log("FAIL: secondary null-DM view unexpectedly has a display manager\n");
 	fail = 1;
     } else {
@@ -329,7 +329,7 @@ test_multiple_null_views(const char *datadir)
 	    bu_log("FAIL: view '%s' is not a valid RT view context\n", vname[i]);
 	    fail = 1;
 	}
-	if (rt_view_context_display_manager_get(views[i]) != NULL) {
+	if (ged_view_context_display_manager_get(views[i]) != NULL) {
 	    bu_log("FAIL: view '%s' unexpectedly has a display manager\n", vname[i]);
 	    fail = 1;
 	}
@@ -360,7 +360,7 @@ open_gedp_obol(const char *gfile, int width, int height)
     ged_exec_dm(gedp, 4, s_av);
 
     void *v = ged_view_active_ctx(gedp);
-    struct dm *dmp  = (struct dm *)rt_view_context_display_manager_get(v);
+    struct dm *dmp  = (struct dm *)ged_view_context_display_manager_get(v);
     if (!dmp) {
 	ged_close(gedp);
 	return NULL;
@@ -372,7 +372,7 @@ open_gedp_obol(const char *gfile, int width, int height)
     fastf_t wb[6] = {-1, 1, -1, 1, -100, 100};
     dm_set_win_bounds(dmp, wb);
     dm_set_vp(dmp, rt_view_context_scale_storage_get(v));
-    rt_view_context_display_manager_set(v, dmp);
+    ged_view_context_display_manager_set(v, dmp);
     rt_view_context_dimensions_set(v, dm_get_width(dmp), dm_get_height(dmp));
     rt_view_context_unit_conversion_set(v, gedp->dbip->dbi_local2base,
 	gedp->dbip->dbi_base2local);

@@ -52,7 +52,7 @@ ged_size_core(struct ged *gedp, int argc, const char *argv[])
 
     /* get view size */
     if (argc == 1) {
-	fastf_t view_size = ged_view_context_size_get(view_ctx);
+	fastf_t view_size = rt_view_context_size_get(view_ctx);
 	if (gedp->dbip) {
 	    bu_vls_printf(gedp->ged_result_str, "%g",
 		    view_size * gedp->dbip->dbi_base2local);
@@ -75,8 +75,8 @@ ged_size_core(struct ged *gedp, int argc, const char *argv[])
 	fastf_t view_size = (gedp->dbip) ? gedp->dbip->dbi_local2base * size : size;
 	if (view_size < RT_VIEW_MIN_SIZE)
 	    view_size = RT_VIEW_MIN_SIZE;
-	ged_view_context_size_set(view_ctx, view_size);
-	ged_view_context_update(view_ctx);
+	rt_view_context_size_set(view_ctx, view_size);
+	rt_view_context_update(view_ctx);
 
 	return BRLCAD_OK;
     }

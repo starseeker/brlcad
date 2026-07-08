@@ -125,7 +125,7 @@ dozoom(struct mged_state *s, int which_eye)
      */
     struct mged_dm *save_dm_list = s->mged_curr_dm;
 
-    ged_view_context_refresh_drawn_count_set(view_ctx, 0);
+    rt_view_context_refresh_drawn_count_set(view_ctx, 0);
 
     /* Keep the retained view's display manager in sync so that
      * refresh code can find the DM.  This must be done every frame
@@ -136,11 +136,11 @@ dozoom(struct mged_state *s, int which_eye)
     /* gv_pmat may be replaced for the stereo path; remember the original
      * so we can restore it before returning. */
     mat_t saved_pmat;
-    ged_view_context_pmat_get(saved_pmat, view_ctx);
+    rt_view_context_pmat_get(saved_pmat, view_ctx);
 
-    view_perspective = ged_view_context_perspective_get(view_ctx);
-    ged_view_context_eye_pos_get(view_eye_pos, view_ctx);
-    ged_view_context_model2view_get(model2view, view_ctx);
+    view_perspective = rt_view_context_perspective_get(view_ctx);
+    rt_view_context_eye_pos_get(view_eye_pos, view_ctx);
+    rt_view_context_model2view_get(model2view, view_ctx);
 
     if (which_eye == 0) {
 	/* ----- Non-stereo: keep gv_pmat in sync with the perspective state.
@@ -153,12 +153,12 @@ dozoom(struct mged_state *s, int which_eye)
 		VSET(l, -1.0, -1.0, -1.0);
 		VSET(h,  1.0,  1.0, 200.0);
 		deering_persp_mat(perspective_mat, l, h, view_eye_pos);
-		ged_view_context_pmat_set(view_ctx, perspective_mat);
+		rt_view_context_pmat_set(view_ctx, perspective_mat);
 	    } else {
 		persp_mat(perspective_mat, view_perspective,
 			  (fastf_t)1.0f, (fastf_t)0.01f,
 			  (fastf_t)1.0e10f, (fastf_t)1.0f);
-		ged_view_context_pmat_set(view_ctx, perspective_mat);
+		rt_view_context_pmat_set(view_ctx, perspective_mat);
 	    }
 	}
     } else {
@@ -188,13 +188,13 @@ dozoom(struct mged_state *s, int which_eye)
 	    eye[X] = -eye_delta_scr;
 	}
 	deering_persp_mat(perspective_mat, l, h, eye);
-	ged_view_context_pmat_set(view_ctx, perspective_mat);
+	rt_view_context_pmat_set(view_ctx, perspective_mat);
 
 	/* Force the display host to apply the perspective matrix even when the
 	 * retained view perspective was 0; legacy drawing gates the projection
 	 * load on a non-zero perspective angle. */
 	if (view_perspective < SMALL_FASTF)
-	    ged_view_context_perspective_set(view_ctx, persp);
+	    rt_view_context_perspective_set(view_ctx, persp);
 
 	/* Stereo viewport / scissor selection.  gl_loadMatrix() inspects
 	 * which_eye (1 = right, 2 = left) and adjusts glViewport+glScissor
@@ -219,7 +219,7 @@ dozoom(struct mged_state *s, int which_eye)
     ged_view_context_edit_matrix_clear(view_ctx);
 
     /* Restore gv_pmat (no-op for which_eye == 0). */
-    ged_view_context_pmat_set(view_ctx, saved_pmat);
+    rt_view_context_pmat_set(view_ctx, saved_pmat);
 
     /* Count drawn objects for usepen.c zone-based picking. */
     if (s->gedp && ged_draw_scene_available(s->gedp)) {
@@ -230,10 +230,10 @@ dozoom(struct mged_state *s, int which_eye)
 	} else {
 	    struct _mged_count_drawn_ctx ctx;
 	    ctx.np = &ndrawn;
-	    ctx.frame_rev = ged_view_context_frame_revision_get(view_ctx);
+	    ctx.frame_rev = rt_view_context_frame_revision_get(view_ctx);
 	    ged_draw_foreach_shape_record(s->gedp, _mged_count_drawn_cb, &ctx);
 	}
-	ged_view_context_refresh_drawn_count_set(view_ctx, ndrawn);
+	rt_view_context_refresh_drawn_count_set(view_ctx, ndrawn);
     }
 
     if (s->mged_curr_dm != save_dm_list) set_curr_dm(s, save_dm_list);

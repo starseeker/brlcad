@@ -35,7 +35,7 @@ print_knob_vals(struct bu_vls *o, void *view_ctx)
 {
     struct rt_view_knob_values values;
 
-    if (!o || !ged_view_context_knob_values_get(&values, view_ctx))
+    if (!o || !rt_view_context_knob_values_get(&values, view_ctx))
 	return;
 
     bu_vls_printf(o, "rate - rotation:\n");
@@ -68,7 +68,7 @@ ged_knob_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     /* Make sure the view coordinate conversion values match the database */
     void *view_ctx = ged_view_active_ctx(gedp);
-    ged_view_context_unit_conversion_set(view_ctx,
+    rt_view_context_unit_conversion_set(view_ctx,
 	(gedp->dbip) ? gedp->dbip->dbi_local2base : 1.0,
 	(gedp->dbip) ? gedp->dbip->dbi_base2local : 1.0);
 
@@ -123,7 +123,7 @@ ged_knob_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
     if (!model_flag && !view_flag)
-	model_flag = (ged_view_context_coord_get(view_ctx) == 'm') ? 1 : 0;
+	model_flag = (rt_view_context_coord_get(view_ctx) == 'm') ? 1 : 0;
 
     int do_tran = 0;
     int do_rot = 0;
@@ -140,11 +140,11 @@ ged_knob_core(struct ged *gedp, int argc, const char *argv[])
 		BU_STR_EQUAL(cmd, "clear") || BU_STR_EQUAL(cmd, "stop")) {
 	    // Per MGED, this command seems to reset the rate entries
 	    // but not the absolute entries.
-	    ged_view_context_knobs_reset(view_ctx, RT_VIEW_KNOBS_RATE);
+	    rt_view_context_knobs_reset(view_ctx, RT_VIEW_KNOBS_RATE);
 	    continue;
 	}
 	if (BU_STR_EQUAL(cmd, "calibrate")) {
-	    ged_view_context_knobs_calibrate(view_ctx);
+	    rt_view_context_knobs_calibrate(view_ctx);
 	    continue;
 	}
 
@@ -167,7 +167,7 @@ ged_knob_core(struct ged *gedp, int argc, const char *argv[])
 	--argc;	++argv;
 
 	// Process the actual command
-	int kp_ret = ged_view_context_knobs_cmd_process(
+	int kp_ret = rt_view_context_knobs_cmd_process(
 		&rvec, &do_rot, &tvec, &do_tran,
 		view_ctx, cmd, f,
 		origin, model_flag, incr_flag);
@@ -179,7 +179,7 @@ ged_knob_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     if (do_tran) {
-	ged_view_context_knobs_translate(view_ctx, tvec, model_flag);
+	rt_view_context_knobs_translate(view_ctx, tvec, model_flag);
     }
 
     if (do_rot) {
@@ -187,14 +187,14 @@ ged_knob_core(struct ged *gedp, int argc, const char *argv[])
 	const pointp_t pvt_pt = (origin == 'k') ? keypoint : NULL;
 
 	if (pvt_pt)
-	    ged_view_context_keypoint_get(keypoint, view_ctx);
+	    rt_view_context_keypoint_get(keypoint, view_ctx);
 
 	// Note - we don't (currently) support 'o' coords here, so the obj_rot matrix is always NULL.
-	ged_view_context_knobs_rotate(view_ctx, rvec, origin,
+	rt_view_context_knobs_rotate(view_ctx, rvec, origin,
 	    (model_flag ? 'm' : 'v'), NULL, pvt_pt);
     }
 
-    ged_view_context_knobs_update_rate_flags(view_ctx);
+    rt_view_context_knobs_update_rate_flags(view_ctx);
 
     return BRLCAD_OK;
 }
